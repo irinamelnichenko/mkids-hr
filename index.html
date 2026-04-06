@@ -435,7 +435,7 @@ tbody tr.clickable{cursor:pointer}
 const CFG = {
   API_KEY: 'AIzaSyBXY-1iAKeBdyWc7gbtNOe66yBa5-Mcmlc',
   SHEET_ID: '1KeSelcGyp8ijUQOmzUjFlX78TOScMWAFm7Hjf33Doyo',
-  RANGE: 'A2:Q3000',
+  RANGE: "'2025-2026'!A2:Q3000",
   VAC_TEACHER: 28,
   VAC_DEFAULT: 14,
   PW: { hr: 'hr2024', director: 'dir2024' },
@@ -1230,7 +1230,7 @@ window.addEventListener('DOMContentLoaded',async()=>{
   // Load saved passwords
   try{const c=JSON.parse(localStorage.getItem('hr_creds')||'null');if(c){CFG.PW.hr=c.hr;CFG.PW.director=c.director;}}catch(e){};
   try{
-    const r=await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${CFG.SHEET_ID}/values/B2:B500?key=${CFG.API_KEY}`);
+    const r=await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${CFG.SHEET_ID}/values/'2025-2026'!B2:B1200?key=${CFG.API_KEY}`);
     const j=await r.json();
     if(j.values){
       const locs=[...new Set(j.values.flat().filter(Boolean))].sort();
