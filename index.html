@@ -237,6 +237,12 @@ tbody tr.clickable{cursor:pointer}
 .chart-card{background:#fff;border-radius:var(--r);box-shadow:var(--sh);padding:18px}
 .chart-card h4{font-size:13px;font-weight:700;margin-bottom:14px;color:var(--dark)}
 .days-num{font-size:26px;font-weight:900;line-height:1;color:var(--dark)}
+.dtype-tab{padding:7px 14px;border:1.5px solid var(--gray2);border-radius:20px;background:#fff;
+  font-size:13px;font-weight:600;color:var(--gray);cursor:pointer;transition:all .2s;display:inline-flex;align-items:center;gap:6px}
+.dtype-tab:hover{border-color:var(--green);color:var(--green)}
+.dtype-tab.active{border-color:var(--green);background:var(--green);color:#fff}
+.dtype-cnt{background:rgba(0,0,0,.15);padding:1px 7px;border-radius:10px;font-size:11px}
+.dtype-tab.active .dtype-cnt{background:rgba(255,255,255,.25)}
 ::-webkit-scrollbar{width:6px;height:6px}
 ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:#dde3ea;border-radius:3px}
@@ -435,12 +441,12 @@ tbody tr.clickable{cursor:pointer}
 const CFG = {
   API_KEY: 'AIzaSyBXY-1iAKeBdyWc7gbtNOe66yBa5-Mcmlc',
   SHEET_ID: '1KeSelcGyp8ijUQOmzUjFlX78TOScMWAFm7Hjf33Doyo',
-  RANGE: "'2025-2026'!A2:Q3000",
+  RANGE: "'2025-2026'!A2:R3000",
   VAC_TEACHER: 28,
   VAC_DEFAULT: 14,
   PW: { hr: 'hr2024', director: 'dir2024' },
   SK: 'hr_mkids_v3',
-  CK: 'hr_mkids_cache_v3',
+  CK: 'hr_mkids_cache_v5',
   TTL: 5 * 60 * 1000
 };
 
@@ -472,13 +478,23 @@ async function fetchEmps(force=false) {
     const j = await r.json();
     S.emps = (j.values||[]).filter(row=>row.some(c=>c&&c.trim())).map((row,i)=>({
       id:i,
-      key: mkKey(row[3],row[4],row[11]||row[12]),
-      dir:(row[0]||'').trim(), loc:(row[1]||'').trim(), grp:(row[2]||'').trim(),
-      last:(row[3]||'').trim(), first:(row[4]||'').trim(), phone:(row[5]||'').trim(),
-      pos:(row[6]||'').trim(), stat:(row[7]||'').trim(),
-      bday:(row[8]||'').trim(), bmon:(row[9]||'').trim(), bdate:(row[10]||'').trim(),
-      wday:(row[11]||'').trim(), hired:(row[12]||'').trim(),
-      fired:(row[13]||'').trim(), email:(row[16]||'').trim()
+      key: mkKey(row[4],row[5],row[12]||row[13]),
+      dir:(row[0]||'').trim(),  // A=Напрямок
+      typ:(row[1]||'').trim(),  // B=Тип (NEW)
+      loc:(row[2]||'').trim(),  // C=Локація
+      grp:(row[3]||'').trim(),  // D=Група
+      last:(row[4]||'').trim(), // E=Прізвище
+      first:(row[5]||'').trim(),// F=Ім'я
+      phone:(row[6]||'').trim(),// G=Контакт
+      pos:(row[7]||'').trim(),  // H=Посада
+      stat:(row[8]||'').trim(), // I=Статус
+      bday:(row[9]||'').trim(), // J=День нар.
+      bmon:(row[10]||'').trim(),// K=Місяць нар.
+      bdate:(row[11]||'').trim(),// L=Дата нар.
+      wday:(row[12]||'').trim(), // M=Перший роб. день
+      hired:(row[13]||'').trim(),// N=Працевлаштування
+      fired:(row[14]||'').trim(),// O=Звільнення
+      email:(row[17]||'').trim() // R=Електронна адреса
     })).filter(e=>e.last||e.first);
     S.lastSync=new Date();
     localStorage.setItem(CFG.CK, JSON.stringify({data:S.emps,ts:Date.now()}));
@@ -500,6 +516,13 @@ function updSync(err=false) {
 
 // ── AUTH ──
 let selRole = 'hr';
+function getDirPw(loc){
+  try{const m=JSON.parse(localStorage.getItem('hr_dir_pw')||'{}');return m[loc]||CFG.PW.director;}catch{return CFG.PW.director;}
+}
+function setDirPw(loc,pw){
+  try{const m=JSON.parse(localStorage.getItem('hr_dir_pw')||'{}');m[loc]=pw;localStorage.setItem('hr_dir_pw',JSON.stringify(m));}catch(e){}
+}
+function getAllDirPws(){try{return JSON.parse(localStorage.getItem('hr_dir_pw')||'{}');}catch{return {};}}
 function selectRole(r) {
   selRole=r;
   document.getElementById('tabHR').classList.toggle('active',r==='hr');
@@ -510,10 +533,16 @@ async function doLogin() {
   const pw=document.getElementById('loginPw').value;
   const err=document.getElementById('loginError'); err.classList.add('hidden');
   if(!pw){showErr('Введіть пароль');return;}
-  if(pw!==CFG.PW[selRole]){showErr('Невірний пароль');return;}
-  let loc=null;
-  if(selRole==='director'){loc=document.getElementById('loginLocation').value; if(!loc){showErr('Оберіть локацію');return;}}
-  S.user={role:selRole,loc};
+  if(selRole==='hr'){
+    if(pw!==CFG.PW.hr){showErr('Невірний пароль');return;}
+    S.user={role:'hr',loc:null};
+  } else {
+    const loc=document.getElementById('loginLocation').value;
+    if(!loc){showErr('Оберіть локацію');return;}
+    const expected=getDirPw(loc);
+    if(pw!==expected){showErr('Невірний пароль для цієї локації');return;}
+    S.user={role:'director',loc};
+  }
   document.getElementById('loginScreen').classList.add('hidden');
   document.getElementById('app').classList.remove('hidden');
   updUserUI(); await initApp();
@@ -525,7 +554,7 @@ function updUserUI(){
   document.getElementById('uName').textContent=hr?'HR Менеджер':'Директор';
   document.getElementById('uLoc').textContent=hr?'Всі локації':S.user.loc;
   document.getElementById('uAvatar').textContent=hr?'HR':'Д';
-  document.getElementById('sbRole').textContent=hr?'HR-менеджер':'Директор садочку';
+  document.getElementById('sbRole').textContent=hr?'HR-менеджер':'Директор локації';
 }
 
 // ── INIT ──
@@ -625,20 +654,37 @@ function upcomingAnnivs(emps,days=30){
 }
 
 // ── DASHBOARD ──
+let dashTab='all';
+const TYPE_ICONS={'Садочок':'🌱','Школа':'🏫','Управління':'🏢','Укравління':'🏢','Офіс':'💼','Менеджмент':'👔','Кухня':'🍽️'};
+function normType(t){return (t||'').replace('Укравління','Управління');}
+function switchDashTab(t){dashTab=t;renderDash();}
 function renderDash(){
-  const emps=visible(),active=emps.filter(isActive);
+  const allEmps=visible();
+  const allTypes=[...new Set(allEmps.map(e=>normType(e.typ)).filter(Boolean))].sort();
+  // Filter by selected tab
+  const emps=dashTab==='all'?allEmps:allEmps.filter(e=>normType(e.typ)===dashTab);
+  const active=emps.filter(isActive);
   const onVac=active.filter(e=>isOnVac(e.key)),onSick=active.filter(e=>isOnSick(e.key));
   const over=active.filter(e=>vacUsed(e.key)>vacLim(e));
   const now=new Date();
   const newThis=active.filter(e=>{const d=pd(e.wday)||pd(e.hired);return d&&d.getFullYear()===now.getFullYear()&&d.getMonth()===now.getMonth();});
   const locs={};
-  emps.forEach(e=>{if(!e.loc)return;if(!locs[e.loc])locs[e.loc]={t:0,a:0,v:0,s:0};locs[e.loc].t++;if(isActive(e)){locs[e.loc].a++;if(isOnVac(e.key))locs[e.loc].v++;if(isOnSick(e.key))locs[e.loc].s++;}});
+  emps.forEach(e=>{if(!e.loc)return;if(!locs[e.loc])locs[e.loc]={t:0,a:0,v:0,s:0,typ:normType(e.typ)};locs[e.loc].t++;if(isActive(e)){locs[e.loc].a++;if(isOnVac(e.key))locs[e.loc].v++;if(isOnSick(e.key))locs[e.loc].s++;}});
   const bdays7=upcomingBdays(active,7);
   const isHR=S.user.role==='hr';
+  // Type stats for summary
+  const typeStats={};
+  allEmps.filter(isActive).forEach(e=>{const t=normType(e.typ)||'Інше';if(!typeStats[t])typeStats[t]={a:0,v:0,s:0,ov:0};typeStats[t].a++;if(isOnVac(e.key))typeStats[t].v++;if(isOnSick(e.key))typeStats[t].s++;if(vacUsed(e.key)>vacLim(e))typeStats[t].ov++;});
 
   set('main',`
+    ${isHR&&allTypes.length>1?`
+    <div class="dash-type-tabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:18px">
+      <button class="dtype-tab ${dashTab==='all'?'active':''}" onclick="switchDashTab('all')">🌐 Всі <span class="dtype-cnt">${allEmps.filter(isActive).length}</span></button>
+      ${allTypes.map(t=>`<button class="dtype-tab ${dashTab===t?'active':''}" onclick="switchDashTab('${t}')">${TYPE_ICONS[t]||'📌'} ${t} <span class="dtype-cnt">${(typeStats[t]||{a:0}).a}</span></button>`).join('')}
+    </div>`:''}
+
     <div class="stats-grid">
-      <div class="stat-card"><div class="stat-icon si-g">👥</div><div><div class="stat-val">${active.length}</div><div class="stat-lbl">Активних співробітників</div></div></div>
+      <div class="stat-card"><div class="stat-icon si-g">👥</div><div><div class="stat-val">${active.length}</div><div class="stat-lbl">Активних${dashTab!=='all'?' ('+dashTab+')':''}</div></div></div>
       <div class="stat-card"><div class="stat-icon si-b">🏖️</div><div><div class="stat-val">${onVac.length}</div><div class="stat-lbl">Зараз у відпустці</div></div></div>
       <div class="stat-card"><div class="stat-icon si-o">🏥</div><div><div class="stat-val">${onSick.length}</div><div class="stat-lbl">На лікарняному</div></div></div>
       <div class="stat-card"><div class="stat-icon si-r">⚠️</div><div><div class="stat-val">${over.length}</div><div class="stat-lbl">Перевищень ліміту</div></div></div>
@@ -653,12 +699,14 @@ function renderDash(){
 
     <div style="display:grid;grid-template-columns:${isHR?'1.3fr 0.7fr':'1fr'};gap:20px">
       ${isHR?`<div class="card">
-        <div class="card-hd"><h3>🏫 Зведення по локаціях</h3></div>
+        <div class="card-hd"><h3>🏫 Зведення по локаціях${dashTab!=='all'?' — '+dashTab:''}</h3></div>
         <div class="tbl-wrap"><table>
-          <thead><tr><th>Локація</th><th>Всього</th><th>Активні</th><th>Відпустка</th><th>Лікарняний</th></tr></thead>
-          <tbody>${Object.entries(locs).sort((a,b)=>a[0].localeCompare(b[0],'uk')).map(([l,d])=>`
+          <thead><tr><th>Локація</th><th>Тип</th><th>Всього</th><th>Активні</th><th>Відпустка</th><th>Лікарняний</th></tr></thead>
+          <tbody>${Object.entries(locs).sort((a,b)=>(a[1].typ||'').localeCompare(b[1].typ||'')||a[0].localeCompare(b[0],'uk')).map(([l,d])=>`
           <tr class="clickable" onclick="filterLoc('${esc(l)}')">
-            <td><strong>${l}</strong></td><td>${d.t}</td>
+            <td><strong>${l}</strong></td>
+            <td><span style="font-size:11px;color:var(--gray)">${TYPE_ICONS[d.typ]||'📌'} ${d.typ||'—'}</span></td>
+            <td>${d.t}</td>
             <td><span class="badge bg">${d.a}</span></td>
             <td>${d.v>0?`<span class="badge bb">${d.v}</span>`:'—'}</td>
             <td>${d.s>0?`<span class="badge bo">${d.s}</span>`:'—'}</td>
@@ -702,12 +750,14 @@ function filterLoc(loc){S.f.loc=loc;nav('employees');}
 function renderEmps(){
   const emps=visible();
   const locs=uniq(emps,'loc'),poss=uniq(emps,'pos'),dirs=uniq(emps,'dir'),stats=uniq(emps,'stat');
+  const typs=[...new Set(emps.map(e=>normType(e.typ)).filter(Boolean))].sort();
   let f=emps;
   if(S.q){const q=S.q.toLowerCase();f=f.filter(e=>fullName(e).toLowerCase().includes(q)||e.pos.toLowerCase().includes(q)||e.loc.toLowerCase().includes(q)||e.phone.includes(q)||e.email.toLowerCase().includes(q));}
   if(S.f.loc)f=f.filter(e=>e.loc===S.f.loc);
   if(S.f.pos)f=f.filter(e=>e.pos===S.f.pos);
   if(S.f.status)f=f.filter(e=>e.stat===S.f.status);
   if(S.f.dir)f=f.filter(e=>e.dir===S.f.dir);
+  if(S.f.typ)f=f.filter(e=>normType(e.typ)===S.f.typ);
   const isHR=S.user.role==='hr';
 
   set('main',`
@@ -722,6 +772,9 @@ function renderEmps(){
       <select class="flt-sel" onchange="S.f.status=this.value;renderEmps()">
         <option value="">Всі статуси</option>${stats.map(s=>`<option value="${s}" ${S.f.status===s?'selected':''}>${s}</option>`).join('')}
       </select>
+      ${isHR?`<select class="flt-sel" onchange="S.f.typ=this.value;renderEmps()">
+        <option value="">Всі типи</option>${typs.map(t=>`<option value="${t}" ${S.f.typ===t?'selected':''}>${TYPE_ICONS[t]||''} ${t}</option>`).join('')}
+      </select>`:''}
       ${isHR?`<select class="flt-sel" onchange="S.f.dir=this.value;renderEmps()">
         <option value="">Всі напрямки</option>${dirs.map(d=>`<option value="${d}" ${S.f.dir===d?'selected':''}>${d}</option>`).join('')}
       </select>`:''}
@@ -763,7 +816,7 @@ function renderEmps(){
     </table></div></div>
   `);
 }
-function clearF(){S.q='';S.f={loc:'',pos:'',status:'',dir:''};renderEmps();}
+function clearF(){S.q='';S.f={loc:'',pos:'',status:'',dir:'',typ:''};renderEmps();}
 
 // ── EMPLOYEE CARD ──
 function renderEmpCard(){
@@ -810,7 +863,7 @@ function renderEmpCard(){
       <div id="tInfo" class="tab-pane active">
         <div class="info-grid">
           ${ii('Прізвище',e.last)}${ii("Ім'я",e.first)}${ii('Посада',e.pos)}${ii('Локація',e.loc)}
-          ${ii('Напрямок',e.dir)}${ii('Група',e.grp)}${ii('Телефон',e.phone)}${ii('Email',e.email)}
+          ${ii('Тип',e.typ)}${ii('Напрямок',e.dir)}${ii('Група',e.grp)}${ii('Телефон',e.phone)}${ii('Email',e.email)}
           ${ii('Статус',e.stat)}${ii('Дата народження',e.bdate||(e.bday&&e.bmon?e.bday+'.'+e.bmon:''))}
           ${ii('Перший робочий день',e.wday)}${ii('Дата прийому',e.hired)}
           ${e.fired?ii('Дата звільнення',`<span style="color:#e74c3c">${e.fired}</span>`):''}
@@ -1149,17 +1202,35 @@ function delRec(key,type,rid,empId){
 // ── SETTINGS ──
 function renderSettings(){
   const creds=JSON.parse(localStorage.getItem('hr_creds')||'null')||CFG.PW;
+  const locs=[...new Set(S.emps.map(e=>e.loc).filter(Boolean))].sort();
+  const dirPws=getAllDirPws();
   set('main',`
-    <div style="max-width:560px">
+    <div style="max-width:660px">
       <div class="card" style="margin-bottom:18px">
-        <div class="card-hd"><h3>🔑 Зміна паролів</h3></div>
+        <div class="card-hd"><h3>🔑 Пароль HR менеджера</h3></div>
         <div style="padding:20px;display:flex;flex-direction:column;gap:14px">
           <div class="fg"><label>Пароль HR</label>
-            <input type="password" id="setPwHR" placeholder="Новий пароль HR" value="${creds.hr}"></div>
-          <div class="fg"><label>Пароль Директора</label>
-            <input type="password" id="setPwDir" placeholder="Новий пароль директора" value="${creds.director}"></div>
-          <button class="btn btn-primary" style="align-self:flex-start" onclick="saveSettings()">💾 Зберегти паролі</button>
-          <div class="alert alert-info" style="font-size:12px">ℹ️ Паролі зберігаються у браузері. При очищенні кешу скидаються до стандартних.</div>
+            <input type="text" id="setPwHR" placeholder="Пароль HR" value="${esc(creds.hr)}"></div>
+          <button class="btn btn-primary" style="align-self:flex-start" onclick="saveSettings()">💾 Зберегти</button>
+          <div class="alert alert-info" style="font-size:12px">ℹ️ Паролі зберігаються локально у браузері. При очищенні кешу скидаються до стандартних.</div>
+        </div>
+      </div>
+      <div class="card" style="margin-bottom:18px">
+        <div class="card-hd">
+          <h3>🏫 Паролі директорів по локаціях</h3>
+          <span style="font-size:12px;color:var(--gray)">Стандартний: <strong>${CFG.PW.director}</strong></span>
+        </div>
+        <div style="padding:14px 20px">
+          <div class="alert alert-info" style="font-size:12px;margin-bottom:12px">ℹ️ Якщо пароль не встановлено — директор входить за стандартним <strong>${CFG.PW.director}</strong></div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+          ${locs.map(loc=>{const safeId='dpw_'+loc.replace(/[^a-zA-Z0-9]/g,'_');return`
+          <div style="display:grid;grid-template-columns:200px 1fr auto;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid #f0f4f8">
+            <div style="font-size:13px;font-weight:600">${loc}</div>
+            <input type="text" id="${safeId}" placeholder="${CFG.PW.director} (стандартний)" value="${esc(dirPws[loc]||'')}" style="padding:7px 10px;border:1.5px solid var(--gray2);border-radius:8px;font-size:13px;font-family:inherit;outline:none">
+            <button class="btn btn-primary btn-sm" onclick="saveDirPw('${esc(loc)}','${safeId}')">💾</button>
+          </div>`;}).join('')}
+          </div>
+          <button class="btn btn-secondary" style="margin-top:12px" onclick="resetAllDirPw()">🔄 Скинути всі до стандартного</button>
         </div>
       </div>
       <div class="card" style="margin-bottom:18px">
@@ -1181,18 +1252,27 @@ function renderSettings(){
   `);
 }
 function saveSettings(){
-  const hr=document.getElementById('setPwHR').value,dir=document.getElementById('setPwDir').value;
-  if(!hr||!dir){alert('Заповніть обидва паролі');return;}
-  CFG.PW.hr=hr;CFG.PW.director=dir;
-  localStorage.setItem('hr_creds',JSON.stringify({hr,director:dir}));
-  toast('✅ Паролі оновлено');
+  const hr=document.getElementById('setPwHR').value;
+  if(!hr){alert('Введіть пароль HR');return;}
+  CFG.PW.hr=hr;
+  localStorage.setItem('hr_creds',JSON.stringify({hr,director:CFG.PW.director}));
+  toast('✅ Пароль HR оновлено');
+}
+function saveDirPw(loc,safeId){
+  const pw=document.getElementById(safeId).value.trim();
+  if(!pw){toast('⚠️ Введіть пароль');return;}
+  setDirPw(loc,pw);toast(`✅ Пароль для "${loc}" збережено`);
+}
+function resetAllDirPw(){
+  if(!confirm('Скинути всі паролі директорів до стандартного?'))return;
+  localStorage.removeItem('hr_dir_pw');toast('✅ Всі паролі скинуто');renderSettings();
 }
 function exportCSV(){
   const emps=visible();
-  const rows=[['Напрямок','Локація','Група','Прізвище',"Ім'я",'Телефон','Посада','Статус','Дата народження','Перший раб.день','Прийнятий','Звільнений','Email','Стаж','Відпустка (рік)','Ліміт','Лікарняний (рік)','Зп поточна']];
+  const rows=[['Напрямок','Тип','Локація','Група','Прізвище',"Ім'я",'Телефон','Посада','Статус','Дата народження','Перший раб.день','Прийнятий','Звільнений','Email','Стаж','Відпустка (рік)','Ліміт','Лікарняний (рік)','Зп поточна']];
   emps.forEach(e=>{
     const t=tenure(e),vu=vacUsed(e.key),su=sickUsed(e.key),sal=curSal(e.key);
-    rows.push([e.dir,e.loc,e.grp,e.last,e.first,e.phone,e.pos,e.stat,e.bdate||`${e.bday}.${e.bmon}`,e.wday,e.hired,e.fired,e.email,t?`${t.yr}р ${t.mo}м`:'',vu,vacLim(e),su,sal?sal.amount:'']);
+    rows.push([e.dir,e.typ,e.loc,e.grp,e.last,e.first,e.phone,e.pos,e.stat,e.bdate||`${e.bday}.${e.bmon}`,e.wday,e.hired,e.fired,e.email,t?`${t.yr}р ${t.mo}м`:'',vu,vacLim(e),su,sal?sal.amount:'']);
   });
   const csv=rows.map(r=>r.map(c=>`"${(c||'').toString().replace(/"/g,'""')}"`).join(',')).join('\n');
   dl('\uFEFF'+csv,'hr_employees_'+new Date().toISOString().slice(0,10)+'.csv','text/csv;charset=utf-8');
@@ -1230,7 +1310,7 @@ window.addEventListener('DOMContentLoaded',async()=>{
   // Load saved passwords
   try{const c=JSON.parse(localStorage.getItem('hr_creds')||'null');if(c){CFG.PW.hr=c.hr;CFG.PW.director=c.director;}}catch(e){};
   try{
-    const r=await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${CFG.SHEET_ID}/values/'2025-2026'!B2:B1200?key=${CFG.API_KEY}`);
+    const r=await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${CFG.SHEET_ID}/values/'2025-2026'!C2:C1200?key=${CFG.API_KEY}`);
     const j=await r.json();
     if(j.values){
       const locs=[...new Set(j.values.flat().filter(Boolean))].sort();
