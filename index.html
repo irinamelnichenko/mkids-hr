@@ -477,7 +477,7 @@ async function fetchEmps(force=false) {
     if (!r.ok) throw new Error(r.status);
     const j = await r.json();
     S.emps = (j.values||[]).filter(row=>row.some(c=>c&&c.trim())).map((row,i)=>({
-      id:i,
+      _rowIdx:i,
       key: mkKey(row[4],row[5],row[12]||row[13]),
       dir:(row[0]||'').trim(),  // A=Напрямок
       typ:(row[1]||'').trim(),  // B=Тип (NEW)
@@ -495,7 +495,7 @@ async function fetchEmps(force=false) {
       hired:(row[13]||'').trim(),// N=Працевлаштування
       fired:(row[14]||'').trim(),// O=Звільнення
       email:(row[17]||'').trim() // R=Електронна адреса
-    })).filter(e=>e.last||e.first);
+    })).filter(e=>e.last||e.first).map((e,i)=>({...e,id:i}));
     S.lastSync=new Date();
     localStorage.setItem(CFG.CK, JSON.stringify({data:S.emps,ts:Date.now()}));
     updSync();
