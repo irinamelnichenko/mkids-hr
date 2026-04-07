@@ -514,6 +514,22 @@ function updSync(err=false) {
   else if(S.lastSync){el.textContent=`✓ ${S.lastSync.toLocaleTimeString('uk-UA',{hour:'2-digit',minute:'2-digit'})}`;el.style.color='#27ae60';}
 }
 
+// ── TRANSLITERATION & AUTO PASSWORDS ──
+function translitUA(str){
+  const T={'а':'a','б':'b','в':'v','г':'h','ґ':'g','д':'d','е':'e','є':'ye',
+    'ж':'zh','з':'z','и':'y','і':'i','ї':'i','й':'y','к':'k','л':'l','м':'m',
+    'н':'n','о':'o','п':'p','р':'r','с':'s','т':'t','у':'u','ф':'f','х':'kh',
+    'ц':'ts','ч':'ch','ш':'sh','щ':'shch','ь':'','ю':'yu','я':'ya'};
+  return str.toLowerCase().split('').map(c=>T[c]!==undefined?T[c]:/[a-z0-9]/.test(c)?c:'').join('');
+}
+function genLocPw(loc){return translitUA(loc)+'2025';}
+function autoGenPasswords(){
+  const locs=[...new Set(S.emps.map(e=>e.loc).filter(Boolean))];
+  const existing=getAllDirPws();let changed=false;
+  locs.forEach(loc=>{if(!existing[loc]){existing[loc]=genLocPw(loc);changed=true;}});
+  if(changed)localStorage.setItem('hr_dir_pw',JSON.stringify(existing));
+}
+
 // ── AUTH ──
 let selRole = 'hr';
 function getDirPw(loc){
@@ -558,7 +574,7 @@ function updUserUI(){
 }
 
 // ── INIT ──
-async function initApp(){loadRecs();showLoad();await fetchEmps();fillLoginLocs();updateBadges();nav('dashboard');}
+async function initApp(){loadRecs();showLoad();await fetchEmps();autoGenPasswords();fillLoginLocs();updateBadges();nav('dashboard');}
 async function refreshData(){showLoad();await fetchEmps(true);renderView();}
 function fillLoginLocs(){
   const locs=[...new Set(S.emps.map(e=>e.loc).filter(Boolean))].sort();
@@ -654,13 +670,18 @@ function upcomingAnnivs(emps,days=30){
 }
 
 // ── DASHBOARD ──
-let dashTab='all';
+let dashTab='Садочок';
 const TYPE_ICONS={'Садочок':'🌱','Школа':'🏫','Управління':'🏢','Укравління':'🏢','Офіс':'💼','Менеджмент':'👔','Кухня':'🍽️'};
-function normType(t){return (t||'').replace('Укравління','Управління');}
+const TYPE_ORDER=['Садочок','Школа','Управління','Офіс','Менеджмент','Кухня'];
+function normType(t){return (t||'').replace('Укравління','Управління').trim();}
 function switchDashTab(t){dashTab=t;renderDash();}
 function renderDash(){
   const allEmps=visible();
-  const allTypes=[...new Set(allEmps.map(e=>normType(e.typ)).filter(Boolean))].sort();
+  // Sort tabs in fixed order
+  const rawTypes=[...new Set(allEmps.map(e=>normType(e.typ)).filter(Boolean))];
+  const allTypes=[...TYPE_ORDER.filter(t=>rawTypes.includes(t)),...rawTypes.filter(t=>!TYPE_ORDER.includes(t)).sort()];
+  // If current dashTab type doesn't exist in data, fallback
+  if(dashTab!=='all'&&!allTypes.includes(dashTab)&&allTypes.length>0)dashTab=allTypes[0];
   // Filter by selected tab
   const emps=dashTab==='all'?allEmps:allEmps.filter(e=>normType(e.typ)===dashTab);
   const active=emps.filter(isActive);
@@ -679,12 +700,12 @@ function renderDash(){
   set('main',`
     ${isHR&&allTypes.length>1?`
     <div class="dash-type-tabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:18px">
-      <button class="dtype-tab ${dashTab==='all'?'active':''}" onclick="switchDashTab('all')">🌐 Всі <span class="dtype-cnt">${allEmps.filter(isActive).length}</span></button>
       ${allTypes.map(t=>`<button class="dtype-tab ${dashTab===t?'active':''}" onclick="switchDashTab('${t}')">${TYPE_ICONS[t]||'📌'} ${t} <span class="dtype-cnt">${(typeStats[t]||{a:0}).a}</span></button>`).join('')}
+      <button class="dtype-tab ${dashTab==='all'?'active':''}" onclick="switchDashTab('all')" style="margin-left:auto">🌐 Всі <span class="dtype-cnt">${allEmps.filter(isActive).length}</span></button>
     </div>`:''}
 
     <div class="stats-grid">
-      <div class="stat-card"><div class="stat-icon si-g">👥</div><div><div class="stat-val">${active.length}</div><div class="stat-lbl">Активних${dashTab!=='all'?' ('+dashTab+')':''}</div></div></div>
+      <div class="stat-card"><div class="stat-icon si-g">👥</div><div><div class="stat-val">${active.length}</div><div class="stat-lbl">Активних${dashTab!=='all'?' — '+dashTab:''}</div></div></div>
       <div class="stat-card"><div class="stat-icon si-b">🏖️</div><div><div class="stat-val">${onVac.length}</div><div class="stat-lbl">Зараз у відпустці</div></div></div>
       <div class="stat-card"><div class="stat-icon si-o">🏥</div><div><div class="stat-val">${onSick.length}</div><div class="stat-lbl">На лікарняному</div></div></div>
       <div class="stat-card"><div class="stat-icon si-r">⚠️</div><div><div class="stat-val">${over.length}</div><div class="stat-lbl">Перевищень ліміту</div></div></div>
@@ -1218,19 +1239,38 @@ function renderSettings(){
       <div class="card" style="margin-bottom:18px">
         <div class="card-hd">
           <h3>🏫 Паролі директорів по локаціях</h3>
-          <span style="font-size:12px;color:var(--gray)">Стандартний: <strong>${CFG.PW.director}</strong></span>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-secondary btn-sm" onclick="copyAllPws()">📋 Скопіювати список</button>
+            <button class="btn btn-secondary btn-sm" onclick="regenAllPws()">🔄 Перегенерувати</button>
+          </div>
         </div>
         <div style="padding:14px 20px">
-          <div class="alert alert-info" style="font-size:12px;margin-bottom:12px">ℹ️ Якщо пароль не встановлено — директор входить за стандартним <strong>${CFG.PW.director}</strong></div>
-          <div style="display:flex;flex-direction:column;gap:8px">
-          ${locs.map(loc=>{const safeId='dpw_'+loc.replace(/[^a-zA-Z0-9]/g,'_');return`
-          <div style="display:grid;grid-template-columns:200px 1fr auto;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid #f0f4f8">
-            <div style="font-size:13px;font-weight:600">${loc}</div>
-            <input type="text" id="${safeId}" placeholder="${CFG.PW.director} (стандартний)" value="${esc(dirPws[loc]||'')}" style="padding:7px 10px;border:1.5px solid var(--gray2);border-radius:8px;font-size:13px;font-family:inherit;outline:none">
-            <button class="btn btn-primary btn-sm" onclick="saveDirPw('${esc(loc)}','${safeId}')">💾</button>
-          </div>`;}).join('')}
+          <div class="alert alert-info" style="font-size:12px;margin-bottom:12px">
+            ℹ️ Паролі генеруються автоматично: назва локації транслітом + 2025.<br>
+            Наприклад: <strong>Борщагівка → borshchahivka2025</strong>
           </div>
-          <button class="btn btn-secondary" style="margin-top:12px" onclick="resetAllDirPw()">🔄 Скинути всі до стандартного</button>
+          <div class="tbl-wrap">
+          <table><thead><tr><th>Тип</th><th>Локація</th><th>Пароль</th><th>Змінити</th></tr></thead>
+          <tbody>
+          ${[...new Set(S.emps.map(e=>e.loc).filter(Boolean))].sort().map(loc=>{
+            const emp=S.emps.find(e=>e.loc===loc);
+            const typ=emp?normType(emp.typ):'';
+            const safeId='dpw_'+loc.replace(/[^a-zA-Z0-9]/g,'_');
+            const pw=dirPws[loc]||genLocPw(loc);
+            return`<tr>
+              <td style="font-size:12px">${TYPE_ICONS[typ]||''} ${typ}</td>
+              <td><strong>${loc}</strong></td>
+              <td><code style="background:#f8fafc;padding:3px 8px;border-radius:5px;font-size:13px;letter-spacing:.5px">${pw}</code></td>
+              <td style="min-width:220px">
+                <div style="display:flex;gap:6px">
+                  <input type="text" id="${safeId}" value="${esc(pw)}" style="padding:5px 9px;border:1.5px solid var(--gray2);border-radius:7px;font-size:12px;font-family:monospace;width:160px;outline:none">
+                  <button class="btn btn-primary btn-xs" onclick="saveDirPw('${esc(loc)}','${safeId}');renderSettings()">💾</button>
+                </div>
+              </td>
+            </tr>`;
+          }).join('')}
+          </tbody></table>
+          </div>
         </div>
       </div>
       <div class="card" style="margin-bottom:18px">
@@ -1266,6 +1306,23 @@ function saveDirPw(loc,safeId){
 function resetAllDirPw(){
   if(!confirm('Скинути всі паролі директорів до стандартного?'))return;
   localStorage.removeItem('hr_dir_pw');toast('✅ Всі паролі скинуто');renderSettings();
+}
+function regenAllPws(){
+  if(!confirm('Перегенерувати всі паролі директорів?\nПоточні паролі буде замінено.'))return;
+  localStorage.removeItem('hr_dir_pw');autoGenPasswords();toast('✅ Паролі перегенеровано');renderSettings();
+}
+function copyAllPws(){
+  const pws=getAllDirPws();
+  const locs=[...new Set(S.emps.map(e=>e.loc).filter(Boolean))].sort();
+  const lines=locs.map(loc=>{
+    const emp=S.emps.find(e=>e.loc===loc);
+    const typ=emp?normType(emp.typ):'';
+    const pw=pws[loc]||genLocPw(loc);
+    return `${typ} | ${loc}: ${pw}`;
+  });
+  navigator.clipboard.writeText(lines.join('\n')).then(()=>toast('📋 Скопійовано!')).catch(()=>{
+    const ta=document.createElement('textarea');ta.value=lines.join('\n');document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();toast('📋 Скопійовано!');
+  });
 }
 function exportCSV(){
   const emps=visible();
