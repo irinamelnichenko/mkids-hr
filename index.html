@@ -1039,8 +1039,20 @@ function renderSicks(){
 }
 
 // ── ANALYTICS ──
+let analyticsTypFilter='';
+function salStats(arr){
+  if(!arr.length)return null;
+  const s=[...arr].sort((a,b)=>a-b);
+  return{avg:Math.round(arr.reduce((a,b)=>a+b,0)/arr.length),min:s[0],max:s[s.length-1],cnt:arr.length};
+}
+function fmtGrn(n){return n!=null?Number(n).toLocaleString('uk-UA')+' ₴':'—';}
+
 function renderAnalytics(){
-  const emps=visible().filter(isActive);
+  const allActive=visible().filter(isActive);
+  const typs=[...new Set(allActive.map(e=>normType(e.typ)).filter(Boolean))];
+  const sortedTyps=[...TYPE_ORDER.filter(t=>typs.includes(t)),...typs.filter(t=>!TYPE_ORDER.includes(t)).sort()];
+  // Apply type filter
+  const emps=analyticsTypFilter?allActive.filter(e=>normType(e.typ)===analyticsTypFilter):allActive;
   const yr=new Date().getFullYear();
   const isHR=S.user.role==='hr';
   const byPos={},byLoc={},tp={};
@@ -1057,8 +1069,69 @@ function renderAnalytics(){
   const maxL=Math.max(...Object.values(byLoc),1);
   const maxT=Math.max(...avgT.map(x=>x.avg),1);
 
+  // ── Salary analytics ──
+  const salByPos={},salByLoc={};
+  emps.forEach(e=>{
+    const s=curSal(e.key);if(!s)return;
+    const amt=parseFloat(s.amount);if(!amt||isNaN(amt))return;
+    const p=e.pos||'Невідомо',l=e.loc||'Невідомо';
+    if(!salByPos[p])salByPos[p]=[];salByPos[p].push(amt);
+    if(!salByLoc[l])salByLoc[l]=[];salByLoc[l].push(amt);
+  });
+  const salPosRows=Object.entries(salByPos).sort((a,b)=>{const sa=salStats(a[1]),sb=salStats(b[1]);return (sb.avg||0)-(sa.avg||0);});
+  const salLocRows=Object.entries(salByLoc).sort((a,b)=>{const sa=salStats(a[1]),sb=salStats(b[1]);return (sb.avg||0)-(sa.avg||0);});
+  const hasSalData=salPosRows.length>0;
+
+  function salTblPos(){
+    if(!hasSalData)return`<div class="empty" style="padding:30px"><span class="ei">💰</span><p>Дані не внесені</p></div>`;
+    return`<div class="tbl-wrap"><table>
+      <thead><tr><th>Посада</th><th>Осіб</th><th>Середня ₴</th><th>Мін ₴</th><th>Макс ₴</th></tr></thead>
+      <tbody>${salPosRows.map(([pos,vals])=>{const st=salStats(vals);return`<tr>
+        <td style="font-weight:600;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${pos}">${pos}</td>
+        <td><span class="badge bg">${st.cnt}</span></td>
+        <td><strong style="color:#27ae60">${fmtGrn(st.avg)}</strong></td>
+        <td style="font-size:12px;color:var(--gray)">${fmtGrn(st.min)}</td>
+        <td style="font-size:12px;color:var(--gray)">${fmtGrn(st.max)}</td>
+      </tr>`;}).join('')}</tbody></table></div>`;
+  }
+  function salTblLoc(){
+    if(!hasSalData)return`<div class="empty" style="padding:30px"><span class="ei">🏫</span><p>Дані не внесені</p></div>`;
+    return`<div class="tbl-wrap"><table>
+      <thead><tr><th>Локація</th><th>Осіб</th><th>Середня ₴</th><th>Мін ₴</th><th>Макс ₴</th></tr></thead>
+      <tbody>${salLocRows.map(([loc,vals])=>{const st=salStats(vals);return`<tr>
+        <td style="font-weight:600">${loc}</td>
+        <td><span class="badge bg">${st.cnt}</span></td>
+        <td><strong style="color:#27ae60">${fmtGrn(st.avg)}</strong></td>
+        <td style="font-size:12px;color:var(--gray)">${fmtGrn(st.min)}</td>
+        <td style="font-size:12px;color:var(--gray)">${fmtGrn(st.max)}</td>
+      </tr>`;}).join('')}</tbody></table></div>`;
+  }
+
   set('main',`
     <div style="display:grid;grid-template-columns:${isHR?'1fr 1fr':'1fr'};gap:18px">
+
+    <div class="card" style="grid-column:1/-1">
+      <div class="card-hd" style="flex-wrap:wrap;gap:10px">
+        <h3>💰 Зарплатна аналітика</h3>
+        ${isHR?`<select class="flt-sel" onchange="analyticsTypFilter=this.value;renderAnalytics()" style="min-width:160px">
+          <option value="">Всі типи</option>
+          ${sortedTyps.map(t=>`<option value="${t}" ${analyticsTypFilter===t?'selected':''}>${TYPE_ICONS[t]||''} ${t}</option>`).join('')}
+        </select>`:''}
+        <span style="font-size:12px;color:var(--gray);margin-left:auto">
+          ${hasSalData?`Зарплати внесені для <strong>${Object.values(salByPos).flat().length}</strong> співробітників`:'Зарплати ще не внесені — додавайте через картку співробітника'}
+        </span>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;overflow:hidden">
+        <div style="padding:16px 20px;border-right:1px solid #f0f4f8">
+          <div style="font-size:13px;font-weight:700;margin-bottom:12px;color:var(--dark)">👔 За посадами</div>
+          ${salTblPos()}
+        </div>
+        <div style="padding:16px 20px">
+          <div style="font-size:13px;font-weight:700;margin-bottom:12px;color:var(--dark)">🏫 За локаціями</div>
+          ${salTblLoc()}
+        </div>
+      </div>
+    </div>
       <div class="chart-card"><h4>👔 Розподіл за посадами</h4><div class="bar-chart">
         ${Object.entries(byPos).sort((a,b)=>b[1]-a[1]).slice(0,12).map(([p,n])=>`
         <div class="bar-row"><div class="bar-lbl" title="${p}">${p}</div>
