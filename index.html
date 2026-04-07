@@ -445,8 +445,8 @@ const CFG = {
   VAC_TEACHER: 28,
   VAC_DEFAULT: 14,
   PW: { hr: 'hr2024', director: 'dir2024' },
-  SK: 'hr_mkids_v3',
-  CK: 'hr_mkids_cache_v5',
+  SK: 'hr_mkids_v4',
+  CK: 'hr_mkids_cache_v6',
   TTL: 5 * 60 * 1000
 };
 
@@ -507,7 +507,7 @@ async function fetchEmps(force=false) {
   }
 }
 
-function mkKey(l,f,d) { const s=x=>(x||'').replace(/[^\w]/g,'').slice(0,15); return `e_${s(l)}_${s(f)}_${s(d)}`; }
+function mkKey(l,f,d) { const s=x=>(x||'').trim().replace(/\s+/g,'').slice(0,25); return `e5_${s(l)}_${s(f)}_${s(d)}`; }
 function updSync(err=false) {
   const el=document.getElementById('syncStatus'); if(!el) return;
   if(err){el.textContent='⚠️ Помилка синхронізації';el.style.color='#e74c3c';}
