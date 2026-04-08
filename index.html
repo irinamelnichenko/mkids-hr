@@ -621,6 +621,11 @@ function updUserUI(){
   document.getElementById('uLoc').textContent=hr?'Всі локації':S.user.loc;
   document.getElementById('uAvatar').textContent=hr?'HR':'Д';
   document.getElementById('sbRole').textContent=hr?'HR-менеджер':'Директор локації';
+  // Hide settings nav for directors
+  const settingsNav=document.querySelector('.nav-item[data-v="settings"]');
+  if(settingsNav) settingsNav.classList.toggle('hidden',!hr);
+  const settingsSec=settingsNav&&settingsNav.previousElementSibling;
+  if(settingsSec&&settingsSec.classList.contains('nav-sec')) settingsSec.classList.toggle('hidden',!hr);
 }
 
 // ── INIT ──
@@ -650,6 +655,8 @@ function updateBadges(){
 // ── NAVIGATION ──
 const TITLES={dashboard:'📊 Дашборд',employees:'👥 Співробітники',employee:'👤 Картка співробітника',vacations:'🏖️ Відпустки',sick:'🏥 Лікарняні',analytics:'📈 Аналітика',birthdays:'🎂 Дні народження',settings:'⚙️ Налаштування'};
 function nav(view,id=null){
+  // Directors cannot access settings
+  if(view==='settings'&&S.user&&S.user.role==='director') view='dashboard';
   S.view=view; if(id!==null) S.empId=id;
   document.querySelectorAll('.nav-item').forEach(el=>el.classList.toggle('active',el.dataset.v===view));
   document.getElementById('pageTitle').textContent=TITLES[view]||view;
@@ -760,7 +767,16 @@ function upcomingAnnivs(emps,days=30){
 let dashTab='Садочок';
 const TYPE_ICONS={'Садочок':'🌱','Школа':'🏫','Управління':'🏢','Укравління':'🏢','Офіс':'💼','Менеджмент':'👔','Кухня':'🍽️'};
 const TYPE_ORDER=['Садочок','Школа','Управління','Офіс','Менеджмент','Кухня'];
-function normType(t){return (t||'').replace('Укравління','Управління').trim();}
+function normType(t){
+  t=(t||'').trim();
+  if(/^кухня/i.test(t)) return 'Кухня'; // "Кухня Київ" → "Кухня"
+  return t.replace('Укравління','Управління');
+}
+// Normalized location for display — strips "Кухня " prefix for kitchen employees
+function normEmpLoc(e){
+  if(normType(e.typ)==='Кухня') return (e.loc||'').replace(/^кухня\s*/i,'').trim()||(e.loc||'');
+  return e.loc||'';
+}
 function switchDashTab(t){dashTab=t;renderDash();}
 function renderDash(){
   const allEmps=visible();
@@ -1131,6 +1147,9 @@ function renderSicks(){
 
 // ── ANALYTICS ──
 let analyticsTypFilter='',analyticsLocFilter='',analyticsDirFilter='',analyticsRegionFilter='',analyticsTurnoverPeriod='year';
+function switchAnalyticsType(val){analyticsTypFilter=val;analyticsLocFilter='';renderAnalytics();}
+function switchAnalyticsLoc(val){analyticsLocFilter=val;renderAnalytics();}
+function clearAnalyticsFilters(){analyticsTypFilter='';analyticsLocFilter='';analyticsDirFilter='';analyticsRegionFilter='';renderAnalytics();}
 function salStats(arr){
   if(!arr.length)return null;
   const s=[...arr].sort((a,b)=>a-b);
@@ -1142,30 +1161,29 @@ function renderAnalytics(){
   const allActive=visible().filter(isActive);
   const typs=[...new Set(allActive.map(e=>normType(e.typ)).filter(Boolean))];
   const sortedTyps=[...TYPE_ORDER.filter(t=>typs.includes(t)),...typs.filter(t=>!TYPE_ORDER.includes(t)).sort()];
-  const dirs=[...new Set(allActive.map(e=>e.dir).filter(Boolean))].sort();
-  const locs=[...new Set(allActive.map(e=>e.loc).filter(Boolean))].sort();
+  // Locations for the chosen type (using normalized loc for display)
+  const locsForType=analyticsTypFilter
+    ? [...new Set(allActive.filter(e=>normType(e.typ)===analyticsTypFilter).map(e=>normEmpLoc(e)).filter(Boolean))].sort()
+    : [...new Set(allActive.map(e=>normEmpLoc(e)).filter(Boolean))].sort();
   // Apply filters
   let emps=analyticsTypFilter?allActive.filter(e=>normType(e.typ)===analyticsTypFilter):allActive;
-  if(analyticsRegionFilter)emps=emps.filter(e=>getRegion(e)===analyticsRegionFilter);
-  if(analyticsDirFilter)emps=emps.filter(e=>e.dir===analyticsDirFilter);
-  if(analyticsLocFilter)emps=emps.filter(e=>e.loc===analyticsLocFilter);
+  if(analyticsLocFilter)emps=emps.filter(e=>normEmpLoc(e)===analyticsLocFilter);
   const yr=new Date().getFullYear();
   const isHR=S.user.role==='hr';
   const byPos={},byLoc={},tp={};
   emps.forEach(e=>{
     const p=e.pos||'Невідомо';byPos[p]=(byPos[p]||0)+1;
-    const l=e.loc||'Невідомо';byLoc[l]=(byLoc[l]||0)+1;
+    const l=normEmpLoc(e)||'Невідомо';byLoc[l]=(byLoc[l]||0)+1;
     const t=tenure(e);if(!t)return;if(!tp[p])tp[p]=[];tp[p].push(t.yr*12+t.mo);
   });
   const avgT=Object.entries(tp).map(([p,ms])=>({p,avg:Math.round(ms.reduce((a,b)=>a+b,0)/ms.length)})).sort((a,b)=>b.avg-a.avg);
 
-  // Turnover with period + region filter
+  // Turnover with period + type + loc filter
   function dismissedInPeriod(period){
     return visible().filter(e=>{
       const d=pd(e.fired);if(!d)return false;
-      if(analyticsRegionFilter&&getRegion(e)!==analyticsRegionFilter)return false;
-      if(analyticsDirFilter&&e.dir!==analyticsDirFilter)return false;
-      if(analyticsLocFilter&&e.loc!==analyticsLocFilter)return false;
+      if(analyticsTypFilter&&normType(e.typ)!==analyticsTypFilter)return false;
+      if(analyticsLocFilter&&normEmpLoc(e)!==analyticsLocFilter)return false;
       if(period==='year')return d.getFullYear()===yr;
       if(period==='h1')return d.getFullYear()===yr&&d.getMonth()<6;
       if(period==='h2')return d.getFullYear()===yr&&d.getMonth()>=6;
@@ -1178,9 +1196,6 @@ function renderAnalytics(){
   }
   const dismissed=dismissedInPeriod(analyticsTurnoverPeriod);
   const periodLabels={year:`${yr} рік`,h1:'І півріччя',h2:'ІІ півріччя',q1:'І квартал',q2:'ІІ квартал',q3:'ІІІ квартал',q4:'IV квартал'};
-  // Per-location turnover breakdown
-  const turnByLoc={};
-  dismissed.forEach(e=>{const l=e.loc||'—';turnByLoc[l]=(turnByLoc[l]||0)+1;});
 
   const annivs=upcomingAnnivs(emps,30);
   const bdays14=upcomingBdays(emps,14);
@@ -1193,7 +1208,7 @@ function renderAnalytics(){
   emps.forEach(e=>{
     const s=curSal(e.key);if(!s)return;
     const amt=parseFloat(s.amount);if(!amt||isNaN(amt))return;
-    const p=e.pos||'Невідомо',l=e.loc||'Невідомо';
+    const p=e.pos||'Невідомо',l=normEmpLoc(e)||'Невідомо';
     if(!salByPos[p])salByPos[p]=[];salByPos[p].push(amt);
     if(!salByLoc[l])salByLoc[l]=[];salByLoc[l].push(amt);
   });
@@ -1226,37 +1241,29 @@ function renderAnalytics(){
       </tr>`;}).join('')}</tbody></table></div>`;
   }
 
-  // Region-filtered locations
-  const filteredLocs=analyticsRegionFilter
-    ? locs.filter(l=>{const e=allActive.find(x=>x.loc===l);return e&&getRegion(e)===analyticsRegionFilter;})
-    : (analyticsDirFilter?locs.filter(l=>{const e=allActive.find(x=>x.loc===l);return e&&e.dir===analyticsDirFilter;}):locs);
-
+  // HR filter bar: 1) Type tabs  2) Location selector (scoped to type)
   const filterBar=isHR?`
-    <div class="filters" style="margin-bottom:16px">
-      <strong style="font-size:12px;color:var(--gray)">Аналітика:</strong>
-      <select class="flt-sel" onchange="analyticsRegionFilter=this.value;analyticsDirFilter='';analyticsLocFilter='';renderAnalytics()">
-        <option value="">🌐 Всі регіони</option>
-        ${REGIONS.map(r=>`<option value="${r}" ${analyticsRegionFilter===r?'selected':''}>${r}</option>`).join('')}
-      </select>
-      <select class="flt-sel" onchange="analyticsTypFilter=this.value;analyticsLocFilter='';renderAnalytics()">
-        <option value="">Всі типи</option>
-        ${sortedTyps.map(t=>`<option value="${t}" ${analyticsTypFilter===t?'selected':''}>${TYPE_ICONS[t]||''} ${t}</option>`).join('')}
-      </select>
-      <select class="flt-sel" onchange="analyticsDirFilter=this.value;analyticsLocFilter='';renderAnalytics()">
-        <option value="">Всі напрямки</option>
-        ${dirs.map(d=>`<option value="${d}" ${analyticsDirFilter===d?'selected':''}>${d}</option>`).join('')}
-      </select>
-      <select class="flt-sel" onchange="analyticsLocFilter=this.value;renderAnalytics()">
-        <option value="">Всі локації</option>
-        ${filteredLocs.map(l=>`<option value="${l}" ${analyticsLocFilter===l?'selected':''}>${l}</option>`).join('')}
-      </select>
-      ${analyticsRegionFilter||analyticsTypFilter||analyticsDirFilter||analyticsLocFilter?`<button class="btn btn-secondary btn-sm" onclick="analyticsRegionFilter='';analyticsTypFilter='';analyticsDirFilter='';analyticsLocFilter='';renderAnalytics()">✕ Скинути</button>`:''}
-      <span style="margin-left:auto;font-size:12px;color:var(--gray)">${emps.length} активних${analyticsRegionFilter?' · '+analyticsRegionFilter:''}</span>
-    </div>`:'';
+    <div class="filters" style="margin-bottom:16px;flex-direction:column;align-items:flex-start;gap:10px">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;width:100%">
+        <strong style="font-size:12px;color:var(--gray);white-space:nowrap">Тип:</strong>
+        <button class="dtype-tab ${!analyticsTypFilter?'active':''}" onclick="switchAnalyticsType('')">🌐 Всі <span class="dtype-cnt">${allActive.length}</span></button>
+        ${sortedTyps.map(t=>`<button class="dtype-tab ${analyticsTypFilter===t?'active':''}" onclick="switchAnalyticsType('${esc(t)}')">${TYPE_ICONS[t]||'📌'} ${t} <span class="dtype-cnt">${allActive.filter(e=>normType(e.typ)===t).length}</span></button>`).join('')}
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;width:100%">
+        <strong style="font-size:12px;color:var(--gray);white-space:nowrap">Локація:</strong>
+        <select class="flt-sel" style="min-width:200px" onchange="switchAnalyticsLoc(this.value)">
+          <option value="">Всі локації${analyticsTypFilter?' типу '+analyticsTypFilter:''}</option>
+          ${locsForType.map(l=>`<option value="${l}" ${analyticsLocFilter===l?'selected':''}>${l}</option>`).join('')}
+        </select>
+        ${analyticsTypFilter||analyticsLocFilter?`<button class="btn btn-secondary btn-sm" onclick="clearAnalyticsFilters()">✕ Скинути</button>`:''}
+        <span style="margin-left:auto;font-size:12px;color:var(--gray)">${emps.length} активних${analyticsTypFilter?' · '+analyticsTypFilter:''}${analyticsLocFilter?' · '+analyticsLocFilter:''}</span>
+      </div>
+    </div>`
+  : (!isHR?`<div class="alert alert-info" style="margin-bottom:14px">🏫 Локація: <strong>${S.user.loc}</strong></div>`:'');
 
-  // Turnover per-region breakdown
-  const turnByRegion={};
-  dismissed.forEach(e=>{const reg=getRegion(e);turnByRegion[reg]=(turnByRegion[reg]||0)+1;});
+  // Turnover per-location breakdown (scoped to current filter)
+  const turnByLoc_={}; // renamed to avoid collision below
+  dismissed.forEach(e=>{const l=normEmpLoc(e)||'—';turnByLoc_[l]=(turnByLoc_[l]||0)+1;});
 
   set('main',`
     ${filterBar}
@@ -1299,32 +1306,19 @@ function renderAnalytics(){
         <div class="bar-val">${t.avg>12?`${Math.floor(t.avg/12)}р ${t.avg%12}м`:`${t.avg}м`}</div></div>`).join('')}
       </div></div>
       <div class="chart-card">
-        <h4>📉 Плинність кадрів</h4>
+        <h4>📉 Плинність кадрів${analyticsTypFilter?' — '+analyticsTypFilter:''}${analyticsLocFilter?' · '+analyticsLocFilter:''}</h4>
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
           ${['year','h1','h2','q1','q2','q3','q4'].map(p=>`<button class="btn btn-${analyticsTurnoverPeriod===p?'primary':'secondary'} btn-xs" onclick="analyticsTurnoverPeriod='${p}';renderAnalytics()">${periodLabels[p]}</button>`).join('')}
         </div>
-        <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:12px;border-top:1px solid #f0f4f8;padding-top:8px">
-          <span style="font-size:11px;color:var(--gray);margin-right:3px;align-self:center">Регіон:</span>
-          <button class="btn btn-${!analyticsRegionFilter?'primary':'secondary'} btn-xs" onclick="analyticsRegionFilter='';renderAnalytics()">Всі</button>
-          ${REGIONS.map(r=>`<button class="btn btn-${analyticsRegionFilter===r?'primary':'secondary'} btn-xs" onclick="analyticsRegionFilter='${r}';analyticsDirFilter='';analyticsLocFilter='';renderAnalytics()">${r}</button>`).join('')}
-        </div>
         <div style="text-align:center;padding:10px 0">
           <div style="font-size:48px;font-weight:900;color:${dismissed.length>5?'#e74c3c':'var(--dark)'}">${dismissed.length}</div>
-          <div style="color:var(--gray);font-size:13px">звільнень · ${periodLabels[analyticsTurnoverPeriod]}${analyticsRegionFilter?' · '+analyticsRegionFilter:''}</div>
+          <div style="color:var(--gray);font-size:13px">звільнень · ${periodLabels[analyticsTurnoverPeriod]}</div>
           <div style="margin-top:6px;font-size:12px;color:var(--gray)">Активних: ${emps.length} · Плинність: ${emps.length>0?Math.round(dismissed.length/(emps.length+dismissed.length)*100):0}%</div>
         </div>
-        ${!analyticsRegionFilter&&Object.keys(turnByRegion).length>0?`
-        <div style="margin-top:8px;border-top:1px solid #f0f4f8;padding-top:8px">
-          <div style="font-size:11px;font-weight:700;color:var(--gray);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">По регіонах</div>
-          ${REGIONS.filter(r=>turnByRegion[r]).map(r=>`
-          <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #f8fafc;font-size:12px;cursor:pointer" onclick="analyticsRegionFilter='${r}';renderAnalytics()">
-            <span style="color:var(--blue2);text-decoration:underline">${r}</span><span style="font-weight:700;color:#e74c3c">${turnByRegion[r]||0}</span>
-          </div>`).join('')}
-        </div>`:''}
-        ${Object.keys(turnByLoc).length>0?`
+        ${Object.keys(turnByLoc_).length>1?`
         <div style="margin-top:8px;border-top:1px solid #f0f4f8;padding-top:8px">
           <div style="font-size:11px;font-weight:700;color:var(--gray);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">По локаціях</div>
-          ${Object.entries(turnByLoc).sort((a,b)=>b[1]-a[1]).map(([l,n])=>`
+          ${Object.entries(turnByLoc_).sort((a,b)=>b[1]-a[1]).map(([l,n])=>`
           <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #f8fafc;font-size:12px">
             <span>${l}</span><span style="font-weight:700;color:#e74c3c">${n}</span>
           </div>`).join('')}
@@ -1333,7 +1327,7 @@ function renderAnalytics(){
           ${dismissed.slice(0,6).map(e=>`
           <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:11px">
             <span style="cursor:pointer;text-decoration:underline;color:var(--blue2)" onclick="nav('employee',${e.id})">${fullName(e)}</span>
-            <span style="color:var(--gray)">${e.loc||''} · ${e.fired}</span>
+            <span style="color:var(--gray)">${normEmpLoc(e)||''} · ${e.fired}</span>
           </div>`).join('')}
           ${dismissed.length>6?`<div style="font-size:11px;color:var(--gray);margin-top:4px">+ ще ${dismissed.length-6}</div>`:''}
         </div>`:''}
