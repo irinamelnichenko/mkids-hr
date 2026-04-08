@@ -340,6 +340,7 @@ tbody tr.clickable{cursor:pointer}
         <h2 id="pageTitle">Дашборд</h2>
       </div>
       <div class="topbar-r">
+        <span id="sheetsStatus" style="font-size:12px;color:var(--gray)"></span>
         <span id="syncStatus">↻ Завантаження…</span>
         <button class="btn btn-secondary btn-sm" onclick="refreshData()">🔄 Оновити</button>
       </div>
@@ -447,8 +448,12 @@ const CFG = {
   PW: { hr: 'hr2024', director: 'dir2024' },
   SK: 'hr_mkids_v4',
   CK: 'hr_mkids_cache_v6',
+  SCRIPT_URL_KEY: 'hr_script_url', // localStorage key for Apps Script URL
   TTL: 5 * 60 * 1000
 };
+// Apps Script URL for Google Sheets data storage (configurable in settings)
+function getScriptUrl(){return localStorage.getItem(CFG.SCRIPT_URL_KEY)||'';}
+function setScriptUrl(url){localStorage.setItem(CFG.SCRIPT_URL_KEY,url.trim());}
 
 const S = {
   user: null, emps: [], recs: {},
@@ -459,10 +464,55 @@ const S = {
 
 // ── STORAGE ──
 function loadRecs() { try { S.recs = JSON.parse(localStorage.getItem(CFG.SK)||'{}'); } catch { S.recs={}; } }
-function saveRecs() { localStorage.setItem(CFG.SK, JSON.stringify(S.recs)); }
+function saveRecs() {
+  localStorage.setItem(CFG.SK, JSON.stringify(S.recs));
+  syncToSheets(); // async, fire-and-forget
+}
 function rec(key) {
   if (!S.recs[key]) S.recs[key] = { vacs:[], sicks:[], sals:[] };
   return S.recs[key];
+}
+
+// ── GOOGLE SHEETS SYNC (Apps Script backend) ──
+let _sheetSyncTimer=null;
+function syncToSheets(){
+  clearTimeout(_sheetSyncTimer);
+  _sheetSyncTimer=setTimeout(()=>_doSyncToSheets(),1200);
+}
+async function _doSyncToSheets(){
+  const url=getScriptUrl(); if(!url) return;
+  try{
+    updSheetsStatus('sync');
+    await fetch(url, {
+      method:'POST', mode:'no-cors',
+      headers:{'Content-Type':'text/plain'},
+      body:JSON.stringify({action:'save',data:S.recs})
+    });
+    updSheetsStatus('ok');
+  }catch(e){updSheetsStatus('err');}
+}
+async function loadFromSheets(){
+  const url=getScriptUrl(); if(!url) return false;
+  try{
+    updSheetsStatus('sync');
+    const r=await fetch(url+'?action=get',{redirect:'follow'});
+    if(!r.ok) throw new Error(r.status);
+    const j=await r.json();
+    if(j.ok && j.data){
+      S.recs=j.data;
+      localStorage.setItem(CFG.SK,JSON.stringify(S.recs));
+      updSheetsStatus('ok');
+      return true;
+    }
+  }catch(e){console.warn('Sheets load:',e);updSheetsStatus('err');}
+  return false;
+}
+function updSheetsStatus(st){
+  const el=document.getElementById('sheetsStatus'); if(!el) return;
+  if(st==='ok'){el.textContent='☁️ Синхронізовано';el.style.color='#27ae60';}
+  else if(st==='sync'){el.textContent='☁️ Синхронізація…';el.style.color='#e67e22';}
+  else if(st==='err'){el.textContent='⚠️ Помилка хмари';el.style.color='#e74c3c';}
+  else{el.textContent='💾 Лише локально';el.style.color='#7f8c8d';}
 }
 
 // ── SHEETS ──
@@ -574,7 +624,14 @@ function updUserUI(){
 }
 
 // ── INIT ──
-async function initApp(){loadRecs();showLoad();await fetchEmps();autoGenPasswords();fillLoginLocs();updateBadges();nav('dashboard');}
+async function initApp(){
+  loadRecs(); // load from localStorage immediately as fallback
+  showLoad();
+  await fetchEmps();
+  const loaded=await loadFromSheets(); // override with Sheets data if available
+  if(!loaded) updSheetsStatus(getScriptUrl()?'err':'none');
+  autoGenPasswords();fillLoginLocs();updateBadges();nav('dashboard');
+}
 async function refreshData(){showLoad();await fetchEmps(true);renderView();}
 function fillLoginLocs(){
   const locs=[...new Set(S.emps.map(e=>e.loc).filter(Boolean))].sort();
@@ -584,7 +641,7 @@ function fillLoginLocs(){
 function updateBadges(){
   const now=new Date(); const mon=now.getMonth(),yr=now.getFullYear();
   const newThis=visible().filter(e=>{const d=pd(e.wday)||pd(e.hired);return d&&d.getFullYear()===yr&&d.getMonth()===mon&&isActive(e);});
-  const over=visible().filter(e=>isActive(e)&&vacUsed(e.key)>vacLim(e));
+  const over=visible().filter(e=>isActive(e)&&vacUsed(e.key)>vacTotalLim(e));
   const nb=document.getElementById('newBadge'),ob=document.getElementById('overBadge');
   if(newThis.length>0){nb.textContent=newThis.length;nb.classList.remove('hidden');}
   if(over.length>0){ob.classList.remove('hidden');}else{ob.classList.add('hidden');}
@@ -617,7 +674,27 @@ function showLoad(){document.getElementById('main').innerHTML='<div class="loadi
 function visible(){return S.user.role==='director'?S.emps.filter(e=>e.loc===S.user.loc):S.emps;}
 function isActive(e){if(e.fired&&e.fired.trim())return false;if(e.stat&&/звіл/i.test(e.stat))return false;return true;}
 function fullName(e){return (e.last+' '+e.first).trim();}
-function vacLim(e){return /вихователь/i.test(e.pos||'')?CFG.VAC_TEACHER:CFG.VAC_DEFAULT;}
+function vacLim(e, yr=new Date().getFullYear()){
+  const base=/вихователь/i.test(e.pos||'')?CFG.VAC_TEACHER:CFG.VAC_DEFAULT;
+  const sd=pd(e.wday)||pd(e.hired);
+  if(!sd) return base;
+  const sy=sd.getFullYear();
+  if(sy>yr) return 0;
+  if(sy<yr) return base;
+  // Started this year — proportional
+  const isLeap=yr%4===0&&(yr%100!==0||yr%400===0);
+  const daysInYear=isLeap?366:365;
+  const startOfYear=new Date(yr,0,1);
+  const daysWorked=Math.round((new Date(yr,11,31)-sd)/86400000)+1;
+  return Math.max(1, Math.round(base*daysWorked/daysInYear));
+}
+function vacCarryover(e, yr=new Date().getFullYear()){
+  if(yr<=2024) return 0;
+  return Math.max(0, vacLim(e,yr-1)-vacUsed(e.key,yr-1));
+}
+function vacTotalLim(e, yr=new Date().getFullYear()){
+  return vacLim(e,yr)+vacCarryover(e,yr);
+}
 function vacUsed(key,yr=new Date().getFullYear()){return rec(key).vacs.filter(v=>new Date(v.start).getFullYear()===yr&&v.type==='Щорічна').reduce((s,v)=>s+(v.days||0),0);}
 function sickUsed(key,yr=new Date().getFullYear()){return rec(key).sicks.filter(v=>new Date(v.start).getFullYear()===yr).reduce((s,v)=>s+(v.days||0),0);}
 function curSal(key){const h=[...rec(key).sals].sort((a,b)=>new Date(b.date)-new Date(a.date));return h[0]||null;}
@@ -641,6 +718,16 @@ function daysBetween(a,b){return Math.max(0,Math.round((new Date(b)-new Date(a))
 function initials(e){return ((e.last[0]||'')+(e.first[0]||'')).toUpperCase()||'?';}
 function empBday(e){let d=pd(e.bdate);if(d)return d;const day=parseInt(e.bday),mon=parseInt(e.bmon);if(day&&mon)return new Date(new Date().getFullYear(),mon-1,day);return null;}
 function uniq(arr,key){return [...new Set(arr.map(e=>e[key]).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'uk'));}
+
+// ── REGION ──
+const REGION_KEYS={'Київ':['київ','kyiv'],'Львів':['львів','lviv']};
+function getRegion(e){
+  const txt=((e.dir||'')+' '+(e.loc||'')).toLowerCase();
+  if(REGION_KEYS['Київ'].some(k=>txt.includes(k))) return 'Київ';
+  if(REGION_KEYS['Львів'].some(k=>txt.includes(k))) return 'Львів';
+  return 'Управління';
+}
+const REGIONS=['Київ','Львів','Управління'];
 function esc(s){return (s||'').replace(/"/g,'&quot;').replace(/</g,'&lt;');}
 function set(id,html){document.getElementById(id).innerHTML=html;}
 
@@ -686,7 +773,7 @@ function renderDash(){
   const emps=dashTab==='all'?allEmps:allEmps.filter(e=>normType(e.typ)===dashTab);
   const active=emps.filter(isActive);
   const onVac=active.filter(e=>isOnVac(e.key)),onSick=active.filter(e=>isOnSick(e.key));
-  const over=active.filter(e=>vacUsed(e.key)>vacLim(e));
+  const over=active.filter(e=>vacUsed(e.key)>vacTotalLim(e));
   const now=new Date();
   const newThis=active.filter(e=>{const d=pd(e.wday)||pd(e.hired);return d&&d.getFullYear()===now.getFullYear()&&d.getMonth()===now.getMonth();});
   const locs={};
@@ -695,7 +782,7 @@ function renderDash(){
   const isHR=S.user.role==='hr';
   // Type stats for summary
   const typeStats={};
-  allEmps.filter(isActive).forEach(e=>{const t=normType(e.typ)||'Інше';if(!typeStats[t])typeStats[t]={a:0,v:0,s:0,ov:0};typeStats[t].a++;if(isOnVac(e.key))typeStats[t].v++;if(isOnSick(e.key))typeStats[t].s++;if(vacUsed(e.key)>vacLim(e))typeStats[t].ov++;});
+  allEmps.filter(isActive).forEach(e=>{const t=normType(e.typ)||'Інше';if(!typeStats[t])typeStats[t]={a:0,v:0,s:0,ov:0};typeStats[t].a++;if(isOnVac(e.key))typeStats[t].v++;if(isOnSick(e.key))typeStats[t].s++;if(vacUsed(e.key)>vacTotalLim(e))typeStats[t].ov++;});
 
   set('main',`
     ${isHR&&allTypes.length>1?`
@@ -715,7 +802,7 @@ function renderDash(){
 
     ${over.length>0?`<div class="alert alert-danger" style="margin-bottom:18px">
       <div><strong>⚠️ Перевищення ліміту відпусток!</strong><br>
-      ${over.map(e=>`<span onclick="nav('employee',${e.id})" style="cursor:pointer;text-decoration:underline">${fullName(e)}</span> (${vacUsed(e.key)}/${vacLim(e)} дн.)`).join(' · ')}
+      ${over.map(e=>`<span onclick="nav('employee',${e.id})" style="cursor:pointer;text-decoration:underline">${fullName(e)}</span> (${vacUsed(e.key)}/${vacTotalLim(e)} дн.)`).join(' · ')}
       </div></div>`:''}
 
     <div style="display:grid;grid-template-columns:${isHR?'1.3fr 0.7fr':'1fr'};gap:20px">
@@ -810,8 +897,8 @@ function renderEmps(){
       </tr></thead>
       <tbody>${f.length===0?`<tr><td colspan="7" style="text-align:center;padding:40px;color:var(--gray)">Нічого не знайдено</td></tr>`:
       f.map(e=>{
-        const act=isActive(e),ov=act&&vacUsed(e.key)>vacLim(e);
-        const vu=vacUsed(e.key),vl=vacLim(e);
+        const act=isActive(e),ov=act&&vacUsed(e.key)>vacTotalLim(e);
+        const vu=vacUsed(e.key),vl=vacTotalLim(e);
         return `<tr class="clickable" onclick="nav('employee',${e.id})">
           <td><div style="display:flex;align-items:center;gap:10px">
             <div class="avatar" style="width:34px;height:34px;font-size:12px;${!act?'background:var(--gray2)':''}">${initials(e)}</div>
@@ -842,8 +929,11 @@ function clearF(){S.q='';S.f={loc:'',pos:'',status:'',dir:'',typ:''};renderEmps(
 // ── EMPLOYEE CARD ──
 function renderEmpCard(){
   const e=S.emps[S.empId]; if(!e){nav('employees');return;}
-  const act=isActive(e),r=rec(e.key),vl=vacLim(e),vu=vacUsed(e.key),su=sickUsed(e.key);
-  const sal=curSal(e.key),t=tenure(e),ov=vu>vl,pct=Math.min(100,Math.round(vu/vl*100));
+  const yr=new Date().getFullYear();
+  const act=isActive(e),r=rec(e.key);
+  const vlBase=vacLim(e,yr),vlCarry=vacCarryover(e,yr),vl=vacTotalLim(e,yr);
+  const vu=vacUsed(e.key),su=sickUsed(e.key);
+  const sal=curSal(e.key),t=tenure(e),ov=vu>vl,pct=Math.min(100,Math.round(vl>0?vu/vl*100:0));
 
   set('main',`
     <div class="back-btn" onclick="nav('employees')">← Назад до списку</div>
@@ -886,11 +976,11 @@ function renderEmpCard(){
           ${ii('Прізвище',e.last)}${ii("Ім'я",e.first)}${ii('Посада',e.pos)}${ii('Локація',e.loc)}
           ${ii('Тип',e.typ)}${ii('Напрямок',e.dir)}${ii('Група',e.grp)}${ii('Телефон',e.phone)}${ii('Email',e.email)}
           ${ii('Статус',e.stat)}${ii('Дата народження',e.bdate||(e.bday&&e.bmon?e.bday+'.'+e.bmon:''))}
-          ${ii('Перший робочий день',e.wday)}${ii('Дата прийому',e.hired)}
+          ${ii('Перший робочий день',e.wday)}${ii('Дата працевлаштування',e.hired)}
           ${e.fired?ii('Дата звільнення',`<span style="color:#e74c3c">${e.fired}</span>`):''}
-          <div class="ii"><label>Ліміт відпустки</label><div class="iv">${vl} днів
+          <div class="ii"><label>Ліміт відпустки ${yr}</label><div class="iv">${vl} днів
             <div class="prog-wrap"><div class="prog-bar ${ov?'pr':pct>75?'po':'pg'}" style="width:${pct}%"></div></div>
-            <div style="font-size:11px;color:var(--gray);margin-top:3px">${vu} з ${vl} (${pct}%)</div>
+            <div style="font-size:11px;color:var(--gray);margin-top:3px">${vu} з ${vl} (${pct}%)${vlCarry>0?` · перенесено з ${yr-1}: +${vlCarry} дн.`:''}</div>
           </div></div>
         </div>
       </div>
@@ -971,14 +1061,14 @@ function switchTab(el){
 function renderVacs(){
   const yr=new Date().getFullYear();
   const rows=visible().filter(isActive).map(e=>{
-    const vl=vacLim(e),vu=vacUsed(e.key);
-    return{e,vl,vu,pct:Math.min(100,Math.round(vu/vl*100)),ov:vu>vl};
+    const vl=vacTotalLim(e,yr),vu=vacUsed(e.key),carry=vacCarryover(e,yr);
+    return{e,vl,vu,carry,pct:Math.min(100,Math.round(vl>0?vu/vl*100:0)),ov:vu>vl};
   }).sort((a,b)=>b.ov-a.ov||b.pct-a.pct);
   const isHR=S.user.role==='hr';
 
   set('main',`
     <div class="alert alert-info" style="margin-bottom:16px">
-      ℹ️ Ліміт відпусток: <strong>вихователь — 28 днів</strong>, всі інші посади — <strong>14 днів</strong> на рік
+      ℹ️ Ліміт: <strong>вихователь — 28 дн.</strong>, інші — <strong>14 дн.</strong> на рік (пропорційно до дати початку роботи). Невикористані дні переходять на наступний рік.
     </div>
     <div class="card">
       <div class="card-hd"><h3>🏖️ Відпустки ${yr}</h3>
@@ -987,7 +1077,7 @@ function renderVacs(){
         </span>
       </div>
       <div class="tbl-wrap"><table>
-        <thead><tr><th>Співробітник</th>${isHR?'<th>Локація</th>':''}<th>Посада</th><th>Використано</th><th>Ліміт</th><th>Залишок</th><th style="min-width:140px">Прогрес</th><th>Дії</th></tr></thead>
+        <thead><tr><th>Співробітник</th>${isHR?'<th>Локація</th>':''}<th>Посада</th><th>Використано</th><th>Ліміт</th><th>Перенесено</th><th>Залишок</th><th style="min-width:140px">Прогрес</th><th>Дії</th></tr></thead>
         <tbody>${rows.map(r=>`<tr class="clickable" style="${r.ov?'background:#fdf9f9':''}" onclick="nav('employee',${r.e.id})">
           <td><div style="display:flex;align-items:center;gap:8px">
             <div class="avatar" style="width:28px;height:28px;font-size:10px">${initials(r.e)}</div>
@@ -996,7 +1086,8 @@ function renderVacs(){
           ${isHR?`<td style="font-size:12px">${r.e.loc}</td>`:''}
           <td style="font-size:12px">${r.e.pos}</td>
           <td><strong style="color:${r.ov?'#e74c3c':'var(--dark)'}">${r.vu}</strong></td>
-          <td>${r.vl}</td>
+          <td>${r.vl}${r.carry>0?`<span style="font-size:10px;color:var(--blue2);margin-left:3px">+${r.carry}</span>`:''}</td>
+          <td>${r.carry>0?`<span class="badge bb" style="font-size:10px">+${r.carry} перен.</span>`:'—'}</td>
           <td><strong style="color:${r.vl-r.vu<0?'#e74c3c':r.vl-r.vu<3?'#e67e22':'#27ae60'}">${r.vl-r.vu}</strong></td>
           <td><div style="display:flex;align-items:center;gap:6px">
             <div class="prog-wrap" style="flex:1"><div class="prog-bar ${r.ov?'pr':r.pct>75?'po':'pg'}" style="width:${r.pct}%"></div></div>
@@ -1039,7 +1130,7 @@ function renderSicks(){
 }
 
 // ── ANALYTICS ──
-let analyticsTypFilter='';
+let analyticsTypFilter='',analyticsLocFilter='',analyticsDirFilter='',analyticsRegionFilter='',analyticsTurnoverPeriod='year';
 function salStats(arr){
   if(!arr.length)return null;
   const s=[...arr].sort((a,b)=>a-b);
@@ -1051,8 +1142,13 @@ function renderAnalytics(){
   const allActive=visible().filter(isActive);
   const typs=[...new Set(allActive.map(e=>normType(e.typ)).filter(Boolean))];
   const sortedTyps=[...TYPE_ORDER.filter(t=>typs.includes(t)),...typs.filter(t=>!TYPE_ORDER.includes(t)).sort()];
-  // Apply type filter
-  const emps=analyticsTypFilter?allActive.filter(e=>normType(e.typ)===analyticsTypFilter):allActive;
+  const dirs=[...new Set(allActive.map(e=>e.dir).filter(Boolean))].sort();
+  const locs=[...new Set(allActive.map(e=>e.loc).filter(Boolean))].sort();
+  // Apply filters
+  let emps=analyticsTypFilter?allActive.filter(e=>normType(e.typ)===analyticsTypFilter):allActive;
+  if(analyticsRegionFilter)emps=emps.filter(e=>getRegion(e)===analyticsRegionFilter);
+  if(analyticsDirFilter)emps=emps.filter(e=>e.dir===analyticsDirFilter);
+  if(analyticsLocFilter)emps=emps.filter(e=>e.loc===analyticsLocFilter);
   const yr=new Date().getFullYear();
   const isHR=S.user.role==='hr';
   const byPos={},byLoc={},tp={};
@@ -1062,7 +1158,30 @@ function renderAnalytics(){
     const t=tenure(e);if(!t)return;if(!tp[p])tp[p]=[];tp[p].push(t.yr*12+t.mo);
   });
   const avgT=Object.entries(tp).map(([p,ms])=>({p,avg:Math.round(ms.reduce((a,b)=>a+b,0)/ms.length)})).sort((a,b)=>b.avg-a.avg);
-  const dismissed=visible().filter(e=>{const d=pd(e.fired);return d&&d.getFullYear()===yr;});
+
+  // Turnover with period + region filter
+  function dismissedInPeriod(period){
+    return visible().filter(e=>{
+      const d=pd(e.fired);if(!d)return false;
+      if(analyticsRegionFilter&&getRegion(e)!==analyticsRegionFilter)return false;
+      if(analyticsDirFilter&&e.dir!==analyticsDirFilter)return false;
+      if(analyticsLocFilter&&e.loc!==analyticsLocFilter)return false;
+      if(period==='year')return d.getFullYear()===yr;
+      if(period==='h1')return d.getFullYear()===yr&&d.getMonth()<6;
+      if(period==='h2')return d.getFullYear()===yr&&d.getMonth()>=6;
+      if(period==='q1')return d.getFullYear()===yr&&d.getMonth()<3;
+      if(period==='q2')return d.getFullYear()===yr&&d.getMonth()>=3&&d.getMonth()<6;
+      if(period==='q3')return d.getFullYear()===yr&&d.getMonth()>=6&&d.getMonth()<9;
+      if(period==='q4')return d.getFullYear()===yr&&d.getMonth()>=9;
+      return false;
+    });
+  }
+  const dismissed=dismissedInPeriod(analyticsTurnoverPeriod);
+  const periodLabels={year:`${yr} рік`,h1:'І півріччя',h2:'ІІ півріччя',q1:'І квартал',q2:'ІІ квартал',q3:'ІІІ квартал',q4:'IV квартал'};
+  // Per-location turnover breakdown
+  const turnByLoc={};
+  dismissed.forEach(e=>{const l=e.loc||'—';turnByLoc[l]=(turnByLoc[l]||0)+1;});
+
   const annivs=upcomingAnnivs(emps,30);
   const bdays14=upcomingBdays(emps,14);
   const maxP=Math.max(...Object.values(byPos),1);
@@ -1107,16 +1226,45 @@ function renderAnalytics(){
       </tr>`;}).join('')}</tbody></table></div>`;
   }
 
+  // Region-filtered locations
+  const filteredLocs=analyticsRegionFilter
+    ? locs.filter(l=>{const e=allActive.find(x=>x.loc===l);return e&&getRegion(e)===analyticsRegionFilter;})
+    : (analyticsDirFilter?locs.filter(l=>{const e=allActive.find(x=>x.loc===l);return e&&e.dir===analyticsDirFilter;}):locs);
+
+  const filterBar=isHR?`
+    <div class="filters" style="margin-bottom:16px">
+      <strong style="font-size:12px;color:var(--gray)">Аналітика:</strong>
+      <select class="flt-sel" onchange="analyticsRegionFilter=this.value;analyticsDirFilter='';analyticsLocFilter='';renderAnalytics()">
+        <option value="">🌐 Всі регіони</option>
+        ${REGIONS.map(r=>`<option value="${r}" ${analyticsRegionFilter===r?'selected':''}>${r}</option>`).join('')}
+      </select>
+      <select class="flt-sel" onchange="analyticsTypFilter=this.value;analyticsLocFilter='';renderAnalytics()">
+        <option value="">Всі типи</option>
+        ${sortedTyps.map(t=>`<option value="${t}" ${analyticsTypFilter===t?'selected':''}>${TYPE_ICONS[t]||''} ${t}</option>`).join('')}
+      </select>
+      <select class="flt-sel" onchange="analyticsDirFilter=this.value;analyticsLocFilter='';renderAnalytics()">
+        <option value="">Всі напрямки</option>
+        ${dirs.map(d=>`<option value="${d}" ${analyticsDirFilter===d?'selected':''}>${d}</option>`).join('')}
+      </select>
+      <select class="flt-sel" onchange="analyticsLocFilter=this.value;renderAnalytics()">
+        <option value="">Всі локації</option>
+        ${filteredLocs.map(l=>`<option value="${l}" ${analyticsLocFilter===l?'selected':''}>${l}</option>`).join('')}
+      </select>
+      ${analyticsRegionFilter||analyticsTypFilter||analyticsDirFilter||analyticsLocFilter?`<button class="btn btn-secondary btn-sm" onclick="analyticsRegionFilter='';analyticsTypFilter='';analyticsDirFilter='';analyticsLocFilter='';renderAnalytics()">✕ Скинути</button>`:''}
+      <span style="margin-left:auto;font-size:12px;color:var(--gray)">${emps.length} активних${analyticsRegionFilter?' · '+analyticsRegionFilter:''}</span>
+    </div>`:'';
+
+  // Turnover per-region breakdown
+  const turnByRegion={};
+  dismissed.forEach(e=>{const reg=getRegion(e);turnByRegion[reg]=(turnByRegion[reg]||0)+1;});
+
   set('main',`
+    ${filterBar}
     <div style="display:grid;grid-template-columns:${isHR?'1fr 1fr':'1fr'};gap:18px">
 
     <div class="card" style="grid-column:1/-1">
       <div class="card-hd" style="flex-wrap:wrap;gap:10px">
         <h3>💰 Зарплатна аналітика</h3>
-        ${isHR?`<select class="flt-sel" onchange="analyticsTypFilter=this.value;renderAnalytics()" style="min-width:160px">
-          <option value="">Всі типи</option>
-          ${sortedTyps.map(t=>`<option value="${t}" ${analyticsTypFilter===t?'selected':''}>${TYPE_ICONS[t]||''} ${t}</option>`).join('')}
-        </select>`:''}
         <span style="font-size:12px;color:var(--gray);margin-left:auto">
           ${hasSalData?`Зарплати внесені для <strong>${Object.values(salByPos).flat().length}</strong> співробітників`:'Зарплати ще не внесені — додавайте через картку співробітника'}
         </span>
@@ -1150,17 +1298,45 @@ function renderAnalytics(){
         <div class="bar-track"><div class="bar-fill" style="width:${Math.round(t.avg/maxT*100)}%;background:#9b59b6"></div></div>
         <div class="bar-val">${t.avg>12?`${Math.floor(t.avg/12)}р ${t.avg%12}м`:`${t.avg}м`}</div></div>`).join('')}
       </div></div>
-      <div class="chart-card"><h4>📉 Плинність кадрів ${yr}</h4>
-        <div style="text-align:center;padding:16px 0">
-          <div style="font-size:52px;font-weight:900;color:${dismissed.length>5?'#e74c3c':'var(--dark)'}">${dismissed.length}</div>
-          <div style="color:var(--gray);font-size:14px">звільнень за ${yr} рік</div>
-          <div style="margin-top:8px;font-size:13px;color:var(--gray)">Активних: ${emps.length} · Плинність: ${emps.length>0?Math.round(dismissed.length/(emps.length+dismissed.length)*100):0}%</div>
+      <div class="chart-card">
+        <h4>📉 Плинність кадрів</h4>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
+          ${['year','h1','h2','q1','q2','q3','q4'].map(p=>`<button class="btn btn-${analyticsTurnoverPeriod===p?'primary':'secondary'} btn-xs" onclick="analyticsTurnoverPeriod='${p}';renderAnalytics()">${periodLabels[p]}</button>`).join('')}
         </div>
-        ${dismissed.length>0?`<div>${dismissed.slice(0,5).map(e=>`
-        <div style="display:flex;justify-content:space-between;padding:5px 0;border-top:1px solid #f0f4f8;font-size:12px">
-          <span style="cursor:pointer;text-decoration:underline" onclick="nav('employee',${e.id})">${fullName(e)}</span>
-          <span style="color:var(--gray)">${e.fired}</span>
-        </div>`).join('')}</div>`:''}
+        <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:12px;border-top:1px solid #f0f4f8;padding-top:8px">
+          <span style="font-size:11px;color:var(--gray);margin-right:3px;align-self:center">Регіон:</span>
+          <button class="btn btn-${!analyticsRegionFilter?'primary':'secondary'} btn-xs" onclick="analyticsRegionFilter='';renderAnalytics()">Всі</button>
+          ${REGIONS.map(r=>`<button class="btn btn-${analyticsRegionFilter===r?'primary':'secondary'} btn-xs" onclick="analyticsRegionFilter='${r}';analyticsDirFilter='';analyticsLocFilter='';renderAnalytics()">${r}</button>`).join('')}
+        </div>
+        <div style="text-align:center;padding:10px 0">
+          <div style="font-size:48px;font-weight:900;color:${dismissed.length>5?'#e74c3c':'var(--dark)'}">${dismissed.length}</div>
+          <div style="color:var(--gray);font-size:13px">звільнень · ${periodLabels[analyticsTurnoverPeriod]}${analyticsRegionFilter?' · '+analyticsRegionFilter:''}</div>
+          <div style="margin-top:6px;font-size:12px;color:var(--gray)">Активних: ${emps.length} · Плинність: ${emps.length>0?Math.round(dismissed.length/(emps.length+dismissed.length)*100):0}%</div>
+        </div>
+        ${!analyticsRegionFilter&&Object.keys(turnByRegion).length>0?`
+        <div style="margin-top:8px;border-top:1px solid #f0f4f8;padding-top:8px">
+          <div style="font-size:11px;font-weight:700;color:var(--gray);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">По регіонах</div>
+          ${REGIONS.filter(r=>turnByRegion[r]).map(r=>`
+          <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #f8fafc;font-size:12px;cursor:pointer" onclick="analyticsRegionFilter='${r}';renderAnalytics()">
+            <span style="color:var(--blue2);text-decoration:underline">${r}</span><span style="font-weight:700;color:#e74c3c">${turnByRegion[r]||0}</span>
+          </div>`).join('')}
+        </div>`:''}
+        ${Object.keys(turnByLoc).length>0?`
+        <div style="margin-top:8px;border-top:1px solid #f0f4f8;padding-top:8px">
+          <div style="font-size:11px;font-weight:700;color:var(--gray);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">По локаціях</div>
+          ${Object.entries(turnByLoc).sort((a,b)=>b[1]-a[1]).map(([l,n])=>`
+          <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #f8fafc;font-size:12px">
+            <span>${l}</span><span style="font-weight:700;color:#e74c3c">${n}</span>
+          </div>`).join('')}
+        </div>`:''}
+        ${dismissed.length>0?`<div style="margin-top:8px;border-top:1px solid #f0f4f8;padding-top:8px">
+          ${dismissed.slice(0,6).map(e=>`
+          <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:11px">
+            <span style="cursor:pointer;text-decoration:underline;color:var(--blue2)" onclick="nav('employee',${e.id})">${fullName(e)}</span>
+            <span style="color:var(--gray)">${e.loc||''} · ${e.fired}</span>
+          </div>`).join('')}
+          ${dismissed.length>6?`<div style="font-size:11px;color:var(--gray);margin-top:4px">+ ще ${dismissed.length-6}</div>`:''}
+        </div>`:''}
       </div>
       <div class="chart-card"><h4>🎖️ Робочі ювілеї (30 днів)</h4>
         ${annivs.length===0?`<p style="color:var(--gray);text-align:center;padding:16px">Немає ювілеїв у найближчі 30 днів</p>`:
@@ -1221,7 +1397,7 @@ function renderBdays(){
 // ── MODALS ──
 let mEmpId=null;
 function openVac(id){
-  mEmpId=id;const e=S.emps[id],vl=vacLim(e),vu=vacUsed(e.key);
+  mEmpId=id;const e=S.emps[id],vl=vacTotalLim(e),vu=vacUsed(e.key);
   document.getElementById('mVacName').textContent=fullName(e);
   document.getElementById('mVacInfo').innerHTML=`Ліміт: <strong>${vl} дн.</strong> | Використано: <strong>${vu}</strong> | Залишок: <strong style="color:${vl-vu<0?'#e74c3c':'#27ae60'}">${vl-vu}</strong>`;
   document.getElementById('mVacWarn').classList.add('hidden');
@@ -1246,7 +1422,7 @@ function calcVDays(){
   const s=document.getElementById('vStart').value,e=document.getElementById('vEnd').value;
   if(!s||!e)return;
   const days=daysBetween(s,e);document.getElementById('vDays').textContent=days;
-  const emp=S.emps[mEmpId],vl=vacLim(emp),vu=vacUsed(emp.key);
+  const emp=S.emps[mEmpId],vl=vacTotalLim(emp),vu=vacUsed(emp.key);
   const type=document.getElementById('vType').value,w=document.getElementById('mVacWarn');
   if(type==='Щорічна'&&vu+days>vl){w.innerHTML=`⚠️ Перевищення ліміту! ${vu} + ${days} = ${vu+days} з ${vl} дозволених днів`;w.classList.remove('hidden');}
   else{w.classList.add('hidden');}
@@ -1298,8 +1474,36 @@ function renderSettings(){
   const creds=JSON.parse(localStorage.getItem('hr_creds')||'null')||CFG.PW;
   const locs=[...new Set(S.emps.map(e=>e.loc).filter(Boolean))].sort();
   const dirPws=getAllDirPws();
+  const scriptUrl=getScriptUrl();
   set('main',`
     <div style="max-width:660px">
+
+      <div class="card" style="margin-bottom:18px">
+        <div class="card-hd"><h3>☁️ Збереження в Google Sheets</h3><span class="badge ${scriptUrl?'bg':'bgr'}">${scriptUrl?'Налаштовано':'Не налаштовано'}</span></div>
+        <div style="padding:20px;display:flex;flex-direction:column;gap:14px">
+          <div class="alert alert-info" style="font-size:12px">
+            ℹ️ Для збереження даних між браузерами і пристроями — розгорніть Google Apps Script:<br>
+            <ol style="margin-top:8px;margin-left:18px;line-height:1.7">
+              <li>Відкрийте <strong>script.google.com</strong> → Новий проект</li>
+              <li>Скопіюйте код з кнопки нижче у редактор</li>
+              <li>Збережіть, натисніть <strong>Розгорнути → Веб-застосунок</strong></li>
+              <li>Доступ: <strong>"Всі (включно з анонімними)"</strong></li>
+              <li>Скопіюйте URL і вставте нижче</li>
+            </ol>
+          </div>
+          <button class="btn btn-secondary" onclick="copyAppsScript()">📋 Скопіювати код Apps Script</button>
+          <div class="fg"><label>URL Apps Script (веб-застосунок)</label>
+            <input type="url" id="setScriptUrl" placeholder="https://script.google.com/macros/s/.../exec" value="${esc(scriptUrl)}">
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-primary" style="align-self:flex-start" onclick="saveScriptUrl()">💾 Зберегти URL</button>
+            ${scriptUrl?`<button class="btn btn-secondary" onclick="testScriptUrl()">🔍 Перевірити з'єднання</button>`:''}
+            ${scriptUrl?`<button class="btn btn-secondary" onclick="forceSyncFromSheets()">⬇️ Завантажити з хмари</button>`:''}
+          </div>
+          <div id="scriptTestResult"></div>
+        </div>
+      </div>
+
       <div class="card" style="margin-bottom:18px">
         <div class="card-hd"><h3>🔑 Пароль HR менеджера</h3></div>
         <div style="padding:20px;display:flex;flex-direction:column;gap:14px">
@@ -1371,6 +1575,120 @@ function saveSettings(){
   localStorage.setItem('hr_creds',JSON.stringify({hr,director:CFG.PW.director}));
   toast('✅ Пароль HR оновлено');
 }
+function saveScriptUrl(){
+  const url=document.getElementById('setScriptUrl').value.trim();
+  setScriptUrl(url);
+  toast(url?'✅ URL збережено':'✅ URL очищено');
+  renderSettings();
+}
+async function testScriptUrl(){
+  const url=getScriptUrl(); if(!url){toast('⚠️ URL не задано');return;}
+  const el=document.getElementById('scriptTestResult');
+  el.innerHTML='<div class="alert alert-info">⏳ Перевірка…</div>';
+  try{
+    const r=await fetch(url+'?action=get',{redirect:'follow'});
+    const j=await r.json();
+    if(j.ok){
+      el.innerHTML=`<div class="alert alert-ok">✅ З'єднання успішне! Записів: ${Object.keys(j.data||{}).length}</div>`;
+    } else {
+      el.innerHTML=`<div class="alert alert-warn">⚠️ Відповідь: ${JSON.stringify(j)}</div>`;
+    }
+  }catch(e){
+    el.innerHTML=`<div class="alert alert-danger">❌ Помилка: ${e.message}</div>`;
+  }
+}
+async function forceSyncFromSheets(){
+  toast('⬇️ Завантаження з хмари…');
+  const ok=await loadFromSheets();
+  if(ok){toast('✅ Дані завантажено з Google Sheets');renderView();}
+  else{toast('❌ Не вдалося завантажити дані');}
+}
+const APPS_SCRIPT_CODE=`// ============================================================
+// HR mkids — Google Apps Script Backend
+// Вставте цей код у script.google.com → Новий проект
+// Замініть SHEET_ID на ID вашої таблиці (якщо потрібно)
+// Розгорніть як Веб-застосунок → доступ "Всі (анонімні)"
+// ============================================================
+const SHEET_ID = '1KeSelcGyp8ijUQOmzUjFlX78TOScMWAFm7Hjf33Doyo';
+const SHEET_NAME = 'HR_Data';
+const HEADERS = ['key','type','_id','f1','f2','f3','f4','f5','f6','at'];
+
+function doGet(e) {
+  const action = (e.parameter||{}).action || 'get';
+  const out = ContentService.createTextOutput();
+  out.setMimeType(ContentService.MimeType.JSON);
+  try {
+    if (action === 'get') {
+      out.setContent(JSON.stringify({ok:true, data: readData()}));
+    } else {
+      out.setContent(JSON.stringify({ok:false, error:'Unknown action'}));
+    }
+  } catch(err) {
+    out.setContent(JSON.stringify({ok:false, error:err.toString()}));
+  }
+  return out;
+}
+
+function doPost(e) {
+  const out = ContentService.createTextOutput();
+  out.setMimeType(ContentService.MimeType.JSON);
+  try {
+    const body = JSON.parse(e.postData.contents);
+    if (body.action === 'save') {
+      writeData(body.data);
+      out.setContent(JSON.stringify({ok:true}));
+    } else {
+      out.setContent(JSON.stringify({ok:false, error:'Unknown action'}));
+    }
+  } catch(err) {
+    out.setContent(JSON.stringify({ok:false, error:err.toString()}));
+  }
+  return out;
+}
+
+function getOrCreateSheet() {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  let sh = ss.getSheetByName(SHEET_NAME);
+  if (!sh) {
+    sh = ss.insertSheet(SHEET_NAME);
+    sh.appendRow(HEADERS);
+  }
+  return sh;
+}
+
+function readData() {
+  const sh = getOrCreateSheet();
+  const rows = sh.getDataRange().getValues();
+  if (rows.length <= 1) return {};
+  const result = {};
+  rows.slice(1).forEach(r => {
+    const [key,type,_id,f1,f2,f3,f4,f5,f6,at] = r;
+    if (!key || !type) return;
+    if (!result[key]) result[key] = {vacs:[],sicks:[],sals:[]};
+    if (type==='vac') result[key].vacs.push({_id,start:f1,end:f2,days:+f3,type:f4,note:f5,at});
+    else if (type==='sick') result[key].sicks.push({_id,start:f1,end:f2,days:+f3,doc:f4,note:f5,at});
+    else if (type==='sal') result[key].sals.push({_id,date:f1,amount:+f2,note:f3,at});
+  });
+  return result;
+}
+
+function writeData(data) {
+  const sh = getOrCreateSheet();
+  sh.clearContents();
+  sh.appendRow(HEADERS);
+  const rows = [];
+  Object.entries(data).forEach(([key, rec]) => {
+    (rec.vacs||[]).forEach(v => rows.push([key,'vac',v._id||'',v.start||'',v.end||'',v.days||0,v.type||'',v.note||'','',v.at||'']));
+    (rec.sicks||[]).forEach(v => rows.push([key,'sick',v._id||'',v.start||'',v.end||'',v.days||0,v.doc||'',v.note||'','',v.at||'']));
+    (rec.sals||[]).forEach(v => rows.push([key,'sal',v._id||'',v.date||'',v.amount||0,v.note||'','','','',v.at||'']));
+  });
+  if (rows.length > 0) sh.getRange(2,1,rows.length,HEADERS.length).setValues(rows);
+}`;
+function copyAppsScript(){
+  navigator.clipboard.writeText(APPS_SCRIPT_CODE).then(()=>toast('📋 Код Apps Script скопійовано!')).catch(()=>{
+    const ta=document.createElement('textarea');ta.value=APPS_SCRIPT_CODE;document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();toast('📋 Скопійовано!');
+  });
+}
 function saveDirPw(loc,safeId){
   const pw=document.getElementById(safeId).value.trim();
   if(!pw){toast('⚠️ Введіть пароль');return;}
@@ -1402,7 +1720,7 @@ function exportCSV(){
   const rows=[['Напрямок','Тип','Локація','Група','Прізвище',"Ім'я",'Телефон','Посада','Статус','Дата народження','Перший раб.день','Прийнятий','Звільнений','Email','Стаж','Відпустка (рік)','Ліміт','Лікарняний (рік)','Зп поточна']];
   emps.forEach(e=>{
     const t=tenure(e),vu=vacUsed(e.key),su=sickUsed(e.key),sal=curSal(e.key);
-    rows.push([e.dir,e.typ,e.loc,e.grp,e.last,e.first,e.phone,e.pos,e.stat,e.bdate||`${e.bday}.${e.bmon}`,e.wday,e.hired,e.fired,e.email,t?`${t.yr}р ${t.mo}м`:'',vu,vacLim(e),su,sal?sal.amount:'']);
+    rows.push([e.dir,e.typ,e.loc,e.grp,e.last,e.first,e.phone,e.pos,e.stat,e.bdate||`${e.bday}.${e.bmon}`,e.wday,e.hired,e.fired,e.email,t?`${t.yr}р ${t.mo}м`:'',vu,vacTotalLim(e),su,sal?sal.amount:'']);
   });
   const csv=rows.map(r=>r.map(c=>`"${(c||'').toString().replace(/"/g,'""')}"`).join(',')).join('\n');
   dl('\uFEFF'+csv,'hr_employees_'+new Date().toISOString().slice(0,10)+'.csv','text/csv;charset=utf-8');
