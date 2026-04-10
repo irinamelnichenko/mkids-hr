@@ -536,8 +536,8 @@ async function fetchEmps(force=false) {
       last:(row[4]||'').trim(), // E=Прізвище
       first:(row[5]||'').trim(),// F=Ім'я
       phone:(row[6]||'').trim(),// G=Контакт
-      stat:(row[7]||'').trim(), // H=Статус (працює / звільнений / декрет…)
-      pos:(row[8]||'').trim(),  // I=Посада
+      pos:(row[7]||'').trim(),  // H=Посада (вчитель, вихователь, директор…)
+      stat:(row[8]||'').trim(), // I=Статус (працює / звільнений / декрет…)
       bday:(row[9]||'').trim(), // J=День нар.
       bmon:(row[10]||'').trim(),// K=Місяць нар.
       wday:(row[11]||'').trim(), // L=Перший робочий день
@@ -732,7 +732,7 @@ function tenure(e){
 function fmtTenure(e){const t=tenure(e);if(!t)return '—';return t.yr>0?`${t.yr} р. ${t.mo} міс.`:`${t.mo} міс.`;}
 function daysBetween(a,b){return Math.max(0,Math.round((new Date(b)-new Date(a))/86400000)+1);}
 function initials(e){return ((e.last[0]||'')+(e.first[0]||'')).toUpperCase()||'?';}
-function empBday(e){let d=pd(e.bdate);if(d)return d;const day=parseInt(e.bday),mon=parseInt(e.bmon);if(day&&mon)return new Date(new Date().getFullYear(),mon-1,day);return null;}
+function empBday(e){let d=pd(e.bdate);if(d)return d;const day=parseInt(e.bday),mon=parseInt((String(e.bmon).match(/\d+/)||['0'])[0]);if(day&&mon)return new Date(new Date().getFullYear(),mon-1,day);return null;}
 function uniq(arr,key){return [...new Set(arr.map(e=>e[key]).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'uk'));}
 
 // ── REGION ──
@@ -1001,7 +1001,7 @@ function renderEmpCard(){
         <div class="info-grid">
           ${ii('Прізвище',e.last)}${ii("Ім'я",e.first)}${ii('Посада',e.pos)}${ii('Локація',e.loc)}
           ${ii('Тип',e.typ)}${ii('Напрямок',e.dir)}${ii('Група',e.grp)}${ii('Телефон',e.phone)}${ii('Email',e.email)}
-          ${ii('Статус',e.stat)}${ii('Дата народження',(e.bday&&e.bmon?e.bday+'.'+e.bmon:''))}
+          ${ii('Статус',e.stat)}${ii('Дата народження',(e.bday&&e.bmon?e.bday+'.'+(String(e.bmon).match(/\d+/)||[''])[0]:''))}
           ${ii('Перший робочий день',e.wday)}${ii('Дата працевлаштування',e.hired)}
           ${e.fired?ii('Дата звільнення',`<span style="color:#e74c3c">${e.fired}</span>`):''}
           <div class="ii"><label>Ліміт відпустки ${yr}</label><div class="iv">${vl} днів
