@@ -327,7 +327,7 @@ tbody tr.clickable{cursor:pointer}
       <div class="nav-item" data-v="birthdays" onclick="nav('birthdays')" id="navBirthdays">
         <span class="ni">🗓️</span> Календар подій
       </div>
-      <div class="nav-item" data-v="report" onclick="nav('report')" id="navReport">
+      <div class="nav-item hidden" data-v="report" onclick="nav('report')" id="navReport">
         <span class="ni">📊</span> Місячний звіт
       </div>
       <div class="nav-sec" id="navSecSystem">Система</div>
@@ -1200,7 +1200,7 @@ function renderSicks(){
 // ── ANALYTICS ──
 let analyticsTypFilter='',analyticsLocFilter='';
 let analyticsTurnoverPeriod='year',analyticsTurnoverYear=new Date().getFullYear();
-let analyticsTurnoverTypFilter='',analyticsTurnoverLocFilter='';
+let analyticsTabelPeriod='month',analyticsTabelYear=new Date().getFullYear(),analyticsTabelMonth=new Date().getMonth();
 function switchAnalyticsType(val){analyticsTypFilter=val;analyticsLocFilter='';renderAnalytics();}
 function switchAnalyticsLoc(val){analyticsLocFilter=val;renderAnalytics();}
 function clearAnalyticsFilters(){analyticsTypFilter='';analyticsLocFilter='';renderAnalytics();}
@@ -1233,13 +1233,13 @@ function renderAnalytics(){
   });
   const avgT=Object.entries(tp).map(([p,ms])=>({p,avg:Math.round(ms.reduce((a,b)=>a+b,0)/ms.length)})).sort((a,b)=>b.avg-a.avg);
 
-  // Turnover with year + period + type + loc filter (власні фільтри, незалежні від аналітики)
+  // Плинність — використовує ті ж фільтри що й вся аналітика (Тип + Локація)
   const tYear=analyticsTurnoverYear;
   function dismissedInPeriod(period){
     return visible().filter(e=>{
       const d=pd(e.fired);if(!d)return false;
-      if(analyticsTurnoverTypFilter&&normType(e.typ)!==analyticsTurnoverTypFilter)return false;
-      if(analyticsTurnoverLocFilter&&normEmpLoc(e)!==analyticsTurnoverLocFilter)return false;
+      if(analyticsTypFilter&&normType(e.typ)!==analyticsTypFilter)return false;
+      if(analyticsLocFilter&&normEmpLoc(e)!==analyticsLocFilter)return false;
       if(d.getFullYear()!==tYear)return false;
       if(period==='year')return true;
       if(period==='h1')return d.getMonth()<6;
@@ -1367,7 +1367,7 @@ function renderAnalytics(){
         <div class="bar-val">${t.avg>12?`${Math.floor(t.avg/12)}р ${t.avg%12}м`:`${t.avg}м`}</div></div>`).join('')}
       </div></div>
       <div class="chart-card">
-        <h4>📉 Плинність кадрів${analyticsTurnoverTypFilter?' — '+analyticsTurnoverTypFilter:''}${analyticsTurnoverLocFilter?' · '+analyticsTurnoverLocFilter:''}</h4>
+        <h4>📉 Плинність кадрів${analyticsTypFilter?' — '+analyticsTypFilter:''}${analyticsLocFilter?' · '+analyticsLocFilter:''}</h4>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;align-items:center">
           <span style="font-size:11px;color:var(--gray);white-space:nowrap">Рік:</span>
           <select class="flt-sel" style="min-width:80px;padding:4px 8px;font-size:12px" onchange="analyticsTurnoverYear=+this.value;renderAnalytics()">
@@ -1384,19 +1384,6 @@ function renderAnalytics(){
             <option value="q4" ${analyticsTurnoverPeriod==='q4'?'selected':''}>IV квартал</option>
           </select>
         </div>
-        ${isHR?`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px;align-items:center">
-          <span style="font-size:11px;color:var(--gray);white-space:nowrap">Тип:</span>
-          <button class="btn btn-${!analyticsTurnoverTypFilter?'primary':'secondary'} btn-xs" onclick="analyticsTurnoverTypFilter='';analyticsTurnoverLocFilter='';renderAnalytics()">Всі</button>
-          ${sortedTyps.map(t=>`<button class="btn btn-${analyticsTurnoverTypFilter===t?'primary':'secondary'} btn-xs" onclick="analyticsTurnoverTypFilter='${esc(t)}';analyticsTurnoverLocFilter='';renderAnalytics()">${TYPE_ICONS[t]||'📌'} ${t}</button>`).join('')}
-        </div>
-        <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px;align-items:center">
-          <span style="font-size:11px;color:var(--gray);white-space:nowrap">Локація:</span>
-          <select class="flt-sel" style="min-width:160px;padding:4px 8px;font-size:12px" onchange="analyticsTurnoverLocFilter=this.value;renderAnalytics()">
-            <option value="">Всі локації</option>
-            ${[...new Set(visible().filter(e=>!analyticsTurnoverTypFilter||normType(e.typ)===analyticsTurnoverTypFilter).map(e=>normEmpLoc(e)).filter(Boolean))].sort().map(l=>`<option value="${l}" ${analyticsTurnoverLocFilter===l?'selected':''}>${l}</option>`).join('')}
-          </select>
-          ${analyticsTurnoverTypFilter||analyticsTurnoverLocFilter?`<button class="btn btn-secondary btn-xs" onclick="analyticsTurnoverTypFilter='';analyticsTurnoverLocFilter='';renderAnalytics()">✕ Скинути</button>`:''}
-        </div>`:''}
         <div style="text-align:center;padding:10px 0">
           <div style="font-size:48px;font-weight:900;color:${dismissed.length>5?'#e74c3c':'var(--dark)'}">${dismissed.length}</div>
           <div style="color:var(--gray);font-size:13px">звільнень · ${periodLabels[analyticsTurnoverPeriod]}</div>
@@ -1407,7 +1394,7 @@ function renderAnalytics(){
           <div style="font-size:11px;font-weight:700;color:var(--gray);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">По локаціях</div>
           ${Object.entries(turnByLoc_).sort((a,b)=>b[1]-a[1]).map(([l,n])=>`
           <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #f8fafc;font-size:12px">
-            <span style="cursor:pointer;color:var(--blue2)" onclick="analyticsTurnoverLocFilter='${esc(l)}';renderAnalytics()">${l}</span>
+            <span style="cursor:pointer;color:var(--blue2)" onclick="analyticsLocFilter='${esc(l)}';renderAnalytics()">${l}</span>
             <span style="font-weight:700;color:#e74c3c">${n}</span>
           </div>`).join('')}
         </div>`:''}
@@ -1420,6 +1407,84 @@ function renderAnalytics(){
           </div>`).join('')}
           ${dismissed.length>8?`<div style="font-size:11px;color:var(--gray);margin-top:4px">+ ще ${dismissed.length-8}</div>`:''}
         </div>`:''}
+      </div>
+
+      <div class="chart-card" style="grid-column:1/-1">
+        <h4>📋 Табель відвідуваності${analyticsTypFilter?' — '+analyticsTypFilter:''}${analyticsLocFilter?' · '+analyticsLocFilter:''}</h4>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">
+          ${[['month','Місяць'],['quarter','Квартал'],['year','Рік']].map(([p,l])=>
+          `<button class="btn btn-${analyticsTabelPeriod===p?'primary':'secondary'} btn-sm" onclick="analyticsTabelPeriod='${p}';renderAnalytics()">${l}</button>`).join('')}
+          <select class="flt-sel" style="min-width:120px;padding:4px 8px;font-size:12px" onchange="analyticsTabelMonth=+this.value;renderAnalytics()">
+            ${['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'].map((m,i)=>`<option value="${i}" ${analyticsTabelMonth===i?'selected':''}>${m}</option>`).join('')}
+          </select>
+          <select class="flt-sel" style="min-width:80px;padding:4px 8px;font-size:12px" onchange="analyticsTabelYear=+this.value;renderAnalytics()">
+            ${[2024,2025,2026].map(y=>`<option value="${y}" ${analyticsTabelYear===y?'selected':''}>${y}</option>`).join('')}
+          </select>
+        </div>
+        ${(()=>{
+          // Визначаємо діапазон дат
+          let from,to;
+          if(analyticsTabelPeriod==='month'){
+            from=new Date(analyticsTabelYear,analyticsTabelMonth,1);
+            to=new Date(analyticsTabelYear,analyticsTabelMonth+1,0);
+          } else if(analyticsTabelPeriod==='quarter'){
+            const q=Math.floor(analyticsTabelMonth/3);
+            from=new Date(analyticsTabelYear,q*3,1);
+            to=new Date(analyticsTabelYear,q*3+3,0);
+          } else {
+            from=new Date(analyticsTabelYear,0,1);
+            to=new Date(analyticsTabelYear,11,31);
+          }
+          const fromStr=from.toISOString().split('T')[0];
+          const toStr=to.toISOString().split('T')[0];
+          const workDays=workDaysInRange(fromStr,toStr);
+
+          // Збираємо унікальні локації з поточного фільтру
+          const filteredLocs=[...new Set(emps.map(e=>normEmpLoc(e)).filter(Boolean))].sort();
+
+          // Підраховуємо по локаціях
+          const locStats=filteredLocs.map(loc=>{
+            const locEmps=emps.filter(e=>normEmpLoc(e)===loc);
+            let totalPresent=0,totalAbsent=0,totalSick=0,totalVac=0,totalUnknown=0;
+            let d=new Date(from);
+            while(d<=to){
+              const dw=d.getDay();
+              if(dw!==0&&dw!==6){
+                const ds=d.toISOString().split('T')[0];
+                const t=getTabel(loc,ds);
+                locEmps.forEach(e=>{
+                  const st=t[e.key]?.status||'unknown';
+                  if(st==='present')totalPresent++;
+                  else if(st==='absent')totalAbsent++;
+                  else if(st==='sick')totalSick++;
+                  else if(st==='vacation')totalVac++;
+                  else totalUnknown++;
+                });
+              }
+              d.setDate(d.getDate()+1);
+            }
+            const total=locEmps.length*workDays||1;
+            return{loc,locEmps:locEmps.length,totalPresent,totalAbsent,totalSick,totalVac,totalUnknown,total};
+          });
+
+          if(locStats.length===0)return`<div class="empty"><p>Немає даних для цього фільтру</p></div>`;
+
+          return`<div class="tbl-wrap"><table>
+            <thead><tr><th>Локація</th><th>Осіб</th><th>Роб.днів</th><th>✅ Присутніх</th><th>⏰ Спізн.</th><th>❌ Відсутніх</th><th>🏥 Лікарн.</th><th>🏖️ Відпуст.</th><th>❓ Невідомо</th><th>% присут.</th></tr></thead>
+            <tbody>${locStats.map(r=>`<tr>
+              <td><strong>${r.loc}</strong></td>
+              <td>${r.locEmps}</td>
+              <td>${workDays}</td>
+              <td style="color:#27ae60;font-weight:700">${r.totalPresent}</td>
+              <td style="color:#e67e22">${r.totalAbsent||0}</td>
+              <td style="color:#e74c3c">${r.totalAbsent}</td>
+              <td style="color:#9b59b6">${r.totalSick}</td>
+              <td style="color:#3498db">${r.totalVac}</td>
+              <td style="color:#7f8c8d">${r.totalUnknown}</td>
+              <td><strong style="color:${Math.round(r.totalPresent/r.total*100)>80?'#27ae60':'#e74c3c'}">${Math.round(r.totalPresent/r.total*100)}%</strong></td>
+            </tr>`).join('')}</tbody>
+          </table></div>`;
+        })()}
       </div>
       <div class="chart-card"><h4>🎖️ Робочі ювілеї (30 днів)</h4>
         ${annivs.length===0?`<p style="color:var(--gray);text-align:center;padding:16px">Немає ювілеїв у найближчі 30 днів</p>`:
@@ -1444,32 +1509,75 @@ function renderAnalytics(){
 }
 
 // ── BIRTHDAYS VIEW ──
+let bdaysMonth=new Date().getMonth(), bdaysYear=new Date().getFullYear();
 function renderBdays(){
   const emps=visible().filter(isActive);
-  const bdays=upcomingBdays(emps,90),annivs=upcomingAnnivs(emps,90);
+  const monthNames=['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
+  const now=new Date(); now.setHours(0,0,0,0);
+
+  // Дні народження за вибраний місяць
+  const bdaysInMonth=emps.map(e=>{
+    const bd=empBday(e); if(!bd) return null;
+    const d=new Date(bdaysYear, bd.getMonth(), bd.getDate());
+    if(d.getMonth()!==bdaysMonth) return null;
+    const left=Math.round((d-now)/86400000);
+    return{e,d,left};
+  }).filter(Boolean).sort((a,b)=>a.d.getDate()-b.d.getDate());
+
+  // Ювілеї за вибраний місяць
+  const ms=[1,2,3,5,7,10,15,20,25,30];
+  const annivInMonth=emps.map(e=>{
+    const sd=startDate(e); if(!sd) return null;
+    const total=bdaysYear-sd.getFullYear();
+    if(total<=0||!ms.includes(total)) return null;
+    const anniv=new Date(bdaysYear, sd.getMonth(), sd.getDate());
+    if(anniv.getMonth()!==bdaysMonth) return null;
+    const left=Math.round((anniv-now)/86400000);
+    return{e,d:anniv,left,yrs:total};
+  }).filter(Boolean).sort((a,b)=>a.d.getDate()-b.d.getDate());
+
+  const prevMonth=()=>{bdaysMonth--;if(bdaysMonth<0){bdaysMonth=11;bdaysYear--;}renderBdays();};
+  const nextMonth=()=>{bdaysMonth++;if(bdaysMonth>11){bdaysMonth=0;bdaysYear++;}renderBdays();};
+
   set('main',`
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;flex-wrap:wrap">
+      <button class="btn btn-secondary btn-sm" onclick="(${prevMonth.toString()})()">← Попередній</button>
+      <select class="flt-sel" onchange="bdaysMonth=+this.value;renderBdays()">
+        ${monthNames.map((m,i)=>`<option value="${i}" ${bdaysMonth===i?'selected':''}>${m}</option>`).join('')}
+      </select>
+      <select class="flt-sel" onchange="bdaysYear=+this.value;renderBdays()">
+        ${[2025,2026,2027].map(y=>`<option value="${y}" ${bdaysYear===y?'selected':''}>${y}</option>`).join('')}
+      </select>
+      <button class="btn btn-secondary btn-sm" onclick="(${nextMonth.toString()})()">Наступний →</button>
+      <button class="btn btn-secondary btn-sm" onclick="bdaysMonth=new Date().getMonth();bdaysYear=new Date().getFullYear();renderBdays()">Сьогодні</button>
+      <span style="font-size:12px;color:var(--gray)">${monthNames[bdaysMonth]} ${bdaysYear}</span>
+    </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
       <div class="card">
-        <div class="card-hd"><h3>🎂 Дні народження (90 днів)</h3></div>
-        ${bdays.length===0?`<div class="empty"><span class="ei">🎂</span><h4>Немає</h4></div>`:
-        bdays.map(b=>`<div style="padding:13px 20px;border-bottom:1px solid #f0f4f8;display:flex;align-items:center;gap:10px;cursor:pointer" onclick="nav('employee',${b.e.id})">
-          <div style="font-size:26px">${b.left===0?'🎉':b.left<=3?'🎁':'🎂'}</div>
+        <div class="card-hd"><h3>🎂 Дні народження — ${monthNames[bdaysMonth]}</h3>
+          <span style="font-size:12px;color:var(--gray)">${bdaysInMonth.length} подій</span>
+        </div>
+        ${bdaysInMonth.length===0?`<div class="empty"><span class="ei">🎂</span><h4>Немає в цьому місяці</h4></div>`:
+        bdaysInMonth.map(b=>`<div style="padding:12px 20px;border-bottom:1px solid #f0f4f8;display:flex;align-items:center;gap:10px;cursor:pointer" onclick="nav('employee',${b.e.id})">
+          <div style="font-size:24px">${b.left===0?'🎉':b.left<0?'🎂':b.left<=3?'🎁':'🎂'}</div>
           <div style="flex:1"><div style="font-weight:700">${fullName(b.e)}</div><div style="font-size:12px;color:var(--gray)">${b.e.pos} · ${b.e.loc}</div></div>
           <div style="text-align:right">
-            <div style="font-weight:700;color:${b.left===0?'#e74c3c':b.left<=7?'#e67e22':'#27ae60'};font-size:13px">${b.left===0?'Сьогодні!':'за '+b.left+' дн.'}</div>
-            <div style="font-size:11px;color:var(--gray2)">${fmtDate(b.d)}</div>
+            <div style="font-weight:700;color:${b.left===0?'#e74c3c':b.left<0?'var(--gray)':b.left<=7?'#e67e22':'#27ae60'};font-size:13px">${b.left===0?'Сьогодні!':b.left<0?`${Math.abs(b.left)} дн. тому`:'за '+b.left+' дн.'}</div>
+            <div style="font-size:11px;color:var(--gray2)">${b.d.getDate()}.${String(b.d.getMonth()+1).padStart(2,'0')}</div>
           </div>
         </div>`).join('')}
       </div>
       <div class="card">
-        <div class="card-hd"><h3>🎖️ Ювілеї роботи (90 днів)</h3></div>
-        ${annivs.length===0?`<div class="empty"><span class="ei">🎖️</span><h4>Немає</h4></div>`:
-        annivs.map(a=>`<div style="padding:13px 20px;border-bottom:1px solid #f0f4f8;display:flex;align-items:center;gap:10px;cursor:pointer" onclick="nav('employee',${a.e.id})">
-          <div style="font-size:26px">${a.yrs>=10?'🏆':'🎖️'}</div>
+        <div class="card-hd"><h3>🎖️ Ювілеї роботи — ${monthNames[bdaysMonth]}</h3>
+          <span style="font-size:12px;color:var(--gray)">${annivInMonth.length} подій</span>
+        </div>
+        ${annivInMonth.length===0?`<div class="empty"><span class="ei">🎖️</span><h4>Немає в цьому місяці</h4></div>`:
+        annivInMonth.map(a=>`<div style="padding:12px 20px;border-bottom:1px solid #f0f4f8;display:flex;align-items:center;gap:10px;cursor:pointer" onclick="nav('employee',${a.e.id})">
+          <div style="font-size:24px">${a.yrs>=10?'🏆':'🎖️'}</div>
           <div style="flex:1"><div style="font-weight:700">${fullName(a.e)}</div><div style="font-size:12px;color:var(--gray)">${a.e.pos} · ${a.e.loc}</div></div>
           <div style="text-align:right">
             <div style="font-weight:700;color:#27ae60;font-size:14px">${a.yrs} рок${a.yrs===1?'':a.yrs<5?'и':'ів'}</div>
-            <div style="font-size:11px;color:${a.left===0?'#e74c3c':a.left<=7?'#e67e22':'var(--gray2)'}">${a.left===0?'Сьогодні!':'за '+a.left+' дн.'}</div>
+            <div style="font-size:11px;color:${a.left===0?'#e74c3c':a.left<0?'var(--gray)':a.left<=7?'#e67e22':'var(--gray2)'}">${a.left===0?'Сьогодні!':a.left<0?`${Math.abs(a.left)} дн. тому`:'за '+a.left+' дн.'}</div>
           </div>
         </div>`).join('')}
       </div>
