@@ -398,6 +398,13 @@ tbody tr.clickable{cursor:pointer}
     </div>
     <div class="modal-bd">
       <div id="mSickName" style="font-weight:700;font-size:15px;margin-bottom:10px;color:var(--dark)"></div>
+      <div class="fg">
+        <label>Тип лікарняного</label>
+        <select id="sType">
+          <option value="Офіційний">🏥 Офіційний (з листком непрацездатності)</option>
+          <option value="Неофіційний">🤒 Неофіційний (без документів)</option>
+        </select>
+      </div>
       <div class="g2">
         <div class="fg"><label>Початок</label><input type="date" id="sStart" onchange="calcSDays()"></div>
         <div class="fg"><label>Кінець</label><input type="date" id="sEnd" onchange="calcSDays()"></div>
@@ -535,7 +542,7 @@ async function fetchEmps(force=false) {
       grp:(row[3]||'').trim(),  // D=Група
       last:(row[4]||'').trim(), // E=Прізвище
       first:(row[5]||'').trim(),// F=Ім'я
-      phone:(row[6]||'').trim(),// G=Контакт
+      phone:(()=>{const p=(row[6]||'').trim().replace(/\s/g,'');return p&&!p.startsWith('0')&&/^\d{9}$/.test(p)?'0'+p:p;})(),// G=Контакт
       pos:(row[7]||'').trim(),  // H=Посада
       stat:(row[8]||'').trim(), // I=Статус
       bday:(row[9]||'').trim(), // J=День нар.
@@ -736,16 +743,10 @@ function initials(e){return ((e.last[0]||'')+(e.first[0]||'')).toUpperCase()||'?
 function empBday(e){let d=pd(e.bdate);if(d)return d;const day=parseInt(e.bday),mon=parseInt((String(e.bmon).match(/\d+/)||['0'])[0]);if(day&&mon)return new Date(new Date().getFullYear(),mon-1,day);return null;}
 function uniq(arr,key){return [...new Set(arr.map(e=>e[key]).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'uk'));}
 
-// ── REGION ──
-const REGION_KEYS={'Київ':['київ','kyiv'],'Львів':['львів','lviv']};
-function getRegion(e){
-  const txt=((e.dir||'')+' '+(e.loc||'')).toLowerCase();
-  if(REGION_KEYS['Київ'].some(k=>txt.includes(k))) return 'Київ';
-  if(REGION_KEYS['Львів'].some(k=>txt.includes(k))) return 'Львів';
-  return 'Управління';
-}
-const REGIONS=['Київ','Львів','Управління'];
-const REGION_ICONS={'Київ':'🏙️','Львів':'🦁','Управління':'🏛️'};
+// ── REGION (використовуємо поле Напрямок = dir) ──
+function getRegion(e){ return (e.dir||'').trim()||'Інше'; }
+function getRegions(arr){ return [...new Set((arr||S.emps).map(e=>getRegion(e)).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'uk')); }
+const REGION_ICONS={'Садочок':'🌱','Школа':'🏫','Управління':'🏛️','Офіс':'💼','Менеджмент':'👔','Кухня':'🍽️','Інше':'📌'};
 function esc(s){return (s||'').replace(/"/g,'&quot;').replace(/</g,'&lt;');}
 function set(id,html){document.getElementById(id).innerHTML=html;}
 
@@ -1031,8 +1032,9 @@ function renderEmpCard(){
           ${act?`<button class="btn btn-primary btn-sm" onclick="openSick(${e.id})">+ Додати</button>`:''}
         </div>
         ${r.sicks.length===0?`<div class="empty"><span class="ei">🏥</span><h4>Немає лікарняних</h4></div>`:
-        `<div class="tbl-wrap"><table><thead><tr><th>Початок</th><th>Кінець</th><th>Днів</th><th>№ документу</th><th>Примітка</th><th></th></tr></thead>
+        `<div class="tbl-wrap"><table><thead><tr><th>Тип</th><th>Початок</th><th>Кінець</th><th>Днів</th><th>№ документу</th><th>Примітка</th><th></th></tr></thead>
         <tbody>${[...r.sicks].sort((a,b)=>new Date(b.start)-new Date(a.start)).map(v=>`<tr>
+          <td><span class="badge ${v.sickType==='Неофіційний'?'bo':'bb'}">${v.sickType||'Офіційний'}</span></td>
           <td>${fmtDate(v.start)}</td><td>${fmtDate(v.end)}</td><td><strong>${v.days}</strong></td>
           <td style="font-size:12px">${v.doc||'—'}</td><td style="font-size:12px;color:var(--gray)">${v.note||'—'}</td>
           <td><button class="btn btn-danger btn-xs" onclick="delRec('${e.key}','sicks','${v._id||r.sicks.indexOf(v)}',${e.id})">🗑</button></td>
@@ -1159,6 +1161,7 @@ function renderSicks(){
 // ── ANALYTICS ──
 let analyticsTypFilter='',analyticsLocFilter='',analyticsDirFilter='',analyticsRegionFilter='';
 let analyticsTurnoverPeriod='year',analyticsTurnoverYear=new Date().getFullYear();
+let analyticsTurnoverTypFilter='',analyticsTurnoverLocFilter='';
 function switchAnalyticsType(val){analyticsTypFilter=val;analyticsLocFilter='';renderAnalytics();}
 function switchAnalyticsLoc(val){analyticsLocFilter=val;renderAnalytics();}
 function switchAnalyticsRegion(val){analyticsRegionFilter=val;analyticsLocFilter='';renderAnalytics();}
@@ -1194,14 +1197,13 @@ function renderAnalytics(){
   });
   const avgT=Object.entries(tp).map(([p,ms])=>({p,avg:Math.round(ms.reduce((a,b)=>a+b,0)/ms.length)})).sort((a,b)=>b.avg-a.avg);
 
-  // Turnover with year + period + type + region + loc filter
+  // Turnover with year + period + type + loc filter (власні фільтри, незалежні від аналітики)
   const tYear=analyticsTurnoverYear;
   function dismissedInPeriod(period){
     return visible().filter(e=>{
       const d=pd(e.fired);if(!d)return false;
-      if(analyticsTypFilter&&normType(e.typ)!==analyticsTypFilter)return false;
-      if(analyticsRegionFilter&&getRegion(e)!==analyticsRegionFilter)return false;
-      if(analyticsLocFilter&&normEmpLoc(e)!==analyticsLocFilter)return false;
+      if(analyticsTurnoverTypFilter&&normType(e.typ)!==analyticsTurnoverTypFilter)return false;
+      if(analyticsTurnoverLocFilter&&normEmpLoc(e)!==analyticsTurnoverLocFilter)return false;
       if(d.getFullYear()!==tYear)return false;
       if(period==='year')return true;
       if(period==='h1')return d.getMonth()<6;
@@ -1269,9 +1271,9 @@ function renderAnalytics(){
         ${sortedTyps.map(t=>`<button class="dtype-tab ${analyticsTypFilter===t?'active':''}" onclick="switchAnalyticsType('${esc(t)}')">${TYPE_ICONS[t]||'📌'} ${t} <span class="dtype-cnt">${allActive.filter(e=>normType(e.typ)===t).length}</span></button>`).join('')}
       </div>
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;width:100%">
-        <strong style="font-size:12px;color:var(--gray);white-space:nowrap">Регіон:</strong>
-        <button class="dtype-tab ${!analyticsRegionFilter?'active':''}" onclick="switchAnalyticsRegion('')">🌐 Всі регіони</button>
-        ${REGIONS.map(r=>{const rc=allActive.filter(e=>getRegion(e)===r);return`<button class="dtype-tab ${analyticsRegionFilter===r?'active':''}" onclick="switchAnalyticsRegion('${r}')">${REGION_ICONS[r]||'📍'} ${r} <span class="dtype-cnt">${rc.length}</span></button>`;}).join('')}
+        <strong style="font-size:12px;color:var(--gray);white-space:nowrap">Напрямок:</strong>
+        <button class="dtype-tab ${!analyticsRegionFilter?'active':''}" onclick="switchAnalyticsRegion('')">🌐 Всі</button>
+        ${getRegions(allActive).map(r=>{const rc=allActive.filter(e=>getRegion(e)===r);return`<button class="dtype-tab ${analyticsRegionFilter===r?'active':''}" onclick="switchAnalyticsRegion('${esc(r)}')">${REGION_ICONS[r]||'📍'} ${r} <span class="dtype-cnt">${rc.length}</span></button>`;}).join('')}
       </div>
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;width:100%">
         <strong style="font-size:12px;color:var(--gray);white-space:nowrap">Локація:</strong>
@@ -1351,30 +1353,31 @@ function renderAnalytics(){
             <option value="q4" ${analyticsTurnoverPeriod==='q4'?'selected':''}>IV квартал</option>
           </select>
         </div>
-        ${isHR?`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px;align-items:center">
-          <span style="font-size:11px;color:var(--gray);white-space:nowrap">Регіон:</span>
-          <button class="btn btn-${!analyticsRegionFilter?'primary':'secondary'} btn-xs" onclick="switchAnalyticsRegion('')">Всі</button>
-          ${REGIONS.map(r=>`<button class="btn btn-${analyticsRegionFilter===r?'primary':'secondary'} btn-xs" onclick="switchAnalyticsRegion('${r}')">${r}</button>`).join('')}
+        ${isHR?`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px;align-items:center">
+          <span style="font-size:11px;color:var(--gray);white-space:nowrap">Тип:</span>
+          <button class="btn btn-${!analyticsTurnoverTypFilter?'primary':'secondary'} btn-xs" onclick="analyticsTurnoverTypFilter='';analyticsTurnoverLocFilter='';renderAnalytics()">Всі</button>
+          ${sortedTyps.map(t=>`<button class="btn btn-${analyticsTurnoverTypFilter===t?'primary':'secondary'} btn-xs" onclick="analyticsTurnoverTypFilter='${esc(t)}';analyticsTurnoverLocFilter='';renderAnalytics()">${TYPE_ICONS[t]||'📌'} ${t}</button>`).join('')}
+        </div>
+        <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px;align-items:center">
+          <span style="font-size:11px;color:var(--gray);white-space:nowrap">Локація:</span>
+          <select class="flt-sel" style="min-width:160px;padding:4px 8px;font-size:12px" onchange="analyticsTurnoverLocFilter=this.value;renderAnalytics()">
+            <option value="">Всі локації</option>
+            ${[...new Set(visible().filter(e=>!analyticsTurnoverTypFilter||normType(e.typ)===analyticsTurnoverTypFilter).map(e=>normEmpLoc(e)).filter(Boolean))].sort().map(l=>`<option value="${l}" ${analyticsTurnoverLocFilter===l?'selected':''}>${l}</option>`).join('')}
+          </select>
+          ${analyticsTurnoverTypFilter||analyticsTurnoverLocFilter?`<button class="btn btn-secondary btn-xs" onclick="analyticsTurnoverTypFilter='';analyticsTurnoverLocFilter='';renderAnalytics()">✕ Скинути</button>`:''}
         </div>`:''}
         <div style="text-align:center;padding:10px 0">
           <div style="font-size:48px;font-weight:900;color:${dismissed.length>5?'#e74c3c':'var(--dark)'}">${dismissed.length}</div>
           <div style="color:var(--gray);font-size:13px">звільнень · ${periodLabels[analyticsTurnoverPeriod]}</div>
           <div style="margin-top:6px;font-size:12px;color:var(--gray)">Активних: ${emps.length} · Плинність: ${emps.length>0?Math.round(dismissed.length/(emps.length+dismissed.length)*100):0}%</div>
         </div>
-        ${!analyticsRegionFilter&&Object.keys(turnByRegion_).length>0?`
-        <div style="margin-top:8px;border-top:1px solid #f0f4f8;padding-top:8px">
-          <div style="font-size:11px;font-weight:700;color:var(--gray);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">По регіонах</div>
-          ${Object.entries(turnByRegion_).sort((a,b)=>b[1]-a[1]).map(([r,n])=>`
-          <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #f8fafc;font-size:12px">
-            <span style="cursor:pointer;color:var(--blue2);text-decoration:underline" onclick="switchAnalyticsRegion('${r}')">${r}</span><span style="font-weight:700;color:#e74c3c">${n}</span>
-          </div>`).join('')}
-        </div>`:''}
-        ${Object.keys(turnByLoc_).length>1?`
+        ${Object.keys(turnByLoc_).length>0?`
         <div style="margin-top:8px;border-top:1px solid #f0f4f8;padding-top:8px">
           <div style="font-size:11px;font-weight:700;color:var(--gray);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">По локаціях</div>
           ${Object.entries(turnByLoc_).sort((a,b)=>b[1]-a[1]).map(([l,n])=>`
           <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #f8fafc;font-size:12px">
-            <span>${l}</span><span style="font-weight:700;color:#e74c3c">${n}</span>
+            <span style="cursor:pointer;color:var(--blue2)" onclick="analyticsTurnoverLocFilter='${esc(l)}';renderAnalytics()">${l}</span>
+            <span style="font-weight:700;color:#e74c3c">${n}</span>
           </div>`).join('')}
         </div>`:''}
         ${dismissed.length>0?`<div style="margin-top:8px;border-top:1px solid #f0f4f8;padding-top:8px">
@@ -1382,7 +1385,7 @@ function renderAnalytics(){
           ${dismissed.slice(0,8).map(e=>`
           <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:11px">
             <span style="cursor:pointer;text-decoration:underline;color:var(--blue2)" onclick="nav('employee',${e.id})">${fullName(e)}</span>
-            <span style="color:var(--gray)">${getRegion(e)} · ${normEmpLoc(e)||''} · ${e.fired}</span>
+            <span style="color:var(--gray)">${normType(e.typ)} · ${normEmpLoc(e)||''} · ${e.fired}</span>
           </div>`).join('')}
           ${dismissed.length>8?`<div style="font-size:11px;color:var(--gray);margin-top:4px">+ ще ${dismissed.length-8}</div>`:''}
         </div>`:''}
@@ -1457,6 +1460,7 @@ function openVac(id){
 function openSick(id){
   mEmpId=id;document.getElementById('mSickName').textContent=fullName(S.emps[id]);
   ['sStart','sEnd','sDoc','sNote'].forEach(x=>document.getElementById(x).value='');
+  document.getElementById('sType').value='Офіційний';
   document.getElementById('sDays').textContent='0';document.getElementById('mSick').classList.remove('hidden');
 }
 function openSal(id){
@@ -1493,10 +1497,11 @@ function saveVac(){
 function saveSick(){
   const start=document.getElementById('sStart').value,end=document.getElementById('sEnd').value;
   const doc=document.getElementById('sDoc').value,note=document.getElementById('sNote').value;
+  const sickType=document.getElementById('sType').value;
   if(!start||!end){alert('Вкажіть дати');return;}
   if(new Date(start)>new Date(end)){alert('Початок > кінець');return;}
   const e=S.emps[mEmpId];
-  rec(e.key).sicks.push({_id:Date.now()+'s'+Math.random().toString(36).slice(2,6),start,end,days:daysBetween(start,end),doc,note,at:new Date().toISOString()});
+  rec(e.key).sicks.push({_id:Date.now()+'s'+Math.random().toString(36).slice(2,6),start,end,days:daysBetween(start,end),sickType,doc,note,at:new Date().toISOString()});
   saveRecs();closeModal('mSick');toast('✅ Лікарняний збережено');
   if(S.view==='employee')renderEmpCard();else renderView();
 }
