@@ -691,35 +691,44 @@ function renderView(){
 function showLoad(){document.getElementById('main').innerHTML='<div class="loading"><div class="spinner"></div><p>Завантаження…</p></div>';}
 
 // ── DATA HELPERS ──
-function visible(){return S.user.role==='director'?S.emps.filter(e=>e.loc===S.user.loc):S.emps;}
+function visible(){return S.user.role==='director'||S.user.role==='nurse'?S.emps.filter(e=>e.loc===S.user.loc):S.emps;}
 function isActive(e){
-  if(e.fired&&e.fired.trim())return false;          // є дата в кол. O
-  if(e.stat&&/звіл/i.test(e.stat))return false;    // статус містить "звіл…"
+  if(e.fired&&e.fired.trim())return false;
+  if(e.stat&&/звіл/i.test(e.stat))return false;
   return true;
 }
 function fullName(e){return (e.last+' '+e.first).trim();}
-function vacLim(e, yr=new Date().getFullYear()){
-  const base=/вихователь/i.test(e.pos||'')?CFG.VAC_TEACHER:CFG.VAC_DEFAULT;
-  const sd=pd(e.wday)||pd(e.hired);
-  if(!sd) return base;
-  const sy=sd.getFullYear();
-  if(sy>yr) return 0;
-  if(sy<yr) return base;
-  // Started this year — proportional
-  const isLeap=yr%4===0&&(yr%100!==0||yr%400===0);
-  const daysInYear=isLeap?366:365;
-  const startOfYear=new Date(yr,0,1);
-  const daysWorked=Math.round((new Date(yr,11,31)-sd)/86400000)+1;
-  return Math.max(1, Math.round(base*daysWorked/daysInYear));
+
+// Найрання дата початку роботи
+function startDate(e){
+  const d1=pd(e.wday),d2=pd(e.hired);
+  if(d1&&d2)return d1<d2?d1:d2;
+  return d1||d2||null;
 }
-function vacCarryover(e, yr=new Date().getFullYear()){
-  if(yr<=2024) return 0;
-  return Math.max(0, vacLim(e,yr-1)-vacUsed(e.key,yr-1));
+
+// Ліміт відпустки = фактично відпрацьовані місяці × (14 або 24) / 12
+// Рахується накопичено від дати початку до сьогодні
+function vacDailyRate(e){
+  return /вихователь/i.test(e.pos||'')?24:14;
 }
-function vacTotalLim(e, yr=new Date().getFullYear()){
-  return vacLim(e,yr)+vacCarryover(e,yr);
+function vacEarned(e, toDate=new Date()){
+  // Скільки місяців відпрацювано від початку до toDate
+  const sd=startDate(e); if(!sd)return 0;
+  if(sd>toDate)return 0;
+  const months=(toDate.getFullYear()-sd.getFullYear())*12+(toDate.getMonth()-sd.getMonth());
+  const rate=vacDailyRate(e);
+  return Math.floor(months*rate/12);
 }
-function vacUsed(key,yr=new Date().getFullYear()){return rec(key).vacs.filter(v=>new Date(v.start).getFullYear()===yr&&v.type==='Щорічна').reduce((s,v)=>s+(v.days||0),0);}
+// Для відображення: зароблено всього мінус використано = залишок
+function vacTotalLim(e){return vacEarned(e);}
+function vacLim(e){return vacEarned(e);} // сумісність
+function vacCarryover(){return 0;} // більше не використовуємо перенос
+function vacUsed(key,yr=null){
+  // Якщо yr не вказано — всі використані за весь час
+  if(yr===null) return rec(key).vacs.filter(v=>v.type==='Щорічна').reduce((s,v)=>s+(v.days||0),0);
+  return rec(key).vacs.filter(v=>new Date(v.start).getFullYear()===yr&&v.type==='Щорічна').reduce((s,v)=>s+(v.days||0),0);
+}
+function vacBalance(e){return Math.max(0, vacEarned(e)-vacUsed(e.key));}
 function sickUsed(key,yr=new Date().getFullYear()){return rec(key).sicks.filter(v=>new Date(v.start).getFullYear()===yr).reduce((s,v)=>s+(v.days||0),0);}
 function curSal(key){const h=[...rec(key).sals].sort((a,b)=>new Date(b.date)-new Date(a.date));return h[0]||null;}
 function isOnVac(key){const now=new Date();now.setHours(0,0,0,0);return rec(key).vacs.some(v=>new Date(v.start)<=now&&now<=new Date(v.end));}
@@ -733,8 +742,8 @@ function pd(str){
 }
 function fmtDate(d){if(!d)return '—';if(typeof d==='string'){const p=pd(d);return p?p.toLocaleDateString('uk-UA'):d;}return d.toLocaleDateString('uk-UA');}
 function tenure(e){
-  const d=pd(e.wday)||pd(e.hired); if(!d)return null;
-  const ms=Date.now()-d.getTime();
+  const d=startDate(e); if(!d)return null;
+  const ms=Date.now()-d.getTime(); if(ms<0)return null;
   return {yr:Math.floor(ms/(365.25*24*3600*1000)),mo:Math.floor((ms%(365.25*24*3600*1000))/(30.44*24*3600*1000)),d};
 }
 function fmtTenure(e){const t=tenure(e);if(!t)return '—';return t.yr>0?`${t.yr} р. ${t.mo} міс.`:`${t.mo} міс.`;}
@@ -959,9 +968,13 @@ function renderEmpCard(){
   const e=S.emps[S.empId]; if(!e){nav('employees');return;}
   const yr=new Date().getFullYear();
   const act=isActive(e),r=rec(e.key);
-  const vlBase=vacLim(e,yr),vlCarry=vacCarryover(e,yr),vl=vacTotalLim(e,yr);
-  const vu=vacUsed(e.key),su=sickUsed(e.key);
-  const sal=curSal(e.key),t=tenure(e),ov=vu>vl,pct=Math.min(100,Math.round(vl>0?vu/vl*100:0));
+  const vEarned=vacEarned(e);         // зароблено всього за фактичний стаж
+  const vUsed=vacUsed(e.key);         // використано всього (без фільтра по року)
+  const vBal=Math.max(0,vEarned-vUsed); // залишок
+  const ov=vUsed>vEarned;
+  const pct=Math.min(100,Math.round(vEarned>0?vUsed/vEarned*100:0));
+  const su=sickUsed(e.key),sal=curSal(e.key),t=tenure(e);
+  const rate=vacDailyRate(e);
 
   set('main',`
     <div class="back-btn" onclick="nav('employees')">← Назад до списку</div>
@@ -987,11 +1000,11 @@ function renderEmpCard(){
       </div>
       <div class="qs-grid">
         <div class="qs-item"><div class="qs-val">${t?`${t.yr}р ${t.mo}м`:'—'}</div><div class="qs-lbl">Стаж</div></div>
-        <div class="qs-item"><div class="qs-val" style="color:${ov?'#e74c3c':'var(--dark)'};">${vu}<span style="font-size:14px;color:var(--gray)">/${vl}</span></div><div class="qs-lbl">Відпустка (днів)</div></div>
-        <div class="qs-item"><div class="qs-val">${su}</div><div class="qs-lbl">Лікарняних (днів)</div></div>
+        <div class="qs-item"><div class="qs-val" style="color:${ov?'#e74c3c':'var(--dark)'};">${vUsed}<span style="font-size:14px;color:var(--gray)">/${vEarned}</span></div><div class="qs-lbl">Відпустка використано/зароблено</div></div>
+        <div class="qs-item"><div class="qs-val" style="color:${vBal===0?'#e74c3c':vBal<3?'#e67e22':'#27ae60'}">${vBal}</div><div class="qs-lbl">Залишок днів відпустки</div></div>
         <div class="qs-item"><div class="qs-val" style="color:#27ae60;font-size:18px">${sal?Number(sal.amount).toLocaleString('uk-UA'):'—'}</div><div class="qs-lbl">Зарплата (грн)</div></div>
       </div>
-      ${ov?`<div class="alert alert-danger" style="margin:14px;border-radius:8px">⚠️ Перевищено ліміт! Використано <strong>${vu}</strong> з <strong>${vl}</strong> днів (+${vu-vl} зайвих)</div>`:''}
+      ${ov?`<div class="alert alert-danger" style="margin:14px;border-radius:8px">⚠️ Перевищено ліміт! Використано <strong>${vUsed}</strong> з <strong>${vEarned}</strong> зароблених днів</div>`:''}
       <div class="tabs" id="empTabs">
         <div class="tab active" data-tab="tInfo" onclick="switchTab(this)">📋 Інфо</div>
         <div class="tab" data-tab="tVac" onclick="switchTab(this)">🏖️ Відпустки (${r.vacs.length})</div>
@@ -1006,15 +1019,15 @@ function renderEmpCard(){
           ${ii('Статус',e.stat)}${ii('Дата народження', e.bdate ? fmtDate(e.bdate) : (e.bday&&e.bmon ? e.bday+'.'+(String(e.bmon).match(/\d+/)||[''])[0] : ''))}
           ${ii('Перший робочий день',e.wday)}${ii('Дата працевлаштування',e.hired)}
           ${e.fired?ii('Дата звільнення',`<span style="color:#e74c3c">${e.fired}</span>`):''}
-          <div class="ii"><label>Ліміт відпустки ${yr}</label><div class="iv">${vl} днів
+          <div class="ii"><label>Відпустка (накопичено за стажем)</label><div class="iv">${vEarned} днів зароблено
             <div class="prog-wrap"><div class="prog-bar ${ov?'pr':pct>75?'po':'pg'}" style="width:${pct}%"></div></div>
-            <div style="font-size:11px;color:var(--gray);margin-top:3px">${vu} з ${vl} (${pct}%)${vlCarry>0?` · перенесено з ${yr-1}: +${vlCarry} дн.`:''}</div>
+            <div style="font-size:11px;color:var(--gray);margin-top:3px">${vUsed} використано · ${vBal} залишок · ставка ${rate} дн/рік (${(rate/12).toFixed(1)} дн/міс)</div>
           </div></div>
         </div>
       </div>
       <div id="tVac" class="tab-pane">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
-          <h4 style="font-size:14px;font-weight:700">Відпустки ${new Date().getFullYear()}: <strong style="color:${ov?'#e74c3c':'#27ae60'}">${vu}/${vl} днів</strong></h4>
+          <h4 style="font-size:14px;font-weight:700">Відпустки: <strong style="color:${ov?'#e74c3c':'#27ae60'}">${vUsed}/${vEarned} днів</strong> · залишок: <strong>${vBal}</strong></h4>
           ${act?`<button class="btn btn-primary btn-sm" onclick="openVac(${e.id})">+ Додати</button>`:''}
         </div>
         ${r.vacs.length===0?`<div class="empty"><span class="ei">🏖️</span><h4>Немає відпусток</h4><p>Натисніть "+ Додати"</p></div>`:
@@ -1088,25 +1101,25 @@ function switchTab(el){
 
 // ── VACATIONS VIEW ──
 function renderVacs(){
-  const yr=new Date().getFullYear();
   const rows=visible().filter(isActive).map(e=>{
-    const vl=vacTotalLim(e,yr),vu=vacUsed(e.key),carry=vacCarryover(e,yr);
-    return{e,vl,vu,carry,pct:Math.min(100,Math.round(vl>0?vu/vl*100:0)),ov:vu>vl};
+    const vEarned=vacEarned(e),vUsed=vacUsed(e.key),vBal=Math.max(0,vEarned-vUsed);
+    const ov=vUsed>vEarned,pct=Math.min(100,Math.round(vEarned>0?vUsed/vEarned*100:0));
+    return{e,vEarned,vUsed,vBal,ov,pct};
   }).sort((a,b)=>b.ov-a.ov||b.pct-a.pct);
   const isHR=S.user.role==='hr';
 
   set('main',`
     <div class="alert alert-info" style="margin-bottom:16px">
-      ℹ️ Ліміт: <strong>вихователь — 28 дн.</strong>, інші — <strong>14 дн.</strong> на рік (пропорційно до дати початку роботи). Невикористані дні переходять на наступний рік.
+      ℹ️ Відпустка нараховується за фактичним стажем: <strong>вихователь — 24 дн/рік</strong>, інші — <strong>14 дн/рік</strong> (2 дні за кожні 1.7 міс стажу).
     </div>
     <div class="card">
-      <div class="card-hd"><h3>🏖️ Відпустки ${yr}</h3>
+      <div class="card-hd"><h3>🏖️ Відпустки</h3>
         <span style="font-size:12px;color:${rows.filter(r=>r.ov).length>0?'#e74c3c':'var(--gray)'}">
           ${rows.filter(r=>r.ov).length} перевищень
         </span>
       </div>
       <div class="tbl-wrap"><table>
-        <thead><tr><th>Співробітник</th>${isHR?'<th>Локація</th>':''}<th>Посада</th><th>Використано</th><th>Ліміт</th><th>Перенесено</th><th>Залишок</th><th style="min-width:140px">Прогрес</th><th>Дії</th></tr></thead>
+        <thead><tr><th>Співробітник</th>${isHR?'<th>Локація</th>':''}<th>Посада</th><th>Зароблено</th><th>Використано</th><th>Залишок</th><th style="min-width:140px">Прогрес</th><th>Дії</th></tr></thead>
         <tbody>${rows.map(r=>`<tr class="clickable" style="${r.ov?'background:#fdf9f9':''}" onclick="nav('employee',${r.e.id})">
           <td><div style="display:flex;align-items:center;gap:8px">
             <div class="avatar" style="width:28px;height:28px;font-size:10px">${initials(r.e)}</div>
@@ -1114,10 +1127,9 @@ function renderVacs(){
           </div></td>
           ${isHR?`<td style="font-size:12px">${r.e.loc}</td>`:''}
           <td style="font-size:12px">${r.e.pos}</td>
-          <td><strong style="color:${r.ov?'#e74c3c':'var(--dark)'}">${r.vu}</strong></td>
-          <td>${r.vl}${r.carry>0?`<span style="font-size:10px;color:var(--blue2);margin-left:3px">+${r.carry}</span>`:''}</td>
-          <td>${r.carry>0?`<span class="badge bb" style="font-size:10px">+${r.carry} перен.</span>`:'—'}</td>
-          <td><strong style="color:${r.vl-r.vu<0?'#e74c3c':r.vl-r.vu<3?'#e67e22':'#27ae60'}">${r.vl-r.vu}</strong></td>
+          <td><strong>${r.vEarned}</strong></td>
+          <td><strong style="color:${r.ov?'#e74c3c':'var(--dark)'}">${r.vUsed}</strong></td>
+          <td><strong style="color:${r.vBal===0?'#e74c3c':r.vBal<3?'#e67e22':'#27ae60'}">${r.vBal}</strong></td>
           <td><div style="display:flex;align-items:center;gap:6px">
             <div class="prog-wrap" style="flex:1"><div class="prog-bar ${r.ov?'pr':r.pct>75?'po':'pg'}" style="width:${r.pct}%"></div></div>
             <span style="font-size:11px;color:var(--gray);width:28px">${r.pct}%</span>
@@ -1441,9 +1453,10 @@ function renderBdays(){
 // ── MODALS ──
 let mEmpId=null;
 function openVac(id){
-  mEmpId=id;const e=S.emps[id],vl=vacTotalLim(e),vu=vacUsed(e.key);
+  mEmpId=id;const e=S.emps[id];
+  const vEarned=vacEarned(e),vUsed=vacUsed(e.key),vBal=Math.max(0,vEarned-vUsed);
   document.getElementById('mVacName').textContent=fullName(e);
-  document.getElementById('mVacInfo').innerHTML=`Ліміт: <strong>${vl} дн.</strong> | Використано: <strong>${vu}</strong> | Залишок: <strong style="color:${vl-vu<0?'#e74c3c':'#27ae60'}">${vl-vu}</strong>`;
+  document.getElementById('mVacInfo').innerHTML=`Зароблено: <strong>${vEarned} дн.</strong> | Використано: <strong>${vUsed}</strong> | Залишок: <strong style="color:${vBal<=0?'#e74c3c':'#27ae60'}">${vBal}</strong>`;
   document.getElementById('mVacWarn').classList.add('hidden');
   ['vStart','vEnd','vNote'].forEach(x=>document.getElementById(x).value='');
   document.getElementById('vDays').textContent='0';document.getElementById('vType').value='Щорічна';
