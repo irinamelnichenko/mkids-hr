@@ -642,11 +642,11 @@ function updUserUI(){
   document.getElementById('sbRole').textContent=roles[role]||role;
   // Показуємо/ховаємо пункти меню залежно від ролі
   const hide=(id,cond)=>{const el=document.getElementById(id);if(el)el.classList.toggle('hidden',cond);};
-  hide('navEmployees', isNurse);
-  hide('navVacations', isNurse);
+  hide('navEmployees', false); // всі бачать співробітників
+  hide('navVacations', isNurse); // медсестра не бачить відпустки
   hide('navSick', false); // всі бачать лікарняні
-  hide('navAnalytics', isNurse);
-  hide('navBirthdays', isNurse);
+  hide('navAnalytics', false); // всі бачать аналітику
+  hide('navBirthdays', false); // всі бачать календар подій
   hide('navReport', true); // місячний звіт прихований
   hide('navSecAnalytics', isNurse);
   // Налаштування — тільки HR
@@ -690,8 +690,6 @@ function updateBadges(){
 const TITLES={dashboard:'📊 Дашборд',employees:'👥 Співробітники',employee:'👤 Картка співробітника',vacations:'🏖️ Відпустки',sick:'🏥 Лікарняні',analytics:'📈 Аналітика',birthdays:'🗓️ Календар подій',settings:'⚙️ Налаштування',tabel:'📋 Табель відвідуваності',report:'📊 Місячний звіт'};
 function nav(view,id=null){
   if(view==='settings'&&S.user&&S.user.role!=='hr') view='dashboard';
-  if(view==='employees'&&S.user&&S.user.role==='nurse') view='tabel';
-  if(view==='analytics'&&S.user&&S.user.role==='nurse') view='tabel';
   S.view=view; if(id!==null) S.empId=id;
   document.querySelectorAll('.nav-item').forEach(el=>el.classList.toggle('active',el.dataset.v===view));
   document.getElementById('pageTitle').textContent=TITLES[view]||view;
@@ -853,9 +851,9 @@ function renderDash(){
     </div>`:''}
 
     <div class="stats-grid">
-      <div class="stat-card" style="cursor:pointer" onclick="nav('employees')"><div class="stat-icon si-g">👥</div><div><div class="stat-val">${active.length}</div><div class="stat-lbl">Активних${!isHR?' — '+S.user.loc:dashTab!=='all'?' — '+dashTab:''}</div></div></div>
-      <div class="stat-card" style="cursor:pointer" onclick="nav('vacations')"><div class="stat-icon si-b">🏖️</div><div><div class="stat-val">${onVac.length}</div><div class="stat-lbl">Зараз у відпустці</div></div></div>
-      <div class="stat-card" style="cursor:pointer" onclick="nav('sick')"><div class="stat-icon si-o">🏥</div><div><div class="stat-val">${onSick.length}</div><div class="stat-lbl">На лікарняному</div></div></div>
+      <div class="stat-card"><div class="stat-icon si-g">👥</div><div><div class="stat-val">${active.length}</div><div class="stat-lbl">Активних${!isHR?' — '+S.user.loc:dashTab!=='all'?' — '+dashTab:''}</div></div></div>
+      <div class="stat-card"><div class="stat-icon si-b">🏖️</div><div><div class="stat-val">${onVac.length}</div><div class="stat-lbl">Зараз у відпустці</div></div></div>
+      <div class="stat-card"><div class="stat-icon si-o">🏥</div><div><div class="stat-val">${onSick.length}</div><div class="stat-lbl">На лікарняному</div></div></div>
       <div class="stat-card"><div class="stat-icon si-r">⚠️</div><div><div class="stat-val">${over.length}</div><div class="stat-lbl">Перевищень ліміту</div></div></div>
       ${isHR?`<div class="stat-card"><div class="stat-icon si-p">🏫</div><div><div class="stat-val">${Object.keys(locs).length}</div><div class="stat-lbl">Локацій</div></div></div>`:''}
       <div class="stat-card"><div class="stat-icon si-y">🆕</div><div><div class="stat-val">${newThis.length}</div><div class="stat-lbl">Нових цього місяця</div></div></div>
