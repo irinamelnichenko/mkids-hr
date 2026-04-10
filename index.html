@@ -647,7 +647,7 @@ function updUserUI(){
   hide('navSick', false); // всі бачать лікарняні
   hide('navAnalytics', isNurse);
   hide('navBirthdays', isNurse);
-  hide('navReport', false); // всі бачать звіт
+  hide('navReport', true); // місячний звіт прихований
   hide('navSecAnalytics', isNurse);
   // Налаштування — тільки HR
   const settingsNav=document.querySelector('.nav-item[data-v="settings"]');
@@ -1412,17 +1412,24 @@ function renderAnalytics(){
       <div class="chart-card" style="grid-column:1/-1">
         <h4>📋 Табель відвідуваності${analyticsTypFilter?' — '+analyticsTypFilter:''}${analyticsLocFilter?' · '+analyticsLocFilter:''}</h4>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">
-          ${[['month','Місяць'],['quarter','Квартал'],['year','Рік']].map(([p,l])=>
-          `<button class="btn btn-${analyticsTabelPeriod===p?'primary':'secondary'} btn-sm" onclick="analyticsTabelPeriod='${p}';renderAnalytics()">${l}</button>`).join('')}
-          <select class="flt-sel" style="min-width:120px;padding:4px 8px;font-size:12px" onchange="analyticsTabelMonth=+this.value;renderAnalytics()">
+          <span style="font-size:12px;color:var(--gray)">Період:</span>
+          <select class="flt-sel" style="min-width:120px;padding:4px 8px;font-size:12px" onchange="analyticsTabelMonth=+this.value;analyticsTabelPeriod='month';renderAnalytics()">
             ${['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'].map((m,i)=>`<option value="${i}" ${analyticsTabelMonth===i?'selected':''}>${m}</option>`).join('')}
           </select>
           <select class="flt-sel" style="min-width:80px;padding:4px 8px;font-size:12px" onchange="analyticsTabelYear=+this.value;renderAnalytics()">
             ${[2024,2025,2026].map(y=>`<option value="${y}" ${analyticsTabelYear===y?'selected':''}>${y}</option>`).join('')}
           </select>
+          <span style="font-size:11px;color:var(--gray)">або:</span>
+          ${[['quarter','Квартал'],['year','Весь рік']].map(([p,l])=>
+          `<button class="btn btn-${analyticsTabelPeriod===p?'primary':'secondary'} btn-sm" onclick="analyticsTabelPeriod='${p}';renderAnalytics()">${l}</button>`).join('')}
+          ${analyticsTabelPeriod!=='month'?`<button class="btn btn-secondary btn-sm" onclick="analyticsTabelPeriod='month';renderAnalytics()">✕ Скинути</button>`:''}
+          <span style="font-size:12px;color:var(--gray);margin-left:auto">
+            ${analyticsTabelPeriod==='month'?`${['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'][analyticsTabelMonth]} ${analyticsTabelYear}`:
+            analyticsTabelPeriod==='quarter'?`${Math.floor(analyticsTabelMonth/3)+1}-й квартал ${analyticsTabelYear}`:
+            `Весь ${analyticsTabelYear} рік`}
+          </span>
         </div>
         ${(()=>{
-          // Визначаємо діапазон дат
           let from,to;
           if(analyticsTabelPeriod==='month'){
             from=new Date(analyticsTabelYear,analyticsTabelMonth,1);
@@ -1438,14 +1445,12 @@ function renderAnalytics(){
           const fromStr=from.toISOString().split('T')[0];
           const toStr=to.toISOString().split('T')[0];
           const workDays=workDaysInRange(fromStr,toStr);
-
-          // Збираємо унікальні локації з поточного фільтру
+          // Локації з поточного фільтру аналітики
           const filteredLocs=[...new Set(emps.map(e=>normEmpLoc(e)).filter(Boolean))].sort();
-
-          // Підраховуємо по локаціях
+          if(filteredLocs.length===0)return`<div class="empty"><p>Немає даних для цього фільтру</p></div>`;
           const locStats=filteredLocs.map(loc=>{
             const locEmps=emps.filter(e=>normEmpLoc(e)===loc);
-            let totalPresent=0,totalAbsent=0,totalSick=0,totalVac=0,totalUnknown=0;
+            let totalPresent=0,totalLate=0,totalAbsent=0,totalSick=0,totalVac=0,totalUnknown=0;
             let d=new Date(from);
             while(d<=to){
               const dw=d.getDay();
@@ -1455,6 +1460,7 @@ function renderAnalytics(){
                 locEmps.forEach(e=>{
                   const st=t[e.key]?.status||'unknown';
                   if(st==='present')totalPresent++;
+                  else if(st==='late')totalLate++;
                   else if(st==='absent')totalAbsent++;
                   else if(st==='sick')totalSick++;
                   else if(st==='vacation')totalVac++;
@@ -1464,26 +1470,33 @@ function renderAnalytics(){
               d.setDate(d.getDate()+1);
             }
             const total=locEmps.length*workDays||1;
-            return{loc,locEmps:locEmps.length,totalPresent,totalAbsent,totalSick,totalVac,totalUnknown,total};
+            const pct=Math.round(totalPresent/total*100);
+            return{loc,n:locEmps.length,totalPresent,totalLate,totalAbsent,totalSick,totalVac,totalUnknown,total,pct};
           });
-
-          if(locStats.length===0)return`<div class="empty"><p>Немає даних для цього фільтру</p></div>`;
-
           return`<div class="tbl-wrap"><table>
-            <thead><tr><th>Локація</th><th>Осіб</th><th>Роб.днів</th><th>✅ Присутніх</th><th>⏰ Спізн.</th><th>❌ Відсутніх</th><th>🏥 Лікарн.</th><th>🏖️ Відпуст.</th><th>❓ Невідомо</th><th>% присут.</th></tr></thead>
+            <thead><tr><th>Локація</th><th>Осіб</th><th>Роб.днів</th><th>✅ Присутні</th><th>⏰ Спізн.</th><th>❌ Відсутні</th><th>🏥 Лікарн.</th><th>🏖️ Відпуст.</th><th>❓ Невідомо</th><th>% присут.</th></tr></thead>
             <tbody>${locStats.map(r=>`<tr>
-              <td><strong>${r.loc}</strong></td>
-              <td>${r.locEmps}</td>
-              <td>${workDays}</td>
+              <td><strong style="cursor:pointer;color:var(--blue2)" onclick="analyticsLocFilter='${esc(r.loc)}';renderAnalytics()">${r.loc}</strong></td>
+              <td>${r.n}</td><td>${workDays}</td>
               <td style="color:#27ae60;font-weight:700">${r.totalPresent}</td>
-              <td style="color:#e67e22">${r.totalAbsent||0}</td>
+              <td style="color:#e67e22">${r.totalLate}</td>
               <td style="color:#e74c3c">${r.totalAbsent}</td>
               <td style="color:#9b59b6">${r.totalSick}</td>
               <td style="color:#3498db">${r.totalVac}</td>
               <td style="color:#7f8c8d">${r.totalUnknown}</td>
-              <td><strong style="color:${Math.round(r.totalPresent/r.total*100)>80?'#27ae60':'#e74c3c'}">${Math.round(r.totalPresent/r.total*100)}%</strong></td>
-            </tr>`).join('')}</tbody>
-          </table></div>`;
+              <td><strong style="color:${r.pct>80?'#27ae60':r.pct>60?'#e67e22':'#e74c3c'}">${r.pct}%</strong></td>
+            </tr>`).join('')}
+            <tr style="background:#f8fafc;font-weight:700;border-top:2px solid #e8ecf0">
+              <td>Разом</td><td>${locStats.reduce((s,r)=>s+r.n,0)}</td><td>${workDays}</td>
+              <td style="color:#27ae60">${locStats.reduce((s,r)=>s+r.totalPresent,0)}</td>
+              <td style="color:#e67e22">${locStats.reduce((s,r)=>s+r.totalLate,0)}</td>
+              <td style="color:#e74c3c">${locStats.reduce((s,r)=>s+r.totalAbsent,0)}</td>
+              <td style="color:#9b59b6">${locStats.reduce((s,r)=>s+r.totalSick,0)}</td>
+              <td style="color:#3498db">${locStats.reduce((s,r)=>s+r.totalVac,0)}</td>
+              <td style="color:#7f8c8d">${locStats.reduce((s,r)=>s+r.totalUnknown,0)}</td>
+              <td></td>
+            </tr>
+            </tbody></table></div>`;
         })()}
       </div>
       <div class="chart-card"><h4>🎖️ Робочі ювілеї (30 днів)</h4>
