@@ -1458,7 +1458,7 @@ function renderAnalytics(){
                 const ds=d.toISOString().split('T')[0];
                 const t=getTabel(loc,ds);
                 locEmps.forEach(e=>{
-                  const st=t[e.key]?.status||'unknown';
+                  const st=t[e.key]?.status||'notset';
                   if(st==='present')totalPresent++;
                   else if(st==='late')totalLate++;
                   else if(st==='absent')totalAbsent++;
@@ -1474,7 +1474,7 @@ function renderAnalytics(){
             return{loc,n:locEmps.length,totalPresent,totalLate,totalAbsent,totalSick,totalVac,totalUnknown,total,pct};
           });
           return`<div class="tbl-wrap"><table>
-            <thead><tr><th>Локація</th><th>Осіб</th><th>Роб.днів</th><th>✅ Присутні</th><th>⏰ Спізн.</th><th>❌ Відсутні</th><th>🏥 Лікарн.</th><th>🏖️ Відпуст.</th><th>❓ Невідомо</th><th>% присут.</th></tr></thead>
+            <thead><tr><th>Локація</th><th>Осіб</th><th>Роб.днів</th><th>✅ Присутні</th><th>⏰ Спізн.</th><th>❌ Відсутні</th><th>🏥 Лікарн.</th><th>🏖️ Відпуст.</th><th>📝 Не запов.</th><th>% присут.</th></tr></thead>
             <tbody>${locStats.map(r=>`<tr>
               <td><strong style="cursor:pointer;color:var(--blue2)" onclick="analyticsLocFilter='${esc(r.loc)}';renderAnalytics()">${r.loc}</strong></td>
               <td>${r.n}</td><td>${workDays}</td>
@@ -1483,19 +1483,9 @@ function renderAnalytics(){
               <td style="color:#e74c3c">${r.totalAbsent}</td>
               <td style="color:#9b59b6">${r.totalSick}</td>
               <td style="color:#3498db">${r.totalVac}</td>
-              <td style="color:#7f8c8d">${r.totalUnknown}</td>
+              <td style="color:#bdc3c7">${r.totalUnknown}</td>
               <td><strong style="color:${r.pct>80?'#27ae60':r.pct>60?'#e67e22':'#e74c3c'}">${r.pct}%</strong></td>
             </tr>`).join('')}
-            <tr style="background:#f8fafc;font-weight:700;border-top:2px solid #e8ecf0">
-              <td>Разом</td><td>${locStats.reduce((s,r)=>s+r.n,0)}</td><td>${workDays}</td>
-              <td style="color:#27ae60">${locStats.reduce((s,r)=>s+r.totalPresent,0)}</td>
-              <td style="color:#e67e22">${locStats.reduce((s,r)=>s+r.totalLate,0)}</td>
-              <td style="color:#e74c3c">${locStats.reduce((s,r)=>s+r.totalAbsent,0)}</td>
-              <td style="color:#9b59b6">${locStats.reduce((s,r)=>s+r.totalSick,0)}</td>
-              <td style="color:#3498db">${locStats.reduce((s,r)=>s+r.totalVac,0)}</td>
-              <td style="color:#7f8c8d">${locStats.reduce((s,r)=>s+r.totalUnknown,0)}</td>
-              <td></td>
-            </tr>
             </tbody></table></div>`;
         })()}
       </div>
@@ -2102,7 +2092,10 @@ function renderTabel(){
 
   // Фільтри дати залежно від режиму
   const showDatePicker=tabelPeriod==='day'||tabelPeriod==='week';
-  const showMonthSel=tabelPeriod==='month'||tabelPeriod==='quarter'||tabelPeriod==='year';
+  const showMonthSel=tabelPeriod==='month';
+  const showQuarterSel=tabelPeriod==='quarter';
+  const showYearSel=tabelPeriod==='year';
+  const curQ=Math.floor(tabelMonth/3);
 
   set('main',`
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:16px">
@@ -2118,11 +2111,23 @@ function renderTabel(){
         ${[['day','Дата'],['week','Тиждень'],['month','Місяць'],['quarter','Квартал'],['year','Рік']].map(([p,l])=>
         `<button class="btn btn-${tabelPeriod===p?'primary':'secondary'} btn-sm" onclick="tabelPeriod='${p}';renderTabel()">${l}</button>`).join('')}
       </div>
-      ${showDatePicker?`<input type="date" class="flt-sel" value="${tabelDay}" onchange="tabelDay=this.value;renderTabel()" style="min-width:150px">`:``}
+      ${showDatePicker?`<input type="date" class="flt-sel" value="${tabelDay}" onchange="tabelDay=this.value;renderTabel()" style="min-width:150px">`:''}
       ${showMonthSel?`
         <select class="flt-sel" style="min-width:110px" onchange="tabelMonth=+this.value;renderTabel()">
           ${MONTH_NAMES.map((m,i)=>`<option value="${i}" ${tabelMonth===i?'selected':''}>${m}</option>`).join('')}
         </select>
+        <select class="flt-sel" style="min-width:80px" onchange="tabelYear=+this.value;renderTabel()">
+          ${[2024,2025,2026].map(y=>`<option value="${y}" ${tabelYear===y?'selected':''}>${y}</option>`).join('')}
+        </select>`:''}
+      ${showQuarterSel?`
+        <div style="display:flex;gap:4px">
+          ${[[0,'I кв'],[1,'II кв'],[2,'III кв'],[3,'IV кв']].map(([q,l])=>
+          `<button class="btn btn-${curQ===q?'primary':'secondary'} btn-sm" onclick="tabelMonth=${q*3};renderTabel()">${l}</button>`).join('')}
+        </div>
+        <select class="flt-sel" style="min-width:80px" onchange="tabelYear=+this.value;renderTabel()">
+          ${[2024,2025,2026].map(y=>`<option value="${y}" ${tabelYear===y?'selected':''}>${y}</option>`).join('')}
+        </select>`:''}
+      ${showYearSel?`
         <select class="flt-sel" style="min-width:80px" onchange="tabelYear=+this.value;renderTabel()">
           ${[2024,2025,2026].map(y=>`<option value="${y}" ${tabelYear===y?'selected':''}>${y}</option>`).join('')}
         </select>`:''}
