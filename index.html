@@ -536,13 +536,13 @@ async function fetchEmps(force=false) {
       last:(row[4]||'').trim(), // E=Прізвище
       first:(row[5]||'').trim(),// F=Ім'я
       phone:(row[6]||'').trim(),// G=Контакт
-      pos:(row[7]||'').trim(),  // H=Посада
-      stat:(row[8]||'').trim(), // I=Статус
+      stat:(row[7]||'').trim(), // H=Статус (працює / звільнений / декрет…)
+      pos:(row[8]||'').trim(),  // I=Посада
       bday:(row[9]||'').trim(), // J=День нар.
       bmon:(row[10]||'').trim(),// K=Місяць нар.
       wday:(row[11]||'').trim(), // L=Перший робочий день
       hired:(row[12]||'').trim(),// M=Дата працевлаштування
-      fired:(row[13]||'').trim(),// N=Звільнення
+      fired:(row[14]||'').trim(),// O=Дата звільнення
       email:(row[17]||'').trim() // R=Електронна адреса
     })).filter(e=>e.last||e.first).map((e,i)=>({...e,id:i}));
     S.lastSync=new Date();
@@ -684,7 +684,11 @@ function showLoad(){document.getElementById('main').innerHTML='<div class="loadi
 
 // ── DATA HELPERS ──
 function visible(){return S.user.role==='director'?S.emps.filter(e=>e.loc===S.user.loc):S.emps;}
-function isActive(e){if(e.fired&&e.fired.trim())return false;if(e.stat&&/звіл/i.test(e.stat))return false;return true;}
+function isActive(e){
+  if(e.fired&&e.fired.trim())return false;          // є дата в кол. O
+  if(e.stat&&/звіл/i.test(e.stat))return false;    // статус містить "звіл…"
+  return true;
+}
 function fullName(e){return (e.last+' '+e.first).trim();}
 function vacLim(e, yr=new Date().getFullYear()){
   const base=/вихователь/i.test(e.pos||'')?CFG.VAC_TEACHER:CFG.VAC_DEFAULT;
@@ -1152,7 +1156,8 @@ function renderSicks(){
 }
 
 // ── ANALYTICS ──
-let analyticsTypFilter='',analyticsLocFilter='',analyticsDirFilter='',analyticsRegionFilter='',analyticsTurnoverPeriod='year';
+let analyticsTypFilter='',analyticsLocFilter='',analyticsDirFilter='',analyticsRegionFilter='';
+let analyticsTurnoverPeriod='year',analyticsTurnoverYear=new Date().getFullYear();
 function switchAnalyticsType(val){analyticsTypFilter=val;analyticsLocFilter='';renderAnalytics();}
 function switchAnalyticsLoc(val){analyticsLocFilter=val;renderAnalytics();}
 function switchAnalyticsRegion(val){analyticsRegionFilter=val;analyticsLocFilter='';renderAnalytics();}
@@ -1188,25 +1193,27 @@ function renderAnalytics(){
   });
   const avgT=Object.entries(tp).map(([p,ms])=>({p,avg:Math.round(ms.reduce((a,b)=>a+b,0)/ms.length)})).sort((a,b)=>b.avg-a.avg);
 
-  // Turnover with period + type + region + loc filter
+  // Turnover with year + period + type + region + loc filter
+  const tYear=analyticsTurnoverYear;
   function dismissedInPeriod(period){
     return visible().filter(e=>{
       const d=pd(e.fired);if(!d)return false;
       if(analyticsTypFilter&&normType(e.typ)!==analyticsTypFilter)return false;
       if(analyticsRegionFilter&&getRegion(e)!==analyticsRegionFilter)return false;
       if(analyticsLocFilter&&normEmpLoc(e)!==analyticsLocFilter)return false;
-      if(period==='year')return d.getFullYear()===yr;
-      if(period==='h1')return d.getFullYear()===yr&&d.getMonth()<6;
-      if(period==='h2')return d.getFullYear()===yr&&d.getMonth()>=6;
-      if(period==='q1')return d.getFullYear()===yr&&d.getMonth()<3;
-      if(period==='q2')return d.getFullYear()===yr&&d.getMonth()>=3&&d.getMonth()<6;
-      if(period==='q3')return d.getFullYear()===yr&&d.getMonth()>=6&&d.getMonth()<9;
-      if(period==='q4')return d.getFullYear()===yr&&d.getMonth()>=9;
+      if(d.getFullYear()!==tYear)return false;
+      if(period==='year')return true;
+      if(period==='h1')return d.getMonth()<6;
+      if(period==='h2')return d.getMonth()>=6;
+      if(period==='q1')return d.getMonth()<3;
+      if(period==='q2')return d.getMonth()>=3&&d.getMonth()<6;
+      if(period==='q3')return d.getMonth()>=6&&d.getMonth()<9;
+      if(period==='q4')return d.getMonth()>=9;
       return false;
     });
   }
   const dismissed=dismissedInPeriod(analyticsTurnoverPeriod);
-  const periodLabels={year:`${yr} рік`,h1:'І півріччя',h2:'ІІ півріччя',q1:'І квартал',q2:'ІІ квартал',q3:'ІІІ квартал',q4:'IV квартал'};
+  const periodLabels={year:`${tYear} рік`,h1:'І півріччя',h2:'ІІ півріччя',q1:'І квартал',q2:'ІІ квартал',q3:'ІІІ квартал',q4:'IV квартал'};
 
   const annivs=upcomingAnnivs(emps,30);
   const bdays14=upcomingBdays(emps,14);
@@ -1327,12 +1334,24 @@ function renderAnalytics(){
       </div></div>
       <div class="chart-card">
         <h4>📉 Плинність кадрів${analyticsRegionFilter?' — '+analyticsRegionFilter:''}${analyticsTypFilter?' — '+analyticsTypFilter:''}${analyticsLocFilter?' · '+analyticsLocFilter:''}</h4>
-        <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px">
-          <span style="font-size:11px;color:var(--gray);align-self:center;white-space:nowrap">Період:</span>
-          ${['year','h1','h2','q1','q2','q3','q4'].map(p=>`<button class="btn btn-${analyticsTurnoverPeriod===p?'primary':'secondary'} btn-xs" onclick="analyticsTurnoverPeriod='${p}';renderAnalytics()">${periodLabels[p]}</button>`).join('')}
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;align-items:center">
+          <span style="font-size:11px;color:var(--gray);white-space:nowrap">Рік:</span>
+          <select class="flt-sel" style="min-width:80px;padding:4px 8px;font-size:12px" onchange="analyticsTurnoverYear=+this.value;renderAnalytics()">
+            ${[2024,2025,2026].map(y=>`<option value="${y}" ${tYear===y?'selected':''}>${y}</option>`).join('')}
+          </select>
+          <span style="font-size:11px;color:var(--gray);white-space:nowrap">Період:</span>
+          <select class="flt-sel" style="min-width:120px;padding:4px 8px;font-size:12px" onchange="analyticsTurnoverPeriod=this.value;renderAnalytics()">
+            <option value="year" ${analyticsTurnoverPeriod==='year'?'selected':''}>Весь рік</option>
+            <option value="h1" ${analyticsTurnoverPeriod==='h1'?'selected':''}>І півріччя</option>
+            <option value="h2" ${analyticsTurnoverPeriod==='h2'?'selected':''}>ІІ півріччя</option>
+            <option value="q1" ${analyticsTurnoverPeriod==='q1'?'selected':''}>І квартал</option>
+            <option value="q2" ${analyticsTurnoverPeriod==='q2'?'selected':''}>ІІ квартал</option>
+            <option value="q3" ${analyticsTurnoverPeriod==='q3'?'selected':''}>ІІІ квартал</option>
+            <option value="q4" ${analyticsTurnoverPeriod==='q4'?'selected':''}>IV квартал</option>
+          </select>
         </div>
-        ${!analyticsRegionFilter&&isHR?`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px">
-          <span style="font-size:11px;color:var(--gray);align-self:center;white-space:nowrap">Регіон:</span>
+        ${isHR?`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px;align-items:center">
+          <span style="font-size:11px;color:var(--gray);white-space:nowrap">Регіон:</span>
           <button class="btn btn-${!analyticsRegionFilter?'primary':'secondary'} btn-xs" onclick="switchAnalyticsRegion('')">Всі</button>
           ${REGIONS.map(r=>`<button class="btn btn-${analyticsRegionFilter===r?'primary':'secondary'} btn-xs" onclick="switchAnalyticsRegion('${r}')">${r}</button>`).join('')}
         </div>`:''}
