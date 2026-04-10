@@ -853,9 +853,9 @@ function renderDash(){
     </div>`:''}
 
     <div class="stats-grid">
-      <div class="stat-card"><div class="stat-icon si-g">👥</div><div><div class="stat-val">${active.length}</div><div class="stat-lbl">Активних${dashTab!=='all'?' — '+dashTab:''}</div></div></div>
-      <div class="stat-card"><div class="stat-icon si-b">🏖️</div><div><div class="stat-val">${onVac.length}</div><div class="stat-lbl">Зараз у відпустці</div></div></div>
-      <div class="stat-card"><div class="stat-icon si-o">🏥</div><div><div class="stat-val">${onSick.length}</div><div class="stat-lbl">На лікарняному</div></div></div>
+      <div class="stat-card" style="cursor:pointer" onclick="nav('employees')"><div class="stat-icon si-g">👥</div><div><div class="stat-val">${active.length}</div><div class="stat-lbl">Активних${!isHR?' — '+S.user.loc:dashTab!=='all'?' — '+dashTab:''}</div></div></div>
+      <div class="stat-card" style="cursor:pointer" onclick="nav('vacations')"><div class="stat-icon si-b">🏖️</div><div><div class="stat-val">${onVac.length}</div><div class="stat-lbl">Зараз у відпустці</div></div></div>
+      <div class="stat-card" style="cursor:pointer" onclick="nav('sick')"><div class="stat-icon si-o">🏥</div><div><div class="stat-val">${onSick.length}</div><div class="stat-lbl">На лікарняному</div></div></div>
       <div class="stat-card"><div class="stat-icon si-r">⚠️</div><div><div class="stat-val">${over.length}</div><div class="stat-lbl">Перевищень ліміту</div></div></div>
       ${isHR?`<div class="stat-card"><div class="stat-icon si-p">🏫</div><div><div class="stat-val">${Object.keys(locs).length}</div><div class="stat-lbl">Локацій</div></div></div>`:''}
       <div class="stat-card"><div class="stat-icon si-y">🆕</div><div><div class="stat-val">${newThis.length}</div><div class="stat-lbl">Нових цього місяця</div></div></div>
@@ -921,6 +921,8 @@ function filterLoc(loc){S.f.loc=loc;nav('employees');}
 // ── EMPLOYEES ──
 function renderEmps(){
   const emps=visible();
+  const isHR=S.user.role==='hr';
+  const isDir=S.user.role==='director', isNurse=S.user.role==='nurse';
   const locs=uniq(emps,'loc'),poss=uniq(emps,'pos'),dirs=uniq(emps,'dir'),stats=uniq(emps,'stat');
   const typs=[...new Set(emps.map(e=>normType(e.typ)).filter(Boolean))].sort();
   let f=emps;
@@ -930,14 +932,13 @@ function renderEmps(){
   if(S.f.status)f=f.filter(e=>e.stat===S.f.status);
   if(S.f.dir)f=f.filter(e=>e.dir===S.f.dir);
   if(S.f.typ)f=f.filter(e=>normType(e.typ)===S.f.typ);
-  const isHR=S.user.role==='hr';
 
   set('main',`
     <div class="filters">
       <input class="search-inp" placeholder="🔍 Пошук за ім'ям, посадою, контактом…" value="${esc(S.q)}" oninput="S.q=this.value;renderEmps()">
-      <select class="flt-sel" onchange="S.f.loc=this.value;renderEmps()">
+      ${isHR?`<select class="flt-sel" onchange="S.f.loc=this.value;renderEmps()">
         <option value="">Всі локації</option>${locs.map(l=>`<option value="${l}" ${S.f.loc===l?'selected':''}>${l}</option>`).join('')}
-      </select>
+      </select>`:`<span class="badge bg" style="padding:6px 12px">${S.user.loc}</span>`}
       <select class="flt-sel" onchange="S.f.pos=this.value;renderEmps()">
         <option value="">Всі посади</option>${poss.map(p=>`<option value="${p}" ${S.f.pos===p?'selected':''}>${p}</option>`).join('')}
       </select>
@@ -951,7 +952,7 @@ function renderEmps(){
         <option value="">Всі напрямки</option>${dirs.map(d=>`<option value="${d}" ${S.f.dir===d?'selected':''}>${d}</option>`).join('')}
       </select>`:''}
       <button class="btn btn-secondary btn-sm" onclick="clearF()">✕ Скинути</button>
-      <button class="btn btn-secondary btn-sm" onclick="exportCSV()" title="Експорт CSV">📊 CSV</button>
+      ${isHR?`<button class="btn btn-secondary btn-sm" onclick="exportCSV()" title="Експорт CSV">📊 CSV</button>`:''}
       <span style="margin-left:auto;font-size:12px;color:var(--gray)">${f.length} / ${emps.length}</span>
     </div>
     <div class="card"><div class="tbl-wrap"><table>
@@ -1212,19 +1213,22 @@ function salStats(arr){
 function fmtGrn(n){return n!=null?Number(n).toLocaleString('uk-UA')+' ₴':'—';}
 
 function renderAnalytics(){
+  const isHR=S.user.role==='hr';
+  const userLoc=S.user.loc||'';
   const allActive=visible().filter(isActive);
   const typs=[...new Set(allActive.map(e=>normType(e.typ)).filter(Boolean))];
   const sortedTyps=[...TYPE_ORDER.filter(t=>typs.includes(t)),...typs.filter(t=>!TYPE_ORDER.includes(t)).sort()];
-  // Всі локації для вибраного типу
+  // Для директора/медсестри — автоматично по їх локації
   const locsForType=(analyticsTypFilter
     ? allActive.filter(e=>normType(e.typ)===analyticsTypFilter)
     : allActive).map(e=>normEmpLoc(e)).filter(Boolean);
   const locsForTypeSorted=[...new Set(locsForType)].sort();
-  // Застосовуємо фільтри — тип І локація
+  // Застосовуємо фільтри
   let emps=analyticsTypFilter?allActive.filter(e=>normType(e.typ)===analyticsTypFilter):allActive;
+  // Для не-HR: якщо немає явного фільтру локації — автоматично беремо їх локацію
+  if(!isHR&&!analyticsLocFilter&&userLoc) emps=emps.filter(e=>normEmpLoc(e)===userLoc);
   if(analyticsLocFilter)emps=emps.filter(e=>normEmpLoc(e)===analyticsLocFilter);
   const yr=new Date().getFullYear();
-  const isHR=S.user.role==='hr';
   const byPos={},byLoc={},tp={};
   emps.forEach(e=>{
     const p=e.pos||'Невідомо';byPos[p]=(byPos[p]||0)+1;
