@@ -266,9 +266,10 @@ tbody tr.clickable{cursor:pointer}
       <h1>HR Система</h1>
       <p>Мережа дитячих садочків mkids</p>
     </div>
-    <div class="role-tabs">
+    <div class="role-tabs" style="grid-template-columns:1fr 1fr 1fr">
       <button class="rtab active" id="tabHR" onclick="selectRole('hr')">👔 HR</button>
       <button class="rtab" id="tabDir" onclick="selectRole('director')">🏫 Директор</button>
+      <button class="rtab" id="tabNurse" onclick="selectRole('nurse')">🏥 Медсестра</button>
     </div>
     <div id="loginError" class="login-error hidden"></div>
     <div id="fldLocation" class="fg hidden">
@@ -281,7 +282,7 @@ tbody tr.clickable{cursor:pointer}
         onkeydown="if(event.key==='Enter')doLogin()">
     </div>
     <button class="btn btn-primary full" onclick="doLogin()">Увійти →</button>
-    <p class="login-hint">HR: <b>hr2024</b> &nbsp;|&nbsp; Директор: <b>dir2024</b></p>
+    <p class="login-hint">HR: <b>hr2024</b> &nbsp;|&nbsp; Директор/Медсестра: пароль локації</p>
   </div>
 </div>
 
@@ -304,26 +305,32 @@ tbody tr.clickable{cursor:pointer}
       <div class="nav-item active" data-v="dashboard" onclick="nav('dashboard')">
         <span class="ni">📊</span> Дашборд
       </div>
-      <div class="nav-item" data-v="employees" onclick="nav('employees')">
+      <div class="nav-item" data-v="employees" onclick="nav('employees')" id="navEmployees">
         <span class="ni">👥</span> Співробітники
         <span class="nav-badge hidden" id="newBadge">0</span>
       </div>
       <div class="nav-sec">Облік</div>
-      <div class="nav-item" data-v="vacations" onclick="nav('vacations')">
+      <div class="nav-item" data-v="tabel" onclick="nav('tabel')">
+        <span class="ni">📋</span> Табель
+      </div>
+      <div class="nav-item" data-v="vacations" onclick="nav('vacations')" id="navVacations">
         <span class="ni">🏖️</span> Відпустки
         <span class="nav-badge hidden" id="overBadge">!</span>
       </div>
-      <div class="nav-item" data-v="sick" onclick="nav('sick')">
+      <div class="nav-item" data-v="sick" onclick="nav('sick')" id="navSick">
         <span class="ni">🏥</span> Лікарняні
       </div>
-      <div class="nav-sec">Аналітика</div>
-      <div class="nav-item" data-v="analytics" onclick="nav('analytics')">
+      <div class="nav-sec" id="navSecAnalytics">Аналітика</div>
+      <div class="nav-item" data-v="analytics" onclick="nav('analytics')" id="navAnalytics">
         <span class="ni">📈</span> Аналітика
       </div>
-      <div class="nav-item" data-v="birthdays" onclick="nav('birthdays')">
+      <div class="nav-item" data-v="birthdays" onclick="nav('birthdays')" id="navBirthdays">
         <span class="ni">🎂</span> Дні народження
       </div>
-      <div class="nav-sec">Система</div>
+      <div class="nav-item" data-v="report" onclick="nav('report')" id="navReport">
+        <span class="ni">📊</span> Місячний звіт
+      </div>
+      <div class="nav-sec" id="navSecSystem">Система</div>
       <div class="nav-item" data-v="settings" onclick="nav('settings')">
         <span class="ni">⚙️</span> Налаштування
       </div>
@@ -600,6 +607,7 @@ function selectRole(r) {
   selRole=r;
   document.getElementById('tabHR').classList.toggle('active',r==='hr');
   document.getElementById('tabDir').classList.toggle('active',r==='director');
+  document.getElementById('tabNurse').classList.toggle('active',r==='nurse');
   document.getElementById('fldLocation').classList.toggle('hidden',r==='hr');
 }
 async function doLogin() {
@@ -614,7 +622,7 @@ async function doLogin() {
     if(!loc){showErr('Оберіть локацію');return;}
     const expected=getDirPw(loc);
     if(pw!==expected){showErr('Невірний пароль для цієї локації');return;}
-    S.user={role:'director',loc};
+    S.user={role:selRole,loc};
   }
   document.getElementById('loginScreen').classList.add('hidden');
   document.getElementById('app').classList.remove('hidden');
@@ -623,16 +631,29 @@ async function doLogin() {
 function showErr(m){const el=document.getElementById('loginError');el.textContent='⚠️ '+m;el.classList.remove('hidden');}
 function doLogout(){S.user=null;S.view='dashboard';document.getElementById('app').classList.add('hidden');document.getElementById('loginScreen').classList.remove('hidden');document.getElementById('loginPw').value='';}
 function updUserUI(){
-  const hr=S.user.role==='hr';
-  document.getElementById('uName').textContent=hr?'HR Менеджер':'Директор';
-  document.getElementById('uLoc').textContent=hr?'Всі локації':S.user.loc;
-  document.getElementById('uAvatar').textContent=hr?'HR':'Д';
-  document.getElementById('sbRole').textContent=hr?'HR-менеджер':'Директор локації';
-  // Hide settings nav for directors
+  const role=S.user.role;
+  const isHR=role==='hr', isDir=role==='director', isNurse=role==='nurse';
+  const names={hr:'HR Менеджер',director:'Директор',nurse:'Медсестра'};
+  const avatars={hr:'HR',director:'Д',nurse:'М'};
+  const roles={hr:'HR-менеджер',director:'Директор локації',nurse:'Медсестра'};
+  document.getElementById('uName').textContent=names[role]||role;
+  document.getElementById('uLoc').textContent=isHR?'Всі локації':S.user.loc;
+  document.getElementById('uAvatar').textContent=avatars[role]||'?';
+  document.getElementById('sbRole').textContent=roles[role]||role;
+  // Показуємо/ховаємо пункти меню залежно від ролі
+  const hide=(id,cond)=>{const el=document.getElementById(id);if(el)el.classList.toggle('hidden',cond);};
+  hide('navEmployees', isNurse);
+  hide('navVacations', isNurse);
+  hide('navSick', false); // всі бачать лікарняні
+  hide('navAnalytics', isNurse);
+  hide('navBirthdays', isNurse);
+  hide('navReport', false); // всі бачать звіт
+  hide('navSecAnalytics', isNurse);
+  // Налаштування — тільки HR
   const settingsNav=document.querySelector('.nav-item[data-v="settings"]');
-  if(settingsNav) settingsNav.classList.toggle('hidden',!hr);
+  if(settingsNav) settingsNav.classList.toggle('hidden',!isHR);
   const settingsSec=settingsNav&&settingsNav.previousElementSibling;
-  if(settingsSec&&settingsSec.classList.contains('nav-sec')) settingsSec.classList.toggle('hidden',!hr);
+  if(settingsSec&&settingsSec.classList.contains('nav-sec')) settingsSec.classList.toggle('hidden',!isHR);
 }
 
 // ── INIT ──
@@ -666,10 +687,11 @@ function updateBadges(){
 }
 
 // ── NAVIGATION ──
-const TITLES={dashboard:'📊 Дашборд',employees:'👥 Співробітники',employee:'👤 Картка співробітника',vacations:'🏖️ Відпустки',sick:'🏥 Лікарняні',analytics:'📈 Аналітика',birthdays:'🎂 Дні народження',settings:'⚙️ Налаштування'};
+const TITLES={dashboard:'📊 Дашборд',employees:'👥 Співробітники',employee:'👤 Картка співробітника',vacations:'🏖️ Відпустки',sick:'🏥 Лікарняні',analytics:'📈 Аналітика',birthdays:'🎂 Дні народження',settings:'⚙️ Налаштування',tabel:'📋 Табель відвідуваності',report:'📊 Місячний звіт'};
 function nav(view,id=null){
-  // Directors cannot access settings
-  if(view==='settings'&&S.user&&S.user.role==='director') view='dashboard';
+  if(view==='settings'&&S.user&&S.user.role!=='hr') view='dashboard';
+  if(view==='employees'&&S.user&&S.user.role==='nurse') view='tabel';
+  if(view==='analytics'&&S.user&&S.user.role==='nurse') view='tabel';
   S.view=view; if(id!==null) S.empId=id;
   document.querySelectorAll('.nav-item').forEach(el=>el.classList.toggle('active',el.dataset.v===view));
   document.getElementById('pageTitle').textContent=TITLES[view]||view;
@@ -685,6 +707,8 @@ function renderView(){
     case 'analytics': renderAnalytics(); break;
     case 'birthdays': renderBdays(); break;
     case 'settings':  renderSettings(); break;
+    case 'tabel':     renderTabel(); break;
+    case 'report':    renderReport(); break;
     default: renderDash();
   }
 }
@@ -822,6 +846,7 @@ function renderDash(){
   allEmps.filter(isActive).forEach(e=>{const t=normType(e.typ)||'Інше';if(!typeStats[t])typeStats[t]={a:0,v:0,s:0,ov:0};typeStats[t].a++;if(isOnVac(e.key))typeStats[t].v++;if(isOnSick(e.key))typeStats[t].s++;if(vacUsed(e.key)>vacTotalLim(e))typeStats[t].ov++;});
 
   set('main',`
+    ${renderReminders()}
     ${isHR&&allTypes.length>1?`
     <div class="dash-type-tabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:18px">
       ${allTypes.map(t=>`<button class="dtype-tab ${dashTab===t?'active':''}" onclick="switchDashTab('${t}')">${TYPE_ICONS[t]||'📌'} ${t} <span class="dtype-cnt">${(typeStats[t]||{a:0}).a}</span></button>`).join('')}
@@ -1799,6 +1824,227 @@ function clearAllRecords(){
 }
 function dl(content,name,mime){
   const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([content],{type:mime}));a.download=name;a.click();
+}
+
+// ── ТАБЕЛЬ ВІДВІДУВАНОСТІ ──
+const TABEL_STATUSES={present:{label:'✅ Прийшов',color:'#27ae60'},absent:{label:'❌ Відсутній',color:'#e74c3c'},late:{label:'⏰ Спізнився',color:'#e67e22'},vacation:{label:'🏖️ Відпустка',color:'#3498db'},sick:{label:'🏥 Лікарняний',color:'#9b59b6'}};
+
+function tabelKey(loc,date){return `tabel_${loc}_${date}`;}
+function getTabel(loc,date){
+  try{const d=JSON.parse(localStorage.getItem(tabelKey(loc,date))||'{}');return d;}catch{return {};}
+}
+function saveTabel(loc,date,data){
+  localStorage.setItem(tabelKey(loc,date),JSON.stringify(data));
+}
+
+let tabelDate=new Date().toISOString().split('T')[0];
+
+function renderTabel(){
+  const loc=S.user.loc||(S.f&&S.f.tabelLoc)||'';
+  const isHR=S.user.role==='hr';
+  const locs=isHR?[...new Set(S.emps.map(e=>e.loc).filter(Boolean))].sort():null;
+  const curLoc=isHR?(loc||locs[0]||''):loc;
+  if(!S.f)S.f={};
+  if(!S.f.tabelLoc)S.f.tabelLoc=curLoc;
+  const activeLoc=isHR?S.f.tabelLoc:curLoc;
+  const emps=S.emps.filter(e=>isActive(e)&&e.loc===activeLoc);
+  const tabel=getTabel(activeLoc,tabelDate);
+  const canEdit=S.user.role==='nurse'||S.user.role==='director'||S.user.role==='hr';
+
+  set('main',`
+    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:18px">
+      ${isHR?`<select class="flt-sel" onchange="S.f.tabelLoc=this.value;renderTabel()">
+        ${locs.map(l=>`<option value="${l}" ${activeLoc===l?'selected':''}>${l}</option>`).join('')}
+      </select>`:''}
+      <input type="date" class="flt-sel" value="${tabelDate}" onchange="tabelDate=this.value;renderTabel()" style="min-width:150px">
+      <span style="font-size:12px;color:var(--gray)">${emps.length} співробітників</span>
+      <button class="btn btn-secondary btn-sm" onclick="tabelDate=new Date().toISOString().split('T')[0];renderTabel()">Сьогодні</button>
+      ${canEdit?`<button class="btn btn-primary btn-sm" onclick="autoFillTabel('${activeLoc}','${tabelDate}')">⚡ Всі присутні</button>`:''}
+    </div>
+    ${emps.length===0?`<div class="empty"><span class="ei">📋</span><h4>Немає співробітників для цієї локації</h4></div>`:
+    `<div class="card">
+      <div class="card-hd"><h3>📋 Табель — ${activeLoc} — ${fmtDate(tabelDate)}</h3>
+        <span style="font-size:12px;color:var(--gray)">
+          ✅ ${emps.filter(e=>tabel[e.key]?.status==='present').length} &nbsp;
+          ❌ ${emps.filter(e=>tabel[e.key]?.status==='absent').length} &nbsp;
+          ⏰ ${emps.filter(e=>tabel[e.key]?.status==='late').length} &nbsp;
+          🏥 ${emps.filter(e=>tabel[e.key]?.status==='sick').length} &nbsp;
+          🏖️ ${emps.filter(e=>tabel[e.key]?.status==='vacation').length}
+        </span>
+      </div>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Співробітник</th><th>Посада</th><th>Статус</th><th>Час приходу</th><th>Примітка</th></tr></thead>
+        <tbody>${emps.map(e=>{
+          const row=tabel[e.key]||{};
+          const st=row.status||'';
+          const stInfo=TABEL_STATUSES[st]||{};
+          return`<tr>
+            <td><strong>${fullName(e)}</strong></td>
+            <td style="font-size:12px;color:var(--gray)">${e.pos||'—'}</td>
+            <td>${canEdit?`<select style="padding:4px 8px;border:1.5px solid var(--gray2);border-radius:6px;font-size:12px;background:#fff" onchange="setTabelStatus('${activeLoc}','${tabelDate}','${e.key}',this.value)">
+              <option value="">— Оберіть —</option>
+              ${Object.entries(TABEL_STATUSES).map(([k,v])=>`<option value="${k}" ${st===k?'selected':''}>${v.label}</option>`).join('')}
+            </select>`:st?`<span style="color:${stInfo.color};font-weight:600">${stInfo.label}</span>`:'—'}</td>
+            <td>${canEdit&&(st==='present'||st==='late')?`<input type="time" value="${row.time||''}" style="padding:4px 8px;border:1.5px solid var(--gray2);border-radius:6px;font-size:12px" onchange="setTabelTime('${activeLoc}','${tabelDate}','${e.key}',this.value)">`:row.time||'—'}</td>
+            <td>${canEdit?`<input type="text" value="${row.note||''}" placeholder="Примітка…" style="padding:4px 8px;border:1.5px solid var(--gray2);border-radius:6px;font-size:12px;width:160px" onchange="setTabelNote('${activeLoc}','${tabelDate}','${e.key}',this.value)">`:row.note||'—'}</td>
+          </tr>`;}).join('')}
+        </tbody>
+      </table></div>
+    </div>`}
+  `);
+}
+
+function setTabelStatus(loc,date,key,status){
+  const t=getTabel(loc,date);
+  if(!t[key])t[key]={};
+  t[key].status=status;
+  if(status==='present'&&!t[key].time)t[key].time='09:00';
+  saveTabel(loc,date,t);renderTabel();
+}
+function setTabelTime(loc,date,key,time){
+  const t=getTabel(loc,date);if(!t[key])t[key]={};
+  t[key].time=time;saveTabel(loc,date,t);
+}
+function setTabelNote(loc,date,key,note){
+  const t=getTabel(loc,date);if(!t[key])t[key]={};
+  t[key].note=note;saveTabel(loc,date,t);
+}
+function autoFillTabel(loc,date){
+  const emps=S.emps.filter(e=>isActive(e)&&e.loc===loc);
+  const t=getTabel(loc,date);
+  emps.forEach(e=>{if(!t[e.key]||!t[e.key].status){t[e.key]={status:'present',time:'09:00',note:''}}});
+  saveTabel(loc,date,t);renderTabel();toast('✅ Всіх відмічено як присутніх');
+}
+
+// ── НАГАДУВАННЯ ──
+function renderReminders(){
+  const emps=visible().filter(isActive);
+  const now=new Date();now.setHours(0,0,0,0);
+  const items=[];
+
+  // Дні народження (7 днів)
+  upcomingBdays(emps,7).forEach(b=>{
+    items.push({icon:'🎂',color:'#e74c3c',text:`День народження — <strong>${fullName(b.e)}</strong>`,sub:b.left===0?'Сьогодні!':'за '+b.left+' дн.',id:b.e.id});
+  });
+  // Ювілеї (14 днів)
+  upcomingAnnivs(emps,14).forEach(a=>{
+    items.push({icon:'🎖️',color:'#f39c12',text:`${a.yrs} років роботи — <strong>${fullName(a.e)}</strong>`,sub:a.left===0?'Сьогодні!':'за '+a.left+' дн.',id:a.e.id});
+  });
+  // Відпустки що закінчуються (3 дні)
+  emps.forEach(e=>{
+    const r=rec(e.key);
+    r.vacs.forEach(v=>{
+      const end=new Date(v.end);end.setHours(0,0,0,0);
+      const diff=Math.round((end-now)/86400000);
+      if(diff>=0&&diff<=3)items.push({icon:'🏖️',color:'#3498db',text:`Закінчується відпустка — <strong>${fullName(e)}</strong>`,sub:`${fmtDate(v.end)} (за ${diff} дн.)`,id:e.id});
+    });
+    // Лікарняний більше 14 днів
+    r.sicks.filter(v=>{const s=new Date(v.start);return (now-s)/86400000>14&&new Date(v.end)>=now;}).forEach(v=>{
+      const days=Math.round((now-new Date(v.start))/86400000);
+      items.push({icon:'🏥',color:'#9b59b6',text:`Лікарняний ${days} днів — <strong>${fullName(e)}</strong>`,sub:`з ${fmtDate(v.start)}`,id:e.id});
+    });
+  });
+
+  return items.length===0?'':`
+    <div style="background:#fff;border-radius:10px;box-shadow:0 2px 12px rgba(0,0,0,.08);margin-bottom:20px;overflow:hidden">
+      <div style="padding:12px 20px;background:#f8fafc;border-bottom:1px solid #e8ecf0;font-size:13px;font-weight:700;color:var(--dark)">
+        🔔 Нагадування (${items.length})
+      </div>
+      ${items.map(i=>`<div style="padding:10px 20px;border-bottom:1px solid #f0f4f8;display:flex;align-items:center;gap:12px;cursor:pointer" onclick="nav('employee',${i.id})">
+        <div style="font-size:20px">${i.icon}</div>
+        <div style="flex:1"><div style="font-size:13px">${i.text}</div><div style="font-size:11px;color:var(--gray)">${i.sub}</div></div>
+        <div style="width:8px;height:8px;border-radius:50%;background:${i.color};flex-shrink:0"></div>
+      </div>`).join('')}
+    </div>`;
+}
+
+// ── МІСЯЧНИЙ ЗВІТ ──
+let reportMonth=new Date().getMonth(),reportYear=new Date().getFullYear(),reportLoc='';
+
+function renderReport(){
+  const isHR=S.user.role==='hr';
+  const loc=isHR?reportLoc:(S.user.loc||'');
+  const locs=isHR?[...new Set(S.emps.map(e=>e.loc).filter(Boolean))].sort():null;
+  const emps=visible().filter(isActive).filter(e=>!loc||e.loc===loc);
+  const monthNames=['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
+  const daysInMonth=new Date(reportYear,reportMonth+1,0).getDate();
+
+  // Рахуємо дані по кожному
+  const rows=emps.map(e=>{
+    const r=rec(e.key);
+    const vacDays=r.vacs.filter(v=>{
+      const s=new Date(v.start),en=new Date(v.end);
+      return s.getFullYear()===reportYear&&s.getMonth()===reportMonth||
+             en.getFullYear()===reportYear&&en.getMonth()===reportMonth;
+    }).reduce((sum,v)=>sum+(v.days||0),0);
+    const sickDays=r.sicks.filter(v=>{
+      const s=new Date(v.start);
+      return s.getFullYear()===reportYear&&s.getMonth()===reportMonth;
+    }).reduce((sum,v)=>sum+(v.days||0),0);
+    const worked=daysInMonth-vacDays-sickDays;
+    const sal=curSal(e.key);
+    return{e,vacDays,sickDays,worked:Math.max(0,worked),sal:sal?sal.amount:0};
+  });
+
+  set('main',`
+    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:18px">
+      ${isHR?`<select class="flt-sel" onchange="reportLoc=this.value;renderReport()">
+        <option value="">Всі локації</option>
+        ${locs.map(l=>`<option value="${l}" ${loc===l?'selected':''}>${l}</option>`).join('')}
+      </select>`:''}
+      <select class="flt-sel" onchange="reportMonth=+this.value;renderReport()">
+        ${monthNames.map((m,i)=>`<option value="${i}" ${reportMonth===i?'selected':''}>${m}</option>`).join('')}
+      </select>
+      <select class="flt-sel" onchange="reportYear=+this.value;renderReport()">
+        ${[2024,2025,2026].map(y=>`<option value="${y}" ${reportYear===y?'selected':''}>${y}</option>`).join('')}
+      </select>
+      <button class="btn btn-primary btn-sm" onclick="exportReport()">📊 Експорт CSV</button>
+    </div>
+    <div class="card">
+      <div class="card-hd"><h3>📊 ${monthNames[reportMonth]} ${reportYear}${loc?' — '+loc:''}</h3>
+        <span style="font-size:12px;color:var(--gray)">${rows.length} співробітників</span>
+      </div>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Співробітник</th>${isHR?'<th>Локація</th>':''}<th>Посада</th><th>Відпустка (дн)</th><th>Лікарняний (дн)</th><th>Відпрацьовано (дн)</th><th>Зарплата</th></tr></thead>
+        <tbody>${rows.map(r=>`<tr class="clickable" onclick="nav('employee',${r.e.id})">
+          <td><strong>${fullName(r.e)}</strong></td>
+          ${isHR?`<td style="font-size:12px">${r.e.loc}</td>`:''}
+          <td style="font-size:12px">${r.e.pos}</td>
+          <td>${r.vacDays>0?`<span class="badge bb">${r.vacDays}</span>`:'—'}</td>
+          <td>${r.sickDays>0?`<span class="badge bo">${r.sickDays}</span>`:'—'}</td>
+          <td><strong>${r.worked}</strong> з ${daysInMonth}</td>
+          <td style="color:#27ae60;font-weight:600">${r.sal?Number(r.sal).toLocaleString('uk-UA')+' ₴':'—'}</td>
+        </tr>`).join('')}
+        <tr style="background:#f8fafc;font-weight:700">
+          <td colspan="${isHR?2:1}"><strong>Разом</strong></td>
+          <td></td>
+          <td>${rows.reduce((s,r)=>s+r.vacDays,0)}</td>
+          <td>${rows.reduce((s,r)=>s+r.sickDays,0)}</td>
+          <td>${rows.reduce((s,r)=>s+r.worked,0)}</td>
+          <td>${rows.filter(r=>r.sal).length>0?Number(rows.reduce((s,r)=>s+(+r.sal||0),0)).toLocaleString('uk-UA')+' ₴':'—'}</td>
+        </tr>
+        </tbody>
+      </table></div>
+    </div>
+  `);
+}
+
+function exportReport(){
+  const isHR=S.user.role==='hr';
+  const loc=isHR?reportLoc:(S.user.loc||'');
+  const emps=visible().filter(isActive).filter(e=>!loc||e.loc===loc);
+  const monthNames=['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
+  const daysInMonth=new Date(reportYear,reportMonth+1,0).getDate();
+  const rows=[['Прізвище',"Ім'я",'Локація','Посада','Відпустка (дн)','Лікарняний (дн)','Відпрацьовано (дн)','Зарплата']];
+  emps.forEach(e=>{
+    const r=rec(e.key);
+    const vacDays=r.vacs.filter(v=>new Date(v.start).getMonth()===reportMonth&&new Date(v.start).getFullYear()===reportYear).reduce((s,v)=>s+(v.days||0),0);
+    const sickDays=r.sicks.filter(v=>new Date(v.start).getMonth()===reportMonth&&new Date(v.start).getFullYear()===reportYear).reduce((s,v)=>s+(v.days||0),0);
+    const sal=curSal(e.key);
+    rows.push([e.last,e.first,e.loc,e.pos,vacDays,sickDays,Math.max(0,daysInMonth-vacDays-sickDays),sal?sal.amount:'']);
+  });
+  const csv=rows.map(r=>r.map(c=>`"${(c||'').toString().replace(/"/g,'""')}"`).join(',')).join('\n');
+  dl('\uFEFF'+csv,`звіт_${monthNames[reportMonth]}_${reportYear}.csv`,'text/csv;charset=utf-8');
 }
 
 // ── TOAST ──
