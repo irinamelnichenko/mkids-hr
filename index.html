@@ -325,7 +325,7 @@ tbody tr.clickable{cursor:pointer}
         <span class="ni">📈</span> Аналітика
       </div>
       <div class="nav-item" data-v="birthdays" onclick="nav('birthdays')" id="navBirthdays">
-        <span class="ni">🎂</span> Дні народження
+        <span class="ni">🗓️</span> Календар подій
       </div>
       <div class="nav-item" data-v="report" onclick="nav('report')" id="navReport">
         <span class="ni">📊</span> Місячний звіт
@@ -687,7 +687,7 @@ function updateBadges(){
 }
 
 // ── NAVIGATION ──
-const TITLES={dashboard:'📊 Дашборд',employees:'👥 Співробітники',employee:'👤 Картка співробітника',vacations:'🏖️ Відпустки',sick:'🏥 Лікарняні',analytics:'📈 Аналітика',birthdays:'🎂 Дні народження',settings:'⚙️ Налаштування',tabel:'📋 Табель відвідуваності',report:'📊 Місячний звіт'};
+const TITLES={dashboard:'📊 Дашборд',employees:'👥 Співробітники',employee:'👤 Картка співробітника',vacations:'🏖️ Відпустки',sick:'🏥 Лікарняні',analytics:'📈 Аналітика',birthdays:'🗓️ Календар подій',settings:'⚙️ Налаштування',tabel:'📋 Табель відвідуваності',report:'📊 Місячний звіт'};
 function nav(view,id=null){
   if(view==='settings'&&S.user&&S.user.role!=='hr') view='dashboard';
   if(view==='employees'&&S.user&&S.user.role==='nurse') view='tabel';
@@ -743,7 +743,7 @@ function vacEarned(e, toDate=new Date()){
   const rate=vacDailyRate(e);
   return Math.floor(months*rate/12);
 }
-// Для відображення: зароблено всього мінус використано = залишок
+// Для відображення: доступно всього мінус використано = залишок
 function vacTotalLim(e){return vacEarned(e);}
 function vacLim(e){return vacEarned(e);} // сумісність
 function vacCarryover(){return 0;} // більше не використовуємо перенос
@@ -846,7 +846,6 @@ function renderDash(){
   allEmps.filter(isActive).forEach(e=>{const t=normType(e.typ)||'Інше';if(!typeStats[t])typeStats[t]={a:0,v:0,s:0,ov:0};typeStats[t].a++;if(isOnVac(e.key))typeStats[t].v++;if(isOnSick(e.key))typeStats[t].s++;if(vacUsed(e.key)>vacTotalLim(e))typeStats[t].ov++;});
 
   set('main',`
-    ${renderReminders()}
     ${isHR&&allTypes.length>1?`
     <div class="dash-type-tabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:18px">
       ${allTypes.map(t=>`<button class="dtype-tab ${dashTab===t?'active':''}" onclick="switchDashTab('${t}')">${TYPE_ICONS[t]||'📌'} ${t} <span class="dtype-cnt">${(typeStats[t]||{a:0}).a}</span></button>`).join('')}
@@ -867,33 +866,23 @@ function renderDash(){
       ${over.map(e=>`<span onclick="nav('employee',${e.id})" style="cursor:pointer;text-decoration:underline">${fullName(e)}</span> (${vacUsed(e.key)}/${vacTotalLim(e)} дн.)`).join(' · ')}
       </div></div>`:''}
 
-    <div style="display:grid;grid-template-columns:${isHR?'1.3fr 0.7fr':'1fr'};gap:20px">
-      ${isHR?`<div class="card">
-        <div class="card-hd"><h3>🏫 Зведення по локаціях${dashTab!=='all'?' — '+dashTab:''}</h3></div>
-        <div class="tbl-wrap"><table>
-          <thead><tr><th>Локація</th><th>Тип</th><th>Всього</th><th>Активні</th><th>Відпустка</th><th>Лікарняний</th></tr></thead>
-          <tbody>${Object.entries(locs).sort((a,b)=>(a[1].typ||'').localeCompare(b[1].typ||'')||a[0].localeCompare(b[0],'uk')).map(([l,d])=>`
-          <tr class="clickable" onclick="filterLoc('${esc(l)}')">
-            <td><strong>${l}</strong></td>
-            <td><span style="font-size:11px;color:var(--gray)">${TYPE_ICONS[d.typ]||'📌'} ${d.typ||'—'}</span></td>
-            <td>${d.t}</td>
-            <td><span class="badge bg">${d.a}</span></td>
-            <td>${d.v>0?`<span class="badge bb">${d.v}</span>`:'—'}</td>
-            <td>${d.s>0?`<span class="badge bo">${d.s}</span>`:'—'}</td>
-          </tr>`).join('')}</tbody>
-        </table></div>
-      </div>`:''}
-
+    <div style="display:grid;grid-template-columns:${isHR?'1.3fr 0.7fr':'1fr 0.7fr'};gap:20px">
       <div style="display:flex;flex-direction:column;gap:16px">
-        <div class="card">
-          <div class="card-hd"><h3>🎂 Дні народження (7 днів)</h3><button class="btn btn-secondary btn-sm" onclick="nav('birthdays')">Всі →</button></div>
-          ${bdays7.length===0?`<div class="empty"><span class="ei" style="font-size:32px">🎂</span><p>Немає найближчих</p></div>`:
-          bdays7.map(b=>`<div style="padding:10px 20px;border-bottom:1px solid #f0f4f8;display:flex;align-items:center;gap:10px;cursor:pointer" onclick="nav('employee',${b.e.id})">
-            <div style="font-size:22px">${b.left===0?'🎉':b.left<=3?'🎁':'🎂'}</div>
-            <div style="flex:1"><div style="font-weight:700;font-size:13px">${fullName(b.e)}</div><div style="font-size:11px;color:var(--gray)">${b.e.pos} · ${b.e.loc}</div></div>
-            <div style="text-align:right"><div style="font-size:12px;font-weight:700;color:${b.left===0?'#e74c3c':'#27ae60'}">${b.left===0?'🎉 Сьогодні!':'за '+b.left+' дн.'}</div><div style="font-size:11px;color:#bdc3c7">${fmtDate(b.d)}</div></div>
-          </div>`).join('')}
-        </div>
+        ${isHR?`<div class="card">
+          <div class="card-hd"><h3>🏫 Зведення по локаціях${dashTab!=='all'?' — '+dashTab:''}</h3></div>
+          <div class="tbl-wrap"><table>
+            <thead><tr><th>Локація</th><th>Тип</th><th>Всього</th><th>Активні</th><th>Відпустка</th><th>Лікарняний</th></tr></thead>
+            <tbody>${Object.entries(locs).sort((a,b)=>(a[1].typ||'').localeCompare(b[1].typ||'')||a[0].localeCompare(b[0],'uk')).map(([l,d])=>`
+            <tr class="clickable" onclick="filterLoc('${esc(l)}')">
+              <td><strong>${l}</strong></td>
+              <td><span style="font-size:11px;color:var(--gray)">${TYPE_ICONS[d.typ]||'📌'} ${d.typ||'—'}</span></td>
+              <td>${d.t}</td>
+              <td><span class="badge bg">${d.a}</span></td>
+              <td>${d.v>0?`<span class="badge bb">${d.v}</span>`:'—'}</td>
+              <td>${d.s>0?`<span class="badge bo">${d.s}</span>`:'—'}</td>
+            </tr>`).join('')}</tbody>
+          </table></div>
+        </div>`:''}
         ${onVac.length>0?`<div class="card">
           <div class="card-hd"><h3>🏖️ Зараз у відпустці</h3></div>
           ${onVac.slice(0,5).map(e=>`<div style="padding:9px 20px;border-bottom:1px solid #f0f4f8;display:flex;align-items:center;gap:10px;cursor:pointer" onclick="nav('employee',${e.id})">
@@ -910,6 +899,19 @@ function renderDash(){
             <span class="badge bo">лікарняний</span>
           </div>`).join('')}
         </div>`:''}
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:16px">
+        <div class="card">
+          <div class="card-hd"><h3>🎂 Дні народження (7 днів)</h3><button class="btn btn-secondary btn-sm" onclick="nav('birthdays')">Всі →</button></div>
+          ${bdays7.length===0?`<div class="empty"><span class="ei" style="font-size:28px">🎂</span><p>Немає найближчих</p></div>`:
+          bdays7.map(b=>`<div style="padding:9px 16px;border-bottom:1px solid #f0f4f8;display:flex;align-items:center;gap:8px;cursor:pointer" onclick="nav('employee',${b.e.id})">
+            <div style="font-size:18px">${b.left===0?'🎉':b.left<=3?'🎁':'🎂'}</div>
+            <div style="flex:1"><div style="font-weight:700;font-size:12px">${fullName(b.e)}</div><div style="font-size:11px;color:var(--gray)">${b.e.pos}</div></div>
+            <div style="font-size:11px;font-weight:700;color:${b.left===0?'#e74c3c':'#27ae60'}">${b.left===0?'Сьогодні!':'за '+b.left+' дн.'}</div>
+          </div>`).join('')}
+        </div>
+        ${renderReminders()}
       </div>
     </div>
   `);
@@ -993,7 +995,7 @@ function renderEmpCard(){
   const e=S.emps[S.empId]; if(!e){nav('employees');return;}
   const yr=new Date().getFullYear();
   const act=isActive(e),r=rec(e.key);
-  const vEarned=vacEarned(e);         // зароблено всього за фактичний стаж
+  const vEarned=vacEarned(e);         // доступно всього за фактичний стаж
   const vUsed=vacUsed(e.key);         // використано всього (без фільтра по року)
   const vBal=Math.max(0,vEarned-vUsed); // залишок
   const ov=vUsed>vEarned;
@@ -1025,7 +1027,7 @@ function renderEmpCard(){
       </div>
       <div class="qs-grid">
         <div class="qs-item"><div class="qs-val">${t?`${t.yr}р ${t.mo}м`:'—'}</div><div class="qs-lbl">Стаж</div></div>
-        <div class="qs-item"><div class="qs-val" style="color:${ov?'#e74c3c':'var(--dark)'};">${vUsed}<span style="font-size:14px;color:var(--gray)">/${vEarned}</span></div><div class="qs-lbl">Відпустка використано/зароблено</div></div>
+        <div class="qs-item"><div class="qs-val" style="color:${ov?'#e74c3c':'var(--dark)'};">${vUsed}<span style="font-size:14px;color:var(--gray)">/${vEarned}</span></div><div class="qs-lbl">Відпустка використано/доступно</div></div>
         <div class="qs-item"><div class="qs-val" style="color:${vBal===0?'#e74c3c':vBal<3?'#e67e22':'#27ae60'}">${vBal}</div><div class="qs-lbl">Залишок днів відпустки</div></div>
         <div class="qs-item"><div class="qs-val" style="color:#27ae60;font-size:18px">${sal?Number(sal.amount).toLocaleString('uk-UA'):'—'}</div><div class="qs-lbl">Зарплата (грн)</div></div>
       </div>
@@ -1044,7 +1046,7 @@ function renderEmpCard(){
           ${ii('Статус',e.stat)}${ii('Дата народження', e.bdate ? fmtDate(e.bdate) : (e.bday&&e.bmon ? e.bday+'.'+(String(e.bmon).match(/\d+/)||[''])[0] : ''))}
           ${ii('Перший робочий день',e.wday)}${ii('Дата працевлаштування',e.hired)}
           ${e.fired?ii('Дата звільнення',`<span style="color:#e74c3c">${e.fired}</span>`):''}
-          <div class="ii"><label>Відпустка (накопичено за стажем)</label><div class="iv">${vEarned} днів зароблено
+          <div class="ii"><label>Відпустка (накопичено за стажем)</label><div class="iv">${vEarned} днів доступно
             <div class="prog-wrap"><div class="prog-bar ${ov?'pr':pct>75?'po':'pg'}" style="width:${pct}%"></div></div>
             <div style="font-size:11px;color:var(--gray);margin-top:3px">${vUsed} використано · ${vBal} залишок · ставка ${rate} дн/рік (${(rate/12).toFixed(1)} дн/міс)</div>
           </div></div>
@@ -1144,7 +1146,7 @@ function renderVacs(){
         </span>
       </div>
       <div class="tbl-wrap"><table>
-        <thead><tr><th>Співробітник</th>${isHR?'<th>Локація</th>':''}<th>Посада</th><th>Зароблено</th><th>Використано</th><th>Залишок</th><th style="min-width:140px">Прогрес</th><th>Дії</th></tr></thead>
+        <thead><tr><th>Співробітник</th>${isHR?'<th>Локація</th>':''}<th>Посада</th><th>Доступно</th><th>Використано</th><th>Залишок</th><th style="min-width:140px">Прогрес</th><th>Дії</th></tr></thead>
         <tbody>${rows.map(r=>`<tr class="clickable" style="${r.ov?'background:#fdf9f9':''}" onclick="nav('employee',${r.e.id})">
           <td><div style="display:flex;align-items:center;gap:8px">
             <div class="avatar" style="width:28px;height:28px;font-size:10px">${initials(r.e)}</div>
@@ -1481,7 +1483,7 @@ function openVac(id){
   mEmpId=id;const e=S.emps[id];
   const vEarned=vacEarned(e),vUsed=vacUsed(e.key),vBal=Math.max(0,vEarned-vUsed);
   document.getElementById('mVacName').textContent=fullName(e);
-  document.getElementById('mVacInfo').innerHTML=`Зароблено: <strong>${vEarned} дн.</strong> | Використано: <strong>${vUsed}</strong> | Залишок: <strong style="color:${vBal<=0?'#e74c3c':'#27ae60'}">${vBal}</strong>`;
+  document.getElementById('mVacInfo').innerHTML=`Доступно: <strong>${vEarned} дн.</strong> | Використано: <strong>${vUsed}</strong> | Залишок: <strong style="color:${vBal<=0?'#e74c3c':'#27ae60'}">${vBal}</strong>`;
   document.getElementById('mVacWarn').classList.add('hidden');
   ['vStart','vEnd','vNote'].forEach(x=>document.getElementById(x).value='');
   document.getElementById('vDays').textContent='0';document.getElementById('vType').value='Щорічна';
@@ -1827,7 +1829,7 @@ function dl(content,name,mime){
 }
 
 // ── ТАБЕЛЬ ВІДВІДУВАНОСТІ ──
-const TABEL_STATUSES={present:{label:'✅ Прийшов',color:'#27ae60'},absent:{label:'❌ Відсутній',color:'#e74c3c'},late:{label:'⏰ Спізнився',color:'#e67e22'},vacation:{label:'🏖️ Відпустка',color:'#3498db'},sick:{label:'🏥 Лікарняний',color:'#9b59b6'}};
+const TABEL_STATUSES={present:{label:'✅ Присутній',color:'#27ae60'},absent:{label:'❌ Відсутній',color:'#e74c3c'},late:{label:'⏰ Спізнився',color:'#e67e22'},vacation:{label:'🏖️ Відпустка',color:'#3498db'},sick:{label:'🏥 Лікарняний',color:'#9b59b6'}};
 
 function tabelKey(loc,date){return `tabel_${loc}_${date}`;}
 function getTabel(loc,date){
@@ -1837,60 +1839,151 @@ function saveTabel(loc,date,data){
   localStorage.setItem(tabelKey(loc,date),JSON.stringify(data));
 }
 
-let tabelDate=new Date().toISOString().split('T')[0];
+let tabelPeriod='day'; // day | week | month | quarter | year
+let tabelTypFilter='';
+
+function workDaysInRange(from,to){
+  let count=0,d=new Date(from);d.setHours(0,0,0,0);
+  const end=new Date(to);end.setHours(0,0,0,0);
+  while(d<=end){const dw=d.getDay();if(dw!==0&&dw!==6)count++;d.setDate(d.getDate()+1);}
+  return count;
+}
+function getPeriodRange(period,dateStr){
+  const d=new Date(dateStr);
+  let from,to;
+  if(period==='day'){from=to=dateStr;}
+  else if(period==='week'){
+    const day=d.getDay()||7;
+    from=new Date(d);from.setDate(d.getDate()-day+1);
+    to=new Date(from);to.setDate(from.getDate()+4);
+    from=from.toISOString().split('T')[0];to=to.toISOString().split('T')[0];
+  } else if(period==='month'){
+    from=new Date(d.getFullYear(),d.getMonth(),1).toISOString().split('T')[0];
+    to=new Date(d.getFullYear(),d.getMonth()+1,0).toISOString().split('T')[0];
+  } else if(period==='quarter'){
+    const q=Math.floor(d.getMonth()/3);
+    from=new Date(d.getFullYear(),q*3,1).toISOString().split('T')[0];
+    to=new Date(d.getFullYear(),q*3+3,0).toISOString().split('T')[0];
+  } else if(period==='year'){
+    from=`${d.getFullYear()}-01-01`;to=`${d.getFullYear()}-12-31`;
+  }
+  return{from,to};
+}
 
 function renderTabel(){
-  const loc=S.user.loc||(S.f&&S.f.tabelLoc)||'';
-  const isHR=S.user.role==='hr';
-  const locs=isHR?[...new Set(S.emps.map(e=>e.loc).filter(Boolean))].sort():null;
-  const curLoc=isHR?(loc||locs[0]||''):loc;
+  const isHR=S.user.role==='hr', isDir=S.user.role==='director', isNurse=S.user.role==='nurse';
   if(!S.f)S.f={};
-  if(!S.f.tabelLoc)S.f.tabelLoc=curLoc;
-  const activeLoc=isHR?S.f.tabelLoc:curLoc;
-  const emps=S.emps.filter(e=>isActive(e)&&e.loc===activeLoc);
-  const tabel=getTabel(activeLoc,tabelDate);
-  const canEdit=S.user.role==='nurse'||S.user.role==='director'||S.user.role==='hr';
+  // Тип фільтр (тільки для HR)
+  const allTyps=isHR?[...new Set(S.emps.filter(isActive).map(e=>normType(e.typ)).filter(Boolean))].sort():null;
+  const curTyp=isHR?(tabelTypFilter||''):'';
+  // Локації
+  const locsForTyp=isHR
+    ?[...new Set(S.emps.filter(e=>isActive(e)&&(!curTyp||normType(e.typ)===curTyp)).map(e=>e.loc).filter(Boolean))].sort()
+    :null;
+  const userLoc=S.user.loc||'';
+  if(isHR&&!S.f.tabelLoc&&locsForTyp&&locsForTyp.length)S.f.tabelLoc=locsForTyp[0];
+  if(isHR&&S.f.tabelLoc&&locsForTyp&&!locsForTyp.includes(S.f.tabelLoc))S.f.tabelLoc=locsForTyp[0]||'';
+  const activeLoc=isHR?S.f.tabelLoc:userLoc;
 
-  set('main',`
-    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:18px">
-      ${isHR?`<select class="flt-sel" onchange="S.f.tabelLoc=this.value;renderTabel()">
-        ${locs.map(l=>`<option value="${l}" ${activeLoc===l?'selected':''}>${l}</option>`).join('')}
-      </select>`:''}
-      <input type="date" class="flt-sel" value="${tabelDate}" onchange="tabelDate=this.value;renderTabel()" style="min-width:150px">
-      <span style="font-size:12px;color:var(--gray)">${emps.length} співробітників</span>
-      <button class="btn btn-secondary btn-sm" onclick="tabelDate=new Date().toISOString().split('T')[0];renderTabel()">Сьогодні</button>
-      ${canEdit?`<button class="btn btn-primary btn-sm" onclick="autoFillTabel('${activeLoc}','${tabelDate}')">⚡ Всі присутні</button>`:''}
-    </div>
-    ${emps.length===0?`<div class="empty"><span class="ei">📋</span><h4>Немає співробітників для цієї локації</h4></div>`:
-    `<div class="card">
-      <div class="card-hd"><h3>📋 Табель — ${activeLoc} — ${fmtDate(tabelDate)}</h3>
-        <span style="font-size:12px;color:var(--gray)">
-          ✅ ${emps.filter(e=>tabel[e.key]?.status==='present').length} &nbsp;
-          ❌ ${emps.filter(e=>tabel[e.key]?.status==='absent').length} &nbsp;
-          ⏰ ${emps.filter(e=>tabel[e.key]?.status==='late').length} &nbsp;
-          🏥 ${emps.filter(e=>tabel[e.key]?.status==='sick').length} &nbsp;
-          🏖️ ${emps.filter(e=>tabel[e.key]?.status==='vacation').length}
-        </span>
+  const emps=S.emps.filter(e=>isActive(e)&&e.loc===activeLoc&&(!curTyp||normType(e.typ)===curTyp));
+  const canEdit=true;
+  const {from,to}=getPeriodRange(tabelPeriod,tabelDate);
+  const isDayView=tabelPeriod==='day';
+
+  // Підсумок для одного дня
+  let summary='';
+  if(isDayView){
+    const tabel=getTabel(activeLoc,tabelDate);
+    const cnt={present:0,absent:0,late:0,sick:0,vacation:0,unknown:0};
+    emps.forEach(e=>{const st=tabel[e.key]?.status||'';if(st&&cnt[st]!==undefined)cnt[st]++;else cnt.unknown++;});
+    summary=`<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">
+      ${[['present','✅ Присутніх','#27ae60'],['late','⏰ Спізнились','#e67e22'],['absent','❌ Відсутніх','#e74c3c'],['sick','🏥 Лікарняний','#9b59b6'],['vacation','🏖️ Відпустка','#3498db'],['unknown','❓ Невідомо','#7f8c8d']].map(([k,l,c])=>
+      `<div style="background:#fff;border-radius:10px;padding:12px 18px;box-shadow:0 2px 8px rgba(0,0,0,.06);text-align:center;min-width:90px">
+        <div style="font-size:22px;font-weight:900;color:${c}">${cnt[k]}</div>
+        <div style="font-size:11px;color:var(--gray);margin-top:2px">${l}</div>
+      </div>`).join('')}
+    </div>`;
+  }
+
+  // Таблиця для одного дня
+  let tableHtml='';
+  if(isDayView){
+    const tabel=getTabel(activeLoc,tabelDate);
+    tableHtml=`<div class="card">
+      <div class="card-hd"><h3>📋 ${activeLoc} — ${fmtDate(tabelDate)}</h3>
+        ${canEdit?`<button class="btn btn-primary btn-sm" onclick="autoFillTabel('${esc(activeLoc)}','${tabelDate}')">⚡ Всі присутні</button>`:''}
       </div>
       <div class="tbl-wrap"><table>
         <thead><tr><th>Співробітник</th><th>Посада</th><th>Статус</th><th>Час приходу</th><th>Примітка</th></tr></thead>
         <tbody>${emps.map(e=>{
-          const row=tabel[e.key]||{};
-          const st=row.status||'';
-          const stInfo=TABEL_STATUSES[st]||{};
+          const row=tabel[e.key]||{};const st=row.status||'';const stInfo=TABEL_STATUSES[st]||{};
           return`<tr>
             <td><strong>${fullName(e)}</strong></td>
             <td style="font-size:12px;color:var(--gray)">${e.pos||'—'}</td>
-            <td>${canEdit?`<select style="padding:4px 8px;border:1.5px solid var(--gray2);border-radius:6px;font-size:12px;background:#fff" onchange="setTabelStatus('${activeLoc}','${tabelDate}','${e.key}',this.value)">
+            <td><select style="padding:4px 8px;border:1.5px solid var(--gray2);border-radius:6px;font-size:12px;background:#fff" onchange="setTabelStatus('${esc(activeLoc)}','${tabelDate}','${e.key}',this.value)">
               <option value="">— Оберіть —</option>
               ${Object.entries(TABEL_STATUSES).map(([k,v])=>`<option value="${k}" ${st===k?'selected':''}>${v.label}</option>`).join('')}
-            </select>`:st?`<span style="color:${stInfo.color};font-weight:600">${stInfo.label}</span>`:'—'}</td>
-            <td>${canEdit&&(st==='present'||st==='late')?`<input type="time" value="${row.time||''}" style="padding:4px 8px;border:1.5px solid var(--gray2);border-radius:6px;font-size:12px" onchange="setTabelTime('${activeLoc}','${tabelDate}','${e.key}',this.value)">`:row.time||'—'}</td>
-            <td>${canEdit?`<input type="text" value="${row.note||''}" placeholder="Примітка…" style="padding:4px 8px;border:1.5px solid var(--gray2);border-radius:6px;font-size:12px;width:160px" onchange="setTabelNote('${activeLoc}','${tabelDate}','${e.key}',this.value)">`:row.note||'—'}</td>
+            </select></td>
+            <td>${(st==='present'||st==='late')?`<input type="time" value="${row.time||''}" style="padding:4px 8px;border:1.5px solid var(--gray2);border-radius:6px;font-size:12px" onchange="setTabelTime('${esc(activeLoc)}','${tabelDate}','${e.key}',this.value)">`:row.time||'—'}</td>
+            <td><input type="text" value="${(row.note||'').replace(/"/g,'&quot;')}" placeholder="Примітка…" style="padding:4px 8px;border:1.5px solid var(--gray2);border-radius:6px;font-size:12px;width:150px" onchange="setTabelNote('${esc(activeLoc)}','${tabelDate}','${e.key}',this.value)"></td>
           </tr>`;}).join('')}
         </tbody>
       </table></div>
-    </div>`}
+    </div>`;
+  } else {
+    // Зведена таблиця за період
+    const workDays=workDaysInRange(from,to);
+    tableHtml=`<div class="card">
+      <div class="card-hd"><h3>📋 ${activeLoc} — ${fmtDate(from)}${from!==to?' — '+fmtDate(to):''} (${workDays} роб. днів)</h3></div>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Співробітник</th><th>Посада</th><th>✅ Присут.</th><th>⏰ Спізн.</th><th>❌ Відсут.</th><th>🏥 Лікарн.</th><th>🏖️ Відпуст.</th><th>❓ Невід.</th></tr></thead>
+        <tbody>${emps.map(e=>{
+          const cnt={present:0,late:0,absent:0,sick:0,vacation:0,unknown:0};
+          let d=new Date(from);
+          while(d<=new Date(to)){
+            const dw=d.getDay();
+            if(dw!==0&&dw!==6){
+              const ds=d.toISOString().split('T')[0];
+              const t=getTabel(activeLoc,ds);
+              const st=t[e.key]?.status||'unknown';
+              cnt[st]=(cnt[st]||0)+1;
+            }
+            d.setDate(d.getDate()+1);
+          }
+          return`<tr>
+            <td><strong>${fullName(e)}</strong></td>
+            <td style="font-size:12px;color:var(--gray)">${e.pos||'—'}</td>
+            <td style="color:#27ae60;font-weight:700">${cnt.present||0}</td>
+            <td style="color:#e67e22">${cnt.late||0}</td>
+            <td style="color:#e74c3c">${cnt.absent||0}</td>
+            <td style="color:#9b59b6">${cnt.sick||0}</td>
+            <td style="color:#3498db">${cnt.vacation||0}</td>
+            <td style="color:#7f8c8d">${cnt.unknown||0}</td>
+          </tr>`;}).join('')}
+        </tbody>
+      </table></div>
+    </div>`;
+  }
+
+  set('main',`
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:16px">
+      ${isHR&&allTyps?`<select class="flt-sel" onchange="tabelTypFilter=this.value;S.f.tabelLoc='';renderTabel()">
+        <option value="">Всі типи</option>
+        ${allTyps.map(t=>`<option value="${t}" ${curTyp===t?'selected':''}>${TYPE_ICONS[t]||'📌'} ${t}</option>`).join('')}
+      </select>`:''}
+      ${isHR&&locsForTyp?`<select class="flt-sel" onchange="S.f.tabelLoc=this.value;renderTabel()">
+        <option value="">Всі локації</option>
+        ${locsForTyp.map(l=>`<option value="${l}" ${activeLoc===l?'selected':''}>${l}</option>`).join('')}
+      </select>`:''}
+      <div style="display:flex;gap:4px">
+        ${[['day','День'],['week','Тиждень'],['month','Місяць'],['quarter','Квартал'],['year','Рік']].map(([p,l])=>
+        `<button class="btn btn-${tabelPeriod===p?'primary':'secondary'} btn-sm" onclick="tabelPeriod='${p}';renderTabel()">${l}</button>`).join('')}
+      </div>
+      <input type="date" class="flt-sel" value="${tabelDate}" onchange="tabelDate=this.value;renderTabel()" style="min-width:150px">
+      <button class="btn btn-secondary btn-sm" onclick="tabelDate=new Date().toISOString().split('T')[0];renderTabel()">Сьогодні</button>
+    </div>
+    ${summary}
+    ${emps.length===0?`<div class="empty"><span class="ei">📋</span><h4>Немає співробітників</h4></div>`:tableHtml}
   `);
 }
 
@@ -1967,23 +2060,27 @@ function renderReport(){
   const locs=isHR?[...new Set(S.emps.map(e=>e.loc).filter(Boolean))].sort():null;
   const emps=visible().filter(isActive).filter(e=>!loc||e.loc===loc);
   const monthNames=['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
-  const daysInMonth=new Date(reportYear,reportMonth+1,0).getDate();
+  const isNurse=S.user.role==='nurse';
+  // Рахуємо робочі дні (Пн-Пт) у місяці
+  const workDaysMonth=workDaysInRange(
+    `${reportYear}-${String(reportMonth+1).padStart(2,'0')}-01`,
+    new Date(reportYear,reportMonth+1,0).toISOString().split('T')[0]
+  );
 
-  // Рахуємо дані по кожному
   const rows=emps.map(e=>{
     const r=rec(e.key);
     const vacDays=r.vacs.filter(v=>{
       const s=new Date(v.start),en=new Date(v.end);
-      return s.getFullYear()===reportYear&&s.getMonth()===reportMonth||
-             en.getFullYear()===reportYear&&en.getMonth()===reportMonth;
+      return (s.getFullYear()===reportYear&&s.getMonth()===reportMonth)||
+             (en.getFullYear()===reportYear&&en.getMonth()===reportMonth);
     }).reduce((sum,v)=>sum+(v.days||0),0);
     const sickDays=r.sicks.filter(v=>{
       const s=new Date(v.start);
       return s.getFullYear()===reportYear&&s.getMonth()===reportMonth;
     }).reduce((sum,v)=>sum+(v.days||0),0);
-    const worked=daysInMonth-vacDays-sickDays;
+    const worked=Math.max(0,workDaysMonth-vacDays-sickDays);
     const sal=curSal(e.key);
-    return{e,vacDays,sickDays,worked:Math.max(0,worked),sal:sal?sal.amount:0};
+    return{e,vacDays,sickDays,worked,sal:sal?sal.amount:0};
   });
 
   set('main',`
@@ -1999,21 +2096,22 @@ function renderReport(){
         ${[2024,2025,2026].map(y=>`<option value="${y}" ${reportYear===y?'selected':''}>${y}</option>`).join('')}
       </select>
       <button class="btn btn-primary btn-sm" onclick="exportReport()">📊 Експорт CSV</button>
+      <span style="font-size:12px;color:var(--gray)">Робочих днів у місяці: <strong>${workDaysMonth}</strong></span>
     </div>
     <div class="card">
       <div class="card-hd"><h3>📊 ${monthNames[reportMonth]} ${reportYear}${loc?' — '+loc:''}</h3>
         <span style="font-size:12px;color:var(--gray)">${rows.length} співробітників</span>
       </div>
       <div class="tbl-wrap"><table>
-        <thead><tr><th>Співробітник</th>${isHR?'<th>Локація</th>':''}<th>Посада</th><th>Відпустка (дн)</th><th>Лікарняний (дн)</th><th>Відпрацьовано (дн)</th><th>Зарплата</th></tr></thead>
-        <tbody>${rows.map(r=>`<tr class="clickable" onclick="nav('employee',${r.e.id})">
+        <thead><tr><th>Співробітник</th>${isHR?'<th>Локація</th>':''}<th>Посада</th><th>Відпустка (дн)</th><th>Лікарняний (дн)</th><th>Відпрацьовано (дн)</th>${!isNurse?'<th>Зарплата</th>':''}</tr></thead>
+        <tbody>${rows.map(r=>`<tr class="clickable" onclick="${!isNurse?`nav('employee',${r.e.id})`:''}">
           <td><strong>${fullName(r.e)}</strong></td>
           ${isHR?`<td style="font-size:12px">${r.e.loc}</td>`:''}
           <td style="font-size:12px">${r.e.pos}</td>
           <td>${r.vacDays>0?`<span class="badge bb">${r.vacDays}</span>`:'—'}</td>
           <td>${r.sickDays>0?`<span class="badge bo">${r.sickDays}</span>`:'—'}</td>
-          <td><strong>${r.worked}</strong> з ${daysInMonth}</td>
-          <td style="color:#27ae60;font-weight:600">${r.sal?Number(r.sal).toLocaleString('uk-UA')+' ₴':'—'}</td>
+          <td><strong>${r.worked}</strong> з ${workDaysMonth}</td>
+          ${!isNurse?`<td style="color:#27ae60;font-weight:600">${r.sal?Number(r.sal).toLocaleString('uk-UA')+' ₴':'—'}</td>`:''}
         </tr>`).join('')}
         <tr style="background:#f8fafc;font-weight:700">
           <td colspan="${isHR?2:1}"><strong>Разом</strong></td>
@@ -2021,7 +2119,7 @@ function renderReport(){
           <td>${rows.reduce((s,r)=>s+r.vacDays,0)}</td>
           <td>${rows.reduce((s,r)=>s+r.sickDays,0)}</td>
           <td>${rows.reduce((s,r)=>s+r.worked,0)}</td>
-          <td>${rows.filter(r=>r.sal).length>0?Number(rows.reduce((s,r)=>s+(+r.sal||0),0)).toLocaleString('uk-UA')+' ₴':'—'}</td>
+          ${!isNurse?`<td>${rows.filter(r=>r.sal).length>0?Number(rows.reduce((s,r)=>s+(+r.sal||0),0)).toLocaleString('uk-UA')+' ₴':'—'}</td>`:''}
         </tr>
         </tbody>
       </table></div>
