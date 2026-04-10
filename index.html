@@ -1159,13 +1159,12 @@ function renderSicks(){
 }
 
 // ── ANALYTICS ──
-let analyticsTypFilter='',analyticsLocFilter='',analyticsDirFilter='',analyticsRegionFilter='';
+let analyticsTypFilter='',analyticsLocFilter='';
 let analyticsTurnoverPeriod='year',analyticsTurnoverYear=new Date().getFullYear();
 let analyticsTurnoverTypFilter='',analyticsTurnoverLocFilter='';
 function switchAnalyticsType(val){analyticsTypFilter=val;analyticsLocFilter='';renderAnalytics();}
 function switchAnalyticsLoc(val){analyticsLocFilter=val;renderAnalytics();}
-function switchAnalyticsRegion(val){analyticsRegionFilter=val;analyticsLocFilter='';renderAnalytics();}
-function clearAnalyticsFilters(){analyticsTypFilter='';analyticsLocFilter='';analyticsDirFilter='';analyticsRegionFilter='';renderAnalytics();}
+function clearAnalyticsFilters(){analyticsTypFilter='';analyticsLocFilter='';renderAnalytics();}
 function salStats(arr){
   if(!arr.length)return null;
   const s=[...arr].sort((a,b)=>a-b);
@@ -1177,15 +1176,13 @@ function renderAnalytics(){
   const allActive=visible().filter(isActive);
   const typs=[...new Set(allActive.map(e=>normType(e.typ)).filter(Boolean))];
   const sortedTyps=[...TYPE_ORDER.filter(t=>typs.includes(t)),...typs.filter(t=>!TYPE_ORDER.includes(t)).sort()];
-  // Locations for the chosen type/region (using normalized loc for display)
-  const baseForLocs=analyticsRegionFilter?allActive.filter(e=>getRegion(e)===analyticsRegionFilter):allActive;
+  // Всі локації для вибраного типу
   const locsForType=(analyticsTypFilter
-    ? baseForLocs.filter(e=>normType(e.typ)===analyticsTypFilter)
-    : baseForLocs).map(e=>normEmpLoc(e)).filter(Boolean);
+    ? allActive.filter(e=>normType(e.typ)===analyticsTypFilter)
+    : allActive).map(e=>normEmpLoc(e)).filter(Boolean);
   const locsForTypeSorted=[...new Set(locsForType)].sort();
-  // Apply filters
+  // Застосовуємо фільтри — тип І локація
   let emps=analyticsTypFilter?allActive.filter(e=>normType(e.typ)===analyticsTypFilter):allActive;
-  if(analyticsRegionFilter)emps=emps.filter(e=>getRegion(e)===analyticsRegionFilter);
   if(analyticsLocFilter)emps=emps.filter(e=>normEmpLoc(e)===analyticsLocFilter);
   const yr=new Date().getFullYear();
   const isHR=S.user.role==='hr';
@@ -1262,7 +1259,7 @@ function renderAnalytics(){
       </tr>`;}).join('')}</tbody></table></div>`;
   }
 
-  // HR filter bar: 1) Type tabs  2) Region buttons  3) Location selector
+  // HR filter bar: тільки Тип + Локація
   const filterBar=isHR?`
     <div class="filters" style="margin-bottom:16px;flex-direction:column;align-items:flex-start;gap:10px">
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;width:100%">
@@ -1271,18 +1268,13 @@ function renderAnalytics(){
         ${sortedTyps.map(t=>`<button class="dtype-tab ${analyticsTypFilter===t?'active':''}" onclick="switchAnalyticsType('${esc(t)}')">${TYPE_ICONS[t]||'📌'} ${t} <span class="dtype-cnt">${allActive.filter(e=>normType(e.typ)===t).length}</span></button>`).join('')}
       </div>
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;width:100%">
-        <strong style="font-size:12px;color:var(--gray);white-space:nowrap">Напрямок:</strong>
-        <button class="dtype-tab ${!analyticsRegionFilter?'active':''}" onclick="switchAnalyticsRegion('')">🌐 Всі</button>
-        ${getRegions(allActive).map(r=>{const rc=allActive.filter(e=>getRegion(e)===r);return`<button class="dtype-tab ${analyticsRegionFilter===r?'active':''}" onclick="switchAnalyticsRegion('${esc(r)}')">${REGION_ICONS[r]||'📍'} ${r} <span class="dtype-cnt">${rc.length}</span></button>`;}).join('')}
-      </div>
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;width:100%">
         <strong style="font-size:12px;color:var(--gray);white-space:nowrap">Локація:</strong>
         <select class="flt-sel" style="min-width:200px" onchange="switchAnalyticsLoc(this.value)">
-          <option value="">Всі локації${analyticsRegionFilter?' · '+analyticsRegionFilter:analyticsTypFilter?' типу '+analyticsTypFilter:''}</option>
+          <option value="">Всі локації${analyticsTypFilter?' — '+analyticsTypFilter:''}</option>
           ${locsForTypeSorted.map(l=>`<option value="${l}" ${analyticsLocFilter===l?'selected':''}>${l}</option>`).join('')}
         </select>
-        ${analyticsTypFilter||analyticsLocFilter||analyticsRegionFilter?`<button class="btn btn-secondary btn-sm" onclick="clearAnalyticsFilters()">✕ Скинути</button>`:''}
-        <span style="margin-left:auto;font-size:12px;color:var(--gray)">${emps.length} активних${analyticsRegionFilter?' · '+analyticsRegionFilter:''}${analyticsTypFilter?' · '+analyticsTypFilter:''}${analyticsLocFilter?' · '+analyticsLocFilter:''}</span>
+        ${analyticsTypFilter||analyticsLocFilter?`<button class="btn btn-secondary btn-sm" onclick="clearAnalyticsFilters()">✕ Скинути</button>`:''}
+        <span style="margin-left:auto;font-size:12px;color:var(--gray)">${emps.length} активних${analyticsTypFilter?' · '+analyticsTypFilter:''}${analyticsLocFilter?' · '+analyticsLocFilter:''}</span>
       </div>
     </div>`
   : (!isHR?`<div class="alert alert-info" style="margin-bottom:14px">🏫 Локація: <strong>${S.user.loc}</strong></div>`:'');
@@ -1336,7 +1328,7 @@ function renderAnalytics(){
         <div class="bar-val">${t.avg>12?`${Math.floor(t.avg/12)}р ${t.avg%12}м`:`${t.avg}м`}</div></div>`).join('')}
       </div></div>
       <div class="chart-card">
-        <h4>📉 Плинність кадрів${analyticsRegionFilter?' — '+analyticsRegionFilter:''}${analyticsTypFilter?' — '+analyticsTypFilter:''}${analyticsLocFilter?' · '+analyticsLocFilter:''}</h4>
+        <h4>📉 Плинність кадрів${analyticsTurnoverTypFilter?' — '+analyticsTurnoverTypFilter:''}${analyticsTurnoverLocFilter?' · '+analyticsTurnoverLocFilter:''}</h4>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;align-items:center">
           <span style="font-size:11px;color:var(--gray);white-space:nowrap">Рік:</span>
           <select class="flt-sel" style="min-width:80px;padding:4px 8px;font-size:12px" onchange="analyticsTurnoverYear=+this.value;renderAnalytics()">
