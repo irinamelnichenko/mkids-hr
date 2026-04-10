@@ -528,9 +528,9 @@ async function fetchEmps(force=false) {
     const j = await r.json();
     S.emps = (j.values||[]).filter(row=>row.some(c=>c&&c.trim())).map((row,i)=>({
       _rowIdx:i,
-      key: mkKey(row[4],row[5],row[12]||row[13]),
+      key: mkKey(row[4],row[5],row[11]||row[12]),
       dir:(row[0]||'').trim(),  // A=Напрямок
-      typ:(row[1]||'').trim(),  // B=Тип (NEW)
+      typ:(row[1]||'').trim(),  // B=Тип
       loc:(row[2]||'').trim(),  // C=Локація
       grp:(row[3]||'').trim(),  // D=Група
       last:(row[4]||'').trim(), // E=Прізвище
@@ -540,10 +540,9 @@ async function fetchEmps(force=false) {
       stat:(row[8]||'').trim(), // I=Статус
       bday:(row[9]||'').trim(), // J=День нар.
       bmon:(row[10]||'').trim(),// K=Місяць нар.
-      bdate:(row[11]||'').trim(),// L=Дата нар.
-      wday:(row[12]||'').trim(), // M=Перший роб. день
-      hired:(row[13]||'').trim(),// N=Працевлаштування
-      fired:(row[14]||'').trim(),// O=Звільнення
+      wday:(row[11]||'').trim(), // L=Перший робочий день
+      hired:(row[12]||'').trim(),// M=Дата працевлаштування
+      fired:(row[13]||'').trim(),// N=Звільнення
       email:(row[17]||'').trim() // R=Електронна адреса
     })).filter(e=>e.last||e.first).map((e,i)=>({...e,id:i}));
     S.lastSync=new Date();
@@ -635,7 +634,13 @@ async function initApp(){
   await fetchEmps();
   const loaded=await loadFromSheets(); // override with Sheets data if available
   if(!loaded) updSheetsStatus(getScriptUrl()?'err':'none');
-  autoGenPasswords();fillLoginLocs();updateBadges();nav('dashboard');
+  autoGenPasswords();fillLoginLocs();updateBadges();
+  // Show cloud sync warning banner in topbar if not configured (HR only)
+  if(S.user.role==='hr'){
+    const el=document.getElementById('sheetsStatus');
+    if(!getScriptUrl()&&el){el.innerHTML='<span style="cursor:pointer;text-decoration:underline" onclick="nav(\'settings\')">⚠️ Хмарне збереження не налаштовано</span>';el.style.color='#e67e22';}
+  }
+  nav('dashboard');
 }
 async function refreshData(){showLoad();await fetchEmps(true);renderView();}
 function fillLoginLocs(){
@@ -735,6 +740,7 @@ function getRegion(e){
   return 'Управління';
 }
 const REGIONS=['Київ','Львів','Управління'];
+const REGION_ICONS={'Київ':'🏙️','Львів':'🦁','Управління':'🏛️'};
 function esc(s){return (s||'').replace(/"/g,'&quot;').replace(/</g,'&lt;');}
 function set(id,html){document.getElementById(id).innerHTML=html;}
 
@@ -991,7 +997,7 @@ function renderEmpCard(){
         <div class="info-grid">
           ${ii('Прізвище',e.last)}${ii("Ім'я",e.first)}${ii('Посада',e.pos)}${ii('Локація',e.loc)}
           ${ii('Тип',e.typ)}${ii('Напрямок',e.dir)}${ii('Група',e.grp)}${ii('Телефон',e.phone)}${ii('Email',e.email)}
-          ${ii('Статус',e.stat)}${ii('Дата народження',e.bdate||(e.bday&&e.bmon?e.bday+'.'+e.bmon:''))}
+          ${ii('Статус',e.stat)}${ii('Дата народження',(e.bday&&e.bmon?e.bday+'.'+e.bmon:''))}
           ${ii('Перший робочий день',e.wday)}${ii('Дата працевлаштування',e.hired)}
           ${e.fired?ii('Дата звільнення',`<span style="color:#e74c3c">${e.fired}</span>`):''}
           <div class="ii"><label>Ліміт відпустки ${yr}</label><div class="iv">${vl} днів
@@ -1149,6 +1155,7 @@ function renderSicks(){
 let analyticsTypFilter='',analyticsLocFilter='',analyticsDirFilter='',analyticsRegionFilter='',analyticsTurnoverPeriod='year';
 function switchAnalyticsType(val){analyticsTypFilter=val;analyticsLocFilter='';renderAnalytics();}
 function switchAnalyticsLoc(val){analyticsLocFilter=val;renderAnalytics();}
+function switchAnalyticsRegion(val){analyticsRegionFilter=val;analyticsLocFilter='';renderAnalytics();}
 function clearAnalyticsFilters(){analyticsTypFilter='';analyticsLocFilter='';analyticsDirFilter='';analyticsRegionFilter='';renderAnalytics();}
 function salStats(arr){
   if(!arr.length)return null;
@@ -1161,12 +1168,15 @@ function renderAnalytics(){
   const allActive=visible().filter(isActive);
   const typs=[...new Set(allActive.map(e=>normType(e.typ)).filter(Boolean))];
   const sortedTyps=[...TYPE_ORDER.filter(t=>typs.includes(t)),...typs.filter(t=>!TYPE_ORDER.includes(t)).sort()];
-  // Locations for the chosen type (using normalized loc for display)
-  const locsForType=analyticsTypFilter
-    ? [...new Set(allActive.filter(e=>normType(e.typ)===analyticsTypFilter).map(e=>normEmpLoc(e)).filter(Boolean))].sort()
-    : [...new Set(allActive.map(e=>normEmpLoc(e)).filter(Boolean))].sort();
+  // Locations for the chosen type/region (using normalized loc for display)
+  const baseForLocs=analyticsRegionFilter?allActive.filter(e=>getRegion(e)===analyticsRegionFilter):allActive;
+  const locsForType=(analyticsTypFilter
+    ? baseForLocs.filter(e=>normType(e.typ)===analyticsTypFilter)
+    : baseForLocs).map(e=>normEmpLoc(e)).filter(Boolean);
+  const locsForTypeSorted=[...new Set(locsForType)].sort();
   // Apply filters
   let emps=analyticsTypFilter?allActive.filter(e=>normType(e.typ)===analyticsTypFilter):allActive;
+  if(analyticsRegionFilter)emps=emps.filter(e=>getRegion(e)===analyticsRegionFilter);
   if(analyticsLocFilter)emps=emps.filter(e=>normEmpLoc(e)===analyticsLocFilter);
   const yr=new Date().getFullYear();
   const isHR=S.user.role==='hr';
@@ -1178,11 +1188,12 @@ function renderAnalytics(){
   });
   const avgT=Object.entries(tp).map(([p,ms])=>({p,avg:Math.round(ms.reduce((a,b)=>a+b,0)/ms.length)})).sort((a,b)=>b.avg-a.avg);
 
-  // Turnover with period + type + loc filter
+  // Turnover with period + type + region + loc filter
   function dismissedInPeriod(period){
     return visible().filter(e=>{
       const d=pd(e.fired);if(!d)return false;
       if(analyticsTypFilter&&normType(e.typ)!==analyticsTypFilter)return false;
+      if(analyticsRegionFilter&&getRegion(e)!==analyticsRegionFilter)return false;
       if(analyticsLocFilter&&normEmpLoc(e)!==analyticsLocFilter)return false;
       if(period==='year')return d.getFullYear()===yr;
       if(period==='h1')return d.getFullYear()===yr&&d.getMonth()<6;
@@ -1241,7 +1252,7 @@ function renderAnalytics(){
       </tr>`;}).join('')}</tbody></table></div>`;
   }
 
-  // HR filter bar: 1) Type tabs  2) Location selector (scoped to type)
+  // HR filter bar: 1) Type tabs  2) Region buttons  3) Location selector
   const filterBar=isHR?`
     <div class="filters" style="margin-bottom:16px;flex-direction:column;align-items:flex-start;gap:10px">
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;width:100%">
@@ -1250,20 +1261,29 @@ function renderAnalytics(){
         ${sortedTyps.map(t=>`<button class="dtype-tab ${analyticsTypFilter===t?'active':''}" onclick="switchAnalyticsType('${esc(t)}')">${TYPE_ICONS[t]||'📌'} ${t} <span class="dtype-cnt">${allActive.filter(e=>normType(e.typ)===t).length}</span></button>`).join('')}
       </div>
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;width:100%">
+        <strong style="font-size:12px;color:var(--gray);white-space:nowrap">Регіон:</strong>
+        <button class="dtype-tab ${!analyticsRegionFilter?'active':''}" onclick="switchAnalyticsRegion('')">🌐 Всі регіони</button>
+        ${REGIONS.map(r=>{const rc=allActive.filter(e=>getRegion(e)===r);return`<button class="dtype-tab ${analyticsRegionFilter===r?'active':''}" onclick="switchAnalyticsRegion('${r}')">${REGION_ICONS[r]||'📍'} ${r} <span class="dtype-cnt">${rc.length}</span></button>`;}).join('')}
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;width:100%">
         <strong style="font-size:12px;color:var(--gray);white-space:nowrap">Локація:</strong>
         <select class="flt-sel" style="min-width:200px" onchange="switchAnalyticsLoc(this.value)">
-          <option value="">Всі локації${analyticsTypFilter?' типу '+analyticsTypFilter:''}</option>
-          ${locsForType.map(l=>`<option value="${l}" ${analyticsLocFilter===l?'selected':''}>${l}</option>`).join('')}
+          <option value="">Всі локації${analyticsRegionFilter?' · '+analyticsRegionFilter:analyticsTypFilter?' типу '+analyticsTypFilter:''}</option>
+          ${locsForTypeSorted.map(l=>`<option value="${l}" ${analyticsLocFilter===l?'selected':''}>${l}</option>`).join('')}
         </select>
-        ${analyticsTypFilter||analyticsLocFilter?`<button class="btn btn-secondary btn-sm" onclick="clearAnalyticsFilters()">✕ Скинути</button>`:''}
-        <span style="margin-left:auto;font-size:12px;color:var(--gray)">${emps.length} активних${analyticsTypFilter?' · '+analyticsTypFilter:''}${analyticsLocFilter?' · '+analyticsLocFilter:''}</span>
+        ${analyticsTypFilter||analyticsLocFilter||analyticsRegionFilter?`<button class="btn btn-secondary btn-sm" onclick="clearAnalyticsFilters()">✕ Скинути</button>`:''}
+        <span style="margin-left:auto;font-size:12px;color:var(--gray)">${emps.length} активних${analyticsRegionFilter?' · '+analyticsRegionFilter:''}${analyticsTypFilter?' · '+analyticsTypFilter:''}${analyticsLocFilter?' · '+analyticsLocFilter:''}</span>
       </div>
     </div>`
   : (!isHR?`<div class="alert alert-info" style="margin-bottom:14px">🏫 Локація: <strong>${S.user.loc}</strong></div>`:'');
 
-  // Turnover per-location breakdown (scoped to current filter)
-  const turnByLoc_={}; // renamed to avoid collision below
-  dismissed.forEach(e=>{const l=normEmpLoc(e)||'—';turnByLoc_[l]=(turnByLoc_[l]||0)+1;});
+  // Turnover per-region and per-location breakdown (scoped to current filter)
+  const turnByLoc_={};
+  const turnByRegion_={};
+  dismissed.forEach(e=>{
+    const l=normEmpLoc(e)||'—';turnByLoc_[l]=(turnByLoc_[l]||0)+1;
+    const rg=getRegion(e);turnByRegion_[rg]=(turnByRegion_[rg]||0)+1;
+  });
 
   set('main',`
     ${filterBar}
@@ -1306,15 +1326,29 @@ function renderAnalytics(){
         <div class="bar-val">${t.avg>12?`${Math.floor(t.avg/12)}р ${t.avg%12}м`:`${t.avg}м`}</div></div>`).join('')}
       </div></div>
       <div class="chart-card">
-        <h4>📉 Плинність кадрів${analyticsTypFilter?' — '+analyticsTypFilter:''}${analyticsLocFilter?' · '+analyticsLocFilter:''}</h4>
-        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
+        <h4>📉 Плинність кадрів${analyticsRegionFilter?' — '+analyticsRegionFilter:''}${analyticsTypFilter?' — '+analyticsTypFilter:''}${analyticsLocFilter?' · '+analyticsLocFilter:''}</h4>
+        <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px">
+          <span style="font-size:11px;color:var(--gray);align-self:center;white-space:nowrap">Період:</span>
           ${['year','h1','h2','q1','q2','q3','q4'].map(p=>`<button class="btn btn-${analyticsTurnoverPeriod===p?'primary':'secondary'} btn-xs" onclick="analyticsTurnoverPeriod='${p}';renderAnalytics()">${periodLabels[p]}</button>`).join('')}
         </div>
+        ${!analyticsRegionFilter&&isHR?`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px">
+          <span style="font-size:11px;color:var(--gray);align-self:center;white-space:nowrap">Регіон:</span>
+          <button class="btn btn-${!analyticsRegionFilter?'primary':'secondary'} btn-xs" onclick="switchAnalyticsRegion('')">Всі</button>
+          ${REGIONS.map(r=>`<button class="btn btn-${analyticsRegionFilter===r?'primary':'secondary'} btn-xs" onclick="switchAnalyticsRegion('${r}')">${r}</button>`).join('')}
+        </div>`:''}
         <div style="text-align:center;padding:10px 0">
           <div style="font-size:48px;font-weight:900;color:${dismissed.length>5?'#e74c3c':'var(--dark)'}">${dismissed.length}</div>
           <div style="color:var(--gray);font-size:13px">звільнень · ${periodLabels[analyticsTurnoverPeriod]}</div>
           <div style="margin-top:6px;font-size:12px;color:var(--gray)">Активних: ${emps.length} · Плинність: ${emps.length>0?Math.round(dismissed.length/(emps.length+dismissed.length)*100):0}%</div>
         </div>
+        ${!analyticsRegionFilter&&Object.keys(turnByRegion_).length>0?`
+        <div style="margin-top:8px;border-top:1px solid #f0f4f8;padding-top:8px">
+          <div style="font-size:11px;font-weight:700;color:var(--gray);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">По регіонах</div>
+          ${Object.entries(turnByRegion_).sort((a,b)=>b[1]-a[1]).map(([r,n])=>`
+          <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #f8fafc;font-size:12px">
+            <span style="cursor:pointer;color:var(--blue2);text-decoration:underline" onclick="switchAnalyticsRegion('${r}')">${r}</span><span style="font-weight:700;color:#e74c3c">${n}</span>
+          </div>`).join('')}
+        </div>`:''}
         ${Object.keys(turnByLoc_).length>1?`
         <div style="margin-top:8px;border-top:1px solid #f0f4f8;padding-top:8px">
           <div style="font-size:11px;font-weight:700;color:var(--gray);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">По локаціях</div>
@@ -1324,12 +1358,13 @@ function renderAnalytics(){
           </div>`).join('')}
         </div>`:''}
         ${dismissed.length>0?`<div style="margin-top:8px;border-top:1px solid #f0f4f8;padding-top:8px">
-          ${dismissed.slice(0,6).map(e=>`
+          <div style="font-size:11px;font-weight:700;color:var(--gray);margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px">Звільнені</div>
+          ${dismissed.slice(0,8).map(e=>`
           <div style="display:flex;justify-content:space-between;padding:4px 0;font-size:11px">
             <span style="cursor:pointer;text-decoration:underline;color:var(--blue2)" onclick="nav('employee',${e.id})">${fullName(e)}</span>
-            <span style="color:var(--gray)">${normEmpLoc(e)||''} · ${e.fired}</span>
+            <span style="color:var(--gray)">${getRegion(e)} · ${normEmpLoc(e)||''} · ${e.fired}</span>
           </div>`).join('')}
-          ${dismissed.length>6?`<div style="font-size:11px;color:var(--gray);margin-top:4px">+ ще ${dismissed.length-6}</div>`:''}
+          ${dismissed.length>8?`<div style="font-size:11px;color:var(--gray);margin-top:4px">+ ще ${dismissed.length-8}</div>`:''}
         </div>`:''}
       </div>
       <div class="chart-card"><h4>🎖️ Робочі ювілеї (30 днів)</h4>
@@ -1472,20 +1507,24 @@ function renderSettings(){
   set('main',`
     <div style="max-width:660px">
 
-      <div class="card" style="margin-bottom:18px">
-        <div class="card-hd"><h3>☁️ Збереження в Google Sheets</h3><span class="badge ${scriptUrl?'bg':'bgr'}">${scriptUrl?'Налаштовано':'Не налаштовано'}</span></div>
+      <div class="card" style="margin-bottom:18px;${!scriptUrl?'border:2px solid #e67e22':''}">
+        <div class="card-hd"><h3>☁️ Збереження в Google Sheets (HR_Data)</h3><span class="badge ${scriptUrl?'bg':'br'}">${scriptUrl?'✅ Налаштовано':'⚠️ Не налаштовано'}</span></div>
         <div style="padding:20px;display:flex;flex-direction:column;gap:14px">
-          <div class="alert alert-info" style="font-size:12px">
-            ℹ️ Для збереження даних між браузерами і пристроями — розгорніть Google Apps Script:<br>
-            <ol style="margin-top:8px;margin-left:18px;line-height:1.7">
-              <li>Відкрийте <strong>script.google.com</strong> → Новий проект</li>
-              <li>Скопіюйте код з кнопки нижче у редактор</li>
-              <li>Збережіть, натисніть <strong>Розгорнути → Веб-застосунок</strong></li>
-              <li>Доступ: <strong>"Всі (включно з анонімними)"</strong></li>
-              <li>Скопіюйте URL і вставте нижче</li>
-            </ol>
+          ${!scriptUrl?`<div class="alert alert-warn"><strong>⚠️ ВАЖЛИВО:</strong> Дані відпусток, лікарняних та зарплат зберігаються лише в цьому браузері. Для збереження між пристроями — налаштуйте хмарний бекенд нижче.</div>`:''}
+          <div class="alert ${scriptUrl?'alert-ok':'alert-info'}" style="font-size:12px">
+            ${scriptUrl?`✅ Хмарний бекенд налаштовано. Дані автоматично синхронізуються з аркушем <strong>HR_Data</strong> в таблиці mkids.`:`
+            ℹ️ Налаштування займає 5 хвилин (один раз назавжди):<br>
+            <ol style="margin-top:8px;margin-left:18px;line-height:1.9">
+              <li>Натисніть <strong>"Скопіювати код Apps Script"</strong></li>
+              <li>Відкрийте <a href="https://script.google.com" target="_blank" style="color:var(--blue2)">script.google.com</a> → Новий проект</li>
+              <li>Замініть весь вміст редактора скопійованим кодом → <strong>Ctrl+S</strong></li>
+              <li>Натисніть <strong>Розгорнути → Новий розгортання → Веб-застосунок</strong></li>
+              <li>Виконати як: <strong>Я</strong>. Хто має доступ: <strong>Всі</strong></li>
+              <li>Натисніть <strong>Розгорнути</strong> → дозвольте доступ → скопіюйте URL</li>
+              <li>Вставте URL у поле нижче і натисніть <strong>Зберегти</strong></li>
+            </ol>`}
           </div>
-          <button class="btn btn-secondary" onclick="copyAppsScript()">📋 Скопіювати код Apps Script</button>
+          <button class="btn btn-${scriptUrl?'secondary':'primary'}" onclick="copyAppsScript()">📋 Скопіювати код Apps Script</button>
           <div class="fg"><label>URL Apps Script (веб-застосунок)</label>
             <input type="url" id="setScriptUrl" placeholder="https://script.google.com/macros/s/.../exec" value="${esc(scriptUrl)}">
           </div>
