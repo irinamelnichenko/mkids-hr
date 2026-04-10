@@ -1964,6 +1964,9 @@ let tabelPeriod='day';
 let tabelTypFilter='';
 let tabelYear=new Date().getFullYear();
 let tabelMonth=new Date().getMonth();
+let tabelDay=new Date().toISOString().split('T')[0]; // конкретна дата для день/тиждень
+
+const MONTH_NAMES=['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
 
 function workDaysInRange(from,to){
   let count=0,d=new Date(from);d.setHours(0,0,0,0);
@@ -1971,56 +1974,31 @@ function workDaysInRange(from,to){
   while(d<=end){const dw=d.getDay();if(dw!==0&&dw!==6)count++;d.setDate(d.getDate()+1);}
   return count;
 }
-function getPeriodRange(period,dateStr){
-  const d=new Date(dateStr);
-  let from,to;
-  if(period==='day'){from=to=dateStr;}
-  else if(period==='week'){
-    const day=d.getDay()||7;
-    from=new Date(d);from.setDate(d.getDate()-day+1);
-    to=new Date(from);to.setDate(from.getDate()+4);
-    from=from.toISOString().split('T')[0];to=to.toISOString().split('T')[0];
-  } else if(period==='month'){
-    from=new Date(d.getFullYear(),d.getMonth(),1).toISOString().split('T')[0];
-    to=new Date(d.getFullYear(),d.getMonth()+1,0).toISOString().split('T')[0];
-  } else if(period==='quarter'){
-    const q=Math.floor(d.getMonth()/3);
-    from=new Date(d.getFullYear(),q*3,1).toISOString().split('T')[0];
-    to=new Date(d.getFullYear(),q*3+3,0).toISOString().split('T')[0];
-  } else if(period==='year'){
-    from=`${d.getFullYear()}-01-01`;to=`${d.getFullYear()}-12-31`;
-  }
-  return{from,to};
-}
-
-const MONTH_NAMES=['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
 
 function renderTabel(){
   const isHR=S.user.role==='hr';
   if(!S.f)S.f={};
 
-  // Фільтри типу і локації
   const allTyps=isHR?[...new Set(S.emps.filter(isActive).map(e=>normType(e.typ)).filter(Boolean))].sort():null;
   const curTyp=isHR?(tabelTypFilter||''):'';
   const locsForTyp=isHR
     ?[...new Set(S.emps.filter(e=>isActive(e)&&(!curTyp||normType(e.typ)===curTyp)).map(e=>e.loc).filter(Boolean))].sort()
     :[S.user.loc||''];
-
   if(isHR&&(!S.f.tabelLoc||!locsForTyp.includes(S.f.tabelLoc)))S.f.tabelLoc=locsForTyp[0]||'';
   const activeLoc=isHR?S.f.tabelLoc:(S.user.loc||'');
+  const emps=S.emps.filter(e=>isActive(e)&&e.loc===activeLoc&&(!curTyp||normType(e.typ)===curTyp));
 
-  // Базова дата для навігації
-  const baseDate=`${tabelYear}-${String(tabelMonth+1).padStart(2,'0')}-15`;
-  const tabelDate=new Date().toISOString().split('T')[0]; // для дня беремо сьогодні
-
-  // Визначаємо діапазон залежно від періоду
+  // Визначаємо діапазон
   let from,to,periodLabel;
   if(tabelPeriod==='day'){
-    from=to=tabelDate;
-    periodLabel=fmtDate(tabelDate);
+    from=to=tabelDay;
+    periodLabel=fmtDate(tabelDay);
   } else if(tabelPeriod==='week'){
-    const r=getPeriodRange('week',tabelDate);from=r.from;to=r.to;
-    periodLabel=`Тиждень ${fmtDate(from)}—${fmtDate(to)}`;
+    const d=new Date(tabelDay),day=d.getDay()||7;
+    const f=new Date(d);f.setDate(d.getDate()-day+1);
+    const t2=new Date(f);t2.setDate(f.getDate()+4);
+    from=f.toISOString().split('T')[0];to=t2.toISOString().split('T')[0];
+    periodLabel=`${fmtDate(from)} — ${fmtDate(to)}`;
   } else if(tabelPeriod==='month'){
     from=new Date(tabelYear,tabelMonth,1).toISOString().split('T')[0];
     to=new Date(tabelYear,tabelMonth+1,0).toISOString().split('T')[0];
@@ -2035,17 +2013,24 @@ function renderTabel(){
     periodLabel=`${tabelYear} рік`;
   }
 
-  const isDayView=tabelPeriod==='day'||tabelPeriod==='week';
-  const emps=S.emps.filter(e=>isActive(e)&&e.loc===activeLoc&&(!curTyp||normType(e.typ)===curTyp));
+  const isDayView=tabelPeriod==='day';
 
   // Підсумок для одного дня
   let summary='';
-  if(tabelPeriod==='day'){
-    const tbl=getTabel(activeLoc,tabelDate);
-    const cnt={present:0,late:0,absent:0,sick:0,vacation:0,unknown:0};
-    emps.forEach(e=>{const st=tbl[e.key]?.status||'';if(st&&cnt[st]!==undefined)cnt[st]++;else cnt.unknown++;});
+  if(isDayView){
+    const tbl=getTabel(activeLoc,tabelDay);
+    const cnt={present:0,late:0,absent:0,sick:0,vacation:0,notset:0};
+    emps.forEach(e=>{
+      const st=tbl[e.key]?.status||'';
+      if(st==='present')cnt.present++;
+      else if(st==='late')cnt.late++;
+      else if(st==='absent')cnt.absent++;
+      else if(st==='sick')cnt.sick++;
+      else if(st==='vacation')cnt.vacation++;
+      else cnt.notset++;
+    });
     summary=`<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">
-      ${[['present','✅ Присутні','#27ae60'],['late','⏰ Спізнились','#e67e22'],['absent','❌ Відсутні','#e74c3c'],['sick','🏥 Лікарняний','#9b59b6'],['vacation','🏖️ Відпустка','#3498db'],['unknown','❓ Невідомо','#7f8c8d']].map(([k,l,c])=>
+      ${[['present','✅ Присутні','#27ae60'],['late','⏰ Спізнились','#e67e22'],['absent','❌ Відсутні','#e74c3c'],['sick','🏥 Лікарняний','#9b59b6'],['vacation','🏖️ Відпустка','#3498db'],['notset','📝 Не заповнено','#bdc3c7']].map(([k,l,c])=>
       `<div style="background:#fff;border-radius:10px;padding:10px 16px;box-shadow:0 2px 8px rgba(0,0,0,.06);text-align:center;min-width:80px">
         <div style="font-size:20px;font-weight:900;color:${c}">${cnt[k]}</div>
         <div style="font-size:10px;color:var(--gray);margin-top:2px">${l}</div>
@@ -2055,11 +2040,11 @@ function renderTabel(){
 
   // Таблиця
   let tableHtml='';
-  if(tabelPeriod==='day'){
-    const tbl=getTabel(activeLoc,tabelDate);
+  if(isDayView){
+    const tbl=getTabel(activeLoc,tabelDay);
     tableHtml=`<div class="card">
-      <div class="card-hd"><h3>📋 ${activeLoc||'—'} — ${fmtDate(tabelDate)}</h3>
-        <button class="btn btn-primary btn-sm" onclick="autoFillTabel('${esc(activeLoc)}','${tabelDate}')">⚡ Всі присутні</button>
+      <div class="card-hd"><h3>📋 ${activeLoc||'—'} — ${periodLabel}</h3>
+        <button class="btn btn-primary btn-sm" onclick="autoFillTabel('${esc(activeLoc)}','${tabelDay}')">⚡ Всі присутні</button>
       </div>
       <div class="tbl-wrap"><table>
         <thead><tr><th>Співробітник</th><th>Посада</th><th>Статус</th><th>Час приходу</th><th>Примітка</th></tr></thead>
@@ -2069,42 +2054,54 @@ function renderTabel(){
           return`<tr>
             <td><strong>${fullName(e)}</strong></td>
             <td style="font-size:12px;color:var(--gray)">${e.pos||'—'}</td>
-            <td><select style="padding:4px 8px;border:1.5px solid var(--gray2);border-radius:6px;font-size:12px;background:#fff" onchange="setTabelStatus('${esc(activeLoc)}','${tabelDate}','${e.key}',this.value)">
+            <td><select style="padding:4px 8px;border:1.5px solid var(--gray2);border-radius:6px;font-size:12px;background:#fff" onchange="setTabelStatus('${esc(activeLoc)}','${tabelDay}','${e.key}',this.value)">
               <option value="">— Оберіть —</option>
               ${Object.entries(TABEL_STATUSES).map(([k,v])=>`<option value="${k}" ${st===k?'selected':''}>${v.label}</option>`).join('')}
             </select></td>
-            <td>${(st==='present'||st==='late')?`<input type="time" value="${row.time||''}" style="padding:4px 8px;border:1.5px solid var(--gray2);border-radius:6px;font-size:12px" onchange="setTabelTime('${esc(activeLoc)}','${tabelDate}','${e.key}',this.value)">`:row.time||'—'}</td>
-            <td><input type="text" value="${(row.note||'').replace(/"/g,'&quot;')}" placeholder="Примітка…" style="padding:4px 8px;border:1.5px solid var(--gray2);border-radius:6px;font-size:12px;width:140px" onchange="setTabelNote('${esc(activeLoc)}','${tabelDate}','${e.key}',this.value)"></td>
+            <td>${(st==='present'||st==='late')?`<input type="time" value="${row.time||''}" style="padding:4px 8px;border:1.5px solid var(--gray2);border-radius:6px;font-size:12px" onchange="setTabelTime('${esc(activeLoc)}','${tabelDay}','${e.key}',this.value)">`:row.time||'—'}</td>
+            <td><input type="text" value="${(row.note||'').replace(/"/g,'&quot;')}" placeholder="Примітка…" style="padding:4px 8px;border:1.5px solid var(--gray2);border-radius:6px;font-size:12px;width:140px" onchange="setTabelNote('${esc(activeLoc)}','${tabelDay}','${e.key}',this.value)"></td>
           </tr>`;}).join('')}
         </tbody>
       </table></div>
     </div>`;
   } else {
+    // Зведена таблиця за тиждень/місяць/квартал/рік — без колонки "невідомо", без рядка "разом"
     const workDays=workDaysInRange(from,to);
     tableHtml=`<div class="card">
       <div class="card-hd"><h3>📋 ${activeLoc||'—'} — ${periodLabel} (${workDays} роб.днів)</h3></div>
       <div class="tbl-wrap"><table>
-        <thead><tr><th>Співробітник</th><th>Посада</th><th>✅ Присут.</th><th>⏰ Спізн.</th><th>❌ Відсут.</th><th>🏥 Лікарн.</th><th>🏖️ Відпуст.</th><th>❓ Невід.</th></tr></thead>
+        <thead><tr><th>Співробітник</th><th>Посада</th><th>✅ Присутній</th><th>⏰ Спізнився</th><th>❌ Відсутній</th><th>🏥 Лікарняний</th><th>🏖️ Відпустка</th><th>📝 Не запов.</th></tr></thead>
         <tbody>${emps.length===0?`<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--gray)">Немає співробітників</td></tr>`:
         emps.map(e=>{
-          const cnt={present:0,late:0,absent:0,sick:0,vacation:0,unknown:0};
+          const cnt={present:0,late:0,absent:0,sick:0,vacation:0,notset:0};
           let d=new Date(from);
           while(d<=new Date(to)){
             const dw=d.getDay();
-            if(dw!==0&&dw!==6){const ds=d.toISOString().split('T')[0];const t=getTabel(activeLoc,ds);const st=t[e.key]?.status||'unknown';cnt[st]=(cnt[st]||0)+1;}
+            if(dw!==0&&dw!==6){
+              const ds=d.toISOString().split('T')[0];
+              const t=getTabel(activeLoc,ds);
+              const st=t[e.key]?.status||'notset';
+              cnt[st]=(cnt[st]||0)+1;
+            }
             d.setDate(d.getDate()+1);
           }
-          return`<tr><td><strong>${fullName(e)}</strong></td><td style="font-size:12px;color:var(--gray)">${e.pos||'—'}</td>
-            <td style="color:#27ae60;font-weight:700">${cnt.present}</td><td style="color:#e67e22">${cnt.late}</td>
-            <td style="color:#e74c3c">${cnt.absent}</td><td style="color:#9b59b6">${cnt.sick}</td>
-            <td style="color:#3498db">${cnt.vacation}</td><td style="color:#7f8c8d">${cnt.unknown}</td></tr>`;
-        }).join('')}
+          return`<tr>
+            <td><strong>${fullName(e)}</strong></td>
+            <td style="font-size:12px;color:var(--gray)">${e.pos||'—'}</td>
+            <td style="color:#27ae60;font-weight:700">${cnt.present}</td>
+            <td style="color:#e67e22">${cnt.late}</td>
+            <td style="color:#e74c3c">${cnt.absent}</td>
+            <td style="color:#9b59b6">${cnt.sick}</td>
+            <td style="color:#3498db">${cnt.vacation}</td>
+            <td style="color:#bdc3c7">${cnt.notset}</td>
+          </tr>`;}).join('')}
         </tbody>
       </table></div>
     </div>`;
   }
 
-  // Показуємо місяць/квартал/рік тільки для не-денних переглядів
+  // Фільтри дати залежно від режиму
+  const showDatePicker=tabelPeriod==='day'||tabelPeriod==='week';
   const showMonthSel=tabelPeriod==='month'||tabelPeriod==='quarter'||tabelPeriod==='year';
 
   set('main',`
@@ -2118,16 +2115,17 @@ function renderTabel(){
         ${locsForTyp.map(l=>`<option value="${l}" ${activeLoc===l?'selected':''}>${l}</option>`).join('')}
       </select>`:''}
       <div style="display:flex;gap:4px;flex-wrap:wrap">
-        ${[['day','День'],['week','Тиждень'],['month','Місяць'],['quarter','Квартал'],['year','Рік']].map(([p,l])=>
+        ${[['day','Дата'],['week','Тиждень'],['month','Місяць'],['quarter','Квартал'],['year','Рік']].map(([p,l])=>
         `<button class="btn btn-${tabelPeriod===p?'primary':'secondary'} btn-sm" onclick="tabelPeriod='${p}';renderTabel()">${l}</button>`).join('')}
       </div>
+      ${showDatePicker?`<input type="date" class="flt-sel" value="${tabelDay}" onchange="tabelDay=this.value;renderTabel()" style="min-width:150px">`:``}
       ${showMonthSel?`
         <select class="flt-sel" style="min-width:110px" onchange="tabelMonth=+this.value;renderTabel()">
           ${MONTH_NAMES.map((m,i)=>`<option value="${i}" ${tabelMonth===i?'selected':''}>${m}</option>`).join('')}
         </select>
         <select class="flt-sel" style="min-width:80px" onchange="tabelYear=+this.value;renderTabel()">
           ${[2024,2025,2026].map(y=>`<option value="${y}" ${tabelYear===y?'selected':''}>${y}</option>`).join('')}
-        </select>`:'<button class="btn btn-secondary btn-sm" onclick="tabelPeriod=\'day\';renderTabel()">Сьогодні</button>'}
+        </select>`:''}
     </div>
     ${summary}
     ${tableHtml}
