@@ -851,9 +851,9 @@ function renderDash(){
     </div>`:''}
 
     <div class="stats-grid">
-      <div class="stat-card"><div class="stat-icon si-g">👥</div><div><div class="stat-val">${active.length}</div><div class="stat-lbl">Активних${!isHR?' — '+S.user.loc:dashTab!=='all'?' — '+dashTab:''}</div></div></div>
-      <div class="stat-card"><div class="stat-icon si-b">🏖️</div><div><div class="stat-val">${onVac.length}</div><div class="stat-lbl">Зараз у відпустці</div></div></div>
-      <div class="stat-card"><div class="stat-icon si-o">🏥</div><div><div class="stat-val">${onSick.length}</div><div class="stat-lbl">На лікарняному</div></div></div>
+      <div class="stat-card" style="cursor:pointer" onclick="nav('employees')"><div class="stat-icon si-g">👥</div><div><div class="stat-val">${active.length}</div><div class="stat-lbl">Активних${!isHR?' — '+S.user.loc:dashTab!=='all'?' — '+dashTab:''}</div></div></div>
+      <div class="stat-card" style="cursor:pointer" onclick="nav('tabel')"><div class="stat-icon si-b">📋</div><div><div class="stat-val">${(()=>{if(isHR)return onVac.length;const t=getTabel(S.user.loc||'',new Date().toISOString().split('T')[0]);return active.filter(e=>t[e.key]?.status==='present'||t[e.key]?.status==='late').length;})()}</div><div class="stat-lbl">${isHR?'Зараз у відпустці':'Присутні сьогодні'}</div></div></div>
+      <div class="stat-card" style="cursor:pointer" onclick="nav('sick')"><div class="stat-icon si-o">🏥</div><div><div class="stat-val">${onSick.length}</div><div class="stat-lbl">На лікарняному</div></div></div>
       <div class="stat-card"><div class="stat-icon si-r">⚠️</div><div><div class="stat-val">${over.length}</div><div class="stat-lbl">Перевищень ліміту</div></div></div>
       ${isHR?`<div class="stat-card"><div class="stat-icon si-p">🏫</div><div><div class="stat-val">${Object.keys(locs).length}</div><div class="stat-lbl">Локацій</div></div></div>`:''}
       <div class="stat-card"><div class="stat-icon si-y">🆕</div><div><div class="stat-val">${newThis.length}</div><div class="stat-lbl">Нових цього місяця</div></div></div>
@@ -880,7 +880,33 @@ function renderDash(){
               <td>${d.s>0?`<span class="badge bo">${d.s}</span>`:'—'}</td>
             </tr>`).join('')}</tbody>
           </table></div>
-        </div>`:''}
+        </div>`:`
+        <div class="card">
+          <div class="card-hd"><h3>📋 Табель сьогодні — ${S.user.loc}</h3>
+            <button class="btn btn-primary btn-sm" onclick="nav('tabel')">Відкрити →</button>
+          </div>
+          ${(()=>{
+            const todayStr=new Date().toISOString().split('T')[0];
+            const tbl=getTabel(S.user.loc||'',todayStr);
+            const cnt={present:0,late:0,absent:0,sick:0,vacation:0,notset:0};
+            active.forEach(e=>{const st=tbl[e.key]?.status||'notset';cnt[st]=(cnt[st]||0)+1;});
+            return`<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:#f0f4f8">
+              ${[['present','✅ Присутні','#27ae60'],['late','⏰ Спізнились','#e67e22'],['absent','❌ Відсутні','#e74c3c'],['sick','🏥 Лікарняний','#9b59b6'],['vacation','🏖️ Відпустка','#3498db'],['notset','📝 Не заповнено','#bdc3c7']].map(([k,l,c])=>
+              `<div style="background:#fff;padding:14px;text-align:center">
+                <div style="font-size:22px;font-weight:900;color:${c}">${cnt[k]}</div>
+                <div style="font-size:10px;color:var(--gray);margin-top:2px">${l}</div>
+              </div>`).join('')}
+            </div>
+            ${active.filter(e=>tbl[e.key]?.status).slice(0,6).map(e=>{
+              const st=tbl[e.key]?.status||'';
+              const stInfo=TABEL_STATUSES[st]||{};
+              return`<div style="padding:8px 16px;border-top:1px solid #f0f4f8;display:flex;align-items:center;gap:10px;cursor:pointer" onclick="nav('employee',${e.id})">
+                <div class="avatar" style="width:28px;height:28px;font-size:10px">${initials(e)}</div>
+                <div style="flex:1"><div style="font-weight:600;font-size:12px">${fullName(e)}</div><div style="font-size:11px;color:var(--gray)">${e.pos||'—'}</div></div>
+                <span style="font-size:11px;font-weight:600;color:${stInfo.color||'var(--gray)'}">${stInfo.label||'—'}</span>
+              </div>`;}).join('')}`;
+          })()}
+        </div>`}
         ${onVac.length>0?`<div class="card">
           <div class="card-hd"><h3>🏖️ Зараз у відпустці</h3></div>
           ${onVac.slice(0,5).map(e=>`<div style="padding:9px 20px;border-bottom:1px solid #f0f4f8;display:flex;align-items:center;gap:10px;cursor:pointer" onclick="nav('employee',${e.id})">
