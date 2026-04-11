@@ -1895,7 +1895,7 @@ function renderBdays(){
 // ── ГРАФІК ВІДПУСТОК ──
 let vacSchedYear=new Date().getFullYear();
 let vacSchedMonth=new Date().getMonth();
-let vacSchedTyp='',vacSchedLoc='';
+let vacSchedTyp='',vacSchedLoc='',vacSchedPos='';
 let vacSchedMode='year';
 
 function renderVacSchedule(){
@@ -1906,7 +1906,11 @@ function renderVacSchedule(){
   let emps=vacSchedTyp?allActive.filter(e=>normType(e.typ)===vacSchedTyp):allActive;
   if(!isHR&&S.user.loc)emps=emps.filter(e=>normEmpLoc(e)===S.user.loc);
   if(vacSchedLoc)emps=emps.filter(e=>normEmpLoc(e)===vacSchedLoc);
-  const locs=[...new Set(emps.map(e=>normEmpLoc(e)).filter(Boolean))].sort();
+  // Посади для вибраних фільтрів
+  const poss=[...new Set(emps.map(e=>e.pos).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'uk'));
+  if(vacSchedPos&&!poss.includes(vacSchedPos))vacSchedPos='';
+  if(vacSchedPos)emps=emps.filter(e=>e.pos===vacSchedPos);
+  const locs=[...new Set(allActive.filter(e=>vacSchedTyp?normType(e.typ)===vacSchedTyp:true).map(e=>normEmpLoc(e)).filter(Boolean))].sort();
   const yr=vacSchedYear;
   const MONTHS_SHORT=['Січ','Лют','Бер','Квіт','Трав','Черв','Лип','Серп','Вер','Жовт','Лист','Груд'];
   const MONTHS_FULL=['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
@@ -2026,14 +2030,17 @@ function renderVacSchedule(){
   set('main',`
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:16px">
       ${isHR?`<div style="display:flex;gap:4px;flex-wrap:wrap">
-        <button class="btn btn-${!vacSchedTyp?'primary':'secondary'} btn-sm" onclick="vacSchedTyp='';vacSchedLoc='';renderVacSchedule()">🌐 Всі</button>
-        ${sortedTyps.map(t=>`<button class="btn btn-${vacSchedTyp===t?'primary':'secondary'} btn-sm" onclick="vacSchedTyp='${esc(t)}';vacSchedLoc='';renderVacSchedule()">${TYPE_ICONS[t]||'📌'} ${t}</button>`).join('')}
+        <button class="btn btn-${!vacSchedTyp?'primary':'secondary'} btn-sm" onclick="vacSchedTyp='';vacSchedLoc='';vacSchedPos='';renderVacSchedule()">🌐 Всі</button>
+        ${sortedTyps.map(t=>`<button class="btn btn-${vacSchedTyp===t?'primary':'secondary'} btn-sm" onclick="vacSchedTyp='${esc(t)}';vacSchedLoc='';vacSchedPos='';renderVacSchedule()">${TYPE_ICONS[t]||'📌'} ${t}</button>`).join('')}
       </div>
-      <select class="flt-sel" onchange="vacSchedLoc=this.value;renderVacSchedule()">
+      <select class="flt-sel" onchange="vacSchedLoc=this.value;vacSchedPos='';renderVacSchedule()">
         <option value="">Всі локації</option>
         ${locs.map(l=>`<option value="${l}" ${vacSchedLoc===l?'selected':''}>${l}</option>`).join('')}
       </select>`:''}
-      <div style="display:flex;gap:4px">
+      <select class="flt-sel" style="min-width:160px" onchange="vacSchedPos=this.value;renderVacSchedule()">
+        <option value="">Всі посади</option>
+        ${poss.map(p=>`<option value="${p}" ${vacSchedPos===p?'selected':''}>${p}</option>`).join('')}
+      </select>      <div style="display:flex;gap:4px">
         <button class="btn btn-${vacSchedMode==='year'?'primary':'secondary'} btn-sm" onclick="vacSchedMode='year';renderVacSchedule()">📅 Рік</button>
         <button class="btn btn-${vacSchedMode==='month'?'primary':'secondary'} btn-sm" onclick="vacSchedMode='month';renderVacSchedule()">🗓️ Місяць</button>
       </div>
