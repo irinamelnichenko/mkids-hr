@@ -617,20 +617,23 @@ async function doLogin() {
   if(selRole==='hr'){
     if(pw!==CFG.PW.hr){showErr('Невірний пароль');return;}
     S.user={role:'hr',loc:null};
+    S.f={loc:'',pos:'',status:'',dir:'',typ:''};
+    S.q='';
   } else {
     const loc=document.getElementById('loginLocation').value;
     if(!loc){showErr('Оберіть локацію');return;}
     const expected=getDirPw(loc);
     if(pw!==expected){showErr('Невірний пароль для цієї локації');return;}
     S.user={role:selRole,loc};
-    S.f={loc:'',pos:'',status:'',dir:'',typ:''}; // скидаємо фільтри при вході
+    S.f={loc:'',pos:'',status:'',dir:'',typ:''};
+    S.q=''; // скидаємо пошук і всі фільтри при вході
   }
   document.getElementById('loginScreen').classList.add('hidden');
   document.getElementById('app').classList.remove('hidden');
   updUserUI(); await initApp();
 }
 function showErr(m){const el=document.getElementById('loginError');el.textContent='⚠️ '+m;el.classList.remove('hidden');}
-function doLogout(){S.user=null;S.view='dashboard';document.getElementById('app').classList.add('hidden');document.getElementById('loginScreen').classList.remove('hidden');document.getElementById('loginPw').value='';}
+function doLogout(){S.user=null;S.view='dashboard';S.f={loc:'',pos:'',status:'',dir:'',typ:''};S.q='';document.getElementById('app').classList.add('hidden');document.getElementById('loginScreen').classList.remove('hidden');document.getElementById('loginPw').value='';}
 function updUserUI(){
   const role=S.user.role;
   const isHR=role==='hr', isDir=role==='director', isNurse=role==='nurse';
