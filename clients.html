@@ -370,6 +370,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
               <option value="Find-iki">Find-iki</option>
               <option value="Study-ki">Study-ki</option>
               <option value="Preschool">Preschool</option>
+              <option value="Чомусики">Чомусики</option>
             </select></div>
         </div>
         <div class="g2">
@@ -731,19 +732,45 @@ function mergeCRMFromCloud(rows){
   saveLocalCRM();
 }
 
+// ─── НОРМАЛІЗАЦІЯ ГРУПИ ──────────────────────────────────────────────────────
+function normalizeGroup(raw){
+  if(!raw) return '';
+  var s=raw.trim();
+  var sl=s.toLowerCase().replace(/[\s\-\.\(\)]/g,'');
+  // Ігноруємо "Школа"
+  if(sl==='школа'||sl==='school') return '__skip__';
+  // miniBaby-ki
+  if(/mini.*baby/i.test(sl)||sl==='minibabyki') return 'miniBaby-ki';
+  // Baby-ki (але не miniBaby)
+  if(/^baby/i.test(sl)) return 'Baby-ki';
+  // Find-iki (findi, findy, find-ki, findi.ki, findiki, findi-Ki тощо)
+  if(/^find/i.test(sl)||/^findi/i.test(sl)||/^findy/i.test(sl)) return 'Find-iki';
+  // Study-ki
+  if(/^study/i.test(sl)) return 'Study-ki';
+  // Preschool
+  if(/preschool/i.test(sl)||/prescool/i.test(sl)) return 'Preschool';
+  // Чомусики
+  if(/чомус/i.test(s)) return 'Чомусики';
+  return s;
+}
+
 function buildGroups(){
   S.groups={};
   var grpMap={};
+  S.payMonth='';
   S.payments.forEach(function(row){
     var loc=String(row['Локація']||'').trim();
-    var grp=String(row['Група']||'').trim();
+    var rawGrp=String(row['Група']||'').trim();
+    var grp=normalizeGroup(rawGrp);
+    if(grp==='__skip__') return;
     var name=String(row["Ім'я дитини"]||'').trim();
     if(!loc||!name) return;
+    if(!S.payMonth) S.payMonth=String(row['Місяць']||'').trim();
 
     if(!S.groups[loc]) S.groups[loc]=[];
     var key=loc+'||'+grp;
     if(!grpMap[key]){
-      var g={group:grp,teacher:String(row['Вихователь']||''),children:[]};
+      var g={group:grp,teacher:String(row['Вихователь']||''),children:[],totalDebt:0,debtors:0};
       S.groups[loc].push(g);
       grpMap[key]=g;
     }
@@ -755,14 +782,22 @@ function buildGroups(){
     var total=+(row['Факт разом']||0)||(fs+fv+fe);
     var bud=+(row['Бюджет разом']||0)||(bs+be)||+(row['Бюджет']||0);
     var status=String(row['Статус']||'unknown');
-    var debt=bud>total?bud-total:0;
+    // Для боргу/переплати не включаємо вступний внесок
+    var totalNoEntry=fs+fe;
+    var budBase=bs+be||bud;
+    var debt=budBase>totalNoEntry?budBase-totalNoEntry:0;
     var id=childId(name,grp,loc);
-    grpMap[key].children.push({
+    var child={
       name:name,loc:loc,group:grp,teacher:grpMap[key].teacher,
       factStudy:fs,factEntry:fv,factExtra:fe,factTotal:total,
       budgetStudy:bs,budgetExtra:be,budget:bud,
       status:status,debt:debt,id:id
-    });
+    };
+    grpMap[key].children.push(child);
+    if(status==='debt'||status==='nopay'){
+      grpMap[key].totalDebt+=debt||(status==='nopay'?bud:0);
+      grpMap[key].debtors++;
+    }
   });
 }
 
@@ -968,7 +1003,7 @@ function renderClients(){
 
   var now=new Date();
   var mIdx=CFG.MONTHS_JS.indexOf(now.getMonth());
-  var mName=mIdx>=0?CFG.MONTHS_DISP[mIdx]:now.toLocaleString('uk-UA',{month:'long'});
+  var mName=S.payMonth||( mIdx>=0?CFG.MONTHS_DISP[mIdx]:now.toLocaleString('uk-UA',{month:'long'}) );
 
   // Додаємо CRM-only дітей до загальної кількості для відображення
   var displayKids = stats.totalKids + (S.selLoc || !isHR() ? crmOnlyIds.length : Object.keys(S.crm).filter(function(id){ var c=S.crm[id]; return c&&c.name&&!payIds[id]&&(isHR()||c.loc===S.user.loc); }).length);
@@ -1054,9 +1089,15 @@ function renderClients(){
       if(!children.length) return;
 
       // ── ТАБЛИЦЯ: БЕЗ колонки "Борг (грн)" ───────────────────────────────
+      var grpDebtors=grp.children.filter(function(c){return c.status==='debt'||c.status==='nopay';}).length;
+      var grpDebt=grp.totalDebt||0;
       html+='<div class="card" style="margin-bottom:16px">'
         +'<div class="card-hd"><h3>👥 '+esc(grp.group)+'</h3>'
-        +'<span style="font-size:12px;color:var(--gray)">'+(grp.teacher?'Вихователь: '+esc(grp.teacher)+' &nbsp;|&nbsp; ':'')+children.length+' дітей</span></div>'
+        +'<span style="font-size:12px;color:var(--gray)">'
+        +(grp.teacher?'Вихователь: '+esc(grp.teacher)+' &nbsp;|&nbsp; ':'')
+        +children.length+' дітей'
+        +(grpDebtors?' &nbsp;|&nbsp; <span style="color:var(--red2)">'+grpDebtors+' боржників, '+fmtN(Math.round(grpDebt))+' грн</span>':' &nbsp;|&nbsp; <span style="color:var(--green)">всі сплатили ✅</span>')
+        +'</span></div>'
         +'<div class="tbl-wrap"><table><thead><tr>'
         +'<th>Ім\'я дитини</th><th>Статус оплати</th>'
         +'<th>Навчання</th><th>Вступний</th><th>Доп.</th><th>Бюджет (грн)</th><th>Телефон</th><th></th>'
