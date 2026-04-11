@@ -1401,7 +1401,7 @@ function renderPayHistory(){
     var fv=+(row['Факт вступний']||0);
     var fe=+(row['Факт доп.']||0);
     var total=+(row['Факт разом']||0)||(fs+fv+fe);
-    var bud=+(row['Бюджет разом']||0)||+(row['Бюджет']||0)||(+(row['Бюджет навчання']||0)++(row['Бюджет доп.']||0));
+    var bud=+(row['Бюджет разом']||0)||+(row['Бюджет']||0)||( +(row['Бюджет навчання']||0) + +(row['Бюджет доп.']||0) );
     var status=String(row['Статус']||'');
     totalFact+=total;
     totalBudget+=bud;
