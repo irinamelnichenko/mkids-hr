@@ -349,7 +349,15 @@ tbody tr.clickable:hover td{background:#f0f7ff}
             <select id="fLocSel" class="hidden"></select>
             <input type="text" id="fLoc" readonly style="background:#f8fafc">
           </div>
-          <div class="fg"><label>Група</label><input type="text" id="fGroup"></div>
+          <div class="fg"><label>Група</label>
+            <select id="fGroup" onchange="updateContractType()">
+              <option value="">— Оберіть групу —</option>
+              <option value="miniBaby-ki">miniBaby-ki</option>
+              <option value="Baby-ki">Baby-ki</option>
+              <option value="Find-iki">Find-iki</option>
+              <option value="Study-ki">Study-ki</option>
+              <option value="Preschool">Preschool</option>
+            </select></div>
         </div>
         <div class="g2">
           <div class="fg"><label>Вихователь</label><input type="text" id="fTeacher"></div>
@@ -377,12 +385,10 @@ tbody tr.clickable:hover td{background:#f0f7ff}
         <div class="g2">
           <div class="fg"><label>Дата підписання договору</label>
             <input type="date" id="fContractDate" onchange="onContractDateChange()"></div>
-          <div class="fg"><label>Тип договору</label>
-            <select id="fContractType" onchange="updateContractUI()">
-              <option value="standard">Стандарт (до 01.10.2025)</option>
-              <option value="preschool">Preschool (до 01.10.2025)</option>
-              <option value="sick-only">Після 01.10.2025 (будь-яка група)</option>
-            </select></div>
+          <div class="fg"><label>Тип договору — визначається автоматично</label>
+            <input type="hidden" id="fContractType">
+            <div id="contractTypeDisplay" style="padding:10px 14px;background:#f0f4f8;border:2px solid #e8ecf0;border-radius:10px;font-size:14px;font-weight:600;color:var(--dark2)">—</div>
+          </div>
         </div>
         <div class="fg"><label>Щомісячна сума (грн)</label>
           <input type="number" id="fMonthlyFee" placeholder="0" oninput="recalcDiscount()"></div>
@@ -1075,12 +1081,12 @@ function openNewChild(){
   document.querySelectorAll('#mChildTabs .tab').forEach(function(t,i){ t.classList.toggle('active',i===0); });
   document.querySelectorAll('.tab-pane').forEach(function(p,i){ p.classList.toggle('active',i===0); });
   // Clear form
-  ['fName','fBday','fGroup','fTeacher','fMomName','fMomPhone','fDadName','fDadPhone',
+  ['fName','fBday','fTeacher','fMomName','fMomPhone','fDadName','fDadPhone',
    'fContractDate','fMonthlyFee','fEntryFee','fNotes'].forEach(function(id){
     document.getElementById(id).value='';
   });
+  document.getElementById('fGroup').value='';
   document.getElementById('fStatus').value='active';
-  document.getElementById('fContractType').value='standard';
   document.getElementById('tpPayStatus').innerHTML='';
   document.getElementById('feeHistoryList').innerHTML='';
   document.getElementById('entryFeeList').innerHTML='';
@@ -1088,7 +1094,7 @@ function openNewChild(){
   document.getElementById('absenceList').innerHTML='<p style="color:var(--gray);font-size:13px">Відсутностей не записано</p>';
   document.getElementById('absenceSummary').innerHTML='';
   setLocFieldMode(true);
-  updateContractUI();
+  updateContractType();
   document.getElementById('mChild').classList.remove('hidden');
 }
 
@@ -1131,12 +1137,11 @@ function populateForm(id){
   document.getElementById('fDadName').value=c.dadName||'';
   document.getElementById('fDadPhone').value=c.dadPhone||'';
   document.getElementById('fContractDate').value=c.contractDate||'';
-  document.getElementById('fContractType').value=c.contractType||'standard';
   document.getElementById('fMonthlyFee').value=c.monthlyFee||'';
   document.getElementById('fEntryFee').value=c.entryFee||'';
   document.getElementById('fNotes').value=c.notes||'';
   renderPayStatus(id);
-  updateContractUI();
+  updateContractType(); // auto-determines type from date + group
 }
 
 function renderPayStatus(id){
@@ -1157,11 +1162,30 @@ function renderPayStatus(id){
   el.innerHTML='<div class="alert alert-'+type+'"><div class="pay-status-big">'+txt+'</div>'+detail+'</div>';
 }
 
-function onContractDateChange(){
-  var d=document.getElementById('fContractDate').value;
-  if(d>='2025-10-01') document.getElementById('fContractType').value='sick-only';
+function onContractDateChange(){ updateContractType(); }
+
+function updateContractType(){
+  var date=document.getElementById('fContractDate').value;
+  var group=document.getElementById('fGroup').value;
+  var t;
+  if(date && date>='2025-10-01'){
+    t='sick-only';
+  } else if(group==='Preschool'){
+    t='preschool';
+  } else {
+    t='standard';
+  }
+  document.getElementById('fContractType').value=t;
+  var labels={
+    'standard':   '📋 Стандарт — тільки відпустка (до 01.10.2025)',
+    'preschool':  '📋 Preschool — без перерахунків (до 01.10.2025)',
+    'sick-only':  '📋 Після 01.10.2025 — тільки хвороба'
+  };
+  var disp=document.getElementById('contractTypeDisplay');
+  if(disp) disp.textContent=labels[t]||t;
   updateContractUI();
 }
+
 function updateContractUI(){
   var t=document.getElementById('fContractType').value;
   var el=document.getElementById('contractInfo'); if(!el) return;
