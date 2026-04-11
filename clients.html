@@ -356,6 +356,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
           <div class="fg"><label>Статус клієнта</label>
             <select id="fStatus">
               <option value="active">✅ Активний</option>
+              <option value="future">📅 Майбутній</option>
               <option value="terminated">❌ Розірваний</option>
               <option value="graduate">🎓 Випускник</option>
             </select></div>
@@ -378,9 +379,9 @@ tbody tr.clickable:hover td{background:#f0f7ff}
             <input type="date" id="fContractDate" onchange="onContractDateChange()"></div>
           <div class="fg"><label>Тип договору</label>
             <select id="fContractType" onchange="updateContractUI()">
-              <option value="standard">Стандарт (відпустка + хвороба)</option>
-              <option value="preschool">Preschool (тільки хвороба)</option>
-              <option value="sick-only">Після 01.10.2025 (тільки хвороба)</option>
+              <option value="standard">Стандарт (до 01.10.2025)</option>
+              <option value="preschool">Preschool (до 01.10.2025)</option>
+              <option value="sick-only">Після 01.10.2025 (будь-яка група)</option>
             </select></div>
         </div>
         <div class="fg"><label>Щомісячна сума (грн)</label>
@@ -1164,9 +1165,9 @@ function onContractDateChange(){
 function updateContractUI(){
   var t=document.getElementById('fContractType').value;
   var el=document.getElementById('contractInfo'); if(!el) return;
-  if(t==='standard') el.textContent='Стандарт: відпустка 4 тиж/рік (25%→50%→75%→100%) + хвороба 4 тиж/рік (5%→10%→15%→20%)';
-  else if(t==='preschool') el.textContent='Preschool: тільки хвороба до 4 тиж/рік';
-  else el.textContent='Після 01.10.2025: тільки хвороба до 4 тиж/рік';
+  if(t==='standard')   el.textContent='Стандарт: ТІЛЬКИ відпустка до 4 тижнів на рік (1 тиж→25%, 2→50%, 3→75%, 4→100%). Хвороба не перераховується.';
+  else if(t==='preschool') el.textContent='Preschool: без перерахунків. Ні відпустка, ні хвороба не впливають на суму.';
+  else el.textContent='Після 01.10.2025: ТІЛЬКИ хвороба до 4 тижнів на рік (1 тиж→5%, 2→10%, 3→15%, 4→20%). Відпустка не перераховується.';
   recalcDiscount();
 }
 
@@ -1177,22 +1178,36 @@ function recalcDiscount(){
   var t=document.getElementById('fContractType').value;
   var fee=parseFloat(document.getElementById('fMonthlyFee').value)||c.monthlyFee||0;
   var abs=c.absences||[];
+
+  // Preschool — no recalculation at all
+  if(t==='preschool'){
+    el.innerHTML='<div class="alert alert-info" style="margin-top:4px">Preschool: перерахунки не передбачені договором.</div>';
+    return;
+  }
+
   var vacDays=abs.filter(function(a){ return a.type==='vacation'; }).reduce(function(s,a){ return s+a.days; },0);
   var sickDays=abs.filter(function(a){ return a.type==='sick'; }).reduce(function(s,a){ return s+a.days; },0);
-  var vacW=Math.min(4,weeksCeil(vacDays));
-  var sickW=Math.min(4,weeksCeil(sickDays));
-  var vacPct=t==='standard'?[0,25,50,75,100][vacW]:0;
-  var sickPct=[0,5,10,15,20][sickW];
-  var totalPct=Math.min(100,vacPct+sickPct);
-  var discAmt=fee*(totalPct/100);
-  var payable=fee-discAmt;
-  var remVac=Math.max(0,4-weeksCeil(vacDays));
 
+  var totalPct=0;
   var html='<div style="display:flex;gap:10px;flex-wrap:wrap">';
-  if(t==='standard') html+='<div class="vac-box"><div class="vac-num">'+weeksCeil(vacDays)+'</div><div><div class="vac-lbl">Тижнів відпустки</div><div class="vac-lbl" style="color:var(--green)">Залишок: '+remVac+' тиж.</div></div></div>';
-  html+='<div class="vac-box"><div class="vac-num">'+weeksCeil(sickDays)+'</div><div><div class="vac-lbl">Тижнів хвороби</div>'+(weeksCeil(sickDays)>4?'<div class="vac-lbl" style="color:var(--red2)">Ліміт вичерпано</div>':'')+'</div></div>';
-  if(fee>0) html+='<div class="vac-box"><div class="vac-num">'+totalPct+'%</div><div><div class="vac-lbl">Знижка</div><div class="vac-lbl">−'+fmtN(Math.round(discAmt))+' грн</div></div></div>'
-    +'<div class="vac-box"><div class="vac-num" style="color:var(--green)">'+fmtN(Math.round(payable))+'</div><div><div class="vac-lbl">До сплати (грн)</div></div></div>';
+
+  if(t==='standard'){
+    // vacation only: 25/50/75/100%
+    var vacW=Math.min(4,weeksCeil(vacDays));
+    var vacPct=[0,25,50,75,100][vacW];
+    totalPct=vacPct;
+    var remVac=Math.max(0,4-weeksCeil(vacDays));
+    html+='<div class="vac-box"><div class="vac-num">'+weeksCeil(vacDays)+'</div><div><div class="vac-lbl">Тижнів відпустки</div><div class="vac-lbl" style="color:var(--green)">Залишок: '+remVac+' тиж.</div></div></div>';
+  } else {
+    // sick-only: 5/10/15/20%
+    var sickW=Math.min(4,weeksCeil(sickDays));
+    var sickPct=[0,5,10,15,20][sickW];
+    totalPct=sickPct;
+    html+='<div class="vac-box"><div class="vac-num">'+weeksCeil(sickDays)+'</div><div><div class="vac-lbl">Тижнів хвороби</div>'+(weeksCeil(sickDays)>4?'<div class="vac-lbl" style="color:var(--red2)">Ліміт вичерпано</div>':'')+'</div></div>';
+  }
+
+  if(fee>0) html+='<div class="vac-box"><div class="vac-num">'+totalPct+'%</div><div><div class="vac-lbl">Знижка</div><div class="vac-lbl">−'+fmtN(Math.round(fee*totalPct/100))+' грн</div></div></div>'
+    +'<div class="vac-box"><div class="vac-num" style="color:var(--green)">'+fmtN(Math.round(fee*(1-totalPct/100)))+'</div><div><div class="vac-lbl">До сплати (грн)</div></div></div>';
   html+='</div>';
   el.innerHTML=html;
 }
@@ -1248,38 +1263,88 @@ function renderAbsences(){
   var abs=c.absences||[];
   var t=document.getElementById('fContractType').value;
 
-  document.getElementById('absTypeInfo').textContent=t==='standard'
-    ?'Стандарт: відпустка до 4 тижнів + хвороба до 4 тижнів на рік.'
-    :'Preschool / після 01.10.2025: тільки хвороба, до 4 тижнів.';
+  // Info banner + add-form visibility
+  var infoEl=document.getElementById('absTypeInfo');
+  var addFormEl=document.querySelector('#tp3 .g3');
+  var addBtnEl=document.querySelector('#tp3 .btn-secondary.btn-sm');
 
+  if(t==='preschool'){
+    infoEl.className='alert alert-warn';
+    infoEl.textContent='Preschool: перерахунки не передбачені договором. Відпустки і хвороби не впливають на суму.';
+    if(addFormEl) addFormEl.style.display='none';
+    if(addBtnEl) addBtnEl.style.display='none';
+    document.getElementById('absenceSummary').innerHTML='';
+    document.getElementById('absenceList').innerHTML='<p style="color:var(--gray);font-size:13px">Перерахунки не передбачені цим типом договору.</p>';
+    return;
+  }
+
+  // Show add-form for allowed types
+  if(addFormEl) addFormEl.style.display='';
+  if(addBtnEl) addBtnEl.style.display='';
+
+  // Limit absence type selector to what's allowed
+  var absTypeEl=document.getElementById('fAbsType');
+  if(t==='standard'){
+    infoEl.className='alert alert-info';
+    infoEl.textContent='Стандарт: ТІЛЬКИ відпустка до 4 тижнів на рік (1→25%, 2→50%, 3→75%, 4→100%). Хвороба не перераховується.';
+    absTypeEl.innerHTML='<option value="vacation">🏖️ Відпустка</option>';
+  } else {
+    infoEl.className='alert alert-info';
+    infoEl.textContent='Після 01.10.2025: ТІЛЬКИ хвороба до 4 тижнів на рік (1→5%, 2→10%, 3→15%, 4→20%). Відпустка не перераховується.';
+    absTypeEl.innerHTML='<option value="sick">🤒 Хвороба</option>';
+  }
+
+  // Summary boxes
   var vacDays=abs.filter(function(a){ return a.type==='vacation'; }).reduce(function(s,a){ return s+a.days; },0);
   var sickDays=abs.filter(function(a){ return a.type==='sick'; }).reduce(function(s,a){ return s+a.days; },0);
-  var vacW=weeksCeil(vacDays), sickW=weeksCeil(sickDays);
   var sumHtml='<div style="display:flex;gap:10px;flex-wrap:wrap">';
-  if(t==='standard') sumHtml+='<div class="vac-box"><div class="vac-num">'+vacW+'</div><div><div class="vac-lbl">Тижнів відпустки</div><div class="vac-lbl" style="color:var(--green)">Залишок: '+Math.max(0,4-vacW)+' тиж.</div></div></div>';
-  sumHtml+='<div class="vac-box"><div class="vac-num">'+sickW+'</div><div><div class="vac-lbl">Тижнів хвороби</div>'+(sickW>4?'<div class="vac-lbl" style="color:var(--red2)">Ліміт перевищено</div>':'')+'</div></div></div>';
+  if(t==='standard'){
+    var vacW=weeksCeil(vacDays);
+    sumHtml+='<div class="vac-box"><div class="vac-num">'+vacW+'</div><div><div class="vac-lbl">Тижнів відпустки</div><div class="vac-lbl" style="color:var(--green)">Залишок: '+Math.max(0,4-vacW)+' тиж.</div></div></div>';
+  } else {
+    var sickW=weeksCeil(sickDays);
+    sumHtml+='<div class="vac-box"><div class="vac-num">'+sickW+'</div><div><div class="vac-lbl">Тижнів хвороби</div>'+(sickW>4?'<div class="vac-lbl" style="color:var(--red2)">Ліміт перевищено</div>':'<div class="vac-lbl" style="color:var(--green)">Залишок: '+Math.max(0,4-sickW)+' тиж.</div>')+'</div></div>';
+  }
+  sumHtml+='</div>';
   document.getElementById('absenceSummary').innerHTML=sumHtml;
 
+  // List of recorded absences
   var listEl=document.getElementById('absenceList'); if(!listEl) return;
-  listEl.innerHTML=!abs.length?'<p style="color:var(--gray);font-size:13px">Відсутностей не записано</p>'
-    :abs.map(function(a,i){
+  // filter to only show relevant absences for this contract type
+  var visAbs=t==='standard'
+    ? abs.filter(function(a){ return a.type==='vacation'; })
+    : abs.filter(function(a){ return a.type==='sick'; });
+
+  listEl.innerHTML=!visAbs.length?'<p style="color:var(--gray);font-size:13px">Відсутностей не записано</p>'
+    :visAbs.map(function(a,i){
+      // find real index in abs array for delete
+      var realIdx=abs.indexOf(a);
       var w=weeksCeil(a.days);
       var pct=a.type==='vacation'?[0,25,50,75,100][Math.min(4,w)]:[0,5,10,15,20][Math.min(4,w)];
       return '<div class="absence-row"><span class="ar-type">'+(a.type==='vacation'?'🏖️ Відпустка':'🤒 Хвороба')+'</span>'
         +'<span class="ar-dates">'+fmtD(a.from)+' — '+fmtD(a.to)+'</span>'
         +'<span class="ar-days">'+a.days+' дн / '+w+' тиж → −'+pct+'%</span>'
-        +'<button class="del-btn" onclick="delAbsence('+i+')">✕</button></div>';
+        +'<button class="del-btn" onclick="delAbsence('+realIdx+')">✕</button></div>';
     }).join('');
 }
 function addAbsence(){
   var id=S.editId; if(!id) return;
+  var ct=document.getElementById('fContractType').value;
+  if(ct==='preschool'){ alert('Pereschool: перерахунки не передбачені договором.'); return; }
   var type=document.getElementById('fAbsType').value;
+  // enforce contract type restriction
+  if(ct==='standard'&&type!=='vacation'){ alert('Стандарт: можна додавати тільки відпустки.'); return; }
+  if(ct==='sick-only'&&type!=='sick'){ alert('Після 01.10.2025: можна додавати тільки хворобу.'); return; }
   var from=document.getElementById('fAbsFrom').value;
   var to=document.getElementById('fAbsTo').value;
   if(!from||!to){ alert('Вкажіть дати'); return; }
   var f=pd(from), t=pd(to);
   if(!f||!t||t<f){ alert('Невірний діапазон'); return; }
   var days=diffDays(f,t)+1;
+  // check 4-week cap
+  var abs=getCRMCard(id).absences||[];
+  var usedDays=abs.filter(function(a){ return a.type===type; }).reduce(function(s,a){ return s+a.days; },0);
+  if(weeksCeil(usedDays+days)>4){ alert('Ліміт 4 тижні на рік вичерпано'); return; }
   getCRMCard(id).absences.push({type:type,from:from,to:to,days:days});
   document.getElementById('fAbsFrom').value=''; document.getElementById('fAbsTo').value='';
   renderAbsences();
