@@ -955,8 +955,8 @@ function renderClients(){
       +'</tr></thead><tbody>';
     crmFiltered.forEach(function(id){
       var c=S.crm[id];
-      var phone=c.momPhone||c.dadPhone||'';
-      html+='<tr class="clickable" onclick="openChild(\''+esc(id)+'\',\''+esc(c.group)+'\',\''+esc(c.teacher)+'\',\''+esc(c.loc)+'\',\''+esc(c.name)+'\')">'
+      var phone=String(c.momPhone||c.dadPhone||'');
+      html+='<tr class="clickable" onclick="openChild(\''+esc(String(id))+'\',\''+esc(String(c.group||''))+'\',\''+esc(String(c.teacher||''))+'\',\''+esc(String(c.loc||''))+'\',\''+esc(String(c.name||''))+'\')">'
         +'<td><span class="child-link">'+esc(c.name)+'</span></td>'
         +'<td>'+esc(c.loc)+'</td>'
         +'<td>'+esc(c.group)+'</td>'
@@ -1002,7 +1002,7 @@ function renderClients(){
       children.forEach(function(ch){
         var card=S.crm[ch.id]||{};
         var phone=card.momPhone||card.dadPhone||'';
-        html+='<tr class="clickable" onclick="openChild(\''+esc(ch.id)+'\',\''+esc(ch.group)+'\',\''+esc(ch.teacher||grp.teacher)+'\',\''+esc(ch.loc)+'\',\''+esc(ch.name)+'\')">'
+        html+='<tr class="clickable" onclick="openChild(\''+esc(String(ch.id||''))+'\',\''+esc(String(ch.group||''))+'\',\''+esc(String(ch.teacher||grp.teacher||''))+'\',\''+esc(String(ch.loc||''))+'\',\''+esc(String(ch.name||''))+'\')">'
           +'<td><span class="child-link">'+esc(ch.name)+'</span></td>'
           +'<td>'+payBadge(ch.status,ch.debt)+'</td>'
           +'<td>'+(ch.debt>0?'<b style="color:var(--red2)">'+fmtN(Math.round(ch.debt))+'</b>':'—')+'</td>'
