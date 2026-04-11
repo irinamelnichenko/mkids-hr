@@ -728,27 +728,28 @@ function startDate(e){
   return d1||d2||null;
 }
 
-// Ліміт відпустки = фактично відпрацьовані місяці × (14 або 24) / 12
-// Рахується накопичено від дати початку до сьогодні
+// Відпустка рахується з 01.01.2025 (не від початку стажу)
+const VAC_START_DATE = new Date(2025, 0, 1); // 01.01.2025
+
 function vacDailyRate(e){
   return /вихователь/i.test(e.pos||'')?24:14;
 }
 function vacEarned(e, toDate=new Date()){
-  // Скільки місяців відпрацювано від початку до toDate
-  const sd=startDate(e); if(!sd)return 0;
-  if(sd>toDate)return 0;
-  const months=(toDate.getFullYear()-sd.getFullYear())*12+(toDate.getMonth()-sd.getMonth());
+  // Рахуємо місяці від 01.01.2025 до сьогодні
+  const from=VAC_START_DATE;
+  if(toDate<from)return 0;
+  const months=(toDate.getFullYear()-from.getFullYear())*12+(toDate.getMonth()-from.getMonth());
   const rate=vacDailyRate(e);
   return Math.floor(months*rate/12);
 }
-// Для відображення: доступно всього мінус використано = залишок
 function vacTotalLim(e){return vacEarned(e);}
-function vacLim(e){return vacEarned(e);} // сумісність
-function vacCarryover(){return 0;} // більше не використовуємо перенос
+function vacLim(e){return vacEarned(e);}
+function vacCarryover(){return 0;}
 function vacUsed(key,yr=null){
-  // Якщо yr не вказано — всі використані за весь час
-  if(yr===null) return rec(key).vacs.filter(v=>v.type==='Щорічна').reduce((s,v)=>s+(v.days||0),0);
-  return rec(key).vacs.filter(v=>new Date(v.start).getFullYear()===yr&&v.type==='Щорічна').reduce((s,v)=>s+(v.days||0),0);
+  // Тільки відпустки з 01.01.2025
+  const vacs=rec(key).vacs.filter(v=>v.type==='Щорічна'&&new Date(v.start)>=VAC_START_DATE);
+  if(yr===null) return vacs.reduce((s,v)=>s+(v.days||0),0);
+  return vacs.filter(v=>new Date(v.start).getFullYear()===yr).reduce((s,v)=>s+(v.days||0),0);
 }
 function vacBalance(e){return Math.max(0, vacEarned(e)-vacUsed(e.key));}
 function sickUsed(key,yr=new Date().getFullYear()){return rec(key).sicks.filter(v=>new Date(v.start).getFullYear()===yr).reduce((s,v)=>s+(v.days||0),0);}
@@ -1063,6 +1064,7 @@ function renderEmpCard(){
         <div class="tab" data-tab="tVac" onclick="switchTab(this)">🏖️ Відпустки (${r.vacs.length})</div>
         <div class="tab" data-tab="tSick" onclick="switchTab(this)">🏥 Лікарняні (${r.sicks.length})</div>
         ${!isNurse?`<div class="tab" data-tab="tSal" onclick="switchTab(this)">💰 Зарплата (${r.sals.length})</div>`:''}
+        <div class="tab" data-tab="tTabel" onclick="switchTab(this)">📊 Табель</div>
         <div class="tab" data-tab="tLine" onclick="switchTab(this)">📅 Хронологія</div>
       </div>
       <div id="tInfo" class="tab-pane active">
@@ -1119,12 +1121,94 @@ function renderEmpCard(){
           <td><button class="btn btn-danger btn-xs" onclick="delRec('${e.key}','sals','${v._id||r.sals.indexOf(v)}',${e.id})">🗑</button></td>
         </tr>`).join('')}</tbody></table></div>`}
       </div>
+      <div id="tTabel" class="tab-pane">${buildEmpTabel(e)}</div>
       <div id="tLine" class="tab-pane">${buildTimeline(e,r)}</div>
     </div>
   `);
 }
 
 function ii(label,val){return `<div class="ii"><label>${label}</label><div class="iv">${val||'—'}</div></div>`;}
+
+function buildEmpTabel(e){
+  const now=new Date(); now.setHours(0,0,0,0);
+  const monthNames=['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
+  const curYear=now.getFullYear();
+  const loc=e.loc||'';
+
+  // Статистика за поточний рік по місяцях
+  const months=[];
+  for(let m=0;m<12;m++){
+    const from=new Date(curYear,m,1);
+    const to=new Date(curYear,m+1,0);
+    if(from>now)break; // не рахуємо майбутні місяці
+    let present=0,late=0,absent=0,sick=0,vacation=0,notset=0;
+    let d=new Date(from);
+    while(d<=to&&d<=now){
+      const dw=d.getDay();
+      if(dw!==0&&dw!==6){
+        const ds=d.toISOString().split('T')[0];
+        const t=getTabel(loc,ds);
+        const st=t[e.key]?.status||'notset';
+        if(st==='present')present++;
+        else if(st==='late')late++;
+        else if(st==='absent')absent++;
+        else if(st==='sick')sick++;
+        else if(st==='vacation')vacation++;
+        else notset++;
+      }
+      d.setDate(d.getDate()+1);
+    }
+    const workDays=workDaysInRange(from.toISOString().split('T')[0], Math.min(to,now).toISOString ? new Date(Math.min(to,now)).toISOString().split('T')[0] : to.toISOString().split('T')[0]);
+    months.push({m,name:monthNames[m],present,late,absent,sick,vacation,notset,workDays});
+  }
+
+  // Загальна статистика за рік
+  const total={present:0,late:0,absent:0,sick:0,vacation:0,notset:0,workDays:0};
+  months.forEach(m=>{total.present+=m.present;total.late+=m.late;total.absent+=m.absent;total.sick+=m.sick;total.vacation+=m.vacation;total.notset+=m.notset;total.workDays+=m.workDays;});
+
+  const pct=total.workDays>0?Math.round((total.present+total.late)/total.workDays*100):0;
+
+  return`<div style="padding:16px">
+    <div style="font-size:14px;font-weight:700;margin-bottom:14px;color:var(--dark)">📊 Табель ${curYear} — ${loc}</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px">
+      ${[['✅','Присутніх',total.present,'#27ae60'],['⏰','Спізнень',total.late,'#e67e22'],['❌','Відсутніх',total.absent,'#e74c3c'],['🏥','Лікарняних',total.sick,'#9b59b6'],['🏖️','Відпустка',total.vacation,'#3498db'],['📝','Не запов.',total.notset,'#bdc3c7']].map(([ic,l,v,c])=>
+      `<div style="background:#f8fafc;border-radius:8px;padding:10px 14px;text-align:center;min-width:70px">
+        <div style="font-size:18px;font-weight:900;color:${c}">${v}</div>
+        <div style="font-size:10px;color:var(--gray);margin-top:2px">${ic} ${l}</div>
+      </div>`).join('')}
+      <div style="background:#e8f8f0;border-radius:8px;padding:10px 14px;text-align:center;min-width:70px;margin-left:auto">
+        <div style="font-size:18px;font-weight:900;color:#27ae60">${pct}%</div>
+        <div style="font-size:10px;color:var(--gray);margin-top:2px">присутність</div>
+      </div>
+    </div>
+    ${months.length===0?`<div class="empty"><p>Дані табелю відсутні</p></div>`:`
+    <table style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead><tr style="background:#f8fafc">
+        <th style="padding:8px;text-align:left;border-bottom:2px solid #e8ecf0">Місяць</th>
+        <th style="padding:8px;text-align:center;color:#27ae60;border-bottom:2px solid #e8ecf0">✅</th>
+        <th style="padding:8px;text-align:center;color:#e67e22;border-bottom:2px solid #e8ecf0">⏰</th>
+        <th style="padding:8px;text-align:center;color:#e74c3c;border-bottom:2px solid #e8ecf0">❌</th>
+        <th style="padding:8px;text-align:center;color:#9b59b6;border-bottom:2px solid #e8ecf0">🏥</th>
+        <th style="padding:8px;text-align:center;color:#3498db;border-bottom:2px solid #e8ecf0">🏖️</th>
+        <th style="padding:8px;text-align:center;color:#bdc3c7;border-bottom:2px solid #e8ecf0">📝</th>
+        <th style="padding:8px;text-align:center;border-bottom:2px solid #e8ecf0">%</th>
+      </tr></thead>
+      <tbody>${months.map(m=>{
+        const p=m.workDays>0?Math.round((m.present+m.late)/m.workDays*100):0;
+        return`<tr style="border-bottom:1px solid #f0f4f8">
+          <td style="padding:7px 8px;font-weight:600">${m.name}</td>
+          <td style="padding:7px 8px;text-align:center;color:#27ae60;font-weight:${m.present>0?'700':'400'}">${m.present||'—'}</td>
+          <td style="padding:7px 8px;text-align:center;color:#e67e22">${m.late||'—'}</td>
+          <td style="padding:7px 8px;text-align:center;color:#e74c3c">${m.absent||'—'}</td>
+          <td style="padding:7px 8px;text-align:center;color:#9b59b6">${m.sick||'—'}</td>
+          <td style="padding:7px 8px;text-align:center;color:#3498db">${m.vacation||'—'}</td>
+          <td style="padding:7px 8px;text-align:center;color:#bdc3c7">${m.notset||'—'}</td>
+          <td style="padding:7px 8px;text-align:center"><strong style="color:${p>80?'#27ae60':p>60?'#e67e22':p>0?'#e74c3c':'#bdc3c7'}">${p>0?p+'%':'—'}</strong></td>
+        </tr>`;}).join('')}
+      </tbody>
+    </table>`}
+  </div>`;
+}
 
 function buildTimeline(e,r){
   const evts=[];
@@ -1547,16 +1631,17 @@ function renderBdays(){
   const monthNames=['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
   const now=new Date(); now.setHours(0,0,0,0);
 
-  // Дні народження за вибраний місяць
+  // Дні народження за вибраний місяць — тільки майбутні та сьогодні
   const bdaysInMonth=emps.map(e=>{
     const bd=empBday(e); if(!bd) return null;
     const d=new Date(bdaysYear, bd.getMonth(), bd.getDate());
     if(d.getMonth()!==bdaysMonth) return null;
     const left=Math.round((d-now)/86400000);
+    if(left<0) return null; // пропускаємо минулі
     return{e,d,left};
   }).filter(Boolean).sort((a,b)=>a.d.getDate()-b.d.getDate());
 
-  // Ювілеї за вибраний місяць
+  // Ювілеї за вибраний місяць — тільки майбутні та сьогодні
   const ms=[1,2,3,5,7,10,15,20,25,30];
   const annivInMonth=emps.map(e=>{
     const sd=startDate(e); if(!sd) return null;
@@ -1565,6 +1650,7 @@ function renderBdays(){
     const anniv=new Date(bdaysYear, sd.getMonth(), sd.getDate());
     if(anniv.getMonth()!==bdaysMonth) return null;
     const left=Math.round((anniv-now)/86400000);
+    if(left<0) return null; // пропускаємо минулі
     return{e,d:anniv,left,yrs:total};
   }).filter(Boolean).sort((a,b)=>a.d.getDate()-b.d.getDate());
 
@@ -1591,10 +1677,10 @@ function renderBdays(){
         </div>
         ${bdaysInMonth.length===0?`<div class="empty"><span class="ei">🎂</span><h4>Немає в цьому місяці</h4></div>`:
         bdaysInMonth.map(b=>`<div style="padding:12px 20px;border-bottom:1px solid #f0f4f8;display:flex;align-items:center;gap:10px;cursor:pointer" onclick="nav('employee',${b.e.id})">
-          <div style="font-size:24px">${b.left===0?'🎉':b.left<0?'🎂':b.left<=3?'🎁':'🎂'}</div>
+          <div style="font-size:24px">${b.left===0?'🎉':b.left<=3?'🎁':'🎂'}</div>
           <div style="flex:1"><div style="font-weight:700">${fullName(b.e)}</div><div style="font-size:12px;color:var(--gray)">${b.e.pos} · ${b.e.loc}</div></div>
           <div style="text-align:right">
-            <div style="font-weight:700;color:${b.left===0?'#e74c3c':b.left<0?'var(--gray)':b.left<=7?'#e67e22':'#27ae60'};font-size:13px">${b.left===0?'Сьогодні!':b.left<0?`${Math.abs(b.left)} дн. тому`:'за '+b.left+' дн.'}</div>
+            <div style="font-weight:700;color:${b.left===0?'#e74c3c':b.left<=7?'#e67e22':'#27ae60'};font-size:13px">${b.left===0?'🎉 Сьогодні!':'за '+b.left+' дн.'}</div>
             <div style="font-size:11px;color:var(--gray2)">${b.d.getDate()}.${String(b.d.getMonth()+1).padStart(2,'0')}</div>
           </div>
         </div>`).join('')}
