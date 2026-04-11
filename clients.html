@@ -344,11 +344,15 @@ tbody tr.clickable:hover td{background:#f0f7ff}
           <div class="fg"><label>Дата народження</label><input type="date" id="fBday"></div>
         </div>
         <div class="g2">
-          <div class="fg"><label>Локація</label><input type="text" id="fLoc" readonly style="background:#f8fafc"></div>
-          <div class="fg"><label>Група</label><input type="text" id="fGroup" readonly style="background:#f8fafc"></div>
+          <div class="fg">
+            <label>Локація</label>
+            <select id="fLocSel" class="hidden"></select>
+            <input type="text" id="fLoc" readonly style="background:#f8fafc">
+          </div>
+          <div class="fg"><label>Група</label><input type="text" id="fGroup"></div>
         </div>
         <div class="g2">
-          <div class="fg"><label>Вихователь</label><input type="text" id="fTeacher" readonly style="background:#f8fafc"></div>
+          <div class="fg"><label>Вихователь</label><input type="text" id="fTeacher"></div>
           <div class="fg"><label>Статус клієнта</label>
             <select id="fStatus">
               <option value="active">✅ Активний</option>
@@ -472,6 +476,7 @@ var S = {
   selStatus:'',
   searchQ:  '',
   editId:   null,
+  isNew:    false,
   curTab:   0,
   payUpdated: ''
 };
@@ -868,6 +873,7 @@ function renderClients(){
     +(isHR()?'<select class="flt-sel" onchange="S.selLoc=this.value;S.selGroup=\'\';renderClients()"><option value="">Всі локації</option>'+locs.map(function(l){ return '<option value="'+esc(l.loc)+'"'+(S.selLoc===l.loc?' selected':'')+'>'+esc(l.loc)+'</option>'; }).join('')+'</select>':'')
     +'<select class="flt-sel" onchange="S.selGroup=this.value;renderClients()"><option value="">Всі групи</option>'+allGroups.map(function(g){ return '<option value="'+esc(g)+'"'+(S.selGroup===g?' selected':'')+'>'+esc(g)+'</option>'; }).join('')+'</select>'
     +'<select class="flt-sel" onchange="S.selStatus=this.value;renderClients()"><option value="">Всі статуси</option><option value="paid"'+(S.selStatus==='paid'?' selected':'')+'>✅ Оплачено</option><option value="debt"'+(S.selStatus==='debt'?' selected':'')+'>❌ Борг</option><option value="nopay"'+(S.selStatus==='nopay'?' selected':'')+'>⛔ Не платив</option><option value="over"'+(S.selStatus==='over'?' selected':'')+'>💰 Переплата</option></select>'
+    +'<button class="btn btn-primary btn-sm" onclick="openNewChild()" style="margin-left:auto;white-space:nowrap">➕ Додати дитину</button>'
     +'</div>';
 
   var filtLocs=S.selLoc?locs.filter(function(l){ return l.loc===S.selLoc; }):locs;
@@ -1042,14 +1048,59 @@ async function makeSheetPublic(){
 }
 
 // ─── CHILD CARD MODAL ─────────────────────────────────────────────────────────
+function setLocFieldMode(isNew){
+  var sel=document.getElementById('fLocSel');
+  var inp=document.getElementById('fLoc');
+  if(isNew){
+    // populate select with locations
+    sel.innerHTML='<option value="">— Оберіть локацію —</option>'
+      +S.locs.map(function(l){ return '<option value="'+esc(l.loc)+'">'+esc(l.loc)+'</option>'; }).join('');
+    // if director, pre-select their location
+    if(!isHR()&&S.user.loc) sel.value=S.user.loc;
+    sel.classList.remove('hidden');
+    inp.classList.add('hidden');
+  } else {
+    sel.classList.add('hidden');
+    inp.classList.remove('hidden');
+  }
+}
+
+function openNewChild(){
+  S.editId=null;
+  S.isNew=true;
+  document.getElementById('mChildTitle').textContent='➕ Нова дитина';
+  S.curTab=0;
+  // Reset all tabs to active=0
+  document.querySelectorAll('#mChildTabs .tab').forEach(function(t,i){ t.classList.toggle('active',i===0); });
+  document.querySelectorAll('.tab-pane').forEach(function(p,i){ p.classList.toggle('active',i===0); });
+  // Clear form
+  ['fName','fBday','fGroup','fTeacher','fMomName','fMomPhone','fDadName','fDadPhone',
+   'fContractDate','fMonthlyFee','fEntryFee','fNotes'].forEach(function(id){
+    document.getElementById(id).value='';
+  });
+  document.getElementById('fStatus').value='active';
+  document.getElementById('fContractType').value='standard';
+  document.getElementById('tpPayStatus').innerHTML='';
+  document.getElementById('feeHistoryList').innerHTML='';
+  document.getElementById('entryFeeList').innerHTML='';
+  document.getElementById('entryFeeSummary').innerHTML='';
+  document.getElementById('absenceList').innerHTML='<p style="color:var(--gray);font-size:13px">Відсутностей не записано</p>';
+  document.getElementById('absenceSummary').innerHTML='';
+  setLocFieldMode(true);
+  updateContractUI();
+  document.getElementById('mChild').classList.remove('hidden');
+}
+
 function openChild(id,group,teacher,loc,name){
   S.editId=id;
+  S.isNew=false;
   var card=getCRMCard(id);
   if(!card.name) card.name=name;
   if(!card.group) card.group=group;
   if(!card.teacher) card.teacher=teacher;
   if(!card.loc) card.loc=loc;
 
+  setLocFieldMode(false);
   document.getElementById('mChildTitle').textContent='👤 '+card.name;
   S.curTab=0;
   populateForm(id);
@@ -1238,9 +1289,28 @@ function delAbsence(i){ getCRMCard(S.editId).absences.splice(i,1); renderAbsence
 
 // Save
 function saveChild(){
-  var id=S.editId; if(!id) return;
+  var name=document.getElementById('fName').value.trim();
+  if(!name){ alert('Вкажіть ПІБ дитини'); return; }
+
+  var loc, group, teacher;
+  if(S.isNew){
+    loc=document.getElementById('fLocSel').value;
+    if(!loc){ alert('Оберіть локацію'); return; }
+    group=document.getElementById('fGroup').value.trim();
+    teacher=document.getElementById('fTeacher').value.trim();
+    S.editId=childId(name, group, loc);
+  } else {
+    loc=document.getElementById('fLoc').value;
+    group=document.getElementById('fGroup').value.trim();
+    teacher=document.getElementById('fTeacher').value.trim();
+  }
+
+  var id=S.editId;
   var c=getCRMCard(id);
-  c.name=document.getElementById('fName').value.trim()||c.name;
+  c.name=name;
+  c.loc=loc;
+  c.group=group;
+  c.teacher=teacher;
   c.bday=document.getElementById('fBday').value;
   c.status=document.getElementById('fStatus').value;
   c.momName=document.getElementById('fMomName').value.trim();
@@ -1253,12 +1323,13 @@ function saveChild(){
   c.entryFee=parseFloat(document.getElementById('fEntryFee').value)||0;
   c.notes=document.getElementById('fNotes').value.trim();
   c.updatedAt=today();
+  if(!c.createdAt) c.createdAt=today();
+
   saveLocalCRM();
-  // Sync to Apps Script (fire-and-forget)
   apiPost({action:'saveClient', data:Object.assign({id:id},c)});
-  // Invalidate clients cache
   localStorage.removeItem(CFG.CLI_CACHE);
   closeModal('mChild');
+  S.isNew=false;
   renderView();
 }
 
