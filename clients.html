@@ -96,7 +96,7 @@ input,select,textarea{font-family:inherit}
 #syncStatus{font-size:12px;color:var(--gray)}
 .content{padding:24px 28px;flex:1}
 
-/* CARDS / TABLES / BADGES / etc (same design system) */
+/* CARDS / TABLES / BADGES / etc */
 .card{background:#fff;border-radius:var(--r);box-shadow:var(--sh);overflow:hidden}
 .card-hd{padding:16px 20px;border-bottom:1px solid #f0f4f8;display:flex;align-items:center;justify-content:space-between}
 .card-hd h3{font-size:14px;font-weight:700;color:var(--dark)}
@@ -203,7 +203,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
 </head>
 <body>
 
-<!-- SETUP SCREEN (shown when Apps Script URL not configured) -->
+<!-- SETUP SCREEN -->
 <div id="setupScreen" class="auth-screen hidden">
   <div class="auth-card">
     <div class="auth-logo">
@@ -372,12 +372,18 @@ tbody tr.clickable:hover td{background:#f0f7ff}
         <div class="section-hd">Контакт мами</div>
         <div class="g2">
           <div class="fg"><label>ПІБ мами</label><input type="text" id="fMomName" placeholder="Прізвище Ім'я По-батькові"></div>
-          <div class="fg"><label>Телефон мами</label><input type="tel" id="fMomPhone" placeholder="+380…"></div>
+          <div class="fg"><label>Телефон мами</label>
+            <input type="tel" id="fMomPhone" placeholder="+380XXXXXXXXX"
+              oninput="fmtPhone(this)" onkeydown="phoneKeyDown(this,event)">
+          </div>
         </div>
         <div class="section-hd">Контакт тата</div>
         <div class="g2">
           <div class="fg"><label>ПІБ тата</label><input type="text" id="fDadName" placeholder="Прізвище Ім'я По-батькові"></div>
-          <div class="fg"><label>Телефон тата</label><input type="tel" id="fDadPhone" placeholder="+380…"></div>
+          <div class="fg"><label>Телефон тата</label>
+            <input type="tel" id="fDadPhone" placeholder="+380XXXXXXXXX"
+              oninput="fmtPhone(this)" onkeydown="phoneKeyDown(this,event)">
+          </div>
         </div>
       </div>
       <!-- Tab 1 -->
@@ -462,7 +468,6 @@ var CFG = {
   CLI_CACHE:     'crm_cli_v3',
   PW_HR:         'hr2024',
   TTL:           15 * 60 * 1000,
-  // Direct Sheets API (read-only, works when sheet is public)
   API_KEY:       'AIzaSyBXY-1iAKeBdyWc7gbtNOe66yBa5-Mcmlc',
   CRM_SHEET_ID:  '1pA2q84BFsXWuUchIlu8um853od_PXr7KepLpTovUjLo',
   MONTHS_UA:    ['вересень','жовтень','листопад','грудень','січень','лютий','березень','квітень','травень','червень','липень','серпень'],
@@ -474,9 +479,9 @@ var CFG = {
 var S = {
   user:     null,
   locs:     [],
-  payments: [],   // flat rows from "Оплати"
-  groups:   {},   // { locName: [{group, teacher, children:[...]}] }
-  crm:      {},   // { [id]: cardData }
+  payments: [],
+  groups:   {},
+  crm:      {},
   view:     'clients',
   selLoc:   '',
   selGroup: '',
@@ -507,6 +512,34 @@ function translitUA(str){
 function genDirPw(loc){
   try{ var m=JSON.parse(localStorage.getItem('hr_dir_pw')||'{}'); return m[loc]||translitUA(loc)+'2025'; }
   catch(e){ return translitUA(loc)+'2025'; }
+}
+
+// ─── PHONE FORMAT ─────────────────────────────────────────────────────────────
+// Користувач вводить цифри починаючи з 0, автоматично ставиться +38
+function fmtPhone(inp){
+  var raw = inp.value;
+  // витягуємо тільки цифри
+  var digits = raw.replace(/\D/g,'');
+  // якщо починається з 380... — прибираємо 38
+  if(digits.startsWith('380')) digits = digits.slice(2);
+  else if(digits.startsWith('38') && digits.length > 2) digits = digits.slice(2);
+  // максимум 10 цифр (0XX XXX XX XX)
+  digits = digits.slice(0,10);
+  // формуємо результат
+  if(digits.length === 0){
+    inp.value = '';
+  } else {
+    inp.value = '+38' + digits;
+  }
+  // курсор в кінець
+  setTimeout(function(){ inp.setSelectionRange(inp.value.length, inp.value.length); }, 0);
+}
+function phoneKeyDown(inp, e){
+  // якщо натиснули Backspace і залишився тільки +38 — чистимо повністю
+  if(e.key === 'Backspace' && (inp.value === '+38' || inp.value === '+3')){
+    e.preventDefault();
+    inp.value = '';
+  }
 }
 
 // ─── SCRIPT URL ───────────────────────────────────────────────────────────────
@@ -558,7 +591,7 @@ function setSyncStatus(st){
   else{ el.textContent=''; }
 }
 
-// ─── DIRECT SHEETS API (fast read when sheet is public) ───────────────────────
+// ─── DIRECT SHEETS API ────────────────────────────────────────────────────────
 async function sheetsRead(sheetName, range){
   var r=encodeURIComponent("'"+sheetName+"'!"+range);
   var url='https://sheets.googleapis.com/v4/spreadsheets/'+CFG.CRM_SHEET_ID+'/values/'+r+'?key='+CFG.API_KEY;
@@ -596,7 +629,6 @@ async function loadPayments(force){
   }
   var rows=[];
   var updated='';
-  // Try direct API first (fast), fall back to Apps Script
   try{
     var vals=await sheetsRead('Оплати','A1:M2000');
     rows=rowsToObjects(vals);
@@ -622,7 +654,6 @@ async function loadClients(force){
     if(c){ var p=JSON.parse(c); if(Date.now()-p.ts<CFG.TTL){ mergeCRMFromCloud(p.data); return; } }
   }
   var rows=[];
-  // Try direct API first, fall back to Apps Script
   try{
     var vals=await sheetsRead('Клієнти','A1:U2000');
     rows=rowsToObjects(vals).filter(function(r){ return r['ID']; });
@@ -765,12 +796,10 @@ async function saveSetupAndProceed(){
     errEl.textContent='⚠️ URL повинен починатись з https://script.google.com'; errEl.classList.remove('hidden'); return;
   }
   setScriptUrl(url);
-  // Test connection
   try{
     var j=await apiGet('ping');
     document.getElementById('setupScreen').classList.add('hidden');
     document.getElementById('loginScreen').classList.remove('hidden');
-    // preload locations
     await preloadLocations();
   }catch(e){
     errEl.textContent='⚠️ Не вдалось підключитись: '+esc(e.message)+'. Перевірте URL та налаштування деплойменту.';
@@ -806,7 +835,6 @@ async function initApp(){
   }catch(e){
     console.error('initApp error:',e);
     setSyncStatus('err');
-    // Try to use cached data
     buildGroups();
   }
   nav('clients');
@@ -844,6 +872,17 @@ function renderView(){
   else renderSettings();
 }
 
+// ─── HELPERS: які ID є в платіжній системі ────────────────────────────────────
+function getPaymentIds(){
+  var ids={};
+  for(var loc in S.groups){
+    S.groups[loc].forEach(function(g){
+      g.children.forEach(function(ch){ ids[ch.id]=true; });
+    });
+  }
+  return ids;
+}
+
 // ─── RENDER CLIENTS ───────────────────────────────────────────────────────────
 function renderClients(){
   var locs=visibleLocs();
@@ -853,23 +892,32 @@ function renderClients(){
     return;
   }
 
-  // Build group list across all visible locs
   var allGroups=[];
   locs.forEach(function(l){ (S.groups[l.loc]||[]).forEach(function(g){ if(allGroups.indexOf(g.group)<0) allGroups.push(g.group); }); });
 
-  // Summary
   var totalKids=0,totalDebt=0,debtors=0;
   locs.forEach(function(l){ (S.groups[l.loc]||[]).forEach(function(g){ g.children.forEach(function(ch){
     totalKids++;
     if(ch.status==='debt'||ch.status==='nopay'){ debtors++; totalDebt+=ch.debt||0; }
   }); }); });
 
+  // Рахуємо нових CRM-клієнтів (без платіжних даних)
+  var payIds=getPaymentIds();
+  var crmOnlyIds=Object.keys(S.crm).filter(function(id){
+    var c=S.crm[id];
+    if(!c||!c.name) return false;
+    if(payIds[id]) return false;
+    // фільтр по локації для директора
+    if(!isHR()&&c.loc!==S.user.loc) return false;
+    return true;
+  });
+
   var now=new Date();
   var mIdx=CFG.MONTHS_JS.indexOf(now.getMonth());
   var mName=mIdx>=0?CFG.MONTHS_DISP[mIdx]:now.toLocaleString('uk-UA',{month:'long'});
 
   var html='<div class="stats-grid">'
-    +'<div class="stat-card"><div class="stat-icon si-b">👶</div><div><div class="stat-val">'+totalKids+'</div><div class="stat-lbl">Всього дітей</div></div></div>'
+    +'<div class="stat-card"><div class="stat-icon si-b">👶</div><div><div class="stat-val">'+(totalKids+crmOnlyIds.length)+'</div><div class="stat-lbl">Всього дітей</div></div></div>'
     +'<div class="stat-card"><div class="stat-icon si-r">❌</div><div><div class="stat-val">'+debtors+'</div><div class="stat-lbl">Боржників</div></div></div>'
     +'<div class="stat-card"><div class="stat-icon si-o">💸</div><div><div class="stat-val">'+fmtN(Math.round(totalDebt))+'</div><div class="stat-lbl">Загальний борг (грн)</div></div></div>'
     +'<div class="stat-card"><div class="stat-icon si-g">📅</div><div><div class="stat-val">'+mName+'</div><div class="stat-lbl">'+(S.payUpdated?'Оновлено: '+S.payUpdated:'Поточний місяць')+'</div></div></div>'
@@ -883,6 +931,39 @@ function renderClients(){
     +'<button class="btn btn-primary btn-sm" onclick="openNewChild()" style="margin-left:auto;white-space:nowrap">➕ Додати дитину</button>'
     +'</div>';
 
+  // ── Нові CRM-клієнти (ще не в платіжній системі) ──────────────────────────
+  var crmFiltered=crmOnlyIds.filter(function(id){
+    var c=S.crm[id];
+    if(S.selLoc&&c.loc!==S.selLoc) return false;
+    if(S.selGroup&&c.group!==S.selGroup) return false;
+    if(S.searchQ&&c.name.toLowerCase().indexOf(S.searchQ.toLowerCase())<0) return false;
+    // статус-фільтр не застосовуємо (у них немає платіжного статусу)
+    return true;
+  });
+  if(crmFiltered.length){
+    var statusLabel={active:'✅ Активний',future:'📅 Майбутній',terminated:'❌ Розірваний',graduate:'🎓 Випускник'};
+    html+='<div class="loc-section">'
+      +'<div class="loc-title">📋 Нові клієнти <span style="font-size:13px;font-weight:400;color:var(--gray)">ще не в платіжній системі — '+crmFiltered.length+' дітей</span></div>'
+      +'<div class="card" style="margin-bottom:16px">'
+      +'<div class="tbl-wrap"><table><thead><tr>'
+      +'<th>Ім\'я дитини</th><th>Локація</th><th>Група</th><th>Статус клієнта</th><th>Телефон</th><th></th>'
+      +'</tr></thead><tbody>';
+    crmFiltered.forEach(function(id){
+      var c=S.crm[id];
+      var phone=c.momPhone||c.dadPhone||'';
+      html+='<tr class="clickable" onclick="openChild(\''+esc(id)+'\',\''+esc(c.group)+'\',\''+esc(c.teacher)+'\',\''+esc(c.loc)+'\',\''+esc(c.name)+'\')">'
+        +'<td><span class="child-link">'+esc(c.name)+'</span></td>'
+        +'<td>'+esc(c.loc)+'</td>'
+        +'<td>'+esc(c.group)+'</td>'
+        +'<td><span class="badge bg">'+(statusLabel[c.status]||c.status)+'</span></td>'
+        +'<td>'+(phone?'<a href="tel:'+esc(phone)+'" onclick="event.stopPropagation()" style="color:var(--blue2)">'+esc(phone)+'</a>':'<span style="color:var(--gray2)">—</span>')+'</td>'
+        +'<td>'+(phone?'<a href="tel:'+esc(phone)+'" onclick="event.stopPropagation()" class="call-btn">📞 Дзвонити</a>':'')+'</td>'
+        +'</tr>';
+    });
+    html+='</tbody></table></div></div></div>';
+  }
+
+  // ── Клієнти з платіжної системи ───────────────────────────────────────────
   var filtLocs=S.selLoc?locs.filter(function(l){ return l.loc===S.selLoc; }):locs;
   filtLocs.forEach(function(loc){
     var groups=(S.groups[loc.loc]||[]);
@@ -1002,7 +1083,7 @@ function renderSettings(){
     +'<div class="alert alert-info" style="margin-bottom:12px">CRM Sheet ID: <code style="font-size:11px">'+esc(CFG.CRM_SHEET_ID)+'</code></div>'
     +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">'
     +'<a href="https://docs.google.com/spreadsheets/d/'+esc(CFG.CRM_SHEET_ID)+'" target="_blank" class="btn btn-secondary btn-sm">📊 Відкрити CRM таблицю</a>'
-    +'<button class="btn btn-secondary btn-sm" onclick="makeSheetPublic()">🔓 Відкрити публічний доступ (для швидкого читання)</button>'
+    +'<button class="btn btn-secondary btn-sm" onclick="makeSheetPublic()">🔓 Відкрити публічний доступ</button>'
     +'</div>'
     +'<div id="publicMsg" style="font-size:13px"></div>'
     +'<div class="alert alert-warn" style="margin-top:10px;font-size:12px">⚠️ Публічний доступ дозволяє читати дані таблиці без авторизації. Запис залишається тільки через Apps Script.</div>'
@@ -1042,8 +1123,7 @@ async function makeSheetPublic(){
   try{
     var j=await apiGet('makePublic');
     if(j.ok){
-      el.innerHTML='<span style="color:var(--green)">✅ Публічний доступ відкрито. Тепер читання працює напряму через API key.</span>';
-      // clear payment/client cache to force fresh direct-API reads
+      el.innerHTML='<span style="color:var(--green)">✅ Публічний доступ відкрито.</span>';
       localStorage.removeItem(CFG.PAY_CACHE);
       localStorage.removeItem(CFG.CLI_CACHE);
     } else {
@@ -1059,10 +1139,8 @@ function setLocFieldMode(isNew){
   var sel=document.getElementById('fLocSel');
   var inp=document.getElementById('fLoc');
   if(isNew){
-    // populate select with locations
     sel.innerHTML='<option value="">— Оберіть локацію —</option>'
       +S.locs.map(function(l){ return '<option value="'+esc(l.loc)+'">'+esc(l.loc)+'</option>'; }).join('');
-    // if director, pre-select their location
     if(!isHR()&&S.user.loc) sel.value=S.user.loc;
     sel.classList.remove('hidden');
     inp.classList.add('hidden');
@@ -1077,10 +1155,8 @@ function openNewChild(){
   S.isNew=true;
   document.getElementById('mChildTitle').textContent='➕ Нова дитина';
   S.curTab=0;
-  // Reset all tabs to active=0
   document.querySelectorAll('#mChildTabs .tab').forEach(function(t,i){ t.classList.toggle('active',i===0); });
   document.querySelectorAll('.tab-pane').forEach(function(p,i){ p.classList.toggle('active',i===0); });
-  // Clear form
   ['fName','fBday','fTeacher','fMomName','fMomPhone','fDadName','fDadPhone',
    'fContractDate','fMonthlyFee','fEntryFee','fNotes'].forEach(function(id){
     document.getElementById(id).value='';
@@ -1141,7 +1217,7 @@ function populateForm(id){
   document.getElementById('fEntryFee').value=c.entryFee||'';
   document.getElementById('fNotes').value=c.notes||'';
   renderPayStatus(id);
-  updateContractType(); // auto-determines type from date + group
+  updateContractType();
 }
 
 function renderPayStatus(id){
@@ -1203,7 +1279,6 @@ function recalcDiscount(){
   var fee=parseFloat(document.getElementById('fMonthlyFee').value)||c.monthlyFee||0;
   var abs=c.absences||[];
 
-  // Preschool — no recalculation at all
   if(t==='preschool'){
     el.innerHTML='<div class="alert alert-info" style="margin-top:4px">Preschool: перерахунки не передбачені договором.</div>';
     return;
@@ -1216,14 +1291,12 @@ function recalcDiscount(){
   var html='<div style="display:flex;gap:10px;flex-wrap:wrap">';
 
   if(t==='standard'){
-    // vacation only: 25/50/75/100%
     var vacW=Math.min(4,weeksCeil(vacDays));
     var vacPct=[0,25,50,75,100][vacW];
     totalPct=vacPct;
     var remVac=Math.max(0,4-weeksCeil(vacDays));
     html+='<div class="vac-box"><div class="vac-num">'+weeksCeil(vacDays)+'</div><div><div class="vac-lbl">Тижнів відпустки</div><div class="vac-lbl" style="color:var(--green)">Залишок: '+remVac+' тиж.</div></div></div>';
   } else {
-    // sick-only: 5/10/15/20%
     var sickW=Math.min(4,weeksCeil(sickDays));
     var sickPct=[0,5,10,15,20][sickW];
     totalPct=sickPct;
@@ -1287,7 +1360,6 @@ function renderAbsences(){
   var abs=c.absences||[];
   var t=document.getElementById('fContractType').value;
 
-  // Info banner + add-form visibility
   var infoEl=document.getElementById('absTypeInfo');
   var addFormEl=document.querySelector('#tp3 .g3');
   var addBtnEl=document.querySelector('#tp3 .btn-secondary.btn-sm');
@@ -1302,11 +1374,9 @@ function renderAbsences(){
     return;
   }
 
-  // Show add-form for allowed types
   if(addFormEl) addFormEl.style.display='';
   if(addBtnEl) addBtnEl.style.display='';
 
-  // Limit absence type selector to what's allowed
   var absTypeEl=document.getElementById('fAbsType');
   if(t==='standard'){
     infoEl.className='alert alert-info';
@@ -1318,7 +1388,6 @@ function renderAbsences(){
     absTypeEl.innerHTML='<option value="sick">🤒 Хвороба</option>';
   }
 
-  // Summary boxes
   var vacDays=abs.filter(function(a){ return a.type==='vacation'; }).reduce(function(s,a){ return s+a.days; },0);
   var sickDays=abs.filter(function(a){ return a.type==='sick'; }).reduce(function(s,a){ return s+a.days; },0);
   var sumHtml='<div style="display:flex;gap:10px;flex-wrap:wrap">';
@@ -1332,16 +1401,13 @@ function renderAbsences(){
   sumHtml+='</div>';
   document.getElementById('absenceSummary').innerHTML=sumHtml;
 
-  // List of recorded absences
   var listEl=document.getElementById('absenceList'); if(!listEl) return;
-  // filter to only show relevant absences for this contract type
   var visAbs=t==='standard'
     ? abs.filter(function(a){ return a.type==='vacation'; })
     : abs.filter(function(a){ return a.type==='sick'; });
 
   listEl.innerHTML=!visAbs.length?'<p style="color:var(--gray);font-size:13px">Відсутностей не записано</p>'
-    :visAbs.map(function(a,i){
-      // find real index in abs array for delete
+    :visAbs.map(function(a){
       var realIdx=abs.indexOf(a);
       var w=weeksCeil(a.days);
       var pct=a.type==='vacation'?[0,25,50,75,100][Math.min(4,w)]:[0,5,10,15,20][Math.min(4,w)];
@@ -1354,9 +1420,8 @@ function renderAbsences(){
 function addAbsence(){
   var id=S.editId; if(!id) return;
   var ct=document.getElementById('fContractType').value;
-  if(ct==='preschool'){ alert('Pereschool: перерахунки не передбачені договором.'); return; }
+  if(ct==='preschool'){ alert('Preschool: перерахунки не передбачені договором.'); return; }
   var type=document.getElementById('fAbsType').value;
-  // enforce contract type restriction
   if(ct==='standard'&&type!=='vacation'){ alert('Стандарт: можна додавати тільки відпустки.'); return; }
   if(ct==='sick-only'&&type!=='sick'){ alert('Після 01.10.2025: можна додавати тільки хворобу.'); return; }
   var from=document.getElementById('fAbsFrom').value;
@@ -1365,7 +1430,6 @@ function addAbsence(){
   var f=pd(from), t=pd(to);
   if(!f||!t||t<f){ alert('Невірний діапазон'); return; }
   var days=diffDays(f,t)+1;
-  // check 4-week cap
   var abs=getCRMCard(id).absences||[];
   var usedDays=abs.filter(function(a){ return a.type===type; }).reduce(function(s,a){ return s+a.days; },0);
   if(weeksCeil(usedDays+days)>4){ alert('Ліміт 4 тижні на рік вичерпано'); return; }
@@ -1376,7 +1440,7 @@ function addAbsence(){
 }
 function delAbsence(i){ getCRMCard(S.editId).absences.splice(i,1); renderAbsences(); recalcDiscount(); }
 
-// Save
+// ─── SAVE ─────────────────────────────────────────────────────────────────────
 function saveChild(){
   var name=document.getElementById('fName').value.trim();
   if(!name){ alert('Вкажіть ПІБ дитини'); return; }
@@ -1424,7 +1488,6 @@ function saveChild(){
 
 // ─── BOOTSTRAP ────────────────────────────────────────────────────────────────
 (function bootstrap(){
-  // SCRIPT_URL is hardcoded — always go straight to login
   document.getElementById('loginScreen').classList.remove('hidden');
   preloadLocations();
 })();
