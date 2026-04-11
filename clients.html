@@ -616,32 +616,46 @@ function updUserUI(){
 function isHR(){ return S.user&&S.user.role==='hr'; }
 
 // ─── LOCATIONS LOADING ────────────────────────────────────────────────────────
+let _locError = '';
 async function fetchLocations(force=false){
   if(!force){
     const c=localStorage.getItem(CFG.LOC_CACHE);
     if(c){ const {data,ts}=JSON.parse(c); if(Date.now()-ts<CFG.TTL){ S.locs=data; return; } }
   }
-  const range=encodeURIComponent('A2:E200');
-  const url=`https://sheets.googleapis.com/v4/spreadsheets/${CFG.CONFIG_SHEET}/values/${range}?key=${CFG.API_KEY}`;
-  try{
-    const r=await fetch(url);
-    if(!r.ok) throw new Error(r.status);
-    const j=await r.json();
-    S.locs=(j.values||[])
-      .filter(row=>row[2]&&row[3])
-      .map(row=>({
+  // Try without sheet name first (reads first sheet), then with explicit Sheet1
+  const ranges=['A1:E300', 'Sheet1!A1:E300', 'Аркуш1!A1:E300'];
+  let lastErr='';
+  for(const range of ranges){
+    const url=`https://sheets.googleapis.com/v4/spreadsheets/${CFG.CONFIG_SHEET}/values/${encodeURIComponent(range)}?key=${CFG.API_KEY}`;
+    try{
+      const r=await fetch(url);
+      if(!r.ok){
+        const errJ=await r.json().catch(()=>({}));
+        lastErr=`HTTP ${r.status}: ${errJ.error&&errJ.error.message||r.statusText}`;
+        continue;
+      }
+      const j=await r.json();
+      const rows=(j.values||[]).filter(row=>row[2]&&row[3]&&row[2].trim()&&row[3].trim());
+      if(rows.length===0 && range===ranges[0]){ lastErr='Знайдено 0 рядків з даними (перевірте колонки C та D)'; continue; }
+      S.locs=rows.map(row=>({
         dir:(row[0]||'').trim(),
         typ:(row[1]||'').trim(),
         loc:(row[2]||'').trim(),
         sheetId:(row[3]||'').trim(),
         sheetName:(row[4]||'Payment').trim()
       }));
-    localStorage.setItem(CFG.LOC_CACHE,JSON.stringify({data:S.locs,ts:Date.now()}));
-  }catch(e){
-    console.warn('Locations load error:',e);
-    const c=localStorage.getItem(CFG.LOC_CACHE);
-    if(c) S.locs=JSON.parse(c).data;
+      localStorage.setItem(CFG.LOC_CACHE,JSON.stringify({data:S.locs,ts:Date.now()}));
+      _locError='';
+      return;
+    }catch(e){
+      lastErr=e.message||String(e);
+    }
   }
+  // All attempts failed — use cache if available
+  _locError=lastErr;
+  console.error('fetchLocations failed:', lastErr);
+  const c=localStorage.getItem(CFG.LOC_CACHE);
+  if(c) S.locs=JSON.parse(c).data;
 }
 
 function fillLoginLocs(){
@@ -841,7 +855,20 @@ function toggleSidebar(){ document.getElementById('sidebar').classList.toggle('o
 // ─── RENDER CLIENTS ───────────────────────────────────────────────────────────
 function renderClients(){
   const locs=visibleLocs();
-  if(!locs.length){ document.getElementById('main').innerHTML='<div class="empty"><span class="ei">📋</span><h4>Немає даних</h4><p>Не вдалось завантажити список локацій</p></div>'; return; }
+  if(!locs.length){
+    const errMsg=_locError?`<p style="color:var(--red2);font-size:12px;margin-top:8px;word-break:break-all">Помилка: ${esc(_locError)}</p>`:'';
+    document.getElementById('main').innerHTML=`<div class="empty"><span class="ei">📋</span><h4>Не вдалось завантажити локації</h4>
+      <p>Перевірте що Google Sheets відкритий для читання (Поділитися → Будь-хто з посиланням)</p>${errMsg}
+      <div style="margin-top:16px;display:flex;gap:8px;justify-content:center">
+        <button class="btn btn-primary btn-sm" onclick="refreshAll()">🔄 Спробувати ще раз</button>
+        <button class="btn btn-secondary btn-sm" onclick="nav('settings')">⚙️ Налаштування</button>
+      </div>
+      <div style="margin-top:12px;font-size:11px;color:var(--gray)">
+        Config Sheet ID: ${esc(CFG.CONFIG_SHEET)}<br>API Key: ${esc(CFG.API_KEY.slice(0,12))}…
+      </div>
+    </div>`;
+    return;
+  }
 
   // Build filters
   const allGroups=[];
@@ -1369,11 +1396,14 @@ function saveChild(){
 
 // ─── BOOTSTRAP ────────────────────────────────────────────────────────────────
 (async function bootstrap(){
-  // Pre-load locations for login dropdown
-  try{
-    await fetchLocations();
+  const locSel=document.getElementById('loginLocation');
+  locSel.innerHTML='<option value="">Завантаження локацій…</option>';
+  await fetchLocations();
+  if(S.locs.length){
     fillLoginLocs();
-  }catch(e){ console.warn('Pre-load locations error:',e); }
+  } else {
+    locSel.innerHTML='<option value="">⚠️ Помилка завантаження'+(_locError?' ('+_locError.slice(0,60)+'…)':'')+' — увійдіть як HR</option>';
+  }
 })();
 </script>
 </body>
