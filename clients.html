@@ -717,17 +717,22 @@ function buildGroups(){
       S.groups[loc].push(g);
       grpMap[key]=g;
     }
-    var bud=+row['Бюджет']||0;
-    var fs=+row['Факт навчання']||0;
-    var fe=+row['Факт доп.']||0;
-    var total=+row['Факт разом']||(fs+fe);
+    // Підтримка нових (v4) і старих колонок
+    var fs=+(row['Факт навчання']||0);
+    var fv=+(row['Факт вступний']||0);
+    var fe=+(row['Факт доп.']||0);
+    var bs=+(row['Бюджет навчання']||0);
+    var be=+(row['Бюджет доп.']||0);
+    var total=+(row['Факт разом']||0)||(fs+fv+fe);
+    var bud=+(row['Бюджет разом']||0)||(bs+be)||+(row['Бюджет']||0);
     var status=String(row['Статус']||'unknown');
     var debt=bud>total?bud-total:0;
     var id=childId(name,grp,loc);
     grpMap[key].children.push({
       name:name,loc:loc,group:grp,teacher:grpMap[key].teacher,
-      factStudy:fs,factExtra:fe,factTotal:total,
-      budget:bud,status:status,debt:debt,id:id
+      factStudy:fs,factEntry:fv,factExtra:fe,factTotal:total,
+      budgetStudy:bs,budgetExtra:be,budget:bud,
+      status:status,debt:debt,id:id
     });
   });
 }
@@ -991,7 +996,7 @@ function renderClients(){
         +'<span style="font-size:12px;color:var(--gray)">'+(grp.teacher?'Вихователь: '+esc(grp.teacher)+' &nbsp;|&nbsp; ':'')+children.length+' дітей</span></div>'
         +'<div class="tbl-wrap"><table><thead><tr>'
         +'<th>Ім\'я дитини</th><th>Статус оплати</th><th>Борг (грн)</th>'
-        +'<th>Факт (грн)</th><th>Бюджет (грн)</th><th>Телефон</th><th></th>'
+        +'<th>Навчання</th><th>Вступний</th><th>Доп.</th><th>Бюджет (грн)</th><th>Телефон</th><th></th>'
         +'</tr></thead><tbody>';
 
       children.forEach(function(ch){
@@ -1001,7 +1006,9 @@ function renderClients(){
           +'<td><span class="child-link">'+esc(ch.name)+'</span></td>'
           +'<td>'+payBadge(ch.status,ch.debt)+'</td>'
           +'<td>'+(ch.debt>0?'<b style="color:var(--red2)">'+fmtN(Math.round(ch.debt))+'</b>':'—')+'</td>'
-          +'<td>'+fmtN(ch.factTotal)+'</td>'
+          +'<td>'+(ch.factStudy?fmtN(ch.factStudy):'—')+'</td>'
+          +'<td>'+(ch.factEntry?fmtN(ch.factEntry):'—')+'</td>'
+          +'<td>'+(ch.factExtra?fmtN(ch.factExtra):'—')+'</td>'
           +'<td>'+fmtN(ch.budget)+'</td>'
           +'<td>'+(phone?'<a href="tel:'+esc(phone)+'" onclick="event.stopPropagation()" style="color:var(--blue2)">'+esc(phone)+'</a>':'<span style="color:var(--gray2)">—</span>')+'</td>'
           +'<td>'+(phone?'<a href="tel:'+esc(phone)+'" onclick="event.stopPropagation()" class="call-btn">📞 Дзвонити</a>':'')+'</td>'
