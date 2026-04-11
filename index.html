@@ -2038,9 +2038,10 @@ function renderVacSchedule(){
         ${locs.map(l=>`<option value="${l}" ${vacSchedLoc===l?'selected':''}>${l}</option>`).join('')}
       </select>`:''}
       <select class="flt-sel" style="min-width:160px" onchange="vacSchedPos=this.value;renderVacSchedule()">
-        <option value="">Всі посади</option>
+        <option value="">Всі посади${poss.length>0?` (${poss.length})`:''}</option>
         ${poss.map(p=>`<option value="${p}" ${vacSchedPos===p?'selected':''}>${p}</option>`).join('')}
-      </select>      <div style="display:flex;gap:4px">
+      </select>
+      <div style="display:flex;gap:4px">
         <button class="btn btn-${vacSchedMode==='year'?'primary':'secondary'} btn-sm" onclick="vacSchedMode='year';renderVacSchedule()">📅 Рік</button>
         <button class="btn btn-${vacSchedMode==='month'?'primary':'secondary'} btn-sm" onclick="vacSchedMode='month';renderVacSchedule()">🗓️ Місяць</button>
       </div>
@@ -2050,7 +2051,8 @@ function renderVacSchedule(){
       <select class="flt-sel" style="min-width:80px" onchange="vacSchedYear=+this.value;renderVacSchedule()">
         ${[2025,2026,2027].map(y=>`<option value="${y}" ${yr===y?'selected':''}>${y}</option>`).join('')}
       </select>
-      <span style="font-size:12px;color:var(--gray)">${emps.length} співроб. · ${currentlyOnVac} зараз у відпустці</span>
+      ${vacSchedPos||vacSchedLoc?`<button class="btn btn-secondary btn-sm" onclick="vacSchedPos='';vacSchedLoc='';renderVacSchedule()">✕ Скинути</button>`:''}
+      <span style="font-size:12px;color:var(--gray);margin-left:auto">${emps.length} співроб. · ${currentlyOnVac} зараз у відпустці</span>
     </div>
     <div class="card" style="padding:16px">
       ${vacSchedMode==='year'?buildYearView():buildMonthView()}
