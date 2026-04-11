@@ -443,16 +443,17 @@ tbody tr.clickable:hover td{background:#f0f7ff}
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 var CFG = {
-  SCRIPT_KEY:   'crm_script_url',
-  SK:           'crm_mkids_v3',
-  LOC_CACHE:    'crm_locs_v3',
-  PAY_CACHE:    'crm_pay_v3',
-  CLI_CACHE:    'crm_cli_v3',
-  PW_HR:        'hr2024',
-  TTL:          15 * 60 * 1000,
+  SCRIPT_KEY:    'crm_script_url',
+  SCRIPT_URL:    'https://script.google.com/macros/s/AKfycbx6TWtMdjGO3WD7WcA3v_WCouXmTb1YZi1DtIti-LgHluMG-i2PzJLRCAGvs_SX_2IP/exec',
+  SK:            'crm_mkids_v3',
+  LOC_CACHE:     'crm_locs_v3',
+  PAY_CACHE:     'crm_pay_v3',
+  CLI_CACHE:     'crm_cli_v3',
+  PW_HR:         'hr2024',
+  TTL:           15 * 60 * 1000,
   // Direct Sheets API (read-only, works when sheet is public)
-  API_KEY:      'AIzaSyBXY-1iAKeBdyWc7gbtNOe66yBa5-Mcmlc',
-  CRM_SHEET_ID: '1pA2q84BFsXWuUchIlu8um853od_PXr7KepLpTovUjLo',
+  API_KEY:       'AIzaSyBXY-1iAKeBdyWc7gbtNOe66yBa5-Mcmlc',
+  CRM_SHEET_ID:  '1pA2q84BFsXWuUchIlu8um853od_PXr7KepLpTovUjLo',
   MONTHS_UA:    ['вересень','жовтень','листопад','грудень','січень','лютий','березень','квітень','травень','червень','липень','серпень'],
   MONTHS_JS:    [8,9,10,11,0,1,2,3,4,5,6,7],
   MONTHS_DISP:  ['Вересень','Жовтень','Листопад','Грудень','Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень']
@@ -497,7 +498,7 @@ function genDirPw(loc){
 }
 
 // ─── SCRIPT URL ───────────────────────────────────────────────────────────────
-function getScriptUrl(){ return localStorage.getItem(CFG.SCRIPT_KEY)||''; }
+function getScriptUrl(){ return localStorage.getItem(CFG.SCRIPT_KEY)||CFG.SCRIPT_URL; }
 function setScriptUrl(u){ localStorage.setItem(CFG.SCRIPT_KEY,u.trim()); }
 function clearSetupUrl(){ localStorage.removeItem(CFG.SCRIPT_KEY); location.reload(); }
 
@@ -1263,13 +1264,9 @@ function saveChild(){
 
 // ─── BOOTSTRAP ────────────────────────────────────────────────────────────────
 (function bootstrap(){
-  var url=getScriptUrl();
-  if(!url){
-    document.getElementById('setupScreen').classList.remove('hidden');
-  } else {
-    document.getElementById('loginScreen').classList.remove('hidden');
-    preloadLocations();
-  }
+  // SCRIPT_URL is hardcoded — always go straight to login
+  document.getElementById('loginScreen').classList.remove('hidden');
+  preloadLocations();
 })();
 </script>
 </body>
