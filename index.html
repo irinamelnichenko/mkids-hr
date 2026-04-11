@@ -586,23 +586,36 @@ function translitUA(str){
     'ц':'ts','ч':'ch','ш':'sh','щ':'shch','ь':'','ю':'yu','я':'ya'};
   return str.toLowerCase().split('').map(c=>T[c]!==undefined?T[c]:/[a-z0-9]/.test(c)?c:'').join('');
 }
-function genLocPw(loc){return translitUA(loc)+'2025';}
+function genLocPw(loc,role='director'){
+  const base=translitUA(loc)+'2025';
+  return role==='nurse'?base+'n':base;
+}
 function autoGenPasswords(){
   const locs=[...new Set(S.emps.map(e=>e.loc).filter(Boolean))];
-  const existing=getAllDirPws();let changed=false;
-  locs.forEach(loc=>{if(!existing[loc]){existing[loc]=genLocPw(loc);changed=true;}});
-  if(changed)localStorage.setItem('hr_dir_pw',JSON.stringify(existing));
+  const dirPws=getAllDirPws(); const nursePws=getAllNursePws(); let changed=false;
+  locs.forEach(loc=>{
+    if(!dirPws[loc]){dirPws[loc]=genLocPw(loc,'director');changed=true;}
+    if(!nursePws[loc]){nursePws[loc]=genLocPw(loc,'nurse');changed=true;}
+  });
+  if(changed){localStorage.setItem('hr_dir_pw',JSON.stringify(dirPws));localStorage.setItem('hr_nurse_pw',JSON.stringify(nursePws));}
 }
 
 // ── AUTH ──
 let selRole = 'hr';
 function getDirPw(loc){
-  try{const m=JSON.parse(localStorage.getItem('hr_dir_pw')||'{}');return m[loc]||CFG.PW.director;}catch{return CFG.PW.director;}
+  try{const m=JSON.parse(localStorage.getItem('hr_dir_pw')||'{}');return m[loc]||genLocPw(loc,'director');}catch{return genLocPw(loc,'director');}
+}
+function getNursePw(loc){
+  try{const m=JSON.parse(localStorage.getItem('hr_nurse_pw')||'{}');return m[loc]||genLocPw(loc,'nurse');}catch{return genLocPw(loc,'nurse');}
 }
 function setDirPw(loc,pw){
   try{const m=JSON.parse(localStorage.getItem('hr_dir_pw')||'{}');m[loc]=pw;localStorage.setItem('hr_dir_pw',JSON.stringify(m));}catch(e){}
 }
+function setNursePw(loc,pw){
+  try{const m=JSON.parse(localStorage.getItem('hr_nurse_pw')||'{}');m[loc]=pw;localStorage.setItem('hr_nurse_pw',JSON.stringify(m));}catch(e){}
+}
 function getAllDirPws(){try{return JSON.parse(localStorage.getItem('hr_dir_pw')||'{}');}catch{return {};}}
+function getAllNursePws(){try{return JSON.parse(localStorage.getItem('hr_nurse_pw')||'{}');}catch{return {};}}
 function selectRole(r) {
   selRole=r;
   document.getElementById('tabHR').classList.toggle('active',r==='hr');
@@ -622,7 +635,7 @@ async function doLogin() {
   } else {
     const loc=document.getElementById('loginLocation').value;
     if(!loc){showErr('Оберіть локацію');return;}
-    const expected=getDirPw(loc);
+    const expected=selRole==='nurse'?getNursePw(loc):getDirPw(loc);
     if(pw!==expected){showErr('Невірний пароль для цієї локації');return;}
     S.user={role:selRole,loc};
     S.f={loc:'',pos:'',status:'',dir:'',typ:''};
@@ -1912,35 +1925,45 @@ function renderSettings(){
       </div>
       <div class="card" style="margin-bottom:18px">
         <div class="card-hd">
-          <h3>🏫 Паролі директорів по локаціях</h3>
+          <h3>🔑 Паролі по локаціях</h3>
           <div style="display:flex;gap:8px">
             <button class="btn btn-secondary btn-sm" onclick="copyAllPws()">📋 Скопіювати список</button>
             <button class="btn btn-secondary btn-sm" onclick="regenAllPws()">🔄 Перегенерувати</button>
           </div>
         </div>
         <div style="padding:14px 20px">
-          <div class="alert alert-info" style="font-size:12px;margin-bottom:12px">
-            ℹ️ Паролі генеруються автоматично: назва локації транслітом + 2025.<br>
-            Наприклад: <strong>Борщагівка → borshchahivka2025</strong>
+          <div class="alert alert-info" style="font-size:12px;margin-bottom:16px">
+            ℹ️ Кожна локація має <strong>два окремих паролі</strong> — для директора і для медсестри.<br>
+            За замовчуванням: директор — <code>назвалокації2025</code>, медсестра — <code>назвалокації2025n</code>
           </div>
           <div class="tbl-wrap">
-          <table><thead><tr><th>Тип</th><th>Локація</th><th>Пароль</th><th>Змінити</th></tr></thead>
+          <table><thead><tr><th>Локація</th><th>Тип</th><th>🏫 Пароль директора</th><th></th><th>🏥 Пароль медсестри</th><th></th></tr></thead>
           <tbody>
           ${[...new Set(S.emps.map(e=>e.loc).filter(Boolean))].sort().map(loc=>{
             const emp=S.emps.find(e=>e.loc===loc);
             const typ=emp?normType(emp.typ):'';
-            const safeId='dpw_'+loc.replace(/[^a-zA-Z0-9]/g,'_');
-            const pw=dirPws[loc]||genLocPw(loc);
+            const safeDir='dpw_'+loc.replace(/[^a-zA-Z0-9]/g,'_');
+            const safeNurse='npw_'+loc.replace(/[^a-zA-Z0-9]/g,'_');
+            const nursePws=getAllNursePws();
+            const dirPw=dirPws[loc]||genLocPw(loc,'director');
+            const nursePw=nursePws[loc]||genLocPw(loc,'nurse');
             return`<tr>
-              <td style="font-size:12px">${TYPE_ICONS[typ]||''} ${typ}</td>
               <td><strong>${loc}</strong></td>
-              <td><code style="background:#f8fafc;padding:3px 8px;border-radius:5px;font-size:13px;letter-spacing:.5px">${pw}</code></td>
-              <td style="min-width:220px">
-                <div style="display:flex;gap:6px">
-                  <input type="text" id="${safeId}" value="${esc(pw)}" style="padding:5px 9px;border:1.5px solid var(--gray2);border-radius:7px;font-size:12px;font-family:monospace;width:160px;outline:none">
-                  <button class="btn btn-primary btn-xs" onclick="saveDirPw('${esc(loc)}','${safeId}');renderSettings()">💾</button>
+              <td style="font-size:12px;color:var(--gray)">${TYPE_ICONS[typ]||''} ${typ}</td>
+              <td>
+                <div style="display:flex;gap:6px;align-items:center">
+                  <input type="text" id="${safeDir}" value="${esc(dirPw)}" style="padding:5px 9px;border:1.5px solid var(--gray2);border-radius:7px;font-size:12px;font-family:monospace;width:180px;outline:none">
+                  <button class="btn btn-primary btn-xs" onclick="saveDirPw('${esc(loc)}','${safeDir}');renderSettings()">💾</button>
                 </div>
               </td>
+              <td style="width:20px"></td>
+              <td>
+                <div style="display:flex;gap:6px;align-items:center">
+                  <input type="text" id="${safeNurse}" value="${esc(nursePw)}" style="padding:5px 9px;border:1.5px solid var(--gray2);border-radius:7px;font-size:12px;font-family:monospace;width:180px;outline:none">
+                  <button class="btn btn-primary btn-xs" onclick="saveNursePw('${esc(loc)}','${safeNurse}');renderSettings()">💾</button>
+                </div>
+              </td>
+              <td></td>
             </tr>`;
           }).join('')}
           </tbody></table>
@@ -2089,25 +2112,31 @@ function copyAppsScript(){
 function saveDirPw(loc,safeId){
   const pw=document.getElementById(safeId).value.trim();
   if(!pw){toast('⚠️ Введіть пароль');return;}
-  setDirPw(loc,pw);toast(`✅ Пароль для "${loc}" збережено`);
+  setDirPw(loc,pw);toast(`✅ Пароль директора для "${loc}" збережено`);
+}
+function saveNursePw(loc,safeId){
+  const pw=document.getElementById(safeId).value.trim();
+  if(!pw){toast('⚠️ Введіть пароль');return;}
+  setNursePw(loc,pw);toast(`✅ Пароль медсестри для "${loc}" збережено`);
 }
 function resetAllDirPw(){
-  if(!confirm('Скинути всі паролі директорів до стандартного?'))return;
-  localStorage.removeItem('hr_dir_pw');toast('✅ Всі паролі скинуто');renderSettings();
+  if(!confirm('Скинути всі паролі до стандартних?'))return;
+  localStorage.removeItem('hr_dir_pw');localStorage.removeItem('hr_nurse_pw');toast('✅ Всі паролі скинуто');renderSettings();
 }
 function regenAllPws(){
-  if(!confirm('Перегенерувати всі паролі директорів?\nПоточні паролі буде замінено.'))return;
-  localStorage.removeItem('hr_dir_pw');autoGenPasswords();toast('✅ Паролі перегенеровано');renderSettings();
+  if(!confirm('Перегенерувати всі паролі?\nПоточні паролі буде замінено.'))return;
+  localStorage.removeItem('hr_dir_pw');localStorage.removeItem('hr_nurse_pw');autoGenPasswords();toast('✅ Паролі перегенеровано');renderSettings();
 }
 function copyAllPws(){
-  const pws=getAllDirPws();
+  const dirPws=getAllDirPws(), nursePws=getAllNursePws();
   const locs=[...new Set(S.emps.map(e=>e.loc).filter(Boolean))].sort();
-  const lines=locs.map(loc=>{
-    const emp=S.emps.find(e=>e.loc===loc);
-    const typ=emp?normType(emp.typ):'';
-    const pw=pws[loc]||genLocPw(loc);
-    return `${typ} | ${loc}: ${pw}`;
-  });
+  const lines=['=== ПАРОЛІ ДИРЕКТОРІВ ===',...locs.map(loc=>{
+    const emp=S.emps.find(e=>e.loc===loc);const typ=emp?normType(emp.typ):'';
+    return`${typ} | ${loc}: ${dirPws[loc]||genLocPw(loc,'director')}`;
+  }),'','=== ПАРОЛІ МЕДСЕСТЕР ===',...locs.map(loc=>{
+    const emp=S.emps.find(e=>e.loc===loc);const typ=emp?normType(emp.typ):'';
+    return`${typ} | ${loc}: ${nursePws[loc]||genLocPw(loc,'nurse')}`;
+  })];
   navigator.clipboard.writeText(lines.join('\n')).then(()=>toast('📋 Скопійовано!')).catch(()=>{
     const ta=document.createElement('textarea');ta.value=lines.join('\n');document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();toast('📋 Скопійовано!');
   });
