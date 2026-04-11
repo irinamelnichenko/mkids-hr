@@ -903,7 +903,7 @@ function renderClients(){
   var totalKids=0,totalDebt=0,debtors=0;
   locs.forEach(function(l){ (S.groups[l.loc]||[]).forEach(function(g){ g.children.forEach(function(ch){
     totalKids++;
-    if(ch.status==='debt'||ch.status==='nopay'){ debtors++; totalDebt+=ch.debt||0; }
+    if(ch.status==='debt'||ch.status==='nopay'){ debtors++; totalDebt+=(ch.budget||0); }
   }); }); });
 
   // Рахуємо нових CRM-клієнтів (без платіжних даних)
@@ -932,7 +932,7 @@ function renderClients(){
     +'<input class="search-inp" placeholder="🔍 Пошук по імені…" value="'+esc(S.searchQ)+'" oninput="S.searchQ=this.value;renderClients()">'
     +(isHR()?'<select class="flt-sel" onchange="S.selLoc=this.value;S.selGroup=\'\';renderClients()"><option value="">Всі локації</option>'+locs.map(function(l){ return '<option value="'+esc(l.loc)+'"'+(S.selLoc===l.loc?' selected':'')+'>'+esc(l.loc)+'</option>'; }).join('')+'</select>':'')
     +'<select class="flt-sel" onchange="S.selGroup=this.value;renderClients()"><option value="">Всі групи</option>'+allGroups.map(function(g){ return '<option value="'+esc(g)+'"'+(S.selGroup===g?' selected':'')+'>'+esc(g)+'</option>'; }).join('')+'</select>'
-    +'<select class="flt-sel" onchange="S.selStatus=this.value;renderClients()"><option value="">Всі статуси</option><option value="paid"'+(S.selStatus==='paid'?' selected':'')+'>✅ Оплачено</option><option value="debt"'+(S.selStatus==='debt'?' selected':'')+'>❌ Борг</option><option value="nopay"'+(S.selStatus==='nopay'?' selected':'')+'>⛔ Не платив</option><option value="over"'+(S.selStatus==='over'?' selected':'')+'>💰 Переплата</option></select>'
+    +'<select class="flt-sel" onchange="S.selStatus=this.value;renderClients()"><option value="">Всі статуси</option><option value="paid"'+(S.selStatus==='paid'?' selected':'')+'>✅ Оплачено</option><option value="debt"'+(S.selStatus==='debt'?' selected':'')+'>❌ Борг</option><option value="over"'+(S.selStatus==='over'?' selected':'')+'>💰 Переплата</option></select>'
     +'<button class="btn btn-primary btn-sm" onclick="openNewChild()" style="margin-left:auto;white-space:nowrap">➕ Додати дитину</button>'
     +'</div>';
 
@@ -976,7 +976,7 @@ function renderClients(){
     if(!filtGroups.length) return;
 
     var locKids=0,locDebt=0,locDebtors=0;
-    filtGroups.forEach(function(g){ g.children.forEach(function(ch){ locKids++; if(ch.status==='debt'||ch.status==='nopay'){locDebtors++;locDebt+=ch.debt||0;} }); });
+    filtGroups.forEach(function(g){ g.children.forEach(function(ch){ locKids++; if(ch.status==='debt'||ch.status==='nopay'){locDebtors++;locDebt+=(ch.status==='nopay'?ch.budget:ch.debt)||0;} }); });
 
     html+='<div class="loc-section"><div class="loc-title">🏫 '+esc(loc.loc)
       +'<span style="font-size:13px;font-weight:400;color:var(--gray)">'
@@ -985,7 +985,11 @@ function renderClients(){
 
     filtGroups.forEach(function(grp){
       var children=grp.children.filter(function(ch){
-        if(S.selStatus&&ch.status!==S.selStatus) return false;
+        if(S.selStatus){
+          // nopay і debt — обидва є "борг"
+          var chSt=(ch.status==='nopay'?'debt':ch.status);
+          if(chSt!==S.selStatus) return false;
+        }
         if(S.searchQ&&ch.name.toLowerCase().indexOf(S.searchQ.toLowerCase())<0) return false;
         return true;
       });
@@ -1002,10 +1006,16 @@ function renderClients(){
       children.forEach(function(ch){
         var card=S.crm[ch.id]||{};
         var phone=card.momPhone||card.dadPhone||'';
+        var over=ch.factTotal>ch.budget?ch.factTotal-ch.budget:0;
+        var debtAmt=ch.status==='nopay'?ch.budget:(ch.debt||0);
+        var crmCard=S.crm[ch.id]||{};
+        var entryFee=crmCard.entryFee||0;
+        var entryPaid=(crmCard.entryFeeSchedule||[]).reduce(function(s,r){return s+r.amount;},0);
+        var entryIcon=entryFee===0?'':(entryPaid>=entryFee?'<span title="Вступний сплачено" style="color:var(--green)">✅</span>':entryPaid>0?'<span title="Вступний частково: '+fmtN(entryPaid)+'/'+fmtN(entryFee)+'" style="color:var(--orange)">⚠️</span>':'<span title="Вступний не сплачено: '+fmtN(entryFee)+' грн" style="color:var(--red2)">❌</span>');
         html+='<tr class="clickable" onclick="openChild(\''+esc(String(ch.id||''))+'\',\''+esc(String(ch.group||''))+'\',\''+esc(String(ch.teacher||grp.teacher||''))+'\',\''+esc(String(ch.loc||''))+'\',\''+esc(String(ch.name||''))+'\')">'
-          +'<td><span class="child-link">'+esc(ch.name)+'</span></td>'
-          +'<td>'+payBadge(ch.status,ch.debt)+'</td>'
-          +'<td>'+(ch.debt>0?'<b style="color:var(--red2)">'+fmtN(Math.round(ch.debt))+'</b>':'—')+'</td>'
+          +'<td><span class="child-link">'+esc(ch.name)+'</span>'+(entryIcon?' '+entryIcon:'')+'</td>'
+          +'<td>'+payBadge(ch.status,debtAmt,over)+'</td>'
+          +'<td>'+(debtAmt>0&&ch.status!=='paid'&&ch.status!=='over'?'<b style="color:var(--red2)">'+fmtN(Math.round(debtAmt))+'</b>':over>0?'<span style="color:var(--orange)">+'+fmtN(Math.round(over))+'</span>':'—')+'</td>'
           +'<td>'+(ch.factStudy?fmtN(ch.factStudy):'—')+'</td>'
           +'<td>'+(ch.factEntry?fmtN(ch.factEntry):'—')+'</td>'
           +'<td>'+(ch.factExtra?fmtN(ch.factExtra):'—')+'</td>'
@@ -1022,10 +1032,10 @@ function renderClients(){
   document.getElementById('main').innerHTML=html;
 }
 
-function payBadge(status,debt){
+function payBadge(status,debt,over){
   if(status==='paid')  return '<span class="badge bg">✅ Оплачено</span>';
-  if(status==='nopay') return '<span class="badge br">⛔ Не платив</span>';
-  if(status==='over')  return '<span class="badge by">💰 Переплата</span>';
+  if(status==='nopay') return '<span class="badge br">❌ Борг '+(debt?fmtN(Math.round(debt))+' грн':'')+'</span>';
+  if(status==='over')  return '<span class="badge by">💰 Переплата '+(over?fmtN(Math.round(over))+' грн':'')+'</span>';
   if(status==='debt')  return '<span class="badge br">❌ Борг '+(debt?fmtN(Math.round(debt))+' грн':'')+'</span>';
   return '<span class="badge bgr">— Немає даних</span>';
 }
