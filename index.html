@@ -1020,9 +1020,10 @@ function renderEmpCard(){
   const e=S.emps[S.empId]; if(!e){nav('employees');return;}
   const yr=new Date().getFullYear();
   const act=isActive(e),r=rec(e.key);
-  const vEarned=vacEarned(e);         // доступно всього за фактичний стаж
-  const vUsed=vacUsed(e.key);         // використано всього (без фільтра по року)
-  const vBal=Math.max(0,vEarned-vUsed); // залишок
+  const isNurse=S.user.role==='nurse';
+  const vEarned=vacEarned(e);
+  const vUsed=vacUsed(e.key);
+  const vBal=Math.max(0,vEarned-vUsed);
   const ov=vUsed>vEarned;
   const pct=Math.min(100,Math.round(vEarned>0?vUsed/vEarned*100:0));
   const su=sickUsed(e.key),sal=curSal(e.key),t=tenure(e);
@@ -1047,21 +1048,21 @@ function renderEmpCard(){
         ${act?`<div class="emp-btns">
           <button class="btn btn-ghost" onclick="openVac(${e.id})">🏖️ Відпустка</button>
           <button class="btn btn-ghost" onclick="openSick(${e.id})">🏥 Лікарняний</button>
-          <button class="btn btn-ghost" onclick="openSal(${e.id})">💰 Зарплата</button>
+          ${!isNurse?`<button class="btn btn-ghost" onclick="openSal(${e.id})">💰 Зарплата</button>`:''}
         </div>`:''}
       </div>
       <div class="qs-grid">
         <div class="qs-item"><div class="qs-val">${t?`${t.yr}р ${t.mo}м`:'—'}</div><div class="qs-lbl">Стаж</div></div>
         <div class="qs-item"><div class="qs-val" style="color:${ov?'#e74c3c':'var(--dark)'};">${vUsed}<span style="font-size:14px;color:var(--gray)">/${vEarned}</span></div><div class="qs-lbl">Відпустка використано/доступно</div></div>
         <div class="qs-item"><div class="qs-val" style="color:${vBal===0?'#e74c3c':vBal<3?'#e67e22':'#27ae60'}">${vBal}</div><div class="qs-lbl">Залишок днів відпустки</div></div>
-        <div class="qs-item"><div class="qs-val" style="color:#27ae60;font-size:18px">${sal?Number(sal.amount).toLocaleString('uk-UA'):'—'}</div><div class="qs-lbl">Зарплата (грн)</div></div>
+        ${!isNurse?`<div class="qs-item"><div class="qs-val" style="color:#27ae60;font-size:18px">${sal?Number(sal.amount).toLocaleString('uk-UA'):'—'}</div><div class="qs-lbl">Зарплата (грн)</div></div>`:''}
       </div>
       ${ov?`<div class="alert alert-danger" style="margin:14px;border-radius:8px">⚠️ Перевищено ліміт! Використано <strong>${vUsed}</strong> з <strong>${vEarned}</strong> зароблених днів</div>`:''}
       <div class="tabs" id="empTabs">
         <div class="tab active" data-tab="tInfo" onclick="switchTab(this)">📋 Інфо</div>
         <div class="tab" data-tab="tVac" onclick="switchTab(this)">🏖️ Відпустки (${r.vacs.length})</div>
         <div class="tab" data-tab="tSick" onclick="switchTab(this)">🏥 Лікарняні (${r.sicks.length})</div>
-        <div class="tab" data-tab="tSal" onclick="switchTab(this)">💰 Зарплата (${r.sals.length})</div>
+        ${!isNurse?`<div class="tab" data-tab="tSal" onclick="switchTab(this)">💰 Зарплата (${r.sals.length})</div>`:''}
         <div class="tab" data-tab="tLine" onclick="switchTab(this)">📅 Хронологія</div>
       </div>
       <div id="tInfo" class="tab-pane active">
@@ -1358,7 +1359,7 @@ function renderAnalytics(){
     ${filterBar}
     <div style="display:grid;grid-template-columns:${isHR?'1fr 1fr':'1fr'};gap:18px">
 
-    <div class="card" style="grid-column:1/-1">
+    ${!isNurse?`<div class="card" style="grid-column:1/-1">
       <div class="card-hd" style="flex-wrap:wrap;gap:10px">
         <h3>💰 Зарплатна аналітика</h3>
         <span style="font-size:12px;color:var(--gray);margin-left:auto">
@@ -1375,7 +1376,7 @@ function renderAnalytics(){
           ${salTblLoc()}
         </div>
       </div>
-    </div>
+    </div>`:''}
       <div class="chart-card"><h4>👔 Розподіл за посадами</h4><div class="bar-chart">
         ${Object.entries(byPos).sort((a,b)=>b[1]-a[1]).slice(0,12).map(([p,n])=>`
         <div class="bar-row"><div class="bar-lbl" title="${p}">${p}</div>
@@ -1394,7 +1395,7 @@ function renderAnalytics(){
         <div class="bar-track"><div class="bar-fill" style="width:${Math.round(t.avg/maxT*100)}%;background:#9b59b6"></div></div>
         <div class="bar-val">${t.avg>12?`${Math.floor(t.avg/12)}р ${t.avg%12}м`:`${t.avg}м`}</div></div>`).join('')}
       </div></div>
-      <div class="chart-card">
+      ${!isNurse?`<div class="chart-card">
         <h4>📉 Плинність кадрів${analyticsTypFilter?' — '+analyticsTypFilter:''}${analyticsLocFilter?' · '+analyticsLocFilter:''}</h4>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;align-items:center">
           <span style="font-size:11px;color:var(--gray);white-space:nowrap">Рік:</span>
@@ -1435,7 +1436,7 @@ function renderAnalytics(){
           </div>`).join('')}
           ${dismissed.length>8?`<div style="font-size:11px;color:var(--gray);margin-top:4px">+ ще ${dismissed.length-8}</div>`:''}
         </div>`:''}
-      </div>
+      </div>`:''}
 
       <div class="chart-card" style="grid-column:1/-1">
         <h4>📋 Табель відвідуваності${analyticsTypFilter?' — '+analyticsTypFilter:''}${analyticsLocFilter?' · '+analyticsLocFilter:''}</h4>
