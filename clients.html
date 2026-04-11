@@ -189,6 +189,18 @@ tbody tr.clickable:hover td{background:#f0f7ff}
 .fr-note{color:var(--gray);flex:1}
 .del-btn{margin-left:auto;background:none;border:none;cursor:pointer;color:var(--gray);font-size:16px;padding:2px 6px}
 .del-btn:hover{color:var(--red2)}
+
+/* PAY HISTORY TABLE */
+.pay-hist-table{width:100%;border-collapse:collapse;font-size:13px}
+.pay-hist-table th{padding:8px 12px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--gray);background:#f8fafc;border-bottom:2px solid #e8ecf0}
+.pay-hist-table td{padding:9px 12px;border-bottom:1px solid #f0f4f8}
+.pay-hist-table tr:last-child td{border-bottom:none}
+.pay-hist-table tr:hover td{background:#f8faff}
+.pay-hist-month{font-weight:700;color:var(--dark2)}
+.pay-hist-paid{color:var(--green);font-weight:600}
+.pay-hist-debt{color:var(--red2);font-weight:600}
+.pay-hist-over{color:var(--orange);font-weight:600}
+
 ::-webkit-scrollbar{width:6px;height:6px}
 ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:#dde3ea;border-radius:3px}
@@ -332,10 +344,11 @@ tbody tr.clickable:hover td{background:#f0f7ff}
       <div class="tab" onclick="switchTab(1)">📋 Договір</div>
       <div class="tab" onclick="switchTab(2)">💳 Внески</div>
       <div class="tab" onclick="switchTab(3)">🏖️ Відпустки</div>
-      <div class="tab" onclick="switchTab(4)">📝 Нотатки</div>
+      <div class="tab" onclick="switchTab(4)">📊 Історія оплат</div>
+      <div class="tab" onclick="switchTab(5)">📝 Нотатки</div>
     </div>
     <div class="modal-bd">
-      <!-- Tab 0 -->
+      <!-- Tab 0: Основне -->
       <div class="tab-pane active" id="tp0">
         <div id="tpPayStatus" style="margin-bottom:14px"></div>
         <div class="section-hd">Основна інформація</div>
@@ -386,7 +399,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
           </div>
         </div>
       </div>
-      <!-- Tab 1 -->
+      <!-- Tab 1: Договір -->
       <div class="tab-pane" id="tp1">
         <div class="g2">
           <div class="fg"><label>Дата підписання договору</label>
@@ -409,7 +422,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
           <button class="btn btn-secondary btn-sm" onclick="addFeeHistory()">+ Додати</button>
         </div>
       </div>
-      <!-- Tab 2 -->
+      <!-- Tab 2: Внески -->
       <div class="tab-pane" id="tp2">
         <div class="fg"><label>Вступний внесок — загальна сума (грн)</label>
           <input type="number" id="fEntryFee" placeholder="0" oninput="renderEntryFee()"></div>
@@ -423,7 +436,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
         </div>
         <div id="entryFeeSummary" style="margin-top:12px"></div>
       </div>
-      <!-- Tab 3 -->
+      <!-- Tab 3: Відпустки -->
       <div class="tab-pane" id="tp3">
         <div id="absTypeInfo" class="alert alert-info" style="margin-bottom:12px"></div>
         <div id="absenceSummary" style="margin-bottom:12px"></div>
@@ -441,8 +454,14 @@ tbody tr.clickable:hover td{background:#f0f7ff}
         <div class="section-hd" style="margin-top:14px">Записані відсутності</div>
         <div id="absenceList"></div>
       </div>
-      <!-- Tab 4 -->
+      <!-- Tab 4: Історія оплат -->
       <div class="tab-pane" id="tp4">
+        <div id="payHistContent">
+          <div class="loading"><div class="spinner"></div><p>Завантаження…</p></div>
+        </div>
+      </div>
+      <!-- Tab 5: Нотатки -->
+      <div class="tab-pane" id="tp5">
         <div class="fg"><label>Нотатки</label>
           <textarea id="fNotes" rows="8" placeholder="Будь-які нотатки…" style="resize:vertical"></textarea>
         </div>
@@ -482,6 +501,8 @@ var S = {
   payments: [],
   groups:   {},
   crm:      {},
+  // allPayRows: всі рядки з усіх місяців для історії
+  allPayRows: [],
   view:     'clients',
   selLoc:   '',
   selGroup: '',
@@ -515,27 +536,20 @@ function genDirPw(loc){
 }
 
 // ─── PHONE FORMAT ─────────────────────────────────────────────────────────────
-// Користувач вводить цифри починаючи з 0, автоматично ставиться +38
 function fmtPhone(inp){
   var raw = inp.value;
-  // витягуємо тільки цифри
   var digits = raw.replace(/\D/g,'');
-  // якщо починається з 380... — прибираємо 38
   if(digits.startsWith('380')) digits = digits.slice(2);
   else if(digits.startsWith('38') && digits.length > 2) digits = digits.slice(2);
-  // максимум 10 цифр (0XX XXX XX XX)
   digits = digits.slice(0,10);
-  // формуємо результат
   if(digits.length === 0){
     inp.value = '';
   } else {
     inp.value = '+38' + digits;
   }
-  // курсор в кінець
   setTimeout(function(){ inp.setSelectionRange(inp.value.length, inp.value.length); }, 0);
 }
 function phoneKeyDown(inp, e){
-  // якщо натиснули Backspace і залишився тільки +38 — чистимо повністю
   if(e.key === 'Backspace' && (inp.value === '+38' || inp.value === '+3')){
     e.preventDefault();
     inp.value = '';
@@ -648,6 +662,22 @@ async function loadPayments(force){
   buildGroups();
 }
 
+// ─── LOAD ALL PAYMENT HISTORY (всі місяці) ────────────────────────────────────
+async function loadAllPayHistory(){
+  // Намагаємось читати всі листи Payment_YYYY-MM або Payment_MonthName
+  // Спочатку пробуємо через Apps Script
+  S.allPayRows=[];
+  try{
+    var j=await apiGet('getAllPayments');
+    S.allPayRows=j.data||[];
+    console.log('All payment history loaded: '+S.allPayRows.length+' rows');
+  }catch(e){
+    // Fallback: використовуємо поточні S.payments як єдиний доступний місяць
+    console.warn('getAllPayments not available, using current month data');
+    S.allPayRows=S.payments.slice();
+  }
+}
+
 async function loadClients(force){
   if(!force){
     var c=localStorage.getItem(CFG.CLI_CACHE);
@@ -717,7 +747,6 @@ function buildGroups(){
       S.groups[loc].push(g);
       grpMap[key]=g;
     }
-    // Підтримка нових (v4) і старих колонок
     var fs=+(row['Факт навчання']||0);
     var fv=+(row['Факт вступний']||0);
     var fe=+(row['Факт доп.']||0);
@@ -836,6 +865,8 @@ async function initApp(){
     await loadLocations(false);
     await loadPayments(false);
     await loadClients(false);
+    // Завантажуємо всю історію оплат у фоні
+    loadAllPayHistory().catch(function(e){ console.warn('History load failed:', e); });
     setSyncStatus('ok');
   }catch(e){
     console.error('initApp error:',e);
@@ -852,6 +883,7 @@ async function refreshAll(){
     await loadLocations(true);
     await loadPayments(true);
     await loadClients(true);
+    await loadAllPayHistory();
     setSyncStatus('ok');
   }catch(e){
     setSyncStatus('err');
@@ -877,7 +909,7 @@ function renderView(){
   else renderSettings();
 }
 
-// ─── HELPERS: які ID є в платіжній системі ────────────────────────────────────
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
 function getPaymentIds(){
   var ids={};
   for(var loc in S.groups){
@@ -886,6 +918,25 @@ function getPaymentIds(){
     });
   }
   return ids;
+}
+
+// ─── СТАТИСТИКА: рахуємо по активній локації або по всіх ─────────────────────
+function calcStats(locsArr, groupFilter){
+  var totalKids=0, totalDebt=0, debtors=0;
+  locsArr.forEach(function(l){
+    var groups=(S.groups[l.loc]||[]);
+    if(groupFilter) groups=groups.filter(function(g){ return g.group===groupFilter; });
+    groups.forEach(function(g){
+      g.children.forEach(function(ch){
+        totalKids++;
+        if(ch.status==='debt'||ch.status==='nopay'){
+          debtors++;
+          totalDebt+=(ch.status==='nopay'?ch.budget:(ch.debt||0));
+        }
+      });
+    });
+  });
+  return {totalKids:totalKids, totalDebt:totalDebt, debtors:debtors};
 }
 
 // ─── RENDER CLIENTS ───────────────────────────────────────────────────────────
@@ -900,20 +951,18 @@ function renderClients(){
   var allGroups=[];
   locs.forEach(function(l){ (S.groups[l.loc]||[]).forEach(function(g){ if(allGroups.indexOf(g.group)<0) allGroups.push(g.group); }); });
 
-  var totalKids=0,totalDebt=0,debtors=0;
-  locs.forEach(function(l){ (S.groups[l.loc]||[]).forEach(function(g){ g.children.forEach(function(ch){
-    totalKids++;
-    if(ch.status==='debt'||ch.status==='nopay'){ debtors++; totalDebt+=(ch.budget||0); }
-  }); }); });
+  // ── Статистика: якщо вибрано локацію — тільки її дані ──────────────────────
+  var statLocs = S.selLoc ? locs.filter(function(l){ return l.loc===S.selLoc; }) : locs;
+  var stats = calcStats(statLocs, S.selGroup);
 
-  // Рахуємо нових CRM-клієнтів (без платіжних даних)
+  // Нові CRM-клієнти
   var payIds=getPaymentIds();
   var crmOnlyIds=Object.keys(S.crm).filter(function(id){
     var c=S.crm[id];
     if(!c||!c.name) return false;
     if(payIds[id]) return false;
-    // фільтр по локації для директора
     if(!isHR()&&c.loc!==S.user.loc) return false;
+    if(S.selLoc&&c.loc!==S.selLoc) return false;
     return true;
   });
 
@@ -921,10 +970,16 @@ function renderClients(){
   var mIdx=CFG.MONTHS_JS.indexOf(now.getMonth());
   var mName=mIdx>=0?CFG.MONTHS_DISP[mIdx]:now.toLocaleString('uk-UA',{month:'long'});
 
+  // Додаємо CRM-only дітей до загальної кількості для відображення
+  var displayKids = stats.totalKids + (S.selLoc || !isHR() ? crmOnlyIds.length : Object.keys(S.crm).filter(function(id){ var c=S.crm[id]; return c&&c.name&&!payIds[id]&&(isHR()||c.loc===S.user.loc); }).length);
+
+  // Назва для статистики
+  var statLabel = S.selLoc ? S.selLoc : (isHR() ? 'Всі локації' : (S.user&&S.user.loc?S.user.loc:''));
+
   var html='<div class="stats-grid">'
-    +'<div class="stat-card"><div class="stat-icon si-b">👶</div><div><div class="stat-val">'+(totalKids+crmOnlyIds.length)+'</div><div class="stat-lbl">Всього дітей</div></div></div>'
-    +'<div class="stat-card"><div class="stat-icon si-r">❌</div><div><div class="stat-val">'+debtors+'</div><div class="stat-lbl">Боржників</div></div></div>'
-    +'<div class="stat-card"><div class="stat-icon si-o">💸</div><div><div class="stat-val">'+fmtN(Math.round(totalDebt))+'</div><div class="stat-lbl">Загальний борг (грн)</div></div></div>'
+    +'<div class="stat-card"><div class="stat-icon si-b">👶</div><div><div class="stat-val">'+displayKids+'</div><div class="stat-lbl">Дітей'+(statLabel?' · '+esc(statLabel):'')+'</div></div></div>'
+    +'<div class="stat-card"><div class="stat-icon si-r">❌</div><div><div class="stat-val">'+stats.debtors+'</div><div class="stat-lbl">Боржників'+(statLabel?' · '+esc(statLabel):'')+'</div></div></div>'
+    +'<div class="stat-card"><div class="stat-icon si-o">💸</div><div><div class="stat-val">'+fmtN(Math.round(stats.totalDebt))+'</div><div class="stat-lbl">Загальний борг (грн)'+(statLabel?' · '+esc(statLabel):'')+'</div></div></div>'
     +'<div class="stat-card"><div class="stat-icon si-g">📅</div><div><div class="stat-val">'+mName+'</div><div class="stat-lbl">'+(S.payUpdated?'Оновлено: '+S.payUpdated:'Поточний місяць')+'</div></div></div>'
     +'</div>';
 
@@ -936,13 +991,11 @@ function renderClients(){
     +'<button class="btn btn-primary btn-sm" onclick="openNewChild()" style="margin-left:auto;white-space:nowrap">➕ Додати дитину</button>'
     +'</div>';
 
-  // ── Нові CRM-клієнти (ще не в платіжній системі) ──────────────────────────
+  // ── Нові CRM-клієнти ──────────────────────────────────────────────────────
   var crmFiltered=crmOnlyIds.filter(function(id){
     var c=S.crm[id];
-    if(S.selLoc&&c.loc!==S.selLoc) return false;
     if(S.selGroup&&c.group!==S.selGroup) return false;
     if(S.searchQ&&c.name.toLowerCase().indexOf(S.searchQ.toLowerCase())<0) return false;
-    // статус-фільтр не застосовуємо (у них немає платіжного статусу)
     return true;
   });
   if(crmFiltered.length){
@@ -976,7 +1029,13 @@ function renderClients(){
     if(!filtGroups.length) return;
 
     var locKids=0,locDebt=0,locDebtors=0;
-    filtGroups.forEach(function(g){ g.children.forEach(function(ch){ locKids++; if(ch.status==='debt'||ch.status==='nopay'){locDebtors++;locDebt+=(ch.status==='nopay'?ch.budget:ch.debt)||0;} }); });
+    filtGroups.forEach(function(g){ g.children.forEach(function(ch){
+      locKids++;
+      if(ch.status==='debt'||ch.status==='nopay'){
+        locDebtors++;
+        locDebt+=(ch.status==='nopay'?ch.budget:(ch.debt||0));
+      }
+    }); });
 
     html+='<div class="loc-section"><div class="loc-title">🏫 '+esc(loc.loc)
       +'<span style="font-size:13px;font-weight:400;color:var(--gray)">'
@@ -986,7 +1045,6 @@ function renderClients(){
     filtGroups.forEach(function(grp){
       var children=grp.children.filter(function(ch){
         if(S.selStatus){
-          // nopay і debt — обидва є "борг"
           var chSt=(ch.status==='nopay'?'debt':ch.status);
           if(chSt!==S.selStatus) return false;
         }
@@ -995,11 +1053,12 @@ function renderClients(){
       });
       if(!children.length) return;
 
+      // ── ТАБЛИЦЯ: БЕЗ колонки "Борг (грн)" ───────────────────────────────
       html+='<div class="card" style="margin-bottom:16px">'
         +'<div class="card-hd"><h3>👥 '+esc(grp.group)+'</h3>'
         +'<span style="font-size:12px;color:var(--gray)">'+(grp.teacher?'Вихователь: '+esc(grp.teacher)+' &nbsp;|&nbsp; ':'')+children.length+' дітей</span></div>'
         +'<div class="tbl-wrap"><table><thead><tr>'
-        +'<th>Ім\'я дитини</th><th>Статус оплати</th><th>Борг (грн)</th>'
+        +'<th>Ім\'я дитини</th><th>Статус оплати</th>'
         +'<th>Навчання</th><th>Вступний</th><th>Доп.</th><th>Бюджет (грн)</th><th>Телефон</th><th></th>'
         +'</tr></thead><tbody>';
 
@@ -1015,7 +1074,6 @@ function renderClients(){
         html+='<tr class="clickable" onclick="openChild(\''+esc(String(ch.id||''))+'\',\''+esc(String(ch.group||''))+'\',\''+esc(String(ch.teacher||grp.teacher||''))+'\',\''+esc(String(ch.loc||''))+'\',\''+esc(String(ch.name||''))+'\')">'
           +'<td><span class="child-link">'+esc(ch.name)+'</span>'+(entryIcon?' '+entryIcon:'')+'</td>'
           +'<td>'+payBadge(ch.status,debtAmt,over)+'</td>'
-          +'<td>'+(debtAmt>0&&ch.status!=='paid'&&ch.status!=='over'?'<b style="color:var(--red2)">'+fmtN(Math.round(debtAmt))+'</b>':over>0?'<span style="color:var(--orange)">+'+fmtN(Math.round(over))+'</span>':'—')+'</td>'
           +'<td>'+(ch.factStudy?fmtN(ch.factStudy):'—')+'</td>'
           +'<td>'+(ch.factEntry?fmtN(ch.factEntry):'—')+'</td>'
           +'<td>'+(ch.factExtra?fmtN(ch.factExtra):'—')+'</td>'
@@ -1215,6 +1273,7 @@ function switchTab(i){
   if(i===1){ renderFeeHistory(); recalcDiscount(); }
   if(i===2) renderEntryFee();
   if(i===3) renderAbsences();
+  if(i===4) renderPayHistory();
 }
 
 function populateForm(id){
@@ -1253,6 +1312,138 @@ function renderPayStatus(id){
   }
   else{ type='warn'; txt='— Немає даних'; }
   el.innerHTML='<div class="alert alert-'+type+'"><div class="pay-status-big">'+txt+'</div>'+detail+'</div>';
+}
+
+// ─── ІСТОРІЯ ОПЛАТ КЛІЄНТА ────────────────────────────────────────────────────
+function renderPayHistory(){
+  var el=document.getElementById('payHistContent');
+  if(!el) return;
+  var id=S.editId;
+  var card=S.crm[id]||{};
+  var childName=(card.name||'').toLowerCase().trim();
+  var childGroup=(card.group||'').trim();
+  var childLoc=(card.loc||'').trim();
+
+  // Шукаємо по S.allPayRows або S.payments (fallback)
+  var source = S.allPayRows.length ? S.allPayRows : S.payments;
+
+  // Знаходимо всі рядки цього клієнта
+  var myRows = source.filter(function(row){
+    var rName=String(row["Ім'я дитини"]||'').toLowerCase().trim();
+    var rGrp=String(row['Група']||'').trim();
+    var rLoc=String(row['Локація']||'').trim();
+    // Матч по імені + або група, або локація
+    if(!rName || rName !== childName) return false;
+    if(childGroup && rGrp && rGrp !== childGroup) return false;
+    if(childLoc && rLoc && rLoc !== childLoc) return false;
+    return true;
+  });
+
+  if(!myRows.length){
+    // Якщо лише поточний місяць — шукаємо у S.payments
+    var cur = S.payments.filter(function(row){
+      var rName=String(row["Ім'я дитини"]||'').toLowerCase().trim();
+      return rName === childName;
+    });
+    if(cur.length){
+      myRows = cur;
+    }
+  }
+
+  if(!myRows.length){
+    el.innerHTML='<div class="empty"><span class="ei">📊</span><h4>Немає даних оплат</h4>'
+      +'<p>Клієнт ще не з\'явився в платіжній системі або дані не завантажені.</p>'
+      +'<button class="btn btn-secondary btn-sm" style="margin-top:12px" onclick="loadAllPayHistory().then(renderPayHistory)">🔄 Оновити</button></div>';
+    return;
+  }
+
+  // Групуємо по місяцю (колонка "Місяць" або парсимо з рядка)
+  var byMonth={};
+  myRows.forEach(function(row){
+    var month=String(row['Місяць']||row['місяць']||'').trim();
+    if(!month){
+      // спробуємо знайти хоч якийсь ідентифікатор місяця
+      month='Поточний місяць';
+    }
+    if(!byMonth[month]) byMonth[month]=[];
+    byMonth[month].push(row);
+  });
+
+  // Сортуємо місяці (намагаємось за CFG.MONTHS_UA порядком)
+  var monthKeys=Object.keys(byMonth);
+  monthKeys.sort(function(a,b){
+    var ai=CFG.MONTHS_UA.indexOf(a.toLowerCase());
+    var bi=CFG.MONTHS_UA.indexOf(b.toLowerCase());
+    if(ai<0&&bi<0) return a.localeCompare(b,'uk');
+    if(ai<0) return 1;
+    if(bi<0) return -1;
+    return ai-bi;
+  });
+
+  // Підсумки за весь час
+  var totalFact=0, totalBudget=0;
+
+  var html='<div style="margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">'
+    +'<div style="font-size:14px;font-weight:700;color:var(--dark)">📊 Історія оплат — '+monthKeys.length+' міс.</div>'
+    +'<button class="btn btn-secondary btn-sm" onclick="loadAllPayHistory().then(renderPayHistory)">🔄 Оновити</button>'
+    +'</div>';
+
+  html+='<div class="tbl-wrap"><table class="pay-hist-table"><thead><tr>'
+    +'<th>Місяць</th><th>Навчання</th><th>Вступний</th><th>Доп.</th>'
+    +'<th>Факт разом</th><th>Бюджет</th><th>Статус</th>'
+    +'</tr></thead><tbody>';
+
+  monthKeys.forEach(function(month){
+    var rows=byMonth[month];
+    // Якщо кілька рядків за місяць — беремо останній або сумуємо
+    var row=rows[rows.length-1];
+    var fs=+(row['Факт навчання']||0);
+    var fv=+(row['Факт вступний']||0);
+    var fe=+(row['Факт доп.']||0);
+    var total=+(row['Факт разом']||0)||(fs+fv+fe);
+    var bud=+(row['Бюджет разом']||0)||+(row['Бюджет']||0)||(+(row['Бюджет навчання']||0)++(row['Бюджет доп.']||0));
+    var status=String(row['Статус']||'');
+    totalFact+=total;
+    totalBudget+=bud;
+
+    var statusBadge;
+    if(status==='paid') statusBadge='<span class="badge bg">✅ Оплачено</span>';
+    else if(status==='debt') statusBadge='<span class="badge br">❌ Борг</span>';
+    else if(status==='nopay') statusBadge='<span class="badge br">❌ Борг</span>';
+    else if(status==='over') statusBadge='<span class="badge by">💰 Переплата</span>';
+    else statusBadge='<span class="badge bgr">—</span>';
+
+    var diff=total-bud;
+    var factCls=total===0?'':total>=bud?'pay-hist-paid':'pay-hist-debt';
+
+    html+='<tr>'
+      +'<td class="pay-hist-month">'+esc(month)+'</td>'
+      +'<td>'+(fs?fmtN(fs):'—')+'</td>'
+      +'<td>'+(fv?fmtN(fv):'—')+'</td>'
+      +'<td>'+(fe?fmtN(fe):'—')+'</td>'
+      +'<td class="'+factCls+'">'+fmtN(total)+'</td>'
+      +'<td>'+fmtN(bud)+'</td>'
+      +'<td>'+statusBadge+'</td>'
+      +'</tr>';
+  });
+
+  // Підсумковий рядок
+  var diffTotal=totalFact-totalBudget;
+  html+='<tr style="background:#f8fafc;font-weight:700;border-top:2px solid #e8ecf0">'
+    +'<td>Всього</td><td colspan="3" style="color:var(--gray);font-size:12px">'+monthKeys.length+' місяців</td>'
+    +'<td class="'+(totalFact>=totalBudget?'pay-hist-paid':'pay-hist-debt')+'">'+fmtN(totalFact)+'</td>'
+    +'<td>'+fmtN(totalBudget)+'</td>'
+    +'<td>'+(diffTotal>=0?'<span style="color:var(--green)">+'+fmtN(Math.round(diffTotal))+'</span>':'<span style="color:var(--red2)">'+fmtN(Math.round(diffTotal))+'</span>')+'</td>'
+    +'</tr>';
+
+  html+='</tbody></table></div>';
+
+  // Якщо лише поточний місяць — показуємо підказку
+  if(S.allPayRows.length===0||S.allPayRows===S.payments){
+    html+='<div class="alert alert-warn" style="margin-top:12px;font-size:12px">⚠️ Показано тільки поточний місяць. Для повної історії потрібно додати action <b>getAllPayments</b> в Apps Script.</div>';
+  }
+
+  el.innerHTML=html;
 }
 
 function onContractDateChange(){ updateContractType(); }
