@@ -12,9 +12,10 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ─── CONSTANTS ───────────────────────────────────────────────────────────────
-var CONFIG_SHEET_ID = '11NEIEBzaMiIDFnJB9RXqKnRqjCJjNyHVqylrX7cRZhc';
-var SHEET_PAYMENTS  = 'Оплати';
-var SHEET_CLIENTS   = 'Клієнти';
+var CONFIG_SHEET_ID  = '11NEIEBzaMiIDFnJB9RXqKnRqjCJjNyHVqylrX7cRZhc';
+var CRM_SHEET_ID_DEFAULT = '1pA2q84BFsXWuUchIlu8um853od_PXr7KepLpTovUjLo'; // fallback
+var SHEET_PAYMENTS   = 'Оплати';
+var SHEET_CLIENTS    = 'Клієнти';
 
 var MONTHS_UA      = ['вересень','жовтень','листопад','грудень','січень','лютий','березень','квітень','травень','червень','липень','серпень'];
 var MONTHS_JS      = [8,9,10,11,0,1,2,3,4,5,6,7];
@@ -39,17 +40,22 @@ function getProps() {
 // ─── CRM SPREADSHEET ─────────────────────────────────────────────────────────
 function getCRMSpreadsheet() {
   var props = getProps();
-  var id = props.getProperty('CRM_SHEET_ID');
+  var id = props.getProperty('CRM_SHEET_ID') || CRM_SHEET_ID_DEFAULT;
   if (id) {
     try {
       var ss = SpreadsheetApp.openById(id);
+      // Save to properties if it came from default
+      if (!props.getProperty('CRM_SHEET_ID')) {
+        props.setProperty('CRM_SHEET_ID', id);
+        Logger.log('Saved CRM_SHEET_ID to Script Properties: ' + id);
+      }
       ensureSheetsExist(ss);
       return ss;
     } catch(e) {
       Logger.log('Cannot open CRM sheet ' + id + ': ' + e.message);
     }
   }
-  // Create new spreadsheet
+  // Create new spreadsheet (fallback)
   var newSS = SpreadsheetApp.create('m.kids CRM Data');
   props.setProperty('CRM_SHEET_ID', newSS.getId());
   setupSheetsStructure(newSS);
@@ -114,6 +120,7 @@ function doGet(e) {
     else if (action === 'getClients')   result = getClients();
     else if (action === 'runAggregate') result = aggregatePayments();
     else if (action === 'getCRMInfo')   result = getCRMInfo();
+    else if (action === 'makePublic')   result = makeSheetPublic();
     else                                result = {ok:false, error:'Unknown action: ' + action};
     return jsonOut(result);
   } catch(err) {
@@ -454,9 +461,26 @@ function createDailyTrigger() {
 // ─── CRM INFO ────────────────────────────────────────────────────────────────
 function getCRMInfo() {
   var props = getProps();
-  var id = props.getProperty('CRM_SHEET_ID') || '';
+  var id = props.getProperty('CRM_SHEET_ID') || CRM_SHEET_ID_DEFAULT;
   var url = id ? 'https://docs.google.com/spreadsheets/d/' + id : '';
   return {ok:true, crmSheetId: id, crmSheetUrl: url};
+}
+
+// ─── MAKE SHEET PUBLIC (read-only for anyone with link) ──────────────────────
+function makeSheetPublic() {
+  var props = getProps();
+  var id = props.getProperty('CRM_SHEET_ID') || CRM_SHEET_ID_DEFAULT;
+  if (!id) return {ok:false, error:'CRM_SHEET_ID not set'};
+  try {
+    var file = DriveApp.getFileById(id);
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    var url = 'https://docs.google.com/spreadsheets/d/' + id;
+    Logger.log('CRM sheet is now public (read-only): ' + url);
+    return {ok:true, url:url, msg:'Таблиця відкрита для читання (Anyone with link → Viewer)'};
+  } catch(e) {
+    Logger.log('makeSheetPublic error: ' + e.message);
+    return {ok:false, error:e.message};
+  }
 }
 
 // ─── UTILS ───────────────────────────────────────────────────────────────────

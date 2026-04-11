@@ -443,16 +443,19 @@ tbody tr.clickable:hover td{background:#f0f7ff}
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 var CFG = {
-  SCRIPT_KEY:  'crm_script_url',
-  SK:          'crm_mkids_v3',
-  LOC_CACHE:   'crm_locs_v3',
-  PAY_CACHE:   'crm_pay_v3',
-  CLI_CACHE:   'crm_cli_v3',
-  PW_HR:       'hr2024',
-  TTL:         15 * 60 * 1000,
-  MONTHS_UA:   ['вересень','жовтень','листопад','грудень','січень','лютий','березень','квітень','травень','червень','липень','серпень'],
-  MONTHS_JS:   [8,9,10,11,0,1,2,3,4,5,6,7],
-  MONTHS_DISP: ['Вересень','Жовтень','Листопад','Грудень','Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень']
+  SCRIPT_KEY:   'crm_script_url',
+  SK:           'crm_mkids_v3',
+  LOC_CACHE:    'crm_locs_v3',
+  PAY_CACHE:    'crm_pay_v3',
+  CLI_CACHE:    'crm_cli_v3',
+  PW_HR:        'hr2024',
+  TTL:          15 * 60 * 1000,
+  // Direct Sheets API (read-only, works when sheet is public)
+  API_KEY:      'AIzaSyBXY-1iAKeBdyWc7gbtNOe66yBa5-Mcmlc',
+  CRM_SHEET_ID: '1pA2q84BFsXWuUchIlu8um853od_PXr7KepLpTovUjLo',
+  MONTHS_UA:    ['вересень','жовтень','листопад','грудень','січень','лютий','березень','квітень','травень','червень','липень','серпень'],
+  MONTHS_JS:    [8,9,10,11,0,1,2,3,4,5,6,7],
+  MONTHS_DISP:  ['Вересень','Жовтень','Листопад','Грудень','Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень']
 };
 
 // ─── STATE ────────────────────────────────────────────────────────────────────
@@ -542,6 +545,26 @@ function setSyncStatus(st){
   else{ el.textContent=''; }
 }
 
+// ─── DIRECT SHEETS API (fast read when sheet is public) ───────────────────────
+async function sheetsRead(sheetName, range){
+  var r=encodeURIComponent("'"+sheetName+"'!"+range);
+  var url='https://sheets.googleapis.com/v4/spreadsheets/'+CFG.CRM_SHEET_ID+'/values/'+r+'?key='+CFG.API_KEY;
+  var res=await fetch(url);
+  if(!res.ok) throw new Error('HTTP '+res.status);
+  var j=await res.json();
+  if(j.error) throw new Error(j.error.message||j.error.status);
+  return j.values||[];
+}
+function rowsToObjects(values){
+  if(!values||values.length<2) return [];
+  var hdr=values[0];
+  return values.slice(1).map(function(row){
+    var o={};
+    hdr.forEach(function(h,i){ o[String(h)]=row[i]!==undefined?row[i]:''; });
+    return o;
+  }).filter(function(o){ return Object.keys(o).some(function(k){ return o[k]!==''; }); });
+}
+
 // ─── DATA LOADING ─────────────────────────────────────────────────────────────
 async function loadLocations(force){
   if(!force){
@@ -558,10 +581,25 @@ async function loadPayments(force){
     var c=localStorage.getItem(CFG.PAY_CACHE);
     if(c){ var p=JSON.parse(c); if(Date.now()-p.ts<CFG.TTL){ S.payments=p.data; S.payUpdated=p.updated||''; buildGroups(); return; } }
   }
-  var j=await apiGet('getPayments');
-  S.payments=j.data||[];
-  S.payUpdated=j.updated||'';
-  localStorage.setItem(CFG.PAY_CACHE,JSON.stringify({data:S.payments,ts:Date.now(),updated:S.payUpdated}));
+  var rows=[];
+  var updated='';
+  // Try direct API first (fast), fall back to Apps Script
+  try{
+    var vals=await sheetsRead('Оплати','A1:M2000');
+    rows=rowsToObjects(vals);
+    if(rows.length>0){
+      updated=String(rows[rows.length-1]['Оновлено']||'');
+      console.log('Payments loaded via direct API: '+rows.length+' rows');
+    }
+  }catch(e){
+    console.warn('Direct API for Payments failed ('+e.message+'), trying Apps Script…');
+    var j=await apiGet('getPayments');
+    rows=j.data||[];
+    updated=j.updated||'';
+  }
+  S.payments=rows;
+  S.payUpdated=updated;
+  localStorage.setItem(CFG.PAY_CACHE,JSON.stringify({data:rows,ts:Date.now(),updated:updated}));
   buildGroups();
 }
 
@@ -570,12 +608,23 @@ async function loadClients(force){
     var c=localStorage.getItem(CFG.CLI_CACHE);
     if(c){ var p=JSON.parse(c); if(Date.now()-p.ts<CFG.TTL){ mergeCRMFromCloud(p.data); return; } }
   }
+  var rows=[];
+  // Try direct API first, fall back to Apps Script
   try{
-    var j=await apiGet('getClients');
-    var rows=j.data||[];
+    var vals=await sheetsRead('Клієнти','A1:U2000');
+    rows=rowsToObjects(vals).filter(function(r){ return r['ID']; });
+    console.log('Clients loaded via direct API: '+rows.length+' rows');
+  }catch(e){
+    console.warn('Direct API for Clients failed ('+e.message+'), trying Apps Script…');
+    try{
+      var j=await apiGet('getClients');
+      rows=j.data||[];
+    }catch(e2){ console.warn('Apps Script also failed:',e2); }
+  }
+  if(rows.length>0){
     localStorage.setItem(CFG.CLI_CACHE,JSON.stringify({data:rows,ts:Date.now()}));
     mergeCRMFromCloud(rows);
-  }catch(e){ console.warn('loadClients error:',e); }
+  }
 }
 
 function mergeCRMFromCloud(rows){
@@ -935,9 +984,14 @@ function renderSettings(){
     +'<div style="margin-top:10px"><button class="btn btn-secondary btn-sm" onclick="refreshAll()">🔄 Оновити</button></div>'
     +'</div></div>'
 
-    +'<div class="card"><div class="card-hd"><h3>📁 CRM дані</h3></div><div class="modal-bd">'
-    +'<button class="btn btn-secondary btn-sm" onclick="getCRMSheetInfo()">🔗 Посилання на CRM таблицю</button>'
-    +'<div id="crmInfo" style="margin-top:10px;font-size:13px"></div>'
+    +'<div class="card"><div class="card-hd"><h3>📁 CRM таблиця</h3></div><div class="modal-bd">'
+    +'<div class="alert alert-info" style="margin-bottom:12px">CRM Sheet ID: <code style="font-size:11px">'+esc(CFG.CRM_SHEET_ID)+'</code></div>'
+    +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">'
+    +'<a href="https://docs.google.com/spreadsheets/d/'+esc(CFG.CRM_SHEET_ID)+'" target="_blank" class="btn btn-secondary btn-sm">📊 Відкрити CRM таблицю</a>'
+    +'<button class="btn btn-secondary btn-sm" onclick="makeSheetPublic()">🔓 Відкрити публічний доступ (для швидкого читання)</button>'
+    +'</div>'
+    +'<div id="publicMsg" style="font-size:13px"></div>'
+    +'<div class="alert alert-warn" style="margin-top:10px;font-size:12px">⚠️ Публічний доступ дозволяє читати дані таблиці без авторизації. Запис залишається тільки через Apps Script.</div>'
     +'</div></div>'
     +'</div>';
 }
@@ -968,15 +1022,22 @@ async function triggerAggregate(){
   }
 }
 
-async function getCRMSheetInfo(){
+async function makeSheetPublic(){
+  var el=document.getElementById('publicMsg');
+  el.innerHTML='<span style="color:var(--orange)">🔓 Відкриваємо доступ…</span>';
   try{
-    var j=await apiGet('getCRMInfo');
-    if(j.crmSheetUrl){
-      document.getElementById('crmInfo').innerHTML='<a href="'+esc(j.crmSheetUrl)+'" target="_blank" style="color:var(--blue2)">📊 Відкрити m.kids CRM Data</a>';
+    var j=await apiGet('makePublic');
+    if(j.ok){
+      el.innerHTML='<span style="color:var(--green)">✅ Публічний доступ відкрито. Тепер читання працює напряму через API key.</span>';
+      // clear payment/client cache to force fresh direct-API reads
+      localStorage.removeItem(CFG.PAY_CACHE);
+      localStorage.removeItem(CFG.CLI_CACHE);
     } else {
-      document.getElementById('crmInfo').innerHTML='<span style="color:var(--gray)">ID: '+esc(j.crmSheetId||'—')+'</span>';
+      el.innerHTML='<span style="color:var(--red2)">❌ '+esc(j.error||'Помилка')+'</span>';
     }
-  }catch(e){ document.getElementById('crmInfo').innerHTML='<span style="color:var(--red2)">'+esc(e.message)+'</span>'; }
+  }catch(e){
+    el.innerHTML='<span style="color:var(--red2)">❌ '+esc(e.message)+'</span>';
+  }
 }
 
 // ─── CHILD CARD MODAL ─────────────────────────────────────────────────────────
