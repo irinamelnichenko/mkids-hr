@@ -1891,9 +1891,12 @@ function renderBdays(){
   `);
 }
 
+
 // ── ГРАФІК ВІДПУСТОК ──
 let vacSchedYear=new Date().getFullYear();
+let vacSchedMonth=new Date().getMonth();
 let vacSchedTyp='',vacSchedLoc='';
+let vacSchedMode='year';
 
 function renderVacSchedule(){
   const isHR=S.user.role==='hr';
@@ -1904,47 +1907,125 @@ function renderVacSchedule(){
   if(!isHR&&S.user.loc)emps=emps.filter(e=>normEmpLoc(e)===S.user.loc);
   if(vacSchedLoc)emps=emps.filter(e=>normEmpLoc(e)===vacSchedLoc);
   const locs=[...new Set(emps.map(e=>normEmpLoc(e)).filter(Boolean))].sort();
-
   const yr=vacSchedYear;
-  const months=['Січ','Лют','Бер','Квіт','Трав','Черв','Лип','Серп','Вер','Жовт','Лист','Груд'];
+  const MONTHS_SHORT=['Січ','Лют','Бер','Квіт','Трав','Черв','Лип','Серп','Вер','Жовт','Лист','Груд'];
+  const MONTHS_FULL=['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
   const daysInMonth=[31,yr%4===0?29:28,31,30,31,30,31,31,30,31,30,31];
   const totalDays=daysInMonth.reduce((a,b)=>a+b,0);
-
-  // Рахуємо ширину кожного місяця в %
-  const mWidths=daysInMonth.map(d=>Math.round(d/totalDays*100*10)/10);
-
-  // Знаходимо відпустки за рік для кожного
-  function getVacs(e){
-    return rec(e.key).vacs.filter(v=>{
-      const s=new Date(v.start),en=new Date(v.end);
-      return s.getFullYear()===yr||en.getFullYear()===yr;
-    });
-  }
-
-  // Позиція дня в році (0-364)
-  function dayOfYear(date){
-    const start=new Date(yr,0,1);
-    return Math.floor((date-start)/86400000);
-  }
-
-  const empRows=emps.map(e=>{
-    const vacs=getVacs(e);
-    const bars=vacs.map(v=>{
-      const start=new Date(Math.max(new Date(v.start),new Date(yr,0,1)));
-      const end=new Date(Math.min(new Date(v.end),new Date(yr,11,31)));
-      const s=dayOfYear(start)/totalDays*100;
-      const w=(dayOfYear(end)-dayOfYear(start)+1)/totalDays*100;
-      return{s:Math.max(0,s),w:Math.max(0,w),days:v.days,type:v.type||'Щорічна'};
-    });
-    return{e,bars,totalDays:vacs.reduce((s,v)=>s+(v.days||0),0)};
-  });
-
   const currentlyOnVac=allActive.filter(e=>isOnVac(e.key)).length;
+
+  function getVacsForYear(e){
+    return rec(e.key).vacs.filter(v=>{const s=new Date(v.start),en=new Date(v.end);return s.getFullYear()===yr||en.getFullYear()===yr;});
+  }
+  function dayOfYear(date){return Math.floor((date-new Date(yr,0,1))/86400000);}
+
+  function buildYearView(){
+    const empRows=emps.map(e=>{
+      const vacs=getVacsForYear(e);
+      const bars=vacs.map(v=>{
+        const start=new Date(Math.max(new Date(v.start),new Date(yr,0,1)));
+        const end=new Date(Math.min(new Date(v.end),new Date(yr,11,31)));
+        const s=dayOfYear(start)/totalDays*100;
+        const w=(dayOfYear(end)-dayOfYear(start)+1)/totalDays*100;
+        return{s:Math.max(0,s),w:Math.max(0.3,w),days:v.days,type:v.type||'Щорічна'};
+      });
+      return{e,bars,td:vacs.reduce((s,v)=>s+(v.days||0),0)};
+    });
+    return`<div style="overflow-x:auto">
+      <div style="display:flex;margin-left:200px;margin-bottom:4px;min-width:700px">
+        ${MONTHS_SHORT.map((m,i)=>`<div style="flex:${daysInMonth[i]};text-align:center;font-size:11px;font-weight:700;color:var(--gray);border-left:1px solid #e8ecf0;padding:2px 0">${m}</div>`).join('')}
+      </div>
+      <div style="min-width:700px">
+        ${empRows.length===0?`<div class="empty"><p>Немає відпусток за ${yr} рік</p></div>`:
+        empRows.map(({e,bars,td})=>`
+          <div style="display:flex;align-items:center;padding:4px 0;border-bottom:1px solid #f0f4f8">
+            <div style="width:200px;flex-shrink:0;padding-right:10px;display:flex;align-items:center;gap:7px;cursor:pointer" onclick="nav('employee',${e.id})">
+              <div class="avatar" style="width:24px;height:24px;font-size:9px;flex-shrink:0">${initials(e)}</div>
+              <div style="overflow:hidden">
+                <div style="font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${fullName(e)}</div>
+                <div style="font-size:10px;color:var(--gray);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${e.pos||'—'} · ${normEmpLoc(e)||'—'}</div>
+              </div>
+            </div>
+            <div style="flex:1;position:relative;height:26px;background:#f8fafc;border-radius:4px;overflow:hidden">
+              ${bars.map(b=>`<div title="${b.days} дн." style="position:absolute;left:${b.s}%;width:${b.w}%;height:100%;background:${b.type==='Без збереження зп'?'#e74c3c':'#3498db'};opacity:.85;border-radius:3px;display:flex;align-items:center;justify-content:center">
+                ${b.w>4?`<span style="font-size:9px;color:#fff;font-weight:700">${b.days}д</span>`:''}
+              </div>`).join('')}
+            </div>
+            <div style="width:36px;text-align:right;font-size:11px;color:${td>0?'#3498db':'var(--gray2)'};font-weight:${td>0?'700':'400'};margin-left:6px">${td>0?td+'д':'—'}</div>
+          </div>`).join('')}
+      </div>
+      <div style="margin-top:10px;font-size:11px;color:var(--gray);display:flex;gap:16px">
+        <span><span style="display:inline-block;width:12px;height:12px;background:#3498db;border-radius:2px;vertical-align:middle;margin-right:4px"></span>Щорічна</span>
+        <span><span style="display:inline-block;width:12px;height:12px;background:#e74c3c;border-radius:2px;vertical-align:middle;margin-right:4px"></span>Без збереження зп</span>
+      </div>
+    </div>`;
+  }
+
+  function buildMonthView(){
+    const mo=vacSchedMonth;
+    const dim=daysInMonth[mo];
+    const days=Array.from({length:dim},(_,i)=>i+1);
+    const today=new Date();today.setHours(0,0,0,0);
+    const DAYS_UK=['Нд','Пн','Вт','Ср','Чт','Пт','Сб'];
+    const empRows=emps.map(e=>{
+      const vacs=rec(e.key).vacs.filter(v=>{
+        const s=new Date(v.start),en=new Date(v.end);
+        return (s<=new Date(yr,mo,dim))&&(en>=new Date(yr,mo,1));
+      });
+      if(!vacs.length)return null;
+      const vacDays=new Set();
+      vacs.forEach(v=>{
+        let d=new Date(Math.max(new Date(v.start),new Date(yr,mo,1)));
+        const end=new Date(Math.min(new Date(v.end),new Date(yr,mo,dim)));
+        while(d<=end){vacDays.add(d.getDate());d.setDate(d.getDate()+1);}
+      });
+      return{e,vacDays,td:vacs.reduce((s,v)=>s+(v.days||0),0)};
+    }).filter(Boolean);
+
+    return`<div style="overflow-x:auto">
+      <div style="display:flex;margin-left:200px;min-width:800px;border-bottom:2px solid #e8ecf0;padding-bottom:2px">
+        ${days.map(d=>{
+          const dow=new Date(yr,mo,d).getDay();
+          const isWe=dow===0||dow===6;
+          const isTod=today.getFullYear()===yr&&today.getMonth()===mo&&today.getDate()===d;
+          return`<div style="flex:1;min-width:26px;text-align:center;padding:2px 1px;${isTod?'background:#e8f8f0;border-radius:4px 4px 0 0':''}">
+            <div style="font-size:9px;color:${isWe?'#e74c3c':'var(--gray)'}">${DAYS_UK[dow]}</div>
+            <div style="font-size:11px;font-weight:${isTod?'900':'600'};color:${isTod?'#27ae60':isWe?'#e74c3c':'var(--dark)'}">${d}</div>
+          </div>`;}).join('')}
+      </div>
+      <div style="min-width:800px">
+        ${empRows.length===0?`<div class="empty" style="margin-top:20px"><p>Немає відпусток у ${MONTHS_FULL[mo]} ${yr}</p></div>`:
+        empRows.map(({e,vacDays,td})=>`
+          <div style="display:flex;align-items:center;border-bottom:1px solid #f0f4f8">
+            <div style="width:200px;flex-shrink:0;padding:5px 10px 5px 0;display:flex;align-items:center;gap:7px;cursor:pointer" onclick="nav('employee',${e.id})">
+              <div class="avatar" style="width:24px;height:24px;font-size:9px;flex-shrink:0">${initials(e)}</div>
+              <div style="overflow:hidden">
+                <div style="font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${fullName(e)}</div>
+                <div style="font-size:10px;color:var(--gray)">${e.pos||'—'}</div>
+              </div>
+            </div>
+            ${days.map(d=>{
+              const dow=new Date(yr,mo,d).getDay();
+              const isWe=dow===0||dow===6;
+              const isVac=vacDays.has(d);
+              const isTod=today.getFullYear()===yr&&today.getMonth()===mo&&today.getDate()===d;
+              return`<div style="flex:1;min-width:26px;height:34px;display:flex;align-items:center;justify-content:center;background:${isVac?'#3498db':isWe?'#fafafa':isTod?'#e8f8f0':'transparent'};border-left:1px solid #f0f4f8">
+                ${isVac?`<span style="font-size:10px;color:#fff;font-weight:700">✓</span>`:isWe?`<span style="font-size:9px;color:#e0e0e0">—</span>`:''}
+              </div>`;}).join('')}
+          </div>`).join('')}
+      </div>
+      <div style="margin-top:12px;font-size:11px;color:var(--gray);display:flex;gap:16px;flex-wrap:wrap">
+        <span><span style="display:inline-block;width:12px;height:12px;background:#3498db;border-radius:2px;vertical-align:middle;margin-right:4px"></span>Відпустка</span>
+        <span><span style="display:inline-block;width:12px;height:12px;background:#fafafa;border:1px solid #e8ecf0;border-radius:2px;vertical-align:middle;margin-right:4px"></span>Вихідний</span>
+        <span><span style="display:inline-block;width:12px;height:12px;background:#e8f8f0;border-radius:2px;vertical-align:middle;margin-right:4px"></span>Сьогодні</span>
+        <span style="margin-left:auto"><strong>${empRows.length}</strong> співробітників у відпустці</span>
+      </div>
+    </div>`;
+  }
 
   set('main',`
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:16px">
-      ${isHR?`
-      <div style="display:flex;gap:4px;flex-wrap:wrap">
+      ${isHR?`<div style="display:flex;gap:4px;flex-wrap:wrap">
         <button class="btn btn-${!vacSchedTyp?'primary':'secondary'} btn-sm" onclick="vacSchedTyp='';vacSchedLoc='';renderVacSchedule()">🌐 Всі</button>
         ${sortedTyps.map(t=>`<button class="btn btn-${vacSchedTyp===t?'primary':'secondary'} btn-sm" onclick="vacSchedTyp='${esc(t)}';vacSchedLoc='';renderVacSchedule()">${TYPE_ICONS[t]||'📌'} ${t}</button>`).join('')}
       </div>
@@ -1952,43 +2033,20 @@ function renderVacSchedule(){
         <option value="">Всі локації</option>
         ${locs.map(l=>`<option value="${l}" ${vacSchedLoc===l?'selected':''}>${l}</option>`).join('')}
       </select>`:''}
+      <div style="display:flex;gap:4px">
+        <button class="btn btn-${vacSchedMode==='year'?'primary':'secondary'} btn-sm" onclick="vacSchedMode='year';renderVacSchedule()">📅 Рік</button>
+        <button class="btn btn-${vacSchedMode==='month'?'primary':'secondary'} btn-sm" onclick="vacSchedMode='month';renderVacSchedule()">🗓️ Місяць</button>
+      </div>
+      ${vacSchedMode==='month'?`<select class="flt-sel" style="min-width:110px" onchange="vacSchedMonth=+this.value;renderVacSchedule()">
+        ${MONTHS_FULL.map((m,i)=>`<option value="${i}" ${vacSchedMonth===i?'selected':''}>${m}</option>`).join('')}
+      </select>`:''}
       <select class="flt-sel" style="min-width:80px" onchange="vacSchedYear=+this.value;renderVacSchedule()">
         ${[2025,2026,2027].map(y=>`<option value="${y}" ${yr===y?'selected':''}>${y}</option>`).join('')}
       </select>
-      <span style="font-size:12px;color:var(--gray)">${emps.length} співробітників · ${currentlyOnVac} зараз у відпустці</span>
+      <span style="font-size:12px;color:var(--gray)">${emps.length} співроб. · ${currentlyOnVac} зараз у відпустці</span>
     </div>
-
-    <div class="card">
-      <div style="overflow-x:auto">
-        <!-- Заголовок місяців -->
-        <div style="display:flex;margin-left:220px;margin-bottom:4px;min-width:600px">
-          ${months.map((m,i)=>`<div style="flex:${daysInMonth[i]};text-align:center;font-size:11px;font-weight:700;color:var(--gray);border-left:1px solid #e8ecf0;padding:2px 0">${m}</div>`).join('')}
-        </div>
-        <!-- Рядки співробітників -->
-        <div style="min-width:600px">
-          ${empRows.length===0?`<div class="empty"><p>Немає відпусток за ${yr} рік</p></div>`:
-          empRows.map(({e,bars,totalDays:td})=>`
-            <div style="display:flex;align-items:center;padding:5px 0;border-bottom:1px solid #f0f4f8">
-              <div style="width:220px;flex-shrink:0;padding-right:12px;display:flex;align-items:center;gap:8px;cursor:pointer" onclick="nav('employee',${e.id})">
-                <div class="avatar" style="width:26px;height:26px;font-size:9px;flex-shrink:0">${initials(e)}</div>
-                <div style="overflow:hidden">
-                  <div style="font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${fullName(e)}</div>
-                  <div style="font-size:10px;color:var(--gray);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${e.pos||'—'}</div>
-                </div>
-              </div>
-              <div style="flex:1;position:relative;height:28px;background:#f8fafc;border-radius:4px;overflow:hidden">
-                ${bars.map(b=>`<div title="${b.days} дн. · ${b.type}" style="position:absolute;left:${b.s}%;width:${b.w}%;height:100%;background:${b.type==='Без збереження зп'?'#e74c3c':'#3498db'};opacity:.85;border-radius:3px;display:flex;align-items:center;justify-content:center">
-                  ${b.w>3?`<span style="font-size:9px;color:#fff;font-weight:700">${b.days}д</span>`:''}
-                </div>`).join('')}
-              </div>
-              <div style="width:40px;text-align:right;font-size:11px;color:${td>0?'#3498db':'var(--gray2)'};font-weight:${td>0?'700':'400'};margin-left:8px">${td>0?td+'д':'—'}</div>
-            </div>`).join('')}
-        </div>
-        <div style="margin-top:10px;font-size:11px;color:var(--gray);display:flex;gap:16px;padding:4px 0">
-          <span><span style="display:inline-block;width:12px;height:12px;background:#3498db;border-radius:2px;vertical-align:middle;margin-right:4px"></span>Щорічна</span>
-          <span><span style="display:inline-block;width:12px;height:12px;background:#e74c3c;border-radius:2px;vertical-align:middle;margin-right:4px"></span>Без збереження зп</span>
-        </div>
-      </div>
+    <div class="card" style="padding:16px">
+      ${vacSchedMode==='year'?buildYearView():buildMonthView()}
     </div>
   `);
 }
