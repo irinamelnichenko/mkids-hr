@@ -733,25 +733,45 @@ function mergeCRMFromCloud(rows){
 }
 
 // ─── НОРМАЛІЗАЦІЯ ГРУПИ ──────────────────────────────────────────────────────
-function normalizeGroup(raw){
-  if(!raw) return '';
+// Офіційні групи для розпізнавання типу групи
+var GROUP_PATTERNS=[
+  {re:/mini.?baby/i,   name:'miniBaby-ki'},
+  {re:/^baby/i,        name:'Baby-ki'},
+  {re:/find/i,         name:'Find-iki'},
+  {re:/study/i,        name:'Study-ki'},
+  {re:/preschool/i,    name:'Preschool'},
+  {re:/чомус/i,        name:'Чомусики'},
+  {re:/школа|school/i, name:'__skip__'}
+];
+
+// Визначає тип групи (для нормалізації написання)
+// але ЗБЕРІГАЄ вихователя як частину ключа якщо він є в назві
+// "Findy-ki Маша Вовк" → тип Find-iki, вихователь "Маша Вовк"
+// "Preschool Юля" → тип Preschool, вихователь "Юля"
+// "Find-iki" → тип Find-iki, вихователь ""
+function parseGroupField(raw){
+  if(!raw) return {groupType:'',teacher:''};
   var s=raw.trim();
-  var sl=s.toLowerCase().replace(/[\s\-\.\(\)]/g,'');
-  // Ігноруємо "Школа"
-  if(sl==='школа'||sl==='school') return '__skip__';
-  // miniBaby-ki
-  if(/mini.*baby/i.test(sl)||sl==='minibabyki') return 'miniBaby-ki';
-  // Baby-ki (але не miniBaby)
-  if(/^baby/i.test(sl)) return 'Baby-ki';
-  // Find-iki (findi, findy, find-ki, findi.ki, findiki, findi-Ki тощо)
-  if(/^find/i.test(sl)||/^findi/i.test(sl)||/^findy/i.test(sl)) return 'Find-iki';
-  // Study-ki
-  if(/^study/i.test(sl)) return 'Study-ki';
-  // Preschool
-  if(/preschool/i.test(sl)||/prescool/i.test(sl)) return 'Preschool';
-  // Чомусики
-  if(/чомус/i.test(s)) return 'Чомусики';
-  return s;
+  var groupType='';
+  for(var i=0;i<GROUP_PATTERNS.length;i++){
+    if(GROUP_PATTERNS[i].re.test(s)){
+      groupType=GROUP_PATTERNS[i].name;
+      break;
+    }
+  }
+  if(!groupType) return {groupType:s,teacher:''};
+  // Витягуємо вихователя — все що після першого слова (назви групи)
+  // "Preschool Юля Фещенко" → teacher="Юля Фещенко"
+  var firstSpace=s.search(/\s/);
+  var teacher=firstSpace>0?s.slice(firstSpace).trim():'';
+  return {groupType:groupType, teacher:teacher};
+}
+
+function normalizeGroup(raw){
+  return parseGroupField(raw).groupType;
+}
+function extractTeacher(raw){
+  return parseGroupField(raw).teacher;
 }
 
 function buildGroups(){
@@ -761,16 +781,21 @@ function buildGroups(){
   S.payments.forEach(function(row){
     var loc=String(row['Локація']||'').trim();
     var rawGrp=String(row['Група']||'').trim();
-    var grp=normalizeGroup(rawGrp);
+    var parsed=parseGroupField(rawGrp);
+    var grp=parsed.groupType;
     if(grp==='__skip__') return;
     var name=String(row["Ім'я дитини"]||'').trim();
     if(!loc||!name) return;
     if(!S.payMonth) S.payMonth=String(row['Місяць']||'').trim();
+    // Вихователь: з окремої колонки або витягнутий з назви групи
+    var rawTeacher=String(row['Вихователь']||'').trim()||parsed.teacher;
+    // Ключ групи = локація + тип групи + вихователь (щоб Preschool Юля і Preschool Наталія були різними)
+    var grpKey=grp+(rawTeacher?' '+rawTeacher:'');
 
     if(!S.groups[loc]) S.groups[loc]=[];
-    var key=loc+'||'+grp;
+    var key=loc+'||'+grpKey;
     if(!grpMap[key]){
-      var g={group:grp,teacher:String(row['Вихователь']||''),children:[],totalDebt:0,debtors:0};
+      var g={group:grpKey,teacher:rawTeacher,children:[],totalDebt:0,debtors:0};
       S.groups[loc].push(g);
       grpMap[key]=g;
     }
