@@ -735,13 +735,14 @@ function mergeCRMFromCloud(rows){
 // ─── НОРМАЛІЗАЦІЯ ГРУПИ ──────────────────────────────────────────────────────
 // Офіційні групи для розпізнавання типу групи
 var GROUP_PATTERNS=[
-  {re:/mini.?baby/i,   name:'miniBaby-ki'},
-  {re:/^baby/i,        name:'Baby-ki'},
-  {re:/find/i,         name:'Find-iki'},
-  {re:/study/i,        name:'Study-ki'},
-  {re:/preschool/i,    name:'Preschool'},
-  {re:/чомус/i,        name:'Чомусики'},
-  {re:/школа|school/i, name:'__skip__'}
+  {re:/mini.?baby/i,  name:'miniBaby-ki'},
+  {re:/^baby/i,       name:'Baby-ki'},
+  {re:/find/i,        name:'Find-iki'},
+  {re:/study/i,       name:'Study-ki'},
+  {re:/preschool/i,   name:'Preschool'},
+  {re:/чомус/i,       name:'Чомусики'},
+  {re:/^школа$/i,     name:'Школа'},
+  {re:/^гхзд$/i,      name:'ГХЗД'}
 ];
 
 // Визначає тип групи (для нормалізації написання)
