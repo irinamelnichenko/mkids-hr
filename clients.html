@@ -481,7 +481,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 var CFG = {
   SCRIPT_KEY:    'crm_script_url',
-  SCRIPT_URL:    'https://script.google.com/macros/s/AKfycbx6TWtMdjGO3WD7WcA3v_WCouXmTb1YZi1DtIti-LgHluMG-i2PzJLRCAGvs_SX_2IP/exec',
+  SCRIPT_URL:    'https://script.google.com/macros/s/AKfycbw-5OSgz8NGqu7vOK9f-40jo9azPLENGxsRaeR9dU7evEiBdLedmkSUkMEOGnrPZ-1O/exec',
   SK:            'crm_mkids_v3',
   LOC_CACHE:     'crm_locs_v3',
   PAY_CACHE:     'crm_pay_v3',
@@ -786,15 +786,7 @@ function buildGroups(){
     if(grp==='__skip__') return;
     var name=String(row["Ім'я дитини"]||'').trim();
     if(!loc||!name) return;
-    // Пропускаємо рядки-заголовки груп (ім'я починається з назви групи)
-    // Наприклад: "Find-iki Маша Вовк", "Preschool Юля Фещенко"
-    var isHeader=false;
-    for(var pi=0;pi<GROUP_PATTERNS.length;pi++){
-      if(GROUP_PATTERNS[pi].re.test(name)&&GROUP_PATTERNS[pi].name!=='__skip__'){
-        isHeader=true; break;
-      }
-    }
-    if(isHeader) return;
+
     if(!S.payMonth) S.payMonth=String(row['Місяць']||'').trim();
     // Вихователь: з окремої колонки або витягнутий з назви групи
     var rawTeacher=String(row['Вихователь']||'').trim()||parsed.teacher;
