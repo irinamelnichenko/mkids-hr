@@ -481,7 +481,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 var CFG = {
   SCRIPT_KEY:    'crm_script_url',
-  SCRIPT_URL:    'https://script.google.com/macros/s/AKfycbzKvVddWVBRct0c_RD-LM4Uyj2DaNBYyVHWgBvYQb5I71D2NzuEg21KXxkZXeP2ngoS/exec',
+  SCRIPT_URL:    'https://script.google.com/macros/s/AKfycbzc7VdKquiklGQdxOXoItEhI8aBvOOEP1ikx4OfSX_Gomk3FQb1JNQg0wWvEVEYXINr/exec',
   SK:            'crm_mkids_v3',
   LOC_CACHE:     'crm_locs_v3',
   PAY_CACHE:     'crm_pay_v3',
@@ -560,6 +560,21 @@ function phoneKeyDown(inp, e){
 // ─── SCRIPT URL ───────────────────────────────────────────────────────────────
 function getScriptUrl(){ return localStorage.getItem(CFG.SCRIPT_KEY)||CFG.SCRIPT_URL; }
 function setScriptUrl(u){ localStorage.setItem(CFG.SCRIPT_KEY,u.trim()); }
+
+// Автоматично очищає кеш якщо URL скрипту змінився
+function checkAndClearCache(){
+  var storedUrl = localStorage.getItem(CFG.SCRIPT_KEY);
+  var builtinUrl = CFG.SCRIPT_URL;
+  var lastBuiltin = localStorage.getItem('crm_last_builtin_url');
+  if(lastBuiltin !== builtinUrl){
+    // URL змінився — очищаємо кеш платежів і клієнтів
+    localStorage.removeItem(CFG.PAY_CACHE);
+    localStorage.removeItem(CFG.CLI_CACHE);
+    localStorage.removeItem(CFG.LOC_CACHE);
+    localStorage.setItem('crm_last_builtin_url', builtinUrl);
+    console.log('Cache cleared due to URL change');
+  }
+}
 function clearSetupUrl(){ localStorage.removeItem(CFG.SCRIPT_KEY); location.reload(); }
 
 // ─── API CALLS ────────────────────────────────────────────────────────────────
@@ -1764,6 +1779,7 @@ function saveChild(){
 
 // ─── BOOTSTRAP ────────────────────────────────────────────────────────────────
 (function bootstrap(){
+  checkAndClearCache();
   document.getElementById('loginScreen').classList.remove('hidden');
   preloadLocations();
 })();
