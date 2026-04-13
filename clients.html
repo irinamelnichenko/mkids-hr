@@ -323,6 +323,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
       </div>
       <div class="topbar-r">
         <span id="syncStatus"></span>
+        <div id="monthNav"></div>
         <button class="btn btn-secondary btn-sm" onclick="refreshAll()">🔄 Оновити</button>
       </div>
     </div>
@@ -506,9 +507,9 @@ var CFG = {
   TTL:           15 * 60 * 1000,
   API_KEY:       'AIzaSyBXY-1iAKeBdyWc7gbtNOe66yBa5-Mcmlc',
   CRM_SHEET_ID:  '1pA2q84BFsXWuUchIlu8um853od_PXr7KepLpTovUjLo',
-  MONTHS_UA:    ['вересень','жовтень','листопад','грудень','січень','лютий','березень','квітень','травень','червень','липень','серпень'],
-  MONTHS_JS:    [8,9,10,11,0,1,2,3,4,5,6,7],
-  MONTHS_DISP:  ['Вересень','Жовтень','Листопад','Грудень','Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень']
+  MONTHS_UA:    ['січень','лютий','березень','квітень','травень','червень','липень','серпень','вересень','жовтень','листопад','грудень'],
+  MONTHS_JS:    [0,1,2,3,4,5,6,7,8,9,10,11],
+  MONTHS_DISP:  ['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень']
 };
 
 // ─── STATE ────────────────────────────────────────────────────────────────────
@@ -528,7 +529,8 @@ var S = {
   editId:   null,
   isNew:    false,
   curTab:   0,
-  payUpdated: ''
+  payUpdated: '',
+  selMonth: ''   // обраний місяць (порожньо = поточний)
 };
 
 // ─── UTILS ────────────────────────────────────────────────────────────────────
@@ -668,25 +670,29 @@ async function loadLocations(force){
   localStorage.setItem(CFG.LOC_CACHE,JSON.stringify({data:S.locs,ts:Date.now()}));
 }
 
-async function loadPayments(force){
+async function loadPayments(force, month){
+  var cacheKey = CFG.PAY_CACHE + (month ? '_' + month : '');
   if(!force){
-    var c=localStorage.getItem(CFG.PAY_CACHE);
-    if(c){ var p=JSON.parse(c); if(Date.now()-p.ts<CFG.TTL){ S.payments=p.data; S.payUpdated=p.updated||''; buildGroups(); return; } }
+    var c=localStorage.getItem(cacheKey);
+    if(c){ var p=JSON.parse(c); if(Date.now()-p.ts<CFG.TTL){ S.payments=p.data; S.payUpdated=p.updated||''; S.payMonth=p.month||''; buildGroups(); return; } }
   }
   var rows=[];
   var updated='';
-  // Читаємо ТІЛЬКИ через Apps Script щоб отримати правильні статуси
+  var retMonth='';
   try{
-    var j=await apiGet('getPayments');
+    var url = 'getPayments' + (month ? '&month=' + encodeURIComponent(month) : '');
+    var j=await apiGet(url);
     rows=j.data||[];
     updated=j.updated||'';
-    console.log('Payments loaded via Apps Script: '+rows.length+' rows');
+    retMonth=j.month||month||'';
+    console.log('Payments loaded: '+rows.length+' rows, month='+retMonth);
   }catch(e){
-    console.warn('Apps Script failed: '+e.message);
+    console.warn('loadPayments failed: '+e.message);
   }
   S.payments=rows;
   S.payUpdated=updated;
-  localStorage.setItem(CFG.PAY_CACHE,JSON.stringify({data:rows,ts:Date.now(),updated:updated}));
+  S.payMonth=retMonth;
+  localStorage.setItem(cacheKey,JSON.stringify({data:rows,ts:Date.now(),updated:updated,month:retMonth}));
   buildGroups();
 }
 
@@ -1028,8 +1034,55 @@ function calcStats(locsArr, groupFilter){
   return {totalKids:totalKids, totalDebt:totalDebt, debtors:debtors};
 }
 
-// ─── RENDER CLIENTS ───────────────────────────────────────────────────────────
+// ─── НАВІГАЦІЯ ПО МІСЯЦЯХ ────────────────────────────────────────────────────
+function getCurrentMonthIdx(){
+  // Якщо обрано місяць вручну
+  if(S.selMonth){
+    var i=CFG.MONTHS_UA.indexOf(S.selMonth.toLowerCase());
+    if(i>=0) return i;
+  }
+  // Інакше — поточний місяць
+  var now=new Date();
+  return now.getMonth(); // 0=січень
+}
+
+function renderMonthNav(){
+  var idx=getCurrentMonthIdx();
+  var prevIdx=(idx-1+12)%12;
+  var nextIdx=(idx+1)%12;
+  var curYear=new Date().getFullYear();
+  // Якщо наступний місяць > поточного — це наступний рік (не показуємо)
+  var nowIdx=new Date().getMonth();
+  var canNext=idx<nowIdx; // не можна йти вперед далі поточного місяця
+
+  return '<div style="display:flex;align-items:center;gap:8px;background:#fff;border-radius:10px;padding:6px 14px;box-shadow:var(--sh)">'
+    +'<button class="btn btn-icon btn-sm" onclick="changeMonth(-1)" title="Попередній місяць" style="padding:5px 10px">←</button>'
+    +'<span style="font-size:14px;font-weight:700;color:var(--dark);min-width:130px;text-align:center">'
+    +CFG.MONTHS_DISP[idx]+' '+curYear
+    +(idx===nowIdx?'<span style="font-size:10px;color:var(--green);margin-left:6px">● зараз</span>':'')
+    +'</span>'
+    +'<button class="btn btn-icon btn-sm" onclick="changeMonth(1)" '+(canNext?'':'disabled style="opacity:.35;cursor:default"')+' title="Наступний місяць" style="padding:5px 10px">→</button>'
+    +'</div>';
+}
+
+async function changeMonth(dir){
+  var idx=getCurrentMonthIdx();
+  var newIdx=idx+dir;
+  if(newIdx<0) newIdx=11;
+  if(newIdx>11) newIdx=0;
+  // Не дозволяємо йти в майбутнє
+  var nowIdx=new Date().getMonth();
+  if(newIdx>nowIdx) return;
+  S.selMonth=CFG.MONTHS_UA[newIdx];
+  showSpinner();
+  await loadPayments(true, S.selMonth);
+  renderView();
+}
+
+
 function renderClients(){
+  var navEl=document.getElementById('monthNav');
+  if(navEl) navEl.innerHTML=renderMonthNav();
   var locs=visibleLocs();
   if(!locs.length){
     var noDataHtml=Object.keys(S.groups).length?'<p>Оберіть локацію або зачекайте на синхронізацію</p>':'<p>Дані оплат не завантажені.<br>Перевірте налаштування Apps Script або запустіть <b>aggregatePayments()</b> вручну.</p>';
