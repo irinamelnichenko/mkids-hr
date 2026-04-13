@@ -976,7 +976,7 @@ async function refreshAll(){
   setSyncStatus('sync');
   try{
     await loadLocations(true);
-    await loadPayments(true);
+    await loadPayments(true, S.selMonth);
     await loadClients(true);
     await loadAllPayHistory();
     setSyncStatus('ok');
@@ -985,6 +985,19 @@ async function refreshAll(){
     buildGroups();
   }
   renderView();
+}
+
+async function triggerAggregateMonth(month){
+  var el=document.getElementById('sMsg');
+  if(el) el.innerHTML='<span style="color:var(--orange)">▶️ Збираємо дані за '+esc(month)+'…</span>';
+  try{
+    var j=await apiGet('runAggregate&month='+encodeURIComponent(month));
+    if(el) el.innerHTML='<span style="color:var(--green)">✅ Зібрано '+j.rows+' рядків за '+esc(j.month||month)+'</span>';
+    await loadPayments(true, month);
+    renderView();
+  }catch(e){
+    if(el) el.innerHTML='<span style="color:var(--red2)">❌ '+esc(e.message)+'</span>';
+  }
 }
 
 function showSpinner(){ document.getElementById('main').innerHTML='<div class="loading"><div class="spinner"></div><p>Завантаження даних…</p></div>'; }
@@ -1051,9 +1064,7 @@ function renderMonthNav(){
   var prevIdx=(idx-1+12)%12;
   var nextIdx=(idx+1)%12;
   var curYear=new Date().getFullYear();
-  // Якщо наступний місяць > поточного — це наступний рік (не показуємо)
   var nowIdx=new Date().getMonth();
-  var canNext=idx<nowIdx; // не можна йти вперед далі поточного місяця
 
   return '<div style="display:flex;align-items:center;gap:8px;background:#fff;border-radius:10px;padding:6px 14px;box-shadow:var(--sh)">'
     +'<button class="btn btn-icon btn-sm" onclick="changeMonth(-1)" title="Попередній місяць" style="padding:5px 10px">←</button>'
@@ -1061,7 +1072,7 @@ function renderMonthNav(){
     +CFG.MONTHS_DISP[idx]+' '+curYear
     +(idx===nowIdx?'<span style="font-size:10px;color:var(--green);margin-left:6px">● зараз</span>':'')
     +'</span>'
-    +'<button class="btn btn-icon btn-sm" onclick="changeMonth(1)" '+(canNext?'':'disabled style="opacity:.35;cursor:default"')+' title="Наступний місяць" style="padding:5px 10px">→</button>'
+    +'<button class="btn btn-icon btn-sm" onclick="changeMonth(1)" title="Наступний місяць" style="padding:5px 10px">→</button>'
     +'</div>';
 }
 
@@ -1070,9 +1081,6 @@ async function changeMonth(dir){
   var newIdx=idx+dir;
   if(newIdx<0) newIdx=11;
   if(newIdx>11) newIdx=0;
-  // Не дозволяємо йти в майбутнє
-  var nowIdx=new Date().getMonth();
-  if(newIdx>nowIdx) return;
   S.selMonth=CFG.MONTHS_UA[newIdx];
   showSpinner();
   await loadPayments(true, S.selMonth);
@@ -1332,7 +1340,10 @@ function renderSettings(){
     +'<div class="fg"><label>URL деплойменту</label><input type="url" id="sUrl" value="'+esc(url)+'" placeholder="https://script.google.com/macros/s/…/exec"></div>'
     +'<div style="display:flex;gap:8px"><button class="btn btn-primary btn-sm" onclick="saveScriptUrl()">💾 Зберегти</button>'
     +'<button class="btn btn-secondary btn-sm" onclick="testConn()">🔌 Тест</button>'
-    +'<button class="btn btn-secondary btn-sm" onclick="triggerAggregate()">▶️ Зібрати оплати зараз</button></div>'
+    +'<button class="btn btn-secondary btn-sm" onclick="triggerAggregate()">▶️ Зібрати поточний місяць</button></div>'
+    +'<div style="margin-top:10px"><b style="font-size:12px;color:var(--gray)">Зібрати дані за конкретний місяць:</b><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">'
+    +CFG.MONTHS_DISP.map(function(m,i){ return '<button class="btn btn-secondary btn-xs" onclick="triggerAggregateMonth(\''+CFG.MONTHS_UA[i]+'\')">'+m+'</button>'; }).join('')
+    +'</div></div>'
     +'<div id="sMsg" style="margin-top:10px;font-size:13px"></div></div></div>'
 
     +'<div class="card" style="margin-bottom:16px"><div class="card-hd"><h3>📊 Локації</h3></div><div class="modal-bd">'
