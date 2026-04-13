@@ -659,18 +659,14 @@ async function loadPayments(force){
   }
   var rows=[];
   var updated='';
+  // Читаємо ТІЛЬКИ через Apps Script щоб отримати правильні статуси
   try{
-    var vals=await sheetsRead('Оплати','A1:M2000');
-    rows=rowsToObjects(vals);
-    if(rows.length>0){
-      updated=String(rows[rows.length-1]['Оновлено']||'');
-      console.log('Payments loaded via direct API: '+rows.length+' rows');
-    }
-  }catch(e){
-    console.warn('Direct API for Payments failed ('+e.message+'), trying Apps Script…');
     var j=await apiGet('getPayments');
     rows=j.data||[];
     updated=j.updated||'';
+    console.log('Payments loaded via Apps Script: '+rows.length+' rows');
+  }catch(e){
+    console.warn('Apps Script failed: '+e.message);
   }
   S.payments=rows;
   S.payUpdated=updated;
