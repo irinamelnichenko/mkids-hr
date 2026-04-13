@@ -484,6 +484,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
       </div>
     </div>
     <div class="modal-ft">
+      <button class="btn btn-danger btn-sm" id="btnDeleteChild" onclick="deleteChild()" style="margin-right:auto">🗑️ Видалити</button>
       <button class="btn btn-secondary" onclick="closeModal('mChild')">Скасувати</button>
       <button class="btn btn-primary" onclick="saveChild()">💾 Зберегти</button>
     </div>
@@ -1364,6 +1365,7 @@ function openNewChild(){
   S.editId=null;
   S.isNew=true;
   document.getElementById('mChildTitle').textContent='➕ Нова дитина';
+  document.getElementById('btnDeleteChild').style.display='none';
   S.curTab=0;
   document.querySelectorAll('#mChildTabs .tab').forEach(function(t,i){ t.classList.toggle('active',i===0); });
   document.querySelectorAll('.tab-pane').forEach(function(p,i){ p.classList.toggle('active',i===0); });
@@ -1392,7 +1394,7 @@ function openChild(id,group,teacher,loc,name){
   if(!card.group) card.group=group;
   if(!card.teacher) card.teacher=teacher;
   if(!card.loc) card.loc=loc;
-
+  document.getElementById('btnDeleteChild').style.display='';
   setLocFieldMode(false);
   document.getElementById('mChildTitle').textContent='👤 '+card.name;
   S.curTab=0;
@@ -1838,6 +1840,22 @@ function addAbsence(){
   recalcDiscount();
 }
 function delAbsence(i){ getCRMCard(S.editId).absences.splice(i,1); renderAbsences(); recalcDiscount(); }
+
+// ─── DELETE ───────────────────────────────────────────────────────────────────
+function deleteChild(){
+  var id=S.editId; if(!id) return;
+  var card=S.crm[id]||{};
+  var name=card.name||id;
+  if(!confirm('Видалити "'+name+'" з CRM?\n\nУвага: клієнт буде видалений тільки з CRM-картки. Дані в Payment Sheet залишаться.')) return;
+  // Видаляємо локально
+  delete S.crm[id];
+  saveLocalCRM();
+  // Видаляємо в хмарі
+  apiPost({action:'deleteClient', id:id});
+  localStorage.removeItem(CFG.CLI_CACHE);
+  closeModal('mChild');
+  renderView();
+}
 
 // ─── SAVE ─────────────────────────────────────────────────────────────────────
 function saveChild(){
