@@ -323,7 +323,6 @@ tbody tr.clickable:hover td{background:#f0f7ff}
       </div>
       <div class="topbar-r">
         <span id="syncStatus"></span>
-        <div id="monthNav"></div>
         <button class="btn btn-secondary btn-sm" onclick="refreshAll()">🔄 Оновити</button>
       </div>
     </div>
@@ -529,8 +528,7 @@ var S = {
   editId:   null,
   isNew:    false,
   curTab:   0,
-  payUpdated: '',
-  selMonth: ''   // обраний місяць (порожньо = поточний)
+  payUpdated: ''
 };
 
 // ─── UTILS ────────────────────────────────────────────────────────────────────
@@ -670,29 +668,26 @@ async function loadLocations(force){
   localStorage.setItem(CFG.LOC_CACHE,JSON.stringify({data:S.locs,ts:Date.now()}));
 }
 
-async function loadPayments(force, month){
-  var cacheKey = CFG.PAY_CACHE + (month ? '_' + month : '');
+async function loadPayments(force){
   if(!force){
-    var c=localStorage.getItem(cacheKey);
+    var c=localStorage.getItem(CFG.PAY_CACHE);
     if(c){ var p=JSON.parse(c); if(Date.now()-p.ts<CFG.TTL){ S.payments=p.data; S.payUpdated=p.updated||''; S.payMonth=p.month||''; buildGroups(); return; } }
   }
   var rows=[];
   var updated='';
   var retMonth='';
   try{
-    var url = 'getPayments' + (month ? '&month=' + encodeURIComponent(month) : '');
-    var j=await apiGet(url);
+    var j=await apiGet('getPayments');
     rows=j.data||[];
     updated=j.updated||'';
-    retMonth=j.month||month||'';
-    console.log('Payments loaded: '+rows.length+' rows, month='+retMonth);
+    retMonth=j.month||'';
   }catch(e){
     console.warn('loadPayments failed: '+e.message);
   }
   S.payments=rows;
   S.payUpdated=updated;
   S.payMonth=retMonth;
-  localStorage.setItem(cacheKey,JSON.stringify({data:rows,ts:Date.now(),updated:updated,month:retMonth}));
+  localStorage.setItem(CFG.PAY_CACHE,JSON.stringify({data:rows,ts:Date.now(),updated:updated,month:retMonth}));
   buildGroups();
 }
 
@@ -976,7 +971,7 @@ async function refreshAll(){
   setSyncStatus('sync');
   try{
     await loadLocations(true);
-    await loadPayments(true, S.selMonth);
+    await loadPayments(true);
     await loadClients(true);
     await loadAllPayHistory();
     setSyncStatus('ok');
@@ -985,19 +980,6 @@ async function refreshAll(){
     buildGroups();
   }
   renderView();
-}
-
-async function triggerAggregateMonth(month){
-  var el=document.getElementById('sMsg');
-  if(el) el.innerHTML='<span style="color:var(--orange)">▶️ Збираємо дані за '+esc(month)+'…</span>';
-  try{
-    var j=await apiGet('runAggregate&month='+encodeURIComponent(month));
-    if(el) el.innerHTML='<span style="color:var(--green)">✅ Зібрано '+j.rows+' рядків за '+esc(j.month||month)+'</span>';
-    await loadPayments(true, month);
-    renderView();
-  }catch(e){
-    if(el) el.innerHTML='<span style="color:var(--red2)">❌ '+esc(e.message)+'</span>';
-  }
 }
 
 function showSpinner(){ document.getElementById('main').innerHTML='<div class="loading"><div class="spinner"></div><p>Завантаження даних…</p></div>'; }
@@ -1047,50 +1029,7 @@ function calcStats(locsArr, groupFilter){
   return {totalKids:totalKids, totalDebt:totalDebt, debtors:debtors};
 }
 
-// ─── НАВІГАЦІЯ ПО МІСЯЦЯХ ────────────────────────────────────────────────────
-function getCurrentMonthIdx(){
-  // Якщо обрано місяць вручну
-  if(S.selMonth){
-    var i=CFG.MONTHS_UA.indexOf(S.selMonth.toLowerCase());
-    if(i>=0) return i;
-  }
-  // Інакше — поточний місяць
-  var now=new Date();
-  return now.getMonth(); // 0=січень
-}
-
-function renderMonthNav(){
-  var idx=getCurrentMonthIdx();
-  var prevIdx=(idx-1+12)%12;
-  var nextIdx=(idx+1)%12;
-  var curYear=new Date().getFullYear();
-  var nowIdx=new Date().getMonth();
-
-  return '<div style="display:flex;align-items:center;gap:8px;background:#fff;border-radius:10px;padding:6px 14px;box-shadow:var(--sh)">'
-    +'<button class="btn btn-icon btn-sm" onclick="changeMonth(-1)" title="Попередній місяць" style="padding:5px 10px">←</button>'
-    +'<span style="font-size:14px;font-weight:700;color:var(--dark);min-width:130px;text-align:center">'
-    +CFG.MONTHS_DISP[idx]+' '+curYear
-    +(idx===nowIdx?'<span style="font-size:10px;color:var(--green);margin-left:6px">● зараз</span>':'')
-    +'</span>'
-    +'<button class="btn btn-icon btn-sm" onclick="changeMonth(1)" title="Наступний місяць" style="padding:5px 10px">→</button>'
-    +'</div>';
-}
-
-async function changeMonth(dir){
-  var idx=getCurrentMonthIdx();
-  var newIdx=idx+dir;
-  if(newIdx<0) newIdx=11;
-  if(newIdx>11) newIdx=0;
-  S.selMonth=CFG.MONTHS_UA[newIdx];
-  showSpinner();
-  await loadPayments(true, S.selMonth);
-  renderView();
-}
-
-
 function renderClients(){
-  var navEl=document.getElementById('monthNav');
-  if(navEl) navEl.innerHTML=renderMonthNav();
   var locs=visibleLocs();
   if(!locs.length){
     var noDataHtml=Object.keys(S.groups).length?'<p>Оберіть локацію або зачекайте на синхронізацію</p>':'<p>Дані оплат не завантажені.<br>Перевірте налаштування Apps Script або запустіть <b>aggregatePayments()</b> вручну.</p>';
@@ -1340,10 +1279,7 @@ function renderSettings(){
     +'<div class="fg"><label>URL деплойменту</label><input type="url" id="sUrl" value="'+esc(url)+'" placeholder="https://script.google.com/macros/s/…/exec"></div>'
     +'<div style="display:flex;gap:8px"><button class="btn btn-primary btn-sm" onclick="saveScriptUrl()">💾 Зберегти</button>'
     +'<button class="btn btn-secondary btn-sm" onclick="testConn()">🔌 Тест</button>'
-    +'<button class="btn btn-secondary btn-sm" onclick="triggerAggregate()">▶️ Зібрати поточний місяць</button></div>'
-    +'<div style="margin-top:10px"><b style="font-size:12px;color:var(--gray)">Зібрати дані за конкретний місяць:</b><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">'
-    +CFG.MONTHS_DISP.map(function(m,i){ return '<button class="btn btn-secondary btn-xs" onclick="triggerAggregateMonth(\''+CFG.MONTHS_UA[i]+'\')">'+m+'</button>'; }).join('')
-    +'</div></div>'
+    +'<button class="btn btn-secondary btn-sm" onclick="triggerAggregate()">▶️ Зібрати оплати зараз</button></div>'
     +'<div id="sMsg" style="margin-top:10px;font-size:13px"></div></div></div>'
 
     +'<div class="card" style="margin-bottom:16px"><div class="card-hd"><h3>📊 Локації</h3></div><div class="modal-bd">'
