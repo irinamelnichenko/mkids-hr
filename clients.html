@@ -425,17 +425,32 @@ tbody tr.clickable:hover td{background:#f0f7ff}
       </div>
       <!-- Tab 2: Внески -->
       <div class="tab-pane" id="tp2">
-        <div class="fg"><label>Вступний внесок — загальна сума (грн)</label>
-          <input type="number" id="fEntryFee" placeholder="0" oninput="renderEntryFee()"></div>
-        <div class="section-hd">Графік оплати (до 3 місяців)</div>
-        <div id="entryFeeList"></div>
-        <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
-          <input type="date" id="fEFDate" style="flex:1;min-width:120px;padding:8px;border:1.5px solid var(--gray2);border-radius:8px;font-size:13px">
-          <input type="number" id="fEFAmt" placeholder="Сума грн" style="flex:1;min-width:80px;padding:8px;border:1.5px solid var(--gray2);border-radius:8px;font-size:13px">
-          <input type="text" id="fEFNote" placeholder="Примітка" style="flex:2;min-width:120px;padding:8px;border:1.5px solid var(--gray2);border-radius:8px;font-size:13px">
-          <button class="btn btn-secondary btn-sm" onclick="addEntryFeeRow()">+ Додати</button>
+        <div class="alert alert-info" style="margin-bottom:14px;font-size:13px">
+          <b>Директор</b> вносить план при підписанні договору. <b>Фінансист</b> фіксує факт у Payment Sheet (колонка "вступ") — CRM автоматично порівнює.
         </div>
-        <div id="entryFeeSummary" style="margin-top:12px"></div>
+        <div class="g2">
+          <div class="fg"><label>Загальна сума вступного за договором (грн)</label>
+            <input type="number" id="fEntryFee" placeholder="0" oninput="renderEntryFee()"></div>
+          <div id="entryFeeSummary" style="display:flex;align-items:center"></div>
+        </div>
+        <div class="section-hd">Графік платежів — план (max 3)</div>
+        <div id="entryFeeList"></div>
+        <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:flex-end">
+          <div style="display:flex;flex-direction:column;gap:3px;flex:1;min-width:110px">
+            <label style="font-size:11px;font-weight:700;color:var(--gray);text-transform:uppercase;letter-spacing:.5px">Дата платежу</label>
+            <input type="date" id="fEFDate" style="padding:8px;border:1.5px solid var(--gray2);border-radius:8px;font-size:13px;font-family:inherit">
+          </div>
+          <div style="display:flex;flex-direction:column;gap:3px;flex:1;min-width:90px">
+            <label style="font-size:11px;font-weight:700;color:var(--gray);text-transform:uppercase;letter-spacing:.5px">Сума (грн)</label>
+            <input type="number" id="fEFAmt" placeholder="0" style="padding:8px;border:1.5px solid var(--gray2);border-radius:8px;font-size:13px;font-family:inherit">
+          </div>
+          <div style="display:flex;flex-direction:column;gap:3px;flex:2;min-width:120px">
+            <label style="font-size:11px;font-weight:700;color:var(--gray);text-transform:uppercase;letter-spacing:.5px">Примітка</label>
+            <input type="text" id="fEFNote" placeholder="напр. перша частина, доплата за повний день" style="padding:8px;border:1.5px solid var(--gray2);border-radius:8px;font-size:13px;font-family:inherit">
+          </div>
+          <button class="btn btn-secondary btn-sm" onclick="addEntryFeeRow()" style="white-space:nowrap">+ Додати платіж</button>
+        </div>
+        <div id="entryFeeFactBlock" style="margin-top:16px"></div>
       </div>
       <!-- Tab 3: Відпустки -->
       <div class="tab-pane" id="tp3">
@@ -1138,7 +1153,7 @@ function renderClients(){
         +'</span></div>'
         +'<div class="tbl-wrap"><table><thead><tr>'
         +'<th>Ім\'я дитини</th><th>Статус оплати</th>'
-        +'<th>Навчання</th><th>Вступний</th><th>Доп.</th><th>Бюджет (грн)</th><th>Телефон</th><th></th>'
+        +'<th>Факт (навч+доп)</th><th>Бюджет разом</th><th>Вступний</th><th>Телефон</th><th></th>'
         +'</tr></thead><tbody>';
 
       children.forEach(function(ch){
@@ -1148,17 +1163,56 @@ function renderClients(){
         var budForStatus=ch.budget||0;
         var over=factForStatus>budForStatus?factForStatus-budForStatus:0;
         var debtAmt=ch.status==='nopay'?budForStatus:(budForStatus>factForStatus?budForStatus-factForStatus:0);
-        var crmCard=S.crm[ch.id]||{};
-        var entryFee=crmCard.entryFee||0;
-        var entryPaid=(crmCard.entryFeeSchedule||[]).reduce(function(s,r){return s+r.amount;},0);
-        var entryIcon=entryFee===0?'':(entryPaid>=entryFee?'<span title="Вступний сплачено" style="color:var(--green)">✅</span>':entryPaid>0?'<span title="Вступний частково: '+fmtN(entryPaid)+'/'+fmtN(entryFee)+'" style="color:var(--orange)">⚠️</span>':'<span title="Вступний не сплачено: '+fmtN(entryFee)+' грн" style="color:var(--red2)">❌</span>');
+        // Факт разом (навч + доп, без вступного)
+        var factTotal=factForStatus;
+        // Бюджет разом з розшифровкою
+        var budStudy=ch.budgetStudy||0;
+        var budExtra=ch.budgetExtra||0;
+        var budHint=budStudy&&budExtra?'навч '+fmtN(budStudy)+' + доп '+fmtN(budExtra):(budStudy?'навч '+fmtN(budStudy):(budExtra?'доп '+fmtN(budExtra):''));
+        var budCell='<div style="font-weight:600">'+fmtN(budForStatus)+'</div>'+(budHint?'<div style="font-size:11px;color:var(--gray)">'+budHint+'</div>':'');
+        // Вступний — порівнюємо план (CRM) з фактом (Payment Sheet)
+        var entryPlan=card.entryFee||0;
+        var entryFactPaid=ch.factEntry||0; // факт з Payment Sheet колонка "вступ"
+        var entryCell='<span style="color:var(--gray2)">—</span>';
+        if(entryPlan>0){
+          if(entryFactPaid>=entryPlan){
+            entryCell='<div style="color:var(--green);font-size:12px;font-weight:600">✓ '+fmtN(entryFactPaid)+' / '+fmtN(entryPlan)+'</div>'
+              +'<div style="font-size:11px;color:var(--green)">сплачено повністю</div>';
+          } else if(entryFactPaid>0){
+            // Знаходимо наступний очікуваний платіж з графіку
+            var sched=card.entryFeeSchedule||[];
+            var paidSoFar=0;
+            var nextDate='';
+            var nextAmt=0;
+            for(var si=0;si<sched.length;si++){
+              if(paidSoFar+sched[si].amount<=entryFactPaid){
+                paidSoFar+=sched[si].amount;
+              } else {
+                nextDate=sched[si].date;
+                nextAmt=sched[si].amount;
+                break;
+              }
+            }
+            entryCell='<div style="color:var(--orange);font-size:12px;font-weight:600">'+fmtN(entryFactPaid)+' / '+fmtN(entryPlan)+'</div>'
+              +'<div style="font-size:11px;color:var(--gray)">залишок '+fmtN(entryPlan-entryFactPaid)+(nextDate?' · '+fmtD(nextDate):'')+'</div>';
+          } else {
+            // Ще не платив — перший платіж з графіку
+            var schedFirst=(card.entryFeeSchedule||[])[0];
+            var firstDate=schedFirst?fmtD(schedFirst.date):'';
+            entryCell='<div style="color:var(--red2);font-size:12px;font-weight:600">0 / '+fmtN(entryPlan)+'</div>'
+              +'<div style="font-size:11px;color:var(--gray)">'+(firstDate?'очікується '+firstDate:'не сплачено')+'</div>';
+          }
+        } else if(entryFactPaid>0){
+          // Факт є але плану немає — просто показуємо факт
+          entryCell='<div style="color:var(--green);font-size:12px;font-weight:600">✓ '+fmtN(entryFactPaid)+'</div>'
+            +'<div style="font-size:11px;color:var(--green)">сплачено</div>';
+        }
         html+='<tr class="clickable" onclick="openChild(\''+esc(String(ch.id||''))+'\',\''+esc(String(ch.group||''))+'\',\''+esc(String(ch.teacher||grp.teacher||''))+'\',\''+esc(String(ch.loc||''))+'\',\''+esc(String(ch.name||''))+'\')">'
-          +'<td><span class="child-link">'+esc(ch.name)+'</span>'+(entryIcon?' '+entryIcon:'')+'</td>'
+          +'<td><span class="child-link">'+esc(ch.name)+'</span></td>'
           +'<td>'+payBadge(ch.status,debtAmt,over)+'</td>'
-          +'<td>'+(ch.factStudy?fmtN(ch.factStudy):'—')+'</td>'
-          +'<td>'+(ch.factEntry?fmtN(ch.factEntry):'—')+'</td>'
-          +'<td>'+(ch.factExtra?fmtN(ch.factExtra):'—')+'</td>'
-          +'<td>'+fmtN(ch.budget)+'</td>'
+          +'<td style="font-weight:600">'+(factTotal?fmtN(factTotal):'—')+'</td>'
+          +'<td>'+budCell+'</td>'
+          +'<td>'+entryCell+'</td>'
           +'<td>'+(phone?'<a href="tel:'+esc(phone)+'" onclick="event.stopPropagation()" style="color:var(--blue2)">'+esc(phone)+'</a>':'<span style="color:var(--gray2)">—</span>')+'</td>'
           +'<td>'+(phone?'<a href="tel:'+esc(phone)+'" onclick="event.stopPropagation()" class="call-btn">📞 Дзвонити</a>':'')+'</td>'
           +'</tr>';
@@ -1622,12 +1676,68 @@ function renderEntryFee(){
   var c=S.crm[id]||{};
   var sched=c.entryFeeSchedule||[];
   var total=parseFloat(document.getElementById('fEntryFee').value)||c.entryFee||0;
-  var paid=sched.reduce(function(s,r){ return s+r.amount; },0);
+
+  // Факт з Payment Sheet (колонка "вступ")
+  var factPaid=0;
+  outer2:for(var loc2 in S.groups){
+    for(var gi2=0;gi2<S.groups[loc2].length;gi2++){
+      var g2=S.groups[loc2][gi2];
+      for(var ci2=0;ci2<g2.children.length;ci2++){
+        if(g2.children[ci2].id===id){ factPaid=g2.children[ci2].factEntry||0; break outer2; }
+      }
+    }
+  }
+
+  // Список запланованих платежів
   var el=document.getElementById('entryFeeList'); if(!el) return;
-  el.innerHTML=!sched.length?'<p style="color:var(--gray);font-size:13px">Платежів не записано</p>'
-    :sched.map(function(r,i){ return '<div class="fee-row"><span class="fr-date">'+fmtD(r.date)+'</span><span class="fr-amt">'+fmtN(r.amount)+' грн</span><span class="fr-note">'+esc(r.note||'')+'</span><button class="del-btn" onclick="delEntryFeeRow('+i+')">✕</button></div>'; }).join('');
+  if(!sched.length){
+    el.innerHTML='<p style="color:var(--gray);font-size:13px;padding:8px 0">Платежів не записано. Додайте графік нижче.</p>';
+  } else {
+    var paidSoFar=0;
+    el.innerHTML=sched.map(function(r,i){
+      var isPaid=paidSoFar+r.amount<=factPaid;
+      if(isPaid) paidSoFar+=r.amount;
+      var isNext=!isPaid&&paidSoFar<=factPaid&&factPaid<paidSoFar+r.amount+0.01;
+      var statusHtml=isPaid
+        ?'<span style="background:#e8f8f0;color:#1e8449;font-size:11px;font-weight:700;padding:3px 9px;border-radius:99px">✓ сплачено</span>'
+        :isNext
+          ?'<span style="background:#fef4e9;color:#e67e22;font-size:11px;font-weight:700;padding:3px 9px;border-radius:99px">⏳ очікується</span>'
+          :'<span style="background:#f0f4f8;color:#7f8c8d;font-size:11px;font-weight:700;padding:3px 9px;border-radius:99px">– план</span>';
+      return '<div class="fee-row" style="'+(isPaid?'background:#f0faf5':isNext?'background:#fef9ee':'')+';">'
+        +'<span style="font-weight:700;color:var(--dark2);min-width:20px;text-align:center">'+(i+1)+'.</span>'
+        +'<span class="fr-date">'+fmtD(r.date)+'</span>'
+        +'<span class="fr-amt">'+fmtN(r.amount)+' грн</span>'
+        +'<span class="fr-note" style="flex:1">'+esc(r.note||'')+'</span>'
+        +statusHtml
+        +'<button class="del-btn" onclick="delEntryFeeRow('+i+')" title="Видалити">✕</button>'
+        +'</div>';
+    }).join('');
+  }
+
+  // Підсумок
   var sumEl=document.getElementById('entryFeeSummary'); if(!sumEl) return;
-  if(total>0) sumEl.innerHTML='<div class="alert alert-'+(paid>=total?'ok':'warn')+'">Сплачено: <b>'+fmtN(paid)+' грн</b> з '+fmtN(total)+' грн'+(paid<total?' | Залишок: <b>'+fmtN(total-paid)+' грн</b>':' | ✅ Повністю сплачено')+'</div>';
+  if(total>0){
+    var pct=Math.round(factPaid/total*100);
+    var leftAmt=total-factPaid;
+    var color=factPaid>=total?'var(--green)':factPaid>0?'var(--orange)':'var(--red2)';
+    sumEl.innerHTML='<div class="alert alert-'+(factPaid>=total?'ok':factPaid>0?'warn':'danger')+'" style="display:flex;flex-direction:column;gap:4px">'
+      +'<div style="font-size:14px;font-weight:700;color:'+color+'">'+fmtN(factPaid)+' / '+fmtN(total)+' грн</div>'
+      +'<div style="font-size:12px">'+(factPaid>=total?'✅ Вступний сплачено повністю':factPaid>0?'Залишок: <b>'+fmtN(leftAmt)+' грн</b> ('+pct+'% сплачено)':'⚠️ Вступний не сплачено')+'</div>'
+      +'<div style="font-size:11px;color:var(--gray)">Факт з Payment Sheet (колонка "вступ")</div>'
+      +'</div>';
+  } else {
+    sumEl.innerHTML='';
+  }
+
+  // Блок факту
+  var factEl=document.getElementById('entryFeeFactBlock'); if(!factEl) return;
+  if(factPaid>0&&total===0){
+    factEl.innerHTML='<div class="alert alert-ok"><b style="color:var(--green)">✓ Факт з Payment Sheet: '+fmtN(factPaid)+' грн</b><div style="font-size:12px;margin-top:3px">Вступний зафіксований. Загальна сума за договором не заповнена — вкажіть вище для порівняння.</div></div>';
+  } else if(factPaid===0&&total===0){
+    factEl.innerHTML='<div style="font-size:12px;color:var(--gray);margin-top:4px">Вступного немає або ще не вносився.</div>';
+  } else {
+    factEl.innerHTML='';
+  }
 }
 function addEntryFeeRow(){
   var id=S.editId; if(!id) return;
