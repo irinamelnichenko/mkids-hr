@@ -481,7 +481,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 var CFG = {
   SCRIPT_KEY:    'crm_script_url',
-  SCRIPT_URL:    'https://script.google.com/macros/s/AKfycbzRjOxeSq4rGENySKY4MZncIk4DqxwsuiS24oFodLt3-9R0tbcdrLhsA-YpW3osPn0-/exec',
+  SCRIPT_URL:    'https://script.google.com/macros/s/AKfycbwxWYeMP2hVyo2cOV66-887WV0nIlQ-LIkn6eUY1YOsxSfkNdVXZ99_KzVv3cpmiyPA/exec',
   SK:            'crm_mkids_v3',
   LOC_CACHE:     'crm_locs_v3',
   PAY_CACHE:     'crm_pay_v3',
@@ -1144,8 +1144,8 @@ function renderClients(){
       children.forEach(function(ch){
         var card=S.crm[ch.id]||{};
         var phone=card.momPhone||card.dadPhone||'';
-        var over=ch.factTotal>ch.budget?ch.factTotal-ch.budget:0;
-        var debtAmt=ch.status==='nopay'?ch.budget:(ch.debt||0);
+        var over=ch.factStudy>ch.budgetStudy?ch.factStudy-ch.budgetStudy:0;
+        var debtAmt=ch.status==='nopay'?ch.budgetStudy:(ch.debt||0);
         var crmCard=S.crm[ch.id]||{};
         var entryFee=crmCard.entryFee||0;
         var entryPaid=(crmCard.entryFeeSchedule||[]).reduce(function(s,r){return s+r.amount;},0);
