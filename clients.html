@@ -1166,9 +1166,12 @@ function renderClients(){
         var debtAmt=ch.status==='nopay'?budForStatus:(budForStatus>factForStatus?budForStatus-factForStatus:0);
         // Факт разом (навч + доп, без вступного)
         var factTotal=factForStatus;
-        // Бюджет разом з розшифровкою
-        var budStudy=ch.budgetStudy||0;
-        var budExtra=ch.budgetExtra||0;
+        // Бюджет разом з розшифровкою — використовуємо факт навч і факт доп
+        var budStudy=ch.factStudy||0;
+        var budExtra=ch.factExtra||0;
+        // Якщо немає факту — беремо з бюджету
+        if(budStudy===0) budStudy=ch.budgetStudy||0;
+        if(budExtra===0) budExtra=ch.budgetExtra||0;
         var budHint=budStudy&&budExtra?'навч '+fmtN(budStudy)+' + доп '+fmtN(budExtra):(budStudy?'навч '+fmtN(budStudy):(budExtra?'доп '+fmtN(budExtra):''));
         var budCell='<div style="font-weight:600">'+fmtN(budForStatus)+'</div>'+(budHint?'<div style="font-size:11px;color:var(--gray)">'+budHint+'</div>':'');
         // Вступний — порівнюємо план (CRM) з фактом (Payment Sheet)
