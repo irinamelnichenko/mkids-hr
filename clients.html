@@ -1161,7 +1161,7 @@ function renderClients(){
         var card=S.crm[ch.id]||{};
         var phone=card.momPhone||card.dadPhone||'';
         var factForStatus=(ch.factStudy||0)+(ch.factExtra||0);
-        var realBudStudy=ch.budgetStudy||0;var realBudExtra=ch.budgetExtra||0;var realBudExtra=ch.budgetExtra||0;var budForStatus=realBudStudy+realBudExtra;
+        var realBudStudy=ch.budgetStudy||0;var realBudExtra=ch.budgetExtra||0;var budForStatus=(realBudStudy||0)+(realBudExtra||0);var realBudExtra=ch.budgetExtra||0;var budForStatus=realBudStudy+realBudExtra;
         var over=factForStatus>budForStatus?factForStatus-budForStatus:0;
         var debtAmt=ch.status==='nopay'?budForStatus:(budForStatus>factForStatus?budForStatus-factForStatus:0);
         // Факт разом (навч + доп, без вступного)
