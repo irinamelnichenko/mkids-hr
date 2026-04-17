@@ -1232,7 +1232,7 @@ function renderClients(){
 function payBadge(status,debt,over){
   if(status==='paid')  return '<span class="badge bg">✅ Оплачено</span>';
   if(status==='nopay') return '<span class="badge br">❌ Борг '+(debt?fmtN(Math.round(debt))+' грн':'')+'</span>';
-  if(status==='over')  return '<span class="badge bg">✅ Оплачено '+(over?fmtN(Math.round(over))+' грн':'')+'</span>';
+  if(status==='over')  return '<span class="badge bg">✅ Оплачено</span>';
   if(status==='debt')  return '<span class="badge br">❌ Борг '+(debt?fmtN(Math.round(debt))+' грн':'')+'</span>';
   return '<span class="badge bgr">— Немає даних</span>';
 }
