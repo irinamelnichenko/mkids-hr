@@ -2127,22 +2127,47 @@ function byLocation(rows){
   });
   return Object.values(map).sort(function(a,b){ return b.collected-a.collected; });
 }
-function topDebtors(rows){
-  return rows.filter(function(r){ return +(r['Борг-Рік']||0)>0; })
-    .sort(function(a,b){ return (+(b['Борг-Рік']||0))-(+(a['Борг-Рік']||0)); }).slice(0,5);
+// Борг дитини за вказані місяці (тільки ті де budget > fact)
+function calcRowPeriodDebt(row, monthIndices){
+  var d=0;
+  monthIndices.forEach(function(mi){
+    var mn=CFG.MONTHS_DISP[mi];
+    var fact=+(row[mn+'-Факт-навч']||0)+(+(row[mn+'-Факт-доп']||0));
+    var bud=+(row[mn+'-Бюджет-навч']||0)+(+(row[mn+'-Бюджет-доп']||0));
+    if(bud>fact) d+=bud-fact;
+  });
+  return d;
+}
+// Топ-5 боржників за вказані місяці (реальні дані, без Борг-Рік)
+function topDebtorsByPeriod(rows, monthIndices){
+  var res=[];
+  rows.forEach(function(r){
+    var d=calcRowPeriodDebt(r,monthIndices);
+    if(d>0) res.push({r:r,debt:d});
+  });
+  res.sort(function(a,b){ return b.debt-a.debt; });
+  return res.slice(0,5);
 }
 function groupDist(rows){
   var map={};
   rows.forEach(function(r){ var g=normalizeGroup(String(r['Група']||'').trim())||'Інше'; map[g]=(map[g]||0)+1; });
   return Object.entries(map).sort(function(a,b){ return b[1]-a[1]; });
 }
+// Місяці обраного фільтра (тільки <= поточного місяця)
 function getAnaPeriodMonths(){
   var curM=new Date().getMonth();
   if(S.anaSelPeriod==='month') return [curM];
   if(S.anaSelPeriod==='q3'){
     var arr=[]; for(var i=2;i>=0;i--){ arr.push((curM-i+12)%12); } return arr;
   }
+  // year → повертаємо всі 12, але для боргу/зібрано використовуємо pastMonths
   return [0,1,2,3,4,5,6,7,8,9,10,11];
+}
+// Місяці від Січня до поточного включно
+function getPastMonths(){
+  var curM=new Date().getMonth();
+  var arr=[]; for(var i=0;i<=curM;i++) arr.push(i);
+  return arr;
 }
 
 function renderAnalytics(){
@@ -2153,6 +2178,11 @@ function renderAnalytics(){
     return;
   }
 
+  var curM=new Date().getMonth();
+  var pastMonths=getPastMonths();            // 0..curM — для боргу і зібрано (без майбутніх)
+  var periodMonths=getAnaPeriodMonths();     // для "Останні 3 місяці" / "Поточний місяць"
+
+  // ── Фільтри ─────────────────────────────────────────────────────────────────
   var locs=isHR()?S.locs:S.locs.filter(function(l){ return l.loc===S.user.loc; });
   var locOpts=(isHR()?'<option value="">Всі локації</option>':'')+locs.map(function(l){
     return '<option value="'+esc(l.loc)+'"'+(S.anaSelLoc===l.loc?' selected':'')+'>'+esc(l.loc)+'</option>';
@@ -2164,107 +2194,143 @@ function renderAnalytics(){
     +'<select class="flt-sel" onchange="S.anaSelPeriod=this.value;renderAnalytics()">'+periodOpts+'</select>'
     +'</div>';
 
-  // Metrics
-  var periodMonths=getAnaPeriodMonths();
-  var totalKids=rows.length, totalCollected=0, totalBudget=0, totalDebt=0;
+  // ── Метрики ──────────────────────────────────────────────────────────────────
+  var totalKids=rows.length, totalCollected=0, totalBudget=0, totalDebt=0, debtorsCount=0;
+
   if(S.anaSelPeriod==='year'){
+    // Зібрано-На-Сьогодні = факт за Jan..curMonth (обраховано в Apps Script)
+    // Борг = тільки pastMonths (не включаємо майбутні місяці)
     rows.forEach(function(r){
       totalCollected+=+(r['Зібрано-На-Сьогодні']||0);
       totalBudget+=+(r['Бюджет-Рік']||0);
-      var d=+(r['Борг-Рік']||0); if(d>0) totalDebt+=d;
+      var d=calcRowPeriodDebt(r,pastMonths);
+      if(d>0){ totalDebt+=d; debtorsCount++; }
     });
   } else {
-    periodMonths.forEach(function(mi){
-      var mn=CFG.MONTHS_DISP[mi];
-      rows.forEach(function(r){
+    // Для конкретного періоду: рахуємо факт/бюджет/борг по обраних місяцях
+    // periodMonths вже <= curM (getAnaPeriodMonths не повертає майбутні)
+    rows.forEach(function(r){
+      periodMonths.forEach(function(mi){
+        var mn=CFG.MONTHS_DISP[mi];
         totalCollected+=+(r[mn+'-Факт-навч']||0)+(+(r[mn+'-Факт-доп']||0));
         totalBudget+=+(r[mn+'-Бюджет-навч']||0)+(+(r[mn+'-Бюджет-доп']||0));
-        var d=+(r[mn+'-Бюджет-навч']||0)+(+(r[mn+'-Бюджет-доп']||0))-(+(r[mn+'-Факт-навч']||0))-(+(r[mn+'-Факт-доп']||0));
-        if(d>0) totalDebt+=d;
       });
+      var d=calcRowPeriodDebt(r,periodMonths);
+      if(d>0){ totalDebt+=d; debtorsCount++; }
     });
   }
 
-  // Monthly bar chart
+  // % від бюджету
+  var pctCollected=totalBudget>0?Math.min(100,Math.round(totalCollected/totalBudget*100)):0;
+
+  // ── Графік по місяцях (завжди показуємо 12 місяців з доступних даних) ───────
   var monthly=monthlyTotals(rows);
   var barCollected=monthly.map(function(m){ return Math.round(m.collected); });
   var barBudget=monthly.map(function(m){ return Math.round(m.budget); });
 
-  // Location ranking
-  var locData=byLocation(rows);
+  // ── Локації — зібрано (Зібрано-На-Сьогодні) ─────────────────────────────────
+  var locMap={};
+  rows.forEach(function(r){
+    var loc=String(r['Локація']||'').trim(); if(!loc) return;
+    if(!locMap[loc]) locMap[loc]={loc:loc,collected:0};
+    locMap[loc].collected+=+(r['Зібрано-На-Сьогодні']||0);
+  });
+  var locData=Object.values(locMap).sort(function(a,b){ return b.collected-a.collected; });
   var maxLocC=locData.length?locData[0].collected:1;
 
-  // Top debtors
-  var debtors=topDebtors(rows);
+  // ── Топ-5 боржників за обраний період (реальні дані) ─────────────────────────
+  var debtMonths=S.anaSelPeriod==='year'?pastMonths:periodMonths;
+  var top5=topDebtorsByPeriod(rows,debtMonths);
 
-  // Group donut
+  // ── Розподіл по групах ───────────────────────────────────────────────────────
   var grpData=groupDist(rows);
 
-  // Forecast
-  var curJSM=new Date().getMonth();
-  var monthsElapsed=curJSM+1;
+  // ── Прогноз (тільки для річного режиму) ─────────────────────────────────────
+  var monthsElapsed=curM+1;
   var monthlyAvg=monthsElapsed>0?totalCollected/monthsElapsed:0;
   var forecast=Math.round(monthlyAvg*12);
-  var pct=totalBudget>0?Math.min(100,Math.round(totalCollected/totalBudget*100)):0;
-  var progCls=pct>=80?'':pct>=50?'warn':'danger';
+  var progCls=pctCollected>=80?'':pctCollected>=50?'warn':'danger';
 
+  // ── HTML ─────────────────────────────────────────────────────────────────────
   var html=filtersHtml;
-  // Metric cards
+
+  // Metric cards — 4 картки
   html+='<div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(190px,1fr))">'
-    +'<div class="stat-card"><div class="stat-icon si-b">👶</div><div><div class="stat-val">'+totalKids+'</div><div class="stat-lbl">Усього дітей</div></div></div>'
-    +'<div class="stat-card"><div class="stat-icon si-g">💵</div><div><div class="stat-val">'+fmtN(Math.round(totalCollected))+'</div><div class="stat-lbl">Зібрано (грн)</div></div></div>'
-    +'<div class="stat-card"><div class="stat-icon si-p">📈</div><div><div class="stat-val">'+fmtN(Math.round(totalBudget))+'</div><div class="stat-lbl">Бюджет (грн)</div></div></div>'
-    +'<div class="stat-card"><div class="stat-icon si-r">💸</div><div><div class="stat-val" style="color:var(--red2)">'+fmtN(Math.round(totalDebt))+'</div><div class="stat-lbl">Загальний борг (грн)</div></div></div>'
+    +'<div class="stat-card"><div class="stat-icon si-b">👶</div><div>'
+    +'<div class="stat-val">'+totalKids+'</div>'
+    +'<div class="stat-lbl">Усього дітей</div></div></div>'
+
+    +'<div class="stat-card"><div class="stat-icon si-g">💵</div><div>'
+    +'<div class="stat-val">'+fmtN(Math.round(totalCollected))+'</div>'
+    +'<div class="stat-lbl">Зібрано (грн) · <span style="color:var(--green)">'+pctCollected+'% від бюджету</span></div></div></div>'
+
+    +'<div class="stat-card"><div class="stat-icon si-p">📈</div><div>'
+    +'<div class="stat-val">'+fmtN(Math.round(totalBudget))+'</div>'
+    +'<div class="stat-lbl">Бюджет за період (грн)</div></div></div>'
+
+    +'<div class="stat-card"><div class="stat-icon si-r">💸</div><div>'
+    +'<div class="stat-val" style="color:var(--red2)">'+fmtN(Math.round(totalDebt))+'</div>'
+    +'<div class="stat-lbl">Борг (грн) · <span style="color:var(--red2)">'+debtorsCount+' боржників</span></div></div></div>'
     +'</div>';
-  // Bar chart (full width)
+
+  // Bar chart — динаміка по місяцях
   html+='<div class="chart-grid">'
-    +'<div class="chart-card chart-full"><h3>Оплати по місяцях — 2026 (грн)</h3>'
+    +'<div class="chart-card chart-full"><h3>Динаміка оплат по місяцях — 2026 (грн)</h3>'
     +'<div class="chart-wrap"><canvas id="chartMonthly"></canvas></div></div></div>';
-  // Locations + Donut
-  html+='<div class="chart-grid"><div class="chart-card"><h3>Локації — зібрано за рік (грн)</h3>';
+
+  // Локації + Donut
+  html+='<div class="chart-grid"><div class="chart-card"><h3>Топ локацій — зібрано (грн)</h3>';
   if(locData.length){
     locData.forEach(function(ld){
       var w=maxLocC>0?Math.round(ld.collected/maxLocC*100):0;
-      html+='<div class="hbar-row"><div class="hbar-label" title="'+esc(ld.loc)+'">'+esc(ld.loc)+'</div>'
+      html+='<div class="hbar-row">'
+        +'<div class="hbar-label" title="'+esc(ld.loc)+'">'+esc(ld.loc)+'</div>'
         +'<div class="hbar-track"><div class="hbar-fill" style="width:'+w+'%"></div></div>'
         +'<div class="hbar-val">'+fmtN(Math.round(ld.collected/1000))+'к</div></div>';
     });
   } else { html+='<div class="empty">Немає даних</div>'; }
   html+='</div>'
-    +'<div class="chart-card"><h3>Діти за типом групи</h3>'
+    +'<div class="chart-card"><h3>Розподіл по типах груп</h3>'
     +'<div class="chart-wrap"><canvas id="chartGroups"></canvas></div></div></div>';
-  // Top-5 debtors
-  html+='<div class="card" style="margin-bottom:22px"><div class="card-hd"><h3>❌ Топ-5 боржників</h3></div>'
-    +'<div class="tbl-wrap"><table><thead><tr><th>#</th><th>Дитина</th><th>Локація</th><th>Група</th>'
+
+  // Топ-5 боржників
+  var periodLabel=S.anaSelPeriod==='year'?'(за минулі місяці 2026)':S.anaSelPeriod==='month'?'(поточний місяць)':'(останні 3 місяці)';
+  html+='<div class="card" style="margin-bottom:22px">'
+    +'<div class="card-hd"><h3>❌ Топ-5 боржників '+periodLabel+'</h3></div>'
+    +'<div class="tbl-wrap"><table>'
+    +'<thead><tr><th>#</th><th>Дитина</th><th>Локація</th><th>Група</th>'
     +'<th style="text-align:right">Борг (грн)</th></tr></thead><tbody>';
-  if(debtors.length){
-    debtors.forEach(function(r,i){
+  if(top5.length){
+    top5.forEach(function(item,i){
+      var r=item.r;
       var name=String(r["Ім'я дитини"]||'').trim();
       var loc=String(r['Локація']||'').trim();
       var grp=normalizeGroup(String(r['Група']||'').trim());
-      var debt=+(r['Борг-Рік']||0);
       html+='<tr class="clickable" onclick="switchMainTab(\'clients\');S.searchQ='+JSON.stringify(name)+';S.view=\'clients\';renderView()">'
         +'<td style="color:var(--gray);font-weight:700">'+(i+1)+'</td>'
         +'<td><span style="color:var(--blue2);font-weight:600">'+esc(name)+'</span></td>'
         +'<td>'+esc(loc)+'</td><td>'+esc(grp)+'</td>'
-        +'<td style="text-align:right"><span class="badge br">'+fmtN(Math.round(debt))+' грн</span></td></tr>';
+        +'<td style="text-align:right"><span class="badge br">'+fmtN(Math.round(item.debt))+' грн</span></td></tr>';
     });
   } else {
     html+='<tr><td colspan="5" style="text-align:center;color:var(--gray);padding:20px">Боржників немає 🎉</td></tr>';
   }
   html+='</tbody></table></div></div>';
-  // Forecast
-  html+='<div class="card" style="margin-bottom:22px"><div class="card-hd"><h3>📅 Прогноз на кінець року</h3></div>'
-    +'<div style="padding:20px">'
-    +'<div style="display:flex;justify-content:space-between;font-size:12px;color:var(--gray);margin-bottom:4px">'
-    +'<span>Виконання бюджету</span><span>'+pct+'%</span></div>'
-    +'<div class="prog-bar-wrap"><div class="prog-bar '+progCls+'" style="width:'+pct+'%"></div></div>'
-    +'<div class="forecast-grid">'
-    +'<div class="fc-item"><label>Зібрано</label><div class="fc-val">'+fmtN(Math.round(totalCollected))+' <span style="font-size:13px;font-weight:400;color:var(--gray)">грн</span></div></div>'
-    +'<div class="fc-item"><label>Бюджет року</label><div class="fc-val">'+fmtN(Math.round(totalBudget))+' <span style="font-size:13px;font-weight:400;color:var(--gray)">грн</span></div></div>'
-    +'<div class="fc-item"><label>Середньомісячно</label><div class="fc-val">'+fmtN(Math.round(monthlyAvg))+' <span style="font-size:13px;font-weight:400;color:var(--gray)">грн</span></div></div>'
-    +'<div class="fc-item"><label>Очікувана виручка</label><div class="fc-val" style="color:var(--green)">'+fmtN(forecast)+' <span style="font-size:13px;font-weight:400;color:var(--gray)">грн</span></div></div>'
-    +'</div></div></div>';
+
+  // Прогноз (тільки для річного режиму де є сенс)
+  if(S.anaSelPeriod==='year'){
+    html+='<div class="card" style="margin-bottom:22px"><div class="card-hd"><h3>📅 Прогноз на кінець 2026 року</h3></div>'
+      +'<div style="padding:20px">'
+      +'<div style="display:flex;justify-content:space-between;font-size:12px;color:var(--gray);margin-bottom:4px">'
+      +'<span>Виконання бюджету (факт до сьогодні / бюджет року)</span><span>'+pctCollected+'%</span></div>'
+      +'<div class="prog-bar-wrap"><div class="prog-bar '+progCls+'" style="width:'+pctCollected+'%"></div></div>'
+      +'<div class="forecast-grid">'
+      +'<div class="fc-item"><label>Зібрано</label><div class="fc-val">'+fmtN(Math.round(totalCollected))+' <span style="font-size:13px;font-weight:400;color:var(--gray)">грн</span></div></div>'
+      +'<div class="fc-item"><label>Бюджет року</label><div class="fc-val">'+fmtN(Math.round(totalBudget))+' <span style="font-size:13px;font-weight:400;color:var(--gray)">грн</span></div></div>'
+      +'<div class="fc-item"><label>Середньомісячно</label><div class="fc-val">'+fmtN(Math.round(monthlyAvg))+' <span style="font-size:13px;font-weight:400;color:var(--gray)">грн</span></div></div>'
+      +'<div class="fc-item"><label>Очікувана виручка</label><div class="fc-val" style="color:var(--green)">'+fmtN(forecast)+' <span style="font-size:13px;font-weight:400;color:var(--gray)">грн</span></div></div>'
+      +'</div></div></div>';
+  }
 
   main.innerHTML=html;
   setTimeout(function(){
