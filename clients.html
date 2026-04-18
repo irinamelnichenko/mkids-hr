@@ -222,6 +222,49 @@ tbody tr.clickable:hover td{background:#f0f7ff}
 ::-webkit-scrollbar-thumb:hover{background:#b8c1cc}
 
 
+/* ANALYTICS EXTRAS */
+.stat-card.clickable-card{cursor:pointer;border:2px solid transparent;transition:transform .2s,border-color .2s,box-shadow .2s}
+.stat-card.clickable-card:hover{transform:translateY(-3px);border-color:var(--green2);box-shadow:0 6px 20px rgba(39,174,96,.15)}
+.stat-card.clickable-card.active-card{border-color:var(--green);box-shadow:0 4px 16px rgba(39,174,96,.2)}
+.detail-panel{background:#fff;border-radius:var(--r);padding:18px 20px;box-shadow:var(--sh);margin-bottom:16px;border-left:4px solid var(--green)}
+.detail-panel h4{font-size:13px;font-weight:700;color:var(--dark);margin-bottom:12px}
+.detail-scroll{max-height:300px;overflow-y:auto;border:1px solid #f0f4f8;border-radius:8px}
+.detail-row{display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid #f8fafc;font-size:13px}
+.detail-row:last-child{border-bottom:none}
+.detail-row:hover{background:#f8faff}
+.compare-block{background:#fff;border-radius:var(--r);padding:18px 20px;box-shadow:var(--sh);margin-bottom:16px}
+.compare-block h4{font-size:13px;font-weight:700;color:var(--dark);margin-bottom:14px}
+.cmp-row{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #f8fafc;font-size:13px}
+.cmp-row:last-child{border-bottom:none}
+.cmp-label{width:180px;color:var(--gray);flex-shrink:0;font-size:12px}
+.cmp-vals{display:flex;flex-wrap:wrap;gap:12px;flex:1}
+.cmp-val{font-weight:700;color:var(--dark)}
+.cmp-val.highlight{color:var(--green);background:#e8f8f0;padding:2px 8px;border-radius:12px}
+.cmp-val.warn{color:var(--red2);background:#fdf0f0;padding:2px 8px;border-radius:12px}
+.heat-wrap{overflow-x:auto;margin-bottom:22px}
+.heat-table{border-collapse:collapse;font-size:11px;min-width:700px}
+.heat-table th{padding:5px 8px;background:#f8fafc;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--gray);border:1px solid #e8ecf0;white-space:nowrap}
+.heat-table th.loc-col{text-align:left;min-width:130px;position:sticky;left:0;background:#f8fafc;z-index:1}
+.heat-table td{padding:6px 8px;border:1px solid #e8ecf0;text-align:center;font-weight:600;cursor:default;white-space:nowrap}
+.heat-table td.loc-name{text-align:left;font-weight:700;color:var(--dark2);position:sticky;left:0;background:#fff;z-index:1}
+.hc-g{background:#d4edda;color:#155724}.hc-y{background:#fff3cd;color:#856404}
+.hc-o{background:#ffe0b2;color:#e65100}.hc-r{background:#f8d7da;color:#721c24}
+.hc-gray{background:#f8fafc;color:#bdc3c7}
+.fin-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:16px}
+.fin-card{background:#fff;border-radius:var(--r);padding:14px 16px;box-shadow:var(--sh)}
+.fin-card h4{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--gray);margin-bottom:10px}
+.fin-item{display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:1px solid #f8fafc;font-size:12px}
+.fin-item:last-child{border-bottom:none}
+.fin-item .fi-val{font-weight:700;color:var(--dark)}
+.fi-good{color:var(--green)!important}.fi-bad{color:var(--red2)!important}
+.discipline-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:16px}
+.disc-card{border-radius:var(--r);padding:16px;text-align:center}
+.disc-card.always{background:#e8f8f0;border:1px solid #9ae6b4}
+.disc-card.sometimes{background:#fef9e7;border:1px solid #f9ca24}
+.disc-card.chronic{background:#fdf2f2;border:1px solid #fca5a5}
+.disc-num{font-size:36px;font-weight:900;line-height:1}
+.disc-lbl{font-size:11px;font-weight:700;margin-top:4px;text-transform:uppercase;letter-spacing:.5px}
+
 /* ANALYTICS CHARTS */
 .chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:22px}
 .chart-card{background:#fff;border-radius:var(--r);padding:20px;box-shadow:var(--sh)}
@@ -588,7 +631,8 @@ var S = {
   // Аналітика — вкладка
   mainTab:      'clients',
   anaSelLoc:    '',
-  anaSelPeriod: 'year'
+  anaSelPeriod: 'year',
+  anaDetail:    null   // ключ відкритої деталізації: 'kids'|'debtors'|'collected'|'budget'|'pct'|null
 };
 
 // ─── UTILS ────────────────────────────────────────────────────────────────────
@@ -2104,6 +2148,42 @@ function drawDonutChart(canvasId,labels,data){
   });
 }
 
+function toggleAnaDetail(key){
+  S.anaDetail = S.anaDetail === key ? null : key;
+  renderAnalytics();
+}
+
+function drawLineChart(canvasId,labels,datasets){
+  destroyChart(canvasId);
+  var ctx=document.getElementById(canvasId); if(!ctx) return;
+  _charts[canvasId]=new Chart(ctx,{
+    type:'line',
+    data:{labels:labels,datasets:datasets},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{position:'bottom',labels:{font:{size:11},boxWidth:12}}},
+      scales:{x:{grid:{display:false},ticks:{font:{size:10}}},
+        y:{grid:{color:'#f0f4f8'},beginAtZero:true,ticks:{font:{size:10}}}}}
+  });
+}
+
+// Борг дитини за один місяць
+function calcMonthDebt(row, mi){
+  var mn=CFG.MONTHS_DISP[mi];
+  var fact=+(row[mn+'-Факт-навч']||0)+(+(row[mn+'-Факт-доп']||0));
+  var bud=+(row[mn+'-Бюджет-навч']||0)+(+(row[mn+'-Бюджет-доп']||0));
+  return bud>fact?bud-fact:0;
+}
+
+// Кількість останніх підряд місяців з боргом (з кінця масиву)
+function consecutiveDebtMonths(row, monthIndices){
+  var count=0;
+  for(var i=monthIndices.length-1;i>=0;i--){
+    if(calcMonthDebt(row,monthIndices[i])>0) count++;
+    else break;
+  }
+  return count;
+}
+
 function anaVisibleRows(){
   var rows=S.yearlyData;
   if(!isHR()&&S.user&&S.user.loc) rows=rows.filter(function(r){ return String(r['Локація']||'').trim()===S.user.loc; });
@@ -2172,17 +2252,19 @@ function getPastMonths(){
 
 function renderAnalytics(){
   var rows=anaVisibleRows();
+  var allYRows=S.yearlyData; // незафільтровані — для порівняння між локаціями
   var main=document.getElementById('main');
-  if(!S.yearlyData.length){
+  if(!allYRows.length){
     main.innerHTML='<div class="loading"><div class="spinner"></div><p>Завантаження річних даних…</p></div>';
     return;
   }
 
   var curM=new Date().getMonth();
-  var pastMonths=getPastMonths();            // 0..curM — для боргу і зібрано (без майбутніх)
-  var periodMonths=getAnaPeriodMonths();     // для "Останні 3 місяці" / "Поточний місяць"
+  var pastMonths=getPastMonths();        // [0..curM]
+  var periodMonths=getAnaPeriodMonths(); // для фільтру q3/month
+  var debtMonths=S.anaSelPeriod==='year'?pastMonths:periodMonths;
 
-  // ── Фільтри ─────────────────────────────────────────────────────────────────
+  // ── Фільтри HTML ─────────────────────────────────────────────────────────────
   var locs=isHR()?S.locs:S.locs.filter(function(l){ return l.loc===S.user.loc; });
   var locOpts=(isHR()?'<option value="">Всі локації</option>':'')+locs.map(function(l){
     return '<option value="'+esc(l.loc)+'"'+(S.anaSelLoc===l.loc?' selected':'')+'>'+esc(l.loc)+'</option>';
@@ -2190,126 +2272,312 @@ function renderAnalytics(){
   var periodOpts=[{v:'year',l:'Рік 2026'},{v:'q3',l:'Останні 3 місяці'},{v:'month',l:'Поточний місяць'}]
     .map(function(o){ return '<option value="'+o.v+'"'+(S.anaSelPeriod===o.v?' selected':'')+'>'+o.l+'</option>'; }).join('');
   var filtersHtml='<div class="filters">'
-    +(isHR()?'<select class="flt-sel" onchange="S.anaSelLoc=this.value;renderAnalytics()">'+locOpts+'</select>':'')
-    +'<select class="flt-sel" onchange="S.anaSelPeriod=this.value;renderAnalytics()">'+periodOpts+'</select>'
+    +(isHR()?'<select class="flt-sel" onchange="S.anaSelLoc=this.value;S.anaDetail=null;renderAnalytics()">'+locOpts+'</select>':'')
+    +'<select class="flt-sel" onchange="S.anaSelPeriod=this.value;S.anaDetail=null;renderAnalytics()">'+periodOpts+'</select>'
     +'</div>';
 
-  // ── Метрики ──────────────────────────────────────────────────────────────────
+  // ── МЕТРИКИ ───────────────────────────────────────────────────────────────────
   var totalKids=rows.length, totalCollected=0, totalBudget=0, totalDebt=0, debtorsCount=0;
-
   if(S.anaSelPeriod==='year'){
-    // Зібрано-На-Сьогодні = факт за Jan..curMonth (обраховано в Apps Script)
-    // Борг = тільки pastMonths (не включаємо майбутні місяці)
     rows.forEach(function(r){
       totalCollected+=+(r['Зібрано-На-Сьогодні']||0);
       totalBudget+=+(r['Бюджет-Рік']||0);
-      var d=calcRowPeriodDebt(r,pastMonths);
-      if(d>0){ totalDebt+=d; debtorsCount++; }
+      var d=calcRowPeriodDebt(r,pastMonths); if(d>0){totalDebt+=d;debtorsCount++;}
     });
   } else {
-    // Для конкретного періоду: рахуємо факт/бюджет/борг по обраних місяцях
-    // periodMonths вже <= curM (getAnaPeriodMonths не повертає майбутні)
     rows.forEach(function(r){
       periodMonths.forEach(function(mi){
         var mn=CFG.MONTHS_DISP[mi];
         totalCollected+=+(r[mn+'-Факт-навч']||0)+(+(r[mn+'-Факт-доп']||0));
         totalBudget+=+(r[mn+'-Бюджет-навч']||0)+(+(r[mn+'-Бюджет-доп']||0));
       });
-      var d=calcRowPeriodDebt(r,periodMonths);
-      if(d>0){ totalDebt+=d; debtorsCount++; }
+      var d=calcRowPeriodDebt(r,periodMonths); if(d>0){totalDebt+=d;debtorsCount++;}
     });
   }
-
-  // % від бюджету
   var pctCollected=totalBudget>0?Math.min(100,Math.round(totalCollected/totalBudget*100)):0;
 
-  // ── Графік по місяцях (завжди показуємо 12 місяців з доступних даних) ───────
+  // Картка 5: % оплат на сьогодні (factToday / budgetToday)
+  var collectedToday=0, budgetToday=0;
+  rows.forEach(function(r){
+    collectedToday+=+(r['Зібрано-На-Сьогодні']||0);
+    pastMonths.forEach(function(mi){
+      var mn=CFG.MONTHS_DISP[mi];
+      budgetToday+=+(r[mn+'-Бюджет-навч']||0)+(+(r[mn+'-Бюджет-доп']||0));
+    });
+  });
+  var pctToday=budgetToday>0?Math.min(100,Math.round(collectedToday/budgetToday*100)):0;
+  var pctTodayColor=pctToday>=80?'var(--green)':pctToday>=50?'var(--orange)':'var(--red2)';
+
+  // Картка 6: % поточного місяця
+  var mnCur=CFG.MONTHS_DISP[curM];
+  var factCurM=0, budCurM=0;
+  rows.forEach(function(r){
+    factCurM+=+(r[mnCur+'-Факт-навч']||0)+(+(r[mnCur+'-Факт-доп']||0));
+    budCurM+=+(r[mnCur+'-Бюджет-навч']||0)+(+(r[mnCur+'-Бюджет-доп']||0));
+  });
+  var pctCurM=budCurM>0?Math.min(100,Math.round(factCurM/budCurM*100)):0;
+  var pctCurMColor=pctCurM>=80?'var(--green)':pctCurM>=50?'var(--orange)':'var(--red2)';
+
+  // ── ДАНІ ДЛЯ ГРАФІКІВ ─────────────────────────────────────────────────────────
   var monthly=monthlyTotals(rows);
   var barCollected=monthly.map(function(m){ return Math.round(m.collected); });
   var barBudget=monthly.map(function(m){ return Math.round(m.budget); });
 
-  // ── Локації — зібрано (Зібрано-На-Сьогодні) ─────────────────────────────────
-  var locMap={};
+  // Динаміка кількості дітей по місяцях (унікальні з ненульовим фактом)
+  var kidsPerMonth=CFG.MONTHS_DISP.map(function(mn){
+    return rows.filter(function(r){ return (+(r[mn+'-Факт-навч']||0))+(+(r[mn+'-Факт-доп']||0))>0; }).length;
+  });
+  // Приріст у поточному місяці
+  var kCur=kidsPerMonth[curM], kPrev=curM>0?kidsPerMonth[curM-1]:kCur;
+  var growth=kCur-kPrev;
+
+  // ── ЛОКАЦІЇ (per-location stats для всіх блоків) ──────────────────────────────
+  var locStatsMap={};
   rows.forEach(function(r){
     var loc=String(r['Локація']||'').trim(); if(!loc) return;
-    if(!locMap[loc]) locMap[loc]={loc:loc,collected:0};
-    locMap[loc].collected+=+(r['Зібрано-На-Сьогодні']||0);
+    if(!locStatsMap[loc]) locStatsMap[loc]={loc:loc,kids:0,collected:0,budgetToday:0,debt:0,budFull:0};
+    locStatsMap[loc].kids++;
+    locStatsMap[loc].collected+=+(r['Зібрано-На-Сьогодні']||0);
+    locStatsMap[loc].budFull+=+(r['Бюджет-Рік']||0);
+    pastMonths.forEach(function(mi){
+      var mn=CFG.MONTHS_DISP[mi];
+      locStatsMap[loc].budgetToday+=+(r[mn+'-Бюджет-навч']||0)+(+(r[mn+'-Бюджет-доп']||0));
+    });
+    locStatsMap[loc].debt+=calcRowPeriodDebt(r,pastMonths);
   });
-  var locData=Object.values(locMap).sort(function(a,b){ return b.collected-a.collected; });
-  var maxLocC=locData.length?locData[0].collected:1;
+  var locArr=Object.values(locStatsMap);
+  locArr.sort(function(a,b){ return b.collected-a.collected; });
+  var maxLocC=locArr.length?locArr[0].collected:1;
 
-  // ── Топ-5 боржників за обраний період (реальні дані) ─────────────────────────
-  var debtMonths=S.anaSelPeriod==='year'?pastMonths:periodMonths;
+  // ── ТОП ДЕБЛОКЕРИ ─────────────────────────────────────────────────────────────
   var top5=topDebtorsByPeriod(rows,debtMonths);
 
-  // ── Розподіл по групах ───────────────────────────────────────────────────────
+  // ── РОЗПОДІЛ ГРУП ─────────────────────────────────────────────────────────────
   var grpData=groupDist(rows);
 
-  // ── Прогноз (тільки для річного режиму) ─────────────────────────────────────
+  // ── ПРОГНОЗ ───────────────────────────────────────────────────────────────────
   var monthsElapsed=curM+1;
-  var monthlyAvg=monthsElapsed>0?totalCollected/monthsElapsed:0;
+  var monthlyAvg=monthsElapsed>0?collectedToday/monthsElapsed:0;
   var forecast=Math.round(monthlyAvg*12);
-  var progCls=pctCollected>=80?'':pctCollected>=50?'warn':'danger';
+  var progCls=pctToday>=80?'':pctToday>=50?'warn':'danger';
 
-  // ── HTML ─────────────────────────────────────────────────────────────────────
+  // ── ФІНАНСОВІ МЕТРИКИ ─────────────────────────────────────────────────────────
+  var avgCheck=totalKids>0&&monthsElapsed>0?Math.round(collectedToday/totalKids/monthsElapsed):0;
+  // Локації з найбільшим pct виконання (collected/budgetToday)
+  var locPct=locArr.map(function(l){
+    return {loc:l.loc, pct:l.budgetToday>0?Math.round(l.collected/l.budgetToday*100):0,
+      collected:l.collected, debt:l.debt, kids:l.kids};
+  }).sort(function(a,b){ return b.pct-a.pct; });
+  var topLocs=locPct.slice(0,3);
+  var worstLocs=locPct.slice().sort(function(a,b){ return a.pct-b.pct; }).slice(0,3);
+  var mostDebtLocs=locArr.slice().sort(function(a,b){ return b.debt-a.debt; }).slice(0,3);
+
+  // ── ПОРІВНЯННЯ З МЕРЕЖЕЮ (якщо обрана конкретна локація) ──────────────────────
+  var cmpHtml='';
+  if(S.anaSelLoc&&locStatsMap[S.anaSelLoc]){
+    var tl=locStatsMap[S.anaSelLoc];
+    // Статистика по всій мережі (allYRows) для порівняння
+    var netMap={};
+    allYRows.forEach(function(r){
+      var loc=String(r['Локація']||'').trim(); if(!loc) return;
+      if(!netMap[loc]) netMap[loc]={kids:0,collected:0,budgetToday:0,debt:0};
+      netMap[loc].kids++;
+      netMap[loc].collected+=+(r['Зібрано-На-Сьогодні']||0);
+      pastMonths.forEach(function(mi){
+        var mn=CFG.MONTHS_DISP[mi];
+        netMap[loc].budgetToday+=+(r[mn+'-Бюджет-навч']||0)+(+(r[mn+'-Бюджет-доп']||0));
+      });
+      netMap[loc].debt+=calcRowPeriodDebt(r,pastMonths);
+    });
+    var netArr=Object.values(netMap);
+    var netByCollected=netArr.slice().sort(function(a,b){ return b.collected-a.collected; });
+    var rank=netByCollected.findIndex(function(l){ return l.loc===S.anaSelLoc; })+1;
+    var netPcts=netArr.map(function(l){ return l.budgetToday>0?l.collected/l.budgetToday:0; });
+    var avgNetPct=netPcts.length?Math.round(netPcts.reduce(function(s,v){ return s+v; },0)/netPcts.length*100):0;
+    var maxNetPct=netArr.slice().sort(function(a,b){ return (b.budgetToday>0?b.collected/b.budgetToday:0)-(a.budgetToday>0?a.collected/a.budgetToday:0); });
+    var leaderPct=maxNetPct.length&&maxNetPct[0].budgetToday>0?Math.round(maxNetPct[0].collected/maxNetPct[0].budgetToday*100):0;
+    var thisLocPct=tl.budgetToday>0?Math.round(tl.collected/tl.budgetToday*100):0;
+    var netDebtPcts=netArr.map(function(l){ return {loc:l.loc,dp:l.budgetToday>0?l.debt/l.budgetToday:0}; });
+    var avgDebtPct=netDebtPcts.length?Math.round(netDebtPcts.reduce(function(s,v){ return s+v.dp; },0)/netDebtPcts.length*100):0;
+    var worstDebt=netDebtPcts.slice().sort(function(a,b){ return b.dp-a.dp; })[0];
+    var worstDebtPct=worstDebt?Math.round(worstDebt.dp*100):0;
+    var netKids=netArr.map(function(l){ return l.kids; });
+    var avgKids=netKids.length?Math.round(netKids.reduce(function(s,v){ return s+v; },0)/netKids.length):0;
+    var maxKidsLoc=netArr.slice().sort(function(a,b){ return b.kids-a.kids; })[0];
+    cmpHtml='<div class="compare-block" style="margin-bottom:22px">'
+      +'<h4>📊 Порівняння: <b>'+esc(S.anaSelLoc)+'</b> з мережею</h4>'
+      +'<div class="cmp-row"><div class="cmp-label">Позиція в рейтингу</div>'
+      +'<div class="cmp-vals"><span class="cmp-val highlight">'+rank+'-а з '+netByCollected.length+' локацій</span><span style="font-size:12px;color:var(--gray)">за зібраними оплатами</span></div></div>'
+      +'<div class="cmp-row"><div class="cmp-label">% зібрано</div>'
+      +'<div class="cmp-vals">'
+      +'<span class="cmp-val">'+esc(S.anaSelLoc)+' <b>'+thisLocPct+'%</b></span>'
+      +'<span class="cmp-val" style="color:var(--gray)">Середнє '+avgNetPct+'%</span>'
+      +'<span class="cmp-val" style="color:var(--green)">Лідер ('+esc(maxNetPct[0]&&maxNetPct[0].loc||'')+') '+leaderPct+'%</span>'
+      +'</div></div>'
+      +'<div class="cmp-row"><div class="cmp-label">Борг від бюджету</div>'
+      +'<div class="cmp-vals">'
+      +'<span class="cmp-val">'+esc(S.anaSelLoc)+' <b>'+Math.round((tl.budgetToday>0?tl.debt/tl.budgetToday:0)*100)+'%</b></span>'
+      +'<span class="cmp-val" style="color:var(--gray)">Середнє '+avgDebtPct+'%</span>'
+      +'<span class="cmp-val warn">Найгірша ('+esc(worstDebt&&worstDebt.loc||'')+') '+worstDebtPct+'%</span>'
+      +'</div></div>'
+      +'<div class="cmp-row"><div class="cmp-label">Кількість дітей</div>'
+      +'<div class="cmp-vals">'
+      +'<span class="cmp-val">'+esc(S.anaSelLoc)+' <b>'+tl.kids+'</b></span>'
+      +'<span class="cmp-val" style="color:var(--gray)">Середнє '+avgKids+'</span>'
+      +'<span class="cmp-val" style="color:var(--green)">Макс ('+esc(maxKidsLoc&&maxKidsLoc.loc||'')+') '+((maxKidsLoc&&maxKidsLoc.kids)||0)+'</span>'
+      +'</div></div>'
+      +'</div>';
+  }
+
+  // ── ПЛАТІЖНА ДИСЦИПЛІНА ───────────────────────────────────────────────────────
+  var always=[],sometimes=[],chronic=[];
+  rows.forEach(function(r){
+    if(!pastMonths.length){ always.push({r:r,cnt:0}); return; }
+    var cnt=pastMonths.filter(function(mi){ return calcMonthDebt(r,mi)>0; }).length;
+    var obj={r:r,cnt:cnt,consec:consecutiveDebtMonths(r,pastMonths)};
+    if(cnt===0) always.push(obj);
+    else if(cnt<=2) sometimes.push(obj);
+    else chronic.push(obj);
+  });
+  chronic.sort(function(a,b){ return b.consec-a.consec||b.cnt-a.cnt; });
+
+  // ── ХЕТМАП ────────────────────────────────────────────────────────────────────
+  var heatSource=isHR()?allYRows:allYRows.filter(function(r){ return String(r['Локація']||'').trim()===S.user.loc; });
+  var heatMap={};
+  heatSource.forEach(function(r){
+    var loc=String(r['Локація']||'').trim(); if(!loc) return;
+    if(!heatMap[loc]) { heatMap[loc]=[]; for(var i=0;i<12;i++) heatMap[loc].push({f:0,b:0}); }
+    for(var mi=0;mi<12;mi++){
+      var mn=CFG.MONTHS_DISP[mi];
+      heatMap[loc][mi].f+=+(r[mn+'-Факт-навч']||0)+(+(r[mn+'-Факт-доп']||0));
+      heatMap[loc][mi].b+=+(r[mn+'-Бюджет-навч']||0)+(+(r[mn+'-Бюджет-доп']||0));
+    }
+  });
+  var heatLocs=Object.keys(heatMap).sort();
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // ── БУДУЄМО HTML ──────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────────
   var html=filtersHtml;
 
-  // Metric cards — 4 картки
-  html+='<div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(190px,1fr))">'
-    +'<div class="stat-card"><div class="stat-icon si-b">👶</div><div>'
-    +'<div class="stat-val">'+totalKids+'</div>'
-    +'<div class="stat-lbl">Усього дітей</div></div></div>'
+  // ─ 6 карток метрик (клікабельні) ────────────────────────────────────────────
+  function cardClass(key){ return 'stat-card clickable-card'+(S.anaDetail===key?' active-card':''); }
+  html+='<div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(175px,1fr));margin-bottom:10px">'
+    +'<div class="'+cardClass('kids')+'" onclick="toggleAnaDetail(\'kids\')">'
+    +'<div class="stat-icon si-b">👶</div><div><div class="stat-val">'+totalKids+'</div><div class="stat-lbl">Усього дітей</div></div></div>'
 
-    +'<div class="stat-card"><div class="stat-icon si-g">💵</div><div>'
-    +'<div class="stat-val">'+fmtN(Math.round(totalCollected))+'</div>'
-    +'<div class="stat-lbl">Зібрано (грн) · <span style="color:var(--green)">'+pctCollected+'% від бюджету</span></div></div></div>'
+    +'<div class="'+cardClass('collected')+'" onclick="toggleAnaDetail(\'collected\')">'
+    +'<div class="stat-icon si-g">💵</div><div><div class="stat-val">'+fmtN(Math.round(totalCollected))+'</div>'
+    +'<div class="stat-lbl">Зібрано (грн)</div></div></div>'
 
-    +'<div class="stat-card"><div class="stat-icon si-p">📈</div><div>'
-    +'<div class="stat-val">'+fmtN(Math.round(totalBudget))+'</div>'
-    +'<div class="stat-lbl">Бюджет за період (грн)</div></div></div>'
+    +'<div class="'+cardClass('budget')+'" onclick="toggleAnaDetail(\'budget\')">'
+    +'<div class="stat-icon si-p">📈</div><div><div class="stat-val">'+fmtN(Math.round(totalBudget))+'</div>'
+    +'<div class="stat-lbl">Бюджет за період</div></div></div>'
 
-    +'<div class="stat-card"><div class="stat-icon si-r">💸</div><div>'
-    +'<div class="stat-val" style="color:var(--red2)">'+fmtN(Math.round(totalDebt))+'</div>'
-    +'<div class="stat-lbl">Борг (грн) · <span style="color:var(--red2)">'+debtorsCount+' боржників</span></div></div></div>'
+    +'<div class="'+cardClass('debtors')+'" onclick="toggleAnaDetail(\'debtors\')">'
+    +'<div class="stat-icon si-r">💸</div><div><div class="stat-val" style="color:var(--red2)">'+fmtN(Math.round(totalDebt))+'</div>'
+    +'<div class="stat-lbl">Борг (грн) · '+debtorsCount+' дітей</div></div></div>'
+
+    +'<div class="'+cardClass('pct')+'" onclick="toggleAnaDetail(\'pct\')">'
+    +'<div class="stat-icon si-g">📊</div><div><div class="stat-val" style="color:'+pctTodayColor+'">'+pctToday+'%</div>'
+    +'<div class="stat-lbl">% оплат до сьогодні<br><small style="color:var(--gray)">'+fmtN(Math.round(collectedToday))+' з '+fmtN(Math.round(budgetToday))+'</small></div></div></div>'
+
+    +'<div class="stat-card clickable-card" style="cursor:default">'
+    +'<div class="stat-icon si-b">📅</div><div><div class="stat-val" style="color:'+pctCurMColor+'">'+pctCurM+'%</div>'
+    +'<div class="stat-lbl">% за '+esc(mnCur)+'<br><small style="color:var(--gray)">'+fmtN(Math.round(factCurM))+' з '+fmtN(Math.round(budCurM))+'</small></div></div></div>'
     +'</div>';
 
-  // Bar chart — динаміка по місяцях
-  html+='<div class="chart-grid">'
-    +'<div class="chart-card chart-full"><h3>Динаміка оплат по місяцях — 2026 (грн)</h3>'
+  // ─ Деталізація (розгортається під картками) ──────────────────────────────────
+  if(S.anaDetail){
+    html+='<div class="detail-panel">';
+    if(S.anaDetail==='kids'){
+      html+='<h4>👶 Усі діти ('+totalKids+')</h4><div class="detail-scroll">';
+      rows.forEach(function(r){
+        var name=String(r["Ім'я дитини"]||'').trim();
+        var loc=String(r['Локація']||'').trim();
+        var grp=normalizeGroup(String(r['Група']||'').trim());
+        html+='<div class="detail-row"><span style="flex:1;font-weight:600">'+esc(name)+'</span>'
+          +'<span style="color:var(--gray);min-width:100px">'+esc(loc)+'</span>'
+          +'<span style="color:var(--gray)">'+esc(grp)+'</span></div>';
+      });
+      html+='</div>';
+    } else if(S.anaDetail==='debtors'){
+      var allDebtors=topDebtorsByPeriod(rows,debtMonths); // only top but let's show all
+      // show ALL debtors, not just top 5
+      var allD=rows.map(function(r){ return {r:r,debt:calcRowPeriodDebt(r,debtMonths)}; })
+        .filter(function(x){ return x.debt>0; }).sort(function(a,b){ return b.debt-a.debt; });
+      html+='<h4>❌ Боржники ('+allD.length+') за обраний період</h4><div class="detail-scroll">';
+      allD.forEach(function(item){
+        var r=item.r;
+        var name=String(r["Ім'я дитини"]||'').trim();
+        var loc=String(r['Локація']||'').trim();
+        var id=childId(name,'',loc);
+        html+='<div class="detail-row">'
+          +'<span style="flex:1"><a href="clients.html?q='+encodeURIComponent(name)+'" style="color:var(--blue2);font-weight:600">'+esc(name)+'</a></span>'
+          +'<span style="color:var(--gray);min-width:100px">'+esc(loc)+'</span>'
+          +'<span style="color:var(--red2);font-weight:700;min-width:80px;text-align:right">'+fmtN(Math.round(item.debt))+' грн</span></div>';
+      });
+      html+='</div>';
+    } else if(S.anaDetail==='collected'){
+      html+='<h4>💵 Зібрано по локаціях</h4><div class="detail-scroll">';
+      locArr.forEach(function(l){
+        html+='<div class="detail-row"><span style="flex:1;font-weight:600">'+esc(l.loc)+'</span>'
+          +'<span style="font-weight:700;color:var(--green)">'+fmtN(Math.round(l.collected))+' грн</span></div>';
+      });
+      html+='</div>';
+    } else if(S.anaDetail==='budget'){
+      var bArr=locArr.slice().sort(function(a,b){ return b.budFull-a.budFull; });
+      html+='<h4>📈 Бюджет по локаціях (рік)</h4><div class="detail-scroll">';
+      bArr.forEach(function(l){
+        html+='<div class="detail-row"><span style="flex:1;font-weight:600">'+esc(l.loc)+'</span>'
+          +'<span style="font-weight:700;color:var(--blue2)">'+fmtN(Math.round(l.budFull))+' грн</span></div>';
+      });
+      html+='</div>';
+    } else if(S.anaDetail==='pct'){
+      html+='<h4>📊 % виконання по локаціях (до сьогодні)</h4><div class="detail-scroll">';
+      locPct.forEach(function(l){
+        var col=l.pct>=80?'var(--green)':l.pct>=50?'var(--orange)':'var(--red2)';
+        html+='<div class="detail-row"><span style="flex:1;font-weight:600">'+esc(l.loc)+'</span>'
+          +'<span style="font-weight:700;color:'+col+'">'+l.pct+'%</span></div>';
+      });
+      html+='</div>';
+    }
+    html+='<div style="margin-top:10px"><button class="btn btn-secondary btn-sm" onclick="S.anaDetail=null;renderAnalytics()">× Закрити</button></div></div>';
+  }
+
+  // ─ Порівняння з мережею ──────────────────────────────────────────────────────
+  html+=cmpHtml;
+
+  // ─ Графік оплат ─────────────────────────────────────────────────────────────
+  html+='<div class="chart-grid"><div class="chart-card chart-full">'
+    +'<h3>Динаміка оплат по місяцях — 2026 (грн)</h3>'
     +'<div class="chart-wrap"><canvas id="chartMonthly"></canvas></div></div></div>';
 
-  // Локації + Donut
+  // ─ Локації + Donut ──────────────────────────────────────────────────────────
   html+='<div class="chart-grid"><div class="chart-card"><h3>Топ локацій — зібрано (грн)</h3>';
-  if(locData.length){
-    locData.forEach(function(ld){
-      var w=maxLocC>0?Math.round(ld.collected/maxLocC*100):0;
-      html+='<div class="hbar-row">'
-        +'<div class="hbar-label" title="'+esc(ld.loc)+'">'+esc(ld.loc)+'</div>'
-        +'<div class="hbar-track"><div class="hbar-fill" style="width:'+w+'%"></div></div>'
-        +'<div class="hbar-val">'+fmtN(Math.round(ld.collected/1000))+'к</div></div>';
-    });
-  } else { html+='<div class="empty">Немає даних</div>'; }
+  locArr.forEach(function(ld){
+    var w=maxLocC>0?Math.round(ld.collected/maxLocC*100):0;
+    html+='<div class="hbar-row"><div class="hbar-label" title="'+esc(ld.loc)+'">'+esc(ld.loc)+'</div>'
+      +'<div class="hbar-track"><div class="hbar-fill" style="width:'+w+'%"></div></div>'
+      +'<div class="hbar-val">'+fmtN(Math.round(ld.collected/1000))+'к</div></div>';
+  });
+  if(!locArr.length) html+='<div class="empty">Немає даних</div>';
   html+='</div>'
     +'<div class="chart-card"><h3>Розподіл по типах груп</h3>'
     +'<div class="chart-wrap"><canvas id="chartGroups"></canvas></div></div></div>';
 
-  // Топ-5 боржників
-  var periodLabel=S.anaSelPeriod==='year'?'(за минулі місяці 2026)':S.anaSelPeriod==='month'?'(поточний місяць)':'(останні 3 місяці)';
-  html+='<div class="card" style="margin-bottom:22px">'
-    +'<div class="card-hd"><h3>❌ Топ-5 боржників '+periodLabel+'</h3></div>'
-    +'<div class="tbl-wrap"><table>'
-    +'<thead><tr><th>#</th><th>Дитина</th><th>Локація</th><th>Група</th>'
+  // ─ Топ-5 боржників ──────────────────────────────────────────────────────────
+  var periodLabel=S.anaSelPeriod==='year'?'(минулі місяці 2026)':S.anaSelPeriod==='month'?'('+esc(mnCur)+')':'(останні 3 місяці)';
+  html+='<div class="card" style="margin-bottom:22px"><div class="card-hd"><h3>❌ Топ-5 боржників '+periodLabel+'</h3></div>'
+    +'<div class="tbl-wrap"><table><thead><tr><th>#</th><th>Дитина</th><th>Локація</th><th>Група</th>'
     +'<th style="text-align:right">Борг (грн)</th></tr></thead><tbody>';
   if(top5.length){
     top5.forEach(function(item,i){
-      var r=item.r;
-      var name=String(r["Ім'я дитини"]||'').trim();
-      var loc=String(r['Локація']||'').trim();
-      var grp=normalizeGroup(String(r['Група']||'').trim());
+      var r=item.r, name=String(r["Ім'я дитини"]||'').trim(), loc=String(r['Локація']||'').trim();
       html+='<tr class="clickable" onclick="switchMainTab(\'clients\');S.searchQ='+JSON.stringify(name)+';S.view=\'clients\';renderView()">'
         +'<td style="color:var(--gray);font-weight:700">'+(i+1)+'</td>'
         +'<td><span style="color:var(--blue2);font-weight:600">'+esc(name)+'</span></td>'
-        +'<td>'+esc(loc)+'</td><td>'+esc(grp)+'</td>'
+        +'<td>'+esc(loc)+'</td><td>'+esc(normalizeGroup(String(r['Група']||'').trim()))+'</td>'
         +'<td style="text-align:right"><span class="badge br">'+fmtN(Math.round(item.debt))+' грн</span></td></tr>';
     });
   } else {
@@ -2317,15 +2585,104 @@ function renderAnalytics(){
   }
   html+='</tbody></table></div></div>';
 
-  // Прогноз (тільки для річного режиму де є сенс)
+  // ─ ЧАСТИНА 4: Фінансова картина ─────────────────────────────────────────────
+  html+='<div class="card" style="margin-bottom:22px"><div class="card-hd"><h3>💵 Фінансова картина</h3></div>'
+    +'<div style="padding:18px">'
+    +'<div style="margin-bottom:14px;font-size:13px">Середній чек на дитину/місяць: '
+    +'<b style="font-size:16px">'+fmtN(avgCheck)+' грн</b></div>'
+    +'<div class="fin-grid">'
+    +'<div class="fin-card"><h4>🟢 Лідери виконання</h4>';
+  topLocs.forEach(function(l){
+    html+='<div class="fin-item"><span>'+esc(l.loc)+'</span><span class="fi-val fi-good">'+l.pct+'%</span></div>';
+  });
+  html+='</div><div class="fin-card"><h4>🔴 Відстаючі</h4>';
+  worstLocs.forEach(function(l){
+    html+='<div class="fin-item"><span>'+esc(l.loc)+'</span><span class="fi-val fi-bad">'+l.pct+'%</span></div>';
+  });
+  html+='</div><div class="fin-card"><h4>💸 Найбільший борг</h4>';
+  mostDebtLocs.forEach(function(l){
+    html+='<div class="fin-item"><span>'+esc(l.loc)+'</span><span class="fi-val fi-bad">'+fmtN(Math.round(l.debt/1000))+'к грн</span></div>';
+  });
+  html+='</div></div></div></div>';
+
+  // ─ ЧАСТИНА 5: Динаміка росту ─────────────────────────────────────────────────
+  var growthStr=growth>0?'<span style="color:var(--green)">+'+growth+'</span>':growth<0?'<span style="color:var(--red2)">'+growth+'</span>':'<span style="color:var(--gray)">0</span>';
+  // Лінійний прогноз кількості дітей
+  var validK=kidsPerMonth.slice(0,curM+1).filter(function(v){ return v>0; });
+  var kTrend=validK.length>=2?(validK[validK.length-1]-validK[0])/(validK.length-1):0;
+  var forecastKids=Math.round(kidsPerMonth[curM]+kTrend*(11-curM));
+  html+='<div class="card" style="margin-bottom:22px"><div class="card-hd"><h3>📈 Динаміка кількості дітей</h3></div>'
+    +'<div style="padding:18px">'
+    +'<div style="margin-bottom:12px;font-size:13px">'
+    +'Приріст у '+esc(mnCur)+': '+growthStr
+    +(Math.abs(growth)>0?' ('+kPrev+' → '+kCur+')':'')
+    +(forecastKids>0&&curM<11?' &nbsp;·&nbsp; Прогноз до кінця року: <b>~'+forecastKids+' дітей</b>':'')
+    +'</div>'
+    +'<div class="chart-wrap" style="height:220px"><canvas id="chartKids"></canvas></div>'
+    +'</div></div>';
+
+  // ─ ЧАСТИНА 6: Платіжна дисципліна ───────────────────────────────────────────
+  html+='<div class="card" style="margin-bottom:22px"><div class="card-hd"><h3>👨‍👩‍👧 Платіжна дисципліна</h3></div>'
+    +'<div style="padding:18px">'
+    +'<div class="discipline-grid">'
+    +'<div class="disc-card always"><div class="disc-num" style="color:#1e8449">'+always.length+'</div><div class="disc-lbl" style="color:#1e8449">Завжди вчасно</div></div>'
+    +'<div class="disc-card sometimes"><div class="disc-num" style="color:#856404">'+sometimes.length+'</div><div class="disc-lbl" style="color:#856404">Іноді боржники</div></div>'
+    +'<div class="disc-card chronic"><div class="disc-num" style="color:var(--red2)">'+chronic.length+'</div><div class="disc-lbl" style="color:var(--red2)">Хронічні боржники</div></div>'
+    +'</div>';
+  if(chronic.length){
+    html+='<div style="margin-top:14px"><div style="font-size:12px;font-weight:700;color:var(--gray);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Хронічні боржники (3+ місяців):</div>'
+      +'<div class="detail-scroll">';
+    chronic.slice(0,20).forEach(function(item){
+      var r=item.r, name=String(r["Ім'я дитини"]||'').trim(), loc=String(r['Локація']||'').trim();
+      html+='<div class="detail-row">'
+        +'<span style="flex:1;font-weight:600">'+esc(name)+'</span>'
+        +'<span style="color:var(--gray);min-width:100px">'+esc(loc)+'</span>'
+        +'<span style="color:var(--red2);font-weight:700">'+item.cnt+' міс. боргу'+(item.consec>1?' ('+item.consec+' підряд)':'')+'</span></div>';
+    });
+    if(chronic.length>20) html+='<div class="detail-row" style="color:var(--gray)">… ще '+(chronic.length-20)+'</div>';
+    html+='</div></div>';
+  }
+  html+='</div></div>';
+
+  // ─ ЧАСТИНА 7: Хетмап ────────────────────────────────────────────────────────
+  html+='<div class="card" style="margin-bottom:22px"><div class="card-hd"><h3>🗺 Хетмап виконання плану (%)</h3></div>'
+    +'<div style="padding:18px"><div class="heat-wrap"><table class="heat-table"><thead><tr>'
+    +'<th class="loc-col">Локація</th>';
+  CFG.MONTHS_SHORT.forEach(function(sh){ html+='<th>'+sh+'</th>'; });
+  html+='</tr></thead><tbody>';
+  heatLocs.forEach(function(loc){
+    var cells=heatMap[loc];
+    html+='<tr><td class="loc-name">'+esc(loc)+'</td>';
+    cells.forEach(function(c,mi){
+      var isFuture=mi>curM;
+      if(isFuture){
+        html+='<td class="hc-gray">—</td>';
+      } else {
+        var pct=c.b>0?Math.round(c.f/c.b*100):0;
+        var cls=pct>=95?'hc-g':pct>=70?'hc-y':pct>=30?'hc-o':'hc-r';
+        var tip='title="'+esc(loc)+' · '+CFG.MONTHS_DISP[mi]+': '+fmtN(Math.round(c.f))+' / '+fmtN(Math.round(c.b))+' грн"';
+        html+='<td class="'+cls+'" '+tip+'>'+pct+'%</td>';
+      }
+    });
+    html+='</tr>';
+  });
+  html+='</tbody></table></div>'
+    +'<div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;font-size:11px;color:var(--gray)">'
+    +'<span style="display:flex;align-items:center;gap:4px"><span style="width:12px;height:12px;background:#d4edda;display:inline-block;border-radius:2px"></span> ≥95% — виконано</span>'
+    +'<span style="display:flex;align-items:center;gap:4px"><span style="width:12px;height:12px;background:#fff3cd;display:inline-block;border-radius:2px"></span> 70-95% — майже</span>'
+    +'<span style="display:flex;align-items:center;gap:4px"><span style="width:12px;height:12px;background:#ffe0b2;display:inline-block;border-radius:2px"></span> 30-70% — недовиконано</span>'
+    +'<span style="display:flex;align-items:center;gap:4px"><span style="width:12px;height:12px;background:#f8d7da;display:inline-block;border-radius:2px"></span> &lt;30% — критично</span>'
+    +'</div></div></div>';
+
+  // ─ Прогноз по оплатах (тільки для річного режиму) ───────────────────────────
   if(S.anaSelPeriod==='year'){
-    html+='<div class="card" style="margin-bottom:22px"><div class="card-hd"><h3>📅 Прогноз на кінець 2026 року</h3></div>'
+    html+='<div class="card" style="margin-bottom:22px"><div class="card-hd"><h3>📅 Прогноз виручки на кінець 2026</h3></div>'
       +'<div style="padding:20px">'
       +'<div style="display:flex;justify-content:space-between;font-size:12px;color:var(--gray);margin-bottom:4px">'
-      +'<span>Виконання бюджету (факт до сьогодні / бюджет року)</span><span>'+pctCollected+'%</span></div>'
-      +'<div class="prog-bar-wrap"><div class="prog-bar '+progCls+'" style="width:'+pctCollected+'%"></div></div>'
+      +'<span>Виконання бюджету (зібрано до сьогодні / бюджет року)</span><span>'+pctToday+'%</span></div>'
+      +'<div class="prog-bar-wrap"><div class="prog-bar '+progCls+'" style="width:'+pctToday+'%"></div></div>'
       +'<div class="forecast-grid">'
-      +'<div class="fc-item"><label>Зібрано</label><div class="fc-val">'+fmtN(Math.round(totalCollected))+' <span style="font-size:13px;font-weight:400;color:var(--gray)">грн</span></div></div>'
+      +'<div class="fc-item"><label>Зібрано (до сьогодні)</label><div class="fc-val">'+fmtN(Math.round(collectedToday))+' <span style="font-size:13px;font-weight:400;color:var(--gray)">грн</span></div></div>'
       +'<div class="fc-item"><label>Бюджет року</label><div class="fc-val">'+fmtN(Math.round(totalBudget))+' <span style="font-size:13px;font-weight:400;color:var(--gray)">грн</span></div></div>'
       +'<div class="fc-item"><label>Середньомісячно</label><div class="fc-val">'+fmtN(Math.round(monthlyAvg))+' <span style="font-size:13px;font-weight:400;color:var(--gray)">грн</span></div></div>'
       +'<div class="fc-item"><label>Очікувана виручка</label><div class="fc-val" style="color:var(--green)">'+fmtN(forecast)+' <span style="font-size:13px;font-weight:400;color:var(--gray)">грн</span></div></div>'
@@ -2336,6 +2693,10 @@ function renderAnalytics(){
   setTimeout(function(){
     drawBarChart('chartMonthly',CFG.MONTHS_SHORT,barCollected,barBudget);
     if(grpData.length) drawDonutChart('chartGroups',grpData.map(function(x){ return x[0]; }),grpData.map(function(x){ return x[1]; }));
+    drawLineChart('chartKids',CFG.MONTHS_SHORT,[
+      {label:'Дітей з оплатами',data:kidsPerMonth,borderColor:'#2980b9',backgroundColor:'rgba(41,128,185,.1)',
+       fill:true,tension:.35,pointRadius:4,pointHoverRadius:6,borderWidth:2}
+    ]);
   },0);
 }
 
