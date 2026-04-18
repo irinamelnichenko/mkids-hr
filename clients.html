@@ -316,6 +316,10 @@ tbody tr.clickable:hover td{background:#f0f7ff}
       <div class="nav-item" data-v="debts" onclick="nav('debts')">
         <span class="ni">💰</span> Борги та оплати
       </div>
+      <div class="nav-sec">Аналітика</div>
+      <div class="nav-item" onclick="window.location='analytics.html'">
+        <span class="ni">📊</span> Аналітика
+      </div>
       <div class="nav-sec">Система</div>
       <div class="nav-item" data-v="settings" onclick="nav('settings')">
         <span class="ni">⚙️</span> Налаштування
@@ -1109,9 +1113,9 @@ function renderClients(){
     groupsBackup=S.groups;
     S.groups=buildGroupsFromYearly(S.selMonth);
   } else if(S.selMonth!==curJSMonth && !S.yearlyData.length){
+    // Yearly data not loaded yet — wait silently (background load)
     document.getElementById('main').innerHTML=monthStripHtml
-      +'<div class="alert alert-warn" style="margin-top:8px">⚠️ Для перегляду інших місяців потрібні річні дані. '
-      +'<button class="btn btn-secondary btn-sm btn-load-yearly" onclick="doLoadYearly()">🔄 Завантажити</button></div>';
+      +'<div class="loading"><div class="spinner"></div><p>Завантаження даних…</p></div>';
     return;
   }
 
@@ -1141,16 +1145,10 @@ function renderClients(){
   // Назва для статистики
   var statLabel = S.selLoc ? S.selLoc : (isHR() ? 'Всі локації' : (S.user&&S.user.loc?S.user.loc:''));
 
-  // Річні цифри для карток 4-5
-  var visRows=S.yearlyData.length?getYearlyForLocs(statLocs):[];
-  var yst=calcYearlyStats(visRows);
-
-  var html=monthStripHtml+'<div class="stats-grid">'
+  var html=monthStripHtml+'<div class="stats-grid" style="grid-template-columns:repeat(3,1fr)">'
     +'<div class="stat-card"><div class="stat-icon si-b">👶</div><div><div class="stat-val">'+displayKids+'</div><div class="stat-lbl">Дітей'+(statLabel?' · '+esc(statLabel):'')+'</div></div></div>'
     +'<div class="stat-card"><div class="stat-icon si-r">❌</div><div><div class="stat-val" style="color:var(--red2)">'+stats.debtors+'</div><div class="stat-lbl">Боржників · '+esc(mName)+'</div></div></div>'
     +'<div class="stat-card"><div class="stat-icon si-o">💸</div><div><div class="stat-val" style="color:var(--red2)">'+fmtN(Math.round(stats.totalDebt))+'</div><div class="stat-lbl">Борг · '+esc(mName)+' (грн)</div></div></div>'
-    +'<div class="stat-card"><div class="stat-icon si-g">💵</div><div><div class="stat-val">'+fmtN(Math.round(yst.collected))+'</div><div class="stat-lbl">Зібрано на сьогодні</div></div></div>'
-    +'<div class="stat-card"><div class="stat-icon si-p">📈</div><div><div class="stat-val">'+fmtN(Math.round(yst.budYear))+'</div><div class="stat-lbl">Бюджет 2026 (грн)</div></div></div>'
     +'</div>';
 
   html+='<div class="filters">'
@@ -2147,12 +2145,10 @@ function renderClientsYearly(monthStripHtml){
   var statLabel=S.selLoc?S.selLoc:(isHR()?'Всі локації':(S.user&&S.user.loc?S.user.loc:''));
 
   var html=monthStripHtml;
-  html+='<div class="stats-grid">'
+  html+='<div class="stats-grid" style="grid-template-columns:repeat(3,1fr)">'
     +'<div class="stat-card"><div class="stat-icon si-b">👶</div><div><div class="stat-val">'+totalKids+'</div><div class="stat-lbl">Дітей'+(statLabel?' · '+esc(statLabel):'')+'</div></div></div>'
     +'<div class="stat-card"><div class="stat-icon si-r">❌</div><div><div class="stat-val" style="color:var(--red2)">'+yst.debtors+'</div><div class="stat-lbl">Боржників</div></div></div>'
     +'<div class="stat-card"><div class="stat-icon si-o">💸</div><div><div class="stat-val" style="color:var(--red2)">'+fmtN(Math.round(yst.debt))+'</div><div class="stat-lbl">Борг 2026 (грн)</div></div></div>'
-    +'<div class="stat-card"><div class="stat-icon si-g">💵</div><div><div class="stat-val">'+fmtN(Math.round(yst.collected))+'</div><div class="stat-lbl">Зібрано на сьогодні</div></div></div>'
-    +'<div class="stat-card"><div class="stat-icon si-p">📈</div><div><div class="stat-val">'+fmtN(Math.round(yst.budYear))+'</div><div class="stat-lbl">Бюджет 2026 (грн)</div></div></div>'
     +'</div>';
 
   // Фільтри
@@ -2167,13 +2163,9 @@ function renderClientsYearly(monthStripHtml){
     +'<button class="btn btn-primary btn-sm" onclick="openNewChild()" style="margin-left:auto;white-space:nowrap">➕ Додати дитину</button>'
     +'</div>';
 
-  // Якщо yearlyData не завантажено
+  // Якщо yearlyData не завантажено — показуємо спінер, фонове завантаження відбудеться автоматично
   if(!S.yearLoaded){
-    var errMsg=S.yearError?'<div class="alert alert-danger" style="margin-top:8px;font-size:12px">❌ Помилка: '+esc(S.yearError)+'</div>':'';
-    html+='<div class="alert alert-warn">⚠️ Річні дані не завантажені. '
-      +'<button class="btn btn-secondary btn-sm btn-load-yearly" onclick="doLoadYearly()">🔄 Завантажити</button>'
-      +'</div>'+errMsg
-      +'<div class="alert alert-info" style="font-size:12px;margin-top:4px">Якщо дані ще не зібрані — запустіть в Apps Script: <b>aggregatePaymentsYearly()</b>, потім натисніть "Завантажити"</div>';
+    html+='<div class="loading"><div class="spinner"></div><p>Завантаження річних даних…</p></div>';
     document.getElementById('main').innerHTML=html;
     return;
   }
