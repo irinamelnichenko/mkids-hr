@@ -2195,11 +2195,16 @@ function consecutiveDebtMonths(row, monthIndices){
   return count;
 }
 
+// ── Аліаси типів локацій (нормалізація "Благо" → "Управління" тощо) ───────────
+var ANA_TYPE_ALIAS={'Благо':'Управління','БЛАГО':'Управління','Благозаврик':'Управління','благо':'Управління'};
+var ANA_TYPE_ICONS={'Садочок':'🌱','Школа':'🏫','Управління':'🏢'};
+function normLocType(t){ return ANA_TYPE_ALIAS[t]||t||'Інше'; }
+
 function anaVisibleRows(){
   var rows=S.yearlyData;
   if(!isHR()&&S.user&&S.user.loc) rows=rows.filter(function(r){ return String(r['Локація']||'').trim()===S.user.loc; });
   if(S.anaSelLocType){
-    var locsOfType=S.locs.filter(function(l){ return (l.typ||'')===S.anaSelLocType; }).map(function(l){ return l.loc; });
+    var locsOfType=S.locs.filter(function(l){ return normLocType(l.typ)===S.anaSelLocType; }).map(function(l){ return l.loc; });
     rows=rows.filter(function(r){ return locsOfType.indexOf(String(r['Локація']||'').trim())>=0; });
   }
   if(S.anaSelLoc) rows=rows.filter(function(r){ return String(r['Локація']||'').trim()===S.anaSelLoc; });
@@ -2288,18 +2293,25 @@ function renderAnalytics(){
   // ── Фільтри HTML ─────────────────────────────────────────────────────────────
   var allLocs=isHR()?S.locs:S.locs.filter(function(l){ return l.loc===S.user.loc; });
 
-  // Типи локацій з іконками
-  var TYPE_ICONS={'Садочок':'🌱','Школа':'🏫','Управління':'🏢','Офіс':'💼','Менеджмент':'👔','Кухня':'🍽'};
+  // Типи локацій з іконками (константи визначені на рівні модуля — div нижче)
+
+
+  // Лог усіх унікальних типів з S.locs — для діагностики
+  var rawTypes=[]; allLocs.forEach(function(l){ if(rawTypes.indexOf(l.typ||'')<0) rawTypes.push(l.typ||''); });
+  console.log('[CRM Analytics] Унікальні типи локацій з S.locs:', rawTypes);
+  console.log('[CRM Analytics] Локації з типами:', allLocs.map(function(l){ return l.loc+' → "'+l.typ+'"'; }));
+
   var typeMap={};
-  allLocs.forEach(function(l){ var t=l.typ||'Інше'; if(!typeMap[t]) typeMap[t]=0; typeMap[t]++; });
+  allLocs.forEach(function(l){ var t=normLocType(l.typ); if(!typeMap[t]) typeMap[t]=0; typeMap[t]++; });
   var CRM_LOC_TYPES=['Садочок','Школа','Управління'];
-  var uniqueTypes=Object.keys(typeMap).filter(function(t){ return CRM_LOC_TYPES.indexOf(t)>=0; }).sort();
+  // Зберігаємо порядок з CRM_LOC_TYPES (не сортуємо)
+  var uniqueTypes=CRM_LOC_TYPES.filter(function(t){ return typeMap[t]; });
 
   // Кількість дітей по типу (з yearlyData для точності)
   var kidsPerType={};
   allYRows.forEach(function(r){
     var locObj=S.locs.find(function(l){ return l.loc===String(r['Локація']||'').trim(); });
-    var t=locObj?(locObj.typ||'Інше'):'Інше';
+    var t=normLocType(locObj?locObj.typ:'');
     kidsPerType[t]=(kidsPerType[t]||0)+1;
   });
 
@@ -2309,7 +2321,7 @@ function renderAnalytics(){
     typeChipsHtml='<div class="ana-type-bar">'
       +'<button class="ana-type-chip'+(S.anaSelLocType===''?' active':'')+'" onclick="S.anaSelLocType=\'\';S.anaSelLoc=\'\';S.anaDetail=null;renderAnalytics()">📋 Всі <span class="ana-type-cnt">'+allYRows.length+'</span></button>';
     uniqueTypes.forEach(function(t){
-      var ic=TYPE_ICONS[t]||'📍';
+      var ic=ANA_TYPE_ICONS[t]||'📍';
       var cnt=kidsPerType[t]||0;
       typeChipsHtml+='<button class="ana-type-chip'+(S.anaSelLocType===t?' active':'')+'" onclick="S.anaSelLocType=\''+esc(t)+'\';S.anaSelLoc=\'\';S.anaDetail=null;renderAnalytics()">'+ic+' '+esc(t)+' <span class="ana-type-cnt">'+cnt+'</span></button>';
     });
@@ -2317,7 +2329,7 @@ function renderAnalytics(){
   }
 
   // Відфільтровані локації для дропдауну
-  var filteredLocs=S.anaSelLocType?allLocs.filter(function(l){ return (l.typ||'')===S.anaSelLocType; }):allLocs;
+  var filteredLocs=S.anaSelLocType?allLocs.filter(function(l){ return normLocType(l.typ)===S.anaSelLocType; }):allLocs;
   var locOpts=(isHR()?'<option value="">Всі локації</option>':'')+filteredLocs.map(function(l){
     return '<option value="'+esc(l.loc)+'"'+(S.anaSelLoc===l.loc?' selected':'')+'>'+esc(l.loc)+'</option>';
   }).join('');
