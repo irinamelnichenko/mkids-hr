@@ -2387,7 +2387,7 @@ function renderAnalytics(){
   // зберігаємо collectedToday/budgetToday для сумісності (прогноз)
   var collectedToday=collectedForPct, budgetToday=budgetForPct;
   var pctToday=budgetForPct>0?Math.min(100,Math.round(collectedForPct/budgetForPct*100)):0;
-  var pctTodayColor=pctToday>=80?'var(--green)':pctToday>=50?'var(--orange)':'var(--red2)';
+  var pctTodayColor=pctToday>=95?'var(--green)':pctToday>=70?'var(--orange)':'var(--red2)';
 
   // Картка 6: % останнього місяця в обраному періоді (не завжди curM)
   var mnCur=CFG.MONTHS_DISP[curM]; // для назв
@@ -2513,6 +2513,24 @@ function renderAnalytics(){
       +'</div>';
   }
 
+  // ── ДИСЦИПЛІНА ДЛЯ КАРТКИ (скільки дітей сплатили повністю за debtMonths) ──────
+  var discPaid=0, discUnderpaid=[];
+  rows.forEach(function(r){
+    // враховуємо тільки дітей з бюджетом у хоча б одному місяці
+    var hasBudget=debtMonths.some(function(mi){
+      var mn=CFG.MONTHS_DISP[mi];
+      return (+(r[mn+'-Бюджет-навч']||0))+(+(r[mn+'-Бюджет-доп']||0))>0;
+    });
+    if(!hasBudget) return;
+    var d=calcRowPeriodDebt(r,debtMonths);
+    if(d<=0) discPaid++;
+    else discUnderpaid.push({r:r,debt:d});
+  });
+  discUnderpaid.sort(function(a,b){ return b.debt-a.debt; });
+  var discTotal=discPaid+discUnderpaid.length;
+  var pctDisc=discTotal>0?Math.round(discPaid/discTotal*100):0;
+  var pctDiscColor=pctDisc>=90?'var(--green)':pctDisc>=70?'var(--orange)':'var(--red2)';
+
   // ── ПЛАТІЖНА ДИСЦИПЛІНА ───────────────────────────────────────────────────────
   var always=[],sometimes=[],chronic=[];
   rows.forEach(function(r){
@@ -2564,11 +2582,11 @@ function renderAnalytics(){
 
     +'<div class="'+cardClass('pct')+'" onclick="toggleAnaDetail(\'pct\')">'
     +'<div class="stat-icon si-g">📊</div><div><div class="stat-val" style="color:'+pctTodayColor+'">'+pctToday+'%</div>'
-    +'<div class="stat-lbl">% за обраний період<br><small style="color:var(--gray)">'+fmtShort(collectedForPct)+' з '+fmtShort(budgetForPct)+'</small></div></div></div>'
+    +'<div class="stat-lbl">% виконання бюджету<br><small style="color:var(--gray)">'+fmtShort(collectedForPct)+' з '+fmtShort(budgetForPct)+'</small></div></div></div>'
 
-    +'<div class="stat-card clickable-card" style="cursor:default">'
-    +'<div class="stat-icon si-b">📅</div><div><div class="stat-val" style="color:'+pctCurMColor+'">'+pctCurM+'%</div>'
-    +'<div class="stat-lbl">% за '+esc(mnCard6)+'<br><small style="color:var(--gray)">'+fmtShort(factCurM)+' з '+fmtShort(budCurM)+'</small></div></div></div>'
+    +'<div class="'+cardClass('discipline')+'" onclick="toggleAnaDetail(\'discipline\')">'
+    +'<div class="stat-icon si-p">✅</div><div><div class="stat-val" style="color:'+pctDiscColor+'">'+pctDisc+'%</div>'
+    +'<div class="stat-lbl">% дисципліни оплат<br><small style="color:var(--gray)">'+discPaid+' з '+discTotal+' дітей</small></div></div></div>'
     +'</div>';
 
   // ─ Деталізація (розгортається під картками) ──────────────────────────────────
@@ -2618,13 +2636,32 @@ function renderAnalytics(){
       });
       html+='</div>';
     } else if(S.anaDetail==='pct'){
-      html+='<h4>📊 % виконання по локаціях (до сьогодні)</h4><div class="detail-scroll">';
+      html+='<h4>📊 % виконання бюджету по локаціях</h4><div class="detail-scroll">';
       locPct.forEach(function(l){
-        var col=l.pct>=80?'var(--green)':l.pct>=50?'var(--orange)':'var(--red2)';
+        var col=l.pct>=95?'var(--green)':l.pct>=70?'var(--orange)':'var(--red2)';
         html+='<div class="detail-row"><span style="flex:1;font-weight:600">'+esc(l.loc)+'</span>'
-          +'<span style="font-weight:700;color:'+col+'">'+l.pct+'%</span></div>';
+          +'<span style="font-weight:700;color:'+col+'">'+l.pct+'%</span>'
+          +'<span style="color:var(--gray);font-size:12px;min-width:80px;text-align:right">'+fmtShort(l.collected)+' грн</span></div>';
       });
       html+='</div>';
+    } else if(S.anaDetail==='discipline'){
+      html+='<h4>✅ Дисципліна оплат: '+pctDisc+'% ('+discPaid+' з '+discTotal+' дітей сплатили повністю)</h4>';
+      if(discUnderpaid.length){
+        html+='<div style="font-size:12px;color:var(--gray);margin-bottom:8px">Недоплатники ('+discUnderpaid.length+'):</div>'
+          +'<div class="detail-scroll">';
+        discUnderpaid.forEach(function(item){
+          var r=item.r;
+          var name=String(r["Ім'я дитини"]||'').trim();
+          var loc=String(r['Локація']||'').trim();
+          html+='<div class="detail-row">'
+            +'<span style="flex:1;font-weight:600">'+esc(name)+'</span>'
+            +'<span style="color:var(--gray);min-width:100px">'+esc(loc)+'</span>'
+            +'<span style="color:var(--red2);font-weight:700;min-width:80px;text-align:right">−'+fmtN(Math.round(item.debt))+' грн</span></div>';
+        });
+        html+='</div>';
+      } else {
+        html+='<div style="color:var(--green);font-weight:600;padding:10px 0">🎉 Всі діти сплатили повністю!</div>';
+      }
     }
     html+='<div style="margin-top:10px"><button class="btn btn-secondary btn-sm" onclick="S.anaDetail=null;renderAnalytics()">× Закрити</button></div></div>';
   }
