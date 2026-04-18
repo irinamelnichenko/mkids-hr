@@ -531,8 +531,7 @@ var CFG = {
   MONTHS_UA:    ['січень','лютий','березень','квітень','травень','червень','липень','серпень','вересень','жовтень','листопад','грудень'],
   MONTHS_JS:    [0,1,2,3,4,5,6,7,8,9,10,11],
   MONTHS_DISP:  ['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'],
-  MONTHS_SHORT: ['Січ','Лют','Бер','Квіт','Тра','Чер','Лип','Сер','Вер','Жов','Лис','Гру'],
-  YEAR_CACHE:   'crm_year_v1'
+  MONTHS_SHORT: ['Січ','Лют','Бер','Квіт','Тра','Чер','Лип','Сер','Вер','Жов','Лис','Гру']
 };
 
 // ─── STATE ────────────────────────────────────────────────────────────────────
@@ -615,12 +614,15 @@ function checkAndClearCache(){
     localStorage.removeItem(CFG.PAY_CACHE);
     localStorage.removeItem(CFG.CLI_CACHE);
     localStorage.removeItem(CFG.LOC_CACHE);
-    localStorage.removeItem(CFG.YEAR_CACHE); // очищаємо і річний кеш
+    // YEAR_CACHE не використовується (дані тільки в пам'яті)
     localStorage.setItem('crm_last_builtin_url', builtinUrl);
     console.log('Cache cleared due to URL change');
   }
 }
 function clearSetupUrl(){ localStorage.removeItem(CFG.SCRIPT_KEY); location.reload(); }
+
+// Прибираємо старий великий yearly-кеш якщо залишився з попередніх версій
+(function(){ try{ localStorage.removeItem('crm_year_v1'); }catch(e){} })();
 
 // ─── API CALLS ────────────────────────────────────────────────────────────────
 async function apiGet(action){
@@ -736,32 +738,26 @@ async function loadAllPayHistory(){
   }
 }
 
+// Річні дані НЕ зберігаються в localStorage (занадто великі — 1136 дітей × 71 колонка).
+// Завантажуються в пам'ять при кожному відкритті сторінки або по запиту.
 async function loadPaymentsYearly(force){
-  if(!force){
-    var c=localStorage.getItem(CFG.YEAR_CACHE);
-    if(c){
-      try{
-        var p=JSON.parse(c);
-        if(Date.now()-p.ts<CFG.TTL && p.data && p.data.length>0){
-          S.yearlyData=p.data; S.yearLoaded=true; S.yearError=''; return;
-        }
-      }catch(e2){}
-    }
-  }
+  // В пам'яті вже є свіжі дані — не робимо повторний запит (якщо не force)
+  if(!force && S.yearLoaded && S.yearlyData.length>0) return;
+
   S.yearError='';
   try{
     var url=getScriptUrl();
     if(!url) throw new Error('URL не налаштовано');
-    // Робимо запит напряму щоб бачити реальну помилку
     var r=await fetch(url+'?action=getPaymentsYearly',{redirect:'follow'});
     if(!r.ok) throw new Error('HTTP '+r.status);
     var j=await r.json();
     if(!j.ok) throw new Error(j.error||'Сервер повернув ok:false');
     S.yearlyData=j.data||[];
     S.yearLoaded=S.yearlyData.length>0;
-    S.yearError=S.yearlyData.length===0?'Дані порожні — запустіть aggregatePaymentsYearly() в Apps Script':'';
-    localStorage.setItem(CFG.YEAR_CACHE,JSON.stringify({data:S.yearlyData,ts:Date.now()}));
-    console.log('Yearly data loaded: '+S.yearlyData.length+' rows');
+    S.yearError=S.yearlyData.length===0
+      ?'Дані порожні — запустіть aggregatePaymentsYearly() в Apps Script':'';
+    // НЕ пишемо в localStorage — дані задні великі (quota exceeded)
+    console.log('Yearly data loaded in memory: '+S.yearlyData.length+' rows');
   }catch(e){
     console.error('loadPaymentsYearly error:', e);
     S.yearlyData=[];
