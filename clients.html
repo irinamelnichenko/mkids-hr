@@ -2203,23 +2203,19 @@ var ANA_TYPE_ALIAS={'Благо':'Управління','БЛАГО':'Управ
 var ANA_TYPE_ICONS={'Садочок':'🌱','Школа':'🏫','Управління':'🏢'};
 var CRM_TYPES=['Садочок','Школа','Управління'];
 function normLocType(t){ return ANA_TYPE_ALIAS[t]||t||'Інше'; }
-// Визначає CRM-тип локації: спочатку перевіряє l.typ, потім l.dir
-// (деякі локації мають l.dir='Садочок' але l.typ='Управління' — наприклад, Манхетен)
-function getLocCRMType(l){
-  var nt=normLocType(l.typ);
+// Визначає CRM-тип напряму з рядка yearlyData (поля 'Тип' і 'Напрямок')
+function getRowCRMType(row){
+  var nt=normLocType(String(row['Тип']||'').trim());
   if(CRM_TYPES.indexOf(nt)>=0) return nt;
-  var nd=normLocType(l.dir);
+  var nd=normLocType(String(row['Напрямок']||'').trim());
   if(CRM_TYPES.indexOf(nd)>=0) return nd;
-  return nt||nd||'Інше';
+  return 'Інше';
 }
 
 function anaVisibleRows(){
   var rows=S.yearlyData;
   if(!isHR()&&S.user&&S.user.loc) rows=rows.filter(function(r){ return String(r['Локація']||'').trim()===S.user.loc; });
-  if(S.anaSelLocType){
-    var locsOfType=S.locs.filter(function(l){ return getLocCRMType(l)===S.anaSelLocType; }).map(function(l){ return l.loc; });
-    rows=rows.filter(function(r){ return locsOfType.indexOf(String(r['Локація']||'').trim())>=0; });
-  }
+  if(S.anaSelLocType) rows=rows.filter(function(r){ return getRowCRMType(r)===S.anaSelLocType; });
   if(S.anaSelLoc) rows=rows.filter(function(r){ return String(r['Локація']||'').trim()===S.anaSelLoc; });
   return rows;
 }
@@ -2309,24 +2305,18 @@ function renderAnalytics(){
   // Типи локацій з іконками (константи визначені на рівні модуля — div нижче)
 
 
-  // Лог усіх унікальних типів з S.locs — для діагностики
-  var rawTypes=[]; allLocs.forEach(function(l){ if(rawTypes.indexOf(l.typ||'')<0) rawTypes.push(l.typ||''); });
-  console.log('[CRM Analytics] Унікальні типи локацій з S.locs:', rawTypes);
-  console.log('[CRM Analytics] Локації з типами:', allLocs.map(function(l){ return l.loc+' dir="'+l.dir+'" typ="'+l.typ+'" → '+getLocCRMType(l); }));
-
-  var typeMap={};
-  allLocs.forEach(function(l){ var t=getLocCRMType(l); if(!typeMap[t]) typeMap[t]=0; typeMap[t]++; });
-  var CRM_LOC_TYPES=['Садочок','Школа','Управління'];
-  // Зберігаємо порядок з CRM_LOC_TYPES (не сортуємо)
-  var uniqueTypes=CRM_LOC_TYPES.filter(function(t){ return typeMap[t]; });
-
-  // Кількість дітей по типу (з yearlyData для точності)
+  // Унікальні CRM-типи та локації — читаємо з yearlyData (поля 'Тип' і 'Напрямок')
   var kidsPerType={};
+  var locsPerType={};   // type → Set of loc names
   allYRows.forEach(function(r){
-    var locObj=S.locs.find(function(l){ return l.loc===String(r['Локація']||'').trim(); });
-    var t=locObj?getLocCRMType(locObj):'Інше';
+    var t=getRowCRMType(r);
     kidsPerType[t]=(kidsPerType[t]||0)+1;
+    if(!locsPerType[t]) locsPerType[t]={};
+    var loc=String(r['Локація']||'').trim();
+    if(loc) locsPerType[t][loc]=true;
   });
+  var CRM_LOC_TYPES=['Садочок','Школа','Управління'];
+  var uniqueTypes=CRM_LOC_TYPES.filter(function(t){ return kidsPerType[t]; });
 
   // Чіпси типів (тільки для HR)
   var typeChipsHtml='';
@@ -2341,10 +2331,12 @@ function renderAnalytics(){
     typeChipsHtml+='</div>';
   }
 
-  // Відфільтровані локації для дропдауну
-  var filteredLocs=S.anaSelLocType?allLocs.filter(function(l){ return getLocCRMType(l)===S.anaSelLocType; }):allLocs;
-  var locOpts=(isHR()?'<option value="">Всі локації</option>':'')+filteredLocs.map(function(l){
-    return '<option value="'+esc(l.loc)+'"'+(S.anaSelLoc===l.loc?' selected':'')+'>'+esc(l.loc)+'</option>';
+  // Відфільтровані локації для дропдауну — беремо з yearlyData
+  var filteredLocNames=S.anaSelLocType
+    ? Object.keys(locsPerType[S.anaSelLocType]||{}).sort()
+    : Object.keys(allYRows.reduce(function(m,r){ var l=String(r['Локація']||'').trim(); if(l) m[l]=true; return m; },{})).sort();
+  var locOpts=(isHR()?'<option value="">Всі локації</option>':'')+filteredLocNames.map(function(loc){
+    return '<option value="'+esc(loc)+'"'+(S.anaSelLoc===loc?' selected':'')+'>'+esc(loc)+'</option>';
   }).join('');
 
   var periodOpts=[
