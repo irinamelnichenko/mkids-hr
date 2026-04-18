@@ -191,6 +191,37 @@ tbody tr.clickable:hover td{background:#f0f7ff}
 .del-btn{margin-left:auto;background:none;border:none;cursor:pointer;color:var(--gray);font-size:16px;padding:2px 6px}
 .del-btn:hover{color:var(--red2)}
 
+/* ABSENCE MODULE */
+.abs-info-block{background:#e8f2fb;border:1px solid #90cdf4;border-radius:10px;padding:12px 16px;margin-bottom:12px;font-size:13px}
+.abs-counters{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px}
+.abs-cnt{border:2px solid #e8ecf0;border-radius:10px;padding:14px 16px}
+.abs-cnt.disabled{background:#f8fafc;opacity:.6}
+.abs-cnt-lbl{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--gray);margin-bottom:4px}
+.abs-cnt-val{font-size:22px;font-weight:900;color:var(--dark);line-height:1.2}
+.abs-cnt-sub{font-size:12px;color:var(--gray);margin-top:2px}
+.abs-pbar{height:5px;background:#e8ecf0;border-radius:3px;margin-top:8px;overflow:hidden}
+.abs-pbar-fill{height:100%;border-radius:3px;background:var(--green);transition:width .3s}
+.abs-pbar-fill.over{background:var(--red2)}
+.abs-entry{background:#f8fafc;border:1px solid #e8ecf0;border-radius:10px;padding:12px 14px;margin-bottom:8px}
+.abs-entry-hd{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:5px}
+.abs-entry-type{font-weight:700;font-size:13px}
+.abs-entry-info{font-size:13px;color:var(--gray);margin-bottom:3px}
+.abs-entry-calc{font-size:13px;color:var(--dark2);margin-bottom:3px}
+.abs-entry-reject{font-size:12px;color:var(--red2);margin-top:4px;padding:4px 8px;background:#fdf0f0;border-radius:6px}
+.ab-st{display:inline-flex;align-items:center;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700;white-space:nowrap}
+.ab-pending{background:#fef9e7;color:#856404}
+.ab-processing{background:#e8f2fb;color:#2471a3}
+.ab-done{background:#e8f8f0;color:#1e8449}
+.ab-rejected{background:#fdf0f0;color:#c0392b}
+.ab-legacy{background:#f0f4f8;color:#7f8c8d}
+.abs-add-form{background:#f0f7ff;border:1px solid #90cdf4;border-radius:10px;padding:14px;margin:10px 0}
+.abs-preview-block{background:#fff3cd;border:1px solid #f0c040;border-radius:8px;padding:10px 14px;font-size:13px;margin-top:10px;line-height:1.7}
+.abs-preview-block.warn{background:#fdf2f2;border-color:#fca5a5;color:#721c24}
+.req-hdr-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px}
+.req-stat{background:#fff;border-radius:var(--r);padding:14px 16px;box-shadow:var(--sh);text-align:center}
+.req-stat-n{font-size:28px;font-weight:900;color:var(--dark);line-height:1}
+.req-stat-l{font-size:12px;color:var(--gray);margin-top:3px}
+
 /* PAY HISTORY TABLE */
 .pay-hist-table{width:100%;border-collapse:collapse;font-size:13px}
 .pay-hist-table th{padding:8px 12px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--gray);background:#f8fafc;border-bottom:2px solid #e8ecf0}
@@ -394,6 +425,9 @@ tbody tr.clickable:hover td{background:#f0f7ff}
       <div class="nav-item" id="navAnalytics" onclick="switchMainTab('analytics')">
         <span class="ni">📊</span> Аналітика
       </div>
+      <div class="nav-item" id="navAbsReq" data-v="absRequests" onclick="S.mainTab='clients';nav('absRequests')" style="display:none">
+        <span class="ni">💼</span> Перерахунки
+      </div>
       <div class="nav-sec">Система</div>
       <div class="nav-item" data-v="settings" onclick="nav('settings')">
         <span class="ni">⚙️</span> Налаштування
@@ -546,24 +580,8 @@ tbody tr.clickable:hover td{background:#f0f7ff}
         </div>
         <div id="entryFeeFactBlock" style="margin-top:16px"></div>
       </div>
-      <!-- Tab 3: Відпустки -->
-      <div class="tab-pane" id="tp3">
-        <div id="absTypeInfo" class="alert alert-info" style="margin-bottom:12px"></div>
-        <div id="absenceSummary" style="margin-bottom:12px"></div>
-        <div class="section-hd">Додати відсутність</div>
-        <div class="g3" style="margin-bottom:8px">
-          <div class="fg" style="margin-bottom:0"><label>Тип</label>
-            <select id="fAbsType">
-              <option value="vacation">🏖️ Відпустка</option>
-              <option value="sick">🤒 Хвороба</option>
-            </select></div>
-          <div class="fg" style="margin-bottom:0"><label>Початок</label><input type="date" id="fAbsFrom"></div>
-          <div class="fg" style="margin-bottom:0"><label>Кінець</label><input type="date" id="fAbsTo"></div>
-        </div>
-        <button class="btn btn-secondary btn-sm" onclick="addAbsence()">+ Додати відсутність</button>
-        <div class="section-hd" style="margin-top:14px">Записані відсутності</div>
-        <div id="absenceList"></div>
-      </div>
+      <!-- Tab 3: Відсутності (рендериться динамічно) -->
+      <div class="tab-pane" id="tp3"></div>
       <!-- Tab 4: Оплати по місяцях (NEW) -->
       <div class="tab-pane" id="tp4">
         <div id="payMonthsContent">
@@ -642,7 +660,8 @@ var S = {
   anaSelLoc:    '',
   anaSelPeriod: 'year',
   anaSelLocType:'',    // фільтр типу локації: ''|'Садочок'|'Школа'|...
-  anaDetail:    null   // ключ відкритої деталізації: 'kids'|'debtors'|'collected'|'budget'|'pct'|null
+  anaDetail:    null,  // ключ відкритої деталізації: 'kids'|'debtors'|'collected'|'budget'|'pct'|null
+  _absFormOpen: false  // стан форми додавання відсутності
 };
 
 // ─── UTILS ────────────────────────────────────────────────────────────────────
@@ -1044,6 +1063,8 @@ function updUserUI(){
   document.getElementById('uLoc').textContent=r==='hr'?'Всі локації':S.user.loc;
   document.getElementById('uAvatar').textContent=r==='hr'?'HR':'Д';
   document.getElementById('sbRole').textContent=r==='hr'?'CEO / HR менеджер':'Директор локації';
+  var absEl=document.getElementById('navAbsReq');
+  if(absEl) absEl.style.display=r==='hr'?'':'none';
 }
 function isHR(){ return S.user&&S.user.role==='hr'; }
 function visibleLocs(){
@@ -1138,10 +1159,12 @@ function showSpinner(){ document.getElementById('main').innerHTML='<div class="l
 function toggleSidebar(){ document.getElementById('sidebar').classList.toggle('open'); }
 
 // ─── NAVIGATION ──────────────────────────────────────────────────────────────
-var TITLES={clients:'👶 Список дітей',debts:'💰 Борги та оплати',settings:'⚙️ Налаштування'};
+var TITLES={clients:'👶 Список дітей',debts:'💰 Борги та оплати',settings:'⚙️ Налаштування',absRequests:'💼 Перерахунки бюджету'};
 function nav(view){
+  S.mainTab='clients'; // скидаємо аналітику при навігації
   S.view=view;
   document.querySelectorAll('.nav-item').forEach(function(el){ el.classList.toggle('active',el.dataset.v===view); });
+  var na=document.getElementById('navAnalytics'); if(na) na.classList.remove('active');
   document.getElementById('pageTitle').textContent=TITLES[view]||view;
   renderView();
 }
@@ -1149,6 +1172,7 @@ function renderView(){
   if(S.mainTab==='analytics'){ renderAnalytics(); return; }
   if(S.view==='clients') renderClients();
   else if(S.view==='debts') renderDebts();
+  else if(S.view==='absRequests') renderAbsRequests();
   else renderSettings();
 }
 function switchMainTab(tab){
@@ -1384,7 +1408,7 @@ function renderClients(){
             +'<div style="font-size:11px;color:var(--green)">сплачено</div>';
         }
         html+='<tr class="clickable" onclick="openChild(\''+esc(String(ch.id||''))+'\',\''+esc(String(ch.group||''))+'\',\''+esc(String(ch.teacher||grp.teacher||''))+'\',\''+esc(String(ch.loc||''))+'\',\''+esc(String(ch.name||''))+'\')">'
-          +'<td><span class="child-link">'+esc(ch.name)+'</span></td>'
+          +'<td><span class="child-link">'+esc(ch.name)+'</span>'+getAbsBadge(ch.id)+'</td>'
           +'<td>'+payBadge(ch.status,debtAmt,over)+'</td>'
           +'<td style="font-weight:600">'+(factTotal?fmtN(factTotal):'—')+'</td>'
           +'<td>'+budCell+'</td>'
@@ -1558,14 +1582,15 @@ function openNewChild(){
   document.getElementById('feeHistoryList').innerHTML='';
   document.getElementById('entryFeeList').innerHTML='';
   document.getElementById('entryFeeSummary').innerHTML='';
-  document.getElementById('absenceList').innerHTML='<p style="color:var(--gray);font-size:13px">Відсутностей не записано</p>';
-  document.getElementById('absenceSummary').innerHTML='';
+  document.getElementById('tp3').innerHTML='';
+  S._absFormOpen=false;
   setLocFieldMode(true);
   updateContractType();
   document.getElementById('mChild').classList.remove('hidden');
 }
 
 function openChild(id,group,teacher,loc,name){
+  S._absFormOpen=false;
   S.editId=id;
   S.isNew=false;
   var card=getCRMCard(id);
@@ -1824,7 +1849,8 @@ function recalcDiscount(){
   var c=S.crm[id]||{};
   var t=document.getElementById('fContractType').value;
   var fee=parseFloat(document.getElementById('fMonthlyFee').value)||c.monthlyFee||0;
-  var abs=c.absences||[];
+  // Враховуємо тільки підтверджені (done) або legacy відсутності
+  var abs=(c.absences||[]).filter(function(a){ return !a.id||a.status==='done'; });
 
   if(t==='preschool'){
     el.innerHTML='<div class="alert alert-info" style="margin-top:4px">Preschool: перерахунки не передбачені договором.</div>';
@@ -1956,92 +1982,433 @@ function addEntryFeeRow(){
 }
 function delEntryFeeRow(i){ getCRMCard(S.editId).entryFeeSchedule.splice(i,1); renderEntryFee(); }
 
-// Absences
+// ─── ABSENCE MODULE ──────────────────────────────────────────────────────────
+
+// Рахує робочі дні (Пн-Пт) між двома датами включно
+function countWorkDays(fromStr, toStr){
+  var f=pd(fromStr), t=pd(toStr);
+  if(!f||!t||t<f) return 0;
+  var n=0, cur=new Date(f.getTime());
+  while(cur<=t){ var d=cur.getDay(); if(d!==0&&d!==6) n++; cur.setDate(cur.getDate()+1); }
+  return n;
+}
+
+// Тип договору за датою + групою
+function getContractType2(contractDate, group){
+  if(!contractDate) return 'standard';
+  if(contractDate>='2025-10-01') return 'new';
+  if(/preschool/i.test(normalizeGroup(group||''))) return 'preschool';
+  return 'standard';
+}
+
+// Поточний рік договору: {from, to} — від дати договору, не календарний
+function getContractYear(contractDate, todayStr){
+  var cd=pd(contractDate); if(!cd) return null;
+  var td=pd(todayStr)||new Date();
+  var diffY=td.getFullYear()-cd.getFullYear();
+  for(var off=diffY-1;off<=diffY+1;off++){
+    var f=new Date(cd.getFullYear()+off,cd.getMonth(),cd.getDate());
+    var t2=new Date(cd.getFullYear()+off+1,cd.getMonth(),cd.getDate()-1);
+    if(td>=f&&td<=t2) return {from:f.toISOString().slice(0,10),to:t2.toISOString().slice(0,10)};
+  }
+  var f0=new Date(cd.getFullYear()+diffY,cd.getMonth(),cd.getDate());
+  var t0=new Date(cd.getFullYear()+diffY+1,cd.getMonth(),cd.getDate()-1);
+  return {from:f0.toISOString().slice(0,10),to:t0.toISOString().slice(0,10)};
+}
+
+// Конвертує старий формат відсутностей в новий (in-place)
+function migrateAbsences(c){
+  if(!c.absences){ c.absences=[]; return; }
+  c.absences=c.absences.map(function(a,i){
+    if(a.status!==undefined) return a; // вже новий формат
+    var wd=countWorkDays(a.from,a.to)||a.days||0;
+    var w=Math.min(4,Math.ceil(Math.max(0,wd)/5));
+    return {
+      id:'abs_legacy_'+i, type:a.type||'vacation', from:a.from||'', to:a.to||'',
+      workDays:wd, weeks:w, monthsBreakdown:[], totalPct:0, totalAmount:0,
+      status:'done',
+      statusHistory:[{status:'done',at:a.from||today(),by:'legacy'}],
+      rejectReason:'', note:'(з попередньої версії)', createdBy:'', createdAt:a.from||today()
+    };
+  });
+}
+
+// Розбиває відсутність по місяцях, повертає [{month,workDays,weeks,pct,amount}]
+function calcAbsMonthBreakdown(type, fromStr, toStr, fee){
+  var f=pd(fromStr), t=pd(toStr);
+  if(!f||!t||t<f) return [];
+  var mmap={}, cur=new Date(f.getTime());
+  while(cur<=t){
+    var d=cur.getDay();
+    if(d!==0&&d!==6){
+      var mk=cur.getFullYear()+'-'+String(cur.getMonth()+1).padStart(2,'0');
+      mmap[mk]=(mmap[mk]||0)+1;
+    }
+    cur.setDate(cur.getDate()+1);
+  }
+  var VPCT=[0,25,50,75,100], SPCT=[0,5,10,15,20];
+  return Object.keys(mmap).sort().map(function(mk){
+    var wd=mmap[mk], w=Math.min(4,Math.ceil(wd/5));
+    var pct=type==='vacation'?VPCT[w]:SPCT[w];
+    return {month:mk,workDays:wd,weeks:w,pct:pct,amount:fee>0?Math.round(fee*pct/100):0};
+  });
+}
+
+// Бейдж відсутності для списку дітей
+function getAbsBadge(id){
+  var c=S.crm[id]; if(!c||!c.absences||!c.absences.length) return '';
+  var hasActive=c.absences.some(function(a){ return a.status==='done'||a.status==='pending'||a.status==='processing'; });
+  if(!hasActive) return '';
+  var hasVac=c.absences.some(function(a){ return a.type==='vacation'&&(a.status==='done'||a.status==='pending'||a.status==='processing'); });
+  var hasSick=c.absences.some(function(a){ return a.type==='sick'&&(a.status==='done'||a.status==='pending'||a.status==='processing'); });
+  return (hasVac?' <span title="Відпустка">🏖</span>':'')+(hasSick?' <span title="Лікарняний">🤒</span>':'');
+}
+
+// ── РЕНДЕР ВКЛАДКИ ВІДСУТНОСТІ ───────────────────────────────────────────────
 function renderAbsences(){
   var id=S.editId; if(!id) return;
+  var tp3=document.getElementById('tp3'); if(!tp3) return;
   var c=S.crm[id]||{};
+  migrateAbsences(c);
+  var contractDate=c.contractDate||'';
+  var group=c.group||'';
+  var fee=+(c.monthlyFee||0);
+  var ct=getContractType2(contractDate,group);
+  var contractYear=contractDate?getContractYear(contractDate,today()):null;
   var abs=c.absences||[];
-  var t=document.getElementById('fContractType').value;
+  var who=isHR()?'HR':(S.user&&S.user.loc?S.user.loc:'Директор');
 
-  var infoEl=document.getElementById('absTypeInfo');
-  var addFormEl=document.querySelector('#tp3 .g3');
-  var addBtnEl=document.querySelector('#tp3 .btn-secondary.btn-sm');
+  // Використані робочі дні (без відхилених)
+  var vacWD=0, sickWD=0;
+  abs.forEach(function(a){ if(a.status==='rejected') return; if(a.type==='vacation') vacWD+=a.workDays||0; else sickWD+=a.workDays||0; });
 
-  if(t==='preschool'){
-    infoEl.className='alert alert-warn';
-    infoEl.textContent='Preschool: перерахунки не передбачені договором. Відпустки і хвороби не впливають на суму.';
-    if(addFormEl) addFormEl.style.display='none';
-    if(addBtnEl) addBtnEl.style.display='none';
-    document.getElementById('absenceSummary').innerHTML='';
-    document.getElementById('absenceList').innerHTML='<p style="color:var(--gray);font-size:13px">Перерахунки не передбачені цим типом договору.</p>';
-    return;
-  }
+  var CT_LABEL={standard:'Стандарт',preschool:'Preschool','new':'Новий','sick-only':'Новий'};
+  var html='';
 
-  if(addFormEl) addFormEl.style.display='';
-  if(addBtnEl) addBtnEl.style.display='';
-
-  var absTypeEl=document.getElementById('fAbsType');
-  if(t==='standard'){
-    infoEl.className='alert alert-info';
-    infoEl.textContent='Стандарт: ТІЛЬКИ відпустка до 4 тижнів на рік (1→25%, 2→50%, 3→75%, 4→100%). Хвороба не перераховується.';
-    absTypeEl.innerHTML='<option value="vacation">🏖️ Відпустка</option>';
+  // Блок 1: Інформація про договір
+  if(!contractDate){
+    html+='<div class="alert alert-warn">⚠️ Вкажіть дату договору та групу на вкладці <b>Договір</b> — тип визначається автоматично.</div>';
   } else {
-    infoEl.className='alert alert-info';
-    infoEl.textContent='Після 01.10.2025: ТІЛЬКИ хвороба до 4 тижнів на рік (1→5%, 2→10%, 3→15%, 4→20%). Відпустка не перераховується.';
-    absTypeEl.innerHTML='<option value="sick">🤒 Хвороба</option>';
+    var yearInfo=contractYear?fmtD(contractYear.from)+' — '+fmtD(contractYear.to):'—';
+    html+='<div class="abs-info-block">'
+      +'<b>Тип договору: '+(CT_LABEL[ct]||ct)+'</b> (визначено авто)'
+      +'<div style="margin-top:3px;color:var(--dark2)">Договір '+fmtD(contractDate)+' · група '+esc(group)
+      +(contractYear?' · Рік: '+yearInfo:'')
+      +'</div></div>';
   }
 
-  var vacDays=abs.filter(function(a){ return a.type==='vacation'; }).reduce(function(s,a){ return s+a.days; },0);
-  var sickDays=abs.filter(function(a){ return a.type==='sick'; }).reduce(function(s,a){ return s+a.days; },0);
-  var sumHtml='<div style="display:flex;gap:10px;flex-wrap:wrap">';
-  if(t==='standard'){
-    var vacW=weeksCeil(vacDays);
-    sumHtml+='<div class="vac-box"><div class="vac-num">'+vacW+'</div><div><div class="vac-lbl">Тижнів відпустки</div><div class="vac-lbl" style="color:var(--green)">Залишок: '+Math.max(0,4-vacW)+' тиж.</div></div></div>';
+  // Блок 2: Лічильники
+  var vacAvail=ct==='standard';
+  var sickAvail=ct!=='preschool';
+  html+='<div class="abs-counters">';
+  if(vacAvail){
+    var vp=Math.min(100,Math.round(vacWD/20*100));
+    html+='<div class="abs-cnt"><div class="abs-cnt-lbl">🏖 Відпустка</div>'
+      +'<div class="abs-cnt-val">'+vacWD+' <span style="font-size:13px;font-weight:400;color:var(--gray)">з 20 роб.дн</span></div>'
+      +'<div class="abs-cnt-sub">'+Math.min(4,Math.ceil(vacWD/5))+' тиж · залишок: '+(20-Math.min(20,vacWD))+' дн</div>'
+      +'<div class="abs-pbar"><div class="abs-pbar-fill'+(vacWD>20?' over':'')+'" style="width:'+vp+'%"></div></div></div>';
   } else {
-    var sickW=weeksCeil(sickDays);
-    sumHtml+='<div class="vac-box"><div class="vac-num">'+sickW+'</div><div><div class="vac-lbl">Тижнів хвороби</div>'+(sickW>4?'<div class="vac-lbl" style="color:var(--red2)">Ліміт перевищено</div>':'<div class="vac-lbl" style="color:var(--green)">Залишок: '+Math.max(0,4-sickW)+' тиж.</div>')+'</div></div>';
+    html+='<div class="abs-cnt disabled"><div class="abs-cnt-lbl">🏖 Відпустка</div><div style="font-size:13px;color:var(--gray);margin-top:6px">Недоступно за договором</div></div>';
   }
-  sumHtml+='</div>';
-  document.getElementById('absenceSummary').innerHTML=sumHtml;
+  if(sickAvail){
+    var sp=Math.min(100,Math.round(sickWD/20*100));
+    html+='<div class="abs-cnt"><div class="abs-cnt-lbl">🤒 Лікарняний</div>'
+      +'<div class="abs-cnt-val">'+sickWD+' <span style="font-size:13px;font-weight:400;color:var(--gray)">з 20 роб.дн</span></div>'
+      +'<div class="abs-cnt-sub">'+Math.min(4,Math.ceil(sickWD/5))+' тиж · залишок: '+(20-Math.min(20,sickWD))+' дн</div>'
+      +'<div class="abs-pbar"><div class="abs-pbar-fill'+(sickWD>20?' over':'')+'" style="width:'+sp+'%"></div></div></div>';
+  } else {
+    html+='<div class="abs-cnt disabled"><div class="abs-cnt-lbl">🤒 Лікарняний</div><div style="font-size:13px;color:var(--gray);margin-top:6px">Недоступно за договором</div></div>';
+  }
+  html+='</div>'; // abs-counters
 
-  var listEl=document.getElementById('absenceList'); if(!listEl) return;
-  var visAbs=t==='standard'
-    ? abs.filter(function(a){ return a.type==='vacation'; })
-    : abs.filter(function(a){ return a.type==='sick'; });
+  // Блок 3: Форма або кнопка + список
+  if(S._absFormOpen && ct!=='preschool'){
+    html+=renderAbsAddForm(ct,fee,abs,vacAvail,sickAvail);
+  } else if(ct!=='preschool'){
+    html+='<button class="btn btn-secondary btn-sm" onclick="S._absFormOpen=true;renderAbsences()">➕ Додати період</button>';
+  }
 
-  listEl.innerHTML=!visAbs.length?'<p style="color:var(--gray);font-size:13px">Відсутностей не записано</p>'
-    :visAbs.map(function(a){
-      var realIdx=abs.indexOf(a);
-      var w=weeksCeil(a.days);
-      var pct=a.type==='vacation'?[0,25,50,75,100][Math.min(4,w)]:[0,5,10,15,20][Math.min(4,w)];
-      return '<div class="absence-row"><span class="ar-type">'+(a.type==='vacation'?'🏖️ Відпустка':'🤒 Хвороба')+'</span>'
-        +'<span class="ar-dates">'+fmtD(a.from)+' — '+fmtD(a.to)+'</span>'
-        +'<span class="ar-days">'+a.days+' дн / '+w+' тиж → −'+pct+'%</span>'
-        +'<button class="del-btn" onclick="delAbsence('+realIdx+')">✕</button></div>';
-    }).join('');
+  html+='<div class="section-hd" style="margin-top:14px">Записані відсутності</div>';
+  if(!abs.length){
+    html+='<p style="color:var(--gray);font-size:13px">Відсутностей не записано</p>';
+  } else {
+    abs.forEach(function(a,i){ html+=renderAbsEntry(a,i,id); });
+  }
+
+  tp3.innerHTML=html;
 }
-function addAbsence(){
+
+function renderAbsAddForm(ct,fee,abs,vacAvail,sickAvail){
+  var typeOpts=(vacAvail?'<option value="vacation">🏖 Відпустка</option>':'')
+    +(sickAvail?'<option value="sick">🤒 Лікарняний</option>':'');
+  return '<div class="abs-add-form">'
+    +'<div style="font-weight:700;font-size:13px;margin-bottom:10px">Новий період відсутності</div>'
+    +'<div class="g3" style="margin-bottom:8px">'
+    +'<div class="fg" style="margin-bottom:0"><label>Тип</label><select id="absNewType" onchange="absPreviewUpdate()">'+typeOpts+'</select></div>'
+    +'<div class="fg" style="margin-bottom:0"><label>Початок</label><input type="date" id="absNewFrom" onchange="absPreviewUpdate()"></div>'
+    +'<div class="fg" style="margin-bottom:0"><label>Кінець</label><input type="date" id="absNewTo" onchange="absPreviewUpdate()"></div>'
+    +'</div>'
+    +'<div class="fg" style="margin-bottom:8px"><label>Нотатка (опціонально)</label>'
+    +'<input type="text" id="absNewNote" placeholder="Напр. є довідка, вийдуть 26.04"></div>'
+    +'<div id="absPreview"></div>'
+    +'<div style="display:flex;gap:8px;margin-top:10px">'
+    +'<button class="btn btn-primary btn-sm" onclick="saveAbsencePeriod()">💾 Зберегти</button>'
+    +'<button class="btn btn-secondary btn-sm" onclick="S._absFormOpen=false;renderAbsences()">Скасувати</button>'
+    +'</div></div>';
+}
+
+function renderAbsEntry(a,i,cid){
+  var typeLabel=a.type==='vacation'?'🏖 Відпустка':'🤒 Лікарняний';
+  var wd=a.workDays||0, w=a.weeks||Math.min(4,Math.ceil(wd/5));
+  var ST_HTML={
+    pending:'<span class="ab-st ab-pending">⏳ Очікує фінансиста</span>',
+    processing:'<span class="ab-st ab-processing">💼 На обробці</span>',
+    done:'<span class="ab-st ab-done">✅ Внесено</span>',
+    rejected:'<span class="ab-st ab-rejected">❌ Відхилено</span>'
+  };
+  var badge=ST_HTML[a.status]||'<span class="ab-st ab-legacy">📁 Архів</span>';
+
+  var calcLines='';
+  if(a.monthsBreakdown&&a.monthsBreakdown.length){
+    calcLines='Перерахунок: '+a.monthsBreakdown.map(function(mb){
+      var ml=CFG.MONTHS_DISP[+mb.month.split('-')[1]-1]||mb.month;
+      return ml+': '+mb.workDays+' дн → '+mb.weeks+' тиж → −'+mb.pct+'%'+(mb.amount>0?' = −'+fmtN(mb.amount)+' грн':'');
+    }).join(' · ');
+  } else if(wd>0){
+    var VPCT=[0,25,50,75,100],SPCT=[0,5,10,15,20];
+    var pct=a.type==='vacation'?VPCT[Math.min(4,w)]:SPCT[Math.min(4,w)];
+    calcLines='Перерахунок: '+w+' тиж → −'+pct+'%'+(a.totalAmount>0?' = −'+fmtN(a.totalAmount)+' грн':'');
+  }
+
+  var actions='';
+  if(a.status==='pending'&&!isHR()){
+    actions='<button class="btn btn-xs btn-danger" onclick="deleteAbsencePeriod('+i+')">🗑 Видалити</button>';
+  }
+  if((a.status==='pending'||a.status==='processing')&&isHR()){
+    actions='<button class="btn btn-xs btn-primary" style="font-size:11px" onclick="markAbsDone(\''+esc(cid)+'\',\''+esc(a.id)+'\',false)">✅ Внесено</button>'
+      +' <button class="btn btn-xs btn-danger" style="font-size:11px" onclick="openRejectForm(\''+esc(cid)+'\',\''+esc(a.id)+'\',false)">❌ Відхилити</button>';
+  }
+
+  return '<div class="abs-entry">'
+    +'<div class="abs-entry-hd"><span class="abs-entry-type">'+typeLabel+'</span>'+badge
+    +(actions?'<span style="margin-left:auto;display:flex;gap:4px">'+actions+'</span>':'')+'</div>'
+    +'<div class="abs-entry-info">'+fmtD(a.from)+' — '+fmtD(a.to)+' · '+wd+' роб.дн · '+w+' тиж</div>'
+    +(calcLines?'<div class="abs-entry-calc">'+calcLines+'</div>':'')
+    +(a.note?'<div style="font-size:12px;color:var(--gray)">📝 '+esc(a.note)+'</div>':'')
+    +(a.rejectReason?'<div class="abs-entry-reject">❌ Причина відхилення: '+esc(a.rejectReason)+'</div>':'')
+    +'</div>';
+}
+
+function absPreviewUpdate(){
+  var el=document.getElementById('absPreview'); if(!el) return;
+  var typeEl=document.getElementById('absNewType');
+  var fromEl=document.getElementById('absNewFrom');
+  var toEl=document.getElementById('absNewTo');
+  if(!typeEl||!fromEl||!toEl) return;
+  var type=typeEl.value, from=fromEl.value, to=toEl.value;
+  if(!from||!to||to<from){ el.innerHTML=''; return; }
+  var id=S.editId; var c=S.crm[id]||{};
+  var fee=+(c.monthlyFee||0);
+  var abs=c.absences||[];
+  var wd=countWorkDays(from,to);
+  if(!wd){ el.innerHTML='<div class="abs-preview-block warn">⚠️ У діапазоні немає робочих днів (Пн-Пт)</div>'; return; }
+  var w=Math.min(4,Math.ceil(wd/5));
+  var usedWD=abs.filter(function(a){ return a.status!=='rejected'&&a.type===type; }).reduce(function(s,a){ return s+(a.workDays||0); },0);
+  var limitOk=(usedWD+wd)<=20;
+  var hasOverlap=abs.some(function(a){ return a.status!=='rejected'&&!(to<a.from||from>a.to); });
+  var bd=calcAbsMonthBreakdown(type,from,to,fee);
+  var lines=['<b>Робочих днів: '+wd+'</b> (Пн-Пт '+fmtD(from)+'–'+fmtD(to)+')',
+    'Тижнів: '+w+' (округлено вгору)'];
+  bd.forEach(function(mb){
+    var ml=CFG.MONTHS_DISP[+mb.month.split('-')[1]-1]||mb.month;
+    lines.push(ml+': '+mb.workDays+' дн → '+mb.weeks+' тиж → −'+mb.pct+'%'+(mb.amount>0?' = −'+fmtN(mb.amount)+' грн':''));
+  });
+  var warn='';
+  if(!limitOk) warn+='⚠️ Перевищено ліміт 20 робочих днів на рік! ';
+  if(hasOverlap) warn+='⚠️ Накладається з вже записаним періодом! ';
+  el.innerHTML='<div class="abs-preview-block'+(warn?' warn':'')+'">'
+    +lines.join('<br>')+(warn?'<div style="margin-top:6px;font-weight:700">'+warn+'</div>':'')+'</div>';
+}
+
+function saveAbsencePeriod(){
   var id=S.editId; if(!id) return;
-  var ct=document.getElementById('fContractType').value;
-  if(ct==='preschool'){ alert('Preschool: перерахунки не передбачені договором.'); return; }
-  var type=document.getElementById('fAbsType').value;
-  if(ct==='standard'&&type!=='vacation'){ alert('Стандарт: можна додавати тільки відпустки.'); return; }
-  if(ct==='sick-only'&&type!=='sick'){ alert('Після 01.10.2025: можна додавати тільки хворобу.'); return; }
-  var from=document.getElementById('fAbsFrom').value;
-  var to=document.getElementById('fAbsTo').value;
-  if(!from||!to){ alert('Вкажіть дати'); return; }
-  var f=pd(from), t=pd(to);
-  if(!f||!t||t<f){ alert('Невірний діапазон'); return; }
-  var days=diffDays(f,t)+1;
+  var typeEl=document.getElementById('absNewType');
+  var from=(document.getElementById('absNewFrom')||{}).value;
+  var to=(document.getElementById('absNewTo')||{}).value;
+  var note=(document.getElementById('absNewNote')||{}).value||'';
+  if(!typeEl||!from||!to){ alert('Вкажіть тип та дати'); return; }
+  if(to<from){ alert('Дата кінця має бути після початку'); return; }
+  var type=typeEl.value;
+  var c=S.crm[id]||{}; var fee=+(c.monthlyFee||0);
+  var ct=getContractType2(c.contractDate||'',c.group||'');
+  if(ct==='preschool'){ alert('Preschool: перерахунки не передбачені договором'); return; }
+  if((ct==='new'||ct==='sick-only')&&type==='vacation'){ alert('Договір від 01.10.2025+: лише лікарняний'); return; }
+  var wd=countWorkDays(from,to);
+  if(!wd){ alert('У вказаному діапазоні немає робочих днів (Пн-Пт)'); return; }
   var abs=getCRMCard(id).absences||[];
-  var usedDays=abs.filter(function(a){ return a.type===type; }).reduce(function(s,a){ return s+a.days; },0);
-  if(weeksCeil(usedDays+days)>4){ alert('Ліміт 4 тижні на рік вичерпано'); return; }
-  getCRMCard(id).absences.push({type:type,from:from,to:to,days:days});
-  document.getElementById('fAbsFrom').value=''; document.getElementById('fAbsTo').value='';
+  var usedWD=abs.filter(function(a){ return a.status!=='rejected'&&a.type===type; }).reduce(function(s,a){ return s+(a.workDays||0); },0);
+  if(usedWD+wd>20){ if(!confirm('Перевищено ліміт 20 робочих днів. Додати все одно?')) return; }
+  var bd=calcAbsMonthBreakdown(type,from,to,fee);
+  var totalPct=bd.reduce(function(s,mb){ return s+mb.pct; },0);
+  var totalAmt=bd.reduce(function(s,mb){ return s+mb.amount; },0);
+  var w=Math.min(4,Math.ceil(wd/5));
+  var who=isHR()?'HR':(S.user&&S.user.loc?S.user.loc:'Директор');
+  var now=new Date().toISOString();
+  getCRMCard(id).absences.push({
+    id:'abs_'+Date.now(), type:type, from:from, to:to, workDays:wd, weeks:w,
+    monthsBreakdown:bd, totalPct:totalPct, totalAmount:totalAmt,
+    status:'pending', statusHistory:[{status:'pending',at:now,by:who}],
+    rejectReason:'', note:note, createdBy:who, createdAt:now
+  });
+  S._absFormOpen=false;
+  saveLocalCRM();
+  apiPost({action:'saveClient',data:Object.assign({id:id},getCRMCard(id))});
+  localStorage.removeItem(CFG.CLI_CACHE);
   renderAbsences();
   recalcDiscount();
 }
-function delAbsence(i){ getCRMCard(S.editId).absences.splice(i,1); renderAbsences(); recalcDiscount(); }
+
+function deleteAbsencePeriod(idx){
+  var id=S.editId; if(!id) return;
+  if(!confirm('Видалити цей запис?')) return;
+  var c=getCRMCard(id); c.absences.splice(idx,1);
+  saveLocalCRM();
+  apiPost({action:'saveClient',data:Object.assign({id:id},c)});
+  localStorage.removeItem(CFG.CLI_CACHE);
+  renderAbsences(); recalcDiscount();
+}
+
+function setAbsStatus(cid,absId,status,reason){
+  var c=getCRMCard(cid); if(!c) return;
+  var a=(c.absences||[]).find(function(x){ return x.id===absId; }); if(!a) return;
+  var who=isHR()?'HR':(S.user&&S.user.loc?S.user.loc:'?');
+  a.status=status;
+  a.statusHistory=a.statusHistory||[];
+  a.statusHistory.push({status:status,at:new Date().toISOString(),by:who});
+  if(reason) a.rejectReason=reason;
+  saveLocalCRM();
+  apiPost({action:'saveClient',data:Object.assign({id:cid},c)});
+  localStorage.removeItem(CFG.CLI_CACHE);
+}
+
+function markAbsDone(cid,absId,fromHR){
+  setAbsStatus(cid,absId,'done','');
+  if(fromHR) renderAbsRequests(); else { renderAbsences(); recalcDiscount(); }
+}
+
+function openRejectForm(cid,absId,fromHR){
+  var reason=prompt('Причина відхилення:');
+  if(reason===null) return;
+  setAbsStatus(cid,absId,'rejected',reason||'Без пояснення');
+  if(fromHR) renderAbsRequests(); else { renderAbsences(); recalcDiscount(); }
+}
+
+// ── HR VIEW: ПЕРЕРАХУНКИ БЮДЖЕТУ ─────────────────────────────────────────────
+function renderAbsRequests(){
+  var main=document.getElementById('main'); if(!main) return;
+  if(!isHR()){ main.innerHTML='<div class="empty"><span class="ei">🔒</span><h4>Доступно тільки для HR</h4></div>'; return; }
+
+  var allReqs=[];
+  Object.keys(S.crm).forEach(function(cid){
+    var c=S.crm[cid]; if(!c||!c.name) return;
+    (c.absences||[]).forEach(function(a){
+      if(!a.id) return; // skip unconverted legacy
+      allReqs.push({a:a,cid:cid,c:c});
+    });
+  });
+
+  var ORDER={pending:0,processing:1,done:2,rejected:3};
+  allReqs.sort(function(x,y){
+    return (ORDER[x.a.status]||9)-(ORDER[y.a.status]||9)||((y.a.createdAt||'')>(x.a.createdAt||'')?1:-1);
+  });
+
+  var pending=allReqs.filter(function(r){ return r.a.status==='pending'; }).length;
+  var processing=allReqs.filter(function(r){ return r.a.status==='processing'; }).length;
+  var curM=new Date().toISOString().slice(0,7);
+  var doneCur=allReqs.filter(function(r){ return r.a.status==='done'&&(r.a.statusHistory||[]).some(function(h){ return h.at&&h.at.slice(0,7)===curM&&h.status==='done'; }); }).length;
+
+  var html='<div class="req-hdr-grid">'
+    +'<div class="req-stat"><div class="req-stat-n" style="color:var(--orange)">'+pending+'</div><div class="req-stat-l">⏳ Нових заявок</div></div>'
+    +'<div class="req-stat"><div class="req-stat-n" style="color:var(--blue)">'+processing+'</div><div class="req-stat-l">💼 В роботі</div></div>'
+    +'<div class="req-stat"><div class="req-stat-n" style="color:var(--green)">'+doneCur+'</div><div class="req-stat-l">✅ Виконано цього місяця</div></div>'
+    +'</div>';
+
+  if(!allReqs.length){
+    html+='<div class="empty"><span class="ei">📋</span><h4>Заявок немає</h4><p>Директори ще не вносили відсутності в нових форматах</p></div>';
+    main.innerHTML=html; return;
+  }
+
+  var ST_HTML2={
+    pending:'<span class="ab-st ab-pending">⏳ Очікує</span>',
+    processing:'<span class="ab-st ab-processing">💼 В роботі</span>',
+    done:'<span class="ab-st ab-done">✅ Внесено</span>',
+    rejected:'<span class="ab-st ab-rejected">❌ Відхилено</span>'
+  };
+
+  html+='<div class="card"><div class="tbl-wrap"><table class="req-table"><thead><tr>'
+    +'<th>Заявка</th><th>Дитина · Локація</th><th>Тип</th><th>Період</th>'
+    +'<th>Дн / Тиж</th><th>Перерахунок</th><th>Статус</th><th>Дії</th>'
+    +'</tr></thead><tbody>';
+
+  allReqs.forEach(function(r){
+    var a=r.a, c=r.c, cid=r.cid;
+    var typeLabel=a.type==='vacation'?'🏖 Відпустка':'🤒 Лікарняний';
+    var calcInfo='';
+    if(a.monthsBreakdown&&a.monthsBreakdown.length){
+      calcInfo=a.monthsBreakdown.map(function(mb){
+        var ml=CFG.MONTHS_DISP[+mb.month.split('-')[1]-1]||mb.month;
+        return ml+': −'+mb.pct+'%'+(mb.amount>0?' (−'+fmtN(mb.amount)+' грн)':'');
+      }).join('<br>');
+    } else if(a.totalPct){
+      calcInfo='−'+a.totalPct+'%'+(a.totalAmount>0?' (−'+fmtN(a.totalAmount)+' грн)':'');
+    }
+    var locObj=S.locs.find(function(l){ return l.loc===c.loc; });
+    var sheetUrl=locObj&&locObj.sheetName
+      ?'https://docs.google.com/spreadsheets/d/'+CFG.CRM_SHEET_ID+'/edit#gid=0':'';
+    var actions='';
+    if(a.status==='pending'||a.status==='processing'){
+      actions=(sheetUrl?'<a href="'+esc(sheetUrl)+'" target="_blank" class="btn btn-xs btn-secondary" style="text-decoration:none;font-size:11px">📄 Відкрити Sheet</a> ':'')
+        +'<button class="btn btn-xs btn-primary" style="font-size:11px" onclick="markAbsDone(\''+esc(cid)+'\',\''+esc(a.id)+'\',true)">✅ Внесено</button>'
+        +' <button class="btn btn-xs btn-danger" style="font-size:11px" onclick="openRejectForm(\''+esc(cid)+'\',\''+esc(a.id)+'\',true)">❌ Відхилити</button>';
+    } else if(a.status==='done'){
+      var doneBy=(a.statusHistory||[]).filter(function(h){ return h.status==='done'; }).pop()||{};
+      actions='<span style="font-size:11px;color:var(--gray)">'+((doneBy.at||'').slice(0,10)||'')+(doneBy.by?' · '+esc(doneBy.by):'')+'</span>';
+    }
+    html+='<tr>'
+      +'<td style="font-size:12px;color:var(--gray);white-space:nowrap">'+((a.createdAt||'').slice(0,10).split('-').reverse().join('.')+'<br>'+esc(a.createdBy||''))+'</td>'
+      +'<td><b style="cursor:pointer;color:var(--blue2)" onclick="openChildByName(\''+esc(c.name||'')+'\',\''+esc(c.loc||'')+'\')">'+esc(c.name)+'</b><br><span style="color:var(--gray);font-size:12px">'+esc(c.loc||'')+'</span></td>'
+      +'<td>'+typeLabel+'</td>'
+      +'<td style="white-space:nowrap">'+fmtD(a.from)+' — '+fmtD(a.to)+'</td>'
+      +'<td>'+((a.workDays||0))+' / '+(a.weeks||0)+' тиж</td>'
+      +'<td style="font-size:12px">'+calcInfo+'</td>'
+      +'<td>'+(ST_HTML2[a.status]||'')+(a.rejectReason?'<div style="font-size:11px;color:var(--red2);margin-top:2px">'+esc(a.rejectReason)+'</div>':'')+'</td>'
+      +'<td style="white-space:nowrap">'+actions+'</td>'
+      +'</tr>';
+  });
+  html+='</tbody></table></div></div>';
+  main.innerHTML=html;
+}
+
+// Відкрити картку дитини по імені та локації (для посилань з HR-таблиці)
+function openChildByName(name, loc){
+  for(var cid in S.crm){
+    var c=S.crm[cid]; if(!c) continue;
+    if(c.name===name&&c.loc===loc){ openChild(cid,c.group||'',c.teacher||'',c.loc||'',c.name||''); return; }
+  }
+  // Fallback: шукаємо в S.groups
+  for(var loc2 in S.groups){
+    for(var gi=0;gi<S.groups[loc2].length;gi++){
+      var g=S.groups[loc2][gi];
+      for(var ci=0;ci<g.children.length;ci++){
+        var ch=g.children[ci];
+        if(ch.name===name&&ch.loc===loc){ openChild(ch.id,ch.group,ch.teacher||g.teacher,ch.loc,ch.name); return; }
+      }
+    }
+  }
+}
+
+// delAbsence: legacy stub (нові картки використовують deleteAbsencePeriod)
+function delAbsence(i){ deleteAbsencePeriod(i); }
 
 // ─── DELETE ───────────────────────────────────────────────────────────────────
 function deleteChild(){
