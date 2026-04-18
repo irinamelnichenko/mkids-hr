@@ -350,6 +350,9 @@ tbody tr.clickable:hover td{background:#f0f7ff}
       <div class="nav-item" data-v="debts" onclick="nav('debts')">
         <span class="ni">💰</span> Борги та оплати
       </div>
+      <div class="nav-item" id="navAnalytics" onclick="switchMainTab('analytics')">
+        <span class="ni">📊</span> Аналітика
+      </div>
       <div class="nav-sec">Система</div>
       <div class="nav-item" data-v="settings" onclick="nav('settings')">
         <span class="ni">⚙️</span> Налаштування
@@ -1117,6 +1120,8 @@ function switchMainTab(tab){
   S.mainTab=tab;
   document.getElementById('tb-clients').classList.toggle('active',tab==='clients');
   document.getElementById('tb-analytics').classList.toggle('active',tab==='analytics');
+  var na=document.getElementById('navAnalytics');
+  if(na) na.classList.toggle('active',tab==='analytics');
   var titles={clients:'👶 Список дітей',analytics:'📊 Аналітика · Рік 2026'};
   document.getElementById('pageTitle').textContent=titles[tab]||tab;
   renderView();
