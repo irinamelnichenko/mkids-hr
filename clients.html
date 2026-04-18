@@ -222,6 +222,47 @@ tbody tr.clickable:hover td{background:#f0f7ff}
 .req-stat-n{font-size:28px;font-weight:900;color:var(--dark);line-height:1}
 .req-stat-l{font-size:12px;color:var(--gray);margin-top:3px}
 
+/* ATTENDANCE MODULE */
+.att-wrap{overflow-x:auto}
+.att-table{border-collapse:collapse;width:100%;font-size:13px;min-width:480px}
+.att-table th{padding:8px 10px;background:#f8fafc;border:1px solid #e8ecf0;font-weight:700;font-size:11px;text-transform:uppercase;color:var(--gray);white-space:nowrap;position:sticky;top:0;z-index:10}
+.att-table th.nc{left:0;z-index:11;background:#f8fafc;min-width:150px}
+.att-table td{padding:6px 8px;border:1px solid #e8ecf0;vertical-align:middle;text-align:center}
+.att-table td.nc{left:0;position:sticky;background:#fff;font-weight:600;text-align:left;z-index:5;padding-left:10px}
+.att-table tr:hover td.nc{background:#f8faff}
+.att-table tr.grp-row td{background:#f0f4f8;font-weight:700;font-size:12px;color:var(--dark);text-align:left;padding:6px 10px}
+.att-btn{background:none;border:2px solid #e8ecf0;border-radius:8px;width:36px;height:36px;font-size:17px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:all .15s;user-select:none}
+.att-btn:hover{background:#f0f4f8}
+.att-s-present{background:#e8f8f0!important;border-color:#9ae6b4!important}
+.att-s-sick{background:#fef9e7!important;border-color:#f9ca24!important}
+.att-s-vacation{background:#e8f2fb!important;border-color:#90cdf4!important}
+.att-s-absent{background:#fdf0f0!important;border-color:#fca5a5!important}
+.att-mode-bar{display:flex;gap:8px;margin-bottom:14px;align-items:center;flex-wrap:wrap}
+.att-mode-btn{padding:7px 14px;border:2px solid #e8ecf0;border-radius:8px;background:#fff;font-size:13px;font-weight:600;cursor:pointer;color:var(--gray);transition:all .2s}
+.att-mode-btn.active{border-color:var(--green);background:var(--green);color:#fff}
+.att-stats{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;padding:10px 14px;background:#fff;border-radius:10px;box-shadow:var(--sh);align-items:center}
+.att-stat{text-align:center;min-width:64px}
+.att-stat-n{font-size:19px;font-weight:800;color:var(--dark);line-height:1}
+.att-stat-l{font-size:11px;color:var(--gray);margin-top:1px}
+.att-day-row{display:flex;align-items:center;gap:8px;padding:9px 10px;border-bottom:1px solid #f0f4f8;flex-wrap:wrap}
+.att-day-row:last-child{border-bottom:none}
+.att-day-name{flex:1;min-width:130px;font-weight:600;font-size:13px;cursor:pointer;color:var(--blue2)}
+.att-day-btns{display:flex;gap:5px}
+.att-day-btn{border:2px solid #e8ecf0;border-radius:8px;padding:5px 9px;font-size:16px;cursor:pointer;background:#fff;transition:all .15s;line-height:1}
+.att-streak{display:inline-block;font-size:10px;background:#fef4e9;color:#e67e22;font-weight:700;border-radius:4px;padding:1px 5px;margin-left:4px;vertical-align:middle}
+/* Health tab */
+.health-record{padding:10px 14px;background:#f8fafc;border:1px solid #e8ecf0;border-radius:9px;margin-bottom:8px}
+.health-record-hd{display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap}
+.hrt{display:inline-flex;align-items:center;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700}
+.hrt-sickness{background:#fef9e7;color:#856404}
+.hrt-injury{background:#fdf0f0;color:#c0392b}
+.hrt-temp{background:#e8f2fb;color:#2471a3}
+.hrt-note{background:#f0f4f8;color:#7f8c8d}
+/* Sick suggest banner */
+.sick-suggest{background:#fef4e9;border:2px solid #f9ca24;border-radius:10px;padding:12px 16px;margin-bottom:12px}
+/* Login 3-tab */
+.role-tabs-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:24px}
+
 /* PAY HISTORY TABLE */
 .pay-hist-table{width:100%;border-collapse:collapse;font-size:13px}
 .pay-hist-table th{padding:8px 12px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--gray);background:#f8fafc;border-bottom:2px solid #e8ecf0}
@@ -378,9 +419,10 @@ tbody tr.clickable:hover td{background:#f0f7ff}
       <h1>m.kids CRM</h1>
       <p>Модуль клієнтів — дітей та батьків</p>
     </div>
-    <div class="role-tabs">
+    <div class="role-tabs-3">
       <button class="rtab active" id="tabHR" onclick="selRole('hr')">👔 CEO / HR</button>
       <button class="rtab" id="tabDir" onclick="selRole('director')">🏫 Директор</button>
+      <button class="rtab" id="tabNurse" onclick="selRole('nurse')">👩‍⚕️ Медсестра</button>
     </div>
     <div id="loginError" class="auth-error hidden"></div>
     <div id="fldLocation" class="fg hidden">
@@ -393,7 +435,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
         onkeydown="if(event.key==='Enter')doLogin()">
     </div>
     <button class="btn btn-primary full" onclick="doLogin()">Увійти →</button>
-    <p class="auth-hint">CEO/HR: <b>hr2024</b> &nbsp;|&nbsp; Директор: пароль локації</p>
+    <p class="auth-hint">CEO/HR: <b>hr2024</b> &nbsp;|&nbsp; Директор/Медсестра: пароль локації</p>
     <p style="text-align:center;margin-top:10px;font-size:11px">
       <a href="#" onclick="clearSetupUrl();return false" style="color:var(--gray)">Змінити Apps Script URL</a>
     </p>
@@ -424,6 +466,9 @@ tbody tr.clickable:hover td{background:#f0f7ff}
       </div>
       <div class="nav-item" id="navAnalytics" onclick="switchMainTab('analytics')">
         <span class="ni">📊</span> Аналітика
+      </div>
+      <div class="nav-item" id="navAttendance" data-v="attendance" onclick="S.mainTab='clients';nav('attendance')">
+        <span class="ni">📋</span> Табель
       </div>
       <div class="nav-item" id="navAbsReq" data-v="absRequests" onclick="S.mainTab='clients';nav('absRequests')" style="display:none">
         <span class="ni">💼</span> Перерахунки
@@ -474,6 +519,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
       <div class="tab" onclick="switchTab(4)">📅 Оплати по місяцях</div>
       <div class="tab" onclick="switchTab(5)">📊 Історія оплат</div>
       <div class="tab" onclick="switchTab(6)">📝 Нотатки</div>
+      <div class="tab" onclick="switchTab(7)">🩺 Здоров'я</div>
     </div>
     <div class="modal-bd">
       <!-- Tab 0: Основне -->
@@ -601,6 +647,8 @@ tbody tr.clickable:hover td{background:#f0f7ff}
           <textarea id="fNotes" rows="8" placeholder="Будь-які нотатки…" style="resize:vertical"></textarea>
         </div>
       </div>
+      <!-- Tab 7: Здоров'я -->
+      <div class="tab-pane" id="tp7"></div>
     </div>
     <div class="modal-ft">
       <button class="btn btn-danger btn-sm" id="btnDeleteChild" onclick="deleteChild()" style="margin-right:auto">🗑️ Видалити</button>
@@ -661,7 +709,15 @@ var S = {
   anaSelPeriod: 'year',
   anaSelLocType:'',    // фільтр типу локації: ''|'Садочок'|'Школа'|...
   anaDetail:    null,  // ключ відкритої деталізації: 'kids'|'debtors'|'collected'|'budget'|'pct'|null
-  _absFormOpen: false  // стан форми додавання відсутності
+  _absFormOpen: false, // стан форми додавання відсутності
+  // Attendance
+  att:      {},        // {dateStr: {childId: status}}
+  attMode:  'week',    // 'week'|'day'
+  attWeek:  '',        // Monday date of selected week (YYYY-MM-DD)
+  attDay:   '',        // selected day (YYYY-MM-DD), defaults to today
+  attLoc:   '',        // HR filter
+  attGroup: '',        // group filter
+  _sickIgnore: {}      // {childId: true} — ігнорувати підказку лікарняного
 };
 
 // ─── UTILS ────────────────────────────────────────────────────────────────────
@@ -684,6 +740,10 @@ function translitUA(str){
 function genDirPw(loc){
   try{ var m=JSON.parse(localStorage.getItem('hr_dir_pw')||'{}'); return m[loc]||translitUA(loc)+'2025'; }
   catch(e){ return translitUA(loc)+'2025'; }
+}
+function genNursePw(loc){
+  try{ var m=JSON.parse(localStorage.getItem('hr_nurse_pw')||'{}'); return m[loc]||translitUA(loc)+'med'; }
+  catch(e){ return translitUA(loc)+'med'; }
 }
 
 // ─── PHONE FORMAT ─────────────────────────────────────────────────────────────
@@ -1026,6 +1086,7 @@ function selRole(r){
   _role=r;
   document.getElementById('tabHR').classList.toggle('active',r==='hr');
   document.getElementById('tabDir').classList.toggle('active',r==='director');
+  document.getElementById('tabNurse').classList.toggle('active',r==='nurse');
   document.getElementById('fldLocation').classList.toggle('hidden',r==='hr');
 }
 
@@ -1037,6 +1098,11 @@ async function doLogin(){
   if(_role==='hr'){
     if(pw!==CFG.PW_HR){ showLoginErr('Невірний пароль'); return; }
     S.user={role:'hr',loc:null};
+  } else if(_role==='nurse'){
+    var loc=document.getElementById('loginLocation').value;
+    if(!loc){ showLoginErr('Оберіть локацію'); return; }
+    if(pw!==genNursePw(loc)){ showLoginErr('Невірний пароль для цієї локації'); return; }
+    S.user={role:'nurse',loc:loc};
   } else {
     var loc=document.getElementById('loginLocation').value;
     if(!loc){ showLoginErr('Оберіть локацію'); return; }
@@ -1059,14 +1125,30 @@ function doLogout(){
 
 function updUserUI(){
   var r=S.user.role;
-  document.getElementById('uName').textContent=r==='hr'?'CEO / HR':'Директор';
-  document.getElementById('uLoc').textContent=r==='hr'?'Всі локації':S.user.loc;
-  document.getElementById('uAvatar').textContent=r==='hr'?'HR':'Д';
-  document.getElementById('sbRole').textContent=r==='hr'?'CEO / HR менеджер':'Директор локації';
+  if(r==='nurse'){
+    document.getElementById('uName').textContent='Медсестра';
+    document.getElementById('uLoc').textContent=S.user.loc||'';
+    document.getElementById('uAvatar').textContent='М';
+    document.getElementById('sbRole').textContent='Медична сестра';
+  } else {
+    document.getElementById('uName').textContent=r==='hr'?'CEO / HR':'Директор';
+    document.getElementById('uLoc').textContent=r==='hr'?'Всі локації':S.user.loc;
+    document.getElementById('uAvatar').textContent=r==='hr'?'HR':'Д';
+    document.getElementById('sbRole').textContent=r==='hr'?'CEO / HR менеджер':'Директор локації';
+  }
   var absEl=document.getElementById('navAbsReq');
   if(absEl) absEl.style.display=r==='hr'?'':'none';
+  // Nurse: hide financial nav items, show only attendance
+  var hideForNurse=['navAnalytics'];
+  hideForNurse.forEach(function(id){
+    var el=document.getElementById(id);
+    if(el) el.style.display=r==='nurse'?'none':'';
+  });
+  // Nurse: attLoc prefill
+  if(r==='nurse' && S.user.loc) S.attLoc=S.user.loc;
 }
 function isHR(){ return S.user&&S.user.role==='hr'; }
+function isNurse(){ return S.user&&S.user.role==='nurse'; }
 function visibleLocs(){
   if(isHR()) return S.locs;
   return S.locs.filter(function(l){ return l.loc===S.user.loc; });
@@ -1115,6 +1197,7 @@ function fillLoginLocs(){
 // ─── INIT ─────────────────────────────────────────────────────────────────────
 async function initApp(){
   loadLocalCRM();
+  loadAttendanceFromStorage();
   showSpinner();
   setSyncStatus('sync');
   try{
@@ -1129,6 +1212,11 @@ async function initApp(){
     console.error('initApp error:',e);
     setSyncStatus('err');
     buildGroups();
+  }
+  // Якщо медсестра — одразу на табель
+  if(isNurse()){
+    nav('attendance');
+    return;
   }
   // Якщо відкрито з ?tab=analytics — одразу переключаємо вкладку
   if(new URLSearchParams(window.location.search).get('tab')==='analytics'){
@@ -1159,7 +1247,7 @@ function showSpinner(){ document.getElementById('main').innerHTML='<div class="l
 function toggleSidebar(){ document.getElementById('sidebar').classList.toggle('open'); }
 
 // ─── NAVIGATION ──────────────────────────────────────────────────────────────
-var TITLES={clients:'👶 Список дітей',debts:'💰 Борги та оплати',settings:'⚙️ Налаштування',absRequests:'💼 Перерахунки бюджету'};
+var TITLES={clients:'👶 Список дітей',debts:'💰 Борги та оплати',settings:'⚙️ Налаштування',absRequests:'💼 Перерахунки бюджету',attendance:'📋 Табель відвідування'};
 function nav(view){
   S.mainTab='clients'; // скидаємо аналітику при навігації
   S.view=view;
@@ -1173,6 +1261,7 @@ function renderView(){
   if(S.view==='clients') renderClients();
   else if(S.view==='debts') renderDebts();
   else if(S.view==='absRequests') renderAbsRequests();
+  else if(S.view==='attendance') renderAttendance();
   else renderSettings();
 }
 function switchMainTab(tab){
@@ -1616,6 +1705,7 @@ function switchTab(i){
   if(i===3) renderAbsences();
   if(i===4) renderPayMonths();
   if(i===5) renderPayHistory();
+  if(i===7) renderHealthTab();
 }
 
 function populateForm(id){
@@ -2121,6 +2211,15 @@ function renderAbsences(){
   }
   html+='</div>'; // abs-counters
 
+  // Перевіряємо streak лікарняних (з табеля)
+  var streak=getSickStreak(id, today());
+  if(streak>=3 && !S._sickIgnore[id] && sickAvail){
+    html+='<div class="sick-suggest"><b>🤒 Підказка медсестри:</b> '+streak+' днів підряд відмічено хворим у табелі.'
+      +' Рекомендується оформити лікарняний.'
+      +' <button class="btn btn-xs btn-primary" style="margin-left:8px" onclick="S._absFormOpen=true;renderAbsences()">➕ Оформити</button>'
+      +' <button class="btn btn-xs btn-secondary" style="margin-left:4px" onclick="S._sickIgnore[\''+esc(id)+'\']=true;renderAbsences()">Ігнорувати</button></div>';
+  }
+
   // Блок 3: Форма або кнопка + список
   if(S._absFormOpen && ct!=='preschool'){
     html+=renderAbsAddForm(ct,fee,abs,vacAvail,sickAvail);
@@ -2409,6 +2508,320 @@ function openChildByName(name, loc){
 
 // delAbsence: legacy stub (нові картки використовують deleteAbsencePeriod)
 function delAbsence(i){ deleteAbsencePeriod(i); }
+
+// ─── ATTENDANCE MODULE ────────────────────────────────────────────────────────
+
+var ATT_KEY='crm_att_v1';
+
+function loadAttendanceFromStorage(){
+  try{ S.att=JSON.parse(localStorage.getItem(ATT_KEY)||'{}'); }catch(e){ S.att={}; }
+}
+function saveAttendanceToStorage(){
+  try{ localStorage.setItem(ATT_KEY,JSON.stringify(S.att)); }catch(e){ console.warn('att save err',e); }
+}
+
+// Повертає кількість підряд хворих днів до toDate (включно) для дитини
+function getSickStreak(childId, toDate){
+  var t=pd(toDate); if(!t) return 0;
+  var streak=0;
+  var cur=new Date(t.getTime());
+  for(var i=0;i<60;i++){
+    var d=cur.getDay();
+    if(d!==0&&d!==6){ // тільки робочі
+      var ds=cur.toISOString().slice(0,10);
+      var st=(S.att[ds]||{})[childId];
+      if(st==='sick') streak++;
+      else break;
+    }
+    cur.setDate(cur.getDate()-1);
+  }
+  return streak;
+}
+
+function setAttStatus(dateStr, cId, status){
+  if(!S.att[dateStr]) S.att[dateStr]={};
+  if(status==='') delete S.att[dateStr][cId];
+  else S.att[dateStr][cId]=status;
+  saveAttendanceToStorage();
+}
+
+function cycleAttStatus(dateStr, cId){
+  var ORDER=['','present','sick','vacation','absent'];
+  var cur=(S.att[dateStr]||{})[cId]||'';
+  var ni=(ORDER.indexOf(cur)+1)%ORDER.length;
+  setAttStatus(dateStr,cId,ORDER[ni]);
+  renderAttendance();
+}
+
+function markAllPresent(dateStr, loc, group){
+  // Відмічає всіх дітей локації/групи присутніми якщо ще не відмічені
+  var locs=loc?[loc]:Object.keys(S.groups);
+  locs.forEach(function(l){
+    (S.groups[l]||[]).forEach(function(g){
+      if(group&&g.group!==group) return;
+      g.children.forEach(function(ch){
+        var cur=(S.att[dateStr]||{})[ch.id]||'';
+        if(!cur) setAttStatus(dateStr,ch.id,'present');
+      });
+    });
+  });
+  renderAttendance();
+}
+
+function attMondayOfWeek(dateStr){
+  var d=pd(dateStr)||new Date();
+  var dow=d.getDay(); // 0=Sun
+  var diff=dow===0?-6:1-dow;
+  var m=new Date(d.getTime()+diff*86400000);
+  return m.toISOString().slice(0,10);
+}
+
+function attAddDays(dateStr,n){
+  var d=pd(dateStr); if(!d) return dateStr;
+  d.setDate(d.getDate()+n);
+  return d.toISOString().slice(0,10);
+}
+
+function attWeekDays(monday){
+  var days=[];
+  for(var i=0;i<5;i++) days.push(attAddDays(monday,i));
+  return days;
+}
+
+var ATT_STATUS_ICON={present:'✅',sick:'🤒',vacation:'🏖',absent:'🚫','':`—`};
+var ATT_STATUS_CLASS={present:'att-s-present',sick:'att-s-sick',vacation:'att-s-vacation',absent:'att-s-absent'};
+var ATT_STATUS_LABEL={present:'Присутній',sick:'Хворий',vacation:'Відпустка',absent:'Відсутній (інше)'};
+var DAY_UA=['Нд','Пн','Вт','Ср','Чт','Пт','Сб'];
+var DAY_UA_FULL=['Неділя','Понеділок','Вівторок','Середа','Четвер','Пятниця','Субота'];
+
+function renderAttendance(){
+  var main=document.getElementById('main'); if(!main) return;
+
+  // Дефолти для перегляду
+  var curToday=today();
+  if(!S.attWeek) S.attWeek=attMondayOfWeek(curToday);
+  if(!S.attDay)  S.attDay=curToday;
+
+  // Локація — медсестра бачить тільки свою
+  var availLocs;
+  if(isNurse()){
+    availLocs=[S.user.loc];
+    S.attLoc=S.user.loc;
+  } else {
+    availLocs=S.locs.map(function(l){ return l.loc; }).filter(function(l){ return S.groups[l]||Object.keys(S.att).some(function(d){ return Object.keys(S.att[d]).some(function(id){ var c=S.crm[id]; return c&&c.loc===l; }); }); });
+    if(!availLocs.length) availLocs=S.locs.map(function(l){ return l.loc; });
+  }
+  var activeLoc=S.attLoc||availLocs[0]||'';
+
+  // Групи для вибраної локації
+  var groups=(S.groups[activeLoc]||[]).map(function(g){ return g.group; });
+  var activeGroup=S.attGroup;
+  if(activeGroup && groups.indexOf(activeGroup)<0) activeGroup='';
+
+  var locSel=isNurse()?''
+    :'<select onchange="S.attLoc=this.value;S.attGroup=\'\';renderAttendance()" style="padding:7px 10px;border:1.5px solid var(--gray2);border-radius:8px;font-size:13px;font-family:inherit">'
+    +availLocs.map(function(l){ return '<option value="'+esc(l)+'"'+(l===activeLoc?' selected':'')+'>'+esc(l)+'</option>'; }).join('')+'</select>';
+
+  var groupSel='<select onchange="S.attGroup=this.value;renderAttendance()" style="padding:7px 10px;border:1.5px solid var(--gray2);border-radius:8px;font-size:13px;font-family:inherit">'
+    +'<option value="">Всі групи</option>'
+    +groups.map(function(g){ return '<option value="'+esc(g)+'"'+(g===activeGroup?' selected':'')+'>'+esc(g)+'</option>'; }).join('')+'</select>';
+
+  var modeBar='<div class="att-mode-bar">'
+    +(locSel?locSel+' ':'')
+    +groupSel+' '
+    +'<button class="att-mode-btn'+(S.attMode==='week'?' active':'')+'" onclick="S.attMode=\'week\';renderAttendance()">📅 Тиждень</button>'
+    +'<button class="att-mode-btn'+(S.attMode==='day'?' active':'')+'" onclick="S.attMode=\'day\';renderAttendance()">📋 День</button>'
+    +'</div>';
+
+  var content='';
+  if(S.attMode==='week') content=renderAttendanceWeek(activeLoc,activeGroup);
+  else content=renderAttendanceDay(activeLoc,activeGroup);
+
+  // Статистика дня
+  var statsDate=S.attMode==='week'?S.attDay:S.attDay;
+  var dayRec=S.att[statsDate]||{};
+  var nPresent=0,nSick=0,nVac=0,nAbsent=0,nTotal=0;
+  (S.groups[activeLoc]||[]).forEach(function(g){
+    if(activeGroup&&g.group!==activeGroup) return;
+    g.children.forEach(function(ch){
+      nTotal++;
+      var st=dayRec[ch.id]||'';
+      if(st==='present') nPresent++;
+      else if(st==='sick') nSick++;
+      else if(st==='vacation') nVac++;
+      else if(st==='absent') nAbsent++;
+    });
+  });
+
+  var stats='<div class="att-stats">'
+    +'<div class="att-stat"><div class="att-stat-n">'+nTotal+'</div><div class="att-stat-l">Всього</div></div>'
+    +'<div class="att-stat"><div class="att-stat-n" style="color:var(--green)">'+nPresent+'</div><div class="att-stat-l">✅ Присутні</div></div>'
+    +'<div class="att-stat"><div class="att-stat-n" style="color:var(--orange)">'+nSick+'</div><div class="att-stat-l">🤒 Хворі</div></div>'
+    +'<div class="att-stat"><div class="att-stat-n" style="color:var(--blue2)">'+nVac+'</div><div class="att-stat-l">🏖 Відпустка</div></div>'
+    +'<div class="att-stat"><div class="att-stat-n" style="color:var(--red2)">'+nAbsent+'</div><div class="att-stat-l">🚫 Інше</div></div>'
+    +'</div>';
+
+  main.innerHTML=modeBar+stats+content;
+}
+
+function renderAttendanceWeek(loc,group){
+  var days=attWeekDays(S.attWeek);
+  var prevWeek=attAddDays(S.attWeek,-7), nextWeek=attAddDays(S.attWeek,7);
+  var todayStr=today();
+
+  var nav='<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">'
+    +'<button class="btn btn-secondary btn-sm" onclick="S.attWeek=\''+prevWeek+'\';renderAttendance()">◀ Тиждень</button>'
+    +'<b style="font-size:14px">'+fmtD(days[0])+' – '+fmtD(days[4])+'</b>'
+    +'<button class="btn btn-secondary btn-sm" onclick="S.attWeek=\''+nextWeek+'\';renderAttendance()">Тиждень ▶</button>'
+    +'<button class="btn btn-secondary btn-sm" onclick="S.attWeek=attMondayOfWeek(today());renderAttendance()">Сьогодні</button>'
+    +'<button class="btn btn-primary btn-sm" onclick="markAllPresent(\''+fmtToday()+'\',\''+esc(loc)+'\',\''+esc(group||'')+'\')">✅ Всі присутні</button>'
+    +'</div>';
+
+  function fmtToday(){ return todayStr; }
+
+  var thead='<tr><th class="nc">Дитина</th>'
+    +days.map(function(d){ var dow=pd(d).getDay(); return '<th style="min-width:70px;'+(d===todayStr?'background:#e8f8f0;color:var(--green)':'')+'">'+DAY_UA[dow]+'<br><span style="font-weight:400;font-size:10px">'+fmtD(d)+'</span></th>'; }).join('')
+    +'</tr>';
+
+  var groups=S.groups[loc]||[];
+  var rows='';
+  groups.forEach(function(g){
+    if(group&&g.group!==group) return;
+    rows+='<tr class="grp-row"><td colspan="'+(days.length+1)+'">📚 '+esc(g.group)+(g.teacher?' · '+esc(g.teacher):'')+'</td></tr>';
+    g.children.forEach(function(ch){
+      var streak=getSickStreak(ch.id,todayStr);
+      var streakHtml=streak>=3?'<span class="att-streak">'+streak+'д🤒</span>':'';
+      rows+='<tr><td class="nc" title="'+esc(ch.name)+'">'+esc(ch.name.split(' ').slice(0,2).join(' '))+streakHtml+'</td>';
+      days.forEach(function(d){
+        var st=(S.att[d]||{})[ch.id]||'';
+        var cls=ATT_STATUS_CLASS[st]||'';
+        var ico=ATT_STATUS_ICON[st]||'';
+        rows+='<td><button class="att-btn '+cls+'" title="'+esc(ATT_STATUS_LABEL[st]||'Не відмічено')+'" onclick="cycleAttStatus(\''+d+'\',\''+esc(ch.id)+'\')">'+ico+'</button></td>';
+      });
+      rows+='</tr>';
+    });
+  });
+
+  if(!rows) return '<div class="empty"><span class="ei">👶</span><h4>Немає дітей для цієї локації</h4><p>Завантажте дані оплат</p></div>';
+
+  return nav+'<div class="att-wrap"><table class="att-table"><thead>'+thead+'</thead><tbody>'+rows+'</tbody></table></div>'
+    +'<p style="font-size:11px;color:var(--gray);margin-top:8px">Клікайте по кнопці щоб змінити статус: — → ✅ → 🤒 → 🏖 → 🚫 → —</p>';
+}
+
+function renderAttendanceDay(loc,group){
+  var dateStr=S.attDay;
+  var todayStr=today();
+  var prevDay=attPrevWorkday(dateStr), nextDay=attNextWorkday(dateStr);
+
+  var dow=pd(dateStr)?pd(dateStr).getDay():1;
+  var nav='<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">'
+    +'<button class="btn btn-secondary btn-sm" onclick="S.attDay=\''+prevDay+'\';renderAttendance()">◀ День</button>'
+    +'<b style="font-size:14px">'+DAY_UA_FULL[dow]+', '+fmtD(dateStr)+'</b>'
+    +'<button class="btn btn-secondary btn-sm" onclick="S.attDay=\''+nextDay+'\';renderAttendance()">День ▶</button>'
+    +'<button class="btn btn-secondary btn-sm" onclick="S.attDay=today();renderAttendance()">Сьогодні</button>'
+    +'<button class="btn btn-primary btn-sm" onclick="markAllPresent(\''+esc(dateStr)+'\',\''+esc(loc)+'\',\''+esc(group||'')+'\')">✅ Всі присутні</button>'
+    +'</div>';
+
+  var groups=S.groups[loc]||[];
+  var rows='';
+  groups.forEach(function(g){
+    if(group&&g.group!==group) return;
+    rows+='<div style="font-size:12px;font-weight:700;text-transform:uppercase;color:var(--gray);padding:8px 0 4px">📚 '+esc(g.group)+(g.teacher?' · '+esc(g.teacher):'')+'</div>';
+    g.children.forEach(function(ch){
+      var st=(S.att[dateStr]||{})[ch.id]||'';
+      var streak=getSickStreak(ch.id,todayStr);
+      var streakHtml=streak>=3?'<span class="att-streak">'+streak+'д🤒</span>':'';
+      rows+='<div class="att-day-row">'
+        +'<span class="att-day-name" onclick="openChild(\''+esc(ch.id)+'\',\''+esc(ch.group)+'\',\''+esc(ch.teacher||'')+'\',\''+esc(ch.loc)+'\',\''+esc(ch.name)+'\')">'+esc(ch.name)+streakHtml+'</span>'
+        +'<div class="att-day-btns">'
+        +['present','sick','vacation','absent'].map(function(s){
+          return '<button class="att-day-btn'+(st===s?' att-s-'+s:'')+'" title="'+ATT_STATUS_LABEL[s]+'" onclick="setAttStatus(\''+esc(dateStr)+'\',\''+esc(ch.id)+'\',\''+(st===s?'':s)+'\');renderAttendance()">'+ATT_STATUS_ICON[s]+'</button>';
+        }).join('')
+        +'</div></div>';
+    });
+  });
+
+  if(!rows) return '<div class="empty"><span class="ei">👶</span><h4>Немає дітей для цієї локації</h4></div>';
+
+  return '<div class="card" style="padding:14px">'+nav+rows+'</div>';
+}
+
+function attPrevWorkday(dateStr){
+  var d=pd(dateStr)||new Date();
+  do{ d.setDate(d.getDate()-1); }while(d.getDay()===0||d.getDay()===6);
+  return d.toISOString().slice(0,10);
+}
+function attNextWorkday(dateStr){
+  var d=pd(dateStr)||new Date();
+  do{ d.setDate(d.getDate()+1); }while(d.getDay()===0||d.getDay()===6);
+  return d.toISOString().slice(0,10);
+}
+
+// ─── HEALTH TAB ───────────────────────────────────────────────────────────────
+
+var HEALTH_KEY_PFX='crm_health_';
+var HEALTH_TYPES=['sickness','injury','temp','note'];
+var HEALTH_TYPE_LABEL={sickness:'🤒 Хвороба',injury:'🩹 Травма',temp:'🌡 Температура',note:'📝 Нотатка'};
+var HEALTH_TYPE_CSS={sickness:'hrt-sickness',injury:'hrt-injury',temp:'hrt-temp',note:'hrt-note'};
+
+function loadHealth(cId){
+  try{ return JSON.parse(localStorage.getItem(HEALTH_KEY_PFX+cId)||'[]'); }catch(e){ return []; }
+}
+function saveHealth(cId,records){
+  localStorage.setItem(HEALTH_KEY_PFX+cId,JSON.stringify(records));
+}
+
+function renderHealthTab(){
+  var id=S.editId; if(!id) return;
+  var tp7=document.getElementById('tp7'); if(!tp7) return;
+  var records=loadHealth(id);
+
+  var formHtml='<div class="abs-add-form" style="margin-bottom:16px">'
+    +'<div style="font-weight:700;font-size:13px;margin-bottom:10px">Новий запис</div>'
+    +'<div class="g2" style="margin-bottom:8px">'
+    +'<div class="fg" style="margin-bottom:0"><label>Дата</label><input type="date" id="hDate" value="'+today()+'"></div>'
+    +'<div class="fg" style="margin-bottom:0"><label>Тип</label>'
+    +'<select id="hType">'+HEALTH_TYPES.map(function(t){ return '<option value="'+t+'">'+HEALTH_TYPE_LABEL[t]+'</option>'; }).join('')+'</select></div>'
+    +'</div>'
+    +'<div class="fg" style="margin-bottom:8px"><label>Опис</label>'
+    +'<input type="text" id="hDesc" placeholder="Напр. кашель, температура 37.8°, синець..."></div>'
+    +'<button class="btn btn-primary btn-sm" onclick="addHealthEntry()">💾 Зберегти</button>'
+    +'</div>';
+
+  var listHtml='';
+  if(!records.length){
+    listHtml='<p style="color:var(--gray);font-size:13px">Записів немає</p>';
+  } else {
+    var sorted=records.slice().sort(function(a,b){ return (b.date||'')>(a.date||'')?1:-1; });
+    listHtml=sorted.map(function(r){
+      return '<div class="health-record">'
+        +'<div class="health-record-hd">'
+        +'<span class="hrt '+( HEALTH_TYPE_CSS[r.type]||'hrt-note')+'">'+( HEALTH_TYPE_LABEL[r.type]||r.type)+'</span>'
+        +'<span style="font-size:12px;color:var(--gray)">'+fmtD(r.date)+'</span>'
+        +(r.by?'<span style="font-size:11px;color:var(--gray);margin-left:auto">'+esc(r.by)+'</span>':'')
+        +'</div>'
+        +'<div style="font-size:13px">'+esc(r.desc||'')+'</div>'
+        +'</div>';
+    }).join('');
+  }
+
+  tp7.innerHTML='<div class="section-hd">Медичні записи</div>'
+    +(isNurse()||isHR()?formHtml:'<div class="alert alert-info" style="margin-bottom:12px">Тільки медсестра може додавати записи</div>')
+    +listHtml;
+}
+
+function addHealthEntry(){
+  var id=S.editId; if(!id) return;
+  var date=(document.getElementById('hDate')||{}).value||today();
+  var type=(document.getElementById('hType')||{}).value||'note';
+  var desc=(document.getElementById('hDesc')||{}).value.trim();
+  if(!desc){ alert('Вкажіть опис'); return; }
+  var who=isNurse()?(S.user.loc||'Медсестра'):(isHR()?'HR':'Директор');
+  var records=loadHealth(id);
+  records.push({id:'h_'+Date.now(),date:date,type:type,desc:desc,by:who,createdAt:new Date().toISOString()});
+  saveHealth(id,records);
+  renderHealthTab();
+}
 
 // ─── DELETE ───────────────────────────────────────────────────────────────────
 function deleteChild(){
