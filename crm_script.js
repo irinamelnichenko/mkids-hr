@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v5.6
-// 5 колонок на місяць: навч | вступ | доп | бюджет доп | бюджет разом
+// m.kids CRM — Google Apps Script v5.7
+// 5 колонок на місяць: навч | вступ | доп | бюджет доп | бюджет навч
 // ═══════════════════════════════════════════════════════════════════════════
 
 var CONFIG_SHEET_ID = '11NEIEBzaMiIDFnJB9RXqKnRqjCJjNyHVqylrX7cRZhc';
@@ -303,9 +303,9 @@ function aggregatePayments() {
           var fv = ch.factEntry || 0;
           var fe = ch.factExtra || 0;
           var bd = ch.budExtra  || 0;
-          var br = ch.budTotal  || 0;
+          var bs = ch.budStudy  || 0;  // Бюджет навчання (колонка +4)
           var total = fs + fv + fe;
-          var bs = br > bd ? br - bd : 0;
+          var br = bs + bd;             // Бюджет разом = навч + доп
           // Статус рахуємо без вступного
           var totalNoEntry = fs + fe;
           var status;
@@ -365,16 +365,14 @@ function detectCurrentMonthCol(rows, curJSMonth) {
       }
     }
   }
-  // Fallback: школьний рік, 5 колонок на місяць
-  // Вересень=col1, Жовтень=col6, Листопад=col11...
-  var schoolOrder = [8,9,10,11,0,1,2,3,4,5,6,7];
-  var idx = schoolOrder.indexOf(curJSMonth);
-  var col = idx < 0 ? 1 : 1 + idx * 5;
-  Logger.log('Fallback: col=' + col + ' idx=' + idx);
+  // Fallback: календарний рік, 5 колонок на місяць
+  // Січень(0)=col1, Лютий(1)=col6, ..., Квітень(3)=col16, ...
+  var col = 1 + curJSMonth * 5;
+  Logger.log('Fallback: col=' + col + ' jsMonth=' + curJSMonth);
   return col;
 }
 
-// Структура місяця: навч(+0) | вступ(+1) | доп(+2) | бюджет доп(+3) | бюджет разом(+4)
+// Структура місяця: навч(+0) | вступ(+1) | доп(+2) | бюджет доп(+3) | бюджет навч(+4)
 function parsePaymentSheet(data, monthCol) {
   var DATA_START = 3;
   var groups = [];
@@ -401,11 +399,11 @@ function parsePaymentSheet(data, monthCol) {
       var fv = toNum(row[monthCol + 1]);   // факт вступний
       var fe = toNum(row[monthCol + 2]);   // факт доп
       var bd = toNum(row[monthCol + 3]);   // бюджет доп
-      var br = toNum(row[monthCol + 4]);   // бюджет разом
+      var bs = toNum(row[monthCol + 4]);   // бюджет навчання
       curGroup.children.push({
         name: nameCell,
         factStudy: fs, factEntry: fv, factExtra: fe,
-        budExtra: bd, budTotal: br
+        budExtra: bd, budStudy: bs
       });
     }
   }

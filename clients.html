@@ -1166,12 +1166,9 @@ function renderClients(){
         var debtAmt=ch.status==='nopay'?budForStatus:(budForStatus>factForStatus?budForStatus-factForStatus:0);
         // Факт разом (навч + доп, без вступного)
         var factTotal=factForStatus;
-        // Бюджет разом з розшифровкою — використовуємо факт навч і факт доп
-        var budStudy=ch.factStudy||0;
-        var budExtra=ch.factExtra||0;
-        // Якщо немає факту — беремо з бюджету
-        if(budStudy===0) budStudy=ch.budgetStudy||0;
-        if(budExtra===0) budExtra=ch.budgetExtra||0;
+        // Бюджет разом з розшифровкою
+        var budStudy=ch.budgetStudy||0;
+        var budExtra=ch.budgetExtra||0;
         var budHint=budStudy&&budExtra?'навч '+fmtN(budStudy)+' + доп '+fmtN(budExtra):(budStudy?'навч '+fmtN(budStudy):(budExtra?'доп '+fmtN(budExtra):''));
         var budCell='<div style="font-weight:600">'+fmtN(budForStatus)+'</div>'+(budHint?'<div style="font-size:11px;color:var(--gray)">'+budHint+'</div>':'');
         // Вступний — порівнюємо план (CRM) з фактом (Payment Sheet)
@@ -1441,16 +1438,38 @@ function renderPayStatus(id){
   outer:for(var loc in S.groups){ for(var gi=0;gi<S.groups[loc].length;gi++){ var g=S.groups[loc][gi]; for(var ci=0;ci<g.children.length;ci++){ if(g.children[ci].id===id){ch=g.children[ci];break outer;} } } }
   var el=document.getElementById('tpPayStatus'); if(!el) return;
   if(!ch){ el.innerHTML=''; return; }
-  var type,txt,detail='';
-  if(ch.status==='paid'){ type='ok'; txt='✅ Оплачено'; }
+
+  var fs=ch.factStudy||0, fe=ch.factExtra||0, fv=ch.factEntry||0;
+  var bs=ch.budgetStudy||0, be=ch.budgetExtra||0;
+  var debtStudy=bs>fs?bs-fs:0, debtExtra=be>fe?be-fe:0;
+  var totalDebt=debtStudy+debtExtra;
+
+  var type,txt;
+  if(ch.status==='paid'||ch.status==='over'){ type='ok'; txt='✅ Оплачено'; }
   else if(ch.status==='nopay'){ type='danger'; txt='⛔ Не платив взагалі'; }
-  else if(ch.status==='over'){ type='warn'; txt='💰 Переплата '+fmtN(Math.round(ch.factTotal-ch.budget))+' грн'; }
-  else if(ch.status==='debt'){
-    type='danger';
-    txt='❌ Борг '+fmtN(Math.round(ch.debt))+' грн';
-    detail='<div style="font-size:12px;margin-top:4px">Факт: '+fmtN(ch.factTotal)+' грн &nbsp;|&nbsp; Бюджет: '+fmtN(ch.budget)+' грн</div>';
-  }
+  else if(ch.status==='debt'){ type='danger'; txt='❌ Борг '+fmtN(Math.round(totalDebt))+' грн'; }
   else{ type='warn'; txt='— Немає даних'; }
+
+  // Детальна розбивка
+  var rows='';
+  if(bs||fs){
+    var sStudy=fs>=bs?'<span style="color:var(--green)">✅ Оплачено</span>':'<span style="color:var(--red2)">Борг '+fmtN(debtStudy)+' грн</span>';
+    rows+='<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid rgba(0,0,0,.06)">'
+      +'<span>📚 Навчання:</span>'
+      +'<span>Факт <b>'+fmtN(fs)+'</b> / Бюджет <b>'+fmtN(bs)+'</b> &rarr; '+sStudy+'</span></div>';
+  }
+  if(be||fe){
+    var sExtra=fe>=be?'<span style="color:var(--green)">✅ Оплачено</span>':'<span style="color:var(--red2)">Борг '+fmtN(debtExtra)+' грн</span>';
+    rows+='<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid rgba(0,0,0,.06)">'
+      +'<span>🎨 Доп заняття:</span>'
+      +'<span>Факт <b>'+fmtN(fe)+'</b> / Бюджет <b>'+fmtN(be)+'</b> &rarr; '+sExtra+'</span></div>';
+  }
+  if(fv){
+    rows+='<div style="display:flex;justify-content:space-between;padding:4px 0">'
+      +'<span>🔑 Вступний внесок:</span>'
+      +'<span>Факт <b>'+fmtN(fv)+'</b></span></div>';
+  }
+  var detail=rows?'<div style="font-size:12px;margin-top:8px;line-height:1.8">'+rows+'</div>':'';
   el.innerHTML='<div class="alert alert-'+type+'"><div class="pay-status-big">'+txt+'</div>'+detail+'</div>';
 }
 
