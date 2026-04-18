@@ -1,15 +1,19 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v5.7
+// m.kids CRM — Google Apps Script v5.8
 // 5 колонок на місяць: навч | вступ | доп | бюджет доп | бюджет навч
+// Лист "Оплати-Рік" — повні дані за 12 місяців календарного року
 // ═══════════════════════════════════════════════════════════════════════════
 
-var CONFIG_SHEET_ID = '11NEIEBzaMiIDFnJB9RXqKnRqjCJjNyHVqylrX7cRZhc';
-var SHEET_PAYMENTS  = 'Оплати';
-var SHEET_CLIENTS   = 'Клієнти';
+var CONFIG_SHEET_ID  = '11NEIEBzaMiIDFnJB9RXqKnRqjCJjNyHVqylrX7cRZhc';
+var SHEET_PAYMENTS   = 'Оплати';
+var SHEET_YEARLY     = 'Оплати-Рік';
+var SHEET_CLIENTS    = 'Клієнти';
 
 var MONTHS_UA      = ['вересень','жовтень','листопад','грудень','січень','лютий','березень','квітень','травень','червень','липень','серпень'];
 var MONTHS_JS      = [8,9,10,11,0,1,2,3,4,5,6,7];
 var MONTHS_DISPLAY = ['Вересень','Жовтень','Листопад','Грудень','Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень'];
+// Календарний порядок (використовується для листа Оплати-Рік)
+var MONTHS_CAL = ['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
 
 var GROUP_PATTERNS = [
   /mini.?baby/i,
@@ -118,13 +122,15 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')         result = {ok:true, msg:'pong v5.6', ts: new Date().toISOString()};
-    else if (action === 'getLocations') result = getLocations();
-    else if (action === 'getPayments')  result = getPayments();
-    else if (action === 'getClients')   result = getClients();
-    else if (action === 'runAggregate') result = aggregatePayments();
-    else if (action === 'makePublic')   result = makeSheetPublic();
-    else                                result = {ok:false, error:'Unknown action: ' + action};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v5.8', ts: new Date().toISOString()};
+    else if (action === 'getLocations')       result = getLocations();
+    else if (action === 'getPayments')        result = getPayments();
+    else if (action === 'getPaymentsYearly')  result = getPaymentsYearly();
+    else if (action === 'getClients')         result = getClients();
+    else if (action === 'runAggregate')       result = aggregatePayments();
+    else if (action === 'runAggregateYearly') result = aggregatePaymentsYearly();
+    else if (action === 'makePublic')         result = makeSheetPublic();
+    else                                      result = {ok:false, error:'Unknown action: ' + action};
     return jsonOut(result);
   } catch(err) {
     return jsonOut({ok:false, error:err.message || String(err)});
@@ -413,12 +419,16 @@ function parsePaymentSheet(data, monthCol) {
 function createDailyTrigger() {
   var triggers = ScriptApp.getProjectTriggers();
   for (var i = 0; i < triggers.length; i++) {
-    if (triggers[i].getHandlerFunction() === 'aggregatePayments') {
+    var fn = triggers[i].getHandlerFunction();
+    if (fn === 'aggregatePayments' || fn === 'aggregatePaymentsYearly') {
       ScriptApp.deleteTrigger(triggers[i]);
     }
   }
   ScriptApp.newTrigger('aggregatePayments')
     .timeBased().everyDays(1).atHour(6)
+    .inTimezone('Europe/Kiev').create();
+  ScriptApp.newTrigger('aggregatePaymentsYearly')
+    .timeBased().everyDays(1).atHour(7)
     .inTimezone('Europe/Kiev').create();
 }
 
@@ -434,4 +444,136 @@ function formatDate(d) {
 function getMonthDisplayName(jsMonth) {
   var idx = MONTHS_JS.indexOf(jsMonth);
   return idx >= 0 ? MONTHS_DISPLAY[idx] : String(jsMonth + 1);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// РІЧНИЙ АГРЕГАТ — лист "Оплати-Рік"
+// Колонки: 6 фіксованих + 5 × 12 місяців + 5 підсумкових = 71
+// ═══════════════════════════════════════════════════════════════════════════
+
+function writeYearlyHeader(sheet) {
+  sheet.clearContents();
+  var hdr = ['Локація','Напрямок','Тип','Група','Вихователь',"Ім'я дитини"];
+  MONTHS_CAL.forEach(function(m) {
+    hdr.push(m+'-Факт-навч', m+'-Факт-доп', m+'-Бюджет-навч', m+'-Бюджет-доп', m+'-Статус');
+  });
+  hdr.push('Факт-Рік','Бюджет-Рік','Борг-Рік','Зібрано-На-Сьогодні','Оновлено');
+  sheet.appendRow(hdr);
+  sheet.setFrozenRows(1);
+}
+
+function aggregatePaymentsYearly() {
+  var configSS    = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var configSheet = configSS.getSheets()[0];
+  var configData  = configSheet.getDataRange().getValues();
+
+  var crmSS    = getCRMSpreadsheet();
+  var yearSheet = crmSS.getSheetByName(SHEET_YEARLY);
+  if (!yearSheet) yearSheet = crmSS.insertSheet(SHEET_YEARLY);
+
+  var now         = new Date();
+  var curJSMonth  = now.getMonth();   // 0-11, calendar
+  var updateStr   = formatDate(now);
+  var allRows     = [];
+  var errors      = [];
+
+  for (var r = 1; r < configData.length; r++) {
+    var cfgRow    = configData[r];
+    var dir       = trim(cfgRow[0]);
+    var typ       = trim(cfgRow[1]);
+    var loc       = trim(cfgRow[2]);
+    var sheetId   = trim(cfgRow[3]);
+    var sheetName = trim(cfgRow[4]) || 'Payment';
+    if (!loc || !sheetId) continue;
+
+    try {
+      var ss           = SpreadsheetApp.openById(sheetId);
+      var paymentSheet = ss.getSheetByName(sheetName);
+      if (!paymentSheet) paymentSheet = ss.getSheets()[0];
+      var data = paymentSheet.getDataRange().getValues();
+
+      // Отримуємо структуру груп за поточним місяцем
+      var curMonthCol = detectCurrentMonthCol(data, curJSMonth);
+      var groups      = parsePaymentSheet(data, curMonthCol);
+
+      // Будуємо карту ім'я → рядок (DATA_START = 3)
+      var nameToRow = {};
+      for (var ri = 3; ri < data.length; ri++) {
+        var nc = trim(String(data[ri][0] || ''));
+        if (nc && !isGroupHeaderRow(data[ri], 1)) {
+          nameToRow[nc] = ri;
+        }
+      }
+
+      groups.forEach(function(g) {
+        g.children.forEach(function(ch) {
+          var rowIdx  = nameToRow[ch.name];
+          var rowData = (rowIdx !== undefined) ? data[rowIdx] : null;
+          var rowOut  = [loc, dir, typ, g.group, g.teacher, ch.name];
+          var factYear  = 0;
+          var budYear   = 0;
+          var factToday = 0;
+
+          for (var mi = 0; mi < 12; mi++) {
+            // Колонка = 1 + mi*5  (Січень=1, Лютий=6, …, Грудень=56)
+            var col = 1 + mi * 5;
+            var fs  = rowData ? toNum(rowData[col])     : 0; // Факт навч
+            var fe  = rowData ? toNum(rowData[col + 2]) : 0; // Факт доп
+            var be  = rowData ? toNum(rowData[col + 3]) : 0; // Бюджет доп
+            var bs  = rowData ? toNum(rowData[col + 4]) : 0; // Бюджет навч
+
+            var totalNoEntry = fs + fe;
+            var budget       = bs + be;
+            var mStatus;
+            if (budget === 0 && totalNoEntry === 0)     mStatus = 'unknown';
+            else if (totalNoEntry === 0 && budget > 0)  mStatus = 'nopay';
+            else if (totalNoEntry > budget)             mStatus = 'over';
+            else if (totalNoEntry >= budget)            mStatus = 'paid';
+            else                                        mStatus = 'debt';
+
+            rowOut.push(fs, fe, bs, be, mStatus);
+            factYear  += totalNoEntry;
+            budYear   += budget;
+            if (mi <= curJSMonth) factToday += totalNoEntry;
+          }
+
+          var debtYear = budYear > factYear ? budYear - factYear : 0;
+          rowOut.push(factYear, budYear, debtYear, factToday, updateStr);
+          allRows.push(rowOut);
+        });
+      });
+
+    } catch(e) {
+      errors.push(loc + ': ' + e.message);
+      Logger.log('ERROR yearly ' + loc + ': ' + e.message);
+    }
+  }
+
+  yearSheet.clearContents();
+  writeYearlyHeader(yearSheet);
+  var NUM_COLS = 6 + 12 * 5 + 5; // = 71
+  if (allRows.length > 0) {
+    yearSheet.getRange(2, 1, allRows.length, NUM_COLS).setValues(allRows);
+  }
+  Logger.log('Done yearly: ' + allRows.length + ' rows, ' + errors.length + ' errors');
+  return {ok:true, rows:allRows.length, errors:errors, updated:updateStr};
+}
+
+function getPaymentsYearly() {
+  var ss    = getCRMSpreadsheet();
+  var sheet = ss.getSheetByName(SHEET_YEARLY);
+  if (!sheet) return {ok:false, error:'Sheet Оплати-Рік not found. Run aggregatePaymentsYearly() first.'};
+  var vals = sheet.getDataRange().getValues();
+  if (vals.length < 2) return {ok:true, data:[]};
+  var headers = vals[0];
+  var rows = [];
+  for (var r = 1; r < vals.length; r++) {
+    if (!vals[r].some(function(v){ return v !== ''; })) continue;
+    var obj = {};
+    for (var c = 0; c < headers.length; c++) {
+      obj[String(headers[c])] = vals[r][c];
+    }
+    rows.push(obj);
+  }
+  return {ok:true, data:rows};
 }
