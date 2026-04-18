@@ -8,6 +8,8 @@ var CONFIG_SHEET_ID  = '11NEIEBzaMiIDFnJB9RXqKnRqjCJjNyHVqylrX7cRZhc';
 var SHEET_PAYMENTS   = 'Оплати';
 var SHEET_YEARLY     = 'Оплати-Рік';
 var SHEET_CLIENTS    = 'Клієнти';
+var SHEET_ATTENDANCE = 'Табель';
+var SHEET_HEALTH     = 'Здоров\'я';
 
 var MONTHS_UA      = ['вересень','жовтень','листопад','грудень','січень','лютий','березень','квітень','травень','червень','липень','серпень'];
 var MONTHS_JS      = [8,9,10,11,0,1,2,3,4,5,6,7];
@@ -84,6 +86,14 @@ function ensureSheetsExist(ss) {
     var s2 = ss.insertSheet(SHEET_CLIENTS);
     writeClientsHeader(s2);
   }
+  if (!ss.getSheetByName(SHEET_ATTENDANCE)) {
+    var s3 = ss.insertSheet(SHEET_ATTENDANCE);
+    writeAttendanceHeader(s3);
+  }
+  if (!ss.getSheetByName(SHEET_HEALTH)) {
+    var s4 = ss.insertSheet(SHEET_HEALTH);
+    writeHealthHeader(s4);
+  }
 }
 
 function setupSheetsStructure(ss) {
@@ -102,6 +112,18 @@ function writePaymentsHeader(sheet) {
     'Бюджет навчання','Бюджет доп.','Бюджет разом',
     'Статус','Місяць','Оновлено'
   ]);
+  sheet.setFrozenRows(1);
+}
+
+function writeAttendanceHeader(sheet) {
+  sheet.clearContents();
+  sheet.appendRow(['Дата','ID дитини','Ім\'я дитини','Локація','Група','Статус','Ким','Коли']);
+  sheet.setFrozenRows(1);
+}
+
+function writeHealthHeader(sheet) {
+  sheet.clearContents();
+  sheet.appendRow(['ID запису','ID дитини','Дата','Тип','Текст','Ким додано','Створено']);
   sheet.setFrozenRows(1);
 }
 
@@ -130,6 +152,8 @@ function doGet(e) {
     else if (action === 'runAggregate')       result = aggregatePayments();
     else if (action === 'runAggregateYearly') result = aggregatePaymentsYearly();
     else if (action === 'makePublic')         result = makeSheetPublic();
+    else if (action === 'getAttendance')      result = getAttendance(e);
+    else if (action === 'getHealthRecords')   result = getHealthRecords(e);
     else                                      result = {ok:false, error:'Unknown action: ' + action};
     return jsonOut(result);
   } catch(err) {
@@ -141,8 +165,11 @@ function doPost(e) {
   try {
     var body = JSON.parse(e.postData.contents);
     var result;
-    if      (body.action === 'saveClient')   result = saveClient(body.data);
-    else if (body.action === 'deleteClient') result = deleteClient(body.id);
+    if      (body.action === 'saveClient')       result = saveClient(body.data);
+    else if (body.action === 'deleteClient')     result = deleteClient(body.id);
+    else if (body.action === 'saveAttendance')   result = saveAttendance(body);
+    else if (body.action === 'saveHealthRecord') result = saveHealthRecord(body);
+    else if (body.action === 'deleteHealthRecord') result = deleteHealthRecord(body);
     else result = {ok:false, error:'Unknown action'};
     return jsonOut(result);
   } catch(err) {
@@ -576,4 +603,119 @@ function getPaymentsYearly() {
     rows.push(obj);
   }
   return {ok:true, data:rows};
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ТАБЕЛЬ ВІДВІДУВАННЯ
+// ═══════════════════════════════════════════════════════════════════════════
+
+function getAttendance(e) {
+  var params  = e ? (e.parameter || {}) : {};
+  var loc     = trim(params.loc  || '');
+  var from    = trim(params.from || '');
+  var to      = trim(params.to   || '');
+  var ss      = getCRMSpreadsheet();
+  var sheet   = ss.getSheetByName(SHEET_ATTENDANCE);
+  if (!sheet) return {ok:true, data:[]};
+  var vals = sheet.getDataRange().getValues();
+  if (vals.length < 2) return {ok:true, data:[]};
+  var hdrs = vals[0].map(String);
+  var rows = [];
+  for (var r = 1; r < vals.length; r++) {
+    var obj = {};
+    for (var c = 0; c < hdrs.length; c++) obj[hdrs[c]] = String(vals[r][c] || '');
+    var d = obj['Дата'] || '';
+    if (!d) continue;
+    if (from && d < from) continue;
+    if (to   && d > to)   continue;
+    if (loc  && trim(obj['Локація']) !== loc) continue;
+    rows.push(obj);
+  }
+  return {ok:true, data:rows};
+}
+
+function saveAttendance(body) {
+  var records = body.records || [];
+  if (!records.length) return {ok:true, saved:0};
+  var ss    = getCRMSpreadsheet();
+  var sheet = ss.getSheetByName(SHEET_ATTENDANCE);
+  if (!sheet) { sheet = ss.insertSheet(SHEET_ATTENDANCE); writeAttendanceHeader(sheet); }
+  var vals = sheet.getDataRange().getValues();
+  var now  = formatDate(new Date());
+  var saved = 0;
+  records.forEach(function(rec) {
+    var date    = trim(String(rec.date    || ''));
+    var childId = trim(String(rec.childId || ''));
+    if (!date || !childId) return;
+    var row = [date, childId, rec.childName||'', rec.loc||'', rec.group||'', rec.status||'', rec.updatedBy||'', now];
+    for (var r = 1; r < vals.length; r++) {
+      if (String(vals[r][0]) === date && String(vals[r][1]) === childId) {
+        sheet.getRange(r+1, 1, 1, row.length).setValues([row]);
+        vals[r] = row;
+        saved++;
+        return;
+      }
+    }
+    sheet.appendRow(row);
+    vals.push(row);
+    saved++;
+  });
+  return {ok:true, saved:saved};
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// МЕДИЧНА КАРТКА
+// ═══════════════════════════════════════════════════════════════════════════
+
+function getHealthRecords(e) {
+  var params  = e ? (e.parameter || {}) : {};
+  var childId = trim(params.childId || '');
+  if (!childId) return {ok:false, error:'Missing childId'};
+  var ss    = getCRMSpreadsheet();
+  var sheet = ss.getSheetByName(SHEET_HEALTH);
+  if (!sheet) return {ok:true, data:[]};
+  var vals = sheet.getDataRange().getValues();
+  if (vals.length < 2) return {ok:true, data:[]};
+  var hdrs = vals[0].map(String);
+  var rows = [];
+  for (var r = 1; r < vals.length; r++) {
+    var obj = {};
+    for (var c = 0; c < hdrs.length; c++) obj[hdrs[c]] = String(vals[r][c] || '');
+    if (trim(obj['ID дитини']) === childId) rows.push(obj);
+  }
+  return {ok:true, data:rows};
+}
+
+function saveHealthRecord(body) {
+  var rec = body.record;
+  if (!rec || !rec.childId) return {ok:false, error:'Missing record or childId'};
+  var ss    = getCRMSpreadsheet();
+  var sheet = ss.getSheetByName(SHEET_HEALTH);
+  if (!sheet) { sheet = ss.insertSheet(SHEET_HEALTH); writeHealthHeader(sheet); }
+  var now = formatDate(new Date());
+  // Використовуємо client-generated ID або генеруємо новий
+  var id = trim(String(rec.id || '')) || ('h_' + new Date().getTime());
+  // Перевіряємо чи не дублікат
+  var vals = sheet.getDataRange().getValues();
+  for (var r = 1; r < vals.length; r++) {
+    if (String(vals[r][0]) === id) return {ok:true, id:id, action:'exists'};
+  }
+  sheet.appendRow([id, rec.childId, rec.date||'', rec.type||'note', rec.text||rec.desc||'', rec.createdBy||'', now]);
+  return {ok:true, id:id, action:'created'};
+}
+
+function deleteHealthRecord(body) {
+  var recordId = trim(String(body.recordId || ''));
+  if (!recordId) return {ok:false, error:'Missing recordId'};
+  var ss    = getCRMSpreadsheet();
+  var sheet = ss.getSheetByName(SHEET_HEALTH);
+  if (!sheet) return {ok:false, error:'Sheet not found'};
+  var vals = sheet.getDataRange().getValues();
+  for (var r = vals.length-1; r >= 1; r--) {
+    if (String(vals[r][0]) === recordId) {
+      sheet.deleteRow(r+1);
+      return {ok:true};
+    }
+  }
+  return {ok:false, error:'Record not found'};
 }
