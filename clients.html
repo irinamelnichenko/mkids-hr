@@ -1071,7 +1071,12 @@ async function initApp(){
     setSyncStatus('err');
     buildGroups();
   }
-  nav('clients');
+  // Якщо відкрито з ?tab=analytics — одразу переключаємо вкладку
+  if(new URLSearchParams(window.location.search).get('tab')==='analytics'){
+    switchMainTab('analytics');
+  } else {
+    nav('clients');
+  }
 }
 
 async function refreshAll(){
