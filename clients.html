@@ -547,6 +547,7 @@ var S = {
   // Річні дані
   yearlyData:  [],
   yearLoaded:  false,
+  yearError:   '',
   // Обраний місяць: null = весь рік, 0-11 = конкретний місяць (calendar)
   selMonth:    new Date().getMonth(),
   view:     'clients',
@@ -608,14 +609,13 @@ function setScriptUrl(u){ localStorage.setItem(CFG.SCRIPT_KEY,u.trim()); }
 
 // Автоматично очищає кеш якщо URL скрипту змінився
 function checkAndClearCache(){
-  var storedUrl = localStorage.getItem(CFG.SCRIPT_KEY);
   var builtinUrl = CFG.SCRIPT_URL;
   var lastBuiltin = localStorage.getItem('crm_last_builtin_url');
   if(lastBuiltin !== builtinUrl){
-    // URL змінився — очищаємо кеш платежів і клієнтів
     localStorage.removeItem(CFG.PAY_CACHE);
     localStorage.removeItem(CFG.CLI_CACHE);
     localStorage.removeItem(CFG.LOC_CACHE);
+    localStorage.removeItem(CFG.YEAR_CACHE); // очищаємо і річний кеш
     localStorage.setItem('crm_last_builtin_url', builtinUrl);
     console.log('Cache cleared due to URL change');
   }
@@ -739,18 +739,34 @@ async function loadAllPayHistory(){
 async function loadPaymentsYearly(force){
   if(!force){
     var c=localStorage.getItem(CFG.YEAR_CACHE);
-    if(c){ var p=JSON.parse(c); if(Date.now()-p.ts<CFG.TTL){ S.yearlyData=p.data; S.yearLoaded=true; return; } }
+    if(c){
+      try{
+        var p=JSON.parse(c);
+        if(Date.now()-p.ts<CFG.TTL && p.data && p.data.length>0){
+          S.yearlyData=p.data; S.yearLoaded=true; S.yearError=''; return;
+        }
+      }catch(e2){}
+    }
   }
+  S.yearError='';
   try{
-    var j=await apiGet('getPaymentsYearly');
+    var url=getScriptUrl();
+    if(!url) throw new Error('URL не налаштовано');
+    // Робимо запит напряму щоб бачити реальну помилку
+    var r=await fetch(url+'?action=getPaymentsYearly',{redirect:'follow'});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    var j=await r.json();
+    if(!j.ok) throw new Error(j.error||'Сервер повернув ok:false');
     S.yearlyData=j.data||[];
     S.yearLoaded=S.yearlyData.length>0;
+    S.yearError=S.yearlyData.length===0?'Дані порожні — запустіть aggregatePaymentsYearly() в Apps Script':'';
     localStorage.setItem(CFG.YEAR_CACHE,JSON.stringify({data:S.yearlyData,ts:Date.now()}));
     console.log('Yearly data loaded: '+S.yearlyData.length+' rows');
   }catch(e){
-    console.warn('loadPaymentsYearly failed: '+e.message);
+    console.error('loadPaymentsYearly error:', e);
     S.yearlyData=[];
     S.yearLoaded=false;
+    S.yearError=e.message||String(e);
   }
 }
 
@@ -1099,7 +1115,7 @@ function renderClients(){
   } else if(S.selMonth!==curJSMonth && !S.yearlyData.length){
     document.getElementById('main').innerHTML=monthStripHtml
       +'<div class="alert alert-warn" style="margin-top:8px">⚠️ Для перегляду інших місяців потрібні річні дані. '
-      +'<button class="btn btn-secondary btn-sm" onclick="loadPaymentsYearly(true).then(renderView)">🔄 Завантажити</button></div>';
+      +'<button class="btn btn-secondary btn-sm btn-load-yearly" onclick="doLoadYearly()">🔄 Завантажити</button></div>';
     return;
   }
 
@@ -1999,6 +2015,15 @@ function saveChild(){
   renderView();
 }
 
+// ─── YEARLY LOAD HELPER (надійний wrapper для кнопок) ────────────────────────
+async function doLoadYearly(){
+  // Показуємо стан "завантаження" в поточному view
+  var btns=document.querySelectorAll('.btn-load-yearly');
+  btns.forEach(function(b){ b.disabled=true; b.textContent='⏳ Завантаження…'; });
+  await loadPaymentsYearly(true);
+  renderView();
+}
+
 // ─── YEARLY AGGREGATE TRIGGER ─────────────────────────────────────────────────
 async function triggerAggregateYearly(){
   document.getElementById('sMsg').innerHTML='<span style="color:var(--orange)">▶️ Збираємо річні дані…</span>';
@@ -2148,9 +2173,11 @@ function renderClientsYearly(monthStripHtml){
 
   // Якщо yearlyData не завантажено
   if(!S.yearLoaded){
+    var errMsg=S.yearError?'<div class="alert alert-danger" style="margin-top:8px;font-size:12px">❌ Помилка: '+esc(S.yearError)+'</div>':'';
     html+='<div class="alert alert-warn">⚠️ Річні дані не завантажені. '
-      +'<button class="btn btn-secondary btn-sm" onclick="loadPaymentsYearly(true).then(renderView)">🔄 Завантажити</button> '
-      +'або запустіть <b>aggregatePaymentsYearly()</b> в Apps Script та повторіть.</div>';
+      +'<button class="btn btn-secondary btn-sm btn-load-yearly" onclick="doLoadYearly()">🔄 Завантажити</button>'
+      +'</div>'+errMsg
+      +'<div class="alert alert-info" style="font-size:12px;margin-top:4px">Якщо дані ще не зібрані — запустіть в Apps Script: <b>aggregatePaymentsYearly()</b>, потім натисніть "Завантажити"</div>';
     document.getElementById('main').innerHTML=html;
     return;
   }
@@ -2224,9 +2251,10 @@ function renderPayMonths(){
   var childLoc=(card.loc||'').trim();
 
   if(!S.yearLoaded||!S.yearlyData.length){
+    var errTxt=S.yearError?'<div style="color:var(--red2);font-size:12px;margin-top:6px">'+esc(S.yearError)+'</div>':'';
     el.innerHTML='<div class="empty"><span class="ei">📅</span><h4>Річні дані не завантажені</h4>'
-      +'<p>Запустіть aggregatePaymentsYearly() в Apps Script</p>'
-      +'<button class="btn btn-secondary btn-sm" style="margin-top:10px" onclick="loadPaymentsYearly(true).then(renderPayMonths)">🔄 Завантажити</button></div>';
+      +'<p>Запустіть aggregatePaymentsYearly() в Apps Script, потім:</p>'+errTxt
+      +'<button class="btn btn-secondary btn-sm btn-load-yearly" style="margin-top:10px" onclick="doLoadYearly()">🔄 Завантажити</button></div>';
     return;
   }
 
