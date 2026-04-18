@@ -2202,9 +2202,12 @@ function consecutiveDebtMonths(row, monthIndices){
 var ANA_TYPE_ALIAS={'Благо':'Управління','БЛАГО':'Управління','Благозаврик':'Управління','благо':'Управління'};
 var ANA_TYPE_ICONS={'Садочок':'🌱','Школа':'🏫','Управління':'🏢'};
 var CRM_TYPES=['Садочок','Школа','Управління'];
+var UPRAVLINNYA_LOCS=['Житомир','Манхетен (Благо)','Нац.Гвардії (Благо)'];
 function normLocType(t){ return ANA_TYPE_ALIAS[t]||t||'Інше'; }
-// Визначає CRM-тип напряму з рядка yearlyData (поля 'Тип' і 'Напрямок')
+// Визначає CRM-тип напряму з рядка yearlyData
 function getRowCRMType(row){
+  var loc=String(row['Локація']||'').trim();
+  if(UPRAVLINNYA_LOCS.indexOf(loc)>=0) return 'Управління';
   var nt=normLocType(String(row['Тип']||'').trim());
   if(CRM_TYPES.indexOf(nt)>=0) return nt;
   var nd=normLocType(String(row['Напрямок']||'').trim());
