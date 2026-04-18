@@ -2292,7 +2292,8 @@ function renderAnalytics(){
   var TYPE_ICONS={'Садочок':'🌱','Школа':'🏫','Управління':'🏢','Офіс':'💼','Менеджмент':'👔','Кухня':'🍽'};
   var typeMap={};
   allLocs.forEach(function(l){ var t=l.typ||'Інше'; if(!typeMap[t]) typeMap[t]=0; typeMap[t]++; });
-  var uniqueTypes=Object.keys(typeMap).sort();
+  var CRM_LOC_TYPES=['Садочок','Школа','Управління'];
+  var uniqueTypes=Object.keys(typeMap).filter(function(t){ return CRM_LOC_TYPES.indexOf(t)>=0; }).sort();
 
   // Кількість дітей по типу (з yearlyData для точності)
   var kidsPerType={};
