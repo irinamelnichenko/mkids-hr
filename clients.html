@@ -2334,10 +2334,9 @@ function renderAnalytics(){
     typeChipsHtml+='</div>';
   }
 
-  // Відфільтровані локації для дропдауну — беремо з yearlyData
-  var filteredLocNames=S.anaSelLocType
-    ? Object.keys(locsPerType[S.anaSelLocType]||{}).sort()
-    : Object.keys(allYRows.reduce(function(m,r){ var l=String(r['Локація']||'').trim(); if(l) m[l]=true; return m; },{})).sort();
+  // Відфільтровані локації для дропдауну — порядок з S.locs (Config Sheet)
+  var locsInData=S.anaSelLocType?(locsPerType[S.anaSelLocType]||{}):allYRows.reduce(function(m,r){ var l=String(r['Локація']||'').trim(); if(l) m[l]=true; return m; },{});
+  var filteredLocNames=allLocs.map(function(l){ return l.loc; }).filter(function(loc){ return locsInData[loc]; });
   var locOpts=(isHR()?'<option value="">Всі локації</option>':'')+filteredLocNames.map(function(loc){
     return '<option value="'+esc(loc)+'"'+(S.anaSelLoc===loc?' selected':'')+'>'+esc(loc)+'</option>';
   }).join('');
