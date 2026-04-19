@@ -435,6 +435,7 @@ function parsePaymentSheet(data, monthCol) {
   var DATA_START = 3;
   var groups = [];
   var curGroup = null;
+  var diagDone = false;   // діагностика навколо BK — виводимо лише раз на аркуш
 
   for (var r = DATA_START; r < data.length; r++) {
     var row = data[r];
@@ -458,7 +459,31 @@ function parsePaymentSheet(data, monthCol) {
       var fe = toNum(row[monthCol + 2]);   // факт доп
       var bd = toNum(row[monthCol + 3]);   // бюджет доп
       var bs = toNum(row[monthCol + 4]);   // бюджет навчання
-      var cd = parseDateDMY(row[61]);      // BK (індекс 61) — дата договору DD.MM.YYYY → YYYY-MM-DD
+
+      // ── ДІАГНОСТИКА ────────────────────────────────────────────────────────
+      if (!diagDone) {
+        // Один раз — ширина рядка і вміст колонок навколо BK
+        Logger.log('DIAG rowLen=' + row.length + ' monthCol=' + monthCol);
+        Logger.log('DIAG col59=' + JSON.stringify(row[59]) +
+                   ' col60=' + JSON.stringify(row[60]) +
+                   ' col61=' + JSON.stringify(row[61]) +
+                   ' col62=' + JSON.stringify(row[62]) +
+                   ' col63=' + JSON.stringify(row[63]));
+        diagDone = true;
+      }
+      // Перші 5 дітей: детальний лог raw[61] і результат parseDateDMY
+      var childIdx = (curGroup ? curGroup.children.length : 0);
+      if (childIdx < 5) {
+        var rawBK = row[61];
+        var cdTest = parseDateDMY(rawBK);
+        Logger.log('DIAG r=' + r + ' name=' + nameCell +
+                   ' raw[61]=' + JSON.stringify(rawBK) +
+                   ' type=' + typeof rawBK +
+                   ' parsed=' + cdTest);
+      }
+      // ── КІНЕЦЬ ДІАГНОСТИКИ ─────────────────────────────────────────────────
+
+      var cd = parseDateDMY(row[61]);      // BK (індекс 61) — дата договору
       curGroup.children.push({
         name: nameCell,
         factStudy: fs, factEntry: fv, factExtra: fe,
