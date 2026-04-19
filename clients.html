@@ -845,18 +845,24 @@ async function apiGetFull(params){
 function loadLocalCRM(){ try{ S.crm=JSON.parse(localStorage.getItem(CFG.SK)||'{}'); }catch(e){ S.crm={}; } }
 function saveLocalCRM(){ localStorage.setItem(CFG.SK,JSON.stringify(S.crm)); }
 
-function getCRMCard(id){
-  if(!S.crm[id]){
-    // Шукаємо contractDate з payments-даних (через S.groups)
-    var cdFromPay='';
-    outer: for(var loc in S.groups){
-      for(var gi=0;gi<S.groups[loc].length;gi++){
-        var g=S.groups[loc][gi];
-        for(var ci=0;ci<g.children.length;ci++){
-          if(g.children[ci].id===id){ cdFromPay=g.children[ci].contractDate||''; break outer; }
-        }
+function _findContractDateInGroups(id){
+  // Шукаємо contractDate у S.groups по id дитини
+  for(var loc in S.groups){
+    var locs=S.groups[loc];
+    for(var gi=0;gi<locs.length;gi++){
+      var ch=locs[gi].children;
+      for(var ci=0;ci<ch.length;ci++){
+        if(ch[ci].id===id && ch[ci].contractDate){ return ch[ci].contractDate; }
       }
     }
+  }
+  return '';
+}
+
+function getCRMCard(id){
+  if(!S.crm[id]){
+    var cdFromPay=_findContractDateInGroups(id);
+    console.log('getCRMCard NEW:', id, '| cdFromPay=', cdFromPay, '| S.groups keys=', Object.keys(S.groups).length);
     S.crm[id]={
       name:'',loc:'',group:'',teacher:'',bday:'',
       momName:'',momPhone:'',dadName:'',dadPhone:'',
@@ -865,6 +871,15 @@ function getCRMCard(id){
       status:'active',feeHistory:[],absences:[],notes:'',
       createdAt:today(),updatedAt:today()
     };
+  }
+  // Якщо запис є, але contractDate порожній (напр. залишився з localStorage
+  // до того, як aggregatePayments() наповнив колонку Q) — підтягуємо з payments
+  if(!S.crm[id].contractDate){
+    var cdFromPay2=_findContractDateInGroups(id);
+    if(cdFromPay2){
+      console.log('getCRMCard PATCH:', id, '| filling contractDate=', cdFromPay2);
+      S.crm[id].contractDate=cdFromPay2;
+    }
   }
   return S.crm[id];
 }
