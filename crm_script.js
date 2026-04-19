@@ -882,6 +882,11 @@ function diagnoseAbsences() {
   var now = new Date();
   var refYear = now.getFullYear(); // базовий рік для parseAbsencePeriod
 
+  // Статистика по локаціях: {loc: {total, parsed, unparsed}}
+  var stats = {};
+  // Унікальні UNPARSED рядки: {raw: count}
+  var unparsedPatterns = {};
+
   Logger.log('=== diagnoseAbsences START refYear=' + refYear + ' ===');
 
   for (var r = 1; r < configData.length; r++) {
@@ -890,6 +895,8 @@ function diagnoseAbsences() {
     var sheetId = trim(cfgRow[3]);
     var sheetName = trim(cfgRow[4]) || 'Payment';
     if (!loc || !sheetId) continue;
+
+    stats[loc] = {total: 0, parsed: 0, unparsed: 0};
 
     try {
       var ss = SpreadsheetApp.openById(sheetId);
@@ -905,25 +912,32 @@ function diagnoseAbsences() {
         continue;
       }
 
-      // Дані починаються з рядка 3 (індекс 3), як в parsePaymentSheet
       var DATA_START = 3;
       for (var row = DATA_START; row < data.length; row++) {
         var nameCell = trim(String(data[row][0] || ''));
         if (!nameCell) continue;
-        // Пропускаємо рядки-заголовки груп (вчителів) — вони не мають даних в стовпцях оплат
-        // Евристика: якщо рядок містить слово "група" або всі числові клітинки порожні в діапазоні
+
         var bl = trim(String(data[row][absCols[0]] || ''));
         var bm = trim(String(data[row][absCols[1]] || ''));
         var bn = trim(String(data[row][absCols[2]] || ''));
         var bo = trim(String(data[row][absCols[3]] || ''));
 
-        if (!bl && !bm && !bn && !bo) continue; // порожній рядок — пропускаємо
+        if (!bl && !bm && !bn && !bo) continue;
 
         var parts = [bl, bm, bn, bo];
         var parsed = parts.map(function(p) {
+          if (!p) return '-';
+          stats[loc].total++;
           var res = parseAbsencePeriod(p, refYear);
-          if (p && !res) Logger.log(loc + ' | ' + nameCell + ' | UNPARSED: [' + p + ']');
-          return res ? (res.from + '→' + res.to) : (p ? '?' : '-');
+          if (res) {
+            stats[loc].parsed++;
+            return res.from + '→' + res.to;
+          } else {
+            stats[loc].unparsed++;
+            unparsedPatterns[p] = (unparsedPatterns[p] || 0) + 1;
+            Logger.log(loc + ' | ' + nameCell + ' | UNPARSED: [' + p + ']');
+            return '?';
+          }
         });
 
         Logger.log(
@@ -937,5 +951,49 @@ function diagnoseAbsences() {
     }
   }
 
+  // ── ПІДСУМКОВА СТАТИСТИКА ────────────────────────────────────────────────
+  Logger.log('');
+  Logger.log('=== СТАТИСТИКА ===');
+  var header = padR('Локація', 24) + '| ' + padR('Всього', 14) + '| ' + padR('Розпарсено', 10) + '| ' + padR('UNPARSED', 8) + '| % успіху';
+  Logger.log(header);
+  Logger.log(new Array(header.length + 1).join('-'));
+
+  var totTotal = 0, totParsed = 0, totUnparsed = 0;
+  var locNames = Object.keys(stats);
+  for (var li = 0; li < locNames.length; li++) {
+    var ln = locNames[li];
+    var st = stats[ln];
+    var pct = st.total > 0 ? Math.round(st.parsed / st.total * 100) + '%' : 'n/a';
+    Logger.log(padR(ln, 24) + '| ' + padR(String(st.total), 14) + '| ' + padR(String(st.parsed), 10) + '| ' + padR(String(st.unparsed), 8) + '| ' + pct);
+    totTotal   += st.total;
+    totParsed  += st.parsed;
+    totUnparsed += st.unparsed;
+  }
+  Logger.log(new Array(header.length + 1).join('-'));
+  var totPct = totTotal > 0 ? Math.round(totParsed / totTotal * 100) + '%' : 'n/a';
+  Logger.log(padR('РАЗОМ', 24) + '| ' + padR(String(totTotal), 14) + '| ' + padR(String(totParsed), 10) + '| ' + padR(String(totUnparsed), 8) + '| ' + totPct);
+
+  // ── UNPARSED ПАТТЕРНИ ────────────────────────────────────────────────────
+  var patterns = Object.keys(unparsedPatterns);
+  if (patterns.length > 0) {
+    Logger.log('');
+    Logger.log('=== UNPARSED ПАТТЕРНИ ===');
+    // Сортуємо за кількістю (спадно)
+    patterns.sort(function(a, b) { return unparsedPatterns[b] - unparsedPatterns[a]; });
+    for (var pi = 0; pi < patterns.length; pi++) {
+      var cnt = unparsedPatterns[patterns[pi]];
+      Logger.log('"' + patterns[pi] + '"' + new Array(Math.max(2, 20 - patterns[pi].length)).join(' ') + '— ' + cnt + ' ' + (cnt === 1 ? 'раз' : cnt < 5 ? 'рази' : 'разів'));
+    }
+  } else {
+    Logger.log('');
+    Logger.log('=== UNPARSED ПАТТЕРНИ: немає ===');
+  }
+
+  Logger.log('');
   Logger.log('=== diagnoseAbsences END ===');
+}
+
+function padR(s, len) {
+  while (s.length < len) s += ' ';
+  return s;
 }
