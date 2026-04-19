@@ -732,7 +732,14 @@ function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').repla
 function fmtN(n){ return n==null?'':Number(n).toLocaleString('uk-UA'); }
 function fmtShort(n){ n=Math.round(n); if(n>=1000000) return (n/1000000).toFixed(1).replace(/\.0$/,'')+'М'; if(n>=1000) return Math.round(n/1000)+'К'; return String(n); }
 function fmtD(s){ if(!s) return ''; var p=String(s).split('-'); return p.length===3?p[2]+'.'+p[1]+'.'+p[0]:s; }
-function today(){ return new Date().toISOString().slice(0,10); }
+function today(){
+  var d=new Date();
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+// Форматує Date об'єкт у YYYY-MM-DD за ЛОКАЛЬНИМ часом (не UTC!)
+function localDateStr(d){
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
 function pd(s){ if(!s) return null; var p=String(s).split('-'); return p.length===3?new Date(+p[0],+p[1]-1,+p[2]):null; }
 function diffDays(a,b){ return Math.round((b-a)/86400000); }
 function weeksCeil(days){ return Math.ceil(Math.max(0,days)/5); }
@@ -2659,7 +2666,7 @@ function getSickStreak(childId, toDate){
   for(var i=0;i<60;i++){
     var d=cur.getDay();
     if(d!==0&&d!==6){ // тільки робочі
-      var ds=cur.toISOString().slice(0,10);
+      var ds=localDateStr(cur);
       var st=(S.att[ds]||{})[childId];
       if(st==='sick') streak++;
       else break;
@@ -2704,17 +2711,17 @@ function attMondayOfWeek(dateStr){
   var d=pd(dateStr)||new Date();
   var dow=d.getDay(); // 0=Нд,1=Пн,...,6=Сб
   var diff;
-  if(dow===0)      diff=1;    // Нд → наступний Пн
-  else if(dow===6) diff=2;    // Сб → наступний Пн
-  else             diff=1-dow; // Пн(0)…Пт(-3) → Пн цього тижня
-  var m=new Date(d.getTime()+diff*86400000);
-  return m.toISOString().slice(0,10);
+  if(dow===0)      diff=1;     // Нд → наступний Пн
+  else if(dow===6) diff=2;     // Сб → наступний Пн
+  else             diff=1-dow; // Пн-Пт → Пн цього тижня
+  d.setDate(d.getDate()+diff);
+  return localDateStr(d); // локальний час, не UTC!
 }
 
 function attAddDays(dateStr,n){
   var d=pd(dateStr); if(!d) return dateStr;
   d.setDate(d.getDate()+n);
-  return d.toISOString().slice(0,10);
+  return localDateStr(d);
 }
 
 function attWeekDays(monday){
@@ -2735,7 +2742,11 @@ function renderAttendance(){
   // Дефолти
   var curToday=today();
   if(!S.attWeek) S.attWeek=attMondayOfWeek(curToday);
-  if(!S.attDay)  S.attDay=curToday;
+  if(!S.attDay){
+    // якщо вихідний — перший робочий день наступного тижня
+    var tdow=(pd(curToday)||new Date()).getDay();
+    S.attDay=(tdow===0||tdow===6)?attMondayOfWeek(curToday):curToday;
+  }
 
   // Локація
   var availLocs;
@@ -2798,24 +2809,36 @@ function renderAttendance(){
   if(S.attMode==='week') content=renderAttendanceWeek(activeLoc,activeGroup);
   else content=renderAttendanceDay(activeLoc,activeGroup);
 
-  // Статистика для поточного дня
-  var statsDate=S.attMode==='week'?curToday:S.attDay;
-  var dayRec=S.att[statsDate]||{};
+  // Статистика: для дня — за обраний день; для тижня — сума по всіх днях тижня
   var nPresent=0,nSick=0,nVac=0,nAbsent=0,nTotal=0;
+  var statDays=S.attMode==='week'?attWeekDays(S.attWeek):[S.attDay];
   (S.groups[activeLoc]||[]).forEach(function(g){
     if(activeGroup&&g.group!==activeGroup) return;
     g.children.forEach(function(ch){
-      nTotal++;
-      var st=dayRec[ch.id]||'';
-      if(st==='present') nPresent++;
-      else if(st==='sick') nSick++;
-      else if(st==='vacation') nVac++;
-      else if(st==='absent') nAbsent++;
+      if(S.attMode==='week'){
+        // рахуємо кожен день окремо
+        statDays.forEach(function(sd){
+          var st=(S.att[sd]||{})[ch.id]||'';
+          if(st) nTotal++;
+          if(st==='present') nPresent++;
+          else if(st==='sick') nSick++;
+          else if(st==='vacation') nVac++;
+          else if(st==='absent') nAbsent++;
+        });
+      } else {
+        nTotal++;
+        var st=(S.att[S.attDay]||{})[ch.id]||'';
+        if(st==='present') nPresent++;
+        else if(st==='sick') nSick++;
+        else if(st==='vacation') nVac++;
+        else if(st==='absent') nAbsent++;
+      }
     });
   });
 
+  var statsLbl=S.attMode==='week'?'позначок за тиждень':'дітей';
   var stats='<div class="att-stats">'
-    +'<div class="att-stat"><div class="att-stat-n">'+nTotal+'</div><div class="att-stat-l">Всього</div></div>'
+    +'<div class="att-stat"><div class="att-stat-n">'+nTotal+'</div><div class="att-stat-l">'+statsLbl+'</div></div>'
     +'<div class="att-stat"><div class="att-stat-n" style="color:var(--green)">'+nPresent+'</div><div class="att-stat-l">✅ Присутні</div></div>'
     +'<div class="att-stat"><div class="att-stat-n" style="color:var(--orange)">'+nSick+'</div><div class="att-stat-l">🤒 Хворі</div></div>'
     +'<div class="att-stat"><div class="att-stat-n" style="color:var(--blue2)">'+nVac+'</div><div class="att-stat-l">🏖 Відпустка</div></div>'
@@ -2910,12 +2933,12 @@ function renderAttendanceDay(loc,group){
 function attPrevWorkday(dateStr){
   var d=pd(dateStr)||new Date();
   do{ d.setDate(d.getDate()-1); }while(d.getDay()===0||d.getDay()===6);
-  return d.toISOString().slice(0,10);
+  return localDateStr(d);
 }
 function attNextWorkday(dateStr){
   var d=pd(dateStr)||new Date();
   do{ d.setDate(d.getDate()+1); }while(d.getDay()===0||d.getDay()===6);
-  return d.toISOString().slice(0,10);
+  return localDateStr(d);
 }
 
 // ─── HEALTH TAB ─────────────────────────────────────────────────────��─────────
