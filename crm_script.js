@@ -134,7 +134,7 @@ function writePaymentsHeader(sheet) {
     'Локація','Напрямок','Тип','Група','Вихователь',"Ім'я дитини",
     'Факт навчання','Факт вступний','Факт доп.','Факт разом',
     'Бюджет навчання','Бюджет доп.','Бюджет разом',
-    'Статус','Місяць','Оновлено'
+    'Статус','Місяць','Оновлено','Дата договору'
   ]);
   sheet.setFrozenRows(1);
 }
@@ -375,7 +375,8 @@ function aggregatePayments() {
             loc, dir, typ,
             g.group, g.teacher, ch.name,
             fs, fv, fe, total, bs, bd, br,
-            status, monthName, updateStr
+            status, monthName, updateStr,
+            ch.contractDate || ''          // BK → Дата договору (YYYY-MM-DD)
           ]);
         });
       });
@@ -388,7 +389,7 @@ function aggregatePayments() {
   paySheet.clearContents();
   writePaymentsHeader(paySheet);
   if (allRows.length > 0) {
-    paySheet.getRange(2, 1, allRows.length, 16).setValues(allRows);
+    paySheet.getRange(2, 1, allRows.length, 17).setValues(allRows);
   }
   Logger.log('Done: ' + allRows.length + ' rows, ' + errors.length + ' errors');
   return {ok:true, rows:allRows.length, errors:errors, month:monthName, updated:updateStr};
@@ -457,10 +458,12 @@ function parsePaymentSheet(data, monthCol) {
       var fe = toNum(row[monthCol + 2]);   // факт доп
       var bd = toNum(row[monthCol + 3]);   // бюджет доп
       var bs = toNum(row[monthCol + 4]);   // бюджет навчання
+      var cd = parseDateDMY(row[61]);      // BK (індекс 61) — дата договору DD.MM.YYYY → YYYY-MM-DD
       curGroup.children.push({
         name: nameCell,
         factStudy: fs, factEntry: fv, factExtra: fe,
-        budExtra: bd, budStudy: bs
+        budExtra: bd, budStudy: bs,
+        contractDate: cd
       });
     }
   }
@@ -488,6 +491,15 @@ function toNum(v) {
   if (v === '' || v === null || v === undefined) return 0;
   var n = parseFloat(String(v).replace(',', '.'));
   return isNaN(n) ? 0 : n;
+}
+// Конвертує "01.09.2024" (DD.MM.YYYY) → "2024-09-01" (YYYY-MM-DD)
+// Повертає порожній рядок якщо значення порожнє або формат не розпізнано
+function parseDateDMY(v) {
+  var s = trim(String(v || ''));
+  if (!s) return '';
+  var m = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  if (!m) return '';
+  return m[3] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[1]).slice(-2);
 }
 function formatDate(d) {
   return Utilities.formatDate(d, 'Europe/Kiev', 'dd.MM.yyyy HH:mm');
