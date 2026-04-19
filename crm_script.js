@@ -349,9 +349,10 @@ function aggregatePayments() {
       var paymentSheet = ss.getSheetByName(sheetName);
       if (!paymentSheet) paymentSheet = ss.getSheets()[0];
       var data = paymentSheet.getDataRange().getValues();
-      var monthCol = detectCurrentMonthCol(data, curJSMonth);
-      Logger.log(loc + ': monthCol=' + monthCol + ', month=' + monthName);
-      var groups = parsePaymentSheet(data, monthCol);
+      var monthCol    = detectCurrentMonthCol(data, curJSMonth);
+      var contractCol = detectContractDateCol(data);
+      Logger.log(loc + ': monthCol=' + monthCol + ', month=' + monthName + ', contractCol=' + contractCol);
+      var groups = parsePaymentSheet(data, monthCol, contractCol);
       Logger.log(loc + ': groups=' + groups.length);
 
       groups.forEach(function(g) {
@@ -395,6 +396,18 @@ function aggregatePayments() {
   return {ok:true, rows:allRows.length, errors:errors, month:monthName, updated:updateStr};
 }
 
+// Шукає колонку "Дата договору" в заголовкових рядках (перші 5)
+// Повертає індекс колонки або -1 якщо не знайдено
+function detectContractDateCol(data) {
+  for (var r = 0; r < Math.min(5, data.length); r++) {
+    for (var c = 0; c < data[r].length; c++) {
+      var cell = trim(String(data[r][c] || '')).toLowerCase();
+      if (cell.indexOf('дата договору') >= 0) return c;
+    }
+  }
+  return -1;
+}
+
 // Знаходить колонку поточного місяця
 // Merged cells — значення є тільки в першій колонці об'єднання
 // Тому шукаємо в рядках 1-2 (індекси 0-1)
@@ -431,11 +444,10 @@ function detectCurrentMonthCol(rows, curJSMonth) {
 }
 
 // Структура місяця: навч(+0) | вступ(+1) | доп(+2) | бюджет доп(+3) | бюджет навч(+4)
-function parsePaymentSheet(data, monthCol) {
+function parsePaymentSheet(data, monthCol, contractCol) {
   var DATA_START = 3;
   var groups = [];
   var curGroup = null;
-  var diagDone = false;   // діагностика навколо BK — виводимо лише раз на аркуш
 
   for (var r = DATA_START; r < data.length; r++) {
     var row = data[r];
@@ -459,31 +471,8 @@ function parsePaymentSheet(data, monthCol) {
       var fe = toNum(row[monthCol + 2]);   // факт доп
       var bd = toNum(row[monthCol + 3]);   // бюджет доп
       var bs = toNum(row[monthCol + 4]);   // бюджет навчання
-
-      // ── ДІАГНОСТИКА ────────────────────────────────────────────────────────
-      if (!diagDone) {
-        // Один раз — ширина рядка і вміст колонок навколо BK
-        Logger.log('DIAG rowLen=' + row.length + ' monthCol=' + monthCol);
-        Logger.log('DIAG col59=' + JSON.stringify(row[59]) +
-                   ' col60=' + JSON.stringify(row[60]) +
-                   ' col61=' + JSON.stringify(row[61]) +
-                   ' col62=' + JSON.stringify(row[62]) +
-                   ' col63=' + JSON.stringify(row[63]));
-        diagDone = true;
-      }
-      // Перші 5 дітей: детальний лог raw[61] і результат parseDateDMY
-      var childIdx = (curGroup ? curGroup.children.length : 0);
-      if (childIdx < 5) {
-        var rawBK = row[61];
-        var cdTest = parseDateDMY(rawBK);
-        Logger.log('DIAG r=' + r + ' name=' + nameCell +
-                   ' raw[61]=' + JSON.stringify(rawBK) +
-                   ' type=' + typeof rawBK +
-                   ' parsed=' + cdTest);
-      }
-      // ── КІНЕЦЬ ДІАГНОСТИКИ ─────────────────────────────────────────────────
-
-      var cd = parseDateDMY(row[61]);      // BK (індекс 61) — дата договору
+      // Дата договору — за динамічно визначеним індексом колонки
+      var cd = (contractCol >= 0) ? parseDateDMY(row[contractCol]) : '';
       curGroup.children.push({
         name: nameCell,
         factStudy: fs, factEntry: fv, factExtra: fe,
@@ -614,8 +603,9 @@ function aggregatePaymentsYearly() {
       var data = paymentSheet.getDataRange().getValues();
 
       // Отримуємо структуру груп за поточним місяцем
-      var curMonthCol = detectCurrentMonthCol(data, curJSMonth);
-      var groups      = parsePaymentSheet(data, curMonthCol);
+      var curMonthCol  = detectCurrentMonthCol(data, curJSMonth);
+      var contractCol  = detectContractDateCol(data);
+      var groups       = parsePaymentSheet(data, curMonthCol, contractCol);
 
       // Будуємо карту ім'я → рядок (DATA_START = 3)
       var nameToRow = {};
