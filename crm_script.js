@@ -803,3 +803,139 @@ function deleteHealthRecord(body) {
   }
   return {ok:false, error:'Record not found'};
 }
+
+// ─── ДІАГНОСТИКА ВІДПУСТОК (BL-BO) ─────────────────────────────────────────
+// parseAbsencePeriod: парсить рядок типу "09.12-15.12", "01.09.2024-15.09.2024",
+// "15-20.01". Повертає {from, to} у форматі YYYY-MM-DD або null.
+// refYear — рік за замовчуванням (для дат без явного року).
+function parseAbsencePeriod(str, refYear) {
+  if (!str) return null;
+  var s = trim(String(str));
+  if (!s || s === '-' || s.toLowerCase() === 'по') return null;
+
+  // Формат 1: "01.09.2024-15.09.2024" — обидві частини з 4-значним роком
+  var m1 = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})\s*[-–]\s*(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  if (m1) {
+    return {
+      from: m1[3] + '-' + pad2(m1[2]) + '-' + pad2(m1[1]),
+      to:   m1[6] + '-' + pad2(m1[5]) + '-' + pad2(m1[4])
+    };
+  }
+
+  // Формат 2: "09.12-15.12" — день.місяць з обох боків, рік з refYear
+  var m2 = s.match(/^(\d{1,2})\.(\d{1,2})\s*[-–]\s*(\d{1,2})\.(\d{1,2})$/);
+  if (m2) {
+    var fromMon = +m2[2], toMon = +m2[4];
+    // refYear: якщо місяць >= поточного місяця → попередній рік
+    var nowMon = new Date().getMonth() + 1; // 1-based
+    var fy = (fromMon >= nowMon) ? (refYear - 1) : refYear;
+    var ty = (toMon   >= nowMon) ? (refYear - 1) : refYear;
+    return {
+      from: fy + '-' + pad2(m2[2]) + '-' + pad2(m2[1]),
+      to:   ty + '-' + pad2(m2[4]) + '-' + pad2(m2[3])
+    };
+  }
+
+  // Формат 3: "15-20.01" — тільки дні з початку, місяць в кінці
+  var m3 = s.match(/^(\d{1,2})\s*[-–]\s*(\d{1,2})\.(\d{1,2})$/);
+  if (m3) {
+    var mon = +m3[3];
+    var nowMon = new Date().getMonth() + 1;
+    var yr = (mon >= nowMon) ? (refYear - 1) : refYear;
+    return {
+      from: yr + '-' + pad2(m3[3]) + '-' + pad2(m3[1]),
+      to:   yr + '-' + pad2(m3[3]) + '-' + pad2(m3[2])
+    };
+  }
+
+  // Не розпарсили
+  return null;
+}
+
+function pad2(n) { return ('0' + n).slice(-2); }
+
+// Динамічно шукає колонки тижнів відпустки в заголовкових рядках (перші 5).
+// Повертає масив [col1, col2, col3, col4] або null якщо не знайдено.
+function detectAbsenceCols(data) {
+  var labels = ['1 тиждень', '2 тиждень', '3 тиждень', '4 тиждень'];
+  var cols = [null, null, null, null];
+  for (var r = 0; r < Math.min(5, data.length); r++) {
+    for (var c = 0; c < data[r].length; c++) {
+      var cell = trim(String(data[r][c] || '')).toLowerCase();
+      for (var li = 0; li < labels.length; li++) {
+        if (cols[li] === null && cell.indexOf(labels[li].toLowerCase()) >= 0) {
+          cols[li] = c;
+        }
+      }
+    }
+  }
+  return cols;
+}
+
+// Діагностична функція — ТІЛЬКИ читає і логує, нічого не пише.
+// Запускати вручну з Apps Script редактора: diagnoseAbsences()
+function diagnoseAbsences() {
+  var configSS = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var configSheet = configSS.getSheets()[0];
+  var configData = configSheet.getDataRange().getValues();
+
+  var now = new Date();
+  var refYear = now.getFullYear(); // базовий рік для parseAbsencePeriod
+
+  Logger.log('=== diagnoseAbsences START refYear=' + refYear + ' ===');
+
+  for (var r = 1; r < configData.length; r++) {
+    var cfgRow  = configData[r];
+    var loc     = trim(cfgRow[2]);
+    var sheetId = trim(cfgRow[3]);
+    var sheetName = trim(cfgRow[4]) || 'Payment';
+    if (!loc || !sheetId) continue;
+
+    try {
+      var ss = SpreadsheetApp.openById(sheetId);
+      var paymentSheet = ss.getSheetByName(sheetName);
+      if (!paymentSheet) paymentSheet = ss.getSheets()[0];
+      var data = paymentSheet.getDataRange().getValues();
+
+      var absCols = detectAbsenceCols(data);
+      Logger.log(loc + ' | absenceCols=[' + absCols.join(',') + ']');
+
+      if (absCols[0] === null) {
+        Logger.log(loc + ' | WARN: не знайдено колонки тижнів відпустки (1-4 тиждень)');
+        continue;
+      }
+
+      // Дані починаються з рядка 3 (індекс 3), як в parsePaymentSheet
+      var DATA_START = 3;
+      for (var row = DATA_START; row < data.length; row++) {
+        var nameCell = trim(String(data[row][0] || ''));
+        if (!nameCell) continue;
+        // Пропускаємо рядки-заголовки груп (вчителів) — вони не мають даних в стовпцях оплат
+        // Евристика: якщо рядок містить слово "група" або всі числові клітинки порожні в діапазоні
+        var bl = trim(String(data[row][absCols[0]] || ''));
+        var bm = trim(String(data[row][absCols[1]] || ''));
+        var bn = trim(String(data[row][absCols[2]] || ''));
+        var bo = trim(String(data[row][absCols[3]] || ''));
+
+        if (!bl && !bm && !bn && !bo) continue; // порожній рядок — пропускаємо
+
+        var parts = [bl, bm, bn, bo];
+        var parsed = parts.map(function(p) {
+          var res = parseAbsencePeriod(p, refYear);
+          if (p && !res) Logger.log(loc + ' | ' + nameCell + ' | UNPARSED: [' + p + ']');
+          return res ? (res.from + '→' + res.to) : (p ? '?' : '-');
+        });
+
+        Logger.log(
+          loc + ' | ' + nameCell +
+          ' | BL=[' + bl + '] BM=[' + bm + '] BN=[' + bn + '] BO=[' + bo + ']' +
+          ' | parsed: ' + parsed.join(' / ')
+        );
+      }
+    } catch (e) {
+      Logger.log(loc + ' | ERROR: ' + e.message);
+    }
+  }
+
+  Logger.log('=== diagnoseAbsences END ===');
+}
