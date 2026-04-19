@@ -1020,14 +1020,27 @@ function mergeCRMFromCloud(rows){
 // ─── НОРМАЛІЗАЦІЯ ГРУПИ ──────────────────────────────────────────────────────
 // Офіційні групи для розпізнавання типу групи
 var GROUP_PATTERNS=[
+  // Стандартні англійські назви
   {re:/mini.?baby/i,  name:'miniBaby-ki'},
   {re:/^baby/i,       name:'Baby-ki'},
   {re:/find/i,        name:'Find-iki'},
   {re:/study/i,       name:'Study-ki'},
   {re:/preschool/i,   name:'Preschool'},
   {re:/чомус/i,       name:'Чомусики'},
-  {re:/^школа$/i,     name:'Школа'},
-  {re:/^гхзд$/i,      name:'ГХЗД'}
+  {re:/^гхзд$/i,      name:'ГХЗД'},
+  // Благо (Манхетен, Нац.Гвардії) — українські назви груп
+  {re:/мама[\s\+]*я/i, name:'miniBaby-ki'},  // мама+я
+  {re:/малюк/i,        name:'Baby-ki'},       // Малюки
+  {re:/карапуз/i,      name:'Baby-ki'},       // Карапузи
+  {re:/пізнайк/i,      name:'Study-ki'},      // Пізнайки
+  {re:/бешкетн/i,      name:'Find-iki'},      // Бешкетники
+  {re:/мандрівн/i,     name:'Study-ki'},      // Мандрівники
+  {re:/дослідн/i,      name:'Study-ki'},      // Дослідники
+  {re:/розумник/i,     name:'Preschool'},     // Розумники → тільки лікарняний
+  // Школи — будь-яка назва класу з цифрою
+  // "1 клас", "2 Б", "3 В", "1D клас 2025", "2S клас 2024", "2 D 2024", "1 клас 26/27"
+  {re:/^\s*\d+\s*([dDsS]\s*(клас|кл)?|класс?|кл\.?|[бвБВ])/i, name:'Школа'},
+  {re:/^школа$/i,      name:'Школа'}
 ];
 
 // Визначає тип групи (для нормалізації написання)
@@ -1046,8 +1059,12 @@ function parseGroupField(raw){
     }
   }
   if(!groupType) return {groupType:s,teacher:''};
-  // Витягуємо вихователя — все що після першого слова (назви групи)
+  // Школа: назва класу може містити рік/секцію ("1 клас 26/27") — не витягуємо вчителя з неї
+  if(groupType==='Школа') return {groupType:groupType,teacher:''};
+  // Для інших груп: вчитель — все що після першого пробілу
   // "Preschool Юля Фещенко" → teacher="Юля Фещенко"
+  // "Розумники Маша" → teacher="Маша"
+  // "Find-iki" → teacher=""
   var firstSpace=s.search(/\s/);
   var teacher=firstSpace>0?s.slice(firstSpace).trim():'';
   return {groupType:groupType, teacher:teacher};

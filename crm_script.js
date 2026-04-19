@@ -25,19 +25,43 @@ var GROUP_PATTERNS = [
   /preschool/i,
   /чомус/i,
   /^школа$/i,
-  /^гхзд$/i
+  /^гхзд$/i,
+  // Благо (Манхетен, Нац.Гвардії) — українські назви груп
+  /мама[\s\+]*я/i,
+  /малюк/i,
+  /карапуз/i,
+  /пізнайк/i,
+  /бешкетн/i,
+  /мандрівн/i,
+  /дослідн/i,
+  /розумник/i,
+  // Школи — будь-яка назва класу з цифрою
+  /^\s*\d+\s*([dDsS]\s*(клас|кл)?|класс?|кл\.?|[бвБВ])/
 ];
 
 function normalizeGroupName(raw) {
   var s = trim(raw);
+  // ── Стандартні англійські назви ──────────────────────────────────────────
   if (/mini.?baby/i.test(s))  return 'miniBaby-ki';
   if (/^baby/i.test(s))       return 'Baby-ki';
   if (/find/i.test(s))        return 'Find-iki';
   if (/study/i.test(s))       return 'Study-ki';
   if (/preschool/i.test(s))   return 'Preschool';
   if (/чомус/i.test(s))       return 'Чомусики';
-  if (/^школа$/i.test(s))     return 'Школа';
   if (/^гхзд$/i.test(s))      return 'ГХЗД';
+  // ── Благо — українські назви груп ────────────────────────────────────────
+  if (/мама[\s\+]*я/i.test(s))  return 'miniBaby-ki';  // мама+я → miniBaby-ki
+  if (/малюк/i.test(s))         return 'Baby-ki';       // Малюки
+  if (/карапуз/i.test(s))       return 'Baby-ki';       // Карапузи
+  if (/пізнайк/i.test(s))       return 'Study-ki';      // Пізнайки
+  if (/бешкетн/i.test(s))       return 'Find-iki';      // Бешкетники
+  if (/мандрівн/i.test(s))      return 'Study-ki';      // Мандрівники
+  if (/дослідн/i.test(s))       return 'Study-ki';      // Дослідники
+  if (/розумник/i.test(s))      return 'Preschool';     // Розумники → Preschool (тільки лікарняний)
+  // ── Школи — будь-яка назва класу ─────────────────────────────────────────
+  // Розпізнає: "1 клас", "2 Б", "3 В", "1D клас 2025", "2S клас 2024", "2 D 2024", "1 клас 26/27"
+  if (/^\s*\d+\s*([dDsS]\s*(клас|кл)?|класс?|кл\.?|[бвБВ])/i.test(s)) return 'Школа';
+  if (/^школа$/i.test(s))       return 'Школа';
   return s;
 }
 
