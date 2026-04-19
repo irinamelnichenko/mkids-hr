@@ -242,6 +242,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
 .att-mode-btn.active{border-color:var(--green);background:var(--green);color:#fff}
 .att-chip{padding:5px 12px;border:1.5px solid #e8ecf0;border-radius:20px;background:#fff;font-size:12px;font-weight:600;cursor:pointer;color:var(--gray);transition:all .2s}
 .att-chip-active{border-color:var(--blue2);background:var(--blue2);color:#fff}
+.att-loc-row td{background:#eef4ff;color:var(--dark);font-weight:700;font-size:12px;padding:6px 10px;border-top:2px solid var(--blue2)}
 .att-stats{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;padding:10px 14px;background:#fff;border-radius:10px;box-shadow:var(--sh);align-items:center}
 .att-stat{text-align:center;min-width:64px}
 .att-stat-n{font-size:19px;font-weight:800;color:var(--dark);line-height:1}
@@ -722,6 +723,7 @@ var S = {
   attLoc:   '',        // HR filter
   attGroup: '',        // group filter
   attLocType: '',      // тип локації: ''|'Садочок'|'Школа'|'Управління'
+  _displayLocs: [],    // поточний масив activeLocs (для markAllPresent)
   _sickIgnore: {},     // {childId: true} — ігнорувати підказку лікарняного
   // Attendance cloud sync
   _attPendingChanges: [],  // [{date,childId,status,...}] — черга хмарного збереження
@@ -2699,7 +2701,8 @@ function cycleAttStatus(dateStr, cId){
 
 function markAllPresent(dateStr, loc, group){
   // Відмічає всіх дітей локації/групи присутніми якщо ще не відмічені
-  var locs=loc?[loc]:Object.keys(S.groups);
+  // Якщо loc='' — використовує поточний відфільтрований список (S._displayLocs)
+  var locs=loc?[loc]:(S._displayLocs&&S._displayLocs.length?S._displayLocs:Object.keys(S.groups));
   locs.forEach(function(l){
     (S.groups[l]||[]).forEach(function(g){
       if(group&&g.group!==group) return;
@@ -2787,7 +2790,7 @@ function renderAttendance(){
   if(!S.attMonth) S.attMonth=curToday.slice(0,7);
   if(!S.attYear)  S.attYear=curToday.slice(0,4);
 
-  // Локація — спочатку будуємо повний список
+  // Повний список локацій
   var allAvailLocs;
   if(isNurse()){
     allAvailLocs=[S.user.loc];
@@ -2797,17 +2800,22 @@ function renderAttendance(){
     if(!allAvailLocs.length) allAvailLocs=S.locs.map(function(l){ return l.loc; });
   }
 
-  // Фільтр за типом локації
+  // Фільтр за чіпом типу
   var availLocs=S.attLocType
     ? allAvailLocs.filter(function(l){ return getLocTypeByLoc(l)===S.attLocType; })
     : allAvailLocs;
-  if(!availLocs.length) availLocs=allAvailLocs; // якщо фільтр дав порожній список — показуємо всі
+  if(!availLocs.length) availLocs=allAvailLocs;
 
-  // Якщо поточна локація не входить у відфільтровані — скидаємо
+  // Якщо обрана локація вийшла за межі фільтру — скидаємо до «Всі»
   if(S.attLoc && availLocs.indexOf(S.attLoc)<0) S.attLoc='';
-  var activeLoc=S.attLoc||availLocs[0]||'';
 
-  // Визначаємо діапазон для завантаження
+  // activeLocs: масив локацій для відображення (всі або одна)
+  var activeLocs=S.attLoc?[S.attLoc]:availLocs;
+
+  // Зберігаємо для markAllPresent
+  S._displayLocs=activeLocs;
+
+  // Діапазон для хмарного завантаження
   var from, to;
   if(S.attMode==='week'){
     from=S.attWeek; to=attAddDays(S.attWeek,4);
@@ -2818,45 +2826,66 @@ function renderAttendance(){
   } else {
     from=S.attDay; to=S.attDay;
   }
-  var cacheKey=activeLoc+'::'+from+'::'+to;
+  var cacheKey=activeLocs.join(',')+'::'+from+'::'+to;
 
-  // Хмарне завантаження (не для року — агрегуємо з вже завантажених даних)
+  // Хмарне завантаження — послідовно для кожної локації
   if(S.attMode!=='year' && !S._attCloudLoaded[cacheKey] && !S._attLoading){
     S._attLoading=true;
-    main.innerHTML='<div class="loading"><div class="spinner"></div><p>Завантаження табеля з хмари…</p></div>';
-    loadAttendanceCloudRange(activeLoc, from, to, function(err){
-      S._attLoading=false;
-      S._attCloudLoaded[cacheKey]=true;
-      if(err) showFloatMsg('⚠️ Хмара недоступна — показано локальні дані');
-      renderAttendance();
-    });
+    var locsToLoad=activeLocs.slice();
+    var loadedCount=0, totalLoad=locsToLoad.length;
+    main.innerHTML='<div class="loading"><div class="spinner"></div><p>Завантаження табеля… (0/'+totalLoad+')</p></div>';
+    function loadNextLoc(){
+      if(!locsToLoad.length){
+        S._attLoading=false;
+        S._attCloudLoaded[cacheKey]=true;
+        renderAttendance();
+        return;
+      }
+      var nextLoc=locsToLoad.shift();
+      loadedCount++;
+      main.innerHTML='<div class="loading"><div class="spinner"></div><p>Завантаження табеля… ('+loadedCount+'/'+totalLoad+')</p></div>';
+      loadAttendanceCloudRange(nextLoc, from, to, function(err){
+        if(err) showFloatMsg('⚠️ '+nextLoc+': хмара недоступна');
+        loadNextLoc();
+      });
+    }
+    loadNextLoc();
     return;
   }
 
-  // Групи
-  var groups=(S.groups[activeLoc]||[]).map(function(g){ return g.group; });
+  // Всі групи з усіх activeLocs (для дропдауну груп)
+  var allGroupNames=[];
+  activeLocs.forEach(function(loc){
+    (S.groups[loc]||[]).forEach(function(g){
+      if(allGroupNames.indexOf(g.group)<0) allGroupNames.push(g.group);
+    });
+  });
   var activeGroup=S.attGroup;
-  if(activeGroup && groups.indexOf(activeGroup)<0) activeGroup='';
+  if(activeGroup && allGroupNames.indexOf(activeGroup)<0) activeGroup='';
 
-  // ── Фільтр-чіпи типів (не для медсестри) ──────────────────────────────────
+  // ── Чіпи типів ─────────────────────────────────────────────────────────────
   var typeChips='';
   if(!isNurse()){
     var chips=[['','📋 Всі'],['Садочок','🌱 Садочок'],['Школа','🏫 Школа'],['Управління','🏢 Управління']];
     typeChips='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">'
       +chips.map(function(c){
         var active=S.attLocType===c[0];
-        return '<button class="att-chip'+(active?' att-chip-active':'')+'" onclick="S.attLocType=\''+c[0]+'\';S.attLoc=\'\';S._attCloudLoaded={};renderAttendance()">'+c[1]+'</button>';
-      }).join('')
-      +'</div>';
+        return '<button class="att-chip'+(active?' att-chip-active':'')+'" onclick="S.attLocType=\''+c[0]+'\';S.attLoc=\'\';S.attGroup=\'\';S._attCloudLoaded={};renderAttendance()">'+c[1]+'</button>';
+      }).join('')+'</div>';
   }
 
+  // ── Дропдаун локацій ───────────────────────────────────────────────────────
+  var typeNames={'Садочок':'садочки','Школа':'школи','Управління':'управління'};
+  var allLocsLabel=S.attLocType?'Всі локації ('+typeNames[S.attLocType]+')':'Всі локації';
   var locSel=isNurse()?''
     :'<select onchange="S.attLoc=this.value;S.attGroup=\'\';S._attCloudLoaded={};renderAttendance()" style="padding:7px 10px;border:1.5px solid var(--gray2);border-radius:8px;font-size:13px;font-family:inherit">'
-    +availLocs.map(function(l){ return '<option value="'+esc(l)+'"'+(l===activeLoc?' selected':'')+'>'+esc(l)+'</option>'; }).join('')+'</select>';
+    +'<option value=""'+(S.attLoc===''?' selected':'')+'>'+esc(allLocsLabel)+'</option>'
+    +availLocs.map(function(l){ return '<option value="'+esc(l)+'"'+(l===S.attLoc?' selected':'')+'>'+esc(l)+'</option>'; }).join('')+'</select>';
 
+  // ── Дропдаун груп ──────────────────────────────────────────────────────────
   var groupSel='<select onchange="S.attGroup=this.value;renderAttendance()" style="padding:7px 10px;border:1.5px solid var(--gray2);border-radius:8px;font-size:13px;font-family:inherit">'
     +'<option value="">Всі групи</option>'
-    +groups.map(function(g){ return '<option value="'+esc(g)+'"'+(g===activeGroup?' selected':'')+'>'+esc(g)+'</option>'; }).join('')+'</select>';
+    +allGroupNames.map(function(g){ return '<option value="'+esc(g)+'"'+(g===activeGroup?' selected':'')+'>'+esc(g)+'</option>'; }).join('')+'</select>';
 
   var modeBar='<div class="att-mode-bar">'
     +(locSel?locSel+' ':'')
@@ -2868,13 +2897,24 @@ function renderAttendance(){
     +'<button class="att-mode-btn" title="Оновити з хмари" onclick="S._attCloudLoaded={};renderAttendance()">🔄</button>'
     +'</div>';
 
-  var migBanner=maybeShowAttMigrationBanner(null, activeLoc);
+  // ── Підпис поточного вибору ────────────────────────────────────────────────
+  var childCount=0;
+  activeLocs.forEach(function(loc){
+    (S.groups[loc]||[]).forEach(function(g){
+      if(activeGroup&&g.group!==activeGroup) return;
+      childCount+=g.children.length;
+    });
+  });
+  var locLabel=S.attLoc?S.attLoc:(S.attLocType?typeNames[S.attLocType]+' — всі локації':'всі локації');
+  var infoLine='<div style="font-size:12px;color:var(--gray);margin-bottom:6px">📋 Табель: <b>'+esc(locLabel)+(activeGroup?' / '+esc(activeGroup):'')+'</b> <span style="color:var(--blue2)">('+childCount+' дітей)</span></div>';
+
+  var migBanner=maybeShowAttMigrationBanner(null, S.attLoc||activeLocs[0]||'');
 
   var content='';
-  if(S.attMode==='week')       content=renderAttendanceWeek(activeLoc,activeGroup);
-  else if(S.attMode==='month') content=renderAttendanceMonth(activeLoc,activeGroup);
-  else if(S.attMode==='year')  content=renderAttendanceYear(activeLoc,activeGroup);
-  else                         content=renderAttendanceDay(activeLoc,activeGroup);
+  if(S.attMode==='week')       content=renderAttendanceWeek(activeLocs,activeGroup);
+  else if(S.attMode==='month') content=renderAttendanceMonth(activeLocs,activeGroup);
+  else if(S.attMode==='year')  content=renderAttendanceYear(activeLocs,activeGroup);
+  else                         content=renderAttendanceDay(activeLocs,activeGroup);
 
   // ── Статистика ────────────────────────────────────────────────────────────
   var nPresent=0,nSick=0,nVac=0,nAbsent=0,nTotal=0;
@@ -2882,42 +2922,33 @@ function renderAttendance(){
   if(S.attMode==='week')       statDays=attWeekDays(S.attWeek);
   else if(S.attMode==='month') statDays=attGetMonthWorkdays(S.attMonth);
   else if(S.attMode==='year'){
-    // Рік: статистика по кількості дітей (рядків)
-    var childCount=0;
-    (S.groups[activeLoc]||[]).forEach(function(g){
-      if(activeGroup&&g.group!==activeGroup) return;
-      childCount+=g.children.length;
-    });
-    var statsLbl='дітей';
     var stats='<div class="att-stats">'
-      +'<div class="att-stat"><div class="att-stat-n">'+childCount+'</div><div class="att-stat-l">'+statsLbl+'</div></div>'
+      +'<div class="att-stat"><div class="att-stat-n">'+childCount+'</div><div class="att-stat-l">дітей</div></div>'
       +'<div class="att-stat"><div class="att-stat-n" style="color:var(--green)">'+S.attYear+'</div><div class="att-stat-l">📊 Рік</div></div>'
       +'</div>';
-    main.innerHTML=migBanner+typeChips+modeBar+stats+content;
+    main.innerHTML=migBanner+typeChips+infoLine+modeBar+stats+content;
     return;
   } else {
     statDays=[S.attDay];
   }
 
-  (S.groups[activeLoc]||[]).forEach(function(g){
-    if(activeGroup&&g.group!==activeGroup) return;
-    g.children.forEach(function(ch){
-      statDays.forEach(function(sd){
-        var st=(S.att[sd]||{})[ch.id]||'';
-        if(st) nTotal++;
-        if(st==='present') nPresent++;
-        else if(st==='sick') nSick++;
-        else if(st==='vacation') nVac++;
-        else if(st==='absent') nAbsent++;
+  activeLocs.forEach(function(loc){
+    (S.groups[loc]||[]).forEach(function(g){
+      if(activeGroup&&g.group!==activeGroup) return;
+      g.children.forEach(function(ch){
+        statDays.forEach(function(sd){
+          var st=(S.att[sd]||{})[ch.id]||'';
+          if(st) nTotal++;
+          if(st==='present') nPresent++;
+          else if(st==='sick') nSick++;
+          else if(st==='vacation') nVac++;
+          else if(st==='absent') nAbsent++;
+        });
       });
     });
   });
 
-  var statsLbl;
-  if(S.attMode==='week')        statsLbl='позначок за тиждень';
-  else if(S.attMode==='month')  statsLbl='позначок за місяць';
-  else                          statsLbl='дітей';
-
+  var statsLbl=S.attMode==='week'?'позначок за тиждень':S.attMode==='month'?'позначок за місяць':'дітей';
   var stats='<div class="att-stats">'
     +'<div class="att-stat"><div class="att-stat-n">'+nTotal+'</div><div class="att-stat-l">'+statsLbl+'</div></div>'
     +'<div class="att-stat"><div class="att-stat-n" style="color:var(--green)">'+nPresent+'</div><div class="att-stat-l">✅ Присутні</div></div>'
@@ -2926,44 +2957,48 @@ function renderAttendance(){
     +'<div class="att-stat"><div class="att-stat-n" style="color:var(--red2)">'+nAbsent+'</div><div class="att-stat-l">🚫 Інше</div></div>'
     +'</div>';
 
-  main.innerHTML=migBanner+typeChips+modeBar+stats+content;
+  main.innerHTML=migBanner+typeChips+infoLine+modeBar+stats+content;
 }
 
-function renderAttendanceWeek(loc,group){
+function renderAttendanceWeek(locs,group){
   var days=attWeekDays(S.attWeek);
   var prevWeek=attAddDays(S.attWeek,-7), nextWeek=attAddDays(S.attWeek,7);
   var todayStr=today();
+  var multiLoc=locs.length>1;
+  var markLoc=locs.length===1?locs[0]:'';
 
   var nav='<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">'
-    +'<button class="btn btn-secondary btn-sm" onclick="S.attWeek=\''+prevWeek+'\';renderAttendance()">◀ Тиждень</button>'
+    +'<button class="btn btn-secondary btn-sm" onclick="S.attWeek=\''+prevWeek+'\';S._attCloudLoaded={};renderAttendance()">◀ Тиждень</button>'
     +'<b style="font-size:14px">'+fmtD(days[0])+' – '+fmtD(days[4])+'</b>'
-    +'<button class="btn btn-secondary btn-sm" onclick="S.attWeek=\''+nextWeek+'\';renderAttendance()">Тиждень ▶</button>'
-    +'<button class="btn btn-secondary btn-sm" onclick="S.attWeek=attMondayOfWeek(today());renderAttendance()">Сьогодні</button>'
-    +'<button class="btn btn-primary btn-sm" onclick="markAllPresent(\''+fmtToday()+'\',\''+esc(loc)+'\',\''+esc(group||'')+'\')">✅ Всі присутні</button>'
+    +'<button class="btn btn-secondary btn-sm" onclick="S.attWeek=\''+nextWeek+'\';S._attCloudLoaded={};renderAttendance()">Тиждень ▶</button>'
+    +'<button class="btn btn-secondary btn-sm" onclick="S.attWeek=attMondayOfWeek(today());S._attCloudLoaded={};renderAttendance()">Сьогодні</button>'
+    +'<button class="btn btn-primary btn-sm" onclick="markAllPresent(\''+todayStr+'\',\''+esc(markLoc)+'\',\''+esc(group||'')+'\')">✅ Всі присутні</button>'
     +'</div>';
-
-  function fmtToday(){ return todayStr; }
 
   var thead='<tr><th class="nc">Дитина</th>'
     +days.map(function(d){ var dow=pd(d).getDay(); return '<th style="min-width:70px;'+(d===todayStr?'background:#e8f8f0;color:var(--green)':'')+'">'+DAY_UA[dow]+'<br><span style="font-weight:400;font-size:10px">'+fmtD(d)+'</span></th>'; }).join('')
     +'</tr>';
 
-  var groups=S.groups[loc]||[];
   var rows='';
-  groups.forEach(function(g){
-    if(group&&g.group!==group) return;
-    rows+='<tr class="grp-row"><td colspan="'+(days.length+1)+'">📚 '+esc(g.group)+(g.teacher?' · '+esc(g.teacher):'')+'</td></tr>';
-    g.children.forEach(function(ch){
-      var streak=getSickStreak(ch.id,todayStr);
-      var streakHtml=streak>=3?'<span class="att-streak">'+streak+'д🤒</span>':'';
-      rows+='<tr><td class="nc" title="'+esc(ch.name)+'">'+esc(ch.name.split(' ').slice(0,2).join(' '))+streakHtml+'</td>';
-      days.forEach(function(d){
-        var st=(S.att[d]||{})[ch.id]||'';
-        var cls=ATT_STATUS_CLASS[st]||'';
-        var ico=ATT_STATUS_ICON[st]||'';
-        rows+='<td><button class="att-btn '+cls+'" title="'+esc(ATT_STATUS_LABEL[st]||'Не відмічено')+'" onclick="cycleAttStatus(\''+d+'\',\''+esc(ch.id)+'\')">'+ico+'</button></td>';
+  locs.forEach(function(loc){
+    var locGroups=S.groups[loc]||[];
+    if(!locGroups.length) return;
+    if(multiLoc) rows+='<tr class="att-loc-row"><td colspan="'+(days.length+1)+'">📍 '+esc(loc)+'</td></tr>';
+    locGroups.forEach(function(g){
+      if(group&&g.group!==group) return;
+      rows+='<tr class="grp-row"><td colspan="'+(days.length+1)+'">📚 '+esc(g.group)+(g.teacher?' · '+esc(g.teacher):'')+'</td></tr>';
+      g.children.forEach(function(ch){
+        var streak=getSickStreak(ch.id,todayStr);
+        var streakHtml=streak>=3?'<span class="att-streak">'+streak+'д🤒</span>':'';
+        rows+='<tr><td class="nc" title="'+esc(ch.name)+'">'+esc(ch.name.split(' ').slice(0,2).join(' '))+streakHtml+'</td>';
+        days.forEach(function(d){
+          var st=(S.att[d]||{})[ch.id]||'';
+          var cls=ATT_STATUS_CLASS[st]||'';
+          var ico=ATT_STATUS_ICON[st]||'';
+          rows+='<td><button class="att-btn '+cls+'" title="'+esc(ATT_STATUS_LABEL[st]||'Не відмічено')+'" onclick="cycleAttStatus(\''+d+'\',\''+esc(ch.id)+'\')">'+ico+'</button></td>';
+        });
+        rows+='</tr>';
       });
-      rows+='</tr>';
     });
   });
 
@@ -2973,36 +3008,42 @@ function renderAttendanceWeek(loc,group){
     +'<p style="font-size:11px;color:var(--gray);margin-top:8px">Клікайте по кнопці щоб змінити статус: — → ✅ → 🤒 → 🏖 → 🚫 → —</p>';
 }
 
-function renderAttendanceDay(loc,group){
+function renderAttendanceDay(locs,group){
   var dateStr=S.attDay;
   var todayStr=today();
   var prevDay=attPrevWorkday(dateStr), nextDay=attNextWorkday(dateStr);
+  var multiLoc=locs.length>1;
+  var markLoc=locs.length===1?locs[0]:'';
 
   var dow=pd(dateStr)?pd(dateStr).getDay():1;
   var nav='<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">'
-    +'<button class="btn btn-secondary btn-sm" onclick="S.attDay=\''+prevDay+'\';renderAttendance()">◀ День</button>'
+    +'<button class="btn btn-secondary btn-sm" onclick="S.attDay=\''+prevDay+'\';S._attCloudLoaded={};renderAttendance()">◀ День</button>'
     +'<b style="font-size:14px">'+DAY_UA_FULL[dow]+', '+fmtD(dateStr)+'</b>'
-    +'<button class="btn btn-secondary btn-sm" onclick="S.attDay=\''+nextDay+'\';renderAttendance()">День ▶</button>'
-    +'<button class="btn btn-secondary btn-sm" onclick="S.attDay=today();renderAttendance()">Сьогодні</button>'
-    +'<button class="btn btn-primary btn-sm" onclick="markAllPresent(\''+esc(dateStr)+'\',\''+esc(loc)+'\',\''+esc(group||'')+'\')">✅ Всі присутні</button>'
+    +'<button class="btn btn-secondary btn-sm" onclick="S.attDay=\''+nextDay+'\';S._attCloudLoaded={};renderAttendance()">День ▶</button>'
+    +'<button class="btn btn-secondary btn-sm" onclick="S.attDay=today();S._attCloudLoaded={};renderAttendance()">Сьогодні</button>'
+    +'<button class="btn btn-primary btn-sm" onclick="markAllPresent(\''+esc(dateStr)+'\',\''+esc(markLoc)+'\',\''+esc(group||'')+'\')">✅ Всі присутні</button>'
     +'</div>';
 
-  var groups=S.groups[loc]||[];
   var rows='';
-  groups.forEach(function(g){
-    if(group&&g.group!==group) return;
-    rows+='<div style="font-size:12px;font-weight:700;text-transform:uppercase;color:var(--gray);padding:8px 0 4px">📚 '+esc(g.group)+(g.teacher?' · '+esc(g.teacher):'')+'</div>';
-    g.children.forEach(function(ch){
-      var st=(S.att[dateStr]||{})[ch.id]||'';
-      var streak=getSickStreak(ch.id,todayStr);
-      var streakHtml=streak>=3?'<span class="att-streak">'+streak+'д🤒</span>':'';
-      rows+='<div class="att-day-row">'
-        +'<span class="att-day-name" onclick="openChild(\''+esc(ch.id)+'\',\''+esc(ch.group)+'\',\''+esc(ch.teacher||'')+'\',\''+esc(ch.loc)+'\',\''+esc(ch.name)+'\')">'+esc(ch.name)+streakHtml+'</span>'
-        +'<div class="att-day-btns">'
-        +['present','sick','vacation','absent'].map(function(s){
-          return '<button class="att-day-btn'+(st===s?' att-s-'+s:'')+'" title="'+ATT_STATUS_LABEL[s]+'" onclick="setAttStatus(\''+esc(dateStr)+'\',\''+esc(ch.id)+'\',\''+(st===s?'':s)+'\');renderAttendance()">'+ATT_STATUS_ICON[s]+'</button>';
-        }).join('')
-        +'</div></div>';
+  locs.forEach(function(loc){
+    var locGroups=S.groups[loc]||[];
+    if(!locGroups.length) return;
+    if(multiLoc) rows+='<div style="font-size:13px;font-weight:800;color:var(--dark);padding:10px 0 4px;border-top:2px solid var(--gray2);margin-top:8px">📍 '+esc(loc)+'</div>';
+    locGroups.forEach(function(g){
+      if(group&&g.group!==group) return;
+      rows+='<div style="font-size:12px;font-weight:700;text-transform:uppercase;color:var(--gray);padding:8px 0 4px">📚 '+esc(g.group)+(g.teacher?' · '+esc(g.teacher):'')+'</div>';
+      g.children.forEach(function(ch){
+        var st=(S.att[dateStr]||{})[ch.id]||'';
+        var streak=getSickStreak(ch.id,todayStr);
+        var streakHtml=streak>=3?'<span class="att-streak">'+streak+'д🤒</span>':'';
+        rows+='<div class="att-day-row">'
+          +'<span class="att-day-name" onclick="openChild(\''+esc(ch.id)+'\',\''+esc(ch.group)+'\',\''+esc(ch.teacher||'')+'\',\''+esc(ch.loc)+'\',\''+esc(ch.name)+'\')">'+esc(ch.name)+streakHtml+'</span>'
+          +'<div class="att-day-btns">'
+          +['present','sick','vacation','absent'].map(function(s){
+            return '<button class="att-day-btn'+(st===s?' att-s-'+s:'')+'" title="'+ATT_STATUS_LABEL[s]+'" onclick="setAttStatus(\''+esc(dateStr)+'\',\''+esc(ch.id)+'\',\''+(st===s?'':s)+'\');renderAttendance()">'+ATT_STATUS_ICON[s]+'</button>';
+          }).join('')
+          +'</div></div>';
+      });
     });
   });
 
@@ -3011,20 +3052,19 @@ function renderAttendanceDay(loc,group){
   return '<div class="card" style="padding:14px">'+nav+rows+'</div>';
 }
 
-function renderAttendanceMonth(loc,group){
+function renderAttendanceMonth(locs,group){
   var ym=S.attMonth;
   var parts=ym.split('-');
   var year=+parts[0], mon=+parts[1]-1;
   var days=attGetMonthWorkdays(ym);
   var todayStr=today();
+  var multiLoc=locs.length>1;
 
-  // Навігація
   var prevYm=new Date(year,mon-1,1); var prevStr=localDateStr(prevYm).slice(0,7);
   var nextYm=new Date(year,mon+1,1); var nextStr=localDateStr(nextYm).slice(0,7);
   var curYm=todayStr.slice(0,7);
   var monthLabel=CFG.MONTHS_DISP[mon]+' '+year;
 
-  // Місяць-дропдаун
   var monthSel='<select onchange="S.attMonth=this.value;S._attCloudLoaded={};renderAttendance()" style="padding:4px 8px;border:1.5px solid var(--gray2);border-radius:8px;font-size:13px;font-family:inherit">'
     +CFG.MONTHS_DISP.map(function(m,i){
       var v=year+'-'+String(i+1).padStart(2,'0');
@@ -3039,7 +3079,6 @@ function renderAttendanceMonth(loc,group){
     +(ym!==curYm?'<button class="btn btn-secondary btn-sm" onclick="S.attMonth=\''+curYm+'\';S._attCloudLoaded={};renderAttendance()">Поточний</button>':'')
     +'</div>';
 
-  // Заголовок таблиці — дні місяця
   var thead='<thead><tr>'
     +'<th class="nc" style="position:sticky;left:0;background:#fff;z-index:2;min-width:130px">Дитина</th>'
     +days.map(function(d){
@@ -3053,36 +3092,42 @@ function renderAttendanceMonth(loc,group){
     +'<th style="min-width:32px;font-size:11px;background:var(--bg2)">🚫</th>'
     +'</tr></thead>';
 
-  var allGroups=S.groups[loc]||[];
   var tbody='<tbody>';
-  allGroups.forEach(function(g){
-    if(group&&g.group!==group) return;
-    tbody+='<tr class="grp-row"><td colspan="'+(days.length+5)+'">📚 '+esc(g.group)+(g.teacher?' · '+esc(g.teacher):'')+'</td></tr>';
-    g.children.forEach(function(ch){
-      var cp=0,cs=0,cv=0,ca=0;
-      var cells=days.map(function(d){
-        var st=(S.att[d]||{})[ch.id]||'';
-        var cls=ATT_STATUS_CLASS[st]||'';
-        var ico=ATT_STATUS_ICON[st]||'';
-        if(st==='present') cp++;
-        else if(st==='sick') cs++;
-        else if(st==='vacation') cv++;
-        else if(st==='absent') ca++;
-        return '<td style="padding:2px;text-align:center"><button class="att-btn '+cls+'" style="width:28px;height:28px;font-size:12px" title="'+esc(ATT_STATUS_LABEL[st]||'Не відмічено')+' — '+fmtD(d)+'" onclick="cycleAttStatus(\''+d+'\',\''+esc(ch.id)+'\')">'+ico+'</button></td>';
-      }).join('');
-      tbody+='<tr>'
-        +'<td class="nc" style="position:sticky;left:0;background:#fff;z-index:1;font-size:12px" title="'+esc(ch.name)+'">'+esc(ch.name.split(' ').slice(0,2).join(' '))+'</td>'
-        +cells
-        +'<td style="text-align:center;font-weight:700;color:var(--green);font-size:12px">'+cp+'</td>'
-        +'<td style="text-align:center;font-weight:700;color:var(--orange);font-size:12px">'+cs+'</td>'
-        +'<td style="text-align:center;font-weight:700;color:var(--blue2);font-size:12px">'+cv+'</td>'
-        +'<td style="text-align:center;font-weight:700;color:var(--red2);font-size:12px">'+ca+'</td>'
-        +'</tr>';
+  var anyRows=false;
+  locs.forEach(function(loc){
+    var locGroups=S.groups[loc]||[];
+    if(!locGroups.length) return;
+    if(multiLoc) tbody+='<tr class="att-loc-row"><td colspan="'+(days.length+5)+'">📍 '+esc(loc)+'</td></tr>';
+    locGroups.forEach(function(g){
+      if(group&&g.group!==group) return;
+      anyRows=true;
+      tbody+='<tr class="grp-row"><td colspan="'+(days.length+5)+'">📚 '+esc(g.group)+(g.teacher?' · '+esc(g.teacher):'')+'</td></tr>';
+      g.children.forEach(function(ch){
+        var cp=0,cs=0,cv=0,ca=0;
+        var cells=days.map(function(d){
+          var st=(S.att[d]||{})[ch.id]||'';
+          var cls=ATT_STATUS_CLASS[st]||'';
+          var ico=ATT_STATUS_ICON[st]||'';
+          if(st==='present') cp++;
+          else if(st==='sick') cs++;
+          else if(st==='vacation') cv++;
+          else if(st==='absent') ca++;
+          return '<td style="padding:2px;text-align:center"><button class="att-btn '+cls+'" style="width:28px;height:28px;font-size:12px" title="'+esc(ATT_STATUS_LABEL[st]||'Не відмічено')+' — '+fmtD(d)+'" onclick="cycleAttStatus(\''+d+'\',\''+esc(ch.id)+'\')">'+ico+'</button></td>';
+        }).join('');
+        tbody+='<tr>'
+          +'<td class="nc" style="position:sticky;left:0;background:#fff;z-index:1;font-size:12px" title="'+esc(ch.name)+'">'+esc(ch.name.split(' ').slice(0,2).join(' '))+'</td>'
+          +cells
+          +'<td style="text-align:center;font-weight:700;color:var(--green);font-size:12px">'+cp+'</td>'
+          +'<td style="text-align:center;font-weight:700;color:var(--orange);font-size:12px">'+cs+'</td>'
+          +'<td style="text-align:center;font-weight:700;color:var(--blue2);font-size:12px">'+cv+'</td>'
+          +'<td style="text-align:center;font-weight:700;color:var(--red2);font-size:12px">'+ca+'</td>'
+          +'</tr>';
+      });
     });
   });
   tbody+='</tbody>';
 
-  if(!allGroups.length) return '<div class="empty"><span class="ei">👶</span><h4>Немає дітей для цієї локації</h4></div>';
+  if(!anyRows) return '<div class="empty"><span class="ei">👶</span><h4>Немає дітей для цієї локації</h4></div>';
 
   return nav
     +'<div class="att-wrap" style="overflow-x:auto;max-width:100%">'
@@ -3090,20 +3135,20 @@ function renderAttendanceMonth(loc,group){
     +'<p style="font-size:11px;color:var(--gray);margin-top:8px">Клікайте по клітинці щоб змінити статус</p>';
 }
 
-function renderAttendanceYear(loc,group){
+function renderAttendanceYear(locs,group){
   var yr=S.attYear;
   var year=+yr;
   var todayStr=today();
   var curYear=todayStr.slice(0,4);
+  var multiLoc=locs.length>1;
 
   var nav='<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">'
-    +'<button class="btn btn-secondary btn-sm" onclick="S.attYear=\''+(year-1)+'\';renderAttendance()">◀ '+( year-1)+'</button>'
+    +'<button class="btn btn-secondary btn-sm" onclick="S.attYear=\''+(year-1)+'\';renderAttendance()">◀ '+(year-1)+'</button>'
     +'<b style="font-size:14px">'+year+' рік</b>'
     +'<button class="btn btn-secondary btn-sm" onclick="S.attYear=\''+(year+1)+'\';renderAttendance()">'+(year+1)+' ▶</button>'
     +(yr!==curYear?'<button class="btn btn-secondary btn-sm" onclick="S.attYear=\''+curYear+'\';renderAttendance()">Поточний</button>':'')
     +'</div>';
 
-  // Заголовок
   var thead='<thead><tr>'
     +'<th class="nc" style="position:sticky;left:0;background:#fff;z-index:2;min-width:130px">Дитина</th>'
     +CFG.MONTHS_SHORT.map(function(m,i){
@@ -3115,42 +3160,47 @@ function renderAttendanceYear(loc,group){
     +'<th style="min-width:40px;font-size:11px;background:#e3f2fd">🏖</th>'
     +'</tr></thead>';
 
-  var allGroups=S.groups[loc]||[];
   var tbody='<tbody>';
-  allGroups.forEach(function(g){
-    if(group&&g.group!==group) return;
-    tbody+='<tr class="grp-row"><td colspan="'+(12+4)+'">📚 '+esc(g.group)+(g.teacher?' · '+esc(g.teacher):'')+'</td></tr>';
-    g.children.forEach(function(ch){
-      var totP=0,totS=0,totV=0;
-      var cells=CFG.MONTHS_SHORT.map(function(m,i){
-        var ym=yr+'-'+String(i+1).padStart(2,'0');
-        var days=attGetMonthWorkdays(ym);
-        var cp=0,cs=0,cv=0,ca=0;
-        days.forEach(function(d){
-          var st=(S.att[d]||{})[ch.id]||'';
-          if(st==='present') cp++;
-          else if(st==='sick') cs++;
-          else if(st==='vacation') cv++;
-          else if(st==='absent') ca++;
-        });
-        totP+=cp; totS+=cs; totV+=cv;
-        var total=cp+cs+cv+ca;
-        var tip=cp+'✅ / '+cs+'🤒 / '+cv+'🏖 / '+ca+'🚫';
-        var bg=cp>0?'':'';
-        return '<td style="text-align:center;font-size:12px;cursor:pointer;'+(cp>0?'color:var(--green);font-weight:600':total>0?'color:var(--gray)':'color:#ccc')+'" title="'+tip+'" onclick="S.attMode=\'month\';S.attMonth=\''+ym+'\';S._attCloudLoaded={};renderAttendance()">'+(total>0?cp:'-')+'</td>';
-      }).join('');
-      tbody+='<tr>'
-        +'<td class="nc" style="position:sticky;left:0;background:#fff;z-index:1;font-size:12px" title="'+esc(ch.name)+'">'+esc(ch.name.split(' ').slice(0,2).join(' '))+'</td>'
-        +cells
-        +'<td style="text-align:center;font-weight:700;color:var(--green);font-size:12px">'+totP+'</td>'
-        +'<td style="text-align:center;font-weight:700;color:var(--orange);font-size:12px">'+totS+'</td>'
-        +'<td style="text-align:center;font-weight:700;color:var(--blue2);font-size:12px">'+totV+'</td>'
-        +'</tr>';
+  var anyRows=false;
+  locs.forEach(function(loc){
+    var locGroups=S.groups[loc]||[];
+    if(!locGroups.length) return;
+    if(multiLoc) tbody+='<tr class="att-loc-row"><td colspan="'+(12+4)+'">📍 '+esc(loc)+'</td></tr>';
+    locGroups.forEach(function(g){
+      if(group&&g.group!==group) return;
+      anyRows=true;
+      tbody+='<tr class="grp-row"><td colspan="'+(12+4)+'">📚 '+esc(g.group)+(g.teacher?' · '+esc(g.teacher):'')+'</td></tr>';
+      g.children.forEach(function(ch){
+        var totP=0,totS=0,totV=0;
+        var cells=CFG.MONTHS_SHORT.map(function(m,i){
+          var ym=yr+'-'+String(i+1).padStart(2,'0');
+          var mdays=attGetMonthWorkdays(ym);
+          var cp=0,cs=0,cv=0,ca=0;
+          mdays.forEach(function(d){
+            var st=(S.att[d]||{})[ch.id]||'';
+            if(st==='present') cp++;
+            else if(st==='sick') cs++;
+            else if(st==='vacation') cv++;
+            else if(st==='absent') ca++;
+          });
+          totP+=cp; totS+=cs; totV+=cv;
+          var total=cp+cs+cv+ca;
+          var tip=cp+'✅ / '+cs+'🤒 / '+cv+'🏖 / '+ca+'🚫';
+          return '<td style="text-align:center;font-size:12px;cursor:pointer;'+(cp>0?'color:var(--green);font-weight:600':total>0?'color:var(--gray)':'color:#ccc')+'" title="'+tip+'" onclick="S.attMode=\'month\';S.attMonth=\''+ym+'\';S._attCloudLoaded={};renderAttendance()">'+(total>0?cp:'-')+'</td>';
+        }).join('');
+        tbody+='<tr>'
+          +'<td class="nc" style="position:sticky;left:0;background:#fff;z-index:1;font-size:12px" title="'+esc(ch.name)+'">'+esc(ch.name.split(' ').slice(0,2).join(' '))+'</td>'
+          +cells
+          +'<td style="text-align:center;font-weight:700;color:var(--green);font-size:12px">'+totP+'</td>'
+          +'<td style="text-align:center;font-weight:700;color:var(--orange);font-size:12px">'+totS+'</td>'
+          +'<td style="text-align:center;font-weight:700;color:var(--blue2);font-size:12px">'+totV+'</td>'
+          +'</tr>';
+      });
     });
   });
   tbody+='</tbody>';
 
-  if(!allGroups.length) return '<div class="empty"><span class="ei">👶</span><h4>Немає дітей для цієї локації</h4></div>';
+  if(!anyRows) return '<div class="empty"><span class="ei">👶</span><h4>Немає дітей для цієї локації</h4></div>';
 
   return nav
     +'<div class="att-wrap" style="overflow-x:auto;max-width:100%">'
