@@ -2702,8 +2702,11 @@ function markAllPresent(dateStr, loc, group){
 
 function attMondayOfWeek(dateStr){
   var d=pd(dateStr)||new Date();
-  var dow=d.getDay(); // 0=Sun
-  var diff=dow===0?-6:1-dow;
+  var dow=d.getDay(); // 0=Нд,1=Пн,...,6=Сб
+  var diff;
+  if(dow===0)      diff=1;    // Нд → наступний Пн
+  else if(dow===6) diff=2;    // Сб → наступний Пн
+  else             diff=1-dow; // Пн(0)…Пт(-3) → Пн цього тижня
   var m=new Date(d.getTime()+diff*86400000);
   return m.toISOString().slice(0,10);
 }
