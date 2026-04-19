@@ -493,29 +493,46 @@ function toNum(v) {
   return isNaN(n) ? 0 : n;
 }
 // Конвертує дату договору у формат "YYYY-MM-DD"
-// Приймає:
-//   Date-об'єкт  (Google Sheets може повернути Date напряму)
-//   "01.09.2024" (DD.MM.YYYY)
-//   "06.09.23"   (DD.MM.YY)   → 2-значний рік: додає "20" спереду
-//   "6.10.25"    (D.MM.YY)
-//   "19.2.26"    (DD.M.YY)
+// Підтримувані формати (роздільники: крапка, слеш, вертикальна риска):
+//   Date-об'єкт            → через Utilities.formatDate
+//   "30.08.2021"  DD.MM.YYYY
+//   "06.09.23"    DD.MM.YY  → 2-значний рік: '20'+YY
+//   "30/08/21"    DD/MM/YY
+//   "06/09/24"    DD/MM/YY
+//   "05/23"       MM/YY    → день = 01
+//   "02/24"       MM/YY
+//   "10|2025"     MM|YYYY  → день = 01
+//   "07|25"       MM|YY    → день = 01
+//   "9|25"        M|YY     → день = 01
 // Повертає '' якщо порожньо або формат не розпізнано
 function parseDateDMY(v) {
   if (!v && v !== 0) return '';
-  // Google Sheets може повернути Date-об'єкт — конвертуємо через Apps Script API
+  // Google Sheets може повернути Date-об'єкт
   if (v instanceof Date) {
     if (isNaN(v.getTime())) return '';
     return Utilities.formatDate(v, 'Europe/Kiev', 'yyyy-MM-dd');
   }
   var s = trim(String(v));
   if (!s) return '';
-  // DD.MM.YYYY або DD.MM.YY (день і місяць 1-2 цифри, рік 2 або 4 цифри)
-  var m = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{2}|\d{4})$/);
-  if (!m) return '';
-  var day   = ('0' + m[1]).slice(-2);
-  var month = ('0' + m[2]).slice(-2);
-  var year  = m[3].length === 2 ? '20' + m[3] : m[3];
-  return year + '-' + month + '-' + day;
+  // Роздільник: крапка, слеш або вертикальна риска
+  var sep = s.indexOf('.') >= 0 ? '\\.' : s.indexOf('/') >= 0 ? '\\/' : s.indexOf('|') >= 0 ? '\\|' : null;
+  if (!sep) return '';
+  // 3 частини: DD sep MM sep YY/YYYY
+  var m3 = s.match(new RegExp('^(\\d{1,2})' + sep + '(\\d{1,2})' + sep + '(\\d{2}|\\d{4})$'));
+  if (m3) {
+    var day   = ('0' + m3[1]).slice(-2);
+    var month = ('0' + m3[2]).slice(-2);
+    var year  = m3[3].length === 2 ? '20' + m3[3] : m3[3];
+    return year + '-' + month + '-' + day;
+  }
+  // 2 частини: MM sep YY/YYYY → день = 01
+  var m2 = s.match(new RegExp('^(\\d{1,2})' + sep + '(\\d{2}|\\d{4})$'));
+  if (m2) {
+    var month = ('0' + m2[1]).slice(-2);
+    var year  = m2[2].length === 2 ? '20' + m2[2] : m2[2];
+    return year + '-' + month + '-01';
+  }
+  return '';
 }
 function formatDate(d) {
   return Utilities.formatDate(d, 'Europe/Kiev', 'dd.MM.yyyy HH:mm');
