@@ -846,14 +846,26 @@ function loadLocalCRM(){ try{ S.crm=JSON.parse(localStorage.getItem(CFG.SK)||'{}
 function saveLocalCRM(){ localStorage.setItem(CFG.SK,JSON.stringify(S.crm)); }
 
 function getCRMCard(id){
-  if(!S.crm[id]) S.crm[id]={
-    name:'',loc:'',group:'',teacher:'',bday:'',
-    momName:'',momPhone:'',dadName:'',dadPhone:'',
-    contractDate:'',contractType:'standard',monthlyFee:0,
-    entryFee:0,entryFeeSchedule:[],
-    status:'active',feeHistory:[],absences:[],notes:'',
-    createdAt:today(),updatedAt:today()
-  };
+  if(!S.crm[id]){
+    // Шукаємо contractDate з payments-даних (через S.groups)
+    var cdFromPay='';
+    outer: for(var loc in S.groups){
+      for(var gi=0;gi<S.groups[loc].length;gi++){
+        var g=S.groups[loc][gi];
+        for(var ci=0;ci<g.children.length;ci++){
+          if(g.children[ci].id===id){ cdFromPay=g.children[ci].contractDate||''; break outer; }
+        }
+      }
+    }
+    S.crm[id]={
+      name:'',loc:'',group:'',teacher:'',bday:'',
+      momName:'',momPhone:'',dadName:'',dadPhone:'',
+      contractDate:cdFromPay,contractType:'standard',monthlyFee:0,
+      entryFee:0,entryFeeSchedule:[],
+      status:'active',feeHistory:[],absences:[],notes:'',
+      createdAt:today(),updatedAt:today()
+    };
+  }
   return S.crm[id];
 }
 
@@ -1120,7 +1132,8 @@ function buildGroups(){
       name:name,loc:loc,group:grp,teacher:grpMap[key].teacher,
       factStudy:fs,factEntry:fv,factExtra:fe,factTotal:total,
       budgetStudy:bs,budgetExtra:be,budget:bud,
-      status:status,debt:debt,id:id
+      status:status,debt:debt,id:id,
+      contractDate:String(row['Дата договору']||'')
     };
     grpMap[key].children.push(child);
     if(status==='debt'||status==='nopay'){
