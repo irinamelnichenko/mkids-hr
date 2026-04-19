@@ -492,14 +492,30 @@ function toNum(v) {
   var n = parseFloat(String(v).replace(',', '.'));
   return isNaN(n) ? 0 : n;
 }
-// Конвертує "01.09.2024" (DD.MM.YYYY) → "2024-09-01" (YYYY-MM-DD)
-// Повертає порожній рядок якщо значення порожнє або формат не розпізнано
+// Конвертує дату договору у формат "YYYY-MM-DD"
+// Приймає:
+//   Date-об'єкт  (Google Sheets може повернути Date напряму)
+//   "01.09.2024" (DD.MM.YYYY)
+//   "06.09.23"   (DD.MM.YY)   → 2-значний рік: додає "20" спереду
+//   "6.10.25"    (D.MM.YY)
+//   "19.2.26"    (DD.M.YY)
+// Повертає '' якщо порожньо або формат не розпізнано
 function parseDateDMY(v) {
-  var s = trim(String(v || ''));
+  if (!v && v !== 0) return '';
+  // Google Sheets може повернути Date-об'єкт — конвертуємо через Apps Script API
+  if (v instanceof Date) {
+    if (isNaN(v.getTime())) return '';
+    return Utilities.formatDate(v, 'Europe/Kiev', 'yyyy-MM-dd');
+  }
+  var s = trim(String(v));
   if (!s) return '';
-  var m = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  // DD.MM.YYYY або DD.MM.YY (день і місяць 1-2 цифри, рік 2 або 4 цифри)
+  var m = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{2}|\d{4})$/);
   if (!m) return '';
-  return m[3] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[1]).slice(-2);
+  var day   = ('0' + m[1]).slice(-2);
+  var month = ('0' + m[2]).slice(-2);
+  var year  = m[3].length === 2 ? '20' + m[3] : m[3];
+  return year + '-' + month + '-' + day;
 }
 function formatDate(d) {
   return Utilities.formatDate(d, 'Europe/Kiev', 'dd.MM.yyyy HH:mm');
