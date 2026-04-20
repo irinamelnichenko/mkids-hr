@@ -737,8 +737,9 @@ var S = {
   debtLoc:     '',         // конкретна локація
   debtStatus:  '',         // ''|'debt'|'paid'|'over'  ('debt' включає і nopay)
   // Clients list filters
-  listLocType: '',         // type chip: ''|'Садочок'|'Школа'|'Управління'
-  listLoc:     ''          // конкретна локація в списку дітей
+  listLocType:  '',        // type chip: ''|'Садочок'|'Школа'|'Управління'
+  listLoc:      '',        // конкретна локація в списку дітей
+  onlyDebtors:  false      // тумблер "Тільки боржники"
 };
 
 // ─── UTILS ────────────────────────────────────────────────────────────────────
@@ -1476,6 +1477,7 @@ function renderClients(){
     +'<input class="search-inp" placeholder="🔍 Пошук по імені…" value="'+esc(S.searchQ)+'" oninput="S.searchQ=this.value;renderClients()">'
     +(isHR()?'<select class="flt-sel" onchange="S.listLoc=this.value;renderClients()">'+listLocOpts+'</select>':'')
     +'<select class="flt-sel" onchange="S.selStatus=this.value;renderClients()"><option value="">Всі статуси</option><option value="paid"'+(S.selStatus==='paid'?' selected':'')+'>✅ Оплачено</option><option value="debt"'+(S.selStatus==='debt'?' selected':'')+'>❌ Борг</option><option value="over"'+(S.selStatus==='over'?' selected':'')+'>💰 Переплата</option></select>'
+    +'<button class="att-chip'+(S.onlyDebtors?' att-chip-active':'')+'" style="'+(S.onlyDebtors?'background:var(--red2);border-color:var(--red2)':'')+'" onclick="S.onlyDebtors=!S.onlyDebtors;renderClients()">👁 Тільки боржники</button>'
     +'<button class="btn btn-primary btn-sm" onclick="openNewChild()" style="margin-left:auto;white-space:nowrap">➕ Додати дитину</button>'
     +'</div></div></div>'
     // ── 2. stat cards ─────────────────────────────────────────────────────
@@ -1515,9 +1517,13 @@ function renderClients(){
   }
 
   // ── Клієнти з платіжної системи ───────────────────────────────────────────
+  var totalGroupsRendered=0;
   listActiveLocs.forEach(function(loc){
     var groups=(S.groups[loc.loc]||[]);
-    var filtGroups=groups;
+    // При onlyDebtors — залишаємо тільки групи де є хоча б 1 боржник
+    var filtGroups=S.onlyDebtors
+      ? groups.filter(function(g){ return g.children.some(function(ch){ return ch.status==='debt'||ch.status==='nopay'; }); })
+      : groups;
     if(!filtGroups.length) return;
 
     var locKids=0,locDebt=0,locDebtors=0;
@@ -1535,6 +1541,7 @@ function renderClients(){
       +'</div>';
 
     filtGroups.forEach(function(grp){
+      totalGroupsRendered++;
       var children=grp.children.filter(function(ch){
         if(S.selStatus){
           var chSt=(ch.status==='nopay'?'debt':ch.status);
@@ -1625,6 +1632,14 @@ function renderClients(){
     });
     html+='</div>';
   });
+
+  // Якщо жодної групи не відрендерено — показуємо повідомлення
+  if(totalGroupsRendered===0){
+    html+='<div class="empty"><span class="ei">🎉</span>'
+      +'<h4>Немає боржників за вибраними фільтрами</h4>'
+      +'<p style="color:var(--gray)">Усі групи сплатили поточний місяць</p>'
+      +'</div>';
+  }
 
   // Відновлюємо групи якщо були замінені
   if(groupsBackup) S.groups=groupsBackup;
