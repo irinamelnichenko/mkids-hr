@@ -2203,8 +2203,8 @@ function recalcDiscount(){
     return;
   }
 
-  var vacDays=abs.filter(function(a){ return a.type==='vacation'; }).reduce(function(s,a){ return s+a.days; },0);
-  var sickDays=abs.filter(function(a){ return a.type==='sick'; }).reduce(function(s,a){ return s+a.days; },0);
+  var vacDays=abs.filter(function(a){ return a.type==='vacation'; }).reduce(function(s,a){ return s+(a.workDays||a.days||0); },0);
+  var sickDays=abs.filter(function(a){ return a.type==='sick'; }).reduce(function(s,a){ return s+(a.workDays||a.days||0); },0);
 
   var totalPct=0;
   var html='<div style="display:flex;gap:10px;flex-wrap:wrap">';
@@ -2445,27 +2445,27 @@ function renderAbsences(){
 
   // Блок 2: Лічильники
   var vacAvail=ct==='standard';
-  var sickAvail=ct!=='preschool';
-  html+='<div class="abs-counters">';
-  if(vacAvail){
-    var vp=Math.min(100,Math.round(vacWD/20*100));
-    html+='<div class="abs-cnt"><div class="abs-cnt-lbl">🏖 Відпустка</div>'
-      +'<div class="abs-cnt-val">'+vacWD+' <span style="font-size:13px;font-weight:400;color:var(--gray)">з 20 роб.дн</span></div>'
-      +'<div class="abs-cnt-sub">'+Math.min(4,Math.ceil(vacWD/5))+' тиж · залишок: '+(20-Math.min(20,vacWD))+' дн</div>'
-      +'<div class="abs-pbar"><div class="abs-pbar-fill'+(vacWD>20?' over':'')+'" style="width:'+vp+'%"></div></div></div>';
+  var sickAvail=(ct==='sick-only'||ct==='new');
+  if(ct==='preschool'){
+    html+='<div class="alert alert-info" style="margin-top:4px">Перерахунки не передбачені договором (Preschool).</div>';
   } else {
-    html+='<div class="abs-cnt disabled"><div class="abs-cnt-lbl">🏖 Відпустка</div><div style="font-size:13px;color:var(--gray);margin-top:6px">Недоступно за договором</div></div>';
+    html+='<div class="abs-counters">';
+    if(vacAvail){
+      var vp=Math.min(100,Math.round(vacWD/20*100));
+      html+='<div class="abs-cnt"><div class="abs-cnt-lbl">🏖 Відпустка</div>'
+        +'<div class="abs-cnt-val">'+vacWD+' <span style="font-size:13px;font-weight:400;color:var(--gray)">з 20 роб.дн</span></div>'
+        +'<div class="abs-cnt-sub">'+Math.min(4,Math.ceil(vacWD/5))+' тиж · залишок: '+(20-Math.min(20,vacWD))+' дн</div>'
+        +'<div class="abs-pbar"><div class="abs-pbar-fill'+(vacWD>20?' over':'')+'" style="width:'+vp+'%"></div></div></div>';
+    }
+    if(sickAvail){
+      var sp=Math.min(100,Math.round(sickWD/20*100));
+      html+='<div class="abs-cnt"><div class="abs-cnt-lbl">🤒 Лікарняний</div>'
+        +'<div class="abs-cnt-val">'+sickWD+' <span style="font-size:13px;font-weight:400;color:var(--gray)">з 20 роб.дн</span></div>'
+        +'<div class="abs-cnt-sub">'+Math.min(4,Math.ceil(sickWD/5))+' тиж · залишок: '+(20-Math.min(20,sickWD))+' дн</div>'
+        +'<div class="abs-pbar"><div class="abs-pbar-fill'+(sickWD>20?' over':'')+'" style="width:'+sp+'%"></div></div></div>';
+    }
+    html+='</div>'; // abs-counters
   }
-  if(sickAvail){
-    var sp=Math.min(100,Math.round(sickWD/20*100));
-    html+='<div class="abs-cnt"><div class="abs-cnt-lbl">🤒 Лікарняний</div>'
-      +'<div class="abs-cnt-val">'+sickWD+' <span style="font-size:13px;font-weight:400;color:var(--gray)">з 20 роб.дн</span></div>'
-      +'<div class="abs-cnt-sub">'+Math.min(4,Math.ceil(sickWD/5))+' тиж · залишок: '+(20-Math.min(20,sickWD))+' дн</div>'
-      +'<div class="abs-pbar"><div class="abs-pbar-fill'+(sickWD>20?' over':'')+'" style="width:'+sp+'%"></div></div></div>';
-  } else {
-    html+='<div class="abs-cnt disabled"><div class="abs-cnt-lbl">🤒 Лікарняний</div><div style="font-size:13px;color:var(--gray);margin-top:6px">Недоступно за договором</div></div>';
-  }
-  html+='</div>'; // abs-counters
 
   // Перевіряємо streak лікарняних (з табеля)
   var streak=getSickStreak(id, today());
