@@ -735,7 +735,7 @@ var S = {
   // Debts page filters
   debtLocType: '',         // ''|'Садочок'|'Школа'|'Управління'
   debtLoc:     '',         // конкретна локація
-  debtStatus:  ''          // ''|'debt'|'nopay'|'paid'|'over'
+  debtStatus:  ''          // ''|'debt'|'paid'|'over'  ('debt' включає і nopay)
 };
 
 // ─── UTILS ────────────────────────────────────────────────────────────────────
@@ -1658,9 +1658,10 @@ function renderDebts(){
   var pctPlan=totalPlan>0?Math.round(totalCollected/totalPlan*100):0;
 
   // ── фільтруємо за статусом для таблиці (не зачіпає картки) ───────────────
-  // '' = Всі, 'debt' = Борг, 'nopay' = Не платили, 'paid' = Сплачено, 'over' = Переплата
+  // '' = Всі, 'debt' = Борг (debt + nopay), 'paid' = Сплачено, 'over' = Переплата
   var rows=allRows.filter(function(ch){
-    if(!S.debtStatus) return true; // Всі — показуємо всіх
+    if(!S.debtStatus) return true;
+    if(S.debtStatus==='debt') return ch.status==='debt'||ch.status==='nopay';
     return ch.status===S.debtStatus;
   });
   rows.sort(function(a,b){
@@ -1690,7 +1691,7 @@ function renderDebts(){
 
   // ── select статусу ─────────────────────────────────────────────────────────
   var statuses=[
-    ['','📋 Всі'],['debt','❌ Борг'],['nopay','⛔ Не платили'],
+    ['','📋 Всі'],['debt','❌ Борг'],
     ['paid','✅ Сплачено'],['over','💰 Переплата']
   ];
   var statusOpts=statuses.map(function(s){
@@ -1742,7 +1743,6 @@ function renderDebts(){
   if(!rows.length){
     var emptyMsg=!S.debtStatus?'Немає дітей у вибраній локації'
       :S.debtStatus==='debt'?'Боржників немає — всі оплатили!'
-      :S.debtStatus==='nopay'?'Всі хоча б щось заплатили'
       :S.debtStatus==='paid'?'Жодного оплаченого запису'
       :'Переплат немає';
     html+='<tr><td colspan="8"><div class="empty"><span class="ei">🎉</span><h4>'+emptyMsg+'</h4></div></td></tr>';
@@ -1772,7 +1772,6 @@ function renderDebts(){
 
 function debtStatusLabel(s){
   if(s==='debt')  return '❌ Борг';
-  if(s==='nopay') return '⛔ Не платили';
   if(s==='paid')  return '✅ Сплачено';
   if(s==='over')  return '💰 Переплата';
   return '📋 Всі';
