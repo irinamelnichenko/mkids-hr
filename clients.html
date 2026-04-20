@@ -1543,8 +1543,8 @@ function renderClients(){
       +'</div>';
 
     filtGroups.forEach(function(grp){
-      totalGroupsRendered++;
       var children=grp.children.filter(function(ch){
+        if(S.onlyDebtors && ch.status!=='debt' && ch.status!=='nopay') return false;
         if(S.selStatus){
           var chSt=(ch.status==='nopay'?'debt':ch.status);
           if(chSt!==S.selStatus) return false;
@@ -1553,6 +1553,7 @@ function renderClients(){
         return true;
       });
       if(!children.length) return;
+      totalGroupsRendered++;
 
       // ── ТАБЛИЦЯ: БЕЗ колонки "Борг (грн)" ───────────────────────────────
       var grpDebtors=grp.children.filter(function(c){return c.status==='debt'||c.status==='nopay';}).length;
