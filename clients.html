@@ -735,7 +735,10 @@ var S = {
   // Debts page filters
   debtLocType: '',         // ''|'Садочок'|'Школа'|'Управління'
   debtLoc:     '',         // конкретна локація
-  debtStatus:  ''          // ''|'debt'|'paid'|'over'  ('debt' включає і nopay)
+  debtStatus:  '',         // ''|'debt'|'paid'|'over'  ('debt' включає і nopay)
+  // Clients list filters
+  listLocType: '',         // type chip: ''|'Садочок'|'Школа'|'Управління'
+  listLoc:     ''          // конкретна локація в списку дітей
 };
 
 // ─── UTILS ────────────────────────────────────────────────────────────────────
@@ -1415,18 +1418,21 @@ function renderClients(){
     groupsBackup=S.groups;
     S.groups=buildGroupsFromYearly(S.selMonth);
   } else if(S.selMonth!==curJSMonth && !S.yearlyData.length){
-    // Yearly data not loaded yet — wait silently (background load)
     document.getElementById('main').innerHTML=monthStripHtml
       +'<div class="loading"><div class="spinner"></div><p>Завантаження даних…</p></div>';
     return;
   }
 
-  var allGroups=[];
-  locs.forEach(function(l){ (S.groups[l.loc]||[]).forEach(function(g){ if(allGroups.indexOf(g.group)<0) allGroups.push(g.group); }); });
+  // ── фільтрація за типом і локацією ────────────────────────────────────────
+  var listTypeLocs = S.listLocType
+    ? locs.filter(function(l){ return getLocTypeByLoc(l.loc)===S.listLocType; })
+    : locs;
+  var listActiveLocs = S.listLoc
+    ? listTypeLocs.filter(function(l){ return l.loc===S.listLoc; })
+    : listTypeLocs;
 
-  // Статистика поточного місяця
-  var statLocs = S.selLoc ? locs.filter(function(l){ return l.loc===S.selLoc; }) : locs;
-  var stats = calcStats(statLocs, S.selGroup);
+  // Статистика поточного місяця (по activeLocs)
+  var stats = calcStats(listActiveLocs, '');
 
   // Нові CRM-клієнти
   var payIds=getPaymentIds();
@@ -1435,36 +1441,53 @@ function renderClients(){
     if(!c||!c.name) return false;
     if(payIds[id]) return false;
     if(!isHR()&&c.loc!==S.user.loc) return false;
-    if(S.selLoc&&c.loc!==S.selLoc) return false;
+    if(S.listLoc&&c.loc!==S.listLoc) return false;
+    if(S.listLocType&&getLocTypeByLoc(c.loc)!==S.listLocType) return false;
     return true;
   });
 
   var mName=CFG.MONTHS_DISP[S.selMonth]||'';
 
-  // Додаємо CRM-only дітей до загальної кількості для відображення
-  var displayKids = stats.totalKids + (S.selLoc || !isHR() ? crmOnlyIds.length : Object.keys(S.crm).filter(function(id){ var c=S.crm[id]; return c&&c.name&&!payIds[id]&&(isHR()||c.loc===S.user.loc); }).length);
+  var displayKids = stats.totalKids + (S.listLoc||S.listLocType||!isHR()
+    ? crmOnlyIds.length
+    : Object.keys(S.crm).filter(function(id){ var c=S.crm[id]; return c&&c.name&&!payIds[id]&&(isHR()||c.loc===S.user.loc); }).length);
 
-  // Назва для статистики
-  var statLabel = S.selLoc ? S.selLoc : (isHR() ? 'Всі локації' : (S.user&&S.user.loc?S.user.loc:''));
+  var statLabel = S.listLoc ? S.listLoc
+    : S.listLocType ? S.listLocType
+    : (isHR() ? 'Всі локації' : (S.user&&S.user.loc?S.user.loc:''));
 
-  var html=monthStripHtml+'<div class="stats-grid" style="grid-template-columns:repeat(3,1fr)">'
-    +'<div class="stat-card"><div class="stat-icon si-b">👶</div><div><div class="stat-val">'+displayKids+'</div><div class="stat-lbl">Дітей'+(statLabel?' · '+esc(statLabel):'')+'</div></div></div>'
-    +'<div class="stat-card"><div class="stat-icon si-r">❌</div><div><div class="stat-val" style="color:var(--red2)">'+stats.debtors+'</div><div class="stat-lbl">Боржників · '+esc(mName)+'</div></div></div>'
-    +'<div class="stat-card"><div class="stat-icon si-o">💸</div><div><div class="stat-val" style="color:var(--red2)">'+fmtN(Math.round(stats.totalDebt))+'</div><div class="stat-lbl">Борг · '+esc(mName)+' (грн)</div></div></div>'
-    +'</div>';
+  // ── chips ──────────────────────────────────────────────────────────────────
+  var LIST_TYPES=[['','📋 Всі'],['Садочок','🌱 Садочок'],['Школа','🏫 Школа'],['Управління','🏢 Управління']];
+  var listChipsHtml='<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">'
+    +LIST_TYPES.map(function(c){
+      var active=S.listLocType===c[0];
+      return '<button class="att-chip'+(active?' att-chip-active':'')+'" onclick="S.listLocType=\''+c[0]+'\';S.listLoc=\'\';renderClients()">'+c[1]+'</button>';
+    }).join('')+'</div>';
 
-  html+='<div class="filters">'
+  // ── select локації (фільтрується за типом) ────────────────────────────────
+  var listLocOpts='<option value="">Всі локації'+(S.listLocType?' ('+S.listLocType+')':'')+'</option>'
+    +listTypeLocs.map(function(l){ return '<option value="'+esc(l.loc)+'"'+(S.listLoc===l.loc?' selected':'')+'>'+esc(l.loc)+'</option>'; }).join('');
+
+  var html=monthStripHtml
+    // ── 1. chips + фільтри ────────────────────────────────────────────────
+    +'<div class="card" style="margin-bottom:12px"><div style="padding:10px 14px">'
+    +listChipsHtml
+    +'<div class="filters" style="margin:0;padding:0;border:none;background:none;gap:8px">'
     +'<input class="search-inp" placeholder="🔍 Пошук по імені…" value="'+esc(S.searchQ)+'" oninput="S.searchQ=this.value;renderClients()">'
-    +(isHR()?'<select class="flt-sel" onchange="S.selLoc=this.value;S.selGroup=\'\';renderClients()"><option value="">Всі локації</option>'+locs.map(function(l){ return '<option value="'+esc(l.loc)+'"'+(S.selLoc===l.loc?' selected':'')+'>'+esc(l.loc)+'</option>'; }).join('')+'</select>':'')
-    +'<select class="flt-sel" onchange="S.selGroup=this.value;renderClients()"><option value="">Всі групи</option>'+allGroups.map(function(g){ return '<option value="'+esc(g)+'"'+(S.selGroup===g?' selected':'')+'>'+esc(g)+'</option>'; }).join('')+'</select>'
+    +(isHR()?'<select class="flt-sel" onchange="S.listLoc=this.value;renderClients()">'+listLocOpts+'</select>':'')
     +'<select class="flt-sel" onchange="S.selStatus=this.value;renderClients()"><option value="">Всі статуси</option><option value="paid"'+(S.selStatus==='paid'?' selected':'')+'>✅ Оплачено</option><option value="debt"'+(S.selStatus==='debt'?' selected':'')+'>❌ Борг</option><option value="over"'+(S.selStatus==='over'?' selected':'')+'>💰 Переплата</option></select>'
     +'<button class="btn btn-primary btn-sm" onclick="openNewChild()" style="margin-left:auto;white-space:nowrap">➕ Додати дитину</button>'
+    +'</div></div></div>'
+    // ── 2. stat cards ─────────────────────────────────────────────────────
+    +'<div class="stats-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:16px">'
+    +'<div class="stat-card"><div class="stat-icon si-b">👶</div><div><div class="stat-val">'+displayKids+'</div><div class="stat-lbl">Дітей · <b>'+esc(statLabel)+'</b></div></div></div>'
+    +'<div class="stat-card"><div class="stat-icon si-r">❌</div><div><div class="stat-val" style="color:var(--red2)">'+stats.debtors+'</div><div class="stat-lbl">Боржників · '+esc(mName)+'</div></div></div>'
+    +'<div class="stat-card"><div class="stat-icon si-o">💸</div><div><div class="stat-val" style="color:var(--red2)">'+fmtN(Math.round(stats.totalDebt))+'</div><div class="stat-lbl">Борг · '+esc(mName)+' (грн)</div></div></div>'
     +'</div>';
 
   // ── Нові CRM-клієнти ──────────────────────────────────────────────────────
   var crmFiltered=crmOnlyIds.filter(function(id){
     var c=S.crm[id];
-    if(S.selGroup&&c.group!==S.selGroup) return false;
     if(S.searchQ&&c.name.toLowerCase().indexOf(S.searchQ.toLowerCase())<0) return false;
     return true;
   });
@@ -1492,10 +1515,9 @@ function renderClients(){
   }
 
   // ── Клієнти з платіжної системи ───────────────────────────────────────────
-  var filtLocs=S.selLoc?locs.filter(function(l){ return l.loc===S.selLoc; }):locs;
-  filtLocs.forEach(function(loc){
+  listActiveLocs.forEach(function(loc){
     var groups=(S.groups[loc.loc]||[]);
-    var filtGroups=S.selGroup?groups.filter(function(g){ return g.group===S.selGroup; }):groups;
+    var filtGroups=groups;
     if(!filtGroups.length) return;
 
     var locKids=0,locDebt=0,locDebtors=0;
