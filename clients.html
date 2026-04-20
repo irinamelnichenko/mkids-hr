@@ -1658,8 +1658,9 @@ function renderDebts(){
   var pctPlan=totalPlan>0?Math.round(totalCollected/totalPlan*100):0;
 
   // ── фільтруємо за статусом для таблиці (не зачіпає картки) ───────────────
+  // '' = Всі, 'debt' = Борг, 'nopay' = Не платили, 'paid' = Сплачено, 'over' = Переплата
   var rows=allRows.filter(function(ch){
-    if(!S.debtStatus) return ch.status==='debt'||ch.status==='nopay';
+    if(!S.debtStatus) return true; // Всі — показуємо всіх
     return ch.status===S.debtStatus;
   });
   rows.sort(function(a,b){
@@ -1667,6 +1668,13 @@ function renderDebts(){
     var db=(b.status==='debt'||b.status==='nopay')?(b.status==='nopay'?b.budget:(b.debt||0)):0;
     return db-da;
   });
+
+  // ── борг тільки серед видимих рядків (для підпису над таблицею) ───────────
+  var visibleDebt=rows.reduce(function(s,ch){
+    if(ch.status==='debt') return s+(ch.debt||0);
+    if(ch.status==='nopay') return s+(ch.budget||0);
+    return s;
+  },0);
 
   // ── chips ──────────────────────────────────────────────────────────────────
   var TYPES=[['','📋 Всі'],['Садочок','🌱 Садочок'],['Школа','🏫 Школа'],['Управління','🏢 Управління']];
@@ -1682,7 +1690,7 @@ function renderDebts(){
 
   // ── select статусу ─────────────────────────────────────────────────────────
   var statuses=[
-    ['','❌ Борг (всі)'],['debt','❌ Борг'],['nopay','🚫 Не платили'],
+    ['','📋 Всі'],['debt','❌ Борг'],['nopay','⛔ Не платили'],
     ['paid','✅ Сплачено'],['over','💰 Переплата']
   ];
   var statusOpts=statuses.map(function(s){
@@ -1724,7 +1732,7 @@ function renderDebts(){
     +'<div class="card"><div class="card-hd">'
     +'<h3>'+debtStatusLabel(S.debtStatus)+' — '+rows.length+' клієнтів'
       +(filterLabel!=='Всі локації'?' · '+filterLabel:'')+'</h3>'
-    +(totalDebt>0?'<span style="font-size:12px;color:var(--red2)">Борг: '+fmtN(Math.round(totalDebt))+' грн</span>':'')
+    +(visibleDebt>0?'<span style="font-size:12px;color:var(--red2)">Борг: '+fmtN(Math.round(visibleDebt))+' грн</span>':'')
     +'</div>'
     +'<div class="tbl-wrap"><table><thead><tr>'
     +'<th>#</th><th>Ім\'я</th><th>Група</th><th>Локація</th>'
@@ -1732,9 +1740,11 @@ function renderDebts(){
     +'</tr></thead><tbody>';
 
   if(!rows.length){
-    var emptyMsg=S.debtStatus==='paid'?'Жодного оплаченого запису'
-      :S.debtStatus==='over'?'Переплат немає'
-      :'🎉 Боржників немає — всі оплатили!';
+    var emptyMsg=!S.debtStatus?'Немає дітей у вибраній локації'
+      :S.debtStatus==='debt'?'Боржників немає — всі оплатили!'
+      :S.debtStatus==='nopay'?'Всі хоча б щось заплатили'
+      :S.debtStatus==='paid'?'Жодного оплаченого запису'
+      :'Переплат немає';
     html+='<tr><td colspan="8"><div class="empty"><span class="ei">🎉</span><h4>'+emptyMsg+'</h4></div></td></tr>';
   } else {
     rows.forEach(function(ch,i){
@@ -1762,10 +1772,10 @@ function renderDebts(){
 
 function debtStatusLabel(s){
   if(s==='debt')  return '❌ Борг';
-  if(s==='nopay') return '🚫 Не платили';
+  if(s==='nopay') return '⛔ Не платили';
   if(s==='paid')  return '✅ Сплачено';
   if(s==='over')  return '💰 Переплата';
-  return '❌ Борг (всі)';
+  return '📋 Всі';
 }
 
 // ─── RENDER SETTINGS ─────────────────────────────────────────────────────────
