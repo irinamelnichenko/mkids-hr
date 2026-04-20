@@ -1628,7 +1628,13 @@ function renderDebts(){
     ? typeLocs.filter(function(l){ return l.loc===S.debtLoc; })
     : typeLocs;
 
-  // ── збираємо всіх дітей для статистики (без фільтру статусу) ──────────────
+  // ── мітка фільтру для карток (щоб видно по яких даних рахується) ──────────
+  var filterLabel = S.debtLoc ? esc(S.debtLoc)
+    : S.debtLocType ? esc(S.debtLocType)
+    : 'Всі локації';
+
+  // ── збираємо ВСІХ дітей по активних локаціях (незалежно від статусу) ──────
+  // Статус фільтрує тільки таблицю нижче, картки рахуються по всіх
   var allRows=[];
   activeLocs.forEach(function(loc){
     (S.groups[loc.loc]||[]).forEach(function(grp){
@@ -1639,9 +1645,8 @@ function renderDebts(){
     });
   });
 
-  // ── статистика ─────────────────────────────────────────────────────────────
-  var totalDebt=0, totalCollected=0, totalPlan=0;
-  var debtorCount=0;
+  // ── статистика по activeLocs (ігноруємо S.debtStatus) ─────────────────────
+  var totalDebt=0, totalCollected=0, totalPlan=0, debtorCount=0;
   allRows.forEach(function(ch){
     totalCollected+=ch.factTotal||0;
     totalPlan+=ch.budget||0;
@@ -1652,9 +1657,9 @@ function renderDebts(){
   });
   var pctPlan=totalPlan>0?Math.round(totalCollected/totalPlan*100):0;
 
-  // ── фільтруємо за статусом для таблиці ────────────────────────────────────
+  // ── фільтруємо за статусом для таблиці (не зачіпає картки) ───────────────
   var rows=allRows.filter(function(ch){
-    if(!S.debtStatus) return ch.status==='debt'||ch.status==='nopay'; // default: bozhniki
+    if(!S.debtStatus) return ch.status==='debt'||ch.status==='nopay';
     return ch.status===S.debtStatus;
   });
   rows.sort(function(a,b){
@@ -1687,27 +1692,7 @@ function renderDebts(){
   var mName=CFG.MONTHS_DISP[S.selMonth]||'';
 
   var html=''
-    // ── stat cards ────────────────────────────────────────────────────────
-    +'<div class="stats-grid" style="margin-bottom:16px">'
-    +'<div class="stat-card"><div class="stat-icon si-r">💸</div><div>'
-      +'<div class="stat-val" style="color:var(--red2);font-size:22px">'+fmtN(Math.round(totalDebt))+'</div>'
-      +'<div class="stat-lbl">Загальний борг (грн) · '+debtorCount+' дітей</div>'
-    +'</div></div>'
-    +'<div class="stat-card"><div class="stat-icon si-g">💵</div><div>'
-      +'<div class="stat-val" style="color:var(--green);font-size:22px">'+fmtN(Math.round(totalCollected))+'</div>'
-      +'<div class="stat-lbl">Зібрано · '+esc(mName)+' · '+pctPlan+'% від плану</div>'
-    +'</div></div>'
-    +'<div class="stat-card"><div class="stat-icon si-b">📈</div><div>'
-      +'<div class="stat-val" style="font-size:22px">'+fmtN(Math.round(totalPlan))+'</div>'
-      +'<div class="stat-lbl">План місяця (грн)</div>'
-    +'</div></div>'
-    +'<div class="stat-card"><div class="stat-icon si-o">👶</div><div>'
-      +'<div class="stat-val" style="font-size:22px">'+allRows.length+'</div>'
-      +'<div class="stat-lbl">Дітей загалом</div>'
-    +'</div></div>'
-    +'</div>'
-
-    // ── фільтри ───────────────────────────────────────────────────────────
+    // ── 1. ФІЛЬТРИ (зверху, перед картками) ──────────────────────────────
     +'<div class="card" style="margin-bottom:12px"><div style="padding:12px 16px">'
     +chipsHtml
     +'<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">'
@@ -1715,9 +1700,30 @@ function renderDebts(){
     +'<select class="flt-sel" onchange="S.debtStatus=this.value;renderDebts()">'+statusOpts+'</select>'
     +'</div></div></div>'
 
-    // ── таблиця ───────────────────────────────────────────────────────────
+    // ── 2. STAT CARDS (рахуються по activeLocs, filterLabel показує що саме) ─
+    +'<div class="stats-grid" style="margin-bottom:16px">'
+    +'<div class="stat-card"><div class="stat-icon si-r">💸</div><div>'
+      +'<div class="stat-val" style="color:var(--red2);font-size:22px">'+fmtN(Math.round(totalDebt))+'</div>'
+      +'<div class="stat-lbl">Борг (грн) · '+debtorCount+' дітей · <b>'+filterLabel+'</b></div>'
+    +'</div></div>'
+    +'<div class="stat-card"><div class="stat-icon si-g">💵</div><div>'
+      +'<div class="stat-val" style="color:var(--green);font-size:22px">'+fmtN(Math.round(totalCollected))+'</div>'
+      +'<div class="stat-lbl">Зібрано · '+esc(mName)+' · '+pctPlan+'% від плану · <b>'+filterLabel+'</b></div>'
+    +'</div></div>'
+    +'<div class="stat-card"><div class="stat-icon si-b">📈</div><div>'
+      +'<div class="stat-val" style="font-size:22px">'+fmtN(Math.round(totalPlan))+'</div>'
+      +'<div class="stat-lbl">План місяця (грн) · <b>'+filterLabel+'</b></div>'
+    +'</div></div>'
+    +'<div class="stat-card"><div class="stat-icon si-o">👶</div><div>'
+      +'<div class="stat-val" style="font-size:22px">'+allRows.length+'</div>'
+      +'<div class="stat-lbl">Дітей загалом · <b>'+filterLabel+'</b></div>'
+    +'</div></div>'
+    +'</div>'
+
+    // ── 3. ТАБЛИЦЯ ─────────────────────────────────────────────────────────
     +'<div class="card"><div class="card-hd">'
-    +'<h3>'+debtStatusLabel(S.debtStatus)+' — '+rows.length+' клієнтів</h3>'
+    +'<h3>'+debtStatusLabel(S.debtStatus)+' — '+rows.length+' клієнтів'
+      +(filterLabel!=='Всі локації'?' · '+filterLabel:'')+'</h3>'
     +(totalDebt>0?'<span style="font-size:12px;color:var(--red2)">Борг: '+fmtN(Math.round(totalDebt))+' грн</span>':'')
     +'</div>'
     +'<div class="tbl-wrap"><table><thead><tr>'
