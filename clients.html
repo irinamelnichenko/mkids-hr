@@ -1400,6 +1400,8 @@ function calcStats(locsArr, groupFilter){
   return {totalKids:totalKids, totalDebt:totalDebt, debtors:debtors};
 }
 
+function toggleOnlyDebtors(){ S.onlyDebtors=!S.onlyDebtors; renderClients(); }
+
 function renderClients(){
   var monthStripHtml=buildMonthStrip();
   var locs=visibleLocs();
@@ -1477,7 +1479,7 @@ function renderClients(){
     +'<input class="search-inp" placeholder="🔍 Пошук по імені…" value="'+esc(S.searchQ)+'" oninput="S.searchQ=this.value;renderClients()">'
     +(isHR()?'<select class="flt-sel" onchange="S.listLoc=this.value;renderClients()">'+listLocOpts+'</select>':'')
     +'<select class="flt-sel" onchange="S.selStatus=this.value;renderClients()"><option value="">Всі статуси</option><option value="paid"'+(S.selStatus==='paid'?' selected':'')+'>✅ Оплачено</option><option value="debt"'+(S.selStatus==='debt'?' selected':'')+'>❌ Борг</option><option value="over"'+(S.selStatus==='over'?' selected':'')+'>💰 Переплата</option></select>'
-    +'<button class="att-chip'+(S.onlyDebtors?' att-chip-active':'')+'" style="'+(S.onlyDebtors?'background:var(--red2);border-color:var(--red2)':'')+'" onclick="S.onlyDebtors=!S.onlyDebtors;renderClients()">👁 Тільки боржники</button>'
+    +'<button type="button" class="att-chip'+(S.onlyDebtors?' att-chip-active':'')+'" style="'+(S.onlyDebtors?'background:var(--red2);border-color:var(--red2)':'')+'" onclick="toggleOnlyDebtors()">👁 Тільки боржники</button>'
     +'<button class="btn btn-primary btn-sm" onclick="openNewChild()" style="margin-left:auto;white-space:nowrap">➕ Додати дитину</button>'
     +'</div></div></div>'
     // ── 2. stat cards ─────────────────────────────────────────────────────
