@@ -2395,12 +2395,29 @@ function calcAbsMonthBreakdown(type, fromStr, toStr, fee){
     }
     cur.setDate(cur.getDate()+1);
   }
-  var VPCT=[0,25,50,75,100], SPCT=[0,5,10,15,20];
-  return Object.keys(mmap).sort().map(function(mk){
-    var wd=mmap[mk], w=Math.min(4,Math.ceil(wd/5));
-    var pct=type==='vacation'?VPCT[w]:SPCT[w];
-    return {month:mk,workDays:wd,weeks:w,pct:pct,amount:fee>0?Math.round(fee*pct/100):0};
+  var PCT=type==='vacation'?[0,25,50,75,100]:[0,5,10,15,20];
+  // Хронологічний масив місяців
+  var monthsArr=Object.keys(mmap).sort().map(function(mk){
+    return {month:mk,workDays:mmap[mk],weeks:0,pct:0,amount:0};
   });
+  // Загальні тижні всієї відпустки
+  var totalDays=monthsArr.reduce(function(s,m){ return s+m.workDays; },0);
+  var totalWeeks=Math.min(4,Math.ceil(totalDays/5));
+  // Розподіл тижнів: сортуємо по спаданню днів, розподіляємо, повертаємо хронологічно
+  var sorted=monthsArr.slice().sort(function(a,b){ return b.workDays-a.workDays; });
+  var weeksLeft=totalWeeks;
+  for(var i=0;i<sorted.length;i++){
+    var mi=sorted[i];
+    if(i===sorted.length-1){
+      mi.weeks=Math.max(0,weeksLeft);
+    } else {
+      mi.weeks=Math.min(Math.ceil(mi.workDays/5),weeksLeft);
+      weeksLeft-=mi.weeks;
+    }
+    mi.pct=PCT[Math.min(4,mi.weeks)];
+    mi.amount=fee>0?Math.round(fee*mi.pct/100):0;
+  }
+  return monthsArr; // хронологічний порядок збережено
 }
 
 // Бейдж відсутності для списку дітей
@@ -2427,9 +2444,15 @@ function renderAbsences(){
   var abs=c.absences||[];
   var who=isHR()?'HR':(S.user&&S.user.loc?S.user.loc:'Директор');
 
-  // Використані робочі дні (без відхилених)
-  var vacWD=0, sickWD=0;
-  abs.forEach(function(a){ if(a.status==='rejected') return; if(a.type==='vacation') vacWD+=a.workDays||0; else sickWD+=a.workDays||0; });
+  // Використані тижні (кожна відпустка окремо, без rejected і cancelled)
+  var vacWeeks=abs.filter(function(a){ return a.type==='vacation'&&a.status!=='rejected'&&a.status!=='cancelled'; })
+    .reduce(function(s,a){ return s+Math.min(4,Math.ceil((a.workDays||a.days||0)/5)); },0);
+  var sickWeeks=abs.filter(function(a){ return a.type==='sick'&&a.status!=='rejected'&&a.status!=='cancelled'; })
+    .reduce(function(s,a){ return s+Math.min(4,Math.ceil((a.workDays||a.days||0)/5)); },0);
+  vacWeeks=Math.min(4,vacWeeks);
+  sickWeeks=Math.min(4,sickWeeks);
+  var vacWeeksRemain=Math.max(0,4-vacWeeks);
+  var sickWeeksRemain=Math.max(0,4-sickWeeks);
 
   var CT_LABEL={standard:'Стандарт',preschool:'Preschool','new':'Новий','sick-only':'Новий'};
   var html='';
@@ -2454,18 +2477,18 @@ function renderAbsences(){
   } else {
     html+='<div class="abs-counters">';
     if(vacAvail){
-      var vp=Math.min(100,Math.round(vacWD/20*100));
+      var vp=Math.min(100,Math.round(vacWeeks/4*100));
       html+='<div class="abs-cnt"><div class="abs-cnt-lbl">🏖 Відпустка</div>'
-        +'<div class="abs-cnt-val">'+vacWD+' <span style="font-size:13px;font-weight:400;color:var(--gray)">з 20 роб.дн</span></div>'
-        +'<div class="abs-cnt-sub">'+Math.min(4,Math.ceil(vacWD/5))+' тиж · залишок: '+(20-Math.min(20,vacWD))+' дн</div>'
-        +'<div class="abs-pbar"><div class="abs-pbar-fill'+(vacWD>20?' over':'')+'" style="width:'+vp+'%"></div></div></div>';
+        +'<div class="abs-cnt-val">'+vacWeeks+' <span style="font-size:13px;font-weight:400;color:var(--gray)">з 4 тижнів</span></div>'
+        +'<div class="abs-cnt-sub">залишок: '+vacWeeksRemain+' тиж</div>'
+        +'<div class="abs-pbar"><div class="abs-pbar-fill'+(vacWeeks>=4?' over':'')+'" style="width:'+vp+'%"></div></div></div>';
     }
     if(sickAvail){
-      var sp=Math.min(100,Math.round(sickWD/20*100));
+      var sp=Math.min(100,Math.round(sickWeeks/4*100));
       html+='<div class="abs-cnt"><div class="abs-cnt-lbl">🤒 Лікарняний</div>'
-        +'<div class="abs-cnt-val">'+sickWD+' <span style="font-size:13px;font-weight:400;color:var(--gray)">з 20 роб.дн</span></div>'
-        +'<div class="abs-cnt-sub">'+Math.min(4,Math.ceil(sickWD/5))+' тиж · залишок: '+(20-Math.min(20,sickWD))+' дн</div>'
-        +'<div class="abs-pbar"><div class="abs-pbar-fill'+(sickWD>20?' over':'')+'" style="width:'+sp+'%"></div></div></div>';
+        +'<div class="abs-cnt-val">'+sickWeeks+' <span style="font-size:13px;font-weight:400;color:var(--gray)">з 4 тижнів</span></div>'
+        +'<div class="abs-cnt-sub">залишок: '+sickWeeksRemain+' тиж</div>'
+        +'<div class="abs-pbar"><div class="abs-pbar-fill'+(sickWeeks>=4?' over':'')+'" style="width:'+sp+'%"></div></div></div>';
     }
     html+='</div>'; // abs-counters
   }
@@ -2629,9 +2652,10 @@ function saveAbsencePeriod(){
     var absArr=getCRMCard(id).absences||[];
     var aRec=absArr.find(function(x){ return x.id===em.aid; });
     if(!aRec){ alert('Запис не знайдено'); return; }
-    // Перерахунок ліміту: виключаємо старий запис щоб не рахувати двічі
-    var usedWDEdit=absArr.filter(function(a){ return a.id!==em.aid&&a.status!=='rejected'&&a.status!=='cancelled'&&a.type===type; }).reduce(function(s,a){ return s+(a.workDays||0); },0);
-    if(usedWDEdit+wd>20){ if(!confirm('Перевищено ліміт 20 робочих днів. Оновити все одно?')) return; }
+    // Перерахунок ліміту у тижнях: виключаємо старий запис щоб не рахувати двічі
+    var usedWeeksEdit=absArr.filter(function(a){ return a.id!==em.aid&&a.status!=='rejected'&&a.status!=='cancelled'&&a.type===type; }).reduce(function(s,a){ return s+Math.min(4,Math.ceil((a.workDays||a.days||0)/5)); },0);
+    var newWeeksEdit=Math.min(4,Math.ceil(wd/5));
+    if(usedWeeksEdit+newWeeksEdit>4){ alert('Перевищено ліміт 4 тижнів відпустки. Додавання неможливе.'); return; }
     var bd=calcAbsMonthBreakdown(type,from,to,fee);
     var totalPct=bd.reduce(function(s,mb){ return s+mb.pct; },0);
     var totalAmt=bd.reduce(function(s,mb){ return s+mb.amount; },0);
@@ -2652,8 +2676,9 @@ function saveAbsencePeriod(){
 
   // ── НОВИЙ ЗАПИС ──────────────────────────────────────────────────────────────
   var abs=getCRMCard(id).absences||[];
-  var usedWD=abs.filter(function(a){ return a.status!=='rejected'&&a.status!=='cancelled'&&a.type===type; }).reduce(function(s,a){ return s+(a.workDays||0); },0);
-  if(usedWD+wd>20){ if(!confirm('Перевищено ліміт 20 робочих днів. Додати все одно?')) return; }
+  var usedWeeks=abs.filter(function(a){ return a.status!=='rejected'&&a.status!=='cancelled'&&a.type===type; }).reduce(function(s,a){ return s+Math.min(4,Math.ceil((a.workDays||a.days||0)/5)); },0);
+  var newWeeks=Math.min(4,Math.ceil(wd/5));
+  if(usedWeeks+newWeeks>4){ alert('Перевищено ліміт 4 тижнів відпустки. Додавання неможливе.'); return; }
   var bd=calcAbsMonthBreakdown(type,from,to,fee);
   var totalPct=bd.reduce(function(s,mb){ return s+mb.pct; },0);
   var totalAmt=bd.reduce(function(s,mb){ return s+mb.amount; },0);
