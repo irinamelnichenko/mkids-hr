@@ -214,6 +214,8 @@ tbody tr.clickable:hover td{background:#f0f7ff}
 .ab-done{background:#e8f8f0;color:#1e8449}
 .ab-rejected{background:#fdf0f0;color:#c0392b}
 .ab-legacy{background:#f0f4f8;color:#7f8c8d}
+.ab-cancelled{background:#e5e7eb!important;color:#6b7280}
+.abs-entry-cancelled{opacity:0.5}
 .abs-add-form{background:#f0f7ff;border:1px solid #90cdf4;border-radius:10px;padding:14px;margin:10px 0}
 .abs-preview-block{background:#fff3cd;border:1px solid #f0c040;border-radius:8px;padding:10px 14px;font-size:13px;margin-top:10px;line-height:1.7}
 .abs-preview-block.warn{background:#fdf2f2;border-color:#fca5a5;color:#721c24}
@@ -713,6 +715,7 @@ var S = {
   anaSelLocType:'',    // фільтр типу локації: ''|'Садочок'|'Школа'|...
   anaDetail:    null,  // ключ відкритої деталізації: 'kids'|'debtors'|'collected'|'budget'|'pct'|null
   _absFormOpen: false, // стан форми додавання відсутності
+  _absEditMode: null,  // {cid,aid,oldFrom,oldTo,oldType,oldNote} — режим редагування
   // Attendance
   att:      {},        // {dateStr: {childId: status}}
   attMode:  'week',    // 'week'|'day'|'month'|'year'
@@ -2478,7 +2481,7 @@ function renderAbsences(){
 
   // Блок 3: Форма або кнопка + список
   if(S._absFormOpen && ct!=='preschool'){
-    html+=renderAbsAddForm(ct,fee,abs,vacAvail,sickAvail);
+    html+=renderAbsAddForm(ct,fee,abs,vacAvail,sickAvail,S._absEditMode||null);
   } else if(ct!=='preschool'){
     html+='<button class="btn btn-secondary btn-sm" onclick="S._absFormOpen=true;renderAbsences()">➕ Додати період</button>';
   }
@@ -2493,22 +2496,33 @@ function renderAbsences(){
   tp3.innerHTML=html;
 }
 
-function renderAbsAddForm(ct,fee,abs,vacAvail,sickAvail){
+function renderAbsAddForm(ct,fee,abs,vacAvail,sickAvail,editData){
+  var isEdit=!!editData;
   var typeOpts=(vacAvail?'<option value="vacation">🏖 Відпустка</option>':'')
     +(sickAvail?'<option value="sick">🤒 Лікарняний</option>':'');
+  var typeLabel=isEdit?(editData.oldType==='vacation'?'🏖 Відпустка':'🤒 Лікарняний'):'';
+  var typeField=isEdit
+    ?('<input type="hidden" id="absNewType" value="'+editData.oldType+'">'
+      +'<div class="fg" style="margin-bottom:0"><label>Тип</label>'
+      +'<div style="padding:8px;font-weight:600">'+typeLabel+' <span style="font-size:12px;color:var(--gray)">(не змінюється)</span></div></div>')
+    :('<div class="fg" style="margin-bottom:0"><label>Тип</label>'
+      +'<select id="absNewType" onchange="absPreviewUpdate()">'+typeOpts+'</select></div>');
+  var cancelClick=isEdit
+    ?'S._absFormOpen=false;S._absEditMode=null;renderAbsences()'
+    :'S._absFormOpen=false;renderAbsences()';
   return '<div class="abs-add-form">'
-    +'<div style="font-weight:700;font-size:13px;margin-bottom:10px">Новий період відсутності</div>'
+    +'<div style="font-weight:700;font-size:13px;margin-bottom:10px">'+(isEdit?'✏️ Редагування відпустки':'Новий період відсутності')+'</div>'
     +'<div class="g3" style="margin-bottom:8px">'
-    +'<div class="fg" style="margin-bottom:0"><label>Тип</label><select id="absNewType" onchange="absPreviewUpdate()">'+typeOpts+'</select></div>'
-    +'<div class="fg" style="margin-bottom:0"><label>Початок</label><input type="date" id="absNewFrom" onchange="absPreviewUpdate()"></div>'
-    +'<div class="fg" style="margin-bottom:0"><label>Кінець</label><input type="date" id="absNewTo" onchange="absPreviewUpdate()"></div>'
+    +typeField
+    +'<div class="fg" style="margin-bottom:0"><label>Початок</label><input type="date" id="absNewFrom" onchange="absPreviewUpdate()" value="'+(isEdit?editData.oldFrom:'')+'"></div>'
+    +'<div class="fg" style="margin-bottom:0"><label>Кінець</label><input type="date" id="absNewTo" onchange="absPreviewUpdate()" value="'+(isEdit?editData.oldTo:'')+'"></div>'
     +'</div>'
-    +'<div class="fg" style="margin-bottom:8px"><label>Нотатка (опціонально)</label>'
-    +'<input type="text" id="absNewNote" placeholder="Напр. є довідка, вийдуть 26.04"></div>'
+    +'<div class="fg" style="margin-bottom:8px"><label>Нотатка'+(isEdit?' <span style="color:var(--red2)">*обов\'язково</span>':'')+'</label>'
+    +'<input type="text" id="absNewNote" placeholder="'+(isEdit?'Обов\'язково: причина зміни':'Напр. є довідка, вийдуть 26.04')+'" value="'+(isEdit?esc(editData.oldNote):'')+'"></div>'
     +'<div id="absPreview"></div>'
     +'<div style="display:flex;gap:8px;margin-top:10px">'
-    +'<button class="btn btn-primary btn-sm" onclick="saveAbsencePeriod()">💾 Зберегти</button>'
-    +'<button class="btn btn-secondary btn-sm" onclick="S._absFormOpen=false;renderAbsences()">Скасувати</button>'
+    +'<button class="btn btn-primary btn-sm" onclick="saveAbsencePeriod()">'+(isEdit?'✏️ Оновити':'💾 Зберегти')+'</button>'
+    +'<button class="btn btn-secondary btn-sm" onclick="'+cancelClick+'">Скасувати</button>'
     +'</div></div>';
 }
 
@@ -2519,7 +2533,8 @@ function renderAbsEntry(a,i,cid){
     pending:'<span class="ab-st ab-pending">⏳ Очікує фінансиста</span>',
     processing:'<span class="ab-st ab-processing">💼 На обробці</span>',
     done:'<span class="ab-st ab-done">✅ Внесено</span>',
-    rejected:'<span class="ab-st ab-rejected">❌ Відхилено</span>'
+    rejected:'<span class="ab-st ab-rejected">❌ Відхилено</span>',
+    cancelled:'<span class="ab-st ab-cancelled">🚫 Скасовано</span>'
   };
   var badge=ST_HTML[a.status]||'<span class="ab-st ab-legacy">📁 Архів</span>';
 
@@ -2543,8 +2558,12 @@ function renderAbsEntry(a,i,cid){
     actions='<button class="btn btn-xs btn-primary" style="font-size:11px" onclick="markAbsDone(\''+esc(cid)+'\',\''+esc(a.id)+'\',false)">✅ Внесено</button>'
       +' <button class="btn btn-xs btn-danger" style="font-size:11px" onclick="openRejectForm(\''+esc(cid)+'\',\''+esc(a.id)+'\',false)">❌ Відхилити</button>';
   }
+  if(a.status==='done'&&isHR()){
+    actions='<button class="btn btn-xs btn-secondary" style="font-size:11px" onclick="editAbsencePeriod(\''+esc(cid)+'\',\''+esc(a.id)+'\')">✏️ Редагувати</button>'
+      +' <button class="btn btn-xs btn-danger" style="font-size:11px" onclick="cancelAbsencePeriod(\''+esc(cid)+'\',\''+esc(a.id)+'\')">🚫 Скасувати</button>';
+  }
 
-  return '<div class="abs-entry">'
+  return '<div class="abs-entry'+(a.status==='cancelled'?' abs-entry-cancelled':'')+'">'
     +'<div class="abs-entry-hd"><span class="abs-entry-type">'+typeLabel+'</span>'+badge
     +(actions?'<span style="margin-left:auto;display:flex;gap:4px">'+actions+'</span>':'')+'</div>'
     +'<div class="abs-entry-info">'+fmtD(a.from)+' — '+fmtD(a.to)+' · '+wd+' роб.дн · '+w+' тиж</div>'
@@ -2600,15 +2619,45 @@ function saveAbsencePeriod(){
   if((ct==='new'||ct==='sick-only')&&type==='vacation'){ alert('Договір від 01.10.2025+: лише лікарняний'); return; }
   var wd=countWorkDays(from,to);
   if(!wd){ alert('У вказаному діапазоні немає робочих днів (Пн-Пт)'); return; }
+  var who=isHR()?'HR':(S.user&&S.user.loc?S.user.loc:'Директор');
+  var now=new Date().toISOString();
+
+  // ── РЕЖИМ РЕДАГУВАННЯ ────────────────────────────────────────────────────────
+  if(S._absEditMode){
+    if(!note.trim()){ alert('Вкажіть причину зміни (нотатка обов\'язкова при редагуванні)'); return; }
+    var em=S._absEditMode;
+    var absArr=getCRMCard(id).absences||[];
+    var aRec=absArr.find(function(x){ return x.id===em.aid; });
+    if(!aRec){ alert('Запис не знайдено'); return; }
+    // Перерахунок ліміту: виключаємо старий запис щоб не рахувати двічі
+    var usedWDEdit=absArr.filter(function(a){ return a.id!==em.aid&&a.status!=='rejected'&&a.status!=='cancelled'&&a.type===type; }).reduce(function(s,a){ return s+(a.workDays||0); },0);
+    if(usedWDEdit+wd>20){ if(!confirm('Перевищено ліміт 20 робочих днів. Оновити все одно?')) return; }
+    var bd=calcAbsMonthBreakdown(type,from,to,fee);
+    var totalPct=bd.reduce(function(s,mb){ return s+mb.pct; },0);
+    var totalAmt=bd.reduce(function(s,mb){ return s+mb.amount; },0);
+    var w=Math.min(4,Math.ceil(wd/5));
+    aRec.statusHistory=aRec.statusHistory||[];
+    aRec.statusHistory.push({event:'edited',at:now,by:who,
+      from:{from:em.oldFrom,to:em.oldTo},to:{from:from,to:to},reason:note});
+    aRec.from=from; aRec.to=to; aRec.workDays=wd; aRec.weeks=w;
+    aRec.monthsBreakdown=bd; aRec.totalPct=totalPct; aRec.totalAmount=totalAmt;
+    aRec.note=note;
+    S._absFormOpen=false; S._absEditMode=null;
+    saveLocalCRM();
+    apiPost({action:'saveClient',data:Object.assign({id:id},getCRMCard(id))});
+    localStorage.removeItem(CFG.CLI_CACHE);
+    renderAbsences(); recalcDiscount();
+    return;
+  }
+
+  // ── НОВИЙ ЗАПИС ──────────────────────────────────────────────────────────────
   var abs=getCRMCard(id).absences||[];
-  var usedWD=abs.filter(function(a){ return a.status!=='rejected'&&a.type===type; }).reduce(function(s,a){ return s+(a.workDays||0); },0);
+  var usedWD=abs.filter(function(a){ return a.status!=='rejected'&&a.status!=='cancelled'&&a.type===type; }).reduce(function(s,a){ return s+(a.workDays||0); },0);
   if(usedWD+wd>20){ if(!confirm('Перевищено ліміт 20 робочих днів. Додати все одно?')) return; }
   var bd=calcAbsMonthBreakdown(type,from,to,fee);
   var totalPct=bd.reduce(function(s,mb){ return s+mb.pct; },0);
   var totalAmt=bd.reduce(function(s,mb){ return s+mb.amount; },0);
   var w=Math.min(4,Math.ceil(wd/5));
-  var who=isHR()?'HR':(S.user&&S.user.loc?S.user.loc:'Директор');
-  var now=new Date().toISOString();
   getCRMCard(id).absences.push({
     id:'abs_'+Date.now(), type:type, from:from, to:to, workDays:wd, weeks:w,
     monthsBreakdown:bd, totalPct:totalPct, totalAmount:totalAmt,
@@ -2629,6 +2678,31 @@ function deleteAbsencePeriod(idx){
   var c=getCRMCard(id); c.absences.splice(idx,1);
   saveLocalCRM();
   apiPost({action:'saveClient',data:Object.assign({id:id},c)});
+  localStorage.removeItem(CFG.CLI_CACHE);
+  renderAbsences(); recalcDiscount();
+}
+
+function editAbsencePeriod(cid,aid){
+  var c=getCRMCard(cid); if(!c) return;
+  var a=(c.absences||[]).find(function(x){ return x.id===aid; }); if(!a) return;
+  S._absEditMode={cid:cid,aid:aid,oldFrom:a.from,oldTo:a.to,oldType:a.type,oldNote:a.note||''};
+  S._absFormOpen=true;
+  renderAbsences();
+}
+
+function cancelAbsencePeriod(cid,aid){
+  var reason=prompt('Причина скасування (обов\'язково):');
+  if(reason===null) return;
+  if(!reason.trim()){ alert('Вкажіть причину скасування'); return; }
+  if(!confirm('Скасувати цю відпустку? Знижка буде знята з перерахунку.')) return;
+  var c=getCRMCard(cid); if(!c) return;
+  var a=(c.absences||[]).find(function(x){ return x.id===aid; }); if(!a) return;
+  var who=isHR()?'HR':(S.user&&S.user.loc?S.user.loc:'Директор');
+  a.status='cancelled';
+  a.statusHistory=a.statusHistory||[];
+  a.statusHistory.push({event:'cancelled',at:new Date().toISOString(),by:who,reason:reason.trim()});
+  saveLocalCRM();
+  apiPost({action:'saveClient',data:Object.assign({id:cid},c)});
   localStorage.removeItem(CFG.CLI_CACHE);
   renderAbsences(); recalcDiscount();
 }
