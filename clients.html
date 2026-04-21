@@ -1464,11 +1464,11 @@ function renderClients(){
 
   // ── chips ──────────────────────────────────────────────────────────────────
   var LIST_TYPES=[['','📋 Всі'],['Садочок','🌱 Садочок'],['Школа','🏫 Школа'],['Управління','🏢 Управління']];
-  var listChipsHtml='<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">'
+  var listChipsHtml=isHR()?('<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">'
     +LIST_TYPES.map(function(c){
       var active=S.listLocType===c[0];
       return '<button class="att-chip'+(active?' att-chip-active':'')+'" onclick="S.listLocType=\''+c[0]+'\';S.listLoc=\'\';renderClients()">'+c[1]+'</button>';
-    }).join('')+'</div>';
+    }).join('')+'</div>'):'';
 
   // ── select локації (фільтрується за типом) ────────────────────────────────
   var listLocOpts='<option value="">Всі локації'+(S.listLocType?' ('+S.listLocType+')':'')+'</option>'
@@ -1901,9 +1901,14 @@ function setLocFieldMode(isNew){
   var sel=document.getElementById('fLocSel');
   var inp=document.getElementById('fLoc');
   if(isNew){
-    sel.innerHTML='<option value="">— Оберіть локацію —</option>'
-      +S.locs.map(function(l){ return '<option value="'+esc(l.loc)+'">'+esc(l.loc)+'</option>'; }).join('');
-    if(!isHR()&&S.user.loc) sel.value=S.user.loc;
+    if(isHR()){
+      sel.innerHTML='<option value="">— Оберіть локацію —</option>'
+        +S.locs.map(function(l){ return '<option value="'+esc(l.loc)+'">'+esc(l.loc)+'</option>'; }).join('');
+    } else {
+      sel.innerHTML='<option value="'+esc(S.user.loc||'')+'">'+esc(S.user.loc||'')+'</option>';
+      sel.value=S.user.loc||'';
+      sel.disabled=true;
+    }
     sel.classList.remove('hidden');
     inp.classList.add('hidden');
   } else {
