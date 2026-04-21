@@ -1249,6 +1249,12 @@ function updUserUI(){
 }
 function isHR(){ return S.user&&S.user.role==='hr'; }
 function isNurse(){ return S.user&&S.user.role==='nurse'; }
+function isDirector(){ return S.user&&S.user.role==='director'; }
+function canEditHealth(childLoc){
+  if(isHR()||isNurse()) return true;
+  if(isDirector()&&childLoc&&childLoc===S.user.loc) return true;
+  return false;
+}
 function visibleLocs(){
   if(isHR()) return S.locs;
   return S.locs.filter(function(l){ return l.loc===S.user.loc; });
@@ -3610,7 +3616,7 @@ function renderHealthTabWithRecords(id, records){
     listHtml='<p style="color:var(--gray);font-size:13px">Записів немає</p>';
   } else {
     var sorted=records.slice().sort(function(a,b){ return (b.date||'')<(a.date||'')?-1:1; });
-    var canEdit=isNurse()||isHR();
+    var canEdit=canEditHealth((S.crm[id]||{}).loc);
     listHtml=sorted.map(function(r){
       var text=r.text||r.desc||String(r['Текст']||'')||'';
       var date=r.date||String(r['Дата']||'')||today();
@@ -3635,7 +3641,7 @@ function renderHealthTabWithRecords(id, records){
     +'<button class="btn btn-xs btn-secondary" onclick="delete S._healthCache[\''
     +esc(id)+'\'];renderHealthTab()">🔄 Оновити</button></div>'
     +migBanner
-    +(isNurse()||isHR()?formHtml:'<div class="alert alert-info" style="margin-bottom:12px">Тільки медсестра може додавати записи</div>')
+    +(canEditHealth((S.crm[id]||{}).loc)?formHtml:'<div class="alert alert-info" style="margin-bottom:12px">Тільки медсестра або HR може додавати записи</div>')
     +listHtml;
 }
 
@@ -3664,11 +3670,13 @@ function renderHealthTab(){
 
 function addHealthEntry(){
   var id=S.editId; if(!id) return;
+  var childLoc=(S.crm[id]||{}).loc;
+  if(!canEditHealth(childLoc)){ alert('Немає доступу до записів цієї дитини'); return; }
   var date=(document.getElementById('hDate')||{}).value||today();
   var type=(document.getElementById('hType')||{}).value||'note';
   var desc=(document.getElementById('hDesc')||{}).value.trim();
   if(!desc){ alert('Вкажіть опис'); return; }
-  var who=isNurse()?(S.user.loc||'Медсестра'):(isHR()?'HR':'Директор');
+  var who=isNurse()?(S.user.loc||'Медсестра'):(isHR()?'HR':(S.user.loc||'Директор'));
   var newRec={id:'h_'+Date.now(),date:date,type:type,text:desc,by:who,createdAt:new Date().toISOString()};
 
   if(!S._healthCache[id]) S._healthCache[id]=[];
@@ -3683,8 +3691,9 @@ function addHealthEntry(){
 }
 
 function deleteHealthEntry(recordId, childId){
-  if(!confirm('Видалити цей запис?')) return;
   var cId=childId||S.editId;
+  if(!canEditHealth((S.crm[cId]||{}).loc)){ alert('Немає доступу до записів цієї дитини'); return; }
+  if(!confirm('Видалити цей запис?')) return;
   if(S._healthCache[cId]){
     S._healthCache[cId]=S._healthCache[cId].filter(function(r){ return (r.id||String(r['ID запису']||''))!==recordId; });
   }
@@ -3698,7 +3707,7 @@ function deleteHealthEntry(recordId, childId){
 function exportHealthToCloud(cId){
   var local=loadHealthLocal(cId);
   if(!local.length){ showFloatMsg('Немає локальних записів'); return; }
-  var who=isNurse()?(S.user.loc||'Медсестра'):(isHR()?'HR':'Директор');
+  var who=isNurse()?(S.user.loc||'Медсестра'):(isHR()?'HR':(S.user.loc||'Директор'));
   local.forEach(function(r){
     apiPost({action:'saveHealthRecord',record:{id:r.id,childId:cId,date:r.date,type:r.type,text:r.text||r.desc||'',createdBy:r.by||who}});
   });
