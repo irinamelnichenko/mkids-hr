@@ -2164,19 +2164,14 @@ function onContractDateChange(){ updateContractType(); }
 function updateContractType(){
   var date=document.getElementById('fContractDate').value;
   var group=document.getElementById('fGroup').value;
-  var t;
-  if(date && date>='2025-10-01'){
-    t='sick-only';
-  } else if(group==='Preschool'){
-    t='preschool';
-  } else {
-    t='standard';
-  }
+  var loc=document.getElementById('fLoc').value;
+  var t=getContractType3(date,group,loc);
   document.getElementById('fContractType').value=t;
   var labels={
-    'standard':   '📋 Стандарт — тільки відпустка (до 01.10.2025)',
-    'preschool':  '📋 Preschool — без перерахунків (до 01.10.2025)',
-    'sick-only':  '📋 Після 01.10.2025 — тільки хвороба'
+    'standard':          '📋 Стандарт — тільки відпустка (до 01.10.2025)',
+    'preschool':         '📋 Preschool — без перерахунків (до 01.10.2025)',
+    'sick-only':         '📋 Після 01.10.2025 — тільки хвороба',
+    'school-no-absence': '🏠 Школа — облік відпусток не ведеться'
   };
   var disp=document.getElementById('contractTypeDisplay');
   if(disp) disp.textContent=labels[t]||t;
@@ -2188,6 +2183,7 @@ function updateContractUI(){
   var el=document.getElementById('contractInfo'); if(!el) return;
   if(t==='standard')   el.textContent='Стандарт: ТІЛЬКИ відпустка до 4 тижнів на рік (1 тиж→25%, 2→50%, 3→75%, 4→100%). Хвороба не перераховується.';
   else if(t==='preschool') el.textContent='Preschool: без перерахунків. Ні відпустка, ні хвороба не впливають на суму.';
+  else if(t==='school-no-absence') el.textContent='Школа: облік відпусток не ведеться. Перерахунки не передбачені.';
   else el.textContent='Після 01.10.2025: ТІЛЬКИ хвороба до 4 тижнів на рік (1 тиж→5%, 2→10%, 3→15%, 4→20%). Відпустка не перераховується.';
   recalcDiscount();
 }
@@ -2203,6 +2199,10 @@ function recalcDiscount(){
 
   if(t==='preschool'){
     el.innerHTML='<div class="alert alert-info" style="margin-top:4px">Preschool: перерахунки не передбачені договором.</div>';
+    return;
+  }
+  if(t==='school-no-absence'){
+    el.innerHTML='<div class="alert alert-info" style="margin-top:4px">Школа: перерахунки не передбачені.</div>';
     return;
   }
 
@@ -2350,6 +2350,14 @@ function getContractType2(contractDate, group){
   return 'standard';
 }
 
+var SCHOOL_LOCS=['Школа Осокорки','Школа 228','Онлайн школа'];
+
+// Тип договору з урахуванням локації (школи не ведуть облік відпусток)
+function getContractType3(contractDate, group, loc){
+  if(SCHOOL_LOCS.indexOf(loc||'')!==-1) return 'school-no-absence';
+  return getContractType2(contractDate, group);
+}
+
 // Поточний рік договору: {from, to} — від дати договору, не календарний
 function getContractYear(contractDate, todayStr){
   var cd=pd(contractDate); if(!cd) return null;
@@ -2439,7 +2447,7 @@ function renderAbsences(){
   var contractDate=c.contractDate||'';
   var group=c.group||'';
   var fee=+(c.monthlyFee||0);
-  var ct=getContractType2(contractDate,group);
+  var ct=getContractType3(contractDate,group,c.loc||'');
   var contractYear=contractDate?getContractYear(contractDate,today()):null;
   var abs=c.absences||[];
   var who=isHR()?'HR':(S.user&&S.user.loc?S.user.loc:'Директор');
@@ -2454,7 +2462,7 @@ function renderAbsences(){
   var vacWeeksRemain=Math.max(0,4-vacWeeks);
   var sickWeeksRemain=Math.max(0,4-sickWeeks);
 
-  var CT_LABEL={standard:'Стандарт',preschool:'Preschool','new':'Новий','sick-only':'Новий'};
+  var CT_LABEL={standard:'Стандарт',preschool:'Preschool','new':'Новий','sick-only':'Новий','school-no-absence':'Школа'};
   var html='';
 
   // Блок 1: Інформація про договір
@@ -2472,7 +2480,9 @@ function renderAbsences(){
   // Блок 2: Лічильники
   var vacAvail=ct==='standard';
   var sickAvail=(ct==='sick-only'||ct==='new');
-  if(ct==='preschool'){
+  if(ct==='school-no-absence'){
+    html+='<div class="alert alert-info" style="margin-top:4px">🏠 Для шкіл не ведеться облік відпусток. Перерахунки не передбачені.</div>';
+  } else if(ct==='preschool'){
     html+='<div class="alert alert-info" style="margin-top:4px">Перерахунки не передбачені договором (Preschool).</div>';
   } else {
     html+='<div class="abs-counters">';
@@ -2503,9 +2513,9 @@ function renderAbsences(){
   }
 
   // Блок 3: Форма або кнопка + список
-  if(S._absFormOpen && ct!=='preschool'){
+  if(S._absFormOpen && ct!=='preschool' && ct!=='school-no-absence'){
     html+=renderAbsAddForm(ct,fee,abs,vacAvail,sickAvail,S._absEditMode||null);
-  } else if(ct!=='preschool'){
+  } else if(ct!=='preschool' && ct!=='school-no-absence'){
     html+='<button class="btn btn-secondary btn-sm" onclick="S._absFormOpen=true;renderAbsences()">➕ Додати період</button>';
   }
 
@@ -2637,7 +2647,8 @@ function saveAbsencePeriod(){
   if(to<from){ alert('Дата кінця має бути після початку'); return; }
   var type=typeEl.value;
   var c=S.crm[id]||{}; var fee=+(c.monthlyFee||0);
-  var ct=getContractType2(c.contractDate||'',c.group||'');
+  var ct=getContractType3(c.contractDate||'',c.group||'',c.loc||'');
+  if(ct==='school-no-absence'){ alert('Для шкіл не ведеться облік відпусток'); return; }
   if(ct==='preschool'){ alert('Preschool: перерахунки не передбачені договором'); return; }
   if((ct==='new'||ct==='sick-only')&&type==='vacation'){ alert('Договір від 01.10.2025+: лише лікарняний'); return; }
   var wd=countWorkDays(from,to);
