@@ -1036,19 +1036,23 @@ async function loadPaymentsYearly(force){
 async function loadClients(force){
   if(!force){
     var c=localStorage.getItem(CFG.CLI_CACHE);
-    if(c){ var p=JSON.parse(c); if(Date.now()-p.ts<CFG.TTL){ mergeCRMFromCloud(p.data); return; } }
+    if(c){
+      var p=JSON.parse(c);
+      if(Date.now()-p.ts<CFG.TTL){
+        mergeCRMFromCloud(p.data);
+        return;
+      }
+    }
   }
   var rows=[];
   try{
     var vals=await sheetsRead('Клієнти','A1:U2000');
     rows=rowsToObjects(vals).filter(function(r){ return r['ID']; });
-    console.log('Clients loaded via direct API: '+rows.length+' rows');
   }catch(e){
-    console.warn('Direct API for Clients failed ('+e.message+'), trying Apps Script…');
     try{
       var j=await apiGet('getClients');
       rows=j.data||[];
-    }catch(e2){ console.warn('Apps Script also failed:',e2); }
+    }catch(e2){ console.warn('loadClients: Apps Script failed:',e2); }
   }
   if(rows.length>0){
     localStorage.setItem(CFG.CLI_CACHE,JSON.stringify({data:rows,ts:Date.now()}));
@@ -1059,7 +1063,9 @@ async function loadClients(force){
 function mergeCRMFromCloud(rows){
   rows.forEach(function(row){
     var id=String(row['ID']||''); if(!id) return;
-    function safeJSON(v,def){ try{ return JSON.parse(String(v||def)); }catch(e){ return JSON.parse(def); } }
+    function safeJSON(v,def){
+      try{ return JSON.parse(String(v||def)); }catch(e){ return JSON.parse(def); }
+    }
     S.crm[id]={
       name:      row['ПІБ дитини']||'',
       loc:       row['Локація']||'',
