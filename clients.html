@@ -856,6 +856,26 @@ async function apiGetFull(params){
 function loadLocalCRM(){ try{ S.crm=JSON.parse(localStorage.getItem(CFG.SK)||'{}'); }catch(e){ S.crm={}; } }
 function saveLocalCRM(){ localStorage.setItem(CFG.SK,JSON.stringify(S.crm)); }
 
+var _crmSyncTimers = {};
+function schedulePushCRMCard(id){
+  if(!id) return;
+  if(_crmSyncTimers[id]) clearTimeout(_crmSyncTimers[id]);
+  _crmSyncTimers[id] = setTimeout(function(){
+    syncCRMCardToCloud(id);
+    delete _crmSyncTimers[id];
+  }, 1500);
+}
+
+function syncCRMCardToCloud(id){
+  if(!id || !S.crm[id]) return;
+  var card = S.crm[id];
+  var payload = Object.assign({id: id}, card);
+  console.log('CRM cloud sync: pushing ' + id);
+  apiPost({action:'saveClient', data:payload}).catch(function(e){
+    console.warn('CRM sync failed for ' + id + ':', e);
+  });
+}
+
 function normalizeDateYMD(v){
   if(!v) return '';
   if(v instanceof Date){
@@ -1981,10 +2001,28 @@ function switchTab(i){
 
 function populateForm(id){
   var c=S.crm[id]||{};
+  // Очищаємо допоміжні "add" поля які тримають значення від попередньої дитини
+  ['fHDate','fHAmt','fHNote','fEFDate','fEFAmt','fEFNote'].forEach(function(fid){
+    var el=document.getElementById(fid); if(el) el.value='';
+  });
   document.getElementById('fName').value=c.name||'';
   document.getElementById('fBday').value=c.bday||'';
   document.getElementById('fLoc').value=c.loc||'';
-  document.getElementById('fGroup').value=c.group||'';
+  // fGroup: якщо c.group не збігається з жодним option — браузер мовчки
+  // лишає попереднє значення. Гарантуємо коректне встановлення.
+  var groupSel=document.getElementById('fGroup');
+  var desiredGroup=c.group||'';
+  var hasOption=false;
+  for(var oi=0;oi<groupSel.options.length;oi++){
+    if(groupSel.options[oi].value===desiredGroup){ hasOption=true; break; }
+  }
+  if(!hasOption && desiredGroup){
+    var opt=document.createElement('option');
+    opt.value=desiredGroup; opt.textContent=desiredGroup;
+    groupSel.appendChild(opt);
+  }
+  groupSel.value=desiredGroup;
+  if(groupSel.value!==desiredGroup) groupSel.selectedIndex=0;
   document.getElementById('fTeacher').value=c.teacher||'';
   document.getElementById('fStatus').value=c.status||'active';
   document.getElementById('fMomName').value=c.momName||'';
@@ -2368,6 +2406,43 @@ var SCHOOL_LOCS=['Школа Осокорки','Школа 228','Онлайн ш
 function getContractType3(contractDate, group, loc){
   if(SCHOOL_LOCS.indexOf(loc||'')!==-1) return 'school-no-absence';
   return getContractType2(contractDate, group);
+}
+
+// ── УТИЛІТИ: СИНХРОНІЗАЦІЯ ВІДПУСТОК → PAYMENT ──────────────────────────────
+
+// Форматує слот відпустки для запису в Payment-таблицю.
+// Однаковий місяць → "20-23.04.26", різні місяці → "28.04-04.05.26"
+function formatVacationForPayment(startDate, endDate){
+  var s=new Date(startDate); var e=new Date(endDate);
+  var sd=s.getDate();
+  var sm=String(s.getMonth()+1).padStart(2,'0');
+  var ed=e.getDate();
+  var em=String(e.getMonth()+1).padStart(2,'0');
+  var ey=String(e.getFullYear()).slice(-2);
+  if(s.toDateString()===e.toDateString()) return sd+'.'+sm+'.'+ey;  // один день
+  if(sm===em) return sd+'-'+ed+'.'+em+'.'+ey;                       // один місяць
+  return sd+'.'+sm+'-'+ed+'.'+em+'.'+ey;                            // різні місяці
+}
+
+// Розбиває діапазон дат на слоти за тижнями (Пн-Пт).
+// Кожен безперервний відрізок робочих днів → окремий слот {start:Date, end:Date}.
+function splitVacationIntoWeekSlots(fromDate, toDate){
+  var s=new Date(fromDate); s.setHours(0,0,0,0);
+  var e=new Date(toDate);   e.setHours(0,0,0,0);
+  var slots=[]; var cur=new Date(s);
+  var slotStart=null; var slotEnd=null;
+  while(cur<=e){
+    var dow=cur.getDay();
+    if(dow>=1&&dow<=5){
+      if(slotStart===null) slotStart=new Date(cur);
+      slotEnd=new Date(cur);
+    } else {
+      if(slotStart!==null){ slots.push({start:slotStart,end:slotEnd}); slotStart=null; slotEnd=null; }
+    }
+    cur.setDate(cur.getDate()+1);
+  }
+  if(slotStart!==null) slots.push({start:slotStart,end:slotEnd});
+  return slots;
 }
 
 // Поточний рік договору: {from, to} — від дати договору, не календарний
@@ -2770,6 +2845,18 @@ function setAbsStatus(cid,absId,status,reason){
 
 function markAbsDone(cid,absId,fromHR){
   setAbsStatus(cid,absId,'done','');
+  // Синхронізація у Payment-файл локації (тільки відпустка, не школи)
+  try {
+    var c=getCRMCard(cid);
+    var abs=(c.absences||[]).find(function(x){ return x.id===absId; });
+    if(abs&&abs.type==='vacation'&&SCHOOL_LOCS.indexOf(c.loc||'')===-1){
+      var slots=splitVacationIntoWeekSlots(abs.from,abs.to);
+      var slotStrings=slots.map(function(sl){ return formatVacationForPayment(sl.start,sl.end); });
+      apiPost({action:'writeAbsenceToPayment',childName:c.name,group:c.group,
+        loc:c.loc,slots:slotStrings,year:new Date(abs.from).getFullYear()})
+        .catch(function(err){ console.warn('Payment sync failed:',err); });
+    }
+  } catch(err){ console.warn('markAbsDone payment sync error:',err); }
   if(fromHR) renderAbsRequests(); else { renderAbsences(); recalcDiscount(); }
 }
 
