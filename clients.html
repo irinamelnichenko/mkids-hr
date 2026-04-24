@@ -1982,6 +1982,13 @@ function openChild(id,group,teacher,loc,name){
   setLocFieldMode(false);
   document.getElementById('mChildTitle').textContent='👤 '+card.name;
   S.curTab=0;
+  document.querySelectorAll('#mChildTabs .tab').forEach(function(t,i){ t.classList.toggle('active',i===0); });
+  document.querySelectorAll('.tab-pane').forEach(function(p,i){ p.classList.toggle('active',i===0); });
+  document.getElementById('payMonthsContent').innerHTML='';
+  document.getElementById('feeHistoryList').innerHTML='';
+  document.getElementById('entryFeeList').innerHTML='';
+  document.getElementById('entryFeeSummary').innerHTML='';
+  document.getElementById('tp3').innerHTML='';
   populateForm(id);
   document.getElementById('mChild').classList.remove('hidden');
 }
