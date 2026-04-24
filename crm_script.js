@@ -14,34 +14,18 @@ var SHEET_HEALTH     = 'Здоров\'я';
 var MONTHS_UA      = ['вересень','жовтень','листопад','грудень','січень','лютий','березень','квітень','травень','червень','липень','серпень'];
 var MONTHS_JS      = [8,9,10,11,0,1,2,3,4,5,6,7];
 var MONTHS_DISPLAY = ['Вересень','Жовтень','Листопад','Грудень','Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень'];
-// Календарний порядок (використовується для листа Оплати-Рік)
 var MONTHS_CAL = ['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
 
 var GROUP_PATTERNS = [
-  /mini.?baby/i,
-  /^baby/i,
-  /find/i,
-  /study/i,
-  /preschool/i,
-  /чомус/i,
-  /^школа$/i,
-  /^гхзд$/i,
-  // Благо (Манхетен, Нац.Гвардії) — українські назви груп
-  /мама[\s\+]*я/i,
-  /малюк/i,
-  /карапуз/i,
-  /пізнайк/i,
-  /бешкетн/i,
-  /мандрівн/i,
-  /дослідн/i,
-  /розумник/i,
-  // Школи — будь-яка назва класу з цифрою
+  /mini.?baby/i, /^baby/i, /find/i, /study/i, /preschool/i,
+  /чомус/i, /^школа$/i, /^гхзд$/i,
+  /мама[\s\+]*я/i, /малюк/i, /карапуз/i, /пізнайк/i,
+  /бешкетн/i, /мандрівн/i, /дослідн/i, /розумник/i,
   /^\s*\d+\s*([dDsS]\s*(клас|кл)?|класс?|кл\.?|[бвБВ])/
 ];
 
 function normalizeGroupName(raw) {
   var s = trim(raw);
-  // ── Стандартні англійські назви ──────────────────────────────────────────
   if (/mini.?baby/i.test(s))  return 'miniBaby-ki';
   if (/^baby/i.test(s))       return 'Baby-ki';
   if (/find/i.test(s))        return 'Find-iki';
@@ -49,17 +33,14 @@ function normalizeGroupName(raw) {
   if (/preschool/i.test(s))   return 'Preschool';
   if (/чомус/i.test(s))       return 'Чомусики';
   if (/^гхзд$/i.test(s))      return 'ГХЗД';
-  // ── Благо — українські назви груп ────────────────────────────────────────
-  if (/мама[\s\+]*я/i.test(s))  return 'miniBaby-ki';  // мама+я → miniBaby-ki
-  if (/малюк/i.test(s))         return 'Baby-ki';       // Малюки
-  if (/карапуз/i.test(s))       return 'Baby-ki';       // Карапузи
-  if (/пізнайк/i.test(s))       return 'Study-ki';      // Пізнайки
-  if (/бешкетн/i.test(s))       return 'Find-iki';      // Бешкетники
-  if (/мандрівн/i.test(s))      return 'Study-ki';      // Мандрівники
-  if (/дослідн/i.test(s))       return 'Study-ki';      // Дослідники
-  if (/розумник/i.test(s))      return 'Preschool';     // Розумники → Preschool (тільки лікарняний)
-  // ── Школи — будь-яка назва класу ─────────────────────────────────────────
-  // Розпізнає: "1 клас", "2 Б", "3 В", "1D клас 2025", "2S клас 2024", "2 D 2024", "1 клас 26/27"
+  if (/мама[\s\+]*я/i.test(s))  return 'miniBaby-ki';
+  if (/малюк/i.test(s))         return 'Baby-ki';
+  if (/карапуз/i.test(s))       return 'Baby-ki';
+  if (/пізнайк/i.test(s))       return 'Study-ki';
+  if (/бешкетн/i.test(s))       return 'Find-iki';
+  if (/мандрівн/i.test(s))      return 'Study-ki';
+  if (/дослідн/i.test(s))       return 'Study-ki';
+  if (/розумник/i.test(s))      return 'Preschool';
   if (/^\s*\d+\s*([dDsS]\s*(клас|кл)?|класс?|кл\.?|[бвБВ])/i.test(s)) return 'Школа';
   if (/^школа$/i.test(s))       return 'Школа';
   return s;
@@ -177,8 +158,10 @@ function doGet(e) {
     else if (action === 'runAggregateYearly') result = aggregatePaymentsYearly();
     else if (action === 'makePublic')         result = makeSheetPublic();
     else if (action === 'getAttendance')      result = getAttendance(e);
-    else if (action === 'getHealthRecords')   result = getHealthRecords(e);
-    else                                      result = {ok:false, error:'Unknown action: ' + action};
+    else if (action === 'getHealthRecords')         result = getHealthRecords(e);
+    else if (action === 'dryRunImportAbsences')      result = dryRunImportAbsences(e.parameter.loc || '');
+    else if (action === 'importAbsencesFromPayment') result = importAbsencesFromPayment(e.parameter.loc || '');
+    else                                             result = {ok:false, error:'Unknown action: ' + action};
     return jsonOut(result);
   } catch(err) {
     return jsonOut({ok:false, error:err.message || String(err)});
@@ -193,7 +176,9 @@ function doPost(e) {
     else if (body.action === 'deleteClient')     result = deleteClient(body.id);
     else if (body.action === 'saveAttendance')   result = saveAttendance(body);
     else if (body.action === 'saveHealthRecord') result = saveHealthRecord(body);
-    else if (body.action === 'deleteHealthRecord') result = deleteHealthRecord(body);
+    else if (body.action === 'deleteHealthRecord')    result = deleteHealthRecord(body);
+    else if (body.action === 'writeAbsenceToPayment')    result = writeAbsenceToPayment(body);
+    else if (body.action === 'importAbsencesFromPayment') result = importAbsencesFromPayment(body.loc || '');
     else result = {ok:false, error:'Unknown action'};
     return jsonOut(result);
   } catch(err) {
@@ -361,10 +346,9 @@ function aggregatePayments() {
           var fv = ch.factEntry || 0;
           var fe = ch.factExtra || 0;
           var bd = ch.budExtra  || 0;
-          var bs = ch.budStudy  || 0;  // Бюджет навчання (колонка +4)
+          var bs = ch.budStudy  || 0;
           var total = fs + fv + fe;
-          var br = bs + bd;             // Бюджет разом = навч + доп
-          // Статус рахуємо без вступного
+          var br = bs + bd;
           var totalNoEntry = fs + fe;
           var status;
           if (br === 0 && totalNoEntry === 0) status = 'unknown';
@@ -377,7 +361,7 @@ function aggregatePayments() {
             g.group, g.teacher, ch.name,
             fs, fv, fe, total, bs, bd, br,
             status, monthName, updateStr,
-            ch.contractDate || ''          // BK → Дата договору (YYYY-MM-DD)
+            ch.contractDate || ''
           ]);
         });
       });
@@ -396,8 +380,6 @@ function aggregatePayments() {
   return {ok:true, rows:allRows.length, errors:errors, month:monthName, updated:updateStr};
 }
 
-// Шукає колонку "Дата договору" в заголовкових рядках (перші 5)
-// Повертає індекс колонки або -1 якщо не знайдено
 function detectContractDateCol(data) {
   for (var r = 0; r < Math.min(5, data.length); r++) {
     for (var c = 0; c < data[r].length; c++) {
@@ -408,52 +390,39 @@ function detectContractDateCol(data) {
   return -1;
 }
 
-// Знаходить колонку поточного місяця
-// Merged cells — значення є тільки в першій колонці об'єднання
-// Тому шукаємо в рядках 1-2 (індекси 0-1)
 function detectCurrentMonthCol(rows, curJSMonth) {
-  // Спочатку шукаємо точний збіг назви місяця
   for (var r = 0; r < Math.min(3, rows.length); r++) {
     for (var c = 1; c < rows[r].length; c++) {
       var cell = String(rows[r][c] || '').toLowerCase().trim();
       for (var mi = 0; mi < MONTHS_UA.length; mi++) {
         if (cell === MONTHS_UA[mi] && MONTHS_JS[mi] === curJSMonth) {
-          Logger.log('Exact month match at r=' + r + ' c=' + c);
           return c;
         }
       }
     }
   }
-  // Потім шукаємо часткове співпадіння
   for (var r = 0; r < Math.min(3, rows.length); r++) {
     for (var c = 1; c < rows[r].length; c++) {
       var cell = String(rows[r][c] || '').toLowerCase().trim();
       for (var mi = 0; mi < MONTHS_UA.length; mi++) {
         if (cell.indexOf(MONTHS_UA[mi]) >= 0 && MONTHS_JS[mi] === curJSMonth) {
-          Logger.log('Partial month match at r=' + r + ' c=' + c + ' cell=' + cell);
           return c;
         }
       }
     }
   }
-  // Fallback: календарний рік, 5 колонок на місяць
-  // Січень(0)=col1, Лютий(1)=col6, ..., Квітень(3)=col16, ...
   var col = 1 + curJSMonth * 5;
-  Logger.log('Fallback: col=' + col + ' jsMonth=' + curJSMonth);
   return col;
 }
 
-// Структура місяця: навч(+0) | вступ(+1) | доп(+2) | бюджет доп(+3) | бюджет навч(+4)
 function parsePaymentSheet(data, monthCol, contractCol) {
   var DATA_START = 3;
   var groups = [];
   var curGroup = null;
-
   for (var r = DATA_START; r < data.length; r++) {
     var row = data[r];
     var nameCell = trim(String(row[0] || ''));
     if (!nameCell) continue;
-
     if (isGroupHeaderRow(row, monthCol)) {
       var firstSpace = nameCell.search(/\s/);
       var teacher = firstSpace > 0 ? nameCell.slice(firstSpace).trim() : '';
@@ -466,12 +435,11 @@ function parsePaymentSheet(data, monthCol, contractCol) {
         curGroup = {group:'(без групи)', teacher:'', children:[]};
         groups.push(curGroup);
       }
-      var fs = toNum(row[monthCol]);       // факт навчання
-      var fv = toNum(row[monthCol + 1]);   // факт вступний
-      var fe = toNum(row[monthCol + 2]);   // факт доп
-      var bd = toNum(row[monthCol + 3]);   // бюджет доп
-      var bs = toNum(row[monthCol + 4]);   // бюджет навчання
-      // Дата договору — за динамічно визначеним індексом колонки
+      var fs = toNum(row[monthCol]);
+      var fv = toNum(row[monthCol + 1]);
+      var fe = toNum(row[monthCol + 2]);
+      var bd = toNum(row[monthCol + 3]);
+      var bs = toNum(row[monthCol + 4]);
       var cd = (contractCol >= 0) ? parseDateDMY(row[contractCol]) : '';
       curGroup.children.push({
         name: nameCell,
@@ -506,32 +474,17 @@ function toNum(v) {
   var n = parseFloat(String(v).replace(',', '.'));
   return isNaN(n) ? 0 : n;
 }
-// Конвертує дату договору у формат "YYYY-MM-DD"
-// Підтримувані формати (роздільники: крапка, слеш, вертикальна риска):
-//   Date-об'єкт            → через Utilities.formatDate
-//   "30.08.2021"  DD.MM.YYYY
-//   "06.09.23"    DD.MM.YY  → 2-значний рік: '20'+YY
-//   "30/08/21"    DD/MM/YY
-//   "06/09/24"    DD/MM/YY
-//   "05/23"       MM/YY    → день = 01
-//   "02/24"       MM/YY
-//   "10|2025"     MM|YYYY  → день = 01
-//   "07|25"       MM|YY    → день = 01
-//   "9|25"        M|YY     → день = 01
-// Повертає '' якщо порожньо або формат не розпізнано
+
 function parseDateDMY(v) {
   if (!v && v !== 0) return '';
-  // Google Sheets може повернути Date-об'єкт
   if (v instanceof Date) {
     if (isNaN(v.getTime())) return '';
     return Utilities.formatDate(v, 'Europe/Kiev', 'yyyy-MM-dd');
   }
   var s = trim(String(v));
   if (!s) return '';
-  // Роздільник: крапка, слеш або вертикальна риска
   var sep = s.indexOf('.') >= 0 ? '\\.' : s.indexOf('/') >= 0 ? '\\/' : s.indexOf('|') >= 0 ? '\\|' : null;
   if (!sep) return '';
-  // 3 частини: DD sep MM sep YY/YYYY
   var m3 = s.match(new RegExp('^(\\d{1,2})' + sep + '(\\d{1,2})' + sep + '(\\d{2}|\\d{4})$'));
   if (m3) {
     var day   = ('0' + m3[1]).slice(-2);
@@ -539,7 +492,6 @@ function parseDateDMY(v) {
     var year  = m3[3].length === 2 ? '20' + m3[3] : m3[3];
     return year + '-' + month + '-' + day;
   }
-  // 2 частини: MM sep YY/YYYY → день = 01
   var m2 = s.match(new RegExp('^(\\d{1,2})' + sep + '(\\d{2}|\\d{4})$'));
   if (m2) {
     var month = ('0' + m2[1]).slice(-2);
@@ -548,18 +500,15 @@ function parseDateDMY(v) {
   }
   return '';
 }
+
 function formatDate(d) {
   return Utilities.formatDate(d, 'Europe/Kiev', 'dd.MM.yyyy HH:mm');
 }
+
 function getMonthDisplayName(jsMonth) {
   var idx = MONTHS_JS.indexOf(jsMonth);
   return idx >= 0 ? MONTHS_DISPLAY[idx] : String(jsMonth + 1);
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// РІЧНИЙ АГРЕГАТ — лист "Оплати-Рік"
-// Колонки: 6 фіксованих + 5 × 12 місяців + 5 підсумкових = 71
-// ═══════════════════════════════════════════════════════════════════════════
 
 function writeYearlyHeader(sheet) {
   sheet.clearContents();
@@ -576,17 +525,14 @@ function aggregatePaymentsYearly() {
   var configSS    = SpreadsheetApp.openById(CONFIG_SHEET_ID);
   var configSheet = configSS.getSheets()[0];
   var configData  = configSheet.getDataRange().getValues();
-
   var crmSS    = getCRMSpreadsheet();
   var yearSheet = crmSS.getSheetByName(SHEET_YEARLY);
   if (!yearSheet) yearSheet = crmSS.insertSheet(SHEET_YEARLY);
-
   var now         = new Date();
-  var curJSMonth  = now.getMonth();   // 0-11, calendar
+  var curJSMonth  = now.getMonth();
   var updateStr   = formatDate(now);
   var allRows     = [];
   var errors      = [];
-
   for (var r = 1; r < configData.length; r++) {
     var cfgRow    = configData[r];
     var dir       = trim(cfgRow[0]);
@@ -595,19 +541,14 @@ function aggregatePaymentsYearly() {
     var sheetId   = trim(cfgRow[3]);
     var sheetName = trim(cfgRow[4]) || 'Payment';
     if (!loc || !sheetId) continue;
-
     try {
       var ss           = SpreadsheetApp.openById(sheetId);
       var paymentSheet = ss.getSheetByName(sheetName);
       if (!paymentSheet) paymentSheet = ss.getSheets()[0];
       var data = paymentSheet.getDataRange().getValues();
-
-      // Отримуємо структуру груп за поточним місяцем
       var curMonthCol  = detectCurrentMonthCol(data, curJSMonth);
       var contractCol  = detectContractDateCol(data);
       var groups       = parsePaymentSheet(data, curMonthCol, contractCol);
-
-      // Будуємо карту ім'я → рядок (DATA_START = 3)
       var nameToRow = {};
       for (var ri = 3; ri < data.length; ri++) {
         var nc = trim(String(data[ri][0] || ''));
@@ -615,7 +556,6 @@ function aggregatePaymentsYearly() {
           nameToRow[nc] = ri;
         }
       }
-
       groups.forEach(function(g) {
         g.children.forEach(function(ch) {
           var rowIdx  = nameToRow[ch.name];
@@ -624,15 +564,12 @@ function aggregatePaymentsYearly() {
           var factYear  = 0;
           var budYear   = 0;
           var factToday = 0;
-
           for (var mi = 0; mi < 12; mi++) {
-            // Колонка = 1 + mi*5  (Січень=1, Лютий=6, …, Грудень=56)
             var col = 1 + mi * 5;
-            var fs  = rowData ? toNum(rowData[col])     : 0; // Факт навч
-            var fe  = rowData ? toNum(rowData[col + 2]) : 0; // Факт доп
-            var be  = rowData ? toNum(rowData[col + 3]) : 0; // Бюджет доп
-            var bs  = rowData ? toNum(rowData[col + 4]) : 0; // Бюджет навч
-
+            var fs  = rowData ? toNum(rowData[col])     : 0;
+            var fe  = rowData ? toNum(rowData[col + 2]) : 0;
+            var be  = rowData ? toNum(rowData[col + 3]) : 0;
+            var bs  = rowData ? toNum(rowData[col + 4]) : 0;
             var totalNoEntry = fs + fe;
             var budget       = bs + be;
             var mStatus;
@@ -641,32 +578,26 @@ function aggregatePaymentsYearly() {
             else if (totalNoEntry > budget)             mStatus = 'over';
             else if (totalNoEntry >= budget)            mStatus = 'paid';
             else                                        mStatus = 'debt';
-
             rowOut.push(fs, fe, bs, be, mStatus);
             factYear  += totalNoEntry;
             budYear   += budget;
             if (mi <= curJSMonth) factToday += totalNoEntry;
           }
-
           var debtYear = budYear > factYear ? budYear - factYear : 0;
           rowOut.push(factYear, budYear, debtYear, factToday, updateStr);
           allRows.push(rowOut);
         });
       });
-
     } catch(e) {
       errors.push(loc + ': ' + e.message);
-      Logger.log('ERROR yearly ' + loc + ': ' + e.message);
     }
   }
-
   yearSheet.clearContents();
   writeYearlyHeader(yearSheet);
-  var NUM_COLS = 6 + 12 * 5 + 5; // = 71
+  var NUM_COLS = 6 + 12 * 5 + 5;
   if (allRows.length > 0) {
     yearSheet.getRange(2, 1, allRows.length, NUM_COLS).setValues(allRows);
   }
-  Logger.log('Done yearly: ' + allRows.length + ' rows, ' + errors.length + ' errors');
   return {ok:true, rows:allRows.length, errors:errors, updated:updateStr};
 }
 
@@ -688,10 +619,6 @@ function getPaymentsYearly() {
   }
   return {ok:true, data:rows};
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// ТАБЕЛЬ ВІДВІДУВАННЯ
-// ═══════════════════════════════════════════════════════════════════════════
 
 function getAttendance(e) {
   var params  = e ? (e.parameter || {}) : {};
@@ -747,10 +674,6 @@ function saveAttendance(body) {
   return {ok:true, saved:saved};
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// МЕДИЧНА КАРТКА
-// ═══════════════════════════════════════════════════════════════════════════
-
 function getHealthRecords(e) {
   var params  = e ? (e.parameter || {}) : {};
   var childId = trim(params.childId || '');
@@ -777,9 +700,7 @@ function saveHealthRecord(body) {
   var sheet = ss.getSheetByName(SHEET_HEALTH);
   if (!sheet) { sheet = ss.insertSheet(SHEET_HEALTH); writeHealthHeader(sheet); }
   var now = formatDate(new Date());
-  // Використовуємо client-generated ID або генеруємо новий
   var id = trim(String(rec.id || '')) || ('h_' + new Date().getTime());
-  // Перевіряємо чи не дублікат
   var vals = sheet.getDataRange().getValues();
   for (var r = 1; r < vals.length; r++) {
     if (String(vals[r][0]) === id) return {ok:true, id:id, action:'exists'};
@@ -804,16 +725,19 @@ function deleteHealthRecord(body) {
   return {ok:false, error:'Record not found'};
 }
 
-// ─── ДІАГНОСТИКА ВІДПУСТОК (BL-BO) ─────────────────────────────────────────
-// parseAbsencePeriod: парсить рядок типу "09.12-15.12", "01.09.2024-15.09.2024",
-// "15-20.01". Повертає {from, to} у форматі YYYY-MM-DD або null.
-// refYear — рік за замовчуванням (для дат без явного року).
 function parseAbsencePeriod(str, refYear) {
   if (!str) return null;
+
+  // Date-об'єкт з Google Sheets — трактуємо як MM/YYYY (перший тиждень місяця)
+  if (str instanceof Date) {
+    if (isNaN(str.getTime())) return null;
+    return parseAbsencePeriod(pad2(str.getMonth() + 1) + '/' + str.getFullYear(), refYear);
+  }
+
   var s = trim(String(str));
   if (!s || s === '-' || s.toLowerCase() === 'по') return null;
 
-  // Формат 1: "01.09.2024-15.09.2024" — обидві частини з 4-значним роком
+  // Формат 1: "01.09.2024-15.09.2024"
   var m1 = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})\s*[-–]\s*(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
   if (m1) {
     return {
@@ -822,12 +746,11 @@ function parseAbsencePeriod(str, refYear) {
     };
   }
 
-  // Формат 2: "09.12-15.12" — день.місяць з обох боків, рік з refYear
+  // Формат 2: "09.12-15.12"
   var m2 = s.match(/^(\d{1,2})\.(\d{1,2})\s*[-–]\s*(\d{1,2})\.(\d{1,2})$/);
   if (m2) {
     var fromMon = +m2[2], toMon = +m2[4];
-    // refYear: якщо місяць >= поточного місяця → попередній рік
-    var nowMon = new Date().getMonth() + 1; // 1-based
+    var nowMon = new Date().getMonth() + 1;
     var fy = (fromMon >= nowMon) ? (refYear - 1) : refYear;
     var ty = (toMon   >= nowMon) ? (refYear - 1) : refYear;
     return {
@@ -836,7 +759,7 @@ function parseAbsencePeriod(str, refYear) {
     };
   }
 
-  // Формат 3: "15-20.01" — тільки дні з початку, місяць в кінці
+  // Формат 3: "15-20.01"
   var m3 = s.match(/^(\d{1,2})\s*[-–]\s*(\d{1,2})\.(\d{1,2})$/);
   if (m3) {
     var mon = +m3[3];
@@ -848,14 +771,91 @@ function parseAbsencePeriod(str, refYear) {
     };
   }
 
-  // Не розпарсили
+  // Формат 4: "MM/YY", "MM|YY", "MM/YYYY", "MM|YYYY"
+  // "10/25" → 1 тиждень у жовтні 2025: перший повний робочий тиждень місяця
+  var m4 = s.match(/^(\d{1,2})\s*[\/|]\s*(\d{2}|\d{4})$/);
+  if (m4) {
+    var mon4 = +m4[1];
+    var yr4  = m4[2].length === 2 ? 2000 + (+m4[2]) : +m4[2];
+    if (mon4 >= 1 && mon4 <= 12) {
+      // Знаходимо перший робочий день місяця
+      var d = new Date(yr4, mon4 - 1, 1);
+      while (d.getDay() === 0 || d.getDay() === 6) { d.setDate(d.getDate() + 1); }
+      var fromD = new Date(d);
+      var toD   = new Date(d); toD.setDate(toD.getDate() + 4);
+      return {
+        from: fromD.getFullYear() + '-' + pad2(fromD.getMonth()+1) + '-' + pad2(fromD.getDate()),
+        to:   toD.getFullYear()   + '-' + pad2(toD.getMonth()+1)   + '-' + pad2(toD.getDate()),
+        _synthetic:    true,  // дати умовні — точний тиждень невідомий
+        _originalRaw:  str    // оригінальний рядок зі слоту
+      };
+    }
+  }
+
   return null;
 }
 
 function pad2(n) { return ('0' + n).slice(-2); }
 
-// Динамічно шукає колонки тижнів відпустки в заголовкових рядках (перші 5).
-// Повертає масив [col1, col2, col3, col4] або null якщо не знайдено.
+function writeAbsenceToPayment(body) {
+  try {
+    var childName = trim(body.childName || '');
+    var group     = trim(body.group    || '');
+    var loc       = trim(body.loc      || '');
+    var slots     = body.slots || [];
+    if (!childName || !loc || !slots.length) return {ok:false, error:'Missing params'};
+    var configSS    = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+    var configSheet = configSS.getSheets()[0];
+    var configData  = configSheet.getDataRange().getValues();
+    var sheetId = null; var sheetName = 'Payment';
+    for (var r = 1; r < configData.length; r++) {
+      if (trim(String(configData[r][2] || '')) === loc) {
+        sheetId   = trim(String(configData[r][3] || ''));
+        sheetName = trim(String(configData[r][4] || '')) || 'Payment';
+        break;
+      }
+    }
+    if (!sheetId) return {ok:false, error:'Location not found: ' + loc};
+    var paymentSS    = SpreadsheetApp.openById(sheetId);
+    var paymentSheet = paymentSS.getSheetByName(sheetName) || paymentSS.getSheets()[0];
+    var data         = paymentSheet.getDataRange().getValues();
+    var absCols = detectAbsenceCols(data);
+    if (absCols[0] === null) return {ok:false, error:'Absence columns not found: ' + loc};
+    var norm = function(s){ return String(s||'').trim().toLowerCase().replace(/\s+/g,' '); };
+    var normName   = norm(childName);
+    var nameColIdx = 0;  // ПІБ завжди у першій колонці Payment-файлу
+
+    // Збираємо всі рядки з точним збігом ПІБ (для виявлення тезок)
+    var matchRows = [];
+    for (var row = 3; row < data.length; row++) {
+      var rowName = norm(data[row][nameColIdx]);
+      if (rowName === normName) matchRows.push(row);
+    }
+    if (matchRows.length === 0) return {ok:false, error:'Child not found: ' + childName};
+    if (matchRows.length > 1) {
+      Logger.log('writeAbsenceToPayment WARN: знайдено ' + matchRows.length +
+        ' рядків з ім\'ям "' + childName + '" у ' + loc +
+        ' (рядки: ' + matchRows.map(function(r){ return r+1; }).join(', ') + ') — беремо перший');
+    }
+    var targetRow = matchRows[0];
+    var writtenTo = [];
+    var slotIdx   = 0;
+    for (var ci = 0; ci < absCols.length && slotIdx < slots.length; ci++) {
+      if (absCols[ci] === null) continue;
+      var existing = trim(String(data[targetRow][absCols[ci]] || ''));
+      if (!existing) {
+        paymentSheet.getRange(targetRow + 1, absCols[ci] + 1).setValue(slots[slotIdx]);
+        writtenTo.push({weekNum: ci + 1, value: slots[slotIdx]});
+        slotIdx++;
+      }
+    }
+    if (slotIdx === 0) return {ok:false, error:'All absence slots already filled for ' + childName};
+    return {ok:true, writtenTo: writtenTo};
+  } catch(err) {
+    return {ok:false, error: err.message || String(err)};
+  }
+}
+
 function detectAbsenceCols(data) {
   var labels = ['1 тиждень', '2 тиждень', '3 тиждень', '4 тиждень'];
   var cols = [null, null, null, null];
@@ -872,43 +872,159 @@ function detectAbsenceCols(data) {
   return cols;
 }
 
-// Діагностична функція — ТІЛЬКИ читає і логує, нічого не пише.
-// Запускати вручну з Apps Script редактора: diagnoseAbsences()
-function diagnoseAbsences() {
-  var configSS = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+// ── DRY-RUN ІМПОРТ ВІДПУСТОК З PAYMENT → CRM ────────────────────────────────
+// ТІЛЬКИ читає і логує — нічого не пише!
+// locFilter — необов'язковий рядок. Якщо порожній — обробляє всі локації крім шкіл.
+//
+// refYear: береться з поточної дати (new Date().getFullYear()).
+//   parseAbsencePeriod сам вирішує рік: якщо місяць у рядку >= поточного → рік-1,
+//   інакше → поточний рік. При запуску у квітні 2026:
+//     "27.10-31.10" → 2025-10-27/2025-10-31  (жовтень > квітень → 2025)
+//     "20.04-24.04" → 2026-04-20/2026-04-24  (квітень == квітень → 2026)
+//
+// Dedupe: завантажуємо всіх CRM-клієнтів один раз, будуємо map
+//   norm(name)+'|'+norm(loc) → [{from,to}].
+//   Якщо parsed.from+parsed.to вже є у CRM — рахуємо як duplicate, не імпортуємо.
+//
+// Запуск з IDE: _runDryRunImport() або _runDryRunImportOsokory()
+// ── СПІЛЬНИЙ ХЕЛПЕР: завантажує CRM-клієнтів одним разом ─────────────────────
+// Повертає map: norm(name)+'|'+norm(loc) →
+//   {id, absences:[{from,to,...}], group, teacher, contractDate, monthlyFee, ...}
+// Якщо два рядки з однаковим name+loc — перший виграє (WARN у лозі).
+function _loadCRMClientsMap(norm) {
+  var crmSS    = getCRMSpreadsheet();
+  var crmSheet = crmSS.getSheetByName(SHEET_CLIENTS);
+  var map      = {};
+  if (!crmSheet) return map;
+  var crmData = crmSheet.getDataRange().getValues();
+  if (crmData.length < 2) return map;
+  var hdrs    = crmData[0].map(String);
+  var colId   = hdrs.indexOf('ID');              if (colId   < 0) colId   = 0;
+  var colName = hdrs.indexOf('ПІБ дитини');      if (colName < 0) colName = 1;
+  var colLoc  = hdrs.indexOf('Локація');         if (colLoc  < 0) colLoc  = 2;
+  var colGrp  = hdrs.indexOf('Група');           if (colGrp  < 0) colGrp  = 3;
+  var colTch  = hdrs.indexOf('Вихователь');      if (colTch  < 0) colTch  = 4;
+  var colCD   = hdrs.indexOf('Дата договору');   if (colCD   < 0) colCD   = 10;
+  var colCT   = hdrs.indexOf('Тип договору');    if (colCT   < 0) colCT   = 11;
+  var colFee  = hdrs.indexOf('Сума договору');   if (colFee  < 0) colFee  = 12;
+  var colAbs  = hdrs.indexOf('Відсутності (JSON)');
+  var colNot  = hdrs.indexOf('Нотатки');
+  for (var ri = 1; ri < crmData.length; ri++) {
+    var rName = norm(crmData[ri][colName] || '');
+    var rLoc  = norm(crmData[ri][colLoc]  || '');
+    if (!rName) continue;
+    var key = rName + '|' + rLoc;
+    if (map[key]) {
+      Logger.log('_loadCRMClientsMap WARN: тезка "' + rName + '" у "' + rLoc + '" — ігноруємо рядок ' + (ri+1));
+      continue;
+    }
+    var absArr = [];
+    if (colAbs >= 0) { try { absArr = JSON.parse(String(crmData[ri][colAbs] || '[]')); } catch(e2) {} }
+    map[key] = {
+      id:           String(crmData[ri][colId]  || ''),
+      name:         String(crmData[ri][colName] || ''),
+      loc:          String(crmData[ri][colLoc]  || ''),
+      group:        String(crmData[ri][colGrp]  || ''),
+      teacher:      String(crmData[ri][colTch]  || ''),
+      contractDate: String(crmData[ri][colCD]   || ''),
+      contractType: String(crmData[ri][colCT]   || 'standard'),
+      monthlyFee:   toNum(crmData[ri][colFee]),
+      notes:        colNot >= 0 ? String(crmData[ri][colNot] || '') : '',
+      absences:     absArr
+    };
+  }
+  return map;
+}
+
+// ── ХЕЛПЕР: рахує робочі дні між двома YYYY-MM-DD ──────────────────────────
+function _countWorkDays(fromStr, toStr) {
+  if (!fromStr || !toStr) return 0;
+  var f = new Date(fromStr); var t = new Date(toStr);
+  if (isNaN(f.getTime()) || isNaN(t.getTime()) || t < f) return 0;
+  var n = 0; var cur = new Date(f.getTime());
+  while (cur <= t) { var d = cur.getDay(); if (d !== 0 && d !== 6) n++; cur.setDate(cur.getDate()+1); }
+  return n;
+}
+
+// ── ХЕЛПЕР: будує об'єкт відпустки для імпорту ─────────────────────────────
+function _makeImportAbsence(parsed, rawSlot) {
+  var iso = new Date().toISOString();
+  var id  = 'abs_import_' + Date.now() + '_' + Math.random().toString(36).slice(2,7);
+  if (parsed) {
+    var wd   = _countWorkDays(parsed.from, parsed.to);
+    var w    = Math.min(4, Math.ceil(Math.max(0, wd) / 5));
+    var note = parsed._synthetic
+      ? 'імпорт з Payment: "' + (parsed._originalRaw || rawSlot) + '" (1 тиждень у цьому місяці, точні дати не збережено)'
+      : 'імпорт з Payment';
+    return {
+      id: id, type: 'vacation', from: parsed.from, to: parsed.to,
+      workDays: wd, weeks: w,
+      monthsBreakdown: [], totalPct: 0, totalAmount: 0,
+      status: 'done',
+      statusHistory: [{status:'done', at:iso, by:'import'}],
+      rejectReason: '', note: note,
+      createdBy: 'import', createdAt: iso
+    };
+  } else {
+    // placeholder — формат зовсім не розпізнано
+    return {
+      id: id, type: 'vacation', from: null, to: null,
+      workDays: 5, weeks: 1,
+      monthsBreakdown: [], totalPct: 0, totalAmount: 0,
+      status: 'done',
+      statusHistory: [{status:'done', at:iso, by:'import'}],
+      rejectReason: '',
+      note: 'імпорт з Payment: "' + rawSlot + '" (формат не розпізнано, прийнято як 1 тиждень)',
+      createdBy: 'import', createdAt: iso
+    };
+  }
+}
+
+// ── DRY-RUN: читає, рахує, нічого не пише ────────────────────────────────────
+function dryRunImportAbsences(locFilter) {
+  var SCHOOL_LOCS_SKIP = ['Школа Осокорки', 'Школа 228', 'Онлайн школа'];
+  var refYear = new Date().getFullYear();
+  var norm    = function(s){ return String(s||'').trim().toLowerCase().replace(/\s+/g,' '); };
+
+  var crmMap = _loadCRMClientsMap(norm);
+  Logger.log('CRM: завантажено ' + Object.keys(crmMap).length + ' клієнтів для dedupe');
+
+  var configSS    = SpreadsheetApp.openById(CONFIG_SHEET_ID);
   var configSheet = configSS.getSheets()[0];
-  var configData = configSheet.getDataRange().getValues();
+  var configData  = configSheet.getDataRange().getValues();
 
-  var now = new Date();
-  var refYear = now.getFullYear(); // базовий рік для parseAbsencePeriod
+  var totalStats = {
+    locations:0, totalSlotsProcessed:0,
+    wouldCreate:0, wouldCreateExact:0, wouldCreateSynthetic:0,
+    wouldPlaceholder:0, duplicates:0,
+    wouldCreateNewClient:0, wouldSkipNoAbsence:0
+  };
+  var byLocation     = {};
+  var unparsedCounts = {};
 
-  // Статистика по локаціях: {loc: {total, parsed, unparsed}}
-  var stats = {};
-  // Унікальні UNPARSED рядки: {raw: count}
-  var unparsedPatterns = {};
-
-  Logger.log('=== diagnoseAbsences START refYear=' + refYear + ' ===');
+  Logger.log('=== dryRunImportAbsences START refYear=' + refYear +
+    (locFilter ? ' loc=' + locFilter : ' (всі локації)') + ' ===');
 
   for (var r = 1; r < configData.length; r++) {
-    var cfgRow  = configData[r];
-    var loc     = trim(cfgRow[2]);
-    var sheetId = trim(cfgRow[3]);
-    var sheetName = trim(cfgRow[4]) || 'Payment';
+    var loc       = trim(configData[r][2]);
+    var sheetId   = trim(configData[r][3]);
+    var sheetName = trim(configData[r][4]) || 'Payment';
     if (!loc || !sheetId) continue;
+    if (SCHOOL_LOCS_SKIP.indexOf(loc) >= 0) continue;
+    if (locFilter && loc !== locFilter) continue;
 
-    stats[loc] = {total: 0, parsed: 0, unparsed: 0};
+    totalStats.locations++;
+    var locStat = {created:0, placeholder:0, duplicates:0, newClients:0, skipped:0};
 
     try {
-      var ss = SpreadsheetApp.openById(sheetId);
-      var paymentSheet = ss.getSheetByName(sheetName);
-      if (!paymentSheet) paymentSheet = ss.getSheets()[0];
-      var data = paymentSheet.getDataRange().getValues();
+      var ss           = SpreadsheetApp.openById(sheetId);
+      var paymentSheet = ss.getSheetByName(sheetName) || ss.getSheets()[0];
+      var data         = paymentSheet.getDataRange().getValues();
 
       var absCols = detectAbsenceCols(data);
-      Logger.log(loc + ' | absenceCols=[' + absCols.join(',') + ']');
-
       if (absCols[0] === null) {
-        Logger.log(loc + ' | WARN: не знайдено колонки тижнів відпустки (1-4 тиждень)');
+        Logger.log(loc + ': WARN — колонки BL/BM/BN/BO не знайдено, пропускаємо');
+        byLocation[loc] = locStat;
         continue;
       }
 
@@ -916,84 +1032,423 @@ function diagnoseAbsences() {
       for (var row = DATA_START; row < data.length; row++) {
         var nameCell = trim(String(data[row][0] || ''));
         if (!nameCell) continue;
+        if (isGroupHeaderRow(data[row], 1)) continue;
 
-        var bl = trim(String(data[row][absCols[0]] || ''));
-        var bm = trim(String(data[row][absCols[1]] || ''));
-        var bn = trim(String(data[row][absCols[2]] || ''));
-        var bo = trim(String(data[row][absCols[3]] || ''));
+        // Є хоча б один непорожній слот BL-BO?
+        var hasAnySlot = false;
+        for (var si = 0; si < absCols.length; si++) {
+          if (absCols[si] !== null && trim(String(data[row][absCols[si]] || ''))) { hasAnySlot = true; break; }
+        }
+        if (!hasAnySlot) { locStat.skipped++; totalStats.wouldSkipNoAbsence++; continue; }
 
-        if (!bl && !bm && !bn && !bo) continue;
+        // Шукаємо у CRM. Якщо немає → нова картка, всі слоти йдуть як нові
+        var crmKey  = norm(nameCell) + '|' + norm(loc);
+        var isNew   = !crmMap.hasOwnProperty(crmKey);
+        var existingPairs = {};
+        if (isNew) {
+          locStat.newClients++;
+          totalStats.wouldCreateNewClient++;
+        } else {
+          crmMap[crmKey].absences.forEach(function(a){
+            if (a.from && a.to) existingPairs[a.from + '|' + a.to] = true;
+          });
+        }
 
-        var parts = [bl, bm, bn, bo];
-        var parsed = parts.map(function(p) {
-          if (!p) return '-';
-          stats[loc].total++;
-          var res = parseAbsencePeriod(p, refYear);
-          if (res) {
-            stats[loc].parsed++;
-            return res.from + '→' + res.to;
+        // Перебираємо 4 слоти
+        for (var si2 = 0; si2 < absCols.length; si2++) {
+          if (absCols[si2] === null) continue;
+          var slot = trim(String(data[row][absCols[si2]] || ''));
+          if (!slot) continue;
+          totalStats.totalSlotsProcessed++;
+          var parsed = parseAbsencePeriod(slot, refYear);
+          if (parsed) {
+            var pairKey = parsed.from + '|' + parsed.to;
+            if (!isNew && existingPairs[pairKey]) {
+              locStat.duplicates++; totalStats.duplicates++;
+            } else {
+              locStat.created++; totalStats.wouldCreate++;
+              if (parsed._synthetic) { totalStats.wouldCreateSynthetic++; }
+              else                   { totalStats.wouldCreateExact++;      }
+              existingPairs[pairKey] = true;
+            }
           } else {
-            stats[loc].unparsed++;
-            unparsedPatterns[p] = (unparsedPatterns[p] || 0) + 1;
-            Logger.log(loc + ' | ' + nameCell + ' | UNPARSED: [' + p + ']');
-            return '?';
+            unparsedCounts[slot] = (unparsedCounts[slot] || 0) + 1;
+            locStat.placeholder++; totalStats.wouldPlaceholder++;
           }
-        });
-
-        Logger.log(
-          loc + ' | ' + nameCell +
-          ' | BL=[' + bl + '] BM=[' + bm + '] BN=[' + bn + '] BO=[' + bo + ']' +
-          ' | parsed: ' + parsed.join(' / ')
-        );
+        }
       }
-    } catch (e) {
-      Logger.log(loc + ' | ERROR: ' + e.message);
+
+      Logger.log(loc + ': wouldCreate=' + locStat.created +
+        ', placeholder=' + locStat.placeholder +
+        ', duplicates='  + locStat.duplicates +
+        ', newClients='  + locStat.newClients +
+        ', skipped='     + locStat.skipped);
+
+    } catch(err) {
+      Logger.log(loc + ': ERROR — ' + (err.message || String(err)));
+    }
+
+    byLocation[loc] = {
+      created: locStat.created, placeholder: locStat.placeholder,
+      duplicates: locStat.duplicates, newClients: locStat.newClients
+    };
+  }
+
+  var unparsedKeys = Object.keys(unparsedCounts);
+  unparsedKeys.sort(function(a,b){ return unparsedCounts[b]-unparsedCounts[a]; });
+  var unparsedSamples = unparsedKeys.slice(0,20);
+
+  Logger.log('');
+  Logger.log('=== ПІДСУМОК ===');
+  Logger.log('Локацій:              ' + totalStats.locations);
+  Logger.log('Слотів оброблено:     ' + totalStats.totalSlotsProcessed);
+  Logger.log('wouldCreate:          ' + totalStats.wouldCreate +
+    ' (exact=' + totalStats.wouldCreateExact + ', synthetic=' + totalStats.wouldCreateSynthetic + ')');
+  Logger.log('wouldPlaceholder:     ' + totalStats.wouldPlaceholder);
+  Logger.log('duplicates:           ' + totalStats.duplicates);
+  Logger.log('wouldCreateNewClient: ' + totalStats.wouldCreateNewClient);
+  Logger.log('wouldSkipNoAbsence:   ' + totalStats.wouldSkipNoAbsence);
+  if (unparsedSamples.length) {
+    Logger.log('TOP unparsed патерни:');
+    unparsedSamples.forEach(function(k){ Logger.log('  "' + k + '" \xd7 ' + unparsedCounts[k]); });
+  }
+  Logger.log('=== dryRunImportAbsences END ===');
+
+  return {ok:true, stats:totalStats, byLocation:byLocation, unparsedSamples:unparsedSamples};
+}
+
+function _runDryRunImport()        { dryRunImportAbsences(''); }
+function _runDryRunImportOsokory() { dryRunImportAbsences('Осокорки'); }
+
+// ── РЕАЛЬНИЙ ІМПОРТ ВІДПУСТОК З PAYMENT → CRM ────────────────────────────────
+// Лінива ініціалізація: картки створюються тільки якщо є записи у BL-BO.
+// Один виклик saveClient() на дитину: картка + відпустки разом.
+// Тезки: перший рядок CRM виграє, WARN у лозі.
+function importAbsencesFromPayment(locFilter) {
+  var SCHOOL_LOCS_SKIP = ['Школа Осокорки', 'Школа 228', 'Онлайн школа'];
+  var refYear = new Date().getFullYear();
+  var norm    = function(s){ return String(s||'').trim().toLowerCase().replace(/\s+/g,' '); };
+  var nowISO  = new Date().toISOString();
+  var todayUA = Utilities.formatDate(new Date(), 'Europe/Kiev', 'dd.MM.yyyy');
+
+  // Завантажуємо CRM-клієнтів один раз
+  var crmMap = _loadCRMClientsMap(norm);
+  Logger.log('CRM: завантажено ' + Object.keys(crmMap).length + ' клієнтів');
+
+  var configSS    = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var configSheet = configSS.getSheets()[0];
+  var configData  = configSheet.getDataRange().getValues();
+
+  var stats = {
+    locationsProcessed:0,
+    newClientsCreated:0, existingClientsUpdated:0,
+    absencesAdded:0, absencesPlaceholder:0, absencesDuplicates:0,
+    errors:[]
+  };
+
+  Logger.log('=== importAbsencesFromPayment START' +
+    (locFilter ? ' loc=' + locFilter : ' (всі локації)') + ' ===');
+
+  for (var r = 1; r < configData.length; r++) {
+    var loc       = trim(configData[r][2]);
+    var sheetId   = trim(configData[r][3]);
+    var sheetName = trim(configData[r][4]) || 'Payment';
+    if (!loc || !sheetId) continue;
+    if (SCHOOL_LOCS_SKIP.indexOf(loc) >= 0) continue;
+    if (locFilter && loc !== locFilter) continue;
+
+    stats.locationsProcessed++;
+
+    try {
+      var ss           = SpreadsheetApp.openById(sheetId);
+      var paymentSheet = ss.getSheetByName(sheetName) || ss.getSheets()[0];
+      var data         = paymentSheet.getDataRange().getValues();
+
+      var absCols = detectAbsenceCols(data);
+      if (absCols[0] === null) {
+        Logger.log(loc + ': WARN — колонки BL/BM/BN/BO не знайдено, пропускаємо');
+        continue;
+      }
+
+      // Контекст поточної групи — відстежуємо як у parsePaymentSheet
+      var curGroup = '(без групи)'; var curTeacher = '';
+
+      var DATA_START = 3;
+      for (var row = DATA_START; row < data.length; row++) {
+        var nameCell = trim(String(data[row][0] || ''));
+        if (!nameCell) continue;
+
+        // Рядок-заголовок групи → оновлюємо контекст
+        if (isGroupHeaderRow(data[row], 1)) {
+          var firstSpace = nameCell.search(/\s/);
+          curTeacher = firstSpace > 0 ? nameCell.slice(firstSpace).trim() : '';
+          curGroup   = normalizeGroupName(nameCell) + (curTeacher ? ' ' + curTeacher : '');
+          continue;
+        }
+
+        // Є хоча б один слот?
+        var hasAnySlot = false;
+        for (var si = 0; si < absCols.length; si++) {
+          if (absCols[si] !== null && trim(String(data[row][absCols[si]] || ''))) { hasAnySlot = true; break; }
+        }
+        if (!hasAnySlot) continue;  // дитина без відпусток — не чіпаємо
+
+        try {
+          var crmKey  = norm(nameCell) + '|' + norm(loc);
+          var isNew   = !crmMap.hasOwnProperty(crmKey);
+          var existingAbsences = isNew ? [] : crmMap[crmKey].absences.slice();
+
+          // Set from+to для dedupe
+          var existingPairs = {};
+          existingAbsences.forEach(function(a){ if(a.from&&a.to) existingPairs[a.from+'|'+a.to]=true; });
+
+          // Збираємо нові відпустки з 4 слотів
+          var newAbsences = [];
+          for (var si2 = 0; si2 < absCols.length; si2++) {
+            if (absCols[si2] === null) continue;
+            var slot = trim(String(data[row][absCols[si2]] || ''));
+            if (!slot) continue;
+
+            var parsed = parseAbsencePeriod(slot, refYear);
+            if (parsed) {
+              var pairKey = parsed.from + '|' + parsed.to;
+              if (existingPairs[pairKey]) {
+                stats.absencesDuplicates++;
+              } else {
+                var absObj = _makeImportAbsence(parsed, slot);
+                newAbsences.push(absObj);
+                existingPairs[pairKey] = true;
+                Logger.log('  ADDED absence: ' + nameCell + ' [' + parsed.from + ' → ' + parsed.to + ']');
+              }
+            } else {
+              var absPlaceholder = _makeImportAbsence(null, slot);
+              newAbsences.push(absPlaceholder);
+              stats.absencesPlaceholder++;
+              Logger.log('  PLACEHOLDER absence: ' + nameCell + ' ["' + slot + '"]');
+            }
+          }
+
+          if (newAbsences.length === 0) continue;  // нічого нового — не чіпаємо
+
+          // Будуємо повний об'єкт клієнта і зберігаємо одним викликом
+          var allAbsences = existingAbsences.concat(newAbsences);
+          var clientData;
+          if (isNew) {
+            clientData = {
+              id:               'import_' + Date.now() + '_' + Math.random().toString(36).slice(2,8),
+              name:             nameCell,
+              loc:              loc,
+              group:            curGroup,
+              teacher:          curTeacher,
+              bday: '', momName: '', momPhone: '', dadName: '', dadPhone: '',
+              contractDate: '', contractType: 'standard',
+              monthlyFee: 0, entryFee: 0,
+              status:           'active',
+              notes:            'Створено автоматично при імпорті відпусток з Payment ' + todayUA,
+              absences:         allAbsences,
+              entryFeeSchedule: [],
+              feeHistory:       []
+            };
+            Logger.log('CREATED client: ' + nameCell + ' / ' + loc + ' / ' + curGroup);
+          } else {
+            var existing = crmMap[crmKey];
+            clientData = {
+              id:               existing.id,
+              name:             existing.name,
+              loc:              existing.loc,
+              group:            existing.group,
+              teacher:          existing.teacher,
+              contractDate:     existing.contractDate,
+              contractType:     existing.contractType,
+              monthlyFee:       existing.monthlyFee,
+              entryFee:         0,
+              status:           'active',
+              notes:            existing.notes,
+              bday: '', momName: '', momPhone: '', dadName: '', dadPhone: '',
+              absences:         allAbsences,
+              entryFeeSchedule: [],
+              feeHistory:       []
+            };
+          }
+
+          var saveResult = saveClient(clientData);
+          if (!saveResult.ok) {
+            stats.errors.push({loc:loc, child:nameCell, error: saveResult.error || 'saveClient failed'});
+            continue;
+          }
+
+          // Оновлюємо crmMap щоб наступна ітерація бачила оновлені дані
+          crmMap[crmKey] = {
+            id: clientData.id, name: clientData.name, loc: clientData.loc,
+            group: clientData.group, teacher: clientData.teacher,
+            contractDate: clientData.contractDate, contractType: clientData.contractType,
+            monthlyFee: clientData.monthlyFee, notes: clientData.notes,
+            absences: allAbsences
+          };
+
+          if (isNew) { stats.newClientsCreated++; }
+          else       { stats.existingClientsUpdated++; }
+          stats.absencesAdded += newAbsences.filter(function(a){ return a.from; }).length;
+
+        } catch(childErr) {
+          stats.errors.push({loc:loc, child:nameCell, error: childErr.message || String(childErr)});
+          Logger.log('  ERROR child ' + nameCell + ': ' + (childErr.message || String(childErr)));
+        }
+      }
+
+      Logger.log(loc + ': DONE');
+
+    } catch(locErr) {
+      Logger.log(loc + ': ERROR — ' + (locErr.message || String(locErr)));
+      stats.errors.push({loc:loc, child:'', error: locErr.message || String(locErr)});
     }
   }
 
-  // ── ПІДСУМКОВА СТАТИСТИКА ────────────────────────────────────────────────
   Logger.log('');
-  Logger.log('=== СТАТИСТИКА ===');
-  var header = padR('Локація', 24) + '| ' + padR('Всього', 14) + '| ' + padR('Розпарсено', 10) + '| ' + padR('UNPARSED', 8) + '| % успіху';
-  Logger.log(header);
-  Logger.log(new Array(header.length + 1).join('-'));
-
-  var totTotal = 0, totParsed = 0, totUnparsed = 0;
-  var locNames = Object.keys(stats);
-  for (var li = 0; li < locNames.length; li++) {
-    var ln = locNames[li];
-    var st = stats[ln];
-    var pct = st.total > 0 ? Math.round(st.parsed / st.total * 100) + '%' : 'n/a';
-    Logger.log(padR(ln, 24) + '| ' + padR(String(st.total), 14) + '| ' + padR(String(st.parsed), 10) + '| ' + padR(String(st.unparsed), 8) + '| ' + pct);
-    totTotal   += st.total;
-    totParsed  += st.parsed;
-    totUnparsed += st.unparsed;
+  Logger.log('=== ПІДСУМОК ІМПОРТУ ===');
+  Logger.log('Локацій оброблено:       ' + stats.locationsProcessed);
+  Logger.log('Нових карток створено:   ' + stats.newClientsCreated);
+  Logger.log('Існуючих оновлено:       ' + stats.existingClientsUpdated);
+  Logger.log('Відпусток додано:        ' + stats.absencesAdded);
+  Logger.log('Placeholder-відпусток:   ' + stats.absencesPlaceholder);
+  Logger.log('Дублікатів пропущено:    ' + stats.absencesDuplicates);
+  Logger.log('Помилок:                 ' + stats.errors.length);
+  if (stats.errors.length) {
+    stats.errors.slice(0,10).forEach(function(e){
+      Logger.log('  ERR [' + e.loc + '] ' + e.child + ': ' + e.error);
+    });
   }
-  Logger.log(new Array(header.length + 1).join('-'));
-  var totPct = totTotal > 0 ? Math.round(totParsed / totTotal * 100) + '%' : 'n/a';
-  Logger.log(padR('РАЗОМ', 24) + '| ' + padR(String(totTotal), 14) + '| ' + padR(String(totParsed), 10) + '| ' + padR(String(totUnparsed), 8) + '| ' + totPct);
+  Logger.log('=== importAbsencesFromPayment END ===');
 
-  // ── UNPARSED ПАТТЕРНИ ────────────────────────────────────────────────────
-  var patterns = Object.keys(unparsedPatterns);
-  if (patterns.length > 0) {
-    Logger.log('');
-    Logger.log('=== UNPARSED ПАТТЕРНИ ===');
-    // Сортуємо за кількістю (спадно)
-    patterns.sort(function(a, b) { return unparsedPatterns[b] - unparsedPatterns[a]; });
-    for (var pi = 0; pi < patterns.length; pi++) {
-      var cnt = unparsedPatterns[patterns[pi]];
-      Logger.log('"' + patterns[pi] + '"' + new Array(Math.max(2, 20 - patterns[pi].length)).join(' ') + '— ' + cnt + ' ' + (cnt === 1 ? 'раз' : cnt < 5 ? 'рази' : 'разів'));
+  return {ok:true, stats:stats};
+}
+
+function _runImportOsokory() {
+  var r = importAbsencesFromPayment('Осокорки');
+  Logger.log(JSON.stringify(r.stats, null, 2));
+}
+
+
+
+// ── ДІАГНОСТИКА: перевіряє що саме знаходить detectAbsenceCols ───────────────
+function diagnoseAbsenceCols(loc) {
+  // Знаходимо sheetId локації
+  var configSS    = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var configSheet = configSS.getSheets()[0];
+  var configData  = configSheet.getDataRange().getValues();
+  var sheetId = null; var sheetName = 'Payment';
+  for (var r = 1; r < configData.length; r++) {
+    if (trim(String(configData[r][2] || '')) === loc) {
+      sheetId   = trim(String(configData[r][3] || ''));
+      sheetName = trim(String(configData[r][4] || '')) || 'Payment';
+      break;
     }
-  } else {
-    Logger.log('');
-    Logger.log('=== UNPARSED ПАТТЕРНИ: немає ===');
+  }
+  if (!sheetId) { Logger.log('Location not found: ' + loc); return; }
+
+  var ss    = SpreadsheetApp.openById(sheetId);
+  var sheet = ss.getSheetByName(sheetName) || ss.getSheets()[0];
+  var lastCol = sheet.getLastColumn();
+  var lastRow = sheet.getLastRow();
+
+  Logger.log('=== diagnoseAbsenceCols: ' + loc + ' ===');
+  Logger.log('Sheet: ' + sheet.getName() + ', lastRow=' + lastRow + ', lastCol=' + lastCol);
+
+  // Читаємо перші 5 рядків повністю (до col 90 або lastCol)
+  var scanCols = Math.min(lastCol, 90);
+  var scanRows = Math.min(5, lastRow);
+  var headerRange = sheet.getRange(1, 1, scanRows, scanCols);
+  var headerVals  = headerRange.getValues();
+
+  // ── 1. Заголовки перших 80 колонок (рядки 1-3) ──────────────────────────────
+  Logger.log('--- Заголовки рядків 1-3 (перші 80 колонок) ---');
+  for (var rr = 0; rr < Math.min(3, scanRows); rr++) {
+    var parts = [];
+    for (var cc = 0; cc < Math.min(80, scanCols); cc++) {
+      var v = headerVals[rr][cc];
+      if (v !== '' && v !== null && v !== undefined) {
+        // Літерне позначення колонки (A=0, B=1, ... Z=25, AA=26 ...)
+        var colLetter = '';
+        var n = cc;
+        do { colLetter = String.fromCharCode(65 + (n % 26)) + colLetter; n = Math.floor(n / 26) - 1; } while (n >= 0);
+        parts.push(colLetter + '(' + (cc+1) + ')="' + String(v).slice(0,30) + '"');
+      }
+    }
+    Logger.log('Row ' + (rr+1) + ': ' + (parts.length ? parts.join(' | ') : '(порожній)'));
   }
 
-  Logger.log('');
-  Logger.log('=== diagnoseAbsences END ===');
+  // ── 2. Що знайшов detectAbsenceCols ─────────────────────────────────────────
+  var allData = sheet.getRange(1, 1, Math.min(lastRow, 10), scanCols).getValues();
+  var absCols = detectAbsenceCols(allData);
+  Logger.log('--- detectAbsenceCols результат ---');
+  var labels = ['1 тиждень', '2 тиждень', '3 тиждень', '4 тиждень'];
+  for (var li = 0; li < absCols.length; li++) {
+    var ci = absCols[li];
+    if (ci === null) {
+      Logger.log('  ' + labels[li] + ' → NOT FOUND');
+    } else {
+      var colLetter2 = '';
+      var n2 = ci;
+      do { colLetter2 = String.fromCharCode(65 + (n2 % 26)) + colLetter2; n2 = Math.floor(n2 / 26) - 1; } while (n2 >= 0);
+      Logger.log('  ' + labels[li] + ' → col index=' + ci + ' (' + colLetter2 + ')');
+    }
+  }
+
+  // ── 3. Вміст знайдених колонок у рядках 4-6 (перші дані після заголовків) ───
+  Logger.log('--- Вміст знайдених колонок у рядках 4-6 ---');
+  if (lastRow >= 4) {
+    var dataRange = sheet.getRange(4, 1, Math.min(3, lastRow - 3), scanCols);
+    var dataVals  = dataRange.getValues();
+    for (var dr = 0; dr < dataVals.length; dr++) {
+      var rowNum = dr + 4;
+      var name   = trim(String(dataVals[dr][0] || '(порожньо)'));
+      var slots  = absCols.map(function(ci2, idx) {
+        if (ci2 === null) return labels[idx] + '=null';
+        var v2 = dataVals[dr][ci2];
+        return labels[idx] + '=[' + String(v2) + ']';
+      });
+      Logger.log('  Row ' + rowNum + ' name="' + name + '" | ' + slots.join(' | '));
+    }
+  }
+
+  Logger.log('=== END diagnoseAbsenceCols ===');
 }
 
-function padR(s, len) {
-  while (s.length < len) s += ' ';
-  return s;
+function _runDiagColsOsokory() { diagnoseAbsenceCols('Осокорки'); }
+
+// ── ДІАГНОСТИКА: читає лист "Клієнти" і показує що в ньому ──────────────────
+function diagnoseCRMClients() {
+  var ss = getCRMSpreadsheet();
+  Logger.log('=== diagnoseCRMClients ===');
+  Logger.log('SHEET_CLIENTS constant: "' + SHEET_CLIENTS + '"');
+
+  // Усі листи в таблиці
+  Logger.log('Усі листи в SS: ' + ss.getSheets().map(function(s){ return '"' + s.getName() + '"'; }).join(', '));
+
+  var sheet = ss.getSheetByName(SHEET_CLIENTS);
+  Logger.log('sheet found: ' + (sheet ? 'YES' : 'NO'));
+
+  if (sheet) {
+    Logger.log('sheet name: "' + sheet.getName() + '"');
+    Logger.log('lastRow: ' + sheet.getLastRow());
+    Logger.log('lastCol: ' + sheet.getLastColumn());
+
+    var vals = sheet.getDataRange().getValues();
+    Logger.log('vals.length (getDataRange): ' + vals.length);
+
+    for (var r = 0; r < Math.min(10, vals.length); r++) {
+      Logger.log('row ' + r + ': ' + JSON.stringify(vals[r].slice(0, 5)));
+    }
+  }
+
+  // Додатково: спробуємо getSheets()[0] і getSheets()[1] — раптом лист не той
+  var sheets = ss.getSheets();
+  for (var i = 0; i < Math.min(5, sheets.length); i++) {
+    var sh = sheets[i];
+    Logger.log('Sheet[' + i + '] "' + sh.getName() + '": lastRow=' + sh.getLastRow() + ', lastCol=' + sh.getLastColumn());
+  }
+
+  Logger.log('=== END diagnoseCRMClients ===');
 }
+
+function _runDiagCRM() { diagnoseCRMClients(); }
