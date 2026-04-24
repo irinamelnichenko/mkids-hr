@@ -1034,30 +1034,31 @@ async function loadPaymentsYearly(force){
 }
 
 async function loadClients(force){
-  if(!force){
-    var c=localStorage.getItem(CFG.CLI_CACHE);
-    if(c){
-      var p=JSON.parse(c);
-      if(Date.now()-p.ts<CFG.TTL){
-        mergeCRMFromCloud(p.data);
-        return;
-      }
-    }
-  }
+  console.log('[loadClients] fetching from Sheets...');
   var rows=[];
   try{
     var vals=await sheetsRead('Клієнти','A1:U2000');
     rows=rowsToObjects(vals).filter(function(r){ return r['ID']; });
+    if(!rows.length) throw new Error('empty response');
   }catch(e){
     try{
       var j=await apiGet('getClients');
       rows=j.data||[];
-    }catch(e2){ console.warn('loadClients: Apps Script failed:',e2); }
+      if(!rows.length) throw new Error('empty response from Apps Script');
+    }catch(e2){
+      console.warn('[loadClients] network failed, falling back to cache:', e2);
+      var cached=localStorage.getItem(CFG.CLI_CACHE);
+      if(cached){
+        var cp=JSON.parse(cached);
+        console.log('[loadClients] fallback to cache, rows:', cp.data.length);
+        mergeCRMFromCloud(cp.data);
+      }
+      return;
+    }
   }
-  if(rows.length>0){
-    localStorage.setItem(CFG.CLI_CACHE,JSON.stringify({data:rows,ts:Date.now()}));
-    mergeCRMFromCloud(rows);
-  }
+  localStorage.setItem(CFG.CLI_CACHE,JSON.stringify({data:rows,ts:Date.now()}));
+  mergeCRMFromCloud(rows);
+  console.log('[loadClients] done, merged', rows.length, 'cards');
 }
 
 function mergeCRMFromCloud(rows){
