@@ -2955,12 +2955,15 @@ function renderAbsRequests(){
     rejected:'<span class="ab-st ab-rejected">❌ Відхилено</span>'
   };
 
-  html+='<div class="card"><div class="tbl-wrap"><table class="req-table"><thead><tr>'
-    +'<th>Заявка</th><th>Дитина · Локація</th><th>Тип</th><th>Період</th>'
-    +'<th>Дн / Тиж</th><th>Перерахунок</th><th>Статус</th><th>Дії</th>'
-    +'</tr></thead><tbody>';
+  function roleLabel(cb){
+    if(!cb||cb==='import') return 'імпорт';
+    if(cb==='HR') return 'HR';
+    if(cb==='director') return 'директор';
+    if(cb==='nurse') return 'медсестра';
+    return esc(cb);
+  }
 
-  allReqs.forEach(function(r){
+  function buildRow(r){
     var a=r.a, c=r.c, cid=r.cid;
     var typeLabel=a.type==='vacation'?'🏖 Відпустка':'🤒 Лікарняний';
     var calcInfo='';
@@ -2984,8 +2987,9 @@ function renderAbsRequests(){
       var doneBy=(a.statusHistory||[]).filter(function(h){ return h.status==='done'; }).pop()||{};
       actions='<span style="font-size:11px;color:var(--gray)">'+((doneBy.at||'').slice(0,10)||'')+(doneBy.by?' · '+esc(doneBy.by):'')+'</span>';
     }
-    html+='<tr>'
-      +'<td style="font-size:12px;color:var(--gray);white-space:nowrap">'+((a.createdAt||'').slice(0,10).split('-').reverse().join('.')+'<br>'+esc(a.createdBy||''))+'</td>'
+    var dateStr=(a.createdAt||'').slice(0,10).split('-').reverse().join('.');
+    return '<tr>'
+      +'<td style="font-size:12px;color:var(--gray);white-space:nowrap">'+dateStr+'<br><small>від: '+roleLabel(a.createdBy)+'</small></td>'
       +'<td><b style="cursor:pointer;color:var(--blue2)" onclick="openChildByName(\''+esc(c.name||'')+'\',\''+esc(c.loc||'')+'\')">'+esc(c.name)+'</b><br><span style="color:var(--gray);font-size:12px">'+esc(c.loc||'')+'</span></td>'
       +'<td>'+typeLabel+'</td>'
       +'<td style="white-space:nowrap">'+fmtD(a.from)+' — '+fmtD(a.to)+'</td>'
@@ -2994,8 +2998,28 @@ function renderAbsRequests(){
       +'<td>'+(ST_HTML2[a.status]||'')+(a.rejectReason?'<div style="font-size:11px;color:var(--red2);margin-top:2px">'+esc(a.rejectReason)+'</div>':'')+'</td>'
       +'<td style="white-space:nowrap">'+actions+'</td>'
       +'</tr>';
-  });
-  html+='</tbody></table></div></div>';
+  }
+
+  var THEAD='<thead><tr><th>Заявка</th><th>Дитина · Локація</th><th>Тип</th><th>Період</th>'
+    +'<th>Дн / Тиж</th><th>Перерахунок</th><th>Статус</th><th>Дії</th></tr></thead>';
+
+  var activeReqs=allReqs.filter(function(r){ return r.a.status==='pending'||r.a.status==='processing'; });
+  var historyReqs=allReqs.filter(function(r){ return r.a.status==='done'||r.a.status==='rejected'; });
+
+  if(activeReqs.length){
+    html+='<h3 style="margin:16px 0 8px;color:var(--orange)">🔥 Нові заявки</h3>'
+      +'<div class="card" style="border-left:4px solid var(--orange)"><div class="tbl-wrap"><table class="req-table">'+THEAD+'<tbody>';
+    activeReqs.forEach(function(r){ html+=buildRow(r); });
+    html+='</tbody></table></div></div>';
+  }
+
+  if(historyReqs.length){
+    html+='<h3 style="margin:20px 0 8px;color:var(--gray)">Архів</h3>'
+      +'<div class="card"><div class="tbl-wrap"><table class="req-table">'+THEAD+'<tbody>';
+    historyReqs.forEach(function(r){ html+=buildRow(r); });
+    html+='</tbody></table></div></div>';
+  }
+
   main.innerHTML=html;
 }
 
