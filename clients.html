@@ -856,7 +856,9 @@ async function apiGetFull(params){
 function loadLocalCRM(){ try{ S.crm=JSON.parse(localStorage.getItem(CFG.SK)||'{}'); }catch(e){ S.crm={}; } }
 function saveLocalCRM(){ localStorage.setItem(CFG.SK,JSON.stringify(S.crm)); }
 
-var _crmSyncTimers = {};
+var _crmSyncTimers   = {};
+var _lastSaveTs      = 0;
+var _autoRefreshLastTs = 0;
 function schedulePushCRMCard(id){
   if(!id) return;
   if(_crmSyncTimers[id]) clearTimeout(_crmSyncTimers[id]);
@@ -871,6 +873,7 @@ function syncCRMCardToCloud(id){
   var card = S.crm[id];
   var payload = Object.assign({id: id}, card);
   console.log('CRM cloud sync: pushing ' + id);
+  _lastSaveTs = Date.now();
   apiPost({action:'saveClient', data:payload}).catch(function(e){
     console.warn('CRM sync failed for ' + id + ':', e);
   });
@@ -1357,6 +1360,35 @@ async function initApp(){
   } else {
     nav('clients');
   }
+
+  // ── AUTO-REFRESH: оновлення CRM кожні 60 сек ──────────────────────────
+  setInterval(function(){
+    var modalOpen  = !document.getElementById('mChild').classList.contains('hidden');
+    var recentSave = (Date.now() - _lastSaveTs) < 5000;
+    if(modalOpen){
+      console.log('[auto-refresh] skipped — modal open');
+      return;
+    }
+    if(recentSave){
+      console.log('[auto-refresh] skipped — recent save (' +
+        Math.round((Date.now() - _lastSaveTs) / 1000) + 's ago)');
+      return;
+    }
+    loadClients(false)
+      .then(function(){
+        renderView();
+        _autoRefreshLastTs = Date.now();
+      })
+      .catch(function(e){ console.warn('[auto-refresh] failed:', e); });
+  }, 60000);
+
+  // ── SYNC INDICATOR: оновлення тексту кожну секунду ────────────────────
+  setInterval(function(){
+    if(!_autoRefreshLastTs) return;
+    var sec = Math.round((Date.now() - _autoRefreshLastTs) / 1000);
+    var el  = document.getElementById('syncStatus');
+    if(el) el.textContent = '🔄 ' + sec + 'с тому';
+  }, 1000);
 }
 
 async function refreshAll(){
