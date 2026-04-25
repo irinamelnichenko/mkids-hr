@@ -1369,6 +1369,26 @@ function _runImportOsokory() {
   Logger.log(JSON.stringify(r.stats, null, 2));
 }
 
+function _runImportAll() {
+  Logger.log('=== _runImportAll START ===');
+  var r = importAbsencesFromPayment('');
+  Logger.log('');
+  Logger.log('=== ПІДСУМОК _runImportAll ===');
+  Logger.log('Локацій оброблено:       ' + r.stats.locationsProcessed);
+  Logger.log('Нових карток створено:   ' + r.stats.newClientsCreated);
+  Logger.log('Існуючих оновлено:       ' + r.stats.existingClientsUpdated);
+  Logger.log('Відпусток додано:        ' + r.stats.absencesAdded);
+  Logger.log('Placeholder-відпусток:   ' + r.stats.absencesPlaceholder);
+  Logger.log('Дублікатів пропущено:    ' + r.stats.absencesDuplicates);
+  Logger.log('Помилок:                 ' + r.stats.errors.length);
+  if (r.stats.errors.length) {
+    r.stats.errors.forEach(function(e){
+      Logger.log('  ERR [' + e.loc + '] ' + e.child + ': ' + e.error);
+    });
+  }
+  Logger.log('=== _runImportAll END ===');
+}
+
 
 
 // ── ДІАГНОСТИКА: перевіряє що саме знаходить detectAbsenceCols ───────────────
