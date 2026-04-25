@@ -758,73 +758,199 @@ function deleteHealthRecord(body) {
 }
 
 function parseAbsencePeriod(str, refYear) {
-  if (!str) return null;
+  var result = (function() {
 
-  // Date-об'єкт з Google Sheets — трактуємо як MM/YYYY (перший тиждень місяця)
-  if (str instanceof Date) {
-    if (isNaN(str.getTime())) return null;
-    return parseAbsencePeriod(pad2(str.getMonth() + 1) + '/' + str.getFullYear(), refYear);
-  }
+    if (!str) return null;
+    if (str instanceof Date) {
+      if (isNaN(str.getTime())) return null;
+      return parseAbsencePeriod(pad2(str.getMonth() + 1) + '/' + str.getFullYear(), refYear);
+    }
 
-  var s = trim(String(str));
-  if (!s || s === '-' || s.toLowerCase() === 'по') return null;
+    var s = trim(String(str)).toLowerCase();
+    if (!s || s === '-' || s === 'по') return null;
 
-  // Формат 1: "01.09.2024-15.09.2024"
-  var m1 = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})\s*[-–]\s*(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
-  if (m1) {
-    return {
-      from: m1[3] + '-' + pad2(m1[2]) + '-' + pad2(m1[1]),
-      to:   m1[6] + '-' + pad2(m1[5]) + '-' + pad2(m1[4])
-    };
-  }
-
-  // Формат 2: "09.12-15.12"
-  var m2 = s.match(/^(\d{1,2})\.(\d{1,2})\s*[-–]\s*(\d{1,2})\.(\d{1,2})$/);
-  if (m2) {
-    var fromMon = +m2[2], toMon = +m2[4];
     var nowMon = new Date().getMonth() + 1;
-    var fy = (fromMon >= nowMon) ? (refYear - 1) : refYear;
-    var ty = (toMon   >= nowMon) ? (refYear - 1) : refYear;
-    return {
-      from: fy + '-' + pad2(m2[2]) + '-' + pad2(m2[1]),
-      to:   ty + '-' + pad2(m2[4]) + '-' + pad2(m2[3])
-    };
-  }
 
-  // Формат 3: "15-20.01"
-  var m3 = s.match(/^(\d{1,2})\s*[-–]\s*(\d{1,2})\.(\d{1,2})$/);
-  if (m3) {
-    var mon = +m3[3];
-    var nowMon = new Date().getMonth() + 1;
-    var yr = (mon >= nowMon) ? (refYear - 1) : refYear;
-    return {
-      from: yr + '-' + pad2(m3[3]) + '-' + pad2(m3[1]),
-      to:   yr + '-' + pad2(m3[3]) + '-' + pad2(m3[2])
+    var UA_MONTHS = {
+      'січ':1,    'лют':2,    'бер':3,        'квіт':4,    'трав':5,    'черв':6,
+      'лип':7,    'серп':8,   'вер':9,         'жовт':10,   'лист':11,   'груд':12,
+      'січень':1, 'лютий':2,  'березень':3,    'квітень':4, 'травень':5, 'червень':6,
+      'липень':7, 'серпень':8,'вересень':9,    'жовтень':10,'листопад':11,'грудень':12
     };
-  }
 
-  // Формат 4: "MM/YY", "MM|YY", "MM/YYYY", "MM|YYYY"
-  // "10/25" → 1 тиждень у жовтні 2025: перший повний робочий тиждень місяця
-  var m4 = s.match(/^(\d{1,2})\s*[\/|]\s*(\d{2}|\d{4})$/);
-  if (m4) {
-    var mon4 = +m4[1];
-    var yr4  = m4[2].length === 2 ? 2000 + (+m4[2]) : +m4[2];
-    if (mon4 >= 1 && mon4 <= 12) {
-      // Знаходимо перший робочий день місяця
-      var d = new Date(yr4, mon4 - 1, 1);
+    function yearFor(mon) {
+      return (mon >= nowMon) ? (refYear - 1) : refYear;
+    }
+
+    function syntheticWeek(yr, mon) {
+      var d = new Date(yr, mon - 1, 1);
       while (d.getDay() === 0 || d.getDay() === 6) { d.setDate(d.getDate() + 1); }
       var fromD = new Date(d);
       var toD   = new Date(d); toD.setDate(toD.getDate() + 4);
       return {
         from: fromD.getFullYear() + '-' + pad2(fromD.getMonth()+1) + '-' + pad2(fromD.getDate()),
         to:   toD.getFullYear()   + '-' + pad2(toD.getMonth()+1)   + '-' + pad2(toD.getDate()),
-        _synthetic:    true,  // дати умовні — точний тиждень невідомий
-        _originalRaw:  str    // оригінальний рядок зі слоту
+        _synthetic: true, _originalRaw: str
       };
     }
+
+    function findUAMonth(text) {
+      var t = text.trim().toLowerCase();
+      var keys = Object.keys(UA_MONTHS).sort(function(a, b) { return b.length - a.length; });
+      for (var ki = 0; ki < keys.length; ki++) {
+        if (t.indexOf(keys[ki]) >= 0) return UA_MONTHS[keys[ki]];
+      }
+      return null;
+    }
+
+    var n = s.replace(/,/g, '.').replace(/\s*по\s*/g, '-').replace(/\s+/g, '');
+    var m;
+
+    // БЛОК 1а: "01.09.2024-15.09.2024"
+    m = n.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})[-–](\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+    if (m) {
+      return {
+        from: m[3] + '-' + pad2(m[2]) + '-' + pad2(m[1]),
+        to:   m[6] + '-' + pad2(m[5]) + '-' + pad2(m[4])
+      };
+    }
+
+    // БЛОК 1б: "02.01-08.01.2025"
+    m = n.match(/^(\d{1,2})\.(\d{1,2})[-–](\d{1,2})\.(\d{1,2})\.(\d{2}|\d{4})$/);
+    if (m) {
+      var yr1b = m[5].length === 2 ? 2000 + (+m[5]) : +m[5];
+      return {
+        from: yr1b + '-' + pad2(m[2]) + '-' + pad2(m[1]),
+        to:   yr1b + '-' + pad2(m[4]) + '-' + pad2(m[3])
+      };
+    }
+
+    // БЛОК 2а: "09.12-15.12", "30.06-18.07"
+    m = n.match(/^(\d{1,2})\.(\d{1,2})[-–](\d{1,2})\.(\d{1,2})$/);
+    if (m) {
+      return {
+        from: yearFor(+m[2]) + '-' + pad2(m[2]) + '-' + pad2(m[1]),
+        to:   yearFor(+m[4]) + '-' + pad2(m[4]) + '-' + pad2(m[3])
+      };
+    }
+
+    // БЛОК 2б: "30.06-18-07" (нормалізований "30.06по 18-07")
+    m = n.match(/^(\d{1,2})\.(\d{1,2})[-–](\d{1,2})[-–](\d{1,2})$/);
+    if (m) {
+      return {
+        from: yearFor(+m[2]) + '-' + pad2(m[2]) + '-' + pad2(m[1]),
+        to:   yearFor(+m[4]) + '-' + pad2(m[4]) + '-' + pad2(m[3])
+      };
+    }
+
+    // БЛОК 3а: "15-20.01"
+    m = n.match(/^(\d{1,2})[-–](\d{1,2})\.(\d{1,2})$/);
+    if (m) {
+      var mon3 = +m[3];
+      return {
+        from: yearFor(mon3) + '-' + pad2(m[3]) + '-' + pad2(m[1]),
+        to:   yearFor(mon3) + '-' + pad2(m[3]) + '-' + pad2(m[2])
+      };
+    }
+
+    // БЛОК 3б: "1-14.09.25", "1-14.09.2025"
+    m = n.match(/^(\d{1,2})[-–](\d{1,2})\.(\d{1,2})\.(\d{2}|\d{4})$/);
+    if (m) {
+      var yr3b = m[4].length === 2 ? 2000 + (+m[4]) : +m[4];
+      return {
+        from: yr3b + '-' + pad2(m[3]) + '-' + pad2(m[1]),
+        to:   yr3b + '-' + pad2(m[3]) + '-' + pad2(m[2])
+      };
+    }
+
+    // БЛОК 4: "10/25", "10|25", "10/2025", "8.2025"
+    m = n.match(/^(\d{1,2})[\/|.](\d{2}|\d{4})$/);
+    if (m) {
+      var mon4 = +m[1];
+      var yr4  = m[2].length === 2 ? 2000 + (+m[2]) : +m[2];
+      if (mon4 >= 1 && mon4 <= 12) {
+        return syntheticWeek(yr4, mon4);
+      }
+    }
+
+    // БЛОК 5: "жовт25", "лист25", "серп2025"
+    m = s.match(/^([а-яіїє']+?)\.?\s*(\d{2}|\d{4})$/);
+    if (m) {
+      var mon5 = UA_MONTHS[m[1].trim()];
+      if (mon5) {
+        var yr5 = m[2].length === 2 ? 2000 + (+m[2]) : +m[2];
+        return syntheticWeek(yr5, mon5);
+      }
+    }
+
+    // БЛОК 6: "жовтень 2025"
+    m = s.match(/^([а-яіїє']+)\s+(\d{4})$/);
+    if (m) {
+      var mon6 = UA_MONTHS[m[1].trim()];
+      if (mon6) {
+        return syntheticWeek(+m[2], mon6);
+      }
+    }
+
+    // БЛОК 7: "10 днів серпня", "5 днів жовтня"
+    m = s.match(/^(\d+)\s*дн[іияь\.]+\s*([а-яіїє'\s]+)/);
+    if (m) {
+      var days7 = +m[1];
+      var mon7  = findUAMonth(m[2]);
+      if (mon7) {
+        var yr7  = yearFor(mon7);
+        var d7   = new Date(yr7, mon7 - 1, 1);
+        while (d7.getDay() === 0 || d7.getDay() === 6) { d7.setDate(d7.getDate() + 1); }
+        var toD7 = new Date(d7); toD7.setDate(toD7.getDate() + days7 - 1);
+        return {
+          from: d7.getFullYear()   + '-' + pad2(d7.getMonth()+1)   + '-' + pad2(d7.getDate()),
+          to:   toD7.getFullYear() + '-' + pad2(toD7.getMonth()+1) + '-' + pad2(toD7.getDate()),
+          _synthetic: true, _originalRaw: str
+        };
+      }
+    }
+
+    // БЛОК 8: "1 т серпень", "2 т липні", "3 тижн вересень"
+    m = s.match(/^(\d+)\s*т[иі]?[жщ]?[нь]?\.?\s*([а-яіїє'\s]+)/);
+    if (m) {
+      var weeks8 = +m[1];
+      var mon8   = findUAMonth(m[2]);
+      if (mon8) {
+        var yr8  = yearFor(mon8);
+        var d8   = new Date(yr8, mon8 - 1, 1);
+        while (d8.getDay() === 0 || d8.getDay() === 6) { d8.setDate(d8.getDate() + 1); }
+        var toD8 = new Date(d8); toD8.setDate(toD8.getDate() + weeks8 * 5 - 1);
+        return {
+          from: d8.getFullYear()   + '-' + pad2(d8.getMonth()+1)   + '-' + pad2(d8.getDate()),
+          to:   toD8.getFullYear() + '-' + pad2(toD8.getMonth()+1) + '-' + pad2(toD8.getDate()),
+          _synthetic: true, _originalRaw: str
+        };
+      }
+    }
+
+    // БЛОК 9: тільки UA місяць "жовтень", "серп", "КВІТЕНЬ"
+    var mon9 = UA_MONTHS[s.trim()];
+    if (mon9) {
+      return syntheticWeek(yearFor(mon9), mon9);
+    }
+
+    // БЛОК 10: вільний текст що містить назву місяця
+    var mon10 = findUAMonth(s);
+    if (mon10) {
+      return syntheticWeek(yearFor(mon10), mon10);
+    }
+
+    return null;
+
+  })();
+
+  if (!result && str && !(str instanceof Date) && String(str).trim() !== '-') {
+    var raw        = String(str);
+    var normalized = raw.toLowerCase().replace(/,/g, '.').replace(/\s*по\s*/g, '-').replace(/\s+/g, '');
+    Logger.log('[parseAbs] FAIL str="' + raw + '" normalized="' + normalized + '"');
   }
 
-  return null;
+  return result;
 }
 
 function pad2(n) { return ('0' + n).slice(-2); }
