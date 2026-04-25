@@ -62,6 +62,17 @@ function setup() {
   Logger.log('Setup done.');
 }
 
+function fixCRMSheetId() {
+  var correctId = '1pA2q84BFsXWuUchIlu8um853od_PXr7KepLpTovUjLo';
+  var props = PropertiesService.getScriptProperties();
+  Logger.log('Поточний CRM_SHEET_ID: ' + props.getProperty('CRM_SHEET_ID'));
+  props.setProperty('CRM_SHEET_ID', correctId);
+  Logger.log('Новий CRM_SHEET_ID: ' + props.getProperty('CRM_SHEET_ID'));
+  var ss = SpreadsheetApp.openById(correctId);
+  Logger.log('SS name: ' + ss.getName());
+  Logger.log('SS sheets: ' + ss.getSheets().map(function(s){ return s.getName(); }).join(', '));
+}
+
 function getProps() {
   return PropertiesService.getScriptProperties();
 }
@@ -916,10 +927,18 @@ function _loadCRMClientsMap(norm) {
   var crmSS    = getCRMSpreadsheet();
   var crmSheet = crmSS.getSheetByName(SHEET_CLIENTS);
   var map      = {};
+
+  Logger.log('[loadCRMMap] SS id: ' + crmSS.getId() + ' | SS name: ' + crmSS.getName());
+  Logger.log('[loadCRMMap] Sheet "Клієнти" found: ' + !!crmSheet);
+
   if (!crmSheet) return map;
   var crmData = crmSheet.getDataRange().getValues();
+  Logger.log('[loadCRMMap] sheet rows (incl header): ' + crmData.length);
   if (crmData.length < 2) return map;
+
   var hdrs    = crmData[0].map(String);
+  Logger.log('[loadCRMMap] headers: ' + JSON.stringify(hdrs));
+
   var colId   = hdrs.indexOf('ID');              if (colId   < 0) colId   = 0;
   var colName = hdrs.indexOf('ПІБ дитини');      if (colName < 0) colName = 1;
   var colLoc  = hdrs.indexOf('Локація');         if (colLoc  < 0) colLoc  = 2;
@@ -930,9 +949,18 @@ function _loadCRMClientsMap(norm) {
   var colFee  = hdrs.indexOf('Сума договору');   if (colFee  < 0) colFee  = 12;
   var colAbs  = hdrs.indexOf('Відсутності (JSON)');
   var colNot  = hdrs.indexOf('Нотатки');
+  Logger.log('[loadCRMMap] colId=' + colId + ' colName=' + colName + ' colLoc=' + colLoc + ' colAbs=' + colAbs);
+  Logger.log('[loadCRMMap] row[1] raw: ' + JSON.stringify(crmData[1]));
+
   for (var ri = 1; ri < crmData.length; ri++) {
     var rName = norm(crmData[ri][colName] || '');
     var rLoc  = norm(crmData[ri][colLoc]  || '');
+
+    if (String(crmData[ri][colName] || '').indexOf('Рибак') !== -1) {
+      Logger.log('[loadCRMMap] Рибак row ri=' + ri + ': ' + JSON.stringify(crmData[ri]));
+      Logger.log('[loadCRMMap] Рибак rName="' + rName + '" rLoc="' + rLoc + '"');
+    }
+
     if (!rName) continue;
     var key = rName + '|' + rLoc;
     if (map[key]) {
@@ -954,6 +982,9 @@ function _loadCRMClientsMap(norm) {
       absences:     absArr
     };
   }
+
+  Logger.log('[loadCRMMap] map keys count: ' + Object.keys(map).length);
+  Logger.log('[loadCRMMap] map keys: ' + JSON.stringify(Object.keys(map)));
   return map;
 }
 
