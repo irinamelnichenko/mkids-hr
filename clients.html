@@ -2786,7 +2786,7 @@ function saveAbsencePeriod(){
   if((ct==='new'||ct==='sick-only')&&type==='vacation'){ alert('Договір від 01.10.2025+: лише лікарняний'); return; }
   var wd=countWorkDays(from,to);
   if(!wd){ alert('У вказаному діапазоні немає робочих днів (Пн-Пт)'); return; }
-  var who=isHR()?'HR':(S.user&&S.user.loc?S.user.loc:'Директор');
+  var who=isHR()?'HR':(S.user&&S.user.role?S.user.role:'director');
   var now=new Date().toISOString();
 
   // ── РЕЖИМ РЕДАГУВАННЯ ────────────────────────────────────────────────────────
@@ -2831,7 +2831,7 @@ function saveAbsencePeriod(){
     id:'abs_'+Date.now(), type:type, from:from, to:to, workDays:wd, weeks:w,
     monthsBreakdown:bd, totalPct:totalPct, totalAmount:totalAmt,
     status:'pending', statusHistory:[{status:'pending',at:now,by:who}],
-    rejectReason:'', note:note, createdBy:who, createdAt:now
+    rejectReason:'', note:note, createdBy:who, createdByLoc:(S.user&&S.user.loc)||'', createdAt:now
   });
   S._absFormOpen=false;
   saveLocalCRM();
