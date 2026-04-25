@@ -2955,11 +2955,11 @@ function renderAbsRequests(){
     rejected:'<span class="ab-st ab-rejected">❌ Відхилено</span>'
   };
 
-  function roleLabel(cb){
+  function roleLabel(cb, loc){
     if(!cb||cb==='import') return 'імпорт';
     if(cb==='HR') return 'HR';
-    if(cb==='director') return 'директор';
-    if(cb==='nurse') return 'медсестра';
+    if(cb==='director') return 'директор'+(loc?' '+loc:'');
+    if(cb==='nurse') return 'медсестра'+(loc?' '+loc:'');
     return esc(cb);
   }
 
@@ -2989,7 +2989,7 @@ function renderAbsRequests(){
     }
     var dateStr=(a.createdAt||'').slice(0,10).split('-').reverse().join('.');
     return '<tr>'
-      +'<td style="font-size:12px;color:var(--gray);white-space:nowrap">'+dateStr+'<br><small>від: '+roleLabel(a.createdBy)+'</small></td>'
+      +'<td style="font-size:12px;color:var(--gray);white-space:nowrap">'+dateStr+'<br><small>від: '+roleLabel(a.createdBy, a.createdByLoc||c.loc)+'</small></td>'
       +'<td><b style="cursor:pointer;color:var(--blue2)" onclick="openChildByName(\''+esc(c.name||'')+'\',\''+esc(c.loc||'')+'\')">'+esc(c.name)+'</b><br><span style="color:var(--gray);font-size:12px">'+esc(c.loc||'')+'</span></td>'
       +'<td>'+typeLabel+'</td>'
       +'<td style="white-space:nowrap">'+fmtD(a.from)+' — '+fmtD(a.to)+'</td>'
