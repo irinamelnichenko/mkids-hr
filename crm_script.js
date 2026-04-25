@@ -282,6 +282,27 @@ function saveClient(data) {
   return {ok:true, action:'created'};
 }
 
+function patchClientAbsences(id, absences) {
+  var ss    = getCRMSpreadsheet();
+  var sheet = ss.getSheetByName(SHEET_CLIENTS);
+  if (!sheet) return {ok:false, error:'Sheet not found'};
+
+  var vals   = sheet.getDataRange().getValues();
+  var hdrs   = vals[0].map(String);
+  var colAbs = hdrs.indexOf('Відсутності (JSON)');
+  var colUpd = hdrs.indexOf('Оновлено');
+  if (colAbs < 0) return {ok:false, error:'Column "Відсутності (JSON)" not found'};
+
+  for (var r = 1; r < vals.length; r++) {
+    if (String(vals[r][0]) === String(id)) {
+      sheet.getRange(r+1, colAbs+1).setValue(JSON.stringify(absences));
+      if (colUpd >= 0) sheet.getRange(r+1, colUpd+1).setValue(formatDate(new Date()));
+      return {ok:true, action:'patched', row: r+1};
+    }
+  }
+  return {ok:false, error:'Client ID not found: ' + id};
+}
+
 function deleteClient(id) {
   if (!id) return {ok:false, error:'Missing id'};
   var ss = getCRMSpreadsheet();
@@ -1171,7 +1192,7 @@ function importAbsencesFromPayment(locFilter) {
       }
 
       // Контекст поточної групи — відстежуємо як у parsePaymentSheet
-      var curGroup = '(без групи)'; var curTeacher = '';
+      var curGroup = '(без групи)'; var curGroupType = ''; var curTeacher = '';
 
       var DATA_START = 3;
       for (var row = DATA_START; row < data.length; row++) {
@@ -1181,8 +1202,9 @@ function importAbsencesFromPayment(locFilter) {
         // Рядок-заголовок групи → оновлюємо контекст
         if (isGroupHeaderRow(data[row], 1)) {
           var firstSpace = nameCell.search(/\s/);
-          curTeacher = firstSpace > 0 ? nameCell.slice(firstSpace).trim() : '';
-          curGroup   = normalizeGroupName(nameCell) + (curTeacher ? ' ' + curTeacher : '');
+          curTeacher    = firstSpace > 0 ? nameCell.slice(firstSpace).trim() : '';
+          curGroupType  = normalizeGroupName(nameCell);
+          curGroup      = curGroupType + (curTeacher ? ' ' + curTeacher : '');
           continue;
         }
 
@@ -1235,7 +1257,7 @@ function importAbsencesFromPayment(locFilter) {
           var clientData;
           if (isNew) {
             clientData = {
-              id:               'import_' + Date.now() + '_' + Math.random().toString(36).slice(2,8),
+              id:               'c_' + nameCell.trim().slice(0,20) + '_' + curGroupType.slice(0,8) + '_' + loc.slice(0,8),
               name:             nameCell,
               loc:              loc,
               group:            curGroup,
@@ -1250,41 +1272,29 @@ function importAbsencesFromPayment(locFilter) {
               feeHistory:       []
             };
             Logger.log('CREATED client: ' + nameCell + ' / ' + loc + ' / ' + curGroup);
+            var saveResult = saveClient(clientData);
           } else {
             var existing = crmMap[crmKey];
-            clientData = {
-              id:               existing.id,
-              name:             existing.name,
-              loc:              existing.loc,
-              group:            existing.group,
-              teacher:          existing.teacher,
-              contractDate:     existing.contractDate,
-              contractType:     existing.contractType,
-              monthlyFee:       existing.monthlyFee,
-              entryFee:         0,
-              status:           'active',
-              notes:            existing.notes,
-              bday: '', momName: '', momPhone: '', dadName: '', dadPhone: '',
-              absences:         allAbsences,
-              entryFeeSchedule: [],
-              feeHistory:       []
-            };
+            var saveResult = patchClientAbsences(existing.id, allAbsences);
           }
 
-          var saveResult = saveClient(clientData);
           if (!saveResult.ok) {
             stats.errors.push({loc:loc, child:nameCell, error: saveResult.error || 'saveClient failed'});
             continue;
           }
 
           // Оновлюємо crmMap щоб наступна ітерація бачила оновлені дані
-          crmMap[crmKey] = {
-            id: clientData.id, name: clientData.name, loc: clientData.loc,
-            group: clientData.group, teacher: clientData.teacher,
-            contractDate: clientData.contractDate, contractType: clientData.contractType,
-            monthlyFee: clientData.monthlyFee, notes: clientData.notes,
-            absences: allAbsences
-          };
+          if (isNew) {
+            crmMap[crmKey] = {
+              id: clientData.id, name: clientData.name, loc: clientData.loc,
+              group: clientData.group, teacher: clientData.teacher,
+              contractDate: clientData.contractDate, contractType: clientData.contractType,
+              monthlyFee: clientData.monthlyFee, notes: clientData.notes,
+              absences: allAbsences
+            };
+          } else {
+            crmMap[crmKey].absences = allAbsences;
+          }
 
           if (isNew) { stats.newClientsCreated++; }
           else       { stats.existingClientsUpdated++; }
