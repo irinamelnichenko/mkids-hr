@@ -4071,39 +4071,73 @@ function saveChild(){
 
   var id=S.editId;
   var c=getCRMCard(id);
+
+  function val(elId){
+    var el=document.getElementById(elId);
+    return el ? String(el.value||'').trim() : '';
+  }
+  function valRaw(elId){
+    var el=document.getElementById(elId);
+    return el ? String(el.value||'') : '';
+  }
+
   c.name=name;
   c.loc=loc;
   c.group=group;
   c.teacher=teacher;
-  c.bday=document.getElementById('fBday').value;
-  c.status=document.getElementById('fStatus').value;
-  c.momName=document.getElementById('fMomName').value.trim();
-  c.momPhone=document.getElementById('fMomPhone').value.trim();
-  c.dadName=document.getElementById('fDadName').value.trim();
-  c.dadPhone=document.getElementById('fDadPhone').value.trim();
-  c.contractDate=document.getElementById('fContractDate').value;
-  c.contractType=document.getElementById('fContractType').value;
-  c.monthlyFee=parseFloat(document.getElementById('fMonthlyFee').value)||0;
-  c.entryFee=parseFloat(document.getElementById('fEntryFee').value)||0;
-  c.notes=document.getElementById('fNotes').value.trim();
+  c.bday=val('fBday');
+  c.status=val('fStatus');
+  c.momName=val('fMomName');
+  c.momPhone=val('fMomPhone');
+  c.dadName=val('fDadName');
+  c.dadPhone=val('fDadPhone');
+  c.contractDate=val('fContractDate');
+  c.contractType=val('fContractType');
+  c.monthlyFee=parseFloat(val('fMonthlyFee'))||0;
+  c.entryFee=parseFloat(val('fEntryFee'))||0;
+  c.notes=val('fNotes');
 
-  function _setIfInput(id, fn){ var el=document.getElementById(id); if(el) fn(el.value); }
-  _setIfInput('fContractNumber',    function(v){ c.contractNumber    = v.trim(); });
-  _setIfInput('fAdaptDate',         function(v){ c.adaptDate         = v; });
-  _setIfInput('fTerminationDate',   function(v){ c.terminationDate   = v; });
-  _setIfInput('fTerminationReason', function(v){ c.terminationReason = v.trim(); });
-  _setIfInput('fBirthCert',         function(v){ c.birthCert         = v.trim(); });
-  _setIfInput('fChildRegAddress',   function(v){ c.childRegAddress   = v.trim(); });
-  _setIfInput('fMomDoc',            function(v){ c.momDoc            = v.trim(); });
-  _setIfInput('fMomRnokpp',         function(v){ c.momRnokpp         = v.trim(); });
-  _setIfInput('fDadDoc',            function(v){ c.dadDoc            = v.trim(); });
-  _setIfInput('fDadRnokpp',         function(v){ c.dadRnokpp         = v.trim(); });
+  c.contractNumber=val('fContractNumber');
+  c.adaptDate=valRaw('fAdaptDate');
+  c.terminationDate=valRaw('fTerminationDate');
+  c.terminationReason=val('fTerminationReason');
+  c.birthCert=val('fBirthCert');
+  c.childRegAddress=val('fChildRegAddress');
+  c.momDoc=val('fMomDoc');
+  c.momRnokpp=val('fMomRnokpp');
+  c.dadDoc=val('fDadDoc');
+  c.dadRnokpp=val('fDadRnokpp');
 
   c.updatedAt=today();
   if(!c.createdAt) c.createdAt=today();
 
+  var payload = {
+    id: id,
+    name: c.name, loc: c.loc, group: c.group, teacher: c.teacher,
+    bday: c.bday, status: c.status,
+    momName: c.momName, momPhone: c.momPhone,
+    dadName: c.dadName, dadPhone: c.dadPhone,
+    contractDate: c.contractDate, contractType: c.contractType,
+    monthlyFee: c.monthlyFee, entryFee: c.entryFee,
+    notes: c.notes,
+    absences: c.absences || [],
+    entryFeeSchedule: c.entryFeeSchedule || [],
+    feeHistory: c.feeHistory || [],
+    contractNumber: c.contractNumber,
+    adaptDate: c.adaptDate,
+    terminationDate: c.terminationDate,
+    terminationReason: c.terminationReason,
+    birthCert: c.birthCert,
+    childRegAddress: c.childRegAddress,
+    momDoc: c.momDoc, momRnokpp: c.momRnokpp,
+    dadDoc: c.dadDoc, dadRnokpp: c.dadRnokpp,
+    createdAt: c.createdAt, updatedAt: c.updatedAt
+  };
+
+  console.log('[saveChild] payload:', payload);
+
   saveLocalCRM();
-  apiPost({action:'saveClient', data:Object.assign({id:id},c)});
+  apiPost({action:'saveClient', data: payload});
   localStorage.removeItem(CFG.CLI_CACHE);
   closeModal('mChild');
   S.isNew=false;
