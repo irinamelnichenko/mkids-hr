@@ -1312,6 +1312,23 @@ function selRole(r){
   document.getElementById('fldLocation').classList.toggle('hidden',r==='hr');
 }
 
+// ── SHARED SESSION (між index.html і clients.html) ────────────────────────
+var SESSION_KEY = 'mkids_session';
+var SESSION_TTL_MS = 12 * 3600 * 1000;
+
+function saveSession(user){
+  try { localStorage.setItem(SESSION_KEY, JSON.stringify({user: user, t: Date.now()})); } catch(e){}
+}
+function readSession(){
+  try {
+    var s = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null');
+    if (!s || !s.user || !s.t) return null;
+    if (Date.now() - s.t > SESSION_TTL_MS) return null;
+    return s.user;
+  } catch(e) { return null; }
+}
+function clearSession(){ try { localStorage.removeItem(SESSION_KEY); } catch(e){} }
+
 async function doLogin(){
   var pw=document.getElementById('loginPw').value;
   var errEl=document.getElementById('loginError');
@@ -1331,6 +1348,7 @@ async function doLogin(){
     if(pw!==genDirPw(loc)){ showLoginErr('Невірний пароль для цієї локації'); return; }
     S.user={role:'director',loc:loc};
   }
+  saveSession(S.user);
   document.getElementById('loginScreen').classList.add('hidden');
   document.getElementById('app').classList.remove('hidden');
   updUserUI();
@@ -1339,6 +1357,7 @@ async function doLogin(){
 function showLoginErr(m){ var e=document.getElementById('loginError'); e.textContent='⚠️ '+m; e.classList.remove('hidden'); }
 
 function doLogout(){
+  clearSession();
   S.user=null;
   document.getElementById('app').classList.add('hidden');
   document.getElementById('loginScreen').classList.remove('hidden');
@@ -5155,8 +5174,19 @@ function renderPayMonths(){
 }
 
 // ─── BOOTSTRAP ────────────────────────────────────────────────────────────────
-(function bootstrap(){
+(async function bootstrap(){
   checkAndClearCache();
+
+  var sessUser = readSession();
+  if (sessUser) {
+    S.user = sessUser;
+    document.getElementById('loginScreen').classList.add('hidden');
+    document.getElementById('app').classList.remove('hidden');
+    updUserUI();
+    await initApp();
+    return;
+  }
+
   document.getElementById('loginScreen').classList.remove('hidden');
   preloadLocations();
 })();

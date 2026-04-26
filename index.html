@@ -629,6 +629,23 @@ function selectRole(r) {
   document.getElementById('tabNurse').classList.toggle('active',r==='nurse');
   document.getElementById('fldLocation').classList.toggle('hidden',r==='hr');
 }
+// ── SHARED SESSION (між index.html і clients.html) ────────────────────────
+var SESSION_KEY = 'mkids_session';
+var SESSION_TTL_MS = 12 * 3600 * 1000;
+
+function saveSession(user){
+  try { localStorage.setItem(SESSION_KEY, JSON.stringify({user: user, t: Date.now()})); } catch(e){}
+}
+function readSession(){
+  try {
+    var s = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null');
+    if (!s || !s.user || !s.t) return null;
+    if (Date.now() - s.t > SESSION_TTL_MS) return null;
+    return s.user;
+  } catch(e) { return null; }
+}
+function clearSession(){ try { localStorage.removeItem(SESSION_KEY); } catch(e){} }
+
 async function doLogin() {
   const pw=document.getElementById('loginPw').value;
   const err=document.getElementById('loginError'); err.classList.add('hidden');
@@ -647,12 +664,13 @@ async function doLogin() {
     S.f={loc:'',pos:'',status:'',dir:'',typ:''};
     S.q=''; // скидаємо пошук і всі фільтри при вході
   }
+  saveSession(S.user);
   document.getElementById('loginScreen').classList.add('hidden');
   document.getElementById('app').classList.remove('hidden');
   updUserUI(); await initApp();
 }
 function showErr(m){const el=document.getElementById('loginError');el.textContent='⚠️ '+m;el.classList.remove('hidden');}
-function doLogout(){S.user=null;S.view='dashboard';S.f={loc:'',pos:'',status:'',dir:'',typ:''};S.q='';document.getElementById('app').classList.add('hidden');document.getElementById('loginScreen').classList.remove('hidden');document.getElementById('loginPw').value='';}
+function doLogout(){clearSession();S.user=null;S.view='dashboard';S.f={loc:'',pos:'',status:'',dir:'',typ:''};S.q='';document.getElementById('app').classList.add('hidden');document.getElementById('loginScreen').classList.remove('hidden');document.getElementById('loginPw').value='';}
 function updUserUI(){
   const role=S.user.role;
   const isHR=role==='hr', isDir=role==='director', isNurse=role==='nurse';
@@ -2804,6 +2822,19 @@ window.addEventListener('DOMContentLoaded',async()=>{
   loadRecs();
   // Load saved passwords
   try{const c=JSON.parse(localStorage.getItem('hr_creds')||'null');if(c){CFG.PW.hr=c.hr;CFG.PW.director=c.director;}}catch(e){};
+
+  var sessUser = readSession();
+  if (sessUser) {
+    S.user = sessUser;
+    S.f = {loc:'',pos:'',status:'',dir:'',typ:''};
+    S.q = '';
+    document.getElementById('loginScreen').classList.add('hidden');
+    document.getElementById('app').classList.remove('hidden');
+    updUserUI();
+    await initApp();
+    return;
+  }
+
   try{
     const r=await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${CFG.SHEET_ID}/values/'2025-2026'!C2:C1200?key=${CFG.API_KEY}`);
     const j=await r.json();
