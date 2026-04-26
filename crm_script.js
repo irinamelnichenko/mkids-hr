@@ -686,23 +686,30 @@ function saveAttendance(body) {
   var vals = sheet.getDataRange().getValues();
   var now  = formatDate(new Date());
   var saved = 0;
+
   records.forEach(function(rec) {
     var date    = trim(String(rec.date    || ''));
     var childId = trim(String(rec.childId || ''));
     if (!date || !childId) return;
     var row = [date, childId, rec.childName||'', rec.loc||'', rec.group||'', rec.status||'', rec.updatedBy||'', now];
+    var written = false;
     for (var r = 1; r < vals.length; r++) {
       if (String(vals[r][0]) === date && String(vals[r][1]) === childId) {
         sheet.getRange(r+1, 1, 1, row.length).setValues([row]);
         vals[r] = row;
         saved++;
-        return;
+        written = true;
+        break;
       }
     }
-    sheet.appendRow(row);
-    vals.push(row);
-    saved++;
+    if (!written) {
+      sheet.appendRow(row);
+      vals.push(row);
+      saved++;
+    }
+    mirrorAttendanceToNurseSheet(rec.loc||'', rec.childName||'', date, rec.status||'');
   });
+
   return {ok:true, saved:saved};
 }
 
@@ -1639,3 +1646,174 @@ function diagnoseCRMClients() {
 }
 
 function _runDiagCRM() { diagnoseCRMClients(); }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MIRROR: CRM Табель → старі таблиці медсестер (17 локацій)
+// ═══════════════════════════════════════════════════════════════════════════
+
+var NURSE_SHEET_TAB = 'табель медсестри';
+
+var UA_MONTH_NAMES = [
+  'січень','лютий','березень','квітень','травень','червень',
+  'липень','серпень','вересень','жовтень','листопад','грудень'
+];
+
+var _nurseCache = null;
+
+function norm(s) {
+  return String(s || '').trim().toLowerCase()
+    .replace(/[’ʼ′`]/g, "'");
+}
+
+function loadNurseSheetMap() {
+  if (_nurseCache && _nurseCache.map) return _nurseCache.map;
+  var map = {};
+  try {
+    var configSS = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+    var nurseSheet = null;
+    var sheets = configSS.getSheets();
+    for (var i = 0; i < sheets.length; i++) {
+      if (norm(sheets[i].getName()) === norm(NURSE_SHEET_TAB)) {
+        nurseSheet = sheets[i];
+        break;
+      }
+    }
+    if (!nurseSheet) {
+      Logger.log('mirror: WARN — лист "' + NURSE_SHEET_TAB + '" не знайдено у Config');
+    } else {
+      var data = nurseSheet.getDataRange().getValues();
+      for (var r = 1; r < data.length; r++) {
+        var loc = String(data[r][2] || '').trim();
+        var sid = String(data[r][3] || '').trim();
+        if (loc && sid) map[norm(loc)] = sid;
+      }
+    }
+  } catch (e) {
+    Logger.log('mirror: ERROR loadNurseSheetMap — ' + (e.message || e));
+  }
+  _nurseCache = { map: map, ss: {}, sheet: {} };
+  return map;
+}
+
+function findMonthTab(spreadsheet, isoDate) {
+  var m = String(isoDate).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  var monName = UA_MONTH_NAMES[+m[2] - 1];
+  var yFull = m[1];
+  var yy    = yFull.slice(-2);
+
+  var sheets = spreadsheet.getSheets();
+
+  for (var i = 0; i < sheets.length; i++) {
+    var n1 = sheets[i].getName().toLowerCase();
+    if (n1.indexOf(monName) >= 0 && n1.indexOf(yFull) >= 0) return sheets[i];
+  }
+  for (var j = 0; j < sheets.length; j++) {
+    var n2 = sheets[j].getName().toLowerCase();
+    if (n2.indexOf(monName) < 0) continue;
+    var nums = n2.match(/\d+/g) || [];
+    for (var k = 0; k < nums.length; k++) {
+      if (nums[k] === yy || nums[k] === yFull) return sheets[j];
+    }
+  }
+  return null;
+}
+
+function findChildRow(sheet, childName) {
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 3) return -1;
+
+  var values = sheet.getRange(3, 1, lastRow - 2, 1).getValues();
+  var target = norm(childName);
+  if (!target) return -1;
+
+  for (var i = 0; i < values.length; i++) {
+    if (norm(values[i][0]) === target) return i + 3;
+  }
+  return -1;
+}
+
+function findDateColumn(sheet, isoDate) {
+  var m = String(isoDate).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return -1;
+  var target = m[3] + '/' + m[2];
+  var lastCol = sheet.getLastColumn();
+  if (lastCol < 1) return -1;
+  var row2 = sheet.getRange(2, 1, 1, lastCol).getValues()[0];
+  for (var c = 0; c < lastCol; c++) {
+    var raw = row2[c];
+    var s;
+    if (raw instanceof Date) {
+      s = pad2(raw.getDate()) + '/' + pad2(raw.getMonth() + 1);
+    } else {
+      s = String(raw || '').trim();
+      if (!s) continue;
+      var dm = s.replace(/[.\-]/g, '/').match(/^(\d{1,2})\/(\d{1,2})(?:\/\d{2,4})?$/);
+      if (dm) s = pad2(+dm[1]) + '/' + pad2(+dm[2]);
+    }
+    if (s === target) return c + 1;
+  }
+  return -1;
+}
+
+function mapStatusToNurseCell(status) {
+  if (status === 'present') return '1';
+  if (status === 'sick' || status === 'vacation' || status === 'absent' || status === '') return '';
+  return null;
+}
+
+function mirrorAttendanceToNurseSheet(loc, childName, isoDate, status) {
+  try {
+    var newVal = mapStatusToNurseCell(status);
+    if (newVal === null) {
+      Logger.log('mirror: skip unknown status "' + status + '" for ' + childName + ' / ' + isoDate);
+      return;
+    }
+
+    var map = loadNurseSheetMap();
+    var sid = map[norm(loc)];
+    if (!sid) {
+      Logger.log('mirror: WARN — нема spreadsheetId для локації "' + loc + '" (norm="' + norm(loc) + '")');
+      return;
+    }
+
+    var ss = _nurseCache.ss[sid];
+    if (!ss) {
+      ss = SpreadsheetApp.openById(sid);
+      _nurseCache.ss[sid] = ss;
+    }
+
+    var monthKey = sid + '|' + isoDate.slice(0, 7);
+    var sheet = _nurseCache.sheet[monthKey];
+    if (sheet === undefined) {
+      sheet = findMonthTab(ss, isoDate) || false;
+      _nurseCache.sheet[monthKey] = sheet;
+    }
+    if (!sheet) {
+      Logger.log('mirror: WARN — таб місяця не знайдено у [' + loc + '] для дати ' + isoDate);
+      return;
+    }
+
+    var rowNum = findChildRow(sheet, childName);
+    if (rowNum < 1) {
+      Logger.log('mirror: WARN — дитину "' + childName + '" не знайдено у [' + loc + '] / таб "' + sheet.getName() + '"');
+      return;
+    }
+    var colNum = findDateColumn(sheet, isoDate);
+    if (colNum < 1) {
+      Logger.log('mirror: WARN — колонку дати ' + isoDate + ' не знайдено у [' + loc + '] / таб "' + sheet.getName() + '"');
+      return;
+    }
+
+    var cell = sheet.getRange(rowNum, colNum);
+    var existing = String(cell.getValue() || '').trim();
+    if (existing.toUpperCase() === 'А' || existing.toUpperCase() === 'A') {
+      Logger.log('mirror: skip "А" (адаптація) для ' + childName + ' / ' + isoDate);
+      return;
+    }
+    if (existing === newVal) return;
+    cell.setValue(newVal);
+  } catch (e) {
+    Logger.log('mirror: ERROR ' + (e.message || e) + ' для ' + childName + ' / ' + loc + ' / ' + isoDate);
+  }
+}
