@@ -151,6 +151,9 @@ function writeClientsHeader(sheet) {
     'Дата договору','Тип договору','Сума договору','Вступний внесок',
     'Статус','Нотатки',
     'Відсутності (JSON)','Графік внеску (JSON)','Зміни суми (JSON)',
+    'Номер договору','Дата адаптації','Дата розірвання','Причина розірвання',
+    'Свідоцтво про народження','Місце реєстрації дитини',
+    'Документ мами','РНОКПП мами','Документ тата','РНОКПП тата',
     'Створено','Оновлено'
   ]);
   sheet.setFrozenRows(1);
@@ -265,11 +268,36 @@ function getClients() {
   return {ok:true, data:rows};
 }
 
+function ensureClientsHeader(sheet) {
+  var EXPECTED = [
+    'ID','ПІБ дитини','Локація','Група','Вихователь','Дата народження',
+    'ПІБ мами','Телефон мами','ПІБ тата','Телефон тата',
+    'Дата договору','Тип договору','Сума договору','Вступний внесок',
+    'Статус','Нотатки',
+    'Відсутності (JSON)','Графік внеску (JSON)','Зміни суми (JSON)',
+    'Номер договору','Дата адаптації','Дата розірвання','Причина розірвання',
+    'Свідоцтво про народження','Місце реєстрації дитини',
+    'Документ мами','РНОКПП мами','Документ тата','РНОКПП тата',
+    'Створено','Оновлено'
+  ];
+  var lastCol = sheet.getLastColumn();
+  var width = Math.max(lastCol, EXPECTED.length);
+  var current = sheet.getRange(1, 1, 1, width).getValues()[0];
+  for (var i = 0; i < EXPECTED.length; i++) {
+    if (String(current[i] || '').trim() !== EXPECTED[i]) {
+      sheet.getRange(1, 1, 1, EXPECTED.length).setValues([EXPECTED]);
+      sheet.setFrozenRows(1);
+      return;
+    }
+  }
+}
+
 function saveClient(data) {
   if (!data || !data.id) return {ok:false, error:'Missing id'};
   var ss = getCRMSpreadsheet();
   var sheet = ss.getSheetByName(SHEET_CLIENTS);
   if (!sheet) return {ok:false, error:'Sheet not found'};
+  ensureClientsHeader(sheet);
   var vals = sheet.getDataRange().getValues();
   var now = formatDate(new Date());
   var row = [
@@ -280,11 +308,16 @@ function saveClient(data) {
     JSON.stringify(data.absences||[]),
     JSON.stringify(data.entryFeeSchedule||[]),
     JSON.stringify(data.feeHistory||[]),
+    data.contractNumber||'', data.adaptDate||'', data.terminationDate||'',
+    data.terminationReason||'',
+    data.birthCert||'', data.childRegAddress||'',
+    data.momDoc||'', data.momRnokpp||'',
+    data.dadDoc||'', data.dadRnokpp||'',
     data.createdAt||now, now
   ];
   for (var r = 1; r < vals.length; r++) {
     if (String(vals[r][0]) === String(data.id)) {
-      row[19] = vals[r][19] || data.createdAt || now;
+      row[29] = vals[r][29] || data.createdAt || now;
       sheet.getRange(r+1, 1, 1, row.length).setValues([row]);
       return {ok:true, action:'updated'};
     }
