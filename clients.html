@@ -593,7 +593,8 @@ tbody tr.clickable:hover td{background:#f0f7ff}
         </div>
         <div class="g2">
           <div class="fg"><label>Номер договору</label>
-            <input type="text" id="fContractNumber" placeholder="напр. К-2025-001"></div>
+            <input type="text" id="fContractNumber" placeholder="напр. 01-01-01"
+              maxlength="8" oninput="fmtContractNumber(this)"></div>
           <div class="fg"><label>Дата старту адаптації</label>
             <input type="date" id="fAdaptDate" onchange="updateStatusWarnings()"></div>
         </div>
@@ -817,6 +818,16 @@ function phoneKeyDown(inp, e){
     e.preventDefault();
     inp.value = '';
   }
+}
+
+function fmtContractNumber(inp){
+  var digits = inp.value.replace(/\D/g, '').slice(0, 6);
+  var parts = [];
+  if(digits.length > 0) parts.push(digits.slice(0, 2));
+  if(digits.length > 2) parts.push(digits.slice(2, 4));
+  if(digits.length > 4) parts.push(digits.slice(4, 6));
+  inp.value = parts.join('-');
+  setTimeout(function(){ inp.setSelectionRange(inp.value.length, inp.value.length); }, 0);
 }
 
 // ─── SCRIPT URL ───────────────────────────────────────────────────────────────
