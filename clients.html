@@ -1114,7 +1114,7 @@ async function loadClients(force){
   console.log('[loadClients] fetching from Sheets...');
   var rows=[];
   try{
-    var vals=await sheetsRead('Клієнти','A1:U2000');
+    var vals=await sheetsRead('Клієнти','A1:AE2000');
     rows=rowsToObjects(vals).filter(function(r){ return r['ID']; });
     if(!rows.length) throw new Error('empty response');
   }catch(e){
