@@ -525,6 +525,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
       <div class="tab" onclick="switchTab(5)">📊 Історія оплат</div>
       <div class="tab" onclick="switchTab(6)">📝 Нотатки</div>
       <div class="tab" onclick="switchTab(7)">🩺 Здоров'я</div>
+      <div class="tab" onclick="switchTab(8)">📄 Документи</div>
     </div>
     <div class="modal-bd">
       <!-- Tab 0: Основне -->
@@ -673,6 +674,28 @@ tbody tr.clickable:hover td{background:#f0f7ff}
       </div>
       <!-- Tab 7: Здоров'я -->
       <div class="tab-pane" id="tp7"></div>
+      <!-- Tab 8: Документи -->
+      <div class="tab-pane" id="tp8">
+        <div class="section-hd">👶 ДИТИНА</div>
+        <div class="fg"><label>Свідоцтво про народження</label>
+          <input type="text" id="fBirthCert" placeholder="напр. ВЕ 123456 або 1234-567890"></div>
+        <div class="fg"><label>Місце реєстрації дитини</label>
+          <textarea id="fChildRegAddress" rows="2" placeholder="вул., будинок, місто, область, індекс" style="resize:vertical"></textarea></div>
+
+        <div class="section-hd">👩 МАМА</div>
+        <p style="color:var(--gray);font-size:13px;margin:0 0 8px 0">ПІБ і телефон редагуються у вкладці "Основне"</p>
+        <div class="fg"><label>Документ мами</label>
+          <input type="text" id="fMomDoc" placeholder="напр. серія+номер паспорта або номер ID-карти"></div>
+        <div class="fg"><label>РНОКПП мами</label>
+          <input type="text" id="fMomRnokpp" placeholder="10 цифр" maxlength="10" oninput="validateRnokpp(this)"></div>
+
+        <div class="section-hd">👨 ТАТО</div>
+        <p style="color:var(--gray);font-size:13px;margin:0 0 8px 0">ПІБ і телефон редагуються у вкладці "Основне"</p>
+        <div class="fg"><label>Документ тата</label>
+          <input type="text" id="fDadDoc" placeholder="напр. серія+номер паспорта або номер ID-карти"></div>
+        <div class="fg"><label>РНОКПП тата</label>
+          <input type="text" id="fDadRnokpp" placeholder="10 цифр" maxlength="10" oninput="validateRnokpp(this)"></div>
+      </div>
     </div>
     <div class="modal-ft">
       <button class="btn btn-danger btn-sm" id="btnDeleteChild" onclick="deleteChild()" style="margin-right:auto">🗑️ Видалити</button>
@@ -828,6 +851,23 @@ function fmtContractNumber(inp){
   if(digits.length > 4) parts.push(digits.slice(4, 6));
   inp.value = parts.join('-');
   setTimeout(function(){ inp.setSelectionRange(inp.value.length, inp.value.length); }, 0);
+}
+
+function validateRnokpp(inp){
+  inp.value = inp.value.replace(/\D/g, '').slice(0, 10);
+  var warnId = inp.id + 'Warn';
+  var warn = document.getElementById(warnId);
+  if(!warn){
+    warn = document.createElement('div');
+    warn.id = warnId;
+    warn.style.cssText = 'color:var(--orange);font-size:12px;margin-top:4px';
+    inp.parentNode.appendChild(warn);
+  }
+  if(inp.value.length === 0 || inp.value.length === 10){
+    warn.textContent = '';
+  } else {
+    warn.textContent = 'ℹ️ ІПН зазвичай 10 цифр';
+  }
 }
 
 // ─── SCRIPT URL ───────────────────────────────────────────────────────────────
@@ -2036,7 +2076,8 @@ function openNewChild(){
   document.querySelectorAll('.tab-pane').forEach(function(p,i){ p.classList.toggle('active',i===0); });
   ['fName','fBday','fTeacher','fMomName','fMomPhone','fDadName','fDadPhone',
    'fContractDate','fMonthlyFee','fEntryFee','fNotes',
-   'fContractNumber','fAdaptDate','fTerminationDate','fTerminationReason'].forEach(function(id){
+   'fContractNumber','fAdaptDate','fTerminationDate','fTerminationReason',
+   'fBirthCert','fChildRegAddress','fMomDoc','fMomRnokpp','fDadDoc','fDadRnokpp'].forEach(function(id){
     document.getElementById(id).value='';
   });
   document.getElementById('fGroup').value='';
@@ -2128,6 +2169,14 @@ function populateForm(id){
   document.getElementById('fAdaptDate').value=c.adaptDate||'';
   document.getElementById('fTerminationDate').value=c.terminationDate||'';
   document.getElementById('fTerminationReason').value=c.terminationReason||'';
+  document.getElementById('fBirthCert').value=c.birthCert||'';
+  document.getElementById('fChildRegAddress').value=c.childRegAddress||'';
+  document.getElementById('fMomDoc').value=c.momDoc||'';
+  document.getElementById('fMomRnokpp').value=c.momRnokpp||'';
+  document.getElementById('fDadDoc').value=c.dadDoc||'';
+  document.getElementById('fDadRnokpp').value=c.dadRnokpp||'';
+  validateRnokpp(document.getElementById('fMomRnokpp'));
+  validateRnokpp(document.getElementById('fDadRnokpp'));
   onTerminationDateChange();
   updateStatusWarnings();
   renderPayStatus(id);
