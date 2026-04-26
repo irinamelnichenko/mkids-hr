@@ -555,10 +555,12 @@ tbody tr.clickable:hover td{background:#f0f7ff}
         <div class="g2">
           <div class="fg"><label>Вихователь</label><input type="text" id="fTeacher"></div>
           <div class="fg"><label>Статус клієнта</label>
-            <select id="fStatus">
+            <select id="fStatus" onchange="updateStatusWarnings()">
+              <option value="adaptation">🌱 Адаптація</option>
               <option value="active">✅ Активний</option>
+              <option value="paused">⏸ Призупинено</option>
               <option value="future">📅 Майбутній</option>
-              <option value="terminated">❌ Розірваний</option>
+              <option value="terminated">❌ Розірвано</option>
               <option value="graduate">🎓 Випускник</option>
             </select></div>
         </div>
@@ -589,9 +591,25 @@ tbody tr.clickable:hover td{background:#f0f7ff}
             <div id="contractTypeDisplay" style="padding:10px 14px;background:#f0f4f8;border:2px solid #e8ecf0;border-radius:10px;font-size:14px;font-weight:600;color:var(--dark2)">—</div>
           </div>
         </div>
+        <div class="g2">
+          <div class="fg"><label>Номер договору</label>
+            <input type="text" id="fContractNumber" placeholder="напр. К-2025-001"></div>
+          <div class="fg"><label>Дата старту адаптації</label>
+            <input type="date" id="fAdaptDate" onchange="updateStatusWarnings()"></div>
+        </div>
+        <div class="g2">
+          <div class="fg"><label>Дата розірвання договору</label>
+            <input type="date" id="fTerminationDate" onchange="onTerminationDateChange()"></div>
+          <div class="fg"></div>
+        </div>
+        <div class="fg" id="terminationReasonWrap" style="display:none">
+          <label>Причина розірвання</label>
+          <textarea id="fTerminationReason" rows="3" style="width:100%;padding:10px;border:1.5px solid var(--gray2);border-radius:8px;font-size:14px;font-family:inherit;resize:vertical"></textarea>
+        </div>
         <div class="fg"><label>Щомісячна сума (грн)</label>
           <input type="number" id="fMonthlyFee" placeholder="0" oninput="recalcDiscount()"></div>
         <div id="contractInfo" class="alert alert-info"></div>
+        <div id="statusWarnings"></div>
         <div id="discountBlock" style="margin-top:12px"></div>
         <div class="section-hd">Зміни суми договору</div>
         <div id="feeHistoryList"></div>
@@ -2006,7 +2024,8 @@ function openNewChild(){
   document.querySelectorAll('#mChildTabs .tab').forEach(function(t,i){ t.classList.toggle('active',i===0); });
   document.querySelectorAll('.tab-pane').forEach(function(p,i){ p.classList.toggle('active',i===0); });
   ['fName','fBday','fTeacher','fMomName','fMomPhone','fDadName','fDadPhone',
-   'fContractDate','fMonthlyFee','fEntryFee','fNotes'].forEach(function(id){
+   'fContractDate','fMonthlyFee','fEntryFee','fNotes',
+   'fContractNumber','fAdaptDate','fTerminationDate','fTerminationReason'].forEach(function(id){
     document.getElementById(id).value='';
   });
   document.getElementById('fGroup').value='';
@@ -2094,6 +2113,12 @@ function populateForm(id){
   document.getElementById('fMonthlyFee').value=c.monthlyFee||'';
   document.getElementById('fEntryFee').value=c.entryFee||'';
   document.getElementById('fNotes').value=c.notes||'';
+  document.getElementById('fContractNumber').value=c.contractNumber||'';
+  document.getElementById('fAdaptDate').value=c.adaptDate||'';
+  document.getElementById('fTerminationDate').value=c.terminationDate||'';
+  document.getElementById('fTerminationReason').value=c.terminationReason||'';
+  onTerminationDateChange();
+  updateStatusWarnings();
   renderPayStatus(id);
   updateContractType();
 }
@@ -2342,13 +2367,63 @@ function recalcDiscount(){
   el.innerHTML=html;
 }
 
+function onTerminationDateChange(){
+  var v=(document.getElementById('fTerminationDate')||{}).value||'';
+  var wrap=document.getElementById('terminationReasonWrap');
+  if(wrap) wrap.style.display = v ? '' : 'none';
+  updateStatusWarnings();
+}
+
+function updateStatusWarnings(){
+  var el=document.getElementById('statusWarnings'); if(!el) return;
+  var status=(document.getElementById('fStatus')||{}).value||'';
+  var adaptDate=(document.getElementById('fAdaptDate')||{}).value||'';
+  var termDate=(document.getElementById('fTerminationDate')||{}).value||'';
+  var msgs=[];
+  if(status==='adaptation' && !adaptDate) msgs.push('ℹ️ Поставте дату старту адаптації');
+  if(status==='terminated' && !termDate)  msgs.push('ℹ️ Поставте дату розірвання');
+  el.innerHTML = msgs.length
+    ? msgs.map(function(m){ return '<div class="alert alert-warn" style="margin-top:6px;font-size:13px">'+m+'</div>'; }).join('')
+    : '';
+}
+
 // Fee history
 function renderFeeHistory(){
   var id=S.editId; if(!id) return;
   var hist=(S.crm[id]||{}).feeHistory||[];
   var el=document.getElementById('feeHistoryList'); if(!el) return;
-  el.innerHTML=!hist.length?'<p style="color:var(--gray);font-size:13px">Змін суми не записано</p>'
-    :hist.map(function(h,i){ return '<div class="fee-row"><span class="fr-date">'+fmtD(h.date)+'</span><span class="fr-amt">'+fmtN(h.amount)+' грн</span><span class="fr-note">'+esc(h.note||'')+'</span><button class="del-btn" onclick="delFeeHistory('+i+')">✕</button></div>'; }).join('');
+  if(!hist.length){ el.innerHTML='<p style="color:var(--gray);font-size:13px">Змін суми не записано</p>'; return; }
+  el.innerHTML=hist.map(function(h,i){
+    var deltaHtml='—';
+    var deltaStyle='color:var(--gray)';
+    if(i>0){
+      var prev=+hist[i-1].amount||0;
+      var delta=(+h.amount||0)-prev;
+      var pctStr='';
+      if(prev>0){
+        var pct=Math.abs(delta/prev*100);
+        var pctSign=delta>0?'+':(delta<0?'-':'');
+        pctStr=' ('+pctSign+pct.toFixed(1)+'%)';
+      }
+      if(delta>0){
+        deltaStyle='color:var(--green);font-weight:600';
+        deltaHtml='+'+fmtN(delta)+' грн'+pctStr;
+      } else if(delta<0){
+        deltaStyle='color:var(--red2);font-weight:600';
+        deltaHtml='-'+fmtN(Math.abs(delta))+' грн'+pctStr;
+      } else {
+        deltaStyle='color:var(--gray)';
+        deltaHtml='0 грн';
+      }
+    }
+    return '<div class="fee-row">'
+      +'<span class="fr-date">'+fmtD(h.date)+'</span>'
+      +'<span class="fr-amt">'+fmtN(h.amount)+' грн</span>'
+      +'<span style="min-width:140px;font-size:13px;'+deltaStyle+'">'+deltaHtml+'</span>'
+      +'<span class="fr-note">'+esc(h.note||'')+'</span>'
+      +'<button class="del-btn" onclick="delFeeHistory('+i+')">✕</button>'
+      +'</div>';
+  }).join('');
 }
 function addFeeHistory(){
   var id=S.editId; if(!id) return;
