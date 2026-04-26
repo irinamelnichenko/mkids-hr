@@ -765,16 +765,21 @@ function applyRoleVisibility(){
     const anyVisible = Array.from(items).some(item => item.style.display !== 'none');
     section.style.display = anyVisible ? '' : 'none';
   });
-  // TODO: коли додамо колонку ЗП на сторінці співробітників —
-  //       додати data-sensitive="salary" і:
-  //       if (role==='nurse')
-  //         document.querySelectorAll('[data-sensitive="salary"]')
-  //           .forEach(el => el.style.display='none');
+  if (role === 'nurse') {
+    document.querySelectorAll('[data-sensitive="finance"]').forEach(el => el.style.display = 'none');
+    document.querySelectorAll('[data-sensitive="salary"]').forEach(el => el.style.display = 'none');
+  }
 }
 
 function dispatchHashView(){
   const h = (location.hash||'').replace('#','');
   if (!h) return;
+  const allowed = PERMISSIONS[S.user && S.user.role];
+  const hasPerm = (allowed === 'all') || (Array.isArray(allowed) && allowed.indexOf(h) >= 0);
+  if (!hasPerm) {
+    history.replaceState(null,'',location.pathname + location.search);
+    return;
+  }
   const fn = PERM_LOCAL_ACTION[h];
   if (fn) fn();
   history.replaceState(null,'',location.pathname + location.search);

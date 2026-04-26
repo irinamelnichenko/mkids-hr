@@ -560,11 +560,11 @@ tbody tr.clickable:hover td{background:#f0f7ff}
     </div>
     <div class="tabs" id="mChildTabs">
       <div class="tab active" onclick="switchTab(0)">👤 Основне</div>
-      <div class="tab" onclick="switchTab(1)">📋 Договір</div>
-      <div class="tab" onclick="switchTab(2)">💳 Внески</div>
+      <div class="tab" onclick="switchTab(1)" data-sensitive="finance">📋 Договір</div>
+      <div class="tab" onclick="switchTab(2)" data-sensitive="finance">💳 Внески</div>
       <div class="tab" onclick="switchTab(3)">🏖️ Відпустки</div>
-      <div class="tab" onclick="switchTab(4)">📅 Оплати по місяцях</div>
-      <div class="tab" onclick="switchTab(5)">📊 Історія оплат</div>
+      <div class="tab" onclick="switchTab(4)" data-sensitive="finance">📅 Оплати по місяцях</div>
+      <div class="tab" onclick="switchTab(5)" data-sensitive="finance">📊 Історія оплат</div>
       <div class="tab" onclick="switchTab(6)">📝 Нотатки</div>
       <div class="tab" onclick="switchTab(7)">🩺 Здоров'я</div>
       <div class="tab" onclick="switchTab(8)">📄 Документи</div>
@@ -572,7 +572,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
     <div class="modal-bd">
       <!-- Tab 0: Основне -->
       <div class="tab-pane active" id="tp0">
-        <div id="tpPayStatus" style="margin-bottom:14px"></div>
+        <div id="tpPayStatus" data-sensitive="finance" style="margin-bottom:14px"></div>
         <div class="section-hd">Основна інформація</div>
         <div class="g2">
           <div class="fg"><label>ПІБ дитини</label><input type="text" id="fName" placeholder="Прізвище Ім'я По-батькові"></div>
@@ -625,7 +625,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
         </div>
       </div>
       <!-- Tab 1: Договір -->
-      <div class="tab-pane" id="tp1">
+      <div class="tab-pane" id="tp1" data-sensitive="finance">
         <div class="g2">
           <div class="fg"><label>Дата підписання договору</label>
             <input type="date" id="fContractDate" onchange="onContractDateChange()"></div>
@@ -665,7 +665,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
         </div>
       </div>
       <!-- Tab 2: Внески -->
-      <div class="tab-pane" id="tp2">
+      <div class="tab-pane" id="tp2" data-sensitive="finance">
         <div class="alert alert-info" style="margin-bottom:14px;font-size:13px">
           <b>Директор</b> вносить план при підписанні договору. <b>Фінансист</b> фіксує факт у Payment Sheet (колонка "вступ") — CRM автоматично порівнює.
         </div>
@@ -696,14 +696,14 @@ tbody tr.clickable:hover td{background:#f0f7ff}
       <!-- Tab 3: Відсутності (рендериться динамічно) -->
       <div class="tab-pane" id="tp3"></div>
       <!-- Tab 4: Оплати по місяцях (NEW) -->
-      <div class="tab-pane" id="tp4">
+      <div class="tab-pane" id="tp4" data-sensitive="finance">
         <div id="payMonthsContent">
           <div class="empty"><span class="ei">📅</span><h4>Річні дані не завантажені</h4>
             <p>Натисніть "Оновити" або почекайте завантаження</p></div>
         </div>
       </div>
       <!-- Tab 5: Історія оплат (was 4) -->
-      <div class="tab-pane" id="tp5">
+      <div class="tab-pane" id="tp5" data-sensitive="finance">
         <div id="payHistContent">
           <div class="loading"><div class="spinner"></div><p>Завантаження…</p></div>
         </div>
@@ -1465,16 +1465,21 @@ function applyRoleVisibility(){
     var anyVisible = Array.prototype.slice.call(items).some(function(item){ return item.style.display !== 'none'; });
     section.style.display = anyVisible ? '' : 'none';
   });
-  // TODO: коли додамо колонку ЗП на сторінці співробітників —
-  //       додати data-sensitive="salary" і:
-  //       if (role==='nurse')
-  //         document.querySelectorAll('[data-sensitive="salary"]')
-  //           .forEach(el => el.style.display='none');
+  if (role === 'nurse') {
+    document.querySelectorAll('[data-sensitive="finance"]').forEach(function(el){ el.style.display = 'none'; });
+    document.querySelectorAll('[data-sensitive="salary"]').forEach(function(el){ el.style.display = 'none'; });
+  }
 }
 
 function dispatchHashView(){
   var h = (location.hash||'').replace('#','');
   if (!h) return;
+  var allowed = PERMISSIONS[S.user && S.user.role];
+  var hasPerm = (allowed === 'all') || (Array.isArray(allowed) && allowed.indexOf(h) >= 0);
+  if (!hasPerm) {
+    history.replaceState(null,'',location.pathname + location.search);
+    return;
+  }
   var fn = PERM_LOCAL_ACTION[h];
   if (fn) fn();
   history.replaceState(null,'',location.pathname + location.search);
@@ -1758,15 +1763,15 @@ function renderClients(){
     +'<div class="filters" style="margin:0;padding:0;border:none;background:none;gap:8px">'
     +'<input class="search-inp" placeholder="🔍 Пошук по імені…" value="'+esc(S.searchQ)+'" oninput="S.searchQ=this.value;renderClients()">'
     +(isHR()?'<select class="flt-sel" onchange="S.listLoc=this.value;renderClients()">'+listLocOpts+'</select>':'')
-    +'<select class="flt-sel" onchange="S.selStatus=this.value;renderClients()"><option value="">Всі статуси</option><option value="paid"'+(S.selStatus==='paid'?' selected':'')+'>✅ Оплачено</option><option value="debt"'+(S.selStatus==='debt'?' selected':'')+'>❌ Борг</option><option value="over"'+(S.selStatus==='over'?' selected':'')+'>💰 Переплата</option></select>'
-    +'<button type="button" class="att-chip'+(S.onlyDebtors?' att-chip-active':'')+'" style="'+(S.onlyDebtors?'background:var(--red2);border-color:var(--red2)':'')+'" onclick="toggleOnlyDebtors()">👁 Тільки боржники</button>'
+    +'<select class="flt-sel" data-sensitive="finance" onchange="S.selStatus=this.value;renderClients()"><option value="">Всі статуси</option><option value="paid"'+(S.selStatus==='paid'?' selected':'')+'>✅ Оплачено</option><option value="debt"'+(S.selStatus==='debt'?' selected':'')+'>❌ Борг</option><option value="over"'+(S.selStatus==='over'?' selected':'')+'>💰 Переплата</option></select>'
+    +'<button type="button" data-sensitive="finance" class="att-chip'+(S.onlyDebtors?' att-chip-active':'')+'" style="'+(S.onlyDebtors?'background:var(--red2);border-color:var(--red2)':'')+'" onclick="toggleOnlyDebtors()">👁 Тільки боржники</button>'
     +'<button class="btn btn-primary btn-sm" onclick="openNewChild()" style="margin-left:auto;white-space:nowrap">➕ Додати дитину</button>'
     +'</div></div></div>'
     // ── 2. stat cards ─────────────────────────────────────────────────────
     +'<div class="stats-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:16px">'
     +'<div class="stat-card"><div class="stat-icon si-b">👶</div><div><div class="stat-val">'+displayKids+'</div><div class="stat-lbl">Дітей · <b>'+esc(statLabel)+'</b></div></div></div>'
-    +'<div class="stat-card"><div class="stat-icon si-r">❌</div><div><div class="stat-val" style="color:var(--red2)">'+stats.debtors+'</div><div class="stat-lbl">Боржників · '+esc(mName)+'</div></div></div>'
-    +'<div class="stat-card"><div class="stat-icon si-o">💸</div><div><div class="stat-val" style="color:var(--red2)">'+fmtN(Math.round(stats.totalDebt))+'</div><div class="stat-lbl">Борг · '+esc(mName)+' (грн)</div></div></div>'
+    +'<div class="stat-card" data-sensitive="finance"><div class="stat-icon si-r">❌</div><div><div class="stat-val" style="color:var(--red2)">'+stats.debtors+'</div><div class="stat-lbl">Боржників · '+esc(mName)+'</div></div></div>'
+    +'<div class="stat-card" data-sensitive="finance"><div class="stat-icon si-o">💸</div><div><div class="stat-val" style="color:var(--red2)">'+fmtN(Math.round(stats.totalDebt))+'</div><div class="stat-lbl">Борг · '+esc(mName)+' (грн)</div></div></div>'
     +'</div>';
 
   // ── Нові CRM-клієнти ──────────────────────────────────────────────────────
@@ -1819,7 +1824,11 @@ function renderClients(){
 
     html+='<div class="loc-section"><div class="loc-title">🏫 '+esc(loc.loc)
       +'<span style="font-size:13px;font-weight:400;color:var(--gray)">'
-      +locKids+' дітей &nbsp;|&nbsp; '+locDebtors+' боржників &nbsp;|&nbsp; борг: '+fmtN(Math.round(locDebt))+' грн</span>'
+      +locKids+' дітей'
+      +'<span data-sensitive="finance">'
+      +' &nbsp;|&nbsp; '+locDebtors+' боржників &nbsp;|&nbsp; борг: '+fmtN(Math.round(locDebt))+' грн'
+      +'</span>'
+      +'</span>'
       +'</div>';
 
     filtGroups.forEach(function(grp){
@@ -1843,11 +1852,13 @@ function renderClients(){
         +'<span style="font-size:12px;color:var(--gray)">'
         +(grp.teacher?'Вихователь: '+esc(grp.teacher)+' &nbsp;|&nbsp; ':'')
         +children.length+' дітей'
+        +'<span data-sensitive="finance">'
         +(grpDebtors?' &nbsp;|&nbsp; <span style="color:var(--red2)">'+grpDebtors+' боржників, '+fmtN(Math.round(grpDebt))+' грн</span>':' &nbsp;|&nbsp; <span style="color:var(--green)">всі сплатили ✅</span>')
+        +'</span>'
         +'</span></div>'
         +'<div class="tbl-wrap"><table><thead><tr>'
-        +'<th>Ім\'я дитини</th><th>Статус оплати</th>'
-        +'<th>Факт (навч+доп)</th><th>Бюджет разом</th><th>Вступний</th><th>Телефон</th><th></th>'
+        +'<th>Ім\'я дитини</th><th data-sensitive="finance">Статус оплати</th>'
+        +'<th data-sensitive="finance">Факт (навч+доп)</th><th data-sensitive="finance">Бюджет разом</th><th data-sensitive="finance">Вступний</th><th>Телефон</th><th></th>'
         +'</tr></thead><tbody>';
 
       children.forEach(function(ch){
@@ -1903,10 +1914,10 @@ function renderClients(){
         }
         html+='<tr class="clickable" onclick="openChild(\''+esc(String(ch.id||''))+'\',\''+esc(String(ch.group||''))+'\',\''+esc(String(ch.teacher||grp.teacher||''))+'\',\''+esc(String(ch.loc||''))+'\',\''+esc(String(ch.name||''))+'\')">'
           +'<td><span class="child-link">'+esc(ch.name)+'</span>'+getAbsBadge(ch.id)+'</td>'
-          +'<td>'+payBadge(ch.status,debtAmt,over)+'</td>'
-          +'<td style="font-weight:600">'+(factTotal?fmtN(factTotal):'—')+'</td>'
-          +'<td>'+budCell+'</td>'
-          +'<td>'+entryCell+'</td>'
+          +'<td data-sensitive="finance">'+payBadge(ch.status,debtAmt,over)+'</td>'
+          +'<td data-sensitive="finance" style="font-weight:600">'+(factTotal?fmtN(factTotal):'—')+'</td>'
+          +'<td data-sensitive="finance">'+budCell+'</td>'
+          +'<td data-sensitive="finance">'+entryCell+'</td>'
           +'<td>'+(phone?'<a href="tel:'+esc(phone)+'" onclick="event.stopPropagation()" style="color:var(--blue2)">'+esc(phone)+'</a>':'<span style="color:var(--gray2)">—</span>')+'</td>'
           +'<td>'+(phone?'<a href="tel:'+esc(phone)+'" onclick="event.stopPropagation()" class="call-btn">📞 Дзвонити</a>':'')+'</td>'
           +'</tr>';
@@ -1927,6 +1938,7 @@ function renderClients(){
   // Відновлюємо групи якщо були замінені
   if(groupsBackup) S.groups=groupsBackup;
   document.getElementById('main').innerHTML=html;
+  applyRoleVisibility();
 }
 
 function payBadge(status,debt,over){
