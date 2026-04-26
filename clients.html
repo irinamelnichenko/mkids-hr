@@ -904,15 +904,21 @@ async function apiGet(action){
 }
 
 async function apiPost(body){
-  var url=getScriptUrl(); if(!url) return;
-  console.log('[apiPost] url:', url);
-  console.log('[apiPost] body:', JSON.stringify(body));
-  try{
-    var resp = await fetch(url,{method:'POST',mode:'no-cors',
-      headers:{'Content-Type':'text/plain'},
-      body:JSON.stringify(body)});
-    console.log('[apiPost] response status:', resp.status, 'type:', resp.type);
-  }catch(e){ console.warn('apiPost error:',e); }
+  var url = getScriptUrl();
+  if(!url) return;
+  console.log('[apiPost] sending:', body.action);
+  try {
+    var resp = await fetch(url, {
+      method: 'POST',
+      body: JSON.stringify(body)
+    });
+    var data = await resp.json();
+    console.log('[apiPost] response:', data);
+    if(!data.ok) console.warn('[apiPost] server error:', data.error);
+    return data;
+  } catch(e) {
+    console.warn('[apiPost] error:', e);
+  }
 }
 
 // apiGetFull — GET з довільними параметрами (attendance, health)
