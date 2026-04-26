@@ -782,18 +782,20 @@ function genNursePw(loc){
 function fmtPhone(inp){
   var raw = inp.value;
   var digits = raw.replace(/\D/g,'');
-  if(digits.startsWith('380')) digits = digits.slice(2);
-  else if(digits.startsWith('38') && digits.length > 2) digits = digits.slice(2);
-  digits = digits.slice(0,10);
   if(digits.length === 0){
     inp.value = '';
-  } else {
-    inp.value = '+38' + digits;
+    setTimeout(function(){ inp.setSelectionRange(0, 0); }, 0);
+    return;
   }
+  var local = digits;
+  if(local.startsWith('380'))     local = local.slice(2);
+  else if(local.startsWith('38')) local = local.slice(2);
+  local = local.slice(0, 10);
+  inp.value = '+38' + local;
   setTimeout(function(){ inp.setSelectionRange(inp.value.length, inp.value.length); }, 0);
 }
 function phoneKeyDown(inp, e){
-  if(e.key === 'Backspace' && (inp.value === '+38' || inp.value === '+3')){
+  if(e.key === 'Backspace' && (inp.value === '+38' || inp.value === '+3' || inp.value === '+')){
     e.preventDefault();
     inp.value = '';
   }
