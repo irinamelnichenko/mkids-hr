@@ -290,54 +290,85 @@ tbody tr.clickable{cursor:pointer}
 <div id="app" class="hidden">
   <nav class="sidebar" id="sidebar">
     <div class="sb-brand">
-      <h2>🌱 mkids HR</h2>
-      <p id="sbRole">Система управління персоналом</p>
+      <h2>🍊 m.kids</h2>
+      <p>m.kids System</p>
     </div>
     <div class="sb-user">
-      <div class="avatar" id="uAvatar">HR</div>
+      <div class="avatar" id="uAvatar">CFO</div>
       <div class="sb-user-info">
-        <p id="uName">HR Менеджер</p>
+        <p id="uName">CFO</p>
         <span id="uLoc">Всі локації</span>
       </div>
     </div>
     <nav class="sb-nav">
-      <div class="nav-sec">Головне</div>
-      <div class="nav-item active" data-v="dashboard" onclick="nav('dashboard')">
+      <div class="nav-item active" data-permission="dashboard" data-perm-page="index"
+           data-v="dashboard" onclick="goPerm('dashboard')">
         <span class="ni">📊</span> Дашборд
       </div>
-      <div class="nav-item" onclick="window.location='clients.html'"><span class="ni">👶</span> Клієнти CRM</div>
-      <div class="nav-item" onclick="window.location='clients.html?tab=analytics'"><span class="ni">📊</span> Аналітика CRM</div>
-      <div class="nav-item" data-v="employees" onclick="nav('employees')" id="navEmployees">
+
+      <div class="nav-sec" data-section="crm">👶 КЛІЄНТИ CRM</div>
+      <div class="nav-item" data-permission="clients_list" data-parent="crm" data-perm-page="clients"
+           onclick="goPerm('clients_list')">
+        <span class="ni">👶</span> Список дітей
+      </div>
+      <div class="nav-item" data-permission="payments" data-parent="crm" data-perm-page="clients"
+           onclick="goPerm('payments')">
+        <span class="ni">💰</span> Борги та оплати
+      </div>
+      <div class="nav-item" data-permission="attendance_kids" data-parent="crm" data-perm-page="clients"
+           onclick="goPerm('attendance_kids')">
+        <span class="ni">📋</span> Табель відвідуваності
+      </div>
+      <div class="nav-item" data-permission="recalc" data-parent="crm" data-perm-page="clients"
+           onclick="goPerm('recalc')">
+        <span class="ni">💼</span> Перерахунки
+      </div>
+
+      <div class="nav-sec" data-section="hr">👤 HR</div>
+      <div class="nav-item" data-permission="employees" data-parent="hr" data-perm-page="index"
+           data-v="employees" id="navEmployees" onclick="goPerm('employees')">
         <span class="ni">👥</span> Співробітники
         <span class="nav-badge hidden" id="newBadge">0</span>
       </div>
-      <div class="nav-sec">Облік</div>
-      <div class="nav-item" data-v="tabel" onclick="nav('tabel')">
-        <span class="ni">📋</span> Табель
+      <div class="nav-item" data-permission="timesheet_staff" data-parent="hr" data-perm-page="index"
+           data-v="tabel" onclick="goPerm('timesheet_staff')">
+        <span class="ni">📋</span> Табель співробітників
       </div>
-      <div class="nav-item" data-v="vacations" onclick="nav('vacations')" id="navVacations">
+      <div class="nav-item" data-permission="vacations" data-parent="hr" data-perm-page="index"
+           data-v="vacations" id="navVacations" onclick="goPerm('vacations')">
         <span class="ni">🏖️</span> Відпустки
         <span class="nav-badge hidden" id="overBadge">!</span>
       </div>
-      <div class="nav-item" data-v="sick" onclick="nav('sick')" id="navSick">
+      <div class="nav-item" data-permission="sick_leaves" data-parent="hr" data-perm-page="index"
+           data-v="sick" onclick="goPerm('sick_leaves')">
         <span class="ni">🏥</span> Лікарняні
       </div>
-      <div class="nav-sec" id="navSecAnalytics">Аналітика</div>
-      <div class="nav-item" data-v="analytics" onclick="nav('analytics')" id="navAnalytics">
-        <span class="ni">📈</span> Аналітика
-      </div>
-      <div class="nav-item" data-v="birthdays" onclick="nav('birthdays')" id="navBirthdays">
+      <div class="nav-item" data-permission="calendar" data-parent="hr" data-perm-page="index"
+           data-v="birthdays" onclick="goPerm('calendar')">
         <span class="ni">🗓️</span> Календар подій
       </div>
-      <div class="nav-item" data-v="vacschedule" onclick="nav('vacschedule')" id="navVacSchedule">
+      <div class="nav-item" data-permission="vacation_schedule" data-parent="hr" data-perm-page="index"
+           data-v="vacschedule" onclick="goPerm('vacation_schedule')">
         <span class="ni">🌴</span> Графік відпусток
       </div>
+
+      <div class="nav-sec" data-section="analytics">📈 АНАЛІТИКА</div>
+      <div class="nav-item" data-permission="analytics_clients" data-parent="analytics" data-perm-page="clients"
+           onclick="goPerm('analytics_clients')">
+        <span class="ni">📊</span> Аналітика по клієнтам
+      </div>
+      <div class="nav-item" data-permission="analytics_hr" data-parent="analytics" data-perm-page="index"
+           data-v="analytics" onclick="goPerm('analytics_hr')">
+        <span class="ni">📈</span> Аналітика по HR
+      </div>
+
+      <div class="nav-item" data-permission="settings" data-perm-page="index"
+           data-v="settings" onclick="goPerm('settings')">
+        <span class="ni">⚙️</span> Налаштування
+      </div>
+
       <div class="nav-item hidden" data-v="report" onclick="nav('report')" id="navReport">
         <span class="ni">📊</span> Місячний звіт
-      </div>
-      <div class="nav-sec" id="navSecSystem">Система</div>
-      <div class="nav-item" data-v="settings" onclick="nav('settings')">
-        <span class="ni">⚙️</span> Налаштування
       </div>
     </nav>
     <div class="sb-footer">
@@ -668,33 +699,94 @@ async function doLogin() {
   document.getElementById('loginScreen').classList.add('hidden');
   document.getElementById('app').classList.remove('hidden');
   updUserUI(); await initApp();
+  dispatchHashView();
 }
 function showErr(m){const el=document.getElementById('loginError');el.textContent='⚠️ '+m;el.classList.remove('hidden');}
 function doLogout(){clearSession();S.user=null;S.view='dashboard';S.f={loc:'',pos:'',status:'',dir:'',typ:''};S.q='';document.getElementById('app').classList.add('hidden');document.getElementById('loginScreen').classList.remove('hidden');document.getElementById('loginPw').value='';}
+// ── UNIFIED SIDEBAR — permissions, role-visibility, cross-page nav ────────
+const CURRENT_PAGE = 'index';
+
+const PERMISSIONS = {
+  hr: 'all',
+  director: [
+    'dashboard',
+    'clients_list','payments','attendance_kids',
+    'employees','timesheet_staff','vacations','sick_leaves',
+    'calendar','vacation_schedule',
+    'analytics_clients','analytics_hr'
+  ],
+  nurse: [
+    'dashboard',
+    'clients_list','attendance_kids',
+    'employees','timesheet_staff','vacations','sick_leaves',
+    'calendar','vacation_schedule'
+  ]
+};
+
+const PERM_LOCAL_ACTION = {
+  dashboard:         () => nav('dashboard'),
+  employees:         () => nav('employees'),
+  timesheet_staff:   () => nav('tabel'),
+  vacations:         () => nav('vacations'),
+  sick_leaves:       () => nav('sick'),
+  calendar:          () => nav('birthdays'),
+  vacation_schedule: () => nav('vacschedule'),
+  analytics_hr:      () => nav('analytics'),
+  settings:          () => nav('settings'),
+};
+
+function roleLabel(role){ return ({hr:'CFO',director:'Директор',nurse:'Медсестра'})[role] || role; }
+function locLabel(){ return S.user && S.user.role==='hr' ? 'Всі локації' : (S.user && S.user.loc || ''); }
+
+function goPerm(perm){
+  const items = document.querySelectorAll('[data-permission="' + perm + '"]');
+  const target = items[0] && items[0].dataset.permPage;
+  if (target === CURRENT_PAGE) {
+    const fn = PERM_LOCAL_ACTION[perm];
+    if (fn) fn();
+  } else {
+    const targetFile = target === 'clients' ? 'clients.html' : 'index.html';
+    location.href = targetFile + '#' + perm;
+  }
+}
+
+function applyRoleVisibility(){
+  if (!S || !S.user || !S.user.role) return;
+  const role = S.user.role;
+  const allowed = PERMISSIONS[role];
+  document.querySelectorAll('[data-permission]').forEach(el => {
+    const perm = el.dataset.permission;
+    const visible = (allowed === 'all') || (Array.isArray(allowed) && allowed.includes(perm));
+    el.style.display = visible ? '' : 'none';
+  });
+  document.querySelectorAll('[data-section]').forEach(section => {
+    const sectionName = section.dataset.section;
+    const items = document.querySelectorAll('[data-permission][data-parent="' + sectionName + '"]');
+    const anyVisible = Array.from(items).some(item => item.style.display !== 'none');
+    section.style.display = anyVisible ? '' : 'none';
+  });
+  // TODO: коли додамо колонку ЗП на сторінці співробітників —
+  //       додати data-sensitive="salary" і:
+  //       if (role==='nurse')
+  //         document.querySelectorAll('[data-sensitive="salary"]')
+  //           .forEach(el => el.style.display='none');
+}
+
+function dispatchHashView(){
+  const h = (location.hash||'').replace('#','');
+  if (!h) return;
+  const fn = PERM_LOCAL_ACTION[h];
+  if (fn) fn();
+  history.replaceState(null,'',location.pathname + location.search);
+}
+
 function updUserUI(){
-  const role=S.user.role;
-  const isHR=role==='hr', isDir=role==='director', isNurse=role==='nurse';
-  const names={hr:'HR Менеджер',director:'Директор',nurse:'Медсестра'};
-  const avatars={hr:'HR',director:'Д',nurse:'М'};
-  const roles={hr:'HR-менеджер',director:'Директор локації',nurse:'Медсестра'};
-  document.getElementById('uName').textContent=names[role]||role;
-  document.getElementById('uLoc').textContent=isHR?'Всі локації':S.user.loc;
-  document.getElementById('uAvatar').textContent=avatars[role]||'?';
-  document.getElementById('sbRole').textContent=roles[role]||role;
-  // Показуємо/ховаємо пункти меню залежно від ролі
-  const hide=(id,cond)=>{const el=document.getElementById(id);if(el)el.classList.toggle('hidden',cond);};
-  hide('navEmployees', false); // всі бачать співробітників
-  hide('navVacations', isNurse); // медсестра не бачить відпустки
-  hide('navSick', false); // всі бачать лікарняні
-  hide('navAnalytics', false); // всі бачать аналітику
-  hide('navBirthdays', false); // всі бачать календар подій
-  hide('navReport', true); // місячний звіт прихований
-  hide('navSecAnalytics', isNurse);
-  // Налаштування — тільки HR
-  const settingsNav=document.querySelector('.nav-item[data-v="settings"]');
-  if(settingsNav) settingsNav.classList.toggle('hidden',!isHR);
-  const settingsSec=settingsNav&&settingsNav.previousElementSibling;
-  if(settingsSec&&settingsSec.classList.contains('nav-sec')) settingsSec.classList.toggle('hidden',!isHR);
+  if (!S || !S.user) return;
+  const r = S.user.role;
+  document.getElementById('uName').textContent = roleLabel(r);
+  document.getElementById('uLoc').textContent = locLabel();
+  document.getElementById('uAvatar').textContent = ({hr:'CFO',director:'Д',nurse:'М'})[r] || '?';
+  applyRoleVisibility();
 }
 
 // ── INIT ──
@@ -2832,6 +2924,7 @@ window.addEventListener('DOMContentLoaded',async()=>{
     document.getElementById('app').classList.remove('hidden');
     updUserUI();
     await initApp();
+    dispatchHashView();
     return;
   }
 
