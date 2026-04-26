@@ -711,7 +711,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 var CFG = {
   SCRIPT_KEY:    'crm_script_url',
-  SCRIPT_URL:    'https://script.google.com/macros/s/AKfycbzLONec_dkngEbAkbT6xN6ZgTP8D4huoWPYZxbKgC8tVG5bb8NEE6bZbFDqpbRRdo-v/exec',
+  SCRIPT_URL:    'https://script.google.com/macros/s/AKfycbyE-wiBzpcMOrpvGCFruBEgyy1sx8Yuq-o1ZftgBEZgZo9O03R041fWeNv9yJ6h9w7Z3w/exec',
   SK:            'crm_mkids_v3',
   LOC_CACHE:     'crm_locs_v3',
   PAY_CACHE:     'crm_pay_v3',
@@ -904,20 +904,18 @@ async function apiGet(action){
 }
 
 async function apiPost(body){
-  var url = getScriptUrl();
+  var url=getScriptUrl();
   if(!url) return;
-  console.log('[apiPost] sending:', body.action);
-  try {
+  try{
     var resp = await fetch(url, {
-      method: 'POST',
+      method:'POST',
       body: JSON.stringify(body)
     });
     var data = await resp.json();
-    console.log('[apiPost] response:', data);
     if(!data.ok) console.warn('[apiPost] server error:', data.error);
     return data;
-  } catch(e) {
-    console.warn('[apiPost] error:', e);
+  }catch(e){
+    console.warn('apiPost error:', e);
   }
 }
 
@@ -4133,8 +4131,6 @@ function saveChild(){
     dadDoc: c.dadDoc, dadRnokpp: c.dadRnokpp,
     createdAt: c.createdAt, updatedAt: c.updatedAt
   };
-
-  console.log('[saveChild] payload:', payload);
 
   saveLocalCRM();
   apiPost({action:'saveClient', data: payload});
