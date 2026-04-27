@@ -566,10 +566,17 @@ function updSheetsStatus(st){
 }
 
 // ── SHEETS ──
+function freezeEmps(){
+  if (Array.isArray(S.emps)) {
+    S.emps.forEach(e => { try { Object.freeze(e); } catch(_){} });
+    try { Object.freeze(S.emps); } catch(_){}
+  }
+}
+
 async function fetchEmps(force=false) {
   if (!force) {
     const c = localStorage.getItem(CFG.CK);
-    if (c) { const {data,ts}=JSON.parse(c); if (Date.now()-ts < CFG.TTL) { S.emps=data; S.lastSync=new Date(ts); updSync(); return; } }
+    if (c) { const {data,ts}=JSON.parse(c); if (Date.now()-ts < CFG.TTL) { S.emps=data; freezeEmps(); S.lastSync=new Date(ts); updSync(); return; } }
   }
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${CFG.SHEET_ID}/values/${CFG.RANGE}?key=${CFG.API_KEY}`;
   try {
@@ -596,8 +603,9 @@ async function fetchEmps(force=false) {
       fired:(row[14]||'').trim(),// O=Дата звільнення
       email:(row[17]||'').trim() // R=Електронна адреса
     })).filter(e=>e.last||e.first).map((e,i)=>({...e,id:i}));
-    S.lastSync=new Date();
     localStorage.setItem(CFG.CK, JSON.stringify({data:S.emps,ts:Date.now()}));
+    freezeEmps();
+    S.lastSync=new Date();
     updSync();
   } catch(e) {
     console.error('Sheets',e);
@@ -736,6 +744,10 @@ const PERM_LOCAL_ACTION = {
 
 function roleLabel(role){ return ({hr:'CFO',director:'Директор',nurse:'Медсестра'})[role] || role; }
 function locLabel(){ return S.user && S.user.role==='hr' ? 'Всі локації' : (S.user && S.user.loc || ''); }
+
+function isHR(){       return S && S.user && S.user.role === 'hr'; }
+function isDirector(){ return S && S.user && S.user.role === 'director'; }
+function isNurse(){    return S && S.user && S.user.role === 'nurse'; }
 
 function goPerm(perm){
   const items = document.querySelectorAll('[data-permission="' + perm + '"]');
@@ -2499,10 +2511,12 @@ function saveNursePw(loc,safeId){
   setNursePw(loc,pw);toast(`✅ Пароль медсестри для "${loc}" збережено`);
 }
 function resetAllDirPw(){
+  if(!isHR()){alert('⛔ Доступно тільки для CFO');return;}
   if(!confirm('Скинути всі паролі до стандартних?'))return;
   localStorage.removeItem('hr_dir_pw');localStorage.removeItem('hr_nurse_pw');toast('✅ Всі паролі скинуто');renderSettings();
 }
 function regenAllPws(){
+  if(!isHR()){alert('⛔ Доступно тільки для CFO');return;}
   if(!confirm('Перегенерувати всі паролі?\nПоточні паролі буде замінено.'))return;
   localStorage.removeItem('hr_dir_pw');localStorage.removeItem('hr_nurse_pw');autoGenPasswords();toast('✅ Паролі перегенеровано');renderSettings();
 }
@@ -2521,6 +2535,7 @@ function copyAllPws(){
   });
 }
 function exportCSV(){
+  if(!isHR()){alert('⛔ Доступно тільки для CFO');return;}
   const emps=visible();
   const rows=[['Напрямок','Тип','Локація','Група','Прізвище',"Ім'я",'Телефон','Посада','Статус','Дата народження','Перший раб.день','Прийнятий','Звільнений','Email','Стаж','Відпустка (рік)','Ліміт','Лікарняний (рік)','Зп поточна']];
   emps.forEach(e=>{
@@ -2531,10 +2546,12 @@ function exportCSV(){
   dl('\uFEFF'+csv,'hr_employees_'+new Date().toISOString().slice(0,10)+'.csv','text/csv;charset=utf-8');
 }
 function exportRecords(){
+  if(!isHR()){alert('⛔ Доступно тільки для CFO');return;}
   const out={exported:new Date().toISOString(),records:S.recs};
   dl(JSON.stringify(out,null,2),'hr_records_'+new Date().toISOString().slice(0,10)+'.json','application/json');
 }
 function clearAllRecords(){
+  if(!isHR()){alert('⛔ Доступно тільки для CFO');return;}
   if(!confirm('УВАГА! Видалити ВСІ записи відпусток, лікарняних та зарплат?\nЦю дію неможливо відмінити!'))return;
   if(!confirm('Ви впевнені? Всі HR-записи будуть видалені.'))return;
   S.recs={};saveRecs();toast('🗑️ Всі записи видалено');renderView();
@@ -2882,8 +2899,8 @@ function renderReport(){
 }
 
 function exportReport(){
-  const isHR=S.user.role==='hr';
-  const loc=isHR?reportLoc:(S.user.loc||'');
+  if(!isHR()){alert('⛔ Доступно тільки для CFO');return;}
+  const loc=isHR()?reportLoc:(S.user.loc||'');
   const emps=visible().filter(isActive).filter(e=>!loc||e.loc===loc);
   const monthNames=['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
   const daysInMonth=new Date(reportYear,reportMonth+1,0).getDate();
