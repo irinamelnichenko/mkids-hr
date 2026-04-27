@@ -1025,12 +1025,26 @@ function _findContractDateInGroups(id){
   return '';
 }
 
+function _findBdayInGroups(id){
+  for(var loc in S.groups){
+    var locs=S.groups[loc];
+    for(var gi=0;gi<locs.length;gi++){
+      var ch=locs[gi].children;
+      for(var ci=0;ci<ch.length;ci++){
+        if(ch[ci].id===id && ch[ci].bday){ return normalizeDateYMD(ch[ci].bday); }
+      }
+    }
+  }
+  return '';
+}
+
 function getCRMCard(id){
   if(!S.crm[id]){
     var cdFromPay=_findContractDateInGroups(id);
-    console.log('getCRMCard NEW:', id, '| cdFromPay=', cdFromPay, '| S.groups keys=', Object.keys(S.groups).length);
+    var bdFromPay=_findBdayInGroups(id);
+    console.log('getCRMCard NEW:', id, '| cdFromPay=', cdFromPay, '| bdFromPay=', bdFromPay, '| S.groups keys=', Object.keys(S.groups).length);
     S.crm[id]={
-      name:'',loc:'',group:'',teacher:'',bday:'',
+      name:'',loc:'',group:'',teacher:'',bday:bdFromPay,
       momName:'',momPhone:'',dadName:'',dadPhone:'',
       contractDate:cdFromPay,contractType:'standard',monthlyFee:0,
       entryFee:0,entryFeeSchedule:[],
@@ -1047,6 +1061,14 @@ function getCRMCard(id){
     if(cdFromPay2){
       console.log('getCRMCard PATCH:', id, '| filling contractDate=', cdFromPay2);
       S.crm[id].contractDate=cdFromPay2;
+    }
+  }
+  // Якщо запис є, але bday порожній — підтягуємо з payments
+  if(!S.crm[id].bday){
+    var bdFromPay2=_findBdayInGroups(id);
+    if(bdFromPay2){
+      console.log('getCRMCard PATCH:', id, '| filling bday=', bdFromPay2);
+      S.crm[id].bday=bdFromPay2;
     }
   }
   return S.crm[id];
@@ -1333,7 +1355,8 @@ function buildGroups(){
       factStudy:fs,factEntry:fv,factExtra:fe,factTotal:total,
       budgetStudy:bs,budgetExtra:be,budget:bud,
       status:status,debt:debt,id:id,
-      contractDate:normalizeDateYMD(row['Дата договору'])
+      contractDate:normalizeDateYMD(row['Дата договору']),
+      bday:normalizeDateYMD(row['Дата народження']||'')
     };
     grpMap[key].children.push(child);
     if(status==='debt'||status==='nopay'){
