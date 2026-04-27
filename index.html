@@ -491,6 +491,7 @@ tbody tr.clickable{cursor:pointer}
 const CFG = {
   API_KEY: 'AIzaSyBXY-1iAKeBdyWc7gbtNOe66yBa5-Mcmlc',
   SHEET_ID: '1KeSelcGyp8ijUQOmzUjFlX78TOScMWAFm7Hjf33Doyo',
+  CRM_SHEET_ID: '1pA2q84BFsXWuUchIlu8um853od_PXr7KepLpTovUjLo',
   RANGE: "'2025-2026'!A2:R3000",
   VAC_TEACHER: 28,
   VAC_DEFAULT: 14,
@@ -570,6 +571,48 @@ function freezeEmps(){
   if (Array.isArray(S.emps)) {
     S.emps.forEach(e => { try { Object.freeze(e); } catch(_){} });
     try { Object.freeze(S.emps); } catch(_){}
+  }
+}
+
+const CRM_BDAY_CACHE_KEY = 'crm_clients_bday_cache';
+const CRM_BDAY_TTL = 3600 * 1000; // 1 година
+async function ensureClientsLoaded(){
+  if (S.crm && Object.keys(S.crm).length) return;
+  try {
+    const c = localStorage.getItem(CRM_BDAY_CACHE_KEY);
+    if (c) {
+      const {data, ts} = JSON.parse(c);
+      if (Date.now() - ts < CRM_BDAY_TTL) { S.crm = data; return; }
+    }
+  } catch(e) {}
+  try {
+    const range = encodeURIComponent("'Клієнти'!A1:F3000");
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${CFG.CRM_SHEET_ID}/values/${range}?key=${CFG.API_KEY}`;
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(r.status);
+    const j = await r.json();
+    const rows = j.values || [];
+    const hdr = rows[0] || [];
+    const ix = (n) => hdr.indexOf(n);
+    const idI=ix('ID'), nameI=ix('ПІБ дитини'), locI=ix('Локація'), groupI=ix('Група'), bdayI=ix('Дата народження');
+    const crm = {};
+    for (let i=1; i<rows.length; i++) {
+      const row = rows[i];
+      const id = row[idI];
+      if (!id) continue;
+      crm[id] = {
+        id: id,
+        name: row[nameI] || '',
+        loc: row[locI] || '',
+        group: row[groupI] || '',
+        bday: row[bdayI] || ''
+      };
+    }
+    S.crm = crm;
+    try { localStorage.setItem(CRM_BDAY_CACHE_KEY, JSON.stringify({data: crm, ts: Date.now()})); } catch(e) {}
+  } catch(e) {
+    console.warn('ensureClientsLoaded failed:', e);
+    S.crm = S.crm || {};
   }
 }
 
@@ -678,6 +721,7 @@ function readSession(){
   try {
     var s = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null');
     if (!s || !s.user || !s.t) return null;
+    if (typeof s.user.role !== 'string') return null;
     if (Date.now() - s.t > SESSION_TTL_MS) return null;
     return s.user;
   } catch(e) { return null; }
@@ -720,7 +764,8 @@ const PERMISSIONS = {
     'clients_list','payments','attendance_kids',
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
-    'analytics_clients','analytics_hr'
+    'analytics_clients','analytics_hr',
+    'client_birthdays'
   ],
   nurse: [
     'dashboard',
@@ -863,7 +908,10 @@ function renderView(){
 function showLoad(){document.getElementById('main').innerHTML='<div class="loading"><div class="spinner"></div><p>Завантаження…</p></div>';}
 
 // ── DATA HELPERS ──
-function visible(){return S.user.role==='director'||S.user.role==='nurse'?S.emps.filter(e=>e.loc===S.user.loc):S.emps;}
+function visible(){
+  if (!S || !S.user) return [];
+  return S.user.role==='director'||S.user.role==='nurse'?S.emps.filter(e=>e.loc===S.user.loc):S.emps;
+}
 function isActive(e){
   if(e.fired&&e.fired.trim())return false;
   if(e.stat&&/звіл/i.test(e.stat))return false;
@@ -1942,10 +1990,48 @@ function renderAnalytics(){
 
 // ── BIRTHDAYS VIEW ──
 let bdaysMonth=new Date().getMonth(), bdaysYear=new Date().getFullYear();
-function renderBdays(){
+function parseChildBday(s){
+  if(!s) return null;
+  if(s instanceof Date) return isNaN(s.getTime())?null:s;
+  const str=String(s).trim();
+  // YYYY-MM-DD
+  let m=str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if(m) return new Date(+m[1], +m[2]-1, +m[3]);
+  // DD.MM.YYYY або DD/MM/YYYY
+  m=str.match(/^(\d{1,2})[.\/](\d{1,2})[.\/](\d{4})/);
+  if(m) return new Date(+m[3], +m[2]-1, +m[1]);
+  return null;
+}
+function childInitials(name){
+  const parts=String(name||'').trim().split(/\s+/).filter(Boolean);
+  return ((parts[0]||'?')[0]+(parts[1]||'')[0]||'').toUpperCase()||'?';
+}
+function ageWord(n){
+  const lastTwo=n%100, last=n%10;
+  if(lastTwo>=11&&lastTwo<=14) return 'років';
+  if(last===1) return 'рік';
+  if(last>=2&&last<=4) return 'роки';
+  return 'років';
+}
+async function renderBdays(){
+  await ensureClientsLoaded();
   const emps=visible().filter(isActive);
   const monthNames=['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
   const now=new Date(); now.setHours(0,0,0,0);
+
+  // Дні народження дітей за вибраний місяць (для CFO — всі, для директора — своя локація)
+  const allClients=Object.values(S.crm||{});
+  const visibleClients=isHR()?allClients:allClients.filter(c=>c.loc===S.user.loc);
+  const childBdays=visibleClients.map(c=>{
+    if(!c.name||!c.bday) return null;
+    const bd=parseChildBday(c.bday); if(!bd) return null;
+    const d=new Date(bdaysYear, bd.getMonth(), bd.getDate());
+    if(d.getMonth()!==bdaysMonth) return null;
+    const left=Math.round((d-now)/86400000);
+    if(left<0) return null;
+    const age=bdaysYear-bd.getFullYear();
+    return {c, d, left, age};
+  }).filter(Boolean).sort((a,b)=>a.d.getDate()-b.d.getDate());
 
   // Дні народження за вибраний місяць — тільки майбутні та сьогодні
   const bdaysInMonth=emps.map(e=>{
@@ -2016,7 +2102,23 @@ function renderBdays(){
         </div>`).join('')}
       </div>
     </div>
+    <div class="card" data-permission="client_birthdays" style="margin-top:20px">
+      <div class="card-hd"><h3>🎂 Дні народження дітей — ${monthNames[bdaysMonth]}</h3>
+        <span style="font-size:12px;color:var(--gray)">${childBdays.length} подій</span>
+      </div>
+      ${childBdays.length===0?`<div class="empty"><span class="ei">🎂</span><h4>Немає в цьому місяці</h4></div>`:
+      childBdays.map(b=>`<div style="padding:12px 20px;border-bottom:1px solid #f0f4f8;display:flex;align-items:center;gap:10px;cursor:pointer" onclick="window.location='clients.html#open-${esc(String(b.c.id))}'">
+        <div class="avatar" style="width:38px;height:38px;font-size:13px;background:linear-gradient(135deg,#e879f9,#a78bfa)">${childInitials(b.c.name)}</div>
+        <div style="flex:1"><div style="font-weight:700">${esc(b.c.name)}</div><div style="font-size:12px;color:var(--gray)">${esc(b.c.loc)}${b.c.group?' · '+esc(b.c.group):''}</div></div>
+        <div style="text-align:right">
+          <div style="font-weight:700;color:#27ae60;font-size:13px">${b.age} ${ageWord(b.age)}</div>
+          <div style="font-weight:700;color:${b.left===0?'#e74c3c':b.left<=7?'#e67e22':'var(--gray)'};font-size:12px">${b.left===0?'🎉 Сьогодні!':'за '+b.left+' дн.'}</div>
+          <div style="font-size:11px;color:var(--gray2)">${b.d.getDate()}.${String(b.d.getMonth()+1).padStart(2,'0')}</div>
+        </div>
+      </div>`).join('')}
+    </div>
   `);
+  applyRoleVisibility();
 }
 
 

@@ -1364,6 +1364,7 @@ function readSession(){
   try {
     var s = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null');
     if (!s || !s.user || !s.t) return null;
+    if (typeof s.user.role !== 'string') return null;
     if (Date.now() - s.t > SESSION_TTL_MS) return null;
     return s.user;
   } catch(e) { return null; }
@@ -1416,7 +1417,8 @@ const PERMISSIONS = {
     'clients_list','payments','attendance_kids',
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
-    'analytics_clients','analytics_hr'
+    'analytics_clients','analytics_hr',
+    'client_birthdays'
   ],
   nurse: [
     'dashboard',
@@ -1473,6 +1475,18 @@ function applyRoleVisibility(){
 function dispatchHashView(){
   var h = (location.hash||'').replace('#','');
   if (!h) return;
+  // Deep-link на картку дитини: #open-<id>
+  if (h.indexOf('open-') === 0) {
+    var cid = h.slice(5);
+    var c = S.crm && S.crm[cid];
+    if (c && c.name) {
+      openChild(cid, c.group||'', c.teacher||'', c.loc||'', c.name||'');
+    } else {
+      alert('Картку не вдалось відкрити. Спробуйте оновити сторінку.');
+    }
+    history.replaceState(null,'',location.pathname + location.search);
+    return;
+  }
   var allowed = PERMISSIONS[S.user && S.user.role];
   var hasPerm = (allowed === 'all') || (Array.isArray(allowed) && allowed.indexOf(h) >= 0);
   if (!hasPerm) {
