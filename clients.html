@@ -636,7 +636,9 @@ tbody tr.clickable:hover td{background:#f0f7ff}
         <div class="g2">
           <div class="fg"><label>Номер договору</label>
             <input type="text" id="fContractNumber" placeholder="напр. 01-01-01"
-              maxlength="8" oninput="fmtContractNumber(this)"></div>
+              maxlength="8" oninput="fmtContractNumber(this)">
+            <div id="contractNumberStatus" style="font-size:11px;margin-top:4px"></div>
+          </div>
           <div class="fg"><label>Дата старту адаптації</label>
             <input type="date" id="fAdaptDate" onchange="updateStatusWarnings()"></div>
         </div>
@@ -774,6 +776,7 @@ var S = {
   payments: [],
   groups:   {},
   crm:      {},
+  bdayStatus: {},
   // allPayRows: всі рядки з усіх місяців для історії
   allPayRows: [],
   // Річні дані
@@ -1026,6 +1029,11 @@ function _findContractDateInGroups(id){
 }
 
 function _findBdayInGroups(id){
+  // Спершу — з нового листа bday_sync_status
+  if (S.bdayStatus && S.bdayStatus[id] && S.bdayStatus[id].bday) {
+    return normalizeDateYMD(S.bdayStatus[id].bday);
+  }
+  // Fallback — стара логіка (S.groups з Оплати, поки колонка bday там існує)
   for(var loc in S.groups){
     var locs=S.groups[loc];
     for(var gi=0;gi<locs.length;gi++){
@@ -1038,18 +1046,23 @@ function _findBdayInGroups(id){
   return '';
 }
 
+function _findContractNumberInStatus(id){
+  return (S.bdayStatus && S.bdayStatus[id] && S.bdayStatus[id].contractNumber) || '';
+}
+
 function getCRMCard(id){
   if(!S.crm[id]){
     var cdFromPay=_findContractDateInGroups(id);
     var bdFromPay=_findBdayInGroups(id);
-    console.log('getCRMCard NEW:', id, '| cdFromPay=', cdFromPay, '| bdFromPay=', bdFromPay, '| S.groups keys=', Object.keys(S.groups).length);
+    var cnFromStatus=_findContractNumberInStatus(id);
+    console.log('getCRMCard NEW:', id, '| cdFromPay=', cdFromPay, '| bdFromPay=', bdFromPay, '| cnFromStatus=', cnFromStatus);
     S.crm[id]={
       name:'',loc:'',group:'',teacher:'',bday:bdFromPay,
       momName:'',momPhone:'',dadName:'',dadPhone:'',
       contractDate:cdFromPay,contractType:'standard',monthlyFee:0,
       entryFee:0,entryFeeSchedule:[],
       status:'active',feeHistory:[],absences:[],notes:'',
-      contractNumber:'',adaptDate:'',terminationDate:'',terminationReason:'',
+      contractNumber:cnFromStatus,adaptDate:'',terminationDate:'',terminationReason:'',
       birthCert:'',childRegAddress:'',
       momDoc:'',momRnokpp:'',dadDoc:'',dadRnokpp:'',
       createdAt:today(),updatedAt:today()
@@ -1069,6 +1082,14 @@ function getCRMCard(id){
     if(bdFromPay2){
       console.log('getCRMCard PATCH:', id, '| filling bday=', bdFromPay2);
       S.crm[id].bday=bdFromPay2;
+    }
+  }
+  // Якщо запис є, але contractNumber порожній — підтягуємо з bday_sync_status
+  if(!S.crm[id].contractNumber){
+    var cnFromStatus2=_findContractNumberInStatus(id);
+    if(cnFromStatus2){
+      console.log('getCRMCard PATCH:', id, '| filling contractNumber=', cnFromStatus2);
+      S.crm[id].contractNumber=cnFromStatus2;
     }
   }
   return S.crm[id];
@@ -1206,6 +1227,29 @@ async function loadClients(force){
   }
   localStorage.setItem(CFG.CLI_CACHE,JSON.stringify({data:rows,ts:Date.now()}));
   mergeCRMFromCloud(rows);
+}
+
+async function loadBdayStatus(){
+  try {
+    var vals = await sheetsRead('bday_sync_status', 'A1:H3000');
+    var rows = rowsToObjects(vals).filter(function(r){ return r['ChildID']; });
+    var map = {};
+    rows.forEach(function(r){
+      var id = String(r['ChildID']||'').trim();
+      if (!id) return;
+      map[id] = {
+        bday: String(r['Bday']||'').trim(),
+        contractNumber: String(r['ContractNumber']||'').trim(),
+        status: String(r['Status']||'').trim(),
+        matchedReg: String(r['MatchedRegName']||'').trim()
+      };
+    });
+    S.bdayStatus = map;
+    console.log('[loadBdayStatus] loaded', rows.length, 'rows');
+  } catch(e) {
+    console.warn('[loadBdayStatus] failed:', e);
+    S.bdayStatus = S.bdayStatus || {};
+  }
   console.log('[loadClients] done, merged', rows.length, 'cards');
 }
 
@@ -1593,6 +1637,7 @@ async function initApp(){
     await loadLocations(false);
     await loadPayments(false);
     await loadClients(false);
+    await loadBdayStatus();
     // Завантажуємо річні дані та всю історію оплат у фоні
     loadPaymentsYearly(false).then(function(){ renderView(); }).catch(function(e){ console.warn('Yearly load failed:', e); });
     loadAllPayHistory().catch(function(e){ console.warn('History load failed:', e); });
@@ -2342,6 +2387,21 @@ function populateForm(id){
   document.getElementById('fEntryFee').value=c.entryFee||'';
   document.getElementById('fNotes').value=c.notes||'';
   document.getElementById('fContractNumber').value=c.contractNumber||'';
+  // Бейдж статусу синхронізації з реєстром
+  (function(){
+    var el = document.getElementById('contractNumberStatus');
+    if (!el) return;
+    var st = (S.bdayStatus && S.bdayStatus[id]) || null;
+    if (!st || st.status === 'exact') { el.textContent = ''; el.style.color = ''; return; }
+    var msg = '', color = 'var(--orange)';
+    if (st.status === 'smart_check')        { msg = '⚠️ Перевірте збіг з реєстром: ' + st.matchedReg; }
+    else if (st.status === 'ambiguous')     { msg = '⚠️ В реєстрі знайдено кілька варіантів — перевірте: ' + st.matchedReg; }
+    else if (st.status === 'school_no_contract') { msg = '📝 Шкільний договір ще не підписаний'; color = 'var(--gray)'; }
+    else if (st.status === 'not_found')     { msg = '❌ Не знайдено в реєстрі — перевірте'; color = 'var(--red2)'; }
+    else if (st.status === 'name_mismatch') { msg = '⚠️ Імена не співпадають повністю — перевірте: ' + st.matchedReg; }
+    el.textContent = msg;
+    el.style.color = color;
+  })();
   document.getElementById('fAdaptDate').value=c.adaptDate||'';
   document.getElementById('fTerminationDate').value=c.terminationDate||'';
   document.getElementById('fTerminationReason').value=c.terminationReason||'';
