@@ -835,6 +835,15 @@ var S = {
 
 // ─── UTILS ────────────────────────────────────────────────────────────────────
 function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+// JSON.stringify дає валідний JS-літерал в "..." з усіма екранованими спецсимволами.
+// Далі HTML-encode для безпечного вставлення в атрибут (виходить в "..." обгортці onclick).
+function escAttrJS(s) {
+  return JSON.stringify(s == null ? '' : String(s))
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
 function fmtN(n){ return n==null?'':Number(n).toLocaleString('uk-UA'); }
 function fmtShort(n){ n=Math.round(n); if(n>=1000000) return (n/1000000).toFixed(1).replace(/\.0$/,'')+'М'; if(n>=1000) return Math.round(n/1000)+'К'; return String(n); }
 function fmtD(s){ if(!s) return ''; var p=String(s).split('-'); return p.length===3?p[2]+'.'+p[1]+'.'+p[0]:s; }
@@ -1891,7 +1900,7 @@ function renderClients(){
     crmFiltered.forEach(function(id){
       var c=S.crm[id];
       var phone=String(c.momPhone||c.dadPhone||'');
-      html+='<tr class="clickable" onclick="openChild(\''+esc(String(id))+'\',\''+esc(String(c.group||''))+'\',\''+esc(String(c.teacher||''))+'\',\''+esc(String(c.loc||''))+'\',\''+esc(String(c.name||''))+'\')">'
+      html+='<tr class="clickable" onclick="openChild('+escAttrJS(id)+','+escAttrJS(c.group||'')+','+escAttrJS(c.teacher||'')+','+escAttrJS(c.loc||'')+','+escAttrJS(c.name||'')+')">'
         +'<td><span class="child-link">'+esc(c.name)+'</span></td>'
         +'<td>'+esc(c.loc)+'</td>'
         +'<td>'+esc(c.group)+'</td>'
@@ -2012,7 +2021,7 @@ function renderClients(){
           entryCell='<div style="color:var(--green);font-size:12px;font-weight:600">✓ '+fmtN(entryFactPaid)+'</div>'
             +'<div style="font-size:11px;color:var(--green)">сплачено</div>';
         }
-        html+='<tr class="clickable" onclick="openChild(\''+esc(String(ch.id||''))+'\',\''+esc(String(ch.group||''))+'\',\''+esc(String(ch.teacher||grp.teacher||''))+'\',\''+esc(String(ch.loc||''))+'\',\''+esc(String(ch.name||''))+'\')">'
+        html+='<tr class="clickable" onclick="openChild('+escAttrJS(ch.id||'')+','+escAttrJS(ch.group||'')+','+escAttrJS(ch.teacher||grp.teacher||'')+','+escAttrJS(ch.loc||'')+','+escAttrJS(ch.name||'')+')">'
           +'<td><span class="child-link">'+esc(ch.name)+'</span>'+getAbsBadge(ch.id)+'</td>'
           +'<td data-sensitive="finance">'+payBadge(ch.status,debtAmt,over)+'</td>'
           +'<td data-sensitive="finance" style="font-weight:600">'+(factTotal?fmtN(factTotal):'—')+'</td>'
@@ -2187,7 +2196,7 @@ function renderDebts(){
         :ch.status==='over'?fmtN(Math.round(overAmt))
         :fmtN(Math.round(debtAmt));
       var amtColor=ch.status==='paid'?'var(--green)':ch.status==='over'?'var(--blue2)':'var(--red2)';
-      html+='<tr class="clickable" onclick="openChild(\''+esc(ch.id)+'\',\''+esc(ch.group)+'\',\''+esc(ch.teacher)+'\',\''+esc(ch.loc)+'\',\''+esc(ch.name)+'\')">'
+      html+='<tr class="clickable" onclick="openChild('+escAttrJS(ch.id)+','+escAttrJS(ch.group)+','+escAttrJS(ch.teacher)+','+escAttrJS(ch.loc)+','+escAttrJS(ch.name)+')">'
         +'<td style="color:var(--gray)">'+(i+1)+'</td>'
         +'<td><span class="child-link">'+esc(ch.name)+'</span></td>'
         +'<td>'+esc(ch.group)+'</td>'
@@ -3123,7 +3132,7 @@ function renderAbsences(){
     html+='<div class="sick-suggest"><b>🤒 Підказка медсестри:</b> '+streak+' днів підряд відмічено хворим у табелі.'
       +' Рекомендується оформити лікарняний.'
       +' <button class="btn btn-xs btn-primary" style="margin-left:8px" onclick="S._absFormOpen=true;renderAbsences()">➕ Оформити</button>'
-      +' <button class="btn btn-xs btn-secondary" style="margin-left:4px" onclick="S._sickIgnore[\''+esc(id)+'\']=true;renderAbsences()">Ігнорувати</button></div>';
+      +' <button class="btn btn-xs btn-secondary" style="margin-left:4px" onclick="S._sickIgnore['+escAttrJS(id)+']=true;renderAbsences()">Ігнорувати</button></div>';
   }
 
   // Блок 3: Форма або кнопка + список
@@ -3202,12 +3211,12 @@ function renderAbsEntry(a,i,cid){
     actions='<button class="btn btn-xs btn-danger" onclick="deleteAbsencePeriod('+i+')">🗑 Видалити</button>';
   }
   if((a.status==='pending'||a.status==='processing')&&isHR()){
-    actions='<button class="btn btn-xs btn-primary" style="font-size:11px" onclick="markAbsDone(\''+esc(cid)+'\',\''+esc(a.id)+'\',false)">✅ Внесено</button>'
-      +' <button class="btn btn-xs btn-danger" style="font-size:11px" onclick="openRejectForm(\''+esc(cid)+'\',\''+esc(a.id)+'\',false)">❌ Відхилити</button>';
+    actions='<button class="btn btn-xs btn-primary" style="font-size:11px" onclick="markAbsDone('+escAttrJS(cid)+','+escAttrJS(a.id)+',false)">✅ Внесено</button>'
+      +' <button class="btn btn-xs btn-danger" style="font-size:11px" onclick="openRejectForm('+escAttrJS(cid)+','+escAttrJS(a.id)+',false)">❌ Відхилити</button>';
   }
   if(a.status==='done'&&isHR()){
-    actions='<button class="btn btn-xs btn-secondary" style="font-size:11px" onclick="editAbsencePeriod(\''+esc(cid)+'\',\''+esc(a.id)+'\')">✏️ Редагувати</button>'
-      +' <button class="btn btn-xs btn-danger" style="font-size:11px" onclick="cancelAbsencePeriod(\''+esc(cid)+'\',\''+esc(a.id)+'\')">🚫 Скасувати</button>';
+    actions='<button class="btn btn-xs btn-secondary" style="font-size:11px" onclick="editAbsencePeriod('+escAttrJS(cid)+','+escAttrJS(a.id)+')">✏️ Редагувати</button>'
+      +' <button class="btn btn-xs btn-danger" style="font-size:11px" onclick="cancelAbsencePeriod('+escAttrJS(cid)+','+escAttrJS(a.id)+')">🚫 Скасувати</button>';
   }
 
   return '<div class="abs-entry'+(a.status==='cancelled'?' abs-entry-cancelled':'')+'">'
@@ -3462,8 +3471,8 @@ function renderAbsRequests(){
     var actions='';
     if(a.status==='pending'||a.status==='processing'){
       actions=(sheetUrl?'<a href="'+esc(sheetUrl)+'" target="_blank" class="btn btn-xs btn-secondary" style="text-decoration:none;font-size:11px">📄 Відкрити Sheet</a> ':'')
-        +'<button class="btn btn-xs btn-primary" style="font-size:11px" onclick="markAbsDone(\''+esc(cid)+'\',\''+esc(a.id)+'\',true)">✅ Внесено</button>'
-        +' <button class="btn btn-xs btn-danger" style="font-size:11px" onclick="openRejectForm(\''+esc(cid)+'\',\''+esc(a.id)+'\',true)">❌ Відхилити</button>';
+        +'<button class="btn btn-xs btn-primary" style="font-size:11px" onclick="markAbsDone('+escAttrJS(cid)+','+escAttrJS(a.id)+',true)">✅ Внесено</button>'
+        +' <button class="btn btn-xs btn-danger" style="font-size:11px" onclick="openRejectForm('+escAttrJS(cid)+','+escAttrJS(a.id)+',true)">❌ Відхилити</button>';
     } else if(a.status==='done'){
       var doneBy=(a.statusHistory||[]).filter(function(h){ return h.status==='done'; }).pop()||{};
       actions='<span style="font-size:11px;color:var(--gray)">'+((doneBy.at||'').slice(0,10)||'')+(doneBy.by?' · '+esc(doneBy.by):'')+'</span>';
@@ -3471,7 +3480,7 @@ function renderAbsRequests(){
     var dateStr=(a.createdAt||'').slice(0,10).split('-').reverse().join('.');
     return '<tr>'
       +'<td style="font-size:12px;color:var(--gray);white-space:nowrap">'+dateStr+'<br><small>від: '+roleLabel(a.createdBy, a.createdByLoc||c.loc)+'</small></td>'
-      +'<td><b style="cursor:pointer;color:var(--blue2)" onclick="openChildByName(\''+esc(c.name||'')+'\',\''+esc(c.loc||'')+'\')">'+esc(c.name)+'</b><br><span style="color:var(--gray);font-size:12px">'+esc(c.loc||'')+'</span></td>'
+      +'<td><b style="cursor:pointer;color:var(--blue2)" onclick="openChildByName('+escAttrJS(c.name||'')+','+escAttrJS(c.loc||'')+')">'+esc(c.name)+'</b><br><span style="color:var(--gray);font-size:12px">'+esc(c.loc||'')+'</span></td>'
       +'<td>'+typeLabel+'</td>'
       +'<td style="white-space:nowrap">'+fmtD(a.from)+' — '+fmtD(a.to)+'</td>'
       +'<td>'+((a.workDays||0))+' / '+(a.weeks||0)+' тиж</td>'
@@ -3625,8 +3634,8 @@ function maybeShowAttMigrationBanner(container, loc){
   if(!hasOld) return '';
   return '<div class="alert alert-warn" style="margin-bottom:12px">'
     +'📦 У браузері є дані табеля з минулого. '
-    +'<button class="btn btn-xs btn-primary" style="margin-left:8px" onclick="exportAttToCloud(\''+esc(loc)+'\')">📤 Перенести в хмару</button>'
-    +'<button class="btn btn-xs btn-secondary" style="margin-left:4px" onclick="localStorage.setItem(\'crm_att_migrated_'+esc(loc)+'\',\'1\');renderAttendance()">Пропустити</button>'
+    +'<button class="btn btn-xs btn-primary" style="margin-left:8px" onclick="exportAttToCloud('+escAttrJS(loc)+')">📤 Перенести в хмару</button>'
+    +'<button class="btn btn-xs btn-secondary" style="margin-left:4px" onclick="localStorage.setItem('+escAttrJS('crm_att_migrated_'+(loc||''))+','+escAttrJS('1')+');renderAttendance()">Пропустити</button>'
     +'</div>';
 }
 
@@ -3958,7 +3967,7 @@ function renderAttendanceWeek(locs,group){
     +'<b style="font-size:14px">'+fmtD(days[0])+' – '+fmtD(days[4])+'</b>'
     +'<button class="btn btn-secondary btn-sm" onclick="S.attWeek=\''+nextWeek+'\';S._attCloudLoaded={};renderAttendance()">Тиждень ▶</button>'
     +'<button class="btn btn-secondary btn-sm" onclick="S.attWeek=attMondayOfWeek(today());S._attCloudLoaded={};renderAttendance()">Сьогодні</button>'
-    +'<button class="btn btn-primary btn-sm" onclick="markAllPresent(\''+todayStr+'\',\''+esc(markLoc)+'\',\''+esc(group||'')+'\')">✅ Всі присутні</button>'
+    +'<button class="btn btn-primary btn-sm" onclick="markAllPresent('+escAttrJS(todayStr)+','+escAttrJS(markLoc)+','+escAttrJS(group||'')+')">✅ Всі присутні</button>'
     +'</div>';
 
   var thead='<tr><th class="nc">Дитина</th>'
@@ -3981,7 +3990,7 @@ function renderAttendanceWeek(locs,group){
           var st=(S.att[d]||{})[ch.id]||'';
           var cls=ATT_STATUS_CLASS[st]||'';
           var ico=ATT_STATUS_ICON[st]||'';
-          rows+='<td><button class="att-btn '+cls+'" title="'+esc(ATT_STATUS_LABEL[st]||'Не відмічено')+'" onclick="cycleAttStatus(\''+d+'\',\''+esc(ch.id)+'\')">'+ico+'</button></td>';
+          rows+='<td><button class="att-btn '+cls+'" title="'+esc(ATT_STATUS_LABEL[st]||'Не відмічено')+'" onclick="cycleAttStatus('+escAttrJS(d)+','+escAttrJS(ch.id)+')">'+ico+'</button></td>';
         });
         rows+='</tr>';
       });
@@ -4007,7 +4016,7 @@ function renderAttendanceDay(locs,group){
     +'<b style="font-size:14px">'+DAY_UA_FULL[dow]+', '+fmtD(dateStr)+'</b>'
     +'<button class="btn btn-secondary btn-sm" onclick="S.attDay=\''+nextDay+'\';S._attCloudLoaded={};renderAttendance()">День ▶</button>'
     +'<button class="btn btn-secondary btn-sm" onclick="S.attDay=today();S._attCloudLoaded={};renderAttendance()">Сьогодні</button>'
-    +'<button class="btn btn-primary btn-sm" onclick="markAllPresent(\''+esc(dateStr)+'\',\''+esc(markLoc)+'\',\''+esc(group||'')+'\')">✅ Всі присутні</button>'
+    +'<button class="btn btn-primary btn-sm" onclick="markAllPresent('+escAttrJS(dateStr)+','+escAttrJS(markLoc)+','+escAttrJS(group||'')+')">✅ Всі присутні</button>'
     +'</div>';
 
   var rows='';
@@ -4023,10 +4032,10 @@ function renderAttendanceDay(locs,group){
         var streak=getSickStreak(ch.id,todayStr);
         var streakHtml=streak>=3?'<span class="att-streak">'+streak+'д🤒</span>':'';
         rows+='<div class="att-day-row">'
-          +'<span class="att-day-name" onclick="openChild(\''+esc(ch.id)+'\',\''+esc(ch.group)+'\',\''+esc(ch.teacher||'')+'\',\''+esc(ch.loc)+'\',\''+esc(ch.name)+'\')">'+esc(ch.name)+streakHtml+'</span>'
+          +'<span class="att-day-name" onclick="openChild('+escAttrJS(ch.id)+','+escAttrJS(ch.group)+','+escAttrJS(ch.teacher||'')+','+escAttrJS(ch.loc)+','+escAttrJS(ch.name)+')">'+esc(ch.name)+streakHtml+'</span>'
           +'<div class="att-day-btns">'
           +['present','sick','vacation','absent'].map(function(s){
-            return '<button class="att-day-btn'+(st===s?' att-s-'+s:'')+'" title="'+ATT_STATUS_LABEL[s]+'" onclick="setAttStatus(\''+esc(dateStr)+'\',\''+esc(ch.id)+'\',\''+(st===s?'':s)+'\');renderAttendance()">'+ATT_STATUS_ICON[s]+'</button>';
+            return '<button class="att-day-btn'+(st===s?' att-s-'+s:'')+'" title="'+ATT_STATUS_LABEL[s]+'" onclick="setAttStatus('+escAttrJS(dateStr)+','+escAttrJS(ch.id)+','+escAttrJS(st===s?'':s)+');renderAttendance()">'+ATT_STATUS_ICON[s]+'</button>';
           }).join('')
           +'</div></div>';
       });
@@ -4098,7 +4107,7 @@ function renderAttendanceMonth(locs,group){
           else if(st==='sick') cs++;
           else if(st==='vacation') cv++;
           else if(st==='absent') ca++;
-          return '<td style="padding:2px;text-align:center"><button class="att-btn '+cls+'" style="width:28px;height:28px;font-size:12px" title="'+esc(ATT_STATUS_LABEL[st]||'Не відмічено')+' — '+fmtD(d)+'" onclick="cycleAttStatus(\''+d+'\',\''+esc(ch.id)+'\')">'+ico+'</button></td>';
+          return '<td style="padding:2px;text-align:center"><button class="att-btn '+cls+'" style="width:28px;height:28px;font-size:12px" title="'+esc(ATT_STATUS_LABEL[st]||'Не відмічено')+' — '+fmtD(d)+'" onclick="cycleAttStatus('+escAttrJS(d)+','+escAttrJS(ch.id)+')">'+ico+'</button></td>';
         }).join('');
         tbody+='<tr>'
           +'<td class="nc" style="position:sticky;left:0;background:#fff;z-index:1;font-size:12px" title="'+esc(ch.name)+'">'+esc(ch.name.split(' ').slice(0,2).join(' '))+'</td>'
@@ -4242,10 +4251,10 @@ function renderHealthTabWithRecords(id, records){
   var migBanner='';
   if(localRecs.length&&!localStorage.getItem('crm_health_migrated_'+id)){
     migBanner='<div class="alert alert-warn" style="margin-bottom:10px">📦 В браузері є медзаписи з минулого. '
-      +'<button class="btn btn-xs btn-primary" style="margin-left:6px" onclick="exportHealthToCloud(\''
-      +esc(id)+'\')">📤 Перенести в хмару</button>'
-      +'<button class="btn btn-xs btn-secondary" style="margin-left:4px" onclick="localStorage.setItem(\'crm_health_migrated_'
-      +esc(id)+'\',\'1\');renderHealthTab()">Пропустити</button>'
+      +'<button class="btn btn-xs btn-primary" style="margin-left:6px" onclick="exportHealthToCloud('
+      +escAttrJS(id)+')">📤 Перенести в хмару</button>'
+      +'<button class="btn btn-xs btn-secondary" style="margin-left:4px" onclick="localStorage.setItem('
+      +escAttrJS('crm_health_migrated_'+(id||''))+','+escAttrJS('1')+');renderHealthTab()">Пропустити</button>'
       +'</div>';
   }
 
@@ -4266,9 +4275,9 @@ function renderHealthTabWithRecords(id, records){
         +'<span class="hrt '+(HEALTH_TYPE_CSS[type]||'hrt-note')+'">'+( HEALTH_TYPE_LABEL[type]||type)+'</span>'
         +'<span style="font-size:12px;color:var(--gray)">'+fmtD(date)+'</span>'
         +(by?'<span style="font-size:11px;color:var(--gray);margin-left:auto">'+esc(by)+'</span>':''  )
-        +(canEdit&&rid?'<button class="del-btn" title="Видалити" onclick="deleteHealthEntry(\''
-          +esc(rid)+'\',\''
-          +esc(id)+'\')">✕</button>':''  )
+        +(canEdit&&rid?'<button class="del-btn" title="Видалити" onclick="deleteHealthEntry('
+          +escAttrJS(rid)+','
+          +escAttrJS(id)+')">✕</button>':''  )
         +'</div>'
         +'<div style="font-size:13px">'+esc(text)+'</div>'
         +'</div>';
@@ -4276,8 +4285,8 @@ function renderHealthTabWithRecords(id, records){
   }
 
   tp7.innerHTML='<div class="section-hd" style="display:flex;align-items:center;gap:10px">Медичні записи'
-    +'<button class="btn btn-xs btn-secondary" onclick="delete S._healthCache[\''
-    +esc(id)+'\'];renderHealthTab()">🔄 Оновити</button></div>'
+    +'<button class="btn btn-xs btn-secondary" onclick="delete S._healthCache['
+    +escAttrJS(id)+'];renderHealthTab()">🔄 Оновити</button></div>'
     +migBanner
     +(canEditHealth((S.crm[id]||{}).loc)?formHtml:'<div class="alert alert-info" style="margin-bottom:12px">Тільки медсестра або HR може додавати записи</div>')
     +listHtml;
@@ -4687,7 +4696,7 @@ function renderAnalytics(){
     uniqueTypes.forEach(function(t){
       var ic=ANA_TYPE_ICONS[t]||'📍';
       var cnt=kidsPerType[t]||0;
-      typeChipsHtml+='<button class="ana-type-chip'+(S.anaSelLocType===t?' active':'')+'" onclick="S.anaSelLocType=\''+esc(t)+'\';S.anaSelLoc=\'\';S.anaDetail=null;renderAnalytics()">'+ic+' '+esc(t)+' <span class="ana-type-cnt">'+cnt+'</span></button>';
+      typeChipsHtml+='<button class="ana-type-chip'+(S.anaSelLocType===t?' active':'')+'" onclick="S.anaSelLocType='+escAttrJS(t)+';S.anaSelLoc=\'\';S.anaDetail=null;renderAnalytics()">'+ic+' '+esc(t)+' <span class="ana-type-cnt">'+cnt+'</span></button>';
     });
     typeChipsHtml+='</div>';
   }
@@ -5370,7 +5379,7 @@ function renderClientsYearly(monthStripHtml){
       var card=S.crm[id]||{};
       var phone=card.momPhone||card.dadPhone||'';
       var debtCell=debtY>0?'<b style="color:var(--red2)">'+fmtN(Math.round(debtY))+'</b>':'<span style="color:var(--green)">✅</span>';
-      html+='<tr class="clickable" onclick="openChild(\''+esc(String(id))+'\',\''+esc(grp)+'\',\''+esc(teacher)+'\',\''+esc(loc2)+'\',\''+esc(name)+'\')">'
+      html+='<tr class="clickable" onclick="openChild('+escAttrJS(id)+','+escAttrJS(grp)+','+escAttrJS(teacher)+','+escAttrJS(loc2)+','+escAttrJS(name)+')">'
         +'<td><span class="child-link">'+esc(name)+'</span></td>'
         +'<td>'+esc(grp)+'</td>'
         +'<td><b>'+fmtN(Math.round(factY))+'</b></td>'
