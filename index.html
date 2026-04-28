@@ -637,13 +637,16 @@ async function loadBdayStatus(){
     if (rows.length < 2) { S.bdayStatus = {}; return; }
     const hdr = rows[0];
     const ix = (n) => hdr.indexOf(n);
-    const idI=ix('ChildID'), bdayI=ix('Bday'), cnI=ix('ContractNumber'), statusI=ix('Status'), matI=ix('MatchedRegName');
+    const idI=ix('ChildID'), nameI=ix('Name'), locI=ix('Loc'),
+          bdayI=ix('Bday'), cnI=ix('ContractNumber'), statusI=ix('Status'), matI=ix('MatchedRegName');
     const map = {};
     for (let i=1; i<rows.length; i++) {
       const row = rows[i];
       const id = String(row[idI]||'').trim();
       if (!id) continue;
       map[id] = {
+        name: String(row[nameI]||'').trim(),
+        loc:  String(row[locI]||'').trim(),
         bday: String(row[bdayI]||'').trim(),
         contractNumber: String(row[cnI]||'').trim(),
         status: String(row[statusI]||'').trim(),
@@ -2062,8 +2065,21 @@ async function renderBdays(){
   const now=new Date(); now.setHours(0,0,0,0);
 
   // Дні народження дітей за вибраний місяць (для CFO — всі, для директора — своя локація)
-  const allClients=Object.values(S.crm||{});
-  const visibleClients=isHR()?allClients:allClients.filter(c=>c.loc===S.user.loc);
+  // Джерело: bday_sync_status (1100+ дітей з реєстрів). Fallback на S.crm (270 з листа Клієнти)
+  // якщо sync не пройшов і S.bdayStatus порожній.
+  const useBdayStatus = S.bdayStatus && Object.keys(S.bdayStatus).length > 0;
+  const allChildren = useBdayStatus
+    ? Object.entries(S.bdayStatus)
+        .filter(([id, s]) => s.bday && s.name)
+        .map(([id, s]) => ({
+          id: id,
+          name: s.name,
+          loc:  s.loc,
+          bday: s.bday,
+          group: (S.crm && S.crm[id] && S.crm[id].group) || ''
+        }))
+    : Object.values(S.crm||{});
+  const visibleClients=isHR()?allChildren:allChildren.filter(c=>c.loc===S.user.loc);
   const childBdays=visibleClients.map(c=>{
     if(!c.name) return null;
     const lookupId=c.id || _childId(c.name, c.group, c.loc);
