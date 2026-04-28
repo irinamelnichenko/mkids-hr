@@ -170,6 +170,8 @@ function doGet(e) {
     else if (action === 'getClients')         result = getClients();
     else if (action === 'runAggregate')       result = aggregatePayments();
     else if (action === 'runAggregateYearly') result = aggregatePaymentsYearly();
+    else if (action === 'runSyncBdayStatus')  result = syncBdayStatusSheet();
+    else if (action === 'getRegistryUrls')    result = getRegistryUrls();
     else if (action === 'makePublic')         result = makeSheetPublic();
     else if (action === 'getAttendance')      result = getAttendance(e);
     else if (action === 'getHealthRecords')         result = getHealthRecords(e);
@@ -1849,4 +1851,1088 @@ function mirrorAttendanceToNurseSheet(loc, childName, isoDate, status) {
   } catch (e) {
     Logger.log('mirror: ERROR ' + (e.message || e) + ' для ' + childName + ' / ' + loc + ' / ' + isoDate);
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MIGRATE: дати народження дітей з реєстрів договорів → CRM Клієнти
+// ═══════════════════════════════════════════════════════════════════════════
+
+var REGISTRY_TAB_NAME = 'реєстр';
+
+// Читає лист "реєстр" у CONFIG_SHEET_ID. Повертає [{direction, type, location, sheetId, listName}].
+// Пропускає header (рядок 1) і рядки де колонка D (sheetId) порожня.
+function getRegistries() {
+  var configSS = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var sheet = configSS.getSheetByName(REGISTRY_TAB_NAME);
+  if (!sheet) {
+    Logger.log('getRegistries: WARN — лист "' + REGISTRY_TAB_NAME + '" не знайдено у CONFIG');
+    return [];
+  }
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return [];
+  var data = sheet.getRange(1, 1, lastRow, 5).getValues();
+  var out = [];
+  for (var r = 1; r < data.length; r++) {
+    var row = data[r];
+    var sheetId = String(row[3] || '').trim();
+    if (!sheetId) continue;
+    out.push({
+      direction: String(row[0] || '').trim(),
+      type:      String(row[1] || '').trim(),
+      location:  String(row[2] || '').trim(),
+      sheetId:   sheetId,
+      listName:  String(row[4] || '').trim() || '2025'
+    });
+  }
+  return out;
+}
+
+// Повертає map {location: spreadsheetUrl} для клікабельних бейджів реєстру у CRM.
+// Якщо одна локація має кілька записів — перший по порядку перемагає.
+function getRegistryUrls() {
+  var regs = getRegistries();
+  var map = {};
+  for (var i = 0; i < regs.length; i++) {
+    var r = regs[i];
+    if (!r.location || !r.sheetId) continue;
+    if (map[r.location]) continue;
+    map[r.location] = 'https://docs.google.com/spreadsheets/d/' + r.sheetId + '/edit';
+  }
+  return {ok:true, data:map};
+}
+
+// Парсить дату з реєстру в ISO YYYY-MM-DD. Підтримує:
+// - Date object (sheets API повертає коли клітинка тип Date)
+// - "DD.MM.YYYY" або "DD/MM/YYYY"
+// - "YYYY-MM-DD"
+// Повертає null для непарсабельних значень.
+function parseRegistryBday(val) {
+  if (val === null || val === undefined || val === '') return null;
+  if (val instanceof Date) {
+    if (isNaN(val.getTime())) return null;
+    var y = val.getFullYear(), m = val.getMonth() + 1, d = val.getDate();
+    if (y < 1900 || y > 2030) return null;
+    return y + '-' + (m < 10 ? '0' + m : m) + '-' + (d < 10 ? '0' + d : d);
+  }
+  // Excel serial number (число > 10000)
+  if (typeof val === 'number' && val > 10000) {
+    var excelEpoch = new Date(Date.UTC(1899, 11, 30));
+    var dt = new Date(excelEpoch.getTime() + val * 86400000);
+    var ye = dt.getUTCFullYear(), me = dt.getUTCMonth() + 1, de = dt.getUTCDate();
+    if (ye < 1900 || ye > 2030) return null;
+    return ye + '-' + (me < 10 ? '0' + me : me) + '-' + (de < 10 ? '0' + de : de);
+  }
+  if (typeof val === 'string') {
+    // Нормалізуємо роздільники: пробіл / дефіс / слеш → крапка
+    var s = val.trim().replace(/[\s\-\/]+/g, '.');
+    // DD.MM.YYYY
+    var m1 = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+    if (m1) {
+      var dd = +m1[1], mm = +m1[2], yyyy = +m1[3];
+      if (yyyy < 1900 || yyyy > 2030 || mm < 1 || mm > 12 || dd < 1 || dd > 31) return null;
+      return yyyy + '-' + (mm < 10 ? '0' + mm : mm) + '-' + (dd < 10 ? '0' + dd : dd);
+    }
+    // YYYY.MM.DD (після нормалізації роздільників — раніше було YYYY-MM-DD)
+    var m2 = s.match(/^(\d{4})\.(\d{2})\.(\d{2})$/);
+    if (m2) {
+      var yyyy2 = +m2[1], mm2 = +m2[2], dd2 = +m2[3];
+      if (yyyy2 < 1900 || yyyy2 > 2030 || mm2 < 1 || mm2 > 12 || dd2 < 1 || dd2 > 31) return null;
+      return yyyy2 + '-' + (mm2 < 10 ? '0' + mm2 : mm2) + '-' + (dd2 < 10 ? '0' + dd2 : dd2);
+    }
+  }
+  return null;
+}
+
+function _normChildName(s) {
+  return String(s || '')
+    .replace(/\([^)]*\)/g, '')      // прибрати (...)
+    .replace(/\[[^\]]*\]/g, '')     // прибрати [...]
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .replace(/[’ʼ′`'']/g, "'")  // нормалізувати різні апострофи
+    .replace(/і/g, 'и')
+    .replace(/ї/g, 'и')
+    .replace(/є/g, 'е');
+}
+
+// Точна копія childId з clients.html:847 — для синхронізації lookup-ключів
+function _childId(name, group, loc) {
+  return 'c_' + String(name||'').trim().slice(0,20) +
+         '_' + String(group||'').slice(0,8) +
+         '_' + String(loc||'').slice(0,8);
+}
+
+function _commonPrefixLen(a, b) {
+  var n = Math.min(a.length, b.length), i = 0;
+  while (i < n && a.charCodeAt(i) === b.charCodeAt(i)) i++;
+  return i;
+}
+
+// Обходить усі реєстри, парсить ПІБ + дату нар., оновлює пусті bday у CRM Клієнти.
+// Повертає об'єкт-звіт.
+function migrateChildrenBdays() {
+  var regs = getRegistries();
+  Logger.log('Реєстрів: ' + regs.length);
+
+  var crmSS = getCRMSpreadsheet();
+  var crmSheet = crmSS.getSheetByName(SHEET_CLIENTS);
+  if (!crmSheet) {
+    Logger.log('CRM Клієнти sheet not found');
+    return { regsScanned: 0, regsErrored: 0, errors: ['CRM Клієнти sheet not found'],
+             totalRowsInRegistries: 0, matched: 0, updated: 0,
+             alreadyHadBday: 0, unparseable: 0,
+             notFoundInCRMCount: 0, notFoundSamples: [] };
+  }
+
+  ensureClientsHeader(crmSheet);
+  var crmData = crmSheet.getDataRange().getValues();
+  if (crmData.length < 2) {
+    Logger.log('CRM Клієнти is empty');
+    return { regsScanned: regs.length, regsErrored: 0, errors: [],
+             totalRowsInRegistries: 0, matched: 0, updated: 0,
+             alreadyHadBday: 0, unparseable: 0,
+             notFoundInCRMCount: 0, notFoundSamples: [] };
+  }
+  var crmHdr = crmData[0].map(function(h){ return String(h || ''); });
+  var crmNameI = crmHdr.indexOf('ПІБ дитини');
+  var crmBdayI = crmHdr.indexOf('Дата народження');
+  if (crmNameI < 0 || crmBdayI < 0) {
+    var msg = 'CRM headers missing: ПІБ дитини=' + crmNameI + ', Дата народження=' + crmBdayI;
+    Logger.log(msg);
+    return { regsScanned: regs.length, regsErrored: 0, errors: [msg],
+             totalRowsInRegistries: 0, matched: 0, updated: 0,
+             alreadyHadBday: 0, unparseable: 0,
+             notFoundInCRMCount: 0, notFoundSamples: [] };
+  }
+
+  Logger.log('CRM diag: lastRow=' + crmSheet.getLastRow() + ', getDataRange rows=' + crmData.length);
+  var nonEmptyChildRows = 0;
+  for (var ci = 1; ci < crmData.length; ci++) {
+    var rawN = String(crmData[ci][crmNameI] || '').trim();
+    if (rawN) nonEmptyChildRows++;
+  }
+  Logger.log('CRM diag: rows with non-empty ПІБ дитини = ' + nonEmptyChildRows);
+
+  // Будуємо мапу нормалізованого ПІБ → {row (1-based), currentBday}
+  var crmMap = {};
+  var dupeCount = 0;
+  for (var i = 1; i < crmData.length; i++) {
+    var nm = _normChildName(crmData[i][crmNameI]);
+    if (!nm) continue;
+    if (!crmMap[nm]) {
+      crmMap[nm] = { row: i + 1, currentBday: String(crmData[i][crmBdayI] || '').trim() };
+    } else {
+      dupeCount++;
+    }
+  }
+  Logger.log('CRM map size: ' + Object.keys(crmMap).length + ' (dupes after norm: ' + dupeCount + ')');
+
+  var updates = [];
+  var alreadyHadBday = 0;
+  var unparseable = 0;
+  var notFoundInCRMCount = 0;
+  var notFoundSamples = [];
+  var totalRowsInRegistries = 0;
+  var errors = [];
+
+  for (var ri = 0; ri < regs.length; ri++) {
+    var reg = regs[ri];
+    Logger.log('--- [' + (ri+1) + '/' + regs.length + '] ' + reg.location + ' (sheetId=' + reg.sheetId + ', list=' + reg.listName + ')');
+    try {
+      var ss = SpreadsheetApp.openById(reg.sheetId);
+      var sh = ss.getSheetByName(reg.listName);
+      if (!sh) sh = ss.getSheets()[0];
+      if (!sh) { errors.push(reg.location + ': лист не знайдено'); continue; }
+
+      var data = sh.getDataRange().getValues();
+      if (data.length < 2) { Logger.log('  empty'); continue; }
+      var hdr = data[0];
+
+      var childCol = -1, bdayCol = -1;
+      for (var hi = 0; hi < hdr.length; hi++) {
+        var hLower = String(hdr[hi] || '').toLowerCase();
+        if (childCol < 0 && hLower.indexOf('піб дитини') >= 0) childCol = hi;
+        if (bdayCol < 0 && hLower.indexOf('дата народження') >= 0) bdayCol = hi;
+      }
+      if (childCol < 0 || bdayCol < 0) {
+        errors.push(reg.location + ': не знайдено колонок ПІБ дитини=' + childCol + ' / Дата народження=' + bdayCol);
+        Logger.log('  headers: ' + JSON.stringify(hdr));
+        continue;
+      }
+      Logger.log('  childCol=' + childCol + ', bdayCol=' + bdayCol + ', rows=' + (data.length - 1));
+
+      for (var dr = 1; dr < data.length; dr++) {
+        var name = String(data[dr][childCol] || '').trim();
+        var bdayRaw = data[dr][bdayCol];
+        if (!name || (bdayRaw === '' || bdayRaw === null || bdayRaw === undefined)) continue;
+        totalRowsInRegistries++;
+
+        var bdayISO = parseRegistryBday(bdayRaw);
+        if (!bdayISO) { unparseable++; continue; }
+
+        var lookup = crmMap[_normChildName(name)];
+        if (!lookup) {
+          notFoundInCRMCount++;
+          if (notFoundSamples.length < 20) notFoundSamples.push(name + ' [' + reg.location + ']');
+          continue;
+        }
+        if (lookup.currentBday) { alreadyHadBday++; continue; }
+        updates.push({ row: lookup.row, bday: bdayISO });
+        lookup.currentBday = bdayISO; // щоб не оновити двічі
+      }
+    } catch (e) {
+      var em = reg.location + ': ' + (e.message || e);
+      errors.push(em);
+      Logger.log('  ERROR ' + em);
+    }
+  }
+
+  // Виконуємо batch updates
+  for (var ui = 0; ui < updates.length; ui++) {
+    var u = updates[ui];
+    crmSheet.getRange(u.row, crmBdayI + 1).setValue(u.bday);
+  }
+
+  var report = {
+    regsScanned: regs.length,
+    regsErrored: errors.length,
+    errors: errors,
+    totalRowsInRegistries: totalRowsInRegistries,
+    matched: updates.length + alreadyHadBday,
+    updated: updates.length,
+    alreadyHadBday: alreadyHadBday,
+    unparseable: unparseable,
+    notFoundInCRMCount: notFoundInCRMCount,
+    notFoundSamples: notFoundSamples
+  };
+  Logger.log('=== REPORT ===');
+  Logger.log(JSON.stringify(report, null, 2));
+  return report;
+}
+
+function runBdayMigration() {
+  var r = migrateChildrenBdays();
+  var summary =
+    'Реєстрів: ' + r.regsScanned + '\n' +
+    'Помилок: ' + r.regsErrored + '\n' +
+    'Рядків переглянуто: ' + r.totalRowsInRegistries + '\n' +
+    'Знайдено в CRM: ' + r.matched + '\n' +
+    'ЗАПОВНЕНО bday: ' + r.updated + '\n' +
+    'Вже мали bday: ' + r.alreadyHadBday + '\n' +
+    'Непарсабельні: ' + r.unparseable + '\n' +
+    'Не знайдено в CRM: ' + r.notFoundInCRMCount + '\n\n' +
+    (r.errors.length ? 'Помилки:\n' + r.errors.join('\n') + '\n\n' : '') +
+    (r.notFoundSamples.length ? 'Перші 20 не знайдених:\n' + r.notFoundSamples.join('\n') : '');
+  try {
+    SpreadsheetApp.getUi().alert('Міграція bday', summary, SpreadsheetApp.getUi().ButtonSet.OK);
+  } catch (e) {
+    Logger.log('UI alert недоступний (запущено не з sheet context). Звіт у логах.');
+    Logger.log(summary);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SYNC BDAYS: реєстри договорів → колонка "Дата народження" у листі "Оплати"
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Не чіпає aggregatePayments. Викликати ОКРЕМО після кожного перерахунку
+// (бо aggregatePayments робить clearContents() і затирає колонку bday).
+// Або використовувати runFullAggregateAndSync() — комбінований wrapper.
+
+// @deprecated — використовуйте syncBdayStatusSheet().
+// Зберігається тимчасово; колонка "Дата народження" в Оплати стирається при aggregatePayments.
+function syncBdaysToPayments() {
+  var crmSS = getCRMSpreadsheet();
+  var paySheet = crmSS.getSheetByName(SHEET_PAYMENTS);
+  if (!paySheet) {
+    Logger.log('syncBdaysToPayments: ERROR — лист "' + SHEET_PAYMENTS + '" не знайдено');
+    return { ok: false, error: 'Sheet not found', errors: [] };
+  }
+
+  var data = paySheet.getDataRange().getValues();
+  if (data.length < 2) {
+    Logger.log('syncBdaysToPayments: лист "' + SHEET_PAYMENTS + '" порожній');
+    return { ok: true, total: 0, withBday: 0, withoutBday: 0, errors: [] };
+  }
+
+  var hdr = data[0].map(function(h){ return String(h || ''); });
+  var locI = hdr.indexOf('Локація');
+  var nameI = hdr.indexOf("Ім'я дитини");
+  if (locI < 0 || nameI < 0) {
+    var msg = 'Не знайдено колонки: Локація=' + locI + ', Ім\'я дитини=' + nameI;
+    Logger.log('syncBdaysToPayments: ERROR — ' + msg);
+    return { ok: false, error: msg, errors: [] };
+  }
+
+  // Якщо колонки "Дата народження" немає — додаємо в кінець
+  var bdayI = hdr.indexOf('Дата народження');
+  if (bdayI < 0) {
+    bdayI = hdr.length;
+    paySheet.getRange(1, bdayI + 1).setValue('Дата народження');
+    Logger.log('syncBdaysToPayments: додано колонку "Дата народження" на позиції ' + (bdayI + 1));
+    // Перечитуємо щоб мати актуальний шар колонок
+    data = paySheet.getDataRange().getValues();
+  }
+
+  // Будуємо мапу bday з усіх реєстрів
+  var regs = getRegistries();
+  Logger.log('syncBdaysToPayments: реєстрів — ' + regs.length);
+  var bdayMap = {};
+  var errors = [];
+  var totalRegRows = 0;
+
+  for (var ri = 0; ri < regs.length; ri++) {
+    var reg = regs[ri];
+    try {
+      var ss = SpreadsheetApp.openById(reg.sheetId);
+      var sh = ss.getSheetByName(reg.listName) || ss.getSheets()[0];
+      if (!sh) { errors.push(reg.location + ': лист не знайдено'); continue; }
+      var rData = sh.getDataRange().getValues();
+      if (rData.length < 2) continue;
+      var rHdr = rData[0];
+      var childCol = -1, bdayColReg = -1;
+      for (var hi = 0; hi < rHdr.length; hi++) {
+        var hLower = String(rHdr[hi] || '').toLowerCase();
+        if (childCol < 0 && hLower.indexOf('піб дитини') >= 0) childCol = hi;
+        if (bdayColReg < 0 && hLower.indexOf('дата народження') >= 0) bdayColReg = hi;
+      }
+      if (childCol < 0 || bdayColReg < 0) {
+        errors.push(reg.location + ': не знайдено колонок ПІБ дитини=' + childCol + ' / Дата народження=' + bdayColReg);
+        continue;
+      }
+      for (var dr = 1; dr < rData.length; dr++) {
+        var nm = String(rData[dr][childCol] || '').trim();
+        var bdayRaw = rData[dr][bdayColReg];
+        if (!nm || bdayRaw === '' || bdayRaw === null || bdayRaw === undefined) continue;
+        totalRegRows++;
+        var bdayISO = parseRegistryBday(bdayRaw);
+        if (!bdayISO) continue;
+        var key = _normChildName(nm) + '|' + reg.location;
+        bdayMap[key] = bdayISO;
+      }
+    } catch (e) {
+      errors.push(reg.location + ': ' + (e.message || e));
+    }
+  }
+  Logger.log('syncBdaysToPayments: bdayMap size — ' + Object.keys(bdayMap).length + ' з ' + totalRegRows + ' рядків реєстрів');
+
+  // [DEBUG] Reverse index: per-loc список нормалізованих імен з реєстрів
+  var bdayKeysByLoc = {};
+  Object.keys(bdayMap).forEach(function(k){
+    var pipe = k.lastIndexOf('|');
+    if (pipe < 0) return;
+    var nm = k.slice(0, pipe);
+    var lc = k.slice(pipe + 1);
+    if (!bdayKeysByLoc[lc]) bdayKeysByLoc[lc] = [];
+    bdayKeysByLoc[lc].push(nm);
+  });
+
+  // Будуємо нову колонку bday для Оплати: повний масив (длина = data.length - 1)
+  var newCol = [];
+  var withBday = 0;
+  var withoutBday = 0;
+  var exactMatched = 0;
+  var fuzzyMatched = 0;
+  var notMatchedSamples = []; // [DEBUG]
+  for (var r = 1; r < data.length; r++) {
+    var pName = String(data[r][nameI] || '').trim();
+    var pLoc  = String(data[r][locI]  || '').trim();
+    var existing = String(data[r][bdayI] || '').trim();
+    if (existing) {
+      newCol.push([existing]);
+      withBday++;
+      continue;
+    }
+    var norm = _normChildName(pName);
+    var exactKey = norm + '|' + pLoc;
+    var bday = bdayMap[exactKey] || '';
+    if (bday) {
+      exactMatched++;
+    } else {
+      // Fuzzy fallback: префікс прізвище + перші 3 літери імені
+      var parts = norm.split(' ').filter(function(p){ return p; });
+      if (parts.length >= 2) {
+        var surname = parts[0];
+        var firstStart = parts[1].substring(0, 3);
+        var prefix = surname + ' ' + firstStart;
+        var candidates = [];
+        for (var k in bdayMap) {
+          if (k.indexOf('|' + pLoc) === k.length - pLoc.length - 1 && k.indexOf(prefix) === 0) {
+            candidates.push(k);
+          }
+        }
+        if (candidates.length === 1) {
+          bday = bdayMap[candidates[0]];
+          fuzzyMatched++;
+        }
+      }
+    }
+    newCol.push([bday]);
+    if (bday) {
+      withBday++;
+    } else {
+      withoutBday++;
+      if (notMatchedSamples.length < 50) {
+        notMatchedSamples.push({name: pName, loc: pLoc, normKey: exactKey});
+      }
+    }
+  }
+  // [DEBUG] загальний список не-матчів
+  Logger.log('[DEBUG] exactMatched=' + exactMatched + ' fuzzyMatched=' + fuzzyMatched + ' withoutBday=' + withoutBday);
+  Logger.log('[DEBUG] notMatchedSamples (' + notMatchedSamples.length + '/50):');
+  notMatchedSamples.forEach(function(s, i){
+    Logger.log('  [' + (i+1) + '] "' + s.name + '" / "' + s.loc + '" → key="' + s.normKey + '"');
+  });
+
+  // Один batch-запис у всю колонку
+  if (newCol.length > 0) {
+    paySheet.getRange(2, bdayI + 1, newCol.length, 1).setValues(newCol);
+  }
+
+  var report = {
+    ok: true,
+    total: data.length - 1,
+    withBday: withBday,
+    withoutBday: withoutBday,
+    exactMatched: exactMatched,
+    fuzzyMatched: fuzzyMatched,
+    bdayMapSize: Object.keys(bdayMap).length,
+    regsScanned: regs.length,
+    regsErrored: errors.length,
+    errors: errors
+  };
+  Logger.log('=== syncBdaysToPayments REPORT ===');
+  Logger.log(JSON.stringify(report, null, 2));
+  return report;
+}
+
+// @deprecated — використовуйте runSyncBdayStatus().
+function runSyncBdaysToPayments() {
+  var r = syncBdaysToPayments();
+  var summary = !r.ok
+    ? 'Помилка: ' + (r.error || 'unknown')
+    : 'Рядків Оплати: ' + r.total + '\n' +
+      'Заповнено bday: ' + r.withBday + '\n' +
+      'Без bday: ' + r.withoutBday + '\n' +
+      'Реєстрів: ' + r.regsScanned + ' (помилок: ' + r.regsErrored + ')\n\n' +
+      (r.errors && r.errors.length ? 'Помилки:\n' + r.errors.join('\n') : '');
+  try {
+    SpreadsheetApp.getUi().alert('Синхронізація bday', summary, SpreadsheetApp.getUi().ButtonSet.OK);
+  } catch (e) {
+    Logger.log('UI alert недоступний. Звіт у логах.');
+    Logger.log(summary);
+  }
+}
+
+// Use this instead of direct aggregatePayments call.
+// aggregatePayments оновлює лист "Оплати"; syncBdayStatusSheet після нього
+// перебудовує bday_sync_status (нові діти попадають з ПІБ та локацією).
+function runFullAggregateAndSync() {
+  try {
+    aggregatePayments();        // існуюча, не чіпаємо
+    syncBdayStatusSheet();      // НОВА (замість deprecated syncBdaysToPayments)
+    try {
+      SpreadsheetApp.getUi().alert(
+        '✅ Перерахунок виконано',
+        'Оплати оновлені + bday_sync_status оновлено',
+        SpreadsheetApp.getUi().ButtonSet.OK
+      );
+    } catch (e2) {
+      Logger.log('runFullAggregateAndSync: успіх (UI alert недоступний)');
+    }
+  } catch (e) {
+    Logger.log('runFullAggregateAndSync error: ' + e);
+    try {
+      SpreadsheetApp.getUi().alert('Помилка', String(e),
+        SpreadsheetApp.getUi().ButtonSet.OK);
+    } catch (e2) {}
+  }
+}
+
+// ── DEBUG: повна категоризація всіх не-зіставлених дітей ─────────────────────
+function _debugAllMissingBdays() {
+  Logger.log('=== ПОВНА ДІАГНОСТИКА 737 НЕ ЗІСТАВЛЕНИХ ===');
+
+  // 1. Будуємо bdayMap (як syncBdaysToPayments)
+  // АЛЕ також зберігаємо ВСІ варіанти (для виявлення колізій)
+  const regs = getRegistries();
+  const bdayMap = {};                  // key → bday
+  const bdayMapAllOccurrences = {};    // key → [{bday, regLocation, fullName}]
+  const allRegistryNames = {};         // location → [name1, name2, ...]
+  const allRegistryNormNames = {};     // normName → [{loc, fullName, bday}]
+
+  for (const reg of regs) {
+    allRegistryNames[reg.location] = [];
+    try {
+      const ss = SpreadsheetApp.openById(reg.sheetId);
+      const sh = ss.getSheetByName(reg.listName) || ss.getSheets()[0];
+      const data = sh.getDataRange().getValues();
+      const hdr = data[0];
+      const childCol = hdr.findIndex(h =>
+        String(h).toLowerCase().includes('піб дитини'));
+      const bdayColReg = hdr.findIndex(h =>
+        String(h).toLowerCase().includes('дата народження'));
+      if (childCol < 0 || bdayColReg < 0) continue;
+
+      for (let i = 1; i < data.length; i++) {
+        const name = String(data[i][childCol] || '').trim();
+        const bdayRaw = data[i][bdayColReg];
+        if (!name) continue;
+        allRegistryNames[reg.location].push(name);
+        if (!bdayRaw) continue;
+        const bdayISO = parseRegistryBday(bdayRaw);
+        if (!bdayISO) continue;
+
+        const norm = _normChildName(name);
+        const key = norm + '|' + reg.location;
+
+        if (!bdayMapAllOccurrences[key]) {
+          bdayMapAllOccurrences[key] = [];
+        }
+        bdayMapAllOccurrences[key].push({
+          bday: bdayISO, fullName: name, regLocation: reg.location
+        });
+
+        if (!allRegistryNormNames[norm]) {
+          allRegistryNormNames[norm] = [];
+        }
+        allRegistryNormNames[norm].push({
+          loc: reg.location, fullName: name, bday: bdayISO
+        });
+
+        bdayMap[key] = bdayISO;
+      }
+    } catch (e) {
+      Logger.log('ERROR ' + reg.location + ': ' + e);
+    }
+  }
+
+  // 2. Обходимо Оплати
+  const ss = getCRMSpreadsheet();
+  const paySheet = ss.getSheetByName('Оплати');
+  const data = paySheet.getDataRange().getValues();
+  const header = data[0];
+  const nameCol = header.findIndex(h =>
+    String(h).toLowerCase().includes("ім'я дитини"));
+  const locCol = header.findIndex(h =>
+    String(h).toLowerCase().includes('локація'));
+
+  // 3. Категоризація 737 не зіставлених
+  const categoryA = [];  // в реєстрі є, в bdayMap є — БАГ скрипта
+  const categoryB = [];  // в реєстрі НЕМАЄ
+  const categoryC = [];  // однофамільці (колізія)
+  const categoryD = [];  // є в реєстрі іншої локації
+  const categoryE = [];  // дата в реєстрі є, але не парсається
+
+  for (let i = 1; i < data.length; i++) {
+    const name = String(data[i][nameCol] || '').trim();
+    const loc = String(data[i][locCol] || '').trim();
+    if (!name || !loc) continue;
+
+    const norm = _normChildName(name);
+    const lookupKey = norm + '|' + loc;
+
+    if (bdayMap[lookupKey]) continue; // зіставлено
+
+    // НЕ зіставлено — категоризуємо
+    const occurrences = bdayMapAllOccurrences[lookupKey];
+    const allNormMatches = allRegistryNormNames[norm] || [];
+    const inSameLoc = allRegistryNames[loc] &&
+      allRegistryNames[loc].some(n => _normChildName(n) === norm);
+
+    if (occurrences && occurrences.length > 1) {
+      categoryC.push({name, loc, count: occurrences.length});
+    } else if (inSameLoc) {
+      // в реєстрі є, в bdayMap немає — або бад дата
+      categoryE.push({name, loc});
+    } else if (allNormMatches.length > 0) {
+      // в іншій локації є
+      categoryD.push({
+        name, loc,
+        foundIn: allNormMatches.map(m => m.loc).join(',')
+      });
+    } else {
+      categoryB.push({name, loc});
+    }
+  }
+
+  // 4. Звіт
+  Logger.log('--- ЗВІТ ---');
+  Logger.log('bdayMap size: ' + Object.keys(bdayMap).length);
+  Logger.log('');
+  Logger.log('A. Колізії (в map переписано): ' + categoryC.length);
+  Logger.log('B. Немає в жодному реєстрі: ' + categoryB.length);
+  Logger.log('C. Є в реєстрі іншої локації: ' + categoryD.length);
+  Logger.log('D. Є в реєстрі цієї локації, але дата не парсається: '
+    + categoryE.length);
+
+  Logger.log('');
+  Logger.log('--- A. КОЛІЗІЇ (перші 10) ---');
+  categoryC.slice(0, 10).forEach(x =>
+    Logger.log('  ' + x.name + ' / ' + x.loc + ' (× ' + x.count + ')'));
+
+  Logger.log('');
+  Logger.log('--- B. НЕМАЄ В РЕЄСТРАХ (перші 20) ---');
+  categoryB.slice(0, 20).forEach(x =>
+    Logger.log('  ' + x.name + ' / ' + x.loc));
+
+  Logger.log('');
+  Logger.log('--- C. В ІНШИХ ЛОКАЦІЯХ (перші 20) ---');
+  categoryD.slice(0, 20).forEach(x =>
+    Logger.log('  ' + x.name + ' / ' + x.loc + ' → знайдено в: ' + x.foundIn));
+
+  Logger.log('');
+  Logger.log('--- D. ДАТА НЕ ПАРСАЄТЬСЯ (перші 10) ---');
+  categoryE.slice(0, 10).forEach(x =>
+    Logger.log('  ' + x.name + ' / ' + x.loc));
+
+  Logger.log('');
+  Logger.log('=== РЕКОМЕНДАЦІЇ ===');
+  Logger.log('A. Колізії = виправити кодом (додати другий ключ - група або номер договору)');
+  Logger.log('B. = окрема задача для HR (внести в реєстр)');
+  Logger.log('C. = виправити кодом (lookup без локації або по locFromOplata→locInRegistry)');
+  Logger.log('D. = виправити в реєстрі (дата написана дивно)');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SYNC bday_sync_status: окремий лист зі статусами match'у дітей з реєстрами
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Не модифікує лист "Оплати". Створює/перезаписує окремий лист bday_sync_status.
+// Frontend читає з нього bday + contractNumber + status badge.
+
+var BDAY_STATUS_SHEET = 'bday_sync_status';
+
+function syncBdayStatusSheet() {
+  var crmSS = getCRMSpreadsheet();
+  var statusSheet = crmSS.getSheetByName(BDAY_STATUS_SHEET);
+  if (!statusSheet) {
+    statusSheet = crmSS.insertSheet(BDAY_STATUS_SHEET);
+    Logger.log('syncBdayStatusSheet: створено новий лист "' + BDAY_STATUS_SHEET + '"');
+  }
+  var HEADER = ['ChildID','Name','Loc','Bday','ContractNumber','Status','MatchedRegName','UpdatedAt'];
+
+  // 1. Читаємо лист "Оплати" (read-only) — список дітей
+  var paySheet = crmSS.getSheetByName(SHEET_PAYMENTS);
+  if (!paySheet) {
+    Logger.log('syncBdayStatusSheet: ERROR — лист "' + SHEET_PAYMENTS + '" не знайдено');
+    return { ok: false, error: 'Оплати not found' };
+  }
+  var payData = paySheet.getDataRange().getValues();
+  if (payData.length < 2) {
+    Logger.log('syncBdayStatusSheet: лист "' + SHEET_PAYMENTS + '" порожній');
+    return { ok: true, total: 0 };
+  }
+  var payHdr = payData[0].map(function(h){ return String(h || ''); });
+  var locI   = payHdr.indexOf('Локація');
+  var grpI   = payHdr.indexOf('Група');
+  var nameI  = payHdr.indexOf("Ім'я дитини");
+  if (locI < 0 || grpI < 0 || nameI < 0) {
+    Logger.log('syncBdayStatusSheet: ERROR — не знайдено колонки Оплати: locI=' + locI + ' grpI=' + grpI + ' nameI=' + nameI);
+    return { ok: false, error: 'Оплати headers missing' };
+  }
+
+  // 2. Будуємо candidatesByLoc з реєстрів
+  var regs = getRegistries();
+  var candidatesByLoc = {};
+  var errors = [];
+  var registriesScanned = 0;
+  for (var ri = 0; ri < regs.length; ri++) {
+    var reg = regs[ri];
+    try {
+      var ss = SpreadsheetApp.openById(reg.sheetId);
+      var sh = ss.getSheetByName(reg.listName) || ss.getSheets()[0];
+      if (!sh) { errors.push(reg.location + ': лист не знайдено'); continue; }
+      var rData = sh.getDataRange().getValues();
+      if (rData.length < 2) continue;
+      var rHdr = rData[0];
+      var rChildCol = -1, rBdayCol = -1, rCnCol = -1;
+      for (var hi = 0; hi < rHdr.length; hi++) {
+        var hLow = String(rHdr[hi] || '').toLowerCase();
+        if (rChildCol < 0 && hLow.indexOf('піб дитини') >= 0) rChildCol = hi;
+        if (rBdayCol < 0 && hLow.indexOf('дата народження') >= 0) rBdayCol = hi;
+        if (rCnCol < 0 && hLow.indexOf('номер договору') >= 0) rCnCol = hi;
+      }
+      if (rChildCol < 0) {
+        errors.push(reg.location + ': не знайдено колонки "ПІБ дитини"');
+        continue;
+      }
+      registriesScanned++;
+      if (!candidatesByLoc[reg.location]) candidatesByLoc[reg.location] = [];
+      for (var dr = 1; dr < rData.length; dr++) {
+        var fullName = String(rData[dr][rChildCol] || '').trim();
+        if (!fullName) continue;
+        var normName = _normChildName(fullName);
+        var parts = normName.split(' ').filter(function(p){ return p; });
+        if (parts.length < 1) continue;
+        var normSurname = parts[0];
+        var normFirstName = parts.slice(1).join(' ');
+        var bday = rBdayCol >= 0 ? (parseRegistryBday(rData[dr][rBdayCol]) || '') : '';
+        var cn = rCnCol >= 0 ? String(rData[dr][rCnCol] || '').trim() : '';
+        candidatesByLoc[reg.location].push({
+          fullName: fullName,
+          normName: normName,
+          normSurname: normSurname,
+          normFirstName: normFirstName,
+          bday: bday,
+          contractNumber: cn
+        });
+      }
+    } catch (e) {
+      errors.push(reg.location + ': ' + (e.message || e));
+    }
+  }
+  Logger.log('syncBdayStatusSheet: candidates by loc — ' + Object.keys(candidatesByLoc).map(function(l){
+    return l + ':' + candidatesByLoc[l].length;
+  }).join(', '));
+
+  // 3. Smart match для кожної дитини з Оплати
+  var stats = { exact: 0, smart_check: 0, ambiguous: 0, school_no_contract: 0, not_found: 0, name_mismatch: 0 };
+  var rowsOut = [];
+  var nowStr = formatDate(new Date());
+
+  for (var pr = 1; pr < payData.length; pr++) {
+    var name = String(payData[pr][nameI] || '').trim();
+    var loc  = String(payData[pr][locI]  || '').trim();
+    var grp  = String(payData[pr][grpI]  || '').trim();
+    if (!name || !loc) continue;
+
+    var id = _childId(name, grp, loc);
+    var norm = _normChildName(name);
+    var nameParts = norm.split(' ').filter(function(p){ return p; });
+    var status, bdayOut = '', cnOut = '', matchedRegOut = '';
+
+    if (nameParts.length < 2) {
+      status = 'not_found';
+    } else {
+      var surname = nameParts[0];
+      var firstName = nameParts.slice(1).join(' ');
+      var locCands = candidatesByLoc[loc] || [];
+      var candidates = locCands.filter(function(c){ return c.normSurname === surname; });
+
+      if (candidates.length === 0) {
+        if (loc.toLowerCase().indexOf('школа') >= 0) {
+          status = 'school_no_contract';
+        } else {
+          status = 'not_found';
+        }
+      } else if (candidates.length === 1) {
+        var c = candidates[0];
+        if (norm === c.normName) {
+          status = 'exact';
+          bdayOut = c.bday; cnOut = c.contractNumber; matchedRegOut = c.fullName;
+        } else {
+          var minLen = Math.min(firstName.length, c.normFirstName.length);
+          var prefMatch = firstName.indexOf(c.normFirstName) === 0 || c.normFirstName.indexOf(firstName) === 0;
+          if (minLen >= 3 && prefMatch) {
+            status = 'smart_check';
+            bdayOut = c.bday; cnOut = c.contractNumber; matchedRegOut = c.fullName;
+          } else {
+            status = 'name_mismatch';
+            matchedRegOut = c.fullName;
+          }
+        }
+      } else {
+        // 2+ кандидатів — сортуємо за довжиною спільного префіксу імен
+        var scored = candidates.map(function(c){
+          return { c: c, score: _commonPrefixLen(c.normFirstName, firstName) };
+        }).sort(function(a, b){ return b.score - a.score; });
+        var best = scored[0];
+        var second = scored[1];
+        if (best.score - second.score <= 1) {
+          status = 'ambiguous';
+          var uniqBdays = {};
+          candidates.forEach(function(c){ if (c.bday) uniqBdays[c.bday] = true; });
+          var ub = Object.keys(uniqBdays);
+          bdayOut = ub.length === 1 ? ub[0] : '';
+          // contractNumber — НЕ записуємо при ambiguous
+          matchedRegOut = candidates.map(function(c){ return c.fullName; }).join(' | ');
+        } else {
+          status = 'smart_check';
+          bdayOut = best.c.bday;
+          cnOut = best.c.contractNumber;
+          matchedRegOut = best.c.fullName;
+        }
+      }
+    }
+
+    stats[status] = (stats[status] || 0) + 1;
+    rowsOut.push([id, name, loc, bdayOut, cnOut, status, matchedRegOut, nowStr]);
+  }
+
+  // 4. Запис у sheet (clear + write)
+  statusSheet.clearContents();
+  statusSheet.getRange(1, 1, 1, HEADER.length).setValues([HEADER]);
+  statusSheet.setFrozenRows(1);
+  if (rowsOut.length > 0) {
+    statusSheet.getRange(2, 1, rowsOut.length, HEADER.length).setValues(rowsOut);
+  }
+
+  // 5. Звіт
+  var report = {
+    ok: true,
+    total: rowsOut.length,
+    exact: stats.exact || 0,
+    smart_check: stats.smart_check || 0,
+    ambiguous: stats.ambiguous || 0,
+    school_no_contract: stats.school_no_contract || 0,
+    not_found: stats.not_found || 0,
+    name_mismatch: stats.name_mismatch || 0,
+    registriesScanned: registriesScanned,
+    errors: errors
+  };
+  Logger.log('=== syncBdayStatusSheet REPORT ===');
+  Logger.log(JSON.stringify(report, null, 2));
+  return report;
+}
+
+function runSyncBdayStatus() {
+  var r = syncBdayStatusSheet();
+  var summary = !r.ok
+    ? 'Помилка: ' + (r.error || 'unknown')
+    : 'Всього дітей в Оплати: ' + r.total + '\n' +
+      '─────────────────────\n' +
+      '✅ exact:              ' + r.exact + '\n' +
+      '⚠️ smart_check:        ' + r.smart_check + '\n' +
+      '⚠️ ambiguous:          ' + r.ambiguous + '\n' +
+      '⚠️ name_mismatch:      ' + r.name_mismatch + '\n' +
+      '📝 school_no_contract: ' + r.school_no_contract + '\n' +
+      '❌ not_found:          ' + r.not_found + '\n' +
+      '─────────────────────\n' +
+      'Реєстрів просканено: ' + r.registriesScanned + '\n' +
+      (r.errors && r.errors.length ? '\nПомилки:\n' + r.errors.join('\n') : '');
+  try {
+    SpreadsheetApp.getUi().alert('bday_sync_status', summary, SpreadsheetApp.getUi().ButtonSet.OK);
+  } catch (e) {
+    Logger.log('UI alert недоступний. Звіт у логах.');
+    Logger.log(summary);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CLEANUP: видалити timestamp/дати з колонки "Номер договору" в CRM Клієнти
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Сміттєві дані потрапили туди від старого migrateChildrenBdays та інших
+// скриптів. Реальні номери (формат "75-30-08") живуть у реєстрах і
+// підтягуються через bday_sync_status. Очистка ХОВАЄ старі timestamp.
+
+function cleanContractNumberGarbage(dryRun) {
+  if (dryRun === undefined) dryRun = true;
+  var ss = getCRMSpreadsheet();
+  var sheet = ss.getSheetByName(SHEET_CLIENTS);
+  if (!sheet) {
+    Logger.log('cleanContractNumberGarbage: ERROR — sheet "' + SHEET_CLIENTS + '" not found');
+    return { ok: false, error: 'Sheet not found' };
+  }
+
+  var data = sheet.getDataRange().getValues();
+  if (data.length < 2) {
+    Logger.log('cleanContractNumberGarbage: empty');
+    return { ok: true, total: 0, garbage: 0, real: 0, empty: 0 };
+  }
+
+  var hdr = data[0].map(function(h){ return String(h || ''); });
+  var cnCol = hdr.indexOf('Номер договору');
+  if (cnCol < 0) {
+    Logger.log('cleanContractNumberGarbage: ERROR — колонка "Номер договору" не знайдена');
+    return { ok: false, error: 'Column "Номер договору" not found' };
+  }
+  Logger.log('cleanContractNumberGarbage: колонка "Номер договору" — index ' + cnCol + ' (col ' + (cnCol + 1) + ')');
+
+  // Регекси для виявлення сміття у колонці "Номер договору"
+  var GARBAGE_PATTERNS = [
+    /^\d{4}-\d{2}-\d{2}/,                          // ISO: 2026-04-20 (з можливим хвостом)
+    /^\d{1,2}\.\d{1,2}\.\d{4}/                     // D.M.YYYY або DD.MM.YYYY (з timestamp або без)
+  ];
+
+  function isGarbage(val) {
+    if (val === null || val === undefined || val === '') return false;
+    if (val instanceof Date) return true;          // Excel timestamp / Date object
+    var s = String(val).trim();
+    if (!s) return false;
+    for (var i = 0; i < GARBAGE_PATTERNS.length; i++) {
+      if (GARBAGE_PATTERNS[i].test(s)) return true;
+    }
+    return false;
+  }
+
+  var stats = { total: 0, garbage: 0, real: 0, empty: 0 };
+  var garbageRows = []; // [{row, value}]
+  var realSamples = []; // приклади що залишимо (до 10)
+
+  for (var r = 1; r < data.length; r++) {
+    stats.total++;
+    var val = data[r][cnCol];
+    if (val === null || val === undefined || String(val).trim() === '') {
+      stats.empty++;
+      continue;
+    }
+    if (isGarbage(val)) {
+      stats.garbage++;
+      if (garbageRows.length < 1000) garbageRows.push({ row: r + 1, value: String(val) });
+    } else {
+      stats.real++;
+      if (realSamples.length < 10) realSamples.push(String(val));
+    }
+  }
+
+  Logger.log('=== cleanContractNumberGarbage ' + (dryRun ? 'DRY RUN' : 'REAL') + ' ===');
+  Logger.log('Total rows:                  ' + stats.total);
+  Logger.log('Garbage (timestamps/dates):  ' + stats.garbage);
+  Logger.log('Real numbers (kept):         ' + stats.real);
+  Logger.log('Empty (kept):                ' + stats.empty);
+  Logger.log('');
+  Logger.log('Sample REAL numbers (first 10) — НЕ чіпатимемо:');
+  realSamples.forEach(function(s){ Logger.log('  "' + s + '"'); });
+  Logger.log('');
+  Logger.log('Sample GARBAGE values (first 10) — будемо очищати:');
+  garbageRows.slice(0, 10).forEach(function(g){
+    Logger.log('  row ' + g.row + ': "' + g.value + '"');
+  });
+
+  if (dryRun) {
+    Logger.log('');
+    Logger.log('DRY RUN — нічого не змінено. Для реальної очистки запустіть runCleanGarbageReal().');
+    return { ok: true, dryRun: true, total: stats.total, garbage: stats.garbage, real: stats.real, empty: stats.empty };
+  }
+
+  // REAL: пишемо очищену колонку одним batch setValues
+  if (garbageRows.length > 0) {
+    var newCol = [];
+    for (var rr = 1; rr < data.length; rr++) {
+      var v = data[rr][cnCol];
+      if (isGarbage(v)) {
+        newCol.push(['']);
+      } else {
+        newCol.push([(v === null || v === undefined) ? '' : v]);
+      }
+    }
+    sheet.getRange(2, cnCol + 1, newCol.length, 1).setValues(newCol);
+    Logger.log('REAL — очищено ' + garbageRows.length + ' клітинок у колонці "Номер договору"');
+  } else {
+    Logger.log('REAL — нічого очищати, сміття не знайдено');
+  }
+
+  return { ok: true, dryRun: false, cleaned: garbageRows.length, total: stats.total, garbage: stats.garbage, real: stats.real, empty: stats.empty };
+}
+
+function runCleanGarbageDryRun() {
+  var r = cleanContractNumberGarbage(true);
+  var summary = !r.ok
+    ? 'Помилка: ' + (r.error || 'unknown')
+    : 'DRY RUN — нічого не змінено\n' +
+      '─────────────────────\n' +
+      'Всього рядків:       ' + r.total + '\n' +
+      'Сміття (timestamp):  ' + r.garbage + '\n' +
+      'Справжні номери:     ' + r.real + '\n' +
+      'Порожні:             ' + r.empty + '\n' +
+      '─────────────────────\n' +
+      'Деталі (приклади) — у Logger.\n' +
+      'Для реальної очистки: runCleanGarbageReal()';
+  try {
+    SpreadsheetApp.getUi().alert('Очистка сміття (DRY RUN)', summary, SpreadsheetApp.getUi().ButtonSet.OK);
+  } catch (e) {
+    Logger.log('UI alert недоступний.');
+    Logger.log(summary);
+  }
+}
+
+function runCleanGarbageReal() {
+  var confirmed = false;
+  try {
+    var ui = SpreadsheetApp.getUi();
+    var resp = ui.alert(
+      '⚠️ Очистка сміття (РЕАЛЬНО)',
+      'УВАГА! Спершу зробіть копію CRM Sheets:\n' +
+      'File → Make a copy.\n\n' +
+      'Ця операція очистить колонку "Номер договору" у листі "Клієнти" ' +
+      'від timestamp/дат (наприклад "25.04.2026 13:03", "2026-04-20"). ' +
+      'Справжні номери (формат "75-30-08", з літерами тощо) — залишаються.\n\n' +
+      'Продовжити?',
+      ui.ButtonSet.YES_NO
+    );
+    confirmed = (resp === ui.Button.YES);
+  } catch (e) {
+    // Запущено з editor — без UI підтвердження. Логуємо WARNING.
+    Logger.log('runCleanGarbageReal: UI недоступний (editor) — продовжуємо без підтвердження');
+    confirmed = true;
+  }
+  if (!confirmed) {
+    Logger.log('runCleanGarbageReal: користувач відхилив');
+    return;
+  }
+
+  var r = cleanContractNumberGarbage(false);
+  var summary = !r.ok
+    ? 'Помилка: ' + (r.error || 'unknown')
+    : '✅ Очистку завершено\n' +
+      '─────────────────────\n' +
+      'Видалено timestamp:        ' + (r.cleaned || 0) + '\n' +
+      'Справжні номери збережено: ' + r.real + '\n' +
+      'Порожні без змін:          ' + r.empty;
+  try {
+    SpreadsheetApp.getUi().alert('Очистка завершена', summary, SpreadsheetApp.getUi().ButtonSet.OK);
+  } catch (e) {
+    Logger.log(summary);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TRIGGERS: автоматична щоденна синхронізація bday_sync_status
+// ═══════════════════════════════════════════════════════════════════════════
+
+function installSyncTrigger() {
+  var existing = ScriptApp.getProjectTriggers();
+  var removed = 0;
+  existing.forEach(function(t){
+    if (t.getHandlerFunction() === 'runSyncBdayStatus') {
+      ScriptApp.deleteTrigger(t);
+      removed++;
+    }
+  });
+  ScriptApp.newTrigger('runSyncBdayStatus')
+    .timeBased()
+    .everyDays(1)
+    .atHour(4)
+    .inTimezone('Europe/Kiev')
+    .create();
+  Logger.log('✅ Тригер встановлено: щодня о 04:00 Europe/Kiev (видалено старих: ' + removed + ')');
+  try {
+    SpreadsheetApp.getUi().alert(
+      'Тригер встановлено',
+      '✅ runSyncBdayStatus запускатиметься щодня о 04:00 (Київ).\n' +
+      'Видалено старих тригерів: ' + removed,
+      SpreadsheetApp.getUi().ButtonSet.OK
+    );
+  } catch(e) {}
+}
+
+function removeSyncTrigger() {
+  var existing = ScriptApp.getProjectTriggers();
+  var removed = 0;
+  existing.forEach(function(t){
+    if (t.getHandlerFunction() === 'runSyncBdayStatus') {
+      ScriptApp.deleteTrigger(t);
+      removed++;
+    }
+  });
+  Logger.log('🗑️ Тригери runSyncBdayStatus видалено: ' + removed);
+  try {
+    SpreadsheetApp.getUi().alert('Тригер видалено',
+      'Видалено тригерів: ' + removed,
+      SpreadsheetApp.getUi().ButtonSet.OK);
+  } catch(e) {}
+}
+
+function listAllTriggers() {
+  var triggers = ScriptApp.getProjectTriggers();
+  Logger.log('=== Усі тригери проєкту (' + triggers.length + ') ===');
+  triggers.forEach(function(t, i){
+    Logger.log('[' + (i+1) + '] handler="' + t.getHandlerFunction() +
+      '" eventType=' + t.getEventType() +
+      ' uniqueId=' + t.getUniqueId());
+  });
+  return triggers.length;
 }

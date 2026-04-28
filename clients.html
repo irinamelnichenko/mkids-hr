@@ -754,7 +754,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 var CFG = {
   SCRIPT_KEY:    'crm_script_url',
-  SCRIPT_URL:    'https://script.google.com/macros/s/AKfycbyE-wiBzpcMOrpvGCFruBEgyy1sx8Yuq-o1ZftgBEZgZo9O03R041fWeNv9yJ6h9w7Z3w/exec',
+  SCRIPT_URL:    'https://script.google.com/macros/s/AKfycbyTSUVlaN4-PpXe47zCSmhVs0Qxy1FDXG_XsB4zcKNpqBxdhDtS9ibM4YFGkGjmPQDFWQ/exec',
   SK:            'crm_mkids_v3',
   LOC_CACHE:     'crm_locs_v3',
   PAY_CACHE:     'crm_pay_v3',
@@ -778,6 +778,7 @@ var S = {
   crm:      {},
   bdayStatus: {},
   bdayStatusUpdatedAt: '',
+  registryUrls: {},
   // allPayRows: всі рядки з усіх місяців для історії
   allPayRows: [],
   // Річні дані
@@ -1251,6 +1252,17 @@ async function loadBdayStatus(){
   console.log('[loadClients] done, merged', rows.length, 'cards');
 }
 
+async function loadRegistryUrls(){
+  try {
+    var j = await apiGet('getRegistryUrls');
+    S.registryUrls = (j && j.data) || {};
+    console.log('[loadRegistryUrls] loaded', Object.keys(S.registryUrls).length, 'locations');
+  } catch(e) {
+    console.warn('[loadRegistryUrls] failed:', e);
+    S.registryUrls = S.registryUrls || {};
+  }
+}
+
 function mergeCRMFromCloud(rows){
   rows.forEach(function(row){
     var id=String(row['ID']||''); if(!id) return;
@@ -1636,6 +1648,7 @@ async function initApp(){
     await loadPayments(false);
     await loadClients(false);
     await loadBdayStatus();
+    await loadRegistryUrls();
     // Завантажуємо річні дані та всю історію оплат у фоні
     loadPaymentsYearly(false).then(function(){ renderView(); }).catch(function(e){ console.warn('Yearly load failed:', e); });
     loadAllPayHistory().catch(function(e){ console.warn('History load failed:', e); });
@@ -2417,14 +2430,19 @@ function populateForm(id){
     var el = document.getElementById('contractNumberStatus');
     if (!el) return;
     var st = (S.bdayStatus && S.bdayStatus[id]) || null;
-    if (!st || st.status === 'exact') { el.textContent = ''; el.style.color = ''; return; }
-    var msg = '', color = 'var(--orange)';
-    if (st.status === 'smart_check')        { msg = '⚠️ Перевірте збіг з реєстром: ' + st.matchedReg; }
-    else if (st.status === 'ambiguous')     { msg = '⚠️ В реєстрі знайдено кілька варіантів — перевірте: ' + st.matchedReg; }
+    if (!st || st.status === 'exact') { el.innerHTML = ''; el.style.color = ''; return; }
+    var msg = '', color = 'var(--orange)', clickable = false;
+    if (st.status === 'smart_check')        { msg = '⚠️ Перевірте збіг з реєстром: ' + st.matchedReg; clickable = true; }
+    else if (st.status === 'ambiguous')     { msg = '⚠️ В реєстрі знайдено кілька варіантів — перевірте: ' + st.matchedReg; clickable = true; }
     else if (st.status === 'school_no_contract') { msg = '📝 Шкільний договір ще не підписаний'; color = 'var(--gray)'; }
     else if (st.status === 'not_found')     { msg = '❌ Не знайдено в реєстрі — перевірте'; color = 'var(--red2)'; }
-    else if (st.status === 'name_mismatch') { msg = '⚠️ Імена не співпадають повністю — перевірте: ' + st.matchedReg; }
-    el.textContent = msg;
+    else if (st.status === 'name_mismatch') { msg = '⚠️ Імена не співпадають повністю — перевірте: ' + st.matchedReg; clickable = true; }
+    var url = clickable && S.registryUrls ? S.registryUrls[c.loc] : '';
+    if (url) {
+      el.innerHTML = '<a href="'+esc(url)+'" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">'+esc(msg)+'</a>';
+    } else {
+      el.textContent = msg;
+    }
     el.style.color = color;
   })();
   document.getElementById('fAdaptDate').value=c.adaptDate||'';
