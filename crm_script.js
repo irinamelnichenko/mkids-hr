@@ -195,6 +195,8 @@ function doPost(e) {
     else if (body.action === 'deleteHealthRecord')    result = deleteHealthRecord(body);
     else if (body.action === 'writeAbsenceToPayment')    result = writeAbsenceToPayment(body);
     else if (body.action === 'importAbsencesFromPayment') result = importAbsencesFromPayment(body.loc || '');
+    else if (body.action === 'confirmBdayMatch')          result = confirmBdayMatch(body.childId || '', body.confirmedBy || '');
+    else if (body.action === 'unconfirmBdayMatch')        result = unconfirmBdayMatch(body.childId || '');
     else result = {ok:false, error:'Unknown action'};
     return jsonOut(result);
   } catch(err) {
@@ -2511,7 +2513,27 @@ function syncBdayStatusSheet() {
     statusSheet = crmSS.insertSheet(BDAY_STATUS_SHEET);
     Logger.log('syncBdayStatusSheet: створено новий лист "' + BDAY_STATUS_SHEET + '"');
   }
-  var HEADER = ['ChildID','Name','Loc','Bday','ContractNumber','Status','MatchedRegName','UpdatedAt'];
+  var HEADER = ['ChildID','Name','Loc','Bday','ContractNumber','Status','MatchedRegName','UpdatedAt','ConfirmedBy','ConfirmedAt'];
+
+  // 0. Знімок confirmed-рядків — їх НЕ перезаписуємо
+  var confirmedById = {};
+  var existingLastRow = statusSheet.getLastRow();
+  if (existingLastRow >= 2) {
+    var existingHdr = statusSheet.getRange(1, 1, 1, statusSheet.getLastColumn()).getValues()[0];
+    var idIdx        = existingHdr.indexOf('ChildID');
+    var statusIdx    = existingHdr.indexOf('Status');
+    if (idIdx >= 0 && statusIdx >= 0) {
+      var existingData = statusSheet.getRange(2, 1, existingLastRow - 1, statusSheet.getLastColumn()).getValues();
+      for (var ei = 0; ei < existingData.length; ei++) {
+        var erow = existingData[ei];
+        if (String(erow[statusIdx]||'').trim() === 'confirmed') {
+          var eid = String(erow[idIdx]||'').trim();
+          if (eid) confirmedById[eid] = erow;
+        }
+      }
+    }
+    Logger.log('syncBdayStatusSheet: збережено ' + Object.keys(confirmedById).length + ' confirmed-рядків');
+  }
 
   // 1. Читаємо лист "Оплати" (read-only) — список дітей
   var paySheet = crmSS.getSheetByName(SHEET_PAYMENTS);
@@ -2588,7 +2610,7 @@ function syncBdayStatusSheet() {
   }).join(', '));
 
   // 3. Smart match для кожної дитини з Оплати
-  var stats = { exact: 0, smart_check: 0, ambiguous: 0, school_no_contract: 0, not_found: 0, name_mismatch: 0 };
+  var stats = { exact: 0, smart_check: 0, ambiguous: 0, school_no_contract: 0, not_found: 0, name_mismatch: 0, confirmed: 0 };
   var rowsOut = [];
   var nowStr = formatDate(new Date());
 
@@ -2657,8 +2679,17 @@ function syncBdayStatusSheet() {
       }
     }
 
+    if (confirmedById[id]) {
+      var preserved = confirmedById[id];
+      var padded = preserved.slice(0, HEADER.length);
+      while (padded.length < HEADER.length) padded.push('');
+      rowsOut.push(padded);
+      stats.confirmed = (stats.confirmed || 0) + 1;
+      continue;
+    }
+
     stats[status] = (stats[status] || 0) + 1;
-    rowsOut.push([id, name, loc, bdayOut, cnOut, status, matchedRegOut, nowStr]);
+    rowsOut.push([id, name, loc, bdayOut, cnOut, status, matchedRegOut, nowStr, '', '']);
   }
 
   // 4. Запис у sheet (clear + write)
@@ -2679,6 +2710,7 @@ function syncBdayStatusSheet() {
     school_no_contract: stats.school_no_contract || 0,
     not_found: stats.not_found || 0,
     name_mismatch: stats.name_mismatch || 0,
+    confirmed: stats.confirmed || 0,
     registriesScanned: registriesScanned,
     errors: errors
   };
@@ -2697,6 +2729,7 @@ function runSyncBdayStatus() {
       '⚠️ smart_check:        ' + r.smart_check + '\n' +
       '⚠️ ambiguous:          ' + r.ambiguous + '\n' +
       '⚠️ name_mismatch:      ' + r.name_mismatch + '\n' +
+      '✅ confirmed:          ' + r.confirmed + '\n' +
       '📝 school_no_contract: ' + r.school_no_contract + '\n' +
       '❌ not_found:          ' + r.not_found + '\n' +
       '─────────────────────\n' +
@@ -2708,6 +2741,73 @@ function runSyncBdayStatus() {
     Logger.log('UI alert недоступний. Звіт у логах.');
     Logger.log(summary);
   }
+}
+
+// Знаходить рядок у bday_sync_status за ChildID. Повертає {sheet, rowIndex, header}
+// або null якщо не знайдено. rowIndex — 1-based (для setValues).
+function _findBdayStatusRow(childId) {
+  if (!childId) return null;
+  var crmSS = getCRMSpreadsheet();
+  var sh = crmSS.getSheetByName(BDAY_STATUS_SHEET);
+  if (!sh) return null;
+  var lastRow = sh.getLastRow();
+  if (lastRow < 2) return null;
+  var lastCol = sh.getLastColumn();
+  var hdr = sh.getRange(1, 1, 1, lastCol).getValues()[0];
+  var idIdx = hdr.indexOf('ChildID');
+  if (idIdx < 0) return null;
+  var ids = sh.getRange(2, idIdx + 1, lastRow - 1, 1).getValues();
+  for (var i = 0; i < ids.length; i++) {
+    if (String(ids[i][0]||'').trim() === String(childId).trim()) {
+      return { sheet: sh, rowIndex: i + 2, header: hdr };
+    }
+  }
+  return null;
+}
+
+// Підтверджує збіг дитини з реєстром (статус → 'confirmed').
+function confirmBdayMatch(childId, confirmedBy) {
+  var loc = _findBdayStatusRow(childId);
+  if (!loc) return { ok: false, error: 'ChildID не знайдено в ' + BDAY_STATUS_SHEET };
+  var hdr = loc.header;
+  var statusIdx      = hdr.indexOf('Status');
+  var updatedAtIdx   = hdr.indexOf('UpdatedAt');
+  var confirmedByIdx = hdr.indexOf('ConfirmedBy');
+  var confirmedAtIdx = hdr.indexOf('ConfirmedAt');
+  if (statusIdx < 0 || confirmedByIdx < 0 || confirmedAtIdx < 0) {
+    return { ok: false, error: 'Немає колонок Status/ConfirmedBy/ConfirmedAt — потрібен повний sync' };
+  }
+  var nowStr = formatDate(new Date());
+  loc.sheet.getRange(loc.rowIndex, statusIdx + 1).setValue('confirmed');
+  loc.sheet.getRange(loc.rowIndex, confirmedByIdx + 1).setValue(String(confirmedBy || ''));
+  loc.sheet.getRange(loc.rowIndex, confirmedAtIdx + 1).setValue(nowStr);
+  if (updatedAtIdx >= 0) loc.sheet.getRange(loc.rowIndex, updatedAtIdx + 1).setValue(nowStr);
+  return { ok: true, status: 'confirmed', confirmedBy: confirmedBy, confirmedAt: nowStr };
+}
+
+// Скасовує підтвердження. Статус відновлюється з MatchedRegName:
+//   - "A | B" → ambiguous; інакше → smart_check (catch-all для smart_check/name_mismatch)
+//   - наступний повний sync уточнить статус.
+function unconfirmBdayMatch(childId) {
+  var loc = _findBdayStatusRow(childId);
+  if (!loc) return { ok: false, error: 'ChildID не знайдено в ' + BDAY_STATUS_SHEET };
+  var hdr = loc.header;
+  var statusIdx        = hdr.indexOf('Status');
+  var matchedRegIdx    = hdr.indexOf('MatchedRegName');
+  var updatedAtIdx     = hdr.indexOf('UpdatedAt');
+  var confirmedByIdx   = hdr.indexOf('ConfirmedBy');
+  var confirmedAtIdx   = hdr.indexOf('ConfirmedAt');
+  if (statusIdx < 0) return { ok: false, error: 'Немає колонки Status' };
+  var matchedReg = matchedRegIdx >= 0
+    ? String(loc.sheet.getRange(loc.rowIndex, matchedRegIdx + 1).getValue() || '').trim()
+    : '';
+  var newStatus = matchedReg.indexOf(' | ') >= 0 ? 'ambiguous' : 'smart_check';
+  var nowStr = formatDate(new Date());
+  loc.sheet.getRange(loc.rowIndex, statusIdx + 1).setValue(newStatus);
+  if (confirmedByIdx >= 0) loc.sheet.getRange(loc.rowIndex, confirmedByIdx + 1).setValue('');
+  if (confirmedAtIdx >= 0) loc.sheet.getRange(loc.rowIndex, confirmedAtIdx + 1).setValue('');
+  if (updatedAtIdx >= 0)   loc.sheet.getRange(loc.rowIndex, updatedAtIdx + 1).setValue(nowStr);
+  return { ok: true, status: newStatus };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

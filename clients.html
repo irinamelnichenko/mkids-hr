@@ -1229,7 +1229,7 @@ async function loadClients(force){
 
 async function loadBdayStatus(){
   try {
-    var vals = await sheetsRead('bday_sync_status', 'A1:H3000');
+    var vals = await sheetsRead('bday_sync_status', 'A1:J3000');
     var rows = rowsToObjects(vals).filter(function(r){ return r['ChildID']; });
     var map = {};
     rows.forEach(function(r){
@@ -1239,7 +1239,9 @@ async function loadBdayStatus(){
         bday: String(r['Bday']||'').trim(),
         contractNumber: String(r['ContractNumber']||'').trim(),
         status: String(r['Status']||'').trim(),
-        matchedReg: String(r['MatchedRegName']||'').trim()
+        matchedReg: String(r['MatchedRegName']||'').trim(),
+        confirmedBy: String(r['ConfirmedBy']||'').trim(),
+        confirmedAt: String(r['ConfirmedAt']||'').trim()
       };
     });
     S.bdayStatus = map;
@@ -2275,6 +2277,42 @@ async function triggerSyncBdayStatus(btn){
   }
 }
 
+function _currentUserLabel(){
+  if (!S.user) return 'unknown';
+  if (S.user.role === 'hr') return 'HR';
+  if (S.user.role === 'director') return 'Director ' + (S.user.loc || '');
+  if (S.user.role === 'nurse')    return 'Nurse '    + (S.user.loc || '');
+  return S.user.role || 'unknown';
+}
+
+async function confirmBdayMatchClick(id){
+  if (!id) return;
+  var by = _currentUserLabel();
+  var j = await apiPost({action:'confirmBdayMatch', childId:id, confirmedBy:by});
+  if (!j || !j.ok) { showFloatMsg('❌ Не вдалось підтвердити: ' + ((j&&j.error)||'')); return; }
+  S.bdayStatus = S.bdayStatus || {};
+  S.bdayStatus[id] = Object.assign({}, S.bdayStatus[id]||{}, {
+    status: 'confirmed', confirmedBy: by, confirmedAt: j.confirmedAt || ''
+  });
+  showFloatMsg('✅ Підтверджено');
+  if (S.editId === id) populateForm(id);
+  renderView();
+}
+
+async function unconfirmBdayMatchClick(id){
+  if (!id) return;
+  if (!confirm('Скасувати підтвердження збігу?')) return;
+  var j = await apiPost({action:'unconfirmBdayMatch', childId:id});
+  if (!j || !j.ok) { showFloatMsg('❌ Не вдалось скасувати: ' + ((j&&j.error)||'')); return; }
+  S.bdayStatus = S.bdayStatus || {};
+  S.bdayStatus[id] = Object.assign({}, S.bdayStatus[id]||{}, {
+    status: j.status || 'smart_check', confirmedBy: '', confirmedAt: ''
+  });
+  showFloatMsg('↶ Скасовано');
+  if (S.editId === id) populateForm(id);
+  renderView();
+}
+
 async function triggerAggregate(){
   document.getElementById('sMsg').innerHTML='<span style="color:var(--orange)">▶️ Збираємо дані…</span>';
   try{
@@ -2431,6 +2469,16 @@ function populateForm(id){
     if (!el) return;
     var st = (S.bdayStatus && S.bdayStatus[id]) || null;
     if (!st || st.status === 'exact') { el.innerHTML = ''; el.style.color = ''; return; }
+    var idJs = String(id).replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+    if (st.status === 'confirmed') {
+      var byTxt = st.confirmedBy ? ' (' + esc(st.confirmedBy) + ')' : '';
+      el.innerHTML = '<span>✅ Підтверджено'+byTxt+'</span>'
+        + ' <button type="button" title="Скасувати підтвердження" '
+        + 'onclick="unconfirmBdayMatchClick(\''+idJs+'\')" '
+        + 'style="background:none;border:none;cursor:pointer;color:var(--gray);font-size:13px;padding:0 4px">↶</button>';
+      el.style.color = 'var(--green)';
+      return;
+    }
     var msg = '', color = 'var(--orange)', clickable = false;
     if (st.status === 'smart_check')        { msg = '⚠️ Перевірте збіг з реєстром: ' + st.matchedReg; clickable = true; }
     else if (st.status === 'ambiguous')     { msg = '⚠️ В реєстрі знайдено кілька варіантів — перевірте: ' + st.matchedReg; clickable = true; }
@@ -2438,11 +2486,15 @@ function populateForm(id){
     else if (st.status === 'not_found')     { msg = '❌ Не знайдено в реєстрі — перевірте'; color = 'var(--red2)'; }
     else if (st.status === 'name_mismatch') { msg = '⚠️ Імена не співпадають повністю — перевірте: ' + st.matchedReg; clickable = true; }
     var url = clickable && S.registryUrls ? S.registryUrls[c.loc] : '';
-    if (url) {
-      el.innerHTML = '<a href="'+esc(url)+'" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">'+esc(msg)+'</a>';
-    } else {
-      el.textContent = msg;
-    }
+    var msgHtml = url
+      ? '<a href="'+esc(url)+'" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">'+esc(msg)+'</a>'
+      : esc(msg);
+    var btnHtml = clickable
+      ? ' <button type="button" title="Підтвердити збіг" '
+        + 'onclick="confirmBdayMatchClick(\''+idJs+'\')" '
+        + 'style="background:none;border:1px solid var(--green);border-radius:4px;cursor:pointer;color:var(--green);font-size:11px;padding:1px 6px;margin-left:6px">✅ Підтвердити</button>'
+      : '';
+    el.innerHTML = msgHtml + btnHtml;
     el.style.color = color;
   })();
   document.getElementById('fAdaptDate').value=c.adaptDate||'';
