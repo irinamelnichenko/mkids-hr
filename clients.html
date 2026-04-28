@@ -777,6 +777,7 @@ var S = {
   groups:   {},
   crm:      {},
   bdayStatus: {},
+  bdayStatusUpdatedAt: '',
   // allPayRows: всі рядки з усіх місяців для історії
   allPayRows: [],
   // Річні дані
@@ -1241,7 +1242,8 @@ async function loadBdayStatus(){
       };
     });
     S.bdayStatus = map;
-    console.log('[loadBdayStatus] loaded', rows.length, 'rows');
+    S.bdayStatusUpdatedAt = rows.length > 0 ? String(rows[0]['UpdatedAt']||'').trim() : '';
+    console.log('[loadBdayStatus] loaded', rows.length, 'rows, updatedAt=', S.bdayStatusUpdatedAt);
   } catch(e) {
     console.warn('[loadBdayStatus] failed:', e);
     S.bdayStatus = S.bdayStatus || {};
@@ -1842,6 +1844,12 @@ function renderClients(){
     +(isHR()?'<select class="flt-sel" onchange="S.listLoc=this.value;renderClients()">'+listLocOpts+'</select>':'')
     +'<select class="flt-sel" data-sensitive="finance" onchange="S.selStatus=this.value;renderClients()"><option value="">Всі статуси</option><option value="paid"'+(S.selStatus==='paid'?' selected':'')+'>✅ Оплачено</option><option value="debt"'+(S.selStatus==='debt'?' selected':'')+'>❌ Борг</option><option value="over"'+(S.selStatus==='over'?' selected':'')+'>💰 Переплата</option></select>'
     +'<button type="button" data-sensitive="finance" class="att-chip'+(S.onlyDebtors?' att-chip-active':'')+'" style="'+(S.onlyDebtors?'background:var(--red2);border-color:var(--red2)':'')+'" onclick="toggleOnlyDebtors()">👁 Тільки боржники</button>'
+    +(isHR()
+      ? '<button id="btnSyncBday" class="btn btn-secondary btn-sm" onclick="triggerSyncBdayStatus(this)">🔄 Синхронізувати з реєстром</button>'
+        +(S.bdayStatusUpdatedAt
+          ? '<span style="font-size:11px;color:var(--gray);align-self:center">Останнє: '+esc(S.bdayStatusUpdatedAt)+'</span>'
+          : '')
+      : '')
     +'<button class="btn btn-primary btn-sm" onclick="openNewChild()" style="margin-left:auto;white-space:nowrap">➕ Додати дитину</button>'
     +'</div></div></div>'
     // ── 2. stat cards ─────────────────────────────────────────────────────
@@ -2230,6 +2238,27 @@ async function testConn(){
   }catch(e){
     document.getElementById('sMsg').innerHTML='<span style="color:var(--red2)">❌ '+esc(e.message)+'</span>';
     setSyncStatus('err');
+  }
+}
+
+async function triggerSyncBdayStatus(btn){
+  var origText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '⏳ Синхронізую...';
+  try {
+    var j = await apiGet('runSyncBdayStatus');
+    if (!j.ok) throw new Error(j.error || 'sync failed');
+    await loadBdayStatus();
+    var matched = (j.exact||0) + (j.smart_check||0) + (j.ambiguous||0) + (j.name_mismatch||0);
+    var total = j.total || 0;
+    showFloatMsg('✅ Синхронізовано: ' + matched + ' з ' + total);
+    renderView();
+  } catch(e) {
+    console.error('triggerSyncBdayStatus failed:', e);
+    showFloatMsg('❌ Помилка: ' + (e.message || e));
+  } finally {
+    btn.disabled = false;
+    btn.textContent = origText;
   }
 }
 
