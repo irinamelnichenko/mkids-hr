@@ -1053,11 +1053,11 @@ function _findContractNumberInStatus(id){
 function getCRMCard(id){
   if(!S.crm[id]){
     var cdFromPay=_findContractDateInGroups(id);
-    var bdFromPay=_findBdayInGroups(id);
+    var bdFromAny=_findBdayInGroups(id);          // пріоритезує bday_sync_status
     var cnFromStatus=_findContractNumberInStatus(id);
-    console.log('getCRMCard NEW:', id, '| cdFromPay=', cdFromPay, '| bdFromPay=', bdFromPay, '| cnFromStatus=', cnFromStatus);
+    console.log('getCRMCard NEW:', id, '| cdFromPay=', cdFromPay, '| bdFromAny=', bdFromAny, '| cnFromStatus=', cnFromStatus);
     S.crm[id]={
-      name:'',loc:'',group:'',teacher:'',bday:bdFromPay,
+      name:'',loc:'',group:'',teacher:'',bday:bdFromAny,
       momName:'',momPhone:'',dadName:'',dadPhone:'',
       contractDate:cdFromPay,contractType:'standard',monthlyFee:0,
       entryFee:0,entryFeeSchedule:[],
@@ -1068,7 +1068,7 @@ function getCRMCard(id){
       createdAt:today(),updatedAt:today()
     };
   }
-  // Якщо запис є, але contractDate порожній — підтягуємо з payments
+  // contractDate — fallback з payments коли порожньо (стара логіка, без змін)
   if(!S.crm[id].contractDate){
     var cdFromPay2=_findContractDateInGroups(id);
     if(cdFromPay2){
@@ -1076,21 +1076,17 @@ function getCRMCard(id){
       S.crm[id].contractDate=cdFromPay2;
     }
   }
-  // Якщо запис є, але bday порожній — підтягуємо з payments
-  if(!S.crm[id].bday){
-    var bdFromPay2=_findBdayInGroups(id);
-    if(bdFromPay2){
-      console.log('getCRMCard PATCH:', id, '| filling bday=', bdFromPay2);
-      S.crm[id].bday=bdFromPay2;
-    }
+  // bday — ПРІОРИТЕТ bday_sync_status: override існуюче (потенційно сміттєве з CRM Клієнти)
+  var bdFromAny2=_findBdayInGroups(id);
+  if(bdFromAny2 && bdFromAny2!==S.crm[id].bday){
+    console.log('getCRMCard OVERRIDE bday:', id, '| was=', S.crm[id].bday, '| now=', bdFromAny2);
+    S.crm[id].bday=bdFromAny2;
   }
-  // Якщо запис є, але contractNumber порожній — підтягуємо з bday_sync_status
-  if(!S.crm[id].contractNumber){
-    var cnFromStatus2=_findContractNumberInStatus(id);
-    if(cnFromStatus2){
-      console.log('getCRMCard PATCH:', id, '| filling contractNumber=', cnFromStatus2);
-      S.crm[id].contractNumber=cnFromStatus2;
-    }
+  // contractNumber — ПРІОРИТЕТ bday_sync_status: маскує сміття з CRM Клієнти (timestamp/дати)
+  var cnFromStatus2=_findContractNumberInStatus(id);
+  if(cnFromStatus2 && cnFromStatus2!==S.crm[id].contractNumber){
+    console.log('getCRMCard OVERRIDE contractNumber:', id, '| was=', S.crm[id].contractNumber, '| now=', cnFromStatus2);
+    S.crm[id].contractNumber=cnFromStatus2;
   }
   return S.crm[id];
 }
