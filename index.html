@@ -505,6 +505,12 @@ const CFG = {
 function getScriptUrl(){return localStorage.getItem(CFG.SCRIPT_URL_KEY)||'';}
 function setScriptUrl(url){localStorage.setItem(CFG.SCRIPT_URL_KEY,url.trim());}
 
+// Та сама формула, що clients.html:childId і crm_script.js:_childId — щоб
+// згенерований id збігся з ChildID в bday_sync_status коли в Клієнти ID порожнє.
+function _childId(name, group, loc){
+  return 'c_'+((name||'').trim().slice(0,20))+'_'+((group||'').slice(0,8))+'_'+((loc||'').slice(0,8));
+}
+
 const S = {
   user: null, emps: [], recs: {},
   view: 'dashboard', empId: null,
@@ -574,7 +580,7 @@ function freezeEmps(){
   }
 }
 
-const CRM_BDAY_CACHE_KEY = 'crm_clients_bday_cache';
+const CRM_BDAY_CACHE_KEY = 'crm_clients_bday_cache_v2';
 const CRM_BDAY_TTL = 3600 * 1000; // 1 година
 async function ensureClientsLoaded(){
   if (S.crm && Object.keys(S.crm).length) return;
@@ -598,13 +604,16 @@ async function ensureClientsLoaded(){
     const crm = {};
     for (let i=1; i<rows.length; i++) {
       const row = rows[i];
-      const id = row[idI];
-      if (!id) continue;
+      const name = row[nameI] || '';
+      const loc = row[locI] || '';
+      const group = row[groupI] || '';
+      if (!name && !loc) continue;
+      const id = row[idI] || _childId(name, group, loc);
       crm[id] = {
         id: id,
-        name: row[nameI] || '',
-        loc: row[locI] || '',
-        group: row[groupI] || '',
+        name: name,
+        loc: loc,
+        group: group,
         bday: row[bdayI] || ''
       };
     }
@@ -2057,7 +2066,8 @@ async function renderBdays(){
   const visibleClients=isHR()?allClients:allClients.filter(c=>c.loc===S.user.loc);
   const childBdays=visibleClients.map(c=>{
     if(!c.name) return null;
-    const bdayFromStatus=S.bdayStatus && S.bdayStatus[c.id] && S.bdayStatus[c.id].bday;
+    const lookupId=c.id || _childId(c.name, c.group, c.loc);
+    const bdayFromStatus=S.bdayStatus && S.bdayStatus[lookupId] && S.bdayStatus[lookupId].bday;
     const bdayUse=bdayFromStatus || c.bday;
     if(!bdayUse) return null;
     const bd=parseChildBday(bdayUse); if(!bd) return null;
