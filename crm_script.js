@@ -2567,6 +2567,7 @@ function syncBdayStatusSheet() {
       var sh = ss.getSheetByName(reg.listName) || ss.getSheets()[0];
       if (!sh) { errors.push(reg.location + ': лист не знайдено'); continue; }
       var rData = sh.getDataRange().getValues();
+      var rDataDisplay = sh.getDataRange().getDisplayValues();
       if (rData.length < 2) continue;
       var rHdr = rData[0];
       var rChildCol = -1, rBdayCol = -1, rCnCol = -1;
@@ -2591,7 +2592,7 @@ function syncBdayStatusSheet() {
         var normSurname = parts[0];
         var normFirstName = parts.slice(1).join(' ');
         var bday = rBdayCol >= 0 ? (parseRegistryBday(rData[dr][rBdayCol]) || '') : '';
-        var cn = rCnCol >= 0 ? String(rData[dr][rCnCol] || '').trim() : '';
+        var cn = rCnCol >= 0 ? String(rDataDisplay[dr][rCnCol] || '').trim() : '';
         candidatesByLoc[reg.location].push({
           fullName: fullName,
           normName: normName,
@@ -2696,6 +2697,7 @@ function syncBdayStatusSheet() {
   statusSheet.clearContents();
   statusSheet.getRange(1, 1, 1, HEADER.length).setValues([HEADER]);
   statusSheet.setFrozenRows(1);
+  statusSheet.getRange(2, 5, Math.max(rowsOut.length, 1), 1).setNumberFormat('@');
   if (rowsOut.length > 0) {
     statusSheet.getRange(2, 1, rowsOut.length, HEADER.length).setValues(rowsOut);
   }
