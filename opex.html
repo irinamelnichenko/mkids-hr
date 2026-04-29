@@ -97,6 +97,40 @@ select{font-family:inherit}
 .err{background:#fdf2f2;border:1px solid #fca5a5;color:var(--red);
   padding:14px 18px;border-radius:var(--r);margin-bottom:18px;font-weight:600}
 
+/* ── CLICKABLE CATEGORY ROW ───────────────── */
+.tbl tbody tr.clickable{cursor:pointer}
+.tbl tbody tr.clickable:hover{box-shadow:inset 0 0 0 1px #cbd5e0;background:#f4f7fa}
+.tbl tbody tr.clickable.row-over:hover{background:#fde2e2}
+
+/* ── MODAL ────────────────────────────────── */
+.modal-ovl{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:100;
+  display:flex;align-items:center;justify-content:center;padding:20px}
+.modal-card{background:#fff;border-radius:var(--r);box-shadow:0 12px 40px rgba(0,0,0,.25);
+  max-width:800px;width:100%;max-height:90vh;display:flex;flex-direction:column;overflow:hidden}
+.modal-hd{padding:14px 20px;border-bottom:1px solid #e8ecf0;
+  display:flex;align-items:center;justify-content:space-between;gap:10px}
+.modal-hd h2{font-size:16px;font-weight:800;color:var(--dark);flex:1;min-width:0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.modal-x{background:none;border:none;font-size:22px;color:var(--gray);
+  cursor:pointer;line-height:1;padding:4px 10px;border-radius:6px}
+.modal-x:hover{background:#f0f4f8;color:var(--dark)}
+.modal-bd{padding:16px 20px;overflow-y:auto;flex:1}
+.modal-chart-wrap{height:280px;margin-bottom:18px;position:relative}
+.modal-sum{margin-top:18px;display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
+.sum-card{border-radius:8px;padding:11px 13px;border:1px solid #e8ecf0;background:#f8fafc}
+.sum-card.ok  {border-color:#9ae6b4;background:#f0fff4}
+.sum-card.warn{border-color:#fbd38d;background:#fffaf0}
+.sum-card.over{border-color:#fca5a5;background:#fef5f5}
+.sum-lbl{font-size:11px;font-weight:700;color:var(--gray);text-transform:uppercase;letter-spacing:.5px;
+  display:flex;justify-content:space-between;align-items:center;gap:8px}
+.sum-pct{font-size:12px;font-weight:800;color:var(--dark2)}
+.sum-card.ok   .sum-pct{color:var(--green)}
+.sum-card.warn .sum-pct{color:#b7791f}
+.sum-card.over .sum-pct{color:var(--red)}
+.sum-val{font-size:14px;font-weight:700;color:var(--dark);margin-top:5px;font-variant-numeric:tabular-nums}
+.sum-extra{font-size:12px;margin-top:3px;font-variant-numeric:tabular-nums}
+
 /* ── RESPONSIVE ───────────────────────────── */
 @media (max-width:640px){
   .wrap{padding:16px 12px 40px}
@@ -104,6 +138,11 @@ select{font-family:inherit}
   .kpi-val{font-size:22px}
   .tbl thead th,.tbl tbody td{padding:9px 10px;font-size:13px}
   .chart-wrap{height:280px}
+  .modal-ovl{padding:8px}
+  .modal-card{max-height:95vh}
+  .modal-bd{padding:12px}
+  .modal-chart-wrap{height:220px}
+  .modal-hd h2{font-size:14px}
 }
 </style>
 </head>
@@ -116,6 +155,7 @@ select{font-family:inherit}
       <div class="hd-meta" id="meta">завантаження…</div>
     </div>
     <div class="hd-ctrl">
+      <select id="periodSel" class="month-sel"></select>
       <select id="monthSel" class="month-sel"></select>
       <button id="refreshBtn" class="btn btn-primary">🔄 Оновити</button>
     </div>
@@ -131,7 +171,7 @@ select{font-family:inherit}
 
     <div class="kpis">
       <div id="kpiBudget" class="kpi">
-        <div class="kpi-lbl">Бюджет на місяць</div>
+        <div class="kpi-lbl" id="kpiBudgetLbl">Бюджет на місяць</div>
         <div class="kpi-val" id="kpiBudgetVal">—</div>
         <div class="kpi-sub" id="kpiBudgetSub">&nbsp;</div>
       </div>
@@ -141,9 +181,14 @@ select{font-family:inherit}
         <div class="kpi-sub" id="kpiSpentSub">&nbsp;</div>
       </div>
       <div id="kpiLeft" class="kpi">
-        <div class="kpi-lbl">Залишок</div>
+        <div class="kpi-lbl" id="kpiLeftLbl">Залишок</div>
         <div class="kpi-val" id="kpiLeftVal">—</div>
         <div class="kpi-sub" id="kpiLeftSub">&nbsp;</div>
+      </div>
+      <div id="kpiFc" class="kpi hidden">
+        <div class="kpi-lbl">Прогноз на рік</div>
+        <div class="kpi-val" id="kpiFcVal">—</div>
+        <div class="kpi-sub" id="kpiFcSub">&nbsp;</div>
       </div>
     </div>
 
@@ -183,6 +228,31 @@ select{font-family:inherit}
   </div>
 </div>
 
+<div id="catModal" class="modal-ovl hidden">
+  <div class="modal-card">
+    <div class="modal-hd">
+      <h2 id="catModalTitle">💰</h2>
+      <button class="modal-x" id="catModalClose" aria-label="Закрити">✕</button>
+    </div>
+    <div class="modal-bd">
+      <div class="modal-chart-wrap"><canvas id="catChart"></canvas></div>
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>Місяць</th>
+            <th class="num">Факт</th>
+            <th class="num">Бюджет</th>
+            <th class="num">Різниця</th>
+            <th class="num">%</th>
+          </tr>
+        </thead>
+        <tbody id="catTblBody"></tbody>
+      </table>
+      <div class="modal-sum" id="catSum"></div>
+    </div>
+  </div>
+</div>
+
 <script>
 'use strict';
 
@@ -198,8 +268,11 @@ var CFG = {
 
 var S = {
   data: null,
-  month: new Date().getMonth() + 1,
-  chart: null
+  month:   new Date().getMonth() + 1,
+  quarter: Math.ceil((new Date().getMonth() + 1) / 3),
+  period: 'month',
+  chart: null,
+  catChart: null
 };
 
 // ── HELPERS ─────────────────────────────────
@@ -261,15 +334,25 @@ async function fetchData(force){
 }
 
 // ── RENDER ──────────────────────────────────
-function renderMonthSel(){
+function populateSubSel(){
   var sel = $('monthSel');
   sel.innerHTML = '';
-  for (var i = 1; i <= 12; i++){
-    var o = document.createElement('option');
-    o.value = i;
-    o.textContent = CFG.MONTHS_DISP[i-1];
-    if (i === S.month) o.selected = true;
-    sel.appendChild(o);
+  if (S.period === 'month'){
+    for (var i = 1; i <= 12; i++){
+      var o = document.createElement('option');
+      o.value = i;
+      o.textContent = CFG.MONTHS_DISP[i-1];
+      if (i === S.month) o.selected = true;
+      sel.appendChild(o);
+    }
+  } else if (S.period === 'quarter'){
+    for (var q = 1; q <= 4; q++){
+      var oq = document.createElement('option');
+      oq.value = q;
+      oq.textContent = 'Q' + q + ' ' + CFG.YEAR;
+      if (q === S.quarter) oq.selected = true;
+      sel.appendChild(oq);
+    }
   }
 }
 
@@ -281,15 +364,56 @@ function getMonthValues(cat, m){
   };
 }
 
-function rowsForMonth(cats, m){
+function monthsLivedInYear(){
+  var now = new Date();
+  if (CFG.YEAR > now.getFullYear()) return 0;
+  if (CFG.YEAR < now.getFullYear()) return 12;
+  return now.getMonth() + 1;
+}
+
+function activePeriodMonths(){
+  if (S.period === 'month')   return [S.month];
+  if (S.period === 'quarter'){
+    var q = S.quarter;
+    return [(q-1)*3 + 1, (q-1)*3 + 2, (q-1)*3 + 3];
+  }
+  if (S.period === 'year')    return [1,2,3,4,5,6,7,8,9,10,11,12];
+  if (S.period === 'ytd'){
+    var lived = monthsLivedInYear();
+    var arr = [];
+    for (var i = 1; i <= lived; i++) arr.push(i);
+    return arr;
+  }
+  return [S.month];
+}
+
+function periodLabel(){
+  var Y = CFG.YEAR;
+  if (S.period === 'month')   return CFG.MONTHS_DISP[S.month - 1] + ' ' + Y;
+  if (S.period === 'quarter') return 'Q' + S.quarter + ' ' + Y;
+  if (S.period === 'year')    return 'Рік ' + Y;
+  if (S.period === 'ytd'){
+    var lived = monthsLivedInYear();
+    var endM = lived > 0 ? lived : (new Date().getMonth() + 1);
+    return 'YTD до ' + CFG.MONTHS_DISP[endM - 1] + ' ' + Y;
+  }
+  return '';
+}
+
+function rowsForPeriod(cats, monthsArr){
   return cats.map(function(c){
-    var v = getMonthValues(c, m);
-    var p = pct(v.fact, v.budget);
+    var fact = 0, budget = 0;
+    monthsArr.forEach(function(m){
+      var v = getMonthValues(c, m);
+      fact   += v.fact;
+      budget += v.budget;
+    });
+    var p = pct(fact, budget);
     return {
       name: c.name,
-      fact: v.fact,
-      budget: v.budget,
-      diff: v.budget - v.fact,
+      fact: fact,
+      budget: budget,
+      diff: budget - fact,
       pct: p,
       over: p !== null && p > 100
     };
@@ -342,14 +466,75 @@ function renderKpis(rows){
   }
 }
 
+function renderYearKpis(cats){
+  var lived = monthsLivedInYear();
+  var ytdMonths = [];
+  for (var i = 1; i <= lived; i++) ytdMonths.push(i);
+
+  var factYTD = 0, budgetYTD = 0, budgetYear = 0;
+  cats.forEach(function(c){
+    for (var m = 1; m <= 12; m++){
+      var v = getMonthValues(c, m);
+      budgetYear += v.budget;
+      if (m <= lived){
+        factYTD   += v.fact;
+        budgetYTD += v.budget;
+      }
+    }
+  });
+
+  var leftYTD  = budgetYTD - factYTD;
+  var spentPct = budgetYTD > 0 ? (factYTD / budgetYTD) * 100 : null;
+
+  $('kpiBudgetVal').textContent = fmtUah(budgetYTD) + ' ₴';
+  $('kpiBudgetSub').textContent = lived + ' міс. прожито';
+
+  $('kpiSpentVal').textContent = fmtUah(factYTD) + ' ₴';
+  $('kpiSpentSub').textContent = spentPct !== null ? spentPct.toFixed(1) + '% YTD бюджету' : ' ';
+
+  var kpiLeft = $('kpiLeft');
+  kpiLeft.classList.remove('ok','over');
+  $('kpiLeftVal').textContent = (leftYTD < 0 ? '-' : '') + fmtUah(Math.abs(leftYTD)) + ' ₴';
+  if (budgetYTD > 0){
+    if (leftYTD < 0){ kpiLeft.classList.add('over'); $('kpiLeftSub').textContent = 'перевищення'; }
+    else { kpiLeft.classList.add('ok'); $('kpiLeftSub').textContent = 'у межах'; }
+  } else {
+    $('kpiLeftSub').textContent = ' ';
+  }
+
+  var forecastYear = lived > 0 ? (factYTD / lived) * 12 : 0;
+  var diff  = forecastYear - budgetYear;
+  var fcPct = budgetYear > 0 ? (forecastYear / budgetYear) * 100 : null;
+
+  var kpiFc = $('kpiFc');
+  kpiFc.classList.remove('ok','over');
+  $('kpiFcVal').textContent = fmtUah(forecastYear) + ' ₴';
+  if (budgetYear > 0 && lived > 0){
+    var sub;
+    if (forecastYear > budgetYear){
+      kpiFc.classList.add('over');
+      sub = '+' + fmtUah(diff) + ' ₴ перевитрата';
+    } else {
+      kpiFc.classList.add('ok');
+      sub = '-' + fmtUah(Math.abs(diff)) + ' ₴ економія';
+    }
+    if (fcPct !== null) sub = sub + ' · ' + fcPct.toFixed(0) + '% бюджету';
+    $('kpiFcSub').textContent = sub;
+  } else {
+    $('kpiFcSub').textContent = ' ';
+  }
+}
+
 function renderTable(rows){
-  $('tblMonth').textContent = '— ' + CFG.MONTHS_DISP[S.month - 1];
+  $('tblMonth').textContent = '— ' + periodLabel();
   var body = $('tblBody');
   body.innerHTML = '';
 
   rows.forEach(function(r){
     var tr = document.createElement('tr');
-    if (r.over) tr.className = 'row-over';
+    tr.classList.add('clickable');
+    if (r.over) tr.classList.add('row-over');
+    tr.addEventListener('click', function(){ openCategoryModal(r.name); });
 
     var cls, badge;
     if (r.pct === null){ cls = 'b-none'; badge = '—'; }
@@ -396,7 +581,9 @@ function renderTable(rows){
   body.appendChild(totRow);
 }
 
-function renderChart(cats){
+function renderChart(cats, activeMonths){
+  var activeSet = {};
+  (activeMonths || []).forEach(function(m){ activeSet[m] = true; });
   var labels = CFG.MONTHS_SHORT.slice();
   var budget = [], fact = [], factColors = [];
   for (var m = 1; m <= 12; m++){
@@ -408,9 +595,9 @@ function renderChart(cats){
     budget.push(sumB);
     fact.push(sumF);
     var over = sumB > 0 && sumF > sumB;
-    var active = m === S.month;
+    var active = !!activeSet[m];
     var color = over ? '#e74c3c' : '#27ae60';
-    factColors.push(active ? color : color + 'BB');
+    factColors.push(active ? color : color + '55');
   }
 
   var ctx = $('chart').getContext('2d');
@@ -453,14 +640,198 @@ function escapeHtml(s){
   });
 }
 
-// ── ORCHESTRATION ───────────────────────────
-function rerenderForMonth(){
+// ── CATEGORY MODAL ──────────────────────────
+function openCategoryModal(name){
   if (!S.data) return;
-  var rows = rowsForMonth(S.data.categories, S.month);
+  var cat = S.data.categories.find(function(c){ return c.name === name; });
+  if (!cat) return;
+  var loc = (S.data.loc) ? S.data.loc : CFG.LOC;
+  $('catModalTitle').textContent = '💰 ' + name + ' — ' + loc + ' ' + CFG.YEAR;
+  renderCategoryChart(cat);
+  renderCategoryTable(cat);
+  renderCategorySummary(cat);
+  $('catModal').classList.remove('hidden');
+}
+
+function closeCategoryModal(){
+  $('catModal').classList.add('hidden');
+  if (S.catChart){ S.catChart.destroy(); S.catChart = null; }
+}
+
+function renderCategoryChart(cat){
+  var labels = CFG.MONTHS_SHORT.slice();
+  var budget = [], fact = [], factColors = [];
+  for (var m = 1; m <= 12; m++){
+    var v = getMonthValues(cat, m);
+    budget.push(v.budget);
+    fact.push(v.fact);
+    var over = v.budget > 0 && v.fact > v.budget;
+    factColors.push(over ? '#e74c3c' : '#27ae60');
+  }
+  var ctx = $('catChart').getContext('2d');
+  if (S.catChart) S.catChart.destroy();
+  S.catChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: labels,
+      datasets: [
+        { label: 'Бюджет', data: budget, backgroundColor: '#cbd5e0', borderRadius: 4 },
+        { label: 'Факт',   data: fact,   backgroundColor: factColors, borderRadius: 4 }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { position: 'bottom', labels: { font: { size: 12 } } },
+        tooltip: {
+          callbacks: {
+            label: function(c){ return c.dataset.label + ': ' + fmtUah(c.parsed.y) + ' ₴'; }
+          }
+        }
+      },
+      scales: {
+        y: { beginAtZero: true,
+             ticks: { callback: function(v){ return fmtUah(v); }, font: { size: 11 } },
+             grid: { color: '#eef2f6' } },
+        x: { grid: { display: false }, ticks: { font: { size: 11 } } }
+      }
+    }
+  });
+}
+
+function renderCategoryTable(cat){
+  var body = $('catTblBody');
+  body.innerHTML = '';
+  for (var m = 1; m <= 12; m++){
+    var v = getMonthValues(cat, m);
+    var p = pct(v.fact, v.budget);
+    var diff = v.budget - v.fact;
+    var isEmpty = (v.fact === 0 && v.budget === 0);
+
+    var cls, badge;
+    if (isEmpty || p === null){ cls = 'b-none'; badge = '—'; }
+    else if (p > 100){ cls = 'b-bad';  badge = p.toFixed(0) + '%'; }
+    else if (p >= 95){ cls = 'b-warn'; badge = p.toFixed(0) + '%'; }
+    else             { cls = 'b-ok';   badge = p.toFixed(0) + '%'; }
+
+    var diffCls, diffTxt;
+    if (v.budget === 0){ diffCls = 'muted'; diffTxt = '—'; }
+    else if (diff > 0){ diffCls = 'diff-pos'; diffTxt = '+' + fmtUah(diff); }
+    else if (diff < 0){ diffCls = 'diff-neg'; diffTxt = fmtUah(diff); }
+    else              { diffCls = 'diff-zero'; diffTxt = '0'; }
+
+    var tr = document.createElement('tr');
+    if (p !== null && p > 100) tr.classList.add('row-over');
+    tr.innerHTML =
+      '<td class="cat-name">' + escapeHtml(CFG.MONTHS_DISP[m-1]) + '</td>' +
+      '<td class="num">' + fmtUah(v.fact) + '</td>' +
+      '<td class="num">' + (v.budget > 0 ? fmtUah(v.budget) : '<span class="muted">—</span>') + '</td>' +
+      '<td class="num ' + diffCls + '">' + diffTxt + '</td>' +
+      '<td class="num"><span class="badge ' + cls + '">' + badge + '</span></td>';
+    body.appendChild(tr);
+  }
+}
+
+function _aggMonths(cat, monthsArr){
+  var fact = 0, budget = 0;
+  monthsArr.forEach(function(m){
+    var v = getMonthValues(cat, m);
+    fact += v.fact; budget += v.budget;
+  });
+  return { fact: fact, budget: budget, diff: budget - fact, pct: pct(fact, budget) };
+}
+
+function renderCategorySummary(cat){
+  var sets = [
+    { lbl: 'Рік', months: [1,2,3,4,5,6,7,8,9,10,11,12] },
+    { lbl: 'Q1',  months: [1,2,3] },
+    { lbl: 'Q2',  months: [4,5,6] },
+    { lbl: 'Q3',  months: [7,8,9] },
+    { lbl: 'Q4',  months: [10,11,12] }
+  ];
+  var lived = monthsLivedInYear();
+  if (lived > 0){
+    var ytdMonths = [];
+    for (var i = 1; i <= lived; i++) ytdMonths.push(i);
+    sets.push({ lbl: 'YTD (' + lived + ' міс.)', months: ytdMonths });
+  }
+
+  var html = '';
+  sets.forEach(function(s){
+    var a = _aggMonths(cat, s.months);
+    var statusCls = '';
+    if (a.pct !== null){
+      if (a.pct > 100) statusCls = 'over';
+      else if (a.pct >= 95) statusCls = 'warn';
+      else statusCls = 'ok';
+    }
+    var pctTxt = a.pct === null ? '—' : a.pct.toFixed(0) + '%';
+
+    var diffHtml = '';
+    if (a.budget > 0){
+      if (a.diff > 0){
+        diffHtml = '<div class="sum-extra diff-pos">+' + fmtUah(a.diff) + ' ₴</div>';
+      } else if (a.diff < 0){
+        diffHtml = '<div class="sum-extra diff-neg">' + fmtUah(a.diff) + ' ₴</div>';
+      } else {
+        diffHtml = '<div class="sum-extra diff-zero">0 ₴</div>';
+      }
+    }
+
+    html += '<div class="sum-card ' + statusCls + '">' +
+      '<div class="sum-lbl"><span>' + escapeHtml(s.lbl) + '</span><span class="sum-pct">' + pctTxt + '</span></div>' +
+      '<div class="sum-val">' + fmtUah(a.fact) + ' / ' + fmtUah(a.budget) + ' ₴</div>' +
+      diffHtml +
+      '</div>';
+  });
+  $('catSum').innerHTML = html;
+}
+
+// ── ORCHESTRATION ───────────────────────────
+function updateTitle(){
+  var loc = (S.data && S.data.loc) ? S.data.loc : CFG.LOC;
+  $('title').textContent = '💰 Бюджет — ' + loc + ' · ' + periodLabel();
+}
+
+function updateKpiLabel(){
+  var lbl = $('kpiBudgetLbl');
+  if (!lbl) return;
+  if (S.period === 'month')        lbl.textContent = 'Бюджет на місяць';
+  else if (S.period === 'quarter') lbl.textContent = 'Бюджет на квартал';
+  else if (S.period === 'year')    lbl.textContent = 'Бюджет YTD';
+  else if (S.period === 'ytd')     lbl.textContent = 'Бюджет YTD';
+
+  var leftLbl = $('kpiLeftLbl');
+  if (leftLbl){
+    leftLbl.textContent = (S.period === 'year' || S.period === 'ytd') ? 'Залишок YTD' : 'Залишок';
+  }
+}
+
+function applySubSelVisibility(){
+  var ms = $('monthSel');
+  if (!ms) return;
+  var hide = (S.period === 'year' || S.period === 'ytd');
+  ms.classList.toggle('hidden', hide);
+}
+
+function toggleForecastCard(show){
+  var el = $('kpiFc');
+  if (el) el.classList.toggle('hidden', !show);
+}
+
+function rerenderForPeriod(){
+  if (!S.data) return;
+  var months = activePeriodMonths();
+  var rows = rowsForPeriod(S.data.categories, months);
+  updateTitle();
+  updateKpiLabel();
   renderBanner(rows);
-  renderKpis(rows);
+  if (S.period === 'year') renderYearKpis(S.data.categories);
+  else                     renderKpis(rows);
+  toggleForecastCard(S.period === 'year');
   renderTable(rows);
-  renderChart(S.data.categories);
+  renderChart(S.data.categories, months);
 }
 
 async function load(force){
@@ -473,10 +844,9 @@ async function load(force){
   try {
     var data = await fetchData(force);
     S.data = data;
-    $('title').textContent = '💰 Бюджет — ' + (data.loc || CFG.LOC);
     $('loadBox').classList.add('hidden');
     $('content').classList.remove('hidden');
-    rerenderForMonth();
+    rerenderForPeriod();
   } catch(e){
     $('loadBox').classList.add('hidden');
     var box = $('errBox');
@@ -488,15 +858,55 @@ async function load(force){
 }
 
 // ── INIT ────────────────────────────────────
-renderMonthSel();
+function renderPeriodSel(){
+  var sel = $('periodSel');
+  sel.innerHTML = '';
+  var opts = [
+    {v:'month',   t:'Місяць'},
+    {v:'quarter', t:'Квартал'},
+    {v:'year',    t:'Рік'},
+    {v:'ytd',     t:'YTD'}
+  ];
+  opts.forEach(function(o){
+    var el = document.createElement('option');
+    el.value = o.v;
+    el.textContent = o.t;
+    if (o.v === S.period) el.selected = true;
+    sel.appendChild(el);
+  });
+}
+
+renderPeriodSel();
+populateSubSel();
+applySubSelVisibility();
+
+$('periodSel').addEventListener('change', function(e){
+  S.period = e.target.value;
+  populateSubSel();
+  applySubSelVisibility();
+  rerenderForPeriod();
+});
 $('monthSel').addEventListener('change', function(e){
-  S.month = +e.target.value;
-  rerenderForMonth();
+  var v = +e.target.value;
+  if (S.period === 'month')        S.month = v;
+  else if (S.period === 'quarter') S.quarter = v;
+  rerenderForPeriod();
 });
 $('refreshBtn').addEventListener('click', function(){
   localStorage.removeItem(CFG.CACHE_KEY);
   load(true);
 });
+
+$('catModalClose').addEventListener('click', closeCategoryModal);
+$('catModal').addEventListener('click', function(e){
+  if (e.target === this) closeCategoryModal();
+});
+document.addEventListener('keydown', function(e){
+  if (e.key === 'Escape' && !$('catModal').classList.contains('hidden')){
+    closeCategoryModal();
+  }
+});
+
 load(false);
 </script>
 </body>
