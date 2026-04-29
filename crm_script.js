@@ -177,6 +177,7 @@ function doGet(e) {
     else if (action === 'getHealthRecords')         result = getHealthRecords(e);
     else if (action === 'dryRunImportAbsences')      result = dryRunImportAbsences(e.parameter.loc || '');
     else if (action === 'importAbsencesFromPayment') result = importAbsencesFromPayment(e.parameter.loc || '');
+    else if (action === 'getOpexData')               result = getOpexData(e.parameter.loc || '', e.parameter.year || '');
     else                                             result = {ok:false, error:'Unknown action: ' + action};
     return jsonOut(result);
   } catch(err) {
@@ -3037,4 +3038,85 @@ function listAllTriggers() {
       ' uniqueId=' + t.getUniqueId());
   });
   return triggers.length;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// OPEX — читання факт/бюджет по локації. READ-ONLY.
+// Категорії: рядки 2..25 + 27 (КАП). Виключаємо: підсумок, знижки, статистику.
+// Структура: ROW1 = ["", "Факт", "Бюджет", ...] × 12 місяців.
+// ═══════════════════════════════════════════════════════════════════════════
+function getOpexData(loc, year) {
+  loc = String(loc || '').trim();
+  if (!loc) return {ok:false, error:'Missing loc'};
+
+  var configSS = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var regSheet = configSS.getSheetByName('OPEX');
+  if (!regSheet) return {ok:false, error:'OPEX registry tab not found in CONFIG'};
+
+  var regData = regSheet.getDataRange().getValues();
+  var sheetId = '', listName = 'OPEX';
+  for (var i = 1; i < regData.length; i++) {
+    if (String(regData[i][2] || '').trim() === loc) {
+      sheetId  = String(regData[i][3] || '').trim();
+      listName = String(regData[i][4] || '').trim() || 'OPEX';
+      break;
+    }
+  }
+  if (!sheetId) return {ok:false, error:'Location not found'};
+
+  var locSS = SpreadsheetApp.openById(sheetId);
+  var opex  = locSS.getSheetByName(listName);
+  if (!opex) return {ok:false, error:'OPEX sheet not found in location file'};
+
+  var data = opex.getDataRange().getValues();
+  var width = (data[0] || []).length;
+
+  var CATEGORY_ROWS = [];
+  for (var r1 = 2; r1 <= 25; r1++) CATEGORY_ROWS.push(r1);
+  CATEGORY_ROWS.push(27);
+
+  var num = function(v) {
+    if (typeof v === 'number' && isFinite(v)) return v;
+    if (typeof v === 'string') {
+      var n = parseFloat(v.replace(/\s+/g, '').replace(',', '.'));
+      return isFinite(n) ? n : 0;
+    }
+    return 0;
+  };
+
+  var categories = [];
+  for (var k = 0; k < CATEGORY_ROWS.length; k++) {
+    var rowNum = CATEGORY_ROWS[k];
+    var idx = rowNum - 1;
+    if (idx >= data.length) continue;
+    var rowArr = data[idx] || [];
+    var name = String(rowArr[0] || '').trim();
+    if (!name) continue;
+
+    var months = [];
+    var totalFact = 0, totalBudget = 0;
+    for (var m = 1; m <= 12; m++) {
+      var fIdx = (m - 1) * 3 + 1;
+      var bIdx = (m - 1) * 3 + 2;
+      var fact   = fIdx < width ? num(rowArr[fIdx]) : 0;
+      var budget = bIdx < width ? num(rowArr[bIdx]) : 0;
+      months.push({month: m, fact: fact, budget: budget});
+      totalFact   += fact;
+      totalBudget += budget;
+    }
+    categories.push({
+      name: name,
+      row: rowNum,
+      months: months,
+      totalFact: totalFact,
+      totalBudget: totalBudget
+    });
+  }
+
+  return {
+    ok: true,
+    loc: loc,
+    year: year ? Number(year) || year : '',
+    categories: categories
+  };
 }
