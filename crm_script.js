@@ -178,6 +178,7 @@ function doGet(e) {
     else if (action === 'dryRunImportAbsences')      result = dryRunImportAbsences(e.parameter.loc || '');
     else if (action === 'importAbsencesFromPayment') result = importAbsencesFromPayment(e.parameter.loc || '');
     else if (action === 'getOpexData')               result = getOpexData(e.parameter.loc || '', e.parameter.year || '');
+    else if (action === 'getOpexOverview')           result = getOpexOverview(e.parameter.year || '');
     else                                             result = {ok:false, error:'Unknown action: ' + action};
     return jsonOut(result);
   } catch(err) {
@@ -3119,5 +3120,95 @@ function getOpexData(loc, year) {
     loc: loc,
     year: year ? Number(year) || year : '',
     categories: categories
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// OPEX OVERVIEW — агреговані суми факт/бюджет по всіх локаціях. READ-ONLY.
+// Для кожної локації з реєстру OPEX підсумовує категорії 3..25 + 27 за всі
+// 12 місяців. Локації без OPEX-листа або з помилкою попадають в errors[].
+// ═══════════════════════════════════════════════════════════════════════════
+function getOpexOverview(year) {
+  var configSS = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var regSheet = configSS.getSheetByName('OPEX');
+  if (!regSheet) return {ok:false, error:'OPEX registry tab not found in CONFIG'};
+
+  var regData = regSheet.getDataRange().getValues();
+
+  var CATEGORY_ROWS = [];
+  for (var r1 = 3; r1 <= 25; r1++) CATEGORY_ROWS.push(r1);
+  CATEGORY_ROWS.push(27);
+
+  var num = function(v) {
+    if (typeof v === 'number' && isFinite(v)) return v;
+    if (typeof v === 'string') {
+      var n = parseFloat(v.replace(/\s+/g, '').replace(',', '.'));
+      return isFinite(n) ? n : 0;
+    }
+    return 0;
+  };
+
+  var locations = [];
+  var errors = [];
+
+  for (var i = 1; i < regData.length; i++) {
+    var loc      = String(regData[i][2] || '').trim();
+    var typ      = String(regData[i][1] || '').trim();
+    var sheetId  = String(regData[i][3] || '').trim();
+    var listName = String(regData[i][4] || '').trim() || 'OPEX';
+    if (!loc || !sheetId) continue;
+
+    try {
+      var locSS = SpreadsheetApp.openById(sheetId);
+      var opex  = locSS.getSheetByName(listName);
+      if (!opex) {
+        errors.push({loc: loc, error: 'OPEX sheet not found'});
+        continue;
+      }
+
+      var data  = opex.getDataRange().getValues();
+      var width = (data[0] || []).length;
+
+      var monthsTotals = [];
+      var yearFact = 0, yearBudget = 0;
+
+      for (var m = 1; m <= 12; m++) {
+        var fIdx = (m - 1) * 3 + 1;
+        var bIdx = (m - 1) * 3 + 2;
+        var monthFact = 0, monthBudget = 0;
+
+        for (var k = 0; k < CATEGORY_ROWS.length; k++) {
+          var rowNum = CATEGORY_ROWS[k];
+          var idx = rowNum - 1;
+          if (idx >= data.length) continue;
+          var rowArr = data[idx] || [];
+          var name = String(rowArr[0] || '').trim();
+          if (!name) continue;
+          monthFact   += fIdx < width ? num(rowArr[fIdx]) : 0;
+          monthBudget += bIdx < width ? num(rowArr[bIdx]) : 0;
+        }
+
+        monthsTotals.push({month: m, fact: monthFact, budget: monthBudget});
+        yearFact   += monthFact;
+        yearBudget += monthBudget;
+      }
+
+      locations.push({
+        loc: loc,
+        type: typ,
+        monthsTotals: monthsTotals,
+        yearFact: yearFact,
+        yearBudget: yearBudget
+      });
+    } catch (e) {
+      errors.push({loc: loc, error: (e && e.message) ? e.message : String(e)});
+    }
+  }
+
+  return {
+    ok: true,
+    year: year ? Number(year) || year : '',
+    locations: locations,
+    errors: errors
   };
 }
