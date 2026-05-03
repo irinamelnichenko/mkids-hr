@@ -3454,6 +3454,17 @@ function _salaryIsSkippedRow(name) {
   return false;
 }
 
+// Підсумкові рядки в зарплатному листі — їх НЕ рахуємо в підсумку, бо суми
+// дублюються деталізованими рядками нижче (напр. "Додаткові заняття" =
+// сума всіх занять: Лего, Арт, m.Dance...). Substring-match case-insensitive.
+function _salaryIsSubtotalRow(name) {
+  var lower = String(name || '').trim().toLowerCase();
+  if (!lower) return false;
+  if (lower.indexOf('додаткові заняття') !== -1) return true;
+  if (lower.indexOf('день народження') !== -1) return true;
+  return false;
+}
+
 // Реєстр Salary з CONFIG_SHEET_ID (лист "Salary"). Структура колонок та сама
 // що в OPEX-реєстрі: A=Напрямок, B=Тип, C=Локація, D=Spreadsheet ID, E=Назва листа.
 function _salaryGetRegistry() {
@@ -3508,12 +3519,14 @@ function getSalaryData(loc, year) {
   var width   = lastCol;
 
   var rows = [];
-  // Скіпаємо рядки 1-3 (заголовки). Далі — все непорожнє з осмисленою назвою.
+  // Скіпаємо рядки 1-3 (заголовки). Далі — все непорожнє з осмисленою назвою,
+  // окрім підсумкових рядків (вони дублюють суми деталізованих нижче).
   for (var rowNum = 4; rowNum <= data.length; rowNum++) {
     var idx = rowNum - 1;
     var rowArr = data[idx] || [];
     var rawName = String(rowArr[0] || '').trim();
-    if (_salaryIsSkippedRow(rawName)) continue;
+    if (_salaryIsSkippedRow(rawName))  continue;
+    if (_salaryIsSubtotalRow(rawName)) continue;
 
     var months = [];
     var totalFact = 0, totalBudget = 0;
@@ -3569,12 +3582,14 @@ function getSalaryOverview(year) {
       var width   = lastCol;
 
       // Збираємо індекси непустих рядків один раз (за назвою в колонці A).
+      // Виключаємо підсумкові рядки (дублюють деталізовані).
       var rowIdxs = [];
       for (var rowNum = 4; rowNum <= data.length; rowNum++) {
         var idx = rowNum - 1;
         var rowArr = data[idx] || [];
         var rawName = String(rowArr[0] || '').trim();
-        if (_salaryIsSkippedRow(rawName)) continue;
+        if (_salaryIsSkippedRow(rawName))  continue;
+        if (_salaryIsSubtotalRow(rawName)) continue;
         rowIdxs.push(idx);
       }
 

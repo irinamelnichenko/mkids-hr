@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>m.kids — Зарплата (Salary)</title>
+<title>m.kids — Salary</title>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -64,6 +64,18 @@ select{font-family:inherit}
 .kpi.ok{border-color:var(--green)}
 .kpi.over{border-color:var(--red2)}
 .kpi.over .kpi-val{color:var(--red)}
+.kpi-fact{font-size:13px;color:var(--gray);margin-top:4px;font-weight:600}
+.kpi-diff{font-size:13px;margin-top:2px;font-weight:700}
+.kpi-diff.pos{color:var(--green)}
+.kpi-diff.neg{color:var(--red)}
+
+.tbl tbody tr.section-hd{background:#eef2f6;border-top:2px solid #cbd5e0}
+.tbl tbody tr.section-hd td{font-weight:800;color:var(--dark);
+  text-transform:uppercase;letter-spacing:.6px;font-size:12px;padding:12px 14px}
+.tbl tbody tr.section-hd:hover{background:#e3e8ef}
+.tbl tbody tr.separator-row td{height:12px;padding:0;background:#eef2f6;
+  border-top:1px solid #cbd5e0;border-bottom:1px solid #cbd5e0}
+.tbl tbody tr.separator-row:hover td{background:#e3e8ef}
 
 .card{background:#fff;border-radius:var(--r);box-shadow:var(--sh);overflow:hidden;margin-bottom:22px}
 .card-hd{padding:14px 18px;border-bottom:1px solid #e8ecf0;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
@@ -233,13 +245,13 @@ select{font-family:inherit}
            onclick="goPerm('opex')">
         <span class="ni">💰</span> Opex
       </div>
+      <div class="nav-item active" data-permission="salary" data-parent="finance" data-perm-page="salary"
+           onclick="goPerm('salary')">
+        <span class="ni">💼</span> Salary
+      </div>
       <div class="nav-item" data-permission="categories" data-parent="finance" data-perm-page="categories"
            onclick="goPerm('categories')">
         <span class="ni">📊</span> Категорії
-      </div>
-      <div class="nav-item active" data-permission="salary" data-parent="finance" data-perm-page="salary"
-           onclick="goPerm('salary')">
-        <span class="ni">💼</span> Зарплата
       </div>
 
       <div class="nav-item" data-permission="settings" data-perm-page="index"
@@ -263,7 +275,7 @@ select{font-family:inherit}
   <div class="hd">
     <button class="menu-toggle" onclick="toggleSidebar()" aria-label="Меню">☰</button>
     <div style="flex:1;min-width:260px">
-      <h1 id="title">💼 Зарплата</h1>
+      <h1 id="title">💼 Salary</h1>
       <div class="hd-meta" id="meta">завантаження…</div>
     </div>
     <div class="hd-ctrl">
@@ -327,26 +339,35 @@ select{font-family:inherit}
 
     <div id="detailMode" class="hidden">
       <div class="kpis">
-        <div id="kpiBudget" class="kpi">
-          <div class="kpi-lbl" id="kpiBudgetLbl">Бюджет на місяць</div>
-          <div class="kpi-val" id="kpiBudgetVal">—</div>
-          <div class="kpi-sub" id="kpiBudgetSub">&nbsp;</div>
+        <div class="kpi" id="kpiMainCard">
+          <div class="kpi-lbl">👥 Основний</div>
+          <div class="kpi-val" id="kpiMainBudget">—</div>
+          <div class="kpi-fact" id="kpiMainFact">&nbsp;</div>
+          <div class="kpi-diff" id="kpiMainDiff">&nbsp;</div>
         </div>
-        <div id="kpiSpent" class="kpi">
-          <div class="kpi-lbl">Факт</div>
-          <div class="kpi-val" id="kpiSpentVal">—</div>
-          <div class="kpi-sub" id="kpiSpentSub">&nbsp;</div>
+        <div class="kpi" id="kpiSubjCard">
+          <div class="kpi-lbl">📚 Предметники</div>
+          <div class="kpi-val" id="kpiSubjBudget">—</div>
+          <div class="kpi-fact" id="kpiSubjFact">&nbsp;</div>
+          <div class="kpi-diff" id="kpiSubjDiff">&nbsp;</div>
         </div>
-        <div id="kpiLeft" class="kpi">
-          <div class="kpi-lbl" id="kpiLeftLbl">Залишок</div>
-          <div class="kpi-val" id="kpiLeftVal">—</div>
-          <div class="kpi-sub" id="kpiLeftSub">&nbsp;</div>
+        <div class="kpi" id="kpiExtrasCard">
+          <div class="kpi-lbl">🎨 Додаткові</div>
+          <div class="kpi-val" id="kpiExtrasBudget">—</div>
+          <div class="kpi-fact" id="kpiExtrasFact">&nbsp;</div>
+          <div class="kpi-diff" id="kpiExtrasDiff">&nbsp;</div>
+        </div>
+        <div class="kpi" id="kpiTotalCard">
+          <div class="kpi-lbl">💰 РАЗОМ</div>
+          <div class="kpi-val" id="kpiTotalBudget">—</div>
+          <div class="kpi-fact" id="kpiTotalFact">&nbsp;</div>
+          <div class="kpi-diff" id="kpiTotalDiff">&nbsp;</div>
         </div>
       </div>
 
       <div class="card">
         <div class="card-hd">
-          <h3>📋 Зарплата <span id="tblMonth" style="font-weight:500;color:var(--gray)"></span></h3>
+          <h3>📋 Salary <span id="tblMonth" style="font-weight:500;color:var(--gray)"></span></h3>
         </div>
         <div class="card-bd">
           <table class="tbl">
@@ -685,14 +706,87 @@ function periodLabel(){
   return '';
 }
 
+// ── SECTION DETECTION ───────────────────────
+// State machine: main → subjects → extras (без backтрэків).
+// Header рядок "Додаткові заняття" backend скіпає (_salaryIsSubtotalRow), тому
+// детектуємо початок секції extras евристично (короткі назви без цифр).
+
+var SUBJECT_KEYWORDS = [
+  'англійська','англійський',
+  'логопед','муз.керівник','муз керівник',
+  'хореограф','фітнес','психолог',
+  'підготовка до школи','чомусики',
+  'архітектура','смм','speaking','информатика'
+];
+
+function isSubjectTeacher(name){
+  var s = String(name || '');
+  var lower = s.toLowerCase();
+  for (var i = 0; i < SUBJECT_KEYWORDS.length; i++){
+    if (lower.indexOf(SUBJECT_KEYWORDS[i]) !== -1) return true;
+  }
+  // Тариф у назві: "X грн урок" / "X грн/заняття" / "за заняття"
+  if (/грн\s*\/?\s*(урок|занят)|за\s+занят/i.test(s)) return true;
+  // Назва містить число 100..1500 (ставка) як окремого 3-4значного слова
+  if (/\b1[0-4]\d{2}\b/.test(s) || /\b[1-9]\d{2}\b/.test(s)) return true;
+  return false;
+}
+
+function isExtraActivity(name){
+  var trimmed = String(name || '').trim();
+  if (!trimmed) return false;
+  if (/\d/.test(trimmed)) return false;          // без цифр
+  var words = trimmed.split(/\s+/);
+  if (words.length > 3) return false;            // короткі назви (Лего, Арт, m.Dance)
+  return true;
+}
+
+// Перехід стану: лише вперед (main → subjects → extras).
+function nextSection(currentSection, name){
+  if (currentSection === null) return 'main';
+  if (currentSection === 'main'     && isSubjectTeacher(name)) return 'subjects';
+  if (currentSection === 'subjects' && isExtraActivity(name))  return 'extras';
+  return currentSection;
+}
+
+function sectionLabel(s){
+  if (s === 'main')     return '👥 Основний персонал';
+  if (s === 'subjects') return '📚 Вчителі-предметники';
+  if (s === 'extras')   return '🎨 Додаткові заняття';
+  return s;
+}
+
+// Рахуємо суми бюджет/факт по 3 секціях. Header-рядки (нульові за рік) не
+// враховуємо в підсумку — щоб не шуміти KPI.
+function computeSectionTotals(rows){
+  var t = {
+    main:     {budget: 0, fact: 0, count: 0},
+    subjects: {budget: 0, fact: 0, count: 0},
+    extras:   {budget: 0, fact: 0, count: 0}
+  };
+  var section = null;
+  rows.forEach(function(r){
+    section = nextSection(section, r.name);
+    if (r.isHeader) return;
+    t[section].budget += r.budget;
+    t[section].fact   += r.fact;
+    t[section].count++;
+  });
+  return t;
+}
+
 // ── DETAIL: rows for period ─────────────────
+// SWAP: реальна структура листа Salary інша ніж в OPEX. Backend читає колонки
+// за OPEX-формулою, але семантично "fact"-колонка = БЮДЖЕТ, "budget"-колонка = ФАКТ.
+// Виправляємо тут на frontend (backend не чіпаємо за вимогою). Все downstream
+// (KPI, таблиця, total-row) бачить уже правильні значення.
 function rowsForPeriod(rows, monthsArr){
   return rows.map(function(r){
     var fact = 0, budget = 0;
     monthsArr.forEach(function(m){
       var v = getMonthValues(r, m);
-      fact   += v.fact;
-      budget += v.budget;
+      budget += v.fact;     // backend's fact-колонка → реальний БЮДЖЕТ
+      fact   += v.budget;   // backend's budget-колонка → реальний ФАКТ
     });
     return {
       name:        r.name,
@@ -700,37 +794,38 @@ function rowsForPeriod(rows, monthsArr){
       budget:      budget,
       diff:        budget - fact,
       over:        budget > 0 && fact > budget,
+      // Header-рядок: ні факту ні бюджету за весь рік (нульовий totalFact і totalBudget).
       isHeader:    (r.totalFact || 0) === 0 && (r.totalBudget || 0) === 0
     };
   });
 }
 
-function renderKpis(rows){
-  var totalBudget = 0, totalFact = 0;
-  rows.forEach(function(r){ totalBudget += r.budget; totalFact += r.fact; });
-  var left = totalBudget - totalFact;
-  var spentPct = totalBudget > 0 ? (totalFact / totalBudget) * 100 : null;
-
-  $('kpiBudgetVal').textContent = fmtUah(totalBudget) + ' ₴';
-  $('kpiBudgetSub').textContent = rows.filter(function(r){ return !r.isHeader; }).length + ' позицій';
-
-  $('kpiSpentVal').textContent = fmtUah(totalFact) + ' ₴';
-  $('kpiSpentSub').textContent = spentPct !== null ? spentPct.toFixed(1) + '% бюджету' : ' ';
-
-  var kpiLeft = $('kpiLeft');
-  kpiLeft.classList.remove('ok','over');
-  $('kpiLeftVal').textContent = (left < 0 ? '-' : '') + fmtUah(Math.abs(left)) + ' ₴';
-  if (totalBudget > 0){
-    if (left < 0){
-      kpiLeft.classList.add('over');
-      $('kpiLeftSub').textContent = 'перевищення';
-    } else {
-      kpiLeft.classList.add('ok');
-      $('kpiLeftSub').textContent = 'у межах';
-    }
-  } else {
-    $('kpiLeftSub').textContent = ' ';
+// 4 KPI картки: 3 секції + РАЗОМ. Кожна показує Бюджет (велике),
+// Факт (менше), Різниця (кольорова: зелена якщо економія, червона при перевищенні).
+function renderKpis(sectionTotals){
+  function setDiff(id, diff){
+    var el = $(id);
+    el.classList.remove('pos','neg');
+    if (diff > 0)      { el.classList.add('pos'); el.textContent = '+' + fmtUah(diff) + ' ₴'; }
+    else if (diff < 0) { el.classList.add('neg'); el.textContent = fmtUah(diff) + ' ₴'; }
+    else               { el.textContent = '0 ₴'; }
   }
+  function setCard(prefix, t){
+    var diff = t.budget - t.fact;
+    $(prefix + 'Budget').textContent = fmtUah(t.budget) + ' ₴';
+    $(prefix + 'Fact').textContent   = 'Факт: ' + fmtUah(t.fact) + ' ₴';
+    setDiff(prefix + 'Diff', diff);
+  }
+
+  setCard('kpiMain',   sectionTotals.main);
+  setCard('kpiSubj',   sectionTotals.subjects);
+  setCard('kpiExtras', sectionTotals.extras);
+
+  var grand = {
+    budget: sectionTotals.main.budget + sectionTotals.subjects.budget + sectionTotals.extras.budget,
+    fact:   sectionTotals.main.fact   + sectionTotals.subjects.fact   + sectionTotals.extras.fact
+  };
+  setCard('kpiTotal', grand);
 }
 
 function renderTable(rows){
@@ -738,7 +833,31 @@ function renderTable(rows){
   var body = $('tblBody');
   body.innerHTML = '';
 
+  // Стейт секцій. Перед першим рядком кожної секції вставляємо section-hd.
+  var section = null;
+  // Перед першою Медсестрою — тонкий сірий роздільник (location-wide staff:
+  // Медсестра/Охорона/Прибиральниця — обслуговують всю локацію, не групу).
+  // Подальші рядки до першого предметника лишаються в "Основному" без розривів.
+  var nurseSeparatorInserted = false;
+
   rows.forEach(function(r){
+    var newSection = nextSection(section, r.name);
+    if (newSection !== section){
+      var hdr = document.createElement('tr');
+      hdr.className = 'section-hd';
+      hdr.innerHTML = '<td colspan="4">' + escapeHtml(sectionLabel(newSection)) + '</td>';
+      body.appendChild(hdr);
+      section = newSection;
+    }
+
+    if (!nurseSeparatorInserted && /медсестра/i.test(r.name)){
+      var sep = document.createElement('tr');
+      sep.className = 'separator-row';
+      sep.innerHTML = '<td colspan="4"></td>';
+      body.appendChild(sep);
+      nurseSeparatorInserted = true;
+    }
+
     var tr = document.createElement('tr');
     if (r.isHeader) tr.classList.add('row-header');
     else if (r.over) tr.classList.add('row-over');
@@ -962,11 +1081,11 @@ function rerenderOverview(){
 // ── ORCHESTRATION ───────────────────────────
 function updateTitle(){
   if (S.mode === 'overview'){
-    $('title').textContent = '💼 Зарплата · Огляд мережі · ' + periodLabel();
+    $('title').textContent = '💼 Salary · Огляд мережі · ' + periodLabel();
     return;
   }
   var loc = (S.data && S.data.loc) ? S.data.loc : CFG.LOC;
-  $('title').textContent = '💼 Зарплата · ' + loc + ' · ' + periodLabel();
+  $('title').textContent = '💼 Salary · ' + loc + ' · ' + periodLabel();
 }
 
 function applyMode(){
@@ -1013,8 +1132,8 @@ function rerenderForPeriod(){
   var months = activePeriodMonths();
   var rows = rowsForPeriod(S.data.rows || [], months);
   updateTitle();
-  updateKpiLabel();
-  renderKpis(rows);
+  var sectionTotals = computeSectionTotals(rows);
+  renderKpis(sectionTotals);
   renderTable(rows);
 }
 
