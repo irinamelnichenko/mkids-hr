@@ -180,6 +180,8 @@ function doGet(e) {
     else if (action === 'getOpexData')               result = getOpexData(e.parameter.loc || '', e.parameter.year || '');
     else if (action === 'getOpexOverview')           result = getOpexOverview(e.parameter.year || '');
     else if (action === 'getCategoryAnalytics')      result = getCategoryAnalytics(e.parameter.year || '', e.parameter.month || '');
+    else if (action === 'getSalaryData')             result = getSalaryData(e.parameter.loc || '', e.parameter.year || '');
+    else if (action === 'getSalaryOverview')         result = getSalaryOverview(e.parameter.year || '');
     else                                             result = {ok:false, error:'Unknown action: ' + action};
     return jsonOut(result);
   } catch(err) {
@@ -3428,5 +3430,189 @@ function getCategoryAnalytics(year, month) {
     month: m,
     categories: categories,
     errors: errors
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SALARY — спільні хелпери. Структура листа Salary в кожному файлі локації:
+//   рядок 1 = "ЗАРПЛАТА" (заголовок)
+//   рядок 2 = "персонал" (підзаголовок) або порожньо
+//   рядок 3 = column-headers (Факт/Бюджет per month) або порожньо
+//   рядок 4..N = співробітники (А=ПІБ + 36 колонок: 12 місяців × {Факт, Бюджет, spacer})
+// Колонки на місяць m: fIdx=(m-1)*3+1 (B,E,H...), bIdx=(m-1)*3+2 (C,F,I...).
+// Числа парсимо тим самим _opexNum.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Скіп-предикат для рядків зарплатного листа. Виключаємо порожні, заголовки
+// "ЗАРПЛАТА" / "персонал" (case-insensitive як в OPEX) і чисельні маркери.
+function _salaryIsSkippedRow(name) {
+  var s = String(name || '').trim();
+  if (!s) return true;
+  var lower = s.toLowerCase();
+  if (lower === 'зарплата' || lower === 'персонал') return true;
+  if (/^[\d\s.,]+$/.test(s)) return true;
+  return false;
+}
+
+// Реєстр Salary з CONFIG_SHEET_ID (лист "Salary"). Структура колонок та сама
+// що в OPEX-реєстрі: A=Напрямок, B=Тип, C=Локація, D=Spreadsheet ID, E=Назва листа.
+function _salaryGetRegistry() {
+  var configSS = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var regSheet = configSS.getSheetByName('Salary');
+  if (!regSheet) return {ok:false, error:'Salary registry tab not found in CONFIG'};
+
+  var data = regSheet.getDataRange().getValues();
+  var rows = [];
+  for (var i = 1; i < data.length; i++) {
+    var loc      = String(data[i][2] || '').trim();
+    var typ      = String(data[i][1] || '').trim();
+    var sheetId  = String(data[i][3] || '').trim();
+    var listName = String(data[i][4] || '').trim() || 'Salary';
+    if (!loc || !sheetId) continue;
+    rows.push({
+      typ:      typ,
+      loc:      loc,
+      sheetId:  sheetId,
+      listName: listName
+    });
+  }
+  return {ok:true, rows:rows};
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SALARY — деталь по локації (всі непорожні рядки за рік). READ-ONLY.
+// Не намагаємось розпізнавати групи/посади — просто дзеркало рядків.
+// ═══════════════════════════════════════════════════════════════════════════
+function getSalaryData(loc, year) {
+  loc = String(loc || '').trim();
+  if (!loc) return {ok:false, error:'Missing loc'};
+
+  var reg = _salaryGetRegistry();
+  if (!reg.ok) return reg;
+
+  var entry = null;
+  for (var i = 0; i < reg.rows.length; i++) {
+    if (reg.rows[i].loc === loc) { entry = reg.rows[i]; break; }
+  }
+  if (!entry) return {ok:false, error:'Location not found in Salary registry'};
+
+  var locSS = SpreadsheetApp.openById(entry.sheetId);
+  var sheet = locSS.getSheetByName(entry.listName);
+  if (!sheet) return {ok:false, error:'Salary sheet not found in location file'};
+
+  // Явно беремо мінімум 80 рядків × 37 колонок (як OPEX — getDataRange
+  // обрізає рядки з порожнім хвостом). 80 покриває типову локацію з запасом.
+  var lastRow = Math.max(sheet.getLastRow(), 80);
+  var lastCol = Math.max(sheet.getLastColumn(), 37);
+  var data    = sheet.getRange(1, 1, lastRow, lastCol).getValues();
+  var width   = lastCol;
+
+  var rows = [];
+  // Скіпаємо рядки 1-3 (заголовки). Далі — все непорожнє з осмисленою назвою.
+  for (var rowNum = 4; rowNum <= data.length; rowNum++) {
+    var idx = rowNum - 1;
+    var rowArr = data[idx] || [];
+    var rawName = String(rowArr[0] || '').trim();
+    if (_salaryIsSkippedRow(rawName)) continue;
+
+    var months = [];
+    var totalFact = 0, totalBudget = 0;
+    for (var m = 1; m <= 12; m++) {
+      var fIdx = (m - 1) * 3 + 1;
+      var bIdx = (m - 1) * 3 + 2;
+      var fact   = fIdx < width ? _opexNum(rowArr[fIdx]) : 0;
+      var budget = bIdx < width ? _opexNum(rowArr[bIdx]) : 0;
+      months.push({month: m, fact: fact, budget: budget});
+      totalFact   += fact;
+      totalBudget += budget;
+    }
+    rows.push({
+      row:         rowNum,
+      name:        rawName,
+      months:      months,
+      totalFact:   totalFact,
+      totalBudget: totalBudget
+    });
+  }
+
+  return {
+    ok:   true,
+    loc:  loc,
+    year: year ? Number(year) || year : '',
+    rows: rows
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SALARY OVERVIEW — суми факт/бюджет по всіх локаціях, по 12 місяцях.
+// READ-ONLY. Помилки на рівні локації потрапляють в errors[].
+// ═══════════════════════════════════════════════════════════════════════════
+function getSalaryOverview(year) {
+  var reg = _salaryGetRegistry();
+  if (!reg.ok) return reg;
+
+  var locations = [];
+  var errors    = [];
+
+  reg.rows.forEach(function(entry) {
+    try {
+      var locSS = SpreadsheetApp.openById(entry.sheetId);
+      var sheet = locSS.getSheetByName(entry.listName);
+      if (!sheet) {
+        errors.push({loc: entry.loc, error: 'Salary sheet not found'});
+        return;
+      }
+
+      var lastRow = Math.max(sheet.getLastRow(), 80);
+      var lastCol = Math.max(sheet.getLastColumn(), 37);
+      var data    = sheet.getRange(1, 1, lastRow, lastCol).getValues();
+      var width   = lastCol;
+
+      // Збираємо індекси непустих рядків один раз (за назвою в колонці A).
+      var rowIdxs = [];
+      for (var rowNum = 4; rowNum <= data.length; rowNum++) {
+        var idx = rowNum - 1;
+        var rowArr = data[idx] || [];
+        var rawName = String(rowArr[0] || '').trim();
+        if (_salaryIsSkippedRow(rawName)) continue;
+        rowIdxs.push(idx);
+      }
+
+      var monthsTotals = [];
+      var yearFact = 0, yearBudget = 0;
+
+      for (var m = 1; m <= 12; m++) {
+        var fIdx = (m - 1) * 3 + 1;
+        var bIdx = (m - 1) * 3 + 2;
+        var monthFact = 0, monthBudget = 0;
+
+        for (var k = 0; k < rowIdxs.length; k++) {
+          var rowArr = data[rowIdxs[k]] || [];
+          monthFact   += fIdx < width ? _opexNum(rowArr[fIdx]) : 0;
+          monthBudget += bIdx < width ? _opexNum(rowArr[bIdx]) : 0;
+        }
+
+        monthsTotals.push({month: m, fact: monthFact, budget: monthBudget});
+        yearFact   += monthFact;
+        yearBudget += monthBudget;
+      }
+
+      locations.push({
+        loc:          entry.loc,
+        type:         entry.typ,
+        monthsTotals: monthsTotals,
+        yearFact:     yearFact,
+        yearBudget:   yearBudget
+      });
+    } catch (e) {
+      errors.push({loc: entry.loc, error: (e && e.message) ? e.message : String(e)});
+    }
+  });
+
+  return {
+    ok:        true,
+    year:      year ? Number(year) || year : '',
+    locations: locations,
+    errors:    errors
   };
 }
