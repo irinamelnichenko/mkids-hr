@@ -182,6 +182,7 @@ function doGet(e) {
     else if (action === 'getCategoryAnalytics')      result = getCategoryAnalytics(e.parameter.year || '', e.parameter.month || '');
     else if (action === 'getSalaryData')             result = getSalaryData(e.parameter.loc || '', e.parameter.year || '');
     else if (action === 'getSalaryOverview')         result = getSalaryOverview(e.parameter.year || '');
+    else if (action === 'getOverviewAnalytics')      result = getOverviewAnalytics(e.parameter.year || '', e.parameter.month || '');
     else                                             result = {ok:false, error:'Unknown action: ' + action};
     return jsonOut(result);
   } catch(err) {
@@ -3631,3 +3632,227 @@ function getSalaryOverview(year) {
     errors:    errors
   };
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// OVERVIEW ANALYTICS — зведена картина по локаціях за обраний місяць.
+// Збирає три джерела:
+//   1) OPEX — метадані рядки 36-38 (діти / групи / основний персонал плановий)
+//   2) Список дітей (лист "Клієнти") — фактична кількість + розклад по групах
+//   3) Salary — категоризація персоналу + місячні бюджет/факт по локації
+// READ-ONLY. ~30 сек на 13 локацій (кожна локація = 2 файли × відкриття).
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Frontend isSubjectTeacher — дзеркальна копія для backend категоризації.
+function _ovaIsSubjectTeacherName(name) {
+  var s = String(name || '');
+  var lower = s.toLowerCase();
+  var SUBJECT_KEYWORDS = [
+    'англійська','англійський',
+    'логопед','муз.керівник','муз керівник',
+    'хореограф','фітнес','психолог',
+    'підготовка до школи','чомусики',
+    'архітектура','смм','speaking','информатика'
+  ];
+  for (var i = 0; i < SUBJECT_KEYWORDS.length; i++){
+    if (lower.indexOf(SUBJECT_KEYWORDS[i]) !== -1) return true;
+  }
+  if (/грн\s*\/?\s*(урок|занят)|за\s+занят/i.test(s)) return true;
+  if (/\b1[0-4]\d{2}\b/.test(s) || /\b[1-9]\d{2}\b/.test(s)) return true;
+  return false;
+}
+
+// Класифікує salary-рядок у одну з категорій (або null якщо не варто рахувати).
+// Враховує state-машину секції (main → subjects → extras) для "Додаткові заняття".
+// extras перебиває keyword-чек: коли вже в extras-секції, все потрапляє туди.
+function _ovaClassifySalaryRow(name, currentSection) {
+  var lower = String(name || '').toLowerCase();
+  if (currentSection === 'extras')                                    return 'extras';
+  if (lower.indexOf('директор')   !== -1)                             return 'director';
+  if (lower.indexOf('вихователь') !== -1)                             return 'teacher';
+  if (lower.indexOf('помічник')   !== -1)                             return 'assistant';
+  if (lower.indexOf('медсестра')  !== -1)                             return 'nurse';
+  if (lower.indexOf('охорон')     !== -1 || lower.indexOf('охран') !== -1) return 'guard';
+  if (lower.indexOf('прибиральн') !== -1)                             return 'cleaner';
+  if (lower.indexOf('тьютор')     !== -1 || lower.indexOf('тімлід') !== -1) return 'tutor';
+  if (_ovaIsSubjectTeacherName(name))                                  return 'subject';
+  return null;  // нерозпізнане — не рахуємо
+}
+
+function getOverviewAnalytics(year, month) {
+  var m = parseInt(month, 10);
+  if (!m || m < 1 || m > 12) return {ok:false, error:'Invalid month (1-12)'};
+
+  var configSS = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+
+  // 1) OPEX-реєстр — джерело локацій + посилання на OPEX-листи.
+  var opexReg = configSS.getSheetByName('OPEX');
+  if (!opexReg) return {ok:false, error:'OPEX registry tab not found in CONFIG'};
+  var opexRegRows = opexReg.getDataRange().getValues();
+
+  // 2) Salary-реєстр — мапа loc → {sheetId, listName} для швидкого лукапу.
+  var salByLoc = {};
+  var salReg = configSS.getSheetByName('Salary');
+  if (salReg){
+    var salRows = salReg.getDataRange().getValues();
+    for (var si = 1; si < salRows.length; si++){
+      var sLoc = String(salRows[si][2] || '').trim();
+      var sId  = String(salRows[si][3] || '').trim();
+      var sLst = String(salRows[si][4] || '').trim() || 'Salary';
+      if (sLoc && sId) salByLoc[sLoc] = {sheetId: sId, listName: sLst};
+    }
+  }
+
+  // 3) Список дітей — одне читання, потім in-memory-фільтр per-loc.
+  // Виключаємо тих хто має непорожню "Дата розірвання" АБО "Статус" з 'розірв'.
+  var allClients = [];
+  try {
+    var clRes = getClients();
+    if (clRes && clRes.ok && clRes.data) allClients = clRes.data;
+  } catch (e) {
+    // ігноруємо — залишимо childrenByGroup={} для всіх локацій
+  }
+
+  // Колонка для метаданих OPEX (рядки 36-38) і фактових/бюджетних колонок Salary.
+  var metaIdx = (m - 1) * 3 + 2;   // 0-indexed: січень=2 (C), лютий=5 (F)…
+  var fIdx    = (m - 1) * 3 + 1;   // Salary fact (= OPEX fact convention)
+  var bIdx    = (m - 1) * 3 + 2;   // Salary budget
+
+  var locations = [];
+  var errors = [];
+
+  for (var i = 1; i < opexRegRows.length; i++) {
+    var loc      = String(opexRegRows[i][2] || '').trim();
+    var typ      = String(opexRegRows[i][1] || '').trim();
+    var sheetId  = String(opexRegRows[i][3] || '').trim();
+    var listName = String(opexRegRows[i][4] || '').trim() || 'OPEX';
+    if (!loc || !sheetId) continue;
+    if (typ === 'Управління') continue;   // виключаємо управління (тільки садочки+школи)
+
+    var entry = {
+      loc:                   loc,
+      type:                  typ,
+      childrenCount:         0,
+      groupsCount:           0,
+      mainStaffCount:        0,
+      childrenByGroup:       {},
+      childrenTotalFromList: 0,
+      staffCounts: {
+        director: 0, teacher: 0, assistant: 0, nurse: 0,
+        guard: 0, cleaner: 0, tutor: 0, subject: 0, extras: 0
+      },
+      mainStaffFromSalary:   0,
+      salaryFact:            0,
+      salaryBudget:          0
+    };
+
+    // ── A) OPEX-метадані (рядки 36-38) ───────
+    try {
+      var locOpexSS = SpreadsheetApp.openById(sheetId);
+      var opexSh    = locOpexSS.getSheetByName(listName);
+      if (!opexSh) {
+        errors.push({loc: loc, source: 'opex', error: 'OPEX sheet not found'});
+      } else {
+        var opLastRow = Math.max(opexSh.getLastRow(), 40);
+        var opLastCol = Math.max(opexSh.getLastColumn(), 37);
+        var opData    = opexSh.getRange(1, 1, opLastRow, opLastCol).getValues();
+        if (35 < opData.length && metaIdx < opLastCol) entry.childrenCount  = _opexNum(opData[35][metaIdx]);
+        if (36 < opData.length && metaIdx < opLastCol) entry.groupsCount    = _opexNum(opData[36][metaIdx]);
+        if (37 < opData.length && metaIdx < opLastCol) entry.mainStaffCount = _opexNum(opData[37][metaIdx]);
+      }
+    } catch (e) {
+      errors.push({loc: loc, source: 'opex', error: (e && e.message) ? e.message : String(e)});
+    }
+
+    // ── B) Список дітей з листа "Клієнти" ───
+    try {
+      var byGroup = {};
+      var totalActive = 0;
+      for (var ci = 0; ci < allClients.length; ci++) {
+        var c = allClients[ci];
+        if (String(c['Локація'] || '').trim() !== loc) continue;
+        // Виключаємо тих, у кого є дата розірвання або статус містить 'розірв'.
+        var termRaw = c['Дата розірвання'];
+        var hasTermDate = (termRaw instanceof Date) ||
+                          (termRaw !== null && termRaw !== undefined && String(termRaw).trim() !== '');
+        if (hasTermDate) continue;
+        var statusLower = String(c['Статус'] || '').toLowerCase();
+        if (statusLower.indexOf('розірв') !== -1) continue;
+
+        var grp = String(c['Група'] || '').trim() || '(без групи)';
+        byGroup[grp] = (byGroup[grp] || 0) + 1;
+        totalActive++;
+      }
+      entry.childrenByGroup = byGroup;
+      entry.childrenTotalFromList = totalActive;
+    } catch (e) {
+      errors.push({loc: loc, source: 'clients', error: (e && e.message) ? e.message : String(e)});
+    }
+
+    // ── C) Salary — категоризація персоналу + бюджет/факт за місяць ───
+    try {
+      var salEntry = salByLoc[loc];
+      if (!salEntry){
+        errors.push({loc: loc, source: 'salary', error: 'Location not in Salary registry'});
+      } else {
+        var locSalSS = SpreadsheetApp.openById(salEntry.sheetId);
+        var salSh    = locSalSS.getSheetByName(salEntry.listName);
+        if (!salSh) {
+          errors.push({loc: loc, source: 'salary', error: 'Salary sheet not found'});
+        } else {
+          var slastRow = Math.max(salSh.getLastRow(), 80);
+          var slastCol = Math.max(salSh.getLastColumn(), 37);
+          var salData  = salSh.getRange(1, 1, slastRow, slastCol).getValues();
+          var salWidth = slastCol;
+
+          var section = 'main';   // main → subjects → extras
+
+          // Скан з рядка 4 (1-3 — заголовки).
+          for (var rowNum = 4; rowNum <= salData.length; rowNum++) {
+            var idx = rowNum - 1;
+            var rowArr = salData[idx] || [];
+            var rawName = String(rowArr[0] || '').trim();
+            if (_salaryIsSkippedRow(rawName)) continue;
+
+            // Subtotals — пропускаємо повністю (і з counts, і з salary-сум, бо
+            // дублюють деталізовані рядки нижче). "Додаткові заняття" перемикає
+            // секцію в 'extras' для класифікації наступних рядків.
+            if (_salaryIsSubtotalRow(rawName)) {
+              if (/додаткові заняття/i.test(rawName)) section = 'extras';
+              continue;
+            }
+
+            var category = _ovaClassifySalaryRow(rawName, section);
+            if (category === 'subject' && section === 'main') section = 'subjects';
+            if (category){
+              entry.staffCounts[category] = (entry.staffCounts[category] || 0) + 1;
+            }
+
+            // Сума зарплати по локації — всі непропущені рядки.
+            var fact   = fIdx < salWidth ? _opexNum(rowArr[fIdx]) : 0;
+            var budget = bIdx < salWidth ? _opexNum(rowArr[bIdx]) : 0;
+            entry.salaryFact   += fact;
+            entry.salaryBudget += budget;
+          }
+
+          var sc = entry.staffCounts;
+          entry.mainStaffFromSalary =
+            sc.director + sc.teacher + sc.assistant + sc.nurse +
+            sc.guard    + sc.cleaner + sc.tutor;
+        }
+      }
+    } catch (e) {
+      errors.push({loc: loc, source: 'salary', error: (e && e.message) ? e.message : String(e)});
+    }
+
+    locations.push(entry);
+  }
+
+  return {
+    ok:        true,
+    year:      year ? (Number(year) || year) : '',
+    month:     m,
+    locations: locations,
+    errors:    errors
+  };
+}
+

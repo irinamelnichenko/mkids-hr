@@ -225,6 +225,10 @@ select{font-family:inherit}
            onclick="goPerm('categories')">
         <span class="ni">📊</span> Категорії
       </div>
+      <div class="nav-item" data-permission="overview_analytics" data-parent="finance" data-perm-page="analytics"
+           onclick="goPerm('overview_analytics')">
+        <span class="ni">📊</span> Зведена аналітика
+      </div>
 
       <div class="nav-item" data-permission="settings" data-perm-page="index"
            onclick="goPerm('settings')">
@@ -392,7 +396,7 @@ var PERMISSIONS = {
     'clients_list','payments','attendance_kids',
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
-    'analytics_clients','analytics_hr','opex','categories','salary',
+    'analytics_clients','analytics_hr','opex','categories','salary','overview_analytics',
     'client_birthdays'
   ],
   nurse: [
@@ -414,6 +418,7 @@ function goPerm(perm){
                  : target === 'opex'       ? 'opex.html'
                  : target === 'categories' ? 'categories.html'
                  : target === 'salary'     ? 'salary.html'
+                 : target === 'analytics'  ? 'analytics.html'
                  : 'index.html';
   location.href = targetFile + '#' + perm;
 }

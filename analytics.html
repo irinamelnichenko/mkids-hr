@@ -1,0 +1,1180 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>m.kids — Зведена аналітика</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --green:#27ae60;--green2:#2ecc71;--blue:#2980b9;--blue2:#3498db;
+  --red:#c0392b;--red2:#e74c3c;--orange:#e67e22;--yellow:#f1c40f;
+  --dark:#1a2332;--dark2:#2c3e50;--gray:#7f8c8d;--gray2:#bdc3c7;
+  --bg:#f0f4f8;--white:#fff;--sidebar:#1e2d3d;--sw:250px;
+  --r:10px;--sh:0 2px 12px rgba(0,0,0,.08)
+}
+body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--dark2);font-size:14px;line-height:1.5;min-height:100vh}
+button{font-family:inherit;cursor:pointer}
+select{font-family:inherit}
+.hidden{display:none!important}
+
+.wrap{max-width:1320px;margin:0 auto;padding:24px 20px 60px}
+
+.hd{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:22px}
+.hd h1{font-size:24px;font-weight:900;color:var(--dark);flex:1;min-width:260px}
+.hd-meta{font-size:12px;color:var(--gray);margin-top:3px;font-weight:500}
+.hd-ctrl{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+
+.month-sel{padding:9px 14px;border:1.5px solid var(--gray2);border-radius:8px;background:#fff;
+  font-size:14px;font-weight:600;color:var(--dark2);outline:none;cursor:pointer}
+.month-sel:focus{border-color:var(--green)}
+
+.btn{padding:10px 16px;border:none;border-radius:var(--r);font-size:14px;font-weight:600;
+  display:inline-flex;align-items:center;gap:6px;transition:all .15s}
+.btn-primary{background:var(--green);color:#fff}
+.btn-primary:hover{background:var(--green2)}
+.btn-primary:disabled{opacity:.55;cursor:wait}
+.btn-secondary{background:#fff;color:var(--dark2);border:1.5px solid var(--gray2)}
+.btn-secondary:hover{border-color:var(--gray);background:#f4f7fa}
+
+.mode-tabs{display:flex;gap:6px;background:#fff;border-radius:var(--r);padding:4px;
+  box-shadow:var(--sh);margin-bottom:16px;width:fit-content;max-width:100%;flex-wrap:wrap}
+.mt-btn{padding:9px 16px;border:none;border-radius:8px;background:transparent;
+  font-size:14px;font-weight:600;color:var(--gray);cursor:pointer;transition:all .15s}
+.mt-btn:hover{color:var(--dark2)}
+.mt-btn.active{background:var(--green);color:#fff}
+
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:22px}
+.kpi{background:#fff;border-radius:var(--r);padding:18px 20px;box-shadow:var(--sh)}
+.kpi-lbl{font-size:11px;font-weight:700;color:var(--gray);text-transform:uppercase;letter-spacing:.5px}
+.kpi-val{font-size:28px;font-weight:900;color:var(--dark);margin-top:6px;line-height:1.1}
+.kpi-sub{font-size:12px;color:var(--gray);margin-top:4px;font-weight:500}
+
+.card{background:#fff;border-radius:var(--r);box-shadow:var(--sh);overflow:hidden;margin-bottom:22px}
+.card-hd{padding:14px 18px;border-bottom:1px solid #e8ecf0;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
+.card-hd h3{font-size:14px;font-weight:800;color:var(--dark)}
+.card-bd{padding:8px 0}
+.card-bd.pad{padding:18px}
+
+.tbl{width:100%;border-collapse:collapse}
+.tbl thead th{padding:10px 14px;text-align:left;font-size:11px;font-weight:700;
+  text-transform:uppercase;letter-spacing:.5px;color:var(--gray);
+  background:#f8fafc;border-bottom:2px solid #e8ecf0}
+.tbl thead th.num{text-align:right}
+.tbl thead th[data-sort]{cursor:pointer;user-select:none}
+.tbl thead th[data-sort]:hover{background:#eef2f6;color:var(--dark2)}
+.tbl thead th.sort-asc::after{content:' ▲';font-size:9px;color:var(--green)}
+.tbl thead th.sort-desc::after{content:' ▼';font-size:9px;color:var(--green)}
+.tbl tbody td{padding:11px 14px;border-bottom:1px solid #f0f4f8;font-size:14px}
+.tbl tbody td.num{text-align:right;font-variant-numeric:tabular-nums}
+.tbl tbody tr:hover{background:#fafbfc}
+.tbl tbody tr.total{font-weight:800;background:#f4f7fa;border-top:2px solid #e2e8f0}
+.tbl tbody tr.total td{font-size:15px;color:var(--dark)}
+.tbl tbody td.cell-warn{background:#fef5e0;color:#b7791f;font-weight:700}
+.tbl tbody td.cell-over{background:#fdebeb;color:var(--red);font-weight:700}
+.tbl tbody td.cell-min{color:var(--green);font-weight:800}
+.tbl tbody td.cell-max{color:var(--red);font-weight:800}
+
+.cat-name{font-weight:600;color:var(--dark2)}
+.muted{color:var(--gray2)}
+
+/* ── DETAIL: блок категорій персоналу ────── */
+.staff-row{display:flex;justify-content:space-between;align-items:center;
+  padding:8px 0;border-bottom:1px solid #f0f4f8;font-size:14px}
+.staff-row:last-child{border-bottom:none}
+.staff-row span{color:var(--dark2)}
+.staff-row b{color:var(--dark);font-variant-numeric:tabular-nums}
+.staff-row.subtotal{font-weight:800;padding:12px 0;
+  border-top:2px solid #e2e8f0;border-bottom:2px solid #e2e8f0;
+  background:#f8fafc;margin:6px -18px;padding-left:18px;padding-right:18px}
+
+/* ── DETAIL: метрики ───────────────────────── */
+.metrics-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
+.metric{padding:14px 16px;background:#f8fafc;border-radius:var(--r);border:1px solid #e8ecf0}
+.metric-lbl{font-size:11px;font-weight:700;color:var(--gray);text-transform:uppercase;letter-spacing:.5px}
+.metric-val{font-size:22px;font-weight:800;color:var(--dark);margin-top:6px;line-height:1.1}
+
+/* ── OVERVIEW: табси типу (Садочки / Школи) ─── */
+.type-tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:18px}
+.tt-btn{padding:8px 16px;border:1.5px solid var(--gray2);border-radius:14px;background:#fff;
+  font-size:13px;font-weight:600;color:var(--gray);cursor:pointer;transition:all .15s}
+.tt-btn:hover{border-color:var(--gray);color:var(--dark2)}
+.tt-btn.active{background:var(--green);border-color:var(--green);color:#fff}
+
+/* ── OVERVIEW: лідери / аутсайдери ──────────── */
+.leaders-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:22px}
+.leader-tbl td{padding:10px 14px;font-size:14px;border-bottom:1px solid #f0f4f8}
+.leader-tbl tr:last-child td{border-bottom:none}
+.leader-tbl .rk{width:32px;color:var(--gray);font-weight:700}
+
+/* ── OVERVIEW: червоні зони ─────────────────── */
+.rz-section{margin-bottom:18px}
+.rz-section:last-child{margin-bottom:0}
+.rz-section h4{font-size:12px;font-weight:800;color:var(--dark2);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px}
+.rz-row{display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid #f0f4f8;font-size:13.5px}
+.rz-row:last-child{border-bottom:none}
+.rz-row .loc{font-weight:600;color:var(--dark2)}
+.rz-row .val{font-weight:700;color:var(--red);font-variant-numeric:tabular-nums}
+.rz-ok{font-style:italic;color:var(--green);font-size:13px;font-weight:600;padding:6px 0}
+
+@media(max-width:768px){
+  .leaders-grid{grid-template-columns:1fr}
+}
+
+.loading{display:flex;align-items:center;justify-content:center;padding:60px;
+  flex-direction:column;gap:14px;color:var(--gray)}
+.spinner{width:34px;height:34px;border:3px solid #e8ecf0;border-top-color:var(--green);
+  border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.err{background:#fdf2f2;border:1px solid #fca5a5;color:var(--red);
+  padding:14px 18px;border-radius:var(--r);margin-bottom:18px;font-weight:600}
+
+@media(max-width:640px){
+  .wrap{padding:16px 12px 40px}
+  .hd h1{font-size:20px}
+  .kpi-val{font-size:22px}
+  .tbl thead th,.tbl tbody td{padding:9px 10px;font-size:13px}
+}
+
+/* ── SIDEBAR (shared shell з clients.html / index.html) ───── */
+#app{display:flex;min-height:100vh}
+.sidebar{width:var(--sw);background:var(--sidebar);display:flex;flex-direction:column;
+  position:fixed;top:0;left:0;height:100vh;z-index:100;overflow-y:auto}
+.sb-brand{padding:20px;border-bottom:1px solid rgba(255,255,255,.1)}
+.sb-brand h2{color:#fff;font-size:16px;font-weight:800}
+.sb-brand p{color:rgba(255,255,255,.45);font-size:11px;margin-top:2px}
+.sb-user{padding:14px 20px;display:flex;align-items:center;gap:10px;border-bottom:1px solid rgba(255,255,255,.1)}
+.avatar{width:36px;height:36px;background:var(--green);border-radius:50%;
+  display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:13px;flex-shrink:0}
+.sb-user-info p{color:#fff;font-size:13px;font-weight:600}
+.sb-user-info span{color:rgba(255,255,255,.45);font-size:11px}
+.sb-nav{flex:1;padding:10px 0}
+.nav-sec{padding:4px 18px;font-size:10px;text-transform:uppercase;letter-spacing:1px;
+  color:rgba(255,255,255,.28);margin:14px 0 4px}
+.nav-item{display:flex;align-items:center;gap:10px;padding:10px 20px;
+  color:rgba(255,255,255,.6);cursor:pointer;transition:all .2s;font-size:13.5px;
+  border-left:3px solid transparent;user-select:none}
+.nav-item:hover{background:rgba(255,255,255,.06);color:#fff}
+.nav-item.active{background:rgba(39,174,96,.18);color:var(--green2);border-left-color:var(--green)}
+.nav-item .ni{width:20px;text-align:center;font-size:15px}
+.sb-footer{padding:14px 20px;border-top:1px solid rgba(255,255,255,.1)}
+.sb-footer .btn{width:100%;background:rgba(255,255,255,.07);color:rgba(255,255,255,.65);
+  border:none;justify-content:center;font-size:13px}
+.sb-footer .btn:hover{background:rgba(255,255,255,.15);color:#fff}
+.main{margin-left:var(--sw);flex:1;display:flex;flex-direction:column;min-height:100vh}
+.menu-toggle{display:none;padding:8px 10px;background:#fff;
+  border:1.5px solid var(--gray2);border-radius:8px;font-size:18px;color:var(--dark2);cursor:pointer}
+.menu-toggle:hover{background:#f4f7fa}
+@media(max-width:768px){
+  .sidebar{transform:translateX(-100%);transition:transform .3s}
+  .sidebar.open{transform:translateX(0)}
+  .main{margin-left:0}
+  .menu-toggle{display:inline-flex;align-items:center}
+}
+</style>
+</head>
+<body>
+
+<div id="app">
+  <nav class="sidebar" id="sidebar">
+    <div class="sb-brand">
+      <h2>🍊 m.kids</h2>
+      <p>m.kids System</p>
+    </div>
+    <div class="sb-user">
+      <div class="avatar" id="uAvatar">CFO</div>
+      <div class="sb-user-info">
+        <p id="uName">CFO</p>
+        <span id="uLoc">Всі локації</span>
+      </div>
+    </div>
+    <nav class="sb-nav">
+      <div class="nav-item" data-permission="dashboard" data-perm-page="index"
+           onclick="goPerm('dashboard')">
+        <span class="ni">📊</span> Дашборд
+      </div>
+
+      <div class="nav-sec" data-section="crm">👶 КЛІЄНТИ CRM</div>
+      <div class="nav-item" data-permission="clients_list" data-parent="crm" data-perm-page="clients"
+           onclick="goPerm('clients_list')">
+        <span class="ni">👶</span> Список дітей
+      </div>
+      <div class="nav-item" data-permission="payments" data-parent="crm" data-perm-page="clients"
+           onclick="goPerm('payments')">
+        <span class="ni">💰</span> Борги та оплати
+      </div>
+      <div class="nav-item" data-permission="attendance_kids" data-parent="crm" data-perm-page="clients"
+           onclick="goPerm('attendance_kids')">
+        <span class="ni">📋</span> Табель відвідуваності
+      </div>
+      <div class="nav-item" data-permission="recalc" data-parent="crm" data-perm-page="clients"
+           onclick="goPerm('recalc')">
+        <span class="ni">💼</span> Перерахунки
+      </div>
+
+      <div class="nav-sec" data-section="hr">👤 HR</div>
+      <div class="nav-item" data-permission="employees" data-parent="hr" data-perm-page="index"
+           onclick="goPerm('employees')">
+        <span class="ni">👥</span> Співробітники
+      </div>
+      <div class="nav-item" data-permission="timesheet_staff" data-parent="hr" data-perm-page="index"
+           onclick="goPerm('timesheet_staff')">
+        <span class="ni">📋</span> Табель співробітників
+      </div>
+      <div class="nav-item" data-permission="vacations" data-parent="hr" data-perm-page="index"
+           onclick="goPerm('vacations')">
+        <span class="ni">🏖️</span> Відпустки
+      </div>
+      <div class="nav-item" data-permission="sick_leaves" data-parent="hr" data-perm-page="index"
+           onclick="goPerm('sick_leaves')">
+        <span class="ni">🏥</span> Лікарняні
+      </div>
+      <div class="nav-item" data-permission="calendar" data-parent="hr" data-perm-page="index"
+           onclick="goPerm('calendar')">
+        <span class="ni">🗓️</span> Календар подій
+      </div>
+      <div class="nav-item" data-permission="vacation_schedule" data-parent="hr" data-perm-page="index"
+           onclick="goPerm('vacation_schedule')">
+        <span class="ni">🌴</span> Графік відпусток
+      </div>
+
+      <div class="nav-sec" data-section="analytics">📈 АНАЛІТИКА</div>
+      <div class="nav-item" data-permission="analytics_clients" data-parent="analytics" data-perm-page="clients"
+           onclick="goPerm('analytics_clients')">
+        <span class="ni">📊</span> Аналітика по клієнтам
+      </div>
+      <div class="nav-item" data-permission="analytics_hr" data-parent="analytics" data-perm-page="index"
+           onclick="goPerm('analytics_hr')">
+        <span class="ni">📈</span> Аналітика по HR
+      </div>
+
+      <div class="nav-sec" data-section="finance">📊 FINANCE</div>
+      <div class="nav-item" data-permission="opex" data-parent="finance" data-perm-page="opex"
+           onclick="goPerm('opex')">
+        <span class="ni">💰</span> Opex
+      </div>
+      <div class="nav-item" data-permission="salary" data-parent="finance" data-perm-page="salary"
+           onclick="goPerm('salary')">
+        <span class="ni">💼</span> Salary
+      </div>
+      <div class="nav-item" data-permission="categories" data-parent="finance" data-perm-page="categories"
+           onclick="goPerm('categories')">
+        <span class="ni">📊</span> Категорії
+      </div>
+      <div class="nav-item active" data-permission="overview_analytics" data-parent="finance" data-perm-page="analytics"
+           onclick="goPerm('overview_analytics')">
+        <span class="ni">📊</span> Зведена аналітика
+      </div>
+
+      <div class="nav-item" data-permission="settings" data-perm-page="index"
+           onclick="goPerm('settings')">
+        <span class="ni">⚙️</span> Налаштування
+      </div>
+    </nav>
+    <div class="sb-footer">
+      <button class="btn" onclick="doLogout()">🚪 Вийти</button>
+    </div>
+  </nav>
+
+  <main class="main">
+<div class="wrap">
+
+  <div class="mode-tabs hidden" id="modeTabs">
+    <button class="mt-btn active" id="mtOverview">🌐 Огляд мережі</button>
+    <button class="mt-btn" id="mtDetail">📍 Деталь локації</button>
+  </div>
+
+  <div class="hd">
+    <button class="menu-toggle" onclick="toggleSidebar()" aria-label="Меню">☰</button>
+    <div style="flex:1;min-width:260px">
+      <h1 id="title">📊 Зведена аналітика</h1>
+      <div class="hd-meta" id="meta">завантаження…</div>
+    </div>
+    <div class="hd-ctrl">
+      <select id="locSel" class="month-sel hidden"></select>
+      <select id="yearSel" class="month-sel"></select>
+      <select id="monthSel" class="month-sel"></select>
+      <button id="refreshBtn" class="btn btn-primary">🔄 Оновити</button>
+    </div>
+  </div>
+
+  <div id="errBox" class="err hidden"></div>
+
+  <div id="content" class="hidden">
+
+    <!-- ── ОГЛЯД МЕРЕЖІ ── -->
+    <div id="overviewMode" class="hidden">
+
+      <!-- ТАБСИ ТИПУ (Садочки / Школи) — фільтр для всіх блоків нижче -->
+      <div class="type-tabs" id="typeTabs"></div>
+
+      <!-- БЛОК 1: Всього по обраному типу -->
+      <div class="kpis">
+        <div class="kpi">
+          <div class="kpi-lbl">👶 Всього дітей</div>
+          <div class="kpi-val" id="totChildren">—</div>
+          <div class="kpi-sub" id="totChildrenSub">&nbsp;</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-lbl">📚 Всього груп</div>
+          <div class="kpi-val" id="totGroups">—</div>
+          <div class="kpi-sub" id="totGroupsSub">&nbsp;</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-lbl">👥 Всього персоналу</div>
+          <div class="kpi-val" id="totStaff">—</div>
+          <div class="kpi-sub" id="totStaffSub">&nbsp;</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-lbl">💰 Бюджет ЗП</div>
+          <div class="kpi-val" id="totBudget">—</div>
+          <div class="kpi-sub" id="totBudgetSub">&nbsp;</div>
+        </div>
+      </div>
+
+      <!-- БЛОК 3: Середнє по обраному типу -->
+      <div class="card">
+        <div class="card-hd"><h3 id="avgTitle">📊 Середнє</h3></div>
+        <div class="card-bd pad">
+          <div class="metrics-grid" id="avgMetricsGrid"></div>
+        </div>
+      </div>
+
+      <!-- БЛОК 4: Лідери / аутсайдери -->
+      <div class="leaders-grid">
+        <div class="card">
+          <div class="card-hd"><h3 id="topEffTitle">🏆 Найефективніші <span style="font-weight:500;color:var(--gray);font-size:12px">(min ЗП/дитину)</span></h3></div>
+          <div class="card-bd"><table class="tbl leader-tbl"><tbody id="topEfficient"></tbody></table></div>
+        </div>
+        <div class="card">
+          <div class="card-hd"><h3 id="topExpTitle">💸 Найдорожчі <span style="font-weight:500;color:var(--gray);font-size:12px">(max ЗП/дитину)</span></h3></div>
+          <div class="card-bd"><table class="tbl leader-tbl"><tbody id="topExpensive"></tbody></table></div>
+        </div>
+      </div>
+
+      <!-- БЛОК 5: Червоні зони -->
+      <div class="card">
+        <div class="card-hd"><h3>🚨 Зони уваги</h3></div>
+        <div class="card-bd pad">
+          <div class="rz-section">
+            <h4 id="rzOvLbl">⚠️ Перевантаження вихователів</h4>
+            <div id="rzOverloaded"></div>
+          </div>
+          <div class="rz-section">
+            <h4 id="rzGrLbl">⚠️ Великі групи</h4>
+            <div id="rzBigGroups"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Існуюча таблиця порівняння -->
+      <div class="card">
+        <div class="card-hd">
+          <h3>📋 Локації — порівняння <span id="ovSub" style="font-weight:500;color:var(--gray)"></span></h3>
+        </div>
+        <div class="card-bd">
+          <table class="tbl">
+            <thead>
+              <tr>
+                <th data-sort="loc">Локація</th>
+                <th class="num" data-sort="children">Дітей</th>
+                <th class="num" data-sort="groups">Груп</th>
+                <th class="num" data-sort="staff">Персоналу</th>
+                <th class="num" data-sort="kpg">Дітей/гр</th>
+                <th class="num" data-sort="kpt">Дітей/вих</th>
+                <th class="num" data-sort="kpa">Дітей/пом</th>
+                <th class="num" data-sort="spc">ЗП/дит (бюджет)</th>
+              </tr>
+            </thead>
+            <tbody id="ovTblBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── ДЕТАЛЬ ЛОКАЦІЇ ── -->
+    <div id="detailMode" class="hidden">
+      <div class="kpis">
+        <div class="kpi">
+          <div class="kpi-lbl">👶 Дітей</div>
+          <div class="kpi-val" id="kpiChildren">—</div>
+          <div class="kpi-sub" id="kpiChildrenSub">&nbsp;</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-lbl">📚 Груп</div>
+          <div class="kpi-val" id="kpiGroups">—</div>
+          <div class="kpi-sub" id="kpiGroupsSub">&nbsp;</div>
+        </div>
+        <div class="kpi">
+          <div class="kpi-lbl">👥 Персоналу</div>
+          <div class="kpi-val" id="kpiStaff">—</div>
+          <div class="kpi-sub" id="kpiStaffSub">&nbsp;</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-hd"><h3>👥 Категорії персоналу</h3></div>
+        <div class="card-bd pad" id="staffCategories"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-hd"><h3>📈 Метрики ефективності</h3></div>
+        <div class="card-bd pad">
+          <div class="metrics-grid" id="metricsGrid"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="loadBox" class="loading">
+    <div class="spinner"></div>
+    <div id="loadTxt">Завантаження по 13 локаціях… (~30 сек)</div>
+  </div>
+</div>
+  </main>
+</div>
+
+<script>
+'use strict';
+
+var CFG = {
+  SCRIPT_URL: 'https://script.google.com/macros/s/AKfycbyTSUVlaN4-PpXe47zCSmhVs0Qxy1FDXG_XsB4zcKNpqBxdhDtS9ibM4YFGkGjmPQDFWQ/exec',
+  YEARS: [2025, 2026, 2027],
+  DEFAULT_YEAR: 2026,
+  MONTHS_DISP: ['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'],
+  CACHE_KEY: 'analytics_overview_cache_v1',
+  CACHE_TTL: 5 * 60 * 1000
+};
+
+// Default month = поточний - 1 (для січня залишаємо січень).
+var _curM = new Date().getMonth() + 1;
+var DEFAULT_MONTH = _curM > 1 ? _curM - 1 : 1;
+
+var S = {
+  data: null,
+  user: null,
+  year:  CFG.DEFAULT_YEAR,
+  month: DEFAULT_MONTH,
+  mode:  'overview',
+  selectedLoc: null,
+  sortBy:  'loc',
+  sortDir: 'asc',
+  typeFilter: 'Садочок'   // 'Садочок' | 'Школа' — фільтр для overview-блоків
+};
+
+// ── HELPERS ─────────────────────────────────
+function $(id){return document.getElementById(id);}
+function fmtUah(n){
+  if (n === null || n === undefined || !isFinite(n)) return '0';
+  var sign = n < 0 ? '-' : '';
+  var v = Math.round(Math.abs(n));
+  return sign + v.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+}
+function fmtNum(n){
+  if (n === null || n === undefined || !isFinite(n)) return '—';
+  return (Math.round(n * 10) / 10).toString();
+}
+function nowStr(){
+  var d = new Date();
+  var pad = function(x){return x<10?'0'+x:String(x);};
+  return pad(d.getDate())+'.'+pad(d.getMonth()+1)+'.'+d.getFullYear()+
+         ' '+pad(d.getHours())+':'+pad(d.getMinutes());
+}
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, function(c){
+    return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];
+  });
+}
+
+// ── AUTH (shared session) ───────────────────
+var SESSION_KEY = 'mkids_session';
+var SESSION_TTL_MS = 12 * 3600 * 1000;
+function readSession(){
+  try {
+    var s = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null');
+    if (!s || !s.user || !s.t) return null;
+    if (typeof s.user.role !== 'string') return null;
+    if (Date.now() - s.t > SESSION_TTL_MS) return null;
+    return s.user;
+  } catch(e) { return null; }
+}
+function clearSession(){ try { localStorage.removeItem(SESSION_KEY); } catch(e){} }
+function isHR(){       return S.user && S.user.role === 'hr'; }
+function isDirector(){ return S.user && S.user.role === 'director'; }
+function isNurse(){    return S.user && S.user.role === 'nurse'; }
+function doLogout(){ clearSession(); window.location.href = 'index.html'; }
+
+// ── UNIFIED SIDEBAR ─────────────────────────
+var CURRENT_PAGE = 'analytics';
+
+var PERMISSIONS = {
+  hr: 'all',
+  director: [
+    'dashboard',
+    'clients_list','payments','attendance_kids',
+    'employees','timesheet_staff','vacations','sick_leaves',
+    'calendar','vacation_schedule',
+    'analytics_clients','analytics_hr','opex','categories','salary','overview_analytics',
+    'client_birthdays'
+  ],
+  nurse: [
+    'dashboard',
+    'clients_list','attendance_kids',
+    'employees','timesheet_staff','vacations','sick_leaves',
+    'calendar','vacation_schedule'
+  ]
+};
+
+function roleLabel(role){ return ({hr:'CFO',director:'Директор',nurse:'Медсестра'})[role] || role; }
+function locLabel(){ return S.user && S.user.role==='hr' ? 'Всі локації' : (S.user && S.user.loc || ''); }
+
+function goPerm(perm){
+  var items = document.querySelectorAll('[data-permission="' + perm + '"]');
+  var target = items[0] && items[0].dataset.permPage;
+  if (target === CURRENT_PAGE) return;
+  var targetFile = target === 'clients'    ? 'clients.html'
+                 : target === 'opex'       ? 'opex.html'
+                 : target === 'categories' ? 'categories.html'
+                 : target === 'salary'     ? 'salary.html'
+                 : target === 'analytics'  ? 'analytics.html'
+                 : 'index.html';
+  location.href = targetFile + '#' + perm;
+}
+
+function applyRoleVisibility(){
+  if (!S || !S.user || !S.user.role) return;
+  var role = S.user.role;
+  var allowed = PERMISSIONS[role];
+  document.querySelectorAll('[data-permission]').forEach(function(el){
+    var perm = el.dataset.permission;
+    var visible = (allowed === 'all') || (Array.isArray(allowed) && allowed.indexOf(perm) >= 0);
+    el.style.display = visible ? '' : 'none';
+  });
+  document.querySelectorAll('[data-section]').forEach(function(section){
+    var sectionName = section.dataset.section;
+    var items = document.querySelectorAll('[data-permission][data-parent="' + sectionName + '"]');
+    var anyVisible = Array.prototype.slice.call(items).some(function(item){ return item.style.display !== 'none'; });
+    section.style.display = anyVisible ? '' : 'none';
+  });
+}
+
+function toggleSidebar(){ document.getElementById('sidebar').classList.toggle('open'); }
+
+function updUserUI(){
+  if (!S.user) return;
+  var r = S.user.role;
+  $('uName').textContent   = roleLabel(r);
+  $('uLoc').textContent    = locLabel();
+  $('uAvatar').textContent = ({hr:'CFO',director:'Д',nurse:'М'})[r] || '?';
+  applyRoleVisibility();
+}
+
+// ── CACHE ───────────────────────────────────
+function loadCache(){
+  try {
+    var raw = localStorage.getItem(CFG.CACHE_KEY);
+    if (!raw) return null;
+    var obj = JSON.parse(raw);
+    if (!obj || !obj.ts || !obj.data) return null;
+    if (obj.year !== S.year || obj.month !== S.month) return null;
+    if (Date.now() - obj.ts > CFG.CACHE_TTL) return null;
+    return obj;
+  } catch(e){ return null; }
+}
+function saveCache(data){
+  try {
+    localStorage.setItem(CFG.CACHE_KEY, JSON.stringify({
+      ts: Date.now(), year: S.year, month: S.month, data: data
+    }));
+  } catch(e){}
+}
+
+async function fetchData(force){
+  if (!force){
+    var c = loadCache();
+    if (c){
+      $('meta').textContent = 'оновлено ' + new Date(c.ts).toLocaleString('uk-UA') + ' (з кешу)';
+      return c.data;
+    }
+  }
+  var url = CFG.SCRIPT_URL + '?action=getOverviewAnalytics' +
+            '&year='  + encodeURIComponent(S.year) +
+            '&month=' + encodeURIComponent(S.month);
+  var r = await fetch(url, {redirect:'follow'});
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  var json = await r.json();
+  if (!json.ok) throw new Error(json.error || 'Unknown error');
+  saveCache(json);
+  $('meta').textContent = 'оновлено ' + nowStr();
+  return json;
+}
+
+// ── DATA SHAPING ────────────────────────────
+function periodLabel(){ return CFG.MONTHS_DISP[S.month - 1] + ' ' + S.year; }
+function updateTitle(){ $('title').textContent = '📊 Зведена аналітика · ' + periodLabel(); }
+
+// Frontend safety filter — Управління не показуємо. Backend вже фільтрує,
+// але дублюємо як було в opex/categories/salary.
+function visibleLocations(){
+  if (!S.data || !S.data.locations) return [];
+  return S.data.locations.filter(function(L){ return L.type !== 'Управління'; });
+}
+
+// Локації обраного типу (Садочок | Школа) — джерело для всіх блоків Overview.
+function selectedTypeLocations(){
+  return visibleLocations().filter(function(L){ return L.type === S.typeFilter; });
+}
+
+// Слова для лейблів за типом (родовий і місцевий відмінки).
+function typeWordPlural(){ return S.typeFilter === 'Садочок' ? 'садочків' : 'шкіл'; }
+function typeWordLocative(){ return S.typeFilter === 'Садочок' ? 'садочках' : 'школах'; }
+function typeWordAccPlural(){ return S.typeFilter === 'Садочок' ? 'садочки'  : 'школи'; }
+function typeWordGen(){ return S.typeFilter === 'Садочок' ? 'садочка' : 'школи'; }
+function groupWord(){ return S.typeFilter === 'Садочок' ? 'група'   : 'клас';  }
+function groupWordShort(){ return S.typeFilter === 'Садочок' ? 'гр' : 'клас'; }
+
+// ── OVERVIEW: side-table з нормалізованими метриками ──
+// ЗП беремо з salaryBudget (а не Fact) — у поточному місяці фактичних виплат
+// може ще не бути, тому показники мають базуватись на запланованому бюджеті.
+function computeOverviewRows(){
+  return selectedTypeLocations().map(function(L){
+    var sc = L.staffCounts || {};
+    var kpg = (L.groupsCount || 0) > 0 ? L.childrenCount / L.groupsCount  : null;
+    var kpt = (sc.teacher    || 0) > 0 ? L.childrenCount / sc.teacher     : null;
+    var kpa = (sc.assistant  || 0) > 0 ? L.childrenCount / sc.assistant   : null;
+    var spc = (L.childrenCount || 0) > 0 ? L.salaryBudget / L.childrenCount : null;
+    return {
+      loc:      L.loc,
+      type:     L.type || '',
+      children: L.childrenCount || 0,
+      groups:   L.groupsCount   || 0,
+      staff:    L.mainStaffFromSalary || 0,
+      kpg:      kpg,
+      kpt:      kpt,
+      kpa:      kpa,
+      spc:      spc
+    };
+  });
+}
+
+function sortRows(rows){
+  var col = S.sortBy;
+  var dir = S.sortDir === 'asc' ? 1 : -1;
+  rows.sort(function(a, b){
+    var va = a[col], vb = b[col];
+    var aN = (va === null || va === undefined);
+    var bN = (vb === null || vb === undefined);
+    if (aN && bN) return 0;
+    if (aN) return 1;        // nulls always last regardless of dir
+    if (bN) return -1;
+    if (typeof va === 'string') return va.localeCompare(vb, 'uk') * dir;
+    return (va - vb) * dir;
+  });
+}
+
+function updateSortHeaders(){
+  document.querySelectorAll('th[data-sort]').forEach(function(th){
+    th.classList.remove('sort-asc','sort-desc');
+    if (th.dataset.sort === S.sortBy){
+      th.classList.add(S.sortDir === 'asc' ? 'sort-asc' : 'sort-desc');
+    }
+  });
+}
+
+// ── OVERVIEW: верхні аналітичні блоки ───────
+// Цифри обчислюються по локаціях обраного типу (S.typeFilter).
+function computeTypeTotals(){
+  var locs = selectedTypeLocations();
+  var t = {locsCount: locs.length, children:0, groups:0, staff:0, budget:0,
+           teacher:0, assistant:0, childrenFromList:0};
+  locs.forEach(function(L){
+    var sc = L.staffCounts || {};
+    t.children          += L.childrenCount         || 0;
+    t.groups            += L.groupsCount           || 0;
+    t.staff             += L.mainStaffFromSalary   || 0;
+    t.budget            += L.salaryBudget          || 0;
+    t.teacher           += sc.teacher              || 0;
+    t.assistant         += sc.assistant            || 0;
+    t.childrenFromList  += L.childrenTotalFromList || 0;
+  });
+  return t;
+}
+
+// Кількість локацій кожного типу (для табсів).
+function typeCounts(){
+  var locs = visibleLocations();
+  return {
+    'Садочок': locs.filter(function(L){ return L.type === 'Садочок'; }).length,
+    'Школа':   locs.filter(function(L){ return L.type === 'Школа';   }).length
+  };
+}
+
+function renderTypeTabs(){
+  var c = typeCounts();
+  $('typeTabs').innerHTML =
+    '<button class="tt-btn ' + (S.typeFilter === 'Садочок' ? 'active' : '') + '" data-type="Садочок">🌳 Садочки (' + c['Садочок'] + ')</button>' +
+    '<button class="tt-btn ' + (S.typeFilter === 'Школа'   ? 'active' : '') + '" data-type="Школа">🏫 Школи (' + c['Школа'] + ')</button>';
+}
+
+function renderTotalsBlock(){
+  var t = computeTypeTotals();
+  var sub = t.locsCount + ' ' + typeWordPlural();
+  $('totChildren').textContent = t.children;
+  $('totGroups').textContent   = t.groups;
+  $('totStaff').textContent    = t.staff;
+  $('totBudget').textContent   = fmtUah(t.budget) + ' ₴';
+  $('totChildrenSub').textContent = sub;
+  $('totGroupsSub').textContent   = sub;
+  $('totStaffSub').textContent    = sub;
+  $('totBudgetSub').textContent   = sub;
+}
+
+// Середнє: SUM(дітей)/SUM(груп) тощо — глобальне по локаціях типу,
+// а не arithmetic mean of per-loc ratios.
+function renderAvgMetrics(){
+  $('avgTitle').textContent = '📊 Середнє по ' + typeWordLocative();
+  var t = computeTypeTotals();
+  function safeDiv(a, b){ return (b && b > 0) ? a / b : null; }
+  var metrics = [
+    {label: 'Дітей на групу',           val: safeDiv(t.children, t.groups),    unit: ''},
+    {label: 'Дітей на вихователя',       val: safeDiv(t.children, t.teacher),   unit: ''},
+    {label: 'Дітей на помічника',        val: safeDiv(t.children, t.assistant), unit: ''},
+    {label: 'Дітей на 1 співробітника',  val: safeDiv(t.children, t.staff),     unit: ''},
+    {label: 'ЗП на 1 дитину',            val: safeDiv(t.budget,   t.children),  unit: ' ₴'},
+    {label: 'ЗП на 1 співробітника',     val: safeDiv(t.budget,   t.staff),     unit: ' ₴'}
+  ];
+  var html = metrics.map(function(m){
+    var valTxt = (m.val === null) ? '—'
+               : (m.unit === ' ₴') ? (fmtUah(m.val) + m.unit) : fmtNum(m.val);
+    return '<div class="metric">' +
+             '<div class="metric-lbl">' + escapeHtml(m.label) + '</div>' +
+             '<div class="metric-val">' + valTxt + '</div>' +
+           '</div>';
+  }).join('');
+  $('avgMetricsGrid').innerHTML = html;
+}
+
+function renderLeaders(){
+  var typeAcc = typeWordAccPlural();
+  $('topEffTitle').innerHTML = '🏆 Найефективніші ' + typeAcc + ' <span style="font-weight:500;color:var(--gray);font-size:12px">(min ЗП/дитину)</span>';
+  $('topExpTitle').innerHTML = '💸 Найдорожчі '   + typeAcc + ' <span style="font-weight:500;color:var(--gray);font-size:12px">(max ЗП/дитину)</span>';
+
+  var rows = computeOverviewRows().filter(function(r){
+    return r.spc !== null && isFinite(r.spc) && r.spc > 0;
+  });
+  var byAsc  = rows.slice().sort(function(a, b){ return a.spc - b.spc; });
+  // Якщо локацій <= 3 — не дублюємо ту саму локацію в обох топах.
+  var topEff = byAsc.slice(0, 3);
+  var topExp = byAsc.slice(-3).reverse();
+
+  function html(arr){
+    if (!arr.length) return '<tr><td colspan="3" style="padding:14px;text-align:center;color:var(--gray)">Недостатньо даних</td></tr>';
+    return arr.map(function(r, i){
+      return '<tr>' +
+        '<td class="rk">' + (i+1) + '.</td>' +
+        '<td class="cat-name">' + escapeHtml(r.loc) + '</td>' +
+        '<td class="num">' + fmtUah(r.spc) + ' ₴</td>' +
+      '</tr>';
+    }).join('');
+  }
+  $('topEfficient').innerHTML = html(topEff);
+  $('topExpensive').innerHTML = html(topExp);
+}
+
+// Норми залежать від типу. Садочок: 10/14. Школа: 20/22.
+function renderRedZones(){
+  var th = (S.typeFilter === 'Садочок')
+    ? {teacherKids: 10, groupKids: 14}
+    : {teacherKids: 20, groupKids: 22};
+
+  $('rzOvLbl').textContent = '⚠️ Перевантаження вихователів (норма для ' + typeWordGen() + ': до ' + th.teacherKids + ' дітей/вих)';
+  $('rzGrLbl').textContent = '⚠️ Великі ' + (S.typeFilter === 'Садочок' ? 'групи' : 'класи') + ' (норма для ' + typeWordGen() + ': до ' + th.groupKids + ' дітей/' + groupWord() + ')';
+
+  var locs = selectedTypeLocations();
+
+  var overloaded = locs.map(function(L){
+    var sc = L.staffCounts || {};
+    var ratio = (sc.teacher > 0) ? L.childrenCount / sc.teacher : null;
+    return {loc: L.loc, ratio: ratio};
+  }).filter(function(x){ return x.ratio !== null && x.ratio > th.teacherKids; })
+    .sort(function(a, b){ return b.ratio - a.ratio; });
+
+  var bigGroups = locs.map(function(L){
+    var ratio = (L.groupsCount > 0) ? L.childrenCount / L.groupsCount : null;
+    return {loc: L.loc, ratio: ratio};
+  }).filter(function(x){ return x.ratio !== null && x.ratio > th.groupKids; })
+    .sort(function(a, b){ return b.ratio - a.ratio; });
+
+  function rowsHtml(arr, fmtFn){
+    if (!arr.length) return '<div class="rz-ok">✅ Всі в нормі</div>';
+    return arr.map(function(x){
+      return '<div class="rz-row"><span class="loc">' + escapeHtml(x.loc) + '</span><span class="val">' + fmtFn(x) + '</span></div>';
+    }).join('');
+  }
+  $('rzOverloaded').innerHTML = rowsHtml(overloaded, function(x){ return fmtNum(x.ratio) + ' дітей/вих'; });
+  $('rzBigGroups').innerHTML  = rowsHtml(bigGroups,  function(x){ return fmtNum(x.ratio) + ' дітей/' + groupWordShort(); });
+}
+
+function renderOverviewTable(){
+  $('ovSub').textContent = '— ' + periodLabel();
+
+  var rows = computeOverviewRows();
+  sortRows(rows);
+  updateSortHeaders();
+
+  // min/max ЗП на дитину для підсвічування
+  var spcMin = null, spcMax = null;
+  rows.forEach(function(r){
+    if (r.spc === null || !isFinite(r.spc)) return;
+    if (spcMin === null || r.spc < spcMin) spcMin = r.spc;
+    if (spcMax === null || r.spc > spcMax) spcMax = r.spc;
+  });
+
+  var body = $('ovTblBody');
+  body.innerHTML = '';
+
+  rows.forEach(function(r){
+    var tr = document.createElement('tr');
+
+    // Підсвічування комірок:
+    // Дітей/гр > 12 — жовтий
+    var kpgCls = (r.kpg !== null && r.kpg > 12) ? 'cell-warn' : '';
+    // Дітей/вих > 12 — червоний, > 8 — жовтий
+    var kptCls = '';
+    if (r.kpt !== null){
+      if (r.kpt > 12)      kptCls = 'cell-over';
+      else if (r.kpt > 8)  kptCls = 'cell-warn';
+    }
+    // ЗП/дитину min — зеленим жирним, max — червоним
+    var spcCls = '';
+    if (r.spc !== null && spcMin !== spcMax){
+      if (r.spc === spcMin) spcCls = 'cell-min';
+      else if (r.spc === spcMax) spcCls = 'cell-max';
+    }
+
+    tr.innerHTML =
+      '<td class="cat-name">' + escapeHtml(r.loc) + '</td>' +
+      '<td class="num">' + r.children + '</td>' +
+      '<td class="num">' + r.groups + '</td>' +
+      '<td class="num">' + r.staff + '</td>' +
+      '<td class="num ' + kpgCls + '">' + (r.kpg !== null ? fmtNum(r.kpg) : '<span class="muted">—</span>') + '</td>' +
+      '<td class="num ' + kptCls + '">' + (r.kpt !== null ? fmtNum(r.kpt) : '<span class="muted">—</span>') + '</td>' +
+      '<td class="num">'                  + (r.kpa !== null ? fmtNum(r.kpa) : '<span class="muted">—</span>') + '</td>' +
+      '<td class="num ' + spcCls + '">' + (r.spc !== null ? fmtUah(r.spc) : '<span class="muted">—</span>') + '</td>';
+    body.appendChild(tr);
+  });
+
+  if (!rows.length){
+    body.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--gray);padding:24px">Немає локацій</td></tr>';
+    return;
+  }
+
+  // ── СЕРЕДНЄ ──
+  // Усі числові колонки — середнє по локаціях. Для абсолютних (children/groups/
+  // staff) це AVG = SUM / count. Сумарні значення доступні зверху в KPI-блоці.
+  var totC = 0, totG = 0, totS = 0;
+  rows.forEach(function(r){ totC += r.children; totG += r.groups; totS += r.staff; });
+
+  function avgNonNull(field){
+    var sum = 0, cnt = 0;
+    rows.forEach(function(r){ if (r[field] !== null && isFinite(r[field])){ sum += r[field]; cnt++; } });
+    return cnt > 0 ? sum / cnt : null;
+  }
+  var n = rows.length;
+  var avgChildren = totC / n;
+  var avgGroups   = totG / n;
+  var avgStaff    = totS / n;
+  var avgKpg = avgNonNull('kpg');
+  var avgKpt = avgNonNull('kpt');
+  var avgKpa = avgNonNull('kpa');
+  var avgSpc = avgNonNull('spc');
+
+  var totRow = document.createElement('tr');
+  totRow.className = 'total';
+  totRow.innerHTML =
+    '<td>СЕРЕДНЄ (' + n + ' ' + typeWordPlural() + ')</td>' +
+    '<td class="num">' + fmtNum(avgChildren) + '</td>' +
+    '<td class="num">' + fmtNum(avgGroups)   + '</td>' +
+    '<td class="num">' + fmtNum(avgStaff)    + '</td>' +
+    '<td class="num">' + (avgKpg !== null ? fmtNum(avgKpg) : '—') + '</td>' +
+    '<td class="num">' + (avgKpt !== null ? fmtNum(avgKpt) : '—') + '</td>' +
+    '<td class="num">' + (avgKpa !== null ? fmtNum(avgKpa) : '—') + '</td>' +
+    '<td class="num">' + (avgSpc !== null ? fmtUah(avgSpc) : '—') + '</td>';
+  body.appendChild(totRow);
+}
+
+// ── DETAIL: 3 KPI + категорії + метрики ──
+function renderStaffCategories(L){
+  var sc = L.staffCounts || {};
+  var alwaysShow = [
+    ['Директор',     sc.director  || 0],
+    ['Вихователі',   sc.teacher   || 0],
+    ['Помічники',    sc.assistant || 0],
+    ['Медсестра',    sc.nurse     || 0],
+    ['Охорона',      sc.guard     || 0]
+  ];
+  var conditional = [
+    ['Прибиральниця', sc.cleaner || 0],
+    ['Тьютор',        sc.tutor   || 0]
+  ];
+
+  var html = '';
+  alwaysShow.forEach(function(p){
+    html += '<div class="staff-row"><span>' + escapeHtml(p[0]) + '</span><b>' + p[1] + '</b></div>';
+  });
+  conditional.forEach(function(p){
+    if (p[1] > 0) html += '<div class="staff-row"><span>' + escapeHtml(p[0]) + '</span><b>' + p[1] + '</b></div>';
+  });
+  html += '<div class="staff-row subtotal"><span>Всього основного</span><b>' + (L.mainStaffFromSalary || 0) + '</b></div>';
+  html += '<div class="staff-row"><span>Вчителі-предметники</span><b>' + (sc.subject || 0) + '</b></div>';
+  html += '<div class="staff-row"><span>Доп. заняття</span><b>' + (sc.extras || 0) + '</b></div>';
+
+  $('staffCategories').innerHTML = html;
+}
+
+function renderMetrics(L){
+  function safeDiv(a, b){ return (b && b > 0) ? a / b : null; }
+  var sc = L.staffCounts || {};
+  // ЗП — з бюджету (а не Fact), бо в поточному місяці фактичних виплат може ще не бути.
+  var metrics = [
+    {label: 'Дітей на групу',           val: safeDiv(L.childrenCount, L.groupsCount),         unit: ''},
+    {label: 'Дітей на вихователя',       val: safeDiv(L.childrenCount, sc.teacher),            unit: ''},
+    {label: 'Дітей на помічника',        val: safeDiv(L.childrenCount, sc.assistant),          unit: ''},
+    {label: 'Дітей на 1 співробітника',  val: safeDiv(L.childrenCount, L.mainStaffFromSalary), unit: ''},
+    {label: 'ЗП на 1 дитину',            val: safeDiv(L.salaryBudget,  L.childrenCount),       unit: ' ₴'},
+    {label: 'ЗП на 1 співробітника',     val: safeDiv(L.salaryBudget,  L.mainStaffFromSalary), unit: ' ₴'}
+  ];
+  var html = metrics.map(function(m){
+    var valTxt = (m.val === null) ? '—'
+               : (m.unit === ' ₴') ? (fmtUah(m.val) + m.unit) : fmtNum(m.val);
+    return '<div class="metric">' +
+             '<div class="metric-lbl">' + escapeHtml(m.label) + '</div>' +
+             '<div class="metric-val">' + valTxt + '</div>' +
+           '</div>';
+  }).join('');
+  $('metricsGrid').innerHTML = html;
+}
+
+function renderDetail(){
+  if (!S.data || !S.data.locations) return;
+  var L = visibleLocations().filter(function(x){ return x.loc === S.selectedLoc; })[0];
+  if (!L){
+    $('kpiChildren').textContent = '—';
+    $('kpiGroups').textContent = '—';
+    $('kpiStaff').textContent = '—';
+    $('staffCategories').innerHTML = '<div class="staff-row"><span class="muted">Локація не знайдена</span></div>';
+    $('metricsGrid').innerHTML = '';
+    return;
+  }
+
+  $('kpiChildren').textContent     = L.childrenCount || 0;
+  $('kpiChildrenSub').textContent  = 'У базі (Клієнти): ' + (L.childrenTotalFromList || 0);
+  $('kpiGroups').textContent       = L.groupsCount || 0;
+  $('kpiGroupsSub').textContent    = ' ';
+  $('kpiStaff').textContent        = L.mainStaffCount || 0;
+  $('kpiStaffSub').textContent     = 'З Salary: ' + (L.mainStaffFromSalary || 0);
+
+  renderStaffCategories(L);
+  renderMetrics(L);
+}
+
+// ── LOCATION SELECTOR (HR Detail mode) ──────
+function renderLocSelector(){
+  if (!isHR()) return;
+  var locs = visibleLocations();
+  var sel = $('locSel');
+  sel.innerHTML = '';
+  locs.forEach(function(L){
+    var o = document.createElement('option');
+    o.value = L.loc;
+    o.textContent = L.loc;
+    if (L.loc === S.selectedLoc) o.selected = true;
+    sel.appendChild(o);
+  });
+}
+
+// ── SELECTORS ───────────────────────────────
+function renderYearSel(){
+  var sel = $('yearSel');
+  sel.innerHTML = '';
+  CFG.YEARS.forEach(function(y){
+    var o = document.createElement('option');
+    o.value = y;
+    o.textContent = String(y);
+    if (y === S.year) o.selected = true;
+    sel.appendChild(o);
+  });
+}
+function renderMonthSel(){
+  var sel = $('monthSel');
+  sel.innerHTML = '';
+  for (var i = 1; i <= 12; i++){
+    var o = document.createElement('option');
+    o.value = i;
+    o.textContent = CFG.MONTHS_DISP[i-1];
+    if (i === S.month) o.selected = true;
+    sel.appendChild(o);
+  }
+}
+
+// ── ORCHESTRATION ───────────────────────────
+function applyMode(){
+  $('overviewMode').classList.toggle('hidden', S.mode !== 'overview');
+  $('detailMode').classList.toggle('hidden',   S.mode !== 'detail');
+  $('mtOverview').classList.toggle('active', S.mode === 'overview');
+  $('mtDetail').classList.toggle('active',   S.mode === 'detail');
+  // locSel показуємо тільки HR у Деталі. Director має фіксовану локацію — селектор прихований.
+  if (isHR()){
+    $('locSel').classList.toggle('hidden', S.mode !== 'detail');
+  } else {
+    $('locSel').classList.add('hidden');
+  }
+}
+
+function rerender(){
+  updateTitle();
+  if (S.mode === 'overview'){
+    renderTypeTabs();
+    renderTotalsBlock();
+    renderAvgMetrics();
+    renderLeaders();
+    renderRedZones();
+    renderOverviewTable();
+  } else {
+    renderDetail();
+  }
+}
+
+async function load(force){
+  $('errBox').classList.add('hidden');
+  $('refreshBtn').disabled = true;
+  if (!S.data){
+    $('content').classList.add('hidden');
+    $('loadTxt').textContent = 'Завантаження по 13 локаціях… (~30 сек)';
+    $('loadBox').classList.remove('hidden');
+  }
+  try {
+    var data = await fetchData(force);
+    S.data = data;
+
+    // Якщо обрана локація відсутня (наприклад змінили місяць/рік) — підставляємо
+    // першу видиму. Для Director — завжди user.loc.
+    var visibleLocs = visibleLocations();
+    if (isDirector()){
+      S.selectedLoc = S.user.loc;
+    } else if (!S.selectedLoc || !visibleLocs.some(function(L){ return L.loc === S.selectedLoc; })){
+      S.selectedLoc = visibleLocs.length ? visibleLocs[0].loc : null;
+    }
+
+    renderLocSelector();
+    $('loadBox').classList.add('hidden');
+    $('content').classList.remove('hidden');
+    applyMode();
+    rerender();
+  } catch(e){
+    $('loadBox').classList.add('hidden');
+    $('content').classList.add('hidden');
+    S.data = null;
+    var msg = e && e.message ? e.message : String(e);
+    var box = $('errBox');
+    box.textContent = '❌ Помилка: ' + msg;
+    box.classList.remove('hidden');
+  } finally {
+    $('refreshBtn').disabled = false;
+  }
+}
+
+function bindEventListeners(){
+  $('yearSel').addEventListener('change', async function(e){
+    S.year = +e.target.value;
+    S.data = null;
+    await load(false);
+  });
+  $('monthSel').addEventListener('change', async function(e){
+    S.month = +e.target.value;
+    S.data = null;
+    await load(false);
+  });
+  $('refreshBtn').addEventListener('click', function(){
+    localStorage.removeItem(CFG.CACHE_KEY);
+    S.data = null;
+    load(true);
+  });
+
+  $('locSel').addEventListener('change', function(e){
+    S.selectedLoc = e.target.value;
+    if (S.mode === 'detail') renderDetail();
+  });
+
+  $('mtOverview').addEventListener('click', function(){
+    if (S.mode === 'overview') return;
+    S.mode = 'overview';
+    applyMode();
+    rerender();
+  });
+  $('mtDetail').addEventListener('click', function(){
+    if (S.mode === 'detail') return;
+    S.mode = 'detail';
+    applyMode();
+    rerender();
+  });
+
+  // Перемикання типу (Садочки / Школи) — фільтр для всього Огляду.
+  $('typeTabs').addEventListener('click', function(e){
+    var btn = e.target.closest && e.target.closest('.tt-btn');
+    if (!btn) return;
+    var t = btn.dataset.type;
+    if (!t || t === S.typeFilter) return;
+    S.typeFilter = t;
+    rerender();
+  });
+
+  // Сортування у таблиці огляду — клік по заголовку.
+  document.querySelectorAll('th[data-sort]').forEach(function(th){
+    th.addEventListener('click', function(){
+      var col = th.dataset.sort;
+      if (S.sortBy === col){
+        S.sortDir = S.sortDir === 'asc' ? 'desc' : 'asc';
+      } else {
+        S.sortBy = col;
+        S.sortDir = 'asc';
+      }
+      renderOverviewTable();
+    });
+  });
+}
+
+(async function bootstrap(){
+  var sessUser = readSession();
+  if (!sessUser){ window.location.href = 'index.html'; return; }
+  S.user = sessUser;
+
+  if (isNurse()){ window.location.href = 'index.html'; return; }
+  if (!isHR() && !isDirector()){ window.location.href = 'index.html'; return; }
+
+  if (isHR()){
+    S.mode = 'overview';
+    $('modeTabs').classList.remove('hidden');
+  } else if (isDirector()){
+    if (!S.user.loc){
+      updUserUI();
+      $('loadBox').classList.add('hidden');
+      $('errBox').textContent = '❌ Немає прив\'язаної локації для директора';
+      $('errBox').classList.remove('hidden');
+      return;
+    }
+    S.mode = 'detail';
+    S.selectedLoc = S.user.loc;
+    // modeTabs лишаються hidden
+  }
+
+  updUserUI();
+  renderYearSel();
+  renderMonthSel();
+  bindEventListeners();
+  applyMode();
+  await load(false);
+})();
+</script>
+</body>
+</html>
