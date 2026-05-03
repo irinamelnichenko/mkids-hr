@@ -522,6 +522,12 @@ tbody tr.clickable:hover td{background:#f0f7ff}
         <span class="ni">📈</span> Аналітика по HR
       </div>
 
+      <div class="nav-sec" data-section="finance">📊 FINANCE</div>
+      <div class="nav-item" data-permission="opex" data-parent="finance" data-perm-page="opex"
+           onclick="goPerm('opex')">
+        <span class="ni">💰</span> Opex
+      </div>
+
       <div class="nav-item" data-permission="settings" data-perm-page="index"
            onclick="goPerm('settings')">
         <span class="ni">⚙️</span> Налаштування
@@ -1505,7 +1511,7 @@ const PERMISSIONS = {
     'clients_list','payments','attendance_kids',
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
-    'analytics_clients','analytics_hr',
+    'analytics_clients','analytics_hr','opex',
     'client_birthdays'
   ],
   nurse: [
@@ -1534,7 +1540,9 @@ function goPerm(perm){
     var fn = PERM_LOCAL_ACTION[perm];
     if (fn) fn();
   } else {
-    var targetFile = target === 'clients' ? 'clients.html' : 'index.html';
+    var targetFile = target === 'clients' ? 'clients.html'
+                   : target === 'opex'    ? 'opex.html'
+                   : 'index.html';
     location.href = targetFile + '#' + perm;
   }
 }
