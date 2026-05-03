@@ -776,17 +776,16 @@ function computeSectionTotals(rows){
 }
 
 // ── DETAIL: rows for period ─────────────────
-// SWAP: реальна структура листа Salary інша ніж в OPEX. Backend читає колонки
-// за OPEX-формулою, але семантично "fact"-колонка = БЮДЖЕТ, "budget"-колонка = ФАКТ.
-// Виправляємо тут на frontend (backend не чіпаємо за вимогою). Все downstream
-// (KPI, таблиця, total-row) бачить уже правильні значення.
+// Backend (getSalaryData) повертає правильно названі поля fact/budget для
+// кожного місяця. Просто акумулюємо без swap — і таблиця, і KPI бачать
+// узгоджені дані.
 function rowsForPeriod(rows, monthsArr){
   return rows.map(function(r){
     var fact = 0, budget = 0;
     monthsArr.forEach(function(m){
       var v = getMonthValues(r, m);
-      budget += v.fact;     // backend's fact-колонка → реальний БЮДЖЕТ
-      fact   += v.budget;   // backend's budget-колонка → реальний ФАКТ
+      fact   += v.fact;
+      budget += v.budget;
     });
     return {
       name:        r.name,
