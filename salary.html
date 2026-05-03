@@ -3,8 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>m.kids — Бюджет (OPEX)</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<title>m.kids — Зарплата (Salary)</title>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -21,14 +20,15 @@ select{font-family:inherit}
 
 .wrap{max-width:1200px;margin:0 auto;padding:24px 20px 60px}
 
-/* ── HEADER ────────────────────────────────── */
 .hd{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:22px}
 .hd h1{font-size:24px;font-weight:900;color:var(--dark);flex:1;min-width:260px}
 .hd-meta{font-size:12px;color:var(--gray);margin-top:3px;font-weight:500}
 .hd-ctrl{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+
 .month-sel{padding:9px 14px;border:1.5px solid var(--gray2);border-radius:8px;background:#fff;
   font-size:14px;font-weight:600;color:var(--dark2);outline:none;cursor:pointer}
 .month-sel:focus{border-color:var(--green)}
+
 .btn{padding:10px 16px;border:none;border-radius:var(--r);font-size:14px;font-weight:600;
   display:inline-flex;align-items:center;gap:6px;transition:all .15s}
 .btn-primary{background:var(--green);color:#fff}
@@ -36,10 +36,6 @@ select{font-family:inherit}
 .btn-primary:disabled{opacity:.55;cursor:wait}
 .btn-secondary{background:#fff;color:var(--dark2);border:1.5px solid var(--gray2)}
 .btn-secondary:hover{border-color:var(--gray);background:#f4f7fa}
-.user-chip{display:flex;justify-content:flex-end;align-items:center;gap:10px;
-  margin-bottom:10px;font-size:12px;color:var(--gray);font-weight:600}
-.user-chip .role{padding:3px 10px;border-radius:12px;background:#e8f8f0;color:var(--green);font-weight:700}
-.user-chip .role.dir{background:#e6eef9;color:var(--blue)}
 
 .mode-tabs{display:flex;gap:6px;background:#fff;border-radius:var(--r);padding:4px;
   box-shadow:var(--sh);margin-bottom:16px;width:fit-content;max-width:100%;flex-wrap:wrap}
@@ -54,13 +50,11 @@ select{font-family:inherit}
 .tt-btn:hover{border-color:var(--gray);color:var(--dark2)}
 .tt-btn.active{background:var(--green);border-color:var(--green);color:#fff}
 
-/* ── BANNER ────────────────────────────────── */
 .banner{background:#fdf2f2;border:1px solid #fca5a5;color:var(--red);
   padding:14px 18px;border-radius:var(--r);margin-bottom:18px;
   display:flex;align-items:center;gap:10px;font-weight:600;font-size:14px}
 .banner-ic{font-size:20px}
 
-/* ── KPI ──────────────────────────────────── */
 .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:22px}
 .kpi{background:#fff;border-radius:var(--r);padding:18px 20px;box-shadow:var(--sh);
   border:2px solid transparent;transition:border-color .2s}
@@ -71,14 +65,11 @@ select{font-family:inherit}
 .kpi.over{border-color:var(--red2)}
 .kpi.over .kpi-val{color:var(--red)}
 
-/* ── CARD ─────────────────────────────────── */
 .card{background:#fff;border-radius:var(--r);box-shadow:var(--sh);overflow:hidden;margin-bottom:22px}
 .card-hd{padding:14px 18px;border-bottom:1px solid #e8ecf0;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
 .card-hd h3{font-size:14px;font-weight:800;color:var(--dark)}
 .card-bd{padding:8px 0}
-.card-bd.pad{padding:18px}
 
-/* ── TABLE ────────────────────────────────── */
 .tbl{width:100%;border-collapse:collapse}
 .tbl thead th{padding:10px 14px;text-align:left;font-size:11px;font-weight:700;
   text-transform:uppercase;letter-spacing:.5px;color:var(--gray);
@@ -89,8 +80,14 @@ select{font-family:inherit}
 .tbl tbody tr:hover{background:#fafbfc}
 .tbl tbody tr.row-over{background:#fef5f5}
 .tbl tbody tr.row-over:hover{background:#fdebeb}
+.tbl tbody tr.row-header{background:#eef2f6;font-weight:700;color:var(--dark2)}
+.tbl tbody tr.row-header:hover{background:#e3e8ef}
 .tbl tbody tr.total{font-weight:800;background:#f4f7fa;border-top:2px solid #e2e8f0}
 .tbl tbody tr.total td{font-size:15px;color:var(--dark)}
+.tbl tbody tr.clickable{cursor:pointer}
+.tbl tbody tr.clickable:hover{box-shadow:inset 0 0 0 1px #cbd5e0;background:#f4f7fa}
+.tbl tbody tr.clickable.row-over:hover{background:#fde2e2}
+
 .cat-name{font-weight:600;color:var(--dark2)}
 .diff-pos{color:var(--green)}
 .diff-neg{color:var(--red)}
@@ -104,10 +101,6 @@ select{font-family:inherit}
 .b-bad{background:#fdebeb;color:var(--red)}
 .b-none{background:#f0f4f8;color:var(--gray2)}
 
-/* ── CHART ────────────────────────────────── */
-.chart-wrap{position:relative;height:340px;padding:6px}
-
-/* ── STATES ───────────────────────────────── */
 .loading{display:flex;align-items:center;justify-content:center;padding:60px;
   flex-direction:column;gap:14px;color:var(--gray)}
 .spinner{width:34px;height:34px;border:3px solid #e8ecf0;border-top-color:var(--green);
@@ -116,52 +109,11 @@ select{font-family:inherit}
 .err{background:#fdf2f2;border:1px solid #fca5a5;color:var(--red);
   padding:14px 18px;border-radius:var(--r);margin-bottom:18px;font-weight:600}
 
-/* ── CLICKABLE CATEGORY ROW ───────────────── */
-.tbl tbody tr.clickable{cursor:pointer}
-.tbl tbody tr.clickable:hover{box-shadow:inset 0 0 0 1px #cbd5e0;background:#f4f7fa}
-.tbl tbody tr.clickable.row-over:hover{background:#fde2e2}
-
-/* ── MODAL ────────────────────────────────── */
-.modal-ovl{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:100;
-  display:flex;align-items:center;justify-content:center;padding:20px}
-.modal-card{background:#fff;border-radius:var(--r);box-shadow:0 12px 40px rgba(0,0,0,.25);
-  max-width:800px;width:100%;max-height:90vh;display:flex;flex-direction:column;overflow:hidden}
-.modal-hd{padding:14px 20px;border-bottom:1px solid #e8ecf0;
-  display:flex;align-items:center;justify-content:space-between;gap:10px}
-.modal-hd h2{font-size:16px;font-weight:800;color:var(--dark);flex:1;min-width:0;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.modal-x{background:none;border:none;font-size:22px;color:var(--gray);
-  cursor:pointer;line-height:1;padding:4px 10px;border-radius:6px}
-.modal-x:hover{background:#f0f4f8;color:var(--dark)}
-.modal-bd{padding:16px 20px;overflow-y:auto;flex:1}
-.modal-chart-wrap{height:280px;margin-bottom:18px;position:relative}
-.modal-sum{margin-top:18px;display:grid;
-  grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
-.sum-card{border-radius:8px;padding:11px 13px;border:1px solid #e8ecf0;background:#f8fafc}
-.sum-card.ok  {border-color:#9ae6b4;background:#f0fff4}
-.sum-card.warn{border-color:#fbd38d;background:#fffaf0}
-.sum-card.over{border-color:#fca5a5;background:#fef5f5}
-.sum-lbl{font-size:11px;font-weight:700;color:var(--gray);text-transform:uppercase;letter-spacing:.5px;
-  display:flex;justify-content:space-between;align-items:center;gap:8px}
-.sum-pct{font-size:12px;font-weight:800;color:var(--dark2)}
-.sum-card.ok   .sum-pct{color:var(--green)}
-.sum-card.warn .sum-pct{color:#b7791f}
-.sum-card.over .sum-pct{color:var(--red)}
-.sum-val{font-size:14px;font-weight:700;color:var(--dark);margin-top:5px;font-variant-numeric:tabular-nums}
-.sum-extra{font-size:12px;margin-top:3px;font-variant-numeric:tabular-nums}
-
-/* ── RESPONSIVE ───────────────────────────── */
-@media (max-width:640px){
+@media(max-width:640px){
   .wrap{padding:16px 12px 40px}
   .hd h1{font-size:20px}
   .kpi-val{font-size:22px}
   .tbl thead th,.tbl tbody td{padding:9px 10px;font-size:13px}
-  .chart-wrap{height:280px}
-  .modal-ovl{padding:8px}
-  .modal-card{max-height:95vh}
-  .modal-bd{padding:12px}
-  .modal-chart-wrap{height:220px}
-  .modal-hd h2{font-size:14px}
 }
 
 /* ── SIDEBAR (shared shell з clients.html / index.html) ───── */
@@ -277,7 +229,7 @@ select{font-family:inherit}
       </div>
 
       <div class="nav-sec" data-section="finance">📊 FINANCE</div>
-      <div class="nav-item active" data-permission="opex" data-parent="finance" data-perm-page="opex"
+      <div class="nav-item" data-permission="opex" data-parent="finance" data-perm-page="opex"
            onclick="goPerm('opex')">
         <span class="ni">💰</span> Opex
       </div>
@@ -285,7 +237,7 @@ select{font-family:inherit}
            onclick="goPerm('categories')">
         <span class="ni">📊</span> Категорії
       </div>
-      <div class="nav-item" data-permission="salary" data-parent="finance" data-perm-page="salary"
+      <div class="nav-item active" data-permission="salary" data-parent="finance" data-perm-page="salary"
            onclick="goPerm('salary')">
         <span class="ni">💼</span> Зарплата
       </div>
@@ -311,7 +263,7 @@ select{font-family:inherit}
   <div class="hd">
     <button class="menu-toggle" onclick="toggleSidebar()" aria-label="Меню">☰</button>
     <div style="flex:1;min-width:260px">
-      <h1 id="title">💰 Бюджет</h1>
+      <h1 id="title">💼 Зарплата</h1>
       <div class="hd-meta" id="meta">завантаження…</div>
     </div>
     <div class="hd-ctrl">
@@ -374,62 +326,42 @@ select{font-family:inherit}
     </div>
 
     <div id="detailMode" class="hidden">
-    <div id="banner" class="banner hidden">
-      <span class="banner-ic">⚠️</span>
-      <span id="bannerTxt"></span>
-    </div>
+      <div class="kpis">
+        <div id="kpiBudget" class="kpi">
+          <div class="kpi-lbl" id="kpiBudgetLbl">Бюджет на місяць</div>
+          <div class="kpi-val" id="kpiBudgetVal">—</div>
+          <div class="kpi-sub" id="kpiBudgetSub">&nbsp;</div>
+        </div>
+        <div id="kpiSpent" class="kpi">
+          <div class="kpi-lbl">Факт</div>
+          <div class="kpi-val" id="kpiSpentVal">—</div>
+          <div class="kpi-sub" id="kpiSpentSub">&nbsp;</div>
+        </div>
+        <div id="kpiLeft" class="kpi">
+          <div class="kpi-lbl" id="kpiLeftLbl">Залишок</div>
+          <div class="kpi-val" id="kpiLeftVal">—</div>
+          <div class="kpi-sub" id="kpiLeftSub">&nbsp;</div>
+        </div>
+      </div>
 
-    <div class="kpis">
-      <div id="kpiBudget" class="kpi">
-        <div class="kpi-lbl" id="kpiBudgetLbl">Бюджет на місяць</div>
-        <div class="kpi-val" id="kpiBudgetVal">—</div>
-        <div class="kpi-sub" id="kpiBudgetSub">&nbsp;</div>
+      <div class="card">
+        <div class="card-hd">
+          <h3>📋 Зарплата <span id="tblMonth" style="font-weight:500;color:var(--gray)"></span></h3>
+        </div>
+        <div class="card-bd">
+          <table class="tbl">
+            <thead>
+              <tr>
+                <th>Назва</th>
+                <th class="num">Бюджет</th>
+                <th class="num">Факт</th>
+                <th class="num">Різниця</th>
+              </tr>
+            </thead>
+            <tbody id="tblBody"></tbody>
+          </table>
+        </div>
       </div>
-      <div id="kpiSpent" class="kpi">
-        <div class="kpi-lbl">Витрачено</div>
-        <div class="kpi-val" id="kpiSpentVal">—</div>
-        <div class="kpi-sub" id="kpiSpentSub">&nbsp;</div>
-      </div>
-      <div id="kpiLeft" class="kpi">
-        <div class="kpi-lbl" id="kpiLeftLbl">Залишок</div>
-        <div class="kpi-val" id="kpiLeftVal">—</div>
-        <div class="kpi-sub" id="kpiLeftSub">&nbsp;</div>
-      </div>
-      <div id="kpiFc" class="kpi hidden">
-        <div class="kpi-lbl">Прогноз на рік</div>
-        <div class="kpi-val" id="kpiFcVal">—</div>
-        <div class="kpi-sub" id="kpiFcSub">&nbsp;</div>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-hd">
-        <h3>📋 Витрати по категоріях <span id="tblMonth" style="font-weight:500;color:var(--gray)"></span></h3>
-      </div>
-      <div class="card-bd">
-        <table class="tbl">
-          <thead>
-            <tr>
-              <th>Категорія</th>
-              <th class="num">Факт</th>
-              <th class="num">Бюджет</th>
-              <th class="num">Різниця</th>
-              <th class="num">%</th>
-            </tr>
-          </thead>
-          <tbody id="tblBody"></tbody>
-        </table>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-hd">
-        <h3>📊 Динаміка по місяцях</h3>
-      </div>
-      <div class="card-bd pad">
-        <div class="chart-wrap"><canvas id="chart"></canvas></div>
-      </div>
-    </div>
     </div>
   </div>
 
@@ -441,31 +373,6 @@ select{font-family:inherit}
   </main>
 </div>
 
-<div id="catModal" class="modal-ovl hidden">
-  <div class="modal-card">
-    <div class="modal-hd">
-      <h2 id="catModalTitle">💰</h2>
-      <button class="modal-x" id="catModalClose" aria-label="Закрити">✕</button>
-    </div>
-    <div class="modal-bd">
-      <div class="modal-chart-wrap"><canvas id="catChart"></canvas></div>
-      <table class="tbl">
-        <thead>
-          <tr>
-            <th>Місяць</th>
-            <th class="num">Факт</th>
-            <th class="num">Бюджет</th>
-            <th class="num">Різниця</th>
-            <th class="num">%</th>
-          </tr>
-        </thead>
-        <tbody id="catTblBody"></tbody>
-      </table>
-      <div class="modal-sum" id="catSum"></div>
-    </div>
-  </div>
-</div>
-
 <script>
 'use strict';
 
@@ -474,25 +381,22 @@ var CFG = {
   LOC: 'Осокорки',
   YEAR: new Date().getFullYear(),
   MONTHS_DISP: ['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'],
-  MONTHS_SHORT:['Січ','Лют','Бер','Квіт','Тра','Чер','Лип','Сер','Вер','Жов','Лис','Гру'],
-  CACHE_KEY:  'opex_cache_v1',
+  CACHE_KEY:  'salary_detail_cache_v1',
   CACHE_TTL:  5 * 60 * 1000,
-  OVERVIEW_CACHE_KEY: 'opex_overview_cache_v1',
+  OVERVIEW_CACHE_KEY: 'salary_overview_cache_v1',
   OVERVIEW_CACHE_TTL: 5 * 60 * 1000
 };
 
 var S = {
-  data: null,
-  overviewData: null,
+  data: null,            // detail
+  overviewData: null,    // overview
   user: null,
   locations: [],
   mode: 'detail',
   typeFilter: '',
   month:   new Date().getMonth() + 1,
   quarter: Math.ceil((new Date().getMonth() + 1) / 3),
-  period: 'month',
-  chart: null,
-  catChart: null
+  period: 'month'
 };
 
 // ── HELPERS ─────────────────────────────────
@@ -513,11 +417,15 @@ function nowStr(){
   return pad(d.getDate())+'.'+pad(d.getMonth()+1)+'.'+d.getFullYear()+
          ' '+pad(d.getHours())+':'+pad(d.getMinutes());
 }
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, function(c){
+    return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];
+  });
+}
 
-// ── AUTH (shared session з index.html / clients.html) ──
+// ── AUTH (shared session) ───────────────────
 var SESSION_KEY = 'mkids_session';
 var SESSION_TTL_MS = 12 * 3600 * 1000;
-
 function readSession(){
   try {
     var s = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null');
@@ -528,58 +436,13 @@ function readSession(){
   } catch(e) { return null; }
 }
 function clearSession(){ try { localStorage.removeItem(SESSION_KEY); } catch(e){} }
-
 function isHR(){       return S.user && S.user.role === 'hr'; }
 function isDirector(){ return S.user && S.user.role === 'director'; }
 function isNurse(){    return S.user && S.user.role === 'nurse'; }
+function doLogout(){ clearSession(); window.location.href = 'index.html'; }
 
-function doLogout(){
-  clearSession();
-  window.location.href = 'index.html';
-}
-
-async function loadLocationsForSelector(){
-  try {
-    var url = CFG.SCRIPT_URL + '?action=getLocations';
-    var r = await fetch(url, {redirect: 'follow'});
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    var j = await r.json();
-    if (!j.ok) throw new Error(j.error || 'getLocations failed');
-    var seen = {};
-    S.locations = [];
-    (j.data || []).forEach(function(item){
-      if (!item.loc || seen[item.loc]) return;
-      // TEMP: hide management locations until their structure is finalized
-      // Note: backend getLocations returns "typ" (not "type") — see crm_script.js
-      if (item.typ !== 'Садочок' && item.typ !== 'Школа') return;
-      seen[item.loc] = true;
-      S.locations.push(item);
-    });
-    // TEMP: if current CFG.LOC was filtered out (e.g. management loc
-    // carried over from a previous session), switch to first available
-    if (S.locations.length && !S.locations.some(function(x){ return x.loc === CFG.LOC; })){
-      CFG.LOC = S.locations[0].loc;
-    }
-  } catch(e){
-    console.error('loadLocationsForSelector error:', e);
-    S.locations = [];
-  }
-}
-
-function renderLocationSelector(){
-  var sel = $('locSel');
-  sel.innerHTML = '';
-  S.locations.forEach(function(item){
-    var opt = document.createElement('option');
-    opt.value = item.loc;
-    opt.textContent = item.loc;
-    if (item.loc === CFG.LOC) opt.selected = true;
-    sel.appendChild(opt);
-  });
-}
-
-// ── UNIFIED SIDEBAR — permissions, role-visibility, cross-page nav ────────
-var CURRENT_PAGE = 'opex';
+// ── UNIFIED SIDEBAR ─────────────────────────
+var CURRENT_PAGE = 'salary';
 
 var PERMISSIONS = {
   hr: 'all',
@@ -605,7 +468,7 @@ function locLabel(){ return S.user && S.user.role==='hr' ? 'Всі локаці�
 function goPerm(perm){
   var items = document.querySelectorAll('[data-permission="' + perm + '"]');
   var target = items[0] && items[0].dataset.permPage;
-  if (target === CURRENT_PAGE) return;  // вже на цій сторінці
+  if (target === CURRENT_PAGE) return;
   var targetFile = target === 'clients'    ? 'clients.html'
                  : target === 'opex'       ? 'opex.html'
                  : target === 'categories' ? 'categories.html'
@@ -642,7 +505,46 @@ function updUserUI(){
   applyRoleVisibility();
 }
 
-// ── FETCH ───────────────────────────────────
+// ── LOCATIONS for HR selector (with management filter) ──
+async function loadLocationsForSelector(){
+  try {
+    var url = CFG.SCRIPT_URL + '?action=getLocations';
+    var r = await fetch(url, {redirect: 'follow'});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    var j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'getLocations failed');
+    var seen = {};
+    S.locations = [];
+    (j.data || []).forEach(function(item){
+      if (!item.loc || seen[item.loc]) return;
+      // TEMP: тільки садочок/школа (як в opex.html), управління поки виключаємо.
+      // Backend getLocations повертає поле "typ" (не "type") — див. crm_script.js.
+      if (item.typ !== 'Садочок' && item.typ !== 'Школа') return;
+      seen[item.loc] = true;
+      S.locations.push(item);
+    });
+    if (S.locations.length && !S.locations.some(function(x){ return x.loc === CFG.LOC; })){
+      CFG.LOC = S.locations[0].loc;
+    }
+  } catch(e){
+    console.error('loadLocationsForSelector error:', e);
+    S.locations = [];
+  }
+}
+
+function renderLocationSelector(){
+  var sel = $('locSel');
+  sel.innerHTML = '';
+  S.locations.forEach(function(item){
+    var opt = document.createElement('option');
+    opt.value = item.loc;
+    opt.textContent = item.loc;
+    if (item.loc === CFG.LOC) opt.selected = true;
+    sel.appendChild(opt);
+  });
+}
+
+// ── CACHE ───────────────────────────────────
 function loadCache(){
   try {
     var raw = localStorage.getItem(CFG.CACHE_KEY);
@@ -661,7 +563,6 @@ function saveCache(data){
     }));
   } catch(e){}
 }
-
 async function fetchData(force){
   if (!force) {
     var c = loadCache();
@@ -670,7 +571,7 @@ async function fetchData(force){
       return c.data;
     }
   }
-  var url = CFG.SCRIPT_URL + '?action=getOpexData&loc=' + encodeURIComponent(CFG.LOC) +
+  var url = CFG.SCRIPT_URL + '?action=getSalaryData&loc=' + encodeURIComponent(CFG.LOC) +
             '&year=' + encodeURIComponent(CFG.YEAR);
   var r = await fetch(url, {redirect:'follow'});
   if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -707,7 +608,7 @@ async function fetchOverviewData(force){
       return c.data;
     }
   }
-  var url = CFG.SCRIPT_URL + '?action=getOpexOverview&year=' + encodeURIComponent(CFG.YEAR);
+  var url = CFG.SCRIPT_URL + '?action=getSalaryOverview&year=' + encodeURIComponent(CFG.YEAR);
   var r = await fetch(url, {redirect:'follow'});
   if (!r.ok) throw new Error('HTTP ' + r.status);
   var json = await r.json();
@@ -717,7 +618,7 @@ async function fetchOverviewData(force){
   return json;
 }
 
-// ── RENDER ──────────────────────────────────
+// ── PERIOD ──────────────────────────────────
 function populateSubSel(){
   var sel = $('monthSel');
   sel.innerHTML = '';
@@ -740,8 +641,8 @@ function populateSubSel(){
   }
 }
 
-function getMonthValues(cat, m){
-  var mo = (cat.months || []).find(function(x){return x.month === m;});
+function getMonthValues(item, m){
+  var mo = (item.months || []).find(function(x){return x.month === m;});
   return {
     fact:   mo ? (mo.fact   || 0) : 0,
     budget: mo ? (mo.budget || 0) : 0
@@ -784,42 +685,24 @@ function periodLabel(){
   return '';
 }
 
-function rowsForPeriod(cats, monthsArr){
-  return cats.map(function(c){
+// ── DETAIL: rows for period ─────────────────
+function rowsForPeriod(rows, monthsArr){
+  return rows.map(function(r){
     var fact = 0, budget = 0;
     monthsArr.forEach(function(m){
-      var v = getMonthValues(c, m);
+      var v = getMonthValues(r, m);
       fact   += v.fact;
       budget += v.budget;
     });
-    var p = pct(fact, budget);
     return {
-      name: c.name,
-      fact: fact,
-      budget: budget,
-      diff: budget - fact,
-      pct: p,
-      over: p !== null && p > 100
+      name:        r.name,
+      fact:        fact,
+      budget:      budget,
+      diff:        budget - fact,
+      over:        budget > 0 && fact > budget,
+      isHeader:    (r.totalFact || 0) === 0 && (r.totalBudget || 0) === 0
     };
   });
-}
-
-function renderBanner(rows){
-  var overs = rows.filter(function(r){return r.over;});
-  var b = $('banner');
-  if (!overs.length){ b.classList.add('hidden'); return; }
-  var txt;
-  if (overs.length === 1){
-    var o = overs[0];
-    txt = 'Перевищення бюджету: ' + o.name + ' — +' + fmtUah(o.fact - o.budget) +
-          ' грн (заплановано ' + fmtUah(o.budget) + ', фактично ' + fmtUah(o.fact) + ')';
-  } else {
-    var head = overs.slice(0, 2).map(function(o){return o.name;}).join(', ');
-    var rest = overs.length - 2;
-    txt = 'Перевищення бюджету: ' + head + (rest > 0 ? ', ще +' + rest : '');
-  }
-  $('bannerTxt').textContent = txt;
-  b.classList.remove('hidden');
 }
 
 function renderKpis(rows){
@@ -829,7 +712,7 @@ function renderKpis(rows){
   var spentPct = totalBudget > 0 ? (totalFact / totalBudget) * 100 : null;
 
   $('kpiBudgetVal').textContent = fmtUah(totalBudget) + ' ₴';
-  $('kpiBudgetSub').textContent = rows.length + ' категорій';
+  $('kpiBudgetSub').textContent = rows.filter(function(r){ return !r.isHeader; }).length + ' позицій';
 
   $('kpiSpentVal').textContent = fmtUah(totalFact) + ' ₴';
   $('kpiSpentSub').textContent = spentPct !== null ? spentPct.toFixed(1) + '% бюджету' : ' ';
@@ -850,65 +733,6 @@ function renderKpis(rows){
   }
 }
 
-function renderYearKpis(cats){
-  var lived = monthsLivedInYear();
-  var ytdMonths = [];
-  for (var i = 1; i <= lived; i++) ytdMonths.push(i);
-
-  var factYTD = 0, budgetYTD = 0, budgetYear = 0;
-  cats.forEach(function(c){
-    for (var m = 1; m <= 12; m++){
-      var v = getMonthValues(c, m);
-      budgetYear += v.budget;
-      if (m <= lived){
-        factYTD   += v.fact;
-        budgetYTD += v.budget;
-      }
-    }
-  });
-
-  var leftYTD  = budgetYTD - factYTD;
-  var spentPct = budgetYTD > 0 ? (factYTD / budgetYTD) * 100 : null;
-
-  $('kpiBudgetVal').textContent = fmtUah(budgetYTD) + ' ₴';
-  $('kpiBudgetSub').textContent = lived + ' міс. прожито';
-
-  $('kpiSpentVal').textContent = fmtUah(factYTD) + ' ₴';
-  $('kpiSpentSub').textContent = spentPct !== null ? spentPct.toFixed(1) + '% YTD бюджету' : ' ';
-
-  var kpiLeft = $('kpiLeft');
-  kpiLeft.classList.remove('ok','over');
-  $('kpiLeftVal').textContent = (leftYTD < 0 ? '-' : '') + fmtUah(Math.abs(leftYTD)) + ' ₴';
-  if (budgetYTD > 0){
-    if (leftYTD < 0){ kpiLeft.classList.add('over'); $('kpiLeftSub').textContent = 'перевищення'; }
-    else { kpiLeft.classList.add('ok'); $('kpiLeftSub').textContent = 'у межах'; }
-  } else {
-    $('kpiLeftSub').textContent = ' ';
-  }
-
-  var forecastYear = lived > 0 ? (factYTD / lived) * 12 : 0;
-  var diff  = forecastYear - budgetYear;
-  var fcPct = budgetYear > 0 ? (forecastYear / budgetYear) * 100 : null;
-
-  var kpiFc = $('kpiFc');
-  kpiFc.classList.remove('ok','over');
-  $('kpiFcVal').textContent = fmtUah(forecastYear) + ' ₴';
-  if (budgetYear > 0 && lived > 0){
-    var sub;
-    if (forecastYear > budgetYear){
-      kpiFc.classList.add('over');
-      sub = '+' + fmtUah(diff) + ' ₴ перевитрата';
-    } else {
-      kpiFc.classList.add('ok');
-      sub = '-' + fmtUah(Math.abs(diff)) + ' ₴ економія';
-    }
-    if (fcPct !== null) sub = sub + ' · ' + fcPct.toFixed(0) + '% бюджету';
-    $('kpiFcSub').textContent = sub;
-  } else {
-    $('kpiFcSub').textContent = ' ';
-  }
-}
-
 function renderTable(rows){
   $('tblMonth').textContent = '— ' + periodLabel();
   var body = $('tblBody');
@@ -916,41 +740,35 @@ function renderTable(rows){
 
   rows.forEach(function(r){
     var tr = document.createElement('tr');
-    tr.classList.add('clickable');
-    if (r.over) tr.classList.add('row-over');
-    tr.addEventListener('click', function(){ openCategoryModal(r.name); });
-
-    var cls, badge;
-    if (r.pct === null){ cls = 'b-none'; badge = '—'; }
-    else if (r.pct > 100){ cls = 'b-bad'; badge = r.pct.toFixed(0) + '%'; }
-    else if (r.pct >= 95){ cls = 'b-warn'; badge = r.pct.toFixed(0) + '%'; }
-    else { cls = 'b-ok'; badge = r.pct.toFixed(0) + '%'; }
+    if (r.isHeader) tr.classList.add('row-header');
+    else if (r.over) tr.classList.add('row-over');
 
     var diffCls, diffTxt;
-    if (r.budget === 0){ diffCls = 'muted'; diffTxt = '—'; }
+    if (r.budget === 0 && r.fact === 0){ diffCls = 'muted'; diffTxt = '—'; }
     else if (r.diff > 0){ diffCls = 'diff-pos'; diffTxt = '+' + fmtUah(r.diff); }
     else if (r.diff < 0){ diffCls = 'diff-neg'; diffTxt = fmtUah(r.diff); }
     else { diffCls = 'diff-zero'; diffTxt = '0'; }
 
-    tr.innerHTML =
-      '<td class="cat-name">' + escapeHtml(r.name) + '</td>' +
-      '<td class="num">' + fmtUah(r.fact) + '</td>' +
-      '<td class="num">' + (r.budget > 0 ? fmtUah(r.budget) : '<span class="muted">—</span>') + '</td>' +
-      '<td class="num ' + diffCls + '">' + diffTxt + '</td>' +
-      '<td class="num"><span class="badge ' + cls + '">' + badge + '</span></td>';
+    if (r.isHeader){
+      tr.innerHTML =
+        '<td class="cat-name" colspan="4">' + escapeHtml(r.name) + '</td>';
+    } else {
+      tr.innerHTML =
+        '<td class="cat-name">' + escapeHtml(r.name) + '</td>' +
+        '<td class="num">' + (r.budget > 0 ? fmtUah(r.budget) : '<span class="muted">—</span>') + '</td>' +
+        '<td class="num">' + fmtUah(r.fact) + '</td>' +
+        '<td class="num ' + diffCls + '">' + diffTxt + '</td>';
+    }
     body.appendChild(tr);
   });
 
-  var tF = 0, tB = 0;
-  rows.forEach(function(r){ tF += r.fact; tB += r.budget; });
-  var tDiff = tB - tF;
-  var tPct = tB > 0 ? (tF / tB) * 100 : null;
-  var tCls, tBadge;
-  if (tPct === null){ tCls = 'b-none'; tBadge = '—'; }
-  else if (tPct > 100){ tCls = 'b-bad'; tBadge = tPct.toFixed(0) + '%'; }
-  else if (tPct >= 95){ tCls = 'b-warn'; tBadge = tPct.toFixed(0) + '%'; }
-  else { tCls = 'b-ok'; tBadge = tPct.toFixed(0) + '%'; }
+  // Total row (only non-header)
+  var dataRows = rows.filter(function(r){ return !r.isHeader; });
+  if (!dataRows.length) return;
 
+  var tF = 0, tB = 0;
+  dataRows.forEach(function(r){ tF += r.fact; tB += r.budget; });
+  var tDiff = tB - tF;
   var totDiffCls = tDiff > 0 ? 'diff-pos' : (tDiff < 0 ? 'diff-neg' : 'diff-zero');
   var totDiffTxt = tDiff > 0 ? '+' + fmtUah(tDiff) : (tDiff < 0 ? fmtUah(tDiff) : '0');
 
@@ -958,73 +776,13 @@ function renderTable(rows){
   totRow.className = 'total';
   totRow.innerHTML =
     '<td>РАЗОМ</td>' +
-    '<td class="num">' + fmtUah(tF) + '</td>' +
     '<td class="num">' + fmtUah(tB) + '</td>' +
-    '<td class="num ' + totDiffCls + '">' + totDiffTxt + '</td>' +
-    '<td class="num"><span class="badge ' + tCls + '">' + tBadge + '</span></td>';
+    '<td class="num">' + fmtUah(tF) + '</td>' +
+    '<td class="num ' + totDiffCls + '">' + totDiffTxt + '</td>';
   body.appendChild(totRow);
 }
 
-function renderChart(cats, activeMonths){
-  var activeSet = {};
-  (activeMonths || []).forEach(function(m){ activeSet[m] = true; });
-  var labels = CFG.MONTHS_SHORT.slice();
-  var budget = [], fact = [], factColors = [];
-  for (var m = 1; m <= 12; m++){
-    var sumF = 0, sumB = 0;
-    cats.forEach(function(c){
-      var v = getMonthValues(c, m);
-      sumF += v.fact; sumB += v.budget;
-    });
-    budget.push(sumB);
-    fact.push(sumF);
-    var over = sumB > 0 && sumF > sumB;
-    var active = !!activeSet[m];
-    var color = over ? '#e74c3c' : '#27ae60';
-    factColors.push(active ? color : color + '55');
-  }
-
-  var ctx = $('chart').getContext('2d');
-  if (S.chart) S.chart.destroy();
-  S.chart = new Chart(ctx, {
-    type: 'bar',
-    data: {
-      labels: labels,
-      datasets: [
-        { label: 'Бюджет', data: budget, backgroundColor: '#cbd5e0', borderRadius: 4 },
-        { label: 'Факт',   data: fact,   backgroundColor: factColors, borderRadius: 4 }
-      ]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { position: 'bottom', labels: { font: { size: 12 } } },
-        tooltip: {
-          callbacks: {
-            label: function(c){ return c.dataset.label + ': ' + fmtUah(c.parsed.y) + ' ₴'; }
-          }
-        }
-      },
-      scales: {
-        y: {
-          beginAtZero: true,
-          ticks: { callback: function(v){ return fmtUah(v); }, font: { size: 11 } },
-          grid: { color: '#eef2f6' }
-        },
-        x: { grid: { display: false }, ticks: { font: { size: 11 } } }
-      }
-    }
-  });
-}
-
-function escapeHtml(s){
-  return String(s).replace(/[&<>"']/g, function(c){
-    return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];
-  });
-}
-
-// ── OVERVIEW (network-wide) ─────────────────
+// ── OVERVIEW ────────────────────────────────
 function locationAggregate(L, monthsArr){
   var fact = 0, budget = 0;
   (L.monthsTotals || []).forEach(function(mt){
@@ -1048,7 +806,7 @@ function locationAggregate(L, monthsArr){
 function overviewAllRows(){
   if (!S.overviewData) return [];
   var months = activePeriodMonths();
-  // TEMP: hide "Управління" locations until their structure is finalized
+  // TEMP: hide "Управління" — frontend filter (як в opex.html)
   return S.overviewData.locations
     .filter(function(L){ return L.type !== 'Управління'; })
     .map(function(L){ return locationAggregate(L, months); });
@@ -1063,13 +821,11 @@ function filteredOverviewRows(){
 function typeIcon(t){
   if (/садоч/i.test(t))    return '📌 ';
   if (/школ/i.test(t))     return '🏫 ';
-  if (/упр/i.test(t))      return '🏢 ';
   return '';
 }
 
 function renderTypeTabs(){
   var counts = {};
-  // TEMP: exclude "Управління" from tabs until their structure is finalized
   var visibleLocs = (S.overviewData.locations || []).filter(function(L){
     return L.type !== 'Управління';
   });
@@ -1203,162 +959,14 @@ function rerenderOverview(){
   renderOverviewTable(rows);
 }
 
-// ── CATEGORY MODAL ──────────────────────────
-function openCategoryModal(name){
-  if (!S.data) return;
-  var cat = S.data.categories.find(function(c){ return c.name === name; });
-  if (!cat) return;
-  var loc = (S.data.loc) ? S.data.loc : CFG.LOC;
-  $('catModalTitle').textContent = '💰 ' + name + ' — ' + loc + ' ' + CFG.YEAR;
-  renderCategoryChart(cat);
-  renderCategoryTable(cat);
-  renderCategorySummary(cat);
-  $('catModal').classList.remove('hidden');
-}
-
-function closeCategoryModal(){
-  $('catModal').classList.add('hidden');
-  if (S.catChart){ S.catChart.destroy(); S.catChart = null; }
-}
-
-function renderCategoryChart(cat){
-  var labels = CFG.MONTHS_SHORT.slice();
-  var budget = [], fact = [], factColors = [];
-  for (var m = 1; m <= 12; m++){
-    var v = getMonthValues(cat, m);
-    budget.push(v.budget);
-    fact.push(v.fact);
-    var over = v.budget > 0 && v.fact > v.budget;
-    factColors.push(over ? '#e74c3c' : '#27ae60');
-  }
-  var ctx = $('catChart').getContext('2d');
-  if (S.catChart) S.catChart.destroy();
-  S.catChart = new Chart(ctx, {
-    type: 'bar',
-    data: {
-      labels: labels,
-      datasets: [
-        { label: 'Бюджет', data: budget, backgroundColor: '#cbd5e0', borderRadius: 4 },
-        { label: 'Факт',   data: fact,   backgroundColor: factColors, borderRadius: 4 }
-      ]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { position: 'bottom', labels: { font: { size: 12 } } },
-        tooltip: {
-          callbacks: {
-            label: function(c){ return c.dataset.label + ': ' + fmtUah(c.parsed.y) + ' ₴'; }
-          }
-        }
-      },
-      scales: {
-        y: { beginAtZero: true,
-             ticks: { callback: function(v){ return fmtUah(v); }, font: { size: 11 } },
-             grid: { color: '#eef2f6' } },
-        x: { grid: { display: false }, ticks: { font: { size: 11 } } }
-      }
-    }
-  });
-}
-
-function renderCategoryTable(cat){
-  var body = $('catTblBody');
-  body.innerHTML = '';
-  for (var m = 1; m <= 12; m++){
-    var v = getMonthValues(cat, m);
-    var p = pct(v.fact, v.budget);
-    var diff = v.budget - v.fact;
-    var isEmpty = (v.fact === 0 && v.budget === 0);
-
-    var cls, badge;
-    if (isEmpty || p === null){ cls = 'b-none'; badge = '—'; }
-    else if (p > 100){ cls = 'b-bad';  badge = p.toFixed(0) + '%'; }
-    else if (p >= 95){ cls = 'b-warn'; badge = p.toFixed(0) + '%'; }
-    else             { cls = 'b-ok';   badge = p.toFixed(0) + '%'; }
-
-    var diffCls, diffTxt;
-    if (v.budget === 0){ diffCls = 'muted'; diffTxt = '—'; }
-    else if (diff > 0){ diffCls = 'diff-pos'; diffTxt = '+' + fmtUah(diff); }
-    else if (diff < 0){ diffCls = 'diff-neg'; diffTxt = fmtUah(diff); }
-    else              { diffCls = 'diff-zero'; diffTxt = '0'; }
-
-    var tr = document.createElement('tr');
-    if (p !== null && p > 100) tr.classList.add('row-over');
-    tr.innerHTML =
-      '<td class="cat-name">' + escapeHtml(CFG.MONTHS_DISP[m-1]) + '</td>' +
-      '<td class="num">' + fmtUah(v.fact) + '</td>' +
-      '<td class="num">' + (v.budget > 0 ? fmtUah(v.budget) : '<span class="muted">—</span>') + '</td>' +
-      '<td class="num ' + diffCls + '">' + diffTxt + '</td>' +
-      '<td class="num"><span class="badge ' + cls + '">' + badge + '</span></td>';
-    body.appendChild(tr);
-  }
-}
-
-function _aggMonths(cat, monthsArr){
-  var fact = 0, budget = 0;
-  monthsArr.forEach(function(m){
-    var v = getMonthValues(cat, m);
-    fact += v.fact; budget += v.budget;
-  });
-  return { fact: fact, budget: budget, diff: budget - fact, pct: pct(fact, budget) };
-}
-
-function renderCategorySummary(cat){
-  var sets = [
-    { lbl: 'Рік', months: [1,2,3,4,5,6,7,8,9,10,11,12] },
-    { lbl: 'Q1',  months: [1,2,3] },
-    { lbl: 'Q2',  months: [4,5,6] },
-    { lbl: 'Q3',  months: [7,8,9] },
-    { lbl: 'Q4',  months: [10,11,12] }
-  ];
-  var lived = monthsLivedInYear();
-  if (lived > 0){
-    var ytdMonths = [];
-    for (var i = 1; i <= lived; i++) ytdMonths.push(i);
-    sets.push({ lbl: 'YTD (' + lived + ' міс.)', months: ytdMonths });
-  }
-
-  var html = '';
-  sets.forEach(function(s){
-    var a = _aggMonths(cat, s.months);
-    var statusCls = '';
-    if (a.pct !== null){
-      if (a.pct > 100) statusCls = 'over';
-      else if (a.pct >= 95) statusCls = 'warn';
-      else statusCls = 'ok';
-    }
-    var pctTxt = a.pct === null ? '—' : a.pct.toFixed(0) + '%';
-
-    var diffHtml = '';
-    if (a.budget > 0){
-      if (a.diff > 0){
-        diffHtml = '<div class="sum-extra diff-pos">+' + fmtUah(a.diff) + ' ₴</div>';
-      } else if (a.diff < 0){
-        diffHtml = '<div class="sum-extra diff-neg">' + fmtUah(a.diff) + ' ₴</div>';
-      } else {
-        diffHtml = '<div class="sum-extra diff-zero">0 ₴</div>';
-      }
-    }
-
-    html += '<div class="sum-card ' + statusCls + '">' +
-      '<div class="sum-lbl"><span>' + escapeHtml(s.lbl) + '</span><span class="sum-pct">' + pctTxt + '</span></div>' +
-      '<div class="sum-val">' + fmtUah(a.fact) + ' / ' + fmtUah(a.budget) + ' ₴</div>' +
-      diffHtml +
-      '</div>';
-  });
-  $('catSum').innerHTML = html;
-}
-
 // ── ORCHESTRATION ───────────────────────────
 function updateTitle(){
   if (S.mode === 'overview'){
-    $('title').textContent = '🌐 Огляд мережі · ' + periodLabel();
+    $('title').textContent = '💼 Зарплата · Огляд мережі · ' + periodLabel();
     return;
   }
   var loc = (S.data && S.data.loc) ? S.data.loc : CFG.LOC;
-  $('title').textContent = '💰 Бюджет — ' + loc + ' · ' + periodLabel();
+  $('title').textContent = '💼 Зарплата · ' + loc + ' · ' + periodLabel();
 }
 
 function applyMode(){
@@ -1385,9 +993,8 @@ function updateKpiLabel(){
   if (!lbl) return;
   if (S.period === 'month')        lbl.textContent = 'Бюджет на місяць';
   else if (S.period === 'quarter') lbl.textContent = 'Бюджет на квартал';
-  else if (S.period === 'year')    lbl.textContent = 'Бюджет YTD';
+  else if (S.period === 'year')    lbl.textContent = 'Бюджет на рік';
   else if (S.period === 'ytd')     lbl.textContent = 'Бюджет YTD';
-
   var leftLbl = $('kpiLeftLbl');
   if (leftLbl){
     leftLbl.textContent = (S.period === 'year' || S.period === 'ytd') ? 'Залишок YTD' : 'Залишок';
@@ -1401,23 +1008,14 @@ function applySubSelVisibility(){
   ms.classList.toggle('hidden', hide);
 }
 
-function toggleForecastCard(show){
-  var el = $('kpiFc');
-  if (el) el.classList.toggle('hidden', !show);
-}
-
 function rerenderForPeriod(){
   if (!S.data) return;
   var months = activePeriodMonths();
-  var rows = rowsForPeriod(S.data.categories, months);
+  var rows = rowsForPeriod(S.data.rows || [], months);
   updateTitle();
   updateKpiLabel();
-  renderBanner(rows);
-  if (S.period === 'year') renderYearKpis(S.data.categories);
-  else                     renderKpis(rows);
-  toggleForecastCard(S.period === 'year');
+  renderKpis(rows);
   renderTable(rows);
-  renderChart(S.data.categories, months);
 }
 
 async function loadDetail(force){
@@ -1441,8 +1039,8 @@ async function loadDetail(force){
     S.data = null;
     var msg = e && e.message ? e.message : String(e);
     var box = $('errBox');
-    if (/Location not found/i.test(msg) || /OPEX sheet not found/i.test(msg)){
-      box.textContent = '⚠️ Немає даних OPEX для локації "' + CFG.LOC + '"';
+    if (/Location not found/i.test(msg) || /Salary sheet not found/i.test(msg)){
+      box.textContent = '⚠️ Немає даних Salary для локації "' + CFG.LOC + '"';
     } else {
       box.textContent = '❌ Помилка: ' + msg;
     }
@@ -1565,16 +1163,6 @@ function bindEventListeners(){
     if (!btn) return;
     S.typeFilter = btn.dataset.type || '';
     rerenderOverview();
-  });
-
-  $('catModalClose').addEventListener('click', closeCategoryModal);
-  $('catModal').addEventListener('click', function(e){
-    if (e.target === this) closeCategoryModal();
-  });
-  document.addEventListener('keydown', function(e){
-    if (e.key === 'Escape' && !$('catModal').classList.contains('hidden')){
-      closeCategoryModal();
-    }
   });
 }
 
