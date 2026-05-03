@@ -11,7 +11,7 @@
   --green:#27ae60;--green2:#2ecc71;--blue:#2980b9;--blue2:#3498db;
   --red:#c0392b;--red2:#e74c3c;--orange:#e67e22;--yellow:#f1c40f;
   --dark:#1a2332;--dark2:#2c3e50;--gray:#7f8c8d;--gray2:#bdc3c7;
-  --bg:#f0f4f8;--white:#fff;
+  --bg:#f0f4f8;--white:#fff;--sidebar:#1e2d3d;--sw:250px;
   --r:10px;--sh:0 2px 12px rgba(0,0,0,.08)
 }
 body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--dark2);font-size:14px;line-height:1.5;min-height:100vh}
@@ -163,16 +163,141 @@ select{font-family:inherit}
   .modal-chart-wrap{height:220px}
   .modal-hd h2{font-size:14px}
 }
+
+/* ── SIDEBAR (shared shell з clients.html / index.html) ───── */
+#app{display:flex;min-height:100vh}
+.sidebar{width:var(--sw);background:var(--sidebar);display:flex;flex-direction:column;
+  position:fixed;top:0;left:0;height:100vh;z-index:100;overflow-y:auto}
+.sb-brand{padding:20px;border-bottom:1px solid rgba(255,255,255,.1)}
+.sb-brand h2{color:#fff;font-size:16px;font-weight:800}
+.sb-brand p{color:rgba(255,255,255,.45);font-size:11px;margin-top:2px}
+.sb-user{padding:14px 20px;display:flex;align-items:center;gap:10px;border-bottom:1px solid rgba(255,255,255,.1)}
+.avatar{width:36px;height:36px;background:var(--green);border-radius:50%;
+  display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:13px;flex-shrink:0}
+.sb-user-info p{color:#fff;font-size:13px;font-weight:600}
+.sb-user-info span{color:rgba(255,255,255,.45);font-size:11px}
+.sb-nav{flex:1;padding:10px 0}
+.nav-sec{padding:4px 18px;font-size:10px;text-transform:uppercase;letter-spacing:1px;
+  color:rgba(255,255,255,.28);margin:14px 0 4px}
+.nav-item{display:flex;align-items:center;gap:10px;padding:10px 20px;
+  color:rgba(255,255,255,.6);cursor:pointer;transition:all .2s;font-size:13.5px;
+  border-left:3px solid transparent;user-select:none}
+.nav-item:hover{background:rgba(255,255,255,.06);color:#fff}
+.nav-item.active{background:rgba(39,174,96,.18);color:var(--green2);border-left-color:var(--green)}
+.nav-item .ni{width:20px;text-align:center;font-size:15px}
+.sb-footer{padding:14px 20px;border-top:1px solid rgba(255,255,255,.1)}
+.sb-footer .btn{width:100%;background:rgba(255,255,255,.07);color:rgba(255,255,255,.65);
+  border:none;justify-content:center;font-size:13px}
+.sb-footer .btn:hover{background:rgba(255,255,255,.15);color:#fff}
+.main{margin-left:var(--sw);flex:1;display:flex;flex-direction:column;min-height:100vh}
+.menu-toggle{display:none;padding:8px 10px;background:#fff;
+  border:1.5px solid var(--gray2);border-radius:8px;font-size:18px;color:var(--dark2);cursor:pointer}
+.menu-toggle:hover{background:#f4f7fa}
+@media(max-width:768px){
+  .sidebar{transform:translateX(-100%);transition:transform .3s}
+  .sidebar.open{transform:translateX(0)}
+  .main{margin-left:0}
+  .menu-toggle{display:inline-flex;align-items:center}
+}
 </style>
 </head>
 <body>
 
+<div id="app">
+  <nav class="sidebar" id="sidebar">
+    <div class="sb-brand">
+      <h2>🍊 m.kids</h2>
+      <p>m.kids System</p>
+    </div>
+    <div class="sb-user">
+      <div class="avatar" id="uAvatar">CFO</div>
+      <div class="sb-user-info">
+        <p id="uName">CFO</p>
+        <span id="uLoc">Всі локації</span>
+      </div>
+    </div>
+    <nav class="sb-nav">
+      <div class="nav-item" data-permission="dashboard" data-perm-page="index"
+           onclick="goPerm('dashboard')">
+        <span class="ni">📊</span> Дашборд
+      </div>
+
+      <div class="nav-sec" data-section="crm">👶 КЛІЄНТИ CRM</div>
+      <div class="nav-item" data-permission="clients_list" data-parent="crm" data-perm-page="clients"
+           onclick="goPerm('clients_list')">
+        <span class="ni">👶</span> Список дітей
+      </div>
+      <div class="nav-item" data-permission="payments" data-parent="crm" data-perm-page="clients"
+           onclick="goPerm('payments')">
+        <span class="ni">💰</span> Борги та оплати
+      </div>
+      <div class="nav-item" data-permission="attendance_kids" data-parent="crm" data-perm-page="clients"
+           onclick="goPerm('attendance_kids')">
+        <span class="ni">📋</span> Табель відвідуваності
+      </div>
+      <div class="nav-item" data-permission="recalc" data-parent="crm" data-perm-page="clients"
+           onclick="goPerm('recalc')">
+        <span class="ni">💼</span> Перерахунки
+      </div>
+
+      <div class="nav-sec" data-section="hr">👤 HR</div>
+      <div class="nav-item" data-permission="employees" data-parent="hr" data-perm-page="index"
+           onclick="goPerm('employees')">
+        <span class="ni">👥</span> Співробітники
+      </div>
+      <div class="nav-item" data-permission="timesheet_staff" data-parent="hr" data-perm-page="index"
+           onclick="goPerm('timesheet_staff')">
+        <span class="ni">📋</span> Табель співробітників
+      </div>
+      <div class="nav-item" data-permission="vacations" data-parent="hr" data-perm-page="index"
+           onclick="goPerm('vacations')">
+        <span class="ni">🏖️</span> Відпустки
+      </div>
+      <div class="nav-item" data-permission="sick_leaves" data-parent="hr" data-perm-page="index"
+           onclick="goPerm('sick_leaves')">
+        <span class="ni">🏥</span> Лікарняні
+      </div>
+      <div class="nav-item" data-permission="calendar" data-parent="hr" data-perm-page="index"
+           onclick="goPerm('calendar')">
+        <span class="ni">🗓️</span> Календар подій
+      </div>
+      <div class="nav-item" data-permission="vacation_schedule" data-parent="hr" data-perm-page="index"
+           onclick="goPerm('vacation_schedule')">
+        <span class="ni">🌴</span> Графік відпусток
+      </div>
+
+      <div class="nav-sec" data-section="analytics">📈 АНАЛІТИКА</div>
+      <div class="nav-item" data-permission="analytics_clients" data-parent="analytics" data-perm-page="clients"
+           onclick="goPerm('analytics_clients')">
+        <span class="ni">📊</span> Аналітика по клієнтам
+      </div>
+      <div class="nav-item" data-permission="analytics_hr" data-parent="analytics" data-perm-page="index"
+           onclick="goPerm('analytics_hr')">
+        <span class="ni">📈</span> Аналітика по HR
+      </div>
+
+      <div class="nav-sec" data-section="finance">📊 FINANCE</div>
+      <div class="nav-item active" data-permission="opex" data-parent="finance" data-perm-page="opex"
+           onclick="goPerm('opex')">
+        <span class="ni">💰</span> Opex
+      </div>
+      <div class="nav-item" data-permission="categories" data-parent="finance" data-perm-page="categories"
+           onclick="goPerm('categories')">
+        <span class="ni">📊</span> Категорії
+      </div>
+
+      <div class="nav-item" data-permission="settings" data-perm-page="index"
+           onclick="goPerm('settings')">
+        <span class="ni">⚙️</span> Налаштування
+      </div>
+    </nav>
+    <div class="sb-footer">
+      <button class="btn" onclick="doLogout()">🚪 Вийти</button>
+    </div>
+  </nav>
+
+  <main class="main">
 <div class="wrap">
-  <div class="user-chip" id="userChip" style="display:none">
-    <span class="role" id="userRole">CFO</span>
-    <span id="userLoc"></span>
-    <button id="logoutBtn" class="btn btn-secondary" style="padding:6px 12px;font-size:12px">↪ Вийти</button>
-  </div>
 
   <div class="mode-tabs hidden" id="modeTabs">
     <button class="mt-btn active" id="mtOverview">🌐 Огляд мережі</button>
@@ -180,6 +305,7 @@ select{font-family:inherit}
   </div>
 
   <div class="hd">
+    <button class="menu-toggle" onclick="toggleSidebar()" aria-label="Меню">☰</button>
     <div style="flex:1;min-width:260px">
       <h1 id="title">💰 Бюджет</h1>
       <div class="hd-meta" id="meta">завантаження…</div>
@@ -307,6 +433,8 @@ select{font-family:inherit}
     <div class="spinner"></div>
     <div id="loadTxt">Завантаження даних…</div>
   </div>
+</div>
+  </main>
 </div>
 
 <div id="catModal" class="modal-ovl hidden">
@@ -446,19 +574,67 @@ function renderLocationSelector(){
   });
 }
 
-function updateUserChip(){
-  var chip = $('userChip');
-  if (!S.user){ chip.style.display = 'none'; return; }
-  chip.style.display = 'flex';
-  var roleEl = $('userRole');
-  if (isHR()){
-    roleEl.textContent = 'CFO';
-    roleEl.classList.remove('dir');
-  } else {
-    roleEl.textContent = 'Директор';
-    roleEl.classList.add('dir');
-  }
-  $('userLoc').textContent = isHR() ? 'усі локації' : (S.user.loc || '');
+// ── UNIFIED SIDEBAR — permissions, role-visibility, cross-page nav ────────
+var CURRENT_PAGE = 'opex';
+
+var PERMISSIONS = {
+  hr: 'all',
+  director: [
+    'dashboard',
+    'clients_list','payments','attendance_kids',
+    'employees','timesheet_staff','vacations','sick_leaves',
+    'calendar','vacation_schedule',
+    'analytics_clients','analytics_hr','opex','categories',
+    'client_birthdays'
+  ],
+  nurse: [
+    'dashboard',
+    'clients_list','attendance_kids',
+    'employees','timesheet_staff','vacations','sick_leaves',
+    'calendar','vacation_schedule'
+  ]
+};
+
+function roleLabel(role){ return ({hr:'CFO',director:'Директор',nurse:'Медсестра'})[role] || role; }
+function locLabel(){ return S.user && S.user.role==='hr' ? 'Всі локації' : (S.user && S.user.loc || ''); }
+
+function goPerm(perm){
+  var items = document.querySelectorAll('[data-permission="' + perm + '"]');
+  var target = items[0] && items[0].dataset.permPage;
+  if (target === CURRENT_PAGE) return;  // вже на цій сторінці
+  var targetFile = target === 'clients'    ? 'clients.html'
+                 : target === 'opex'       ? 'opex.html'
+                 : target === 'categories' ? 'categories.html'
+                 : 'index.html';
+  location.href = targetFile + '#' + perm;
+}
+
+function applyRoleVisibility(){
+  if (!S || !S.user || !S.user.role) return;
+  var role = S.user.role;
+  var allowed = PERMISSIONS[role];
+  document.querySelectorAll('[data-permission]').forEach(function(el){
+    var perm = el.dataset.permission;
+    var visible = (allowed === 'all') || (Array.isArray(allowed) && allowed.indexOf(perm) >= 0);
+    el.style.display = visible ? '' : 'none';
+  });
+  document.querySelectorAll('[data-section]').forEach(function(section){
+    var sectionName = section.dataset.section;
+    var items = document.querySelectorAll('[data-permission][data-parent="' + sectionName + '"]');
+    var anyVisible = Array.prototype.slice.call(items).some(function(item){ return item.style.display !== 'none'; });
+    section.style.display = anyVisible ? '' : 'none';
+  });
+}
+
+function toggleSidebar(){ document.getElementById('sidebar').classList.toggle('open'); }
+
+function updUserUI(){
+  if (!S.user) return;
+  var r = S.user.role;
+  $('uName').textContent   = roleLabel(r);
+  $('uLoc').textContent    = locLabel();
+  $('uAvatar').textContent = ({hr:'CFO',director:'Д',nurse:'М'})[r] || '?';
+  applyRoleVisibility();
 }
 
 // ── FETCH ───────────────────────────────────
@@ -1363,7 +1539,6 @@ function bindEventListeners(){
     }
     load(true);
   });
-  $('logoutBtn').addEventListener('click', doLogout);
 
   $('mtOverview').addEventListener('click', function(){
     if (S.mode === 'overview') return;
@@ -1408,7 +1583,7 @@ function bindEventListeners(){
   if (isHR()){
     await loadLocationsForSelector();
     if (!S.locations.length){
-      updateUserChip();
+      updUserUI();
       showFatalError('Не вдалося завантажити список локацій');
       bindEventListeners();
       return;
@@ -1419,7 +1594,7 @@ function bindEventListeners(){
     $('modeTabs').classList.remove('hidden');
   } else if (isDirector()){
     if (!S.user.loc){
-      updateUserChip();
+      updUserUI();
       showFatalError('Немає прив\'язаної локації для директора');
       bindEventListeners();
       return;
@@ -1431,7 +1606,7 @@ function bindEventListeners(){
     return;
   }
 
-  updateUserChip();
+  updUserUI();
   renderPeriodSel();
   populateSubSel();
   applySubSelVisibility();

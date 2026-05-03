@@ -366,6 +366,10 @@ tbody tr.clickable{cursor:pointer}
            onclick="goPerm('opex')">
         <span class="ni">💰</span> Opex
       </div>
+      <div class="nav-item" data-permission="categories" data-parent="finance" data-perm-page="categories"
+           onclick="goPerm('categories')">
+        <span class="ni">📊</span> Категорії
+      </div>
 
       <div class="nav-item" data-permission="settings" data-perm-page="index"
            data-v="settings" onclick="goPerm('settings')">
@@ -814,7 +818,7 @@ const PERMISSIONS = {
     'clients_list','payments','attendance_kids',
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
-    'analytics_clients','analytics_hr','opex',
+    'analytics_clients','analytics_hr','opex','categories',
     'client_birthdays'
   ],
   nurse: [
@@ -851,8 +855,9 @@ function goPerm(perm){
     const fn = PERM_LOCAL_ACTION[perm];
     if (fn) fn();
   } else {
-    const targetFile = target === 'clients' ? 'clients.html'
-                     : target === 'opex'    ? 'opex.html'
+    const targetFile = target === 'clients'    ? 'clients.html'
+                     : target === 'opex'       ? 'opex.html'
+                     : target === 'categories' ? 'categories.html'
                      : 'index.html';
     location.href = targetFile + '#' + perm;
   }

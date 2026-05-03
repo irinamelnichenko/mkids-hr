@@ -179,6 +179,7 @@ function doGet(e) {
     else if (action === 'importAbsencesFromPayment') result = importAbsencesFromPayment(e.parameter.loc || '');
     else if (action === 'getOpexData')               result = getOpexData(e.parameter.loc || '', e.parameter.year || '');
     else if (action === 'getOpexOverview')           result = getOpexOverview(e.parameter.year || '');
+    else if (action === 'getCategoryAnalytics')      result = getCategoryAnalytics(e.parameter.year || '', e.parameter.month || '');
     else                                             result = {ok:false, error:'Unknown action: ' + action};
     return jsonOut(result);
   } catch(err) {
@@ -3238,6 +3239,194 @@ function getOpexOverview(year) {
     ok: true,
     year: year ? Number(year) || year : '',
     locations: locations,
+    errors: errors
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// OPEX CATEGORY ANALYTICS — для конкретного місяця, по всіх локаціях,
+// з нормалізацією (на дитину / на групу / на ставку основного персоналу).
+// READ-ONLY. Backend повертає всі 16 локацій; фільтр Управління — на frontend
+// як у getOpexOverview.
+//
+// Структура листа OPEX (поза рядками 3..30 з категоріями):
+//   рядок 36 = "Кількість дітей"
+//   рядок 37 = "Кількість груп"
+//   рядок 38 = "Кількість основного персоналу"
+// Метадані лежать у "бюджет"-колонці кожного місяця:
+//   formula: colIdx = 2 + (month-1)*3   (січень=C, лютий=F, березень=I…)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Карта нормалізації категорій. Ключі — назва ПІСЛЯ _opexNormalizeCategoryName
+// (тож "ГОСП.ТОВАРИ" → "ХОЗ.ТОВАРИ", "СНІДАНКИ (Ашан)" → "СНІДАНКИ").
+var _OPEX_NORM_MAP = {
+  // absolute — нічого не ділимо (normFact = fact, normBudget = budget)
+  'ОРЕНДА':                            'absolute',
+  'КОМУНАЛЬНІ ПОСЛУГИ':                'absolute',
+  'ПОВЕРНЕННЯ':                        'absolute',
+  'Обслуговування':                    'absolute',
+  'Маркетинг':                         'absolute',
+  'ЗАХОДИ':                            'absolute',
+  'КАП':                               'absolute',
+  // child — ділимо на children (рядок 36)
+  'СНІДАНКИ':                          'child',
+  'КУХНЯ':                             'child',
+  'Вода':                              'child',
+  'ПРАЛЬНЯ':                           'child',
+  'Підручники':                        'child',
+  // group — ділимо на groups (рядок 37)
+  'КАНЦТОВАРИ':                        'group',
+  'ІГРАШКИ':                           'group',
+  'ХОЗ.ТОВАРИ':                        'group',
+  'ТЕХНІКА':                           'group',
+  'МЕБЛІ':                             'group',
+  'РЕМОНТ':                            'group',
+  'Постільне/коври/пуфи/форма':        'group',
+  'НЕЗАПЛАНОВАНІ ВИТРАТИ':             'group',
+  'Методична частина':                 'group',
+  // staff — ділимо на staff (рядок 38)
+  'Для персоналу':                     'staff',
+  'ПОДАТОК':                           'staff',
+  'Персонал':                          'staff',
+  'Обслуговування ФОП':                'staff'
+};
+
+function _opexNormType(name) {
+  return _OPEX_NORM_MAP[name] || 'unknown';
+}
+
+// Знаменник 0 → null (не Infinity). 'absolute' і 'unknown' → значення як є.
+function _opexNormalize(value, normType, denoms) {
+  if (normType === 'absolute' || normType === 'unknown') return value;
+  var d;
+  if      (normType === 'child') d = denoms.children;
+  else if (normType === 'group') d = denoms.groups;
+  else if (normType === 'staff') d = denoms.staff;
+  else return value;
+  if (!d || d <= 0) return null;
+  return value / d;
+}
+
+function getCategoryAnalytics(year, month) {
+  var m = parseInt(month, 10);
+  if (!m || m < 1 || m > 12) return {ok:false, error:'Invalid month (must be 1-12)'};
+
+  var configSS = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var regSheet = configSS.getSheetByName('OPEX');
+  if (!regSheet) return {ok:false, error:'OPEX registry tab not found in CONFIG'};
+
+  var regData = regSheet.getDataRange().getValues();
+
+  // Колонки для обраного місяця (0-indexed):
+  //   fIdx (Факт)   = (m-1)*3 + 1   → B,E,H,K…
+  //   bIdx (Бюджет) = (m-1)*3 + 2   → C,F,I,L…
+  // Метадані (рядки 36-38) лежать у бюджет-колонці = той самий bIdx.
+  var fIdx    = (m - 1) * 3 + 1;
+  var bIdx    = (m - 1) * 3 + 2;
+  var metaIdx = 2 + (m - 1) * 3;   // ≡ bIdx, явно за формулою з тз
+
+  // categoryName → акумулятор. Ключем беремо нормалізовану назву, тож
+  // "ГОСП.ТОВАРИ" з однієї локації і "ХОЗ.ТОВАРИ" з іншої злиплються.
+  var catMap = {};
+  var errors = [];
+
+  for (var i = 1; i < regData.length; i++) {
+    var loc      = String(regData[i][2] || '').trim();
+    var typ      = String(regData[i][1] || '').trim();
+    var sheetId  = String(regData[i][3] || '').trim();
+    var listName = String(regData[i][4] || '').trim() || 'OPEX';
+    if (!loc || !sheetId) continue;
+
+    try {
+      var locSS = SpreadsheetApp.openById(sheetId);
+      var opex  = locSS.getSheetByName(listName);
+      if (!opex) {
+        errors.push({loc: loc, error: 'OPEX sheet not found'});
+        continue;
+      }
+
+      // Явно читаємо 40×37 — getDataRange() може обрізати рядки де колонки
+      // крім A порожні. 40 покриває і категорії (3..30) і метадані (36..38).
+      var lastRow = Math.max(opex.getLastRow(), 40);
+      var lastCol = Math.max(opex.getLastColumn(), 37);
+      var data    = opex.getRange(1, 1, lastRow, lastCol).getValues();
+      var width   = lastCol;
+
+      // Метадані (рядки 36-38). Якщо листа коротший або колонки нема — 0.
+      var children = (35 < data.length && metaIdx < width) ? _opexNum(data[35][metaIdx]) : 0;
+      var groups   = (36 < data.length && metaIdx < width) ? _opexNum(data[36][metaIdx]) : 0;
+      var staff    = (37 < data.length && metaIdx < width) ? _opexNum(data[37][metaIdx]) : 0;
+      var denoms   = {children: children, groups: groups, staff: staff};
+
+      // Категорії (рядки 3..30, name-based scan з skip-list).
+      for (var rowNum = 3; rowNum <= 30; rowNum++) {
+        var idx = rowNum - 1;
+        if (idx >= data.length) break;
+        var rowArr  = data[idx] || [];
+        var rawName = String(rowArr[0] || '').trim();
+        if (_opexIsSkippedCategory(rawName)) continue;
+        var name = _opexNormalizeCategoryName(rawName);
+
+        var fact     = fIdx < width ? _opexNum(rowArr[fIdx]) : 0;
+        var budget   = bIdx < width ? _opexNum(rowArr[bIdx]) : 0;
+        var normType = _opexNormType(name);
+        // 'unknown' → показуємо абсолютні значення (на випадок нових категорій)
+        var normFact   = _opexNormalize(fact,   normType, denoms);
+        var normBudget = _opexNormalize(budget, normType, denoms);
+
+        if (!catMap[name]) {
+          catMap[name] = {
+            name: name,
+            normType: normType,
+            locations: [],
+            totalFact: 0,
+            totalBudget: 0
+          };
+        }
+        var bucket = catMap[name];
+        bucket.locations.push({
+          loc:        loc,
+          type:       typ,
+          fact:       fact,
+          budget:     budget,
+          children:   children,
+          groups:     groups,
+          staff:      staff,
+          normFact:   normFact,
+          normBudget: normBudget
+        });
+        bucket.totalFact   += fact;
+        bucket.totalBudget += budget;
+      }
+    } catch (e) {
+      errors.push({loc: loc, error: (e && e.message) ? e.message : String(e)});
+    }
+  }
+
+  // Середні нормалізовані значення — тільки серед локацій з визначеним
+  // (не null) normFact / normBudget. Якщо знаменник був 0 — локація не
+  // потрапляє у середнє, інакше викривило б цифру.
+  var categories = Object.keys(catMap).map(function(name){
+    var c = catMap[name];
+    var sumF = 0, cntF = 0, sumB = 0, cntB = 0;
+    c.locations.forEach(function(L){
+      if (L.normFact !== null && L.normFact !== undefined && isFinite(L.normFact)){
+        sumF += L.normFact; cntF++;
+      }
+      if (L.normBudget !== null && L.normBudget !== undefined && isFinite(L.normBudget)){
+        sumB += L.normBudget; cntB++;
+      }
+    });
+    c.avgNormFact   = cntF > 0 ? sumF / cntF : null;
+    c.avgNormBudget = cntB > 0 ? sumB / cntB : null;
+    return c;
+  });
+
+  return {
+    ok: true,
+    year:  year ? (Number(year) || year) : '',
+    month: m,
+    categories: categories,
     errors: errors
   };
 }
