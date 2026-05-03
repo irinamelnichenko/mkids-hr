@@ -3042,9 +3042,49 @@ function listAllTriggers() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// OPEX — спільні хелпери для парсингу категорій. Структура листа OPEX
+// (всі локації): рядок 1 порожній (column-pair headers Факт/Бюджет),
+// рядок 2 = "ВИТРАТИ" (заголовок таблиці), рядки 3..N = категорії.
+// Категорії визначаємо ПО НАЗВІ а не по фіксованих номерах рядків —
+// в локаціях є шифти і додаткові категорії для управлінь.
+// ═══════════════════════════════════════════════════════════════════════════
+function _opexIsSkippedCategory(name) {
+  var normalized = String(name || '').trim().toLowerCase();
+  if (!normalized) return true;
+  var SKIP_NAMES = [
+    'витрати',
+    'підсумок',
+    'знижки',
+    'кількість дітей',
+    'кількість груп',
+    'кількість основного персоналу'
+  ];
+  if (SKIP_NAMES.indexOf(normalized) !== -1) return true;
+  // Чисто числові «маркери» (типу "25500") — не категорія
+  if (/^[\d\s.,]+$/.test(normalized)) return true;
+  return false;
+}
+
+function _opexNormalizeCategoryName(name) {
+  var s = String(name || '').trim();
+  if (/^госп[\.\s]*товари/i.test(s)) return 'ХОЗ.ТОВАРИ';
+  if (/^сніданки/i.test(s))          return 'СНІДАНКИ';
+  return s;
+}
+
+function _opexNum(v) {
+  if (typeof v === 'number' && isFinite(v)) return v;
+  if (typeof v === 'string') {
+    var n = parseFloat(v.replace(/\s+/g, '').replace(',', '.'));
+    return isFinite(n) ? n : 0;
+  }
+  return 0;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // OPEX — читання факт/бюджет по локації. READ-ONLY.
-// Категорії: рядки 3..25 + 27 (КАП). Рядок 2 — заголовок "ВИТРАТИ" (skip).
-// Виключаємо: підсумок, знижки, статистику.
+// Сканує рядки 3..30, бере як категорію все що НЕ skip-список (див.
+// _opexIsSkippedCategory), назви нормалізуємо через _opexNormalizeCategoryName.
 // Структура: ROW1 = ["", "Факт", "Бюджет", ...] × 12 місяців.
 // ═══════════════════════════════════════════════════════════════════════════
 function getOpexData(loc, year) {
@@ -3070,38 +3110,30 @@ function getOpexData(loc, year) {
   var opex  = locSS.getSheetByName(listName);
   if (!opex) return {ok:false, error:'OPEX sheet not found in location file'};
 
-  var data = opex.getDataRange().getValues();
-  var width = (data[0] || []).length;
-
-  var CATEGORY_ROWS = [];
-  for (var r1 = 3; r1 <= 25; r1++) CATEGORY_ROWS.push(r1);
-  CATEGORY_ROWS.push(27);
-
-  var num = function(v) {
-    if (typeof v === 'number' && isFinite(v)) return v;
-    if (typeof v === 'string') {
-      var n = parseFloat(v.replace(/\s+/g, '').replace(',', '.'));
-      return isFinite(n) ? n : 0;
-    }
-    return 0;
-  };
+  // getDataRange() обрізає рядки де всі колонки крім A порожні (типова ситуація
+  // для МАРКЕТИНГ/КАП — там лише назва без сум). Читаємо явно 30×37 — структура
+  // OPEX листа фіксована і це гарантує що нічого не пропустимо.
+  var lastRow = Math.max(opex.getLastRow(), 30);
+  var lastCol = Math.max(opex.getLastColumn(), 37);
+  var data = opex.getRange(1, 1, lastRow, lastCol).getValues();
+  var width = lastCol;
 
   var categories = [];
-  for (var k = 0; k < CATEGORY_ROWS.length; k++) {
-    var rowNum = CATEGORY_ROWS[k];
+  for (var rowNum = 3; rowNum <= 30; rowNum++) {
     var idx = rowNum - 1;
-    if (idx >= data.length) continue;
+    if (idx >= data.length) break;
     var rowArr = data[idx] || [];
-    var name = String(rowArr[0] || '').trim();
-    if (!name) continue;
+    var rawName = String(rowArr[0] || '').trim();
+    if (_opexIsSkippedCategory(rawName)) continue;
+    var name = _opexNormalizeCategoryName(rawName);
 
     var months = [];
     var totalFact = 0, totalBudget = 0;
     for (var m = 1; m <= 12; m++) {
       var fIdx = (m - 1) * 3 + 1;
       var bIdx = (m - 1) * 3 + 2;
-      var fact   = fIdx < width ? num(rowArr[fIdx]) : 0;
-      var budget = bIdx < width ? num(rowArr[bIdx]) : 0;
+      var fact   = fIdx < width ? _opexNum(rowArr[fIdx]) : 0;
+      var budget = bIdx < width ? _opexNum(rowArr[bIdx]) : 0;
       months.push({month: m, fact: fact, budget: budget});
       totalFact   += fact;
       totalBudget += budget;
@@ -3125,8 +3157,9 @@ function getOpexData(loc, year) {
 
 // ═══════════════════════════════════════════════════════════════════════════
 // OPEX OVERVIEW — агреговані суми факт/бюджет по всіх локаціях. READ-ONLY.
-// Для кожної локації з реєстру OPEX підсумовує категорії 3..25 + 27 за всі
-// 12 місяців. Локації без OPEX-листа або з помилкою попадають в errors[].
+// Для кожної локації сканує рядки 3..30, підсумовує всі що пройшли
+// _opexIsSkippedCategory, по 12 місяцях. Локації без OPEX-листа або з
+// помилкою попадають в errors[].
 // ═══════════════════════════════════════════════════════════════════════════
 function getOpexOverview(year) {
   var configSS = SpreadsheetApp.openById(CONFIG_SHEET_ID);
@@ -3134,19 +3167,6 @@ function getOpexOverview(year) {
   if (!regSheet) return {ok:false, error:'OPEX registry tab not found in CONFIG'};
 
   var regData = regSheet.getDataRange().getValues();
-
-  var CATEGORY_ROWS = [];
-  for (var r1 = 3; r1 <= 25; r1++) CATEGORY_ROWS.push(r1);
-  CATEGORY_ROWS.push(27);
-
-  var num = function(v) {
-    if (typeof v === 'number' && isFinite(v)) return v;
-    if (typeof v === 'string') {
-      var n = parseFloat(v.replace(/\s+/g, '').replace(',', '.'));
-      return isFinite(n) ? n : 0;
-    }
-    return 0;
-  };
 
   var locations = [];
   var errors = [];
@@ -3166,8 +3186,22 @@ function getOpexOverview(year) {
         continue;
       }
 
-      var data  = opex.getDataRange().getValues();
-      var width = (data[0] || []).length;
+      // Явно читаємо 30×37 — getDataRange() може обрізати рядки де колонки
+      // крім A порожні (МАРКЕТИНГ/КАП).
+      var lastRow = Math.max(opex.getLastRow(), 30);
+      var lastCol = Math.max(opex.getLastColumn(), 37);
+      var data    = opex.getRange(1, 1, lastRow, lastCol).getValues();
+      var width   = lastCol;
+
+      // Збираємо індекси рядків-категорій один раз (по назві).
+      var catIdxs = [];
+      for (var rowNum = 3; rowNum <= 30; rowNum++) {
+        var idx = rowNum - 1;
+        if (idx >= data.length) break;
+        var rawName = String((data[idx] || [])[0] || '').trim();
+        if (_opexIsSkippedCategory(rawName)) continue;
+        catIdxs.push(idx);
+      }
 
       var monthsTotals = [];
       var yearFact = 0, yearBudget = 0;
@@ -3177,15 +3211,10 @@ function getOpexOverview(year) {
         var bIdx = (m - 1) * 3 + 2;
         var monthFact = 0, monthBudget = 0;
 
-        for (var k = 0; k < CATEGORY_ROWS.length; k++) {
-          var rowNum = CATEGORY_ROWS[k];
-          var idx = rowNum - 1;
-          if (idx >= data.length) continue;
-          var rowArr = data[idx] || [];
-          var name = String(rowArr[0] || '').trim();
-          if (!name) continue;
-          monthFact   += fIdx < width ? num(rowArr[fIdx]) : 0;
-          monthBudget += bIdx < width ? num(rowArr[bIdx]) : 0;
+        for (var k = 0; k < catIdxs.length; k++) {
+          var rowArr = data[catIdxs[k]] || [];
+          monthFact   += fIdx < width ? _opexNum(rowArr[fIdx]) : 0;
+          monthBudget += bIdx < width ? _opexNum(rowArr[bIdx]) : 0;
         }
 
         monthsTotals.push({month: m, fact: monthFact, budget: monthBudget});
