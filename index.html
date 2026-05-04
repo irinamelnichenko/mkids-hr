@@ -1397,6 +1397,8 @@ function esc(s){return (s||'').replace(/"/g,'&quot;').replace(/</g,'&lt;');}
 // списки тощо) оброблялись — інакше нові елементи лишаються видимими попри
 // PERMISSIONS. typeof guard — applyRoleVisibility може ще не бути визначена
 // під час раннього рендеру (login screen).
+const AUTH_BUILD_VERSION = 'auth-fix-7-2026-05-04';
+console.log('[mkids] auth build:', AUTH_BUILD_VERSION);
 function set(id,html){
   document.getElementById(id).innerHTML=html;
   if (typeof applyRoleVisibility === 'function') applyRoleVisibility();
@@ -1638,6 +1640,7 @@ function clearF(){S.q='';S.f={loc:'',pos:'',status:'',dir:'',typ:''};renderEmps(
 
 // ── EMPLOYEE CARD ──
 function renderEmpCard(){
+  console.log('[renderEmpCard] role=' + (S.user&&S.user.role) + ' build=' + AUTH_BUILD_VERSION);
   const e=S.emps[S.empId]; if(!e){nav('employees');return;}
   const yr=new Date().getFullYear();
   const act=isActive(e),r=rec(e.key);
