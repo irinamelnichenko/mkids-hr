@@ -183,6 +183,7 @@ function doGet(e) {
     else if (action === 'getSalaryData')             result = getSalaryData(e.parameter.loc || '', e.parameter.year || '');
     else if (action === 'getSalaryOverview')         result = getSalaryOverview(e.parameter.year || '');
     else if (action === 'getOverviewAnalytics')      result = getOverviewAnalytics(e.parameter.year || '', e.parameter.month || '');
+    else if (action === 'getUsers')                  result = getUsers();
     else                                             result = {ok:false, error:'Unknown action: ' + action};
     return jsonOut(result);
   } catch(err) {
@@ -203,6 +204,11 @@ function doPost(e) {
     else if (body.action === 'importAbsencesFromPayment') result = importAbsencesFromPayment(body.loc || '');
     else if (body.action === 'confirmBdayMatch')          result = confirmBdayMatch(body.childId || '', body.confirmedBy || '');
     else if (body.action === 'unconfirmBdayMatch')        result = unconfirmBdayMatch(body.childId || '');
+    else if (body.action === 'authenticate')              result = authenticate(body.login || '', body.password || '');
+    else if (body.action === 'updatePassword')            result = updatePassword(body.userId || 0, body.newPassword || '');
+    else if (body.action === 'addUser')                   result = addUser(body.data || {});
+    else if (body.action === 'deactivateUser')            result = deactivateUser(body.userId || 0);
+    else if (body.action === 'activateUser')              result = activateUser(body.userId || 0);
     else result = {ok:false, error:'Unknown action'};
     return jsonOut(result);
   } catch(err) {
@@ -3854,5 +3860,163 @@ function getOverviewAnalytics(year, month) {
     locations: locations,
     errors:    errors
   };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// USERS — лист "Користувачі" в CONFIG_SHEET_ID. Структура колонок:
+//   A=ID  B=ПІБ  C=Логін  D=Пароль  E=Роль  F=Локація  G=Email
+//   H=Активний (checkbox)  I=Останній вхід (datetime)
+// Для топ-менеджменту мережі (cfo/ceo/cco/coo/rnd_director/hr_trainer/legal/cmo).
+// Директори/медсестри локацій НЕ тут — у них стара система паролів.
+// ═══════════════════════════════════════════════════════════════════════════
+
+var USERS_SHEET_NAME = 'Користувачі';
+
+// Допустимі ролі для addUser. authenticate не валідує роль —
+// довіряємо тому, що в листі. director/nurse/hr — legacy, не для топ-менеджменту.
+var VALID_USER_ROLES = ['cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo'];
+
+function _getUsersSheet() {
+  var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var sh = ss.getSheetByName(USERS_SHEET_NAME);
+  if (!sh) throw new Error('Users sheet "' + USERS_SHEET_NAME + '" not found in CONFIG');
+  return sh;
+}
+
+function _parseUserRow(row) {
+  return {
+    id:        Number(row[0]) || 0,
+    name:      String(row[1] || '').trim(),
+    login:     String(row[2] || '').trim(),
+    password:  String(row[3] == null ? '' : row[3]),  // не trim — паролі можуть мати пробіли
+    role:      String(row[4] || '').trim(),
+    loc:       String(row[5] || '').trim(),
+    email:     String(row[6] || '').trim(),
+    active:    row[7] === true || /^(true|так|y|1|active|активний)$/i.test(String(row[7])),
+    lastLogin: row[8]
+                 ? (row[8] instanceof Date ? row[8].toISOString() : String(row[8]))
+                 : ''
+  };
+}
+
+// ── PUBLIC: getUsers() ─────────────────────────────────────────────────────
+// Повертає всіх користувачів (включно з паролями і неактивними).
+// Frontend гейтить видимість пароля через data-permission="user-mgmt".
+function getUsers() {
+  var sh = _getUsersSheet();
+  var data = sh.getDataRange().getValues();
+  var users = [];
+  for (var i = 1; i < data.length; i++) {
+    if (!data[i][0]) continue;        // пропускаємо порожні рядки
+    users.push(_parseUserRow(data[i]));
+  }
+  return {ok: true, users: users};
+}
+
+// ── PUBLIC: authenticate(login, password) ──────────────────────────────────
+// Перевіряє credentials. На успіх — оновлює "Останній вхід" і повертає user
+// БЕЗ password. На неуспіх — повертає {ok:false, error}.
+function authenticate(login, password) {
+  login    = String(login    || '').trim();
+  password = String(password == null ? '' : password);
+  if (!login || !password) return {ok: false, error: 'Введіть логін і пароль'};
+
+  var sh = _getUsersSheet();
+  var data = sh.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) {
+    if (!data[i][0]) continue;
+    var u = _parseUserRow(data[i]);
+    if (u.login !== login) continue;
+    if (!u.active) return {ok: false, error: 'Користувача деактивовано'};
+    if (u.password !== password) return {ok: false, error: 'Невірний пароль'};
+    // Update "Останній вхід" (col I = 9)
+    sh.getRange(i + 1, 9).setValue(new Date());
+    delete u.password;
+    return {ok: true, user: u};
+  }
+  return {ok: false, error: 'Користувача не знайдено'};
+}
+
+// ── PUBLIC: updatePassword(userId, newPassword) ────────────────────────────
+// БЕЗ перевірки старого пароля на бекенді. Гейтінг (свій пароль / admin
+// перевизначує чужий) — на frontend.
+function updatePassword(userId, newPassword) {
+  var id = Number(userId);
+  newPassword = String(newPassword == null ? '' : newPassword);
+  if (!id || !newPassword) return {ok: false, error: 'Missing userId or newPassword'};
+
+  var sh = _getUsersSheet();
+  var data = sh.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) {
+    if (Number(data[i][0]) === id) {
+      sh.getRange(i + 1, 4).setValue(newPassword);   // col D = 4
+      return {ok: true};
+    }
+  }
+  return {ok: false, error: 'Користувача не знайдено'};
+}
+
+// ── PUBLIC: addUser(payload) ───────────────────────────────────────────────
+// payload: {name, login, password, role, loc?, email?}
+// Auto-increment ID, login повинен бути унікальним. За замовчуванням loc="Менеджмент".
+function addUser(payload) {
+  if (!payload || !payload.name || !payload.login || !payload.password || !payload.role) {
+    return {ok: false, error: 'Missing required fields (name, login, password, role)'};
+  }
+  if (VALID_USER_ROLES.indexOf(payload.role) === -1) {
+    return {ok: false, error: 'Invalid role: ' + payload.role};
+  }
+
+  var sh = _getUsersSheet();
+  var data = sh.getDataRange().getValues();
+
+  // Унікальність логіна (case-sensitive trim).
+  var newLogin = String(payload.login).trim();
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][2] || '').trim() === newLogin) {
+      return {ok: false, error: 'Логін "' + newLogin + '" вже існує'};
+    }
+  }
+
+  // Auto-increment ID = max(existing) + 1.
+  var maxId = 0;
+  for (var i = 1; i < data.length; i++) {
+    var n = Number(data[i][0]);
+    if (n > maxId) maxId = n;
+  }
+  var newId = maxId + 1;
+
+  sh.appendRow([
+    newId,
+    String(payload.name).trim(),
+    newLogin,
+    String(payload.password),
+    payload.role,
+    String(payload.loc || 'Менеджмент').trim(),
+    String(payload.email || '').trim(),
+    true,    // active
+    ''       // last login (порожньо до першого входу)
+  ]);
+  return {ok: true, id: newId};
+}
+
+// ── PUBLIC: deactivateUser / activateUser ──────────────────────────────────
+// Soft delete — встановлює col H "Активний" в false / true.
+function deactivateUser(userId) { return _setUserActive(userId, false); }
+function activateUser(userId)   { return _setUserActive(userId, true); }
+
+function _setUserActive(userId, active) {
+  var id = Number(userId);
+  if (!id) return {ok: false, error: 'Missing userId'};
+
+  var sh = _getUsersSheet();
+  var data = sh.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) {
+    if (Number(data[i][0]) === id) {
+      sh.getRange(i + 1, 8).setValue(active);   // col H = 8
+      return {ok: true};
+    }
+  }
+  return {ok: false, error: 'Користувача не знайдено'};
 }
 
