@@ -377,12 +377,18 @@ function readSession(){
     if (!s || !s.user || !s.t) return null;
     if (typeof s.user.role !== 'string') return null;
     if (Date.now() - s.t > SESSION_TTL_MS) return null;
+    var NET = ['hr','cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo'];
+    s.user.role = String(s.user.role || '').toLowerCase().trim();
+    if (NET.indexOf(s.user.role) !== -1 && s.user.loc !== ''){
+      s.user.origLoc = s.user.loc;
+      s.user.loc = '';
+    }
     return s.user;
   } catch(e) { return null; }
 }
 function clearSession(){ try { localStorage.removeItem(SESSION_KEY); } catch(e){} }
 var NETWORK_ROLES = ['hr','cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo'];
-function isNetworkRole(role){ return NETWORK_ROLES.indexOf(role) !== -1; }
+function isNetworkRole(role){ return NETWORK_ROLES.indexOf(String(role || '').toLowerCase()) !== -1; }
 // isHR() семантично = "має мережевий доступ" (всі топ-менеджмент ролі + legacy hr).
 function isHR(){       return S.user && isNetworkRole(S.user.role); }
 function isDirector(){ return S.user && S.user.role === 'director'; }

@@ -1508,6 +1508,14 @@ function readSession(){
     if (!s || !s.user || !s.t) return null;
     if (typeof s.user.role !== 'string') return null;
     if (Date.now() - s.t > SESSION_TTL_MS) return null;
+    // Self-heal stale sessions: normalize role to lowercase + blank loc for
+    // network roles (бо у листі вони мають loc='Менеджмент' що ламає фільтри).
+    var NET = ['hr','cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo'];
+    s.user.role = String(s.user.role || '').toLowerCase().trim();
+    if (NET.indexOf(s.user.role) !== -1 && s.user.loc !== ''){
+      s.user.origLoc = s.user.loc;
+      s.user.loc = '';
+    }
     return s.user;
   } catch(e) { return null; }
 }
@@ -1819,7 +1827,7 @@ const PERM_LOCAL_ACTION = {
 
 // Ролі мережевого рівня — бачать всі локації (на відміну від director/nurse).
 const NETWORK_ROLES = ['hr','cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo'];
-function isNetworkRole(role){ return NETWORK_ROLES.indexOf(role) !== -1; }
+function isNetworkRole(role){ return NETWORK_ROLES.indexOf(String(role || '').toLowerCase()) !== -1; }
 
 function roleLabel(role){
   return ({
