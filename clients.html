@@ -1641,6 +1641,14 @@ async function doLoginMain(){
     var json = await r.json();
     if (!json.ok){ showLoginError(json.error || 'Помилка автентифікації'); return; }
     S.user = json.user;
+    // Мережеві ролі (cfo/ceo/cco/coo/rnd_director/hr_trainer/legal/cmo)
+    // у листі мають loc='Менеджмент' для ідентифікації напрямку. Але для
+    // фільтрації даних вони бачать ВСЮ мережу — тому очищаємо loc.
+    // Оригінал зберігаємо як origLoc.
+    if (isNetworkRole(S.user.role)){
+      S.user.origLoc = S.user.loc;
+      S.user.loc = '';
+    }
     saveSession(S.user);
     document.getElementById('loginScreen').classList.add('hidden');
     document.getElementById('app').classList.remove('hidden');
