@@ -1071,7 +1071,7 @@ const PERMISSIONS = {
     'calendar','vacation_schedule',
     'analytics_clients','analytics_hr',
     'opex','categories','salary','overview_analytics',
-    'client_birthdays','settings',
+    'client_birthdays',
     'finance','medical','salary-mgmt'
   ],
   cco: [                                                // CCO — все, БЕЗ user-mgmt (= як ceo)
@@ -1081,7 +1081,7 @@ const PERMISSIONS = {
     'calendar','vacation_schedule',
     'analytics_clients','analytics_hr',
     'opex','categories','salary','overview_analytics',
-    'client_birthdays','settings',
+    'client_birthdays',
     'finance','medical','salary-mgmt'
   ],
   coo: [                                                // COO — все крім user-mgmt і salary-mgmt
@@ -1091,7 +1091,7 @@ const PERMISSIONS = {
     'calendar','vacation_schedule',
     'analytics_clients','analytics_hr',
     'opex','categories','salary','overview_analytics',
-    'client_birthdays','settings',
+    'client_birthdays',
     'finance','medical'
   ],
   rnd_director: [                                       // Академічний — все крім фінансів і ЗП
@@ -1099,23 +1099,23 @@ const PERMISSIONS = {
     'clients_list','attendance_kids',
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
-    'analytics_clients','analytics_hr',
-    'client_birthdays','settings'
+    'analytics_hr',
+    'client_birthdays'
   ],
   hr_trainer: [                                         // L&D — співробітники + клієнти без грошей
     'dashboard',
     'clients_list','attendance_kids',
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
-    'client_birthdays','settings'
+    'client_birthdays'
   ],
   legal: [                                              // Юрист — все крім фінансів
     'dashboard',
     'clients_list','attendance_kids',
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
-    'analytics_clients','analytics_hr',
-    'client_birthdays','settings',
+    'analytics_hr',
+    'client_birthdays',
     'medical'
   ],
 
@@ -1201,6 +1201,16 @@ function goPerm(perm){
   }
 }
 
+// Перевірка чи поточний користувач має конкретну permission. Повертає true для
+// 'all' роле або якщо perm у whitelist масиві.
+function hasPerm(p){
+  if (!S || !S.user || !S.user.role) return false;
+  var r = String(S.user.role || '').toLowerCase().trim();
+  var allowed = PERMISSIONS[r];
+  if (allowed === 'all') return true;
+  return Array.isArray(allowed) && allowed.indexOf(p) !== -1;
+}
+
 function applyRoleVisibility(){
   if (!S || !S.user || !S.user.role) return;
   // Defensive lowercase: PERMISSIONS keys всі lowercase, тому шукаємо нормалізовано.
@@ -1279,7 +1289,7 @@ function updateBadges(){
 // ── NAVIGATION ──
 const TITLES={dashboard:'📊 Дашборд',employees:'👥 Співробітники',employee:'👤 Картка співробітника',vacations:'🏖️ Відпустки',sick:'🏥 Лікарняні',analytics:'📈 Аналітика',birthdays:'🗓️ Календар подій',vacschedule:'🌴 Графік відпусток',settings:'⚙️ Налаштування',tabel:'📋 Табель відвідуваності',report:'📊 Місячний звіт'};
 function nav(view,id=null){
-  if(view==='settings' && !isHR()) view='dashboard';
+  if(view==='settings' && !hasPerm('settings')) view='dashboard';
   S.view=view; if(id!==null) S.empId=id;
   document.querySelectorAll('.nav-item').forEach(el=>el.classList.toggle('active',el.dataset.v===view));
   document.getElementById('pageTitle').textContent=TITLES[view]||view;
@@ -1651,21 +1661,21 @@ function renderEmpCard(){
         ${act?`<div class="emp-btns">
           <button class="btn btn-ghost" onclick="openVac(${e.id})">🏖️ Відпустка</button>
           <button class="btn btn-ghost" onclick="openSick(${e.id})">🏥 Лікарняний</button>
-          ${!isNurse?`<button class="btn btn-ghost" onclick="openSal(${e.id})">💰 Зарплата</button>`:''}
+          ${!isNurse?`<button class="btn btn-ghost" data-permission="salary" onclick="openSal(${e.id})">💰 Зарплата</button>`:''}
         </div>`:''}
       </div>
       <div class="qs-grid">
         <div class="qs-item"><div class="qs-val">${t?`${t.yr}р ${t.mo}м`:'—'}</div><div class="qs-lbl">Стаж</div></div>
         <div class="qs-item"><div class="qs-val" style="color:${ov?'#e74c3c':'var(--dark)'};">${vUsed}<span style="font-size:14px;color:var(--gray)">/${vEarned}</span></div><div class="qs-lbl">Відпустка використано/доступно</div></div>
         <div class="qs-item"><div class="qs-val" style="color:${vBal===0?'#e74c3c':vBal<3?'#e67e22':'#27ae60'}">${vBal}</div><div class="qs-lbl">Залишок днів відпустки</div></div>
-        ${!isNurse?`<div class="qs-item"><div class="qs-val" style="color:#27ae60;font-size:18px">${sal?Number(sal.amount).toLocaleString('uk-UA'):'—'}</div><div class="qs-lbl">Зарплата (грн)</div></div>`:''}
+        ${!isNurse?`<div class="qs-item" data-permission="salary"><div class="qs-val" style="color:#27ae60;font-size:18px">${sal?Number(sal.amount).toLocaleString('uk-UA'):'—'}</div><div class="qs-lbl">Зарплата (грн)</div></div>`:''}
       </div>
       ${ov?`<div class="alert alert-danger" style="margin:14px;border-radius:8px">⚠️ Перевищено ліміт! Використано <strong>${vUsed}</strong> з <strong>${vEarned}</strong> зароблених днів</div>`:''}
       <div class="tabs" id="empTabs">
         <div class="tab active" data-tab="tInfo" onclick="switchTab(this)">📋 Інфо</div>
         <div class="tab" data-tab="tVac" onclick="switchTab(this)">🏖️ Відпустки (${r.vacs.length})</div>
         <div class="tab" data-tab="tSick" onclick="switchTab(this)">🏥 Лікарняні (${r.sicks.length})</div>
-        ${!isNurse?`<div class="tab" data-tab="tSal" onclick="switchTab(this)">💰 Зарплата (${r.sals.length})</div>`:''}
+        ${!isNurse?`<div class="tab" data-tab="tSal" data-permission="salary" onclick="switchTab(this)">💰 Зарплата (${r.sals.length})</div>`:''}
         <div class="tab" data-tab="tTabel" onclick="switchTab(this)">📊 Табель</div>
         <div class="tab" data-tab="tNote" onclick="switchTab(this)">📝 Нотатки${r.notes.length>0?` (${r.notes.length})`:''}</div>
         <div class="tab" data-tab="tLine" onclick="switchTab(this)">📅 Хронологія</div>
@@ -1711,7 +1721,7 @@ function renderEmpCard(){
           <td><button class="btn btn-danger btn-xs" onclick="delRec('${e.key}','sicks','${v._id||r.sicks.indexOf(v)}',${e.id})">🗑</button></td>
         </tr>`).join('')}</tbody></table></div>`}
       </div>
-      <div id="tSal" class="tab-pane">
+      <div id="tSal" class="tab-pane" data-permission="salary">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
           <h4 style="font-size:14px;font-weight:700">Зарплатна історія</h4>
           <button class="btn btn-primary btn-sm" onclick="openSal(${e.id})">+ Додати</button>
