@@ -390,20 +390,80 @@ function doLogout(){ clearSession(); window.location.href = 'index.html'; }
 var CURRENT_PAGE = 'categories';
 
 var PERMISSIONS = {
-  hr: 'all',
+  // ── Топ-менеджмент мережі (з листа "Користувачі") ────────────────
+  cfo:          'all',                                  // CFO — все + user-mgmt + salary-mgmt
+  ceo: [                                                // CEO — все, БЕЗ user-mgmt
+    'dashboard',
+    'clients_list','payments','attendance_kids','recalc',
+    'employees','timesheet_staff','vacations','sick_leaves',
+    'calendar','vacation_schedule',
+    'analytics_clients','analytics_hr',
+    'opex','categories','salary','overview_analytics',
+    'client_birthdays','settings',
+    'finance','medical','salary-mgmt'
+  ],
+  cco: [                                                // CCO — все, БЕЗ user-mgmt (= як ceo)
+    'dashboard',
+    'clients_list','payments','attendance_kids','recalc',
+    'employees','timesheet_staff','vacations','sick_leaves',
+    'calendar','vacation_schedule',
+    'analytics_clients','analytics_hr',
+    'opex','categories','salary','overview_analytics',
+    'client_birthdays','settings',
+    'finance','medical','salary-mgmt'
+  ],
+  coo: [
+    'dashboard',
+    'clients_list','payments','attendance_kids','recalc',
+    'employees','timesheet_staff','vacations','sick_leaves',
+    'calendar','vacation_schedule',
+    'analytics_clients','analytics_hr',
+    'opex','categories','salary','overview_analytics',
+    'client_birthdays','settings',
+    'finance','medical'
+  ],
+  rnd_director: [
+    'dashboard',
+    'clients_list','attendance_kids',
+    'employees','timesheet_staff','vacations','sick_leaves',
+    'calendar','vacation_schedule',
+    'analytics_clients','analytics_hr',
+    'client_birthdays','settings'
+  ],
+  hr_trainer: [
+    'dashboard',
+    'clients_list','attendance_kids',
+    'employees','timesheet_staff','vacations','sick_leaves',
+    'calendar','vacation_schedule',
+    'client_birthdays','settings'
+  ],
+  legal: [
+    'dashboard',
+    'clients_list','attendance_kids',
+    'employees','timesheet_staff','vacations','sick_leaves',
+    'calendar','vacation_schedule',
+    'analytics_clients','analytics_hr',
+    'client_birthdays','settings',
+    'medical'
+  ],
+
+  // ── Локаційні ролі (стара система паролів — поки лишаються) ──────
+  hr:           'all',
   director: [
     'dashboard',
     'clients_list','payments','attendance_kids',
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
     'analytics_clients','analytics_hr','opex','categories','salary','overview_analytics',
-    'client_birthdays'
+    'client_birthdays',
+    'finance','medical'
   ],
   nurse: [
     'dashboard',
     'clients_list','attendance_kids',
     'employees','timesheet_staff','vacations','sick_leaves',
-    'calendar','vacation_schedule'
+    'calendar','vacation_schedule',
+    'medical'
   ]
 };
 

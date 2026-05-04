@@ -820,20 +820,80 @@ function doLogout(){clearSession();S.user=null;S.view='dashboard';S.f={loc:'',po
 const CURRENT_PAGE = 'index';
 
 const PERMISSIONS = {
-  hr: 'all',
+  // ── Топ-менеджмент мережі (з листа "Користувачі") ────────────────
+  cfo:          'all',                                  // CFO — все + user-mgmt + salary-mgmt
+  ceo: [                                                // CEO — все, БЕЗ user-mgmt
+    'dashboard',
+    'clients_list','payments','attendance_kids','recalc',
+    'employees','timesheet_staff','vacations','sick_leaves',
+    'calendar','vacation_schedule',
+    'analytics_clients','analytics_hr',
+    'opex','categories','salary','overview_analytics',
+    'client_birthdays','settings',
+    'finance','medical','salary-mgmt'
+  ],
+  cco: [                                                // CCO — все, БЕЗ user-mgmt (= як ceo)
+    'dashboard',
+    'clients_list','payments','attendance_kids','recalc',
+    'employees','timesheet_staff','vacations','sick_leaves',
+    'calendar','vacation_schedule',
+    'analytics_clients','analytics_hr',
+    'opex','categories','salary','overview_analytics',
+    'client_birthdays','settings',
+    'finance','medical','salary-mgmt'
+  ],
+  coo: [                                                // COO — все крім user-mgmt і salary-mgmt
+    'dashboard',
+    'clients_list','payments','attendance_kids','recalc',
+    'employees','timesheet_staff','vacations','sick_leaves',
+    'calendar','vacation_schedule',
+    'analytics_clients','analytics_hr',
+    'opex','categories','salary','overview_analytics',
+    'client_birthdays','settings',
+    'finance','medical'
+  ],
+  rnd_director: [                                       // Академічний — все крім фінансів і ЗП
+    'dashboard',
+    'clients_list','attendance_kids',
+    'employees','timesheet_staff','vacations','sick_leaves',
+    'calendar','vacation_schedule',
+    'analytics_clients','analytics_hr',
+    'client_birthdays','settings'
+  ],
+  hr_trainer: [                                         // L&D — співробітники + клієнти без грошей
+    'dashboard',
+    'clients_list','attendance_kids',
+    'employees','timesheet_staff','vacations','sick_leaves',
+    'calendar','vacation_schedule',
+    'client_birthdays','settings'
+  ],
+  legal: [                                              // Юрист — все крім фінансів
+    'dashboard',
+    'clients_list','attendance_kids',
+    'employees','timesheet_staff','vacations','sick_leaves',
+    'calendar','vacation_schedule',
+    'analytics_clients','analytics_hr',
+    'client_birthdays','settings',
+    'medical'
+  ],
+
+  // ── Локаційні ролі (стара система паролів — поки лишаються) ──────
+  hr:           'all',                                  // legacy CFO 'hr2024' — приберемо в Кроку 4
   director: [
     'dashboard',
     'clients_list','payments','attendance_kids',
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
     'analytics_clients','analytics_hr','opex','categories','salary','overview_analytics',
-    'client_birthdays'
+    'client_birthdays',
+    'finance','medical'
   ],
   nurse: [
     'dashboard',
     'clients_list','attendance_kids',
     'employees','timesheet_staff','vacations','sick_leaves',
-    'calendar','vacation_schedule'
+    'calendar','vacation_schedule',
+    'medical'
   ]
 };
 
@@ -888,10 +948,6 @@ function applyRoleVisibility(){
     const anyVisible = Array.from(items).some(item => item.style.display !== 'none');
     section.style.display = anyVisible ? '' : 'none';
   });
-  if (role === 'nurse') {
-    document.querySelectorAll('[data-sensitive="finance"]').forEach(el => el.style.display = 'none');
-    document.querySelectorAll('[data-sensitive="salary"]').forEach(el => el.style.display = 'none');
-  }
 }
 
 function dispatchHashView(){
