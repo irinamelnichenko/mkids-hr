@@ -1528,7 +1528,7 @@ const ROLE_EMOJI_NEW = {
 };
 const ROLE_SHORT_NEW = {
   cfo:'CFO', ceo:'CEO', cco:'CCO', coo:'COO',
-  rnd_director:'R&D', hr_trainer:'L&D', legal:'Юрист', cmo:'CMO'
+  rnd_director:'R&D', hr_trainer:'L&D', legal:'Legal', cmo:'CMO'
 };
 const ROLE_ORDER_NEW = ['cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo'];
 
@@ -1831,7 +1831,7 @@ function isNetworkRole(role){ return NETWORK_ROLES.indexOf(String(role || '').to
 function roleLabel(role){
   return ({
     hr:'CFO', cfo:'CFO', ceo:'CEO', cco:'CCO', coo:'COO',
-    rnd_director:'R&D Director', hr_trainer:'L&D', legal:'Юрист', cmo:'CMO',
+    rnd_director:'R&D Director', hr_trainer:'L&D', legal:'Legal', cmo:'CMO',
     director:'Директор', nurse:'Медсестра'
   })[role] || role;
 }
@@ -1843,7 +1843,7 @@ function locLabel(){
 function avatarText(role){
   return ({
     hr:'CFO', cfo:'CFO', ceo:'CEO', cco:'CCO', coo:'COO',
-    rnd_director:'R&D', hr_trainer:'L&D', legal:'Ю', cmo:'CMO',
+    rnd_director:'R&D', hr_trainer:'L&D', legal:'Lg', cmo:'CMO',
     director:'Д', nurse:'М'
   })[role] || '?';
 }
