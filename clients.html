@@ -1910,7 +1910,8 @@ function updUserUI(){
   if (r==='nurse' && S.user.loc) S.attLoc=S.user.loc;
   applyRoleVisibility();
 }
-function isHR(){ return S.user&&S.user.role==='hr'; }
+// isHR() семантично = "має мережевий доступ" (всі топ-менеджмент ролі + legacy hr).
+function isHR(){ return S.user && isNetworkRole(S.user.role); }
 function isNurse(){ return S.user&&S.user.role==='nurse'; }
 function isDirector(){ return S.user&&S.user.role==='director'; }
 function canEditHealth(childLoc){
@@ -2603,7 +2604,7 @@ async function triggerSyncBdayStatus(btn){
 
 function _currentUserLabel(){
   if (!S.user) return 'unknown';
-  if (S.user.role === 'hr') return 'HR';
+  if (isNetworkRole(S.user.role)) return 'HR';
   if (S.user.role === 'director') return 'Director ' + (S.user.loc || '');
   if (S.user.role === 'nurse')    return 'Nurse '    + (S.user.loc || '');
   return S.user.role || 'unknown';

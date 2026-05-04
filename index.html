@@ -1165,7 +1165,11 @@ function avatarText(role){
   })[role] || '?';
 }
 
-function isHR(){       return S && S.user && S.user.role === 'hr'; }
+// isHR() семантично = "має мережевий доступ" (всі топ-менеджмент ролі + legacy hr).
+// Розширено в auth-refactor щоб cfo/ceo/cco/coo/rnd_director/hr_trainer/legal/cmo
+// успадковували поведінку hr (full access). Якщо колись треба розрізняти —
+// зробити окрему функцію isLegacyHR().
+function isHR(){       return S && S.user && isNetworkRole(S.user.role); }
 function isDirector(){ return S && S.user && S.user.role === 'director'; }
 function isNurse(){    return S && S.user && S.user.role === 'nurse'; }
 
@@ -1235,7 +1239,7 @@ async function initApp(){
   if(!loaded) updSheetsStatus(getScriptUrl()?'err':'none');
   autoGenPasswords();fillLoginLocs();updateBadges();
   // Show cloud sync warning banner in topbar if not configured (HR only)
-  if(S.user.role==='hr'){
+  if(isNetworkRole(S.user.role)){
     const el=document.getElementById('sheetsStatus');
     if(!getScriptUrl()&&el){el.innerHTML='<span style="cursor:pointer;text-decoration:underline" onclick="nav(\'settings\')">⚠️ Хмарне збереження не налаштовано</span>';el.style.color='#e67e22';}
   }
@@ -1259,7 +1263,7 @@ function updateBadges(){
 // ── NAVIGATION ──
 const TITLES={dashboard:'📊 Дашборд',employees:'👥 Співробітники',employee:'👤 Картка співробітника',vacations:'🏖️ Відпустки',sick:'🏥 Лікарняні',analytics:'📈 Аналітика',birthdays:'🗓️ Календар подій',vacschedule:'🌴 Графік відпусток',settings:'⚙️ Налаштування',tabel:'📋 Табель відвідуваності',report:'📊 Місячний звіт'};
 function nav(view,id=null){
-  if(view==='settings'&&S.user&&S.user.role!=='hr') view='dashboard';
+  if(view==='settings' && !isHR()) view='dashboard';
   S.view=view; if(id!==null) S.empId=id;
   document.querySelectorAll('.nav-item').forEach(el=>el.classList.toggle('active',el.dataset.v===view));
   document.getElementById('pageTitle').textContent=TITLES[view]||view;
@@ -1421,7 +1425,7 @@ function renderDash(){
   const locs={};
   emps.forEach(e=>{if(!e.loc)return;if(!locs[e.loc])locs[e.loc]={t:0,a:0,v:0,s:0,typ:normType(e.typ)};locs[e.loc].t++;if(isActive(e)){locs[e.loc].a++;if(isOnVac(e.key))locs[e.loc].v++;if(isOnSick(e.key))locs[e.loc].s++;}});
   const bdays7=upcomingBdays(active,7);
-  const isHR=S.user.role==='hr';
+  const isHR=isNetworkRole(S.user.role);
   // Type stats for summary
   const typeStats={};
   allEmps.filter(isActive).forEach(e=>{const t=normType(e.typ)||'Інше';if(!typeStats[t])typeStats[t]={a:0,v:0,s:0,ov:0};typeStats[t].a++;if(isOnVac(e.key))typeStats[t].v++;if(isOnSick(e.key))typeStats[t].s++;if(vacUsed(e.key)>vacTotalLim(e))typeStats[t].ov++;});
@@ -1528,7 +1532,7 @@ function filterLoc(loc){S.f.loc=loc;nav('employees');}
 // ── EMPLOYEES ──
 function renderEmps(){
   const emps=visible();
-  const isHR=S.user.role==='hr';
+  const isHR=isNetworkRole(S.user.role);
   const isDir=S.user.role==='director', isNurse=S.user.role==='nurse';
   const locs=uniq(emps,'loc'),poss=uniq(emps,'pos'),dirs=uniq(emps,'dir'),stats=uniq(emps,'stat');
   const typs=[...new Set(emps.map(e=>normType(e.typ)).filter(Boolean))].sort();
@@ -1891,7 +1895,7 @@ function addNote(empId){
   if(!text){toast('⚠️ Введіть текст нотатки');return;}
   const e=S.emps[empId];
   const r=rec(e.key);
-  r.notes.push({_id:Date.now()+'n',text,author:S.user.role==='hr'?'HR':S.user.loc,at:new Date().toISOString()});
+  r.notes.push({_id:Date.now()+'n',text,author:isNetworkRole(S.user.role)?'HR':S.user.loc,at:new Date().toISOString()});
   saveRecs();syncToSheets();
   document.getElementById('tNote').innerHTML=buildNotes(e,r);
   if(ta)ta.value='';
@@ -1940,7 +1944,7 @@ function renderVacs(){
     const ov=vUsed>vEarned,pct=Math.min(100,Math.round(vEarned>0?vUsed/vEarned*100:0));
     return{e,vEarned,vUsed,vBal,ov,pct};
   }).sort((a,b)=>b.ov-a.ov||b.pct-a.pct);
-  const isHR=S.user.role==='hr';
+  const isHR=isNetworkRole(S.user.role);
 
   set('main',`
     <div class="alert alert-info" style="margin-bottom:16px">
@@ -1983,7 +1987,7 @@ function renderSicks(){
     const last=[...r.sicks].sort((a,b)=>new Date(b.start)-new Date(a.start))[0]||null;
     return{e,days:sickUsed(e.key,yr),last,on:isOnSick(e.key)};
   }).sort((a,b)=>b.days-a.days);
-  const isHR=S.user.role==='hr';
+  const isHR=isNetworkRole(S.user.role);
 
   set('main',`
     <div class="card">
@@ -2019,7 +2023,7 @@ function salStats(arr){
 function fmtGrn(n){return n!=null?Number(n).toLocaleString('uk-UA')+' ₴':'—';}
 
 function renderAnalytics(){
-  const isHR=S.user.role==='hr';
+  const isHR=isNetworkRole(S.user.role);
   const isNurse=S.user.role==='nurse';
   const userLoc=S.user.loc||'';
   const allActive=visible().filter(isActive);
@@ -2523,7 +2527,7 @@ let vacSchedTyp='',vacSchedLoc='',vacSchedPos='';
 let vacSchedMode='year';
 
 function renderVacSchedule(){
-  const isHR=S.user.role==='hr';
+  const isHR=isNetworkRole(S.user.role);
   const allActive=visible().filter(isActive);
   const typs=[...new Set(allActive.map(e=>normType(e.typ)).filter(Boolean))];
   const sortedTyps=[...TYPE_ORDER.filter(t=>typs.includes(t)),...typs.filter(t=>!TYPE_ORDER.includes(t)).sort()];
@@ -3083,7 +3087,7 @@ function workDaysInRange(from,to){
 }
 
 function renderTabel(){
-  const isHR=S.user.role==='hr';
+  const isHR=isNetworkRole(S.user.role);
   if(!S.f)S.f={};
 
   const allTyps=isHR?[...new Set(S.emps.filter(isActive).map(e=>normType(e.typ)).filter(Boolean))].sort():null;
@@ -3322,7 +3326,7 @@ function renderReminders(){
 let reportMonth=new Date().getMonth(),reportYear=new Date().getFullYear(),reportLoc='';
 
 function renderReport(){
-  const isHR=S.user.role==='hr';
+  const isHR=isNetworkRole(S.user.role);
   const loc=isHR?reportLoc:(S.user.loc||'');
   const locs=isHR?[...new Set(S.emps.map(e=>e.loc).filter(Boolean))].sort():null;
   const emps=visible().filter(isActive).filter(e=>!loc||e.loc===loc);

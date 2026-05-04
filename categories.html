@@ -381,7 +381,10 @@ function readSession(){
   } catch(e) { return null; }
 }
 function clearSession(){ try { localStorage.removeItem(SESSION_KEY); } catch(e){} }
-function isHR(){       return S.user && S.user.role === 'hr'; }
+var NETWORK_ROLES = ['hr','cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo'];
+function isNetworkRole(role){ return NETWORK_ROLES.indexOf(role) !== -1; }
+// isHR() семантично = "має мережевий доступ" (всі топ-менеджмент ролі + legacy hr).
+function isHR(){       return S.user && isNetworkRole(S.user.role); }
 function isDirector(){ return S.user && S.user.role === 'director'; }
 function isNurse(){    return S.user && S.user.role === 'nurse'; }
 function doLogout(){ clearSession(); window.location.href = 'index.html'; }
@@ -468,7 +471,7 @@ var PERMISSIONS = {
 };
 
 function roleLabel(role){ return ({hr:'CFO',director:'Директор',nurse:'Медсестра'})[role] || role; }
-function locLabel(){ return S.user && S.user.role==='hr' ? 'Всі локації' : (S.user && S.user.loc || ''); }
+function locLabel(){ return S.user && isNetworkRole(S.user.role) ? 'Всі локації' : (S.user && S.user.loc || ''); }
 
 function goPerm(perm){
   var items = document.querySelectorAll('[data-permission="' + perm + '"]');
