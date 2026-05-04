@@ -1072,7 +1072,7 @@ const PERMISSIONS = {
     'analytics_clients','analytics_hr',
     'opex','categories','salary','overview_analytics',
     'client_birthdays',
-    'finance','medical','salary-mgmt'
+    'finance','medical','salary-mgmt','hr-actions'
   ],
   cco: [                                                // CCO — все, БЕЗ user-mgmt (= як ceo)
     'dashboard',
@@ -1082,7 +1082,7 @@ const PERMISSIONS = {
     'analytics_clients','analytics_hr',
     'opex','categories','salary','overview_analytics',
     'client_birthdays',
-    'finance','medical','salary-mgmt'
+    'finance','medical','salary-mgmt','hr-actions'
   ],
   coo: [                                                // COO — все крім user-mgmt і salary-mgmt
     'dashboard',
@@ -1092,7 +1092,7 @@ const PERMISSIONS = {
     'analytics_clients','analytics_hr',
     'opex','categories','salary','overview_analytics',
     'client_birthdays',
-    'finance','medical'
+    'finance','medical','hr-actions'
   ],
   rnd_director: [                                       // Академічний — все крім фінансів і ЗП
     'dashboard',
@@ -1128,7 +1128,7 @@ const PERMISSIONS = {
     'calendar','vacation_schedule',
     'analytics_clients','analytics_hr','opex','categories','salary','overview_analytics',
     'client_birthdays',
-    'finance','medical'
+    'finance','medical','hr-actions'
   ],
   nurse: [
     'dashboard',
@@ -1392,7 +1392,15 @@ function getRegion(e){ return (e.dir||'').trim()||'Інше'; }
 function getRegions(arr){ return [...new Set((arr||S.emps).map(e=>getRegion(e)).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'uk')); }
 const REGION_ICONS={'Садочок':'🌱','Школа':'🏫','Управління':'🏛️','Офіс':'💼','Менеджмент':'👔','Кухня':'🍽️','Інше':'📌'};
 function esc(s){return (s||'').replace(/"/g,'&quot;').replace(/</g,'&lt;');}
-function set(id,html){document.getElementById(id).innerHTML=html;}
+// Кожен set() рендерить новий DOM. applyRoleVisibility() викликаємо одразу
+// щоб data-permission атрибути на свіжих елементах (картки співробітників,
+// списки тощо) оброблялись — інакше нові елементи лишаються видимими попри
+// PERMISSIONS. typeof guard — applyRoleVisibility може ще не бути визначена
+// під час раннього рендеру (login screen).
+function set(id,html){
+  document.getElementById(id).innerHTML=html;
+  if (typeof applyRoleVisibility === 'function') applyRoleVisibility();
+}
 
 function upcomingBdays(emps,days=30){
   const now=new Date();now.setHours(0,0,0,0);const yr=now.getFullYear();
@@ -1659,8 +1667,8 @@ function renderEmpCard(){
           </div>
         </div>
         ${act?`<div class="emp-btns">
-          <button class="btn btn-ghost" onclick="openVac(${e.id})">🏖️ Відпустка</button>
-          <button class="btn btn-ghost" onclick="openSick(${e.id})">🏥 Лікарняний</button>
+          <button class="btn btn-ghost" data-permission="hr-actions" onclick="openVac(${e.id})">🏖️ Відпустка</button>
+          <button class="btn btn-ghost" data-permission="hr-actions" onclick="openSick(${e.id})">🏥 Лікарняний</button>
           ${!isNurse?`<button class="btn btn-ghost" data-permission="salary" onclick="openSal(${e.id})">💰 Зарплата</button>`:''}
         </div>`:''}
       </div>
