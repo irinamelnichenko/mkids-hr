@@ -265,23 +265,60 @@ tbody tr.clickable{cursor:pointer}
       <span class="em">🍊</span>
       <h1>m.kids System</h1>
     </div>
+
+    <!-- ВКЛАДКИ ТИПУ ВХОДУ -->
     <div class="role-tabs" style="grid-template-columns:1fr 1fr 1fr">
-      <button class="rtab active" id="tabHR" onclick="selectRole('hr')">💼 CFO</button>
-      <button class="rtab" id="tabDir" onclick="selectRole('director')">🏫 Директор</button>
-      <button class="rtab" id="tabNurse" onclick="selectRole('nurse')">🧑‍⚕️ Медсестра</button>
+      <button class="rtab active" id="tabMgmt"  onclick="selectAuthTab('mgmt')">💼 Менеджмент</button>
+      <button class="rtab"        id="tabDir"   onclick="selectAuthTab('director')">🏫 Директор</button>
+      <button class="rtab"        id="tabNurse" onclick="selectAuthTab('nurse')">🩺 Медсестра</button>
     </div>
+
     <div id="loginError" class="login-error hidden"></div>
-    <div id="fldLocation" class="fg hidden">
-      <label>Локація</label>
-      <select id="loginLocation"><option value="">Завантаження…</option></select>
+
+    <!-- TAB 1: Менеджмент (default) -->
+    <div id="paneMgmt">
+      <div class="fg">
+        <label>Виберіть себе</label>
+        <select id="userSel">
+          <option value="">Завантаження…</option>
+        </select>
+      </div>
+      <div class="fg">
+        <label>Пароль</label>
+        <input type="password" id="loginPwMain" placeholder="Введіть пароль"
+          onkeydown="if(event.key==='Enter')doLoginMain()">
+      </div>
+      <button class="btn btn-primary full" onclick="doLoginMain()">Увійти →</button>
     </div>
-    <div class="fg">
-      <label>Пароль</label>
-      <input type="password" id="loginPw" placeholder="Введіть пароль"
-        onkeydown="if(event.key==='Enter')doLogin()">
+
+    <!-- TAB 2: Директор -->
+    <div id="paneDir" class="hidden">
+      <div class="fg">
+        <label>Локація</label>
+        <select id="loginLocationDir"></select>
+      </div>
+      <div class="fg">
+        <label>Пароль</label>
+        <input type="password" id="loginPwDir" placeholder="Введіть пароль"
+          onkeydown="if(event.key==='Enter')doLoginDir()">
+      </div>
+      <button class="btn btn-primary full" onclick="doLoginDir()">Увійти →</button>
     </div>
-    <button class="btn btn-primary full" onclick="doLogin()">Увійти →</button>
-    <p class="login-hint">CFO: <b>hr2024</b> &nbsp;|&nbsp; Директор/Медсестра: пароль локації</p>
+
+    <!-- TAB 3: Медсестра -->
+    <div id="paneNurse" class="hidden">
+      <div class="fg">
+        <label>Локація</label>
+        <select id="loginLocationNurse"></select>
+      </div>
+      <div class="fg">
+        <label>Пароль</label>
+        <input type="password" id="loginPwNurse" placeholder="Введіть пароль"
+          onkeydown="if(event.key==='Enter')doLoginNurse()">
+      </div>
+      <button class="btn btn-primary full" onclick="doLoginNurse()">Увійти →</button>
+    </div>
+
   </div>
 </div>
 
@@ -790,6 +827,193 @@ function readSession(){
 }
 function clearSession(){ try { localStorage.removeItem(SESSION_KEY); } catch(e){} }
 
+// ── НОВИЙ ЛОГІН: 3 вкладки (Менеджмент / Директор / Медсестра) ────────────
+// Менеджмент → POST authenticate проти листа "Користувачі"
+// Директор/Медсестра → стара система паролів (genDirPw / genNursePw)
+
+const HARDCODED_AUTH_URL = 'https://script.google.com/macros/s/AKfycbyTSUVlaN4-PpXe47zCSmhVs0Qxy1FDXG_XsB4zcKNpqBxdhDtS9ibM4YFGkGjmPQDFWQ/exec';
+function authScriptUrl(){ return getScriptUrl() || HARDCODED_AUTH_URL; }
+
+const ROLE_EMOJI = {
+  cfo:'💰', ceo:'🏢', cco:'📈', coo:'⚙️',
+  rnd_director:'🎓', hr_trainer:'📚', legal:'⚖️', cmo:'📣'
+};
+const ROLE_SHORT_NEW = {
+  cfo:'CFO', ceo:'CEO', cco:'CCO', coo:'COO',
+  rnd_director:'R&D', hr_trainer:'L&D', legal:'Юрист', cmo:'CMO'
+};
+const ROLE_ORDER_NEW = ['cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo'];
+
+// Hardcoded список локацій для логіна (садочки → школи → управління).
+// Назви точно відповідають Sheets — зміна тут потребує синхронної правки в реєстрі.
+const LOGIN_LOCATIONS = [
+  // Садочки (11)
+  {group:'Садочки', name:'Осокорки'},
+  {group:'Садочки', name:'Позняки'},
+  {group:'Садочки', name:'Тичини'},
+  {group:'Садочки', name:"Кар'єрна"},
+  {group:'Садочки', name:'Голосієво'},
+  {group:'Садочки', name:'Пуща'},
+  {group:'Садочки', name:'Оранж'},
+  {group:'Садочки', name:'Борщагівка'},
+  {group:'Садочки', name:'Бровари'},
+  {group:'Садочки', name:'Кругла'},
+  {group:'Садочки', name:'Бігова'},
+  // Школи (2)
+  {group:'Школи', name:'Школа Осокорки'},
+  {group:'Школи', name:'Школа 228'},
+  // Управління (3)
+  {group:'Управління', name:'Житомир'},
+  {group:'Управління', name:'Нац.Гвардії (Благо)'},
+  {group:'Управління', name:'Манхетен (Благо)'}
+];
+
+function selectAuthTab(tab){
+  // Очищаємо помилку при переключенні (поля паролів зберігаємо, бо різні id).
+  var err = document.getElementById('loginError');
+  if (err) err.classList.add('hidden');
+
+  document.getElementById('tabMgmt').classList.toggle('active',  tab === 'mgmt');
+  document.getElementById('tabDir').classList.toggle('active',   tab === 'director');
+  document.getElementById('tabNurse').classList.toggle('active', tab === 'nurse');
+
+  document.getElementById('paneMgmt').classList.toggle('hidden',  tab !== 'mgmt');
+  document.getElementById('paneDir').classList.toggle('hidden',   tab !== 'director');
+  document.getElementById('paneNurse').classList.toggle('hidden', tab !== 'nurse');
+}
+
+function showLoginError(msg){
+  var e = document.getElementById('loginError');
+  e.textContent = '⚠️ ' + msg;
+  e.classList.remove('hidden');
+}
+
+// Заповнюємо обидва dropdown-и (Director і Nurse) тим самим списком LOGIN_LOCATIONS,
+// згрупованим через <optgroup>. Якщо в DOM ще нема елементів — пропускаємо.
+function populateLoginLocations(){
+  var groups = {};
+  LOGIN_LOCATIONS.forEach(function(loc){
+    if (!groups[loc.group]) groups[loc.group] = [];
+    groups[loc.group].push(loc.name);
+  });
+  var html = '<option value="">— Оберіть локацію —</option>';
+  Object.keys(groups).forEach(function(g){
+    html += '<optgroup label="' + esc(g) + '">';
+    groups[g].forEach(function(n){
+      html += '<option value="' + esc(n) + '">' + esc(n) + '</option>';
+    });
+    html += '</optgroup>';
+  });
+  ['loginLocationDir','loginLocationNurse'].forEach(function(id){
+    var sel = document.getElementById(id);
+    if (sel) sel.innerHTML = html;
+  });
+}
+
+// Завантажуємо список користувачів для Менеджмент-dropdown.
+// При помилці — показуємо повідомлення в самому dropdown (вкладки Director/
+// Nurse працюють незалежно).
+async function loadUsersForDropdown(){
+  var sel = document.getElementById('userSel');
+  if (!sel) return;
+  var loaded = false;
+  var ERR_MSG = '⚠️ Помилка завантаження. Зайдіть через вкладку Директор/Медсестра';
+  setTimeout(function(){
+    if (!loaded){
+      sel.innerHTML = '<option value="">' + ERR_MSG + '</option>';
+    }
+  }, 10000);
+
+  try {
+    var r = await fetch(authScriptUrl() + '?action=getUsers', {redirect:'follow'});
+    var json = await r.json();
+    loaded = true;
+    if (!json.ok || !Array.isArray(json.users) || !json.users.length){
+      sel.innerHTML = '<option value="">⚠️ Список порожній</option>';
+      return;
+    }
+    var actives = json.users.filter(function(u){ return u.active; });
+    actives.sort(function(a, b){
+      var ai = ROLE_ORDER_NEW.indexOf(a.role); if (ai === -1) ai = 999;
+      var bi = ROLE_ORDER_NEW.indexOf(b.role); if (bi === -1) bi = 999;
+      if (ai !== bi) return ai - bi;
+      return (a.name||'').localeCompare(b.name||'', 'uk');
+    });
+    var html = '<option value="">— Виберіть користувача —</option>';
+    actives.forEach(function(u){
+      var em  = ROLE_EMOJI[u.role] || '👤';
+      var lbl = ROLE_SHORT_NEW[u.role] || u.role.toUpperCase();
+      html += '<option value="' + esc(u.login) + '">' + em + ' ' + lbl + ' — ' + esc(u.name) + '</option>';
+    });
+    sel.innerHTML = html;
+  } catch(e){
+    loaded = true;
+    sel.innerHTML = '<option value="">' + ERR_MSG + '</option>';
+  }
+}
+
+async function doLoginMain(){
+  var login = document.getElementById('userSel').value;
+  var pw    = document.getElementById('loginPwMain').value;
+  document.getElementById('loginError').classList.add('hidden');
+  if (!login){ showLoginError('Виберіть користувача'); return; }
+  if (!pw)   { showLoginError('Введіть пароль');       return; }
+  try {
+    var r = await fetch(authScriptUrl(), {
+      method: 'POST',
+      redirect: 'follow',
+      headers: {'Content-Type': 'text/plain;charset=utf-8'},
+      body: JSON.stringify({action:'authenticate', login: login, password: pw})
+    });
+    var json = await r.json();
+    if (!json.ok){ showLoginError(json.error || 'Помилка автентифікації'); return; }
+    S.user = json.user;
+    S.f = {loc:'',pos:'',status:'',dir:'',typ:''};
+    S.q = '';
+    saveSession(S.user);
+    document.getElementById('loginScreen').classList.add('hidden');
+    document.getElementById('app').classList.remove('hidden');
+    updUserUI(); await initApp();
+    dispatchHashView();
+  } catch(e){
+    showLoginError('Помилка зʼєднання: ' + (e && e.message ? e.message : e));
+  }
+}
+
+async function doLoginDir(){
+  var loc = document.getElementById('loginLocationDir').value;
+  var pw  = document.getElementById('loginPwDir').value;
+  document.getElementById('loginError').classList.add('hidden');
+  if (!loc){ showLoginError('Оберіть локацію'); return; }
+  if (!pw) { showLoginError('Введіть пароль');  return; }
+  if (pw !== getDirPw(loc)){ showLoginError('Невірний пароль для цієї локації'); return; }
+  S.user = {role:'director', loc:loc};
+  S.f = {loc:'',pos:'',status:'',dir:'',typ:''};
+  S.q = '';
+  saveSession(S.user);
+  document.getElementById('loginScreen').classList.add('hidden');
+  document.getElementById('app').classList.remove('hidden');
+  updUserUI(); await initApp();
+  dispatchHashView();
+}
+
+async function doLoginNurse(){
+  var loc = document.getElementById('loginLocationNurse').value;
+  var pw  = document.getElementById('loginPwNurse').value;
+  document.getElementById('loginError').classList.add('hidden');
+  if (!loc){ showLoginError('Оберіть локацію'); return; }
+  if (!pw) { showLoginError('Введіть пароль');  return; }
+  if (pw !== getNursePw(loc)){ showLoginError('Невірний пароль для цієї локації'); return; }
+  S.user = {role:'nurse', loc:loc};
+  S.f = {loc:'',pos:'',status:'',dir:'',typ:''};
+  S.q = '';
+  saveSession(S.user);
+  document.getElementById('loginScreen').classList.add('hidden');
+  document.getElementById('app').classList.remove('hidden');
+  updUserUI(); await initApp();
+  dispatchHashView();
+}
+
 async function doLogin() {
   const pw=document.getElementById('loginPw').value;
   const err=document.getElementById('loginError'); err.classList.add('hidden');
@@ -909,8 +1133,29 @@ const PERM_LOCAL_ACTION = {
   settings:          () => nav('settings'),
 };
 
-function roleLabel(role){ return ({hr:'CFO',director:'Директор',nurse:'Медсестра'})[role] || role; }
-function locLabel(){ return S.user && S.user.role==='hr' ? 'Всі локації' : (S.user && S.user.loc || ''); }
+// Ролі мережевого рівня — бачать всі локації (на відміну від director/nurse).
+const NETWORK_ROLES = ['hr','cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo'];
+function isNetworkRole(role){ return NETWORK_ROLES.indexOf(role) !== -1; }
+
+function roleLabel(role){
+  return ({
+    hr:'CFO', cfo:'CFO', ceo:'CEO', cco:'CCO', coo:'COO',
+    rnd_director:'R&D Director', hr_trainer:'L&D', legal:'Юрист', cmo:'CMO',
+    director:'Директор', nurse:'Медсестра'
+  })[role] || role;
+}
+function locLabel(){
+  if (!S.user) return '';
+  if (isNetworkRole(S.user.role)) return 'Всі локації';
+  return S.user.loc || '';
+}
+function avatarText(role){
+  return ({
+    hr:'CFO', cfo:'CFO', ceo:'CEO', cco:'CCO', coo:'COO',
+    rnd_director:'R&D', hr_trainer:'L&D', legal:'Ю', cmo:'CMO',
+    director:'Д', nurse:'М'
+  })[role] || '?';
+}
 
 function isHR(){       return S && S.user && S.user.role === 'hr'; }
 function isDirector(){ return S && S.user && S.user.role === 'director'; }
@@ -969,7 +1214,7 @@ function updUserUI(){
   const r = S.user.role;
   document.getElementById('uName').textContent = roleLabel(r);
   document.getElementById('uLoc').textContent = locLabel();
-  document.getElementById('uAvatar').textContent = ({hr:'CFO',director:'Д',nurse:'М'})[r] || '?';
+  document.getElementById('uAvatar').textContent = avatarText(r);
   applyRoleVisibility();
 }
 
@@ -3192,15 +3437,11 @@ window.addEventListener('DOMContentLoaded',async()=>{
     return;
   }
 
-  try{
-    const r=await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${CFG.SHEET_ID}/values/'2025-2026'!C2:C1200?key=${CFG.API_KEY}`);
-    const j=await r.json();
-    if(j.values){
-      const locs=[...new Set(j.values.flat().filter(Boolean))].sort();
-      const sel=document.getElementById('loginLocation');
-      sel.innerHTML='<option value="">— Оберіть локацію —</option>'+locs.map(l=>`<option value="${l}">${l}</option>`).join('');
-    }
-  }catch(e){console.warn('Preload locs',e);}
+  // Сесії немає — наповнюємо обидва dropdown-и для логіна:
+  //   — Менеджмент (з листа Користувачі через getUsers)
+  //   — Директор/Медсестра (hardcoded LOGIN_LOCATIONS, 16 локацій)
+  loadUsersForDropdown();
+  populateLoginLocations();
 });
 </script>
 </body>
