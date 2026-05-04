@@ -1649,10 +1649,9 @@ async function doLoginMain(){
     var json = await r.json();
     if (!json.ok){ showLoginError(json.error || 'Помилка автентифікації'); return; }
     S.user = json.user;
-    // Мережеві ролі (cfo/ceo/cco/coo/rnd_director/hr_trainer/legal/cmo)
-    // у листі мають loc='Менеджмент' для ідентифікації напрямку. Але для
-    // фільтрації даних вони бачать ВСЮ мережу — тому очищаємо loc.
-    // Оригінал зберігаємо як origLoc.
+    // Нормалізуємо role до lowercase — захист від різного регістру в Sheets.
+    S.user.role = String(S.user.role || '').toLowerCase().trim();
+    // Мережеві ролі мають loc='Менеджмент' у листі — очищаємо для фільтрів.
     if (isNetworkRole(S.user.role)){
       S.user.origLoc = S.user.loc;
       S.user.loc = '';
@@ -1868,12 +1867,16 @@ function goPerm(perm){
 
 function applyRoleVisibility(){
   if (!S || !S.user || !S.user.role) return;
-  var role = S.user.role;
+  // Defensive lowercase: PERMISSIONS keys всі lowercase.
+  var role = String(S.user.role || '').toLowerCase().trim();
   var allowed = PERMISSIONS[role];
+  var hiddenCount = 0, totalCount = 0;
   document.querySelectorAll('[data-permission]').forEach(function(el){
+    totalCount++;
     var perm = el.dataset.permission;
     var visible = (allowed === 'all') || (Array.isArray(allowed) && allowed.indexOf(perm) >= 0);
     el.style.display = visible ? '' : 'none';
+    if (!visible) hiddenCount++;
   });
   document.querySelectorAll('[data-section]').forEach(function(section){
     var sectionName = section.dataset.section;
@@ -1881,6 +1884,7 @@ function applyRoleVisibility(){
     var anyVisible = Array.prototype.slice.call(items).some(function(item){ return item.style.display !== 'none'; });
     section.style.display = anyVisible ? '' : 'none';
   });
+  console.log('[applyRoleVisibility] role=' + role + ' allowed=' + (allowed === 'all' ? 'all' : (Array.isArray(allowed) ? allowed.length+'_perms' : 'undefined')) + ' total=' + totalCount + ' hidden=' + hiddenCount);
 }
 
 function dispatchHashView(){

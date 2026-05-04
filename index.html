@@ -977,10 +977,11 @@ async function doLoginMain(){
     var json = await r.json();
     if (!json.ok){ showLoginError(json.error || 'Помилка автентифікації'); return; }
     S.user = json.user;
-    // Мережеві ролі (cfo/ceo/cco/coo/rnd_director/hr_trainer/legal/cmo)
-    // у листі мають loc='Менеджмент' для ідентифікації напрямку. Але для
-    // фільтрації даних вони бачать ВСЮ мережу — тому очищаємо loc.
-    // Оригінал зберігаємо як origLoc.
+    // Нормалізуємо role до lowercase — захист від різного регістру в Sheets
+    // ('CCO' vs 'cco'). PERMISSIONS map і всі чеки використовують lowercase.
+    S.user.role = String(S.user.role || '').toLowerCase().trim();
+    // Мережеві ролі мають loc='Менеджмент' у листі — для фільтрації даних
+    // очищаємо. Оригінал зберігаємо як origLoc.
     if (isNetworkRole(S.user.role)){
       S.user.origLoc = S.user.loc;
       S.user.loc = '';
@@ -1202,12 +1203,16 @@ function goPerm(perm){
 
 function applyRoleVisibility(){
   if (!S || !S.user || !S.user.role) return;
-  const role = S.user.role;
+  // Defensive lowercase: PERMISSIONS keys всі lowercase, тому шукаємо нормалізовано.
+  const role = String(S.user.role || '').toLowerCase().trim();
   const allowed = PERMISSIONS[role];
+  let hiddenCount = 0, totalCount = 0;
   document.querySelectorAll('[data-permission]').forEach(el => {
+    totalCount++;
     const perm = el.dataset.permission;
     const visible = (allowed === 'all') || (Array.isArray(allowed) && allowed.includes(perm));
     el.style.display = visible ? '' : 'none';
+    if (!visible) hiddenCount++;
   });
   document.querySelectorAll('[data-section]').forEach(section => {
     const sectionName = section.dataset.section;
@@ -1215,6 +1220,7 @@ function applyRoleVisibility(){
     const anyVisible = Array.from(items).some(item => item.style.display !== 'none');
     section.style.display = anyVisible ? '' : 'none';
   });
+  console.log('[applyRoleVisibility] role=' + role + ' allowed=' + (allowed === 'all' ? 'all' : (Array.isArray(allowed) ? allowed.length+'_perms' : 'undefined')) + ' total=' + totalCount + ' hidden=' + hiddenCount);
 }
 
 function dispatchHashView(){
