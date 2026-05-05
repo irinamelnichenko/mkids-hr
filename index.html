@@ -1631,6 +1631,11 @@ function filterLoc(loc){S.f.loc=loc;nav('employees');}
 
 // ── EMPLOYEES ──
 function renderEmps(){
+  // Список співробітників іде у порядку рядків Google Sheets:
+  //   fetchEmps → S.emps зберігає row order (filter+map не сортує)
+  //   visible() лише фільтрує по локації для director/nurse
+  //   тут не додавати .sort() — uniq()/typs.sort() стосуються лише
+  //   значень DROPDOWN-фільтрів, а не самого списку.
   const emps=visible();
   const isHR=isNetworkRole(S.user.role);
   const isDir=S.user.role==='director', isNurse=S.user.role==='nurse';
@@ -1646,7 +1651,7 @@ function renderEmps(){
 
   set('main',`
     <div class="filters">
-      <input class="search-inp" placeholder="🔍 Пошук за ім'ям, посадою, контактом…" value="${esc(S.q)}" oninput="S.q=this.value;renderEmps()">
+      <input class="search-inp" placeholder="🔍 Пошук за ім'ям, посадою, контактом…" value="${esc(S.q)}" oninput="searchEmps(this.value)">
       ${isHR?`<select class="flt-sel" onchange="S.f.loc=this.value;renderEmps()">
         <option value="">Всі локації</option>${locs.map(l=>`<option value="${l}" ${S.f.loc===l?'selected':''}>${l}</option>`).join('')}
       </select>`:`<span class="badge bg" style="padding:6px 12px">${S.user.loc}</span>`}
@@ -1701,6 +1706,24 @@ function renderEmps(){
   `);
 }
 function clearF(){S.q='';S.f={loc:'',pos:'',status:'',dir:'',typ:''};renderEmps();}
+
+// Debounced search: при кожному натисненні клавіші re-render усієї таблиці
+// зкидає фокус з input. Дебаунс 200ms + ручне відновлення фокуса в кінець
+// значення зберігає UX звичного field-у пошуку.
+var _empSearchTimer = null;
+function searchEmps(value){
+  S.q = value;
+  if (_empSearchTimer) clearTimeout(_empSearchTimer);
+  _empSearchTimer = setTimeout(function(){
+    renderEmps();
+    var input = document.querySelector('.search-inp');
+    if (input){
+      input.focus();
+      var len = input.value.length;
+      try { input.setSelectionRange(len, len); } catch(e){}
+    }
+  }, 200);
+}
 
 // ── EMPLOYEE CARD ──
 function renderEmpCard(){
@@ -1815,24 +1838,35 @@ function renderEmpCard(){
     </div>
   `);
 
-  // ── L&D DYNAMIC SALARY ────────────────────────────────────────────
-  // hr_trainer (L&D) бачить ЗП блоки тільки якщо напрямок співробітника
-  // збігається з S.user.dir. Default matrix приховує salary-* для L&D —
-  // тут вмикаємо назад при збігу. Без S.user.dir нічого не відкриваємо.
-  var _role = String(S.user && S.user.role || '').toLowerCase();
-  if (_role === 'hr_trainer') {
-    var _ldDir  = String(S.user.dir || '').trim().toLowerCase();
-    var _empDir = String(e.dir       || '').trim().toLowerCase();
-    var _match  = _ldDir && _empDir && _ldDir === _empDir;
-    if (_match) {
-      document.querySelectorAll(
-        '[data-permission="card-employee-salary-button"],' +
-        '[data-permission="card-employee-salary-tab"]'
-      ).forEach(function(el){ el.style.display = ''; });
-      console.log('[L&D salary] unhidden — dir match: ' + _empDir);
-    } else {
-      console.log('[L&D salary] hidden — ldDir=' + _ldDir + ' empDir=' + _empDir);
-    }
+  // ── DIRECTION-BASED SALARY VISIBILITY ─────────────────────────────
+  // Матриця ставить дефолт; цей пост-процес коригує по полю "Напрямок":
+  //   COO       — ховає ЗП якщо emp.dir === "Менеджмент"
+  //   hr_trainer (L&D) — показує ЗП тільки коли emp.dir ∈ {Садочок,
+  //                Школа, Управління, Кухня}; решта (Менеджмент, Офіс,
+  //                або порожньо) — приховано (це default матриці).
+  // CFO/CEO/CCO/director — без обмежень. R&D/Legal — завжди приховано.
+  var _role   = String(S.user && S.user.role || '').toLowerCase();
+  var _empDir = String(e.dir || '').trim().toLowerCase();
+  var _salarySel =
+    '[data-permission="card-employee-salary-button"],' +
+    '[data-permission="card-employee-salary-tab"]';
+
+  function _hideSalary(reason){
+    document.querySelectorAll(_salarySel).forEach(function(el){ el.style.display = 'none'; });
+    console.log('[card-salary] hidden — role=' + _role + ' empDir=' + _empDir + ' (' + reason + ')');
+  }
+  function _showSalary(reason){
+    document.querySelectorAll(_salarySel).forEach(function(el){ el.style.display = ''; });
+    console.log('[card-salary] shown — role=' + _role + ' empDir=' + _empDir + ' (' + reason + ')');
+  }
+
+  if (_role === 'coo' && _empDir === 'менеджмент') {
+    _hideSalary('COO + Менеджмент');
+  }
+  else if (_role === 'hr_trainer') {
+    var L_AND_D_ALLOWED = ['садочок','школа','управління','кухня'];
+    if (L_AND_D_ALLOWED.indexOf(_empDir) !== -1) _showSalary('L&D allowed dir');
+    // else — лишаємо як приховано (default матриці)
   }
 }
 

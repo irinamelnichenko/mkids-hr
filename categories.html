@@ -146,10 +146,10 @@ select{font-family:inherit}
       <p>m.kids System</p>
     </div>
     <div class="sb-user">
-      <div class="avatar" id="uAvatar">CFO</div>
+      <div class="avatar" id="uAvatar">…</div>
       <div class="sb-user-info">
-        <p id="uName">CFO</p>
-        <span id="uLoc">Всі локації</span>
+        <p id="uName">…</p>
+        <span id="uLoc">…</span>
       </div>
     </div>
     <nav class="sb-nav">
@@ -524,7 +524,20 @@ var PERMISSIONS = {
   ]
 };
 
-function roleLabel(role){ return ({hr:'CFO',director:'Директор',nurse:'Медсестра'})[role] || role; }
+function roleLabel(role){
+  return ({
+    hr:'CFO', cfo:'CFO', ceo:'CEO', cco:'CCO', coo:'COO',
+    rnd_director:'R&D Director', hr_trainer:'L&D', legal:'Legal', cmo:'CMO',
+    director:'Директор', nurse:'Медсестра'
+  })[String(role||'').toLowerCase()] || role;
+}
+function avatarText(role){
+  return ({
+    hr:'CFO', cfo:'CFO', ceo:'CEO', cco:'CCO', coo:'COO',
+    rnd_director:'R&D', hr_trainer:'L&D', legal:'Lg', cmo:'CMO',
+    director:'Д', nurse:'М'
+  })[String(role||'').toLowerCase()] || '?';
+}
 function locLabel(){ return S.user && isNetworkRole(S.user.role) ? 'Всі локації' : (S.user && S.user.loc || ''); }
 
 function goPerm(perm){
@@ -571,7 +584,7 @@ function updUserUI(){
   var r = S.user.role;
   $('uName').textContent   = roleLabel(r);
   $('uLoc').textContent    = locLabel();
-  $('uAvatar').textContent = ({hr:'CFO',director:'Д',nurse:'М'})[r] || '?';
+  $('uAvatar').textContent = avatarText(r);
   applyRoleVisibility();
 }
 
