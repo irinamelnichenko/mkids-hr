@@ -184,6 +184,7 @@ function doGet(e) {
     else if (action === 'getSalaryOverview')         result = getSalaryOverview(e.parameter.year || '');
     else if (action === 'getOverviewAnalytics')      result = getOverviewAnalytics(e.parameter.year || '', e.parameter.month || '');
     else if (action === 'getUsers')                  result = getUsers();
+    else if (action === 'getGroupNorms')             result = getGroupNorms();
     else                                             result = {ok:false, error:'Unknown action: ' + action};
     return jsonOut(result);
   } catch(err) {
@@ -4020,3 +4021,37 @@ function _setUserActive(userId, active) {
   return {ok: false, error: 'Користувача не знайдено'};
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// GROUP NORMS — лист "Норми груп" у CONFIG_SHEET_ID
+// Структура: A=Група (текст)  B=Норма (число)
+// Використовується аналітикою для перевірки перевантаження груп.
+// ═══════════════════════════════════════════════════════════════════════════
+
+var GROUP_NORMS_SHEET_NAME = 'Норми груп';
+
+function getGroupNorms() {
+  try {
+    var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+    var sh = ss.getSheetByName(GROUP_NORMS_SHEET_NAME);
+    if (!sh) return {ok: false, error: 'Sheet "' + GROUP_NORMS_SHEET_NAME + '" not found'};
+
+    var lastRow = sh.getLastRow();
+    if (lastRow < 2) return {ok: true, norms: {}, list: []};
+
+    var rows = sh.getRange(2, 1, lastRow - 1, 2).getValues();
+    var norms = {};
+    var list = [];
+    for (var i = 0; i < rows.length; i++) {
+      var name = String(rows[i][0] || '').trim();
+      var raw  = rows[i][1];
+      if (!name) continue;
+      var n = Number(raw);
+      if (!isFinite(n) || n <= 0) continue;
+      norms[name] = n;
+      list.push({group: name, norm: n});
+    }
+    return {ok: true, norms: norms, list: list};
+  } catch (e) {
+    return {ok: false, error: String(e && e.message || e)};
+  }
+}

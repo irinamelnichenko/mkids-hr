@@ -443,7 +443,10 @@ var CFG = {
   DEFAULT_YEAR: 2026,
   MONTHS_DISP: ['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'],
   CACHE_KEY: 'analytics_overview_cache_v1',
-  CACHE_TTL: 5 * 60 * 1000
+  CACHE_TTL: 5 * 60 * 1000,
+  GROUP_NORMS_CACHE_KEY: 'analytics_group_norms_v1',
+  GROUP_NORMS_CACHE_TTL: 60 * 60 * 1000,  // 1 година
+  DEFAULT_GROUP_NORM: 14
 };
 
 // Default month = поточний - 1 (для січня залишаємо січень).
@@ -459,7 +462,9 @@ var S = {
   selectedLoc: null,
   sortBy:  'loc',
   sortDir: 'asc',
-  typeFilter: 'Садочок'   // 'Садочок' | 'Школа' — фільтр для overview-блоків
+  typeFilter: 'Садочок',  // 'Садочок' | 'Школа' — фільтр для overview-блоків
+  groupNorms: null,        // {groupName: norm} — динамічно з листа "Норми груп"
+  groupNormsError: null    // string — повідомлення якщо не вдалося завантажити
 };
 
 // ── HELPERS ─────────────────────────────────
@@ -746,6 +751,59 @@ async function fetchData(force){
   return json;
 }
 
+// ── GROUP NORMS — кеш 1 година, без блокування основного завантаження ──
+function _loadGroupNormsCache(){
+  try {
+    var raw = localStorage.getItem(CFG.GROUP_NORMS_CACHE_KEY);
+    if (!raw) return null;
+    var obj = JSON.parse(raw);
+    if (!obj || !obj.ts || !obj.norms) return null;
+    if (Date.now() - obj.ts > CFG.GROUP_NORMS_CACHE_TTL) return null;
+    return obj.norms;
+  } catch(e){ return null; }
+}
+function _saveGroupNormsCache(norms){
+  try {
+    localStorage.setItem(CFG.GROUP_NORMS_CACHE_KEY, JSON.stringify({
+      ts: Date.now(), norms: norms
+    }));
+  } catch(e){}
+}
+
+async function loadGroupNorms(force){
+  if (!force){
+    var cached = _loadGroupNormsCache();
+    if (cached){
+      S.groupNorms = cached;
+      S.groupNormsError = null;
+      return cached;
+    }
+  }
+  try {
+    var r = await fetch(CFG.SCRIPT_URL + '?action=getGroupNorms', {redirect:'follow'});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    var json = await r.json();
+    if (!json.ok) throw new Error(json.error || 'Unknown error');
+    S.groupNorms = json.norms || {};
+    S.groupNormsError = null;
+    _saveGroupNormsCache(S.groupNorms);
+    return S.groupNorms;
+  } catch(e){
+    console.warn('[group-norms] failed to load:', e && e.message || e);
+    S.groupNormsError = String(e && e.message || e);
+    S.groupNorms = {};
+    return null;
+  }
+}
+
+// Норма для групи: точне співпадіння → fallback default 14 + warn у консолі.
+function getNormForGroup(group){
+  var norms = S.groupNorms || {};
+  if (group in norms) return norms[group];
+  console.warn('[group-norms] норма не знайдена для групи "' + group + '" — використовую default ' + CFG.DEFAULT_GROUP_NORM);
+  return CFG.DEFAULT_GROUP_NORM;
+}
+
 // ── DATA SHAPING ────────────────────────────
 function periodLabel(){ return CFG.MONTHS_DISP[S.month - 1] + ' ' + S.year; }
 function updateTitle(){ $('title').textContent = '📊 Зведена аналітика · ' + periodLabel(); }
@@ -918,17 +976,22 @@ function renderLeaders(){
   $('topExpensive').innerHTML = html(topExp);
 }
 
-// Норми залежать від типу. Садочок: 10/14. Школа: 20/22.
+// Норми вихователів — за типом. Садочок: 10. Школа: 20.
+// Норми груп — динамічно з листа "Норми груп" (CFG.DEFAULT_GROUP_NORM як fallback).
 function renderRedZones(){
   var th = (S.typeFilter === 'Садочок')
-    ? {teacherKids: 10, groupKids: 14}
-    : {teacherKids: 20, groupKids: 22};
+    ? {teacherKids: 10}
+    : {teacherKids: 20};
 
   $('rzOvLbl').textContent = '⚠️ Перевантаження вихователів (норма для ' + typeWordGen() + ': до ' + th.teacherKids + ' дітей/вих)';
-  $('rzGrLbl').textContent = '⚠️ Великі ' + (S.typeFilter === 'Садочок' ? 'групи' : 'класи') + ' (норма для ' + typeWordGen() + ': до ' + th.groupKids + ' дітей/' + groupWord() + ')';
+  var grpHdr = '⚠️ Перевантажені ' + (S.typeFilter === 'Садочок' ? 'групи' : 'класи') + ' (норми з листа «Норми груп»';
+  if (S.groupNormsError) grpHdr += ' — ⚠️ не завантажені, fallback ' + CFG.DEFAULT_GROUP_NORM;
+  grpHdr += ')';
+  $('rzGrLbl').textContent = grpHdr;
 
   var locs = selectedTypeLocations();
 
+  // Перевантаження вихователів — як було, по локації.
   var overloaded = locs.map(function(L){
     var sc = L.staffCounts || {};
     var ratio = (sc.teacher > 0) ? L.childrenCount / sc.teacher : null;
@@ -936,20 +999,48 @@ function renderRedZones(){
   }).filter(function(x){ return x.ratio !== null && x.ratio > th.teacherKids; })
     .sort(function(a, b){ return b.ratio - a.ratio; });
 
-  var bigGroups = locs.map(function(L){
-    var ratio = (L.groupsCount > 0) ? L.childrenCount / L.groupsCount : null;
-    return {loc: L.loc, ratio: ratio};
-  }).filter(function(x){ return x.ratio !== null && x.ratio > th.groupKids; })
-    .sort(function(a, b){ return b.ratio - a.ratio; });
+  // Перевантажені групи — по конкретній групі в кожній локації.
+  // Беремо childrenByGroup, порівнюємо з нормою з S.groupNorms (або default).
+  var bigGroups = [];
+  locs.forEach(function(L){
+    var byGroup = L.childrenByGroup || {};
+    Object.keys(byGroup).forEach(function(grp){
+      if (grp === '(без групи)') return;
+      var count = byGroup[grp] || 0;
+      var norm  = getNormForGroup(grp);
+      if (count > norm){
+        bigGroups.push({
+          loc:    L.loc,
+          group:  grp,
+          count:  count,
+          norm:   norm,
+          excess: count - norm
+        });
+      }
+    });
+  });
+  bigGroups.sort(function(a, b){ return b.excess - a.excess; });
 
-  function rowsHtml(arr, fmtFn){
+  function overRowsHtml(arr){
     if (!arr.length) return '<div class="rz-ok">✅ Всі в нормі</div>';
     return arr.map(function(x){
-      return '<div class="rz-row"><span class="loc">' + escapeHtml(x.loc) + '</span><span class="val">' + fmtFn(x) + '</span></div>';
+      return '<div class="rz-row">'
+           + '<span class="loc">' + escapeHtml(x.loc) + '</span>'
+           + '<span class="val">' + fmtNum(x.ratio) + ' дітей/вих</span>'
+           + '</div>';
     }).join('');
   }
-  $('rzOverloaded').innerHTML = rowsHtml(overloaded, function(x){ return fmtNum(x.ratio) + ' дітей/вих'; });
-  $('rzBigGroups').innerHTML  = rowsHtml(bigGroups,  function(x){ return fmtNum(x.ratio) + ' дітей/' + groupWordShort(); });
+  function groupRowsHtml(arr){
+    if (!arr.length) return '<div class="rz-ok">✅ Всі в нормі</div>';
+    return arr.map(function(x){
+      return '<div class="rz-row">'
+           + '<span class="loc">' + escapeHtml(x.loc) + ' → ' + escapeHtml(x.group) + '</span>'
+           + '<span class="val">' + x.count + ' дітей (норма ' + x.norm + ') → +' + x.excess + '</span>'
+           + '</div>';
+    }).join('');
+  }
+  $('rzOverloaded').innerHTML = overRowsHtml(overloaded);
+  $('rzBigGroups').innerHTML  = groupRowsHtml(bigGroups);
 }
 
 function renderOverviewTable(){
@@ -1191,7 +1282,12 @@ async function load(force){
     $('loadBox').classList.remove('hidden');
   }
   try {
-    var data = await fetchData(force);
+    // Норми груп тягнемо паралельно з основними даними; кеш 1 година.
+    // Помилка тут НЕ блокує overview — getNormForGroup впаде на default 14.
+    var dataPromise  = fetchData(force);
+    var normsPromise = loadGroupNorms(force);
+    var data = await dataPromise;
+    await normsPromise;
     S.data = data;
 
     // Якщо обрана локація відсутня (наприклад змінили місяць/рік) — підставляємо
@@ -1234,7 +1330,9 @@ function bindEventListeners(){
   });
   $('refreshBtn').addEventListener('click', function(){
     localStorage.removeItem(CFG.CACHE_KEY);
+    localStorage.removeItem(CFG.GROUP_NORMS_CACHE_KEY);
     S.data = null;
+    S.groupNorms = null;
     load(true);
   });
 
