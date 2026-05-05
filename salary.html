@@ -478,10 +478,11 @@ function doLogout(){ clearSession(); window.location.href = 'index.html'; }
 // ── UNIFIED SIDEBAR ─────────────────────────
 var CURRENT_PAGE = 'salary';
 
+// ── PERMISSIONS MATRIX (build matrix-2026-05-04) ─────────────────────────
 var PERMISSIONS = {
-  // ── Топ-менеджмент мережі (з листа "Користувачі") ────────────────
-  cfo:          'all',                                  // CFO — все + user-mgmt + salary-mgmt
-  ceo: [                                                // CEO — все, БЕЗ user-mgmt
+  cfo: 'all',
+
+  ceo: [
     'dashboard',
     'clients_list','payments','attendance_kids','recalc',
     'employees','timesheet_staff','vacations','sick_leaves',
@@ -489,9 +490,16 @@ var PERMISSIONS = {
     'analytics_clients','analytics_hr',
     'opex','categories','salary','overview_analytics',
     'client_birthdays',
+    'card-employee-info',
+    'card-employee-salary-button','card-employee-vacation-button','card-employee-sick-button',
+    'card-employee-salary-tab','card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract','card-child-fees',
+    'card-child-vacations','card-child-payments','card-child-history',
+    'card-child-notes','card-child-health',
     'finance','medical','salary-mgmt','hr-actions'
   ],
-  cco: [                                                // CCO — все, БЕЗ user-mgmt (= як ceo)
+
+  cco: [
     'dashboard',
     'clients_list','payments','attendance_kids','recalc',
     'employees','timesheet_staff','vacations','sick_leaves',
@@ -499,8 +507,15 @@ var PERMISSIONS = {
     'analytics_clients','analytics_hr',
     'opex','categories','salary','overview_analytics',
     'client_birthdays',
+    'card-employee-info',
+    'card-employee-salary-button','card-employee-vacation-button','card-employee-sick-button',
+    'card-employee-salary-tab','card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract','card-child-fees',
+    'card-child-vacations','card-child-payments','card-child-history',
+    'card-child-notes','card-child-health',
     'finance','medical','salary-mgmt','hr-actions'
   ],
+
   coo: [
     'dashboard',
     'clients_list','payments','attendance_kids','recalc',
@@ -509,50 +524,83 @@ var PERMISSIONS = {
     'analytics_clients','analytics_hr',
     'opex','categories','salary','overview_analytics',
     'client_birthdays',
+    'card-employee-info',
+    'card-employee-salary-button','card-employee-vacation-button','card-employee-sick-button',
+    'card-employee-salary-tab','card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract','card-child-fees',
+    'card-child-vacations','card-child-payments','card-child-history',
+    'card-child-notes','card-child-health',
     'finance','medical','hr-actions'
   ],
+
   rnd_director: [
     'dashboard',
     'clients_list','attendance_kids',
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
     'analytics_hr',
-    'client_birthdays'
+    'client_birthdays',
+    'card-employee-info',
+    'card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract',
+    'card-child-vacations','card-child-notes'
   ],
+
   hr_trainer: [
-    'dashboard',
-    'clients_list','attendance_kids',
-    'employees','timesheet_staff','vacations','sick_leaves',
-    'calendar','vacation_schedule',
-    'client_birthdays'
-  ],
-  legal: [
     'dashboard',
     'clients_list','attendance_kids',
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
     'analytics_hr',
     'client_birthdays',
-    'medical'
+    'card-employee-info',
+    'card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract',
+    'card-child-vacations','card-child-notes'
   ],
 
-  // ── Локаційні ролі (стара система паролів — поки лишаються) ──────
-  hr:           'all',
+  legal: [
+    'dashboard',
+    'clients_list','payments','attendance_kids',
+    'employees','timesheet_staff',
+    'calendar',
+    'client_birthdays',
+    'card-employee-info',
+    'card-child-banner','card-child-contract',
+    'card-child-vacations','card-child-payments','card-child-history',
+    'card-child-notes',
+    'finance'
+  ],
+
+  hr: 'all',
+
   director: [
     'dashboard',
     'clients_list','payments','attendance_kids',
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
-    'analytics_clients','analytics_hr','opex','categories','salary','overview_analytics',
+    'analytics_clients','analytics_hr',
+    'opex','categories','salary','overview_analytics',
     'client_birthdays',
+    'card-employee-info',
+    'card-employee-salary-button','card-employee-vacation-button','card-employee-sick-button',
+    'card-employee-salary-tab','card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract','card-child-fees',
+    'card-child-vacations','card-child-payments','card-child-history',
+    'card-child-notes','card-child-health',
     'finance','medical','hr-actions'
   ],
+
   nurse: [
     'dashboard',
     'clients_list','attendance_kids',
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
-    'medical'
+    'medical',
+    'card-employee-info',
+    'card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract','card-child-vacations',
+    'card-child-notes','card-child-health'
   ]
 };
 
@@ -571,6 +619,9 @@ function goPerm(perm){
                  : 'index.html';
   location.href = targetFile + '#' + perm;
 }
+
+var PERMISSIONS_BUILD_VERSION = 'matrix-2026-05-04';
+console.log('[mkids] permissions build:', PERMISSIONS_BUILD_VERSION);
 
 function applyRoleVisibility(){
   if (!S || !S.user || !S.user.role) return;

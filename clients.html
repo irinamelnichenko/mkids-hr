@@ -612,20 +612,20 @@ tbody tr.clickable:hover td{background:#f0f7ff}
       <button class="modal-close" onclick="closeModal('mChild')">✕</button>
     </div>
     <div class="tabs" id="mChildTabs">
-      <div class="tab active" onclick="switchTab(0)">👤 Основне</div>
-      <div class="tab" onclick="switchTab(1)" data-permission="finance">📋 Договір</div>
-      <div class="tab" onclick="switchTab(2)" data-permission="finance">💳 Внески</div>
-      <div class="tab" onclick="switchTab(3)">🏖️ Відпустки</div>
-      <div class="tab" onclick="switchTab(4)" data-permission="finance">📅 Оплати по місяцях</div>
-      <div class="tab" onclick="switchTab(5)" data-permission="finance">📊 Історія оплат</div>
-      <div class="tab" onclick="switchTab(6)">📝 Нотатки</div>
-      <div class="tab" onclick="switchTab(7)">🩺 Здоров'я</div>
-      <div class="tab" onclick="switchTab(8)">📄 Документи</div>
+      <div class="tab active" onclick="switchTab(0)" data-permission="card-child-banner">👤 Основне</div>
+      <div class="tab" onclick="switchTab(1)" data-permission="card-child-contract">📋 Договір</div>
+      <div class="tab" onclick="switchTab(2)" data-permission="card-child-fees">💳 Внески</div>
+      <div class="tab" onclick="switchTab(3)" data-permission="card-child-vacations">🏖️ Відпустки</div>
+      <div class="tab" onclick="switchTab(4)" data-permission="card-child-payments">📅 Оплати по місяцях</div>
+      <div class="tab" onclick="switchTab(5)" data-permission="card-child-history">📊 Історія оплат</div>
+      <div class="tab" onclick="switchTab(6)" data-permission="card-child-notes">📝 Нотатки</div>
+      <div class="tab" onclick="switchTab(7)" data-permission="card-child-health">🩺 Здоров'я</div>
+      <div class="tab" onclick="switchTab(8)" data-permission="card-child-banner">📄 Документи</div>
     </div>
     <div class="modal-bd">
       <!-- Tab 0: Основне -->
-      <div class="tab-pane active" id="tp0">
-        <div id="tpPayStatus" data-permission="finance" style="margin-bottom:14px"></div>
+      <div class="tab-pane active" id="tp0" data-permission="card-child-banner">
+        <div id="tpPayStatus" data-permission="card-child-payments" style="margin-bottom:14px"></div>
         <div class="section-hd">Основна інформація</div>
         <div class="g2">
           <div class="fg"><label>ПІБ дитини</label><input type="text" id="fName" placeholder="Прізвище Ім'я По-батькові"></div>
@@ -678,7 +678,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
         </div>
       </div>
       <!-- Tab 1: Договір -->
-      <div class="tab-pane" id="tp1" data-permission="finance">
+      <div class="tab-pane" id="tp1" data-permission="card-child-contract">
         <div class="g2">
           <div class="fg"><label>Дата підписання договору</label>
             <input type="date" id="fContractDate" onchange="onContractDateChange()"></div>
@@ -720,7 +720,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
         </div>
       </div>
       <!-- Tab 2: Внески -->
-      <div class="tab-pane" id="tp2" data-permission="finance">
+      <div class="tab-pane" id="tp2" data-permission="card-child-fees">
         <div class="alert alert-info" style="margin-bottom:14px;font-size:13px">
           <b>Директор</b> вносить план при підписанні договору. <b>Фінансист</b> фіксує факт у Payment Sheet (колонка "вступ") — CRM автоматично порівнює.
         </div>
@@ -749,30 +749,30 @@ tbody tr.clickable:hover td{background:#f0f7ff}
         <div id="entryFeeFactBlock" style="margin-top:16px"></div>
       </div>
       <!-- Tab 3: Відсутності (рендериться динамічно) -->
-      <div class="tab-pane" id="tp3"></div>
+      <div class="tab-pane" id="tp3" data-permission="card-child-vacations"></div>
       <!-- Tab 4: Оплати по місяцях (NEW) -->
-      <div class="tab-pane" id="tp4" data-permission="finance">
+      <div class="tab-pane" id="tp4" data-permission="card-child-payments">
         <div id="payMonthsContent">
           <div class="empty"><span class="ei">📅</span><h4>Річні дані не завантажені</h4>
             <p>Натисніть "Оновити" або почекайте завантаження</p></div>
         </div>
       </div>
       <!-- Tab 5: Історія оплат (was 4) -->
-      <div class="tab-pane" id="tp5" data-permission="finance">
+      <div class="tab-pane" id="tp5" data-permission="card-child-history">
         <div id="payHistContent">
           <div class="loading"><div class="spinner"></div><p>Завантаження…</p></div>
         </div>
       </div>
       <!-- Tab 6: Нотатки (was 5) -->
-      <div class="tab-pane" id="tp6">
+      <div class="tab-pane" id="tp6" data-permission="card-child-notes">
         <div class="fg"><label>Нотатки</label>
           <textarea id="fNotes" rows="8" placeholder="Будь-які нотатки…" style="resize:vertical"></textarea>
         </div>
       </div>
       <!-- Tab 7: Здоров'я -->
-      <div class="tab-pane" id="tp7"></div>
+      <div class="tab-pane" id="tp7" data-permission="card-child-health"></div>
       <!-- Tab 8: Документи -->
-      <div class="tab-pane" id="tp8">
+      <div class="tab-pane" id="tp8" data-permission="card-child-banner">
         <div class="section-hd">👶 ДИТИНА</div>
         <div class="fg"><label>Свідоцтво про народження</label>
           <input type="text" id="fBirthCert" placeholder="напр. ВЕ 123456 або 1234-567890"></div>
@@ -1738,10 +1738,11 @@ function doLogout(){
 // ── UNIFIED SIDEBAR — permissions, role-visibility, cross-page nav ────────
 const CURRENT_PAGE = 'clients';
 
+// ── PERMISSIONS MATRIX (build matrix-2026-05-04) ─────────────────────────
 const PERMISSIONS = {
-  // ── Топ-менеджмент мережі (з листа "Користувачі") ────────────────
-  cfo:          'all',                                  // CFO — все + user-mgmt + salary-mgmt
-  ceo: [                                                // CEO — все, БЕЗ user-mgmt
+  cfo: 'all',
+
+  ceo: [
     'dashboard',
     'clients_list','payments','attendance_kids','recalc',
     'employees','timesheet_staff','vacations','sick_leaves',
@@ -1749,9 +1750,16 @@ const PERMISSIONS = {
     'analytics_clients','analytics_hr',
     'opex','categories','salary','overview_analytics',
     'client_birthdays',
+    'card-employee-info',
+    'card-employee-salary-button','card-employee-vacation-button','card-employee-sick-button',
+    'card-employee-salary-tab','card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract','card-child-fees',
+    'card-child-vacations','card-child-payments','card-child-history',
+    'card-child-notes','card-child-health',
     'finance','medical','salary-mgmt','hr-actions'
   ],
-  cco: [                                                // CCO — все, БЕЗ user-mgmt (= як ceo)
+
+  cco: [
     'dashboard',
     'clients_list','payments','attendance_kids','recalc',
     'employees','timesheet_staff','vacations','sick_leaves',
@@ -1759,8 +1767,15 @@ const PERMISSIONS = {
     'analytics_clients','analytics_hr',
     'opex','categories','salary','overview_analytics',
     'client_birthdays',
+    'card-employee-info',
+    'card-employee-salary-button','card-employee-vacation-button','card-employee-sick-button',
+    'card-employee-salary-tab','card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract','card-child-fees',
+    'card-child-vacations','card-child-payments','card-child-history',
+    'card-child-notes','card-child-health',
     'finance','medical','salary-mgmt','hr-actions'
   ],
+
   coo: [
     'dashboard',
     'clients_list','payments','attendance_kids','recalc',
@@ -1769,50 +1784,83 @@ const PERMISSIONS = {
     'analytics_clients','analytics_hr',
     'opex','categories','salary','overview_analytics',
     'client_birthdays',
+    'card-employee-info',
+    'card-employee-salary-button','card-employee-vacation-button','card-employee-sick-button',
+    'card-employee-salary-tab','card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract','card-child-fees',
+    'card-child-vacations','card-child-payments','card-child-history',
+    'card-child-notes','card-child-health',
     'finance','medical','hr-actions'
   ],
+
   rnd_director: [
     'dashboard',
     'clients_list','attendance_kids',
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
     'analytics_hr',
-    'client_birthdays'
+    'client_birthdays',
+    'card-employee-info',
+    'card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract',
+    'card-child-vacations','card-child-notes'
   ],
+
   hr_trainer: [
-    'dashboard',
-    'clients_list','attendance_kids',
-    'employees','timesheet_staff','vacations','sick_leaves',
-    'calendar','vacation_schedule',
-    'client_birthdays'
-  ],
-  legal: [
     'dashboard',
     'clients_list','attendance_kids',
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
     'analytics_hr',
     'client_birthdays',
-    'medical'
+    'card-employee-info',
+    'card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract',
+    'card-child-vacations','card-child-notes'
   ],
 
-  // ── Локаційні ролі (стара система паролів — поки лишаються) ──────
-  hr:           'all',
+  legal: [
+    'dashboard',
+    'clients_list','payments','attendance_kids',
+    'employees','timesheet_staff',
+    'calendar',
+    'client_birthdays',
+    'card-employee-info',
+    'card-child-banner','card-child-contract',
+    'card-child-vacations','card-child-payments','card-child-history',
+    'card-child-notes',
+    'finance'
+  ],
+
+  hr: 'all',
+
   director: [
     'dashboard',
     'clients_list','payments','attendance_kids',
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
-    'analytics_clients','analytics_hr','opex','categories','salary','overview_analytics',
+    'analytics_clients','analytics_hr',
+    'opex','categories','salary','overview_analytics',
     'client_birthdays',
+    'card-employee-info',
+    'card-employee-salary-button','card-employee-vacation-button','card-employee-sick-button',
+    'card-employee-salary-tab','card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract','card-child-fees',
+    'card-child-vacations','card-child-payments','card-child-history',
+    'card-child-notes','card-child-health',
     'finance','medical','hr-actions'
   ],
+
   nurse: [
     'dashboard',
     'clients_list','attendance_kids',
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
-    'medical'
+    'medical',
+    'card-employee-info',
+    'card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract','card-child-vacations',
+    'card-child-notes','card-child-health'
   ]
 };
 
@@ -1864,6 +1912,9 @@ function goPerm(perm){
     location.href = targetFile + '#' + perm;
   }
 }
+
+var PERMISSIONS_BUILD_VERSION = 'matrix-2026-05-04';
+console.log('[mkids] permissions build:', PERMISSIONS_BUILD_VERSION);
 
 function applyRoleVisibility(){
   if (!S || !S.user || !S.user.role) return;

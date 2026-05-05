@@ -1061,10 +1061,22 @@ function doLogout(){clearSession();S.user=null;S.view='dashboard';S.f={loc:'',po
 // ── UNIFIED SIDEBAR — permissions, role-visibility, cross-page nav ────────
 const CURRENT_PAGE = 'index';
 
+// ── PERMISSIONS MATRIX (build matrix-2026-05-04) ─────────────────────────
+// Sidebar perms: existing keys (clients_list, payments, attendance_kids, recalc,
+//   employees, timesheet_staff, vacations, sick_leaves, calendar,
+//   vacation_schedule, analytics_clients, analytics_hr, opex, salary,
+//   categories, overview_analytics, settings).
+// Card-level perms (нові, granular): card-employee-info / -salary-button /
+//   -vacation-button / -sick-button / -salary-tab / -vacations-tab /
+//   -sickleave-tab; card-child-banner / -contract / -fees / -vacations /
+//   -payments / -history / -notes / -health.
+// Cross-cutting perms: finance, medical, salary-mgmt (COO restriction),
+//   hr-actions (legacy alias), user-mgmt (CFO via 'all').
 const PERMISSIONS = {
   // ── Топ-менеджмент мережі (з листа "Користувачі") ────────────────
-  cfo:          'all',                                  // CFO — все + user-mgmt + salary-mgmt
-  ceo: [                                                // CEO — все, БЕЗ user-mgmt
+  cfo: 'all',                                                  // ✓ ВСЕ + Users
+
+  ceo: [                                                       // ✓ ВСЕ крім Settings
     'dashboard',
     'clients_list','payments','attendance_kids','recalc',
     'employees','timesheet_staff','vacations','sick_leaves',
@@ -1072,9 +1084,16 @@ const PERMISSIONS = {
     'analytics_clients','analytics_hr',
     'opex','categories','salary','overview_analytics',
     'client_birthdays',
+    'card-employee-info',
+    'card-employee-salary-button','card-employee-vacation-button','card-employee-sick-button',
+    'card-employee-salary-tab','card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract','card-child-fees',
+    'card-child-vacations','card-child-payments','card-child-history',
+    'card-child-notes','card-child-health',
     'finance','medical','salary-mgmt','hr-actions'
   ],
-  cco: [                                                // CCO — все, БЕЗ user-mgmt (= як ceo)
+
+  cco: [                                                       // ✓ Як CEO
     'dashboard',
     'clients_list','payments','attendance_kids','recalc',
     'employees','timesheet_staff','vacations','sick_leaves',
@@ -1082,60 +1101,103 @@ const PERMISSIONS = {
     'analytics_clients','analytics_hr',
     'opex','categories','salary','overview_analytics',
     'client_birthdays',
+    'card-employee-info',
+    'card-employee-salary-button','card-employee-vacation-button','card-employee-sick-button',
+    'card-employee-salary-tab','card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract','card-child-fees',
+    'card-child-vacations','card-child-payments','card-child-history',
+    'card-child-notes','card-child-health',
     'finance','medical','salary-mgmt','hr-actions'
   ],
-  coo: [                                                // COO — все крім user-mgmt і salary-mgmt
-    'dashboard',
+
+  coo: [                                                       // ✓ Як CEO, БЕЗ salary-mgmt
+    'dashboard',                                               // (Менеджмент-рядки в Salary — спецфільтр на frontend)
     'clients_list','payments','attendance_kids','recalc',
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
     'analytics_clients','analytics_hr',
     'opex','categories','salary','overview_analytics',
     'client_birthdays',
+    'card-employee-info',
+    'card-employee-salary-button','card-employee-vacation-button','card-employee-sick-button',
+    'card-employee-salary-tab','card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract','card-child-fees',
+    'card-child-vacations','card-child-payments','card-child-history',
+    'card-child-notes','card-child-health',
     'finance','medical','hr-actions'
   ],
-  rnd_director: [                                       // Академічний — все крім фінансів і ЗП
+
+  rnd_director: [                                              // R&D — без фінансів, ЗП, мед.
     'dashboard',
-    'clients_list','attendance_kids',
+    'clients_list','attendance_kids',                          // ✗ payments, ✗ recalc
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
-    'analytics_hr',
-    'client_birthdays'
+    'analytics_hr',                                            // ✗ analytics_clients
+    'client_birthdays',
+    'card-employee-info',
+    'card-employee-vacations-tab','card-employee-sickleave-tab',  // read-only tabs
+    'card-child-banner','card-child-contract',
+    'card-child-vacations','card-child-notes'
   ],
-  hr_trainer: [                                         // L&D — співробітники + клієнти без грошей
-    'dashboard',
-    'clients_list','attendance_kids',
-    'employees','timesheet_staff','vacations','sick_leaves',
-    'calendar','vacation_schedule',
-    'client_birthdays'
-  ],
-  legal: [                                              // Legal — все крім фінансів
+
+  hr_trainer: [                                                // L&D — як R&D + 🟡 динаміка ЗП
     'dashboard',
     'clients_list','attendance_kids',
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
     'analytics_hr',
     'client_birthdays',
-    'medical'
+    'card-employee-info',
+    'card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract',
+    'card-child-vacations','card-child-notes'
+    // ЗП-блоки додаються динамічно у renderEmpCard на основі напрямку
+  ],
+
+  legal: [                                                     // Legal — фінанси клієнтів так, ЗП співр. ні
+    'dashboard',
+    'clients_list','payments','attendance_kids',               // ✗ recalc
+    'employees','timesheet_staff',                             // ✗ vacations, ✗ sick_leaves
+    'calendar',                                                // ✗ vacation_schedule, ✗ analytics_*
+    'client_birthdays',
+    'card-employee-info',
+    'card-child-banner','card-child-contract',
+    'card-child-vacations','card-child-payments','card-child-history',
+    'card-child-notes',
+    'finance'                                                  // фінанси клієнтів — так
+    // ✗ card-child-fees, ✗ card-child-health, ✗ medical, ✗ salary-mgmt, ✗ hr-actions
   ],
 
   // ── Локаційні ролі (стара система паролів — поки лишаються) ──────
-  hr:           'all',                                  // legacy CFO 'hr2024' — приберемо в Кроку 4
+  hr: 'all',                                                   // legacy 'hr2024' — приберемо в Кроку 7
+
   director: [
     'dashboard',
     'clients_list','payments','attendance_kids',
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
-    'analytics_clients','analytics_hr','opex','categories','salary','overview_analytics',
+    'analytics_clients','analytics_hr',
+    'opex','categories','salary','overview_analytics',
     'client_birthdays',
+    'card-employee-info',
+    'card-employee-salary-button','card-employee-vacation-button','card-employee-sick-button',
+    'card-employee-salary-tab','card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract','card-child-fees',
+    'card-child-vacations','card-child-payments','card-child-history',
+    'card-child-notes','card-child-health',
     'finance','medical','hr-actions'
   ],
+
   nurse: [
     'dashboard',
     'clients_list','attendance_kids',
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
-    'medical'
+    'medical',
+    'card-employee-info',
+    'card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract','card-child-vacations',
+    'card-child-notes','card-child-health'
   ]
 };
 
@@ -1398,7 +1460,9 @@ function esc(s){return (s||'').replace(/"/g,'&quot;').replace(/</g,'&lt;');}
 // PERMISSIONS. typeof guard — applyRoleVisibility може ще не бути визначена
 // під час раннього рендеру (login screen).
 const AUTH_BUILD_VERSION = 'auth-fix-7-2026-05-04';
+const PERMISSIONS_BUILD_VERSION = 'matrix-2026-05-04';
 console.log('[mkids] auth build:', AUTH_BUILD_VERSION);
+console.log('[mkids] permissions build:', PERMISSIONS_BUILD_VERSION);
 function set(id,html){
   document.getElementById(id).innerHTML=html;
   if (typeof applyRoleVisibility === 'function') applyRoleVisibility();
@@ -1670,23 +1734,23 @@ function renderEmpCard(){
           </div>
         </div>
         ${act?`<div class="emp-btns">
-          <button class="btn btn-ghost" data-permission="hr-actions" onclick="openVac(${e.id})">🏖️ Відпустка</button>
-          <button class="btn btn-ghost" data-permission="hr-actions" onclick="openSick(${e.id})">🏥 Лікарняний</button>
-          ${!isNurse?`<button class="btn btn-ghost" data-permission="salary" onclick="openSal(${e.id})">💰 Зарплата</button>`:''}
+          <button class="btn btn-ghost" data-permission="card-employee-vacation-button" onclick="openVac(${e.id})">🏖️ Відпустка</button>
+          <button class="btn btn-ghost" data-permission="card-employee-sick-button" onclick="openSick(${e.id})">🏥 Лікарняний</button>
+          ${!isNurse?`<button class="btn btn-ghost" data-permission="card-employee-salary-button" onclick="openSal(${e.id})">💰 Зарплата</button>`:''}
         </div>`:''}
       </div>
       <div class="qs-grid">
         <div class="qs-item"><div class="qs-val">${t?`${t.yr}р ${t.mo}м`:'—'}</div><div class="qs-lbl">Стаж</div></div>
         <div class="qs-item"><div class="qs-val" style="color:${ov?'#e74c3c':'var(--dark)'};">${vUsed}<span style="font-size:14px;color:var(--gray)">/${vEarned}</span></div><div class="qs-lbl">Відпустка використано/доступно</div></div>
         <div class="qs-item"><div class="qs-val" style="color:${vBal===0?'#e74c3c':vBal<3?'#e67e22':'#27ae60'}">${vBal}</div><div class="qs-lbl">Залишок днів відпустки</div></div>
-        ${!isNurse?`<div class="qs-item" data-permission="salary"><div class="qs-val" style="color:#27ae60;font-size:18px">${sal?Number(sal.amount).toLocaleString('uk-UA'):'—'}</div><div class="qs-lbl">Зарплата (грн)</div></div>`:''}
+        ${!isNurse?`<div class="qs-item" data-permission="card-employee-salary-tab"><div class="qs-val" style="color:#27ae60;font-size:18px">${sal?Number(sal.amount).toLocaleString('uk-UA'):'—'}</div><div class="qs-lbl">Зарплата (грн)</div></div>`:''}
       </div>
       ${ov?`<div class="alert alert-danger" style="margin:14px;border-radius:8px">⚠️ Перевищено ліміт! Використано <strong>${vUsed}</strong> з <strong>${vEarned}</strong> зароблених днів</div>`:''}
       <div class="tabs" id="empTabs">
         <div class="tab active" data-tab="tInfo" onclick="switchTab(this)">📋 Інфо</div>
-        <div class="tab" data-tab="tVac" onclick="switchTab(this)">🏖️ Відпустки (${r.vacs.length})</div>
-        <div class="tab" data-tab="tSick" onclick="switchTab(this)">🏥 Лікарняні (${r.sicks.length})</div>
-        ${!isNurse?`<div class="tab" data-tab="tSal" data-permission="salary" onclick="switchTab(this)">💰 Зарплата (${r.sals.length})</div>`:''}
+        <div class="tab" data-tab="tVac" data-permission="card-employee-vacations-tab" onclick="switchTab(this)">🏖️ Відпустки (${r.vacs.length})</div>
+        <div class="tab" data-tab="tSick" data-permission="card-employee-sickleave-tab" onclick="switchTab(this)">🏥 Лікарняні (${r.sicks.length})</div>
+        ${!isNurse?`<div class="tab" data-tab="tSal" data-permission="card-employee-salary-tab" onclick="switchTab(this)">💰 Зарплата (${r.sals.length})</div>`:''}
         <div class="tab" data-tab="tTabel" onclick="switchTab(this)">📊 Табель</div>
         <div class="tab" data-tab="tNote" onclick="switchTab(this)">📝 Нотатки${r.notes.length>0?` (${r.notes.length})`:''}</div>
         <div class="tab" data-tab="tLine" onclick="switchTab(this)">📅 Хронологія</div>
@@ -1704,7 +1768,7 @@ function renderEmpCard(){
           </div></div>
         </div>
       </div>
-      <div id="tVac" class="tab-pane">
+      <div id="tVac" class="tab-pane" data-permission="card-employee-vacations-tab">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
           <h4 style="font-size:14px;font-weight:700">Відпустки: <strong style="color:${ov?'#e74c3c':'#27ae60'}">${vUsed}/${vEarned} днів</strong> · залишок: <strong>${vBal}</strong></h4>
           ${act?`<button class="btn btn-primary btn-sm" onclick="openVac(${e.id})">+ Додати</button>`:''}
@@ -1718,7 +1782,7 @@ function renderEmpCard(){
           <td><button class="btn btn-danger btn-xs" onclick="delRec('${e.key}','vacs','${v._id||r.vacs.indexOf(v)}',${e.id})">🗑</button></td>
         </tr>`).join('')}</tbody></table></div>`}
       </div>
-      <div id="tSick" class="tab-pane">
+      <div id="tSick" class="tab-pane" data-permission="card-employee-sickleave-tab">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
           <h4 style="font-size:14px;font-weight:700">Лікарняні ${new Date().getFullYear()}: <strong>${su} днів</strong></h4>
           ${act?`<button class="btn btn-primary btn-sm" onclick="openSick(${e.id})">+ Додати</button>`:''}
@@ -1732,7 +1796,7 @@ function renderEmpCard(){
           <td><button class="btn btn-danger btn-xs" onclick="delRec('${e.key}','sicks','${v._id||r.sicks.indexOf(v)}',${e.id})">🗑</button></td>
         </tr>`).join('')}</tbody></table></div>`}
       </div>
-      <div id="tSal" class="tab-pane" data-permission="salary">
+      <div id="tSal" class="tab-pane" data-permission="card-employee-salary-tab">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
           <h4 style="font-size:14px;font-weight:700">Зарплатна історія</h4>
           <button class="btn btn-primary btn-sm" onclick="openSal(${e.id})">+ Додати</button>
@@ -1750,6 +1814,26 @@ function renderEmpCard(){
       <div id="tLine" class="tab-pane">${buildTimeline(e,r)}</div>
     </div>
   `);
+
+  // ── L&D DYNAMIC SALARY ────────────────────────────────────────────
+  // hr_trainer (L&D) бачить ЗП блоки тільки якщо напрямок співробітника
+  // збігається з S.user.dir. Default matrix приховує salary-* для L&D —
+  // тут вмикаємо назад при збігу. Без S.user.dir нічого не відкриваємо.
+  var _role = String(S.user && S.user.role || '').toLowerCase();
+  if (_role === 'hr_trainer') {
+    var _ldDir  = String(S.user.dir || '').trim().toLowerCase();
+    var _empDir = String(e.dir       || '').trim().toLowerCase();
+    var _match  = _ldDir && _empDir && _ldDir === _empDir;
+    if (_match) {
+      document.querySelectorAll(
+        '[data-permission="card-employee-salary-button"],' +
+        '[data-permission="card-employee-salary-tab"]'
+      ).forEach(function(el){ el.style.display = ''; });
+      console.log('[L&D salary] unhidden — dir match: ' + _empDir);
+    } else {
+      console.log('[L&D salary] hidden — ldDir=' + _ldDir + ' empDir=' + _empDir);
+    }
+  }
 }
 
 function ii(label,val){return `<div class="ii"><label>${label}</label><div class="iv">${val||'—'}</div></div>`;}
