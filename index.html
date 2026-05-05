@@ -941,17 +941,16 @@ async function loadUsersForDropdown(){
       sel.innerHTML = '<option value="">⚠️ Список порожній</option>';
       return;
     }
+    // Порядок — як з backend (Users sheet — по колонці ID).
+    // НЕ робити .sort() — фільтруємо тільки неактивних.
     var actives = json.users.filter(function(u){ return u.active; });
-    actives.sort(function(a, b){
-      var ai = ROLE_ORDER_NEW.indexOf(a.role); if (ai === -1) ai = 999;
-      var bi = ROLE_ORDER_NEW.indexOf(b.role); if (bi === -1) bi = 999;
-      if (ai !== bi) return ai - bi;
-      return (a.name||'').localeCompare(b.name||'', 'uk');
-    });
     var html = '<option value="">— Виберіть користувача —</option>';
     actives.forEach(function(u){
-      var em  = ROLE_EMOJI[u.role] || '👤';
-      var lbl = ROLE_SHORT_NEW[u.role] || u.role.toUpperCase();
+      // role з Sheets може бути у будь-якому регістрі ('CFO', 'RnD_director',
+      // 'HR_trainer'). Нормалізуємо до lowercase для lookup в ROLE_EMOJI/_SHORT.
+      var role = String(u.role || '').toLowerCase().trim();
+      var em  = ROLE_EMOJI[role]     || '👤';
+      var lbl = ROLE_SHORT_NEW[role] || (u.role || '').toUpperCase();
       html += '<option value="' + esc(u.login) + '">' + em + ' ' + lbl + ' — ' + esc(u.name) + '</option>';
     });
     sel.innerHTML = html;
