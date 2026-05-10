@@ -1435,6 +1435,12 @@ function computeGroupFill(){
   var rows = [];
   var pmt  = S.paymentsByLocGroup || null;
   locs.forEach(function(L){
+    // TEMP: школи виключаємо з вкладки "Заповнення груп" — у Оплати
+    // шкільні групи містять дублі ("Школа клас клас", "Школа В клас В
+    // клас"), що псує таблицю. Поки нормалізація шкільних назв не
+    // готова — пропускаємо. Решта аналітики (Огляд/Деталь/RedZones) не
+    // зачеплена цим фільтром.
+    if (String(L.loc || '').indexOf('Школа') === 0) return;
     var byGroup = (pmt && pmt[L.loc]) || L.childrenByGroup || {};
     Object.keys(byGroup).forEach(function(rawGroup){
       if (rawGroup === '(без групи)') return;
