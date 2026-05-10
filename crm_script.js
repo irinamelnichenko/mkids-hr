@@ -169,6 +169,7 @@ function doGet(e) {
     else if (action === 'getPaymentsYearly')  result = getPaymentsYearly();
     else if (action === 'getClients')         result = getClients();
     else if (action === 'runAggregate')       result = aggregatePayments();
+    else if (action === 'syncPayments')        result = syncPayments();
     else if (action === 'runAggregateYearly') result = aggregatePaymentsYearly();
     else if (action === 'runSyncBdayStatus')  result = syncBdayStatusSheet();
     else if (action === 'getRegistryUrls')    result = getRegistryUrls();
@@ -210,6 +211,7 @@ function doPost(e) {
     else if (body.action === 'addUser')                   result = addUser(body.data || {});
     else if (body.action === 'deactivateUser')            result = deactivateUser(body.userId || 0);
     else if (body.action === 'activateUser')              result = activateUser(body.userId || 0);
+    else if (body.action === 'syncPayments')              result = syncPayments();
     else result = {ok:false, error:'Unknown action'};
     return jsonOut(result);
   } catch(err) {
@@ -4051,6 +4053,38 @@ function getGroupNorms() {
       list.push({group: name, norm: n});
     }
     return {ok: true, norms: norms, list: list};
+  } catch (e) {
+    return {ok: false, error: String(e && e.message || e)};
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SYNC PAYMENTS — ручний запуск agregatePayments із frontend.
+// Це той самий скрипт, що тригер виконує щоранку (~6:00 за конфігурацією
+// в Apps Script triggers): читає Payment-листи всіх локацій, агрегує
+// статуси оплат, перезаписує лист "Оплати" в CRM (SHEET_PAYMENTS).
+// Frontend кнопка викликає action=syncPayments через GET або POST.
+// ═══════════════════════════════════════════════════════════════════════════
+function syncPayments() {
+  if (typeof aggregatePayments !== 'function') {
+    return {
+      ok: false,
+      error: 'Скрипт синхронізації не знайдено. Зверніться до розробника який налаштовував скрипт.'
+    };
+  }
+  try {
+    var startedAt = new Date();
+    var res = aggregatePayments() || {};
+    var finishedAt = new Date();
+    return {
+      ok: !!res.ok,
+      syncedAt:    finishedAt.toISOString(),
+      durationSec: Math.round((finishedAt - startedAt) / 1000),
+      rowsCount:   res.rows || 0,
+      errors:      res.errors || [],
+      month:       res.month || '',
+      updated:     res.updated || ''
+    };
   } catch (e) {
     return {ok: false, error: String(e && e.message || e)};
   }

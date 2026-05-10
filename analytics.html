@@ -143,6 +143,14 @@ select{font-family:inherit}
 @keyframes spin{to{transform:rotate(360deg)}}
 .err{background:#fdf2f2;border:1px solid #fca5a5;color:var(--red);
   padding:14px 18px;border-radius:var(--r);margin-bottom:18px;font-weight:600}
+.toast{position:fixed;left:50%;bottom:30px;transform:translateX(-50%);
+  background:#1f2937;color:#fff;padding:12px 22px;border-radius:10px;
+  font-size:14px;font-weight:600;box-shadow:0 6px 24px rgba(0,0,0,.18);
+  z-index:9999;max-width:90vw}
+.toast.toast-ok  {background:#10b981}
+.toast.toast-err {background:#ef4444}
+.toast.toast-info{background:#3b82f6}
+.btn:disabled{opacity:.55;cursor:not-allowed}
 
 @media(max-width:640px){
   .wrap{padding:16px 12px 40px}
@@ -310,11 +318,15 @@ select{font-family:inherit}
       <select id="locSel" class="month-sel hidden"></select>
       <select id="yearSel" class="month-sel"></select>
       <select id="monthSel" class="month-sel"></select>
+      <button id="syncPaymentsBtn" class="btn btn-secondary"
+              data-permission="sync-payments"
+              title="Перезапустити агрегацію Payment-листів у CRM">🔁 Синхронізувати з Пейментами</button>
       <button id="refreshBtn" class="btn btn-primary">🔄 Оновити</button>
     </div>
   </div>
 
   <div id="errBox" class="err hidden"></div>
+  <div id="toastBox" class="toast hidden"></div>
 
   <div id="content" class="hidden">
 
@@ -900,6 +912,73 @@ function _buildPaymentsByLocGroup(payments){
     byLoc[loc][rawGroupKey] = (byLoc[loc][rawGroupKey] || 0) + 1;
   }
   return byLoc;
+}
+
+// ── TOAST + SYNC PAYMENTS ─────────────────────────────────────────
+// Простий inline-тост; auto-hide 4с (можна перетягнути ms через
+// другий аргумент). Тип: 'ok' | 'err' | 'info'.
+var _toastTimer = null;
+function showToast(msg, type, ms){
+  var box = $('toastBox');
+  if (!box) return;
+  if (_toastTimer){ clearTimeout(_toastTimer); _toastTimer = null; }
+  box.className = 'toast toast-' + (type || 'info');
+  box.textContent = msg;
+  box.classList.remove('hidden');
+  _toastTimer = setTimeout(function(){
+    box.classList.add('hidden');
+    _toastTimer = null;
+  }, ms || 4000);
+}
+
+// Запускає бекендну агрегацію Payment-листів у CRM. Скрипт довгий
+// (1-5 хв). Поки запит у польоті — кнопка disabled, банер у верхньому
+// кутку показує прогрес. Після успіху перезавантажуємо payments-кеш
+// і ререндеримо вкладку Заповнення груп.
+var _syncInFlight = false;
+async function doSyncPayments(){
+  if (_syncInFlight) return;
+  _syncInFlight = true;
+  var btn = $('syncPaymentsBtn');
+  var origText = btn ? btn.textContent : '';
+  if (btn){
+    btn.disabled = true;
+    btn.textContent = '⏳ Синхронізація триває…';
+  }
+  showToast('Синхронізація з Пейментами… (зазвичай 1–5 хв)', 'info', 60 * 60 * 1000);
+  try {
+    var r = await fetch(CFG.SCRIPT_URL + '?action=syncPayments', {
+      method: 'POST',
+      redirect: 'follow',
+      headers: {'Content-Type': 'text/plain;charset=utf-8'},
+      body: JSON.stringify({action: 'syncPayments'})
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    var json = await r.json();
+    if (!json.ok) throw new Error(json.error || 'Sync failed');
+
+    // Свіжі payments — скидаємо кеш + тягнемо заново.
+    localStorage.removeItem(CFG.PAYMENTS_CACHE_KEY);
+    S.paymentsByLocGroup = null;
+    await loadPayments(true);
+
+    // Якщо користувач на вкладці заповнення — миттєво ререндеримо.
+    if (S.mode === 'fill') renderFill();
+
+    var rows = json.rowsCount || 0;
+    var dur  = json.durationSec ? (' за ' + json.durationSec + 'с') : '';
+    var errN = (json.errors || []).length;
+    var msg  = '✅ Синхронізовано: ' + rows + ' рядків з Пейментів' + dur;
+    if (errN > 0) msg += ' (помилок по локаціях: ' + errN + ' — деталі в Apps Script logs)';
+    showToast(msg, errN > 0 ? 'info' : 'ok', 6000);
+  } catch(e){
+    var em = String(e && e.message || e);
+    console.error('[syncPayments]', em);
+    showToast('❌ Помилка синхронізації: ' + em, 'err', 8000);
+  } finally {
+    _syncInFlight = false;
+    if (btn){ btn.disabled = false; btn.textContent = origText; }
+  }
 }
 
 async function loadPayments(force){
@@ -1826,6 +1905,8 @@ function bindEventListeners(){
     S.paymentsByLocGroup = null;
     load(true);
   });
+  var _syncBtn = $('syncPaymentsBtn');
+  if (_syncBtn) _syncBtn.addEventListener('click', doSyncPayments);
 
   $('locSel').addEventListener('change', function(e){
     S.selectedLoc = e.target.value;
