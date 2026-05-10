@@ -994,9 +994,21 @@ function normalizeGroupName(grp){
   for (var i = 0; i < _BASE_NAMES_SORTED.length; i++){
     var base = _BASE_NAMES_SORTED[i];
     var baseLower = base.toLowerCase();
-    // Точне співпадіння або базова назва + пробіл (роздільник перед іменем).
+    // Точне співпадіння — повертаємо канонічну форму.
     if (lower === baseLower) return base;
-    if (lower.indexOf(baseLower + ' ') === 0) return base;
+    // Базова назва + пробіл = є щось далі (вихователь, або номер
+    // паралельної групи "Baby-ki 2 Олена").
+    if (lower.indexOf(baseLower + ' ') === 0){
+      var rest = raw.substring(base.length + 1);
+      // Якщо далі ЦИФРА (1+ цифр) — це маркер паралельної групи,
+      // зберігаємо у нормалізованій назві: "Baby-ki 2 Олена" → "Baby-ki 2".
+      // Цифра має бути або наприкінці, або перед пробілом (щоб не зчепити
+      // з суфіксом типу "2/3" — там розділимо при стрипі норми).
+      var dm = /^(\d+)(\s|$)/.exec(rest);
+      if (dm) return base + ' ' + dm[1];
+      // Інакше далі ім'я вихователя — повертаємо чисту базову назву.
+      return base;
+    }
   }
   return raw;
 }
@@ -1011,12 +1023,25 @@ function _normLookupCI(map, key){
   }
   return undefined;
 }
+// "Baby-ki 2" → "Baby-ki"; "Preschool" → "Preschool" (без змін).
+function _stripDigitSuffix(key){
+  return String(key).replace(/\s+\d+$/, '');
+}
 function getNormForGroup(group){
   var key = normalizeGroupName(group);
+  // 1) Норма для конкретної паралельної групи якщо є в мапі.
   var fromBackend = _normLookupCI(S.groupNorms || {}, key);
   if (fromBackend !== undefined) return fromBackend;
   var fromHard = _normLookupCI(HARDCODED_NORMS, key);
   if (fromHard !== undefined) return fromHard;
+  // 2) Паралельна група ("Baby-ki 2") наслідує норму базової ("Baby-ki").
+  var stripped = _stripDigitSuffix(key);
+  if (stripped !== key){
+    var fromBackendBase = _normLookupCI(S.groupNorms || {}, stripped);
+    if (fromBackendBase !== undefined) return fromBackendBase;
+    var fromHardBase = _normLookupCI(HARDCODED_NORMS, stripped);
+    if (fromHardBase !== undefined) return fromHardBase;
+  }
   console.warn('[group-norms] норма не знайдена для групи "' + group + '" (нормалізовано: "' + key + '") — використовую default ' + CFG.DEFAULT_GROUP_NORM);
   return CFG.DEFAULT_GROUP_NORM;
 }
