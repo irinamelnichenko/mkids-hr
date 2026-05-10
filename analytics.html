@@ -981,6 +981,24 @@ var HARDCODED_NORMS = {
 // приписують до груп з суфіксом "<НазваГрупи> <ІмяВихователя>" (напр.
 // "Baby-ki Аліна"), тому перед lookup треба зрізати суфікс.
 var BASE_GROUP_NAMES = Object.keys(HARDCODED_NORMS);
+
+// Додаткові заняття та інші не-постійні формати — не показуємо у вкладці
+// "Заповнення груп" (для них норма перенаповнення не має сенсу).
+// Перевірка робиться по rawGroupName: точне співпадіння або префікс
+// перед пробілом ("Чомусики", "Чомусики Алла", "Чомусики 2 Олена").
+// 'Школа' тут — подвійна перевірка на додачу до loc.startsWith('Школа').
+var EXTRA_ACTIVITIES = ['Чомусики', 'Школа'];
+var _EXTRA_LOWER = EXTRA_ACTIVITIES.map(function(s){ return s.toLowerCase(); });
+function isExtraActivity(rawOrBase){
+  var lower = String(rawOrBase || '').trim().toLowerCase();
+  if (!lower) return false;
+  for (var i = 0; i < _EXTRA_LOWER.length; i++){
+    var ex = _EXTRA_LOWER[i];
+    if (lower === ex) return true;
+    if (lower.indexOf(ex + ' ') === 0) return true;
+  }
+  return false;
+}
 // За довжиною descending — щоб 'miniBaby-ki' матчилось раніше за 'Baby-ki',
 // а '1 клас'/'2 клас' раніше ніж би якщо була просто назва 'клас'.
 var _BASE_NAMES_SORTED = BASE_GROUP_NAMES.slice().sort(function(a, b){
@@ -1041,6 +1059,11 @@ function getNormForGroup(group){
     if (fromBackendBase !== undefined) return fromBackendBase;
     var fromHardBase = _normLookupCI(HARDCODED_NORMS, stripped);
     if (fromHardBase !== undefined) return fromHardBase;
+  }
+  // Додаткові заняття: тиша (computeGroupFill вже фільтрує, але якщо
+  // якийсь сторонній шлях викличе getNormForGroup — не сипати warning).
+  if (isExtraActivity(group) || isExtraActivity(key)){
+    return CFG.DEFAULT_GROUP_NORM;
   }
   console.warn('[group-norms] норма не знайдена для групи "' + group + '" (нормалізовано: "' + key + '") — використовую default ' + CFG.DEFAULT_GROUP_NORM);
   return CFG.DEFAULT_GROUP_NORM;
@@ -1469,6 +1492,12 @@ function computeGroupFill(){
     var byGroup = (pmt && pmt[L.loc]) || L.childrenByGroup || {};
     Object.keys(byGroup).forEach(function(rawGroup){
       if (rawGroup === '(без групи)') return;
+      // Додаткові заняття (Чомусики тощо) — пропускаємо: для них
+      // норма перенаповнення не має сенсу, потрібна інша логіка.
+      if (isExtraActivity(rawGroup)) {
+        console.info('[group-norms] skip extra activity: "' + rawGroup + '" @ ' + L.loc);
+        return;
+      }
       var count   = byGroup[rawGroup] || 0;
       var base    = normalizeGroupName(rawGroup);
       // teacher = все що йде після базової назви (включно з обрізанням
