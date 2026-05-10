@@ -523,7 +523,9 @@ var CFG = {
   CACHE_TTL: 5 * 60 * 1000,
   GROUP_NORMS_CACHE_KEY: 'analytics_group_norms_v1',
   GROUP_NORMS_CACHE_TTL: 60 * 60 * 1000,  // 1 година
-  DEFAULT_GROUP_NORM: 14
+  DEFAULT_GROUP_NORM: 14,
+  PAYMENTS_CACHE_KEY: 'analytics_payments_v1',
+  PAYMENTS_CACHE_TTL: 5 * 60 * 1000        // 5 хв (як основні дані)
 };
 
 // Default month = поточний - 1 (для січня залишаємо січень).
@@ -543,7 +545,11 @@ var S = {
   groupNorms: null,        // {groupName: norm} — динамічно з листа "Норми груп"
   groupNormsError: null,   // string — повідомлення якщо не вдалося завантажити
   fillFilterLoc:    '',    // фільтр локації у вкладці "Заповнення груп"
-  fillFilterStatus: ''     // фільтр статусу: '' | 'over' | 'empty' | 'ok' | 'exact'
+  fillFilterStatus: '',    // фільтр статусу: '' | 'over' | 'empty' | 'ok' | 'exact'
+  // Дані по дітях беремо з листа "Оплати" (як clients.html, модуль Борги),
+  // а не з backend childrenByGroup, бо там Клієнти sheet має неповні
+  // дані по групах. Map: {loc: {rawGroupKey: count}}.
+  paymentsByLocGroup: null
 };
 
 // ── HELPERS ─────────────────────────────────
@@ -847,6 +853,77 @@ function _saveGroupNormsCache(norms){
       ts: Date.now(), norms: norms
     }));
   } catch(e){}
+}
+
+// ── PAYMENTS — лист "Оплати" як джерело правди про групу→діти ─────
+// Той самий endpoint, що використовує clients.html (модуль Борги).
+// Backend childrenByGroup із Клієнтів неповний/застарілий — payments
+// дають реальну картину поточного місяця.
+function _loadPaymentsCache(){
+  try {
+    var raw = localStorage.getItem(CFG.PAYMENTS_CACHE_KEY);
+    if (!raw) return null;
+    var obj = JSON.parse(raw);
+    if (!obj || !obj.ts || !obj.byLoc) return null;
+    if (Date.now() - obj.ts > CFG.PAYMENTS_CACHE_TTL) return null;
+    return obj.byLoc;
+  } catch(e){ return null; }
+}
+function _savePaymentsCache(byLoc){
+  try {
+    localStorage.setItem(CFG.PAYMENTS_CACHE_KEY, JSON.stringify({
+      ts: Date.now(), byLoc: byLoc
+    }));
+  } catch(e){}
+}
+
+// Будує {loc: {rawGroupKey: count}} зі списку рядків Оплати. rawGroupKey
+// формується так само як у clients.html buildGroups (line 1448-1450):
+//   normalize(group) + (' ' + teacher) — щоб різні вихователі лишалися
+//   окремими ключами навіть якщо у Sheets базова назва однакова.
+function _buildPaymentsByLocGroup(payments){
+  var byLoc = {};
+  for (var i = 0; i < payments.length; i++){
+    var row = payments[i];
+    var loc = String(row['Локація'] || '').trim();
+    if (!loc) continue;
+    var rawGrp = String(row['Група'] || '').trim();
+    if (!rawGrp) continue;
+    var name = String(row["Ім'я дитини"] || '').trim();
+    if (!name) continue;   // header / порожній рядок
+    var base = normalizeGroupName(rawGrp);
+    var teacherInName = String(rawGrp).substring(base.length).trim();
+    var teacherCol    = String(row['Вихователь'] || '').trim();
+    var teacher = teacherCol || teacherInName;
+    var rawGroupKey = base + (teacher ? ' ' + teacher : '');
+    if (!byLoc[loc]) byLoc[loc] = {};
+    byLoc[loc][rawGroupKey] = (byLoc[loc][rawGroupKey] || 0) + 1;
+  }
+  return byLoc;
+}
+
+async function loadPayments(force){
+  if (!force){
+    var cached = _loadPaymentsCache();
+    if (cached){
+      S.paymentsByLocGroup = cached;
+      return cached;
+    }
+  }
+  try {
+    var r = await fetch(CFG.SCRIPT_URL + '?action=getPayments', {redirect:'follow'});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    var json = await r.json();
+    if (!json.ok) throw new Error(json.error || 'Unknown error');
+    var byLoc = _buildPaymentsByLocGroup(json.data || []);
+    S.paymentsByLocGroup = byLoc;
+    _savePaymentsCache(byLoc);
+    return byLoc;
+  } catch(e){
+    console.warn('[payments] failed to load:', e && e.message || e);
+    S.paymentsByLocGroup = null;
+    return null;
+  }
 }
 
 async function loadGroupNorms(force){
@@ -1351,10 +1428,15 @@ function computeGroupFill(){
   // незалежно від обраного typeFilter (вкладка має свій фільтр локацій).
   // Кожен rawGroupName = окрема група з власним вихователем (не агрегуємо
   // "Baby-ki Аліна" з "Baby-ki Сніжана" — це різні групи).
+  // Джерело правди про count — лист "Оплати" (S.paymentsByLocGroup).
+  // Backend L.childrenByGroup лишається фолбеком якщо payments не
+  // завантажились. (Клієнти-sheet дає неповні дані — клас Аліна 1 дитина
+  // замість справжніх 12+, бо більшість не має поля Група заповненим.)
   var locs = visibleLocations();
   var rows = [];
+  var pmt  = S.paymentsByLocGroup || null;
   locs.forEach(function(L){
-    var byGroup = L.childrenByGroup || {};
+    var byGroup = (pmt && pmt[L.loc]) || L.childrenByGroup || {};
     Object.keys(byGroup).forEach(function(rawGroup){
       if (rawGroup === '(без групи)') return;
       var count   = byGroup[rawGroup] || 0;
@@ -1628,12 +1710,14 @@ async function load(force){
     $('loadBox').classList.remove('hidden');
   }
   try {
-    // Норми груп тягнемо паралельно з основними даними; кеш 1 година.
-    // Помилка тут НЕ блокує overview — getNormForGroup впаде на default 14.
-    var dataPromise  = fetchData(force);
-    var normsPromise = loadGroupNorms(force);
+    // Норми груп + payments тягнемо паралельно з основними даними. Помилки
+    // у норм/payments НЕ блокують overview — кожна має свій fallback.
+    var dataPromise     = fetchData(force);
+    var normsPromise    = loadGroupNorms(force);
+    var paymentsPromise = loadPayments(force);
     var data = await dataPromise;
     await normsPromise;
+    await paymentsPromise;
     S.data = data;
 
     // Якщо обрана локація відсутня (наприклад змінили місяць/рік) — підставляємо
@@ -1677,8 +1761,10 @@ function bindEventListeners(){
   $('refreshBtn').addEventListener('click', function(){
     localStorage.removeItem(CFG.CACHE_KEY);
     localStorage.removeItem(CFG.GROUP_NORMS_CACHE_KEY);
+    localStorage.removeItem(CFG.PAYMENTS_CACHE_KEY);
     S.data = null;
     S.groupNorms = null;
+    S.paymentsByLocGroup = null;
     load(true);
   });
 
