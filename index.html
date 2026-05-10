@@ -41,6 +41,15 @@ input,select,textarea{font-family:inherit}
   border:2px solid var(--gray2);border-radius:var(--r);font-size:14px;
   transition:border-color .2s;background:#fff;color:var(--dark2);outline:none}
 .fg input:focus,.fg select:focus,.fg textarea:focus{border-color:var(--green)}
+.pw-wrap{position:relative}
+.pw-wrap input{padding-right:44px}
+.pw-toggle{position:absolute;right:6px;top:50%;transform:translateY(-50%);
+  width:32px;height:32px;display:flex;align-items:center;justify-content:center;
+  background:transparent;border:none;border-radius:6px;cursor:pointer;
+  font-size:16px;line-height:1;color:var(--gray);opacity:.55;
+  transition:opacity .15s, background .15s;padding:0}
+.pw-toggle:hover{opacity:1;background:#f4f7fa}
+.pw-toggle:focus{outline:none;opacity:1}
 .login-error{background:#fdf2f2;border:1px solid #fca5a5;color:var(--red);
   padding:10px 14px;border-radius:8px;font-size:13px;margin-bottom:16px}
 .login-hint{text-align:center;margin-top:14px;font-size:12px;color:#aaa}
@@ -285,8 +294,12 @@ tbody tr.clickable{cursor:pointer}
       </div>
       <div class="fg">
         <label>Пароль</label>
-        <input type="password" id="loginPwMain" placeholder="Введіть пароль"
-          onkeydown="if(event.key==='Enter')doLoginMain()">
+        <div class="pw-wrap">
+          <input type="password" id="loginPwMain" placeholder="Введіть пароль"
+            onkeydown="if(event.key==='Enter')doLoginMain()">
+          <button type="button" class="pw-toggle" aria-label="Показати/приховати пароль"
+            onclick="togglePwVisibility('loginPwMain', this)">👁</button>
+        </div>
       </div>
       <button class="btn btn-primary full" onclick="doLoginMain()">Увійти →</button>
     </div>
@@ -299,8 +312,12 @@ tbody tr.clickable{cursor:pointer}
       </div>
       <div class="fg">
         <label>Пароль</label>
-        <input type="password" id="loginPwDir" placeholder="Введіть пароль"
-          onkeydown="if(event.key==='Enter')doLoginDir()">
+        <div class="pw-wrap">
+          <input type="password" id="loginPwDir" placeholder="Введіть пароль"
+            onkeydown="if(event.key==='Enter')doLoginDir()">
+          <button type="button" class="pw-toggle" aria-label="Показати/приховати пароль"
+            onclick="togglePwVisibility('loginPwDir', this)">👁</button>
+        </div>
       </div>
       <button class="btn btn-primary full" onclick="doLoginDir()">Увійти →</button>
     </div>
@@ -313,8 +330,12 @@ tbody tr.clickable{cursor:pointer}
       </div>
       <div class="fg">
         <label>Пароль</label>
-        <input type="password" id="loginPwNurse" placeholder="Введіть пароль"
-          onkeydown="if(event.key==='Enter')doLoginNurse()">
+        <div class="pw-wrap">
+          <input type="password" id="loginPwNurse" placeholder="Введіть пароль"
+            onkeydown="if(event.key==='Enter')doLoginNurse()">
+          <button type="button" class="pw-toggle" aria-label="Показати/приховати пароль"
+            onclick="togglePwVisibility('loginPwNurse', this)">👁</button>
+        </div>
       </div>
       <button class="btn btn-primary full" onclick="doLoginNurse()">Увійти →</button>
     </div>
@@ -958,6 +979,17 @@ async function loadUsersForDropdown(){
     loaded = true;
     sel.innerHTML = '<option value="">' + ERR_MSG + '</option>';
   }
+}
+
+// Toggle на кнопці 👁 у password-полях логін-екрану. За замовч пароль
+// прихований (type=password) — клік відкриває (type=text), повторний
+// клік ховає назад. Іконки 👁 (приховано) ↔ 🙈 (видно).
+function togglePwVisibility(inputId, btn){
+  var input = document.getElementById(inputId);
+  if (!input) return;
+  var show = input.type === 'password';
+  input.type = show ? 'text' : 'password';
+  if (btn) btn.textContent = show ? '🙈' : '👁';
 }
 
 async function doLoginMain(){
