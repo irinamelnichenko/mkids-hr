@@ -797,10 +797,46 @@ async function loadGroupNorms(force){
 }
 
 // Норма для групи: точне співпадіння → fallback default 14 + warn у консолі.
+// Базові назви груп — як вони лежать у листі "Норми груп". У Sheets дітей
+// приписують до груп з суфіксом "<НазваГрупи> <ІмяВихователя>" (напр.
+// "Baby-ki Аліна"), тому перед lookup треба зрізати суфікс.
+var BASE_GROUP_NAMES = [
+  'miniBaby-ki','Baby-ki','Find-iki','Study-ki','Preschool',
+  '1 клас','2 клас','3 клас','4 клас',
+  'мама+я',
+  'Малюки','Карапузи','Пізнайки','Бешкетники',
+  'Мандрівники','Дослідники','Розумники'
+];
+// За довжиною descending — щоб 'miniBaby-ki' матчилось раніше за 'Baby-ki',
+// а '1 клас'/'2 клас' раніше ніж би якщо була просто назва 'клас'.
+var _BASE_NAMES_SORTED = BASE_GROUP_NAMES.slice().sort(function(a, b){
+  return b.length - a.length;
+});
+
+function normalizeGroupName(grp){
+  var raw = String(grp || '').trim();
+  if (!raw) return raw;
+  var lower = raw.toLowerCase();
+  for (var i = 0; i < _BASE_NAMES_SORTED.length; i++){
+    var base = _BASE_NAMES_SORTED[i];
+    var baseLower = base.toLowerCase();
+    // Точне співпадіння або базова назва + пробіл (роздільник перед іменем).
+    if (lower === baseLower) return base;
+    if (lower.indexOf(baseLower + ' ') === 0) return base;
+  }
+  return raw;
+}
+
 function getNormForGroup(group){
   var norms = S.groupNorms || {};
-  if (group in norms) return norms[group];
-  console.warn('[group-norms] норма не знайдена для групи "' + group + '" — використовую default ' + CFG.DEFAULT_GROUP_NORM);
+  var key = normalizeGroupName(group);
+  if (key in norms) return norms[key];
+  // Можливо у листі ключ записаний у іншому регістрі — спробуємо case-insensitive.
+  var keyLower = key.toLowerCase();
+  for (var k in norms){
+    if (k.toLowerCase() === keyLower) return norms[k];
+  }
+  console.warn('[group-norms] норма не знайдена для групи "' + group + '" (нормалізовано: "' + key + '") — використовую default ' + CFG.DEFAULT_GROUP_NORM);
   return CFG.DEFAULT_GROUP_NORM;
 }
 
@@ -1000,7 +1036,8 @@ function renderRedZones(){
     .sort(function(a, b){ return b.ratio - a.ratio; });
 
   // Перевантажені групи — по конкретній групі в кожній локації.
-  // Беремо childrenByGroup, порівнюємо з нормою з S.groupNorms (або default).
+  // childrenByGroup має ключі типу "Baby-ki Аліна" (з суфіксом імені
+  // вихователя), тому нормалізуємо до базової назви для lookup і display.
   var bigGroups = [];
   locs.forEach(function(L){
     var byGroup = L.childrenByGroup || {};
@@ -1008,10 +1045,11 @@ function renderRedZones(){
       if (grp === '(без групи)') return;
       var count = byGroup[grp] || 0;
       var norm  = getNormForGroup(grp);
+      var displayName = normalizeGroupName(grp);
       if (count > norm){
         bigGroups.push({
           loc:    L.loc,
-          group:  grp,
+          group:  displayName,
           count:  count,
           norm:   norm,
           excess: count - norm
