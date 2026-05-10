@@ -84,11 +84,11 @@ select{font-family:inherit}
 .fs-over {background:#fee2e2;color:#ef4444}
 .fs-empty{background:#fef3c7;color:#f59e0b}
 .fs-ok   {background:#d1fae5;color:#10b981}
-.fs-exact{background:#e2e8f0;color:#475569}
+.fs-exact{background:#e5e7eb;color:#6b7280}
 .kpi.k-over .kpi-val {color:#ef4444}
 .kpi.k-empty .kpi-val{color:#f59e0b}
 .kpi.k-ok .kpi-val   {color:#10b981}
-.kpi.k-exact .kpi-val{color:#475569}
+.kpi.k-exact .kpi-val{color:#6b7280}
 
 .cat-name{font-weight:600;color:var(--dark2)}
 .muted{color:var(--gray2)}
@@ -489,6 +489,7 @@ select{font-family:inherit}
                 <tr>
                   <th>Локація</th>
                   <th>Група</th>
+                  <th>Вихователь</th>
                   <th class="num">Дітей</th>
                   <th class="num">Норма</th>
                   <th>Статус</th>
@@ -1348,29 +1349,29 @@ function computeGroupFill(){
   if (!S.data || !Array.isArray(S.data.locations)) return [];
   // visibleLocations прибирає Управління; ми хочемо ВСІ садочки+школи
   // незалежно від обраного typeFilter (вкладка має свій фільтр локацій).
+  // Кожен rawGroupName = окрема група з власним вихователем (не агрегуємо
+  // "Baby-ki Аліна" з "Baby-ki Сніжана" — це різні групи).
   var locs = visibleLocations();
   var rows = [];
   locs.forEach(function(L){
-    // Агрегуємо count по нормалізованій групі — кілька рядків
-    // "Baby-ki Аліна"/"Baby-ki Сніжана" зливаються в один "Baby-ki".
     var byGroup = L.childrenByGroup || {};
-    var agg = {};
-    Object.keys(byGroup).forEach(function(grp){
-      if (grp === '(без групи)') return;
-      var key = normalizeGroupName(grp);
-      agg[key] = (agg[key] || 0) + (byGroup[grp] || 0);
-    });
-    Object.keys(agg).forEach(function(grp){
-      var count = agg[grp];
-      var norm  = getNormForGroup(grp);
-      var status = classifyFill(count, norm);
+    Object.keys(byGroup).forEach(function(rawGroup){
+      if (rawGroup === '(без групи)') return;
+      var count   = byGroup[rawGroup] || 0;
+      var base    = normalizeGroupName(rawGroup);
+      // teacher = все що йде після базової назви (включно з обрізанням
+      // лідуючого пробіла). Якщо назва = тільки base, teacher лишається ''.
+      var teacher = String(rawGroup).substring(base.length).trim();
+      var norm    = getNormForGroup(rawGroup);
+      var status  = classifyFill(count, norm);
       rows.push({
-        loc:    L.loc,
-        group:  grp,
-        count:  count,
-        norm:   norm,
-        diff:   count - norm,
-        status: status
+        loc:     L.loc,
+        group:   base,
+        teacher: teacher,
+        count:   count,
+        norm:    norm,
+        diff:    count - norm,
+        status:  status
       });
     });
   });
@@ -1381,11 +1382,12 @@ function _sortFillRows(rows){
   rows.sort(function(a, b){
     var pa = STATUS_PRIORITY[a.status], pb = STATUS_PRIORITY[b.status];
     if (pa !== pb) return pa - pb;
-    // Усередині — за |diff| descending. Для exact (diff=0) — за назвою.
+    // Усередині — за |diff| descending. Для exact (diff=0) — за loc/group/teacher.
     var ad = Math.abs(a.diff), bd = Math.abs(b.diff);
     if (ad !== bd) return bd - ad;
     if (a.loc !== b.loc) return a.loc.localeCompare(b.loc, 'uk');
-    return a.group.localeCompare(b.group, 'uk');
+    if (a.group !== b.group) return a.group.localeCompare(b.group, 'uk');
+    return (a.teacher || '').localeCompare(b.teacher || '', 'uk');
   });
 }
 
@@ -1448,7 +1450,7 @@ function renderFill(){
   body.innerHTML = '';
   if (!filtered.length){
     var tr = document.createElement('tr');
-    tr.innerHTML = '<td colspan="5" style="text-align:center;padding:40px;color:var(--gray)">Нічого не знайдено</td>';
+    tr.innerHTML = '<td colspan="6" style="text-align:center;padding:40px;color:var(--gray)">Нічого не знайдено</td>';
     body.appendChild(tr);
     return;
   }
@@ -1461,10 +1463,14 @@ function renderFill(){
     else /* ok */                  diffTxt = (r.diff < 0 ? ' ' : ' +') + r.diff;
     var statusHtml = '<span class="fill-status ' + STATUS_CLASS[r.status] + '">' +
                      STATUS_LABEL[r.status] + diffTxt + '</span>';
+    var teacherCell = r.teacher
+      ? escapeHtml(r.teacher)
+      : '<span class="muted">—</span>';
     var tr = document.createElement('tr');
     tr.innerHTML =
       '<td class="cat-name">' + escapeHtml(r.loc)   + '</td>' +
       '<td>'                 + escapeHtml(r.group) + '</td>' +
+      '<td>'                 + teacherCell         + '</td>' +
       '<td class="num">'     + r.count             + '</td>' +
       '<td class="num">'     + r.norm              + '</td>' +
       '<td>'                 + statusHtml          + '</td>';
@@ -1491,12 +1497,13 @@ function exportFillCSV(){
   }
   var STATUS_PLAIN = {over: 'Перевантажено', empty: 'Недозаповнено',
                       ok:   'В нормі',       exact: 'Точно'};
-  var lines = ['Локація;Група;Дітей;Норма;Статус;Відхилення'];
+  var lines = ['Локація;Група;Вихователь;Дітей;Норма;Статус;Відхилення'];
   rows.forEach(function(r){
     var dev = r.diff > 0 ? ('+' + r.diff) : String(r.diff);
     lines.push([
-      csvCell(r.loc), csvCell(r.group), csvCell(r.count),
-      csvCell(r.norm), csvCell(STATUS_PLAIN[r.status]), csvCell(dev)
+      csvCell(r.loc), csvCell(r.group), csvCell(r.teacher || ''),
+      csvCell(r.count), csvCell(r.norm), csvCell(STATUS_PLAIN[r.status]),
+      csvCell(dev)
     ].join(';'));
   });
 
