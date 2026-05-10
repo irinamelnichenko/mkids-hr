@@ -797,16 +797,35 @@ async function loadGroupNorms(force){
 }
 
 // Норма для групи: точне співпадіння → fallback default 14 + warn у консолі.
+// Hardcoded fallback норм — використовується поки Apps Script backend
+// (action=getGroupNorms) не задеплоєний. Коли deployment з'явиться, бекенд
+// перекриває ці значення (його дані мають вищий пріоритет у getNormForGroup).
+// Норми міняються рідко; редагувати тут руками — нормально як тимчасовий
+// варіант. Ключі мають точно співпадати з BASE_GROUP_NAMES.
+var HARDCODED_NORMS = {
+  'miniBaby-ki': 9,
+  'Baby-ki':    12,
+  'Find-iki':   15,
+  'Study-ki':   15,
+  'Preschool':  15,
+  '1 клас':     15,
+  '2 клас':     15,
+  '3 клас':     15,
+  '4 клас':     15,
+  'мама+я':     15,
+  'Малюки':     15,
+  'Карапузи':   15,
+  'Пізнайки':   15,
+  'Бешкетники': 15,
+  'Мандрівники':15,
+  'Дослідники': 15,
+  'Розумники':  15
+};
+
 // Базові назви груп — як вони лежать у листі "Норми груп". У Sheets дітей
 // приписують до груп з суфіксом "<НазваГрупи> <ІмяВихователя>" (напр.
 // "Baby-ki Аліна"), тому перед lookup треба зрізати суфікс.
-var BASE_GROUP_NAMES = [
-  'miniBaby-ki','Baby-ki','Find-iki','Study-ki','Preschool',
-  '1 клас','2 клас','3 клас','4 клас',
-  'мама+я',
-  'Малюки','Карапузи','Пізнайки','Бешкетники',
-  'Мандрівники','Дослідники','Розумники'
-];
+var BASE_GROUP_NAMES = Object.keys(HARDCODED_NORMS);
 // За довжиною descending — щоб 'miniBaby-ki' матчилось раніше за 'Baby-ki',
 // а '1 клас'/'2 клас' раніше ніж би якщо була просто назва 'клас'.
 var _BASE_NAMES_SORTED = BASE_GROUP_NAMES.slice().sort(function(a, b){
@@ -827,15 +846,22 @@ function normalizeGroupName(grp){
   return raw;
 }
 
-function getNormForGroup(group){
-  var norms = S.groupNorms || {};
-  var key = normalizeGroupName(group);
-  if (key in norms) return norms[key];
-  // Можливо у листі ключ записаний у іншому регістрі — спробуємо case-insensitive.
+// Пріоритет: backend (S.groupNorms) → HARDCODED_NORMS → default 14.
+// Backend перекриває hardcoded коли є; hardcoded заповнює прогалини.
+function _normLookupCI(map, key){
+  if (key in map) return map[key];
   var keyLower = key.toLowerCase();
-  for (var k in norms){
-    if (k.toLowerCase() === keyLower) return norms[k];
+  for (var k in map){
+    if (k.toLowerCase() === keyLower) return map[k];
   }
+  return undefined;
+}
+function getNormForGroup(group){
+  var key = normalizeGroupName(group);
+  var fromBackend = _normLookupCI(S.groupNorms || {}, key);
+  if (fromBackend !== undefined) return fromBackend;
+  var fromHard = _normLookupCI(HARDCODED_NORMS, key);
+  if (fromHard !== undefined) return fromHard;
   console.warn('[group-norms] норма не знайдена для групи "' + group + '" (нормалізовано: "' + key + '") — використовую default ' + CFG.DEFAULT_GROUP_NORM);
   return CFG.DEFAULT_GROUP_NORM;
 }
@@ -1020,9 +1046,12 @@ function renderRedZones(){
     : {teacherKids: 20};
 
   $('rzOvLbl').textContent = '⚠️ Перевантаження вихователів (норма для ' + typeWordGen() + ': до ' + th.teacherKids + ' дітей/вих)';
-  var grpHdr = '⚠️ Перевантажені ' + (S.typeFilter === 'Садочок' ? 'групи' : 'класи') + ' (норми з листа «Норми груп»';
-  if (S.groupNormsError) grpHdr += ' — ⚠️ не завантажені, fallback ' + CFG.DEFAULT_GROUP_NORM;
-  grpHdr += ')';
+  var grpHdr = '⚠️ Перевантажені ' + (S.typeFilter === 'Садочок' ? 'групи' : 'класи');
+  if (S.groupNormsError){
+    grpHdr += ' (норми — hardcoded поки backend не задеплоєний)';
+  } else {
+    grpHdr += ' (норми з листа «Норми груп»)';
+  }
   $('rzGrLbl').textContent = grpHdr;
 
   var locs = selectedTypeLocations();
