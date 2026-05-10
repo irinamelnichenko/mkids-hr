@@ -1046,12 +1046,7 @@ function renderRedZones(){
     : {teacherKids: 20};
 
   $('rzOvLbl').textContent = '⚠️ Перевантаження вихователів (норма для ' + typeWordGen() + ': до ' + th.teacherKids + ' дітей/вих)';
-  var grpHdr = '⚠️ Перевантажені ' + (S.typeFilter === 'Садочок' ? 'групи' : 'класи');
-  if (S.groupNormsError){
-    grpHdr += ' (норми — hardcoded поки backend не задеплоєний)';
-  } else {
-    grpHdr += ' (норми з листа «Норми груп»)';
-  }
+  var grpHdr = '⚠️ Перевантажені ' + (S.typeFilter === 'Садочок' ? 'групи' : 'класи') + ' (норми мережі)';
   $('rzGrLbl').textContent = grpHdr;
 
   var locs = selectedTypeLocations();
