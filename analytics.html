@@ -75,6 +75,21 @@ select{font-family:inherit}
 .tbl tbody td.cell-min{color:var(--green);font-weight:800}
 .tbl tbody td.cell-max{color:var(--red);font-weight:800}
 
+/* ── FILL MODE ─────────────────────────────────────────── */
+.fill-filters{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+.fill-filters .month-sel{min-width:170px}
+.fill-tbl-wrap{overflow-x:auto}
+.fill-status{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;
+  border-radius:999px;font-size:12px;font-weight:700;line-height:1;white-space:nowrap}
+.fs-over {background:#fee2e2;color:#ef4444}
+.fs-empty{background:#fef3c7;color:#f59e0b}
+.fs-ok   {background:#d1fae5;color:#10b981}
+.fs-exact{background:#e2e8f0;color:#475569}
+.kpi.k-over .kpi-val {color:#ef4444}
+.kpi.k-empty .kpi-val{color:#f59e0b}
+.kpi.k-ok .kpi-val   {color:#10b981}
+.kpi.k-exact .kpi-val{color:#475569}
+
 .cat-name{font-weight:600;color:var(--dark2)}
 .muted{color:var(--gray2)}
 
@@ -282,6 +297,7 @@ select{font-family:inherit}
   <div class="mode-tabs hidden" id="modeTabs">
     <button class="mt-btn active" id="mtOverview">🌐 Огляд мережі</button>
     <button class="mt-btn" id="mtDetail">📍 Деталь локації</button>
+    <button class="mt-btn" id="mtFill">📊 Заповнення груп</button>
   </div>
 
   <div class="hd">
@@ -424,6 +440,66 @@ select{font-family:inherit}
         </div>
       </div>
     </div>
+
+    <!-- ── ЗАПОВНЕННЯ ГРУП ── -->
+    <div id="fillMode" class="hidden">
+      <div class="kpis">
+        <div class="kpi k-over">
+          <div class="kpi-lbl">🔴 Перевантажено</div>
+          <div class="kpi-val" id="fillKpiOver">—</div>
+          <div class="kpi-sub">груп більше норми</div>
+        </div>
+        <div class="kpi k-empty">
+          <div class="kpi-lbl">🟡 Недозаповнено</div>
+          <div class="kpi-val" id="fillKpiEmpty">—</div>
+          <div class="kpi-sub">груп нижче 70% норми</div>
+        </div>
+        <div class="kpi k-ok">
+          <div class="kpi-lbl">🟢 У нормі</div>
+          <div class="kpi-val" id="fillKpiOk">—</div>
+          <div class="kpi-sub">в межах норми</div>
+        </div>
+        <div class="kpi k-exact">
+          <div class="kpi-lbl">✓ Точно по нормі</div>
+          <div class="kpi-val" id="fillKpiExact">—</div>
+          <div class="kpi-sub">дітей = норма</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-hd">
+          <h3>📊 Заповнення груп <span id="fillSub" style="font-weight:500;color:var(--gray)"></span></h3>
+        </div>
+        <div class="card-bd pad">
+          <div class="fill-filters">
+            <select id="fillLocSel" class="month-sel"><option value="">Всі локації</option></select>
+            <select id="fillStatusSel" class="month-sel">
+              <option value="">Всі статуси</option>
+              <option value="over">🔴 Перевантажені</option>
+              <option value="empty">🟡 Недозаповнені</option>
+              <option value="ok">🟢 В нормі</option>
+              <option value="exact">✓ Точно</option>
+            </select>
+            <button id="fillExportBtn" class="btn btn-secondary">📥 Експорт CSV</button>
+            <span id="fillCount" style="margin-left:auto;font-size:12px;color:var(--gray)"></span>
+          </div>
+          <div class="fill-tbl-wrap">
+            <table class="tbl">
+              <thead>
+                <tr>
+                  <th>Локація</th>
+                  <th>Група</th>
+                  <th class="num">Дітей</th>
+                  <th class="num">Норма</th>
+                  <th>Статус</th>
+                </tr>
+              </thead>
+              <tbody id="fillTblBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div id="loadBox" class="loading">
@@ -464,7 +540,9 @@ var S = {
   sortDir: 'asc',
   typeFilter: 'Садочок',  // 'Садочок' | 'Школа' — фільтр для overview-блоків
   groupNorms: null,        // {groupName: norm} — динамічно з листа "Норми груп"
-  groupNormsError: null    // string — повідомлення якщо не вдалося завантажити
+  groupNormsError: null,   // string — повідомлення якщо не вдалося завантажити
+  fillFilterLoc:    '',    // фільтр локації у вкладці "Заповнення груп"
+  fillFilterStatus: ''     // фільтр статусу: '' | 'over' | 'empty' | 'ok' | 'exact'
 };
 
 // ── HELPERS ─────────────────────────────────
@@ -1245,6 +1323,201 @@ function renderMetrics(L){
   $('metricsGrid').innerHTML = html;
 }
 
+// ── ЗАПОВНЕННЯ ГРУП ───────────────────────────────────────────────
+// Розширює L.childrenByGroup (має формат "<Група> <ІмяВих>") на
+// нормалізовані базові назви, агрегує count по локація×нормалізована-група
+// (бо однакова базова група з різними виховниками = окремі рядки в Sheets,
+// але одна група для аналізу заповнення), повертає рядки зі статусом.
+//   STATUS_PRIORITY — для дефолтного сортування (over→empty→ok→exact).
+//   EMPTY_THRESHOLD — частка норми, нижче якої вважаємо "недозаповнено".
+var STATUS_PRIORITY = { over: 0, empty: 1, ok: 2, exact: 3 };
+var STATUS_LABEL    = { over: '🔴 Перевантажено', empty: '🟡 Недозаповнено',
+                        ok:   '🟢 В нормі',       exact: '✓ Точно' };
+var STATUS_CLASS    = { over: 'fs-over', empty: 'fs-empty',
+                        ok:   'fs-ok',   exact: 'fs-exact' };
+var EMPTY_THRESHOLD = 0.7;
+
+function classifyFill(count, norm){
+  if (count > norm) return 'over';
+  if (count === norm) return 'exact';
+  if (count < norm * EMPTY_THRESHOLD) return 'empty';
+  return 'ok';
+}
+
+function computeGroupFill(){
+  if (!S.data || !Array.isArray(S.data.locations)) return [];
+  // visibleLocations прибирає Управління; ми хочемо ВСІ садочки+школи
+  // незалежно від обраного typeFilter (вкладка має свій фільтр локацій).
+  var locs = visibleLocations();
+  var rows = [];
+  locs.forEach(function(L){
+    // Агрегуємо count по нормалізованій групі — кілька рядків
+    // "Baby-ki Аліна"/"Baby-ki Сніжана" зливаються в один "Baby-ki".
+    var byGroup = L.childrenByGroup || {};
+    var agg = {};
+    Object.keys(byGroup).forEach(function(grp){
+      if (grp === '(без групи)') return;
+      var key = normalizeGroupName(grp);
+      agg[key] = (agg[key] || 0) + (byGroup[grp] || 0);
+    });
+    Object.keys(agg).forEach(function(grp){
+      var count = agg[grp];
+      var norm  = getNormForGroup(grp);
+      var status = classifyFill(count, norm);
+      rows.push({
+        loc:    L.loc,
+        group:  grp,
+        count:  count,
+        norm:   norm,
+        diff:   count - norm,
+        status: status
+      });
+    });
+  });
+  return rows;
+}
+
+function _sortFillRows(rows){
+  rows.sort(function(a, b){
+    var pa = STATUS_PRIORITY[a.status], pb = STATUS_PRIORITY[b.status];
+    if (pa !== pb) return pa - pb;
+    // Усередині — за |diff| descending. Для exact (diff=0) — за назвою.
+    var ad = Math.abs(a.diff), bd = Math.abs(b.diff);
+    if (ad !== bd) return bd - ad;
+    if (a.loc !== b.loc) return a.loc.localeCompare(b.loc, 'uk');
+    return a.group.localeCompare(b.group, 'uk');
+  });
+}
+
+function _populateFillLocOptions(rows){
+  var sel = $('fillLocSel');
+  // Прибираємо все крім "Всі локації" (перший option).
+  while (sel.options.length > 1) sel.remove(1);
+  var seen = {};
+  var locs = [];
+  rows.forEach(function(r){
+    if (seen[r.loc]) return;
+    seen[r.loc] = true;
+    locs.push(r.loc);
+  });
+  locs.sort(function(a, b){ return a.localeCompare(b, 'uk'); });
+  locs.forEach(function(loc){
+    var o = document.createElement('option');
+    o.value = loc;
+    o.textContent = loc;
+    if (loc === S.fillFilterLoc) o.selected = true;
+    sel.appendChild(o);
+  });
+  // Якщо S.fillFilterLoc стосується локації яка зникла — скидаємо.
+  if (S.fillFilterLoc && !seen[S.fillFilterLoc]){
+    S.fillFilterLoc = '';
+    sel.value = '';
+  }
+  // Status select reflect S.fillFilterStatus.
+  $('fillStatusSel').value = S.fillFilterStatus;
+}
+
+function renderFill(){
+  if (!S.data || !Array.isArray(S.data.locations)) return;
+
+  var allRows = computeGroupFill();
+
+  // Підсумкові KPI рахуємо ДО застосування фільтрів — це показники по
+  // мережі, а не по фільтру (інакше плитки летіли б при кожному дроп-дауні).
+  var counts = {over: 0, empty: 0, ok: 0, exact: 0};
+  allRows.forEach(function(r){ counts[r.status]++; });
+  $('fillKpiOver').textContent  = counts.over;
+  $('fillKpiEmpty').textContent = counts.empty;
+  $('fillKpiOk').textContent    = counts.ok;
+  $('fillKpiExact').textContent = counts.exact;
+  $('fillSub').textContent      = '— ' + periodLabel();
+
+  _populateFillLocOptions(allRows);
+
+  // Фільтрація.
+  var filtered = allRows.filter(function(r){
+    if (S.fillFilterLoc && r.loc !== S.fillFilterLoc) return false;
+    if (S.fillFilterStatus && r.status !== S.fillFilterStatus) return false;
+    return true;
+  });
+  _sortFillRows(filtered);
+
+  $('fillCount').textContent = filtered.length + ' / ' + allRows.length;
+
+  var body = $('fillTblBody');
+  body.innerHTML = '';
+  if (!filtered.length){
+    var tr = document.createElement('tr');
+    tr.innerHTML = '<td colspan="5" style="text-align:center;padding:40px;color:var(--gray)">Нічого не знайдено</td>';
+    body.appendChild(tr);
+    return;
+  }
+
+  filtered.forEach(function(r){
+    var diffTxt;
+    if (r.status === 'over')       diffTxt = ' +' + r.diff;
+    else if (r.status === 'empty') diffTxt = ' '  + r.diff;   // diff < 0 уже з мінусом
+    else if (r.status === 'exact') diffTxt = '';
+    else /* ok */                  diffTxt = (r.diff < 0 ? ' ' : ' +') + r.diff;
+    var statusHtml = '<span class="fill-status ' + STATUS_CLASS[r.status] + '">' +
+                     STATUS_LABEL[r.status] + diffTxt + '</span>';
+    var tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td class="cat-name">' + escapeHtml(r.loc)   + '</td>' +
+      '<td>'                 + escapeHtml(r.group) + '</td>' +
+      '<td class="num">'     + r.count             + '</td>' +
+      '<td class="num">'     + r.norm              + '</td>' +
+      '<td>'                 + statusHtml          + '</td>';
+    body.appendChild(tr);
+  });
+}
+
+function exportFillCSV(){
+  var rows = computeGroupFill();
+  // Експортуємо ВСЕ що є на екрані: з тими самими фільтрами і сортуванням.
+  rows = rows.filter(function(r){
+    if (S.fillFilterLoc && r.loc !== S.fillFilterLoc) return false;
+    if (S.fillFilterStatus && r.status !== S.fillFilterStatus) return false;
+    return true;
+  });
+  _sortFillRows(rows);
+
+  function csvCell(v){
+    var s = String(v == null ? '' : v);
+    if (s.indexOf(';') !== -1 || s.indexOf('"') !== -1 || s.indexOf('\n') !== -1){
+      return '"' + s.replace(/"/g, '""') + '"';
+    }
+    return s;
+  }
+  var STATUS_PLAIN = {over: 'Перевантажено', empty: 'Недозаповнено',
+                      ok:   'В нормі',       exact: 'Точно'};
+  var lines = ['Локація;Група;Дітей;Норма;Статус;Відхилення'];
+  rows.forEach(function(r){
+    var dev = r.diff > 0 ? ('+' + r.diff) : String(r.diff);
+    lines.push([
+      csvCell(r.loc), csvCell(r.group), csvCell(r.count),
+      csvCell(r.norm), csvCell(STATUS_PLAIN[r.status]), csvCell(dev)
+    ].join(';'));
+  });
+
+  var d = new Date();
+  var yyyy = d.getFullYear();
+  var mm = String(d.getMonth() + 1).padStart(2, '0');
+  var dd = String(d.getDate()).padStart(2, '0');
+  var fname = 'zapovnennia_grup_' + yyyy + '-' + mm + '-' + dd + '.csv';
+
+  // BOM щоб Excel відкривав з UTF-8.
+  var blob = new Blob(['﻿' + lines.join('\n')], {type: 'text/csv;charset=utf-8;'});
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = fname;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+}
+
 function renderDetail(){
   if (!S.data || !S.data.locations) return;
   var L = visibleLocations().filter(function(x){ return x.loc === S.selectedLoc; })[0];
@@ -1311,8 +1584,10 @@ function renderMonthSel(){
 function applyMode(){
   $('overviewMode').classList.toggle('hidden', S.mode !== 'overview');
   $('detailMode').classList.toggle('hidden',   S.mode !== 'detail');
+  $('fillMode').classList.toggle('hidden',     S.mode !== 'fill');
   $('mtOverview').classList.toggle('active', S.mode === 'overview');
   $('mtDetail').classList.toggle('active',   S.mode === 'detail');
+  $('mtFill').classList.toggle('active',     S.mode === 'fill');
   // locSel показуємо тільки HR у Деталі. Director має фіксовану локацію — селектор прихований.
   if (isHR()){
     $('locSel').classList.toggle('hidden', S.mode !== 'detail');
@@ -1330,6 +1605,8 @@ function rerender(){
     renderLeaders();
     renderRedZones();
     renderOverviewTable();
+  } else if (S.mode === 'fill'){
+    renderFill();
   } else {
     renderDetail();
   }
@@ -1415,6 +1692,23 @@ function bindEventListeners(){
     applyMode();
     rerender();
   });
+  $('mtFill').addEventListener('click', function(){
+    if (S.mode === 'fill') return;
+    S.mode = 'fill';
+    applyMode();
+    rerender();
+  });
+
+  // Фільтри вкладки "Заповнення груп" — re-render самої вкладки, без re-fetch.
+  $('fillLocSel').addEventListener('change', function(e){
+    S.fillFilterLoc = e.target.value;
+    renderFill();
+  });
+  $('fillStatusSel').addEventListener('change', function(e){
+    S.fillFilterStatus = e.target.value;
+    renderFill();
+  });
+  $('fillExportBtn').addEventListener('click', exportFillCSV);
 
   // Перемикання типу (Садочки / Школи) — фільтр для всього Огляду.
   $('typeTabs').addEventListener('click', function(e){
