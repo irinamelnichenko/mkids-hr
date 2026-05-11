@@ -936,6 +936,8 @@ function showToast(msg, type, ms){
 // кутку показує прогрес. Після успіху перезавантажуємо payments-кеш
 // і ререндеримо вкладку Заповнення груп.
 var _syncInFlight = false;
+var SYNC_TIMEOUT_MS = 5 * 60 * 1000;  // 5 хв — Apps Script execution limit
+
 async function doSyncPayments(){
   if (_syncInFlight) return;
   _syncInFlight = true;
@@ -943,16 +945,27 @@ async function doSyncPayments(){
   var origText = btn ? btn.textContent : '';
   if (btn){
     btn.disabled = true;
-    btn.textContent = '⏳ Синхронізація триває…';
+    btn.textContent = '⏳ Триває синхронізація…';
   }
   showToast('Синхронізація з Пейментами… (зазвичай 1–5 хв)', 'info', 60 * 60 * 1000);
+
+  // Явний 5-хв timeout. Без AbortController fetch може висіти нескінченно
+  // при мережевих збоях — а тут довгий скрипт, користувач має знати
+  // чи помилка це чи просто триває.
+  var ctrl = (typeof AbortController === 'function') ? new AbortController() : null;
+  var timer = setTimeout(function(){
+    if (ctrl) ctrl.abort();
+  }, SYNC_TIMEOUT_MS);
+
   try {
     var r = await fetch(CFG.SCRIPT_URL + '?action=syncPayments', {
       method: 'POST',
       redirect: 'follow',
       headers: {'Content-Type': 'text/plain;charset=utf-8'},
-      body: JSON.stringify({action: 'syncPayments'})
+      body: JSON.stringify({action: 'syncPayments'}),
+      signal: ctrl ? ctrl.signal : undefined
     });
+    clearTimeout(timer);
     if (!r.ok) throw new Error('HTTP ' + r.status);
     var json = await r.json();
     if (!json.ok) throw new Error(json.error || 'Sync failed');
@@ -968,13 +981,20 @@ async function doSyncPayments(){
     var rows = json.rowsCount || 0;
     var dur  = json.durationSec ? (' за ' + json.durationSec + 'с') : '';
     var errN = (json.errors || []).length;
-    var msg  = '✅ Синхронізовано: ' + rows + ' рядків з Пейментів' + dur;
+    var hhmm = new Date().toLocaleTimeString('uk-UA', {hour:'2-digit', minute:'2-digit'});
+    var msg  = '✅ Синхронізовано: ' + rows + ' рядків. Час: ' + hhmm + dur;
     if (errN > 0) msg += ' (помилок по локаціях: ' + errN + ' — деталі в Apps Script logs)';
     showToast(msg, errN > 0 ? 'info' : 'ok', 6000);
   } catch(e){
-    var em = String(e && e.message || e);
+    clearTimeout(timer);
+    var em;
+    if (e && e.name === 'AbortError'){
+      em = 'таймаут 5 хв — скрипт може досі працювати, перевір лог Apps Script';
+    } else {
+      em = String(e && e.message || e);
+    }
     console.error('[syncPayments]', em);
-    showToast('❌ Помилка синхронізації: ' + em, 'err', 8000);
+    showToast('❌ Помилка: ' + em, 'err', 9000);
   } finally {
     _syncInFlight = false;
     if (btn){ btn.disabled = false; btn.textContent = origText; }

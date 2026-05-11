@@ -4069,7 +4069,7 @@ function syncPayments() {
   if (typeof aggregatePayments !== 'function') {
     return {
       ok: false,
-      error: 'Скрипт синхронізації не знайдено. Зверніться до розробника який налаштовував скрипт.'
+      error: 'Функція синхронізації не знайдена в Apps Script. Перевірте чи функція syncPayments() (або подібна) існує в crm_script.js і чи вона задеплоєна.'
     };
   }
   try {
