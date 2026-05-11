@@ -187,6 +187,7 @@ function doGet(e) {
     else if (action === 'getUsers')                  result = getUsers();
     else if (action === 'getGroupNorms')             result = getGroupNorms();
     else if (action === 'getActivitiesCatalog')      result = getActivitiesCatalog();
+    else if (action === 'getAttendanceMarks')         result = getAttendanceMarks(e.parameter || {});
     else                                             result = {ok:false, error:'Unknown action: ' + action};
     return jsonOut(result);
   } catch(err) {
@@ -216,6 +217,8 @@ function doPost(e) {
     else if (body.action === 'addActivity')               result = addActivity(body.data || {});
     else if (body.action === 'updateActivity')            result = updateActivity(body.id || 0, body.data || {});
     else if (body.action === 'deleteActivity')            result = deleteActivity(body.id || 0);
+    else if (body.action === 'addAttendanceMark')         result = addAttendanceMark(body.data || {});
+    else if (body.action === 'removeAttendanceMark')      result = removeAttendanceMark(body.id || 0);
     else result = {ok:false, error:'Unknown action'};
     return jsonOut(result);
   } catch(err) {
@@ -4212,4 +4215,132 @@ function updateActivity(id, data){
 // ручним у Sheets, щоб не втрачати історію.
 function deleteActivity(id){
   return updateActivity(id, {active: false});
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ATTENDANCE MARKS — лист "Додаткові_Відвідуваність" у CONFIG_SHEET_ID.
+// Колонки:
+//   A=id  B=Дата (YYYY-MM-DD)  C=Локація  D=Група  E=Дитина
+//   F=id_заняття  G=Назва_заняття  H=Ціна  I=Відмітив  J=Час_відмітки
+// Один рядок = одне відвідування однією дитиною одного заняття.
+// ═══════════════════════════════════════════════════════════════════════════
+
+var ATTENDANCE_SHEET_NAME = 'Додаткові_Відвідуваність';
+var ATTENDANCE_HEADER = [
+  'id','Дата','Локація','Група','Дитина',
+  'id_заняття','Назва_заняття','Ціна','Відмітив','Час_відмітки'
+];
+
+function _getAttendanceSheet(createIfMissing){
+  var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var sh = ss.getSheetByName(ATTENDANCE_SHEET_NAME);
+  if (!sh && createIfMissing){
+    sh = ss.insertSheet(ATTENDANCE_SHEET_NAME);
+    sh.getRange(1, 1, 1, ATTENDANCE_HEADER.length).setValues([ATTENDANCE_HEADER]);
+    sh.setFrozenRows(1);
+  }
+  if (!sh) throw new Error('Sheet "' + ATTENDANCE_SHEET_NAME + '" не знайдено. Створіть лист з колонками: ' + ATTENDANCE_HEADER.join(', '));
+  return sh;
+}
+
+function _parseAttendanceRow(row){
+  var d = row[1];
+  var dateStr;
+  if (d instanceof Date){
+    var y = d.getFullYear(), m = d.getMonth() + 1, dd = d.getDate();
+    dateStr = y + '-' + (m < 10 ? '0' + m : m) + '-' + (dd < 10 ? '0' + dd : dd);
+  } else {
+    dateStr = String(d || '').trim();
+  }
+  return {
+    id:           Number(row[0]) || 0,
+    date:         dateStr,
+    loc:          String(row[2] || '').trim(),
+    group:        String(row[3] || '').trim(),
+    child:        String(row[4] || '').trim(),
+    activityId:   Number(row[5]) || 0,
+    activityName: String(row[6] || '').trim(),
+    price:        Number(row[7]) || 0,
+    markedBy:     String(row[8] || '').trim(),
+    markedAt:     row[9] instanceof Date ? row[9].toISOString() : String(row[9] || '')
+  };
+}
+
+// Filters: {date, loc, group, child, activityId} — кожен опціональний.
+function getAttendanceMarks(filters){
+  try {
+    filters = filters || {};
+    var sh = _getAttendanceSheet(false);
+    var data = sh.getDataRange().getValues();
+    if (data.length < 2) return {ok: true, items: []};
+    var items = [];
+    for (var i = 1; i < data.length; i++){
+      if (!data[i][0] && !data[i][4]) continue;  // skip empty rows
+      var m = _parseAttendanceRow(data[i]);
+      if (filters.date  && m.date !== String(filters.date)) continue;
+      if (filters.loc   && m.loc !== String(filters.loc)) continue;
+      if (filters.group && m.group !== String(filters.group)) continue;
+      if (filters.child && m.child !== String(filters.child)) continue;
+      if (filters.activityId && m.activityId !== Number(filters.activityId)) continue;
+      items.push(m);
+    }
+    return {ok: true, items: items};
+  } catch(e){
+    return {ok: false, error: String(e && e.message || e)};
+  }
+}
+
+function _nextAttendanceId(sh){
+  var data = sh.getDataRange().getValues();
+  var max = 0;
+  for (var i = 1; i < data.length; i++){
+    var n = Number(data[i][0]) || 0;
+    if (n > max) max = n;
+  }
+  return max + 1;
+}
+
+// data: {date, loc, group, child, activityId, activityName, price, markedBy}
+function addAttendanceMark(data){
+  try {
+    var sh = _getAttendanceSheet(true);
+    var id = _nextAttendanceId(sh);
+    var row = [
+      id,
+      String(data.date  || '').trim(),
+      String(data.loc   || '').trim(),
+      String(data.group || '').trim(),
+      String(data.child || '').trim(),
+      Number(data.activityId) || 0,
+      String(data.activityName || '').trim(),
+      Number(data.price) || 0,
+      String(data.markedBy || '').trim(),
+      new Date()
+    ];
+    if (!row[1] || !row[4] || !row[5]){
+      return {ok: false, error: 'Поля Дата / Дитина / id_заняття обовʼязкові'};
+    }
+    sh.appendRow(row);
+    return {ok: true, id: id};
+  } catch(e){
+    return {ok: false, error: String(e && e.message || e)};
+  }
+}
+
+function removeAttendanceMark(id){
+  try {
+    var nid = Number(id);
+    if (!nid) return {ok: false, error: 'Missing id'};
+    var sh = _getAttendanceSheet(false);
+    var data = sh.getDataRange().getValues();
+    for (var i = 1; i < data.length; i++){
+      if (Number(data[i][0]) === nid){
+        sh.deleteRow(i + 1);
+        return {ok: true};
+      }
+    }
+    return {ok: false, error: 'Відмітку не знайдено'};
+  } catch(e){
+    return {ok: false, error: String(e && e.message || e)};
+  }
 }
