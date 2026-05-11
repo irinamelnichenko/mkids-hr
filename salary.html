@@ -124,6 +124,10 @@ select{font-family:inherit}
 /* ── CLICKABLE NAME у Salary-таблиці ─────────────────────────── */
 .emp-link{cursor:pointer;transition:background .15s, color .15s}
 .emp-link:hover{background:#eef2f6;color:var(--dark)}
+.emp-missing{cursor:help;color:var(--dark2);transition:background .15s}
+.emp-missing:hover{background:#fef5e0}
+.emp-missing-icon{color:#f59e0b;font-size:12px;margin-left:5px;opacity:.75;
+  vertical-align:middle}
 
 /* ── EMPLOYEE MODAL ──────────────────────────────────────────── */
 .emp-modal{position:fixed;inset:0;z-index:1000;display:flex;
@@ -1019,6 +1023,15 @@ function findHrEmp(rawName){
   return null;
 }
 
+// Чи є цей ПІБ у HR-базі. Якщо S.hrEmpsByName ще не побудовано
+// (наприклад fetch впав) — повертаємо true як safe default, щоб не
+// блокувати відкриття картки фейковим ⚠️. Реальна перевірка
+// все одно повторно зробиться у openEmpCardFromSalary.
+function _rowHasHRData(rawName){
+  if (!S.hrEmpsByName) return true;
+  return findHrEmp(rawName) !== null;
+}
+
 function _empInitials(e){
   var f = (e.first || '')[0] || '';
   var l = (e.last  || '')[0] || '';
@@ -1210,12 +1223,23 @@ document.addEventListener('click', function(e){
     if (tab) switchEmpTab(tab);
     return;
   }
-  // Клік по ПІБ у Salary-таблиці.
+  // Клік по ПІБ у Salary-таблиці — є в HR.
   var nameEl = t.closest && t.closest('.emp-link');
   if (nameEl){
     var nm = nameEl.dataset.empName || '';
     var lc = nameEl.dataset.empLoc  || '';
     if (nm) openEmpCardFromSalary(nm, lc);
+    return;
+  }
+  // Клік по ПІБ що НЕ існує в HR-базі — toast-підказка для CFO.
+  var missingEl = t.closest && t.closest('.emp-missing');
+  if (missingEl){
+    showSalaryToast(
+      '⚠️ Цього співробітника немає в HR-базі. Попросіть HR-менеджера або директора локації додати запис.',
+      'info',
+      6000
+    );
+    return;
   }
 });
 
@@ -1423,11 +1447,26 @@ function renderTable(rows){
       // Поточна локація для відкриття картки. У detail-режимі вона
       // одна на всю таблицю — беремо з S.data.
       var curLoc = (S.data && S.data.loc) ? S.data.loc : CFG.LOC;
-      var nameAttr = 'class="cat-name emp-link" title="Відкрити картку"' +
-                     ' data-emp-name="' + escapeHtml(r.name) + '"' +
-                     ' data-emp-loc="'  + escapeHtml(curLoc) + '"';
+      var hasHR  = _rowHasHRData(r.name);
+      var nameCell;
+      if (hasHR){
+        nameCell =
+          '<td class="cat-name emp-link" title="Відкрити картку"' +
+            ' data-emp-name="' + escapeHtml(r.name) + '"' +
+            ' data-emp-loc="'  + escapeHtml(curLoc)  + '">' +
+            escapeHtml(r.name) +
+          '</td>';
+      } else {
+        nameCell =
+          '<td class="cat-name emp-missing"' +
+            ' title="Немає в HR-базі"' +
+            ' data-emp-name="' + escapeHtml(r.name) + '">' +
+            escapeHtml(r.name) +
+            ' <span class="emp-missing-icon" aria-hidden="true">⚠️</span>' +
+          '</td>';
+      }
       tr.innerHTML =
-        '<td ' + nameAttr + '>' + escapeHtml(r.name) + '</td>' +
+        nameCell +
         '<td class="num">' + (r.budget > 0 ? fmtUah(r.budget) : '<span class="muted">—</span>') + '</td>' +
         '<td class="num">' + fmtUah(r.fact) + '</td>' +
         '<td class="num ' + diffCls + '">' + diffTxt + '</td>';
@@ -1702,6 +1741,11 @@ async function loadDetail(force){
   try {
     var data = await fetchData(force);
     S.data = data;
+    // Заздалегідь тягнемо HR-список (паралельно з рендером) — щоб
+    // знати hasHRData для кожного рядка. Кеш 5 хв, при cache hit
+    // майже миттєво.
+    try { await ensureHrEmpsLoaded(false); }
+    catch(e){ console.warn('[hr] silent fetch fail:', e && e.message || e); }
     $('loadBox').classList.add('hidden');
     $('content').classList.remove('hidden');
     applyMode();
