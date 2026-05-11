@@ -121,6 +121,76 @@ select{font-family:inherit}
 .err{background:#fdf2f2;border:1px solid #fca5a5;color:var(--red);
   padding:14px 18px;border-radius:var(--r);margin-bottom:18px;font-weight:600}
 
+/* ── CLICKABLE NAME у Salary-таблиці ─────────────────────────── */
+.emp-link{cursor:pointer;transition:background .15s, color .15s}
+.emp-link:hover{background:#eef2f6;color:var(--dark)}
+
+/* ── EMPLOYEE MODAL ──────────────────────────────────────────── */
+.emp-modal{position:fixed;inset:0;z-index:1000;display:flex;
+  align-items:center;justify-content:center;padding:20px}
+.emp-modal.hidden{display:none}
+.emp-modal-overlay{position:absolute;inset:0;background:rgba(15,23,42,.55);
+  backdrop-filter:blur(2px)}
+.emp-modal-card{position:relative;background:#fff;border-radius:14px;
+  box-shadow:0 20px 60px rgba(0,0,0,.25);width:100%;max-width:720px;
+  max-height:90vh;display:flex;flex-direction:column;overflow:hidden}
+.emp-modal-close{position:absolute;top:12px;right:12px;width:32px;height:32px;
+  border:none;border-radius:8px;background:transparent;cursor:pointer;
+  font-size:18px;color:var(--gray);transition:background .15s}
+.emp-modal-close:hover{background:#f4f7fa;color:var(--dark)}
+.emp-modal-hd{display:flex;gap:14px;align-items:center;padding:22px 24px 18px;
+  border-bottom:1px solid #e8ecf0}
+.emp-modal-av{width:54px;height:54px;border-radius:50%;
+  background:var(--green);color:#fff;display:flex;align-items:center;
+  justify-content:center;font-weight:800;font-size:18px;flex-shrink:0}
+.emp-modal-name{font-size:18px;font-weight:800;color:var(--dark);line-height:1.2}
+.emp-modal-meta{font-size:13px;color:var(--gray);margin-top:4px}
+.emp-modal-tabs{display:flex;gap:4px;padding:0 24px;border-bottom:1px solid #e8ecf0;
+  flex-wrap:wrap}
+.emp-tab{background:transparent;border:none;padding:12px 14px;font-size:13px;
+  font-weight:600;color:var(--gray);cursor:pointer;border-bottom:2px solid transparent;
+  margin-bottom:-1px}
+.emp-tab:hover{color:var(--dark2)}
+.emp-tab.active{color:var(--green);border-bottom-color:var(--green)}
+.emp-modal-body{padding:20px 24px;overflow-y:auto;flex:1}
+.emp-pane.hidden{display:none}
+.emp-info-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
+.emp-info-item{padding:10px 0;border-bottom:1px solid #f0f4f8}
+.emp-info-item label{display:block;font-size:11px;font-weight:700;color:var(--gray);
+  text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
+.emp-info-item .v{font-size:14px;color:var(--dark2);font-weight:600}
+.sal-summary{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px}
+.sal-card{background:#f8fafc;border-radius:10px;padding:14px;text-align:center}
+.sal-card .lbl{font-size:11px;font-weight:700;color:var(--gray);
+  text-transform:uppercase;letter-spacing:.5px}
+.sal-card .val{font-size:18px;font-weight:800;color:var(--dark);margin-top:6px;
+  font-variant-numeric:tabular-nums}
+.sal-card.budget .val{color:var(--dark2)}
+.sal-card.fact   .val{color:#3b82f6}
+.sal-card.debt.pos .val{color:#10b981}
+.sal-card.debt.neg .val{color:#ef4444}
+.sal-history{margin-top:6px}
+.sal-history-hd{font-size:12px;font-weight:700;color:var(--gray);
+  text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px}
+.sal-row{display:flex;justify-content:space-between;align-items:center;
+  padding:8px 0;border-bottom:1px solid #f0f4f8;font-size:14px}
+.sal-row:last-child{border-bottom:none}
+.sal-row .m{color:var(--dark2);font-weight:600}
+.sal-row .v{font-variant-numeric:tabular-nums;font-weight:700}
+@media(max-width:540px){
+  .emp-modal{padding:0;align-items:flex-end}
+  .emp-modal-card{max-height:95vh;border-radius:14px 14px 0 0;max-width:100%}
+  .sal-summary{grid-template-columns:1fr}
+}
+
+/* TOAST */
+.toast{position:fixed;left:50%;bottom:30px;transform:translateX(-50%);
+  background:#1f2937;color:#fff;padding:12px 22px;border-radius:10px;
+  font-size:14px;font-weight:600;box-shadow:0 6px 24px rgba(0,0,0,.18);
+  z-index:1100;max-width:90vw}
+.toast.toast-ok  {background:#10b981}
+.toast.toast-err {background:#ef4444}
+
 @media(max-width:640px){
   .wrap{padding:16px 12px 40px}
   .hd h1{font-size:20px}
@@ -398,6 +468,32 @@ select{font-family:inherit}
   </main>
 </div>
 
+<!-- ── EMPLOYEE CARD MODAL (відкривається з Salary таблиці) ─────────── -->
+<div id="empModal" class="emp-modal hidden" aria-hidden="true">
+  <div class="emp-modal-overlay" data-close="1"></div>
+  <div class="emp-modal-card" role="dialog" aria-modal="true">
+    <button class="emp-modal-close" data-close="1" aria-label="Закрити">✕</button>
+    <div class="emp-modal-hd">
+      <div class="emp-modal-av" id="empModalAv">—</div>
+      <div style="flex:1;min-width:0">
+        <div class="emp-modal-name" id="empModalName">—</div>
+        <div class="emp-modal-meta" id="empModalMeta">—</div>
+      </div>
+    </div>
+    <div class="emp-modal-tabs" id="empModalTabs">
+      <button class="emp-tab active" data-tab="info">📋 Інфо</button>
+      <button class="emp-tab" data-tab="salary">💰 ЗП по локації</button>
+    </div>
+    <div class="emp-modal-body">
+      <div id="empPaneInfo"   class="emp-pane"></div>
+      <div id="empPaneSalary" class="emp-pane hidden"></div>
+    </div>
+  </div>
+</div>
+
+<!-- toast (sync уже використовує цей же елемент якщо є; тут окремий) -->
+<div id="salaryToast" class="toast hidden"></div>
+
 <script>
 'use strict';
 
@@ -409,7 +505,14 @@ var CFG = {
   CACHE_KEY:  'salary_detail_cache_v1',
   CACHE_TTL:  5 * 60 * 1000,
   OVERVIEW_CACHE_KEY: 'salary_overview_cache_v1',
-  OVERVIEW_CACHE_TTL: 5 * 60 * 1000
+  OVERVIEW_CACHE_TTL: 5 * 60 * 1000,
+  // HR Sheets — той самий лист що index.html (fetchEmps). Кеш ключ ділимо
+  // з ним щоб не дублювати запит.
+  HR_API_KEY:    'AIzaSyBXY-1iAKeBdyWc7gbtNOe66yBa5-Mcmlc',
+  HR_SHEET_ID:   '1KeSelcGyp8ijUQOmzUjFlX78TOScMWAFm7Hjf33Doyo',
+  HR_RANGE:      "'2025-2026'!A2:R3000",
+  HR_CACHE_KEY:  'hr_mkids_cache_v6',
+  HR_CACHE_TTL:  5 * 60 * 1000
 };
 
 var S = {
@@ -421,7 +524,16 @@ var S = {
   typeFilter: '',
   month:   new Date().getMonth() + 1,
   quarter: Math.ceil((new Date().getMonth() + 1) / 3),
-  period: 'month'
+  period: 'month',
+  // HR-список + індекс по нормалізованому ПІБ ("прізвище ім'я" lowercase).
+  // Лази-завантажуємо при першому кліку на ПІБ у Salary-таблиці.
+  hrEmps: null,
+  hrEmpsByName: null,
+  // Position збереження при відкритті модалки картки.
+  modalScrollY: 0,
+  // Поточний emp у модалці — для перемикання вкладок.
+  modalEmp: null,
+  modalLoc: ''
 };
 
 // ── HELPERS ─────────────────────────────────
@@ -812,6 +924,301 @@ function getMonthValues(item, m){
   };
 }
 
+// ── EMPLOYEE CARD MODAL ───────────────────────────────────────────
+// При кліку на ПІБ у Salary-таблиці підіймаємо модалку з двома
+// вкладками: 📋 Інфо (HR-дані з листа співробітників) і 💰 ЗП по
+// локації (зведення з S.data за поточну локацію).
+var _salaryToastTimer = null;
+function showSalaryToast(msg, type, ms){
+  var box = $('salaryToast');
+  if (!box) return;
+  if (_salaryToastTimer) clearTimeout(_salaryToastTimer);
+  box.className = 'toast toast-' + (type || 'info');
+  box.textContent = msg;
+  box.classList.remove('hidden');
+  _salaryToastTimer = setTimeout(function(){
+    box.classList.add('hidden');
+    _salaryToastTimer = null;
+  }, ms || 4000);
+}
+
+function _normName(s){ return String(s||'').trim().toLowerCase().replace(/\s+/g, ' '); }
+
+async function ensureHrEmpsLoaded(force){
+  if (S.hrEmps && !force) return S.hrEmps;
+  // Кеш з index.html (shared key) — щоб не дублювати fetch.
+  if (!force){
+    try {
+      var raw = localStorage.getItem(CFG.HR_CACHE_KEY);
+      if (raw){
+        var c = JSON.parse(raw);
+        if (c && c.data && c.ts && Date.now() - c.ts < CFG.HR_CACHE_TTL){
+          _indexHrEmps(c.data);
+          return S.hrEmps;
+        }
+      }
+    } catch(e){}
+  }
+  var url = 'https://sheets.googleapis.com/v4/spreadsheets/' + CFG.HR_SHEET_ID +
+            '/values/' + encodeURIComponent(CFG.HR_RANGE) +
+            '?key=' + CFG.HR_API_KEY;
+  var r = await fetch(url);
+  if (!r.ok) throw new Error('HR Sheets HTTP ' + r.status);
+  var j = await r.json();
+  var emps = (j.values || []).filter(function(row){
+    return row.some(function(c){ return c && String(c).trim(); });
+  }).map(function(row, i){
+    return {
+      _rowIdx: i,
+      dir:   (row[0]  || '').trim(),
+      typ:   (row[1]  || '').trim(),
+      loc:   (row[2]  || '').trim(),
+      grp:   (row[3]  || '').trim(),
+      last:  (row[4]  || '').trim(),
+      first: (row[5]  || '').trim(),
+      phone: (row[6]  || '').trim(),
+      pos:   (row[7]  || '').trim(),
+      stat:  (row[8]  || '').trim(),
+      bdate: (row[11] || '').trim(),
+      wday:  (row[12] || '').trim(),
+      hired: (row[13] || '').trim(),
+      fired: (row[14] || '').trim(),
+      email: (row[17] || '').trim()
+    };
+  }).filter(function(e){ return e.last || e.first; });
+  try { localStorage.setItem(CFG.HR_CACHE_KEY, JSON.stringify({data: emps, ts: Date.now()})); } catch(e){}
+  _indexHrEmps(emps);
+  return S.hrEmps;
+}
+
+function _indexHrEmps(emps){
+  S.hrEmps = emps;
+  S.hrEmpsByName = {};
+  emps.forEach(function(e){
+    // Ключі: "last first" і "first last" — Salary-листи інколи
+    // подають у різному порядку.
+    var k1 = _normName((e.last || '') + ' ' + (e.first || ''));
+    var k2 = _normName((e.first || '') + ' ' + (e.last || ''));
+    if (k1) S.hrEmpsByName[k1] = e;
+    if (k2 && !S.hrEmpsByName[k2]) S.hrEmpsByName[k2] = e;
+  });
+}
+
+function findHrEmp(rawName){
+  if (!S.hrEmpsByName) return null;
+  var key = _normName(rawName);
+  if (!key) return null;
+  if (S.hrEmpsByName[key]) return S.hrEmpsByName[key];
+  // Fallback: тільки перші 2 слова (інколи в Salary вписують посаду
+  // після ПІБ — "Гончарова Алла Вихователь"). Пробуємо префікс.
+  var parts = key.split(' ');
+  if (parts.length > 2){
+    var short = parts.slice(0, 2).join(' ');
+    if (S.hrEmpsByName[short]) return S.hrEmpsByName[short];
+  }
+  return null;
+}
+
+function _empInitials(e){
+  var f = (e.first || '')[0] || '';
+  var l = (e.last  || '')[0] || '';
+  return (f + l).toUpperCase() || '👤';
+}
+function _empFullName(e){ return ((e.last || '') + ' ' + (e.first || '')).trim(); }
+
+// ── ВКЛАДКИ В МОДАЛЦІ ─────────────────────────────────────────────
+function _renderEmpInfoPane(emp){
+  function ii(label, val){
+    return '<div class="emp-info-item"><label>' + label + '</label>' +
+           '<div class="v">' + (val ? escapeHtml(val) : '<span class="muted">—</span>') + '</div></div>';
+  }
+  var html = '<div class="emp-info-grid">' +
+    ii('Прізвище',     emp.last) +
+    ii("Ім'я",         emp.first) +
+    ii('Посада',       emp.pos) +
+    ii('Локація',      emp.loc) +
+    ii('Напрямок',     emp.dir) +
+    ii('Тип',          emp.typ) +
+    ii('Група',        emp.grp) +
+    ii('Телефон',      emp.phone) +
+    ii('Email',        emp.email) +
+    ii('Статус',       emp.stat) +
+    ii('Перший робочий день', emp.wday) +
+    ii('Дата працевлаштування', emp.hired) +
+    (emp.fired ? ii('Дата звільнення', emp.fired) : '') +
+  '</div>';
+  $('empPaneInfo').innerHTML = html;
+}
+
+// Знаходить salary-рядок у S.data.rows за нормалізованим ПІБ.
+function _findSalaryRowByName(rawName){
+  if (!S.data || !Array.isArray(S.data.rows)) return null;
+  var target = _normName(rawName);
+  for (var i = 0; i < S.data.rows.length; i++){
+    var r = S.data.rows[i];
+    if (r.isHeader) continue;
+    if (_normName(r.name) === target) return r;
+  }
+  // Префіксна спроба
+  for (var j = 0; j < S.data.rows.length; j++){
+    var r2 = S.data.rows[j];
+    if (r2.isHeader) continue;
+    if (_normName(r2.name).indexOf(target) === 0) return r2;
+  }
+  return null;
+}
+
+function _renderEmpSalaryPane(rawName, loc){
+  var row = _findSalaryRowByName(rawName);
+  var pane = $('empPaneSalary');
+  if (!row){
+    pane.innerHTML = '<div class="muted" style="padding:14px;text-align:center">' +
+      'У зведенні Salary для локації <strong>' + escapeHtml(loc) + '</strong> ' +
+      'дані для цього співробітника не знайдено.</div>';
+    return;
+  }
+  var curM = S.month;
+  var cur  = getMonthValues(row, curM);
+  var diff = cur.budget - cur.fact;
+  var diffCls = diff > 0 ? 'pos' : (diff < 0 ? 'neg' : 'pos');
+  var diffTxt = diff > 0 ? '+' + fmtUah(diff) + ' ₴'
+              : diff < 0 ? fmtUah(diff) + ' ₴'
+              : '0 ₴';
+  var monthLbl = CFG.MONTHS_DISP[curM - 1] + ' ' + CFG.YEAR;
+
+  var html = '';
+  html += '<div style="margin-bottom:14px;font-size:13px;color:var(--gray)">';
+  html +=   '📍 <strong style="color:var(--dark2)">' + escapeHtml(loc) + '</strong> — ' + monthLbl;
+  html += '</div>';
+
+  html += '<div class="sal-summary">';
+  html +=   '<div class="sal-card budget"><div class="lbl">Бюджет</div><div class="val">' + fmtUah(cur.budget) + ' ₴</div></div>';
+  html +=   '<div class="sal-card fact"  ><div class="lbl">Факт</div  ><div class="val">' + fmtUah(cur.fact)   + ' ₴</div></div>';
+  html +=   '<div class="sal-card debt ' + diffCls + '"><div class="lbl">Заборгованість</div><div class="val">' + diffTxt + '</div></div>';
+  html += '</div>';
+
+  // Історія: 12 місяців року, в порядку від поточного назад.
+  html += '<div class="sal-history">';
+  html +=   '<div class="sal-history-hd">📅 Історія виплат ' + CFG.YEAR + '</div>';
+  var order = [];
+  for (var m = curM; m >= 1; m--) order.push(m);
+  for (var m2 = 12; m2 > curM; m2--) order.push(m2);
+  var anyData = false;
+  order.forEach(function(m){
+    var v = getMonthValues(row, m);
+    if (v.fact === 0 && v.budget === 0) return;
+    anyData = true;
+    var d = v.budget - v.fact;
+    var color = d > 0 ? '#10b981' : (d < 0 ? '#ef4444' : 'var(--gray)');
+    html += '<div class="sal-row">' +
+              '<span class="m">' + CFG.MONTHS_DISP[m - 1] + ' ' + CFG.YEAR + '</span>' +
+              '<span class="v" style="color:' + color + '">' +
+                'факт ' + fmtUah(v.fact) + ' / бюджет ' + fmtUah(v.budget) +
+              '</span>' +
+            '</div>';
+  });
+  if (!anyData){
+    html += '<div class="muted" style="padding:10px 0;text-align:center">Виплат за ' + CFG.YEAR + ' не зафіксовано</div>';
+  }
+  html += '</div>';
+  pane.innerHTML = html;
+}
+
+function switchEmpTab(tab){
+  var btns = document.querySelectorAll('.emp-tab');
+  for (var i = 0; i < btns.length; i++){
+    btns[i].classList.toggle('active', btns[i].dataset.tab === tab);
+  }
+  $('empPaneInfo')  .classList.toggle('hidden', tab !== 'info');
+  $('empPaneSalary').classList.toggle('hidden', tab !== 'salary');
+}
+
+async function openEmpCardFromSalary(rawName, loc){
+  if (!rawName) return;
+  try {
+    await ensureHrEmpsLoaded(false);
+  } catch(e){
+    console.error('[hr-emps]', e);
+    showSalaryToast('❌ Не вдалося завантажити HR-базу: ' + (e.message || e), 'err', 6000);
+    return;
+  }
+  var emp = findHrEmp(rawName);
+  if (!emp){
+    showSalaryToast('Співробітник "' + rawName + '" не знайдений у HR-базі', 'err', 4500);
+    return;
+  }
+
+  // COO + Менеджмент → ховаємо salary-вкладку (за матрицею прав).
+  var role = String(S.user && S.user.role || '').toLowerCase();
+  var hideSalaryTab = (role === 'coo' && String(emp.dir || '').trim() === 'Менеджмент');
+  var salaryTabBtn = document.querySelector('.emp-tab[data-tab="salary"]');
+  if (salaryTabBtn) salaryTabBtn.style.display = hideSalaryTab ? 'none' : '';
+
+  // Збережемо скрол перед блокуванням body.
+  S.modalScrollY = window.scrollY || document.documentElement.scrollTop || 0;
+  S.modalEmp = emp;
+  S.modalLoc = loc || '';
+
+  // Шапка
+  $('empModalAv').textContent   = _empInitials(emp);
+  $('empModalName').textContent = _empFullName(emp);
+  var metaBits = [];
+  if (emp.pos) metaBits.push(emp.pos);
+  if (loc)     metaBits.push('📍 ' + loc);
+  else if (emp.loc) metaBits.push('📍 ' + emp.loc);
+  if (emp.dir) metaBits.push(emp.dir);
+  $('empModalMeta').textContent = metaBits.join(' · ');
+
+  // Контент вкладок
+  _renderEmpInfoPane(emp);
+  _renderEmpSalaryPane(rawName, loc || emp.loc);
+  switchEmpTab(hideSalaryTab ? 'info' : 'info');
+
+  // Показуємо
+  var modal = $('empModal');
+  modal.classList.remove('hidden');
+  modal.setAttribute('aria-hidden', 'false');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeEmpCard(){
+  var modal = $('empModal');
+  modal.classList.add('hidden');
+  modal.setAttribute('aria-hidden', 'true');
+  document.body.style.overflow = '';
+  // Повертаємо скрол назад — щоб користувач не "стрибав" з позиції.
+  window.scrollTo(0, S.modalScrollY || 0);
+  S.modalEmp = null;
+  S.modalLoc = '';
+}
+
+// Обробники: Esc, клік на overlay/✕, перемикання вкладок.
+document.addEventListener('keydown', function(e){
+  if (e.key === 'Escape' && !$('empModal').classList.contains('hidden')){
+    closeEmpCard();
+  }
+});
+document.addEventListener('click', function(e){
+  var t = e.target;
+  if (!t) return;
+  if (t.dataset && t.dataset.close === '1'){
+    closeEmpCard();
+    return;
+  }
+  if (t.classList && t.classList.contains('emp-tab')){
+    var tab = t.dataset.tab;
+    if (tab) switchEmpTab(tab);
+    return;
+  }
+  // Клік по ПІБ у Salary-таблиці.
+  var nameEl = t.closest && t.closest('.emp-link');
+  if (nameEl){
+    var nm = nameEl.dataset.empName || '';
+    var lc = nameEl.dataset.empLoc  || '';
+    if (nm) openEmpCardFromSalary(nm, lc);
+  }
+});
+
 function monthsLivedInYear(){
   var now = new Date();
   if (CFG.YEAR > now.getFullYear()) return 0;
@@ -1013,8 +1420,14 @@ function renderTable(rows){
       tr.innerHTML =
         '<td class="cat-name" colspan="4">' + escapeHtml(r.name) + '</td>';
     } else {
+      // Поточна локація для відкриття картки. У detail-режимі вона
+      // одна на всю таблицю — беремо з S.data.
+      var curLoc = (S.data && S.data.loc) ? S.data.loc : CFG.LOC;
+      var nameAttr = 'class="cat-name emp-link" title="Відкрити картку"' +
+                     ' data-emp-name="' + escapeHtml(r.name) + '"' +
+                     ' data-emp-loc="'  + escapeHtml(curLoc) + '"';
       tr.innerHTML =
-        '<td class="cat-name">' + escapeHtml(r.name) + '</td>' +
+        '<td ' + nameAttr + '>' + escapeHtml(r.name) + '</td>' +
         '<td class="num">' + (r.budget > 0 ? fmtUah(r.budget) : '<span class="muted">—</span>') + '</td>' +
         '<td class="num">' + fmtUah(r.fact) + '</td>' +
         '<td class="num ' + diffCls + '">' + diffTxt + '</td>';
