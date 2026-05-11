@@ -186,6 +186,7 @@ function doGet(e) {
     else if (action === 'getOverviewAnalytics')      result = getOverviewAnalytics(e.parameter.year || '', e.parameter.month || '');
     else if (action === 'getUsers')                  result = getUsers();
     else if (action === 'getGroupNorms')             result = getGroupNorms();
+    else if (action === 'getActivitiesCatalog')      result = getActivitiesCatalog();
     else                                             result = {ok:false, error:'Unknown action: ' + action};
     return jsonOut(result);
   } catch(err) {
@@ -212,6 +213,9 @@ function doPost(e) {
     else if (body.action === 'deactivateUser')            result = deactivateUser(body.userId || 0);
     else if (body.action === 'activateUser')              result = activateUser(body.userId || 0);
     else if (body.action === 'syncPayments')              result = syncPayments();
+    else if (body.action === 'addActivity')               result = addActivity(body.data || {});
+    else if (body.action === 'updateActivity')            result = updateActivity(body.id || 0, body.data || {});
+    else if (body.action === 'deleteActivity')            result = deleteActivity(body.id || 0);
     else result = {ok:false, error:'Unknown action'};
     return jsonOut(result);
   } catch(err) {
@@ -4088,4 +4092,124 @@ function syncPayments() {
   } catch (e) {
     return {ok: false, error: String(e && e.message || e)};
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ACTIVITIES CATALOG — лист "Додаткові_Каталог" у CONFIG_SHEET_ID.
+// Колонки:
+//   A=id  B=Назва  C=Ціна_клієнту  D=Модель_ЗП_викладача
+//   E=Ставка_викладача  F=Викладач  G=Локації  H=Активне
+// Для модуля "🏃 Додаткові заняття" / Етап 1: Каталог.
+// ═══════════════════════════════════════════════════════════════════════════
+
+var ACTIVITIES_SHEET_NAME = 'Додаткові_Каталог';
+var ACTIVITIES_HEADER = [
+  'id','Назва','Ціна_клієнту','Модель_ЗП_викладача',
+  'Ставка_викладача','Викладач','Локації','Активне'
+];
+
+function _getActivitiesSheet(createIfMissing){
+  var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var sh = ss.getSheetByName(ACTIVITIES_SHEET_NAME);
+  if (!sh && createIfMissing){
+    sh = ss.insertSheet(ACTIVITIES_SHEET_NAME);
+    sh.getRange(1, 1, 1, ACTIVITIES_HEADER.length).setValues([ACTIVITIES_HEADER]);
+    sh.setFrozenRows(1);
+  }
+  if (!sh) throw new Error('Sheet "' + ACTIVITIES_SHEET_NAME + '" не знайдено. Створіть лист з колонками: ' + ACTIVITIES_HEADER.join(', '));
+  return sh;
+}
+
+function _parseActivityRow(row){
+  return {
+    id:           Number(row[0]) || 0,
+    name:         String(row[1] || '').trim(),
+    clientPrice:  Number(row[2]) || 0,
+    teacherModel: String(row[3] || '').trim(),    // "За дитину" | "За заняття"
+    teacherRate:  Number(row[4]) || 0,
+    teacher:      String(row[5] || '').trim(),
+    locations:    String(row[6] || '').trim(),    // CSV або "всі"
+    active:       row[7] === true ||
+                  /^(true|так|y|1|active|активне|✅)$/i.test(String(row[7] || '').trim())
+  };
+}
+
+function getActivitiesCatalog(){
+  try {
+    var sh = _getActivitiesSheet(false);
+    var data = sh.getDataRange().getValues();
+    if (data.length < 2) return {ok: true, items: []};
+    var items = [];
+    for (var i = 1; i < data.length; i++){
+      var row = data[i];
+      if (!row[1]) continue;   // skip rows без назви
+      items.push(_parseActivityRow(row));
+    }
+    return {ok: true, items: items};
+  } catch(e){
+    return {ok: false, error: String(e && e.message || e)};
+  }
+}
+
+function _nextActivityId(sh){
+  var data = sh.getDataRange().getValues();
+  var max = 0;
+  for (var i = 1; i < data.length; i++){
+    var n = Number(data[i][0]) || 0;
+    if (n > max) max = n;
+  }
+  return max + 1;
+}
+
+function addActivity(data){
+  try {
+    var sh = _getActivitiesSheet(true);
+    var id = _nextActivityId(sh);
+    var row = [
+      id,
+      String(data.name || '').trim(),
+      Number(data.clientPrice) || 0,
+      String(data.teacherModel || '').trim(),
+      Number(data.teacherRate) || 0,
+      String(data.teacher || '').trim(),
+      String(data.locations || 'всі').trim(),
+      data.active !== false
+    ];
+    if (!row[1]) return {ok: false, error: 'Поле "Назва" обовʼязкове'};
+    sh.appendRow(row);
+    return {ok: true, id: id};
+  } catch(e){
+    return {ok: false, error: String(e && e.message || e)};
+  }
+}
+
+function updateActivity(id, data){
+  try {
+    var nid = Number(id);
+    if (!nid) return {ok: false, error: 'Missing id'};
+    var sh = _getActivitiesSheet(false);
+    var rows = sh.getDataRange().getValues();
+    for (var i = 1; i < rows.length; i++){
+      if (Number(rows[i][0]) !== nid) continue;
+      // Оновлюємо лише ті поля що передані. r1 = i+1 (1-based).
+      var r1 = i + 1;
+      if ('name'         in data) sh.getRange(r1, 2).setValue(String(data.name || '').trim());
+      if ('clientPrice'  in data) sh.getRange(r1, 3).setValue(Number(data.clientPrice) || 0);
+      if ('teacherModel' in data) sh.getRange(r1, 4).setValue(String(data.teacherModel || '').trim());
+      if ('teacherRate'  in data) sh.getRange(r1, 5).setValue(Number(data.teacherRate) || 0);
+      if ('teacher'      in data) sh.getRange(r1, 6).setValue(String(data.teacher || '').trim());
+      if ('locations'    in data) sh.getRange(r1, 7).setValue(String(data.locations || 'всі').trim());
+      if ('active'       in data) sh.getRange(r1, 8).setValue(data.active !== false);
+      return {ok: true};
+    }
+    return {ok: false, error: 'Заняття не знайдено'};
+  } catch(e){
+    return {ok: false, error: String(e && e.message || e)};
+  }
+}
+
+// Soft delete — ставить Активне=false. Реальне видалення лишається
+// ручним у Sheets, щоб не втрачати історію.
+function deleteActivity(id){
+  return updateActivity(id, {active: false});
 }

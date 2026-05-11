@@ -567,6 +567,10 @@ tbody tr.clickable:hover td{background:#f0f7ff}
            onclick="goPerm('salary')">
         <span class="ni">💼</span> Salary
       </div>
+      <div class="nav-item" data-permission="activities" data-parent="finance" data-perm-page="activities"
+           onclick="goPerm('activities')">
+        <span class="ni">🏃</span> Додаткові заняття
+      </div>
       <div class="nav-item" data-permission="categories" data-parent="finance" data-perm-page="categories"
            onclick="goPerm('categories')">
         <span class="ni">📊</span> Категорії
@@ -1749,6 +1753,7 @@ const PERMISSIONS = {
     'calendar','vacation_schedule',
     'analytics_clients','analytics_hr',
     'opex','categories','salary','overview_analytics',
+    'activities','activities-view','activities-edit',
     'client_birthdays',
     'card-employee-info',
     'card-employee-salary-button','card-employee-vacation-button','card-employee-sick-button',
@@ -1766,6 +1771,7 @@ const PERMISSIONS = {
     'calendar','vacation_schedule',
     'analytics_clients','analytics_hr',
     'opex','categories','salary','overview_analytics',
+    'activities','activities-view','activities-edit',
     'client_birthdays',
     'card-employee-info',
     'card-employee-salary-button','card-employee-vacation-button','card-employee-sick-button',
@@ -1783,6 +1789,7 @@ const PERMISSIONS = {
     'calendar','vacation_schedule',
     'analytics_clients','analytics_hr',
     'opex','categories','salary','overview_analytics',
+    'activities','activities-view','activities-edit',
     'client_birthdays',
     'card-employee-info',
     'card-employee-salary-button','card-employee-vacation-button','card-employee-sick-button',
@@ -1799,6 +1806,7 @@ const PERMISSIONS = {
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
     'analytics_hr',
+    'activities','activities-view',
     'client_birthdays',
     'card-employee-info',
     'card-employee-vacations-tab','card-employee-sickleave-tab',
@@ -1812,6 +1820,7 @@ const PERMISSIONS = {
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
     'analytics_hr',
+    'activities','activities-view',
     'client_birthdays',
     'card-employee-info',
     'card-employee-vacations-tab','card-employee-sickleave-tab',
@@ -1841,6 +1850,7 @@ const PERMISSIONS = {
     'calendar','vacation_schedule',
     'analytics_clients','analytics_hr',
     'opex','categories','salary','overview_analytics',
+    'activities','activities-view','activities-edit',
     'client_birthdays',
     'card-employee-info',
     'card-employee-salary-button','card-employee-vacation-button','card-employee-sick-button',
@@ -1907,6 +1917,7 @@ function goPerm(perm){
                    : target === 'opex'       ? 'opex.html'
                    : target === 'categories' ? 'categories.html'
                    : target === 'salary'     ? 'salary.html'
+                   : target === 'activities' ? 'activities.html'
                    : target === 'analytics'  ? 'analytics.html'
                    : 'index.html';
     location.href = targetFile + '#' + perm;
