@@ -154,6 +154,44 @@ select,input,textarea{font-family:inherit}
   display:flex;justify-content:space-between;font-size:14px;font-weight:800;color:var(--dark)}
 .att-sum-tot .r{color:var(--green)}
 
+/* ── ANALYTICS ──────────────────────────────────────────── */
+.ana-period-bar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;
+  background:#fff;padding:12px 18px;border-radius:var(--r);box-shadow:var(--sh);margin-bottom:14px}
+.ana-period-tabs{display:flex;gap:4px;background:#f0f4f8;border-radius:8px;padding:3px;flex-wrap:wrap}
+.ana-pb{padding:6px 12px;border:none;border-radius:6px;background:transparent;
+  font-size:13px;font-weight:600;color:var(--gray);cursor:pointer;transition:all .15s}
+.ana-pb:hover{color:var(--dark2)}
+.ana-pb.active{background:var(--green);color:#fff}
+.ana-custom{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--gray)}
+.ana-custom label{font-size:11px;font-weight:700;color:var(--gray);text-transform:uppercase}
+.ana-custom input{padding:6px 10px;border:1.5px solid var(--gray2);border-radius:6px;font-size:13px}
+.ana-fg{display:flex;flex-direction:column;gap:4px;min-width:130px}
+.ana-fg label{font-size:11px;font-weight:700;color:var(--gray);text-transform:uppercase;letter-spacing:.5px}
+.ana-fg select{padding:7px 10px;border:1.5px solid var(--gray2);border-radius:6px;font-size:13px;font-family:inherit}
+.ana-range{margin-left:auto;font-size:12px;color:var(--gray);font-weight:500}
+.ana-kpis{grid-template-columns:repeat(auto-fit,minmax(180px,1fr))}
+.banner{background:#fef5e0;border:1px solid #fcd34d;color:#b7791f;
+  padding:12px 16px;border-radius:var(--r);margin-bottom:14px;font-size:13px;
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.banner a{color:#92400e;font-weight:700;text-decoration:underline;cursor:pointer}
+.ana-subtabs{display:flex;gap:4px;background:#fff;padding:4px;border-radius:var(--r);
+  box-shadow:var(--sh);margin-bottom:14px;width:fit-content;max-width:100%;flex-wrap:wrap}
+.ana-st{padding:8px 14px;border:none;border-radius:6px;background:transparent;
+  font-size:13px;font-weight:600;color:var(--gray);cursor:pointer;transition:all .15s;
+  display:inline-flex;align-items:center;gap:5px}
+.ana-st:hover{color:var(--dark2)}
+.ana-st.active{background:var(--green);color:#fff}
+.ana-controls{display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap}
+.ana-search{flex:1;min-width:200px;max-width:320px;padding:8px 12px;
+  border:1.5px solid var(--gray2);border-radius:8px;font-size:13px;background:#fff;outline:none}
+.ana-search:focus{border-color:var(--green)}
+.tbl tbody tr.ana-row{cursor:pointer}
+.tbl tbody tr.ana-row:hover{background:#eef9f1}
+.ana-tag{display:inline-block;background:#f0f4f8;color:var(--dark2);
+  padding:1px 7px;border-radius:10px;font-size:11px;margin:1px 3px 1px 0;font-weight:600}
+.ana-pos{color:var(--green);font-weight:800}
+.ana-neg{color:var(--red);font-weight:800}
+
 /* ── MODAL ────────────────────────────────────────────────── */
 .modal{position:fixed;inset:0;z-index:1000;display:flex;
   align-items:center;justify-content:center;padding:20px}
@@ -376,21 +414,21 @@ select,input,textarea{font-family:inherit}
 
   <div id="errBox" class="err hidden"></div>
 
+  <div class="cat-loc-bar">
+    <label class="cat-loc-lbl">📍 Локація:</label>
+    <select id="globalLocSel"></select>
+    <span id="catalogCount" class="cat-loc-count">—</span>
+  </div>
+
   <div class="mode-tabs">
     <button class="mt-btn active" id="mtCatalog">📋 Каталог занять</button>
     <button class="mt-btn" id="mtAttendance" data-permission="attendance-view">📝 Відвідуваність</button>
-    <button class="mt-btn" id="mtAnalytics"  disabled title="Етап 3 — coming soon">📊 Аналітика</button>
+    <button class="mt-btn" id="mtAnalytics"  data-permission="attendance-view">📊 Аналітика</button>
     <button class="mt-btn" id="mtExport"     disabled title="Етап 4 — coming soon">💳 Експорт в Пейменти</button>
   </div>
 
   <!-- ── ETAP 1: КАТАЛОГ ── -->
   <div id="catalogMode">
-    <div class="cat-loc-bar">
-      <label class="cat-loc-lbl">📍 Локація:</label>
-      <select id="catLocSel"></select>
-      <span id="catalogCount" class="cat-loc-count">—</span>
-    </div>
-
     <div id="catalogEmpty" class="card hidden">
       <div class="coming">
         <div class="coming-ic">📭</div>
@@ -434,10 +472,6 @@ select,input,textarea{font-family:inherit}
         <label>📅 Дата</label>
         <input type="date" id="attDate">
       </div>
-      <div class="att-fg" data-permission="attendance-view" id="attLocWrap">
-        <label>📍 Локація</label>
-        <select id="attLocSel"></select>
-      </div>
       <div class="att-fg">
         <label>👶 Група</label>
         <select id="attGroupSel"><option value="">— оберіть —</option></select>
@@ -471,13 +505,75 @@ select,input,textarea{font-family:inherit}
 
   <!-- ── ETAP 3: АНАЛІТИКА ── -->
   <div id="analyticsMode" class="hidden">
-    <div class="card">
-      <div class="coming">
-        <div class="coming-ic">🚧</div>
-        <div class="coming-h">Етап 3 — Аналітика</div>
-        <div class="coming-p">Готується в наступних оновленнях.<br>
-          Зведення відвідуваності, рейтинг занять, рейтинг викладачів.</div>
+    <!-- Period bar -->
+    <div class="ana-period-bar">
+      <div class="ana-period-tabs">
+        <button class="ana-pb" data-period="today">Сьогодні</button>
+        <button class="ana-pb active" data-period="week">Тиждень</button>
+        <button class="ana-pb" data-period="month">Місяць</button>
+        <button class="ana-pb" data-period="quarter">Квартал</button>
+        <button class="ana-pb" data-period="year">Рік</button>
+        <button class="ana-pb" data-period="custom">Період…</button>
       </div>
+      <div class="ana-custom hidden" id="anaCustom">
+        <label>З</label>
+        <input type="date" id="anaFrom">
+        <label>по</label>
+        <input type="date" id="anaTo">
+      </div>
+      <div class="ana-fg" style="flex:1;min-width:160px">
+        <label>👶 Група</label>
+        <select id="anaGroupSel"><option value="">Всі групи</option></select>
+      </div>
+      <span class="ana-range" id="anaRangeLbl">—</span>
+    </div>
+
+    <!-- Warning: teachers not set -->
+    <div id="anaWarn" class="banner hidden"></div>
+
+    <!-- KPIs -->
+    <div class="kpis ana-kpis">
+      <div class="kpi"><div class="kpi-lbl">👶 Дітей залучено</div><div class="kpi-val" id="anaKpiChildren">—</div></div>
+      <div class="kpi"><div class="kpi-lbl">🎯 Занять проведено</div><div class="kpi-val" id="anaKpiMarks">—</div></div>
+      <div class="kpi" data-permission="attendance-edit"><div class="kpi-lbl">💰 До оплати клієнтами</div><div class="kpi-val" id="anaKpiIncome">—</div></div>
+      <div class="kpi" data-permission="attendance-edit"><div class="kpi-lbl">💸 До виплати викладачам</div><div class="kpi-val" id="anaKpiPayout">—</div></div>
+    </div>
+
+    <!-- Sub-tabs -->
+    <div class="ana-subtabs">
+      <button class="ana-st active" data-sub="children">👶 По дітях</button>
+      <button class="ana-st" data-sub="activities">🎯 По заняттях</button>
+      <button class="ana-st" data-sub="teachers">👨‍🏫 По викладачах</button>
+      <button class="ana-st" data-sub="days">📅 По днях</button>
+    </div>
+
+    <!-- Sub-tab controls -->
+    <div class="ana-controls">
+      <input type="text" id="anaSearch" placeholder="🔍 Пошук…" class="ana-search">
+      <button id="anaExportBtn" class="btn btn-secondary btn-sm">📤 CSV</button>
+    </div>
+
+    <!-- Sub-tab content -->
+    <div class="card">
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <thead id="anaThead"></thead>
+          <tbody id="anaTbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div id="anaEmpty" class="card hidden">
+      <div class="coming">
+        <div class="coming-ic">📭</div>
+        <div class="coming-h">За цей період ще немає відвідувань</div>
+        <div class="coming-p">Спробуй інший період або перейди на 📝 Відвідуваність і додай відмітки.</div>
+      </div>
+    </div>
+
+    <div id="anaLoading" class="loading hidden">
+      <div class="spinner"></div>
+      <div>Розрахунок аналітики…</div>
     </div>
   </div>
 
@@ -589,6 +685,21 @@ select,input,textarea{font-family:inherit}
   </div>
 </div>
 
+<!-- ── ANALYTICS DETAIL MODAL ──────────────────────────────── -->
+<div id="anaDetailModal" class="modal hidden" aria-hidden="true">
+  <div class="modal-overlay" data-close="1"></div>
+  <div class="modal-card" role="dialog" aria-modal="true">
+    <button class="modal-close" data-close="1" aria-label="Закрити">✕</button>
+    <div class="modal-hd">
+      <h3 id="anaDetailTitle">Деталь</h3>
+    </div>
+    <div class="modal-bd" id="anaDetailBody"></div>
+    <div class="modal-ft">
+      <button class="btn btn-secondary" data-close="1">Закрити</button>
+    </div>
+  </div>
+</div>
+
 <div id="actToast" class="toast hidden"></div>
 
 <script>
@@ -653,7 +764,8 @@ var S = {
   hrEmps: null,
   mode: 'catalog',     // catalog | attendance | analytics | export
   modalActivity: null, // null = add, else = edit
-  catLoc: ''           // обрана локація для перегляду каталогу
+  activeLoc: ''        // глобальна обрана локація (shared між Каталог /
+                       // Відвідуваність / Аналітика)
 };
 
 // ── HELPERS ─────────────────────────────────
@@ -1035,14 +1147,15 @@ function _defaultUserLoc(){
   if (S.user && S.user.loc)     return S.user.loc;
   return '';
 }
-function initCatLocSelector(){
-  var sel = $('catLocSel');
+// Глобальний селектор локації — спільний для Каталогу/Відвідуваності/
+// Аналітики. Стейт у S.activeLoc, персистенс у localStorage.
+function initGlobalLocSelector(){
+  var sel = $('globalLocSel');
   if (!sel || sel._inited) return;
   sel._inited = true;
   var canSwitch = isHR();
   var defaultLoc = _defaultUserLoc();
   if (canSwitch){
-    // Усі 16 локацій згруповано (Садочки / Школи / Управління)
     var groups = {};
     ALL_LOCATIONS.forEach(function(L){
       if (!groups[L.group]) groups[L.group] = [];
@@ -1059,32 +1172,42 @@ function initCatLocSelector(){
       });
       sel.appendChild(og);
     });
-    // Last-used з localStorage
     var saved = '';
     try { saved = localStorage.getItem(CFG.LAST_LOC_KEY) || ''; } catch(e){}
     var initial = saved || defaultLoc || 'Голосієво';
     if (!_allLocOptions().includes(initial)) initial = 'Голосієво';
     sel.value = initial;
   } else {
-    // Director/nurse — тільки своя
     var o = document.createElement('option');
     o.value = defaultLoc; o.textContent = defaultLoc;
     sel.appendChild(o);
     sel.value = defaultLoc;
     sel.disabled = true;
   }
-  S.catLoc = sel.value;
+  S.activeLoc = sel.value;
   sel.addEventListener('change', function(){
-    S.catLoc = this.value;
-    try { localStorage.setItem(CFG.LAST_LOC_KEY, S.catLoc); } catch(e){}
-    renderCatalog();
+    S.activeLoc = this.value;
+    try { localStorage.setItem(CFG.LAST_LOC_KEY, S.activeLoc); } catch(e){}
+    onActiveLocChange();
   });
+}
+
+// Викликається при будь-якій зміні S.activeLoc — оновлює активну
+// вкладку. Інші ATT/ANA state, що залежали від loc, теж скидаються.
+function onActiveLocChange(){
+  // Attendance: скинути групу + повторно завантажити дошку.
+  ATT.group = ''; ATT.marksKey = ''; ATT.marksLoadedAt = 0;
+  // Analytics: marks кеш привʼязаний до loc — інвалідуємо.
+  if (typeof ANA !== 'undefined'){ ANA.marksLoc = ''; ANA.marksLoadedAt = 0; }
+  if (S.mode === 'catalog')         renderCatalog();
+  else if (S.mode === 'attendance') renderAttendanceBoard();
+  else if (S.mode === 'analytics')  renderAnalytics();
 }
 
 // ── RENDER CATALOG ──────────────────────────
 function renderCatalog(){
-  initCatLocSelector();
-  var loc = S.catLoc;
+  initGlobalLocSelector();
+  var loc = S.activeLoc;
   // Фільтр по локації + сортування: активні→неактивні, потім за назвою.
   var items = (S.items || []).filter(function(a){ return a.loc === loc; });
   items.sort(function(a, b){
@@ -1143,7 +1266,7 @@ async function openActivityModal(id){
   await ensureHrEmpsLoaded();
 
   // datalist викладачів цієї локації (фолбек — всі)
-  var locForFilter = S.catLoc;
+  var locForFilter = S.activeLoc;
   var emps = (S.hrEmps || []).filter(function(e){ return !locForFilter || e.loc === locForFilter; });
   if (!emps.length) emps = S.hrEmps || [];
   var dl = $('actTeacherList');
@@ -1165,7 +1288,7 @@ async function openActivityModal(id){
 
   var existing = id ? (S.items || []).find(function(x){ return x.id === id; }) : null;
   S.modalActivity = existing || null;
-  var targetLoc = existing ? existing.loc : S.catLoc;
+  var targetLoc = existing ? existing.loc : S.activeLoc;
 
   $('actModalTitle').textContent = existing ? 'Редагувати заняття' : 'Додати заняття у "' + targetLoc + '"';
   $('actLocFixed').value      = targetLoc;
@@ -1241,14 +1364,14 @@ function openCopyModal(){
   if (!hasPerm('activities-edit')){
     showToast('Немає прав на копіювання', 'err'); return;
   }
-  if (!S.catLoc){
+  if (!S.activeLoc){
     showToast('Спочатку оберіть локацію-приймач', 'err'); return;
   }
   // Список локацій-джерел: усі що мають хоча б одне активне заняття,
   // ОКРІМ поточної.
   var withItems = {};
   (S.items || []).forEach(function(a){
-    if (a.active && a.loc && a.loc !== S.catLoc) withItems[a.loc] = true;
+    if (a.active && a.loc && a.loc !== S.activeLoc) withItems[a.loc] = true;
   });
   var sources = Object.keys(withItems).sort(function(a,b){ return a.localeCompare(b,'uk'); });
   var sel = $('copyFromSel');
@@ -1264,7 +1387,7 @@ function openCopyModal(){
       sel.appendChild(o);
     });
   }
-  $('copyToFixed').value = S.catLoc;
+  $('copyToFixed').value = S.activeLoc;
   $('copyModal').classList.remove('hidden');
   $('copyModal').setAttribute('aria-hidden','false');
   document.body.style.overflow = 'hidden';
@@ -1317,7 +1440,7 @@ async function doCopyActivities(){
 
 // ── CSV EXPORT ────────────────────────────────
 function exportCatalogCSV(){
-  var loc = S.catLoc;
+  var loc = S.activeLoc;
   var items = (S.items || []).filter(function(a){ return a.loc === loc; });
   items.sort(function(a, b){
     if (a.active !== b.active) return a.active ? -1 : 1;
@@ -1389,7 +1512,11 @@ function switchMode(m){
   $('mtAttendance').classList.toggle('active', m === 'attendance');
   $('mtAnalytics') .classList.toggle('active', m === 'analytics');
   $('mtExport')    .classList.toggle('active', m === 'export');
-  if (m === 'attendance') initAttendanceTab();
+  // Глобальний селектор має бути ініціалізований перш ніж активна
+  // вкладка прочитає S.activeLoc.
+  initGlobalLocSelector();
+  if (m === 'attendance')     initAttendanceTab();
+  else if (m === 'analytics') initAnalyticsTab();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1399,7 +1526,6 @@ function switchMode(m){
 var ATT = {
   initialized: false,
   date: '',        // YYYY-MM-DD
-  loc:  '',
   group: '',
   children: [],    // [{name, group}] для вибраної loc
   childrenByLoc: null,   // {loc: {group: [name,...]}}
@@ -1433,39 +1559,12 @@ async function initAttendanceTab(){
   // Дата
   $('attDate').value = _todayISO();
   ATT.date = $('attDate').value;
-  // Локація: для CFO/CEO/CCO/COO — селектор з усіх локацій; для director —
-  // фіксована origLoc (приховуємо інші опції фактично).
-  var locSel = $('attLocSel');
-  locSel.innerHTML = '';
-  var defaultLoc = _defaultLocForUser();
-  var canSwitchLoc = isHR();    // network роли
-  if (canSwitchLoc){
-    // Список з ALL_LOCATIONS, скіпаємо школи (їх не маркуємо в Етапі 2).
-    ALL_LOCATIONS
-      .filter(function(L){ return L.group !== 'Школи' && L.group !== 'Управління'; })
-      .forEach(function(L){
-        var o = document.createElement('option');
-        o.value = L.name; o.textContent = L.name;
-        locSel.appendChild(o);
-      });
-    // Default: перша садочкова локація.
-    if (!defaultLoc && locSel.options.length) defaultLoc = locSel.options[0].value;
-    locSel.value = defaultLoc;
-  } else {
-    // Director/nurse — тільки своя локація.
-    var o = document.createElement('option');
-    o.value = defaultLoc; o.textContent = defaultLoc;
-    locSel.appendChild(o);
-    locSel.disabled = true;
-  }
-  ATT.loc = locSel.value;
+  // Глобальний селектор локації — S.activeLoc уже встановлений
+  // initGlobalLocSelector(). Тут лише підхоплюємо його.
 
   // Event handlers
   $('attDate').addEventListener('change', function(){
     ATT.date = this.value; renderAttendanceBoard();
-  });
-  $('attLocSel').addEventListener('change', function(){
-    ATT.loc = this.value; ATT.group = ''; renderAttendanceBoard();
   });
   $('attGroupSel').addEventListener('change', function(){
     ATT.group = this.value; renderAttendanceBoard();
@@ -1519,7 +1618,7 @@ async function _loadPayments(){
 }
 
 // ── Marks ───────────────────────────────────
-function _marksFilterKey(){ return [ATT.date, ATT.loc, ATT.group].join('|'); }
+function _marksFilterKey(){ return [ATT.date, S.activeLoc, ATT.group].join('|'); }
 
 async function _loadMarks(force){
   var key = _marksFilterKey();
@@ -1543,7 +1642,7 @@ async function _loadMarks(force){
   try {
     var url = CFG.SCRIPT_URL + '?action=getAttendanceMarks' +
               '&date='  + encodeURIComponent(ATT.date) +
-              '&loc='   + encodeURIComponent(ATT.loc) +
+              '&loc='   + encodeURIComponent(S.activeLoc) +
               '&group=' + encodeURIComponent(ATT.group);
     var r = await fetch(url, {redirect: 'follow'});
     if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -1610,7 +1709,7 @@ async function renderAttendanceBoard(){
   }
 
   // Заповнити dropdown груп для обраної локації
-  var groups = ATT.childrenByLoc[ATT.loc] || {};
+  var groups = ATT.childrenByLoc[S.activeLoc] || {};
   var groupNames = Object.keys(groups).sort(function(a,b){ return a.localeCompare(b,'uk'); });
   var gSel = $('attGroupSel');
   var prevGroup = ATT.group;
@@ -1633,7 +1732,7 @@ async function renderAttendanceBoard(){
     $('attLoading').classList.add('hidden');
     $('attHint').textContent = groupNames.length
       ? '👉 Оберіть групу зі списку щоб побачити дітей'
-      : '⚠️ У локації "' + ATT.loc + '" не знайдено груп у листі Оплати. Перевірте дані.';
+      : '⚠️ У локації "' + S.activeLoc + '" не знайдено груп у листі Оплати. Перевірте дані.';
     $('attHint').classList.remove('hidden');
     return;
   }
@@ -1645,10 +1744,10 @@ async function renderAttendanceBoard(){
   var todayCount = ATT.marks.length;
   $('attCounter').textContent = todayCount + ' відміток за ' + _ddmm(ATT.date) + ' · ' + ATT.group;
 
-  var acts = _activitiesForLoc(ATT.loc);
+  var acts = _activitiesForLoc(S.activeLoc);
   if (!acts.length){
     $('attLoading').classList.add('hidden');
-    $('attHint').textContent = '⚠️ У каталозі немає активних занять для локації "' + ATT.loc + '". Додайте у вкладці Каталог.';
+    $('attHint').textContent = '⚠️ У каталозі немає активних занять для локації "' + S.activeLoc + '". Додайте у вкладці Каталог.';
     $('attHint').classList.remove('hidden');
     return;
   }
@@ -1768,7 +1867,7 @@ async function toggleAttendance(btn){
     var markerName = _markerLabel();
     var payload = {
       data: {
-        date: ATT.date, loc: ATT.loc, group: ATT.group, child: child,
+        date: ATT.date, loc: S.activeLoc, group: ATT.group, child: child,
         activityId: actId, activityName: actName, price: price,
         markedBy: markerName
       }
@@ -1777,7 +1876,7 @@ async function toggleAttendance(btn){
     if (res2.ok || res2.localOnly){
       var newId = res2.id || ('local-' + Date.now() + '-' + Math.random().toString(36).slice(2,7));
       ATT.marks.push({
-        id: newId, date: ATT.date, loc: ATT.loc, group: ATT.group,
+        id: newId, date: ATT.date, loc: S.activeLoc, group: ATT.group,
         child: child, activityId: actId, activityName: actName,
         price: price, markedBy: markerName, markedAt: new Date().toISOString()
       });
@@ -1793,7 +1892,7 @@ async function toggleAttendance(btn){
 
   // Перерахувати лічильник + summary
   $('attCounter').textContent = ATT.marks.length + ' відміток за ' + _ddmm(ATT.date) + ' · ' + ATT.group;
-  renderSummary(_activitiesForLoc(ATT.loc));
+  renderSummary(_activitiesForLoc(S.activeLoc));
 
   btn.disabled = false;
   delete ATT.inFlight[key];
@@ -1865,7 +1964,11 @@ function bindEventListeners(){
     if (this.disabled) return;
     switchMode('attendance');
   });
-  // Аналітика і Експорт лишаються disabled — нічого не робимо в click handler.
+  $('mtAnalytics').addEventListener('click', function(){
+    if (this.disabled) return;
+    switchMode('analytics');
+  });
+  // Експорт лишається disabled — Етап 4 ще не зроблений.
   $('addActivityBtn').addEventListener('click', function(){ openActivityModal(0); });
   $('actSaveBtn').addEventListener('click', saveActivity);
   $('copyActivitiesBtn').addEventListener('click', openCopyModal);
@@ -1874,17 +1977,724 @@ function bindEventListeners(){
   // Закриття модалки: Esc + overlay + ✕.
   document.addEventListener('keydown', function(e){
     if (e.key === 'Escape'){
-      if (!$('actModal') .classList.contains('hidden')) closeActivityModal();
-      if (!$('copyModal').classList.contains('hidden')) closeCopyModal();
+      if (!$('actModal')      .classList.contains('hidden')) closeActivityModal();
+      if (!$('copyModal')     .classList.contains('hidden')) closeCopyModal();
+      if (!$('anaDetailModal').classList.contains('hidden')) closeAnaDetail();
     }
   });
   document.addEventListener('click', function(e){
     var t = e.target;
     if (!t || !t.dataset || t.dataset.close !== '1') return;
     // Закриваємо ту модалку, яка відкрита (overlay/✕ всередині неї).
-    if (!$('copyModal').classList.contains('hidden')) closeCopyModal();
-    else if (!$('actModal').classList.contains('hidden')) closeActivityModal();
+    if (!$('anaDetailModal').classList.contains('hidden')) closeAnaDetail();
+    else if (!$('copyModal').classList.contains('hidden')) closeCopyModal();
+    else if (!$('actModal') .classList.contains('hidden')) closeActivityModal();
   });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ANALYTICS TAB (Етап 3)
+// ═══════════════════════════════════════════════════════════════
+var ANA = {
+  initialized: false,
+  period: 'week',
+  customFrom: '',
+  customTo: '',
+  group: '',
+  search: '',
+  subTab: 'children',
+  marks: [],
+  marksLoc: '',
+  marksLoadedAt: 0
+};
+var ANA_MARKS_TTL = 60 * 1000;
+var ANA_MARKS_CACHE_KEY = 'activities_ana_marks_v1';
+
+function _isoFromDate(d){
+  var y = d.getFullYear(), m = d.getMonth() + 1, dd = d.getDate();
+  return y + '-' + (m < 10 ? '0' + m : m) + '-' + (dd < 10 ? '0' + dd : dd);
+}
+function _ddmmyyyy(iso){
+  if (!iso) return '';
+  var p = String(iso).split('-');
+  return p.length === 3 ? (p[2] + '.' + p[1] + '.' + p[0]) : iso;
+}
+
+// Повертає [fromIso, toIso] включно.
+function _periodRange(){
+  var now = new Date();
+  var to  = _isoFromDate(now);
+  var fromD;
+  switch (ANA.period){
+    case 'today':
+      return [to, to];
+    case 'week':
+      fromD = new Date(now); fromD.setDate(now.getDate() - 6);
+      return [_isoFromDate(fromD), to];
+    case 'month':
+      fromD = new Date(now.getFullYear(), now.getMonth(), 1);
+      return [_isoFromDate(fromD), to];
+    case 'quarter':
+      var qStartMonth = Math.floor(now.getMonth() / 3) * 3;
+      fromD = new Date(now.getFullYear(), qStartMonth, 1);
+      return [_isoFromDate(fromD), to];
+    case 'year':
+      fromD = new Date(now.getFullYear(), 0, 1);
+      return [_isoFromDate(fromD), to];
+    case 'custom':
+      return [ANA.customFrom || to, ANA.customTo || to];
+    default:
+      return [to, to];
+  }
+}
+
+async function initAnalyticsTab(){
+  if (ANA.initialized){
+    renderAnalytics();
+    return;
+  }
+  ANA.initialized = true;
+
+  // Period tabs
+  document.querySelectorAll('.ana-pb').forEach(function(b){
+    b.addEventListener('click', function(){
+      var p = this.dataset.period;
+      if (!p || p === ANA.period) return;
+      document.querySelectorAll('.ana-pb').forEach(function(x){ x.classList.toggle('active', x === b); });
+      ANA.period = p;
+      $('anaCustom').classList.toggle('hidden', p !== 'custom');
+      renderAnalytics();
+    });
+  });
+
+  // Custom range default = current month
+  var now = new Date();
+  $('anaFrom').value = _isoFromDate(new Date(now.getFullYear(), now.getMonth(), 1));
+  $('anaTo').value   = _isoFromDate(now);
+  ANA.customFrom = $('anaFrom').value;
+  ANA.customTo   = $('anaTo').value;
+  $('anaFrom').addEventListener('change', function(){ ANA.customFrom = this.value; if (ANA.period === 'custom') renderAnalytics(); });
+  $('anaTo')  .addEventListener('change', function(){ ANA.customTo   = this.value; if (ANA.period === 'custom') renderAnalytics(); });
+
+  // Group selector
+  $('anaGroupSel').addEventListener('change', function(){
+    ANA.group = this.value;
+    renderAnalytics();
+  });
+
+  // Sub-tabs
+  document.querySelectorAll('.ana-st').forEach(function(b){
+    b.addEventListener('click', function(){
+      var s = this.dataset.sub;
+      if (!s || s === ANA.subTab) return;
+      document.querySelectorAll('.ana-st').forEach(function(x){ x.classList.toggle('active', x === b); });
+      ANA.subTab = s;
+      ANA.search = '';
+      $('anaSearch').value = '';
+      renderAnaTable();
+    });
+  });
+
+  // Search (debounced)
+  var searchTimer = null;
+  $('anaSearch').addEventListener('input', function(){
+    clearTimeout(searchTimer);
+    var v = this.value;
+    searchTimer = setTimeout(function(){
+      ANA.search = v;
+      renderAnaTable();
+    }, 200);
+  });
+
+  // CSV export
+  $('anaExportBtn').addEventListener('click', exportAnalyticsCSV);
+
+  // Detail modal click delegation — для рядків таблиці.
+  $('anaTbody').addEventListener('click', function(e){
+    var tr = e.target.closest && e.target.closest('tr.ana-row');
+    if (!tr || !tr.dataset.key) return;
+    openAnaDetail(tr.dataset.key);
+  });
+
+  renderAnalytics();
+}
+
+// Завантаження ВСІХ marks для активної локації (без фільтра дати) +
+// заповнення dropdown груп.
+async function _loadAnaMarks(force){
+  if (!force && ANA.marksLoc === S.activeLoc && Date.now() - ANA.marksLoadedAt < ANA_MARKS_TTL){
+    return ANA.marks;
+  }
+  // localStorage cache per loc
+  try {
+    if (!force){
+      var raw = localStorage.getItem(ANA_MARKS_CACHE_KEY);
+      if (raw){
+        var c = JSON.parse(raw);
+        if (c && c.loc === S.activeLoc && c.ts && Date.now() - c.ts < ANA_MARKS_TTL){
+          ANA.marks = c.items; ANA.marksLoc = S.activeLoc; ANA.marksLoadedAt = c.ts;
+          return ANA.marks;
+        }
+      }
+    }
+  } catch(e){}
+
+  try {
+    var url = CFG.SCRIPT_URL + '?action=getAttendanceMarks&loc=' + encodeURIComponent(S.activeLoc);
+    var r = await fetch(url, {redirect: 'follow'});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    var json = await r.json();
+    if (!json.ok) throw new Error(json.error || 'getAttendanceMarks failed');
+    ANA.marks = (json.items || []).filter(function(m){ return m.loc === S.activeLoc; });
+  } catch(e){
+    console.warn('[analytics] backend fallback:', e && e.message || e);
+    // Fallback: дістати з localStorage marks кеша Etap2 — там по композитному ключу.
+    var collected = [];
+    try {
+      var raw2 = localStorage.getItem(ATT_MARKS_CACHE_KEY);
+      if (raw2){
+        var all = JSON.parse(raw2) || {};
+        Object.keys(all).forEach(function(k){
+          if (k.indexOf('|' + S.activeLoc + '|') === -1) return;
+          var arr = (all[k] && all[k].items) || [];
+          arr.forEach(function(m){ if (m.loc === S.activeLoc) collected.push(m); });
+        });
+      }
+    } catch(e2){}
+    ANA.marks = collected;
+  }
+  ANA.marksLoc = S.activeLoc;
+  ANA.marksLoadedAt = Date.now();
+  try {
+    localStorage.setItem(ANA_MARKS_CACHE_KEY, JSON.stringify({
+      loc: S.activeLoc, items: ANA.marks, ts: Date.now()
+    }));
+  } catch(e){}
+  return ANA.marks;
+}
+
+function _filteredMarks(){
+  var r = _periodRange();
+  var fromIso = r[0], toIso = r[1];
+  return (ANA.marks || []).filter(function(m){
+    if (m.loc !== S.activeLoc) return false;
+    if (m.date < fromIso || m.date > toIso) return false;
+    if (ANA.group && m.group !== ANA.group) return false;
+    return true;
+  });
+}
+
+function _payoutForActivity(actId, marks){
+  // marks — лише для цього actId
+  if (!marks.length) return 0;
+  // Знаходимо рядок каталогу: спершу за id; якщо немає (видалений) —
+  // повертаємо 0 (попередження покаже warn-блок).
+  var cat = (S.items || []).find(function(a){ return a.id === actId; });
+  if (!cat || !cat.teacherRate) return 0;
+  if (cat.teacherModel === 'За дитину'){
+    return marks.length * cat.teacherRate;
+  }
+  if (cat.teacherModel === 'За заняття'){
+    var dates = {};
+    marks.forEach(function(m){ dates[m.date] = true; });
+    return Object.keys(dates).length * cat.teacherRate;
+  }
+  return 0;
+}
+
+async function renderAnalytics(){
+  if (!hasPerm('attendance-view')){
+    $('anaWarn').textContent = '🚫 Немає прав на перегляд аналітики';
+    $('anaWarn').classList.remove('hidden');
+    return;
+  }
+  $('anaLoading').classList.remove('hidden');
+  $('anaEmpty').classList.add('hidden');
+  try {
+    if (!S.items || !S.items.length) await loadCatalog(false);
+    await _loadAnaMarks(false);
+  } catch(e){
+    $('anaLoading').classList.add('hidden');
+    showToast('❌ ' + (e && e.message || e), 'err');
+    return;
+  }
+  $('anaLoading').classList.add('hidden');
+
+  // Заповнити dropdown груп (з marks)
+  var groups = {};
+  ANA.marks.forEach(function(m){ if (m.group) groups[m.group] = true; });
+  var gSel = $('anaGroupSel');
+  var prev = ANA.group;
+  gSel.innerHTML = '<option value="">Всі групи</option>';
+  Object.keys(groups).sort(function(a,b){return a.localeCompare(b,'uk');}).forEach(function(g){
+    var o = document.createElement('option');
+    o.value = g; o.textContent = g;
+    gSel.appendChild(o);
+  });
+  if (prev && groups[prev]) gSel.value = prev;
+  else { gSel.value = ''; ANA.group = ''; }
+
+  renderAnaRangeLbl();
+  renderAnaKPIs();
+  renderAnaWarn();
+  renderAnaTable();
+}
+
+function renderAnaRangeLbl(){
+  var r = _periodRange();
+  $('anaRangeLbl').textContent = '📅 ' + _ddmmyyyy(r[0]) + ' — ' + _ddmmyyyy(r[1]);
+}
+
+function renderAnaKPIs(){
+  var marks = _filteredMarks();
+  var children = {};
+  var income = 0, payout = 0;
+  marks.forEach(function(m){
+    children[m.child] = true;
+    income += (m.price || 0);
+  });
+  // Payout — згрупувати по activityId, потім порахувати.
+  var byAct = {};
+  marks.forEach(function(m){
+    if (!byAct[m.activityId]) byAct[m.activityId] = [];
+    byAct[m.activityId].push(m);
+  });
+  Object.keys(byAct).forEach(function(actId){
+    payout += _payoutForActivity(Number(actId), byAct[actId]);
+  });
+
+  $('anaKpiChildren').textContent = Object.keys(children).length;
+  $('anaKpiMarks').textContent    = marks.length;
+  $('anaKpiIncome').textContent   = fmtUah(income) + ' ₴';
+  $('anaKpiPayout').textContent   = fmtUah(payout) + ' ₴';
+}
+
+function renderAnaWarn(){
+  // Знайти заняття у активній локації, які мають хоча б одну mark
+  // АБО просто активні, але викладач не заповнений.
+  var marks = _filteredMarks();
+  var actsUsed = {};
+  marks.forEach(function(m){ actsUsed[m.activityId] = true; });
+
+  var missing = [];
+  (S.items || []).forEach(function(a){
+    if (a.loc !== S.activeLoc || !a.active) return;
+    if (!actsUsed[a.id]) return;
+    if (!a.teacher) missing.push(a.name);
+  });
+
+  var warn = $('anaWarn');
+  if (missing.length){
+    warn.innerHTML = '⚠️ У <strong>' + missing.length + '</strong> заняття' +
+                     (missing.length > 1 ? 'х' : '') + ' не вказаний викладач: ' +
+                     missing.map(function(n){ return '<span class="ana-tag">' + escapeHtml(n) + '</span>'; }).join('') +
+                     ' — ЗП не може бути порахована. ' +
+                     '<a onclick="switchMode(\'catalog\')">Відкрити Каталог →</a>';
+    warn.classList.remove('hidden');
+  } else {
+    warn.classList.add('hidden');
+  }
+}
+
+// ── ТАБЛИЦІ ПО СУБ-ВКЛАДКАХ ─────────────────
+function renderAnaTable(){
+  var marks = _filteredMarks();
+  if (!marks.length){
+    $('anaThead').innerHTML = '';
+    $('anaTbody').innerHTML = '';
+    $('anaEmpty').classList.remove('hidden');
+    document.querySelector('#analyticsMode .card .tbl-wrap').parentElement.parentElement.classList.add('hidden');
+    return;
+  }
+  $('anaEmpty').classList.add('hidden');
+  document.querySelector('#analyticsMode .card .tbl-wrap').parentElement.parentElement.classList.remove('hidden');
+
+  var s = String(ANA.search || '').trim().toLowerCase();
+  var canSeeMoney = hasPerm('attendance-edit');
+
+  if (ANA.subTab === 'children')       _renderAnaChildren(marks, s, canSeeMoney);
+  else if (ANA.subTab === 'activities')_renderAnaActivities(marks, s, canSeeMoney);
+  else if (ANA.subTab === 'teachers')  _renderAnaTeachers(marks, s, canSeeMoney);
+  else if (ANA.subTab === 'days')      _renderAnaDays(marks, s, canSeeMoney);
+}
+
+function _renderAnaChildren(marks, search, canSeeMoney){
+  var byChild = {};
+  marks.forEach(function(m){
+    if (!byChild[m.child]){
+      byChild[m.child] = {name: m.child, group: m.group, count: 0, sum: 0, activities: {}};
+    }
+    var b = byChild[m.child];
+    b.count++; b.sum += (m.price || 0);
+    b.activities[m.activityName] = (b.activities[m.activityName] || 0) + 1;
+  });
+  var rows = Object.keys(byChild).map(function(k){ return byChild[k]; });
+  if (search) rows = rows.filter(function(r){ return r.name.toLowerCase().indexOf(search) !== -1; });
+  rows.sort(function(a,b){ return b.sum - a.sum; });
+
+  $('anaThead').innerHTML =
+    '<tr><th>Дитина</th><th>Група</th><th class="num">Занять</th><th>Заняття</th>' +
+    (canSeeMoney ? '<th class="num">Сума до сплати</th>' : '') + '</tr>';
+
+  var html = '';
+  rows.forEach(function(r){
+    var actsHtml = Object.keys(r.activities).map(function(n){
+      return '<span class="ana-tag">' + escapeHtml(n) + ' × ' + r.activities[n] + '</span>';
+    }).join('');
+    html += '<tr class="ana-row" data-key="child:' + escapeHtml(r.name) + '">' +
+              '<td class="cat-name">' + escapeHtml(r.name) + '</td>' +
+              '<td>' + escapeHtml(r.group || '—') + '</td>' +
+              '<td class="num">' + r.count + '</td>' +
+              '<td>' + actsHtml + '</td>' +
+              (canSeeMoney ? '<td class="num">' + fmtUah(r.sum) + ' ₴</td>' : '') +
+            '</tr>';
+  });
+  $('anaTbody').innerHTML = html || '<tr><td colspan="5" class="muted" style="text-align:center;padding:20px">Нічого не знайдено</td></tr>';
+}
+
+function _renderAnaActivities(marks, search, canSeeMoney){
+  var byAct = {};
+  marks.forEach(function(m){
+    if (!byAct[m.activityId]){
+      byAct[m.activityId] = {id: m.activityId, name: m.activityName, count: 0, children: {}, income: 0, marksList: []};
+    }
+    var b = byAct[m.activityId];
+    b.count++; b.income += (m.price || 0);
+    b.children[m.child] = true;
+    b.marksList.push(m);
+  });
+  var rows = Object.keys(byAct).map(function(id){
+    var b = byAct[id];
+    var payout = _payoutForActivity(Number(id), b.marksList);
+    var profit = b.income - payout;
+    return {
+      id: b.id, name: b.name, count: b.count,
+      uniqueChildren: Object.keys(b.children).length,
+      income: b.income, payout: payout, profit: profit
+    };
+  });
+  if (search) rows = rows.filter(function(r){ return r.name.toLowerCase().indexOf(search) !== -1; });
+  rows.sort(function(a,b){ return b.profit - a.profit; });
+
+  $('anaThead').innerHTML =
+    '<tr><th>Заняття</th><th class="num">Дітей</th><th class="num">Разів</th>' +
+    (canSeeMoney ? '<th class="num">Дохід</th><th class="num">Витрати</th><th class="num">Прибуток</th>' : '') +
+    '</tr>';
+
+  var html = '';
+  rows.forEach(function(r){
+    var profCls = r.profit > 0 ? 'ana-pos' : (r.profit < 0 ? 'ana-neg' : '');
+    html += '<tr class="ana-row" data-key="activity:' + r.id + '">' +
+              '<td class="cat-name">' + escapeHtml(r.name) + '</td>' +
+              '<td class="num">' + r.uniqueChildren + '</td>' +
+              '<td class="num">' + r.count + '</td>' +
+              (canSeeMoney
+                ? '<td class="num">' + fmtUah(r.income) + ' ₴</td>' +
+                  '<td class="num">' + fmtUah(r.payout) + ' ₴</td>' +
+                  '<td class="num ' + profCls + '">' + (r.profit > 0 ? '+' : '') + fmtUah(r.profit) + ' ₴</td>'
+                : '') +
+            '</tr>';
+  });
+  $('anaTbody').innerHTML = html || '<tr><td colspan="6" class="muted" style="text-align:center;padding:20px">Нічого не знайдено</td></tr>';
+}
+
+function _renderAnaTeachers(marks, search, canSeeMoney){
+  var byTeacher = {};
+  // Розбиваємо marks по activityId; з каталогу беремо викладача за id.
+  var byAct = {};
+  marks.forEach(function(m){
+    if (!byAct[m.activityId]) byAct[m.activityId] = [];
+    byAct[m.activityId].push(m);
+  });
+  Object.keys(byAct).forEach(function(actId){
+    var actMarks = byAct[actId];
+    var cat = (S.items || []).find(function(a){ return a.id === Number(actId); });
+    var teacherKey = (cat && cat.teacher) ? cat.teacher : '— не вказаний';
+    if (!byTeacher[teacherKey]){
+      byTeacher[teacherKey] = {name: teacherKey, activities: {}, count: 0, children: {}, payout: 0};
+    }
+    var t = byTeacher[teacherKey];
+    t.activities[cat ? cat.name : (actMarks[0].activityName || '?')] = (t.activities[cat ? cat.name : actMarks[0].activityName] || 0) + actMarks.length;
+    t.count += actMarks.length;
+    actMarks.forEach(function(m){ t.children[m.child] = true; });
+    t.payout += _payoutForActivity(Number(actId), actMarks);
+  });
+  var rows = Object.keys(byTeacher).map(function(k){
+    var t = byTeacher[k];
+    return {
+      name: t.name, activities: t.activities, count: t.count,
+      uniqueChildren: Object.keys(t.children).length, payout: t.payout
+    };
+  });
+  if (search) rows = rows.filter(function(r){ return r.name.toLowerCase().indexOf(search) !== -1; });
+  rows.sort(function(a,b){ return b.payout - a.payout; });
+
+  $('anaThead').innerHTML =
+    '<tr><th>Викладач</th><th>Заняття</th><th class="num">Разів</th><th class="num">Дітей</th>' +
+    (canSeeMoney ? '<th class="num">ЗП до виплати</th>' : '') +
+    '</tr>';
+
+  var html = '';
+  rows.forEach(function(r){
+    var actsHtml = Object.keys(r.activities).map(function(n){
+      return '<span class="ana-tag">' + escapeHtml(n) + ' × ' + r.activities[n] + '</span>';
+    }).join('');
+    var nameCls = r.name === '— не вказаний' ? 'muted' : 'cat-name';
+    html += '<tr class="ana-row" data-key="teacher:' + escapeHtml(r.name) + '">' +
+              '<td class="' + nameCls + '">' + escapeHtml(r.name) + '</td>' +
+              '<td>' + actsHtml + '</td>' +
+              '<td class="num">' + r.count + '</td>' +
+              '<td class="num">' + r.uniqueChildren + '</td>' +
+              (canSeeMoney ? '<td class="num">' + fmtUah(r.payout) + ' ₴</td>' : '') +
+            '</tr>';
+  });
+  $('anaTbody').innerHTML = html || '<tr><td colspan="5" class="muted" style="text-align:center;padding:20px">Нічого не знайдено</td></tr>';
+}
+
+function _renderAnaDays(marks, search, canSeeMoney){
+  var byDay = {};
+  marks.forEach(function(m){
+    if (!byDay[m.date]){
+      byDay[m.date] = {date: m.date, activities: {}, children: {}, sum: 0};
+    }
+    var d = byDay[m.date];
+    d.activities[m.activityName] = (d.activities[m.activityName] || 0) + 1;
+    d.children[m.child] = true;
+    d.sum += (m.price || 0);
+  });
+  var rows = Object.keys(byDay).map(function(k){
+    var d = byDay[k];
+    return {
+      date: d.date, activities: d.activities,
+      uniqueChildren: Object.keys(d.children).length, sum: d.sum
+    };
+  });
+  if (search) rows = rows.filter(function(r){
+    return _ddmmyyyy(r.date).indexOf(search) !== -1 ||
+           Object.keys(r.activities).some(function(n){ return n.toLowerCase().indexOf(search) !== -1; });
+  });
+  rows.sort(function(a,b){ return b.date.localeCompare(a.date); });
+
+  $('anaThead').innerHTML =
+    '<tr><th>Дата</th><th>Заняття</th><th class="num">Дітей</th>' +
+    (canSeeMoney ? '<th class="num">Сума</th>' : '') +
+    '</tr>';
+
+  var html = '';
+  rows.forEach(function(r){
+    var actsHtml = Object.keys(r.activities).map(function(n){
+      return '<span class="ana-tag">' + escapeHtml(n) + ' × ' + r.activities[n] + '</span>';
+    }).join('');
+    html += '<tr class="ana-row" data-key="day:' + r.date + '">' +
+              '<td class="cat-name">' + _ddmmyyyy(r.date) + '</td>' +
+              '<td>' + actsHtml + '</td>' +
+              '<td class="num">' + r.uniqueChildren + '</td>' +
+              (canSeeMoney ? '<td class="num">' + fmtUah(r.sum) + ' ₴</td>' : '') +
+            '</tr>';
+  });
+  $('anaTbody').innerHTML = html || '<tr><td colspan="4" class="muted" style="text-align:center;padding:20px">Нічого не знайдено</td></tr>';
+}
+
+// ── DETAIL MODAL ────────────────────────────
+function openAnaDetail(key){
+  var parts = String(key).split(':');
+  var kind = parts[0], val = parts.slice(1).join(':');
+  var marks = _filteredMarks();
+  var title = '', bodyHtml = '';
+  var canSeeMoney = hasPerm('attendance-edit');
+
+  if (kind === 'child'){
+    var ms = marks.filter(function(m){ return m.child === val; });
+    title = '👶 ' + val;
+    var sum = ms.reduce(function(s,m){ return s + (m.price || 0); }, 0);
+    bodyHtml = '<div class="muted" style="margin-bottom:10px">' + ms.length +
+               ' відвідувань · ' + (canSeeMoney ? fmtUah(sum) + ' ₴' : '') + '</div>';
+    bodyHtml += '<div class="tbl-wrap"><table class="tbl"><thead><tr>' +
+                '<th>Дата</th><th>Заняття</th>' +
+                (canSeeMoney ? '<th class="num">Ціна</th>' : '') +
+                '</tr></thead><tbody>';
+    ms.sort(function(a,b){ return b.date.localeCompare(a.date); }).forEach(function(m){
+      bodyHtml += '<tr><td>' + _ddmmyyyy(m.date) + '</td><td>' + escapeHtml(m.activityName) + '</td>' +
+                  (canSeeMoney ? '<td class="num">' + fmtUah(m.price || 0) + ' ₴</td>' : '') +
+                  '</tr>';
+    });
+    bodyHtml += '</tbody></table></div>';
+  } else if (kind === 'activity'){
+    var actId = Number(val);
+    var ms2 = marks.filter(function(m){ return m.activityId === actId; });
+    var cat = (S.items || []).find(function(a){ return a.id === actId; });
+    title = '🎯 ' + (cat ? cat.name : 'Заняття ' + actId);
+    var children = {};
+    ms2.forEach(function(m){ children[m.child] = (children[m.child] || 0) + 1; });
+    bodyHtml = '<div class="muted" style="margin-bottom:10px">' + ms2.length +
+               ' відвідувань · ' + Object.keys(children).length + ' дітей</div>';
+    bodyHtml += '<div class="tbl-wrap"><table class="tbl"><thead><tr>' +
+                '<th>Дитина</th><th class="num">Разів</th></tr></thead><tbody>';
+    Object.keys(children).sort(function(a,b){ return children[b] - children[a]; }).forEach(function(c){
+      bodyHtml += '<tr><td>' + escapeHtml(c) + '</td><td class="num">' + children[c] + '</td></tr>';
+    });
+    bodyHtml += '</tbody></table></div>';
+  } else if (kind === 'teacher'){
+    var actsForTeacher = (S.items || []).filter(function(a){ return a.loc === S.activeLoc && (a.teacher || '— не вказаний') === val; });
+    var actIds = actsForTeacher.map(function(a){ return a.id; });
+    var ms3 = marks.filter(function(m){ return actIds.indexOf(m.activityId) !== -1; });
+    title = '👨‍🏫 ' + val;
+    var byAct = {};
+    ms3.forEach(function(m){
+      if (!byAct[m.activityId]) byAct[m.activityId] = [];
+      byAct[m.activityId].push(m);
+    });
+    var totalPayout = 0;
+    Object.keys(byAct).forEach(function(id){ totalPayout += _payoutForActivity(Number(id), byAct[id]); });
+    bodyHtml = '<div class="muted" style="margin-bottom:10px">' + ms3.length +
+               ' відвідувань' +
+               (canSeeMoney ? ' · ЗП ' + fmtUah(totalPayout) + ' ₴' : '') + '</div>';
+    bodyHtml += '<div class="tbl-wrap"><table class="tbl"><thead><tr>' +
+                '<th>Заняття</th><th class="num">Разів</th>' +
+                (canSeeMoney ? '<th class="num">ЗП</th>' : '') +
+                '</tr></thead><tbody>';
+    Object.keys(byAct).forEach(function(id){
+      var cat2 = (S.items || []).find(function(a){ return a.id === Number(id); });
+      var p = _payoutForActivity(Number(id), byAct[id]);
+      bodyHtml += '<tr><td>' + escapeHtml(cat2 ? cat2.name : 'Заняття ' + id) + '</td>' +
+                  '<td class="num">' + byAct[id].length + '</td>' +
+                  (canSeeMoney ? '<td class="num">' + fmtUah(p) + ' ₴</td>' : '') +
+                  '</tr>';
+    });
+    bodyHtml += '</tbody></table></div>';
+  } else if (kind === 'day'){
+    var ms4 = marks.filter(function(m){ return m.date === val; });
+    title = '📅 ' + _ddmmyyyy(val);
+    bodyHtml = '<div class="muted" style="margin-bottom:10px">' + ms4.length + ' відвідувань</div>';
+    bodyHtml += '<div class="tbl-wrap"><table class="tbl"><thead><tr>' +
+                '<th>Дитина</th><th>Група</th><th>Заняття</th>' +
+                (canSeeMoney ? '<th class="num">Ціна</th>' : '') +
+                '</tr></thead><tbody>';
+    ms4.sort(function(a,b){ return a.child.localeCompare(b.child, 'uk'); }).forEach(function(m){
+      bodyHtml += '<tr><td>' + escapeHtml(m.child) + '</td><td>' + escapeHtml(m.group || '—') +
+                  '</td><td>' + escapeHtml(m.activityName) + '</td>' +
+                  (canSeeMoney ? '<td class="num">' + fmtUah(m.price || 0) + ' ₴</td>' : '') +
+                  '</tr>';
+    });
+    bodyHtml += '</tbody></table></div>';
+  }
+
+  $('anaDetailTitle').textContent = title;
+  $('anaDetailBody').innerHTML = bodyHtml;
+  $('anaDetailModal').classList.remove('hidden');
+  $('anaDetailModal').setAttribute('aria-hidden','false');
+  document.body.style.overflow = 'hidden';
+}
+function closeAnaDetail(){
+  $('anaDetailModal').classList.add('hidden');
+  $('anaDetailModal').setAttribute('aria-hidden','true');
+  document.body.style.overflow = '';
+}
+
+// ── CSV EXPORT ──────────────────────────────
+function exportAnalyticsCSV(){
+  var marks = _filteredMarks();
+  if (!marks.length){ showToast('Немає даних для експорту', 'err'); return; }
+  function cell(v){
+    var s = String(v == null ? '' : v);
+    if (s.indexOf(';') !== -1 || s.indexOf('"') !== -1 || s.indexOf('\n') !== -1){
+      return '"' + s.replace(/"/g, '""') + '"';
+    }
+    return s;
+  }
+  var lines = [], header = [];
+  var canSeeMoney = hasPerm('attendance-edit');
+
+  if (ANA.subTab === 'children'){
+    header = ['Дитина','Група','Занять','Заняття'];
+    if (canSeeMoney) header.push('Сума_до_сплати');
+    lines.push(header.join(';'));
+    var byChild = {};
+    marks.forEach(function(m){
+      if (!byChild[m.child]) byChild[m.child] = {name:m.child, group:m.group, count:0, sum:0, acts:{}};
+      var b = byChild[m.child]; b.count++; b.sum += (m.price||0);
+      b.acts[m.activityName] = (b.acts[m.activityName] || 0) + 1;
+    });
+    Object.keys(byChild).sort(function(a,b){ return byChild[b].sum - byChild[a].sum; }).forEach(function(k){
+      var b = byChild[k];
+      var actsStr = Object.keys(b.acts).map(function(n){ return n + ' × ' + b.acts[n]; }).join(' / ');
+      var row = [cell(b.name), cell(b.group||''), cell(b.count), cell(actsStr)];
+      if (canSeeMoney) row.push(cell(b.sum));
+      lines.push(row.join(';'));
+    });
+  } else if (ANA.subTab === 'activities'){
+    header = ['Заняття','Дітей','Разів'];
+    if (canSeeMoney) header.push('Дохід','Витрати','Прибуток');
+    lines.push(header.join(';'));
+    var byAct = {};
+    marks.forEach(function(m){
+      if (!byAct[m.activityId]) byAct[m.activityId] = {id:m.activityId, name:m.activityName, count:0, kids:{}, inc:0, list:[]};
+      var b = byAct[m.activityId]; b.count++; b.inc += (m.price||0); b.kids[m.child]=1; b.list.push(m);
+    });
+    Object.keys(byAct).forEach(function(id){
+      var b = byAct[id];
+      var pay = _payoutForActivity(Number(id), b.list);
+      var row = [cell(b.name), cell(Object.keys(b.kids).length), cell(b.count)];
+      if (canSeeMoney) row.push(cell(b.inc), cell(pay), cell(b.inc-pay));
+      lines.push(row.join(';'));
+    });
+  } else if (ANA.subTab === 'teachers'){
+    header = ['Викладач','Заняття','Разів','Дітей'];
+    if (canSeeMoney) header.push('ЗП');
+    lines.push(header.join(';'));
+    var byT = {};
+    var groupedByAct = {};
+    marks.forEach(function(m){
+      if (!groupedByAct[m.activityId]) groupedByAct[m.activityId] = [];
+      groupedByAct[m.activityId].push(m);
+    });
+    Object.keys(groupedByAct).forEach(function(id){
+      var actMarks = groupedByAct[id];
+      var cat = (S.items || []).find(function(a){ return a.id === Number(id); });
+      var teacher = (cat && cat.teacher) ? cat.teacher : '— не вказаний';
+      if (!byT[teacher]) byT[teacher] = {name:teacher, acts:{}, count:0, kids:{}, pay:0};
+      var t = byT[teacher];
+      t.acts[cat ? cat.name : '?'] = (t.acts[cat ? cat.name : '?'] || 0) + actMarks.length;
+      t.count += actMarks.length;
+      actMarks.forEach(function(m){ t.kids[m.child] = 1; });
+      t.pay += _payoutForActivity(Number(id), actMarks);
+    });
+    Object.keys(byT).forEach(function(k){
+      var t = byT[k];
+      var actsStr = Object.keys(t.acts).map(function(n){ return n + ' × ' + t.acts[n]; }).join(' / ');
+      var row = [cell(t.name), cell(actsStr), cell(t.count), cell(Object.keys(t.kids).length)];
+      if (canSeeMoney) row.push(cell(t.pay));
+      lines.push(row.join(';'));
+    });
+  } else if (ANA.subTab === 'days'){
+    header = ['Дата','Заняття','Дітей'];
+    if (canSeeMoney) header.push('Сума');
+    lines.push(header.join(';'));
+    var byD = {};
+    marks.forEach(function(m){
+      if (!byD[m.date]) byD[m.date] = {date:m.date, acts:{}, kids:{}, sum:0};
+      var d = byD[m.date];
+      d.acts[m.activityName] = (d.acts[m.activityName] || 0) + 1;
+      d.kids[m.child] = 1; d.sum += (m.price||0);
+    });
+    Object.keys(byD).sort(function(a,b){ return b.localeCompare(a); }).forEach(function(k){
+      var d = byD[k];
+      var actsStr = Object.keys(d.acts).map(function(n){ return n + ' × ' + d.acts[n]; }).join(' / ');
+      var row = [cell(_ddmmyyyy(d.date)), cell(actsStr), cell(Object.keys(d.kids).length)];
+      if (canSeeMoney) row.push(cell(d.sum));
+      lines.push(row.join(';'));
+    });
+  }
+
+  var r = _periodRange();
+  var safeLoc = S.activeLoc.replace(/[^\wа-яА-ЯіІїЇєЄґҐ-]/g, '_');
+  var fname = 'ana_' + ANA.subTab + '_' + safeLoc + '_' + r[0] + '_' + r[1] + '.csv';
+  var blob = new Blob(['﻿' + lines.join('\n')], {type: 'text/csv;charset=utf-8;'});
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a'); a.href = url; a.download = fname;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+  showToast('CSV завантажено', 'ok');
 }
 
 // ── BOOTSTRAP ───────────────────────────────
