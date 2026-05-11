@@ -128,6 +128,8 @@ select{font-family:inherit}
 .emp-missing:hover{background:#fef5e0}
 .emp-missing-icon{color:#f59e0b;font-size:12px;margin-left:5px;opacity:.75;
   vertical-align:middle}
+.emp-service{color:#6b7280;cursor:default}
+.emp-service:hover{background:transparent}
 
 /* ── EMPLOYEE MODAL ──────────────────────────────────────────── */
 .emp-modal{position:fixed;inset:0;z-index:1000;display:flex;
@@ -1116,6 +1118,60 @@ function _rowHasHRData(rawName){
   return findHrEmp(rawName) !== null;
 }
 
+// ── ДОПОМІЖНА ПОСЛУГА vs СПІВРОБІТНИК ─────────────────────────────
+// Salary містить рядки що НЕ є людьми ("Лего", "Англійська мова 230",
+// "Логопед 300") — це зовнішні послуги/доп.заняття. Для них ⚠️
+// "немає в HR-базі" недоречне, бо їх там і не має бути.
+// Прикмети послуги: цінник у кінці, коротке/lowercase/без пробілу
+// слово яке не виглядає як українське прізвище.
+
+// Поширені закінчення українських прізвищ — щоб однослівний рядок
+// "Гончаренко" не сприйняти за послугу.
+var SURNAME_SUFFIXES = [
+  'ова','ева','єва','іва',
+  'ська','цька','зька',
+  'ов','ев','єв','ів',
+  'ський','цький','зький',
+  'ин','ін',
+  'енко','ко',
+  'ук','юк','чук',
+  'ич','ович','евич'
+];
+function _looksLikeSurname(token){
+  var t = String(token || '').toLowerCase();
+  if (t.length < 4) return false;
+  for (var i = 0; i < SURNAME_SUFFIXES.length; i++){
+    var suf = SURNAME_SUFFIXES[i];
+    if (t.length > suf.length && t.slice(-suf.length) === suf) return true;
+  }
+  return false;
+}
+
+function _isExtraService(rawName){
+  var s = String(rawName || '').trim();
+  if (!s) return false;
+
+  // 1) Цінник наприкінці: "Англійська мова 230", "Логопед 300".
+  if (/\s\d{3}\s*$/.test(s)) return true;
+
+  var noSpace = s.indexOf(' ') === -1;
+  var surnameLike = noSpace && _looksLikeSurname(s);
+
+  // 2) Коротке однослівне ("Лего", "Футбол", "теат") — але якщо
+  //    закінчується на прізвищевий суфікс ("Костюк") — лишаємо як
+  //    співробітник.
+  if (s.length < 8 && noSpace && !surnameLike) return true;
+
+  // 3) Повністю з малої літери ("логопед", "футбол").
+  if (s === s.toLowerCase() && /[a-zа-яіїєґ]/i.test(s)) return true;
+
+  // 4) Однослівне і не виглядає як прізвище ("Чомусики", "Розумник",
+  //    "Хореограф") — на відміну від "Гончаренко"/"Гризунова".
+  if (noSpace && !surnameLike) return true;
+
+  return false;
+}
+
 function _empInitials(e){
   var f = (e.first || '')[0] || '';
   var l = (e.last  || '')[0] || '';
@@ -1528,12 +1584,18 @@ function renderTable(rows){
       tr.innerHTML =
         '<td class="cat-name" colspan="4">' + escapeHtml(r.name) + '</td>';
     } else {
-      // Поточна локація для відкриття картки. У detail-режимі вона
-      // одна на всю таблицю — беремо з S.data.
       var curLoc = (S.data && S.data.loc) ? S.data.loc : CFG.LOC;
-      var hasHR  = _rowHasHRData(r.name);
       var nameCell;
-      if (hasHR){
+      // Три гілки: послуга → сірий неклікабельний;
+      //            співробітник є в HR → клікабельний;
+      //            співробітник немає в HR → ⚠️ + toast при кліку.
+      if (_isExtraService(r.name)){
+        nameCell =
+          '<td class="cat-name emp-service"' +
+            ' title="Додаткова послуга / не є співробітником">' +
+            escapeHtml(r.name) +
+          '</td>';
+      } else if (_rowHasHRData(r.name)){
         nameCell =
           '<td class="cat-name emp-link" title="Відкрити картку"' +
             ' data-emp-name="' + escapeHtml(r.name) + '"' +
