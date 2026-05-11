@@ -1008,18 +1008,102 @@ function _indexHrEmps(emps){
   });
 }
 
+// Посади що Salary часто додає перед ПІБ ("Вихователь Анна Гризунова",
+// "Директор Марічка"). Перед lookup-ом у HR-базі ці слова зрізаємо.
+// Lowercase для case-insensitive порівняння; regex anchor — тільки на
+// початку рядка з пробілом після.
+var SALARY_POSITIONS = [
+  'директор','вихователь','помічник','помічниця','тьютор','психолог',
+  'логопед','медсестра','кухар','прибиральниця','завгосп','менеджер',
+  'адміністратор','англійська'
+];
+var _POSITION_RE = new RegExp(
+  '^(?:' + SALARY_POSITIONS.join('|') + ')\\s+', 'i'
+);
+
+function _stripPosition(name){
+  return String(name || '').trim().replace(_POSITION_RE, '');
+}
+
 function findHrEmp(rawName){
   if (!S.hrEmpsByName) return null;
-  var key = _normName(rawName);
-  if (!key) return null;
-  if (S.hrEmpsByName[key]) return S.hrEmpsByName[key];
-  // Fallback: тільки перші 2 слова (інколи в Salary вписують посаду
-  // після ПІБ — "Гончарова Алла Вихователь"). Пробуємо префікс.
-  var parts = key.split(' ');
-  if (parts.length > 2){
-    var short = parts.slice(0, 2).join(' ');
-    if (S.hrEmpsByName[short]) return S.hrEmpsByName[short];
+  var keyRaw = _normName(rawName);
+  if (!keyRaw) return null;
+
+  // 1) Прямий матч (як було).
+  if (S.hrEmpsByName[keyRaw]){
+    console.log('[hr-match] "' + rawName + '" → direct → ' +
+                S.hrEmpsByName[keyRaw].last + ' ' + S.hrEmpsByName[keyRaw].first);
+    return S.hrEmpsByName[keyRaw];
   }
+
+  // 2) Зрізати посаду на початку, спробувати знову. _indexHrEmps зберігає
+  // обидва порядки (last+first ТА first+last), тож якщо в Salary "Анна
+  // Гризунова" а в HR "Гризунова Анна" — знайдеться.
+  var stripped = _stripPosition(rawName);
+  var keyStripped = _normName(stripped);
+  if (keyStripped && keyStripped !== keyRaw && S.hrEmpsByName[keyStripped]){
+    var e = S.hrEmpsByName[keyStripped];
+    console.log('[hr-match] "' + rawName + '" → "' + stripped + '" → found: ' +
+                e.last + ' ' + e.first);
+    return e;
+  }
+
+  // 3) Перевернутий порядок (на випадок коли _indexHrEmps не побачив
+  // другого варіанта — захист від дублів у HR-listі).
+  if (keyStripped){
+    var parts = keyStripped.split(' ');
+    if (parts.length === 2){
+      var rev = parts[1] + ' ' + parts[0];
+      if (S.hrEmpsByName[rev]){
+        var er = S.hrEmpsByName[rev];
+        console.log('[hr-match] "' + rawName + '" → reversed "' + rev + '" → ' +
+                    er.last + ' ' + er.first);
+        return er;
+      }
+    }
+  }
+
+  // 4) Префіксний 2-слова fallback з оригіналу (для випадків "Гончарова
+  // Алла Вихователь" — посада в кінці).
+  var pRaw = keyRaw.split(' ');
+  if (pRaw.length > 2){
+    var short = pRaw.slice(0, 2).join(' ');
+    if (S.hrEmpsByName[short]){
+      console.log('[hr-match] "' + rawName + '" → prefix-2 "' + short + '" → ' +
+                  S.hrEmpsByName[short].last + ' ' + S.hrEmpsByName[short].first);
+      return S.hrEmpsByName[short];
+    }
+  }
+
+  // 5) Single-token випадок: "Директор Марічка" → stripped "Марічка".
+  // Скануємо ВСІХ HR-emp і шукаємо тих у кого first або last точно дорівнює
+  // токену. Якщо рівно 1 match — повертаємо; якщо більше — ambiguous,
+  // не клікабельно (щоб не відкрити картку іншої людини).
+  if (keyStripped && keyStripped.indexOf(' ') === -1){
+    var single = keyStripped;
+    var matches = [];
+    var seen = {};
+    for (var k in S.hrEmpsByName){
+      var em = S.hrEmpsByName[k];
+      if (seen[em._rowIdx]) continue;
+      if (_normName(em.first) === single || _normName(em.last) === single){
+        matches.push(em);
+        seen[em._rowIdx] = true;
+      }
+    }
+    if (matches.length === 1){
+      console.log('[hr-match] "' + rawName + '" → single "' + single + '" → ' +
+                  matches[0].last + ' ' + matches[0].first);
+      return matches[0];
+    }
+    if (matches.length > 1){
+      console.warn('[hr-match] ambiguous single token "' + single + '" — ' +
+                   matches.length + ' HR matches, skipping');
+    }
+  }
+
+  console.log('[hr-match] no match for "' + rawName + '" (stripped: "' + stripped + '")');
   return null;
 }
 
