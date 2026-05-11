@@ -220,6 +220,7 @@ function doPost(e) {
     else if (body.action === 'copyActivitiesFromLocation') result = copyActivitiesFromLocation(body.fromLoc || '', body.toLoc || '');
     else if (body.action === 'addAttendanceMark')         result = addAttendanceMark(body.data || {});
     else if (body.action === 'removeAttendanceMark')      result = removeAttendanceMark(body.id || 0);
+    else if (body.action === 'exportAttendanceToPayments') result = exportAttendanceToPayments(body || {});
     else result = {ok:false, error:'Unknown action'};
     return jsonOut(result);
   } catch(err) {
@@ -4404,6 +4405,135 @@ function removeAttendanceMark(id){
       }
     }
     return {ok: false, error: 'Відмітку не знайдено'};
+  } catch(e){
+    return {ok: false, error: String(e && e.message || e)};
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AUTO-EXPORT — підраховує суму додаткових занять кожної дитини за місяць
+// та переписує її у колонку "Факт доп."/"Додаткові" листа "Оплати" CRM.
+// Один рядок Пейментів = (Локація, Дитина, Місяць). Overwrite — НЕ +=, тож
+// повторні виклики дають однаковий результат (idempotent).
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Канонічні українські назви місяців — у тому ж порядку, що Sheets-колонка
+// "Місяць" Пейментів використовує.
+var MONTHS_CAL_UA = [
+  'Січень','Лютий','Березень','Квітень','Травень','Червень',
+  'Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'
+];
+
+function exportAttendanceToPayments(params){
+  try {
+    var loc = String(params.loc || '').trim();
+    var month = Number(params.month);
+    var year = Number(params.year) || new Date().getFullYear();
+    if (!loc) return {ok: false, error: 'Параметр loc обовʼязковий'};
+    if (!month || month < 1 || month > 12) return {ok: false, error: 'month має бути 1-12'};
+    var monthName = MONTHS_CAL_UA[month - 1];
+
+    // 1) Agg суми по дитині з листа "Додаткові_Відвідуваність".
+    var attSh = _getAttendanceSheet(false);
+    var attData = attSh.getDataRange().getValues();
+    var sumPerChild = {};
+    // Період: [first-of-month, first-of-next-month).
+    var mm = month < 10 ? '0' + month : String(month);
+    var dateFrom = year + '-' + mm + '-01';
+    var nm = month + 1, ny = year;
+    if (nm > 12){ nm = 1; ny++; }
+    var nmm = nm < 10 ? '0' + nm : String(nm);
+    var dateTo = ny + '-' + nmm + '-01';
+
+    for (var i = 1; i < attData.length; i++){
+      var rec = _parseAttendanceRow(attData[i]);
+      if (rec.loc !== loc) continue;
+      if (rec.date < dateFrom || rec.date >= dateTo) continue;
+      sumPerChild[rec.child] = (sumPerChild[rec.child] || 0) + (rec.price || 0);
+    }
+
+    // 2) Відкрити лист "Оплати" у CRM, знайти потрібну колонку.
+    var crmSS = getCRMSpreadsheet();
+    var paySh = crmSS.getSheetByName(SHEET_PAYMENTS);
+    if (!paySh){
+      return {ok: false, error: 'Лист "' + SHEET_PAYMENTS + '" не знайдено в CRM'};
+    }
+    var lastRow = paySh.getLastRow();
+    var lastCol = paySh.getLastColumn();
+    if (lastRow < 2){
+      return {
+        ok: true, updated: 0, totalAmount: 0,
+        notFound: Object.keys(sumPerChild), monthName: monthName, loc: loc
+      };
+    }
+    var headers = paySh.getRange(1, 1, 1, lastCol).getValues()[0];
+    var colIdx = {};
+    for (var c = 0; c < headers.length; c++){
+      var key = String(headers[c] || '').toLowerCase().trim();
+      if (key) colIdx[key] = c + 1;  // 1-based
+    }
+    // Колонка "Додаткові" / "Факт доп." — підтримуємо обидва варіанти.
+    var dopCol = colIdx['факт доп.'] || colIdx['факт доп'] ||
+                 colIdx['додаткові']  || colIdx['додаткові заняття'] ||
+                 colIdx['доп.']      || colIdx['доп'];
+    if (!dopCol){
+      return {
+        ok: false,
+        error: 'Колонка "Додаткові" / "Факт доп." не знайдена в листі "' + SHEET_PAYMENTS + '". Доступні: ' +
+               Object.keys(colIdx).join(', ')
+      };
+    }
+    var locCol   = colIdx['локація'];
+    var nameCol  = colIdx["ім'я дитини"] || colIdx['імʼя дитини'] || colIdx['ім’я дитини'] || colIdx['ім`я дитини'];
+    var monthCol = colIdx['місяць'];
+    if (!locCol || !nameCol){
+      return {ok: false, error: 'Не знайдено колонок "Локація" або "Ім\'я дитини" у листі Пейментів'};
+    }
+
+    // 3) Прочитати всі рядки одним range; знайти ті що match-ять loc/month/child.
+    var allRows = paySh.getRange(2, 1, lastRow - 1, lastCol).getValues();
+    var updates = [];
+    var foundNames = {};
+    var updated = 0;
+    var totalAmount = 0;
+
+    for (var j = 0; j < allRows.length; j++){
+      var row = allRows[j];
+      var rLoc   = String(row[locCol - 1]   || '').trim();
+      var rName  = String(row[nameCol - 1]  || '').trim();
+      var rMonth = monthCol ? String(row[monthCol - 1] || '').trim() : '';
+      if (rLoc !== loc) continue;
+      if (rMonth && rMonth !== monthName) continue;
+      if (!sumPerChild.hasOwnProperty(rName)) continue;
+
+      var sum = sumPerChild[rName];
+      updates.push([j + 2, dopCol, sum]);  // 1-based row, col, value
+      foundNames[rName] = true;
+      totalAmount += sum;
+      updated++;
+    }
+
+    // 4) Записати поодиноко (для невеликих обʼємів — ОК; зазвичай ≤ 50/локацію).
+    for (var k = 0; k < updates.length; k++){
+      paySh.getRange(updates[k][0], updates[k][1]).setValue(updates[k][2]);
+    }
+
+    var notFound = [];
+    Object.keys(sumPerChild).forEach(function(n){
+      if (!foundNames[n]) notFound.push(n);
+    });
+
+    return {
+      ok: true,
+      updated: updated,
+      totalAmount: totalAmount,
+      notFound: notFound,
+      monthName: monthName,
+      loc: loc,
+      childrenPreview: Object.keys(sumPerChild).map(function(n){
+        return {child: n, sum: sumPerChild[n], inPayments: !!foundNames[n]};
+      })
+    };
   } catch(e){
     return {ok: false, error: String(e && e.message || e)};
   }

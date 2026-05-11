@@ -192,6 +192,41 @@ select,input,textarea{font-family:inherit}
 .ana-pos{color:var(--green);font-weight:800}
 .ana-neg{color:var(--red);font-weight:800}
 
+/* ── EXPORT (Etap 4) ─────────────────────────────────────── */
+.exp-filters{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;
+  background:#fff;padding:14px 18px;border-radius:var(--r);box-shadow:var(--sh);margin-bottom:14px}
+.exp-row-found td{color:var(--dark2)}
+.exp-row-missing{background:#fef5e0}
+.exp-row-missing td{color:#b7791f}
+.exp-log-entry{padding:8px 0;border-bottom:1px solid #f0f4f8;font-size:13px;
+  display:flex;justify-content:space-between;gap:10px;align-items:center}
+.exp-log-entry:last-child{border-bottom:none}
+.exp-log-ic{flex-shrink:0}
+
+/* ── SYNC INDICATOR ──────────────────────────────────────── */
+.sync-ind{position:fixed;bottom:20px;right:20px;z-index:900;
+  display:flex;flex-direction:column;align-items:flex-end;gap:6px}
+.sync-pill{display:inline-flex;align-items:center;gap:8px;background:#fff;
+  padding:8px 14px;border-radius:20px;box-shadow:0 4px 16px rgba(0,0,0,.12);
+  font-size:13px;font-weight:600;color:var(--dark2);cursor:pointer;
+  border:1.5px solid transparent;transition:all .15s}
+.sync-pill:hover{box-shadow:0 6px 20px rgba(0,0,0,.18)}
+.sync-dot{font-size:11px;line-height:1}
+.sync-dot.sync-idle    {color:#94a3b8}
+.sync-dot.sync-pending {color:#f59e0b}
+.sync-dot.sync-syncing {color:#3b82f6;animation:pulse-spin 1s linear infinite}
+.sync-dot.sync-ok      {color:#10b981}
+.sync-dot.sync-err     {color:#ef4444}
+@keyframes pulse-spin{50%{opacity:.4}}
+.sync-log{background:#fff;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.12);
+  padding:12px 14px;width:320px;max-width:90vw;max-height:300px;overflow-y:auto}
+.sync-log-hd{font-size:11px;font-weight:800;color:var(--gray);
+  text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px}
+.sync-log-row{padding:6px 0;font-size:12px;border-bottom:1px solid #f0f4f8;
+  display:flex;justify-content:space-between;gap:8px}
+.sync-log-row:last-child{border-bottom:none}
+.sync-log-row .t{color:var(--gray);font-variant-numeric:tabular-nums}
+
 /* ── MODAL ────────────────────────────────────────────────── */
 .modal{position:fixed;inset:0;z-index:1000;display:flex;
   align-items:center;justify-content:center;padding:20px}
@@ -424,7 +459,7 @@ select,input,textarea{font-family:inherit}
     <button class="mt-btn active" id="mtCatalog">📋 Каталог занять</button>
     <button class="mt-btn" id="mtAttendance" data-permission="attendance-view">📝 Відвідуваність</button>
     <button class="mt-btn" id="mtAnalytics"  data-permission="attendance-view">📊 Аналітика</button>
-    <button class="mt-btn" id="mtExport"     disabled title="Етап 4 — coming soon">💳 Експорт в Пейменти</button>
+    <button class="mt-btn" id="mtExport" data-permission="export-payments">💳 Експорт в Пейменти</button>
   </div>
 
   <!-- ── ETAP 1: КАТАЛОГ ── -->
@@ -577,15 +612,52 @@ select,input,textarea{font-family:inherit}
     </div>
   </div>
 
-  <!-- ── ETAP 4: ЕКСПОРТ ── -->
+  <!-- ── ETAP 4: ЕКСПОРТ В ПЕЙМЕНТИ ── -->
   <div id="exportMode" class="hidden">
-    <div class="card">
-      <div class="coming">
-        <div class="coming-ic">🚧</div>
-        <div class="coming-h">Етап 4 — Експорт в Пейменти</div>
-        <div class="coming-p">Готується в наступних оновленнях.<br>
-          Автоматичне формування рядків у Пейментах на основі відвідуваності.</div>
+    <div class="exp-filters">
+      <div class="ana-fg">
+        <label>📅 Місяць</label>
+        <select id="expMonthSel"></select>
       </div>
+      <div class="ana-fg">
+        <label>📅 Рік</label>
+        <select id="expYearSel"></select>
+      </div>
+      <button id="expDoBtn" class="btn btn-primary" style="font-size:15px;padding:12px 22px">
+        🔁 Експортувати зараз
+      </button>
+      <button id="expPrevMonthBtn" class="btn btn-secondary">📅 Минулий місяць</button>
+      <button id="expAllLocsBtn" class="btn btn-secondary" data-perm-cfo="1">
+        🔁 Всі локації (поточний місяць)
+      </button>
+      <button id="expCsvBtn" class="btn btn-secondary">📤 CSV</button>
+    </div>
+
+    <div class="card">
+      <div class="card-hd">
+        <h3 id="expPreviewTitle">Превʼю</h3>
+        <span id="expPreviewSub" style="font-size:12px;color:var(--gray);font-weight:500"></span>
+      </div>
+      <div class="card-bd">
+        <div class="tbl-wrap">
+          <table class="tbl">
+            <thead>
+              <tr>
+                <th>Дитина</th>
+                <th>Група</th>
+                <th class="num">Сума додаткових</th>
+                <th>В Пейментах</th>
+              </tr>
+            </thead>
+            <tbody id="expPreviewBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div id="expLog" class="card hidden">
+      <div class="card-hd"><h3>📋 Останній експорт</h3></div>
+      <div class="card-bd pad" id="expLogBody"></div>
     </div>
   </div>
 
@@ -701,6 +773,18 @@ select,input,textarea{font-family:inherit}
 </div>
 
 <div id="actToast" class="toast hidden"></div>
+
+<!-- ── FLOATING SYNC INDICATOR (Etap 4) ───────────────────────── -->
+<div id="syncIndicator" class="sync-ind hidden">
+  <div class="sync-pill" id="syncPill" title="Натисніть для журналу">
+    <span id="syncDot" class="sync-dot sync-idle">●</span>
+    <span id="syncText">Синхронізовано</span>
+  </div>
+  <div id="syncLog" class="sync-log hidden">
+    <div class="sync-log-hd">🗂️ Журнал останніх синхронізацій</div>
+    <div id="syncLogBody"></div>
+  </div>
+</div>
 
 <script>
 'use strict';
@@ -829,6 +913,7 @@ var PERMISSIONS = {
     'opex','categories','salary','overview_analytics',
     'activities','activities-view','activities-edit',
     'attendance-view','attendance-edit',
+    'export-payments',
     'client_birthdays',
     'card-employee-info',
     'card-employee-salary-button','card-employee-vacation-button','card-employee-sick-button',
@@ -847,6 +932,7 @@ var PERMISSIONS = {
     'opex','categories','salary','overview_analytics',
     'activities','activities-view','activities-edit',
     'attendance-view','attendance-edit',
+    'export-payments',
     'client_birthdays',
     'card-employee-info',
     'card-employee-salary-button','card-employee-vacation-button','card-employee-sick-button',
@@ -865,6 +951,7 @@ var PERMISSIONS = {
     'opex','categories','salary','overview_analytics',
     'activities','activities-view','activities-edit',
     'attendance-view','attendance-edit',
+    'export-payments',
     'client_birthdays',
     'card-employee-info',
     'card-employee-salary-button','card-employee-vacation-button','card-employee-sick-button',
@@ -925,6 +1012,9 @@ var PERMISSIONS = {
     'opex','categories','salary','overview_analytics',
     'activities','activities-view','activities-edit',
     'attendance-view','attendance-edit',
+    // export-payments — навмисно НЕ дається director (Етап 4 спека:
+    // вкладку "💳 Експорт" бачать тільки CFO/CEO/CCO/COO; auto-експорт
+    // у director теж не запускається, бо ця ж permission гейтить hook).
     'client_birthdays',
     'card-employee-info',
     'card-employee-salary-button','card-employee-vacation-button','card-employee-sick-button',
@@ -1517,6 +1607,7 @@ function switchMode(m){
   initGlobalLocSelector();
   if (m === 'attendance')     initAttendanceTab();
   else if (m === 'analytics') initAnalyticsTab();
+  else if (m === 'export')    initExportTab();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1896,6 +1987,11 @@ async function toggleAttendance(btn){
 
   btn.disabled = false;
   delete ATT.inFlight[key];
+
+  // Етап 4: запускаємо debounce 5с для авто-експорту в Пейменти.
+  // Викликаємо ТІЛЬКИ якщо у користувача є export-payments perm —
+  // інакше тиха відсутність (director без перму просто маркує).
+  scheduleAutoExport();
 }
 
 function _markerLabel(){
@@ -1968,7 +2064,13 @@ function bindEventListeners(){
     if (this.disabled) return;
     switchMode('analytics');
   });
-  // Експорт лишається disabled — Етап 4 ще не зроблений.
+  $('mtExport').addEventListener('click', function(){
+    if (this.disabled) return;
+    switchMode('export');
+  });
+  // Sync-indicator: клік на пілюлю — відкриває/ховає журнал.
+  var pill = $('syncPill');
+  if (pill) pill.addEventListener('click', toggleSyncLogPanel);
   $('addActivityBtn').addEventListener('click', function(){ openActivityModal(0); });
   $('actSaveBtn').addEventListener('click', saveActivity);
   $('copyActivitiesBtn').addEventListener('click', openCopyModal);
@@ -2242,7 +2344,15 @@ async function renderAnalytics(){
 
 function renderAnaRangeLbl(){
   var r = _periodRange();
-  $('anaRangeLbl').textContent = '📅 ' + _ddmmyyyy(r[0]) + ' — ' + _ddmmyyyy(r[1]);
+  var txt = '📅 ' + _ddmmyyyy(r[0]) + ' — ' + _ddmmyyyy(r[1]);
+  // Етап 4: показуємо коли востаннє експортували в Пейменти.
+  var lastSync = (EXP && EXP.log && EXP.log[0]) ? EXP.log[0] : null;
+  if (lastSync && lastSync.status === 'ok'){
+    var minsAgo = Math.round((Date.now() - lastSync.ts) / 60000);
+    txt += ' · 💳 Пейменти оновлено ' + (minsAgo < 1 ? 'щойно' :
+                                          minsAgo + ' хв тому');
+  }
+  $('anaRangeLbl').textContent = txt;
 }
 
 function renderAnaKPIs(){
@@ -2697,6 +2807,364 @@ function exportAnalyticsCSV(){
   showToast('CSV завантажено', 'ok');
 }
 
+// ═══════════════════════════════════════════════════════════════
+// EXPORT TO PAYMENTS (Етап 4)
+// ═══════════════════════════════════════════════════════════════
+// Авто-експорт через 5-секундний debounce після останньої відмітки.
+// Manual export через вкладку. Floating sync indicator показує стан.
+
+var EXP = {
+  initialized: false,
+  month: new Date().getMonth() + 1,
+  year:  new Date().getFullYear(),
+  // Debounce
+  pendingTimer: null,
+  pendingFor: null,   // {loc, month, year} — що буде експортовано
+  pendingUntil: 0,    // timestamp коли спрацює fetch
+  countdownTimer: null,
+  // State of sync indicator: idle | pending | syncing | ok | err
+  syncState: 'idle',
+  syncMessage: '',
+  log: []             // [{ts, loc, status, msg}] останні 10
+};
+
+var EXP_LOG_KEY = 'activities_export_log_v1';
+
+function _loadExpLog(){
+  try {
+    var raw = localStorage.getItem(EXP_LOG_KEY);
+    if (raw){
+      var c = JSON.parse(raw);
+      if (Array.isArray(c)) EXP.log = c.slice(0, 10);
+    }
+  } catch(e){}
+}
+function _saveExpLog(){
+  try { localStorage.setItem(EXP_LOG_KEY, JSON.stringify(EXP.log.slice(0, 10))); } catch(e){}
+}
+function _pushLog(status, loc, msg){
+  EXP.log.unshift({
+    ts: Date.now(), loc: loc, status: status, msg: msg
+  });
+  if (EXP.log.length > 10) EXP.log = EXP.log.slice(0, 10);
+  _saveExpLog();
+  renderSyncLog();
+}
+
+function _timeStr(ts){
+  var d = new Date(ts);
+  var p = function(x){ return x<10?'0'+x:''+x; };
+  return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+}
+
+// Показуємо/оновлюємо floating indicator.
+function setSyncState(state, message){
+  EXP.syncState = state;
+  EXP.syncMessage = message || '';
+  var ind = $('syncIndicator');
+  if (!ind) return;
+  ind.classList.remove('hidden');
+  var dot = $('syncDot');
+  dot.className = 'sync-dot sync-' + state;
+  $('syncText').textContent = message || ({
+    idle:    'Синхронізовано з Пейментами',
+    pending: 'Очікую…',
+    syncing: 'Синхронізація…',
+    ok:      '✅ Експортовано',
+    err:     '❌ Помилка'
+  })[state];
+}
+
+function renderSyncLog(){
+  var body = $('syncLogBody');
+  if (!body) return;
+  if (!EXP.log.length){
+    body.innerHTML = '<div class="muted" style="font-size:12px;padding:6px 0">Поки немає записів</div>';
+    return;
+  }
+  body.innerHTML = EXP.log.map(function(e){
+    var ic = ({ok:'✅', err:'❌', pending:'⏳', syncing:'🔄'})[e.status] || '•';
+    return '<div class="sync-log-row">' +
+             '<span>' + ic + ' ' + escapeHtml(e.loc) + ' — ' + escapeHtml(e.msg) + '</span>' +
+             '<span class="t">' + _timeStr(e.ts) + '</span>' +
+           '</div>';
+  }).join('');
+}
+
+// Toggle log panel on indicator click.
+function toggleSyncLogPanel(){
+  $('syncLog').classList.toggle('hidden');
+}
+
+// Викликаємо з toggleAttendance — після кожної відмітки запускаємо
+// debounce 5с. Кожен новий toggle — скидає таймер.
+function scheduleAutoExport(){
+  if (!hasPerm('export-payments')){
+    // Тихо: користувач (наприклад director без перму) не запускає експорт.
+    return;
+  }
+  var loc   = S.activeLoc;
+  var month = new Date().getMonth() + 1;
+  var year  = new Date().getFullYear();
+  if (!loc) return;
+
+  if (EXP.pendingTimer) clearTimeout(EXP.pendingTimer);
+  if (EXP.countdownTimer) clearInterval(EXP.countdownTimer);
+
+  EXP.pendingFor = {loc: loc, month: month, year: year};
+  EXP.pendingUntil = Date.now() + 5000;
+
+  // Show countdown in indicator.
+  setSyncState('pending', '⏳ Синхронізація з Пейментами через 5с…');
+  EXP.countdownTimer = setInterval(function(){
+    var remaining = Math.max(0, Math.ceil((EXP.pendingUntil - Date.now()) / 1000));
+    if (remaining <= 0){
+      clearInterval(EXP.countdownTimer); EXP.countdownTimer = null;
+      return;
+    }
+    setSyncState('pending', '⏳ Синхронізація з Пейментами через ' + remaining + 'с…');
+  }, 500);
+
+  EXP.pendingTimer = setTimeout(function(){
+    EXP.pendingTimer = null;
+    if (EXP.countdownTimer){ clearInterval(EXP.countdownTimer); EXP.countdownTimer = null; }
+    var spec = EXP.pendingFor;
+    EXP.pendingFor = null;
+    if (spec) doExportToPayments(spec.loc, spec.month, spec.year, /*manual*/ false);
+  }, 5000);
+}
+
+async function doExportToPayments(loc, month, year, manual){
+  if (!hasPerm('export-payments')){
+    if (manual) showToast('Немає прав на експорт у Пейменти', 'err');
+    return null;
+  }
+  setSyncState('syncing', '🔄 Синхронізація з Пейментами…');
+  try {
+    var r = await fetch(CFG.SCRIPT_URL, {
+      method: 'POST',
+      redirect: 'follow',
+      headers: {'Content-Type': 'text/plain;charset=utf-8'},
+      body: JSON.stringify({action: 'exportAttendanceToPayments', loc: loc, month: month, year: year})
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    var json = await r.json();
+    if (!json.ok) throw new Error(json.error || 'Export rejected');
+
+    var msg = '✅ ' + json.updated + ' дітей · ' + fmtUah(json.totalAmount || 0) + ' ₴';
+    if (json.notFound && json.notFound.length){
+      msg += ' · ⚠️ ' + json.notFound.length + ' не знайдено';
+    }
+    setSyncState('ok', msg);
+    _pushLog('ok', loc, json.updated + ' дітей · ' + fmtUah(json.totalAmount || 0) + ' ₴' +
+             (json.notFound && json.notFound.length ? ' (⚠️ ' + json.notFound.length + ')' : ''));
+
+    if (manual){
+      showToast('✅ Експортовано: ' + json.updated + ' дітей · ' + fmtUah(json.totalAmount || 0) + ' ₴', 'ok', 5000);
+      _renderExportLog(json);
+    }
+    return json;
+  } catch(e){
+    var em = String(e && e.message || e);
+    // Distinguish "Unknown action" як ознака non-deployed backend.
+    var isUnknown = /unknown action/i.test(em);
+    if (isUnknown){
+      setSyncState('err', '⚠️ Auto-експорт недоступний (потрібен деплой Apps Script)');
+      _pushLog('err', loc, 'Apps Script не задеплоєний');
+      if (manual){
+        showToast('⚠️ Auto-експорт недоступний — потрібен деплой Apps Script. Дані збережено локально.', 'err', 6000);
+      }
+    } else {
+      setSyncState('err', '❌ Помилка: ' + em);
+      _pushLog('err', loc, em);
+      if (manual){
+        showToast('❌ Помилка експорту: ' + em, 'err', 7000);
+      }
+    }
+    return null;
+  }
+}
+
+// ── EXPORT TAB UI ───────────────────────────
+function initExportTab(){
+  if (EXP.initialized){
+    renderExportPreview();
+    return;
+  }
+  EXP.initialized = true;
+  _loadExpLog();
+  renderSyncLog();
+
+  // Місяць dropdown
+  var mSel = $('expMonthSel');
+  ['Січень','Лютий','Березень','Квітень','Травень','Червень',
+   'Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'].forEach(function(n, i){
+    var o = document.createElement('option');
+    o.value = (i + 1); o.textContent = n;
+    if (i + 1 === EXP.month) o.selected = true;
+    mSel.appendChild(o);
+  });
+  mSel.addEventListener('change', function(){
+    EXP.month = Number(this.value);
+    renderExportPreview();
+  });
+
+  // Рік dropdown
+  var ySel = $('expYearSel');
+  var curY = new Date().getFullYear();
+  for (var y = curY - 1; y <= curY + 1; y++){
+    var o = document.createElement('option');
+    o.value = y; o.textContent = y;
+    if (y === EXP.year) o.selected = true;
+    ySel.appendChild(o);
+  }
+  ySel.addEventListener('change', function(){
+    EXP.year = Number(this.value);
+    renderExportPreview();
+  });
+
+  $('expDoBtn').addEventListener('click', function(){
+    doExportToPayments(S.activeLoc, EXP.month, EXP.year, /*manual*/ true);
+  });
+  $('expPrevMonthBtn').addEventListener('click', function(){
+    var m = EXP.month - 1, y = EXP.year;
+    if (m < 1){ m = 12; y--; }
+    EXP.month = m; EXP.year = y;
+    $('expMonthSel').value = m; $('expYearSel').value = y;
+    renderExportPreview();
+    doExportToPayments(S.activeLoc, m, y, true);
+  });
+  $('expAllLocsBtn').addEventListener('click', exportAllLocations);
+  $('expCsvBtn').addEventListener('click', exportPreviewCSV);
+
+  // Hide "all locations" button for non-CFO (only CFO has 'all').
+  if (S.user && S.user.role !== 'cfo' && S.user.role !== 'hr'){
+    $('expAllLocsBtn').classList.add('hidden');
+  }
+
+  renderExportPreview();
+}
+
+async function renderExportPreview(){
+  $('expPreviewSub').textContent = '📍 ' + S.activeLoc + ' · ' +
+    ['Січень','Лютий','Березень','Квітень','Травень','Червень',
+     'Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'][EXP.month - 1] +
+    ' ' + EXP.year;
+
+  try {
+    if (!S.items || !S.items.length) await loadCatalog(false);
+    await _loadAnaMarks(false);
+  } catch(e){
+    $('expPreviewBody').innerHTML = '<tr><td colspan="4" class="muted" style="text-align:center;padding:20px">' + escapeHtml(e.message || e) + '</td></tr>';
+    return;
+  }
+
+  // Сума додаткових по дитині за вибраний місяць.
+  var mm = EXP.month < 10 ? '0' + EXP.month : String(EXP.month);
+  var dateFrom = EXP.year + '-' + mm + '-01';
+  var nextM = EXP.month + 1, nextY = EXP.year;
+  if (nextM > 12){ nextM = 1; nextY++; }
+  var nmm = nextM < 10 ? '0' + nextM : String(nextM);
+  var dateTo = nextY + '-' + nmm + '-01';
+
+  var sumByChild = {};
+  (ANA.marks || []).forEach(function(m){
+    if (m.loc !== S.activeLoc) return;
+    if (m.date < dateFrom || m.date >= dateTo) return;
+    if (!sumByChild[m.child]) sumByChild[m.child] = {sum: 0, group: m.group};
+    sumByChild[m.child].sum += (m.price || 0);
+  });
+
+  var rows = Object.keys(sumByChild).map(function(name){
+    return {name: name, group: sumByChild[name].group, sum: sumByChild[name].sum};
+  }).sort(function(a,b){ return b.sum - a.sum; });
+
+  var body = $('expPreviewBody');
+  if (!rows.length){
+    body.innerHTML = '<tr><td colspan="4" class="muted" style="text-align:center;padding:20px">Немає відвідувань за цей місяць</td></tr>';
+    return;
+  }
+  body.innerHTML = rows.map(function(r){
+    return '<tr>' +
+             '<td class="cat-name">' + escapeHtml(r.name) + '</td>' +
+             '<td>' + escapeHtml(r.group || '—') + '</td>' +
+             '<td class="num">' + fmtUah(r.sum) + ' ₴</td>' +
+             '<td class="muted">(оновиться після експорту)</td>' +
+           '</tr>';
+  }).join('');
+}
+
+function _renderExportLog(resp){
+  $('expLog').classList.remove('hidden');
+  var body = $('expLogBody');
+  var html = '';
+  var preview = resp.childrenPreview || [];
+  preview.sort(function(a,b){ return b.sum - a.sum; });
+  preview.forEach(function(p){
+    var ic = p.inPayments ? '✅' : '⚠️';
+    var note = p.inPayments ? fmtUah(p.sum) + ' ₴' : 'не знайдено в Пейментах';
+    html += '<div class="exp-log-entry">' +
+              '<span><span class="exp-log-ic">' + ic + '</span> ' + escapeHtml(p.child) + '</span>' +
+              '<span>' + note + '</span>' +
+            '</div>';
+  });
+  html += '<div style="margin-top:14px;font-size:13px;font-weight:700;color:var(--dark)">' +
+          'Разом оновлено: ' + resp.updated + ' дітей на суму ' + fmtUah(resp.totalAmount || 0) + ' ₴</div>';
+  body.innerHTML = html;
+}
+
+async function exportAllLocations(){
+  if (!hasPerm('export-payments')){
+    showToast('Немає прав на масовий експорт', 'err'); return;
+  }
+  if (!confirm('Експортувати поточний місяць для ВСІХ садочків? Це може зайняти 1-2 хв.')) return;
+  var locs = ALL_LOCATIONS.filter(function(L){ return L.group === 'Садочки'; });
+  var btn = $('expAllLocsBtn');
+  btn.disabled = true;
+  var origText = btn.textContent;
+  var ok = 0, fail = 0;
+  for (var i = 0; i < locs.length; i++){
+    btn.textContent = '⏳ ' + (i + 1) + '/' + locs.length + ' ' + locs[i].name;
+    var res = await doExportToPayments(locs[i].name, EXP.month, EXP.year, /*manual*/ false);
+    if (res) ok++; else fail++;
+  }
+  btn.disabled = false;
+  btn.textContent = origText;
+  showToast('Готово: ✅ ' + ok + ' успішно · ❌ ' + fail + ' з помилками', fail ? 'err' : 'ok', 6000);
+}
+
+function exportPreviewCSV(){
+  var rows = Array.from($('expPreviewBody').querySelectorAll('tr')).filter(function(tr){
+    return tr.querySelectorAll('td').length >= 4;
+  });
+  if (!rows.length){ showToast('Немає даних для експорту', 'err'); return; }
+  function cell(v){
+    var s = String(v == null ? '' : v).replace(/\s+/g, ' ').trim();
+    if (s.indexOf(';') !== -1 || s.indexOf('"') !== -1){
+      return '"' + s.replace(/"/g, '""') + '"';
+    }
+    return s;
+  }
+  var monthName = ['Січень','Лютий','Березень','Квітень','Травень','Червень',
+                   'Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'][EXP.month - 1];
+  var lines = ['Дитина;Група;Сума_додаткових_₴'];
+  rows.forEach(function(tr){
+    var c = tr.querySelectorAll('td');
+    lines.push([
+      cell(c[0].textContent), cell(c[1].textContent),
+      cell(c[2].textContent.replace(/[^\d\-]/g, ''))
+    ].join(';'));
+  });
+  var safeLoc = S.activeLoc.replace(/[^\wа-яА-ЯіІїЇєЄґҐ-]/g, '_');
+  var fname = 'export_payments_' + safeLoc + '_' + monthName + '_' + EXP.year + '.csv';
+  var blob = new Blob(['﻿' + lines.join('\n')], {type: 'text/csv;charset=utf-8;'});
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a'); a.href = url; a.download = fname;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+  showToast('CSV завантажено', 'ok');
+}
+
 // ── BOOTSTRAP ───────────────────────────────
 (async function bootstrap(){
   var sessUser = readSession();
@@ -2714,6 +3182,12 @@ function exportAnalyticsCSV(){
 
   updUserUI();
   bindEventListeners();
+  // Показуємо sync-indicator лише тим хто реально може експортувати.
+  if (hasPerm('export-payments')){
+    _loadExpLog();
+    renderSyncLog();
+    setSyncState('idle', 'Синхронізовано з Пейментами');
+  }
   await loadCatalog(false);
 })();
 </script>
