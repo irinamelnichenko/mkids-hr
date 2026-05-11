@@ -459,7 +459,7 @@ select,input,textarea{font-family:inherit}
     <button class="mt-btn active" id="mtCatalog">📋 Каталог занять</button>
     <button class="mt-btn" id="mtAttendance" data-permission="attendance-view">📝 Відвідуваність</button>
     <button class="mt-btn" id="mtAnalytics"  data-permission="attendance-view">📊 Аналітика</button>
-    <button class="mt-btn" id="mtExport" data-permission="export-payments">💳 Експорт в Пейменти</button>
+    <button class="mt-btn" id="mtExport" data-permission="export-payments">💳 Експорт у Пейменти + Salary</button>
   </div>
 
   <!-- ── ETAP 1: КАТАЛОГ ── -->
@@ -635,7 +635,7 @@ select,input,textarea{font-family:inherit}
 
     <div class="card">
       <div class="card-hd">
-        <h3 id="expPreviewTitle">Превʼю</h3>
+        <h3>📥 До Пейментів <span style="font-weight:500;color:var(--gray);font-size:12px">(колонка "Факт доп.")</span></h3>
         <span id="expPreviewSub" style="font-size:12px;color:var(--gray);font-weight:500"></span>
       </div>
       <div class="card-bd">
@@ -646,10 +646,33 @@ select,input,textarea{font-family:inherit}
                 <th>Дитина</th>
                 <th>Група</th>
                 <th class="num">Сума додаткових</th>
-                <th>В Пейментах</th>
+                <th>Статус</th>
               </tr>
             </thead>
             <tbody id="expPreviewBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-hd">
+        <h3>📥 До Salary <span style="font-weight:500;color:var(--gray);font-size:12px">(блок "Додаткові" — Факт місяця)</span></h3>
+        <span id="expSalSub" style="font-size:12px;color:var(--gray);font-weight:500"></span>
+      </div>
+      <div class="card-bd">
+        <div class="tbl-wrap">
+          <table class="tbl">
+            <thead>
+              <tr>
+                <th>Заняття</th>
+                <th class="num">Кількість</th>
+                <th class="num">Ставка</th>
+                <th class="num">Факт</th>
+                <th>Статус</th>
+              </tr>
+            </thead>
+            <tbody id="expSalBody"></tbody>
           </table>
         </div>
       </div>
@@ -2930,43 +2953,61 @@ function scheduleAutoExport(){
     if (EXP.countdownTimer){ clearInterval(EXP.countdownTimer); EXP.countdownTimer = null; }
     var spec = EXP.pendingFor;
     EXP.pendingFor = null;
-    if (spec) doExportToPayments(spec.loc, spec.month, spec.year, /*manual*/ false);
+    if (spec) doExportAttendance(spec.loc, spec.month, spec.year, /*manual*/ false);
   }, 5000);
 }
 
-async function doExportToPayments(loc, month, year, manual){
+// Об'єднаний експорт: Пейменти (дохід) + Salary (виплата викладачам).
+// Викликає один backend action 'exportAttendance' що під капотом
+// робить два sub-експорти і повертає {ok, payments, salary}.
+async function doExportAttendance(loc, month, year, manual){
   if (!hasPerm('export-payments')){
-    if (manual) showToast('Немає прав на експорт у Пейменти', 'err');
+    if (manual) showToast('Немає прав на експорт', 'err');
     return null;
   }
-  setSyncState('syncing', '🔄 Синхронізація з Пейментами…');
+  setSyncState('syncing', '🔄 Синхронізація з Пейментами + Salary…');
   try {
     var r = await fetch(CFG.SCRIPT_URL, {
       method: 'POST',
       redirect: 'follow',
       headers: {'Content-Type': 'text/plain;charset=utf-8'},
-      body: JSON.stringify({action: 'exportAttendanceToPayments', loc: loc, month: month, year: year})
+      body: JSON.stringify({action: 'exportAttendance', loc: loc, month: month, year: year})
     });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     var json = await r.json();
-    if (!json.ok) throw new Error(json.error || 'Export rejected');
-
-    var msg = '✅ ' + json.updated + ' дітей · ' + fmtUah(json.totalAmount || 0) + ' ₴';
-    if (json.notFound && json.notFound.length){
-      msg += ' · ⚠️ ' + json.notFound.length + ' не знайдено';
+    var p = json.payments || {};
+    var s = json.salary   || {};
+    if (!json.ok){
+      // Якщо хоча б один sub-експорт ok — все одно показуємо часткові
+      // успіх. Інакше — пробрасуємо помилку.
+      var anyErr = (!p.ok && p.error) || (!s.ok && s.error);
+      if (!p.ok && !s.ok) throw new Error((p.error || s.error || 'Export rejected'));
+      if (anyErr) console.warn('[export] partial fail:', p.error || '', s.error || '');
     }
-    setSyncState('ok', msg);
-    _pushLog('ok', loc, json.updated + ' дітей · ' + fmtUah(json.totalAmount || 0) + ' ₴' +
-             (json.notFound && json.notFound.length ? ' (⚠️ ' + json.notFound.length + ')' : ''));
+
+    var pMsg = p.ok
+      ? (p.updated + ' дітей · ' + fmtUah(p.totalAmount || 0) + ' ₴')
+      : ('❌ ' + (p.error || 'fail'));
+    var sMsg = s.ok
+      ? (s.updated + ' занять · ' + fmtUah(s.totalFact || 0) + ' ₴')
+      : ('❌ ' + (s.error || 'fail'));
+
+    setSyncState('ok', '✅ Пейменти: ' + pMsg + ' · Salary: ' + sMsg);
+    _pushLog(json.ok ? 'ok' : 'err', loc, 'П:' + pMsg + ' · S:' + sMsg);
 
     if (manual){
-      showToast('✅ Експортовано: ' + json.updated + ' дітей · ' + fmtUah(json.totalAmount || 0) + ' ₴', 'ok', 5000);
+      var toastMsg = '✅ Експортовано: ' + pMsg + ' (Пейменти) · ' + sMsg + ' (Salary)';
+      var warns = [];
+      if (p.notFound && p.notFound.length) warns.push('⚠️ ' + p.notFound.length + ' дітей не в Пейментах');
+      if (s.notFound && s.notFound.length) warns.push('⚠️ ' + s.notFound.length + ' занять не в Salary');
+      if (s.skipped  && s.skipped.length)  warns.push('⚠️ ' + s.skipped.length + ' без ставки');
+      if (warns.length) toastMsg += ' · ' + warns.join(' · ');
+      showToast(toastMsg, (p.ok && s.ok) ? 'ok' : 'info', 7000);
       _renderExportLog(json);
     }
     return json;
   } catch(e){
     var em = String(e && e.message || e);
-    // Distinguish "Unknown action" як ознака non-deployed backend.
     var isUnknown = /unknown action/i.test(em);
     if (isUnknown){
       setSyncState('err', '⚠️ Auto-експорт недоступний (потрібен деплой Apps Script)');
@@ -2977,12 +3018,16 @@ async function doExportToPayments(loc, month, year, manual){
     } else {
       setSyncState('err', '❌ Помилка: ' + em);
       _pushLog('err', loc, em);
-      if (manual){
-        showToast('❌ Помилка експорту: ' + em, 'err', 7000);
-      }
+      if (manual) showToast('❌ Помилка експорту: ' + em, 'err', 7000);
     }
     return null;
   }
+}
+
+// Зворотна сумісність — старе ім'я лишається як thin wrapper щоб не
+// порушувати потенційні внутрішні виклики.
+async function doExportToPayments(loc, month, year, manual){
+  return doExportAttendance(loc, month, year, manual);
 }
 
 // ── EXPORT TAB UI ───────────────────────────
@@ -3024,7 +3069,7 @@ function initExportTab(){
   });
 
   $('expDoBtn').addEventListener('click', function(){
-    doExportToPayments(S.activeLoc, EXP.month, EXP.year, /*manual*/ true);
+    doExportAttendance(S.activeLoc, EXP.month, EXP.year, /*manual*/ true);
   });
   $('expPrevMonthBtn').addEventListener('click', function(){
     var m = EXP.month - 1, y = EXP.year;
@@ -3032,7 +3077,7 @@ function initExportTab(){
     EXP.month = m; EXP.year = y;
     $('expMonthSel').value = m; $('expYearSel').value = y;
     renderExportPreview();
-    doExportToPayments(S.activeLoc, m, y, true);
+    doExportAttendance(S.activeLoc, m, y, true);
   });
   $('expAllLocsBtn').addEventListener('click', exportAllLocations);
   $('expCsvBtn').addEventListener('click', exportPreviewCSV);
@@ -3046,20 +3091,22 @@ function initExportTab(){
 }
 
 async function renderExportPreview(){
-  $('expPreviewSub').textContent = '📍 ' + S.activeLoc + ' · ' +
-    ['Січень','Лютий','Березень','Квітень','Травень','Червень',
-     'Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'][EXP.month - 1] +
-    ' ' + EXP.year;
+  var monthName = ['Січень','Лютий','Березень','Квітень','Травень','Червень',
+                   'Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'][EXP.month - 1];
+  $('expPreviewSub').textContent = '📍 ' + S.activeLoc + ' · ' + monthName + ' ' + EXP.year;
+  $('expSalSub')   .textContent  = '📍 ' + S.activeLoc + ' · ' + monthName + ' ' + EXP.year;
 
   try {
     if (!S.items || !S.items.length) await loadCatalog(false);
     await _loadAnaMarks(false);
   } catch(e){
-    $('expPreviewBody').innerHTML = '<tr><td colspan="4" class="muted" style="text-align:center;padding:20px">' + escapeHtml(e.message || e) + '</td></tr>';
+    var em = escapeHtml(e.message || e);
+    $('expPreviewBody').innerHTML = '<tr><td colspan="4" class="muted" style="text-align:center;padding:20px">' + em + '</td></tr>';
+    $('expSalBody')   .innerHTML  = '<tr><td colspan="5" class="muted" style="text-align:center;padding:20px">' + em + '</td></tr>';
     return;
   }
 
-  // Сума додаткових по дитині за вибраний місяць.
+  // Період [from, to)
   var mm = EXP.month < 10 ? '0' + EXP.month : String(EXP.month);
   var dateFrom = EXP.year + '-' + mm + '-01';
   var nextM = EXP.month + 1, nextY = EXP.year;
@@ -3067,49 +3114,142 @@ async function renderExportPreview(){
   var nmm = nextM < 10 ? '0' + nextM : String(nextM);
   var dateTo = nextY + '-' + nmm + '-01';
 
+  var monthMarks = (ANA.marks || []).filter(function(m){
+    return m.loc === S.activeLoc && m.date >= dateFrom && m.date < dateTo;
+  });
+
+  // ── Превʼю до ПЕЙМЕНТІВ — сума по дитині ──
   var sumByChild = {};
-  (ANA.marks || []).forEach(function(m){
-    if (m.loc !== S.activeLoc) return;
-    if (m.date < dateFrom || m.date >= dateTo) return;
+  monthMarks.forEach(function(m){
     if (!sumByChild[m.child]) sumByChild[m.child] = {sum: 0, group: m.group};
     sumByChild[m.child].sum += (m.price || 0);
   });
-
-  var rows = Object.keys(sumByChild).map(function(name){
+  var pRows = Object.keys(sumByChild).map(function(name){
     return {name: name, group: sumByChild[name].group, sum: sumByChild[name].sum};
   }).sort(function(a,b){ return b.sum - a.sum; });
 
-  var body = $('expPreviewBody');
-  if (!rows.length){
-    body.innerHTML = '<tr><td colspan="4" class="muted" style="text-align:center;padding:20px">Немає відвідувань за цей місяць</td></tr>';
-    return;
+  var pBody = $('expPreviewBody');
+  if (!pRows.length){
+    pBody.innerHTML = '<tr><td colspan="4" class="muted" style="text-align:center;padding:20px">Немає відвідувань за цей місяць</td></tr>';
+  } else {
+    pBody.innerHTML = pRows.map(function(r){
+      return '<tr>' +
+               '<td class="cat-name">' + escapeHtml(r.name) + '</td>' +
+               '<td>' + escapeHtml(r.group || '—') + '</td>' +
+               '<td class="num">' + fmtUah(r.sum) + ' ₴</td>' +
+               '<td class="muted">очікує експорту</td>' +
+             '</tr>';
+    }).join('');
   }
-  body.innerHTML = rows.map(function(r){
-    return '<tr>' +
-             '<td class="cat-name">' + escapeHtml(r.name) + '</td>' +
-             '<td>' + escapeHtml(r.group || '—') + '</td>' +
-             '<td class="num">' + fmtUah(r.sum) + ' ₴</td>' +
-             '<td class="muted">(оновиться після експорту)</td>' +
-           '</tr>';
-  }).join('');
+
+  // ── Превʼю до SALARY — fact по заняттю ──
+  var byActId = {};
+  monthMarks.forEach(function(m){
+    if (!byActId[m.activityId]) byActId[m.activityId] = {count: 0, dates: {}};
+    byActId[m.activityId].count++;
+    byActId[m.activityId].dates[m.date] = true;
+  });
+  var activitiesInLoc = (S.items || []).filter(function(a){ return a.active && a.loc === S.activeLoc; });
+  var sRows = activitiesInLoc.map(function(a){
+    var stat = byActId[a.id] || {count: 0, dates: {}};
+    var hasRate = a.teacherRate > 0 && !!a.teacherModel;
+    var fact = 0;
+    var qtyLabel;
+    if (a.teacherModel === 'За дитину'){
+      qtyLabel = stat.count + ' відмічень';
+      fact = stat.count * a.teacherRate;
+    } else if (a.teacherModel === 'За заняття'){
+      qtyLabel = Object.keys(stat.dates).length + ' днів';
+      fact = Object.keys(stat.dates).length * a.teacherRate;
+    } else {
+      qtyLabel = stat.count + ' відмічень';
+    }
+    var status;
+    if (!hasRate)        status = {cls:'muted',   txt:'⚠️ ставка/модель не задана'};
+    else if (!stat.count) status = {cls:'muted',   txt:'без відвідувань'};
+    else                  status = {cls:'',        txt:'очікує експорту'};
+    return {
+      name: a.name, qty: qtyLabel, rate: a.teacherRate, fact: fact,
+      status: status, hasRate: hasRate, hasMarks: stat.count > 0
+    };
+  });
+  // Показуємо лише ті що мають хоч щось (відвідування АБО ставку — щоб
+  // CFO бачив що каталог уже готовий).
+  sRows = sRows.filter(function(r){ return r.hasMarks || r.hasRate; });
+  sRows.sort(function(a,b){ return b.fact - a.fact; });
+
+  var sBody = $('expSalBody');
+  if (!sRows.length){
+    sBody.innerHTML = '<tr><td colspan="5" class="muted" style="text-align:center;padding:20px">Немає занять для експорту</td></tr>';
+  } else {
+    sBody.innerHTML = sRows.map(function(r){
+      return '<tr>' +
+               '<td class="cat-name">' + escapeHtml(r.name) + '</td>' +
+               '<td class="num">' + escapeHtml(r.qty) + '</td>' +
+               '<td class="num">' + (r.rate ? fmtUah(r.rate) + ' ₴' : '<span class="muted">—</span>') + '</td>' +
+               '<td class="num">' + (r.hasRate ? (fmtUah(r.fact) + ' ₴') : '<span class="muted">—</span>') + '</td>' +
+               '<td class="' + r.status.cls + '">' + r.status.txt + '</td>' +
+             '</tr>';
+    }).join('');
+  }
 }
 
 function _renderExportLog(resp){
   $('expLog').classList.remove('hidden');
   var body = $('expLogBody');
+  var p = resp.payments || {};
+  var s = resp.salary   || {};
   var html = '';
-  var preview = resp.childrenPreview || [];
-  preview.sort(function(a,b){ return b.sum - a.sum; });
-  preview.forEach(function(p){
-    var ic = p.inPayments ? '✅' : '⚠️';
-    var note = p.inPayments ? fmtUah(p.sum) + ' ₴' : 'не знайдено в Пейментах';
-    html += '<div class="exp-log-entry">' +
-              '<span><span class="exp-log-ic">' + ic + '</span> ' + escapeHtml(p.child) + '</span>' +
-              '<span>' + note + '</span>' +
-            '</div>';
-  });
-  html += '<div style="margin-top:14px;font-size:13px;font-weight:700;color:var(--dark)">' +
-          'Разом оновлено: ' + resp.updated + ' дітей на суму ' + fmtUah(resp.totalAmount || 0) + ' ₴</div>';
+
+  // Пейменти
+  html += '<div style="font-weight:800;color:var(--dark);margin-bottom:8px">📥 Пейменти</div>';
+  var pPreview = (p.childrenPreview || []).slice().sort(function(a,b){ return b.sum - a.sum; });
+  if (pPreview.length){
+    pPreview.forEach(function(item){
+      var ic = item.inPayments ? '✅' : '⚠️';
+      var note = item.inPayments ? fmtUah(item.sum) + ' ₴' : 'не знайдено в Пейментах';
+      html += '<div class="exp-log-entry">' +
+                '<span><span class="exp-log-ic">' + ic + '</span> ' + escapeHtml(item.child) + '</span>' +
+                '<span>' + note + '</span>' +
+              '</div>';
+    });
+    html += '<div style="margin-top:8px;font-size:13px;font-weight:700;color:var(--dark)">' +
+            'Разом: ' + (p.updated || 0) + ' дітей · ' + fmtUah(p.totalAmount || 0) + ' ₴</div>';
+  } else if (!p.ok){
+    html += '<div class="exp-log-entry"><span>❌ ' + escapeHtml(p.error || 'fail') + '</span></div>';
+  } else {
+    html += '<div class="exp-log-entry"><span class="muted">Немає даних</span></div>';
+  }
+
+  // Salary
+  html += '<div style="font-weight:800;color:var(--dark);margin:14px 0 8px">📥 Salary (Додаткові)</div>';
+  if (!s.ok){
+    html += '<div class="exp-log-entry"><span>❌ ' + escapeHtml(s.error || 'fail') + '</span></div>';
+  } else {
+    var sd = s.details || [];
+    if (!sd.length){
+      html += '<div class="exp-log-entry"><span class="muted">Немає занять з ставкою</span></div>';
+    } else {
+      sd.forEach(function(d){
+        var ic = d.status === 'updated' ? '✅' : '⚠️';
+        var note;
+        if (d.status === 'updated')      note = fmtUah(d.fact) + ' ₴';
+        else if (d.status === 'not-in-salary') note = 'не знайдено у Salary блок "Додаткові"';
+        else note = '—';
+        html += '<div class="exp-log-entry">' +
+                  '<span><span class="exp-log-ic">' + ic + '</span> ' + escapeHtml(d.activity) + '</span>' +
+                  '<span>' + note + '</span>' +
+                '</div>';
+      });
+    }
+    if (s.skipped && s.skipped.length){
+      html += '<div class="muted" style="margin-top:6px;font-size:12px">' +
+              '⚠️ Без ставки в каталозі: ' + s.skipped.map(escapeHtml).join(', ') + '</div>';
+    }
+    html += '<div style="margin-top:8px;font-size:13px;font-weight:700;color:var(--dark)">' +
+            'Разом: ' + (s.updated || 0) + ' занять · ' + fmtUah(s.totalFact || 0) + ' ₴</div>';
+  }
+
   body.innerHTML = html;
 }
 
@@ -3125,7 +3265,7 @@ async function exportAllLocations(){
   var ok = 0, fail = 0;
   for (var i = 0; i < locs.length; i++){
     btn.textContent = '⏳ ' + (i + 1) + '/' + locs.length + ' ' + locs[i].name;
-    var res = await doExportToPayments(locs[i].name, EXP.month, EXP.year, /*manual*/ false);
+    var res = await doExportAttendance(locs[i].name, EXP.month, EXP.year, /*manual*/ false);
     if (res) ok++; else fail++;
   }
   btn.disabled = false;

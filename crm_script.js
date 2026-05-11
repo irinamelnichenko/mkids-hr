@@ -221,6 +221,8 @@ function doPost(e) {
     else if (body.action === 'addAttendanceMark')         result = addAttendanceMark(body.data || {});
     else if (body.action === 'removeAttendanceMark')      result = removeAttendanceMark(body.id || 0);
     else if (body.action === 'exportAttendanceToPayments') result = exportAttendanceToPayments(body || {});
+    else if (body.action === 'exportToSalaryExtras')      result = exportToSalaryExtras(body || {});
+    else if (body.action === 'exportAttendance')          result = exportAttendance(body || {});
     else result = {ok:false, error:'Unknown action'};
     return jsonOut(result);
   } catch(err) {
@@ -4537,4 +4539,144 @@ function exportAttendanceToPayments(params){
   } catch(e){
     return {ok: false, error: String(e && e.message || e)};
   }
+}
+
+// Alias — для зворотної сумісності API.
+function exportToPayments(params){ return exportAttendanceToPayments(params); }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SALARY EXTRAS — за відмітками відвідуваності рахуємо факт ЗП викладача
+// додаткових занять. Знаходимо в листі Salary локації рядки з назвою
+// заняття (точний case-insensitive match по колонці A) та пишемо у Fact-
+// колонку поточного місяця.
+//
+// Алгоритм fact = teacherModel × teacherRate × stat:
+//   "За дитину"  → count_marks × teacherRate
+//   "За заняття" → unique_days × teacherRate
+//
+// Якщо teacherRate=0 або немає teacherModel — пропускаємо (skipped[]).
+// Якщо рядка у Salary немає — додаємо до notFound[].
+// ═══════════════════════════════════════════════════════════════════════════
+function exportToSalaryExtras(params){
+  try {
+    var loc = String(params.loc || '').trim();
+    var month = Number(params.month);
+    var year = Number(params.year) || new Date().getFullYear();
+    if (!loc) return {ok: false, error: 'Параметр loc обовʼязковий'};
+    if (!month || month < 1 || month > 12) return {ok: false, error: 'month має бути 1-12'};
+    var monthName = MONTHS_CAL_UA[month - 1];
+
+    // 1) Каталог для цієї локації — активні + у яких є ставка і модель.
+    var catRes = getActivitiesCatalog(loc);
+    if (!catRes.ok) return catRes;
+    var allActive = (catRes.items || []).filter(function(a){ return a.active; });
+    var withRate = allActive.filter(function(a){ return a.teacherRate > 0 && a.teacherModel; });
+    var skipped = allActive.filter(function(a){ return !(a.teacherRate > 0 && a.teacherModel); })
+                           .map(function(a){ return a.name; });
+
+    // 2) Marks за loc+month: групуємо по activityId → {count, uniqueDates}.
+    var attSh = _getAttendanceSheet(false);
+    var attData = attSh.getDataRange().getValues();
+    var mm = month < 10 ? '0' + month : String(month);
+    var dateFrom = year + '-' + mm + '-01';
+    var nm = month + 1, ny = year;
+    if (nm > 12){ nm = 1; ny++; }
+    var nmm = nm < 10 ? '0' + nm : String(nm);
+    var dateTo = ny + '-' + nmm + '-01';
+
+    var byActId = {};
+    for (var i = 1; i < attData.length; i++){
+      var rec = _parseAttendanceRow(attData[i]);
+      if (rec.loc !== loc) continue;
+      if (rec.date < dateFrom || rec.date >= dateTo) continue;
+      if (!byActId[rec.activityId]) byActId[rec.activityId] = {count: 0, dates: {}};
+      byActId[rec.activityId].count++;
+      byActId[rec.activityId].dates[rec.date] = true;
+    }
+
+    // 3) Fact per activity (для тих що з teacherRate).
+    var factByName = {};   // lowercased name → {fact, name, hasMarks}
+    withRate.forEach(function(a){
+      var stat = byActId[a.id] || {count: 0, dates: {}};
+      var fact = 0;
+      if (a.teacherModel === 'За дитину'){
+        fact = stat.count * a.teacherRate;
+      } else if (a.teacherModel === 'За заняття'){
+        fact = Object.keys(stat.dates).length * a.teacherRate;
+      }
+      factByName[a.name.toLowerCase()] = {fact: fact, name: a.name, hasMarks: stat.count > 0};
+    });
+
+    // 4) Відкрити Salary spreadsheet локації.
+    var reg = _salaryGetRegistry();
+    if (!reg.ok) return reg;
+    var entry = null;
+    for (var j = 0; j < reg.rows.length; j++){
+      if (reg.rows[j].loc === loc){ entry = reg.rows[j]; break; }
+    }
+    if (!entry) return {ok: false, error: 'Локація "' + loc + '" не знайдена у Salary-реєстрі'};
+
+    var locSS = SpreadsheetApp.openById(entry.sheetId);
+    var sheet = locSS.getSheetByName(entry.listName);
+    if (!sheet) return {ok: false, error: 'Salary sheet "' + entry.listName + '" не знайдено в файлі локації'};
+
+    // 5) Прочитати колонку A — назви рядків. Match по lowercase exact.
+    //    Блок "Додаткові" має рядки з простими назвами (Лего, Арт, Айкідо).
+    //    Інші секції — назви з цифрами/посадами, тож не співпадуть.
+    var lastRow = Math.max(sheet.getLastRow(), 80);
+    var names = sheet.getRange(1, 1, lastRow, 1).getValues();
+    var factCol = (month - 1) * 3 + 2;  // 1-based: B=2 for Jan fact
+
+    var updated = 0, totalFact = 0;
+    var notFound = [];
+    var details = [];
+
+    Object.keys(factByName).forEach(function(lname){
+      var info = factByName[lname];
+      var rowFound = -1;
+      for (var k = 3; k < names.length; k++){
+        var rname = String(names[k][0] || '').trim().toLowerCase();
+        if (rname === lname){ rowFound = k + 1; break; }
+      }
+      if (rowFound > 0){
+        sheet.getRange(rowFound, factCol).setValue(info.fact);
+        updated++;
+        totalFact += info.fact;
+        details.push({activity: info.name, fact: info.fact, status: 'updated'});
+      } else {
+        notFound.push(info.name);
+        details.push({activity: info.name, fact: info.fact, status: 'not-in-salary'});
+      }
+    });
+
+    return {
+      ok: true,
+      updated:  updated,
+      totalFact: totalFact,
+      notFound: notFound,    // у Salary немає рядка
+      skipped:  skipped,     // у каталозі немає ставки/моделі
+      details:  details,
+      monthName: monthName,
+      loc: loc
+    };
+  } catch(e){
+    return {ok: false, error: String(e && e.message || e)};
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Об'єднаний експорт — викликає обидва (Пейменти + Salary).
+// Frontend Етап 4 дебаунс кличе саме цей action.
+// ═══════════════════════════════════════════════════════════════════════════
+function exportAttendance(params){
+  var p = exportToPayments(params);
+  var s = exportToSalaryExtras(params);
+  return {
+    ok: !!(p && p.ok && s && s.ok),
+    payments: p,
+    salary:   s,
+    loc:      params && params.loc || '',
+    month:    params && params.month || 0,
+    year:     params && params.year || 0
+  };
 }
