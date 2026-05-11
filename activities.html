@@ -77,6 +77,18 @@ select,input,textarea{font-family:inherit}
 .coming-h{font-size:18px;font-weight:800;color:var(--dark2);margin-bottom:6px}
 .coming-p{font-size:14px}
 
+/* ── CATALOG: location selector bar ──────────────────────── */
+.cat-loc-bar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;
+  background:#fff;padding:12px 18px;border-radius:var(--r);box-shadow:var(--sh);margin-bottom:14px}
+.cat-loc-lbl{font-size:12px;font-weight:700;color:var(--gray);
+  text-transform:uppercase;letter-spacing:.5px}
+.cat-loc-bar select{padding:9px 14px;border:1.5px solid var(--gray2);
+  border-radius:8px;font-size:14px;font-weight:600;color:var(--dark2);
+  background:#fff;outline:none;cursor:pointer;flex:1;min-width:180px;max-width:280px}
+.cat-loc-bar select:focus{border-color:var(--green)}
+.cat-loc-bar select:disabled{background:#f4f7fa;cursor:not-allowed}
+.cat-loc-count{margin-left:auto;font-size:12px;color:var(--gray);font-weight:500}
+
 /* ── ATTENDANCE ─────────────────────────────────────────── */
 .att-filters{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;
   background:#fff;padding:14px 18px;border-radius:var(--r);box-shadow:var(--sh);margin-bottom:14px}
@@ -355,6 +367,10 @@ select,input,textarea{font-family:inherit}
     </div>
     <div class="hd-ctrl">
       <button id="addActivityBtn" class="btn btn-primary" data-permission="activities-edit">+ Додати заняття</button>
+      <button id="copyActivitiesBtn" class="btn btn-secondary" data-permission="activities-edit"
+              title="Скопіювати всі заняття з іншої локації">📋 Скопіювати з локації</button>
+      <button id="exportActivitiesBtn" class="btn btn-secondary"
+              title="CSV для архіву / перевірки">📤 CSV</button>
     </div>
   </div>
 
@@ -369,22 +385,37 @@ select,input,textarea{font-family:inherit}
 
   <!-- ── ETAP 1: КАТАЛОГ ── -->
   <div id="catalogMode">
-    <div class="card">
+    <div class="cat-loc-bar">
+      <label class="cat-loc-lbl">📍 Локація:</label>
+      <select id="catLocSel"></select>
+      <span id="catalogCount" class="cat-loc-count">—</span>
+    </div>
+
+    <div id="catalogEmpty" class="card hidden">
+      <div class="coming">
+        <div class="coming-ic">📭</div>
+        <div class="coming-h">У цій локації ще немає занять</div>
+        <div class="coming-p" data-permission="activities-edit">
+          Натисніть <strong>"+ Додати заняття"</strong> або
+          <strong>"📋 Скопіювати з іншої локації"</strong> вгорі.
+        </div>
+      </div>
+    </div>
+
+    <div id="catalogTable" class="card">
       <div class="card-hd">
         <h3 id="catalogTitle">📋 Каталог занять</h3>
-        <span id="catalogCount" style="font-size:12px;color:var(--gray);font-weight:500"></span>
       </div>
       <div class="card-bd">
         <div class="tbl-wrap">
           <table class="tbl">
             <thead>
               <tr>
-                <th>Назва</th>
+                <th>Заняття</th>
                 <th class="num">Ціна клієнту</th>
                 <th>Модель ЗП</th>
                 <th class="num">Ставка</th>
                 <th>Викладач</th>
-                <th>Локації</th>
                 <th>Статус</th>
                 <th data-permission="activities-edit">Дії</th>
               </tr>
@@ -480,8 +511,13 @@ select,input,textarea{font-family:inherit}
     </div>
     <div class="modal-bd">
       <div class="fg">
-        <label>Назва *</label>
-        <input type="text" id="actName" placeholder="напр. Лего" maxlength="64">
+        <label>Локація</label>
+        <input type="text" id="actLocFixed" readonly style="background:#f4f7fa;color:var(--gray)">
+      </div>
+      <div class="fg">
+        <label>Назва заняття *</label>
+        <input type="text" id="actName" placeholder="напр. Лего" maxlength="64" list="actNameList">
+        <datalist id="actNameList"></datalist>
       </div>
       <div class="fg-row">
         <div class="fg">
@@ -509,14 +545,6 @@ select,input,textarea{font-family:inherit}
         </div>
       </div>
       <div class="fg">
-        <label>Локації</label>
-        <div style="margin-bottom:8px;display:flex;gap:8px;flex-wrap:wrap">
-          <button type="button" class="btn btn-secondary btn-xs" onclick="actSelectAllLocs()">Обрати всі</button>
-          <button type="button" class="btn btn-secondary btn-xs" onclick="actClearLocs()">Очистити</button>
-        </div>
-        <div class="loc-chips" id="actLocChips"></div>
-      </div>
-      <div class="fg">
         <label class="toggle-row">
           <input type="checkbox" id="actActive" style="width:auto" checked>
           Активне (показувати в каталозі)
@@ -530,6 +558,37 @@ select,input,textarea{font-family:inherit}
   </div>
 </div>
 
+<!-- ── COPY-FROM-LOCATION MODAL ─────────────────────────────── -->
+<div id="copyModal" class="modal hidden" aria-hidden="true">
+  <div class="modal-overlay" data-close="1"></div>
+  <div class="modal-card" role="dialog" aria-modal="true">
+    <button class="modal-close" data-close="1" aria-label="Закрити">✕</button>
+    <div class="modal-hd">
+      <h3>📋 Скопіювати з іншої локації</h3>
+    </div>
+    <div class="modal-bd">
+      <div class="fg">
+        <label>Локація-джерело</label>
+        <select id="copyFromSel"></select>
+      </div>
+      <div class="fg">
+        <label>Локація-приймач</label>
+        <input type="text" id="copyToFixed" readonly style="background:#f4f7fa;color:var(--gray)">
+      </div>
+      <div style="background:#fef5e0;color:#b7791f;padding:10px 14px;border-radius:8px;
+                  font-size:13px;line-height:1.5">
+        ℹ️ Назви занять і ціни клієнта копіюються. <strong>Ставка і викладач —
+        ні</strong> (різні локації — різні викладачі; заповніть руками).
+        Дублікати по назві пропускаються.
+      </div>
+    </div>
+    <div class="modal-ft">
+      <button class="btn btn-secondary" data-close="1">Скасувати</button>
+      <button id="copyDoBtn" class="btn btn-primary">Скопіювати</button>
+    </div>
+  </div>
+</div>
+
 <div id="actToast" class="toast hidden"></div>
 
 <script>
@@ -537,10 +596,12 @@ select,input,textarea{font-family:inherit}
 
 var CFG = {
   SCRIPT_URL: 'https://script.google.com/macros/s/AKfycbyTSUVlaN4-PpXe47zCSmhVs0Qxy1FDXG_XsB4zcKNpqBxdhDtS9ibM4YFGkGjmPQDFWQ/exec',
-  CACHE_KEY: 'activities_catalog_v1',
+  CACHE_KEY: 'activities_catalog_v2',
   CACHE_TTL: 5 * 60 * 1000,
   // Локальний override-стор для CRUD коли Apps Script ще не задеплоєний.
-  LOCAL_KEY: 'activities_local_overrides_v1',
+  // v2 — новий формат (per-location rows); v1 був прив'язаний до старої структури.
+  LOCAL_KEY: 'activities_local_overrides_v2',
+  LAST_LOC_KEY: 'activities_last_loc_v1',
   HR_API_KEY:    'AIzaSyBXY-1iAKeBdyWc7gbtNOe66yBa5-Mcmlc',
   HR_SHEET_ID:   '1KeSelcGyp8ijUQOmzUjFlX78TOScMWAFm7Hjf33Doyo',
   HR_RANGE:      "'2025-2026'!A2:R3000",
@@ -567,31 +628,32 @@ var ALL_LOCATIONS = [
   {group:'Управління',  name:'Манхетен (Благо)'}
 ];
 
-// HARDCODED fallback з 13 занять — поки backend getActivitiesCatalog не
-// задеплоєний. Користувач може редагувати; зміни тримаються в localStorage
-// (LOCAL_KEY) до того, як з'явиться реальний бекенд.
+// HARDCODED fallback — кожен рядок це {заняття, локація}. Голосієво
+// попередньо заповнений як приклад. Решта 15 локацій порожні —
+// користувач заповнить через "+ Додати" або "📋 Скопіювати".
+// Поки Apps Script не задеплоєний — зміни тримаються в localStorage
+// (LOCAL_KEY v2 — структура змінилась з Etap 1 v1).
 var HARDCODED_CATALOG = [
-  {id:1,  name:'Лего',                              clientPrice:280, teacherModel:'За дитину',  teacherRate:0, teacher:'', locations:'всі', active:true},
-  {id:2,  name:'Арт',                               clientPrice:280, teacherModel:'За дитину',  teacherRate:0, teacher:'', locations:'всі', active:true},
-  {id:3,  name:'Айкідо',                            clientPrice:300, teacherModel:'За заняття', teacherRate:0, teacher:'', locations:'всі', active:true},
-  {id:4,  name:'m.Dance',                           clientPrice:230, teacherModel:'За дитину',  teacherRate:0, teacher:'', locations:'всі', active:true},
-  {id:5,  name:'Логопед',                           clientPrice:350, teacherModel:'За дитину',  teacherRate:0, teacher:'', locations:'всі', active:true},
-  {id:6,  name:'Гончарство',                        clientPrice:520, teacherModel:'За заняття', teacherRate:0, teacher:'', locations:'всі', active:true},
-  {id:7,  name:'Театр',                             clientPrice:350, teacherModel:'За заняття', teacherRate:0, teacher:'', locations:'всі', active:true},
-  {id:8,  name:'Робототехніка',                     clientPrice:420, teacherModel:'За заняття', teacherRate:0, teacher:'', locations:'всі', active:true},
-  {id:9,  name:'Англійська групові (як додаткова)', clientPrice:280, teacherModel:'За заняття', teacherRate:0, teacher:'', locations:'всі', active:true},
-  {id:10, name:'Вокал індивід',                     clientPrice:600, teacherModel:'За дитину',  teacherRate:0, teacher:'', locations:'всі', active:true},
-  {id:11, name:'Вокал група',                       clientPrice:300, teacherModel:'За дитину',  teacherRate:0, teacher:'', locations:'всі', active:true},
-  {id:12, name:'Чомусики',                          clientPrice:350, teacherModel:'За заняття', teacherRate:0, teacher:'', locations:'всі', active:true},
-  {id:13, name:'Футбол',                            clientPrice:0,   teacherModel:'За заняття', teacherRate:0, teacher:'', locations:'всі', active:true}
+  {id:1,  loc:'Голосієво', name:'Лего',                clientPrice:280, teacherModel:'За дитину',  teacherRate:0, teacher:'', active:true},
+  {id:2,  loc:'Голосієво', name:'Арт',                 clientPrice:280, teacherModel:'За дитину',  teacherRate:0, teacher:'', active:true},
+  {id:3,  loc:'Голосієво', name:'m.Dance',             clientPrice:230, teacherModel:'За дитину',  teacherRate:0, teacher:'', active:true},
+  {id:4,  loc:'Голосієво', name:'Логопед',             clientPrice:350, teacherModel:'За дитину',  teacherRate:0, teacher:'', active:true},
+  {id:5,  loc:'Голосієво', name:'Гончарство',          clientPrice:520, teacherModel:'За заняття', teacherRate:0, teacher:'', active:true},
+  {id:6,  loc:'Голосієво', name:'Айкідо',              clientPrice:300, teacherModel:'За заняття', teacherRate:0, teacher:'', active:true},
+  {id:7,  loc:'Голосієво', name:'Театр',               clientPrice:350, teacherModel:'За заняття', teacherRate:0, teacher:'', active:true},
+  {id:8,  loc:'Голосієво', name:'Робототехніка',       clientPrice:420, teacherModel:'За заняття', teacherRate:0, teacher:'', active:true},
+  {id:9,  loc:'Голосієво', name:'Англійська групові',  clientPrice:280, teacherModel:'За заняття', teacherRate:0, teacher:'', active:true},
+  {id:10, loc:'Голосієво', name:'Вокал індивід',       clientPrice:600, teacherModel:'За дитину',  teacherRate:0, teacher:'', active:true},
+  {id:11, loc:'Голосієво', name:'Вокал група',         clientPrice:300, teacherModel:'За дитину',  teacherRate:0, teacher:'', active:true}
 ];
 
 var S = {
   user: null,
-  items: [],
+  items: [],           // ВЕСЬ каталог (всі локації) — фільтрується при render
   hrEmps: null,
   mode: 'catalog',     // catalog | attendance | analytics | export
-  modalActivity: null  // null = add, else = edit
+  modalActivity: null, // null = add, else = edit
+  catLoc: ''           // обрана локація для перегляду каталогу
 };
 
 // ── HELPERS ─────────────────────────────────
@@ -964,37 +1026,90 @@ async function ensureHrEmpsLoaded(){
   }
 }
 
+// ── LOC SELECTOR ────────────────────────────
+function _allLocOptions(){
+  return ALL_LOCATIONS.map(function(L){ return L.name; });
+}
+function _defaultUserLoc(){
+  if (S.user && S.user.origLoc) return S.user.origLoc;
+  if (S.user && S.user.loc)     return S.user.loc;
+  return '';
+}
+function initCatLocSelector(){
+  var sel = $('catLocSel');
+  if (!sel || sel._inited) return;
+  sel._inited = true;
+  var canSwitch = isHR();
+  var defaultLoc = _defaultUserLoc();
+  if (canSwitch){
+    // Усі 16 локацій згруповано (Садочки / Школи / Управління)
+    var groups = {};
+    ALL_LOCATIONS.forEach(function(L){
+      if (!groups[L.group]) groups[L.group] = [];
+      groups[L.group].push(L.name);
+    });
+    ['Садочки','Школи','Управління'].forEach(function(g){
+      var arr = groups[g] || [];
+      if (!arr.length) return;
+      var og = document.createElement('optgroup'); og.label = g;
+      arr.forEach(function(name){
+        var o = document.createElement('option');
+        o.value = name; o.textContent = name;
+        og.appendChild(o);
+      });
+      sel.appendChild(og);
+    });
+    // Last-used з localStorage
+    var saved = '';
+    try { saved = localStorage.getItem(CFG.LAST_LOC_KEY) || ''; } catch(e){}
+    var initial = saved || defaultLoc || 'Голосієво';
+    if (!_allLocOptions().includes(initial)) initial = 'Голосієво';
+    sel.value = initial;
+  } else {
+    // Director/nurse — тільки своя
+    var o = document.createElement('option');
+    o.value = defaultLoc; o.textContent = defaultLoc;
+    sel.appendChild(o);
+    sel.value = defaultLoc;
+    sel.disabled = true;
+  }
+  S.catLoc = sel.value;
+  sel.addEventListener('change', function(){
+    S.catLoc = this.value;
+    try { localStorage.setItem(CFG.LAST_LOC_KEY, S.catLoc); } catch(e){}
+    renderCatalog();
+  });
+}
+
 // ── RENDER CATALOG ──────────────────────────
 function renderCatalog(){
-  var items = (S.items || []).slice();
-  // Активні зверху, неактивні в кінці; всередині — за назвою.
+  initCatLocSelector();
+  var loc = S.catLoc;
+  // Фільтр по локації + сортування: активні→неактивні, потім за назвою.
+  var items = (S.items || []).filter(function(a){ return a.loc === loc; });
   items.sort(function(a, b){
     if (a.active !== b.active) return a.active ? -1 : 1;
     return String(a.name || '').localeCompare(String(b.name || ''), 'uk');
   });
 
   var canEdit = hasPerm('activities-edit');
-  $('catalogCount').textContent = items.length + ' занять';
+  $('catalogCount').textContent = items.length + ' занять у "' + loc + '"';
+
+  // Empty state замість таблиці.
+  if (!items.length){
+    $('catalogTable').classList.add('hidden');
+    $('catalogEmpty').classList.remove('hidden');
+    applyRoleVisibility();
+    return;
+  }
+  $('catalogEmpty').classList.add('hidden');
+  $('catalogTable').classList.remove('hidden');
 
   var body = $('catalogBody');
   body.innerHTML = '';
-
-  if (!items.length){
-    var tr = document.createElement('tr');
-    tr.innerHTML = '<td colspan="8" style="text-align:center;padding:30px;color:var(--gray)">' +
-                   'Каталог порожній. Натисніть "+ Додати заняття" вгорі.</td>';
-    body.appendChild(tr);
-    return;
-  }
-
   items.forEach(function(a){
     var tr = document.createElement('tr');
     if (!a.active) tr.classList.add('inactive');
-    var locTxt = a.locations === 'всі' || !a.locations
-      ? '<span class="b-info badge" title="Доступно у всіх локаціях">всі</span>'
-      : '<span title="' + escapeHtml(a.locations) + '">' +
-        escapeHtml(a.locations.length > 30 ? a.locations.substring(0, 30) + '…' : a.locations) +
-        '</span>';
     var statusBadge = a.active
       ? '<span class="badge b-ok">Активне</span>'
       : '<span class="badge b-off">Неактивне</span>';
@@ -1011,7 +1126,6 @@ function renderCatalog(){
       '<td>' + (a.teacherModel ? escapeHtml(a.teacherModel) : '<span class="muted">—</span>') + '</td>' +
       '<td class="num">' + (a.teacherRate ? fmtUah(a.teacherRate) + ' ₴' : '<span class="muted">—</span>') + '</td>' +
       '<td>' + (a.teacher ? escapeHtml(a.teacher) : '<span class="muted">—</span>') + '</td>' +
-      '<td>' + locTxt + '</td>' +
       '<td>' + statusBadge + '</td>' +
       '<td data-permission="activities-edit">' + actionsHtml + '</td>';
     body.appendChild(tr);
@@ -1020,88 +1134,47 @@ function renderCatalog(){
   applyRoleVisibility();
 }
 
-// ── MODAL ────────────────────────────────────
-function _buildLocChips(selectedSet){
-  var html = '';
-  var groups = {};
-  ALL_LOCATIONS.forEach(function(L){
-    if (!groups[L.group]) groups[L.group] = [];
-    groups[L.group].push(L.name);
-  });
-  ['Садочки','Школи','Управління'].forEach(function(g){
-    var arr = groups[g] || [];
-    if (!arr.length) return;
-    html += '<div style="width:100%;font-size:10px;font-weight:700;color:var(--gray);' +
-            'text-transform:uppercase;margin-top:4px">' + g + '</div>';
-    arr.forEach(function(name){
-      var on = selectedSet === 'всі' || (selectedSet && selectedSet[name]);
-      html += '<label class="loc-chk' + (on ? ' on' : '') + '">' +
-                '<input type="checkbox" value="' + escapeHtml(name) + '"' + (on ? ' checked' : '') + '>' +
-                escapeHtml(name) +
-              '</label>';
-    });
-  });
-  $('actLocChips').innerHTML = html;
-  // Hover-стан синхронізуємо при click через event delegation.
-  $('actLocChips').onclick = function(e){
-    if (e.target && e.target.tagName === 'INPUT'){
-      var label = e.target.closest('.loc-chk');
-      if (label) label.classList.toggle('on', e.target.checked);
-    }
-  };
-}
-function actSelectAllLocs(){
-  document.querySelectorAll('#actLocChips input').forEach(function(cb){
-    cb.checked = true;
-    var l = cb.closest('.loc-chk'); if (l) l.classList.add('on');
-  });
-}
-function actClearLocs(){
-  document.querySelectorAll('#actLocChips input').forEach(function(cb){
-    cb.checked = false;
-    var l = cb.closest('.loc-chk'); if (l) l.classList.remove('on');
-  });
-}
-
+// ── MODAL: ACTIVITY ──────────────────────────
 async function openActivityModal(id){
   if (!hasPerm('activities-edit')){
     showToast('Немає прав на редагування каталогу', 'err');
     return;
   }
   await ensureHrEmpsLoaded();
-  // Заповнити datalist викладачами
+
+  // datalist викладачів цієї локації (фолбек — всі)
+  var locForFilter = S.catLoc;
+  var emps = (S.hrEmps || []).filter(function(e){ return !locForFilter || e.loc === locForFilter; });
+  if (!emps.length) emps = S.hrEmps || [];
   var dl = $('actTeacherList');
   dl.innerHTML = '';
-  (S.hrEmps || []).forEach(function(e){
+  emps.forEach(function(e){
     var nm = ((e.last || '') + ' ' + (e.first || '')).trim();
     if (nm) dl.innerHTML += '<option value="' + escapeHtml(nm) + '">';
   });
 
+  // datalist назв занять (підказки з інших локацій)
+  var seenNames = {};
+  var nl = $('actNameList');
+  nl.innerHTML = '';
+  (S.items || []).forEach(function(a){
+    if (!a.name || seenNames[a.name]) return;
+    seenNames[a.name] = true;
+    nl.innerHTML += '<option value="' + escapeHtml(a.name) + '">';
+  });
+
   var existing = id ? (S.items || []).find(function(x){ return x.id === id; }) : null;
   S.modalActivity = existing || null;
+  var targetLoc = existing ? existing.loc : S.catLoc;
 
-  $('actModalTitle').textContent = existing ? 'Редагувати заняття' : 'Додати заняття';
+  $('actModalTitle').textContent = existing ? 'Редагувати заняття' : 'Додати заняття у "' + targetLoc + '"';
+  $('actLocFixed').value      = targetLoc;
   $('actName').value          = existing ? existing.name : '';
   $('actClientPrice').value   = existing ? (existing.clientPrice || '') : '';
   $('actTeacherModel').value  = existing ? (existing.teacherModel || '') : '';
   $('actTeacherRate').value   = existing ? (existing.teacherRate || '') : '';
   $('actTeacher').value       = existing ? (existing.teacher || '') : '';
   $('actActive').checked      = existing ? !!existing.active : true;
-
-  var locsArg;
-  if (existing){
-    if (existing.locations === 'всі' || !existing.locations){
-      locsArg = 'всі';
-    } else {
-      locsArg = {};
-      existing.locations.split(',').forEach(function(s){
-        var t = s.trim(); if (t) locsArg[t] = true;
-      });
-    }
-  } else {
-    locsArg = 'всі';
-  }
-  _buildLocChips(locsArg);
 
   $('actModal').classList.remove('hidden');
   $('actModal').setAttribute('aria-hidden', 'false');
@@ -1117,32 +1190,23 @@ function closeActivityModal(){
 }
 
 function _collectModalData(){
-  var checked = [];
-  document.querySelectorAll('#actLocChips input:checked').forEach(function(cb){
-    checked.push(cb.value);
-  });
-  var totalChips = document.querySelectorAll('#actLocChips input').length;
-  var locStr;
-  if (checked.length === 0)               locStr = '';
-  else if (checked.length === totalChips) locStr = 'всі';
-  else                                    locStr = checked.join(', ');
-
   return {
+    loc:          $('actLocFixed').value.trim(),
     name:         $('actName').value.trim(),
     clientPrice:  parseFloat($('actClientPrice').value) || 0,
     teacherModel: $('actTeacherModel').value.trim(),
     teacherRate:  parseFloat($('actTeacherRate').value) || 0,
     teacher:      $('actTeacher').value.trim(),
-    locations:    locStr,
     active:       $('actActive').checked
   };
 }
 
 async function saveActivity(){
   var data = _collectModalData();
-  if (!data.name){ showToast('Поле "Назва" обовʼязкове', 'err'); $('actName').focus(); return; }
-  if (data.clientPrice <= 0 && data.clientPrice !== 0){
-    showToast('"Ціна для клієнта" має бути числом >= 0', 'err'); $('actClientPrice').focus(); return;
+  if (!data.loc){  showToast('Локація не визначена', 'err'); return; }
+  if (!data.name){ showToast('Поле "Назва заняття" обовʼязкове', 'err'); $('actName').focus(); return; }
+  if (data.clientPrice < 0){
+    showToast('"Ціна" має бути 0 або більше', 'err'); $('actClientPrice').focus(); return;
   }
   $('actSaveBtn').disabled = true;
 
@@ -1151,7 +1215,6 @@ async function saveActivity(){
   var payload = isEdit ? {id: S.modalActivity.id, data: data} : {data: data};
   var res = await saveBackend(action, payload);
 
-  // Local update — щоб UI оновити одразу, навіть якщо backend "localOnly".
   if (isEdit){
     var idx = (S.items || []).findIndex(function(x){ return x.id === S.modalActivity.id; });
     if (idx !== -1) S.items[idx] = Object.assign({}, S.items[idx], data);
@@ -1171,6 +1234,123 @@ async function saveActivity(){
   } else {
     showToast('❌ ' + (res.error || 'Помилка збереження'), 'err', 6000);
   }
+}
+
+// ── COPY FROM LOCATION ────────────────────────
+function openCopyModal(){
+  if (!hasPerm('activities-edit')){
+    showToast('Немає прав на копіювання', 'err'); return;
+  }
+  if (!S.catLoc){
+    showToast('Спочатку оберіть локацію-приймач', 'err'); return;
+  }
+  // Список локацій-джерел: усі що мають хоча б одне активне заняття,
+  // ОКРІМ поточної.
+  var withItems = {};
+  (S.items || []).forEach(function(a){
+    if (a.active && a.loc && a.loc !== S.catLoc) withItems[a.loc] = true;
+  });
+  var sources = Object.keys(withItems).sort(function(a,b){ return a.localeCompare(b,'uk'); });
+  var sel = $('copyFromSel');
+  sel.innerHTML = '';
+  if (!sources.length){
+    sel.innerHTML = '<option value="">— немає інших локацій з заняттями —</option>';
+    sel.disabled = true;
+  } else {
+    sel.disabled = false;
+    sources.forEach(function(L){
+      var o = document.createElement('option');
+      o.value = L; o.textContent = L;
+      sel.appendChild(o);
+    });
+  }
+  $('copyToFixed').value = S.catLoc;
+  $('copyModal').classList.remove('hidden');
+  $('copyModal').setAttribute('aria-hidden','false');
+  document.body.style.overflow = 'hidden';
+}
+function closeCopyModal(){
+  $('copyModal').classList.add('hidden');
+  $('copyModal').setAttribute('aria-hidden','true');
+  document.body.style.overflow = '';
+}
+async function doCopyActivities(){
+  var fromLoc = $('copyFromSel').value;
+  var toLoc   = $('copyToFixed').value;
+  if (!fromLoc){ showToast('Оберіть локацію-джерело', 'err'); return; }
+  $('copyDoBtn').disabled = true;
+  var res = await saveBackend('copyActivitiesFromLocation', {fromLoc: fromLoc, toLoc: toLoc});
+
+  // Local-side копіювання — щоб одразу побачити в UI (працює і коли
+  // backend "localOnly"). Дублікати по назві пропускаємо.
+  var existingNames = {};
+  (S.items || []).forEach(function(a){
+    if (a.loc === toLoc) existingNames[a.name.toLowerCase()] = true;
+  });
+  var maxId = Math.max.apply(null, S.items.map(function(x){return x.id||0;}).concat([0]));
+  var copied = 0, skipped = 0;
+  (S.items || []).filter(function(a){ return a.loc === fromLoc && a.active; }).forEach(function(a){
+    if (existingNames[a.name.toLowerCase()]){ skipped++; return; }
+    S.items.push({
+      id: ++maxId, loc: toLoc, name: a.name,
+      clientPrice: a.clientPrice, teacherModel: a.teacherModel,
+      teacherRate: 0, teacher: '', active: true
+    });
+    existingNames[a.name.toLowerCase()] = true;
+    copied++;
+  });
+  _saveLocalOverrides(S.items);
+
+  $('copyDoBtn').disabled = false;
+  closeCopyModal();
+  renderCatalog();
+  var msg;
+  if (res.ok && !res.localOnly){
+    msg = '✅ Скопійовано: ' + (res.copied || 0) +
+          (res.skipped ? ' (' + res.skipped + ' дублікатів пропущено)' : '');
+  } else {
+    msg = '💾 Локально скопійовано: ' + copied +
+          (skipped ? ' (' + skipped + ' дублікатів)' : '');
+  }
+  showToast(msg, 'ok', 4500);
+}
+
+// ── CSV EXPORT ────────────────────────────────
+function exportCatalogCSV(){
+  var loc = S.catLoc;
+  var items = (S.items || []).filter(function(a){ return a.loc === loc; });
+  items.sort(function(a, b){
+    if (a.active !== b.active) return a.active ? -1 : 1;
+    return String(a.name || '').localeCompare(String(b.name || ''), 'uk');
+  });
+  function cell(v){
+    var s = String(v == null ? '' : v);
+    if (s.indexOf(';') !== -1 || s.indexOf('"') !== -1 || s.indexOf('\n') !== -1){
+      return '"' + s.replace(/"/g, '""') + '"';
+    }
+    return s;
+  }
+  var lines = ['Локація;Заняття;Ціна_клієнту;Модель_ЗП;Ставка;Викладач;Активне'];
+  items.forEach(function(a){
+    lines.push([
+      cell(a.loc), cell(a.name), cell(a.clientPrice || 0),
+      cell(a.teacherModel || ''), cell(a.teacherRate || 0),
+      cell(a.teacher || ''), cell(a.active ? 'так' : 'ні')
+    ].join(';'));
+  });
+  var d = new Date();
+  var yyyy = d.getFullYear();
+  var mm = String(d.getMonth() + 1).padStart(2, '0');
+  var dd = String(d.getDate()).padStart(2, '0');
+  var safeLoc = loc.replace(/[^\wа-яА-ЯіІїЇєЄґҐ-]/g, '_');
+  var fname = 'dodatkovi_katalog_' + safeLoc + '_' + yyyy + '-' + mm + '-' + dd + '.csv';
+  var blob = new Blob(['﻿' + lines.join('\n')], {type: 'text/csv;charset=utf-8;'});
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url; a.download = fname;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+  showToast('CSV завантажено: ' + items.length + ' рядків', 'ok');
 }
 
 async function deactivateActivity(id){
@@ -1394,14 +1574,12 @@ function _saveMarksCache(){
   } catch(e){}
 }
 
-// Заняття для locації — фільтр з каталогу.
+// Заняття для locації — фільтр з каталогу. Тепер кожен рядок каталогу
+// прив'язаний до однієї локації (a.loc), тож матч прямий.
 function _activitiesForLoc(loc){
   if (!loc) return [];
   return (S.items || []).filter(function(a){
-    if (!a.active) return false;
-    if (a.locations === 'всі' || !a.locations) return true;
-    // CSV з назвами локацій
-    return String(a.locations).split(/[,;]/).map(function(s){ return s.trim(); }).indexOf(loc) !== -1;
+    return a.active && a.loc === loc;
   });
 }
 
@@ -1690,15 +1868,22 @@ function bindEventListeners(){
   // Аналітика і Експорт лишаються disabled — нічого не робимо в click handler.
   $('addActivityBtn').addEventListener('click', function(){ openActivityModal(0); });
   $('actSaveBtn').addEventListener('click', saveActivity);
+  $('copyActivitiesBtn').addEventListener('click', openCopyModal);
+  $('copyDoBtn').addEventListener('click', doCopyActivities);
+  $('exportActivitiesBtn').addEventListener('click', exportCatalogCSV);
   // Закриття модалки: Esc + overlay + ✕.
   document.addEventListener('keydown', function(e){
-    if (e.key === 'Escape' && !$('actModal').classList.contains('hidden')){
-      closeActivityModal();
+    if (e.key === 'Escape'){
+      if (!$('actModal') .classList.contains('hidden')) closeActivityModal();
+      if (!$('copyModal').classList.contains('hidden')) closeCopyModal();
     }
   });
   document.addEventListener('click', function(e){
     var t = e.target;
-    if (t && t.dataset && t.dataset.close === '1') closeActivityModal();
+    if (!t || !t.dataset || t.dataset.close !== '1') return;
+    // Закриваємо ту модалку, яка відкрита (overlay/✕ всередині неї).
+    if (!$('copyModal').classList.contains('hidden')) closeCopyModal();
+    else if (!$('actModal').classList.contains('hidden')) closeActivityModal();
   });
 }
 

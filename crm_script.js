@@ -186,7 +186,7 @@ function doGet(e) {
     else if (action === 'getOverviewAnalytics')      result = getOverviewAnalytics(e.parameter.year || '', e.parameter.month || '');
     else if (action === 'getUsers')                  result = getUsers();
     else if (action === 'getGroupNorms')             result = getGroupNorms();
-    else if (action === 'getActivitiesCatalog')      result = getActivitiesCatalog();
+    else if (action === 'getActivitiesCatalog')      result = getActivitiesCatalog(e.parameter && e.parameter.loc || '');
     else if (action === 'getAttendanceMarks')         result = getAttendanceMarks(e.parameter || {});
     else                                             result = {ok:false, error:'Unknown action: ' + action};
     return jsonOut(result);
@@ -217,6 +217,7 @@ function doPost(e) {
     else if (body.action === 'addActivity')               result = addActivity(body.data || {});
     else if (body.action === 'updateActivity')            result = updateActivity(body.id || 0, body.data || {});
     else if (body.action === 'deleteActivity')            result = deleteActivity(body.id || 0);
+    else if (body.action === 'copyActivitiesFromLocation') result = copyActivitiesFromLocation(body.fromLoc || '', body.toLoc || '');
     else if (body.action === 'addAttendanceMark')         result = addAttendanceMark(body.data || {});
     else if (body.action === 'removeAttendanceMark')      result = removeAttendanceMark(body.id || 0);
     else result = {ok:false, error:'Unknown action'};
@@ -4099,16 +4100,17 @@ function syncPayments() {
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ACTIVITIES CATALOG — лист "Додаткові_Каталог" у CONFIG_SHEET_ID.
+// ОДИН РЯДОК = ОДНЕ ЗАНЯТТЯ В ОДНІЙ ЛОКАЦІЇ. Якщо "Лего" є в 5 локаціях —
+// 5 рядків (різні ціни/викладачі/ставки можуть бути).
 // Колонки:
-//   A=id  B=Назва  C=Ціна_клієнту  D=Модель_ЗП_викладача
-//   E=Ставка_викладача  F=Викладач  G=Локації  H=Активне
-// Для модуля "🏃 Додаткові заняття" / Етап 1: Каталог.
+//   A=id  B=Локація  C=Заняття  D=Ціна_клієнту
+//   E=Модель_ЗП_викладача  F=Ставка_викладача  G=Викладач  H=Активне
 // ═══════════════════════════════════════════════════════════════════════════
 
 var ACTIVITIES_SHEET_NAME = 'Додаткові_Каталог';
 var ACTIVITIES_HEADER = [
-  'id','Назва','Ціна_клієнту','Модель_ЗП_викладача',
-  'Ставка_викладача','Викладач','Локації','Активне'
+  'id','Локація','Заняття','Ціна_клієнту','Модель_ЗП_викладача',
+  'Ставка_викладача','Викладач','Активне'
 ];
 
 function _getActivitiesSheet(createIfMissing){
@@ -4126,27 +4128,32 @@ function _getActivitiesSheet(createIfMissing){
 function _parseActivityRow(row){
   return {
     id:           Number(row[0]) || 0,
-    name:         String(row[1] || '').trim(),
-    clientPrice:  Number(row[2]) || 0,
-    teacherModel: String(row[3] || '').trim(),    // "За дитину" | "За заняття"
-    teacherRate:  Number(row[4]) || 0,
-    teacher:      String(row[5] || '').trim(),
-    locations:    String(row[6] || '').trim(),    // CSV або "всі"
+    loc:          String(row[1] || '').trim(),
+    name:         String(row[2] || '').trim(),
+    clientPrice:  Number(row[3]) || 0,
+    teacherModel: String(row[4] || '').trim(),    // "За дитину" | "За заняття"
+    teacherRate:  Number(row[5]) || 0,
+    teacher:      String(row[6] || '').trim(),
     active:       row[7] === true ||
                   /^(true|так|y|1|active|активне|✅)$/i.test(String(row[7] || '').trim())
   };
 }
 
-function getActivitiesCatalog(){
+// loc — опціональний фільтр. Якщо переданий — повертає тільки рядки
+// для цієї локації; інакше всі.
+function getActivitiesCatalog(loc){
   try {
     var sh = _getActivitiesSheet(false);
     var data = sh.getDataRange().getValues();
     if (data.length < 2) return {ok: true, items: []};
     var items = [];
+    var filterLoc = String(loc || '').trim();
     for (var i = 1; i < data.length; i++){
       var row = data[i];
-      if (!row[1]) continue;   // skip rows без назви
-      items.push(_parseActivityRow(row));
+      if (!row[2]) continue;   // skip rows без назви заняття
+      var rec = _parseActivityRow(row);
+      if (filterLoc && rec.loc !== filterLoc) continue;
+      items.push(rec);
     }
     return {ok: true, items: items};
   } catch(e){
@@ -4170,15 +4177,16 @@ function addActivity(data){
     var id = _nextActivityId(sh);
     var row = [
       id,
+      String(data.loc  || '').trim(),
       String(data.name || '').trim(),
       Number(data.clientPrice) || 0,
       String(data.teacherModel || '').trim(),
       Number(data.teacherRate) || 0,
       String(data.teacher || '').trim(),
-      String(data.locations || 'всі').trim(),
       data.active !== false
     ];
-    if (!row[1]) return {ok: false, error: 'Поле "Назва" обовʼязкове'};
+    if (!row[1]) return {ok: false, error: 'Поле "Локація" обовʼязкове'};
+    if (!row[2]) return {ok: false, error: 'Поле "Назва заняття" обовʼязкове'};
     sh.appendRow(row);
     return {ok: true, id: id};
   } catch(e){
@@ -4196,12 +4204,12 @@ function updateActivity(id, data){
       if (Number(rows[i][0]) !== nid) continue;
       // Оновлюємо лише ті поля що передані. r1 = i+1 (1-based).
       var r1 = i + 1;
-      if ('name'         in data) sh.getRange(r1, 2).setValue(String(data.name || '').trim());
-      if ('clientPrice'  in data) sh.getRange(r1, 3).setValue(Number(data.clientPrice) || 0);
-      if ('teacherModel' in data) sh.getRange(r1, 4).setValue(String(data.teacherModel || '').trim());
-      if ('teacherRate'  in data) sh.getRange(r1, 5).setValue(Number(data.teacherRate) || 0);
-      if ('teacher'      in data) sh.getRange(r1, 6).setValue(String(data.teacher || '').trim());
-      if ('locations'    in data) sh.getRange(r1, 7).setValue(String(data.locations || 'всі').trim());
+      if ('loc'          in data) sh.getRange(r1, 2).setValue(String(data.loc  || '').trim());
+      if ('name'         in data) sh.getRange(r1, 3).setValue(String(data.name || '').trim());
+      if ('clientPrice'  in data) sh.getRange(r1, 4).setValue(Number(data.clientPrice) || 0);
+      if ('teacherModel' in data) sh.getRange(r1, 5).setValue(String(data.teacherModel || '').trim());
+      if ('teacherRate'  in data) sh.getRange(r1, 6).setValue(Number(data.teacherRate) || 0);
+      if ('teacher'      in data) sh.getRange(r1, 7).setValue(String(data.teacher || '').trim());
       if ('active'       in data) sh.getRange(r1, 8).setValue(data.active !== false);
       return {ok: true};
     }
@@ -4215,6 +4223,62 @@ function updateActivity(id, data){
 // ручним у Sheets, щоб не втрачати історію.
 function deleteActivity(id){
   return updateActivity(id, {active: false});
+}
+
+// Копіює всі активні заняття з fromLoc у toLoc. Викладача і ставку
+// НЕ копіюємо (різні локації — різні викладачі); ціну і модель ЗП
+// копіюємо як дефолт, директор toLoc потім скоригує.
+function copyActivitiesFromLocation(fromLoc, toLoc){
+  try {
+    var fLoc = String(fromLoc || '').trim();
+    var tLoc = String(toLoc   || '').trim();
+    if (!fLoc) return {ok: false, error: 'Не вказано локацію-джерело'};
+    if (!tLoc) return {ok: false, error: 'Не вказано локацію-приймач'};
+    if (fLoc === tLoc) return {ok: false, error: 'Локація-джерело і приймач однакові'};
+
+    var sh = _getActivitiesSheet(true);
+    var data = sh.getDataRange().getValues();
+    var src = [];
+    for (var i = 1; i < data.length; i++){
+      var rec = _parseActivityRow(data[i]);
+      if (rec.loc === fLoc && rec.active) src.push(rec);
+    }
+    if (!src.length) return {ok: false, error: 'У локації "' + fLoc + '" немає активних занять'};
+
+    // Прибираємо вже існуючі назви у toLoc щоб не дублювати.
+    var existsInTo = {};
+    for (var j = 1; j < data.length; j++){
+      var rec2 = _parseActivityRow(data[j]);
+      if (rec2.loc === tLoc) existsInTo[rec2.name.toLowerCase()] = true;
+    }
+
+    var idCounter = _nextActivityId(sh);
+    var toAppend = [];
+    var skipped = 0;
+    src.forEach(function(rec){
+      if (existsInTo[rec.name.toLowerCase()]){ skipped++; return; }
+      toAppend.push([
+        idCounter++, tLoc, rec.name, rec.clientPrice,
+        rec.teacherModel, 0,   // ставку не копіюємо
+        '',                    // викладач не копіюємо
+        true
+      ]);
+    });
+
+    if (toAppend.length){
+      var startRow = sh.getLastRow() + 1;
+      sh.getRange(startRow, 1, toAppend.length, ACTIVITIES_HEADER.length).setValues(toAppend);
+    }
+
+    return {
+      ok: true,
+      copied:  toAppend.length,
+      skipped: skipped,
+      total:   src.length
+    };
+  } catch(e){
+    return {ok: false, error: String(e && e.message || e)};
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
