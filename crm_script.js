@@ -1,7 +1,11 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v5.8
-// 5 колонок на місяць: навч | вступ | доп | бюджет доп | бюджет навч
-// Лист "Оплати-Рік" — повні дані за 12 місяців календарного року
+// m.kids CRM — Google Apps Script v6.1
+// v6.1: автоекспорт пише У ФАЙЛИ ЛОКАЦІЙ (а не в CRM-зведення)
+//        — Пейменти: "Голосієво Payment" / "Осокорки Payment" тощо
+//          Колонка "Бюджет доп" місяця = monthCol + 3
+//          Місяць експорту = місяць_відмітки + 1 (травень → бюджет червня)
+//        — Salary: файл локації, лист Salary, Budget-колонка місяця+1
+// 5 колонок на місяць: Факт навч | Факт вступ | Факт доп | Бюджет доп | Бюджет навч
 // ═══════════════════════════════════════════════════════════════════════════
 
 var CONFIG_SHEET_ID  = '11NEIEBzaMiIDFnJB9RXqKnRqjCJjNyHVqylrX7cRZhc';
@@ -163,7 +167,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v5.8', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v6.1', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getPayments')        result = getPayments();
     else if (action === 'getPaymentsYearly')  result = getPaymentsYearly();
@@ -876,7 +880,6 @@ function parseAbsencePeriod(str, refYear) {
     var n = s.replace(/,/g, '.').replace(/\s*по\s*/g, '-').replace(/\s+/g, '');
     var m;
 
-    // БЛОК 1а: "01.09.2024-15.09.2024"
     m = n.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})[-–](\d{1,2})\.(\d{1,2})\.(\d{4})$/);
     if (m) {
       return {
@@ -885,7 +888,6 @@ function parseAbsencePeriod(str, refYear) {
       };
     }
 
-    // БЛОК 1б: "02.01-08.01.2025"
     m = n.match(/^(\d{1,2})\.(\d{1,2})[-–](\d{1,2})\.(\d{1,2})\.(\d{2}|\d{4})$/);
     if (m) {
       var yr1b = m[5].length === 2 ? 2000 + (+m[5]) : +m[5];
@@ -895,7 +897,6 @@ function parseAbsencePeriod(str, refYear) {
       };
     }
 
-    // БЛОК 2а: "09.12-15.12", "30.06-18.07"
     m = n.match(/^(\d{1,2})\.(\d{1,2})[-–](\d{1,2})\.(\d{1,2})$/);
     if (m) {
       return {
@@ -904,7 +905,6 @@ function parseAbsencePeriod(str, refYear) {
       };
     }
 
-    // БЛОК 2б: "30.06-18-07" (нормалізований "30.06по 18-07")
     m = n.match(/^(\d{1,2})\.(\d{1,2})[-–](\d{1,2})[-–](\d{1,2})$/);
     if (m) {
       return {
@@ -913,7 +913,6 @@ function parseAbsencePeriod(str, refYear) {
       };
     }
 
-    // БЛОК 3а: "15-20.01"
     m = n.match(/^(\d{1,2})[-–](\d{1,2})\.(\d{1,2})$/);
     if (m) {
       var mon3 = +m[3];
@@ -923,7 +922,6 @@ function parseAbsencePeriod(str, refYear) {
       };
     }
 
-    // БЛОК 3б: "1-14.09.25", "1-14.09.2025"
     m = n.match(/^(\d{1,2})[-–](\d{1,2})\.(\d{1,2})\.(\d{2}|\d{4})$/);
     if (m) {
       var yr3b = m[4].length === 2 ? 2000 + (+m[4]) : +m[4];
@@ -933,7 +931,6 @@ function parseAbsencePeriod(str, refYear) {
       };
     }
 
-    // БЛОК 4: "10/25", "10|25", "10/2025", "8.2025"
     m = n.match(/^(\d{1,2})[\/|.](\d{2}|\d{4})$/);
     if (m) {
       var mon4 = +m[1];
@@ -943,7 +940,6 @@ function parseAbsencePeriod(str, refYear) {
       }
     }
 
-    // БЛОК 5: "жовт25", "лист25", "серп2025"
     m = s.match(/^([а-яіїє']+?)\.?\s*(\d{2}|\d{4})$/);
     if (m) {
       var mon5 = UA_MONTHS[m[1].trim()];
@@ -953,7 +949,6 @@ function parseAbsencePeriod(str, refYear) {
       }
     }
 
-    // БЛОК 6: "жовтень 2025"
     m = s.match(/^([а-яіїє']+)\s+(\d{4})$/);
     if (m) {
       var mon6 = UA_MONTHS[m[1].trim()];
@@ -962,7 +957,6 @@ function parseAbsencePeriod(str, refYear) {
       }
     }
 
-    // БЛОК 7: "10 днів серпня", "5 днів жовтня"
     m = s.match(/^(\d+)\s*дн[іияь\.]+\s*([а-яіїє'\s]+)/);
     if (m) {
       var days7 = +m[1];
@@ -980,7 +974,6 @@ function parseAbsencePeriod(str, refYear) {
       }
     }
 
-    // БЛОК 8: "1 т серпень", "2 т липні", "3 тижн вересень"
     m = s.match(/^(\d+)\s*т[иі]?[жщ]?[нь]?\.?\s*([а-яіїє'\s]+)/);
     if (m) {
       var weeks8 = +m[1];
@@ -998,13 +991,11 @@ function parseAbsencePeriod(str, refYear) {
       }
     }
 
-    // БЛОК 9: тільки UA місяць "жовтень", "серп", "КВІТЕНЬ"
     var mon9 = UA_MONTHS[s.trim()];
     if (mon9) {
       return syntheticWeek(yearFor(mon9), mon9);
     }
 
-    // БЛОК 10: вільний текст що містить назву місяця
     var mon10 = findUAMonth(s);
     if (mon10) {
       return syntheticWeek(yearFor(mon10), mon10);
@@ -1051,9 +1042,8 @@ function writeAbsenceToPayment(body) {
     if (absCols[0] === null) return {ok:false, error:'Absence columns not found: ' + loc};
     var norm = function(s){ return String(s||'').trim().toLowerCase().replace(/\s+/g,' '); };
     var normName   = norm(childName);
-    var nameColIdx = 0;  // ПІБ завжди у першій колонці Payment-файлу
+    var nameColIdx = 0;
 
-    // Збираємо всі рядки з точним збігом ПІБ (для виявлення тезок)
     var matchRows = [];
     for (var row = 3; row < data.length; row++) {
       var rowName = norm(data[row][nameColIdx]);
@@ -1100,25 +1090,6 @@ function detectAbsenceCols(data) {
   return cols;
 }
 
-// ── DRY-RUN ІМПОРТ ВІДПУСТОК З PAYMENT → CRM ────────────────────────────────
-// ТІЛЬКИ читає і логує — нічого не пише!
-// locFilter — необов'язковий рядок. Якщо порожній — обробляє всі локації крім шкіл.
-//
-// refYear: береться з поточної дати (new Date().getFullYear()).
-//   parseAbsencePeriod сам вирішує рік: якщо місяць у рядку >= поточного → рік-1,
-//   інакше → поточний рік. При запуску у квітні 2026:
-//     "27.10-31.10" → 2025-10-27/2025-10-31  (жовтень > квітень → 2025)
-//     "20.04-24.04" → 2026-04-20/2026-04-24  (квітень == квітень → 2026)
-//
-// Dedupe: завантажуємо всіх CRM-клієнтів один раз, будуємо map
-//   norm(name)+'|'+norm(loc) → [{from,to}].
-//   Якщо parsed.from+parsed.to вже є у CRM — рахуємо як duplicate, не імпортуємо.
-//
-// Запуск з IDE: _runDryRunImport() або _runDryRunImportOsokory()
-// ── СПІЛЬНИЙ ХЕЛПЕР: завантажує CRM-клієнтів одним разом ─────────────────────
-// Повертає map: norm(name)+'|'+norm(loc) →
-//   {id, absences:[{from,to,...}], group, teacher, contractDate, monthlyFee, ...}
-// Якщо два рядки з однаковим name+loc — перший виграє (WARN у лозі).
 function _loadCRMClientsMap(norm) {
   var crmSS    = getCRMSpreadsheet();
   var crmSheet = crmSS.getSheetByName(SHEET_CLIENTS);
@@ -1145,17 +1116,10 @@ function _loadCRMClientsMap(norm) {
   var colFee  = hdrs.indexOf('Сума договору');   if (colFee  < 0) colFee  = 12;
   var colAbs  = hdrs.indexOf('Відсутності (JSON)');
   var colNot  = hdrs.indexOf('Нотатки');
-  Logger.log('[loadCRMMap] colId=' + colId + ' colName=' + colName + ' colLoc=' + colLoc + ' colAbs=' + colAbs);
-  Logger.log('[loadCRMMap] row[1] raw: ' + JSON.stringify(crmData[1]));
 
   for (var ri = 1; ri < crmData.length; ri++) {
     var rName = norm(crmData[ri][colName] || '');
     var rLoc  = norm(crmData[ri][colLoc]  || '');
-
-    if (String(crmData[ri][colName] || '').indexOf('Рибак') !== -1) {
-      Logger.log('[loadCRMMap] Рибак row ri=' + ri + ': ' + JSON.stringify(crmData[ri]));
-      Logger.log('[loadCRMMap] Рибак rName="' + rName + '" rLoc="' + rLoc + '"');
-    }
 
     if (!rName) continue;
     var key = rName + '|' + rLoc;
@@ -1179,12 +1143,9 @@ function _loadCRMClientsMap(norm) {
     };
   }
 
-  Logger.log('[loadCRMMap] map keys count: ' + Object.keys(map).length);
-  Logger.log('[loadCRMMap] map keys: ' + JSON.stringify(Object.keys(map)));
   return map;
 }
 
-// ── ХЕЛПЕР: рахує робочі дні між двома YYYY-MM-DD ──────────────────────────
 function _countWorkDays(fromStr, toStr) {
   if (!fromStr || !toStr) return 0;
   var f = new Date(fromStr); var t = new Date(toStr);
@@ -1194,7 +1155,6 @@ function _countWorkDays(fromStr, toStr) {
   return n;
 }
 
-// ── ХЕЛПЕР: будує об'єкт відпустки для імпорту ─────────────────────────────
 function _makeImportAbsence(parsed, rawSlot) {
   var iso = new Date().toISOString();
   var id  = 'abs_import_' + Date.now() + '_' + Math.random().toString(36).slice(2,7);
@@ -1214,7 +1174,6 @@ function _makeImportAbsence(parsed, rawSlot) {
       createdBy: 'import', createdAt: iso
     };
   } else {
-    // placeholder — формат зовсім не розпізнано
     return {
       id: id, type: 'vacation', from: null, to: null,
       workDays: 5, weeks: 1,
@@ -1228,7 +1187,6 @@ function _makeImportAbsence(parsed, rawSlot) {
   }
 }
 
-// ── DRY-RUN: читає, рахує, нічого не пише ────────────────────────────────────
 function dryRunImportAbsences(locFilter) {
   var SCHOOL_LOCS_SKIP = ['Школа Осокорки', 'Школа 228', 'Онлайн школа'];
   var refYear = new Date().getFullYear();
@@ -1250,9 +1208,6 @@ function dryRunImportAbsences(locFilter) {
   var byLocation     = {};
   var unparsedCounts = {};
 
-  Logger.log('=== dryRunImportAbsences START refYear=' + refYear +
-    (locFilter ? ' loc=' + locFilter : ' (всі локації)') + ' ===');
-
   for (var r = 1; r < configData.length; r++) {
     var loc       = trim(configData[r][2]);
     var sheetId   = trim(configData[r][3]);
@@ -1271,7 +1226,6 @@ function dryRunImportAbsences(locFilter) {
 
       var absCols = detectAbsenceCols(data);
       if (absCols[0] === null) {
-        Logger.log(loc + ': WARN — колонки BL/BM/BN/BO не знайдено, пропускаємо');
         byLocation[loc] = locStat;
         continue;
       }
@@ -1282,14 +1236,12 @@ function dryRunImportAbsences(locFilter) {
         if (!nameCell) continue;
         if (isGroupHeaderRow(data[row], 1)) continue;
 
-        // Є хоча б один непорожній слот BL-BO?
         var hasAnySlot = false;
         for (var si = 0; si < absCols.length; si++) {
           if (absCols[si] !== null && trim(String(data[row][absCols[si]] || ''))) { hasAnySlot = true; break; }
         }
         if (!hasAnySlot) { locStat.skipped++; totalStats.wouldSkipNoAbsence++; continue; }
 
-        // Шукаємо у CRM. Якщо немає → нова картка, всі слоти йдуть як нові
         var crmKey  = norm(nameCell) + '|' + norm(loc);
         var isNew   = !crmMap.hasOwnProperty(crmKey);
         var existingPairs = {};
@@ -1302,7 +1254,6 @@ function dryRunImportAbsences(locFilter) {
           });
         }
 
-        // Перебираємо 4 слоти
         for (var si2 = 0; si2 < absCols.length; si2++) {
           if (absCols[si2] === null) continue;
           var slot = trim(String(data[row][absCols[si2]] || ''));
@@ -1326,12 +1277,6 @@ function dryRunImportAbsences(locFilter) {
         }
       }
 
-      Logger.log(loc + ': wouldCreate=' + locStat.created +
-        ', placeholder=' + locStat.placeholder +
-        ', duplicates='  + locStat.duplicates +
-        ', newClients='  + locStat.newClients +
-        ', skipped='     + locStat.skipped);
-
     } catch(err) {
       Logger.log(loc + ': ERROR — ' + (err.message || String(err)));
     }
@@ -1346,32 +1291,9 @@ function dryRunImportAbsences(locFilter) {
   unparsedKeys.sort(function(a,b){ return unparsedCounts[b]-unparsedCounts[a]; });
   var unparsedSamples = unparsedKeys.slice(0,20);
 
-  Logger.log('');
-  Logger.log('=== ПІДСУМОК ===');
-  Logger.log('Локацій:              ' + totalStats.locations);
-  Logger.log('Слотів оброблено:     ' + totalStats.totalSlotsProcessed);
-  Logger.log('wouldCreate:          ' + totalStats.wouldCreate +
-    ' (exact=' + totalStats.wouldCreateExact + ', synthetic=' + totalStats.wouldCreateSynthetic + ')');
-  Logger.log('wouldPlaceholder:     ' + totalStats.wouldPlaceholder);
-  Logger.log('duplicates:           ' + totalStats.duplicates);
-  Logger.log('wouldCreateNewClient: ' + totalStats.wouldCreateNewClient);
-  Logger.log('wouldSkipNoAbsence:   ' + totalStats.wouldSkipNoAbsence);
-  if (unparsedSamples.length) {
-    Logger.log('TOP unparsed патерни:');
-    unparsedSamples.forEach(function(k){ Logger.log('  "' + k + '" \xd7 ' + unparsedCounts[k]); });
-  }
-  Logger.log('=== dryRunImportAbsences END ===');
-
   return {ok:true, stats:totalStats, byLocation:byLocation, unparsedSamples:unparsedSamples};
 }
 
-function _runDryRunImport()        { dryRunImportAbsences(''); }
-function _runDryRunImportOsokory() { dryRunImportAbsences('Осокорки'); }
-
-// ── РЕАЛЬНИЙ ІМПОРТ ВІДПУСТОК З PAYMENT → CRM ────────────────────────────────
-// Лінива ініціалізація: картки створюються тільки якщо є записи у BL-BO.
-// Один виклик saveClient() на дитину: картка + відпустки разом.
-// Тезки: перший рядок CRM виграє, WARN у лозі.
 function importAbsencesFromPayment(locFilter) {
   var SCHOOL_LOCS_SKIP = ['Школа Осокорки', 'Школа 228', 'Онлайн школа'];
   var refYear = new Date().getFullYear();
@@ -1379,9 +1301,7 @@ function importAbsencesFromPayment(locFilter) {
   var nowISO  = new Date().toISOString();
   var todayUA = Utilities.formatDate(new Date(), 'Europe/Kiev', 'dd.MM.yyyy');
 
-  // Завантажуємо CRM-клієнтів один раз
   var crmMap = _loadCRMClientsMap(norm);
-  Logger.log('CRM: завантажено ' + Object.keys(crmMap).length + ' клієнтів');
 
   var configSS    = SpreadsheetApp.openById(CONFIG_SHEET_ID);
   var configSheet = configSS.getSheets()[0];
@@ -1393,9 +1313,6 @@ function importAbsencesFromPayment(locFilter) {
     absencesAdded:0, absencesPlaceholder:0, absencesDuplicates:0,
     errors:[]
   };
-
-  Logger.log('=== importAbsencesFromPayment START' +
-    (locFilter ? ' loc=' + locFilter : ' (всі локації)') + ' ===');
 
   for (var r = 1; r < configData.length; r++) {
     var loc       = trim(configData[r][2]);
@@ -1413,12 +1330,8 @@ function importAbsencesFromPayment(locFilter) {
       var data         = paymentSheet.getDataRange().getValues();
 
       var absCols = detectAbsenceCols(data);
-      if (absCols[0] === null) {
-        Logger.log(loc + ': WARN — колонки BL/BM/BN/BO не знайдено, пропускаємо');
-        continue;
-      }
+      if (absCols[0] === null) continue;
 
-      // Контекст поточної групи — відстежуємо як у parsePaymentSheet
       var curGroup = '(без групи)'; var curGroupType = ''; var curTeacher = '';
 
       var DATA_START = 3;
@@ -1426,7 +1339,6 @@ function importAbsencesFromPayment(locFilter) {
         var nameCell = trim(String(data[row][0] || ''));
         if (!nameCell) continue;
 
-        // Рядок-заголовок групи → оновлюємо контекст
         if (isGroupHeaderRow(data[row], 1)) {
           var firstSpace = nameCell.search(/\s/);
           curTeacher    = firstSpace > 0 ? nameCell.slice(firstSpace).trim() : '';
@@ -1435,23 +1347,20 @@ function importAbsencesFromPayment(locFilter) {
           continue;
         }
 
-        // Є хоча б один слот?
         var hasAnySlot = false;
         for (var si = 0; si < absCols.length; si++) {
           if (absCols[si] !== null && trim(String(data[row][absCols[si]] || ''))) { hasAnySlot = true; break; }
         }
-        if (!hasAnySlot) continue;  // дитина без відпусток — не чіпаємо
+        if (!hasAnySlot) continue;
 
         try {
           var crmKey  = norm(nameCell) + '|' + norm(loc);
           var isNew   = !crmMap.hasOwnProperty(crmKey);
           var existingAbsences = isNew ? [] : crmMap[crmKey].absences.slice();
 
-          // Set from+to для dedupe
           var existingPairs = {};
           existingAbsences.forEach(function(a){ if(a.from&&a.to) existingPairs[a.from+'|'+a.to]=true; });
 
-          // Збираємо нові відпустки з 4 слотів
           var newAbsences = [];
           for (var si2 = 0; si2 < absCols.length; si2++) {
             if (absCols[si2] === null) continue;
@@ -1467,19 +1376,16 @@ function importAbsencesFromPayment(locFilter) {
                 var absObj = _makeImportAbsence(parsed, slot);
                 newAbsences.push(absObj);
                 existingPairs[pairKey] = true;
-                Logger.log('  ADDED absence: ' + nameCell + ' [' + parsed.from + ' → ' + parsed.to + ']');
               }
             } else {
               var absPlaceholder = _makeImportAbsence(null, slot);
               newAbsences.push(absPlaceholder);
               stats.absencesPlaceholder++;
-              Logger.log('  PLACEHOLDER absence: ' + nameCell + ' ["' + slot + '"]');
             }
           }
 
-          if (newAbsences.length === 0) continue;  // нічого нового — не чіпаємо
+          if (newAbsences.length === 0) continue;
 
-          // Будуємо повний об'єкт клієнта і зберігаємо одним викликом
           var allAbsences = existingAbsences.concat(newAbsences);
           var clientData;
           if (isNew) {
@@ -1498,7 +1404,6 @@ function importAbsencesFromPayment(locFilter) {
               entryFeeSchedule: [],
               feeHistory:       []
             };
-            Logger.log('CREATED client: ' + nameCell + ' / ' + loc + ' / ' + curGroup);
             var saveResult = saveClient(clientData);
           } else {
             var existing = crmMap[crmKey];
@@ -1510,7 +1415,6 @@ function importAbsencesFromPayment(locFilter) {
             continue;
           }
 
-          // Оновлюємо crmMap щоб наступна ітерація бачила оновлені дані
           if (isNew) {
             crmMap[crmKey] = {
               id: clientData.id, name: clientData.name, loc: clientData.loc,
@@ -1529,190 +1433,16 @@ function importAbsencesFromPayment(locFilter) {
 
         } catch(childErr) {
           stats.errors.push({loc:loc, child:nameCell, error: childErr.message || String(childErr)});
-          Logger.log('  ERROR child ' + nameCell + ': ' + (childErr.message || String(childErr)));
         }
       }
 
-      Logger.log(loc + ': DONE');
-
     } catch(locErr) {
-      Logger.log(loc + ': ERROR — ' + (locErr.message || String(locErr)));
       stats.errors.push({loc:loc, child:'', error: locErr.message || String(locErr)});
     }
   }
 
-  Logger.log('');
-  Logger.log('=== ПІДСУМОК ІМПОРТУ ===');
-  Logger.log('Локацій оброблено:       ' + stats.locationsProcessed);
-  Logger.log('Нових карток створено:   ' + stats.newClientsCreated);
-  Logger.log('Існуючих оновлено:       ' + stats.existingClientsUpdated);
-  Logger.log('Відпусток додано:        ' + stats.absencesAdded);
-  Logger.log('Placeholder-відпусток:   ' + stats.absencesPlaceholder);
-  Logger.log('Дублікатів пропущено:    ' + stats.absencesDuplicates);
-  Logger.log('Помилок:                 ' + stats.errors.length);
-  if (stats.errors.length) {
-    stats.errors.slice(0,10).forEach(function(e){
-      Logger.log('  ERR [' + e.loc + '] ' + e.child + ': ' + e.error);
-    });
-  }
-  Logger.log('=== importAbsencesFromPayment END ===');
-
   return {ok:true, stats:stats};
 }
-
-function _runImportOsokory() {
-  var r = importAbsencesFromPayment('Осокорки');
-  Logger.log(JSON.stringify(r.stats, null, 2));
-}
-
-function _runImportAll() {
-  Logger.log('=== _runImportAll START ===');
-  var r = importAbsencesFromPayment('');
-  Logger.log('');
-  Logger.log('=== ПІДСУМОК _runImportAll ===');
-  Logger.log('Локацій оброблено:       ' + r.stats.locationsProcessed);
-  Logger.log('Нових карток створено:   ' + r.stats.newClientsCreated);
-  Logger.log('Існуючих оновлено:       ' + r.stats.existingClientsUpdated);
-  Logger.log('Відпусток додано:        ' + r.stats.absencesAdded);
-  Logger.log('Placeholder-відпусток:   ' + r.stats.absencesPlaceholder);
-  Logger.log('Дублікатів пропущено:    ' + r.stats.absencesDuplicates);
-  Logger.log('Помилок:                 ' + r.stats.errors.length);
-  if (r.stats.errors.length) {
-    r.stats.errors.forEach(function(e){
-      Logger.log('  ERR [' + e.loc + '] ' + e.child + ': ' + e.error);
-    });
-  }
-  Logger.log('=== _runImportAll END ===');
-}
-
-
-
-// ── ДІАГНОСТИКА: перевіряє що саме знаходить detectAbsenceCols ───────────────
-function diagnoseAbsenceCols(loc) {
-  // Знаходимо sheetId локації
-  var configSS    = SpreadsheetApp.openById(CONFIG_SHEET_ID);
-  var configSheet = configSS.getSheets()[0];
-  var configData  = configSheet.getDataRange().getValues();
-  var sheetId = null; var sheetName = 'Payment';
-  for (var r = 1; r < configData.length; r++) {
-    if (trim(String(configData[r][2] || '')) === loc) {
-      sheetId   = trim(String(configData[r][3] || ''));
-      sheetName = trim(String(configData[r][4] || '')) || 'Payment';
-      break;
-    }
-  }
-  if (!sheetId) { Logger.log('Location not found: ' + loc); return; }
-
-  var ss    = SpreadsheetApp.openById(sheetId);
-  var sheet = ss.getSheetByName(sheetName) || ss.getSheets()[0];
-  var lastCol = sheet.getLastColumn();
-  var lastRow = sheet.getLastRow();
-
-  Logger.log('=== diagnoseAbsenceCols: ' + loc + ' ===');
-  Logger.log('Sheet: ' + sheet.getName() + ', lastRow=' + lastRow + ', lastCol=' + lastCol);
-
-  // Читаємо перші 5 рядків повністю (до col 90 або lastCol)
-  var scanCols = Math.min(lastCol, 90);
-  var scanRows = Math.min(5, lastRow);
-  var headerRange = sheet.getRange(1, 1, scanRows, scanCols);
-  var headerVals  = headerRange.getValues();
-
-  // ── 1. Заголовки перших 80 колонок (рядки 1-3) ──────────────────────────────
-  Logger.log('--- Заголовки рядків 1-3 (перші 80 колонок) ---');
-  for (var rr = 0; rr < Math.min(3, scanRows); rr++) {
-    var parts = [];
-    for (var cc = 0; cc < Math.min(80, scanCols); cc++) {
-      var v = headerVals[rr][cc];
-      if (v !== '' && v !== null && v !== undefined) {
-        // Літерне позначення колонки (A=0, B=1, ... Z=25, AA=26 ...)
-        var colLetter = '';
-        var n = cc;
-        do { colLetter = String.fromCharCode(65 + (n % 26)) + colLetter; n = Math.floor(n / 26) - 1; } while (n >= 0);
-        parts.push(colLetter + '(' + (cc+1) + ')="' + String(v).slice(0,30) + '"');
-      }
-    }
-    Logger.log('Row ' + (rr+1) + ': ' + (parts.length ? parts.join(' | ') : '(порожній)'));
-  }
-
-  // ── 2. Що знайшов detectAbsenceCols ─────────────────────────────────────────
-  var allData = sheet.getRange(1, 1, Math.min(lastRow, 10), scanCols).getValues();
-  var absCols = detectAbsenceCols(allData);
-  Logger.log('--- detectAbsenceCols результат ---');
-  var labels = ['1 тиждень', '2 тиждень', '3 тиждень', '4 тиждень'];
-  for (var li = 0; li < absCols.length; li++) {
-    var ci = absCols[li];
-    if (ci === null) {
-      Logger.log('  ' + labels[li] + ' → NOT FOUND');
-    } else {
-      var colLetter2 = '';
-      var n2 = ci;
-      do { colLetter2 = String.fromCharCode(65 + (n2 % 26)) + colLetter2; n2 = Math.floor(n2 / 26) - 1; } while (n2 >= 0);
-      Logger.log('  ' + labels[li] + ' → col index=' + ci + ' (' + colLetter2 + ')');
-    }
-  }
-
-  // ── 3. Вміст знайдених колонок у рядках 4-6 (перші дані після заголовків) ───
-  Logger.log('--- Вміст знайдених колонок у рядках 4-6 ---');
-  if (lastRow >= 4) {
-    var dataRange = sheet.getRange(4, 1, Math.min(3, lastRow - 3), scanCols);
-    var dataVals  = dataRange.getValues();
-    for (var dr = 0; dr < dataVals.length; dr++) {
-      var rowNum = dr + 4;
-      var name   = trim(String(dataVals[dr][0] || '(порожньо)'));
-      var slots  = absCols.map(function(ci2, idx) {
-        if (ci2 === null) return labels[idx] + '=null';
-        var v2 = dataVals[dr][ci2];
-        return labels[idx] + '=[' + String(v2) + ']';
-      });
-      Logger.log('  Row ' + rowNum + ' name="' + name + '" | ' + slots.join(' | '));
-    }
-  }
-
-  Logger.log('=== END diagnoseAbsenceCols ===');
-}
-
-function _runDiagColsOsokory() { diagnoseAbsenceCols('Осокорки'); }
-
-// ── ДІАГНОСТИКА: читає лист "Клієнти" і показує що в ньому ──────────────────
-function diagnoseCRMClients() {
-  var ss = getCRMSpreadsheet();
-  Logger.log('=== diagnoseCRMClients ===');
-  Logger.log('SHEET_CLIENTS constant: "' + SHEET_CLIENTS + '"');
-
-  // Усі листи в таблиці
-  Logger.log('Усі листи в SS: ' + ss.getSheets().map(function(s){ return '"' + s.getName() + '"'; }).join(', '));
-
-  var sheet = ss.getSheetByName(SHEET_CLIENTS);
-  Logger.log('sheet found: ' + (sheet ? 'YES' : 'NO'));
-
-  if (sheet) {
-    Logger.log('sheet name: "' + sheet.getName() + '"');
-    Logger.log('lastRow: ' + sheet.getLastRow());
-    Logger.log('lastCol: ' + sheet.getLastColumn());
-
-    var vals = sheet.getDataRange().getValues();
-    Logger.log('vals.length (getDataRange): ' + vals.length);
-
-    for (var r = 0; r < Math.min(10, vals.length); r++) {
-      Logger.log('row ' + r + ': ' + JSON.stringify(vals[r].slice(0, 5)));
-    }
-  }
-
-  // Додатково: спробуємо getSheets()[0] і getSheets()[1] — раптом лист не той
-  var sheets = ss.getSheets();
-  for (var i = 0; i < Math.min(5, sheets.length); i++) {
-    var sh = sheets[i];
-    Logger.log('Sheet[' + i + '] "' + sh.getName() + '": lastRow=' + sh.getLastRow() + ', lastCol=' + sh.getLastColumn());
-  }
-
-  Logger.log('=== END diagnoseCRMClients ===');
-}
-
-function _runDiagCRM() { diagnoseCRMClients(); }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// MIRROR: CRM Табель → старі таблиці медсестер (17 локацій)
-// ═══════════════════════════════════════════════════════════════════════════
 
 var NURSE_SHEET_TAB = 'табель медсестри';
 
@@ -1828,17 +1558,11 @@ function mapStatusToNurseCell(status) {
 function mirrorAttendanceToNurseSheet(loc, childName, isoDate, status) {
   try {
     var newVal = mapStatusToNurseCell(status);
-    if (newVal === null) {
-      Logger.log('mirror: skip unknown status "' + status + '" for ' + childName + ' / ' + isoDate);
-      return;
-    }
+    if (newVal === null) return;
 
     var map = loadNurseSheetMap();
     var sid = map[norm(loc)];
-    if (!sid) {
-      Logger.log('mirror: WARN — нема spreadsheetId для локації "' + loc + '" (norm="' + norm(loc) + '")');
-      return;
-    }
+    if (!sid) return;
 
     var ss = _nurseCache.ss[sid];
     if (!ss) {
@@ -1852,50 +1576,29 @@ function mirrorAttendanceToNurseSheet(loc, childName, isoDate, status) {
       sheet = findMonthTab(ss, isoDate) || false;
       _nurseCache.sheet[monthKey] = sheet;
     }
-    if (!sheet) {
-      Logger.log('mirror: WARN — таб місяця не знайдено у [' + loc + '] для дати ' + isoDate);
-      return;
-    }
+    if (!sheet) return;
 
     var rowNum = findChildRow(sheet, childName);
-    if (rowNum < 1) {
-      Logger.log('mirror: WARN — дитину "' + childName + '" не знайдено у [' + loc + '] / таб "' + sheet.getName() + '"');
-      return;
-    }
+    if (rowNum < 1) return;
     var colNum = findDateColumn(sheet, isoDate);
-    if (colNum < 1) {
-      Logger.log('mirror: WARN — колонку дати ' + isoDate + ' не знайдено у [' + loc + '] / таб "' + sheet.getName() + '"');
-      return;
-    }
+    if (colNum < 1) return;
 
     var cell = sheet.getRange(rowNum, colNum);
     var existing = String(cell.getValue() || '').trim();
-    if (existing.toUpperCase() === 'А' || existing.toUpperCase() === 'A') {
-      Logger.log('mirror: skip "А" (адаптація) для ' + childName + ' / ' + isoDate);
-      return;
-    }
+    if (existing.toUpperCase() === 'А' || existing.toUpperCase() === 'A') return;
     if (existing === newVal) return;
     cell.setValue(newVal);
   } catch (e) {
-    Logger.log('mirror: ERROR ' + (e.message || e) + ' для ' + childName + ' / ' + loc + ' / ' + isoDate);
+    Logger.log('mirror: ERROR ' + (e.message || e));
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// MIGRATE: дати народження дітей з реєстрів договорів → CRM Клієнти
-// ═══════════════════════════════════════════════════════════════════════════
-
 var REGISTRY_TAB_NAME = 'реєстр';
 
-// Читає лист "реєстр" у CONFIG_SHEET_ID. Повертає [{direction, type, location, sheetId, listName}].
-// Пропускає header (рядок 1) і рядки де колонка D (sheetId) порожня.
 function getRegistries() {
   var configSS = SpreadsheetApp.openById(CONFIG_SHEET_ID);
   var sheet = configSS.getSheetByName(REGISTRY_TAB_NAME);
-  if (!sheet) {
-    Logger.log('getRegistries: WARN — лист "' + REGISTRY_TAB_NAME + '" не знайдено у CONFIG');
-    return [];
-  }
+  if (!sheet) return [];
   var lastRow = sheet.getLastRow();
   if (lastRow < 2) return [];
   var data = sheet.getRange(1, 1, lastRow, 5).getValues();
@@ -1915,8 +1618,6 @@ function getRegistries() {
   return out;
 }
 
-// Повертає map {location: spreadsheetUrl} для клікабельних бейджів реєстру у CRM.
-// Якщо одна локація має кілька записів — перший по порядку перемагає.
 function getRegistryUrls() {
   var regs = getRegistries();
   var map = {};
@@ -1929,11 +1630,6 @@ function getRegistryUrls() {
   return {ok:true, data:map};
 }
 
-// Парсить дату з реєстру в ISO YYYY-MM-DD. Підтримує:
-// - Date object (sheets API повертає коли клітинка тип Date)
-// - "DD.MM.YYYY" або "DD/MM/YYYY"
-// - "YYYY-MM-DD"
-// Повертає null для непарсабельних значень.
 function parseRegistryBday(val) {
   if (val === null || val === undefined || val === '') return null;
   if (val instanceof Date) {
@@ -1942,7 +1638,6 @@ function parseRegistryBday(val) {
     if (y < 1900 || y > 2030) return null;
     return y + '-' + (m < 10 ? '0' + m : m) + '-' + (d < 10 ? '0' + d : d);
   }
-  // Excel serial number (число > 10000)
   if (typeof val === 'number' && val > 10000) {
     var excelEpoch = new Date(Date.UTC(1899, 11, 30));
     var dt = new Date(excelEpoch.getTime() + val * 86400000);
@@ -1951,16 +1646,13 @@ function parseRegistryBday(val) {
     return ye + '-' + (me < 10 ? '0' + me : me) + '-' + (de < 10 ? '0' + de : de);
   }
   if (typeof val === 'string') {
-    // Нормалізуємо роздільники: пробіл / дефіс / слеш → крапка
     var s = val.trim().replace(/[\s\-\/]+/g, '.');
-    // DD.MM.YYYY
     var m1 = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
     if (m1) {
       var dd = +m1[1], mm = +m1[2], yyyy = +m1[3];
       if (yyyy < 1900 || yyyy > 2030 || mm < 1 || mm > 12 || dd < 1 || dd > 31) return null;
       return yyyy + '-' + (mm < 10 ? '0' + mm : mm) + '-' + (dd < 10 ? '0' + dd : dd);
     }
-    // YYYY.MM.DD (після нормалізації роздільників — раніше було YYYY-MM-DD)
     var m2 = s.match(/^(\d{4})\.(\d{2})\.(\d{2})$/);
     if (m2) {
       var yyyy2 = +m2[1], mm2 = +m2[2], dd2 = +m2[3];
@@ -1973,18 +1665,17 @@ function parseRegistryBday(val) {
 
 function _normChildName(s) {
   return String(s || '')
-    .replace(/\([^)]*\)/g, '')      // прибрати (...)
-    .replace(/\[[^\]]*\]/g, '')     // прибрати [...]
+    .replace(/\([^)]*\)/g, '')
+    .replace(/\[[^\]]*\]/g, '')
     .trim()
     .toLowerCase()
     .replace(/\s+/g, ' ')
-    .replace(/[’ʼ′`'']/g, "'")  // нормалізувати різні апострофи
+    .replace(/[’ʼ′`'']/g, "'")
     .replace(/і/g, 'и')
     .replace(/ї/g, 'и')
     .replace(/є/g, 'е');
 }
 
-// Точна копія childId з clients.html:847 — для синхронізації lookup-ключів
 function _childId(name, group, loc) {
   return 'c_' + String(name||'').trim().slice(0,20) +
          '_' + String(group||'').slice(0,8) +
@@ -1997,539 +1688,6 @@ function _commonPrefixLen(a, b) {
   return i;
 }
 
-// Обходить усі реєстри, парсить ПІБ + дату нар., оновлює пусті bday у CRM Клієнти.
-// Повертає об'єкт-звіт.
-function migrateChildrenBdays() {
-  var regs = getRegistries();
-  Logger.log('Реєстрів: ' + regs.length);
-
-  var crmSS = getCRMSpreadsheet();
-  var crmSheet = crmSS.getSheetByName(SHEET_CLIENTS);
-  if (!crmSheet) {
-    Logger.log('CRM Клієнти sheet not found');
-    return { regsScanned: 0, regsErrored: 0, errors: ['CRM Клієнти sheet not found'],
-             totalRowsInRegistries: 0, matched: 0, updated: 0,
-             alreadyHadBday: 0, unparseable: 0,
-             notFoundInCRMCount: 0, notFoundSamples: [] };
-  }
-
-  ensureClientsHeader(crmSheet);
-  var crmData = crmSheet.getDataRange().getValues();
-  if (crmData.length < 2) {
-    Logger.log('CRM Клієнти is empty');
-    return { regsScanned: regs.length, regsErrored: 0, errors: [],
-             totalRowsInRegistries: 0, matched: 0, updated: 0,
-             alreadyHadBday: 0, unparseable: 0,
-             notFoundInCRMCount: 0, notFoundSamples: [] };
-  }
-  var crmHdr = crmData[0].map(function(h){ return String(h || ''); });
-  var crmNameI = crmHdr.indexOf('ПІБ дитини');
-  var crmBdayI = crmHdr.indexOf('Дата народження');
-  if (crmNameI < 0 || crmBdayI < 0) {
-    var msg = 'CRM headers missing: ПІБ дитини=' + crmNameI + ', Дата народження=' + crmBdayI;
-    Logger.log(msg);
-    return { regsScanned: regs.length, regsErrored: 0, errors: [msg],
-             totalRowsInRegistries: 0, matched: 0, updated: 0,
-             alreadyHadBday: 0, unparseable: 0,
-             notFoundInCRMCount: 0, notFoundSamples: [] };
-  }
-
-  Logger.log('CRM diag: lastRow=' + crmSheet.getLastRow() + ', getDataRange rows=' + crmData.length);
-  var nonEmptyChildRows = 0;
-  for (var ci = 1; ci < crmData.length; ci++) {
-    var rawN = String(crmData[ci][crmNameI] || '').trim();
-    if (rawN) nonEmptyChildRows++;
-  }
-  Logger.log('CRM diag: rows with non-empty ПІБ дитини = ' + nonEmptyChildRows);
-
-  // Будуємо мапу нормалізованого ПІБ → {row (1-based), currentBday}
-  var crmMap = {};
-  var dupeCount = 0;
-  for (var i = 1; i < crmData.length; i++) {
-    var nm = _normChildName(crmData[i][crmNameI]);
-    if (!nm) continue;
-    if (!crmMap[nm]) {
-      crmMap[nm] = { row: i + 1, currentBday: String(crmData[i][crmBdayI] || '').trim() };
-    } else {
-      dupeCount++;
-    }
-  }
-  Logger.log('CRM map size: ' + Object.keys(crmMap).length + ' (dupes after norm: ' + dupeCount + ')');
-
-  var updates = [];
-  var alreadyHadBday = 0;
-  var unparseable = 0;
-  var notFoundInCRMCount = 0;
-  var notFoundSamples = [];
-  var totalRowsInRegistries = 0;
-  var errors = [];
-
-  for (var ri = 0; ri < regs.length; ri++) {
-    var reg = regs[ri];
-    Logger.log('--- [' + (ri+1) + '/' + regs.length + '] ' + reg.location + ' (sheetId=' + reg.sheetId + ', list=' + reg.listName + ')');
-    try {
-      var ss = SpreadsheetApp.openById(reg.sheetId);
-      var sh = ss.getSheetByName(reg.listName);
-      if (!sh) sh = ss.getSheets()[0];
-      if (!sh) { errors.push(reg.location + ': лист не знайдено'); continue; }
-
-      var data = sh.getDataRange().getValues();
-      if (data.length < 2) { Logger.log('  empty'); continue; }
-      var hdr = data[0];
-
-      var childCol = -1, bdayCol = -1;
-      for (var hi = 0; hi < hdr.length; hi++) {
-        var hLower = String(hdr[hi] || '').toLowerCase();
-        if (childCol < 0 && hLower.indexOf('піб дитини') >= 0) childCol = hi;
-        if (bdayCol < 0 && hLower.indexOf('дата народження') >= 0) bdayCol = hi;
-      }
-      if (childCol < 0 || bdayCol < 0) {
-        errors.push(reg.location + ': не знайдено колонок ПІБ дитини=' + childCol + ' / Дата народження=' + bdayCol);
-        Logger.log('  headers: ' + JSON.stringify(hdr));
-        continue;
-      }
-      Logger.log('  childCol=' + childCol + ', bdayCol=' + bdayCol + ', rows=' + (data.length - 1));
-
-      for (var dr = 1; dr < data.length; dr++) {
-        var name = String(data[dr][childCol] || '').trim();
-        var bdayRaw = data[dr][bdayCol];
-        if (!name || (bdayRaw === '' || bdayRaw === null || bdayRaw === undefined)) continue;
-        totalRowsInRegistries++;
-
-        var bdayISO = parseRegistryBday(bdayRaw);
-        if (!bdayISO) { unparseable++; continue; }
-
-        var lookup = crmMap[_normChildName(name)];
-        if (!lookup) {
-          notFoundInCRMCount++;
-          if (notFoundSamples.length < 20) notFoundSamples.push(name + ' [' + reg.location + ']');
-          continue;
-        }
-        if (lookup.currentBday) { alreadyHadBday++; continue; }
-        updates.push({ row: lookup.row, bday: bdayISO });
-        lookup.currentBday = bdayISO; // щоб не оновити двічі
-      }
-    } catch (e) {
-      var em = reg.location + ': ' + (e.message || e);
-      errors.push(em);
-      Logger.log('  ERROR ' + em);
-    }
-  }
-
-  // Виконуємо batch updates
-  for (var ui = 0; ui < updates.length; ui++) {
-    var u = updates[ui];
-    crmSheet.getRange(u.row, crmBdayI + 1).setValue(u.bday);
-  }
-
-  var report = {
-    regsScanned: regs.length,
-    regsErrored: errors.length,
-    errors: errors,
-    totalRowsInRegistries: totalRowsInRegistries,
-    matched: updates.length + alreadyHadBday,
-    updated: updates.length,
-    alreadyHadBday: alreadyHadBday,
-    unparseable: unparseable,
-    notFoundInCRMCount: notFoundInCRMCount,
-    notFoundSamples: notFoundSamples
-  };
-  Logger.log('=== REPORT ===');
-  Logger.log(JSON.stringify(report, null, 2));
-  return report;
-}
-
-function runBdayMigration() {
-  var r = migrateChildrenBdays();
-  var summary =
-    'Реєстрів: ' + r.regsScanned + '\n' +
-    'Помилок: ' + r.regsErrored + '\n' +
-    'Рядків переглянуто: ' + r.totalRowsInRegistries + '\n' +
-    'Знайдено в CRM: ' + r.matched + '\n' +
-    'ЗАПОВНЕНО bday: ' + r.updated + '\n' +
-    'Вже мали bday: ' + r.alreadyHadBday + '\n' +
-    'Непарсабельні: ' + r.unparseable + '\n' +
-    'Не знайдено в CRM: ' + r.notFoundInCRMCount + '\n\n' +
-    (r.errors.length ? 'Помилки:\n' + r.errors.join('\n') + '\n\n' : '') +
-    (r.notFoundSamples.length ? 'Перші 20 не знайдених:\n' + r.notFoundSamples.join('\n') : '');
-  try {
-    SpreadsheetApp.getUi().alert('Міграція bday', summary, SpreadsheetApp.getUi().ButtonSet.OK);
-  } catch (e) {
-    Logger.log('UI alert недоступний (запущено не з sheet context). Звіт у логах.');
-    Logger.log(summary);
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// SYNC BDAYS: реєстри договорів → колонка "Дата народження" у листі "Оплати"
-// ═══════════════════════════════════════════════════════════════════════════
-//
-// Не чіпає aggregatePayments. Викликати ОКРЕМО після кожного перерахунку
-// (бо aggregatePayments робить clearContents() і затирає колонку bday).
-// Або використовувати runFullAggregateAndSync() — комбінований wrapper.
-
-// @deprecated — використовуйте syncBdayStatusSheet().
-// Зберігається тимчасово; колонка "Дата народження" в Оплати стирається при aggregatePayments.
-function syncBdaysToPayments() {
-  var crmSS = getCRMSpreadsheet();
-  var paySheet = crmSS.getSheetByName(SHEET_PAYMENTS);
-  if (!paySheet) {
-    Logger.log('syncBdaysToPayments: ERROR — лист "' + SHEET_PAYMENTS + '" не знайдено');
-    return { ok: false, error: 'Sheet not found', errors: [] };
-  }
-
-  var data = paySheet.getDataRange().getValues();
-  if (data.length < 2) {
-    Logger.log('syncBdaysToPayments: лист "' + SHEET_PAYMENTS + '" порожній');
-    return { ok: true, total: 0, withBday: 0, withoutBday: 0, errors: [] };
-  }
-
-  var hdr = data[0].map(function(h){ return String(h || ''); });
-  var locI = hdr.indexOf('Локація');
-  var nameI = hdr.indexOf("Ім'я дитини");
-  if (locI < 0 || nameI < 0) {
-    var msg = 'Не знайдено колонки: Локація=' + locI + ', Ім\'я дитини=' + nameI;
-    Logger.log('syncBdaysToPayments: ERROR — ' + msg);
-    return { ok: false, error: msg, errors: [] };
-  }
-
-  // Якщо колонки "Дата народження" немає — додаємо в кінець
-  var bdayI = hdr.indexOf('Дата народження');
-  if (bdayI < 0) {
-    bdayI = hdr.length;
-    paySheet.getRange(1, bdayI + 1).setValue('Дата народження');
-    Logger.log('syncBdaysToPayments: додано колонку "Дата народження" на позиції ' + (bdayI + 1));
-    // Перечитуємо щоб мати актуальний шар колонок
-    data = paySheet.getDataRange().getValues();
-  }
-
-  // Будуємо мапу bday з усіх реєстрів
-  var regs = getRegistries();
-  Logger.log('syncBdaysToPayments: реєстрів — ' + regs.length);
-  var bdayMap = {};
-  var errors = [];
-  var totalRegRows = 0;
-
-  for (var ri = 0; ri < regs.length; ri++) {
-    var reg = regs[ri];
-    try {
-      var ss = SpreadsheetApp.openById(reg.sheetId);
-      var sh = ss.getSheetByName(reg.listName) || ss.getSheets()[0];
-      if (!sh) { errors.push(reg.location + ': лист не знайдено'); continue; }
-      var rData = sh.getDataRange().getValues();
-      if (rData.length < 2) continue;
-      var rHdr = rData[0];
-      var childCol = -1, bdayColReg = -1;
-      for (var hi = 0; hi < rHdr.length; hi++) {
-        var hLower = String(rHdr[hi] || '').toLowerCase();
-        if (childCol < 0 && hLower.indexOf('піб дитини') >= 0) childCol = hi;
-        if (bdayColReg < 0 && hLower.indexOf('дата народження') >= 0) bdayColReg = hi;
-      }
-      if (childCol < 0 || bdayColReg < 0) {
-        errors.push(reg.location + ': не знайдено колонок ПІБ дитини=' + childCol + ' / Дата народження=' + bdayColReg);
-        continue;
-      }
-      for (var dr = 1; dr < rData.length; dr++) {
-        var nm = String(rData[dr][childCol] || '').trim();
-        var bdayRaw = rData[dr][bdayColReg];
-        if (!nm || bdayRaw === '' || bdayRaw === null || bdayRaw === undefined) continue;
-        totalRegRows++;
-        var bdayISO = parseRegistryBday(bdayRaw);
-        if (!bdayISO) continue;
-        var key = _normChildName(nm) + '|' + reg.location;
-        bdayMap[key] = bdayISO;
-      }
-    } catch (e) {
-      errors.push(reg.location + ': ' + (e.message || e));
-    }
-  }
-  Logger.log('syncBdaysToPayments: bdayMap size — ' + Object.keys(bdayMap).length + ' з ' + totalRegRows + ' рядків реєстрів');
-
-  // [DEBUG] Reverse index: per-loc список нормалізованих імен з реєстрів
-  var bdayKeysByLoc = {};
-  Object.keys(bdayMap).forEach(function(k){
-    var pipe = k.lastIndexOf('|');
-    if (pipe < 0) return;
-    var nm = k.slice(0, pipe);
-    var lc = k.slice(pipe + 1);
-    if (!bdayKeysByLoc[lc]) bdayKeysByLoc[lc] = [];
-    bdayKeysByLoc[lc].push(nm);
-  });
-
-  // Будуємо нову колонку bday для Оплати: повний масив (длина = data.length - 1)
-  var newCol = [];
-  var withBday = 0;
-  var withoutBday = 0;
-  var exactMatched = 0;
-  var fuzzyMatched = 0;
-  var notMatchedSamples = []; // [DEBUG]
-  for (var r = 1; r < data.length; r++) {
-    var pName = String(data[r][nameI] || '').trim();
-    var pLoc  = String(data[r][locI]  || '').trim();
-    var existing = String(data[r][bdayI] || '').trim();
-    if (existing) {
-      newCol.push([existing]);
-      withBday++;
-      continue;
-    }
-    var norm = _normChildName(pName);
-    var exactKey = norm + '|' + pLoc;
-    var bday = bdayMap[exactKey] || '';
-    if (bday) {
-      exactMatched++;
-    } else {
-      // Fuzzy fallback: префікс прізвище + перші 3 літери імені
-      var parts = norm.split(' ').filter(function(p){ return p; });
-      if (parts.length >= 2) {
-        var surname = parts[0];
-        var firstStart = parts[1].substring(0, 3);
-        var prefix = surname + ' ' + firstStart;
-        var candidates = [];
-        for (var k in bdayMap) {
-          if (k.indexOf('|' + pLoc) === k.length - pLoc.length - 1 && k.indexOf(prefix) === 0) {
-            candidates.push(k);
-          }
-        }
-        if (candidates.length === 1) {
-          bday = bdayMap[candidates[0]];
-          fuzzyMatched++;
-        }
-      }
-    }
-    newCol.push([bday]);
-    if (bday) {
-      withBday++;
-    } else {
-      withoutBday++;
-      if (notMatchedSamples.length < 50) {
-        notMatchedSamples.push({name: pName, loc: pLoc, normKey: exactKey});
-      }
-    }
-  }
-  // [DEBUG] загальний список не-матчів
-  Logger.log('[DEBUG] exactMatched=' + exactMatched + ' fuzzyMatched=' + fuzzyMatched + ' withoutBday=' + withoutBday);
-  Logger.log('[DEBUG] notMatchedSamples (' + notMatchedSamples.length + '/50):');
-  notMatchedSamples.forEach(function(s, i){
-    Logger.log('  [' + (i+1) + '] "' + s.name + '" / "' + s.loc + '" → key="' + s.normKey + '"');
-  });
-
-  // Один batch-запис у всю колонку
-  if (newCol.length > 0) {
-    paySheet.getRange(2, bdayI + 1, newCol.length, 1).setValues(newCol);
-  }
-
-  var report = {
-    ok: true,
-    total: data.length - 1,
-    withBday: withBday,
-    withoutBday: withoutBday,
-    exactMatched: exactMatched,
-    fuzzyMatched: fuzzyMatched,
-    bdayMapSize: Object.keys(bdayMap).length,
-    regsScanned: regs.length,
-    regsErrored: errors.length,
-    errors: errors
-  };
-  Logger.log('=== syncBdaysToPayments REPORT ===');
-  Logger.log(JSON.stringify(report, null, 2));
-  return report;
-}
-
-// @deprecated — використовуйте runSyncBdayStatus().
-function runSyncBdaysToPayments() {
-  var r = syncBdaysToPayments();
-  var summary = !r.ok
-    ? 'Помилка: ' + (r.error || 'unknown')
-    : 'Рядків Оплати: ' + r.total + '\n' +
-      'Заповнено bday: ' + r.withBday + '\n' +
-      'Без bday: ' + r.withoutBday + '\n' +
-      'Реєстрів: ' + r.regsScanned + ' (помилок: ' + r.regsErrored + ')\n\n' +
-      (r.errors && r.errors.length ? 'Помилки:\n' + r.errors.join('\n') : '');
-  try {
-    SpreadsheetApp.getUi().alert('Синхронізація bday', summary, SpreadsheetApp.getUi().ButtonSet.OK);
-  } catch (e) {
-    Logger.log('UI alert недоступний. Звіт у логах.');
-    Logger.log(summary);
-  }
-}
-
-// Use this instead of direct aggregatePayments call.
-// aggregatePayments оновлює лист "Оплати"; syncBdayStatusSheet після нього
-// перебудовує bday_sync_status (нові діти попадають з ПІБ та локацією).
-function runFullAggregateAndSync() {
-  try {
-    aggregatePayments();        // існуюча, не чіпаємо
-    syncBdayStatusSheet();      // НОВА (замість deprecated syncBdaysToPayments)
-    try {
-      SpreadsheetApp.getUi().alert(
-        '✅ Перерахунок виконано',
-        'Оплати оновлені + bday_sync_status оновлено',
-        SpreadsheetApp.getUi().ButtonSet.OK
-      );
-    } catch (e2) {
-      Logger.log('runFullAggregateAndSync: успіх (UI alert недоступний)');
-    }
-  } catch (e) {
-    Logger.log('runFullAggregateAndSync error: ' + e);
-    try {
-      SpreadsheetApp.getUi().alert('Помилка', String(e),
-        SpreadsheetApp.getUi().ButtonSet.OK);
-    } catch (e2) {}
-  }
-}
-
-// ── DEBUG: повна категоризація всіх не-зіставлених дітей ─────────────────────
-function _debugAllMissingBdays() {
-  Logger.log('=== ПОВНА ДІАГНОСТИКА 737 НЕ ЗІСТАВЛЕНИХ ===');
-
-  // 1. Будуємо bdayMap (як syncBdaysToPayments)
-  // АЛЕ також зберігаємо ВСІ варіанти (для виявлення колізій)
-  const regs = getRegistries();
-  const bdayMap = {};                  // key → bday
-  const bdayMapAllOccurrences = {};    // key → [{bday, regLocation, fullName}]
-  const allRegistryNames = {};         // location → [name1, name2, ...]
-  const allRegistryNormNames = {};     // normName → [{loc, fullName, bday}]
-
-  for (const reg of regs) {
-    allRegistryNames[reg.location] = [];
-    try {
-      const ss = SpreadsheetApp.openById(reg.sheetId);
-      const sh = ss.getSheetByName(reg.listName) || ss.getSheets()[0];
-      const data = sh.getDataRange().getValues();
-      const hdr = data[0];
-      const childCol = hdr.findIndex(h =>
-        String(h).toLowerCase().includes('піб дитини'));
-      const bdayColReg = hdr.findIndex(h =>
-        String(h).toLowerCase().includes('дата народження'));
-      if (childCol < 0 || bdayColReg < 0) continue;
-
-      for (let i = 1; i < data.length; i++) {
-        const name = String(data[i][childCol] || '').trim();
-        const bdayRaw = data[i][bdayColReg];
-        if (!name) continue;
-        allRegistryNames[reg.location].push(name);
-        if (!bdayRaw) continue;
-        const bdayISO = parseRegistryBday(bdayRaw);
-        if (!bdayISO) continue;
-
-        const norm = _normChildName(name);
-        const key = norm + '|' + reg.location;
-
-        if (!bdayMapAllOccurrences[key]) {
-          bdayMapAllOccurrences[key] = [];
-        }
-        bdayMapAllOccurrences[key].push({
-          bday: bdayISO, fullName: name, regLocation: reg.location
-        });
-
-        if (!allRegistryNormNames[norm]) {
-          allRegistryNormNames[norm] = [];
-        }
-        allRegistryNormNames[norm].push({
-          loc: reg.location, fullName: name, bday: bdayISO
-        });
-
-        bdayMap[key] = bdayISO;
-      }
-    } catch (e) {
-      Logger.log('ERROR ' + reg.location + ': ' + e);
-    }
-  }
-
-  // 2. Обходимо Оплати
-  const ss = getCRMSpreadsheet();
-  const paySheet = ss.getSheetByName('Оплати');
-  const data = paySheet.getDataRange().getValues();
-  const header = data[0];
-  const nameCol = header.findIndex(h =>
-    String(h).toLowerCase().includes("ім'я дитини"));
-  const locCol = header.findIndex(h =>
-    String(h).toLowerCase().includes('локація'));
-
-  // 3. Категоризація 737 не зіставлених
-  const categoryA = [];  // в реєстрі є, в bdayMap є — БАГ скрипта
-  const categoryB = [];  // в реєстрі НЕМАЄ
-  const categoryC = [];  // однофамільці (колізія)
-  const categoryD = [];  // є в реєстрі іншої локації
-  const categoryE = [];  // дата в реєстрі є, але не парсається
-
-  for (let i = 1; i < data.length; i++) {
-    const name = String(data[i][nameCol] || '').trim();
-    const loc = String(data[i][locCol] || '').trim();
-    if (!name || !loc) continue;
-
-    const norm = _normChildName(name);
-    const lookupKey = norm + '|' + loc;
-
-    if (bdayMap[lookupKey]) continue; // зіставлено
-
-    // НЕ зіставлено — категоризуємо
-    const occurrences = bdayMapAllOccurrences[lookupKey];
-    const allNormMatches = allRegistryNormNames[norm] || [];
-    const inSameLoc = allRegistryNames[loc] &&
-      allRegistryNames[loc].some(n => _normChildName(n) === norm);
-
-    if (occurrences && occurrences.length > 1) {
-      categoryC.push({name, loc, count: occurrences.length});
-    } else if (inSameLoc) {
-      // в реєстрі є, в bdayMap немає — або бад дата
-      categoryE.push({name, loc});
-    } else if (allNormMatches.length > 0) {
-      // в іншій локації є
-      categoryD.push({
-        name, loc,
-        foundIn: allNormMatches.map(m => m.loc).join(',')
-      });
-    } else {
-      categoryB.push({name, loc});
-    }
-  }
-
-  // 4. Звіт
-  Logger.log('--- ЗВІТ ---');
-  Logger.log('bdayMap size: ' + Object.keys(bdayMap).length);
-  Logger.log('');
-  Logger.log('A. Колізії (в map переписано): ' + categoryC.length);
-  Logger.log('B. Немає в жодному реєстрі: ' + categoryB.length);
-  Logger.log('C. Є в реєстрі іншої локації: ' + categoryD.length);
-  Logger.log('D. Є в реєстрі цієї локації, але дата не парсається: '
-    + categoryE.length);
-
-  Logger.log('');
-  Logger.log('--- A. КОЛІЗІЇ (перші 10) ---');
-  categoryC.slice(0, 10).forEach(x =>
-    Logger.log('  ' + x.name + ' / ' + x.loc + ' (× ' + x.count + ')'));
-
-  Logger.log('');
-  Logger.log('--- B. НЕМАЄ В РЕЄСТРАХ (перші 20) ---');
-  categoryB.slice(0, 20).forEach(x =>
-    Logger.log('  ' + x.name + ' / ' + x.loc));
-
-  Logger.log('');
-  Logger.log('--- C. В ІНШИХ ЛОКАЦІЯХ (перші 20) ---');
-  categoryD.slice(0, 20).forEach(x =>
-    Logger.log('  ' + x.name + ' / ' + x.loc + ' → знайдено в: ' + x.foundIn));
-
-  Logger.log('');
-  Logger.log('--- D. ДАТА НЕ ПАРСАЄТЬСЯ (перші 10) ---');
-  categoryE.slice(0, 10).forEach(x =>
-    Logger.log('  ' + x.name + ' / ' + x.loc));
-
-  Logger.log('');
-  Logger.log('=== РЕКОМЕНДАЦІЇ ===');
-  Logger.log('A. Колізії = виправити кодом (додати другий ключ - група або номер договору)');
-  Logger.log('B. = окрема задача для HR (внести в реєстр)');
-  Logger.log('C. = виправити кодом (lookup без локації або по locFromOplata→locInRegistry)');
-  Logger.log('D. = виправити в реєстрі (дата написана дивно)');
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// SYNC bday_sync_status: окремий лист зі статусами match'у дітей з реєстрами
-// ═══════════════════════════════════════════════════════════════════════════
-//
-// Не модифікує лист "Оплати". Створює/перезаписує окремий лист bday_sync_status.
-// Frontend читає з нього bday + contractNumber + status badge.
-
 var BDAY_STATUS_SHEET = 'bday_sync_status';
 
 function syncBdayStatusSheet() {
@@ -2537,11 +1695,9 @@ function syncBdayStatusSheet() {
   var statusSheet = crmSS.getSheetByName(BDAY_STATUS_SHEET);
   if (!statusSheet) {
     statusSheet = crmSS.insertSheet(BDAY_STATUS_SHEET);
-    Logger.log('syncBdayStatusSheet: створено новий лист "' + BDAY_STATUS_SHEET + '"');
   }
   var HEADER = ['ChildID','Name','Loc','Bday','ContractNumber','Status','MatchedRegName','UpdatedAt','ConfirmedBy','ConfirmedAt'];
 
-  // 0. Знімок confirmed-рядків — їх НЕ перезаписуємо
   var confirmedById = {};
   var existingLastRow = statusSheet.getLastRow();
   if (existingLastRow >= 2) {
@@ -2558,30 +1714,20 @@ function syncBdayStatusSheet() {
         }
       }
     }
-    Logger.log('syncBdayStatusSheet: збережено ' + Object.keys(confirmedById).length + ' confirmed-рядків');
   }
 
-  // 1. Читаємо лист "Оплати" (read-only) — список дітей
   var paySheet = crmSS.getSheetByName(SHEET_PAYMENTS);
-  if (!paySheet) {
-    Logger.log('syncBdayStatusSheet: ERROR — лист "' + SHEET_PAYMENTS + '" не знайдено');
-    return { ok: false, error: 'Оплати not found' };
-  }
+  if (!paySheet) return { ok: false, error: 'Оплати not found' };
   var payData = paySheet.getDataRange().getValues();
-  if (payData.length < 2) {
-    Logger.log('syncBdayStatusSheet: лист "' + SHEET_PAYMENTS + '" порожній');
-    return { ok: true, total: 0 };
-  }
+  if (payData.length < 2) return { ok: true, total: 0 };
   var payHdr = payData[0].map(function(h){ return String(h || ''); });
   var locI   = payHdr.indexOf('Локація');
   var grpI   = payHdr.indexOf('Група');
   var nameI  = payHdr.indexOf("Ім'я дитини");
   if (locI < 0 || grpI < 0 || nameI < 0) {
-    Logger.log('syncBdayStatusSheet: ERROR — не знайдено колонки Оплати: locI=' + locI + ' grpI=' + grpI + ' nameI=' + nameI);
     return { ok: false, error: 'Оплати headers missing' };
   }
 
-  // 2. Будуємо candidatesByLoc з реєстрів
   var regs = getRegistries();
   var candidatesByLoc = {};
   var errors = [];
@@ -2632,11 +1778,7 @@ function syncBdayStatusSheet() {
       errors.push(reg.location + ': ' + (e.message || e));
     }
   }
-  Logger.log('syncBdayStatusSheet: candidates by loc — ' + Object.keys(candidatesByLoc).map(function(l){
-    return l + ':' + candidatesByLoc[l].length;
-  }).join(', '));
 
-  // 3. Smart match для кожної дитини з Оплати
   var stats = { exact: 0, smart_check: 0, ambiguous: 0, school_no_contract: 0, not_found: 0, name_mismatch: 0, confirmed: 0 };
   var rowsOut = [];
   var nowStr = formatDate(new Date());
@@ -2683,7 +1825,6 @@ function syncBdayStatusSheet() {
           }
         }
       } else {
-        // 2+ кандидатів — сортуємо за довжиною спільного префіксу імен
         var scored = candidates.map(function(c){
           return { c: c, score: _commonPrefixLen(c.normFirstName, firstName) };
         }).sort(function(a, b){ return b.score - a.score; });
@@ -2695,7 +1836,6 @@ function syncBdayStatusSheet() {
           candidates.forEach(function(c){ if (c.bday) uniqBdays[c.bday] = true; });
           var ub = Object.keys(uniqBdays);
           bdayOut = ub.length === 1 ? ub[0] : '';
-          // contractNumber — НЕ записуємо при ambiguous
           matchedRegOut = candidates.map(function(c){ return c.fullName; }).join(' | ');
         } else {
           status = 'smart_check';
@@ -2719,7 +1859,6 @@ function syncBdayStatusSheet() {
     rowsOut.push([id, name, loc, bdayOut, cnOut, status, matchedRegOut, nowStr, '', '']);
   }
 
-  // 4. Запис у sheet (clear + write)
   statusSheet.clearContents();
   statusSheet.getRange(1, 1, 1, HEADER.length).setValues([HEADER]);
   statusSheet.setFrozenRows(1);
@@ -2728,8 +1867,7 @@ function syncBdayStatusSheet() {
     statusSheet.getRange(2, 1, rowsOut.length, HEADER.length).setValues(rowsOut);
   }
 
-  // 5. Звіт
-  var report = {
+  return {
     ok: true,
     total: rowsOut.length,
     exact: stats.exact || 0,
@@ -2742,37 +1880,8 @@ function syncBdayStatusSheet() {
     registriesScanned: registriesScanned,
     errors: errors
   };
-  Logger.log('=== syncBdayStatusSheet REPORT ===');
-  Logger.log(JSON.stringify(report, null, 2));
-  return report;
 }
 
-function runSyncBdayStatus() {
-  var r = syncBdayStatusSheet();
-  var summary = !r.ok
-    ? 'Помилка: ' + (r.error || 'unknown')
-    : 'Всього дітей в Оплати: ' + r.total + '\n' +
-      '─────────────────────\n' +
-      '✅ exact:              ' + r.exact + '\n' +
-      '⚠️ smart_check:        ' + r.smart_check + '\n' +
-      '⚠️ ambiguous:          ' + r.ambiguous + '\n' +
-      '⚠️ name_mismatch:      ' + r.name_mismatch + '\n' +
-      '✅ confirmed:          ' + r.confirmed + '\n' +
-      '📝 school_no_contract: ' + r.school_no_contract + '\n' +
-      '❌ not_found:          ' + r.not_found + '\n' +
-      '─────────────────────\n' +
-      'Реєстрів просканено: ' + r.registriesScanned + '\n' +
-      (r.errors && r.errors.length ? '\nПомилки:\n' + r.errors.join('\n') : '');
-  try {
-    SpreadsheetApp.getUi().alert('bday_sync_status', summary, SpreadsheetApp.getUi().ButtonSet.OK);
-  } catch (e) {
-    Logger.log('UI alert недоступний. Звіт у логах.');
-    Logger.log(summary);
-  }
-}
-
-// Знаходить рядок у bday_sync_status за ChildID. Повертає {sheet, rowIndex, header}
-// або null якщо не знайдено. rowIndex — 1-based (для setValues).
 function _findBdayStatusRow(childId) {
   if (!childId) return null;
   var crmSS = getCRMSpreadsheet();
@@ -2793,7 +1902,6 @@ function _findBdayStatusRow(childId) {
   return null;
 }
 
-// Підтверджує збіг дитини з реєстром (статус → 'confirmed').
 function confirmBdayMatch(childId, confirmedBy) {
   var loc = _findBdayStatusRow(childId);
   if (!loc) return { ok: false, error: 'ChildID не знайдено в ' + BDAY_STATUS_SHEET };
@@ -2813,9 +1921,6 @@ function confirmBdayMatch(childId, confirmedBy) {
   return { ok: true, status: 'confirmed', confirmedBy: confirmedBy, confirmedAt: nowStr };
 }
 
-// Скасовує підтвердження. Статус відновлюється з MatchedRegName:
-//   - "A | B" → ambiguous; інакше → smart_check (catch-all для smart_check/name_mismatch)
-//   - наступний повний sync уточнить статус.
 function unconfirmBdayMatch(childId) {
   var loc = _findBdayStatusRow(childId);
   if (!loc) return { ok: false, error: 'ChildID не знайдено в ' + BDAY_STATUS_SHEET };
@@ -2838,240 +1943,6 @@ function unconfirmBdayMatch(childId) {
   return { ok: true, status: newStatus };
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// CLEANUP: видалити timestamp/дати з колонки "Номер договору" в CRM Клієнти
-// ═══════════════════════════════════════════════════════════════════════════
-//
-// Сміттєві дані потрапили туди від старого migrateChildrenBdays та інших
-// скриптів. Реальні номери (формат "75-30-08") живуть у реєстрах і
-// підтягуються через bday_sync_status. Очистка ХОВАЄ старі timestamp.
-
-function cleanContractNumberGarbage(dryRun) {
-  if (dryRun === undefined) dryRun = true;
-  var ss = getCRMSpreadsheet();
-  var sheet = ss.getSheetByName(SHEET_CLIENTS);
-  if (!sheet) {
-    Logger.log('cleanContractNumberGarbage: ERROR — sheet "' + SHEET_CLIENTS + '" not found');
-    return { ok: false, error: 'Sheet not found' };
-  }
-
-  var data = sheet.getDataRange().getValues();
-  if (data.length < 2) {
-    Logger.log('cleanContractNumberGarbage: empty');
-    return { ok: true, total: 0, garbage: 0, real: 0, empty: 0 };
-  }
-
-  var hdr = data[0].map(function(h){ return String(h || ''); });
-  var cnCol = hdr.indexOf('Номер договору');
-  if (cnCol < 0) {
-    Logger.log('cleanContractNumberGarbage: ERROR — колонка "Номер договору" не знайдена');
-    return { ok: false, error: 'Column "Номер договору" not found' };
-  }
-  Logger.log('cleanContractNumberGarbage: колонка "Номер договору" — index ' + cnCol + ' (col ' + (cnCol + 1) + ')');
-
-  // Регекси для виявлення сміття у колонці "Номер договору"
-  var GARBAGE_PATTERNS = [
-    /^\d{4}-\d{2}-\d{2}/,                          // ISO: 2026-04-20 (з можливим хвостом)
-    /^\d{1,2}\.\d{1,2}\.\d{4}/                     // D.M.YYYY або DD.MM.YYYY (з timestamp або без)
-  ];
-
-  function isGarbage(val) {
-    if (val === null || val === undefined || val === '') return false;
-    if (val instanceof Date) return true;          // Excel timestamp / Date object
-    var s = String(val).trim();
-    if (!s) return false;
-    for (var i = 0; i < GARBAGE_PATTERNS.length; i++) {
-      if (GARBAGE_PATTERNS[i].test(s)) return true;
-    }
-    return false;
-  }
-
-  var stats = { total: 0, garbage: 0, real: 0, empty: 0 };
-  var garbageRows = []; // [{row, value}]
-  var realSamples = []; // приклади що залишимо (до 10)
-
-  for (var r = 1; r < data.length; r++) {
-    stats.total++;
-    var val = data[r][cnCol];
-    if (val === null || val === undefined || String(val).trim() === '') {
-      stats.empty++;
-      continue;
-    }
-    if (isGarbage(val)) {
-      stats.garbage++;
-      if (garbageRows.length < 1000) garbageRows.push({ row: r + 1, value: String(val) });
-    } else {
-      stats.real++;
-      if (realSamples.length < 10) realSamples.push(String(val));
-    }
-  }
-
-  Logger.log('=== cleanContractNumberGarbage ' + (dryRun ? 'DRY RUN' : 'REAL') + ' ===');
-  Logger.log('Total rows:                  ' + stats.total);
-  Logger.log('Garbage (timestamps/dates):  ' + stats.garbage);
-  Logger.log('Real numbers (kept):         ' + stats.real);
-  Logger.log('Empty (kept):                ' + stats.empty);
-  Logger.log('');
-  Logger.log('Sample REAL numbers (first 10) — НЕ чіпатимемо:');
-  realSamples.forEach(function(s){ Logger.log('  "' + s + '"'); });
-  Logger.log('');
-  Logger.log('Sample GARBAGE values (first 10) — будемо очищати:');
-  garbageRows.slice(0, 10).forEach(function(g){
-    Logger.log('  row ' + g.row + ': "' + g.value + '"');
-  });
-
-  if (dryRun) {
-    Logger.log('');
-    Logger.log('DRY RUN — нічого не змінено. Для реальної очистки запустіть runCleanGarbageReal().');
-    return { ok: true, dryRun: true, total: stats.total, garbage: stats.garbage, real: stats.real, empty: stats.empty };
-  }
-
-  // REAL: пишемо очищену колонку одним batch setValues
-  if (garbageRows.length > 0) {
-    var newCol = [];
-    for (var rr = 1; rr < data.length; rr++) {
-      var v = data[rr][cnCol];
-      if (isGarbage(v)) {
-        newCol.push(['']);
-      } else {
-        newCol.push([(v === null || v === undefined) ? '' : v]);
-      }
-    }
-    sheet.getRange(2, cnCol + 1, newCol.length, 1).setValues(newCol);
-    Logger.log('REAL — очищено ' + garbageRows.length + ' клітинок у колонці "Номер договору"');
-  } else {
-    Logger.log('REAL — нічого очищати, сміття не знайдено');
-  }
-
-  return { ok: true, dryRun: false, cleaned: garbageRows.length, total: stats.total, garbage: stats.garbage, real: stats.real, empty: stats.empty };
-}
-
-function runCleanGarbageDryRun() {
-  var r = cleanContractNumberGarbage(true);
-  var summary = !r.ok
-    ? 'Помилка: ' + (r.error || 'unknown')
-    : 'DRY RUN — нічого не змінено\n' +
-      '─────────────────────\n' +
-      'Всього рядків:       ' + r.total + '\n' +
-      'Сміття (timestamp):  ' + r.garbage + '\n' +
-      'Справжні номери:     ' + r.real + '\n' +
-      'Порожні:             ' + r.empty + '\n' +
-      '─────────────────────\n' +
-      'Деталі (приклади) — у Logger.\n' +
-      'Для реальної очистки: runCleanGarbageReal()';
-  try {
-    SpreadsheetApp.getUi().alert('Очистка сміття (DRY RUN)', summary, SpreadsheetApp.getUi().ButtonSet.OK);
-  } catch (e) {
-    Logger.log('UI alert недоступний.');
-    Logger.log(summary);
-  }
-}
-
-function runCleanGarbageReal() {
-  var confirmed = false;
-  try {
-    var ui = SpreadsheetApp.getUi();
-    var resp = ui.alert(
-      '⚠️ Очистка сміття (РЕАЛЬНО)',
-      'УВАГА! Спершу зробіть копію CRM Sheets:\n' +
-      'File → Make a copy.\n\n' +
-      'Ця операція очистить колонку "Номер договору" у листі "Клієнти" ' +
-      'від timestamp/дат (наприклад "25.04.2026 13:03", "2026-04-20"). ' +
-      'Справжні номери (формат "75-30-08", з літерами тощо) — залишаються.\n\n' +
-      'Продовжити?',
-      ui.ButtonSet.YES_NO
-    );
-    confirmed = (resp === ui.Button.YES);
-  } catch (e) {
-    // Запущено з editor — без UI підтвердження. Логуємо WARNING.
-    Logger.log('runCleanGarbageReal: UI недоступний (editor) — продовжуємо без підтвердження');
-    confirmed = true;
-  }
-  if (!confirmed) {
-    Logger.log('runCleanGarbageReal: користувач відхилив');
-    return;
-  }
-
-  var r = cleanContractNumberGarbage(false);
-  var summary = !r.ok
-    ? 'Помилка: ' + (r.error || 'unknown')
-    : '✅ Очистку завершено\n' +
-      '─────────────────────\n' +
-      'Видалено timestamp:        ' + (r.cleaned || 0) + '\n' +
-      'Справжні номери збережено: ' + r.real + '\n' +
-      'Порожні без змін:          ' + r.empty;
-  try {
-    SpreadsheetApp.getUi().alert('Очистка завершена', summary, SpreadsheetApp.getUi().ButtonSet.OK);
-  } catch (e) {
-    Logger.log(summary);
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// TRIGGERS: автоматична щоденна синхронізація bday_sync_status
-// ═══════════════════════════════════════════════════════════════════════════
-
-function installSyncTrigger() {
-  var existing = ScriptApp.getProjectTriggers();
-  var removed = 0;
-  existing.forEach(function(t){
-    if (t.getHandlerFunction() === 'runSyncBdayStatus') {
-      ScriptApp.deleteTrigger(t);
-      removed++;
-    }
-  });
-  ScriptApp.newTrigger('runSyncBdayStatus')
-    .timeBased()
-    .everyDays(1)
-    .atHour(4)
-    .inTimezone('Europe/Kiev')
-    .create();
-  Logger.log('✅ Тригер встановлено: щодня о 04:00 Europe/Kiev (видалено старих: ' + removed + ')');
-  try {
-    SpreadsheetApp.getUi().alert(
-      'Тригер встановлено',
-      '✅ runSyncBdayStatus запускатиметься щодня о 04:00 (Київ).\n' +
-      'Видалено старих тригерів: ' + removed,
-      SpreadsheetApp.getUi().ButtonSet.OK
-    );
-  } catch(e) {}
-}
-
-function removeSyncTrigger() {
-  var existing = ScriptApp.getProjectTriggers();
-  var removed = 0;
-  existing.forEach(function(t){
-    if (t.getHandlerFunction() === 'runSyncBdayStatus') {
-      ScriptApp.deleteTrigger(t);
-      removed++;
-    }
-  });
-  Logger.log('🗑️ Тригери runSyncBdayStatus видалено: ' + removed);
-  try {
-    SpreadsheetApp.getUi().alert('Тригер видалено',
-      'Видалено тригерів: ' + removed,
-      SpreadsheetApp.getUi().ButtonSet.OK);
-  } catch(e) {}
-}
-
-function listAllTriggers() {
-  var triggers = ScriptApp.getProjectTriggers();
-  Logger.log('=== Усі тригери проєкту (' + triggers.length + ') ===');
-  triggers.forEach(function(t, i){
-    Logger.log('[' + (i+1) + '] handler="' + t.getHandlerFunction() +
-      '" eventType=' + t.getEventType() +
-      ' uniqueId=' + t.getUniqueId());
-  });
-  return triggers.length;
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// OPEX — спільні хелпери для парсингу категорій. Структура листа OPEX
-// (всі локації): рядок 1 порожній (column-pair headers Факт/Бюджет),
-// рядок 2 = "ВИТРАТИ" (заголовок таблиці), рядки 3..N = категорії.
-// Категорії визначаємо ПО НАЗВІ а не по фіксованих номерах рядків —
-// в локаціях є шифти і додаткові категорії для управлінь.
-// ═══════════════════════════════════════════════════════════════════════════
 function _opexIsSkippedCategory(name) {
   var normalized = String(name || '').trim().toLowerCase();
   if (!normalized) return true;
@@ -3084,7 +1955,6 @@ function _opexIsSkippedCategory(name) {
     'кількість основного персоналу'
   ];
   if (SKIP_NAMES.indexOf(normalized) !== -1) return true;
-  // Чисто числові «маркери» (типу "25500") — не категорія
   if (/^[\d\s.,]+$/.test(normalized)) return true;
   return false;
 }
@@ -3105,12 +1975,6 @@ function _opexNum(v) {
   return 0;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// OPEX — читання факт/бюджет по локації. READ-ONLY.
-// Сканує рядки 3..30, бере як категорію все що НЕ skip-список (див.
-// _opexIsSkippedCategory), назви нормалізуємо через _opexNormalizeCategoryName.
-// Структура: ROW1 = ["", "Факт", "Бюджет", ...] × 12 місяців.
-// ═══════════════════════════════════════════════════════════════════════════
 function getOpexData(loc, year) {
   loc = String(loc || '').trim();
   if (!loc) return {ok:false, error:'Missing loc'};
@@ -3134,9 +1998,6 @@ function getOpexData(loc, year) {
   var opex  = locSS.getSheetByName(listName);
   if (!opex) return {ok:false, error:'OPEX sheet not found in location file'};
 
-  // getDataRange() обрізає рядки де всі колонки крім A порожні (типова ситуація
-  // для МАРКЕТИНГ/КАП — там лише назва без сум). Читаємо явно 30×37 — структура
-  // OPEX листа фіксована і це гарантує що нічого не пропустимо.
   var lastRow = Math.max(opex.getLastRow(), 30);
   var lastCol = Math.max(opex.getLastColumn(), 37);
   var data = opex.getRange(1, 1, lastRow, lastCol).getValues();
@@ -3179,19 +2040,12 @@ function getOpexData(loc, year) {
   };
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// OPEX OVERVIEW — агреговані суми факт/бюджет по всіх локаціях. READ-ONLY.
-// Для кожної локації сканує рядки 3..30, підсумовує всі що пройшли
-// _opexIsSkippedCategory, по 12 місяцях. Локації без OPEX-листа або з
-// помилкою попадають в errors[].
-// ═══════════════════════════════════════════════════════════════════════════
 function getOpexOverview(year) {
   var configSS = SpreadsheetApp.openById(CONFIG_SHEET_ID);
   var regSheet = configSS.getSheetByName('OPEX');
   if (!regSheet) return {ok:false, error:'OPEX registry tab not found in CONFIG'};
 
   var regData = regSheet.getDataRange().getValues();
-
   var locations = [];
   var errors = [];
 
@@ -3210,14 +2064,11 @@ function getOpexOverview(year) {
         continue;
       }
 
-      // Явно читаємо 30×37 — getDataRange() може обрізати рядки де колонки
-      // крім A порожні (МАРКЕТИНГ/КАП).
       var lastRow = Math.max(opex.getLastRow(), 30);
       var lastCol = Math.max(opex.getLastColumn(), 37);
       var data    = opex.getRange(1, 1, lastRow, lastCol).getValues();
       var width   = lastCol;
 
-      // Збираємо індекси рядків-категорій один раз (по назві).
       var catIdxs = [];
       for (var rowNum = 3; rowNum <= 30; rowNum++) {
         var idx = rowNum - 1;
@@ -3266,24 +2117,7 @@ function getOpexOverview(year) {
   };
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// OPEX CATEGORY ANALYTICS — для конкретного місяця, по всіх локаціях,
-// з нормалізацією (на дитину / на групу / на ставку основного персоналу).
-// READ-ONLY. Backend повертає всі 16 локацій; фільтр Управління — на frontend
-// як у getOpexOverview.
-//
-// Структура листа OPEX (поза рядками 3..30 з категоріями):
-//   рядок 36 = "Кількість дітей"
-//   рядок 37 = "Кількість груп"
-//   рядок 38 = "Кількість основного персоналу"
-// Метадані лежать у "бюджет"-колонці кожного місяця:
-//   formula: colIdx = 2 + (month-1)*3   (січень=C, лютий=F, березень=I…)
-// ═══════════════════════════════════════════════════════════════════════════
-
-// Карта нормалізації категорій. Ключі — назва ПІСЛЯ _opexNormalizeCategoryName
-// (тож "ГОСП.ТОВАРИ" → "ХОЗ.ТОВАРИ", "СНІДАНКИ (Ашан)" → "СНІДАНКИ").
 var _OPEX_NORM_MAP = {
-  // absolute — нічого не ділимо (normFact = fact, normBudget = budget)
   'ОРЕНДА':                            'absolute',
   'КОМУНАЛЬНІ ПОСЛУГИ':                'absolute',
   'ПОВЕРНЕННЯ':                        'absolute',
@@ -3291,13 +2125,11 @@ var _OPEX_NORM_MAP = {
   'Маркетинг':                         'absolute',
   'ЗАХОДИ':                            'absolute',
   'КАП':                               'absolute',
-  // child — ділимо на children (рядок 36)
   'СНІДАНКИ':                          'child',
   'КУХНЯ':                             'child',
   'Вода':                              'child',
   'ПРАЛЬНЯ':                           'child',
   'Підручники':                        'child',
-  // group — ділимо на groups (рядок 37)
   'КАНЦТОВАРИ':                        'group',
   'ІГРАШКИ':                           'group',
   'ХОЗ.ТОВАРИ':                        'group',
@@ -3307,7 +2139,6 @@ var _OPEX_NORM_MAP = {
   'Постільне/коври/пуфи/форма':        'group',
   'НЕЗАПЛАНОВАНІ ВИТРАТИ':             'group',
   'Методична частина':                 'group',
-  // staff — ділимо на staff (рядок 38)
   'Для персоналу':                     'staff',
   'ПОДАТОК':                           'staff',
   'Персонал':                          'staff',
@@ -3318,7 +2149,6 @@ function _opexNormType(name) {
   return _OPEX_NORM_MAP[name] || 'unknown';
 }
 
-// Знаменник 0 → null (не Infinity). 'absolute' і 'unknown' → значення як є.
 function _opexNormalize(value, normType, denoms) {
   if (normType === 'absolute' || normType === 'unknown') return value;
   var d;
@@ -3339,17 +2169,10 @@ function getCategoryAnalytics(year, month) {
   if (!regSheet) return {ok:false, error:'OPEX registry tab not found in CONFIG'};
 
   var regData = regSheet.getDataRange().getValues();
-
-  // Колонки для обраного місяця (0-indexed):
-  //   fIdx (Факт)   = (m-1)*3 + 1   → B,E,H,K…
-  //   bIdx (Бюджет) = (m-1)*3 + 2   → C,F,I,L…
-  // Метадані (рядки 36-38) лежать у бюджет-колонці = той самий bIdx.
   var fIdx    = (m - 1) * 3 + 1;
   var bIdx    = (m - 1) * 3 + 2;
-  var metaIdx = 2 + (m - 1) * 3;   // ≡ bIdx, явно за формулою з тз
+  var metaIdx = 2 + (m - 1) * 3;
 
-  // categoryName → акумулятор. Ключем беремо нормалізовану назву, тож
-  // "ГОСП.ТОВАРИ" з однієї локації і "ХОЗ.ТОВАРИ" з іншої злиплються.
   var catMap = {};
   var errors = [];
 
@@ -3368,20 +2191,16 @@ function getCategoryAnalytics(year, month) {
         continue;
       }
 
-      // Явно читаємо 40×37 — getDataRange() може обрізати рядки де колонки
-      // крім A порожні. 40 покриває і категорії (3..30) і метадані (36..38).
       var lastRow = Math.max(opex.getLastRow(), 40);
       var lastCol = Math.max(opex.getLastColumn(), 37);
       var data    = opex.getRange(1, 1, lastRow, lastCol).getValues();
       var width   = lastCol;
 
-      // Метадані (рядки 36-38). Якщо листа коротший або колонки нема — 0.
       var children = (35 < data.length && metaIdx < width) ? _opexNum(data[35][metaIdx]) : 0;
       var groups   = (36 < data.length && metaIdx < width) ? _opexNum(data[36][metaIdx]) : 0;
       var staff    = (37 < data.length && metaIdx < width) ? _opexNum(data[37][metaIdx]) : 0;
       var denoms   = {children: children, groups: groups, staff: staff};
 
-      // Категорії (рядки 3..30, name-based scan з skip-list).
       for (var rowNum = 3; rowNum <= 30; rowNum++) {
         var idx = rowNum - 1;
         if (idx >= data.length) break;
@@ -3393,7 +2212,6 @@ function getCategoryAnalytics(year, month) {
         var fact     = fIdx < width ? _opexNum(rowArr[fIdx]) : 0;
         var budget   = bIdx < width ? _opexNum(rowArr[bIdx]) : 0;
         var normType = _opexNormType(name);
-        // 'unknown' → показуємо абсолютні значення (на випадок нових категорій)
         var normFact   = _opexNormalize(fact,   normType, denoms);
         var normBudget = _opexNormalize(budget, normType, denoms);
 
@@ -3426,9 +2244,6 @@ function getCategoryAnalytics(year, month) {
     }
   }
 
-  // Середні нормалізовані значення — тільки серед локацій з визначеним
-  // (не null) normFact / normBudget. Якщо знаменник був 0 — локація не
-  // потрапляє у середнє, інакше викривило б цифру.
   var categories = Object.keys(catMap).map(function(name){
     var c = catMap[name];
     var sumF = 0, cntF = 0, sumB = 0, cntB = 0;
@@ -3454,18 +2269,6 @@ function getCategoryAnalytics(year, month) {
   };
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// SALARY — спільні хелпери. Структура листа Salary в кожному файлі локації:
-//   рядок 1 = "ЗАРПЛАТА" (заголовок)
-//   рядок 2 = "персонал" (підзаголовок) або порожньо
-//   рядок 3 = column-headers (Факт/Бюджет per month) або порожньо
-//   рядок 4..N = співробітники (А=ПІБ + 36 колонок: 12 місяців × {Факт, Бюджет, spacer})
-// Колонки на місяць m: fIdx=(m-1)*3+1 (B,E,H...), bIdx=(m-1)*3+2 (C,F,I...).
-// Числа парсимо тим самим _opexNum.
-// ═══════════════════════════════════════════════════════════════════════════
-
-// Скіп-предикат для рядків зарплатного листа. Виключаємо порожні, заголовки
-// "ЗАРПЛАТА" / "персонал" (case-insensitive як в OPEX) і чисельні маркери.
 function _salaryIsSkippedRow(name) {
   var s = String(name || '').trim();
   if (!s) return true;
@@ -3475,9 +2278,6 @@ function _salaryIsSkippedRow(name) {
   return false;
 }
 
-// Підсумкові рядки в зарплатному листі — їх НЕ рахуємо в підсумку, бо суми
-// дублюються деталізованими рядками нижче (напр. "Додаткові заняття" =
-// сума всіх занять: Лего, Арт, m.Dance...). Substring-match case-insensitive.
 function _salaryIsSubtotalRow(name) {
   var lower = String(name || '').trim().toLowerCase();
   if (!lower) return false;
@@ -3486,8 +2286,6 @@ function _salaryIsSubtotalRow(name) {
   return false;
 }
 
-// Реєстр Salary з CONFIG_SHEET_ID (лист "Salary"). Структура колонок та сама
-// що в OPEX-реєстрі: A=Напрямок, B=Тип, C=Локація, D=Spreadsheet ID, E=Назва листа.
 function _salaryGetRegistry() {
   var configSS = SpreadsheetApp.openById(CONFIG_SHEET_ID);
   var regSheet = configSS.getSheetByName('Salary');
@@ -3511,10 +2309,6 @@ function _salaryGetRegistry() {
   return {ok:true, rows:rows};
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// SALARY — деталь по локації (всі непорожні рядки за рік). READ-ONLY.
-// Не намагаємось розпізнавати групи/посади — просто дзеркало рядків.
-// ═══════════════════════════════════════════════════════════════════════════
 function getSalaryData(loc, year) {
   loc = String(loc || '').trim();
   if (!loc) return {ok:false, error:'Missing loc'};
@@ -3532,16 +2326,12 @@ function getSalaryData(loc, year) {
   var sheet = locSS.getSheetByName(entry.listName);
   if (!sheet) return {ok:false, error:'Salary sheet not found in location file'};
 
-  // Явно беремо мінімум 80 рядків × 37 колонок (як OPEX — getDataRange
-  // обрізає рядки з порожнім хвостом). 80 покриває типову локацію з запасом.
   var lastRow = Math.max(sheet.getLastRow(), 80);
   var lastCol = Math.max(sheet.getLastColumn(), 37);
   var data    = sheet.getRange(1, 1, lastRow, lastCol).getValues();
   var width   = lastCol;
 
   var rows = [];
-  // Скіпаємо рядки 1-3 (заголовки). Далі — все непорожнє з осмисленою назвою,
-  // окрім підсумкових рядків (вони дублюють суми деталізованих нижче).
   for (var rowNum = 4; rowNum <= data.length; rowNum++) {
     var idx = rowNum - 1;
     var rowArr = data[idx] || [];
@@ -3577,10 +2367,6 @@ function getSalaryData(loc, year) {
   };
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// SALARY OVERVIEW — суми факт/бюджет по всіх локаціях, по 12 місяцях.
-// READ-ONLY. Помилки на рівні локації потрапляють в errors[].
-// ═══════════════════════════════════════════════════════════════════════════
 function getSalaryOverview(year) {
   var reg = _salaryGetRegistry();
   if (!reg.ok) return reg;
@@ -3602,8 +2388,6 @@ function getSalaryOverview(year) {
       var data    = sheet.getRange(1, 1, lastRow, lastCol).getValues();
       var width   = lastCol;
 
-      // Збираємо індекси непустих рядків один раз (за назвою в колонці A).
-      // Виключаємо підсумкові рядки (дублюють деталізовані).
       var rowIdxs = [];
       for (var rowNum = 4; rowNum <= data.length; rowNum++) {
         var idx = rowNum - 1;
@@ -3653,16 +2437,6 @@ function getSalaryOverview(year) {
   };
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// OVERVIEW ANALYTICS — зведена картина по локаціях за обраний місяць.
-// Збирає три джерела:
-//   1) OPEX — метадані рядки 36-38 (діти / групи / основний персонал плановий)
-//   2) Список дітей (лист "Клієнти") — фактична кількість + розклад по групах
-//   3) Salary — категоризація персоналу + місячні бюджет/факт по локації
-// READ-ONLY. ~30 сек на 13 локацій (кожна локація = 2 файли × відкриття).
-// ═══════════════════════════════════════════════════════════════════════════
-
-// Frontend isSubjectTeacher — дзеркальна копія для backend категоризації.
 function _ovaIsSubjectTeacherName(name) {
   var s = String(name || '');
   var lower = s.toLowerCase();
@@ -3681,9 +2455,6 @@ function _ovaIsSubjectTeacherName(name) {
   return false;
 }
 
-// Класифікує salary-рядок у одну з категорій (або null якщо не варто рахувати).
-// Враховує state-машину секції (main → subjects → extras) для "Додаткові заняття".
-// extras перебиває keyword-чек: коли вже в extras-секції, все потрапляє туди.
 function _ovaClassifySalaryRow(name, currentSection) {
   var lower = String(name || '').toLowerCase();
   if (currentSection === 'extras')                                    return 'extras';
@@ -3695,7 +2466,7 @@ function _ovaClassifySalaryRow(name, currentSection) {
   if (lower.indexOf('прибиральн') !== -1)                             return 'cleaner';
   if (lower.indexOf('тьютор')     !== -1 || lower.indexOf('тімлід') !== -1) return 'tutor';
   if (_ovaIsSubjectTeacherName(name))                                  return 'subject';
-  return null;  // нерозпізнане — не рахуємо
+  return null;
 }
 
 function getOverviewAnalytics(year, month) {
@@ -3704,12 +2475,10 @@ function getOverviewAnalytics(year, month) {
 
   var configSS = SpreadsheetApp.openById(CONFIG_SHEET_ID);
 
-  // 1) OPEX-реєстр — джерело локацій + посилання на OPEX-листи.
   var opexReg = configSS.getSheetByName('OPEX');
   if (!opexReg) return {ok:false, error:'OPEX registry tab not found in CONFIG'};
   var opexRegRows = opexReg.getDataRange().getValues();
 
-  // 2) Salary-реєстр — мапа loc → {sheetId, listName} для швидкого лукапу.
   var salByLoc = {};
   var salReg = configSS.getSheetByName('Salary');
   if (salReg){
@@ -3722,20 +2491,15 @@ function getOverviewAnalytics(year, month) {
     }
   }
 
-  // 3) Список дітей — одне читання, потім in-memory-фільтр per-loc.
-  // Виключаємо тих хто має непорожню "Дата розірвання" АБО "Статус" з 'розірв'.
   var allClients = [];
   try {
     var clRes = getClients();
     if (clRes && clRes.ok && clRes.data) allClients = clRes.data;
-  } catch (e) {
-    // ігноруємо — залишимо childrenByGroup={} для всіх локацій
-  }
+  } catch (e) {}
 
-  // Колонка для метаданих OPEX (рядки 36-38) і фактових/бюджетних колонок Salary.
-  var metaIdx = (m - 1) * 3 + 2;   // 0-indexed: січень=2 (C), лютий=5 (F)…
-  var fIdx    = (m - 1) * 3 + 1;   // Salary fact (= OPEX fact convention)
-  var bIdx    = (m - 1) * 3 + 2;   // Salary budget
+  var metaIdx = (m - 1) * 3 + 2;
+  var fIdx    = (m - 1) * 3 + 1;
+  var bIdx    = (m - 1) * 3 + 2;
 
   var locations = [];
   var errors = [];
@@ -3746,7 +2510,7 @@ function getOverviewAnalytics(year, month) {
     var sheetId  = String(opexRegRows[i][3] || '').trim();
     var listName = String(opexRegRows[i][4] || '').trim() || 'OPEX';
     if (!loc || !sheetId) continue;
-    if (typ === 'Управління') continue;   // виключаємо управління (тільки садочки+школи)
+    if (typ === 'Управління') continue;
 
     var entry = {
       loc:                   loc,
@@ -3765,7 +2529,6 @@ function getOverviewAnalytics(year, month) {
       salaryBudget:          0
     };
 
-    // ── A) OPEX-метадані (рядки 36-38) ───────
     try {
       var locOpexSS = SpreadsheetApp.openById(sheetId);
       var opexSh    = locOpexSS.getSheetByName(listName);
@@ -3783,14 +2546,12 @@ function getOverviewAnalytics(year, month) {
       errors.push({loc: loc, source: 'opex', error: (e && e.message) ? e.message : String(e)});
     }
 
-    // ── B) Список дітей з листа "Клієнти" ───
     try {
       var byGroup = {};
       var totalActive = 0;
       for (var ci = 0; ci < allClients.length; ci++) {
         var c = allClients[ci];
         if (String(c['Локація'] || '').trim() !== loc) continue;
-        // Виключаємо тих, у кого є дата розірвання або статус містить 'розірв'.
         var termRaw = c['Дата розірвання'];
         var hasTermDate = (termRaw instanceof Date) ||
                           (termRaw !== null && termRaw !== undefined && String(termRaw).trim() !== '');
@@ -3808,7 +2569,6 @@ function getOverviewAnalytics(year, month) {
       errors.push({loc: loc, source: 'clients', error: (e && e.message) ? e.message : String(e)});
     }
 
-    // ── C) Salary — категоризація персоналу + бюджет/факт за місяць ───
     try {
       var salEntry = salByLoc[loc];
       if (!salEntry){
@@ -3824,18 +2584,14 @@ function getOverviewAnalytics(year, month) {
           var salData  = salSh.getRange(1, 1, slastRow, slastCol).getValues();
           var salWidth = slastCol;
 
-          var section = 'main';   // main → subjects → extras
+          var section = 'main';
 
-          // Скан з рядка 4 (1-3 — заголовки).
           for (var rowNum = 4; rowNum <= salData.length; rowNum++) {
             var idx = rowNum - 1;
             var rowArr = salData[idx] || [];
             var rawName = String(rowArr[0] || '').trim();
             if (_salaryIsSkippedRow(rawName)) continue;
 
-            // Subtotals — пропускаємо повністю (і з counts, і з salary-сум, бо
-            // дублюють деталізовані рядки нижче). "Додаткові заняття" перемикає
-            // секцію в 'extras' для класифікації наступних рядків.
             if (_salaryIsSubtotalRow(rawName)) {
               if (/додаткові заняття/i.test(rawName)) section = 'extras';
               continue;
@@ -3847,7 +2603,6 @@ function getOverviewAnalytics(year, month) {
               entry.staffCounts[category] = (entry.staffCounts[category] || 0) + 1;
             }
 
-            // Сума зарплати по локації — всі непропущені рядки.
             var fact   = fIdx < salWidth ? _opexNum(rowArr[fIdx]) : 0;
             var budget = bIdx < salWidth ? _opexNum(rowArr[bIdx]) : 0;
             entry.salaryFact   += fact;
@@ -3876,18 +2631,7 @@ function getOverviewAnalytics(year, month) {
   };
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// USERS — лист "Користувачі" в CONFIG_SHEET_ID. Структура колонок:
-//   A=ID  B=ПІБ  C=Логін  D=Пароль  E=Роль  F=Локація  G=Email
-//   H=Активний (checkbox)  I=Останній вхід (datetime)
-// Для топ-менеджменту мережі (cfo/ceo/cco/coo/rnd_director/hr_trainer/legal/cmo).
-// Директори/медсестри локацій НЕ тут — у них стара система паролів.
-// ═══════════════════════════════════════════════════════════════════════════
-
 var USERS_SHEET_NAME = 'Користувачі';
-
-// Допустимі ролі для addUser. authenticate не валідує роль —
-// довіряємо тому, що в листі. director/nurse/hr — legacy, не для топ-менеджменту.
 var VALID_USER_ROLES = ['cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo'];
 
 function _getUsersSheet() {
@@ -3902,7 +2646,7 @@ function _parseUserRow(row) {
     id:        Number(row[0]) || 0,
     name:      String(row[1] || '').trim(),
     login:     String(row[2] || '').trim(),
-    password:  String(row[3] == null ? '' : row[3]),  // не trim — паролі можуть мати пробіли
+    password:  String(row[3] == null ? '' : row[3]),
     role:      String(row[4] || '').trim(),
     loc:       String(row[5] || '').trim(),
     email:     String(row[6] || '').trim(),
@@ -3913,23 +2657,17 @@ function _parseUserRow(row) {
   };
 }
 
-// ── PUBLIC: getUsers() ─────────────────────────────────────────────────────
-// Повертає всіх користувачів (включно з паролями і неактивними).
-// Frontend гейтить видимість пароля через data-permission="user-mgmt".
 function getUsers() {
   var sh = _getUsersSheet();
   var data = sh.getDataRange().getValues();
   var users = [];
   for (var i = 1; i < data.length; i++) {
-    if (!data[i][0]) continue;        // пропускаємо порожні рядки
+    if (!data[i][0]) continue;
     users.push(_parseUserRow(data[i]));
   }
   return {ok: true, users: users};
 }
 
-// ── PUBLIC: authenticate(login, password) ──────────────────────────────────
-// Перевіряє credentials. На успіх — оновлює "Останній вхід" і повертає user
-// БЕЗ password. На неуспіх — повертає {ok:false, error}.
 function authenticate(login, password) {
   login    = String(login    || '').trim();
   password = String(password == null ? '' : password);
@@ -3943,7 +2681,6 @@ function authenticate(login, password) {
     if (u.login !== login) continue;
     if (!u.active) return {ok: false, error: 'Користувача деактивовано'};
     if (u.password !== password) return {ok: false, error: 'Невірний пароль'};
-    // Update "Останній вхід" (col I = 9)
     sh.getRange(i + 1, 9).setValue(new Date());
     delete u.password;
     return {ok: true, user: u};
@@ -3951,9 +2688,6 @@ function authenticate(login, password) {
   return {ok: false, error: 'Користувача не знайдено'};
 }
 
-// ── PUBLIC: updatePassword(userId, newPassword) ────────────────────────────
-// БЕЗ перевірки старого пароля на бекенді. Гейтінг (свій пароль / admin
-// перевизначує чужий) — на frontend.
 function updatePassword(userId, newPassword) {
   var id = Number(userId);
   newPassword = String(newPassword == null ? '' : newPassword);
@@ -3963,16 +2697,13 @@ function updatePassword(userId, newPassword) {
   var data = sh.getDataRange().getValues();
   for (var i = 1; i < data.length; i++) {
     if (Number(data[i][0]) === id) {
-      sh.getRange(i + 1, 4).setValue(newPassword);   // col D = 4
+      sh.getRange(i + 1, 4).setValue(newPassword);
       return {ok: true};
     }
   }
   return {ok: false, error: 'Користувача не знайдено'};
 }
 
-// ── PUBLIC: addUser(payload) ───────────────────────────────────────────────
-// payload: {name, login, password, role, loc?, email?}
-// Auto-increment ID, login повинен бути унікальним. За замовчуванням loc="Менеджмент".
 function addUser(payload) {
   if (!payload || !payload.name || !payload.login || !payload.password || !payload.role) {
     return {ok: false, error: 'Missing required fields (name, login, password, role)'};
@@ -3984,7 +2715,6 @@ function addUser(payload) {
   var sh = _getUsersSheet();
   var data = sh.getDataRange().getValues();
 
-  // Унікальність логіна (case-sensitive trim).
   var newLogin = String(payload.login).trim();
   for (var i = 1; i < data.length; i++) {
     if (String(data[i][2] || '').trim() === newLogin) {
@@ -3992,7 +2722,6 @@ function addUser(payload) {
     }
   }
 
-  // Auto-increment ID = max(existing) + 1.
   var maxId = 0;
   for (var i = 1; i < data.length; i++) {
     var n = Number(data[i][0]);
@@ -4008,14 +2737,12 @@ function addUser(payload) {
     payload.role,
     String(payload.loc || 'Менеджмент').trim(),
     String(payload.email || '').trim(),
-    true,    // active
-    ''       // last login (порожньо до першого входу)
+    true,
+    ''
   ]);
   return {ok: true, id: newId};
 }
 
-// ── PUBLIC: deactivateUser / activateUser ──────────────────────────────────
-// Soft delete — встановлює col H "Активний" в false / true.
 function deactivateUser(userId) { return _setUserActive(userId, false); }
 function activateUser(userId)   { return _setUserActive(userId, true); }
 
@@ -4027,18 +2754,12 @@ function _setUserActive(userId, active) {
   var data = sh.getDataRange().getValues();
   for (var i = 1; i < data.length; i++) {
     if (Number(data[i][0]) === id) {
-      sh.getRange(i + 1, 8).setValue(active);   // col H = 8
+      sh.getRange(i + 1, 8).setValue(active);
       return {ok: true};
     }
   }
   return {ok: false, error: 'Користувача не знайдено'};
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// GROUP NORMS — лист "Норми груп" у CONFIG_SHEET_ID
-// Структура: A=Група (текст)  B=Норма (число)
-// Використовується аналітикою для перевірки перевантаження груп.
-// ═══════════════════════════════════════════════════════════════════════════
 
 var GROUP_NORMS_SHEET_NAME = 'Норми груп';
 
@@ -4069,18 +2790,11 @@ function getGroupNorms() {
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// SYNC PAYMENTS — ручний запуск agregatePayments із frontend.
-// Це той самий скрипт, що тригер виконує щоранку (~6:00 за конфігурацією
-// в Apps Script triggers): читає Payment-листи всіх локацій, агрегує
-// статуси оплат, перезаписує лист "Оплати" в CRM (SHEET_PAYMENTS).
-// Frontend кнопка викликає action=syncPayments через GET або POST.
-// ═══════════════════════════════════════════════════════════════════════════
 function syncPayments() {
   if (typeof aggregatePayments !== 'function') {
     return {
       ok: false,
-      error: 'Функція синхронізації не знайдена в Apps Script. Перевірте чи функція syncPayments() (або подібна) існує в crm_script.js і чи вона задеплоєна.'
+      error: 'Функція синхронізації не знайдена в Apps Script.'
     };
   }
   try {
@@ -4100,15 +2814,6 @@ function syncPayments() {
     return {ok: false, error: String(e && e.message || e)};
   }
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// ACTIVITIES CATALOG — лист "Додаткові_Каталог" у CONFIG_SHEET_ID.
-// ОДИН РЯДОК = ОДНЕ ЗАНЯТТЯ В ОДНІЙ ЛОКАЦІЇ. Якщо "Лего" є в 5 локаціях —
-// 5 рядків (різні ціни/викладачі/ставки можуть бути).
-// Колонки:
-//   A=id  B=Локація  C=Заняття  D=Ціна_клієнту
-//   E=Модель_ЗП_викладача  F=Ставка_викладача  G=Викладач  H=Активне
-// ═══════════════════════════════════════════════════════════════════════════
 
 var ACTIVITIES_SHEET_NAME = 'Додаткові_Каталог';
 var ACTIVITIES_HEADER = [
@@ -4134,7 +2839,7 @@ function _parseActivityRow(row){
     loc:          String(row[1] || '').trim(),
     name:         String(row[2] || '').trim(),
     clientPrice:  Number(row[3]) || 0,
-    teacherModel: String(row[4] || '').trim(),    // "За дитину" | "За заняття"
+    teacherModel: String(row[4] || '').trim(),
     teacherRate:  Number(row[5]) || 0,
     teacher:      String(row[6] || '').trim(),
     active:       row[7] === true ||
@@ -4142,8 +2847,6 @@ function _parseActivityRow(row){
   };
 }
 
-// loc — опціональний фільтр. Якщо переданий — повертає тільки рядки
-// для цієї локації; інакше всі.
 function getActivitiesCatalog(loc){
   try {
     var sh = _getActivitiesSheet(false);
@@ -4153,7 +2856,7 @@ function getActivitiesCatalog(loc){
     var filterLoc = String(loc || '').trim();
     for (var i = 1; i < data.length; i++){
       var row = data[i];
-      if (!row[2]) continue;   // skip rows без назви заняття
+      if (!row[2]) continue;
       var rec = _parseActivityRow(row);
       if (filterLoc && rec.loc !== filterLoc) continue;
       items.push(rec);
@@ -4205,7 +2908,6 @@ function updateActivity(id, data){
     var rows = sh.getDataRange().getValues();
     for (var i = 1; i < rows.length; i++){
       if (Number(rows[i][0]) !== nid) continue;
-      // Оновлюємо лише ті поля що передані. r1 = i+1 (1-based).
       var r1 = i + 1;
       if ('loc'          in data) sh.getRange(r1, 2).setValue(String(data.loc  || '').trim());
       if ('name'         in data) sh.getRange(r1, 3).setValue(String(data.name || '').trim());
@@ -4222,15 +2924,10 @@ function updateActivity(id, data){
   }
 }
 
-// Soft delete — ставить Активне=false. Реальне видалення лишається
-// ручним у Sheets, щоб не втрачати історію.
 function deleteActivity(id){
   return updateActivity(id, {active: false});
 }
 
-// Копіює всі активні заняття з fromLoc у toLoc. Викладача і ставку
-// НЕ копіюємо (різні локації — різні викладачі); ціну і модель ЗП
-// копіюємо як дефолт, директор toLoc потім скоригує.
 function copyActivitiesFromLocation(fromLoc, toLoc){
   try {
     var fLoc = String(fromLoc || '').trim();
@@ -4248,7 +2945,6 @@ function copyActivitiesFromLocation(fromLoc, toLoc){
     }
     if (!src.length) return {ok: false, error: 'У локації "' + fLoc + '" немає активних занять'};
 
-    // Прибираємо вже існуючі назви у toLoc щоб не дублювати.
     var existsInTo = {};
     for (var j = 1; j < data.length; j++){
       var rec2 = _parseActivityRow(data[j]);
@@ -4262,8 +2958,8 @@ function copyActivitiesFromLocation(fromLoc, toLoc){
       if (existsInTo[rec.name.toLowerCase()]){ skipped++; return; }
       toAppend.push([
         idCounter++, tLoc, rec.name, rec.clientPrice,
-        rec.teacherModel, 0,   // ставку не копіюємо
-        '',                    // викладач не копіюємо
+        rec.teacherModel, 0,
+        '',
         true
       ]);
     });
@@ -4283,14 +2979,6 @@ function copyActivitiesFromLocation(fromLoc, toLoc){
     return {ok: false, error: String(e && e.message || e)};
   }
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// ATTENDANCE MARKS — лист "Додаткові_Відвідуваність" у CONFIG_SHEET_ID.
-// Колонки:
-//   A=id  B=Дата (YYYY-MM-DD)  C=Локація  D=Група  E=Дитина
-//   F=id_заняття  G=Назва_заняття  H=Ціна  I=Відмітив  J=Час_відмітки
-// Один рядок = одне відвідування однією дитиною одного заняття.
-// ═══════════════════════════════════════════════════════════════════════════
 
 var ATTENDANCE_SHEET_NAME = 'Додаткові_Відвідуваність';
 var ATTENDANCE_HEADER = [
@@ -4333,7 +3021,6 @@ function _parseAttendanceRow(row){
   };
 }
 
-// Filters: {date, loc, group, child, activityId} — кожен опціональний.
 function getAttendanceMarks(filters){
   try {
     filters = filters || {};
@@ -4342,7 +3029,7 @@ function getAttendanceMarks(filters){
     if (data.length < 2) return {ok: true, items: []};
     var items = [];
     for (var i = 1; i < data.length; i++){
-      if (!data[i][0] && !data[i][4]) continue;  // skip empty rows
+      if (!data[i][0] && !data[i][4]) continue;
       var m = _parseAttendanceRow(data[i]);
       if (filters.date  && m.date !== String(filters.date)) continue;
       if (filters.loc   && m.loc !== String(filters.loc)) continue;
@@ -4367,7 +3054,6 @@ function _nextAttendanceId(sh){
   return max + 1;
 }
 
-// data: {date, loc, group, child, activityId, activityName, price, markedBy}
 function addAttendanceMark(data){
   try {
     var sh = _getAttendanceSheet(true);
@@ -4412,19 +3098,41 @@ function removeAttendanceMark(id){
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// AUTO-EXPORT — підраховує суму додаткових занять кожної дитини за місяць
-// та переписує її у колонку "Факт доп."/"Додаткові" листа "Оплати" CRM.
-// Один рядок Пейментів = (Локація, Дитина, Місяць). Overwrite — НЕ +=, тож
-// повторні виклики дають однаковий результат (idempotent).
-// ═══════════════════════════════════════════════════════════════════════════
-
-// Канонічні українські назви місяців — у тому ж порядку, що Sheets-колонка
-// "Місяць" Пейментів використовує.
 var MONTHS_CAL_UA = [
   'Січень','Лютий','Березень','Квітень','Травень','Червень',
   'Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'
 ];
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AUTO-EXPORT v6.1 — пише у файл локації (Голосієво Payment, Осокорки Payment...)
+// 5 колонок на місяць: Факт навч | Факт вступ | Факт доп | Бюджет доп | Бюджет навч
+// Відмітка за місяць N → накопичена сума → Бюджет доп місяця N+1
+// (бо діти ходять у травні, а оплата виставляється у червні)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Допоміжна — повертає (наступний_місяць, рік) для (місяць, рік)
+function _nextMonth(month, year){
+  var nm = month + 1, ny = year;
+  if (nm > 12){ nm = 1; ny++; }
+  return {month: nm, year: ny};
+}
+
+// Знаходить sheetId+listName файлу локації з CONFIG-реєстру локацій
+function _getLocationPaymentRegistry(loc){
+  var configSS    = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var configSheet = configSS.getSheets()[0]; // перший лист = реєстр локацій
+  var data = configSheet.getDataRange().getValues();
+  for (var r = 1; r < data.length; r++){
+    if (trim(data[r][2]) === loc){
+      return {
+        sheetId:   trim(data[r][3]),
+        sheetName: trim(data[r][4]) || 'Payment'
+      };
+    }
+  }
+  return null;
+}
 
 function exportAttendanceToPayments(params){
   try {
@@ -4433,129 +3141,163 @@ function exportAttendanceToPayments(params){
     var year = Number(params.year) || new Date().getFullYear();
     if (!loc) return {ok: false, error: 'Параметр loc обовʼязковий'};
     if (!month || month < 1 || month > 12) return {ok: false, error: 'month має бути 1-12'};
+
+    Logger.log('[exportAttendanceToPayments] START loc="%s" month=%s year=%s', loc, month, year);
+
     var monthName = MONTHS_CAL_UA[month - 1];
 
-    // 1) Agg суми по дитині з листа "Додаткові_Відвідуваність".
+    // === 1. Підраховуємо суму додаткових для кожної дитини за вказаний місяць ===
     var attSh = _getAttendanceSheet(false);
     var attData = attSh.getDataRange().getValues();
-    var sumPerChild = {};
-    // Період: [first-of-month, first-of-next-month).
     var mm = month < 10 ? '0' + month : String(month);
     var dateFrom = year + '-' + mm + '-01';
-    var nm = month + 1, ny = year;
-    if (nm > 12){ nm = 1; ny++; }
-    var nmm = nm < 10 ? '0' + nm : String(nm);
-    var dateTo = ny + '-' + nmm + '-01';
+    var nextM = _nextMonth(month, year);
+    var nmm = nextM.month < 10 ? '0' + nextM.month : String(nextM.month);
+    var dateTo = nextM.year + '-' + nmm + '-01';
+    Logger.log('[exportAttendanceToPayments] фільтр дат: [%s .. %s)  attData.length=%s', dateFrom, dateTo, attData.length);
 
+    var sumPerChild = {};
+    var passedRecords = 0;
+    var skippedByLoc = 0;
+    var skippedByDate = 0;
     for (var i = 1; i < attData.length; i++){
       var rec = _parseAttendanceRow(attData[i]);
-      if (rec.loc !== loc) continue;
-      if (rec.date < dateFrom || rec.date >= dateTo) continue;
+      if (rec.loc !== loc){ skippedByLoc++; continue; }
+      if (rec.date < dateFrom || rec.date >= dateTo){
+        skippedByDate++;
+        Logger.log('[exportAttendanceToPayments] skip-by-date: child="%s" date="%s" (поза [%s..%s))', rec.child, rec.date, dateFrom, dateTo);
+        continue;
+      }
+      passedRecords++;
       sumPerChild[rec.child] = (sumPerChild[rec.child] || 0) + (rec.price || 0);
     }
+    Logger.log('[exportAttendanceToPayments] attendance: passed=%s, skippedByLoc=%s, skippedByDate=%s', passedRecords, skippedByLoc, skippedByDate);
+    Logger.log('[exportAttendanceToPayments] sumPerChild keys = %s', JSON.stringify(Object.keys(sumPerChild)));
+    Logger.log('[exportAttendanceToPayments] sumPerChild = %s', JSON.stringify(sumPerChild));
 
-    // 2) Відкрити лист "Оплати" у CRM, знайти потрібну колонку.
-    var crmSS = getCRMSpreadsheet();
-    var paySh = crmSS.getSheetByName(SHEET_PAYMENTS);
+    // === 2. Відкриваємо файл локації через CONFIG ===
+    var reg = _getLocationPaymentRegistry(loc);
+    if (!reg || !reg.sheetId){
+      Logger.log('[exportAttendanceToPayments] ERROR: локацію "%s" не знайдено в CONFIG', loc);
+      return {ok: false, error: 'Локацію "' + loc + '" не знайдено в CONFIG-реєстрі'};
+    }
+    Logger.log('[exportAttendanceToPayments] registry: sheetId="%s" sheetName="%s"', reg.sheetId, reg.sheetName);
+    var paymentSS = SpreadsheetApp.openById(reg.sheetId);
+    var paySh = paymentSS.getSheetByName(reg.sheetName) || paymentSS.getSheets()[0];
     if (!paySh){
-      return {ok: false, error: 'Лист "' + SHEET_PAYMENTS + '" не знайдено в CRM'};
-    }
-    var lastRow = paySh.getLastRow();
-    var lastCol = paySh.getLastColumn();
-    if (lastRow < 2){
-      return {
-        ok: true, updated: 0, totalAmount: 0,
-        notFound: Object.keys(sumPerChild), monthName: monthName, loc: loc
-      };
-    }
-    var headers = paySh.getRange(1, 1, 1, lastCol).getValues()[0];
-    var colIdx = {};
-    for (var c = 0; c < headers.length; c++){
-      var key = String(headers[c] || '').toLowerCase().trim();
-      if (key) colIdx[key] = c + 1;  // 1-based
-    }
-    // Колонка "Додаткові" / "Факт доп." — підтримуємо обидва варіанти.
-    var dopCol = colIdx['факт доп.'] || colIdx['факт доп'] ||
-                 colIdx['додаткові']  || colIdx['додаткові заняття'] ||
-                 colIdx['доп.']      || colIdx['доп'];
-    if (!dopCol){
-      return {
-        ok: false,
-        error: 'Колонка "Додаткові" / "Факт доп." не знайдена в листі "' + SHEET_PAYMENTS + '". Доступні: ' +
-               Object.keys(colIdx).join(', ')
-      };
-    }
-    var locCol   = colIdx['локація'];
-    var nameCol  = colIdx["ім'я дитини"] || colIdx['імʼя дитини'] || colIdx['ім’я дитини'] || colIdx['ім`я дитини'];
-    var monthCol = colIdx['місяць'];
-    if (!locCol || !nameCol){
-      return {ok: false, error: 'Не знайдено колонок "Локація" або "Ім\'я дитини" у листі Пейментів'};
+      Logger.log('[exportAttendanceToPayments] ERROR: лист "%s" не знайдено', reg.sheetName);
+      return {ok: false, error: 'Лист "' + reg.sheetName + '" не знайдено у файлі локації'};
     }
 
-    // 3) Прочитати всі рядки одним range; знайти ті що match-ять loc/month/child.
-    var allRows = paySh.getRange(2, 1, lastRow - 1, lastCol).getValues();
-    var updates = [];
-    var foundNames = {};
+    var data = paySh.getDataRange().getValues();
+    Logger.log('[exportAttendanceToPayments] Payment-лист "%s" відкрито, rows=%s', paySh.getName(), data.length);
+
+    // === 3. Обчислюємо колонку місяця-ТАРГЕТУ (місяць + 1) ===
+    var targetMonthIdx = nextM.month - 1;
+    var monthStartCol0 = 1 + targetMonthIdx * 5;
+    var budgetDopColIdx = monthStartCol0 + 3;
+    var budgetDopCol1 = budgetDopColIdx + 1;
+    var targetMonthName = MONTHS_CAL_UA[targetMonthIdx];
+    Logger.log('[exportAttendanceToPayments] target month: idx=%s (%s), Бюджет доп col=%s (1-based)', targetMonthIdx, targetMonthName, budgetDopCol1);
+
+    // === 4. Толерантний матч імен (lowercase + видалити ВСІ whitespace — пробіли, NBSP, табуляції) ===
+    // "Волков Матвій" / "волков  матвій" / "Волков\u00A0Матвій" / "ВОЛКОВ\tМАТВІЙ" → "волковматвій"
+    function _normName(s){
+      return String(s || '').replace(/[\s\u00A0]+/g, '').toLowerCase();
+    }
+    var DATA_START = 3;
+    var matchedRows = {};   // {childName_з_attendance: rowIdx (0-based) у Payment}
+    var paymentByNorm = {}; // {normName: rowIdx (0-based)} — індекс по Payment-листу
+    var paymentNames = [];  // діагностика: усі імена, що ми побачили в Payment
+    for (var r = DATA_START; r < data.length; r++){
+      var nameCell = trim(String(data[r][0] || ''));
+      if (!nameCell) continue;
+      if (isGroupHeaderRow(data[r], 1)) continue;
+      paymentNames.push(nameCell);
+      var nk = _normName(nameCell);
+      // ПЕРШЕ співпадіння імені (якщо тезки в різних групах — пише в першу)
+      if (!paymentByNorm.hasOwnProperty(nk)) paymentByNorm[nk] = r;
+    }
+    Logger.log('[exportAttendanceToPayments] paymentNames.length=%s, перші 10: %s', paymentNames.length, JSON.stringify(paymentNames.slice(0, 10)));
+
+    Object.keys(sumPerChild).forEach(function(childName){
+      var nk = _normName(childName);
+      if (paymentByNorm.hasOwnProperty(nk)){
+        matchedRows[childName] = paymentByNorm[nk];
+        Logger.log('[exportAttendanceToPayments] MATCH: "%s" (norm="%s") → row %s', childName, nk, paymentByNorm[nk] + 1);
+      } else {
+        Logger.log('[exportAttendanceToPayments] NO-MATCH: "%s" (norm="%s") — серед %s імен Payment-листа збігу немає', childName, nk, paymentNames.length);
+      }
+    });
+
+    // === 5. Пишемо суму у Бюджет доп ===
     var updated = 0;
     var totalAmount = 0;
-
-    for (var j = 0; j < allRows.length; j++){
-      var row = allRows[j];
-      var rLoc   = String(row[locCol - 1]   || '').trim();
-      var rName  = String(row[nameCol - 1]  || '').trim();
-      var rMonth = monthCol ? String(row[monthCol - 1] || '').trim() : '';
-      if (rLoc !== loc) continue;
-      if (rMonth && rMonth !== monthName) continue;
-      if (!sumPerChild.hasOwnProperty(rName)) continue;
-
-      var sum = sumPerChild[rName];
-      updates.push([j + 2, dopCol, sum]);  // 1-based row, col, value
-      foundNames[rName] = true;
-      totalAmount += sum;
-      updated++;
-    }
-
-    // 4) Записати поодиноко (для невеликих обʼємів — ОК; зазвичай ≤ 50/локацію).
-    for (var k = 0; k < updates.length; k++){
-      paySh.getRange(updates[k][0], updates[k][1]).setValue(updates[k][2]);
-    }
-
+    var details = [];
     var notFound = [];
-    Object.keys(sumPerChild).forEach(function(n){
-      if (!foundNames[n]) notFound.push(n);
+
+    Object.keys(sumPerChild).forEach(function(childName){
+      var sum = sumPerChild[childName];
+      if (matchedRows.hasOwnProperty(childName)){
+        var rowIdx0 = matchedRows[childName];
+        paySh.getRange(rowIdx0 + 1, budgetDopCol1).setValue(sum);
+        updated++;
+        totalAmount += sum;
+        details.push({child: childName, sum: sum, row: rowIdx0 + 1, status: 'updated'});
+      } else {
+        notFound.push(childName);
+        details.push({child: childName, sum: sum, status: 'not-found-in-payment'});
+      }
     });
+    Logger.log('[exportAttendanceToPayments] DONE: updated=%s, totalAmount=%s, notFound=%s', updated, totalAmount, JSON.stringify(notFound));
 
     return {
       ok: true,
       updated: updated,
       totalAmount: totalAmount,
       notFound: notFound,
-      monthName: monthName,
       loc: loc,
-      childrenPreview: Object.keys(sumPerChild).map(function(n){
-        return {child: n, sum: sumPerChild[n], inPayments: !!foundNames[n]};
-      })
+      sourceMonth: monthName,        // травень (місяць відвідувань)
+      targetMonth: targetMonthName,  // червень (куди записали бюджет)
+      targetCol: budgetDopCol1,
+      // Діагностика — щоб з фронту видно було, що саме знайшли:
+      attendanceKeys: Object.keys(sumPerChild),
+      paymentNamesCount: paymentNames.length,
+      paymentNamesSample: paymentNames.slice(0, 50),
+      details: details
     };
   } catch(e){
+    Logger.log('[exportAttendanceToPayments] EXCEPTION: %s\n%s', e && e.message, e && e.stack);
     return {ok: false, error: String(e && e.message || e)};
   }
 }
 
-// Alias — для зворотної сумісності API.
 function exportToPayments(params){ return exportAttendanceToPayments(params); }
 
+// ───────────────────────────────────────────────────────────────────────────
+// Тест: запусти вручну з Apps Script editor (View → Executions → дивись Логи).
+// Викликає exportAttendanceToPayments({loc:"Голосієво", month:6, year:2026})
+// і логує JSON-результат + ключові поля окремо.
+// ───────────────────────────────────────────────────────────────────────────
+function testExportVolkov(){
+  var result = exportAttendanceToPayments({loc: 'Голосієво', month: 6, year: 2026});
+  Logger.log('[testExportVolkov] result JSON: %s', JSON.stringify(result, null, 2));
+  Logger.log('[testExportVolkov] error             = %s', result && result.error);
+  Logger.log('[testExportVolkov] updated           = %s', result && result.updated);
+  Logger.log('[testExportVolkov] totalAmount       = %s', result && result.totalAmount);
+  Logger.log('[testExportVolkov] attendanceKeys    = %s', JSON.stringify(result && result.attendanceKeys));
+  Logger.log('[testExportVolkov] paymentNamesCount = %s', result && result.paymentNamesCount);
+  Logger.log('[testExportVolkov] paymentNamesSample= %s', JSON.stringify(result && result.paymentNamesSample));
+  Logger.log('[testExportVolkov] notFound          = %s', JSON.stringify(result && result.notFound));
+  Logger.log('[testExportVolkov] details           = %s', JSON.stringify(result && result.details));
+  return result;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
-// SALARY EXTRAS — за відмітками відвідуваності рахуємо факт ЗП викладача
-// додаткових занять. Знаходимо в листі Salary локації рядки з назвою
-// заняття (точний case-insensitive match по колонці A) та пишемо у Fact-
-// колонку поточного місяця.
-//
-// Алгоритм fact = teacherModel × teacherRate × stat:
-//   "За дитину"  → count_marks × teacherRate
-//   "За заняття" → unique_days × teacherRate
-//
-// Якщо teacherRate=0 або немає teacherModel — пропускаємо (skipped[]).
-// Якщо рядка у Salary немає — додаємо до notFound[].
+// SALARY EXTRAS v6.1 — пише у файл локації (Голосієво Salary тощо)
+// Структура Salary: A=ПІБ, потім по 3 колонки на місяць: Fact | Budget | ?
+// Викладач якого місяця працював → Budget колонка наступного місяця
+// (зарплату нараховують у наступному місяці після того як викладач відпрацював)
 // ═══════════════════════════════════════════════════════════════════════════
 function exportToSalaryExtras(params){
   try {
@@ -4564,9 +3306,10 @@ function exportToSalaryExtras(params){
     var year = Number(params.year) || new Date().getFullYear();
     if (!loc) return {ok: false, error: 'Параметр loc обовʼязковий'};
     if (!month || month < 1 || month > 12) return {ok: false, error: 'month має бути 1-12'};
+
     var monthName = MONTHS_CAL_UA[month - 1];
 
-    // 1) Каталог для цієї локації — активні + у яких є ставка і модель.
+    // === 1. Каталог занять для локації ===
     var catRes = getActivitiesCatalog(loc);
     if (!catRes.ok) return catRes;
     var allActive = (catRes.items || []).filter(function(a){ return a.active; });
@@ -4574,15 +3317,14 @@ function exportToSalaryExtras(params){
     var skipped = allActive.filter(function(a){ return !(a.teacherRate > 0 && a.teacherModel); })
                            .map(function(a){ return a.name; });
 
-    // 2) Marks за loc+month: групуємо по activityId → {count, uniqueDates}.
+    // === 2. Підрахунок ЗП кожного викладача за місяць ===
     var attSh = _getAttendanceSheet(false);
     var attData = attSh.getDataRange().getValues();
     var mm = month < 10 ? '0' + month : String(month);
     var dateFrom = year + '-' + mm + '-01';
-    var nm = month + 1, ny = year;
-    if (nm > 12){ nm = 1; ny++; }
-    var nmm = nm < 10 ? '0' + nm : String(nm);
-    var dateTo = ny + '-' + nmm + '-01';
+    var nextM = _nextMonth(month, year);
+    var nmm = nextM.month < 10 ? '0' + nextM.month : String(nextM.month);
+    var dateTo = nextM.year + '-' + nmm + '-01';
 
     var byActId = {};
     for (var i = 1; i < attData.length; i++){
@@ -4594,8 +3336,7 @@ function exportToSalaryExtras(params){
       byActId[rec.activityId].dates[rec.date] = true;
     }
 
-    // 3) Fact per activity (для тих що з teacherRate).
-    var factByName = {};   // lowercased name → {fact, name, hasMarks}
+    var factByName = {};
     withRate.forEach(function(a){
       var stat = byActId[a.id] || {count: 0, dates: {}};
       var fact = 0;
@@ -4607,7 +3348,7 @@ function exportToSalaryExtras(params){
       factByName[a.name.toLowerCase()] = {fact: fact, name: a.name, hasMarks: stat.count > 0};
     });
 
-    // 4) Відкрити Salary spreadsheet локації.
+    // === 3. Відкриваємо Salary файл локації ===
     var reg = _salaryGetRegistry();
     if (!reg.ok) return reg;
     var entry = null;
@@ -4618,14 +3359,15 @@ function exportToSalaryExtras(params){
 
     var locSS = SpreadsheetApp.openById(entry.sheetId);
     var sheet = locSS.getSheetByName(entry.listName);
-    if (!sheet) return {ok: false, error: 'Salary sheet "' + entry.listName + '" не знайдено в файлі локації'};
+    if (!sheet) return {ok: false, error: 'Salary sheet "' + entry.listName + '" не знайдено'};
 
-    // 5) Прочитати колонку A — назви рядків. Match по lowercase exact.
-    //    Блок "Додаткові" має рядки з простими назвами (Лего, Арт, Айкідо).
-    //    Інші секції — назви з цифрами/посадами, тож не співпадуть.
     var lastRow = Math.max(sheet.getLastRow(), 80);
     var names = sheet.getRange(1, 1, lastRow, 1).getValues();
-    var factCol = (month - 1) * 3 + 2;  // 1-based: B=2 for Jan fact
+    // Salary: 3 колонки на місяць (A=name, B=Fact_січень, C=Budget_січень, ...)
+    // Викладач відпрацював у місяці N → ЗП у Budget місяця N+1
+    var targetMonth = nextM.month; // 1-12
+    var budgetCol = (targetMonth - 1) * 3 + 3; // 1-based: для січня = 3, для лютого = 6 ...
+    var targetMonthName = MONTHS_CAL_UA[targetMonth - 1];
 
     var updated = 0, totalFact = 0;
     var notFound = [];
@@ -4633,16 +3375,17 @@ function exportToSalaryExtras(params){
 
     Object.keys(factByName).forEach(function(lname){
       var info = factByName[lname];
+      // Шукаємо рядок з назвою заняття (Лего, Арт, m.Dance, ...)
       var rowFound = -1;
       for (var k = 3; k < names.length; k++){
         var rname = String(names[k][0] || '').trim().toLowerCase();
         if (rname === lname){ rowFound = k + 1; break; }
       }
       if (rowFound > 0){
-        sheet.getRange(rowFound, factCol).setValue(info.fact);
+        sheet.getRange(rowFound, budgetCol).setValue(info.fact);
         updated++;
         totalFact += info.fact;
-        details.push({activity: info.name, fact: info.fact, status: 'updated'});
+        details.push({activity: info.name, fact: info.fact, status: 'updated', row: rowFound});
       } else {
         notFound.push(info.name);
         details.push({activity: info.name, fact: info.fact, status: 'not-in-salary'});
@@ -4653,21 +3396,18 @@ function exportToSalaryExtras(params){
       ok: true,
       updated:  updated,
       totalFact: totalFact,
-      notFound: notFound,    // у Salary немає рядка
-      skipped:  skipped,     // у каталозі немає ставки/моделі
+      notFound: notFound,
+      skipped:  skipped,
       details:  details,
-      monthName: monthName,
-      loc: loc
+      loc: loc,
+      sourceMonth: monthName,       // травень
+      targetMonth: targetMonthName  // червень
     };
   } catch(e){
     return {ok: false, error: String(e && e.message || e)};
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Об'єднаний експорт — викликає обидва (Пейменти + Salary).
-// Frontend Етап 4 дебаунс кличе саме цей action.
-// ═══════════════════════════════════════════════════════════════════════════
 function exportAttendance(params){
   var p = exportToPayments(params);
   var s = exportToSalaryExtras(params);

@@ -2927,8 +2927,12 @@ function scheduleAutoExport(){
     return;
   }
   var loc   = S.activeLoc;
-  var month = new Date().getMonth() + 1;
-  var year  = new Date().getFullYear();
+  // Брати місяць/рік з ATT.date (дати відмітки), а не з системного календаря —
+  // інакше відмітка на майбутню/минулу дату експортується з фільтром поточного
+  // календарного місяця і запис не потрапляє у sumPerChild.
+  var d = String(ATT.date || '');
+  var month = Number(d.slice(5,7)) || (new Date().getMonth() + 1);
+  var year  = Number(d.slice(0,4)) || new Date().getFullYear();
   if (!loc) return;
 
   if (EXP.pendingTimer) clearTimeout(EXP.pendingTimer);
