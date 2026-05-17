@@ -1,10 +1,15 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v6.1
+// m.kids CRM — Google Apps Script v6.4
 // v6.1: автоекспорт пише У ФАЙЛИ ЛОКАЦІЙ (а не в CRM-зведення)
 //        — Пейменти: "Голосієво Payment" / "Осокорки Payment" тощо
 //          Колонка "Бюджет доп" місяця = monthCol + 3
 //          Місяць експорту = місяць_відмітки + 1 (травень → бюджет червня)
 //        — Salary: файл локації, лист Salary, Budget-колонка місяця+1
+// v6.2: толерантний матч імен (_normName: lowercase + без whitespace/NBSP)
+// v6.3: розумне перезаписування через лист "Експорт_Журнал"
+//        base = currentCell - lastWritten; new = base + newSum
+// v6.4: точковий запис у Payment/Salary (НЕ setValues на стовпець) —
+//        не затирає формули у підсумкових рядках; seedActivitiesCatalog
 // 5 колонок на місяць: Факт навч | Факт вступ | Факт доп | Бюджет доп | Бюджет навч
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -167,7 +172,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v6.1', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v6.4', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getPayments')        result = getPayments();
     else if (action === 'getPaymentsYearly')  result = getPaymentsYearly();
@@ -3180,7 +3185,7 @@ var MONTHS_CAL_UA = [
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// AUTO-EXPORT v6.1 — пише у файл локації (Голосієво Payment, Осокорки Payment...)
+// AUTO-EXPORT v6.4 — пише у файл локації (Голосієво Payment, Осокорки Payment...)
 // 5 колонок на місяць: Факт навч | Факт вступ | Факт доп | Бюджет доп | Бюджет навч
 // Відмітка за місяць N → накопичена сума → Бюджет доп місяця N+1
 // (бо діти ходять у травні, а оплата виставляється у червні)
@@ -3407,11 +3412,18 @@ function exportAttendanceToPayments(params){
     var details = [];
     var matchedChildren = {};
     var journalOps = [];
+    var cellsWritten = 0;
+    var formulaRowsSkipped = 0;
 
+    // ⚠️ ТОЧКОВИЙ запис: НЕ використовуємо setValues на весь стовпець —
+    // це затирало б формули у підсумкових рядках (=SUM(AI24:AI39) → Cashflow).
+    // Пишемо setValue() лише у child-рядки, і лише якщо значення змінилось.
+    // Рядки з формулами не чіпаємо за жодних обставин.
     Object.keys(paymentByNorm).forEach(function(nk){
       var rowIdx0 = paymentByNorm[nk];
       if (colFormulas[rowIdx0] && colFormulas[rowIdx0][0]){
-        Logger.log('[exportAttendanceToPayments] SKIP-FORMULA row %s: %s', rowIdx0 + 1, colFormulas[rowIdx0][0]);
+        formulaRowsSkipped++;
+        Logger.log('[exportAttendanceToPayments] skipped formula row %s: %s', rowIdx0 + 1, colFormulas[rowIdx0][0]);
         return;
       }
       var paymentName  = trim(String(data[rowIdx0][0] || ''));
@@ -3422,7 +3434,12 @@ function exportAttendanceToPayments(params){
       var match        = sumByNorm[nk];
       var newSum       = match ? match.sum : 0;
       var newValue     = baseValue + newSum;
-      colValues[rowIdx0][0] = newValue;
+
+      // Точковий запис лише змінених клітинок.
+      if (newValue !== currentValue){
+        paySh.getRange(rowIdx0 + 1, budgetDopCol1).setValue(newValue);
+        cellsWritten++;
+      }
 
       if (newSum !== lastWritten){
         journalOps.push({
@@ -3454,8 +3471,7 @@ function exportAttendanceToPayments(params){
       }
     });
 
-    paySh.getRange(1, budgetDopCol1, lastSheetRow, 1).setValues(colValues);
-    Logger.log('[exportAttendanceToPayments] column write: %s рядків × col %s', lastSheetRow, budgetDopCol1);
+    Logger.log('[exportAttendanceToPayments] точковий запис: %s клітинок змінено, %s формульних рядків пропущено', cellsWritten, formulaRowsSkipped);
 
     _commitJournalUpdates(journal, journalOps);
     Logger.log('[exportAttendanceToPayments] journal upsert: %s op(s)', journalOps.length);
@@ -3509,7 +3525,7 @@ function testExportVolkov(){
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// SALARY EXTRAS v6.1 — пише у файл локації (Голосієво Salary тощо)
+// SALARY EXTRAS v6.4 — пише у файл локації (Голосієво Salary тощо)
 // Структура Salary: A=ПІБ, потім по 3 колонки на місяць: Fact | Budget | ?
 // Викладач якого місяця працював → Budget колонка наступного місяця
 // (зарплату нараховують у наступному місяці після того як викладач відпрацював)
@@ -3635,7 +3651,13 @@ function exportToSalaryExtras(params){
     Logger.log('[exportToSalaryExtras] journal: %s записів для (%s, salary, %s/%s)', Object.keys(journal.byNormName).length, loc, nextM.year, nextM.month);
 
     var journalOps = [];
+    var cellsWritten = 0;
+    var formulaRowsSkipped = 0;
 
+    // ⚠️ ТОЧКОВИЙ запис: НЕ setValues на весь стовпець (затирало б формули
+    // у підсумкових рядках). Пишемо setValue() лише у рядки занять, і лише
+    // якщо значення змінилось. Формульні рядки не чіпаємо за жодних обставин.
+    //
     // Ідемо по всіх АКТИВНИХ заняттях каталогу (а не лише по withRate) —
     // інакше якщо викладача прибрали з активних, попередня сума не очиститься.
     allActive.forEach(function(a){
@@ -3652,7 +3674,8 @@ function exportToSalaryExtras(params){
       }
       var rowIdx0 = rowFound - 1;
       if (budgetColFormulas[rowIdx0] && budgetColFormulas[rowIdx0][0]){
-        Logger.log('[exportToSalaryExtras] SKIP-FORMULA row %s: %s', rowFound, budgetColFormulas[rowIdx0][0]);
+        formulaRowsSkipped++;
+        Logger.log('[exportToSalaryExtras] skipped formula row %s: %s', rowFound, budgetColFormulas[rowIdx0][0]);
         return;
       }
       var nk           = lname; // нормалізована назва — спільний ключ
@@ -3663,7 +3686,12 @@ function exportToSalaryExtras(params){
       var info         = factByName[lname]; // може бути undefined якщо у заняття немає rate
       var newFact      = info ? info.fact : 0;
       var newValue     = baseValue + newFact;
-      budgetColValues[rowIdx0][0] = newValue;
+
+      // Точковий запис лише змінених клітинок.
+      if (newValue !== currentValue){
+        sheet.getRange(rowFound, budgetCol).setValue(newValue);
+        cellsWritten++;
+      }
 
       if (newFact !== lastWritten){
         journalOps.push({
@@ -3693,8 +3721,7 @@ function exportToSalaryExtras(params){
       }
     });
 
-    sheet.getRange(1, budgetCol, lastRow, 1).setValues(budgetColValues);
-    Logger.log('[exportToSalaryExtras] column write: %s рядків × col %s', lastRow, budgetCol);
+    Logger.log('[exportToSalaryExtras] точковий запис: %s клітинок змінено, %s формульних рядків пропущено', cellsWritten, formulaRowsSkipped);
 
     _commitJournalUpdates(journal, journalOps);
     Logger.log('[exportToSalaryExtras] journal upsert: %s op(s)', journalOps.length);
