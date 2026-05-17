@@ -2152,6 +2152,7 @@ function renderVacs(){
     const ov=vUsed>vEarned,pct=Math.min(100,Math.round(vEarned>0?vUsed/vEarned*100:0));
     return{e,vEarned,vUsed,vBal,ov,pct};
   }).sort((a,b)=>b.ov-a.ov||b.pct-a.pct);
+  S._vacExportRows=rows;  // джерело для exportVacsXlsx
   const isHR=isNetworkRole(S.user.role);
 
   set('main',`
@@ -2163,6 +2164,7 @@ function renderVacs(){
         <span style="font-size:12px;color:${rows.filter(r=>r.ov).length>0?'#e74c3c':'var(--gray)'}">
           ${rows.filter(r=>r.ov).length} перевищень
         </span>
+        <button class="btn btn-secondary btn-sm" onclick="exportVacsXlsx()">📥 Excel</button>
       </div>
       <div class="tbl-wrap"><table>
         <thead><tr><th>Співробітник</th>${isHR?'<th>Локація</th>':''}<th>Посада</th><th>Доступно</th><th>Використано</th><th>Залишок</th><th style="min-width:140px">Прогрес</th><th>Дії</th></tr></thead>
@@ -2195,11 +2197,15 @@ function renderSicks(){
     const last=[...r.sicks].sort((a,b)=>new Date(b.start)-new Date(a.start))[0]||null;
     return{e,days:sickUsed(e.key,yr),last,on:isOnSick(e.key)};
   }).sort((a,b)=>b.days-a.days);
+  S._sickExportRows=rows;  // джерело для exportSicksXlsx
+  S._sickExportYear=yr;
   const isHR=isNetworkRole(S.user.role);
 
   set('main',`
     <div class="card">
-      <div class="card-hd"><h3>🏥 Лікарняні ${yr}</h3></div>
+      <div class="card-hd"><h3>🏥 Лікарняні ${yr}</h3>
+        <button class="btn btn-secondary btn-sm" onclick="exportSicksXlsx()">📥 Excel</button>
+      </div>
       ${rows.length===0?`<div class="empty"><span class="ei">🏥</span><h4>Немає записів про лікарняні</h4></div>`:
       `<div class="tbl-wrap"><table>
         <thead><tr><th>Співробітник</th>${isHR?'<th>Локація</th>':''}<th>Зараз</th><th>Днів (рік)</th><th>Останній</th><th>Дії</th></tr></thead>
@@ -2863,6 +2869,15 @@ function renderVacSchedule(){
     </div>`;
   }
 
+  // Збір рядків для XLSX-експорту — по запису на кожну відпустку року.
+  S._vacSchedExport=[];
+  emps.forEach(e=>{
+    getVacsForYear(e).forEach(v=>{
+      S._vacSchedExport.push({name:fullName(e),pos:e.pos||'',loc:normEmpLoc(e)||'',
+        type:v.type||'Щорічна',start:v.start,end:v.end,days:v.days||0});
+    });
+  });
+
   set('main',`
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:16px">
       ${isHR?`<div style="display:flex;gap:4px;flex-wrap:wrap">
@@ -2888,6 +2903,7 @@ function renderVacSchedule(){
         ${[2025,2026,2027].map(y=>`<option value="${y}" ${yr===y?'selected':''}>${y}</option>`).join('')}
       </select>
       ${vacSchedPos||vacSchedLoc?`<button class="btn btn-secondary btn-sm" onclick="vacSchedPos='';vacSchedLoc='';renderVacSchedule()">✕ Скинути</button>`:''}
+      <button class="btn btn-secondary btn-sm" onclick="exportVacSchedXlsx()">📥 Excel</button>
       <span style="font-size:12px;color:var(--gray);margin-left:auto">${emps.length} співроб. · ${currentlyOnVac} зараз у відпустці</span>
     </div>
     <div class="card" style="padding:16px">
@@ -3285,6 +3301,54 @@ function mkXlsxName(loc,kind){
     .replace(/[\\/:*?"<>|]+/g,'_')+'.xlsx';
 }
 
+// Експорт відпусток співробітників.
+function exportVacsXlsx(){
+  const rows=S._vacExportRows||[];
+  if(!rows.length){ alert('Немає даних для експорту'); return; }
+  const aoa=[['Співробітник','Локація','Посада','Доступно (дн)','Використано (дн)','Залишок (дн)','Перевищення']];
+  rows.forEach(r=>{
+    aoa.push([fullName(r.e),r.e.loc||'',r.e.pos||'',r.vEarned,r.vUsed,r.vBal,r.ov?'так':'']);
+  });
+  exportXlsx(mkXlsxName('','відпустки_співробітників'),[{name:'Відпустки',aoa:aoa}]);
+}
+
+// Експорт лікарняних співробітників.
+function exportSicksXlsx(){
+  const rows=S._sickExportRows||[];
+  if(!rows.length){ alert('Немає даних для експорту'); return; }
+  const aoa=[['Співробітник','Локація','Зараз хворіє','Днів за рік','Останній: початок','Останній: кінець','Останній: днів']];
+  rows.forEach(r=>{
+    aoa.push([fullName(r.e),r.e.loc||'',r.on?'так':'',r.days,
+      r.last?r.last.start:'',r.last?r.last.end:'',r.last?r.last.days:'']);
+  });
+  exportXlsx(mkXlsxName('','лікарняні_співробітників_'+(S._sickExportYear||'')),[{name:'Лікарняні',aoa:aoa}]);
+}
+
+// Експорт табеля співробітників (день або зведений період).
+function exportTabelXlsx(){
+  const t=S._tabelExport;
+  if(!t||!t.rows.length){ alert('Немає даних для експорту'); return; }
+  let aoa;
+  if(t.mode==='day'){
+    aoa=[['Співробітник','Посада','Статус','Час приходу','Примітка']];
+    t.rows.forEach(r=>aoa.push([r.name,r.pos,r.status,r.time,r.note]));
+  } else {
+    aoa=[['Співробітник','Посада','Присутній','Спізнився','Відсутній','Лікарняний','Відпустка','Не заповнено']];
+    t.rows.forEach(r=>aoa.push([r.name,r.pos,r.present,r.late,r.absent,r.sick,r.vacation,r.notset]));
+  }
+  exportXlsx(mkXlsxName(t.loc,'табель_співробітників'),
+    [{name:String(t.period||'Табель').slice(0,31),aoa:aoa}]);
+}
+
+// Експорт графіку відпусток співробітників (по запису на відпустку).
+function exportVacSchedXlsx(){
+  const rows=S._vacSchedExport||[];
+  if(!rows.length){ alert('Немає даних для експорту'); return; }
+  const aoa=[['Співробітник','Посада','Локація','Тип відпустки','Початок','Кінець','Днів']];
+  rows.forEach(r=>aoa.push([r.name,r.pos,r.loc,r.type,r.start,r.end,r.days]));
+  exportXlsx(mkXlsxName('','графік_відпусток'),[{name:'Графік відпусток',aoa:aoa}]);
+}
+
 // ── ТАБЕЛЬ ВІДВІДУВАНОСТІ ──
 const TABEL_STATUSES={present:{label:'✅ Присутній',color:'#27ae60'},absent:{label:'❌ Відсутній',color:'#e74c3c'},late:{label:'⏰ Спізнився',color:'#e67e22'},vacation:{label:'🏖️ Відпустка',color:'#3498db'},sick:{label:'🏥 Лікарняний',color:'#9b59b6'}};
 
@@ -3436,6 +3500,35 @@ function renderTabel(){
     </div>`;
   }
 
+  // Збір рядків для XLSX-експорту (день / зведений період).
+  S._tabelExport={mode:isDayView?'day':'period',loc:activeLoc,period:periodLabel,rows:[]};
+  if(isDayView){
+    const tblX=getTabel(activeLoc,tabelDay);
+    emps.forEach(e=>{
+      const row=tblX[e.key]||{};
+      S._tabelExport.rows.push({name:fullName(e),pos:e.pos||'',
+        status:(TABEL_STATUSES[row.status]?TABEL_STATUSES[row.status].label:''),
+        time:row.time||'',note:row.note||''});
+    });
+  } else {
+    emps.forEach(e=>{
+      const cnt={present:0,late:0,absent:0,sick:0,vacation:0,notset:0};
+      let dx=new Date(from);
+      while(dx<=new Date(to)){
+        const dw=dx.getDay();
+        if(dw!==0&&dw!==6){
+          const ds=dx.toISOString().split('T')[0];
+          const st=getTabel(activeLoc,ds)[e.key]?.status||'notset';
+          cnt[st]=(cnt[st]||0)+1;
+        }
+        dx.setDate(dx.getDate()+1);
+      }
+      S._tabelExport.rows.push({name:fullName(e),pos:e.pos||'',
+        present:cnt.present,late:cnt.late,absent:cnt.absent,
+        sick:cnt.sick,vacation:cnt.vacation,notset:cnt.notset});
+    });
+  }
+
   // Фільтри дати залежно від режиму
   const showDatePicker=tabelPeriod==='day'||tabelPeriod==='week';
   const showMonthSel=tabelPeriod==='month';
@@ -3477,6 +3570,7 @@ function renderTabel(){
         <select class="flt-sel" style="min-width:80px" onchange="tabelYear=+this.value;renderTabel()">
           ${[2024,2025,2026].map(y=>`<option value="${y}" ${tabelYear===y?'selected':''}>${y}</option>`).join('')}
         </select>`:''}
+      <button class="btn btn-secondary btn-sm" onclick="exportTabelXlsx()" style="margin-left:auto">📥 Excel</button>
     </div>
     ${summary}
     ${tableHtml}

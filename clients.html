@@ -3834,13 +3834,16 @@ function renderAbsRequests(){
   allReqs.sort(function(x,y){
     return (ORDER[x.a.status]||9)-(ORDER[y.a.status]||9)||((y.a.createdAt||'')>(x.a.createdAt||'')?1:-1);
   });
+  S._absReqExport=allReqs;  // джерело для exportAbsRequestsXlsx
 
   var pending=allReqs.filter(function(r){ return r.a.status==='pending'; }).length;
   var processing=allReqs.filter(function(r){ return r.a.status==='processing'; }).length;
   var curM=new Date().toISOString().slice(0,7);
   var doneCur=allReqs.filter(function(r){ return r.a.status==='done'&&(r.a.statusHistory||[]).some(function(h){ return h.at&&h.at.slice(0,7)===curM&&h.status==='done'; }); }).length;
 
-  var html='<div class="req-hdr-grid">'
+  var html='<div style="display:flex;justify-content:flex-end;margin-bottom:8px">'
+    +'<button class="btn btn-secondary btn-sm" onclick="exportAbsRequestsXlsx()">📥 Excel</button></div>'
+    +'<div class="req-hdr-grid">'
     +'<div class="req-stat"><div class="req-stat-n" style="color:var(--orange)">'+pending+'</div><div class="req-stat-l">⏳ Нових заявок</div></div>'
     +'<div class="req-stat"><div class="req-stat-n" style="color:var(--blue)">'+processing+'</div><div class="req-stat-l">💼 В роботі</div></div>'
     +'<div class="req-stat"><div class="req-stat-n" style="color:var(--green)">'+doneCur+'</div><div class="req-stat-l">✅ Виконано цього місяця</div></div>'
@@ -4096,6 +4099,70 @@ function exportDebtsXlsx(){
     {name:'Борги',aoa:debtAoa}
   ]);
   showFloatMsg('📥 Excel: '+rows.length+' дітей, '+debtors.length+' боржників');
+}
+
+// Експорт перерахунків (відпустки/лікарняні дітей) — 3 аркуші.
+function exportAbsRequestsXlsx(){
+  var reqs=S._absReqExport||[];
+  if(!reqs.length){ showFloatMsg('❌ Немає заявок для експорту'); return; }
+  var ST={pending:'Очікує',processing:'В роботі',done:'Внесено',rejected:'Відхилено'};
+  function rowOf(r){
+    var a=r.a,c=r.c;
+    return [(a.createdAt||'').slice(0,10),c.name||'',c.loc||'',
+      a.type==='vacation'?'Відпустка':'Лікарняний',a.from||'',a.to||'',
+      a.workDays||0,a.weeks||0,a.totalPct||0,a.totalAmount||0,
+      ST[a.status]||a.status||'',a.rejectReason||''];
+  }
+  var header=['Дата заявки','Дитина','Локація','Тип','Період від','Період до',
+    'Робочих днів','Тижнів','% перерахунку','Сума повернення (грн)','Статус','Причина відхилення'];
+  var active=reqs.filter(function(r){ return r.a.status==='pending'||r.a.status==='processing'; });
+  var archive=reqs.filter(function(r){ return r.a.status==='done'||r.a.status==='rejected'; });
+  // Деталізація по місяцях (monthsBreakdown).
+  var monthsAoa=[['Дитина','Локація','Тип','Місяць','% знижки','Сума повернення (грн)']];
+  reqs.forEach(function(r){
+    var a=r.a,c=r.c;
+    (a.monthsBreakdown||[]).forEach(function(mb){
+      monthsAoa.push([c.name||'',c.loc||'',a.type==='vacation'?'Відпустка':'Лікарняний',
+        mb.month||'',mb.pct||0,mb.amount||0]);
+    });
+  });
+  exportXlsx(mkXlsxName('','перерахунки'),[
+    {name:'Активні',aoa:[header].concat(active.map(rowOf))},
+    {name:'Архів',aoa:[header].concat(archive.map(rowOf))},
+    {name:'По місяцях',aoa:monthsAoa}
+  ]);
+  showFloatMsg('📥 Excel: '+reqs.length+' заявок');
+}
+
+// Експорт табеля відвідуваності дітей — лист на локацію.
+function exportAttendanceXlsx(){
+  var ex=S._attExport;
+  if(!ex||!ex.rows.length){ showFloatMsg('❌ Немає даних табеля'); return; }
+  var byLoc={};
+  ex.rows.forEach(function(r){ (byLoc[r.loc]=byLoc[r.loc]||[]).push(r); });
+  var TXT={present:'присутній',sick:'хворів',vacation:'відпустка',absent:'відсутній','':''};
+  var sheets=Object.keys(byLoc).map(function(loc){
+    var aoa;
+    if(ex.mode==='year'){
+      var mn=['Січ','Лют','Бер','Кві','Тра','Чер','Лип','Сер','Вер','Жов','Лис','Гру'];
+      aoa=[['Група','Дитина'].concat(mn).concat(['Разом днів'])];
+      byLoc[loc].forEach(function(r){
+        var sum=r.months.reduce(function(a,b){ return a+b; },0);
+        aoa.push([r.group,r.name].concat(r.months).concat([sum]));
+      });
+    } else {
+      aoa=[['Група','Дитина'].concat(ex.days)
+        .concat(['Присутній','Хворів','Відпустка','Відсутній'])];
+      byLoc[loc].forEach(function(r){
+        var cells=ex.days.map(function(d){ return TXT[r.byDay[d]||'']; });
+        aoa.push([r.group,r.name].concat(cells)
+          .concat([r.cnt.present,r.cnt.sick,r.cnt.vacation,r.cnt.absent]));
+      });
+    }
+    return {name:loc,aoa:aoa};
+  });
+  exportXlsx(mkXlsxName(ex.loc||'','табель_дітей'),sheets);
+  showFloatMsg('📥 Excel: '+ex.rows.length+' дітей');
 }
 
 // Показати кнопку міграції якщо localStorage має старі дані (один раз)
@@ -4362,6 +4429,7 @@ function renderAttendance(){
     +'<button class="att-mode-btn'+(S.attMode==='month'?' active':'')+'" onclick="S.attMode=\'month\';S._attCloudLoaded={};renderAttendance()">📆 Місяць</button>'
     +'<button class="att-mode-btn'+(S.attMode==='year'?' active':'')+'" onclick="S.attMode=\'year\';renderAttendance()">📊 Рік</button>'
     +'<button class="att-mode-btn" title="Оновити з хмари" onclick="S._attCloudLoaded={};renderAttendance()">🔄</button>'
+    +'<button class="att-mode-btn" title="Завантажити Excel" onclick="exportAttendanceXlsx()">📥 Excel</button>'
     +'</div>';
 
   // ── Підпис поточного вибору ────────────────────────────────────────────────
@@ -4393,24 +4461,48 @@ function renderAttendance(){
       +'<div class="att-stat"><div class="att-stat-n">'+childCount+'</div><div class="att-stat-l">дітей</div></div>'
       +'<div class="att-stat"><div class="att-stat-n" style="color:var(--green)">'+S.attYear+'</div><div class="att-stat-l">📊 Рік</div></div>'
       +'</div>';
+    // Збір для XLSX — по дитині 12 місяців к-сті присутніх днів.
+    S._attExport={mode:'year',year:S.attYear,loc:locLabel,rows:[]};
+    activeLocs.forEach(function(loc){
+      (S.groups[loc]||[]).forEach(function(g){
+        if(activeGroup&&g.group!==activeGroup) return;
+        g.children.forEach(function(ch){
+          var months=[];
+          for(var m=1;m<=12;m++){
+            var pref=S.attYear+'-'+(m<10?'0'+m:''+m), cnt=0;
+            Object.keys(S.att).forEach(function(d){
+              if(d.slice(0,7)===pref && S.att[d][ch.id]==='present') cnt++;
+            });
+            months.push(cnt);
+          }
+          S._attExport.rows.push({loc:loc,group:g.group,name:ch.name,months:months});
+        });
+      });
+    });
     main.innerHTML=migBanner+typeChips+infoLine+modeBar+stats+content;
     return;
   } else {
     statDays=[S.attDay];
   }
 
+  // Збір рядків для XLSX-експорту разом із підрахунком статистики.
+  S._attExport={mode:S.attMode,days:statDays.slice(),loc:locLabel,rows:[]};
   activeLocs.forEach(function(loc){
     (S.groups[loc]||[]).forEach(function(g){
       if(activeGroup&&g.group!==activeGroup) return;
       g.children.forEach(function(ch){
+        var row={loc:loc,group:g.group,name:ch.name,byDay:{},
+                 cnt:{present:0,sick:0,vacation:0,absent:0}};
         statDays.forEach(function(sd){
           var st=(S.att[sd]||{})[ch.id]||'';
+          row.byDay[sd]=st;
           if(st) nTotal++;
-          if(st==='present') nPresent++;
-          else if(st==='sick') nSick++;
-          else if(st==='vacation') nVac++;
-          else if(st==='absent') nAbsent++;
+          if(st==='present'){ nPresent++; row.cnt.present++; }
+          else if(st==='sick'){ nSick++; row.cnt.sick++; }
+          else if(st==='vacation'){ nVac++; row.cnt.vacation++; }
+          else if(st==='absent'){ nAbsent++; row.cnt.absent++; }
         });
+        S._attExport.rows.push(row);
       });
     });
   });
