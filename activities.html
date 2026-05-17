@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>m.kids — Додаткові заняття</title>
+<script src="xlsx.full.min.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -443,7 +444,7 @@ select,input,textarea{font-family:inherit}
       <button id="copyActivitiesBtn" class="btn btn-secondary" data-permission="activities-edit"
               title="Скопіювати всі заняття з іншої локації">📋 Скопіювати з локації</button>
       <button id="exportActivitiesBtn" class="btn btn-secondary"
-              title="CSV для архіву / перевірки">📤 CSV</button>
+              title="Excel для архіву / перевірки">📤 Excel</button>
     </div>
   </div>
 
@@ -585,7 +586,7 @@ select,input,textarea{font-family:inherit}
     <!-- Sub-tab controls -->
     <div class="ana-controls">
       <input type="text" id="anaSearch" placeholder="🔍 Пошук…" class="ana-search">
-      <button id="anaExportBtn" class="btn btn-secondary btn-sm">📤 CSV</button>
+      <button id="anaExportBtn" class="btn btn-secondary btn-sm">📤 Excel</button>
     </div>
 
     <!-- Sub-tab content -->
@@ -630,7 +631,7 @@ select,input,textarea{font-family:inherit}
       <button id="expAllLocsBtn" class="btn btn-secondary" data-perm-cfo="1">
         🔁 Всі локації (поточний місяць)
       </button>
-      <button id="expCsvBtn" class="btn btn-secondary">📤 CSV</button>
+      <button id="expCsvBtn" class="btn btn-secondary">📤 Excel</button>
     </div>
 
     <div class="card">
@@ -1153,6 +1154,25 @@ function showToast(msg, type, ms){
   }, ms || 3500);
 }
 
+// ── XLSX EXPORT (SheetJS) ──
+// sheets: [{name, aoa}]  aoa = масив рядків, рядок 0 = заголовки.
+function exportXlsx(filename, sheets){
+  if (typeof XLSX === 'undefined'){ showToast('Бібліотека XLSX не завантажена', 'err'); return; }
+  var wb = XLSX.utils.book_new();
+  (sheets || []).forEach(function(s, i){
+    var ws = XLSX.utils.aoa_to_sheet(s.aoa && s.aoa.length ? s.aoa : [[]]);
+    XLSX.utils.book_append_sheet(wb, ws, String(s.name || ('Аркуш' + (i+1))).slice(0, 31));
+  });
+  XLSX.writeFile(wb, filename);
+}
+// "Голосієво_борги_2026-05-17.xlsx" — частини через "_", ISO-дата, безпечні символи.
+function mkXlsxName(loc, kind){
+  var d = new Date();
+  var iso = d.getFullYear() + '-' + ('0'+(d.getMonth()+1)).slice(-2) + '-' + ('0'+d.getDate()).slice(-2);
+  return [loc, kind, iso].filter(Boolean).map(function(x){ return String(x).trim(); }).join('_')
+    .replace(/[\\/:*?"<>|]+/g, '_') + '.xlsx';
+}
+
 // ── DATA: backend + HARDCODED fallback + local overrides ──────
 //
 // Поки Apps Script не задеплоєний, getActivitiesCatalog може повернути
@@ -1559,34 +1579,16 @@ function exportCatalogCSV(){
     if (a.active !== b.active) return a.active ? -1 : 1;
     return String(a.name || '').localeCompare(String(b.name || ''), 'uk');
   });
-  function cell(v){
-    var s = String(v == null ? '' : v);
-    if (s.indexOf(';') !== -1 || s.indexOf('"') !== -1 || s.indexOf('\n') !== -1){
-      return '"' + s.replace(/"/g, '""') + '"';
-    }
-    return s;
-  }
-  var lines = ['Локація;Заняття;Ціна_клієнту;Модель_ЗП;Ставка;Викладач;Активне'];
+  var aoa = [['Локація','Заняття','Ціна_клієнту','Модель_ЗП','Ставка','Викладач','Активне']];
   items.forEach(function(a){
-    lines.push([
-      cell(a.loc), cell(a.name), cell(a.clientPrice || 0),
-      cell(a.teacherModel || ''), cell(a.teacherRate || 0),
-      cell(a.teacher || ''), cell(a.active ? 'так' : 'ні')
-    ].join(';'));
+    aoa.push([
+      a.loc || '', a.name || '', a.clientPrice || 0,
+      a.teacherModel || '', a.teacherRate || 0,
+      a.teacher || '', a.active ? 'так' : 'ні'
+    ]);
   });
-  var d = new Date();
-  var yyyy = d.getFullYear();
-  var mm = String(d.getMonth() + 1).padStart(2, '0');
-  var dd = String(d.getDate()).padStart(2, '0');
-  var safeLoc = loc.replace(/[^\wа-яА-ЯіІїЇєЄґҐ-]/g, '_');
-  var fname = 'dodatkovi_katalog_' + safeLoc + '_' + yyyy + '-' + mm + '-' + dd + '.csv';
-  var blob = new Blob(['﻿' + lines.join('\n')], {type: 'text/csv;charset=utf-8;'});
-  var url = URL.createObjectURL(blob);
-  var a = document.createElement('a');
-  a.href = url; a.download = fname;
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
-  showToast('CSV завантажено: ' + items.length + ' рядків', 'ok');
+  exportXlsx(mkXlsxName(loc, 'каталог_занять'), [{name: 'Каталог', aoa: aoa}]);
+  showToast('Excel завантажено: ' + items.length + ' рядків', 'ok');
 }
 
 async function deactivateActivity(id){
@@ -2728,20 +2730,12 @@ function closeAnaDetail(){
 function exportAnalyticsCSV(){
   var marks = _filteredMarks();
   if (!marks.length){ showToast('Немає даних для експорту', 'err'); return; }
-  function cell(v){
-    var s = String(v == null ? '' : v);
-    if (s.indexOf(';') !== -1 || s.indexOf('"') !== -1 || s.indexOf('\n') !== -1){
-      return '"' + s.replace(/"/g, '""') + '"';
-    }
-    return s;
-  }
-  var lines = [], header = [];
   var canSeeMoney = hasPerm('attendance-edit');
 
-  if (ANA.subTab === 'children'){
-    header = ['Дитина','Група','Занять','Заняття'];
+  function aoaChildren(){
+    var header = ['Дитина','Група','Занять','Заняття'];
     if (canSeeMoney) header.push('Сума_до_сплати');
-    lines.push(header.join(';'));
+    var aoa = [header];
     var byChild = {};
     marks.forEach(function(m){
       if (!byChild[m.child]) byChild[m.child] = {name:m.child, group:m.group, count:0, sum:0, acts:{}};
@@ -2751,14 +2745,16 @@ function exportAnalyticsCSV(){
     Object.keys(byChild).sort(function(a,b){ return byChild[b].sum - byChild[a].sum; }).forEach(function(k){
       var b = byChild[k];
       var actsStr = Object.keys(b.acts).map(function(n){ return n + ' × ' + b.acts[n]; }).join(' / ');
-      var row = [cell(b.name), cell(b.group||''), cell(b.count), cell(actsStr)];
-      if (canSeeMoney) row.push(cell(b.sum));
-      lines.push(row.join(';'));
+      var row = [b.name, b.group||'', b.count, actsStr];
+      if (canSeeMoney) row.push(b.sum);
+      aoa.push(row);
     });
-  } else if (ANA.subTab === 'activities'){
-    header = ['Заняття','Дітей','Разів'];
+    return aoa;
+  }
+  function aoaActivities(){
+    var header = ['Заняття','Дітей','Разів'];
     if (canSeeMoney) header.push('Дохід','Витрати','Прибуток');
-    lines.push(header.join(';'));
+    var aoa = [header];
     var byAct = {};
     marks.forEach(function(m){
       if (!byAct[m.activityId]) byAct[m.activityId] = {id:m.activityId, name:m.activityName, count:0, kids:{}, inc:0, list:[]};
@@ -2767,16 +2763,17 @@ function exportAnalyticsCSV(){
     Object.keys(byAct).forEach(function(id){
       var b = byAct[id];
       var pay = _payoutForActivity(Number(id), b.list);
-      var row = [cell(b.name), cell(Object.keys(b.kids).length), cell(b.count)];
-      if (canSeeMoney) row.push(cell(b.inc), cell(pay), cell(b.inc-pay));
-      lines.push(row.join(';'));
+      var row = [b.name, Object.keys(b.kids).length, b.count];
+      if (canSeeMoney) row.push(b.inc, pay, b.inc - pay);
+      aoa.push(row);
     });
-  } else if (ANA.subTab === 'teachers'){
-    header = ['Викладач','Заняття','Разів','Дітей'];
+    return aoa;
+  }
+  function aoaTeachers(){
+    var header = ['Викладач','Заняття','Разів','Дітей'];
     if (canSeeMoney) header.push('ЗП');
-    lines.push(header.join(';'));
-    var byT = {};
-    var groupedByAct = {};
+    var aoa = [header];
+    var byT = {}, groupedByAct = {};
     marks.forEach(function(m){
       if (!groupedByAct[m.activityId]) groupedByAct[m.activityId] = [];
       groupedByAct[m.activityId].push(m);
@@ -2795,14 +2792,16 @@ function exportAnalyticsCSV(){
     Object.keys(byT).forEach(function(k){
       var t = byT[k];
       var actsStr = Object.keys(t.acts).map(function(n){ return n + ' × ' + t.acts[n]; }).join(' / ');
-      var row = [cell(t.name), cell(actsStr), cell(t.count), cell(Object.keys(t.kids).length)];
-      if (canSeeMoney) row.push(cell(t.pay));
-      lines.push(row.join(';'));
+      var row = [t.name, actsStr, t.count, Object.keys(t.kids).length];
+      if (canSeeMoney) row.push(t.pay);
+      aoa.push(row);
     });
-  } else if (ANA.subTab === 'days'){
-    header = ['Дата','Заняття','Дітей'];
+    return aoa;
+  }
+  function aoaDays(){
+    var header = ['Дата','Заняття','Дітей'];
     if (canSeeMoney) header.push('Сума');
-    lines.push(header.join(';'));
+    var aoa = [header];
     var byD = {};
     marks.forEach(function(m){
       if (!byD[m.date]) byD[m.date] = {date:m.date, acts:{}, kids:{}, sum:0};
@@ -2813,21 +2812,22 @@ function exportAnalyticsCSV(){
     Object.keys(byD).sort(function(a,b){ return b.localeCompare(a); }).forEach(function(k){
       var d = byD[k];
       var actsStr = Object.keys(d.acts).map(function(n){ return n + ' × ' + d.acts[n]; }).join(' / ');
-      var row = [cell(_ddmmyyyy(d.date)), cell(actsStr), cell(Object.keys(d.kids).length)];
-      if (canSeeMoney) row.push(cell(d.sum));
-      lines.push(row.join(';'));
+      var row = [_ddmmyyyy(d.date), actsStr, Object.keys(d.kids).length];
+      if (canSeeMoney) row.push(d.sum);
+      aoa.push(row);
     });
+    return aoa;
   }
 
-  var r = _periodRange();
-  var safeLoc = S.activeLoc.replace(/[^\wа-яА-ЯіІїЇєЄґҐ-]/g, '_');
-  var fname = 'ana_' + ANA.subTab + '_' + safeLoc + '_' + r[0] + '_' + r[1] + '.csv';
-  var blob = new Blob(['﻿' + lines.join('\n')], {type: 'text/csv;charset=utf-8;'});
-  var url = URL.createObjectURL(blob);
-  var a = document.createElement('a'); a.href = url; a.download = fname;
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
-  showToast('CSV завантажено', 'ok');
+  // Усі 4 підвкладки — окремими аркушами одного файла.
+  var sheets = [
+    {name:'Діти',      aoa: aoaChildren()},
+    {name:'Заняття',   aoa: aoaActivities()},
+    {name:'Викладачі', aoa: aoaTeachers()},
+    {name:'Дні',       aoa: aoaDays()}
+  ];
+  exportXlsx(mkXlsxName(S.activeLoc, 'аналітика_додаткових'), sheets);
+  showToast('Excel завантажено: 4 аркуші', 'ok');
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -3143,6 +3143,7 @@ async function renderExportPreview(){
   var pRows = Object.keys(sumByChild).map(function(name){
     return {name: name, group: sumByChild[name].group, sum: sumByChild[name].sum};
   }).sort(function(a,b){ return b.sum - a.sum; });
+  EXP.previewRows = pRows;  // джерело для exportPreviewCSV (замість DOM-скрейпінгу)
 
   var pBody = $('expPreviewBody');
   if (!pRows.length){
@@ -3290,35 +3291,18 @@ async function exportAllLocations(){
 }
 
 function exportPreviewCSV(){
-  var rows = Array.from($('expPreviewBody').querySelectorAll('tr')).filter(function(tr){
-    return tr.querySelectorAll('td').length >= 4;
-  });
+  // Дані беремо з масиву-джерела (EXP.previewRows), а не з DOM-таблиці.
+  var rows = EXP.previewRows || [];
   if (!rows.length){ showToast('Немає даних для експорту', 'err'); return; }
-  function cell(v){
-    var s = String(v == null ? '' : v).replace(/\s+/g, ' ').trim();
-    if (s.indexOf(';') !== -1 || s.indexOf('"') !== -1){
-      return '"' + s.replace(/"/g, '""') + '"';
-    }
-    return s;
-  }
   var monthName = ['Січень','Лютий','Березень','Квітень','Травень','Червень',
                    'Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'][EXP.month - 1];
-  var lines = ['Дитина;Група;Сума_додаткових_₴'];
-  rows.forEach(function(tr){
-    var c = tr.querySelectorAll('td');
-    lines.push([
-      cell(c[0].textContent), cell(c[1].textContent),
-      cell(c[2].textContent.replace(/[^\d\-]/g, ''))
-    ].join(';'));
+  var aoa = [['Дитина','Група','Сума_додаткових_₴']];
+  rows.forEach(function(r){
+    aoa.push([r.name || '', r.group || '', r.sum || 0]);
   });
-  var safeLoc = S.activeLoc.replace(/[^\wа-яА-ЯіІїЇєЄґҐ-]/g, '_');
-  var fname = 'export_payments_' + safeLoc + '_' + monthName + '_' + EXP.year + '.csv';
-  var blob = new Blob(['﻿' + lines.join('\n')], {type: 'text/csv;charset=utf-8;'});
-  var url = URL.createObjectURL(blob);
-  var a = document.createElement('a'); a.href = url; a.download = fname;
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
-  showToast('CSV завантажено', 'ok');
+  exportXlsx(mkXlsxName(S.activeLoc, 'превʼю_пейментів_' + monthName + '_' + EXP.year),
+             [{name: 'Превʼю Пейменти', aoa: aoa}]);
+  showToast('Excel завантажено', 'ok');
 }
 
 // ── BOOTSTRAP ───────────────────────────────

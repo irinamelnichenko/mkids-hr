@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>HR Система — mkids Дитячі Садочки</title>
+<script src="xlsx.full.min.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -1720,7 +1721,7 @@ function renderEmps(){
         <option value="">Всі напрямки</option>${dirs.map(d=>`<option value="${d}" ${S.f.dir===d?'selected':''}>${d}</option>`).join('')}
       </select>`:''}
       <button class="btn btn-secondary btn-sm" onclick="clearF()">✕ Скинути</button>
-      ${isHR?`<button class="btn btn-secondary btn-sm" onclick="exportCSV()" title="Експорт CSV">📊 CSV</button>`:''}
+      ${isHR?`<button class="btn btn-secondary btn-sm" onclick="exportCSV()" title="Завантажити Excel">📊 Excel</button>`:''}
       <span style="margin-left:auto;font-size:12px;color:var(--gray)">${f.length} / ${emps.length}</span>
     </div>
     <div class="card"><div class="tbl-wrap"><table>
@@ -3071,7 +3072,7 @@ function renderSettings(){
       <div class="card" style="margin-bottom:18px">
         <div class="card-hd"><h3>📤 Експорт даних</h3></div>
         <div style="padding:20px;display:flex;flex-direction:column;gap:10px">
-          <button class="btn btn-secondary" onclick="exportCSV()">📊 Експорт співробітників (CSV)</button>
+          <button class="btn btn-secondary" onclick="exportCSV()">📊 Експорт співробітників (Excel)</button>
           <button class="btn btn-secondary" onclick="exportRecords()">📋 Експорт записів (JSON)</button>
           <div style="font-size:12px;color:var(--gray)">Файли завантажаться автоматично</div>
         </div>
@@ -3249,8 +3250,7 @@ function exportCSV(){
     const t=tenure(e),vu=vacUsed(e.key),su=sickUsed(e.key),sal=curSal(e.key);
     rows.push([e.dir,e.typ,e.loc,e.grp,e.last,e.first,e.phone,e.pos,e.stat,e.bdate||`${e.bday}.${e.bmon}`,e.wday,e.hired,e.fired,e.email,t?`${t.yr}р ${t.mo}м`:'',vu,vacTotalLim(e),su,sal?sal.amount:'']);
   });
-  const csv=rows.map(r=>r.map(c=>`"${(c||'').toString().replace(/"/g,'""')}"`).join(',')).join('\n');
-  dl('\uFEFF'+csv,'hr_employees_'+new Date().toISOString().slice(0,10)+'.csv','text/csv;charset=utf-8');
+  exportXlsx(mkXlsxName('\u0421\u043F\u0456\u0432\u0440\u043E\u0431\u0456\u0442\u043D\u0438\u043A\u0438'),[{name:'\u0421\u043F\u0456\u0432\u0440\u043E\u0431\u0456\u0442\u043D\u0438\u043A\u0438',aoa:rows}]);
 }
 function exportRecords(){
   if(!isHR()){alert('⛔ Доступно тільки для CFO');return;}
@@ -3265,6 +3265,24 @@ function clearAllRecords(){
 }
 function dl(content,name,mime){
   const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([content],{type:mime}));a.download=name;a.click();
+}
+// ── XLSX EXPORT (SheetJS) ──
+// sheets: [{name, aoa}]  aoa = масив рядків, рядок 0 = заголовки.
+function exportXlsx(filename,sheets){
+  if(typeof XLSX==='undefined'){alert('Бібліотека XLSX не завантажена (xlsx.full.min.js)');return;}
+  const wb=XLSX.utils.book_new();
+  (sheets||[]).forEach((s,i)=>{
+    const ws=XLSX.utils.aoa_to_sheet(s.aoa&&s.aoa.length?s.aoa:[[]]);
+    XLSX.utils.book_append_sheet(wb,ws,String(s.name||('Аркуш'+(i+1))).slice(0,31));
+  });
+  XLSX.writeFile(wb,filename);
+}
+// "Голосієво_борги_2026-05-17.xlsx" — частини через "_", ISO-дата, безпечні символи.
+function mkXlsxName(loc,kind){
+  const d=new Date();
+  const iso=d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2);
+  return [loc,kind,iso].filter(Boolean).map(x=>String(x).trim()).join('_')
+    .replace(/[\\/:*?"<>|]+/g,'_')+'.xlsx';
 }
 
 // ── ТАБЕЛЬ ВІДВІДУВАНОСТІ ──
@@ -3573,7 +3591,7 @@ function renderReport(){
       <select class="flt-sel" onchange="reportYear=+this.value;renderReport()">
         ${[2024,2025,2026].map(y=>`<option value="${y}" ${reportYear===y?'selected':''}>${y}</option>`).join('')}
       </select>
-      <button class="btn btn-primary btn-sm" onclick="exportReport()">📊 Експорт CSV</button>
+      <button class="btn btn-primary btn-sm" onclick="exportReport()">📊 Експорт Excel</button>
       <span style="font-size:12px;color:var(--gray)">Робочих днів у місяці: <strong>${workDaysMonth}</strong></span>
     </div>
     <div class="card">
@@ -3619,8 +3637,7 @@ function exportReport(){
     const sal=curSal(e.key);
     rows.push([e.last,e.first,e.loc,e.pos,vacDays,sickDays,Math.max(0,daysInMonth-vacDays-sickDays),sal?sal.amount:'']);
   });
-  const csv=rows.map(r=>r.map(c=>`"${(c||'').toString().replace(/"/g,'""')}"`).join(',')).join('\n');
-  dl('\uFEFF'+csv,`звіт_${monthNames[reportMonth]}_${reportYear}.csv`,'text/csv;charset=utf-8');
+  exportXlsx(`звіт_${monthNames[reportMonth]}_${reportYear}.xlsx`,[{name:'Звіт',aoa:rows}]);
 }
 
 // ── TOAST ──

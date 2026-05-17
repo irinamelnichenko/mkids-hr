@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>m.kids CRM — Клієнти</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="xlsx.full.min.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -2274,7 +2275,8 @@ function renderClients(){
           ? '<span style="font-size:11px;color:var(--gray);align-self:center">Останнє: '+esc(S.bdayStatusUpdatedAt)+'</span>'
           : '')
       : '')
-    +'<button class="btn btn-primary btn-sm" onclick="openNewChild()" style="margin-left:auto;white-space:nowrap">➕ Додати дитину</button>'
+    +'<button class="btn btn-secondary btn-sm" onclick="exportClientsXlsx()" style="margin-left:auto;white-space:nowrap">📥 Excel</button>'
+    +'<button class="btn btn-primary btn-sm" onclick="openNewChild()" style="white-space:nowrap">➕ Додати дитину</button>'
     +'</div></div></div>'
     // ── 2. stat cards ─────────────────────────────────────────────────────
     +'<div class="stats-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:16px">'
@@ -2284,6 +2286,7 @@ function renderClients(){
     +'</div>';
 
   // ── Нові CRM-клієнти ──────────────────────────────────────────────────────
+  S._listExportRows=[];  // джерело для exportClientsXlsx — наповнюється нижче
   var crmFiltered=crmOnlyIds.filter(function(id){
     var c=S.crm[id];
     if(S.searchQ&&c.name.toLowerCase().indexOf(S.searchQ.toLowerCase())<0) return false;
@@ -2300,6 +2303,9 @@ function renderClients(){
     crmFiltered.forEach(function(id){
       var c=S.crm[id];
       var phone=String(c.momPhone||c.dadPhone||'');
+      S._listExportRows.push({name:c.name||'',loc:c.loc||'',group:c.group||'',teacher:c.teacher||'',
+        bday:c.bday||'',contractDate:c.contractDate||'',statusText:'Новий клієнт',
+        fact:'',budget:'',debt:'',phone:phone});
       html+='<tr class="clickable" onclick="openChild('+escAttrJS(id)+','+escAttrJS(c.group||'')+','+escAttrJS(c.teacher||'')+','+escAttrJS(c.loc||'')+','+escAttrJS(c.name||'')+')">'
         +'<td><span class="child-link">'+esc(c.name)+'</span></td>'
         +'<td>'+esc(c.loc)+'</td>'
@@ -2379,6 +2385,9 @@ function renderClients(){
         var debtAmt=ch.status==='nopay'?budForStatus:(budForStatus>factForStatus?budForStatus-factForStatus:0);
         // Факт разом (навч + доп, без вступного)
         var factTotal=factForStatus;
+        S._listExportRows.push({name:ch.name||'',loc:ch.loc||loc.loc,group:ch.group||grp.group,
+          teacher:grp.teacher||'',bday:ch.bday||card.bday||'',contractDate:ch.contractDate||card.contractDate||'',
+          statusText:_payStatusText(ch.status),fact:factTotal,budget:budForStatus,debt:debtAmt,phone:phone});
         // Бюджет разом з розшифровкою
         var budStudy=ch.budgetStudy||0;
         var budExtra=ch.budgetExtra||0;
@@ -2482,10 +2491,13 @@ function renderDebts(){
     (S.groups[loc.loc]||[]).forEach(function(grp){
       grp.children.forEach(function(ch){
         var card=S.crm[ch.id]||{};
-        allRows.push(Object.assign({},ch,{phone:card.momPhone||card.dadPhone||''}));
+        allRows.push(Object.assign({},ch,{teacher:ch.teacher||grp.teacher||'',phone:card.momPhone||card.dadPhone||''}));
       });
     });
   });
+  // Джерело для exportDebtsXlsx — усі діти активних локацій (без фільтра статусу).
+  S._debtExportRows=allRows;
+  S._debtExportLoc=S.debtLoc||S.debtLocType||'';
 
   // ── статистика по activeLocs (ігноруємо S.debtStatus) ─────────────────────
   var totalDebt=0, totalCollected=0, totalPlan=0, debtorCount=0;
@@ -2549,6 +2561,7 @@ function renderDebts(){
     +'<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">'
     +(isHR()?'<select class="flt-sel" onchange="S.debtLoc=this.value;renderDebts()">'+locOpts+'</select>':'')
     +'<select class="flt-sel" onchange="S.debtStatus=this.value;renderDebts()">'+statusOpts+'</select>'
+    +'<button class="btn btn-secondary btn-sm" onclick="exportDebtsXlsx()" style="margin-left:auto;white-space:nowrap">📥 Excel</button>'
     +'</div></div></div>'
 
     // ── 2. STAT CARDS (рахуються по activeLocs, filterLabel показує що саме) ─
@@ -4024,6 +4037,65 @@ function showFloatMsg(msg){
   el.style.opacity='1';
   clearTimeout(el._t);
   el._t=setTimeout(function(){ el.style.opacity='0'; }, 2500);
+}
+
+// ── XLSX EXPORT (SheetJS) ──
+// sheets: [{name, aoa}]  aoa = масив рядків, рядок 0 = заголовки.
+function exportXlsx(filename,sheets){
+  if(typeof XLSX==='undefined'){ showFloatMsg('❌ Бібліотека XLSX не завантажена'); return; }
+  var wb=XLSX.utils.book_new();
+  (sheets||[]).forEach(function(s,i){
+    var ws=XLSX.utils.aoa_to_sheet(s.aoa&&s.aoa.length?s.aoa:[[]]);
+    XLSX.utils.book_append_sheet(wb,ws,String(s.name||('Аркуш'+(i+1))).slice(0,31));
+  });
+  XLSX.writeFile(wb,filename);
+}
+// "Голосієво_борги_2026-05-17.xlsx" — частини через "_", ISO-дата, безпечні символи.
+function mkXlsxName(loc,kind){
+  var d=new Date();
+  var iso=d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2);
+  return [loc,kind,iso].filter(Boolean).map(function(x){ return String(x).trim(); }).join('_')
+    .replace(/[\\/:*?"<>|]+/g,'_')+'.xlsx';
+}
+// Текстовий статус оплати дитини.
+function _payStatusText(st){
+  return {paid:'Оплачено',debt:'Борг',nopay:'Не оплачено',over:'Переплата',unknown:'—'}[st]||(st||'—');
+}
+
+// Експорт списку дітей у XLSX — бере рядки, зібрані renderClients (S._listExportRows).
+function exportClientsXlsx(){
+  var rows=S._listExportRows||[];
+  if(!rows.length){ showFloatMsg('❌ Немає даних (відкрийте список за місяць)'); return; }
+  var aoa=[['Ім\'я дитини','Локація','Група','Вихователь','Дата народження','Дата договору',
+            'Статус оплати','Факт (навч+доп)','Бюджет разом','Борг (грн)','Телефон']];
+  rows.forEach(function(r){
+    aoa.push([r.name,r.loc,r.group,r.teacher,r.bday,r.contractDate,
+              r.statusText,r.fact,r.budget,r.debt,r.phone]);
+  });
+  exportXlsx(mkXlsxName(S.listLoc||S.listLocType||'',' список_дітей'),
+             [{name:'Список дітей',aoa:aoa}]);
+  showFloatMsg('📥 Excel завантажено: '+rows.length+' дітей');
+}
+
+// Експорт боргів+оплат у XLSX — два аркуші з рядків, зібраних renderDebts (S._debtExportRows).
+function exportDebtsXlsx(){
+  var rows=S._debtExportRows||[];
+  if(!rows.length){ showFloatMsg('❌ Немає даних (відкрийте вкладку Борги)'); return; }
+  var header=['Ім\'я дитини','Локація','Група','Вихователь','Статус','Факт (навч+доп)',
+              'Бюджет разом','Борг (грн)','Телефон'];
+  function rowArr(ch){
+    var debt=ch.status==='nopay'?(ch.budget||0):(ch.debt||0);
+    return [ch.name,ch.loc,ch.group,ch.teacher||'',_payStatusText(ch.status),
+            ch.factTotal||0,ch.budget||0,debt,ch.phone||''];
+  }
+  var allAoa=[header].concat(rows.map(rowArr));
+  var debtors=rows.filter(function(ch){ return ch.status==='debt'||ch.status==='nopay'; });
+  var debtAoa=[header].concat(debtors.map(rowArr));
+  exportXlsx(mkXlsxName(S._debtExportLoc||'','борги_оплати'),[
+    {name:'Оплати (всі)',aoa:allAoa},
+    {name:'Борги',aoa:debtAoa}
+  ]);
+  showFloatMsg('📥 Excel: '+rows.length+' дітей, '+debtors.length+' боржників');
 }
 
 // Показати кнопку міграції якщо localStorage має старі дані (один раз)
