@@ -2867,6 +2867,81 @@ function getActivitiesCatalog(loc){
   }
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// Seed каталогу занять Голосієва у лист "Додаткові_Каталог".
+//   seedActivitiesCatalog()       — м'який режим: якщо Голосієво вже має
+//                                   заняття, НІЧОГО не чіпає (захист ручних
+//                                   правок з UI).
+//   seedActivitiesCatalogForce()  — force: перезаписує заняття Голосієва
+//                                   канонічними цифрами. Рядки інших локацій
+//                                   зберігаються незмінними.
+// Запускати ВРУЧНУ з Apps Script editor.
+// ───────────────────────────────────────────────────────────────────────────
+function seedActivitiesCatalog(force){
+  var sh = _getActivitiesSheet(true); // створить лист із шапкою якщо нема
+  var GOL = 'Голосієво';
+  var data = sh.getDataRange().getValues();
+
+  // Розділяємо наявні рядки даних: Голосієво vs інші локації.
+  var golRows = [], otherRows = [];
+  for (var r = 1; r < data.length; r++){
+    var row = data[r];
+    if (!row[2]) continue; // нема назви заняття — порожній рядок
+    var rowLoc = String(row[1] || '').trim();
+    if (rowLoc === GOL) golRows.push(row);
+    else                otherRows.push(_normCatalogRow(row));
+  }
+
+  if (golRows.length > 0 && !force){
+    Logger.log('[seedActivitiesCatalog] Голосієво вже має %s занять. Запусти seedActivitiesCatalogForce() щоб перезаписати.', golRows.length);
+    return {ok: true, skipped: true, existingGolosievoRows: golRows.length};
+  }
+
+  // Канонічні 10 занять Голосієва (Театр прибрано).
+  // Колонки: id | Локація | Заняття | Ціна_клієнту | Модель_ЗП_викладача |
+  //          Ставка_викладача | Викладач | Активне
+  var golCanonical = [
+    [1,  GOL, 'Лего',               280, 'За дитину',  150,  '', true],
+    [2,  GOL, 'Арт',                280, 'За заняття', 400,  '', true],
+    [3,  GOL, 'm.Dance',            230, 'За заняття', 400,  '', true],
+    [4,  GOL, 'Логопед',            520, 'За дитину',  350,  '', true],
+    [5,  GOL, 'Гончарство',         280, 'За дитину',  150,  '', true],
+    [6,  GOL, 'Айкідо',             300, 'За заняття', 1000, '', true],
+    [7,  GOL, 'Робототехніка',      420, 'За дитину',  250,  '', true],
+    [8,  GOL, 'Англійська групові', 280, 'За заняття', 280,  '', true],
+    [9,  GOL, 'Вокал індивід',      600, 'За дитину',  300,  '', true],
+    [10, GOL, 'Вокал група',        300, 'За заняття', 500,  '', true]
+  ];
+
+  var allRows = otherRows.concat(golCanonical);
+
+  // Очищаємо область даних і пишемо заново (шапка лишається у рядку 1).
+  var lastRow = sh.getLastRow();
+  if (lastRow > 1){
+    sh.getRange(2, 1, lastRow - 1, ACTIVITIES_HEADER.length).clearContent();
+  }
+  if (allRows.length){
+    sh.getRange(2, 1, allRows.length, ACTIVITIES_HEADER.length).setValues(allRows);
+  }
+
+  Logger.log('[seedActivitiesCatalog] Голосієво перезаписано: %s занять; інших локацій збережено: %s рядків (force=%s)', golCanonical.length, otherRows.length, !!force);
+  return {ok: true, seeded: golCanonical.length, keptOtherRows: otherRows.length, force: !!force};
+}
+
+// Apps Script editor не дозволяє передавати аргументи у Run — окремий wrapper.
+function seedActivitiesCatalogForce(){
+  return seedActivitiesCatalog(true);
+}
+
+// Нормалізує рядок каталогу до рівно ACTIVITIES_HEADER.length колонок.
+function _normCatalogRow(row){
+  var out = [];
+  for (var c = 0; c < ACTIVITIES_HEADER.length; c++){
+    out.push(row[c] !== undefined ? row[c] : '');
+  }
+  return out;
+}
+
 function _nextActivityId(sh){
   var data = sh.getDataRange().getValues();
   var max = 0;
@@ -3134,6 +3209,80 @@ function _getLocationPaymentRegistry(loc){
   return null;
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// EXPORT JOURNAL — лист "Експорт_Журнал" у CONFIG-таблиці.
+// Зберігає що ми попередньо записали по (loc, kind, name, targetYear, targetMonth).
+// Дозволяє підрахувати baseValue = currentCell - lastWritten (тобто ручні
+// поправки фінансиста: борг, переплата) і писати baseValue + newSum.
+// kind: 'payment' (Бюджет доп у Payment) | 'salary' (Budget викладача у Salary).
+// ───────────────────────────────────────────────────────────────────────────
+var EXPORT_JOURNAL_SHEET = 'Експорт_Журнал';
+
+function _getExportJournalSheet(){
+  var configSS = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var sh = configSS.getSheetByName(EXPORT_JOURNAL_SHEET);
+  if (!sh){
+    sh = configSS.insertSheet(EXPORT_JOURNAL_SHEET);
+    sh.getRange(1, 1, 1, 7).setValues([['loc','kind','name','year','month','last_written_sum','last_written_at']]);
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+
+function _journalNormName(s){
+  return String(s || '').replace(/[\s\u00A0]+/g, '').toLowerCase();
+}
+
+// Зчитує усі записи журналу для (loc, kind, year, month). Ключ — норм-ім'я.
+function _readJournalForTarget(loc, kind, year, month){
+  var sh = _getExportJournalSheet();
+  var data = sh.getDataRange().getValues();
+  var byNormName = {};
+  for (var r = 1; r < data.length; r++){
+    var row = data[r];
+    if (trim(String(row[0])) !== loc) continue;
+    if (trim(String(row[1])) !== kind) continue;
+    if (Number(row[3]) !== year) continue;
+    if (Number(row[4]) !== month) continue;
+    var nk = _journalNormName(row[2]);
+    byNormName[nk] = {
+      sum: Number(row[5]) || 0,
+      at:  row[6],
+      row: r + 1,            // 1-based — для adresування у setValues
+      nameInJournal: String(row[2] || '')
+    };
+  }
+  return {sheet: sh, byNormName: byNormName};
+}
+
+// Batch-апсерт записів у журналі. ops: [{nk, loc, kind, name, year, month, newSum}].
+function _commitJournalUpdates(journal, ops){
+  if (!ops || !ops.length) return;
+  var now = new Date();
+  var appends = [];
+  ops.forEach(function(op){
+    if (journal.byNormName.hasOwnProperty(op.nk)){
+      var entry = journal.byNormName[op.nk];
+      // last_written_sum (col 6) + last_written_at (col 7)
+      journal.sheet.getRange(entry.row, 6, 1, 2).setValues([[op.newSum, now]]);
+      entry.sum = op.newSum;
+      entry.at  = now;
+    } else {
+      appends.push([op.loc, op.kind, op.name, op.year, op.month, op.newSum, now]);
+    }
+  });
+  if (appends.length){
+    var startRow = journal.sheet.getLastRow() + 1;
+    journal.sheet.getRange(startRow, 1, appends.length, 7).setValues(appends);
+    // Оновлюємо in-memory мапу, щоб подальші виклики бачили нові рядки.
+    appends.forEach(function(a, i){
+      journal.byNormName[_journalNormName(a[2])] = {
+        sum: a[5], at: a[6], row: startRow + i, nameInJournal: a[2]
+      };
+    });
+  }
+}
+
 function exportAttendanceToPayments(params){
   try {
     var loc = String(params.loc || '').trim();
@@ -3230,24 +3379,90 @@ function exportAttendanceToPayments(params){
       }
     });
 
-    // === 5. Пишемо суму у Бюджет доп ===
+    // === 5. РОЗУМНЕ ПЕРЕЗАПИСУВАННЯ через журнал ===
+    // Для кожного child-рядка:
+    //   currentValue = поточне значення клітинки
+    //   lastWritten  = скільки ми поклали туди минулого разу (з журналу)
+    //   baseValue    = currentValue - lastWritten   (ручні поправки фінансиста)
+    //   newSum       = сума з sumPerChild або 0 якщо галочки зняті
+    //   newCell      = baseValue + newSum
+    // Журнал → нова newSum (lastWritten для наступного запуску).
+    //
+    // ⚠️ ПЕРШИЙ запуск після впровадження журналу: lastWritten=0, baseValue
+    //    дорівнює поточному значенню → подвоєння попередніх код-записаних сум.
+    //    Якщо колонка не порожня — обнули її руками одноразово перед запуском.
+    var lastSheetRow = paySh.getLastRow();
+    var colValues   = paySh.getRange(1, budgetDopCol1, lastSheetRow, 1).getValues();
+    var colFormulas = paySh.getRange(1, budgetDopCol1, lastSheetRow, 1).getFormulas();
+    var journal = _readJournalForTarget(loc, 'payment', nextM.year, nextM.month);
+    Logger.log('[exportAttendanceToPayments] journal: %s записів для (%s, payment, %s/%s)', Object.keys(journal.byNormName).length, loc, nextM.year, nextM.month);
+
+    var sumByNorm = {};
+    Object.keys(sumPerChild).forEach(function(childName){
+      sumByNorm[_normName(childName)] = {name: childName, sum: sumPerChild[childName]};
+    });
+
     var updated = 0;
     var totalAmount = 0;
     var details = [];
-    var notFound = [];
+    var matchedChildren = {};
+    var journalOps = [];
 
-    Object.keys(sumPerChild).forEach(function(childName){
-      var sum = sumPerChild[childName];
-      if (matchedRows.hasOwnProperty(childName)){
-        var rowIdx0 = matchedRows[childName];
-        paySh.getRange(rowIdx0 + 1, budgetDopCol1).setValue(sum);
-        updated++;
-        totalAmount += sum;
-        details.push({child: childName, sum: sum, row: rowIdx0 + 1, status: 'updated'});
-      } else {
-        notFound.push(childName);
-        details.push({child: childName, sum: sum, status: 'not-found-in-payment'});
+    Object.keys(paymentByNorm).forEach(function(nk){
+      var rowIdx0 = paymentByNorm[nk];
+      if (colFormulas[rowIdx0] && colFormulas[rowIdx0][0]){
+        Logger.log('[exportAttendanceToPayments] SKIP-FORMULA row %s: %s', rowIdx0 + 1, colFormulas[rowIdx0][0]);
+        return;
       }
+      var paymentName  = trim(String(data[rowIdx0][0] || ''));
+      var currentValue = Number(colValues[rowIdx0][0]) || 0;
+      var je           = journal.byNormName[nk];
+      var lastWritten  = je ? je.sum : 0;
+      var baseValue    = currentValue - lastWritten;
+      var match        = sumByNorm[nk];
+      var newSum       = match ? match.sum : 0;
+      var newValue     = baseValue + newSum;
+      colValues[rowIdx0][0] = newValue;
+
+      if (newSum !== lastWritten){
+        journalOps.push({
+          nk: nk, loc: loc, kind: 'payment', name: paymentName,
+          year: nextM.year, month: nextM.month, newSum: newSum
+        });
+      }
+
+      if (match){
+        matchedRows[match.name] = rowIdx0;
+        matchedChildren[match.name] = true;
+        updated++;
+        totalAmount += newSum;
+        details.push({
+          child: match.name, sum: newSum,
+          currentBefore: currentValue, lastWritten: lastWritten,
+          baseValue: baseValue, newCell: newValue,
+          row: rowIdx0 + 1, status: 'updated'
+        });
+        Logger.log('[exportAttendanceToPayments] WRITE row=%s "%s" cur=%s last=%s base=%s newSum=%s → %s', rowIdx0 + 1, paymentName, currentValue, lastWritten, baseValue, newSum, newValue);
+      } else if (lastWritten !== 0){
+        details.push({
+          child: paymentName, sum: 0,
+          currentBefore: currentValue, lastWritten: lastWritten,
+          baseValue: baseValue, newCell: newValue,
+          row: rowIdx0 + 1, status: 'cleared'
+        });
+        Logger.log('[exportAttendanceToPayments] CLEAR row=%s "%s" cur=%s last=%s base=%s → %s (відмітки зняті)', rowIdx0 + 1, paymentName, currentValue, lastWritten, baseValue, newValue);
+      }
+    });
+
+    paySh.getRange(1, budgetDopCol1, lastSheetRow, 1).setValues(colValues);
+    Logger.log('[exportAttendanceToPayments] column write: %s рядків × col %s', lastSheetRow, budgetDopCol1);
+
+    _commitJournalUpdates(journal, journalOps);
+    Logger.log('[exportAttendanceToPayments] journal upsert: %s op(s)', journalOps.length);
+
+    var notFound = Object.keys(sumPerChild).filter(function(n){ return !matchedChildren[n]; });
+    notFound.forEach(function(n){
+      details.push({child: n, sum: sumPerChild[n], status: 'not-found-in-payment'});
     });
     Logger.log('[exportAttendanceToPayments] DONE: updated=%s, totalAmount=%s, notFound=%s', updated, totalAmount, JSON.stringify(notFound));
 
@@ -3326,6 +3541,9 @@ function exportToSalaryExtras(params){
     var nmm = nextM.month < 10 ? '0' + nextM.month : String(nextM.month);
     var dateTo = nextM.year + '-' + nmm + '-01';
 
+    Logger.log('[exportToSalaryExtras] START loc="%s" month=%s year=%s; фільтр [%s..%s)', loc, month, year, dateFrom, dateTo);
+    Logger.log('[exportToSalaryExtras] каталог: allActive=%s, withRate=%s, skipped=%s', allActive.length, withRate.length, JSON.stringify(skipped));
+
     var byActId = {};
     for (var i = 1; i < attData.length; i++){
       var rec = _parseAttendanceRow(attData[i]);
@@ -3336,6 +3554,14 @@ function exportToSalaryExtras(params){
       byActId[rec.activityId].dates[rec.date] = true;
     }
 
+    // Резолвимо activityId → назва (для діагностики) з каталогу.
+    var idToName = {};
+    allActive.forEach(function(a){ idToName[a.id] = a.name; });
+    var attendanceKeys = Object.keys(byActId).map(function(id){
+      return (idToName[id] || ('id=' + id)) + ' ×' + byActId[id].count + ' (днів ' + Object.keys(byActId[id].dates).length + ')';
+    });
+    Logger.log('[exportToSalaryExtras] byActId (заняття з відмітками): %s', JSON.stringify(attendanceKeys));
+
     var factByName = {};
     withRate.forEach(function(a){
       var stat = byActId[a.id] || {count: 0, dates: {}};
@@ -3345,8 +3571,15 @@ function exportToSalaryExtras(params){
       } else if (a.teacherModel === 'За заняття'){
         fact = Object.keys(stat.dates).length * a.teacherRate;
       }
-      factByName[a.name.toLowerCase()] = {fact: fact, name: a.name, hasMarks: stat.count > 0};
+      // Ключ — нормалізована назва (lowercase + без whitespace), як у Payment.
+      factByName[_journalNormName(a.name)] = {fact: fact, name: a.name, hasMarks: stat.count > 0};
     });
+
+    var factByActivity = {};
+    Object.keys(factByName).forEach(function(ln){
+      factByActivity[factByName[ln].name] = factByName[ln].fact;
+    });
+    Logger.log('[exportToSalaryExtras] factByActivity (ЗП по заняттях): %s', JSON.stringify(factByActivity));
 
     // === 3. Відкриваємо Salary файл локації ===
     var reg = _salaryGetRegistry();
@@ -3368,29 +3601,105 @@ function exportToSalaryExtras(params){
     var targetMonth = nextM.month; // 1-12
     var budgetCol = (targetMonth - 1) * 3 + 3; // 1-based: для січня = 3, для лютого = 6 ...
     var targetMonthName = MONTHS_CAL_UA[targetMonth - 1];
+    Logger.log('[exportToSalaryExtras] Salary файл "%s" → лист "%s", lastRow=%s', entry.sheetId, entry.listName, lastRow);
+    Logger.log('[exportToSalaryExtras] targetMonth=%s (%s), budgetCol=%s (1-based)', targetMonth, targetMonthName, budgetCol);
+
+    // Діагностика: перші 20 рядків колонки A Salary-листа (з номерами рядків).
+    var salaryRowNames = [];
+    for (var sn = 0; sn < names.length && sn < 20; sn++){
+      salaryRowNames.push('row' + (sn + 1) + ': "' + String(names[sn][0] || '') + '"');
+    }
+    Logger.log('[exportToSalaryExtras] salaryRowNames (перші 20): %s', JSON.stringify(salaryRowNames));
 
     var updated = 0, totalFact = 0;
     var notFound = [];
     var details = [];
 
-    Object.keys(factByName).forEach(function(lname){
-      var info = factByName[lname];
-      // Шукаємо рядок з назвою заняття (Лего, Арт, m.Dance, ...)
-      var rowFound = -1;
-      for (var k = 3; k < names.length; k++){
-        var rname = String(names[k][0] || '').trim().toLowerCase();
-        if (rname === lname){ rowFound = k + 1; break; }
+    // Карта нормалізована-назва → 1-based row у Salary-листі (прохід по A-колонці).
+    // Нормалізація толерантна: "m. Dance" і "m.Dance" → "m.dance".
+    var actRowByLname = {};
+    for (var k = 3; k < names.length; k++){
+      var rname = _journalNormName(names[k][0]);
+      if (rname && !actRowByLname.hasOwnProperty(rname)){
+        actRowByLname[rname] = k + 1;
       }
-      if (rowFound > 0){
-        sheet.getRange(rowFound, budgetCol).setValue(info.fact);
+    }
+    Logger.log('[exportToSalaryExtras] actRowByLname (рядки занять, від row4): %s', JSON.stringify(actRowByLname));
+
+    // === РОЗУМНЕ ПЕРЕЗАПИСУВАННЯ через журнал (kind=salary) ===
+    // baseValue = currentCell - lastWritten; newCell = baseValue + newFact.
+    // Дивись коментар у exportAttendanceToPayments — та сама логіка.
+    var budgetColValues   = sheet.getRange(1, budgetCol, lastRow, 1).getValues();
+    var budgetColFormulas = sheet.getRange(1, budgetCol, lastRow, 1).getFormulas();
+    var journal = _readJournalForTarget(loc, 'salary', nextM.year, nextM.month);
+    Logger.log('[exportToSalaryExtras] journal: %s записів для (%s, salary, %s/%s)', Object.keys(journal.byNormName).length, loc, nextM.year, nextM.month);
+
+    var journalOps = [];
+
+    // Ідемо по всіх АКТИВНИХ заняттях каталогу (а не лише по withRate) —
+    // інакше якщо викладача прибрали з активних, попередня сума не очиститься.
+    allActive.forEach(function(a){
+      var lname = _journalNormName(a.name);
+      var rowFound = actRowByLname[lname] || -1;
+      if (rowFound <= 0){
+        // Активність є у каталозі, але рядка у Salary-листі для неї нема.
+        // Записувати ні куди. Лиш діагностика.
+        if (factByName.hasOwnProperty(lname)){
+          notFound.push(factByName[lname].name);
+          details.push({activity: factByName[lname].name, fact: factByName[lname].fact, status: 'not-in-salary'});
+        }
+        return;
+      }
+      var rowIdx0 = rowFound - 1;
+      if (budgetColFormulas[rowIdx0] && budgetColFormulas[rowIdx0][0]){
+        Logger.log('[exportToSalaryExtras] SKIP-FORMULA row %s: %s', rowFound, budgetColFormulas[rowIdx0][0]);
+        return;
+      }
+      var nk           = lname; // нормалізована назва — спільний ключ
+      var currentValue = Number(budgetColValues[rowIdx0][0]) || 0;
+      var je           = journal.byNormName[nk];
+      var lastWritten  = je ? je.sum : 0;
+      var baseValue    = currentValue - lastWritten;
+      var info         = factByName[lname]; // може бути undefined якщо у заняття немає rate
+      var newFact      = info ? info.fact : 0;
+      var newValue     = baseValue + newFact;
+      budgetColValues[rowIdx0][0] = newValue;
+
+      if (newFact !== lastWritten){
+        journalOps.push({
+          nk: nk, loc: loc, kind: 'salary', name: a.name,
+          year: nextM.year, month: nextM.month, newSum: newFact
+        });
+      }
+
+      if (info){
         updated++;
-        totalFact += info.fact;
-        details.push({activity: info.name, fact: info.fact, status: 'updated', row: rowFound});
-      } else {
-        notFound.push(info.name);
-        details.push({activity: info.name, fact: info.fact, status: 'not-in-salary'});
+        totalFact += newFact;
+        details.push({
+          activity: info.name, fact: newFact,
+          currentBefore: currentValue, lastWritten: lastWritten,
+          baseValue: baseValue, newCell: newValue,
+          row: rowFound, status: 'updated'
+        });
+        Logger.log('[exportToSalaryExtras] WRITE row=%s "%s" cur=%s last=%s base=%s newFact=%s → %s', rowFound, a.name, currentValue, lastWritten, baseValue, newFact, newValue);
+      } else if (lastWritten !== 0){
+        details.push({
+          activity: a.name, fact: 0,
+          currentBefore: currentValue, lastWritten: lastWritten,
+          baseValue: baseValue, newCell: newValue,
+          row: rowFound, status: 'cleared'
+        });
+        Logger.log('[exportToSalaryExtras] CLEAR row=%s "%s" cur=%s last=%s base=%s → %s', rowFound, a.name, currentValue, lastWritten, baseValue, newValue);
       }
     });
+
+    sheet.getRange(1, budgetCol, lastRow, 1).setValues(budgetColValues);
+    Logger.log('[exportToSalaryExtras] column write: %s рядків × col %s', lastRow, budgetCol);
+
+    _commitJournalUpdates(journal, journalOps);
+    Logger.log('[exportToSalaryExtras] journal upsert: %s op(s)', journalOps.length);
+
+    Logger.log('[exportToSalaryExtras] DONE: updated=%s, totalFact=%s, notFound=%s', updated, totalFact, JSON.stringify(notFound));
 
     return {
       ok: true,
@@ -3401,11 +3710,45 @@ function exportToSalaryExtras(params){
       details:  details,
       loc: loc,
       sourceMonth: monthName,       // травень
-      targetMonth: targetMonthName  // червень
+      targetMonth: targetMonthName, // червень
+      // === діагностика ===
+      targetMonthNum: targetMonth,
+      budgetCol: budgetCol,
+      attendanceKeys: attendanceKeys,
+      factByActivity: factByActivity,
+      salaryRowNames: salaryRowNames,
+      actRowByLname: actRowByLname,
+      allActiveCount: allActive.length,
+      withRateCount: withRate.length
     };
   } catch(e){
+    Logger.log('[exportToSalaryExtras] EXCEPTION: %s\n%s', e && e.message, e && e.stack);
     return {ok: false, error: String(e && e.message || e)};
   }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Тест: запусти вручну з Apps Script editor (View → Executions → дивись Логи).
+// Викликає exportToSalaryExtras({loc:"Голосієво", month:6, year:2026}) і логує
+// усі ключові поля окремо.
+// ───────────────────────────────────────────────────────────────────────────
+function testExportSalaryVolkov(){
+  var result = exportToSalaryExtras({loc: 'Голосієво', month: 6, year: 2026});
+  Logger.log('[testExportSalaryVolkov] result JSON: %s', JSON.stringify(result, null, 2));
+  Logger.log('[testExportSalaryVolkov] error          = %s', result && result.error);
+  Logger.log('[testExportSalaryVolkov] updated        = %s', result && result.updated);
+  Logger.log('[testExportSalaryVolkov] totalFact      = %s', result && result.totalFact);
+  Logger.log('[testExportSalaryVolkov] targetMonth    = %s (num %s)', result && result.targetMonth, result && result.targetMonthNum);
+  Logger.log('[testExportSalaryVolkov] budgetCol      = %s', result && result.budgetCol);
+  Logger.log('[testExportSalaryVolkov] attendanceKeys = %s', JSON.stringify(result && result.attendanceKeys));
+  Logger.log('[testExportSalaryVolkov] factByActivity = %s', JSON.stringify(result && result.factByActivity));
+  Logger.log('[testExportSalaryVolkov] salaryRowNames = %s', JSON.stringify(result && result.salaryRowNames));
+  Logger.log('[testExportSalaryVolkov] actRowByLname  = %s', JSON.stringify(result && result.actRowByLname));
+  Logger.log('[testExportSalaryVolkov] allActiveCount = %s, withRateCount = %s', result && result.allActiveCount, result && result.withRateCount);
+  Logger.log('[testExportSalaryVolkov] notFound       = %s', JSON.stringify(result && result.notFound));
+  Logger.log('[testExportSalaryVolkov] skipped        = %s', JSON.stringify(result && result.skipped));
+  Logger.log('[testExportSalaryVolkov] details        = %s', JSON.stringify(result && result.details));
+  return result;
 }
 
 function exportAttendance(params){

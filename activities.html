@@ -273,7 +273,7 @@ select,input,textarea{font-family:inherit}
 .toast{position:fixed;left:50%;bottom:30px;transform:translateX(-50%);
   background:#1f2937;color:#fff;padding:12px 22px;border-radius:10px;
   font-size:14px;font-weight:600;box-shadow:0 6px 24px rgba(0,0,0,.18);
-  z-index:1100;max-width:90vw}
+  z-index:1100;max-width:90vw;white-space:pre-line}
 .toast.toast-ok  {background:#10b981}
 .toast.toast-err {background:#ef4444}
 .toast.toast-info{background:#3b82f6}
@@ -2999,15 +2999,27 @@ async function doExportAttendance(loc, month, year, manual){
     setSyncState('ok', '✅ Пейменти: ' + pMsg + ' · Salary: ' + sMsg);
     _pushLog(json.ok ? 'ok' : 'err', loc, 'П:' + pMsg + ' · S:' + sMsg);
 
+    // Заняття, яких бракує у Salary-файлі — викладач не отримає ЗП поки
+    // рядок не додано. Попереджаємо явно (і в manual, і в auto-режимі).
+    var salaryNotFound = (s.notFound && s.notFound.length) ? s.notFound : null;
+    var salaryWarnLine = salaryNotFound
+      ? '⚠️ Додай у Salary файл: ' + salaryNotFound.join(', ')
+      : '';
+
     if (manual){
       var toastMsg = '✅ Експортовано: ' + pMsg + ' (Пейменти) · ' + sMsg + ' (Salary)';
       var warns = [];
       if (p.notFound && p.notFound.length) warns.push('⚠️ ' + p.notFound.length + ' дітей не в Пейментах');
-      if (s.notFound && s.notFound.length) warns.push('⚠️ ' + s.notFound.length + ' занять не в Salary');
+      if (salaryNotFound)                  warns.push('⚠️ ' + salaryNotFound.length + ' занять не в Salary');
       if (s.skipped  && s.skipped.length)  warns.push('⚠️ ' + s.skipped.length + ' без ставки');
       if (warns.length) toastMsg += ' · ' + warns.join(' · ');
-      showToast(toastMsg, (p.ok && s.ok) ? 'ok' : 'info', 7000);
+      if (salaryWarnLine) toastMsg += '\n' + salaryWarnLine;
+      showToast(toastMsg, (p.ok && s.ok) ? 'ok' : 'info', salaryNotFound ? 10000 : 7000);
       _renderExportLog(json);
+    } else if (salaryWarnLine){
+      // Auto-експорт зазвичай тихий, але про відсутні у Salary заняття
+      // показуємо toast — інакше пропуск ЗП лишиться непоміченим.
+      showToast('Salary: ' + sMsg + '\n' + salaryWarnLine, 'info', 10000);
     }
     return json;
   } catch(e){
