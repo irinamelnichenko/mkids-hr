@@ -1209,6 +1209,8 @@ function toggleMark(btn){
 function _afterToggle(){
   if ($('attCounter')) $('attCounter').textContent = S.marks.length + ' відміток · ' + S.attGroup;
   drawAttSummary(_activeSubjects());
+  // Після кожної відмітки запускаємо debounce 5с на авто-експорт у Salary.
+  scheduleAutoExportPredmetny();
 }
 
 // Підсумок під таблицею: скільки дітей відмічено по кожному предмету.
@@ -1318,19 +1320,92 @@ function exportAnalyticsXlsx(){
   exportXlsx(mkXlsxName(S.loc,'предметники_' + MONTHS[S.anaMonth] + '_' + S.anaYear),
     [{name:'Предметники', aoa:aoa}]);
 }
+// Ручний експорт з вкладки «Аналітика» — кнопка «💰 Експорт у Salary».
 function exportToSalary(){
   if (!confirm('Експортувати ЗП предметників за ' + MONTHS[S.anaMonth] + ' ' + S.anaYear
     + ' у Salary-файл локації ' + S.loc + '?\nЗапис іде у Budget наступного місяця.')) return;
-  showToast('🔄 Експорт у Salary…', 'info');
-  apiPost({action:'exportPredmetnyToSalary', loc:S.loc, month:S.anaMonth + 1, year:S.anaYear})
+  doExportPredmetny(S.loc, S.anaMonth + 1, S.anaYear, true);
+}
+
+// ── AUTO-EXPORT (debounce 5с) ───────────────
+// Аналог scheduleAutoExport з activities.html. Після кожної відмітки
+// чекаємо 5с тиші — потім автоматично штовхаємо ЗП предметників у
+// Salary-файл. Кожна нова відмітка скидає таймер.
+var EXP = { pendingTimer:null, countdownTimer:null, pendingFor:null, pendingUntil:0 };
+
+function scheduleAutoExportPredmetny(){
+  if (!hasPerm('predmetnyky')) return;
+  var loc = S.loc;
+  if (!loc) return;
+  // Місяць/рік беремо з дати відмітки (S.attDate), а не з системного
+  // календаря — інакше відмітка на інший місяць не потрапить у фільтр.
+  var d = String(S.attDate || '');
+  var month = Number(d.slice(5,7)) || (new Date().getMonth() + 1);
+  var year  = Number(d.slice(0,4)) || new Date().getFullYear();
+
+  if (EXP.pendingTimer)   clearTimeout(EXP.pendingTimer);
+  if (EXP.countdownTimer) clearInterval(EXP.countdownTimer);
+
+  EXP.pendingFor   = {loc:loc, month:month, year:year};
+  EXP.pendingUntil = Date.now() + 5000;
+
+  setSync('pending', '⏳ Експорт у Salary через 5с…');
+  EXP.countdownTimer = setInterval(function(){
+    var rem = Math.max(0, Math.ceil((EXP.pendingUntil - Date.now()) / 1000));
+    if (rem <= 0){ clearInterval(EXP.countdownTimer); EXP.countdownTimer = null; return; }
+    setSync('pending', '⏳ Експорт у Salary через ' + rem + 'с…');
+  }, 500);
+
+  EXP.pendingTimer = setTimeout(function(){
+    EXP.pendingTimer = null;
+    if (EXP.countdownTimer){ clearInterval(EXP.countdownTimer); EXP.countdownTimer = null; }
+    var spec = EXP.pendingFor;
+    EXP.pendingFor = null;
+    if (spec) doExportPredmetny(spec.loc, spec.month, spec.year, false);
+  }, 5000);
+}
+
+// Виклик exportPredmetnyToSalary на бекенді. Працює і для auto (manual=false),
+// і для ручної кнопки (manual=true). Власноруч керує sync-індикатором, тому
+// йде через прямий fetch, а не apiPost (який має власний setSync).
+function doExportPredmetny(loc, month, year, manual){
+  if (!hasPerm('predmetnyky')){
+    if (manual) showToast('Немає прав на експорт', 'err');
+    return Promise.resolve(null);
+  }
+  setSync('syncing', '🔄 Експорт ЗП предметників у Salary…');
+  return fetch(CFG.SCRIPT_URL, {
+    method:'POST', redirect:'follow',
+    headers:{'Content-Type':'text/plain;charset=utf-8'},
+    body:JSON.stringify({action:'exportPredmetnyToSalary', loc:loc, month:month, year:year})
+  }).then(function(r){ return r.json(); })
     .then(function(res){
-      if (!res || !res.ok){ showToast('❌ ' + ((res && res.error) || 'Помилка експорту'), 'err'); return; }
-      var msg = '✅ Salary: ' + res.updated + ' предметів · ' + fmtN(res.totalFact) + ' ₴';
-      if (res.notFound && res.notFound.length){
-        msg += '\n⚠️ Немає рядка у Salary: ' + res.notFound.join(', ');
+      if (!res || !res.ok){
+        var em = (res && res.error) || 'Помилка експорту';
+        setSync('err', '❌ Salary: ' + em);
+        if (manual) showToast('❌ Експорт у Salary: ' + em, 'err', 7000);
+        return res;
       }
-      showToast(msg, res.notFound && res.notFound.length ? 'info' : 'ok');
-    }).catch(function(){ showToast('❌ Помилка мережі', 'err'); });
+      var sum  = fmtN(res.totalFact || 0);
+      var sMsg = (res.updated || 0) + ' предметів = ' + sum + ' ₴';
+      var notFound = (res.notFound && res.notFound.length) ? res.notFound : null;
+      setSync('ok', '✅ Salary: ' + sMsg);
+      var toastMsg = '✅ Salary (' + MONTHS[month - 1] + ' ' + year + '): ' + sMsg;
+      if (notFound) toastMsg += '\n⚠️ Немає рядка у Salary: ' + notFound.join(', ');
+      showToast(toastMsg, notFound ? 'info' : 'ok', notFound ? 10000 : 6000);
+      return res;
+    })
+    .catch(function(e){
+      var em = String(e && e.message || e);
+      var unknown = /unknown action/i.test(em);
+      setSync('err', unknown
+        ? '⚠️ Експорт недоступний (потрібен деплой Apps Script)'
+        : '❌ Помилка експорту');
+      if (manual) showToast(unknown
+        ? '⚠️ Авто-експорт недоступний — потрібен деплой Apps Script.'
+        : '❌ Помилка мережі: ' + em, 'err', 7000);
+      return null;
+    });
 }
 
 // ── INIT ────────────────────────────────────
