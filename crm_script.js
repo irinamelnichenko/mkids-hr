@@ -4778,18 +4778,29 @@ function deleteTask(taskId, actorId){
     var actor = Number(actorId) || 0;
     var sh = _getTasksSheet(true);
     var data = sh.getDataRange().getValues();
+
+    // Знаходимо задачу.
+    var found = null;
     for (var i=1;i<data.length;i++){
-      if (Number(data[i][0]) === nid){
-        var t = _parseTaskRow(data[i]);
-        if (t.author !== actor) return {ok:false, error:'Видалити може лише автор'};
-        sh.getRange(i+1, 10).setValue('deleted');
-        _getTaskActSheet(true).appendRow(
-          [_nextTaskRowId(_getTaskActSheet(true)), nid, actor,
-           'status_change', 'deleted', '', _taskNow()]);
-        return {ok:true};
-      }
+      if (Number(data[i][0]) === nid){ found = _parseTaskRow(data[i]); break; }
     }
-    return {ok:false, error:'Задачу не знайдено'};
+    if (!found) return {ok:false, error:'Задачу не знайдено'};
+    if (found.author !== actor) return {ok:false, error:'Видалити може лише автор'};
+
+    // Групова задача (є group_id) — видаляємо ВСІ копії групи, інакше лише цю.
+    var actSh = _getTaskActSheet(true);
+    var deleted = 0;
+    for (var j=1;j<data.length;j++){
+      var t = _parseTaskRow(data[j]);
+      if (t.status === 'deleted') continue;
+      var inScope = found.groupId ? (t.groupId === found.groupId) : (t.id === nid);
+      if (!inScope || t.author !== actor) continue;
+      sh.getRange(j+1, 10).setValue('deleted');   // колонка status
+      actSh.appendRow([_nextTaskRowId(actSh), t.id, actor,
+                       'status_change', 'deleted', '', _taskNow()]);
+      deleted++;
+    }
+    return {ok:true, deleted:deleted};
   } catch(e){
     return {ok:false, error:String(e && e.message || e)};
   }
