@@ -541,7 +541,7 @@ var MONTHS = ['Січень','Лютий','Березень','Квітень','�
 var S = {
   user:null, mode:'catalog', loc:'',
   locations:[], catalog:[], clients:[], marks:[],
-  attDate:'', attSubjectId:0,
+  attDate:'', attGroup:'',
   anaMonth:new Date().getMonth(), anaYear:new Date().getFullYear(),
   _anaRows:null, modalId:0
 };
@@ -901,7 +901,7 @@ function loadMarks(filters){
 // ── LOCATION / MODE ─────────────────────────
 function onLocChange(){
   S.loc = $('globalLocSel').value;
-  S.catalog = []; S.clients = []; S.marks = []; S.attSubjectId = 0;
+  S.catalog = []; S.clients = []; S.marks = []; S.attGroup = '';
   loadCatalog().then(render);
 }
 function switchMode(m){
@@ -1006,42 +1006,61 @@ function delPredmetny(id){
 }
 
 // ===== ВІДВІДУВАНІСТЬ =====
+// Матричний UI як у activities.html: рядки — діти групи,
+// колонки — усі активні предмети каталогу локації.
 function renderAttendance(){
-  var active = S.catalog.filter(function(a){ return a.active; });
-  if (!S.attSubjectId && active.length) S.attSubjectId = active[0].id;
-  var subjOpts = active.map(function(a){
-    return '<option value="' + a.id + '"' + (a.id === S.attSubjectId ? ' selected' : '') + '>'
-      + escapeHtml(a.subject) + '</option>';
-  }).join('');
   var html = '<div class="att-filters">'
     + '<div class="att-fg"><label>📅 Дата</label>'
-      + '<input type="date" value="' + S.attDate + '" onchange="S.attDate=this.value;reloadAttBoard()"></div>'
-    + '<div class="att-fg"><label>📚 Предмет</label>'
-      + '<select onchange="S.attSubjectId=+this.value;reloadAttBoard()">' + subjOpts + '</select></div>'
+      + '<input type="date" id="attDate" value="' + S.attDate + '"></div>'
+    + '<div class="att-fg"><label>📍 Локація</label>'
+      + '<input type="text" value="' + escapeHtml(S.loc || '—') + '" disabled></div>'
+    + '<div class="att-fg"><label>👶 Група</label>'
+      + '<select id="attGroupSel"><option value="">— оберіть —</option></select></div>'
+    + '<div class="att-counter" id="attCounter">—</div>'
     + '</div>'
-    + '<div class="card"><div class="card-bd pad" id="attBoard">'
-      + '<div class="loading"><div class="spinner"></div><div>Завантаження…</div></div>'
-    + '</div></div>';
+    + '<div id="attHint" class="att-hint hidden"></div>'
+    + '<div id="attBoard" class="att-board hidden">'
+      + '<div class="att-acts-hd" id="attActsHd"></div>'
+      + '<div class="att-rows" id="attRows"></div>'
+    + '</div>'
+    + '<div id="attSummary" class="att-summary hidden">'
+      + '<div class="att-sum-card">'
+        + '<div class="att-sum-hd">📊 Підсумок за предметом</div>'
+        + '<div class="att-sum-body" id="attSumBySubj"></div>'
+      + '</div>'
+    + '</div>'
+    + '<div id="attLoading" class="loading hidden"><div class="spinner"></div><div>Завантаження…</div></div>';
   $('main').innerHTML = html;
-  if (!active.length){
-    $('attBoard').innerHTML = '<div class="coming"><div class="coming-ic">📚</div>'
-      + '<div class="coming-h">Немає активних предметів</div>'
-      + '<div class="coming-p">Спочатку додайте предмети у вкладці «Каталог».</div></div>';
-    return;
-  }
+  $('attDate').addEventListener('change', function(){ S.attDate = this.value; reloadAttBoard(); });
+  $('attGroupSel').addEventListener('change', function(){ S.attGroup = this.value; drawAttBoard(); });
   reloadAttBoard();
 }
+
 function reloadAttBoard(){
-  var board = $('attBoard');
-  if (!board) return;
-  board.innerHTML = '<div class="loading"><div class="spinner"></div><div>Завантаження…</div></div>';
+  if ($('attLoading'))  $('attLoading').classList.remove('hidden');
+  if ($('attBoard'))    $('attBoard').classList.add('hidden');
+  if ($('attSummary'))  $('attSummary').classList.add('hidden');
+  if ($('attHint'))     $('attHint').classList.add('hidden');
   loadClients().then(function(){
     return loadMarks({loc:S.loc, date:S.attDate});
   }).then(function(marks){
     S.marks = marks;
+    populateGroupSel();
     drawAttBoard();
   });
 }
+
+function populateGroupSel(){
+  var sel = $('attGroupSel'); if (!sel) return;
+  var byGroup = _attChildrenByGroup();
+  var names = Object.keys(byGroup).sort(function(a,b){ return a.localeCompare(b,'uk'); });
+  sel.innerHTML = '<option value="">— оберіть —</option>' + names.map(function(g){
+    return '<option value="' + escapeHtml(g) + '">' + escapeHtml(g) + ' (' + byGroup[g].length + ')</option>';
+  }).join('');
+  if (S.attGroup && names.indexOf(S.attGroup) !== -1){ sel.value = S.attGroup; }
+  else { S.attGroup = ''; sel.value = ''; }
+}
+
 function _attChildrenByGroup(){
   var byGroup = {};
   S.clients.forEach(function(c){
@@ -1055,68 +1074,156 @@ function _attChildrenByGroup(){
   });
   return byGroup;
 }
+
+function _activeSubjects(){
+  return S.catalog.filter(function(a){ return a.active; })
+    .sort(function(a,b){ return String(a.subject).localeCompare(String(b.subject),'uk'); });
+}
+
+function _attHint(msg){
+  if ($('attLoading')) $('attLoading').classList.add('hidden');
+  if ($('attBoard'))   $('attBoard').classList.add('hidden');
+  if ($('attSummary')) $('attSummary').classList.add('hidden');
+  var h = $('attHint');
+  if (h){ h.textContent = msg; h.classList.remove('hidden'); }
+}
+
 function drawAttBoard(){
-  var board = $('attBoard'); if (!board) return;
-  var subj = S.catalog.filter(function(a){ return a.id === S.attSubjectId; })[0];
-  if (!subj){ board.innerHTML = '<div class="empty">Оберіть предмет.</div>'; return; }
-  var byGroup = _attChildrenByGroup();
-  var groups = Object.keys(byGroup).sort(function(a,b){ return a.localeCompare(b,'uk'); });
-  if (!groups.length){
-    board.innerHTML = '<div class="empty">Немає дітей для локації ' + escapeHtml(S.loc) + '.</div>';
+  if ($('attLoading')) $('attLoading').classList.add('hidden');
+  var subjects = _activeSubjects();
+  var byGroup  = _attChildrenByGroup();
+  var groupNames = Object.keys(byGroup);
+
+  if (!subjects.length){
+    _attHint('⚠️ У каталозі немає активних предметів для локації "' + S.loc + '". Додайте у вкладці «Каталог».');
     return;
   }
-  var markByChild = {};
-  S.marks.forEach(function(m){
-    if (m.subjectId === S.attSubjectId) markByChild[m.child] = m;
+  if (!groupNames.length){
+    _attHint('⚠️ Немає дітей для локації "' + S.loc + '".');
+    return;
+  }
+  if (!S.attGroup){
+    _attHint('👉 Оберіть групу зі списку, щоб побачити матрицю відвідуваності.');
+    return;
+  }
+
+  var kids = (byGroup[S.attGroup] || []).slice()
+    .sort(function(a,b){ return a.localeCompare(b,'uk'); });
+
+  // grid: ім'я дитини + N колонок предметів
+  var n = subjects.length;
+  var grid = 'grid-template-columns: minmax(180px,1fr) repeat(' + n + ', minmax(64px,84px))';
+
+  // Заголовок (предмети як колонки)
+  var hd = $('attActsHd');
+  hd.setAttribute('style', grid);
+  var hdHtml = '<div></div>';
+  subjects.forEach(function(s){
+    hdHtml += '<div class="att-act-h" title="' + escapeHtml(s.subject) + ' · ' + fmtN(s.rate) + ' ₴">'
+      + escapeHtml(s.subject)
+      + '<br><span style="color:var(--green);font-weight:800">' + fmtN(s.rate) + '₴</span></div>';
   });
-  var html = '<div class="muted" style="margin-bottom:10px">Предмет: <b>' + escapeHtml(subj.subject)
-    + '</b> · ставка ' + fmtN(subj.rate) + ' ₴/заняття · дата ' + escapeHtml(S.attDate) + '</div>';
-  groups.forEach(function(grp){
-    var kids = byGroup[grp].slice().sort(function(a,b){ return a.localeCompare(b,'uk'); });
-    var marked = kids.filter(function(n){ return markByChild[n]; }).length;
-    html += '<div class="grp-title">👥 ' + escapeHtml(grp)
-      + ' <span class="muted" style="font-weight:400">(' + marked + '/' + kids.length + ' відмічено)</span></div>';
-    kids.forEach(function(name){
-      var m = markByChild[name];
-      html += '<div class="chk-row">'
-        + '<input type="checkbox" ' + (m ? 'checked' : '')
-        + ' onchange="toggleMark(this,' + JSON.stringify(grp).replace(/"/g,'&quot;') + ','
-        + JSON.stringify(name).replace(/"/g,'&quot;') + ')">'
-        + '<label>' + escapeHtml(name) + '</label>'
-        + (m ? '<span class="badge b-ok">присутній</span>' : '')
-        + '</div>';
+  hd.innerHTML = hdHtml;
+
+  // Рядки (діти × предмети)
+  var markByKey = {};
+  S.marks.forEach(function(m){ markByKey[m.child + '|' + m.subjectId] = m; });
+  var rowsHtml = '';
+  kids.forEach(function(child){
+    rowsHtml += '<div class="att-row" style="' + grid + '">';
+    rowsHtml += '<div class="att-name" title="' + escapeHtml(child) + '">' + escapeHtml(child) + '</div>';
+    rowsHtml += '<div class="att-cells-wrap" style="display:contents">';
+    subjects.forEach(function(s){
+      var on = !!markByKey[child + '|' + s.id];
+      rowsHtml += '<button class="att-cell' + (on ? ' on' : '') + '"'
+        + ' data-child="' + escapeHtml(child) + '"'
+        + ' data-subj-id="' + s.id + '"'
+        + ' aria-pressed="' + on + '">'
+        + (on ? '✅' : '⬜')
+        + '<span class="att-cell-lbl">' + escapeHtml(s.subject) + '</span>'
+        + '</button>';
     });
+    rowsHtml += '</div></div>';
   });
-  board.innerHTML = html;
+  $('attRows').innerHTML = rowsHtml;
+  $('attRows').onclick = function(e){
+    var btn = e.target.closest && e.target.closest('.att-cell');
+    if (!btn || btn.disabled) return;
+    toggleMark(btn);
+  };
+
+  $('attCounter').textContent = S.marks.length + ' відміток · ' + S.attGroup;
+  $('attBoard').classList.remove('hidden');
+  drawAttSummary(subjects);
+  $('attSummary').classList.remove('hidden');
 }
-function toggleMark(el, grp, name){
-  var subj = S.catalog.filter(function(a){ return a.id === S.attSubjectId; })[0];
-  if (!subj){ return; }
-  el.disabled = true;
-  if (el.checked){
+
+function _setCell(btn, on){
+  btn.classList.toggle('on', on);
+  btn.firstChild.nodeValue = on ? '✅' : '⬜';
+  btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+}
+
+function toggleMark(btn){
+  var child  = btn.dataset.child;
+  var subjId = Number(btn.dataset.subjId);
+  var subj   = S.catalog.filter(function(a){ return a.id === subjId; })[0];
+  if (!subj) return;
+  var existing = S.marks.filter(function(m){
+    return m.child === child && m.subjectId === subjId;
+  })[0];
+
+  btn.disabled = true;
+  _setCell(btn, !existing);   // оптимістичний UI
+
+  if (existing){
+    apiPost({action:'removePredmetnyMark', id:existing.id}).then(function(res){
+      btn.disabled = false;
+      if (!res || !res.ok){ _setCell(btn, true); showToast('❌ ' + ((res && res.error) || 'Помилка'), 'err'); return; }
+      S.marks = S.marks.filter(function(x){ return x.id !== existing.id; });
+      _afterToggle();
+      showToast('✓ Знято', 'ok', 2000);
+    }).catch(function(){ btn.disabled = false; _setCell(btn, true); showToast('❌ Помилка мережі', 'err'); });
+  } else {
     apiPost({action:'addPredmetnyMark', data:{
-      date:S.attDate, loc:S.loc, group:grp, child:name,
+      date:S.attDate, loc:S.loc, group:S.attGroup, child:child,
       subjectId:subj.id, subjectName:subj.subject, rate:subj.rate,
       markedBy:markerLabel()
     }}).then(function(res){
-      el.disabled = false;
-      if (!res || !res.ok){ el.checked = false; showToast('❌ ' + ((res && res.error) || 'Помилка'), 'err'); return; }
-      S.marks.push({id:res.id, date:S.attDate, loc:S.loc, group:grp, child:name,
-        subjectId:subj.id, subjectName:subj.subject, rate:subj.rate});
-      drawAttBoard();
+      btn.disabled = false;
+      if (!res || !res.ok){ _setCell(btn, false); showToast('❌ ' + ((res && res.error) || 'Помилка'), 'err'); return; }
+      S.marks.push({id:res.id || ('local-' + Date.now()), date:S.attDate, loc:S.loc,
+        group:S.attGroup, child:child, subjectId:subj.id, subjectName:subj.subject, rate:subj.rate});
+      _afterToggle();
       showToast('✅ Відмічено', 'ok', 2000);
-    }).catch(function(){ el.disabled = false; el.checked = false; showToast('❌ Помилка мережі', 'err'); });
-  } else {
-    var m = S.marks.filter(function(x){ return x.subjectId === subj.id && x.child === name; })[0];
-    if (!m){ el.disabled = false; return; }
-    apiPost({action:'removePredmetnyMark', id:m.id}).then(function(res){
-      el.disabled = false;
-      if (!res || !res.ok){ el.checked = true; showToast('❌ ' + ((res && res.error) || 'Помилка'), 'err'); return; }
-      S.marks = S.marks.filter(function(x){ return x.id !== m.id; });
-      drawAttBoard();
-      showToast('✓ Знято', 'ok', 2000);
-    }).catch(function(){ el.disabled = false; el.checked = true; showToast('❌ Помилка мережі', 'err'); });
+    }).catch(function(){ btn.disabled = false; _setCell(btn, false); showToast('❌ Помилка мережі', 'err'); });
   }
+}
+
+function _afterToggle(){
+  if ($('attCounter')) $('attCounter').textContent = S.marks.length + ' відміток · ' + S.attGroup;
+  drawAttSummary(_activeSubjects());
+}
+
+// Підсумок під таблицею: скільки дітей відмічено по кожному предмету.
+function drawAttSummary(subjects){
+  var box = $('attSumBySubj'); if (!box) return;
+  var bySubj = {};
+  subjects.forEach(function(s){ bySubj[s.id] = 0; });
+  S.marks.forEach(function(m){
+    if (bySubj[m.subjectId] !== undefined) bySubj[m.subjectId]++;
+  });
+  var html = '';
+  subjects.forEach(function(s){
+    html += '<div class="att-sum-row">'
+      + '<span class="l">' + escapeHtml(s.subject) + '</span>'
+      + '<span class="r">' + bySubj[s.id] + ' дітей відмічено</span>'
+      + '</div>';
+  });
+  if (!html) html = '<div class="att-sum-row"><span class="l muted">Немає предметів</span></div>';
+  html += '<div class="att-sum-tot"><span>Всього відміток за ' + escapeHtml(S.attDate)
+    + '</span><span class="r">' + S.marks.length + '</span></div>';
+  box.innerHTML = html;
 }
 
 // ===== АНАЛІТИКА =====
