@@ -2884,52 +2884,159 @@ function getActivitiesCatalog(loc){
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// Seed каталогу занять Голосієва у лист "Додаткові_Каталог".
-//   seedActivitiesCatalog()       — м'який режим: якщо Голосієво вже має
-//                                   заняття, НІЧОГО не чіпає (захист ручних
-//                                   правок з UI).
-//   seedActivitiesCatalogForce()  — force: перезаписує заняття Голосієва
-//                                   канонічними цифрами. Рядки інших локацій
-//                                   зберігаються незмінними.
+// Seed каталогу ДОДАТКОВИХ занять — усі 11 локацій (Голосієво + 10 інших)
+// у лист "Додаткові_Каталог".
+//   seedActivitiesCatalog()       — м'який режим: якщо канонічні локації
+//                                   вже мають заняття, НІЧОГО не чіпає
+//                                   (захист ручних правок з UI).
+//   seedActivitiesCatalogForce()  — force: перезаписує всі 11 локацій
+//                                   канонічними цифрами. Рядки локацій поза
+//                                   списком зберігаються незмінними.
 // Запускати ВРУЧНУ з Apps Script editor.
 // ───────────────────────────────────────────────────────────────────────────
 function seedActivitiesCatalog(force){
   var sh = _getActivitiesSheet(true); // створить лист із шапкою якщо нема
-  var GOL = 'Голосієво';
   var data = sh.getDataRange().getValues();
 
-  // Розділяємо наявні рядки даних: Голосієво vs інші локації.
-  var golRows = [], otherRows = [];
+  // Канонічні каталоги всіх 11 локацій. Порядок фіксований — Голосієво
+  // перший, тож його id лишаються 1..10 (як було) і не ламають відмітки.
+  // Запис: [Заняття, Ціна_клієнту, Модель_ЗП_викладача, Ставка_викладача]
+  var CANON = [
+    ['Голосієво', [
+      ['Лего', 280, 'За дитину', 150],
+      ['Арт', 280, 'За заняття', 400],
+      ['m.Dance', 230, 'За заняття', 400],
+      ['Логопед', 520, 'За дитину', 350],
+      ['Гончарство', 280, 'За дитину', 150],
+      ['Айкідо', 300, 'За заняття', 1000],
+      ['Робототехніка', 420, 'За дитину', 250],
+      ['Англійська групові', 280, 'За заняття', 280],
+      ['Вокал індивід', 600, 'За дитину', 300],
+      ['Вокал група', 300, 'За заняття', 500]
+    ]],
+    ['Бігова', [
+      ['Лего', 260, 'За заняття', 500],
+      ['Логопед', 450, 'За дитину', 250],
+      ['Футбол', 270, 'За заняття', 600]
+    ]],
+    ['Борщагівка', [
+      ['Лего', 280, 'За дитину', 150],
+      ['Арт', 220, 'За заняття', 350],
+      ['Театральна студія', 230, 'За заняття', 500],
+      ['Вокал', 300, 'За заняття', 500],
+      ['Робототехніка', 350, 'За дитину', 250],
+      ['Індивідуальні з логопедом', 650, 'За дитину', 450],
+      ['Гончарство', 350, 'За заняття', 600],
+      ['М.Денс', 250, 'За заняття', 400]
+    ]],
+    ['Бровари', [
+      ['Лего', 280, 'За дитину', 150],
+      ['Арт Studio', 280, 'За заняття', 350],
+      ['m.Dance', 230, 'За дитину', 80],
+      ['Логопед', 500, 'За дитину', 250],
+      ['Робототехніка', 430, 'За дитину', 250],
+      ['Планетарій', 450, 'За дитину', 100],
+      ['Карате', 180, 'За дитину', 85]
+    ]],
+    ["Кар'єрна", [
+      ['Лего', 280, 'За дитину', 150],
+      ['Арт', 230, 'За заняття', 400],
+      ['m.Dance', 230, 'За заняття', 400],
+      ['Логопед', 600, 'За дитину', 400],
+      ['Айкідо', 280, 'За заняття', 550],
+      ['Робототехніка', 350, 'За дитину', 250],
+      ['Шахи', 230, 'За дитину', 115],
+      ['Speaking Club', 500, 'За заняття', 1000]
+    ]],
+    ['Кругла', [
+      ['Лего', 370, 'За дитину', 220],
+      ['Логопед', 450, 'За дитину', 250],
+      ['Футбол', 280, 'За заняття', 600],
+      ['Чирлідинг', 200, 'За заняття', 400]
+    ]],
+    ['Оранж', [
+      ['Арт', 230, 'За дитину', 120],
+      ['Логопед', 500, 'За дитину', 250],
+      ['Гончарство', 280, 'За заняття', 600],
+      ['Робототехніка', 420, 'За дитину', 240],
+      ['Англійська групові', 300, 'За дитину', 150],
+      ['Карате', 330, 'За заняття', 500],
+      ['Гімнастика', 380, 'За заняття', 350]
+    ]],
+    ['Осокорки сад', [
+      ['Лего', 280, 'За заняття', 300],
+      ['Арт', 280, 'За дитину', 125],
+      ['m.Dance', 280, 'За заняття', 450],
+      ['Логопед', 600, 'За дитину', 270],
+      ['Гончарство', 300, 'За дитину', 125],
+      ['Робототехніка', 420, 'За дитину', 250],
+      ['Англійська групові', 550, 'За заняття', 500],
+      ['Футбол', 350, 'За дитину', 150],
+      ['Фортепіано', 500, 'За дитину', 250],
+      ['Нейрофітнес', 280, 'За заняття', 300],
+      ['Капоейро', 300, 'За дитину', 150]
+    ]],
+    ['Позняки', [
+      ['Лего', 280, 'За дитину', 150],
+      ['Арт', 280, 'За заняття', 450],
+      ['m.Dance', 250, 'За заняття', 400],
+      ['Логопед', 500, 'За дитину', 300],
+      ['Гончарство', 300, 'За дитину', 140],
+      ['Айкідо', 280, 'За заняття', 550],
+      ['Робототехніка', 400, 'За дитину', 200],
+      ['Англійська групові', 250, 'За заняття', 350]
+    ]],
+    ['Пуща', [
+      ['Лего', 280, 'За дитину', 150],
+      ['Арт', 300, 'За дитину', 150],
+      ['Логопед', 500, 'За дитину', 250],
+      ['Робототехніка', 450, 'За дитину', 250],
+      ['Англійська групові', 450, 'За дитину', 250],
+      ['Гімнастика', 280, 'За дитину', 150]
+    ]],
+    ['Тичини', [
+      ['Лего', 280, 'За дитину', 150],
+      ['Арт', 280, 'За заняття', 400],
+      ['m.Dance', 310, 'За заняття', 350],
+      ['Логопед', 520, 'За дитину', 350],
+      ['Гончарство', 300, 'За дитину', 150],
+      ['Айкідо', 280, 'За заняття', 550],
+      ['Вокал індивід', 500, 'За дитину', 300],
+      ['Англійська групові', 300, 'За заняття', 500]
+    ]]
+  ];
+
+  // Множина канонічних локацій — для розподілу наявних рядків.
+  var CANON_LOC = {};
+  CANON.forEach(function(pair){ CANON_LOC[pair[0]] = true; });
+
+  // Розділяємо наявні рядки: канонічні локації vs усі інші (зберігаємо як є).
+  var canonExisting = 0, otherRows = [];
   for (var r = 1; r < data.length; r++){
     var row = data[r];
     if (!row[2]) continue; // нема назви заняття — порожній рядок
     var rowLoc = String(row[1] || '').trim();
-    if (rowLoc === GOL) golRows.push(row);
-    else                otherRows.push(_normCatalogRow(row));
+    if (CANON_LOC[rowLoc]) canonExisting++;
+    else                   otherRows.push(_normCatalogRow(row));
   }
 
-  if (golRows.length > 0 && !force){
-    Logger.log('[seedActivitiesCatalog] Голосієво вже має %s занять. Запусти seedActivitiesCatalogForce() щоб перезаписати.', golRows.length);
-    return {ok: true, skipped: true, existingGolosievoRows: golRows.length};
+  if (canonExisting > 0 && !force){
+    Logger.log('[seedActivitiesCatalog] Канонічні локації вже мають %s занять. Запусти seedActivitiesCatalogForce() щоб перезаписати.', canonExisting);
+    return {ok: true, skipped: true, existingRows: canonExisting};
   }
 
-  // Канонічні 10 занять Голосієва (Театр прибрано).
+  // Канонічні рядки з наскрізними id (Голосієво перший → id 1..10).
   // Колонки: id | Локація | Заняття | Ціна_клієнту | Модель_ЗП_викладача |
   //          Ставка_викладача | Викладач | Активне
-  var golCanonical = [
-    [1,  GOL, 'Лего',               280, 'За дитину',  150,  '', true],
-    [2,  GOL, 'Арт',                280, 'За заняття', 400,  '', true],
-    [3,  GOL, 'm.Dance',            230, 'За заняття', 400,  '', true],
-    [4,  GOL, 'Логопед',            520, 'За дитину',  350,  '', true],
-    [5,  GOL, 'Гончарство',         280, 'За дитину',  150,  '', true],
-    [6,  GOL, 'Айкідо',             300, 'За заняття', 1000, '', true],
-    [7,  GOL, 'Робототехніка',      420, 'За дитину',  250,  '', true],
-    [8,  GOL, 'Англійська групові', 280, 'За заняття', 280,  '', true],
-    [9,  GOL, 'Вокал індивід',      600, 'За дитину',  300,  '', true],
-    [10, GOL, 'Вокал група',        300, 'За заняття', 500,  '', true]
-  ];
+  var canonRows = [], id = 1;
+  CANON.forEach(function(pair){
+    var loc = pair[0];
+    pair[1].forEach(function(a){
+      canonRows.push([id++, loc, a[0], a[1], a[2], a[3], '', true]);
+    });
+  });
 
-  var allRows = otherRows.concat(golCanonical);
+  var allRows = otherRows.concat(canonRows);
 
   // Очищаємо область даних і пишемо заново (шапка лишається у рядку 1).
   var lastRow = sh.getLastRow();
@@ -2940,8 +3047,8 @@ function seedActivitiesCatalog(force){
     sh.getRange(2, 1, allRows.length, ACTIVITIES_HEADER.length).setValues(allRows);
   }
 
-  Logger.log('[seedActivitiesCatalog] Голосієво перезаписано: %s занять; інших локацій збережено: %s рядків (force=%s)', golCanonical.length, otherRows.length, !!force);
-  return {ok: true, seeded: golCanonical.length, keptOtherRows: otherRows.length, force: !!force};
+  Logger.log('[seedActivitiesCatalog] Залито %s занять у %s локацій; інших рядків збережено: %s (force=%s)', canonRows.length, CANON.length, otherRows.length, !!force);
+  return {ok: true, seeded: canonRows.length, locations: CANON.length, keptOtherRows: otherRows.length, force: !!force};
 }
 
 // Apps Script editor не дозволяє передавати аргументи у Run — окремий wrapper.
@@ -4046,29 +4153,121 @@ function _normPredmetnyCatRow(row){
   return out;
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// Seed каталогу ПРЕДМЕТНИКІВ — усі 11 локацій (Голосієво + 10 інших)
+// у лист "Предметники_Каталог".
+//   seedPredmetnyCatalog()       — м'який режим: якщо канонічні локації
+//                                  вже мають предмети, НІЧОГО не чіпає.
+//   seedPredmetnyCatalogForce()  — force: перезаписує всі 11 локацій.
+// Рядки локацій поза списком зберігаються незмінними.
+// ───────────────────────────────────────────────────────────────────────────
 function seedPredmetnyCatalog(force){
   var sh = _getPredmetnyCatalogSheet(true);
-  var GOL = 'Голосієво';
   var data = sh.getDataRange().getValues();
-  var golRows = [], otherRows = [];
+
+  // Канонічні каталоги всіх 11 локацій. Голосієво перший → id 1..4 як було.
+  // Запис: [Предмет, Ставка_за_заняття]
+  var CANON = [
+    ['Голосієво', [
+      ['Англійська мова', 280],
+      ['Логопед', 300],
+      ['Муз.керівник', 300],
+      ['Хореограф', 270]
+    ]],
+    ['Бігова', [
+      ['Англійська мова', 230],
+      ['Логопед', 300],
+      ['Муз.керівник', 230],
+      ['Хореограф', 220],
+      ['Чомусики', 350]
+    ]],
+    ['Борщагівка', [
+      ['Англійська мова', 280],
+      ['Логопед', 300],
+      ['Муз.керівник', 300],
+      ['Хореограф', 300]
+    ]],
+    ['Бровари', [
+      ['Англійська мова', 250],
+      ['Логопед', 250],
+      ['Муз.керівник', 250],
+      ['Хореограф', 230]
+    ]],
+    ["Кар'єрна", [
+      ['Англійська мова', 280],
+      ['Логопед', 350],
+      ['Муз.керівник', 300],
+      ['Хореограф', 300]
+    ]],
+    ['Кругла', [
+      ['Англійська мова', 230],
+      ['Логопед', 300],
+      ['Муз.керівник', 230],
+      ['Хореограф', 220],
+      ['Чомусики', 350]
+    ]],
+    ['Оранж', [
+      ['Англійська мова', 250],
+      ['Логопед', 250],
+      ['Муз.керівник', 300],
+      ['Хореограф', 230]
+    ]],
+    ['Осокорки сад', [
+      ['Англійська мова', 250],
+      ['Логопед', 300],
+      ['Муз.керівник', 250],
+      ['Хореограф', 350],
+      ['Підготовка до школи', 450]
+    ]],
+    ['Позняки', [
+      ['Англійська мова', 250],
+      ['Логопед', 350],
+      ['Муз.керівник', 250],
+      ['Хореограф', 250]
+    ]],
+    ['Пуща', [
+      ['Англійська мова', 280],
+      ['Логопед', 300],
+      ['Муз.керівник', 250],
+      ['Хореограф', 300]
+    ]],
+    ['Тичини', [
+      ['Англійська мова', 280],
+      ['Логопед', 300],
+      ['Муз.керівник', 250],
+      ['Хореограф', 250]
+    ]]
+  ];
+
+  var CANON_LOC = {};
+  CANON.forEach(function(pair){ CANON_LOC[pair[0]] = true; });
+
+  // Розділяємо наявні рядки: канонічні локації vs усі інші (зберігаємо як є).
+  var canonExisting = 0, otherRows = [];
   for (var r = 1; r < data.length; r++){
     var row = data[r];
     if (!row[2]) continue;
-    if (String(row[1] || '').trim() === GOL) golRows.push(row);
-    else                                     otherRows.push(_normPredmetnyCatRow(row));
+    var rowLoc = String(row[1] || '').trim();
+    if (CANON_LOC[rowLoc]) canonExisting++;
+    else                   otherRows.push(_normPredmetnyCatRow(row));
   }
-  if (golRows.length > 0 && !force){
-    Logger.log('[seedPredmetnyCatalog] Голосієво вже має %s предметів. seedPredmetnyCatalogForce() щоб перезаписати.', golRows.length);
-    return {ok: true, skipped: true, existingGolosievoRows: golRows.length};
+
+  if (canonExisting > 0 && !force){
+    Logger.log('[seedPredmetnyCatalog] Канонічні локації вже мають %s предметів. seedPredmetnyCatalogForce() щоб перезаписати.', canonExisting);
+    return {ok: true, skipped: true, existingRows: canonExisting};
   }
+
+  // Канонічні рядки з наскрізними id (Голосієво перший → id 1..4).
   // Колонки: id | Локація | Предмет | Ставка_за_заняття | Викладач | Активне
-  var golCanonical = [
-    [1, GOL, 'Англійська мова', 280, '', true],
-    [2, GOL, 'Логопед',         300, '', true],
-    [3, GOL, 'Муз.керівник',    300, '', true],
-    [4, GOL, 'Хореограф',       270, '', true]
-  ];
-  var allRows = otherRows.concat(golCanonical);
+  var canonRows = [], id = 1;
+  CANON.forEach(function(pair){
+    var loc = pair[0];
+    pair[1].forEach(function(p){
+      canonRows.push([id++, loc, p[0], p[1], '', true]);
+    });
+  });
+
+  var allRows = otherRows.concat(canonRows);
   var lastRow = sh.getLastRow();
   if (lastRow > 1){
     sh.getRange(2, 1, lastRow - 1, PREDMETNY_CATALOG_HEADER.length).clearContent();
@@ -4076,11 +4275,21 @@ function seedPredmetnyCatalog(force){
   if (allRows.length){
     sh.getRange(2, 1, allRows.length, PREDMETNY_CATALOG_HEADER.length).setValues(allRows);
   }
-  Logger.log('[seedPredmetnyCatalog] Голосієво перезаписано: %s предметів; інших локацій: %s (force=%s)', golCanonical.length, otherRows.length, !!force);
-  return {ok: true, seeded: golCanonical.length, keptOtherRows: otherRows.length, force: !!force};
+  Logger.log('[seedPredmetnyCatalog] Залито %s предметів у %s локацій; інших рядків: %s (force=%s)', canonRows.length, CANON.length, otherRows.length, !!force);
+  return {ok: true, seeded: canonRows.length, locations: CANON.length, keptOtherRows: otherRows.length, force: !!force};
 }
 
 function seedPredmetnyCatalogForce(){ return seedPredmetnyCatalog(true); }
+
+// Перезаписує ОБИДВА каталоги (додаткові + предметники) для всіх 11 локацій.
+// Запускати ВРУЧНУ з Apps Script editor.
+function seedAllCatalogsForce(){
+  var activities = seedActivitiesCatalog(true);
+  var predmetny  = seedPredmetnyCatalog(true);
+  Logger.log('[seedAllCatalogsForce] activities=%s | predmetny=%s',
+    JSON.stringify(activities), JSON.stringify(predmetny));
+  return {ok: true, activities: activities, predmetny: predmetny};
+}
 
 // ── Експорт у Salary ──────────────────────────────────────────────────────
 // Архітектура як exportToSalaryExtras: журнал kind='predmetnyky', розумне
