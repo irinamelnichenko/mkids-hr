@@ -888,7 +888,10 @@ function loadCatalog(){
 }
 function loadClients(){
   if (S.clients.length) return Promise.resolve();
-  return apiGet('getClients').then(function(res){
+  // Діти беруться з Payment-файлу (action=getPayments) — те саме джерело,
+  // що й у activities.html (_loadPayments). getClients повертав неповний
+  // список, через що у групі бачили лише частину дітей.
+  return apiGet('getPayments').then(function(res){
     S.clients = (res && res.data) || [];
   }).catch(function(){ S.clients = []; });
 }
@@ -1062,15 +1065,18 @@ function populateGroupSel(){
 }
 
 function _attChildrenByGroup(){
+  // Дзеркало activities.html _loadPayments: групуємо рядки Payment-файлу
+  // за локацією+групою з дедуплікацією імен (у файлі кілька рядків на
+  // дитину). Без фільтра за статусом — показуємо ВСІХ дітей групи,
+  // як на вкладці "Додаткові заняття".
   var byGroup = {};
-  S.clients.forEach(function(c){
-    if (String(c['Локація'] || '').trim() !== S.loc) return;
-    var st = String(c['Статус'] || '').toLowerCase();
-    if (/розірв|terminat|випуск|graduat/.test(st)) return;
-    var grp = String(c['Група'] || '').trim() || '(без групи)';
-    var name = String(c['ПІБ дитини'] || '').trim();
-    if (!name) return;
-    (byGroup[grp] = byGroup[grp] || []).push(name);
+  S.clients.forEach(function(row){
+    if (String(row['Локація'] || '').trim() !== S.loc) return;
+    var grp  = String(row['Група'] || '').trim();
+    var name = String(row["Ім'я дитини"] || '').trim();
+    if (!grp || !name) return;
+    if (!byGroup[grp]) byGroup[grp] = [];
+    if (byGroup[grp].indexOf(name) === -1) byGroup[grp].push(name);
   });
   return byGroup;
 }
