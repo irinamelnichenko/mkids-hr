@@ -388,6 +388,18 @@ select,input,textarea{font-family:inherit}
 .act-input{display:flex;gap:8px;margin-top:10px}
 .act-input input{flex:1;padding:9px 12px;border:1.5px solid var(--gray2);
   border-radius:8px;font-size:13px;font-family:inherit}
+.asg-modes{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:8px}
+.asg-mode{padding:7px 11px;border:1.5px solid var(--gray2);border-radius:8px;
+  background:#fff;font-size:12px;font-weight:700;color:var(--gray);cursor:pointer}
+.asg-mode:hover{border-color:var(--gray)}
+.asg-mode.active{background:var(--green);color:#fff;border-color:var(--green)}
+.asg-pick{max-height:200px;overflow-y:auto;border:1.5px solid var(--gray2);
+  border-radius:8px;padding:4px 8px}
+.asg-row{display:flex;align-items:center;gap:9px;padding:7px 4px;
+  border-bottom:1px solid #f0f4f8;font-size:13px;cursor:pointer}
+.asg-row:last-child{border-bottom:none}
+.asg-row input{width:17px;height:17px;cursor:pointer;accent-color:var(--green);flex-shrink:0}
+.asg-note{background:#f8fafc;border-radius:8px;padding:11px 13px;font-size:13px;color:var(--dark2)}
 </style>
 </head>
 <body>
@@ -558,7 +570,7 @@ select,input,textarea{font-family:inherit}
   <div class="modal-overlay" onclick="closeTaskModal()"></div>
   <div class="modal-card">
     <button class="modal-close" onclick="closeTaskModal()">✕</button>
-    <div class="modal-hd"><h3>Нова задача</h3></div>
+    <div class="modal-hd"><h3 id="taskModalTitle">Нова задача</h3></div>
     <div class="modal-bd">
       <div class="fg"><label>Назва задачі *</label><input type="text" id="mTitle" placeholder="Що потрібно зробити"></div>
       <div class="fg"><label>Опис</label><textarea id="mDesc" rows="3" placeholder="Деталі задачі"></textarea></div>
@@ -572,12 +584,21 @@ select,input,textarea{font-family:inherit}
           </select>
         </div>
       </div>
-      <div class="fg"><label>Виконавець *</label><select id="mAssignee"></select></div>
-      <div class="fg"><label>Локація (опційно)</label><select id="mLocation"><option value="">— без локації —</option></select></div>
+      <div class="fg" id="asgWrap">
+        <label>Виконавці *</label>
+        <div class="asg-modes">
+          <button type="button" class="asg-mode active" data-m="people"     onclick="setAsgMode('people')">👤 Люди</button>
+          <button type="button" class="asg-mode"        data-m="directors"  onclick="setAsgMode('directors')">👥 Всі директори</button>
+          <button type="button" class="asg-mode"        data-m="management" onclick="setAsgMode('management')">👥 Менеджмент</button>
+          <button type="button" class="asg-mode"        data-m="location"   onclick="setAsgMode('location')">📍 За локацією</button>
+        </div>
+        <div id="asgBody"></div>
+      </div>
+      <div class="fg"><label>Локація задачі (опційно)</label><select id="mLocation"><option value="">— без локації —</option></select></div>
     </div>
     <div class="modal-ft">
       <button class="btn btn-secondary" onclick="closeTaskModal()">Скасувати</button>
-      <button class="btn btn-primary" onclick="submitTask()">Створити задачу</button>
+      <button class="btn btn-primary" id="taskSubmitBtn" onclick="submitTask()">Створити задачу</button>
     </div>
   </div>
 </div>
@@ -606,7 +627,8 @@ var S = {
   user:null, isMgmt:false, scope:'mine_assigned',
   allTasks:[], users:[], locations:[],
   filters:{status:'',priority:'',search:''},
-  detailId:0, notif:null
+  detailId:0, notif:null,
+  editId:0, asgMode:'people', asgPeople:{}, asgLocs:{}
 };
 
 var PRIORITY_LBL = {normal:'Звичайний', high:'Високий', urgent:'Терміновий'};
@@ -993,36 +1015,113 @@ function _dayWord(n){
   return d===1 ? 'ДЕНЬ' : (d>=2 && d<=4 ? 'ДНІ' : 'ДНІВ');
 }
 
-// ── CREATE MODAL ────────────────────────────
-function openTaskModal(){
-  if (!hasPerm('tasks-create')){ showToast('Немає прав на створення задач','err'); return; }
-  $('mTitle').value=''; $('mDesc').value=''; $('mDeadline').value='';
-  $('mPriority').value='normal';
-  var aSel = $('mAssignee');
-  var opts = '<option value="">— оберіть виконавця —</option>' +
-    '<option value="ALL_DIRECTORS">👥 Всім директорам локацій</option>' +
-    '<option value="ALL_MANAGEMENT">👥 Всьому менеджменту</option>';
-  S.users.filter(function(u){ return u.active; }).forEach(function(u){
-    opts += '<option value="' + u.id + '">' + escapeHtml(u.name) + ' (' + roleLabel(u.role) + ')</option>';
-  });
-  aSel.innerHTML = opts;
+// ── CREATE / EDIT MODAL ─────────────────────
+function openTaskModal(editTask){
+  if (!editTask && !hasPerm('tasks-create')){
+    showToast('Немає прав на створення задач','err'); return;
+  }
+  S.editId = editTask ? editTask.id : 0;
+  $('taskModalTitle').textContent = editTask ? 'Редагувати задачу' : 'Нова задача';
+  $('taskSubmitBtn').textContent  = editTask ? 'Зберегти зміни' : 'Створити задачу';
+  $('mTitle').value    = editTask ? editTask.title : '';
+  $('mDesc').value     = editTask ? editTask.description : '';
+  $('mDeadline').value = editTask ? (editTask.deadline || '') : '';
+  $('mPriority').value = editTask ? editTask.priority : 'normal';
+  $('mLocation').value = editTask ? (editTask.location || '') : '';
+  // У режимі редагування виконавця не змінюємо — ховаємо блок вибору.
+  $('asgWrap').style.display = editTask ? 'none' : '';
+  if (!editTask){
+    S.asgMode = 'people'; S.asgPeople = {}; S.asgLocs = {};
+    setAsgMode('people');
+  }
   $('taskModal').classList.remove('hidden');
 }
-function closeTaskModal(){ $('taskModal').classList.add('hidden'); }
+function closeTaskModal(){ $('taskModal').classList.add('hidden'); S.editId = 0; }
+
+function setAsgMode(m){
+  S.asgMode = m;
+  document.querySelectorAll('.asg-mode').forEach(function(b){
+    b.classList.toggle('active', b.dataset.m === m);
+  });
+  renderAsgBody();
+}
+function renderAsgBody(){
+  var box = $('asgBody'), html = '';
+  if (S.asgMode === 'people'){
+    var us = S.users.filter(function(u){ return u.active; })
+      .sort(function(a,b){ return String(a.name).localeCompare(String(b.name),'uk'); });
+    html = us.length
+      ? '<div class="asg-pick">' + us.map(function(u){
+          return '<label class="asg-row"><input type="checkbox" value="'+u.id+'"' +
+            (S.asgPeople[u.id]?' checked':'') +
+            ' onchange="S.asgPeople['+u.id+']=this.checked"><span>' +
+            escapeHtml(u.name)+' <span style="color:var(--gray)">('+roleLabel(u.role)+')</span></span></label>';
+        }).join('') + '</div>'
+      : '<div class="asg-note">Список користувачів порожній.</div>';
+  } else if (S.asgMode === 'directors'){
+    html = '<div class="asg-note">👥 Окрема копія <b>кожному активному директору локації</b> — спільний прогрес групи.</div>';
+  } else if (S.asgMode === 'management'){
+    html = '<div class="asg-note">👥 Окрема копія <b>кожному з менеджменту</b> — спільний прогрес групи.</div>';
+  } else if (S.asgMode === 'location'){
+    var locs = S.locations.slice().sort(function(a,b){
+      return String(a.loc).localeCompare(String(b.loc),'uk'); });
+    html = locs.length
+      ? '<div class="asg-note" style="margin-bottom:6px">Копії підуть директорам обраних локацій.</div>' +
+        '<div class="asg-pick">' + locs.map(function(l){
+          return '<label class="asg-row"><input type="checkbox" value="'+escapeHtml(l.loc)+'"' +
+            (S.asgLocs[l.loc]?' checked':'') +
+            ' onchange="S.asgLocs[this.value]=this.checked"><span>'+escapeHtml(l.loc)+'</span></label>';
+        }).join('') + '</div>'
+      : '<div class="asg-note">Список локацій порожній.</div>';
+  }
+  box.innerHTML = html;
+}
+// Резолв обраних виконавців у масив для createTask.
+function resolveAssignee(){
+  if (S.asgMode === 'directors')  return ['ALL_DIRECTORS'];
+  if (S.asgMode === 'management') return ['ALL_MANAGEMENT'];
+  if (S.asgMode === 'people'){
+    return Object.keys(S.asgPeople).filter(function(id){ return S.asgPeople[id]; })
+      .map(function(id){ return Number(id); });
+  }
+  if (S.asgMode === 'location'){
+    var locs = {};
+    Object.keys(S.asgLocs).forEach(function(l){ if (S.asgLocs[l]) locs[l]=1; });
+    return S.users.filter(function(u){
+      return u.active && u.role === 'director' && locs[u.loc];
+    }).map(function(u){ return u.id; });
+  }
+  return [];
+}
 function submitTask(){
   var title = $('mTitle').value.trim();
-  var assignee = $('mAssignee').value;
   if (!title){ showToast('Вкажіть назву задачі','err'); return; }
-  if (!assignee){ showToast('Оберіть виконавця','err'); return; }
-  apiPost({action:'createTask', data:{
-    author: S.user.id,
-    assignee: assignee,
+  var data = {
     title: title,
     description: $('mDesc').value.trim(),
     priority: $('mPriority').value,
     deadline: $('mDeadline').value,
     location: $('mLocation').value
-  }}).then(function(res){
+  };
+  if (S.editId){
+    apiPost({action:'updateTask', taskId:S.editId, actorId:S.user.id, data:data})
+      .then(function(res){
+        if (!res || !res.ok){ showToast('❌ '+((res&&res.error)||'Помилка'),'err'); return; }
+        closeTaskModal();
+        showToast('✅ Зміни збережено','ok');
+        loadTasks();
+      }).catch(function(){ showToast('❌ Помилка мережі','err'); });
+    return;
+  }
+  var assignee = resolveAssignee();
+  if (!assignee.length){
+    showToast(S.asgMode==='location' ? 'Немає директорів для обраних локацій'
+                                     : 'Оберіть виконавця','err');
+    return;
+  }
+  data.author = S.user.id;
+  data.assignee = assignee;
+  apiPost({action:'createTask', data:data}).then(function(res){
     if (!res || !res.ok){ showToast('❌ ' + ((res&&res.error)||'Помилка'),'err'); return; }
     closeTaskModal();
     showToast('✅ Задачу створено' + (res.count>1?' ('+res.count+' копій)':''), 'ok');
@@ -1094,23 +1193,55 @@ function renderActivity(items){
 }
 function detailActions(t){
   var me = S.user.id;
-  var btns = [];
   var isAssignee = (t.assignee === me);
   var isAuthor   = (t.author === me);
-  if (isAssignee){
-    if (t.status==='new' || t.status==='rejected')
+  var btns = [];
+  if (t.status === 'new'){
+    if (isAssignee)
       btns.push('<button class="btn btn-primary" onclick="changeStatus(\'in_progress\')">▶️ Взяти в роботу</button>');
-    if (t.status==='in_progress')
-      btns.push('<button class="btn btn-primary" onclick="changeStatus(\'review\')">📤 Готово на перевірку</button>');
+    if (isAuthor){
+      btns.push('<button class="btn btn-secondary" onclick="editCurrentTask()">✏️ Редагувати</button>');
+      btns.push('<button class="btn btn-danger" onclick="removeTask()">🗑 Видалити</button>');
+    }
+  } else if (t.status === 'in_progress'){
+    if (isAssignee){
+      btns.push('<button class="btn btn-primary" onclick="changeStatus(\'review\')">📤 Здати на перевірку</button>');
+      btns.push('<button class="btn btn-secondary" onclick="changeStatus(\'new\')">↩️ Повернути на «Нова»</button>');
+    }
+  } else if (t.status === 'review'){
+    if (isAuthor){
+      btns.push('<button class="btn btn-primary" onclick="changeStatus(\'done\')">✅ Прийняти</button>');
+      btns.push('<button class="btn btn-danger" onclick="returnToRework()">↩️ Повернути на доопрацювання</button>');
+    }
   }
-  if (isAuthor && t.status==='review'){
-    btns.push('<button class="btn btn-primary" onclick="changeStatus(\'done\')">✅ Прийняти</button>');
-    btns.push('<button class="btn btn-danger" onclick="changeStatus(\'rejected\')">↩️ Повернути</button>');
-  }
-  if (isAuthor)
-    btns.push('<button class="btn btn-danger" onclick="removeTask()">🗑 Видалити</button>');
+  // 'done' — кнопок дій немає, лише коментарі.
   btns.push('<button class="btn btn-secondary" onclick="closeDetail()">Закрити</button>');
   return btns.join('');
+}
+function editCurrentTask(){
+  var t = S.allTasks.filter(function(x){ return x.id === S.detailId; })[0];
+  if (!t){ return; }
+  closeDetail();
+  openTaskModal(t);
+}
+function returnToRework(){
+  var reason = prompt('Причина повернення на доопрацювання:');
+  if (reason === null) return;            // користувач скасував
+  reason = String(reason).trim();
+  var id = S.detailId, actor = S.user.id;
+  apiPost({action:'updateTaskStatus', taskId:id, status:'in_progress', actorId:actor})
+    .then(function(res){
+      if (!res || !res.ok){ showToast('❌ '+((res&&res.error)||'Помилка'),'err'); return; }
+      var finish = function(){
+        showToast('↩️ Повернуто на доопрацювання','ok');
+        closeDetail(); loadTasks();
+      };
+      if (reason){
+        apiPost({action:'addTaskComment', taskId:id,
+                 comment:'↩️ Повернуто на доопрацювання: '+reason, fileUrl:'', actorId:actor})
+          .then(finish).catch(finish);
+      } else finish();
+    }).catch(function(){ showToast('❌ Помилка мережі','err'); });
 }
 function changeStatus(newStatus){
   apiPost({action:'updateTaskStatus', taskId:S.detailId, status:newStatus, actorId:S.user.id})
@@ -1138,7 +1269,7 @@ function sendComment(){
     }).catch(function(){ inp.disabled=false; showToast('❌ Помилка мережі','err'); });
 }
 function removeTask(){
-  if (!confirm('Видалити задачу? Дію не можна скасувати.')) return;
+  if (!confirm('Видалити задачу остаточно?')) return;
   apiPost({action:'deleteTask', taskId:S.detailId, actorId:S.user.id})
     .then(function(res){
       if (!res || !res.ok){ showToast('❌ '+((res&&res.error)||'Помилка'),'err'); return; }

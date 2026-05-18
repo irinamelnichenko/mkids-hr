@@ -250,6 +250,7 @@ function doPost(e) {
     else if (body.action === 'exportPredmetnyToSalary')   result = exportPredmetnyToSalary(body || {});
     else if (body.action === 'createTask')                result = createTask(body.data || {});
     else if (body.action === 'updateTaskStatus')          result = updateTaskStatus(body.taskId || 0, body.status || '', body.actorId || 0);
+    else if (body.action === 'updateTask')                result = updateTask(body.taskId || 0, body.data || {}, body.actorId || 0);
     else if (body.action === 'addTaskComment')            result = addTaskComment(body.taskId || 0, body.comment || '', body.fileUrl || '', body.actorId || 0);
     else if (body.action === 'deleteTask')                result = deleteTask(body.taskId || 0, body.actorId || 0);
     else result = {ok:false, error:'Unknown action'};
@@ -4548,6 +4549,29 @@ function _taskMail(toEmail, subject, body){
 // ── createTask ─────────────────────────────────────────────────────────────
 // assignee може бути id користувача АБО 'ALL_DIRECTORS' / 'ALL_MANAGEMENT' —
 // тоді створюється N копій задачі з одним group_id (групова задача).
+// Резолв виконавців: assignee може бути id, спец-рядком
+// ('ALL_DIRECTORS' / 'ALL_MANAGEMENT') АБО масивом будь-чого з цього
+// (мультивибір людей / вибір за локацією на фронті). Повертає унікальні id.
+function _resolveAssignees(raw, users){
+  var items = (raw && Array.isArray(raw)) ? raw : [raw];
+  var out = [], seen = {};
+  function add(n){ n = Number(n) || 0; if (n && !seen[n]){ seen[n] = 1; out.push(n); } }
+  items.forEach(function(it){
+    if (it === 'ALL_DIRECTORS'){
+      Object.keys(users).forEach(function(id){
+        if (users[id].active && users[id].role === 'director') add(id);
+      });
+    } else if (it === 'ALL_MANAGEMENT'){
+      Object.keys(users).forEach(function(id){
+        if (users[id].active && TASK_MGMT_ROLES.indexOf(users[id].role) !== -1) add(id);
+      });
+    } else {
+      add(it);
+    }
+  });
+  return out;
+}
+
 function createTask(params){
   try {
     params = params || {};
@@ -4558,21 +4582,7 @@ function createTask(params){
     if (!author) return {ok:false, error:'Не вказано автора'};
     if (!title)  return {ok:false, error:'Вкажіть назву задачі'};
 
-    var assigneeRaw = params.assignee;
-    var assigneeList = [];
-    if (assigneeRaw === 'ALL_DIRECTORS'){
-      Object.keys(users).forEach(function(id){
-        if (users[id].active && users[id].role === 'director') assigneeList.push(Number(id));
-      });
-    } else if (assigneeRaw === 'ALL_MANAGEMENT'){
-      Object.keys(users).forEach(function(id){
-        if (users[id].active && TASK_MGMT_ROLES.indexOf(users[id].role) !== -1)
-          assigneeList.push(Number(id));
-      });
-    } else {
-      var aid = Number(assigneeRaw) || 0;
-      if (aid) assigneeList.push(aid);
-    }
+    var assigneeList = _resolveAssignees(params.assignee, users);
     if (!assigneeList.length) return {ok:false, error:'Не вказано виконавця'};
 
     var isGroup  = assigneeList.length > 1;
@@ -4685,11 +4695,47 @@ function updateTaskStatus(taskId, newStatus, actorId){
         if (newStatus === 'review' && author && author.email){
           _taskMail(author.email, 'Задача готова до перевірки: '+t.title,
             'Виконавець позначив задачу "'+t.title+'" як готову до перевірки.');
+        } else if (t.status === 'review' && newStatus === 'in_progress' &&
+                   assignee && assignee.email){
+          _taskMail(assignee.email, 'Повернуто на доопрацювання: '+t.title,
+            'Задачу "'+t.title+'" повернуто на доопрацювання.');
         } else if (newStatus === 'rejected' && assignee && assignee.email){
           _taskMail(assignee.email, 'Повернуто: '+t.title,
             'Задачу "'+t.title+'" повернуто на доопрацювання.');
         }
         return {ok:true, status:newStatus};
+      }
+    }
+    return {ok:false, error:'Задачу не знайдено'};
+  } catch(e){
+    return {ok:false, error:String(e && e.message || e)};
+  }
+}
+
+// ── updateTask (редагування — лише автор) ─────────────────────────────────
+function updateTask(taskId, data, actorId){
+  try {
+    var nid = Number(taskId) || 0;
+    if (!nid) return {ok:false, error:'Missing taskId'};
+    data = data || {};
+    var actor = Number(actorId) || 0;
+    var title = String(data.title || '').trim();
+    if (!title) return {ok:false, error:'Вкажіть назву задачі'};
+    var sh = _getTasksSheet(true);
+    var rows = sh.getDataRange().getValues();
+    for (var i=1;i<rows.length;i++){
+      if (Number(rows[i][0]) === nid){
+        var t = _parseTaskRow(rows[i]);
+        if (t.author !== actor) return {ok:false, error:'Редагувати може лише автор'};
+        sh.getRange(i+1, 5).setValue(title);                                            // title
+        sh.getRange(i+1, 6).setValue(String(data.description || '').trim());             // description
+        sh.getRange(i+1, 7).setValue(String(data.priority || 'normal').trim()||'normal');// priority
+        sh.getRange(i+1, 8).setValue(String(data.deadline || '').trim());                // deadline
+        sh.getRange(i+1, 9).setValue(String(data.location || '').trim());                // location
+        var actSh = _getTaskActSheet(true);
+        actSh.appendRow([_nextTaskRowId(actSh), nid, actor, 'comment',
+                         '✏️ Задачу відредаговано', '', _taskNow()]);
+        return {ok:true};
       }
     }
     return {ok:false, error:'Задачу не знайдено'};
