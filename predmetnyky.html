@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>m.kids — Вчителі-предметники</title>
+<script src="xlsx.full.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:#f4f6f9;color:#1a2332;font-size:14px}
+.topbar{background:#1f2937;color:#fff;padding:12px 18px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.topbar h1{font-size:16px;font-weight:700}
+.topbar a{color:#9fc4e8;text-decoration:none;font-size:13px}
+.topbar .sp{margin-left:auto}
+select,input[type=date],input[type=text],input[type=number]{padding:7px 10px;border:1.5px solid #cbd3db;border-radius:8px;font-size:13px;font-family:inherit;background:#fff}
+.wrap{max-width:1100px;margin:0 auto;padding:16px}
+.tabs{display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap}
+.tab{padding:9px 16px;border-radius:9px;border:1.5px solid #cbd3db;background:#fff;cursor:pointer;font-weight:600;font-size:13px}
+.tab.active{background:#2980b9;color:#fff;border-color:#2980b9}
+.card{background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.06);margin-bottom:14px;overflow:hidden}
+.card-hd{padding:12px 16px;border-bottom:1px solid #eef1f4;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.card-hd h3{font-size:14px;font-weight:700}
+.card-bd{padding:12px 16px}
+table{width:100%;border-collapse:collapse}
+th,td{padding:8px 10px;text-align:left;border-bottom:1px solid #eef1f4;font-size:13px}
+th{background:#f8fafc;font-weight:700;font-size:12px;color:#5a6573}
+.btn{padding:7px 13px;border-radius:8px;border:1.5px solid #cbd3db;background:#fff;cursor:pointer;font-weight:600;font-size:13px;font-family:inherit}
+.btn-pri{background:#27ae60;color:#fff;border-color:#27ae60}
+.btn-blue{background:#2980b9;color:#fff;border-color:#2980b9}
+.btn-sm{padding:5px 10px;font-size:12px}
+.btn-danger{background:#e74c3c;color:#fff;border-color:#e74c3c}
+.muted{color:#7f8c8d}
+.grp-title{font-weight:700;font-size:13px;margin:14px 0 6px;color:#2c3e50}
+.chk-row{display:flex;align-items:center;gap:10px;padding:6px 8px;border-bottom:1px solid #f0f3f6}
+.chk-row label{cursor:pointer;flex:1}
+.chk-row input{width:18px;height:18px;cursor:pointer}
+.stat-grid{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+.stat{background:#fff;border-radius:10px;padding:10px 16px;box-shadow:0 2px 8px rgba(0,0,0,.06);text-align:center;min-width:90px}
+.stat-n{font-size:20px;font-weight:900}
+.stat-l{font-size:11px;color:#7f8c8d;margin-top:2px}
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:center;justify-content:center;z-index:100}
+.modal-bg.show{display:flex}
+.modal{background:#fff;border-radius:14px;padding:20px;width:380px;max-width:92vw}
+.modal h3{font-size:15px;margin-bottom:14px}
+.fld{margin-bottom:10px}
+.fld label{display:block;font-size:12px;font-weight:600;margin-bottom:4px;color:#5a6573}
+.fld input,.fld select{width:100%}
+.modal-act{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
+.toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:#1f2937;color:#fff;padding:11px 20px;border-radius:10px;font-weight:600;font-size:13px;z-index:200;box-shadow:0 6px 24px rgba(0,0,0,.2);white-space:pre-line;display:none}
+.toast.show{display:block}
+.toast.ok{background:#10b981}.toast.err{background:#ef4444}
+.empty{text-align:center;padding:30px;color:#7f8c8d}
+.badge{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700}
+.badge-on{background:#d4f4e2;color:#1e7a48}.badge-off{background:#f0f0f0;color:#888}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <h1>🏫 Вчителі-предметники</h1>
+  <select id="locSel" onchange="onLocChange()"></select>
+  <span class="sp"></span>
+  <a href="index.html">← Система</a>
+  <a href="#" onclick="doLogout();return false">Вийти</a>
+</div>
+<div class="wrap">
+  <div class="tabs">
+    <div class="tab active" data-tab="catalog" onclick="switchTab('catalog')">📚 Каталог</div>
+    <div class="tab" data-tab="attendance" onclick="switchTab('attendance')">✅ Відвідуваність</div>
+    <div class="tab" data-tab="analytics" onclick="switchTab('analytics')">📊 Аналітика</div>
+  </div>
+  <div id="main"></div>
+</div>
+
+<div class="modal-bg" id="modalBg">
+  <div class="modal">
+    <h3 id="modalTitle">Предмет</h3>
+    <div class="fld"><label>Предмет</label><input type="text" id="mSubject" placeholder="Англійська мова"></div>
+    <div class="fld"><label>Ставка за заняття (грн)</label><input type="number" id="mRate" min="0"></div>
+    <div class="fld"><label>Викладач</label><input type="text" id="mTeacher" placeholder="ПІБ"></div>
+    <div class="fld"><label><input type="checkbox" id="mActive" style="width:auto"> Активне</label></div>
+    <div class="modal-act">
+      <button class="btn" onclick="closeModal()">Скасувати</button>
+      <button class="btn btn-pri" onclick="saveModal()">Зберегти</button>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+var CFG = {
+  SCRIPT_URL: 'https://script.google.com/macros/s/AKfycbyTSUVlaN4-PpXe47zCSmhVs0Qxy1FDXG_XsB4zcKNpqBxdhDtS9ibM4YFGkGjmPQDFWQ/exec'
+};
+var MONTHS = ['Січень','Лютий','Березень','Квітень','Травень','Червень',
+              'Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
+var S = {
+  user:null, tab:'catalog', loc:'',
+  locations:[], catalog:[], clients:[], marks:[],
+  attDate:'', attSubjectId:0,
+  anaMonth:new Date().getMonth(), anaYear:new Date().getFullYear(),
+  modalId:0
+};
+
+// ── AUTH ──
+function readSession(){
+  try{
+    var s=JSON.parse(localStorage.getItem('mkids_session')||'null');
+    if(!s||!s.user||!s.t) return null;
+    if(Date.now()-s.t > 12*3600*1000) return null;
+    return s.user;
+  }catch(e){ return null; }
+}
+function doLogout(){ try{localStorage.removeItem('mkids_session');}catch(e){} location.href='index.html'; }
+
+// ── API ──
+function apiGet(action,params){
+  var url=CFG.SCRIPT_URL+'?action='+encodeURIComponent(action);
+  Object.keys(params||{}).forEach(function(k){
+    url+='&'+k+'='+encodeURIComponent(params[k]);
+  });
+  return fetch(url,{redirect:'follow'}).then(function(r){ return r.json(); });
+}
+function apiPost(body){
+  return fetch(CFG.SCRIPT_URL,{
+    method:'POST', redirect:'follow',
+    headers:{'Content-Type':'text/plain;charset=utf-8'},
+    body:JSON.stringify(body)
+  }).then(function(r){ return r.json(); });
+}
+
+// ── HELPERS ──
+function $(id){ return document.getElementById(id); }
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){
+  return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]; }); }
+function toast(msg,type){
+  var t=$('toast'); t.textContent=msg;
+  t.className='toast show'+(type?' '+type:'');
+  clearTimeout(t._t); t._t=setTimeout(function(){ t.className='toast'; },3500);
+}
+function fmtN(n){ n=Math.round(+n||0); return String(n).replace(/\B(?=(\d{3})+(?!\d))/g,' '); }
+function markerLabel(){ return (S.user&&S.user.role||'user')+' ('+(S.loc||'мережа')+')'; }
+function mkXlsxName(loc,kind){
+  var d=new Date();
+  var iso=d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2);
+  return [loc,kind,iso].filter(Boolean).map(function(x){return String(x).trim();}).join('_')
+    .replace(/[\\/:*?"<>|]+/g,'_')+'.xlsx';
+}
+function exportXlsx(filename,sheets){
+  if(typeof XLSX==='undefined'){ toast('Бібліотека XLSX не завантажена','err'); return; }
+  var wb=XLSX.utils.book_new();
+  (sheets||[]).forEach(function(s,i){
+    var ws=XLSX.utils.aoa_to_sheet(s.aoa&&s.aoa.length?s.aoa:[[]]);
+    XLSX.utils.book_append_sheet(wb,ws,String(s.name||('Аркуш'+(i+1))).slice(0,31));
+  });
+  XLSX.writeFile(wb,filename);
+}
+
+// ── INIT ──
+(function init(){
+  S.user=readSession();
+  if(!S.user){ location.href='index.html'; return; }
+  var d=new Date();
+  S.attDate=d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2);
+  apiGet('getLocations').then(function(res){
+    S.locations=(res&&res.data)||[];
+    var sel=$('locSel');
+    sel.innerHTML=S.locations.map(function(l){
+      return '<option value="'+esc(l.loc)+'">'+esc(l.loc)+'</option>'; }).join('');
+    // Директор/не-мережевий прив'язаний до своєї локації — селектор замкнено.
+    // CFO/HR (мережеві ролі без loc) можуть обирати будь-яку локацію.
+    if(S.user.loc){ S.loc=S.user.loc; sel.value=S.user.loc; sel.disabled=true; }
+    else { S.loc=(S.locations[0]||{}).loc||''; sel.disabled=false; }
+    loadCatalog().then(render);
+  }).catch(function(){ toast('Не вдалося завантажити локації','err'); });
+})();
+
+function onLocChange(){
+  S.loc=$('locSel').value;
+  S.catalog=[]; S.clients=[]; S.marks=[];
+  loadCatalog().then(render);
+}
+function switchTab(t){
+  S.tab=t;
+  document.querySelectorAll('.tab').forEach(function(el){
+    el.classList.toggle('active', el.getAttribute('data-tab')===t); });
+  render();
+}
+
+// ── DATA LOADERS ──
+function loadCatalog(){
+  return apiGet('getPredmetnyCatalog',{loc:S.loc}).then(function(res){
+    S.catalog=(res&&res.items)||[];
+  }).catch(function(){ S.catalog=[]; });
+}
+function loadClients(){
+  if(S.clients.length) return Promise.resolve();
+  return apiGet('getClients').then(function(res){
+    S.clients=(res&&res.data)||[];
+  }).catch(function(){ S.clients=[]; });
+}
+function loadMarks(filters){
+  return apiGet('getPredmetnyMarks',filters).then(function(res){
+    return (res&&res.items)||[];
+  }).catch(function(){ return []; });
+}
+
+// ── RENDER ──
+function render(){
+  if(S.tab==='catalog')      renderCatalog();
+  else if(S.tab==='attendance') renderAttendance();
+  else                       renderAnalytics();
+}
+
+// ===== КАТАЛОГ =====
+function renderCatalog(){
+  var rows=S.catalog.slice().sort(function(a,b){
+    if(a.active!==b.active) return a.active?-1:1;
+    return String(a.subject).localeCompare(String(b.subject),'uk');
+  });
+  var html='<div class="card"><div class="card-hd">'
+    +'<h3>📚 Каталог предметів — '+esc(S.loc)+'</h3>'
+    +'<button class="btn btn-pri btn-sm" style="margin-left:auto" onclick="openModal(0)">➕ Додати предмет</button>'
+    +'</div><div class="card-bd">';
+  if(!rows.length){
+    html+='<div class="empty">Предметів немає. Додайте перший або запустіть seedPredmetnyCatalogForce у Apps Script.</div>';
+  } else {
+    html+='<table><thead><tr><th>Предмет</th><th>Ставка/заняття</th><th>Викладач</th><th>Статус</th><th></th></tr></thead><tbody>';
+    rows.forEach(function(a){
+      html+='<tr>'
+        +'<td><b>'+esc(a.subject)+'</b></td>'
+        +'<td>'+fmtN(a.rate)+' ₴</td>'
+        +'<td>'+(esc(a.teacher)||'<span class="muted">—</span>')+'</td>'
+        +'<td>'+(a.active?'<span class="badge badge-on">активний</span>':'<span class="badge badge-off">вимкнено</span>')+'</td>'
+        +'<td style="white-space:nowrap">'
+          +'<button class="btn btn-sm" onclick="openModal('+a.id+')">✏️</button> '
+          +'<button class="btn btn-sm btn-danger" onclick="delPredmetny('+a.id+')">🗑</button>'
+        +'</td></tr>';
+    });
+    html+='</tbody></table>';
+  }
+  html+='</div></div>';
+  $('main').innerHTML=html;
+}
+
+function openModal(id){
+  S.modalId=id;
+  var a=S.catalog.filter(function(x){return x.id===id;})[0];
+  $('modalTitle').textContent=id?'Редагувати предмет':'Новий предмет';
+  $('mSubject').value=a?a.subject:'';
+  $('mRate').value=a?a.rate:'';
+  $('mTeacher').value=a?a.teacher:'';
+  $('mActive').checked=a?!!a.active:true;
+  $('modalBg').classList.add('show');
+}
+function closeModal(){ $('modalBg').classList.remove('show'); }
+function saveModal(){
+  var data={
+    loc:S.loc,
+    subject:$('mSubject').value.trim(),
+    rate:parseFloat($('mRate').value)||0,
+    teacher:$('mTeacher').value.trim(),
+    active:$('mActive').checked
+  };
+  if(!data.subject){ toast('Вкажіть назву предмета','err'); return; }
+  var body=S.modalId
+    ? {action:'updatePredmetny',id:S.modalId,data:data}
+    : {action:'addPredmetny',data:data};
+  apiPost(body).then(function(res){
+    if(!res||!res.ok){ toast('❌ '+((res&&res.error)||'Помилка'),'err'); return; }
+    closeModal();
+    loadCatalog().then(renderCatalog);
+    toast(S.modalId?'✅ Збережено':'✅ Додано','ok');
+  }).catch(function(){ toast('❌ Помилка мережі','err'); });
+}
+function delPredmetny(id){
+  if(!confirm('Видалити предмет з каталогу?')) return;
+  apiPost({action:'deletePredmetny',id:id}).then(function(res){
+    if(!res||!res.ok){ toast('❌ '+((res&&res.error)||'Помилка'),'err'); return; }
+    loadCatalog().then(renderCatalog);
+    toast('🗑 Видалено','ok');
+  }).catch(function(){ toast('❌ Помилка мережі','err'); });
+}
+
+// ===== ВІДВІДУВАНІСТЬ =====
+function renderAttendance(){
+  var active=S.catalog.filter(function(a){return a.active;});
+  if(!S.attSubjectId && active.length) S.attSubjectId=active[0].id;
+  var subjOpts=active.map(function(a){
+    return '<option value="'+a.id+'"'+(a.id===S.attSubjectId?' selected':'')+'>'+esc(a.subject)+'</option>';
+  }).join('');
+  var html='<div class="card"><div class="card-hd">'
+    +'<h3>✅ Відвідуваність</h3>'
+    +'<input type="date" value="'+S.attDate+'" onchange="S.attDate=this.value;reloadAttBoard()">'
+    +'<select onchange="S.attSubjectId=+this.value;reloadAttBoard()">'+subjOpts+'</select>'
+    +'</div><div class="card-bd" id="attBoard"><div class="empty">Завантаження…</div></div></div>';
+  $('main').innerHTML=html;
+  if(!active.length){
+    $('attBoard').innerHTML='<div class="empty">Спочатку додайте предмети у Каталог.</div>';
+    return;
+  }
+  reloadAttBoard();
+}
+
+function reloadAttBoard(){
+  var board=$('attBoard');
+  if(!board) return;
+  board.innerHTML='<div class="empty">Завантаження…</div>';
+  loadClients().then(function(){
+    return loadMarks({loc:S.loc,date:S.attDate});
+  }).then(function(marks){
+    S.marks=marks;
+    drawAttBoard();
+  });
+}
+
+function _attChildrenByGroup(){
+  // Активні діти локації, згруповані за "Група".
+  var byGroup={};
+  S.clients.forEach(function(c){
+    if(String(c['Локація']||'').trim()!==S.loc) return;
+    var st=String(c['Статус']||'').toLowerCase();
+    if(/розірв|terminat|випуск|graduat/.test(st)) return;
+    var grp=String(c['Група']||'').trim()||'(без групи)';
+    var name=String(c['ПІБ дитини']||'').trim();
+    if(!name) return;
+    (byGroup[grp]=byGroup[grp]||[]).push(name);
+  });
+  return byGroup;
+}
+
+function drawAttBoard(){
+  var board=$('attBoard'); if(!board) return;
+  var subj=S.catalog.filter(function(a){return a.id===S.attSubjectId;})[0];
+  if(!subj){ board.innerHTML='<div class="empty">Оберіть предмет.</div>'; return; }
+  var byGroup=_attChildrenByGroup();
+  var groups=Object.keys(byGroup).sort(function(a,b){return a.localeCompare(b,'uk');});
+  if(!groups.length){
+    board.innerHTML='<div class="empty">Немає дітей для локації '+esc(S.loc)+'.</div>';
+    return;
+  }
+  // Мапа: child -> mark (для поточного предмета)
+  var markByChild={};
+  S.marks.forEach(function(m){
+    if(m.subjectId===S.attSubjectId) markByChild[m.child]=m;
+  });
+  var html='<div class="muted" style="margin-bottom:8px">Предмет: <b>'+esc(subj.subject)
+    +'</b> · ставка '+fmtN(subj.rate)+' ₴/заняття · дата '+esc(S.attDate)+'</div>';
+  groups.forEach(function(grp){
+    var kids=byGroup[grp].slice().sort(function(a,b){return a.localeCompare(b,'uk');});
+    var marked=kids.filter(function(n){return markByChild[n];}).length;
+    html+='<div class="grp-title">👥 '+esc(grp)+' <span class="muted" style="font-weight:400">'
+      +'('+marked+'/'+kids.length+' відмічено)</span></div>';
+    kids.forEach(function(name){
+      var m=markByChild[name];
+      var key=esc(grp)+'||'+esc(name);
+      html+='<div class="chk-row">'
+        +'<input type="checkbox" '+(m?'checked':'')
+        +' onchange="toggleMark(this,'+JSON.stringify(grp).replace(/"/g,'&quot;')+','
+        +JSON.stringify(name).replace(/"/g,'&quot;')+')">'
+        +'<label>'+esc(name)+'</label>'
+        +(m?'<span class="badge badge-on">присутній</span>':'')
+        +'</div>';
+    });
+  });
+  board.innerHTML=html;
+}
+
+function toggleMark(el,grp,name){
+  var subj=S.catalog.filter(function(a){return a.id===S.attSubjectId;})[0];
+  if(!subj){ return; }
+  el.disabled=true;
+  if(el.checked){
+    apiPost({action:'addPredmetnyMark',data:{
+      date:S.attDate, loc:S.loc, group:grp, child:name,
+      subjectId:subj.id, subjectName:subj.subject, rate:subj.rate,
+      markedBy:markerLabel()
+    }}).then(function(res){
+      el.disabled=false;
+      if(!res||!res.ok){ el.checked=false; toast('❌ '+((res&&res.error)||'Помилка'),'err'); return; }
+      S.marks.push({id:res.id,date:S.attDate,loc:S.loc,group:grp,child:name,
+        subjectId:subj.id,subjectName:subj.subject,rate:subj.rate});
+      drawAttBoard();
+      toast('✅ Відмічено','ok');
+    }).catch(function(){ el.disabled=false; el.checked=false; toast('❌ Помилка мережі','err'); });
+  } else {
+    var m=S.marks.filter(function(x){return x.subjectId===subj.id&&x.child===name;})[0];
+    if(!m){ el.disabled=false; return; }
+    apiPost({action:'removePredmetnyMark',id:m.id}).then(function(res){
+      el.disabled=false;
+      if(!res||!res.ok){ el.checked=true; toast('❌ '+((res&&res.error)||'Помилка'),'err'); return; }
+      S.marks=S.marks.filter(function(x){return x.id!==m.id;});
+      drawAttBoard();
+      toast('✓ Знято','ok');
+    }).catch(function(){ el.disabled=false; el.checked=true; toast('❌ Помилка мережі','err'); });
+  }
+}
+
+// ===== АНАЛІТИКА =====
+function renderAnalytics(){
+  var monthOpts=MONTHS.map(function(m,i){
+    return '<option value="'+i+'"'+(i===S.anaMonth?' selected':'')+'>'+m+'</option>'; }).join('');
+  var yearOpts=[2025,2026,2027].map(function(y){
+    return '<option value="'+y+'"'+(y===S.anaYear?' selected':'')+'>'+y+'</option>'; }).join('');
+  var html='<div class="card"><div class="card-hd">'
+    +'<h3>📊 Аналітика занять</h3>'
+    +'<select onchange="S.anaMonth=+this.value;renderAnalytics()">'+monthOpts+'</select>'
+    +'<select onchange="S.anaYear=+this.value;renderAnalytics()">'+yearOpts+'</select>'
+    +'<button class="btn btn-sm" style="margin-left:auto" onclick="exportAnalyticsXlsx()">📥 Excel</button>'
+    +'<button class="btn btn-sm btn-blue" onclick="exportToSalary()">💰 Експорт у Salary</button>'
+    +'</div><div class="card-bd" id="anaBody"><div class="empty">Завантаження…</div></div></div>';
+  $('main').innerHTML=html;
+  loadMarks({loc:S.loc}).then(function(marks){
+    S._anaRows=computeAnalytics(marks);
+    drawAnalytics();
+  });
+}
+
+function computeAnalytics(marks){
+  var mm=('0'+(S.anaMonth+1)).slice(-2);
+  var pref=S.anaYear+'-'+mm;
+  // subjectId -> {subject, rate, lessons:Set, children:Set, marks}
+  var bySubj={};
+  marks.forEach(function(m){
+    if(String(m.date).slice(0,7)!==pref) return;
+    var b=bySubj[m.subjectId];
+    if(!b){ b=bySubj[m.subjectId]={subject:m.subjectName,rate:m.rate,lessons:{},children:{},marks:0}; }
+    b.lessons[m.group+'|'+m.date]=true;
+    b.children[m.child]=true;
+    b.marks++;
+    if(m.rate) b.rate=m.rate;
+  });
+  // доповнюємо ставки з каталогу (якщо у відмітці 0)
+  return Object.keys(bySubj).map(function(id){
+    var b=bySubj[id];
+    var cat=S.catalog.filter(function(a){return a.id===+id;})[0];
+    var rate=b.rate||(cat?cat.rate:0);
+    var lessons=Object.keys(b.lessons).length;
+    return {subject:b.subject||(cat?cat.subject:'?'), rate:rate,
+      lessons:lessons, children:Object.keys(b.children).length,
+      marks:b.marks, salary:lessons*rate};
+  }).sort(function(a,b){ return b.salary-a.salary; });
+}
+
+function drawAnalytics(){
+  var body=$('anaBody'); if(!body) return;
+  var rows=S._anaRows||[];
+  if(!rows.length){
+    body.innerHTML='<div class="empty">Немає відміток за '+MONTHS[S.anaMonth]+' '+S.anaYear+'.</div>';
+    return;
+  }
+  var totL=0,totS=0;
+  rows.forEach(function(r){ totL+=r.lessons; totS+=r.salary; });
+  var html='<div class="stat-grid">'
+    +'<div class="stat"><div class="stat-n">'+rows.length+'</div><div class="stat-l">предметів</div></div>'
+    +'<div class="stat"><div class="stat-n" style="color:#2980b9">'+totL+'</div><div class="stat-l">занять</div></div>'
+    +'<div class="stat"><div class="stat-n" style="color:#27ae60">'+fmtN(totS)+'</div><div class="stat-l">ЗП разом, ₴</div></div>'
+    +'</div>';
+  html+='<table><thead><tr><th>Предмет</th><th>Ставка</th><th>Занять (група×дата)</th>'
+    +'<th>Дітей відмічено</th><th>Всього галочок</th><th>ЗП, ₴</th></tr></thead><tbody>';
+  rows.forEach(function(r){
+    html+='<tr><td><b>'+esc(r.subject)+'</b></td><td>'+fmtN(r.rate)+'</td>'
+      +'<td>'+r.lessons+'</td><td>'+r.children+'</td><td>'+r.marks+'</td>'
+      +'<td><b>'+fmtN(r.salary)+'</b></td></tr>';
+  });
+  html+='</tbody></table>';
+  html+='<div class="muted" style="margin-top:10px;font-size:12px">ЗП = ставка × к-сть унікальних пар (група + дата). '
+    +'Дитячі галочки — лише статистика присутності.</div>';
+  body.innerHTML=html;
+}
+
+function exportAnalyticsXlsx(){
+  var rows=S._anaRows||[];
+  if(!rows.length){ toast('Немає даних для експорту','err'); return; }
+  var aoa=[['Предмет','Ставка','Занять (група×дата)','Дітей відмічено','Всього галочок','ЗП (грн)']];
+  rows.forEach(function(r){
+    aoa.push([r.subject,r.rate,r.lessons,r.children,r.marks,r.salary]);
+  });
+  exportXlsx(mkXlsxName(S.loc,'предметники_'+MONTHS[S.anaMonth]+'_'+S.anaYear),
+    [{name:'Предметники',aoa:aoa}]);
+}
+
+function exportToSalary(){
+  if(!confirm('Експортувати ЗП предметників за '+MONTHS[S.anaMonth]+' '+S.anaYear
+    +' у Salary-файл локації '+S.loc+'?\nЗапис іде у Budget наступного місяця.')) return;
+  toast('🔄 Експорт у Salary…');
+  apiPost({action:'exportPredmetnyToSalary',loc:S.loc,month:S.anaMonth+1,year:S.anaYear})
+    .then(function(res){
+      if(!res||!res.ok){ toast('❌ '+((res&&res.error)||'Помилка експорту'),'err'); return; }
+      var msg='✅ Salary: '+res.updated+' предметів · '+fmtN(res.totalFact)+' ₴';
+      if(res.notFound&&res.notFound.length){
+        msg+='\n⚠️ Немає рядка у Salary: '+res.notFound.join(', ');
+      }
+      toast(msg, res.notFound&&res.notFound.length?'':'ok');
+    }).catch(function(){ toast('❌ Помилка мережі','err'); });
+}
+</script>
+</body>
+</html>

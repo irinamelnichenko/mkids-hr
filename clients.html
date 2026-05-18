@@ -572,6 +572,10 @@ tbody tr.clickable:hover td{background:#f0f7ff}
            onclick="goPerm('activities')">
         <span class="ni">🏃</span> Додаткові заняття
       </div>
+      <div class="nav-item" data-permission="predmetnyky" data-parent="finance" data-perm-page="predmetnyky"
+           onclick="goPerm('predmetnyky')">
+        <span class="ni">🏫</span> Вчителі-предметники
+      </div>
       <div class="nav-item" data-permission="categories" data-parent="finance" data-perm-page="categories"
            onclick="goPerm('categories')">
         <span class="ni">📊</span> Категорії
@@ -1860,6 +1864,7 @@ const PERMISSIONS = {
     'analytics_clients','analytics_hr',
     'opex','categories','salary','overview_analytics',
     'activities','activities-view','activities-edit',
+    'predmetnyky',
     'attendance-view','attendance-edit',
     'export-payments',
     'client_birthdays',
@@ -1929,6 +1934,7 @@ function goPerm(perm){
                    : target === 'categories' ? 'categories.html'
                    : target === 'salary'     ? 'salary.html'
                    : target === 'activities' ? 'activities.html'
+                   : target === 'predmetnyky' ? 'predmetnyky.html'
                    : target === 'analytics'  ? 'analytics.html'
                    : 'index.html';
     location.href = targetFile + '#' + perm;

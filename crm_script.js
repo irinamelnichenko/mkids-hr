@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v6.4
+// m.kids CRM — Google Apps Script v6.5
+// v6.5: вчителі-предметники — групові заняття у вартості навчання;
+//        ЗП = ставка × унікальні (група+дата); пише ТІЛЬКИ у Salary
 // v6.1: автоекспорт пише У ФАЙЛИ ЛОКАЦІЙ (а не в CRM-зведення)
 //        — Пейменти: "Голосієво Payment" / "Осокорки Payment" тощо
 //          Колонка "Бюджет доп" місяця = monthCol + 3
@@ -172,7 +174,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v6.4', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v6.5', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getPayments')        result = getPayments();
     else if (action === 'getPaymentsYearly')  result = getPaymentsYearly();
@@ -197,6 +199,8 @@ function doGet(e) {
     else if (action === 'getGroupNorms')             result = getGroupNorms();
     else if (action === 'getActivitiesCatalog')      result = getActivitiesCatalog(e.parameter && e.parameter.loc || '');
     else if (action === 'getAttendanceMarks')         result = getAttendanceMarks(e.parameter || {});
+    else if (action === 'getPredmetnyCatalog')        result = getPredmetnyCatalog(e.parameter && e.parameter.loc || '');
+    else if (action === 'getPredmetnyMarks')          result = getPredmetnyMarks(e.parameter || {});
     else                                             result = {ok:false, error:'Unknown action: ' + action};
     return jsonOut(result);
   } catch(err) {
@@ -232,6 +236,13 @@ function doPost(e) {
     else if (body.action === 'exportAttendanceToPayments') result = exportAttendanceToPayments(body || {});
     else if (body.action === 'exportToSalaryExtras')      result = exportToSalaryExtras(body || {});
     else if (body.action === 'exportAttendance')          result = exportAttendance(body || {});
+    else if (body.action === 'addPredmetny')              result = addPredmetny(body.data || {});
+    else if (body.action === 'updatePredmetny')           result = updatePredmetny(body.id || 0, body.data || {});
+    else if (body.action === 'deletePredmetny')           result = deletePredmetny(body.id || 0);
+    else if (body.action === 'addPredmetnyMark')          result = addPredmetnyMark(body.data || {});
+    else if (body.action === 'removePredmetnyMark')       result = removePredmetnyMark(body.id || 0);
+    else if (body.action === 'getPredmetnyMarks')         result = getPredmetnyMarks(body || {});
+    else if (body.action === 'exportPredmetnyToSalary')   result = exportPredmetnyToSalary(body || {});
     else result = {ok:false, error:'Unknown action'};
     return jsonOut(result);
   } catch(err) {
@@ -3789,4 +3800,424 @@ function exportAttendance(params){
     month:    params && params.month || 0,
     year:     params && params.year || 0
   };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ВЧИТЕЛІ-ПРЕДМЕТНИКИ v6.5
+// Групові заняття включені у вартість навчання (НЕ в Бюджет ДОП Payment).
+// ЗП викладача = ставка × к-сть унікальних пар (група + дата), де відмічено
+// ≥1 дитину. Дитячі галочки — лише статистика присутності.
+// Пише ТІЛЬКИ у Salary-файл локації, у рядки "<предмет> <ставка>".
+// ═══════════════════════════════════════════════════════════════════════════
+var PREDMETNY_CATALOG_SHEET  = 'Предметники_Каталог';
+var PREDMETNY_ATT_SHEET      = 'Предметники_Відвідуваність';
+var PREDMETNY_CATALOG_HEADER = ['id','Локація','Предмет','Ставка_за_заняття','Викладач','Активне'];
+var PREDMETNY_ATT_HEADER     = ['id','Дата','Локація','Група','Дитина','id_предмета','Назва_предмета','Ставка','Відмітив','Час_відмітки'];
+
+function _getPredmetnyCatalogSheet(createIfMissing){
+  var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var sh = ss.getSheetByName(PREDMETNY_CATALOG_SHEET);
+  if (!sh && createIfMissing){
+    sh = ss.insertSheet(PREDMETNY_CATALOG_SHEET);
+    sh.getRange(1, 1, 1, PREDMETNY_CATALOG_HEADER.length).setValues([PREDMETNY_CATALOG_HEADER]);
+    sh.setFrozenRows(1);
+  }
+  if (!sh) throw new Error('Sheet "' + PREDMETNY_CATALOG_SHEET + '" не знайдено.');
+  return sh;
+}
+
+function _getPredmetnyAttSheet(createIfMissing){
+  var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var sh = ss.getSheetByName(PREDMETNY_ATT_SHEET);
+  if (!sh && createIfMissing){
+    sh = ss.insertSheet(PREDMETNY_ATT_SHEET);
+    sh.getRange(1, 1, 1, PREDMETNY_ATT_HEADER.length).setValues([PREDMETNY_ATT_HEADER]);
+    sh.setFrozenRows(1);
+  }
+  if (!sh) throw new Error('Sheet "' + PREDMETNY_ATT_SHEET + '" не знайдено.');
+  return sh;
+}
+
+function _parsePredmetnyCatRow(row){
+  return {
+    id:      Number(row[0]) || 0,
+    loc:     String(row[1] || '').trim(),
+    subject: String(row[2] || '').trim(),
+    rate:    Number(row[3]) || 0,
+    teacher: String(row[4] || '').trim(),
+    active:  row[5] === true ||
+             /^(true|так|y|1|active|активне|✅)$/i.test(String(row[5] || '').trim())
+  };
+}
+
+function _parsePredmetnyAttRow(row){
+  var d = row[1], dateStr;
+  if (d instanceof Date){
+    var y = d.getFullYear(), m = d.getMonth() + 1, dd = d.getDate();
+    dateStr = y + '-' + (m < 10 ? '0' + m : m) + '-' + (dd < 10 ? '0' + dd : dd);
+  } else {
+    dateStr = String(d || '').trim();
+  }
+  return {
+    id:          Number(row[0]) || 0,
+    date:        dateStr,
+    loc:         String(row[2] || '').trim(),
+    group:       String(row[3] || '').trim(),
+    child:       String(row[4] || '').trim(),
+    subjectId:   Number(row[5]) || 0,
+    subjectName: String(row[6] || '').trim(),
+    rate:        Number(row[7]) || 0,
+    markedBy:    String(row[8] || '').trim(),
+    markedAt:    row[9] instanceof Date ? row[9].toISOString() : String(row[9] || '')
+  };
+}
+
+function _nextPredmetnyRowId(sh){
+  var data = sh.getDataRange().getValues();
+  var max = 0;
+  for (var i = 1; i < data.length; i++){
+    var n = Number(data[i][0]) || 0;
+    if (n > max) max = n;
+  }
+  return max + 1;
+}
+
+// ── Каталог CRUD ──────────────────────────────────────────────────────────
+function getPredmetnyCatalog(loc){
+  try {
+    var sh = _getPredmetnyCatalogSheet(true);
+    var data = sh.getDataRange().getValues();
+    if (data.length < 2) return {ok: true, items: []};
+    var items = [];
+    var filterLoc = String(loc || '').trim();
+    for (var i = 1; i < data.length; i++){
+      if (!data[i][2]) continue;
+      var rec = _parsePredmetnyCatRow(data[i]);
+      if (filterLoc && rec.loc !== filterLoc) continue;
+      items.push(rec);
+    }
+    return {ok: true, items: items};
+  } catch(e){
+    return {ok: false, error: String(e && e.message || e)};
+  }
+}
+
+function addPredmetny(data){
+  try {
+    var sh = _getPredmetnyCatalogSheet(true);
+    var id = _nextPredmetnyRowId(sh);
+    var row = [
+      id,
+      String(data.loc || '').trim(),
+      String(data.subject || '').trim(),
+      Number(data.rate) || 0,
+      String(data.teacher || '').trim(),
+      data.active !== false
+    ];
+    if (!row[1]) return {ok: false, error: 'Поле "Локація" обовʼязкове'};
+    if (!row[2]) return {ok: false, error: 'Поле "Предмет" обовʼязкове'};
+    sh.appendRow(row);
+    return {ok: true, id: id};
+  } catch(e){
+    return {ok: false, error: String(e && e.message || e)};
+  }
+}
+
+function updatePredmetny(id, data){
+  try {
+    var nid = Number(id);
+    if (!nid) return {ok: false, error: 'Missing id'};
+    var sh = _getPredmetnyCatalogSheet(false);
+    var rows = sh.getDataRange().getValues();
+    for (var i = 1; i < rows.length; i++){
+      if (Number(rows[i][0]) !== nid) continue;
+      var r1 = i + 1;
+      if ('loc'     in data) sh.getRange(r1, 2).setValue(String(data.loc || '').trim());
+      if ('subject' in data) sh.getRange(r1, 3).setValue(String(data.subject || '').trim());
+      if ('rate'    in data) sh.getRange(r1, 4).setValue(Number(data.rate) || 0);
+      if ('teacher' in data) sh.getRange(r1, 5).setValue(String(data.teacher || '').trim());
+      if ('active'  in data) sh.getRange(r1, 6).setValue(data.active !== false);
+      return {ok: true};
+    }
+    return {ok: false, error: 'Предмет не знайдено'};
+  } catch(e){
+    return {ok: false, error: String(e && e.message || e)};
+  }
+}
+
+function deletePredmetny(id){
+  try {
+    var nid = Number(id);
+    if (!nid) return {ok: false, error: 'Missing id'};
+    var sh = _getPredmetnyCatalogSheet(false);
+    var rows = sh.getDataRange().getValues();
+    for (var i = 1; i < rows.length; i++){
+      if (Number(rows[i][0]) === nid){
+        sh.deleteRow(i + 1);
+        return {ok: true};
+      }
+    }
+    return {ok: false, error: 'Предмет не знайдено'};
+  } catch(e){
+    return {ok: false, error: String(e && e.message || e)};
+  }
+}
+
+// ── Відвідуваність ────────────────────────────────────────────────────────
+function addPredmetnyMark(data){
+  try {
+    var sh = _getPredmetnyAttSheet(true);
+    var id = _nextPredmetnyRowId(sh);
+    var row = [
+      id,
+      String(data.date || '').trim(),
+      String(data.loc || '').trim(),
+      String(data.group || '').trim(),
+      String(data.child || '').trim(),
+      Number(data.subjectId) || 0,
+      String(data.subjectName || '').trim(),
+      Number(data.rate) || 0,
+      String(data.markedBy || '').trim(),
+      new Date()
+    ];
+    if (!row[1] || !row[4] || !row[5]){
+      return {ok: false, error: 'Поля Дата / Дитина / id_предмета обовʼязкові'};
+    }
+    sh.appendRow(row);
+    return {ok: true, id: id};
+  } catch(e){
+    return {ok: false, error: String(e && e.message || e)};
+  }
+}
+
+function removePredmetnyMark(id){
+  try {
+    var nid = Number(id);
+    if (!nid) return {ok: false, error: 'Missing id'};
+    var sh = _getPredmetnyAttSheet(false);
+    var data = sh.getDataRange().getValues();
+    for (var i = 1; i < data.length; i++){
+      if (Number(data[i][0]) === nid){
+        sh.deleteRow(i + 1);
+        return {ok: true};
+      }
+    }
+    return {ok: false, error: 'Відмітку не знайдено'};
+  } catch(e){
+    return {ok: false, error: String(e && e.message || e)};
+  }
+}
+
+function getPredmetnyMarks(filters){
+  try {
+    filters = filters || {};
+    var sh = _getPredmetnyAttSheet(true);
+    var data = sh.getDataRange().getValues();
+    if (data.length < 2) return {ok: true, items: []};
+    var items = [];
+    for (var i = 1; i < data.length; i++){
+      if (!data[i][0] && !data[i][4]) continue;
+      var m = _parsePredmetnyAttRow(data[i]);
+      if (filters.date      && m.date !== String(filters.date)) continue;
+      if (filters.loc       && m.loc !== String(filters.loc)) continue;
+      if (filters.group     && m.group !== String(filters.group)) continue;
+      if (filters.child     && m.child !== String(filters.child)) continue;
+      if (filters.subjectId && m.subjectId !== Number(filters.subjectId)) continue;
+      items.push(m);
+    }
+    return {ok: true, items: items};
+  } catch(e){
+    return {ok: false, error: String(e && e.message || e)};
+  }
+}
+
+// ── Seed каталогу предметників ────────────────────────────────────────────
+function _normPredmetnyCatRow(row){
+  var out = [];
+  for (var c = 0; c < PREDMETNY_CATALOG_HEADER.length; c++){
+    out.push(row[c] !== undefined ? row[c] : '');
+  }
+  return out;
+}
+
+function seedPredmetnyCatalog(force){
+  var sh = _getPredmetnyCatalogSheet(true);
+  var GOL = 'Голосієво';
+  var data = sh.getDataRange().getValues();
+  var golRows = [], otherRows = [];
+  for (var r = 1; r < data.length; r++){
+    var row = data[r];
+    if (!row[2]) continue;
+    if (String(row[1] || '').trim() === GOL) golRows.push(row);
+    else                                     otherRows.push(_normPredmetnyCatRow(row));
+  }
+  if (golRows.length > 0 && !force){
+    Logger.log('[seedPredmetnyCatalog] Голосієво вже має %s предметів. seedPredmetnyCatalogForce() щоб перезаписати.', golRows.length);
+    return {ok: true, skipped: true, existingGolosievoRows: golRows.length};
+  }
+  // Колонки: id | Локація | Предмет | Ставка_за_заняття | Викладач | Активне
+  var golCanonical = [
+    [1, GOL, 'Англійська мова', 280, '', true],
+    [2, GOL, 'Логопед',         300, '', true],
+    [3, GOL, 'Муз.керівник',    300, '', true],
+    [4, GOL, 'Хореограф',       270, '', true]
+  ];
+  var allRows = otherRows.concat(golCanonical);
+  var lastRow = sh.getLastRow();
+  if (lastRow > 1){
+    sh.getRange(2, 1, lastRow - 1, PREDMETNY_CATALOG_HEADER.length).clearContent();
+  }
+  if (allRows.length){
+    sh.getRange(2, 1, allRows.length, PREDMETNY_CATALOG_HEADER.length).setValues(allRows);
+  }
+  Logger.log('[seedPredmetnyCatalog] Голосієво перезаписано: %s предметів; інших локацій: %s (force=%s)', golCanonical.length, otherRows.length, !!force);
+  return {ok: true, seeded: golCanonical.length, keptOtherRows: otherRows.length, force: !!force};
+}
+
+function seedPredmetnyCatalogForce(){ return seedPredmetnyCatalog(true); }
+
+// ── Експорт у Salary ──────────────────────────────────────────────────────
+// Архітектура як exportToSalaryExtras: журнал kind='predmetnyky', розумне
+// перезаписування, толерантний матч рядків, точковий запис (skip формул).
+function exportPredmetnyToSalary(params){
+  try {
+    var loc = String(params.loc || '').trim();
+    var month = Number(params.month);
+    var year = Number(params.year) || new Date().getFullYear();
+    if (!loc) return {ok: false, error: 'Параметр loc обовʼязковий'};
+    if (!month || month < 1 || month > 12) return {ok: false, error: 'month має бути 1-12'};
+    Logger.log('[exportPredmetnyToSalary] START loc="%s" month=%s year=%s', loc, month, year);
+    var monthName = MONTHS_CAL_UA[month - 1];
+
+    // 1. Каталог предметів локації.
+    var catRes = getPredmetnyCatalog(loc);
+    if (!catRes.ok) return catRes;
+    var withRate = (catRes.items || []).filter(function(a){ return a.active && a.rate > 0; });
+
+    // 2. Період + відвідуваність → унікальні (група+дата) на кожен предмет.
+    var attSh = _getPredmetnyAttSheet(true);
+    var attData = attSh.getDataRange().getValues();
+    var mm = month < 10 ? '0' + month : String(month);
+    var dateFrom = year + '-' + mm + '-01';
+    var nextM = _nextMonth(month, year);
+    var nmm = nextM.month < 10 ? '0' + nextM.month : String(nextM.month);
+    var dateTo = nextM.year + '-' + nmm + '-01';
+
+    var lessonsBySubj = {}; // subjectId -> {"group|date": true}
+    for (var i = 1; i < attData.length; i++){
+      var rec = _parsePredmetnyAttRow(attData[i]);
+      if (rec.loc !== loc) continue;
+      if (rec.date < dateFrom || rec.date >= dateTo) continue;
+      if (!lessonsBySubj[rec.subjectId]) lessonsBySubj[rec.subjectId] = {};
+      lessonsBySubj[rec.subjectId][rec.group + '|' + rec.date] = true;
+    }
+
+    // 3. fact = ставка × унікальні (група+дата). Ключ — норм-назва "предмет ставка".
+    var factByNorm = {};
+    withRate.forEach(function(a){
+      var uniq = lessonsBySubj[a.id] ? Object.keys(lessonsBySubj[a.id]).length : 0;
+      var rowName = a.subject + ' ' + a.rate;   // "Англійська мова 280"
+      factByNorm[_journalNormName(rowName)] = {
+        fact: uniq * a.rate, lessons: uniq, rate: a.rate, name: rowName, subject: a.subject
+      };
+    });
+    Logger.log('[exportPredmetnyToSalary] предметів зі ставкою=%s', withRate.length);
+
+    // 4. Salary-файл локації.
+    var reg = _salaryGetRegistry();
+    if (!reg.ok) return reg;
+    var entry = null;
+    for (var j = 0; j < reg.rows.length; j++){
+      if (reg.rows[j].loc === loc){ entry = reg.rows[j]; break; }
+    }
+    if (!entry) return {ok: false, error: 'Локація "' + loc + '" не знайдена у Salary-реєстрі'};
+    var locSS = SpreadsheetApp.openById(entry.sheetId);
+    var sheet = locSS.getSheetByName(entry.listName);
+    if (!sheet) return {ok: false, error: 'Salary sheet "' + entry.listName + '" не знайдено'};
+
+    var lastRow = Math.max(sheet.getLastRow(), 80);
+    var names = sheet.getRange(1, 1, lastRow, 1).getValues();
+    var targetMonth = nextM.month;
+    var budgetCol = (targetMonth - 1) * 3 + 3;
+    var targetMonthName = MONTHS_CAL_UA[targetMonth - 1];
+    Logger.log('[exportPredmetnyToSalary] targetMonth=%s (%s), budgetCol=%s', targetMonth, targetMonthName, budgetCol);
+
+    // Карта норм-назва рядка → 1-based row.
+    var rowByNorm = {};
+    for (var k = 3; k < names.length; k++){
+      var rn = _journalNormName(names[k][0]);
+      if (rn && !rowByNorm.hasOwnProperty(rn)) rowByNorm[rn] = k + 1;
+    }
+
+    var budgetColValues   = sheet.getRange(1, budgetCol, lastRow, 1).getValues();
+    var budgetColFormulas = sheet.getRange(1, budgetCol, lastRow, 1).getFormulas();
+    var journal = _readJournalForTarget(loc, 'predmetnyky', nextM.year, nextM.month);
+
+    var journalOps = [];
+    var updated = 0, totalFact = 0, cellsWritten = 0, formulaRowsSkipped = 0;
+    var notFound = [], details = [];
+
+    Object.keys(factByNorm).forEach(function(nk){
+      var info = factByNorm[nk];
+      var rowFound = rowByNorm[nk] || -1;
+      if (rowFound <= 0){
+        notFound.push(info.name);
+        details.push({subject: info.name, fact: info.fact, lessons: info.lessons, status: 'not-in-salary'});
+        Logger.log('[exportPredmetnyToSalary] NO-MATCH "%s" (norm="%s")', info.name, nk);
+        return;
+      }
+      var rowIdx0 = rowFound - 1;
+      if (budgetColFormulas[rowIdx0] && budgetColFormulas[rowIdx0][0]){
+        formulaRowsSkipped++;
+        Logger.log('[exportPredmetnyToSalary] skipped formula row %s: %s', rowFound, budgetColFormulas[rowIdx0][0]);
+        return;
+      }
+      var currentValue = Number(budgetColValues[rowIdx0][0]) || 0;
+      var je = journal.byNormName[nk];
+      var lastWritten = je ? je.sum : 0;
+      var baseValue = currentValue - lastWritten;
+      var newValue = baseValue + info.fact;
+      if (newValue !== currentValue){
+        sheet.getRange(rowFound, budgetCol).setValue(newValue);
+        cellsWritten++;
+      }
+      if (info.fact !== lastWritten){
+        journalOps.push({nk: nk, loc: loc, kind: 'predmetnyky', name: info.name,
+          year: nextM.year, month: nextM.month, newSum: info.fact});
+      }
+      updated++;
+      totalFact += info.fact;
+      details.push({subject: info.name, fact: info.fact, lessons: info.lessons,
+        currentBefore: currentValue, lastWritten: lastWritten, baseValue: baseValue,
+        newCell: newValue, row: rowFound, status: 'updated'});
+      Logger.log('[exportPredmetnyToSalary] WRITE row=%s "%s" lessons=%s fact=%s cur=%s last=%s base=%s → %s', rowFound, info.name, info.lessons, info.fact, currentValue, lastWritten, baseValue, newValue);
+    });
+
+    _commitJournalUpdates(journal, journalOps);
+    Logger.log('[exportPredmetnyToSalary] DONE updated=%s totalFact=%s cellsWritten=%s formulaSkipped=%s notFound=%s', updated, totalFact, cellsWritten, formulaRowsSkipped, JSON.stringify(notFound));
+
+    return {
+      ok: true,
+      updated: updated,
+      totalFact: totalFact,
+      notFound: notFound,
+      details: details,
+      loc: loc,
+      sourceMonth: monthName,
+      targetMonth: targetMonthName,
+      budgetCol: budgetCol,
+      cellsWritten: cellsWritten,
+      formulaRowsSkipped: formulaRowsSkipped
+    };
+  } catch(e){
+    Logger.log('[exportPredmetnyToSalary] EXCEPTION: %s\n%s', e && e.message, e && e.stack);
+    return {ok: false, error: String(e && e.message || e)};
+  }
+}
+
+// Тест: запусти вручну з Apps Script editor.
+function testExportPredmetny(){
+  var result = exportPredmetnyToSalary({loc: 'Голосієво', month: 6, year: 2026});
+  Logger.log('[testExportPredmetny] result: %s', JSON.stringify(result, null, 2));
+  return result;
 }
