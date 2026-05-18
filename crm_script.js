@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v6.5
+// m.kids CRM — Google Apps Script v6.6
+// v6.6: Задачник — управління задачами в команді; листи "Задачі" +
+//        "Задачі_Активність"; email-нагадування; daily-тригер о 09:00
 // v6.5: вчителі-предметники — групові заняття у вартості навчання;
 //        ЗП = ставка × унікальні (група+дата); пише ТІЛЬКИ у Salary
 // v6.1: автоекспорт пише У ФАЙЛИ ЛОКАЦІЙ (а не в CRM-зведення)
@@ -201,6 +203,9 @@ function doGet(e) {
     else if (action === 'getAttendanceMarks')         result = getAttendanceMarks(e.parameter || {});
     else if (action === 'getPredmetnyCatalog')        result = getPredmetnyCatalog(e.parameter && e.parameter.loc || '');
     else if (action === 'getPredmetnyMarks')          result = getPredmetnyMarks(e.parameter || {});
+    else if (action === 'getTasks')                   result = getTasks(e.parameter || {});
+    else if (action === 'getTaskActivity')            result = getTaskActivity(e.parameter && e.parameter.taskId || 0);
+    else if (action === 'getDashboardNotifications')  result = getDashboardNotifications(e.parameter && e.parameter.userId || 0, e.parameter && e.parameter.role || '');
     else                                             result = {ok:false, error:'Unknown action: ' + action};
     return jsonOut(result);
   } catch(err) {
@@ -243,6 +248,10 @@ function doPost(e) {
     else if (body.action === 'removePredmetnyMark')       result = removePredmetnyMark(body.id || 0);
     else if (body.action === 'getPredmetnyMarks')         result = getPredmetnyMarks(body || {});
     else if (body.action === 'exportPredmetnyToSalary')   result = exportPredmetnyToSalary(body || {});
+    else if (body.action === 'createTask')                result = createTask(body.data || {});
+    else if (body.action === 'updateTaskStatus')          result = updateTaskStatus(body.taskId || 0, body.status || '', body.actorId || 0);
+    else if (body.action === 'addTaskComment')            result = addTaskComment(body.taskId || 0, body.comment || '', body.fileUrl || '', body.actorId || 0);
+    else if (body.action === 'deleteTask')                result = deleteTask(body.taskId || 0, body.actorId || 0);
     else result = {ok:false, error:'Unknown action'};
     return jsonOut(result);
   } catch(err) {
@@ -4435,4 +4444,437 @@ function testExportPredmetny(){
   var result = exportPredmetnyToSalary({loc: 'Голосієво', month: 6, year: 2026});
   Logger.log('[testExportPredmetny] result: %s', JSON.stringify(result, null, 2));
   return result;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ЗАДАЧНИК (v6.6) — управління задачами в команді.
+// Листи CONFIG: "Задачі" + "Задачі_Активність" (журнал коментарів/подій).
+// Активність задач — окремий лист, НЕ пов'язаний з Експорт_Журналом.
+// ═══════════════════════════════════════════════════════════════════════════
+var TASKS_SHEET_NAME     = 'Задачі';
+var TASKS_ACT_SHEET_NAME = 'Задачі_Активність';
+var TASKS_HEADER = ['id','created_at','author','assignee','title','description',
+                    'priority','deadline','location','status','group_id','parent_id'];
+var TASKS_ACT_HEADER = ['id','task_id','author','type','content','file_url','created_at'];
+
+// Ролі-менеджмент: ставлять задачі (tasks-create). director — лише отримує.
+var TASK_MGMT_ROLES = ['cfo','ceo','cco','coo','hr','cmo','rnd_director','hr_trainer','legal'];
+
+function _getTasksSheet(create){
+  var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var sh = ss.getSheetByName(TASKS_SHEET_NAME);
+  if (!sh && create){
+    sh = ss.insertSheet(TASKS_SHEET_NAME);
+    sh.getRange(1,1,1,TASKS_HEADER.length).setValues([TASKS_HEADER]);
+    sh.setFrozenRows(1);
+  }
+  if (!sh) throw new Error('Лист "'+TASKS_SHEET_NAME+'" не знайдено.');
+  // created_at(2) / deadline(8) — текстові, щоб дати не плавали по TZ.
+  sh.getRange(1,2,sh.getMaxRows(),1).setNumberFormat('@');
+  sh.getRange(1,8,sh.getMaxRows(),1).setNumberFormat('@');
+  return sh;
+}
+function _getTaskActSheet(create){
+  var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var sh = ss.getSheetByName(TASKS_ACT_SHEET_NAME);
+  if (!sh && create){
+    sh = ss.insertSheet(TASKS_ACT_SHEET_NAME);
+    sh.getRange(1,1,1,TASKS_ACT_HEADER.length).setValues([TASKS_ACT_HEADER]);
+    sh.setFrozenRows(1);
+  }
+  if (!sh) throw new Error('Лист "'+TASKS_ACT_SHEET_NAME+'" не знайдено.');
+  sh.getRange(1,7,sh.getMaxRows(),1).setNumberFormat('@');
+  return sh;
+}
+
+function _taskDateStr(v){
+  if (v instanceof Date) return Utilities.formatDate(v,'Europe/Kiev','yyyy-MM-dd');
+  return String(v == null ? '' : v).trim();
+}
+function _taskNow(){   return Utilities.formatDate(new Date(),'Europe/Kiev','yyyy-MM-dd HH:mm'); }
+function _taskToday(){ return Utilities.formatDate(new Date(),'Europe/Kiev','yyyy-MM-dd'); }
+
+function _parseTaskRow(row){
+  return {
+    id:          Number(row[0]) || 0,
+    createdAt:   String(row[1] || '').trim(),
+    author:      Number(row[2]) || 0,
+    assignee:    Number(row[3]) || 0,
+    title:       String(row[4] || '').trim(),
+    description: String(row[5] || '').trim(),
+    priority:    String(row[6] || 'normal').trim() || 'normal',
+    deadline:    _taskDateStr(row[7]),
+    location:    String(row[8] || '').trim(),
+    status:      String(row[9] || 'new').trim() || 'new',
+    groupId:     String(row[10] || '').trim(),
+    parentId:    Number(row[11]) || 0
+  };
+}
+function _parseTaskActRow(row){
+  return {
+    id:        Number(row[0]) || 0,
+    taskId:    Number(row[1]) || 0,
+    author:    Number(row[2]) || 0,
+    type:      String(row[3] || '').trim(),
+    content:   String(row[4] || '').trim(),
+    fileUrl:   String(row[5] || '').trim(),
+    createdAt: String(row[6] || '').trim()
+  };
+}
+function _nextTaskRowId(sh){
+  var data = sh.getDataRange().getValues();
+  var max = 0;
+  for (var i=1;i<data.length;i++){ var n=Number(data[i][0])||0; if(n>max)max=n; }
+  return max+1;
+}
+// Карта користувачів {id: {name, role, email, ...}} — для резолву імен/email.
+function _taskUserMap(){
+  var sh = _getUsersSheet();
+  var data = sh.getDataRange().getValues();
+  var map = {};
+  for (var i=1;i<data.length;i++){
+    if (!data[i][0]) continue;
+    var u = _parseUserRow(data[i]);
+    map[u.id] = u;
+  }
+  return map;
+}
+function _taskMail(toEmail, subject, body){
+  if (!toEmail) return;
+  try { MailApp.sendEmail(toEmail, subject, body); }
+  catch(e){ Logger.log('[tasks] mail fail to %s: %s', toEmail, e); }
+}
+
+// ── createTask ─────────────────────────────────────────────────────────────
+// assignee може бути id користувача АБО 'ALL_DIRECTORS' / 'ALL_MANAGEMENT' —
+// тоді створюється N копій задачі з одним group_id (групова задача).
+function createTask(params){
+  try {
+    params = params || {};
+    var sh = _getTasksSheet(true);
+    var users = _taskUserMap();
+    var author = Number(params.author) || 0;
+    var title  = String(params.title || '').trim();
+    if (!author) return {ok:false, error:'Не вказано автора'};
+    if (!title)  return {ok:false, error:'Вкажіть назву задачі'};
+
+    var assigneeRaw = params.assignee;
+    var assigneeList = [];
+    if (assigneeRaw === 'ALL_DIRECTORS'){
+      Object.keys(users).forEach(function(id){
+        if (users[id].active && users[id].role === 'director') assigneeList.push(Number(id));
+      });
+    } else if (assigneeRaw === 'ALL_MANAGEMENT'){
+      Object.keys(users).forEach(function(id){
+        if (users[id].active && TASK_MGMT_ROLES.indexOf(users[id].role) !== -1)
+          assigneeList.push(Number(id));
+      });
+    } else {
+      var aid = Number(assigneeRaw) || 0;
+      if (aid) assigneeList.push(aid);
+    }
+    if (!assigneeList.length) return {ok:false, error:'Не вказано виконавця'};
+
+    var isGroup  = assigneeList.length > 1;
+    var groupId  = isGroup ? ('g' + Date.now()) : '';
+    var now      = _taskNow();
+    var priority = String(params.priority || 'normal').trim() || 'normal';
+    var deadline = String(params.deadline || '').trim();
+    var location = String(params.location || '').trim();
+    var descr    = String(params.description || '').trim();
+    var parentId = Number(params.parentId) || '';
+    var actSh    = _getTaskActSheet(true);
+    var ids = [];
+
+    assigneeList.forEach(function(aid){
+      var id = _nextTaskRowId(sh);
+      sh.appendRow([id, now, author, aid, title, descr, priority,
+                    deadline, location, 'new', groupId, parentId]);
+      actSh.appendRow([_nextTaskRowId(actSh), id, author, 'created',
+                       'Задачу створено', '', now]);
+      ids.push(id);
+      var au = users[aid];
+      if (au && au.email){
+        _taskMail(au.email, 'Нова задача: ' + title,
+          'Вам поставлено задачу "' + title + '".\n' +
+          (descr ? descr + '\n' : '') +
+          (deadline ? 'Дедлайн: ' + deadline + '\n' : '') +
+          'Пріоритет: ' + priority + '\n\nВідкрийте Задачник у системі m.kids.');
+      }
+    });
+    return {ok:true, ids:ids, groupId:groupId, count:ids.length};
+  } catch(e){
+    return {ok:false, error:String(e && e.message || e)};
+  }
+}
+
+// ── getTasks ───────────────────────────────────────────────────────────────
+function getTasks(filters){
+  try {
+    filters = filters || {};
+    var viewerId   = Number(filters.viewerId) || 0;
+    var viewerRole = String(filters.viewerRole || '').trim().toLowerCase();
+    var isMgmt = (viewerRole === 'cfo' || viewerRole === 'hr' ||
+                  TASK_MGMT_ROLES.indexOf(viewerRole) !== -1);
+    var scope = String(filters.scope || 'mine_assigned');
+    if (!isMgmt) scope = 'mine_assigned'; // директор локації — лише свої
+
+    var sh = _getTasksSheet(true);
+    var data = sh.getDataRange().getValues();
+    var users = _taskUserMap();
+    var all = [], groupStat = {};
+
+    for (var i=1;i<data.length;i++){
+      if (!data[i][0]) continue;
+      var t = _parseTaskRow(data[i]);
+      if (t.status === 'deleted') continue;
+      all.push(t);
+      if (t.groupId){
+        if (!groupStat[t.groupId]) groupStat[t.groupId] = {total:0, done:0};
+        groupStat[t.groupId].total++;
+        if (t.status === 'done') groupStat[t.groupId].done++;
+      }
+    }
+
+    var tasks = [];
+    all.forEach(function(t){
+      if (scope === 'mine_assigned' && t.assignee !== viewerId) return;
+      if (scope === 'mine_authored' && t.author   !== viewerId) return;
+      if (filters.status   && t.status   !== filters.status)   return;
+      if (filters.priority && t.priority !== filters.priority) return;
+      if (filters.location && t.location !== filters.location) return;
+      if (filters.search){
+        var q = String(filters.search).toLowerCase();
+        if ((t.title+' '+t.description).toLowerCase().indexOf(q) === -1) return;
+      }
+      var au = users[t.author], as = users[t.assignee];
+      tasks.push({
+        id:t.id, createdAt:t.createdAt, title:t.title, description:t.description,
+        priority:t.priority, deadline:t.deadline, location:t.location,
+        status:t.status, groupId:t.groupId, parentId:t.parentId,
+        author:t.author, authorName: au ? au.name : ('#'+t.author),
+        assignee:t.assignee, assigneeName: as ? as.name : ('#'+t.assignee),
+        group: t.groupId ? groupStat[t.groupId] : null
+      });
+    });
+    return {ok:true, tasks:tasks};
+  } catch(e){
+    return {ok:false, error:String(e && e.message || e)};
+  }
+}
+
+// ── updateTaskStatus ───────────────────────────────────────────────────────
+function updateTaskStatus(taskId, newStatus, actorId){
+  try {
+    var nid = Number(taskId) || 0;
+    var VALID = ['new','in_progress','review','done','rejected'];
+    if (!nid) return {ok:false, error:'Missing taskId'};
+    if (VALID.indexOf(newStatus) === -1) return {ok:false, error:'Невірний статус'};
+    var sh = _getTasksSheet(true);
+    var data = sh.getDataRange().getValues();
+    var users = _taskUserMap();
+    for (var i=1;i<data.length;i++){
+      if (Number(data[i][0]) === nid){
+        var t = _parseTaskRow(data[i]);
+        sh.getRange(i+1, 10).setValue(newStatus); // колонка status
+        var now = _taskNow();
+        _getTaskActSheet(true).appendRow(
+          [_nextTaskRowId(_getTaskActSheet(true)), nid, Number(actorId)||0,
+           'status_change', newStatus, '', now]);
+        var author = users[t.author], assignee = users[t.assignee];
+        if (newStatus === 'review' && author && author.email){
+          _taskMail(author.email, 'Задача готова до перевірки: '+t.title,
+            'Виконавець позначив задачу "'+t.title+'" як готову до перевірки.');
+        } else if (newStatus === 'rejected' && assignee && assignee.email){
+          _taskMail(assignee.email, 'Повернуто: '+t.title,
+            'Задачу "'+t.title+'" повернуто на доопрацювання.');
+        }
+        return {ok:true, status:newStatus};
+      }
+    }
+    return {ok:false, error:'Задачу не знайдено'};
+  } catch(e){
+    return {ok:false, error:String(e && e.message || e)};
+  }
+}
+
+// ── addTaskComment ─────────────────────────────────────────────────────────
+function addTaskComment(taskId, comment, fileUrl, actorId){
+  try {
+    var nid = Number(taskId) || 0;
+    if (!nid) return {ok:false, error:'Missing taskId'};
+    comment = String(comment || '').trim();
+    fileUrl = String(fileUrl || '').trim();
+    if (!comment && !fileUrl) return {ok:false, error:'Порожній коментар'};
+    var sh = _getTasksSheet(true);
+    var data = sh.getDataRange().getValues();
+    var users = _taskUserMap();
+    var task = null;
+    for (var i=1;i<data.length;i++){
+      if (Number(data[i][0]) === nid){ task = _parseTaskRow(data[i]); break; }
+    }
+    if (!task) return {ok:false, error:'Задачу не знайдено'};
+    var actSh = _getTaskActSheet(true);
+    var aId = Number(actorId) || 0;
+    actSh.appendRow([_nextTaskRowId(actSh), nid, aId,
+                     fileUrl ? 'file' : 'comment', comment, fileUrl, _taskNow()]);
+    var otherId = (aId === task.author) ? task.assignee : task.author;
+    var other = users[otherId];
+    if (other && other.email){
+      _taskMail(other.email, 'Новий коментар у задачі: '+task.title,
+        (users[aId] ? users[aId].name : 'Користувач') + ': ' +
+        (comment || '[файл]') + (fileUrl ? '\nФайл: '+fileUrl : ''));
+    }
+    return {ok:true};
+  } catch(e){
+    return {ok:false, error:String(e && e.message || e)};
+  }
+}
+
+// ── deleteTask (м'яке видалення — лише автор) ──────────────────────────────
+function deleteTask(taskId, actorId){
+  try {
+    var nid = Number(taskId) || 0;
+    if (!nid) return {ok:false, error:'Missing taskId'};
+    var actor = Number(actorId) || 0;
+    var sh = _getTasksSheet(true);
+    var data = sh.getDataRange().getValues();
+    for (var i=1;i<data.length;i++){
+      if (Number(data[i][0]) === nid){
+        var t = _parseTaskRow(data[i]);
+        if (t.author !== actor) return {ok:false, error:'Видалити може лише автор'};
+        sh.getRange(i+1, 10).setValue('deleted');
+        _getTaskActSheet(true).appendRow(
+          [_nextTaskRowId(_getTaskActSheet(true)), nid, actor,
+           'status_change', 'deleted', '', _taskNow()]);
+        return {ok:true};
+      }
+    }
+    return {ok:false, error:'Задачу не знайдено'};
+  } catch(e){
+    return {ok:false, error:String(e && e.message || e)};
+  }
+}
+
+// ── getTaskActivity ────────────────────────────────────────────────────────
+function getTaskActivity(taskId){
+  try {
+    var nid = Number(taskId) || 0;
+    if (!nid) return {ok:false, error:'Missing taskId'};
+    var sh = _getTaskActSheet(true);
+    var data = sh.getDataRange().getValues();
+    var users = _taskUserMap();
+    var items = [];
+    for (var i=1;i<data.length;i++){
+      if (!data[i][0]) continue;
+      var a = _parseTaskActRow(data[i]);
+      if (a.taskId !== nid) continue;
+      var u = users[a.author];
+      items.push({
+        id:a.id, type:a.type, content:a.content, fileUrl:a.fileUrl,
+        createdAt:a.createdAt, author:a.author,
+        authorName: u ? u.name : ('#'+a.author)
+      });
+    }
+    items.sort(function(x,y){ return x.id - y.id; });
+    return {ok:true, items:items};
+  } catch(e){
+    return {ok:false, error:String(e && e.message || e)};
+  }
+}
+
+// ── getDashboardNotifications ──────────────────────────────────────────────
+// Бейдж = нові призначені задачі + свіжі коментарі/зміни (останні 2 дні).
+function getDashboardNotifications(userId, role){
+  try {
+    var uid = Number(userId) || 0;
+    var sh = _getTasksSheet(true);
+    var data = sh.getDataRange().getValues();
+    var users = _taskUserMap();
+    var tomorrow = Utilities.formatDate(new Date(Date.now()+86400000),'Europe/Kiev','yyyy-MM-dd');
+
+    var myTasks = {}, newTasks = 0, overdueDueTomorrow = 0;
+    for (var i=1;i<data.length;i++){
+      if (!data[i][0]) continue;
+      var t = _parseTaskRow(data[i]);
+      if (t.status === 'deleted') continue;
+      if (t.assignee !== uid && t.author !== uid) continue;
+      myTasks[t.id] = t;
+      if (t.assignee === uid && t.status === 'new') newTasks++;
+      if (t.assignee === uid && t.status !== 'done' && t.deadline &&
+          t.deadline <= tomorrow) overdueDueTomorrow++;
+    }
+    var actSh = _getTaskActSheet(true);
+    var adata = actSh.getDataRange().getValues();
+    var cutoff = Utilities.formatDate(new Date(Date.now()-2*86400000),
+                                      'Europe/Kiev','yyyy-MM-dd HH:mm');
+    var events = [], comments = 0;
+    for (var j=adata.length-1;j>=1;j--){
+      if (!adata[j][0]) continue;
+      var a = _parseTaskActRow(adata[j]);
+      if (!myTasks[a.taskId]) continue;
+      if (a.author === uid) continue;
+      if (a.createdAt < cutoff) continue;
+      if (a.type === 'comment' || a.type === 'file') comments++;
+      if (events.length < 10){
+        var u = users[a.author];
+        events.push({
+          taskId:a.taskId, taskTitle: myTasks[a.taskId].title,
+          type:a.type, content:a.content,
+          who: u ? u.name : ('#'+a.author), at:a.createdAt
+        });
+      }
+    }
+    return {ok:true, newTasks:newTasks, overdueDueTomorrow:overdueDueTomorrow,
+            comments:comments, badge:(newTasks + comments), events:events};
+  } catch(e){
+    return {ok:false, error:String(e && e.message || e)};
+  }
+}
+
+// ── Time-trigger: щоденні нагадування о 09:00 ──────────────────────────────
+// setupTaskReminders() запустити ВРУЧНУ один раз із Apps Script editor.
+function setupTaskReminders(){
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i=0;i<triggers.length;i++){
+    if (triggers[i].getHandlerFunction() === 'dailyTaskReminders')
+      ScriptApp.deleteTrigger(triggers[i]);
+  }
+  ScriptApp.newTrigger('dailyTaskReminders')
+    .timeBased().atHour(9).everyDays(1)
+    .inTimezone('Europe/Kiev').create();
+  Logger.log('[setupTaskReminders] daily 09:00 trigger створено');
+  return {ok:true};
+}
+function dailyTaskReminders(){
+  var sh = _getTasksSheet(true);
+  var data = sh.getDataRange().getValues();
+  var users = _taskUserMap();
+  var today = _taskToday();
+  var tomorrow = Utilities.formatDate(new Date(Date.now()+86400000),'Europe/Kiev','yyyy-MM-dd');
+  var sent = 0;
+  for (var i=1;i<data.length;i++){
+    if (!data[i][0]) continue;
+    var t = _parseTaskRow(data[i]);
+    if (t.status === 'done' || t.status === 'deleted' || !t.deadline) continue;
+    var assignee = users[t.assignee], author = users[t.author];
+    if (t.deadline < today){
+      if (assignee && assignee.email){
+        _taskMail(assignee.email,'Задача прострочена: '+t.title,
+          'Задача "'+t.title+'" прострочена (дедлайн '+t.deadline+').'); sent++; }
+      if (author && author.email && t.author !== t.assignee){
+        _taskMail(author.email,'Задача прострочена: '+t.title,
+          'Задача "'+t.title+'" (виконавець '+(assignee?assignee.name:'?')+') прострочена.'); sent++; }
+    } else if (t.deadline === today){
+      if (assignee && assignee.email){
+        _taskMail(assignee.email,'У вас задача на сьогодні: '+t.title,
+          'Сьогодні дедлайн задачі "'+t.title+'".'); sent++; }
+    } else if (t.deadline === tomorrow){
+      if (assignee && assignee.email){
+        _taskMail(assignee.email,'Завтра дедлайн: '+t.title,
+          'Завтра дедлайн задачі "'+t.title+'".'); sent++; }
+    }
+  }
+  Logger.log('[dailyTaskReminders] листів надіслано: %s', sent);
+  return {ok:true, sent:sent};
 }

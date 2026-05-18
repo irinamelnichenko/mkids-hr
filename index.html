@@ -364,6 +364,12 @@ tbody tr.clickable{cursor:pointer}
         <span class="ni">📊</span> Дашборд
       </div>
 
+      <div class="nav-item" data-permission="tasks" data-perm-page="tasks"
+           onclick="window.location.href='tasks.html'">
+        <span class="ni">📋</span> Задачник
+        <span class="nav-badge hidden" id="tasksBadge">0</span>
+      </div>
+
       <div class="nav-sec" data-section="crm">👶 КЛІЄНТИ CRM</div>
       <div class="nav-item" data-permission="clients_list" data-parent="crm" data-perm-page="clients"
            onclick="goPerm('clients_list')">
@@ -1262,6 +1268,14 @@ const PERMISSIONS = {
     'card-child-notes','card-child-health'
   ]
 };
+// Задачник: tasks — менеджмент + director; tasks-create — лише менеджмент.
+(function(){
+  ['ceo','cco','coo','rnd_director','hr_trainer','legal'].forEach(function(r){
+    if (Array.isArray(PERMISSIONS[r])){ PERMISSIONS[r].push('tasks'); PERMISSIONS[r].push('tasks-create'); }
+  });
+  if (Array.isArray(PERMISSIONS.director)) PERMISSIONS.director.push('tasks');
+  PERMISSIONS.cmo = ['dashboard','tasks','tasks-create'];
+})();
 
 const PERM_LOCAL_ACTION = {
   dashboard:         () => nav('dashboard'),
@@ -3783,6 +3797,28 @@ window.addEventListener('DOMContentLoaded',async()=>{
   loadUsersForDropdown();
   populateLoginLocations();
 });
+</script>
+<script>
+/* Задачник: бейдж непрочитаних у бічному меню (опитування кожні 60с). */
+(function(){
+  var st=document.createElement('style');
+  st.textContent='.nav-badge{margin-left:auto;background:#e74c3c;color:#fff;font-size:11px;font-weight:800;min-width:18px;height:18px;border-radius:9px;display:inline-flex;align-items:center;justify-content:center;padding:0 5px}.nav-badge.hidden{display:none!important}';
+  document.head.appendChild(st);
+  var U='https://script.google.com/macros/s/AKfycbyTSUVlaN4-PpXe47zCSmhVs0Qxy1FDXG_XsB4zcKNpqBxdhDtS9ibM4YFGkGjmPQDFWQ/exec';
+  function poll(){
+    var b=document.getElementById('tasksBadge'); if(!b) return;
+    var s; try{ s=JSON.parse(localStorage.getItem('mkids_session')||'null'); }catch(e){ return; }
+    if(!s||!s.user||!s.user.id) return;
+    fetch(U+'?action=getDashboardNotifications&userId='+encodeURIComponent(s.user.id)+'&role='+encodeURIComponent(s.user.role||''),{redirect:'follow'})
+      .then(function(r){return r.json();})
+      .then(function(res){
+        if(!res||!res.ok) return;
+        if(res.badge>0){ b.textContent=res.badge; b.classList.remove('hidden'); }
+        else b.classList.add('hidden');
+      }).catch(function(){});
+  }
+  setTimeout(poll,1500); setInterval(poll,60000);
+})();
 </script>
 </body>
 </html>
