@@ -3853,8 +3853,10 @@ function _parsePredmetnyCatRow(row){
 function _parsePredmetnyAttRow(row){
   var d = row[1], dateStr;
   if (d instanceof Date){
-    var y = d.getFullYear(), m = d.getMonth() + 1, dd = d.getDate();
-    dateStr = y + '-' + (m < 10 ? '0' + m : m) + '-' + (dd < 10 ? '0' + dd : dd);
+    // Канонічна TZ проєкту — Europe/Kiev (як formatDate вище). Без явної
+    // TZ getDate() рахує у TZ скрипта і дата зсувається на ±1 день, через
+    // що точний фільтр getPredmetnyMarks не знаходить збережену відмітку.
+    dateStr = Utilities.formatDate(d, 'Europe/Kiev', 'yyyy-MM-dd');
   } else {
     dateStr = String(d || '').trim();
   }
@@ -3967,6 +3969,10 @@ function deletePredmetny(id){
 function addPredmetnyMark(data){
   try {
     var sh = _getPredmetnyAttSheet(true);
+    // Колонка Дата (B) — примусово текстова. Інакше Sheets конвертує
+    // рядок '2026-05-18' у date-serial, і round-trip дати стає залежним
+    // від TZ — точний фільтр getPredmetnyMarks втрачає відмітку.
+    sh.getRange(1, 2, sh.getMaxRows(), 1).setNumberFormat('@');
     var id = _nextPredmetnyRowId(sh);
     var row = [
       id,
