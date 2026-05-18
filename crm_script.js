@@ -4677,7 +4677,7 @@ function getTasks(filters){
 function updateTaskStatus(taskId, newStatus, actorId){
   try {
     var nid = Number(taskId) || 0;
-    var VALID = ['new','in_progress','review','done','rejected'];
+    var VALID = ['new','in_progress','done'];
     if (!nid) return {ok:false, error:'Missing taskId'};
     if (VALID.indexOf(newStatus) === -1) return {ok:false, error:'Невірний статус'};
     var sh = _getTasksSheet(true);
@@ -4691,17 +4691,10 @@ function updateTaskStatus(taskId, newStatus, actorId){
         _getTaskActSheet(true).appendRow(
           [_nextTaskRowId(_getTaskActSheet(true)), nid, Number(actorId)||0,
            'status_change', newStatus, '', now]);
-        var author = users[t.author], assignee = users[t.assignee];
-        if (newStatus === 'review' && author && author.email){
-          _taskMail(author.email, 'Задача готова до перевірки: '+t.title,
-            'Виконавець позначив задачу "'+t.title+'" як готову до перевірки.');
-        } else if (t.status === 'review' && newStatus === 'in_progress' &&
-                   assignee && assignee.email){
-          _taskMail(assignee.email, 'Повернуто на доопрацювання: '+t.title,
-            'Задачу "'+t.title+'" повернуто на доопрацювання.');
-        } else if (newStatus === 'rejected' && assignee && assignee.email){
-          _taskMail(assignee.email, 'Повернуто: '+t.title,
-            'Задачу "'+t.title+'" повернуто на доопрацювання.');
+        var author = users[t.author];
+        if (newStatus === 'done' && author && author.email){
+          _taskMail(author.email, 'Задача виконана: '+t.title,
+            'Виконавець позначив задачу "'+t.title+'" як виконану.');
         }
         return {ok:true, status:newStatus};
       }

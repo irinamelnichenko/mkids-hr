@@ -544,8 +544,7 @@ select,input,textarea{font-family:inherit}
       <option value="">Всі статуси</option>
       <option value="new">Нові</option>
       <option value="in_progress">В роботі</option>
-      <option value="review">На перевірці</option>
-      <option value="done">Готові</option>
+      <option value="done">Виконані</option>
       <option value="rejected">Повернені</option>
     </select>
     <select id="fPriority" onchange="onFilter()">
@@ -632,8 +631,8 @@ var S = {
 };
 
 var PRIORITY_LBL = {normal:'Звичайний', high:'Високий', urgent:'Терміновий'};
-var STATUS_LBL   = {new:'Нова', in_progress:'В роботі', review:'На перевірці',
-                    done:'Готово', rejected:'Повернено', deleted:'Видалено'};
+var STATUS_LBL   = {new:'Нова', in_progress:'В роботі',
+                    done:'Виконано', deleted:'Видалено'};
 
 // ── HELPERS ─────────────────────────────────
 function $(id){ return document.getElementById(id); }
@@ -1205,16 +1204,16 @@ function detailActions(t){
     }
   } else if (t.status === 'in_progress'){
     if (isAssignee){
-      btns.push('<button class="btn btn-primary" onclick="changeStatus(\'review\')">📤 Здати на перевірку</button>');
+      btns.push('<button class="btn btn-primary" onclick="changeStatus(\'done\')">✅ Виконано</button>');
       btns.push('<button class="btn btn-secondary" onclick="changeStatus(\'new\')">↩️ Повернути на «Нова»</button>');
     }
-  } else if (t.status === 'review'){
-    if (isAuthor){
-      btns.push('<button class="btn btn-primary" onclick="changeStatus(\'done\')">✅ Прийняти</button>');
-      btns.push('<button class="btn btn-danger" onclick="returnToRework()">↩️ Повернути на доопрацювання</button>');
-    }
+    if (isAuthor)
+      btns.push('<button class="btn btn-danger" onclick="removeTask()">🗑 Видалити</button>');
+  } else if (t.status === 'done'){
+    if (isAuthor)
+      btns.push('<button class="btn btn-secondary" onclick="changeStatus(\'in_progress\')">↩️ Повернути в роботу</button>');
   }
-  // 'done' — кнопок дій немає, лише коментарі.
+  // 'done' для не-автора — кнопок дій немає, лише коментарі.
   btns.push('<button class="btn btn-secondary" onclick="closeDetail()">Закрити</button>');
   return btns.join('');
 }
@@ -1223,25 +1222,6 @@ function editCurrentTask(){
   if (!t){ return; }
   closeDetail();
   openTaskModal(t);
-}
-function returnToRework(){
-  var reason = prompt('Причина повернення на доопрацювання:');
-  if (reason === null) return;            // користувач скасував
-  reason = String(reason).trim();
-  var id = S.detailId, actor = S.user.id;
-  apiPost({action:'updateTaskStatus', taskId:id, status:'in_progress', actorId:actor})
-    .then(function(res){
-      if (!res || !res.ok){ showToast('❌ '+((res&&res.error)||'Помилка'),'err'); return; }
-      var finish = function(){
-        showToast('↩️ Повернуто на доопрацювання','ok');
-        closeDetail(); loadTasks();
-      };
-      if (reason){
-        apiPost({action:'addTaskComment', taskId:id,
-                 comment:'↩️ Повернуто на доопрацювання: '+reason, fileUrl:'', actorId:actor})
-          .then(finish).catch(finish);
-      } else finish();
-    }).catch(function(){ showToast('❌ Помилка мережі','err'); });
 }
 function changeStatus(newStatus){
   apiPost({action:'updateTaskStatus', taskId:S.detailId, status:newStatus, actorId:S.user.id})
