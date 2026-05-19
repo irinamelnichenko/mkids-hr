@@ -5345,3 +5345,130 @@ function auditPredmetnyInSalary(){
   summary.forEach(function(s){ Logger.log('  ' + s); });
   return {ok: true};
 }
+
+// ── DRY-RUN: матчинг предметників → Salary без запису ──────────────────────
+// exportAllPredmetnyToSalary_DRY_RUN(month, year) — проганяє _findPredmetnySalaryRow
+// для всіх 11 локацій, НІЧОГО не пише у Salary. Звіт — у Execution log.
+function exportAllPredmetnyToSalary_DRY_RUN(month, year){
+  month = Number(month); year = Number(year) || new Date().getFullYear();
+  if (!month || month < 1 || month > 12){ Logger.log('month має бути 1-12'); return; }
+  var LOCS = ['Голосієво','Бігова','Борщагівка','Бровари',"Кар'єрна",'Кругла',
+              'Оранж','Осокорки','Позняки','Пуща','Тичини'];
+  var ICON = {P1:'✅', P2:'🔵', P3:'🟡', P4:'🟢', P5:'❌'};
+
+  var reg = _salaryGetRegistry();
+  if (!reg.ok){ Logger.log('Salary-реєстр: %s', reg.error); return; }
+  var regByLoc = {};
+  reg.rows.forEach(function(r){ regByLoc[r.loc] = r; });
+
+  var mm = month < 10 ? '0' + month : String(month);
+  var dateFrom = year + '-' + mm + '-01';
+  var nextM = _nextMonth(month, year);
+  var nmm = nextM.month < 10 ? '0' + nextM.month : String(nextM.month);
+  var dateTo = nextM.year + '-' + nmm + '-01';
+  var attData = _getPredmetnyAttSheet(true).getDataRange().getValues();
+
+  var summary = [], doubtful = [], gateLines = [];
+  Logger.log('═══════════ DRY-RUN: предметники → Salary | місяць %s/%s ═══════════', month, year);
+
+  LOCS.forEach(function(loc){
+    Logger.log('\n[ЛОКАЦІЯ %s]', loc);
+    var catItems = ((getPredmetnyCatalog(loc) || {}).items || [])
+      .filter(function(a){ return a.active && a.rate > 0; });
+
+    // Додаткові_Каталог локації — для P4-гейту.
+    var addItems = ((getActivitiesCatalog(loc) || {}).items || []);
+    var addNames = addItems.map(function(x){ return x.name; });
+    var addSubjNorms = {};
+    addItems.forEach(function(x){
+      var nn = _journalNormName(x.name); if (nn) addSubjNorms[nn] = true;
+    });
+
+    var entry = regByLoc[loc];
+    if (!entry){
+      Logger.log('  ❌ локацію не знайдено у Salary-реєстрі');
+      summary.push(loc + ' | ' + catItems.length + ' | — нема в реєстрі —');
+      return;
+    }
+    var sheet;
+    try { sheet = SpreadsheetApp.openById(entry.sheetId).getSheetByName(entry.listName); }
+    catch(e){
+      Logger.log('  ❌ доступ до Salary: %s', e && e.message || e);
+      summary.push(loc + ' | ' + catItems.length + ' | — помилка доступу —'); return;
+    }
+    if (!sheet){
+      Logger.log('  ❌ лист "%s" не знайдено', entry.listName);
+      summary.push(loc + ' | ' + catItems.length + ' | — нема листа —'); return;
+    }
+
+    var lastRow = Math.max(sheet.getLastRow(), 80);
+    var names = sheet.getRange(1, 1, lastRow, 1).getValues();
+    var salaryRows = [];
+    for (var k = 3; k < names.length; k++){
+      var raw = String(names[k][0] == null ? '' : names[k][0]).trim();
+      if (raw) salaryRows.push({row: k + 1, raw: raw, norm: _journalNormName(raw)});
+    }
+
+    var lessonsBySubj = {};
+    for (var i = 1; i < attData.length; i++){
+      var rec = _parsePredmetnyAttRow(attData[i]);
+      if (rec.loc !== loc) continue;
+      if (rec.date < dateFrom || rec.date >= dateTo) continue;
+      if (!lessonsBySubj[rec.subjectId]) lessonsBySubj[rec.subjectId] = {};
+      lessonsBySubj[rec.subjectId][rec.group + '|' + rec.date] = true;
+    }
+
+    var st = {p1:0,p2:0,p3:0,p4:0,p5:0}, sumFact = 0;
+    catItems.forEach(function(a){
+      var uniq = lessonsBySubj[a.id] ? Object.keys(lessonsBySubj[a.id]).length : 0;
+      var fact = uniq * a.rate;
+      var catName = a.subject + ' ' + a.rate;
+      var found = _findPredmetnySalaryRow(salaryRows, a.subject, a.rate, addSubjNorms);
+      if (!found){
+        st.p5++;
+        Logger.log('  %s P5: %s → НЕ ЗНАЙДЕНО (fact=%s₴)', ICON.P5, catName, fact);
+        doubtful.push('❌ [' + loc + '] ' + catName + ' → P5 НЕ ЗНАЙДЕНО · fact=' + fact + '₴ (нікуди записати)');
+        return;
+      }
+      st['p' + found.priority.slice(1)]++;
+      sumFact += fact;
+      var note = found.priority === 'P3' ? ' (інша ставка — найближча)'
+               : found.priority === 'P4' ? ' (без ставки — P4-гейт пройдено)'
+               : found.priority === 'P2' ? ' (префікс)' : '';
+      Logger.log('  %s %s: %s → A%s "%s"%s', ICON[found.priority], found.priority,
+        catName, found.row, found.matchedAs, note);
+      if (found.priority === 'P3' || found.priority === 'P4'){
+        doubtful.push((found.priority === 'P3' ? '🟡' : '🟢') + ' [' + loc + '] ' +
+          catName + ' → ' + found.priority + ' A' + found.row + ' "' + found.matchedAs +
+          '" · fact=' + fact + '₴');
+      }
+    });
+
+    Logger.log('  ── каталог=%s | P1=%s P2=%s P3=%s P4=%s P5=%s | сума fact=%s₴',
+      catItems.length, st.p1, st.p2, st.p3, st.p4, st.p5, sumFact);
+    summary.push(loc + ' | ' + catItems.length + ' | ' + st.p1 + ' | ' + st.p2 +
+      ' | ' + st.p3 + ' | ' + st.p4 + ' | ' + st.p5 + ' | ' + sumFact);
+
+    var blocked = [], allowed = [];
+    catItems.forEach(function(a){
+      if (addSubjNorms[_journalNormName(a.subject)]) blocked.push(a.subject);
+      else allowed.push(a.subject);
+    });
+    gateLines.push('[' + loc + '] Додаткові_Каталог: ' + JSON.stringify(addNames));
+    gateLines.push('   → P4 ЗАБЛОКОВАНО: ' + (blocked.join(', ') || '—') +
+      '  |  P4 дозволено: ' + (allowed.join(', ') || '—'));
+  });
+
+  Logger.log('\n═══════════ ЗВЕДЕНА ТАБЛИЦЯ ═══════════');
+  Logger.log('Локація | Каталог | P1 | P2 | P3 | P4 | P5 | Сума fact (грн)');
+  summary.forEach(function(s){ Logger.log('  ' + s); });
+
+  Logger.log('\n═══════════ СУМНІВНІ МАТЧІ — перевірити вручну (P3/P4/P5) ═══════════');
+  if (!doubtful.length) Logger.log('  (немає — усі матчі точні P1/P2)');
+  doubtful.forEach(function(d){ Logger.log('  ' + d); });
+
+  Logger.log('\n═══════════ P4-ГЕЙТ: Додаткові_Каталог по локаціях ═══════════');
+  gateLines.forEach(function(g){ Logger.log('  ' + g); });
+
+  return {ok: true};
+}
