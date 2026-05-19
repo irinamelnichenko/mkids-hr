@@ -1105,6 +1105,8 @@ async function doLoginLocation(role, locFieldId, pwFieldId){
     S.f = {loc:'',pos:'',status:'',dir:'',typ:''};
     S.q = '';
     saveSession(S.user);
+    // Вихователь не має доступу до Дашборду — одразу на Додаткові заняття.
+    if (S.user.role === 'vyhovatel'){ window.location.href = 'activities.html'; return; }
     document.getElementById('loginScreen').classList.add('hidden');
     document.getElementById('app').classList.remove('hidden');
     updUserUI(); await initApp();
@@ -1306,7 +1308,7 @@ const PERMISSIONS = {
     'card-child-banner','card-child-contract','card-child-vacations',
     'card-child-notes','card-child-health'
   ],
-  vyhovatel: ['dashboard','activities','attendance-view','attendance-edit']
+  vyhovatel: ['activities','attendance-view','attendance-edit']
 };
 // Задачник: tasks — менеджмент + director; tasks-create — лише менеджмент.
 (function(){
@@ -3821,6 +3823,10 @@ window.addEventListener('DOMContentLoaded',async()=>{
   var sessUser = readSession();
   if (sessUser) {
     S.user = sessUser;
+    // Вихователь працює на activities.html — Дашборд для нього недоступний.
+    if (String(sessUser.role || '').toLowerCase() === 'vyhovatel'){
+      window.location.href = 'activities.html'; return;
+    }
     S.f = {loc:'',pos:'',status:'',dir:'',typ:''};
     S.q = '';
     document.getElementById('loginScreen').classList.add('hidden');
