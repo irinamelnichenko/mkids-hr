@@ -2947,10 +2947,9 @@ function toggleSyncLogPanel(){
 // Викликаємо з toggleAttendance — після кожної відмітки запускаємо
 // debounce 5с. Кожен новий toggle — скидає таймер.
 function scheduleAutoExport(){
-  if (!hasPerm('export-payments')){
-    // Тихо: користувач (наприклад director без перму) не запускає експорт.
-    return;
-  }
+  // Авто-експорт запускає кожен, хто може ставити відмітки (attendance-edit) —
+  // вихователі та директори на місцях, не лише CFO.
+  if (!hasPerm('attendance-edit')) return;
   var loc   = S.activeLoc;
   // Брати місяць/рік з ATT.date (дати відмітки), а не з системного календаря —
   // інакше відмітка на майбутню/минулу дату експортується з фільтром поточного
@@ -2990,7 +2989,7 @@ function scheduleAutoExport(){
 // Викликає один backend action 'exportAttendance' що під капотом
 // робить два sub-експорти і повертає {ok, payments, salary}.
 async function doExportAttendance(loc, month, year, manual){
-  if (!hasPerm('export-payments')){
+  if (!hasPerm('attendance-edit')){
     if (manual) showToast('Немає прав на експорт', 'err');
     return null;
   }
@@ -3347,8 +3346,8 @@ function exportPreviewCSV(){
 
   updUserUI();
   bindEventListeners();
-  // Показуємо sync-indicator лише тим хто реально може експортувати.
-  if (hasPerm('export-payments')){
+  // Sync-indicator — усім, хто може ставити відмітки (запускати експорт).
+  if (hasPerm('attendance-edit')){
     _loadExpLog();
     renderSyncLog();
     setSyncState('idle', 'Синхронізовано з Пейментами');
