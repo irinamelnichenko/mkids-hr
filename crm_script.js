@@ -19,6 +19,12 @@
 // 5 колонок на місяць: Факт навч | Факт вступ | Факт доп | Бюджет доп | Бюджет навч
 // ═══════════════════════════════════════════════════════════════════════════
 
+// Зручна обгортка для запуску dry-run з Apps Script editor (Run не передає
+// аргументи). Запускає матчинг предметників → Salary за травень 2026.
+function runDryRunMay2026() {
+  return exportAllPredmetnyToSalary_DRY_RUN(5, 2026);
+}
+
 var CONFIG_SHEET_ID  = '11NEIEBzaMiIDFnJB9RXqKnRqjCJjNyHVqylrX7cRZhc';
 var SHEET_PAYMENTS   = 'Оплати';
 var SHEET_YEARLY     = 'Оплати-Рік';
