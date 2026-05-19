@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v6.6
+// m.kids CRM — Google Apps Script v6.7
+// v6.7: міграція директорів і медсестер у єдиний лист "Користувачі";
+//        паролі SHA-256; addAllDirectorsAndNurses() — разова утиліта
 // v6.6: Задачник — управління задачами в команді; листи "Задачі" +
 //        "Задачі_Активність"; email-нагадування; daily-тригер о 09:00
 // v6.5: вчителі-предметники — групові заняття у вартості навчання;
@@ -2706,7 +2708,11 @@ function authenticate(login, password) {
     var u = _parseUserRow(data[i]);
     if (u.login !== login) continue;
     if (!u.active) return {ok: false, error: 'Користувача деактивовано'};
-    if (u.password !== password) return {ok: false, error: 'Невірний пароль'};
+    // v6.7: паролі — SHA-256. Plaintext-гілка лишена як страховка на
+    // час міграції (після addAllDirectorsAndNurses() всі рядки хешовані).
+    var stored = String(u.password == null ? '' : u.password);
+    if (stored !== _sha256(password) && stored !== password)
+      return {ok: false, error: 'Невірний пароль'};
     sh.getRange(i + 1, 9).setValue(new Date());
     delete u.password;
     return {ok: true, user: u};
@@ -4927,4 +4933,126 @@ function dailyTaskReminders(){
   }
   Logger.log('[dailyTaskReminders] листів надіслано: %s', sent);
   return {ok:true, sent:sent};
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// МІГРАЦІЯ КОРИСТУВАЧІВ (v6.7) — директори і медсестри усіх локацій
+// переносяться у єдиний лист "Користувачі". Паролі — SHA-256.
+// Запуск: addAllDirectorsAndNurses() ВРУЧНУ з Apps Script editor (один раз).
+// ═══════════════════════════════════════════════════════════════════════════
+
+// SHA-256 → hex lowercase.
+function _sha256(str){
+  var bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,
+                                      String(str == null ? '' : str),
+                                      Utilities.Charset.UTF_8);
+  var hex = '';
+  for (var i = 0; i < bytes.length; i++){
+    var b = (bytes[i] + 256) % 256;
+    hex += (b < 16 ? '0' : '') + b.toString(16);
+  }
+  return hex;
+}
+
+// Транслітерація кирилиці → латиниця lowercase, без пробілів/розділових.
+// Точна копія translitUA з index.html — щоб slug (а отже й пароль) збігались.
+function _translitUA(str){
+  var T = {'а':'a','б':'b','в':'v','г':'h','ґ':'g','д':'d','е':'e','є':'ye',
+    'ж':'zh','з':'z','и':'y','і':'i','ї':'i','й':'y','к':'k','л':'l','м':'m',
+    'н':'n','о':'o','п':'p','р':'r','с':'s','т':'t','у':'u','ф':'f','х':'kh',
+    'ц':'ts','ч':'ch','ш':'sh','щ':'shch','ь':'','ю':'yu','я':'ya'};
+  var s = String(str || '').toLowerCase(), out = '';
+  for (var i = 0; i < s.length; i++){
+    var c = s[i];
+    if (T[c] !== undefined) out += T[c];
+    else if (/[a-z0-9]/.test(c)) out += c;
+  }
+  return out;
+}
+
+// Пароль локації — копія genLocPw з index.html: <slug>2025 / <slug>2025n.
+function _locPassword(loc, role){
+  var base = _translitUA(loc) + '2025';
+  return role === 'nurse' ? base + 'n' : base;
+}
+
+// Перехешовує усі НЕ-хешовані паролі у листі "Користувачі" (значення не
+// змінюється — лише формат: plaintext → SHA-256). Ідемпотентно.
+function _rehashManagementPasswords(){
+  var sh = _getUsersSheet();
+  var data = sh.getDataRange().getValues();
+  var n = 0;
+  for (var i = 1; i < data.length; i++){
+    if (!data[i][0]) continue;
+    var pw = String(data[i][3] == null ? '' : data[i][3]);
+    if (!pw) continue;
+    if (/^[0-9a-f]{64}$/i.test(pw)) continue;   // вже SHA-256
+    sh.getRange(i + 1, 4).setValue(_sha256(pw));
+    n++;
+  }
+  return {ok: true, rehashed: n};
+}
+
+// Створює рядки директорів і медсестер для всіх локацій. Якщо логін
+// уже існує — пропускає (не перезаписує). Повертає лічильники.
+function migrateDirectorsAndNursesToUsers(){
+  try {
+    // Активні локації (паролі генеруються алгоритмом _locPassword —
+    // окремого листа "Налаштування Паролі Локацій" у системі немає).
+    // Назви точно відповідають LOGIN_LOCATIONS у index.html / реєстру Sheets.
+    var LOCATIONS = [
+      'Осокорки','Позняки','Тичини',"Кар'єрна",'Голосієво','Пуща','Оранж',
+      'Борщагівка','Бровари','Кругла','Бігова',
+      'Школа Осокорки','Школа 228',
+      'Житомир','Нац.Гвардії (Благо)','Манхетен (Благо)',
+      'Кухня Київ','Кухня Львів','Іва-Франківськ кухня'
+    ];
+    var sh = _getUsersSheet();
+    var data = sh.getDataRange().getValues();
+    var existing = {}, maxId = 0;
+    for (var i = 1; i < data.length; i++){
+      if (!data[i][0]) continue;
+      existing[String(data[i][2] || '').trim().toLowerCase()] = true;
+      var n = Number(data[i][0]) || 0; if (n > maxId) maxId = n;
+    }
+    var nextId = maxId + 1;
+    var dirs = 0, nurses = 0, skipped = 0, rows = [];
+    LOCATIONS.forEach(function(loc){
+      var slug = _translitUA(loc);
+      [['director','Директор'], ['nurse','Медсестра']].forEach(function(rd){
+        var role = rd[0], lbl = rd[1];
+        var login = role + '.' + slug;
+        if (existing[login]){ skipped++; return; }
+        var pwHash = _sha256(_locPassword(loc, role));
+        // Колонки: id | name | login | password | role | loc | email | active | lastLogin
+        rows.push([nextId++, lbl + ' ' + loc, login, pwHash, role, loc, '', true, '']);
+        existing[login] = true;
+        if (role === 'director') dirs++; else nurses++;
+      });
+    });
+    if (rows.length){
+      sh.getRange(sh.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
+    }
+    Logger.log('[migrateDirectorsAndNursesToUsers] Створено %s директорів, %s медсестер, %s пропущено',
+      dirs, nurses, skipped);
+    return {ok: true, directors: dirs, nurses: nurses, skipped: skipped};
+  } catch(e){
+    return {ok: false, error: String(e && e.message || e)};
+  }
+}
+
+// Разова утиліта — запустити ВРУЧНУ з Apps Script editor.
+// Перехешовує наявні паролі + створює директорів/медсестер.
+function addAllDirectorsAndNurses(){
+  var rehash = _rehashManagementPasswords();
+  var mig = migrateDirectorsAndNursesToUsers();
+  if (!mig.ok){
+    Logger.log('[addAllDirectorsAndNurses] ПОМИЛКА: %s', mig.error);
+    return mig;
+  }
+  Logger.log('[addAllDirectorsAndNurses] Паролів перехешовано: %s | ' +
+             'Створено %s директорів, %s медсестер, %s пропущено (вже існує)',
+    rehash.rehashed, mig.directors, mig.nurses, mig.skipped);
+  return {ok: true, rehashed: rehash.rehashed,
+          directors: mig.directors, nurses: mig.nurses, skipped: mig.skipped};
 }

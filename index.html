@@ -910,7 +910,11 @@ const LOGIN_LOCATIONS = [
   // Управління (3)
   {group:'Управління', name:'Житомир'},
   {group:'Управління', name:'Нац.Гвардії (Благо)'},
-  {group:'Управління', name:'Манхетен (Благо)'}
+  {group:'Управління', name:'Манхетен (Благо)'},
+  // Кухні (3)
+  {group:'Кухні', name:'Кухня Київ'},
+  {group:'Кухні', name:'Кухня Львів'},
+  {group:'Кухні', name:'Іва-Франківськ кухня'}
 ];
 
 function selectAuthTab(tab){
@@ -1044,39 +1048,44 @@ async function doLoginMain(){
   }
 }
 
-async function doLoginDir(){
-  var loc = document.getElementById('loginLocationDir').value;
-  var pw  = document.getElementById('loginPwDir').value;
+// v6.7: директор/медсестра входять через лист "Користувачі" (authenticate).
+// Логін = '<role>.<translitUA(loc)>' — той самий slug, що у міграції бекенду.
+async function doLoginLocation(role, locFieldId, pwFieldId){
+  var loc = document.getElementById(locFieldId).value;
+  var pw  = document.getElementById(pwFieldId).value;
   document.getElementById('loginError').classList.add('hidden');
   if (!loc){ showLoginError('Оберіть локацію'); return; }
   if (!pw) { showLoginError('Введіть пароль');  return; }
-  if (pw !== getDirPw(loc)){ showLoginError('Невірний пароль для цієї локації'); return; }
-  S.user = {role:'director', loc:loc};
-  S.f = {loc:'',pos:'',status:'',dir:'',typ:''};
-  S.q = '';
-  saveSession(S.user);
-  document.getElementById('loginScreen').classList.add('hidden');
-  document.getElementById('app').classList.remove('hidden');
-  updUserUI(); await initApp();
-  dispatchHashView();
+  var login = role + '.' + translitUA(loc);
+  try {
+    var r = await fetch(authScriptUrl(), {
+      method: 'POST',
+      redirect: 'follow',
+      headers: {'Content-Type': 'text/plain;charset=utf-8'},
+      body: JSON.stringify({action:'authenticate', login: login, password: pw})
+    });
+    var json = await r.json();
+    if (!json.ok){
+      showLoginError(json.error === 'Користувача не знайдено'
+        ? 'Логін для цієї локації ще не створено'
+        : (json.error || 'Невірний пароль для цієї локації'));
+      return;
+    }
+    S.user = json.user;
+    S.user.role = String(S.user.role || '').toLowerCase().trim();
+    S.f = {loc:'',pos:'',status:'',dir:'',typ:''};
+    S.q = '';
+    saveSession(S.user);
+    document.getElementById('loginScreen').classList.add('hidden');
+    document.getElementById('app').classList.remove('hidden');
+    updUserUI(); await initApp();
+    dispatchHashView();
+  } catch(e){
+    showLoginError('Помилка зʼєднання: ' + (e && e.message ? e.message : e));
+  }
 }
-
-async function doLoginNurse(){
-  var loc = document.getElementById('loginLocationNurse').value;
-  var pw  = document.getElementById('loginPwNurse').value;
-  document.getElementById('loginError').classList.add('hidden');
-  if (!loc){ showLoginError('Оберіть локацію'); return; }
-  if (!pw) { showLoginError('Введіть пароль');  return; }
-  if (pw !== getNursePw(loc)){ showLoginError('Невірний пароль для цієї локації'); return; }
-  S.user = {role:'nurse', loc:loc};
-  S.f = {loc:'',pos:'',status:'',dir:'',typ:''};
-  S.q = '';
-  saveSession(S.user);
-  document.getElementById('loginScreen').classList.add('hidden');
-  document.getElementById('app').classList.remove('hidden');
-  updUserUI(); await initApp();
-  dispatchHashView();
-}
+async function doLoginDir(){   await doLoginLocation('director', 'loginLocationDir',   'loginPwDir');   }
+async function doLoginNurse(){ await doLoginLocation('nurse',    'loginLocationNurse', 'loginPwNurse'); }
 
 async function doLogin() {
   const pw=document.getElementById('loginPw').value;
