@@ -5175,3 +5175,100 @@ function reseedPasswordsFor2026(){
     r.missing.length ? (' · відсутні логіни: ' + JSON.stringify(r.missing)) : '');
   return {ok:true, updated:r.updated, missing:r.missing};
 }
+
+// ── ДІАГНОСТИКА: предметники у Salary-файлах ───────────────────────────────
+// auditPredmetnyInSalary() — для всіх 11 локацій порівнює каталог предметників
+// із секцією "Вчителі-предметники" у Salary-файлі локації. Запускати ВРУЧНУ
+// з Apps Script editor; звіт — у Execution log.
+function auditPredmetnyInSalary(){
+  var LOCS = ['Голосієво','Бігова','Борщагівка','Бровари',"Кар'єрна",'Кругла',
+              'Оранж','Осокорки','Позняки','Пуща','Тичини'];
+  var reg = _salaryGetRegistry();
+  if (!reg.ok){ Logger.log('Salary-реєстр: %s', reg.error); return reg; }
+  var regByLoc = {};
+  reg.rows.forEach(function(r){ regByLoc[r.loc] = r; });
+  var summary = [];
+
+  LOCS.forEach(function(loc){
+    Logger.log('\n════════════════ %s ════════════════', loc);
+    var entry = regByLoc[loc];
+    if (!entry){
+      Logger.log('  ❌ локацію не знайдено у Salary-реєстрі CONFIG');
+      summary.push(loc + ' | — | — | — | нема в реєстрі'); return;
+    }
+    var catItems = ((getPredmetnyCatalog(loc) || {}).items || [])
+      .filter(function(a){ return a.active; });
+
+    var sheet;
+    try {
+      sheet = SpreadsheetApp.openById(entry.sheetId).getSheetByName(entry.listName);
+    } catch(e){
+      Logger.log('  ❌ доступ до Salary-файлу: %s', e && e.message || e);
+      summary.push(loc + ' | ' + catItems.length + ' | — | — | помилка доступу'); return;
+    }
+    if (!sheet){
+      Logger.log('  ❌ лист "%s" не знайдено', entry.listName);
+      summary.push(loc + ' | ' + catItems.length + ' | — | — | нема листа'); return;
+    }
+
+    var lastRow = Math.max(sheet.getLastRow(), 60);
+    var colA = sheet.getRange(1, 1, lastRow, 1).getValues();
+
+    // Розбір колонки A на секції за заголовками.
+    var section = 'header';
+    var sec = {predmetny:[], dodatkovi:[], other:[]};
+    for (var i = 0; i < colA.length; i++){
+      var raw = String(colA[i][0] == null ? '' : colA[i][0]).trim();
+      if (!raw) continue;
+      var low = raw.toLowerCase();
+      if (low.indexOf('предметник') !== -1 || low.indexOf('вчител') !== -1){ section = 'predmetny'; continue; }
+      if (low.indexOf('додатков') !== -1){ section = 'dodatkovi'; continue; }
+      var bucket = (section === 'predmetny') ? sec.predmetny
+                 : (section === 'dodatkovi') ? sec.dodatkovi : sec.other;
+      bucket.push({row: i + 1, raw: raw, norm: _journalNormName(raw)});
+    }
+
+    Logger.log('  Salary: %s [%s]', entry.sheetId, entry.listName);
+    Logger.log('  ── Секція "Вчителі-предметники" — %s рядків:', sec.predmetny.length);
+    if (!sec.predmetny.length){
+      Logger.log('     (секцію не знайдено — повний дамп колонки A:)');
+      sec.other.concat(sec.dodatkovi).forEach(function(r){
+        Logger.log('     A%s: "%s"', r.row, r.raw);
+      });
+    } else {
+      sec.predmetny.forEach(function(r){ Logger.log('     A%s: "%s"', r.row, r.raw); });
+    }
+
+    // Порівняння каталог ↔ секція "Вчителі-предметники".
+    var predNorm = {};
+    sec.predmetny.forEach(function(r){ predNorm[r.norm] = r; });
+    var ok = [], missing = [], wrongRate = [], escaped = [];
+    catItems.forEach(function(a){
+      var want = _journalNormName(a.subject + ' ' + a.rate);
+      var subjNorm = _journalNormName(a.subject);
+      if (predNorm[want]){ ok.push(a.subject + ' ' + a.rate); return; }
+      var wr = null;
+      sec.predmetny.forEach(function(r){ if (r.norm.indexOf(subjNorm) === 0) wr = r; });
+      if (wr){ wrongRate.push(a.subject + ': каталог=' + a.rate + ' / Salary="' + wr.raw + '"'); return; }
+      var esc = null;
+      sec.dodatkovi.forEach(function(r){
+        if (r.norm === want || r.norm.indexOf(subjNorm) === 0) esc = r;
+      });
+      if (esc){ escaped.push(a.subject + ' ' + a.rate + ' → "Додаткові" A' + esc.row + ': "' + esc.raw + '"'); return; }
+      missing.push(a.subject + ' ' + a.rate);
+    });
+
+    Logger.log('  ✅ Збігається (%s/%s): %s', ok.length, catItems.length, ok.join(', ') || '—');
+    if (wrongRate.length) Logger.log('  ⚠️ Інша ставка: %s', wrongRate.join('  |  '));
+    if (escaped.length)   Logger.log('  📍 Лежить у "Додаткові": %s', escaped.join('  |  '));
+    if (missing.length)   Logger.log('  ❌ Відсутні у Salary: %s', missing.join(', '));
+
+    summary.push(loc + ' | ' + catItems.length + ' | ' + ok.length +
+      ' | ' + missing.length + ' | ' + escaped.length);
+  });
+
+  Logger.log('\n════════════════ ЗВЕДЕННЯ ════════════════');
+  Logger.log('Локація | Каталог | OK | Відсутні | Не там (у Додаткових)');
+  summary.forEach(function(s){ Logger.log('  ' + s); });
+  return {ok: true};
+}
