@@ -3124,7 +3124,7 @@ function renderSettings(){
         </div>
         <div style="padding:14px 20px">
           <div class="alert alert-info" style="font-size:12px;margin-bottom:16px">
-            ℹ️ Кожна локація має <strong>три окремих паролі</strong> — директора, медсестри та вихователя.<br>
+            ℹ️ Паролі директорів, медсестер і вихователів зберігаються у листі <strong>"Користувачі"</strong> (SHA-256). Поле показує <code>**********</code> — введіть новий пароль і натисніть 💾 щоб змінити.<br>
             За замовчуванням: директор — <code>назвалокації2025</code>, медсестра — <code>назвалокації2025n</code>, вихователь — <code>назвалокації2025v</code>
           </div>
           <div class="tbl-wrap">
@@ -3146,22 +3146,22 @@ function renderSettings(){
               <td style="font-size:12px;color:var(--gray)">${TYPE_ICONS[typ]||''} ${typ}</td>
               <td>
                 <div style="display:flex;gap:6px;align-items:center">
-                  <input type="text" id="${safeDir}" value="${esc(dirPw)}" style="padding:5px 9px;border:1.5px solid var(--gray2);border-radius:7px;font-size:12px;font-family:monospace;width:180px;outline:none">
-                  <button class="btn btn-primary btn-xs" onclick="saveDirPw('${esc(loc)}','${safeDir}');renderSettings()">💾</button>
+                  <input type="text" id="${safeDir}" value="**********" style="padding:5px 9px;border:1.5px solid var(--gray2);border-radius:7px;font-size:12px;font-family:monospace;width:180px;outline:none">
+                  <button class="btn btn-primary btn-xs" onclick="saveLocUserPw('${esc(loc)}','director','${safeDir}')">💾</button>
                 </div>
               </td>
               <td style="width:20px"></td>
               <td>
                 <div style="display:flex;gap:6px;align-items:center">
-                  <input type="text" id="${safeNurse}" value="${esc(nursePw)}" style="padding:5px 9px;border:1.5px solid var(--gray2);border-radius:7px;font-size:12px;font-family:monospace;width:180px;outline:none">
-                  <button class="btn btn-primary btn-xs" onclick="saveNursePw('${esc(loc)}','${safeNurse}');renderSettings()">💾</button>
+                  <input type="text" id="${safeNurse}" value="**********" style="padding:5px 9px;border:1.5px solid var(--gray2);border-radius:7px;font-size:12px;font-family:monospace;width:180px;outline:none">
+                  <button class="btn btn-primary btn-xs" onclick="saveLocUserPw('${esc(loc)}','nurse','${safeNurse}')">💾</button>
                 </div>
               </td>
               <td style="width:20px"></td>
               <td>
                 <div style="display:flex;gap:6px;align-items:center">
-                  <input type="text" id="${safeVyhovatel}" value="${esc(vyhovatelPw)}" style="padding:5px 9px;border:1.5px solid var(--gray2);border-radius:7px;font-size:12px;font-family:monospace;width:180px;outline:none">
-                  <button class="btn btn-primary btn-xs" onclick="saveVyhovatelPw('${esc(loc)}','${safeVyhovatel}');renderSettings()">💾</button>
+                  <input type="text" id="${safeVyhovatel}" value="**********" style="padding:5px 9px;border:1.5px solid var(--gray2);border-radius:7px;font-size:12px;font-family:monospace;width:180px;outline:none">
+                  <button class="btn btn-primary btn-xs" onclick="saveLocUserPw('${esc(loc)}','vyhovatel','${safeVyhovatel}')">💾</button>
                 </div>
               </td>
               <td></td>
@@ -3325,25 +3325,57 @@ function saveVyhovatelPw(loc,safeId){
   if(!pw){toast('⚠️ Введіть пароль');return;}
   setVyhovatelPw(loc,pw);toast(`✅ Пароль вихователя для "${loc}" збережено`);
 }
+// Записує реальний пароль у лист "Користувачі" (SHA-256) через бекенд.
+async function saveLocUserPw(loc,role,safeId){
+  const pw=document.getElementById(safeId).value.trim();
+  if(!pw){toast('⚠️ Введіть пароль');return;}
+  if(pw==='**********'){toast('ℹ️ Введіть новий пароль щоб змінити');return;}
+  const login=role+'.'+translitUA(loc);
+  const roleLbl={director:'директор',nurse:'медсестра',vyhovatel:'вихователь'}[role]||role;
+  try{
+    const r=await fetch(authScriptUrl(),{method:'POST',redirect:'follow',
+      headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body:JSON.stringify({action:'setUserPassword',username:login,newPassword:pw,actorId:(S.user&&S.user.id)||0})});
+    const j=await r.json();
+    if(!j.ok){toast('❌ '+(j.error||'Помилка'));return;}
+    toast(`✅ Пароль збережено для ${loc} (${roleLbl})`);
+    renderSettings();
+  }catch(e){toast('❌ Помилка мережі');}
+}
 function resetAllDirPw(){
   if(!isHR()){alert('⛔ Доступно тільки для CFO');return;}
   if(!confirm('Скинути всі паролі до стандартних?'))return;
   localStorage.removeItem('hr_dir_pw');localStorage.removeItem('hr_nurse_pw');localStorage.removeItem('hr_vyhovatel_pw');toast('✅ Всі паролі скинуто');renderSettings();
 }
-function regenAllPws(){
-  if(!isHR()){alert('⛔ Доступно тільки для CFO');return;}
-  if(!confirm('Перегенерувати всі паролі?\nПоточні паролі буде замінено.'))return;
-  localStorage.removeItem('hr_dir_pw');localStorage.removeItem('hr_nurse_pw');localStorage.removeItem('hr_vyhovatel_pw');autoGenPasswords();toast('✅ Паролі перегенеровано');renderSettings();
+// Скидає ВСІ паролі локаційних користувачів до стандартних — у листі
+// "Користувачі" через бекенд (resetAllLocationPasswords).
+async function regenAllPws(){
+  if(!confirm('Скинути ВСІ паролі до стандартних?\nПаролі директорів, медсестер і вихователів усіх локацій буде замінено у листі "Користувачі".'))return;
+  try{
+    const r=await fetch(authScriptUrl(),{method:'POST',redirect:'follow',
+      headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body:JSON.stringify({action:'resetAllLocationPasswords',actorId:(S.user&&S.user.id)||0})});
+    const j=await r.json();
+    if(!j.ok){toast('❌ '+(j.error||'Помилка'));return;}
+    toast(`✅ Скинуто ${j.updated} паролів`+(j.missing&&j.missing.length?` · відсутні: ${j.missing.length}`:''));
+    renderSettings();
+  }catch(e){toast('❌ Помилка мережі');}
 }
+// Копіює список паролів — з полів сторінки; для незмінених полів
+// (**********) підставляє стандартний пароль (хеш прочитати не можна).
 function copyAllPws(){
-  const dirPws=getAllDirPws(), nursePws=getAllNursePws(), vPws=getAllVyhovateliPws();
   const locs=[...new Set(S.emps.map(e=>e.loc).filter(Boolean))].sort();
+  const fieldVal=(prefix,loc,role)=>{
+    const el=document.getElementById(prefix+loc.replace(/[^a-zA-Z0-9]/g,'_'));
+    const v=el?el.value.trim():'';
+    return (!v||v==='**********')?genLocPw(loc,role):v;
+  };
   const lines=[];
   locs.forEach(loc=>{
     lines.push(loc+':');
-    lines.push('🏠 Директор: '   +(dirPws[loc]  ||genLocPw(loc,'director')));
-    lines.push('🩺 Медсестра: '  +(nursePws[loc]||genLocPw(loc,'nurse')));
-    lines.push('👨‍🏫 Вихователь: '+(vPws[loc]    ||genLocPw(loc,'vyhovatel')));
+    lines.push('🏠 Директор: '   +fieldVal('dpw_',loc,'director'));
+    lines.push('🩺 Медсестра: '  +fieldVal('npw_',loc,'nurse'));
+    lines.push('👨‍🏫 Вихователь: '+fieldVal('vpw_',loc,'vyhovatel'));
     lines.push('');
   });
   const text=lines.join('\n').trim();

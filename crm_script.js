@@ -255,6 +255,8 @@ function doPost(e) {
     else if (body.action === 'updateTask')                result = updateTask(body.taskId || 0, body.data || {}, body.actorId || 0);
     else if (body.action === 'addTaskComment')            result = addTaskComment(body.taskId || 0, body.comment || '', body.fileUrl || '', body.actorId || 0);
     else if (body.action === 'deleteTask')                result = deleteTask(body.taskId || 0, body.actorId || 0);
+    else if (body.action === 'setUserPassword')           result = setUserPassword(body.username || '', body.newPassword || '', body.actorId || 0);
+    else if (body.action === 'resetAllLocationPasswords') result = resetAllLocationPasswords(body.actorId || 0);
     else result = {ok:false, error:'Unknown action'};
     return jsonOut(result);
   } catch(err) {
@@ -5078,4 +5080,81 @@ function addAllVyhovateli(){
   Logger.log('[addAllVyhovateli] Створено %s вихователів, %s пропущено (вже існує)',
     mig.vyhovateli, mig.skipped);
   return {ok: true, vyhovateli: mig.vyhovateli, skipped: mig.skipped};
+}
+
+// ── Керування паролями локаційних користувачів (v6.7) ──────────────────────
+// Пише реальні SHA-256 паролі у лист "Користувачі". Раніше сторінка
+// налаштувань редагувала лише localStorage — пароль входу не змінювався.
+var PW_ADMIN_ROLES = ['cfo','hr','ceo','cco','coo'];
+
+// Перевірка ролі через session: actorId — id поточного користувача;
+// роль перечитується з листа "Користувачі" (не довіряємо клієнту).
+function _isPasswordAdmin(actorId){
+  var id = Number(actorId) || 0;
+  if (!id) return false;
+  var sh = _getUsersSheet();
+  var data = sh.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++){
+    if (Number(data[i][0]) === id){
+      var role = String(data[i][4] || '').toLowerCase().trim();
+      return PW_ADMIN_ROLES.indexOf(role) !== -1;
+    }
+  }
+  return false;
+}
+
+// Записує SHA-256(newPassword) у рядок листа "Користувачі" з логіном username.
+function setUserPassword(username, newPassword, actorId){
+  try {
+    if (!_isPasswordAdmin(actorId))
+      return {ok:false, error:'Лише CFO/CEO/CCO/COO можуть міняти паролі'};
+    username    = String(username || '').trim();
+    newPassword = String(newPassword == null ? '' : newPassword);
+    if (!username)    return {ok:false, error:'Не вказано логін'};
+    if (!newPassword) return {ok:false, error:'Порожній пароль'};
+    var sh = _getUsersSheet();
+    var data = sh.getDataRange().getValues();
+    for (var i = 1; i < data.length; i++){
+      if (String(data[i][2] || '').trim() === username){
+        sh.getRange(i + 1, 4).setValue(_sha256(newPassword));
+        return {ok:true, username:username};
+      }
+    }
+    return {ok:false, error:'Користувача "' + username + '" не знайдено'};
+  } catch(e){
+    return {ok:false, error:String(e && e.message || e)};
+  }
+}
+
+// Скидає паролі всіх локаційних користувачів (director/nurse/vyhovatel
+// × LOCATION_USER_LOCS) до стандартних _locPassword. Лише адмін.
+function resetAllLocationPasswords(actorId){
+  try {
+    if (!_isPasswordAdmin(actorId))
+      return {ok:false, error:'Лише CFO/CEO/CCO/COO можуть міняти паролі'};
+    var sh = _getUsersSheet();
+    var data = sh.getDataRange().getValues();
+    var byLogin = {};
+    for (var i = 1; i < data.length; i++){
+      if (!data[i][0]) continue;
+      byLogin[String(data[i][2] || '').trim()] = i;
+    }
+    var roles = ['director','nurse','vyhovatel'];
+    var updated = 0, missing = [];
+    LOCATION_USER_LOCS.forEach(function(loc){
+      var slug = _translitUA(loc);
+      roles.forEach(function(role){
+        var login = role + '.' + slug;
+        var idx = byLogin[login];
+        if (idx === undefined){ missing.push(login); return; }
+        sh.getRange(idx + 1, 4).setValue(_sha256(_locPassword(loc, role)));
+        updated++;
+      });
+    });
+    Logger.log('[resetAllLocationPasswords] оновлено %s, відсутні: %s',
+      updated, JSON.stringify(missing));
+    return {ok:true, updated:updated, missing:missing};
+  } catch(e){
+    return {ok:false, error:String(e && e.message || e)};
+  }
 }
