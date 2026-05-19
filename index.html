@@ -828,7 +828,7 @@ function translitUA(str){
   return str.toLowerCase().split('').map(c=>T[c]!==undefined?T[c]:/[a-z0-9]/.test(c)?c:'').join('');
 }
 function genLocPw(loc,role='director'){
-  const base=translitUA(loc)+'2025';
+  const base=translitUA(loc)+'2026';
   if(role==='nurse')return base+'n';
   if(role==='vyhovatel')return base+'v';
   return base;
@@ -3135,7 +3135,7 @@ function renderSettings(){
         <div style="padding:14px 20px">
           <div class="alert alert-info" style="font-size:12px;margin-bottom:16px">
             ℹ️ Паролі директорів, медсестер і вихователів зберігаються у листі <strong>"Користувачі"</strong> (SHA-256). Поле показує <code>**********</code> — введіть новий пароль і натисніть 💾 щоб змінити.<br>
-            За замовчуванням: директор — <code>назвалокації2025</code>, медсестра — <code>назвалокації2025n</code>, вихователь — <code>назвалокації2025v</code>
+            За замовчуванням: директор — <code>назвалокації2026</code>, медсестра — <code>назвалокації2026n</code>, вихователь — <code>назвалокації2026v</code>
           </div>
           <div class="tbl-wrap">
           <table><thead><tr><th>Локація</th><th>Тип</th><th>🏫 Пароль директора</th><th></th><th>🏥 Пароль медсестри</th><th></th><th>👨‍🏫 Пароль вихователя</th><th></th></tr></thead>

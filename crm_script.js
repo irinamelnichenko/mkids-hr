@@ -4975,7 +4975,7 @@ function _translitUA(str){
 // Пароль локації — копія genLocPw з index.html: <slug>2025 (директор),
 // <slug>2025n (медсестра), <slug>2025v (вихователь).
 function _locPassword(loc, role){
-  var base = _translitUA(loc) + '2025';
+  var base = _translitUA(loc) + '2026';
   if (role === 'nurse')     return base + 'n';
   if (role === 'vyhovatel') return base + 'v';
   return base;
@@ -5128,33 +5128,50 @@ function setUserPassword(username, newPassword, actorId){
 
 // Скидає паролі всіх локаційних користувачів (director/nurse/vyhovatel
 // × LOCATION_USER_LOCS) до стандартних _locPassword. Лише адмін.
+// Ядро: переписує паролі всіх локаційних користувачів до стандартних
+// _locPassword. Повертає {updated, missing}. Без перевірки ролі.
+function _reseedAllLocationPasswords(){
+  var sh = _getUsersSheet();
+  var data = sh.getDataRange().getValues();
+  var byLogin = {};
+  for (var i = 1; i < data.length; i++){
+    if (!data[i][0]) continue;
+    byLogin[String(data[i][2] || '').trim()] = i;
+  }
+  var roles = ['director','nurse','vyhovatel'];
+  var updated = 0, missing = [];
+  LOCATION_USER_LOCS.forEach(function(loc){
+    var slug = _translitUA(loc);
+    roles.forEach(function(role){
+      var login = role + '.' + slug;
+      var idx = byLogin[login];
+      if (idx === undefined){ missing.push(login); return; }
+      sh.getRange(idx + 1, 4).setValue(_sha256(_locPassword(loc, role)));
+      updated++;
+    });
+  });
+  return {updated:updated, missing:missing};
+}
+
 function resetAllLocationPasswords(actorId){
   try {
     if (!_isPasswordAdmin(actorId))
       return {ok:false, error:'Лише CFO/CEO/CCO/COO можуть міняти паролі'};
-    var sh = _getUsersSheet();
-    var data = sh.getDataRange().getValues();
-    var byLogin = {};
-    for (var i = 1; i < data.length; i++){
-      if (!data[i][0]) continue;
-      byLogin[String(data[i][2] || '').trim()] = i;
-    }
-    var roles = ['director','nurse','vyhovatel'];
-    var updated = 0, missing = [];
-    LOCATION_USER_LOCS.forEach(function(loc){
-      var slug = _translitUA(loc);
-      roles.forEach(function(role){
-        var login = role + '.' + slug;
-        var idx = byLogin[login];
-        if (idx === undefined){ missing.push(login); return; }
-        sh.getRange(idx + 1, 4).setValue(_sha256(_locPassword(loc, role)));
-        updated++;
-      });
-    });
+    var r = _reseedAllLocationPasswords();
     Logger.log('[resetAllLocationPasswords] оновлено %s, відсутні: %s',
-      updated, JSON.stringify(missing));
-    return {ok:true, updated:updated, missing:missing};
+      r.updated, JSON.stringify(r.missing));
+    return {ok:true, updated:r.updated, missing:r.missing};
   } catch(e){
     return {ok:false, error:String(e && e.message || e)};
   }
+}
+
+// Разова утиліта — запустити ВРУЧНУ з Apps Script editor після зміни
+// року у _locPassword (2025 → 2026). Переписує паролі всіх 19 локацій
+// × 3 ролі на нові 2026-паролі. Старі 2025-паролі перестануть діяти.
+function reseedPasswordsFor2026(){
+  var r = _reseedAllLocationPasswords();
+  Logger.log('[reseedPasswordsFor2026] Оновлено %s паролів%s', r.updated,
+    r.missing.length ? (' · відсутні логіни: ' + JSON.stringify(r.missing)) : '');
+  return {ok:true, updated:r.updated, missing:r.missing};
 }
