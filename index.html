@@ -970,32 +970,36 @@ function showLoginError(msg){
 
 // Заповнюємо обидва dropdown-и (Director і Nurse) тим самим списком LOGIN_LOCATIONS,
 // згрупованим через <optgroup>. Якщо в DOM ще нема елементів — пропускаємо.
-function populateLoginLocations(){
-  var groups = {};
-  LOGIN_LOCATIONS.forEach(function(loc){
-    if (!groups[loc.group]) groups[loc.group] = [];
-    groups[loc.group].push(loc.name);
+// Будує <optgroup>-список локацій лише з дозволених груп (порядок — як
+// у LOGIN_LOCATIONS).
+function _buildLocOptions(allowedGroups, placeholder){
+  var html = '<option value="">' + esc(placeholder) + '</option>';
+  var order = [], seen = {};
+  LOGIN_LOCATIONS.forEach(function(l){
+    if (!seen[l.group]){ seen[l.group] = 1; order.push(l.group); }
   });
-  var html = '<option value="">— Оберіть локацію —</option>';
-  Object.keys(groups).forEach(function(g){
+  order.forEach(function(g){
+    if (allowedGroups.indexOf(g) === -1) return;
     html += '<optgroup label="' + esc(g) + '">';
-    groups[g].forEach(function(n){
-      html += '<option value="' + esc(n) + '">' + esc(n) + '</option>';
+    LOGIN_LOCATIONS.forEach(function(l){
+      if (l.group === g)
+        html += '<option value="' + esc(l.name) + '">' + esc(l.name) + '</option>';
     });
     html += '</optgroup>';
   });
-  ['loginLocationDir','loginLocationNurse'].forEach(function(id){
-    var sel = document.getElementById(id);
-    if (sel) sel.innerHTML = html;
-  });
-  // Вихователь — лише садочки (без шкіл / кухонь / управління).
-  var vHtml = '<option value="">— Оберіть садочок —</option>';
-  LOGIN_LOCATIONS.filter(function(l){ return l.group === 'Садочки'; })
-    .forEach(function(l){
-      vHtml += '<option value="' + esc(l.name) + '">' + esc(l.name) + '</option>';
-    });
-  var vSel = document.getElementById('loginLocationVyhovatel');
-  if (vSel) vSel.innerHTML = vHtml;
+  return html;
+}
+// Фільтр локацій за роллю (типом локації):
+//   Директор  — садочки + школи + управління (без кухонь)
+//   Медсестра — садочки + школи (без управління і кухонь)
+//   Вихователь — лише садочки
+function populateLoginLocations(){
+  var dir = document.getElementById('loginLocationDir');
+  if (dir) dir.innerHTML = _buildLocOptions(['Садочки','Школи','Управління'], '— Оберіть локацію —');
+  var nurse = document.getElementById('loginLocationNurse');
+  if (nurse) nurse.innerHTML = _buildLocOptions(['Садочки','Школи'], '— Оберіть локацію —');
+  var vyh = document.getElementById('loginLocationVyhovatel');
+  if (vyh) vyh.innerHTML = _buildLocOptions(['Садочки'], '— Оберіть садочок —');
 }
 
 // Завантажуємо список користувачів для Менеджмент-dropdown.
@@ -1022,7 +1026,13 @@ async function loadUsersForDropdown(){
     }
     // Порядок — як з backend (Users sheet — по колонці ID).
     // НЕ робити .sort() — фільтруємо тільки неактивних.
-    var actives = json.users.filter(function(u){ return u.active; });
+    // Вкладка Менеджмент — лише управлінські ролі. Локаційні (director /
+    // nurse / vyhovatel) входять через власні вкладки, тут їх не показуємо.
+    var LOCATION_ROLES = ['director','nurse','vyhovatel'];
+    var actives = json.users.filter(function(u){
+      if (!u.active) return false;
+      return LOCATION_ROLES.indexOf(String(u.role || '').toLowerCase().trim()) === -1;
+    });
     var html = '<option value="">— Виберіть користувача —</option>';
     actives.forEach(function(u){
       // role з Sheets може бути у будь-якому регістрі ('CFO', 'RnD_director',
