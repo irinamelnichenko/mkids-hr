@@ -4312,6 +4312,51 @@ function seedAllCatalogsForce(){
 // ── Експорт у Salary ──────────────────────────────────────────────────────
 // Архітектура як exportToSalaryExtras: журнал kind='predmetnyky', розумне
 // перезаписування, толерантний матч рядків, точковий запис (skip формул).
+// Знаходить рядок Salary для предмета каталогу за пріоритетами P1–P4.
+//   salaryRows      — [{row, raw, norm}] непорожні рядки колонки A.
+//   subject, rate   — предмет і ставка з каталогу предметників.
+//   addSubjNorms    — {нормНазваДодатковогоЗаняття: true} для цієї локації.
+// Повертає {row, matchedAs, priority:'P1'..'P4'} або null (P5).
+function _findPredmetnySalaryRow(salaryRows, subject, rate, addSubjNorms){
+  var subjNorm  = _journalNormName(subject);
+  var exactNorm = _journalNormName(subject + ' ' + rate);   // напр. "логопед250"
+  if (!subjNorm) return null;
+  var i;
+
+  // P1 — точний збіг "предмет ставка".
+  for (i = 0; i < salaryRows.length; i++){
+    if (salaryRows[i].norm === exactNorm)
+      return {row: salaryRows[i].row, matchedAs: salaryRows[i].raw, priority: 'P1'};
+  }
+  // P2 — префікс "предмет ставка ..." (далі — не цифра, тобто ставка та сама).
+  for (i = 0; i < salaryRows.length; i++){
+    var n2 = salaryRows[i].norm;
+    if (n2.length > exactNorm.length && n2.indexOf(exactNorm) === 0
+        && !/[0-9]/.test(n2.charAt(exactNorm.length)))
+      return {row: salaryRows[i].row, matchedAs: salaryRows[i].raw, priority: 'P2'};
+  }
+  // P3 — той самий предмет з БУДЬ-ЯКОЮ ставкою; беремо найближчу.
+  var best = null, bestDiff = Infinity;
+  for (i = 0; i < salaryRows.length; i++){
+    var n3 = salaryRows[i].norm;
+    if (n3.indexOf(subjNorm) !== 0) continue;
+    var m = n3.slice(subjNorm.length).match(/^([0-9]+)/);
+    if (!m) continue;
+    var diff = Math.abs(Number(m[1]) - Number(rate));
+    if (diff < bestDiff){ bestDiff = diff; best = salaryRows[i]; }
+  }
+  if (best) return {row: best.row, matchedAs: best.raw, priority: 'P3'};
+  // P4 — назва без ставки; лише якщо у Додаткові_Каталог локації такого
+  // заняття НЕМАЄ (інакше рядок без ставки належить додатковому).
+  if (!addSubjNorms[subjNorm]){
+    for (i = 0; i < salaryRows.length; i++){
+      if (salaryRows[i].norm === subjNorm)
+        return {row: salaryRows[i].row, matchedAs: salaryRows[i].raw, priority: 'P4'};
+    }
+  }
+  return null;   // P5
+}
+
 function exportPredmetnyToSalary(params){
   try {
     var loc = String(params.loc || '').trim();
@@ -4322,10 +4367,18 @@ function exportPredmetnyToSalary(params){
     Logger.log('[exportPredmetnyToSalary] START loc="%s" month=%s year=%s', loc, month, year);
     var monthName = MONTHS_CAL_UA[month - 1];
 
-    // 1. Каталог предметів локації.
+    // 1. Каталог предметників локації.
     var catRes = getPredmetnyCatalog(loc);
     if (!catRes.ok) return catRes;
     var withRate = (catRes.items || []).filter(function(a){ return a.active && a.rate > 0; });
+
+    // 1b. Каталог ДОДАТКОВИХ занять — для гейту P4 (рядок без ставки).
+    var addSubjNorms = {};
+    var actRes = getActivitiesCatalog(loc);
+    (((actRes && actRes.items) || [])).forEach(function(x){
+      var nn = _journalNormName(x.name);
+      if (nn) addSubjNorms[nn] = true;
+    });
 
     // 2. Період + відвідуваність → унікальні (група+дата) на кожен предмет.
     var attSh = _getPredmetnyAttSheet(true);
@@ -4345,18 +4398,7 @@ function exportPredmetnyToSalary(params){
       lessonsBySubj[rec.subjectId][rec.group + '|' + rec.date] = true;
     }
 
-    // 3. fact = ставка × унікальні (група+дата). Ключ — норм-назва "предмет ставка".
-    var factByNorm = {};
-    withRate.forEach(function(a){
-      var uniq = lessonsBySubj[a.id] ? Object.keys(lessonsBySubj[a.id]).length : 0;
-      var rowName = a.subject + ' ' + a.rate;   // "Англійська мова 280"
-      factByNorm[_journalNormName(rowName)] = {
-        fact: uniq * a.rate, lessons: uniq, rate: a.rate, name: rowName, subject: a.subject
-      };
-    });
-    Logger.log('[exportPredmetnyToSalary] предметів зі ставкою=%s', withRate.length);
-
-    // 4. Salary-файл локації.
+    // 3. Salary-файл локації.
     var reg = _salaryGetRegistry();
     if (!reg.ok) return reg;
     var entry = null;
@@ -4375,11 +4417,12 @@ function exportPredmetnyToSalary(params){
     var targetMonthName = MONTHS_CAL_UA[targetMonth - 1];
     Logger.log('[exportPredmetnyToSalary] targetMonth=%s (%s), budgetCol=%s', targetMonth, targetMonthName, budgetCol);
 
-    // Карта норм-назва рядка → 1-based row.
-    var rowByNorm = {};
+    // Непорожні рядки колонки A (з рядка 4 — вище шапка/мета).
+    var salaryRows = [];
     for (var k = 3; k < names.length; k++){
-      var rn = _journalNormName(names[k][0]);
-      if (rn && !rowByNorm.hasOwnProperty(rn)) rowByNorm[rn] = k + 1;
+      var raw = String(names[k][0] == null ? '' : names[k][0]).trim();
+      if (!raw) continue;
+      salaryRows.push({row: k + 1, raw: raw, norm: _journalNormName(raw)});
     }
 
     var budgetColValues   = sheet.getRange(1, budgetCol, lastRow, 1).getValues();
@@ -4389,45 +4432,56 @@ function exportPredmetnyToSalary(params){
     var journalOps = [];
     var updated = 0, totalFact = 0, cellsWritten = 0, formulaRowsSkipped = 0;
     var notFound = [], details = [];
+    var stats = {attempts: 0, p1: 0, p2: 0, p3: 0, p4: 0, p5: 0};
 
-    Object.keys(factByNorm).forEach(function(nk){
-      var info = factByNorm[nk];
-      var rowFound = rowByNorm[nk] || -1;
-      if (rowFound <= 0){
-        notFound.push(info.name);
-        details.push({subject: info.name, fact: info.fact, lessons: info.lessons, status: 'not-in-salary'});
-        Logger.log('[exportPredmetnyToSalary] NO-MATCH "%s" (norm="%s")', info.name, nk);
+    // 4. Матчинг кожного предмета каталогу → рядок Salary (P1–P5).
+    withRate.forEach(function(a){
+      var uniq = lessonsBySubj[a.id] ? Object.keys(lessonsBySubj[a.id]).length : 0;
+      var fact = uniq * a.rate;
+      var catName = a.subject + ' ' + a.rate;       // ключ журналу — з каталогу
+      var nk = _journalNormName(catName);
+      stats.attempts++;
+
+      var found = _findPredmetnySalaryRow(salaryRows, a.subject, a.rate, addSubjNorms);
+      if (!found){
+        stats.p5++;
+        notFound.push(catName);
+        details.push({subject: catName, fact: fact, lessons: uniq, status: 'not-found'});
+        Logger.log('[%s] %s → P5 НЕ ЗНАЙДЕНО у Salary', loc, catName);
         return;
       }
-      var rowIdx0 = rowFound - 1;
+      stats['p' + found.priority.slice(1)]++;
+      Logger.log('[%s] %s → matched %s на A%s "%s"', loc, catName, found.priority, found.row, found.matchedAs);
+
+      var rowIdx0 = found.row - 1;
       if (budgetColFormulas[rowIdx0] && budgetColFormulas[rowIdx0][0]){
         formulaRowsSkipped++;
-        Logger.log('[exportPredmetnyToSalary] skipped formula row %s: %s', rowFound, budgetColFormulas[rowIdx0][0]);
+        Logger.log('[%s] %s → пропущено: формула у рядку %s', loc, catName, found.row);
         return;
       }
       var currentValue = Number(budgetColValues[rowIdx0][0]) || 0;
       var je = journal.byNormName[nk];
       var lastWritten = je ? je.sum : 0;
       var baseValue = currentValue - lastWritten;
-      var newValue = baseValue + info.fact;
+      var newValue = baseValue + fact;
       if (newValue !== currentValue){
-        sheet.getRange(rowFound, budgetCol).setValue(newValue);
+        sheet.getRange(found.row, budgetCol).setValue(newValue);
         cellsWritten++;
       }
-      if (info.fact !== lastWritten){
-        journalOps.push({nk: nk, loc: loc, kind: 'predmetnyky', name: info.name,
-          year: nextM.year, month: nextM.month, newSum: info.fact});
+      if (fact !== lastWritten){
+        journalOps.push({nk: nk, loc: loc, kind: 'predmetnyky', name: catName,
+          year: nextM.year, month: nextM.month, newSum: fact});
       }
       updated++;
-      totalFact += info.fact;
-      details.push({subject: info.name, fact: info.fact, lessons: info.lessons,
-        currentBefore: currentValue, lastWritten: lastWritten, baseValue: baseValue,
-        newCell: newValue, row: rowFound, status: 'updated'});
-      Logger.log('[exportPredmetnyToSalary] WRITE row=%s "%s" lessons=%s fact=%s cur=%s last=%s base=%s → %s', rowFound, info.name, info.lessons, info.fact, currentValue, lastWritten, baseValue, newValue);
+      totalFact += fact;
+      details.push({subject: catName, matchedAs: found.matchedAs, priority: found.priority,
+        fact: fact, lessons: uniq, row: found.row, currentBefore: currentValue,
+        lastWritten: lastWritten, newCell: newValue, status: 'updated'});
     });
 
     _commitJournalUpdates(journal, journalOps);
-    Logger.log('[exportPredmetnyToSalary] DONE updated=%s totalFact=%s cellsWritten=%s formulaSkipped=%s notFound=%s', updated, totalFact, cellsWritten, formulaRowsSkipped, JSON.stringify(notFound));
+    Logger.log('[%s] СВОДКА: спроб=%s | P1=%s P2=%s P3=%s P4=%s P5=%s | записано клітинок=%s формул-пропущено=%s',
+      loc, stats.attempts, stats.p1, stats.p2, stats.p3, stats.p4, stats.p5, cellsWritten, formulaRowsSkipped);
 
     return {
       ok: true,
@@ -4435,6 +4489,7 @@ function exportPredmetnyToSalary(params){
       totalFact: totalFact,
       notFound: notFound,
       details: details,
+      matchStats: stats,
       loc: loc,
       sourceMonth: monthName,
       targetMonth: targetMonthName,
@@ -4446,6 +4501,24 @@ function exportPredmetnyToSalary(params){
     Logger.log('[exportPredmetnyToSalary] EXCEPTION: %s\n%s', e && e.message, e && e.stack);
     return {ok: false, error: String(e && e.message || e)};
   }
+}
+
+// Експорт предметників у Salary для всіх 11 локацій + зведена таблиця.
+// УВАГА: реально пише у Salary-файли. Запускати ВРУЧНУ.
+function exportAllPredmetnyToSalary(month, year){
+  var LOCS = ['Голосієво','Бігова','Борщагівка','Бровари',"Кар'єрна",'Кругла',
+              'Оранж','Осокорки','Позняки','Пуща','Тичини'];
+  var lines = [];
+  LOCS.forEach(function(loc){
+    var r = exportPredmetnyToSalary({loc: loc, month: month, year: year});
+    var s = (r && r.matchStats) || {attempts:0,p1:0,p2:0,p3:0,p4:0,p5:0};
+    lines.push(loc + ' | ' + s.attempts + ' | ' + s.p1 + ' | ' + s.p2 + ' | ' +
+      s.p3 + ' | ' + s.p4 + ' | ' + s.p5 + ((r && r.ok) ? '' : '  ❌ ' + (r && r.error)));
+  });
+  Logger.log('\n════════ SUMMARY предметники → Salary (місяць %s/%s) ════════', month, year);
+  Logger.log('Локація | Спроб | P1 точн | P2 префікс | P3 інша ст | P4 без ст | P5 не зн');
+  lines.forEach(function(x){ Logger.log('  ' + x); });
+  return {ok: true};
 }
 
 // Тест: запусти вручну з Apps Script editor.
