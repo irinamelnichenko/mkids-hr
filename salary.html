@@ -1466,58 +1466,46 @@ function periodLabel(){
 }
 
 // ── SECTION DETECTION ───────────────────────
-// Класифікація рядків Salary — PER-ROW, на основі каталогу предметників
-// (getPredmetnyCatalog). Жодних машин станів: кожен рядок класифікується
-// незалежно від сусідів.
-//   "Вчителі-предметники" — назва починається з предмета каталогу;
-//   "Основний персонал"   — містить ключове слово штату;
-//   "Додаткові заняття"   — решта.
+// State machine: main → subjects → extras (без backтрэків).
+// Header рядок "Додаткові заняття" backend скіпає (_salaryIsSubtotalRow), тому
+// детектуємо початок секції extras евристично (короткі назви без цифр).
 
-// Нормалізовані назви предметів каталогу поточної локації — заповнює
-// ensurePredmetnyCatalog() при завантаженні Salary.
-var PREDMETNY_SUBJ_NORMS = [];
-var _predmetnyCatLoc = null;
+var SUBJECT_KEYWORDS = [
+  'англійська','англійський',
+  'логопед','муз.керівник','муз керівник',
+  'хореограф','фітнес','психолог',
+  'підготовка до школи','чомусики',
+  'архітектура','смм','speaking','информатика'
+];
 
-var MAIN_STAFF_KW = ['директор','вихователь','помічник','медсестра',
-                     'охорон','прибиральн','тьютор','тімлід'];
-
-// lowercase; крапки / пробіли / NBSP → один пробіл.
-function _salNorm(s){
-  return String(s == null ? '' : s).toLowerCase().replace(/[.\s]+/g, ' ').trim();
+function isSubjectTeacher(name){
+  var s = String(name || '');
+  var lower = s.toLowerCase();
+  for (var i = 0; i < SUBJECT_KEYWORDS.length; i++){
+    if (lower.indexOf(SUBJECT_KEYWORDS[i]) !== -1) return true;
+  }
+  // Тариф у назві: "X грн урок" / "X грн/заняття" / "за заняття"
+  if (/грн\s*\/?\s*(урок|занят)|за\s+занят/i.test(s)) return true;
+  // Назва містить число 100..1500 (ставка) як окремого 3-4значного слова
+  if (/\b1[0-4]\d{2}\b/.test(s) || /\b[1-9]\d{2}\b/.test(s)) return true;
+  return false;
 }
 
-// Завантажує каталог предметників локації CFG.LOC (один раз на локацію).
-async function ensurePredmetnyCatalog(){
-  if (_predmetnyCatLoc === CFG.LOC) return;
-  var url = CFG.SCRIPT_URL + '?action=getPredmetnyCatalog&loc=' + encodeURIComponent(CFG.LOC);
-  var r = await fetch(url, {redirect:'follow'});
-  var json = await r.json();
-  var items = (json && json.items) || [];
-  PREDMETNY_SUBJ_NORMS = items
-    .map(function(a){ return _salNorm(a.subject); })
-    .filter(function(s){ return !!s; });
-  _predmetnyCatLoc = CFG.LOC;
+function isExtraActivity(name){
+  var trimmed = String(name || '').trim();
+  if (!trimmed) return false;
+  if (/\d/.test(trimmed)) return false;          // без цифр
+  var words = trimmed.split(/\s+/);
+  if (words.length > 3) return false;            // короткі назви (Лего, Арт, m.Dance)
+  return true;
 }
 
-// Класифікує один рядок Salary → 'subjects' | 'main' | 'extras'.
-function classifyRow(name){
-  var rowNorm = _salNorm(name);
-  if (!rowNorm) return 'main';
-  // 1) Починається з предмета каталогу предметників → "Вчителі-предметники".
-  for (var i = 0; i < PREDMETNY_SUBJ_NORMS.length; i++){
-    var subj = PREDMETNY_SUBJ_NORMS[i];
-    if (subj && rowNorm.indexOf(subj) === 0){
-      var c = rowNorm.charAt(subj.length);   // '' якщо рядок == предмет
-      if (c === '' || c === ' ' || (c >= '0' && c <= '9')) return 'subjects';
-    }
-  }
-  // 2) Ключове слово основного персоналу → "Основний персонал".
-  var low = String(name || '').toLowerCase();
-  for (var k = 0; k < MAIN_STAFF_KW.length; k++){
-    if (low.indexOf(MAIN_STAFF_KW[k]) !== -1) return 'main';
-  }
-  // 3) Решта → "Додаткові заняття".
-  return 'extras';
+// Перехід стану: лише вперед (main → subjects → extras).
+function nextSection(currentSection, name){
+  if (currentSection === null) return 'main';
+  if (currentSection === 'main'     && isSubjectTeacher(name)) return 'subjects';
+  if (currentSection === 'subjects' && isExtraActivity(name))  return 'extras';
+  return currentSection;
 }
 
 function sectionLabel(s){
@@ -1535,9 +1523,10 @@ function computeSectionTotals(rows){
     subjects: {budget: 0, fact: 0, count: 0},
     extras:   {budget: 0, fact: 0, count: 0}
   };
+  var section = null;
   rows.forEach(function(r){
+    section = nextSection(section, r.name);
     if (r.isHeader) return;
-    var section = classifyRow(r.name);
     t[section].budget += r.budget;
     t[section].fact   += r.fact;
     t[section].count++;
@@ -1602,26 +1591,21 @@ function renderTable(rows){
   var body = $('tblBody');
   body.innerHTML = '';
 
-  // Per-row класифікація + групування у фіксованому порядку секцій.
-  var groups = {main: [], subjects: [], extras: []};
-  rows.forEach(function(r){ groups[classifyRow(r.name)].push(r); });
-  var ordered = [];
-  ['main','subjects','extras'].forEach(function(sec){
-    if (!groups[sec].length) return;
-    ordered.push({_sectionHd: sec});
-    for (var gi = 0; gi < groups[sec].length; gi++) ordered.push(groups[sec][gi]);
-  });
-
-  // Перед першою Медсестрою — тонкий сірий роздільник.
+  // Стейт секцій. Перед першим рядком кожної секції вставляємо section-hd.
+  var section = null;
+  // Перед першою Медсестрою — тонкий сірий роздільник (location-wide staff:
+  // Медсестра/Охорона/Прибиральниця — обслуговують всю локацію, не групу).
+  // Подальші рядки до першого предметника лишаються в "Основному" без розривів.
   var nurseSeparatorInserted = false;
 
-  ordered.forEach(function(r){
-    if (r._sectionHd){
+  rows.forEach(function(r){
+    var newSection = nextSection(section, r.name);
+    if (newSection !== section){
       var hdr = document.createElement('tr');
       hdr.className = 'section-hd';
-      hdr.innerHTML = '<td colspan="4">' + escapeHtml(sectionLabel(r._sectionHd)) + '</td>';
+      hdr.innerHTML = '<td colspan="4">' + escapeHtml(sectionLabel(newSection)) + '</td>';
       body.appendChild(hdr);
-      return;
+      section = newSection;
     }
 
     if (!nurseSeparatorInserted && /медсестра/i.test(r.name)){
@@ -1954,9 +1938,6 @@ async function loadDetail(force){
     // майже миттєво.
     try { await ensureHrEmpsLoaded(false); }
     catch(e){ console.warn('[hr] silent fetch fail:', e && e.message || e); }
-    // Каталог предметників локації — для класифікації секцій Salary.
-    try { await ensurePredmetnyCatalog(); }
-    catch(e){ console.warn('[predmetny] catalog fetch fail:', e && e.message || e); }
     $('loadBox').classList.add('hidden');
     $('content').classList.remove('hidden');
     applyMode();
