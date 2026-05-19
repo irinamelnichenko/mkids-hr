@@ -4970,10 +4970,13 @@ function _translitUA(str){
   return out;
 }
 
-// Пароль локації — копія genLocPw з index.html: <slug>2025 / <slug>2025n.
+// Пароль локації — копія genLocPw з index.html: <slug>2025 (директор),
+// <slug>2025n (медсестра), <slug>2025v (вихователь).
 function _locPassword(loc, role){
   var base = _translitUA(loc) + '2025';
-  return role === 'nurse' ? base + 'n' : base;
+  if (role === 'nurse')     return base + 'n';
+  if (role === 'vyhovatel') return base + 'v';
+  return base;
 }
 
 // Перехешовує усі НЕ-хешовані паролі у листі "Користувачі" (значення не
@@ -4993,20 +4996,26 @@ function _rehashManagementPasswords(){
   return {ok: true, rehashed: n};
 }
 
-// Створює рядки директорів і медсестер для всіх локацій. Якщо логін
-// уже існує — пропускає (не перезаписує). Повертає лічильники.
-function migrateDirectorsAndNursesToUsers(){
+// Активні локації (паролі генеруються алгоритмом _locPassword — окремого
+// листа "Налаштування Паролі Локацій" у системі немає). Назви точно
+// відповідають LOGIN_LOCATIONS у index.html / реєстру Sheets.
+var LOCATION_USER_LOCS = [
+  'Осокорки','Позняки','Тичини',"Кар'єрна",'Голосієво','Пуща','Оранж',
+  'Борщагівка','Бровари','Кругла','Бігова',
+  'Школа Осокорки','Школа 228',
+  'Житомир','Нац.Гвардії (Благо)','Манхетен (Благо)',
+  'Кухня Київ','Кухня Львів','Іва-Франківськ кухня'
+];
+
+// Створює рядки директорів / медсестер / вихователів для всіх локацій.
+// roles — необовʼязковий масив (напр. ['vyhovatel']); за замовч. усі три.
+// Якщо логін уже існує — пропускає (не перезаписує). Повертає лічильники.
+function migrateAllLocationUsers(roles){
   try {
-    // Активні локації (паролі генеруються алгоритмом _locPassword —
-    // окремого листа "Налаштування Паролі Локацій" у системі немає).
-    // Назви точно відповідають LOGIN_LOCATIONS у index.html / реєстру Sheets.
-    var LOCATIONS = [
-      'Осокорки','Позняки','Тичини',"Кар'єрна",'Голосієво','Пуща','Оранж',
-      'Борщагівка','Бровари','Кругла','Бігова',
-      'Школа Осокорки','Школа 228',
-      'Житомир','Нац.Гвардії (Благо)','Манхетен (Благо)',
-      'Кухня Київ','Кухня Львів','Іва-Франківськ кухня'
-    ];
+    var ALL = [['director','Директор'], ['nurse','Медсестра'], ['vyhovatel','Вихователь']];
+    var pick = (roles && roles.length)
+      ? ALL.filter(function(r){ return roles.indexOf(r[0]) !== -1; })
+      : ALL;
     var sh = _getUsersSheet();
     var data = sh.getDataRange().getValues();
     var existing = {}, maxId = 0;
@@ -5016,36 +5025,37 @@ function migrateDirectorsAndNursesToUsers(){
       var n = Number(data[i][0]) || 0; if (n > maxId) maxId = n;
     }
     var nextId = maxId + 1;
-    var dirs = 0, nurses = 0, skipped = 0, rows = [];
-    LOCATIONS.forEach(function(loc){
+    var counts = {director:0, nurse:0, vyhovatel:0, skipped:0}, rows = [];
+    LOCATION_USER_LOCS.forEach(function(loc){
       var slug = _translitUA(loc);
-      [['director','Директор'], ['nurse','Медсестра']].forEach(function(rd){
+      pick.forEach(function(rd){
         var role = rd[0], lbl = rd[1];
         var login = role + '.' + slug;
-        if (existing[login]){ skipped++; return; }
+        if (existing[login]){ counts.skipped++; return; }
         var pwHash = _sha256(_locPassword(loc, role));
         // Колонки: id | name | login | password | role | loc | email | active | lastLogin
         rows.push([nextId++, lbl + ' ' + loc, login, pwHash, role, loc, '', true, '']);
         existing[login] = true;
-        if (role === 'director') dirs++; else nurses++;
+        counts[role]++;
       });
     });
     if (rows.length){
       sh.getRange(sh.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
     }
-    Logger.log('[migrateDirectorsAndNursesToUsers] Створено %s директорів, %s медсестер, %s пропущено',
-      dirs, nurses, skipped);
-    return {ok: true, directors: dirs, nurses: nurses, skipped: skipped};
+    Logger.log('[migrateAllLocationUsers] Створено %s директорів, %s медсестер, %s вихователів, %s пропущено',
+      counts.director, counts.nurse, counts.vyhovatel, counts.skipped);
+    return {ok: true, directors: counts.director, nurses: counts.nurse,
+            vyhovateli: counts.vyhovatel, skipped: counts.skipped};
   } catch(e){
     return {ok: false, error: String(e && e.message || e)};
   }
 }
 
 // Разова утиліта — запустити ВРУЧНУ з Apps Script editor.
-// Перехешовує наявні паролі + створює директорів/медсестер.
+// Перехешовує наявні паролі + створює директорів і медсестер.
 function addAllDirectorsAndNurses(){
   var rehash = _rehashManagementPasswords();
-  var mig = migrateDirectorsAndNursesToUsers();
+  var mig = migrateAllLocationUsers(['director','nurse']);
   if (!mig.ok){
     Logger.log('[addAllDirectorsAndNurses] ПОМИЛКА: %s', mig.error);
     return mig;
@@ -5055,4 +5065,17 @@ function addAllDirectorsAndNurses(){
     rehash.rehashed, mig.directors, mig.nurses, mig.skipped);
   return {ok: true, rehashed: rehash.rehashed,
           directors: mig.directors, nurses: mig.nurses, skipped: mig.skipped};
+}
+
+// Разова утиліта — додає ЛИШЕ вихователів (vyhovatel.<slug>) для всіх
+// локацій. Запустити ВРУЧНУ з Apps Script editor.
+function addAllVyhovateli(){
+  var mig = migrateAllLocationUsers(['vyhovatel']);
+  if (!mig.ok){
+    Logger.log('[addAllVyhovateli] ПОМИЛКА: %s', mig.error);
+    return mig;
+  }
+  Logger.log('[addAllVyhovateli] Створено %s вихователів, %s пропущено (вже існує)',
+    mig.vyhovateli, mig.skipped);
+  return {ok: true, vyhovateli: mig.vyhovateli, skipped: mig.skipped};
 }

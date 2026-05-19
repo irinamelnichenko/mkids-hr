@@ -1074,7 +1074,8 @@ var PERMISSIONS = {
     'card-employee-vacations-tab','card-employee-sickleave-tab',
     'card-child-banner','card-child-contract','card-child-vacations',
     'card-child-notes','card-child-health'
-  ]
+  ],
+  vyhovatel: ['dashboard','activities','attendance-view','attendance-edit']
 };
 // Задачник: tasks — менеджмент + director; tasks-create — лише менеджмент.
 (function(){
@@ -3353,6 +3354,13 @@ function exportPreviewCSV(){
     setSyncState('idle', 'Синхронізовано з Пейментами');
   }
   await loadCatalog(false);
+
+  // Вихователь бачить лише вкладку Відвідуваність — ховаємо Каталог/Аналітику.
+  if (String(S.user.role || '').toLowerCase() === 'vyhovatel'){
+    if ($('mtCatalog'))  $('mtCatalog').classList.add('hidden');
+    if ($('mtAnalytics')) $('mtAnalytics').classList.add('hidden');
+    switchMode('attendance');
+  }
 })();
 </script>
 <script>

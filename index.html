@@ -277,10 +277,11 @@ tbody tr.clickable{cursor:pointer}
     </div>
 
     <!-- ВКЛАДКИ ТИПУ ВХОДУ -->
-    <div class="role-tabs" style="grid-template-columns:1fr 1fr 1fr">
-      <button class="rtab active" id="tabMgmt"  onclick="selectAuthTab('mgmt')">💼 Менеджмент</button>
-      <button class="rtab"        id="tabDir"   onclick="selectAuthTab('director')">🏫 Директор</button>
-      <button class="rtab"        id="tabNurse" onclick="selectAuthTab('nurse')">🩺 Медсестра</button>
+    <div class="role-tabs" style="grid-template-columns:1fr 1fr">
+      <button class="rtab active" id="tabMgmt"      onclick="selectAuthTab('mgmt')">💼 Менеджмент</button>
+      <button class="rtab"        id="tabDir"       onclick="selectAuthTab('director')">🏫 Директор</button>
+      <button class="rtab"        id="tabNurse"     onclick="selectAuthTab('nurse')">🩺 Медсестра</button>
+      <button class="rtab"        id="tabVyhovatel" onclick="selectAuthTab('vyhovatel')">👨‍🏫 Вихователь</button>
     </div>
 
     <div id="loginError" class="login-error hidden"></div>
@@ -339,6 +340,24 @@ tbody tr.clickable{cursor:pointer}
         </div>
       </div>
       <button class="btn btn-primary full" onclick="doLoginNurse()">Увійти →</button>
+    </div>
+
+    <!-- TAB 4: Вихователь -->
+    <div id="paneVyhovatel" class="hidden">
+      <div class="fg">
+        <label>Локація (садочок)</label>
+        <select id="loginLocationVyhovatel"></select>
+      </div>
+      <div class="fg">
+        <label>Пароль</label>
+        <div class="pw-wrap">
+          <input type="password" id="loginPwVyhovatel" placeholder="Введіть пароль"
+            onkeydown="if(event.key==='Enter')doLoginVyhovatel()">
+          <button type="button" class="pw-toggle" aria-label="Показати/приховати пароль"
+            onclick="togglePwVisibility('loginPwVyhovatel', this)">👁</button>
+        </div>
+      </div>
+      <button class="btn btn-primary full" onclick="doLoginVyhovatel()">Увійти →</button>
     </div>
 
   </div>
@@ -922,13 +941,15 @@ function selectAuthTab(tab){
   var err = document.getElementById('loginError');
   if (err) err.classList.add('hidden');
 
-  document.getElementById('tabMgmt').classList.toggle('active',  tab === 'mgmt');
-  document.getElementById('tabDir').classList.toggle('active',   tab === 'director');
-  document.getElementById('tabNurse').classList.toggle('active', tab === 'nurse');
+  document.getElementById('tabMgmt').classList.toggle('active',      tab === 'mgmt');
+  document.getElementById('tabDir').classList.toggle('active',       tab === 'director');
+  document.getElementById('tabNurse').classList.toggle('active',     tab === 'nurse');
+  document.getElementById('tabVyhovatel').classList.toggle('active', tab === 'vyhovatel');
 
-  document.getElementById('paneMgmt').classList.toggle('hidden',  tab !== 'mgmt');
-  document.getElementById('paneDir').classList.toggle('hidden',   tab !== 'director');
-  document.getElementById('paneNurse').classList.toggle('hidden', tab !== 'nurse');
+  document.getElementById('paneMgmt').classList.toggle('hidden',      tab !== 'mgmt');
+  document.getElementById('paneDir').classList.toggle('hidden',       tab !== 'director');
+  document.getElementById('paneNurse').classList.toggle('hidden',     tab !== 'nurse');
+  document.getElementById('paneVyhovatel').classList.toggle('hidden', tab !== 'vyhovatel');
 }
 
 function showLoginError(msg){
@@ -957,6 +978,14 @@ function populateLoginLocations(){
     var sel = document.getElementById(id);
     if (sel) sel.innerHTML = html;
   });
+  // Вихователь — лише садочки (без шкіл / кухонь / управління).
+  var vHtml = '<option value="">— Оберіть садочок —</option>';
+  LOGIN_LOCATIONS.filter(function(l){ return l.group === 'Садочки'; })
+    .forEach(function(l){
+      vHtml += '<option value="' + esc(l.name) + '">' + esc(l.name) + '</option>';
+    });
+  var vSel = document.getElementById('loginLocationVyhovatel');
+  if (vSel) vSel.innerHTML = vHtml;
 }
 
 // Завантажуємо список користувачів для Менеджмент-dropdown.
@@ -1084,8 +1113,9 @@ async function doLoginLocation(role, locFieldId, pwFieldId){
     showLoginError('Помилка зʼєднання: ' + (e && e.message ? e.message : e));
   }
 }
-async function doLoginDir(){   await doLoginLocation('director', 'loginLocationDir',   'loginPwDir');   }
-async function doLoginNurse(){ await doLoginLocation('nurse',    'loginLocationNurse', 'loginPwNurse'); }
+async function doLoginDir(){       await doLoginLocation('director',  'loginLocationDir',       'loginPwDir');       }
+async function doLoginNurse(){     await doLoginLocation('nurse',     'loginLocationNurse',     'loginPwNurse');     }
+async function doLoginVyhovatel(){ await doLoginLocation('vyhovatel', 'loginLocationVyhovatel', 'loginPwVyhovatel'); }
 
 async function doLogin() {
   const pw=document.getElementById('loginPw').value;
@@ -1275,7 +1305,8 @@ const PERMISSIONS = {
     'card-employee-vacations-tab','card-employee-sickleave-tab',
     'card-child-banner','card-child-contract','card-child-vacations',
     'card-child-notes','card-child-health'
-  ]
+  ],
+  vyhovatel: ['dashboard','activities','attendance-view','attendance-edit']
 };
 // Задачник: tasks — менеджмент + director; tasks-create — лише менеджмент.
 (function(){
