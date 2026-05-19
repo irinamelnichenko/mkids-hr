@@ -829,16 +829,19 @@ function translitUA(str){
 }
 function genLocPw(loc,role='director'){
   const base=translitUA(loc)+'2025';
-  return role==='nurse'?base+'n':base;
+  if(role==='nurse')return base+'n';
+  if(role==='vyhovatel')return base+'v';
+  return base;
 }
 function autoGenPasswords(){
   const locs=[...new Set(S.emps.map(e=>e.loc).filter(Boolean))];
-  const dirPws=getAllDirPws(); const nursePws=getAllNursePws(); let changed=false;
+  const dirPws=getAllDirPws(); const nursePws=getAllNursePws(); const vPws=getAllVyhovateliPws(); let changed=false;
   locs.forEach(loc=>{
     if(!dirPws[loc]){dirPws[loc]=genLocPw(loc,'director');changed=true;}
     if(!nursePws[loc]){nursePws[loc]=genLocPw(loc,'nurse');changed=true;}
+    if(!vPws[loc]){vPws[loc]=genLocPw(loc,'vyhovatel');changed=true;}
   });
-  if(changed){localStorage.setItem('hr_dir_pw',JSON.stringify(dirPws));localStorage.setItem('hr_nurse_pw',JSON.stringify(nursePws));}
+  if(changed){localStorage.setItem('hr_dir_pw',JSON.stringify(dirPws));localStorage.setItem('hr_nurse_pw',JSON.stringify(nursePws));localStorage.setItem('hr_vyhovatel_pw',JSON.stringify(vPws));}
 }
 
 // ── AUTH ──
@@ -857,6 +860,13 @@ function setNursePw(loc,pw){
 }
 function getAllDirPws(){try{return JSON.parse(localStorage.getItem('hr_dir_pw')||'{}');}catch{return {};}}
 function getAllNursePws(){try{return JSON.parse(localStorage.getItem('hr_nurse_pw')||'{}');}catch{return {};}}
+function getVyhovatelPw(loc){
+  try{const m=JSON.parse(localStorage.getItem('hr_vyhovatel_pw')||'{}');return m[loc]||genLocPw(loc,'vyhovatel');}catch{return genLocPw(loc,'vyhovatel');}
+}
+function setVyhovatelPw(loc,pw){
+  try{const m=JSON.parse(localStorage.getItem('hr_vyhovatel_pw')||'{}');m[loc]=pw;localStorage.setItem('hr_vyhovatel_pw',JSON.stringify(m));}catch(e){}
+}
+function getAllVyhovateliPws(){try{return JSON.parse(localStorage.getItem('hr_vyhovatel_pw')||'{}');}catch{return {};}}
 function selectRole(r) {
   selRole=r;
   document.getElementById('tabHR').classList.toggle('active',r==='hr');
@@ -3114,20 +3124,23 @@ function renderSettings(){
         </div>
         <div style="padding:14px 20px">
           <div class="alert alert-info" style="font-size:12px;margin-bottom:16px">
-            ℹ️ Кожна локація має <strong>два окремих паролі</strong> — для директора і для медсестри.<br>
-            За замовчуванням: директор — <code>назвалокації2025</code>, медсестра — <code>назвалокації2025n</code>
+            ℹ️ Кожна локація має <strong>три окремих паролі</strong> — директора, медсестри та вихователя.<br>
+            За замовчуванням: директор — <code>назвалокації2025</code>, медсестра — <code>назвалокації2025n</code>, вихователь — <code>назвалокації2025v</code>
           </div>
           <div class="tbl-wrap">
-          <table><thead><tr><th>Локація</th><th>Тип</th><th>🏫 Пароль директора</th><th></th><th>🏥 Пароль медсестри</th><th></th></tr></thead>
+          <table><thead><tr><th>Локація</th><th>Тип</th><th>🏫 Пароль директора</th><th></th><th>🏥 Пароль медсестри</th><th></th><th>👨‍🏫 Пароль вихователя</th><th></th></tr></thead>
           <tbody>
           ${[...new Set(S.emps.map(e=>e.loc).filter(Boolean))].sort().map(loc=>{
             const emp=S.emps.find(e=>e.loc===loc);
             const typ=emp?normType(emp.typ):'';
             const safeDir='dpw_'+loc.replace(/[^a-zA-Z0-9]/g,'_');
             const safeNurse='npw_'+loc.replace(/[^a-zA-Z0-9]/g,'_');
+            const safeVyhovatel='vpw_'+loc.replace(/[^a-zA-Z0-9]/g,'_');
             const nursePws=getAllNursePws();
+            const vyhovateliPws=getAllVyhovateliPws();
             const dirPw=dirPws[loc]||genLocPw(loc,'director');
             const nursePw=nursePws[loc]||genLocPw(loc,'nurse');
+            const vyhovatelPw=vyhovateliPws[loc]||genLocPw(loc,'vyhovatel');
             return`<tr>
               <td><strong>${loc}</strong></td>
               <td style="font-size:12px;color:var(--gray)">${TYPE_ICONS[typ]||''} ${typ}</td>
@@ -3142,6 +3155,13 @@ function renderSettings(){
                 <div style="display:flex;gap:6px;align-items:center">
                   <input type="text" id="${safeNurse}" value="${esc(nursePw)}" style="padding:5px 9px;border:1.5px solid var(--gray2);border-radius:7px;font-size:12px;font-family:monospace;width:180px;outline:none">
                   <button class="btn btn-primary btn-xs" onclick="saveNursePw('${esc(loc)}','${safeNurse}');renderSettings()">💾</button>
+                </div>
+              </td>
+              <td style="width:20px"></td>
+              <td>
+                <div style="display:flex;gap:6px;align-items:center">
+                  <input type="text" id="${safeVyhovatel}" value="${esc(vyhovatelPw)}" style="padding:5px 9px;border:1.5px solid var(--gray2);border-radius:7px;font-size:12px;font-family:monospace;width:180px;outline:none">
+                  <button class="btn btn-primary btn-xs" onclick="saveVyhovatelPw('${esc(loc)}','${safeVyhovatel}');renderSettings()">💾</button>
                 </div>
               </td>
               <td></td>
@@ -3300,28 +3320,35 @@ function saveNursePw(loc,safeId){
   if(!pw){toast('⚠️ Введіть пароль');return;}
   setNursePw(loc,pw);toast(`✅ Пароль медсестри для "${loc}" збережено`);
 }
+function saveVyhovatelPw(loc,safeId){
+  const pw=document.getElementById(safeId).value.trim();
+  if(!pw){toast('⚠️ Введіть пароль');return;}
+  setVyhovatelPw(loc,pw);toast(`✅ Пароль вихователя для "${loc}" збережено`);
+}
 function resetAllDirPw(){
   if(!isHR()){alert('⛔ Доступно тільки для CFO');return;}
   if(!confirm('Скинути всі паролі до стандартних?'))return;
-  localStorage.removeItem('hr_dir_pw');localStorage.removeItem('hr_nurse_pw');toast('✅ Всі паролі скинуто');renderSettings();
+  localStorage.removeItem('hr_dir_pw');localStorage.removeItem('hr_nurse_pw');localStorage.removeItem('hr_vyhovatel_pw');toast('✅ Всі паролі скинуто');renderSettings();
 }
 function regenAllPws(){
   if(!isHR()){alert('⛔ Доступно тільки для CFO');return;}
   if(!confirm('Перегенерувати всі паролі?\nПоточні паролі буде замінено.'))return;
-  localStorage.removeItem('hr_dir_pw');localStorage.removeItem('hr_nurse_pw');autoGenPasswords();toast('✅ Паролі перегенеровано');renderSettings();
+  localStorage.removeItem('hr_dir_pw');localStorage.removeItem('hr_nurse_pw');localStorage.removeItem('hr_vyhovatel_pw');autoGenPasswords();toast('✅ Паролі перегенеровано');renderSettings();
 }
 function copyAllPws(){
-  const dirPws=getAllDirPws(), nursePws=getAllNursePws();
+  const dirPws=getAllDirPws(), nursePws=getAllNursePws(), vPws=getAllVyhovateliPws();
   const locs=[...new Set(S.emps.map(e=>e.loc).filter(Boolean))].sort();
-  const lines=['=== ПАРОЛІ ДИРЕКТОРІВ ===',...locs.map(loc=>{
-    const emp=S.emps.find(e=>e.loc===loc);const typ=emp?normType(emp.typ):'';
-    return`${typ} | ${loc}: ${dirPws[loc]||genLocPw(loc,'director')}`;
-  }),'','=== ПАРОЛІ МЕДСЕСТЕР ===',...locs.map(loc=>{
-    const emp=S.emps.find(e=>e.loc===loc);const typ=emp?normType(emp.typ):'';
-    return`${typ} | ${loc}: ${nursePws[loc]||genLocPw(loc,'nurse')}`;
-  })];
-  navigator.clipboard.writeText(lines.join('\n')).then(()=>toast('📋 Скопійовано!')).catch(()=>{
-    const ta=document.createElement('textarea');ta.value=lines.join('\n');document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();toast('📋 Скопійовано!');
+  const lines=[];
+  locs.forEach(loc=>{
+    lines.push(loc+':');
+    lines.push('🏠 Директор: '   +(dirPws[loc]  ||genLocPw(loc,'director')));
+    lines.push('🩺 Медсестра: '  +(nursePws[loc]||genLocPw(loc,'nurse')));
+    lines.push('👨‍🏫 Вихователь: '+(vPws[loc]    ||genLocPw(loc,'vyhovatel')));
+    lines.push('');
+  });
+  const text=lines.join('\n').trim();
+  navigator.clipboard.writeText(text).then(()=>toast('📋 Скопійовано!')).catch(()=>{
+    const ta=document.createElement('textarea');ta.value=text;document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();toast('📋 Скопійовано!');
   });
 }
 function exportCSV(){
