@@ -2324,7 +2324,8 @@ function _salaryIsSubtotalRow(name) {
   var lower = String(name || '').trim().toLowerCase();
   if (!lower) return false;
   if (lower.indexOf('додаткові заняття') !== -1) return true;
-  if (lower.indexOf('день народження') !== -1) return true;
+  // "День народження" БІЛЬШЕ не вважаємо subtotal-рядком — це звичайний extras
+  // (в новій моделі state machine просто falls through у поточний state).
   return false;
 }
 
@@ -2517,11 +2518,14 @@ function _startsWithCatalogName(rowNorm, catNorm){
 // (Школа Осокорки, Школа 228, Управління-локації).
 //
 // Вхід: rows = [{name, fact?, budget?, ...}]  у source-order.
-// Вихід: новий масив [{...row, _category, _section}], незмінений вхід.
+// Вихід: новий масив [{...row, _category, _section, _inSchoolGroup?}].
+// Рядки "День народження" та empty/numeric-only — повністю пропускаються
+// (не з'являються в out, state не міняється).
 //
-//   _section:  'main' | 'subjects' | 'extras' | 'birthdays'
+//   _section:  'main' | 'subjects' | 'extras'
 //   _category: 'director' | 'teacher' | 'assistant' | 'nurse' | 'guard' |
-//              'cleaner' | 'tutor' | 'subject' | 'extras' | 'birthdays' |
+//              'cleaner' | 'tutor' | 'mentor' | 'duty' | 'meal_extra' |
+//              'substitute' | 'subject' | 'school_subject' | 'extras' |
 //              'section_header' | 'group_header' | null
 function _classifyAllSalaryRows(rows){
   var SUBJECT_KEYWORDS = [
@@ -2582,7 +2586,7 @@ function _classifyAllSalaryRows(rows){
   }
 
   var out = [];
-  var state = 'main';            // 'main' | 'subjects' | 'extras' | 'birthdays'
+  var state = 'main';            // 'main' | 'subjects' | 'extras'
   var inSchoolGroup = false;     // КАР'ЄРНА: всередині group_header "Школа"
                                  // subject keywords дають 'school_subject' у main,
                                  // НЕ переключаючи state на subjects.
@@ -2610,13 +2614,6 @@ function _classifyAllSalaryRows(rows){
       out.push(emit(r, 'section_header', 'extras'));
       continue;
     }
-    if (lower.indexOf('день народження') !== -1){
-      state = 'birthdays';
-      inSchoolGroup = false;
-      out.push(emit(r, 'section_header', 'birthdays'));
-      continue;
-    }
-
     // ── 2. Group-headers всередині main (Findики/.../Школа) ─────
     //   "Школа" — group у Кар'єрній (FIX 3). Інші — за префіксом.
     //   "mini baby-ki" / "mini-baby" з пробілом/дефісом ловить mini\s*-?\s*baby.
@@ -2678,10 +2675,9 @@ function _classifyAllSalaryRows(rows){
     }
 
     // ── 6. Default → поточний state ─────────────────────────────
-    if (state === 'extras')         out.push(emit(r, 'extras',    'extras'));
-    else if (state === 'birthdays') out.push(emit(r, 'birthdays', 'birthdays'));
-    else if (state === 'subjects')  out.push(emit(r, 'subject',   'subjects'));
-    else                            out.push(emit(r, null,        'main'));
+    if (state === 'extras')        out.push(emit(r, 'extras',  'extras'));
+    else if (state === 'subjects') out.push(emit(r, 'subject', 'subjects'));
+    else                           out.push(emit(r, null,      'main'));
   }
 
   return out;
@@ -5855,10 +5851,10 @@ function exportAllPredmetnyToSalary_DRY_RUN(month, year){
 //   testClassifyAllLocations()  → всі 16 локацій з Salary registry
 //   testClassifyRealLocations() → 3 локації (швидкий smoke-test)
 //
-// Для кожної: підсумки по 4 секціях (main / subjects / extras / birthdays)
-// + список потенційних проблем. У кінці — зведена таблиця зі статусами:
-//   ✅ ok       — нерозпізнаних нема, birthdays ≤ 1
-//   ⚠️ warn    — null-category, або birthdays > 1, або subject без сум
+// Для кожної: підсумки по 3 секціях (main / subjects / extras) + список
+// потенційних проблем. У кінці — зведена таблиця зі статусами:
+//   ✅ ok       — нерозпізнаних нема
+//   ⚠️ warn    — null-category або subject без сум
 //   ❌ fail    — порожня локація або помилка
 function testClassifyAllLocations(){
   return _runClassifyDiagnostic(null);
@@ -5904,9 +5900,9 @@ function _runClassifyDiagnostic(locFilter){
     Logger.log('\n══════════════ %s [%s] ══════════════', ent.loc, ent.typ || '?');
     var stat = {
       loc: ent.loc, typ: ent.typ,
-      main: 0, subjects: 0, extras: 0, birthdays: 0,
-      bM: 0, bS: 0, bE: 0, bB: 0,
-      fM: 0, fS: 0, fE: 0, fB: 0,
+      main: 0, subjects: 0, extras: 0,
+      bM: 0, bS: 0, bE: 0,
+      fM: 0, fS: 0, fE: 0,
       status: '✅', issues: 0
     };
 
@@ -5944,17 +5940,15 @@ function _runClassifyDiagnostic(locFilter){
         if (cr._category === 'section_header' || cr._category === 'group_header') return;
         var s = cr._section;
         var fF = Number(cr.fact) || 0, bB = Number(cr.budget) || 0;
-        if (s === 'main')           { stat.main++;      stat.bM += bB; stat.fM += fF; }
-        else if (s === 'subjects')  { stat.subjects++;  stat.bS += bB; stat.fS += fF; }
-        else if (s === 'extras')    { stat.extras++;    stat.bE += bB; stat.fE += fF; }
-        else if (s === 'birthdays') { stat.birthdays++; stat.bB += bB; stat.fB += fF; }
+        if (s === 'main')          { stat.main++;     stat.bM += bB; stat.fM += fF; }
+        else if (s === 'subjects') { stat.subjects++; stat.bS += bB; stat.fS += fF; }
+        else if (s === 'extras')   { stat.extras++;   stat.bE += bB; stat.fE += fF; }
       });
 
       Logger.log('  ── ПІДСУМКИ за травень %s ──', YEAR);
-      Logger.log('  main      : %s рядків · бюджет=%s₴ · факт=%s₴', padL(stat.main, 3),      stat.bM, stat.fM);
-      Logger.log('  subjects  : %s рядків · бюджет=%s₴ · факт=%s₴', padL(stat.subjects, 3),  stat.bS, stat.fS);
-      Logger.log('  extras    : %s рядків · бюджет=%s₴ · факт=%s₴', padL(stat.extras, 3),    stat.bE, stat.fE);
-      Logger.log('  birthdays : %s рядків · бюджет=%s₴ · факт=%s₴', padL(stat.birthdays, 3), stat.bB, stat.fB);
+      Logger.log('  main     : %s рядків · бюджет=%s₴ · факт=%s₴', padL(stat.main, 3),     stat.bM, stat.fM);
+      Logger.log('  subjects : %s рядків · бюджет=%s₴ · факт=%s₴', padL(stat.subjects, 3), stat.bS, stat.fS);
+      Logger.log('  extras   : %s рядків · бюджет=%s₴ · факт=%s₴', padL(stat.extras, 3),   stat.bE, stat.fE);
 
       // ── ПОТЕНЦІЙНІ ПРОБЛЕМИ — тільки для Тип='Садочок' ──
       // Для Школа/Управління блок проблем приховано — у них своя структура
@@ -5978,13 +5972,7 @@ function _runClassifyDiagnostic(locFilter){
           }
         });
 
-        // 3) birthdays > 1 — state може бути застряг.
-        if (stat.birthdays > 1){
-          problems.push({sev:'warn',
-            text: 'birthdays = ' + stat.birthdays + ' (>1) — імовірно state застряг'});
-        }
-
-        // 4) Підсекція "Школа" — group_header + усе до наступного group/section header.
+        // 3) Підсекція "Школа" — group_header + усе до наступного group/section header.
         var school = null;
         for (var k = 0; k < classified.length; k++){
           var cr = classified[k];
@@ -6019,7 +6007,7 @@ function _runClassifyDiagnostic(locFilter){
         stat.status = '➖';
       }
 
-      if (!stat.main && !stat.subjects && !stat.extras && !stat.birthdays) stat.status = '❌';
+      if (!stat.main && !stat.subjects && !stat.extras) stat.status = '❌';
 
     } catch (e){
       Logger.log('  ❌ ERROR: %s', (e && e.message) ? e.message : String(e));
@@ -6031,19 +6019,18 @@ function _runClassifyDiagnostic(locFilter){
 
   // ── ЗВЕДЕНА ТАБЛИЦЯ ──
   Logger.log('\n\n═════════════════════════════ ЗВЕДЕНА ТАБЛИЦЯ ═════════════════════════════');
-  Logger.log('┌────────────────────────┬────────────┬──────┬─────┬──────┬───────┬────────┐');
-  Logger.log('│ Локація                │ Тип        │ main │ sub │ extr │ b-day │ status │');
-  Logger.log('├────────────────────────┼────────────┼──────┼─────┼──────┼───────┼────────┤');
+  Logger.log('┌────────────────────────┬────────────┬──────┬─────┬──────┬────────┐');
+  Logger.log('│ Локація                │ Тип        │ main │ sub │ extr │ status │');
+  Logger.log('├────────────────────────┼────────────┼──────┼─────┼──────┼────────┤');
   summary.forEach(function(s){
     Logger.log('│ ' + padR(s.loc, 22) + ' │ ' +
                padR(s.typ || '?', 10) + ' │ ' +
                padL(s.main, 4) + ' │ ' +
                padL(s.subjects, 3) + ' │ ' +
                padL(s.extras, 4) + ' │ ' +
-               padL(s.birthdays, 5) + ' │ ' +
                padR(s.status, 6) + ' │');
   });
-  Logger.log('└────────────────────────┴────────────┴──────┴─────┴──────┴───────┴────────┘');
+  Logger.log('└────────────────────────┴────────────┴──────┴─────┴──────┴────────┘');
 
   var counts = {ok:0, warn:0, fail:0, neutral:0};
   summary.forEach(function(s){
