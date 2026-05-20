@@ -2503,26 +2503,41 @@ function _startsWithCatalogName(rowNorm, catNorm){
 // Каталог-driven класифікація рядка Salary → 'subjects' | 'extras' | 'main'.
 // Не залежить від положення рядка у файлі. Каталоги передаються ззовні —
 // масиви назв з Предметники_Каталог та Додаткові_Каталог для локації.
+//
+// Порядок перевірок:
+//  1) Main-staff keywords (медсестра/охорона/...) → 'main' ПРІОРИТЕТ.
+//  2) Якщо у назві є 3-значна ставка → перевірити Предметники_Каталог.
+//  3) Перевірити Додаткові_Каталог.
+//  4) Fallback: 3-значне число → 'subjects'.
+//  5) Default → 'main' (безпечно: не extras).
+//
+// Ключове правило для пункту 2: предметник МАЄ ставку у назві ("Логопед 250").
+// Без ставки те ж саме слово ("Логопед") = додаткова послуга, бо це разовий
+// захід, а не штатний предметник.
 function _classifySalaryRowByCatalog(name, predmetnySubjects, addActivities){
   var norm = _softNorm(name);
   if (!norm) return 'main';
-  // 1) Стартує з предмета каталогу предметників → 'subjects'.
-  if (predmetnySubjects){
+  // 1) Main staff — пріоритет над каталогами. Медсестра/Охорона/Прибиральниця/
+  //    Директор/Вихователь і т.д. ЗАВЖДИ 'main', навіть якщо випадково
+  //    збігаються з назвою у Додаткові_Каталог.
+  if (/директор|вихователь|медсестра|охрана|охорона|чергування|підміна|прибиральниц|кухар|повар|кухня|техперсонал|психолог/.test(norm))
+    return 'main';
+  var hasRate = /\b[1-9]\d{2}\b/.test(name);
+  // 2) Предметник = має ставку + збігається з Предметники_Каталог.
+  if (hasRate && predmetnySubjects){
     for (var i = 0; i < predmetnySubjects.length; i++){
       if (_startsWithCatalogName(norm, _softNorm(predmetnySubjects[i]))) return 'subjects';
     }
   }
-  // 2) Стартує з назви каталогу додаткових → 'extras'.
+  // 3) Додаткова послуга — будь-яка назва з Додаткові_Каталог (зі ставкою
+  //    або без; "Логопед" без числа = разовий захід).
   if (addActivities){
     for (var j = 0; j < addActivities.length; j++){
       if (_startsWithCatalogName(norm, _softNorm(addActivities[j]))) return 'extras';
     }
   }
-  // 3) Ключове слово штату → 'main'.
-  if (/директор|вихователь|медсестра|охрана|охорона|чергування|підміна|прибиральниц|кухар|повар|кухня|техперсонал|психолог/.test(norm))
-    return 'main';
-  // 4) Fallback: 3-значне число у назві → 'subjects' (предметник без каталогу).
-  if (/\b[1-9]\d{2}\b/.test(name)) return 'subjects';
+  // 4) Fallback: ставка є, але предмет невідомий каталогу → 'subjects'.
+  if (hasRate) return 'subjects';
   // 5) Дефолт — основний персонал (безпечно: не extras).
   return 'main';
 }

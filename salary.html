@@ -73,6 +73,15 @@ select{font-family:inherit}
 .tbl tbody tr.section-hd td{font-weight:800;color:var(--dark);
   text-transform:uppercase;letter-spacing:.6px;font-size:12px;padding:12px 14px}
 .tbl tbody tr.section-hd:hover{background:#e3e8ef}
+.tbl tbody tr.group-hd{background:#f4f7fa;border-top:1px solid #e2e8f0}
+.tbl tbody tr.group-hd td{font-weight:700;color:var(--dark2);
+  font-size:12px;padding:8px 14px 8px 28px;letter-spacing:.3px}
+.tbl tbody tr.group-hd:hover{background:#edf1f5}
+.tbl tbody tr.section-total{background:#f8fafc;border-top:1px solid #e2e8f0;
+  border-bottom:1px solid #cbd5e0}
+.tbl tbody tr.section-total td{font-weight:700;font-size:13px;color:var(--dark);
+  padding:10px 14px}
+.tbl tbody tr.section-total:hover{background:#f1f5f9}
 .tbl tbody tr.separator-row td{height:12px;padding:0;background:#eef2f6;
   border-top:1px solid #cbd5e0;border-bottom:1px solid #cbd5e0}
 .tbl tbody tr.separator-row:hover td{background:#e3e8ef}
@@ -1483,26 +1492,42 @@ function _startsWithCatalogName(rowNorm, catNorm){
 }
 
 // Класифікує рядок Salary → 'subjects' | 'extras' | 'main'.
+// Дзеркало _classifySalaryRowByCatalog на бекенді.
+// Порядок: 1) main-staff keywords (пріоритет) 2) hasRate+predNames →
+// subjects 3) actNames → extras 4) hasRate fallback → subjects 5) main.
+// "Логопед 250" → subjects; "Логопед" (без ставки) → extras.
 function classifyRow(name){
   var predNames = (S.data && S.data.predmetnySubjects)    || [];
   var actNames  = (S.data && S.data.additionalActivities) || [];
   var norm = _salNorm(name);
   if (!norm) return 'main';
-  // 1) Стартує з предмета каталогу предметників → 'subjects'.
-  for (var i = 0; i < predNames.length; i++){
-    if (_startsWithCatalogName(norm, _salNorm(predNames[i]))) return 'subjects';
+  // 1) Main staff — пріоритет над каталогами.
+  if (/директор|вихователь|медсестра|охрана|охорона|чергування|підміна|прибиральниц|кухар|повар|кухня|техперсонал|психолог/.test(norm))
+    return 'main';
+  var hasRate = /\b[1-9]\d{2}\b/.test(name);
+  // 2) Предметник = має ставку + збігається з Предметники_Каталог.
+  if (hasRate){
+    for (var i = 0; i < predNames.length; i++){
+      if (_startsWithCatalogName(norm, _salNorm(predNames[i]))) return 'subjects';
+    }
   }
-  // 2) Стартує з назви каталогу додаткових → 'extras'.
+  // 3) Додаткова послуга — будь-яка назва з Додаткові_Каталог (зі ставкою або без).
   for (var j = 0; j < actNames.length; j++){
     if (_startsWithCatalogName(norm, _salNorm(actNames[j]))) return 'extras';
   }
-  // 3) Ключове слово штату → 'main'.
-  if (/директор|вихователь|медсестра|охрана|охорона|чергування|підміна|прибиральниц|кухар|повар|кухня|техперсонал|психолог/.test(norm))
-    return 'main';
-  // 4) Fallback: 3-значне число у назві → 'subjects' (предметник без каталогу).
-  if (/\b[1-9]\d{2}\b/.test(name)) return 'subjects';
-  // 5) Дефолт — основний персонал (безпечно: не extras).
+  // 4) Fallback: ставка є, але предмет невідомий каталогу → 'subjects'.
+  if (hasRate) return 'subjects';
+  // 5) Дефолт — основний персонал.
   return 'main';
+}
+
+// Чи рядок — це group-header (Findики, miniBabyки, Preschool, Studyки).
+// Group-header лежить у Salary файлі як isHeader-рядок (без ставки за рік),
+// чия назва збігається з типовою назвою групи. Section-headers ("Додаткові
+// заняття") сюди НЕ потрапляють — їх ігноруємо як sheet-shim.
+function _isGroupHeader(name){
+  var norm = String(name || '').toLowerCase();
+  return /find|minibaby|mini baby|preschool|прескул|study|стаді/i.test(norm);
 }
 
 function sectionLabel(s){
@@ -1587,97 +1612,168 @@ function renderTable(rows){
   var body = $('tblBody');
   body.innerHTML = '';
 
-  // Per-row catalog-driven класифікація + ГРУПУВАННЯ у фіксованому порядку
-  // секцій (main → subjects → extras). Завдяки групуванню рядок предметника
-  // потрапляє під "Вчителі-предметники" навіть якщо у файлі стоїть у "extras-
-  // зоні". Один заголовок на секцію.
-  var groups = {main: [], subjects: [], extras: []};
+  // ── Pass 1: walk source order, build бакетs ──────────────────────
+  // Main розбиваємо по групах (Findики, miniBabyки, Preschool, Studyки) —
+  // group-header беремо з isHeader-рядків Salary, що збігаються з типовою
+  // назвою групи. Location-wide штат (медсестра/охорона/прибиральниця) йде
+  // в окремий бакет noGroupMain — без group-header, ПІСЛЯ всіх груп.
+  var mainGroupOrder = [];   // group names у appearance-порядку
+  var mainByGroup    = {};   // groupName → [rows]
+  var noGroupMain    = [];   // location-wide штат
+  var subjectsRows   = [];
+  var extrasRows     = [];
+
+  var currentGroup = '';
   rows.forEach(function(r){
-    // У старій логіці у sheet були in-line заголовки секцій ("Додаткові
-    // заняття" тощо) — рядки без грошей за весь рік. Тепер ми малюємо власні
-    // section-hd, тож source isHeader-рядки пропускаємо.
-    if (r.isHeader) return;
-    groups[classifyRow(r.name)].push(r);
-  });
-  var ordered = [];
-  ['main','subjects','extras'].forEach(function(sec){
-    if (!groups[sec].length) return;
-    ordered.push({_sectionHd: sec});
-    for (var gi = 0; gi < groups[sec].length; gi++) ordered.push(groups[sec][gi]);
-  });
-
-  // Перед першою Медсестрою — тонкий сірий роздільник.
-  var nurseSeparatorInserted = false;
-
-  ordered.forEach(function(r){
-    if (r._sectionHd){
-      var hdr = document.createElement('tr');
-      hdr.className = 'section-hd';
-      hdr.innerHTML = '<td colspan="4">' + escapeHtml(sectionLabel(r._sectionHd)) + '</td>';
-      body.appendChild(hdr);
+    if (r.isHeader){
+      // group-header? — оновлюємо контекст. Інші isHeader (section-shim
+      // "Додаткові заняття") ігноруємо: ми малюємо власні section-hd.
+      if (_isGroupHeader(r.name)){
+        currentGroup = r.name;
+        if (!mainByGroup[currentGroup]){
+          mainByGroup[currentGroup] = [];
+          mainGroupOrder.push(currentGroup);
+        }
+      }
       return;
     }
+    var section = classifyRow(r.name);
+    if (section === 'subjects')     subjectsRows.push(r);
+    else if (section === 'extras')  extrasRows.push(r);
+    else {
+      // 'main'. Location-wide штат — окремо, без групи.
+      if (/медсестра|охорон|охран|прибиральниц|кухня|кухар|повар|чергуван|підмін|техперсонал|психолог/i.test(r.name)){
+        noGroupMain.push(r);
+      } else if (currentGroup){
+        mainByGroup[currentGroup].push(r);
+      } else {
+        // Main-рядок до першого group-header (наприклад "Директор" зверху) —
+        // окремий бакет "" на самому початку, без під-заголовку.
+        if (mainGroupOrder.indexOf('') === -1){
+          mainByGroup[''] = [];
+          mainGroupOrder.unshift('');
+        }
+        mainByGroup[''].push(r);
+      }
+    }
+  });
 
-    if (!nurseSeparatorInserted && /медсестра/i.test(r.name)){
+  // ── Helpers ─────────────────────────────────────────────────────
+  function diffCellHtml(budget, fact, diff){
+    var cls, txt;
+    if (budget === 0 && fact === 0){ cls = 'muted'; txt = '—'; }
+    else if (diff > 0){ cls = 'diff-pos'; txt = '+' + fmtUah(diff); }
+    else if (diff < 0){ cls = 'diff-neg'; txt = fmtUah(diff); }
+    else { cls = 'diff-zero'; txt = '0'; }
+    return '<td class="num ' + cls + '">' + txt + '</td>';
+  }
+
+  function appendSectionHd(label){
+    var tr = document.createElement('tr');
+    tr.className = 'section-hd';
+    tr.innerHTML = '<td colspan="4">' + escapeHtml(label) + '</td>';
+    body.appendChild(tr);
+  }
+
+  function appendGroupHd(label){
+    var tr = document.createElement('tr');
+    tr.className = 'group-hd';
+    tr.innerHTML = '<td colspan="4">' + escapeHtml(label) + '</td>';
+    body.appendChild(tr);
+  }
+
+  function appendSectionTotal(label, list){
+    var b = 0, f = 0;
+    list.forEach(function(r){ b += r.budget; f += r.fact; });
+    var tr = document.createElement('tr');
+    tr.className = 'section-total';
+    tr.innerHTML =
+      '<td>' + escapeHtml(label) + '</td>' +
+      '<td class="num">' + fmtUah(b) + '</td>' +
+      '<td class="num">' + fmtUah(f) + '</td>' +
+      diffCellHtml(b, f, b - f);
+    body.appendChild(tr);
+  }
+
+  function appendDataRow(r){
+    var tr = document.createElement('tr');
+    if (r.over) tr.classList.add('row-over');
+
+    var curLoc = (S.data && S.data.loc) ? S.data.loc : CFG.LOC;
+    var nameCell;
+    // Три гілки: послуга → сірий неклікабельний;
+    //            співробітник є в HR → клікабельний;
+    //            співробітник немає в HR → ⚠️ + toast при кліку.
+    if (_isExtraService(r.name)){
+      nameCell =
+        '<td class="cat-name emp-service"' +
+          ' title="Додаткова послуга / не є співробітником">' +
+          escapeHtml(r.name) +
+        '</td>';
+    } else if (_rowHasHRData(r.name)){
+      nameCell =
+        '<td class="cat-name emp-link" title="Відкрити картку"' +
+          ' data-emp-name="' + escapeHtml(r.name) + '"' +
+          ' data-emp-loc="'  + escapeHtml(curLoc)  + '">' +
+          escapeHtml(r.name) +
+        '</td>';
+    } else {
+      nameCell =
+        '<td class="cat-name emp-missing"' +
+          ' title="Немає в HR-базі"' +
+          ' data-emp-name="' + escapeHtml(r.name) + '">' +
+          escapeHtml(r.name) +
+          ' <span class="emp-missing-icon" aria-hidden="true">⚠️</span>' +
+        '</td>';
+    }
+    tr.innerHTML =
+      nameCell +
+      '<td class="num">' + (r.budget > 0 ? fmtUah(r.budget) : '<span class="muted">—</span>') + '</td>' +
+      '<td class="num">' + fmtUah(r.fact) + '</td>' +
+      diffCellHtml(r.budget, r.fact, r.diff);
+    body.appendChild(tr);
+  }
+
+  // ── Pass 2: render ──────────────────────────────────────────────
+  // SECTION main
+  var mainAll = [];
+  mainGroupOrder.forEach(function(g){ mainAll = mainAll.concat(mainByGroup[g] || []); });
+  mainAll = mainAll.concat(noGroupMain);
+  if (mainAll.length){
+    appendSectionHd(sectionLabel('main'));
+    mainGroupOrder.forEach(function(g){
+      var list = mainByGroup[g] || [];
+      if (!list.length) return;
+      if (g) appendGroupHd(g);
+      list.forEach(appendDataRow);
+    });
+    if (noGroupMain.length){
+      // Тонкий роздільник перед location-wide штатом.
       var sep = document.createElement('tr');
       sep.className = 'separator-row';
       sep.innerHTML = '<td colspan="4"></td>';
       body.appendChild(sep);
-      nurseSeparatorInserted = true;
+      noGroupMain.forEach(appendDataRow);
     }
+    appendSectionTotal(sectionLabel('main') + ' — ПІДСУМОК', mainAll);
+  }
 
-    var tr = document.createElement('tr');
-    if (r.isHeader) tr.classList.add('row-header');
-    else if (r.over) tr.classList.add('row-over');
+  // SECTION subjects
+  if (subjectsRows.length){
+    appendSectionHd(sectionLabel('subjects'));
+    subjectsRows.forEach(appendDataRow);
+    appendSectionTotal(sectionLabel('subjects') + ' — ПІДСУМОК', subjectsRows);
+  }
 
-    var diffCls, diffTxt;
-    if (r.budget === 0 && r.fact === 0){ diffCls = 'muted'; diffTxt = '—'; }
-    else if (r.diff > 0){ diffCls = 'diff-pos'; diffTxt = '+' + fmtUah(r.diff); }
-    else if (r.diff < 0){ diffCls = 'diff-neg'; diffTxt = fmtUah(r.diff); }
-    else { diffCls = 'diff-zero'; diffTxt = '0'; }
+  // SECTION extras
+  if (extrasRows.length){
+    appendSectionHd(sectionLabel('extras'));
+    extrasRows.forEach(appendDataRow);
+    appendSectionTotal(sectionLabel('extras') + ' — ПІДСУМОК', extrasRows);
+  }
 
-    if (r.isHeader){
-      tr.innerHTML =
-        '<td class="cat-name" colspan="4">' + escapeHtml(r.name) + '</td>';
-    } else {
-      var curLoc = (S.data && S.data.loc) ? S.data.loc : CFG.LOC;
-      var nameCell;
-      // Три гілки: послуга → сірий неклікабельний;
-      //            співробітник є в HR → клікабельний;
-      //            співробітник немає в HR → ⚠️ + toast при кліку.
-      if (_isExtraService(r.name)){
-        nameCell =
-          '<td class="cat-name emp-service"' +
-            ' title="Додаткова послуга / не є співробітником">' +
-            escapeHtml(r.name) +
-          '</td>';
-      } else if (_rowHasHRData(r.name)){
-        nameCell =
-          '<td class="cat-name emp-link" title="Відкрити картку"' +
-            ' data-emp-name="' + escapeHtml(r.name) + '"' +
-            ' data-emp-loc="'  + escapeHtml(curLoc)  + '">' +
-            escapeHtml(r.name) +
-          '</td>';
-      } else {
-        nameCell =
-          '<td class="cat-name emp-missing"' +
-            ' title="Немає в HR-базі"' +
-            ' data-emp-name="' + escapeHtml(r.name) + '">' +
-            escapeHtml(r.name) +
-            ' <span class="emp-missing-icon" aria-hidden="true">⚠️</span>' +
-          '</td>';
-      }
-      tr.innerHTML =
-        nameCell +
-        '<td class="num">' + (r.budget > 0 ? fmtUah(r.budget) : '<span class="muted">—</span>') + '</td>' +
-        '<td class="num">' + fmtUah(r.fact) + '</td>' +
-        '<td class="num ' + diffCls + '">' + diffTxt + '</td>';
-    }
-    body.appendChild(tr);
-  });
-
-  // Total row (only non-header)
-  var dataRows = rows.filter(function(r){ return !r.isHeader; });
+  // ── Grand total ─────────────────────────────────────────────────
+  var dataRows = mainAll.concat(subjectsRows, extrasRows);
   if (!dataRows.length) return;
 
   var tF = 0, tB = 0;
