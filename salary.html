@@ -56,6 +56,11 @@ select{font-family:inherit}
 .banner-ic{font-size:20px}
 
 .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:22px}
+/* Detail-KPI має фіксовано 4 колонки на desktop, 2×2 на планшеті, 1 на мобільному.
+   Перебиває .kpis auto-fit щоб 4 картки не падали на другий рядок. */
+.kpis-4col{grid-template-columns:repeat(4,1fr)}
+@media(max-width:1023px){.kpis-4col{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:767px){.kpis-4col{grid-template-columns:1fr}}
 .kpi{background:#fff;border-radius:var(--r);padding:18px 20px;box-shadow:var(--sh);
   border:2px solid transparent;transition:border-color .2s}
 .kpi-lbl{font-size:11px;font-weight:700;color:var(--gray);text-transform:uppercase;letter-spacing:.5px}
@@ -454,7 +459,7 @@ select{font-family:inherit}
     </div>
 
     <div id="detailMode" class="hidden">
-      <div class="kpis">
+      <div class="kpis kpis-4col">
         <div class="kpi" id="kpiMainCard">
           <div class="kpi-lbl">👥 Основний</div>
           <div class="kpi-val" id="kpiMainBudget">—</div>
