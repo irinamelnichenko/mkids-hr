@@ -1475,65 +1475,26 @@ function periodLabel(){
 }
 
 // ── SECTION DETECTION ───────────────────────
-// Каталог-driven класифікація рядків Salary (дзеркало бекенду
-// _classifySalaryRowByCatalog). НЕ залежить від положення у файлі.
-// Каталоги — predmetnySubjects / additionalActivities — приходять у
-// відповіді getSalaryData (S.data).
+// Бекенд (v6.8 — section-based state machine у _classifyAllSalaryRows)
+// проставляє на кожному рядку поля _section та _category. Фронт лише
+// читає їх; жодної власної класифікації.
+//   _section:  'main' | 'subjects' | 'extras' | 'birthdays'
+//   _category: 'director' | 'teacher' | ... | 'subject' | 'extras' |
+//              'birthdays' | 'group_header' | null
 
-function _salNorm(s){
-  return String(s == null ? '' : s).toLowerCase().replace(/[.\s]+/g, ' ').trim();
+function rowSection(r){
+  return (r && r._section) || 'main';
 }
 
-function _startsWithCatalogName(rowNorm, catNorm){
-  if (!catNorm || rowNorm.indexOf(catNorm) !== 0) return false;
-  if (rowNorm.length === catNorm.length) return true;
-  var c = rowNorm.charAt(catNorm.length);
-  return c === ' ' || (c >= '0' && c <= '9');
-}
-
-// Класифікує рядок Salary → 'subjects' | 'extras' | 'main'.
-// Дзеркало _classifySalaryRowByCatalog на бекенді.
-// Порядок: 1) main-staff keywords (пріоритет) 2) hasRate+predNames →
-// subjects 3) actNames → extras 4) hasRate fallback → subjects 5) main.
-// "Логопед 250" → subjects; "Логопед" (без ставки) → extras.
-function classifyRow(name){
-  var predNames = (S.data && S.data.predmetnySubjects)    || [];
-  var actNames  = (S.data && S.data.additionalActivities) || [];
-  var norm = _salNorm(name);
-  if (!norm) return 'main';
-  // 1) Main staff — пріоритет над каталогами.
-  if (/директор|вихователь|медсестра|охрана|охорона|чергування|підміна|прибиральниц|кухар|повар|кухня|техперсонал|психолог/.test(norm))
-    return 'main';
-  var hasRate = /\b[1-9]\d{2}\b/.test(name);
-  // 2) Предметник = має ставку + збігається з Предметники_Каталог.
-  if (hasRate){
-    for (var i = 0; i < predNames.length; i++){
-      if (_startsWithCatalogName(norm, _salNorm(predNames[i]))) return 'subjects';
-    }
-  }
-  // 3) Додаткова послуга — будь-яка назва з Додаткові_Каталог (зі ставкою або без).
-  for (var j = 0; j < actNames.length; j++){
-    if (_startsWithCatalogName(norm, _salNorm(actNames[j]))) return 'extras';
-  }
-  // 4) Fallback: ставка є, але предмет невідомий каталогу → 'subjects'.
-  if (hasRate) return 'subjects';
-  // 5) Дефолт — основний персонал.
-  return 'main';
-}
-
-// Чи рядок — це group-header (Findики, miniBabyки, Preschool, Studyки).
-// Group-header лежить у Salary файлі як isHeader-рядок (без ставки за рік),
-// чия назва збігається з типовою назвою групи. Section-headers ("Додаткові
-// заняття") сюди НЕ потрапляють — їх ігноруємо як sheet-shim.
-function _isGroupHeader(name){
-  var norm = String(name || '').toLowerCase();
-  return /find|minibaby|mini baby|preschool|прескул|study|стаді/i.test(norm);
+function rowIsGroupHeader(r){
+  return r && r._category === 'group_header';
 }
 
 function sectionLabel(s){
-  if (s === 'main')     return '👥 Основний персонал';
-  if (s === 'subjects') return '📚 Вчителі-предметники';
-  if (s === 'extras')   return '🎨 Додаткові заняття';
+  if (s === 'main')      return '👥 Основний персонал';
+  if (s === 'subjects')  return '📚 Вчителі-предметники';
+  if (s === 'extras')    return '🎨 Додаткові заняття';
+  if (s === 'birthdays') return '🎂 День народження';
   return s;
 }
 
@@ -1546,8 +1507,10 @@ function computeSectionTotals(rows){
     extras:   {budget: 0, fact: 0, count: 0}
   };
   rows.forEach(function(r){
-    if (r.isHeader) return;
-    var section = classifyRow(r.name);
+    if (rowIsGroupHeader(r)) return;
+    if (r.isHeader)          return;
+    var section = rowSection(r);
+    if (!t[section]) return;   // 'birthdays' — поки не у KPI картках, ігноруємо
     t[section].budget += r.budget;
     t[section].fact   += r.fact;
     t[section].count++;
@@ -1573,6 +1536,9 @@ function rowsForPeriod(rows, monthsArr){
       budget:      budget,
       diff:        budget - fact,
       over:        budget > 0 && fact > budget,
+      // Класифікація — приходить з бекенду (v6.8 section-based).
+      _section:    r._section,
+      _category:   r._category,
       // Header-рядок: ні факту ні бюджету за весь рік (нульовий totalFact і totalBudget).
       isHeader:    (r.totalFact || 0) === 0 && (r.totalBudget || 0) === 0
     };
@@ -1613,42 +1579,52 @@ function renderTable(rows){
   body.innerHTML = '';
 
   // ── Pass 1: walk source order, build бакетs ──────────────────────
-  // Main розбиваємо по групах (Findики, miniBabyки, Preschool, Studyки) —
-  // group-header беремо з isHeader-рядків Salary, що збігаються з типовою
-  // назвою групи. Location-wide штат (медсестра/охорона/прибиральниця) йде
-  // в окремий бакет noGroupMain — без group-header, ПІСЛЯ всіх груп.
+  // Класифікація вже зроблена бекендом (_classifyAllSalaryRows). Тут лише
+  // розкладаємо за секціями. У main підтримуємо групову ієрархію — group-
+  // header виявляється через _category === 'group_header'. Location-wide
+  // штат (medsestra/oхорона/прибиральниця/кухня/etc) ідентифікуємо за
+  // category-значеннями ('nurse','guard','cleaner','kitchen') і виносимо
+  // у noGroupMain — рендерається після всіх груп без під-заголовка.
   var mainGroupOrder = [];   // group names у appearance-порядку
   var mainByGroup    = {};   // groupName → [rows]
   var noGroupMain    = [];   // location-wide штат
   var subjectsRows   = [];
   var extrasRows     = [];
+  var birthdaysRows  = [];
+
+  // Location-wide штат — рендериться після всіх груп, без group-header.
+  // (дзеркало LOC_WIDE_STAFF на бекенді + meal_extra/substitute як разові
+  // location-wide виплати).
+  var LOC_WIDE_CATS = {nurse:1, guard:1, cleaner:1, duty:1,
+                       meal_extra:1, substitute:1};
 
   var currentGroup = '';
   rows.forEach(function(r){
-    if (r.isHeader){
-      // group-header? — оновлюємо контекст. Інші isHeader (section-shim
-      // "Додаткові заняття") ігноруємо: ми малюємо власні section-hd.
-      if (_isGroupHeader(r.name)){
-        currentGroup = r.name;
-        if (!mainByGroup[currentGroup]){
-          mainByGroup[currentGroup] = [];
-          mainGroupOrder.push(currentGroup);
-        }
+    if (rowIsGroupHeader(r)){
+      currentGroup = r.name;
+      if (!mainByGroup[currentGroup]){
+        mainByGroup[currentGroup] = [];
+        mainGroupOrder.push(currentGroup);
       }
       return;
     }
-    var section = classifyRow(r.name);
-    if (section === 'subjects')     subjectsRows.push(r);
-    else if (section === 'extras')  extrasRows.push(r);
+    if (r.isHeader) return;  // інші 0-сум рядки — sheet-shims, пропускаємо
+
+    var section = rowSection(r);
+    if      (section === 'subjects')  subjectsRows.push(r);
+    else if (section === 'extras')    extrasRows.push(r);
+    else if (section === 'birthdays') birthdaysRows.push(r);
     else {
-      // 'main'. Location-wide штат — окремо, без групи.
-      if (/медсестра|охорон|охран|прибиральниц|кухня|кухар|повар|чергуван|підмін|техперсонал|психолог/i.test(r.name)){
+      // section === 'main'
+      // Location-wide штат (nurse/guard/cleaner/duty/...) виноситься у бакет
+      // noGroupMain — рендериться ПІСЛЯ всіх груп. Виняток: якщо рядок з
+      // позначкою _inSchoolGroup (внутрішня шкільна прибиральниця/медсестра/
+      // тощо Кар'єрної) — він лишається під заголовком поточної групи "Школа".
+      if (LOC_WIDE_CATS[r._category] && !r._inSchoolGroup){
         noGroupMain.push(r);
       } else if (currentGroup){
         mainByGroup[currentGroup].push(r);
       } else {
-        // Main-рядок до першого group-header (наприклад "Директор" зверху) —
-        // окремий бакет "" на самому початку, без під-заголовку.
         if (mainGroupOrder.indexOf('') === -1){
           mainByGroup[''] = [];
           mainGroupOrder.unshift('');
@@ -1772,8 +1748,15 @@ function renderTable(rows){
     appendSectionTotal(sectionLabel('extras') + ' — ПІДСУМОК', extrasRows);
   }
 
+  // SECTION birthdays (нова в v6.8 — sheet містить підсекцію "День народження")
+  if (birthdaysRows.length){
+    appendSectionHd(sectionLabel('birthdays'));
+    birthdaysRows.forEach(appendDataRow);
+    appendSectionTotal(sectionLabel('birthdays') + ' — ПІДСУМОК', birthdaysRows);
+  }
+
   // ── Grand total ─────────────────────────────────────────────────
-  var dataRows = mainAll.concat(subjectsRows, extrasRows);
+  var dataRows = mainAll.concat(subjectsRows, extrasRows, birthdaysRows);
   if (!dataRows.length) return;
 
   var tF = 0, tB = 0;

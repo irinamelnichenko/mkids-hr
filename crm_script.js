@@ -2373,13 +2373,17 @@ function getSalaryData(loc, year) {
   var data    = sheet.getRange(1, 1, lastRow, lastCol).getValues();
   var width   = lastCol;
 
-  var rows = [];
+  // ── SECTION-BASED класифікація (v6.8) ─────────────────────
+  // Збираємо raw-рядки у source-order, ВКЛЮЧАЮЧИ subtotal-рядки
+  // ("Додаткові заняття" / "День народження"), бо вони перемикають
+  // state у _classifyAllSalaryRows. Фронт отримує rows із полями
+  // _section / _category замість того щоб класифікувати самостійно.
+  var rawRows = [];
   for (var rowNum = 4; rowNum <= data.length; rowNum++) {
     var idx = rowNum - 1;
     var rowArr = data[idx] || [];
     var rawName = String(rowArr[0] || '').trim();
-    if (_salaryIsSkippedRow(rawName))  continue;
-    if (_salaryIsSubtotalRow(rawName)) continue;
+    if (_salaryIsSkippedRow(rawName)) continue;  // empty / pure-numeric only
 
     var months = [];
     var totalFact = 0, totalBudget = 0;
@@ -2392,33 +2396,35 @@ function getSalaryData(loc, year) {
       totalFact   += fact;
       totalBudget += budget;
     }
-    rows.push({
+    rawRows.push({
       row:         rowNum,
       name:        rawName,
       months:      months,
       totalFact:   totalFact,
-      totalBudget: totalBudget
+      totalBudget: totalBudget,
+      // для state machine — totals використовуються як індикатор hasNoSum
+      fact:        totalFact,
+      budget:      totalBudget
     });
   }
 
-  // Каталоги локації — для catalog-driven класифікації секцій на фронті.
-  var predSubjects = [], addNames = [];
-  try {
-    predSubjects = ((getPredmetnyCatalog(loc) || {}).items || [])
-      .map(function(a){ return a.subject; });
-  } catch(e){}
-  try {
-    addNames = ((getActivitiesCatalog(loc) || {}).items || [])
-      .map(function(a){ return a.name; });
-  } catch(e){}
+  var classified = _classifyAllSalaryRows(rawRows);
+
+  // DEBUG: перші 5 класифікованих рядків.
+  for (var d = 0; d < Math.min(5, classified.length); d++){
+    Logger.log('[getSalaryData:%s] "%s" → cat=%s sec=%s',
+      loc, classified[d].name, classified[d]._category, classified[d]._section);
+  }
+
+  // Section-header-рядки — мета, у відповідь не йдуть. Group-header лишається
+  // (фронт їх відрисує як підзаголовки груп всередині 'main').
+  var rows = classified.filter(function(r){ return r._category !== 'section_header'; });
 
   return {
     ok:   true,
     loc:  loc,
     year: year ? Number(year) || year : '',
-    rows: rows,
-    predmetnySubjects:    predSubjects,
-    additionalActivities: addNames
+    rows: rows
   };
 }
 
@@ -2500,51 +2506,215 @@ function _startsWithCatalogName(rowNorm, catNorm){
   return c === ' ' || (c >= '0' && c <= '9');
 }
 
-// Каталог-driven класифікація рядка Salary → 'subjects' | 'extras' | 'main'.
-// Не залежить від положення рядка у файлі. Каталоги передаються ззовні —
-// масиви назв з Предметники_Каталог та Додаткові_Каталог для локації.
+// ═══════════════════════════════════════════════════════════════════════════
+//  SECTION-BASED CLASSIFIER (v6.8 — гібрид логіки b080103 + 3-digit override)
+// ═══════════════════════════════════════════════════════════════════════════
+// На відміну від попередньої isolated-per-row класифікації, тут обхід Salary-
+// рядків ЗВЕРХУ ВНИЗ зі state machine. State міняють sheet-секції ("Додаткові
+// заняття", "День народження"); MAIN-staff keywords та 3-digit override
+// перебивають state. Каталоги CONFIG не використовуються — keyword + ставка
+// дають надійний матч і працюють для локацій без записів у каталогах
+// (Школа Осокорки, Школа 228, Управління-локації).
 //
-// Порядок перевірок:
-//  1) Main-staff keywords (медсестра/охорона/...) → 'main' ПРІОРИТЕТ.
-//  2) Якщо у назві є 3-значна ставка → перевірити Предметники_Каталог.
-//  3) Перевірити Додаткові_Каталог.
-//  4) Fallback: 3-значне число → 'subjects'.
-//  5) Default → 'main' (безпечно: не extras).
+// Вхід: rows = [{name, fact?, budget?, ...}]  у source-order.
+// Вихід: новий масив [{...row, _category, _section}], незмінений вхід.
 //
-// Ключове правило для пункту 2: предметник МАЄ ставку у назві ("Логопед 250").
-// Без ставки те ж саме слово ("Логопед") = додаткова послуга, бо це разовий
-// захід, а не штатний предметник.
-function _classifySalaryRowByCatalog(name, predmetnySubjects, addActivities){
+//   _section:  'main' | 'subjects' | 'extras' | 'birthdays'
+//   _category: 'director' | 'teacher' | 'assistant' | 'nurse' | 'guard' |
+//              'cleaner' | 'tutor' | 'subject' | 'extras' | 'birthdays' |
+//              'section_header' | 'group_header' | null
+function _classifyAllSalaryRows(rows){
+  var SUBJECT_KEYWORDS = [
+    'англійська','англійський',
+    'логопед','муз.керівник','муз керівник',
+    'хореограф','фітнес','психолог','спорт',
+    'підготовка до школи','чомусики',
+    'архітектура','смм','speaking','информатика'
+  ];
+
+  function staffCategory(lower){
+    if (lower.indexOf('директор')   !== -1)                             return 'director';
+    if (lower.indexOf('вихователь') !== -1)                             return 'teacher';
+    if (lower.indexOf('вчитель')    !== -1)                             return 'teacher';
+    if (lower.indexOf('помічник')   !== -1)                             return 'assistant';
+    if (lower.indexOf('медсестра')  !== -1)                             return 'nurse';
+    if (lower.indexOf('охорон') !== -1 || lower.indexOf('охран') !== -1) return 'guard';
+    if (lower.indexOf('прибиральн') !== -1)                             return 'cleaner';
+    if (lower.indexOf('тьютор') !== -1 || lower.indexOf('тімлід') !== -1) return 'tutor';
+    if (lower.indexOf('ментор')     !== -1)                             return 'mentor';
+    if (lower.indexOf('чергуван')   !== -1)                             return 'duty';
+    if (lower.indexOf('млинц')      !== -1)                             return 'meal_extra';
+    if (lower.indexOf('замін')      !== -1)                             return 'substitute';
+    return null;
+  }
+
+  // Стандартний садкочковий предметник — список ключових назв предметів, що
+  // зі ставкою вважаються штатним предметництвом ('subject'). Усе інше зі
+  // ставкою всередині group_header "Школа" — це шкільні позиції ('school_subject')
+  // на кшталт "Фото 200".
+  var STANDARD_SADOCHOK_SUBJECTS = [
+    'англійська мова', 'логопед', 'муз.керівник', 'муз керівник',
+    'хореограф', 'підготовка до школи'
+  ];
+  function isStandardSadochokSubject(lower){
+    for (var i = 0; i < STANDARD_SADOCHOK_SUBJECTS.length; i++){
+      if (lower.indexOf(STANDARD_SADOCHOK_SUBJECTS[i]) !== -1) return true;
+    }
+    return false;
+  }
+
+  function subjectKwMatch(lower){
+    for (var i = 0; i < SUBJECT_KEYWORDS.length; i++){
+      if (lower.indexOf(SUBJECT_KEYWORDS[i]) !== -1) return true;
+    }
+    return false;
+  }
+
+  function emit(r, cat, sec){
+    var copy = {};
+    for (var k in r) if (r.hasOwnProperty(k)) copy[k] = r[k];
+    copy._category = cat;
+    copy._section  = sec;
+    // Підказка для UI: location-wide штат всередині школи не виноситься в
+    // noGroupMain, а лишається під заголовком "Школа".
+    if (inSchoolGroup) copy._inSchoolGroup = true;
+    return copy;
+  }
+
+  var out = [];
+  var state = 'main';            // 'main' | 'subjects' | 'extras' | 'birthdays'
+  var inSchoolGroup = false;     // КАР'ЄРНА: всередині group_header "Школа"
+                                 // subject keywords дають 'school_subject' у main,
+                                 // НЕ переключаючи state на subjects.
+
+  for (var i = 0; i < rows.length; i++){
+    var r      = rows[i];
+    var name   = String(r.name || '').trim();
+    var lower  = name.toLowerCase();
+    var budget = Number(r.budget) || 0;
+    var fact   = Number(r.fact)   || 0;
+
+    if (!name){ out.push(emit(r, null, state)); continue; }
+
+    // ── 1. Sheet-section headers — міняють state, скидають school-context ─
+    //   "школа" БІЛЬШЕ НЕ є section header — це group всередині main (FIX 3).
+    if (lower === 'персонал' || lower === 'зарплата'){
+      state = 'main';
+      inSchoolGroup = false;
+      out.push(emit(r, 'section_header', 'main'));
+      continue;
+    }
+    if (lower.indexOf('додаткові заняття') !== -1 || lower === 'додаткові'){
+      state = 'extras';
+      inSchoolGroup = false;
+      out.push(emit(r, 'section_header', 'extras'));
+      continue;
+    }
+    if (lower.indexOf('день народження') !== -1){
+      state = 'birthdays';
+      inSchoolGroup = false;
+      out.push(emit(r, 'section_header', 'birthdays'));
+      continue;
+    }
+
+    // ── 2. Group-headers всередині main (Findики/.../Школа) ─────
+    //   "Школа" — group у Кар'єрній (FIX 3). Інші — за префіксом.
+    //   "mini baby-ki" / "mini-baby" з пробілом/дефісом ловить mini\s*-?\s*baby.
+    var hasNoSum   = budget === 0 && fact === 0;
+    var isSchoolGp = /^школа$/i.test(name);
+    var isGroupNm  = isSchoolGp ||
+                     /^(find|baby|mini\s*-?\s*baby|minibaby|preschool|study|стаді|студі)/i.test(name);
+    if (state === 'main' && hasNoSum && isGroupNm){
+      inSchoolGroup = isSchoolGp;   // ON для "Школа", OFF для будь-якої іншої групи
+      out.push(emit(r, 'group_header', 'main'));
+      continue;
+    }
+
+    // ── 3. Main-staff keywords — ЗАВЖДИ 'main'. НЕ скидає inSchoolGroup ─
+    //   У КАР'ЄРНІЙ всередині group "Школа" є СВОЯ прибиральниця/медсестра/
+    //   охорона тощо. Тому location-wide keywords не виводять зі school-
+    //   контексту. _inSchoolGroup-флаг (через emit) допомагає UI рендерити
+    //   їх під заголовком "Школа", а не у "noGroupMain" bucket.
+    var staffCat = staffCategory(lower);
+    if (staffCat){
+      out.push(emit(r, staffCat, 'main'));
+      continue;
+    }
+
+    // ── 4. 3-DIGIT OVERRIDE → 'subject' (з нюансом для школи) ────
+    //   Ставка типу 250/280/300 у назві → штатний предметник, навіть якщо
+    //   state=extras. Це лікує Кар'єрна/Борщагівка/Бровари (де "Логопед 250"
+    //   фізично під "Додатковими заняттями").
+    //
+    //   Всередині group "Школа" ставка переводить у 'subject' (вихід зі
+    //   школи) ТІЛЬКИ якщо назва містить стандартний садочковий предметник
+    //   ('Англійська мова 280', 'Логопед 350' тощо). Інакше — це шкільна
+    //   стаття ("Фото 200"): cat='school_subject', section='main', школа НЕ
+    //   виходить.
+    if (/\b[1-9]\d{2}\b/.test(name)){
+      if (inSchoolGroup && !isStandardSadochokSubject(lower)){
+        out.push(emit(r, 'school_subject', 'main'));
+        continue;
+      }
+      inSchoolGroup = false;
+      out.push(emit(r, 'subject', 'subjects'));
+      if (state === 'main') state = 'subjects';
+      continue;
+    }
+
+    // ── 5. SUBJECT_KEYWORDS у state=main → 'subject' (або 'school_subject') ─
+    //   "Логопед" без ставки у main-зоні → 'subject', state→subjects.
+    //   Усередині group_header "Школа" — 'school_subject', state ЛИШАЄТЬСЯ main
+    //   (шкільні предмети, не садкові предметники).
+    //   У state=extras БЕЗ ставки те ж саме слово → 'extras' (разова послуга).
+    if (state === 'main' && subjectKwMatch(lower)){
+      if (inSchoolGroup){
+        out.push(emit(r, 'school_subject', 'main'));
+      } else {
+        out.push(emit(r, 'subject', 'subjects'));
+        state = 'subjects';
+      }
+      continue;
+    }
+
+    // ── 6. Default → поточний state ─────────────────────────────
+    if (state === 'extras')         out.push(emit(r, 'extras',    'extras'));
+    else if (state === 'birthdays') out.push(emit(r, 'birthdays', 'birthdays'));
+    else if (state === 'subjects')  out.push(emit(r, 'subject',   'subjects'));
+    else                            out.push(emit(r, null,        'main'));
+  }
+
+  return out;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DEPRECATED — попередній (catalog-driven, isolated-per-row) класифікатор.
+// Залишено для historical reference; не використовується. Видалити в наступній
+// чистці. Замість нього — _classifyAllSalaryRows (section-based state machine).
+// ═══════════════════════════════════════════════════════════════════════════
+function _classifySalaryRowByCatalog_OLD(name, predmetnySubjects, addActivities){
   var norm = _softNorm(name);
   if (!norm) return 'main';
-  // 1) Main staff — пріоритет над каталогами. Медсестра/Охорона/Прибиральниця/
-  //    Директор/Вихователь і т.д. ЗАВЖДИ 'main', навіть якщо випадково
-  //    збігаються з назвою у Додаткові_Каталог.
   if (/директор|вихователь|медсестра|охрана|охорона|чергування|підміна|прибиральниц|кухар|повар|кухня|техперсонал|психолог/.test(norm))
     return 'main';
   var hasRate = /\b[1-9]\d{2}\b/.test(name);
-  // 2) Предметник = має ставку + збігається з Предметники_Каталог.
   if (hasRate && predmetnySubjects){
     for (var i = 0; i < predmetnySubjects.length; i++){
       if (_startsWithCatalogName(norm, _softNorm(predmetnySubjects[i]))) return 'subjects';
     }
   }
-  // 3) Додаткова послуга — будь-яка назва з Додаткові_Каталог (зі ставкою
-  //    або без; "Логопед" без числа = разовий захід).
   if (addActivities){
     for (var j = 0; j < addActivities.length; j++){
       if (_startsWithCatalogName(norm, _softNorm(addActivities[j]))) return 'extras';
     }
   }
-  // 4) Fallback: ставка є, але предмет невідомий каталогу → 'subjects'.
   if (hasRate) return 'subjects';
-  // 5) Дефолт — основний персонал (безпечно: не extras).
   return 'main';
 }
 
-// Гранулярний тип штату (для staffCounts в overview-аналітиці). Викликається
-// лише для рядків, що вже мають section==='main'. null — невідомий штат.
-function _ovaGranularStaff(name){
+// DEPRECATED — гранулярний тип штату ізольовано. Зараз цю логіку містить
+// staffCategory() у _classifyAllSalaryRows. Залишено для historical reference.
+function _ovaGranularStaff_OLD(name){
   var lower = String(name || '').toLowerCase();
   if (lower.indexOf('директор')   !== -1)                             return 'director';
   if (lower.indexOf('вихователь') !== -1)                             return 'teacher';
@@ -2687,35 +2857,43 @@ function getOverviewAnalytics(year, month) {
           var salData  = salSh.getRange(1, 1, slastRow, slastCol).getValues();
           var salWidth = slastCol;
 
-          // Каталог-driven класифікація: незалежна від положення рядка
-          // у файлі. Стара машина станів "після слова 'Додаткові' все extras"
-          // прибрана — предметник зі ставкою у extras-зоні тепер коректно
-          // йде у 'subjects'.
-          var predNames = predByLoc[loc] || [];
-          var actNames  = actByLoc[loc]  || [];
-
+          // ── SECTION-BASED класифікація (v6.8) ─────────────────────
+          // Збираємо raw-рядки у source-order, ВКЛЮЧАЮЧИ subtotal-рядки
+          // ("Додаткові заняття" / "День народження"), бо саме вони
+          // перемикають state machine у _classifyAllSalaryRows.
+          var rawRows = [];
           for (var rowNum = 4; rowNum <= salData.length; rowNum++) {
             var idx = rowNum - 1;
             var rowArr = salData[idx] || [];
             var rawName = String(rowArr[0] || '').trim();
-            if (_salaryIsSkippedRow(rawName))  continue;
-            if (_salaryIsSubtotalRow(rawName)) continue;   // службові рядки-роздільники
+            if (_salaryIsSkippedRow(rawName)) continue;  // empty / pure-numeric
+            var rFact   = fIdx < salWidth ? _opexNum(rowArr[fIdx]) : 0;
+            var rBudget = bIdx < salWidth ? _opexNum(rowArr[bIdx]) : 0;
+            rawRows.push({name: rawName, fact: rFact, budget: rBudget});
+          }
 
-            var section = _classifySalaryRowByCatalog(rawName, predNames, actNames);
-            if (section === 'subjects'){
-              entry.staffCounts.subject++;
-            } else if (section === 'extras'){
-              entry.staffCounts.extras++;
-            } else {
-              var granular = _ovaGranularStaff(rawName);
-              if (granular) entry.staffCounts[granular]++;
+          var classified = _classifyAllSalaryRows(rawRows);
+
+          // DEBUG: перші 5 класифікованих рядків.
+          for (var d = 0; d < Math.min(5, classified.length); d++){
+            Logger.log('[ova:%s] "%s" → cat=%s sec=%s',
+              loc, classified[d].name, classified[d]._category, classified[d]._section);
+          }
+
+          classified.forEach(function(cr){
+            // Meta-рядки не рахуємо ні в staffCounts, ні в salary-сумах
+            // (вони сервісні маркери секцій / груп, без власних грошей).
+            if (cr._category === 'section_header') return;
+            if (cr._category === 'group_header')   return;
+
+            // staffCounts — бамп гранулярного типу.
+            if (cr._category && entry.staffCounts.hasOwnProperty(cr._category)){
+              entry.staffCounts[cr._category]++;
             }
 
-            var fact   = fIdx < salWidth ? _opexNum(rowArr[fIdx]) : 0;
-            var budget = bIdx < salWidth ? _opexNum(rowArr[bIdx]) : 0;
-            entry.salaryFact   += fact;
-            entry.salaryBudget += budget;
-          }
+            entry.salaryFact   += Number(cr.fact)   || 0;
+            entry.salaryBudget += Number(cr.budget) || 0;
+          });
 
           var sc = entry.staffCounts;
           entry.mainStaffFromSalary =
@@ -5396,6 +5574,71 @@ function reseedPasswordsFor2026(){
   return {ok:true, updated:r.updated, missing:r.missing};
 }
 
+// ── РАЗОВА УТИЛІТА: почистити баги у CONFIG → Salary ─────────────────────
+// 1) trim() для всіх значень у колонках A (Напрямок), B (Тип), C (Локація),
+//    E (Назва листа) — щоб "Школа " і "Школа" були однаковими.
+// 2) Для рядків де Локація ∈ {Житомир, Нац.Гвардії (Благо), Манхетен (Благо)}
+//    виставити Напрямок = "Управління" (зараз там некоректно "Садочок").
+// Запускати ВРУЧНУ з Apps Script editor — БЕЗ автотригерів.
+// Логує кожну зміну в Execution log.
+function _fixSalaryConfigBugs(){
+  var configSS = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var sh = configSS.getSheetByName('Salary');
+  if (!sh){ Logger.log('!!! CONFIG → Salary tab not found'); return {ok:false}; }
+
+  var rng  = sh.getDataRange();
+  var data = rng.getValues();
+  if (data.length < 2){ Logger.log('Salary registry порожній'); return {ok:false}; }
+
+  var MGMT_LOCS = ['Житомир', 'Нац.Гвардії (Благо)', 'Манхетен (Благо)'];
+  var trimCols  = [0, 1, 2, 4];   // A, B, C, E (D = Spreadsheet ID — не чіпаємо)
+
+  var changes = [];
+
+  for (var i = 1; i < data.length; i++){
+    var rowNum = i + 1; // 1-based sheet row
+
+    // 1) trim усіх 4 колонок.
+    trimCols.forEach(function(c){
+      var v = data[i][c];
+      if (v == null) return;
+      var str  = String(v);
+      var trim = str.trim();
+      if (trim !== str){
+        changes.push({row: rowNum, col: c, from: JSON.stringify(str), to: JSON.stringify(trim), kind: 'trim'});
+        data[i][c] = trim;
+      }
+    });
+
+    // 2) Управління: фікс Напрямок (A) якщо Локація (C) у списку.
+    var loc = String(data[i][2] || '').trim();
+    if (MGMT_LOCS.indexOf(loc) !== -1){
+      var oldNapr = String(data[i][0] || '').trim();
+      if (oldNapr !== 'Управління'){
+        changes.push({row: rowNum, col: 0, from: JSON.stringify(oldNapr), to: '"Управління"', kind: 'mgmt-napr', loc: loc});
+        data[i][0] = 'Управління';
+      }
+    }
+  }
+
+  if (!changes.length){
+    Logger.log('[_fixSalaryConfigBugs] нічого виправляти — CONFIG чистий.');
+    return {ok:true, changed:0};
+  }
+
+  // Лог кожної зміни.
+  changes.forEach(function(ch){
+    Logger.log('  row %s col %s [%s] %s → %s%s',
+      ch.row, ch.col, ch.kind, ch.from, ch.to,
+      ch.loc ? (' (loc=' + ch.loc + ')') : '');
+  });
+  Logger.log('[_fixSalaryConfigBugs] усього змін: %s', changes.length);
+
+  // Один батч-запис на весь діапазон.
+  rng.setValues(data);
+  return {ok:true, changed: changes.length, details: changes};
+}
+
 // ── ДІАГНОСТИКА: предметники у Salary-файлах ───────────────────────────────
 // auditPredmetnyInSalary() — для всіх 11 локацій порівнює каталог предметників
 // із секцією "Вчителі-предметники" у Salary-файлі локації. Запускати ВРУЧНУ
@@ -5604,4 +5847,213 @@ function exportAllPredmetnyToSalary_DRY_RUN(month, year){
   doubtful.forEach(function(d){ Logger.log('  ' + d); });
 
   return {ok: true};
+}
+
+// ── ДІАГНОСТИКА section-based класифікатора по локаціях ─────────────────
+// READ-ONLY — не пише нічого. Запускати ВРУЧНУ з Apps Script editor.
+//
+//   testClassifyAllLocations()  → всі 16 локацій з Salary registry
+//   testClassifyRealLocations() → 3 локації (швидкий smoke-test)
+//
+// Для кожної: підсумки по 4 секціях (main / subjects / extras / birthdays)
+// + список потенційних проблем. У кінці — зведена таблиця зі статусами:
+//   ✅ ok       — нерозпізнаних нема, birthdays ≤ 1
+//   ⚠️ warn    — null-category, або birthdays > 1, або subject без сум
+//   ❌ fail    — порожня локація або помилка
+function testClassifyAllLocations(){
+  return _runClassifyDiagnostic(null);
+}
+
+function testClassifyRealLocations(){
+  return _runClassifyDiagnostic(["Кар'єрна", 'Голосієво', 'Осокорки']);
+}
+
+function _runClassifyDiagnostic(locFilter){
+  var YEAR  = 2026;
+  var MONTH = 5;   // травень
+  var fIdx  = (MONTH - 1) * 3 + 1;
+  var bIdx  = (MONTH - 1) * 3 + 2;
+
+  var configSS = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var salReg   = configSS.getSheetByName('Salary');
+  if (!salReg){ Logger.log('!!! CONFIG → Salary tab not found'); return {ok:false}; }
+
+  // Реєстр у source-order — щоб зведена таблиця збереглася як у CONFIG.
+  // Колонка 1 (Тип) використовується для фільтра проблем: повний "ПОТЕНЦІЙНІ
+  // ПРОБЛЕМИ" блок показується тільки для Тип='Садочок' (Школи/Управління —
+  // у summary, але без розгорнутого аналізу).
+  var entries = [];
+  var regRows = salReg.getDataRange().getValues();
+  for (var i = 1; i < regRows.length; i++){
+    var sTyp = String(regRows[i][1] || '').trim();
+    var sLoc = String(regRows[i][2] || '').trim();
+    var sId  = String(regRows[i][3] || '').trim();
+    var sLst = String(regRows[i][4] || '').trim() || 'Salary';
+    if (!sLoc || !sId) continue;
+    if (locFilter && locFilter.indexOf(sLoc) === -1) continue;
+    entries.push({typ: sTyp, loc: sLoc, sheetId: sId, listName: sLst});
+  }
+
+  function padR(s, n){ s = String(s == null ? '' : s); return s + new Array(Math.max(1, n - s.length + 1)).join(' '); }
+  function padL(s, n){ s = String(s == null ? '' : s); return new Array(Math.max(1, n - s.length + 1)).join(' ') + s; }
+
+  var summary = [];
+
+  entries.forEach(function(ent){
+    var isSadochok = ent.typ === 'Садочок';
+    Logger.log('\n══════════════ %s [%s] ══════════════', ent.loc, ent.typ || '?');
+    var stat = {
+      loc: ent.loc, typ: ent.typ,
+      main: 0, subjects: 0, extras: 0, birthdays: 0,
+      bM: 0, bS: 0, bE: 0, bB: 0,
+      fM: 0, fS: 0, fE: 0, fB: 0,
+      status: '✅', issues: 0
+    };
+
+    try {
+      var sh = SpreadsheetApp.openById(ent.sheetId).getSheetByName(ent.listName);
+      if (!sh){ Logger.log('  ❌ немає листа "%s"', ent.listName); stat.status = '❌'; summary.push(stat); return; }
+
+      var lastRow = Math.max(sh.getLastRow(), 80);
+      var lastCol = Math.max(sh.getLastColumn(), 37);
+      var data    = sh.getRange(1, 1, lastRow, lastCol).getValues();
+      var width   = lastCol;
+
+      var raw = [];
+      for (var r = 4; r <= data.length; r++){
+        var idx = r - 1;
+        var rowArr = data[idx] || [];
+        var name = String(rowArr[0] || '').trim();
+        if (_salaryIsSkippedRow(name)) continue;
+        var fact   = fIdx < width ? _opexNum(rowArr[fIdx]) : 0;
+        var budget = bIdx < width ? _opexNum(rowArr[bIdx]) : 0;
+        raw.push({row: r, name: name, fact: fact, budget: budget});
+      }
+
+      if (!raw.length){
+        Logger.log('  (порожньо — у Salary файлі немає даних з рядка 4)');
+        stat.status = '❌';
+        summary.push(stat);
+        return;
+      }
+
+      var classified = _classifyAllSalaryRows(raw);
+
+      // Підрахунки.
+      classified.forEach(function(cr){
+        if (cr._category === 'section_header' || cr._category === 'group_header') return;
+        var s = cr._section;
+        var fF = Number(cr.fact) || 0, bB = Number(cr.budget) || 0;
+        if (s === 'main')           { stat.main++;      stat.bM += bB; stat.fM += fF; }
+        else if (s === 'subjects')  { stat.subjects++;  stat.bS += bB; stat.fS += fF; }
+        else if (s === 'extras')    { stat.extras++;    stat.bE += bB; stat.fE += fF; }
+        else if (s === 'birthdays') { stat.birthdays++; stat.bB += bB; stat.fB += fF; }
+      });
+
+      Logger.log('  ── ПІДСУМКИ за травень %s ──', YEAR);
+      Logger.log('  main      : %s рядків · бюджет=%s₴ · факт=%s₴', padL(stat.main, 3),      stat.bM, stat.fM);
+      Logger.log('  subjects  : %s рядків · бюджет=%s₴ · факт=%s₴', padL(stat.subjects, 3),  stat.bS, stat.fS);
+      Logger.log('  extras    : %s рядків · бюджет=%s₴ · факт=%s₴', padL(stat.extras, 3),    stat.bE, stat.fE);
+      Logger.log('  birthdays : %s рядків · бюджет=%s₴ · факт=%s₴', padL(stat.birthdays, 3), stat.bB, stat.fB);
+
+      // ── ПОТЕНЦІЙНІ ПРОБЛЕМИ — тільки для Тип='Садочок' ──
+      // Для Школа/Управління блок проблем приховано — у них своя структура
+      // Salary-файлів, класифікатор поки заточений під 11 садочків.
+      if (isSadochok){
+        var problems = [];
+
+        // 1) null-category у main — нерозпізнаний штат.
+        classified.forEach(function(cr){
+          if (cr._category === null && cr._section === 'main' && cr.name){
+            problems.push({sev:'warn',
+              text: 'row ' + cr.row + ' "' + cr.name + '" → НЕРОЗПІЗНАНО (main+null)'});
+          }
+        });
+
+        // 2) subject без бюджету і без факту — підозра на помилку.
+        classified.forEach(function(cr){
+          if (cr._category === 'subject' && Number(cr.fact) === 0 && Number(cr.budget) === 0){
+            problems.push({sev:'warn',
+              text: 'row ' + cr.row + ' "' + cr.name + '" → subject але 0 бюджет + 0 факт'});
+          }
+        });
+
+        // 3) birthdays > 1 — state може бути застряг.
+        if (stat.birthdays > 1){
+          problems.push({sev:'warn',
+            text: 'birthdays = ' + stat.birthdays + ' (>1) — імовірно state застряг'});
+        }
+
+        // 4) Підсекція "Школа" — group_header + усе до наступного group/section header.
+        var school = null;
+        for (var k = 0; k < classified.length; k++){
+          var cr = classified[k];
+          var nm = String(cr.name || '').trim();
+          if (cr._category === 'group_header' && /^школа$/i.test(nm)){
+            school = {start: cr.row, rows: []};
+            continue;
+          }
+          if (school){
+            if (cr._category === 'group_header' || cr._category === 'section_header') break;
+            school.rows.push(cr);
+          }
+        }
+        if (school){
+          problems.push({sev:'info',
+            text: 'Підсекція "Школа" (з row ' + school.start + ', ' + school.rows.length + ' рядків):'});
+          school.rows.forEach(function(cr){
+            problems.push({sev:'info',
+              text: '    row ' + cr.row + ' "' + cr.name + '" → cat=' + cr._category + ' sec=' + cr._section});
+          });
+        }
+
+        if (problems.length){
+          Logger.log('\n  ── ПОТЕНЦІЙНІ ПРОБЛЕМИ ──');
+          problems.forEach(function(p){ Logger.log('  - ' + p.text); });
+          stat.issues = problems.filter(function(p){ return p.sev === 'warn'; }).length;
+        }
+        if (stat.issues > 0) stat.status = '⚠️';
+      } else {
+        // Школа/Управління — статус нейтральний (не аналізуємо).
+        Logger.log('  ── (Школа/Управління — діагностика проблем поки не включена) ──');
+        stat.status = '➖';
+      }
+
+      if (!stat.main && !stat.subjects && !stat.extras && !stat.birthdays) stat.status = '❌';
+
+    } catch (e){
+      Logger.log('  ❌ ERROR: %s', (e && e.message) ? e.message : String(e));
+      stat.status = '❌';
+    }
+
+    summary.push(stat);
+  });
+
+  // ── ЗВЕДЕНА ТАБЛИЦЯ ──
+  Logger.log('\n\n═════════════════════════════ ЗВЕДЕНА ТАБЛИЦЯ ═════════════════════════════');
+  Logger.log('┌────────────────────────┬────────────┬──────┬─────┬──────┬───────┬────────┐');
+  Logger.log('│ Локація                │ Тип        │ main │ sub │ extr │ b-day │ status │');
+  Logger.log('├────────────────────────┼────────────┼──────┼─────┼──────┼───────┼────────┤');
+  summary.forEach(function(s){
+    Logger.log('│ ' + padR(s.loc, 22) + ' │ ' +
+               padR(s.typ || '?', 10) + ' │ ' +
+               padL(s.main, 4) + ' │ ' +
+               padL(s.subjects, 3) + ' │ ' +
+               padL(s.extras, 4) + ' │ ' +
+               padL(s.birthdays, 5) + ' │ ' +
+               padR(s.status, 6) + ' │');
+  });
+  Logger.log('└────────────────────────┴────────────┴──────┴─────┴──────┴───────┴────────┘');
+
+  var counts = {ok:0, warn:0, fail:0, neutral:0};
+  summary.forEach(function(s){
+    if      (s.status === '✅') counts.ok++;
+    else if (s.status === '⚠️') counts.warn++;
+    else if (s.status === '➖') counts.neutral++;
+    else                        counts.fail++;
+  });
+  Logger.log('\n  ✅ ok=%s  ⚠️ warn=%s  ➖ neutral=%s  ❌ fail=%s  усього=%s',
+    counts.ok, counts.warn, counts.neutral, counts.fail, summary.length);
+
+  return {ok: true, summary: summary};
 }
