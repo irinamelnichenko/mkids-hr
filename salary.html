@@ -69,19 +69,23 @@ select{font-family:inherit}
 .kpi-diff.pos{color:var(--green)}
 .kpi-diff.neg{color:var(--red)}
 
-.tbl tbody tr.section-hd{background:#eef2f6;border-top:2px solid #cbd5e0}
-.tbl tbody tr.section-hd td{font-weight:800;color:var(--dark);
-  text-transform:uppercase;letter-spacing:.6px;font-size:12px;padding:12px 14px}
-.tbl tbody tr.section-hd:hover{background:#e3e8ef}
-.tbl tbody tr.group-hd{background:#f4f7fa;border-top:1px solid #e2e8f0}
-.tbl tbody tr.group-hd td{font-weight:700;color:var(--dark2);
-  font-size:12px;padding:8px 14px 8px 28px;letter-spacing:.3px}
-.tbl tbody tr.group-hd:hover{background:#edf1f5}
-.tbl tbody tr.section-total{background:#f8fafc;border-top:1px solid #e2e8f0;
-  border-bottom:1px solid #cbd5e0}
-.tbl tbody tr.section-total td{font-weight:700;font-size:13px;color:var(--dark);
-  padding:10px 14px}
-.tbl tbody tr.section-total:hover{background:#f1f5f9}
+/* Section header — більш помітний (ЗМІНА 3 у v6.8 UI poliш) */
+.tbl tbody tr.salary-section-hd td{
+  font-size:13px;font-weight:700;color:#475569;
+  text-transform:uppercase;letter-spacing:.06em;
+  padding-top:28px !important;padding-bottom:12px !important;
+  border-top:1px solid #E2E8F0;background:transparent;
+}
+.tbl tbody tr.salary-section-hd:hover td{background:#f8fafc}
+
+/* Group header — м'який блакитний з акцентом ліворуч (ЗМІНА 1) */
+.tbl tbody tr.salary-group-hd td{
+  background:#F0F9FF;border-left:4px solid #0EA5E9;
+  font-weight:600;font-size:14px;color:#0C4A6E;letter-spacing:.02em;
+  padding-left:16px !important;padding-top:10px !important;padding-bottom:10px !important;
+}
+.tbl tbody tr.salary-group-hd:hover td{background:#E0F2FE}
+
 .tbl tbody tr.separator-row td{height:12px;padding:0;background:#eef2f6;
   border-top:1px solid #cbd5e0;border-bottom:1px solid #cbd5e0}
 .tbl tbody tr.separator-row:hover td{background:#e3e8ef}
@@ -1478,9 +1482,9 @@ function periodLabel(){
 // Бекенд (v6.8 — section-based state machine у _classifyAllSalaryRows)
 // проставляє на кожному рядку поля _section та _category. Фронт лише
 // читає їх; жодної власної класифікації.
-//   _section:  'main' | 'subjects' | 'extras' | 'birthdays'
-//   _category: 'director' | 'teacher' | ... | 'subject' | 'extras' |
-//              'birthdays' | 'group_header' | null
+//   _section:  'main' | 'subjects' | 'extras'
+//   _category: 'director' | 'teacher' | ... | 'subject' | 'school_subject' |
+//              'extras' | 'group_header' | null
 
 function rowSection(r){
   return (r && r._section) || 'main';
@@ -1494,7 +1498,6 @@ function sectionLabel(s){
   if (s === 'main')      return '👥 Основний персонал';
   if (s === 'subjects')  return '📚 Вчителі-предметники';
   if (s === 'extras')    return '🎨 Додаткові заняття';
-  if (s === 'birthdays') return '🎂 День народження';
   return s;
 }
 
@@ -1510,7 +1513,7 @@ function computeSectionTotals(rows){
     if (rowIsGroupHeader(r)) return;
     if (r.isHeader)          return;
     var section = rowSection(r);
-    if (!t[section]) return;   // 'birthdays' — поки не у KPI картках, ігноруємо
+    if (!t[section]) return;   // невідомий section — ігноруємо
     t[section].budget += r.budget;
     t[section].fact   += r.fact;
     t[section].count++;
@@ -1590,7 +1593,6 @@ function renderTable(rows){
   var noGroupMain    = [];   // location-wide штат
   var subjectsRows   = [];
   var extrasRows     = [];
-  var birthdaysRows  = [];
 
   // Location-wide штат — рендериться після всіх груп, без group-header.
   // (дзеркало LOC_WIDE_STAFF на бекенді + meal_extra/substitute як разові
@@ -1613,7 +1615,6 @@ function renderTable(rows){
     var section = rowSection(r);
     if      (section === 'subjects')  subjectsRows.push(r);
     else if (section === 'extras')    extrasRows.push(r);
-    else if (section === 'birthdays') birthdaysRows.push(r);
     else {
       // section === 'main'
       // Location-wide штат (nurse/guard/cleaner/duty/...) виноситься у бакет
@@ -1644,32 +1645,35 @@ function renderTable(rows){
     return '<td class="num ' + cls + '">' + txt + '</td>';
   }
 
+  // Emoji-prefix для group-header — щоб типи груп розрізнялись з першого погляду.
+  function _groupEmoji(name){
+    var l = String(name || '').toLowerCase();
+    if (/minibaby|mini\s*-?\s*baby/.test(l)) return '🌱';
+    if (l.indexOf('baby-ki') !== -1)         return '🌱';
+    if (l.indexOf('preschool') !== -1)       return '🌿';
+    if (l.indexOf('find') !== -1)            return '🌿';
+    if (l.indexOf('study') !== -1)           return '🎓';
+    if (l === 'школа' || l.indexOf('школа') === 0) return '🏫';
+    return '';
+  }
+
   function appendSectionHd(label){
     var tr = document.createElement('tr');
-    tr.className = 'section-hd';
+    tr.className = 'salary-section-hd';
     tr.innerHTML = '<td colspan="4">' + escapeHtml(label) + '</td>';
     body.appendChild(tr);
   }
 
-  function appendGroupHd(label){
+  function appendGroupHd(name){
     var tr = document.createElement('tr');
-    tr.className = 'group-hd';
+    tr.className = 'salary-group-hd';
+    var emoji = _groupEmoji(name);
+    var label = emoji ? (emoji + ' ' + name) : name;
     tr.innerHTML = '<td colspan="4">' + escapeHtml(label) + '</td>';
     body.appendChild(tr);
   }
 
-  function appendSectionTotal(label, list){
-    var b = 0, f = 0;
-    list.forEach(function(r){ b += r.budget; f += r.fact; });
-    var tr = document.createElement('tr');
-    tr.className = 'section-total';
-    tr.innerHTML =
-      '<td>' + escapeHtml(label) + '</td>' +
-      '<td class="num">' + fmtUah(b) + '</td>' +
-      '<td class="num">' + fmtUah(f) + '</td>' +
-      diffCellHtml(b, f, b - f);
-    body.appendChild(tr);
-  }
+  // ЗМІНА 2: section totals прибрано — інфо є в KPI-картках вгорі.
 
   function appendDataRow(r){
     var tr = document.createElement('tr');
@@ -1731,32 +1735,22 @@ function renderTable(rows){
       body.appendChild(sep);
       noGroupMain.forEach(appendDataRow);
     }
-    appendSectionTotal(sectionLabel('main') + ' — ПІДСУМОК', mainAll);
   }
 
   // SECTION subjects
   if (subjectsRows.length){
     appendSectionHd(sectionLabel('subjects'));
     subjectsRows.forEach(appendDataRow);
-    appendSectionTotal(sectionLabel('subjects') + ' — ПІДСУМОК', subjectsRows);
   }
 
   // SECTION extras
   if (extrasRows.length){
     appendSectionHd(sectionLabel('extras'));
     extrasRows.forEach(appendDataRow);
-    appendSectionTotal(sectionLabel('extras') + ' — ПІДСУМОК', extrasRows);
-  }
-
-  // SECTION birthdays (нова в v6.8 — sheet містить підсекцію "День народження")
-  if (birthdaysRows.length){
-    appendSectionHd(sectionLabel('birthdays'));
-    birthdaysRows.forEach(appendDataRow);
-    appendSectionTotal(sectionLabel('birthdays') + ' — ПІДСУМОК', birthdaysRows);
   }
 
   // ── Grand total ─────────────────────────────────────────────────
-  var dataRows = mainAll.concat(subjectsRows, extrasRows, birthdaysRows);
+  var dataRows = mainAll.concat(subjectsRows, extrasRows);
   if (!dataRows.length) return;
 
   var tF = 0, tB = 0;
