@@ -2401,11 +2401,24 @@ function getSalaryData(loc, year) {
     });
   }
 
+  // Каталоги локації — для catalog-driven класифікації секцій на фронті.
+  var predSubjects = [], addNames = [];
+  try {
+    predSubjects = ((getPredmetnyCatalog(loc) || {}).items || [])
+      .map(function(a){ return a.subject; });
+  } catch(e){}
+  try {
+    addNames = ((getActivitiesCatalog(loc) || {}).items || [])
+      .map(function(a){ return a.name; });
+  } catch(e){}
+
   return {
     ok:   true,
     loc:  loc,
     year: year ? Number(year) || year : '',
-    rows: rows
+    rows: rows,
+    predmetnySubjects:    predSubjects,
+    additionalActivities: addNames
   };
 }
 
@@ -2479,27 +2492,45 @@ function getSalaryOverview(year) {
   };
 }
 
-function _ovaIsSubjectTeacherName(name) {
-  var s = String(name || '');
-  var lower = s.toLowerCase();
-  var SUBJECT_KEYWORDS = [
-    'англійська','англійський',
-    'логопед','муз.керівник','муз керівник',
-    'хореограф','фітнес','психолог',
-    'підготовка до школи','чомусики',
-    'архітектура','смм','speaking','информатика'
-  ];
-  for (var i = 0; i < SUBJECT_KEYWORDS.length; i++){
-    if (lower.indexOf(SUBJECT_KEYWORDS[i]) !== -1) return true;
-  }
-  if (/грн\s*\/?\s*(урок|занят)|за\s+занят/i.test(s)) return true;
-  if (/\b1[0-4]\d{2}\b/.test(s) || /\b[1-9]\d{2}\b/.test(s)) return true;
-  return false;
+// Чи починається rowNorm з назви каталогу (далі — пробіл/цифра/кінець).
+function _startsWithCatalogName(rowNorm, catNorm){
+  if (!catNorm || rowNorm.indexOf(catNorm) !== 0) return false;
+  if (rowNorm.length === catNorm.length) return true;
+  var c = rowNorm.charAt(catNorm.length);
+  return c === ' ' || (c >= '0' && c <= '9');
 }
 
-function _ovaClassifySalaryRow(name, currentSection) {
+// Каталог-driven класифікація рядка Salary → 'subjects' | 'extras' | 'main'.
+// Не залежить від положення рядка у файлі. Каталоги передаються ззовні —
+// масиви назв з Предметники_Каталог та Додаткові_Каталог для локації.
+function _classifySalaryRowByCatalog(name, predmetnySubjects, addActivities){
+  var norm = _softNorm(name);
+  if (!norm) return 'main';
+  // 1) Стартує з предмета каталогу предметників → 'subjects'.
+  if (predmetnySubjects){
+    for (var i = 0; i < predmetnySubjects.length; i++){
+      if (_startsWithCatalogName(norm, _softNorm(predmetnySubjects[i]))) return 'subjects';
+    }
+  }
+  // 2) Стартує з назви каталогу додаткових → 'extras'.
+  if (addActivities){
+    for (var j = 0; j < addActivities.length; j++){
+      if (_startsWithCatalogName(norm, _softNorm(addActivities[j]))) return 'extras';
+    }
+  }
+  // 3) Ключове слово штату → 'main'.
+  if (/директор|вихователь|медсестра|охрана|охорона|чергування|підміна|прибиральниц|кухар|повар|кухня|техперсонал|психолог/.test(norm))
+    return 'main';
+  // 4) Fallback: 3-значне число у назві → 'subjects' (предметник без каталогу).
+  if (/\b[1-9]\d{2}\b/.test(name)) return 'subjects';
+  // 5) Дефолт — основний персонал (безпечно: не extras).
+  return 'main';
+}
+
+// Гранулярний тип штату (для staffCounts в overview-аналітиці). Викликається
+// лише для рядків, що вже мають section==='main'. null — невідомий штат.
+function _ovaGranularStaff(name){
   var lower = String(name || '').toLowerCase();
-  if (currentSection === 'extras')                                    return 'extras';
   if (lower.indexOf('директор')   !== -1)                             return 'director';
   if (lower.indexOf('вихователь') !== -1)                             return 'teacher';
   if (lower.indexOf('помічник')   !== -1)                             return 'assistant';
@@ -2507,7 +2538,6 @@ function _ovaClassifySalaryRow(name, currentSection) {
   if (lower.indexOf('охорон')     !== -1 || lower.indexOf('охран') !== -1) return 'guard';
   if (lower.indexOf('прибиральн') !== -1)                             return 'cleaner';
   if (lower.indexOf('тьютор')     !== -1 || lower.indexOf('тімлід') !== -1) return 'tutor';
-  if (_ovaIsSubjectTeacherName(name))                                  return 'subject';
   return null;
 }
 
@@ -2532,6 +2562,22 @@ function getOverviewAnalytics(year, month) {
       if (sLoc && sId) salByLoc[sLoc] = {sheetId: sId, listName: sLst};
     }
   }
+
+  // Каталоги предметників і додаткових — групуємо по локації одним проходом
+  // (щоб не відкривати CONFIG-таблицю на кожну з 11 локацій).
+  var predByLoc = {}, actByLoc = {};
+  try {
+    var pAll = (getPredmetnyCatalog('').items || []);
+    pAll.forEach(function(x){
+      (predByLoc[x.loc] = predByLoc[x.loc] || []).push(x.subject);
+    });
+  } catch(e){}
+  try {
+    var aAll = (getActivitiesCatalog('').items || []);
+    aAll.forEach(function(x){
+      (actByLoc[x.loc] = actByLoc[x.loc] || []).push(x.name);
+    });
+  } catch(e){}
 
   var allClients = [];
   try {
@@ -2626,23 +2672,28 @@ function getOverviewAnalytics(year, month) {
           var salData  = salSh.getRange(1, 1, slastRow, slastCol).getValues();
           var salWidth = slastCol;
 
-          var section = 'main';
+          // Каталог-driven класифікація: незалежна від положення рядка
+          // у файлі. Стара машина станів "після слова 'Додаткові' все extras"
+          // прибрана — предметник зі ставкою у extras-зоні тепер коректно
+          // йде у 'subjects'.
+          var predNames = predByLoc[loc] || [];
+          var actNames  = actByLoc[loc]  || [];
 
           for (var rowNum = 4; rowNum <= salData.length; rowNum++) {
             var idx = rowNum - 1;
             var rowArr = salData[idx] || [];
             var rawName = String(rowArr[0] || '').trim();
-            if (_salaryIsSkippedRow(rawName)) continue;
+            if (_salaryIsSkippedRow(rawName))  continue;
+            if (_salaryIsSubtotalRow(rawName)) continue;   // службові рядки-роздільники
 
-            if (_salaryIsSubtotalRow(rawName)) {
-              if (/додаткові заняття/i.test(rawName)) section = 'extras';
-              continue;
-            }
-
-            var category = _ovaClassifySalaryRow(rawName, section);
-            if (category === 'subject' && section === 'main') section = 'subjects';
-            if (category){
-              entry.staffCounts[category] = (entry.staffCounts[category] || 0) + 1;
+            var section = _classifySalaryRowByCatalog(rawName, predNames, actNames);
+            if (section === 'subjects'){
+              entry.staffCounts.subject++;
+            } else if (section === 'extras'){
+              entry.staffCounts.extras++;
+            } else {
+              var granular = _ovaGranularStaff(rawName);
+              if (granular) entry.staffCounts[granular]++;
             }
 
             var fact   = fIdx < salWidth ? _opexNum(rowArr[fIdx]) : 0;
