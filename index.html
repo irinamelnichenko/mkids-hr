@@ -166,6 +166,51 @@ tbody tr.clickable{cursor:pointer}
 .emp-tag{background:rgba(255,255,255,.15);padding:3px 10px;border-radius:20px;font-size:12px}
 .emp-btns{display:flex;gap:8px;flex-wrap:wrap;margin-left:auto}
 
+/* ── HR EDIT MODAL (v6.10) ─────────────────────────── */
+.emp-edit-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);
+  display:none;align-items:flex-start;justify-content:center;z-index:1050;
+  padding:40px 16px;overflow-y:auto}
+.emp-edit-overlay.show{display:flex}
+.emp-edit-card{background:#fff;border-radius:14px;width:100%;max-width:640px;
+  box-shadow:0 20px 60px rgba(0,0,0,.25);display:flex;flex-direction:column;
+  max-height:calc(100vh - 80px)}
+.emp-edit-hd{padding:18px 20px;border-bottom:1px solid #e8ecf0;
+  display:flex;align-items:center;justify-content:space-between}
+.emp-edit-hd h3{font-size:16px;font-weight:800;color:var(--dark);margin:0}
+.emp-edit-close{background:transparent;border:none;font-size:20px;
+  cursor:pointer;color:var(--gray);padding:4px 8px;border-radius:6px;line-height:1}
+.emp-edit-close:hover{background:#f4f7fa;color:var(--dark)}
+.emp-edit-bd{padding:20px;overflow-y:auto;flex:1}
+.emp-edit-sec{margin-bottom:22px}
+.emp-edit-sec:last-of-type{margin-bottom:0}
+.emp-edit-sec-hd{font-size:11px;font-weight:700;color:var(--gray);
+  text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px;
+  padding-bottom:6px;border-bottom:1px solid #f0f4f8}
+.emp-edit-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:10px}
+.emp-edit-row3{display:grid;grid-template-columns:80px 80px 1fr;gap:12px;margin-bottom:10px}
+.emp-edit-field label{display:block;font-size:11px;font-weight:600;color:var(--gray);
+  margin-bottom:4px;text-transform:uppercase;letter-spacing:.3px}
+.emp-edit-field label .req{color:#e74c3c}
+.emp-edit-field input,.emp-edit-field select{width:100%;padding:8px 10px;
+  border:1px solid #d4dae0;border-radius:6px;font-size:13px;font-family:inherit;
+  background:#fff;box-sizing:border-box}
+.emp-edit-field input:focus,.emp-edit-field select:focus{outline:none;
+  border-color:#0EA5E9;box-shadow:0 0 0 2px rgba(14,165,233,.15)}
+.emp-edit-field input:disabled,.emp-edit-field select:disabled,
+.emp-edit-field input[readonly]{background:#f4f7fa;color:var(--gray);cursor:not-allowed}
+.emp-edit-field .field-hint{font-size:11px;color:var(--gray);margin-top:3px}
+.emp-edit-error{background:#fef5f5;border:1px solid #f5c2c2;color:#c0392b;
+  padding:10px 14px;border-radius:6px;font-size:13px;margin-top:12px;display:none}
+.emp-edit-error.show{display:block}
+.emp-edit-ft{padding:14px 20px;border-top:1px solid #e8ecf0;
+  display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.emp-edit-ft-spacer{flex:1}
+@media(max-width:640px){
+  .emp-edit-overlay{padding:0}
+  .emp-edit-card{border-radius:14px 14px 0 0;max-height:100vh;align-self:flex-end}
+  .emp-edit-row,.emp-edit-row3{grid-template-columns:1fr}
+}
+
 /* QUICK STATS */
 .qs-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1px;background:#f0f4f8}
 .qs-item{background:#fff;padding:16px;text-align:center}
@@ -1384,6 +1429,269 @@ function isHR(){       return S && S.user && isNetworkRole(S.user.role); }
 function isDirector(){ return S && S.user && S.user.role === 'director'; }
 function isNurse(){    return S && S.user && S.user.role === 'nurse'; }
 
+// ═══════════════════════════════════════════════════════════════════════
+//  HR EDIT MODAL (v6.10) — add/edit/soft-delete employee card
+// ═══════════════════════════════════════════════════════════════════════
+var EMP_DROPDOWNS = {
+  dir:  ['Садочок', 'Школа', 'Кухня', 'Офіс', 'Менеджмент'],
+  typ:  ['Садочок', 'Школа', 'Кухня', 'Управління'],
+  grp:  ['', 'mini Baby-ki', 'Baby-ki', 'Find-iki', 'Study-ki', 'Preschool',
+         '1 клас', '2 клас', '3 клас', '4 клас', 'кухня'],
+  stat: ['працює', 'звільнена', 'декрет', 'вакансія'],
+  posSuggest: ['вихователь','помічник','англійська','медсестра','охоронець',
+               'директор','логопед','вчитель','фітнес','музика',
+               'прибиральниця','тьютор']
+};
+var EMP_DEL_ROLES_FE = ['cfo','ceo','coo','hr','hr_trainer'];
+
+function _empAllLocs(){
+  var locs = {};
+  (S.emps || []).forEach(function(e){ if (e.loc) locs[e.loc] = 1; });
+  return Object.keys(locs).sort(function(a,b){ return a.localeCompare(b, 'uk'); });
+}
+
+function canEmpAdd(){
+  if (!S || !S.user) return false;
+  var r = String(S.user.role || '').toLowerCase();
+  return isNetworkRole(r) || r === 'director';
+}
+function canEmpEdit(emp){
+  if (!S || !S.user || !emp) return false;
+  var r = String(S.user.role || '').toLowerCase();
+  if (isNetworkRole(r)) return true;
+  if (r === 'director')
+    return String(S.user.loc || '').trim() === String(emp.loc || '').trim();
+  return false;
+}
+function canEmpDel(){
+  if (!S || !S.user) return false;
+  var r = String(S.user.role || '').toLowerCase();
+  return EMP_DEL_ROLES_FE.indexOf(r) !== -1;
+}
+
+function _dmyToIso(s){
+  if (!s) return '';
+  var m = /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/.exec(String(s).trim());
+  return m ? (m[3] + '-' + String(m[2]).padStart(2,'0') + '-' + String(m[1]).padStart(2,'0')) : '';
+}
+function _isoToDmy(s){
+  if (!s) return '';
+  var m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(String(s).trim());
+  return m ? (String(m[3]).padStart(2,'0') + '.' + String(m[2]).padStart(2,'0') + '.' + m[1]) : s;
+}
+
+function openEmpEditor(empId){
+  var emp = (empId !== undefined && empId !== null) ? S.emps[empId] : null;
+  var isEdit = !!emp;
+  var isDir = String(S.user.role || '').toLowerCase() === 'director';
+
+  document.getElementById('empEditTitle').textContent = isEdit
+    ? '✏️ Редагувати: ' + fullName(emp)
+    : '➕ Додати співробітника';
+  document.getElementById('empEditRowNum').value = isEdit ? (emp.rowNum || '') : '';
+
+  // Loc dropdown — реальні з S.emps + actor.loc для director
+  var locSel = document.getElementById('empF_loc');
+  locSel.innerHTML = '';
+  var availLocs = _empAllLocs();
+  if (isEdit && emp.loc && availLocs.indexOf(emp.loc) === -1) availLocs.push(emp.loc);
+  if (isDir && S.user.loc && availLocs.indexOf(S.user.loc) === -1) availLocs.push(S.user.loc);
+  availLocs.forEach(function(l){
+    var o = document.createElement('option'); o.value = l; o.textContent = l;
+    locSel.appendChild(o);
+  });
+  var locHint = document.getElementById('empF_loc_hint');
+  if (isDir){
+    locSel.value = S.user.loc;
+    locSel.disabled = true;
+    locHint.style.display = 'block';
+  } else {
+    locSel.value = isEdit ? (emp.loc || '') : '';
+    locSel.disabled = false;
+    locHint.style.display = 'none';
+  }
+
+  function fillSel(id, opts, curVal){
+    var sel = document.getElementById(id);
+    sel.innerHTML = '';
+    var list = opts.slice();
+    if (curVal && list.indexOf(curVal) === -1) list.unshift(curVal);  // legacy value
+    list.forEach(function(v){
+      var o = document.createElement('option'); o.value = v;
+      o.textContent = v === '' ? '— (не вказано)' : v;
+      sel.appendChild(o);
+    });
+    sel.value = curVal || '';
+  }
+  fillSel('empF_dir',  EMP_DROPDOWNS.dir,  isEdit ? (emp.dir  || '') : 'Садочок');
+  fillSel('empF_typ',  EMP_DROPDOWNS.typ,  isEdit ? (emp.typ  || '') : 'Садочок');
+  fillSel('empF_grp',  EMP_DROPDOWNS.grp,  isEdit ? (emp.grp  || '') : '');
+  fillSel('empF_stat', EMP_DROPDOWNS.stat, isEdit ? (emp.stat || '') : 'працює');
+
+  // Combobox saggests для Посади
+  var posDl = document.getElementById('empPosSuggest');
+  posDl.innerHTML = '';
+  EMP_DROPDOWNS.posSuggest.forEach(function(p){
+    var o = document.createElement('option'); o.value = p; posDl.appendChild(o);
+  });
+
+  // Поля
+  document.getElementById('empF_last').value  = isEdit ? (emp.last  || '') : '';
+  document.getElementById('empF_first').value = isEdit ? (emp.first || '') : '';
+  document.getElementById('empF_phone').value = isEdit ? (emp.phone || '') : '';
+  document.getElementById('empF_email').value = isEdit ? (emp.email || '') : '';
+  document.getElementById('empF_pos').value   = isEdit ? (emp.pos   || '') : '';
+  document.getElementById('empF_bday').value  = isEdit ? (emp.bday  || '') : '';
+  document.getElementById('empF_bmon').value  = isEdit ? (emp.bmon  || '') : '';
+  document.getElementById('empF_bdate').value = isEdit ? _dmyToIso(emp.bdate) : '';
+  document.getElementById('empF_wday').value  = isEdit ? _dmyToIso(emp.wday)  : '';
+  document.getElementById('empF_hired').value = isEdit
+    ? _dmyToIso(emp.hired)
+    : (new Date().toISOString().slice(0,10));
+  document.getElementById('empF_fired').value = isEdit ? (emp.fired || '') : '';
+
+  // Footer
+  document.getElementById('empEditDelBtn').style.display =
+    (isEdit && canEmpDel()) ? 'inline-block' : 'none';
+  var err = document.getElementById('empEditError');
+  err.classList.remove('show'); err.textContent = '';
+
+  document.getElementById('empEditOverlay').classList.add('show');
+  setTimeout(function(){ document.getElementById('empF_last').focus(); }, 50);
+}
+
+function closeEmpEditor(){
+  document.getElementById('empEditOverlay').classList.remove('show');
+}
+
+// Esc to close
+document.addEventListener('keydown', function(e){
+  if (e.key === 'Escape'){
+    var ov = document.getElementById('empEditOverlay');
+    if (ov && ov.classList.contains('show')) closeEmpEditor();
+  }
+});
+
+function _empCollectPayload(){
+  var $ = function(id){ return document.getElementById(id).value.trim(); };
+  return {
+    dir:   $('empF_dir'),
+    typ:   $('empF_typ'),
+    loc:   $('empF_loc'),
+    grp:   $('empF_grp'),
+    last:  $('empF_last'),
+    first: $('empF_first'),
+    phone: $('empF_phone'),
+    pos:   $('empF_pos'),
+    stat:  $('empF_stat'),
+    bday:  $('empF_bday'),
+    bmon:  $('empF_bmon'),
+    bdate: _isoToDmy($('empF_bdate')),
+    wday:  _isoToDmy($('empF_wday')),
+    hired: _isoToDmy($('empF_hired')),
+    fired: $('empF_fired'),
+    email: $('empF_email')
+  };
+}
+
+function _empShowError(msg){
+  var err = document.getElementById('empEditError');
+  err.textContent = msg;
+  err.classList.add('show');
+}
+
+async function saveEmpForm(){
+  var rowNumStr = document.getElementById('empEditRowNum').value;
+  var rowNum    = rowNumStr ? Number(rowNumStr) : null;
+  var payload   = _empCollectPayload();
+
+  // Client-side validation (backend re-validates все одно)
+  if (!payload.last || !payload.first || !payload.loc || !payload.pos){
+    _empShowError('Заповни обов\'язкові поля: Прізвище, Ім\'я, Локація, Посада');
+    return;
+  }
+
+  var btn = document.getElementById('empEditSaveBtn');
+  var origLabel = btn.textContent;
+  btn.disabled = true; btn.textContent = '⏳ Збереження…';
+
+  try {
+    var res = await postToScript('saveEmployee', {
+      actorId: S.user && S.user.id,
+      payload: payload,
+      rowNum:  rowNum
+    });
+    if (!res.ok){
+      var msg = res.error || 'Невідома помилка';
+      if (res.code === 'DUPLICATE')   msg = '⚠️ ' + msg;
+      if (res.code === 'PERM_DENIED') msg = '🚫 ' + msg;
+      _empShowError(msg);
+      return;
+    }
+    // Success: invalidate cache → refresh emps → close → re-render
+    try { localStorage.removeItem(CFG.CK); } catch(e){}
+    await fetchEmps(true);
+    closeEmpEditor();
+    if (res.employee){
+      var newId = -1;
+      for (var i = 0; i < S.emps.length; i++){
+        if (S.emps[i].rowNum === res.employee.rowNum){ newId = i; break; }
+      }
+      if (newId >= 0 && S.view === 'employee'){ S.empId = newId; renderEmpCard(); }
+      else { renderEmps(); }
+    } else {
+      renderEmps();
+    }
+  } catch(e){
+    _empShowError('Помилка мережі: ' + (e && e.message || e));
+  } finally {
+    btn.disabled = false; btn.textContent = origLabel;
+  }
+}
+
+async function confirmDeleteEmp(){
+  var rowNum = Number(document.getElementById('empEditRowNum').value || 0);
+  if (!rowNum){ _empShowError('Нема rowNum'); return; }
+  if (!confirm('Звільнити співробітника? У колонку "Дата звільнення" буде проставлено сьогоднішню дату. Скасувати — тільки руками у Google Sheets.')) return;
+
+  var btn = document.getElementById('empEditDelBtn');
+  var origLabel = btn.textContent;
+  btn.disabled = true; btn.textContent = '⏳…';
+
+  try {
+    var res = await postToScript('deleteEmployee', {
+      actorId: S.user && S.user.id,
+      rowNum:  rowNum
+    });
+    if (!res.ok){ _empShowError(res.error || 'Помилка'); return; }
+    try { localStorage.removeItem(CFG.CK); } catch(e){}
+    await fetchEmps(true);
+    closeEmpEditor();
+    nav('employees');
+  } catch(e){
+    _empShowError('Помилка мережі: ' + (e && e.message || e));
+  } finally {
+    btn.disabled = false; btn.textContent = origLabel;
+  }
+}
+
+// POST на Apps Script web app. URL береться з localStorage[CFG.SCRIPT_URL_KEY].
+// Content-Type: text/plain — щоб уникнути CORS preflight (Apps Script doPost
+// читає raw body з e.postData.contents).
+async function postToScript(action, body){
+  var url = getScriptUrl();
+  if (!url) throw new Error('Apps Script URL не налаштовано (Settings → Script URL)');
+  var payload = Object.assign({action: action}, body || {});
+  var resp = await fetch(url, {
+    method: 'POST',
+    redirect: 'follow',
+    headers: {'Content-Type': 'text/plain;charset=utf-8'},
+    body: JSON.stringify(payload)
+  });
+  if (!resp.ok) throw new Error('HTTP ' + resp.status);
+  return await resp.json();
+}
+
 function goPerm(perm){
   const items = document.querySelectorAll('[data-permission="' + perm + '"]');
   const target = items[0] && items[0].dataset.permPage;
@@ -1807,6 +2115,7 @@ function renderEmps(){
         <option value="">Всі напрямки</option>${dirs.map(d=>`<option value="${d}" ${S.f.dir===d?'selected':''}>${d}</option>`).join('')}
       </select>`:''}
       <button class="btn btn-secondary btn-sm" onclick="clearF()">✕ Скинути</button>
+      ${canEmpAdd()?`<button class="btn btn-primary btn-sm" onclick="openEmpEditor()" title="Додати співробітника">➕ Додати</button>`:''}
       ${isHR?`<button class="btn btn-secondary btn-sm" onclick="exportCSV()" title="Завантажити Excel">📊 Excel</button>`:''}
       <span style="margin-left:auto;font-size:12px;color:var(--gray)">${f.length} / ${emps.length}</span>
     </div>
@@ -1895,11 +2204,14 @@ function renderEmpCard(){
             ${isOnSick(e.key)?'<span class="emp-tag">🏥 Лікарняний</span>':''}
           </div>
         </div>
-        ${act?`<div class="emp-btns">
-          <button class="btn btn-ghost" data-permission="card-employee-vacation-button" onclick="openVac(${e.id})">🏖️ Відпустка</button>
-          <button class="btn btn-ghost" data-permission="card-employee-sick-button" onclick="openSick(${e.id})">🏥 Лікарняний</button>
-          ${!isNurse?`<button class="btn btn-ghost" data-permission="card-employee-salary-button" onclick="openSal(${e.id})">💰 Зарплата</button>`:''}
-        </div>`:''}
+        <div class="emp-btns">
+          ${canEmpEdit(e)?`<button class="btn btn-ghost" onclick="openEmpEditor(${e.id})" title="Редагувати картку">✏️ Редагувати</button>`:''}
+          ${act?`
+            <button class="btn btn-ghost" data-permission="card-employee-vacation-button" onclick="openVac(${e.id})">🏖️ Відпустка</button>
+            <button class="btn btn-ghost" data-permission="card-employee-sick-button" onclick="openSick(${e.id})">🏥 Лікарняний</button>
+            ${!isNurse?`<button class="btn btn-ghost" data-permission="card-employee-salary-button" onclick="openSal(${e.id})">💰 Зарплата</button>`:''}
+          `:''}
+        </div>
       </div>
       <div class="qs-grid">
         <div class="qs-item"><div class="qs-val">${t?`${t.yr}р ${t.mo}м`:'—'}</div><div class="qs-lbl">Стаж</div></div>
@@ -3958,5 +4270,79 @@ window.addEventListener('DOMContentLoaded',async()=>{
   setTimeout(poll,1500); setInterval(poll,60000);
 })();
 </script>
+<!-- HR EDIT MODAL (v6.10) — заповнюється через openEmpEditor(empId?) -->
+<div class="emp-edit-overlay" id="empEditOverlay" onclick="if(event.target===this)closeEmpEditor()">
+  <div class="emp-edit-card">
+    <div class="emp-edit-hd">
+      <h3 id="empEditTitle">✏️ Редагувати співробітника</h3>
+      <button class="emp-edit-close" onclick="closeEmpEditor()" title="Закрити (Esc)">✕</button>
+    </div>
+    <form class="emp-edit-bd" id="empEditForm" onsubmit="event.preventDefault();saveEmpForm()">
+      <input type="hidden" id="empEditRowNum" value="">
+
+      <div class="emp-edit-sec">
+        <div class="emp-edit-sec-hd">👤 Особисті дані</div>
+        <div class="emp-edit-row">
+          <div class="emp-edit-field"><label>Прізвище <span class="req">*</span></label><input type="text" id="empF_last" required></div>
+          <div class="emp-edit-field"><label>Ім'я <span class="req">*</span></label><input type="text" id="empF_first" required></div>
+        </div>
+        <div class="emp-edit-row">
+          <div class="emp-edit-field"><label>Телефон</label><input type="tel" id="empF_phone" placeholder="0671234567"></div>
+          <div class="emp-edit-field"><label>Email</label><input type="email" id="empF_email"></div>
+        </div>
+        <div class="emp-edit-row3">
+          <div class="emp-edit-field"><label>День</label><input type="number" id="empF_bday" min="1" max="31"></div>
+          <div class="emp-edit-field"><label>Місяць</label><input type="number" id="empF_bmon" min="1" max="12"></div>
+          <div class="emp-edit-field"><label>Дата народження</label><input type="date" id="empF_bdate"></div>
+        </div>
+      </div>
+
+      <div class="emp-edit-sec">
+        <div class="emp-edit-sec-hd">🏢 Робоче місце</div>
+        <div class="emp-edit-row">
+          <div class="emp-edit-field">
+            <label>Локація <span class="req">*</span></label>
+            <select id="empF_loc" required></select>
+            <div class="field-hint" id="empF_loc_hint" style="display:none">Тільки своя локація (director)</div>
+          </div>
+          <div class="emp-edit-field"><label>Напрямок</label><select id="empF_dir"></select></div>
+        </div>
+        <div class="emp-edit-row">
+          <div class="emp-edit-field"><label>Тип</label><select id="empF_typ"></select></div>
+          <div class="emp-edit-field"><label>Група</label><select id="empF_grp"></select></div>
+        </div>
+        <div class="emp-edit-row">
+          <div class="emp-edit-field">
+            <label>Посада <span class="req">*</span></label>
+            <input type="text" id="empF_pos" list="empPosSuggest" required placeholder="напр. вихователь">
+            <datalist id="empPosSuggest"></datalist>
+          </div>
+          <div class="emp-edit-field"><label>Статус</label><select id="empF_stat"></select></div>
+        </div>
+      </div>
+
+      <div class="emp-edit-sec">
+        <div class="emp-edit-sec-hd">📅 Працевлаштування</div>
+        <div class="emp-edit-row">
+          <div class="emp-edit-field"><label>Перший робочий день</label><input type="date" id="empF_wday"></div>
+          <div class="emp-edit-field"><label>Дата працевлаштування</label><input type="date" id="empF_hired"></div>
+        </div>
+        <div class="emp-edit-field" style="margin-bottom:0">
+          <label>Дата звільнення (read-only — через кнопку 🗑)</label>
+          <input type="text" id="empF_fired" readonly placeholder="—">
+        </div>
+      </div>
+
+      <div class="emp-edit-error" id="empEditError"></div>
+    </form>
+    <div class="emp-edit-ft">
+      <button type="button" class="btn btn-danger btn-sm" id="empEditDelBtn" onclick="confirmDeleteEmp()" style="display:none">🗑 Звільнити</button>
+      <div class="emp-edit-ft-spacer"></div>
+      <button type="button" class="btn btn-secondary" onclick="closeEmpEditor()">Скасувати</button>
+      <button type="button" class="btn btn-primary" id="empEditSaveBtn" onclick="saveEmpForm()">💾 Зберегти</button>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>
