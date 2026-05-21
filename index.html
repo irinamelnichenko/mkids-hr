@@ -166,7 +166,7 @@ tbody tr.clickable{cursor:pointer}
 .emp-tag{background:rgba(255,255,255,.15);padding:3px 10px;border-radius:20px;font-size:12px}
 .emp-btns{display:flex;gap:8px;flex-wrap:wrap;margin-left:auto}
 
-/* ── HR EDIT MODAL (v6.10) ─────────────────────────── */
+/* ── HR EDIT MODAL (v6.10.1) ─────────────────────────── */
 .emp-edit-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);
   display:none;align-items:flex-start;justify-content:center;z-index:1050;
   padding:40px 16px;overflow-y:auto}
@@ -1430,7 +1430,7 @@ function isDirector(){ return S && S.user && S.user.role === 'director'; }
 function isNurse(){    return S && S.user && S.user.role === 'nurse'; }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  HR EDIT MODAL (v6.10) — add/edit/soft-delete employee card
+//  HR EDIT MODAL (v6.10.1) — add/edit/soft-delete employee card
 // ═══════════════════════════════════════════════════════════════════════
 var EMP_DROPDOWNS = {
   dir:  ['Садочок', 'Школа', 'Кухня', 'Офіс', 'Менеджмент'],
@@ -1548,7 +1548,7 @@ function openEmpEditor(empId){
   document.getElementById('empF_hired').value = isEdit
     ? _dmyToIso(emp.hired)
     : (new Date().toISOString().slice(0,10));
-  document.getElementById('empF_fired').value = isEdit ? (emp.fired || '') : '';
+  document.getElementById('empF_fired').value = isEdit ? _dmyToIso(emp.fired) : '';
 
   // Footer
   document.getElementById('empEditDelBtn').style.display =
@@ -1589,7 +1589,7 @@ function _empCollectPayload(){
     bdate: _isoToDmy($('empF_bdate')),
     wday:  _isoToDmy($('empF_wday')),
     hired: _isoToDmy($('empF_hired')),
-    fired: $('empF_fired'),
+    fired: _isoToDmy($('empF_fired')),
     email: $('empF_email')
   };
 }
@@ -4270,7 +4270,7 @@ window.addEventListener('DOMContentLoaded',async()=>{
   setTimeout(poll,1500); setInterval(poll,60000);
 })();
 </script>
-<!-- HR EDIT MODAL (v6.10) — заповнюється через openEmpEditor(empId?) -->
+<!-- HR EDIT MODAL (v6.10.1) — заповнюється через openEmpEditor(empId?) -->
 <div class="emp-edit-overlay" id="empEditOverlay" onclick="if(event.target===this)closeEmpEditor()">
   <div class="emp-edit-card">
     <div class="emp-edit-hd">
@@ -4328,8 +4328,8 @@ window.addEventListener('DOMContentLoaded',async()=>{
           <div class="emp-edit-field"><label>Дата працевлаштування</label><input type="date" id="empF_hired"></div>
         </div>
         <div class="emp-edit-field" style="margin-bottom:0">
-          <label>Дата звільнення (read-only — через кнопку 🗑)</label>
-          <input type="text" id="empF_fired" readonly placeholder="—">
+          <label>Дата звільнення</label>
+          <input type="date" id="empF_fired">
         </div>
       </div>
 
