@@ -166,7 +166,7 @@ tbody tr.clickable{cursor:pointer}
 .emp-tag{background:rgba(255,255,255,.15);padding:3px 10px;border-radius:20px;font-size:12px}
 .emp-btns{display:flex;gap:8px;flex-wrap:wrap;margin-left:auto}
 
-/* ── HR EDIT MODAL (v6.10.1) ─────────────────────────── */
+/* ── HR EDIT MODAL (v6.10.3) ─────────────────────────── */
 .emp-edit-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);
   display:none;align-items:flex-start;justify-content:center;z-index:1050;
   padding:40px 16px;overflow-y:auto}
@@ -1430,7 +1430,7 @@ function isDirector(){ return S && S.user && S.user.role === 'director'; }
 function isNurse(){    return S && S.user && S.user.role === 'nurse'; }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  HR EDIT MODAL (v6.10.1) — add/edit/soft-delete employee card
+//  HR EDIT MODAL (v6.10.3) — add/edit/soft-delete employee card
 // ═══════════════════════════════════════════════════════════════════════
 var EMP_DROPDOWNS = {
   dir:  ['Садочок', 'Школа', 'Кухня', 'Офіс', 'Менеджмент'],
@@ -1675,12 +1675,12 @@ async function confirmDeleteEmp(){
   }
 }
 
-// POST на Apps Script web app. URL береться з localStorage[CFG.SCRIPT_URL_KEY].
+// POST на Apps Script web app. URL з localStorage, fallback — HARDCODED_AUTH_URL
+// (той самий бекенд, що обробляє логін / save / delete).
 // Content-Type: text/plain — щоб уникнути CORS preflight (Apps Script doPost
 // читає raw body з e.postData.contents).
 async function postToScript(action, body){
-  var url = getScriptUrl();
-  if (!url) throw new Error('Apps Script URL не налаштовано (Settings → Script URL)');
+  var url = authScriptUrl();
   var payload = Object.assign({action: action}, body || {});
   var resp = await fetch(url, {
     method: 'POST',
@@ -4270,7 +4270,7 @@ window.addEventListener('DOMContentLoaded',async()=>{
   setTimeout(poll,1500); setInterval(poll,60000);
 })();
 </script>
-<!-- HR EDIT MODAL (v6.10.1) — заповнюється через openEmpEditor(empId?) -->
+<!-- HR EDIT MODAL (v6.10.3) — заповнюється через openEmpEditor(empId?) -->
 <div class="emp-edit-overlay" id="empEditOverlay" onclick="if(event.target===this)closeEmpEditor()">
   <div class="emp-edit-card">
     <div class="emp-edit-hd">
