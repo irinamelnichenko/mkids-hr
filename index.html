@@ -166,7 +166,7 @@ tbody tr.clickable{cursor:pointer}
 .emp-tag{background:rgba(255,255,255,.15);padding:3px 10px;border-radius:20px;font-size:12px}
 .emp-btns{display:flex;gap:8px;flex-wrap:wrap;margin-left:auto}
 
-/* ── HR EDIT MODAL (v6.10.3) ─────────────────────────── */
+/* ── HR EDIT MODAL (v6.10.4) ─────────────────────────── */
 .emp-edit-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);
   display:none;align-items:flex-start;justify-content:center;z-index:1050;
   padding:40px 16px;overflow-y:auto}
@@ -825,26 +825,33 @@ async function fetchEmps(force=false) {
     const r = await fetch(url);
     if (!r.ok) throw new Error(r.status);
     const j = await r.json();
-    S.emps = (j.values||[]).filter(row=>row.some(c=>c&&c.trim())).map((row,i)=>({
-      _rowIdx:i,
-      key: mkKey(row[4],row[5],row[12]||row[13]),
-      dir:(row[0]||'').trim(),  // A=Напрямок
-      typ:(row[1]||'').trim(),  // B=Тип
-      loc:(row[2]||'').trim(),  // C=Локація
-      grp:(row[3]||'').trim(),  // D=Група
-      last:(row[4]||'').trim(), // E=Прізвище
-      first:(row[5]||'').trim(),// F=Ім'я
-      phone:(()=>{const p=(row[6]||'').trim().replace(/\s/g,'');return p&&!p.startsWith('0')&&/^\d{9}$/.test(p)?'0'+p:p;})(),// G=Контакт
-      pos:(row[7]||'').trim(),  // H=Посада
-      stat:(row[8]||'').trim(), // I=Статус
-      bday:(row[9]||'').trim(), // J=День нар.
-      bmon:(row[10]||'').trim(),// K=Місяць нар.
-      bdate:(row[11]||'').trim(),// L=Дата народження (повна)
-      wday:(row[12]||'').trim(), // M=Перший робочий день
-      hired:(row[13]||'').trim(),// N=Дата працевлаштування
-      fired:(row[14]||'').trim(),// O=Дата звільнення
-      email:(row[17]||'').trim() // R=Електронна адреса
-    })).filter(e=>e.last||e.first).map((e,i)=>({...e,id:i}));
+    // rowNum: 1-based sheet row (RANGE стартує з A2 → i=0 ⇒ row 2). Потрібен
+    // для saveEmployee/deleteEmployee Apps Script — обчислюємо ДО будь-яких
+    // .filter(), щоб індекс відповідав реальному рядку в Google Sheets.
+    S.emps = (j.values||[]).map((row,i)=>{
+      if (!row.some(c=>c&&c.trim())) return null;
+      return {
+        rowNum: i + 2,
+        _rowIdx: i,
+        key: mkKey(row[4],row[5],row[12]||row[13]),
+        dir:(row[0]||'').trim(),  // A=Напрямок
+        typ:(row[1]||'').trim(),  // B=Тип
+        loc:(row[2]||'').trim(),  // C=Локація
+        grp:(row[3]||'').trim(),  // D=Група
+        last:(row[4]||'').trim(), // E=Прізвище
+        first:(row[5]||'').trim(),// F=Ім'я
+        phone:(()=>{const p=(row[6]||'').trim().replace(/\s/g,'');return p&&!p.startsWith('0')&&/^\d{9}$/.test(p)?'0'+p:p;})(),// G=Контакт
+        pos:(row[7]||'').trim(),  // H=Посада
+        stat:(row[8]||'').trim(), // I=Статус
+        bday:(row[9]||'').trim(), // J=День нар.
+        bmon:(row[10]||'').trim(),// K=Місяць нар.
+        bdate:(row[11]||'').trim(),// L=Дата народження (повна)
+        wday:(row[12]||'').trim(), // M=Перший робочий день
+        hired:(row[13]||'').trim(),// N=Дата працевлаштування
+        fired:(row[14]||'').trim(),// O=Дата звільнення
+        email:(row[17]||'').trim() // R=Електронна адреса
+      };
+    }).filter(e=>e && (e.last||e.first)).map((e,i)=>({...e,id:i}));
     localStorage.setItem(CFG.CK, JSON.stringify({data:S.emps,ts:Date.now()}));
     freezeEmps();
     S.lastSync=new Date();
@@ -1430,7 +1437,7 @@ function isDirector(){ return S && S.user && S.user.role === 'director'; }
 function isNurse(){    return S && S.user && S.user.role === 'nurse'; }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  HR EDIT MODAL (v6.10.3) — add/edit/soft-delete employee card
+//  HR EDIT MODAL (v6.10.4) — add/edit/soft-delete employee card
 // ═══════════════════════════════════════════════════════════════════════
 var EMP_DROPDOWNS = {
   dir:  ['Садочок', 'Школа', 'Кухня', 'Офіс', 'Менеджмент'],
@@ -4270,7 +4277,7 @@ window.addEventListener('DOMContentLoaded',async()=>{
   setTimeout(poll,1500); setInterval(poll,60000);
 })();
 </script>
-<!-- HR EDIT MODAL (v6.10.3) — заповнюється через openEmpEditor(empId?) -->
+<!-- HR EDIT MODAL (v6.10.4) — заповнюється через openEmpEditor(empId?) -->
 <div class="emp-edit-overlay" id="empEditOverlay" onclick="if(event.target===this)closeEmpEditor()">
   <div class="emp-edit-card">
     <div class="emp-edit-hd">
