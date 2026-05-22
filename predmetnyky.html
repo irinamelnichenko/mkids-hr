@@ -396,8 +396,19 @@ select,input,textarea{font-family:inherit}
 .pred-cell-num{font-size:11px;font-weight:700;line-height:1;opacity:.7}
 .pred-cell-date{font-size:13px;font-weight:800;line-height:1.1;
   margin-top:3px;font-variant-numeric:tabular-nums}
-.pred-cell-init{font-size:9px;font-weight:700;line-height:1;
-  margin-top:2px;opacity:.75;letter-spacing:.5px}
+
+.pred-card-unassigned{background:#fffbf0;border:1px dashed #fcd34d}
+.pred-card-unassigned .pred-matrix-hd{background:transparent;border-bottom:none}
+.pred-card-warn{border:1px solid #f5b7b1}
+.pred-teacher-missing{color:#c0392b;font-weight:600}
+.pred-assign-btn{padding:7px 14px;border:1.5px solid var(--green);
+  background:#fff;color:var(--green);border-radius:8px;font-size:13px;
+  font-weight:600;cursor:pointer;transition:all .15s;white-space:nowrap}
+.pred-assign-btn:hover{background:var(--green);color:#fff}
+.pred-assign-edit{background:transparent;border:none;cursor:pointer;
+  font-size:13px;opacity:.6;padding:0 4px;margin-left:2px;
+  transition:opacity .15s;line-height:1}
+.pred-assign-edit:hover{opacity:1}
 
 .pred-modal-err{background:#fdecea;border:1px solid #f5b7b1;color:#a93226;
   border-radius:6px;padding:8px 12px;font-size:13px;margin-top:8px}
@@ -579,6 +590,38 @@ select,input,textarea{font-family:inherit}
   </div>
 </div>
 
+<!-- ── ASSIGN TEACHER MODAL (v6.11.4) ──────────────────────────── -->
+<div id="modalAssign" class="modal hidden">
+  <div class="modal-overlay" onclick="closeAssign()"></div>
+  <div class="modal-card">
+    <button class="modal-close" onclick="closeAssign()">✕</button>
+    <div class="modal-hd"><h3 id="assignTitle">Призначити викладача</h3></div>
+    <div class="modal-bd">
+      <div class="fg">
+        <label>Локація → Група</label>
+        <input type="text" id="assignLocGroup" disabled>
+      </div>
+      <div class="fg">
+        <label>Предмет</label>
+        <input type="text" id="assignSubject" disabled>
+      </div>
+      <div class="fg">
+        <label>Викладач</label>
+        <select id="assignTeacherSel"></select>
+      </div>
+      <div id="assignNoCands" class="pred-modal-err hidden">
+        Немає кандидатів у HR. Додай спочатку співробітника з відповідною посадою для цієї локації.
+      </div>
+      <div id="assignErr" class="pred-modal-err hidden"></div>
+    </div>
+    <div class="modal-ft">
+      <button class="btn btn-danger hidden" id="assignRemoveBtn" onclick="removeAssign()">🗑 Видалити</button>
+      <button class="btn btn-secondary" onclick="closeAssign()">Скасувати</button>
+      <button class="btn btn-primary" id="assignSubmit" onclick="submitAssign()">Зберегти</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── ADD LESSON DATE MODAL (v6.11) ───────────────────────────── -->
 <div id="modalAddDate" class="modal hidden">
   <div class="modal-overlay" onclick="closeAddDate()"></div>
@@ -644,13 +687,18 @@ var S = {
   year:  new Date().getFullYear(),
   month: new Date().getMonth() + 1,
   // ── data (одне завантаження getPredmetnyky) ──
-  teachers: [],
-  norms: {},
-  lessons: [],
-  catalog: [],
-  locations: [],
+  teachers:    [],
+  norms:       {},
+  lessons:     [],
+  catalog:     [],
+  assignments: [],
+  locations:   [],
   // ── ui ──
-  addModal: null
+  addModal:    null,
+  assignModal: null,
+  // ── auto-export ──
+  autoExportTimer:   null,
+  autoExportPending: {}    // {loc: true} — щоб не дублювати запит
 };
 
 // ① ② ③ ... ⑳, далі (21), (22)…
@@ -1058,10 +1106,11 @@ function hasAnyEditPerm(){
 function loadPredmetnyky(){
   return apiGet('getPredmetnyky', {actorId: S.user.id}).then(function(res){
     if (!res || !res.ok) throw new Error(res && res.error || 'Failed to load');
-    S.teachers = res.teachers || [];
-    S.norms    = res.norms    || {};
-    S.lessons  = res.lessons  || [];
-    S.catalog  = res.catalog  || [];
+    S.teachers    = res.teachers    || [];
+    S.norms       = res.norms       || {};
+    S.lessons     = res.lessons     || [];
+    S.catalog     = res.catalog     || [];
+    S.assignments = res.assignments || [];
   });
 }
 
@@ -1078,6 +1127,17 @@ function teachersFor(loc, subj){
   }).sort(function(a, b){
     return a.name.localeCompare(b.name, 'uk');
   });
+}
+function assignmentFor(loc, groupType, subj){
+  var groupName = GROUP_NAME_BY_TYPE[groupType];
+  for (var i = 0; i < S.assignments.length; i++){
+    var a = S.assignments[i];
+    if (a.loc !== loc) continue;
+    if (a.subject !== subj) continue;
+    if (a.group !== groupName) continue;
+    return a;
+  }
+  return null;
 }
 function allLessonsFor(loc, groupType, subj){
   return S.lessons.filter(function(L){
@@ -1115,15 +1175,6 @@ function getActiveLocations(){
   var list = Object.keys(locSet).sort(function(a, b){ return a.localeCompare(b, 'uk'); });
   if (S.loc) return list.filter(function(l){ return l === S.loc; });
   return list;
-}
-function teacherInitials(name){
-  return String(name || '').trim().split(/\s+/).slice(0, 2)
-    .map(function(w){ return w.charAt(0).toUpperCase(); }).join('');
-}
-function shortName(name){
-  var parts = String(name || '').trim().split(/\s+/);
-  if (parts.length < 2) return name;
-  return parts[0] + ' ' + parts[1].charAt(0).toUpperCase() + '.';
 }
 function shortDate(dmy){
   var m = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(String(dmy || ''));
@@ -1192,12 +1243,13 @@ function renderGroupSection(loc, groupType, addBlocks){
   var subjBlocks = [];
   PRED_SUBJECTS.forEach(function(subj){
     var teachers = teachersFor(loc, subj);
-    if (!teachers.length) return;
+    if (!teachers.length) return;                 // нема HR-кандидатів — приховуємо
     var norm = getNormFor(loc, subj, groupType);
     var isUnlimited = (subj === PRED_UNLIMITED_SUBJ);
-    if (norm <= 0 && !isUnlimited) return;     // hide silently
+    if (norm <= 0 && !isUnlimited) return;        // норма=0 — приховуємо
     var lessons = allLessonsFor(loc, groupType, subj);
-    subjBlocks.push(renderMatrixCard(loc, groupType, subj, teachers, lessons, norm, isUnlimited));
+    var assignment = assignmentFor(loc, groupType, subj);
+    subjBlocks.push(renderMatrixCard(loc, groupType, subj, teachers, assignment, lessons, norm, isUnlimited));
   });
   if (!subjBlocks.length) return '';
   addBlocks(subjBlocks.length);
@@ -1210,37 +1262,58 @@ function renderGroupSection(loc, groupType, addBlocks){
   '</div>';
 }
 
-function renderMatrixCard(loc, groupType, subj, teachers, lessons, norm, isUnlimited){
+function renderMatrixCard(loc, groupType, subj, teachers, assignment, lessons, norm, isUnlimited){
   var canEdit = canEditPred(loc);
   var emoji = SUBJECT_EMOJI[subj] || '📚';
 
-  // ── Title: subject + teacher(s) ──
-  var teacherLbl;
-  if (teachers.length === 1){
-    teacherLbl = escapeHtml(teachers[0].name);
-  } else if (teachers.length === 2){
-    teacherLbl = escapeHtml(shortName(teachers[0].name)) + ' + ' + escapeHtml(shortName(teachers[1].name));
-  } else {
-    teacherLbl = escapeHtml(shortName(teachers[0].name)) + ', ' +
-                 escapeHtml(shortName(teachers[1].name)) +
-                 ' <span class="muted">+' + (teachers.length - 2) + '</span>';
+  // ── UNASSIGNED state ──
+  if (!assignment){
+    var noCandidates = !teachers.length;
+    var btnHtml = canEdit
+      ? '<button class="pred-assign-btn" onclick="openAssign(\'' +
+          escapeJs(loc) + '\', \'' + groupType + '\', \'' + escapeJs(subj) + '\', null)">' +
+        (noCandidates ? 'Додати викладача' : '+ Обрати викладача') +
+        '</button>'
+      : '';
+    return '<div class="pred-matrix-card pred-card-unassigned">' +
+      '<div class="pred-matrix-hd">' +
+        '<span class="pred-matrix-emoji">' + emoji + '</span>' +
+        '<div class="pred-matrix-info">' +
+          '<div class="pred-matrix-title">' + escapeHtml(subj) +
+            ' · <span class="muted">Викладач не призначений</span></div>' +
+          '<div class="pred-matrix-sub muted">' +
+            (noCandidates
+              ? 'Немає кандидатів у HR з посадою «' + escapeHtml(subj) + '» у «' + escapeHtml(loc) + '»'
+              : escapeHtml(teachers.length) + ' ' + pluralUk(teachers.length, 'кандидат', 'кандидати', 'кандидатів') + ' у HR') +
+          '</div>' +
+        '</div>' +
+        btnHtml +
+      '</div>' +
+    '</div>';
   }
 
-  // ── Rate (unique values) ──
-  var uniqueRates = [];
-  teachers.forEach(function(t){
-    var r = getRateFor(t.locations[0], subj);
-    if (r != null && uniqueRates.indexOf(r) === -1) uniqueRates.push(r);
-  });
-  var rateHtml;
-  if (!uniqueRates.length){
-    rateHtml = '<span class="pred-rate no-rate">Ставка не вказана</span>';
-  } else if (uniqueRates.length === 1){
-    rateHtml = '<span class="pred-rate">' + fmtN(uniqueRates[0]) + ' грн/зан.</span>';
+  // ── ASSIGNED state ──
+  var teacher = findTeacher(assignment.empKey);
+  var teacherLbl, teacherWarn = '';
+  if (teacher){
+    teacherLbl = escapeHtml(teacher.name);
   } else {
-    rateHtml = '<span class="pred-rate">' +
-      uniqueRates.map(function(r){ return fmtN(r); }).join(' / ') + ' грн/зан.</span>';
+    teacherLbl = '<span class="pred-teacher-missing">⚠️ Невідомий викладач</span>';
+    teacherWarn = ' pred-card-warn';
   }
+
+  // ── Rate ──
+  var rate = getRateFor(loc, subj);
+  var rateHtml = (rate != null)
+    ? '<span class="pred-rate">' + fmtN(rate) + ' грн/зан.</span>'
+    : '<span class="pred-rate no-rate">Ставка не вказана</span>';
+
+  // ── Edit-assignment button ──
+  var editBtn = canEdit
+    ? '<button class="pred-assign-edit" title="Замінити викладача" onclick="openAssign(\'' +
+        escapeJs(loc) + '\', \'' + groupType + '\', \'' + escapeJs(subj) + '\', \'' +
+        escapeJs(assignment.empKey) + '\')">✏️</button>'
+    : '';
 
   // ── Counter ──
   var count = lessons.length;
@@ -1253,18 +1326,18 @@ function renderMatrixCard(loc, groupType, subj, teachers, lessons, norm, isUnlim
   }
 
   // ── Cells ──
-  var totalCells = isUnlimited ? (count + 1) : norm;   // Чомусики: filled + 1 trailing empty
-  var showInitials = teachers.length > 1;
+  var totalCells = isUnlimited ? (count + 1) : norm;
   var cellsHtml = '';
+  var canAddLesson = canEdit && !!teacher;       // нема HR teacher → не дозволяємо додавати
   for (var i = 0; i < totalCells; i++){
-    cellsHtml += renderCell(i, lessons[i] || null, showInitials, canEdit, loc, groupType, subj);
+    cellsHtml += renderCell(i, lessons[i] || null, canAddLesson, loc, groupType, subj);
   }
 
-  return '<div class="pred-matrix-card">' +
+  return '<div class="pred-matrix-card' + teacherWarn + '">' +
     '<div class="pred-matrix-hd">' +
       '<span class="pred-matrix-emoji">' + emoji + '</span>' +
       '<div class="pred-matrix-info">' +
-        '<div class="pred-matrix-title">' + escapeHtml(subj) + ' · ' + teacherLbl + '</div>' +
+        '<div class="pred-matrix-title">' + escapeHtml(subj) + ' · ' + teacherLbl + ' ' + editBtn + '</div>' +
         '<div class="pred-matrix-sub">' + rateHtml + '</div>' +
       '</div>' +
       counterHtml +
@@ -1273,23 +1346,15 @@ function renderMatrixCard(loc, groupType, subj, teachers, lessons, norm, isUnlim
   '</div>';
 }
 
-function renderCell(idx, lesson, showInitials, canEdit, loc, groupType, subj){
+function renderCell(idx, lesson, canEdit, loc, groupType, subj){
   var num = CELL_NUM[idx] || ('(' + (idx + 1) + ')');
   if (lesson){
-    var initHtml = '';
-    if (showInitials){
-      var t = findTeacher(lesson.empKey);
-      var ini = teacherInitials(t ? t.name : '');
-      if (ini) initHtml = '<span class="pred-cell-init" title="' +
-        escapeHtml(t ? t.name : '') + '">' + escapeHtml(ini) + '</span>';
-    }
     var cls = 'pred-cell filled' + (canEdit ? '' : ' readonly');
     var handler = canEdit ? ' onclick="onCellFilledClick(' + lesson.id + ', event)"' : '';
     var titleAttr = canEdit ? ' title="Натисни, щоб видалити"' : '';
     return '<div class="' + cls + '"' + handler + titleAttr + '>' +
       '<span class="pred-cell-num">' + num + '</span>' +
       '<span class="pred-cell-date">' + escapeHtml(shortDate(lesson.date)) + '</span>' +
-      initHtml +
     '</div>';
   } else {
     var clsE = 'pred-cell empty' + (canEdit ? '' : ' readonly');
@@ -1326,38 +1391,185 @@ function refreshAll(){
 }
 function onCellEmptyClick(loc, groupType, subj){
   if (!canEditPred(loc)){ showToast('🚫 Немає дозволу', 'err'); return; }
-  openAddDate(loc, groupType, subj);
+  var a = assignmentFor(loc, groupType, subj);
+  if (!a){
+    openAssign(loc, groupType, subj, null);
+    return;
+  }
+  openAddDate(loc, groupType, subj, a.empKey);
 }
 function onCellFilledClick(id, ev){
   if (ev) ev.stopPropagation();
   onDeleteLesson(id, ev);
 }
 
-// ── ADD-DATE MODAL (v6.11.2) ────────────────
-function openAddDate(loc, groupType, subject){
+// ── ASSIGN MODAL (v6.11.4) ──────────────────
+function openAssign(loc, groupType, subject, currentEmpKey){
   if (!canEditPred(loc)){ showToast('🚫 Немає дозволу', 'err'); return; }
-  var teachers = teachersFor(loc, subject);
-  if (!teachers.length){ showToast('🚫 Немає викладачів для цього блоку', 'err'); return; }
-
+  var teachers  = teachersFor(loc, subject);
   var groupName = GROUP_NAME_BY_TYPE[groupType];
+  var existing  = assignmentFor(loc, groupType, subject);
+
+  S.assignModal = {
+    loc:           loc,
+    groupType:     groupType,
+    group:         groupName,
+    subject:       subject,
+    teachers:      teachers,
+    existingId:    existing ? existing.id : null,
+    currentEmpKey: currentEmpKey || (existing ? existing.empKey : null)
+  };
+
+  $('assignTitle').textContent  = (existing ? 'Замінити: ' : 'Призначити: ') + subject + ' · ' + groupName;
+  $('assignLocGroup').value     = loc + ' → ' + groupName;
+  $('assignSubject').value      = subject;
+
+  var sel = $('assignTeacherSel');
+  if (teachers.length){
+    sel.innerHTML = teachers.map(function(t){
+      return '<option value="' + escapeHtml(t.empKey) + '">' + escapeHtml(t.name) + '</option>';
+    }).join('');
+    sel.disabled = false;
+    sel.value = S.assignModal.currentEmpKey || teachers[0].empKey;
+    $('assignNoCands').classList.add('hidden');
+    $('assignSubmit').disabled = false;
+  } else {
+    sel.innerHTML = '';
+    sel.disabled = true;
+    $('assignNoCands').classList.remove('hidden');
+    $('assignSubmit').disabled = true;
+  }
+
+  if (existing){
+    $('assignRemoveBtn').classList.remove('hidden');
+  } else {
+    $('assignRemoveBtn').classList.add('hidden');
+  }
+
+  $('assignErr').classList.add('hidden');
+  $('assignErr').textContent = '';
+  $('modalAssign').classList.remove('hidden');
+}
+function closeAssign(){
+  $('modalAssign').classList.add('hidden');
+  S.assignModal = null;
+}
+function _assignErr(msg){
+  var box = $('assignErr');
+  box.textContent = msg;
+  box.classList.remove('hidden');
+}
+function submitAssign(){
+  if (!S.assignModal) return;
+  var empKey = $('assignTeacherSel').value;
+  if (!empKey){ _assignErr('Обери викладача'); return; }
+
+  var btn = $('assignSubmit'); var orig = btn.textContent;
+  btn.disabled = true; btn.textContent = '⏳ Збереження…';
+
+  apiPost({
+    action: 'savePredmetnykyAssignment',
+    actorId: S.user.id,
+    payload: {
+      loc:     S.assignModal.loc,
+      group:   S.assignModal.group,
+      subject: S.assignModal.subject,
+      empKey:  empKey
+    }
+  }).then(function(res){
+    btn.disabled = false; btn.textContent = orig;
+    if (!res || !res.ok){
+      var msg;
+      if      (res && res.code === 'PERM_DENIED') msg = '🚫 Немає дозволу';
+      else if (res && res.code === 'BAD_GROUP')   msg = '🚫 ' + (res.error || 'Заборонена комбінація');
+      else if (res && res.code === 'BAD_SUBJECT') msg = '🚫 ' + (res.error || 'Невідомий предмет');
+      else                                        msg = (res && res.error) || 'Невідома помилка';
+      _assignErr(msg);
+      return;
+    }
+    // Replace any existing entry with same id OR same (loc,group,subject)
+    S.assignments = S.assignments.filter(function(a){
+      if (a.id === res.id) return false;
+      if (a.loc === res.loc && a.group === res.group && a.subject === res.subject) return false;
+      return true;
+    });
+    S.assignments.push({
+      id:      res.id,
+      loc:     res.loc,
+      group:   res.group,
+      subject: res.subject,
+      empKey:  res.empKey
+    });
+    closeAssign();
+    renderApp();
+    showToast(res.created ? '✅ Викладача призначено' : '✅ Викладача замінено', 'ok');
+  }).catch(function(e){
+    btn.disabled = false; btn.textContent = orig;
+    _assignErr('Помилка мережі: ' + (e && e.message || e));
+  });
+}
+function removeAssign(){
+  if (!S.assignModal || !S.assignModal.existingId) return;
+  if (!confirm('Видалити призначення викладача для цього блоку?')) return;
+
+  var id = S.assignModal.existingId;
+  var btn = $('assignRemoveBtn'); var orig = btn.textContent;
+  btn.disabled = true; btn.textContent = '⏳ Видалення…';
+
+  apiPost({
+    action: 'deletePredmetnykyAssignment',
+    actorId: S.user.id,
+    id: id
+  }).then(function(res){
+    btn.disabled = false; btn.textContent = orig;
+    if (!res || !res.ok){
+      if (res && res.code === 'NOT_FOUND'){
+        S.assignments = S.assignments.filter(function(a){ return a.id !== id; });
+        closeAssign();
+        renderApp();
+        showToast('Призначення вже видалено', 'info');
+      } else {
+        _assignErr((res && res.error) || 'Помилка видалення');
+      }
+      return;
+    }
+    S.assignments = S.assignments.filter(function(a){ return a.id !== id; });
+    closeAssign();
+    renderApp();
+    showToast('✅ Призначення видалено', 'ok');
+  }).catch(function(e){
+    btn.disabled = false; btn.textContent = orig;
+    _assignErr('Помилка мережі: ' + (e && e.message || e));
+  });
+}
+
+// ── ADD-DATE MODAL (v6.11.4 — empKey з assignment) ──
+function openAddDate(loc, groupType, subject, empKey){
+  if (!canEditPred(loc)){ showToast('🚫 Немає дозволу', 'err'); return; }
+  if (!empKey){ showToast('🚫 Спершу признач викладача', 'err'); return; }
+
+  var t = findTeacher(empKey);
+  var teacherName = t ? t.name : '(невідомий — empKey: ' + empKey + ')';
+  var groupName = GROUP_NAME_BY_TYPE[groupType];
+
   S.addModal = {
-    loc: loc, group: groupName, groupType: groupType, subject: subject,
-    teachers: teachers
+    loc:       loc,
+    group:     groupName,
+    groupType: groupType,
+    subject:   subject,
+    empKey:    empKey
   };
 
   $('addDateTitle').textContent = 'Додати: ' + subject + ' · ' + groupName;
 
   var sel = $('addDateTeacherSel');
-  sel.innerHTML = teachers.map(function(t){
-    return '<option value="' + escapeHtml(t.empKey) + '">' + escapeHtml(t.name) + '</option>';
-  }).join('');
-  sel.value    = teachers[0].empKey;
-  sel.disabled = (teachers.length === 1);
+  sel.innerHTML = '<option value="' + escapeHtml(empKey) + '">' + escapeHtml(teacherName) + '</option>';
+  sel.value    = empKey;
+  sel.disabled = true;
 
   $('addDateLocGroup').value = loc + ' → ' + groupName;
   $('addDateSubject').value  = subject;
 
-  // Default: сьогодні, якщо у фільтрованому місяці; інакше 1-ше число місяця.
   var d = new Date();
   $('addDateInput').value = (d.getFullYear() === S.year && (d.getMonth() + 1) === S.month)
     ? todayIso()
@@ -1383,8 +1595,8 @@ function submitAddDate(){
   if (!dateIso){ _addDateErr('Вкажи дату'); return; }
   var dateDmy = isoToDmy(dateIso);
 
-  var empKey = $('addDateTeacherSel').value;
-  if (!empKey){ _addDateErr('Обери викладача'); return; }
+  var empKey = S.addModal.empKey;
+  if (!empKey){ _addDateErr('Викладач не призначений'); return; }
 
   var btn = $('addDateSubmit'); var orig = btn.textContent;
   btn.disabled = true; btn.textContent = '⏳ Збереження…';
@@ -1410,10 +1622,11 @@ function submitAddDate(){
       _addDateErr(msg);
       return;
     }
+    var lessonLoc = S.addModal.loc;
     S.lessons.push({
       id:      res.id,
       empKey:  empKey,
-      loc:     S.addModal.loc,
+      loc:     lessonLoc,
       group:   S.addModal.group,
       subject: S.addModal.subject,
       date:    dateDmy
@@ -1421,6 +1634,7 @@ function submitAddDate(){
     closeAddDate();
     renderApp();
     showToast('✅ Заняття додано (' + res.current + ' / ' + (res.norm || '∞') + ')', 'ok');
+    scheduleAutoExport(lessonLoc);
   }).catch(function(e){
     btn.disabled = false; btn.textContent = orig;
     _addDateErr('Помилка мережі: ' + (e && e.message || e));
@@ -1431,6 +1645,11 @@ function submitAddDate(){
 function onDeleteLesson(id, ev){
   if (ev) ev.stopPropagation();
   if (!confirm('Видалити це заняття?')) return;
+  var lesson = null;
+  for (var i = 0; i < S.lessons.length; i++){
+    if (S.lessons[i].id === id){ lesson = S.lessons[i]; break; }
+  }
+  var lessonLoc = lesson ? lesson.loc : null;
   apiPost({
     action: 'deletePredmetnykyLesson',
     actorId: S.user.id,
@@ -1441,6 +1660,7 @@ function onDeleteLesson(id, ev){
         S.lessons = S.lessons.filter(function(L){ return L.id !== id; });
         renderApp();
         showToast('Заняття вже було видалено', 'info');
+        if (lessonLoc) scheduleAutoExport(lessonLoc);
       } else {
         showToast((res && res.error) || 'Помилка видалення', 'err');
       }
@@ -1449,14 +1669,48 @@ function onDeleteLesson(id, ev){
     S.lessons = S.lessons.filter(function(L){ return L.id !== id; });
     renderApp();
     showToast('✅ Видалено', 'ok');
+    if (lessonLoc) scheduleAutoExport(lessonLoc);
   }).catch(function(e){
     showToast('Помилка мережі: ' + (e && e.message || e), 'err');
   });
 }
 
-// Esc → закрити модалку
+// ── AUTO-EXPORT (v6.11.4) ───────────────────
+// Дебаунс 5 сек після save/delete lesson — викликає
+// exportPredmetnykyToSalary для локації заняття.
+function scheduleAutoExport(loc){
+  if (!loc) return;
+  if (S.autoExportTimer){ clearTimeout(S.autoExportTimer); }
+  setSync('pending', '↻ Salary через 5 сек…');
+  S.autoExportTimer = setTimeout(function(){
+    S.autoExportTimer = null;
+    runAutoExport(loc);
+  }, 5000);
+}
+function runAutoExport(loc){
+  setSync('syncing', '↻ Salary…');
+  apiPost({
+    action: 'exportPredmetnykyToSalary',
+    actorId: S.user.id,
+    loc:  loc,
+    year: S.year,
+    month: S.month
+  }).then(function(res){
+    if (res && res.ok){
+      setSync('ok', '✅ Salary оновлено (' + (res.cellsWritten || 0) + ' клітинок)');
+    } else {
+      setSync('err', '⚠️ Salary: ' + ((res && res.error) || 'помилка'));
+    }
+  }).catch(function(e){
+    setSync('err', '⚠️ Salary: ' + (e && e.message || e));
+  });
+}
+
+// Esc → закрити будь-яку модалку (assign має пріоритет)
 document.addEventListener('keydown', function(e){
-  if (e.key === 'Escape' && S.addModal) closeAddDate();
+  if (e.key !== 'Escape') return;
+  if (S.assignModal) { closeAssign(); return; }
+  if (S.addModal)    { closeAddDate(); return; }
 });
 
 // ── INIT ────────────────────────────────────

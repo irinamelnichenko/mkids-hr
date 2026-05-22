@@ -297,6 +297,9 @@ function doPost(e) {
     else if (body.action === 'deleteEmployee')            result = deleteEmployee(Number(body.actorId || 0), body.rowNum || 0);
     else if (body.action === 'savePredmetnykyLesson')     result = savePredmetnykyLesson(Number(body.actorId || 0), body.lesson || {});
     else if (body.action === 'deletePredmetnykyLesson')   result = deletePredmetnykyLesson(Number(body.actorId || 0), Number(body.lessonId || 0));
+    else if (body.action === 'savePredmetnykyAssignment')   result = savePredmetnykyAssignment(Number(body.actorId || 0), body.payload || body.data || {});
+    else if (body.action === 'deletePredmetnykyAssignment') result = deletePredmetnykyAssignment(Number(body.actorId || 0), Number(body.id || 0));
+    else if (body.action === 'exportPredmetnykyToSalary')   result = exportPredmetnykyToSalary(body || {});
     else result = {ok:false, error:'Unknown action'};
     return jsonOut(result);
   } catch(err) {
@@ -6731,12 +6734,13 @@ function getPredmetnyky(actorId){
     catch(e){ return {ok:false, error:'Permission denied', code:'PERM_DENIED'}; }
 
     return {
-      ok:       true,
-      teachers: _loadPredTeachers(scope),
-      norms:    _loadPredNorms(),
-      catalog:  _loadPredCatalog(scope),
-      lessons:  _loadPredLessons(scope),
-      scope:    scope || 'all'
+      ok:           true,
+      teachers:     _loadPredTeachers(scope),
+      norms:        _loadPredNorms(),
+      catalog:      _loadPredCatalog(scope),
+      lessons:      _loadPredLessons(scope),
+      assignments:  _loadPredAssignments(scope),
+      scope:        scope || 'all'
     };
   } catch(e){
     return {ok:false, error: e.message || String(e)};
@@ -6868,6 +6872,432 @@ function deletePredmetnykyLesson(actorId, lessonId){
     }
   } catch(e){
     return {ok:false, error: e.message || String(e)};
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// PREDMETNYKY_ASSIGNMENTS (v6.11.4) — призначення викладача на
+// (Location, Group, Subject). Один запис = один блок у frontend.
+// Sheet auto-створюється + idempotent seed з Предметники_Каталог.
+// ═══════════════════════════════════════════════════════════════════
+var PRED_ASSIGN_TAB    = 'Predmetnyky_Assignments';        // CRM_SHEET
+var PRED_ASSIGN_HEADER = ['ID','Location','Group','Subject','EmpKey','CreatedAt','CreatedBy'];
+
+var PRED_GROUP_NAME_BY_TYPE = {
+  miniBaby:'miniBaby-ki', Baby:'Baby-ki', Find:'Find-iki',
+  Study:'Study-ki', Preschool:'Preschool'
+};
+
+function _getPredAssignSheet(){
+  var ss = getCRMSpreadsheet();
+  var sh = ss.getSheetByName(PRED_ASSIGN_TAB);
+  if (!sh){
+    sh = ss.insertSheet(PRED_ASSIGN_TAB);
+    sh.getRange(1, 1, 1, PRED_ASSIGN_HEADER.length).setValues([PRED_ASSIGN_HEADER]);
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+
+function _nextPredAssignId(sh){
+  var lastRow = sh.getLastRow();
+  if (lastRow < 2) return 1;
+  var ids = sh.getRange(2, 1, lastRow - 1, 1).getValues();
+  var max = 0;
+  for (var i = 0; i < ids.length; i++){
+    var n = Number(ids[i][0]);
+    if (n > max) max = n;
+  }
+  return max + 1;
+}
+
+// Assignments sheet → [{id, loc, group, subject, empKey}].
+// Auto-seeds з каталогу при першому виклику на порожньому листі.
+function _loadPredAssignments(locFilter){
+  var sh = _getPredAssignSheet();
+  if (sh.getLastRow() < 2){
+    try {
+      var seedRes = _seedPredmetnykyAssignmentsFromCatalog();
+      Logger.log('[loadPredAssignments] auto-seed: %s', JSON.stringify(seedRes));
+    } catch(e){
+      Logger.log('[loadPredAssignments] seed failed: %s', e && e.message);
+    }
+  }
+  var lastRow = sh.getLastRow();
+  if (lastRow < 2) return [];
+  var data = sh.getRange(2, 1, lastRow - 1, PRED_ASSIGN_HEADER.length).getValues();
+  var out = [];
+  var filter = String(locFilter || '').trim();
+  for (var i = 0; i < data.length; i++){
+    var id  = Number(data[i][0]); if (!id) continue;
+    var loc = String(data[i][1] || '').trim();
+    if (filter && loc !== filter) continue;
+    out.push({
+      id:      id,
+      loc:     loc,
+      group:   String(data[i][2] || '').trim(),
+      subject: String(data[i][3] || '').trim(),
+      empKey:  String(data[i][4] || '').trim()
+    });
+  }
+  return out;
+}
+
+// Нормалізує ПІБ для матчингу catalog.teacher → HR.name.
+// Whitespace + lowercase. (Без strip-diacritics — українська збігається.)
+function _predNormalizeName(name){
+  return String(name || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+// Ідемпотентний seed assignments з Предметники_Каталог.
+// На кожен active catalog row з заповненим Викладачем — створюємо
+// assignment для КОЖНОЇ groupType де norm>0 (для Чомусики — для всіх 5).
+// Матчинг catalog.teacher → HR.empKey за нормалізованим повним ПІБ.
+function _seedPredmetnykyAssignmentsFromCatalog(){
+  var sh = _getPredAssignSheet();
+  if (sh.getLastRow() > 1) return {ok:true, skipped:true, msg:'Assignments already populated'};
+
+  var catalog    = _loadPredCatalog('');
+  var norms      = _loadPredNorms();
+  var hrTeachers = _loadPredTeachers(null);
+
+  // ПІБ-індекс (включаючи альтернативу "First Last")
+  var byName = {};
+  hrTeachers.forEach(function(t){
+    var k1 = _predNormalizeName(t.name);
+    if (k1 && !byName[k1]) byName[k1] = t.empKey;
+    var parts = String(t.name || '').trim().split(/\s+/);
+    if (parts.length >= 2){
+      var k2 = _predNormalizeName(parts[1] + ' ' + parts[0]);
+      if (k2 && !byName[k2]) byName[k2] = t.empKey;
+    }
+  });
+
+  var now = new Date();
+  var rows = [];
+  var nextId = 1;
+  var stats = {catalog:0, withTeacher:0, matched:0, unmatched:[], generated:0};
+
+  catalog.forEach(function(a){
+    stats.catalog++;
+    if (!a.active)       return;
+    if (!a.teacher)      return;
+    if (!a.subject_norm) return;     // не у системі норм (напр. Підготовка до школи)
+    stats.withTeacher++;
+
+    var empKey = byName[_predNormalizeName(a.teacher)] || null;
+    if (!empKey){
+      stats.unmatched.push(a.loc + '/' + a.subject_raw + '/«' + a.teacher + '»');
+      return;
+    }
+    stats.matched++;
+
+    var region = _predLocToRegion(a.loc);
+    var isUnlimited = (a.subject_norm === PRED_UNLIMITED_SUBJ);
+    PRED_GROUP_TYPES.forEach(function(gt){
+      var n = (norms[region] && norms[region][a.subject_norm] &&
+               norms[region][a.subject_norm][gt]) || 0;
+      if (n <= 0 && !isUnlimited) return;
+      rows.push([nextId++, a.loc, PRED_GROUP_NAME_BY_TYPE[gt] || gt,
+                 a.subject_norm, empKey, now, 'seed']);
+      stats.generated++;
+    });
+  });
+
+  if (rows.length){
+    sh.getRange(2, 1, rows.length, PRED_ASSIGN_HEADER.length).setValues(rows);
+  }
+  Logger.log('[seedAssignments] cat=%s teachersInCat=%s matched=%s generated=%s unmatched=%s',
+    stats.catalog, stats.withTeacher, stats.matched, stats.generated, stats.unmatched.length);
+  if (stats.unmatched.length){
+    Logger.log('[seedAssignments] unmatched: %s', stats.unmatched.join(' | '));
+  }
+  return {ok:true, seeded:rows.length, stats:stats};
+}
+
+// POST {action:'savePredmetnykyAssignment', actorId, payload:{loc,group,subject,empKey}}
+// Upsert: уніквальний ключ — (loc, group, subject).
+function savePredmetnykyAssignment(actorId, payload){
+  try {
+    var actor = _getActor(actorId);
+    payload = payload || {};
+    var loc     = String(payload.loc     || payload.location || '').trim();
+    var group   = String(payload.group   || '').trim();
+    var subject = String(payload.subject || '').trim();
+    var empKey  = String(payload.empKey  || '').trim();
+
+    if (!loc)     return {ok:false, error:'loc required'};
+    if (!group)   return {ok:false, error:'group required'};
+    if (!subject) return {ok:false, error:'subject required'};
+    if (!empKey)  return {ok:false, error:'empKey required'};
+
+    if (PRED_SUBJECTS.indexOf(subject) === -1)
+      return {ok:false, code:'BAD_SUBJECT', error:'Unknown subject: ' + subject};
+    if (!_normalizeGroupType(group))
+      return {ok:false, code:'BAD_GROUP', error:'Unknown group type: ' + group};
+
+    if (!_canEditPredmetnyky(actor, loc))
+      return {ok:false, code:'PERM_DENIED', error:'Permission denied'};
+
+    var lock = LockService.getScriptLock();
+    lock.waitLock(15000);
+    try {
+      var sh = _getPredAssignSheet();
+      var lastRow = sh.getLastRow();
+      var data = lastRow > 1
+        ? sh.getRange(2, 1, lastRow - 1, PRED_ASSIGN_HEADER.length).getValues()
+        : [];
+
+      // Upsert: знайти (loc, group, subject)
+      for (var i = 0; i < data.length; i++){
+        if (String(data[i][1] || '').trim() !== loc)     continue;
+        if (String(data[i][2] || '').trim() !== group)   continue;
+        if (String(data[i][3] || '').trim() !== subject) continue;
+        var rowNum = i + 2;
+        var existingId = Number(data[i][0]) || 0;
+        var beforeEmpKey = String(data[i][4] || '').trim();
+        if (beforeEmpKey === empKey){
+          return {ok:true, id:existingId, updated:false,
+                  loc:loc, group:group, subject:subject, empKey:empKey,
+                  msg:'No change'};
+        }
+        sh.getRange(rowNum, 5).setValue(empKey);
+        _writeHrAudit(actor, 'pred_save_assign', existingId,
+          {empKey:beforeEmpKey},
+          {empKey:empKey, loc:loc, group:group, subject:subject});
+        return {ok:true, id:existingId, updated:true,
+                loc:loc, group:group, subject:subject, empKey:empKey};
+      }
+
+      // Insert новий
+      var newId = _nextPredAssignId(sh);
+      sh.appendRow([newId, loc, group, subject, empKey, new Date(), actor.id]);
+      _writeHrAudit(actor, 'pred_save_assign', newId, null,
+        {empKey:empKey, loc:loc, group:group, subject:subject});
+      return {ok:true, id:newId, created:true,
+              loc:loc, group:group, subject:subject, empKey:empKey};
+    } finally {
+      lock.releaseLock();
+    }
+  } catch(e){
+    return {ok:false, error: e.message || String(e)};
+  }
+}
+
+// POST {action:'deletePredmetnykyAssignment', actorId, id}
+function deletePredmetnykyAssignment(actorId, id){
+  try {
+    var actor = _getActor(actorId);
+    id = Number(id);
+    if (!id) return {ok:false, error:'id required'};
+
+    var lock = LockService.getScriptLock();
+    lock.waitLock(15000);
+    try {
+      var sh = _getPredAssignSheet();
+      var lastRow = sh.getLastRow();
+      if (lastRow < 2) return {ok:false, code:'NOT_FOUND', error:'Assignment not found'};
+      var data = sh.getRange(2, 1, lastRow - 1, PRED_ASSIGN_HEADER.length).getValues();
+      for (var i = 0; i < data.length; i++){
+        if (Number(data[i][0]) !== id) continue;
+        var loc = String(data[i][1] || '').trim();
+        if (!_canEditPredmetnyky(actor, loc))
+          return {ok:false, code:'PERM_DENIED', error:'Permission denied'};
+        var before = {
+          loc:     loc,
+          group:   String(data[i][2] || '').trim(),
+          subject: String(data[i][3] || '').trim(),
+          empKey:  String(data[i][4] || '').trim()
+        };
+        sh.deleteRow(i + 2);
+        _writeHrAudit(actor, 'pred_delete_assign', id, before, null);
+        return {ok:true, id:id};
+      }
+      return {ok:false, code:'NOT_FOUND', error:'Assignment not found'};
+    } finally {
+      lock.releaseLock();
+    }
+  } catch(e){
+    return {ok:false, error: e.message || String(e)};
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Salary export з Predmetnyky_Lessons (v6.11.4). Алгоритм такий
+// як v6.5 exportPredmetnyToSalary, але джерело — лист lessons:
+//   1) Кожен active catalog (loc, subject, rate) → count = унікальні
+//      (group, date) з PRED_LESSONS_TAB у (loc, subject_norm, year, month).
+//   2) fact = count × rate.
+//   3) Salary row matching по "<subject_raw> <rate>" (P1-P7).
+//   4) Дельта через Експорт_Журнал (kind='predmetnyky').
+// Target month — наступний (зарплата за лекції місяця N виплачується N+1).
+// ═══════════════════════════════════════════════════════════════════
+function exportPredmetnykyToSalary(params){
+  try {
+    params = params || {};
+    var actorId = Number(params.actorId || 0);
+    var loc     = String(params.loc || '').trim();
+    var month   = Number(params.month);
+    var year    = Number(params.year) || new Date().getFullYear();
+
+    if (!loc) return {ok:false, error:'loc обовʼязковий'};
+    if (!month || month < 1 || month > 12) return {ok:false, error:'month має бути 1-12'};
+
+    if (actorId){
+      var actor;
+      try { actor = _getActor(actorId); } catch(e){
+        return {ok:false, code:'PERM_DENIED', error:'Actor not found'};
+      }
+      if (!_canEditPredmetnyky(actor, loc))
+        return {ok:false, code:'PERM_DENIED', error:'Permission denied'};
+    }
+
+    Logger.log('[exportPredmetnykyToSalary] START loc="%s" month=%s year=%s', loc, month, year);
+
+    // 1. Catalog для локації — лише active + rate>0 + subject_norm
+    var withRate = _loadPredCatalog(loc).filter(function(a){
+      return a.active && a.rate > 0 && a.subject_norm;
+    });
+    if (!withRate.length){
+      Logger.log('[exportPredmetnykyToSalary] no active rated catalog entries for ' + loc);
+      return {ok:true, updated:0, totalFact:0, cellsWritten:0,
+              info:'No active catalog entries with rate for ' + loc, loc:loc};
+    }
+
+    // 2. Lessons → унікальні (group|date) per subject_norm
+    var lessons = _loadPredLessons(loc);
+    var lessonsBySubj = {};
+    for (var i = 0; i < lessons.length; i++){
+      var L = lessons[i];
+      var ym = _lessonYearMonth(L.date);
+      if (!ym || ym.y !== year || ym.m !== month) continue;
+      if (!lessonsBySubj[L.subject]) lessonsBySubj[L.subject] = {};
+      lessonsBySubj[L.subject][L.group + '|' + L.date] = true;
+    }
+
+    // 3. Salary registry → файл локації
+    var reg = _salaryGetRegistry();
+    if (!reg.ok) return reg;
+    var entry = null;
+    for (var j = 0; j < reg.rows.length; j++){
+      if (reg.rows[j].loc === loc){ entry = reg.rows[j]; break; }
+    }
+    if (!entry) return {ok:false, error:'Локація "' + loc + '" не знайдена у Salary-реєстрі'};
+    var locSS = SpreadsheetApp.openById(entry.sheetId);
+    var sheet = locSS.getSheetByName(entry.listName);
+    if (!sheet) return {ok:false, error:'Salary sheet "' + entry.listName + '" не знайдено'};
+
+    var nextM = _nextMonth(month, year);
+    var lastRow = Math.max(sheet.getLastRow(), 80);
+    var names = sheet.getRange(1, 1, lastRow, 1).getValues();
+    var targetMonth = nextM.month;
+    var budgetCol = (targetMonth - 1) * 3 + 3;
+    var targetMonthName = MONTHS_CAL_UA[targetMonth - 1];
+    var sourceMonthName = MONTHS_CAL_UA[month - 1];
+
+    var salaryRows = [];
+    for (var k = 3; k < names.length; k++){
+      var raw = String(names[k][0] == null ? '' : names[k][0]).trim();
+      if (!raw) continue;
+      salaryRows.push({row:k+1, raw:raw,
+        norm:_journalNormName(raw), soft:_softNorm(raw)});
+    }
+
+    var budgetColValues   = sheet.getRange(1, budgetCol, lastRow, 1).getValues();
+    var budgetColFormulas = sheet.getRange(1, budgetCol, lastRow, 1).getFormulas();
+    var journal = _readJournalForTarget(loc, 'predmetnyky', nextM.year, nextM.month);
+
+    var journalOps = [];
+    var updated = 0, totalFact = 0, cellsWritten = 0, formulaRowsSkipped = 0;
+    var p7queue = [], maxMatchedRow = 0, details = [];
+    var stats = {attempts:0, p1:0, p2:0, p3:0, p4:0, p5:0, p6:0, p7:0};
+
+    // 4. Матчинг кожного catalog entry → Salary row
+    withRate.forEach(function(a){
+      var uniqMap = lessonsBySubj[a.subject_norm];
+      var uniq = uniqMap ? Object.keys(uniqMap).length : 0;
+      var fact = uniq * a.rate;
+      var catName = a.subject_raw + ' ' + a.rate;
+      var nk = _journalNormName(catName);
+      stats.attempts++;
+
+      var found = _findPredmetnySalaryRow(salaryRows, a.subject_raw, a.rate);
+      if (!found){
+        stats.p7++;
+        p7queue.push({subject:a.subject_raw, rate:a.rate, fact:fact,
+                      lessons:uniq, catName:catName, nk:nk});
+        return;
+      }
+      stats['p' + found.priority.slice(1)]++;
+      if (found.row > maxMatchedRow) maxMatchedRow = found.row;
+
+      var rowIdx0 = found.row - 1;
+      if (budgetColFormulas[rowIdx0] && budgetColFormulas[rowIdx0][0]){
+        formulaRowsSkipped++;
+        return;
+      }
+      var currentValue = Number(budgetColValues[rowIdx0][0]) || 0;
+      var je = journal.byNormName[nk];
+      var lastWritten = je ? je.sum : 0;
+      var baseValue = currentValue - lastWritten;
+      var newValue = baseValue + fact;
+      if (newValue !== currentValue){
+        sheet.getRange(found.row, budgetCol).setValue(newValue);
+        cellsWritten++;
+      }
+      if (fact !== lastWritten){
+        journalOps.push({nk:nk, loc:loc, kind:'predmetnyky', name:catName,
+          year:nextM.year, month:nextM.month, newSum:fact});
+      }
+      updated++;
+      totalFact += fact;
+      details.push({subject:catName, matchedAs:found.matchedAs, priority:found.priority,
+        fact:fact, lessons:uniq, row:found.row});
+    });
+
+    // 5. P7 — додаємо нові рядки після останнього зматченого
+    p7queue.forEach(function(p){
+      var newRow;
+      if (maxMatchedRow > 0){
+        sheet.insertRowsAfter(maxMatchedRow, 1);
+        newRow = maxMatchedRow + 1;
+        maxMatchedRow = newRow;
+      } else {
+        newRow = sheet.getLastRow() + 1;
+      }
+      sheet.getRange(newRow, 1).setValue(p.subject + ' ' + p.rate);
+      sheet.getRange(newRow, budgetCol).setValue(p.fact);
+      cellsWritten++;
+      journalOps.push({nk:p.nk, loc:loc, kind:'predmetnyky', name:p.catName,
+        year:nextM.year, month:nextM.month, newSum:p.fact});
+      updated++;
+      totalFact += p.fact;
+      details.push({subject:p.catName, fact:p.fact, lessons:p.lessons,
+        priority:'P7', row:newRow, status:'row-added'});
+    });
+
+    _commitJournalUpdates(journal, journalOps);
+    Logger.log('[%s] СВОДКА: catalog=%s | P1=%s P2=%s P3=%s P4=%s P5=%s P6=%s P7=%s | клітинок=%s формул-пропущено=%s',
+      loc, stats.attempts, stats.p1, stats.p2, stats.p3, stats.p4, stats.p5, stats.p6, stats.p7,
+      cellsWritten, formulaRowsSkipped);
+
+    return {
+      ok: true,
+      loc: loc,
+      sourceMonth: sourceMonthName,
+      targetMonth: targetMonthName,
+      budgetCol: budgetCol,
+      updated: updated,
+      totalFact: totalFact,
+      cellsWritten: cellsWritten,
+      formulaRowsSkipped: formulaRowsSkipped,
+      rowsAdded: stats.p7,
+      matchStats: stats,
+      details: details
+    };
+  } catch(e){
+    Logger.log('[exportPredmetnykyToSalary] EXCEPTION: %s\n%s', e && e.message, e && e.stack);
+    return {ok:false, error: String(e && e.message || e)};
   }
 }
 
