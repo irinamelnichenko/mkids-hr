@@ -7216,8 +7216,32 @@ function deletePredmetnykyAssignment(actorId, id){
 // Target month — наступний (зарплата за лекції місяця N виплачується N+1).
 // ═══════════════════════════════════════════════════════════════════
 function exportPredmetnykyToSalary(params){
+  params = params || {};
+
+  // Batch mode: locations: [...] → виклик по кожній локації окремо.
+  if (Array.isArray(params.locations)){
+    Logger.log('[exportPredmetnykyToSalary] BATCH locs=%s month=%s/%s',
+      params.locations.length, params.month, params.year);
+    var batchResults = [], totFact = 0, totUpd = 0, totCells = 0;
+    for (var li = 0; li < params.locations.length; li++){
+      var sub = exportPredmetnykyToSalary({
+        actorId: params.actorId,
+        loc:     params.locations[li],
+        year:    params.year,
+        month:   params.month
+      });
+      batchResults.push(sub);
+      if (sub && sub.ok){
+        totFact  += (sub.totalFact   || 0);
+        totUpd   += (sub.updated     || 0);
+        totCells += (sub.cellsWritten|| 0);
+      }
+    }
+    return {ok:true, batch:true, locations: batchResults,
+            totalFact: totFact, totalUpdated: totUpd, totalCellsWritten: totCells};
+  }
+
   try {
-    params = params || {};
     var actorId = Number(params.actorId || 0);
     var loc     = String(params.loc || '').trim();
     var month   = Number(params.month);
@@ -7295,7 +7319,12 @@ function exportPredmetnykyToSalary(params){
     var p7queue = [], maxMatchedRow = 0, details = [];
     var stats = {attempts:0, p1:0, p2:0, p3:0, p4:0, p5:0, p6:0, p7:0};
 
-    // 4. Матчинг кожного catalog entry → Salary row
+    // 4. Матчинг кожного catalog entry → Salary row.
+    // OVERWRITE-логіка: клітинка "<Subject> <Rate>" у Salary належить
+    // ВИКЛЮЧНО predmetnyky (ніхто інший туди не пише), тому пишемо fact
+    // напряму без додавання до попереднього значення. Це фіксить баг де
+    // ручні дані / старий v6.5 експорт залишили "забруднену" клітинку
+    // і дельта-логіка (currentValue - 0 + fact) накопичувала суму.
     withRate.forEach(function(a){
       var uniqMap = lessonsBySubj[a.subject_norm];
       var uniq = uniqMap ? Object.keys(uniqMap).length : 0;
@@ -7309,6 +7338,8 @@ function exportPredmetnykyToSalary(params){
         stats.p7++;
         p7queue.push({subject:a.subject_raw, rate:a.rate, fact:fact,
                       lessons:uniq, catName:catName, nk:nk});
+        Logger.log('[%s] %s → P7 (рядок не знайдено) | lessons=%s × %s = %s',
+          loc, catName, uniq, a.rate, fact);
         return;
       }
       stats['p' + found.priority.slice(1)]++;
@@ -7317,17 +7348,18 @@ function exportPredmetnykyToSalary(params){
       var rowIdx0 = found.row - 1;
       if (budgetColFormulas[rowIdx0] && budgetColFormulas[rowIdx0][0]){
         formulaRowsSkipped++;
+        Logger.log('[%s] %s → SKIP (формула у Salary row %s)', loc, catName, found.row);
         return;
       }
       var currentValue = Number(budgetColValues[rowIdx0][0]) || 0;
-      var je = journal.byNormName[nk];
-      var lastWritten = je ? je.sum : 0;
-      var baseValue = currentValue - lastWritten;
-      var newValue = baseValue + fact;
+      var newValue    = fact;                  // ← OVERWRITE (не дельта)
       if (newValue !== currentValue){
         sheet.getRange(found.row, budgetCol).setValue(newValue);
         cellsWritten++;
       }
+      // Журнал лишається для аудиту (last_written_sum + timestamp).
+      var je = journal.byNormName[nk];
+      var lastWritten = je ? je.sum : 0;
       if (fact !== lastWritten){
         journalOps.push({nk:nk, loc:loc, kind:'predmetnyky', name:catName,
           year:nextM.year, month:nextM.month, newSum:fact});
@@ -7335,7 +7367,10 @@ function exportPredmetnykyToSalary(params){
       updated++;
       totalFact += fact;
       details.push({subject:catName, matchedAs:found.matchedAs, priority:found.priority,
-        fact:fact, lessons:uniq, row:found.row});
+        fact:fact, lessons:uniq, row:found.row, oldValue:currentValue, newValue:newValue});
+      Logger.log('[%s] %s → %s | lessons=%s × %s = %s | Salary row=%s col=%s | %s → %s',
+        loc, catName, found.priority, uniq, a.rate, fact,
+        found.row, budgetCol, currentValue, newValue);
     });
 
     // 5. P7 — додаємо нові рядки після останнього зматченого
