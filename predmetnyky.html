@@ -342,7 +342,7 @@ select,input,textarea{font-family:inherit}
 .card-hd select{padding:8px 10px;border:1.5px solid var(--gray2);
   border-radius:8px;font-size:13px;font-family:inherit;background:#fff}
 
-/* ── PREDMETNYKY v6.11.5 — dates × subjects matrix ──────────────── */
+/* ── PREDMETNYKY v6.11.6 — groups × days timesheet ──────────────── */
 .pred-filters{display:flex;align-items:center;flex-wrap:wrap;gap:10px 14px;
   background:#fff;border-radius:10px;padding:12px 16px;margin:10px 0 14px;
   box-shadow:0 1px 3px rgba(0,0,0,.05)}
@@ -355,86 +355,92 @@ select,input,textarea{font-family:inherit}
 .pred-perm-banner{background:#fff7e6;border:1px solid #ffd591;color:#874d00;
   border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:13px}
 
-.pred-grid{background:#fff;border-radius:10px;
-  box-shadow:0 1px 3px rgba(0,0,0,.06);overflow:hidden;
-  display:grid;grid-template-columns:140px repeat(5, minmax(120px, 1fr))}
-.pred-grid-cnr{background:#fcfdfe;border-bottom:1px solid #eef1f4;
-  border-right:1px solid #eef1f4}
+.pred-banner{padding:14px 18px;background:#fff;border-radius:10px;
+  box-shadow:0 1px 3px rgba(0,0,0,.06);margin-bottom:14px;
+  display:flex;align-items:center;gap:12px}
+.pred-banner-emoji{font-size:24px}
+.pred-banner-title{font-size:16px;font-weight:800;color:var(--dark)}
+.pred-banner-sub{font-size:12px;color:var(--gray);margin-top:2px}
 
-.pred-subj-hd{padding:10px 12px;border-bottom:1px solid #eef1f4;
-  background:#fcfdfe;display:flex;flex-direction:column;gap:3px;
-  font-size:12px;line-height:1.3;border-right:1px solid #eef1f4;position:relative}
-.pred-subj-hd:last-child{border-right:none}
-.pred-subj-hd.col-unassigned{background:#fffbf0}
-.pred-subj-hd.col-maxed{background:#fdecea}
-.pred-subj-name{font-size:13px;font-weight:800;color:var(--dark);
-  display:flex;align-items:center;gap:6px}
-.pred-subj-emoji{font-size:15px}
-.pred-subj-teacher{font-weight:600;color:var(--dark2);
-  display:flex;align-items:center;gap:4px;font-size:12px}
-.pred-subj-teacher.no-teacher{color:var(--gray);font-style:italic;font-weight:500}
-.pred-subj-rate{color:#16a085;font-size:11px;font-weight:600}
-.pred-subj-rate.no-rate{color:var(--red);font-weight:500}
-.pred-subj-counter{font-size:11px;font-weight:700;display:inline-block;
-  padding:2px 7px;background:#f0f4f8;color:var(--dark2);border-radius:10px;
-  align-self:flex-start;margin-top:1px}
-.pred-subj-counter.maxed{background:#fdecea;color:var(--red)}
-.pred-subj-counter.unlimited{background:#e0f2fe;color:#0369a1}
-.pred-subj-edit{background:transparent;border:none;cursor:pointer;
-  font-size:11px;opacity:.6;padding:0 2px;line-height:1}
-.pred-subj-edit:hover{opacity:1}
-.pred-subj-assignbtn{margin-top:4px;padding:4px 8px;border:1.5px solid var(--green);
-  background:#fff;color:var(--green);border-radius:6px;font-size:11px;
-  font-weight:600;cursor:pointer;align-self:flex-start;white-space:nowrap}
-.pred-subj-assignbtn:hover{background:var(--green);color:#fff}
+.pred-table-wrap{background:#fff;border-radius:10px;
+  box-shadow:0 1px 3px rgba(0,0,0,.06);overflow-x:auto;margin-bottom:8px}
+.pred-table{display:grid;min-width:fit-content}
+
+.pred-th-cnr,.pred-th-day,.pred-th-counter{padding:8px 4px;
+  background:#fcfdfe;border-bottom:2px solid #e8ecf0;
+  border-right:1px solid #eef1f4;text-align:center}
+.pred-th-cnr{font-size:11px;font-weight:700;color:var(--gray);
+  text-transform:uppercase;letter-spacing:.5px}
+.pred-th-day{display:flex;flex-direction:column;align-items:center;
+  gap:1px;line-height:1.1}
+.pred-th-day .wd{font-size:10px;color:var(--gray);font-weight:600;
+  text-transform:uppercase;letter-spacing:.3px}
+.pred-th-day .dd{font-size:13px;font-weight:800;color:var(--dark2);
+  font-variant-numeric:tabular-nums}
+.pred-th-day.weekend{background:#f4f6f8}
+.pred-th-day.weekend .wd{color:var(--red2)}
+.pred-th-day.today{border-top:3px solid var(--blue);padding-top:5px}
+.pred-th-counter{font-size:11px;font-weight:700;color:var(--gray);
+  text-transform:uppercase;letter-spacing:.5px;border-right:none}
+
+.pred-row-grp{padding:8px 12px;border-bottom:1px solid #f0f4f8;
+  border-right:1px solid #eef1f4;display:flex;flex-direction:column;gap:3px;
+  background:#fcfdfe;min-height:64px;justify-content:center}
+.pred-row-grp.forbidden{opacity:.55}
+.pred-grp-name{font-size:13px;font-weight:700;color:var(--dark)}
+.pred-grp-teacher{font-size:11px;color:var(--dark2);font-weight:600;
+  display:flex;align-items:center;gap:4px;line-height:1.2}
+.pred-grp-teacher.no-teacher{color:var(--gray);font-style:italic;font-weight:500}
+.pred-grp-assignbtn{padding:3px 7px;border:1.5px solid var(--green);
+  background:#fff;color:var(--green);border-radius:5px;font-size:11px;
+  font-weight:600;cursor:pointer;white-space:nowrap;align-self:flex-start}
+.pred-grp-assignbtn:hover{background:var(--green);color:#fff}
+.pred-grp-edit{background:transparent;border:none;cursor:pointer;
+  font-size:11px;opacity:.55;padding:0 2px;line-height:1}
+.pred-grp-edit:hover{opacity:1}
 .pred-teacher-missing{color:var(--red);font-weight:600}
 
-.pred-date-cell{padding:8px 10px;border-bottom:1px solid #f0f4f8;
-  border-right:1px solid #eef1f4;display:flex;align-items:center;
-  justify-content:space-between;gap:6px;font-size:13px;font-weight:700;
-  color:var(--dark2);font-variant-numeric:tabular-nums;background:#fafbfc}
-.pred-date-cell.row-saving{opacity:.5}
-.pred-date-del{background:transparent;border:none;cursor:pointer;
-  font-size:13px;opacity:.55;padding:2px 4px;border-radius:4px;
-  transition:all .15s;line-height:1}
-.pred-date-del:hover{opacity:1;background:#fdecea;color:var(--red)}
-.pred-date-del:disabled{opacity:.3;cursor:wait}
-
-.pred-cb-cell{padding:10px;border-bottom:1px solid #f0f4f8;
+.pred-cell-day{padding:6px;border-bottom:1px solid #f0f4f8;
   border-right:1px solid #eef1f4;display:flex;align-items:center;
   justify-content:center;cursor:pointer;transition:background .12s;
-  user-select:none;min-height:46px;position:relative}
-.pred-cb-cell:last-child{border-right:none}
-.pred-cb-cell:hover:not(.disabled){background:#f0f7ff}
-.pred-cb-cell.checked{background:#e8f8f0}
-.pred-cb-cell.checked:hover:not(.disabled){background:#d1f1de}
-.pred-cb-cell.col-unassigned{background:#fffbf0;cursor:not-allowed}
-.pred-cb-cell.col-maxed{background:#fdecea;cursor:not-allowed}
-.pred-cb-cell.col-maxed.checked{background:#fdecea;cursor:pointer}
-.pred-cb-cell.disabled{cursor:not-allowed;opacity:.7}
-.pred-cb-cell.saving{opacity:.6;cursor:wait}
+  user-select:none;min-height:64px}
+.pred-cell-day.weekend{background:#fafbfc}
+.pred-cell-day:hover:not(.disabled){background:#f0f7ff}
+.pred-cell-day.checked{background:#e8f8f0}
+.pred-cell-day.checked:hover:not(.disabled){background:#d1f1de}
+.pred-cell-day.weekend.checked{background:#dff5e8}
+.pred-cell-day.disabled{cursor:not-allowed;opacity:.5}
+.pred-cell-day.saving{opacity:.6;cursor:wait}
+.pred-cell-day.today{border-top:3px solid var(--blue)}
 
 .pred-cb{width:22px;height:22px;border-radius:5px;border:2px solid #cbd0d6;
   background:#fff;display:flex;align-items:center;justify-content:center;
   font-size:14px;font-weight:800;color:transparent;line-height:1;
   transition:all .12s}
-.pred-cb-cell:hover:not(.disabled) .pred-cb{border-color:var(--blue2)}
-.pred-cb-cell.checked .pred-cb{background:var(--green);border-color:var(--green);color:#fff}
-.pred-cb-cell.col-unassigned .pred-cb{background:#f4f6f8;border-style:dashed}
+.pred-cell-day:hover:not(.disabled) .pred-cb{border-color:var(--blue2)}
+.pred-cell-day.checked .pred-cb{background:var(--green);
+  border-color:var(--green);color:#fff}
+.pred-cell-day.disabled .pred-cb{background:#f4f6f8;border-style:dashed}
 
-.pred-bottom-row{grid-column:1 / -1;padding:12px;background:#fcfdfe;
-  border-top:1px solid #eef1f4;display:flex;align-items:center;gap:10px;
-  position:relative}
-.pred-add-btn{padding:8px 16px;background:#fff;border:1.5px dashed var(--green);
-  color:var(--green);border-radius:8px;font-size:13px;font-weight:600;
-  cursor:pointer;transition:all .15s}
-.pred-add-btn:hover{background:var(--green);color:#fff;border-style:solid}
-.pred-date-popover{display:flex;align-items:center;gap:8px;
-  background:#fff;border:1px solid var(--gray2);border-radius:8px;
-  padding:6px 8px;box-shadow:0 2px 8px rgba(0,0,0,.08)}
-.pred-date-popover input[type=date]{padding:5px 8px;border:1px solid var(--gray2);
-  border-radius:6px;font-size:13px;font-family:inherit}
-.pred-date-popover .btn{padding:5px 12px;font-size:13px}
+.pred-counter-cell{padding:8px;border-bottom:1px solid #f0f4f8;
+  display:flex;align-items:center;justify-content:center;
+  font-size:13px;font-weight:700;color:var(--dark2);
+  font-variant-numeric:tabular-nums;background:#fcfdfe}
+.pred-counter-cell.maxed{background:#fdecea;color:var(--red)}
+.pred-counter-cell.unlimited{background:#e0f2fe;color:#0369a1}
+.pred-counter-cell.forbidden{color:var(--gray);font-style:italic;font-size:11px}
+
+.pred-row-msg{border-bottom:1px solid #f0f4f8;border-right:1px solid #eef1f4;
+  padding:10px;text-align:center;color:var(--gray);font-size:12px;
+  background:#fafbfc;display:flex;align-items:center;justify-content:center;
+  min-height:64px;gap:8px;flex-wrap:wrap}
+.pred-row-msg.noteacher{background:#fffbf0;color:#874d00}
+
+.pred-footer{padding:14px 18px;background:#fff;border-radius:10px;
+  box-shadow:0 1px 3px rgba(0,0,0,.06);
+  display:flex;justify-content:flex-end;align-items:center;gap:24px;
+  font-size:14px;font-weight:700;color:var(--dark)}
+.pred-footer-num{color:var(--green);font-weight:800;font-size:16px}
 
 .pred-modal-err{background:#fdecea;border:1px solid #f5b7b1;color:#a93226;
   border-radius:6px;padding:8px 12px;font-size:13px;margin-top:8px}
@@ -443,12 +449,13 @@ select,input,textarea{font-family:inherit}
 .pred-empty-hint{color:var(--gray2);font-size:12px;margin-top:8px}
 
 @media(max-width:768px){
-  .pred-grid{grid-template-columns:90px repeat(5, minmax(70px, 1fr));font-size:11px}
-  .pred-subj-hd{padding:8px 6px;font-size:11px}
-  .pred-subj-name{font-size:12px}
-  .pred-subj-emoji{font-size:13px}
-  .pred-date-cell{padding:6px 6px;font-size:11px}
+  .pred-table-wrap{border-radius:8px}
+  .pred-row-grp{padding:6px 8px;min-height:54px}
+  .pred-grp-name{font-size:12px}
+  .pred-cell-day{min-height:54px;padding:4px}
   .pred-cb{width:18px;height:18px}
+  .pred-th-day .dd{font-size:11px}
+  .pred-counter-cell{font-size:11px}
 }
 </style>
 </head>
@@ -590,8 +597,8 @@ select,input,textarea{font-family:inherit}
     <label class="pred-filter-lbl">📍 Локація</label>
     <select id="fLoc" onchange="onFilterChange('loc')"></select>
 
-    <label class="pred-filter-lbl">👥 Група</label>
-    <select id="fGroup" onchange="onFilterChange('group')"></select>
+    <label class="pred-filter-lbl">📚 Предмет</label>
+    <select id="fSubject" onchange="onFilterChange('subject')"></select>
 
     <label class="pred-filter-lbl">📅 Місяць</label>
     <select id="fMonth" onchange="onFilterChange('month')"></select>
@@ -683,10 +690,10 @@ var PRED_EDIT_ROLES = ['cfo','ceo','coo','cco'];   // any loc; director — own 
 var S = {
   user: null,
   // ── filters ──
-  loc:       '',
-  groupType: 'Find',                    // НОВИЙ обов'язковий filter
-  year:      new Date().getFullYear(),
-  month:     new Date().getMonth() + 1,
+  loc:     '',
+  subject: 'Англійська',                // НОВИЙ обов'язковий filter (один предмет на сторінку)
+  year:    new Date().getFullYear(),
+  month:   new Date().getMonth() + 1,
   // ── data (одне завантаження getPredmetnyky) ──
   teachers:    [],
   norms:       {},
@@ -695,14 +702,13 @@ var S = {
   assignments: [],
   locations:   [],
   // ── ui ──
-  assignModal:  null,
-  datePopover:  false,                  // true коли inline date popover відкритий
-  savingCells:  {},                     // {"loc|gt|subj|date": true} — per-cell save lock
-  savingDates:  {},                     // {"loc|gt|date": true} — per-row delete lock
-  uiExtraDates: {},                     // {"loc|gt|YYYY-MM": ["DD.MM.YYYY", ...]} — додані вручну, поки без занять
+  assignModal: null,
+  savingCells: {},                       // {"loc|gt|subj|date": true} — per-cell save lock
   // ── auto-export ──
   autoExportTimer: null
 };
+
+var UA_WEEKDAY_SHORT = ['Нд','Пн','Вт','Ср','Чт','Пт','Сб'];
 
 // ── HELPERS ─────────────────────────────────
 function $(id){ return document.getElementById(id); }
@@ -1158,7 +1164,7 @@ function escapeJs(s){
   return String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
-// ── RENDERERS (v6.11.2 — matrix view) ──────
+// ── HELPERS (v6.11.6 — groups × days) ──────
 function lessonByCell(loc, groupName, subj, dateDmy){
   for (var i = 0; i < S.lessons.length; i++){
     var L = S.lessons[i];
@@ -1170,41 +1176,69 @@ function lessonByCell(loc, groupName, subj, dateDmy){
   }
   return null;
 }
-function ymKey(){ return S.year + '-' + ('0' + S.month).slice(-2); }
-function extraDatesKey(loc, groupType){
-  return loc + '|' + groupType + '|' + ymKey();
-}
-function buildDateRows(loc, groupType){
-  var groupName = GROUP_NAME_BY_TYPE[groupType];
-  var dateSet = {};
-  S.lessons.forEach(function(L){
-    if (L.loc !== loc) return;
-    if (L.group !== groupName) return;
-    var ym = lessonYM(L.date);
-    if (!ym || ym.y !== S.year || ym.m !== S.month) return;
-    dateSet[L.date] = true;
-  });
-  var extras = S.uiExtraDates[extraDatesKey(loc, groupType)] || [];
-  extras.forEach(function(d){ dateSet[d] = true; });
-  return Object.keys(dateSet).sort(function(a, b){
-    return lessonSortKey(a).localeCompare(lessonSortKey(b));
-  });
-}
 function cellLockKey(loc, gt, subj, dateDmy){ return [loc, gt, subj, dateDmy].join('|'); }
-function dateLockKey(loc, gt, dateDmy){       return [loc, gt, dateDmy].join('|'); }
+
+// Створює масив [{day, wd, isWeekend, isToday, dmy}] для (year, month).
+function buildDays(year, month){
+  var lastDay = new Date(year, month, 0).getDate();       // m=1-based
+  var t = new Date();
+  var todayDay = (t.getFullYear() === year && (t.getMonth() + 1) === month)
+    ? t.getDate() : 0;
+  var out = [];
+  var mm = ('0' + month).slice(-2);
+  for (var d = 1; d <= lastDay; d++){
+    var dt = new Date(year, month - 1, d);                // JS Date m=0-based
+    var wd = dt.getDay();                                 // 0=Sun, ..., 6=Sat
+    out.push({
+      day:       d,
+      wd:        UA_WEEKDAY_SHORT[wd],
+      isWeekend: (wd === 0 || wd === 6),
+      isToday:   (d === todayDay),
+      dmy:       ('0' + d).slice(-2) + '.' + mm + '.' + year
+    });
+  }
+  return out;
+}
+
+function countLessonsInRow(loc, groupName, subject){
+  var n = 0;
+  for (var i = 0; i < S.lessons.length; i++){
+    var L = S.lessons[i];
+    if (L.loc !== loc) continue;
+    if (L.group !== groupName) continue;
+    if (L.subject !== subject) continue;
+    var ym = lessonYM(L.date);
+    if (!ym || ym.y !== S.year || ym.m !== S.month) continue;
+    n++;
+  }
+  return n;
+}
+function countTotalForPage(loc, subject){
+  var n = 0;
+  for (var i = 0; i < S.lessons.length; i++){
+    var L = S.lessons[i];
+    if (L.loc !== loc) continue;
+    if (L.subject !== subject) continue;
+    var ym = lessonYM(L.date);
+    if (!ym || ym.y !== S.year || ym.m !== S.month) continue;
+    n++;
+  }
+  return n;
+}
 
 // ── RENDER ──────────────────────────────────
 function renderApp(){
   renderPermBanner();
-  if (!S.loc || !S.groupType){
-    $('main').innerHTML = '<div class="pred-empty">Обери локацію та групу.<div class="pred-empty-hint">' +
-      'Матриця показує дати × предмети для конкретної групи.</div></div>';
+  if (!S.loc || !S.subject){
+    $('main').innerHTML = '<div class="pred-empty">Обери локацію та предмет.' +
+      '<div class="pred-empty-hint">Табель показує заняття по групах на обраний місяць.</div></div>';
     renderFilterCount(0);
     return;
   }
-  $('main').innerHTML = renderMatrix(S.loc, S.groupType);
-  var totalLessons = countMatrixLessons(S.loc, S.groupType);
-  renderFilterCount(totalLessons);
+  $('main').innerHTML = renderBanner(S.loc, S.subject) +
+                        renderTable(S.loc, S.subject) +
+                        renderFooter(S.loc, S.subject);
+  renderFilterCount(countTotalForPage(S.loc, S.subject));
 }
 
 function renderPermBanner(){
@@ -1224,195 +1258,176 @@ function renderFilterCount(n){
   $('filterCount').textContent = n + ' ' + pluralUk(n, 'заняття', 'заняття', 'занять');
 }
 
-function countMatrixLessons(loc, groupType){
-  var groupName = GROUP_NAME_BY_TYPE[groupType];
-  var n = 0;
-  for (var i = 0; i < S.lessons.length; i++){
-    var L = S.lessons[i];
-    if (L.loc !== loc) continue;
-    if (L.group !== groupName) continue;
-    var ym = lessonYM(L.date);
-    if (!ym || ym.y !== S.year || ym.m !== S.month) continue;
-    n++;
-  }
-  return n;
+function renderBanner(loc, subject){
+  var emoji = SUBJECT_EMOJI[subject] || '📚';
+  return '<div class="pred-banner">' +
+    '<span class="pred-banner-emoji">' + emoji + '</span>' +
+    '<div>' +
+      '<div class="pred-banner-title">' + escapeHtml(subject) + ' · ' + escapeHtml(loc) + '</div>' +
+      '<div class="pred-banner-sub">' + escapeHtml(MONTHS[S.month - 1]) + ' ' + S.year + '</div>' +
+    '</div>' +
+  '</div>';
 }
 
-function renderMatrix(loc, groupType){
+function renderTable(loc, subject){
   var canEdit = canEditPred(loc);
-  var groupName = GROUP_NAME_BY_TYPE[groupType];
+  var days = buildDays(S.year, S.month);
+  var nDays = days.length;
+  var isUnlimited = (subject === PRED_UNLIMITED_SUBJ);
 
-  // Per-subject metadata: assignment, teacher, rate, norm, count, isUnlimited, isMaxed, isUnassigned
-  var subjMeta = PRED_SUBJECTS.map(function(subj){
-    var assignment  = assignmentFor(loc, groupType, subj);
-    var teacher     = assignment ? findTeacher(assignment.empKey) : null;
-    var norm        = getNormFor(loc, subj, groupType);
-    var isUnlimited = (subj === PRED_UNLIMITED_SUBJ);
-    var rate        = getRateFor(loc, subj);
-    var count = 0;
-    S.lessons.forEach(function(L){
-      if (L.loc !== loc || L.group !== groupName || L.subject !== subj) return;
-      var ym = lessonYM(L.date);
-      if (!ym || ym.y !== S.year || ym.m !== S.month) return;
-      count++;
-    });
-    var isMaxed = !isUnlimited && count >= norm;
-    return {
-      subj: subj, assignment: assignment, teacher: teacher,
-      norm: norm, isUnlimited: isUnlimited, rate: rate,
-      count: count, isMaxed: isMaxed,
-      isUnassigned: !assignment
-    };
+  // Per-group metadata
+  var rows = PRED_GROUP_TYPES.map(function(gt){
+    var groupName  = GROUP_NAME_BY_TYPE[gt];
+    var norm       = getNormFor(loc, subject, gt);
+    var isForbidden = !isUnlimited && norm <= 0;
+    var assignment = assignmentFor(loc, gt, subject);
+    var teacher    = assignment ? findTeacher(assignment.empKey) : null;
+    var count      = isForbidden ? 0 : countLessonsInRow(loc, groupName, subject);
+    var isMaxed    = !isUnlimited && count >= norm;
+    return {gt:gt, groupName:groupName, norm:norm, isUnlimited:isUnlimited,
+            isForbidden:isForbidden, assignment:assignment, teacher:teacher,
+            count:count, isMaxed:isMaxed};
   });
 
-  // Header row
-  var html = '<div class="pred-grid">';
-  html += '<div class="pred-grid-cnr"></div>';
-  subjMeta.forEach(function(m){
-    html += renderSubjHeader(loc, groupType, m, canEdit);
-  });
+  var gridCols = '200px repeat(' + nDays + ', minmax(36px, 1fr)) 90px';
+  var html = '<div class="pred-table-wrap"><div class="pred-table" style="grid-template-columns:' +
+              gridCols + '">';
 
-  // Data rows
-  var dates = buildDateRows(loc, groupType);
-  dates.forEach(function(dateDmy){
-    html += renderDateRow(loc, groupType, groupName, dateDmy, subjMeta, canEdit);
-  });
-
-  // Bottom row (add date)
-  if (canEdit){
-    html += '<div class="pred-bottom-row" id="predBottomRow">' +
-      '<button class="pred-add-btn" id="predAddDateBtn" onclick="openAddDatePopover()">+ Додати дату</button>' +
+  // ── Header row ──
+  html += '<div class="pred-th-cnr">Група / Дата</div>';
+  days.forEach(function(D){
+    var cls = 'pred-th-day';
+    if (D.isWeekend) cls += ' weekend';
+    if (D.isToday)   cls += ' today';
+    html += '<div class="' + cls + '">' +
+      '<span class="wd">' + D.wd + '</span>' +
+      '<span class="dd">' + D.day + '</span>' +
     '</div>';
-  } else {
-    html += '<div class="pred-bottom-row"><span class="muted">Тільки перегляд</span></div>';
-  }
+  });
+  html += '<div class="pred-th-counter">Заняття</div>';
 
-  html += '</div>';
+  // ── Data rows ──
+  rows.forEach(function(R){
+    html += renderGroupLabel(loc, R, canEdit);
+    if (R.isForbidden){
+      html += '<div class="pred-row-msg" style="grid-column: 2 / -2">' +
+        'Не передбачено для цієї групи</div>';
+      html += '<div class="pred-counter-cell forbidden">—</div>';
+    } else if (!R.assignment){
+      html += '<div class="pred-row-msg noteacher" style="grid-column: 2 / -2">' +
+        '⚠️ Спершу призначте викладача — клікни «+ Обрати» у назві групи</div>';
+      html += '<div class="pred-counter-cell">' +
+        (R.isUnlimited ? '0 (∞)' : '0 / ' + R.norm) + '</div>';
+    } else {
+      days.forEach(function(D){
+        html += renderDayCell(loc, R, subject, D, canEdit);
+      });
+      var counterCls = 'pred-counter-cell';
+      var counterTxt;
+      if (R.isUnlimited){
+        counterCls += ' unlimited';
+        counterTxt = R.count + ' (∞)';
+      } else {
+        if (R.isMaxed) counterCls += ' maxed';
+        counterTxt = R.count + ' / ' + R.norm;
+      }
+      html += '<div class="' + counterCls + '">' + counterTxt + '</div>';
+    }
+  });
 
-  // Hint якщо матриця порожня
-  if (!dates.length){
-    html += '<div class="pred-empty" style="margin-top:16px">Поки що жодного заняття.' +
-      (canEdit ? '<div class="pred-empty-hint">Натисни «+ Додати дату» щоб почати.</div>' : '') +
-    '</div>';
-  }
+  html += '</div></div>';
   return html;
 }
 
-function renderSubjHeader(loc, groupType, m, canEdit){
-  var emoji = SUBJECT_EMOJI[m.subj] || '📚';
-  var colCls = '';
-  if (m.isUnassigned) colCls = ' col-unassigned';
-  else if (m.isMaxed) colCls = ' col-maxed';
-
-  // ── Unassigned ──
-  if (m.isUnassigned){
-    var candidates = teachersFor(loc, m.subj);
-    var noCandidates = !candidates.length;
-    var btn = canEdit
-      ? '<button class="pred-subj-assignbtn" onclick="openAssign(\'' +
-          escapeJs(loc) + '\', \'' + groupType + '\', \'' + escapeJs(m.subj) + '\', null)">' +
-        (noCandidates ? 'Додати в HR' : '+ Обрати') + '</button>'
-      : '';
-    return '<div class="pred-subj-hd' + colCls + '">' +
-      '<div class="pred-subj-name"><span class="pred-subj-emoji">' + emoji + '</span>' +
-        escapeHtml(m.subj) + '</div>' +
-      '<div class="pred-subj-teacher no-teacher">Не призначено</div>' +
-      btn +
-    '</div>';
-  }
-
-  // ── Assigned ──
-  var teacherLbl = m.teacher
-    ? escapeHtml(m.teacher.name)
-    : '<span class="pred-teacher-missing">⚠️ Невідомий</span>';
-  var editBtn = canEdit
-    ? '<button class="pred-subj-edit" title="Замінити викладача" onclick="openAssign(\'' +
-        escapeJs(loc) + '\', \'' + groupType + '\', \'' + escapeJs(m.subj) + '\', \'' +
-        escapeJs(m.assignment.empKey) + '\')">✏️</button>'
-    : '';
-  var rateHtml = (m.rate != null)
-    ? '<span class="pred-subj-rate">' + fmtN(m.rate) + '₴</span>'
-    : '<span class="pred-subj-rate no-rate">— ₴</span>';
-  var counterHtml;
-  if (m.isUnlimited){
-    counterHtml = '<span class="pred-subj-counter unlimited">' + m.count + ' (∞)</span>';
+function renderGroupLabel(loc, R, canEdit){
+  var cls = 'pred-row-grp' + (R.isForbidden ? ' forbidden' : '');
+  var nameHtml = '<div class="pred-grp-name">' + escapeHtml(R.groupName) + '</div>';
+  var teacherHtml = '';
+  if (R.isForbidden){
+    teacherHtml = '';                                          // нема сенсу показувати
+  } else if (R.assignment){
+    if (R.teacher){
+      var editBtn = canEdit
+        ? '<button class="pred-grp-edit" title="Замінити" onclick="openAssign(\'' +
+            escapeJs(loc) + '\', \'' + R.gt + '\', \'' + escapeJs(S.subject) + '\', \'' +
+            escapeJs(R.assignment.empKey) + '\')">✏️</button>'
+        : '';
+      teacherHtml = '<div class="pred-grp-teacher">' +
+        escapeHtml(R.teacher.name) + ' ' + editBtn + '</div>';
+    } else {
+      var fixBtn = canEdit
+        ? '<button class="pred-grp-edit" title="Замінити" onclick="openAssign(\'' +
+            escapeJs(loc) + '\', \'' + R.gt + '\', \'' + escapeJs(S.subject) + '\', \'' +
+            escapeJs(R.assignment.empKey) + '\')">✏️</button>'
+        : '';
+      teacherHtml = '<div class="pred-grp-teacher pred-teacher-missing">⚠️ Невідомий ' + fixBtn + '</div>';
+    }
+  } else if (canEdit){
+    teacherHtml = '<button class="pred-grp-assignbtn" onclick="openAssign(\'' +
+        escapeJs(loc) + '\', \'' + R.gt + '\', \'' + escapeJs(S.subject) + '\', null)">+ Обрати</button>';
   } else {
-    var cls = m.isMaxed ? 'pred-subj-counter maxed' : 'pred-subj-counter';
-    counterHtml = '<span class="' + cls + '">' + m.count + ' / ' + m.norm + '</span>';
+    teacherHtml = '<div class="pred-grp-teacher no-teacher">Не призначено</div>';
   }
-  return '<div class="pred-subj-hd' + colCls + '">' +
-    '<div class="pred-subj-name"><span class="pred-subj-emoji">' + emoji + '</span>' +
-      escapeHtml(m.subj) + '</div>' +
-    '<div class="pred-subj-teacher">' + teacherLbl + ' ' + editBtn + '</div>' +
-    rateHtml +
-    counterHtml +
-  '</div>';
+  return '<div class="' + cls + '">' + nameHtml + teacherHtml + '</div>';
 }
 
-function renderDateRow(loc, groupType, groupName, dateDmy, subjMeta, canEdit){
-  var rowSaving = !!S.savingDates[dateLockKey(loc, groupType, dateDmy)];
-  var rowCls = 'pred-date-cell' + (rowSaving ? ' row-saving' : '');
-  var delDisabled = (!canEdit || rowSaving) ? ' disabled' : '';
-  var delBtn = canEdit
-    ? '<button class="pred-date-del" onclick="onDeleteDateRow(\'' +
-        escapeJs(loc) + '\', \'' + groupType + '\', \'' + escapeJs(dateDmy) + '\')"' +
-        delDisabled + ' title="Видалити всі заняття цієї дати">🗑</button>'
-    : '';
-  var html = '<div class="' + rowCls + '">' +
-    '<span>' + escapeHtml(dateDmy) + '</span>' + delBtn +
-  '</div>';
-  subjMeta.forEach(function(m){
-    html += renderCheckbox(loc, groupType, groupName, m, dateDmy, canEdit);
-  });
-  return html;
-}
-
-function renderCheckbox(loc, groupType, groupName, m, dateDmy, canEdit){
-  var lesson = lessonByCell(loc, groupName, m.subj, dateDmy);
+function renderDayCell(loc, R, subject, D, canEdit){
+  var lesson  = lessonByCell(loc, R.groupName, subject, D.dmy);
   var checked = !!lesson;
-  var saving  = !!S.savingCells[cellLockKey(loc, groupType, m.subj, dateDmy)];
+  var lockKey = cellLockKey(loc, R.gt, subject, D.dmy);
+  var saving  = !!S.savingCells[lockKey];
 
-  // Disabled rules:
-  //   • view-only → disabled
-  //   • unassigned column → disabled
-  //   • maxed column AND not currently checked → disabled (still allow uncheck of existing)
-  //   • saving in flight → disabled visually
-  var disabled = !canEdit
-    || m.isUnassigned
-    || (m.isMaxed && !checked);
+  // Disabled:
+  //   • view-only або saving — disabled visually
+  //   • maxed + не checked — disabled (можна uncheck існуючі)
+  //   • R.assignment === null обробляється у renderTable окремо (msg-row), сюди не доходить
+  var disabled = !canEdit || (R.isMaxed && !checked);
 
-  var classes = 'pred-cb-cell';
-  if (checked)      classes += ' checked';
-  if (disabled)     classes += ' disabled';
-  if (saving)       classes += ' saving';
-  if (m.isUnassigned) classes += ' col-unassigned';
-  else if (m.isMaxed) classes += ' col-maxed';
+  var cls = 'pred-cell-day';
+  if (D.isWeekend) cls += ' weekend';
+  if (D.isToday)   cls += ' today';
+  if (checked)     cls += ' checked';
+  if (disabled)    cls += ' disabled';
+  if (saving)      cls += ' saving';
 
   var handler = (!disabled && !saving)
-    ? ' onclick="onCheckboxToggle(\'' + escapeJs(loc) + '\', \'' + groupType +
-      '\', \'' + escapeJs(m.subj) + '\', \'' + escapeJs(dateDmy) + '\')"'
+    ? ' onclick="onCheckboxToggle(\'' + escapeJs(loc) + '\', \'' + R.gt +
+      '\', \'' + escapeJs(subject) + '\', \'' + D.dmy + '\')"'
     : '';
   var title = disabled
-    ? (m.isUnassigned ? 'Спершу признач викладача' :
-       (m.isMaxed ? 'Норму досягнуто' : ''))
+    ? (R.isMaxed && !checked ? 'Норму досягнуто' : '')
     : (checked ? 'Натисни щоб видалити заняття' : 'Натисни щоб провести заняття');
 
-  return '<div class="' + classes + '"' + handler +
+  return '<div class="' + cls + '"' + handler +
     (title ? ' title="' + escapeHtml(title) + '"' : '') + '>' +
     '<span class="pred-cb">✓</span>' +
   '</div>';
 }
 
-// ── FILTERS & CELL HANDLERS ─────────────────
+function renderFooter(loc, subject){
+  var total = countTotalForPage(loc, subject);
+  var rate = getRateFor(loc, subject);
+  var sumHtml;
+  if (rate != null){
+    sumHtml = 'Сума: <span class="pred-footer-num">' + fmtN(total * rate) + ' ₴</span>';
+  } else {
+    sumHtml = '<span class="muted">Ставка не вказана</span>';
+  }
+  return '<div class="pred-footer">' +
+    '<span>Разом: <span class="pred-footer-num">' + total + '</span> ' +
+      pluralUk(total, 'заняття', 'заняття', 'занять') + '</span>' +
+    '<span>' + sumHtml + '</span>' +
+  '</div>';
+}
+
+// ── FILTERS & HANDLERS ──────────────────────
 function onFilterChange(which){
-  if (which === 'loc')   S.loc = $('fLoc').value;
-  if (which === 'group') S.groupType = $('fGroup').value;
+  if (which === 'loc')     S.loc = $('fLoc').value;
+  if (which === 'subject') S.subject = $('fSubject').value;
   if (which === 'month'){
     S.year  = Number($('fYear').value)  || S.year;
     S.month = Number($('fMonth').value) || S.month;
   }
-  // Зміна фільтрів закриває попап додавання дати
-  S.datePopover = false;
   renderApp();
 }
 function refreshAll(){
@@ -1427,7 +1442,7 @@ function refreshAll(){
   });
 }
 
-// ── CHECKBOX TOGGLE (v6.11.5) ───────────────
+// ── CHECKBOX TOGGLE ─────────────────────────
 // Per-cell lock + idempotent upsert у S.lessons (фікс багу "1=2").
 function onCheckboxToggle(loc, groupType, subj, dateDmy){
   if (!canEditPred(loc)){ showToast('🚫 Немає дозволу', 'err'); return; }
@@ -1461,8 +1476,6 @@ function onCheckboxToggle(loc, groupType, subj, dateDmy){
         return;
       }
       S.lessons = S.lessons.filter(function(L){ return L.id !== existing.id; });
-      // Дату лишаємо в uiExtraDates щоб рядок не зник (якщо інші чекбокси теж порожні)
-      _ensureExtraDate(loc, groupType, dateDmy);
       renderApp();
       scheduleAutoExport(loc);
     }).catch(function(e){
@@ -1504,8 +1517,6 @@ function onCheckboxToggle(loc, groupType, subj, dateDmy){
         subject: subj,
         date:    dateDmy
       });
-      // Дата тепер реально у lessons — прибираємо з uiExtraDates
-      _removeExtraDate(loc, groupType, dateDmy);
       renderApp();
       scheduleAutoExport(loc);
     }).catch(function(e){
@@ -1514,120 +1525,6 @@ function onCheckboxToggle(loc, groupType, subj, dateDmy){
       showToast('Помилка мережі: ' + (e && e.message || e), 'err');
     });
   }
-}
-
-// ── DELETE WHOLE DATE ROW ───────────────────
-function onDeleteDateRow(loc, groupType, dateDmy){
-  if (!canEditPred(loc)){ showToast('🚫 Немає дозволу', 'err'); return; }
-  var groupName = GROUP_NAME_BY_TYPE[groupType];
-  var rowKey = dateLockKey(loc, groupType, dateDmy);
-  if (S.savingDates[rowKey]) return;
-
-  var toDelete = S.lessons.filter(function(L){
-    return L.loc === loc && L.group === groupName && L.date === dateDmy;
-  });
-
-  if (!toDelete.length){
-    // Дата лише в uiExtraDates — просто прибрати з UI
-    _removeExtraDate(loc, groupType, dateDmy);
-    renderApp();
-    return;
-  }
-
-  var n = toDelete.length;
-  if (!confirm('Видалити ' + n + ' ' + pluralUk(n, 'заняття', 'заняття', 'занять') +
-               ' за ' + dateDmy + '?')) return;
-
-  S.savingDates[rowKey] = true;
-  renderApp();
-
-  var promises = toDelete.map(function(L){
-    return apiPost({
-      action:'deletePredmetnykyLesson', actorId: S.user.id, lessonId: L.id
-    }).then(function(res){
-      return {id: L.id, res: res};
-    }).catch(function(e){
-      return {id: L.id, error: e};
-    });
-  });
-
-  Promise.all(promises).then(function(results){
-    delete S.savingDates[rowKey];
-    var deletedIds = [];
-    var errs = [];
-    results.forEach(function(r){
-      if (r.error){ errs.push(r.id + ': ' + (r.error.message || r.error)); return; }
-      if (r.res && r.res.ok)                              deletedIds.push(r.id);
-      else if (r.res && r.res.code === 'NOT_FOUND')       deletedIds.push(r.id);
-      else                                                errs.push(r.id + ': ' + ((r.res && r.res.error) || 'fail'));
-    });
-    if (deletedIds.length){
-      var set = {};
-      deletedIds.forEach(function(id){ set[id] = true; });
-      S.lessons = S.lessons.filter(function(L){ return !set[L.id]; });
-    }
-    _removeExtraDate(loc, groupType, dateDmy);
-    renderApp();
-    if (errs.length){
-      showToast('⚠️ Видалено ' + deletedIds.length + ' з ' + results.length + '. Помилки: ' + errs.join(' | '), 'err');
-    } else {
-      showToast('✅ Видалено ' + deletedIds.length + ' ' + pluralUk(deletedIds.length, 'заняття', 'заняття', 'занять'), 'ok');
-    }
-    scheduleAutoExport(loc);
-  });
-}
-
-// ── INLINE DATE POPOVER ────────────────────
-function _ensureExtraDate(loc, groupType, dateDmy){
-  var key = extraDatesKey(loc, groupType);
-  if (!S.uiExtraDates[key]) S.uiExtraDates[key] = [];
-  if (S.uiExtraDates[key].indexOf(dateDmy) === -1) S.uiExtraDates[key].push(dateDmy);
-}
-function _removeExtraDate(loc, groupType, dateDmy){
-  var key = extraDatesKey(loc, groupType);
-  if (!S.uiExtraDates[key]) return;
-  S.uiExtraDates[key] = S.uiExtraDates[key].filter(function(d){ return d !== dateDmy; });
-  if (!S.uiExtraDates[key].length) delete S.uiExtraDates[key];
-}
-function openAddDatePopover(){
-  if (!canEditPred(S.loc)){ showToast('🚫 Немає дозволу', 'err'); return; }
-  var row = $('predBottomRow');
-  if (!row) return;
-  // Default — сьогодні якщо у фільтрованому місяці, інакше 1-ше число.
-  var d = new Date();
-  var defaultIso = (d.getFullYear() === S.year && (d.getMonth() + 1) === S.month)
-    ? todayIso()
-    : (S.year + '-' + ('0' + S.month).slice(-2) + '-01');
-  row.innerHTML =
-    '<button class="pred-add-btn" disabled>+ Додати дату</button>' +
-    '<div class="pred-date-popover">' +
-      '<input type="date" id="popoverDateInput" value="' + defaultIso + '">' +
-      '<button class="btn btn-primary btn-sm" onclick="submitAddDatePopover()">Додати</button>' +
-      '<button class="btn btn-secondary btn-sm" onclick="cancelAddDatePopover()">Скасувати</button>' +
-    '</div>';
-  S.datePopover = true;
-  setTimeout(function(){ var el = $('popoverDateInput'); if (el) el.focus(); }, 50);
-}
-function cancelAddDatePopover(){
-  S.datePopover = false;
-  renderApp();
-}
-function submitAddDatePopover(){
-  var iso = $('popoverDateInput') && $('popoverDateInput').value;
-  if (!iso){ showToast('Вкажи дату', 'err'); return; }
-  var ymISO = /^(\d{4})-(\d{1,2})-/.exec(iso);
-  if (ymISO){
-    var y = Number(ymISO[1]), mo = Number(ymISO[2]);
-    if (y !== S.year || mo !== S.month){
-      showToast('⚠️ Дата має бути у обраному місяці (' +
-                MONTHS[S.month - 1] + ' ' + S.year + ')', 'err');
-      return;
-    }
-  }
-  var dmy = isoToDmy(iso);
-  _ensureExtraDate(S.loc, S.groupType, dmy);
-  S.datePopover = false;
-  renderApp();
 }
 
 // ── ASSIGN MODAL (v6.11.4) ──────────────────
@@ -1805,7 +1702,6 @@ function runAutoExport(loc){
 document.addEventListener('keydown', function(e){
   if (e.key !== 'Escape') return;
   if (S.assignModal) { closeAssign(); return; }
-  if (S.datePopover) { cancelAddDatePopover(); return; }
 });
 
 // ── INIT ────────────────────────────────────
@@ -1842,11 +1738,12 @@ function populateLocSel(){
   $('syncIndicator').classList.remove('hidden');
   setSync('idle');
 
-  // Group dropdown — обов'язковий filter
-  $('fGroup').innerHTML = PRED_GROUP_TYPES.map(function(gt){
-    return '<option value="' + gt + '">' + escapeHtml(GROUP_NAME_BY_TYPE[gt]) + '</option>';
+  // Subject dropdown — обов'язковий filter
+  $('fSubject').innerHTML = PRED_SUBJECTS.map(function(s){
+    var em = SUBJECT_EMOJI[s] || '📚';
+    return '<option value="' + escapeHtml(s) + '">' + em + ' ' + escapeHtml(s) + '</option>';
   }).join('');
-  $('fGroup').value = S.groupType;
+  $('fSubject').value = S.subject;
 
   // Populate Ukrainian month/year dropdowns
   $('fMonth').innerHTML = MONTHS.map(function(m, i){
