@@ -348,8 +348,7 @@ select,input,textarea{font-family:inherit}
   box-shadow:0 1px 3px rgba(0,0,0,.05)}
 .pred-filter-lbl{font-size:12px;font-weight:700;color:var(--gray);
   text-transform:uppercase;letter-spacing:.5px}
-.pred-filters select,
-.pred-filters input[type="month"]{padding:7px 10px;border:1px solid #d6d9dd;
+.pred-filters select{padding:7px 10px;border:1px solid #d6d9dd;
   border-radius:6px;font-size:14px;background:#fff}
 .pred-filter-count{margin-left:auto;font-size:13px;color:var(--gray);font-weight:600}
 
@@ -552,7 +551,8 @@ select,input,textarea{font-family:inherit}
     <select id="fLoc" onchange="onFilterChange('loc')"></select>
 
     <label class="pred-filter-lbl">📅 Місяць</label>
-    <input type="month" id="fMonth" onchange="onFilterChange('month')">
+    <select id="fMonth" onchange="onFilterChange('month')"></select>
+    <select id="fYear" onchange="onFilterChange('month')"></select>
 
     <span class="pred-filter-count" id="filterCount">—</span>
   </div>
@@ -1308,8 +1308,8 @@ function renderCell(idx, lesson, showInitials, canEdit, loc, groupType, subj){
 function onFilterChange(which){
   if (which === 'loc') S.loc = $('fLoc').value;
   if (which === 'month'){
-    var m = /^(\d{4})-(\d{2})$/.exec($('fMonth').value);
-    if (m){ S.year = Number(m[1]); S.month = Number(m[2]); }
+    S.year  = Number($('fYear').value)  || S.year;
+    S.month = Number($('fMonth').value) || S.month;
   }
   renderApp();
 }
@@ -1493,9 +1493,16 @@ function populateLocSel(){
   $('syncIndicator').classList.remove('hidden');
   setSync('idle');
 
-  // Default month → current
-  var d = new Date();
-  $('fMonth').value = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2);
+  // Populate Ukrainian month/year dropdowns
+  $('fMonth').innerHTML = MONTHS.map(function(m, i){
+    return '<option value="' + (i + 1) + '">' + m + '</option>';
+  }).join('');
+  $('fMonth').value = String(S.month);
+
+  $('fYear').innerHTML = [2025, 2026, 2027].map(function(y){
+    return '<option value="' + y + '">' + y + '</option>';
+  }).join('');
+  $('fYear').value = String(S.year);
 
   Promise.all([
     apiGet('getLocations')
