@@ -341,6 +341,74 @@ select,input,textarea{font-family:inherit}
 .att-fg select,.att-fg input{min-width:160px}
 .card-hd select{padding:8px 10px;border:1.5px solid var(--gray2);
   border-radius:8px;font-size:13px;font-family:inherit;background:#fff}
+
+/* ── PREDMETNYKY v6.11 ─────────────────────────────────────────── */
+.pred-filters{display:flex;align-items:center;flex-wrap:wrap;gap:10px 14px;
+  background:#fff;border-radius:10px;padding:12px 16px;margin:10px 0 14px;
+  box-shadow:0 1px 3px rgba(0,0,0,.05)}
+.pred-filter-lbl{font-size:12px;font-weight:700;color:var(--gray);
+  text-transform:uppercase;letter-spacing:.5px}
+.pred-filters select,
+.pred-filters input[type="month"]{padding:7px 10px;border:1px solid #d6d9dd;
+  border-radius:6px;font-size:14px;background:#fff}
+.pred-filter-count{margin-left:auto;font-size:13px;color:var(--gray);font-weight:600}
+
+.pred-perm-banner{background:#fff7e6;border:1px solid #ffd591;color:#874d00;
+  border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:13px}
+
+.pred-teacher{background:#fff;border-radius:10px;margin-bottom:10px;
+  box-shadow:0 1px 3px rgba(0,0,0,.05);overflow:hidden}
+.pred-teacher-hd{display:flex;align-items:center;gap:12px;padding:14px 18px;
+  cursor:pointer;user-select:none;border-left:4px solid transparent;
+  transition:background .15s,border-color .15s}
+.pred-teacher-hd:hover{background:#f6f9fc}
+.pred-teacher-hd.is-expanded{border-left-color:var(--green);background:#f4fbf7}
+.pred-teacher-emoji{font-size:22px}
+.pred-teacher-main{flex:1;min-width:0}
+.pred-teacher-title{font-weight:700;font-size:15px;color:var(--dark)}
+.pred-teacher-meta{font-size:12px;color:var(--gray);margin-top:3px}
+.pred-teacher-rate{font-weight:600;font-size:13px;color:#16a085;white-space:nowrap}
+.pred-teacher-rate.no-rate{color:#c0392b;font-weight:500}
+.pred-teacher-chevron{font-size:14px;color:var(--gray);width:18px;text-align:center;
+  transition:transform .15s}
+.pred-teacher-hd.is-expanded .pred-teacher-chevron{transform:rotate(90deg)}
+
+.pred-teacher-body{padding:4px 18px 14px;border-top:1px solid #eef1f4;background:#fcfdfe}
+
+.pred-group-block{display:flex;flex-direction:column;gap:6px;padding:10px 0;
+  border-bottom:1px dashed #e1e5ea}
+.pred-group-block:last-child{border-bottom:none}
+.pred-group-hd{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.pred-group-name{font-weight:600;font-size:14px;color:var(--dark)}
+.pred-group-loc{font-size:12px;color:var(--gray);font-weight:500}
+.pred-group-counter{margin-left:auto;font-size:13px;font-weight:700;color:var(--dark2)}
+.pred-group-counter.maxed{color:#c0392b}
+.pred-group-counter.unlimited{color:#16a085}
+
+.pred-lessons-list{display:flex;flex-wrap:wrap;gap:6px;padding:4px 0}
+.pred-lesson-chip{display:inline-flex;align-items:center;gap:6px;
+  background:#eafaf1;border:1px solid #c8eed8;color:#1d6e44;
+  padding:4px 8px 4px 10px;border-radius:14px;font-size:12px;font-weight:600}
+.pred-lesson-del{cursor:pointer;color:#c0392b;font-size:13px;opacity:.75;
+  background:none;border:none;padding:0;line-height:1}
+.pred-lesson-del:hover{opacity:1}
+
+.pred-group-add{padding:6px 14px;font-size:13px;font-weight:600;
+  background:#fff;border:1px dashed #16a085;color:#16a085;border-radius:6px;
+  cursor:pointer;align-self:flex-start;transition:background .15s}
+.pred-group-add:hover:not(:disabled){background:#e8f8f3}
+.pred-group-add:disabled{border-color:#d0d4d9;color:#9aa1a8;
+  cursor:not-allowed;background:#f4f6f8}
+
+.pred-group-forbidden{font-size:12px;color:var(--gray);font-style:italic;
+  background:#f4f6f8;padding:6px 10px;border-radius:4px;align-self:flex-start}
+.pred-group-maxed-msg{font-size:12px;font-weight:700;color:#c0392b;
+  background:#fdecea;padding:6px 10px;border-radius:4px;align-self:flex-start}
+
+.pred-modal-err{background:#fdecea;border:1px solid #f5b7b1;color:#a93226;
+  border-radius:6px;padding:8px 12px;font-size:13px;margin-top:8px}
+
+.pred-empty{text-align:center;color:var(--gray);padding:40px 20px;font-size:14px}
 </style>
 </head>
 <body>
@@ -467,7 +535,7 @@ select,input,textarea{font-family:inherit}
     <button class="menu-toggle" onclick="toggleSidebar()" aria-label="Меню">☰</button>
     <div style="flex:1;min-width:260px">
       <h1>🏫 Вчителі-предметники</h1>
-      <div class="hd-meta" id="meta">Каталог предметів, відвідуваність занять і розрахунок ЗП викладачів</div>
+      <div class="hd-meta" id="meta">Журнал проведених занять і норми за місяць</div>
     </div>
     <div class="hd-ctrl">
       <button class="btn btn-secondary" onclick="refreshAll()">🔄 Оновити</button>
@@ -476,17 +544,29 @@ select,input,textarea{font-family:inherit}
 
   <div id="errBox" class="err hidden"></div>
 
-  <div class="cat-loc-bar">
-    <label class="cat-loc-lbl">📍 Локація:</label>
-    <select id="globalLocSel" onchange="onLocChange()"></select>
-    <span id="catalogCount" class="cat-loc-count">—</span>
+  <!-- ── Filter Bar ── -->
+  <div class="pred-filters">
+    <label class="pred-filter-lbl">📍 Локація</label>
+    <select id="fLoc" onchange="onFilterChange('loc')"></select>
+
+    <label class="pred-filter-lbl">📅 Місяць</label>
+    <input type="month" id="fMonth" onchange="onFilterChange('month')">
+
+    <label class="pred-filter-lbl">📚 Предмет</label>
+    <select id="fSubject" onchange="onFilterChange('subject')">
+      <option value="">Всі</option>
+      <option value="Англійська">Англійська</option>
+      <option value="Музика">Музика</option>
+      <option value="Хореограф">Хореограф</option>
+      <option value="Логопед">Логопед</option>
+      <option value="Психолог">Психолог</option>
+      <option value="Чомусики">Чомусики</option>
+    </select>
+
+    <span class="pred-filter-count" id="filterCount">—</span>
   </div>
 
-  <div class="mode-tabs">
-    <button class="mt-btn active" id="mtCatalog"    onclick="switchMode('catalog')">📚 Каталог</button>
-    <button class="mt-btn"        id="mtAttendance" onclick="switchMode('attendance')">✅ Відвідуваність</button>
-    <button class="mt-btn"        id="mtAnalytics"  onclick="switchMode('analytics')">📊 Аналітика</button>
-  </div>
+  <div id="permBanner" class="pred-perm-banner hidden"></div>
 
   <div id="main">
     <div class="loading"><div class="spinner"></div><div>Завантаження…</div></div>
@@ -508,27 +588,34 @@ select,input,textarea{font-family:inherit}
   </div>
 </div>
 
-<!-- ── MODAL ───────────────────────────────────────────────────── -->
-<div id="modal" class="modal hidden">
-  <div class="modal-overlay" onclick="closeModal()"></div>
+<!-- ── ADD LESSON DATE MODAL (v6.11) ───────────────────────────── -->
+<div id="modalAddDate" class="modal hidden">
+  <div class="modal-overlay" onclick="closeAddDate()"></div>
   <div class="modal-card">
-    <button class="modal-close" onclick="closeModal()">✕</button>
-    <div class="modal-hd"><h3 id="modalTitle">Предмет</h3></div>
+    <button class="modal-close" onclick="closeAddDate()">✕</button>
+    <div class="modal-hd"><h3 id="addDateTitle">Додати заняття</h3></div>
     <div class="modal-bd">
-      <div class="fg"><label>Предмет</label>
-        <input type="text" id="mSubject" placeholder="Англійська мова"></div>
-      <div class="fg"><label>Ставка за заняття (грн)</label>
-        <input type="number" id="mRate" min="0"></div>
-      <div class="fg"><label>Викладач</label>
-        <input type="text" id="mTeacher" placeholder="ПІБ"></div>
-      <div class="toggle-row">
-        <input type="checkbox" id="mActive" style="width:auto">
-        <label for="mActive" style="margin:0;text-transform:none;letter-spacing:0;font-size:14px;color:var(--dark2)">Активний предмет</label>
+      <div class="fg">
+        <label>Викладач</label>
+        <input type="text" id="addDateTeacher" disabled>
       </div>
+      <div class="fg">
+        <label>Локація → Група</label>
+        <input type="text" id="addDateLocGroup" disabled>
+      </div>
+      <div class="fg">
+        <label>Предмет</label>
+        <input type="text" id="addDateSubject" disabled>
+      </div>
+      <div class="fg">
+        <label>Дата заняття</label>
+        <input type="date" id="addDateInput">
+      </div>
+      <div id="addDateErr" class="pred-modal-err hidden"></div>
     </div>
     <div class="modal-ft">
-      <button class="btn btn-secondary" onclick="closeModal()">Скасувати</button>
-      <button class="btn btn-primary" onclick="saveModal()">Зберегти</button>
+      <button class="btn btn-secondary" onclick="closeAddDate()">Скасувати</button>
+      <button class="btn btn-primary" id="addDateSubmit" onclick="submitAddDate()">Додати</button>
     </div>
   </div>
 </div>
@@ -544,12 +631,37 @@ var CFG = {
 var MONTHS = ['Січень','Лютий','Березень','Квітень','Травень','Червень',
               'Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
 
+// ── PRED v6.11 (мирорить backend constants) ─────────────────────
+var PRED_SUBJECTS       = ['Англійська','Музика','Хореограф','Логопед','Психолог','Чомусики'];
+var PRED_UNLIMITED_SUBJ = 'Чомусики';
+var PRED_GROUP_TYPES    = ['miniBaby','Baby','Find','Study','Preschool'];
+var PRED_LVIV_LOCATIONS = ['Кругла','Бігова'];
+var GROUP_NAME_BY_TYPE  = {
+  miniBaby:'miniBaby-ki', Baby:'Baby-ki', Find:'Find-iki',
+  Study:'Study-ki', Preschool:'Preschool'
+};
+var SUBJECT_EMOJI = {
+  'Англійська':'📚','Музика':'🎵','Хореограф':'💃',
+  'Логопед':'💬','Психолог':'🧠','Чомусики':'❓'
+};
+var PRED_EDIT_ROLES = ['cfo','ceo','coo','cco'];   // any loc; director — own loc
+
 var S = {
-  user:null, mode:'catalog', loc:'',
-  locations:[], catalog:[], clients:[], marks:[],
-  attDate:'', attGroup:'',
-  anaMonth:new Date().getMonth(), anaYear:new Date().getFullYear(),
-  _anaRows:null, modalId:0
+  user: null,
+  // ── filters ──
+  loc: '',
+  year:  new Date().getFullYear(),
+  month: new Date().getMonth() + 1,
+  subjectFilter: '',
+  // ── data (одне завантаження getPredmetnyky) ──
+  teachers: [],
+  norms: {},
+  lessons: [],
+  catalog: [],
+  locations: [],
+  // ── ui ──
+  expanded: {},
+  addModal: null
 };
 
 // ── HELPERS ─────────────────────────────────
@@ -579,6 +691,44 @@ function exportXlsx(filename,sheets){
     XLSX.utils.book_append_sheet(wb,ws,String(s.name||('Аркуш'+(i+1))).slice(0,31));
   });
   XLSX.writeFile(wb,filename);
+}
+
+// ── PRED HELPERS (v6.11) ────────────────────
+function todayIso(){
+  var d = new Date();
+  return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2);
+}
+function isoToDmy(s){
+  var m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(String(s||'').trim());
+  return m ? (('0'+m[3]).slice(-2)+'.'+('0'+m[2]).slice(-2)+'.'+m[1]) : s;
+}
+function lessonYM(dmy){
+  var m = /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/.exec(String(dmy||'').trim());
+  return m ? {y:Number(m[3]), m:Number(m[2])} : null;
+}
+function lessonSortKey(dmy){
+  var m = /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/.exec(String(dmy||'').trim());
+  return m ? (m[3]+('0'+m[2]).slice(-2)+('0'+m[1]).slice(-2)) : '00000000';
+}
+function predLocToRegion(loc){
+  return PRED_LVIV_LOCATIONS.indexOf(String(loc||'').trim()) !== -1 ? 'Львів' : 'Київ';
+}
+function normalizeGroupType(grp){
+  var s = String(grp || '').trim();
+  if (!s) return null;
+  if (/mini[\s\-]?baby/i.test(s))             return 'miniBaby';
+  if (/^baby[\-\s]?ki|^baby$/i.test(s))       return 'Baby';
+  if (/find[\-\s]?iki/i.test(s))              return 'Find';
+  if (/study[\-\s]?ki/i.test(s))              return 'Study';
+  if (/preschool|шкільн|підготов/i.test(s))   return 'Preschool';
+  return null;
+}
+function pluralUk(n, one, few, many){
+  var m = Math.abs(n) % 100, m1 = m % 10;
+  if (m > 10 && m < 20) return many;
+  if (m1 > 1 && m1 < 5) return few;
+  if (m1 === 1)         return one;
+  return many;
 }
 
 // ── AUTH (shared session) ───────────────────
@@ -895,535 +1045,381 @@ function apiPost(body){
     });
 }
 
-// ── DATA LOADERS ────────────────────────────
-function loadCatalog(){
-  return apiGet('getPredmetnyCatalog', {loc:S.loc}).then(function(res){
-    S.catalog = (res && res.items) || [];
-  }).catch(function(){ S.catalog = []; });
+// ── PERMISSIONS (write) v6.11 ───────────────
+function canEditPred(targetLoc){
+  if (!S.user || !S.user.role) return false;
+  var role = String(S.user.role).toLowerCase();
+  if (PRED_EDIT_ROLES.indexOf(role) !== -1) return true;           // cfo/ceo/coo/cco
+  if (role === 'director' && S.user.loc && S.user.loc === targetLoc) return true;
+  return false;
 }
-function loadClients(){
-  if (S.clients.length) return Promise.resolve();
-  // Діти беруться з Payment-файлу (action=getPayments) — те саме джерело,
-  // що й у activities.html (_loadPayments). getClients повертав неповний
-  // список, через що у групі бачили лише частину дітей.
-  return apiGet('getPayments').then(function(res){
-    S.clients = (res && res.data) || [];
-  }).catch(function(){ S.clients = []; });
-}
-function loadMarks(filters){
-  return apiGet('getPredmetnyMarks', filters).then(function(res){
-    return (res && res.items) || [];
-  }).catch(function(){ return []; });
+function hasAnyEditPerm(){
+  if (!S.user || !S.user.role) return false;
+  var role = String(S.user.role).toLowerCase();
+  if (PRED_EDIT_ROLES.indexOf(role) !== -1) return true;
+  if (role === 'director' && S.user.loc) return true;
+  return false;
 }
 
-// ── LOCATION / MODE ─────────────────────────
-function onLocChange(){
-  S.loc = $('globalLocSel').value;
-  S.catalog = []; S.clients = []; S.marks = []; S.attGroup = '';
-  loadCatalog().then(render);
-}
-function switchMode(m){
-  S.mode = m;
-  ['catalog','attendance','analytics'].forEach(function(x){
-    var btn = $('mt' + x.charAt(0).toUpperCase() + x.slice(1));
-    if (btn) btn.classList.toggle('active', x === m);
+// ── DATA LOADER v6.11 ───────────────────────
+function loadPredmetnyky(){
+  return apiGet('getPredmetnyky', {actorId: S.user.id}).then(function(res){
+    if (!res || !res.ok) throw new Error(res && res.error || 'Failed to load');
+    S.teachers = res.teachers || [];
+    S.norms    = res.norms    || {};
+    S.lessons  = res.lessons  || [];
+    S.catalog  = res.catalog  || [];
   });
-  render();
+}
+
+// ── FILTER / SELECTOR HELPERS ───────────────
+function visibleTeachers(){
+  return S.teachers.filter(function(t){
+    if (S.loc && t.locations[0] !== S.loc) return false;
+    if (S.subjectFilter && t.subject !== S.subjectFilter) return false;
+    return true;
+  });
+}
+function teacherLessons(teacher, opts){
+  opts = opts || {};
+  return S.lessons.filter(function(L){
+    if (L.empKey !== teacher.empKey) return false;
+    if (L.subject !== teacher.subject) return false;
+    if (S.loc && L.loc !== S.loc) return false;
+    var ym = lessonYM(L.date);
+    if (!ym || ym.y !== S.year || ym.m !== S.month) return false;
+    if (opts.groupType && normalizeGroupType(L.group) !== opts.groupType) return false;
+    return true;
+  });
+}
+function isTeacherExpanded(teacher){
+  if (S.expanded.hasOwnProperty(teacher.empKey))
+    return S.expanded[teacher.empKey];                              // explicit override
+  return teacherLessons(teacher).length >= 1;                       // auto: ≥1 у фільтр-місяці
+}
+function teacherRate(teacher){
+  var loc = teacher.locations[0];
+  for (var i = 0; i < S.catalog.length; i++){
+    var c = S.catalog[i];
+    if (!c.active) continue;
+    if (c.loc !== loc) continue;
+    if (c.subject_norm !== teacher.subject) continue;
+    return c.rate;
+  }
+  return null;
+}
+function getNorm(teacher, groupType){
+  var region = predLocToRegion(teacher.locations[0]);
+  var r = S.norms[region]; if (!r) return 0;
+  var s = r[teacher.subject]; if (!s) return 0;
+  return s[groupType] || 0;
+}
+function findTeacher(empKey){
+  for (var i = 0; i < S.teachers.length; i++){
+    if (S.teachers[i].empKey === empKey) return S.teachers[i];
+  }
+  return null;
+}
+
+// ── RENDERERS ───────────────────────────────
+function renderApp(){
+  renderFilterCount();
+  renderPermBanner();
+  var visible = visibleTeachers();
+  if (!visible.length){
+    $('main').innerHTML = '<div class="pred-empty">Викладачів не знайдено. ' +
+      'Перевір фільтри або додай вчителів-предметників у HR.</div>';
+    return;
+  }
+  visible.sort(function(a, b){
+    if (a.subject !== b.subject)
+      return PRED_SUBJECTS.indexOf(a.subject) - PRED_SUBJECTS.indexOf(b.subject);
+    return a.name.localeCompare(b.name, 'uk');
+  });
+  $('main').innerHTML = visible.map(renderTeacherCard).join('');
+}
+
+function renderFilterCount(){
+  var vis = visibleTeachers().length;
+  $('filterCount').textContent = vis + ' ' +
+    pluralUk(vis, 'викладач', 'викладачі', 'викладачів');
+}
+
+function renderPermBanner(){
+  var box = $('permBanner');
+  if (hasAnyEditPerm()){
+    box.classList.add('hidden');
+    box.textContent = '';
+  } else {
+    box.classList.remove('hidden');
+    box.textContent = '👁️ Перегляд лише — редагування доступне CFO/CEO/COO/CCO ' +
+      'та директорам у власній локації.';
+  }
+}
+
+function renderTeacherCard(t){
+  var expanded = isTeacherExpanded(t);
+  var lessonsCount = teacherLessons(t).length;
+  var rate = teacherRate(t);
+  var rateText  = rate ? (fmtN(rate) + ' грн/зан.') : 'Ставка не вказана';
+  var rateClass = rate ? '' : ' no-rate';
+  var emoji = SUBJECT_EMOJI[t.subject] || '📚';
+  var meta = t.locations.join(' / ') + ' · ' + lessonsCount + ' ' +
+    pluralUk(lessonsCount, 'заняття', 'заняття', 'занять') + ' у ' + MONTHS[S.month - 1];
+  var keyEsc = escapeHtml(t.empKey).replace(/'/g, "\\'");
+
+  var body = '';
+  if (expanded){
+    body = '<div class="pred-teacher-body">' +
+      PRED_GROUP_TYPES.map(function(gt){ return renderGroupBlock(t, gt); }).join('') +
+    '</div>';
+  }
+
+  return '<div class="pred-teacher" data-emp="' + escapeHtml(t.empKey) + '">' +
+    '<div class="pred-teacher-hd' + (expanded ? ' is-expanded' : '') +
+         '" onclick="onToggleTeacher(\'' + keyEsc + '\')">' +
+      '<span class="pred-teacher-emoji">' + emoji + '</span>' +
+      '<div class="pred-teacher-main">' +
+        '<div class="pred-teacher-title">' + escapeHtml(t.subject) + ' · ' + escapeHtml(t.name) + '</div>' +
+        '<div class="pred-teacher-meta">' + escapeHtml(meta) + '</div>' +
+      '</div>' +
+      '<span class="pred-teacher-rate' + rateClass + '">' + escapeHtml(rateText) + '</span>' +
+      '<span class="pred-teacher-chevron">▸</span>' +
+    '</div>' + body +
+  '</div>';
+}
+
+function renderGroupBlock(t, groupType){
+  var loc = t.locations[0];
+  var groupName  = GROUP_NAME_BY_TYPE[groupType];
+  var norm       = getNorm(t, groupType);
+  var unlimited  = (t.subject === PRED_UNLIMITED_SUBJ);
+  var canEdit    = canEditPred(loc);
+
+  // Forbidden block: norm=0 + не Чомусики
+  if (!unlimited && norm <= 0){
+    return '<div class="pred-group-block">' +
+      '<div class="pred-group-hd">' +
+        '<span class="pred-group-name">' + escapeHtml(groupName) + '</span>' +
+        '<span class="pred-group-loc">' + escapeHtml(loc) + '</span>' +
+      '</div>' +
+      '<div class="pred-group-forbidden">Не передбачено для цієї групи</div>' +
+    '</div>';
+  }
+
+  var lessons = teacherLessons(t, {groupType: groupType});
+  lessons.sort(function(a, b){
+    return lessonSortKey(a.date).localeCompare(lessonSortKey(b.date));
+  });
+  var count = lessons.length;
+
+  var counterText, counterClass = '';
+  if (unlimited){
+    counterText  = count + ' (без ліміту)';
+    counterClass = ' unlimited';
+  } else {
+    counterText = count + ' / ' + norm;
+    if (count >= norm) counterClass = ' maxed';
+  }
+
+  var chipsHtml = lessons.map(function(L){
+    var delBtn = canEdit
+      ? '<button class="pred-lesson-del" onclick="onDeleteLesson(' + L.id + ', event)" title="Видалити">✕</button>'
+      : '';
+    return '<span class="pred-lesson-chip">✓ ' + escapeHtml(L.date) + delBtn + '</span>';
+  }).join('');
+
+  var actionHtml = '';
+  if (canEdit){
+    if (!unlimited && count >= norm){
+      actionHtml = '<div class="pred-group-maxed-msg">Норму досягнуто</div>';
+    } else {
+      var keyEsc = escapeHtml(t.empKey).replace(/'/g, "\\'");
+      actionHtml = '<button class="pred-group-add" ' +
+        'onclick="openAddDate(\'' + keyEsc + '\', \'' + groupType + '\')">+ Додати дату</button>';
+    }
+  }
+
+  return '<div class="pred-group-block">' +
+    '<div class="pred-group-hd">' +
+      '<span class="pred-group-name">' + escapeHtml(groupName) + '</span>' +
+      '<span class="pred-group-loc">' + escapeHtml(loc) + '</span>' +
+      '<span class="pred-group-counter' + counterClass + '">' + escapeHtml(counterText) + '</span>' +
+    '</div>' +
+    (chipsHtml ? '<div class="pred-lessons-list">' + chipsHtml + '</div>' : '') +
+    actionHtml +
+  '</div>';
+}
+
+// ── FILTERS / TOGGLES ───────────────────────
+function onFilterChange(which){
+  if (which === 'loc') S.loc = $('fLoc').value;
+  if (which === 'month'){
+    var m = /^(\d{4})-(\d{2})$/.exec($('fMonth').value);
+    if (m){ S.year = Number(m[1]); S.month = Number(m[2]); }
+  }
+  if (which === 'subject') S.subjectFilter = $('fSubject').value;
+  S.expanded = {};
+  renderApp();
+}
+function onToggleTeacher(empKey){
+  var t = findTeacher(empKey); if (!t) return;
+  S.expanded[empKey] = !isTeacherExpanded(t);
+  renderApp();
 }
 function refreshAll(){
-  S.catalog = []; S.clients = []; S.marks = [];
-  $('main').innerHTML = '<div class="loading"><div class="spinner"></div><div>Завантаження…</div></div>';
-  loadCatalog().then(function(){ render(); showToast('🔄 Оновлено', 'ok', 2000); });
-}
-
-// ── RENDER DISPATCH ─────────────────────────
-function render(){
-  $('catalogCount').textContent = S.catalog.length
-    ? (S.catalog.length + ' предметів') : '—';
-  if (S.mode === 'catalog')          renderCatalog();
-  else if (S.mode === 'attendance')  renderAttendance();
-  else                               renderAnalytics();
-}
-
-// ===== КАТАЛОГ =====
-function renderCatalog(){
-  var rows = S.catalog.slice().sort(function(a,b){
-    if (a.active !== b.active) return a.active ? -1 : 1;
-    return String(a.subject).localeCompare(String(b.subject), 'uk');
+  setSync('syncing');
+  loadPredmetnyky().then(function(){
+    S.expanded = {};
+    renderApp();
+    setSync('ok');
+    showToast('🔄 Оновлено', 'ok', 2000);
+  }).catch(function(e){
+    setSync('err', 'Не вдалося оновити');
+    showToast('Помилка: ' + (e && e.message || e), 'err');
   });
-  var html = '<div class="card"><div class="card-hd">'
-    + '<h3>📚 Каталог предметів — ' + escapeHtml(S.loc || '—') + '</h3>'
-    + '<button class="btn btn-primary btn-sm" data-permission="predmetnyky" onclick="openModal(0)">+ Додати предмет</button>'
-    + '</div><div class="card-bd">';
-  if (!rows.length){
-    html += '<div class="coming"><div class="coming-ic">📭</div>'
-      + '<div class="coming-h">У цій локації ще немає предметів</div>'
-      + '<div class="coming-p">Натисніть <strong>"+ Додати предмет"</strong> вгорі картки.</div></div>';
-  } else {
-    html += '<div class="tbl-wrap"><table class="tbl"><thead><tr>'
-      + '<th>Предмет</th><th class="num">Ставка/заняття</th><th>Викладач</th>'
-      + '<th>Статус</th><th data-permission="predmetnyky"></th>'
-      + '</tr></thead><tbody>';
-    rows.forEach(function(a){
-      html += '<tr' + (a.active ? '' : ' class="inactive"') + '>'
-        + '<td><span class="cat-name">' + escapeHtml(a.subject) + '</span></td>'
-        + '<td class="num">' + fmtN(a.rate) + ' ₴</td>'
-        + '<td>' + (escapeHtml(a.teacher) || '<span class="muted">—</span>') + '</td>'
-        + '<td>' + (a.active
-            ? '<span class="badge b-ok">активний</span>'
-            : '<span class="badge b-off">вимкнено</span>') + '</td>'
-        + '<td data-permission="predmetnyky" style="white-space:nowrap">'
-          + '<button class="btn btn-secondary btn-xs" onclick="openModal(' + a.id + ')">✏️</button> '
-          + '<button class="btn btn-danger btn-xs" onclick="delPredmetny(' + a.id + ')">🗑</button>'
-        + '</td></tr>';
+}
+
+// ── ADD-DATE MODAL ──────────────────────────
+function openAddDate(empKey, groupType){
+  var t = findTeacher(empKey); if (!t) return;
+  var loc = t.locations[0];
+  if (!canEditPred(loc)){ showToast('🚫 Немає дозволу', 'err'); return; }
+
+  var groupName = GROUP_NAME_BY_TYPE[groupType];
+  S.addModal = {empKey:empKey, loc:loc, group:groupName, groupType:groupType, subject:t.subject};
+
+  $('addDateTitle').textContent  = 'Додати: ' + t.subject + ' · ' + t.name;
+  $('addDateTeacher').value      = t.name;
+  $('addDateLocGroup').value     = loc + ' → ' + groupName;
+  $('addDateSubject').value      = t.subject;
+
+  // Default: сьогодні, якщо у фільтрованому місяці; інакше 1-ше число місяця.
+  var d = new Date();
+  $('addDateInput').value = (d.getFullYear() === S.year && (d.getMonth() + 1) === S.month)
+    ? todayIso()
+    : (S.year + '-' + ('0' + S.month).slice(-2) + '-01');
+
+  $('addDateErr').classList.add('hidden');
+  $('addDateErr').textContent = '';
+  $('modalAddDate').classList.remove('hidden');
+  setTimeout(function(){ $('addDateInput').focus(); }, 50);
+}
+function closeAddDate(){
+  $('modalAddDate').classList.add('hidden');
+  S.addModal = null;
+}
+function _addDateErr(msg){
+  var box = $('addDateErr');
+  box.textContent = msg;
+  box.classList.remove('hidden');
+}
+function submitAddDate(){
+  if (!S.addModal) return;
+  var dateIso = $('addDateInput').value;
+  if (!dateIso){ _addDateErr('Вкажи дату'); return; }
+  var dateDmy = isoToDmy(dateIso);
+
+  var btn = $('addDateSubmit'); var orig = btn.textContent;
+  btn.disabled = true; btn.textContent = '⏳ Збереження…';
+
+  apiPost({
+    action: 'savePredmetnykyLesson',
+    actorId: S.user.id,
+    lesson: {
+      empKey:   S.addModal.empKey,
+      location: S.addModal.loc,
+      group:    S.addModal.group,
+      subject:  S.addModal.subject,
+      date:     dateDmy
+    }
+  }).then(function(res){
+    btn.disabled = false; btn.textContent = orig;
+    if (!res || !res.ok){
+      var msg;
+      if      (res && res.code === 'NORM_REACHED')  msg = '⚠️ Норму вже досягнуто (' + res.current + ' / ' + res.norm + ')';
+      else if (res && res.code === 'BAD_GROUP')     msg = '🚫 ' + (res.error || 'Заборонена комбінація');
+      else if (res && res.code === 'PERM_DENIED')   msg = '🚫 Немає дозволу';
+      else                                          msg = (res && res.error) || 'Невідома помилка';
+      _addDateErr(msg);
+      return;
+    }
+    S.lessons.push({
+      id:      res.id,
+      empKey:  S.addModal.empKey,
+      loc:     S.addModal.loc,
+      group:   S.addModal.group,
+      subject: S.addModal.subject,
+      date:    dateDmy
     });
-    html += '</tbody></table></div>';
-  }
-  html += '</div></div>';
-  $('main').innerHTML = html;
-  applyRoleVisibility();
-}
-
-function openModal(id){
-  S.modalId = id;
-  var a = S.catalog.filter(function(x){ return x.id === id; })[0];
-  $('modalTitle').textContent = id ? 'Редагувати предмет' : 'Новий предмет';
-  $('mSubject').value = a ? a.subject : '';
-  $('mRate').value    = a ? a.rate : '';
-  $('mTeacher').value = a ? a.teacher : '';
-  $('mActive').checked = a ? !!a.active : true;
-  $('modal').classList.remove('hidden');
-}
-function closeModal(){ $('modal').classList.add('hidden'); }
-function saveModal(){
-  var data = {
-    loc:     S.loc,
-    subject: $('mSubject').value.trim(),
-    rate:    parseFloat($('mRate').value) || 0,
-    teacher: $('mTeacher').value.trim(),
-    active:  $('mActive').checked
-  };
-  if (!data.subject){ showToast('Вкажіть назву предмета', 'err'); return; }
-  var body = S.modalId
-    ? {action:'updatePredmetny', id:S.modalId, data:data}
-    : {action:'addPredmetny', data:data};
-  apiPost(body).then(function(res){
-    if (!res || !res.ok){ showToast('❌ ' + ((res && res.error) || 'Помилка'), 'err'); return; }
-    closeModal();
-    loadCatalog().then(render);
-    showToast(S.modalId ? '✅ Збережено' : '✅ Додано', 'ok');
-  }).catch(function(){ showToast('❌ Помилка мережі', 'err'); });
-}
-function delPredmetny(id){
-  if (!confirm('Видалити предмет з каталогу?')) return;
-  apiPost({action:'deletePredmetny', id:id}).then(function(res){
-    if (!res || !res.ok){ showToast('❌ ' + ((res && res.error) || 'Помилка'), 'err'); return; }
-    loadCatalog().then(render);
-    showToast('🗑 Видалено', 'ok');
-  }).catch(function(){ showToast('❌ Помилка мережі', 'err'); });
-}
-
-// ===== ВІДВІДУВАНІСТЬ =====
-// Матричний UI як у activities.html: рядки — діти групи,
-// колонки — усі активні предмети каталогу локації.
-function renderAttendance(){
-  var html = '<div class="att-filters">'
-    + '<div class="att-fg"><label>📅 Дата</label>'
-      + '<input type="date" id="attDate" value="' + S.attDate + '"></div>'
-    + '<div class="att-fg"><label>📍 Локація</label>'
-      + '<input type="text" value="' + escapeHtml(S.loc || '—') + '" disabled></div>'
-    + '<div class="att-fg"><label>👶 Група</label>'
-      + '<select id="attGroupSel"><option value="">— оберіть —</option></select></div>'
-    + '<div class="att-counter" id="attCounter">—</div>'
-    + '</div>'
-    + '<div id="attHint" class="att-hint hidden"></div>'
-    + '<div id="attBoard" class="att-board hidden">'
-      + '<div class="att-acts-hd" id="attActsHd"></div>'
-      + '<div class="att-rows" id="attRows"></div>'
-    + '</div>'
-    + '<div id="attSummary" class="att-summary hidden">'
-      + '<div class="att-sum-card">'
-        + '<div class="att-sum-hd">📊 Підсумок за предметом</div>'
-        + '<div class="att-sum-body" id="attSumBySubj"></div>'
-      + '</div>'
-    + '</div>'
-    + '<div id="attLoading" class="loading hidden"><div class="spinner"></div><div>Завантаження…</div></div>';
-  $('main').innerHTML = html;
-  $('attDate').addEventListener('change', function(){ S.attDate = this.value; reloadAttBoard(); });
-  $('attGroupSel').addEventListener('change', function(){ S.attGroup = this.value; drawAttBoard(); });
-  reloadAttBoard();
-}
-
-function reloadAttBoard(){
-  if ($('attLoading'))  $('attLoading').classList.remove('hidden');
-  if ($('attBoard'))    $('attBoard').classList.add('hidden');
-  if ($('attSummary'))  $('attSummary').classList.add('hidden');
-  if ($('attHint'))     $('attHint').classList.add('hidden');
-  loadClients().then(function(){
-    return loadMarks({loc:S.loc, date:S.attDate});
-  }).then(function(marks){
-    S.marks = marks;
-    populateGroupSel();
-    drawAttBoard();
+    closeAddDate();
+    renderApp();
+    showToast('✅ Заняття додано (' + res.current + ' / ' + (res.norm || '∞') + ')', 'ok');
+  }).catch(function(e){
+    btn.disabled = false; btn.textContent = orig;
+    _addDateErr('Помилка мережі: ' + (e && e.message || e));
   });
 }
 
-function populateGroupSel(){
-  var sel = $('attGroupSel'); if (!sel) return;
-  var byGroup = _attChildrenByGroup();
-  var names = Object.keys(byGroup).sort(function(a,b){ return a.localeCompare(b,'uk'); });
-  sel.innerHTML = '<option value="">— оберіть —</option>' + names.map(function(g){
-    return '<option value="' + escapeHtml(g) + '">' + escapeHtml(g) + ' (' + byGroup[g].length + ')</option>';
-  }).join('');
-  if (S.attGroup && names.indexOf(S.attGroup) !== -1){ sel.value = S.attGroup; }
-  else { S.attGroup = ''; sel.value = ''; }
-}
-
-function _attChildrenByGroup(){
-  // Дзеркало activities.html _loadPayments: групуємо рядки Payment-файлу
-  // за локацією+групою з дедуплікацією імен (у файлі кілька рядків на
-  // дитину). Без фільтра за статусом — показуємо ВСІХ дітей групи,
-  // як на вкладці "Додаткові заняття".
-  var byGroup = {};
-  S.clients.forEach(function(row){
-    if (String(row['Локація'] || '').trim() !== S.loc) return;
-    var grp  = String(row['Група'] || '').trim();
-    var name = String(row["Ім'я дитини"] || '').trim();
-    if (!grp || !name) return;
-    if (!byGroup[grp]) byGroup[grp] = [];
-    if (byGroup[grp].indexOf(name) === -1) byGroup[grp].push(name);
-  });
-  return byGroup;
-}
-
-function _activeSubjects(){
-  return S.catalog.filter(function(a){ return a.active; })
-    .sort(function(a,b){ return String(a.subject).localeCompare(String(b.subject),'uk'); });
-}
-
-function _attHint(msg){
-  if ($('attLoading')) $('attLoading').classList.add('hidden');
-  if ($('attBoard'))   $('attBoard').classList.add('hidden');
-  if ($('attSummary')) $('attSummary').classList.add('hidden');
-  var h = $('attHint');
-  if (h){ h.textContent = msg; h.classList.remove('hidden'); }
-}
-
-function drawAttBoard(){
-  if ($('attLoading')) $('attLoading').classList.add('hidden');
-  var subjects = _activeSubjects();
-  var byGroup  = _attChildrenByGroup();
-  var groupNames = Object.keys(byGroup);
-
-  if (!subjects.length){
-    _attHint('⚠️ У каталозі немає активних предметів для локації "' + S.loc + '". Додайте у вкладці «Каталог».');
-    return;
-  }
-  if (!groupNames.length){
-    _attHint('⚠️ Немає дітей для локації "' + S.loc + '".');
-    return;
-  }
-  if (!S.attGroup){
-    _attHint('👉 Оберіть групу зі списку, щоб побачити матрицю відвідуваності.');
-    return;
-  }
-
-  var kids = (byGroup[S.attGroup] || []).slice()
-    .sort(function(a,b){ return a.localeCompare(b,'uk'); });
-
-  // grid: ім'я дитини + N колонок предметів
-  var n = subjects.length;
-  var grid = 'grid-template-columns: minmax(180px,1fr) repeat(' + n + ', minmax(64px,84px))';
-
-  // Заголовок (предмети як колонки)
-  var hd = $('attActsHd');
-  hd.setAttribute('style', grid);
-  var hdHtml = '<div></div>';
-  subjects.forEach(function(s){
-    hdHtml += '<div class="att-act-h" title="' + escapeHtml(s.subject) + ' · ' + fmtN(s.rate) + ' ₴">'
-      + escapeHtml(s.subject)
-      + '<br><span style="color:var(--green);font-weight:800">' + fmtN(s.rate) + '₴</span></div>';
-  });
-  hd.innerHTML = hdHtml;
-
-  // Рядки (діти × предмети)
-  var markByKey = {};
-  S.marks.forEach(function(m){ markByKey[m.child + '|' + m.subjectId] = m; });
-  var rowsHtml = '';
-  kids.forEach(function(child){
-    rowsHtml += '<div class="att-row" style="' + grid + '">';
-    rowsHtml += '<div class="att-name" title="' + escapeHtml(child) + '">' + escapeHtml(child) + '</div>';
-    rowsHtml += '<div class="att-cells-wrap" style="display:contents">';
-    subjects.forEach(function(s){
-      var on = !!markByKey[child + '|' + s.id];
-      rowsHtml += '<button class="att-cell' + (on ? ' on' : '') + '"'
-        + ' data-child="' + escapeHtml(child) + '"'
-        + ' data-subj-id="' + s.id + '"'
-        + ' aria-pressed="' + on + '">'
-        + (on ? '✅' : '⬜')
-        + '<span class="att-cell-lbl">' + escapeHtml(s.subject) + '</span>'
-        + '</button>';
-    });
-    rowsHtml += '</div></div>';
-  });
-  $('attRows').innerHTML = rowsHtml;
-  $('attRows').onclick = function(e){
-    var btn = e.target.closest && e.target.closest('.att-cell');
-    if (!btn || btn.disabled) return;
-    toggleMark(btn);
-  };
-
-  $('attCounter').textContent = S.marks.length + ' відміток · ' + S.attGroup;
-  $('attBoard').classList.remove('hidden');
-  drawAttSummary(subjects);
-  $('attSummary').classList.remove('hidden');
-}
-
-function _setCell(btn, on){
-  btn.classList.toggle('on', on);
-  btn.firstChild.nodeValue = on ? '✅' : '⬜';
-  btn.setAttribute('aria-pressed', on ? 'true' : 'false');
-}
-
-function toggleMark(btn){
-  var child  = btn.dataset.child;
-  var subjId = Number(btn.dataset.subjId);
-  var subj   = S.catalog.filter(function(a){ return a.id === subjId; })[0];
-  if (!subj) return;
-  var existing = S.marks.filter(function(m){
-    return m.child === child && m.subjectId === subjId;
-  })[0];
-
-  btn.disabled = true;
-  _setCell(btn, !existing);   // оптимістичний UI
-
-  if (existing){
-    apiPost({action:'removePredmetnyMark', id:existing.id}).then(function(res){
-      btn.disabled = false;
-      if (!res || !res.ok){ _setCell(btn, true); showToast('❌ ' + ((res && res.error) || 'Помилка'), 'err'); return; }
-      S.marks = S.marks.filter(function(x){ return x.id !== existing.id; });
-      _afterToggle();
-      showToast('✓ Знято', 'ok', 2000);
-    }).catch(function(){ btn.disabled = false; _setCell(btn, true); showToast('❌ Помилка мережі', 'err'); });
-  } else {
-    apiPost({action:'addPredmetnyMark', data:{
-      date:S.attDate, loc:S.loc, group:S.attGroup, child:child,
-      subjectId:subj.id, subjectName:subj.subject, rate:subj.rate,
-      markedBy:markerLabel()
-    }}).then(function(res){
-      btn.disabled = false;
-      if (!res || !res.ok){ _setCell(btn, false); showToast('❌ ' + ((res && res.error) || 'Помилка'), 'err'); return; }
-      S.marks.push({id:res.id || ('local-' + Date.now()), date:S.attDate, loc:S.loc,
-        group:S.attGroup, child:child, subjectId:subj.id, subjectName:subj.subject, rate:subj.rate});
-      _afterToggle();
-      showToast('✅ Відмічено', 'ok', 2000);
-    }).catch(function(){ btn.disabled = false; _setCell(btn, false); showToast('❌ Помилка мережі', 'err'); });
-  }
-}
-
-function _afterToggle(){
-  if ($('attCounter')) $('attCounter').textContent = S.marks.length + ' відміток · ' + S.attGroup;
-  drawAttSummary(_activeSubjects());
-  // Після кожної відмітки запускаємо debounce 5с на авто-експорт у Salary.
-  scheduleAutoExportPredmetny();
-}
-
-// Підсумок під таблицею: скільки дітей відмічено по кожному предмету.
-function drawAttSummary(subjects){
-  var box = $('attSumBySubj'); if (!box) return;
-  var bySubj = {};
-  subjects.forEach(function(s){ bySubj[s.id] = 0; });
-  S.marks.forEach(function(m){
-    if (bySubj[m.subjectId] !== undefined) bySubj[m.subjectId]++;
-  });
-  var html = '';
-  subjects.forEach(function(s){
-    html += '<div class="att-sum-row">'
-      + '<span class="l">' + escapeHtml(s.subject) + '</span>'
-      + '<span class="r">' + bySubj[s.id] + ' дітей відмічено</span>'
-      + '</div>';
-  });
-  if (!html) html = '<div class="att-sum-row"><span class="l muted">Немає предметів</span></div>';
-  html += '<div class="att-sum-tot"><span>Всього відміток за ' + escapeHtml(S.attDate)
-    + '</span><span class="r">' + S.marks.length + '</span></div>';
-  box.innerHTML = html;
-}
-
-// ===== АНАЛІТИКА =====
-function renderAnalytics(){
-  var monthOpts = MONTHS.map(function(m,i){
-    return '<option value="' + i + '"' + (i === S.anaMonth ? ' selected' : '') + '>' + m + '</option>';
-  }).join('');
-  var yearOpts = [2025,2026,2027].map(function(y){
-    return '<option value="' + y + '"' + (y === S.anaYear ? ' selected' : '') + '>' + y + '</option>';
-  }).join('');
-  var html = '<div class="card"><div class="card-hd">'
-    + '<h3>📊 Аналітика занять</h3>'
-    + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
-      + '<select onchange="S.anaMonth=+this.value;renderAnalytics()">' + monthOpts + '</select>'
-      + '<select onchange="S.anaYear=+this.value;renderAnalytics()">' + yearOpts + '</select>'
-      + '<button class="btn btn-secondary btn-sm" onclick="exportAnalyticsXlsx()">📤 Excel</button>'
-      + '<button class="btn btn-primary btn-sm" onclick="exportToSalary()">💰 Експорт у Salary</button>'
-    + '</div>'
-    + '</div><div class="card-bd pad" id="anaBody">'
-      + '<div class="loading"><div class="spinner"></div><div>Завантаження…</div></div>'
-    + '</div></div>';
-  $('main').innerHTML = html;
-  loadMarks({loc:S.loc}).then(function(marks){
-    S._anaRows = computeAnalytics(marks);
-    drawAnalytics();
-  });
-}
-function computeAnalytics(marks){
-  var mm = ('0' + (S.anaMonth + 1)).slice(-2);
-  var pref = S.anaYear + '-' + mm;
-  var bySubj = {};
-  marks.forEach(function(m){
-    if (String(m.date).slice(0,7) !== pref) return;
-    var b = bySubj[m.subjectId];
-    if (!b){ b = bySubj[m.subjectId] = {subject:m.subjectName, rate:m.rate, lessons:{}, children:{}, marks:0}; }
-    b.lessons[m.group + '|' + m.date] = true;
-    b.children[m.child] = true;
-    b.marks++;
-    if (m.rate) b.rate = m.rate;
-  });
-  return Object.keys(bySubj).map(function(id){
-    var b = bySubj[id];
-    var cat = S.catalog.filter(function(a){ return a.id === +id; })[0];
-    var rate = b.rate || (cat ? cat.rate : 0);
-    var lessons = Object.keys(b.lessons).length;
-    return {subject:b.subject || (cat ? cat.subject : '?'), rate:rate,
-      lessons:lessons, children:Object.keys(b.children).length,
-      marks:b.marks, salary:lessons * rate};
-  }).sort(function(a,b){ return b.salary - a.salary; });
-}
-function drawAnalytics(){
-  var body = $('anaBody'); if (!body) return;
-  var rows = S._anaRows || [];
-  if (!rows.length){
-    body.innerHTML = '<div class="empty">Немає відміток за ' + MONTHS[S.anaMonth] + ' ' + S.anaYear + '.</div>';
-    return;
-  }
-  var totL = 0, totS = 0;
-  rows.forEach(function(r){ totL += r.lessons; totS += r.salary; });
-  var html = '<div class="stat-grid">'
-    + '<div class="stat"><div class="stat-n">' + rows.length + '</div><div class="stat-l">предметів</div></div>'
-    + '<div class="stat"><div class="stat-n" style="color:var(--blue)">' + totL + '</div><div class="stat-l">занять</div></div>'
-    + '<div class="stat"><div class="stat-n" style="color:var(--green)">' + fmtN(totS) + '</div><div class="stat-l">ЗП разом, ₴</div></div>'
-    + '</div>';
-  html += '<div class="tbl-wrap"><table class="tbl"><thead><tr>'
-    + '<th>Предмет</th><th class="num">Ставка</th><th class="num">Занять (група×дата)</th>'
-    + '<th class="num">Дітей відмічено</th><th class="num">Всього галочок</th><th class="num">ЗП, ₴</th>'
-    + '</tr></thead><tbody>';
-  rows.forEach(function(r){
-    html += '<tr><td><span class="cat-name">' + escapeHtml(r.subject) + '</span></td>'
-      + '<td class="num">' + fmtN(r.rate) + '</td>'
-      + '<td class="num">' + r.lessons + '</td><td class="num">' + r.children + '</td>'
-      + '<td class="num">' + r.marks + '</td>'
-      + '<td class="num"><b>' + fmtN(r.salary) + '</b></td></tr>';
-  });
-  html += '</tbody></table></div>';
-  html += '<div class="muted" style="margin-top:10px;font-size:12px">ЗП = ставка × к-сть унікальних пар '
-    + '(група + дата). Дитячі галочки — лише статистика присутності.</div>';
-  body.innerHTML = html;
-}
-function exportAnalyticsXlsx(){
-  var rows = S._anaRows || [];
-  if (!rows.length){ showToast('Немає даних для експорту', 'err'); return; }
-  var aoa = [['Предмет','Ставка','Занять (група×дата)','Дітей відмічено','Всього галочок','ЗП (грн)']];
-  rows.forEach(function(r){ aoa.push([r.subject,r.rate,r.lessons,r.children,r.marks,r.salary]); });
-  exportXlsx(mkXlsxName(S.loc,'предметники_' + MONTHS[S.anaMonth] + '_' + S.anaYear),
-    [{name:'Предметники', aoa:aoa}]);
-}
-// Ручний експорт з вкладки «Аналітика» — кнопка «💰 Експорт у Salary».
-function exportToSalary(){
-  if (!confirm('Експортувати ЗП предметників за ' + MONTHS[S.anaMonth] + ' ' + S.anaYear
-    + ' у Salary-файл локації ' + S.loc + '?\nЗапис іде у Budget наступного місяця.')) return;
-  doExportPredmetny(S.loc, S.anaMonth + 1, S.anaYear, true);
-}
-
-// ── AUTO-EXPORT (debounce 5с) ───────────────
-// Аналог scheduleAutoExport з activities.html. Після кожної відмітки
-// чекаємо 5с тиші — потім автоматично штовхаємо ЗП предметників у
-// Salary-файл. Кожна нова відмітка скидає таймер.
-var EXP = { pendingTimer:null, countdownTimer:null, pendingFor:null, pendingUntil:0 };
-
-function scheduleAutoExportPredmetny(){
-  if (!hasPerm('predmetnyky')) return;
-  var loc = S.loc;
-  if (!loc) return;
-  // Місяць/рік беремо з дати відмітки (S.attDate), а не з системного
-  // календаря — інакше відмітка на інший місяць не потрапить у фільтр.
-  var d = String(S.attDate || '');
-  var month = Number(d.slice(5,7)) || (new Date().getMonth() + 1);
-  var year  = Number(d.slice(0,4)) || new Date().getFullYear();
-
-  if (EXP.pendingTimer)   clearTimeout(EXP.pendingTimer);
-  if (EXP.countdownTimer) clearInterval(EXP.countdownTimer);
-
-  EXP.pendingFor   = {loc:loc, month:month, year:year};
-  EXP.pendingUntil = Date.now() + 5000;
-
-  setSync('pending', '⏳ Експорт у Salary через 5с…');
-  EXP.countdownTimer = setInterval(function(){
-    var rem = Math.max(0, Math.ceil((EXP.pendingUntil - Date.now()) / 1000));
-    if (rem <= 0){ clearInterval(EXP.countdownTimer); EXP.countdownTimer = null; return; }
-    setSync('pending', '⏳ Експорт у Salary через ' + rem + 'с…');
-  }, 500);
-
-  EXP.pendingTimer = setTimeout(function(){
-    EXP.pendingTimer = null;
-    if (EXP.countdownTimer){ clearInterval(EXP.countdownTimer); EXP.countdownTimer = null; }
-    var spec = EXP.pendingFor;
-    EXP.pendingFor = null;
-    if (spec) doExportPredmetny(spec.loc, spec.month, spec.year, false);
-  }, 5000);
-}
-
-// Виклик exportPredmetnyToSalary на бекенді. Працює і для auto (manual=false),
-// і для ручної кнопки (manual=true). Власноруч керує sync-індикатором, тому
-// йде через прямий fetch, а не apiPost (який має власний setSync).
-function doExportPredmetny(loc, month, year, manual){
-  if (!hasPerm('predmetnyky')){
-    if (manual) showToast('Немає прав на експорт', 'err');
-    return Promise.resolve(null);
-  }
-  setSync('syncing', '🔄 Експорт ЗП предметників у Salary…');
-  return fetch(CFG.SCRIPT_URL, {
-    method:'POST', redirect:'follow',
-    headers:{'Content-Type':'text/plain;charset=utf-8'},
-    body:JSON.stringify({action:'exportPredmetnyToSalary', loc:loc, month:month, year:year})
-  }).then(function(r){ return r.json(); })
-    .then(function(res){
-      if (!res || !res.ok){
-        var em = (res && res.error) || 'Помилка експорту';
-        setSync('err', '❌ Salary: ' + em);
-        if (manual) showToast('❌ Експорт у Salary: ' + em, 'err', 7000);
-        return res;
+// ── DELETE LESSON ───────────────────────────
+function onDeleteLesson(id, ev){
+  if (ev) ev.stopPropagation();
+  if (!confirm('Видалити це заняття?')) return;
+  apiPost({
+    action: 'deletePredmetnykyLesson',
+    actorId: S.user.id,
+    lessonId: id
+  }).then(function(res){
+    if (!res || !res.ok){
+      if (res && res.code === 'NOT_FOUND'){
+        S.lessons = S.lessons.filter(function(L){ return L.id !== id; });
+        renderApp();
+        showToast('Заняття вже було видалено', 'info');
+      } else {
+        showToast((res && res.error) || 'Помилка видалення', 'err');
       }
-      var sum  = fmtN(res.totalFact || 0);
-      var sMsg = (res.updated || 0) + ' предметів = ' + sum + ' ₴';
-      var notFound = (res.notFound && res.notFound.length) ? res.notFound : null;
-      setSync('ok', '✅ Salary: ' + sMsg);
-      var toastMsg = '✅ Salary (' + MONTHS[month - 1] + ' ' + year + '): ' + sMsg;
-      if (notFound) toastMsg += '\n⚠️ Немає рядка у Salary: ' + notFound.join(', ');
-      showToast(toastMsg, notFound ? 'info' : 'ok', notFound ? 10000 : 6000);
-      return res;
-    })
-    .catch(function(e){
-      var em = String(e && e.message || e);
-      var unknown = /unknown action/i.test(em);
-      setSync('err', unknown
-        ? '⚠️ Експорт недоступний (потрібен деплой Apps Script)'
-        : '❌ Помилка експорту');
-      if (manual) showToast(unknown
-        ? '⚠️ Авто-експорт недоступний — потрібен деплой Apps Script.'
-        : '❌ Помилка мережі: ' + em, 'err', 7000);
-      return null;
-    });
+      return;
+    }
+    S.lessons = S.lessons.filter(function(L){ return L.id !== id; });
+    renderApp();
+    showToast('✅ Видалено', 'ok');
+  }).catch(function(e){
+    showToast('Помилка мережі: ' + (e && e.message || e), 'err');
+  });
 }
+
+// Esc → закрити модалку
+document.addEventListener('keydown', function(e){
+  if (e.key === 'Escape' && S.addModal) closeAddDate();
+});
 
 // ── INIT ────────────────────────────────────
+function populateLocSel(){
+  var sel = $('fLoc');
+  var locSet = {};
+  S.locations.forEach(function(l){ if (l && l.loc) locSet[l.loc] = 1; });
+  S.teachers.forEach(function(t){ (t.locations||[]).forEach(function(l){ if(l) locSet[l] = 1; }); });
+  S.lessons.forEach(function(L){ if (L.loc) locSet[L.loc] = 1; });
+  S.catalog.forEach(function(c){ if (c.loc) locSet[c.loc] = 1; });
+  var allLocs = Object.keys(locSet).sort();
+
+  if (S.user.loc){
+    // director / nurse / vyhovatel — locked to own loc
+    sel.innerHTML = '<option value="' + escapeHtml(S.user.loc) + '">' + escapeHtml(S.user.loc) + '</option>';
+    sel.value = S.user.loc;
+    sel.disabled = true;
+    S.loc = S.user.loc;
+  } else {
+    // network role — "Всі локації" + each
+    sel.innerHTML = '<option value="">Всі локації</option>' +
+      allLocs.map(function(l){
+        return '<option value="' + escapeHtml(l) + '">' + escapeHtml(l) + '</option>';
+      }).join('');
+    sel.disabled = false;
+    sel.value = S.loc;
+  }
+}
+
 (function init(){
   S.user = readSession();
   if (!S.user){ window.location.href = 'index.html'; return; }
@@ -1431,26 +1427,24 @@ function doExportPredmetny(loc, month, year, manual){
   $('syncIndicator').classList.remove('hidden');
   setSync('idle');
 
+  // Default month → current
   var d = new Date();
-  S.attDate = d.getFullYear() + '-' + ('0'+(d.getMonth()+1)).slice(-2) + '-' + ('0'+d.getDate()).slice(-2);
+  $('fMonth').value = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2);
 
-  apiGet('getLocations').then(function(res){
-    S.locations = (res && res.data) || [];
-    var sel = $('globalLocSel');
-    sel.innerHTML = S.locations.map(function(l){
-      return '<option value="' + escapeHtml(l.loc) + '">' + escapeHtml(l.loc) + '</option>';
-    }).join('');
-    // Директор/не-мережевий — замкнено на свою локацію. Мережеві ролі обирають будь-яку.
-    if (S.user.loc){ S.loc = S.user.loc; sel.value = S.user.loc; sel.disabled = true; }
-    else { S.loc = (S.locations[0] || {}).loc || ''; sel.disabled = false; }
-    return loadCatalog();
-  }).then(function(){
-    render();
-  }).catch(function(){
-    showToast('Не вдалося завантажити локації', 'err');
+  Promise.all([
+    apiGet('getLocations')
+      .then(function(res){ S.locations = (res && res.data) || []; })
+      .catch(function(){ S.locations = []; }),
+    loadPredmetnyky()
+  ]).then(function(){
+    populateLocSel();
+    renderApp();
+  }).catch(function(e){
+    showToast('Не вдалося завантажити: ' + (e && e.message || e), 'err');
     $('main').innerHTML = '<div class="err">Помилка завантаження. Натисніть «🔄 Оновити».</div>';
   });
 })();
+
 </script>
 <script>
 /* Задачник: бейдж непрочитаних у бічному меню (опитування кожні 60с). */

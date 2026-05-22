@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v6.7
+// m.kids CRM — Google Apps Script v6.11
+// v6.11: вчителі-предметники v2 — норми по регіонах × предмет × group_type,
+//        журнал занять (Predmetnyky_Lessons), endpoints + тести
 // v6.7: міграція директорів і медсестер у єдиний лист "Користувачі";
 //        паролі SHA-256; addAllDirectorsAndNurses() — разова утиліта
 // v6.6: Задачник — управління задачами в команді; листи "Задачі" +
@@ -37,6 +39,26 @@ var SHEET_YEARLY     = 'Оплати-Рік';
 var SHEET_CLIENTS    = 'Клієнти';
 var SHEET_ATTENDANCE = 'Табель';
 var SHEET_HEALTH     = 'Здоров\'я';
+
+// HR-таблиця (картка співробітника, v6.9). Окремий Google Sheet.
+// Структура: A=dir B=typ C=loc D=grp E=last F=first G=phone H=pos I=stat
+//            J=bday K=bmon L=bdate M=wday N=hired O=fired
+//            P=formula DATEDIF(M;O) — не чіпати при update
+//            Q=reserved (порожнє) — не чіпати при update
+//            R=email
+var HR_SHEET_ID       = '1KeSelcGyp8ijUQOmzUjFlX78TOScMWAFm7Hjf33Doyo';
+var HR_TAB_NAME       = '2025-2026';
+var HR_COLS           = 18;
+var HR_AUDIT_SHEET    = 'HR_Audit';
+var HR_AUDIT_HEADER   = ['ts','actorId','actorName','action','rowNum','before_json','after_json'];
+
+// Усе lowercase: helper-функції нижче порівнюють case-insensitive
+// (бо у Користувачі ролі написані змішано: 'CFO', 'CEO', 'RnD_director',
+// 'HR_trainer', 'Legal', а director / nurse / vyhovatel — lowercase).
+var EMP_MGMT_ROLES    = ['cfo','ceo','cco','coo','cmo','hr','hr_trainer','rnd_director','legal'];
+var EMP_DIR_ROLES     = ['director'];
+var EMP_VIEW_ROLES    = ['nurse','vyhovatel'];
+var EMP_DELETE_ROLES  = ['cfo','ceo','coo','hr','hr_trainer'];
 
 var MONTHS_UA      = ['вересень','жовтень','листопад','грудень','січень','лютий','березень','квітень','травень','червень','липень','серпень'];
 var MONTHS_JS      = [8,9,10,11,0,1,2,3,4,5,6,7];
@@ -220,6 +242,8 @@ function doGet(e) {
     else if (action === 'getTasks')                   result = getTasks(e.parameter || {});
     else if (action === 'getTaskActivity')            result = getTaskActivity(e.parameter && e.parameter.taskId || 0);
     else if (action === 'getDashboardNotifications')  result = getDashboardNotifications(e.parameter && e.parameter.userId || 0, e.parameter && e.parameter.role || '');
+    else if (action === 'getEmployees')               result = getEmployees(Number(e.parameter && e.parameter.actorId || 0), e.parameter && e.parameter.loc || '');
+    else if (action === 'getPredmetnyky')              result = getPredmetnyky(Number(e.parameter && e.parameter.actorId || 0));
     else                                             result = {ok:false, error:'Unknown action: ' + action};
     return jsonOut(result);
   } catch(err) {
@@ -269,6 +293,10 @@ function doPost(e) {
     else if (body.action === 'deleteTask')                result = deleteTask(body.taskId || 0, body.actorId || 0);
     else if (body.action === 'setUserPassword')           result = setUserPassword(body.username || '', body.newPassword || '', body.actorId || 0);
     else if (body.action === 'resetAllLocationPasswords') result = resetAllLocationPasswords(body.actorId || 0);
+    else if (body.action === 'saveEmployee')              result = saveEmployee(Number(body.actorId || 0), body.payload || {}, body.rowNum || null);
+    else if (body.action === 'deleteEmployee')            result = deleteEmployee(Number(body.actorId || 0), body.rowNum || 0);
+    else if (body.action === 'savePredmetnykyLesson')     result = savePredmetnykyLesson(Number(body.actorId || 0), body.lesson || {});
+    else if (body.action === 'deletePredmetnykyLesson')   result = deletePredmetnykyLesson(Number(body.actorId || 0), Number(body.lessonId || 0));
     else result = {ok:false, error:'Unknown action'};
     return jsonOut(result);
   } catch(err) {
@@ -6043,4 +6071,943 @@ function _runClassifyDiagnostic(locFilter){
     counts.ok, counts.warn, counts.neutral, counts.fail, summary.length);
 
   return {ok: true, summary: summary};
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  HR — КАРТКА СПІВРОБІТНИКА (v6.9)
+// ═══════════════════════════════════════════════════════════════════════════
+// Backend для додавання/редагування/soft-delete співробітника.
+// Permission-модель:
+//   director (own loc) | mgmt (any loc): CRUD; nurse/vyhovatel (own loc): read-only
+//   delete (soft, fired=today): тільки cfo/ceo/hr/coo
+// Audit log: CONFIG.HR_Audit [ts, actorId, actorName, action, rowNum, before, after]
+// Колонки P (formula) і Q (reserved) не чіпаються при update.
+
+// ── Sheets ──────────────────────────────────────────────────────────
+function _getHrSheet(){
+  var ss = SpreadsheetApp.openById(HR_SHEET_ID);
+  var sh = ss.getSheetByName(HR_TAB_NAME);
+  if (!sh) throw new Error('HR sheet tab "' + HR_TAB_NAME + '" not found');
+  return sh;
+}
+
+function _getHrAuditSheet(){
+  var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var sh = ss.getSheetByName(HR_AUDIT_SHEET);
+  if (!sh){
+    sh = ss.insertSheet(HR_AUDIT_SHEET);
+    sh.getRange(1, 1, 1, HR_AUDIT_HEADER.length).setValues([HR_AUDIT_HEADER]);
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+
+// ── Actor / permissions ────────────────────────────────────────────
+function _getActor(actorId){
+  if (!actorId) throw new Error('actorId required');
+  var sh = _getUsersSheet();
+  var data = sh.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++){
+    if (Number(data[i][0]) === Number(actorId)){
+      var u = _parseUserRow(data[i]);
+      if (!u.active) throw new Error('Actor user is inactive');
+      return u;
+    }
+  }
+  throw new Error('Actor not found (id=' + actorId + ')');
+}
+
+// Case-insensitive порівняння ролі — бо в Користувачі є 'CFO'/'CEO'/'Legal',
+// а наші константи lowercase.
+function _roleKey(r){ return String(r == null ? '' : r).trim().toLowerCase(); }
+
+function _empHasMgmtRole(role){ return EMP_MGMT_ROLES.indexOf(_roleKey(role)) !== -1; }
+function _empHasDirRole(role){  return EMP_DIR_ROLES.indexOf(_roleKey(role))  !== -1; }
+function _empHasViewRole(role){ return EMP_VIEW_ROLES.indexOf(_roleKey(role)) !== -1; }
+
+function _canViewEmployees(actor){
+  return _empHasMgmtRole(actor.role) || _empHasDirRole(actor.role) || _empHasViewRole(actor.role);
+}
+
+function _canEditEmployee(actor, targetLoc){
+  if (_empHasMgmtRole(actor.role)) return true;
+  if (_empHasDirRole(actor.role)){
+    if (!targetLoc) return false;
+    return String(actor.loc || '').trim() === String(targetLoc).trim();
+  }
+  return false;
+}
+
+function _canDeleteEmployee(actor){
+  return EMP_DELETE_ROLES.indexOf(_roleKey(actor.role)) !== -1;
+}
+
+// director/nurse/vyhovatel → їх loc (read-scope); mgmt → null (full access)
+function _empLocScope(actor){
+  if (_empHasMgmtRole(actor.role)) return null;
+  return String(actor.loc || '').trim() || null;
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────
+function _normalizePhone(phone){
+  var p = String(phone || '').trim().replace(/\s/g, '');
+  if (!p) return '';
+  if (!p.startsWith('0') && /^\d{9}$/.test(p)) return '0' + p;
+  return p;
+}
+
+function _fmtDateDmy(v){
+  if (!v) return '';
+  if (v instanceof Date)
+    return Utilities.formatDate(v, Session.getScriptTimeZone(), 'dd.MM.yyyy');
+  return String(v).trim();
+}
+
+// "15.03.2024" / "2024-03-15" / Date → Date (для запису у sheet).
+function _parseDateInput(s){
+  if (s == null || s === '') return '';
+  if (s instanceof Date) return s;
+  var str = String(s).trim();
+  if (!str) return '';
+  var dmy = /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/.exec(str);
+  if (dmy) return new Date(Number(dmy[3]), Number(dmy[2]) - 1, Number(dmy[1]));
+  var iso = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(str);
+  if (iso) return new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
+  return str;  // fallback — sheet validate сам
+}
+
+// row[18] → Employee object. rowNum — 1-based sheet row (stable ID).
+function _parseEmpRow(row, rowNum){
+  function s(v){ return String(v == null ? '' : v).trim(); }
+  var fired = _fmtDateDmy(row[14]);
+  return {
+    rowNum:   rowNum,
+    dir:      s(row[0]),
+    typ:      s(row[1]),
+    loc:      s(row[2]),
+    grp:      s(row[3]),
+    last:     s(row[4]),
+    first:    s(row[5]),
+    phone:    s(row[6]),
+    pos:      s(row[7]),
+    stat:     s(row[8]),
+    bday:     s(row[9]),
+    bmon:     s(row[10]),
+    bdate:    _fmtDateDmy(row[11]),
+    wday:     _fmtDateDmy(row[12]),
+    hired:    _fmtDateDmy(row[13]),
+    fired:    fired,
+    // P (idx 15) — formula, не повертаємо. Q (idx 16) — reserved.
+    email:    s(row[17]),
+    archived: fired !== ''
+  };
+}
+
+// Payload → 15 елементів A..O (для setValues).
+function _payloadToAtoO(p){
+  return [
+    String(p.dir   || '').trim(),         // A
+    String(p.typ   || '').trim(),         // B
+    String(p.loc   || '').trim(),         // C
+    String(p.grp   || '').trim(),         // D
+    String(p.last  || '').trim(),         // E
+    String(p.first || '').trim(),         // F
+    _normalizePhone(p.phone),             // G
+    String(p.pos   || '').trim(),         // H
+    String(p.stat  || '').trim(),         // I
+    String(p.bday  || '').trim(),         // J — день (рядок)
+    String(p.bmon  || '').trim(),         // K — місяць (рядок)
+    _parseDateInput(p.bdate),             // L
+    _parseDateInput(p.wday),              // M
+    _parseDateInput(p.hired),             // N
+    _parseDateInput(p.fired)              // O
+  ];
+}
+
+function _validateEmpPayload(p){
+  if (!p || typeof p !== 'object') return 'Empty payload';
+  if (!String(p.first || '').trim()) return 'Field "first" (Ім\'я) is required';
+  if (!String(p.last  || '').trim()) return 'Field "last" (Прізвище) is required';
+  if (!String(p.loc   || '').trim()) return 'Field "loc" (Локація) is required';
+  if (!String(p.pos   || '').trim()) return 'Field "pos" (Посада) is required';
+  return null;
+}
+
+// Дублікат = той самий ПІБ+phone+loc у активних (не archived). excludeRowNum
+// дозволяє безпечно update без хибного дубль-конфлікту "сам із собою".
+function _findEmpDuplicate(allEmps, payload, excludeRowNum){
+  function key(o){
+    return (String(o.last  || '').trim() + '|' +
+            String(o.first || '').trim() + '|' +
+            _normalizePhone(o.phone)     + '|' +
+            String(o.loc   || '').trim()
+           ).toLowerCase();
+  }
+  var target = key(payload);
+  for (var i = 0; i < allEmps.length; i++){
+    if (excludeRowNum && allEmps[i].rowNum === excludeRowNum) continue;
+    if (allEmps[i].archived) continue;
+    if (key(allEmps[i]) === target) return allEmps[i];
+  }
+  return null;
+}
+
+// ── Audit ──────────────────────────────────────────────────────────
+function _writeHrAudit(actor, action, rowNum, before, after){
+  try {
+    var sh = _getHrAuditSheet();
+    sh.appendRow([
+      new Date(),
+      actor ? actor.id : 0,
+      actor ? actor.name : '',
+      action || '',
+      rowNum || 0,
+      JSON.stringify(before || null),
+      JSON.stringify(after || null)
+    ]);
+  } catch(e){
+    Logger.log('[_writeHrAudit] error: ' + (e && e.message));
+  }
+}
+
+// ── PUBLIC API ──────────────────────────────────────────────────────
+
+// getEmployees(actorId, locFilter?) — read список з permission-filter.
+//   director/nurse/vyhovatel: автоматично scope=own loc (locFilter ігнор).
+//   mgmt: всі (або locFilter якщо передано).
+function getEmployees(actorId, locFilter){
+  try {
+    var actor = _getActor(actorId);
+    if (!_canViewEmployees(actor))
+      return {ok:false, error:'Permission denied', code:'PERM_DENIED'};
+
+    var scope  = _empLocScope(actor);
+    var filter = scope || (String(locFilter || '').trim() || null);
+
+    var sh = _getHrSheet();
+    var lastRow = sh.getLastRow();
+    if (lastRow < 2) return {ok:true, items:[], totalCount:0, scope: filter || 'all'};
+
+    var data  = sh.getRange(2, 1, lastRow - 1, HR_COLS).getValues();
+    var items = [];
+    for (var i = 0; i < data.length; i++){
+      var row = data[i];
+      var hasAny = false;
+      for (var c = 0; c < row.length; c++){
+        if (row[c] !== '' && row[c] !== null){ hasAny = true; break; }
+      }
+      if (!hasAny) continue;
+      var emp = _parseEmpRow(row, i + 2);
+      if (!emp.last && !emp.first) continue;
+      if (filter && emp.loc !== filter) continue;
+      items.push(emp);
+    }
+    return {ok:true, items:items, totalCount:items.length, scope: filter || 'all'};
+  } catch(e){
+    return {ok:false, error: e.message || String(e)};
+  }
+}
+
+// saveEmployee(actorId, payload, rowNum?) — create або update.
+//   rowNum=null/0  → create (appendRow + copy P formula з row 2)
+//   rowNum>0       → update (setValues A:O і R; P/Q не чіпаємо)
+function saveEmployee(actorId, payload, rowNum){
+  try {
+    var actor = _getActor(actorId);
+
+    var vErr = _validateEmpPayload(payload);
+    if (vErr) return {ok:false, error:vErr, code:'VALIDATION'};
+
+    if (!_canEditEmployee(actor, payload.loc))
+      return {ok:false, error:'Permission denied for location "' + payload.loc + '"', code:'PERM_DENIED'};
+
+    var lock = LockService.getDocumentLock();
+    if (!lock.tryLock(10000))
+      return {ok:false, error:'Could not acquire lock (try again)', code:'LOCK_TIMEOUT'};
+
+    try {
+      var sh = _getHrSheet();
+
+      // Усі співробітники у scope актора (для дубль-чеку).
+      var allRes = getEmployees(actorId);
+      if (!allRes.ok) return allRes;
+      var allEmps = allRes.items;
+
+      var newAtoO = _payloadToAtoO(payload);
+      var email   = String(payload.email || '').trim();
+
+      // ── UPDATE ─────────────────────────────────────────
+      if (rowNum){
+        rowNum = Number(rowNum) || 0;
+        if (!rowNum) return {ok:false, error:'Invalid rowNum', code:'VALIDATION'};
+
+        var existingRow = sh.getRange(rowNum, 1, 1, HR_COLS).getValues()[0];
+        var existing    = _parseEmpRow(existingRow, rowNum);
+
+        // Director не може переносити співробітника у іншу локацію
+        if (_empHasDirRole(actor.role) && existing.loc && existing.loc !== payload.loc)
+          return {ok:false, error:'Director cannot move employee to another location', code:'PERM_DENIED'};
+
+        var dup = _findEmpDuplicate(allEmps, payload, rowNum);
+        if (dup) return {ok:false, error:'Duplicate employee in same location (row ' + dup.rowNum + ')', code:'DUPLICATE'};
+
+        // Пишемо A:O (15 cols) і R (1 col). P (formula) + Q (reserved) — НЕ чіпаємо.
+        sh.getRange(rowNum, 1,  1, 15).setValues([newAtoO]);
+        sh.getRange(rowNum, 18, 1, 1).setValue(email);
+
+        var updated = _parseEmpRow(sh.getRange(rowNum, 1, 1, HR_COLS).getValues()[0], rowNum);
+        _writeHrAudit(actor, 'update', rowNum, existing, updated);
+        return {ok:true, rowNum:rowNum, employee:updated};
+      }
+
+      // ── CREATE ─────────────────────────────────────────
+      var dupNew = _findEmpDuplicate(allEmps, payload, null);
+      if (dupNew) return {ok:false, error:'Duplicate employee in same location (row ' + dupNew.rowNum + ')', code:'DUPLICATE'};
+
+      // appendRow з 18 cols: A-O (15) + ['',''] (P,Q) + R (email)
+      var fullRow = newAtoO.concat(['', '', email]);
+      sh.appendRow(fullRow);
+      var newRowNum = sh.getLastRow();
+
+      // P (life-cycle formula) — копіюємо з row 2 (relative refs автоматично переставляться).
+      try {
+        sh.getRange(2, 16).copyTo(
+          sh.getRange(newRowNum, 16),
+          SpreadsheetApp.CopyPasteType.PASTE_FORMULA,
+          false  // transposed
+        );
+      } catch(e){
+        Logger.log('[saveEmployee] copyTo P formula failed: ' + (e && e.message));
+      }
+
+      var created = _parseEmpRow(sh.getRange(newRowNum, 1, 1, HR_COLS).getValues()[0], newRowNum);
+      _writeHrAudit(actor, 'create', newRowNum, null, created);
+      return {ok:true, rowNum:newRowNum, employee:created};
+    } finally {
+      lock.releaseLock();
+    }
+  } catch(e){
+    return {ok:false, error: e.message || String(e)};
+  }
+}
+
+// deleteEmployee(actorId, rowNum) — soft-delete (O = today, формула P
+// автоматично переробить "life-cycle" з активного на "X років Y місяців").
+function deleteEmployee(actorId, rowNum){
+  try {
+    var actor = _getActor(actorId);
+    if (!_canDeleteEmployee(actor))
+      return {ok:false, error:'Permission denied (delete restricted to top management)', code:'PERM_DENIED'};
+    rowNum = Number(rowNum) || 0;
+    if (!rowNum) return {ok:false, error:'Invalid rowNum', code:'VALIDATION'};
+
+    var lock = LockService.getDocumentLock();
+    if (!lock.tryLock(10000))
+      return {ok:false, error:'Could not acquire lock', code:'LOCK_TIMEOUT'};
+
+    try {
+      var sh          = _getHrSheet();
+      var existingRow = sh.getRange(rowNum, 1, 1, HR_COLS).getValues()[0];
+      var existing    = _parseEmpRow(existingRow, rowNum);
+      if (!existing.last && !existing.first)
+        return {ok:false, error:'Row ' + rowNum + ' is empty', code:'NOT_FOUND'};
+
+      // O = column 15 (1-based). Date об'єкт → sheet форматнe як DD.MM.YYYY.
+      sh.getRange(rowNum, 15).setValue(new Date());
+
+      var updated = _parseEmpRow(sh.getRange(rowNum, 1, 1, HR_COLS).getValues()[0], rowNum);
+      _writeHrAudit(actor, 'soft_delete', rowNum, existing, updated);
+      return {ok:true, rowNum:rowNum, firedAt: updated.fired};
+    } finally {
+      lock.releaseLock();
+    }
+  } catch(e){
+    return {ok:false, error: e.message || String(e)};
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  PREDMETNYKY — ВЧИТЕЛІ-ПРЕДМЕТНИКИ (v6.11)
+// ═══════════════════════════════════════════════════════════════════════════
+// Облік проведених занять: 1 рядок Predmetnyky_Lessons = 1 заняття.
+// Норма = (region × subject × group_type) на місяць. Сума по
+// (location, group, subject, year-month) у Lessons ≤ норма.
+// "Чомусики" — без ліміту (норма 0 у всіх клітинках = сигнал unlimited).
+// Не торкаємось v6.5 (Предметники_Каталог читаємо тільки).
+//
+// Дві нові таблиці (у CRM_SHEET, auto-create):
+//   • Predmetnyky_Norms    — норми + idempotent seed (12 рядків).
+//   • Predmetnyky_Lessons  — журнал занять.
+//
+// Permission-модель:
+//   view :  mgmt (всі ролі) | director/nurse/vyhovatel (own loc)
+//   edit :  cfo/ceo/coo/cco (any loc) | director (own loc)
+//   read-only mgmt :  cmo, hr, hr_trainer, rnd_director, legal
+// Audit реюзає HR_Audit (action: 'pred_save_lesson' / 'pred_delete_lesson').
+
+// ── Constants ────────────────────────────────────────────────────
+var PRED_NORMS_TAB        = 'Predmetnyky_Norms';     // CRM_SHEET
+var PRED_LESSONS_TAB      = 'Predmetnyky_Lessons';   // CRM_SHEET
+var PRED_NORMS_HEADER     = ['Регіон','Предмет','miniBaby','Baby','Find','Study','Preschool'];
+var PRED_LESSONS_HEADER   = ['ID','EmpKey','Location','Group','Subject','Date','CreatedAt','CreatedBy'];
+
+// Нормалізовані назви предметів для системи норм.
+var PRED_SUBJECTS         = ['Англійська','Музика','Хореограф','Логопед','Психолог','Чомусики'];
+var PRED_UNLIMITED_SUBJ   = 'Чомусики';   // норму НЕ перевіряємо
+var PRED_GROUP_TYPES      = ['miniBaby','Baby','Find','Study','Preschool'];
+var PRED_LVIV_LOCATIONS   = ['Кругла','Бігова'];   // все інше → 'Київ'
+
+// Маппінг "сирих" назв з Предметники_Каталог → PRED_SUBJECTS.
+// null → не в системі норм (frontend ховає).
+var CATALOG_TO_NORM_MAP = {
+  'Англійська мова':       'Англійська',
+  'Логопед':               'Логопед',
+  'Муз.керівник':          'Музика',
+  'Хореограф':             'Хореограф',
+  'Психолог':              'Психолог',
+  'Чомусики':              'Чомусики',
+  'Підготовка до школи':   null
+};
+
+var PRED_EDIT_ROLES_ANY = ['cfo','ceo','coo','cco'];   // будь-яка локація
+// director (EMP_DIR_ROLES) — тільки своя локація
+
+// Seed для Predmetnyky_Norms (12 рядків — 2 регіони × 6 предметів).
+var PRED_NORMS_SEED = [
+  ['Київ',  'Англійська', 8, 8, 10, 15, 15],
+  ['Київ',  'Музика',     6, 6,  6,  6,  6],
+  ['Київ',  'Хореограф',  6, 6,  6,  6,  6],
+  ['Київ',  'Логопед',    0, 4,  4,  4,  4],
+  ['Київ',  'Психолог',   0, 2,  2,  2,  2],
+  ['Київ',  'Чомусики',   0, 0,  0,  0,  0],   // unlimited
+  ['Львів', 'Англійська', 8, 8, 10, 15, 15],
+  ['Львів', 'Музика',     6, 8,  8,  8,  8],
+  ['Львів', 'Хореограф',  6, 6,  6,  6,  6],
+  ['Львів', 'Логопед',    0, 4,  4,  4,  4],
+  ['Львів', 'Психолог',   0, 0,  0,  0,  0],
+  ['Львів', 'Чомусики',   0, 0,  0,  0,  0]    // unlimited
+];
+
+// ── Normalizers ──────────────────────────────────────────────────
+// HR.D (назва групи) → один з PRED_GROUP_TYPES або null.
+// Regexes case-insensitive і толерантні до "-ki"/" ki"/empty suffix —
+// HR-дані бувають з різними написаннями.
+function _normalizeGroupType(grp){
+  var s = String(grp || '').trim();
+  if (!s) return null;
+  if (/mini[\s\-]?baby/i.test(s))             return 'miniBaby';
+  if (/^baby[\-\s]?ki|^baby$/i.test(s))       return 'Baby';
+  if (/find[\-\s]?iki/i.test(s))              return 'Find';
+  if (/study[\-\s]?ki/i.test(s))              return 'Study';
+  if (/preschool|шкільн|підготов/i.test(s))   return 'Preschool';
+  return null;
+}
+
+// Catalog subject АБО HR.pos → один з PRED_SUBJECTS або null.
+//   1) Якщо точно у CATALOG_TO_NORM_MAP — повертаємо значення (включно з null).
+//   2) Інакше — contains-match по ключових словах (для HR pos: "Викладач
+//      англійської", "Музкерівник", "Логопед-психолог" тощо).
+function _normalizeSubject(raw){
+  var t = String(raw || '').trim();
+  if (!t) return null;
+  if (CATALOG_TO_NORM_MAP.hasOwnProperty(t)) return CATALOG_TO_NORM_MAP[t];
+  var low = t.toLowerCase();
+  if (low.indexOf('англ')    !== -1) return 'Англійська';
+  if (low.indexOf('хорео')   !== -1) return 'Хореограф';
+  if (low.indexOf('муз')     !== -1) return 'Музика';
+  if (low.indexOf('логопед') !== -1) return 'Логопед';
+  if (low.indexOf('психол')  !== -1) return 'Психолог';
+  if (low.indexOf('чомус')   !== -1) return 'Чомусики';
+  return null;
+}
+
+// ── Sheets (Norms — auto-create + seed) ──────────────────────────
+function _getPredNormsSheet(seedIfMissing){
+  var ss = getCRMSpreadsheet();
+  var sh = ss.getSheetByName(PRED_NORMS_TAB);
+  if (!sh){
+    sh = ss.insertSheet(PRED_NORMS_TAB);
+    sh.getRange(1, 1, 1, PRED_NORMS_HEADER.length).setValues([PRED_NORMS_HEADER]);
+    sh.setFrozenRows(1);
+    if (seedIfMissing !== false){
+      sh.getRange(2, 1, PRED_NORMS_SEED.length, PRED_NORMS_HEADER.length)
+        .setValues(PRED_NORMS_SEED);
+    }
+  }
+  return sh;
+}
+
+// Ідемпотентний seed — окремий public-call, можна запускати руками з editor.
+function _seedPredmetnykyNorms(){
+  var sh = _getPredNormsSheet(false);
+  var lastRow = sh.getLastRow();
+  if (lastRow > 1) return {ok:true, skipped:true, msg:'Norms already exist ('+(lastRow-1)+' rows)'};
+  sh.getRange(2, 1, PRED_NORMS_SEED.length, PRED_NORMS_HEADER.length)
+    .setValues(PRED_NORMS_SEED);
+  return {ok:true, seeded: PRED_NORMS_SEED.length};
+}
+
+// ── Loaders (Norms + Catalog) ────────────────────────────────────
+// Norms sheet → {'Київ': {'Англійська': {miniBaby:8,...}, ...}, 'Львів': {...}}
+function _loadPredNorms(){
+  var sh = _getPredNormsSheet(true);
+  var data = sh.getDataRange().getValues();
+  var out = {};
+  for (var i = 1; i < data.length; i++){
+    var row = data[i];
+    var region  = String(row[0] || '').trim();
+    var subject = String(row[1] || '').trim();
+    if (!region || !subject) continue;
+    if (!out[region]) out[region] = {};
+    out[region][subject] = {
+      miniBaby:  Number(row[2]) || 0,
+      Baby:      Number(row[3]) || 0,
+      Find:      Number(row[4]) || 0,
+      Study:     Number(row[5]) || 0,
+      Preschool: Number(row[6]) || 0
+    };
+  }
+  return out;
+}
+
+// Існуючий Предметники_Каталог → [{loc, subject_raw, subject_norm, rate, teacher, active}].
+// read-only; не торкаємось схеми. locFilter='' → усі локації.
+function _loadPredCatalog(locFilter){
+  var sh = _getPredmetnyCatalogSheet(false);
+  if (!sh || sh.getLastRow() < 2) return [];
+  var data = sh.getRange(2, 1, sh.getLastRow() - 1, PREDMETNY_CATALOG_HEADER.length).getValues();
+  var out = [];
+  var filter = String(locFilter || '').trim();
+  for (var i = 0; i < data.length; i++){
+    var rec = _parsePredmetnyCatRow(data[i]);
+    if (!rec.loc || !rec.subject) continue;
+    if (filter && rec.loc !== filter) continue;
+    out.push({
+      loc:          rec.loc,
+      subject_raw:  rec.subject,
+      subject_norm: _normalizeSubject(rec.subject),   // може бути null
+      rate:         rec.rate || null,
+      teacher:      rec.teacher,
+      active:       rec.active
+    });
+  }
+  return out;
+}
+
+// ── Sheets (Lessons) ─────────────────────────────────────────────
+function _getPredLessonsSheet(){
+  var ss = getCRMSpreadsheet();
+  var sh = ss.getSheetByName(PRED_LESSONS_TAB);
+  if (!sh){
+    sh = ss.insertSheet(PRED_LESSONS_TAB);
+    sh.getRange(1, 1, 1, PRED_LESSONS_HEADER.length).setValues([PRED_LESSONS_HEADER]);
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+
+// ── Endpoint helpers ─────────────────────────────────────────────
+function _predLocToRegion(loc){
+  var s = String(loc || '').trim();
+  return PRED_LVIV_LOCATIONS.indexOf(s) !== -1 ? 'Львів' : 'Київ';
+}
+
+// Має співпадати з frontend mkKey(last, first, wday||hired).
+function _mkEmpKey(last, first, wdayOrHired){
+  function s(x){ return String(x == null ? '' : x).trim().replace(/\s+/g, '').slice(0, 25); }
+  return 'e5_' + s(last) + '_' + s(first) + '_' + s(wdayOrHired);
+}
+
+// 'DD.MM.YYYY' / 'YYYY-MM-DD' / Date → {y, m}. m — 1-based. null якщо не парситься.
+function _lessonYearMonth(dateInput){
+  if (dateInput instanceof Date)
+    return {y: dateInput.getFullYear(), m: dateInput.getMonth() + 1};
+  var s = String(dateInput || '').trim();
+  var dmy = /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/.exec(s);
+  if (dmy) return {y: Number(dmy[3]), m: Number(dmy[2])};
+  var iso = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(s);
+  if (iso) return {y: Number(iso[1]), m: Number(iso[2])};
+  return null;
+}
+
+function _fmtLessonDate(d){
+  if (d instanceof Date)
+    return Utilities.formatDate(d, Session.getScriptTimeZone(), 'dd.MM.yyyy');
+  return String(d || '').trim();
+}
+
+function _nextPredLessonId(sh){
+  var lastRow = sh.getLastRow();
+  if (lastRow < 2) return 1;
+  var ids = sh.getRange(2, 1, lastRow - 1, 1).getValues();
+  var max = 0;
+  for (var i = 0; i < ids.length; i++){
+    var n = Number(ids[i][0]);
+    if (n > max) max = n;
+  }
+  return max + 1;
+}
+
+// ── Permission helpers ───────────────────────────────────────────
+function _canEditPredmetnyky(actor, targetLoc){
+  if (!actor) return false;
+  if (PRED_EDIT_ROLES_ANY.indexOf(_roleKey(actor.role)) !== -1) return true;
+  if (_empHasDirRole(actor.role)){
+    if (!targetLoc) return false;
+    return String(actor.loc || '').trim() === String(targetLoc).trim();
+  }
+  return false;
+}
+
+// view scope: mgmt → null (всі), director/nurse/vyhovatel → own loc, інші → throw
+function _predViewScope(actor){
+  if (_empHasMgmtRole(actor.role)) return null;
+  if (_empHasDirRole(actor.role) || _empHasViewRole(actor.role))
+    return String(actor.loc || '').trim() || null;
+  throw new Error('PERM_DENIED');
+}
+
+// ── Data loaders (teachers + lessons) ────────────────────────────
+// HR.emps → teachers. Filter: emp.pos має зматчити PRED_SUBJECTS через _normalizeSubject.
+function _loadPredTeachers(locFilter){
+  var sh = _getHrSheet();
+  var lastRow = sh.getLastRow();
+  if (lastRow < 2) return [];
+  var data = sh.getRange(2, 1, lastRow - 1, HR_COLS).getValues();
+  var teachers = [];
+  for (var i = 0; i < data.length; i++){
+    var emp = _parseEmpRow(data[i], i + 2);
+    if (emp.archived) continue;
+    if (!emp.last && !emp.first) continue;
+    if (locFilter && emp.loc !== locFilter) continue;
+    var subj = _normalizeSubject(emp.pos);
+    if (!subj) continue;
+    teachers.push({
+      empId:     emp.rowNum,
+      empKey:    _mkEmpKey(emp.last, emp.first, emp.wday || emp.hired),
+      name:      (emp.last + ' ' + emp.first).trim(),
+      position:  emp.pos,
+      subject:   subj,             // нормалізований (один з PRED_SUBJECTS)
+      locations: [emp.loc]
+    });
+  }
+  return teachers;
+}
+
+// Lessons sheet → [{id, empKey, loc, group, subject, date}].
+function _loadPredLessons(locFilter){
+  var sh = _getPredLessonsSheet();
+  var lastRow = sh.getLastRow();
+  if (lastRow < 2) return [];
+  var data = sh.getRange(2, 1, lastRow - 1, PRED_LESSONS_HEADER.length).getValues();
+  var out = [];
+  for (var i = 0; i < data.length; i++){
+    var row = data[i];
+    var id  = Number(row[0]);
+    if (!id) continue;
+    var loc = String(row[2] || '').trim();
+    if (locFilter && loc !== locFilter) continue;
+    out.push({
+      id:      id,
+      empKey:  String(row[1] || '').trim(),
+      loc:     loc,
+      group:   String(row[3] || '').trim(),
+      subject: String(row[4] || '').trim(),
+      date:    _fmtLessonDate(row[5])
+    });
+  }
+  return out;
+}
+
+// ── PUBLIC API ───────────────────────────────────────────────────
+
+// GET ?action=getPredmetnyky&actorId=N
+// {ok, teachers, norms (всі), catalog (scoped), lessons (scoped), scope}
+function getPredmetnyky(actorId){
+  try {
+    var actor = _getActor(actorId);
+    var scope;
+    try { scope = _predViewScope(actor); }
+    catch(e){ return {ok:false, error:'Permission denied', code:'PERM_DENIED'}; }
+
+    return {
+      ok:       true,
+      teachers: _loadPredTeachers(scope),
+      norms:    _loadPredNorms(),
+      catalog:  _loadPredCatalog(scope),
+      lessons:  _loadPredLessons(scope),
+      scope:    scope || 'all'
+    };
+  } catch(e){
+    return {ok:false, error: e.message || String(e)};
+  }
+}
+
+// POST {action:'savePredmetnykyLesson', actorId, lesson:{empKey, location, group, subject, date}}
+// Success:  {ok:true, id, current, norm}
+// Errors:   {ok:false, code:'BAD_SUBJECT'|'BAD_GROUP'|'NORM_REACHED'|'PERM_DENIED'|..., error, ...}
+function savePredmetnykyLesson(actorId, lesson){
+  try {
+    var actor = _getActor(actorId);
+    lesson = lesson || {};
+
+    // ── валідація ──
+    var empKey   = String(lesson.empKey   || '').trim();
+    var location = String(lesson.location || '').trim();
+    var group    = String(lesson.group    || '').trim();
+    var subject  = String(lesson.subject  || '').trim();
+    var dateStr  = String(lesson.date     || '').trim();
+    if (!empKey)   return {ok:false, error:'empKey is required'};
+    if (!location) return {ok:false, error:'location is required'};
+    if (!group)    return {ok:false, error:'group is required'};
+    if (!subject)  return {ok:false, error:'subject is required'};
+    if (!dateStr)  return {ok:false, error:'date is required'};
+    if (PRED_SUBJECTS.indexOf(subject) === -1)
+      return {ok:false, code:'BAD_SUBJECT', error:'Unknown subject: ' + subject};
+    var groupType = _normalizeGroupType(group);
+    if (!groupType)
+      return {ok:false, code:'BAD_GROUP', error:'Unknown group type for: ' + group};
+    var ym = _lessonYearMonth(dateStr);
+    if (!ym) return {ok:false, error:'Bad date format: ' + dateStr};
+
+    // ── permission ──
+    if (!_canEditPredmetnyky(actor, location))
+      return {ok:false, code:'PERM_DENIED', error:'Permission denied'};
+
+    var lock = LockService.getScriptLock();
+    lock.waitLock(15000);
+    try {
+      // ── norm check ──
+      // Чомусики — без ліміту (норма 0 у всіх клітинках = сигнал unlimited).
+      // Для решти: norm == 0 → BAD_GROUP (заборонена комбінація);
+      //          count >= norm → NORM_REACHED (місячний ліміт вичерпано).
+      var current = 0, norm = 0, region = _predLocToRegion(location);
+      if (subject !== PRED_UNLIMITED_SUBJ){
+        var norms = _loadPredNorms();
+        norm = (norms[region] && norms[region][subject] && norms[region][subject][groupType]) || 0;
+        if (norm <= 0){
+          return {ok:false, code:'BAD_GROUP',
+                  error:'No norm for ' + region + '/' + subject + '/' + groupType,
+                  region:region, groupType:groupType, norm:0};
+        }
+        var existing = _loadPredLessons(null);
+        for (var i = 0; i < existing.length; i++){
+          var L = existing[i];
+          if (L.loc     !== location) continue;
+          if (L.group   !== group)    continue;
+          if (L.subject !== subject)  continue;
+          var lym = _lessonYearMonth(L.date);
+          if (!lym || lym.y !== ym.y || lym.m !== ym.m) continue;
+          current++;
+        }
+        if (current >= norm){
+          return {ok:false, code:'NORM_REACHED', error:'norm_reached',
+                  current:current, norm:norm, region:region, groupType:groupType};
+        }
+      }
+
+      // ── insert ──
+      var sh = _getPredLessonsSheet();
+      var id = _nextPredLessonId(sh);
+      var dateVal = _parseDateInput(dateStr);
+      sh.appendRow([
+        id,
+        empKey,
+        location,
+        group,
+        subject,
+        dateVal instanceof Date ? dateVal : dateStr,
+        new Date(),
+        actor.id
+      ]);
+      _writeHrAudit(actor, 'pred_save_lesson', id, null,
+                    {empKey:empKey, location:location, group:group, subject:subject, date:dateStr});
+      return {ok:true, id:id, current: current + 1, norm: norm};
+    } finally {
+      lock.releaseLock();
+    }
+  } catch(e){
+    return {ok:false, error: e.message || String(e)};
+  }
+}
+
+// POST {action:'deletePredmetnykyLesson', actorId, lessonId}
+function deletePredmetnykyLesson(actorId, lessonId){
+  try {
+    var actor = _getActor(actorId);
+    var id = Number(lessonId);
+    if (!id) return {ok:false, error:'lessonId is required'};
+
+    var lock = LockService.getScriptLock();
+    lock.waitLock(15000);
+    try {
+      var sh = _getPredLessonsSheet();
+      var lastRow = sh.getLastRow();
+      if (lastRow < 2) return {ok:false, code:'NOT_FOUND', error:'Lesson not found'};
+      var data = sh.getRange(2, 1, lastRow - 1, PRED_LESSONS_HEADER.length).getValues();
+      for (var i = 0; i < data.length; i++){
+        if (Number(data[i][0]) !== id) continue;
+        var rowNum = i + 2;
+        var location = String(data[i][2] || '').trim();
+        if (!_canEditPredmetnyky(actor, location))
+          return {ok:false, code:'PERM_DENIED', error:'Permission denied'};
+        var before = {
+          empKey:   String(data[i][1] || '').trim(),
+          location: location,
+          group:    String(data[i][3] || '').trim(),
+          subject:  String(data[i][4] || '').trim(),
+          date:     _fmtLessonDate(data[i][5])
+        };
+        sh.deleteRow(rowNum);
+        _writeHrAudit(actor, 'pred_delete_lesson', id, before, null);
+        return {ok:true};
+      }
+      return {ok:false, code:'NOT_FOUND', error:'Lesson not found'};
+    } finally {
+      lock.releaseLock();
+    }
+  } catch(e){
+    return {ok:false, error: e.message || String(e)};
+  }
+}
+
+// ── TESTS ────────────────────────────────────────────────────────
+// Запускати з Apps Script editor → Run → _testPredmetnykyBackend.
+// Actor: CFO Мельніченко Ірина (ID=1), testDate=15.01.2199 (далеке майбутнє
+// щоб не колізіювати з реальними lessons). Side-effects: створює/видаляє
+// рядки у Predmetnyky_Lessons; cleanup в кінці.
+function _testPredmetnykyBackend(){
+  var actorId  = 1;                  // CFO Мельніченко Ірина
+  var testDate = '15.01.2199';
+  var createdIds = [];
+  var pass = 0, fail = 0;
+
+  Logger.log('━━━ Predmetnyky backend tests ━━━');
+  Logger.log('  actorId=' + actorId + ', testDate=' + testDate);
+
+  function ok(name, cond, info){
+    if (cond){ pass++; Logger.log('  ✅ ' + name + (info ? ' ('+info+')' : '')); }
+    else     { fail++; Logger.log('  ❌ ' + name + (info ? ' — '+info : '')); }
+  }
+  function cleanup(){
+    var n = 0;
+    for (var i = 0; i < createdIds.length; i++){
+      try {
+        var r = deletePredmetnykyLesson(actorId, createdIds[i]);
+        if (r && r.ok) n++;
+      } catch(e){}
+    }
+    Logger.log('  cleanup: removed ' + n + '/' + createdIds.length + ' test rows');
+  }
+
+  // ── 0. seed norms (idempotent) ──
+  var seedRes = _seedPredmetnykyNorms();
+  ok('0. seed idempotent', seedRes && seedRes.ok === true,
+     seedRes && (seedRes.skipped ? 'already seeded' : 'seeded=' + seedRes.seeded));
+
+  // ── 1. getPredmetnyky ──
+  var got = getPredmetnyky(actorId);
+  ok('1a. getPredmetnyky.ok', got && got.ok === true, got && got.error);
+  if (!got || !got.ok){
+    Logger.log('━━━ ABORT (cannot continue without getPredmetnyky) ━━━');
+    return {ok:false, pass:pass, fail:fail+9};
+  }
+  ok('1b. teachers ≥ 5', got.teachers.length >= 5, 'got=' + got.teachers.length);
+  ok('1c. norms[Київ][Англійська]',  !!(got.norms.Київ  && got.norms.Київ['Англійська']));
+  ok('1d. norms[Львів][Музика]',     !!(got.norms.Львів && got.norms.Львів['Музика']));
+  ok('1e. lessons is array', Array.isArray(got.lessons));
+  ok('1f. catalog is array', Array.isArray(got.catalog));
+
+  // Test fixture: реальна Київ-локація (не-Lviv) з перших teachers; fallback 'Голосієво'.
+  var testLoc = 'Голосієво';
+  for (var t = 0; t < got.teachers.length; t++){
+    var l = got.teachers[t].locations[0];
+    if (l && PRED_LVIV_LOCATIONS.indexOf(l) === -1){ testLoc = l; break; }
+  }
+  var testEmpKey = (got.teachers[0] && got.teachers[0].empKey) || 'e5_TEST_TEST_TEST';
+  Logger.log('  fixture: loc=' + testLoc + ', empKey=' + testEmpKey);
+
+  // Базовий lesson: Київ/Психолог/Baby, norm=2 (найменша ненульова).
+  var L = {empKey:testEmpKey, location:testLoc, group:'Baby-ki', subject:'Психолог', date:testDate};
+
+  // ── 2. save first lesson ──
+  var r2 = savePredmetnykyLesson(actorId, L);
+  ok('2a. save first lesson ok', r2 && r2.ok === true, r2 && r2.error);
+  ok('2b. response has id', r2 && r2.id > 0, r2 && ('id=' + r2.id));
+  ok('2c. current=1, norm=2', r2 && r2.current === 1 && r2.norm === 2,
+     r2 ? ('current=' + r2.current + ', norm=' + r2.norm) : 'no response');
+  if (r2 && r2.id) createdIds.push(r2.id);
+
+  // ── 3. fill-to-norm (2 of 2) ──
+  var r3 = savePredmetnykyLesson(actorId, L);
+  ok('3a. fill to norm ok', r3 && r3.ok === true, r3 && r3.error);
+  ok('3b. current=2, norm=2', r3 && r3.current === 2 && r3.norm === 2,
+     r3 ? ('current=' + r3.current + ', norm=' + r3.norm) : 'no response');
+  if (r3 && r3.id) createdIds.push(r3.id);
+
+  // ── 4. overflow → NORM_REACHED ──
+  var r4 = savePredmetnykyLesson(actorId, L);
+  ok('4. overflow → NORM_REACHED',
+     r4 && r4.ok === false && r4.code === 'NORM_REACHED',
+     r4 && (r4.code + ' current=' + r4.current + ' norm=' + r4.norm));
+
+  // ── 5. empty fields → error (без code, бо це базова валідація) ──
+  var r5a = savePredmetnykyLesson(actorId,
+    {empKey:'', location:testLoc, group:'Baby-ki', subject:'Психолог', date:testDate});
+  ok('5a. empty empKey → error', r5a && r5a.ok === false && /empKey/i.test(r5a.error || ''),
+     r5a && r5a.error);
+
+  var r5b = savePredmetnykyLesson(actorId,
+    {empKey:testEmpKey, location:testLoc, group:'', subject:'Психолог', date:testDate});
+  ok('5b. empty group → error', r5b && r5b.ok === false && /group/i.test(r5b.error || ''),
+     r5b && r5b.error);
+
+  var r5c = savePredmetnykyLesson(actorId,
+    {empKey:testEmpKey, location:testLoc, group:'Baby-ki', subject:'', date:testDate});
+  ok('5c. empty subject → error', r5c && r5c.ok === false && /subject/i.test(r5c.error || ''),
+     r5c && r5c.error);
+
+  // ── 6. unknown groupType → BAD_GROUP ──
+  var r6 = savePredmetnykyLesson(actorId,
+    {empKey:testEmpKey, location:testLoc, group:'XYZ-Garbage', subject:'Психолог', date:testDate});
+  ok('6. unknown groupType → BAD_GROUP',
+     r6 && r6.ok === false && r6.code === 'BAD_GROUP',
+     r6 && (r6.code + ' / ' + r6.error));
+
+  // ── 7. norm=0 (Київ/Логопед/miniBaby) → BAD_GROUP with norm:0 ──
+  var r7 = savePredmetnykyLesson(actorId,
+    {empKey:testEmpKey, location:testLoc, group:'miniBaby-ki', subject:'Логопед', date:testDate});
+  ok('7a. norm=0 → BAD_GROUP',
+     r7 && r7.ok === false && r7.code === 'BAD_GROUP',
+     r7 && (r7.code + ' norm=' + r7.norm));
+  ok('7b. norm=0 response includes norm:0', r7 && r7.norm === 0, r7 && ('norm=' + r7.norm));
+
+  // 7c. Чомусики (unlimited) — норма скіпається, save завжди ok.
+  var r7c = savePredmetnykyLesson(actorId,
+    {empKey:testEmpKey, location:testLoc, group:'Baby-ki', subject:'Чомусики', date:testDate});
+  ok('7c. Чомусики unlimited → ok', r7c && r7c.ok === true, r7c && r7c.error);
+  if (r7c && r7c.id) createdIds.push(r7c.id);
+
+  // ── 8. delete створеного → ok ──
+  if (createdIds.length){
+    var idDel = createdIds[0];
+    var r8 = deletePredmetnykyLesson(actorId, idDel);
+    ok('8. delete created → ok', r8 && r8.ok === true,
+       r8 ? ('id=' + idDel + ', ' + (r8.error || 'ok')) : 'no response');
+    if (r8 && r8.ok) createdIds.shift();
+  } else {
+    ok('8. delete created → ok', false, 'no created lessons to delete');
+  }
+
+  // ── 9. delete фейкового id → NOT_FOUND ──
+  var r9 = deletePredmetnykyLesson(actorId, 999999999);
+  ok('9. delete missing → NOT_FOUND',
+     r9 && r9.ok === false && r9.code === 'NOT_FOUND',
+     r9 && r9.code);
+
+  // ── cleanup ──
+  cleanup();
+
+  Logger.log('━━━ tests: ' + pass + ' pass, ' + fail + ' fail ━━━');
+  return {ok: fail === 0, pass:pass, fail:fail};
 }
