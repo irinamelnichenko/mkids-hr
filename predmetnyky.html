@@ -342,7 +342,7 @@ select,input,textarea{font-family:inherit}
 .card-hd select{padding:8px 10px;border:1.5px solid var(--gray2);
   border-radius:8px;font-size:13px;font-family:inherit;background:#fff}
 
-/* ── PREDMETNYKY v6.11.2 — matrix view ─────────────────────────── */
+/* ── PREDMETNYKY v6.11.5 — dates × subjects matrix ──────────────── */
 .pred-filters{display:flex;align-items:center;flex-wrap:wrap;gap:10px 14px;
   background:#fff;border-radius:10px;padding:12px 16px;margin:10px 0 14px;
   box-shadow:0 1px 3px rgba(0,0,0,.05)}
@@ -355,71 +355,100 @@ select,input,textarea{font-family:inherit}
 .pred-perm-banner{background:#fff7e6;border:1px solid #ffd591;color:#874d00;
   border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:13px}
 
-.pred-loc-section{margin-bottom:24px}
-.pred-loc-hd{font-size:17px;font-weight:800;color:var(--dark);
-  padding:6px 0 8px;margin-bottom:10px;border-bottom:2px solid var(--green2)}
+.pred-grid{background:#fff;border-radius:10px;
+  box-shadow:0 1px 3px rgba(0,0,0,.06);overflow:hidden;
+  display:grid;grid-template-columns:140px repeat(5, minmax(120px, 1fr))}
+.pred-grid-cnr{background:#fcfdfe;border-bottom:1px solid #eef1f4;
+  border-right:1px solid #eef1f4}
 
-.pred-group-section{margin-bottom:18px}
-.pred-group-hd{font-size:13px;font-weight:800;color:var(--dark2);
-  text-transform:uppercase;letter-spacing:.5px;padding:4px 4px 6px;
-  display:flex;align-items:center;gap:8px}
-.pred-group-hd::before{content:"▸";color:var(--green);font-size:11px}
+.pred-subj-hd{padding:10px 12px;border-bottom:1px solid #eef1f4;
+  background:#fcfdfe;display:flex;flex-direction:column;gap:3px;
+  font-size:12px;line-height:1.3;border-right:1px solid #eef1f4;position:relative}
+.pred-subj-hd:last-child{border-right:none}
+.pred-subj-hd.col-unassigned{background:#fffbf0}
+.pred-subj-hd.col-maxed{background:#fdecea}
+.pred-subj-name{font-size:13px;font-weight:800;color:var(--dark);
+  display:flex;align-items:center;gap:6px}
+.pred-subj-emoji{font-size:15px}
+.pred-subj-teacher{font-weight:600;color:var(--dark2);
+  display:flex;align-items:center;gap:4px;font-size:12px}
+.pred-subj-teacher.no-teacher{color:var(--gray);font-style:italic;font-weight:500}
+.pred-subj-rate{color:#16a085;font-size:11px;font-weight:600}
+.pred-subj-rate.no-rate{color:var(--red);font-weight:500}
+.pred-subj-counter{font-size:11px;font-weight:700;display:inline-block;
+  padding:2px 7px;background:#f0f4f8;color:var(--dark2);border-radius:10px;
+  align-self:flex-start;margin-top:1px}
+.pred-subj-counter.maxed{background:#fdecea;color:var(--red)}
+.pred-subj-counter.unlimited{background:#e0f2fe;color:#0369a1}
+.pred-subj-edit{background:transparent;border:none;cursor:pointer;
+  font-size:11px;opacity:.6;padding:0 2px;line-height:1}
+.pred-subj-edit:hover{opacity:1}
+.pred-subj-assignbtn{margin-top:4px;padding:4px 8px;border:1.5px solid var(--green);
+  background:#fff;color:var(--green);border-radius:6px;font-size:11px;
+  font-weight:600;cursor:pointer;align-self:flex-start;white-space:nowrap}
+.pred-subj-assignbtn:hover{background:var(--green);color:#fff}
+.pred-teacher-missing{color:var(--red);font-weight:600}
 
-.pred-matrix-card{background:#fff;border-radius:10px;
-  box-shadow:0 1px 3px rgba(0,0,0,.06);margin-bottom:8px;overflow:hidden}
-.pred-matrix-hd{display:flex;align-items:center;gap:10px;padding:10px 14px;
-  border-bottom:1px solid #eef1f4;background:#fcfdfe;flex-wrap:wrap}
-.pred-matrix-emoji{font-size:20px;flex-shrink:0}
-.pred-matrix-info{flex:1;min-width:160px}
-.pred-matrix-title{font-size:14px;font-weight:700;color:var(--dark)}
-.pred-matrix-sub{font-size:12px;color:var(--gray);margin-top:1px}
-.pred-rate{color:#16a085;font-weight:600}
-.pred-rate.no-rate{color:#c0392b;font-weight:500}
-.pred-counter{font-size:13px;font-weight:700;white-space:nowrap;
-  padding:4px 11px;background:#f0f4f8;color:var(--dark2);border-radius:14px}
-.pred-counter.maxed{background:#fdecea;color:var(--red)}
-.pred-counter.unlimited{background:#e0f2fe;color:#0369a1}
+.pred-date-cell{padding:8px 10px;border-bottom:1px solid #f0f4f8;
+  border-right:1px solid #eef1f4;display:flex;align-items:center;
+  justify-content:space-between;gap:6px;font-size:13px;font-weight:700;
+  color:var(--dark2);font-variant-numeric:tabular-nums;background:#fafbfc}
+.pred-date-cell.row-saving{opacity:.5}
+.pred-date-del{background:transparent;border:none;cursor:pointer;
+  font-size:13px;opacity:.55;padding:2px 4px;border-radius:4px;
+  transition:all .15s;line-height:1}
+.pred-date-del:hover{opacity:1;background:#fdecea;color:var(--red)}
+.pred-date-del:disabled{opacity:.3;cursor:wait}
 
-.pred-matrix-cells{display:flex;flex-wrap:wrap;gap:8px;padding:12px 14px}
-.pred-cell{display:flex;flex-direction:column;align-items:center;justify-content:center;
-  width:78px;min-width:78px;height:60px;border-radius:8px;
-  transition:all .15s;user-select:none;text-align:center;padding:4px 6px;
-  background:transparent;border:1.5px solid transparent}
-.pred-cell.filled{background:#e8f8f0;border-color:#86d9aa;color:#1d6e44;cursor:pointer}
-.pred-cell.filled:hover:not(.readonly){background:#d1f1de;border-color:var(--green);
-  transform:translateY(-1px);box-shadow:0 2px 6px rgba(39,174,96,.18)}
-.pred-cell.empty{background:#fafbfc;border-style:dashed;border-color:#cbd0d6;
-  color:#9aa1a8;cursor:pointer}
-.pred-cell.empty:hover:not(.readonly){background:#eaf5ff;border-style:solid;
-  border-color:var(--blue2);color:var(--blue)}
-.pred-cell.readonly{cursor:default}
-.pred-cell-num{font-size:11px;font-weight:700;line-height:1;opacity:.7}
-.pred-cell-date{font-size:13px;font-weight:800;line-height:1.1;
-  margin-top:3px;font-variant-numeric:tabular-nums}
+.pred-cb-cell{padding:10px;border-bottom:1px solid #f0f4f8;
+  border-right:1px solid #eef1f4;display:flex;align-items:center;
+  justify-content:center;cursor:pointer;transition:background .12s;
+  user-select:none;min-height:46px;position:relative}
+.pred-cb-cell:last-child{border-right:none}
+.pred-cb-cell:hover:not(.disabled){background:#f0f7ff}
+.pred-cb-cell.checked{background:#e8f8f0}
+.pred-cb-cell.checked:hover:not(.disabled){background:#d1f1de}
+.pred-cb-cell.col-unassigned{background:#fffbf0;cursor:not-allowed}
+.pred-cb-cell.col-maxed{background:#fdecea;cursor:not-allowed}
+.pred-cb-cell.col-maxed.checked{background:#fdecea;cursor:pointer}
+.pred-cb-cell.disabled{cursor:not-allowed;opacity:.7}
+.pred-cb-cell.saving{opacity:.6;cursor:wait}
 
-.pred-card-unassigned{background:#fffbf0;border:1px dashed #fcd34d}
-.pred-card-unassigned .pred-matrix-hd{background:transparent;border-bottom:none}
-.pred-card-warn{border:1px solid #f5b7b1}
-.pred-teacher-missing{color:#c0392b;font-weight:600}
-.pred-assign-btn{padding:7px 14px;border:1.5px solid var(--green);
-  background:#fff;color:var(--green);border-radius:8px;font-size:13px;
-  font-weight:600;cursor:pointer;transition:all .15s;white-space:nowrap}
-.pred-assign-btn:hover{background:var(--green);color:#fff}
-.pred-assign-edit{background:transparent;border:none;cursor:pointer;
-  font-size:13px;opacity:.6;padding:0 4px;margin-left:2px;
-  transition:opacity .15s;line-height:1}
-.pred-assign-edit:hover{opacity:1}
+.pred-cb{width:22px;height:22px;border-radius:5px;border:2px solid #cbd0d6;
+  background:#fff;display:flex;align-items:center;justify-content:center;
+  font-size:14px;font-weight:800;color:transparent;line-height:1;
+  transition:all .12s}
+.pred-cb-cell:hover:not(.disabled) .pred-cb{border-color:var(--blue2)}
+.pred-cb-cell.checked .pred-cb{background:var(--green);border-color:var(--green);color:#fff}
+.pred-cb-cell.col-unassigned .pred-cb{background:#f4f6f8;border-style:dashed}
+
+.pred-bottom-row{grid-column:1 / -1;padding:12px;background:#fcfdfe;
+  border-top:1px solid #eef1f4;display:flex;align-items:center;gap:10px;
+  position:relative}
+.pred-add-btn{padding:8px 16px;background:#fff;border:1.5px dashed var(--green);
+  color:var(--green);border-radius:8px;font-size:13px;font-weight:600;
+  cursor:pointer;transition:all .15s}
+.pred-add-btn:hover{background:var(--green);color:#fff;border-style:solid}
+.pred-date-popover{display:flex;align-items:center;gap:8px;
+  background:#fff;border:1px solid var(--gray2);border-radius:8px;
+  padding:6px 8px;box-shadow:0 2px 8px rgba(0,0,0,.08)}
+.pred-date-popover input[type=date]{padding:5px 8px;border:1px solid var(--gray2);
+  border-radius:6px;font-size:13px;font-family:inherit}
+.pred-date-popover .btn{padding:5px 12px;font-size:13px}
 
 .pred-modal-err{background:#fdecea;border:1px solid #f5b7b1;color:#a93226;
   border-radius:6px;padding:8px 12px;font-size:13px;margin-top:8px}
 
 .pred-empty{text-align:center;color:var(--gray);padding:40px 20px;font-size:14px}
+.pred-empty-hint{color:var(--gray2);font-size:12px;margin-top:8px}
 
-@media(max-width:640px){
-  .pred-cell{width:calc(33.333% - 6px);min-width:0;height:58px}
-  .pred-matrix-cells{gap:6px;padding:10px}
-  .pred-matrix-hd{padding:10px 12px;gap:8px}
-  .pred-matrix-title{font-size:13px}
+@media(max-width:768px){
+  .pred-grid{grid-template-columns:90px repeat(5, minmax(70px, 1fr));font-size:11px}
+  .pred-subj-hd{padding:8px 6px;font-size:11px}
+  .pred-subj-name{font-size:12px}
+  .pred-subj-emoji{font-size:13px}
+  .pred-date-cell{padding:6px 6px;font-size:11px}
+  .pred-cb{width:18px;height:18px}
 }
 </style>
 </head>
@@ -561,6 +590,9 @@ select,input,textarea{font-family:inherit}
     <label class="pred-filter-lbl">📍 Локація</label>
     <select id="fLoc" onchange="onFilterChange('loc')"></select>
 
+    <label class="pred-filter-lbl">👥 Група</label>
+    <select id="fGroup" onchange="onFilterChange('group')"></select>
+
     <label class="pred-filter-lbl">📅 Місяць</label>
     <select id="fMonth" onchange="onFilterChange('month')"></select>
     <select id="fYear" onchange="onFilterChange('month')"></select>
@@ -622,38 +654,6 @@ select,input,textarea{font-family:inherit}
   </div>
 </div>
 
-<!-- ── ADD LESSON DATE MODAL (v6.11) ───────────────────────────── -->
-<div id="modalAddDate" class="modal hidden">
-  <div class="modal-overlay" onclick="closeAddDate()"></div>
-  <div class="modal-card">
-    <button class="modal-close" onclick="closeAddDate()">✕</button>
-    <div class="modal-hd"><h3 id="addDateTitle">Додати заняття</h3></div>
-    <div class="modal-bd">
-      <div class="fg">
-        <label>Викладач</label>
-        <select id="addDateTeacherSel"></select>
-      </div>
-      <div class="fg">
-        <label>Локація → Група</label>
-        <input type="text" id="addDateLocGroup" disabled>
-      </div>
-      <div class="fg">
-        <label>Предмет</label>
-        <input type="text" id="addDateSubject" disabled>
-      </div>
-      <div class="fg">
-        <label>Дата заняття</label>
-        <input type="date" id="addDateInput">
-      </div>
-      <div id="addDateErr" class="pred-modal-err hidden"></div>
-    </div>
-    <div class="modal-ft">
-      <button class="btn btn-secondary" onclick="closeAddDate()">Скасувати</button>
-      <button class="btn btn-primary" id="addDateSubmit" onclick="submitAddDate()">Додати</button>
-    </div>
-  </div>
-</div>
-
 <div id="actToast" class="toast hidden"></div>
 
 <script>
@@ -683,9 +683,10 @@ var PRED_EDIT_ROLES = ['cfo','ceo','coo','cco'];   // any loc; director — own 
 var S = {
   user: null,
   // ── filters ──
-  loc: '',
-  year:  new Date().getFullYear(),
-  month: new Date().getMonth() + 1,
+  loc:       '',
+  groupType: 'Find',                    // НОВИЙ обов'язковий filter
+  year:      new Date().getFullYear(),
+  month:     new Date().getMonth() + 1,
   // ── data (одне завантаження getPredmetnyky) ──
   teachers:    [],
   norms:       {},
@@ -694,16 +695,14 @@ var S = {
   assignments: [],
   locations:   [],
   // ── ui ──
-  addModal:    null,
-  assignModal: null,
+  assignModal:  null,
+  datePopover:  false,                  // true коли inline date popover відкритий
+  savingCells:  {},                     // {"loc|gt|subj|date": true} — per-cell save lock
+  savingDates:  {},                     // {"loc|gt|date": true} — per-row delete lock
+  uiExtraDates: {},                     // {"loc|gt|YYYY-MM": ["DD.MM.YYYY", ...]} — додані вручну, поки без занять
   // ── auto-export ──
-  autoExportTimer:   null,
-  autoExportPending: {}    // {loc: true} — щоб не дублювати запит
+  autoExportTimer: null
 };
-
-// ① ② ③ ... ⑳, далі (21), (22)…
-var CELL_NUM = ['①','②','③','④','⑤','⑥','⑦','⑧','⑨','⑩',
-                '⑪','⑫','⑬','⑭','⑮','⑯','⑰','⑱','⑲','⑳'];
 
 // ── HELPERS ─────────────────────────────────
 function $(id){ return document.getElementById(id); }
@@ -1139,18 +1138,6 @@ function assignmentFor(loc, groupType, subj){
   }
   return null;
 }
-function allLessonsFor(loc, groupType, subj){
-  return S.lessons.filter(function(L){
-    if (L.loc !== loc) return false;
-    if (L.subject !== subj) return false;
-    if (normalizeGroupType(L.group) !== groupType) return false;
-    var ym = lessonYM(L.date);
-    if (!ym || ym.y !== S.year || ym.m !== S.month) return false;
-    return true;
-  }).sort(function(a, b){
-    return lessonSortKey(a.date).localeCompare(lessonSortKey(b.date));
-  });
-}
 function getNormFor(loc, subj, groupType){
   var region = predLocToRegion(loc);
   var r = S.norms[region]; if (!r) return 0;
@@ -1167,53 +1154,57 @@ function getRateFor(loc, subj){
   }
   return null;
 }
-function getActiveLocations(){
-  var locSet = {};
-  S.teachers.forEach(function(t){
-    (t.locations || []).forEach(function(l){ if (l) locSet[l] = 1; });
-  });
-  var list = Object.keys(locSet).sort(function(a, b){ return a.localeCompare(b, 'uk'); });
-  if (S.loc) return list.filter(function(l){ return l === S.loc; });
-  return list;
-}
-function shortDate(dmy){
-  var m = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(String(dmy || ''));
-  return m ? (m[1] + '.' + m[2]) : dmy;
-}
 function escapeJs(s){
   return String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
 // ── RENDERERS (v6.11.2 — matrix view) ──────
+function lessonByCell(loc, groupName, subj, dateDmy){
+  for (var i = 0; i < S.lessons.length; i++){
+    var L = S.lessons[i];
+    if (L.loc !== loc) continue;
+    if (L.group !== groupName) continue;
+    if (L.subject !== subj) continue;
+    if (L.date !== dateDmy) continue;
+    return L;
+  }
+  return null;
+}
+function ymKey(){ return S.year + '-' + ('0' + S.month).slice(-2); }
+function extraDatesKey(loc, groupType){
+  return loc + '|' + groupType + '|' + ymKey();
+}
+function buildDateRows(loc, groupType){
+  var groupName = GROUP_NAME_BY_TYPE[groupType];
+  var dateSet = {};
+  S.lessons.forEach(function(L){
+    if (L.loc !== loc) return;
+    if (L.group !== groupName) return;
+    var ym = lessonYM(L.date);
+    if (!ym || ym.y !== S.year || ym.m !== S.month) return;
+    dateSet[L.date] = true;
+  });
+  var extras = S.uiExtraDates[extraDatesKey(loc, groupType)] || [];
+  extras.forEach(function(d){ dateSet[d] = true; });
+  return Object.keys(dateSet).sort(function(a, b){
+    return lessonSortKey(a).localeCompare(lessonSortKey(b));
+  });
+}
+function cellLockKey(loc, gt, subj, dateDmy){ return [loc, gt, subj, dateDmy].join('|'); }
+function dateLockKey(loc, gt, dateDmy){       return [loc, gt, dateDmy].join('|'); }
+
+// ── RENDER ──────────────────────────────────
 function renderApp(){
   renderPermBanner();
-  var locs = getActiveLocations();
-  if (!locs.length){
-    $('main').innerHTML = '<div class="pred-empty">Викладачів не знайдено. ' +
-      'Перевір фільтри або додай вчителів-предметників у HR.</div>';
+  if (!S.loc || !S.groupType){
+    $('main').innerHTML = '<div class="pred-empty">Обери локацію та групу.<div class="pred-empty-hint">' +
+      'Матриця показує дати × предмети для конкретної групи.</div></div>';
     renderFilterCount(0);
     return;
   }
-  var showLocHd = !S.loc; // "Всі локації"
-  var blockCount = 0;
-  var html = locs.map(function(loc){
-    var section = renderLocSection(loc, showLocHd, function(n){ blockCount += n; });
-    return section;
-  }).filter(Boolean).join('');
-
-  if (!blockCount){
-    $('main').innerHTML = '<div class="pred-empty">Немає блоків для відображення з поточними фільтрами.<br>' +
-      '<span style="font-size:12px">Перевір, що в HR є викладачі-предметники для обраної локації, ' +
-      'та що норми &gt; 0.</span></div>';
-  } else {
-    $('main').innerHTML = html;
-  }
-  renderFilterCount(blockCount);
-}
-
-function renderFilterCount(blockCount){
-  var n = blockCount || 0;
-  $('filterCount').textContent = n + ' ' + pluralUk(n, 'блок', 'блоки', 'блоків');
+  $('main').innerHTML = renderMatrix(S.loc, S.groupType);
+  var totalLessons = countMatrixLessons(S.loc, S.groupType);
+  renderFilterCount(totalLessons);
 }
 
 function renderPermBanner(){
@@ -1228,154 +1219,200 @@ function renderPermBanner(){
   }
 }
 
-function renderLocSection(loc, showHd, addBlocks){
-  var groupsHtml = PRED_GROUP_TYPES.map(function(gt){
-    return renderGroupSection(loc, gt, addBlocks);
-  }).filter(Boolean).join('');
-  if (!groupsHtml) return '';
-  return '<section class="pred-loc-section">' +
-    (showHd ? '<div class="pred-loc-hd">📍 ' + escapeHtml(loc) + '</div>' : '') +
-    groupsHtml +
-  '</section>';
+function renderFilterCount(n){
+  n = n || 0;
+  $('filterCount').textContent = n + ' ' + pluralUk(n, 'заняття', 'заняття', 'занять');
 }
 
-function renderGroupSection(loc, groupType, addBlocks){
-  var subjBlocks = [];
-  PRED_SUBJECTS.forEach(function(subj){
-    var teachers = teachersFor(loc, subj);
-    if (!teachers.length) return;                 // нема HR-кандидатів — приховуємо
-    var norm = getNormFor(loc, subj, groupType);
-    var isUnlimited = (subj === PRED_UNLIMITED_SUBJ);
-    if (norm <= 0 && !isUnlimited) return;        // норма=0 — приховуємо
-    var lessons = allLessonsFor(loc, groupType, subj);
-    var assignment = assignmentFor(loc, groupType, subj);
-    subjBlocks.push(renderMatrixCard(loc, groupType, subj, teachers, assignment, lessons, norm, isUnlimited));
-  });
-  if (!subjBlocks.length) return '';
-  addBlocks(subjBlocks.length);
+function countMatrixLessons(loc, groupType){
   var groupName = GROUP_NAME_BY_TYPE[groupType];
-  return '<div class="pred-group-section">' +
-    '<div class="pred-group-hd">' +
-      escapeHtml(groupName) + ' — ' + escapeHtml(MONTHS[S.month - 1] + ' ' + S.year) +
-    '</div>' +
-    subjBlocks.join('') +
-  '</div>';
+  var n = 0;
+  for (var i = 0; i < S.lessons.length; i++){
+    var L = S.lessons[i];
+    if (L.loc !== loc) continue;
+    if (L.group !== groupName) continue;
+    var ym = lessonYM(L.date);
+    if (!ym || ym.y !== S.year || ym.m !== S.month) continue;
+    n++;
+  }
+  return n;
 }
 
-function renderMatrixCard(loc, groupType, subj, teachers, assignment, lessons, norm, isUnlimited){
+function renderMatrix(loc, groupType){
   var canEdit = canEditPred(loc);
-  var emoji = SUBJECT_EMOJI[subj] || '📚';
+  var groupName = GROUP_NAME_BY_TYPE[groupType];
 
-  // ── UNASSIGNED state ──
-  if (!assignment){
-    var noCandidates = !teachers.length;
-    var btnHtml = canEdit
-      ? '<button class="pred-assign-btn" onclick="openAssign(\'' +
-          escapeJs(loc) + '\', \'' + groupType + '\', \'' + escapeJs(subj) + '\', null)">' +
-        (noCandidates ? 'Додати викладача' : '+ Обрати викладача') +
-        '</button>'
+  // Per-subject metadata: assignment, teacher, rate, norm, count, isUnlimited, isMaxed, isUnassigned
+  var subjMeta = PRED_SUBJECTS.map(function(subj){
+    var assignment  = assignmentFor(loc, groupType, subj);
+    var teacher     = assignment ? findTeacher(assignment.empKey) : null;
+    var norm        = getNormFor(loc, subj, groupType);
+    var isUnlimited = (subj === PRED_UNLIMITED_SUBJ);
+    var rate        = getRateFor(loc, subj);
+    var count = 0;
+    S.lessons.forEach(function(L){
+      if (L.loc !== loc || L.group !== groupName || L.subject !== subj) return;
+      var ym = lessonYM(L.date);
+      if (!ym || ym.y !== S.year || ym.m !== S.month) return;
+      count++;
+    });
+    var isMaxed = !isUnlimited && count >= norm;
+    return {
+      subj: subj, assignment: assignment, teacher: teacher,
+      norm: norm, isUnlimited: isUnlimited, rate: rate,
+      count: count, isMaxed: isMaxed,
+      isUnassigned: !assignment
+    };
+  });
+
+  // Header row
+  var html = '<div class="pred-grid">';
+  html += '<div class="pred-grid-cnr"></div>';
+  subjMeta.forEach(function(m){
+    html += renderSubjHeader(loc, groupType, m, canEdit);
+  });
+
+  // Data rows
+  var dates = buildDateRows(loc, groupType);
+  dates.forEach(function(dateDmy){
+    html += renderDateRow(loc, groupType, groupName, dateDmy, subjMeta, canEdit);
+  });
+
+  // Bottom row (add date)
+  if (canEdit){
+    html += '<div class="pred-bottom-row" id="predBottomRow">' +
+      '<button class="pred-add-btn" id="predAddDateBtn" onclick="openAddDatePopover()">+ Додати дату</button>' +
+    '</div>';
+  } else {
+    html += '<div class="pred-bottom-row"><span class="muted">Тільки перегляд</span></div>';
+  }
+
+  html += '</div>';
+
+  // Hint якщо матриця порожня
+  if (!dates.length){
+    html += '<div class="pred-empty" style="margin-top:16px">Поки що жодного заняття.' +
+      (canEdit ? '<div class="pred-empty-hint">Натисни «+ Додати дату» щоб почати.</div>' : '') +
+    '</div>';
+  }
+  return html;
+}
+
+function renderSubjHeader(loc, groupType, m, canEdit){
+  var emoji = SUBJECT_EMOJI[m.subj] || '📚';
+  var colCls = '';
+  if (m.isUnassigned) colCls = ' col-unassigned';
+  else if (m.isMaxed) colCls = ' col-maxed';
+
+  // ── Unassigned ──
+  if (m.isUnassigned){
+    var candidates = teachersFor(loc, m.subj);
+    var noCandidates = !candidates.length;
+    var btn = canEdit
+      ? '<button class="pred-subj-assignbtn" onclick="openAssign(\'' +
+          escapeJs(loc) + '\', \'' + groupType + '\', \'' + escapeJs(m.subj) + '\', null)">' +
+        (noCandidates ? 'Додати в HR' : '+ Обрати') + '</button>'
       : '';
-    return '<div class="pred-matrix-card pred-card-unassigned">' +
-      '<div class="pred-matrix-hd">' +
-        '<span class="pred-matrix-emoji">' + emoji + '</span>' +
-        '<div class="pred-matrix-info">' +
-          '<div class="pred-matrix-title">' + escapeHtml(subj) +
-            ' · <span class="muted">Викладач не призначений</span></div>' +
-          '<div class="pred-matrix-sub muted">' +
-            (noCandidates
-              ? 'Немає кандидатів у HR з посадою «' + escapeHtml(subj) + '» у «' + escapeHtml(loc) + '»'
-              : escapeHtml(teachers.length) + ' ' + pluralUk(teachers.length, 'кандидат', 'кандидати', 'кандидатів') + ' у HR') +
-          '</div>' +
-        '</div>' +
-        btnHtml +
-      '</div>' +
+    return '<div class="pred-subj-hd' + colCls + '">' +
+      '<div class="pred-subj-name"><span class="pred-subj-emoji">' + emoji + '</span>' +
+        escapeHtml(m.subj) + '</div>' +
+      '<div class="pred-subj-teacher no-teacher">Не призначено</div>' +
+      btn +
     '</div>';
   }
 
-  // ── ASSIGNED state ──
-  var teacher = findTeacher(assignment.empKey);
-  var teacherLbl, teacherWarn = '';
-  if (teacher){
-    teacherLbl = escapeHtml(teacher.name);
-  } else {
-    teacherLbl = '<span class="pred-teacher-missing">⚠️ Невідомий викладач</span>';
-    teacherWarn = ' pred-card-warn';
-  }
-
-  // ── Rate ──
-  var rate = getRateFor(loc, subj);
-  var rateHtml = (rate != null)
-    ? '<span class="pred-rate">' + fmtN(rate) + ' грн/зан.</span>'
-    : '<span class="pred-rate no-rate">Ставка не вказана</span>';
-
-  // ── Edit-assignment button ──
+  // ── Assigned ──
+  var teacherLbl = m.teacher
+    ? escapeHtml(m.teacher.name)
+    : '<span class="pred-teacher-missing">⚠️ Невідомий</span>';
   var editBtn = canEdit
-    ? '<button class="pred-assign-edit" title="Замінити викладача" onclick="openAssign(\'' +
-        escapeJs(loc) + '\', \'' + groupType + '\', \'' + escapeJs(subj) + '\', \'' +
-        escapeJs(assignment.empKey) + '\')">✏️</button>'
+    ? '<button class="pred-subj-edit" title="Замінити викладача" onclick="openAssign(\'' +
+        escapeJs(loc) + '\', \'' + groupType + '\', \'' + escapeJs(m.subj) + '\', \'' +
+        escapeJs(m.assignment.empKey) + '\')">✏️</button>'
     : '';
-
-  // ── Counter ──
-  var count = lessons.length;
+  var rateHtml = (m.rate != null)
+    ? '<span class="pred-subj-rate">' + fmtN(m.rate) + '₴</span>'
+    : '<span class="pred-subj-rate no-rate">— ₴</span>';
   var counterHtml;
-  if (isUnlimited){
-    counterHtml = '<span class="pred-counter unlimited">' + count + ' (без ліміту)</span>';
+  if (m.isUnlimited){
+    counterHtml = '<span class="pred-subj-counter unlimited">' + m.count + ' (∞)</span>';
   } else {
-    var cls = (count >= norm) ? 'pred-counter maxed' : 'pred-counter';
-    counterHtml = '<span class="' + cls + '">' + count + ' / ' + norm + '</span>';
+    var cls = m.isMaxed ? 'pred-subj-counter maxed' : 'pred-subj-counter';
+    counterHtml = '<span class="' + cls + '">' + m.count + ' / ' + m.norm + '</span>';
   }
-
-  // ── Cells ──
-  var totalCells = isUnlimited ? (count + 1) : norm;
-  var cellsHtml = '';
-  var canAddLesson = canEdit && !!teacher;       // нема HR teacher → не дозволяємо додавати
-  for (var i = 0; i < totalCells; i++){
-    cellsHtml += renderCell(i, lessons[i] || null, canAddLesson, loc, groupType, subj);
-  }
-
-  return '<div class="pred-matrix-card' + teacherWarn + '">' +
-    '<div class="pred-matrix-hd">' +
-      '<span class="pred-matrix-emoji">' + emoji + '</span>' +
-      '<div class="pred-matrix-info">' +
-        '<div class="pred-matrix-title">' + escapeHtml(subj) + ' · ' + teacherLbl + ' ' + editBtn + '</div>' +
-        '<div class="pred-matrix-sub">' + rateHtml + '</div>' +
-      '</div>' +
-      counterHtml +
-    '</div>' +
-    '<div class="pred-matrix-cells">' + cellsHtml + '</div>' +
+  return '<div class="pred-subj-hd' + colCls + '">' +
+    '<div class="pred-subj-name"><span class="pred-subj-emoji">' + emoji + '</span>' +
+      escapeHtml(m.subj) + '</div>' +
+    '<div class="pred-subj-teacher">' + teacherLbl + ' ' + editBtn + '</div>' +
+    rateHtml +
+    counterHtml +
   '</div>';
 }
 
-function renderCell(idx, lesson, canEdit, loc, groupType, subj){
-  var num = CELL_NUM[idx] || ('(' + (idx + 1) + ')');
-  if (lesson){
-    var cls = 'pred-cell filled' + (canEdit ? '' : ' readonly');
-    var handler = canEdit ? ' onclick="onCellFilledClick(' + lesson.id + ', event)"' : '';
-    var titleAttr = canEdit ? ' title="Натисни, щоб видалити"' : '';
-    return '<div class="' + cls + '"' + handler + titleAttr + '>' +
-      '<span class="pred-cell-num">' + num + '</span>' +
-      '<span class="pred-cell-date">' + escapeHtml(shortDate(lesson.date)) + '</span>' +
-    '</div>';
-  } else {
-    var clsE = 'pred-cell empty' + (canEdit ? '' : ' readonly');
-    var handlerE = canEdit
-      ? ' onclick="onCellEmptyClick(\'' + escapeJs(loc) + '\', \'' + groupType + '\', \'' + escapeJs(subj) + '\')"'
-      : '';
-    var titleE = canEdit ? ' title="Натисни, щоб додати дату"' : '';
-    return '<div class="' + clsE + '"' + handlerE + titleE + '>' +
-      '<span class="pred-cell-num">' + num + '</span>' +
-      '<span class="pred-cell-date">___</span>' +
-    '</div>';
-  }
+function renderDateRow(loc, groupType, groupName, dateDmy, subjMeta, canEdit){
+  var rowSaving = !!S.savingDates[dateLockKey(loc, groupType, dateDmy)];
+  var rowCls = 'pred-date-cell' + (rowSaving ? ' row-saving' : '');
+  var delDisabled = (!canEdit || rowSaving) ? ' disabled' : '';
+  var delBtn = canEdit
+    ? '<button class="pred-date-del" onclick="onDeleteDateRow(\'' +
+        escapeJs(loc) + '\', \'' + groupType + '\', \'' + escapeJs(dateDmy) + '\')"' +
+        delDisabled + ' title="Видалити всі заняття цієї дати">🗑</button>'
+    : '';
+  var html = '<div class="' + rowCls + '">' +
+    '<span>' + escapeHtml(dateDmy) + '</span>' + delBtn +
+  '</div>';
+  subjMeta.forEach(function(m){
+    html += renderCheckbox(loc, groupType, groupName, m, dateDmy, canEdit);
+  });
+  return html;
+}
+
+function renderCheckbox(loc, groupType, groupName, m, dateDmy, canEdit){
+  var lesson = lessonByCell(loc, groupName, m.subj, dateDmy);
+  var checked = !!lesson;
+  var saving  = !!S.savingCells[cellLockKey(loc, groupType, m.subj, dateDmy)];
+
+  // Disabled rules:
+  //   • view-only → disabled
+  //   • unassigned column → disabled
+  //   • maxed column AND not currently checked → disabled (still allow uncheck of existing)
+  //   • saving in flight → disabled visually
+  var disabled = !canEdit
+    || m.isUnassigned
+    || (m.isMaxed && !checked);
+
+  var classes = 'pred-cb-cell';
+  if (checked)      classes += ' checked';
+  if (disabled)     classes += ' disabled';
+  if (saving)       classes += ' saving';
+  if (m.isUnassigned) classes += ' col-unassigned';
+  else if (m.isMaxed) classes += ' col-maxed';
+
+  var handler = (!disabled && !saving)
+    ? ' onclick="onCheckboxToggle(\'' + escapeJs(loc) + '\', \'' + groupType +
+      '\', \'' + escapeJs(m.subj) + '\', \'' + escapeJs(dateDmy) + '\')"'
+    : '';
+  var title = disabled
+    ? (m.isUnassigned ? 'Спершу признач викладача' :
+       (m.isMaxed ? 'Норму досягнуто' : ''))
+    : (checked ? 'Натисни щоб видалити заняття' : 'Натисни щоб провести заняття');
+
+  return '<div class="' + classes + '"' + handler +
+    (title ? ' title="' + escapeHtml(title) + '"' : '') + '>' +
+    '<span class="pred-cb">✓</span>' +
+  '</div>';
 }
 
 // ── FILTERS & CELL HANDLERS ─────────────────
 function onFilterChange(which){
-  if (which === 'loc') S.loc = $('fLoc').value;
+  if (which === 'loc')   S.loc = $('fLoc').value;
+  if (which === 'group') S.groupType = $('fGroup').value;
   if (which === 'month'){
     S.year  = Number($('fYear').value)  || S.year;
     S.month = Number($('fMonth').value) || S.month;
   }
+  // Зміна фільтрів закриває попап додавання дати
+  S.datePopover = false;
   renderApp();
 }
 function refreshAll(){
@@ -1389,18 +1426,208 @@ function refreshAll(){
     showToast('Помилка: ' + (e && e.message || e), 'err');
   });
 }
-function onCellEmptyClick(loc, groupType, subj){
+
+// ── CHECKBOX TOGGLE (v6.11.5) ───────────────
+// Per-cell lock + idempotent upsert у S.lessons (фікс багу "1=2").
+function onCheckboxToggle(loc, groupType, subj, dateDmy){
   if (!canEditPred(loc)){ showToast('🚫 Немає дозволу', 'err'); return; }
-  var a = assignmentFor(loc, groupType, subj);
-  if (!a){
-    openAssign(loc, groupType, subj, null);
+  var groupName = GROUP_NAME_BY_TYPE[groupType];
+  var assignment = assignmentFor(loc, groupType, subj);
+  if (!assignment){
+    showToast('🚫 Спершу признач викладача', 'err');
     return;
   }
-  openAddDate(loc, groupType, subj, a.empKey);
+  var lockKey = cellLockKey(loc, groupType, subj, dateDmy);
+  if (S.savingCells[lockKey]) return;       // GUARD проти подвійного клацання
+  S.savingCells[lockKey] = true;
+  renderApp();
+
+  var existing = lessonByCell(loc, groupName, subj, dateDmy);
+  if (existing){
+    apiPost({
+      action:'deletePredmetnykyLesson', actorId: S.user.id, lessonId: existing.id
+    }).then(function(res){
+      delete S.savingCells[lockKey];
+      if (!res || !res.ok){
+        if (res && res.code === 'NOT_FOUND'){
+          S.lessons = S.lessons.filter(function(L){ return L.id !== existing.id; });
+          renderApp();
+          showToast('Заняття вже було видалено', 'info');
+          scheduleAutoExport(loc);
+        } else {
+          renderApp();
+          showToast((res && res.error) || 'Помилка видалення', 'err');
+        }
+        return;
+      }
+      S.lessons = S.lessons.filter(function(L){ return L.id !== existing.id; });
+      // Дату лишаємо в uiExtraDates щоб рядок не зник (якщо інші чекбокси теж порожні)
+      _ensureExtraDate(loc, groupType, dateDmy);
+      renderApp();
+      scheduleAutoExport(loc);
+    }).catch(function(e){
+      delete S.savingCells[lockKey];
+      renderApp();
+      showToast('Помилка мережі: ' + (e && e.message || e), 'err');
+    });
+  } else {
+    apiPost({
+      action:'savePredmetnykyLesson', actorId: S.user.id,
+      lesson: {
+        empKey:   assignment.empKey,
+        location: loc,
+        group:    groupName,
+        subject:  subj,
+        date:     dateDmy
+      }
+    }).then(function(res){
+      delete S.savingCells[lockKey];
+      if (!res || !res.ok){
+        var msg;
+        if      (res && res.code === 'NORM_REACHED') msg = '⚠️ Норму досягнуто (' + res.current + '/' + res.norm + ')';
+        else if (res && res.code === 'BAD_GROUP')    msg = '🚫 ' + (res.error || 'Заборонена комбінація');
+        else if (res && res.code === 'PERM_DENIED')  msg = '🚫 Немає дозволу';
+        else                                         msg = (res && res.error) || 'Невідома помилка';
+        renderApp();
+        showToast(msg, 'err');
+        return;
+      }
+      // IDEMPOTENT upsert — фікс багу "1 клік = 2 заняття":
+      // видаляємо будь-який lesson з тим самим id (від race condition),
+      // потім додаємо свіжий.
+      S.lessons = S.lessons.filter(function(L){ return L.id !== res.id; });
+      S.lessons.push({
+        id:      res.id,
+        empKey:  assignment.empKey,
+        loc:     loc,
+        group:   groupName,
+        subject: subj,
+        date:    dateDmy
+      });
+      // Дата тепер реально у lessons — прибираємо з uiExtraDates
+      _removeExtraDate(loc, groupType, dateDmy);
+      renderApp();
+      scheduleAutoExport(loc);
+    }).catch(function(e){
+      delete S.savingCells[lockKey];
+      renderApp();
+      showToast('Помилка мережі: ' + (e && e.message || e), 'err');
+    });
+  }
 }
-function onCellFilledClick(id, ev){
-  if (ev) ev.stopPropagation();
-  onDeleteLesson(id, ev);
+
+// ── DELETE WHOLE DATE ROW ───────────────────
+function onDeleteDateRow(loc, groupType, dateDmy){
+  if (!canEditPred(loc)){ showToast('🚫 Немає дозволу', 'err'); return; }
+  var groupName = GROUP_NAME_BY_TYPE[groupType];
+  var rowKey = dateLockKey(loc, groupType, dateDmy);
+  if (S.savingDates[rowKey]) return;
+
+  var toDelete = S.lessons.filter(function(L){
+    return L.loc === loc && L.group === groupName && L.date === dateDmy;
+  });
+
+  if (!toDelete.length){
+    // Дата лише в uiExtraDates — просто прибрати з UI
+    _removeExtraDate(loc, groupType, dateDmy);
+    renderApp();
+    return;
+  }
+
+  var n = toDelete.length;
+  if (!confirm('Видалити ' + n + ' ' + pluralUk(n, 'заняття', 'заняття', 'занять') +
+               ' за ' + dateDmy + '?')) return;
+
+  S.savingDates[rowKey] = true;
+  renderApp();
+
+  var promises = toDelete.map(function(L){
+    return apiPost({
+      action:'deletePredmetnykyLesson', actorId: S.user.id, lessonId: L.id
+    }).then(function(res){
+      return {id: L.id, res: res};
+    }).catch(function(e){
+      return {id: L.id, error: e};
+    });
+  });
+
+  Promise.all(promises).then(function(results){
+    delete S.savingDates[rowKey];
+    var deletedIds = [];
+    var errs = [];
+    results.forEach(function(r){
+      if (r.error){ errs.push(r.id + ': ' + (r.error.message || r.error)); return; }
+      if (r.res && r.res.ok)                              deletedIds.push(r.id);
+      else if (r.res && r.res.code === 'NOT_FOUND')       deletedIds.push(r.id);
+      else                                                errs.push(r.id + ': ' + ((r.res && r.res.error) || 'fail'));
+    });
+    if (deletedIds.length){
+      var set = {};
+      deletedIds.forEach(function(id){ set[id] = true; });
+      S.lessons = S.lessons.filter(function(L){ return !set[L.id]; });
+    }
+    _removeExtraDate(loc, groupType, dateDmy);
+    renderApp();
+    if (errs.length){
+      showToast('⚠️ Видалено ' + deletedIds.length + ' з ' + results.length + '. Помилки: ' + errs.join(' | '), 'err');
+    } else {
+      showToast('✅ Видалено ' + deletedIds.length + ' ' + pluralUk(deletedIds.length, 'заняття', 'заняття', 'занять'), 'ok');
+    }
+    scheduleAutoExport(loc);
+  });
+}
+
+// ── INLINE DATE POPOVER ────────────────────
+function _ensureExtraDate(loc, groupType, dateDmy){
+  var key = extraDatesKey(loc, groupType);
+  if (!S.uiExtraDates[key]) S.uiExtraDates[key] = [];
+  if (S.uiExtraDates[key].indexOf(dateDmy) === -1) S.uiExtraDates[key].push(dateDmy);
+}
+function _removeExtraDate(loc, groupType, dateDmy){
+  var key = extraDatesKey(loc, groupType);
+  if (!S.uiExtraDates[key]) return;
+  S.uiExtraDates[key] = S.uiExtraDates[key].filter(function(d){ return d !== dateDmy; });
+  if (!S.uiExtraDates[key].length) delete S.uiExtraDates[key];
+}
+function openAddDatePopover(){
+  if (!canEditPred(S.loc)){ showToast('🚫 Немає дозволу', 'err'); return; }
+  var row = $('predBottomRow');
+  if (!row) return;
+  // Default — сьогодні якщо у фільтрованому місяці, інакше 1-ше число.
+  var d = new Date();
+  var defaultIso = (d.getFullYear() === S.year && (d.getMonth() + 1) === S.month)
+    ? todayIso()
+    : (S.year + '-' + ('0' + S.month).slice(-2) + '-01');
+  row.innerHTML =
+    '<button class="pred-add-btn" disabled>+ Додати дату</button>' +
+    '<div class="pred-date-popover">' +
+      '<input type="date" id="popoverDateInput" value="' + defaultIso + '">' +
+      '<button class="btn btn-primary btn-sm" onclick="submitAddDatePopover()">Додати</button>' +
+      '<button class="btn btn-secondary btn-sm" onclick="cancelAddDatePopover()">Скасувати</button>' +
+    '</div>';
+  S.datePopover = true;
+  setTimeout(function(){ var el = $('popoverDateInput'); if (el) el.focus(); }, 50);
+}
+function cancelAddDatePopover(){
+  S.datePopover = false;
+  renderApp();
+}
+function submitAddDatePopover(){
+  var iso = $('popoverDateInput') && $('popoverDateInput').value;
+  if (!iso){ showToast('Вкажи дату', 'err'); return; }
+  var ymISO = /^(\d{4})-(\d{1,2})-/.exec(iso);
+  if (ymISO){
+    var y = Number(ymISO[1]), mo = Number(ymISO[2]);
+    if (y !== S.year || mo !== S.month){
+      showToast('⚠️ Дата має бути у обраному місяці (' +
+                MONTHS[S.month - 1] + ' ' + S.year + ')', 'err');
+      return;
+    }
+  }
+  var dmy = isoToDmy(iso);
+  _ensureExtraDate(S.loc, S.groupType, dmy);
+  S.datePopover = false;
+  renderApp();
 }
 
 // ── ASSIGN MODAL (v6.11.4) ──────────────────
@@ -1543,138 +1770,6 @@ function removeAssign(){
   });
 }
 
-// ── ADD-DATE MODAL (v6.11.4 — empKey з assignment) ──
-function openAddDate(loc, groupType, subject, empKey){
-  if (!canEditPred(loc)){ showToast('🚫 Немає дозволу', 'err'); return; }
-  if (!empKey){ showToast('🚫 Спершу признач викладача', 'err'); return; }
-
-  var t = findTeacher(empKey);
-  var teacherName = t ? t.name : '(невідомий — empKey: ' + empKey + ')';
-  var groupName = GROUP_NAME_BY_TYPE[groupType];
-
-  S.addModal = {
-    loc:       loc,
-    group:     groupName,
-    groupType: groupType,
-    subject:   subject,
-    empKey:    empKey
-  };
-
-  $('addDateTitle').textContent = 'Додати: ' + subject + ' · ' + groupName;
-
-  var sel = $('addDateTeacherSel');
-  sel.innerHTML = '<option value="' + escapeHtml(empKey) + '">' + escapeHtml(teacherName) + '</option>';
-  sel.value    = empKey;
-  sel.disabled = true;
-
-  $('addDateLocGroup').value = loc + ' → ' + groupName;
-  $('addDateSubject').value  = subject;
-
-  var d = new Date();
-  $('addDateInput').value = (d.getFullYear() === S.year && (d.getMonth() + 1) === S.month)
-    ? todayIso()
-    : (S.year + '-' + ('0' + S.month).slice(-2) + '-01');
-
-  $('addDateErr').classList.add('hidden');
-  $('addDateErr').textContent = '';
-  $('modalAddDate').classList.remove('hidden');
-  setTimeout(function(){ $('addDateInput').focus(); }, 50);
-}
-function closeAddDate(){
-  $('modalAddDate').classList.add('hidden');
-  S.addModal = null;
-}
-function _addDateErr(msg){
-  var box = $('addDateErr');
-  box.textContent = msg;
-  box.classList.remove('hidden');
-}
-function submitAddDate(){
-  if (!S.addModal) return;
-  var dateIso = $('addDateInput').value;
-  if (!dateIso){ _addDateErr('Вкажи дату'); return; }
-  var dateDmy = isoToDmy(dateIso);
-
-  var empKey = S.addModal.empKey;
-  if (!empKey){ _addDateErr('Викладач не призначений'); return; }
-
-  var btn = $('addDateSubmit'); var orig = btn.textContent;
-  btn.disabled = true; btn.textContent = '⏳ Збереження…';
-
-  apiPost({
-    action: 'savePredmetnykyLesson',
-    actorId: S.user.id,
-    lesson: {
-      empKey:   empKey,
-      location: S.addModal.loc,
-      group:    S.addModal.group,
-      subject:  S.addModal.subject,
-      date:     dateDmy
-    }
-  }).then(function(res){
-    btn.disabled = false; btn.textContent = orig;
-    if (!res || !res.ok){
-      var msg;
-      if      (res && res.code === 'NORM_REACHED')  msg = '⚠️ Норму вже досягнуто (' + res.current + ' / ' + res.norm + ')';
-      else if (res && res.code === 'BAD_GROUP')     msg = '🚫 ' + (res.error || 'Заборонена комбінація');
-      else if (res && res.code === 'PERM_DENIED')   msg = '🚫 Немає дозволу';
-      else                                          msg = (res && res.error) || 'Невідома помилка';
-      _addDateErr(msg);
-      return;
-    }
-    var lessonLoc = S.addModal.loc;
-    S.lessons.push({
-      id:      res.id,
-      empKey:  empKey,
-      loc:     lessonLoc,
-      group:   S.addModal.group,
-      subject: S.addModal.subject,
-      date:    dateDmy
-    });
-    closeAddDate();
-    renderApp();
-    showToast('✅ Заняття додано (' + res.current + ' / ' + (res.norm || '∞') + ')', 'ok');
-    scheduleAutoExport(lessonLoc);
-  }).catch(function(e){
-    btn.disabled = false; btn.textContent = orig;
-    _addDateErr('Помилка мережі: ' + (e && e.message || e));
-  });
-}
-
-// ── DELETE LESSON ───────────────────────────
-function onDeleteLesson(id, ev){
-  if (ev) ev.stopPropagation();
-  if (!confirm('Видалити це заняття?')) return;
-  var lesson = null;
-  for (var i = 0; i < S.lessons.length; i++){
-    if (S.lessons[i].id === id){ lesson = S.lessons[i]; break; }
-  }
-  var lessonLoc = lesson ? lesson.loc : null;
-  apiPost({
-    action: 'deletePredmetnykyLesson',
-    actorId: S.user.id,
-    lessonId: id
-  }).then(function(res){
-    if (!res || !res.ok){
-      if (res && res.code === 'NOT_FOUND'){
-        S.lessons = S.lessons.filter(function(L){ return L.id !== id; });
-        renderApp();
-        showToast('Заняття вже було видалено', 'info');
-        if (lessonLoc) scheduleAutoExport(lessonLoc);
-      } else {
-        showToast((res && res.error) || 'Помилка видалення', 'err');
-      }
-      return;
-    }
-    S.lessons = S.lessons.filter(function(L){ return L.id !== id; });
-    renderApp();
-    showToast('✅ Видалено', 'ok');
-    if (lessonLoc) scheduleAutoExport(lessonLoc);
-  }).catch(function(e){
-    showToast('Помилка мережі: ' + (e && e.message || e), 'err');
-  });
-}
-
 // ── AUTO-EXPORT (v6.11.4) ───────────────────
 // Дебаунс 5 сек після save/delete lesson — викликає
 // exportPredmetnykyToSalary для локації заняття.
@@ -1710,7 +1805,7 @@ function runAutoExport(loc){
 document.addEventListener('keydown', function(e){
   if (e.key !== 'Escape') return;
   if (S.assignModal) { closeAssign(); return; }
-  if (S.addModal)    { closeAddDate(); return; }
+  if (S.datePopover) { cancelAddDatePopover(); return; }
 });
 
 // ── INIT ────────────────────────────────────
@@ -1746,6 +1841,12 @@ function populateLocSel(){
   updUserUI();
   $('syncIndicator').classList.remove('hidden');
   setSync('idle');
+
+  // Group dropdown — обов'язковий filter
+  $('fGroup').innerHTML = PRED_GROUP_TYPES.map(function(gt){
+    return '<option value="' + gt + '">' + escapeHtml(GROUP_NAME_BY_TYPE[gt]) + '</option>';
+  }).join('');
+  $('fGroup').value = S.groupType;
 
   // Populate Ukrainian month/year dropdowns
   $('fMonth').innerHTML = MONTHS.map(function(m, i){
