@@ -299,6 +299,7 @@ function doPost(e) {
     else if (body.action === 'deletePredmetnykyLesson')   result = deletePredmetnykyLesson(Number(body.actorId || 0), Number(body.lessonId || 0));
     else if (body.action === 'savePredmetnykyAssignment')   result = savePredmetnykyAssignment(Number(body.actorId || 0), body.payload || body.data || {});
     else if (body.action === 'deletePredmetnykyAssignment') result = deletePredmetnykyAssignment(Number(body.actorId || 0), Number(body.id || 0));
+    else if (body.action === 'runPredmetnykyHrSeed')        result = _seedPredmetnykyAssignmentsFromHR();
     else if (body.action === 'exportPredmetnykyToSalary')   result = exportPredmetnykyToSalary(body || {});
     else result = {ok:false, error:'Unknown action'};
     return jsonOut(result);
@@ -6912,13 +6913,15 @@ function _nextPredAssignId(sh){
 }
 
 // Assignments sheet → [{id, loc, group, subject, empKey}].
-// Auto-seeds з каталогу при першому виклику на порожньому листі.
+// Auto-seeds (католог → HR fallback) при першому виклику на порожньому листі.
 function _loadPredAssignments(locFilter){
   var sh = _getPredAssignSheet();
   if (sh.getLastRow() < 2){
     try {
-      var seedRes = _seedPredmetnykyAssignmentsFromCatalog();
-      Logger.log('[loadPredAssignments] auto-seed: %s', JSON.stringify(seedRes));
+      var catRes = _seedPredmetnykyAssignmentsFromCatalog();
+      Logger.log('[loadPredAssignments] catalog-seed: %s', JSON.stringify(catRes));
+      var hrRes = _seedPredmetnykyAssignmentsFromHR();
+      Logger.log('[loadPredAssignments] hr-seed: %s', JSON.stringify(hrRes));
     } catch(e){
       Logger.log('[loadPredAssignments] seed failed: %s', e && e.message);
     }
@@ -7013,6 +7016,86 @@ function _seedPredmetnykyAssignmentsFromCatalog(){
     Logger.log('[seedAssignments] unmatched: %s', stats.unmatched.join(' | '));
   }
   return {ok:true, seeded:rows.length, stats:stats};
+}
+
+// Idempotent fallback seed: для кожної пари (loc, subject) де в HR
+// РІВНО ОДИН викладач — авто-створюємо assignment для усіх groupTypes
+// де norm>0. Існуючі assignments не чіпаємо. Випадки де 2+ кандидатів
+// у HR — лишаємо для ручного вибору через UI [Обрати].
+function _seedPredmetnykyAssignmentsFromHR(){
+  var sh = _getPredAssignSheet();
+
+  // map існуючих assignments: "loc|group|subject" → true
+  var existing = {};
+  if (sh.getLastRow() > 1){
+    var data = sh.getRange(2, 1, sh.getLastRow() - 1, PRED_ASSIGN_HEADER.length).getValues();
+    for (var i = 0; i < data.length; i++){
+      var k = String(data[i][1]||'').trim() + '|' +
+              String(data[i][2]||'').trim() + '|' +
+              String(data[i][3]||'').trim();
+      existing[k] = true;
+    }
+  }
+
+  var hrTeachers = _loadPredTeachers(null);
+  var norms = _loadPredNorms();
+
+  // Групуємо HR-викладачів по (loc, subject)
+  var byLocSubj = {};
+  hrTeachers.forEach(function(t){
+    var loc = t.locations && t.locations[0];
+    if (!loc || !t.subject) return;
+    var key = loc + '|' + t.subject;
+    if (!byLocSubj[key]) byLocSubj[key] = [];
+    byLocSubj[key].push(t);
+  });
+
+  var now = new Date();
+  var nextId = _nextPredAssignId(sh);
+  var rowsToAppend = [];
+  var stats = {pairs:0, single:0, multi:0, skippedExisting:0, generated:0,
+               multiList:[]};
+
+  Object.keys(byLocSubj).forEach(function(key){
+    stats.pairs++;
+    var list = byLocSubj[key];
+    if (list.length !== 1){
+      stats.multi++;
+      stats.multiList.push(key + ' [' + list.length + ' candidates]');
+      return;
+    }
+    stats.single++;
+    var t = list[0];
+    var loc = t.locations[0];
+    var subj = t.subject;
+    var region = _predLocToRegion(loc);
+    var isUnlimited = (subj === PRED_UNLIMITED_SUBJ);
+
+    PRED_GROUP_TYPES.forEach(function(gt){
+      var n = (norms[region] && norms[region][subj] &&
+               norms[region][subj][gt]) || 0;
+      if (n <= 0 && !isUnlimited) return;
+      var groupName = PRED_GROUP_NAME_BY_TYPE[gt] || gt;
+      var ekey = loc + '|' + groupName + '|' + subj;
+      if (existing[ekey]){ stats.skippedExisting++; return; }
+      rowsToAppend.push([nextId++, loc, groupName, subj, t.empKey, now, 'hr-seed']);
+      existing[ekey] = true;
+      stats.generated++;
+    });
+  });
+
+  if (rowsToAppend.length){
+    var startRow = sh.getLastRow() + 1;
+    sh.getRange(startRow, 1, rowsToAppend.length, PRED_ASSIGN_HEADER.length)
+      .setValues(rowsToAppend);
+  }
+  Logger.log('[seedFromHR] pairs=%s single=%s multi=%s skippedExisting=%s generated=%s',
+    stats.pairs, stats.single, stats.multi, stats.skippedExisting, stats.generated);
+  if (stats.multiList.length){
+    Logger.log('[seedFromHR] multi-candidate pairs (manual assign needed): %s',
+      stats.multiList.join(' | '));
+  }
+  return {ok:true, seeded:rowsToAppend.length, stats:stats};
 }
 
 // POST {action:'savePredmetnykyAssignment', actorId, payload:{loc,group,subject,empKey}}
