@@ -377,8 +377,6 @@ select,input,textarea{font-family:inherit}
   text-transform:uppercase;letter-spacing:.3px}
 .pred-th-day .dd{font-size:13px;font-weight:800;color:var(--dark2);
   font-variant-numeric:tabular-nums}
-.pred-th-day.weekend{background:#f4f6f8}
-.pred-th-day.weekend .wd{color:var(--red2)}
 .pred-th-day.today{border-top:3px solid var(--blue);padding-top:5px}
 .pred-th-counter{font-size:11px;font-weight:700;color:var(--gray);
   text-transform:uppercase;letter-spacing:.5px;border-right:none}
@@ -404,11 +402,9 @@ select,input,textarea{font-family:inherit}
   border-right:1px solid #eef1f4;display:flex;align-items:center;
   justify-content:center;cursor:pointer;transition:background .12s;
   user-select:none;min-height:64px}
-.pred-cell-day.weekend{background:#fafbfc}
 .pred-cell-day:hover:not(.disabled){background:#f0f7ff}
 .pred-cell-day.checked{background:#e8f8f0}
 .pred-cell-day.checked:hover:not(.disabled){background:#d1f1de}
-.pred-cell-day.weekend.checked{background:#dff5e8}
 .pred-cell-day.disabled{cursor:not-allowed;opacity:.5}
 .pred-cell-day.saving{opacity:.6;cursor:wait}
 .pred-cell-day.today{border-top:3px solid var(--blue)}
@@ -1178,7 +1174,8 @@ function lessonByCell(loc, groupName, subj, dateDmy){
 }
 function cellLockKey(loc, gt, subj, dateDmy){ return [loc, gt, subj, dateDmy].join('|'); }
 
-// Створює масив [{day, wd, isWeekend, isToday, dmy}] для (year, month).
+// Створює масив [{day, wd, isToday, dmy}] для (year, month).
+// Вихідні (Сб/Нд) пропускаємо — у садочку занять немає.
 function buildDays(year, month){
   var lastDay = new Date(year, month, 0).getDate();       // m=1-based
   var t = new Date();
@@ -1189,12 +1186,12 @@ function buildDays(year, month){
   for (var d = 1; d <= lastDay; d++){
     var dt = new Date(year, month - 1, d);                // JS Date m=0-based
     var wd = dt.getDay();                                 // 0=Sun, ..., 6=Sat
+    if (wd === 0 || wd === 6) continue;                   // skip Сб/Нд
     out.push({
-      day:       d,
-      wd:        UA_WEEKDAY_SHORT[wd],
-      isWeekend: (wd === 0 || wd === 6),
-      isToday:   (d === todayDay),
-      dmy:       ('0' + d).slice(-2) + '.' + mm + '.' + year
+      day:     d,
+      wd:      UA_WEEKDAY_SHORT[wd],
+      isToday: (d === todayDay),
+      dmy:     ('0' + d).slice(-2) + '.' + mm + '.' + year
     });
   }
   return out;
@@ -1274,6 +1271,8 @@ function renderTable(loc, subject){
   var days = buildDays(S.year, S.month);
   var nDays = days.length;
   var isUnlimited = (subject === PRED_UNLIMITED_SUBJ);
+  var rate = getRateFor(loc, subject);
+  var hasRate = (rate != null);
 
   // Per-group metadata
   var rows = PRED_GROUP_TYPES.map(function(gt){
@@ -1286,7 +1285,7 @@ function renderTable(loc, subject){
     var isMaxed    = !isUnlimited && count >= norm;
     return {gt:gt, groupName:groupName, norm:norm, isUnlimited:isUnlimited,
             isForbidden:isForbidden, assignment:assignment, teacher:teacher,
-            count:count, isMaxed:isMaxed};
+            count:count, isMaxed:isMaxed, hasRate:hasRate};
   });
 
   var gridCols = '200px repeat(' + nDays + ', minmax(36px, 1fr)) 90px';
@@ -1296,9 +1295,7 @@ function renderTable(loc, subject){
   // ── Header row ──
   html += '<div class="pred-th-cnr">Група / Дата</div>';
   days.forEach(function(D){
-    var cls = 'pred-th-day';
-    if (D.isWeekend) cls += ' weekend';
-    if (D.isToday)   cls += ' today';
+    var cls = 'pred-th-day' + (D.isToday ? ' today' : '');
     html += '<div class="' + cls + '">' +
       '<span class="wd">' + D.wd + '</span>' +
       '<span class="dd">' + D.day + '</span>' +
@@ -1313,11 +1310,6 @@ function renderTable(loc, subject){
       html += '<div class="pred-row-msg" style="grid-column: 2 / -2">' +
         'Не передбачено для цієї групи</div>';
       html += '<div class="pred-counter-cell forbidden">—</div>';
-    } else if (!R.assignment){
-      html += '<div class="pred-row-msg noteacher" style="grid-column: 2 / -2">' +
-        '⚠️ Спершу призначте викладача — клікни «+ Обрати» у назві групи</div>';
-      html += '<div class="pred-counter-cell">' +
-        (R.isUnlimited ? '0 (∞)' : '0 / ' + R.norm) + '</div>';
     } else {
       days.forEach(function(D){
         html += renderDayCell(loc, R, subject, D, canEdit);
@@ -1344,7 +1336,9 @@ function renderGroupLabel(loc, R, canEdit){
   var nameHtml = '<div class="pred-grp-name">' + escapeHtml(R.groupName) + '</div>';
   var teacherHtml = '';
   if (R.isForbidden){
-    teacherHtml = '';                                          // нема сенсу показувати
+    teacherHtml = '';
+  } else if (!R.hasRate){
+    teacherHtml = '<div class="pred-grp-teacher pred-teacher-missing">⚠️ Немає ставки</div>';
   } else if (R.assignment){
     if (R.teacher){
       var editBtn = canEdit
@@ -1379,12 +1373,12 @@ function renderDayCell(loc, R, subject, D, canEdit){
 
   // Disabled:
   //   • view-only або saving — disabled visually
+  //   • !hasRate (ставка не в каталозі) — disabled
   //   • maxed + не checked — disabled (можна uncheck існуючі)
-  //   • R.assignment === null обробляється у renderTable окремо (msg-row), сюди не доходить
-  var disabled = !canEdit || (R.isMaxed && !checked);
+  //   • assignment не обов'язковий (empKey fallback всередині toggle handler)
+  var disabled = !canEdit || !R.hasRate || (R.isMaxed && !checked);
 
   var cls = 'pred-cell-day';
-  if (D.isWeekend) cls += ' weekend';
   if (D.isToday)   cls += ' today';
   if (checked)     cls += ' checked';
   if (disabled)    cls += ' disabled';
@@ -1443,15 +1437,25 @@ function refreshAll(){
 }
 
 // ── CHECKBOX TOGGLE ─────────────────────────
-// Per-cell lock + idempotent upsert у S.lessons (фікс багу "1=2").
+// Rate-gate (не assignment) + per-cell lock + idempotent upsert.
+// empKey resolution: assignment → перший HR кандидат → '_unassigned' sentinel.
 function onCheckboxToggle(loc, groupType, subj, dateDmy){
   if (!canEditPred(loc)){ showToast('🚫 Немає дозволу', 'err'); return; }
-  var groupName = GROUP_NAME_BY_TYPE[groupType];
-  var assignment = assignmentFor(loc, groupType, subj);
-  if (!assignment){
-    showToast('🚫 Спершу признач викладача', 'err');
+  if (getRateFor(loc, subj) == null){
+    showToast('🚫 Немає ставки в каталозі. Додай у Предметники_Каталог', 'err');
     return;
   }
+  var groupName = GROUP_NAME_BY_TYPE[groupType];
+
+  var assignment = assignmentFor(loc, groupType, subj);
+  var empKey;
+  if (assignment){
+    empKey = assignment.empKey;
+  } else {
+    var cands = teachersFor(loc, subj);
+    empKey = cands.length ? cands[0].empKey : '_unassigned';
+  }
+
   var lockKey = cellLockKey(loc, groupType, subj, dateDmy);
   if (S.savingCells[lockKey]) return;       // GUARD проти подвійного клацання
   S.savingCells[lockKey] = true;
@@ -1487,7 +1491,7 @@ function onCheckboxToggle(loc, groupType, subj, dateDmy){
     apiPost({
       action:'savePredmetnykyLesson', actorId: S.user.id,
       lesson: {
-        empKey:   assignment.empKey,
+        empKey:   empKey,
         location: loc,
         group:    groupName,
         subject:  subj,
@@ -1511,7 +1515,7 @@ function onCheckboxToggle(loc, groupType, subj, dateDmy){
       S.lessons = S.lessons.filter(function(L){ return L.id !== res.id; });
       S.lessons.push({
         id:      res.id,
-        empKey:  assignment.empKey,
+        empKey:  empKey,
         loc:     loc,
         group:   groupName,
         subject: subj,
