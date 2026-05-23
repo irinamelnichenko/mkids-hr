@@ -6692,7 +6692,9 @@ function _loadPredTeachers(locFilter){
       name:      (emp.last + ' ' + emp.first).trim(),
       position:  emp.pos,
       subject:   subj,             // нормалізований (один з PRED_SUBJECTS)
-      locations: [emp.loc]
+      locations: [emp.loc],
+      phone:     emp.phone || '',
+      email:     emp.email || ''
     });
   }
   return teachers;
@@ -6882,7 +6884,8 @@ function deletePredmetnykyLesson(actorId, lessonId){
 // Sheet auto-створюється + idempotent seed з Предметники_Каталог.
 // ═══════════════════════════════════════════════════════════════════
 var PRED_ASSIGN_TAB    = 'Predmetnyky_Assignments';        // CRM_SHEET
-var PRED_ASSIGN_HEADER = ['ID','Location','Group','Subject','EmpKey','CreatedAt','CreatedBy'];
+// v6.11.9: схема — один викладач per (loc, subject), без колонки Group.
+var PRED_ASSIGN_HEADER = ['ID','Location','Subject','EmpKey','CreatedAt','CreatedBy'];
 
 var PRED_GROUP_NAME_BY_TYPE = {
   miniBaby:'miniBaby-ki', Baby:'Baby-ki', Find:'Find-iki',
@@ -6896,8 +6899,47 @@ function _getPredAssignSheet(){
     sh = ss.insertSheet(PRED_ASSIGN_TAB);
     sh.getRange(1, 1, 1, PRED_ASSIGN_HEADER.length).setValues([PRED_ASSIGN_HEADER]);
     sh.setFrozenRows(1);
+    return sh;
+  }
+  // Detect old schema (з колонкою Group) → migrate in-place.
+  var headerRow = sh.getRange(1, 1, 1, Math.max(sh.getLastColumn(), 7)).getValues()[0];
+  if (String(headerRow[2] || '').trim().toLowerCase() === 'group'){
+    _migratePredAssignSchema(sh);
   }
   return sh;
+}
+
+// Конвертує старий PRED_ASSIGN (7 колонок з Group) у новий (6 без Group).
+// Дедуп: на (loc, subject) лишаємо ПЕРШИЙ empKey (за rowNum).
+function _migratePredAssignSchema(sh){
+  var lastRow = sh.getLastRow();
+  var oldData = lastRow > 1
+    ? sh.getRange(2, 1, lastRow - 1, 7).getValues()
+    : [];
+  var seen = {};                                   // "loc|subject" → true
+  var newRows = [];
+  var nextId = 1;
+  for (var i = 0; i < oldData.length; i++){
+    var loc     = String(oldData[i][1] || '').trim();
+    var subject = String(oldData[i][3] || '').trim();
+    var empKey  = String(oldData[i][4] || '').trim();
+    var created = oldData[i][5] || new Date();
+    var by      = String(oldData[i][6] || '').trim() || 'migrated';
+    if (!loc || !subject || !empKey) continue;
+    var k = loc + '|' + subject;
+    if (seen[k]) continue;
+    seen[k] = true;
+    newRows.push([nextId++, loc, subject, empKey, created, by]);
+  }
+  // Rewrite sheet — clear old data + put new header
+  sh.clearContents();
+  sh.getRange(1, 1, 1, PRED_ASSIGN_HEADER.length).setValues([PRED_ASSIGN_HEADER]);
+  if (newRows.length){
+    sh.getRange(2, 1, newRows.length, PRED_ASSIGN_HEADER.length).setValues(newRows);
+  }
+  sh.setFrozenRows(1);
+  Logger.log('[migratePredAssignSchema] old rows=%s → new rows=%s (dedup by loc+subject)',
+    oldData.length, newRows.length);
 }
 
 function _nextPredAssignId(sh){
@@ -6912,7 +6954,8 @@ function _nextPredAssignId(sh){
   return max + 1;
 }
 
-// Assignments sheet → [{id, loc, group, subject, empKey}].
+// Assignments sheet → [{id, loc, subject, empKey}].
+// Один викладач per (loc, subject) (v6.11.9).
 // Auto-seeds (католог → HR fallback) при першому виклику на порожньому листі.
 function _loadPredAssignments(locFilter){
   var sh = _getPredAssignSheet();
@@ -6938,9 +6981,8 @@ function _loadPredAssignments(locFilter){
     out.push({
       id:      id,
       loc:     loc,
-      group:   String(data[i][2] || '').trim(),
-      subject: String(data[i][3] || '').trim(),
-      empKey:  String(data[i][4] || '').trim()
+      subject: String(data[i][2] || '').trim(),
+      empKey:  String(data[i][3] || '').trim()
     });
   }
   return out;
@@ -6953,9 +6995,9 @@ function _predNormalizeName(name){
 }
 
 // Ідемпотентний seed assignments з Предметники_Каталог.
-// На кожен active catalog row з заповненим Викладачем — створюємо
-// assignment для КОЖНОЇ groupType де norm>0 (для Чомусики — для всіх 5).
-// Матчинг catalog.teacher → HR.empKey за нормалізованим повним ПІБ.
+// Один assignment per (loc, subject_norm). Створюємо тільки якщо
+// принаймні одна group має norm>0 (або subject = Чомусики).
+// Матчинг catalog.teacher → HR.empKey за нормалізованим ПІБ.
 function _seedPredmetnykyAssignmentsFromCatalog(){
   var sh = _getPredAssignSheet();
   if (sh.getLastRow() > 1) return {ok:true, skipped:true, msg:'Assignments already populated'};
@@ -6979,32 +7021,44 @@ function _seedPredmetnykyAssignmentsFromCatalog(){
   var now = new Date();
   var rows = [];
   var nextId = 1;
+  var seen = {};                                       // "loc|subject" → true (dedup)
   var stats = {catalog:0, withTeacher:0, matched:0, unmatched:[], generated:0};
 
   catalog.forEach(function(a){
     stats.catalog++;
     if (!a.active)       return;
     if (!a.teacher)      return;
-    if (!a.subject_norm) return;     // не у системі норм (напр. Підготовка до школи)
+    if (!a.subject_norm) return;
     stats.withTeacher++;
+
+    var key = a.loc + '|' + a.subject_norm;
+    if (seen[key]) return;                             // вже додано для цієї пари
 
     var empKey = byName[_predNormalizeName(a.teacher)] || null;
     if (!empKey){
       stats.unmatched.push(a.loc + '/' + a.subject_raw + '/«' + a.teacher + '»');
       return;
     }
-    stats.matched++;
 
+    // Перевірка: хоча б одна group має norm>0 (або subject unlimited)
     var region = _predLocToRegion(a.loc);
     var isUnlimited = (a.subject_norm === PRED_UNLIMITED_SUBJ);
-    PRED_GROUP_TYPES.forEach(function(gt){
-      var n = (norms[region] && norms[region][a.subject_norm] &&
-               norms[region][a.subject_norm][gt]) || 0;
-      if (n <= 0 && !isUnlimited) return;
-      rows.push([nextId++, a.loc, PRED_GROUP_NAME_BY_TYPE[gt] || gt,
-                 a.subject_norm, empKey, now, 'seed']);
-      stats.generated++;
-    });
+    var hasNorm = false;
+    if (isUnlimited){
+      hasNorm = true;
+    } else {
+      for (var gi = 0; gi < PRED_GROUP_TYPES.length; gi++){
+        var n = (norms[region] && norms[region][a.subject_norm] &&
+                 norms[region][a.subject_norm][PRED_GROUP_TYPES[gi]]) || 0;
+        if (n > 0){ hasNorm = true; break; }
+      }
+    }
+    if (!hasNorm) return;
+
+    seen[key] = true;
+    stats.matched++;
+    rows.push([nextId++, a.loc, a.subject_norm, empKey, now, 'seed']);
+    stats.generated++;
   });
 
   if (rows.length){
@@ -7019,20 +7073,18 @@ function _seedPredmetnykyAssignmentsFromCatalog(){
 }
 
 // Idempotent fallback seed: для кожної пари (loc, subject) де в HR
-// РІВНО ОДИН викладач — авто-створюємо assignment для усіх groupTypes
-// де norm>0. Існуючі assignments не чіпаємо. Випадки де 2+ кандидатів
-// у HR — лишаємо для ручного вибору через UI [Обрати].
+// РІВНО ОДИН викладач — авто-створюємо ОДИН assignment (per loc+subject).
+// Існуючі assignments не чіпаємо. Multi-candidate випадки лишаємо для
+// ручного вибору через UI ✏️.
 function _seedPredmetnykyAssignmentsFromHR(){
   var sh = _getPredAssignSheet();
 
-  // map існуючих assignments: "loc|group|subject" → true
+  // map існуючих assignments: "loc|subject" → true
   var existing = {};
   if (sh.getLastRow() > 1){
     var data = sh.getRange(2, 1, sh.getLastRow() - 1, PRED_ASSIGN_HEADER.length).getValues();
     for (var i = 0; i < data.length; i++){
-      var k = String(data[i][1]||'').trim() + '|' +
-              String(data[i][2]||'').trim() + '|' +
-              String(data[i][3]||'').trim();
+      var k = String(data[i][1]||'').trim() + '|' + String(data[i][2]||'').trim();
       existing[k] = true;
     }
   }
@@ -7068,20 +7120,24 @@ function _seedPredmetnykyAssignmentsFromHR(){
     var t = list[0];
     var loc = t.locations[0];
     var subj = t.subject;
+    if (existing[key]){ stats.skippedExisting++; return; }
+
+    // Перевірка: хоча б одна group має norm>0 (або subject unlimited)
     var region = _predLocToRegion(loc);
     var isUnlimited = (subj === PRED_UNLIMITED_SUBJ);
+    var hasNorm = isUnlimited;
+    if (!hasNorm){
+      for (var gi = 0; gi < PRED_GROUP_TYPES.length; gi++){
+        var n = (norms[region] && norms[region][subj] &&
+                 norms[region][subj][PRED_GROUP_TYPES[gi]]) || 0;
+        if (n > 0){ hasNorm = true; break; }
+      }
+    }
+    if (!hasNorm) return;
 
-    PRED_GROUP_TYPES.forEach(function(gt){
-      var n = (norms[region] && norms[region][subj] &&
-               norms[region][subj][gt]) || 0;
-      if (n <= 0 && !isUnlimited) return;
-      var groupName = PRED_GROUP_NAME_BY_TYPE[gt] || gt;
-      var ekey = loc + '|' + groupName + '|' + subj;
-      if (existing[ekey]){ stats.skippedExisting++; return; }
-      rowsToAppend.push([nextId++, loc, groupName, subj, t.empKey, now, 'hr-seed']);
-      existing[ekey] = true;
-      stats.generated++;
-    });
+    rowsToAppend.push([nextId++, loc, subj, t.empKey, now, 'hr-seed']);
+    existing[key] = true;
+    stats.generated++;
   });
 
   if (rowsToAppend.length){
@@ -7098,26 +7154,23 @@ function _seedPredmetnykyAssignmentsFromHR(){
   return {ok:true, seeded:rowsToAppend.length, stats:stats};
 }
 
-// POST {action:'savePredmetnykyAssignment', actorId, payload:{loc,group,subject,empKey}}
-// Upsert: уніквальний ключ — (loc, group, subject).
+// POST {action:'savePredmetnykyAssignment', actorId, payload:{loc, subject, empKey}}
+// Upsert: уніквальний ключ — (loc, subject). Поле 'group' у payload
+// ігнорується (backward compat для старого фронта).
 function savePredmetnykyAssignment(actorId, payload){
   try {
     var actor = _getActor(actorId);
     payload = payload || {};
     var loc     = String(payload.loc     || payload.location || '').trim();
-    var group   = String(payload.group   || '').trim();
     var subject = String(payload.subject || '').trim();
     var empKey  = String(payload.empKey  || '').trim();
 
     if (!loc)     return {ok:false, error:'loc required'};
-    if (!group)   return {ok:false, error:'group required'};
     if (!subject) return {ok:false, error:'subject required'};
     if (!empKey)  return {ok:false, error:'empKey required'};
 
     if (PRED_SUBJECTS.indexOf(subject) === -1)
       return {ok:false, code:'BAD_SUBJECT', error:'Unknown subject: ' + subject};
-    if (!_normalizeGroupType(group))
-      return {ok:false, code:'BAD_GROUP', error:'Unknown group type: ' + group};
 
     if (!_canEditPredmetnyky(actor, loc))
       return {ok:false, code:'PERM_DENIED', error:'Permission denied'};
@@ -7131,34 +7184,33 @@ function savePredmetnykyAssignment(actorId, payload){
         ? sh.getRange(2, 1, lastRow - 1, PRED_ASSIGN_HEADER.length).getValues()
         : [];
 
-      // Upsert: знайти (loc, group, subject)
+      // Upsert: знайти (loc, subject)
       for (var i = 0; i < data.length; i++){
         if (String(data[i][1] || '').trim() !== loc)     continue;
-        if (String(data[i][2] || '').trim() !== group)   continue;
-        if (String(data[i][3] || '').trim() !== subject) continue;
+        if (String(data[i][2] || '').trim() !== subject) continue;
         var rowNum = i + 2;
         var existingId = Number(data[i][0]) || 0;
-        var beforeEmpKey = String(data[i][4] || '').trim();
+        var beforeEmpKey = String(data[i][3] || '').trim();
         if (beforeEmpKey === empKey){
           return {ok:true, id:existingId, updated:false,
-                  loc:loc, group:group, subject:subject, empKey:empKey,
+                  loc:loc, subject:subject, empKey:empKey,
                   msg:'No change'};
         }
-        sh.getRange(rowNum, 5).setValue(empKey);
+        sh.getRange(rowNum, 4).setValue(empKey);    // col D = EmpKey
         _writeHrAudit(actor, 'pred_save_assign', existingId,
           {empKey:beforeEmpKey},
-          {empKey:empKey, loc:loc, group:group, subject:subject});
+          {empKey:empKey, loc:loc, subject:subject});
         return {ok:true, id:existingId, updated:true,
-                loc:loc, group:group, subject:subject, empKey:empKey};
+                loc:loc, subject:subject, empKey:empKey};
       }
 
       // Insert новий
       var newId = _nextPredAssignId(sh);
-      sh.appendRow([newId, loc, group, subject, empKey, new Date(), actor.id]);
+      sh.appendRow([newId, loc, subject, empKey, new Date(), actor.id]);
       _writeHrAudit(actor, 'pred_save_assign', newId, null,
-        {empKey:empKey, loc:loc, group:group, subject:subject});
+        {empKey:empKey, loc:loc, subject:subject});
       return {ok:true, id:newId, created:true,
-              loc:loc, group:group, subject:subject, empKey:empKey};
+              loc:loc, subject:subject, empKey:empKey};
     } finally {
       lock.releaseLock();
     }
@@ -7188,9 +7240,8 @@ function deletePredmetnykyAssignment(actorId, id){
           return {ok:false, code:'PERM_DENIED', error:'Permission denied'};
         var before = {
           loc:     loc,
-          group:   String(data[i][2] || '').trim(),
-          subject: String(data[i][3] || '').trim(),
-          empKey:  String(data[i][4] || '').trim()
+          subject: String(data[i][2] || '').trim(),
+          empKey:  String(data[i][3] || '').trim()
         };
         sh.deleteRow(i + 2);
         _writeHrAudit(actor, 'pred_delete_assign', id, before, null);

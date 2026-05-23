@@ -355,12 +355,28 @@ select,input,textarea{font-family:inherit}
 .pred-perm-banner{background:#fff7e6;border:1px solid #ffd591;color:#874d00;
   border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:13px}
 
-.pred-banner{padding:14px 18px;background:#fff;border-radius:10px;
+.pred-card{padding:16px 20px;background:#fff;border-radius:10px;
   box-shadow:0 1px 3px rgba(0,0,0,.06);margin-bottom:14px;
-  display:flex;align-items:center;gap:12px}
-.pred-banner-emoji{font-size:24px}
-.pred-banner-title{font-size:16px;font-weight:800;color:var(--dark)}
-.pred-banner-sub{font-size:12px;color:var(--gray);margin-top:2px}
+  display:flex;flex-direction:column;gap:7px}
+.pred-card-title{font-size:17px;font-weight:800;color:var(--dark);
+  padding-bottom:8px;border-bottom:1px solid #eef1f4;
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.pred-card-emoji{font-size:22px}
+.pred-card-row,.pred-card-teacher,.pred-card-contact{
+  font-size:14px;color:var(--dark2);line-height:1.5;
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.pred-card-lbl{color:var(--gray);font-weight:600}
+.pred-card-contact{font-size:13px;color:var(--gray);gap:4px}
+.pred-card-total{margin-top:4px;padding-top:8px;border-top:1px dashed #eef1f4;
+  font-size:14px}
+.pred-card-sum{color:#16a085;font-size:16px;font-weight:800}
+.pred-card-btn{background:transparent;border:none;cursor:pointer;
+  font-size:12px;color:var(--blue);font-weight:600;padding:2px 6px;
+  border-radius:4px;line-height:1.3}
+.pred-card-btn:hover{background:#eaf5ff}
+.pred-card-btn.primary{background:var(--green);color:#fff;
+  padding:6px 12px;font-size:13px;border-radius:6px}
+.pred-card-btn.primary:hover{background:var(--green2)}
 
 .pred-table-wrap{background:#fff;border-radius:10px;
   box-shadow:0 1px 3px rgba(0,0,0,.06);overflow-x:auto;margin-bottom:8px}
@@ -386,16 +402,6 @@ select,input,textarea{font-family:inherit}
   background:#fcfdfe;min-height:64px;justify-content:center}
 .pred-row-grp.forbidden{opacity:.55}
 .pred-grp-name{font-size:13px;font-weight:700;color:var(--dark)}
-.pred-grp-teacher{font-size:11px;color:var(--dark2);font-weight:600;
-  display:flex;align-items:center;gap:4px;line-height:1.2}
-.pred-grp-teacher.no-teacher{color:var(--gray);font-style:italic;font-weight:500}
-.pred-grp-assignbtn{padding:3px 7px;border:1.5px solid var(--green);
-  background:#fff;color:var(--green);border-radius:5px;font-size:11px;
-  font-weight:600;cursor:pointer;white-space:nowrap;align-self:flex-start}
-.pred-grp-assignbtn:hover{background:var(--green);color:#fff}
-.pred-grp-edit{background:transparent;border:none;cursor:pointer;
-  font-size:11px;opacity:.55;padding:0 2px;line-height:1}
-.pred-grp-edit:hover{opacity:1}
 .pred-teacher-missing{color:var(--red);font-weight:600}
 
 .pred-cell-day{padding:6px;border-bottom:1px solid #f0f4f8;
@@ -430,13 +436,6 @@ select,input,textarea{font-family:inherit}
   padding:10px;text-align:center;color:var(--gray);font-size:12px;
   background:#fafbfc;display:flex;align-items:center;justify-content:center;
   min-height:64px;gap:8px;flex-wrap:wrap}
-.pred-row-msg.noteacher{background:#fffbf0;color:#874d00}
-
-.pred-footer{padding:14px 18px;background:#fff;border-radius:10px;
-  box-shadow:0 1px 3px rgba(0,0,0,.06);
-  display:flex;justify-content:flex-end;align-items:center;gap:24px;
-  font-size:14px;font-weight:700;color:var(--dark)}
-.pred-footer-num{color:var(--green);font-weight:800;font-size:16px}
 
 .pred-modal-err{background:#fdecea;border:1px solid #f5b7b1;color:#a93226;
   border-radius:6px;padding:8px 12px;font-size:13px;margin-top:8px}
@@ -633,7 +632,7 @@ select,input,textarea{font-family:inherit}
     <div class="modal-hd"><h3 id="assignTitle">Призначити викладача</h3></div>
     <div class="modal-bd">
       <div class="fg">
-        <label>Локація → Група</label>
+        <label>Локація</label>
         <input type="text" id="assignLocGroup" disabled>
       </div>
       <div class="fg">
@@ -1129,13 +1128,11 @@ function teachersFor(loc, subj){
     return a.name.localeCompare(b.name, 'uk');
   });
 }
-function assignmentFor(loc, groupType, subj){
-  var groupName = GROUP_NAME_BY_TYPE[groupType];
+function assignmentFor(loc, subj){
   for (var i = 0; i < S.assignments.length; i++){
     var a = S.assignments[i];
     if (a.loc !== loc) continue;
     if (a.subject !== subj) continue;
-    if (a.group !== groupName) continue;
     return a;
   }
   return null;
@@ -1232,9 +1229,8 @@ function renderApp(){
     renderFilterCount(0);
     return;
   }
-  $('main').innerHTML = renderBanner(S.loc, S.subject) +
-                        renderTable(S.loc, S.subject) +
-                        renderFooter(S.loc, S.subject);
+  $('main').innerHTML = renderHeaderCard(S.loc, S.subject) +
+                        renderTable(S.loc, S.subject);
   renderFilterCount(countTotalForPage(S.loc, S.subject));
 }
 
@@ -1255,14 +1251,86 @@ function renderFilterCount(n){
   $('filterCount').textContent = n + ' ' + pluralUk(n, 'заняття', 'заняття', 'занять');
 }
 
-function renderBanner(loc, subject){
-  var emoji = SUBJECT_EMOJI[subject] || '📚';
-  return '<div class="pred-banner">' +
-    '<span class="pred-banner-emoji">' + emoji + '</span>' +
-    '<div>' +
-      '<div class="pred-banner-title">' + escapeHtml(subject) + ' · ' + escapeHtml(loc) + '</div>' +
-      '<div class="pred-banner-sub">' + escapeHtml(MONTHS[S.month - 1]) + ' ' + S.year + '</div>' +
+function renderHeaderCard(loc, subject){
+  var canEdit = canEditPred(loc);
+  var emoji   = SUBJECT_EMOJI[subject] || '📚';
+  var assignment = assignmentFor(loc, subject);
+  var teacher = assignment ? findTeacher(assignment.empKey) : null;
+  var rate    = getRateFor(loc, subject);
+  var total   = countTotalForPage(loc, subject);
+
+  // ── Teacher row ──
+  var teacherHtml;
+  if (assignment && teacher){
+    var editBtn = canEdit
+      ? '<button class="pred-card-btn" onclick="openAssign(\'' +
+          escapeJs(loc) + '\', \'' + escapeJs(subject) + '\', \'' +
+          escapeJs(assignment.empKey) + '\')">✏️ змінити</button>'
+      : '';
+    teacherHtml = '<div class="pred-card-teacher">' +
+      '<span class="pred-card-lbl">Викладач:</span> ' +
+      '<strong>' + escapeHtml(teacher.name) + '</strong> ' + editBtn +
+    '</div>';
+  } else if (assignment){
+    var fixBtn = canEdit
+      ? '<button class="pred-card-btn" onclick="openAssign(\'' +
+          escapeJs(loc) + '\', \'' + escapeJs(subject) + '\', \'' +
+          escapeJs(assignment.empKey) + '\')">✏️ замінити</button>'
+      : '';
+    teacherHtml = '<div class="pred-card-teacher">' +
+      '<span class="pred-teacher-missing">⚠️ Викладач не знайдений у HR</span> ' + fixBtn +
+    '</div>';
+  } else if (canEdit){
+    teacherHtml = '<div class="pred-card-teacher">' +
+      '<button class="pred-card-btn primary" onclick="openAssign(\'' +
+        escapeJs(loc) + '\', \'' + escapeJs(subject) + '\', null)">+ Обрати викладача</button>' +
+    '</div>';
+  } else {
+    teacherHtml = '<div class="pred-card-teacher muted">Викладача не призначено</div>';
+  }
+
+  // ── Contact row ──
+  var contactHtml = '';
+  if (teacher && (teacher.phone || teacher.email)){
+    var parts = [];
+    if (teacher.phone) parts.push('📞 ' + escapeHtml(teacher.phone));
+    if (teacher.email) parts.push('✉ ' + escapeHtml(teacher.email));
+    contactHtml = '<div class="pred-card-contact">' + parts.join('&nbsp;&nbsp;&nbsp;') + '</div>';
+  }
+
+  // ── Rate row ──
+  var rateHtml = (rate != null)
+    ? '<div class="pred-card-row"><span class="pred-card-lbl">Ставка:</span> ' +
+        '<strong>' + fmtN(rate) + '₴</strong> за заняття</div>'
+    : '<div class="pred-card-row pred-teacher-missing">' +
+        '⚠️ Немає ставки в каталозі — додай у Предметники_Каталог</div>';
+
+  // ── Total row ──
+  var totalHtml;
+  if (rate != null){
+    totalHtml = '<div class="pred-card-row pred-card-total">' +
+      '<span class="pred-card-lbl">Разом за місяць:</span> ' +
+      '<strong>' + total + '</strong> ' + pluralUk(total, 'заняття', 'заняття', 'занять') +
+      ' × ' + fmtN(rate) + '₴ = ' +
+      '<strong class="pred-card-sum">' + fmtN(total * rate) + '₴</strong>' +
+    '</div>';
+  } else {
+    totalHtml = '<div class="pred-card-row pred-card-total">' +
+      '<span class="pred-card-lbl">Разом за місяць:</span> ' +
+      '<strong>' + total + '</strong> ' + pluralUk(total, 'заняття', 'заняття', 'занять') +
+    '</div>';
+  }
+
+  return '<div class="pred-card">' +
+    '<div class="pred-card-title">' +
+      '<span class="pred-card-emoji">' + emoji + '</span> ' +
+      escapeHtml(subject) + ' · ' + escapeHtml(loc) + ' · ' +
+      escapeHtml(MONTHS[S.month - 1]) + ' ' + S.year +
     '</div>' +
+    teacherHtml +
+    contactHtml +
+    rateHtml +
+    totalHtml +
   '</div>';
 }
 
@@ -1274,21 +1342,18 @@ function renderTable(loc, subject){
   var rate = getRateFor(loc, subject);
   var hasRate = (rate != null);
 
-  // Per-group metadata
+  // Per-group metadata (без teacher chip — він у header card)
   var rows = PRED_GROUP_TYPES.map(function(gt){
     var groupName  = GROUP_NAME_BY_TYPE[gt];
     var norm       = getNormFor(loc, subject, gt);
     var isForbidden = !isUnlimited && norm <= 0;
-    var assignment = assignmentFor(loc, gt, subject);
-    var teacher    = assignment ? findTeacher(assignment.empKey) : null;
     var count      = isForbidden ? 0 : countLessonsInRow(loc, groupName, subject);
     var isMaxed    = !isUnlimited && count >= norm;
     return {gt:gt, groupName:groupName, norm:norm, isUnlimited:isUnlimited,
-            isForbidden:isForbidden, assignment:assignment, teacher:teacher,
-            count:count, isMaxed:isMaxed, hasRate:hasRate};
+            isForbidden:isForbidden, count:count, isMaxed:isMaxed, hasRate:hasRate};
   });
 
-  var gridCols = '200px repeat(' + nDays + ', minmax(36px, 1fr)) 90px';
+  var gridCols = '160px repeat(' + nDays + ', minmax(36px, 1fr)) 90px';
   var html = '<div class="pred-table-wrap"><div class="pred-table" style="grid-template-columns:' +
               gridCols + '">';
 
@@ -1301,11 +1366,14 @@ function renderTable(loc, subject){
       '<span class="dd">' + D.day + '</span>' +
     '</div>';
   });
-  html += '<div class="pred-th-counter">Заняття</div>';
+  html += '<div class="pred-th-counter">Лічильник</div>';
 
   // ── Data rows ──
   rows.forEach(function(R){
-    html += renderGroupLabel(loc, R, canEdit);
+    var rowCls = 'pred-row-grp' + (R.isForbidden ? ' forbidden' : '');
+    html += '<div class="' + rowCls + '">' +
+      '<div class="pred-grp-name">' + escapeHtml(R.groupName) + '</div>' +
+    '</div>';
     if (R.isForbidden){
       html += '<div class="pred-row-msg" style="grid-column: 2 / -2">' +
         'Не передбачено для цієї групи</div>';
@@ -1329,40 +1397,6 @@ function renderTable(loc, subject){
 
   html += '</div></div>';
   return html;
-}
-
-function renderGroupLabel(loc, R, canEdit){
-  var cls = 'pred-row-grp' + (R.isForbidden ? ' forbidden' : '');
-  var nameHtml = '<div class="pred-grp-name">' + escapeHtml(R.groupName) + '</div>';
-  var teacherHtml = '';
-  if (R.isForbidden){
-    teacherHtml = '';
-  } else if (!R.hasRate){
-    teacherHtml = '<div class="pred-grp-teacher pred-teacher-missing">⚠️ Немає ставки</div>';
-  } else if (R.assignment){
-    if (R.teacher){
-      var editBtn = canEdit
-        ? '<button class="pred-grp-edit" title="Замінити" onclick="openAssign(\'' +
-            escapeJs(loc) + '\', \'' + R.gt + '\', \'' + escapeJs(S.subject) + '\', \'' +
-            escapeJs(R.assignment.empKey) + '\')">✏️</button>'
-        : '';
-      teacherHtml = '<div class="pred-grp-teacher">' +
-        escapeHtml(R.teacher.name) + ' ' + editBtn + '</div>';
-    } else {
-      var fixBtn = canEdit
-        ? '<button class="pred-grp-edit" title="Замінити" onclick="openAssign(\'' +
-            escapeJs(loc) + '\', \'' + R.gt + '\', \'' + escapeJs(S.subject) + '\', \'' +
-            escapeJs(R.assignment.empKey) + '\')">✏️</button>'
-        : '';
-      teacherHtml = '<div class="pred-grp-teacher pred-teacher-missing">⚠️ Невідомий ' + fixBtn + '</div>';
-    }
-  } else if (canEdit){
-    teacherHtml = '<button class="pred-grp-assignbtn" onclick="openAssign(\'' +
-        escapeJs(loc) + '\', \'' + R.gt + '\', \'' + escapeJs(S.subject) + '\', null)">+ Обрати</button>';
-  } else {
-    teacherHtml = '<div class="pred-grp-teacher no-teacher">Не призначено</div>';
-  }
-  return '<div class="' + cls + '">' + nameHtml + teacherHtml + '</div>';
 }
 
 function renderDayCell(loc, R, subject, D, canEdit){
@@ -1395,22 +1429,6 @@ function renderDayCell(loc, R, subject, D, canEdit){
   return '<div class="' + cls + '"' + handler +
     (title ? ' title="' + escapeHtml(title) + '"' : '') + '>' +
     '<span class="pred-cb">✓</span>' +
-  '</div>';
-}
-
-function renderFooter(loc, subject){
-  var total = countTotalForPage(loc, subject);
-  var rate = getRateFor(loc, subject);
-  var sumHtml;
-  if (rate != null){
-    sumHtml = 'Сума: <span class="pred-footer-num">' + fmtN(total * rate) + ' ₴</span>';
-  } else {
-    sumHtml = '<span class="muted">Ставка не вказана</span>';
-  }
-  return '<div class="pred-footer">' +
-    '<span>Разом: <span class="pred-footer-num">' + total + '</span> ' +
-      pluralUk(total, 'заняття', 'заняття', 'занять') + '</span>' +
-    '<span>' + sumHtml + '</span>' +
   '</div>';
 }
 
@@ -1447,7 +1465,7 @@ function onCheckboxToggle(loc, groupType, subj, dateDmy){
   }
   var groupName = GROUP_NAME_BY_TYPE[groupType];
 
-  var assignment = assignmentFor(loc, groupType, subj);
+  var assignment = assignmentFor(loc, subj);
   var empKey;
   if (assignment){
     empKey = assignment.empKey;
@@ -1531,26 +1549,23 @@ function onCheckboxToggle(loc, groupType, subj, dateDmy){
   }
 }
 
-// ── ASSIGN MODAL (v6.11.4) ──────────────────
-function openAssign(loc, groupType, subject, currentEmpKey){
+// ── ASSIGN MODAL (v6.11.9 — без groupType) ──
+function openAssign(loc, subject, currentEmpKey){
   if (!canEditPred(loc)){ showToast('🚫 Немає дозволу', 'err'); return; }
-  var teachers  = teachersFor(loc, subject);
-  var groupName = GROUP_NAME_BY_TYPE[groupType];
-  var existing  = assignmentFor(loc, groupType, subject);
+  var teachers = teachersFor(loc, subject);
+  var existing = assignmentFor(loc, subject);
 
   S.assignModal = {
     loc:           loc,
-    groupType:     groupType,
-    group:         groupName,
     subject:       subject,
     teachers:      teachers,
     existingId:    existing ? existing.id : null,
     currentEmpKey: currentEmpKey || (existing ? existing.empKey : null)
   };
 
-  $('assignTitle').textContent  = (existing ? 'Замінити: ' : 'Призначити: ') + subject + ' · ' + groupName;
-  $('assignLocGroup').value     = loc + ' → ' + groupName;
-  $('assignSubject').value      = subject;
+  $('assignTitle').textContent = (existing ? 'Замінити: ' : 'Призначити: ') + subject + ' · ' + loc;
+  $('assignLocGroup').value    = loc;
+  $('assignSubject').value     = subject;
 
   var sel = $('assignTeacherSel');
   if (teachers.length){
@@ -1600,7 +1615,6 @@ function submitAssign(){
     actorId: S.user.id,
     payload: {
       loc:     S.assignModal.loc,
-      group:   S.assignModal.group,
       subject: S.assignModal.subject,
       empKey:  empKey
     }
@@ -1609,22 +1623,20 @@ function submitAssign(){
     if (!res || !res.ok){
       var msg;
       if      (res && res.code === 'PERM_DENIED') msg = '🚫 Немає дозволу';
-      else if (res && res.code === 'BAD_GROUP')   msg = '🚫 ' + (res.error || 'Заборонена комбінація');
       else if (res && res.code === 'BAD_SUBJECT') msg = '🚫 ' + (res.error || 'Невідомий предмет');
       else                                        msg = (res && res.error) || 'Невідома помилка';
       _assignErr(msg);
       return;
     }
-    // Replace any existing entry with same id OR same (loc,group,subject)
+    // Replace any existing entry with same id OR same (loc, subject)
     S.assignments = S.assignments.filter(function(a){
       if (a.id === res.id) return false;
-      if (a.loc === res.loc && a.group === res.group && a.subject === res.subject) return false;
+      if (a.loc === res.loc && a.subject === res.subject) return false;
       return true;
     });
     S.assignments.push({
       id:      res.id,
       loc:     res.loc,
-      group:   res.group,
       subject: res.subject,
       empKey:  res.empKey
     });
