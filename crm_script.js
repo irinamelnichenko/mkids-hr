@@ -7559,3 +7559,14 @@ function _testPredmetnykyBackend(){
   Logger.log('━━━ tests: ' + pass + ' pass, ' + fail + ' fail ━━━');
   return {ok: fail === 0, pass:pass, fail:fail};
 }
+
+function testExportHolosievo() {
+  var result = exportPredmetnykyToSalary({
+    actorId: 1,
+    locations: ['Голосієво'],
+    year: 2026,
+    month: 6
+  });
+  Logger.log('RESULT: ' + JSON.stringify(result));
+  return result;
+}
