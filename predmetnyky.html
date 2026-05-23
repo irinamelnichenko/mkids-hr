@@ -445,6 +445,11 @@ select,input,textarea{font-family:inherit}
 .pred-empty{text-align:center;color:var(--gray);padding:40px 20px;font-size:14px}
 .pred-empty-hint{color:var(--gray2);font-size:12px;margin-top:8px}
 
+.pred-danger-zone{margin-top:24px;padding:14px 18px;background:#fef8f7;
+  border:1px dashed #f5b7b1;border-radius:10px;
+  display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.pred-danger-hint{font-size:12px;color:var(--gray);flex:1;min-width:200px}
+
 @media(max-width:768px){
   .pred-table-wrap{border-radius:8px}
   .pred-row-grp{padding:6px 8px;min-height:54px}
@@ -1237,8 +1242,21 @@ function renderApp(){
     return;
   }
   $('main').innerHTML = renderHeaderCard(S.loc, S.subject) +
-                        renderTable(S.loc, S.subject);
+                        renderTable(S.loc, S.subject) +
+                        renderDangerZone(S.loc);
   renderFilterCount(countTotalForPage(S.loc, S.subject));
+}
+
+function renderDangerZone(loc){
+  if (!canEditPred(loc)) return '';
+  var lessonsInLoc = S.lessons.filter(function(L){ return L.loc === loc; }).length;
+  if (!lessonsInLoc) return '';
+  return '<div class="pred-danger-zone">' +
+    '<button class="btn btn-danger" onclick="onClearAllLessons()">' +
+      '🗑 Очистити ВСІ заняття для «' + escapeHtml(loc) + '» (' + lessonsInLoc + ')' +
+    '</button>' +
+    '<span class="pred-danger-hint">Тільки для тестів — видалить заняття по всіх місяцях/групах/предметах для цієї локації.</span>' +
+  '</div>';
 }
 
 function renderPermBanner(){
@@ -1779,6 +1797,48 @@ function runAutoExport(loc){
     var msg = '⚠️ Salary: ' + (e && e.message || e);
     setSync('err', msg);
     showToast(msg, 'err', 6000);
+  });
+}
+
+// Destructive: видалити ВСІ заняття для поточної локації.
+// Double-confirm: 1) звичайний confirm, 2) prompt з типуванням назви локації.
+function onClearAllLessons(){
+  var loc = S.loc;
+  if (!loc){ showToast('Спершу обери локацію', 'err'); return; }
+  if (!canEditPred(loc)){ showToast('🚫 Немає дозволу', 'err'); return; }
+  var n = S.lessons.filter(function(L){ return L.loc === loc; }).length;
+  if (!n){ showToast('Немає занять для видалення', 'info'); return; }
+
+  if (!confirm('⚠️ ВИДАЛИТИ ВСІ ' + n + ' ' +
+               pluralUk(n, 'заняття', 'заняття', 'занять') +
+               ' для «' + loc + '»?\n\nЦе по всіх місяцях/групах/предметах. Відмінити НЕ МОЖНА.')) return;
+
+  var typed = prompt('Введи назву локації щоб підтвердити: «' + loc + '»');
+  if (typed !== loc){ showToast('Назва не співпала — скасовано', 'info'); return; }
+
+  setSync('syncing', '🗑 Видалення…');
+  apiPost({
+    action: 'clearAllPredmetnykyLessons',
+    actorId: S.user.id,
+    location: loc
+  }).then(function(res){
+    if (!res || !res.ok){
+      var msg = '🚫 ' + ((res && res.error) || 'Помилка видалення');
+      setSync('err', msg);
+      showToast(msg, 'err', 6000);
+      return;
+    }
+    // Викинути локальні lessons для loc
+    S.lessons = S.lessons.filter(function(L){ return L.loc !== loc; });
+    renderApp();
+    setSync('ok', '✅ Видалено ' + res.deleted + ' занять');
+    showToast('✅ Видалено ' + res.deleted + ' ' +
+              pluralUk(res.deleted, 'заняття', 'заняття', 'занять') +
+              ' для «' + loc + '»', 'ok', 5000);
+    scheduleAutoExport(loc);
+  }).catch(function(e){
+    setSync('err', 'Помилка мережі');
+    showToast('Помилка мережі: ' + (e && e.message || e), 'err', 6000);
   });
 }
 

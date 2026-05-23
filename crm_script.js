@@ -300,6 +300,7 @@ function doPost(e) {
     else if (body.action === 'savePredmetnykyAssignment')   result = savePredmetnykyAssignment(Number(body.actorId || 0), body.payload || body.data || {});
     else if (body.action === 'deletePredmetnykyAssignment') result = deletePredmetnykyAssignment(Number(body.actorId || 0), Number(body.id || 0));
     else if (body.action === 'runPredmetnykyHrSeed')        result = _seedPredmetnykyAssignmentsFromHR();
+    else if (body.action === 'clearAllPredmetnykyLessons')  result = clearAllPredmetnykyLessons(Number(body.actorId || 0), body.location || body.loc || '');
     else if (body.action === 'exportPredmetnykyToSalary')   result = exportPredmetnykyToSalary(body || {});
     else result = {ok:false, error:'Unknown action'};
     return jsonOut(result);
@@ -7312,6 +7313,59 @@ function deletePredmetnykyAssignment(actorId, id){
   } catch(e){
     return {ok:false, error: e.message || String(e)};
   }
+}
+
+// POST {action:'clearAllPredmetnykyLessons', actorId, location}
+// DESTRUCTIVE: видаляє ВСІ заняття для конкретної локації (по всіх
+// місяцях/групах/предметах). Корисно для тестових скидань.
+// Permission: cfo/ceo/coo/cco або director у власній локації.
+function clearAllPredmetnykyLessons(actorId, location){
+  try {
+    var actor = _getActor(actorId);
+    var loc = String(location || '').trim();
+    if (!loc) return {ok:false, error:'location required'};
+    if (!_canEditPredmetnyky(actor, loc))
+      return {ok:false, code:'PERM_DENIED', error:'Permission denied'};
+
+    var lock = LockService.getScriptLock();
+    lock.waitLock(15000);
+    try {
+      var sh = _getPredLessonsSheet();
+      var lastRow = sh.getLastRow();
+      if (lastRow < 2) return {ok:true, deleted:0, loc:loc};
+
+      var data = sh.getRange(2, 1, lastRow - 1, PRED_LESSONS_HEADER.length).getValues();
+      var rowsToDelete = [];
+      var deletedIds = [];
+      for (var i = 0; i < data.length; i++){
+        if (String(data[i][2] || '').trim() !== loc) continue;
+        rowsToDelete.push(i + 2);
+        deletedIds.push(Number(data[i][0]) || 0);
+      }
+      // Видалення з низу — щоб індекси не зсувались.
+      rowsToDelete.sort(function(a, b){ return b - a; });
+      for (var j = 0; j < rowsToDelete.length; j++){
+        sh.deleteRow(rowsToDelete[j]);
+      }
+      _writeHrAudit(actor, 'pred_clear_lessons', 0,
+        {loc:loc, count:deletedIds.length}, null);
+      Logger.log('[clearAllPredmetnykyLessons] loc="%s" deleted=%s actor=%s',
+        loc, rowsToDelete.length, actor.id);
+      return {ok:true, deleted:rowsToDelete.length, loc:loc, ids:deletedIds};
+    } finally {
+      lock.releaseLock();
+    }
+  } catch(e){
+    return {ok:false, error: e.message || String(e)};
+  }
+}
+
+// Apps Script editor wrapper: _clearAllPredmetnykyLessons('Голосієво')
+// Викликає clearAllPredmetnykyLessons як CFO (actorId=1).
+function _clearAllPredmetnykyLessons(location){
+  var res = clearAllPredmetnykyLessons(1, location);
+  Logger.log('RESULT: ' + JSON.stringify(res));
+  return res;
 }
 
 // ═══════════════════════════════════════════════════════════════════
