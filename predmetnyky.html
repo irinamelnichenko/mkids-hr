@@ -441,6 +441,12 @@ select,input,textarea{font-family:inherit}
   border-radius:6px;padding:8px 12px;font-size:13px;margin-top:8px}
 .pred-modal-warn{background:#fff7e6;border:1px solid #ffd591;color:#874d00;
   border-radius:6px;padding:8px 12px;font-size:12.5px;margin:6px 0}
+.pred-mode-toggle{display:flex;gap:14px;margin-top:2px}
+.pred-mode-opt{display:flex;align-items:center;gap:6px;cursor:pointer;
+  font-size:14px;font-weight:600;color:var(--dark2)}
+.pred-mode-opt input[type=radio]{cursor:pointer;width:16px;height:16px;
+  accent-color:var(--green)}
+.pred-req{color:var(--red);font-weight:700;margin-left:2px}
 
 .pred-empty{text-align:center;color:var(--gray);padding:40px 20px;font-size:14px}
 .pred-empty-hint{color:var(--gray2);font-size:12px;margin-top:8px}
@@ -649,10 +655,47 @@ select,input,textarea{font-family:inherit}
       </div>
       <div class="fg">
         <label>Викладач</label>
-        <select id="assignTeacherSel"></select>
+        <div class="pred-mode-toggle">
+          <label class="pred-mode-opt">
+            <input type="radio" name="assignMode" value="existing" onchange="onAssignModeChange()" checked>
+            <span>Існуючий</span>
+          </label>
+          <label class="pred-mode-opt">
+            <input type="radio" name="assignMode" value="new" onchange="onAssignModeChange()">
+            <span>+ Створити нового</span>
+          </label>
+        </div>
       </div>
-      <div id="assignNoCands" class="pred-modal-warn hidden">
-        ⚠️ Немає кандидатів у HR з відповідною посадою. Можна зберегти лише ставку — викладача обереш пізніше.
+
+      <div id="assignBlockExisting">
+        <div class="fg">
+          <select id="assignTeacherSel" onchange="onAssignTeacherChange()"></select>
+        </div>
+        <div id="assignNoCands" class="pred-modal-warn hidden">
+          ⚠️ Немає кандидатів у HR з відповідною посадою. Створи нового або введи лише ставку.
+        </div>
+      </div>
+
+      <div id="assignBlockNew" class="hidden">
+        <div class="fg-row">
+          <div class="fg">
+            <label>Прізвище <span class="pred-req">*</span></label>
+            <input type="text" id="assignLastName" placeholder="наприклад Колот">
+          </div>
+          <div class="fg">
+            <label>Ім'я <span class="pred-req">*</span></label>
+            <input type="text" id="assignFirstName" placeholder="наприклад Інна">
+          </div>
+        </div>
+      </div>
+
+      <div class="fg">
+        <label>Телефон</label>
+        <input type="text" id="assignPhone" placeholder="наприклад 098 324 89 94">
+      </div>
+      <div class="fg">
+        <label>Email</label>
+        <input type="email" id="assignEmail" placeholder="example@mkids.ua">
       </div>
       <div class="fg">
         <label>Ставка за заняття (₴)</label>
@@ -1169,6 +1212,12 @@ function escapeJs(s){
   return String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
+// Мірорить backend _mkEmpKey(last, first, wdayOrHired).
+function mkEmpKey(last, first, wdayOrHired){
+  function s(x){ return String(x == null ? '' : x).trim().replace(/\s+/g, '').slice(0, 25); }
+  return 'e5_' + s(last) + '_' + s(first) + '_' + s(wdayOrHired);
+}
+
 // "983248994" → "+380 98 324-89-94". Невідомий формат — повертаємо raw.
 function formatUkrPhone(raw){
   var s = String(raw == null ? '' : raw);
@@ -1593,7 +1642,7 @@ function onCheckboxToggle(loc, groupType, subj, dateDmy){
   }
 }
 
-// ── ASSIGN MODAL (v6.11.10 — teacher + rate) ──
+// ── ASSIGN MODAL (v6.11.13 — teacher CRUD + rate) ──
 function openAssign(loc, subject, currentEmpKey){
   if (!canEditPred(loc)){ showToast('🚫 Немає дозволу', 'err'); return; }
   var teachers = teachersFor(loc, subject);
@@ -1622,14 +1671,25 @@ function openAssign(loc, subject, currentEmpKey){
         return '<option value="' + escapeHtml(t.empKey) + '">' + escapeHtml(t.name) + '</option>';
       }).join('');
     sel.disabled = false;
-    sel.value = S.assignModal.currentEmpKey || teachers[0].empKey;
+    sel.value = S.assignModal.currentEmpKey || '';
     $('assignNoCands').classList.add('hidden');
   } else {
     sel.innerHTML = '<option value="">— нема кандидатів —</option>';
     sel.disabled = true;
     $('assignNoCands').classList.remove('hidden');
   }
-  // submit активна завжди — рейт або teacher хоча б один
+
+  // Reset mode → existing (default). Якщо нема кандидатів — пропонуємо new.
+  var defaultMode = teachers.length ? 'existing' : 'new';
+  document.querySelectorAll('input[name="assignMode"]').forEach(function(r){
+    r.checked = (r.value === defaultMode);
+  });
+
+  // Reset name inputs
+  $('assignLastName').value  = '';
+  $('assignFirstName').value = '';
+
+  onAssignModeChange();         // показати правильний блок + наповнити phone/email
   $('assignSubmit').disabled = false;
 
   if (existing){
@@ -1642,6 +1702,38 @@ function openAssign(loc, subject, currentEmpKey){
   $('assignErr').textContent = '';
   $('modalAssign').classList.remove('hidden');
 }
+
+function _currentAssignMode(){
+  var r = document.querySelector('input[name="assignMode"]:checked');
+  return r ? r.value : 'existing';
+}
+
+function onAssignModeChange(){
+  var mode = _currentAssignMode();
+  if (mode === 'new'){
+    $('assignBlockExisting').classList.add('hidden');
+    $('assignBlockNew').classList.remove('hidden');
+    $('assignPhone').value = '';
+    $('assignEmail').value = '';
+    setTimeout(function(){ var el = $('assignLastName'); if (el) el.focus(); }, 50);
+  } else {
+    $('assignBlockExisting').classList.remove('hidden');
+    $('assignBlockNew').classList.add('hidden');
+    onAssignTeacherChange();   // підставити phone/email обраного
+  }
+}
+
+function onAssignTeacherChange(){
+  var empKey = $('assignTeacherSel').value;
+  if (!empKey){
+    $('assignPhone').value = '';
+    $('assignEmail').value = '';
+    return;
+  }
+  var t = findTeacher(empKey);
+  $('assignPhone').value = t && t.phone ? t.phone : '';
+  $('assignEmail').value = t && t.email ? t.email : '';
+}
 function closeAssign(){
   $('modalAssign').classList.add('hidden');
   S.assignModal = null;
@@ -1653,34 +1745,131 @@ function _assignErr(msg){
 }
 function submitAssign(){
   if (!S.assignModal) return;
-  var empKey = $('assignTeacherSel').value || '';
+  var mode = _currentAssignMode();
+  var loc = S.assignModal.loc;
+  var subject = S.assignModal.subject;
   var rateStr = $('assignRate').value;
   var hasRate = rateStr !== '' && rateStr != null;
   var rate = hasRate ? Number(rateStr) : null;
+  var phone = String($('assignPhone').value || '').trim();
+  var email = String($('assignEmail').value || '').trim();
 
-  if (!empKey && !hasRate){
-    _assignErr('Введи ставку або обери викладача (або те й інше)');
-    return;
-  }
   if (hasRate && (!isFinite(rate) || rate < 0)){
     _assignErr('Ставка має бути числом ≥ 0');
     return;
   }
 
-  var payload = {
-    loc:     S.assignModal.loc,
-    subject: S.assignModal.subject
-  };
-  if (empKey)  payload.empKey = empKey;
-  if (hasRate) payload.rate = rate;
-
+  // ── Збираємо план кроків ──
   var btn = $('assignSubmit'); var orig = btn.textContent;
   btn.disabled = true; btn.textContent = '⏳ Збереження…';
+  _assignErr('');
+  $('assignErr').classList.add('hidden');
 
-  apiPost({
-    action: 'savePredmetnykyAssignment',
-    actorId: S.user.id,
-    payload: payload
+  // Орchestrate: 1) create/update HR teacher → 2) save assignment + rate
+  var step1;
+  if (mode === 'new'){
+    var last = String($('assignLastName').value || '').trim();
+    var first = String($('assignFirstName').value || '').trim();
+    if (!last || !first){
+      btn.disabled = false; btn.textContent = orig;
+      _assignErr('Прізвище та Ім\'я обов\'язкові для нового викладача');
+      return;
+    }
+    var hiredIso = todayIso();
+    step1 = apiPost({
+      action: 'saveEmployee',
+      actorId: S.user.id,
+      payload: {
+        last:  last,
+        first: first,
+        loc:   loc,
+        pos:   subject,
+        typ:   'Предметник',
+        phone: phone,
+        email: email,
+        hired: hiredIso
+      }
+    }).then(function(res){
+      if (!res || !res.ok) throw new Error('saveEmployee: ' + ((res && res.error) || 'unknown'));
+      var emp = res.employee || {};
+      var newEmpKey = mkEmpKey(emp.last || last, emp.first || first, emp.wday || emp.hired || isoToDmy(hiredIso));
+      // Push into S.teachers одразу
+      S.teachers.push({
+        empId:     res.rowNum,
+        empKey:    newEmpKey,
+        name:      (emp.last || last) + ' ' + (emp.first || first),
+        position:  emp.pos || subject,
+        subject:   subject,
+        locations: [loc],
+        phone:     emp.phone || phone,
+        email:     emp.email || email
+      });
+      return {empKey: newEmpKey, created: true};
+    });
+  } else {
+    // mode === 'existing'
+    var selectedKey = $('assignTeacherSel').value || '';
+    if (!selectedKey && !hasRate){
+      btn.disabled = false; btn.textContent = orig;
+      _assignErr('Обери викладача, створи нового, або введи лише ставку');
+      return;
+    }
+    if (!selectedKey){
+      // Тільки ставка, без teacher → пропускаємо step1
+      step1 = Promise.resolve({empKey: '', created: false});
+    } else {
+      var t = findTeacher(selectedKey);
+      var phoneChanged = t && (t.phone || '') !== phone;
+      var emailChanged = t && (t.email || '') !== email;
+      if (!t || (!phoneChanged && !emailChanged)){
+        // Без змін — пропускаємо HR update
+        step1 = Promise.resolve({empKey: selectedKey, created: false});
+      } else {
+        step1 = apiPost({
+          action: 'saveEmployee',
+          actorId: S.user.id,
+          rowNum: t.empId,
+          payload: {
+            last:  t.name.split(/\s+/)[0] || '',
+            first: t.name.split(/\s+/).slice(1).join(' ') || '',
+            loc:   t.locations[0],
+            pos:   t.position,
+            phone: phone,
+            email: email
+          }
+        }).then(function(res){
+          if (!res || !res.ok) throw new Error('saveEmployee update: ' + ((res && res.error) || 'unknown'));
+          var emp = res.employee || {};
+          // Оновлюємо local S.teachers
+          for (var i = 0; i < S.teachers.length; i++){
+            if (S.teachers[i].empKey === selectedKey){
+              S.teachers[i].phone = emp.phone || phone;
+              S.teachers[i].email = emp.email || email;
+              break;
+            }
+          }
+          return {empKey: selectedKey, created: false};
+        });
+      }
+    }
+  }
+
+  // ── Step 2: assignment + rate ──
+  step1.then(function(step1Res){
+    var empKey = step1Res.empKey;
+    var payload = {loc: loc, subject: subject};
+    if (empKey)  payload.empKey = empKey;
+    if (hasRate) payload.rate = rate;
+
+    // Якщо нема ні empKey ні rate (защита — не повинно тут трапитись)
+    if (!empKey && !hasRate){
+      return {ok:true, info:'noop'};
+    }
+    return apiPost({
+      action: 'savePredmetnykyAssignment',
+      actorId: S.user.id,
+      payload: payload
+    });
   }).then(function(res){
     btn.disabled = false; btn.textContent = orig;
     if (!res || !res.ok){
@@ -1691,7 +1880,7 @@ function submitAssign(){
       _assignErr(msg);
       return;
     }
-    // Оновити assignments якщо повернулась нова/змінена
+    // Оновити S.assignments
     if (res.id && res.empKey){
       S.assignments = S.assignments.filter(function(a){
         if (a.id === res.id) return false;
@@ -1705,9 +1894,8 @@ function submitAssign(){
         empKey:  res.empKey
       });
     }
-    // Оновити catalog якщо rate змінено
+    // Оновити catalog якщо rate
     if (res.rate != null){
-      // Знайти catalog entry і оновити, або додати новий
       var foundCat = false;
       for (var ci = 0; ci < S.catalog.length; ci++){
         var c = S.catalog[ci];
@@ -1729,14 +1917,14 @@ function submitAssign(){
     closeAssign();
     renderApp();
     var msgs = [];
-    if (res.empKey)    msgs.push(res.created ? 'Викладача призначено' : 'Викладача замінено');
-    if (res.rate != null) msgs.push('ставка ' + res.rate + '₴');
-    showToast('✅ ' + msgs.join(' · '), 'ok');
-    // Якщо ставка/викладач змінились — Salary потрібен оновити
-    scheduleAutoExport(S.assignModal && S.assignModal.loc || res.loc);
+    if (mode === 'new')          msgs.push('Викладача створено');
+    else if (res.empKey)         msgs.push(res.created ? 'Викладача призначено' : 'Викладача замінено');
+    if (res.rate != null)        msgs.push('ставка ' + res.rate + '₴');
+    if (msgs.length) showToast('✅ ' + msgs.join(' · '), 'ok');
+    scheduleAutoExport(loc);
   }).catch(function(e){
     btn.disabled = false; btn.textContent = orig;
-    _assignErr('Помилка мережі: ' + (e && e.message || e));
+    _assignErr('Помилка: ' + (e && e.message || e));
   });
 }
 function removeAssign(){
