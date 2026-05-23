@@ -7154,9 +7154,41 @@ function _seedPredmetnykyAssignmentsFromHR(){
   return {ok:true, seeded:rowsToAppend.length, stats:stats};
 }
 
-// POST {action:'savePredmetnykyAssignment', actorId, payload:{loc, subject, empKey}}
-// Upsert: уніквальний ключ — (loc, subject). Поле 'group' у payload
-// ігнорується (backward compat для старого фронта).
+// Upsert ставки у Предметники_Каталог для (loc, subject_norm).
+// Якщо catalog row існує (active, _normalizeSubject(row.subject) === subject_norm)
+// — оновлюємо rate; інакше — створюємо новий рядок з subject_raw = subject_norm.
+// Повертає {ok, id, created} або {ok:false, error}.
+function _upsertCatalogRate(loc, subject_norm, rate, actor){
+  var rateNum = Number(rate);
+  if (!isFinite(rateNum) || rateNum < 0) return {ok:false, error:'Invalid rate'};
+
+  var sh = _getPredmetnyCatalogSheet(true);
+  var data = sh.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++){
+    var rec = _parsePredmetnyCatRow(data[i]);
+    if (rec.loc !== loc) continue;
+    if (_normalizeSubject(rec.subject) !== subject_norm) continue;
+    var oldRate = Number(rec.rate) || 0;
+    sh.getRange(i + 1, 4).setValue(rateNum);                     // col D = Ставка
+    if (!rec.active){ sh.getRange(i + 1, 6).setValue(true); }    // re-activate якщо було off
+    _writeHrAudit(actor, 'pred_catalog_rate', rec.id,
+      {rate:oldRate, active:rec.active},
+      {rate:rateNum, loc:loc, subject:rec.subject});
+    return {ok:true, id:rec.id, updated:true, oldRate:oldRate, newRate:rateNum};
+  }
+  // Не знайдено — створюємо новий catalog row.
+  var newId = _nextPredmetnyRowId(sh);
+  sh.appendRow([newId, loc, subject_norm, rateNum, '', true]);
+  _writeHrAudit(actor, 'pred_catalog_rate', newId, null,
+    {loc:loc, subject:subject_norm, rate:rateNum, created:true});
+  return {ok:true, id:newId, created:true, newRate:rateNum};
+}
+
+// POST {action:'savePredmetnykyAssignment', actorId,
+//        payload:{loc, subject, empKey?, rate?}}
+// Принаймні одне з empKey або rate має бути присутнє.
+// empKey: upsert assignment row by (loc, subject).
+// rate:   upsert catalog rate by (loc, subject_norm).
 function savePredmetnykyAssignment(actorId, payload){
   try {
     var actor = _getActor(actorId);
@@ -7164,13 +7196,18 @@ function savePredmetnykyAssignment(actorId, payload){
     var loc     = String(payload.loc     || payload.location || '').trim();
     var subject = String(payload.subject || '').trim();
     var empKey  = String(payload.empKey  || '').trim();
+    var hasRate = payload.rate !== undefined && payload.rate !== null && payload.rate !== '';
+    var rate    = hasRate ? Number(payload.rate) : null;
 
     if (!loc)     return {ok:false, error:'loc required'};
     if (!subject) return {ok:false, error:'subject required'};
-    if (!empKey)  return {ok:false, error:'empKey required'};
+    if (!empKey && !hasRate)
+      return {ok:false, error:'Provide empKey or rate (or both)'};
 
     if (PRED_SUBJECTS.indexOf(subject) === -1)
       return {ok:false, code:'BAD_SUBJECT', error:'Unknown subject: ' + subject};
+    if (hasRate && (!isFinite(rate) || rate < 0))
+      return {ok:false, error:'Invalid rate: ' + payload.rate};
 
     if (!_canEditPredmetnyky(actor, loc))
       return {ok:false, code:'PERM_DENIED', error:'Permission denied'};
@@ -7178,39 +7215,60 @@ function savePredmetnykyAssignment(actorId, payload){
     var lock = LockService.getScriptLock();
     lock.waitLock(15000);
     try {
-      var sh = _getPredAssignSheet();
-      var lastRow = sh.getLastRow();
-      var data = lastRow > 1
-        ? sh.getRange(2, 1, lastRow - 1, PRED_ASSIGN_HEADER.length).getValues()
-        : [];
+      var result = {ok:true, loc:loc, subject:subject};
 
-      // Upsert: знайти (loc, subject)
-      for (var i = 0; i < data.length; i++){
-        if (String(data[i][1] || '').trim() !== loc)     continue;
-        if (String(data[i][2] || '').trim() !== subject) continue;
-        var rowNum = i + 2;
-        var existingId = Number(data[i][0]) || 0;
-        var beforeEmpKey = String(data[i][3] || '').trim();
-        if (beforeEmpKey === empKey){
-          return {ok:true, id:existingId, updated:false,
-                  loc:loc, subject:subject, empKey:empKey,
-                  msg:'No change'};
-        }
-        sh.getRange(rowNum, 4).setValue(empKey);    // col D = EmpKey
-        _writeHrAudit(actor, 'pred_save_assign', existingId,
-          {empKey:beforeEmpKey},
-          {empKey:empKey, loc:loc, subject:subject});
-        return {ok:true, id:existingId, updated:true,
-                loc:loc, subject:subject, empKey:empKey};
+      // ── 1. Catalog rate (якщо передано) ──
+      if (hasRate){
+        var catRes = _upsertCatalogRate(loc, subject, rate, actor);
+        if (!catRes.ok) return {ok:false, error:'Catalog: ' + catRes.error};
+        result.rate = rate;
+        result.catalogId = catRes.id;
+        result.catalogCreated = !!catRes.created;
       }
 
-      // Insert новий
-      var newId = _nextPredAssignId(sh);
-      sh.appendRow([newId, loc, subject, empKey, new Date(), actor.id]);
-      _writeHrAudit(actor, 'pred_save_assign', newId, null,
-        {empKey:empKey, loc:loc, subject:subject});
-      return {ok:true, id:newId, created:true,
-              loc:loc, subject:subject, empKey:empKey};
+      // ── 2. Assignment (якщо empKey передано) ──
+      if (empKey){
+        var sh = _getPredAssignSheet();
+        var lastRow = sh.getLastRow();
+        var data = lastRow > 1
+          ? sh.getRange(2, 1, lastRow - 1, PRED_ASSIGN_HEADER.length).getValues()
+          : [];
+
+        var foundExisting = false;
+        for (var i = 0; i < data.length; i++){
+          if (String(data[i][1] || '').trim() !== loc)     continue;
+          if (String(data[i][2] || '').trim() !== subject) continue;
+          var rowNum = i + 2;
+          var existingId = Number(data[i][0]) || 0;
+          var beforeEmpKey = String(data[i][3] || '').trim();
+          if (beforeEmpKey === empKey){
+            result.id = existingId;
+            result.empKey = empKey;
+            result.updated = false;
+          } else {
+            sh.getRange(rowNum, 4).setValue(empKey);
+            _writeHrAudit(actor, 'pred_save_assign', existingId,
+              {empKey:beforeEmpKey},
+              {empKey:empKey, loc:loc, subject:subject});
+            result.id = existingId;
+            result.empKey = empKey;
+            result.updated = true;
+          }
+          foundExisting = true;
+          break;
+        }
+        if (!foundExisting){
+          var newId = _nextPredAssignId(sh);
+          sh.appendRow([newId, loc, subject, empKey, new Date(), actor.id]);
+          _writeHrAudit(actor, 'pred_save_assign', newId, null,
+            {empKey:empKey, loc:loc, subject:subject});
+          result.id = newId;
+          result.empKey = empKey;
+          result.created = true;
+        }
+      }
+
+      return result;
     } finally {
       lock.releaseLock();
     }

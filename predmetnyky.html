@@ -439,6 +439,8 @@ select,input,textarea{font-family:inherit}
 
 .pred-modal-err{background:#fdecea;border:1px solid #f5b7b1;color:#a93226;
   border-radius:6px;padding:8px 12px;font-size:13px;margin-top:8px}
+.pred-modal-warn{background:#fff7e6;border:1px solid #ffd591;color:#874d00;
+  border-radius:6px;padding:8px 12px;font-size:12.5px;margin:6px 0}
 
 .pred-empty{text-align:center;color:var(--gray);padding:40px 20px;font-size:14px}
 .pred-empty-hint{color:var(--gray2);font-size:12px;margin-top:8px}
@@ -581,6 +583,7 @@ select,input,textarea{font-family:inherit}
       <div class="hd-meta" id="meta">Матриця занять по групах · одна клітинка = одне заняття</div>
     </div>
     <div class="hd-ctrl">
+      <button class="btn btn-secondary" onclick="manualSyncSalary()" id="btnSyncSalary" title="Експортувати в Salary зараз">💸 Sync Salary</button>
       <button class="btn btn-secondary" onclick="refreshAll()">🔄 Оновити</button>
     </div>
   </div>
@@ -643,8 +646,12 @@ select,input,textarea{font-family:inherit}
         <label>Викладач</label>
         <select id="assignTeacherSel"></select>
       </div>
-      <div id="assignNoCands" class="pred-modal-err hidden">
-        Немає кандидатів у HR. Додай спочатку співробітника з відповідною посадою для цієї локації.
+      <div id="assignNoCands" class="pred-modal-warn hidden">
+        ⚠️ Немає кандидатів у HR з відповідною посадою. Можна зберегти лише ставку — викладача обереш пізніше.
+      </div>
+      <div class="fg">
+        <label>Ставка за заняття (₴)</label>
+        <input type="number" id="assignRate" min="0" step="1" placeholder="наприклад 280">
       </div>
       <div id="assignErr" class="pred-modal-err hidden"></div>
     </div>
@@ -1289,13 +1296,15 @@ function renderHeaderCard(loc, subject){
     teacherHtml = '<div class="pred-card-teacher muted">Викладача не призначено</div>';
   }
 
-  // ── Contact row ──
+  // ── Contact row (завжди показуємо обидва — з '—' для порожніх) ──
   var contactHtml = '';
-  if (teacher && (teacher.phone || teacher.email)){
-    var parts = [];
-    if (teacher.phone) parts.push('📞 ' + escapeHtml(teacher.phone));
-    if (teacher.email) parts.push('✉ ' + escapeHtml(teacher.email));
-    contactHtml = '<div class="pred-card-contact">' + parts.join('&nbsp;&nbsp;&nbsp;') + '</div>';
+  if (teacher){
+    var phoneTxt = teacher.phone ? escapeHtml(teacher.phone) : '<span class="muted">—</span>';
+    var emailTxt = teacher.email ? escapeHtml(teacher.email) : '<span class="muted">—</span>';
+    contactHtml = '<div class="pred-card-contact">' +
+      '📞 ' + phoneTxt + '&nbsp;&nbsp;&nbsp;' +
+      '✉ ' + emailTxt +
+    '</div>';
   }
 
   // ── Rate row ──
@@ -1549,39 +1558,44 @@ function onCheckboxToggle(loc, groupType, subj, dateDmy){
   }
 }
 
-// ── ASSIGN MODAL (v6.11.9 — без groupType) ──
+// ── ASSIGN MODAL (v6.11.10 — teacher + rate) ──
 function openAssign(loc, subject, currentEmpKey){
   if (!canEditPred(loc)){ showToast('🚫 Немає дозволу', 'err'); return; }
   var teachers = teachersFor(loc, subject);
   var existing = assignmentFor(loc, subject);
+  var currentRate = getRateFor(loc, subject);
 
   S.assignModal = {
     loc:           loc,
     subject:       subject,
     teachers:      teachers,
     existingId:    existing ? existing.id : null,
-    currentEmpKey: currentEmpKey || (existing ? existing.empKey : null)
+    currentEmpKey: currentEmpKey || (existing ? existing.empKey : null),
+    currentRate:   currentRate
   };
 
-  $('assignTitle').textContent = (existing ? 'Замінити: ' : 'Призначити: ') + subject + ' · ' + loc;
+  $('assignTitle').textContent = (existing || currentRate != null ? 'Редагувати: ' : 'Призначити: ') +
+                                  subject + ' · ' + loc;
   $('assignLocGroup').value    = loc;
   $('assignSubject').value     = subject;
+  $('assignRate').value        = (currentRate != null) ? String(currentRate) : '';
 
   var sel = $('assignTeacherSel');
   if (teachers.length){
-    sel.innerHTML = teachers.map(function(t){
-      return '<option value="' + escapeHtml(t.empKey) + '">' + escapeHtml(t.name) + '</option>';
-    }).join('');
+    sel.innerHTML = '<option value="">— без викладача —</option>' +
+      teachers.map(function(t){
+        return '<option value="' + escapeHtml(t.empKey) + '">' + escapeHtml(t.name) + '</option>';
+      }).join('');
     sel.disabled = false;
     sel.value = S.assignModal.currentEmpKey || teachers[0].empKey;
     $('assignNoCands').classList.add('hidden');
-    $('assignSubmit').disabled = false;
   } else {
-    sel.innerHTML = '';
+    sel.innerHTML = '<option value="">— нема кандидатів —</option>';
     sel.disabled = true;
     $('assignNoCands').classList.remove('hidden');
-    $('assignSubmit').disabled = true;
   }
+  // submit активна завжди — рейт або teacher хоча б один
+  $('assignSubmit').disabled = false;
 
   if (existing){
     $('assignRemoveBtn').classList.remove('hidden');
@@ -1604,8 +1618,26 @@ function _assignErr(msg){
 }
 function submitAssign(){
   if (!S.assignModal) return;
-  var empKey = $('assignTeacherSel').value;
-  if (!empKey){ _assignErr('Обери викладача'); return; }
+  var empKey = $('assignTeacherSel').value || '';
+  var rateStr = $('assignRate').value;
+  var hasRate = rateStr !== '' && rateStr != null;
+  var rate = hasRate ? Number(rateStr) : null;
+
+  if (!empKey && !hasRate){
+    _assignErr('Введи ставку або обери викладача (або те й інше)');
+    return;
+  }
+  if (hasRate && (!isFinite(rate) || rate < 0)){
+    _assignErr('Ставка має бути числом ≥ 0');
+    return;
+  }
+
+  var payload = {
+    loc:     S.assignModal.loc,
+    subject: S.assignModal.subject
+  };
+  if (empKey)  payload.empKey = empKey;
+  if (hasRate) payload.rate = rate;
 
   var btn = $('assignSubmit'); var orig = btn.textContent;
   btn.disabled = true; btn.textContent = '⏳ Збереження…';
@@ -1613,11 +1645,7 @@ function submitAssign(){
   apiPost({
     action: 'savePredmetnykyAssignment',
     actorId: S.user.id,
-    payload: {
-      loc:     S.assignModal.loc,
-      subject: S.assignModal.subject,
-      empKey:  empKey
-    }
+    payload: payload
   }).then(function(res){
     btn.disabled = false; btn.textContent = orig;
     if (!res || !res.ok){
@@ -1628,21 +1656,49 @@ function submitAssign(){
       _assignErr(msg);
       return;
     }
-    // Replace any existing entry with same id OR same (loc, subject)
-    S.assignments = S.assignments.filter(function(a){
-      if (a.id === res.id) return false;
-      if (a.loc === res.loc && a.subject === res.subject) return false;
-      return true;
-    });
-    S.assignments.push({
-      id:      res.id,
-      loc:     res.loc,
-      subject: res.subject,
-      empKey:  res.empKey
-    });
+    // Оновити assignments якщо повернулась нова/змінена
+    if (res.id && res.empKey){
+      S.assignments = S.assignments.filter(function(a){
+        if (a.id === res.id) return false;
+        if (a.loc === res.loc && a.subject === res.subject) return false;
+        return true;
+      });
+      S.assignments.push({
+        id:      res.id,
+        loc:     res.loc,
+        subject: res.subject,
+        empKey:  res.empKey
+      });
+    }
+    // Оновити catalog якщо rate змінено
+    if (res.rate != null){
+      // Знайти catalog entry і оновити, або додати новий
+      var foundCat = false;
+      for (var ci = 0; ci < S.catalog.length; ci++){
+        var c = S.catalog[ci];
+        if (c.loc !== res.loc) continue;
+        if (c.subject_norm !== res.subject) continue;
+        c.rate = res.rate;
+        c.active = true;
+        foundCat = true;
+        break;
+      }
+      if (!foundCat){
+        S.catalog.push({
+          loc: res.loc, subject_raw: res.subject,
+          subject_norm: res.subject, rate: res.rate,
+          teacher: '', active: true
+        });
+      }
+    }
     closeAssign();
     renderApp();
-    showToast(res.created ? '✅ Викладача призначено' : '✅ Викладача замінено', 'ok');
+    var msgs = [];
+    if (res.empKey)    msgs.push(res.created ? 'Викладача призначено' : 'Викладача замінено');
+    if (res.rate != null) msgs.push('ставка ' + res.rate + '₴');
+    showToast('✅ ' + msgs.join(' · '), 'ok');
+    // Якщо ставка/викладач змінились — Salary потрібен оновити
+    scheduleAutoExport(S.assignModal && S.assignModal.loc || res.loc);
   }).catch(function(e){
     btn.disabled = false; btn.textContent = orig;
     _assignErr('Помилка мережі: ' + (e && e.message || e));
@@ -1683,21 +1739,21 @@ function removeAssign(){
   });
 }
 
-// ── AUTO-EXPORT (v6.11.4) ───────────────────
-// Дебаунс 5 сек після save/delete lesson — викликає
-// exportPredmetnykyToSalary для локації заняття.
+// ── AUTO-EXPORT (v6.11.10 — debounce 2s + clearer toasts) ────
+// Викликає exportPredmetnykyToSalary після save/delete lesson або
+// зміни ставки. Зменшено з 5s до 2s — щоб користувач швидше бачив зміни.
 function scheduleAutoExport(loc){
   if (!loc) return;
   if (S.autoExportTimer){ clearTimeout(S.autoExportTimer); }
-  setSync('pending', '↻ Salary через 5 сек…');
+  setSync('pending', '↻ Salary через 2 сек…');
   S.autoExportTimer = setTimeout(function(){
     S.autoExportTimer = null;
     runAutoExport(loc);
-  }, 5000);
+  }, 2000);
 }
 function runAutoExport(loc){
   setSync('syncing', '↻ Salary…');
-  apiPost({
+  return apiPost({
     action: 'exportPredmetnykyToSalary',
     actorId: S.user.id,
     loc:  loc,
@@ -1705,12 +1761,35 @@ function runAutoExport(loc){
     month: S.month
   }).then(function(res){
     if (res && res.ok){
-      setSync('ok', '✅ Salary оновлено (' + (res.cellsWritten || 0) + ' клітинок)');
+      var totalFact = res.totalFact || 0;
+      var cells = res.cellsWritten || 0;
+      var msg = '✅ Salary: ' + cells + ' ' + pluralUk(cells, 'клітинка', 'клітинки', 'клітинок') +
+                ', разом ' + fmtN(totalFact) + '₴';
+      setSync('ok', msg);
+      // Toast тільки для значущих змін (cells>0) щоб не спамити
+      if (cells > 0) showToast(msg + ' · ' + escapeHtml(res.targetMonth || '') + '', 'ok', 4000);
     } else {
-      setSync('err', '⚠️ Salary: ' + ((res && res.error) || 'помилка'));
+      var err = (res && res.error) || 'невідома помилка';
+      var fullMsg = '⚠️ Salary не оновлено: ' + err;
+      setSync('err', fullMsg);
+      showToast(fullMsg, 'err', 6000);
     }
+    return res;
   }).catch(function(e){
-    setSync('err', '⚠️ Salary: ' + (e && e.message || e));
+    var msg = '⚠️ Salary: ' + (e && e.message || e);
+    setSync('err', msg);
+    showToast(msg, 'err', 6000);
+  });
+}
+
+// Manual sync — миттєвий експорт без debounce.
+function manualSyncSalary(){
+  if (!S.loc){ showToast('Спершу обери локацію', 'err'); return; }
+  if (S.autoExportTimer){ clearTimeout(S.autoExportTimer); S.autoExportTimer = null; }
+  var btn = $('btnSyncSalary');
+  if (btn){ btn.disabled = true; btn.textContent = '⏳ Sync…'; }
+  runAutoExport(S.loc).finally(function(){
+    if (btn){ btn.disabled = false; btn.textContent = '💸 Sync Salary'; }
   });
 }
 
