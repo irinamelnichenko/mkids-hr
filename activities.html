@@ -2,8 +2,16 @@
 <html lang="uk">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#27ae60">
 <title>m.kids — Додаткові заняття</title>
+<!-- PWA (v6.12) -->
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="m.kids">
+<meta name="mobile-web-app-capable" content="yes">
 <script src="xlsx.full.min.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -320,6 +328,41 @@ select,input,textarea{font-family:inherit}
   .sidebar.open{transform:translateX(0)}
   .main{margin-left:0}
   .menu-toggle{display:inline-flex;align-items:center}
+}
+
+/* ── PWA Mobile (v6.12) — bottom nav + safe-area + bigger tap targets ── */
+.mobile-bnav{display:none}
+@media(max-width:768px){
+  body{padding-bottom:calc(64px + env(safe-area-inset-bottom, 0px))}
+  .wrap{padding:14px 12px 24px}
+  .menu-toggle{display:none !important}            /* приховуємо hamburger на mobile */
+  .sidebar{display:none !important}                /* приховуємо sidebar повністю */
+  .main{margin-left:0;padding-bottom:0}
+
+  /* Bottom navigation — fixed, 3 кнопки */
+  .mobile-bnav{display:flex;position:fixed;left:0;right:0;bottom:0;
+    background:var(--sidebar);color:#fff;z-index:500;
+    padding-bottom:env(safe-area-inset-bottom, 0px);
+    box-shadow:0 -2px 12px rgba(0,0,0,.15)}
+  .bnav-item{flex:1;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;gap:2px;padding:10px 4px;cursor:pointer;
+    color:rgba(255,255,255,.65);font-size:11px;font-weight:600;
+    border:none;background:transparent;font-family:inherit;
+    min-height:60px;text-align:center;transition:color .15s}
+  .bnav-item .ic{font-size:22px;line-height:1}
+  .bnav-item:active{background:rgba(255,255,255,.08)}
+  .bnav-item.active{color:var(--green2)}
+
+  /* Bigger tap targets для чекбоксів і кнопок */
+  .att-cell,.tbl tbody td button,.btn{min-height:44px}
+  .att-cell{min-width:44px}
+
+  /* Offline indicator (бере над bnav, бо fixed bottom) */
+  .pwa-offline{position:fixed;left:0;right:0;
+    bottom:calc(64px + env(safe-area-inset-bottom, 0px));
+    background:#b7791f;color:#fff;text-align:center;font-size:13px;
+    font-weight:600;padding:6px;z-index:501;display:none}
+  .pwa-offline.show{display:block}
 }
 </style>
 </head>
@@ -1243,23 +1286,95 @@ async function loadCatalog(force){
   }
 }
 
+// v6.12 PWA: safePost з retry (3x exp backoff) + localStorage offline queue.
+// Зберігає API saveBackend(action, payload) для backward-compat усіх callers.
 async function saveBackend(action, payload){
+  return safePost(action, payload);
+}
+
+async function safePost(action, payload, attempt){
+  attempt = attempt || 0;
+  var body = JSON.stringify(Object.assign({action: action}, payload || {}));
   try {
     var r = await fetch(CFG.SCRIPT_URL, {
-      method: 'POST',
-      redirect: 'follow',
+      method: 'POST', redirect: 'follow',
       headers: {'Content-Type': 'text/plain;charset=utf-8'},
-      body: JSON.stringify(Object.assign({action: action}, payload || {}))
+      body: body
     });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     var json = await r.json();
     if (!json.ok) throw new Error(json.error || 'Backend rejected');
     return json;
   } catch(e){
-    // Зберігаємо локально щоб користувач міг продовжувати працювати.
-    return {ok: false, error: e && e.message || String(e), localOnly: true};
+    if (attempt < 2){
+      var delayMs = 1000 * Math.pow(2, attempt);   // 1s → 2s → 4s
+      try { showToast('⚠ Зв\'язок нестабільний, повтор через ' + (delayMs/1000) + ' сек…', 'info', delayMs); } catch(_){}
+      await new Promise(function(rs){ setTimeout(rs, delayMs); });
+      return safePost(action, payload, attempt + 1);
+    }
+    // Усі спроби fail → черга
+    _queueOffline(action, payload);
+    try { showToast('💾 Збережено локально — відправимо коли з\'явиться мережа', 'err', 5000); } catch(_){}
+    return {ok: false, error: e && e.message || String(e), localOnly: true, queued: true};
   }
 }
+
+function _queueOffline(action, payload){
+  try {
+    var q = JSON.parse(localStorage.getItem('mkids_offline_queue') || '[]');
+    q.push({action: action, payload: payload, ts: Date.now()});
+    if (q.length > 200) q = q.slice(-200);
+    localStorage.setItem('mkids_offline_queue', JSON.stringify(q));
+    updatePwaOfflineIndicator();
+  } catch(e){ console.warn('[pwa] queue write:', e); }
+}
+
+function updatePwaOfflineIndicator(){
+  var el = document.getElementById('pwaOfflineBar');
+  if (!el) return;
+  var q = [];
+  try { q = JSON.parse(localStorage.getItem('mkids_offline_queue') || '[]'); } catch(e){}
+  if (q.length){
+    el.classList.add('show');
+    el.textContent = '📡 ' + q.length + ' запис' +
+      (q.length === 1 ? '' : (q.length < 5 ? 'и' : 'ів')) +
+      ' чекають синхронізації — підключися до мережі';
+  } else {
+    el.classList.remove('show');
+  }
+}
+
+async function replayOfflineQueue(){
+  var q = [];
+  try { q = JSON.parse(localStorage.getItem('mkids_offline_queue') || '[]'); } catch(e){ return; }
+  if (!q.length) return;
+  try { showToast('🔄 Синхронізую ' + q.length + ' збережен' +
+    (q.length === 1 ? 'ий запис' : 'их записів') + '…', 'info', 3000); } catch(_){}
+  var remaining = [];
+  for (var i = 0; i < q.length; i++){
+    var item = q[i];
+    try {
+      var r = await fetch(CFG.SCRIPT_URL, {
+        method: 'POST', redirect: 'follow',
+        headers: {'Content-Type': 'text/plain;charset=utf-8'},
+        body: JSON.stringify(Object.assign({action: item.action}, item.payload || {}))
+      });
+      var json = await r.json();
+      if (!(json && json.ok)) remaining.push(item);
+    } catch(e){
+      remaining.push(item);
+    }
+  }
+  localStorage.setItem('mkids_offline_queue', JSON.stringify(remaining));
+  updatePwaOfflineIndicator();
+  try {
+    if (!remaining.length) showToast('✅ Усі записи синхронізовано', 'ok', 3000);
+    else showToast('⚠ Не вдалось синхронізувати ' + remaining.length, 'err', 4000);
+  } catch(_){}
+}
+
+window.addEventListener('online',  function(){ replayOfflineQueue(); });
+window.addEventListener('offline', function(){ updatePwaOfflineIndicator(); });
 
 // ── HR EMPS (для dropdown викладачів) ──────────────────────────
 async function ensureHrEmpsLoaded(){
@@ -3383,6 +3498,39 @@ function exportPreviewCSV(){
   }
   setTimeout(poll,1500); setInterval(poll,60000);
 })();
+</script>
+
+<!-- ── PWA v6.12: bottom nav + offline indicator + SW register ── -->
+<div class="pwa-offline" id="pwaOfflineBar"></div>
+<nav class="mobile-bnav" id="mobileBnav" role="navigation">
+  <button class="bnav-item active" type="button" onclick="window.scrollTo({top:0,behavior:'smooth'})">
+    <span class="ic">📋</span><span>Заняття</span>
+  </button>
+  <button class="bnav-item" type="button" onclick="window.location.reload()">
+    <span class="ic">🔄</span><span>Оновити</span>
+  </button>
+  <button class="bnav-item" type="button" onclick="doLogout()">
+    <span class="ic">🚪</span><span>Вийти</span>
+  </button>
+</nav>
+
+<script>
+// Реєструємо service worker (тільки https або localhost)
+if ('serviceWorker' in navigator){
+  window.addEventListener('load', function(){
+    navigator.serviceWorker.register('sw.js').then(function(reg){
+      console.log('[pwa] SW registered, scope:', reg.scope);
+    }).catch(function(e){
+      console.warn('[pwa] SW register failed:', e && e.message);
+    });
+  });
+}
+
+// Початковий стан offline-indicator + auto-replay якщо вже онлайн
+if (typeof updatePwaOfflineIndicator === 'function') updatePwaOfflineIndicator();
+if (navigator.onLine && typeof replayOfflineQueue === 'function'){
+  setTimeout(replayOfflineQueue, 1500);
+}
 </script>
 </body>
 </html>
