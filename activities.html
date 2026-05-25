@@ -433,31 +433,27 @@ select,input,textarea{font-family:inherit}
   border-radius:6px;padding:8px 12px;font-size:13px;margin-top:8px}
 
 @media(max-width:768px){
-  /* Компактний 1 ряд — без labels, locked локація схована */
+  /* v6.14: компактний sticky — 1 рядок, без labels, тільки emoji-плейсхолдери */
   .mark-filters{position:sticky;top:0;z-index:50;border-radius:0;
-    margin:-14px -12px 10px;padding:8px 10px;gap:6px;
-    flex-wrap:nowrap;align-items:center;
-    box-shadow:0 2px 6px rgba(0,0,0,.08)}
-  .mark-filter-lbl{display:none}
-  .mark-filters select.mf-locked{display:none}
+    margin:-14px -12px 8px;padding:8px 10px;
+    box-shadow:0 2px 6px rgba(0,0,0,.08);
+    gap:6px;flex-wrap:nowrap;align-items:center}
   .mark-filters select,.mark-filters input[type=date]{
-    flex:1 1 0;min-width:0;font-size:14px;padding:7px 8px}
-
-  .mark-empty{padding:20px 14px;font-size:13px}
-
-  /* Картка викладача — компактніше */
-  .mark-card{padding:10px 12px;gap:4px;margin-bottom:10px}
-  .mark-card-title{font-size:14px;padding-bottom:6px;gap:6px}
+    flex:1 1 0;min-width:0;font-size:14px;padding:8px 8px;
+    text-overflow:ellipsis}
+  .mark-filter-lbl{display:none}  /* приховуємо текстові labels — emoji всередині select */
+  .mark-filters select.mf-locked{display:none}  /* v6.14: ховаємо locked локацію на mobile */
+  .mark-card{padding:10px 14px;gap:4px;margin-bottom:10px}
+  .mark-card-title{font-size:14px;padding-bottom:6px;gap:6px;line-height:1.3}
   .mark-card-emoji{font-size:18px}
-  .mark-card-row,.mark-card-contact{font-size:13px;gap:6px}
-  .mark-card-contact{font-size:12px}
-  .mark-card-sum{font-size:14px}
+  .mark-card-row{font-size:13px}
   .mark-card-total{margin-top:2px;padding-top:6px}
-
-  /* Список дітей — більше видно */
-  .mark-child-row{padding:9px 14px;min-height:48px;gap:10px}
-  .mark-child-name{font-size:14px}
-  .mark-cb{width:24px;height:24px;font-size:14px}
+  .mark-card-sum{font-size:15px}
+  .mark-card-contact{font-size:12px}
+  .mark-child-row{padding:11px 14px;min-height:50px}
+  .mark-child-name{font-size:15px}
+  .mark-cb{width:26px;height:26px;font-size:16px}
+  .mark-empty{padding:18px 14px;margin-bottom:10px;font-size:13px}
 }
 </style>
 </head>
@@ -3733,14 +3729,14 @@ function populateMarkLocSel(){
   MK.catalog.forEach(function(a){ if (a.loc) locSet[a.loc] = 1; });
   var allLocs = Object.keys(locSet).sort(function(a,b){ return a.localeCompare(b,'uk'); });
   if (S.user && S.user.loc){
-    // director/vyhovatel/nurse — locked. На mobile ховаємо повністю.
+    // director/vyhovatel/nurse — locked
     sel.innerHTML = '<option value="' + escapeHtml(S.user.loc) + '">' + escapeHtml(S.user.loc) + '</option>';
     sel.value = S.user.loc;
     sel.disabled = true;
-    sel.classList.add('mf-locked');
+    sel.classList.add('mf-locked');  // v6.14: ховаємо на mobile
     MK.loc = S.user.loc;
   } else {
-    sel.innerHTML = '<option value="">— Локація —</option>' +
+    sel.innerHTML = '<option value="">📍 Локація</option>' +
       allLocs.map(function(l){
         return '<option value="' + escapeHtml(l) + '">' + escapeHtml(l) + '</option>';
       }).join('');
@@ -3762,7 +3758,7 @@ function populateMarkActivitySel(){
     uniq.push(a);
   });
   uniq.sort(function(a,b){ return a.name.localeCompare(b.name,'uk'); });
-  sel.innerHTML = '<option value="0">— Заняття —</option>' +
+  sel.innerHTML = '<option value="0">🧩 Заняття</option>' +
     uniq.map(function(a){
       return '<option value="' + a.id + '">' + escapeHtml(a.name) + '</option>';
     }).join('');
@@ -3919,17 +3915,18 @@ function renderMarkTeacherCard(cat){
       '⚠️ Викладача нема в HR — додай через ✏️</div>';
   }
 
-  var perLessonModel = String(cat.teacherModel || '').trim() === 'За заняття';
-  var rateUnit = perLessonModel ? 'за заняття' : 'за дитину';
+  // v6.14 FIX: модель ЗП з каталогу (За дитину / За заняття)
+  var teacherModel = cat.teacherModel || 'За дитину';
+  var modelLabel = teacherModel === 'За заняття' ? 'за заняття' : 'за дитину';
+
   var rateLine = rate
     ? '<div class="mark-card-row"><span class="mark-card-lbl">Ставка:</span> ' +
-      '<strong>' + rate + '₴</strong> ' + rateUnit + '</div>'
+      '<strong>' + rate + '₴</strong> ' + modelLabel + '</div>'
     : '<div class="mark-card-row mark-teacher-missing">' +
       '⚠️ Ставка не вказана — додай через ✏️</div>';
 
   var totalLine;
-  if (perLessonModel){
-    // Один раз за заняття — sum = rate (незалежно від кількості дітей)
+  if (teacherModel === 'За заняття'){
     totalLine = '<div class="mark-card-row mark-card-total">' +
       '<span class="mark-card-lbl">Разом:</span> ' +
       '<strong>' + n + '</strong> ' + (n === 1 ? 'дитина' : (n < 5 ? 'дитини' : 'дітей')) +
