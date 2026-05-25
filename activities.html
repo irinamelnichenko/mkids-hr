@@ -433,16 +433,31 @@ select,input,textarea{font-family:inherit}
   border-radius:6px;padding:8px 12px;font-size:13px;margin-top:8px}
 
 @media(max-width:768px){
+  /* Компактний 1 ряд — без labels, locked локація схована */
   .mark-filters{position:sticky;top:0;z-index:50;border-radius:0;
-    margin:-14px -12px 12px;padding:10px 12px;
+    margin:-14px -12px 10px;padding:8px 10px;gap:6px;
+    flex-wrap:nowrap;align-items:center;
     box-shadow:0 2px 6px rgba(0,0,0,.08)}
+  .mark-filter-lbl{display:none}
+  .mark-filters select.mf-locked{display:none}
   .mark-filters select,.mark-filters input[type=date]{
-    flex:1 1 calc(50% - 4px);min-width:0;font-size:15px;padding:9px 10px}
-  .mark-filter-lbl{flex-basis:100%;margin-bottom:-4px}
-  .mark-card{padding:14px 16px}
-  .mark-child-row{padding:14px 16px;min-height:60px}
-  .mark-child-name{font-size:15px}
-  .mark-cb{width:30px;height:30px}
+    flex:1 1 0;min-width:0;font-size:14px;padding:7px 8px}
+
+  .mark-empty{padding:20px 14px;font-size:13px}
+
+  /* Картка викладача — компактніше */
+  .mark-card{padding:10px 12px;gap:4px;margin-bottom:10px}
+  .mark-card-title{font-size:14px;padding-bottom:6px;gap:6px}
+  .mark-card-emoji{font-size:18px}
+  .mark-card-row,.mark-card-contact{font-size:13px;gap:6px}
+  .mark-card-contact{font-size:12px}
+  .mark-card-sum{font-size:14px}
+  .mark-card-total{margin-top:2px;padding-top:6px}
+
+  /* Список дітей — більше видно */
+  .mark-child-row{padding:9px 14px;min-height:48px;gap:10px}
+  .mark-child-name{font-size:14px}
+  .mark-cb{width:24px;height:24px;font-size:14px}
 }
 </style>
 </head>
@@ -3718,10 +3733,11 @@ function populateMarkLocSel(){
   MK.catalog.forEach(function(a){ if (a.loc) locSet[a.loc] = 1; });
   var allLocs = Object.keys(locSet).sort(function(a,b){ return a.localeCompare(b,'uk'); });
   if (S.user && S.user.loc){
-    // director/vyhovatel/nurse — locked
+    // director/vyhovatel/nurse — locked. На mobile ховаємо повністю.
     sel.innerHTML = '<option value="' + escapeHtml(S.user.loc) + '">' + escapeHtml(S.user.loc) + '</option>';
     sel.value = S.user.loc;
     sel.disabled = true;
+    sel.classList.add('mf-locked');
     MK.loc = S.user.loc;
   } else {
     sel.innerHTML = '<option value="">— Локація —</option>' +
@@ -3729,6 +3745,7 @@ function populateMarkLocSel(){
         return '<option value="' + escapeHtml(l) + '">' + escapeHtml(l) + '</option>';
       }).join('');
     sel.disabled = false;
+    sel.classList.remove('mf-locked');
     sel.value = MK.loc || '';
   }
 }
@@ -3902,17 +3919,29 @@ function renderMarkTeacherCard(cat){
       '⚠️ Викладача нема в HR — додай через ✏️</div>';
   }
 
+  var perLessonModel = String(cat.teacherModel || '').trim() === 'За заняття';
+  var rateUnit = perLessonModel ? 'за заняття' : 'за дитину';
   var rateLine = rate
     ? '<div class="mark-card-row"><span class="mark-card-lbl">Ставка:</span> ' +
-      '<strong>' + rate + '₴</strong> за дитину</div>'
+      '<strong>' + rate + '₴</strong> ' + rateUnit + '</div>'
     : '<div class="mark-card-row mark-teacher-missing">' +
       '⚠️ Ставка не вказана — додай через ✏️</div>';
 
-  var totalLine = '<div class="mark-card-row mark-card-total">' +
-    '<span class="mark-card-lbl">Разом:</span> ' +
-    '<strong>' + n + '</strong> ' + (n === 1 ? 'дитина' : (n < 5 ? 'дитини' : 'дітей')) +
-    (rate ? ' × ' + rate + '₴ = <strong class="mark-card-sum">' + (sum) + '₴</strong>' : '') +
-    '</div>';
+  var totalLine;
+  if (perLessonModel){
+    // Один раз за заняття — sum = rate (незалежно від кількості дітей)
+    totalLine = '<div class="mark-card-row mark-card-total">' +
+      '<span class="mark-card-lbl">Разом:</span> ' +
+      '<strong>' + n + '</strong> ' + (n === 1 ? 'дитина' : (n < 5 ? 'дитини' : 'дітей')) +
+      (rate ? ' · 1 заняття × ' + rate + '₴ = <strong class="mark-card-sum">' + rate + '₴</strong>' : '') +
+      '</div>';
+  } else {
+    totalLine = '<div class="mark-card-row mark-card-total">' +
+      '<span class="mark-card-lbl">Разом:</span> ' +
+      '<strong>' + n + '</strong> ' + (n === 1 ? 'дитина' : (n < 5 ? 'дитини' : 'дітей')) +
+      (rate ? ' × ' + rate + '₴ = <strong class="mark-card-sum">' + sum + '₴</strong>' : '') +
+      '</div>';
+  }
 
   return '<div class="mark-card-title"><span class="mark-card-emoji">' + emoji + '</span> ' +
     escapeHtml(cat.name) + ' · ' + escapeHtml(MK.loc) + ' · ' +
