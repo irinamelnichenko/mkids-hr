@@ -274,6 +274,7 @@ function doPost(e) {
     else if (body.action === 'updateActivity')            result = updateActivity(body.id || 0, body.data || {});
     else if (body.action === 'deleteActivity')            result = deleteActivity(body.id || 0);
     else if (body.action === 'copyActivitiesFromLocation') result = copyActivitiesFromLocation(body.fromLoc || '', body.toLoc || '');
+    else if (body.action === 'seedActivityTeachersInHR')   result = _seedActivityTeachersInHR(Number(body.actorId || 1));
     else if (body.action === 'addAttendanceMark')         result = addAttendanceMark(body.data || {});
     else if (body.action === 'removeAttendanceMark')      result = removeAttendanceMark(body.id || 0);
     else if (body.action === 'exportAttendanceToPayments') result = exportAttendanceToPayments(body || {});
@@ -3481,6 +3482,107 @@ function copyActivitiesFromLocation(fromLoc, toLoc){
   }
 }
 
+// ── v6.13: попередній матчинг catalog.teacher → HR.row ───────────────────
+// Для кожного catalog entry з заповненим полем "Викладач" перевіряє чи в HR
+// існує співробітник з тим же ПІБ у тій же локації. Якщо НІ — створює його
+// в HR через saveEmployee (typ='Викладач додаткових', pos=назва активності,
+// phone/email порожні — заповнить director/CFO потім через UI).
+// Ідемпотентний — повторні виклики нічого не змінюють.
+// Запуск: з Apps Script editor → Run → _seedActivityTeachersInHR
+//         або POST {action:'seedActivityTeachersInHR', actorId}.
+function _seedActivityTeachersInHR(actorId){
+  try {
+    actorId = actorId || 1;   // default: CFO Мельніченко Ірина
+    var catRes = getActivitiesCatalog('');
+    if (!catRes.ok) return catRes;
+    var catalog = (catRes.items || []).filter(function(a){
+      return a.active && a.teacher && String(a.teacher).trim().length > 0;
+    });
+
+    function normName(s){
+      return String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    }
+
+    // Завантажуємо всі активні HR-рядки
+    var hrSh = _getHrSheet();
+    var hrLastRow = hrSh.getLastRow();
+    var hrTeachers = [];
+    if (hrLastRow >= 2){
+      var hrData = hrSh.getRange(2, 1, hrLastRow - 1, HR_COLS).getValues();
+      for (var i = 0; i < hrData.length; i++){
+        var emp = _parseEmpRow(hrData[i], i + 2);
+        if (emp.archived) continue;
+        if (!emp.last && !emp.first) continue;
+        hrTeachers.push(emp);
+      }
+    }
+
+    // Індексуємо за (loc|normalized_name) — обидва варіанти "last first" та "first last"
+    var existsByKey = {};
+    hrTeachers.forEach(function(t){
+      var n1 = normName(t.last + ' ' + t.first);
+      var n2 = normName(t.first + ' ' + t.last);
+      existsByKey[t.loc + '|' + n1] = t;
+      if (n2 !== n1) existsByKey[t.loc + '|' + n2] = t;
+    });
+
+    var stats = {catalog: catalog.length, matched: 0, created: 0, errors: 0, skippedBadName: 0};
+    var unmatched = [];
+
+    catalog.forEach(function(a){
+      var teacherName = String(a.teacher || '').trim();
+      var key = a.loc + '|' + normName(teacherName);
+      if (existsByKey[key]){ stats.matched++; return; }
+
+      var parts = teacherName.split(/\s+/);
+      if (parts.length < 2){
+        stats.skippedBadName++;
+        unmatched.push({loc:a.loc, activity:a.name, teacher:teacherName, reason:'name needs ≥2 words'});
+        return;
+      }
+      var last  = parts[0];
+      var first = parts.slice(1).join(' ');
+
+      var saveRes = saveEmployee(actorId, {
+        last:  last,
+        first: first,
+        loc:   a.loc,
+        pos:   a.name,                  // = назва активності (як у предметників)
+        typ:   'Викладач додаткових',
+        phone: '',
+        email: '',
+        hired: _fmtDateDmy(new Date())
+      }, null);
+
+      if (saveRes && saveRes.ok){
+        stats.created++;
+        existsByKey[a.loc + '|' + normName(last + ' ' + first)] = saveRes.employee;
+      } else if (saveRes && saveRes.code === 'DUPLICATE'){
+        // Дубль за last+first+phone+loc → вважаємо matched
+        stats.matched++;
+      } else {
+        stats.errors++;
+        unmatched.push({loc:a.loc, activity:a.name, teacher:teacherName,
+                        err: (saveRes && saveRes.error) || 'unknown'});
+      }
+    });
+
+    Logger.log('[_seedActivityTeachersInHR] catalog=%s matched=%s created=%s errors=%s skippedBadName=%s',
+      stats.catalog, stats.matched, stats.created, stats.errors, stats.skippedBadName);
+    if (unmatched.length){
+      Logger.log('[_seedActivityTeachersInHR] unmatched: %s', JSON.stringify(unmatched).slice(0, 1500));
+    }
+    return {ok: true, stats: stats, unmatched: unmatched};
+  } catch(e){
+    return {ok: false, error: String(e && e.message || e)};
+  }
+}
+
+// Wrapper для прямого запуску з Apps Script editor (без параметрів).
+function seedActivityTeachersInHR(){
+  return _seedActivityTeachersInHR(1);
+}
+
 var ATTENDANCE_SHEET_NAME = 'Додаткові_Відвідуваність';
 var ATTENDANCE_HEADER = [
   'id','Дата','Локація','Група','Дитина',
@@ -4103,10 +4205,11 @@ function exportToSalaryExtras(params){
       var currentValue = Number(budgetColValues[rowIdx0][0]) || 0;
       var je           = journal.byNormName[nk];
       var lastWritten  = je ? je.sum : 0;
-      var baseValue    = currentValue - lastWritten;
       var info         = factByName[lname]; // може бути undefined якщо у заняття немає rate
       var newFact      = info ? info.fact : 0;
-      var newValue     = baseValue + newFact;
+      // v6.13: OVERWRITE замість delta. Клітинка Salary "<Activity>" належить
+      // виключно activities — забруднених baseValues нема (як і в предметниках).
+      var newValue     = newFact;
 
       // Точковий запис лише змінених клітинок.
       if (newValue !== currentValue){
@@ -4127,18 +4230,16 @@ function exportToSalaryExtras(params){
         details.push({
           activity: info.name, fact: newFact,
           currentBefore: currentValue, lastWritten: lastWritten,
-          baseValue: baseValue, newCell: newValue,
-          row: rowFound, status: 'updated'
+          newCell: newValue, row: rowFound, status: 'updated'
         });
-        Logger.log('[exportToSalaryExtras] WRITE row=%s "%s" cur=%s last=%s base=%s newFact=%s → %s', rowFound, a.name, currentValue, lastWritten, baseValue, newFact, newValue);
+        Logger.log('[exportToSalaryExtras] WRITE row=%s "%s" cur=%s last=%s newFact=%s → %s', rowFound, a.name, currentValue, lastWritten, newFact, newValue);
       } else if (lastWritten !== 0){
         details.push({
           activity: a.name, fact: 0,
           currentBefore: currentValue, lastWritten: lastWritten,
-          baseValue: baseValue, newCell: newValue,
-          row: rowFound, status: 'cleared'
+          newCell: newValue, row: rowFound, status: 'cleared'
         });
-        Logger.log('[exportToSalaryExtras] CLEAR row=%s "%s" cur=%s last=%s base=%s → %s', rowFound, a.name, currentValue, lastWritten, baseValue, newValue);
+        Logger.log('[exportToSalaryExtras] CLEAR row=%s "%s" cur=%s last=%s → %s', rowFound, a.name, currentValue, lastWritten, newValue);
       }
     });
 
