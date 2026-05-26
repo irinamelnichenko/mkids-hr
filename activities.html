@@ -428,6 +428,51 @@ select,input,textarea{font-family:inherit}
   #attendanceMode .att-summary{grid-template-columns:1fr}
 }
 
+/* ── v6.21: на дуже вузьких екранах фільтри йдуть вертикально ── */
+@media(max-width:600px){
+  #attendanceMode .att-filters{flex-direction:column;align-items:stretch;
+    flex-wrap:nowrap}
+  #attendanceMode .att-fg{width:100%;min-width:0;flex:0 0 auto}
+  #attendanceMode .att-fg label{display:block;font-size:10px}
+  #attendanceMode .att-fg input,
+  #attendanceMode .att-fg select{width:100%}
+}
+
+/* ── v6.21: рядок дитини — ПІБ зліва, чекбокс справа, tap по всьому row ── */
+.att-list-row{cursor:pointer;user-select:none}
+.att-list-row .att-name{order:1;flex:1;text-align:left}
+.att-list-row .att-cell{order:2;flex-shrink:0;pointer-events:none}
+
+/* ── v6.21: segmented pill picker (для payType у модалці і картці) ── */
+.seg-pill{display:flex;gap:0;border:1.5px solid var(--gray2);border-radius:8px;
+  overflow:hidden;background:#fff}
+.seg-pill button{flex:1;padding:9px 12px;background:#fff;border:none;
+  font-size:13px;font-weight:600;color:var(--gray);cursor:pointer;
+  font-family:inherit;border-right:1px solid var(--gray2);min-height:44px;
+  transition:background .12s,color .12s}
+.seg-pill button:last-child{border-right:none}
+.seg-pill button.active{background:var(--green);color:#fff}
+.seg-pill.readonly button{cursor:default}
+.seg-pill.readonly button:not(.active){opacity:.6}
+
+/* ── v6.21: підпис під розрахунком ── */
+.att-tbox-account-stub{font-size:11px;color:var(--gray2);font-style:italic;
+  margin-top:6px}
+
+/* ── v6.21: edit-btn у заголовку картки викладача ── */
+.att-tbox-edit-btn{margin-left:auto;padding:6px 12px;border:1.5px solid var(--blue);
+  background:#fff;color:var(--blue);border-radius:8px;font-size:12px;
+  font-weight:700;cursor:pointer;white-space:nowrap;font-family:inherit;
+  display:inline-flex;align-items:center;gap:4px}
+.att-tbox-edit-btn:hover{background:var(--blue);color:#fff}
+
+/* ── v6.21: інформативні рядки у картці викладача (з реальними даними) ── */
+.att-tbox-info-row{display:flex;justify-content:space-between;align-items:center;
+  padding:5px 0;font-size:13px;color:var(--dark2);gap:10px}
+.att-tbox-info-row .lbl{color:var(--gray);font-weight:600}
+.att-tbox-info-row .val{font-weight:700;color:var(--dark)}
+.att-tbox-info-row .val.muted{color:var(--gray2);font-weight:500}
+
 </style>
 </head>
 <body>
@@ -856,9 +901,29 @@ select,input,textarea{font-family:inherit}
           <input type="number" id="actTeacherRate" min="0" step="1" placeholder="—">
         </div>
         <div class="fg">
-          <label>Викладач</label>
-          <input type="text" id="actTeacher" placeholder="ПІБ або пусто" list="actTeacherList">
+          <label>Викладач (Прізвище Імʼя)</label>
+          <input type="text" id="actTeacher" placeholder="Іванова Олена" list="actTeacherList">
           <datalist id="actTeacherList"></datalist>
+        </div>
+      </div>
+      <!-- v6.21: контакти викладача (зберігаються в HR, не в каталозі) -->
+      <div class="fg-row">
+        <div class="fg">
+          <label>📞 Телефон викладача</label>
+          <input type="tel" id="actTeacherPhone" placeholder="+380 67 123 45 67">
+        </div>
+        <div class="fg">
+          <label>✉ Email викладача</label>
+          <input type="email" id="actTeacherEmail" placeholder="name@mkids.ua">
+        </div>
+      </div>
+      <!-- v6.21: тип розрахунку з викладачем -->
+      <div class="fg">
+        <label>💳 Розрахунок з викладачем</label>
+        <div class="seg-pill" id="actPayTypePicker" role="radiogroup" aria-label="Розрахунок">
+          <button type="button" data-val="">— не вказано</button>
+          <button type="button" data-val="Готівка">Готівка</button>
+          <button type="button" data-val="Безготівка">Безготівка</button>
         </div>
       </div>
       <div class="fg">
@@ -1644,10 +1709,44 @@ async function openActivityModal(id){
   $('actTeacher').value       = existing ? (existing.teacher || '') : '';
   $('actActive').checked      = existing ? !!existing.active : true;
 
+  // v6.21: payType pill picker
+  _setPayTypePill(existing ? (existing.payType || '') : '');
+  // v6.21: phone/email — підтягуємо з HR (теж рендериться в att-вкладці),
+  // а також зберігаємо rowNum щоб update йшов в той самий запис.
+  $('actTeacherPhone').value = '';
+  $('actTeacherEmail').value = '';
+  if (S.modalActivity) S.modalActivity._hrRowNum = null;
+  if (existing && existing.teacher){
+    _attEnsureHr().then(function(){
+      var hr = _attFindHrByName(targetLoc, existing.teacher);
+      if (!hr) return;
+      $('actTeacherPhone').value = hr.phone ? attFmtPhone(hr.phone) : '';
+      $('actTeacherEmail').value = hr.email || '';
+      if (S.modalActivity) S.modalActivity._hrRowNum = hr.rowNum || null;
+    });
+  }
+
   $('actModal').classList.remove('hidden');
   $('actModal').setAttribute('aria-hidden', 'false');
   document.body.style.overflow = 'hidden';
   setTimeout(function(){ $('actName').focus(); }, 50);
+}
+
+// v6.21: сегментований pill для payType
+function _setPayTypePill(val){
+  var v = String(val || '').trim();
+  var picker = $('actPayTypePicker');
+  if (!picker) return;
+  var btns = picker.querySelectorAll('button');
+  for (var i = 0; i < btns.length; i++){
+    btns[i].classList.toggle('active', (btns[i].dataset.val || '') === v);
+  }
+}
+function _getPayTypePill(){
+  var picker = $('actPayTypePicker');
+  if (!picker) return '';
+  var active = picker.querySelector('button.active');
+  return active ? (active.dataset.val || '') : '';
 }
 
 function closeActivityModal(){
@@ -1665,16 +1764,35 @@ function _collectModalData(){
     teacherModel: $('actTeacherModel').value.trim(),
     teacherRate:  parseFloat($('actTeacherRate').value) || 0,
     teacher:      $('actTeacher').value.trim(),
-    active:       $('actActive').checked
+    active:       $('actActive').checked,
+    payType:      _getPayTypePill()
+  };
+}
+// v6.21: контакти викладача (для HR — зберігаються окремо від каталогу)
+function _collectModalContacts(){
+  return {
+    phone: $('actTeacherPhone').value.trim(),
+    email: $('actTeacherEmail').value.trim()
   };
 }
 
 async function saveActivity(){
   var data = _collectModalData();
+  var contacts = _collectModalContacts();
   if (!data.loc){  showToast('Локація не визначена', 'err'); return; }
   if (!data.name){ showToast('Поле "Назва заняття" обовʼязкове', 'err'); $('actName').focus(); return; }
   if (data.clientPrice < 0){
     showToast('"Ціна" має бути 0 або більше', 'err'); $('actClientPrice').focus(); return;
+  }
+  // v6.21: якщо телефон/email вказано — ПІБ має містити Прізвище + Імʼя
+  var hasContacts = !!(contacts.phone || contacts.email);
+  if (hasContacts && data.teacher){
+    var parts = data.teacher.split(/\s+/).filter(Boolean);
+    if (parts.length < 2){
+      showToast('ПІБ має містити Прізвище + Імʼя (через пробіл)', 'err', 5000);
+      $('actTeacher').focus();
+      return;
+    }
   }
   $('actSaveBtn').disabled = true;
 
@@ -1692,16 +1810,103 @@ async function saveActivity(){
   }
   _saveLocalOverrides(S.items);
 
+  // v6.21: фаза 2 — upsert HR-запис викладача (phone/email) у HR-таблицю.
+  // Запускаємо тільки якщо ПІБ і хоча б один контакт вказані.
+  var hrMsg = '';
+  if (data.teacher && hasContacts){
+    hrMsg = await _saveTeacherContactsToHr(data.loc, data.name, data.teacher, contacts,
+      (S.modalActivity && S.modalActivity._hrRowNum) || null);
+  }
+
   $('actSaveBtn').disabled = false;
   closeActivityModal();
   renderCatalog();
+  // Якщо att-вкладка відкрита — перерендерити картку викладача свіжими даними
+  if (S.mode === 'attendance' && typeof renderAttTeacherBox === 'function'){
+    renderAttTeacherBox();
+  }
+
   if (res.localOnly){
-    showToast('💾 Збережено локально (backend ще не задеплоєний)', 'info', 4500);
+    showToast('💾 Збережено локально (backend ще не задеплоєний)' + hrMsg, 'info', 4500);
   } else if (res.ok){
-    showToast(isEdit ? '✅ Збережено' : '✅ Додано', 'ok');
+    showToast((isEdit ? '✅ Збережено' : '✅ Додано') + hrMsg, 'ok', 3500);
   } else {
     showToast('❌ ' + (res.error || 'Помилка збереження'), 'err', 6000);
   }
+}
+
+// v6.21: створює АБО оновлює HR-запис викладача (typ='Викладач додаткових')
+// з телефоном і email. Повертає короткий текст для toast (' · HR оновлено' /
+// ' · HR створено' / ' · HR не оновлено: <err>').
+async function _saveTeacherContactsToHr(loc, activityName, teacher, contacts, hintRowNum){
+  try {
+    await _attEnsureHr();
+    var existing = _attFindHrByName(loc, teacher);
+    var rowNum = (existing && existing.rowNum) || hintRowNum || null;
+
+    var parts = teacher.split(/\s+/).filter(Boolean);
+    var last  = parts[0] || '';
+    var first = parts.slice(1).join(' ');
+
+    var payload;
+    if (existing){
+      // Update — зберігаємо всі існуючі поля, перезаписуємо тільки phone/email
+      payload = {
+        dir:   existing.dir   || '',
+        typ:   existing.typ   || 'Викладач додаткових',
+        loc:   existing.loc   || loc,
+        grp:   existing.grp   || '',
+        last:  existing.last  || last,
+        first: existing.first || first,
+        phone: contacts.phone,
+        pos:   existing.pos   || activityName,
+        stat:  existing.stat  || '',
+        bday:  existing.bday  || '',
+        bmon:  existing.bmon  || '',
+        bdate: existing.bdate || '',
+        wday:  existing.wday  || '',
+        hired: existing.hired || '',
+        fired: existing.fired || '',
+        email: contacts.email
+      };
+    } else {
+      // Create — мінімально-валідний запис викладача додаткових
+      payload = {
+        dir:   '', typ: 'Викладач додаткових',
+        loc:   loc, grp: '',
+        last:  last, first: first,
+        phone: contacts.phone,
+        pos:   activityName,
+        stat:  '', bday: '', bmon: '', bdate: '', wday: '',
+        hired: _todayDmyForHr(),
+        fired: '',
+        email: contacts.email
+      };
+    }
+
+    var res = await saveBackend('saveEmployee', {
+      actorId: (S.user && S.user.id) || 0,
+      payload: payload,
+      rowNum:  rowNum
+    });
+
+    // Інвалідовуємо кеш — наступний рендер картки підтягне свіжі дані
+    ATT_HR_CACHE = null;
+
+    if (res && res.ok) return rowNum ? ' · HR оновлено' : ' · HR створено';
+    if (res && res.localOnly) return ' · HR в офлайн-черзі';
+    return ' · HR не оновлено: ' + ((res && res.error) || 'unknown');
+  } catch(e){
+    console.warn('[v6.21] saveTeacherContactsToHr failed:', e && e.message || e);
+    return ' · HR не оновлено: ' + (e && e.message || e);
+  }
+}
+
+// v6.21: сьогоднішня дата у форматі ДД.ММ.РРРР (для поля hired в HR)
+function _todayDmyForHr(){
+  var d = new Date();
+  var dd = d.getDate(), mm = d.getMonth() + 1, yy = d.getFullYear();
+  return (dd < 10 ? '0' + dd : dd) + '.' + (mm < 10 ? '0' + mm : mm) + '.' + yy;
 }
 
 // ── COPY FROM LOCATION ────────────────────────
@@ -2224,9 +2429,11 @@ function renderAttList(){
   });
   listEl.innerHTML = html;
   listEl.classList.remove('hidden');
-  // Delegate toggle
+  // v6.21: tap по всьому рядку = toggle (не тільки по чекбоксу)
   listEl.onclick = function(e){
-    var btn = e.target.closest && e.target.closest('.att-cell');
+    var row = e.target.closest && e.target.closest('.att-list-row');
+    if (!row) return;
+    var btn = row.querySelector('.att-cell');
     if (!btn || btn.disabled) return;
     toggleAttendance(btn);
   };
@@ -2286,9 +2493,31 @@ function _renderAttTeacherInner(cat){
     ? '<a href="mailto:' + escapeHtml(email) + '">' + escapeHtml(email) + '</a>'
     : '<span class="muted">—</span>';
   var editBtn = canEditCat
-    ? '<button class="att-tbox-assign-btn" style="margin-left:auto" type="button"' +
-        ' onclick="openAttAssignTeacher(' + cat.id + ')">✏ Замінити</button>'
+    ? '<button class="att-tbox-edit-btn" type="button"' +
+        ' onclick="openAttAssignTeacher(' + cat.id + ')">✏ Редагувати</button>'
     : '';
+
+  // v6.21: реальні дані замість stub'ів
+  var priceHtml = cat.clientPrice
+    ? '<span class="val">' + fmtUah(cat.clientPrice) + ' ₴</span>'
+    : '<span class="val muted">— не вказано</span>';
+  var rateText;
+  if (cat.teacherRate && cat.teacherModel){
+    rateText = fmtUah(cat.teacherRate) + ' ₴ · модель: ' + escapeHtml(cat.teacherModel);
+  } else if (cat.teacherRate){
+    rateText = fmtUah(cat.teacherRate) + ' ₴';
+  } else if (cat.teacherModel){
+    rateText = '— · модель: ' + escapeHtml(cat.teacherModel);
+  } else {
+    rateText = '<span class="val muted">— не вказано</span>';
+  }
+  var payType = String(cat.payType || '').trim();
+  var payTypePill =
+    '<div class="seg-pill readonly" aria-readonly="true" style="margin-top:6px">' +
+      '<button type="button" disabled' + (payType === '' ? ' class="active"' : '') + '>— не вказано</button>' +
+      '<button type="button" disabled' + (payType === 'Готівка' ? ' class="active"' : '') + '>Готівка</button>' +
+      '<button type="button" disabled' + (payType === 'Безготівка' ? ' class="active"' : '') + '>Безготівка</button>' +
+    '</div>';
 
   return '<div class="att-tbox-title">🧩 ' + escapeHtml(cat.name) + ' · ' + escapeHtml(loc) +
       editBtn + '</div>' +
@@ -2297,16 +2526,18 @@ function _renderAttTeacherInner(cat){
     '<div class="att-tbox-row"><span class="lbl">📞</span> ' + phoneHtml + '</div>' +
     '<div class="att-tbox-row"><span class="lbl">✉</span> ' + emailHtml + '</div>' +
     '<div class="att-tbox-section">' +
-      '<div class="att-tbox-section-lbl">💰 Вартість</div>' +
-      '<div class="att-tbox-section-stub">буде додано пізніше</div>' +
+      '<div class="att-tbox-info-row">' +
+        '<span class="lbl">💰 Ціна для клієнта</span>' + priceHtml +
+      '</div>' +
+      '<div class="att-tbox-info-row">' +
+        '<span class="lbl">💵 Ставка викладача</span>' +
+        '<span class="val">' + rateText + '</span>' +
+      '</div>' +
     '</div>' +
     '<div class="att-tbox-section">' +
-      '<div class="att-tbox-section-lbl">📊 ЗП викладача</div>' +
-      '<div class="att-tbox-section-stub">буде додано пізніше</div>' +
-    '</div>' +
-    '<div class="att-tbox-section">' +
-      '<div class="att-tbox-section-lbl">🧾 Рахунок</div>' +
-      '<div class="att-tbox-section-stub">буде додано пізніше</div>' +
+      '<div class="att-tbox-section-lbl">💳 Розрахунок з викладачем</div>' +
+      payTypePill +
+      '<div class="att-tbox-account-stub">Розрахунковий рахунок: буде додано пізніше</div>' +
     '</div>';
 }
 
@@ -2473,6 +2704,12 @@ function bindEventListeners(){
   if (pill) pill.addEventListener('click', toggleSyncLogPanel);
   $('addActivityBtn').addEventListener('click', function(){ openActivityModal(0); });
   $('actSaveBtn').addEventListener('click', saveActivity);
+  // v6.21: pill picker для payType — delegation, бо кнопки statично відомі
+  $('actPayTypePicker').addEventListener('click', function(e){
+    var btn = e.target.closest && e.target.closest('button[data-val]');
+    if (!btn) return;
+    _setPayTypePill(btn.dataset.val || '');
+  });
   $('copyActivitiesBtn').addEventListener('click', openCopyModal);
   $('copyDoBtn').addEventListener('click', doCopyActivities);
   $('exportActivitiesBtn').addEventListener('click', exportCatalogCSV);
