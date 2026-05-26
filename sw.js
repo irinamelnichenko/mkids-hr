@@ -1,11 +1,11 @@
-// m.kids PWA Service Worker (v6.12.0)
+// m.kids PWA Service Worker (v6.16.0)
 // Cache: static shell (HTML + manifest + icons + xlsx)
 // Strategy:
 //   • POST → завжди network (ніколи не кешуємо)
 //   • GET до /macros/ (Apps Script) → network-only, fallback на cache
 //   • GET до інших static URLs → cache-first з фоновим оновленням
 
-var CACHE = 'mkids-cache-v6.12.0';
+var CACHE = 'mkids-cache-v6.16.0';
 var SHELL = [
   './',
   'activities.html',
@@ -64,7 +64,32 @@ self.addEventListener('fetch', function(ev){
     return;
   }
 
-  // Static — cache-first з оновленням у фоні (stale-while-revalidate)
+  // v6.16: HTML — NETWORK-FIRST щоб оновлення підхоплювались одразу
+  // (cache-first для HTML призводив до того що користувач бачив стару версію
+  // навіть після push на GitHub Pages; SW оновлював у фоні і тільки на
+  // наступне відкриття показував свіже)
+  var isHtml = url.pathname.endsWith('.html') ||
+               url.pathname === '/' ||
+               url.pathname === '/mkids-hr/' ||
+               url.pathname.endsWith('/');
+  if (isHtml){
+    ev.respondWith(
+      fetch(req).then(function(resp){
+        if (resp && resp.status === 200 && resp.type === 'basic'){
+          var clone = resp.clone();
+          caches.open(CACHE).then(function(c){ c.put(req, clone); });
+        }
+        return resp;
+      }).catch(function(){
+        return caches.match(req).then(function(c){
+          return c || new Response('Offline', {status: 503});
+        });
+      })
+    );
+    return;
+  }
+
+  // Static (images, manifest, JS-libs) — cache-first з оновленням у фоні
   ev.respondWith(
     caches.match(req).then(function(cached){
       var fresh = fetch(req).then(function(resp){
