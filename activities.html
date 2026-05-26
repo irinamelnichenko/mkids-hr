@@ -524,23 +524,63 @@ select,input,textarea{font-family:inherit}
 .att-list-row{transition:background .12s}
 .att-list-row:active{background:#c8f0d4 !important}
 
-/* DESKTOP 2-колонковий layout */
+/* DESKTOP layout */
 .att-grid{display:block}
 @media(min-width:900px){
-  .att-grid{display:grid;grid-template-columns:minmax(320px, 40%) 1fr;
-    gap:16px;align-items:start}
-  .att-col-left{position:sticky;top:10px;align-self:start;
-    max-height:calc(100vh - 20px);overflow-y:auto;padding-right:4px}
-  .att-col-right{min-width:0}
-  /* На desktop counter inline в фільтрах, не окремим рядком */
+  /* v6.23: ВЕРТИКАЛЬНИЙ full-width — Grid 40/60 прибрано */
+  .att-grid{display:block}
+  .att-col-left,
+  .att-col-right{position:static !important;width:100%;
+    max-height:none;overflow:visible;padding:0;margin:0}
+
+  /* Counter показуємо у filters справа, mobile-counter ховаємо */
   .att-counter-mobile{display:none !important}
-  /* Відмінити mobile sticky (з блоку @max-width:768px) */
+
+  /* Compact filter-bar в один рядок */
   #attendanceMode .att-filters{position:static !important;
-    border-radius:var(--r);margin:0 0 12px;padding:14px 18px;
-    box-shadow:var(--sh);gap:10px}
-  #attendanceMode .att-filters label{display:block;font-size:11px}
+    border-radius:var(--r);margin:0 0 12px;padding:12px 18px;
+    box-shadow:var(--sh);gap:12px;flex-wrap:wrap;align-items:center}
+  #attendanceMode .att-filters label{display:block;font-size:10px}
+  #attendanceMode .att-date-chips{width:auto;flex:0 0 auto;margin-bottom:0}
+  #attendanceMode .att-fg{flex:1;min-width:160px;max-width:260px}
+  #attendanceMode .att-counter{display:inline-block;margin-left:auto;
+    background:#e8f8f0;color:var(--green);padding:6px 12px;
+    border-radius:8px;font-size:12px;font-weight:700;align-self:center}
+
+  /* Картка викладача — горизонтальна стрічка в один рядок (wrap при потребі) */
   #attendanceMode .att-tbox{position:static !important;border-radius:var(--r);
-    margin:0 0 12px;padding:14px 18px}
+    margin:0 0 12px;padding:12px 18px;
+    display:flex;align-items:center;flex-wrap:wrap;gap:14px;row-gap:6px}
+  #attendanceMode .att-tbox-row{padding:0;font-size:13px;
+    display:inline-flex;align-items:center;gap:6px}
+  #attendanceMode .att-tbox-row .lbl{min-width:0;font-size:12px}
+  #attendanceMode .att-tbox-row::after{content:'·';margin-left:8px;
+    color:var(--gray2);font-weight:700}
+  #attendanceMode .att-tbox-row:last-of-type::after{content:''}
+  #attendanceMode .att-tbox-section{display:inline-flex;align-items:center;
+    gap:10px;border-top:none;margin:0;padding:0;flex-wrap:wrap}
+  #attendanceMode .att-tbox-section-lbl{display:inline;font-size:12px;
+    color:var(--gray);text-transform:none;letter-spacing:0;margin:0}
+  #attendanceMode .att-tbox-info-row{display:inline-flex;align-items:center;
+    gap:6px;padding:0}
+  #attendanceMode .att-tbox-info-row::after{content:'·';margin-left:8px;
+    color:var(--gray2);font-weight:700}
+  #attendanceMode .att-tbox-info-row:last-of-type::after{content:''}
+  #attendanceMode .att-tbox-account-stub{display:none}
+  #attendanceMode .att-tbox-header{margin-left:auto;margin-bottom:0;
+    display:inline-flex}
+  #attendanceMode .att-tbox .seg-pill.readonly{display:inline-flex;
+    height:30px;border-width:1px}
+  #attendanceMode .att-tbox .seg-pill.readonly button{font-size:12px;
+    padding:4px 10px;min-height:30px}
+  #attendanceMode .att-tbox-warn{flex:1;font-size:13px}
+
+  /* Список дітей — у повну ширину сторінки */
+  #attendanceMode .att-list{width:100%}
+
+  /* Summary — 2 картки у grid горизонтально на desktop */
+  #attendanceMode .att-summary{display:grid;
+    grid-template-columns:1fr 1fr;gap:14px}
 }
 
 /* MOBILE — counter окремим рядком ПІД фільтрами */
@@ -1553,7 +1593,14 @@ async function safePost(action, payload, attempt){
     });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     var json = await r.json();
-    if (!json.ok) throw new Error(json.error || 'Backend rejected');
+    // v6.23: application errors (validation/perm/lock) — НЕ retry, НЕ queue.
+    // Caller сам інтерпретує (наприклад LOCK_TIMEOUT → sync-indicator ❌).
+    // Retry лишається тільки на network/HTTP/JSON-parse fail (catch нижче).
+    if (json && json.ok === false) return json;
+    // v6.23: opportunistic replay черги після success (без чекання online event).
+    if (navigator.onLine && typeof replayOfflineQueue === 'function'){
+      setTimeout(replayOfflineQueue, 100);
+    }
     return json;
   } catch(e){
     if (attempt < 2){
@@ -1571,6 +1618,8 @@ async function safePost(action, payload, attempt){
 
 function _queueOffline(action, payload){
   try {
+    // v6.23: видно у DevTools коли черга росте (для діагностики bulk-проблем)
+    console.warn('[pwa] safePost → offline queue:', action, payload);
     var q = JSON.parse(localStorage.getItem('mkids_offline_queue') || '[]');
     q.push({action: action, payload: payload, ts: Date.now()});
     if (q.length > 200) q = q.slice(-200);
@@ -2247,6 +2296,10 @@ function _defaultLocForUser(){
 async function initAttendanceTab(){
   if (ATT.initialized) return;
   ATT.initialized = true;
+  // v6.23: розгрібаємо чергу при відкритті табу (раптом залишилось з попередніх клацань)
+  if (navigator.onLine && typeof replayOfflineQueue === 'function'){
+    setTimeout(replayOfflineQueue, 100);
+  }
   // Дата
   $('attDate').value = _todayISO();
   ATT.date = $('attDate').value;
@@ -2725,15 +2778,14 @@ async function _runBulk(kind, children){
     );
     if (!btn || btn.disabled){ continue; }
     // Викликаємо існуючий toggleAttendance — він сам оновить syncStatus
-    toggleAttendance(btn);
-    await new Promise(function(r){ setTimeout(r, 100); });
+    // v6.23: AWAIT — кожен запит чекає завершення попереднього.
+    // Це усуває race condition між паралельними addAttendanceMark
+    // (Apps Script LockService не встигає звільнити lock між викликами).
+    await toggleAttendance(btn);
+    await new Promise(function(r){ setTimeout(r, 150); });
   }
-
-  // Чекаємо щоб останні запити завершились (макс 5с)
-  var waitStart = Date.now();
-  while (Object.keys(ATT.inFlight).length && Date.now() - waitStart < 5000){
-    await new Promise(function(r){ setTimeout(r, 100); });
-  }
+  // v6.23: "wait inFlight" hack більше не потрібен — кожен await
+  // вже синхронізував bulk-операцію з backend.
 
   ATT.bulkRunning = false;
   markBtn.disabled  = false;
