@@ -1716,9 +1716,14 @@ function onActiveLocChange(){
   ATT.group = ''; ATT.marksKey = ''; ATT.marksLoadedAt = 0;
   // Analytics: marks кеш привʼязаний до loc — інвалідуємо.
   if (typeof ANA !== 'undefined'){ ANA.marksLoc = ''; ANA.marksLoadedAt = 0; }
+  // v6.16: Mark — скинути локацію/групу/заняття щоб підхопити нову локацію
+  if (typeof MK !== 'undefined'){
+    MK.loc = ''; MK.group = ''; MK.activityId = 0; MK.marks = [];
+  }
   if (S.mode === 'catalog')         renderCatalog();
   else if (S.mode === 'attendance') renderAttendanceBoard();
   else if (S.mode === 'analytics')  renderAnalytics();
+  else if (S.mode === 'mark')       initMarkTab();
 }
 
 // ── RENDER CATALOG ──────────────────────────
@@ -3765,9 +3770,19 @@ async function initMarkTab(){
   }
 
   // v6.16: Init filters з пріоритетом vyhovatel
-  if (!MK.loc){
-    if (S.user && S.user.loc) MK.loc = S.user.loc;
-    else if (S.activeLoc)     MK.loc = S.activeLoc;
+  // v6.16 fix: ЗАВЖДИ синхронізуємо MK.loc з активною локацією
+  // (S.activeLoc для CFO/director, S.user.loc для vyhovatel — заблоковано на свою)
+  if (S.user && S.user.loc){
+    MK.loc = S.user.loc;          // vyhovatel/director — захардкоджено
+  } else if (S.activeLoc){
+    MK.loc = S.activeLoc;          // CFO — обрана з верхнього селектора
+  } else if (!MK.loc){
+    // fallback: беремо першу локацію з catalog
+    var firstLoc = '';
+    for (var i = 0; i < MK.catalog.length; i++){
+      if (MK.catalog[i].loc){ firstLoc = MK.catalog[i].loc; break; }
+    }
+    MK.loc = firstLoc;
   }
   if (!MK.date) MK.date = mkTodayIso();
 
@@ -3851,32 +3866,20 @@ function renderMarkPickers(){
     pickers.classList.add('hidden');
     return;
   }
-  // Показуємо лише якщо не vyhovatel
+  // Для CFO/director — показуємо лише group dropdown
+  // (локація вже керується верхнім глобальним селектором)
   pickers.classList.remove('hidden');
 
-  // Loc select
+  // Loc select — приховуємо (CFO/director використовують глобальний верхній)
   var locSel = $('mfLoc');
-  var locSet = {};
-  MK.catalog.forEach(function(a){ if (a.loc) locSet[a.loc] = 1; });
-  var allLocs = Object.keys(locSet).sort(function(a,b){ return a.localeCompare(b,'uk'); });
-  if (S.user && S.user.loc){
-    // director локований на свою локацію
-    locSel.innerHTML = '<option value="' + escapeHtml(S.user.loc) + '">📍 ' + escapeHtml(S.user.loc) + '</option>';
-    locSel.value = S.user.loc;
-    locSel.disabled = true;
-  } else {
-    locSel.innerHTML = allLocs.map(function(l){
-      return '<option value="' + escapeHtml(l) + '">📍 ' + escapeHtml(l) + '</option>';
-    }).join('');
-    locSel.disabled = false;
-    locSel.value = MK.loc || (allLocs[0] || '');
-  }
+  if (locSel) locSel.style.display = 'none';
 
   // Group select — реальні групи з постфіксом
   var grpSel = $('mfGroup');
+  if (!grpSel) return;
   var groups = _mkGroupsForLoc(MK.loc);
   if (!groups.length){
-    grpSel.innerHTML = '<option value="">👥 Немає груп</option>';
+    grpSel.innerHTML = '<option value="">👥 Немає груп у «' + escapeHtml(MK.loc || '—') + '»</option>';
     grpSel.value = '';
   } else {
     grpSel.innerHTML = groups.map(function(g){
