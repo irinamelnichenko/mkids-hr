@@ -120,6 +120,21 @@ select,input,textarea{font-family:inherit}
 .att-act-h{font-size:11px;font-weight:700;color:var(--gray);
   text-transform:uppercase;letter-spacing:.4px;text-align:center;
   padding:2px;line-height:1.2;word-break:break-word}
+.att-act-clickable{cursor:pointer;border-radius:4px;transition:background .12s}
+.att-act-clickable:hover{background:#eaf5ff;color:var(--blue)}
+/* v6.19: Teacher Card */
+.att-tc-loading{padding:20px;text-align:center;color:var(--gray);font-size:13px}
+.att-tc-row{padding:8px 0;display:flex;align-items:center;gap:8px;font-size:14px;
+  color:var(--dark2);border-bottom:1px solid #f0f4f8}
+.att-tc-row:last-child{border-bottom:none}
+.att-tc-row .lbl{font-size:12px;color:var(--gray);font-weight:600;min-width:80px}
+.att-tc-row a{color:var(--blue);text-decoration:none;font-weight:600}
+.att-tc-row a:hover{text-decoration:underline}
+.att-tc-warn{color:var(--red);font-weight:600}
+.att-tc-section{margin-top:14px;padding-top:12px;border-top:1px dashed #e8ecf0}
+.att-tc-section-lbl{font-size:12px;font-weight:800;color:var(--dark2);
+  text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
+.att-tc-section-stub{font-size:13px;color:var(--gray2);font-style:italic}
 .att-rows{display:flex;flex-direction:column}
 .att-row{display:grid;gap:6px;align-items:center;padding:8px 18px;
   border-bottom:1px solid #f0f4f8}
@@ -365,146 +380,38 @@ select,input,textarea{font-family:inherit}
   .pwa-offline.show{display:block}
 }
 
-/* ── v6.16: Mark tab (predmetnyky-style, mobile-first) ─────────────── */
-
-/* Header: 📍 Локація · 👥 Група + дата */
-.mark-header{background:#fff;border-radius:10px;padding:10px 14px;
-  margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;
-  gap:10px;box-shadow:0 1px 3px rgba(0,0,0,.05);flex-wrap:wrap}
-.mark-header-left{display:flex;align-items:center;gap:6px;font-size:13px;
-  color:var(--dark2);font-weight:600;flex:1;min-width:0;flex-wrap:wrap}
-.mark-h-loc,.mark-h-grp{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.mark-h-sep{color:var(--gray);margin:0 2px}
-.mark-header-right{flex-shrink:0}
-.mark-h-date{padding:6px 10px;border:1px solid #d6d9dd;border-radius:6px;
-  font-size:13px;background:#fff;font-family:inherit}
-
-/* Pickers (group + activity dropdowns) */
-.mark-pickers{background:#fff;border-radius:10px;padding:8px 12px;
-  margin-bottom:10px;display:flex;gap:8px;flex-wrap:wrap;
-  box-shadow:0 1px 3px rgba(0,0,0,.05)}
-.mark-pickers select{flex:1 1 calc(50% - 4px);padding:9px 10px;border:1px solid #d6d9dd;
-  border-radius:6px;font-size:14px;background:#fff;font-family:inherit;min-width:0}
-
-/* Горизонтальні tabs занять */
-.mark-act-tabs{display:flex;gap:6px;overflow-x:auto;padding:4px 0 10px;
-  margin-bottom:10px;-webkit-overflow-scrolling:touch;
-  scrollbar-width:thin}
-.mark-act-tabs::-webkit-scrollbar{height:4px}
-.mark-act-tabs::-webkit-scrollbar-thumb{background:#cbd0d6;border-radius:2px}
-.mark-act-tab{flex-shrink:0;padding:9px 14px;border-radius:20px;
-  background:#fff;border:1px solid #d6d9dd;font-size:13px;
-  white-space:nowrap;cursor:pointer;font-family:inherit;color:var(--dark2);
-  transition:all .12s;font-weight:500}
-.mark-act-tab:hover{border-color:var(--green);color:var(--green)}
-.mark-act-tab.active{background:var(--green);color:#fff;border-color:var(--green);
-  font-weight:600}
-.mark-act-tab-price{font-size:11px;opacity:.8;margin-left:4px}
-
-/* Розширена картка викладача з контактами */
-.mark-teacher-card{background:#fff;border-radius:12px;padding:14px 16px;
-  margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
-.mark-tc-top{display:flex;align-items:center;gap:12px;margin-bottom:10px}
-.mark-tc-avatar{width:40px;height:40px;border-radius:50%;
-  background:#e1f5ee;display:flex;align-items:center;justify-content:center;
-  font-weight:700;font-size:14px;color:#0f6e56;flex-shrink:0}
-.mark-tc-avatar.empty{background:#f0f4f8;color:#cbd0d6;font-size:20px}
-.mark-tc-info{flex:1;min-width:0}
-.mark-tc-title{font-size:15px;font-weight:700;color:var(--dark);
-  line-height:1.3;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-.mark-tc-rate{font-size:12px;color:var(--gray);margin-top:2px}
-.mark-tc-edit{background:transparent;border:1px solid #d6d9dd;
-  border-radius:8px;padding:7px 10px;font-size:15px;cursor:pointer;
-  flex-shrink:0;line-height:1}
-.mark-tc-edit:hover{background:#f4f7fa;border-color:var(--blue2)}
-.mark-tc-contacts{padding-top:10px;border-top:1px solid #eef1f4;
-  display:flex;flex-direction:column;gap:6px;font-size:13px}
-.mark-tc-row{display:flex;justify-content:space-between;align-items:center;gap:8px}
-.mark-tc-row-lbl{color:var(--gray)}
-.mark-tc-row a{color:var(--blue);text-decoration:none;font-weight:500}
-.mark-tc-row a:hover{text-decoration:underline}
-.mark-tc-total{padding-top:8px;border-top:1px dashed #eef1f4;margin-top:4px;
-  font-weight:600;color:var(--dark)}
-.mark-tc-total-sum{color:#16a085;font-weight:800;font-size:15px}
-
-/* Кнопка "+ Призначити викладача" коли не призначено */
-.mark-tc-assign{display:block;width:100%;margin-top:8px;padding:10px;
-  background:var(--green);color:#fff;border:none;border-radius:8px;
-  font-size:14px;font-weight:600;cursor:pointer;font-family:inherit}
-.mark-tc-assign:hover{background:#138d6f}
-
-/* Empty state коли немає викладача */
-.mark-tc-empty-msg{color:var(--red);font-weight:600;font-size:13px;
-  text-align:center;padding:6px 0}
-
-/* Empty banner */
-.mark-empty{background:#fff;border-radius:10px;padding:24px 18px;
-  text-align:center;color:var(--gray);font-size:14px;
-  box-shadow:0 1px 3px rgba(0,0,0,.05);margin-bottom:14px}
-
-/* Список дітей — велика картка-список */
-.mark-children{background:#fff;border-radius:12px;
-  box-shadow:0 1px 3px rgba(0,0,0,.06);overflow:hidden}
-.mark-children:empty{display:none}
-.mark-children-hdr{padding:10px 16px;font-size:12px;color:var(--gray);
-  background:#f9fafb;border-bottom:1px solid #eef1f4;font-weight:600}
-.mark-child-row{display:flex;align-items:center;gap:12px;padding:12px 16px;
-  border-bottom:1px solid #f0f4f8;cursor:pointer;
-  transition:background .12s;user-select:none;min-height:54px}
-.mark-child-row:last-child{border-bottom:none}
-.mark-child-row:hover:not(.disabled){background:#f4f7fa}
-.mark-child-row.checked{background:#e8f8f0}
-.mark-child-row.checked:hover:not(.disabled){background:#d1f1de}
-.mark-child-row.disabled{cursor:not-allowed;opacity:.55}
-.mark-child-row.saving{opacity:.6;cursor:wait}
-.mark-child-name{flex:1;font-size:15px;font-weight:600;color:var(--dark2)}
-.mark-cb{width:28px;height:28px;border-radius:7px;border:2px solid #cbd0d6;
-  background:#fff;display:flex;align-items:center;justify-content:center;
-  font-size:18px;font-weight:800;color:transparent;line-height:1;
-  transition:all .12s;flex-shrink:0}
-.mark-child-row:hover:not(.disabled) .mark-cb{border-color:var(--blue2)}
-.mark-child-row.checked .mark-cb{background:var(--green);
-  border-color:var(--green);color:#fff}
-
-/* Stats footer (під списком дітей) */
-.mark-stats{padding:10px 16px;background:#f9fafb;border-top:1px solid #eef1f4;
-  display:flex;justify-content:space-between;align-items:center;font-size:12px;
-  color:var(--gray)}
-.mark-stats-saved{color:#16a085;font-weight:600}
-
-/* Mobile-specific */
+/* ── v6.19: Mobile-зручна стара "Відвідуваність" (тільки CSS) ─────── */
 @media(max-width:768px){
-  .mark-header{position:sticky;top:0;z-index:50;border-radius:0;
-    margin:-14px -12px 8px;padding:10px 12px;
-    box-shadow:0 2px 6px rgba(0,0,0,.08)}
-  .mark-header-left{font-size:12px}
-  .mark-h-date{font-size:12px;padding:5px 8px}
-  .mark-act-tabs{margin:0 -12px 10px;padding:4px 12px 10px}
-  .mark-teacher-card{padding:12px 14px}
-  .mark-tc-avatar{width:36px;height:36px;font-size:13px}
-  .mark-tc-title{font-size:14px}
-  .mark-tc-contacts{font-size:12px}
-  .mark-child-row{padding:11px 14px;min-height:50px}
-  .mark-cb{width:26px;height:26px;font-size:16px}
+  /* Sticky фільтр-бар зверху */
+  #attendanceMode .att-filters{position:sticky;top:0;z-index:50;
+    border-radius:0;margin:-14px -12px 10px;padding:10px 12px;
+    box-shadow:0 2px 6px rgba(0,0,0,.08);background:#fff}
+  #attendanceMode .att-fg label{font-size:10px}
+  #attendanceMode .att-fg input,#attendanceMode .att-fg select{
+    font-size:15px;padding:8px 10px;min-width:0}
+  #attendanceMode .att-counter{font-size:11px;padding:6px 10px}
+
+  /* Великі чекбокси */
+  #attendanceMode .att-cell{min-width:44px;min-height:44px;font-size:20px}
+
+  /* Читабельний шрифт */
+  #attendanceMode .att-name{font-size:14px;font-weight:600}
+  #attendanceMode .att-act-h{font-size:11px;font-weight:700;line-height:1.2}
+
+  /* Горизонтальний scroll матриці діти × заняття */
+  #attendanceMode .att-board{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  #attendanceMode .att-acts-hd,
+  #attendanceMode .att-row{min-width:fit-content}
+  /* Перший стовпець (ім'я дитини / порожня клітинка заголовку) — sticky */
+  #attendanceMode .att-row > :first-child,
+  #attendanceMode .att-acts-hd > :first-child{position:sticky;left:0;
+    background:#fff;z-index:5;box-shadow:2px 0 4px rgba(0,0,0,.06)}
+  #attendanceMode .att-acts-hd > :first-child{background:#f8fafc}
+
+  /* Summary картки вертикально */
+  #attendanceMode .att-summary{grid-template-columns:1fr}
 }
 
-/* Legacy classes (модалка) */
-.mark-card-btn{background:transparent;border:none;cursor:pointer;
-  font-size:12px;color:var(--blue);font-weight:600;padding:2px 6px;
-  border-radius:4px;line-height:1.3}
-.mark-card-btn:hover{background:#eaf5ff}
-.mark-card-btn.primary{background:var(--green);color:#fff;
-  padding:6px 12px;font-size:13px;border-radius:6px}
-.mark-mode-toggle{display:flex;gap:14px;margin-top:2px}
-.mark-mode-opt{display:flex;align-items:center;gap:6px;cursor:pointer;
-  font-size:14px;font-weight:600;color:var(--dark2)}
-.mark-mode-opt input[type=radio]{cursor:pointer;width:16px;height:16px;
-  accent-color:var(--green)}
-.mark-req{color:var(--red);font-weight:700;margin-left:2px}
-.mark-modal-warn{background:#fff7e6;border:1px solid #ffd591;color:#874d00;
-  border-radius:6px;padding:8px 12px;font-size:12.5px;margin:6px 0}
-.mark-modal-err{background:#fdecea;border:1px solid #f5b7b1;color:#a93226;
-  border-radius:6px;padding:8px 12px;font-size:13px;margin-top:8px}
 </style>
 </head>
 <body>
@@ -651,7 +558,6 @@ select,input,textarea{font-family:inherit}
   </div>
 
   <div class="mode-tabs">
-    <button class="mt-btn" id="mtMark"       data-permission="attendance-edit">📋 Відмічання</button>
     <button class="mt-btn active" id="mtCatalog">📋 Каталог занять</button>
     <button class="mt-btn" id="mtAttendance" data-permission="attendance-view">📝 Відвідуваність</button>
     <button class="mt-btn" id="mtAnalytics"  data-permission="attendance-view">📊 Аналітика</button>
@@ -659,37 +565,6 @@ select,input,textarea{font-family:inherit}
   </div>
 
   <!-- ── v6.16: ВІДМІЧАННЯ (predmetnyky-style, mobile-first) ── -->
-  <div id="markMode" class="hidden">
-    <!-- v6.16: top header — locked для vyhovatel, dropdowns для director/CFO -->
-    <div class="mark-header">
-      <div class="mark-header-left">
-        <span class="mark-h-loc">📍 <span id="mhLoc">—</span></span>
-        <span class="mark-h-sep">·</span>
-        <span class="mark-h-grp">👥 <span id="mhGroup">—</span></span>
-      </div>
-      <div class="mark-header-right">
-        <input type="date" id="mfDate" class="mark-h-date" onchange="onMarkFilterChange('date')">
-      </div>
-    </div>
-
-    <!-- v6.16: dropdowns для director/CFO (приховано для vyhovatel) -->
-    <div id="markPickers" class="mark-pickers hidden">
-      <select id="mfLoc"      onchange="onMarkFilterChange('loc')"></select>
-      <select id="mfGroup"    onchange="onMarkFilterChange('group')"></select>
-      <select id="mfActivity" onchange="onMarkFilterChange('activity')"></select>
-    </div>
-
-    <!-- v6.17: tabs прибрали — заняття тепер у dropdown вище -->
-    <div id="markActTabs" class="mark-act-tabs hidden"></div>
-
-    <!-- v6.16: розширена картка викладача -->
-    <div id="markCard" class="mark-teacher-card hidden"></div>
-
-    <!-- v6.16: список дітей -->
-    <div id="markChildren" class="mark-children"></div>
-
-    <div id="markBanner" class="mark-empty hidden">Завантаження…</div>
-  </div>
 
   <!-- ── ETAP 1: КАТАЛОГ ── -->
   <div id="catalogMode">
@@ -922,76 +797,22 @@ select,input,textarea{font-family:inherit}
 </div>
 
 <!-- ── v6.13: ASSIGN TEACHER MODAL (predmetnyky-style) ────────── -->
-<div id="markAssignModal" class="modal hidden" aria-hidden="true">
-  <div class="modal-overlay" data-close-mark="1"></div>
-  <div class="modal-card" role="dialog" aria-modal="true">
-    <button class="modal-close" data-close-mark="1" aria-label="Закрити">✕</button>
-    <div class="modal-hd"><h3 id="maTitle">Призначити викладача</h3></div>
+
+<!-- ── ACTIVITY EDIT MODAL ────────────────────────────────────── -->
+<!-- ── v6.19: Teacher Card (popup on click on activity column header) ── -->
+<div id="attTeacherCard" class="modal hidden" aria-hidden="true">
+  <div class="modal-overlay" data-close-att-tc="1"></div>
+  <div class="modal-card">
+    <button class="modal-close" data-close-att-tc="1" aria-label="Закрити">✕</button>
+    <div class="modal-hd"><h3 id="attTcTitle">Картка викладача</h3></div>
     <div class="modal-bd">
-      <div class="fg">
-        <label>Локація</label>
-        <input type="text" id="maLoc" disabled>
+      <div id="attTcBody">
+        <div class="att-tc-loading">Завантаження…</div>
       </div>
-      <div class="fg">
-        <label>Заняття</label>
-        <input type="text" id="maActivity" disabled>
-      </div>
-      <div class="fg">
-        <label>Викладач</label>
-        <div class="mark-mode-toggle">
-          <label class="mark-mode-opt">
-            <input type="radio" name="maMode" value="existing" onchange="onMarkModeChange()" checked>
-            <span>Існуючий</span>
-          </label>
-          <label class="mark-mode-opt">
-            <input type="radio" name="maMode" value="new" onchange="onMarkModeChange()">
-            <span>+ Створити нового</span>
-          </label>
-        </div>
-      </div>
-      <div id="maBlockExisting">
-        <div class="fg">
-          <select id="maTeacherSel" onchange="onMarkTeacherChange()"></select>
-        </div>
-        <div id="maNoCands" class="mark-modal-warn hidden">
-          ⚠️ Немає HR-кандидатів для цієї активності в локації. Створи нового або введи лише ставку.
-        </div>
-      </div>
-      <div id="maBlockNew" class="hidden">
-        <div class="fg-row">
-          <div class="fg">
-            <label>Прізвище <span class="mark-req">*</span></label>
-            <input type="text" id="maLastName" placeholder="наприклад Іванова">
-          </div>
-          <div class="fg">
-            <label>Ім'я <span class="mark-req">*</span></label>
-            <input type="text" id="maFirstName" placeholder="наприклад Ольга">
-          </div>
-        </div>
-      </div>
-      <div class="fg">
-        <label>Телефон</label>
-        <input type="text" id="maPhone" placeholder="наприклад 098 324 89 94">
-      </div>
-      <div class="fg">
-        <label>Email</label>
-        <input type="email" id="maEmail" placeholder="example@mkids.ua">
-      </div>
-      <div class="fg">
-        <label>Ставка за дитину (₴)</label>
-        <input type="number" id="maRate" min="0" step="1" placeholder="наприклад 80">
-      </div>
-      <div id="maErr" class="mark-modal-err hidden"></div>
-    </div>
-    <div class="modal-ft">
-      <button class="btn btn-danger hidden" id="maRemoveBtn" type="button" onclick="removeMarkAssign()">🗑 Очистити</button>
-      <button class="btn btn-secondary" type="button" data-close-mark="1">Скасувати</button>
-      <button class="btn btn-primary" id="maSubmit" type="button" onclick="submitMarkAssign()">Зберегти</button>
     </div>
   </div>
 </div>
 
-<!-- ── ACTIVITY EDIT MODAL ────────────────────────────────────── -->
 <div id="actModal" class="modal hidden" aria-hidden="true">
   <div class="modal-overlay" data-close="1"></div>
   <div class="modal-card" role="dialog" aria-modal="true">
@@ -1548,13 +1369,7 @@ async function safePost(action, payload, attempt){
     });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     var json = await r.json();
-    // v6.18: application errors (validation/perm/not_found) — НЕ retry, НЕ queue.
-    // Caller сам інтерпретує (наприклад NOT_FOUND для вже-видаленого).
-    if (!json.ok) return json;
-    // Success: opportunistically розгрібаємо чергу (без чекання online event).
-    if (navigator.onLine && typeof replayOfflineQueue === 'function'){
-      setTimeout(replayOfflineQueue, 100);
-    }
+    if (!json.ok) throw new Error(json.error || 'Backend rejected');
     return json;
   } catch(e){
     if (attempt < 2){
@@ -1572,7 +1387,6 @@ async function safePost(action, payload, attempt){
 
 function _queueOffline(action, payload){
   try {
-    console.warn('[pwa] safePost → offline queue:', action, payload);
     var q = JSON.parse(localStorage.getItem('mkids_offline_queue') || '[]');
     q.push({action: action, payload: payload, ts: Date.now()});
     if (q.length > 200) q = q.slice(-200);
@@ -1724,14 +1538,9 @@ function onActiveLocChange(){
   ATT.group = ''; ATT.marksKey = ''; ATT.marksLoadedAt = 0;
   // Analytics: marks кеш привʼязаний до loc — інвалідуємо.
   if (typeof ANA !== 'undefined'){ ANA.marksLoc = ''; ANA.marksLoadedAt = 0; }
-  // v6.16: Mark — скинути локацію/групу/заняття щоб підхопити нову локацію
-  if (typeof MK !== 'undefined'){
-    MK.loc = ''; MK.group = ''; MK.activityId = 0; MK.marks = [];
-  }
   if (S.mode === 'catalog')         renderCatalog();
   else if (S.mode === 'attendance') renderAttendanceBoard();
   else if (S.mode === 'analytics')  renderAnalytics();
-  else if (S.mode === 'mark')       initMarkTab();
 }
 
 // ── RENDER CATALOG ──────────────────────────
@@ -2013,15 +1822,132 @@ async function reactivateActivity(id){
   else               showToast('❌ ' + (res.error || 'Помилка'), 'err');
 }
 
+// ═══════════════════════════════════════════════════════════════
+// v6.19: TEACHER CARD (popup при кліку на заголовок колонки заняття)
+// ═══════════════════════════════════════════════════════════════
+var ATT_HR_CACHE = null;
+async function _attEnsureHr(){
+  if (ATT_HR_CACHE) return ATT_HR_CACHE;
+  try {
+    var r = await fetch(CFG.SCRIPT_URL + '?action=getEmployees&actorId=' + (S.user && S.user.id || 0),
+                        {redirect: 'follow'});
+    var j = await r.json();
+    ATT_HR_CACHE = (j && j.ok && j.items) || [];
+  } catch(e){ ATT_HR_CACHE = []; console.warn('[att-tc] getEmployees failed:', e); }
+  return ATT_HR_CACHE;
+}
+function _attNormName(s){
+  return String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+function _attFindHrByName(loc, fullName){
+  if (!fullName || !ATT_HR_CACHE) return null;
+  var n = _attNormName(fullName);
+  for (var i = 0; i < ATT_HR_CACHE.length; i++){
+    var t = ATT_HR_CACHE[i];
+    if (t.loc !== loc) continue;
+    if (t.archived) continue;
+    var n1 = _attNormName((t.last||'') + ' ' + (t.first||''));
+    var n2 = _attNormName((t.first||'') + ' ' + (t.last||''));
+    if (n === n1 || n === n2) return t;
+  }
+  return null;
+}
+function attFmtPhone(raw){
+  var s = String(raw == null ? '' : raw);
+  var d = s.replace(/\D/g, '');
+  if (d.length === 12 && d.indexOf('380') === 0){ /* ok */ }
+  else if (d.length === 10 && d.charAt(0) === '0') d = '380' + d.slice(1);
+  else if (d.length === 9) d = '380' + d;
+  else return s;
+  return '+' + d.slice(0,3) + ' ' + d.slice(3,5) + ' ' +
+         d.slice(5,8) + '-' + d.slice(8,10) + '-' + d.slice(10,12);
+}
+async function openAttTeacherCard(activityId){
+  var modal = $('attTeacherCard'); if (!modal) return;
+  // Знайти catalog item для (loc, activityId)
+  var loc = S.activeLoc;
+  var cat = null;
+  for (var i = 0; i < (S.items||[]).length; i++){
+    if (S.items[i].id === activityId && S.items[i].loc === loc){ cat = S.items[i]; break; }
+  }
+  if (!cat){
+    $('attTcTitle').textContent = 'Активність не знайдена';
+    $('attTcBody').innerHTML = '<div class="att-tc-warn">Заняття id=' + activityId + ' не в каталозі</div>';
+    modal.classList.remove('hidden');
+    return;
+  }
+  $('attTcTitle').textContent = cat.name + ' · ' + loc;
+  $('attTcBody').innerHTML = '<div class="att-tc-loading">Завантаження даних викладача…</div>';
+  modal.classList.remove('hidden');
+  await _attEnsureHr();
+  $('attTcBody').innerHTML = _renderAttTeacherCard(cat);
+}
+function _renderAttTeacherCard(cat){
+  var loc = cat.loc;
+  var teacherName = String(cat.teacher || '').trim();
+  var hr = teacherName ? _attFindHrByName(loc, teacherName) : null;
+
+  var nameHtml;
+  if (!teacherName){
+    nameHtml = '<div class="att-tc-row att-tc-warn">⚠️ Викладач не вказаний у каталозі</div>';
+  } else if (!hr){
+    nameHtml = '<div class="att-tc-row"><span class="lbl">Викладач:</span> <strong>' +
+      escapeHtml(teacherName) + '</strong></div>' +
+      '<div class="att-tc-row att-tc-warn">⚠️ Цього викладача нема в HR — додай у HR-лист</div>';
+  } else {
+    var phone = hr.phone || '';
+    var email = hr.email || '';
+    nameHtml = '<div class="att-tc-row"><span class="lbl">Викладач:</span> <strong>' +
+      escapeHtml((hr.last || '') + ' ' + (hr.first || '')).trim() + '</strong></div>';
+    nameHtml += '<div class="att-tc-row"><span class="lbl">📞</span>' +
+      (phone
+        ? '<a href="tel:+' + escapeHtml(String(phone).replace(/\D/g,'')) + '">' + escapeHtml(attFmtPhone(phone)) + '</a>'
+        : '<span class="muted">—</span>') +
+      '</div>';
+    nameHtml += '<div class="att-tc-row"><span class="lbl">✉</span>' +
+      (email
+        ? '<a href="mailto:' + escapeHtml(email) + '">' + escapeHtml(email) + '</a>'
+        : '<span class="muted">—</span>') +
+      '</div>';
+  }
+  // Stub секції — без хардкоду цифр
+  var stubs = ''
+    + '<div class="att-tc-section">'
+    +   '<div class="att-tc-section-lbl">💰 Розрахунок з клієнтом</div>'
+    +   '<div class="att-tc-section-stub">буде додано пізніше</div>'
+    + '</div>'
+    + '<div class="att-tc-section">'
+    +   '<div class="att-tc-section-lbl">📊 Розрахунок з викладачем</div>'
+    +   '<div class="att-tc-section-stub">буде додано пізніше</div>'
+    + '</div>'
+    + '<div class="att-tc-section">'
+    +   '<div class="att-tc-section-lbl">🧾 Рахунок</div>'
+    +   '<div class="att-tc-section-stub">буде додано пізніше</div>'
+    + '</div>';
+  return nameHtml + stubs;
+}
+function closeAttTeacherCard(){
+  var m = $('attTeacherCard'); if (m) m.classList.add('hidden');
+}
+// Close-on-overlay/✕ + Esc
+document.addEventListener('click', function(e){
+  var t = e.target;
+  if (t && t.getAttribute && t.getAttribute('data-close-att-tc') === '1') closeAttTeacherCard();
+});
+document.addEventListener('keydown', function(e){
+  if (e.key === 'Escape'){
+    var m = $('attTeacherCard');
+    if (m && !m.classList.contains('hidden')) closeAttTeacherCard();
+  }
+});
+
 // ── MODE TABS ───────────────────────────────
 function switchMode(m){
   S.mode = m;
-  $('markMode')      .classList.toggle('hidden', m !== 'mark');
   $('catalogMode')   .classList.toggle('hidden', m !== 'catalog');
   $('attendanceMode').classList.toggle('hidden', m !== 'attendance');
   $('analyticsMode') .classList.toggle('hidden', m !== 'analytics');
   $('exportMode')    .classList.toggle('hidden', m !== 'export');
-  $('mtMark')      .classList.toggle('active', m === 'mark');
   $('mtCatalog')   .classList.toggle('active', m === 'catalog');
   $('mtAttendance').classList.toggle('active', m === 'attendance');
   $('mtAnalytics') .classList.toggle('active', m === 'analytics');
@@ -2029,8 +1955,7 @@ function switchMode(m){
   // Глобальний селектор має бути ініціалізований перш ніж активна
   // вкладка прочитає S.activeLoc.
   initGlobalLocSelector();
-  if (m === 'mark')           initMarkTab();
-  else if (m === 'attendance') initAttendanceTab();
+  if (m === 'attendance')      initAttendanceTab();
   else if (m === 'analytics')  initAnalyticsTab();
   else if (m === 'export')     initExportTab();
 }
@@ -2301,13 +2226,20 @@ function renderBoard(acts){
   hd.setAttribute('style', hdStyle);
   var hdHtml = '<div></div>';
   acts.forEach(function(a){
-    hdHtml += '<div class="att-act-h" title="' + escapeHtml(a.name) +
-              (a.clientPrice ? ' · ' + a.clientPrice + ' ₴' : '') + '">' +
+    hdHtml += '<div class="att-act-h att-act-clickable" data-act-id="' + a.id +
+              '" title="' + escapeHtml(a.name) +
+              ' — клікни для картки викладача">' +
               escapeHtml(a.name) +
               (a.clientPrice ? '<br><span style="color:var(--green);font-weight:800">' + a.clientPrice + '₴</span>' : '') +
               '</div>';
   });
   hd.innerHTML = hdHtml;
+  // v6.19: клік по заголовку колонки → картка викладача
+  hd.querySelectorAll('.att-act-clickable').forEach(function(el){
+    el.addEventListener('click', function(){
+      openAttTeacherCard(Number(this.dataset.actId));
+    });
+  });
 
   // Rows
   var rowsHtml = '';
@@ -2480,11 +2412,6 @@ function renderSummary(acts){
 
 // ── EVENT LISTENERS ─────────────────────────
 function bindEventListeners(){
-  var mtMark = $('mtMark');
-  if (mtMark) mtMark.addEventListener('click', function(){
-    if (this.disabled) return;
-    switchMode('mark');
-  });
   $('mtCatalog')   .addEventListener('click', function(){ switchMode('catalog'); });
   $('mtAttendance').addEventListener('click', function(){
     if (this.disabled) return;
@@ -3708,866 +3635,6 @@ function exportPreviewCSV(){
              [{name: 'Превʼю Пейменти', aoa: aoa}]);
   showToast('Excel завантажено', 'ok');
 }
-
-// ═══════════════════════════════════════════════════════════════
-// v6.13: MARK TAB (predmetnyky-style)
-// State + filter/render/handlers/modal/auto-export
-// ═══════════════════════════════════════════════════════════════
-var MK_GROUPS = ['miniBaby-ki','Baby-ki','Find-iki','Study-ki','Preschool'];
-var MK = {
-  loc: '', activityId: 0, group: '', date: '',
-  catalog: [],             // ВСІ catalog items (за всіма локаціями)
-  children: [],            // ВСІ діти (clients), фільтр у render
-  marks:    [],            // attendance marks для (loc, group, date) — мин. фільтр сервера
-  hr:       [],            // ВСІ активні HR-співробітники
-  modal:    null,
-  savingCells:       {},   // {"child|activityId|date": true}
-  autoExportTimer:   null
-};
-
-function mkTodayIso(){
-  var d = new Date();
-  return d.getFullYear() + '-' + ('0'+(d.getMonth()+1)).slice(-2) + '-' + ('0'+d.getDate()).slice(-2);
-}
-function mkIsoToHuman(iso){
-  var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
-  return m ? (m[3] + '.' + m[2] + '.' + m[1]) : iso;
-}
-function mkNormName(s){
-  return String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
-}
-function mkFmtPhone(raw){
-  var s = String(raw == null ? '' : raw);
-  var d = s.replace(/\D/g, '');
-  if (d.length === 12 && d.indexOf('380') === 0){ /* ok */ }
-  else if (d.length === 10 && d.charAt(0) === '0') d = '380' + d.slice(1);
-  else if (d.length === 9) d = '380' + d;
-  else return s;
-  return '+' + d.slice(0,3) + ' ' + d.slice(3,5) + ' ' +
-         d.slice(5,8) + '-' + d.slice(8,10) + '-' + d.slice(10,12);
-}
-function mkMkEmpKey(last, first, wdayOrHired){
-  function s(x){ return String(x == null ? '' : x).trim().replace(/\s+/g, '').slice(0, 25); }
-  return 'e5_' + s(last) + '_' + s(first) + '_' + s(wdayOrHired);
-}
-
-async function initMarkTab(){
-  // v6.18: розгрібаємо чергу при відкритті табу (раптом залишилось з попередніх клацань)
-  if (navigator.onLine && typeof replayOfflineQueue === 'function'){
-    setTimeout(replayOfflineQueue, 100);
-  }
-  // Завантажуємо catalog (вже є S.items, з реюзу), HR, дітей.
-  if (!S.items || !S.items.length){
-    try { await loadCatalog(false); } catch(e){}
-  }
-  MK.catalog = S.items || [];
-
-  // HR: один раз на сесію
-  if (!MK.hr.length){
-    try {
-      var r = await fetch(CFG.SCRIPT_URL + '?action=getEmployees&actorId=' + (S.user && S.user.id || 0),
-                          {redirect: 'follow'});
-      var jr = await r.json();
-      MK.hr = (jr && jr.ok && jr.items) || [];
-    } catch(e){ console.warn('[mark] getEmployees failed:', e); }
-  }
-
-  // Children: один раз на сесію
-  if (!MK.children.length){
-    try {
-      var r2 = await fetch(CFG.SCRIPT_URL + '?action=getClients', {redirect: 'follow'});
-      var jr2 = await r2.json();
-      MK.children = (jr2 && jr2.ok && jr2.data) || [];
-    } catch(e){ console.warn('[mark] getClients failed:', e); }
-  }
-
-  // v6.16: Init filters з пріоритетом vyhovatel
-  // v6.16 fix: ЗАВЖДИ синхронізуємо MK.loc з активною локацією
-  // (S.activeLoc для CFO/director, S.user.loc для vyhovatel — заблоковано на свою)
-  if (S.user && S.user.loc){
-    MK.loc = S.user.loc;          // vyhovatel/director — захардкоджено
-  } else if (S.activeLoc){
-    MK.loc = S.activeLoc;          // CFO — обрана з верхнього селектора
-  } else if (!MK.loc){
-    // fallback: беремо першу локацію з catalog
-    var firstLoc = '';
-    for (var i = 0; i < MK.catalog.length; i++){
-      if (MK.catalog[i].loc){ firstLoc = MK.catalog[i].loc; break; }
-    }
-    MK.loc = firstLoc;
-  }
-  if (!MK.date) MK.date = mkTodayIso();
-
-  // v6.16: vyhovatel — автоматично визначаємо ЙОГО групу з його children
-  var isVyhovatel = S.user && S.user.role === 'vyhovatel';
-  var locGroups = _mkGroupsForLoc(MK.loc);
-  if (isVyhovatel && locGroups.length){
-    // якщо точно одна група — беремо її
-    if (locGroups.length === 1){
-      MK.group = locGroups[0].name;
-    } else if (!MK.group || locGroups.findIndex(function(g){ return g.name === MK.group; }) === -1){
-      // якщо є кілька — беремо першу (буде показано dropdown)
-      MK.group = locGroups[0].name;
-    }
-  } else {
-    // director/CFO — якщо група не виставлена або не існує, беремо першу
-    if (!MK.group || locGroups.findIndex(function(g){ return g.name === MK.group; }) === -1){
-      MK.group = locGroups.length ? locGroups[0].name : '';
-    }
-  }
-
-  // v6.16: автовибір першого заняття якщо не вибрано
-  var locActs = _mkActivitiesForLoc(MK.loc);
-  if (!MK.activityId || !locActs.find(function(a){ return a.id === MK.activityId; })){
-    MK.activityId = locActs.length ? locActs[0].id : 0;
-  }
-
-  // Рендеримо UI
-  renderMarkHeader();
-  renderMarkPickers();
-  renderMarkActivityTabs();
-  if ($('mfDate')) $('mfDate').value = MK.date;
-
-  await refreshMarkAttendance();
-  renderMarkPage();
-}
-
-// v6.16: повертає унікальні групи (з постфіксом виховательки) для локації
-function _mkGroupsForLoc(loc){
-  if (!loc) return [];
-  // v6.17: нормалізуємо для матчингу (lowercase, прибираємо подвійні пробіли і NBSP)
-  function _norm(s){ return String(s||'').replace(/[\s\u00A0]+/g,' ').trim().toLowerCase(); }
-  var normLoc = _norm(loc);
-  var counts = {};
-  (MK.children || []).forEach(function(k){
-    var kLoc = _norm(k['Локація']);
-    var kGrp = String(k['Група'] || '').trim();
-    if (!kGrp) return;
-    if (kLoc !== normLoc) return;
-    counts[kGrp] = (counts[kGrp] || 0) + 1;
-  });
-  return Object.keys(counts).sort(function(a,b){ return a.localeCompare(b,'uk'); })
-    .map(function(name){ return { name: name, count: counts[name] }; });
-}
-
-// v6.16: унікальні активні заняття для локації
-function _mkActivitiesForLoc(loc){
-  if (!loc) return [];
-  var items = MK.catalog.filter(function(a){ return a.active && a.loc === loc; });
-  var seen = {};
-  var uniq = [];
-  items.forEach(function(a){
-    if (seen[a.name]) return;
-    seen[a.name] = true;
-    uniq.push(a);
-  });
-  uniq.sort(function(a,b){ return a.name.localeCompare(b.name,'uk'); });
-  return uniq;
-}
-
-// v6.16: header — показуємо локацію · групу + date (для vyhovatel)
-function renderMarkHeader(){
-  var locEl = $('mhLoc'); var grpEl = $('mhGroup');
-  if (locEl) locEl.textContent = MK.loc || '—';
-  if (grpEl) grpEl.textContent = MK.group || '—';
-}
-
-// v6.17: pickers — group + activity dropdowns ВСІМ. Loc прихована (керується верхом).
-function renderMarkPickers(){
-  var pickers = $('markPickers');
-  if (!pickers) return;
-  pickers.classList.remove('hidden');
-
-  // Loc select — завжди приховуємо (керується глобальним верхнім селектором)
-  var locSel = $('mfLoc');
-  if (locSel) locSel.style.display = 'none';
-
-  // Group select — реальні групи з постфіксом + counter
-  var grpSel = $('mfGroup');
-  if (grpSel){
-    var groups = _mkGroupsForLoc(MK.loc);
-    if (!groups.length){
-      grpSel.innerHTML = '<option value="">👥 Немає груп у «' + escapeHtml(MK.loc || '—') + '»</option>';
-      grpSel.value = '';
-    } else {
-      grpSel.innerHTML = groups.map(function(g){
-        return '<option value="' + escapeHtml(g.name) + '">👥 ' + escapeHtml(g.name) + ' (' + g.count + ')</option>';
-      }).join('');
-      grpSel.value = MK.group;
-    }
-  }
-  // Activity select заповнюється у renderMarkActivityTabs
-}
-
-// v6.17: заняття — DROPDOWN (замість tabs, які важко скролити на мобільному)
-function renderMarkActivityTabs(){
-  var sel = $('mfActivity');
-  if (!sel) return;
-  var acts = _mkActivitiesForLoc(MK.loc);
-  if (!acts.length){
-    sel.innerHTML = '<option value="0">🧩 Немає занять у «' + escapeHtml(MK.loc || '—') + '»</option>';
-    sel.value = '0';
-    MK.activityId = 0;
-    return;
-  }
-  sel.innerHTML = acts.map(function(a){
-    var emoji = _mkActEmoji(a.name);
-    var price = Number(a.teacherRate) || 0;
-    var priceStr = price ? ' · ' + price + '₴' : '';
-    return '<option value="' + a.id + '">' + emoji + ' ' + escapeHtml(a.name) + priceStr + '</option>';
-  }).join('');
-  // якщо поточне заняття не в списку — беремо перше
-  if (!acts.find(function(a){ return a.id === MK.activityId; })){
-    MK.activityId = acts[0].id;
-  }
-  sel.value = String(MK.activityId);
-}
-
-// v6.16: emoji для відомих занять
-function _mkActEmoji(name){
-  var n = String(name || '').toLowerCase();
-  if (n.indexOf('айкідо') !== -1) return '🥋';
-  if (n.indexOf('лего')   !== -1) return '🧩';
-  if (n.indexOf('арт')    !== -1) return '🎨';
-  if (n.indexOf('dance')  !== -1 || n.indexOf('танц') !== -1) return '💃';
-  if (n.indexOf('лого')   !== -1) return '🗣';
-  if (n.indexOf('англ')   !== -1) return '🇬🇧';
-  if (n.indexOf('робот')  !== -1) return '🤖';
-  if (n.indexOf('гонч')   !== -1) return '🏺';
-  if (n.indexOf('вокал')  !== -1) return '🎤';
-  if (n.indexOf('футбол') !== -1) return '⚽';
-  if (n.indexOf('форте')  !== -1 || n.indexOf('піаніно') !== -1) return '🎹';
-  if (n.indexOf('театр')  !== -1) return '🎭';
-  if (n.indexOf('капоейр')!== -1) return '🤸';
-  if (n.indexOf('нейро')  !== -1) return '🧠';
-  return '🧩';
-}
-
-// v6.16: клік по табу заняття
-function onMarkActivityTabClick(actId){
-  MK.activityId = Number(actId) || 0;
-  renderMarkActivityTabs();   // оновити active state
-  refreshMarkAttendance().then(renderMarkPage);
-}
-
-function onMarkFilterChange(which){
-  if (which === 'loc'){
-    MK.loc = $('mfLoc').value;
-    MK.activityId = 0;
-    MK.group = '';
-    // переберемо групи й заняття
-    var grps = _mkGroupsForLoc(MK.loc);
-    MK.group = grps.length ? grps[0].name : '';
-    var acts = _mkActivitiesForLoc(MK.loc);
-    MK.activityId = acts.length ? acts[0].id : 0;
-    renderMarkHeader();
-    renderMarkPickers();
-    renderMarkActivityTabs();
-  }
-  if (which === 'group'){
-    MK.group = $('mfGroup').value;
-    renderMarkHeader();
-  }
-  if (which === 'activity'){
-    MK.activityId = Number($('mfActivity').value) || 0;
-  }
-  if (which === 'date')  MK.date  = $('mfDate').value;
-  refreshMarkAttendance().then(renderMarkPage);
-}
-
-async function refreshMarkAttendance(){
-  if (!MK.loc || !MK.activityId || !MK.date){ MK.marks = []; return; }
-  try {
-    var url = CFG.SCRIPT_URL + '?action=getAttendanceMarks' +
-              '&loc=' + encodeURIComponent(MK.loc) +
-              '&group=' + encodeURIComponent(MK.group) +
-              '&date=' + encodeURIComponent(MK.date) +
-              '&activityId=' + MK.activityId;
-    var r = await fetch(url, {redirect: 'follow'});
-    var jr = await r.json();
-    MK.marks = (jr && jr.ok && jr.items) || [];
-  } catch(e){ MK.marks = []; }
-}
-
-function _markFindCatalog(){
-  if (!MK.activityId || !MK.loc) return null;
-  for (var i = 0; i < MK.catalog.length; i++){
-    var a = MK.catalog[i];
-    if (a.id === MK.activityId && a.loc === MK.loc) return a;
-  }
-  // Fallback: інший loc з тим же ID — використовуємо назву
-  for (var j = 0; j < MK.catalog.length; j++){
-    if (MK.catalog[j].id === MK.activityId) return MK.catalog[j];
-  }
-  return null;
-}
-function _markFindCatalogByName(loc, name){
-  for (var i = 0; i < MK.catalog.length; i++){
-    var a = MK.catalog[i];
-    if (a.loc === loc && a.name === name) return a;
-  }
-  return null;
-}
-function _markFindHrByName(loc, fullName){
-  if (!fullName) return null;
-  var n = mkNormName(fullName);
-  for (var i = 0; i < MK.hr.length; i++){
-    var t = MK.hr[i];
-    if (t.loc !== loc) continue;
-    var n1 = mkNormName(t.last + ' ' + t.first);
-    var n2 = mkNormName(t.first + ' ' + t.last);
-    if (n === n1 || n === n2) return t;
-  }
-  return null;
-}
-function _markTeachersForActivity(loc, activityName){
-  return MK.hr.filter(function(t){
-    if (t.loc !== loc) return false;
-    return String(t.pos || '').toLowerCase().trim() === String(activityName || '').toLowerCase().trim();
-  });
-}
-
-function renderMarkPage(){
-  var banner = $('markBanner');
-  if (!MK.loc || !MK.activityId || !MK.group || !MK.date){
-    if (banner){
-      banner.classList.remove('hidden');
-      banner.textContent = 'Оберіть локацію, заняття, групу і дату.';
-    }
-    $('markCard').classList.add('hidden');
-    $('markChildren').innerHTML = '';
-    return;
-  }
-  if (banner) banner.classList.add('hidden');
-
-  var cat = _markFindCatalog();
-  $('markCard').classList.remove('hidden');
-  $('markCard').innerHTML = renderMarkTeacherCard(cat);
-
-  // Children filtered (точна назва групи з постфіксом, нормалізована локація)
-  function _normLoc(s){ return String(s||'').replace(/[\s\u00A0]+/g,' ').trim().toLowerCase(); }
-  var normMkLoc = _normLoc(MK.loc);
-  var groupKids = MK.children.filter(function(k){
-    return _normLoc(k['Локація']) === normMkLoc &&
-           String(k['Група']  || '').trim()  === MK.group;
-  });
-  groupKids.sort(function(a, b){
-    return String(a['ПІБ дитини'] || '').localeCompare(String(b['ПІБ дитини'] || ''), 'uk');
-  });
-
-  var canEdit = hasPerm('attendance-edit');
-  var rowsHtml = groupKids.map(function(k){ return renderMarkChildRow(k, cat, canEdit); }).join('');
-  if (!rowsHtml){
-    $('markChildren').innerHTML = '<div class="mark-empty" style="border-radius:12px;margin:0">' +
-      'Немає дітей у групі «' + escapeHtml(MK.group) + '».</div>';
-    return;
-  }
-
-  var hdrHtml = '<div class="mark-children-hdr">' +
-    'Діти (' + MK.marks.length + ' з ' + groupKids.length + ' відмічено)' +
-    '</div>';
-  var statsHtml = '<div class="mark-stats">' +
-    '<span>' + groupKids.length + ' дітей у групі</span>' +
-    '<span class="mark-stats-saved">● Збережено</span>' +
-    '</div>';
-  $('markChildren').innerHTML = hdrHtml + rowsHtml + statsHtml;
-}
-
-function renderMarkTeacherCard(cat){
-  if (!cat){
-    return '<div class="mark-tc-empty-msg">⚠️ Активність не знайдена в каталозі</div>';
-  }
-  var canEditTeacher = hasPerm('activities-edit');   // director/mgmt
-  var teacherName = cat.teacher || '';
-  var hrEmp = teacherName ? _markFindHrByName(cat.loc, teacherName) : null;
-  var phone = hrEmp ? hrEmp.phone : '';
-  var email = hrEmp ? hrEmp.email : '';
-  var rate = Number(cat.teacherRate) || 0;
-  var emoji = _mkActEmoji(cat.name);
-
-  // Аватар: ініціали з ПІБ або заглушка
-  var avatarHtml;
-  if (teacherName){
-    var parts = teacherName.split(/\s+/).filter(Boolean);
-    var initials = (parts[0] ? parts[0][0] : '') + (parts[1] ? parts[1][0] : '');
-    avatarHtml = '<div class="mark-tc-avatar">' + escapeHtml(initials.toUpperCase()) + '</div>';
-  } else {
-    avatarHtml = '<div class="mark-tc-avatar empty">?</div>';
-  }
-
-  // Title row
-  var teacherModel = cat.teacherModel || 'За дитину';
-  var modelLabel = teacherModel === 'За заняття' ? 'за заняття' : 'за дитину';
-  var titleText = teacherName ? escapeHtml(teacherName) : '<span style="color:var(--gray)">— не призначений —</span>';
-  var rateHtml = rate
-    ? '<div class="mark-tc-rate">' + rate + '₴ ' + modelLabel + '</div>'
-    : '<div class="mark-tc-rate" style="color:var(--red)">⚠️ ставка не вказана</div>';
-
-  var editBtn = canEditTeacher
-    ? '<button class="mark-tc-edit" type="button" onclick="openMarkAssign(' + cat.id +
-      ')" title="' + (teacherName ? 'Змінити викладача' : 'Призначити викладача') + '">✏️</button>'
-    : '';
-
-  var topRow =
-    '<div class="mark-tc-top">' +
-      avatarHtml +
-      '<div class="mark-tc-info">' +
-        '<div class="mark-tc-title">' + emoji + ' ' + escapeHtml(cat.name) +
-          (teacherName ? ' · ' + titleText : '') + '</div>' +
-        rateHtml +
-      '</div>' +
-      editBtn +
-    '</div>';
-
-  // Контакти (якщо є HR-запис)
-  var contactsHtml = '';
-  if (hrEmp){
-    var phoneRow = phone
-      ? '<div class="mark-tc-row"><span class="mark-tc-row-lbl">📞 Телефон</span>' +
-        '<a href="tel:' + escapeHtml(phone) + '">' + escapeHtml(mkFmtPhone(phone)) + '</a></div>'
-      : '<div class="mark-tc-row"><span class="mark-tc-row-lbl">📞 Телефон</span><span style="color:var(--gray)">—</span></div>';
-    var emailRow = email
-      ? '<div class="mark-tc-row"><span class="mark-tc-row-lbl">✉️ Email</span>' +
-        '<a href="mailto:' + escapeHtml(email) + '">' + escapeHtml(email) + '</a></div>'
-      : '<div class="mark-tc-row"><span class="mark-tc-row-lbl">✉️ Email</span><span style="color:var(--gray)">—</span></div>';
-
-    // Сума за сьогодні
-    var n = MK.marks.length;
-    var sumByModel = teacherModel === 'За заняття' ? (rate || 0) : (n * rate);
-    var sumRow = '<div class="mark-tc-row mark-tc-total">' +
-      '<span>Сьогодні до виплати</span>' +
-      '<span class="mark-tc-total-sum">' + sumByModel + '₴</span>' +
-      '</div>';
-
-    contactsHtml = '<div class="mark-tc-contacts">' + phoneRow + emailRow + sumRow + '</div>';
-  } else if (teacherName){
-    // teacherName є але hrEmp не знайдено
-    contactsHtml = '<div class="mark-tc-empty-msg" style="padding-top:8px;border-top:1px solid #eef1f4">' +
-      '⚠️ Викладача нема в HR — додай через ✏️</div>';
-  } else if (canEditTeacher){
-    // викладача не призначено — велика кнопка
-    contactsHtml = '<button class="mark-tc-assign" type="button" onclick="openMarkAssign(' + cat.id + ')">' +
-      '+ Призначити викладача</button>';
-  } else {
-    contactsHtml = '<div class="mark-tc-empty-msg" style="padding-top:8px;border-top:1px solid #eef1f4">' +
-      'Викладач ще не призначений</div>';
-  }
-
-  return topRow + contactsHtml;
-}
-
-function renderMarkChildRow(kid, cat, canEdit){
-  var name = String(kid['ПІБ дитини'] || '').trim();
-  var date = MK.date;
-  var actId = MK.activityId;
-  var key = name + '|' + actId + '|' + date;
-  var existing = null;
-  for (var i = 0; i < MK.marks.length; i++){
-    if (MK.marks[i].child === name){ existing = MK.marks[i]; break; }
-  }
-  var checked = !!existing;
-  var saving  = !!MK.savingCells[key];
-  var hasRate = cat && Number(cat.teacherRate) > 0;
-  var disabled = !canEdit || !hasRate;
-
-  var cls = 'mark-child-row';
-  if (checked)  cls += ' checked';
-  if (disabled) cls += ' disabled';
-  if (saving)   cls += ' saving';
-
-  var handler = (!disabled && !saving)
-    ? ' onclick="onMarkCheckboxToggle(\'' + (name.replace(/\\/g,'\\\\').replace(/'/g,"\\'")) + '\')"'
-    : '';
-  return '<div class="' + cls + '"' + handler + '>' +
-    '<span class="mark-cb">✓</span>' +
-    '<div class="mark-child-name">' + escapeHtml(name) + '</div>' +
-  '</div>';
-}
-
-function onMarkCheckboxToggle(childName){
-  if (!hasPerm('attendance-edit')){ showToast('🚫 Немає дозволу', 'err'); return; }
-  var cat = _markFindCatalog();
-  if (!cat){ showToast('Активність не знайдена', 'err'); return; }
-  var rate = Number(cat.teacherRate) || 0;
-  if (rate <= 0){ showToast('🚫 Спершу додай ставку для активності', 'err'); return; }
-
-  var key = childName + '|' + MK.activityId + '|' + MK.date;
-  if (MK.savingCells[key]) return;
-  MK.savingCells[key] = true;
-  renderMarkPage();
-
-  // Find existing
-  var existing = null;
-  for (var i = 0; i < MK.marks.length; i++){
-    if (MK.marks[i].child === childName){ existing = MK.marks[i]; break; }
-  }
-
-  if (existing){
-    safePost('removeAttendanceMark', {id: existing.id}).then(function(res){
-      delete MK.savingCells[key];
-      if (res && (res.ok || res.localOnly)){
-        MK.marks = MK.marks.filter(function(m){ return m.id !== existing.id; });
-        if (res.localOnly) showToast('💾 Видалено локально', 'info', 2500);
-      } else if (res && /not.*found|відмітку не знайдено/i.test(res.error || '')){
-        MK.marks = MK.marks.filter(function(m){ return m.id !== existing.id; });
-      } else {
-        showToast((res && res.error) || 'Помилка видалення', 'err');
-      }
-      renderMarkPage();
-      scheduleMarkAutoExport();
-    });
-  } else {
-    safePost('addAttendanceMark', {data:{
-      date:         MK.date,
-      loc:          MK.loc,
-      group:        MK.group,
-      child:        childName,
-      activityId:   MK.activityId,
-      activityName: cat.name,
-      price:        Number(cat.clientPrice) || 0,
-      markedBy:     (S.user && S.user.name) || ''
-    }}).then(function(res){
-      delete MK.savingCells[key];
-      if (res && (res.ok || res.localOnly)){
-        // IDEMPOTENT upsert. Local-only зберігаємо з тимчасовим id — після
-        // replay сервер створить рядок з реальним id (видно при reload).
-        var newId = res.id || ('local-' + Date.now() + '-' + Math.random().toString(36).slice(2,7));
-        MK.marks = MK.marks.filter(function(m){ return m.id !== newId; });
-        MK.marks.push({
-          id: newId, date: MK.date, loc: MK.loc, group: MK.group,
-          child: childName, activityId: MK.activityId, activityName: cat.name,
-          price: Number(cat.clientPrice) || 0
-        });
-        if (res.localOnly) showToast('💾 Збережено локально — синхр. при підключенні', 'info', 3000);
-        renderMarkPage();
-        scheduleMarkAutoExport();
-      } else {
-        renderMarkPage();
-        showToast((res && res.error) || 'Помилка', 'err');
-      }
-    });
-  }
-}
-
-function scheduleMarkAutoExport(){
-  if (!MK.loc) return;
-  if (MK.autoExportTimer){ clearTimeout(MK.autoExportTimer); }
-  setSyncState && setSyncState('pending', '↻ Salary через 2 сек…');
-  MK.autoExportTimer = setTimeout(function(){
-    MK.autoExportTimer = null;
-    runMarkAutoExport();
-  }, 2000);
-}
-function runMarkAutoExport(){
-  if (!MK.loc || !MK.date) return;
-  var m = /^(\d{4})-(\d{2})-/.exec(MK.date);
-  if (!m) return;
-  var year = Number(m[1]), month = Number(m[2]);
-  setSyncState && setSyncState('syncing', '↻ Salary…');
-  safePost('exportAttendance', {loc: MK.loc, year: year, month: month, actorId: (S.user && S.user.id) || 0})
-    .then(function(res){
-      if (res && res.ok){
-        setSyncState && setSyncState('ok', '✅ Salary оновлено');
-      } else {
-        setSyncState && setSyncState('err', '⚠ Salary: ' + ((res && res.error) || 'помилка'));
-      }
-    });
-}
-
-// ── MARK MODAL (assign teacher + rate) ──
-function openMarkAssign(activityId){
-  if (!hasPerm('activities-edit')){ showToast('🚫 Немає дозволу', 'err'); return; }
-  var cat = MK.catalog.filter(function(a){
-    return a.id === activityId || (a.loc === MK.loc && a.id === activityId);
-  })[0];
-  if (!cat) cat = _markFindCatalog();
-  if (!cat) return;
-
-  var teachers = _markTeachersForActivity(cat.loc, cat.name);
-  var currentTeacherName = cat.teacher || '';
-  var currentHr = currentTeacherName ? _markFindHrByName(cat.loc, currentTeacherName) : null;
-
-  MK.modal = {
-    catalogId:   cat.id,
-    loc:         cat.loc,
-    activity:    cat.name,
-    teachers:    teachers,
-    currentName: currentTeacherName,
-    currentHr:   currentHr,
-    currentRate: Number(cat.teacherRate) || 0
-  };
-
-  $('maTitle').textContent  = (currentTeacherName || currentHr ? 'Редагувати: ' : 'Призначити: ') +
-                              cat.name + ' · ' + cat.loc;
-  $('maLoc').value          = cat.loc;
-  $('maActivity').value     = cat.name;
-  $('maRate').value         = MK.modal.currentRate ? String(MK.modal.currentRate) : '';
-  $('maLastName').value     = '';
-  $('maFirstName').value    = '';
-
-  var sel = $('maTeacherSel');
-  if (teachers.length){
-    sel.innerHTML = '<option value="">— без викладача —</option>' +
-      teachers.map(function(t){
-        var name = (t.last + ' ' + t.first).trim();
-        var ek = mkMkEmpKey(t.last, t.first, t.wday || t.hired || '');
-        return '<option value="' + escapeHtml(ek) + '" data-name="' + escapeHtml(name) + '">' + escapeHtml(name) + '</option>';
-      }).join('');
-    sel.disabled = false;
-    // Pre-select current
-    if (currentHr){
-      var k = mkMkEmpKey(currentHr.last, currentHr.first, currentHr.wday || currentHr.hired || '');
-      sel.value = k;
-    } else if (currentTeacherName){
-      // Не знайдено в HR серед candidates — лишаємо placeholder
-      sel.value = '';
-    } else {
-      sel.value = '';
-    }
-    $('maNoCands').classList.add('hidden');
-  } else {
-    sel.innerHTML = '<option value="">— нема кандидатів —</option>';
-    sel.disabled = true;
-    $('maNoCands').classList.remove('hidden');
-  }
-
-  // Mode: existing default; if no candidates → new
-  var defaultMode = teachers.length ? 'existing' : 'new';
-  document.querySelectorAll('input[name="maMode"]').forEach(function(r){
-    r.checked = (r.value === defaultMode);
-  });
-  onMarkModeChange();
-
-  // Remove button: only if catalog has teacher OR rate
-  if (currentTeacherName || MK.modal.currentRate){
-    $('maRemoveBtn').classList.remove('hidden');
-  } else {
-    $('maRemoveBtn').classList.add('hidden');
-  }
-
-  $('maErr').classList.add('hidden');
-  $('maErr').textContent = '';
-  $('markAssignModal').classList.remove('hidden');
-}
-
-function _maMode(){
-  var r = document.querySelector('input[name="maMode"]:checked');
-  return r ? r.value : 'existing';
-}
-function onMarkModeChange(){
-  var mode = _maMode();
-  if (mode === 'new'){
-    $('maBlockExisting').classList.add('hidden');
-    $('maBlockNew').classList.remove('hidden');
-    $('maPhone').value = '';
-    $('maEmail').value = '';
-    setTimeout(function(){ var el = $('maLastName'); if (el) el.focus(); }, 50);
-  } else {
-    $('maBlockExisting').classList.remove('hidden');
-    $('maBlockNew').classList.add('hidden');
-    onMarkTeacherChange();
-  }
-}
-function onMarkTeacherChange(){
-  var empKey = $('maTeacherSel').value;
-  if (!empKey){ $('maPhone').value = ''; $('maEmail').value = ''; return; }
-  // Find by empKey in MK.hr
-  for (var i = 0; i < MK.hr.length; i++){
-    var t = MK.hr[i];
-    var k = mkMkEmpKey(t.last, t.first, t.wday || t.hired || '');
-    if (k === empKey){
-      $('maPhone').value = t.phone || '';
-      $('maEmail').value = t.email || '';
-      return;
-    }
-  }
-  $('maPhone').value = '';
-  $('maEmail').value = '';
-}
-
-function closeMarkAssign(){
-  $('markAssignModal').classList.add('hidden');
-  MK.modal = null;
-}
-function _maErr(msg){
-  var box = $('maErr');
-  box.textContent = msg;
-  box.classList.remove('hidden');
-}
-
-async function submitMarkAssign(){
-  if (!MK.modal) return;
-  var mode = _maMode();
-  var loc = MK.modal.loc;
-  var activity = MK.modal.activity;
-  var catId = MK.modal.catalogId;
-
-  var rateStr = $('maRate').value;
-  var hasRate = rateStr !== '' && rateStr != null;
-  var rate = hasRate ? Number(rateStr) : null;
-  if (hasRate && (!isFinite(rate) || rate < 0)){ _maErr('Ставка має бути числом ≥ 0'); return; }
-
-  var phone = String($('maPhone').value || '').trim();
-  var email = String($('maEmail').value || '').trim();
-
-  var btn = $('maSubmit'); var orig = btn.textContent;
-  btn.disabled = true; btn.textContent = '⏳ Збереження…';
-  _maErr('');
-  $('maErr').classList.add('hidden');
-
-  try {
-    var teacherName = '';
-    var teacherChanged = false;
-
-    if (mode === 'new'){
-      var last = String($('maLastName').value || '').trim();
-      var first = String($('maFirstName').value || '').trim();
-      if (!last || !first){
-        btn.disabled = false; btn.textContent = orig;
-        _maErr('Прізвище та Ім\'я обов\'язкові для нового викладача');
-        return;
-      }
-      var hiredIso = mkTodayIso();
-      var saveRes = await safePost('saveEmployee', {
-        actorId: (S.user && S.user.id) || 0,
-        payload: {
-          last: last, first: first, loc: loc, pos: activity,
-          typ: 'Викладач додаткових', phone: phone, email: email,
-          hired: hiredIso
-        }
-      });
-      if (!saveRes || !saveRes.ok) throw new Error(saveRes && saveRes.error || 'saveEmployee failed');
-      var emp = saveRes.employee || {};
-      teacherName = ((emp.last || last) + ' ' + (emp.first || first)).trim();
-      teacherChanged = true;
-      // Local update
-      MK.hr.push(Object.assign({rowNum: saveRes.rowNum}, emp, {
-        last: emp.last || last, first: emp.first || first, loc: loc,
-        pos: activity, phone: emp.phone || phone, email: emp.email || email,
-        wday: emp.wday || '', hired: emp.hired || hiredIso, archived: false
-      }));
-    } else {
-      // existing
-      var empKey = $('maTeacherSel').value;
-      if (!empKey && !hasRate){
-        btn.disabled = false; btn.textContent = orig;
-        _maErr('Обери викладача, створи нового або введи лише ставку');
-        return;
-      }
-      if (empKey){
-        // Find HR by empKey
-        var found = null;
-        for (var i = 0; i < MK.hr.length; i++){
-          var t = MK.hr[i];
-          var k = mkMkEmpKey(t.last, t.first, t.wday || t.hired || '');
-          if (k === empKey){ found = t; break; }
-        }
-        if (found){
-          teacherName = (found.last + ' ' + found.first).trim();
-          teacherChanged = (teacherName !== MK.modal.currentName);
-          var phoneChanged = (found.phone || '') !== phone;
-          var emailChanged = (found.email || '') !== email;
-          if (phoneChanged || emailChanged){
-            var updRes = await safePost('saveEmployee', {
-              actorId: (S.user && S.user.id) || 0,
-              rowNum:  found.rowNum,
-              payload: {
-                last: found.last, first: found.first,
-                loc:  found.loc, pos: found.pos,
-                phone: phone, email: email
-              }
-            });
-            if (updRes && updRes.ok){
-              found.phone = phone; found.email = email;
-            }
-          }
-        }
-      }
-    }
-
-    // Catalog update (teacher + rate)
-    var updates = {};
-    if (teacherChanged) updates.teacher = teacherName;
-    if (hasRate) updates.teacherRate = rate;
-    if (Object.keys(updates).length){
-      var catRes = await safePost('updateActivity', {id: catId, data: updates});
-      if (!catRes || !catRes.ok) throw new Error(catRes && catRes.error || 'updateActivity failed');
-      // Local update
-      for (var ci = 0; ci < MK.catalog.length; ci++){
-        if (MK.catalog[ci].id === catId){
-          if (teacherChanged) MK.catalog[ci].teacher = teacherName;
-          if (hasRate) MK.catalog[ci].teacherRate = rate;
-          break;
-        }
-      }
-      // Також оновлюємо S.items щоб catalog tab бачив зміни
-      if (Array.isArray(S.items)){
-        for (var si = 0; si < S.items.length; si++){
-          if (S.items[si].id === catId){
-            if (teacherChanged) S.items[si].teacher = teacherName;
-            if (hasRate) S.items[si].teacherRate = rate;
-            break;
-          }
-        }
-      }
-    }
-
-    btn.disabled = false; btn.textContent = orig;
-    closeMarkAssign();
-    renderMarkPage();
-    var msgs = [];
-    if (teacherChanged) msgs.push('викладача оновлено');
-    if (hasRate)        msgs.push('ставка ' + rate + '₴');
-    if (msgs.length) showToast('✅ ' + msgs.join(' · '), 'ok');
-    scheduleMarkAutoExport();
-  } catch(e){
-    btn.disabled = false; btn.textContent = orig;
-    _maErr('Помилка: ' + (e && e.message || e));
-  }
-}
-
-async function removeMarkAssign(){
-  if (!MK.modal) return;
-  if (!confirm('Очистити викладача та ставку для «' + MK.modal.activity + '»?')) return;
-  var btn = $('maRemoveBtn'); var orig = btn.textContent;
-  btn.disabled = true; btn.textContent = '⏳…';
-  try {
-    var res = await safePost('updateActivity', {id: MK.modal.catalogId, data: {teacher: '', teacherRate: 0}});
-    btn.disabled = false; btn.textContent = orig;
-    if (!res || !res.ok) throw new Error(res && res.error || 'unknown');
-    for (var i = 0; i < MK.catalog.length; i++){
-      if (MK.catalog[i].id === MK.modal.catalogId){
-        MK.catalog[i].teacher = ''; MK.catalog[i].teacherRate = 0;
-        break;
-      }
-    }
-    if (Array.isArray(S.items)){
-      for (var si = 0; si < S.items.length; si++){
-        if (S.items[si].id === MK.modal.catalogId){
-          S.items[si].teacher = ''; S.items[si].teacherRate = 0;
-          break;
-        }
-      }
-    }
-    closeMarkAssign();
-    renderMarkPage();
-    showToast('✅ Очищено', 'ok');
-    scheduleMarkAutoExport();
-  } catch(e){
-    btn.disabled = false; btn.textContent = orig;
-    _maErr('Помилка: ' + (e && e.message || e));
-  }
-}
-
-// Close-on-overlay та Esc — для нової модалки
-document.addEventListener('click', function(e){
-  var t = e.target;
-  if (t && t.getAttribute && t.getAttribute('data-close-mark') === '1') closeMarkAssign();
-});
-document.addEventListener('keydown', function(e){
-  if (e.key === 'Escape' && MK.modal) closeMarkAssign();
-});
-
 // ── BOOTSTRAP ───────────────────────────────
 (async function bootstrap(){
   var sessUser = readSession();
@@ -4593,12 +3660,11 @@ document.addEventListener('keydown', function(e){
   }
   await loadCatalog(false);
 
-  // Вихователь бачить лише новий tab "Відмічання" — ховаємо решту.
+  // Вихователь бачить лише вкладку Відвідуваність — ховаємо Каталог/Аналітику.
   if (String(S.user.role || '').toLowerCase() === 'vyhovatel'){
-    ['mtCatalog','mtAttendance','mtAnalytics','mtExport'].forEach(function(id){
-      var el = $(id); if (el) el.classList.add('hidden');
-    });
-    switchMode('mark');
+    if ($('mtCatalog'))  $('mtCatalog').classList.add('hidden');
+    if ($('mtAnalytics')) $('mtAnalytics').classList.add('hidden');
+    switchMode('attendance');
   }
 })();
 </script>
