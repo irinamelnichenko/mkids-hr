@@ -379,11 +379,11 @@ select,input,textarea{font-family:inherit}
 .mark-h-date{padding:6px 10px;border:1px solid #d6d9dd;border-radius:6px;
   font-size:13px;background:#fff;font-family:inherit}
 
-/* Pickers (director/CFO): локація + група */
+/* Pickers (group + activity dropdowns) */
 .mark-pickers{background:#fff;border-radius:10px;padding:8px 12px;
-  margin-bottom:10px;display:flex;gap:8px;
+  margin-bottom:10px;display:flex;gap:8px;flex-wrap:wrap;
   box-shadow:0 1px 3px rgba(0,0,0,.05)}
-.mark-pickers select{flex:1;padding:7px 10px;border:1px solid #d6d9dd;
+.mark-pickers select{flex:1 1 calc(50% - 4px);padding:9px 10px;border:1px solid #d6d9dd;
   border-radius:6px;font-size:14px;background:#fff;font-family:inherit;min-width:0}
 
 /* Горизонтальні tabs занять */
@@ -674,12 +674,13 @@ select,input,textarea{font-family:inherit}
 
     <!-- v6.16: dropdowns для director/CFO (приховано для vyhovatel) -->
     <div id="markPickers" class="mark-pickers hidden">
-      <select id="mfLoc"   onchange="onMarkFilterChange('loc')"></select>
-      <select id="mfGroup" onchange="onMarkFilterChange('group')"></select>
+      <select id="mfLoc"      onchange="onMarkFilterChange('loc')"></select>
+      <select id="mfGroup"    onchange="onMarkFilterChange('group')"></select>
+      <select id="mfActivity" onchange="onMarkFilterChange('activity')"></select>
     </div>
 
-    <!-- v6.16: горизонтальні tabs занять -->
-    <div id="markActTabs" class="mark-act-tabs"></div>
+    <!-- v6.17: tabs прибрали — заняття тепер у dropdown вище -->
+    <div id="markActTabs" class="mark-act-tabs hidden"></div>
 
     <!-- v6.16: розширена картка викладача -->
     <div id="markCard" class="mark-teacher-card hidden"></div>
@@ -3823,12 +3824,15 @@ async function initMarkTab(){
 // v6.16: повертає унікальні групи (з постфіксом виховательки) для локації
 function _mkGroupsForLoc(loc){
   if (!loc) return [];
+  // v6.17: нормалізуємо для матчингу (lowercase, прибираємо подвійні пробіли і NBSP)
+  function _norm(s){ return String(s||'').replace(/[\s\u00A0]+/g,' ').trim().toLowerCase(); }
+  var normLoc = _norm(loc);
   var counts = {};
   (MK.children || []).forEach(function(k){
-    var kLoc = String(k['Локація'] || '').trim();
-    var kGrp = String(k['Група']   || '').trim();
+    var kLoc = _norm(k['Локація']);
+    var kGrp = String(k['Група'] || '').trim();
     if (!kGrp) return;
-    if (kLoc !== loc) return;
+    if (kLoc !== normLoc) return;
     counts[kGrp] = (counts[kGrp] || 0) + 1;
   });
   return Object.keys(counts).sort(function(a,b){ return a.localeCompare(b,'uk'); })
@@ -3857,58 +3861,55 @@ function renderMarkHeader(){
   if (grpEl) grpEl.textContent = MK.group || '—';
 }
 
-// v6.16: pickers для director/CFO (приховано для vyhovatel)
+// v6.17: pickers — group + activity dropdowns ВСІМ. Loc прихована (керується верхом).
 function renderMarkPickers(){
   var pickers = $('markPickers');
   if (!pickers) return;
-  var isVyhovatel = S.user && S.user.role === 'vyhovatel';
-  if (isVyhovatel){
-    pickers.classList.add('hidden');
-    return;
-  }
-  // Для CFO/director — показуємо лише group dropdown
-  // (локація вже керується верхнім глобальним селектором)
   pickers.classList.remove('hidden');
 
-  // Loc select — приховуємо (CFO/director використовують глобальний верхній)
+  // Loc select — завжди приховуємо (керується глобальним верхнім селектором)
   var locSel = $('mfLoc');
   if (locSel) locSel.style.display = 'none';
 
-  // Group select — реальні групи з постфіксом
+  // Group select — реальні групи з постфіксом + counter
   var grpSel = $('mfGroup');
-  if (!grpSel) return;
-  var groups = _mkGroupsForLoc(MK.loc);
-  if (!groups.length){
-    grpSel.innerHTML = '<option value="">👥 Немає груп у «' + escapeHtml(MK.loc || '—') + '»</option>';
-    grpSel.value = '';
-  } else {
-    grpSel.innerHTML = groups.map(function(g){
-      return '<option value="' + escapeHtml(g.name) + '">👥 ' + escapeHtml(g.name) + ' (' + g.count + ')</option>';
-    }).join('');
-    grpSel.value = MK.group;
+  if (grpSel){
+    var groups = _mkGroupsForLoc(MK.loc);
+    if (!groups.length){
+      grpSel.innerHTML = '<option value="">👥 Немає груп у «' + escapeHtml(MK.loc || '—') + '»</option>';
+      grpSel.value = '';
+    } else {
+      grpSel.innerHTML = groups.map(function(g){
+        return '<option value="' + escapeHtml(g.name) + '">👥 ' + escapeHtml(g.name) + ' (' + g.count + ')</option>';
+      }).join('');
+      grpSel.value = MK.group;
+    }
   }
+  // Activity select заповнюється у renderMarkActivityTabs
 }
 
-// v6.16: горизонтальні tabs занять
+// v6.17: заняття — DROPDOWN (замість tabs, які важко скролити на мобільному)
 function renderMarkActivityTabs(){
-  var wrap = $('markActTabs');
-  if (!wrap) return;
+  var sel = $('mfActivity');
+  if (!sel) return;
   var acts = _mkActivitiesForLoc(MK.loc);
   if (!acts.length){
-    wrap.innerHTML = '<div style="color:var(--gray);font-size:13px;padding:8px 4px">' +
-      'Немає занять у локації «' + escapeHtml(MK.loc || '') + '».</div>';
+    sel.innerHTML = '<option value="0">🧩 Немає занять у «' + escapeHtml(MK.loc || '—') + '»</option>';
+    sel.value = '0';
+    MK.activityId = 0;
     return;
   }
-  wrap.innerHTML = acts.map(function(a){
+  sel.innerHTML = acts.map(function(a){
     var emoji = _mkActEmoji(a.name);
     var price = Number(a.teacherRate) || 0;
-    var isActive = a.id === MK.activityId;
-    return '<button class="mark-act-tab' + (isActive ? ' active' : '') + '" ' +
-      'type="button" onclick="onMarkActivityTabClick(' + a.id + ')">' +
-      emoji + ' ' + escapeHtml(a.name) +
-      (price ? '<span class="mark-act-tab-price">' + price + '₴</span>' : '') +
-      '</button>';
+    var priceStr = price ? ' · ' + price + '₴' : '';
+    return '<option value="' + a.id + '">' + emoji + ' ' + escapeHtml(a.name) + priceStr + '</option>';
   }).join('');
+  // якщо поточне заняття не в списку — беремо перше
+  if (!acts.find(function(a){ return a.id === MK.activityId; })){
+    MK.activityId = acts[0].id;
+  }
+  sel.value = String(MK.activityId);
 }
 
 // v6.16: emoji для відомих занять
@@ -3955,6 +3956,9 @@ function onMarkFilterChange(which){
   if (which === 'group'){
     MK.group = $('mfGroup').value;
     renderMarkHeader();
+  }
+  if (which === 'activity'){
+    MK.activityId = Number($('mfActivity').value) || 0;
   }
   if (which === 'date')  MK.date  = $('mfDate').value;
   refreshMarkAttendance().then(renderMarkPage);
@@ -4029,9 +4033,11 @@ function renderMarkPage(){
   $('markCard').classList.remove('hidden');
   $('markCard').innerHTML = renderMarkTeacherCard(cat);
 
-  // Children filtered (точна назва групи з постфіксом)
+  // Children filtered (точна назва групи з постфіксом, нормалізована локація)
+  function _normLoc(s){ return String(s||'').replace(/[\s\u00A0]+/g,' ').trim().toLowerCase(); }
+  var normMkLoc = _normLoc(MK.loc);
   var groupKids = MK.children.filter(function(k){
-    return String(k['Локація'] || '').trim() === MK.loc &&
+    return _normLoc(k['Локація']) === normMkLoc &&
            String(k['Група']  || '').trim()  === MK.group;
   });
   groupKids.sort(function(a, b){
