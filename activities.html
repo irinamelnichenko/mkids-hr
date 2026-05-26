@@ -459,6 +459,9 @@ select,input,textarea{font-family:inherit}
 .att-tbox-account-stub{font-size:11px;color:var(--gray2);font-style:italic;
   margin-top:6px}
 
+/* ── v6.22: header картки викладача — тільки edit-btn справа ── */
+.att-tbox-header{display:flex;justify-content:flex-end;margin-bottom:8px}
+
 /* ── v6.21: edit-btn у заголовку картки викладача ── */
 .att-tbox-edit-btn{margin-left:auto;padding:6px 12px;border:1.5px solid var(--blue);
   background:#fff;color:var(--blue);border-radius:8px;font-size:12px;
@@ -472,6 +475,87 @@ select,input,textarea{font-family:inherit}
 .att-tbox-info-row .lbl{color:var(--gray);font-weight:600}
 .att-tbox-info-row .val{font-weight:700;color:var(--dark)}
 .att-tbox-info-row .val.muted{color:var(--gray2);font-weight:500}
+
+/* ════════ v6.22: швидкість відмічання + 2-колонковий layout ════════ */
+
+/* h3-заголовок усередині #attendanceMode (не CTA-кнопка) */
+.att-page-title{font-size:18px;font-weight:800;margin:0 0 12px;color:var(--dark);
+  display:flex;align-items:center;gap:8px}
+
+/* Date chips */
+.att-date-chips{display:flex;gap:6px;flex-wrap:wrap;width:100%;margin-bottom:4px}
+.att-date-chip{padding:7px 14px;border:1.5px solid var(--gray2);background:#fff;
+  border-radius:16px;font-size:13px;font-weight:600;color:var(--dark2);
+  cursor:pointer;font-family:inherit;min-height:36px;transition:all .12s}
+.att-date-chip:hover{border-color:var(--green);color:var(--green)}
+.att-date-chip.active{background:var(--green);color:#fff;border-color:var(--green)}
+
+/* Counter — окремий рядок на mobile (показується через media) */
+.att-counter-mobile{display:none}
+
+/* Bulk actions */
+.att-bulk-actions{display:flex;gap:8px;margin:12px 0;flex-wrap:wrap}
+.att-bulk-btn{flex:1;min-width:140px;padding:10px 14px;
+  border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;
+  font-family:inherit;display:inline-flex;align-items:center;justify-content:center;
+  gap:6px;min-height:44px;transition:all .12s}
+.att-bulk-mark{background:#fff;color:var(--green);border:1.5px solid var(--green)}
+.att-bulk-mark:hover:not(:disabled){background:var(--green);color:#fff}
+.att-bulk-clear{background:#fff;color:#b91c1c;border:1.5px solid #fca5a5}
+.att-bulk-clear:hover:not(:disabled){background:#fdf2f2}
+.att-bulk-btn:disabled{opacity:.55;cursor:not-allowed}
+.bulk-spinner{display:inline-block;width:14px;height:14px;border:2px solid currentColor;
+  border-top-color:transparent;border-radius:50%;animation:bulkSpin .8s linear infinite}
+.bulk-spinner.hidden{display:none}
+@keyframes bulkSpin{to{transform:rotate(360deg)}}
+
+/* Sync status indicator біля кожної дитини */
+.att-sync{display:inline-flex;align-items:center;justify-content:center;
+  width:22px;height:22px;flex-shrink:0;font-size:14px;font-weight:700;
+  order:1.5;transition:opacity .2s}
+.att-sync:empty{visibility:hidden}
+.att-sync.pending{color:#b7791f;animation:syncPulse 1s ease-in-out infinite}
+.att-sync.ok{color:var(--green)}
+.att-sync.queued{color:#b7791f}
+.att-sync.err{color:#b91c1c}
+@keyframes syncPulse{0%,100%{opacity:.4}50%{opacity:1}}
+
+/* :active flash на рядку дитини */
+.att-list-row{transition:background .12s}
+.att-list-row:active{background:#c8f0d4 !important}
+
+/* DESKTOP 2-колонковий layout */
+.att-grid{display:block}
+@media(min-width:900px){
+  .att-grid{display:grid;grid-template-columns:minmax(320px, 40%) 1fr;
+    gap:16px;align-items:start}
+  .att-col-left{position:sticky;top:10px;align-self:start;
+    max-height:calc(100vh - 20px);overflow-y:auto;padding-right:4px}
+  .att-col-right{min-width:0}
+  /* На desktop counter inline в фільтрах, не окремим рядком */
+  .att-counter-mobile{display:none !important}
+  /* Відмінити mobile sticky (з блоку @max-width:768px) */
+  #attendanceMode .att-filters{position:static !important;
+    border-radius:var(--r);margin:0 0 12px;padding:14px 18px;
+    box-shadow:var(--sh);gap:10px}
+  #attendanceMode .att-filters label{display:block;font-size:11px}
+  #attendanceMode .att-tbox{position:static !important;border-radius:var(--r);
+    margin:0 0 12px;padding:14px 18px}
+}
+
+/* MOBILE — counter окремим рядком ПІД фільтрами */
+@media(max-width:899px){
+  .att-counter-mobile{display:block;padding:7px 12px;background:#e8f8f0;
+    color:var(--green);border-radius:8px;font-size:12px;font-weight:700;
+    margin:-4px 0 10px;text-align:center}
+  /* Великий attCounter в .att-filters — приховуємо на mobile (mirror в attCounterMobile) */
+  #attendanceMode .att-counter{display:none}
+}
+
+/* Дуже вузький екран — chips wrap на 2 рядки */
+@media(max-width:360px){
+  .att-date-chip{flex:1;min-width:0;padding:7px 8px;font-size:12px}
+}
 
 </style>
 </head>
@@ -665,40 +749,69 @@ select,input,textarea{font-family:inherit}
     </div>
   </div>
 
-  <!-- ── ETAP 2: ВІДВІДУВАНІСТЬ ── -->
+  <!-- ── ETAP 2: ВІДВІДУВАНІСТЬ (v6.22: 2-колонковий лейаут на desktop) ── -->
   <div id="attendanceMode" class="hidden">
-    <div class="att-filters">
-      <div class="att-fg">
-        <label>📅 Дата</label>
-        <input type="date" id="attDate">
-      </div>
-      <div class="att-fg">
-        <label>👶 Група</label>
-        <select id="attGroupSel"><option value="">— оберіть —</option></select>
-      </div>
-      <div class="att-fg">
-        <label>🧩 Заняття</label>
-        <select id="attActivitySel"><option value="">— оберіть —</option></select>
-      </div>
-      <div class="att-counter" id="attCounter">—</div>
-    </div>
+    <h3 class="att-page-title">📝 Відвідуваність</h3>
 
-    <div id="attHint" class="att-hint hidden"></div>
+    <div class="att-grid">
+      <div class="att-col-left">
+        <div class="att-filters">
+          <!-- v6.22: chips для швидкого вибору дати -->
+          <div class="att-date-chips" id="attDateChips">
+            <button type="button" class="att-date-chip active" data-mode="today">Сьогодні</button>
+            <button type="button" class="att-date-chip" data-mode="yesterday">Вчора</button>
+            <button type="button" class="att-date-chip" data-mode="calendar">📅 Календар ▾</button>
+          </div>
+          <div class="att-fg att-fg-date hidden">
+            <label>📅 Дата</label>
+            <input type="date" id="attDate">
+          </div>
+          <div class="att-fg">
+            <label>👶 Група</label>
+            <select id="attGroupSel"><option value="">— оберіть —</option></select>
+          </div>
+          <div class="att-fg">
+            <label>🧩 Заняття</label>
+            <select id="attActivitySel"><option value="">— оберіть —</option></select>
+          </div>
+          <div class="att-counter" id="attCounter">—</div>
+        </div>
 
-    <!-- v6.20: вбудована картка викладача (під фільтрами) -->
-    <div id="attTeacherBox" class="att-tbox hidden"></div>
+        <!-- v6.22: окремий лічильник на mobile -->
+        <div class="att-counter-mobile" id="attCounterMobile">—</div>
 
-    <!-- v6.20: плоский список дітей (один чекбокс на дитину для обраного заняття) -->
-    <div id="attList" class="att-list hidden"></div>
+        <!-- v6.20: вбудована картка викладача -->
+        <div id="attTeacherBox" class="att-tbox hidden"></div>
 
-    <div id="attSummary" class="att-summary hidden">
-      <div class="att-sum-card">
-        <div class="att-sum-hd">📊 Зведення за дитину</div>
-        <div class="att-sum-body" id="attSumByChild"></div>
+        <!-- v6.22: швидкі bulk-кнопки -->
+        <div class="att-bulk-actions hidden" id="attBulkActions">
+          <button type="button" class="att-bulk-btn att-bulk-mark" id="attBulkMarkBtn">
+            <span class="bulk-spinner hidden"></span>
+            <span class="bulk-label">✅ Відмітити всіх</span>
+          </button>
+          <button type="button" class="att-bulk-btn att-bulk-clear" id="attBulkClearBtn">
+            <span class="bulk-spinner hidden"></span>
+            <span class="bulk-label">❌ Очистити</span>
+          </button>
+        </div>
       </div>
-      <div class="att-sum-card">
-        <div class="att-sum-hd">💰 Зведення за заняття</div>
-        <div class="att-sum-body" id="attSumByAct"></div>
+
+      <div class="att-col-right">
+        <div id="attHint" class="att-hint hidden"></div>
+
+        <!-- v6.20: плоский список дітей -->
+        <div id="attList" class="att-list hidden"></div>
+
+        <div id="attSummary" class="att-summary hidden">
+          <div class="att-sum-card">
+            <div class="att-sum-hd">📊 Зведення за дитину</div>
+            <div class="att-sum-body" id="attSumByChild"></div>
+          </div>
+          <div class="att-sum-card">
+            <div class="att-sum-hd">💰 Зведення за заняття</div>
+            <div class="att-sum-body" id="attSumByAct"></div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -2099,6 +2212,7 @@ function switchMode(m){
 var ATT = {
   initialized: false,
   date: '',        // YYYY-MM-DD
+  dateMode: 'today',  // v6.22: 'today' | 'yesterday' | 'calendar'
   group: '',
   activity: 0,     // v6.20: id обраного заняття (одне на сторінку)
   children: [],    // [{name, group}] для вибраної loc
@@ -2107,7 +2221,9 @@ var ATT = {
   marks: [],       // [{id, child, activityId, ...}] для (date, loc, group)
   marksKey: '',    // composite key поточного фільтра
   marksLoadedAt: 0,
-  inFlight: {}     // {compositeKey: true} — блокуємо подвійні toggle
+  inFlight: {},    // {compositeKey: true} — блокуємо подвійні toggle
+  syncStatus: {},  // v6.22: {child|actId: {state:'pending'|'ok'|'queued'|'err', ts}}
+  bulkRunning: false  // v6.22: lock для bulk-операцій
 };
 var ATT_ACTIVITY_LS_KEY = 'mkids_att_activity';
 var ATT_CHILDREN_TTL = 60 * 1000;
@@ -2144,19 +2260,81 @@ async function initAttendanceTab(){
 
   // Event handlers
   $('attDate').addEventListener('change', function(){
-    ATT.date = this.value; renderAttendanceBoard();
+    ATT.date = this.value;
+    // v6.22: ручна зміна дати = "calendar" mode (chips перерендерить setDateChip)
+    _setDateChipActive('calendar');
+    ATT.syncStatus = {};
+    renderAttendanceBoard();
   });
   $('attGroupSel').addEventListener('change', function(){
-    ATT.group = this.value; renderAttendanceBoard();
+    ATT.group = this.value;
+    ATT.syncStatus = {};
+    renderAttendanceBoard();
   });
   $('attActivitySel').addEventListener('change', function(){
     ATT.activity = Number(this.value) || 0;
     try { localStorage.setItem(ATT_ACTIVITY_LS_KEY, String(ATT.activity)); } catch(e){}
+    ATT.syncStatus = {};
     renderAttList();
     renderAttTeacherBox();
   });
 
+  // v6.22: chips для швидкого вибору дати
+  $('attDateChips').addEventListener('click', function(e){
+    var btn = e.target.closest && e.target.closest('.att-date-chip');
+    if (!btn) return;
+    setDateChip(btn.dataset.mode || 'today');
+  });
+
+  // v6.22: bulk-кнопки
+  $('attBulkMarkBtn').addEventListener('click', bulkMarkAll);
+  $('attBulkClearBtn').addEventListener('click', bulkClearAll);
+
   renderAttendanceBoard();
+}
+
+// v6.22: установка дати з chip і одразу запуск рендеру
+function setDateChip(mode){
+  var today = _todayISO();
+  if (mode === 'today'){
+    ATT.date = today;
+    $('attDate').value = today;
+    $('.att-fg-date'); // no-op
+    document.querySelector('.att-fg-date').classList.add('hidden');
+  } else if (mode === 'yesterday'){
+    var d = new Date(today + 'T00:00:00');
+    d.setDate(d.getDate() - 1);
+    var iso = d.getFullYear() + '-' +
+              String(d.getMonth() + 1).padStart(2, '0') + '-' +
+              String(d.getDate()).padStart(2, '0');
+    ATT.date = iso;
+    $('attDate').value = iso;
+    document.querySelector('.att-fg-date').classList.add('hidden');
+  } else if (mode === 'calendar'){
+    document.querySelector('.att-fg-date').classList.remove('hidden');
+  }
+  _setDateChipActive(mode);
+  if (mode !== 'calendar'){
+    ATT.syncStatus = {};
+    renderAttendanceBoard();
+  }
+}
+
+// Підсвітка активного chip (без рендеру)
+function _setDateChipActive(mode){
+  ATT.dateMode = mode;
+  var chips = document.querySelectorAll('.att-date-chip');
+  for (var i = 0; i < chips.length; i++){
+    chips[i].classList.toggle('active', chips[i].dataset.mode === mode);
+  }
+}
+
+// v6.22: helper що оновлює і desktop-counter, і mobile-counter одночасно
+function _setAttCounter(text){
+  var d = $('attCounter');
+  var m = $('attCounterMobile');
+  if (d) d.textContent = text;
+  if (m) m.textContent = text;
 }
 
 // ── Children з листа Оплати ─────────────────
@@ -2330,7 +2508,7 @@ async function renderAttendanceBoard(){
 
   // Counter для верхньої панелі
   var todayCount = ATT.marks.length;
-  $('attCounter').textContent = todayCount + ' відміток за ' + _ddmm(ATT.date) + ' · ' + ATT.group;
+  _setAttCounter(todayCount + ' відміток за ' + _ddmm(ATT.date) + ' · ' + ATT.group);
 
   var acts = _activitiesForLoc(S.activeLoc);
 
@@ -2391,8 +2569,10 @@ function _markFor(child, activityId){
 // v6.20: плоский список дітей з одним чекбоксом (для обраного ATT.activity)
 function renderAttList(){
   var listEl = $('attList');
+  var bulkEl = $('attBulkActions');
   if (!ATT.activity){
     listEl.classList.add('hidden');
+    if (bulkEl) bulkEl.classList.add('hidden');
     return;
   }
   var acts = _activitiesForLoc(S.activeLoc);
@@ -2402,11 +2582,13 @@ function renderAttList(){
   }
   if (!act){
     listEl.classList.add('hidden');
+    if (bulkEl) bulkEl.classList.add('hidden');
     return;
   }
   if (!ATT.children.length){
     listEl.innerHTML = '<div class="att-list-empty">У групі «' + escapeHtml(ATT.group) + '» немає дітей.</div>';
     listEl.classList.remove('hidden');
+    if (bulkEl) bulkEl.classList.add('hidden');
     return;
   }
   var canEdit = hasPerm('attendance-edit');
@@ -2414,6 +2596,11 @@ function renderAttList(){
   ATT.children.forEach(function(child){
     var mark = _markFor(child, act.id);
     var on = !!mark;
+    // v6.22: sync icon з ATT.syncStatus
+    var syncKey = child + '|' + act.id;
+    var sync = ATT.syncStatus[syncKey];
+    var syncCls = sync ? (' ' + sync.state) : '';
+    var syncIco = _syncStateIcon(sync && sync.state);
     html += '<div class="att-list-row">' +
       '<button class="att-cell' + (on ? ' on' : '') + '"' +
         (canEdit ? '' : ' disabled') +
@@ -2425,10 +2612,16 @@ function renderAttList(){
         (on ? '✅' : '⬜') +
       '</button>' +
       '<span class="att-name">' + escapeHtml(child) + '</span>' +
+      '<span class="att-sync' + syncCls + '" data-sync-key="' + escapeHtml(syncKey) + '">' + syncIco + '</span>' +
     '</div>';
   });
   listEl.innerHTML = html;
   listEl.classList.remove('hidden');
+  // v6.22: показати bulk-кнопки лише якщо є права на редагування
+  if (bulkEl){
+    if (canEdit) bulkEl.classList.remove('hidden');
+    else         bulkEl.classList.add('hidden');
+  }
   // v6.21: tap по всьому рядку = toggle (не тільки по чекбоксу)
   listEl.onclick = function(e){
     var row = e.target.closest && e.target.closest('.att-list-row');
@@ -2437,6 +2630,136 @@ function renderAttList(){
     if (!btn || btn.disabled) return;
     toggleAttendance(btn);
   };
+}
+
+// v6.22: рендер іконки sync за станом
+function _syncStateIcon(state){
+  if (state === 'pending') return '⏳';
+  if (state === 'ok')      return '✓';
+  if (state === 'queued')  return '⚠';
+  if (state === 'err')     return '❌';
+  return '';
+}
+
+// v6.22: оновити стан синхронізації для (child, actId) — DOM + ATT.syncStatus
+function _setSyncStatus(child, actId, state){
+  var key = child + '|' + actId;
+  if (state === null || state === undefined){
+    delete ATT.syncStatus[key];
+  } else {
+    ATT.syncStatus[key] = {state: state, ts: Date.now()};
+  }
+  _updateSyncIcon(key);
+  // ok auto-clear через 2с
+  if (state === 'ok'){
+    setTimeout(function(){
+      var cur = ATT.syncStatus[key];
+      if (cur && cur.state === 'ok'){
+        delete ATT.syncStatus[key];
+        _updateSyncIcon(key);
+      }
+    }, 2000);
+  }
+}
+
+// v6.22: точкове оновлення DOM-іконки sync (без ререндеру списку)
+function _updateSyncIcon(key){
+  var el = document.querySelector('.att-sync[data-sync-key="' + (window.CSS && CSS.escape ? CSS.escape(key) : key) + '"]');
+  if (!el) return;
+  el.classList.remove('pending','ok','queued','err');
+  var cur = ATT.syncStatus[key];
+  if (cur){
+    el.classList.add(cur.state);
+    el.textContent = _syncStateIcon(cur.state);
+  } else {
+    el.textContent = '';
+  }
+}
+
+// v6.22: BULK — відмітити всіх ще-не-відмічених
+async function bulkMarkAll(){
+  if (ATT.bulkRunning) return;
+  if (!ATT.activity){ showToast('Спочатку оберіть заняття', 'err'); return; }
+  if (!hasPerm('attendance-edit')){ showToast('🚫 Немає прав', 'err'); return; }
+  var unmarked = [];
+  ATT.children.forEach(function(child){
+    if (!_markFor(child, ATT.activity)) unmarked.push(child);
+  });
+  if (!unmarked.length){ showToast('Усі вже відмічені', 'info', 2000); return; }
+  await _runBulk('mark', unmarked);
+}
+
+// v6.22: BULK — очистити всі відмітки
+async function bulkClearAll(){
+  if (ATT.bulkRunning) return;
+  if (!ATT.activity){ showToast('Спочатку оберіть заняття', 'err'); return; }
+  if (!hasPerm('attendance-edit')){ showToast('🚫 Немає прав', 'err'); return; }
+  var marked = [];
+  ATT.children.forEach(function(child){
+    if (_markFor(child, ATT.activity)) marked.push(child);
+  });
+  if (!marked.length){ showToast('Немає відміток', 'info', 2000); return; }
+  if (!confirm('Скасувати всі ' + marked.length + ' відміток?')) return;
+  await _runBulk('clear', marked);
+}
+
+// v6.22: запуск bulk-операції з lock + spinner + 100мс throttle
+async function _runBulk(kind, children){
+  ATT.bulkRunning = true;
+  var markBtn  = $('attBulkMarkBtn');
+  var clearBtn = $('attBulkClearBtn');
+  markBtn.disabled  = true;
+  clearBtn.disabled = true;
+  var activeBtn = (kind === 'mark') ? markBtn : clearBtn;
+  activeBtn.querySelector('.bulk-spinner').classList.remove('hidden');
+
+  var total = children.length;
+  var initialErrors = _countSyncStateInChildren(children, 'err') + _countSyncStateInChildren(children, 'queued');
+  // успіх рахуємо порівнянням marks до/після
+  var marksBefore = ATT.marks.length;
+
+  for (var i = 0; i < children.length; i++){
+    var child = children[i];
+    var btn = $('attList').querySelector(
+      '.att-cell[data-child="' + (window.CSS && CSS.escape ? CSS.escape(child) : child) + '"]'
+    );
+    if (!btn || btn.disabled){ continue; }
+    // Викликаємо існуючий toggleAttendance — він сам оновить syncStatus
+    toggleAttendance(btn);
+    await new Promise(function(r){ setTimeout(r, 100); });
+  }
+
+  // Чекаємо щоб останні запити завершились (макс 5с)
+  var waitStart = Date.now();
+  while (Object.keys(ATT.inFlight).length && Date.now() - waitStart < 5000){
+    await new Promise(function(r){ setTimeout(r, 100); });
+  }
+
+  ATT.bulkRunning = false;
+  markBtn.disabled  = false;
+  clearBtn.disabled = false;
+  activeBtn.querySelector('.bulk-spinner').classList.add('hidden');
+
+  // Toast: рахуємо успішні (зміна кількості marks у потрібному напрямку)
+  var marksAfter = ATT.marks.length;
+  var diff = (kind === 'mark') ? (marksAfter - marksBefore) : (marksBefore - marksAfter);
+  if (diff < 0) diff = 0;
+  if (kind === 'mark'){
+    if (diff === total) showToast('✅ Відмічено всіх ' + total, 'ok', 3000);
+    else                showToast('✅ Відмічено ' + diff + ' з ' + total, diff ? 'ok' : 'err', 4000);
+  } else {
+    if (diff === total) showToast('🧹 Скасовано ' + total + ' відміток', 'ok', 3000);
+    else                showToast('🧹 Скасовано ' + diff + ' з ' + total, diff ? 'ok' : 'err', 4000);
+  }
+}
+
+function _countSyncStateInChildren(children, state){
+  var n = 0;
+  for (var i = 0; i < children.length; i++){
+    var k = children[i] + '|' + ATT.activity;
+    if (ATT.syncStatus[k] && ATT.syncStatus[k].state === state) n++;
+  }
+  return n;
 }
 
 // v6.20: вбудована картка викладача для обраного ATT.activity
@@ -2477,8 +2800,8 @@ function _renderAttTeacherInner(cat){
       ? '<button class="att-tbox-assign-btn" type="button" onclick="openAttAssignTeacher(' +
           cat.id + ')">✏ Призначити викладача</button>'
       : '';
-    return '<div class="att-tbox-title">🧩 ' + escapeHtml(cat.name) + ' · ' + escapeHtml(loc) + '</div>' +
-      '<div class="att-tbox-warn">' + msg + btn + '</div>';
+    // v6.22: заголовок "🧩 Назва · Локація" прибрано — дублює dropdown
+    return '<div class="att-tbox-warn">' + msg + btn + '</div>';
   }
 
   // Картка з даними
@@ -2519,8 +2842,12 @@ function _renderAttTeacherInner(cat){
       '<button type="button" disabled' + (payType === 'Безготівка' ? ' class="active"' : '') + '>Безготівка</button>' +
     '</div>';
 
-  return '<div class="att-tbox-title">🧩 ' + escapeHtml(cat.name) + ' · ' + escapeHtml(loc) +
-      editBtn + '</div>' +
+  // v6.22: заголовок "🧩 Назва · Локація" прибрано — дублює dropdown.
+  // Кнопка "✏ Редагувати" перенесена у власний рядок праворуч.
+  var headerHtml = editBtn
+    ? '<div class="att-tbox-header">' + editBtn + '</div>'
+    : '';
+  return headerHtml +
     '<div class="att-tbox-row"><span class="lbl">Викладач:</span> <strong>' +
       escapeHtml(fullName) + '</strong></div>' +
     '<div class="att-tbox-row"><span class="lbl">📞</span> ' + phoneHtml + '</div>' +
@@ -2561,6 +2888,8 @@ async function toggleAttendance(btn){
   ATT.inFlight[key] = true;
 
   var existing = _markFor(child, actId);
+  // v6.22: sync indicator → pending
+  _setSyncStatus(child, actId, 'pending');
   // Optimistic UI
   btn.disabled = true;
   if (existing){
@@ -2578,12 +2907,19 @@ async function toggleAttendance(btn){
     if (res.ok || res.localOnly){
       ATT.marks = ATT.marks.filter(function(m){ return m.id !== existing.id; });
       _saveMarksCache();
-      showToast(res.localOnly ? '💾 Знято локально' : '✓ Знято', res.localOnly ? 'info' : 'ok', 2200);
+      // v6.22: при bulk-операції тости не спамимо — лише individual
+      if (!ATT.bulkRunning){
+        showToast(res.localOnly ? '💾 Знято локально' : '✓ Знято', res.localOnly ? 'info' : 'ok', 2200);
+      }
+      _setSyncStatus(child, actId, res.localOnly ? 'queued' : 'ok');
     } else {
       // Revert
       btn.classList.add('on');
       btn.firstChild.nodeValue = '✅';
-      showToast('❌ ' + (res.error || 'Не вдалось зняти'), 'err');
+      if (!ATT.bulkRunning){
+        showToast('❌ ' + (res.error || 'Не вдалось зняти'), 'err');
+      }
+      _setSyncStatus(child, actId, 'err');
     }
   } else {
     var markerName = _markerLabel();
@@ -2603,17 +2939,23 @@ async function toggleAttendance(btn){
         price: price, markedBy: markerName, markedAt: new Date().toISOString()
       });
       _saveMarksCache();
-      showToast(res2.localOnly ? '💾 Відмічено локально' : '✓ Збережено', res2.localOnly ? 'info' : 'ok', 2200);
+      if (!ATT.bulkRunning){
+        showToast(res2.localOnly ? '💾 Відмічено локально' : '✓ Збережено', res2.localOnly ? 'info' : 'ok', 2200);
+      }
+      _setSyncStatus(child, actId, res2.localOnly ? 'queued' : 'ok');
     } else {
       // Revert
       btn.classList.remove('on');
       btn.firstChild.nodeValue = '⬜';
-      showToast('❌ ' + (res2.error || 'Не вдалось зберегти'), 'err');
+      if (!ATT.bulkRunning){
+        showToast('❌ ' + (res2.error || 'Не вдалось зберегти'), 'err');
+      }
+      _setSyncStatus(child, actId, 'err');
     }
   }
 
   // Перерахувати лічильник + summary
-  $('attCounter').textContent = ATT.marks.length + ' відміток за ' + _ddmm(ATT.date) + ' · ' + ATT.group;
+  _setAttCounter(ATT.marks.length + ' відміток за ' + _ddmm(ATT.date) + ' · ' + ATT.group);
   renderSummary(_activitiesForLoc(S.activeLoc));
 
   btn.disabled = false;
