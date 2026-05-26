@@ -1548,7 +1548,13 @@ async function safePost(action, payload, attempt){
     });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     var json = await r.json();
-    if (!json.ok) throw new Error(json.error || 'Backend rejected');
+    // v6.18: application errors (validation/perm/not_found) — НЕ retry, НЕ queue.
+    // Caller сам інтерпретує (наприклад NOT_FOUND для вже-видаленого).
+    if (!json.ok) return json;
+    // Success: opportunistically розгрібаємо чергу (без чекання online event).
+    if (navigator.onLine && typeof replayOfflineQueue === 'function'){
+      setTimeout(replayOfflineQueue, 100);
+    }
     return json;
   } catch(e){
     if (attempt < 2){
@@ -1566,6 +1572,7 @@ async function safePost(action, payload, attempt){
 
 function _queueOffline(action, payload){
   try {
+    console.warn('[pwa] safePost → offline queue:', action, payload);
     var q = JSON.parse(localStorage.getItem('mkids_offline_queue') || '[]');
     q.push({action: action, payload: payload, ts: Date.now()});
     if (q.length > 200) q = q.slice(-200);
@@ -3745,6 +3752,10 @@ function mkMkEmpKey(last, first, wdayOrHired){
 }
 
 async function initMarkTab(){
+  // v6.18: розгрібаємо чергу при відкритті табу (раптом залишилось з попередніх клацань)
+  if (navigator.onLine && typeof replayOfflineQueue === 'function'){
+    setTimeout(replayOfflineQueue, 100);
+  }
   // Завантажуємо catalog (вже є S.items, з реюзу), HR, дітей.
   if (!S.items || !S.items.length){
     try { await loadCatalog(false); } catch(e){}
@@ -4194,8 +4205,9 @@ function onMarkCheckboxToggle(childName){
   if (existing){
     safePost('removeAttendanceMark', {id: existing.id}).then(function(res){
       delete MK.savingCells[key];
-      if (res && res.ok){
+      if (res && (res.ok || res.localOnly)){
         MK.marks = MK.marks.filter(function(m){ return m.id !== existing.id; });
+        if (res.localOnly) showToast('💾 Видалено локально', 'info', 2500);
       } else if (res && /not.*found|відмітку не знайдено/i.test(res.error || '')){
         MK.marks = MK.marks.filter(function(m){ return m.id !== existing.id; });
       } else {
@@ -4216,14 +4228,17 @@ function onMarkCheckboxToggle(childName){
       markedBy:     (S.user && S.user.name) || ''
     }}).then(function(res){
       delete MK.savingCells[key];
-      if (res && res.ok){
-        // IDEMPOTENT upsert
-        MK.marks = MK.marks.filter(function(m){ return m.id !== res.id; });
+      if (res && (res.ok || res.localOnly)){
+        // IDEMPOTENT upsert. Local-only зберігаємо з тимчасовим id — після
+        // replay сервер створить рядок з реальним id (видно при reload).
+        var newId = res.id || ('local-' + Date.now() + '-' + Math.random().toString(36).slice(2,7));
+        MK.marks = MK.marks.filter(function(m){ return m.id !== newId; });
         MK.marks.push({
-          id: res.id, date: MK.date, loc: MK.loc, group: MK.group,
+          id: newId, date: MK.date, loc: MK.loc, group: MK.group,
           child: childName, activityId: MK.activityId, activityName: cat.name,
           price: Number(cat.clientPrice) || 0
         });
+        if (res.localOnly) showToast('💾 Збережено локально — синхр. при підключенні', 'info', 3000);
         renderMarkPage();
         scheduleMarkAutoExport();
       } else {
