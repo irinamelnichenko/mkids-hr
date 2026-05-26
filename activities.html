@@ -117,24 +117,42 @@ select,input,textarea{font-family:inherit}
   margin-bottom:14px;overflow:hidden}
 .att-acts-hd{display:grid;align-items:end;gap:6px;padding:12px 18px 8px;
   border-bottom:2px solid #e8ecf0;background:#f8fafc}
-.att-act-h{font-size:11px;font-weight:700;color:var(--gray);
-  text-transform:uppercase;letter-spacing:.4px;text-align:center;
-  padding:2px;line-height:1.2;word-break:break-word}
-.att-act-clickable{cursor:pointer;border-radius:4px;transition:background .12s}
-.att-act-clickable:hover{background:#eaf5ff;color:var(--blue)}
-/* v6.19: Teacher Card */
-.att-tc-loading{padding:20px;text-align:center;color:var(--gray);font-size:13px}
-.att-tc-row{padding:8px 0;display:flex;align-items:center;gap:8px;font-size:14px;
-  color:var(--dark2);border-bottom:1px solid #f0f4f8}
-.att-tc-row:last-child{border-bottom:none}
-.att-tc-row .lbl{font-size:12px;color:var(--gray);font-weight:600;min-width:80px}
-.att-tc-row a{color:var(--blue);text-decoration:none;font-weight:600}
-.att-tc-row a:hover{text-decoration:underline}
-.att-tc-warn{color:var(--red);font-weight:600}
-.att-tc-section{margin-top:14px;padding-top:12px;border-top:1px dashed #e8ecf0}
-.att-tc-section-lbl{font-size:12px;font-weight:800;color:var(--dark2);
-  text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
-.att-tc-section-stub{font-size:13px;color:var(--gray2);font-style:italic}
+/* v6.20: Inline teacher card + flat list */
+.att-tbox{background:#fff;border-radius:var(--r);box-shadow:var(--sh);
+  padding:14px 18px;margin-bottom:14px}
+.att-tbox-title{font-size:14px;font-weight:800;color:var(--dark);
+  padding-bottom:8px;border-bottom:1px solid #eef1f4;margin-bottom:8px;
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.att-tbox-row{padding:6px 0;display:flex;align-items:center;gap:10px;
+  font-size:14px;color:var(--dark2)}
+.att-tbox-row .lbl{font-size:12px;color:var(--gray);font-weight:600;min-width:80px}
+.att-tbox-row a{color:var(--blue);text-decoration:none;font-weight:600}
+.att-tbox-row a:hover{text-decoration:underline}
+.att-tbox-warn{color:#874d00;background:#fff7e6;border:1px solid #ffd591;
+  border-radius:8px;padding:10px 14px;font-size:13px;font-weight:600;
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.att-tbox-assign-btn{padding:7px 14px;border:1.5px solid var(--green);
+  background:#fff;color:var(--green);border-radius:8px;font-size:13px;
+  font-weight:600;cursor:pointer;white-space:nowrap;font-family:inherit}
+.att-tbox-assign-btn:hover{background:var(--green);color:#fff}
+.att-tbox-section{margin-top:12px;padding-top:10px;border-top:1px dashed #e8ecf0}
+.att-tbox-section-lbl{font-size:11px;font-weight:800;color:var(--dark2);
+  text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
+.att-tbox-section-stub{font-size:12px;color:var(--gray2);font-style:italic}
+
+.att-list{background:#fff;border-radius:var(--r);box-shadow:var(--sh);
+  overflow:hidden;margin-bottom:14px}
+.att-list-empty{padding:30px 18px;text-align:center;color:var(--gray);font-size:14px}
+.att-list-row{display:flex;align-items:center;gap:14px;padding:10px 18px;
+  border-bottom:1px solid #f0f4f8;transition:background .12s;min-height:56px}
+.att-list-row:last-child{border-bottom:none}
+.att-list-row:hover{background:#fafbfc}
+/* Highlight row коли всередині є ✅ */
+.att-list-row:has(.att-cell.on){background:#eafaf0}
+.att-list-row:has(.att-cell.on):hover{background:#dbf2e3}
+.att-list-row .att-name{flex:1;font-size:15px;font-weight:600;color:var(--dark2);
+  white-space:normal;overflow:visible}
+.att-list-row .att-cell{width:44px;height:44px;flex-shrink:0;font-size:22px}
 .att-rows{display:flex;flex-direction:column}
 .att-row{display:grid;gap:6px;align-items:center;padding:8px 18px;
   border-bottom:1px solid #f0f4f8}
@@ -380,33 +398,31 @@ select,input,textarea{font-family:inherit}
   .pwa-offline.show{display:block}
 }
 
-/* ── v6.19: Mobile-зручна стара "Відвідуваність" (тільки CSS) ─────── */
+/* ── v6.20: Mobile-зручна "Відвідуваність" (list-mode + sticky фільтри + sticky teacher card) ─────── */
 @media(max-width:768px){
   /* Sticky фільтр-бар зверху */
   #attendanceMode .att-filters{position:sticky;top:0;z-index:50;
-    border-radius:0;margin:-14px -12px 10px;padding:10px 12px;
-    box-shadow:0 2px 6px rgba(0,0,0,.08);background:#fff}
-  #attendanceMode .att-fg label{font-size:10px}
+    border-radius:0;margin:-14px -12px 8px;padding:8px 10px;gap:6px;
+    box-shadow:0 2px 6px rgba(0,0,0,.08);background:#fff;
+    flex-wrap:nowrap;align-items:flex-end}
+  #attendanceMode .att-fg{min-width:0;flex:1}
+  #attendanceMode .att-fg label{font-size:10px;display:none}
   #attendanceMode .att-fg input,#attendanceMode .att-fg select{
-    font-size:15px;padding:8px 10px;min-width:0}
-  #attendanceMode .att-counter{font-size:11px;padding:6px 10px}
+    font-size:14px;padding:7px 8px;min-width:0;width:100%}
+  #attendanceMode .att-counter{display:none}
 
-  /* Великі чекбокси */
-  #attendanceMode .att-cell{min-width:44px;min-height:44px;font-size:20px}
+  /* Sticky teacher card нижче фільтрів */
+  #attendanceMode .att-tbox{position:sticky;top:54px;z-index:49;
+    border-radius:0;margin:-2px -12px 10px;padding:10px 14px}
+  .att-tbox-title{font-size:13px;padding-bottom:6px}
+  .att-tbox-row{font-size:13px;padding:4px 0;gap:6px}
+  .att-tbox-row .lbl{min-width:auto}
+  .att-tbox-section{margin-top:8px;padding-top:6px}
 
-  /* Читабельний шрифт */
-  #attendanceMode .att-name{font-size:14px;font-weight:600}
-  #attendanceMode .att-act-h{font-size:11px;font-weight:700;line-height:1.2}
-
-  /* Горизонтальний scroll матриці діти × заняття */
-  #attendanceMode .att-board{overflow-x:auto;-webkit-overflow-scrolling:touch}
-  #attendanceMode .att-acts-hd,
-  #attendanceMode .att-row{min-width:fit-content}
-  /* Перший стовпець (ім'я дитини / порожня клітинка заголовку) — sticky */
-  #attendanceMode .att-row > :first-child,
-  #attendanceMode .att-acts-hd > :first-child{position:sticky;left:0;
-    background:#fff;z-index:5;box-shadow:2px 0 4px rgba(0,0,0,.06)}
-  #attendanceMode .att-acts-hd > :first-child{background:#f8fafc}
+  /* Список дітей: великі рядки, чекбокс 44×44 */
+  #attendanceMode .att-list-row{padding:10px 14px;min-height:54px;gap:12px}
+  #attendanceMode .att-list-row .att-name{font-size:15px}
+  #attendanceMode .att-list-row .att-cell{width:44px;height:44px;font-size:22px}
 
   /* Summary картки вертикально */
   #attendanceMode .att-summary{grid-template-columns:1fr}
@@ -615,15 +631,20 @@ select,input,textarea{font-family:inherit}
         <label>👶 Група</label>
         <select id="attGroupSel"><option value="">— оберіть —</option></select>
       </div>
+      <div class="att-fg">
+        <label>🧩 Заняття</label>
+        <select id="attActivitySel"><option value="">— оберіть —</option></select>
+      </div>
       <div class="att-counter" id="attCounter">—</div>
     </div>
 
     <div id="attHint" class="att-hint hidden"></div>
 
-    <div id="attBoard" class="att-board hidden">
-      <div class="att-acts-hd" id="attActsHd"></div>
-      <div class="att-rows" id="attRows"></div>
-    </div>
+    <!-- v6.20: вбудована картка викладача (під фільтрами) -->
+    <div id="attTeacherBox" class="att-tbox hidden"></div>
+
+    <!-- v6.20: плоский список дітей (один чекбокс на дитину для обраного заняття) -->
+    <div id="attList" class="att-list hidden"></div>
 
     <div id="attSummary" class="att-summary hidden">
       <div class="att-sum-card">
@@ -796,22 +817,7 @@ select,input,textarea{font-family:inherit}
   </main>
 </div>
 
-<!-- ── v6.13: ASSIGN TEACHER MODAL (predmetnyky-style) ────────── -->
-
 <!-- ── ACTIVITY EDIT MODAL ────────────────────────────────────── -->
-<!-- ── v6.19: Teacher Card (popup on click on activity column header) ── -->
-<div id="attTeacherCard" class="modal hidden" aria-hidden="true">
-  <div class="modal-overlay" data-close-att-tc="1"></div>
-  <div class="modal-card">
-    <button class="modal-close" data-close-att-tc="1" aria-label="Закрити">✕</button>
-    <div class="modal-hd"><h3 id="attTcTitle">Картка викладача</h3></div>
-    <div class="modal-bd">
-      <div id="attTcBody">
-        <div class="att-tc-loading">Завантаження…</div>
-      </div>
-    </div>
-  </div>
-</div>
 
 <div id="actModal" class="modal hidden" aria-hidden="true">
   <div class="modal-overlay" data-close="1"></div>
@@ -1862,85 +1868,6 @@ function attFmtPhone(raw){
   return '+' + d.slice(0,3) + ' ' + d.slice(3,5) + ' ' +
          d.slice(5,8) + '-' + d.slice(8,10) + '-' + d.slice(10,12);
 }
-async function openAttTeacherCard(activityId){
-  var modal = $('attTeacherCard'); if (!modal) return;
-  // Знайти catalog item для (loc, activityId)
-  var loc = S.activeLoc;
-  var cat = null;
-  for (var i = 0; i < (S.items||[]).length; i++){
-    if (S.items[i].id === activityId && S.items[i].loc === loc){ cat = S.items[i]; break; }
-  }
-  if (!cat){
-    $('attTcTitle').textContent = 'Активність не знайдена';
-    $('attTcBody').innerHTML = '<div class="att-tc-warn">Заняття id=' + activityId + ' не в каталозі</div>';
-    modal.classList.remove('hidden');
-    return;
-  }
-  $('attTcTitle').textContent = cat.name + ' · ' + loc;
-  $('attTcBody').innerHTML = '<div class="att-tc-loading">Завантаження даних викладача…</div>';
-  modal.classList.remove('hidden');
-  await _attEnsureHr();
-  $('attTcBody').innerHTML = _renderAttTeacherCard(cat);
-}
-function _renderAttTeacherCard(cat){
-  var loc = cat.loc;
-  var teacherName = String(cat.teacher || '').trim();
-  var hr = teacherName ? _attFindHrByName(loc, teacherName) : null;
-
-  var nameHtml;
-  if (!teacherName){
-    nameHtml = '<div class="att-tc-row att-tc-warn">⚠️ Викладач не вказаний у каталозі</div>';
-  } else if (!hr){
-    nameHtml = '<div class="att-tc-row"><span class="lbl">Викладач:</span> <strong>' +
-      escapeHtml(teacherName) + '</strong></div>' +
-      '<div class="att-tc-row att-tc-warn">⚠️ Цього викладача нема в HR — додай у HR-лист</div>';
-  } else {
-    var phone = hr.phone || '';
-    var email = hr.email || '';
-    nameHtml = '<div class="att-tc-row"><span class="lbl">Викладач:</span> <strong>' +
-      escapeHtml((hr.last || '') + ' ' + (hr.first || '')).trim() + '</strong></div>';
-    nameHtml += '<div class="att-tc-row"><span class="lbl">📞</span>' +
-      (phone
-        ? '<a href="tel:+' + escapeHtml(String(phone).replace(/\D/g,'')) + '">' + escapeHtml(attFmtPhone(phone)) + '</a>'
-        : '<span class="muted">—</span>') +
-      '</div>';
-    nameHtml += '<div class="att-tc-row"><span class="lbl">✉</span>' +
-      (email
-        ? '<a href="mailto:' + escapeHtml(email) + '">' + escapeHtml(email) + '</a>'
-        : '<span class="muted">—</span>') +
-      '</div>';
-  }
-  // Stub секції — без хардкоду цифр
-  var stubs = ''
-    + '<div class="att-tc-section">'
-    +   '<div class="att-tc-section-lbl">💰 Розрахунок з клієнтом</div>'
-    +   '<div class="att-tc-section-stub">буде додано пізніше</div>'
-    + '</div>'
-    + '<div class="att-tc-section">'
-    +   '<div class="att-tc-section-lbl">📊 Розрахунок з викладачем</div>'
-    +   '<div class="att-tc-section-stub">буде додано пізніше</div>'
-    + '</div>'
-    + '<div class="att-tc-section">'
-    +   '<div class="att-tc-section-lbl">🧾 Рахунок</div>'
-    +   '<div class="att-tc-section-stub">буде додано пізніше</div>'
-    + '</div>';
-  return nameHtml + stubs;
-}
-function closeAttTeacherCard(){
-  var m = $('attTeacherCard'); if (m) m.classList.add('hidden');
-}
-// Close-on-overlay/✕ + Esc
-document.addEventListener('click', function(e){
-  var t = e.target;
-  if (t && t.getAttribute && t.getAttribute('data-close-att-tc') === '1') closeAttTeacherCard();
-});
-document.addEventListener('keydown', function(e){
-  if (e.key === 'Escape'){
-    var m = $('attTeacherCard');
-    if (m && !m.classList.contains('hidden')) closeAttTeacherCard();
-  }
-});
-
 // ── MODE TABS ───────────────────────────────
 function switchMode(m){
   S.mode = m;
@@ -1968,6 +1895,7 @@ var ATT = {
   initialized: false,
   date: '',        // YYYY-MM-DD
   group: '',
+  activity: 0,     // v6.20: id обраного заняття (одне на сторінку)
   children: [],    // [{name, group}] для вибраної loc
   childrenByLoc: null,   // {loc: {group: [name,...]}}
   childrenLoadedAt: 0,
@@ -1976,6 +1904,7 @@ var ATT = {
   marksLoadedAt: 0,
   inFlight: {}     // {compositeKey: true} — блокуємо подвійні toggle
 };
+var ATT_ACTIVITY_LS_KEY = 'mkids_att_activity';
 var ATT_CHILDREN_TTL = 60 * 1000;
 var ATT_MARKS_TTL    = 60 * 1000;
 var ATT_PAYMENTS_CACHE_KEY = 'activities_payments_v1';
@@ -2000,6 +1929,11 @@ async function initAttendanceTab(){
   // Дата
   $('attDate').value = _todayISO();
   ATT.date = $('attDate').value;
+  // v6.20: відновити обране заняття з минулої сесії
+  try {
+    var saved = Number(localStorage.getItem(ATT_ACTIVITY_LS_KEY) || 0);
+    if (saved) ATT.activity = saved;
+  } catch(e){}
   // Глобальний селектор локації — S.activeLoc уже встановлений
   // initGlobalLocSelector(). Тут лише підхоплюємо його.
 
@@ -2009,6 +1943,12 @@ async function initAttendanceTab(){
   });
   $('attGroupSel').addEventListener('change', function(){
     ATT.group = this.value; renderAttendanceBoard();
+  });
+  $('attActivitySel').addEventListener('change', function(){
+    ATT.activity = Number(this.value) || 0;
+    try { localStorage.setItem(ATT_ACTIVITY_LS_KEY, String(ATT.activity)); } catch(e){}
+    renderAttList();
+    renderAttTeacherBox();
   });
 
   renderAttendanceBoard();
@@ -2128,13 +2068,15 @@ async function renderAttendanceBoard(){
   if (!hasPerm('attendance-view')){
     $('attHint').textContent = '🚫 Немає прав на перегляд відвідуваності';
     $('attHint').classList.remove('hidden');
-    $('attBoard').classList.add('hidden');
+    $('attList').classList.add('hidden');
+    $('attTeacherBox').classList.add('hidden');
     $('attSummary').classList.add('hidden');
     return;
   }
 
   $('attLoading').classList.remove('hidden');
-  $('attBoard').classList.add('hidden');
+  $('attList').classList.add('hidden');
+  $('attTeacherBox').classList.add('hidden');
   $('attSummary').classList.add('hidden');
   $('attHint').classList.add('hidden');
 
@@ -2186,18 +2128,45 @@ async function renderAttendanceBoard(){
   $('attCounter').textContent = todayCount + ' відміток за ' + _ddmm(ATT.date) + ' · ' + ATT.group;
 
   var acts = _activitiesForLoc(S.activeLoc);
+
+  // v6.20: populate activity dropdown
+  populateAttActivitySel(acts);
+
   if (!acts.length){
     $('attLoading').classList.add('hidden');
     $('attHint').textContent = '⚠️ У каталозі немає активних занять для локації "' + S.activeLoc + '". Додайте у вкладці Каталог.';
     $('attHint').classList.remove('hidden');
+    $('attList').classList.add('hidden');
+    $('attTeacherBox').classList.add('hidden');
     return;
   }
 
-  renderBoard(acts);
+  renderAttList();
+  renderAttTeacherBox();
   renderSummary(acts);
   $('attLoading').classList.add('hidden');
-  $('attBoard').classList.remove('hidden');
   $('attSummary').classList.remove('hidden');
+}
+
+// v6.20: dropdown занять для обраної локації
+function populateAttActivitySel(acts){
+  var sel = $('attActivitySel');
+  sel.innerHTML = acts.length
+    ? '<option value="">— оберіть —</option>' + acts.map(function(a){
+        return '<option value="' + a.id + '">' +
+          escapeHtml(a.name) +
+          (a.clientPrice ? ' · ' + a.clientPrice + '₴' : '') +
+          '</option>';
+      }).join('')
+    : '<option value="">— немає занять —</option>';
+  // restore ATT.activity якщо є; інакше перше зі списку
+  var prev = ATT.activity;
+  var found = acts.some(function(a){ return a.id === prev; });
+  if (!found) prev = (acts[0] && acts[0].id) || 0;
+  ATT.activity = prev;
+  sel.value = String(ATT.activity || '');
+  // persist
+  try { localStorage.setItem(ATT_ACTIVITY_LS_KEY, String(ATT.activity)); } catch(e){}
 }
 
 function _ddmm(iso){
@@ -2214,63 +2183,137 @@ function _markFor(child, activityId){
   return null;
 }
 
-function renderBoard(acts){
+// v6.20: плоский список дітей з одним чекбоксом (для обраного ATT.activity)
+function renderAttList(){
+  var listEl = $('attList');
+  if (!ATT.activity){
+    listEl.classList.add('hidden');
+    return;
+  }
+  var acts = _activitiesForLoc(S.activeLoc);
+  var act = null;
+  for (var i = 0; i < acts.length; i++){
+    if (acts[i].id === ATT.activity){ act = acts[i]; break; }
+  }
+  if (!act){
+    listEl.classList.add('hidden');
+    return;
+  }
+  if (!ATT.children.length){
+    listEl.innerHTML = '<div class="att-list-empty">У групі «' + escapeHtml(ATT.group) + '» немає дітей.</div>';
+    listEl.classList.remove('hidden');
+    return;
+  }
   var canEdit = hasPerm('attendance-edit');
-  var colCount = acts.length;
-  // Grid template: name + N cells (60px each on desktop)
-  var gridStyle = 'grid-template-columns: minmax(180px, 1fr) repeat(' + colCount + ', minmax(56px, 70px))';
-  var hdStyle   = 'grid-template-columns: minmax(180px, 1fr) repeat(' + colCount + ', minmax(56px, 70px))';
-
-  // Header
-  var hd = $('attActsHd');
-  hd.setAttribute('style', hdStyle);
-  var hdHtml = '<div></div>';
-  acts.forEach(function(a){
-    hdHtml += '<div class="att-act-h att-act-clickable" data-act-id="' + a.id +
-              '" title="' + escapeHtml(a.name) +
-              ' — клікни для картки викладача">' +
-              escapeHtml(a.name) +
-              (a.clientPrice ? '<br><span style="color:var(--green);font-weight:800">' + a.clientPrice + '₴</span>' : '') +
-              '</div>';
-  });
-  hd.innerHTML = hdHtml;
-  // v6.19: клік по заголовку колонки → картка викладача
-  hd.querySelectorAll('.att-act-clickable').forEach(function(el){
-    el.addEventListener('click', function(){
-      openAttTeacherCard(Number(this.dataset.actId));
-    });
-  });
-
-  // Rows
-  var rowsHtml = '';
+  var html = '';
   ATT.children.forEach(function(child){
-    rowsHtml += '<div class="att-row" style="' + gridStyle + '">';
-    rowsHtml += '<div class="att-name">' + escapeHtml(child) + '</div>';
-    rowsHtml += '<div class="att-cells-wrap" style="display:contents">';
-    acts.forEach(function(a){
-      var mark = _markFor(child, a.id);
-      var on = !!mark;
-      rowsHtml += '<button class="att-cell' + (on ? ' on' : '') + '"' +
-                  (canEdit ? '' : ' disabled') +
-                  ' data-child="' + escapeHtml(child) + '"' +
-                  ' data-act-id="' + a.id + '"' +
-                  ' data-act-name="' + escapeHtml(a.name) + '"' +
-                  ' data-act-price="' + (a.clientPrice || 0) + '"' +
-                  ' aria-pressed="' + on + '">' +
-                  (on ? '✅' : '⬜') +
-                  '<span class="att-cell-lbl">' + escapeHtml(a.name) + '</span>' +
-                  '</button>';
-    });
-    rowsHtml += '</div></div>';
+    var mark = _markFor(child, act.id);
+    var on = !!mark;
+    html += '<div class="att-list-row">' +
+      '<button class="att-cell' + (on ? ' on' : '') + '"' +
+        (canEdit ? '' : ' disabled') +
+        ' data-child="' + escapeHtml(child) + '"' +
+        ' data-act-id="' + act.id + '"' +
+        ' data-act-name="' + escapeHtml(act.name) + '"' +
+        ' data-act-price="' + (act.clientPrice || 0) + '"' +
+        ' aria-pressed="' + on + '">' +
+        (on ? '✅' : '⬜') +
+      '</button>' +
+      '<span class="att-name">' + escapeHtml(child) + '</span>' +
+    '</div>';
   });
-  $('attRows').innerHTML = rowsHtml;
-
-  // Wire toggle (delegation)
-  $('attRows').onclick = function(e){
+  listEl.innerHTML = html;
+  listEl.classList.remove('hidden');
+  // Delegate toggle
+  listEl.onclick = function(e){
     var btn = e.target.closest && e.target.closest('.att-cell');
     if (!btn || btn.disabled) return;
     toggleAttendance(btn);
   };
+}
+
+// v6.20: вбудована картка викладача для обраного ATT.activity
+function renderAttTeacherBox(){
+  var box = $('attTeacherBox');
+  if (!ATT.activity){
+    box.classList.add('hidden');
+    box.innerHTML = '';
+    return;
+  }
+  var acts = _activitiesForLoc(S.activeLoc);
+  var cat = null;
+  for (var i = 0; i < acts.length; i++){
+    if (acts[i].id === ATT.activity){ cat = acts[i]; break; }
+  }
+  if (!cat){
+    box.classList.add('hidden');
+    return;
+  }
+  box.classList.remove('hidden');
+  box.innerHTML = '<div class="att-tbox-loading">Завантаження викладача…</div>';
+  _attEnsureHr().then(function(){
+    box.innerHTML = _renderAttTeacherInner(cat);
+  });
+}
+function _renderAttTeacherInner(cat){
+  var loc = cat.loc;
+  var teacherName = String(cat.teacher || '').trim();
+  var hr = teacherName ? _attFindHrByName(loc, teacherName) : null;
+  var canEditCat = hasPerm('activities-edit');
+
+  // Якщо HR не знайдено АБО викладач не вказаний — спрощений вигляд з кнопкою
+  if (!teacherName || !hr){
+    var msg = teacherName
+      ? '⚠️ Викладач «' + escapeHtml(teacherName) + '» не знайдений у HR'
+      : 'ℹ️ Викладач не призначений';
+    var btn = canEditCat
+      ? '<button class="att-tbox-assign-btn" type="button" onclick="openAttAssignTeacher(' +
+          cat.id + ')">✏ Призначити викладача</button>'
+      : '';
+    return '<div class="att-tbox-title">🧩 ' + escapeHtml(cat.name) + ' · ' + escapeHtml(loc) + '</div>' +
+      '<div class="att-tbox-warn">' + msg + btn + '</div>';
+  }
+
+  // Картка з даними
+  var fullName = ((hr.last || '') + ' ' + (hr.first || '')).trim();
+  var phone = hr.phone || '';
+  var email = hr.email || '';
+  var phoneHtml = phone
+    ? '<a href="tel:+' + escapeHtml(String(phone).replace(/\D/g,'')) + '">' +
+      escapeHtml(attFmtPhone(phone)) + '</a>'
+    : '<span class="muted">—</span>';
+  var emailHtml = email
+    ? '<a href="mailto:' + escapeHtml(email) + '">' + escapeHtml(email) + '</a>'
+    : '<span class="muted">—</span>';
+  var editBtn = canEditCat
+    ? '<button class="att-tbox-assign-btn" style="margin-left:auto" type="button"' +
+        ' onclick="openAttAssignTeacher(' + cat.id + ')">✏ Замінити</button>'
+    : '';
+
+  return '<div class="att-tbox-title">🧩 ' + escapeHtml(cat.name) + ' · ' + escapeHtml(loc) +
+      editBtn + '</div>' +
+    '<div class="att-tbox-row"><span class="lbl">Викладач:</span> <strong>' +
+      escapeHtml(fullName) + '</strong></div>' +
+    '<div class="att-tbox-row"><span class="lbl">📞</span> ' + phoneHtml + '</div>' +
+    '<div class="att-tbox-row"><span class="lbl">✉</span> ' + emailHtml + '</div>' +
+    '<div class="att-tbox-section">' +
+      '<div class="att-tbox-section-lbl">💰 Вартість</div>' +
+      '<div class="att-tbox-section-stub">буде додано пізніше</div>' +
+    '</div>' +
+    '<div class="att-tbox-section">' +
+      '<div class="att-tbox-section-lbl">📊 ЗП викладача</div>' +
+      '<div class="att-tbox-section-stub">буде додано пізніше</div>' +
+    '</div>' +
+    '<div class="att-tbox-section">' +
+      '<div class="att-tbox-section-lbl">🧾 Рахунок</div>' +
+      '<div class="att-tbox-section-stub">буде додано пізніше</div>' +
+    '</div>';
+}
+
+// v6.20: реюз існуючої #actModal для редагування catalog row (teacher + rate + etc)
+function openAttAssignTeacher(catId){
+  if (typeof openActivityModal === 'function') openActivityModal(catId);
+  else showToast('Модалка редагування недоступна', 'err');
 }
 
 async function toggleAttendance(btn){
