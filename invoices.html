@@ -118,6 +118,12 @@ select,input{font-family:inherit}
 .inv-loading{text-align:center;padding:30px 14px;color:var(--gray)}
 .inv-signer-role{color:var(--gray);font-size:11px;font-weight:400;margin-left:4px}
 
+/* v6.26.1: групування дітей по групі */
+.inv-group-header td{background:#f0f4f8;padding:10px 12px;
+  font-size:13px;font-weight:700;color:var(--dark2);
+  border-bottom:1px solid #d9dfe5;border-top:1px solid #d9dfe5}
+.inv-group-header .inv-group-count{color:var(--gray);font-weight:500;margin-left:6px}
+
 @media (max-width:720px){
   .inv-table thead{display:none}
   .inv-table,.inv-table tbody,.inv-table tr,.inv-table td{display:block;width:100%;box-sizing:border-box}
@@ -127,6 +133,11 @@ select,input{font-family:inherit}
   .inv-table td::before{content:attr(data-label);font-weight:700;color:var(--gray);
     flex:0 0 110px;font-size:11px;text-transform:uppercase}
   .inv-actions{justify-content:flex-end;margin-top:8px}
+  /* v6.26.1: group header у mobile-card-режимі — на всю ширину, без card-стилю */
+  .inv-table tr.inv-group-header{background:transparent;box-shadow:none;padding:0;margin:14px 0 6px}
+  .inv-table tr.inv-group-header td{display:block;width:100%;padding:8px 12px;
+    background:#dde4eb;border-radius:8px;border:none}
+  .inv-table tr.inv-group-header td::before{content:none}
 }
 @media (max-width:640px){
   .wrap{padding:16px 12px 40px}
@@ -765,6 +776,18 @@ function renderInvoiceList(){
     return;
   }
 
+  // v6.26.1: групуємо дітей по полю group. Зберігаємо source-order груп
+  // (як вони першими зустрічаються у даних backend'у, який повертає children
+  // вже відсортованими по імені). Всередині групи — теж за іменем.
+  var byGroup = {};
+  var groupOrder = [];
+  children.forEach(function(c){
+    var g = c.group || '— без групи';
+    if (!byGroup[g]){ byGroup[g] = []; groupOrder.push(g); }
+    byGroup[g].push(c);
+  });
+  groupOrder.sort(function(a,b){ return a.localeCompare(b, 'uk'); });
+
   var html = '<table class="inv-table"><thead><tr>' +
     '<th>ПІБ дитини</th>' +
     '<th>Навчання (' + INV_MONTHS[INV.payMonth-1] + ' ' + INV.payYear + ')</th>' +
@@ -774,39 +797,52 @@ function renderInvoiceList(){
     '<th>Дії</th>' +
     '</tr></thead><tbody>';
 
-  children.forEach(function(c){
-    var pCell = c.paymentSum > 0
-      ? '<span class="inv-sum">' + fmtUah(c.paymentSum) + ' ₴</span>'
-      : '<span class="inv-sum zero">—</span>';
-    var eCell = c.extrasSum > 0
-      ? '<span class="inv-sum">' + fmtUah(c.extrasSum) + ' ₴</span>'
-      : '<span class="inv-sum zero">—</span>';
-    var sName = c.signerName || '<span class="inv-sum zero">— не вказано</span>';
-    var sRole = c.signerParent === 'dad' ? '(тато)' : '(мама)';
-    var phoneTitle = c.signerPhone ? escapeHtml(c.signerPhone) : 'нема телефону';
-    var emailTitle = c.signerEmail ? escapeHtml(c.signerEmail) : 'нема email';
-    var pIcon = '<span class="' + (c.signerPhone ? 'has' : 'no') + '" title="' + phoneTitle + '">📞</span>';
-    var eIcon = '<span class="' + (c.signerEmail ? 'has' : 'no') + '" title="' + emailTitle + '">📧</span>';
-    var hasAnySum = (c.paymentSum > 0) || (c.extrasSum > 0);
-    var canEmail  = hasAnySum && !!c.signerEmail;
-    var canViber  = hasAnySum && !!c.signerPhone;
-    var idEsc = escapeHtml(String(c.id));
-    html += '<tr>' +
-      '<td data-label="ПІБ">' + escapeHtml(c.name) + '</td>' +
-      '<td data-label="Навчання">' + pCell + '</td>' +
-      '<td data-label="Додаткові">' + eCell + '</td>' +
-      '<td data-label="Підписант">' + escapeHtml(sName) +
-        ' <span class="inv-signer-role">' + sRole + '</span></td>' +
-      '<td data-label="Контакти"><span class="inv-contact-ind">' + pIcon + eIcon + '</span></td>' +
-      '<td data-label="Дії"><div class="inv-actions">' +
-        '<button class="inv-act-btn" title="Завантажити PDF"' + (hasAnySum ? '' : ' disabled') +
-          ' onclick="invStubAction(\'pdf\',\'' + idEsc + '\')">📄</button>' +
-        '<button class="inv-act-btn" title="Надіслати Email"' + (canEmail ? '' : ' disabled') +
-          ' onclick="invStubAction(\'email\',\'' + idEsc + '\')">📧</button>' +
-        '<button class="inv-act-btn" title="Надіслати Viber"' + (canViber ? '' : ' disabled') +
-          ' onclick="invStubAction(\'viber\',\'' + idEsc + '\')">💬</button>' +
-      '</div></td>' +
-    '</tr>';
+  groupOrder.forEach(function(g){
+    var groupKids = byGroup[g];
+    groupKids.sort(function(a,b){ return a.name.localeCompare(b.name, 'uk'); });
+    html += '<tr class="inv-group-header"><td colspan="6">' +
+      '👶 ' + escapeHtml(g) +
+      '<span class="inv-group-count">· ' + groupKids.length +
+        (groupKids.length === 1 ? ' дитина' : (groupKids.length < 5 ? ' дітей' : ' дітей')) +
+      '</span></td></tr>';
+
+    groupKids.forEach(function(c){
+      var pCell = c.paymentSum > 0
+        ? '<span class="inv-sum">' + fmtUah(c.paymentSum) + ' ₴</span>'
+        : '<span class="inv-sum zero">—</span>';
+      var eCell = c.extrasSum > 0
+        ? '<span class="inv-sum">' + fmtUah(c.extrasSum) + ' ₴</span>'
+        : '<span class="inv-sum zero">—</span>';
+      // v6.26.1 FIX: розділяємо escape HTML-заглушки — щоб не екранувати теги.
+      var sName = c.signerName
+        ? escapeHtml(c.signerName)
+        : '<span class="inv-sum zero">— не вказано</span>';
+      var sRole = c.signerParent === 'dad' ? '(тато)' : '(мама)';
+      var phoneTitle = c.signerPhone ? escapeHtml(c.signerPhone) : 'нема телефону';
+      var emailTitle = c.signerEmail ? escapeHtml(c.signerEmail) : 'нема email';
+      var pIcon = '<span class="' + (c.signerPhone ? 'has' : 'no') + '" title="' + phoneTitle + '">📞</span>';
+      var eIcon = '<span class="' + (c.signerEmail ? 'has' : 'no') + '" title="' + emailTitle + '">📧</span>';
+      var hasAnySum = (c.paymentSum > 0) || (c.extrasSum > 0);
+      var canEmail  = hasAnySum && !!c.signerEmail;
+      var canViber  = hasAnySum && !!c.signerPhone;
+      var idEsc = escapeHtml(String(c.id));
+      html += '<tr>' +
+        '<td data-label="ПІБ">' + escapeHtml(c.name) + '</td>' +
+        '<td data-label="Навчання">' + pCell + '</td>' +
+        '<td data-label="Додаткові">' + eCell + '</td>' +
+        '<td data-label="Підписант">' + sName +
+          ' <span class="inv-signer-role">' + sRole + '</span></td>' +
+        '<td data-label="Контакти"><span class="inv-contact-ind">' + pIcon + eIcon + '</span></td>' +
+        '<td data-label="Дії"><div class="inv-actions">' +
+          '<button class="inv-act-btn" title="Завантажити PDF"' + (hasAnySum ? '' : ' disabled') +
+            ' onclick="invStubAction(\'pdf\',\'' + idEsc + '\')">📄</button>' +
+          '<button class="inv-act-btn" title="Надіслати Email"' + (canEmail ? '' : ' disabled') +
+            ' onclick="invStubAction(\'email\',\'' + idEsc + '\')">📧</button>' +
+          '<button class="inv-act-btn" title="Надіслати Viber"' + (canViber ? '' : ' disabled') +
+            ' onclick="invStubAction(\'viber\',\'' + idEsc + '\')">💬</button>' +
+        '</div></td>' +
+      '</tr>';
+    });
   });
   html += '</tbody></table>';
   $('invListWrap').innerHTML = html;
