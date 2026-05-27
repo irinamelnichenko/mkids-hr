@@ -2756,7 +2756,10 @@ async function bulkClearAll(){
   await _runBulk('clear', marked);
 }
 
-// v6.22: запуск bulk-операції з lock + spinner + 100мс throttle
+// v6.24: BULK — один POST з масивом дітей замість циклу.
+// Backend (bulkAttendanceMarks / bulkRemoveAttendanceMarks) бере один lock
+// на всю транзакцію. Усуває race condition з паралельними auto-export запитами.
+// Fallback на старий sequential (v6.23) якщо новий endpoint відсутній.
 async function _runBulk(kind, children){
   ATT.bulkRunning = true;
   var markBtn  = $('attBulkMarkBtn');
@@ -2767,35 +2770,136 @@ async function _runBulk(kind, children){
   activeBtn.querySelector('.bulk-spinner').classList.remove('hidden');
 
   var total = children.length;
-  var initialErrors = _countSyncStateInChildren(children, 'err') + _countSyncStateInChildren(children, 'queued');
-  // успіх рахуємо порівнянням marks до/після
   var marksBefore = ATT.marks.length;
+  var attemptedBulk = false;
+  var bulkOk = false;
 
-  for (var i = 0; i < children.length; i++){
-    var child = children[i];
-    var btn = $('attList').querySelector(
-      '.att-cell[data-child="' + (window.CSS && CSS.escape ? CSS.escape(child) : child) + '"]'
-    );
-    if (!btn || btn.disabled){ continue; }
-    // Викликаємо існуючий toggleAttendance — він сам оновить syncStatus
-    // v6.23: AWAIT — кожен запит чекає завершення попереднього.
-    // Це усуває race condition між паралельними addAttendanceMark
-    // (Apps Script LockService не встигає звільнити lock між викликами).
-    await toggleAttendance(btn);
-    await new Promise(function(r){ setTimeout(r, 150); });
+  try {
+    if (kind === 'mark'){
+      var actId = Number(ATT.activity);
+      var cat = null;
+      var acts = _activitiesForLoc(S.activeLoc);
+      for (var ai = 0; ai < acts.length; ai++){ if (acts[ai].id === actId){ cat = acts[ai]; break; } }
+      var actName  = cat ? cat.name : '';
+      var price    = cat ? (Number(cat.clientPrice) || 0) : 0;
+      var markerName = _markerLabel();
+      var items = [];
+      var toMark = [];
+      for (var i = 0; i < children.length; i++){
+        var child = children[i];
+        if (_markFor(child, actId)) continue;
+        items.push({
+          date: ATT.date, loc: S.activeLoc, group: ATT.group, child: child,
+          activityId: actId, activityName: actName, price: price,
+          markedBy: markerName
+        });
+        toMark.push(child);
+        _setSyncStatus(child, actId, 'pending');
+      }
+      if (items.length){
+        attemptedBulk = true;
+        var res = await saveBackend('bulkAttendanceMarks', {items: items});
+        if (res && res.ok && Array.isArray(res.results)){
+          bulkOk = true;
+          for (var k = 0; k < res.results.length; k++){
+            var rr = res.results[k];
+            var ch = toMark[k];
+            if (rr && rr.ok){
+              ATT.marks.push({
+                id: rr.id, date: ATT.date, loc: S.activeLoc, group: ATT.group,
+                child: ch, activityId: actId, activityName: actName,
+                price: price, markedBy: markerName, markedAt: new Date().toISOString()
+              });
+              _setSyncStatus(ch, actId, 'ok');
+            } else {
+              _setSyncStatus(ch, actId, 'err');
+            }
+          }
+          _saveMarksCache();
+        } else if (res && res.error === 'Unknown action'){
+          // Backend ще не задеплоєний — fallback нижче
+          for (var p = 0; p < toMark.length; p++) _setSyncStatus(toMark[p], actId, null);
+        } else {
+          // Network/lock fail → revert sync indicators, fallback теж спробуємо
+          for (var p2 = 0; p2 < toMark.length; p2++) _setSyncStatus(toMark[p2], actId, 'err');
+        }
+      }
+    } else {
+      // kind === 'clear'
+      var actId2 = Number(ATT.activity);
+      var ids = [];
+      var marksMap = []; // паралельний масив {child, markId}
+      for (var j = 0; j < children.length; j++){
+        var ch2 = children[j];
+        var existing = _markFor(ch2, actId2);
+        if (!existing) continue;
+        ids.push(existing.id);
+        marksMap.push({child: ch2, id: existing.id});
+        _setSyncStatus(ch2, actId2, 'pending');
+      }
+      if (ids.length){
+        attemptedBulk = true;
+        var res2 = await saveBackend('bulkRemoveAttendanceMarks', {ids: ids});
+        if (res2 && res2.ok && Array.isArray(res2.results)){
+          bulkOk = true;
+          var removedIds = {};
+          for (var q = 0; q < res2.results.length; q++){
+            var rr2 = res2.results[q];
+            var m2 = marksMap[q];
+            if (rr2 && rr2.ok){
+              removedIds[m2.id] = true;
+              _setSyncStatus(m2.child, actId2, 'ok');
+            } else {
+              _setSyncStatus(m2.child, actId2, 'err');
+            }
+          }
+          ATT.marks = ATT.marks.filter(function(m){ return !removedIds[m.id]; });
+          _saveMarksCache();
+        } else if (res2 && res2.error === 'Unknown action'){
+          for (var q2 = 0; q2 < marksMap.length; q2++) _setSyncStatus(marksMap[q2].child, actId2, null);
+        } else {
+          for (var q3 = 0; q3 < marksMap.length; q3++) _setSyncStatus(marksMap[q3].child, actId2, 'err');
+        }
+      }
+    }
+
+    // Fallback на v6.23 sequential — якщо bulk endpoint відсутній або транзакція не відбулась
+    if (attemptedBulk && !bulkOk){
+      for (var fi = 0; fi < children.length; fi++){
+        var fch = children[fi];
+        var fbtn = $('attList').querySelector(
+          '.att-cell[data-child="' + (window.CSS && CSS.escape ? CSS.escape(fch) : fch) + '"]'
+        );
+        if (!fbtn || fbtn.disabled) continue;
+        // Для 'mark' пропускаємо вже відмічених, для 'clear' — невідмічених
+        var has = _markFor(fch, ATT.activity);
+        if (kind === 'mark' && has) continue;
+        if (kind === 'clear' && !has) continue;
+        await toggleAttendance(fbtn);
+        await new Promise(function(r){ setTimeout(r, 150); });
+      }
+    } else if (bulkOk){
+      // Re-render списку щоб optimistic UI відобразив новий стан ATT.marks
+      renderAttList();
+      // Re-sync ATT.marks з бекендом — захист від edge cases
+      await _loadMarks(true);
+      renderAttList();
+      // Запускаємо auto-export один раз для всієї транзакції
+      if (typeof scheduleAutoExport === 'function') scheduleAutoExport();
+    }
+  } finally {
+    ATT.bulkRunning = false;
+    markBtn.disabled  = false;
+    clearBtn.disabled = false;
+    activeBtn.querySelector('.bulk-spinner').classList.add('hidden');
   }
-  // v6.23: "wait inFlight" hack більше не потрібен — кожен await
-  // вже синхронізував bulk-операцію з backend.
-
-  ATT.bulkRunning = false;
-  markBtn.disabled  = false;
-  clearBtn.disabled = false;
-  activeBtn.querySelector('.bulk-spinner').classList.add('hidden');
 
   // Toast: рахуємо успішні (зміна кількості marks у потрібному напрямку)
   var marksAfter = ATT.marks.length;
   var diff = (kind === 'mark') ? (marksAfter - marksBefore) : (marksBefore - marksAfter);
   if (diff < 0) diff = 0;
+  _setAttCounter(ATT.marks.length + ' відміток за ' + _ddmm(ATT.date) + ' · ' + ATT.group);
+  renderSummary(_activitiesForLoc(S.activeLoc));
   if (kind === 'mark'){
     if (diff === total) showToast('✅ Відмічено всіх ' + total, 'ok', 3000);
     else                showToast('✅ Відмічено ' + diff + ' з ' + total, diff ? 'ok' : 'err', 4000);
