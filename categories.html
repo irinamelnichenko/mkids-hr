@@ -235,6 +235,10 @@ select{font-family:inherit}
            onclick="window.location.href='predmetnyky.html'">
         <span class="ni">🏫</span> Вчителі-предметники
       </div>
+      <div class="nav-item" data-permission="invoices" data-parent="finance" data-perm-page="invoices"
+           onclick="window.location.href='invoices.html'">
+        <span class="ni">📧</span> Рахунки
+      </div>
       <div class="nav-item active" data-permission="categories" data-parent="finance" data-perm-page="categories"
            onclick="goPerm('categories')">
         <span class="ni">📊</span> Категорії
@@ -544,7 +548,8 @@ var PERMISSIONS = {
     'card-child-banner','card-child-contract','card-child-fees',
     'card-child-vacations','card-child-payments','card-child-history',
     'card-child-notes','card-child-health',
-    'finance','medical','hr-actions'
+    'finance','medical','hr-actions',
+    'invoices'
   ],
 
   nurse: [
