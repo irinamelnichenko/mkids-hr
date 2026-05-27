@@ -683,6 +683,11 @@ tbody tr.clickable:hover td{background:#f0f7ff}
               oninput="fmtPhone(this)" onkeydown="phoneKeyDown(this,event)">
           </div>
         </div>
+        <div class="g2">
+          <div class="fg"><label>Email мами</label>
+            <input type="email" id="fMomEmail" placeholder="example@gmail.com"></div>
+          <div class="fg"></div>
+        </div>
         <div class="section-hd">Контакт тата</div>
         <div class="g2">
           <div class="fg"><label>ПІБ тата</label><input type="text" id="fDadName" placeholder="Прізвище Ім'я По-батькові"></div>
@@ -690,6 +695,11 @@ tbody tr.clickable:hover td{background:#f0f7ff}
             <input type="tel" id="fDadPhone" placeholder="+380XXXXXXXXX"
               oninput="fmtPhone(this)" onkeydown="phoneKeyDown(this,event)">
           </div>
+        </div>
+        <div class="g2">
+          <div class="fg"><label>Email тата</label>
+            <input type="email" id="fDadEmail" placeholder="example@gmail.com"></div>
+          <div class="fg"></div>
         </div>
       </div>
       <!-- Tab 1: Договір -->
@@ -710,6 +720,20 @@ tbody tr.clickable:hover td{background:#f0f7ff}
           </div>
           <div class="fg"><label>Дата старту адаптації</label>
             <input type="date" id="fAdaptDate" onchange="updateStatusWarnings()"></div>
+        </div>
+        <div class="g2">
+          <div class="fg"><label>Підписант договору (для рахунків)</label>
+            <div style="display:flex;gap:18px;align-items:center;padding:10px 14px;background:#f0f4f8;border:2px solid #e8ecf0;border-radius:10px;font-size:14px">
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+                <input type="radio" name="signerParent" value="mom" checked> Мама
+              </label>
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+                <input type="radio" name="signerParent" value="dad"> Тато
+              </label>
+            </div>
+          </div>
+          <div class="fg"><label>Номер договору на додаткові</label>
+            <input type="text" id="fAdditionalContractNumber" placeholder="напр. 01-01-01-Д"></div>
         </div>
         <div class="g2">
           <div class="fg"><label>Дата розірвання договору</label>
@@ -1138,11 +1162,14 @@ function getCRMCard(id){
     console.log('getCRMCard NEW:', id, '| cdFromPay=', cdFromPay, '| bdFromAny=', bdFromAny, '| cnFromStatus=', cnFromStatus);
     S.crm[id]={
       name:'',loc:'',group:'',teacher:'',bday:bdFromAny,
-      momName:'',momPhone:'',dadName:'',dadPhone:'',
+      momName:'',momPhone:'',momEmail:'',dadName:'',dadPhone:'',dadEmail:'',
       contractDate:cdFromPay,contractType:'standard',monthlyFee:0,
       entryFee:0,entryFeeSchedule:[],
       status:'active',feeHistory:[],absences:[],notes:'',
-      contractNumber:cnFromStatus,adaptDate:'',terminationDate:'',terminationReason:'',
+      contractNumber:cnFromStatus,
+      // v6.26 Етап 1A — поля для PDF-рахунків.
+      signerParent:'mom',additionalContractNumber:'',
+      adaptDate:'',terminationDate:'',terminationReason:'',
       birthCert:'',childRegAddress:'',
       momDoc:'',momRnokpp:'',dadDoc:'',dadRnokpp:'',
       createdAt:today(),updatedAt:today()
@@ -1357,8 +1384,13 @@ function mergeCRMFromCloud(rows){
       bday:      row['Дата народження']||'',
       momName:   row['ПІБ мами']||'',
       momPhone:  row['Телефон мами']||'',
+      momEmail:  row['Email мами']||'',
       dadName:   row['ПІБ тата']||'',
       dadPhone:  row['Телефон тата']||'',
+      dadEmail:  row['Email тата']||'',
+      // v6.26 Етап 1A — поля для PDF-рахунків (signer + дод. договір).
+      signerParent: row['Підписант договору']||'mom',
+      additionalContractNumber: row['Номер додаткового договору']||'',
       contractDate: row['Дата договору']||'',
       contractType: row['Тип договору']||'standard',
       monthlyFee: +(row['Сума договору']||0),
@@ -2819,12 +2851,15 @@ function openNewChild(){
   S.curTab=0;
   document.querySelectorAll('#mChildTabs .tab').forEach(function(t,i){ t.classList.toggle('active',i===0); });
   document.querySelectorAll('.tab-pane').forEach(function(p,i){ p.classList.toggle('active',i===0); });
-  ['fName','fBday','fTeacher','fMomName','fMomPhone','fDadName','fDadPhone',
+  ['fName','fBday','fTeacher','fMomName','fMomPhone','fMomEmail','fDadName','fDadPhone','fDadEmail',
    'fContractDate','fMonthlyFee','fEntryFee','fNotes',
-   'fContractNumber','fAdaptDate','fTerminationDate','fTerminationReason',
+   'fContractNumber','fAdditionalContractNumber','fAdaptDate','fTerminationDate','fTerminationReason',
    'fBirthCert','fChildRegAddress','fMomDoc','fMomRnokpp','fDadDoc','fDadRnokpp'].forEach(function(id){
     document.getElementById(id).value='';
   });
+  // v6.26 Етап 1A — reset radio "Підписант договору" до Мами за замовчуванням.
+  var spMom = document.querySelector('input[name="signerParent"][value="mom"]');
+  if (spMom) spMom.checked = true;
   document.getElementById('fGroup').value='';
   document.getElementById('fStatus').value='active';
   document.getElementById('tpPayStatus').innerHTML='';
@@ -2904,8 +2939,15 @@ function populateForm(id){
   document.getElementById('fStatus').value=c.status||'active';
   document.getElementById('fMomName').value=c.momName||'';
   document.getElementById('fMomPhone').value=c.momPhone||'';
+  document.getElementById('fMomEmail').value=c.momEmail||'';
   document.getElementById('fDadName').value=c.dadName||'';
   document.getElementById('fDadPhone').value=c.dadPhone||'';
+  document.getElementById('fDadEmail').value=c.dadEmail||'';
+  // v6.26 Етап 1A — підписант (radio) + номер дод. договору.
+  var spVal = c.signerParent || 'mom';
+  var spEl = document.querySelector('input[name="signerParent"][value="' + spVal + '"]');
+  if (spEl) spEl.checked = true;
+  document.getElementById('fAdditionalContractNumber').value=c.additionalContractNumber||'';
   document.getElementById('fContractDate').value=c.contractDate||'';
   document.getElementById('fMonthlyFee').value=c.monthlyFee||'';
   document.getElementById('fEntryFee').value=c.entryFee||'';
@@ -5009,8 +5051,14 @@ function saveChild(){
   c.status=val('fStatus');
   c.momName=val('fMomName');
   c.momPhone=val('fMomPhone');
+  c.momEmail=val('fMomEmail');
   c.dadName=val('fDadName');
   c.dadPhone=val('fDadPhone');
+  c.dadEmail=val('fDadEmail');
+  // v6.26 Етап 1A — radio "Підписант договору" + номер дод. договору.
+  var spChecked = document.querySelector('input[name="signerParent"]:checked');
+  c.signerParent = spChecked ? spChecked.value : 'mom';
+  c.additionalContractNumber=val('fAdditionalContractNumber');
   c.contractDate=val('fContractDate');
   c.contractType=val('fContractType');
   c.monthlyFee=parseFloat(val('fMonthlyFee'))||0;
@@ -5035,8 +5083,9 @@ function saveChild(){
     id: id,
     name: c.name, loc: c.loc, group: c.group, teacher: c.teacher,
     bday: c.bday, status: c.status,
-    momName: c.momName, momPhone: c.momPhone,
-    dadName: c.dadName, dadPhone: c.dadPhone,
+    momName: c.momName, momPhone: c.momPhone, momEmail: c.momEmail,
+    dadName: c.dadName, dadPhone: c.dadPhone, dadEmail: c.dadEmail,
+    signerParent: c.signerParent, additionalContractNumber: c.additionalContractNumber,
     contractDate: c.contractDate, contractType: c.contractType,
     monthlyFee: c.monthlyFee, entryFee: c.entryFee,
     notes: c.notes,
