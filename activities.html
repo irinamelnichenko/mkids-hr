@@ -4102,7 +4102,7 @@ async function doExportAttendance(loc, month, year, manual){
       ? (p.updated + ' дітей · ' + fmtUah(p.totalAmount || 0) + ' ₴')
       : ('❌ ' + (p.error || 'fail'));
     var sMsg = s.ok
-      ? (fmtUah(s.totalFact || 0) + ' ₴ (' + s.updated + ' занять у локації)')
+      ? (fmtUah(s.totalFact || 0) + ' ₴')
       : ('❌ ' + (s.error || 'fail'));
 
     setSyncState('ok', '✅ Пейменти: ' + pMsg + ' · Salary: ' + sMsg);
