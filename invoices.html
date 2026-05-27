@@ -1,0 +1,899 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>m.kids — Рахунки</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --green:#27ae60;--green2:#2ecc71;--blue:#2980b9;--blue2:#3498db;
+  --red:#c0392b;--red2:#e74c3c;--orange:#e67e22;--yellow:#f1c40f;
+  --dark:#1a2332;--dark2:#2c3e50;--gray:#7f8c8d;--gray2:#bdc3c7;
+  --bg:#f0f4f8;--white:#fff;--sidebar:#1e2d3d;--sw:250px;
+  --r:10px;--sh:0 2px 12px rgba(0,0,0,.08)
+}
+body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--dark2);font-size:14px;line-height:1.5;min-height:100vh}
+button{font-family:inherit;cursor:pointer}
+select,input{font-family:inherit}
+.hidden{display:none!important}
+.wrap{max-width:1200px;margin:0 auto;padding:24px 20px 60px}
+
+/* ── HEADER ────────────────────────────────── */
+.hd{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:22px}
+.hd h1{font-size:24px;font-weight:900;color:var(--dark);flex:1;min-width:260px}
+.hd-meta{font-size:12px;color:var(--gray);margin-top:3px;font-weight:500}
+.hd-ctrl{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.month-sel{padding:9px 14px;border:1.5px solid var(--gray2);border-radius:8px;background:#fff;
+  font-size:14px;font-weight:600;color:var(--dark2);outline:none;cursor:pointer}
+.month-sel:focus{border-color:var(--green)}
+.btn{padding:10px 16px;border:none;border-radius:var(--r);font-size:14px;font-weight:600;
+  display:inline-flex;align-items:center;gap:6px;transition:all .15s}
+.btn-primary{background:var(--green);color:#fff}
+.btn-primary:hover{background:var(--green2)}
+.btn-primary:disabled{opacity:.55;cursor:wait}
+
+.err{background:#fdf2f2;border:1px solid #fca5a5;color:var(--red);
+  padding:14px 18px;border-radius:var(--r);margin-bottom:18px;font-weight:600}
+.loading{display:flex;align-items:center;justify-content:center;padding:60px;
+  flex-direction:column;gap:14px;color:var(--gray)}
+.spinner{width:34px;height:34px;border:3px solid #e8ecf0;border-top-color:var(--green);
+  border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── SIDEBAR (shared shell з opex.html / clients.html / index.html) ───── */
+#app{display:flex;min-height:100vh}
+.sidebar{width:var(--sw);background:var(--sidebar);display:flex;flex-direction:column;
+  position:fixed;top:0;left:0;height:100vh;z-index:100;overflow-y:auto}
+.sb-brand{padding:20px;border-bottom:1px solid rgba(255,255,255,.1)}
+.sb-brand h2{color:#fff;font-size:16px;font-weight:800}
+.sb-brand p{color:rgba(255,255,255,.45);font-size:11px;margin-top:2px}
+.sb-user{padding:14px 20px;display:flex;align-items:center;gap:10px;border-bottom:1px solid rgba(255,255,255,.1)}
+.avatar{width:36px;height:36px;background:var(--green);border-radius:50%;
+  display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:13px;flex-shrink:0}
+.sb-user-info p{color:#fff;font-size:13px;font-weight:600}
+.sb-user-info span{color:rgba(255,255,255,.45);font-size:11px}
+.sb-nav{flex:1;padding:10px 0}
+.nav-sec{padding:4px 18px;font-size:10px;text-transform:uppercase;letter-spacing:1px;
+  color:rgba(255,255,255,.28);margin:14px 0 4px}
+.nav-item{display:flex;align-items:center;gap:10px;padding:10px 20px;
+  color:rgba(255,255,255,.6);cursor:pointer;transition:all .2s;font-size:13.5px;
+  border-left:3px solid transparent;user-select:none}
+.nav-item:hover{background:rgba(255,255,255,.06);color:#fff}
+.nav-item.active{background:rgba(39,174,96,.18);color:var(--green2);border-left-color:var(--green)}
+.nav-item .ni{width:20px;text-align:center;font-size:15px}
+.sb-footer{padding:14px 20px;border-top:1px solid rgba(255,255,255,.1)}
+.sb-footer .btn{width:100%;background:rgba(255,255,255,.07);color:rgba(255,255,255,.65);
+  border:none;justify-content:center;font-size:13px}
+.sb-footer .btn:hover{background:rgba(255,255,255,.15);color:#fff}
+.main{margin-left:var(--sw);flex:1;display:flex;flex-direction:column;min-height:100vh}
+.menu-toggle{display:none;padding:8px 10px;background:#fff;
+  border:1.5px solid var(--gray2);border-radius:8px;font-size:18px;color:var(--dark2);cursor:pointer}
+.menu-toggle:hover{background:#f4f7fa}
+@media(max-width:768px){
+  .sidebar{transform:translateX(-100%);transition:transform .3s}
+  .sidebar.open{transform:translateX(0)}
+  .main{margin-left:0}
+  .menu-toggle{display:inline-flex;align-items:center}
+}
+
+/* ── TOAST ─────────────────────────────────── */
+.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);
+  background:var(--dark);color:#fff;padding:12px 20px;border-radius:8px;
+  font-size:14px;font-weight:600;z-index:200;box-shadow:0 4px 16px rgba(0,0,0,.25);
+  max-width:90%;text-align:center}
+.toast-info{background:var(--blue)}
+.toast-ok{background:var(--green)}
+.toast-err{background:var(--red)}
+
+/* ════════ Вкладка "📧 РАХУНКИ" ════════ */
+.inv-card{background:var(--white);border-radius:14px;padding:18px;
+  box-shadow:0 1px 3px rgba(0,0,0,.04)}
+.inv-filters{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:14px}
+.inv-filters .fg{flex:1;min-width:140px;display:flex;flex-direction:column;gap:3px}
+.inv-filters label{font-size:11px;font-weight:700;color:var(--gray);
+  text-transform:uppercase;letter-spacing:.5px}
+.inv-filters input,.inv-filters select{padding:8px 10px;border:1.5px solid var(--gray2);
+  border-radius:8px;font-size:13px;font-family:inherit;box-sizing:border-box;background:#fff}
+.inv-bulk-row{display:flex;align-items:center;justify-content:space-between;
+  flex-wrap:wrap;gap:10px;margin-bottom:14px;padding:10px 14px;
+  background:#f0f4f8;border-radius:10px}
+.inv-bulk-info{font-size:13px;color:var(--dark2)}
+.inv-table{width:100%;border-collapse:collapse;font-size:13px}
+.inv-table th{text-align:left;padding:10px 8px;font-size:11px;text-transform:uppercase;
+  letter-spacing:.5px;color:var(--gray);border-bottom:2px solid var(--gray2);white-space:nowrap}
+.inv-table td{padding:10px 8px;border-bottom:1px solid #eef2f6;vertical-align:middle}
+.inv-table tr:hover td{background:#fafbfc}
+.inv-sum{font-weight:700;color:var(--dark2);white-space:nowrap}
+.inv-sum.zero{color:var(--gray);font-weight:400}
+.inv-contact-ind{display:inline-flex;gap:8px;align-items:center;font-size:13px}
+.inv-contact-ind .has{color:#2ea043}
+.inv-contact-ind .no{color:#cdd5dd}
+.inv-actions{display:flex;gap:6px;white-space:nowrap}
+.inv-act-btn{padding:6px 10px;border:1px solid var(--gray2);background:#fff;
+  border-radius:7px;cursor:pointer;font-size:14px;line-height:1;transition:all .15s}
+.inv-act-btn:hover:not(:disabled){background:#f0f4f8;border-color:#c0c8d0}
+.inv-act-btn:disabled{opacity:.35;cursor:not-allowed}
+.inv-empty{text-align:center;padding:30px 14px;color:var(--gray);font-size:14px}
+.inv-loading{text-align:center;padding:30px 14px;color:var(--gray)}
+.inv-signer-role{color:var(--gray);font-size:11px;font-weight:400;margin-left:4px}
+
+@media (max-width:720px){
+  .inv-table thead{display:none}
+  .inv-table,.inv-table tbody,.inv-table tr,.inv-table td{display:block;width:100%;box-sizing:border-box}
+  .inv-table tr{background:#fff;border-radius:10px;
+    box-shadow:0 1px 2px rgba(0,0,0,.04);padding:12px;margin-bottom:10px;border:none}
+  .inv-table td{border-bottom:none;padding:4px 0;display:flex;align-items:center;gap:8px}
+  .inv-table td::before{content:attr(data-label);font-weight:700;color:var(--gray);
+    flex:0 0 110px;font-size:11px;text-transform:uppercase}
+  .inv-actions{justify-content:flex-end;margin-top:8px}
+}
+@media (max-width:640px){
+  .wrap{padding:16px 12px 40px}
+  .hd h1{font-size:20px}
+}
+</style>
+</head>
+<body>
+
+<div id="app">
+  <nav class="sidebar" id="sidebar">
+    <div class="sb-brand">
+      <h2>🍊 m.kids</h2>
+      <p>m.kids System</p>
+    </div>
+    <div class="sb-user">
+      <div class="avatar" id="uAvatar">…</div>
+      <div class="sb-user-info">
+        <p id="uName">…</p>
+        <span id="uLoc">…</span>
+      </div>
+    </div>
+    <nav class="sb-nav">
+      <div class="nav-item" data-permission="dashboard" data-perm-page="index"
+           onclick="goPerm('dashboard')">
+        <span class="ni">📊</span> Дашборд
+      </div>
+
+      <div class="nav-item" data-permission="tasks" data-perm-page="tasks"
+           onclick="window.location.href='tasks.html'">
+        <span class="ni">📋</span> Задачник
+        <span class="nav-badge hidden" id="tasksBadge">0</span>
+      </div>
+
+      <div class="nav-sec" data-section="crm">👶 КЛІЄНТИ CRM</div>
+      <div class="nav-item" data-permission="clients_list" data-parent="crm" data-perm-page="clients"
+           onclick="goPerm('clients_list')">
+        <span class="ni">👶</span> Список дітей
+      </div>
+      <div class="nav-item" data-permission="payments" data-parent="crm" data-perm-page="clients"
+           onclick="goPerm('payments')">
+        <span class="ni">💰</span> Борги та оплати
+      </div>
+      <div class="nav-item" data-permission="attendance_kids" data-parent="crm" data-perm-page="clients"
+           onclick="goPerm('attendance_kids')">
+        <span class="ni">📋</span> Табель відвідуваності
+      </div>
+      <div class="nav-item" data-permission="recalc" data-parent="crm" data-perm-page="clients"
+           onclick="goPerm('recalc')">
+        <span class="ni">💼</span> Перерахунки
+      </div>
+
+      <div class="nav-sec" data-section="hr">👤 HR</div>
+      <div class="nav-item" data-permission="employees" data-parent="hr" data-perm-page="index"
+           onclick="goPerm('employees')">
+        <span class="ni">👥</span> Співробітники
+      </div>
+      <div class="nav-item" data-permission="timesheet_staff" data-parent="hr" data-perm-page="index"
+           onclick="goPerm('timesheet_staff')">
+        <span class="ni">📋</span> Табель співробітників
+      </div>
+      <div class="nav-item" data-permission="vacations" data-parent="hr" data-perm-page="index"
+           onclick="goPerm('vacations')">
+        <span class="ni">🏖️</span> Відпустки
+      </div>
+      <div class="nav-item" data-permission="sick_leaves" data-parent="hr" data-perm-page="index"
+           onclick="goPerm('sick_leaves')">
+        <span class="ni">🏥</span> Лікарняні
+      </div>
+      <div class="nav-item" data-permission="calendar" data-parent="hr" data-perm-page="index"
+           onclick="goPerm('calendar')">
+        <span class="ni">🗓️</span> Календар подій
+      </div>
+      <div class="nav-item" data-permission="vacation_schedule" data-parent="hr" data-perm-page="index"
+           onclick="goPerm('vacation_schedule')">
+        <span class="ni">🌴</span> Графік відпусток
+      </div>
+
+      <div class="nav-sec" data-section="analytics">📈 АНАЛІТИКА</div>
+      <div class="nav-item" data-permission="analytics_clients" data-parent="analytics" data-perm-page="clients"
+           onclick="goPerm('analytics_clients')">
+        <span class="ni">📊</span> Аналітика по клієнтам
+      </div>
+      <div class="nav-item" data-permission="analytics_hr" data-parent="analytics" data-perm-page="index"
+           onclick="goPerm('analytics_hr')">
+        <span class="ni">📈</span> Аналітика по HR
+      </div>
+
+      <div class="nav-sec" data-section="finance">📊 FINANCE</div>
+      <div class="nav-item" data-permission="opex" data-parent="finance" data-perm-page="opex"
+           onclick="goPerm('opex')">
+        <span class="ni">💰</span> Opex
+      </div>
+      <div class="nav-item" data-permission="salary" data-parent="finance" data-perm-page="salary"
+           onclick="goPerm('salary')">
+        <span class="ni">💼</span> Salary
+      </div>
+      <div class="nav-item" data-permission="activities" data-parent="finance" data-perm-page="activities"
+           onclick="goPerm('activities')">
+        <span class="ni">🏃</span> Додаткові заняття
+      </div>
+      <div class="nav-item" data-permission="categories" data-parent="finance" data-perm-page="categories"
+           onclick="goPerm('categories')">
+        <span class="ni">📊</span> Категорії
+      </div>
+      <div class="nav-item active" data-permission="invoices" data-parent="finance" data-perm-page="invoices"
+           onclick="window.location.href='invoices.html'">
+        <span class="ni">📧</span> Рахунки
+      </div>
+      <div class="nav-item" data-permission="predmetnyky" data-parent="finance" data-perm-page="predmetnyky"
+           onclick="window.location.href='predmetnyky.html'">
+        <span class="ni">🏫</span> Вчителі-предметники
+      </div>
+      <div class="nav-item" data-permission="overview_analytics" data-parent="finance" data-perm-page="analytics"
+           onclick="goPerm('overview_analytics')">
+        <span class="ni">📊</span> Зведена аналітика
+      </div>
+
+      <div class="nav-item" data-permission="settings" data-perm-page="index"
+           onclick="goPerm('settings')">
+        <span class="ni">⚙️</span> Налаштування
+      </div>
+    </nav>
+    <div class="sb-footer">
+      <button class="btn" onclick="doLogout()">🚪 Вийти</button>
+    </div>
+  </nav>
+
+  <main class="main">
+<div class="wrap">
+
+  <div class="hd">
+    <button class="menu-toggle" onclick="toggleSidebar()" aria-label="Меню">☰</button>
+    <div style="flex:1;min-width:260px">
+      <h1>📧 Рахунки</h1>
+      <div class="hd-meta" id="meta">завантаження…</div>
+    </div>
+    <div class="hd-ctrl">
+      <select id="locSel" class="month-sel hidden"></select>
+      <button id="refreshBtn" class="btn btn-primary" onclick="loadInvoiceData()">🔄 Оновити</button>
+    </div>
+  </div>
+
+  <div id="errBox" class="err hidden"></div>
+
+  <div id="content" class="hidden">
+    <div class="inv-card">
+      <div class="inv-filters">
+        <div class="fg"><label>Місяць навчання</label>
+          <select id="invPayMonth"></select></div>
+        <div class="fg"><label>Рік навчання</label>
+          <select id="invPayYear"></select></div>
+        <div class="fg"><label>Місяць додаткових</label>
+          <select id="invExtMonth"></select></div>
+        <div class="fg"><label>Рік додаткових</label>
+          <select id="invExtYear"></select></div>
+        <div class="fg"><label>Дата рахунку</label>
+          <input type="date" id="invDate"></div>
+      </div>
+      <div class="inv-bulk-row">
+        <div class="inv-bulk-info" id="invSummary">Завантаження…</div>
+        <button class="btn btn-primary" id="invBulkBtn" onclick="invBulkSend()">📬 Надіслати всім</button>
+      </div>
+      <div id="invListWrap">
+        <div class="inv-loading">⏳ Завантаження…</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="loadBox" class="loading">
+    <div class="spinner"></div>
+    <div>Завантаження…</div>
+  </div>
+
+  <div id="invToast" class="toast hidden"></div>
+
+</div>
+  </main>
+</div>
+
+<script>
+'use strict';
+
+var CFG = {
+  SCRIPT_URL: 'https://script.google.com/macros/s/AKfycbyTSUVlaN4-PpXe47zCSmhVs0Qxy1FDXG_XsB4zcKNpqBxdhDtS9ibM4YFGkGjmPQDFWQ/exec',
+  LOC: 'Голосієво'
+};
+
+var S = {
+  user: null,
+  locations: []
+};
+
+// ── HELPERS ─────────────────────────────────
+function $(id){ return document.getElementById(id); }
+function fmtUah(n){
+  if (n === null || n === undefined || isNaN(n)) return '0';
+  var sign = n < 0 ? '-' : '';
+  var v = Math.round(Math.abs(n));
+  return sign + v.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+}
+function escapeHtml(s){
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function _todayISO(){
+  var d = new Date();
+  var y = d.getFullYear(), m = d.getMonth() + 1, dd = d.getDate();
+  return y + '-' + (m < 10 ? '0' + m : m) + '-' + (dd < 10 ? '0' + dd : dd);
+}
+var _toastTimer = null;
+function showToast(msg, type, ms){
+  var box = $('invToast');
+  if (!box) return;
+  if (_toastTimer) clearTimeout(_toastTimer);
+  box.className = 'toast toast-' + (type || 'info');
+  box.textContent = msg;
+  box.classList.remove('hidden');
+  _toastTimer = setTimeout(function(){
+    box.classList.add('hidden'); _toastTimer = null;
+  }, ms || 3500);
+}
+
+// ── AUTH (shared session з index.html / clients.html / opex.html) ──
+var SESSION_KEY = 'mkids_session';
+var SESSION_TTL_MS = 12 * 3600 * 1000;
+
+function readSession(){
+  try {
+    var s = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null');
+    if (!s || !s.user || !s.t) return null;
+    if (typeof s.user.role !== 'string') return null;
+    if (Date.now() - s.t > SESSION_TTL_MS) return null;
+    var NET = ['hr','cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo'];
+    s.user.role = String(s.user.role || '').toLowerCase().trim();
+    if (NET.indexOf(s.user.role) !== -1 && s.user.loc !== ''){
+      s.user.origLoc = s.user.loc;
+      s.user.loc = '';
+    }
+    return s.user;
+  } catch(e) { return null; }
+}
+function clearSession(){ try { localStorage.removeItem(SESSION_KEY); } catch(e){} }
+
+var NETWORK_ROLES = ['hr','cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo'];
+function isNetworkRole(role){ return NETWORK_ROLES.indexOf(String(role || '').toLowerCase()) !== -1; }
+function isHR(){       return S.user && isNetworkRole(S.user.role); }
+function isDirector(){ return S.user && S.user.role === 'director'; }
+function isNurse(){    return S.user && S.user.role === 'nurse'; }
+
+function doLogout(){
+  clearSession();
+  window.location.href = 'index.html';
+}
+
+async function loadLocationsForSelector(){
+  try {
+    var url = CFG.SCRIPT_URL + '?action=getLocations';
+    var r = await fetch(url, {redirect: 'follow'});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    var j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'getLocations failed');
+    var seen = {};
+    S.locations = [];
+    (j.data || []).forEach(function(item){
+      if (!item.loc || seen[item.loc]) return;
+      if (item.typ !== 'Садочок' && item.typ !== 'Школа') return;
+      seen[item.loc] = true;
+      S.locations.push(item);
+    });
+    if (S.locations.length && !S.locations.some(function(x){ return x.loc === CFG.LOC; })){
+      CFG.LOC = S.locations[0].loc;
+    }
+  } catch(e){
+    console.error('loadLocationsForSelector error:', e);
+    S.locations = [];
+  }
+}
+
+function renderLocationSelector(){
+  var sel = $('locSel');
+  sel.innerHTML = '';
+  S.locations.forEach(function(item){
+    var opt = document.createElement('option');
+    opt.value = item.loc;
+    opt.textContent = item.loc;
+    if (item.loc === CFG.LOC) opt.selected = true;
+    sel.appendChild(opt);
+  });
+}
+
+// ── UNIFIED SIDEBAR — permissions, role-visibility, cross-page nav ────────
+var CURRENT_PAGE = 'invoices';
+
+var PERMISSIONS = {
+  cfo: 'all',
+
+  ceo: [
+    'dashboard',
+    'clients_list','payments','attendance_kids','recalc',
+    'employees','timesheet_staff','vacations','sick_leaves',
+    'calendar','vacation_schedule',
+    'analytics_clients','analytics_hr',
+    'opex','categories','salary','overview_analytics',
+    'activities','activities-view','activities-edit',
+    'predmetnyky',
+    'attendance-view','attendance-edit',
+    'export-payments',
+    'client_birthdays',
+    'card-employee-info',
+    'card-employee-salary-button','card-employee-vacation-button','card-employee-sick-button',
+    'card-employee-salary-tab','card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract','card-child-fees',
+    'card-child-vacations','card-child-payments','card-child-history',
+    'card-child-notes','card-child-health',
+    'finance','medical','salary-mgmt','hr-actions'
+  ],
+
+  cco: [
+    'dashboard',
+    'clients_list','payments','attendance_kids','recalc',
+    'employees','timesheet_staff','vacations','sick_leaves',
+    'calendar','vacation_schedule',
+    'analytics_clients','analytics_hr',
+    'opex','categories','salary','overview_analytics',
+    'activities','activities-view','activities-edit',
+    'predmetnyky',
+    'attendance-view','attendance-edit',
+    'export-payments',
+    'client_birthdays',
+    'card-employee-info',
+    'card-employee-salary-button','card-employee-vacation-button','card-employee-sick-button',
+    'card-employee-salary-tab','card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract','card-child-fees',
+    'card-child-vacations','card-child-payments','card-child-history',
+    'card-child-notes','card-child-health',
+    'finance','medical','salary-mgmt','hr-actions'
+  ],
+
+  coo: [
+    'dashboard',
+    'clients_list','payments','attendance_kids','recalc',
+    'employees','timesheet_staff','vacations','sick_leaves',
+    'calendar','vacation_schedule',
+    'analytics_clients','analytics_hr',
+    'opex','categories','salary','overview_analytics',
+    'activities','activities-view','activities-edit',
+    'predmetnyky',
+    'attendance-view','attendance-edit',
+    'export-payments',
+    'client_birthdays',
+    'card-employee-info',
+    'card-employee-salary-button','card-employee-vacation-button','card-employee-sick-button',
+    'card-employee-salary-tab','card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract','card-child-fees',
+    'card-child-vacations','card-child-payments','card-child-history',
+    'card-child-notes','card-child-health',
+    'finance','medical','hr-actions'
+  ],
+
+  rnd_director: [
+    'dashboard',
+    'clients_list','attendance_kids',
+    'employees','timesheet_staff','vacations','sick_leaves',
+    'calendar','vacation_schedule',
+    'analytics_hr',
+    'activities','activities-view',
+    'predmetnyky',
+    'attendance-view',
+    'client_birthdays',
+    'card-employee-info',
+    'card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract',
+    'card-child-vacations','card-child-notes'
+  ],
+
+  hr_trainer: [
+    'dashboard',
+    'clients_list','attendance_kids',
+    'employees','timesheet_staff','vacations','sick_leaves',
+    'calendar','vacation_schedule',
+    'analytics_hr',
+    'activities','activities-view',
+    'predmetnyky',
+    'attendance-view',
+    'client_birthdays',
+    'card-employee-info',
+    'card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract',
+    'card-child-vacations','card-child-notes'
+  ],
+
+  legal: [
+    'dashboard',
+    'clients_list','payments','attendance_kids',
+    'employees','timesheet_staff',
+    'calendar',
+    'client_birthdays',
+    'card-employee-info',
+    'card-child-banner','card-child-contract',
+    'card-child-vacations','card-child-payments','card-child-history',
+    'card-child-notes',
+    'finance'
+  ],
+
+  hr: 'all',
+
+  director: [
+    'dashboard',
+    'clients_list','payments','attendance_kids',
+    'employees','timesheet_staff','vacations','sick_leaves',
+    'calendar','vacation_schedule',
+    'analytics_clients','analytics_hr',
+    'opex','categories','salary','overview_analytics',
+    'activities','activities-view','activities-edit',
+    'predmetnyky',
+    'attendance-view','attendance-edit',
+    'export-payments',
+    'client_birthdays',
+    'card-employee-info',
+    'card-employee-salary-button','card-employee-vacation-button','card-employee-sick-button',
+    'card-employee-salary-tab','card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract','card-child-fees',
+    'card-child-vacations','card-child-payments','card-child-history',
+    'card-child-notes','card-child-health',
+    'finance','medical','hr-actions',
+    'invoices'
+  ],
+
+  nurse: [
+    'dashboard',
+    'clients_list','attendance_kids',
+    'employees','timesheet_staff','vacations','sick_leaves',
+    'calendar','vacation_schedule',
+    'medical',
+    'card-employee-info',
+    'card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract','card-child-vacations',
+    'card-child-notes','card-child-health'
+  ],
+  vyhovatel: ['activities','attendance-view','attendance-edit']
+};
+// Задачник: tasks — менеджмент + director; tasks-create — лише менеджмент.
+(function(){
+  ['ceo','cco','coo','rnd_director','hr_trainer','legal'].forEach(function(r){
+    if (Array.isArray(PERMISSIONS[r])){ PERMISSIONS[r].push('tasks'); PERMISSIONS[r].push('tasks-create'); }
+  });
+  if (Array.isArray(PERMISSIONS.director)) PERMISSIONS.director.push('tasks');
+  PERMISSIONS.cmo = ['dashboard','tasks','tasks-create'];
+})();
+
+function roleLabel(role){
+  return ({
+    hr:'CFO', cfo:'CFO', ceo:'CEO', cco:'CCO', coo:'COO',
+    rnd_director:'R&D Director', hr_trainer:'L&D', legal:'Legal', cmo:'CMO',
+    director:'Директор', nurse:'Медсестра'
+  })[String(role||'').toLowerCase()] || role;
+}
+function avatarText(role){
+  return ({
+    hr:'CFO', cfo:'CFO', ceo:'CEO', cco:'CCO', coo:'COO',
+    rnd_director:'R&D', hr_trainer:'L&D', legal:'Lg', cmo:'CMO',
+    director:'Д', nurse:'М'
+  })[String(role||'').toLowerCase()] || '?';
+}
+function locLabel(){ return S.user && isNetworkRole(S.user.role) ? 'Всі локації' : (S.user && S.user.loc || ''); }
+
+function goPerm(perm){
+  var items = document.querySelectorAll('[data-permission="' + perm + '"]');
+  var target = items[0] && items[0].dataset.permPage;
+  if (target === CURRENT_PAGE) return;
+  var targetFile = target === 'clients'    ? 'clients.html'
+                 : target === 'opex'       ? 'opex.html'
+                 : target === 'categories' ? 'categories.html'
+                 : target === 'salary'     ? 'salary.html'
+                 : target === 'activities' ? 'activities.html'
+                 : target === 'analytics'  ? 'analytics.html'
+                 : target === 'invoices'   ? 'invoices.html'
+                 : 'index.html';
+  location.href = targetFile + '#' + perm;
+}
+
+var PERMISSIONS_BUILD_VERSION = 'matrix-2026-05-04';
+
+function applyRoleVisibility(){
+  if (!S || !S.user || !S.user.role) return;
+  var role = String(S.user.role || '').toLowerCase().trim();
+  var allowed = PERMISSIONS[role];
+  document.querySelectorAll('[data-permission]').forEach(function(el){
+    var perm = el.dataset.permission;
+    var visible = (allowed === 'all') || (Array.isArray(allowed) && allowed.indexOf(perm) >= 0);
+    el.style.display = visible ? '' : 'none';
+  });
+  document.querySelectorAll('[data-section]').forEach(function(section){
+    var sectionName = section.dataset.section;
+    var items = document.querySelectorAll('[data-permission][data-parent="' + sectionName + '"]');
+    var anyVisible = Array.prototype.slice.call(items).some(function(item){ return item.style.display !== 'none'; });
+    section.style.display = anyVisible ? '' : 'none';
+  });
+}
+
+function toggleSidebar(){ document.getElementById('sidebar').classList.toggle('open'); }
+
+function updUserUI(){
+  if (!S.user) return;
+  var r = S.user.role;
+  $('uName').textContent   = roleLabel(r);
+  $('uLoc').textContent    = locLabel();
+  $('uAvatar').textContent = avatarText(r);
+  applyRoleVisibility();
+}
+
+function hasPerm(p){
+  if (!S || !S.user || !S.user.role) return false;
+  var r = String(S.user.role || '').toLowerCase().trim();
+  var allowed = PERMISSIONS[r];
+  if (allowed === 'all') return true;
+  return Array.isArray(allowed) && allowed.indexOf(p) !== -1;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// v6.26 Етап 1B — UI-список рахунків (без генерації PDF — 1C).
+// ═══════════════════════════════════════════════════════════════
+var INV = {
+  payMonth: 0, payYear: 0,
+  extMonth: 0, extYear: 0,
+  invoiceDate: '',
+  data: null,
+  loading: false,
+  lastLoc: ''
+};
+var INV_MONTHS = ['Січень','Лютий','Березень','Квітень','Травень','Червень',
+                  'Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
+
+function _invNextMonthFromToday(){
+  var d = new Date();
+  var m = d.getMonth() + 2;
+  var y = d.getFullYear();
+  if (m > 12){ m = 1; y++; }
+  return {month: m, year: y};
+}
+function _invCurrentMonthYear(){
+  var d = new Date();
+  return {month: d.getMonth() + 1, year: d.getFullYear()};
+}
+
+function initFilters(){
+  var monthHtml = '';
+  for (var i = 0; i < 12; i++){
+    monthHtml += '<option value="' + (i+1) + '">' + INV_MONTHS[i] + '</option>';
+  }
+  $('invPayMonth').innerHTML = monthHtml;
+  $('invExtMonth').innerHTML = monthHtml;
+  var curY = new Date().getFullYear();
+  var yearHtml = '';
+  for (var y = curY - 1; y <= curY + 1; y++){
+    yearHtml += '<option value="' + y + '">' + y + '</option>';
+  }
+  $('invPayYear').innerHTML = yearHtml;
+  $('invExtYear').innerHTML = yearHtml;
+
+  var next = _invNextMonthFromToday();
+  var cur = _invCurrentMonthYear();
+  INV.payMonth = next.month;  INV.payYear = next.year;
+  INV.extMonth = cur.month;   INV.extYear = cur.year;
+  INV.invoiceDate = _todayISO();
+  $('invPayMonth').value = INV.payMonth;
+  $('invPayYear').value  = INV.payYear;
+  $('invExtMonth').value = INV.extMonth;
+  $('invExtYear').value  = INV.extYear;
+  $('invDate').value     = INV.invoiceDate;
+
+  $('invPayMonth').addEventListener('change', function(){ INV.payMonth = Number(this.value); loadInvoiceData(); });
+  $('invPayYear').addEventListener('change',  function(){ INV.payYear  = Number(this.value); loadInvoiceData(); });
+  $('invExtMonth').addEventListener('change', function(){ INV.extMonth = Number(this.value); loadInvoiceData(); });
+  $('invExtYear').addEventListener('change',  function(){ INV.extYear  = Number(this.value); loadInvoiceData(); });
+  $('invDate').addEventListener('change', function(){
+    INV.invoiceDate = this.value;
+    // Дата рахунку впливає тільки на PDF (Етап 1C) — таблицю не перевантажуємо.
+  });
+}
+
+async function loadInvoiceData(){
+  if (INV.loading) return;
+  if (!CFG.LOC){
+    $('invListWrap').innerHTML = '<div class="inv-empty">⚠️ Локацію не визначено</div>';
+    $('invSummary').textContent = '';
+    return;
+  }
+  INV.loading = true;
+  INV.lastLoc = CFG.LOC;
+  $('invListWrap').innerHTML = '<div class="inv-loading">⏳ Завантаження даних…</div>';
+  $('invSummary').textContent = 'Завантаження…';
+  try {
+    var url = CFG.SCRIPT_URL + '?action=getInvoiceListData' +
+              '&loc='      + encodeURIComponent(CFG.LOC) +
+              '&payMonth=' + INV.payMonth +
+              '&payYear='  + INV.payYear +
+              '&extMonth=' + INV.extMonth +
+              '&extYear='  + INV.extYear;
+    var r = await fetch(url, {redirect: 'follow'});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    var json = await r.json();
+    if (!json.ok) throw new Error(json.error || 'failed');
+    INV.data = json;
+    renderInvoiceList();
+  } catch(e){
+    INV.data = null;
+    $('invListWrap').innerHTML = '<div class="inv-empty">❌ Помилка завантаження: ' +
+      escapeHtml(String(e && e.message || e)) + '</div>';
+    $('invSummary').textContent = '';
+  } finally {
+    INV.loading = false;
+  }
+}
+
+function renderInvoiceList(){
+  if (!INV.data) return;
+  var children = INV.data.children || [];
+  var total = INV.data.totalClients || 0;
+  var shown = INV.data.shownChildren || 0;
+
+  var totalPay = 0, totalExt = 0;
+  children.forEach(function(c){ totalPay += (c.paymentSum || 0); totalExt += (c.extrasSum || 0); });
+  $('invSummary').innerHTML =
+    '<strong>' + shown + '</strong> з ' + total + ' дітей · ' +
+    'Навчання: <strong>' + fmtUah(totalPay) + ' ₴</strong> · ' +
+    'Додаткові: <strong>' + fmtUah(totalExt) + ' ₴</strong>';
+
+  if (!children.length){
+    $('invListWrap').innerHTML =
+      '<div class="inv-empty">Немає дітей з ненульовими сумами для цієї локації + місяця.<br>' +
+      '<span style="font-size:12px">Перевір що в "Оплати-Рік" заповнені "Бюджет-навч" для обраного місяця, ' +
+      'або є відмітки за обраний місяць додаткових.</span></div>';
+    return;
+  }
+
+  var html = '<table class="inv-table"><thead><tr>' +
+    '<th>ПІБ дитини</th>' +
+    '<th>Навчання (' + INV_MONTHS[INV.payMonth-1] + ' ' + INV.payYear + ')</th>' +
+    '<th>Додаткові (' + INV_MONTHS[INV.extMonth-1] + ' ' + INV.extYear + ')</th>' +
+    '<th>Підписант</th>' +
+    '<th>Контакти</th>' +
+    '<th>Дії</th>' +
+    '</tr></thead><tbody>';
+
+  children.forEach(function(c){
+    var pCell = c.paymentSum > 0
+      ? '<span class="inv-sum">' + fmtUah(c.paymentSum) + ' ₴</span>'
+      : '<span class="inv-sum zero">—</span>';
+    var eCell = c.extrasSum > 0
+      ? '<span class="inv-sum">' + fmtUah(c.extrasSum) + ' ₴</span>'
+      : '<span class="inv-sum zero">—</span>';
+    var sName = c.signerName || '<span class="inv-sum zero">— не вказано</span>';
+    var sRole = c.signerParent === 'dad' ? '(тато)' : '(мама)';
+    var phoneTitle = c.signerPhone ? escapeHtml(c.signerPhone) : 'нема телефону';
+    var emailTitle = c.signerEmail ? escapeHtml(c.signerEmail) : 'нема email';
+    var pIcon = '<span class="' + (c.signerPhone ? 'has' : 'no') + '" title="' + phoneTitle + '">📞</span>';
+    var eIcon = '<span class="' + (c.signerEmail ? 'has' : 'no') + '" title="' + emailTitle + '">📧</span>';
+    var hasAnySum = (c.paymentSum > 0) || (c.extrasSum > 0);
+    var canEmail  = hasAnySum && !!c.signerEmail;
+    var canViber  = hasAnySum && !!c.signerPhone;
+    var idEsc = escapeHtml(String(c.id));
+    html += '<tr>' +
+      '<td data-label="ПІБ">' + escapeHtml(c.name) + '</td>' +
+      '<td data-label="Навчання">' + pCell + '</td>' +
+      '<td data-label="Додаткові">' + eCell + '</td>' +
+      '<td data-label="Підписант">' + escapeHtml(sName) +
+        ' <span class="inv-signer-role">' + sRole + '</span></td>' +
+      '<td data-label="Контакти"><span class="inv-contact-ind">' + pIcon + eIcon + '</span></td>' +
+      '<td data-label="Дії"><div class="inv-actions">' +
+        '<button class="inv-act-btn" title="Завантажити PDF"' + (hasAnySum ? '' : ' disabled') +
+          ' onclick="invStubAction(\'pdf\',\'' + idEsc + '\')">📄</button>' +
+        '<button class="inv-act-btn" title="Надіслати Email"' + (canEmail ? '' : ' disabled') +
+          ' onclick="invStubAction(\'email\',\'' + idEsc + '\')">📧</button>' +
+        '<button class="inv-act-btn" title="Надіслати Viber"' + (canViber ? '' : ' disabled') +
+          ' onclick="invStubAction(\'viber\',\'' + idEsc + '\')">💬</button>' +
+      '</div></td>' +
+    '</tr>';
+  });
+  html += '</tbody></table>';
+  $('invListWrap').innerHTML = html;
+}
+
+function invStubAction(kind, childId){
+  var labels = {pdf:'📄 PDF', email:'📧 Email', viber:'💬 Viber'};
+  showToast('🚧 ' + (labels[kind] || kind) + ' — буде в Етапі 1C (childId=' + childId + ')', 'info', 3000);
+}
+function invBulkSend(){
+  showToast('🚧 Масова відправка — буде в Етапі 1C', 'info', 3000);
+}
+
+function showFatalError(msg){
+  $('errBox').textContent = msg;
+  $('errBox').classList.remove('hidden');
+  $('content').classList.add('hidden');
+  $('loadBox').classList.add('hidden');
+}
+
+(async function bootstrap(){
+  var sessUser = readSession();
+  if (!sessUser){ window.location.href = 'index.html'; return; }
+  S.user = sessUser;
+  if (isNurse()){ window.location.href = 'index.html'; return; }
+  updUserUI();
+
+  // Permission gate — CFO має 'all', director має 'invoices'. Інші — редірект.
+  if (!hasPerm('invoices')){
+    window.location.href = 'index.html';
+    return;
+  }
+
+  if (isHR()){
+    await loadLocationsForSelector();
+    if (!S.locations.length){
+      showFatalError('Не вдалося завантажити список локацій');
+      return;
+    }
+    CFG.LOC = S.locations[0].loc;
+    renderLocationSelector();
+    $('locSel').classList.remove('hidden');
+    $('locSel').addEventListener('change', function(){
+      CFG.LOC = this.value;
+      $('meta').textContent = 'Локація: ' + CFG.LOC;
+      loadInvoiceData();
+    });
+  } else if (isDirector()){
+    if (!S.user.loc){
+      showFatalError('Немає прив\'язаної локації для директора');
+      return;
+    }
+    CFG.LOC = S.user.loc;
+  } else {
+    window.location.href = 'index.html';
+    return;
+  }
+
+  updUserUI();
+  $('meta').textContent = 'Локація: ' + CFG.LOC;
+  initFilters();
+  $('loadBox').classList.add('hidden');
+  $('content').classList.remove('hidden');
+  await loadInvoiceData();
+})();
+</script>
+<script>
+/* Задачник: бейдж непрочитаних у бічному меню (опитування кожні 60с). */
+(function(){
+  var st=document.createElement('style');
+  st.textContent='.nav-badge{margin-left:auto;background:#e74c3c;color:#fff;font-size:11px;font-weight:800;min-width:18px;height:18px;border-radius:9px;display:inline-flex;align-items:center;justify-content:center;padding:0 5px}.nav-badge.hidden{display:none!important}';
+  document.head.appendChild(st);
+  var U='https://script.google.com/macros/s/AKfycbyTSUVlaN4-PpXe47zCSmhVs0Qxy1FDXG_XsB4zcKNpqBxdhDtS9ibM4YFGkGjmPQDFWQ/exec';
+  function poll(){
+    var b=document.getElementById('tasksBadge'); if(!b) return;
+    var s; try{ s=JSON.parse(localStorage.getItem('mkids_session')||'null'); }catch(e){ return; }
+    if(!s||!s.user||!s.user.id) return;
+    fetch(U+'?action=getDashboardNotifications&userId='+encodeURIComponent(s.user.id)+'&role='+encodeURIComponent(s.user.role||''),{redirect:'follow'})
+      .then(function(r){return r.json();})
+      .then(function(res){
+        if(!res||!res.ok) return;
+        if(res.badge>0){ b.textContent=res.badge; b.classList.remove('hidden'); }
+        else b.classList.add('hidden');
+      }).catch(function(){});
+  }
+  setTimeout(poll,1500); setInterval(poll,60000);
+})();
+</script>
+</body>
+</html>
