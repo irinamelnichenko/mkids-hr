@@ -3360,6 +3360,10 @@ function renderEntryFee(){
         +'<span class="fr-amt">'+fmtN(r.amount)+' грн</span>'
         +'<span class="fr-note" style="flex:1">'+esc(r.note||'')+'</span>'
         +statusHtml
+        +(r.paid===true
+          ? '<span style="background:#e8f8f0;color:#1e8449;font-size:11px;font-weight:700;padding:3px 9px;border-radius:99px">✅ Сплачено'+(r.datePaid?(' '+fmtD(r.datePaid)):'')+'</span>'
+            +'<button class="del-btn" onclick="unmarkEntryFeePaid('+i+')" title="Скасувати позначку сплати">↶</button>'
+          : '<button class="del-btn" onclick="markEntryFeePaid('+i+')" title="Позначити сплаченим" style="background:#27ae60;color:#fff;border:none;font-weight:700">💵 Сплачено</button>')
         +'<button class="del-btn" onclick="delEntryFeeRow('+i+')" title="Видалити">✕</button>'
         +'</div>';
     }).join('');
@@ -3402,6 +3406,20 @@ function addEntryFeeRow(){
   renderEntryFee();
 }
 function delEntryFeeRow(i){ getCRMCard(S.editId).entryFeeSchedule.splice(i,1); renderEntryFee(); }
+// v6.11.26: прапорець paid у графіку вступного — джерело правди для рахунку навчання.
+// Окремий від динамічного статусу (план vs factPaid). Зберігає картку одразу.
+function markEntryFeePaid(i){
+  var card=getCRMCard(S.editId); var r=(card.entryFeeSchedule||[])[i]; if(!r) return;
+  r.paid=true; r.datePaid=today();
+  renderEntryFee();
+  try{ syncCRMCardToCloud(S.editId); }catch(e){ console.warn('entryFee save fail',e); }
+}
+function unmarkEntryFeePaid(i){
+  var card=getCRMCard(S.editId); var r=(card.entryFeeSchedule||[])[i]; if(!r) return;
+  r.paid=false; delete r.datePaid;
+  renderEntryFee();
+  try{ syncCRMCardToCloud(S.editId); }catch(e){ console.warn('entryFee save fail',e); }
+}
 
 // ─── ABSENCE MODULE ──────────────────────────────────────────────────────────
 
