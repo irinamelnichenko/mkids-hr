@@ -116,6 +116,9 @@ select,input{font-family:inherit}
 .inv-act-btn:disabled{opacity:.35;cursor:not-allowed}
 .inv-empty{text-align:center;padding:30px 14px;color:var(--gray);font-size:14px}
 .inv-loading{text-align:center;padding:30px 14px;color:var(--gray)}
+.inv-search{width:100%;box-sizing:border-box;padding:10px 14px;margin-bottom:14px;
+  border:1.5px solid var(--gray2);border-radius:8px;font-size:14px;font-family:inherit;background:#fff}
+.inv-search:focus{outline:none;border-color:var(--green)}
 .inv-signer-role{color:var(--gray);font-size:11px;font-weight:400;margin-left:4px}
 
 /* v6.26.1: групування дітей по групі */
@@ -301,6 +304,7 @@ select,input{font-family:inherit}
         <div class="inv-bulk-info" id="invSummary">Завантаження…</div>
         <button class="btn btn-primary" id="invBulkBtn" onclick="invBulkSend()">📬 Надіслати всім</button>
       </div>
+      <input id="invSearch" class="inv-search" type="text" placeholder="🔍 Пошук дитини або групи..." oninput="INV.searchQ=this.value; renderInvoiceList()">
       <div id="invListWrap">
         <div class="inv-loading">⏳ Завантаження…</div>
       </div>
@@ -668,7 +672,8 @@ var INV = {
   invoiceDate: '',
   data: null,
   loading: false,
-  lastLoc: ''
+  lastLoc: '',
+  searchQ: ''
 };
 var INV_MONTHS = ['Січень','Лютий','Березень','Квітень','Травень','Червень',
                   'Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
@@ -776,12 +781,27 @@ function renderInvoiceList(){
     return;
   }
 
+  // v6.26.4: пошук — case-insensitive по ПІБ дитини, групі, ПІБ підписанта.
+  var q = (INV.searchQ || '').trim().toLowerCase();
+  var filtered = !q ? children : children.filter(function(c){
+    return (String(c.name || '').toLowerCase().indexOf(q) >= 0)
+        || (String(c.group || '').toLowerCase().indexOf(q) >= 0)
+        || (String(c.signerName || '').toLowerCase().indexOf(q) >= 0);
+  });
+  if (!filtered.length){
+    $('invListWrap').innerHTML =
+      '<div class="inv-empty">🔍 Нічого не знайдено за запитом «' + escapeHtml(INV.searchQ) + '»</div>';
+    return;
+  }
+
   // v6.26.1: групуємо дітей по полю group. Зберігаємо source-order груп
   // (як вони першими зустрічаються у даних backend'у, який повертає children
   // вже відсортованими по імені). Всередині групи — теж за іменем.
+  // v6.26.4: групуємо вже відфільтрований список — заголовки груп показують
+  // кількість знайдених дітей, групи без збігів зникають автоматично.
   var byGroup = {};
   var groupOrder = [];
-  children.forEach(function(c){
+  filtered.forEach(function(c){
     var g = c.group || '— без групи';
     if (!byGroup[g]){ byGroup[g] = []; groupOrder.push(g); }
     byGroup[g].push(c);

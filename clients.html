@@ -2518,7 +2518,11 @@ function renderClients(){
 
   // Відновлюємо групи якщо були замінені
   if(groupsBackup) S.groups=groupsBackup;
+  // v6.26.4 FIX: зберігаємо фокус і позицію курсора в полі пошуку перед innerHTML=,
+  // інакше при кожному кейстроку input знищується і фокус зникає.
+  var _si=document.querySelector('.search-inp'), _sf=_si&&document.activeElement===_si, _ss=_sf?_si.selectionStart:0, _se=_sf?_si.selectionEnd:0;
   document.getElementById('main').innerHTML=html;
+  if(_sf){ var _ni=document.querySelector('.search-inp'); if(_ni){ _ni.focus(); try{_ni.setSelectionRange(_ss,_se);}catch(e){} } }
   applyRoleVisibility();
 }
 
