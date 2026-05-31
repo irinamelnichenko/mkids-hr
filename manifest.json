@@ -1,15 +1,26 @@
 {
-  "name": "m.kids — Додаткові заняття",
+  "name": "m.kids HR",
   "short_name": "m.kids",
-  "start_url": "/mkids-hr/activities.html",
+  "description": "m.kids HR — CRM для садочків та шкіл m.kids",
+  "start_url": "/mkids-hr/",
   "scope": "/mkids-hr/",
   "display": "standalone",
-  "background_color": "#1e2d3d",
-  "theme_color": "#27ae60",
   "orientation": "portrait",
+  "background_color": "#ffffff",
+  "theme_color": "#FF6B35",
   "lang": "uk",
   "icons": [
-    {"src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
-    {"src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
   ]
 }

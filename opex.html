@@ -79,6 +79,7 @@ select{font-family:inherit}
 .card-bd.pad{padding:18px}
 
 /* ── TABLE ────────────────────────────────── */
+.tbl-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;}
 .tbl{width:100%;border-collapse:collapse}
 .tbl thead th{padding:10px 14px;text-align:left;font-size:11px;font-weight:700;
   text-transform:uppercase;letter-spacing:.5px;color:var(--gray);
@@ -198,6 +199,15 @@ select{font-family:inherit}
   .sidebar.open{transform:translateX(0)}
   .main{margin-left:0}
   .menu-toggle{display:inline-flex;align-items:center}
+}
+</style>
+<style>
+/* v6.27 M3: тач-таргети >=44px на мобільних */
+@media (max-width: 768px) {
+  .btn, .del-btn, .call-btn, .pred-card-btn, .btn-xs, button {
+    min-height: 44px;
+    min-width: 44px;
+  }
 }
 </style>
 </head>
@@ -378,6 +388,7 @@ select{font-family:inherit}
           <div class="type-tabs" id="typeTabs"></div>
         </div>
         <div class="card-bd">
+          <div class="tbl-wrap">
           <table class="tbl">
             <thead>
               <tr>
@@ -391,6 +402,7 @@ select{font-family:inherit}
             </thead>
             <tbody id="ovTblBody"></tbody>
           </table>
+          </div>
         </div>
       </div>
     </div>
@@ -429,6 +441,7 @@ select{font-family:inherit}
         <h3>📋 Витрати по категоріях <span id="tblMonth" style="font-weight:500;color:var(--gray)"></span></h3>
       </div>
       <div class="card-bd">
+        <div class="tbl-wrap">
         <table class="tbl">
           <thead>
             <tr>
@@ -441,6 +454,7 @@ select{font-family:inherit}
           </thead>
           <tbody id="tblBody"></tbody>
         </table>
+        </div>
       </div>
     </div>
 
@@ -471,6 +485,7 @@ select{font-family:inherit}
     </div>
     <div class="modal-bd">
       <div class="modal-chart-wrap"><canvas id="catChart"></canvas></div>
+      <div class="tbl-wrap">
       <table class="tbl">
         <thead>
           <tr>
@@ -483,6 +498,7 @@ select{font-family:inherit}
         </thead>
         <tbody id="catTblBody"></tbody>
       </table>
+      </div>
       <div class="modal-sum" id="catSum"></div>
     </div>
   </div>
@@ -1839,6 +1855,11 @@ function bindEventListeners(){
   }
   setTimeout(poll,1500); setInterval(poll,60000);
 })();
+</script>
+<script>
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch(console.error);
+}
 </script>
 </body>
 </html>

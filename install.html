@@ -3,145 +3,80 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="theme-color" content="#27ae60">
-<title>m.kids — Як встановити</title>
+<meta name="theme-color" content="#FF6B35">
+<title>m.kids HR — Встановлення застосунку</title>
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-192.png">
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,'Segoe UI',Arial,sans-serif;background:#f0f4f8;
-  color:#1a2332;line-height:1.5;padding:20px;max-width:560px;margin:0 auto;
-  padding-bottom:60px}
-
-.hd{background:#fff;border-radius:14px;padding:22px 18px;text-align:center;
-  box-shadow:0 2px 12px rgba(0,0,0,.06);margin-bottom:18px}
-.hd img{width:80px;height:80px;border-radius:18px;display:block;margin:0 auto 12px}
-.hd h1{font-size:22px;font-weight:900;color:#1e2d3d}
-.hd p{font-size:14px;color:#7f8c8d;margin-top:6px}
-
-.tabs{display:flex;gap:8px;background:#fff;border-radius:10px;padding:6px;
-  margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
-.tab-btn{flex:1;padding:12px 8px;border:none;background:transparent;
-  font-size:14px;font-weight:700;color:#7f8c8d;cursor:pointer;border-radius:7px;
-  font-family:inherit;display:flex;align-items:center;justify-content:center;gap:6px}
-.tab-btn.active{background:#27ae60;color:#fff}
-
-.card{background:#fff;border-radius:12px;padding:18px;
-  box-shadow:0 1px 3px rgba(0,0,0,.06);margin-bottom:14px}
-.card.hidden{display:none}
-.card h2{font-size:16px;font-weight:800;color:#1e2d3d;margin-bottom:14px;
-  display:flex;align-items:center;gap:8px}
-
-.step{display:flex;gap:14px;padding:12px 0;border-bottom:1px solid #f0f4f8}
-.step:last-child{border-bottom:none}
-.step-num{flex-shrink:0;width:32px;height:32px;border-radius:50%;
-  background:#27ae60;color:#fff;font-weight:800;font-size:14px;
-  display:flex;align-items:center;justify-content:center}
-.step-txt{flex:1;font-size:14.5px;color:#2c3e50;padding-top:4px}
-.step-txt strong{color:#1e2d3d}
-.step-txt .ico{display:inline-block;margin:0 3px;font-size:17px;vertical-align:-2px}
-
-.note{background:#fef5e0;border:1px solid #fcd34d;color:#b7791f;
-  border-radius:10px;padding:12px 14px;font-size:13px;margin-bottom:14px}
-.note strong{color:#92400e}
-
-.cta{display:block;width:100%;padding:14px;background:#27ae60;color:#fff;
-  border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;
-  text-decoration:none;text-align:center;margin-top:10px}
-.cta:hover{background:#2ecc71}
-.cta-link{color:#27ae60;text-decoration:none;font-weight:600}
+body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:#f0f4f8;color:#1a2332;
+  line-height:1.55;min-height:100vh;padding:24px 16px 60px}
+.wrap{max-width:680px;margin:0 auto}
+.brand{display:flex;align-items:center;gap:14px;margin-bottom:24px}
+.logo{width:56px;height:56px;border-radius:14px;background:#FF6B35;color:#fff;
+  display:flex;align-items:center;justify-content:center;font-weight:900;font-size:15px;flex-shrink:0;
+  box-shadow:0 4px 14px rgba(255,107,53,.35)}
+h1{font-size:24px;font-weight:900}
+.sub{color:#7f8c8d;font-size:13px;margin-top:2px}
+.card{background:#fff;border-radius:14px;padding:20px 22px;margin-bottom:16px;
+  box-shadow:0 2px 12px rgba(0,0,0,.06)}
+.card h2{font-size:16px;font-weight:800;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+ol{margin:0 0 0 20px;padding:0}
+ol li{margin-bottom:8px}
+.note{font-size:13px;color:#7f8c8d;margin-top:10px}
+.tag{display:inline-block;background:#fff3ec;color:#FF6B35;font-weight:700;font-size:12px;
+  padding:3px 10px;border-radius:20px;margin-bottom:6px}
+.btn{display:inline-flex;align-items:center;gap:6px;margin-top:14px;padding:11px 18px;
+  background:#FF6B35;color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;
+  text-decoration:none;min-height:44px}
+.btn:hover{background:#e85d28}
+kbd{background:#eef2f6;border:1px solid #d0d8e0;border-radius:5px;padding:1px 6px;font-size:12px}
 </style>
 </head>
 <body>
+<div class="wrap">
+  <div class="brand">
+    <div class="logo">m.kids</div>
+    <div>
+      <h1>m.kids HR</h1>
+      <div class="sub">Встановлення застосунку на телефон / комп'ютер</div>
+    </div>
+  </div>
 
-<div class="hd">
-  <img src="icon-192.png" alt="m.kids">
-  <h1>m.kids — Додаткові заняття</h1>
-  <p>Встанови на телефон, щоб відмічати заняття як в звичайному додатку</p>
+  <div class="card">
+    <span class="tag">📱 iPhone / iPad (Safari)</span>
+    <h2>Як встановити на iOS</h2>
+    <ol>
+      <li>Відкрий застосунок у браузері <b>Safari</b>.</li>
+      <li>Натисни кнопку <b>«Поділитися»</b> (квадрат зі стрілкою вгору) внизу екрана.</li>
+      <li>Прокрути і обери <b>«На початковий екран»</b> (Add to Home Screen).</li>
+      <li>Натисни <b>«Додати»</b> — іконка m.kids з'явиться на робочому столі.</li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <span class="tag">🤖 Android (Chrome)</span>
+    <h2>Як встановити на Android</h2>
+    <ol>
+      <li>Відкрий застосунок у браузері <b>Chrome</b>.</li>
+      <li>Натисни <b>⋮</b> (три крапки) у правому верхньому куті.</li>
+      <li>Обери <b>«Встановити застосунок»</b> або <b>«Додати на головний екран»</b>.</li>
+      <li>Підтвердь — іконка з'явиться серед застосунків.</li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <span class="tag">💻 Комп'ютер (Chrome / Edge)</span>
+    <h2>Як встановити на Desktop</h2>
+    <ol>
+      <li>Відкрий застосунок у <b>Chrome</b> або <b>Edge</b>.</li>
+      <li>У правому кінці адресного рядка натисни іконку <b>встановлення</b> (монітор зі стрілкою) або <kbd>⋮</kbd> → <b>«Встановити m.kids HR»</b>.</li>
+      <li>Підтвердь — застосунок відкриється в окремому вікні.</li>
+    </ol>
+    <p class="note">Після встановлення застосунок працює як окрема програма, без адресного рядка браузера.</p>
+  </div>
+
+  <a class="btn" href="index.html">← Повернутись до застосунку</a>
 </div>
-
-<div class="tabs">
-  <button class="tab-btn" id="tabIos" onclick="showTab('ios')">📱 iPhone</button>
-  <button class="tab-btn" id="tabAndroid" onclick="showTab('android')">🤖 Android</button>
-</div>
-
-<!-- ── iOS ── -->
-<div class="card" id="cardIos">
-  <h2>📱 Встановлення на iPhone (Safari)</h2>
-
-  <div class="note">
-    <strong>Важливо:</strong> має бути <strong>Safari</strong>, а не Chrome чи інший браузер.
-  </div>
-
-  <div class="step">
-    <div class="step-num">1</div>
-    <div class="step-txt">Відкрий цю сторінку в <strong>Safari</strong> та перейди на <a href="activities.html" class="cta-link">сторінку занять</a>.</div>
-  </div>
-  <div class="step">
-    <div class="step-num">2</div>
-    <div class="step-txt">Натисни кнопку <strong>Поділитись</strong> <span class="ico">📤</span> внизу екрана (квадратик зі стрілкою вгору).</div>
-  </div>
-  <div class="step">
-    <div class="step-num">3</div>
-    <div class="step-txt">Прокрути меню і обери <strong>«На екран Home»</strong> <span class="ico">➕</span>.</div>
-  </div>
-  <div class="step">
-    <div class="step-num">4</div>
-    <div class="step-txt">Зверху правий кут — натисни <strong>«Додати»</strong>. Іконка з'явиться на головному екрані.</div>
-  </div>
-  <div class="step">
-    <div class="step-num">5</div>
-    <div class="step-txt">Закрий Safari — відкривай <strong>m.kids</strong> з головного екрана. Працюватиме як звичайний додаток.</div>
-  </div>
-</div>
-
-<!-- ── Android ── -->
-<div class="card hidden" id="cardAndroid">
-  <h2>🤖 Встановлення на Android (Chrome)</h2>
-
-  <div class="note">
-    <strong>Важливо:</strong> має бути <strong>Chrome</strong> або <strong>Edge</strong>.
-  </div>
-
-  <div class="step">
-    <div class="step-num">1</div>
-    <div class="step-txt">Відкрий цю сторінку в <strong>Chrome</strong> і перейди на <a href="activities.html" class="cta-link">сторінку занять</a>.</div>
-  </div>
-  <div class="step">
-    <div class="step-num">2</div>
-    <div class="step-txt">Натисни <strong>⋮</strong> (три крапки) у верхньому правому куті.</div>
-  </div>
-  <div class="step">
-    <div class="step-num">3</div>
-    <div class="step-txt">Обери <strong>«Додати на головний екран»</strong> або <strong>«Встановити додаток»</strong>.</div>
-  </div>
-  <div class="step">
-    <div class="step-num">4</div>
-    <div class="step-txt">Підтверди — іконка <strong>m.kids</strong> з'явиться на екрані.</div>
-  </div>
-</div>
-
-<a href="activities.html" class="cta">📋 Перейти до занять</a>
-
-<script>
-function showTab(name){
-  var isIos = name === 'ios';
-  document.getElementById('cardIos').classList.toggle('hidden', !isIos);
-  document.getElementById('cardAndroid').classList.toggle('hidden', isIos);
-  document.getElementById('tabIos').classList.toggle('active', isIos);
-  document.getElementById('tabAndroid').classList.toggle('active', !isIos);
-}
-// Auto-detect platform on first load
-var ua = navigator.userAgent || '';
-var isAndroid = /Android/i.test(ua);
-showTab(isAndroid ? 'android' : 'ios');
-
-// Реєструємо SW тут теж — щоб офлайн працювало навіть з install сторінки
-if ('serviceWorker' in navigator){
-  navigator.serviceWorker.register('sw.js').catch(function(e){
-    console.warn('SW register failed:', e);
-  });
-}
-</script>
 </body>
 </html>

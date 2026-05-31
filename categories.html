@@ -136,6 +136,15 @@ select{font-family:inherit}
   .menu-toggle{display:inline-flex;align-items:center}
 }
 </style>
+<style>
+/* v6.27 M3: тач-таргети >=44px на мобільних */
+@media (max-width: 768px) {
+  .btn, .del-btn, .call-btn, .pred-card-btn, .btn-xs, button {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+</style>
 </head>
 <body>
 
@@ -1076,6 +1085,11 @@ function bindEventListeners(){
   }
   setTimeout(poll,1500); setInterval(poll,60000);
 })();
+</script>
+<script>
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch(console.error);
+}
 </script>
 </body>
 </html>

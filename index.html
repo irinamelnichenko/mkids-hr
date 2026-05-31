@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>HR Система — mkids Дитячі Садочки</title>
+<title>m.kids HR — mkids Дитячі Садочки</title>
 <script src="xlsx.full.min.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -308,6 +308,15 @@ tbody tr.clickable{cursor:pointer}
   .main{margin-left:0}
   .emp-hd{flex-direction:column}
   .g2,.g3{grid-template-columns:1fr}
+}
+</style>
+<style>
+/* v6.27 M3: тач-таргети >=44px на мобільних */
+@media (max-width: 768px) {
+  .btn, .del-btn, .call-btn, .pred-card-btn, .btn-xs, button {
+    min-height: 44px;
+    min-width: 44px;
+  }
 }
 </style>
 </head>
@@ -4355,6 +4364,12 @@ window.addEventListener('DOMContentLoaded',async()=>{
     </div>
   </div>
 </div>
+
+<script>
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch(console.error);
+}
+</script>
 
 </body>
 </html>

@@ -195,6 +195,16 @@ select{font-family:inherit}
   .main{margin-left:0}
   .menu-toggle{display:inline-flex;align-items:center}
 }
+.tbl-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;}
+</style>
+<style>
+/* v6.27 M3: тач-таргети >=44px на мобільних */
+@media (max-width: 768px) {
+  .btn, .del-btn, .call-btn, .pred-card-btn, .btn-xs, button {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
 </style>
 </head>
 <body>
@@ -391,11 +401,15 @@ select{font-family:inherit}
       <div class="leaders-grid">
         <div class="card">
           <div class="card-hd"><h3 id="topEffTitle">🏆 Найефективніші <span style="font-weight:500;color:var(--gray);font-size:12px">(min ЗП/дитину)</span></h3></div>
-          <div class="card-bd"><table class="tbl leader-tbl"><tbody id="topEfficient"></tbody></table></div>
+          <div class="card-bd"><div class="tbl-wrap">
+<table class="tbl leader-tbl"><tbody id="topEfficient"></tbody></table>
+</div></div>
         </div>
         <div class="card">
           <div class="card-hd"><h3 id="topExpTitle">💸 Найдорожчі <span style="font-weight:500;color:var(--gray);font-size:12px">(max ЗП/дитину)</span></h3></div>
-          <div class="card-bd"><table class="tbl leader-tbl"><tbody id="topExpensive"></tbody></table></div>
+          <div class="card-bd"><div class="tbl-wrap">
+<table class="tbl leader-tbl"><tbody id="topExpensive"></tbody></table>
+</div></div>
         </div>
       </div>
 
@@ -420,6 +434,7 @@ select{font-family:inherit}
           <h3>📋 Локації — порівняння <span id="ovSub" style="font-weight:500;color:var(--gray)"></span></h3>
         </div>
         <div class="card-bd">
+          <div class="tbl-wrap">
           <table class="tbl">
             <thead>
               <tr>
@@ -435,6 +450,7 @@ select{font-family:inherit}
             </thead>
             <tbody id="ovTblBody"></tbody>
           </table>
+          </div>
         </div>
       </div>
     </div>
@@ -515,6 +531,7 @@ select{font-family:inherit}
             <span id="fillCount" style="margin-left:auto;font-size:12px;color:var(--gray)"></span>
           </div>
           <div class="fill-tbl-wrap">
+            <div class="tbl-wrap">
             <table class="tbl">
               <thead>
                 <tr>
@@ -528,6 +545,7 @@ select{font-family:inherit}
               </thead>
               <tbody id="fillTblBody"></tbody>
             </table>
+            </div>
           </div>
         </div>
       </div>
@@ -2089,6 +2107,11 @@ function bindEventListeners(){
   }
   setTimeout(poll,1500); setInterval(poll,60000);
 })();
+</script>
+<script>
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch(console.error);
+}
 </script>
 </body>
 </html>
