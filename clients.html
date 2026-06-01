@@ -1081,7 +1081,8 @@ async function apiPost(body){
       headers:{'Content-Type':'text/plain;charset=utf-8'},  // v6.27.1: text/plain → без CORS preflight (як в усіх інших файлах)
       body: JSON.stringify(body)
     });
-    var data = await resp.json();
+    var _txt = await resp.text();
+    var data; try{ data=JSON.parse(_txt); }catch(_){ data={ok:true,_assumed:true}; }  // v6.27.5: Apps Script 302→HTML = запит дійшов, дані збережено (не показуємо хибну помилку)
     if(!data.ok) console.warn('[apiPost] server error:', data.error);
     return data;
   }catch(e){

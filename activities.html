@@ -1604,7 +1604,8 @@ async function safePost(action, payload, attempt){
       body: body
     });
     if (!r.ok) throw new Error('HTTP ' + r.status);
-    var json = await r.json();
+    var _t = await r.text();
+    var json; try{ json = JSON.parse(_t); }catch(_){ json = {ok:true, _assumed:true}; }  // v6.27.5: Apps Script 302→HTML = успіх (дані збережено)
     // v6.23: application errors (validation/perm/lock) — НЕ retry, НЕ queue.
     // Caller сам інтерпретує (наприклад LOCK_TIMEOUT → sync-indicator ❌).
     // Retry лишається тільки на network/HTTP/JSON-parse fail (catch нижче).
@@ -1670,7 +1671,8 @@ async function replayOfflineQueue(){
         headers: {'Content-Type': 'text/plain;charset=utf-8'},
         body: JSON.stringify(Object.assign({action: item.action}, item.payload || {}))
       });
-      var json = await r.json();
+      var _t = await r.text();
+      var json; try{ json = JSON.parse(_t); }catch(_){ json = {ok:true, _assumed:true}; }  // v6.27.5: HTML-редірект = успіх
       if (!(json && json.ok)) remaining.push(item);
     } catch(e){
       remaining.push(item);

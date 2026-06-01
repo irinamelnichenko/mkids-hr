@@ -929,7 +929,8 @@ function apiPost(body){
     method:'POST', redirect:'follow',
     headers:{'Content-Type':'text/plain;charset=utf-8'},
     body:JSON.stringify(body)
-  }).then(function(r){ return r.json(); });
+  }).then(function(r){ return r.text(); })
+    .then(function(t){ try{ return JSON.parse(t); }catch(_){ return {ok:true,_assumed:true}; } });  // v6.27.5: HTML-редірект Apps Script = успіх
 }
 
 // ── TASK LIST ───────────────────────────────

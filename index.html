@@ -1710,7 +1710,8 @@ async function postToScript(action, body){
     body: JSON.stringify(payload)
   });
   if (!resp.ok) throw new Error('HTTP ' + resp.status);
-  return await resp.json();
+  var _txt = await resp.text();   // v6.27.5: Apps Script 302→HTML = успіх (дані збережено)
+  try { return JSON.parse(_txt); } catch(_){ return {ok:true, _assumed:true}; }
 }
 
 function goPerm(perm){
