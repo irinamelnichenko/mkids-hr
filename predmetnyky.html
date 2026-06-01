@@ -760,6 +760,7 @@ var S = {
   // ── data (одне завантаження getPredmetnyky) ──
   teachers:    [],
   norms:       {},
+  groups:      {},                       // v6.28.2: {loc: [повні назви реальних груп]}
   lessons:     [],
   catalog:     [],
   assignments: [],
@@ -1178,6 +1179,7 @@ function loadPredmetnyky(){
     if (!res || !res.ok) throw new Error(res && res.error || 'Failed to load');
     S.teachers    = res.teachers    || [];
     S.norms       = res.norms       || {};
+    S.groups      = res.groups      || {};
     S.lessons     = res.lessons     || [];
     S.catalog     = res.catalog     || [];
     S.assignments = res.assignments || [];
@@ -1212,6 +1214,23 @@ function getNormFor(loc, subj, groupType){
   var r = S.norms[region]; if (!r) return 0;
   var s = r[subj]; if (!s) return 0;
   return s[groupType] || 0;
+}
+// v6.28.2: реальні групи локації (ПОВНІ назви з вихователем), відсортовані
+// за типом (miniBaby→Preschool) і назвою. Кожна реальна група = окремий
+// рядок матриці; норма береться з матриці ПО ТИПУ. Fallback — 5 стандартних
+// типів (якщо для локації нема реальних груп з Клієнтів).
+function realGroupsFor(loc){
+  var raw = (S.groups && S.groups[loc]) ? S.groups[loc].slice() : [];
+  if (!raw.length){
+    raw = PRED_GROUP_TYPES.map(function(gt){ return GROUP_NAME_BY_TYPE[gt]; });
+  }
+  raw.sort(function(a, b){
+    var ta = PRED_GROUP_TYPES.indexOf(normalizeGroupType(a)); if (ta === -1) ta = 99;
+    var tb = PRED_GROUP_TYPES.indexOf(normalizeGroupType(b)); if (tb === -1) tb = 99;
+    if (ta !== tb) return ta - tb;
+    return String(a).localeCompare(String(b), 'uk');
+  });
+  return raw;
 }
 function getRateFor(loc, subj){
   for (var i = 0; i < S.catalog.length; i++){
@@ -1450,14 +1469,17 @@ function renderTable(loc, subject){
   var rate = getRateFor(loc, subject);
   var hasRate = (rate != null);
 
-  // Per-group metadata (без teacher chip — він у header card)
-  var rows = PRED_GROUP_TYPES.map(function(gt){
-    var groupName  = GROUP_NAME_BY_TYPE[gt];
-    var norm       = getNormFor(loc, subject, gt);
-    var isForbidden = !isUnlimited && norm <= 0;
-    var count      = isForbidden ? 0 : countLessonsInRow(loc, groupName, subject);
-    var isMaxed    = !isUnlimited && count >= norm;
-    return {gt:gt, groupName:groupName, norm:norm, isUnlimited:isUnlimited,
+  // Per-group metadata — РЕАЛЬНІ групи локації (повні назви). Норма по ТИПУ
+  // застосовується до КОЖНОЇ групи окремо; лічильник — по повній назві.
+  var rows = realGroupsFor(loc).map(function(groupName){
+    var gt           = normalizeGroupType(groupName);            // тип або null
+    // unlimited: предмет Чомусики АБО тип не розпізнано (нема норми в матриці)
+    var rowUnlimited = isUnlimited || !gt;
+    var norm         = rowUnlimited ? 0 : getNormFor(loc, subject, gt);
+    var isForbidden  = !rowUnlimited && norm <= 0;               // тип з нормою 0 у матриці
+    var count        = isForbidden ? 0 : countLessonsInRow(loc, groupName, subject);
+    var isMaxed      = !rowUnlimited && count >= norm;
+    return {gt:gt, groupName:groupName, norm:norm, isUnlimited:rowUnlimited,
             isForbidden:isForbidden, count:count, isMaxed:isMaxed, hasRate:hasRate};
   });
 
@@ -1510,7 +1532,7 @@ function renderTable(loc, subject){
 function renderDayCell(loc, R, subject, D, canEdit){
   var lesson  = lessonByCell(loc, R.groupName, subject, D.dmy);
   var checked = !!lesson;
-  var lockKey = cellLockKey(loc, R.gt, subject, D.dmy);
+  var lockKey = cellLockKey(loc, R.groupName, subject, D.dmy);
   var saving  = !!S.savingCells[lockKey];
 
   // Disabled:
@@ -1527,7 +1549,7 @@ function renderDayCell(loc, R, subject, D, canEdit){
   if (saving)      cls += ' saving';
 
   var handler = (!disabled && !saving)
-    ? ' onclick="onCheckboxToggle(\'' + escapeJs(loc) + '\', \'' + R.gt +
+    ? ' onclick="onCheckboxToggle(\'' + escapeJs(loc) + '\', \'' + escapeJs(R.groupName) +
       '\', \'' + escapeJs(subject) + '\', \'' + D.dmy + '\')"'
     : '';
   var title = disabled
@@ -1565,13 +1587,13 @@ function refreshAll(){
 // ── CHECKBOX TOGGLE ─────────────────────────
 // Rate-gate (не assignment) + per-cell lock + idempotent upsert.
 // empKey resolution: assignment → перший HR кандидат → '_unassigned' sentinel.
-function onCheckboxToggle(loc, groupType, subj, dateDmy){
+// v6.28.2: groupName — ПОВНА назва реальної групи (не тип).
+function onCheckboxToggle(loc, groupName, subj, dateDmy){
   if (!canEditPred(loc)){ showToast('🚫 Немає дозволу', 'err'); return; }
   if (getRateFor(loc, subj) == null){
     showToast('🚫 Немає ставки в каталозі. Додай у Предметники_Каталог', 'err');
     return;
   }
-  var groupName = GROUP_NAME_BY_TYPE[groupType];
 
   var assignment = assignmentFor(loc, subj);
   var empKey;
@@ -1582,7 +1604,7 @@ function onCheckboxToggle(loc, groupType, subj, dateDmy){
     empKey = cands.length ? cands[0].empKey : '_unassigned';
   }
 
-  var lockKey = cellLockKey(loc, groupType, subj, dateDmy);
+  var lockKey = cellLockKey(loc, groupName, subj, dateDmy);
   if (S.savingCells[lockKey]) return;       // GUARD проти подвійного клацання
   S.savingCells[lockKey] = true;
   renderApp();
