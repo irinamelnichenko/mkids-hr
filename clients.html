@@ -4138,14 +4138,17 @@ function flushAttCloudSave(){
       status:c.status, updatedBy:who
     };
   });
-  // v6.27.1: чекаємо реальну відповідь і показуємо чесний статус; при помилці — повертаємо зміни в чергу
+  // v6.27.3: Apps Script POST відповідає 302→HTML (не JSON), тому звичайний cors-fetch
+  // не може прочитати відповідь і v6.27.1 помилково показував "Помилка хмари" — хоча
+  // дані РЕАЛЬНО зберігаються на сервері (перевірено прямим читанням аркуша 'Табель').
+  // Рішення: no-cors fire-and-forget (як index.html:712). Успіх = запит відправлено;
+  // 'err' лише при справжній мережевій помилці (офлайн) → тоді повертаємо зміни в чергу.
   setSyncStatus('sync');
-  apiPost({action:'saveAttendance',records:records}).then(function(res){
-    if(res && res.ok){ setSyncStatus('ok'); showFloatMsg('☁️ Збережено в хмарі'); }
-    else { setSyncStatus('err'); S._attPendingChanges=changes.concat(S._attPendingChanges); showFloatMsg('⚠️ Не збережено в хмарі — повторю спробу'); }
-  }).catch(function(){
-    setSyncStatus('err'); S._attPendingChanges=changes.concat(S._attPendingChanges); showFloatMsg('⚠️ Хмара недоступна — збережено локально');
-  });
+  var _u=getScriptUrl();
+  if(!_u){ setSyncStatus('err'); return; }
+  fetch(_u,{method:'POST',mode:'no-cors',redirect:'follow',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'saveAttendance',records:records})})
+    .then(function(){ setSyncStatus('ok'); showFloatMsg('☁️ Збережено в хмарі'); })
+    .catch(function(e){ setSyncStatus('err'); S._attPendingChanges=changes.concat(S._attPendingChanges); showFloatMsg('⚠️ Хмара недоступна — збережено локально'); console.warn('att save error:',e); });
 }
 
 // Плаваюче повідомлення (знизу праворуч)
