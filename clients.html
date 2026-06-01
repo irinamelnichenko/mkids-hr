@@ -2138,12 +2138,19 @@ async function initApp(){
   showSpinner();
   setSyncStatus('sync');
   try{
-    await loadLocations(false);
-    await loadPayments(false);
-    await loadClients(false);
-    await loadBdayStatus();
-    await loadRegistryUrls();
-    // Завантажуємо річні дані та всю історію оплат у фоні
+    // v6.28: незалежні виклики — ПАРАЛЕЛЬНО (було 5 послідовних awaits ~16с → ~4-5с).
+    // buildGroups залежить лише від S.payments; loadClients/locations/bday/registry пишуть
+    // незалежні зрізи S.* → безпечно паралелити. Кожен має власний try/catch (нижче).
+    await Promise.all([
+      loadLocations(false),
+      loadPayments(false),
+      loadClients(false),
+      loadBdayStatus(),
+      loadRegistryUrls()
+    ]);
+    buildGroups();   // гарантуємо актуальні групи після паралельного завантаження
+    renderView();    // рендеримо ОДРАЗУ — не чекаємо 3MB річних даних
+    // Річні дані та вся історія оплат — у фоні, з повторним рендером коли готові
     loadPaymentsYearly(false).then(function(){ renderView(); }).catch(function(e){ console.warn('Yearly load failed:', e); });
     loadAllPayHistory().catch(function(e){ console.warn('History load failed:', e); });
     setSyncStatus('ok');
