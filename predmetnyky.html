@@ -2104,12 +2104,17 @@ document.addEventListener('keydown', function(e){
 // ── INIT ────────────────────────────────────
 function populateLocSel(){
   var sel = $('fLoc');
-  var locSet = {};
-  S.locations.forEach(function(l){ if (l && l.loc) locSet[l.loc] = 1; });
-  S.teachers.forEach(function(t){ (t.locations||[]).forEach(function(l){ if(l) locSet[l] = 1; }); });
-  S.lessons.forEach(function(L){ if (L.loc) locSet[L.loc] = 1; });
-  S.catalog.forEach(function(c){ if (c.loc) locSet[c.loc] = 1; });
-  var allLocs = Object.keys(locSet).sort();
+  // v6.28.3: ЄДИНЕ джерело локацій — getLocations (CONFIG sheet).
+  // Раніше домішувались teachers/lessons/catalog — звідти протікали
+  // фантомні локації (дубль «Осокорки сад» з Предметники_Каталог,
+  // «Львів Бігова/Кругла», «Офіс», «Чернігів» зі старих даних).
+  var seen = {};
+  var allLocs = [];
+  S.locations.forEach(function(l){
+    var loc = l && l.loc;
+    if (loc && !seen[loc]){ seen[loc] = 1; allLocs.push(loc); }
+  });
+  allLocs.sort(function(a, b){ return String(a).localeCompare(String(b), 'uk'); });
 
   if (S.user.loc){
     // director / nurse / vyhovatel — locked to own loc
