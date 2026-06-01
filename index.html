@@ -1801,7 +1801,7 @@ async function initApp(){
   }
   nav('dashboard');
 }
-async function refreshData(){showLoad();await fetchEmps(true);renderView();}
+async function refreshData(){showLoad();S._tabelCloudLoaded={};await fetchEmps(true);renderView();}
 function fillLoginLocs(){
   const locs=[...new Set(S.emps.map(e=>e.loc).filter(Boolean))].sort();
   const sel=document.getElementById('loginLocation');
@@ -3850,6 +3850,48 @@ function getTabel(loc,date){
 }
 function saveTabel(loc,date,data){
   localStorage.setItem(tabelKey(loc,date),JSON.stringify(data));
+  pushTabelToCloud(loc,date,data);  // v6.27.4: синхронізація табеля співробітників у хмару
+}
+// v6.27.4: Табель співробітників раніше зберігався ЛИШЕ в localStorage → CFO на іншому
+// пристрої бачив нулі. Тепер синкаємо через існуючі saveAttendance/getAttendance (лист 'Табель')
+// з namespaced childId 'STAFF::<empKey>' — НЕ перетинається з дітьми і НЕ зачіпає білінг
+// (exportAttendanceToPayments читає інший лист 'Додаткові_Відвідуваність').
+function pushTabelToCloud(loc,date,data){
+  try{
+    var url=authScriptUrl(); if(!url) return;
+    var who=S.user?(S.user.role==='director'?'Директор ('+(S.user.loc||'')+')':(S.user.role==='nurse'?'Медсестра ('+(S.user.loc||'')+')':S.user.role)):'?';
+    var recs=Object.keys(data||{}).map(function(k){
+      var e=(S.emps||[]).filter(function(x){return x.key===k;})[0];
+      return {date:date,childId:'STAFF::'+k,childName:e?fullName(e):k,loc:loc,group:'',status:(data[k]&&data[k].status)||'',updatedBy:who};
+    });
+    if(!recs.length) return;
+    fetch(url,{method:'POST',mode:'no-cors',redirect:'follow',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'saveAttendance',records:recs})}).catch(function(){});
+  }catch(e){ console.warn('pushTabelToCloud',e); }
+}
+// Підвантаження табеля співробітників з хмари (тільки рядки STAFF::) у localStorage.
+function loadTabelFromCloud(loc,from,to){
+  var url=authScriptUrl(); if(!url||!loc) return;
+  // ВАЖЛИВО: getAttendance з from/to ЛАМАЄТЬСЯ — дата в листі 'Табель' зберігається як Date-тип,
+  // бекенд робить рядкове порівняння і відсікає всі рядки. Тому тягнемо БЕЗ діапазону (лише loc)
+  // і нормалізуємо+фільтруємо дату на клієнті. (Бекенд-баг getAttendance — окремий техборг.)
+  function _normD(v){ v=String(v||''); if(/^\d{4}-\d{2}-\d{2}/.test(v)) return v.slice(0,10); var dt=new Date(v); return isNaN(dt)?'':dt.getFullYear()+'-'+('0'+(dt.getMonth()+1)).slice(-2)+'-'+('0'+dt.getDate()).slice(-2); }
+  fetch(url+'?action=getAttendance&loc='+encodeURIComponent(loc),{redirect:'follow'})
+    .then(function(r){return r.json();})
+    .then(function(j){
+      if(!j||!j.ok) return;
+      var byDate={}, n=0;
+      (j.data||[]).forEach(function(row){
+        var cid=row['ID дитини']||''; if(cid.indexOf('STAFF::')!==0) return;
+        var d=_normD(row['Дата']); if(!d || d<from || d>to) return;
+        var k=cid.slice(7); (byDate[d]=byDate[d]||{})[k]=row['Статус']||''; n++;
+      });
+      Object.keys(byDate).forEach(function(d){
+        var t=getTabel(loc,d);
+        Object.keys(byDate[d]).forEach(function(k){ if(!t[k])t[k]={}; t[k].status=byDate[d][k]; });
+        localStorage.setItem(tabelKey(loc,d),JSON.stringify(t));
+      });
+      if(n) renderTabel();  // перемалювати з хмарними даними
+    }).catch(function(){});
 }
 
 let tabelPeriod='day';
@@ -3922,6 +3964,11 @@ function renderTabel(){
     from=`${tabelYear}-01-01`;to=`${tabelYear}-12-31`;
     periodLabel=`${tabelYear} рік`;
   }
+
+  // v6.27.4: один раз на (локація+діапазон) підвантажуємо табель з хмари, тоді перемальовуємо
+  if(!S._tabelCloudLoaded) S._tabelCloudLoaded={};
+  var _tck=activeLoc+'|'+from+'|'+to;
+  if(activeLoc && !S._tabelCloudLoaded[_tck]){ S._tabelCloudLoaded[_tck]=true; loadTabelFromCloud(activeLoc,from,to); }
 
   const isDayView=tabelPeriod==='day';
 
