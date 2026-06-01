@@ -1386,7 +1386,7 @@ const PERMISSIONS = {
   nurse: [
     'dashboard',
     'clients_list','attendance_kids',
-    'employees','timesheet_staff','vacations','sick_leaves',
+    'employees','vacations','sick_leaves',
     'calendar','vacation_schedule',
     'medical',
     'card-employee-info',
@@ -3929,6 +3929,9 @@ function sortByPosition(arr){
   });
 }
 function renderTabel(){
+  // v6.28.1: медсестра відмічає ТІЛЬКИ дітей — табель співробітників їй недоступний
+  // (страхуємо ще й тут, бо дашборд-картка «Присутні сьогодні» теж веде на nav('tabel')).
+  if(typeof isNurse==='function' && isNurse()){ nav('dashboard'); return; }
   const isHR=isNetworkRole(S.user.role);
   if(!S.f)S.f={};
 
