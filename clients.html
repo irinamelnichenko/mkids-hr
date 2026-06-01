@@ -1077,6 +1077,8 @@ async function apiPost(body){
   try{
     var resp = await fetch(url, {
       method:'POST',
+      redirect:'follow',
+      headers:{'Content-Type':'text/plain;charset=utf-8'},  // v6.27.1: text/plain → без CORS preflight (як в усіх інших файлах)
       body: JSON.stringify(body)
     });
     var data = await resp.json();
@@ -1261,7 +1263,7 @@ async function loadLocations(force){
 async function loadPayments(force){
   if(!force){
     var c=localStorage.getItem(CFG.PAY_CACHE);
-    if(c){ var p=JSON.parse(c); if(Date.now()-p.ts<CFG.TTL){ S.payments=p.data; S.payUpdated=p.updated||''; S.payMonth=p.month||''; buildGroups(); return; } }
+    if(c){ var p=JSON.parse(c); if(Date.now()-p.ts<CFG.TTL && new Date(p.ts).getMonth()===new Date().getMonth()){ S.payments=p.data; S.payUpdated=p.updated||''; S.payMonth=p.month||''; buildGroups(); return; } }  // v6.27.1: інвалідуємо кеш на зламі місяця
   }
   var rows=[];
   var updated='';
@@ -2552,6 +2554,8 @@ function payBadge(status,debt,over){
 
 // ─── RENDER DEBTS ─────────────────────────────────────────────────────────────
 function renderDebts(){
+  // v6.27.1: картка боргів завжди стартує з поточного місяця (не запам'ятовуємо старий)
+  if(!S._debtsMonthInit){ S._debtsMonthInit=true; S.selMonth=new Date().getMonth(); }
   // ── визначаємо активні локації ─────────────────────────────────────────────
   var allLocs = visibleLocs();
   var typeLocs = S.debtLocType
@@ -4134,8 +4138,14 @@ function flushAttCloudSave(){
       status:c.status, updatedBy:who
     };
   });
-  apiPost({action:'saveAttendance',records:records});
-  showFloatMsg('☁️ Збережено в хмарі');
+  // v6.27.1: чекаємо реальну відповідь і показуємо чесний статус; при помилці — повертаємо зміни в чергу
+  setSyncStatus('sync');
+  apiPost({action:'saveAttendance',records:records}).then(function(res){
+    if(res && res.ok){ setSyncStatus('ok'); showFloatMsg('☁️ Збережено в хмарі'); }
+    else { setSyncStatus('err'); S._attPendingChanges=changes.concat(S._attPendingChanges); showFloatMsg('⚠️ Не збережено в хмарі — повторю спробу'); }
+  }).catch(function(){
+    setSyncStatus('err'); S._attPendingChanges=changes.concat(S._attPendingChanges); showFloatMsg('⚠️ Хмара недоступна — збережено локально');
+  });
 }
 
 // Плаваюче повідомлення (знизу праворуч)
@@ -6214,6 +6224,23 @@ function renderPayMonths(){
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(console.error);
 }
+</script>
+<script>
+/* v6.27.1 P3: закриття сайдбару на мобільному (backdrop overlay) */
+(function(){
+  function sb(){ return document.getElementById('sidebar'); }
+  var bd=document.createElement('div');
+  bd.id='sbBackdrop';
+  bd.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:90;display:none';
+  function close(){ var s=sb(); if(s) s.classList.remove('open'); bd.style.display='none'; }
+  function sync(){ var s=sb(); bd.style.display=(s&&s.classList.contains('open')&&window.innerWidth<=768)?'block':'none'; }
+  document.addEventListener('DOMContentLoaded',function(){
+    document.body.appendChild(bd);
+    var s=sb(); if(s) new MutationObserver(sync).observe(s,{attributes:true,attributeFilter:['class']});
+  });
+  bd.addEventListener('click',close);
+  document.addEventListener('click',function(e){ if(e.target.closest&&e.target.closest('.nav-item')) close(); });
+})();
 </script>
 </body>
 </html>

@@ -1091,5 +1091,22 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(console.error);
 }
 </script>
+<script>
+/* v6.27.1 P3: закриття сайдбару на мобільному (backdrop overlay) */
+(function(){
+  function sb(){ return document.getElementById('sidebar'); }
+  var bd=document.createElement('div');
+  bd.id='sbBackdrop';
+  bd.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:90;display:none';
+  function close(){ var s=sb(); if(s) s.classList.remove('open'); bd.style.display='none'; }
+  function sync(){ var s=sb(); bd.style.display=(s&&s.classList.contains('open')&&window.innerWidth<=768)?'block':'none'; }
+  document.addEventListener('DOMContentLoaded',function(){
+    document.body.appendChild(bd);
+    var s=sb(); if(s) new MutationObserver(sync).observe(s,{attributes:true,attributeFilter:['class']});
+  });
+  bd.addEventListener('click',close);
+  document.addEventListener('click',function(e){ if(e.target.closest&&e.target.closest('.nav-item')) close(); });
+})();
+</script>
 </body>
 </html>
