@@ -1471,6 +1471,10 @@ document.addEventListener('click', function(e){
         var hr = (typeof findHrEmp === 'function') ? findHrEmp(nm) : null;
         if (hr) canonical = ((hr.last||'') + ' ' + (hr.first||'')).trim() || nm;
       } catch(_e){}
+      // v6.32.3: дублюємо ціль у localStorage — index відкриє картку навіть
+      // якщо hash загубиться (SW/редірект Pages). Hash лишаємо як другий шлях.
+      try { localStorage.setItem('mkids_open_emp', canonical); } catch(_e){}
+      console.log('[salary→card] redirect to emp:', canonical);
       window.location.href = 'index.html#emp/' + encodeURIComponent(canonical);
     }
     return;
