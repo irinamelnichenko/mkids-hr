@@ -1820,28 +1820,48 @@ function applyRoleVisibility(){
   console.log('[applyRoleVisibility] role=' + role + ' allowed=' + (allowed === 'all' ? 'all' : (Array.isArray(allowed) ? allowed.length+'_perms' : 'undefined')) + ' total=' + totalCount + ' hidden=' + hiddenCount);
 }
 
+// v6.32.3: спільний резолвер «відкрити картку по ПІБ». Матч у ОБОХ порядках
+// (last+first / first+last) + token-subset (запит містить і прізвище, і ім'я —
+// на випадок по-батькові «Музиченко Юлія Іванівна»). Лог у консоль.
+function openEmpByName(rawName){
+  if (typeof hasPerm === 'function' && !hasPerm('employees')) { console.warn('[openEmpByName] no perm'); return false; }
+  function _nn(s){ return String(s||'').trim().toLowerCase().replace(/\s+/g,' '); }
+  var nm = _nn(rawName);
+  if (!nm) return false;
+  var toks = nm.split(' ');
+  var found = (S.emps||[]).filter(function(e){
+    var lf = _nn((e.last||'') + ' ' + (e.first||''));
+    var fl = _nn((e.first||'') + ' ' + (e.last||''));
+    if (lf === nm || fl === nm) return true;
+    var L = _nn(e.last), F = _nn(e.first);
+    return L && F && toks.indexOf(L) >= 0 && toks.indexOf(F) >= 0;
+  });
+  console.log('[openEmpByName] "' + rawName + '" → ' + (found.length ? ('id=' + found[0].id + ' ('+found[0].last+' '+found[0].first+')') : 'NOT FOUND серед ' + (S.emps||[]).length));
+  if (found.length){ nav('employee', found[0].id); return true; }
+  nav('employees'); S.q = nm; renderEmps();
+  return false;
+}
+
+// v6.32.3: handoff із Salary через localStorage (надійніше за hash при SW/
+// редіректах GitHub Pages). Salary кладе ПІБ → index споживає при завантаженні.
+function consumePendingEmpOpen(){
+  var nm = null;
+  try { nm = localStorage.getItem('mkids_open_emp'); } catch(e){}
+  if (!nm) return;
+  try { localStorage.removeItem('mkids_open_emp'); } catch(e){}
+  console.log('[consumePendingEmpOpen] →', nm);
+  openEmpByName(nm);
+}
+
 function dispatchHashView(){
   const h = (location.hash||'').replace('#','');
   if (!h) return;
-  // v6.31: deep-link на повну картку співробітника — #emp/<ПІБ> (з Salary тощо).
-  // v6.32.2: ❗ локальний const нижче назвали hasViewPerm — раніше він зватися
-  // hasPerm і ЗАТІНЯВ глобальну функцію hasPerm → виклик hasPerm('employees')
-  // тут кидав TDZ ReferenceError, і весь deep-link падав (Salary не відкривав
-  // картку). Також матчимо ПІБ у ОБОХ порядках (last+first / first+last).
+  // v6.31/.2/.3: deep-link на повну картку — #emp/<ПІБ>.
   if (h.indexOf('emp/') === 0){
     history.replaceState(null,'',location.pathname + location.search);
-    if (typeof hasPerm === 'function' && !hasPerm('employees')) return;
     var nm = '';
     try { nm = decodeURIComponent(h.slice(4)); } catch(e){ nm = h.slice(4); }
-    nm = String(nm||'').trim().toLowerCase().replace(/\s+/g,' ');
-    function _nn(s){ return String(s||'').trim().toLowerCase().replace(/\s+/g,' '); }
-    var found = (S.emps||[]).filter(function(e){
-      var lf = _nn((e.last||'') + ' ' + (e.first||''));
-      var fl = _nn((e.first||'') + ' ' + (e.last||''));
-      return lf === nm || fl === nm;
-    });
-    if (found.length){ nav('employee', found[0].id); }
-    else { nav('employees'); S.q = nm; renderEmps(); }   // не знайшли — список + пошук
+    openEmpByName(nm);
     return;
   }
   const allowed = PERMISSIONS[S.user && S.user.role];
@@ -4485,6 +4505,7 @@ window.addEventListener('DOMContentLoaded',async()=>{
     updUserUI();
     await initApp();
     dispatchHashView();
+    consumePendingEmpOpen();   // v6.32.3: handoff із Salary (localStorage)
     return;
   }
 
