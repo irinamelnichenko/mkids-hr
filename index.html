@@ -1726,6 +1726,31 @@ async function saveEmpForm(){
   }
 }
 
+// v6.33: повернення з декрету — статус → 'працює'. Свідома дія CFO/HR/director
+// (на відміну від UI-фільтра). Пише повний рядок назад через saveEmployee.
+async function reactivateMaternity(empId){
+  var e = S.emps[empId]; if(!e) return;
+  if(!canEmpEdit(e)){ toast('🚫 Немає дозволу'); return; }
+  if(!confirm('Повернути «'+fullName(e)+'» з декрету в активні?\n\nСтатус зміниться з «'+(e.stat||'')+'» на «працює». Співробітниця знову зʼявиться в табелі та зарплаті.')) return;
+  var payload = {
+    dir:e.dir||'', typ:e.typ||'', loc:e.loc||'', grp:e.grp||'',
+    last:e.last||'', first:e.first||'', phone:e.phone||'', pos:e.pos||'',
+    stat:'працює', bday:e.bday||'', bmon:e.bmon||'', bdate:e.bdate||'',
+    wday:e.wday||'', hired:e.hired||'', fired:e.fired||'', email:e.email||''
+  };
+  try{
+    var res = await postToScript('saveEmployee', {actorId:S.user&&S.user.id, payload:payload, rowNum:e.rowNum});
+    if(!res || !res.ok){ toast('❌ '+((res&&res.error)||'Помилка збереження')); return; }
+    try{ localStorage.removeItem(CFG.CK); }catch(_e){}
+    await fetchEmps(true);
+    var newRow = (res.employee && res.employee.rowNum) || e.rowNum;
+    var newId = -1;
+    for(var i=0;i<S.emps.length;i++){ if(S.emps[i].rowNum===newRow){ newId=i; break; } }
+    if(newId>=0){ S.empId=newId; renderEmpCard(); } else { renderEmps(); }
+    toast('↩ Повернено в активні');
+  }catch(err){ toast('Помилка мережі: '+(err&&err.message||err)); }
+}
+
 async function confirmDeleteEmp(){
   var rowNum = Number(document.getElementById('empEditRowNum').value || 0);
   if (!rowNum){ _empShowError('Нема rowNum'); return; }
@@ -2351,6 +2376,7 @@ function renderEmpCard(){
         </div>
         <div class="emp-btns">
           ${canEmpEdit(e)?`<button class="btn btn-ghost" onclick="openEmpEditor(${e.id})" title="Редагувати картку">✏️ Редагувати</button>`:''}
+          ${isMaternity(e)&&canEmpEdit(e)?`<button class="btn btn-ghost" onclick="reactivateMaternity(${e.id})" title="Повернути з декрету">↩ Повернути в активні</button>`:''}
           ${act?`
             <button class="btn btn-ghost" data-permission="card-employee-vacation-button" onclick="openVac(${e.id})">🏖️ Відпустка</button>
             <button class="btn btn-ghost" data-permission="card-employee-sick-button" onclick="openSick(${e.id})">🏥 Лікарняний</button>
@@ -2358,6 +2384,10 @@ function renderEmpCard(){
           `:''}
         </div>
       </div>
+      ${isMaternity(e)?`<div style="margin:14px;padding:12px 16px;border-radius:8px;background:#f3e8fb;border:1px solid #8e44ad;color:#6c3483;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+        <span>👶 <strong>У декретній відпустці</strong> — не показується в табелі та зарплаті, не рахується активною.</span>
+        ${canEmpEdit(e)?`<button class="btn btn-sm" onclick="reactivateMaternity(${e.id})" style="background:#27ae60;color:#fff;border-color:#27ae60;white-space:nowrap">↩ Повернути в активні</button>`:''}
+      </div>`:''}
       <div class="qs-grid">
         <div class="qs-item"><div class="qs-val">${t?`${t.yr}р ${t.mo}м`:'—'}</div><div class="qs-lbl">Стаж</div></div>
         <div class="qs-item"><div class="qs-val" style="color:${ov?'#e74c3c':'var(--dark)'};">${vUsed}<span style="font-size:14px;color:var(--gray)">/${vEarned}</span></div><div class="qs-lbl">Відпустка використано/доступно</div></div>
