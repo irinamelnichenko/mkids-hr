@@ -864,7 +864,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
     </div>
     <div class="modal-ft">
       <button class="btn btn-danger btn-sm" id="btnDeleteChild" onclick="deleteChild()" style="margin-right:auto">🗑️ Видалити</button>
-      <button class="btn btn-sm" id="btnGraduate" data-permission="terminate_contract" onclick="openGraduate()" style="display:none;background:#8e44ad;color:#fff;border-color:#8e44ad">🎓 Випустити</button>
+      <button class="btn btn-sm" id="btnGraduate" data-permission="terminate_contract" onclick="openGraduate()" style="display:none;background:#8e44ad;color:#fff;border-color:#8e44ad">🎓 Випускник</button>
       <button class="btn btn-sm" id="btnTerminate" data-permission="terminate_contract" onclick="openTerminate()" style="display:none;background:#c0392b;color:#fff;border-color:#c0392b">🚪 Розірвати договір</button>
       <button class="btn btn-sm" id="btnRestore" data-permission="terminate_contract" onclick="restoreContract()" style="display:none;background:#fff;color:#27ae60;border:1.5px solid #27ae60">↶ Повернути в активні</button>
       <button class="btn btn-secondary" onclick="closeModal('mChild')">Скасувати</button>
@@ -912,7 +912,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
 <div class="modal-ov hidden" id="mGraduate">
   <div class="modal">
     <div class="modal-hd">
-      <h3>🎓 Випустити дитину</h3>
+      <h3>🎓 Перевести в випускники</h3>
       <button class="modal-close" onclick="closeModal('mGraduate')">✕</button>
     </div>
     <div class="modal-bd">
@@ -927,7 +927,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
     </div>
     <div class="modal-ft">
       <button class="btn btn-secondary" onclick="closeModal('mGraduate')">Скасувати</button>
-      <button class="btn btn-sm" onclick="confirmGraduate()" style="background:#8e44ad;color:#fff;border-color:#8e44ad">🎓 Підтвердити випуск</button>
+      <button class="btn btn-sm" onclick="confirmGraduate()" style="background:#8e44ad;color:#fff;border-color:#8e44ad">🎓 Підтвердити</button>
     </div>
   </div>
 </div>
