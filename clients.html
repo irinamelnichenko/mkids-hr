@@ -4241,6 +4241,18 @@ function flushAttCloudSave(){
     .catch(function(e){ setSyncStatus('err'); S._attPendingChanges=changes.concat(S._attPendingChanges); showFloatMsg('⚠️ Хмара недоступна — збережено локально'); console.warn('att save error:',e); });
 }
 
+// v6.30.2: примусовий flush черги при згортанні/закритті PWA — щоб відмітки
+// не загубились, якщо застосунок закрили в межах debounce-вікна (1.5с).
+(function(){
+  function _attFlushNow(){
+    try{ if(S._attPendingChanges && S._attPendingChanges.length) flushAttCloudSave(); }catch(e){}
+  }
+  window.addEventListener('pagehide', _attFlushNow);
+  document.addEventListener('visibilitychange', function(){
+    if(document.visibilityState==='hidden') _attFlushNow();
+  });
+})();
+
 // Плаваюче повідомлення (знизу праворуч)
 function showFloatMsg(msg){
   var el=document.getElementById('floatMsg');
