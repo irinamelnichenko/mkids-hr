@@ -1462,7 +1462,17 @@ document.addEventListener('click', function(e){
   var nameEl = t.closest && t.closest('.emp-link');
   if (nameEl){
     var nm = nameEl.dataset.empName || '';
-    if (nm) window.location.href = 'index.html#emp/' + encodeURIComponent(nm);
+    if (nm){
+      // v6.32.2: ПІБ у Salary може бути в іншому порядку/з по-батькові, ніж
+      // у HR. Резолвимо до КАНОНІЧНОГО "Прізвище Ім'я" через findHrEmp (HR
+      // уже завантажені, бо рядок став .emp-link) — index чекає саме його.
+      var canonical = nm;
+      try {
+        var hr = (typeof findHrEmp === 'function') ? findHrEmp(nm) : null;
+        if (hr) canonical = ((hr.last||'') + ' ' + (hr.first||'')).trim() || nm;
+      } catch(_e){}
+      window.location.href = 'index.html#emp/' + encodeURIComponent(canonical);
+    }
     return;
   }
   // Клік по ПІБ що НЕ існує в HR-базі — toast-підказка для CFO.
