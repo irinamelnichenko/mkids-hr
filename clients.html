@@ -534,6 +534,10 @@ tbody tr.clickable:hover td{background:#f0f7ff}
            data-v="terminated" onclick="navTerminated()">
         <span class="ni">📋</span> Розірвані договори
       </div>
+      <div class="nav-item" data-permission="clients_list" data-parent="crm" data-perm-page="clients"
+           data-v="graduates" onclick="navGraduates()">
+        <span class="ni">🎓</span> Випускники
+      </div>
       <div class="nav-item" data-permission="payments" data-parent="crm" data-perm-page="clients"
            data-v="debts" onclick="goPerm('payments')">
         <span class="ni">💰</span> Борги та оплати
@@ -692,13 +696,12 @@ tbody tr.clickable:hover td{background:#f0f7ff}
         <div class="g2">
           <div class="fg"><label>Вихователь</label><input type="text" id="fTeacher"></div>
           <div class="fg"><label>Статус клієнта</label>
+            <!-- v6.29.3: «Розірвано»/«Випускник» прибрано — лише через кнопки. -->
             <select id="fStatus" onchange="updateStatusWarnings()">
               <option value="adaptation">🌱 Адаптація</option>
               <option value="active">✅ Активний</option>
               <option value="paused">⏸ Призупинено</option>
               <option value="future">📅 Майбутній</option>
-              <option value="terminated">❌ Розірвано</option>
-              <option value="graduate">🎓 Випускник</option>
             </select></div>
         </div>
         <div class="section-hd">Контакт мами</div>
@@ -861,8 +864,9 @@ tbody tr.clickable:hover td{background:#f0f7ff}
     </div>
     <div class="modal-ft">
       <button class="btn btn-danger btn-sm" id="btnDeleteChild" onclick="deleteChild()" style="margin-right:auto">🗑️ Видалити</button>
+      <button class="btn btn-sm" id="btnGraduate" data-permission="terminate_contract" onclick="openGraduate()" style="display:none;background:#8e44ad;color:#fff;border-color:#8e44ad">🎓 Випустити</button>
       <button class="btn btn-sm" id="btnTerminate" data-permission="terminate_contract" onclick="openTerminate()" style="display:none;background:#c0392b;color:#fff;border-color:#c0392b">🚪 Розірвати договір</button>
-      <button class="btn btn-sm" id="btnRestore" data-permission="terminate_contract" onclick="restoreContract()" style="display:none;background:#fff;color:#27ae60;border:1.5px solid #27ae60">↶ Відновити</button>
+      <button class="btn btn-sm" id="btnRestore" data-permission="terminate_contract" onclick="restoreContract()" style="display:none;background:#fff;color:#27ae60;border:1.5px solid #27ae60">↶ Повернути в активні</button>
       <button class="btn btn-secondary" onclick="closeModal('mChild')">Скасувати</button>
       <button class="btn btn-primary" onclick="saveChild()">💾 Зберегти</button>
     </div>
@@ -884,7 +888,6 @@ tbody tr.clickable:hover td{background:#f0f7ff}
         <select id="termCategory">
           <option value="🏠 Переїзд">🏠 Переїзд</option>
           <option value="🎒 Перехід до іншого садочка">🎒 Перехід до іншого садочка</option>
-          <option value="🎓 Випускник">🎓 Випускник (закінчили цикл навчання)</option>
           <option value="💰 Підняття вартості">💰 Підняття вартості</option>
           <option value="😔 Незадоволення якістю">😔 Незадоволення якістю</option>
           <option value="👨‍👩‍👧 Сімейні обставини">👨‍👩‍👧 Сімейні обставини</option>
@@ -901,6 +904,30 @@ tbody tr.clickable:hover td{background:#f0f7ff}
     <div class="modal-ft">
       <button class="btn btn-secondary" onclick="closeModal('mTerminate')">Скасувати</button>
       <button class="btn btn-sm" onclick="confirmTerminate()" style="background:#c0392b;color:#fff;border-color:#c0392b">🚪 Підтвердити розірвання</button>
+    </div>
+  </div>
+</div>
+
+<!-- v6.29.3: модалка випуску ──────────────────────────────────────── -->
+<div class="modal-ov hidden" id="mGraduate">
+  <div class="modal">
+    <div class="modal-hd">
+      <h3>🎓 Випустити дитину</h3>
+      <button class="modal-close" onclick="closeModal('mGraduate')">✕</button>
+    </div>
+    <div class="modal-bd">
+      <p id="gradClientName" style="font-weight:600;margin:0 0 12px 0"></p>
+      <div class="fg"><label>Дата випуску</label>
+        <input type="date" id="gradDate"></div>
+      <div class="fg" style="margin-top:10px"><label>Куди пішов далі (опційно)</label>
+        <textarea id="gradNext" rows="2" placeholder="Напр.: школа m.kids / інша школа / інше"
+          style="width:100%;padding:10px;border:1.5px solid var(--gray2);border-radius:8px;font-size:14px;font-family:inherit;resize:vertical"></textarea></div>
+      <div class="alert alert-warn" style="margin-top:12px;font-size:13px">
+        🎓 Випуск — природне завершення циклу (НЕ розірвання). Клієнт переходить у розділ «🎓 Випускники» і НЕ впливає на показники відтоку. Платежі не чіпаються.</div>
+    </div>
+    <div class="modal-ft">
+      <button class="btn btn-secondary" onclick="closeModal('mGraduate')">Скасувати</button>
+      <button class="btn btn-sm" onclick="confirmGraduate()" style="background:#8e44ad;color:#fff;border-color:#8e44ad">🎓 Підтвердити випуск</button>
     </div>
   </div>
 </div>
@@ -958,6 +985,9 @@ var S = {
   termPeriod: 'all',   // 'all'|'month'|'quarter'|'year'
   termReasonQ:'',      // пошук по імені
   termCategory:'',     // v6.29.1 — фільтр по категорії причини
+  // v6.29.3 — фільтри архіву випускників
+  gradLoc:    '',
+  gradPeriod: 'all',
   // Аналітика — вкладка
   mainTab:      'clients',
   anaSelLoc:    '',
@@ -2273,8 +2303,9 @@ function showSpinner(){ document.getElementById('main').innerHTML='<div class="l
 function toggleSidebar(){ document.getElementById('sidebar').classList.toggle('open'); }
 
 // ─── NAVIGATION ──────────────────────────────────────────────────────────────
-var TITLES={clients:'👶 Список дітей',debts:'💰 Борги та оплати',settings:'⚙️ Налаштування',absRequests:'💼 Перерахунки бюджету',attendance:'📋 Табель відвідування',terminated:'📋 Розірвані договори'};
+var TITLES={clients:'👶 Список дітей',debts:'💰 Борги та оплати',settings:'⚙️ Налаштування',absRequests:'💼 Перерахунки бюджету',attendance:'📋 Табель відвідування',terminated:'📋 Розірвані договори',graduates:'🎓 Випускники'};
 function navTerminated(){ nav('terminated'); }
+function navGraduates(){ nav('graduates'); }
 function nav(view){
   S.mainTab='clients'; // скидаємо аналітику при навігації
   S.view=view;
@@ -2290,6 +2321,7 @@ function renderView(){
   else if(S.view==='absRequests') renderAbsRequests();
   else if(S.view==='attendance') renderAttendance();
   else if(S.view==='terminated') renderTerminated();
+  else if(S.view==='graduates') renderGraduates();
   else renderSettings();
 }
 function switchMainTab(tab){
@@ -2435,7 +2467,7 @@ function renderClients(){
     return true;
   });
   if(crmFiltered.length){
-    var statusLabel={active:'✅ Активний',future:'📅 Майбутній',terminated:'❌ Розірваний',graduate:'🎓 Випускник'};
+    var statusLabel={active:'✅ Активний',future:'📅 Майбутній',adaptation:'🌱 Адаптація',paused:'⏸ Призупинено',terminated:'❌ Розірваний',graduate:'🎓 Випускник',graduated:'🎓 Випускник'};
     html+='<div class="loc-section">'
       +'<div class="loc-title">📋 Нові клієнти <span style="font-size:13px;font-weight:400;color:var(--gray)">ще не в платіжній системі — '+crmFiltered.length+' дітей</span></div>'
       +'<div class="card" style="margin-bottom:16px">'
@@ -2951,7 +2983,7 @@ function openNewChild(){
   var spMom = document.querySelector('input[name="signerParent"][value="mom"]');
   if (spMom) spMom.checked = true;
   document.getElementById('fGroup').value='';
-  document.getElementById('fStatus').value='active';
+  syncStatusField({status:'active'});   // v6.29.3: знімає lock/temp-опцію
   document.getElementById('tpPayStatus').innerHTML='';
   document.getElementById('payMonthsContent').innerHTML='';
   document.getElementById('feeHistoryList').innerHTML='';
@@ -3026,7 +3058,7 @@ function populateForm(id){
   groupSel.value=desiredGroup;
   if(groupSel.value!==desiredGroup) groupSel.selectedIndex=0;
   document.getElementById('fTeacher').value=c.teacher||'';
-  document.getElementById('fStatus').value=c.status||'active';
+  syncStatusField(c);   // v6.29.3: read-only для розірваних/випускників
   document.getElementById('fMomName').value=c.momName||'';
   document.getElementById('fMomPhone').value=c.momPhone||'';
   document.getElementById('fMomEmail').value=c.momEmail||'';
@@ -5156,7 +5188,6 @@ function buildClientPayload(c, id){
 var TERM_REASON_CATEGORIES = [
   '🏠 Переїзд',
   '🎒 Перехід до іншого садочка',
-  '🎓 Випускник',
   '💰 Підняття вартості',
   '😔 Незадоволення якістю',
   '👨‍👩‍👧 Сімейні обставини',
@@ -5219,11 +5250,47 @@ function confirmTerminate(){
   renderView();
 }
 
+// graduated: підтримуємо й legacy-значення 'graduate'.
+function isGraduatedStatus(st){ return st==='graduated'||st==='graduate'; }
+
+// v6.29.3: випуск (природне завершення циклу, НЕ розірвання).
+function openGraduate(){
+  var id=S.editId; if(!id) return;
+  var c=S.crm[id]||{};
+  if(!canTerminate(c.loc)){ alert('🚫 Випуск доступний лише CFO/HR та директору власної локації.'); return; }
+  document.getElementById('gradClientName').textContent='👤 '+(c.name||id)+(c.loc?' · '+c.loc:'');
+  document.getElementById('gradDate').value = (isGraduatedStatus(c.status)&&c.terminationDate) ? c.terminationDate : today();
+  document.getElementById('gradNext').value = isGraduatedStatus(c.status) ? (c.terminationReason||'') : '';
+  document.getElementById('mGraduate').classList.remove('hidden');
+}
+function confirmGraduate(){
+  var id=S.editId; if(!id) return;
+  var c=getCRMCard(id);
+  if(!canTerminate(c.loc)){ alert('🚫 Немає дозволу.'); return; }
+  var date=String(document.getElementById('gradDate').value||'').trim();
+  var next=String(document.getElementById('gradNext').value||'').trim();
+  if(!date){ alert('Вкажіть дату випуску'); return; }
+  c.status='graduated';
+  c.terminationDate=date;                 // дата випуску — у тому ж полі (для простоти)
+  c.terminationReason=next;               // «куди пішов» — у тому ж полі
+  c.updatedAt=today();
+  if(!c.createdAt) c.createdAt=today();
+  saveLocalCRM();
+  apiPost({action:'saveClient', data: buildClientPayload(c, id)});
+  localStorage.removeItem(CFG.CLI_CACHE);
+  closeModal('mGraduate');
+  closeModal('mChild');
+  if(typeof showToast==='function') showToast('🎓 Дитину випущено. Клієнт у розділі «Випускники».','ok');
+  renderView();
+}
+
+// Універсальне повернення в активні (для розірваних і випускників).
 function restoreContract(){
   var id=S.editId; if(!id) return;
   var c=getCRMCard(id);
   if(!canTerminate(c.loc)){ alert('🚫 Немає дозволу.'); return; }
-  if(!confirm('Відновити договір «'+(c.name||id)+'»?\n\nСтатус повернеться на «Активний», дату й причину розірвання буде очищено.')) return;
+  var wasGrad=isGraduatedStatus(c.status);
+  if(!confirm('Повернути «'+(c.name||id)+'» в активні?\n\nСтатус повернеться на «Активний», дату й '+(wasGrad?'примітку випуску':'причину розірвання')+' буде очищено.')) return;
   c.status='active';
   c.terminationDate='';
   c.terminationReason='';
@@ -5232,17 +5299,33 @@ function restoreContract(){
   apiPost({action:'saveClient', data: buildClientPayload(c, id)});
   localStorage.removeItem(CFG.CLI_CACHE);
   closeModal('mChild');
-  if(typeof showToast==='function') showToast('↶ Договір відновлено.','ok');
+  if(typeof showToast==='function') showToast('↶ Повернуто в активні.','ok');
   renderView();
 }
 
-// Банер + перемикання кнопок розірвати/відновити у картці. Викликається з populateForm.
+// Поле статусу: для розірваних/випускників — read-only (lock) з підказкою.
+function syncStatusField(c){
+  var sel=document.getElementById('fStatus'); if(!sel) return;
+  var st=(c&&c.status)||'active';
+  var tmp=sel.querySelector('option[data-temp="1"]'); if(tmp) tmp.remove();
+  if(st==='terminated' || isGraduatedStatus(st)){
+    var o=document.createElement('option');
+    o.value=st; o.textContent=(st==='terminated'?'❌ Розірвано':'🎓 Випускник'); o.setAttribute('data-temp','1');
+    sel.appendChild(o); sel.value=st; sel.disabled=true;
+  } else {
+    sel.disabled=false; sel.value=st;
+  }
+}
+
+// Банер + перемикання кнопок випустити/розірвати/повернути у картці.
 function renderTermBanner(id){
   var c=S.crm[id]||{};
   var banner=document.getElementById('termBanner');
+  var btnG=document.getElementById('btnGraduate');
   var btnT=document.getElementById('btnTerminate');
   var btnR=document.getElementById('btnRestore');
   var isTerm=(c.status==='terminated');
+  var isGrad=isGraduatedStatus(c.status);
   var canT=canTerminate(c.loc);
   if(banner){
     if(isTerm){
@@ -5252,13 +5335,21 @@ function renderTermBanner(id){
       banner.innerHTML='<div class="alert alert-danger" style="line-height:1.6">'
         +'<b>❌ Договір розірвано '+esc(dt)+'</b>'
         +'<div style="font-size:13px;margin-top:2px">Причина: '+rsn+'</div></div>';
+    } else if(isGrad){
+      var gdt=c.terminationDate?fmtDateUa(c.terminationDate):'—';
+      var nxt=c.terminationReason?('<div style="font-size:13px;margin-top:2px">Куди пішов: '+esc(c.terminationReason)+'</div>'):'';
+      banner.style.display='';
+      banner.innerHTML='<div class="alert" style="line-height:1.6;background:#f3e8fb;border:1px solid #8e44ad;color:#6c3483">'
+        +'<b>🎓 Випускник з '+esc(gdt)+'</b>'+nxt+'</div>';
     } else {
       banner.style.display='none';
       banner.innerHTML='';
     }
   }
-  if(btnT) btnT.style.display=(canT && !isTerm)?'':'none';
-  if(btnR) btnR.style.display=(canT && isTerm)?'':'none';
+  var locked=(isTerm||isGrad);
+  if(btnG) btnG.style.display=(canT && !locked)?'':'none';
+  if(btnT) btnT.style.display=(canT && !locked)?'':'none';
+  if(btnR) btnR.style.display=(canT && locked)?'':'none';
 }
 
 // 'YYYY-MM-DD' → 'DD.MM.YYYY' (для відображення).
@@ -5406,14 +5497,74 @@ function renderTerminated(){
   document.getElementById('main').innerHTML=html;
 }
 
+// ─── ARCHIVE: випускники (v6.29.3) ────────────────────────────────────────────
+// status='graduated' (legacy 'graduate' теж). Дата випуску — у terminationDate,
+// «куди пішов» — у terminationReason. НЕ розірвання, НЕ впливає на відтік.
+function renderGraduates(){
+  var rows=[];
+  Object.keys(S.crm).forEach(function(id){
+    var c=S.crm[id];
+    if(!c||!c.name||!isGraduatedStatus(c.status)) return;
+    if(!isHR() && c.loc!==S.user.loc) return;
+    rows.push({id:id, c:c});
+  });
+  var filtered=rows.filter(function(r){
+    if(S.gradLoc && r.c.loc!==S.gradLoc) return false;
+    if(!termInPeriod(r.c.terminationDate, S.gradPeriod)) return false;
+    return true;
+  });
+  filtered.sort(function(a,b){ return String(b.c.terminationDate||'').localeCompare(String(a.c.terminationDate||'')); });
+
+  var locOpts='<option value="">Всі локації</option>'+visibleLocs().map(function(l){
+    return '<option value="'+esc(l.loc)+'"'+(S.gradLoc===l.loc?' selected':'')+'>'+esc(l.loc)+'</option>';
+  }).join('');
+  var periods=[['all','Весь час'],['month','Цей місяць'],['quarter','Цей квартал'],['year','Цей рік']];
+  var periodOpts=periods.map(function(p){ return '<option value="'+p[0]+'"'+(S.gradPeriod===p[0]?' selected':'')+'>'+p[1]+'</option>'; }).join('');
+
+  var html='<div class="card" style="margin-bottom:12px"><div style="padding:10px 14px">'
+    +'<div class="filters" style="margin:0;padding:0;border:none;background:none;gap:8px;flex-wrap:wrap">'
+    +(isHR()?'<select class="flt-sel" onchange="S.gradLoc=this.value;renderGraduates()">'+locOpts+'</select>':'')
+    +'<select class="flt-sel" onchange="S.gradPeriod=this.value;renderGraduates()">'+periodOpts+'</select>'
+    +'</div></div></div>';
+
+  html+='<div class="stats-grid" style="grid-template-columns:repeat(1,1fr);margin-bottom:16px">'
+    +'<div class="stat-card"><div class="stat-icon" style="background:#8e44ad">🎓</div><div><div class="stat-val">'+filtered.length+'</div><div class="stat-lbl">Випускників за період</div></div></div>'
+    +'</div>';
+
+  if(!filtered.length){
+    html+='<div class="empty"><span class="ei">🎓</span><h4>Немає випускників</h4>'
+      +'<p style="color:var(--gray)">За обраними фільтрами нічого не знайдено.</p></div>';
+    document.getElementById('main').innerHTML=html;
+    return;
+  }
+
+  html+='<div class="card"><div class="tbl-wrap"><table><thead><tr>'
+    +'<th>ПІБ дитини</th><th>Локація</th><th>Група</th><th>Дата випуску</th><th>Куди пішов</th>'
+    +'</tr></thead><tbody>';
+  filtered.forEach(function(r){
+    var c=r.c;
+    html+='<tr class="clickable" onclick="openChild('+escAttrJS(r.id)+','+escAttrJS(c.group||'')+','+escAttrJS(c.teacher||'')+','+escAttrJS(c.loc||'')+','+escAttrJS(c.name||'')+')">'
+      +'<td><span class="child-link">'+esc(c.name)+'</span></td>'
+      +'<td>'+esc(c.loc||'')+'</td>'
+      +'<td>'+esc(c.group||'')+'</td>'
+      +'<td>'+esc(fmtDateUa(c.terminationDate))+'</td>'
+      +'<td>'+(c.terminationReason?esc(c.terminationReason):'<span style="color:var(--gray2)">—</span>')+'</td>'
+      +'</tr>';
+  });
+  html+='</tbody></table></div></div>';
+  document.getElementById('main').innerHTML=html;
+}
+
 // ─── DELETE ───────────────────────────────────────────────────────────────────
 function deleteChild(){
   var id=S.editId; if(!id) return;
   var card=S.crm[id]||{};
   var name=card.name||id;
-  // v6.29: захист — попередження при видаленні розірваного (історія в архіві).
+  // v6.29: захист — попередження при видаленні розірваного/випускника (історія в архіві).
   if(card.status==='terminated'){
     if(!confirm('⚠️ Ви видаляєте РОЗІРВАНОГО клієнта «'+name+'».\n\nІсторія розірвання (дата/причина) буде ВТРАЧЕНА, і він зникне з розділу «Розірвані договори».\n\nЗазвичай розірваного НЕ треба видаляти — він має лишатись в архіві.\n\nВидалити все одно?')) return;
+  } else if(isGraduatedStatus(card.status)){
+    if(!confirm('⚠️ Ви видаляєте ВИПУСКНИКА «'+name+'».\n\nІсторія випуску буде ВТРАЧЕНА, і він зникне з розділу «Випускники».\n\nЗазвичай випускника НЕ треба видаляти — він має лишатись в архіві.\n\nВидалити все одно?')) return;
   }
   if(!confirm('Видалити "'+name+'" з CRM?\n\nУвага: клієнт буде видалений тільки з CRM-картки. Дані в Payment Sheet залишаться.')) return;
   // Видаляємо локально
@@ -5461,7 +5612,10 @@ function saveChild(){
   c.group=group;
   c.teacher=teacher;
   c.bday=val('fBday');
-  c.status=val('fStatus');
+  // v6.29.3: статус «Розірвано»/«Випускник» змінюється ЛИШЕ через кнопки —
+  // звичайне збереження картки його НЕ чіпає (dropdown disabled/read-only).
+  var prevStatus=c.status;
+  c.status=(prevStatus==='terminated'||isGraduatedStatus(prevStatus)) ? prevStatus : val('fStatus');
   c.momName=val('fMomName');
   c.momPhone=val('fMomPhone');
   c.momEmail=val('fMomEmail');
