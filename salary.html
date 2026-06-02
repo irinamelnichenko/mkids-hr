@@ -1456,11 +1456,13 @@ document.addEventListener('click', function(e){
     return;
   }
   // Клік по ПІБ у Salary-таблиці — є в HR.
+  // v6.31: уніфікація — ведемо на ПОВНУ картку співробітника (index.html),
+  // ту саму що зі Списку/Табеля (deep-link #emp/<ПІБ>). Модалка #empModal
+  // лишається в коді як резерв (не видаляємо), але клік тепер не її відкриває.
   var nameEl = t.closest && t.closest('.emp-link');
   if (nameEl){
     var nm = nameEl.dataset.empName || '';
-    var lc = nameEl.dataset.empLoc  || '';
-    if (nm) openEmpCardFromSalary(nm, lc);
+    if (nm) window.location.href = 'index.html#emp/' + encodeURIComponent(nm);
     return;
   }
   // Клік по ПІБ що НЕ існує в HR-базі — toast-підказка для CFO.
