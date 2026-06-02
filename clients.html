@@ -1059,6 +1059,62 @@ function diffDays(a,b){ return Math.round((b-a)/86400000); }
 function weeksCeil(days){ return Math.ceil(Math.max(0,days)/5); }
 function childId(name,group,loc){ return 'c_'+((name||'').trim().slice(0,20))+'_'+((group||'').slice(0,8))+'_'+((loc||'').slice(0,8)); }
 
+// ── v6.36: ВІДПУСТКА — пропорційна формула + ліміт 20 роб.днів/договірний рік ──
+// Держсвята України (хардкод 2025-2026). Свято на Сб/Нд не переноситься (не
+// віднімається). Великдень/Трійця — рухомі (дати задані явно).
+function getUkraineHolidays(year){
+  var fixed=['01-01','01-07','03-08','05-01','05-09','06-28','08-24','10-14','12-25'];
+  var movable={ 2025:['05-05','06-23'], 2026:['04-12','05-31'] };  // Великдень, Трійця
+  var out=fixed.map(function(dm){ return year+'-'+dm; });
+  (movable[year]||[]).forEach(function(dm){ out.push(year+'-'+dm); });
+  return out;
+}
+var _HOL_CACHE={};
+function _holSet(year){
+  if(!_HOL_CACHE[year]){ var s={}; getUkraineHolidays(year).forEach(function(d){ s[d]=1; }); _HOL_CACHE[year]=s; }
+  return _HOL_CACHE[year];
+}
+function isoOf(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+// Робочі дні в діапазоні [from,to]: Пн-Пт мінус держсвята.
+function countWorkDaysExclHol(fromStr,toStr){
+  var f=pd(fromStr), t=pd(toStr); if(!f||!t||t<f) return 0;
+  var n=0, cur=new Date(f.getTime());
+  while(cur<=t){ var wd=cur.getDay(); if(wd!==0&&wd!==6 && !_holSet(cur.getFullYear())[isoOf(cur)]) n++; cur.setDate(cur.getDate()+1); }
+  return n;
+}
+// Робочі дні цілого місяця (1-based) + скільки свят випало на Пн-Пт.
+function workDaysInMonthExcludingHolidays(year, month){
+  var days=new Date(year,month,0).getDate(); var n=0, hol=0;
+  for(var d=1; d<=days; d++){
+    var dt=new Date(year,month-1,d), wd=dt.getDay();
+    if(wd===0||wd===6) continue;
+    if(_holSet(year)[isoOf(dt)]){ hol++; continue; }
+    n++;
+  }
+  return {workDays:n, holidaysOnWeekday:hol};
+}
+// Використано роб.днів відпустки у договірному році, що містить refISO (без excludeId, без rejected/cancelled).
+function getVacationUsedInContractYear(c, refISO, excludeAbsId){
+  if(!c||!c.contractDate) return 0;
+  var w=getContractYear(c.contractDate, refISO); if(!w) return 0;
+  var used=0;
+  (c.absences||[]).forEach(function(a){
+    if(!a||a.type!=='vacation') return;
+    if(excludeAbsId && a.id===excludeAbsId) return;
+    if(a.status==='rejected'||a.status==='cancelled') return;
+    if(!a.from||!a.to) return;
+    var s=(a.from<w.from)?w.from:a.from;
+    var e=(a.to>w.to)?w.to:a.to;
+    if(e<s) return;
+    used+=countWorkDaysExclHol(s,e);
+  });
+  return used;
+}
+// Залишок ліміту відпустки (20 роб.днів) у договірному році для refISO.
+function getVacationLimitRemaining(c, refISO, excludeAbsId){
+  return Math.max(0, 20 - getVacationUsedInContractYear(c, refISO||today(), excludeAbsId));
+}
+
 function translitUA(str){
   var T={'а':'a','б':'b','в':'v','г':'h','ґ':'g','д':'d','е':'e','є':'ye','ж':'zh','з':'z','и':'y',
     'і':'i','ї':'i','й':'y','к':'k','л':'l','м':'m','н':'n','о':'o','п':'p','р':'r','с':'s',
@@ -3316,7 +3372,7 @@ function updateContractType(){
   var t=getContractType3(date,group,loc);
   document.getElementById('fContractType').value=t;
   var labels={
-    'standard':          '📋 Стандарт — тільки відпустка (до 01.10.2025)',
+    'standard':          '📋 Стандарт — відпустка (пропорційно, до 01.10.2025)',
     'preschool':         '📋 Preschool — без перерахунків (до 01.10.2025)',
     'sick-only':         '📋 Після 01.10.2025 — тільки хвороба',
     'school-no-absence': '🏠 Школа — облік відпусток не ведеться'
@@ -3329,7 +3385,7 @@ function updateContractType(){
 function updateContractUI(){
   var t=document.getElementById('fContractType').value;
   var el=document.getElementById('contractInfo'); if(!el) return;
-  if(t==='standard')   el.textContent='Стандарт: ТІЛЬКИ відпустка до 4 тижнів на рік (1 тиж→25%, 2→50%, 3→75%, 4→100%). Хвороба не перераховується.';
+  if(t==='standard')   el.textContent='Стандарт: відпустка перераховується ПРОПОРЦІЙНО (ціна × відвідані / робочі_дні_місяця), ліміт 20 роб.днів на договірний рік; понад ліміт — повна оплата. Хвороба не перераховується.';
   else if(t==='preschool') el.textContent='Preschool: без перерахунків. Ні відпустка, ні хвороба не впливають на суму.';
   else if(t==='school-no-absence') el.textContent='Школа: облік відпусток не ведеться. Перерахунки не передбачені.';
   else el.textContent='Після 01.10.2025: ТІЛЬКИ хвороба до 4 тижнів на рік (1 тиж→5%, 2→10%, 3→15%, 4→20%). Відпустка не перераховується.';
@@ -3354,25 +3410,24 @@ function recalcDiscount(){
     return;
   }
 
-  var vacDays=abs.filter(function(a){ return a.type==='vacation'; }).reduce(function(s,a){ return s+(a.workDays||a.days||0); },0);
-  var sickDays=abs.filter(function(a){ return a.type==='sick'; }).reduce(function(s,a){ return s+(a.workDays||a.days||0); },0);
-
-  var totalPct=0;
-  var html='<div style="display:flex;gap:10px;flex-wrap:wrap">';
-
+  // ── ВІДПУСТКА (standard, v6.36): пропорційна формула + ліміт 20/рік ──
   if(t==='standard'){
-    var vacW=Math.min(4,weeksCeil(vacDays));
-    var vacPct=[0,25,50,75,100][vacW];
-    totalPct=vacPct;
-    var remVac=Math.max(0,4-weeksCeil(vacDays));
-    html+='<div class="vac-box"><div class="vac-num">'+weeksCeil(vacDays)+'</div><div><div class="vac-lbl">Тижнів відпустки</div><div class="vac-lbl" style="color:var(--green)">Залишок: '+remVac+' тиж.</div></div></div>';
-  } else {
-    var sickW=Math.min(4,weeksCeil(sickDays));
-    var sickPct=[0,5,10,15,20][sickW];
-    totalPct=sickPct;
-    html+='<div class="vac-box"><div class="vac-num">'+weeksCeil(sickDays)+'</div><div><div class="vac-lbl">Тижнів хвороби</div>'+(weeksCeil(sickDays)>4?'<div class="vac-lbl" style="color:var(--red2)">Ліміт вичерпано</div>':'')+'</div></div>';
+    var vacAmt=(c.absences||[]).filter(function(a){ return a.type==='vacation'&&(!a.id||a.status==='done')&&a.monthsBreakdown&&a.monthsBreakdown.length; })
+      .reduce(function(s,a){ return s+a.monthsBreakdown.reduce(function(ss,mb){ return ss+(mb.amount||0); },0); },0);
+    var remain=getVacationLimitRemaining(c, today(), null);
+    var html='<div style="display:flex;gap:10px;flex-wrap:wrap">'
+      +'<div class="vac-box"><div class="vac-num">'+remain+'</div><div><div class="vac-lbl">Залишок ліміту</div><div class="vac-lbl">з 20 роб.днів/рік</div></div></div>'
+      +(fee>0?'<div class="vac-box"><div class="vac-num" style="color:var(--green)">−'+fmtN(vacAmt)+'</div><div><div class="vac-lbl">Знижка за відпустки (грн)</div></div></div>':'')
+      +'</div>'
+      +'<div class="alert alert-info" style="margin-top:8px;font-size:12px">🏖 Відпустка (формула v6.36): <b>до сплати = ціна × відвідані / робочі_дні_місяця</b>. Ліміт 20 роб.днів на договірний рік; понад ліміт — повна оплата. Деталі по періодах — вкладка «Відсутності».</div>';
+    el.innerHTML=html; return;
   }
-
+  // ── ХВОРОБА (else) — стара логіка % за тижнями (НЕ чіпаємо) ──
+  var sickDays=abs.filter(function(a){ return a.type==='sick'; }).reduce(function(s,a){ return s+(a.workDays||a.days||0); },0);
+  var sickW=Math.min(4,weeksCeil(sickDays));
+  var totalPct=[0,5,10,15,20][sickW];
+  var html='<div style="display:flex;gap:10px;flex-wrap:wrap">'
+    +'<div class="vac-box"><div class="vac-num">'+weeksCeil(sickDays)+'</div><div><div class="vac-lbl">Тижнів хвороби</div>'+(weeksCeil(sickDays)>4?'<div class="vac-lbl" style="color:var(--red2)">Ліміт вичерпано</div>':'')+'</div></div>';
   if(fee>0) html+='<div class="vac-box"><div class="vac-num">'+totalPct+'%</div><div><div class="vac-lbl">Знижка</div><div class="vac-lbl">−'+fmtN(Math.round(fee*totalPct/100))+' грн</div></div></div>'
     +'<div class="vac-box"><div class="vac-num" style="color:var(--green)">'+fmtN(Math.round(fee*(1-totalPct/100)))+'</div><div><div class="vac-lbl">До сплати (грн)</div></div></div>';
   html+='</div>';
@@ -3644,41 +3699,67 @@ function migrateAbsences(c){
 }
 
 // Розбиває відсутність по місяцях, повертає [{month,workDays,weeks,pct,amount}]
-function calcAbsMonthBreakdown(type, fromStr, toStr, fee){
+function calcAbsMonthBreakdown(type, fromStr, toStr, fee, c, excludeAbsId){
   var f=pd(fromStr), t=pd(toStr);
   if(!f||!t||t<f) return [];
+
+  // ── ВІДПУСТКА (v6.36): пропорційно по днях + ліміт 20 роб.днів/договірний рік ──
+  // amount_to_pay = ціна × відвідані / робочі_дні_місяця; знижка = ціна − to_pay.
+  // Лише дні в межах річного ліміту знижуються; понад ліміт — повна оплата.
+  if(type==='vacation'){
+    // роб.дні відпустки по місяцях (Пн-Пт мінус свята), хронологічно
+    var mmapV={}, curV=new Date(f.getTime());
+    while(curV<=t){
+      var wdV=curV.getDay();
+      if(wdV!==0&&wdV!==6 && !_holSet(curV.getFullYear())[isoOf(curV)]){
+        var y=curV.getFullYear(), mo=curV.getMonth()+1, mk=y+'-'+String(mo).padStart(2,'0');
+        if(!mmapV[mk]) mmapV[mk]={month:mk,y:y,m:mo,vacDays:0};
+        mmapV[mk].vacDays++;
+      }
+      curV.setDate(curV.getDate()+1);
+    }
+    var arr=Object.keys(mmapV).sort().map(function(k){ return mmapV[k]; });
+    var remaining = c ? getVacationLimitRemaining(c, fromStr, excludeAbsId) : 20;
+    return arr.map(function(mi){
+      var wdm=workDaysInMonthExcludingHolidays(mi.y, mi.m);
+      var eligible=Math.min(mi.vacDays, Math.max(0, remaining));
+      remaining-=eligible;
+      var over=mi.vacDays-eligible;
+      var amount=(fee>0 && wdm.workDays>0) ? Math.round(fee*eligible/wdm.workDays) : 0;
+      var pct=(fee>0) ? Math.round(amount/fee*100) : 0;
+      return {month:mi.month, workDays:mi.vacDays, weeks:Math.min(4,Math.ceil(mi.vacDays/5)),
+              pct:pct, amount:amount,
+              monthWorkDays:wdm.workDays, monthHolidays:wdm.holidaysOnWeekday,
+              eligibleDays:eligible, overLimitDays:over};
+    });
+  }
+
+  // ── ХВОРОБА: стара логіка (% за тижнями 5/10/15/20) — НЕ ЧІПАЄМО ──
   var mmap={}, cur=new Date(f.getTime());
   while(cur<=t){
     var d=cur.getDay();
     if(d!==0&&d!==6){
-      var mk=cur.getFullYear()+'-'+String(cur.getMonth()+1).padStart(2,'0');
-      mmap[mk]=(mmap[mk]||0)+1;
+      var mkS=cur.getFullYear()+'-'+String(cur.getMonth()+1).padStart(2,'0');
+      mmap[mkS]=(mmap[mkS]||0)+1;
     }
     cur.setDate(cur.getDate()+1);
   }
-  var PCT=type==='vacation'?[0,25,50,75,100]:[0,5,10,15,20];
-  // Хронологічний масив місяців
+  var PCT=[0,5,10,15,20];
   var monthsArr=Object.keys(mmap).sort().map(function(mk){
     return {month:mk,workDays:mmap[mk],weeks:0,pct:0,amount:0};
   });
-  // Загальні тижні всієї відпустки
   var totalDays=monthsArr.reduce(function(s,m){ return s+m.workDays; },0);
   var totalWeeks=Math.min(4,Math.ceil(totalDays/5));
-  // Розподіл тижнів: сортуємо по спаданню днів, розподіляємо, повертаємо хронологічно
   var sorted=monthsArr.slice().sort(function(a,b){ return b.workDays-a.workDays; });
   var weeksLeft=totalWeeks;
   for(var i=0;i<sorted.length;i++){
     var mi=sorted[i];
-    if(i===sorted.length-1){
-      mi.weeks=Math.max(0,weeksLeft);
-    } else {
-      mi.weeks=Math.min(Math.ceil(mi.workDays/5),weeksLeft);
-      weeksLeft-=mi.weeks;
-    }
+    if(i===sorted.length-1){ mi.weeks=Math.max(0,weeksLeft); }
+    else { mi.weeks=Math.min(Math.ceil(mi.workDays/5),weeksLeft); weeksLeft-=mi.weeks; }
     mi.pct=PCT[Math.min(4,mi.weeks)];
     mi.amount=fee>0?Math.round(fee*mi.pct/100):0;
   }
-  return monthsArr; // хронологічний порядок збережено
+  return monthsArr;
 }
 
 // Бейдж відсутності для списку дітей
@@ -3870,21 +3951,37 @@ function absPreviewUpdate(){
   var id=S.editId; var c=S.crm[id]||{};
   var fee=+(c.monthlyFee||0);
   var abs=c.absences||[];
-  var wd=countWorkDays(from,to);
-  if(!wd){ el.innerHTML='<div class="abs-preview-block warn">⚠️ У діапазоні немає робочих днів (Пн-Пт)</div>'; return; }
-  var w=Math.min(4,Math.ceil(wd/5));
-  var usedWD=abs.filter(function(a){ return a.status!=='rejected'&&a.type===type; }).reduce(function(s,a){ return s+(a.workDays||0); },0);
-  var limitOk=(usedWD+wd)<=20;
   var hasOverlap=abs.some(function(a){ return a.status!=='rejected'&&!(to<a.from||from>a.to); });
-  var bd=calcAbsMonthBreakdown(type,from,to,fee);
-  var lines=['<b>Робочих днів: '+wd+'</b> (Пн-Пт '+fmtD(from)+'–'+fmtD(to)+')',
-    'Тижнів: '+w+' (округлено вгору)'];
-  bd.forEach(function(mb){
-    var ml=CFG.MONTHS_DISP[+mb.month.split('-')[1]-1]||mb.month;
-    lines.push(ml+': '+mb.workDays+' дн → '+mb.weeks+' тиж → −'+mb.pct+'%'+(mb.amount>0?' = −'+fmtN(mb.amount)+' грн':''));
-  });
-  var warn='';
-  if(!limitOk) warn+='⚠️ Перевищено ліміт 20 робочих днів на рік! ';
+  var bd=calcAbsMonthBreakdown(type,from,to,fee,c,(S._absEditMode&&S._absEditMode.aid)||null);
+  var lines=[], warn='';
+
+  if(type==='vacation'){
+    // v6.36: пропорційно по днях + ліміт 20 роб.днів/договірний рік.
+    var remain=getVacationLimitRemaining(c, from, (S._absEditMode&&S._absEditMode.aid)||null);
+    var totalElig=bd.reduce(function(s,mb){ return s+(mb.eligibleDays||0); },0);
+    var totalOver=bd.reduce(function(s,mb){ return s+(mb.overLimitDays||0); },0);
+    var totalAmt=bd.reduce(function(s,mb){ return s+(mb.amount||0); },0);
+    lines.push('<b>Залишок ліміту у цьому договірному році: '+remain+' з 20 роб.днів</b>');
+    bd.forEach(function(mb){
+      var ml=CFG.MONTHS_DISP[+mb.month.split('-')[1]-1]||mb.month;
+      var hol=mb.monthHolidays>0?(' (з них '+mb.monthHolidays+' свято)'):'';
+      lines.push('<u>'+ml+'</u>: робочих днів у місяці '+mb.monthWorkDays+hol
+        +'<br>&nbsp;&nbsp;відсутність '+mb.workDays+' дн → у ліміті '+mb.eligibleDays+' дн = <b>−'+fmtN(mb.amount)+' грн</b>'
+        +(mb.overLimitDays>0?', понад ліміт '+mb.overLimitDays+' дн → повна оплата':''));
+    });
+    lines.push('Разом знижка: <b>−'+fmtN(totalAmt)+' грн</b>'+(fee>0?' · до сплати ≈ '+fmtN(Math.max(0,fee*bd.length-totalAmt))+' грн/міс×('+bd.length+')':''));
+    if(totalOver>0) warn+='ℹ️ '+totalOver+' дн поза річним лімітом — оплачуються повністю. ';
+  } else {
+    // ХВОРОБА — стара логіка (% за тижнями)
+    var wd=countWorkDays(from,to); var w=Math.min(4,Math.ceil(wd/5));
+    var usedWD=abs.filter(function(a){ return a.status!=='rejected'&&a.type==='sick'; }).reduce(function(s,a){ return s+(a.workDays||0); },0);
+    lines.push('<b>Робочих днів: '+wd+'</b> (Пн-Пт)','Тижнів: '+w);
+    bd.forEach(function(mb){
+      var ml=CFG.MONTHS_DISP[+mb.month.split('-')[1]-1]||mb.month;
+      lines.push(ml+': '+mb.workDays+' дн → '+mb.weeks+' тиж → −'+mb.pct+'%'+(mb.amount>0?' = −'+fmtN(mb.amount)+' грн':''));
+    });
+    if((usedWD+wd)>20) warn+='⚠️ Перевищено ліміт 20 робочих днів на рік! ';
+  }
   if(hasOverlap) warn+='⚠️ Накладається з вже записаним періодом! ';
   el.innerHTML='<div class="abs-preview-block'+(warn?' warn':'')+'">'
     +lines.join('<br>')+(warn?'<div style="margin-top:6px;font-weight:700">'+warn+'</div>':'')+'</div>';
@@ -3916,11 +4013,13 @@ function saveAbsencePeriod(){
     var absArr=getCRMCard(id).absences||[];
     var aRec=absArr.find(function(x){ return x.id===em.aid; });
     if(!aRec){ alert('Запис не знайдено'); return; }
-    // Перерахунок ліміту у тижнях: виключаємо старий запис щоб не рахувати двічі
-    var usedWeeksEdit=absArr.filter(function(a){ return a.id!==em.aid&&a.status!=='rejected'&&a.status!=='cancelled'&&a.type===type; }).reduce(function(s,a){ return s+Math.min(4,Math.ceil((a.workDays||a.days||0)/5)); },0);
-    var newWeeksEdit=Math.min(4,Math.ceil(wd/5));
-    if(usedWeeksEdit+newWeeksEdit>4){ alert('Перевищено ліміт 4 тижнів відпустки. Додавання неможливе.'); return; }
-    var bd=calcAbsMonthBreakdown(type,from,to,fee);
+    // v6.36: хвороба — старий блок 4 тижні; відпустка — без блоку (split за лімітом 20 днів).
+    if(type==='sick'){
+      var usedWeeksEdit=absArr.filter(function(a){ return a.id!==em.aid&&a.status!=='rejected'&&a.status!=='cancelled'&&a.type==='sick'; }).reduce(function(s,a){ return s+Math.min(4,Math.ceil((a.workDays||a.days||0)/5)); },0);
+      var newWeeksEdit=Math.min(4,Math.ceil(wd/5));
+      if(usedWeeksEdit+newWeeksEdit>4){ alert('Перевищено ліміт 4 тижнів лікарняного. Додавання неможливе.'); return; }
+    }
+    var bd=calcAbsMonthBreakdown(type,from,to,fee,c,em.aid);
     var totalPct=bd.reduce(function(s,mb){ return s+mb.pct; },0);
     var totalAmt=bd.reduce(function(s,mb){ return s+mb.amount; },0);
     var w=Math.min(4,Math.ceil(wd/5));
@@ -3940,10 +4039,13 @@ function saveAbsencePeriod(){
 
   // ── НОВИЙ ЗАПИС ──────────────────────────────────────────────────────────────
   var abs=getCRMCard(id).absences||[];
-  var usedWeeks=abs.filter(function(a){ return a.status!=='rejected'&&a.status!=='cancelled'&&a.type===type; }).reduce(function(s,a){ return s+Math.min(4,Math.ceil((a.workDays||a.days||0)/5)); },0);
-  var newWeeks=Math.min(4,Math.ceil(wd/5));
-  if(usedWeeks+newWeeks>4){ alert('Перевищено ліміт 4 тижнів відпустки. Додавання неможливе.'); return; }
-  var bd=calcAbsMonthBreakdown(type,from,to,fee);
+  // v6.36: хвороба — старий блок 4 тижні; відпустка — без блоку (split за лімітом 20 днів).
+  if(type==='sick'){
+    var usedWeeks=abs.filter(function(a){ return a.status!=='rejected'&&a.status!=='cancelled'&&a.type==='sick'; }).reduce(function(s,a){ return s+Math.min(4,Math.ceil((a.workDays||a.days||0)/5)); },0);
+    var newWeeks=Math.min(4,Math.ceil(wd/5));
+    if(usedWeeks+newWeeks>4){ alert('Перевищено ліміт 4 тижнів лікарняного. Додавання неможливе.'); return; }
+  }
+  var bd=calcAbsMonthBreakdown(type,from,to,fee,c,null);
   var totalPct=bd.reduce(function(s,mb){ return s+mb.pct; },0);
   var totalAmt=bd.reduce(function(s,mb){ return s+mb.amount; },0);
   var w=Math.min(4,Math.ceil(wd/5));
