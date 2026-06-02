@@ -1953,9 +1953,16 @@ function visible(){
   if (!S || !S.user) return [];
   return S.user.role==='director'||S.user.role==='nurse'?S.emps.filter(e=>e.loc===S.user.loc):S.emps;
 }
+// v6.33: декретниця = статус містить «декрет/вагітн/догляд/матер».
+// Лишається в HR-списку (з бейджем), але НЕ активна → виключена з Табеля,
+// «активних» лічильників, відпусток/лікарняних. Дані НЕ змінюються.
+function isMaternity(e){
+  return !!(e && e.stat && /декрет|вагітн|догляд за дит|по догляду|матер/i.test(e.stat));
+}
 function isActive(e){
   if(e.fired&&e.fired.trim())return false;
   if(e.stat&&/звіл/i.test(e.stat))return false;
+  if(isMaternity(e))return false;   // v6.33: декрет не рахуємо активною
   return true;
 }
 function fullName(e){return (e.last+' '+e.first).trim();}
@@ -2244,7 +2251,8 @@ function renderEmps(){
       <button class="btn btn-secondary btn-sm" onclick="clearF()">✕ Скинути</button>
       ${canEmpAdd()?`<button class="btn btn-primary btn-sm" onclick="openEmpEditor()" title="Додати співробітника">➕ Додати</button>`:''}
       ${isHR?`<button class="btn btn-secondary btn-sm" onclick="exportCSV()" title="Завантажити Excel">📊 Excel</button>`:''}
-      <span style="margin-left:auto;font-size:12px;color:var(--gray)">${f.length} / ${emps.length}</span>
+      ${(function(){var mc=emps.filter(isMaternity).length;return mc?`<span class="badge bb" style="margin-left:auto" title="Співробітниць у декретній відпустці">👶 Декретниць: ${mc}</span>`:'';})()}
+      <span style="${emps.filter(isMaternity).length?'':'margin-left:auto;'}font-size:12px;color:var(--gray)">${f.length} / ${emps.length}</span>
     </div>
     <div class="card"><div class="tbl-wrap"><table>
       <thead><tr>
@@ -2262,7 +2270,7 @@ function renderEmps(){
           </div></td>
           ${isHR?`<td style="font-size:12px">${e.loc||'—'}</td>`:''}
           <td style="font-size:12px">${e.pos||'—'}</td>
-          <td>${isOnVac(e.key)?'<span class="badge bb">відпустка</span>':isOnSick(e.key)?'<span class="badge bo">лікарняний</span>':act?'<span class="badge bg">активний</span>':'<span class="badge bgr">звільнений</span>'}</td>
+          <td>${isMaternity(e)?'<span class="badge bb">👶 Декрет</span>':isOnVac(e.key)?'<span class="badge bb">відпустка</span>':isOnSick(e.key)?'<span class="badge bo">лікарняний</span>':act?'<span class="badge bg">активний</span>':'<span class="badge bgr">звільнений</span>'}</td>
           <td style="font-size:12px">${fmtTenure(e)}</td>
           <td><div style="display:flex;align-items:center;gap:6px">
             <span style="font-weight:800;color:${ov?'#e74c3c':'var(--dark)'}">${vu}</span>
@@ -2336,7 +2344,7 @@ function renderEmpCard(){
           <div class="emp-tags">
             ${e.dir?`<span class="emp-tag">${e.dir}</span>`:''}
             ${e.grp?`<span class="emp-tag">Група: ${e.grp}</span>`:''}
-            <span class="emp-tag">${act?'✅ Активний':'❌ Звільнений'}</span>
+            <span class="emp-tag">${isMaternity(e)?'👶 У декретній відпустці':act?'✅ Активний':'❌ Звільнений'}</span>
             ${isOnVac(e.key)?'<span class="emp-tag">🏖️ Відпустка</span>':''}
             ${isOnSick(e.key)?'<span class="emp-tag">🏥 Лікарняний</span>':''}
           </div>
