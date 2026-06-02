@@ -530,14 +530,6 @@ tbody tr.clickable:hover td{background:#f0f7ff}
            data-v="clients" onclick="goPerm('clients_list')">
         <span class="ni">👶</span> Список дітей
       </div>
-      <div class="nav-item" data-permission="clients_list" data-parent="crm" data-perm-page="clients"
-           data-v="terminated" onclick="navTerminated()">
-        <span class="ni">📋</span> Розірвані договори
-      </div>
-      <div class="nav-item" data-permission="clients_list" data-parent="crm" data-perm-page="clients"
-           data-v="graduates" onclick="navGraduates()">
-        <span class="ni">🎓</span> Випускники
-      </div>
       <div class="nav-item" data-permission="payments" data-parent="crm" data-perm-page="clients"
            data-v="debts" onclick="goPerm('payments')">
         <span class="ni">💰</span> Борги та оплати
@@ -617,6 +609,11 @@ tbody tr.clickable:hover td{background:#f0f7ff}
       <div class="nav-item" data-permission="overview_analytics" data-parent="finance" data-perm-page="analytics"
            onclick="goPerm('overview_analytics')">
         <span class="ni">📊</span> Зведена аналітика
+      </div>
+
+      <div class="nav-item" data-permission="clients_list" data-perm-page="clients"
+           data-v="archive" onclick="navArchive()">
+        <span class="ni">📁</span> Архів клієнтів
       </div>
 
       <div class="nav-item" data-permission="settings" data-perm-page="index"
@@ -980,14 +977,13 @@ var S = {
   isNew:    false,
   curTab:   0,
   payUpdated: '',
-  // v6.29 — фільтри архіву розірваних договорів
-  termLoc:    '',
+  // v6.30 — об'єднаний архів клієнтів (розірвані + випускники)
+  archiveTab: 'all',   // 'all'|'terminated'|'graduated'
+  archSort:   'date',  // 'date'|'loc'
+  termLoc:    '',      // фільтр локації
   termPeriod: 'all',   // 'all'|'month'|'quarter'|'year'
   termReasonQ:'',      // пошук по імені
-  termCategory:'',     // v6.29.1 — фільтр по категорії причини
-  // v6.29.3 — фільтри архіву випускників
-  gradLoc:    '',
-  gradPeriod: 'all',
+  termCategory:'',     // фільтр по категорії причини (лише таб «Розірвані»)
   // Аналітика — вкладка
   mainTab:      'clients',
   anaSelLoc:    '',
@@ -2303,9 +2299,8 @@ function showSpinner(){ document.getElementById('main').innerHTML='<div class="l
 function toggleSidebar(){ document.getElementById('sidebar').classList.toggle('open'); }
 
 // ─── NAVIGATION ──────────────────────────────────────────────────────────────
-var TITLES={clients:'👶 Список дітей',debts:'💰 Борги та оплати',settings:'⚙️ Налаштування',absRequests:'💼 Перерахунки бюджету',attendance:'📋 Табель відвідування',terminated:'📋 Розірвані договори',graduates:'🎓 Випускники'};
-function navTerminated(){ nav('terminated'); }
-function navGraduates(){ nav('graduates'); }
+var TITLES={clients:'👶 Список дітей',debts:'💰 Борги та оплати',settings:'⚙️ Налаштування',absRequests:'💼 Перерахунки бюджету',attendance:'📋 Табель відвідування',archive:'📁 Архів клієнтів'};
+function navArchive(){ nav('archive'); }
 function nav(view){
   S.mainTab='clients'; // скидаємо аналітику при навігації
   S.view=view;
@@ -2320,8 +2315,7 @@ function renderView(){
   else if(S.view==='debts') renderDebts();
   else if(S.view==='absRequests') renderAbsRequests();
   else if(S.view==='attendance') renderAttendance();
-  else if(S.view==='terminated') renderTerminated();
-  else if(S.view==='graduates') renderGraduates();
+  else if(S.view==='archive') renderArchive();
   else renderSettings();
 }
 function switchMainTab(tab){
@@ -5358,9 +5352,10 @@ function fmtDateUa(s){
   return m ? (('0'+m[3]).slice(-2)+'.'+('0'+m[2]).slice(-2)+'.'+m[1]) : String(s||'');
 }
 
-// ─── ARCHIVE: розірвані договори (v6.29) ──────────────────────────────────────
-// Джерело — S.crm (status='terminated'). Платежі НЕ чіпаються; борг
-// підтягуємо з платіжного рядка (якщо клієнт ще там є). Scoped по ролі.
+// ─── ARCHIVE: об'єднаний архів клієнтів (v6.30) ───────────────────────────────
+// Розірвані (status='terminated') + Випускники (status='graduated'/'graduate')
+// в одному в'ю з табами. Платежі НЕ чіпаються; борг підтягуємо з платіжного
+// рядка (якщо клієнт ще там є). Scoped по ролі.
 function findPayChildById(id){
   for(var loc in S.groups){
     var gs=S.groups[loc];
@@ -5389,166 +5384,153 @@ function termInPeriod(dateStr, period){
   if(period==='quarter') return y===ny && Math.floor((mo-1)/3)===Math.floor((nm-1)/3);
   return true;
 }
-function renderTerminated(){
-  // 1. збір розірваних (scoped по ролі: director/nurse — своя локація)
-  var rows=[];
+function archiveKind(st){ return st==='terminated' ? 'terminated' : (isGraduatedStatus(st) ? 'graduated' : ''); }
+
+function renderArchive(){
+  // 1. збір (розірвані + випускники), scoped по ролі
+  var all=[];
   Object.keys(S.crm).forEach(function(id){
-    var c=S.crm[id];
-    if(!c||!c.name||c.status!=='terminated') return;
+    var c=S.crm[id]; if(!c||!c.name) return;
+    var kind=archiveKind(c.status); if(!kind) return;
     if(!isHR() && c.loc!==S.user.loc) return;
-    var parsed=parseTermReason(c.terminationReason||'');
-    rows.push({id:id, c:c, category:parsed.category||TERM_OTHER, details:parsed.details});
+    var category='', details='';
+    if(kind==='terminated'){ var p=parseTermReason(c.terminationReason||''); category=p.category||TERM_OTHER; details=p.details; }
+    all.push({id:id, c:c, kind:kind, category:category, details:details});
   });
-  // 2. scoped = локація + період (БЕЗ категорії/імені) — база для статистики
-  var scoped=rows.filter(function(r){
+
+  // 2. scoped = локація + період (для лічильників табів і stat-карток)
+  var scoped=all.filter(function(r){
     if(S.termLoc && r.c.loc!==S.termLoc) return false;
     if(!termInPeriod(r.c.terminationDate, S.termPeriod)) return false;
     return true;
   });
-  // 3. filtered = scoped + категорія + пошук по імені
+  var cntAll=scoped.length;
+  var cntTerm=scoped.filter(function(r){ return r.kind==='terminated'; }).length;
+  var cntGrad=scoped.filter(function(r){ return r.kind==='graduated'; }).length;
+
+  // 3. таб + 4. категорія(лише terminated) + пошук по імені
   var filtered=scoped.filter(function(r){
-    if(S.termCategory && r.category!==S.termCategory) return false;
-    if(S.termReasonQ){
-      if(String(r.c.name||'').toLowerCase().indexOf(S.termReasonQ.toLowerCase())<0) return false;
-    }
+    if(S.archiveTab==='terminated' && r.kind!=='terminated') return false;
+    if(S.archiveTab==='graduated'  && r.kind!=='graduated')  return false;
+    if(S.archiveTab==='terminated' && S.termCategory && r.category!==S.termCategory) return false;
+    if(S.termReasonQ && String(r.c.name||'').toLowerCase().indexOf(S.termReasonQ.toLowerCase())<0) return false;
     return true;
   });
-  // 4. сорт за датою розірвання (нові зверху)
-  filtered.sort(function(a,b){ return String(b.c.terminationDate||'').localeCompare(String(a.c.terminationDate||'')); });
 
-  // 5. фільтр-бар
-  var locOpts='<option value="">Всі локації</option>'+visibleLocs().map(function(l){
+  // 5. сортування
+  if(S.archSort==='loc'){
+    filtered.sort(function(a,b){ var l=String(a.c.loc||'').localeCompare(String(b.c.loc||''),'uk'); return l!==0?l:String(b.c.terminationDate||'').localeCompare(String(a.c.terminationDate||'')); });
+  } else {
+    filtered.sort(function(a,b){ return String(b.c.terminationDate||'').localeCompare(String(a.c.terminationDate||'')); });
+  }
+
+  // 6. таби з лічильниками
+  function tab(key,label,n){
+    var act=(S.archiveTab===key);
+    return '<button class="att-chip'+(act?' att-chip-active':'')+'" onclick="S.archiveTab=\''+key+'\';S.termCategory=\'\';renderArchive()">'+label+' ('+n+')</button>';
+  }
+  var tabsHtml='<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">'
+    +tab('all','Всі',cntAll)+tab('terminated','🚪 Розірвані',cntTerm)+tab('graduated','🎓 Випускники',cntGrad)+'</div>';
+
+  // 7. фільтр-бар
+  var locOpts='<option value="">Усі локації</option>'+visibleLocs().map(function(l){
     return '<option value="'+esc(l.loc)+'"'+(S.termLoc===l.loc?' selected':'')+'>'+esc(l.loc)+'</option>';
   }).join('');
   var periods=[['all','Весь час'],['month','Цей місяць'],['quarter','Цей квартал'],['year','Цей рік']];
   var periodOpts=periods.map(function(p){ return '<option value="'+p[0]+'"'+(S.termPeriod===p[0]?' selected':'')+'>'+p[1]+'</option>'; }).join('');
-  var catOpts='<option value="">Всі причини</option>'+TERM_REASON_CATEGORIES.map(function(cat){
-    return '<option value="'+esc(cat)+'"'+(S.termCategory===cat?' selected':'')+'>'+esc(cat)+'</option>';
-  }).join('');
-
+  var catSel='';
+  if(S.archiveTab==='terminated'){
+    var catOpts='<option value="">Всі причини</option>'+TERM_REASON_CATEGORIES.map(function(cat){
+      return '<option value="'+esc(cat)+'"'+(S.termCategory===cat?' selected':'')+'>'+esc(cat)+'</option>';
+    }).join('');
+    catSel='<select class="flt-sel" onchange="S.termCategory=this.value;renderArchive()">'+catOpts+'</select>';
+  }
   var html='<div class="card" style="margin-bottom:12px"><div style="padding:10px 14px">'
+    +tabsHtml
     +'<div class="filters" style="margin:0;padding:0;border:none;background:none;gap:8px;flex-wrap:wrap">'
-    +(isHR()?'<select class="flt-sel" onchange="S.termLoc=this.value;renderTerminated()">'+locOpts+'</select>':'')
-    +'<select class="flt-sel" onchange="S.termPeriod=this.value;renderTerminated()">'+periodOpts+'</select>'
-    +'<select class="flt-sel" onchange="S.termCategory=this.value;renderTerminated()">'+catOpts+'</select>'
-    +'<input class="search-inp" placeholder="🔍 Пошук по імені…" value="'+esc(S.termReasonQ)+'" oninput="S.termReasonQ=this.value;renderTerminated()">'
+    +(isHR()?'<select class="flt-sel" onchange="S.termLoc=this.value;renderArchive()">'+locOpts+'</select>':'')
+    +'<select class="flt-sel" onchange="S.termPeriod=this.value;renderArchive()">'+periodOpts+'</select>'
+    +catSel
+    +'<input class="search-inp" placeholder="🔍 Пошук по імені…" value="'+esc(S.termReasonQ)+'" oninput="S.termReasonQ=this.value;renderArchive()">'
     +'</div></div></div>';
 
-  // 6. статистика (cards)
-  var totDebt=filtered.reduce(function(s,r){ return s+Math.max(0,payChildDebt(findPayChildById(r.id))); },0);
-  html+='<div class="stats-grid" style="grid-template-columns:repeat(2,1fr);margin-bottom:12px">'
-    +'<div class="stat-card"><div class="stat-icon si-r">📋</div><div><div class="stat-val">'+filtered.length+'</div><div class="stat-lbl">Розірваних договорів</div></div></div>'
-    +'<div class="stat-card"><div class="stat-icon si-o">💸</div><div><div class="stat-val" style="color:var(--red2)">'+fmtN(totDebt)+'</div><div class="stat-lbl">Незібраний борг (грн)</div></div></div>'
+  // 8. stat-картки (за період+локацію)
+  var totDebt=scoped.reduce(function(s,r){ return s+Math.max(0,payChildDebt(findPayChildById(r.id))); },0);
+  html+='<div class="stats-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:12px">'
+    +'<div class="stat-card"><div class="stat-icon si-b">📁</div><div><div class="stat-val">'+cntAll+'</div><div class="stat-lbl">Всього в архіві</div></div></div>'
+    +'<div class="stat-card"><div class="stat-icon si-r">🚪</div><div><div class="stat-val">'+cntTerm+'</div><div class="stat-lbl">Розірваних</div></div></div>'
+    +'<div class="stat-card"><div class="stat-icon" style="background:#8e44ad">🎓</div><div><div class="stat-val">'+cntGrad+'</div><div class="stat-lbl">Випускників</div></div></div>'
+    +'<div class="stat-card"><div class="stat-icon si-o">💸</div><div><div class="stat-val" style="color:var(--red2)">'+fmtN(totDebt)+'</div><div class="stat-lbl">Незібраний борг</div></div></div>'
     +'</div>';
 
-  // 7. розподіл по категоріях за період (клік = фільтр) — міні-аналітика
-  var catCount={}; TERM_REASON_CATEGORIES.forEach(function(cat){ catCount[cat]=0; });
-  scoped.forEach(function(r){ catCount[r.category]=(catCount[r.category]||0)+1; });
-  var maxCat=0; TERM_REASON_CATEGORIES.forEach(function(cat){ if(catCount[cat]>maxCat) maxCat=catCount[cat]; });
-  if(scoped.length){
-    html+='<div class="card" style="margin-bottom:16px"><div style="padding:12px 14px">'
-      +'<div style="font-weight:600;margin-bottom:8px">📊 Причини розірвання за період ('+scoped.length+')</div>';
-    TERM_REASON_CATEGORIES.forEach(function(cat){
-      var n=catCount[cat]||0; if(!n) return;
-      var pct=maxCat?Math.round(n/maxCat*100):0;
-      var sel=(S.termCategory===cat);
-      var pctOfTotal=scoped.length?Math.round(n/scoped.length*100):0;
-      html+='<div onclick="S.termCategory='+escAttrJS(cat)+';renderTerminated()" '
-        +'style="cursor:pointer;display:flex;align-items:center;gap:10px;padding:4px 0;'+(sel?'font-weight:700':'')+'">'
-        +'<span style="flex:0 0 210px">'+esc(cat)+'</span>'
-        +'<span style="flex:1;background:var(--gray3,#eee);border-radius:6px;height:14px;position:relative;overflow:hidden">'
-          +'<span style="position:absolute;left:0;top:0;bottom:0;width:'+pct+'%;background:'+(sel?'var(--red2)':'var(--blue2,#3498db)')+';border-radius:6px"></span></span>'
-        +'<span style="flex:0 0 70px;text-align:right">'+n+' ('+pctOfTotal+'%)</span>'
-        +'</div>';
-    });
-    if(S.termCategory){
-      html+='<div style="margin-top:8px"><button class="btn btn-secondary btn-sm" onclick="S.termCategory=\'\';renderTerminated()">✕ Скинути фільтр причини</button></div>';
+  // 9. бари причин — ЛИШЕ таб «Розірвані»
+  if(S.archiveTab==='terminated'){
+    var termScoped=scoped.filter(function(r){ return r.kind==='terminated'; });
+    var catCount={}; TERM_REASON_CATEGORIES.forEach(function(cat){ catCount[cat]=0; });
+    termScoped.forEach(function(r){ catCount[r.category]=(catCount[r.category]||0)+1; });
+    var maxCat=0; TERM_REASON_CATEGORIES.forEach(function(cat){ if(catCount[cat]>maxCat) maxCat=catCount[cat]; });
+    if(termScoped.length){
+      html+='<div class="card" style="margin-bottom:16px"><div style="padding:12px 14px">'
+        +'<div style="font-weight:600;margin-bottom:8px">📊 Причини розірвання за період ('+termScoped.length+')</div>';
+      TERM_REASON_CATEGORIES.forEach(function(cat){
+        var n=catCount[cat]||0; if(!n) return;
+        var pct=maxCat?Math.round(n/maxCat*100):0;
+        var sel=(S.termCategory===cat);
+        var pctOfTotal=termScoped.length?Math.round(n/termScoped.length*100):0;
+        html+='<div onclick="S.termCategory='+escAttrJS(cat)+';renderArchive()" '
+          +'style="cursor:pointer;display:flex;align-items:center;gap:10px;padding:4px 0;'+(sel?'font-weight:700':'')+'">'
+          +'<span style="flex:0 0 210px">'+esc(cat)+'</span>'
+          +'<span style="flex:1;background:var(--gray3,#eee);border-radius:6px;height:14px;position:relative;overflow:hidden">'
+            +'<span style="position:absolute;left:0;top:0;bottom:0;width:'+pct+'%;background:'+(sel?'var(--red2)':'var(--blue2,#3498db)')+';border-radius:6px"></span></span>'
+          +'<span style="flex:0 0 70px;text-align:right">'+n+' ('+pctOfTotal+'%)</span>'
+          +'</div>';
+      });
+      if(S.termCategory){
+        html+='<div style="margin-top:8px"><button class="btn btn-secondary btn-sm" onclick="S.termCategory=\'\';renderArchive()">✕ Скинути фільтр причини</button></div>';
+      }
+      html+='</div></div>';
     }
-    html+='</div></div>';
   }
 
   if(!filtered.length){
-    html+='<div class="empty"><span class="ei">📋</span><h4>Немає розірваних договорів</h4>'
+    html+='<div class="empty"><span class="ei">📁</span><h4>Архів порожній</h4>'
       +'<p style="color:var(--gray)">За обраними фільтрами нічого не знайдено.</p></div>';
     document.getElementById('main').innerHTML=html;
     return;
   }
 
-  // 8. таблиця
+  // 10. таблиця (клік на «Локація»/«Дата» — сортування)
+  var dateArrow=(S.archSort==='date')?' ▼':'';
+  var locArrow=(S.archSort==='loc')?' ▲':'';
   html+='<div class="card"><div class="tbl-wrap"><table><thead><tr>'
-    +'<th>ПІБ дитини</th><th>Локація</th><th>Група</th><th>Дата розірвання</th><th>Причина</th><th>Борг</th>'
+    +'<th>ПІБ дитини</th>'
+    +'<th onclick="S.archSort=\'loc\';renderArchive()" style="cursor:pointer">Локація'+locArrow+'</th>'
+    +'<th>Група</th>'
+    +'<th onclick="S.archSort=\'date\';renderArchive()" style="cursor:pointer">Дата'+dateArrow+'</th>'
+    +'<th>Тип</th><th>Причина / Куди пішов</th><th>Борг</th>'
     +'</tr></thead><tbody>';
   filtered.forEach(function(r){
     var c=r.c;
     var debt=Math.max(0,payChildDebt(findPayChildById(r.id)));
     var debtCell=debt>0?'<span style="color:var(--red2);font-weight:600">'+fmtN(debt)+' грн</span>':'<span style="color:var(--gray2)">—</span>';
-    var reasonCell='<span class="badge bg">'+esc(r.category)+'</span>'
-      +(r.details?'<div style="font-size:12px;color:var(--gray);margin-top:2px">'+esc(r.details)+'</div>':'');
+    var typeBadge = r.kind==='terminated'
+      ? '<span class="badge" style="background:#fdecea;color:#c0392b">🚪 Розірваний</span>'
+      : '<span class="badge" style="background:#e8f4fb;color:#16a085">🎓 Випускник</span>';
+    var reasonCell;
+    if(r.kind==='terminated'){
+      reasonCell='<span class="badge bg">'+esc(r.category)+'</span>'
+        +(r.details?'<div style="font-size:12px;color:var(--gray);margin-top:2px">'+esc(r.details)+'</div>':'');
+    } else {
+      reasonCell=c.terminationReason?esc(c.terminationReason):'<span style="color:var(--gray2)">—</span>';
+    }
     html+='<tr class="clickable" onclick="openChild('+escAttrJS(r.id)+','+escAttrJS(c.group||'')+','+escAttrJS(c.teacher||'')+','+escAttrJS(c.loc||'')+','+escAttrJS(c.name||'')+')">'
       +'<td><span class="child-link">'+esc(c.name)+'</span></td>'
       +'<td>'+esc(c.loc||'')+'</td>'
       +'<td>'+esc(c.group||'')+'</td>'
       +'<td>'+esc(fmtDateUa(c.terminationDate))+'</td>'
+      +'<td>'+typeBadge+'</td>'
       +'<td>'+reasonCell+'</td>'
       +'<td>'+debtCell+'</td>'
-      +'</tr>';
-  });
-  html+='</tbody></table></div></div>';
-  document.getElementById('main').innerHTML=html;
-}
-
-// ─── ARCHIVE: випускники (v6.29.3) ────────────────────────────────────────────
-// status='graduated' (legacy 'graduate' теж). Дата випуску — у terminationDate,
-// «куди пішов» — у terminationReason. НЕ розірвання, НЕ впливає на відтік.
-function renderGraduates(){
-  var rows=[];
-  Object.keys(S.crm).forEach(function(id){
-    var c=S.crm[id];
-    if(!c||!c.name||!isGraduatedStatus(c.status)) return;
-    if(!isHR() && c.loc!==S.user.loc) return;
-    rows.push({id:id, c:c});
-  });
-  var filtered=rows.filter(function(r){
-    if(S.gradLoc && r.c.loc!==S.gradLoc) return false;
-    if(!termInPeriod(r.c.terminationDate, S.gradPeriod)) return false;
-    return true;
-  });
-  filtered.sort(function(a,b){ return String(b.c.terminationDate||'').localeCompare(String(a.c.terminationDate||'')); });
-
-  var locOpts='<option value="">Всі локації</option>'+visibleLocs().map(function(l){
-    return '<option value="'+esc(l.loc)+'"'+(S.gradLoc===l.loc?' selected':'')+'>'+esc(l.loc)+'</option>';
-  }).join('');
-  var periods=[['all','Весь час'],['month','Цей місяць'],['quarter','Цей квартал'],['year','Цей рік']];
-  var periodOpts=periods.map(function(p){ return '<option value="'+p[0]+'"'+(S.gradPeriod===p[0]?' selected':'')+'>'+p[1]+'</option>'; }).join('');
-
-  var html='<div class="card" style="margin-bottom:12px"><div style="padding:10px 14px">'
-    +'<div class="filters" style="margin:0;padding:0;border:none;background:none;gap:8px;flex-wrap:wrap">'
-    +(isHR()?'<select class="flt-sel" onchange="S.gradLoc=this.value;renderGraduates()">'+locOpts+'</select>':'')
-    +'<select class="flt-sel" onchange="S.gradPeriod=this.value;renderGraduates()">'+periodOpts+'</select>'
-    +'</div></div></div>';
-
-  html+='<div class="stats-grid" style="grid-template-columns:repeat(1,1fr);margin-bottom:16px">'
-    +'<div class="stat-card"><div class="stat-icon" style="background:#8e44ad">🎓</div><div><div class="stat-val">'+filtered.length+'</div><div class="stat-lbl">Випускників за період</div></div></div>'
-    +'</div>';
-
-  if(!filtered.length){
-    html+='<div class="empty"><span class="ei">🎓</span><h4>Немає випускників</h4>'
-      +'<p style="color:var(--gray)">За обраними фільтрами нічого не знайдено.</p></div>';
-    document.getElementById('main').innerHTML=html;
-    return;
-  }
-
-  html+='<div class="card"><div class="tbl-wrap"><table><thead><tr>'
-    +'<th>ПІБ дитини</th><th>Локація</th><th>Група</th><th>Дата випуску</th><th>Куди пішов</th>'
-    +'</tr></thead><tbody>';
-  filtered.forEach(function(r){
-    var c=r.c;
-    html+='<tr class="clickable" onclick="openChild('+escAttrJS(r.id)+','+escAttrJS(c.group||'')+','+escAttrJS(c.teacher||'')+','+escAttrJS(c.loc||'')+','+escAttrJS(c.name||'')+')">'
-      +'<td><span class="child-link">'+esc(c.name)+'</span></td>'
-      +'<td>'+esc(c.loc||'')+'</td>'
-      +'<td>'+esc(c.group||'')+'</td>'
-      +'<td>'+esc(fmtDateUa(c.terminationDate))+'</td>'
-      +'<td>'+(c.terminationReason?esc(c.terminationReason):'<span style="color:var(--gray2)">—</span>')+'</td>'
       +'</tr>';
   });
   html+='</tbody></table></div></div>';
