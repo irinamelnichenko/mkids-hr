@@ -2267,9 +2267,19 @@ function searchEmps(value){
 }
 
 // ── EMPLOYEE CARD ──
+// v6.32.1: захист — помилка в одному з білдерів вкладок НЕ повинна валити
+// весь рендер картки (інакше картка взагалі не відкривається).
+function _safeTab(fn, label){
+  try { return fn(); }
+  catch(e){
+    console.error('[empCard] помилка вкладки «'+label+'»:', e);
+    return '<div style="padding:16px;color:#e74c3c">⚠️ Не вдалося відобразити «'+label+'»: '+esc(String(e&&e.message||e))+'</div>';
+  }
+}
 function renderEmpCard(){
   console.log('[renderEmpCard] role=' + (S.user&&S.user.role) + ' build=' + AUTH_BUILD_VERSION);
   const e=S.emps[S.empId]; if(!e){nav('employees');return;}
+  try {
   const yr=new Date().getFullYear();
   const act=isActive(e),r=rec(e.key);
   const isNurse=S.user.role==='nurse';
@@ -2376,9 +2386,9 @@ function renderEmpCard(){
           <td><button class="btn btn-danger btn-xs" onclick="delRec('${e.key}','sals','${v._id||r.sals.indexOf(v)}',${e.id})">🗑</button></td>
         </tr>`).join('')}</tbody></table></div>`}
       </div>
-      <div id="tTabel" class="tab-pane">${buildEmpTabel(e)}</div>
-      <div id="tNote" class="tab-pane">${buildNotes(e,r)}</div>
-      <div id="tLine" class="tab-pane">${buildTimeline(e,r)}</div>
+      <div id="tTabel" class="tab-pane">${_safeTab(()=>buildEmpTabel(e),'Табель')}</div>
+      <div id="tNote" class="tab-pane">${_safeTab(()=>buildNotes(e,r),'Нотатки')}</div>
+      <div id="tLine" class="tab-pane">${_safeTab(()=>buildTimeline(e,r),'Хронологія')}</div>
     </div>
   `);
 
@@ -2411,6 +2421,13 @@ function renderEmpCard(){
     var L_AND_D_ALLOWED = ['садочок','школа','управління','кухня'];
     if (L_AND_D_ALLOWED.indexOf(_empDir) !== -1) _showSalary('L&D allowed dir');
     // else — лишаємо як приховано (default матриці)
+  }
+  } catch(_err){
+    console.error('[renderEmpCard] FATAL:', _err);
+    set('main', `<div class="back-btn" onclick="nav('employees')">← Назад до списку</div>`+
+      `<div class="card" style="padding:24px"><h3 style="color:#e74c3c">⚠️ Помилка відкриття картки</h3>`+
+      `<p style="color:var(--gray)">${esc(String(_err&&_err.message||_err))}</p>`+
+      `<p style="font-size:12px;color:var(--gray)">Оновіть сторінку. Деталі — у консолі (F12).</p></div>`);
   }
 }
 
