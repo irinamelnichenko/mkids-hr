@@ -2318,9 +2318,9 @@ function renderEmpCard(){
         <div class="tab" data-tab="tVac" data-permission="card-employee-vacations-tab" onclick="switchTab(this)">🏖️ Відпустки (${r.vacs.length})</div>
         <div class="tab" data-tab="tSick" data-permission="card-employee-sickleave-tab" onclick="switchTab(this)">🏥 Лікарняні (${r.sicks.length})</div>
         ${!isNurse?`<div class="tab" data-tab="tSal" data-permission="card-employee-salary-tab" onclick="switchTab(this)">💰 Зарплата (${r.sals.length})</div>`:''}
-        <div class="tab" data-tab="tTabel" onclick="switchTab(this)">📊 Табель</div>
+        <div class="tab" data-tab="tTabel" onclick="switchTab(this)">📅 Табель</div>
         <div class="tab" data-tab="tNote" onclick="switchTab(this)">📝 Нотатки${r.notes.length>0?` (${r.notes.length})`:''}</div>
-        <div class="tab" data-tab="tLine" onclick="switchTab(this)">📅 Хронологія</div>
+        <div class="tab" data-tab="tLine" onclick="switchTab(this)">📜 Хронологія</div>
       </div>
       <div id="tInfo" class="tab-pane active">
         <div class="info-grid">
@@ -2424,6 +2424,51 @@ function renderEmpTabelTab(){
   document.getElementById('tTabel').innerHTML=buildEmpTabel(e);
 }
 
+// v6.32: перемикання місяця стрілками (з переходом року).
+function empTabelShift(delta){
+  let m=empTabelMonth+delta, y=empTabelYear;
+  while(m<0){ m+=12; y--; }
+  while(m>11){ m-=12; y++; }
+  empTabelMonth=m; empTabelYear=y;
+  renderEmpTabelTab();
+}
+
+// v6.32: календар-сітка днів місяця з кольоровим статусом (read-only з Табель).
+function buildEmpTabelCalendar(e, year, month, loc){
+  const now=new Date(); now.setHours(0,0,0,0);
+  const firstDow=(new Date(year,month,1).getDay()||7);   // 1=Пн .. 7=Нд
+  const daysIn=new Date(year,month+1,0).getDate();
+  const COL={present:'#27ae60',late:'#e67e22',absent:'#e74c3c',sick:'#9b59b6',vacation:'#3498db'};
+  const LBL={present:'Присутній',late:'Спізнення',absent:'Відсутній',sick:'Лікарняний',vacation:'Відпустка'};
+  let cells='';
+  for(let i=1;i<firstDow;i++) cells+='<div></div>';
+  for(let dnum=1;dnum<=daysIn;dnum++){
+    const dt=new Date(year,month,dnum); const dw=dt.getDay();
+    const ds=`${year}-${('0'+(month+1)).slice(-2)}-${('0'+dnum).slice(-2)}`;
+    const weekend=(dw===0||dw===6);
+    const future=dt>now;
+    let bg='#f8fafc',col='#bdc3c7',bd='#e8ecf0',title='Не відмічено';
+    if(weekend){ bg='#eef1f4'; col='#cbd5e0'; bd='#eef1f4'; title='Вихідний'; }
+    else if(future){ bg='#fff'; col='#cbd5e0'; bd='#eef2f6'; title='—'; }
+    else {
+      const st=(getTabel(loc,ds)[e.key]||{}).status||'';
+      if(COL[st]){ bg=COL[st]; col='#fff'; bd=COL[st]; title=LBL[st]; }
+    }
+    cells+=`<div title="${esc(fmtDate(ds))} · ${title}" style="aspect-ratio:1;display:flex;align-items:center;justify-content:center;border-radius:7px;font-size:12px;font-weight:700;background:${bg};color:${col};border:1.5px solid ${bd}">${dnum}</div>`;
+  }
+  const dows=['Пн','Вт','Ср','Чт','Пт','Сб','Нд'];
+  const legend=[['#27ae60','Присутній'],['#e67e22','Спізнення'],['#e74c3c','Відсутній'],['#9b59b6','Лікарняний'],['#3498db','Відпустка'],['#f8fafc','Не відмічено']];
+  return `<div style="margin-bottom:16px">
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:5px;max-width:360px">
+      ${dows.map(d=>`<div style="text-align:center;font-size:10px;color:var(--gray);font-weight:700">${d}</div>`).join('')}
+      ${cells}
+    </div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:10px;font-size:11px;color:var(--gray)">
+      ${legend.map(([c,l])=>`<span style="display:inline-flex;align-items:center;gap:4px"><span style="width:12px;height:12px;border-radius:3px;background:${c};border:1px solid #e8ecf0;display:inline-block"></span>${l}</span>`).join('')}
+    </div>
+  </div>`;
+}
+
 function buildEmpTabel(e){
   empTabelEmpId=e.id;
   const now=new Date(); now.setHours(0,0,0,0);
@@ -2513,9 +2558,11 @@ function buildEmpTabel(e){
         `<button class="btn btn-${empTabelPeriod===p?'primary':'secondary'} btn-sm" onclick="empTabelPeriod='${p}';renderEmpTabelTab()">${l}</button>`).join('')}
       </div>
       ${empTabelPeriod==='month'?`
+        <button class="btn btn-secondary btn-sm" onclick="empTabelShift(-1)" title="Попередній місяць">←</button>
         <select class="flt-sel" style="min-width:100px;padding:4px 8px;font-size:12px" onchange="empTabelMonth=+this.value;renderEmpTabelTab()">
           ${monthNames.map((m,i)=>`<option value="${i}" ${empTabelMonth===i?'selected':''}>${m}</option>`).join('')}
-        </select>`:''}
+        </select>
+        <button class="btn btn-secondary btn-sm" onclick="empTabelShift(1)" title="Наступний місяць">→</button>`:''}
       ${empTabelPeriod==='quarter'?`
         <div style="display:flex;gap:4px">
           ${[[0,'I'],[1,'II'],[2,'III'],[3,'IV']].map(([q,l])=>
@@ -2546,6 +2593,8 @@ function buildEmpTabel(e){
         <div style="font-size:10px;color:var(--gray);margin-top:2px">❌ відсутність</div>
       </div>`:''}
     </div>
+
+    ${empTabelPeriod==='month'?buildEmpTabelCalendar(e,empTabelYear,empTabelMonth,loc):''}
 
     ${showMonths&&monthRows?`
     <table style="width:100%;border-collapse:collapse;font-size:12px">
@@ -2613,19 +2662,25 @@ function deleteNote(empId,nid){
 function buildTimeline(e,r){
   const evts=[];
   const sd=pd(e.wday)||pd(e.hired);
-  if(sd)evts.push({d:sd,type:'g',text:'🟢 Початок роботи',note:e.pos});
-  if(e.fired){const fd=pd(e.fired);if(fd)evts.push({d:fd,type:'r',text:'🔴 Звільнення',note:''});}
+  if(sd)evts.push({d:sd,type:'g',text:'🟢 Прийнятий',note:[e.pos,e.loc].filter(Boolean).join(' · ')});
+  // v6.32: декрет/інший нестандартний статус — показуємо як поточний маркер.
+  if(isActive(e) && e.stat && /декрет|відпустка по догляду|вагітн/i.test(e.stat)){
+    evts.push({d:new Date(),type:'b',text:'👶 '+e.stat,note:'поточний статус'});
+  }
+  if(e.fired){const fd=pd(e.fired);if(fd)evts.push({d:fd,type:'r',text:'🔴 Звільнення',note:e.stat&&/звільн/i.test(e.stat)?e.stat:''});}
   r.vacs.forEach(v=>evts.push({d:new Date(v.start),type:'b',text:`🏖️ Відпустка (${v.type||'Щорічна'})`,note:`${v.days} днів${v.note?' · '+v.note:''}`}));
   r.sicks.forEach(v=>evts.push({d:new Date(v.start),type:'o',text:'🏥 Лікарняний',note:`${v.days} днів${v.note?' · '+v.note:''}`}));
   r.sals.forEach(v=>evts.push({d:new Date(v.date),type:'g',text:`💰 Зарплата: ${Number(v.amount).toLocaleString('uk-UA')} грн`,note:v.note||''}));
   evts.sort((a,b)=>b.d-a.d);
   if(!evts.length)return`<div class="empty"><span class="ei">📅</span><h4>Хронологія порожня</h4><p>Додайте відпустки, лікарняні або зарплату</p></div>`;
+  // v6.32: лише початок → підказка «Поки що тільки початок».
+  const onlyStart = (evts.length===1 && evts[0].text==='🟢 Прийнятий');
   return`<div class="timeline">${evts.map(ev=>`<div class="tl-item">
     <div class="tl-dot t${ev.type}"></div>
     <div class="tl-date">${fmtDate(ev.d)}</div>
     <div class="tl-text">${ev.text}</div>
     ${ev.note?`<div class="tl-note">${ev.note}</div>`:''}
-  </div>`).join('')}</div>`;
+  </div>`).join('')}</div>${onlyStart?`<div style="padding:8px 16px;color:var(--gray);font-size:12px">Поки що тільки початок — інші події (відпустки, лікарняні, зміни ЗП) з'являться тут автоматично.</div>`:''}`;
 }
 
 function switchTab(el){
