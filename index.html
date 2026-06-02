@@ -1824,22 +1824,29 @@ function dispatchHashView(){
   const h = (location.hash||'').replace('#','');
   if (!h) return;
   // v6.31: deep-link на повну картку співробітника — #emp/<ПІБ> (з Salary тощо).
+  // v6.32.2: ❗ локальний const нижче назвали hasViewPerm — раніше він зватися
+  // hasPerm і ЗАТІНЯВ глобальну функцію hasPerm → виклик hasPerm('employees')
+  // тут кидав TDZ ReferenceError, і весь deep-link падав (Salary не відкривав
+  // картку). Також матчимо ПІБ у ОБОХ порядках (last+first / first+last).
   if (h.indexOf('emp/') === 0){
     history.replaceState(null,'',location.pathname + location.search);
-    if (!hasPerm('employees')) return;
+    if (typeof hasPerm === 'function' && !hasPerm('employees')) return;
     var nm = '';
     try { nm = decodeURIComponent(h.slice(4)); } catch(e){ nm = h.slice(4); }
     nm = String(nm||'').trim().toLowerCase().replace(/\s+/g,' ');
+    function _nn(s){ return String(s||'').trim().toLowerCase().replace(/\s+/g,' '); }
     var found = (S.emps||[]).filter(function(e){
-      return fullName(e).trim().toLowerCase().replace(/\s+/g,' ') === nm;
+      var lf = _nn((e.last||'') + ' ' + (e.first||''));
+      var fl = _nn((e.first||'') + ' ' + (e.last||''));
+      return lf === nm || fl === nm;
     });
     if (found.length){ nav('employee', found[0].id); }
     else { nav('employees'); S.q = nm; renderEmps(); }   // не знайшли — список + пошук
     return;
   }
   const allowed = PERMISSIONS[S.user && S.user.role];
-  const hasPerm = (allowed === 'all') || (Array.isArray(allowed) && allowed.indexOf(h) >= 0);
-  if (!hasPerm) {
+  const hasViewPerm = (allowed === 'all') || (Array.isArray(allowed) && allowed.indexOf(h) >= 0);
+  if (!hasViewPerm) {
     history.replaceState(null,'',location.pathname + location.search);
     return;
   }
@@ -1847,6 +1854,13 @@ function dispatchHashView(){
   if (fn) fn();
   history.replaceState(null,'',location.pathname + location.search);
 }
+
+// v6.32.2: якщо hash зміниться вже на завантаженій index.html (back/forward,
+// повторний deep-link) — повторно обробляємо. Замінити URL у dispatchHashView
+// не тригерить hashchange, тож циклу немає.
+window.addEventListener('hashchange', function(){
+  try { if (S && S.user && (location.hash||'').indexOf('#emp/') === 0) dispatchHashView(); } catch(e){ console.warn('[hashchange]', e); }
+});
 
 function updUserUI(){
   if (!S || !S.user) return;
