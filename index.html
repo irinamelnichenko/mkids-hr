@@ -1070,49 +1070,85 @@ function populateLoginLocations(){
 // Завантажуємо список користувачів для Менеджмент-dropdown.
 // При помилці — показуємо повідомлення в самому dropdown (вкладки Director/
 // Nurse працюють незалежно).
+// v6.30.3: стійке завантаження. Корінь старого бага — `await r.json()` кидав
+// на GET-відповіді Apps Script, коли 302→приходила HTML-обгортка (хоча JSON
+// усередині є). Рішення: читаємо як TEXT і витягуємо JSON (resilient-parse,
+// як у POST-патерні), + 1 ретрай, + без агресивного 10с-таймера що затирав
+// успішний cold-start. Локаційні таби (Директор/Медсестра/Вихователь) беруть
+// локації з hardcoded LOGIN_LOCATIONS і мережі НЕ чіпають — тому не падали.
+function _parseUsersResponse(text){
+  var t = String(text || '');
+  var i = t.indexOf('{'), j = t.lastIndexOf('}');
+  if (i < 0 || j <= i) return null;
+  try { return JSON.parse(t.slice(i, j + 1)); } catch(e){ return null; }
+}
+async function _fetchUsersOnce(){
+  var r = await fetch(authScriptUrl() + '?action=getUsers', {redirect:'follow'});
+  var text = await r.text();
+  var json = _parseUsersResponse(text);
+  if (!json) throw new Error('non-JSON response (len=' + text.length + ')');
+  return json;
+}
 async function loadUsersForDropdown(){
   var sel = document.getElementById('userSel');
   if (!sel) return;
-  var loaded = false;
   var ERR_MSG = '⚠️ Помилка завантаження. Зайдіть через вкладку Директор/Медсестра';
-  setTimeout(function(){
-    if (!loaded){
-      sel.innerHTML = '<option value="">' + ERR_MSG + '</option>';
-    }
-  }, 10000);
+  sel.innerHTML = '<option value="">⏳ Завантаження…</option>';
 
+  var json = null, lastErr = null;
+  for (var k = 0; k < 2 && !json; k++){
+    try { json = await _fetchUsersOnce(); }
+    catch(e){ lastErr = e; }
+  }
+  if (!json || !json.ok || !Array.isArray(json.users) || !json.users.length){
+    if (lastErr) console.warn('[loadUsersForDropdown] failed:', lastErr);
+    sel.innerHTML = '<option value="">' + ERR_MSG + '</option>';
+    return;
+  }
+  // Порядок — як з backend (Users sheet — по колонці ID). НЕ .sort().
+  // Вкладка Менеджмент — лише управлінські ролі; локаційні входять окремо.
+  var LOCATION_ROLES = ['director','nurse','vyhovatel'];
+  var actives = json.users.filter(function(u){
+    if (!u.active) return false;
+    return LOCATION_ROLES.indexOf(String(u.role || '').toLowerCase().trim()) === -1;
+  });
+  var html = '<option value="">— Виберіть користувача —</option>';
+  actives.forEach(function(u){
+    var role = String(u.role || '').toLowerCase().trim();
+    var em  = ROLE_EMOJI[role]     || '👤';
+    var lbl = ROLE_SHORT_NEW[role] || (u.role || '').toUpperCase();
+    html += '<option value="' + esc(u.login) + '">' + em + ' ' + lbl + ' — ' + esc(u.name) + '</option>';
+  });
+  sel.innerHTML = html;
+}
+
+// Діагностика з консолі: diagLoginTabs() — показує що повертає getUsers і
+// розкладку по ролях (Менеджмент vs локаційні). Локаційні таби мережі не
+// потребують (LOGIN_LOCATIONS), тож для повноти показуємо і їх список.
+async function diagLoginTabs(){
+  var out = {url: authScriptUrl()};
   try {
     var r = await fetch(authScriptUrl() + '?action=getUsers', {redirect:'follow'});
-    var json = await r.json();
-    loaded = true;
-    if (!json.ok || !Array.isArray(json.users) || !json.users.length){
-      sel.innerHTML = '<option value="">⚠️ Список порожній</option>';
-      return;
+    out.httpStatus = r.status;
+    var text = await r.text();
+    out.rawLength = text.length;
+    out.rawHead = text.slice(0, 200);
+    var json = _parseUsersResponse(text);
+    out.parsed = !!json;
+    if (json && Array.isArray(json.users)){
+      var loc = ['director','nurse','vyhovatel'];
+      out.total = json.users.length;
+      out.management = json.users.filter(function(u){ return u.active && loc.indexOf(String(u.role||'').toLowerCase().trim())===-1; }).length;
+      out.directors  = json.users.filter(function(u){ return u.active && String(u.role||'').toLowerCase().trim()==='director'; }).length;
+      out.nurses     = json.users.filter(function(u){ return u.active && String(u.role||'').toLowerCase().trim()==='nurse'; }).length;
+      out.vyhovateli = json.users.filter(function(u){ return u.active && String(u.role||'').toLowerCase().trim()==='vyhovatel'; }).length;
     }
-    // Порядок — як з backend (Users sheet — по колонці ID).
-    // НЕ робити .sort() — фільтруємо тільки неактивних.
-    // Вкладка Менеджмент — лише управлінські ролі. Локаційні (director /
-    // nurse / vyhovatel) входять через власні вкладки, тут їх не показуємо.
-    var LOCATION_ROLES = ['director','nurse','vyhovatel'];
-    var actives = json.users.filter(function(u){
-      if (!u.active) return false;
-      return LOCATION_ROLES.indexOf(String(u.role || '').toLowerCase().trim()) === -1;
-    });
-    var html = '<option value="">— Виберіть користувача —</option>';
-    actives.forEach(function(u){
-      // role з Sheets може бути у будь-якому регістрі ('CFO', 'RnD_director',
-      // 'HR_trainer'). Нормалізуємо до lowercase для lookup в ROLE_EMOJI/_SHORT.
-      var role = String(u.role || '').toLowerCase().trim();
-      var em  = ROLE_EMOJI[role]     || '👤';
-      var lbl = ROLE_SHORT_NEW[role] || (u.role || '').toUpperCase();
-      html += '<option value="' + esc(u.login) + '">' + em + ' ' + lbl + ' — ' + esc(u.name) + '</option>';
-    });
-    sel.innerHTML = html;
-  } catch(e){
-    loaded = true;
-    sel.innerHTML = '<option value="">' + ERR_MSG + '</option>';
-  }
+  } catch(e){ out.error = String(e && e.message || e); }
+  out.loginLocations = (typeof LOGIN_LOCATIONS!=='undefined') ? LOGIN_LOCATIONS.length : 'n/a';
+  console.log('[diagLoginTabs]', JSON.stringify(out, null, 2));
+  return out;
 }
+if (typeof window !== 'undefined') window.diagLoginTabs = diagLoginTabs;
 
 // Toggle на кнопці 👁 у password-полях логін-екрану. За замовч пароль
 // прихований (type=password) — клік відкриває (type=text), повторний
