@@ -693,13 +693,22 @@ tbody tr.clickable:hover td{background:#f0f7ff}
         <div class="g2">
           <div class="fg"><label>Вихователь</label><input type="text" id="fTeacher"></div>
           <div class="fg"><label>Статус клієнта</label>
-            <!-- v6.29.3: «Розірвано»/«Випускник» прибрано — лише через кнопки. -->
-            <select id="fStatus" onchange="updateStatusWarnings()">
+            <!-- v6.35: «Випускник» через dropdown. «❌ Розірвано» — лише кнопкою. -->
+            <select id="fStatus" onchange="onClientStatusChange()">
               <option value="adaptation">🌱 Адаптація</option>
               <option value="active">✅ Активний</option>
               <option value="paused">⏸ Призупинено</option>
               <option value="future">📅 Майбутній</option>
+              <option value="graduated">🎓 Випускник</option>
             </select></div>
+        </div>
+        <!-- v6.35: поля випуску — показуються лише коли статус = Випускник -->
+        <div id="gradFieldsWrap" style="display:none">
+          <div class="fg"><label>Дата випуску</label>
+            <input type="date" id="gradStatusDate"></div>
+          <div class="fg" style="margin-top:10px"><label>Куди пішов далі (опційно)</label>
+            <textarea id="gradStatusNext" rows="2" placeholder="Напр.: школа m.kids / інша школа / інше"
+              style="width:100%;padding:10px;border:1.5px solid var(--gray2);border-radius:8px;font-size:14px;font-family:inherit;resize:vertical"></textarea></div>
         </div>
         <div class="section-hd">Контакт мами</div>
         <div class="g2">
@@ -861,7 +870,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
     </div>
     <div class="modal-ft">
       <button class="btn btn-danger btn-sm" id="btnDeleteChild" onclick="deleteChild()" style="margin-right:auto">🗑️ Видалити</button>
-      <button class="btn btn-sm" id="btnGraduate" data-permission="terminate_contract" onclick="openGraduate()" style="display:none;background:#8e44ad;color:#fff;border-color:#8e44ad">🎓 Випускник</button>
+      <!-- v6.35: кнопку «🎓 Випускник» прибрано — тепер через dropdown статусу -->
       <button class="btn btn-sm" id="btnTerminate" data-permission="terminate_contract" onclick="openTerminate()" style="display:none;background:#c0392b;color:#fff;border-color:#c0392b">🚪 Розірвати договір</button>
       <button class="btn btn-sm" id="btnRestore" data-permission="terminate_contract" onclick="restoreContract()" style="display:none;background:#fff;color:#27ae60;border:1.5px solid #27ae60">↶ Повернути в активні</button>
       <button class="btn btn-secondary" onclick="closeModal('mChild')">Скасувати</button>
@@ -3054,7 +3063,10 @@ function populateForm(id){
   groupSel.value=desiredGroup;
   if(groupSel.value!==desiredGroup) groupSel.selectedIndex=0;
   document.getElementById('fTeacher').value=c.teacher||'';
-  syncStatusField(c);   // v6.29.3: read-only для розірваних/випускників
+  syncStatusField(c);   // v6.29.3: read-only для розірваних / dropdown для випускника
+  // v6.35: префіл полів випуску (показуються лише для статусу «Випускник»).
+  var _gd=document.getElementById('gradStatusDate'); if(_gd) _gd.value=(isGraduatedStatus(c.status)?(c.terminationDate||''):'');
+  var _gn=document.getElementById('gradStatusNext'); if(_gn) _gn.value=(isGraduatedStatus(c.status)?(c.terminationReason||''):'');
   document.getElementById('fMomName').value=c.momName||'';
   document.getElementById('fMomPhone').value=c.momPhone||'';
   document.getElementById('fMomEmail').value=c.momEmail||'';
@@ -5311,25 +5323,44 @@ function restoreContract(){
   renderView();
 }
 
-// Поле статусу: для розірваних/випускників — read-only (lock) з підказкою.
+// Поле статусу. «❌ Розірвано» — read-only lock (лише кнопкою). «🎓 Випускник»
+// (v6.35) — звичайна опція dropdown. Поля випуску показуємо для випускника.
 function syncStatusField(c){
   var sel=document.getElementById('fStatus'); if(!sel) return;
   var st=(c&&c.status)||'active';
   var tmp=sel.querySelector('option[data-temp="1"]'); if(tmp) tmp.remove();
-  if(st==='terminated' || isGraduatedStatus(st)){
+  if(st==='terminated'){
     var o=document.createElement('option');
-    o.value=st; o.textContent=(st==='terminated'?'❌ Розірвано':'🎓 Випускник'); o.setAttribute('data-temp','1');
-    sel.appendChild(o); sel.value=st; sel.disabled=true;
+    o.value='terminated'; o.textContent='❌ Розірвано'; o.setAttribute('data-temp','1');
+    sel.appendChild(o); sel.value='terminated'; sel.disabled=true;
+  } else if(isGraduatedStatus(st)){
+    sel.disabled=false; sel.value='graduated';     // v6.35: реальна опція
   } else {
     sel.disabled=false; sel.value=st;
   }
+  toggleGradFields();
+}
+// Показ/прихов полів випуску залежно від обраного статусу.
+function toggleGradFields(){
+  var sel=document.getElementById('fStatus');
+  var wrap=document.getElementById('gradFieldsWrap');
+  if(!sel||!wrap) return;
+  wrap.style.display=(sel.value==='graduated')?'':'none';
+}
+function onClientStatusChange(){
+  var sel=document.getElementById('fStatus');
+  toggleGradFields();
+  if(sel && sel.value==='graduated'){
+    var dEl=document.getElementById('gradStatusDate');
+    if(dEl && !dEl.value && typeof today==='function') dEl.value=today();
+  }
+  if(typeof updateStatusWarnings==='function') updateStatusWarnings();
 }
 
-// Банер + перемикання кнопок випустити/розірвати/повернути у картці.
+// Банер + перемикання кнопок розірвати/повернути у картці.
 function renderTermBanner(id){
   var c=S.crm[id]||{};
   var banner=document.getElementById('termBanner');
-  var btnG=document.getElementById('btnGraduate');
   var btnT=document.getElementById('btnTerminate');
   var btnR=document.getElementById('btnRestore');
   var isTerm=(c.status==='terminated');
@@ -5355,7 +5386,6 @@ function renderTermBanner(id){
     }
   }
   var locked=(isTerm||isGrad);
-  if(btnG) btnG.style.display=(canT && !locked)?'':'none';
   if(btnT) btnT.style.display=(canT && !locked)?'':'none';
   if(btnR) btnR.style.display=(canT && locked)?'':'none';
 }
@@ -5651,10 +5681,11 @@ function saveChild(){
   c.group=group;
   c.teacher=teacher;
   c.bday=val('fBday');
-  // v6.29.3: статус «Розірвано»/«Випускник» змінюється ЛИШЕ через кнопки —
-  // звичайне збереження картки його НЕ чіпає (dropdown disabled/read-only).
+  // v6.35: статус через dropdown (вкл. 🎓 Випускник). «❌ Розірвано» — locked
+  // (лише через кнопку/restore), тож для нього зберігаємо попередній статус.
   var prevStatus=c.status;
-  c.status=(prevStatus==='terminated'||isGraduatedStatus(prevStatus)) ? prevStatus : val('fStatus');
+  var selStatus=(prevStatus==='terminated')?prevStatus:val('fStatus');
+  c.status=selStatus;
   c.momName=val('fMomName');
   c.momPhone=val('fMomPhone');
   c.momEmail=val('fMomEmail');
@@ -5673,8 +5704,17 @@ function saveChild(){
 
   c.contractNumber=val('fContractNumber');
   c.adaptDate=valRaw('fAdaptDate');
-  c.terminationDate=valRaw('fTerminationDate');
-  c.terminationReason=val('fTerminationReason');
+  // v6.35: дата/причина залежно від статусу.
+  if(selStatus==='terminated'){
+    // розірвано — поважаємо наявне (виставляється кнопкою/restore / legacy-полем)
+    c.terminationDate=valRaw('fTerminationDate')||c.terminationDate||'';
+    c.terminationReason=val('fTerminationReason')||c.terminationReason||'';
+  } else if(isGraduatedStatus(selStatus)){
+    c.terminationDate=valRaw('gradStatusDate')||c.terminationDate||today();
+    c.terminationReason=val('gradStatusNext');
+  } else {
+    c.terminationDate=''; c.terminationReason='';   // звичайний статус — чисто
+  }
   c.birthCert=val('fBirthCert');
   c.childRegAddress=val('fChildRegAddress');
   c.momDoc=val('fMomDoc');
