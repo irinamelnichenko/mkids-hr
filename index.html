@@ -602,6 +602,25 @@ tbody tr.clickable{cursor:pointer}
   </div>
 </div>
 
+<!-- MODAL: ПРИЙНЯТИ ЗНОВ (v6.34) -->
+<div id="mRehire" class="modal-ov hidden">
+  <div class="modal">
+    <div class="modal-hd">
+      <h3>↶ Прийняти знов на роботу</h3>
+      <button class="modal-close" onclick="closeModal('mRehire')">✕</button>
+    </div>
+    <div class="modal-bd">
+      <div id="mRehireName" style="font-weight:700;font-size:15px;margin-bottom:10px;color:var(--dark)"></div>
+      <div class="fg"><label>Дата прийняття</label><input type="date" id="rehireDate"></div>
+      <div class="alert alert-info" style="font-size:13px">Статус → «працює», дата звільнення очиститься. Співробітник знову зʼявиться в табелі та зарплаті. Стара дата звільнення збережеться як нотатка (для хронології).</div>
+    </div>
+    <div class="modal-ft">
+      <button class="btn btn-secondary" onclick="closeModal('mRehire')">Скасувати</button>
+      <button class="btn btn-primary" onclick="confirmRehire()" style="background:#27ae60;border-color:#27ae60">↶ Підтвердити</button>
+    </div>
+  </div>
+</div>
+
 <!-- MODAL: ЛІКАРНЯНИЙ -->
 <div id="mSick" class="modal-ov hidden">
   <div class="modal">
@@ -1751,6 +1770,50 @@ async function reactivateMaternity(empId){
   }catch(err){ toast('Помилка мережі: '+(err&&err.message||err)); }
 }
 
+// v6.34: повторне прийняття звільненого. Модалка з датою → saveEmployee
+// (fired='', stat='працює', hired=нова дата). Стару дату звільнення зберігаємо
+// у нотатці «↩ Прийнято знов …» → buildTimeline показує реактивацію.
+var _rehireEmpId = null;
+function openRehire(empId){
+  var e = S.emps[empId]; if(!e) return;
+  if(!canEmpEdit(e)){ toast('🚫 Немає дозволу'); return; }
+  _rehireEmpId = empId;
+  document.getElementById('mRehireName').textContent = fullName(e) + (e.loc?' · '+e.loc:'');
+  document.getElementById('rehireDate').value = new Date().toISOString().split('T')[0];
+  document.getElementById('mRehire').classList.remove('hidden');
+}
+async function confirmRehire(){
+  var empId = _rehireEmpId; var e = S.emps[empId]; if(!e) return;
+  if(!canEmpEdit(e)){ toast('🚫 Немає дозволу'); return; }
+  var iso = document.getElementById('rehireDate').value;
+  if(!iso){ toast('Вкажіть дату прийняття'); return; }
+  var newHired = _isoToDmy(iso);
+  var oldFired = String(e.fired||'').trim();
+  var payload = {
+    dir:e.dir||'', typ:e.typ||'', loc:e.loc||'', grp:e.grp||'',
+    last:e.last||'', first:e.first||'', phone:e.phone||'', pos:e.pos||'',
+    stat:'працює', bday:e.bday||'', bmon:e.bmon||'', bdate:e.bdate||'',
+    wday:e.wday||'', hired:newHired, fired:'', email:e.email||''
+  };
+  try{
+    var res = await postToScript('saveEmployee', {actorId:S.user&&S.user.id, payload:payload, rowNum:e.rowNum});
+    if(!res || !res.ok){ toast('❌ '+((res&&res.error)||'Помилка збереження')); return; }
+    // Нотатка-хронологія (зберігає стару дату звільнення; key за wday стабільний).
+    try{
+      var r = rec(e.key);
+      r.notes.push({_id:Date.now()+'r', text:'↩ Прийнято знов '+newHired+(oldFired&&pd(oldFired)?' (раніше звільнено: '+oldFired+')':''), author:isNetworkRole(S.user.role)?'HR':S.user.loc, at:new Date().toISOString()});
+      saveRecs(); syncToSheets();
+    }catch(_e){}
+    try{ localStorage.removeItem(CFG.CK); }catch(_e){}
+    await fetchEmps(true);
+    closeModal('mRehire');
+    var newRow = (res.employee && res.employee.rowNum) || e.rowNum, newId=-1;
+    for(var i=0;i<S.emps.length;i++){ if(S.emps[i].rowNum===newRow){ newId=i; break; } }
+    if(newId>=0){ S.empId=newId; renderEmpCard(); } else { renderEmps(); }
+    toast('Співробітник повернувся в активні');
+  }catch(err){ toast('Помилка мережі: '+(err&&err.message||err)); }
+}
+
 async function confirmDeleteEmp(){
   var rowNum = Number(document.getElementById('empEditRowNum').value || 0);
   if (!rowNum){ _empShowError('Нема rowNum'); return; }
@@ -1989,6 +2052,13 @@ function isActive(e){
   if(e.stat&&/звіл/i.test(e.stat))return false;
   if(isMaternity(e))return false;   // v6.33: декрет не рахуємо активною
   return true;
+}
+// v6.34: звільнений (дата звільнення АБО статус ~«звіл»), але НЕ декрет.
+function isFired(e){
+  if(isMaternity(e))return false;
+  if(e && e.fired && String(e.fired).trim())return true;
+  if(e && e.stat && /звіл/i.test(e.stat))return true;
+  return false;
 }
 function fullName(e){return (e.last+' '+e.first).trim();}
 
@@ -2388,6 +2458,10 @@ function renderEmpCard(){
         <span>👶 <strong>У декретній відпустці</strong> — не показується в табелі та зарплаті, не рахується активною.</span>
         ${canEmpEdit(e)?`<button class="btn btn-sm" onclick="reactivateMaternity(${e.id})" style="background:#27ae60;color:#fff;border-color:#27ae60;white-space:nowrap">↩ Повернути в активні</button>`:''}
       </div>`:''}
+      ${isFired(e)?`<div style="margin:14px;padding:12px 16px;border-radius:8px;background:#fdecea;border:1px solid #e74c3c;color:#c0392b;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+        <span>🔴 <strong>Звільнений${e.fired&&pd(e.fired)?' з '+fmtDate(e.fired):''}</strong></span>
+        ${canEmpEdit(e)?`<button class="btn btn-sm" onclick="openRehire(${e.id})" style="background:#27ae60;color:#fff;border-color:#27ae60;white-space:nowrap">↶ Прийняти знов</button>`:''}
+      </div>`:''}
       <div class="qs-grid">
         <div class="qs-item"><div class="qs-val">${t?`${t.yr}р ${t.mo}м`:'—'}</div><div class="qs-lbl">Стаж</div></div>
         <div class="qs-item"><div class="qs-val" style="color:${ov?'#e74c3c':'var(--dark)'};">${vUsed}<span style="font-size:14px;color:var(--gray)">/${vEarned}</span></div><div class="qs-lbl">Відпустка використано/доступно</div></div>
@@ -2760,6 +2834,12 @@ function buildTimeline(e,r){
   r.vacs.forEach(v=>evts.push({d:new Date(v.start),type:'b',text:`🏖️ Відпустка (${v.type||'Щорічна'})`,note:`${v.days} днів${v.note?' · '+v.note:''}`}));
   r.sicks.forEach(v=>evts.push({d:new Date(v.start),type:'o',text:'🏥 Лікарняний',note:`${v.days} днів${v.note?' · '+v.note:''}`}));
   r.sals.forEach(v=>evts.push({d:new Date(v.date),type:'g',text:`💰 Зарплата: ${Number(v.amount).toLocaleString('uk-UA')} грн`,note:v.note||''}));
+  // v6.34: реактивація («Прийнято знов») — з нотаток, що починаються з ↩.
+  (r.notes||[]).forEach(function(n){
+    if(n.text && String(n.text).trim().indexOf('↩')===0){
+      evts.push({d:n.at?new Date(n.at):new Date(),type:'g',text:'↩ Прийнято знов',note:String(n.text).replace(/^↩\s*/,'')});
+    }
+  });
   evts.sort((a,b)=>b.d-a.d);
   if(!evts.length)return`<div class="empty"><span class="ei">📅</span><h4>Хронологія порожня</h4><p>Додайте відпустки, лікарняні або зарплату</p></div>`;
   // v6.32: лише початок → підказка «Поки що тільки початок».
