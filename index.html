@@ -137,6 +137,9 @@ tbody td{padding:11px 14px;border-bottom:1px solid #f0f4f8;font-size:13px}
 tbody tr:hover{background:#f8faff}
 tbody tr:last-child td{border-bottom:none}
 tbody tr.clickable{cursor:pointer}
+/* v6.31: клікабельний ПІБ у табелі — відкриває повну картку */
+.emp-link{cursor:pointer;border-radius:4px;padding:1px 4px;transition:background .15s,color .15s}
+.emp-link:hover{background:#eef2f6;text-decoration:underline}
 
 /* BADGES */
 .badge{display:inline-flex;align-items:center;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:600}
@@ -1820,6 +1823,20 @@ function applyRoleVisibility(){
 function dispatchHashView(){
   const h = (location.hash||'').replace('#','');
   if (!h) return;
+  // v6.31: deep-link на повну картку співробітника — #emp/<ПІБ> (з Salary тощо).
+  if (h.indexOf('emp/') === 0){
+    history.replaceState(null,'',location.pathname + location.search);
+    if (!hasPerm('employees')) return;
+    var nm = '';
+    try { nm = decodeURIComponent(h.slice(4)); } catch(e){ nm = h.slice(4); }
+    nm = String(nm||'').trim().toLowerCase().replace(/\s+/g,' ');
+    var found = (S.emps||[]).filter(function(e){
+      return fullName(e).trim().toLowerCase().replace(/\s+/g,' ') === nm;
+    });
+    if (found.length){ nav('employee', found[0].id); }
+    else { nav('employees'); S.q = nm; renderEmps(); }   // не знайшли — список + пошук
+    return;
+  }
   const allowed = PERMISSIONS[S.user && S.user.role];
   const hasPerm = (allowed === 'all') || (Array.isArray(allowed) && allowed.indexOf(h) >= 0);
   if (!hasPerm) {
@@ -4066,7 +4083,7 @@ function renderTabel(){
         emps.map(e=>{
           const row=tbl[e.key]||{};const st=row.status||'';
           return`<tr>
-            <td><strong>${fullName(e)}</strong></td>
+            <td onclick="nav('employee',${e.id})" title="Відкрити картку"><strong class="emp-link">${fullName(e)}</strong></td>
             <td style="font-size:12px;color:var(--gray)">${e.pos||'—'}</td>
             <td><select style="padding:4px 8px;border:1.5px solid var(--gray2);border-radius:6px;font-size:12px;background:#fff" onchange="setTabelStatus('${esc(activeLoc)}','${tabelDay}','${e.key}',this.value)">
               <option value="">— Оберіть —</option>
@@ -4100,7 +4117,7 @@ function renderTabel(){
             d.setDate(d.getDate()+1);
           }
           return`<tr>
-            <td><strong>${fullName(e)}</strong></td>
+            <td onclick="nav('employee',${e.id})" title="Відкрити картку"><strong class="emp-link">${fullName(e)}</strong></td>
             <td style="font-size:12px;color:var(--gray)">${e.pos||'—'}</td>
             <td style="color:#27ae60;font-weight:700">${cnt.present}</td>
             <td style="color:#e67e22">${cnt.late}</td>
