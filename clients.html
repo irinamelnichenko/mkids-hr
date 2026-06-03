@@ -1106,7 +1106,10 @@ function getVacationUsedInContractYear(c, refISO, excludeAbsId){
     var s=(a.from<w.from)?w.from:a.from;
     var e=(a.to>w.to)?w.to:a.to;
     if(e<s) return;
-    used+=countWorkDaysExclHol(s,e);
+    // v6.40: списання ліміту ОКРУГЛЯЄТЬСЯ ВГОРУ до тижня (ceil(днів/5)*5).
+    // Різниця між заблокованими і реально пропущеними «згорає» (грошей не торкається).
+    // Узгоджено з бекендом _vacUsedInContractYear.
+    used+=Math.ceil(countWorkDaysExclHol(s,e)/5)*5;
   });
   return used;
 }
@@ -3666,6 +3669,70 @@ function splitVacationIntoWeekSlots(fromDate, toDate){
   return slots;
 }
 
+// ── v6.40: АВТО-ЕКСПОРТ ЗНИЖКИ ВІДПУСТКИ → ПЛАТЕЖІ ───────────────────────────
+// Дзеркалить determineTargetMonth на бекенді: timestamp внесення < 1-ше число
+// місяця відпустки → той самий місяць; інакше → наступний.
+function _feDetermineTargetMonth(vacMonth, vacYear, createdAt){
+  var firstISO=vacYear+'-'+String(vacMonth).padStart(2,'0')+'-01';
+  var entryISO=(createdAt instanceof Date)?createdAt.toISOString().slice(0,10):String(createdAt||'').slice(0,10);
+  if(!/^\d{4}-\d{2}-\d{2}/.test(entryISO)) return {month:vacMonth,year:vacYear};
+  if(entryISO<firstISO) return {month:vacMonth,year:vacYear};
+  var nm=(vacMonth===12)?{m:1,y:vacYear+1}:{m:vacMonth+1,y:vacYear};
+  return {month:nm.m,year:nm.y};
+}
+// Унікальні таргет-місяці для діапазону відпустки (для оновлення Платежів).
+function _vacTargetMonthsForRange(fromStr, toStr, createdAt){
+  var f=pd(fromStr), t=pd(toStr), out={};
+  if(!f||!t||t<f) return [];
+  var cur=new Date(f.getFullYear(), f.getMonth(), 1);
+  while(cur<=t){
+    var tgt=_feDetermineTargetMonth(cur.getMonth()+1, cur.getFullYear(), createdAt);
+    out[tgt.year+'-'+tgt.month]={year:tgt.year, month:tgt.month};
+    cur.setMonth(cur.getMonth()+1);
+  }
+  return Object.keys(out).map(function(k){ return out[k]; });
+}
+// Викликає бекенд-експорт для кожного таргет-місяця (await save → потім export,
+// щоб read-after-write побачив свіжі дані) і показує toast.
+async function _refreshVacTargets(loc, targets){
+  if(!loc || !targets || !targets.length) return;
+  var results=[];
+  for(var i=0;i<targets.length;i++){
+    try{
+      var res=await apiPost({action:'exportVacationDiscountToPayments',
+        loc:loc, month:targets[i].month, year:targets[i].year});
+      if(res && res.ok) results.push(res);
+    }catch(e){ console.warn('[vacExport] fail', targets[i], e); }
+  }
+  _showVacExportToast(results);
+}
+function _showVacExportToast(results){
+  if(!results || !results.length) return;
+  var lines=[];
+  results.forEach(function(r){
+    if(r.totalDiscount>0){
+      lines.push('✅ Знижку записано в бюджет '+r.targetMonth+': −'+r.totalDiscount+' грн');
+      var moved=(r.routing||[]).filter(function(x){ return (x.reason||'').indexOf('наступний')>=0; });
+      if(moved.length) lines.push('⚠️ Знижку перенесено в '+r.targetMonth+' бо рахунок попереднього місяця вже виставлений');
+    } else if((r.details||[]).some(function(d){ return d.status==='restored'; })){
+      lines.push('↩️ Бюджет '+r.targetMonth+' відновлено (знижку знято)');
+    }
+  });
+  if(lines.length) vacToast(lines.join('\n'));
+}
+// Self-contained toast (showToast у clients.html не визначений).
+function vacToast(msg){
+  var t=document.createElement('div');
+  t.textContent=msg;
+  t.style.cssText='position:fixed;left:50%;bottom:24px;transform:translateX(-50%);'
+    +'background:#1f2937;color:#fff;padding:12px 18px;border-radius:10px;z-index:99999;'
+    +'box-shadow:0 6px 24px rgba(0,0,0,.25);font-size:13px;line-height:1.5;'
+    +'white-space:pre-line;max-width:90vw;text-align:center';
+  document.body.appendChild(t);
+  setTimeout(function(){ t.style.transition='opacity .4s'; t.style.opacity='0';
+    setTimeout(function(){ t.remove(); }, 400); }, 9000);
+}
+
 // Поточний рік договору: {from, to} — від дати договору, не календарний
 function getContractYear(contractDate, todayStr){
   var cd=pd(contractDate); if(!cd) return null;
@@ -3987,7 +4054,7 @@ function absPreviewUpdate(){
     +lines.join('<br>')+(warn?'<div style="margin-top:6px;font-weight:700">'+warn+'</div>':'')+'</div>';
 }
 
-function saveAbsencePeriod(){
+async function saveAbsencePeriod(){
   var id=S.editId; if(!id) return;
   var typeEl=document.getElementById('absNewType');
   var from=(document.getElementById('absNewFrom')||{}).value;
@@ -4031,9 +4098,18 @@ function saveAbsencePeriod(){
     aRec.note=note;
     S._absFormOpen=false; S._absEditMode=null;
     saveLocalCRM();
-    apiPost({action:'saveClient',data:Object.assign({id:id},getCRMCard(id))});
+    // v6.40: await — щоб бекенд-експорт побачив свіжі дані (read-after-write).
+    await apiPost({action:'saveClient',data:Object.assign({id:id},getCRMCard(id))});
     localStorage.removeItem(CFG.CLI_CACHE);
     renderAbsences(); recalcDiscount();
+    // Авто-експорт знижки: оновлюємо таргет-місяці СТАРОГО і НОВОГО періодів
+    // (якщо стара або нова відпустка — vacation; для standard-договору).
+    if((em.oldType==='vacation'||type==='vacation') && getContractType3(c.contractDate||'',c.group||'',c.loc||'')==='standard'){
+      var tg={};
+      _vacTargetMonthsForRange(em.oldFrom,em.oldTo,aRec.createdAt).forEach(function(x){ tg[x.year+'-'+x.month]=x; });
+      _vacTargetMonthsForRange(from,to,aRec.createdAt).forEach(function(x){ tg[x.year+'-'+x.month]=x; });
+      await _refreshVacTargets(c.loc||'', Object.keys(tg).map(function(k){ return tg[k]; }));
+    }
     return;
   }
 
@@ -4057,20 +4133,35 @@ function saveAbsencePeriod(){
   });
   S._absFormOpen=false;
   saveLocalCRM();
-  apiPost({action:'saveClient',data:Object.assign({id:id},getCRMCard(id))});
+  // v6.40: await — щоб бекенд-експорт побачив свіжий запис (read-after-write).
+  await apiPost({action:'saveClient',data:Object.assign({id:id},getCRMCard(id))});
   localStorage.removeItem(CFG.CLI_CACHE);
   renderAbsences();
   recalcDiscount();
+  // Авто-експорт знижки в Платежі (тільки відпустка, standard-договір).
+  // ct вже провалідовано вище (preschool/new/school → alert+return).
+  if(type==='vacation' && ct==='standard'){
+    await _refreshVacTargets(c.loc||'', _vacTargetMonthsForRange(from,to,now));
+  }
 }
 
-function deleteAbsencePeriod(idx){
+async function deleteAbsencePeriod(idx){
   var id=S.editId; if(!id) return;
   if(!confirm('Видалити цей запис?')) return;
-  var c=getCRMCard(id); c.absences.splice(idx,1);
+  var c=getCRMCard(id);
+  // Таргет-місяці фіксуємо ДО видалення запису.
+  var del=(c.absences||[])[idx];
+  var wasVacation=del && del.type==='vacation' && del.status!=='cancelled' && del.status!=='rejected';
+  var tgts=wasVacation?_vacTargetMonthsForRange(del.from,del.to,del.createdAt):[];
+  c.absences.splice(idx,1);
   saveLocalCRM();
-  apiPost({action:'saveClient',data:Object.assign({id:id},c)});
+  await apiPost({action:'saveClient',data:Object.assign({id:id},c)});
   localStorage.removeItem(CFG.CLI_CACHE);
   renderAbsences(); recalcDiscount();
+  // v6.40: авто-відміна знижки видаленої відпустки (export порахує 0 → повернення).
+  if(wasVacation && getContractType3(c.contractDate||'',c.group||'',c.loc||'')==='standard'){
+    await _refreshVacTargets(c.loc||'', tgts);
+  }
 }
 
 function editAbsencePeriod(cid,aid){
@@ -4081,7 +4172,7 @@ function editAbsencePeriod(cid,aid){
   renderAbsences();
 }
 
-function cancelAbsencePeriod(cid,aid){
+async function cancelAbsencePeriod(cid,aid){
   var reason=prompt('Причина скасування (обов\'язково):');
   if(reason===null) return;
   if(!reason.trim()){ alert('Вкажіть причину скасування'); return; }
@@ -4089,13 +4180,20 @@ function cancelAbsencePeriod(cid,aid){
   var c=getCRMCard(cid); if(!c) return;
   var a=(c.absences||[]).find(function(x){ return x.id===aid; }); if(!a) return;
   var who=isHR()?'HR':(S.user&&S.user.loc?S.user.loc:'Директор');
+  // Таргет-місяці фіксуємо ДО зміни статусу (по даті/періоду відпустки).
+  var wasVacation=(a.type==='vacation');
+  var tgts=wasVacation?_vacTargetMonthsForRange(a.from,a.to,a.createdAt):[];
   a.status='cancelled';
   a.statusHistory=a.statusHistory||[];
   a.statusHistory.push({event:'cancelled',at:new Date().toISOString(),by:who,reason:reason.trim()});
   saveLocalCRM();
-  apiPost({action:'saveClient',data:Object.assign({id:cid},c)});
+  await apiPost({action:'saveClient',data:Object.assign({id:cid},c)});
   localStorage.removeItem(CFG.CLI_CACHE);
   renderAbsences(); recalcDiscount();
+  // v6.40: авто-відміна знижки в Платежах (export порахує 0 → бюджет повернеться).
+  if(wasVacation && getContractType3(c.contractDate||'',c.group||'',c.loc||'')==='standard'){
+    await _refreshVacTargets(c.loc||'', tgts);
+  }
 }
 
 function setAbsStatus(cid,absId,status,reason){
