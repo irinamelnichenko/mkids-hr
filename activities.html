@@ -1054,11 +1054,13 @@ select,input,textarea{font-family:inherit}
         </div>
         <div class="fg">
           <label>Модель оплати викладача</label>
-          <select id="actTeacherModel">
+          <select id="actTeacherModel" onchange="updateModelHint()">
             <option value="">— Оберіть —</option>
-            <option value="За дитину">За дитину</option>
-            <option value="За заняття">За заняття</option>
+            <option value="За заняття" title="Фіксована сума за кожне проведене заняття (унікальну дату), незалежно від кількості дітей.">За заняття</option>
+            <option value="За дитину" title="Сума множиться на кількість відмічених дітей (дитино-відвідувань).">За дитину</option>
+            <option value="За захід" title="Фіксована сума за 1 захід незалежно від кількості дітей. Підходить для Театру, Майстер-класу, вистав.">За захід</option>
           </select>
+          <small id="actModelHint" class="muted" style="display:block;margin-top:4px;font-size:11px;line-height:1.4"></small>
         </div>
       </div>
       <div class="fg-row">
@@ -1843,6 +1845,19 @@ function renderCatalog(){
   applyRoleVisibility();
 }
 
+// v6.39: підказка під dropdown "Модель оплати" — пояснює обрану модель.
+function updateModelHint(){
+  var el = $('actModelHint');
+  if (!el) return;
+  var v = $('actTeacherModel').value;
+  var HINTS = {
+    'За заняття': 'Фіксована сума за кожне проведене заняття (унікальну дату), незалежно від кількості дітей.',
+    'За дитину':  'Сума множиться на кількість відмічених дітей (дитино-відвідувань).',
+    'За захід':   'Фіксована сума за 1 захід незалежно від кількості дітей. Підходить для Театру, Майстер-класу, вистав.'
+  };
+  el.textContent = HINTS[v] || '';
+}
+
 // ── MODAL: ACTIVITY ──────────────────────────
 async function openActivityModal(id){
   if (!hasPerm('activities-edit')){
@@ -1881,6 +1896,7 @@ async function openActivityModal(id){
   $('actName').value          = existing ? existing.name : '';
   $('actClientPrice').value   = existing ? (existing.clientPrice || '') : '';
   $('actTeacherModel').value  = existing ? (existing.teacherModel || '') : '';
+  updateModelHint();
   $('actTeacherRate').value   = existing ? (existing.teacherRate || '') : '';
   $('actTeacher').value       = existing ? (existing.teacher || '') : '';
   $('actActive').checked      = existing ? !!existing.active : true;
