@@ -671,7 +671,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
         <div class="section-hd">Основна інформація</div>
         <div class="g2">
           <div class="fg"><label>ПІБ дитини</label><input type="text" id="fName" placeholder="Прізвище Ім'я По-батькові"></div>
-          <div class="fg"><label>Дата народження</label><input type="date" id="fBday"></div>
+          <div class="fg"><label>Дата народження</label><input type="date" lang="uk" id="fBday"></div>
         </div>
         <div class="g2">
           <div class="fg">
@@ -705,7 +705,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
         <!-- v6.35: поля випуску — показуються лише коли статус = Випускник -->
         <div id="gradFieldsWrap" style="display:none">
           <div class="fg"><label>Дата випуску</label>
-            <input type="date" id="gradStatusDate"></div>
+            <input type="date" lang="uk" id="gradStatusDate"></div>
           <div class="fg" style="margin-top:10px"><label>Куди пішов далі (опційно)</label>
             <textarea id="gradStatusNext" rows="2" placeholder="Напр.: школа m.kids / інша школа / інше"
               style="width:100%;padding:10px;border:1.5px solid var(--gray2);border-radius:8px;font-size:14px;font-family:inherit;resize:vertical"></textarea></div>
@@ -741,7 +741,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
       <div class="tab-pane" id="tp1" data-permission="card-child-contract">
         <div class="g2">
           <div class="fg"><label>Дата підписання договору</label>
-            <input type="date" id="fContractDate" onchange="onContractDateChange()"></div>
+            <input type="date" lang="uk" id="fContractDate" onchange="onContractDateChange()"></div>
           <div class="fg"><label>Тип договору — визначається автоматично</label>
             <input type="hidden" id="fContractType">
             <div id="contractTypeDisplay" style="padding:10px 14px;background:#f0f4f8;border:2px solid #e8ecf0;border-radius:10px;font-size:14px;font-weight:600;color:var(--dark2)">—</div>
@@ -754,7 +754,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
             <div id="contractNumberStatus" style="font-size:11px;margin-top:4px"></div>
           </div>
           <div class="fg"><label>Дата старту адаптації</label>
-            <input type="date" id="fAdaptDate" onchange="updateStatusWarnings()"></div>
+            <input type="date" lang="uk" id="fAdaptDate" onchange="updateStatusWarnings()"></div>
         </div>
         <div class="g2">
           <div class="fg"><label>Підписант договору (для рахунків)</label>
@@ -772,7 +772,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
         </div>
         <div class="g2">
           <div class="fg"><label>Дата розірвання договору</label>
-            <input type="date" id="fTerminationDate" onchange="onTerminationDateChange()"></div>
+            <input type="date" lang="uk" id="fTerminationDate" onchange="onTerminationDateChange()"></div>
           <div class="fg"></div>
         </div>
         <div class="fg" id="terminationReasonWrap" style="display:none">
@@ -787,7 +787,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
         <div class="section-hd">Зміни суми договору</div>
         <div id="feeHistoryList"></div>
         <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
-          <input type="date" id="fHDate" style="flex:1;min-width:120px;padding:8px;border:1.5px solid var(--gray2);border-radius:8px;font-size:13px">
+          <input type="date" lang="uk" id="fHDate" style="flex:1;min-width:120px;padding:8px;border:1.5px solid var(--gray2);border-radius:8px;font-size:13px">
           <input type="number" id="fHAmt" placeholder="Сума грн" style="flex:1;min-width:80px;padding:8px;border:1.5px solid var(--gray2);border-radius:8px;font-size:13px">
           <input type="text" id="fHNote" placeholder="Причина" style="flex:2;min-width:120px;padding:8px;border:1.5px solid var(--gray2);border-radius:8px;font-size:13px">
           <button class="btn btn-secondary btn-sm" onclick="addFeeHistory()">+ Додати</button>
@@ -808,7 +808,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
         <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:flex-end">
           <div style="display:flex;flex-direction:column;gap:3px;flex:1;min-width:110px">
             <label style="font-size:11px;font-weight:700;color:var(--gray);text-transform:uppercase;letter-spacing:.5px">Дата платежу</label>
-            <input type="date" id="fEFDate" style="padding:8px;border:1.5px solid var(--gray2);border-radius:8px;font-size:13px;font-family:inherit">
+            <input type="date" lang="uk" id="fEFDate" style="padding:8px;border:1.5px solid var(--gray2);border-radius:8px;font-size:13px;font-family:inherit">
           </div>
           <div style="display:flex;flex-direction:column;gap:3px;flex:1;min-width:90px">
             <label style="font-size:11px;font-weight:700;color:var(--gray);text-transform:uppercase;letter-spacing:.5px">Сума (грн)</label>
@@ -889,7 +889,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
     <div class="modal-bd">
       <p id="termClientName" style="font-weight:600;margin:0 0 12px 0"></p>
       <div class="fg"><label>Дата розірвання</label>
-        <input type="date" id="termDate"></div>
+        <input type="date" lang="uk" id="termDate"></div>
       <div class="fg" style="margin-top:10px"><label>Причина розірвання</label>
         <select id="termCategory">
           <option value="🏠 Переїзд">🏠 Переїзд</option>
@@ -924,7 +924,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
     <div class="modal-bd">
       <p id="gradClientName" style="font-weight:600;margin:0 0 12px 0"></p>
       <div class="fg"><label>Дата випуску</label>
-        <input type="date" id="gradDate"></div>
+        <input type="date" lang="uk" id="gradDate"></div>
       <div class="fg" style="margin-top:10px"><label>Куди пішов далі (опційно)</label>
         <textarea id="gradNext" rows="2" placeholder="Напр.: школа m.kids / інша школа / інше"
           style="width:100%;padding:10px;border:1.5px solid var(--gray2);border-radius:8px;font-size:14px;font-family:inherit;resize:vertical"></textarea></div>
@@ -2454,10 +2454,13 @@ function renderClients(){
   }
 
   // ── фільтрація за типом і локацією ────────────────────────────────────────
-  var listTypeLocs = S.listLocType
+  // v6.42: при активному пошуку шукаємо ГЛОБАЛЬНО по ВСІХ локаціях —
+  // ігноруємо фільтри типу/локації, щоб «Всі локації» + пошук знаходив скрізь.
+  var searching = !!(S.searchQ && S.searchQ.trim());
+  var listTypeLocs = (S.listLocType && !searching)
     ? locs.filter(function(l){ return getLocTypeByLoc(l.loc)===S.listLocType; })
     : locs;
-  var listActiveLocs = S.listLoc
+  var listActiveLocs = (S.listLoc && !searching)
     ? listTypeLocs.filter(function(l){ return l.loc===S.listLoc; })
     : listTypeLocs;
 
@@ -2471,8 +2474,8 @@ function renderClients(){
     if(!c||!c.name) return false;
     if(payIds[id]) return false;
     if(!isHR()&&c.loc!==S.user.loc) return false;
-    if(S.listLoc&&c.loc!==S.listLoc) return false;
-    if(S.listLocType&&getLocTypeByLoc(c.loc)!==S.listLocType) return false;
+    if(S.listLoc&&!searching&&c.loc!==S.listLoc) return false;
+    if(S.listLocType&&!searching&&getLocTypeByLoc(c.loc)!==S.listLocType) return false;
     return true;
   });
 
@@ -2527,7 +2530,7 @@ function renderClients(){
   S._listExportRows=[];  // джерело для exportClientsXlsx — наповнюється нижче
   var crmFiltered=crmOnlyIds.filter(function(id){
     var c=S.crm[id];
-    if(S.searchQ&&c.name.toLowerCase().indexOf(S.searchQ.toLowerCase())<0) return false;
+    if(searching&&c.name.toLowerCase().indexOf(S.searchQ.trim().toLowerCase())<0) return false;
     return true;
   });
   if(crmFiltered.length){
@@ -2591,7 +2594,7 @@ function renderClients(){
           var chSt=(ch.status==='nopay'?'debt':ch.status);
           if(chSt!==S.selStatus) return false;
         }
-        if(S.searchQ&&ch.name.toLowerCase().indexOf(S.searchQ.toLowerCase())<0) return false;
+        if(searching&&ch.name.toLowerCase().indexOf(S.searchQ.trim().toLowerCase())<0) return false;
         return true;
       });
       if(!children.length) return;
@@ -3948,8 +3951,8 @@ function renderAbsAddForm(ct,fee,abs,vacAvail,sickAvail,editData){
     +'<div style="font-weight:700;font-size:13px;margin-bottom:10px">'+(isEdit?'✏️ Редагування відпустки':'Новий період відсутності')+'</div>'
     +'<div class="g3" style="margin-bottom:8px">'
     +typeField
-    +'<div class="fg" style="margin-bottom:0"><label>Початок</label><input type="date" id="absNewFrom" onchange="absPreviewUpdate()" value="'+(isEdit?editData.oldFrom:'')+'"></div>'
-    +'<div class="fg" style="margin-bottom:0"><label>Кінець</label><input type="date" id="absNewTo" onchange="absPreviewUpdate()" value="'+(isEdit?editData.oldTo:'')+'"></div>'
+    +'<div class="fg" style="margin-bottom:0"><label>Початок</label><input type="date" lang="uk" id="absNewFrom" onchange="absPreviewUpdate()" value="'+(isEdit?editData.oldFrom:'')+'"></div>'
+    +'<div class="fg" style="margin-bottom:0"><label>Кінець</label><input type="date" lang="uk" id="absNewTo" onchange="absPreviewUpdate()" value="'+(isEdit?editData.oldTo:'')+'"></div>'
     +'</div>'
     +'<div class="fg" style="margin-bottom:8px"><label>Нотатка'+(isEdit?' <span style="color:var(--red2)">*обов\'язково</span>':'')+'</label>'
     +'<input type="text" id="absNewNote" placeholder="'+(isEdit?'Обов\'язково: причина зміни':'Напр. є довідка, вийдуть 26.04')+'" value="'+(isEdit?esc(editData.oldNote):'')+'"></div>'
@@ -5240,7 +5243,7 @@ function renderHealthTabWithRecords(id, records){
   var formHtml='<div class="abs-add-form" style="margin-bottom:16px">'
     +'<div style="font-weight:700;font-size:13px;margin-bottom:10px">Новий запис</div>'
     +'<div class="g2" style="margin-bottom:8px">'
-    +'<div class="fg" style="margin-bottom:0"><label>Дата</label><input type="date" id="hDate" value="'+today()+'"></div>'
+    +'<div class="fg" style="margin-bottom:0"><label>Дата</label><input type="date" lang="uk" id="hDate" value="'+today()+'"></div>'
     +'<div class="fg" style="margin-bottom:0"><label>Тип</label>'
     +'<select id="hType">'+HEALTH_TYPES.map(function(t){ return '<option value="'+t+'">'+HEALTH_TYPE_LABEL[t]+'</option>'; }).join('')+'</select></div>'
     +'</div>'
@@ -6774,11 +6777,13 @@ function renderClientsYearly(monthStripHtml){
     return;
   }
 
+  // v6.42: при активному пошуку — глобально по ВСІХ локаціях.
+  var searching=!!(S.searchQ&&S.searchQ.trim());
   var visRows=getYearlyForLocs(locs);
   var yst=calcYearlyStats(visRows);
 
-  // Фільтруємо за S.selLoc якщо вибрана
-  var filtRows=S.selLoc?visRows.filter(function(r){ return String(r['Локація']||'').trim()===S.selLoc; }):visRows;
+  // Фільтруємо за S.selLoc якщо вибрана (але НЕ під час пошуку)
+  var filtRows=(S.selLoc&&!searching)?visRows.filter(function(r){ return String(r['Локація']||'').trim()===S.selLoc; }):visRows;
   if(S.selLoc) yst=calcYearlyStats(filtRows);
 
   // Додаткові CRM-only діти
@@ -6788,7 +6793,7 @@ function renderClientsYearly(monthStripHtml){
     var c=S.crm[id];
     if(!c||!c.name||payIds[id]) return false;
     if(!isHR()&&c.loc!==S.user.loc) return false;
-    if(S.selLoc&&c.loc!==S.selLoc) return false;
+    if(S.selLoc&&!searching&&c.loc!==S.selLoc) return false;
     return true;
   }).length;
   var totalKids=filtRows.length+crmOnlyCount;
@@ -6822,7 +6827,7 @@ function renderClientsYearly(monthStripHtml){
   }
 
   // Таблиця по локаціях
-  var filtLocs=S.selLoc?locs.filter(function(l){ return l.loc===S.selLoc; }):locs;
+  var filtLocs=(S.selLoc&&!searching)?locs.filter(function(l){ return l.loc===S.selLoc; }):locs;
   filtLocs.forEach(function(loc){
     var locRows=filtRows.filter(function(r){ return String(r['Локація']||'').trim()===loc.loc; });
     if(!locRows.length) return;
@@ -6833,7 +6838,7 @@ function renderClientsYearly(monthStripHtml){
       var grp=parseGroupField(String(r['Група']||'')).groupType||'';
       if(S.selGroup&&grp!==S.selGroup) return false;
       if(S.selStatus==='debtors'&&!(+(r['Борг-Рік']||0)>0)) return false;
-      if(S.searchQ&&name.toLowerCase().indexOf(S.searchQ.toLowerCase())<0) return false;
+      if(searching&&name.toLowerCase().indexOf(S.searchQ.trim().toLowerCase())<0) return false;
       return true;
     });
     if(!dispRows.length) return;
