@@ -2129,6 +2129,10 @@ function getRegion(e){ return (e.dir||'').trim()||'Інше'; }
 function getRegions(arr){ return [...new Set((arr||S.emps).map(e=>getRegion(e)).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'uk')); }
 const REGION_ICONS={'Садочок':'🌱','Школа':'🏫','Управління':'🏛️','Офіс':'💼','Менеджмент':'👔','Кухня':'🍽️','Інше':'📌'};
 function esc(s){return (s||'').replace(/"/g,'&quot;').replace(/</g,'&lt;');}
+// v6.37: escJs() — для значень, що йдуть у JS-рядок одинарних лапок усередині inline
+// onclick="fn('${escJs(x)}')". Екранує \ і ' (інакше апостроф у назві локації,
+// напр. "Кар'єрна", ламає JS-рядок), плюс " та < для безпеки HTML-атрибута.
+function escJs(s){return (s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'&quot;').replace(/</g,'&lt;');}
 // Кожен set() рендерить новий DOM. applyRoleVisibility() викликаємо одразу
 // щоб data-permission атрибути на свіжих елементах (картки співробітників,
 // списки тощо) оброблялись — інакше нові елементи лишаються видимими попри
@@ -2233,7 +2237,7 @@ function renderDash(){
           <div class="tbl-wrap"><table>
             <thead><tr><th>Локація</th><th>Тип</th><th>Всього</th><th>Активні</th><th>Відпустка</th><th>Лікарняний</th></tr></thead>
             <tbody>${Object.entries(locs).sort((a,b)=>(a[1].typ||'').localeCompare(b[1].typ||'')||a[0].localeCompare(b[0],'uk')).map(([l,d])=>`
-            <tr class="clickable" onclick="filterLoc('${esc(l)}')">
+            <tr class="clickable" onclick="filterLoc('${escJs(l)}')">
               <td><strong>${l}</strong></td>
               <td><span style="font-size:11px;color:var(--gray)">${TYPE_ICONS[d.typ]||'📌'} ${d.typ||'—'}</span></td>
               <td>${d.t}</td>
@@ -3048,7 +3052,7 @@ function renderAnalytics(){
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;width:100%">
         <strong style="font-size:12px;color:var(--gray);white-space:nowrap">Тип:</strong>
         <button class="dtype-tab ${!analyticsTypFilter?'active':''}" onclick="switchAnalyticsType('')">🌐 Всі <span class="dtype-cnt">${allActive.length}</span></button>
-        ${sortedTyps.map(t=>`<button class="dtype-tab ${analyticsTypFilter===t?'active':''}" onclick="switchAnalyticsType('${esc(t)}')">${TYPE_ICONS[t]||'📌'} ${t} <span class="dtype-cnt">${allActive.filter(e=>normType(e.typ)===t).length}</span></button>`).join('')}
+        ${sortedTyps.map(t=>`<button class="dtype-tab ${analyticsTypFilter===t?'active':''}" onclick="switchAnalyticsType('${escJs(t)}')">${TYPE_ICONS[t]||'📌'} ${t} <span class="dtype-cnt">${allActive.filter(e=>normType(e.typ)===t).length}</span></button>`).join('')}
       </div>
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;width:100%">
         <strong style="font-size:12px;color:var(--gray);white-space:nowrap">Локація:</strong>
@@ -3180,7 +3184,7 @@ function renderAnalytics(){
           <div style="font-size:11px;font-weight:700;color:var(--gray);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">По локаціях</div>
           ${Object.entries(turnByLoc_).sort((a,b)=>b[1]-a[1]).map(([l,n])=>`
           <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #f8fafc;font-size:12px">
-            <span style="cursor:pointer;color:var(--blue2)" onclick="analyticsLocFilter='${esc(l)}';renderAnalytics()">${l}</span>
+            <span style="cursor:pointer;color:var(--blue2)" onclick="analyticsLocFilter='${escJs(l)}';renderAnalytics()">${l}</span>
             <span style="font-weight:700;color:#e74c3c">${n}</span>
           </div>`).join('')}
         </div>`:''}
@@ -3262,7 +3266,7 @@ function renderAnalytics(){
           return`<div class="tbl-wrap"><table>
             <thead><tr><th>Локація</th><th>Осіб</th><th>Роб.днів</th><th>✅ Присутні</th><th>⏰ Спізн.</th><th>❌ Відсутні</th><th>🏥 Лікарн.</th><th>🏖️ Відпуст.</th><th>📝 Не запов.</th><th>% присут.</th></tr></thead>
             <tbody>${locStats.map(r=>`<tr>
-              <td><strong style="cursor:pointer;color:var(--blue2)" onclick="analyticsLocFilter='${esc(r.loc)}';renderAnalytics()">${r.loc}</strong></td>
+              <td><strong style="cursor:pointer;color:var(--blue2)" onclick="analyticsLocFilter='${escJs(r.loc)}';renderAnalytics()">${r.loc}</strong></td>
               <td>${r.n}</td><td>${workDays}</td>
               <td style="color:#27ae60;font-weight:700">${r.totalPresent}</td>
               <td style="color:#e67e22">${r.totalLate}</td>
@@ -3597,7 +3601,7 @@ function renderVacSchedule(){
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:16px">
       ${isHR?`<div style="display:flex;gap:4px;flex-wrap:wrap">
         <button class="btn btn-${!vacSchedTyp?'primary':'secondary'} btn-sm" onclick="vacSchedTyp='';vacSchedLoc='';vacSchedPos='';renderVacSchedule()">🌐 Всі</button>
-        ${sortedTyps.map(t=>`<button class="btn btn-${vacSchedTyp===t?'primary':'secondary'} btn-sm" onclick="vacSchedTyp='${esc(t)}';vacSchedLoc='';vacSchedPos='';renderVacSchedule()">${TYPE_ICONS[t]||'📌'} ${t}</button>`).join('')}
+        ${sortedTyps.map(t=>`<button class="btn btn-${vacSchedTyp===t?'primary':'secondary'} btn-sm" onclick="vacSchedTyp='${escJs(t)}';vacSchedLoc='';vacSchedPos='';renderVacSchedule()">${TYPE_ICONS[t]||'📌'} ${t}</button>`).join('')}
       </div>
       <select class="flt-sel" onchange="vacSchedLoc=this.value;vacSchedPos='';renderVacSchedule()">
         <option value="">Всі локації</option>
@@ -3963,12 +3967,12 @@ function _pwCell(loc,role,safeId){
   if(isCustomPw(loc,role)){
     return `<div style="display:flex;gap:6px;align-items:center">
       <span style="font-size:12px;color:#e67e22;font-weight:700">🔒 змінено</span>
-      <button class="btn btn-secondary btn-xs" onclick="restoreLocUserPw('${esc(loc)}','${role}')">↩️ Відновити</button>
+      <button class="btn btn-secondary btn-xs" onclick="restoreLocUserPw('${escJs(loc)}','${role}')">↩️ Відновити</button>
     </div>`;
   }
   return `<div style="display:flex;gap:6px;align-items:center">
     <input type="text" id="${safeId}" value="${esc(genLocPw(loc,role))}" style="padding:5px 9px;border:1.5px solid var(--gray2);border-radius:7px;font-size:12px;font-family:monospace;width:180px;outline:none">
-    <button class="btn btn-primary btn-xs" onclick="saveLocUserPw('${esc(loc)}','${role}','${safeId}')">💾</button>
+    <button class="btn btn-primary btn-xs" onclick="saveLocUserPw('${escJs(loc)}','${role}','${safeId}')">💾</button>
   </div>`;
 }
 async function saveLocUserPw(loc,role,safeId){
@@ -4299,7 +4303,7 @@ function renderTabel(){
     const tbl=getTabel(activeLoc,tabelDay);
     tableHtml=`<div class="card">
       <div class="card-hd"><h3>📋 ${activeLoc||'—'} — ${periodLabel}</h3>
-        <button class="btn btn-primary btn-sm" onclick="autoFillTabel('${esc(activeLoc)}','${tabelDay}')">⚡ Всі присутні</button>
+        <button class="btn btn-primary btn-sm" onclick="autoFillTabel('${escJs(activeLoc)}','${tabelDay}')">⚡ Всі присутні</button>
       </div>
       <div class="tbl-wrap"><table>
         <thead><tr><th>Співробітник</th><th>Посада</th><th>Статус</th><th>Час приходу</th><th>Примітка</th></tr></thead>
@@ -4309,12 +4313,12 @@ function renderTabel(){
           return`<tr>
             <td onclick="nav('employee',${e.id})" title="Відкрити картку"><strong class="emp-link">${fullName(e)}</strong></td>
             <td style="font-size:12px;color:var(--gray)">${e.pos||'—'}</td>
-            <td><select style="padding:4px 8px;border:1.5px solid var(--gray2);border-radius:6px;font-size:12px;background:#fff" onchange="setTabelStatus('${esc(activeLoc)}','${tabelDay}','${e.key}',this.value)">
+            <td><select style="padding:4px 8px;border:1.5px solid var(--gray2);border-radius:6px;font-size:12px;background:#fff" onchange="setTabelStatus('${escJs(activeLoc)}','${tabelDay}','${e.key}',this.value)">
               <option value="">— Оберіть —</option>
               ${Object.entries(TABEL_STATUSES).map(([k,v])=>`<option value="${k}" ${st===k?'selected':''}>${v.label}</option>`).join('')}
             </select></td>
-            <td>${(st==='present'||st==='late')?`<input type="time" value="${row.time||''}" style="padding:4px 8px;border:1.5px solid var(--gray2);border-radius:6px;font-size:12px" onchange="setTabelTime('${esc(activeLoc)}','${tabelDay}','${e.key}',this.value)">`:row.time||'—'}</td>
-            <td><input type="text" value="${(row.note||'').replace(/"/g,'&quot;')}" placeholder="Примітка…" style="padding:4px 8px;border:1.5px solid var(--gray2);border-radius:6px;font-size:12px;width:140px" onchange="setTabelNote('${esc(activeLoc)}','${tabelDay}','${e.key}',this.value)"></td>
+            <td>${(st==='present'||st==='late')?`<input type="time" value="${row.time||''}" style="padding:4px 8px;border:1.5px solid var(--gray2);border-radius:6px;font-size:12px" onchange="setTabelTime('${escJs(activeLoc)}','${tabelDay}','${e.key}',this.value)">`:row.time||'—'}</td>
+            <td><input type="text" value="${(row.note||'').replace(/"/g,'&quot;')}" placeholder="Примітка…" style="padding:4px 8px;border:1.5px solid var(--gray2);border-radius:6px;font-size:12px;width:140px" onchange="setTabelNote('${escJs(activeLoc)}','${tabelDay}','${e.key}',this.value)"></td>
           </tr>`;}).join('')}
         </tbody>
       </table></div>
