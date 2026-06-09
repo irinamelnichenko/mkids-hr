@@ -660,8 +660,8 @@ tbody tr.clickable:hover td{background:#f0f7ff}
       <div class="tab" onclick="switchTab(5)" data-permission="card-child-history">📊 Історія оплат</div>
       <div class="tab" onclick="switchTab(6)" data-permission="card-child-notes">📝 Нотатки</div>
       <div class="tab" onclick="switchTab(7)" data-permission="card-child-health">🩺 Здоров'я</div>
-      <div class="tab" onclick="switchTab(8)" data-permission="card-child-banner">📄 Документи</div>
-      <div class="tab" onclick="switchTab(9)" data-permission="card-child-health">🌱 Розвиток</div>
+      <div class="tab" onclick="switchTab(8)" data-permission="card-child-health">🌱 Розвиток</div>
+      <div class="tab" onclick="switchTab(9)" data-permission="card-child-banner">📄 Документи</div>
     </div>
     <div class="modal-bd">
       <!-- v6.29: банер розірваного договору (показується якщо статус=terminated) -->
@@ -846,6 +846,9 @@ tbody tr.clickable:hover td{background:#f0f7ff}
       </div>
       <!-- Tab 7: Здоров'я -->
       <div class="tab-pane" id="tp7" data-permission="card-child-health"></div>
+      <!-- Розвиток (v6.47.2) — DOM-індекс 8 = switchTab(8); ПЕРЕД Документи -->
+      <div class="tab-pane" id="tp9" data-permission="card-child-health"></div>
+      <!-- Документи — DOM-індекс 9 = switchTab(9) -->
       <!-- Tab 8: Документи -->
       <div class="tab-pane" id="tp8" data-permission="card-child-banner">
         <div class="section-hd">👶 ДИТИНА</div>
@@ -868,8 +871,6 @@ tbody tr.clickable:hover td{background:#f0f7ff}
         <div class="fg"><label>РНОКПП тата</label>
           <input type="text" id="fDadRnokpp" placeholder="10 цифр" maxlength="10" oninput="validateRnokpp(this)"></div>
       </div>
-      <!-- Tab 9: Розвиток (v6.47) — ПІСЛЯ tp8, щоб DOM-індекс панелі співпадав з індексом вкладки -->
-      <div class="tab-pane" id="tp9" data-permission="card-child-health"></div>
     </div>
     <div class="modal-ft">
       <button class="btn btn-danger btn-sm" id="btnDeleteChild" onclick="deleteChild()" style="margin-right:auto">🗑️ Видалити</button>
@@ -1480,7 +1481,7 @@ async function loadClients(force){
   console.log('[loadClients] fetching from Sheets...');
   var rows=[];
   try{
-    var vals=await sheetsRead('Клієнти','A1:AE2000');
+    var vals=await sheetsRead('Клієнти','A1:AO2000');  // v6.47.2: AE→AO — охопити Email/Здоров'я(AJ)/Розвиток(AK), інакше нові колонки не читались
     rows=rowsToObjects(vals).filter(function(r){ return r['ID']; });
     if(!rows.length) throw new Error('empty response');
   }catch(e){
@@ -3103,7 +3104,7 @@ function switchTab(i){
   if(i===4) renderPayMonths();
   if(i===5) renderPayHistory();
   if(i===7) renderHealthTab();
-  if(i===9) renderDevelopmentTab();
+  if(i===8) renderDevelopmentTab();   // v6.47.2: Розвиток — tab 8 (перед Документи)
 }
 
 function populateForm(id){
