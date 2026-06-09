@@ -4803,16 +4803,29 @@ function renderAttendance(){
   }
   var cacheKey=activeLocs.join(',')+'::'+from+'::'+to;
 
-  // Хмарне завантаження — послідовно для кожної локації
-  if(S.attMode!=='year' && !S._attCloudLoaded[cacheKey] && !S._attLoading){
+  // v6.44.1 — авто-оновлення кешу табеля (силент, без кнопок):
+  //   (1) Перший раз (даних нема) → блокуюче завантаження зі спінером.
+  //   (2) Поточний діапазон (включає today) → дані ще міняються: фоновий refresh
+  //       кожні 5 хв БЕЗ спінера, показуючи наявне одразу.
+  //   (3) Старі тижні → кеш назавжди (дані вже не зміняться).
+  //   FIX замикання: прапор _attCloudLoaded ставимо ЛИШЕ при успіху — транзиентний
+  //   збій більше не «замикає» стейл, наступний рендер повторить.
+  if(!S._attLoadedAt) S._attLoadedAt={};
+  var ATT_TTL=5*60*1000;
+  var isCurrentRange=(from<=curToday && curToday<=to);
+  var neverLoaded=!S._attCloudLoaded[cacheKey];
+  var cacheStale=isCurrentRange && ((Date.now()-(S._attLoadedAt[cacheKey]||0))>ATT_TTL);
+
+  // (1) БЛОКУЮЧЕ завантаження — лише коли для діапазону ще НЕМАЄ даних.
+  if(S.attMode!=='year' && neverLoaded && !S._attLoading){
     S._attLoading=true;
     var locsToLoad=activeLocs.slice();
-    var loadedCount=0, totalLoad=locsToLoad.length;
+    var loadedCount=0, totalLoad=locsToLoad.length, loadErr=false;
     main.innerHTML='<div class="loading"><div class="spinner"></div><p>Завантаження табеля… (0/'+totalLoad+')</p></div>';
-    function loadNextLoc(){
+    (function loadNextLoc(){
       if(!locsToLoad.length){
         S._attLoading=false;
-        S._attCloudLoaded[cacheKey]=true;
+        if(!loadErr){ S._attCloudLoaded[cacheKey]=true; S._attLoadedAt[cacheKey]=Date.now(); } // успіх→кеш; помилка→повтор
         renderAttendance();
         return;
       }
@@ -4820,12 +4833,24 @@ function renderAttendance(){
       loadedCount++;
       main.innerHTML='<div class="loading"><div class="spinner"></div><p>Завантаження табеля… ('+loadedCount+'/'+totalLoad+')</p></div>';
       loadAttendanceCloudRange(nextLoc, from, to, function(err){
-        if(err) showFloatMsg('⚠️ '+nextLoc+': хмара недоступна');
+        if(err){ loadErr=true; showFloatMsg('⚠️ '+nextLoc+': хмара недоступна'); }
         loadNextLoc();
       });
-    }
-    loadNextLoc();
+    })();
     return;
+  }
+
+  // (2) ФОНОВЕ тихе дозавантаження — поточний діапазон, кеш протух (>5 хв).
+  //     Наявні дані показуємо ОДРАЗУ (не return); свіже підтягнеться і перемалює.
+  if(S.attMode!=='year' && !neverLoaded && cacheStale && !S._attLoading){
+    S._attLoading=true;
+    S._attLoadedAt[cacheKey]=Date.now();   // позначаємо одразу — щоб не плодити паралельні цикли
+    var bgLocs=activeLocs.slice();
+    (function bgNextLoc(){
+      if(!bgLocs.length){ S._attLoading=false; renderAttendance(); return; }
+      loadAttendanceCloudRange(bgLocs.shift(), from, to, function(){ bgNextLoc(); });
+    })();
+    // без return — рендеримо наявне нижче, поки фон оновлює
   }
 
   // Всі групи з усіх activeLocs (для дропдауну груп)
