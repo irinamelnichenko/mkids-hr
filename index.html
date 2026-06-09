@@ -2182,11 +2182,11 @@ function uniq(arr,key){return [...new Set(arr.map(e=>e[key]).filter(Boolean))].s
 function getRegion(e){ return (e.dir||'').trim()||'Інше'; }
 function getRegions(arr){ return [...new Set((arr||S.emps).map(e=>getRegion(e)).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'uk')); }
 const REGION_ICONS={'Садочок':'🌱','Школа':'🏫','Управління':'🏛️','Офіс':'💼','Менеджмент':'👔','Кухня':'🍽️','Інше':'📌'};
-function esc(s){return (s||'').replace(/"/g,'&quot;').replace(/</g,'&lt;');}
+function esc(s){return String(s||'').replace(/"/g,'&quot;').replace(/</g,'&lt;');}
 // v6.37: escJs() — для значень, що йдуть у JS-рядок одинарних лапок усередині inline
 // onclick="fn('${escJs(x)}')". Екранує \ і ' (інакше апостроф у назві локації,
 // напр. "Кар'єрна", ламає JS-рядок), плюс " та < для безпеки HTML-атрибута.
-function escJs(s){return (s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'&quot;').replace(/</g,'&lt;');}
+function escJs(s){return String(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'&quot;').replace(/</g,'&lt;');}
 // Кожен set() рендерить новий DOM. applyRoleVisibility() викликаємо одразу
 // щоб data-permission атрибути на свіжих елементах (картки співробітників,
 // списки тощо) оброблялись — інакше нові елементи лишаються видимими попри
