@@ -1899,6 +1899,18 @@ function applyRoleVisibility(){
     el.style.display = visible ? '' : 'none';
     if (!visible) hiddenCount++;
   });
+  // v6.43: hidden, restore later — приховуємо пункти sidebar без зміни роутів/прав.
+  //   Дашборд: лише CFO/HR.  Задачник: лише CFO (Іра — на переробку).
+  //   URL/deep-link і hasPerm НЕ чіпаємо: сторінки доступні тим, хто знає адресу.
+  //   Щоб повернути — видалити цей блок.
+  (function(){
+    var DASH_ALLOWED  = ['cfo','hr'];   // v6.43: hidden, restore later
+    var TASKS_ALLOWED = ['cfo'];        // v6.43: hidden, restore later
+    if (DASH_ALLOWED.indexOf(role) === -1)
+      document.querySelectorAll('[data-permission="dashboard"]').forEach(el => { el.style.display='none'; });
+    if (TASKS_ALLOWED.indexOf(role) === -1)
+      document.querySelectorAll('[data-permission="tasks"]').forEach(el => { el.style.display='none'; });
+  })();
   document.querySelectorAll('[data-section]').forEach(section => {
     const sectionName = section.dataset.section;
     const items = document.querySelectorAll('[data-permission][data-parent="' + sectionName + '"]');
@@ -2180,6 +2192,16 @@ function normType(t){
   t=(t||'').trim();
   if(/^кухня/i.test(t)) return 'Кухня'; // "Кухня Київ" → "Кухня"
   return t.replace('Укравління','Управління');
+}
+// v6.43: викладачі-предметники ('Предметник') та «додаткових» ('Викладач
+//   додаткових') приховані з Табеля співробітників. UI-фільтр: дані в HR НЕ
+//   чіпаємо, відмітки НЕ стираємо, Salary (Sync/Експорт) працює як раніше.
+//   restore later — прибрати виклики isTeacherTypeForTabel у renderTabel.
+function isTeacherTypeForTabel(typ){
+  var t=String(typ||'').trim().toLowerCase();
+  if(!t) return false;
+  return /предметник/.test(t) || /додаткових/.test(t)
+      || t==='subject_teacher' || t==='extras_teacher';
 }
 // Normalized location for display — strips "Кухня " prefix for kitchen employees
 function normEmpLoc(e){
@@ -4233,14 +4255,15 @@ function renderTabel(){
   const isHR=isNetworkRole(S.user.role);
   if(!S.f)S.f={};
 
-  const allTyps=isHR?[...new Set(S.emps.filter(isActive).map(e=>normType(e.typ)).filter(Boolean))].sort():null;
+  // v6.43: виключаємо викладачів-предметників і «додаткових» з Табеля (UI-фільтр)
+  const allTyps=isHR?[...new Set(S.emps.filter(e=>isActive(e)&&!isTeacherTypeForTabel(e.typ)).map(e=>normType(e.typ)).filter(Boolean))].sort():null;
   const curTyp=isHR?(tabelTypFilter||''):'';
   const locsForTyp=isHR
-    ?[...new Set(S.emps.filter(e=>isActive(e)&&(!curTyp||normType(e.typ)===curTyp)).map(e=>e.loc).filter(Boolean))].sort()
+    ?[...new Set(S.emps.filter(e=>isActive(e)&&!isTeacherTypeForTabel(e.typ)&&(!curTyp||normType(e.typ)===curTyp)).map(e=>e.loc).filter(Boolean))].sort()
     :[S.user.loc||''];
   if(isHR&&(!S.f.tabelLoc||!locsForTyp.includes(S.f.tabelLoc)))S.f.tabelLoc=locsForTyp[0]||'';
   const activeLoc=isHR?S.f.tabelLoc:(S.user.loc||'');
-  const emps=sortByPosition(S.emps.filter(e=>isActive(e)&&e.loc===activeLoc&&(!curTyp||normType(e.typ)===curTyp)));  // v6.27.2: сорт за посадою+ПІБ
+  const emps=sortByPosition(S.emps.filter(e=>isActive(e)&&!isTeacherTypeForTabel(e.typ)&&e.loc===activeLoc&&(!curTyp||normType(e.typ)===curTyp)));  // v6.27.2: сорт за посадою+ПІБ; v6.43: без предметників/додаткових
 
   // Визначаємо діапазон
   let from,to,periodLabel;
