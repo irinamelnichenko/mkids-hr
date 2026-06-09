@@ -2193,15 +2193,27 @@ function normType(t){
   if(/^кухня/i.test(t)) return 'Кухня'; // "Кухня Київ" → "Кухня"
   return t.replace('Укравління','Управління');
 }
-// v6.43: викладачі-предметники ('Предметник') та «додаткових» ('Викладач
-//   додаткових') приховані з Табеля співробітників. UI-фільтр: дані в HR НЕ
-//   чіпаємо, відмітки НЕ стираємо, Salary (Sync/Експорт) працює як раніше.
+// v6.43.1: викладачі-предметники приховані з Табеля співробітників. UI-фільтр:
+//   дані в HR НЕ чіпаємо, відмітки НЕ стираємо, Salary (Sync/Експорт) як раніше.
 //   restore later — прибрати виклики isTeacherTypeForTabel у renderTabel.
-function isTeacherTypeForTabel(typ){
-  var t=String(typ||'').trim().toLowerCase();
-  if(!t) return false;
-  return /предметник/.test(t) || /додаткових/.test(t)
-      || t==='subject_teacher' || t==='extras_teacher';
+//   Розпізнаємо двома шляхами (бо в HR немає єдиного типу для предметників):
+//   1) typ = 'Предметник' / 'Викладач додаткових' (+ англ. варіанти) — лише 6 осіб;
+//   2) typ = 'Садочок'/'Школа', але pos = назва предмету (англійська, музика,
+//      фітнес, логопед, арт, лего, театр, робототехніка, інформатика, мови…).
+//   Компаунд-посади ('вихователь\фітнес', 'англійська\методист') — це ОСНОВНИЙ
+//   персонал: якщо хоч один токен — основна роль (вихователь/помічник/директор/
+//   методист/вчитель/тьютор/психолог…), лишаємо в табелі. Case-insensitive+trim.
+var _TABEL_CORE_RE = /вихователь|помічник|директор|дирек|медсестр|психолог|тьютор|тімлі|охорон|водій|кухар|прибиральниц|посудомийниц|фінансист|юрист|методист|заступ|зам |сео|смм|маркет|тренер|операці|академічн|раннього розвитку|вчитель/;
+var _TABEL_SUBJ_RE = /англійськ|польськ|іспанськ|французськ|німецьк|музик|фітнес|логопед|танц|айкідо|робототехнік|інформатик|хореограф|вокал|малюванн|шах/;
+var _TABEL_SUBJ_EXACT = ['арт','лего','театр','карате','каратэ'];
+function isTeacherTypeForTabel(e){
+  var t=String((e&&e.typ)||'').trim().toLowerCase();
+  if(/предметник/.test(t) || /додаткових/.test(t) || t==='subject_teacher' || t==='extras_teacher') return true;
+  var p=String((e&&e.pos)||'').trim().toLowerCase();
+  if(!p) return false;
+  var toks=p.split(/[\\\/,]+/).map(function(s){return s.trim();}).filter(Boolean);
+  if(toks.some(function(x){return _TABEL_CORE_RE.test(x);})) return false;   // основна роль → лишаємо
+  return toks.some(function(x){return _TABEL_SUBJ_RE.test(x) || _TABEL_SUBJ_EXACT.indexOf(x)!==-1;});
 }
 // Normalized location for display — strips "Кухня " prefix for kitchen employees
 function normEmpLoc(e){
@@ -4255,15 +4267,15 @@ function renderTabel(){
   const isHR=isNetworkRole(S.user.role);
   if(!S.f)S.f={};
 
-  // v6.43: виключаємо викладачів-предметників і «додаткових» з Табеля (UI-фільтр)
-  const allTyps=isHR?[...new Set(S.emps.filter(e=>isActive(e)&&!isTeacherTypeForTabel(e.typ)).map(e=>normType(e.typ)).filter(Boolean))].sort():null;
+  // v6.43.1: виключаємо викладачів-предметників з Табеля (UI-фільтр по typ+pos)
+  const allTyps=isHR?[...new Set(S.emps.filter(e=>isActive(e)&&!isTeacherTypeForTabel(e)).map(e=>normType(e.typ)).filter(Boolean))].sort():null;
   const curTyp=isHR?(tabelTypFilter||''):'';
   const locsForTyp=isHR
-    ?[...new Set(S.emps.filter(e=>isActive(e)&&!isTeacherTypeForTabel(e.typ)&&(!curTyp||normType(e.typ)===curTyp)).map(e=>e.loc).filter(Boolean))].sort()
+    ?[...new Set(S.emps.filter(e=>isActive(e)&&!isTeacherTypeForTabel(e)&&(!curTyp||normType(e.typ)===curTyp)).map(e=>e.loc).filter(Boolean))].sort()
     :[S.user.loc||''];
   if(isHR&&(!S.f.tabelLoc||!locsForTyp.includes(S.f.tabelLoc)))S.f.tabelLoc=locsForTyp[0]||'';
   const activeLoc=isHR?S.f.tabelLoc:(S.user.loc||'');
-  const emps=sortByPosition(S.emps.filter(e=>isActive(e)&&!isTeacherTypeForTabel(e.typ)&&e.loc===activeLoc&&(!curTyp||normType(e.typ)===curTyp)));  // v6.27.2: сорт за посадою+ПІБ; v6.43: без предметників/додаткових
+  const emps=sortByPosition(S.emps.filter(e=>isActive(e)&&!isTeacherTypeForTabel(e)&&e.loc===activeLoc&&(!curTyp||normType(e.typ)===curTyp)));  // v6.27.2: сорт за посадою+ПІБ; v6.43.1: без предметників (typ+pos)
 
   // Визначаємо діапазон
   let from,to,periodLabel;
