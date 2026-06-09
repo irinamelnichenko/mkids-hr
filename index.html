@@ -234,6 +234,19 @@ tbody tr.clickable{cursor:pointer}
 .ii label{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--gray);
   font-weight:700;display:block;margin-bottom:3px}
 .ii .iv{font-size:14px;font-weight:600;color:var(--dark2)}
+/* v6.44 — підсвічування неповних полів у картці (Інфо) */
+.ii.miss-red{background:#fdecea;border-radius:8px;padding:6px 8px;border:1.5px solid #e74c3c}
+.ii.miss-red .iv{color:#c0392b}
+.ii.miss-yellow{background:#fff8e6;border-radius:8px;padding:6px 8px;border:1.5px solid #f0c674}
+.ii.miss-yellow .iv{color:#b9770e}
+/* v6.44 — індикатори повноти у списку співробітників */
+tr.emp-inc-red>td:first-child{border-left:4px solid #e74c3c}
+tr.emp-inc-yellow>td:first-child{border-left:4px solid #f1c40f}
+tr.emp-inc-green>td:first-child{border-left:4px solid transparent}
+.emp-cmpl{display:inline-flex;align-items:center;gap:2px;font-size:11px;font-weight:800;
+  padding:1px 6px;border-radius:20px;cursor:help;vertical-align:middle}
+.emp-cmpl.red{background:#fdecea;color:#c0392b}
+.emp-cmpl.yellow{background:#fff3cd;color:#b9770e}
 
 /* PROGRESS */
 .prog-wrap{background:#f0f4f8;border-radius:10px;height:8px;overflow:hidden;margin-top:6px}
@@ -682,7 +695,7 @@ const CFG = {
   API_KEY: 'AIzaSyBXY-1iAKeBdyWc7gbtNOe66yBa5-Mcmlc',
   SHEET_ID: '1KeSelcGyp8ijUQOmzUjFlX78TOScMWAFm7Hjf33Doyo',
   CRM_SHEET_ID: '1pA2q84BFsXWuUchIlu8um853od_PXr7KepLpTovUjLo',
-  RANGE: "'2025-2026'!A2:R3000",
+  RANGE: "'2025-2026'!A2:V3000",  // v6.44: розширено R→V (S=Паспорт,T=Ставка,U=Умови,V=Модель)
   VAC_TEACHER: 28,
   VAC_DEFAULT: 14,
   PW: { hr: 'hr2024', director: 'dir2024' },
@@ -884,7 +897,12 @@ async function fetchEmps(force=false) {
         wday:(row[12]||'').trim(), // M=Перший робочий день
         hired:(row[13]||'').trim(),// N=Дата працевлаштування
         fired:(row[14]||'').trim(),// O=Дата звільнення
-        email:(row[17]||'').trim() // R=Електронна адреса
+        email:(row[17]||'').trim(),// R=Електронна адреса
+        // v6.44 — нові поля картки (append-only S:V)
+        passport:(row[18]||'').trim(), // S=Паспорт
+        rate:(row[19]||'').trim(),     // T=Ставка ЗП
+        workCond:(row[20]||'').trim(), // U=Умови роботи
+        calcModel:(row[21]||'').trim() // V=Модель розрахунку
       };
     }).filter(e=>e && (e.last||e.first)).map((e,i)=>({...e,id:i}));
     localStorage.setItem(CFG.CK, JSON.stringify({data:S.emps,ts:Date.now()}));
@@ -1645,6 +1663,11 @@ function openEmpEditor(empId){
     ? _dmyToIso(emp.hired)
     : (new Date().toISOString().slice(0,10));
   document.getElementById('empF_fired').value = isEdit ? _dmyToIso(emp.fired) : '';
+  // v6.44 — нові поля картки
+  document.getElementById('empF_passport').value  = isEdit ? (emp.passport  || '') : '';
+  document.getElementById('empF_rate').value       = isEdit ? (emp.rate      || '') : '';
+  document.getElementById('empF_workCond').value   = isEdit ? (emp.workCond  || '') : '';
+  document.getElementById('empF_calcModel').value  = isEdit ? (emp.calcModel || '') : '';
 
   // Footer
   document.getElementById('empEditDelBtn').style.display =
@@ -1686,7 +1709,12 @@ function _empCollectPayload(){
     wday:  _isoToDmy($('empF_wday')),
     hired: _isoToDmy($('empF_hired')),
     fired: _isoToDmy($('empF_fired')),
-    email: $('empF_email')
+    email: $('empF_email'),
+    // v6.44 — нові поля картки
+    passport:  $('empF_passport'),
+    rate:      $('empF_rate'),
+    workCond:  $('empF_workCond'),
+    calcModel: $('empF_calcModel')
   };
 }
 
@@ -2215,6 +2243,51 @@ function isTeacherTypeForTabel(e){
   if(toks.some(function(x){return _TABEL_CORE_RE.test(x);})) return false;   // основна роль → лишаємо
   return toks.some(function(x){return _TABEL_SUBJ_RE.test(x) || _TABEL_SUBJ_EXACT.indexOf(x)!==-1;});
 }
+
+// v6.44 — повнота картки співробітника. Два профілі: ШТАТНИЙ vs ВИКЛАДАЧ
+//   (предметник/додаткові, через isTeacherTypeForTabel). Суто фронт-індикатор,
+//   у Sheets нічого не пише. Повертає {level, red:[], yel:[], missing:[]}.
+//   level: 'red' (є критичні порожні) / 'yellow' (лише бажані) / 'green'.
+function _empFilled(v){ return String(v==null?'':v).trim()!==''; }
+// «Повна» дата народження = має рік (4 цифри). bday+bmon без року не рахуємо.
+function _empHasBirth(e){ return /\d{4}/.test(String((e&&e.bdate)||'')); }
+// «Дата прийому» — N (hired) АБО M (перший робочий день): це одна дата у 2 колонках
+//   (рушій відпусток теж бере wday||hired), тому будь-якої достатньо.
+function _empHasHire(e){ return _empFilled(e&&e.hired) || _empFilled(e&&e.wday); }
+function _empNeedsGroup(e){ return /вихователь|помічник/i.test(String((e&&e.pos)||'')); }
+function empCompletion(e){
+  var red=[], yel=[];
+  if(isTeacherTypeForTabel(e)){
+    // ── ВИКЛАДАЧІ (зовнішні договори) ──
+    if(!_empFilled(e.last)||!_empFilled(e.first)) red.push('ПІБ');
+    if(!_empFilled(e.typ))       red.push('Тип');
+    if(!_empFilled(e.loc))       red.push('Локація');
+    if(!_empFilled(e.phone))     red.push('Контакт');
+    if(!_empFilled(e.workCond))  red.push('Умови роботи');
+    if(!_empFilled(e.calcModel)) red.push('Модель розрахунку');
+    if(!_empFilled(e.rate))      red.push('Ставка');
+    if(!_empFilled(e.email))     yel.push('Email');
+    if(!_empHasBirth(e))         yel.push('Дата народження');
+    if(!_empFilled(e.passport))  yel.push('Паспорт');
+  } else {
+    // ── ШТАТНИЙ ПЕРСОНАЛ ──
+    if(!_empFilled(e.last))  red.push('Прізвище');
+    if(!_empFilled(e.first)) red.push("Ім'я");
+    if(!_empFilled(e.loc))   red.push('Локація');
+    if(!_empFilled(e.typ))   red.push('Тип');
+    if(!_empFilled(e.pos))   red.push('Посада');
+    if(!_empFilled(e.phone)) red.push('Контакт');
+    if(!_empHasBirth(e))     red.push('Дата народження');
+    if(!_empHasHire(e))      red.push('Дата прийому');
+    if(!_empFilled(e.email)) red.push('Email');
+    if(!_empFilled(e.stat))  red.push('Статус');
+    if(!_empFilled(e.passport)) yel.push('Паспорт');
+    if(!_empFilled(e.rate))     yel.push('Ставка ЗП');
+    if(_empNeedsGroup(e)&&!_empFilled(e.grp)) yel.push('Група');
+  }
+  var level = red.length ? 'red' : (yel.length ? 'yellow' : 'green');
+  return {level:level, red:red, yel:yel, missing:red.concat(yel)};
+}
 // Normalized location for display — strips "Кухня " prefix for kitchen employees
 function normEmpLoc(e){
   if(normType(e.typ)==='Кухня') return (e.loc||'').replace(/^кухня\s*/i,'').trim()||(e.loc||'');
@@ -2361,6 +2434,12 @@ function renderEmps(){
   if(S.f.status)f=f.filter(e=>e.stat===S.f.status);
   if(S.f.dir)f=f.filter(e=>e.dir===S.f.dir);
   if(S.f.typ)f=f.filter(e=>normType(e.typ)===S.f.typ);
+  // v6.44 — повнота карток. Рахуємо лише по АКТИВНИХ (звільнені/декрет не актуалізуємо).
+  const _cmplActive=emps.filter(isActive);
+  let _incRed=0,_incYel=0;
+  _cmplActive.forEach(e=>{const lv=empCompletion(e).level;if(lv==='red')_incRed++;else if(lv==='yellow')_incYel++;});
+  const _incTotal=_incRed+_incYel;
+  if(S.f.incomplete)f=f.filter(e=>isActive(e)&&empCompletion(e).level!=='green'); // фільтр «тільки неповні»
   f=sortByPosition(f);  // v6.27.2: сорт за групою посад, потім ПІБ
 
   set('main',`
@@ -2383,6 +2462,10 @@ function renderEmps(){
       </select>`:''}
       <button class="btn btn-secondary btn-sm" onclick="clearF()">✕ Скинути</button>
       ${canEmpAdd()?`<button class="btn btn-primary btn-sm" onclick="openEmpEditor()" title="Додати співробітника">➕ Додати</button>`:''}
+      ${_incTotal>0?`<label class="badge ${_incRed?'bo':'bb'}" style="cursor:pointer;display:inline-flex;align-items:center;gap:5px" title="Карток, що потребують актуалізації (активні)">
+        <input type="checkbox" ${S.f.incomplete?'checked':''} onchange="S.f.incomplete=this.checked;renderEmps()" style="margin:0">
+        📋 Потребують оновлення: ${_incTotal} з ${_cmplActive.length}${_incRed?` · 🔴 ${_incRed}`:''}
+      </label>`:''}
       ${isHR?`<button class="btn btn-secondary btn-sm" onclick="exportCSV()" title="Завантажити Excel">📊 Excel</button>`:''}
       ${(function(){var mc=emps.filter(isMaternity).length;return mc?`<span class="badge bb" style="margin-left:auto" title="Співробітниць у декретній відпустці">👶 Декретниць: ${mc}</span>`:'';})()}
       <span style="${emps.filter(isMaternity).length?'':'margin-left:auto;'}font-size:12px;color:var(--gray)">${f.length} / ${emps.length}</span>
@@ -2396,10 +2479,14 @@ function renderEmps(){
       f.map(e=>{
         const act=isActive(e),ov=act&&vacUsed(e.key)>vacTotalLim(e);
         const vu=vacUsed(e.key),vl=vacTotalLim(e);
-        return `<tr class="clickable" onclick="nav('employee',${e.id})">
+        // v6.44 — індикатор повноти (лише для активних)
+        const cmpl=act?empCompletion(e):{level:'green',missing:[]};
+        const rowCls=act&&cmpl.level!=='green'?` emp-inc-${cmpl.level}`:'';
+        const cmplBadge=(act&&cmpl.level!=='green')?` <span class="emp-cmpl ${cmpl.level}" title="Не заповнено: ${esc(cmpl.missing.join(', '))}">${cmpl.level==='red'?'⚠':'◐'} ${cmpl.missing.length}</span>`:'';
+        return `<tr class="clickable${rowCls}" onclick="nav('employee',${e.id})">
           <td><div style="display:flex;align-items:center;gap:10px">
             <div class="avatar" style="width:34px;height:34px;font-size:12px;${!act?'background:var(--gray2)':''}">${initials(e)}</div>
-            <div><div style="font-weight:700">${fullName(e)}</div><div style="font-size:11px;color:var(--gray)">${e.phone||e.email||''}</div></div>
+            <div><div style="font-weight:700">${fullName(e)}${cmplBadge}</div><div style="font-size:11px;color:var(--gray)">${e.phone||e.email||''}</div></div>
           </div></td>
           ${isHR?`<td style="font-size:12px">${e.loc||'—'}</td>`:''}
           <td style="font-size:12px">${e.pos||'—'}</td>
@@ -2465,6 +2552,10 @@ function renderEmpCard(){
   const pct=Math.min(100,Math.round(vEarned>0?vUsed/vEarned*100:0));
   const su=sickUsed(e.key),sal=curSal(e.key),t=tenure(e);
   const rate=vacDailyRate(e);
+  // v6.44 — повнота картки: підсвічуємо незаповнені поля у вкладці Інфо.
+  const _cmpl=act?empCompletion(e):{red:[],yel:[]};
+  const _ml=lbl=>_cmpl.red.indexOf(lbl)>=0?'red':(_cmpl.yel.indexOf(lbl)>=0?'yellow':null);
+  const _isTeacher=isTeacherTypeForTabel(e);
 
   set('main',`
     <div class="back-btn" onclick="nav('employees')">← Назад до списку</div>
@@ -2518,11 +2609,13 @@ function renderEmpCard(){
       </div>
       <div id="tInfo" class="tab-pane active">
         <div class="info-grid">
-          ${ii('Прізвище',e.last)}${ii("Ім'я",e.first)}${ii('Посада',e.pos)}${ii('Локація',e.loc)}
-          ${ii('Тип',e.typ)}${ii('Напрямок',e.dir)}${ii('Група',e.grp)}${ii('Телефон',e.phone)}${ii('Email',e.email)}
-          ${ii('Статус',e.stat)}${ii('Дата народження', e.bdate ? fmtDate(e.bdate) : (e.bday&&e.bmon ? e.bday+'.'+(String(e.bmon).match(/\d+/)||[''])[0] : ''))}
-          ${ii('Перший робочий день',e.wday)}${ii('Дата працевлаштування',e.hired)}
+          ${ii('Прізвище',e.last,_ml('Прізвище')||_ml('ПІБ'))}${ii("Ім'я",e.first,_ml("Ім'я")||_ml('ПІБ'))}${ii('Посада',e.pos,_ml('Посада'))}${ii('Локація',e.loc,_ml('Локація'))}
+          ${ii('Тип',e.typ,_ml('Тип'))}${ii('Напрямок',e.dir)}${ii('Група',e.grp,_ml('Група'))}${ii('Телефон',e.phone,_ml('Контакт'))}${ii('Email',e.email,_ml('Email'))}
+          ${ii('Статус',e.stat,_ml('Статус'))}${ii('Дата народження', e.bdate ? fmtDate(e.bdate) : (e.bday&&e.bmon ? e.bday+'.'+(String(e.bmon).match(/\d+/)||[''])[0] : ''),_ml('Дата народження'))}
+          ${ii('Перший робочий день',e.wday)}${ii('Дата працевлаштування',e.hired,_ml('Дата прийому'))}
           ${e.fired?ii('Дата звільнення',`<span style="color:#e74c3c">${e.fired}</span>`):''}
+          ${ii('Паспорт',e.passport,_ml('Паспорт'))}${ii('Ставка ЗП',e.rate?(isNaN(Number(e.rate))?e.rate:Number(e.rate).toLocaleString('uk-UA')+' грн'):'',_ml('Ставка ЗП')||_ml('Ставка'))}
+          ${ii('Умови роботи',e.workCond,_ml('Умови роботи'))}${(_isTeacher||e.calcModel)?ii('Модель розрахунку',e.calcModel,_ml('Модель розрахунку')):''}
           <div class="ii"><label>Відпустка (накопичено за стажем)</label><div class="iv">${vEarned} днів доступно
             <div class="prog-wrap"><div class="prog-bar ${ov?'pr':pct>75?'po':'pg'}" style="width:${pct}%"></div></div>
             <div style="font-size:11px;color:var(--gray);margin-top:3px">${vUsed} використано · ${vBal} залишок · ставка ${rate} дн/рік (${(rate/12).toFixed(1)} дн/міс)</div>
@@ -2615,7 +2708,8 @@ function renderEmpCard(){
   }
 }
 
-function ii(label,val){return `<div class="ii"><label>${label}</label><div class="iv">${val||'—'}</div></div>`;}
+// v6.44 — 3-й параметр miss: 'red'|'yellow' підсвічує незаповнене поле у картці.
+function ii(label,val,miss){return `<div class="ii${miss?(' miss-'+miss):''}"><label>${label}</label><div class="iv">${val||'—'}</div></div>`;}
 
 // Змінні для табелю в картці співробітника
 let empTabelPeriod='year', empTabelYear=new Date().getFullYear(), empTabelMonth=new Date().getMonth(), empTabelEmpId=null;
@@ -4755,6 +4849,34 @@ window.addEventListener('DOMContentLoaded',async()=>{
         <div class="emp-edit-field" style="margin-bottom:0">
           <label>Дата звільнення</label>
           <input type="date" lang="uk" id="empF_fired">
+        </div>
+      </div>
+
+      <!-- v6.44: нові поля картки (Паспорт, Ставка, Умови, Модель розрахунку) -->
+      <div class="emp-edit-sec">
+        <div class="emp-edit-sec-hd">💼 Договір та оплата</div>
+        <div class="emp-edit-row">
+          <div class="emp-edit-field"><label>Паспорт</label><input type="text" id="empF_passport" placeholder="серія/№ або текст"></div>
+          <div class="emp-edit-field"><label>Ставка ЗП (грн)</label><input type="number" id="empF_rate" min="0" step="1" placeholder="напр. 15000"></div>
+        </div>
+        <div class="emp-edit-row">
+          <div class="emp-edit-field">
+            <label>Умови роботи</label>
+            <input type="text" id="empF_workCond" list="empWorkCondSuggest" placeholder="Договір / ФОП / ЦПХ / ГПД">
+            <datalist id="empWorkCondSuggest">
+              <option value="Договір"></option><option value="ФОП"></option>
+              <option value="ЦПХ"></option><option value="Договір ГПД"></option>
+            </datalist>
+          </div>
+          <div class="emp-edit-field">
+            <label>Модель розрахунку <span class="field-hint" style="display:inline">(для викладачів)</span></label>
+            <select id="empF_calcModel">
+              <option value="">—</option>
+              <option value="За заняття">За заняття</option>
+              <option value="За дитину">За дитину</option>
+              <option value="За захід">За захід</option>
+            </select>
+          </div>
         </div>
       </div>
 
