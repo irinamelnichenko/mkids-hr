@@ -846,8 +846,6 @@ tbody tr.clickable:hover td{background:#f0f7ff}
       </div>
       <!-- Tab 7: Здоров'я -->
       <div class="tab-pane" id="tp7" data-permission="card-child-health"></div>
-      <!-- Tab 9: Розвиток (v6.47) -->
-      <div class="tab-pane" id="tp9" data-permission="card-child-health"></div>
       <!-- Tab 8: Документи -->
       <div class="tab-pane" id="tp8" data-permission="card-child-banner">
         <div class="section-hd">👶 ДИТИНА</div>
@@ -870,6 +868,8 @@ tbody tr.clickable:hover td{background:#f0f7ff}
         <div class="fg"><label>РНОКПП тата</label>
           <input type="text" id="fDadRnokpp" placeholder="10 цифр" maxlength="10" oninput="validateRnokpp(this)"></div>
       </div>
+      <!-- Tab 9: Розвиток (v6.47) — ПІСЛЯ tp8, щоб DOM-індекс панелі співпадав з індексом вкладки -->
+      <div class="tab-pane" id="tp9" data-permission="card-child-health"></div>
     </div>
     <div class="modal-ft">
       <button class="btn btn-danger btn-sm" id="btnDeleteChild" onclick="deleteChild()" style="margin-right:auto">🗑️ Видалити</button>
