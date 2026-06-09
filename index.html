@@ -2436,15 +2436,25 @@ function _locTeam(loc){
   return { staffN:es.length-teachers.length, teacherN:teachers.length,
            dir:es.find(e=>/директор/i.test(e.pos||'')) };
 }
-async function renderLocCard(){
-  await ensureClientsLoaded();
+// v6.45.1 — харднінг: явний спінер одразу + рендер-перший (як дашборд) + фон-фетч.
+//   Жоден шлях не «висить»: картка показується миттєво з наявних даних, хмара
+//   (картки/діти) дотягується у фоні й тихо перемальовує. Бекенд не чіпаємо.
+function _locCardSoftRerender(){ if(S.view==='loccard') _renderLocCardNow(); }
+function renderLocCard(){
+  showLoad();                                   // явний спінер при вході
+  ensureClientsLoaded().then(_locCardSoftRerender).catch(_locCardSoftRerender);
   if(!S._locCards){
-    try{ var r=await fetch(authScriptUrl()+'?action=getLocationCards',{redirect:'follow'}); var j=await r.json(); S._locCards=(j&&j.data)||{}; }
-    catch(e){ S._locCards={}; }
+    fetch(authScriptUrl()+'?action=getLocationCards',{redirect:'follow'})
+      .then(function(r){ return r.json(); })
+      .then(function(j){ S._locCards=(j&&j.data)||{}; })
+      .catch(function(){ S._locCards=S._locCards||{}; })
+      .then(_locCardSoftRerender);
   }
-  _renderLocCardNow();
+  _renderLocCardNow();                          // рендер-перший: одразу заміняє спінер
 }
 function _renderLocCardNow(){
+  if(!S||!S.user) return;
+  if(!S.f) S.f={};                              // захист від undefined
   const isHR=isNetworkRole(S.user.role);
   const allLocs=_dashAllLocs();
   if(!isHR) S.f.locCard=S.user.loc||'';
