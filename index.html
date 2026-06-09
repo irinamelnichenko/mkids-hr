@@ -253,7 +253,22 @@ tr.emp-inc-green>td:first-child{border-left:4px solid transparent}
   .main,#main,.content{margin:0!important;padding:0!important;width:100%!important}
   .loc-card-wrap input{border:none!important;padding:2px 0!important}
   .card{box-shadow:none!important;border:1px solid #ddd!important;break-inside:avoid}
+  .lt-modal-ov{display:none!important}
 }
+/* v6.45.4 — документи локації + модалка команди */
+.loc-doc{border:1px solid #eef1f5;border-radius:9px;padding:12px;margin-bottom:10px}
+.loc-doc-hd{font-weight:700;font-size:13px;margin-bottom:8px}
+.loc-doc-inp{width:100%;padding:6px 9px;border:1.5px solid var(--gray2);border-radius:7px;font-size:13px;margin-bottom:6px}
+.loc-doc-ta{width:100%;padding:6px 9px;border:1.5px solid var(--gray2);border-radius:7px;font-size:13px;min-height:38px;resize:vertical}
+.lt-modal-ov{position:fixed;inset:0;background:rgba(0,0,0,.4);display:none;align-items:center;justify-content:center;z-index:1000;padding:20px}
+.lt-modal-ov.show{display:flex}
+.lt-modal-card{background:#fff;border-radius:14px;max-width:480px;width:100%;max-height:80vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.3)}
+.lt-modal-hd{padding:14px 18px;border-bottom:1px solid #f0f4f8;display:flex;align-items:center;justify-content:space-between}
+.lt-modal-hd h3{font-size:15px;font-weight:800;margin:0}
+.lt-modal-bd{padding:8px;overflow-y:auto}
+.lt-row{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:9px;cursor:pointer}
+.lt-row:hover{background:#f4f7fb}
+.lt-av{width:32px;height:32px;border-radius:50%;background:var(--green,#27ae60);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0}
 
 /* PROGRESS */
 .prog-wrap{background:#f0f4f8;border-radius:10px;height:8px;overflow:hidden;margin-top:6px}
@@ -2467,6 +2482,19 @@ function _renderLocCardNow(){
   const v=(k)=>esc(c[k]||'');
   const fld=(id,label,val,ro)=>`<div class="ii" style="margin-bottom:0"><label>${label}</label><input id="${id}" value="${esc(val||'')}" ${ro?'disabled':''} style="width:100%;padding:7px 10px;border:1.5px solid var(--gray2);border-radius:7px;font-size:14px"></div>`;
   const taLbl='Особливості';
+  // v6.45.4 — документи (JSON: contract/license/certificates/policies + custom[])
+  let docs={}; try{ docs=(typeof c.documents==='string')?JSON.parse(c.documents||'{}'):(c.documents||{}); }catch(e){ docs={}; }
+  if(!docs||typeof docs!=='object') docs={};
+  const customDocs=Array.isArray(docs.custom)?docs.custom:[];
+  const _docRow=(key,label,d)=>{d=d||{};return `
+    <div class="loc-doc">
+      <div class="loc-doc-hd">📄 ${label}
+        ${d.url?`<a href="${esc(d.url)}" target="_blank" rel="noopener" class="btn btn-secondary btn-xs no-print" style="margin-left:8px">↗ Відкрити</a>`:''}
+        ${(d.by||d.at)?`<span style="font-weight:400;font-size:11px;color:var(--gray);margin-left:8px">${esc(d.by||'')}${d.at?' · '+esc(d.at):''}</span>`:''}
+      </div>
+      <input id="locD_url_${key}" placeholder="📎 Посилання на Google Drive" value="${esc(d.url||'')}" ${canEdit?'':'disabled'} class="loc-doc-inp">
+      <textarea id="locD_note_${key}" placeholder="📝 Нотатка / коментар" ${canEdit?'':'disabled'} class="loc-doc-ta">${esc(d.note||'')}</textarea>
+    </div>`;};
   set('main',`
     <div class="loc-card-wrap">
     <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px" class="no-print">
@@ -2509,20 +2537,22 @@ function _renderLocCardNow(){
       <div class="card-hd"><h3>03 · Команда</h3></div>
       <div style="padding:16px;display:flex;gap:28px;flex-wrap:wrap;align-items:center">
         <div>${team.dir?`<div style="font-weight:700;cursor:pointer;color:var(--blue2)" onclick="nav('employee',${team.dir.id})">${fullName(team.dir)}</div>`:'<div style="color:var(--gray)">— не призначено —</div>'}<div style="font-size:12px;color:var(--gray)">Директор</div></div>
-        <div><div style="font-size:24px;font-weight:900">${team.staffN}</div><div style="font-size:12px;color:var(--gray)">Штатних співробітників</div></div>
-        <div><div style="font-size:24px;font-weight:900">${team.teacherN}</div><div style="font-size:12px;color:var(--gray)">Викладачів</div></div>
+        <div><div style="font-size:24px;font-weight:900;${team.staffN?'cursor:pointer;color:var(--blue2);text-decoration:underline':''}" ${team.staffN?`onclick="openLocTeam('${escJs(loc)}','staff')" title="Показати список"`:''}>${team.staffN}</div><div style="font-size:12px;color:var(--gray)">Штатних співробітників</div></div>
+        <div><div style="font-size:24px;font-weight:900;${team.teacherN?'cursor:pointer;color:var(--blue2);text-decoration:underline':''}" ${team.teacherN?`onclick="openLocTeam('${escJs(loc)}','teachers')" title="Показати список"`:''}>${team.teacherN}</div><div style="font-size:12px;color:var(--gray)">Викладачів</div></div>
         <div><div style="font-size:24px;font-weight:900">${grpCnt}</div><div style="font-size:12px;color:var(--gray)">Груп (з реєстру дітей)</div></div>
       </div>
     </div>
 
     <div class="card">
-      <div class="card-hd"><h3>04 · Документи</h3></div>
+      <div class="card-hd"><h3>04 · Документи</h3>${canEdit?`<button class="btn btn-secondary btn-sm no-print" onclick="addCustomDoc()">＋ Свій тип</button>`:''}</div>
       <div style="padding:16px">
-        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
-          ${['📄 Договір оренди','📄 Ліцензія','📄 Сертифікати','📄 Полісні документи'].map(d=>`<span class="badge" style="background:#f0f4f8;color:var(--gray);padding:8px 14px">${d}</span>`).join('')}
-        </div>
-        ${fld('locF_docsNote','Нотатка по документах',c.docsNote,!canEdit)}
-        <div style="font-size:12px;color:var(--gray);margin-top:8px">📌 Завантаження файлів — на майбутнє.</div>
+        ${_docRow('contract','Договір оренди',docs.contract)}
+        ${_docRow('license','Ліцензія / Дозвіл',docs.license)}
+        ${_docRow('certificates','Сертифікати',docs.certificates)}
+        ${_docRow('policies','Полісні документи',docs.policies)}
+        <div id="locCustomDocs">${customDocs.map((d,i)=>_locCustomDocHtml(i,d,canEdit)).join('')}</div>
+        ${fld('locF_docsNote','Загальна нотатка по документах',c.docsNote,!canEdit)}
+        <div style="font-size:12px;color:var(--gray);margin-top:8px">📌 Зараз: посилання на Google Drive + нотатка. Завантаження файлів — на майбутнє.</div>
       </div>
     </div>
     ${c.updatedAt?`<div style="font-size:11px;color:var(--gray);margin-top:10px" class="no-print">Оновлено: ${esc(c.updatedAt)}${c.updatedBy?' · '+esc(c.updatedBy):''}</div>`:''}
@@ -2535,7 +2565,8 @@ function saveLocCard(){
   const payload={loc:loc,fullName:g('locF_fullName'),format:g('locF_format'),license:g('locF_license'),
     legalAddr:g('locF_legalAddr'),factAddr:g('locF_factAddr'),phone:g('locF_phone'),email:g('locF_email'),
     area:g('locF_area'),rooms:g('locF_rooms'),features:g('locF_features'),playground:g('locF_playground'),
-    shelter:g('locF_shelter'),wifi:g('locF_wifi'),capacity:g('locF_capacity'),docsNote:g('locF_docsNote')};
+    shelter:g('locF_shelter'),wifi:g('locF_wifi'),capacity:g('locF_capacity'),docsNote:g('locF_docsNote'),
+    documents:JSON.stringify(_collectLocDocs())};   // v6.45.4
   var btn=document.getElementById('locSaveBtn'); if(btn){btn.disabled=true;btn.textContent='⏳ Збереження…';}
   postToScript('saveLocationCard',{actorId:S.user&&S.user.id,payload:payload}).then(function(res){
     if(res&&res.ok===false){ alert('🚫 '+(res.error||'Помилка збереження')); if(btn){btn.disabled=false;btn.textContent='💾 Зберегти';} return; }
@@ -2544,6 +2575,51 @@ function saveLocCard(){
     if(btn){ btn.textContent='✅ Збережено'; setTimeout(function(){ if(btn){btn.disabled=false;btn.textContent='💾 Зберегти';} },1500); }
   }).catch(function(e){ alert('Помилка мережі: '+(e&&e.message||e)); if(btn){btn.disabled=false;btn.textContent='💾 Зберегти';} });
 }
+// v6.45.4 — власні типи документів (рядок HTML; використовується в рендері і в addCustomDoc)
+function _locCustomDocHtml(i,d,canEdit){ d=d||{};
+  return '<div class="loc-doc" data-custom-doc="'+i+'">'
+    +'<div class="loc-doc-hd" style="display:flex;gap:8px;align-items:center">'
+    +'<input id="locDC_name_'+i+'" placeholder="Назва документа" value="'+esc(d.name||'')+'" '+(canEdit?'':'disabled')+' class="loc-doc-inp" style="flex:1;font-weight:700">'
+    +(d.url?'<a href="'+esc(d.url)+'" target="_blank" rel="noopener" class="btn btn-secondary btn-xs no-print">↗</a>':'')
+    +(canEdit?'<button class="btn btn-danger btn-xs no-print" title="Прибрати" onclick="this.closest(\'[data-custom-doc]\').remove()">✕</button>':'')
+    +'</div>'
+    +'<input id="locDC_url_'+i+'" placeholder="📎 Посилання на Google Drive" value="'+esc(d.url||'')+'" '+(canEdit?'':'disabled')+' class="loc-doc-inp">'
+    +'<textarea id="locDC_note_'+i+'" placeholder="📝 Нотатка" '+(canEdit?'':'disabled')+' class="loc-doc-ta">'+esc(d.note||'')+'</textarea>'
+    +'</div>';
+}
+var _locCustomSeq=0;
+function addCustomDoc(){ var box=document.getElementById('locCustomDocs'); if(!box)return;
+  box.insertAdjacentHTML('beforeend', _locCustomDocHtml('new'+(_locCustomSeq++),{},true));
+}
+function _collectLocDocs(){
+  var g=function(id){var el=document.getElementById(id);return el?String(el.value).trim():'';};
+  var who=(S.user&&(typeof roleLabel==='function'?roleLabel(S.user.role):S.user.role))||'';
+  var at=new Date().toISOString().slice(0,10);
+  function one(k){ var url=g('locD_url_'+k),note=g('locD_note_'+k); var o={url:url,note:note}; if(url||note){o.by=who;o.at=at;} return o; }
+  var out={contract:one('contract'),license:one('license'),certificates:one('certificates'),policies:one('policies'),custom:[]};
+  var rows=document.querySelectorAll('#locCustomDocs [data-custom-doc]');
+  for(var x=0;x<rows.length;x++){ var i=rows[x].getAttribute('data-custom-doc');
+    var name=g('locDC_name_'+i),url=g('locDC_url_'+i),note=g('locDC_note_'+i);
+    if(name||url||note){ var o={name:name,url:url,note:note}; if(url||note){o.by=who;o.at=at;} out.custom.push(o); }
+  }
+  return out;
+}
+// v6.45.4 — модалка списку команди локації (штатні / викладачі)
+function openLocTeam(loc,kind){
+  var es=(S.emps||[]).filter(function(e){ return e.loc===loc&&isActive(e); });
+  var list=kind==='teachers'?es.filter(isTeacherTypeForTabel):es.filter(function(e){ return !isTeacherTypeForTabel(e); });
+  list=(typeof sortByPosition==='function')?sortByPosition(list):list.sort(function(a,b){ return (a.pos||'').localeCompare(b.pos||'','uk')||fullName(a).localeCompare(fullName(b),'uk'); });
+  var t=document.getElementById('ltModalTitle'); if(t) t.textContent=(kind==='teachers'?'Викладачі':'Штатні співробітники')+' — '+loc;
+  var b=document.getElementById('ltModalBody');
+  if(b) b.innerHTML=list.length?list.map(function(e){
+    return '<div class="lt-row" onclick="closeLtModal();nav(\'employee\','+e.id+')"><div class="lt-av">'+initials(e)+'</div>'
+      +'<div style="flex:1"><div style="font-weight:700;font-size:13px">'+esc(fullName(e))+'</div>'
+      +'<div style="font-size:11px;color:var(--gray)">'+esc(e.pos||'—')+'</div></div></div>';
+  }).join(''):'<div style="padding:20px;text-align:center;color:var(--gray)">Немає записів</div>';
+  var m=document.getElementById('ltModal'); if(m) m.classList.add('show');
+}
+function closeLtModal(){ var m=document.getElementById('ltModal'); if(m) m.classList.remove('show'); }
+document.addEventListener('keydown',function(e){ if(e.key==='Escape'){ var m=document.getElementById('ltModal'); if(m&&m.classList.contains('show')) closeLtModal(); } });
 function filterLoc(loc){S.f.loc=loc;nav('employees');}
 
 // ── EMPLOYEES ──
@@ -4944,6 +5020,13 @@ window.addEventListener('DOMContentLoaded',async()=>{
 })();
 </script>
 <!-- HR EDIT MODAL (v6.10.4) — заповнюється через openEmpEditor(empId?) -->
+<!-- v6.45.4 — модалка списку команди локації -->
+<div class="lt-modal-ov" id="ltModal" onclick="if(event.target===this)closeLtModal()">
+  <div class="lt-modal-card">
+    <div class="lt-modal-hd"><h3 id="ltModalTitle"></h3><button class="emp-edit-close" onclick="closeLtModal()" title="Закрити (Esc)">✕</button></div>
+    <div class="lt-modal-bd" id="ltModalBody"></div>
+  </div>
+</div>
 <div class="emp-edit-overlay" id="empEditOverlay" onclick="if(event.target===this)closeEmpEditor()">
   <div class="emp-edit-card">
     <div class="emp-edit-hd">
