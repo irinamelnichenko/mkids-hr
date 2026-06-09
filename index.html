@@ -4296,8 +4296,8 @@ function pushTabelToCloud(loc,date,data){
   }catch(e){ console.warn('pushTabelToCloud',e); }
 }
 // Підвантаження табеля співробітників з хмари (тільки рядки STAFF::) у localStorage.
-function loadTabelFromCloud(loc,from,to){
-  var url=authScriptUrl(); if(!url||!loc) return;
+function loadTabelFromCloud(loc,from,to,onDone){
+  var url=authScriptUrl(); if(!url||!loc){ if(onDone)onDone('no-url'); return; }
   // ВАЖЛИВО: getAttendance з from/to ЛАМАЄТЬСЯ — дата в листі 'Табель' зберігається як Date-тип,
   // бекенд робить рядкове порівняння і відсікає всі рядки. Тому тягнемо БЕЗ діапазону (лише loc)
   // і нормалізуємо+фільтруємо дату на клієнті. (Бекенд-баг getAttendance — окремий техборг.)
@@ -4305,7 +4305,7 @@ function loadTabelFromCloud(loc,from,to){
   fetch(url+'?action=getAttendance&loc='+encodeURIComponent(loc),{redirect:'follow'})
     .then(function(r){return r.json();})
     .then(function(j){
-      if(!j||!j.ok) return;
+      if(!j||!j.ok){ if(onDone)onDone('bad-response'); return; }
       var byDate={}, n=0;
       (j.data||[]).forEach(function(row){
         var cid=row['ID дитини']||''; if(cid.indexOf('STAFF::')!==0) return;
@@ -4317,8 +4317,9 @@ function loadTabelFromCloud(loc,from,to){
         Object.keys(byDate[d]).forEach(function(k){ if(!t[k])t[k]={}; t[k].status=byDate[d][k]; });
         localStorage.setItem(tabelKey(loc,d),JSON.stringify(t));
       });
-      if(n) renderTabel();  // перемалювати з хмарними даними
-    }).catch(function(){});
+      if(onDone)onDone(null);    // v6.44.2: успіх ДО renderTabel — прапор стоїть, re-render не зациклиться
+      if(n) renderTabel();       // перемалювати з хмарними даними
+    }).catch(function(e){ if(onDone)onDone(e||'fetch-error'); });
 }
 
 let tabelPeriod='day';
@@ -4396,10 +4397,32 @@ function renderTabel(){
     periodLabel=`${tabelYear} рік`;
   }
 
-  // v6.27.4: один раз на (локація+діапазон) підвантажуємо табель з хмари, тоді перемальовуємо
+  // v6.44.2 — авто-оновлення кешу табеля співробітників (силент, без спінера/кнопок):
+  //   (1) перше завантаження діапазону → fetch; прапор+timestamp ЛИШЕ при успіху
+  //       (збій більше не «замикає» стейл — наступний рендер повторить);
+  //   (2) поточний тиждень (включає today) → фоновий refresh кожні 5 хв;
+  //   (3) старі тижні → кеш назавжди. Дзеркало v6.44.1 (табель дітей).
+  //   Рендер іде з localStorage одразу (не блокуємо), хмара дотягує і перемальовує.
   if(!S._tabelCloudLoaded) S._tabelCloudLoaded={};
+  if(!S._tabelLoadedAt)    S._tabelLoadedAt={};
   var _tck=activeLoc+'|'+from+'|'+to;
-  if(activeLoc && !S._tabelCloudLoaded[_tck]){ S._tabelCloudLoaded[_tck]=true; loadTabelFromCloud(activeLoc,from,to); }
+  var _tabTTL=5*60*1000;
+  var _tabToday=new Date().toISOString().split('T')[0];
+  var _tabCurrent=(from<=_tabToday && _tabToday<=to);
+  var _tabNever=!S._tabelCloudLoaded[_tck];
+  var _tabStale=_tabCurrent && ((Date.now()-(S._tabelLoadedAt[_tck]||0))>_tabTTL);
+  function _tabDone(err){
+    S._tabelLoading=false;
+    if(!err){ S._tabelCloudLoaded[_tck]=true; S._tabelLoadedAt[_tck]=Date.now(); } // успіх→кеш; помилка→повтор
+  }
+  if(activeLoc && _tabNever && !S._tabelLoading){
+    S._tabelLoading=true;
+    loadTabelFromCloud(activeLoc,from,to,_tabDone);
+  } else if(activeLoc && !_tabNever && _tabStale && !S._tabelLoading){
+    S._tabelLoading=true;
+    S._tabelLoadedAt[_tck]=Date.now();   // позначаємо одразу — щоб не плодити паралельні фонові цикли
+    loadTabelFromCloud(activeLoc,from,to,_tabDone);
+  }
 
   const isDayView=tabelPeriod==='day';
 
