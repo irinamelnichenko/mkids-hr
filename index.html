@@ -247,6 +247,13 @@ tr.emp-inc-green>td:first-child{border-left:4px solid transparent}
   padding:1px 6px;border-radius:20px;cursor:help;vertical-align:middle}
 .emp-cmpl.red{background:#fdecea;color:#c0392b}
 .emp-cmpl.yellow{background:#fff3cd;color:#b9770e}
+/* v6.45 — друк картки локації: лише вміст картки, без меню/шапки */
+@media print{
+  .sidebar,.topbar,#sidebar,.nav-item,.no-print{display:none!important}
+  .main,#main,.content{margin:0!important;padding:0!important;width:100%!important}
+  .loc-card-wrap input{border:none!important;padding:2px 0!important}
+  .card{box-shadow:none!important;border:1px solid #ddd!important;break-inside:avoid}
+}
 
 /* PROGRESS */
 .prog-wrap{background:#f0f4f8;border-radius:10px;height:8px;overflow:hidden;margin-top:6px}
@@ -503,6 +510,10 @@ tr.emp-inc-green>td:first-child{border-left:4px solid transparent}
       <div class="nav-item" data-permission="vacation_schedule" data-parent="hr" data-perm-page="index"
            data-v="vacschedule" onclick="goPerm('vacation_schedule')">
         <span class="ni">🌴</span> Графік відпусток
+      </div>
+      <div class="nav-item" data-permission="loccard" data-parent="hr" data-perm-page="index"
+           data-v="loccard" onclick="goPerm('loccard')">
+        <span class="ni">🏢</span> Картка локації
       </div>
 
       <div class="nav-sec" data-section="analytics">📈 АНАЛІТИКА</div>
@@ -1495,6 +1506,7 @@ const PERMISSIONS = {
     if (Array.isArray(PERMISSIONS[r])){ PERMISSIONS[r].push('tasks'); PERMISSIONS[r].push('tasks-create'); }
   });
   if (Array.isArray(PERMISSIONS.director)) PERMISSIONS.director.push('tasks');
+  if (Array.isArray(PERMISSIONS.director)) PERMISSIONS.director.push('loccard'); // v6.45: директор бачить картку своєї локації
   PERMISSIONS.cmo = ['dashboard','tasks','tasks-create'];
 })();
 
@@ -1508,6 +1520,7 @@ const PERM_LOCAL_ACTION = {
   vacation_schedule: () => nav('vacschedule'),
   analytics_hr:      () => nav('analytics'),
   settings:          () => nav('settings'),
+  loccard:           () => nav('loccard'),
 };
 
 // Ролі мережевого рівня — бачать всі локації (на відміну від director/nurse).
@@ -2050,7 +2063,7 @@ function updateBadges(){
 }
 
 // ── NAVIGATION ──
-const TITLES={dashboard:'📊 Дашборд',employees:'👥 Співробітники',employee:'👤 Картка співробітника',vacations:'🏖️ Відпустки',sick:'🏥 Лікарняні',analytics:'📈 Аналітика',birthdays:'🗓️ Календар подій',vacschedule:'🌴 Графік відпусток',settings:'⚙️ Налаштування',tabel:'📋 Табель відвідуваності',report:'📊 Місячний звіт'};
+const TITLES={dashboard:'📊 Дашборд',employees:'👥 Співробітники',employee:'👤 Картка співробітника',vacations:'🏖️ Відпустки',sick:'🏥 Лікарняні',analytics:'📈 Аналітика',birthdays:'🗓️ Календар подій',vacschedule:'🌴 Графік відпусток',settings:'⚙️ Налаштування',tabel:'📋 Табель відвідуваності',report:'📊 Місячний звіт',loccard:'🏢 Картка локації'};
 function nav(view,id=null){
   if(view==='settings' && !hasPerm('settings')) view='dashboard';
   S.view=view; if(id!==null) S.empId=id;
@@ -2070,6 +2083,7 @@ function renderView(){
     case 'vacschedule': renderVacSchedule(); break;
     case 'settings':  renderSettings(); break;
     case 'tabel':     renderTabel(); break;
+    case 'loccard':   renderLocCard(); break;
     case 'report':    renderReport(); break;
     default: renderDash();
   }
@@ -2293,125 +2307,232 @@ function normEmpLoc(e){
   if(normType(e.typ)==='Кухня') return (e.loc||'').replace(/^кухня\s*/i,'').trim()||(e.loc||'');
   return e.loc||'';
 }
-function switchDashTab(t){dashTab=t;renderDash();}
+// ─── v6.45: НОВИЙ ДАШБОРД (старий renderDash видалено) ──────────────────────
+// Дані: S.crm (діти/групи, ensureClientsLoaded), S.emps (плинність),
+//   S._locCaps (місткість, getLocationCapacity), S._dashYearly (квартали,
+//   getPaymentsYearly). Доступ: ПОКИ лише CFO/HR (sidebar-гейт v6.43);
+//   director-scope готовий до відкриття (visible()/myLoc).
+var DASH_MONTHS=['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
+function _dashSoftRerender(){ if(S.view==='dashboard') _renderDashNow(); }
+async function _ensureLocCaps(){
+  if(S._locCaps) return S._locCaps;
+  try{ var r=await fetch(authScriptUrl()+'?action=getLocationCapacity',{redirect:'follow'}); var j=await r.json(); S._locCaps=(j&&j.data)||{}; }
+  catch(e){ S._locCaps=S._locCaps||{}; }
+  return S._locCaps;
+}
+async function _ensureDashYearly(){
+  if(S._dashYearly) return S._dashYearly;
+  try{ var r=await fetch(authScriptUrl()+'?action=getPaymentsYearly',{redirect:'follow'}); var j=await r.json(); S._dashYearly=(j&&j.data)||[]; }
+  catch(e){ S._dashYearly=S._dashYearly||[]; }
+  return S._dashYearly;
+}
 function renderDash(){
-  const allEmps=visible();
-  // Sort tabs in fixed order
-  const rawTypes=[...new Set(allEmps.map(e=>normType(e.typ)).filter(Boolean))];
-  const allTypes=[...TYPE_ORDER.filter(t=>rawTypes.includes(t)),...rawTypes.filter(t=>!TYPE_ORDER.includes(t)).sort()];
-  // If current dashTab type doesn't exist in data, fallback
-  if(dashTab!=='all'&&!allTypes.includes(dashTab)&&allTypes.length>0)dashTab=allTypes[0];
-  // Filter by selected tab
-  const emps=dashTab==='all'?allEmps:allEmps.filter(e=>normType(e.typ)===dashTab);
-  const active=emps.filter(isActive);
-  const onVac=active.filter(e=>isOnVac(e.key)),onSick=active.filter(e=>isOnSick(e.key));
-  const over=active.filter(e=>vacUsed(e.key)>vacTotalLim(e));
-  const now=new Date();
-  const newThis=active.filter(e=>{const d=pd(e.wday)||pd(e.hired);return d&&d.getFullYear()===now.getFullYear()&&d.getMonth()===now.getMonth();});
-  const locs={};
-  emps.forEach(e=>{if(!e.loc)return;if(!locs[e.loc])locs[e.loc]={t:0,a:0,v:0,s:0,typ:normType(e.typ)};locs[e.loc].t++;if(isActive(e)){locs[e.loc].a++;if(isOnVac(e.key))locs[e.loc].v++;if(isOnSick(e.key))locs[e.loc].s++;}});
-  const bdays7=upcomingBdays(active,7);
+  // лінива підгрузка — кожне джерело по готовності тихо перемальовує
+  ensureClientsLoaded().then(_dashSoftRerender);
+  _ensureLocCaps().then(_dashSoftRerender);
+  _ensureDashYearly().then(_dashSoftRerender);
+  _renderDashNow();
+}
+function _renderDashNow(){
+  if(S.view!=='dashboard') return;
   const isHR=isNetworkRole(S.user.role);
-  // Type stats for summary
-  const typeStats={};
-  allEmps.filter(isActive).forEach(e=>{const t=normType(e.typ)||'Інше';if(!typeStats[t])typeStats[t]={a:0,v:0,s:0,ov:0};typeStats[t].a++;if(isOnVac(e.key))typeStats[t].v++;if(isOnSick(e.key))typeStats[t].s++;if(vacUsed(e.key)>vacTotalLim(e))typeStats[t].ov++;});
-
+  const myLoc=S.user.loc||'';
+  // ── діти + групи (S.crm) ──
+  const kids=S.crm?Object.values(S.crm):[];
+  const scopedKids=isHR?kids:kids.filter(c=>c.loc===myLoc);
+  const caps=S._locCaps||{};
+  const locAgg={};
+  scopedKids.forEach(c=>{ if(!c.loc)return; if(!locAgg[c.loc])locAgg[c.loc]={kids:0,groups:new Set()}; locAgg[c.loc].kids++; if(c.group)locAgg[c.loc].groups.add(c.group); });
+  const locList=Object.keys(locAgg).sort((a,b)=>locAgg[b].kids-locAgg[a].kids);
+  const totalKids=scopedKids.length, totalLocs=locList.length;
+  const totalGroups=locList.reduce((s,l)=>s+locAgg[l].groups.size,0);
+  // ── плинність (S.emps) ──
+  const emps=(visible()||[]);
+  const period=S.dashTurnPeriod||'year';
+  const now=new Date(), Y=now.getFullYear(), MM=now.getMonth();
+  function inPeriod(iso){ var d=pd(iso); if(!d)return false;
+    if(period==='month') return d.getFullYear()===Y&&d.getMonth()===MM;
+    if(period==='quarter'){var q=Math.floor(MM/3);return d.getFullYear()===Y&&Math.floor(d.getMonth()/3)===q;}
+    return d.getFullYear()===Y; }
+  const hired=emps.filter(e=>inPeriod(e.hired)||inPeriod(e.wday));
+  const fired=emps.filter(e=>inPeriod(e.fired));
+  const activeCnt=emps.filter(isActive).length;
+  const turnPct=activeCnt?Math.round(fired.length/activeCnt*100):0;
+  const perLbl=period==='month'?'місяць':period==='quarter'?'квартал':'рік';
+  // ── квартали (S._dashYearly) ──
+  const yearly=S._dashYearly;
+  let quartersHtml;
+  if(!yearly){ quartersHtml='<div class="empty"><span class="ei">📊</span><p>Завантаження…</p></div>'; }
+  else {
+    const rows=isHR?yearly:yearly.filter(r=>String(r['Локація']||'')===myLoc);
+    const monthCnt=DASH_MONTHS.map(mn=>rows.filter(r=>(Number(r[mn+'-Бюджет-навч'])||0)>0||(Number(r[mn+'-Факт-навч'])||0)>0).length);
+    function qAvg(qi){ const ms=monthCnt.slice(qi*3,qi*3+3).filter(x=>x>0); return ms.length?Math.round(ms.reduce((a,b)=>a+b,0)/ms.length):null; }
+    const qs=[0,1,2,3].map(qAvg);
+    const qLbl=['Q1 (січ–бер)','Q2 (кві–чер)','Q3 (лип–вер)','Q4 (жов–гру)'];
+    quartersHtml=`<div class="tbl-wrap"><table>
+      <thead><tr><th>Рік</th>${qLbl.map(l=>`<th>${l}</th>`).join('')}</tr></thead>
+      <tbody>
+        <tr><td><strong>${Y}</strong></td>${qs.map(v=>`<td>${v==null?'<span style=color:var(--gray2)>—</span>':'<strong>'+v+'</strong> <span style=font-size:11px;color:var(--gray)>дітей/міс</span>'}</td>`).join('')}</tr>
+        <tr style="color:var(--gray)"><td>${Y-1}</td><td colspan="4" style="font-size:12px">Дані за ${Y-1} у поточному реєстрі відсутні</td></tr>
+      </tbody></table></div>`;
+  }
   set('main',`
-    ${isHR&&allTypes.length>1?`
-    <div class="dash-type-tabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:18px">
-      ${allTypes.map(t=>`<button class="dtype-tab ${dashTab===t?'active':''}" onclick="switchDashTab('${t}')">${TYPE_ICONS[t]||'📌'} ${t} <span class="dtype-cnt">${(typeStats[t]||{a:0}).a}</span></button>`).join('')}
-      <button class="dtype-tab ${dashTab==='all'?'active':''}" onclick="switchDashTab('all')" style="margin-left:auto">🌐 Всі <span class="dtype-cnt">${allEmps.filter(isActive).length}</span></button>
-    </div>`:''}
-
     <div class="stats-grid">
-      <div class="stat-card" style="cursor:pointer" onclick="nav('employees')"><div class="stat-icon si-g">👥</div><div><div class="stat-val">${active.length}</div><div class="stat-lbl">Активних${!isHR?' — '+S.user.loc:dashTab!=='all'?' — '+dashTab:''}</div></div></div>
-      <div class="stat-card" style="cursor:pointer" onclick="nav('tabel')"><div class="stat-icon si-b">📋</div><div><div class="stat-val">${(()=>{if(isHR)return onVac.length;const t=getTabel(S.user.loc||'',new Date().toISOString().split('T')[0]);return active.filter(e=>t[e.key]?.status==='present'||t[e.key]?.status==='late').length;})()}</div><div class="stat-lbl">${isHR?'Зараз у відпустці':'Присутні сьогодні'}</div></div></div>
-      <div class="stat-card" style="cursor:pointer" onclick="nav('sick')"><div class="stat-icon si-o">🏥</div><div><div class="stat-val">${onSick.length}</div><div class="stat-lbl">На лікарняному</div></div></div>
-      <div class="stat-card"><div class="stat-icon si-r">⚠️</div><div><div class="stat-val">${over.length}</div><div class="stat-lbl">Перевищень ліміту</div></div></div>
-      ${isHR?`<div class="stat-card"><div class="stat-icon si-p">🏫</div><div><div class="stat-val">${Object.keys(locs).length}</div><div class="stat-lbl">Локацій</div></div></div>`:''}
-      <div class="stat-card"><div class="stat-icon si-y">🆕</div><div><div class="stat-val">${newThis.length}</div><div class="stat-lbl">Нових цього місяця</div></div></div>
+      <div class="stat-card"><div class="stat-icon si-g">👶</div><div><div class="stat-val">${totalKids}</div><div class="stat-lbl">Дітей${isHR?'':' — '+myLoc}</div></div></div>
+      <div class="stat-card"><div class="stat-icon si-b">📚</div><div><div class="stat-val">${totalGroups}</div><div class="stat-lbl">Груп</div></div></div>
+      ${isHR?`<div class="stat-card"><div class="stat-icon si-p">🏫</div><div><div class="stat-val">${totalLocs}</div><div class="stat-lbl">Локацій</div></div></div>`:''}
+      <div class="stat-card"><div class="stat-icon si-y">🆕</div><div><div class="stat-val">${hired.length}</div><div class="stat-lbl">Прийнято (${perLbl})</div></div></div>
+      <div class="stat-card"><div class="stat-icon si-r">🚪</div><div><div class="stat-val">${fired.length}</div><div class="stat-lbl">Звільнено (${perLbl})</div></div></div>
     </div>
 
-    ${over.length>0?`<div class="alert alert-danger" style="margin-bottom:18px">
-      <div><strong>⚠️ Перевищення ліміту відпусток!</strong><br>
-      ${over.map(e=>`<span onclick="nav('employee',${e.id})" style="cursor:pointer;text-decoration:underline">${fullName(e)}</span> (${vacUsed(e.key)}/${vacTotalLim(e)} дн.)`).join(' · ')}
-      </div></div>`:''}
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-hd"><h3>🏫 Наповнюваність${isHR?' — мережа':' — '+myLoc}</h3><span style="font-size:12px;color:var(--gray)">${totalKids} дітей · ${totalGroups} груп${isHR?' · '+totalLocs+' лок.':''}</span></div>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Локація</th><th>Дітей</th><th>Місць</th><th>Заповнення</th><th>Груп</th></tr></thead>
+        <tbody>${locList.length===0?`<tr><td colspan="5" style="text-align:center;padding:24px;color:var(--gray)">${S.crm?'Немає даних дітей':'Завантаження…'}</td></tr>`:
+        locList.map(l=>{const a=locAgg[l],cap=Number(caps[l])||0,pct=cap?Math.min(100,Math.round(a.kids/cap*100)):null,col=pct==null?'#bdc3c7':pct>=90?'#e74c3c':pct>=70?'#27ae60':'#e67e22';
+          return `<tr class="clickable" onclick="filterLoc('${escJs(l)}')">
+            <td><strong>${l}</strong></td><td>${a.kids}</td><td>${cap||'<span style=color:var(--gray2)>—</span>'}</td>
+            <td style="min-width:150px"><div style="display:flex;align-items:center;gap:8px"><div class="prog-wrap" style="flex:1;margin:0"><div class="prog-bar" style="width:${pct||0}%;background:${col}"></div></div><span style="font-size:12px;font-weight:700;color:${col};min-width:36px">${pct==null?'—':pct+'%'}</span></div></td>
+            <td>${a.groups.size}</td></tr>`;}).join('')}</tbody>
+      </table></div>
+      ${Object.keys(caps).length===0?`<div style="font-size:12px;color:var(--gray);padding:8px 16px">💡 Місткість заповнюється в «🏢 Картка локації» → поле «Місткість».</div>`:''}
+    </div>
 
-    <div style="display:grid;grid-template-columns:${isHR?'1.3fr 0.7fr':'1fr 0.7fr'};gap:20px">
-      <div style="display:flex;flex-direction:column;gap:16px">
-        ${isHR?`<div class="card">
-          <div class="card-hd"><h3>🏫 Зведення по локаціях${dashTab!=='all'?' — '+dashTab:''}</h3></div>
-          <div class="tbl-wrap"><table>
-            <thead><tr><th>Локація</th><th>Тип</th><th>Всього</th><th>Активні</th><th>Відпустка</th><th>Лікарняний</th></tr></thead>
-            <tbody>${Object.entries(locs).sort((a,b)=>(a[1].typ||'').localeCompare(b[1].typ||'')||a[0].localeCompare(b[0],'uk')).map(([l,d])=>`
-            <tr class="clickable" onclick="filterLoc('${escJs(l)}')">
-              <td><strong>${l}</strong></td>
-              <td><span style="font-size:11px;color:var(--gray)">${TYPE_ICONS[d.typ]||'📌'} ${d.typ||'—'}</span></td>
-              <td>${d.t}</td>
-              <td><span class="badge bg">${d.a}</span></td>
-              <td>${d.v>0?`<span class="badge bb">${d.v}</span>`:'—'}</td>
-              <td>${d.s>0?`<span class="badge bo">${d.s}</span>`:'—'}</td>
-            </tr>`).join('')}</tbody>
-          </table></div>
-        </div>`:`
-        <div class="card">
-          <div class="card-hd"><h3>📋 Табель сьогодні — ${S.user.loc}</h3>
-            <button class="btn btn-primary btn-sm" onclick="nav('tabel')">Відкрити →</button>
-          </div>
-          ${(()=>{
-            const todayStr=new Date().toISOString().split('T')[0];
-            const tbl=getTabel(S.user.loc||'',todayStr);
-            const cnt={present:0,late:0,absent:0,sick:0,vacation:0,notset:0};
-            active.forEach(e=>{const st=tbl[e.key]?.status||'notset';cnt[st]=(cnt[st]||0)+1;});
-            return`<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:#f0f4f8">
-              ${[['present','✅ Присутні','#27ae60'],['late','⏰ Спізнились','#e67e22'],['absent','❌ Відсутні','#e74c3c'],['sick','🏥 Лікарняний','#9b59b6'],['vacation','🏖️ Відпустка','#3498db'],['notset','📝 Не заповнено','#bdc3c7']].map(([k,l,c])=>
-              `<div style="background:#fff;padding:14px;text-align:center">
-                <div style="font-size:22px;font-weight:900;color:${c}">${cnt[k]}</div>
-                <div style="font-size:10px;color:var(--gray);margin-top:2px">${l}</div>
-              </div>`).join('')}
-            </div>
-            ${active.filter(e=>tbl[e.key]?.status).slice(0,6).map(e=>{
-              const st=tbl[e.key]?.status||'';
-              const stInfo=TABEL_STATUSES[st]||{};
-              return`<div style="padding:8px 16px;border-top:1px solid #f0f4f8;display:flex;align-items:center;gap:10px;cursor:pointer" onclick="nav('employee',${e.id})">
-                <div class="avatar" style="width:28px;height:28px;font-size:10px">${initials(e)}</div>
-                <div style="flex:1"><div style="font-weight:600;font-size:12px">${fullName(e)}</div><div style="font-size:11px;color:var(--gray)">${e.pos||'—'}</div></div>
-                <span style="font-size:11px;font-weight:600;color:${stInfo.color||'var(--gray)'}">${stInfo.label||'—'}</span>
-              </div>`;}).join('')}`;
-          })()}
-        </div>`}
-        ${onVac.length>0?`<div class="card">
-          <div class="card-hd"><h3>🏖️ Зараз у відпустці</h3></div>
-          ${onVac.slice(0,5).map(e=>`<div style="padding:9px 20px;border-bottom:1px solid #f0f4f8;display:flex;align-items:center;gap:10px;cursor:pointer" onclick="nav('employee',${e.id})">
-            <div class="avatar" style="width:30px;height:30px;font-size:11px;background:#3498db">${initials(e)}</div>
-            <div style="flex:1"><div style="font-weight:600;font-size:13px">${fullName(e)}</div><div style="font-size:11px;color:var(--gray)">${e.loc}</div></div>
-            <span class="badge bb">відпустка</span>
-          </div>`).join('')}
-        </div>`:''}
-        ${onSick.length>0?`<div class="card">
-          <div class="card-hd"><h3>🏥 Зараз на лікарняному</h3></div>
-          ${onSick.slice(0,5).map(e=>`<div style="padding:9px 20px;border-bottom:1px solid #f0f4f8;display:flex;align-items:center;gap:10px;cursor:pointer" onclick="nav('employee',${e.id})">
-            <div class="avatar" style="width:30px;height:30px;font-size:11px;background:#e67e22">${initials(e)}</div>
-            <div style="flex:1"><div style="font-weight:600;font-size:13px">${fullName(e)}</div><div style="font-size:11px;color:var(--gray)">${e.loc}</div></div>
-            <span class="badge bo">лікарняний</span>
-          </div>`).join('')}
-        </div>`:''}
-      </div>
-
-      <div style="display:flex;flex-direction:column;gap:16px">
-        <div class="card">
-          <div class="card-hd"><h3>🎂 Дні народження (7 днів)</h3><button class="btn btn-secondary btn-sm" onclick="nav('birthdays')">Всі →</button></div>
-          ${bdays7.length===0?`<div class="empty"><span class="ei" style="font-size:28px">🎂</span><p>Немає найближчих</p></div>`:
-          bdays7.map(b=>`<div style="padding:9px 16px;border-bottom:1px solid #f0f4f8;display:flex;align-items:center;gap:8px;cursor:pointer" onclick="nav('employee',${b.e.id})">
-            <div style="font-size:18px">${b.left===0?'🎉':b.left<=3?'🎁':'🎂'}</div>
-            <div style="flex:1"><div style="font-weight:700;font-size:12px">${fullName(b.e)}</div><div style="font-size:11px;color:var(--gray)">${b.e.pos}</div></div>
-            <div style="font-size:11px;font-weight:700;color:${b.left===0?'#e74c3c':'#27ae60'}">${b.left===0?'Сьогодні!':'за '+b.left+' дн.'}</div>
-          </div>`).join('')}
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+      <div class="card">
+        <div class="card-hd"><h3>📉 Плинність кадрів ${Y}</h3>
+          <div style="display:flex;gap:4px">${[['month','Міс'],['quarter','Квартал'],['year','Рік']].map(([k,l])=>`<button class="btn btn-${period===k?'primary':'secondary'} btn-sm" onclick="S.dashTurnPeriod='${k}';_renderDashNow()">${l}</button>`).join('')}</div>
         </div>
-        ${renderReminders()}
+        <div style="padding:18px;display:flex;gap:28px;flex-wrap:wrap">
+          <div><div style="font-size:28px;font-weight:900;color:#27ae60">${hired.length}</div><div style="font-size:12px;color:var(--gray)">Прийнято</div></div>
+          <div><div style="font-size:28px;font-weight:900;color:#e74c3c">${fired.length}</div><div style="font-size:12px;color:var(--gray)">Звільнено</div></div>
+          <div><div style="font-size:28px;font-weight:900;color:${turnPct>15?'#e74c3c':'#e67e22'}">${turnPct}%</div><div style="font-size:12px;color:var(--gray)">Плинність</div></div>
+        </div>
       </div>
+      <div class="card">
+        <div class="card-hd"><h3>📊 Комплектація за квартали</h3></div>
+        ${quartersHtml}
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px">
+      <div class="card"><div class="card-hd"><h3>😊 eNPS (співробітники)</h3></div><div class="empty"><span class="ei">📭</span><h4>Дані не завантажено</h4><p>Чекаємо таблицю</p></div></div>
+      <div class="card"><div class="card-hd"><h3>⭐ NPS (клієнти)</h3></div><div class="empty"><span class="ei">📭</span><h4>Дані не завантажено</h4><p>Чекаємо таблицю</p></div></div>
     </div>
   `);
+}
+
+// ─── v6.45: КАРТКА ЛОКАЦІЇ ───────────────────────────────────────────────────
+function _dashAllLocs(){
+  var s=new Set();
+  (S.emps||[]).forEach(e=>{ if(e.loc) s.add(e.loc); });
+  if(S.crm) Object.values(S.crm).forEach(c=>{ if(c.loc) s.add(c.loc); });
+  return [...s].sort((a,b)=>a.localeCompare(b,'uk'));
+}
+function _locTeam(loc){
+  const es=(S.emps||[]).filter(e=>e.loc===loc&&isActive(e));
+  const teachers=es.filter(e=>isTeacherTypeForTabel(e));
+  return { staffN:es.length-teachers.length, teacherN:teachers.length,
+           dir:es.find(e=>/директор/i.test(e.pos||'')) };
+}
+async function renderLocCard(){
+  await ensureClientsLoaded();
+  if(!S._locCards){
+    try{ var r=await fetch(authScriptUrl()+'?action=getLocationCards',{redirect:'follow'}); var j=await r.json(); S._locCards=(j&&j.data)||{}; }
+    catch(e){ S._locCards={}; }
+  }
+  _renderLocCardNow();
+}
+function _renderLocCardNow(){
+  const isHR=isNetworkRole(S.user.role);
+  const allLocs=_dashAllLocs();
+  if(!isHR) S.f.locCard=S.user.loc||'';
+  else if(!S.f.locCard||allLocs.indexOf(S.f.locCard)<0) S.f.locCard=allLocs[0]||'';
+  const loc=S.f.locCard;
+  const c=(S._locCards&&S._locCards[loc])||{};
+  const canEdit=isHR||(String(S.user.role||'').toLowerCase()==='director'&&S.user.loc===loc);
+  const team=_locTeam(loc);
+  const grpCnt=S.crm?new Set(Object.values(S.crm).filter(x=>x.loc===loc&&x.group).map(x=>x.group)).size:0;
+  const v=(k)=>esc(c[k]||'');
+  const fld=(id,label,val,ro)=>`<div class="ii" style="margin-bottom:0"><label>${label}</label><input id="${id}" value="${esc(val||'')}" ${ro?'disabled':''} style="width:100%;padding:7px 10px;border:1.5px solid var(--gray2);border-radius:7px;font-size:14px"></div>`;
+  const taLbl='Особливості';
+  set('main',`
+    <div class="loc-card-wrap">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px" class="no-print">
+      <h2 style="margin:0">🏢 Картка локації</h2>
+      ${isHR?`<select class="flt-sel" onchange="S.f.locCard=this.value;_renderLocCardNow()">${allLocs.map(l=>`<option value="${esc(l)}" ${l===loc?'selected':''}>${esc(l)}</option>`).join('')}</select>`:`<span class="badge bg" style="padding:6px 12px">${esc(loc)}</span>`}
+      <div style="margin-left:auto;display:flex;gap:8px">
+        ${canEdit?`<button class="btn btn-primary" id="locSaveBtn" onclick="saveLocCard()">💾 Зберегти</button>`:''}
+        <button class="btn btn-secondary" onclick="window.print()">🖨 Друк / PDF</button>
+      </div>
+    </div>
+    ${!canEdit?`<div class="alert alert-info no-print" style="margin-bottom:14px">Перегляд лише для читання — редагування доступне CFO/HR та директору цієї локації.</div>`:''}
+
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-hd"><h3>01 · Загальна інформація</h3></div>
+      <div style="padding:16px;display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        ${fld('locF_fullName','Повна назва закладу',c.fullName||('M.Kids '+loc),!canEdit)}
+        ${fld('locF_format','Формат роботи',c.format,!canEdit)}
+        ${fld('locF_license','Ліцензія / Дозвіл №',c.license,!canEdit)}
+        ${fld('locF_capacity','Місткість (місць)',c.capacity,!canEdit)}
+        ${fld('locF_legalAddr','Юридична адреса',c.legalAddr,!canEdit)}
+        ${fld('locF_factAddr','Фактична адреса',c.factAddr,!canEdit)}
+        ${fld('locF_phone','Робочий телефон',c.phone,!canEdit)}
+        ${fld('locF_email','Робочий email',c.email,!canEdit)}
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-hd"><h3>02 · Приміщення та особливості</h3></div>
+      <div style="padding:16px;display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        ${fld('locF_area','Загальна площа, м²',c.area,!canEdit)}
+        ${fld('locF_rooms','Кількість груп / кімнат',c.rooms||grpCnt,!canEdit)}
+        ${fld('locF_features', taLbl,c.features,!canEdit)}
+        ${fld('locF_playground','Майданчик (огляд / прибирання)',c.playground,!canEdit)}
+        ${fld('locF_shelter','Укриття (так/ні, де)',c.shelter,!canEdit)}
+        ${fld('locF_wifi','Wi-Fi мережа / пароль',c.wifi,!canEdit)}
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-hd"><h3>03 · Команда</h3></div>
+      <div style="padding:16px;display:flex;gap:28px;flex-wrap:wrap;align-items:center">
+        <div>${team.dir?`<div style="font-weight:700;cursor:pointer;color:var(--blue2)" onclick="nav('employee',${team.dir.id})">${fullName(team.dir)}</div>`:'<div style="color:var(--gray)">— не призначено —</div>'}<div style="font-size:12px;color:var(--gray)">Директор</div></div>
+        <div><div style="font-size:24px;font-weight:900">${team.staffN}</div><div style="font-size:12px;color:var(--gray)">Штатних співробітників</div></div>
+        <div><div style="font-size:24px;font-weight:900">${team.teacherN}</div><div style="font-size:12px;color:var(--gray)">Викладачів</div></div>
+        <div><div style="font-size:24px;font-weight:900">${grpCnt}</div><div style="font-size:12px;color:var(--gray)">Груп (з реєстру дітей)</div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-hd"><h3>04 · Документи</h3></div>
+      <div style="padding:16px">
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+          ${['📄 Договір оренди','📄 Ліцензія','📄 Сертифікати','📄 Полісні документи'].map(d=>`<span class="badge" style="background:#f0f4f8;color:var(--gray);padding:8px 14px">${d}</span>`).join('')}
+        </div>
+        ${fld('locF_docsNote','Нотатка по документах',c.docsNote,!canEdit)}
+        <div style="font-size:12px;color:var(--gray);margin-top:8px">📌 Завантаження файлів — на майбутнє.</div>
+      </div>
+    </div>
+    ${c.updatedAt?`<div style="font-size:11px;color:var(--gray);margin-top:10px" class="no-print">Оновлено: ${esc(c.updatedAt)}${c.updatedBy?' · '+esc(c.updatedBy):''}</div>`:''}
+    </div>
+  `);
+}
+function saveLocCard(){
+  const loc=S.f.locCard; if(!loc){alert('Оберіть локацію');return;}
+  const g=id=>{var el=document.getElementById(id);return el?String(el.value).trim():'';};
+  const payload={loc:loc,fullName:g('locF_fullName'),format:g('locF_format'),license:g('locF_license'),
+    legalAddr:g('locF_legalAddr'),factAddr:g('locF_factAddr'),phone:g('locF_phone'),email:g('locF_email'),
+    area:g('locF_area'),rooms:g('locF_rooms'),features:g('locF_features'),playground:g('locF_playground'),
+    shelter:g('locF_shelter'),wifi:g('locF_wifi'),capacity:g('locF_capacity'),docsNote:g('locF_docsNote')};
+  var btn=document.getElementById('locSaveBtn'); if(btn){btn.disabled=true;btn.textContent='⏳ Збереження…';}
+  postToScript('saveLocationCard',{actorId:S.user&&S.user.id,payload:payload}).then(function(res){
+    if(res&&res.ok===false){ alert('🚫 '+(res.error||'Помилка збереження')); if(btn){btn.disabled=false;btn.textContent='💾 Зберегти';} return; }
+    S._locCards=S._locCards||{}; S._locCards[loc]=Object.assign({},S._locCards[loc],payload);
+    S._locCaps=null;  // capacity змінилась → дашборд перечитає
+    if(btn){ btn.textContent='✅ Збережено'; setTimeout(function(){ if(btn){btn.disabled=false;btn.textContent='💾 Зберегти';} },1500); }
+  }).catch(function(e){ alert('Помилка мережі: '+(e&&e.message||e)); if(btn){btn.disabled=false;btn.textContent='💾 Зберегти';} });
 }
 function filterLoc(loc){S.f.loc=loc;nav('employees');}
 
