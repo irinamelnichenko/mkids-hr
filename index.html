@@ -721,7 +721,7 @@ const CFG = {
   API_KEY: 'AIzaSyBXY-1iAKeBdyWc7gbtNOe66yBa5-Mcmlc',
   SHEET_ID: '1KeSelcGyp8ijUQOmzUjFlX78TOScMWAFm7Hjf33Doyo',
   CRM_SHEET_ID: '1pA2q84BFsXWuUchIlu8um853od_PXr7KepLpTovUjLo',
-  RANGE: "'2025-2026'!A2:V3000",  // v6.44: розширено R→V (S=Паспорт,T=Ставка,U=Умови,V=Модель)
+  RANGE: "'2025-2026'!A2:Z3000",  // v6.44: R→V; v6.48: V→Z (W=Оцінка JSON, інакше колонка поза діапазоном — урок v6.47.2)
   VAC_TEACHER: 28,
   VAC_DEFAULT: 14,
   PW: { hr: 'hr2024', director: 'dir2024' },
@@ -928,7 +928,8 @@ async function fetchEmps(force=false) {
         passport:(row[18]||'').trim(), // S=Паспорт
         rate:(row[19]||'').trim(),     // T=Ставка ЗП
         workCond:(row[20]||'').trim(), // U=Умови роботи
-        calcModel:(row[21]||'').trim() // V=Модель розрахунку
+        calcModel:(row[21]||'').trim(),// V=Модель розрахунку
+        assessment:(()=>{try{return JSON.parse(row[22]||'{}')||{};}catch(e){return {};}})() // W=Оцінка(JSON) v6.48
       };
     }).filter(e=>e && (e.last||e.first)).map((e,i)=>({...e,id:i}));
     localStorage.setItem(CFG.CK, JSON.stringify({data:S.emps,ts:Date.now()}));
@@ -2745,6 +2746,137 @@ function _safeTab(fn, label){
     return '<div style="padding:16px;color:#e74c3c">⚠️ Не вдалося відобразити «'+label+'»: '+esc(String(e&&e.message||e))+'</div>';
   }
 }
+// ─── v6.48: ОЦІНКА СПІВРОБІТНИКА (універсальні шаблони по посадах) ───────────
+var ASSESSMENT_SCALE=[{v:'погано',label:'Погано',col:'#e74c3c',pts:1},{v:'середньо',label:'Середньо',col:'#e67e22',pts:2},{v:'відмінно',label:'Відмінно',col:'#27ae60',pts:3}];
+var ASSESSMENT_SUPPORT=['Менторство','Навчання','Ротація на іншу групу','Зовнішнє навчання','План розвитку на 3 міс'];
+var ASSESSMENT_DECISIONS=['Розвиток до лідерської ролі','Закріпити як сильного фахівця','Потребує підтримки/наставника','Потребує ротації','Потребує заміни'];
+var ASSESSMENT_TEMPLATES={
+  teacher:{ title:'Вихователь', appliesTo:['вихователь','тьютор','педагог'], rhythm:'month', extras:true,
+    sections:{
+      O1:{title:'Організація та якість навчального процесу', items:[
+        {id:'KR1.1',text:'Проведено мінімум 90% занять відповідно до програми та календарного плану'},
+        {id:'KR1.2',text:'Наповненість групи не менше 80%'},
+        {id:'KR1.3',text:'≥80% активностей (спостереження керівника/методиста, 4/семестр) відповідають віковим нормам і мають чітку мету'},
+        {id:'KR1.4',text:'Динаміка розвитку дітей фіксується: семестрово (Report) та щомісячно (Day Book)'}]},
+      O2:{title:'Комунікація з батьками', items:[
+        {id:'KR2.1',text:'Високий рівень комунікації в чатах: фото з описами, звіти пʼятниці, правильні часові проміжки'},
+        {id:'KR2.2',text:'Мінімум 1 індивідуальна зустріч/дзвінок з батьками на місяць'},
+        {id:'KR2.3',text:'Високий рівень фідбеку від батьків'},
+        {id:'KR2.4',text:'Високий рівень спільних заходів з батьками'}]},
+      O3:{title:'Простір та оформлення', items:[
+        {id:'KR4.1',text:'Сезонне/тематичне оформлення групи відповідає календарю/подіям'},
+        {id:'KR4.2',text:'Візуальна зона дітей: роботи, стенди прогресу, власні проєкти'},
+        {id:'KR4.3',text:'Група відповідає критеріям охайності, безпеки, впорядкованості (рейд 2/період)'}]},
+      O4:{title:'Саморозвиток та ініціативність', items:[
+        {id:'KR3.1',text:'Пройдено мінімум 2 навчання за семестр'},
+        {id:'KR3.2',text:'Створено мінімум 6 власних матеріалів (гра, інструмент)'},
+        {id:'KR3.3',text:'Реалізовано мінімум 1 покращення процесів'},
+        {id:'KR3.4',text:'Поділено досвідом з колегами (заняття, методрозробки)'}]}
+    }},
+  // Плейсхолдери — sections порожні → вкладка НЕ показується, доки не заповнимо:
+  helper:{title:'Помічник вихователя', appliesTo:['помічник'], rhythm:'month', extras:true, sections:{}},
+  nurse: {title:'Медсестра', appliesTo:['медсестр'], rhythm:'month', extras:true, sections:{}},
+  cook:  {title:'Кухар', appliesTo:['кухар','кухня'], rhythm:'month', extras:true, sections:{}}
+};
+function resolveTemplateId(pos){
+  var p=String(pos||'').toLowerCase(); if(!p) return null;
+  for(var t in ASSESSMENT_TEMPLATES){ var tpl=ASSESSMENT_TEMPLATES[t];
+    if(!tpl.sections||!Object.keys(tpl.sections).length) continue;   // плейсхолдер
+    if((tpl.appliesTo||[]).some(function(kw){return p.indexOf(kw)>=0;})) return t; }
+  return null;
+}
+var ASSESS_MONTHS=['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
+function assessCurrentMonth(){ var d=new Date(); return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2); }
+function assessMonthLabel(k){ var p=String(k).split('-'); return (ASSESS_MONTHS[(+p[1]||1)-1]||p[1])+' '+p[0]; }
+function canEditAssessment(e){ if(!S.user)return false; var role=String(S.user.role||'').toLowerCase();
+  if(isNetworkRole(role)) return true; if(role==='director') return !!e&&e.loc===S.user.loc; return false; }
+function _assessDraft(empId,tplId){ if(!S._assessDraft)S._assessDraft={};
+  if(!S._assessDraft[empId]){ var e=S.emps[empId]||{}; var src=(e.assessment&&e.assessment[tplId])||{};
+    try{S._assessDraft[empId]=JSON.parse(JSON.stringify(src));}catch(_){S._assessDraft[empId]={};} }
+  return S._assessDraft[empId]; }
+function assessOverall(crit,tpl){ var sum=0,n=0; Object.keys(tpl.sections).forEach(function(s){ tpl.sections[s].items.forEach(function(it){
+    var v=crit[it.id]; if(!v)return; var sc=ASSESSMENT_SCALE.find(function(x){return x.v===v;}); if(sc){sum+=sc.pts;n++;} }); });
+  return n?{score:(sum/(n*3)),filled:n}:{score:0,filled:0}; }
+function assessRerender(empId){ var el=document.getElementById('tAssess'); if(el) el.innerHTML=renderAssessmentBody(empId); }
+function assessSetMonth(empId,k){ if(!S._assessMonth)S._assessMonth={}; S._assessMonth[empId]=k; assessRerender(empId); }
+function assessToggleSec(empId,sec){ if(!S._assessOpen)S._assessOpen={}; var key=empId+'|'+sec; S._assessOpen[key]=!S._assessOpen[key]; assessRerender(empId); }
+function _assessCurMonth(empId){ if(!S._assessMonth)S._assessMonth={}; return S._assessMonth[empId]||assessCurrentMonth(); }
+function _assessEnsureMonth(draft,mkey){ if(!draft[mkey])draft[mkey]={criteria:{}}; if(!draft[mkey].criteria)draft[mkey].criteria={}; return draft[mkey]; }
+function assessSetKR(empId,id,v){ var e=S.emps[empId]; if(!canEditAssessment(e))return; var tplId=resolveTemplateId(e.pos);
+  var draft=_assessDraft(empId,tplId); var mkey=_assessCurMonth(empId); var per=_assessEnsureMonth(draft,mkey);
+  if(per.criteria[id]===v) delete per.criteria[id]; else per.criteria[id]=v; assessRerender(empId); }
+function assessToggleSupport(empId,val){ var e=S.emps[empId]; if(!canEditAssessment(e))return; var draft=_assessDraft(empId,resolveTemplateId(e.pos));
+  var per=_assessEnsureMonth(draft,_assessCurMonth(empId)); if(!Array.isArray(per.support))per.support=[];
+  var i=per.support.indexOf(val); if(i>=0)per.support.splice(i,1); else per.support.push(val); assessRerender(empId); }
+function assessSetDecision(empId,val){ var e=S.emps[empId]; if(!canEditAssessment(e))return; var draft=_assessDraft(empId,resolveTemplateId(e.pos));
+  var per=_assessEnsureMonth(draft,_assessCurMonth(empId)); per.decision=(per.decision===val)?'':val; assessRerender(empId); }
+function assessSetText(empId,field,val){ var e=S.emps[empId]; if(!canEditAssessment(e))return; var draft=_assessDraft(empId,resolveTemplateId(e.pos));
+  _assessEnsureMonth(draft,_assessCurMonth(empId))[field]=val; }  // без rerender (textarea не втрачає фокус)
+function renderAssessmentBody(empId){
+  var e=S.emps[empId]; if(!e) return '';
+  var tplId=resolveTemplateId(e.pos); if(!tplId) return '<div class="empty"><p>Немає шаблону для посади</p></div>';
+  var tpl=ASSESSMENT_TEMPLATES[tplId];
+  var draft=_assessDraft(empId,tplId); var canEdit=canEditAssessment(e);
+  var mkey=_assessCurMonth(empId); var per=draft[mkey]||{criteria:{}}; var crit=per.criteria||{};
+  if(!S._assessOpen)S._assessOpen={};
+  var months=[]; var d=new Date(); for(var i=0;i<12;i++){var dd=new Date(d.getFullYear(),d.getMonth()-i,1);months.push(dd.getFullYear()+'-'+('0'+(dd.getMonth()+1)).slice(-2));}
+  Object.keys(draft).forEach(function(k){if(months.indexOf(k)<0)months.push(k);}); months.sort().reverse();
+  var ov=assessOverall(crit,tpl); var ovCol=ov.score>=0.8?'#27ae60':ov.score>=0.5?'#e67e22':'#e74c3c';
+  var sel='<select class="flt-sel" onchange="assessSetMonth('+empId+',this.value)">'+months.map(function(k){return '<option value="'+k+'" '+(k===mkey?'selected':'')+'>'+assessMonthLabel(k)+'</option>';}).join('')+'</select>';
+  var html='<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px">'
+    +'<strong>👨‍🏫 Оцінка ('+esc(tpl.title)+')</strong> Місяць: '+sel
+    +'<span class="badge" style="background:'+ovCol+'1a;color:'+ovCol+';font-weight:800">Загальна: '+(ov.filled?Math.round(ov.score*100)+'%':'—')+'</span>'
+    +(canEdit?'<button class="btn btn-primary btn-sm" style="margin-left:auto" onclick="saveAssessment('+empId+')">💾 Зберегти</button>':'<span class="badge" style="margin-left:auto;background:#f0f4f8;color:var(--gray)">перегляд</span>')+'</div>';
+  Object.keys(tpl.sections).forEach(function(sec){ var S2=tpl.sections[sec]; var open=!!S._assessOpen[empId+'|'+sec];
+    var done=S2.items.filter(function(it){return crit[it.id];}).length;
+    html+='<div class="card" style="margin-bottom:8px"><div class="card-hd" style="cursor:pointer" onclick="assessToggleSec('+empId+',\''+sec+'\')"><h3>'+(open?'▾':'▸')+' '+esc(S2.title)+'</h3><span class="badge '+(done?'bg':'')+'">'+done+'/'+S2.items.length+'</span></div>';
+    if(open){ html+='<div style="padding:8px 14px">'+S2.items.map(function(it){ var cur=crit[it.id]||'';
+      var btns=ASSESSMENT_SCALE.map(function(sc){var on=cur===sc.v;return '<button '+(canEdit?'onclick="assessSetKR('+empId+',\''+it.id+'\',\''+sc.v+'\')"':'disabled')+' style="border:1px solid '+(on?sc.col:'var(--gray2)')+';background:'+(on?sc.col:'#fff')+';color:'+(on?'#fff':sc.col)+';border-radius:6px;padding:3px 8px;font-size:12px;font-weight:700;margin:1px;cursor:'+(canEdit?'pointer':'default')+'">'+sc.label+'</button>';}).join('');
+      return '<div style="display:flex;gap:10px;align-items:center;padding:5px 0;border-bottom:1px solid #f4f7fb"><div style="flex:1;font-size:13px"><b>'+it.id+'</b> '+esc(it.text)+'</div><div style="white-space:nowrap">'+btns+'</div></div>';
+    }).join('')+'</div>'; }
+    html+='</div>'; });
+  if(tpl.extras){
+    var sup=Array.isArray(per.support)?per.support:[];
+    html+='<div class="card" style="margin-bottom:8px"><div class="card-hd"><h3>Зони розвитку та рішення</h3></div><div style="padding:12px 14px">'
+      +'<label style="font-size:12px;font-weight:700;color:var(--gray)">Основні зони росту / рекомендації</label>'
+      +'<textarea id="asx_zones" '+(canEdit?'':'disabled')+' oninput="assessSetText('+empId+',\'zones\',this.value)" style="width:100%;min-height:42px;padding:6px 9px;border:1.5px solid var(--gray2);border-radius:7px;font-size:13px;margin-bottom:8px">'+esc(per.zones||'')+'</textarea>'
+      +'<label style="font-size:12px;font-weight:700;color:var(--gray)">Що варто спробувати / змінити</label>'
+      +'<textarea id="asx_recommend" '+(canEdit?'':'disabled')+' oninput="assessSetText('+empId+',\'recommend\',this.value)" style="width:100%;min-height:42px;padding:6px 9px;border:1.5px solid var(--gray2);border-radius:7px;font-size:13px;margin-bottom:8px">'+esc(per.recommend||'')+'</textarea>'
+      +'<div style="font-size:12px;font-weight:700;color:var(--gray);margin-bottom:4px">Формат підтримки</div><div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">'
+      +ASSESSMENT_SUPPORT.map(function(s){var on=sup.indexOf(s)>=0;return '<button '+(canEdit?'onclick="assessToggleSupport('+empId+',\''+escJs(s)+'\')"':'disabled')+' style="border:1px solid '+(on?'#2980b9':'var(--gray2)')+';background:'+(on?'#2980b9':'#fff')+';color:'+(on?'#fff':'var(--dark2)')+';border-radius:20px;padding:4px 12px;font-size:12px;cursor:'+(canEdit?'pointer':'default')+'">'+(on?'☑ ':'☐ ')+s+'</button>';}).join('')+'</div>'
+      +'<div style="font-size:12px;font-weight:700;color:var(--gray);margin-bottom:4px">Рішення керівника/менеджменту</div><div style="display:flex;flex-direction:column;gap:4px">'
+      +ASSESSMENT_DECISIONS.map(function(s){var on=per.decision===s;return '<label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:'+(canEdit?'pointer':'default')+'"><span '+(canEdit?'onclick="assessSetDecision('+empId+',\''+escJs(s)+'\')"':'')+' style="width:16px;height:16px;border-radius:50%;border:2px solid '+(on?'#27ae60':'var(--gray2)')+';background:'+(on?'#27ae60':'#fff')+';display:inline-block;flex-shrink:0"></span>'+s+'</label>';}).join('')+'</div>'
+      +'</div></div>';
+  }
+  if(per.by||per.at) html+='<div style="font-size:11px;color:var(--gray);margin:4px 2px">Оновив: '+esc(per.by||'')+(per.at?' · '+esc(per.at):'')+'</div>';
+  return html;
+}
+function _empFullPayload(e,assessmentObj){
+  return { dir:e.dir||'',typ:e.typ||'',loc:e.loc||'',grp:e.grp||'',last:e.last||'',first:e.first||'',
+    phone:e.phone||'',pos:e.pos||'',stat:e.stat||'',bday:e.bday||'',bmon:e.bmon||'',bdate:e.bdate||'',
+    wday:e.wday||'',hired:e.hired||'',fired:e.fired||'',email:e.email||'',
+    passport:e.passport||'',rate:e.rate||'',workCond:e.workCond||'',calcModel:e.calcModel||'',
+    assessment:assessmentObj };
+}
+async function saveAssessment(empId){
+  var e=S.emps[empId]; if(!e) return;
+  if(!canEditAssessment(e)){ toast('🚫 Немає дозволу'); return; }
+  var tplId=resolveTemplateId(e.pos); var draft=_assessDraft(empId,tplId); var mkey=_assessCurMonth(empId);
+  ['zones','recommend'].forEach(function(f){ var el=document.getElementById('asx_'+f); if(el){ _assessEnsureMonth(draft,mkey)[f]=el.value; } });
+  if(draft[mkey]){ var who=(typeof roleLabel==='function'?roleLabel(S.user.role):S.user.role)||''; draft[mkey].by=who; draft[mkey].at=new Date().toISOString().slice(0,10); }
+  var full=Object.assign({}, e.assessment||{}); full[tplId]=draft;
+  try{
+    var res=await postToScript('saveEmployee',{actorId:S.user&&S.user.id,payload:_empFullPayload(e,full),rowNum:e.rowNum});
+    if(!res||!res.ok){ toast('❌ '+((res&&res.error)||'Помилка збереження')); return; }
+    try{localStorage.removeItem(CFG.CK);}catch(_){}
+    if(S._assessDraft)delete S._assessDraft[empId];
+    await fetchEmps(true);
+    var newId=-1; for(var i=0;i<S.emps.length;i++){ if(S.emps[i].rowNum===((res.employee&&res.employee.rowNum)||e.rowNum)){newId=i;break;} }
+    if(newId>=0){ S.empId=newId; renderEmpCard(); var tab=document.querySelector('[data-tab="tAssess"]'); if(tab)switchTab(tab); }
+    toast('✅ Оцінку збережено');
+  }catch(err){ toast('Помилка мережі: '+(err&&err.message||err)); }
+}
+
 function renderEmpCard(){
   console.log('[renderEmpCard] role=' + (S.user&&S.user.role) + ' build=' + AUTH_BUILD_VERSION);
   const e=S.emps[S.empId]; if(!e){nav('employees');return;}
@@ -2759,6 +2891,7 @@ function renderEmpCard(){
   const pct=Math.min(100,Math.round(vEarned>0?vUsed/vEarned*100:0));
   const su=sickUsed(e.key),sal=curSal(e.key),t=tenure(e);
   const rate=vacDailyRate(e);
+  const _tplId=(typeof resolveTemplateId==='function')?resolveTemplateId(e.pos):null;  // v6.48: шаблон оцінки за посадою
   // v6.44 — повнота картки: підсвічуємо незаповнені поля у вкладці Інфо.
   const _cmpl=act?empCompletion(e):{red:[],yel:[]};
   const _ml=lbl=>_cmpl.red.indexOf(lbl)>=0?'red':(_cmpl.yel.indexOf(lbl)>=0?'yellow':null);
@@ -2813,6 +2946,7 @@ function renderEmpCard(){
         <div class="tab" data-tab="tTabel" onclick="switchTab(this)">📅 Табель</div>
         <div class="tab" data-tab="tNote" onclick="switchTab(this)">📝 Нотатки${r.notes.length>0?` (${r.notes.length})`:''}</div>
         <div class="tab" data-tab="tLine" onclick="switchTab(this)">📜 Хронологія</div>
+        ${_tplId?`<div class="tab" data-tab="tAssess" onclick="switchTab(this)">👨‍🏫 Оцінка</div>`:''}
       </div>
       <div id="tInfo" class="tab-pane active">
         <div class="info-grid">
@@ -2873,6 +3007,7 @@ function renderEmpCard(){
       <div id="tTabel" class="tab-pane">${_safeTab(()=>buildEmpTabel(e),'Табель')}</div>
       <div id="tNote" class="tab-pane">${_safeTab(()=>buildNotes(e,r),'Нотатки')}</div>
       <div id="tLine" class="tab-pane">${_safeTab(()=>buildTimeline(e,r),'Хронологія')}</div>
+      ${_tplId?`<div id="tAssess" class="tab-pane">${_safeTab(()=>renderAssessmentBody(e.id),'Оцінка')}</div>`:''}
     </div>
   `);
 
