@@ -661,6 +661,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
       <div class="tab" onclick="switchTab(6)" data-permission="card-child-notes">📝 Нотатки</div>
       <div class="tab" onclick="switchTab(7)" data-permission="card-child-health">🩺 Здоров'я</div>
       <div class="tab" onclick="switchTab(8)" data-permission="card-child-banner">📄 Документи</div>
+      <div class="tab" onclick="switchTab(9)" data-permission="card-child-health">🌱 Розвиток</div>
     </div>
     <div class="modal-bd">
       <!-- v6.29: банер розірваного договору (показується якщо статус=terminated) -->
@@ -845,6 +846,8 @@ tbody tr.clickable:hover td{background:#f0f7ff}
       </div>
       <!-- Tab 7: Здоров'я -->
       <div class="tab-pane" id="tp7" data-permission="card-child-health"></div>
+      <!-- Tab 9: Розвиток (v6.47) -->
+      <div class="tab-pane" id="tp9" data-permission="card-child-health"></div>
       <!-- Tab 8: Документи -->
       <div class="tab-pane" id="tp8" data-permission="card-child-banner">
         <div class="section-hd">👶 ДИТИНА</div>
@@ -1580,7 +1583,8 @@ function mergeCRMFromCloud(rows){
       dadRnokpp:         row['РНОКПП тата']||'',
       createdAt: row['Створено']||'',
       updatedAt: row['Оновлено']||'',
-      health:    safeJSON(row['Здоров\'я (JSON)'],'{}')   // v6.46
+      health:    safeJSON(row['Здоров\'я (JSON)'],'{}'),  // v6.46
+      development: safeJSON(row['Розвиток (JSON)'],'{}')  // v6.47
     };
   });
   saveLocalCRM();
@@ -3099,6 +3103,7 @@ function switchTab(i){
   if(i===4) renderPayMonths();
   if(i===5) renderPayHistory();
   if(i===7) renderHealthTab();
+  if(i===9) renderDevelopmentTab();
 }
 
 function populateForm(id){
@@ -5332,6 +5337,110 @@ function saveHealthStatic(id){
   renderHealthTab();
 }
 
+// ─── v6.47: ОСОБИСТІСНО-СОЦІАЛЬНИЙ РОЗВИТОК (ті ж період-функції що v6.46) ─────
+var DEVELOPMENT_CRITERIA={
+ '1':{title:'Емоційний інтелект',items:[
+   {id:'1.1',text:'Виражає емоції більш нюансовано (здивування, гордість)'},
+   {id:'1.2',text:'Розпізнає почуття у знайомих ситуаціях'},
+   {id:'1.3',text:'Вчиться підтримувати товариша словами'},
+   {id:'1.4',text:'Використовує стратегії самозаспокоєння (дихає, відволікається)'},
+   {id:'1.5',text:'Може пояснити причину власних емоцій'}]},
+ '2':{title:'Соціальна адаптація',items:[
+   {id:'2.1',text:'Має друзів у групі'},{id:'2.2',text:'Бере активну участь у колективних іграх'},
+   {id:'2.3',text:'Дотримується встановлених правил'},{id:'2.4',text:'Може підкоритися груповому рішенню'},
+   {id:'2.5',text:'Уміє просити про допомогу'}]},
+ '3':{title:'Уміння вирішувати конфлікти',items:[
+   {id:'3.1',text:'Вміє аргументувати («я взяв першим»)'},{id:'3.2',text:'Використовує компроміс («ти зараз, я потім»)'},
+   {id:'3.3',text:'Може пробачати і миритися'},{id:'3.4',text:'Все рідше потребує втручання дорослого'},
+   {id:'3.5',text:'Вчиться домовлятися з кількома дітьми'}]},
+ '4':{title:'Самостійність у прийнятті рішень',items:[
+   {id:'4.1',text:'Вибирає заняття за власними інтересами'},{id:'4.2',text:'Може прийняти рішення в побутових ситуаціях'},
+   {id:'4.3',text:'Прагне довести справу до кінця'},{id:'4.4',text:'Демонструє ініціативність у грі'},
+   {id:'4.5',text:'Вчиться оцінювати свій вибір («правильно/неправильно»)'}]},
+ '5':{title:'Мовленнєвий розвиток',items:[
+   {id:'5.1',text:'Використовує складніші речення (5-6 слів)'},{id:'5.2',text:'Правильно узгоджує слова в роді та числі'},
+   {id:'5.3',text:'Переказує короткі тексти'},{id:'5.4',text:'Використовує прислівники («швидко», «вчора»)'},
+   {id:'5.5',text:'Утворює зменшувальні слова'}]},
+ '6':{title:'Сенсорно-пізнавальний розвиток',items:[
+   {id:'6.1',text:'Добре знає кольори та відтінки'},{id:'6.2',text:'Розпізнає фігури (трикутник, прямокутник)'},
+   {id:'6.3',text:'Встановлює послідовність подій'},{id:'6.4',text:'Може відгадати прості загадки'},
+   {id:'6.5',text:'Порівнює предмети за двома ознаками (великий і червоний)'}]},
+ '7':{title:'Ігрова діяльність',items:[
+   {id:'7.1',text:'Грає у групових сюжетно-рольових іграх'},{id:'7.2',text:'Дотримується правил у настільних іграх'},
+   {id:'7.3',text:'Ініціює нові ігрові сюжети'},{id:'7.4',text:'Може утримати роль до кінця гри'},
+   {id:'7.5',text:'Конструює складніші споруди'}]},
+ '8':{title:'Предметно-практична діяльність',items:[
+   {id:'8.1',text:'Малює прості сюжетні малюнки'},{id:'8.2',text:'Використовує фарби, комбінує техніки'},
+   {id:'8.3',text:'Ліпить предмети з деталей'},{id:'8.4',text:'Складає пазли 10-12 частин'},
+   {id:'8.5',text:'Вирізає за контуром'}]},
+ '9':{title:'Художньо-естетичний розвиток',items:[
+   {id:'9.1',text:'Виконує пісні цілком'},{id:'9.2',text:'Відрізняє жанри музики (марш, колискова)'},
+   {id:'9.3',text:'Відображає сюжет у малюнку'},{id:'9.4',text:'Бере участь у міні-виставах'},
+   {id:'9.5',text:'Має улюблені твори/казки'},{id:'9.6',text:'Радіє власним малюнкам, показує їх'}]}
+};
+function canEditDevelopment(){ return isHR()||isNurse(); }   // B1: director — лише перегляд
+function _devPeriodLabel(key){ var p=String(key).split('-'); var lbl=({'09':'Вересень','01':'Січень','06':'Червень'})[p[1]]||key; return lbl+' '+(p[0]||''); }
+function toggleDevSection(sec){ if(!S._devOpen)S._devOpen={}; S._devOpen[sec]=!S._devOpen[sec]; renderDevelopmentTab(); }
+function setDevCell(critId, periodKey, val){
+  var id=S.editId; if(!id) return; var c=getCRMCard(id);
+  if(!canEditDevelopment()) return;
+  if(!c.development||typeof c.development!=='object') c.development={};
+  if(!c.development[periodKey]) c.development[periodKey]={criteria:{}};
+  if(!c.development[periodKey].criteria) c.development[periodKey].criteria={};
+  var cr=c.development[periodKey].criteria;
+  if(cr[critId]===val) delete cr[critId]; else cr[critId]=val;   // toggle off if same
+  renderDevelopmentTab();
+}
+function renderDevelopmentTab(){
+  var id=S.editId; if(!id) return; var tp=document.getElementById('tp9'); if(!tp) return;
+  var c=getCRMCard(id); var dev=(c&&c.development)||{};
+  var canEdit=canEditDevelopment();
+  if(!S._devSY) S._devSY={}; var sy=(S._devSY[id]!=null)?S._devSY[id]:currentSchoolStartYear(); S._devSY[id]=sy;
+  if(!S._devOpen) S._devOpen={};
+  var keys=schoolYearKeys(sy), curKey=currentSchoolPeriod().key;
+  var progKey=keys.indexOf(curKey)>=0?curKey:keys[keys.length-1];
+  var progCrit=((dev[progKey]||{}).criteria)||{};
+  var filled=Object.keys(progCrit).filter(function(k){return progCrit[k]==='+'||progCrit[k]==='-';}).length;
+  var years=[]; for(var y=currentSchoolStartYear()+1;y>=currentSchoolStartYear()-3;y--) years.push(y);
+  var sel='<select onchange="S._devSY['+id+']=+this.value;renderDevelopmentTab()">'+years.map(function(y){return '<option value="'+y+'" '+(y===sy?'selected':'')+'>'+schoolYearLabel(y)+'</option>';}).join('')+'</select>';
+  var html='<div class="card" style="margin-bottom:12px"><div class="card-hd" style="gap:10px;flex-wrap:wrap"><h3>🌱 Особистісно-соціальний розвиток</h3>'
+    +'<div style="display:flex;gap:8px;align-items:center;margin-left:auto">Навч.рік: '+sel
+    +'<span class="badge bb">Оцінено '+filled+' з 46 · '+_devPeriodLabel(progKey)+'</span>'
+    +(canEdit?'<button class="btn btn-primary btn-sm" onclick="saveDevelopment('+escAttrJS(id)+')">💾 Зберегти</button>':'<span class="badge" style="background:#f0f4f8;color:var(--gray)">перегляд</span>')+'</div></div></div>';
+  Object.keys(DEVELOPMENT_CRITERIA).forEach(function(sec){
+    var S2=DEVELOPMENT_CRITERIA[sec]; var open=!!S._devOpen[sec];
+    var p=0,m=0; S2.items.forEach(function(it){var v=progCrit[it.id];if(v==='+')p++;else if(v==='-')m++;});
+    var badge=(p+m===0)?('0/'+S2.items.length):(p+' +'+(m?'  '+m+' −':''));
+    html+='<div class="card" style="margin-bottom:8px"><div class="card-hd" style="cursor:pointer" onclick="toggleDevSection(\''+sec+'\')"><h3>'+(open?'▾':'▸')+' '+sec+'. '+esc(S2.title)+'</h3><span class="badge '+(p+m===0?'':'bg')+'">'+badge+'</span></div>';
+    if(open){
+      html+='<div class="tbl-wrap"><table><thead><tr><th>Критерій</th>'+keys.map(function(k,i){var cur=k===curKey;return '<th style="'+(cur?'background:#e8f8f0;color:var(--green)':'')+'">'+SY_POINTS[i].label+(cur?' •':'')+'</th>';}).join('')+'</tr></thead><tbody>';
+      S2.items.forEach(function(it){
+        html+='<tr><td style="font-size:13px">'+it.id+' '+esc(it.text)+'</td>'+keys.map(function(k){
+          var v=((dev[k]||{}).criteria||{})[it.id]||'';
+          function btn(val,lbl,col){var on=v===val;return '<button '+(canEdit?'onclick="setDevCell(\''+it.id+'\',\''+k+'\',\''+val+'\')"':'disabled')+' style="border:1px solid '+(on?col:'var(--gray2)')+';background:'+(on?col:'#fff')+';color:'+(on?'#fff':col)+';border-radius:6px;width:28px;height:24px;font-weight:800;margin:1px;cursor:'+(canEdit?'pointer':'default')+'">'+lbl+'</button>';}
+          return '<td style="text-align:center;white-space:nowrap">'+btn('+','+','#27ae60')+btn('-','−','#e74c3c')+'</td>';
+        }).join('')+'</tr>';
+      });
+      html+='</tbody></table></div>';
+    }
+    html+='</div>';
+  });
+  var stamps=keys.map(function(k,i){var d=dev[k]||{};return (d.by||d.at)?(SY_POINTS[i].label+': '+esc(d.by||'')+(d.at?' · '+esc(d.at):'')):'';}).filter(Boolean).join('  ·  ');
+  if(stamps) html+='<div style="font-size:11px;color:var(--gray);margin:4px 2px">'+stamps+'</div>';
+  tp.innerHTML=html;
+}
+function saveDevelopment(id){
+  var c=getCRMCard(id);
+  if(!canEditDevelopment()){ showFloatMsg('🚫 Немає прав на редагування'); return; }
+  var who=S.user?(S.user.role==='nurse'?'Медсестра ('+(S.user.loc||'')+')':(S.user.role||'')):'';
+  var at=today();
+  if(c.development){ Object.keys(c.development).forEach(function(k){ var d=c.development[k]; if(d&&d.criteria&&Object.keys(d.criteria).length){ if(!d.by)d.by=who; d.at=at; } }); }
+  try{ saveLocalCRM(); }catch(e){}
+  apiPost({action:'saveClient', data:buildClientPayload(c,id)})
+    .then(function(){ showFloatMsg('✅ Розвиток збережено'); })
+    .catch(function(e){ showFloatMsg('⚠️ Помилка: '+(e&&e.message||e)); });
+}
+
 function renderHealthTabWithRecords(id, records){
   var tp7=document.getElementById('tp7'); if(!tp7) return;
 
@@ -5500,7 +5609,8 @@ function buildClientPayload(c, id){
     momDoc: c.momDoc||'', momRnokpp: c.momRnokpp||'',
     dadDoc: c.dadDoc||'', dadRnokpp: c.dadRnokpp||'',
     createdAt: c.createdAt||today(), updatedAt: today(),
-    health: c.health||{}   // v6.46 — щоб збереження картки не занулило здоров'я
+    health: c.health||{},   // v6.46 — щоб збереження картки не занулило здоров'я
+    development: c.development||{}   // v6.47
   };
 }
 
