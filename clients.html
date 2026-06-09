@@ -5399,7 +5399,11 @@ function renderDevelopmentTab(){
   if(!S._devSY) S._devSY={}; var sy=(S._devSY[id]!=null)?S._devSY[id]:currentSchoolStartYear(); S._devSY[id]=sy;
   if(!S._devOpen) S._devOpen={};
   var keys=schoolYearKeys(sy), curKey=currentSchoolPeriod().key;
-  var progKey=keys.indexOf(curKey)>=0?curKey:keys[keys.length-1];
+  // v6.47.2: лічильник/бейджі показують ЗАПОВНЕНИЙ період — поточний якщо в ньому є дані,
+  //   інакше останню заповнену точку обраного навч.року (щоб імпортований Вересень було видно).
+  var _hasData=function(k){ return Object.keys(((dev[k]||{}).criteria)||{}).length>0; };
+  var progKey=(keys.indexOf(curKey)>=0 && _hasData(curKey)) ? curKey
+            : (keys.filter(_hasData).pop() || (keys.indexOf(curKey)>=0?curKey:keys[keys.length-1]));
   var progCrit=((dev[progKey]||{}).criteria)||{};
   var filled=Object.keys(progCrit).filter(function(k){return progCrit[k]==='+'||progCrit[k]==='-';}).length;
   var years=[]; for(var y=currentSchoolStartYear()+1;y>=currentSchoolStartYear()-3;y--) years.push(y);
