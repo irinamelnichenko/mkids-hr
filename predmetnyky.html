@@ -2114,7 +2114,7 @@ function populateLocSel(){
     var loc = l && l.loc;
     if (loc && !seen[loc]){ seen[loc] = 1; allLocs.push(loc); }
   });
-  allLocs.sort(function(a, b){ return String(a).localeCompare(String(b), 'uk'); });
+  // v6.49.1: НЕ сортуємо алфавітно — S.locations вже у реєстровому (зонному) порядку getLocations.
 
   if (S.user.loc){
     // director / nurse / vyhovatel — locked to own loc
