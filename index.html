@@ -743,7 +743,7 @@ function _childId(name, group, loc){
 const S = {
   user: null, emps: [], recs: {},
   view: 'dashboard', empId: null,
-  q: '', f: { loc:'', pos:'', status:'', dir:'' },
+  q: '', f: { loc:'', pos:'', status:'працює', dir:'' },
   lastSync: null
 };
 
@@ -1270,7 +1270,7 @@ async function doLoginMain(){
       S.user.origLoc = S.user.loc;
       S.user.loc = '';
     }
-    S.f = {loc:'',pos:'',status:'',dir:'',typ:''};
+    S.f = {loc:'',pos:'',status:'працює',dir:'',typ:''};
     S.q = '';
     saveSession(S.user);
     document.getElementById('loginScreen').classList.add('hidden');
@@ -1307,7 +1307,7 @@ async function doLoginLocation(role, locFieldId, pwFieldId){
     }
     S.user = json.user;
     S.user.role = String(S.user.role || '').toLowerCase().trim();
-    S.f = {loc:'',pos:'',status:'',dir:'',typ:''};
+    S.f = {loc:'',pos:'',status:'працює',dir:'',typ:''};
     S.q = '';
     saveSession(S.user);
     // Вихователь не має доступу до Дашборду — одразу на Додаткові заняття.
@@ -1331,7 +1331,7 @@ async function doLogin() {
   if(selRole==='hr'){
     if(pw!==CFG.PW.hr){showErr('Невірний пароль');return;}
     S.user={role:'hr',loc:null};
-    S.f={loc:'',pos:'',status:'',dir:'',typ:''};
+    S.f={loc:'',pos:'',status:'працює',dir:'',typ:''};
     S.q='';
   } else {
     const loc=document.getElementById('loginLocation').value;
@@ -1339,7 +1339,7 @@ async function doLogin() {
     const expected=selRole==='nurse'?getNursePw(loc):getDirPw(loc);
     if(pw!==expected){showErr('Невірний пароль для цієї локації');return;}
     S.user={role:selRole,loc};
-    S.f={loc:'',pos:'',status:'',dir:'',typ:''};
+    S.f={loc:'',pos:'',status:'працює',dir:'',typ:''};
     S.q=''; // скидаємо пошук і всі фільтри при вході
   }
   saveSession(S.user);
@@ -1349,7 +1349,7 @@ async function doLogin() {
   dispatchHashView();
 }
 function showErr(m){const el=document.getElementById('loginError');el.textContent='⚠️ '+m;el.classList.remove('hidden');}
-function doLogout(){clearSession();S.user=null;S.view='dashboard';S.f={loc:'',pos:'',status:'',dir:'',typ:''};S.q='';document.getElementById('app').classList.add('hidden');document.getElementById('loginScreen').classList.remove('hidden');document.getElementById('loginPw').value='';}
+function doLogout(){clearSession();S.user=null;S.view='dashboard';S.f={loc:'',pos:'',status:'працює',dir:'',typ:''};S.q='';document.getElementById('app').classList.add('hidden');document.getElementById('loginScreen').classList.remove('hidden');document.getElementById('loginPw').value='';}
 // ── UNIFIED SIDEBAR — permissions, role-visibility, cross-page nav ────────
 const CURRENT_PAGE = 'index';
 
@@ -2716,7 +2716,7 @@ function renderEmps(){
     </table></div></div>
   `);
 }
-function clearF(){S.q='';S.f={loc:'',pos:'',status:'',dir:'',typ:''};renderEmps();}
+function clearF(){S.q='';S.f={loc:'',pos:'',status:'працює',dir:'',typ:''};renderEmps();}
 
 // Debounced search: при кожному натисненні клавіші re-render усієї таблиці
 // зкидає фокус з input. Дебаунс 200ms + ручне відновлення фокуса в кінець
@@ -5114,7 +5114,7 @@ window.addEventListener('DOMContentLoaded',async()=>{
     if (String(sessUser.role || '').toLowerCase() === 'vyhovatel'){
       window.location.href = 'activities.html'; return;
     }
-    S.f = {loc:'',pos:'',status:'',dir:'',typ:''};
+    S.f = {loc:'',pos:'',status:'працює',dir:'',typ:''};
     S.q = '';
     document.getElementById('loginScreen').classList.add('hidden');
     document.getElementById('app').classList.remove('hidden');
