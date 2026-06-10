@@ -2065,7 +2065,7 @@ async function initApp(){
 }
 async function refreshData(){showLoad();S._tabelCloudLoaded={};await fetchEmps(true);renderView();}
 function fillLoginLocs(){
-  const locs=[...new Set(S.emps.map(e=>e.loc).filter(Boolean))].sort();
+  const locs=sortLocationsByZone([...new Set(S.emps.map(e=>e.loc).filter(Boolean))]);  // v6.49.1
   const sel=document.getElementById('loginLocation');
   sel.innerHTML='<option value="">— Оберіть локацію —</option>'+locs.map(l=>`<option value="${l}">${l}</option>`).join('');
 }
@@ -2193,6 +2193,17 @@ function daysBetween(a,b){return Math.max(0,Math.round((new Date(b)-new Date(a))
 function initials(e){return ((e.last[0]||'')+(e.first[0]||'')).toUpperCase()||'?';}
 function empBday(e){let d=pd(e.bdate);if(d)return d;const day=parseInt(e.bday),mon=parseInt((String(e.bmon).match(/\d+/)||['0'])[0]);if(day&&mon)return new Date(new Date().getFullYear(),mon-1,day);return null;}
 function uniq(arr,key){return [...new Set(arr.map(e=>e[key]).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'uk'));}
+// v6.49.1 — ЄДИНИЙ порядок локацій = джерело правди логін-селектора (LOGIN_LOCATIONS,
+//   садочки→школи→управління→кухні). Невідомі локації (поза списком) — у КІНЕЦЬ,
+//   алфавітно. Жодна локація не губиться.
+var LOCATION_ORDER=(typeof LOGIN_LOCATIONS!=='undefined'&&Array.isArray(LOGIN_LOCATIONS))?LOGIN_LOCATIONS.map(function(l){return l.name;}):[];
+function sortLocationsByZone(locs){
+  var ord={}; LOCATION_ORDER.forEach(function(l,i){ord[l]=i;});
+  return (locs||[]).slice().sort(function(a,b){
+    var ia=(ord[a]!=null)?ord[a]:9999, ib=(ord[b]!=null)?ord[b]:9999;
+    return ia!==ib ? ia-ib : String(a).localeCompare(String(b),'uk');
+  });
+}
 
 // ── REGION (використовуємо поле Напрямок = dir) ──
 function getRegion(e){ return (e.dir||'').trim()||'Інше'; }
@@ -2359,7 +2370,7 @@ function _renderDashNow(){
   const caps=S._locCaps||{};
   const locAgg={};
   scopedKids.forEach(c=>{ if(!c.loc)return; if(!locAgg[c.loc])locAgg[c.loc]={kids:0,groups:new Set()}; locAgg[c.loc].kids++; if(c.group)locAgg[c.loc].groups.add(c.group); });
-  const locList=Object.keys(locAgg).sort((a,b)=>locAgg[b].kids-locAgg[a].kids);
+  const locList=sortLocationsByZone(Object.keys(locAgg));  // v6.49.1: зонний порядок (було за к-стю дітей)
   const totalKids=scopedKids.length, totalLocs=locList.length;
   const totalGroups=locList.reduce((s,l)=>s+locAgg[l].groups.size,0);
   // ── плинність (S.emps) ──
@@ -2444,7 +2455,7 @@ function _dashAllLocs(){
   var s=new Set();
   (S.emps||[]).forEach(e=>{ if(e.loc) s.add(e.loc); });
   if(S.crm) Object.values(S.crm).forEach(c=>{ if(c.loc) s.add(c.loc); });
-  return [...s].sort((a,b)=>a.localeCompare(b,'uk'));
+  return sortLocationsByZone([...s]);  // v6.49.1: зонний порядок
 }
 function _locTeam(loc){
   const es=(S.emps||[]).filter(e=>e.loc===loc&&isActive(e));
@@ -2633,7 +2644,7 @@ function renderEmps(){
   const emps=visible();
   const isHR=isNetworkRole(S.user.role);
   const isDir=S.user.role==='director', isNurse=S.user.role==='nurse';
-  const locs=uniq(emps,'loc'),poss=uniq(emps,'pos'),dirs=uniq(emps,'dir'),stats=uniq(emps,'stat');
+  const locs=sortLocationsByZone(uniq(emps,'loc')),poss=uniq(emps,'pos'),dirs=uniq(emps,'dir'),stats=uniq(emps,'stat');  // v6.49.1: зонний порядок локацій
   const typs=[...new Set(emps.map(e=>normType(e.typ)).filter(Boolean))].sort();
   let f=emps;
   if(S.q){const q=S.q.toLowerCase();f=f.filter(e=>fullName(e).toLowerCase().includes(q)||e.pos.toLowerCase().includes(q)||e.loc.toLowerCase().includes(q)||e.phone.includes(q)||e.email.toLowerCase().includes(q));}
@@ -3436,7 +3447,7 @@ function renderAnalytics(){
   const locsForType=(analyticsTypFilter
     ? allActive.filter(e=>normType(e.typ)===analyticsTypFilter)
     : allActive).map(e=>normEmpLoc(e)).filter(Boolean);
-  const locsForTypeSorted=[...new Set(locsForType)].sort();
+  const locsForTypeSorted=sortLocationsByZone([...new Set(locsForType)]);  // v6.49.1: зонний порядок
   // Застосовуємо фільтри
   let emps=analyticsTypFilter?allActive.filter(e=>normType(e.typ)===analyticsTypFilter):allActive;
   // Для не-HR: якщо немає явного фільтру локації — автоматично беремо їх локацію
@@ -4708,7 +4719,7 @@ function renderTabel(){
   const allTyps=isHR?[...new Set(S.emps.filter(e=>isActive(e)&&!isTeacherTypeForTabel(e)).map(e=>normType(e.typ)).filter(Boolean))].sort():null;
   const curTyp=isHR?(tabelTypFilter||''):'';
   const locsForTyp=isHR
-    ?[...new Set(S.emps.filter(e=>isActive(e)&&!isTeacherTypeForTabel(e)&&(!curTyp||normType(e.typ)===curTyp)).map(e=>e.loc).filter(Boolean))].sort()
+    ?sortLocationsByZone([...new Set(S.emps.filter(e=>isActive(e)&&!isTeacherTypeForTabel(e)&&(!curTyp||normType(e.typ)===curTyp)).map(e=>e.loc).filter(Boolean))])  // v6.49.1
     :[S.user.loc||''];
   if(isHR&&(!S.f.tabelLoc||!locsForTyp.includes(S.f.tabelLoc)))S.f.tabelLoc=locsForTyp[0]||'';
   const activeLoc=isHR?S.f.tabelLoc:(S.user.loc||'');
