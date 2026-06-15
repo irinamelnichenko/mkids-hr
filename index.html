@@ -509,6 +509,10 @@ tr.emp-inc-green>td:first-child{border-left:4px solid transparent}
            data-v="tabel" onclick="goPerm('timesheet_staff')">
         <span class="ni">📋</span> Табель співробітників
       </div>
+      <div class="nav-item" id="navFillControl" data-parent="hr" style="display:none"
+           onclick="window.location.href='control.html'">
+        <span class="ni">📋</span> Контроль заповнення
+      </div>
       <div class="nav-item" data-permission="vacations" data-parent="hr" data-perm-page="index"
            data-v="vacations" id="navVacations" onclick="goPerm('vacations')">
         <span class="ni">🏖️</span> Відпустки
@@ -1968,6 +1972,9 @@ function applyRoleVisibility(){
     if (TASKS_ALLOWED.indexOf(role) === -1)
       document.querySelectorAll('[data-permission="tasks"]').forEach(el => { el.style.display='none'; });
   })();
+  // v6.51: «Контроль заповнення» — лише CFO + менеджмент (мережеві ролі).
+  var _fc = document.getElementById('navFillControl');
+  if (_fc) _fc.style.display = (typeof isNetworkRole === 'function' && isNetworkRole(role)) ? '' : 'none';
   document.querySelectorAll('[data-section]').forEach(section => {
     const sectionName = section.dataset.section;
     const items = document.querySelectorAll('[data-permission][data-parent="' + sectionName + '"]');

@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>m.kids — Контроль заповнення</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--green:#27ae60;--green2:#2ecc71;--red:#c0392b;--red2:#e74c3c;--yellow:#f1c40f;
+  --orange:#e67e22;--blue:#2980b9;--dark:#1a2332;--dark2:#2c3e50;--gray:#7f8c8d;
+  --gray2:#bdc3c7;--bg:#f0f4f8;--white:#fff;--r:10px}
+body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:var(--bg);
+  color:var(--dark2);font-size:14px;line-height:1.5;min-height:100vh}
+button{font-family:inherit;cursor:pointer}
+.wrap{max-width:1180px;margin:0 auto;padding:24px 20px 60px}
+.hd{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:18px}
+.hd h1{font-size:24px;font-weight:900;color:var(--dark);flex:1;min-width:240px}
+.hd-meta{font-size:12px;color:var(--gray);margin-top:3px;font-weight:500}
+.btn{padding:10px 16px;border:none;border-radius:var(--r);font-size:14px;font-weight:600;
+  display:inline-flex;align-items:center;gap:6px;background:var(--green);color:#fff}
+.btn-ghost{background:#fff;color:var(--dark2);border:1.5px solid var(--gray2)}
+.filters{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:16px}
+.fg{display:flex;flex-direction:column;gap:3px}
+.fg label{font-size:11px;font-weight:700;color:var(--gray);text-transform:uppercase;letter-spacing:.5px}
+.fg input{padding:9px 12px;border:1.5px solid var(--gray2);border-radius:8px;font-size:14px;
+  font-weight:600;background:#fff;color:var(--dark2);outline:none}
+.chips{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px}
+.chip{background:#fff;border-radius:12px;padding:10px 16px;box-shadow:0 1px 3px rgba(0,0,0,.05);
+  font-size:13px;font-weight:700;display:flex;align-items:center;gap:8px}
+.chip b{font-size:18px}
+.chip.green{color:var(--green)}.chip.red{color:var(--red)}.chip.gray{color:var(--gray)}
+.banner{background:#eef3f8;border:1px solid #cdd9e5;color:var(--dark2);padding:12px 16px;
+  border-radius:var(--r);margin-bottom:16px;font-weight:600}
+.banner.nonwork{background:#fff7e6;border-color:#f5d99b;color:#9a6a00}
+.loc{background:var(--white);border-radius:14px;padding:0;box-shadow:0 1px 3px rgba(0,0,0,.05);
+  margin-bottom:14px;overflow:hidden}
+.loc-h{display:flex;align-items:center;gap:10px;padding:13px 16px;background:#f7fafc;
+  border-bottom:1px solid #eef2f6;font-weight:800;color:var(--dark);font-size:15px}
+.loc-h .ts{margin-left:auto;font-size:12px;font-weight:700;display:inline-flex;align-items:center;gap:6px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;padding:9px 16px;font-size:10px;text-transform:uppercase;letter-spacing:.5px;
+  color:var(--gray);border-bottom:1px solid #eef2f6}
+td{padding:9px 16px;border-bottom:1px solid #f3f6f9;vertical-align:middle}
+tr:last-child td{border-bottom:none}
+td.num,th.num{text-align:right;white-space:nowrap}
+.stat{display:inline-flex;align-items:center;gap:5px;font-weight:700;white-space:nowrap}
+.stat.green{color:var(--green)}.stat.yellow{color:var(--orange)}.stat.red{color:var(--red)}.stat.gray{color:var(--gray)}
+.muted{color:var(--gray)}
+.dim{opacity:.5}
+.loading{display:flex;align-items:center;justify-content:center;padding:50px;
+  flex-direction:column;gap:14px;color:var(--gray)}
+.spinner{width:32px;height:32px;border:3px solid #e8ecf0;border-top-color:var(--green);
+  border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.hidden{display:none!important}
+.empty{text-align:center;padding:34px;color:var(--gray)}
+.err{background:#fdf2f2;border:1px solid #fca5a5;color:var(--red);padding:14px 18px;
+  border-radius:var(--r);margin-bottom:16px;font-weight:600}
+@media(max-width:640px){.hd h1{font-size:20px} th:nth-child(4),td:nth-child(4){display:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hd">
+    <div style="flex:1;min-width:240px">
+      <h1>📋 Контроль заповнення</h1>
+      <div class="hd-meta" id="meta">завантаження…</div>
+    </div>
+    <button class="btn btn-ghost" onclick="window.location.href='index.html'">← На дашборд</button>
+  </div>
+
+  <div id="errBox" class="err hidden"></div>
+
+  <div class="filters">
+    <div class="fg"><label>Дата</label><input type="date" id="fDate"></div>
+    <button class="btn" onclick="loadFill()">🔄 Оновити</button>
+  </div>
+
+  <div id="bannerBox"></div>
+  <div id="chips" class="chips hidden"></div>
+  <div id="body"><div class="loading"><div class="spinner"></div><div>Завантаження…</div></div></div>
+</div>
+
+<script>
+'use strict';
+var CFG = { SCRIPT_URL: 'https://script.google.com/macros/s/AKfycbyTSUVlaN4-PpXe47zCSmhVs0Qxy1FDXG_XsB4zcKNpqBxdhDtS9ibM4YFGkGjmPQDFWQ/exec' };
+function $(id){ return document.getElementById(id); }
+function escapeHtml(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+  .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+function _todayISO(){ var d=new Date(); return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2); }
+
+// ── session (shared) ──
+var SESSION_KEY='mkids_session', SESSION_TTL_MS=12*3600*1000;
+var NETWORK_ROLES=['hr','cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo'];
+function isNetworkRole(role){ return NETWORK_ROLES.indexOf(String(role||'').toLowerCase())!==-1; }
+function readSession(){
+  try{
+    var s=JSON.parse(localStorage.getItem(SESSION_KEY)||'null');
+    if(!s||!s.user||!s.t) return null;
+    if(Date.now()-s.t>SESSION_TTL_MS) return null;
+    s.user.role=String(s.user.role||'').toLowerCase().trim();
+    return s.user;
+  }catch(e){ return null; }
+}
+
+var ICON={green:'🟢',yellow:'🟡',red:'🔴',gray:'⚪'};
+function statCell(st, txt, dim){
+  return '<span class="stat '+(dim?'gray':st)+'">'+ICON[dim?'gray':st]+' '+escapeHtml(txt)+'</span>';
+}
+
+function render(j){
+  var nw = !!j.nonWorking;
+  // banner
+  $('bannerBox').innerHTML = nw
+    ? '<div class="banner nonwork">⚪ '+escapeHtml(j.nonWorkingReason||'Вихідний')+' — заповнення не очікується.</div>'
+    : '';
+  // chips
+  var s=j.summary||{};
+  $('chips').classList.remove('hidden');
+  $('chips').innerHTML =
+    '<div class="chip green"><b>'+(s.groupsGreen||0)+'</b>/'+(s.groupsTotal||0)+' груп заповнено</div>'+
+    '<div class="chip green"><b>'+(s.timesheetGreen||0)+'</b>/'+(s.timesheetTotal||0)+' табелів заповнено</div>'+
+    '<div class="chip '+(nw?'gray':'red')+'"><b>'+(nw?'—':(s.red||0))+'</b> 🔴 не заповнено</div>';
+
+  var locs=j.locations||[];
+  if(!locs.length){ $('body').innerHTML='<div class="empty">Немає локацій з даними.</div>'; return; }
+
+  var html='';
+  locs.forEach(function(L){
+    var ts=L.timesheet||{};
+    var tsTxt=(ts.marked||0)+'/'+(ts.expected||0)+(ts.by?(' · '+escapeHtml(ts.by)):'')+(ts.at?(' · '+escapeHtml(ts.at)):'');
+    html+='<div class="loc'+(nw?' dim':'')+'">'+
+      '<div class="loc-h">🏢 '+escapeHtml(L.loc)+
+        '<span class="ts">Табель: '+statCell(ts.status,(ts.marked||0)+'/'+(ts.expected||0),nw)+
+          (ts.by?'<span class="muted"> · '+escapeHtml(ts.by)+'</span>':'')+
+          (ts.at?'<span class="muted"> · '+escapeHtml(ts.at)+'</span>':'')+'</span>'+
+      '</div>';
+    var groups=L.groups||[];
+    if(groups.length){
+      html+='<table><thead><tr><th>Група</th><th>Вихователь / хто відмітив</th>'+
+        '<th>Статус</th><th class="num">Відмічено</th><th>Час</th></tr></thead><tbody>';
+      groups.forEach(function(g){
+        html+='<tr>'+
+          '<td><b>'+escapeHtml(g.group)+'</b></td>'+
+          '<td class="muted">'+(g.teacher?escapeHtml(g.teacher):'<span class="muted">—</span>')+'</td>'+
+          '<td>'+statCell(g.status,({green:'заповнено',yellow:'частково',red:'не заповнено'}[g.status]||g.status),nw)+'</td>'+
+          '<td class="num">'+(g.marked||0)+'/'+(g.expected||0)+'</td>'+
+          '<td class="muted">'+(g.at?escapeHtml(g.at):'—')+'</td>'+
+        '</tr>';
+      });
+      html+='</tbody></table>';
+    } else {
+      html+='<div class="empty" style="padding:14px">Немає груп з активними дітьми.</div>';
+    }
+    html+='</div>';
+  });
+  $('body').innerHTML=html;
+}
+
+async function loadFill(){
+  var date=$('fDate').value || _todayISO();
+  $('meta').textContent='Дата: '+date;
+  $('chips').classList.add('hidden');
+  $('bannerBox').innerHTML='';
+  $('body').innerHTML='<div class="loading"><div class="spinner"></div><div>Завантаження…</div></div>';
+  try{
+    var url=CFG.SCRIPT_URL+'?action=getFillStatus&date='+encodeURIComponent(date);
+    var r=await fetch(url,{redirect:'follow'});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    var j=await r.json();
+    if(!j.ok) throw new Error(j.error||'failed');
+    render(j);
+  }catch(e){
+    $('body').innerHTML='<div class="empty">❌ Помилка: '+escapeHtml(String(e&&e.message||e))+'</div>';
+  }
+}
+
+(function boot(){
+  var u=readSession();
+  if(!u){ window.location.href='index.html'; return; }
+  // доступ: лише CFO + менеджмент (мережеві ролі), НЕ директор/медсестра/вихователь
+  if(!isNetworkRole(u.role)){
+    $('errBox').textContent='Доступ лише для CFO та менеджменту.';
+    $('errBox').classList.remove('hidden');
+    $('body').innerHTML=''; $('chips').classList.add('hidden');
+    $('meta').textContent='';
+    return;
+  }
+  $('fDate').value=_todayISO();
+  loadFill();
+})();
+</script>
+</body>
+</html>
