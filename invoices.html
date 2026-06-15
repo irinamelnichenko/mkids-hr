@@ -673,7 +673,8 @@ function hasPerm(p){
 }
 
 // ═══════════════════════════════════════════════════════════════
-// v6.26 Етап 1B — UI-список рахунків (без генерації PDF — 1C).
+// v6.26 Етап 1B — UI-список рахунків.
+// v6.50 — PDF (download) + Email (надсилання) + масова розсилка з логом.
 // ═══════════════════════════════════════════════════════════════
 var INV = {
   payMonth: 0, payYear: 0,
@@ -864,11 +865,11 @@ function renderInvoiceList(){
         '<td data-label="Контакти"><span class="inv-contact-ind">' + pIcon + eIcon + '</span></td>' +
         '<td data-label="Дії"><div class="inv-actions">' +
           '<button class="inv-act-btn" title="Завантажити PDF"' + (hasAnySum ? '' : ' disabled') +
-            ' onclick="invStubAction(\'pdf\',\'' + idEsc + '\')">📄</button>' +
+            ' onclick="invDownloadPdf(\'' + idEsc + '\', this)">📄</button>' +
           '<button class="inv-act-btn" title="Надіслати Email"' + (canEmail ? '' : ' disabled') +
-            ' onclick="invStubAction(\'email\',\'' + idEsc + '\')">📧</button>' +
+            ' onclick="invSendEmail(\'' + idEsc + '\', this)">📧</button>' +
           '<button class="inv-act-btn" title="Надіслати Viber"' + (canViber ? '' : ' disabled') +
-            ' onclick="invStubAction(\'viber\',\'' + idEsc + '\')">💬</button>' +
+            ' onclick="invViberStub(\'' + idEsc + '\')">💬</button>' +
         '</div></td>' +
       '</tr>';
     });
@@ -877,12 +878,141 @@ function renderInvoiceList(){
   $('invListWrap').innerHTML = html;
 }
 
-function invStubAction(kind, childId){
-  var labels = {pdf:'📄 PDF', email:'📧 Email', viber:'💬 Viber'};
-  showToast('🚧 ' + (labels[kind] || kind) + ' — буде в Етапі 1C (childId=' + childId + ')', 'info', 3000);
+// ═══════════════════════════════════════════════════════════════
+// v6.50 — РЕАЛЬНІ дії: PDF (download) + Email (надсилання) + масова.
+// Viber лишається стабом (Крок C).
+// ═══════════════════════════════════════════════════════════════
+async function invApi(payload){
+  var r = await fetch(CFG.SCRIPT_URL, {
+    method: 'POST', redirect: 'follow',
+    headers: {'Content-Type': 'text/plain;charset=utf-8'},   // без CORS preflight
+    body: JSON.stringify(payload)
+  });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  var j = await r.json();
+  if (!j.ok) throw new Error(j.error || 'failed');
+  return j;
 }
-function invBulkSend(){
-  showToast('🚧 Масова відправка — буде в Етапі 1C', 'info', 3000);
+function _invFindChild(id){
+  if (!INV.data || !INV.data.children) return null;
+  id = String(id);
+  for (var i = 0; i < INV.data.children.length; i++){
+    if (String(INV.data.children[i].id) === id) return INV.data.children[i];
+  }
+  return null;
+}
+function _b64ToBlob(b64, mime){
+  var bin = atob(b64), len = bin.length, bytes = new Uint8Array(len);
+  for (var i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], {type: mime || 'application/octet-stream'});
+}
+function _downloadBlob(blob, filename){
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url; a.download = filename || 'file';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(function(){ URL.revokeObjectURL(url); }, 4000);
+}
+function _invBusy(btn, on){
+  if (!btn) return;
+  if (on){ btn.dataset._html = btn.innerHTML; btn.disabled = true; btn.innerHTML = '⏳'; }
+  else { btn.disabled = false; if (btn.dataset._html != null){ btn.innerHTML = btn.dataset._html; delete btn.dataset._html; } }
+}
+function _invTypesFor(c){
+  var t = [];
+  if ((c.paymentSum || 0) > 0) t.push('studies');
+  if ((c.extrasSum  || 0) > 0) t.push('extras');
+  return t;
+}
+function _invActor(){ return (S.user && S.user.name) || roleLabel(S.user && S.user.role) || 'system'; }
+
+// 📄 — формує PDF по кожній наявній сумі (навчання+додаткові = 2 файли, різні ЮО).
+async function invDownloadPdf(childId, btn){
+  var c = _invFindChild(childId);
+  if (!c){ showToast('❌ Дитину не знайдено', 'err'); return; }
+  var types = _invTypesFor(c);
+  if (!types.length){ showToast('❌ Немає сум для рахунку', 'err'); return; }
+  _invBusy(btn, true);
+  var done = 0, errs = [];
+  try {
+    for (var i = 0; i < types.length; i++){
+      var type = types[i];
+      var month = type === 'studies' ? INV.payMonth : INV.extMonth;
+      var year  = type === 'studies' ? INV.payYear  : INV.extYear;
+      try {
+        var j = await invApi({
+          action: 'generateInvoicePDF',
+          childName: c.name, loc: CFG.LOC, type: type,
+          month: month, year: year, invoiceDate: INV.invoiceDate
+        });
+        _downloadBlob(_b64ToBlob(j.pdfBase64, 'application/pdf'), j.pdfFilename);
+        done++;
+      } catch(e){
+        errs.push((type === 'studies' ? 'Навчання' : 'Додаткові') + ': ' + (e.message || e));
+      }
+    }
+  } finally { _invBusy(btn, false); }
+  if (done && !errs.length) showToast('✅ Готово (' + done + ' PDF)', 'ok');
+  else if (done) showToast('⚠️ ' + done + ' PDF, помилки: ' + errs.join('; '), 'info', 5000);
+  else showToast('❌ ' + errs.join('; '), 'err', 5000);
+}
+
+// 📧 — 1 лист підписанту з усіма PDF (різні ЮО) у вкладенні.
+async function invSendEmail(childId, btn){
+  var c = _invFindChild(childId);
+  if (!c){ showToast('❌ Дитину не знайдено', 'err'); return; }
+  if (!c.signerEmail){ showToast('❌ У підписанта немає email', 'err'); return; }
+  var types = _invTypesFor(c);
+  if (!types.length){ showToast('❌ Немає сум для рахунку', 'err'); return; }
+  if (!confirm('Надіслати рахунок (' + types.length + ' PDF) батькам ' + c.signerEmail + '?')) return;
+  _invBusy(btn, true);
+  try {
+    var j = await invApi({
+      action: 'sendInvoiceEmail',
+      childName: c.name, loc: CFG.LOC, invoiceDate: INV.invoiceDate, actorName: _invActor(),
+      payMonth: INV.payMonth, payYear: INV.payYear, extMonth: INV.extMonth, extYear: INV.extYear,
+      sendStudies: (c.paymentSum || 0) > 0, sendExtras: (c.extrasSum || 0) > 0
+    });
+    showToast('✅ Надіслано (' + (j.sent || types.length) + ' рах.) → ' + c.signerEmail, 'ok', 4000);
+  } catch(e){
+    showToast('❌ ' + (e.message || e), 'err', 5000);
+  } finally { _invBusy(btn, false); }
+}
+
+function invViberStub(childId){
+  showToast('💬 Viber — у наступному кроці (Крок C)', 'info', 3000);
+}
+
+// 📬 — масова: послідовно по дітях з email і сумою > 0, з прогрес-тостом.
+async function invBulkSend(){
+  if (!INV.data || !INV.data.children){ showToast('Немає даних', 'err'); return; }
+  var withSum = INV.data.children.filter(function(c){
+    return ((c.paymentSum || 0) > 0) || ((c.extrasSum || 0) > 0);
+  });
+  var targets    = withSum.filter(function(c){ return !!c.signerEmail; });
+  var noEmailCnt = withSum.length - targets.length;
+  if (!targets.length){ showToast('Немає кому надсилати (нема email або сум)', 'info', 4000); return; }
+  if (!confirm('Надіслати рахунки ' + targets.length + ' батькам?' +
+      (noEmailCnt ? ('\n(' + noEmailCnt + ' без email — пропустимо)') : ''))) return;
+
+  var bulkBtn = $('invBulkBtn');
+  if (bulkBtn) bulkBtn.disabled = true;
+  var sent = 0, failed = 0;
+  for (var i = 0; i < targets.length; i++){
+    var c = targets[i];
+    showToast('📤 Надсилаємо ' + (i + 1) + ' з ' + targets.length + '… (' + c.name + ')', 'info', 60000);
+    try {
+      await invApi({
+        action: 'sendInvoiceEmail',
+        childName: c.name, loc: CFG.LOC, invoiceDate: INV.invoiceDate, actorName: _invActor(),
+        payMonth: INV.payMonth, payYear: INV.payYear, extMonth: INV.extMonth, extYear: INV.extYear,
+        sendStudies: (c.paymentSum || 0) > 0, sendExtras: (c.extrasSum || 0) > 0
+      });
+      sent++;
+    } catch(e){ failed++; }
+  }
+  if (bulkBtn) bulkBtn.disabled = false;
+  showToast('✅ Надіслано ' + sent + ' / помилок ' + failed + ' / без email ' + noEmailCnt, 'ok', 6000);
 }
 
 function showFatalError(msg){
