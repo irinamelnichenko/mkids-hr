@@ -155,6 +155,14 @@ select,input{font-family:inherit}
     min-width: 44px;
   }
 }
+/* v6.50.3: бейджі статусу розсилки */
+.inv-badges{display:inline-flex;gap:5px;align-items:center;flex-wrap:wrap}
+.inv-badge{display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:700;
+  padding:3px 7px;border-radius:20px;line-height:1.2;cursor:default;white-space:nowrap}
+.inv-badge.b-green{background:#e6f7ec;color:#1e8e4e}
+.inv-badge.b-red{background:#fdecea;color:#c0392b}
+.inv-badge.b-gray{background:#eef2f6;color:#9aa6b2}
+.inv-badge.b-yellow{background:#fff7e0;color:#b8860b}
 </style>
 </head>
 <body>
@@ -258,6 +266,10 @@ select,input{font-family:inherit}
       <div class="nav-item active" data-permission="invoices" data-parent="finance" data-perm-page="invoices"
            onclick="window.location.href='invoices.html'">
         <span class="ni">📧</span> Рахунки
+      </div>
+      <div class="nav-item" id="navInvReport" data-parent="finance" style="display:none"
+           onclick="window.location.href='invoice_report.html'">
+        <span class="ni">📊</span> Звіт розсилок
       </div>
       <div class="nav-item" data-permission="predmetnyky" data-parent="finance" data-perm-page="predmetnyky"
            onclick="window.location.href='predmetnyky.html'">
@@ -676,6 +688,7 @@ function hasPerm(p){
 // v6.26 Етап 1B — UI-список рахунків.
 // v6.50 — PDF (download) + Email (надсилання) + масова розсилка з логом.
 // v6.50.2 — Viber Deep Link (директор шле з робочого номера) + fallback TG/SMS.
+// v6.50.3 — бейджі статусу розсилки (📧/💬) + авто-лог Viber + CFO-звіт (окрема стор.).
 // ═══════════════════════════════════════════════════════════════
 var INV = {
   payMonth: 0, payYear: 0,
@@ -684,7 +697,8 @@ var INV = {
   data: null,
   loading: false,
   lastLoc: '',
-  searchQ: ''
+  searchQ: '',
+  sendStatus: null   // v6.50.3: {byChild:{ПІБ:{email:{status,ts},viber:{ts}}}, ...}
 };
 var INV_MONTHS = ['Січень','Лютий','Березень','Квітень','Травень','Червень',
                   'Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
@@ -760,7 +774,9 @@ async function loadInvoiceData(){
     var json = await r.json();
     if (!json.ok) throw new Error(json.error || 'failed');
     INV.data = json;
+    INV.sendStatus = null;
     renderInvoiceList();
+    loadSendStatus();           // v6.50.3: підвантажує бейджі асинхронно
   } catch(e){
     INV.data = null;
     $('invListWrap').innerHTML = '<div class="inv-empty">❌ Помилка завантаження: ' +
@@ -825,13 +841,14 @@ function renderInvoiceList(){
     '<th>Додаткові (' + INV_MONTHS[INV.extMonth-1] + ' ' + INV.extYear + ')</th>' +
     '<th>Підписант</th>' +
     '<th>Контакти</th>' +
+    '<th>Статус розсилки</th>' +
     '<th>Дії</th>' +
     '</tr></thead><tbody>';
 
   groupOrder.forEach(function(g){
     var groupKids = byGroup[g];
     groupKids.sort(function(a,b){ return a.name.localeCompare(b.name, 'uk'); });
-    html += '<tr class="inv-group-header"><td colspan="6">' +
+    html += '<tr class="inv-group-header"><td colspan="7">' +
       '👶 ' + escapeHtml(g) +
       '<span class="inv-group-count">· ' + groupKids.length +
         (groupKids.length === 1 ? ' дитина' : (groupKids.length < 5 ? ' дітей' : ' дітей')) +
@@ -864,6 +881,7 @@ function renderInvoiceList(){
         '<td data-label="Підписант">' + sName +
           ' <span class="inv-signer-role">' + sRole + '</span></td>' +
         '<td data-label="Контакти"><span class="inv-contact-ind">' + pIcon + eIcon + '</span></td>' +
+        '<td data-label="Статус">' + _invBadge(c) + '</td>' +
         '<td data-label="Дії"><div class="inv-actions">' +
           '<button class="inv-act-btn" title="Завантажити PDF"' + (hasAnySum ? '' : ' disabled') +
             ' onclick="invDownloadPdf(\'' + idEsc + '\', this)">📄</button>' +
@@ -927,6 +945,40 @@ function _invTypesFor(c){
 }
 function _invActor(){ return (S.user && S.user.name) || roleLabel(S.user && S.user.role) || 'system'; }
 
+// v6.50.3: бейджі статусу (📧 email + 💬 viber). hover → дата/час.
+function _invBadge(c){
+  var st = (INV.sendStatus && INV.sendStatus.byChild && INV.sendStatus.byChild[c.name]) || {};
+  var eCls, eTxt, eTitle = '';
+  if (!c.signerEmail){ eCls = 'b-yellow'; eTxt = 'немає email'; }
+  else if (st.email && st.email.status === 'надіслано'){ eCls = 'b-green'; eTxt = 'надіслано'; eTitle = st.email.ts || ''; }
+  else if (st.email && st.email.status === 'помилка'){   eCls = 'b-red';   eTxt = 'помилка';   eTitle = st.email.ts || ''; }
+  else { eCls = 'b-gray'; eTxt = 'не надіслано'; }
+  var vCls, vTxt, vTitle = '';
+  if (st.viber){ vCls = 'b-green'; vTxt = 'надіслано'; vTitle = st.viber.ts || ''; }
+  else { vCls = 'b-gray'; vTxt = 'не надіслано'; }
+  return '<span class="inv-badges">' +
+    '<span class="inv-badge ' + eCls + '"' + (eTitle ? (' title="Email: ' + escapeHtml(eTitle) + '"') : '') + '>📧 ' + eTxt + '</span>' +
+    '<span class="inv-badge ' + vCls + '"' + (vTitle ? (' title="Viber: ' + escapeHtml(vTitle) + '"') : '') + '>💬 ' + vTxt + '</span>' +
+  '</span>';
+}
+// Підвантажує статуси розсилки для поточної локації (не блокує рендер таблиці).
+async function loadSendStatus(){
+  try {
+    var url = CFG.SCRIPT_URL + '?action=getInvoiceStatusReport&loc=' + encodeURIComponent(CFG.LOC);
+    var r = await fetch(url, {redirect: 'follow'});
+    if (!r.ok) return;
+    var j = await r.json();
+    if (j && j.ok){ INV.sendStatus = j; renderInvoiceList(); }
+  } catch(e){ /* бейджі лишаться сірими */ }
+}
+function _invMarkLocal(name, channel, payload){
+  if (!INV.sendStatus) INV.sendStatus = {byChild:{}};
+  if (!INV.sendStatus.byChild) INV.sendStatus.byChild = {};
+  var rec = INV.sendStatus.byChild[name] = INV.sendStatus.byChild[name] || {};
+  rec[channel] = payload;
+  renderInvoiceList();
+}
+
 // 📄 — формує PDF по кожній наявній сумі (навчання+додаткові = 2 файли, різні ЮО).
 async function invDownloadPdf(childId, btn){
   var c = _invFindChild(childId);
@@ -975,8 +1027,10 @@ async function invSendEmail(childId, btn){
       sendStudies: (c.paymentSum || 0) > 0, sendExtras: (c.extrasSum || 0) > 0
     });
     showToast('✅ Надіслано (' + (j.sent || types.length) + ' рах.) → ' + c.signerEmail, 'ok', 4000);
+    _invMarkLocal(c.name, 'email', {status: 'надіслано', ts: 'щойно'});   // v6.50.3
   } catch(e){
     showToast('❌ ' + (e.message || e), 'err', 5000);
+    _invMarkLocal(c.name, 'email', {status: 'помилка', ts: 'щойно'});     // v6.50.3
   } finally { _invBusy(btn, false); }
 }
 
@@ -1030,6 +1084,11 @@ function invSendViber(childId){
   showToast('💬 Відкриваємо Viber → ' + c.signerName, 'info', 2500);
   window.location.href = viberUrl;
 
+  // v6.50.3: авто-позначка Viber (лог на бекенд + бейдж одразу).
+  invApi({action: 'logViberSent', childName: c.name, loc: CFG.LOC,
+    phone: c.signerPhone, actorName: _invActor()}).catch(function(){});
+  _invMarkLocal(c.name, 'viber', {ts: 'щойно'});
+
   setTimeout(function(){
     document.removeEventListener('visibilitychange', onLeave);
     window.removeEventListener('blur', onLeave);
@@ -1073,6 +1132,7 @@ async function invBulkSend(){
   }
   if (bulkBtn) bulkBtn.disabled = false;
   showToast('✅ Надіслано ' + sent + ' / помилок ' + failed + ' / без email ' + noEmailCnt, 'ok', 6000);
+  loadSendStatus();   // v6.50.3: оновити бейджі з бекенду після масової
 }
 
 function showFatalError(msg){
@@ -1121,6 +1181,9 @@ function showFatalError(msg){
   }
 
   updUserUI();
+  // v6.50.3: звіт лише CFO/HR (ролі hr/cfo)
+  var _rl = String(S.user && S.user.role || '').toLowerCase();
+  if (_rl === 'hr' || _rl === 'cfo'){ var _nr = $('navInvReport'); if (_nr) _nr.style.display = ''; }
   $('meta').textContent = 'Локація: ' + CFG.LOC;
   initFilters();
   $('loadBox').classList.add('hidden');

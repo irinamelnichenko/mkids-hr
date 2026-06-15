@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>m.kids — Звіт розсилок рахунків</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--green:#27ae60;--red:#c0392b;--blue:#2980b9;--dark:#1a2332;--dark2:#2c3e50;
+  --gray:#7f8c8d;--gray2:#bdc3c7;--bg:#f0f4f8;--white:#fff;--r:10px}
+body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:var(--bg);
+  color:var(--dark2);font-size:14px;line-height:1.5;min-height:100vh}
+button{font-family:inherit;cursor:pointer}
+.wrap{max-width:1100px;margin:0 auto;padding:24px 20px 60px}
+.hd{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:22px}
+.hd h1{font-size:24px;font-weight:900;color:var(--dark);flex:1;min-width:240px}
+.hd-meta{font-size:12px;color:var(--gray);margin-top:3px;font-weight:500}
+.btn{padding:10px 16px;border:none;border-radius:var(--r);font-size:14px;font-weight:600;
+  display:inline-flex;align-items:center;gap:6px;background:var(--green);color:#fff}
+.btn-ghost{background:#fff;color:var(--dark2);border:1.5px solid var(--gray2)}
+.filters{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:18px}
+.fg{display:flex;flex-direction:column;gap:3px}
+.fg label{font-size:11px;font-weight:700;color:var(--gray);text-transform:uppercase;letter-spacing:.5px}
+.fg select{padding:9px 12px;border:1.5px solid var(--gray2);border-radius:8px;font-size:14px;
+  font-weight:600;background:#fff;color:var(--dark2);outline:none}
+.card{background:var(--white);border-radius:14px;padding:18px;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;padding:11px 10px;font-size:11px;text-transform:uppercase;letter-spacing:.5px;
+  color:var(--gray);border-bottom:2px solid var(--gray2);white-space:nowrap}
+td{padding:11px 10px;border-bottom:1px solid #eef2f6}
+tr:hover td{background:#fafbfc}
+td.num,th.num{text-align:right}
+.pct{display:inline-block;min-width:46px;text-align:right;font-weight:700}
+.pct.hi{color:var(--green)}.pct.mid{color:#e67e22}.pct.lo{color:var(--red)}
+.bar{height:6px;border-radius:4px;background:#eef2f6;margin-top:4px;overflow:hidden}
+.bar>span{display:block;height:100%;background:var(--green)}
+tr.total td{font-weight:800;color:var(--dark);border-top:2px solid var(--gray2);background:#f4f7fa}
+.err{background:#fdf2f2;border:1px solid #fca5a5;color:var(--red);padding:14px 18px;
+  border-radius:var(--r);margin-bottom:18px;font-weight:600}
+.loading{display:flex;align-items:center;justify-content:center;padding:50px;
+  flex-direction:column;gap:14px;color:var(--gray)}
+.spinner{width:32px;height:32px;border:3px solid #e8ecf0;border-top-color:var(--green);
+  border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.hidden{display:none!important}
+.empty{text-align:center;padding:30px;color:var(--gray)}
+@media(max-width:600px){.hd h1{font-size:20px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hd">
+    <div style="flex:1;min-width:240px">
+      <h1>📊 Звіт розсилок рахунків</h1>
+      <div class="hd-meta" id="meta">завантаження…</div>
+    </div>
+    <button class="btn btn-ghost" onclick="window.location.href='invoices.html'">← До рахунків</button>
+  </div>
+
+  <div id="errBox" class="err hidden"></div>
+
+  <div class="filters">
+    <div class="fg"><label>Місяць надсилання</label>
+      <select id="fMonth"></select></div>
+    <div class="fg"><label>Рік</label>
+      <select id="fYear"></select></div>
+    <button class="btn" onclick="loadReport()">🔄 Оновити</button>
+  </div>
+
+  <div class="card">
+    <div id="repWrap"><div class="loading"><div class="spinner"></div><div>Завантаження…</div></div></div>
+  </div>
+</div>
+
+<script>
+'use strict';
+var CFG = { SCRIPT_URL: 'https://script.google.com/macros/s/AKfycbyTSUVlaN4-PpXe47zCSmhVs0Qxy1FDXG_XsB4zcKNpqBxdhDtS9ibM4YFGkGjmPQDFWQ/exec' };
+var MONTHS = ['Січень','Лютий','Березень','Квітень','Травень','Червень',
+              'Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
+function $(id){ return document.getElementById(id); }
+function escapeHtml(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+  .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+
+// ── session (shared) ──
+var SESSION_KEY='mkids_session', SESSION_TTL_MS=12*3600*1000;
+function readSession(){
+  try{
+    var s=JSON.parse(localStorage.getItem(SESSION_KEY)||'null');
+    if(!s||!s.user||!s.t) return null;
+    if(Date.now()-s.t>SESSION_TTL_MS) return null;
+    s.user.role=String(s.user.role||'').toLowerCase().trim();
+    return s.user;
+  }catch(e){ return null; }
+}
+
+function _pctClass(p){ return p>=80?'hi':(p>=40?'mid':'lo'); }
+
+function renderReport(j){
+  var rep=j.report||[], tot=j.total||{kids:0,emailSent:0,viberSent:0,errors:0,emailPct:0,viberPct:0};
+  if(!rep.length){ $('repWrap').innerHTML='<div class="empty">Немає даних за обраний період.</div>'; return; }
+  function row(x, isTotal){
+    var ep=x.emailPct||0, vp=x.viberPct||0;
+    return '<tr'+(isTotal?' class="total"':'')+'>'+
+      '<td>'+escapeHtml(x.loc)+'</td>'+
+      '<td class="num">'+(x.kids||0)+'</td>'+
+      '<td class="num">'+(x.emailSent||0)+' <span class="pct '+_pctClass(ep)+'">'+ep+'%</span>'+
+        (isTotal?'':'<div class="bar"><span style="width:'+Math.min(ep,100)+'%"></span></div>')+'</td>'+
+      '<td class="num">'+(x.viberSent||0)+' <span class="pct '+_pctClass(vp)+'">'+vp+'%</span>'+
+        (isTotal?'':'<div class="bar"><span style="width:'+Math.min(vp,100)+'%"></span></div>')+'</td>'+
+      '<td class="num">'+(x.errors||0)+'</td>'+
+    '</tr>';
+  }
+  var html='<table><thead><tr>'+
+    '<th>Локація</th><th class="num">Дітей</th>'+
+    '<th class="num">📧 Email надіслано</th><th class="num">💬 Viber надіслано</th>'+
+    '<th class="num">❌ Помилок</th>'+
+    '</tr></thead><tbody>';
+  rep.forEach(function(x){ html+=row(x,false); });
+  html+=row(tot,true);
+  html+='</tbody></table>';
+  $('repWrap').innerHTML=html;
+}
+
+async function loadReport(){
+  var m=Number($('fMonth').value)||0, y=Number($('fYear').value)||0;
+  $('repWrap').innerHTML='<div class="loading"><div class="spinner"></div><div>Завантаження…</div></div>';
+  $('meta').textContent=(m?MONTHS[m-1]+' ':'усі місяці ')+(y||'');
+  try{
+    var url=CFG.SCRIPT_URL+'?action=getInvoiceStatusReport&month='+m+'&year='+y;
+    var r=await fetch(url,{redirect:'follow'});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    var j=await r.json();
+    if(!j.ok) throw new Error(j.error||'failed');
+    renderReport(j);
+  }catch(e){
+    $('repWrap').innerHTML='<div class="empty">❌ Помилка: '+escapeHtml(String(e&&e.message||e))+'</div>';
+  }
+}
+
+function initFilters(){
+  var mh='<option value="0">— усі —</option>';
+  for(var i=0;i<12;i++) mh+='<option value="'+(i+1)+'">'+MONTHS[i]+'</option>';
+  $('fMonth').innerHTML=mh;
+  var cy=new Date().getFullYear(), yh='';
+  for(var y=cy-1;y<=cy+1;y++) yh+='<option value="'+y+'">'+y+'</option>';
+  $('fYear').innerHTML=yh;
+  $('fMonth').value=new Date().getMonth()+1;
+  $('fYear').value=cy;
+}
+
+(function boot(){
+  var u=readSession();
+  if(!u){ window.location.href='index.html'; return; }
+  // доступ лише CFO/HR (ролі hr/cfo)
+  var role=String(u.role||'').toLowerCase();
+  if(role!=='hr' && role!=='cfo'){
+    $('errBox').textContent='Доступ лише для CFO/HR.';
+    $('errBox').classList.remove('hidden');
+    $('repWrap').innerHTML='';
+    return;
+  }
+  initFilters();
+  loadReport();
+})();
+</script>
+</body>
+</html>
