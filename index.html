@@ -2196,14 +2196,26 @@ function uniq(arr,key){return [...new Set(arr.map(e=>e[key]).filter(Boolean))].s
 // v6.49.1 — ЄДИНИЙ порядок локацій = джерело правди логін-селектора (LOGIN_LOCATIONS,
 //   садочки→школи→управління→кухні). Невідомі локації (поза списком) — у КІНЕЦЬ,
 //   алфавітно. Жодна локація не губиться.
-var LOCATION_ORDER=(typeof LOGIN_LOCATIONS!=='undefined'&&Array.isArray(LOGIN_LOCATIONS))?LOGIN_LOCATIONS.map(function(l){return l.name;}):[];
-function sortLocationsByZone(locs){
-  var ord={}; LOCATION_ORDER.forEach(function(l,i){ord[l]=i;});
-  return (locs||[]).slice().sort(function(a,b){
-    var ia=(ord[a]!=null)?ord[a]:9999, ib=(ord[b]!=null)?ord[b]:9999;
-    return ia!==ib ? ia-ib : String(a).localeCompare(String(b),'uk');
+// v6.50.4: ЄДИНИЙ зонний порядок (explicit) — single source of truth, не похідний від LOGIN_LOCATIONS.
+var LOCATION_ORDER = [
+  'Осокорки','Позняки','Тичини','Кар\'єрна','Голосієво','Пуща',
+  'Оранж','Борщагівка','Бровари','Кругла','Бігова',
+  'Школа Осокорки','Школа 228','Житомир',
+  'Нац.Гвардії (Благо)','Манхетен (Благо)',
+  'Онлайн школа','Кухня Київ','Кухня Львів','Іва-Франківськ кухня'
+];
+function locationRank(name){
+  var i = LOCATION_ORDER.indexOf(String(name == null ? '' : name).trim());
+  return i === -1 ? 999 : i;
+}
+function sortByLocationOrder(arr, getName){
+  return (arr || []).slice().sort(function(a, b){
+    var na = getName ? getName(a) : a, nb = getName ? getName(b) : b;
+    var ra = locationRank(na), rb = locationRank(nb);
+    return ra - rb || String(na == null ? '' : na).localeCompare(String(nb == null ? '' : nb), 'uk');
   });
 }
+function sortLocationsByZone(locs){ return sortByLocationOrder(locs); }
 
 // ── REGION (використовуємо поле Напрямок = dir) ──
 function getRegion(e){ return (e.dir||'').trim()||'Інше'; }

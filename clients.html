@@ -945,6 +945,29 @@ tbody tr.clickable:hover td{background:#f0f7ff}
 <script>
 'use strict';
 
+// ═══ ЄДИНИЙ ЗОННИЙ ПОРЯДОК ЛОКАЦІЙ (single source of truth) — v6.50.4 ═══
+// CFO-порядок: садочки → школи → управління → онлайн-школа → кухні.
+// Невідомі назви (поза списком) → у кінець (rank 999), алфавітно.
+var LOCATION_ORDER = [
+  'Осокорки','Позняки','Тичини','Кар\'єрна','Голосієво','Пуща',
+  'Оранж','Борщагівка','Бровари','Кругла','Бігова',
+  'Школа Осокорки','Школа 228','Житомир',
+  'Нац.Гвардії (Благо)','Манхетен (Благо)',
+  'Онлайн школа','Кухня Київ','Кухня Львів','Іва-Франківськ кухня'
+];
+function locationRank(name){
+  var i = LOCATION_ORDER.indexOf(String(name == null ? '' : name).trim());
+  return i === -1 ? 999 : i;
+}
+function sortByLocationOrder(arr, getName){
+  return (arr || []).slice().sort(function(a, b){
+    var na = getName ? getName(a) : a, nb = getName ? getName(b) : b;
+    var ra = locationRank(na), rb = locationRank(nb);
+    return ra - rb || String(na == null ? '' : na).localeCompare(String(nb == null ? '' : nb), 'uk');
+  });
+}
+function sortLocationsByZone(locs){ return sortByLocationOrder(locs); }
+
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 var CFG = {
   SCRIPT_KEY:    'crm_script_url',
@@ -3026,7 +3049,7 @@ function setLocFieldMode(isNew){
   if(isNew){
     if(isHR()){
       sel.innerHTML='<option value="">— Оберіть локацію —</option>'
-        +S.locs.map(function(l){ return '<option value="'+esc(l.loc)+'">'+esc(l.loc)+'</option>'; }).join('');
+        +sortByLocationOrder(S.locs, function(l){ return l.loc; }).map(function(l){ return '<option value="'+esc(l.loc)+'">'+esc(l.loc)+'</option>'; }).join('');   // v6.50.4 зонний
     } else {
       sel.innerHTML='<option value="'+esc(S.user.loc||'')+'">'+esc(S.user.loc||'')+'</option>';
       sel.value=S.user.loc||'';

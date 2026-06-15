@@ -563,6 +563,29 @@ select{font-family:inherit}
 <script>
 'use strict';
 
+// ═══ ЄДИНИЙ ЗОННИЙ ПОРЯДОК ЛОКАЦІЙ (single source of truth) — v6.50.4 ═══
+// CFO-порядок: садочки → школи → управління → онлайн-школа → кухні.
+// Невідомі назви (поза списком) → у кінець (rank 999), алфавітно.
+var LOCATION_ORDER = [
+  'Осокорки','Позняки','Тичини','Кар\'єрна','Голосієво','Пуща',
+  'Оранж','Борщагівка','Бровари','Кругла','Бігова',
+  'Школа Осокорки','Школа 228','Житомир',
+  'Нац.Гвардії (Благо)','Манхетен (Благо)',
+  'Онлайн школа','Кухня Київ','Кухня Львів','Іва-Франківськ кухня'
+];
+function locationRank(name){
+  var i = LOCATION_ORDER.indexOf(String(name == null ? '' : name).trim());
+  return i === -1 ? 999 : i;
+}
+function sortByLocationOrder(arr, getName){
+  return (arr || []).slice().sort(function(a, b){
+    var na = getName ? getName(a) : a, nb = getName ? getName(b) : b;
+    var ra = locationRank(na), rb = locationRank(nb);
+    return ra - rb || String(na == null ? '' : na).localeCompare(String(nb == null ? '' : nb), 'uk');
+  });
+}
+function sortLocationsByZone(locs){ return sortByLocationOrder(locs); }
+
 var CFG = {
   SCRIPT_URL: 'https://script.google.com/macros/s/AKfycbyTSUVlaN4-PpXe47zCSmhVs0Qxy1FDXG_XsB4zcKNpqBxdhDtS9ibM4YFGkGjmPQDFWQ/exec',
   YEARS: [2025, 2026, 2027],
@@ -1265,7 +1288,10 @@ function updateTitle(){ $('title').textContent = '📊 Зведена аналі
 // але дублюємо як було в opex/categories/salary.
 function visibleLocations(){
   if (!S.data || !S.data.locations) return [];
-  return S.data.locations.filter(function(L){ return L.type !== 'Управління'; });
+  // v6.50.4: єдиний зонний порядок (база для селектора локацій + Overview-блоків).
+  return sortByLocationOrder(
+    S.data.locations.filter(function(L){ return L.type !== 'Управління'; }),
+    function(L){ return L.loc; });
 }
 
 // Локації обраного типу (Садочок | Школа) — джерело для всіх блоків Overview.
@@ -1731,7 +1757,7 @@ function _populateFillLocOptions(rows){
     seen[r.loc] = true;
     locs.push(r.loc);
   });
-  locs.sort(function(a, b){ return a.localeCompare(b, 'uk'); });
+  locs = sortByLocationOrder(locs);   // v6.50.4 зонний порядок (було алфавіт)
   locs.forEach(function(loc){
     var o = document.createElement('option');
     o.value = loc;

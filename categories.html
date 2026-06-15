@@ -331,6 +331,29 @@ select{font-family:inherit}
 <script>
 'use strict';
 
+// ═══ ЄДИНИЙ ЗОННИЙ ПОРЯДОК ЛОКАЦІЙ (single source of truth) — v6.50.4 ═══
+// CFO-порядок: садочки → школи → управління → онлайн-школа → кухні.
+// Невідомі назви (поза списком) → у кінець (rank 999), алфавітно.
+var LOCATION_ORDER = [
+  'Осокорки','Позняки','Тичини','Кар\'єрна','Голосієво','Пуща',
+  'Оранж','Борщагівка','Бровари','Кругла','Бігова',
+  'Школа Осокорки','Школа 228','Житомир',
+  'Нац.Гвардії (Благо)','Манхетен (Благо)',
+  'Онлайн школа','Кухня Київ','Кухня Львів','Іва-Франківськ кухня'
+];
+function locationRank(name){
+  var i = LOCATION_ORDER.indexOf(String(name == null ? '' : name).trim());
+  return i === -1 ? 999 : i;
+}
+function sortByLocationOrder(arr, getName){
+  return (arr || []).slice().sort(function(a, b){
+    var na = getName ? getName(a) : a, nb = getName ? getName(b) : b;
+    var ra = locationRank(na), rb = locationRank(nb);
+    return ra - rb || String(na == null ? '' : na).localeCompare(String(nb == null ? '' : nb), 'uk');
+  });
+}
+function sortLocationsByZone(locs){ return sortByLocationOrder(locs); }
+
 var CFG = {
   SCRIPT_URL: 'https://script.google.com/macros/s/AKfycbyTSUVlaN4-PpXe47zCSmhVs0Qxy1FDXG_XsB4zcKNpqBxdhDtS9ibM4YFGkGjmPQDFWQ/exec',
   YEAR: new Date().getFullYear(),
@@ -705,14 +728,8 @@ function getAllVisibleLocations(){
       out.push({loc: L.loc, type: L.type});
     });
   });
-  out.sort(function(a, b){
-    var ord = {'Садочок': 0, 'Школа': 1};
-    var ta = ord[a.type] !== undefined ? ord[a.type] : 2;
-    var tb = ord[b.type] !== undefined ? ord[b.type] : 2;
-    if (ta !== tb) return ta - tb;
-    return a.loc.localeCompare(b.loc, 'uk');
-  });
-  return out;
+  // v6.50.4: єдиний зонний порядок (замість тип→алфавіт).
+  return sortByLocationOrder(out, function(L){ return L.loc; });
 }
 
 // Ініціалізує S.selectedLocs після завантаження даних: відновлює зі сховища
