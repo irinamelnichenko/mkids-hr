@@ -675,6 +675,7 @@ function hasPerm(p){
 // ═══════════════════════════════════════════════════════════════
 // v6.26 Етап 1B — UI-список рахунків.
 // v6.50 — PDF (download) + Email (надсилання) + масова розсилка з логом.
+// v6.50.2 — Viber Deep Link (директор шле з робочого номера) + fallback TG/SMS.
 // ═══════════════════════════════════════════════════════════════
 var INV = {
   payMonth: 0, payYear: 0,
@@ -854,7 +855,7 @@ function renderInvoiceList(){
       var eIcon = '<span class="' + (c.signerEmail ? 'has' : 'no') + '" title="' + emailTitle + '">📧</span>';
       var hasAnySum = (c.paymentSum > 0) || (c.extrasSum > 0);
       var canEmail  = hasAnySum && !!c.signerEmail;
-      var canViber  = hasAnySum && !!c.signerPhone;
+      var canViber  = !!c.signerPhone;   // v6.50.2: активна якщо є телефон підписанта
       var idEsc = escapeHtml(String(c.id));
       html += '<tr>' +
         '<td data-label="ПІБ">' + escapeHtml(c.name) + '</td>' +
@@ -869,7 +870,7 @@ function renderInvoiceList(){
           '<button class="inv-act-btn" title="Надіслати Email"' + (canEmail ? '' : ' disabled') +
             ' onclick="invSendEmail(\'' + idEsc + '\', this)">📧</button>' +
           '<button class="inv-act-btn" title="Надіслати Viber"' + (canViber ? '' : ' disabled') +
-            ' onclick="invViberStub(\'' + idEsc + '\')">💬</button>' +
+            ' onclick="invSendViber(\'' + idEsc + '\')">💬</button>' +
         '</div></td>' +
       '</tr>';
     });
@@ -979,8 +980,67 @@ async function invSendEmail(childId, btn){
   } finally { _invBusy(btn, false); }
 }
 
-function invViberStub(childId){
-  showToast('💬 Viber — у наступному кроці (Крок C)', 'info', 3000);
+// ── v6.50.2: Viber Deep Link (директор шле з робочого номера) ────────────────
+// Нормалізує укр. телефон у міжнародний формат БЕЗ '+' (380XXXXXXXXX).
+function _invNormPhone(raw){
+  var digits = String(raw || '').replace(/\D/g, '');
+  if (digits.length === 10 && digits.charAt(0) === '0') digits = '38' + digits;       // 0XXXXXXXXX
+  else if (digits.length === 9)                          digits = '380' + digits;      // XXXXXXXXX
+  else if (digits.length === 11 && digits.slice(0,2) === '80') digits = '3' + digits;  // 80XXXXXXXXX
+  return digits;   // очікувано 380XXXXXXXXX (12 цифр)
+}
+// Текст повідомлення для батьків.
+function _invViberText(c){
+  var hasS = (c.paymentSum || 0) > 0, hasE = (c.extrasSum || 0) > 0;
+  var m = hasS ? INV.payMonth : INV.extMonth;
+  var y = hasS ? INV.payYear  : INV.extYear;
+  var monthLabel = (INV_MONTHS[m-1] || '') + ' ' + y;
+  var sum = (c.paymentSum || 0) + (c.extrasSum || 0);
+  var L = [];
+  L.push('*m.kids ' + CFG.LOC + '* 📚');
+  L.push('');
+  L.push('Рахунок за ' + monthLabel);
+  L.push('Дитина: ' + c.name);
+  if (hasS) L.push('Навчання: ' + fmtUah(c.paymentSum) + ' грн');
+  if (hasE) L.push('Додаткові: ' + fmtUah(c.extrasSum) + ' грн');
+  L.push('До сплати: ' + fmtUah(sum) + ' грн');
+  L.push('');
+  L.push('Деталі та реквізити в PDF.');
+  L.push('');
+  L.push('Дякуємо! ❤️');
+  return L.join('\n');
+}
+// Відкриває Viber з готовим текстом; fallback (Telegram → SMS) якщо не відкрилось.
+function invSendViber(childId){
+  var c = _invFindChild(childId);
+  if (!c){ showToast('❌ Дитину не знайдено', 'err'); return; }
+  if (!c.signerPhone){ showToast('❌ У підписанта немає телефону', 'err'); return; }
+  var intl = _invNormPhone(c.signerPhone);
+  if (intl.length < 11){ showToast('❌ Невірний телефон: ' + c.signerPhone, 'err'); return; }
+
+  var enc = encodeURIComponent(_invViberText(c));
+  var viberUrl = 'viber://chat?number=%2B' + intl + '&text=' + enc;
+
+  // Детектуємо, чи застосунок перехопив фокус (значить Viber відкрився).
+  var left = false;
+  function onLeave(){ left = true; }
+  document.addEventListener('visibilitychange', onLeave);
+  window.addEventListener('blur', onLeave);
+
+  showToast('💬 Відкриваємо Viber → ' + c.signerName, 'info', 2500);
+  window.location.href = viberUrl;
+
+  setTimeout(function(){
+    document.removeEventListener('visibilitychange', onLeave);
+    window.removeEventListener('blur', onLeave);
+    if (left || document.hidden) return;   // Viber відкрився — все ок
+    // Fallback: Telegram → SMS
+    if (confirm('Не відкрилось Viber? Спробувати Telegram?')){
+      window.location.href = 'https://t.me/+' + intl + '?text=' + enc;
+    } else if (confirm('Надіслати через SMS?')){
+      window.location.href = 'sms:+' + intl + '?body=' + enc;
+    }
+  }, 1800);
 }
 
 // 📬 — масова: послідовно по дітях з email і сумою > 0, з прогрес-тостом.
