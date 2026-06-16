@@ -172,6 +172,26 @@ select,input{font-family:inherit}
 .fc-stat.green{color:#1e8e4e}.fc-stat.yellow{color:#e67e22}.fc-stat.red{color:#c0392b}.fc-stat.gray{color:#7f8c8d}
 .fc-meta{color:var(--gray);font-size:12px;font-weight:500}
 .fc-dim{opacity:.55}
+/* v6.51.2: drill-down по групах */
+.fc-loc-row{cursor:pointer}
+.fc-loc-row:hover td{background:#f4f7fa}
+.fc-caret{display:inline-block;width:14px;color:var(--gray);transition:transform .15s;font-size:11px}
+.fc-loc-row.open .fc-caret{transform:rotate(90deg)}
+.fc-detail-row>td{background:#f7f9fb;padding:0!important;border-bottom:1px solid #e3e9ef}
+.fc-detail{padding:8px 14px 12px 30px}
+.fc-grp-tbl{width:100%;border-collapse:collapse;font-size:12.5px}
+.fc-grp-tbl th{text-align:left;padding:5px 8px;font-size:10px;text-transform:uppercase;
+  letter-spacing:.5px;color:var(--gray);border-bottom:1px solid #dde4eb;font-weight:700}
+.fc-grp-tbl td{padding:6px 8px;border-bottom:1px solid #edf1f5;vertical-align:middle}
+.fc-grp-tbl tr:last-child td{border-bottom:none}
+.fc-grp-name{font-weight:600;color:var(--dark2)}
+@media(max-width:720px){
+  .fc-detail{padding:8px 10px}
+  .fc-grp-tbl th{display:none}
+  .fc-grp-tbl td{display:flex;justify-content:space-between;gap:10px;border-bottom:none;padding:3px 0}
+  .fc-grp-tbl td::before{content:attr(data-label);font-weight:700;color:var(--gray);font-size:10px;text-transform:uppercase}
+  .fc-grp-tbl tr{display:block;padding:8px 0;border-bottom:1px solid #e3e9ef}
+}
 </style>
 </head>
 <body>
@@ -705,8 +725,9 @@ function hasPerm(p){
 }
 
 // ═══════════════════════════════════════════════════════════════
-// v6.51.1 — КОНТРОЛЬ ЗАПОВНЕННЯ: рівень ЛОКАЦІЇ (distinct childId),
+// v6.51.2 — КОНТРОЛЬ ЗАПОВНЕННЯ: рівень ЛОКАЦІЇ (distinct childId),
 // дві рівні колонки — відвідуваність дітей + табель співробітників.
+// Клік на рядок локації → drill-down по групах (хто заповнив / прогалини).
 // ═══════════════════════════════════════════════════════════════
 var FC = { date: '', data: null, loading: false };
 var _FC_ICON = {green:'🟢', yellow:'🟡', red:'🔴', gray:'⚪'};
@@ -759,20 +780,49 @@ function renderFill(){
     '<th>Відвідуваність дітей</th>' +
     '<th>Табель співробітників</th>' +
     '</tr></thead><tbody' + (nw ? ' class="fc-dim"' : '') + '>';
-  locs.forEach(function(L){
+  locs.forEach(function(L, idx){
     var c = L.children || {}, t = L.timesheet || {};
     var tMeta = [];
     if (t.by) tMeta.push(escapeHtml(t.by));
     if (t.at) tMeta.push(escapeHtml(t.at));
-    html += '<tr>' +
-      '<td data-label="Локація"><b>' + escapeHtml(L.loc) + '</b></td>' +
+    var groups = L.groups || [];
+    var hasDetail = groups.length > 0;
+    html += '<tr class="fc-loc-row" data-fc-idx="' + idx + '"' + (hasDetail ? ' onclick="fcToggle(' + idx + ')"' : '') + '>' +
+      '<td data-label="Локація"><b>' +
+        (hasDetail ? '<span class="fc-caret">▶</span> ' : '<span class="fc-caret"></span> ') +
+        escapeHtml(L.loc) + '</b></td>' +
       '<td data-label="Відвідуваність">' + fcStat(c.status, (c.marked||0) + '/' + (c.expected||0), nw) + '</td>' +
       '<td data-label="Табель">' + fcStat(t.status, (t.marked||0) + '/' + (t.expected||0), nw) +
         (tMeta.length ? ' <span class="fc-meta">· ' + tMeta.join(' · ') + '</span>' : '') + '</td>' +
     '</tr>';
+    if (hasDetail){
+      var gRows = groups.map(function(g){
+        var gMeta = [];
+        if (g.by) gMeta.push(escapeHtml(g.by));
+        if (g.at) gMeta.push(escapeHtml(g.at));
+        return '<tr>' +
+          '<td data-label="Група" class="fc-grp-name">' + escapeHtml(g.group || '—') + '</td>' +
+          '<td data-label="Відмічено">' + fcStat(g.status, (g.marked||0) + '/' + (g.expected||0), nw) + '</td>' +
+          '<td data-label="Хто заповнив">' + (gMeta.length ? '<span class="fc-meta">' + gMeta.join(' · ') + '</span>' : '<span class="fc-meta">—</span>') + '</td>' +
+        '</tr>';
+      }).join('');
+      html += '<tr class="fc-detail-row hidden" data-fc-detail="' + idx + '"><td colspan="3">' +
+        '<div class="fc-detail"><table class="fc-grp-tbl"><thead><tr>' +
+          '<th>Група</th><th>Відмічено</th><th>Хто заповнив</th>' +
+        '</tr></thead><tbody>' + gRows + '</tbody></table></div></td></tr>';
+    }
   });
   html += '</tbody></table>';
   $('fcWrap').innerHTML = html;
+}
+
+function fcToggle(idx){
+  var det = document.querySelector('[data-fc-detail="' + idx + '"]');
+  var row = document.querySelector('.fc-loc-row[data-fc-idx="' + idx + '"]');
+  if (!det) return;
+  var show = det.classList.contains('hidden');
+  det.classList.toggle('hidden', !show);
+  if (row) row.classList.toggle('open', show);
 }
 
 (async function bootstrap(){
