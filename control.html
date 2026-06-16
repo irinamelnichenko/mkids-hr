@@ -192,6 +192,19 @@ select,input{font-family:inherit}
   .fc-grp-tbl td::before{content:attr(data-label);font-weight:700;color:var(--gray);font-size:10px;text-transform:uppercase}
   .fc-grp-tbl tr{display:block;padding:8px 0;border-bottom:1px solid #e3e9ef}
 }
+/* v6.51.3: перемикач періоду + смужка по днях */
+.fc-period{display:inline-flex;border:1.5px solid var(--gray2);border-radius:8px;overflow:hidden}
+.fc-period button{padding:9px 14px;border:none;background:#fff;font-size:14px;font-weight:600;color:var(--dark2)}
+.fc-period button.active{background:var(--green);color:#fff}
+.fc-period button+button{border-left:1.5px solid var(--gray2)}
+.fc-strip-legend{font-size:11px;color:var(--gray);font-weight:600;margin-bottom:6px}
+.fc-strip{display:flex;flex-wrap:wrap;gap:7px}
+.fc-day{display:flex;flex-direction:column;align-items:center;gap:3px;min-width:30px}
+.fc-day.fc-day-off{opacity:.5}
+.fc-dot{width:13px;height:13px;border-radius:50%;background:#d0d7de}
+.fc-dot.green{background:#27ae60}.fc-dot.yellow{background:#f39c12}.fc-dot.red{background:#e74c3c}.fc-dot.gray{background:#d0d7de}
+.fc-day-lbl{font-size:11px;font-weight:700;color:var(--dark2);margin-top:2px}
+.fc-day-wd{font-size:9px;color:var(--gray);text-transform:uppercase}
 </style>
 </head>
 <body>
@@ -333,6 +346,11 @@ select,input{font-family:inherit}
       <div class="hd-meta" id="meta">завантаження…</div>
     </div>
     <div class="hd-ctrl">
+      <div class="fc-period" id="fcPeriod">
+        <button data-p="day" class="active" onclick="setPeriod('day')">День</button>
+        <button data-p="week" onclick="setPeriod('week')">Тиждень</button>
+        <button data-p="month" onclick="setPeriod('month')">Місяць</button>
+      </div>
       <input type="date" id="fcDate" class="month-sel">
       <button id="refreshBtn" class="btn btn-primary" onclick="loadFill()">🔄 Оновити</button>
     </div>
@@ -725,33 +743,74 @@ function hasPerm(p){
 }
 
 // ═══════════════════════════════════════════════════════════════
-// v6.51.2 — КОНТРОЛЬ ЗАПОВНЕННЯ: рівень ЛОКАЦІЇ (distinct childId),
-// дві рівні колонки — відвідуваність дітей + табель співробітників.
-// Клік на рядок локації → drill-down по групах (хто заповнив / прогалини).
+// v6.51.3 — КОНТРОЛЬ ЗАПОВНЕННЯ: періоди День / Тиждень / Місяць.
+//   • День — рівень локації (distinct childId) + drill-down по групах.
+//   • Тиждень/Місяць (range) — X/Y днів по локації + інлайн смужка по днях.
 // ═══════════════════════════════════════════════════════════════
-var FC = { date: '', data: null, loading: false };
+var FC = { date: '', period: 'day', data: null, loading: false };
 var _FC_ICON = {green:'🟢', yellow:'🟡', red:'🔴', gray:'⚪'};
 function fcStat(st, txt, dim){
   var s = dim ? 'gray' : (st || 'gray');
   return '<span class="fc-stat ' + s + '">' + _FC_ICON[s] + ' ' + escapeHtml(txt) + '</span>';
 }
 
+// ── ISO-дати: опорна дата → діапазон тижня (пн–нд) / місяця (1–кінець) ──
+function _fcISO(d){
+  var y = d.getFullYear(), m = d.getMonth() + 1, dd = d.getDate();
+  return y + '-' + (m < 10 ? '0' + m : m) + '-' + (dd < 10 ? '0' + dd : dd);
+}
+function _fcParse(iso){ var p = iso.split('-'); return new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2])); }
+function _fcAddDays(iso, n){ var d = _fcParse(iso); d.setDate(d.getDate() + n); return _fcISO(d); }
+function _fcWeekRange(iso){
+  var d = _fcParse(iso), wd = d.getDay();          // 0=нд … 6=сб
+  var from = _fcAddDays(iso, wd === 0 ? -6 : 1 - wd);  // понеділок
+  return {from: from, to: _fcAddDays(from, 6)};
+}
+function _fcMonthRange(iso){
+  var p = iso.split('-'), y = Number(p[0]), m = Number(p[1]);
+  var mm = m < 10 ? '0' + m : '' + m;
+  var last = new Date(y, m, 0).getDate();
+  return {from: y + '-' + mm + '-01', to: y + '-' + mm + '-' + (last < 10 ? '0' + last : last)};
+}
+
+function setPeriod(p){
+  if (FC.period === p && !FC.loading) { /* повторний клік → просто перезавантажити */ }
+  FC.period = p;
+  var btns = document.querySelectorAll('#fcPeriod button');
+  for (var i = 0; i < btns.length; i++) btns[i].classList.toggle('active', btns[i].dataset.p === p);
+  loadFill();
+}
+
 async function loadFill(){
   if (FC.loading) return;
   FC.loading = true;
   FC.date = $('fcDate').value || _todayISO();
-  $('meta').textContent = 'Дата: ' + FC.date;
   $('fcBanner').innerHTML = '';
   $('fcChips').innerHTML = '';
   $('fcWrap').innerHTML = '<div class="inv-loading">⏳ Завантаження…</div>';
+
+  var url, metaTxt;
+  if (FC.period === 'week'){
+    var w = _fcWeekRange(FC.date);
+    url = CFG.SCRIPT_URL + '?action=getFillStatus&from=' + encodeURIComponent(w.from) + '&to=' + encodeURIComponent(w.to);
+    metaTxt = 'Тиждень: ' + w.from + ' — ' + w.to;
+  } else if (FC.period === 'month'){
+    var mo = _fcMonthRange(FC.date);
+    url = CFG.SCRIPT_URL + '?action=getFillStatus&from=' + encodeURIComponent(mo.from) + '&to=' + encodeURIComponent(mo.to);
+    metaTxt = 'Місяць: ' + mo.from + ' — ' + mo.to;
+  } else {
+    url = CFG.SCRIPT_URL + '?action=getFillStatus&date=' + encodeURIComponent(FC.date);
+    metaTxt = 'Дата: ' + FC.date;
+  }
+  $('meta').textContent = metaTxt;
+
   try {
-    var url = CFG.SCRIPT_URL + '?action=getFillStatus&date=' + encodeURIComponent(FC.date);
     var r = await fetch(url, {redirect: 'follow'});
     if (!r.ok) throw new Error('HTTP ' + r.status);
     var j = await r.json();
     if (!j.ok) throw new Error(j.error || 'failed');
     FC.data = j;
-    renderFill();
+    if (j.mode === 'range') renderFillRange(); else renderFill();
   } catch(e){
     FC.data = null;
     $('fcWrap').innerHTML = '<div class="inv-empty">❌ Помилка: ' + escapeHtml(String(e && e.message || e)) + '</div>';
@@ -787,7 +846,8 @@ function renderFill(){
     if (t.at) tMeta.push(escapeHtml(t.at));
     var groups = L.groups || [];
     var hasDetail = groups.length > 0;
-    html += '<tr class="fc-loc-row" data-fc-idx="' + idx + '"' + (hasDetail ? ' onclick="fcToggle(' + idx + ')"' : '') + '>' +
+    var key = 'd' + idx;
+    html += '<tr class="fc-loc-row" data-fc-key="' + key + '"' + (hasDetail ? ' onclick="fcToggle(\'' + key + '\')"' : '') + '>' +
       '<td data-label="Локація"><b>' +
         (hasDetail ? '<span class="fc-caret">▶</span> ' : '<span class="fc-caret"></span> ') +
         escapeHtml(L.loc) + '</b></td>' +
@@ -806,7 +866,7 @@ function renderFill(){
           '<td data-label="Хто заповнив">' + (gMeta.length ? '<span class="fc-meta">' + gMeta.join(' · ') + '</span>' : '<span class="fc-meta">—</span>') + '</td>' +
         '</tr>';
       }).join('');
-      html += '<tr class="fc-detail-row hidden" data-fc-detail="' + idx + '"><td colspan="3">' +
+      html += '<tr class="fc-detail-row hidden" data-fc-detail="' + key + '"><td colspan="3">' +
         '<div class="fc-detail"><table class="fc-grp-tbl"><thead><tr>' +
           '<th>Група</th><th>Відмічено</th><th>Хто заповнив</th>' +
         '</tr></thead><tbody>' + gRows + '</tbody></table></div></td></tr>';
@@ -816,13 +876,59 @@ function renderFill(){
   $('fcWrap').innerHTML = html;
 }
 
-function fcToggle(idx){
-  var det = document.querySelector('[data-fc-detail="' + idx + '"]');
-  var row = document.querySelector('.fc-loc-row[data-fc-idx="' + idx + '"]');
+function fcToggle(key){
+  var det = document.querySelector('[data-fc-detail="' + key + '"]');
+  var row = document.querySelector('.fc-loc-row[data-fc-key="' + key + '"]');
   if (!det) return;
   var show = det.classList.contains('hidden');
   det.classList.toggle('hidden', !show);
   if (row) row.classList.toggle('open', show);
+}
+
+// ── v6.51.3: Тиждень/Місяць — список локацій + інлайн смужка по днях ──
+var _FC_WD = ['Нд','Пн','Вт','Ср','Чт','Пт','Сб'];
+function renderStrip(byDay){
+  var cells = (byDay || []).map(function(e){
+    var d = _fcParse(e.date);
+    return '<div class="fc-day' + (e.nw ? ' fc-day-off' : '') + '" title="' + escapeHtml(e.date) + '">' +
+      '<span class="fc-dot ' + (e.childrenStatus || 'gray') + '"></span>' +
+      '<span class="fc-dot ' + (e.timesheetStatus || 'gray') + '"></span>' +
+      '<span class="fc-day-lbl">' + d.getDate() + '</span>' +
+      '<span class="fc-day-wd">' + _FC_WD[d.getDay()] + '</span>' +
+    '</div>';
+  }).join('');
+  return '<div class="fc-detail"><div class="fc-strip-legend">⬆ діти · ⬇ табель · сірі — вихідні/свята</div>' +
+    '<div class="fc-strip">' + cells + '</div></div>';
+}
+
+function renderFillRange(){
+  var j = FC.data; if (!j) return;
+  $('fcBanner').innerHTML = '';
+  var s = j.summary || {};
+  $('fcChips').innerHTML =
+    '<div class="fc-chip">🟢 Відвідуваність: <b>' + (s.childrenGreen||0) + '</b>/' + (s.childrenTotal||0) + ' лок.</div>' +
+    '<div class="fc-chip">🟢 Табель: <b>' + (s.timesheetGreen||0) + '</b>/' + (s.timesheetTotal||0) + ' лок.</div>' +
+    '<div class="fc-chip">📅 Робочих днів: <b>' + (j.workingDays||0) + '</b></div>' +
+    '<div class="fc-chip">🔴 Прогалини: <b>' + (s.red||0) + '</b></div>';
+
+  var locs = j.locations || [];
+  if (!locs.length){ $('fcWrap').innerHTML = '<div class="inv-empty">Немає локацій з даними.</div>'; return; }
+
+  var html = '<table class="inv-table"><thead><tr>' +
+    '<th>Локація</th><th>Відвідуваність</th><th>Табель</th>' +
+    '</tr></thead><tbody>';
+  locs.forEach(function(L, idx){
+    var c = L.children || {}, t = L.timesheet || {};
+    var key = 'r' + idx;
+    html += '<tr class="fc-loc-row" data-fc-key="' + key + '" onclick="fcToggle(\'' + key + '\')">' +
+      '<td data-label="Локація"><b><span class="fc-caret">▶</span> ' + escapeHtml(L.loc) + '</b></td>' +
+      '<td data-label="Відвідуваність">' + fcStat(c.status, (c.daysFilled||0) + '/' + (c.workingDays||0) + ' дн.') + '</td>' +
+      '<td data-label="Табель">' + fcStat(t.status, (t.daysFilled||0) + '/' + (t.workingDays||0) + ' дн.') + '</td>' +
+    '</tr>' +
+    '<tr class="fc-detail-row hidden" data-fc-detail="' + key + '"><td colspan="3">' + renderStrip(L.byDay) + '</td></tr>';
+  });
+  html += '</tbody></table>';
+  $('fcWrap').innerHTML = html;
 }
 
 (async function bootstrap(){
