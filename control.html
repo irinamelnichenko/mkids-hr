@@ -743,8 +743,9 @@ function hasPerm(p){
 }
 
 // ═══════════════════════════════════════════════════════════════
-// v6.51.3 — КОНТРОЛЬ ЗАПОВНЕННЯ: періоди День / Тиждень / Місяць.
-//   • День — рівень локації (distinct childId) + drill-down по групах.
+// v6.51.4 — КОНТРОЛЬ ЗАПОВНЕННЯ: періоди День / Тиждень / Місяць.
+//   • День — рівень локації (distinct childId), без drill-down по групах
+//     (задвоєні суфікс-багом); колонки діти/табель показують хто+коли.
 //   • Тиждень/Місяць (range) — X/Y днів по локації + інлайн смужка по днях.
 // ═══════════════════════════════════════════════════════════════
 var FC = { date: '', period: 'day', data: null, loading: false };
@@ -839,38 +840,22 @@ function renderFill(){
     '<th>Відвідуваність дітей</th>' +
     '<th>Табель співробітників</th>' +
     '</tr></thead><tbody' + (nw ? ' class="fc-dim"' : '') + '>';
-  locs.forEach(function(L, idx){
+  locs.forEach(function(L){
     var c = L.children || {}, t = L.timesheet || {};
+    // v6.51.4: «хто+коли» для відвідуваності — distinct маркер(и) + найпізніший час.
+    var cMeta = [];
+    if (c.by){ cMeta.push(escapeHtml(c.byCount > 1 ? c.by + ' (+' + (c.byCount - 1) + ')' : c.by)); }
+    if (c.at) cMeta.push(escapeHtml(c.at));
     var tMeta = [];
     if (t.by) tMeta.push(escapeHtml(t.by));
     if (t.at) tMeta.push(escapeHtml(t.at));
-    var groups = L.groups || [];
-    var hasDetail = groups.length > 0;
-    var key = 'd' + idx;
-    html += '<tr class="fc-loc-row" data-fc-key="' + key + '"' + (hasDetail ? ' onclick="fcToggle(\'' + key + '\')"' : '') + '>' +
-      '<td data-label="Локація"><b>' +
-        (hasDetail ? '<span class="fc-caret">▶</span> ' : '<span class="fc-caret"></span> ') +
-        escapeHtml(L.loc) + '</b></td>' +
-      '<td data-label="Відвідуваність">' + fcStat(c.status, (c.marked||0) + '/' + (c.expected||0), nw) + '</td>' +
+    html += '<tr>' +
+      '<td data-label="Локація"><b>' + escapeHtml(L.loc) + '</b></td>' +
+      '<td data-label="Відвідуваність">' + fcStat(c.status, (c.marked||0) + '/' + (c.expected||0), nw) +
+        (cMeta.length ? ' <span class="fc-meta">· ' + cMeta.join(' · ') + '</span>' : '') + '</td>' +
       '<td data-label="Табель">' + fcStat(t.status, (t.marked||0) + '/' + (t.expected||0), nw) +
         (tMeta.length ? ' <span class="fc-meta">· ' + tMeta.join(' · ') + '</span>' : '') + '</td>' +
     '</tr>';
-    if (hasDetail){
-      var gRows = groups.map(function(g){
-        var gMeta = [];
-        if (g.by) gMeta.push(escapeHtml(g.by));
-        if (g.at) gMeta.push(escapeHtml(g.at));
-        return '<tr>' +
-          '<td data-label="Група" class="fc-grp-name">' + escapeHtml(g.group || '—') + '</td>' +
-          '<td data-label="Відмічено">' + fcStat(g.status, (g.marked||0) + '/' + (g.expected||0), nw) + '</td>' +
-          '<td data-label="Хто заповнив">' + (gMeta.length ? '<span class="fc-meta">' + gMeta.join(' · ') + '</span>' : '<span class="fc-meta">—</span>') + '</td>' +
-        '</tr>';
-      }).join('');
-      html += '<tr class="fc-detail-row hidden" data-fc-detail="' + key + '"><td colspan="3">' +
-        '<div class="fc-detail"><table class="fc-grp-tbl"><thead><tr>' +
-          '<th>Група</th><th>Відмічено</th><th>Хто заповнив</th>' +
-        '</tr></thead><tbody>' + gRows + '</tbody></table></div></td></tr>';
-    }
   });
   html += '</tbody></table>';
   $('fcWrap').innerHTML = html;
