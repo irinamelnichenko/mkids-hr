@@ -365,8 +365,8 @@ select,input{font-family:inherit}
       <div id="rcWrap"><div class="inv-empty">📂 Обери файл виписки ПриватБанку — система визначить локацію за рахунком і зіставить платників з дітьми.</div></div>
     </div>
     <div id="rcApplyBar" style="margin-top:14px;display:none">
-      <button class="btn" disabled title="Запис буде у Фазі 2" style="opacity:.6;cursor:not-allowed">✅ Застосувати (Фаза 2)</button>
-      <span style="margin-left:10px;color:var(--gray);font-size:12px">Фаза 1 — лише прев'ю, без записів у Payment.</span>
+      <button class="btn btn-primary" onclick="rcApply()">✅ Застосувати обрані</button>
+      <span id="rcApplyHint" style="margin-left:10px;color:var(--gray);font-size:12px">Познач рядки галочкою — можна один платіж для перевірки. Запис накопичувальний (Факт += сума), дедуп по Референсу.</span>
     </div>
   </div>
 
@@ -925,7 +925,7 @@ function renderFillRange(){
 //   бекенд reconcilePreview (резолв локації за IBAN + матч платник→дитина) →
 //   прев'ю-таблиця зі статусами. БЕЗ ЗАПИСІВ.
 // ═══════════════════════════════════════════════════════════════
-var RC = { busy:false, groups:[] };   // groups: [{fileName, ok, error, preview}]
+var RC = { busy:false, parsed:[], groups:[] };   // parsed:[{fileName,iban,payments}] · groups:[{fileName,ok,error,preview}]
 
 var _RC_STAT = {
   auto:  {icon:'🟢', cls:'green',  txt:'авто'},
@@ -1015,43 +1015,85 @@ async function rcOnFile(input){
   if(RC.busy) return; RC.busy=true;
   $('meta').textContent=files.length+' файл(ів)';
   $('rcBanner').innerHTML=''; $('rcSummary').innerHTML=''; $('rcApplyBar').style.display='none';
-  $('rcWrap').innerHTML='<div class="inv-loading">⏳ Парсинг і зіставлення…</div>';
-  RC.groups=[];
+  $('rcWrap').innerHTML='<div class="inv-loading">⏳ Парсинг…</div>';
+  RC.parsed=[]; RC.groups=[];
   try{
     for (var i=0;i<files.length;i++){
-      var fname=files[i].name, parsed=null, perr=null;
-      try{ parsed=await rcParseFile(files[i]); }catch(e){ perr=String(e); }
-      if(perr){ RC.groups.push({fileName:fname, ok:false, error:perr}); continue; }
-      try{
-        var r=await fetch(CFG.SCRIPT_URL,{ method:'POST', redirect:'follow',
-          headers:{'Content-Type':'text/plain;charset=utf-8'},
-          body:JSON.stringify({action:'reconcilePreview', iban:parsed.iban, payments:parsed.payments}) });
-        var j=await r.json();
-        if(!j.ok) RC.groups.push({fileName:fname, ok:false, error:j.error||'preview failed'});
-        else { j.fileName=fname; RC.groups.push({fileName:fname, ok:true, preview:j}); }
-      }catch(e2){ RC.groups.push({fileName:fname, ok:false, error:String(e2&&e2.message||e2)}); }
+      var fname=files[i].name;
+      try{ var parsed=await rcParseFile(files[i]); RC.parsed.push(parsed); }
+      catch(e){ RC.groups.push({fileName:fname, ok:false, error:String(e)}); }
     }
-    rcRenderAll();
+    await rcPreviewAll();
   } finally { RC.busy=false; input.value=''; }   // value='' → повторний вибір тих самих файлів спрацює
 }
 
-function rcRowsHtml(p){
+// Прогін усіх розпарсених виписок через reconcilePreview (read-only) + рендер.
+async function rcPreviewAll(){
+  $('rcWrap').innerHTML='<div class="inv-loading">⏳ Зіставлення платників з дітьми…</div>';
+  // лишаємо лише parse-error плашки, ok-групи перебудовуємо
+  RC.groups=RC.groups.filter(function(g){return !g.ok;});
+  for (var i=0;i<RC.parsed.length;i++){
+    var pr=RC.parsed[i];
+    try{
+      var r=await fetch(CFG.SCRIPT_URL,{ method:'POST', redirect:'follow',
+        headers:{'Content-Type':'text/plain;charset=utf-8'},
+        body:JSON.stringify({action:'reconcilePreview', iban:pr.iban, payments:pr.payments}) });
+      var j=await r.json();
+      if(!j.ok) RC.groups.push({fileName:pr.fileName, ok:false, error:j.error||'preview failed'});
+      else { j.fileName=pr.fileName; RC.groups.push({fileName:pr.fileName, ok:true, preview:j, parsedIdx:i}); }
+    }catch(e2){ RC.groups.push({fileName:pr.fileName, ok:false, error:String(e2&&e2.message||e2)}); }
+  }
+  rcRenderAll();
+}
+
+function rcToday(){
+  var d=new Date(), p=function(n){return n<10?'0'+n:''+n;};
+  return p(d.getDate())+'.'+p(d.getMonth()+1)+'.'+d.getFullYear();
+}
+
+// Чи можна писати рядок: auto (1 кандидат із рядком у Payment) АБО multi з обраним.
+function rcResolveRow(x, g){
+  if(x.status==='auto' && x.candidates && x.candidates.length){
+    return x.candidates[0].row>=0 ? x.candidates[0] : null;
+  }
+  if(x.status==='multi'){
+    var sel=document.querySelector('.rc-sel[data-g="'+g+'"][data-i="'+x.i+'"]');
+    if(sel && sel.value!==''){ var c=x.candidates[+sel.value]; return (c&&c.row>=0)?c:null; }
+  }
+  return null;
+}
+
+function rcChkToggle(sel){          // multi: чекбокс активний лише коли дитину обрано
+  var g=sel.getAttribute('data-g'), i=sel.getAttribute('data-i');
+  var chk=document.querySelector('.rc-chk[data-g="'+g+'"][data-i="'+i+'"]');
+  if(chk){ chk.disabled = (sel.value===''); if(sel.value==='') chk.checked=false; }
+}
+
+function rcRowsHtml(p, g){
+  var today=rcToday();
   var h='<div style="overflow-x:auto"><table class="inv-table"><thead><tr>'
-    +'<th>Дата</th><th>Сума</th><th>Платник (виписка)</th><th>Прізв.</th><th>Статус</th><th>Дитина → рядок</th><th>Міс./Кол.</th></tr></thead><tbody>';
+    +'<th style="width:34px"></th><th>Дата</th><th>Сума</th><th>Платник (виписка)</th><th>Прізв.</th><th>Статус</th><th>Дитина → рядок</th><th>Міс./Кол.</th></tr></thead><tbody>';
   p.rows.forEach(function(x){
     var st=_RC_STAT[x.status]||_RC_STAT.none;
+    var writable=(x.status==='auto' && x.candidates && x.candidates.length && x.candidates[0].row>=0) || (x.status==='multi');
+    var chkDisabled=(x.status!=='auto');   // multi вмикається після вибору; none — ніколи
+    var chk = writable
+      ? '<input type="checkbox" class="rc-chk" data-g="'+g+'" data-i="'+x.i+'"'+(chkDisabled?' disabled':'')+'>'
+      : '';
     var child='';
     if(x.status==='multi'){
-      child='<select class="rc-sel" data-i="'+x.i+'"><option value="">— оберіть —</option>'
-        +x.candidates.map(function(c,ci){ return '<option value="'+ci+'">'+escapeHtml(c.childName)+(c.group?' ('+escapeHtml(c.group)+')':'')+'</option>'; }).join('')
+      child='<select class="rc-sel" data-g="'+g+'" data-i="'+x.i+'" onchange="rcChkToggle(this)"><option value="">— оберіть —</option>'
+        +x.candidates.map(function(c,ci){ return '<option value="'+ci+'"'+(c.row<0?' disabled':'')+'>'+escapeHtml(c.childName)+(c.group?' ('+escapeHtml(c.group)+')':'')+(c.row<0?' — нема рядка':'')+'</option>'; }).join('')
         +'</select>';
     } else if(x.candidates&&x.candidates.length){
       var c=x.candidates[0];
-      child=escapeHtml(c.childName)+(c.group?' <span style="color:var(--gray);font-size:11px">('+escapeHtml(c.group)+')</span>':'')+(c.row>=0?' <span style="color:var(--gray);font-size:11px">р.'+(c.row+1)+'</span>':'');
+      child=escapeHtml(c.childName)+(c.group?' <span style="color:var(--gray);font-size:11px">('+escapeHtml(c.group)+')</span>':'')+(c.row>=0?' <span style="color:var(--gray);font-size:11px">р.'+(c.row+1)+'</span>':' <span style="color:var(--red2);font-size:11px">нема рядка в Payment</span>');
       if(x.existing>0) child+=' <span style="color:#2980b9;font-size:11px">· вже '+fmtUah(x.existing)+', додасться +'+fmtUah(x.amount)+'</span>';
     } else child='<span style="color:var(--gray)">—</span>';
+    var dateCell=escapeHtml(x.date)+(x.date===today?' <span title="сьогодні — день незавершений" style="color:var(--orange);font-size:11px">⚠</span>':'');
     h+='<tr>'
-      +'<td data-label="Дата">'+escapeHtml(x.date)+'</td>'
+      +'<td>'+chk+'</td>'
+      +'<td data-label="Дата">'+dateCell+'</td>'
       +'<td data-label="Сума" style="text-align:right;white-space:nowrap"><b>'+fmtUah(x.amount)+'</b></td>'
       +'<td data-label="Платник">'+escapeHtml(x.payerRaw)+(x.payerVia&&x.payerVia!=='individual'?' <span style="color:var(--gray);font-size:11px">['+escapeHtml(x.payerVia)+']</span>':'')+'</td>'
       +'<td data-label="Прізв."><span style="color:var(--gray);font-size:12px">'+escapeHtml(x.payerSurname||'')+'</span></td>'
@@ -1064,35 +1106,89 @@ function rcRowsHtml(p){
 }
 
 function rcRenderAll(){
-  var total={auto:0,multi:0,none:0,dup:0};
+  var total={auto:0,multi:0,none:0};
   var okGroups=RC.groups.filter(function(g){return g.ok;});
-  okGroups.forEach(function(g){ g.preview.rows.forEach(function(x){ total[x.status]=(total[x.status]||0)+1; }); });
+  okGroups.forEach(function(g){ g.preview.rows.forEach(function(x){ if(total[x.status]!=null) total[x.status]++; }); });
 
   $('rcSummary').innerHTML=['auto','multi','none'].map(function(s){
     return '<span class="fc-stat '+_RC_STAT[s].cls+'">'+_RC_STAT[s].icon+' '+_RC_STAT[s].txt+': '+(total[s]||0)+'</span>';
   }).join('');
 
+  var today=rcToday();
   var html='';
-  // помилкові файли
   RC.groups.filter(function(g){return !g.ok;}).forEach(function(g){
     html+='<div class="inv-empty" style="text-align:left;margin-bottom:10px">❌ <b>'+escapeHtml(g.fileName)+'</b>: '+escapeHtml(g.error)+'</div>';
   });
-  // успішні — згруповано по локація · категорія
-  okGroups.forEach(function(g){
+  okGroups.forEach(function(g, gi){
     var p=g.preview, d=p.diag||{};
     var diagTxt='індекс прізвищ: дитина '+(d.fromChild||0)+' · BJ '+(d.fromBJ||0)+(d.bjColDetected?'':' ⚠ колонку «сторона договору» НЕ знайдено')+' · картка '+(d.fromCard||0);
-    html+='<div style="margin-bottom:18px">'
+    // distinct-дати виписки
+    var dates={}; p.rows.forEach(function(x){ if(x.date) dates[x.date]=true; });
+    var stmtDates=Object.keys(dates);
+    // B: дні, що вже звірялись
+    var proc=(p.processedDates||[]); var procSet={}; proc.forEach(function(dd){procSet[dd]=true;});
+    var dupDays=stmtDates.filter(function(dd){return procSet[dd];});
+    // C: чи включає сьогодні
+    var hasToday=stmtDates.indexOf(today)>=0;
+    var warn='';
+    if(dupDays.length) warn+='<div style="margin-top:6px;padding:6px 10px;border-radius:8px;background:#fff4e5;border:1px solid #ffd9a8;font-size:12px">⚠ дні вже оброблялись: <b>'+dupDays.map(escapeHtml).join(', ')+'</b> — повторно? (дублі по Референсу все одно пропустяться)</div>';
+    if(hasToday) warn+='<div style="margin-top:6px;padding:6px 10px;border-radius:8px;background:#fff8e1;border:1px solid #ffe6a0;font-size:12px">⏳ виписка включає <b>сьогодні ('+escapeHtml(today)+')</b> — день незавершений, можливі донарахування</div>';
+    html+='<div style="margin-bottom:18px" data-grp="'+gi+'">'
       +'<div class="fc-banner" style="padding:12px 14px;border-radius:12px;background:#eef6ff;border:1px solid #cfe3fb;margin-bottom:8px">'
       +'<b>'+escapeHtml(p.loc)+'</b> · '+escapeHtml(p.typeLabel||(p.type==='extras'?'Додаткові':'Навчання'))
       +' <span style="color:var(--gray)">('+escapeHtml(p.orgName||'')+')</span><br>'
       +'<span style="font-size:12px;color:var(--gray)">📄 '+escapeHtml(p.fileName||'')+' · рахунок '+escapeHtml(p.iban)+' · платежів: '+p.count+'</span><br>'
       +'<span style="font-size:11px;color:var(--gray)">'+escapeHtml(diagTxt)+'</span>'
-      +'</div>'+rcRowsHtml(p)+'</div>';
+      +warn
+      +'</div>'+rcRowsHtml(p, gi)+'</div>';
   });
   if(!html) html='<div class="inv-empty">Нічого не розпізнано.</div>';
   $('rcBanner').innerHTML='';
   $('rcWrap').innerHTML=html;
   $('rcApplyBar').style.display = okGroups.length ? '' : 'none';
+}
+
+// Збір обраних рядків по групах і запис через reconcileApply.
+async function rcApply(){
+  if(RC.busy) return;
+  var okGroups=RC.groups.filter(function(g){return g.ok;});
+  var batch=[];   // {iban, items:[...], groupLabel}
+  var totalItems=0, totalSum=0;
+  okGroups.forEach(function(g, gi){
+    var p=g.preview, items=[];
+    p.rows.forEach(function(x){
+      var chk=document.querySelector('.rc-chk[data-g="'+gi+'"][data-i="'+x.i+'"]');
+      if(!chk||!chk.checked) return;
+      var cand=rcResolveRow(x, gi); if(!cand) return;
+      items.push({childRow:cand.row, childName:cand.childName, amount:x.amount, date:x.date, ref:x.ref, payerRaw:x.payerRaw});
+      totalSum+=x.amount;
+    });
+    if(items.length){ batch.push({iban:p.iban, items:items, label:p.loc+' · '+(p.typeLabel||'')}); totalItems+=items.length; }
+  });
+  if(!totalItems){ showToast('Познач хоча б один рядок','error'); return; }
+  if(!confirm('Записати '+totalItems+' платіж(ів) на суму '+fmtUah(totalSum)+' грн?\nНакопичувально (Факт += сума). Дублі по Референсу пропускаються.')) return;
+
+  RC.busy=true;
+  $('rcApplyBar').style.display='none';
+  $('rcWrap').insertAdjacentHTML('afterbegin','<div id="rcApplyMsg" class="inv-loading">⏳ Запис у Payment…</div>');
+  var by=(S.user&&S.user.role)||'';
+  var W=0,S2=0,E=0, msgs=[];
+  try{
+    for(var b=0;b<batch.length;b++){
+      try{
+        var r=await fetch(CFG.SCRIPT_URL,{ method:'POST', redirect:'follow',
+          headers:{'Content-Type':'text/plain;charset=utf-8'},
+          body:JSON.stringify({action:'reconcileApply', iban:batch[b].iban, by:by, items:batch[b].items}) });
+        var j=await r.json();
+        if(!j.ok){ E+=batch[b].items.length; msgs.push('❌ '+batch[b].label+': '+(j.error||'помилка')); }
+        else { W+=j.written; S2+=j.skipped; E+=j.errors; msgs.push('✅ '+batch[b].label+': записано '+j.written+', пропущено '+j.skipped+(j.errors?', помилок '+j.errors:'')); }
+      }catch(e){ E+=batch[b].items.length; msgs.push('❌ '+batch[b].label+': '+(e&&e.message||e)); }
+    }
+    showToast('Записано '+W+' · пропущено '+S2+(E?' · помилок '+E:''), E?'error':'info', 6000);
+  } finally { RC.busy=false; }
+  // оновлюємо прев'ю (свіжі existing + processedDates), потім показуємо підсумок
+  await rcPreviewAll();
+  $('rcWrap').insertAdjacentHTML('afterbegin','<div class="inv-card" style="margin-bottom:12px"><b>Результат запису:</b><br>'+msgs.map(escapeHtml).join('<br>')+'</div>');
 }
 
 (async function bootstrap(){

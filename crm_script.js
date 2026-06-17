@@ -314,6 +314,7 @@ function doPost(e) {
     else if (body.action === 'bulkRemoveAttendanceMarks') result = bulkRemoveAttendanceMarks(body || {});
     else if (body.action === 'exportAttendanceToPayments') result = exportAttendanceToPayments(body || {});
     else if (body.action === 'reconcilePreview')            result = reconcilePreview(body || {}); // v6.51 ФАЗА 1
+    else if (body.action === 'reconcileApply')              result = reconcileApply(body || {});   // v6.51.3 ФАЗА 2
     else if (body.action === 'exportToSalaryExtras')      result = exportToSalaryExtras(body || {});
     else if (body.action === 'exportAttendance')          result = exportAttendance(body || {});
     else if (body.action === 'addPredmetny')              result = addPredmetny(body.data || {});
@@ -4613,6 +4614,17 @@ function reconcilePreview(body){
     var built = _buildPayerIndex(loc);
     var idx = built.index;
 
+    // Дати, що вже звірялися (для цього loc+iban) — м'яке попередження «день уже оброблено».
+    var processed = {};
+    var ibanN = iban.replace(/\s+/g, '').toUpperCase();
+    var logSh0 = _getReconcileLogSheet();
+    var lv0 = logSh0.getDataRange().getValues();
+    for (var lr = 1; lr < lv0.length; lr++){
+      if (trim(lv0[lr][2]) === loc && String(lv0[lr][3] || '').replace(/\s+/g, '').toUpperCase() === ibanN){
+        var dd = trim(lv0[lr][4]); if (dd) processed[dd] = true;
+      }
+    }
+
     var rows = payments.map(function(rec, i){
       var payer = _extractPayer(rec);
       var sk = _surnameKey(payer.raw);               // КЛЮЧ = ПРІЗВИЩЕ платника
@@ -4641,8 +4653,91 @@ function reconcilePreview(body){
     });
 
     return {ok:true, loc:loc, type:type, typeLabel:acct.typeLabel, orgName:acct.orgName,
-            iban:iban, count:rows.length, rows:rows, diag:built.diag};
+            iban:iban, count:rows.length, rows:rows, diag:built.diag,
+            processedDates:Object.keys(processed)};
   } catch(e){ return {ok:false, error: e.message || String(e)}; }
+}
+
+// ── Лог-аркуш звірок (CONFIG). Колонка «Ключ дедупу» (15) — для ідемпотентності по Референсу.
+var RECONCILE_LOG_SHEET = 'Звірки_Платежів';
+function _getReconcileLogSheet(){
+  var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var sh = ss.getSheetByName(RECONCILE_LOG_SHEET);
+  if (!sh){
+    sh = ss.insertSheet(RECONCILE_LOG_SHEET);
+    sh.getRange(1, 1, 1, 15).setValues([['Коли','Ким','Локація','IBAN','Дата платежу','Референс',
+      'Платник','Дитина','Рядок','Місяць','Колонка','Сума','Було','Стало','Ключ дедупу']]);
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+
+// ── ФАЗА 2: ЗАПИС. Вхід: {iban, by, items:[{childRow(0-based), childName, amount, date, ref, payerRaw}]}.
+//   Накопичувально (Факт += сума). Колонка — ТІЛЬКИ по шапці (−1 → помилка, без offset).
+//   Ідемпотентність по Референсу (порожній → composite). Skip formula. LockService.
+function reconcileApply(body){
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(30000); }
+  catch(e){ return {ok:false, error:'Система зайнята (інша звірка триває) — спробуйте ще раз'}; }
+  try {
+    body = body || {};
+    var iban = trim(body.iban);
+    var by   = trim(body.by) || '?';
+    var items = body.items || [];
+    var acct = _resolveAccountByIban(iban);
+    if (!acct || !acct.loc) return {ok:false, error:'Рахунок "' + iban + '" не знайдено в Реквізити_Локацій'};
+    var loc = acct.loc, type = acct.type;
+    var reg = _getLocationPaymentRegistry(loc);
+    if (!reg || !reg.sheetId) return {ok:false, error:'Локацію "' + loc + '" не знайдено в CONFIG-реєстрі'};
+    var ss = SpreadsheetApp.openById(reg.sheetId);
+    var paySh = ss.getSheetByName(reg.sheetName) || ss.getSheets()[0];
+    var data = paySh.getDataRange().getValues();
+
+    var logSh = _getReconcileLogSheet();
+    var lv = logSh.getDataRange().getValues();
+    var applied = {};                              // ключ дедупу -> true (вже застосовано)
+    for (var lr = 1; lr < lv.length; lr++){ var k = trim(lv[lr][14]); if (k) applied[k] = true; }
+
+    var ibanN = iban.replace(/\s+/g, '').toUpperCase();
+    var written = 0, skipped = 0, errors = 0, details = [], logAppend = [], overlay = {};
+
+    items.forEach(function(it){
+      var childRow = Number(it.childRow);          // 0-based у Payment
+      var childName = trim(it.childName);
+      var amount = Number(it.amount) || 0;
+      var ref = trim(it.ref);
+      var dateStr = String(it.date || '');
+      var dupKey = ref ? ('REF|' + ref) : ('CMP|' + ibanN + '|' + dateStr + '|' + childRow + '|' + amount);
+
+      if (applied[dupKey]){ skipped++; details.push({childName:childName, status:'skipped-dup', ref:ref}); return; }
+      if (!(childRow >= 3) || childRow >= data.length){ errors++; details.push({childName:childName, status:'error', msg:'рядок поза межами'}); return; }
+
+      var d = _recParseDate(dateStr);
+      var jsMonth = d ? d.getMonth() : -1;
+      var monthCol0 = (jsMonth >= 0) ? _detectMonthColByHeader(data, jsMonth) : -1;
+      if (monthCol0 < 0){ errors++; details.push({childName:childName, status:'error', msg:'місяць не знайдено в шапці — НЕ записано'}); return; }
+      var factCol0 = _factColForType(monthCol0, type);
+
+      if (paySh.getRange(childRow + 1, factCol0 + 1).getFormula()){
+        skipped++; details.push({childName:childName, status:'skipped-formula'}); return;
+      }
+
+      var okey = childRow + ',' + factCol0;
+      var prev = overlay.hasOwnProperty(okey) ? overlay[okey] : (Number(toNum(data[childRow][factCol0])) || 0);
+      var nv = prev + amount;
+      paySh.getRange(childRow + 1, factCol0 + 1).setValue(nv);
+      overlay[okey] = nv;
+      applied[dupKey] = true;                      // анти-дубль і в межах батчу
+      written++;
+      logAppend.push([new Date(), by, loc, iban, dateStr, ref, trim(it.payerRaw), childName,
+                      childRow + 1, (jsMonth + 1), _colLetter(factCol0), amount, prev, nv, dupKey]);
+      details.push({childName:childName, status:'written', prev:prev, now:nv, col:_colLetter(factCol0)});
+    });
+
+    if (logAppend.length) logSh.getRange(logSh.getLastRow() + 1, 1, logAppend.length, 15).setValues(logAppend);
+    return {ok:true, loc:loc, written:written, skipped:skipped, errors:errors, details:details};
+  } catch(e){ return {ok:false, error: e.message || String(e)}; }
+  finally { try { lock.releaseLock(); } catch(e){} }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
