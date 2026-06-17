@@ -4510,9 +4510,16 @@ function _detectContractPartyCol(rows){
   return -1;
 }
 
-// Нормалізація ПІБ (повна): апострофи знімаємо, lower, схлопуємо пробіли. Для показу.
+// ГОМОГЛІФИ: ПриватБанк пише ПІБ латинськими двійниками ("Сахащiк" — латинська 'i').
+// Зводимо латиницю до кирилиці — застосовуємо ОДНАКОВО з обох боків (платник + індекс).
+function _lat2cyr(lowerStr){
+  var map = {a:'а', c:'с', e:'е', i:'і', o:'о', p:'р', x:'х', y:'у', k:'к', m:'м'};
+  return String(lowerStr || '').replace(/[aceiopxykm]/g, function(ch){ return map[ch] || ch; });
+}
+// Нормалізація ПІБ (повна): апострофи знімаємо, lower, гомогліфи→кирилиця, схлопуємо пробіли.
 function _normPayerName(s){
-  return String(s || '').replace(/[`'’ʼ]/g, '').toLowerCase().trim().replace(/\s+/g, ' ');
+  var t = String(s || '').replace(/[`'’ʼ]/g, '').toLowerCase().trim().replace(/\s+/g, ' ');
+  return _lat2cyr(t);
 }
 // КЛЮЧ МАТЧИНГУ = ПРІЗВИЩЕ (перший токен). Платник-батько часто має інше ІМ'Я,
 // ніж parent у BJ (мама) — тож матчимо лише по прізвищу. Складене прізвище через
@@ -4616,18 +4623,19 @@ function reconcilePreview(body){
       var monthCol0 = (jsMonth >= 0) ? _detectMonthColByHeader(data, jsMonth) : -1;
       var factCol0  = (monthCol0 >= 0) ? _factColForType(monthCol0, type) : -1;
 
-      // анти-дубль: лише коли РІВНО один кандидат із реальним рядком — чи факт-клітинка вже непорожня
-      var dup = false;
+      // Непорожній Факт — НОРМА (батьки платять частинами → сума ДОДАСТЬСЯ у Фазі 2).
+      // Тому "дубля" по непорожній клітинці НЕ існує; справжній дубль = той самий
+      // Референс уже у Звірки_Платежів — а у Фазі 1 (без записів) дублів не буває.
+      var existing = 0;
       if (uniq.length === 1 && uniq[0].row >= 0 && factCol0 >= 0){
-        var cur = trim((data[uniq[0].row] || [])[factCol0]);
-        if (cur) dup = true;
+        existing = Number(toNum((data[uniq[0].row] || [])[factCol0])) || 0;
       }
-      var status = uniq.length === 0 ? 'none' : (uniq.length === 1 ? (dup ? 'dup' : 'auto') : 'multi');
+      var status = uniq.length === 0 ? 'none' : (uniq.length === 1 ? 'auto' : 'multi');
 
       return {
         i: i, date: String(rec.date || ''), amount: Number(rec.amount) || 0, ref: String(rec.ref || ''),
         payerRaw: payer.raw, payerVia: payer.via, payerSurname: sk,
-        month: (jsMonth + 1), status: status, candidates: uniq,
+        month: (jsMonth + 1), status: status, candidates: uniq, existing: existing,
         factCol: factCol0 >= 0 ? _colLetter(factCol0) : ''
       };
     });

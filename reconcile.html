@@ -1048,6 +1048,7 @@ function rcRowsHtml(p){
     } else if(x.candidates&&x.candidates.length){
       var c=x.candidates[0];
       child=escapeHtml(c.childName)+(c.group?' <span style="color:var(--gray);font-size:11px">('+escapeHtml(c.group)+')</span>':'')+(c.row>=0?' <span style="color:var(--gray);font-size:11px">р.'+(c.row+1)+'</span>':'');
+      if(x.existing>0) child+=' <span style="color:#2980b9;font-size:11px">· вже '+fmtUah(x.existing)+', додасться +'+fmtUah(x.amount)+'</span>';
     } else child='<span style="color:var(--gray)">—</span>';
     h+='<tr>'
       +'<td data-label="Дата">'+escapeHtml(x.date)+'</td>'
@@ -1067,7 +1068,7 @@ function rcRenderAll(){
   var okGroups=RC.groups.filter(function(g){return g.ok;});
   okGroups.forEach(function(g){ g.preview.rows.forEach(function(x){ total[x.status]=(total[x.status]||0)+1; }); });
 
-  $('rcSummary').innerHTML=['auto','multi','none','dup'].map(function(s){
+  $('rcSummary').innerHTML=['auto','multi','none'].map(function(s){
     return '<span class="fc-stat '+_RC_STAT[s].cls+'">'+_RC_STAT[s].icon+' '+_RC_STAT[s].txt+': '+(total[s]||0)+'</span>';
   }).join('');
 
