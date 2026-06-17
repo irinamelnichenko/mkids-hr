@@ -481,6 +481,16 @@ tr.emp-inc-green>td:first-child{border-left:4px solid transparent}
         <span class="nav-badge hidden" id="tasksBadge">0</span>
       </div>
 
+      <!-- v6.51: CFO-інструменти — верхньорівневі, видимі лише мережевим ролям (JS у bootstrap) -->
+      <div class="nav-item" id="navFillControl" style="display:none"
+           onclick="window.location.href='control.html'">
+        <span class="ni">📋</span> Контроль заповнення
+      </div>
+      <div class="nav-item" id="navReconcile" style="display:none"
+           onclick="window.location.href='reconcile.html'">
+        <span class="ni">💳</span> Звірка платежів
+      </div>
+
       <div class="nav-sec" data-section="crm">👶 КЛІЄНТИ CRM</div>
       <div class="nav-item" data-permission="clients_list" data-parent="crm" data-perm-page="clients"
            onclick="goPerm('clients_list')">
@@ -508,10 +518,6 @@ tr.emp-inc-green>td:first-child{border-left:4px solid transparent}
       <div class="nav-item" data-permission="timesheet_staff" data-parent="hr" data-perm-page="index"
            data-v="tabel" onclick="goPerm('timesheet_staff')">
         <span class="ni">📋</span> Табель співробітників
-      </div>
-      <div class="nav-item" id="navFillControl" data-parent="hr" style="display:none"
-           onclick="window.location.href='control.html'">
-        <span class="ni">📋</span> Контроль заповнення
       </div>
       <div class="nav-item" data-permission="vacations" data-parent="hr" data-perm-page="index"
            data-v="vacations" id="navVacations" onclick="goPerm('vacations')">
@@ -1972,9 +1978,13 @@ function applyRoleVisibility(){
     if (TASKS_ALLOWED.indexOf(role) === -1)
       document.querySelectorAll('[data-permission="tasks"]').forEach(el => { el.style.display='none'; });
   })();
-  // v6.51: «Контроль заповнення» — лише CFO + менеджмент (мережеві ролі).
+  // v6.51: «Контроль заповнення» + «Звірка платежів» — верхньорівневі,
+  //   лише CFO + менеджмент (мережеві ролі).
+  var _isNet = (typeof isNetworkRole === 'function' && isNetworkRole(role));
   var _fc = document.getElementById('navFillControl');
-  if (_fc) _fc.style.display = (typeof isNetworkRole === 'function' && isNetworkRole(role)) ? '' : 'none';
+  if (_fc) _fc.style.display = _isNet ? '' : 'none';
+  var _rc = document.getElementById('navReconcile');
+  if (_rc) _rc.style.display = _isNet ? '' : 'none';
   document.querySelectorAll('[data-section]').forEach(section => {
     const sectionName = section.dataset.section;
     const items = document.querySelectorAll('[data-permission][data-parent="' + sectionName + '"]');

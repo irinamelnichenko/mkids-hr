@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>m.kids — Контроль заповнення</title>
+<title>m.kids — Звірка платежів</title>
+<script src="xlsx.full.min.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -313,11 +314,11 @@ select,input{font-family:inherit}
            onclick="window.location.href='invoice_report.html'">
         <span class="ni">📊</span> Звіт розсилок
       </div>
-      <div class="nav-item active" id="navFillControl" data-parent="finance" style="display:none"
+      <div class="nav-item" id="navFillControl" data-parent="finance" style="display:none"
            onclick="window.location.href='control.html'">
         <span class="ni">📋</span> Контроль заповнення
       </div>
-      <div class="nav-item" id="navReconcile" data-parent="finance" style="display:none"
+      <div class="nav-item active" id="navReconcile" data-parent="finance" style="display:none"
            onclick="window.location.href='reconcile.html'">
         <span class="ni">💳</span> Звірка платежів
       </div>
@@ -346,27 +347,26 @@ select,input{font-family:inherit}
   <div class="hd">
     <button class="menu-toggle" onclick="toggleSidebar()" aria-label="Меню">☰</button>
     <div style="flex:1;min-width:260px">
-      <h1>📋 Контроль заповнення</h1>
-      <div class="hd-meta" id="meta">завантаження…</div>
+      <h1>💳 Звірка платежів</h1>
+      <div class="hd-meta" id="meta">завантаж виписку ПриватБанку (.xls / .xlsx / .csv)</div>
     </div>
     <div class="hd-ctrl">
-      <div class="fc-period" id="fcPeriod">
-        <button data-p="day" class="active" onclick="setPeriod('day')">День</button>
-        <button data-p="week" onclick="setPeriod('week')">Тиждень</button>
-        <button data-p="month" onclick="setPeriod('month')">Місяць</button>
-      </div>
-      <input type="date" id="fcDate" class="month-sel">
-      <button id="refreshBtn" class="btn btn-primary" onclick="loadFill()">🔄 Оновити</button>
+      <input type="file" id="rcFile" accept=".xls,.xlsx,.csv" style="display:none" onchange="rcOnFile(this)">
+      <button class="btn btn-primary" onclick="document.getElementById('rcFile').click()">📂 Обрати виписку</button>
     </div>
   </div>
 
   <div id="errBox" class="err hidden"></div>
 
   <div id="content" class="hidden">
-    <div id="fcBanner"></div>
-    <div id="fcChips" class="fc-chips"></div>
+    <div id="rcBanner"></div>
+    <div id="rcSummary" class="fc-chips"></div>
     <div class="inv-card">
-      <div id="fcWrap"><div class="inv-loading">⏳ Завантаження…</div></div>
+      <div id="rcWrap"><div class="inv-empty">📂 Обери файл виписки ПриватБанку — система визначить локацію за рахунком і зіставить платників з дітьми.</div></div>
+    </div>
+    <div id="rcApplyBar" style="margin-top:14px;display:none">
+      <button class="btn" disabled title="Запис буде у Фазі 2" style="opacity:.6;cursor:not-allowed">✅ Застосувати (Фаза 2)</button>
+      <span style="margin-left:10px;color:var(--gray);font-size:12px">Фаза 1 — лише прев'ю, без записів у Payment.</span>
     </div>
   </div>
 
@@ -518,7 +518,7 @@ function renderLocationSelector(){
 }
 
 // ── UNIFIED SIDEBAR — permissions, role-visibility, cross-page nav ────────
-var CURRENT_PAGE = 'control';
+var CURRENT_PAGE = 'reconcile';
 
 var PERMISSIONS = {
   cfo: 'all',
@@ -920,26 +920,187 @@ function renderFillRange(){
   $('fcWrap').innerHTML = html;
 }
 
+// ═══════════════════════════════════════════════════════════════
+// v6.51 — ЗВІРКА ПЛАТЕЖІВ (ФАЗА 1): парс виписки ПриватБанку (SheetJS) →
+//   бекенд reconcilePreview (резолв локації за IBAN + матч платник→дитина) →
+//   прев'ю-таблиця зі статусами. БЕЗ ЗАПИСІВ.
+// ═══════════════════════════════════════════════════════════════
+var RC = { iban:'', rows:[], preview:null, busy:false };
+
+var _RC_STAT = {
+  auto:  {icon:'🟢', cls:'green',  txt:'авто'},
+  multi: {icon:'🟡', cls:'yellow', txt:'вибір'},
+  none:  {icon:'🔴', cls:'red',    txt:'не знайдено'},
+  dup:   {icon:'⚪', cls:'gray',   txt:'дубль'}
+};
+
+function rcMatrix(aoa){
+  // нормалізуємо всі рядки в масив рядкових клітинок
+  return (aoa||[]).map(function(row){ return (row||[]).map(function(c){ return c==null?'':String(c); }); });
+}
+
+// Знаходить IBAN (UAxxx...) у шапці виписки.
+function rcFindIban(m){
+  var re=/UA\d{2}[0-9A-Z]{10,}/i;
+  for (var r=0;r<Math.min(40,m.length);r++){
+    for (var c=0;c<m[r].length;c++){
+      var hit=String(m[r][c]).replace(/\s+/g,'').match(re);
+      if (hit) return hit[0].toUpperCase();
+    }
+  }
+  return '';
+}
+
+// Знаходить рядок-заголовок таблиці транзакцій і мапить колонки за підписами.
+function rcFindTable(m){
+  var want = {
+    n:        ['№','номер'],
+    date:     ['дата'],
+    time:     ['час'],
+    amount:   ['сума'],
+    currency: ['валют'],
+    purpose:  ['призначен'],
+    edrpou:   ['єдрпоу','рнокпп','код'],
+    counterparty:['контрагент','найменування','назва'],
+    account:  ['рахунок'],
+    mfo:      ['мфо'],
+    ref:      ['референс','reference','ref']
+  };
+  for (var r=0;r<Math.min(40,m.length);r++){
+    var row=m[r].map(function(s){return s.toLowerCase();});
+    var hits=row.filter(function(s){return s.indexOf('дата')>=0||s.indexOf('сума')>=0||s.indexOf('призначен')>=0;}).length;
+    if (hits>=2){
+      var map={};
+      Object.keys(want).forEach(function(key){
+        for (var c=0;c<row.length;c++){
+          if (map[key]!=null) break;
+          for (var k=0;k<want[key].length;k++){ if (row[c].indexOf(want[key][k])>=0){ map[key]=c; break; } }
+        }
+      });
+      return {headerRow:r, map:map};
+    }
+  }
+  return null;
+}
+
+function rcOnFile(input){
+  var f=input.files&&input.files[0]; if(!f) return;
+  if (typeof XLSX==='undefined'){ showToast('❌ Бібліотека XLSX не завантажена','error'); return; }
+  $('meta').textContent='Файл: '+f.name;
+  var reader=new FileReader();
+  reader.onload=function(ev){
+    try{
+      var wb=XLSX.read(new Uint8Array(ev.target.result),{type:'array',cellDates:false,raw:true});
+      var ws=wb.Sheets[wb.SheetNames[0]];
+      var aoa=XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:false});
+      var m=rcMatrix(aoa);
+      var iban=rcFindIban(m);
+      var tbl=rcFindTable(m);
+      if(!iban){ rcError('У файлі не знайдено номер рахунку (UA…). Перевір, що це виписка ПриватБанку.'); return; }
+      if(!tbl||tbl.map.date==null||tbl.map.amount==null){ rcError('Не вдалося розпізнати таблицю транзакцій (немає колонок Дата/Сума).'); return; }
+      var pays=[];
+      for (var r=tbl.headerRow+1;r<m.length;r++){
+        var row=m[r]; var g=function(key){ var c=tbl.map[key]; return c==null?'':String(row[c]||'').trim(); };
+        var dateV=g('date'), amtRaw=g('amount');
+        if(!dateV && !amtRaw) continue;
+        var amt=parseFloat(amtRaw.replace(/\s/g,'').replace(',','.'));
+        if(isNaN(amt)) continue;
+        if(amt<=0) continue;                          // лише надходження
+        pays.push({ date:dateV, time:g('time'), amount:amt, currency:g('currency'),
+                    purpose:g('purpose'), edrpou:g('edrpou'), counterparty:g('counterparty'),
+                    account:g('account'), mfo:g('mfo'), ref:g('ref') });
+      }
+      if(!pays.length){ rcError('У виписці не знайдено вхідних платежів (сума > 0).'); return; }
+      RC.iban=iban; RC.rows=pays;
+      rcSendPreview();
+    }catch(e){ rcError('Помилка парсингу файлу: '+(e&&e.message||e)); }
+  };
+  reader.onerror=function(){ rcError('Не вдалося прочитати файл.'); };
+  reader.readAsArrayBuffer(f);
+}
+
+function rcError(msg){
+  $('rcBanner').innerHTML='';
+  $('rcSummary').innerHTML='';
+  $('rcApplyBar').style.display='none';
+  $('rcWrap').innerHTML='<div class="inv-empty">❌ '+escapeHtml(msg)+'</div>';
+}
+
+async function rcSendPreview(){
+  if(RC.busy) return; RC.busy=true;
+  $('rcWrap').innerHTML='<div class="inv-loading">⏳ Зіставлення платників з дітьми…</div>';
+  try{
+    var r=await fetch(CFG.SCRIPT_URL,{
+      method:'POST', redirect:'follow',
+      headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body:JSON.stringify({action:'reconcilePreview', iban:RC.iban, payments:RC.rows})
+    });
+    var j=await r.json();
+    if(!j.ok) throw new Error(j.error||'preview failed');
+    RC.preview=j;
+    rcRender();
+  }catch(e){ rcError(String(e&&e.message||e)); }
+  finally{ RC.busy=false; }
+}
+
+function rcRender(){
+  var p=RC.preview; if(!p) return;
+  var cnt={auto:0,multi:0,none:0,dup:0};
+  p.rows.forEach(function(x){ cnt[x.status]=(cnt[x.status]||0)+1; });
+
+  $('rcBanner').innerHTML='<div class="fc-banner" style="padding:14px 16px;border-radius:12px;background:#eef6ff;border:1px solid #cfe3fb;margin-bottom:12px">'
+    +'<b>'+escapeHtml(p.loc)+'</b> · '+escapeHtml(p.typeLabel||(p.type==='extras'?'Додаткові':'Навчання'))
+    +' <span style="color:var(--gray)">('+escapeHtml(p.orgName||'')+')</span><br>'
+    +'<span style="font-size:12px;color:var(--gray)">Рахунок: '+escapeHtml(p.iban)+' · платежів: '+p.count+'</span></div>';
+
+  $('rcSummary').innerHTML=['auto','multi','none','dup'].map(function(s){
+    return '<span class="fc-stat '+_RC_STAT[s].cls+'">'+_RC_STAT[s].icon+' '+_RC_STAT[s].txt+': '+(cnt[s]||0)+'</span>';
+  }).join('');
+
+  var h='<div style="overflow-x:auto"><table class="inv-table"><thead><tr>'
+    +'<th>Дата</th><th>Сума</th><th>Платник (з виписки)</th><th>Статус</th><th>Дитина → рядок</th><th>Міс./Кол.</th></tr></thead><tbody>';
+  p.rows.forEach(function(x){
+    var st=_RC_STAT[x.status]||_RC_STAT.none;
+    var child='';
+    if(x.status==='multi'){
+      child='<select class="rc-sel" data-i="'+x.i+'">'
+        +'<option value="">— оберіть —</option>'
+        +x.candidates.map(function(c,ci){ return '<option value="'+ci+'">'+escapeHtml(c.childName)+(c.group?' ('+escapeHtml(c.group)+')':'')+'</option>'; }).join('')
+        +'</select>';
+    } else if(x.candidates&&x.candidates.length){
+      var c=x.candidates[0];
+      child=escapeHtml(c.childName)+(c.group?' <span style="color:var(--gray);font-size:11px">('+escapeHtml(c.group)+')</span>':'')+(c.row>=0?' <span style="color:var(--gray);font-size:11px">р.'+(c.row+1)+'</span>':'');
+    } else {
+      child='<span style="color:var(--gray)">—</span>';
+    }
+    h+='<tr>'
+      +'<td data-label="Дата">'+escapeHtml(x.date)+'</td>'
+      +'<td data-label="Сума" style="text-align:right;white-space:nowrap"><b>'+fmtUah(x.amount)+'</b></td>'
+      +'<td data-label="Платник">'+escapeHtml(x.payerRaw)+(x.payerVia&&x.payerVia!=='individual'?' <span style="color:var(--gray);font-size:11px">['+escapeHtml(x.payerVia)+']</span>':'')+'</td>'
+      +'<td data-label="Статус"><span class="fc-stat '+st.cls+'">'+st.icon+' '+st.txt+'</span></td>'
+      +'<td data-label="Дитина">'+child+'</td>'
+      +'<td data-label="Кол.">'+(x.month||'?')+' / '+(x.factCol||'?')+'</td>'
+      +'</tr>';
+  });
+  h+='</tbody></table></div>';
+  $('rcWrap').innerHTML=h;
+  $('rcApplyBar').style.display='';
+}
+
 (async function bootstrap(){
   var sessUser = readSession();
   if (!sessUser){ window.location.href = 'index.html'; return; }
   S.user = sessUser;
-  // Доступ: лише CFO + менеджмент (мережеві ролі). Директор/медсестра/вихователь → index.
+  // Доступ: поки лише CFO + менеджмент (мережеві ролі). Інші → index.
   if (!isNetworkRole(S.user.role)){ window.location.href = 'index.html'; return; }
   updUserUI();
-  // Показати CFO/HR-пункти сайдбару.
   var _rl = String(S.user.role || '').toLowerCase();
   if (_rl === 'hr' || _rl === 'cfo'){ var _nr = $('navInvReport'); if (_nr) _nr.style.display = ''; }
   var _fcNav = $('navFillControl'); if (_fcNav) _fcNav.style.display = '';
   var _rcNav = $('navReconcile');   if (_rcNav) _rcNav.style.display = '';
 
-  FC.date = _todayISO();
-  $('fcDate').value = FC.date;
-  $('fcDate').addEventListener('change', loadFill);
-  $('meta').textContent = 'Дата: ' + FC.date;
   $('loadBox').classList.add('hidden');
   $('content').classList.remove('hidden');
-  await loadFill();
 })();
 </script>
 <script>

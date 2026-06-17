@@ -48,7 +48,10 @@ var SHEET_HEALTH     = 'Здоров\'я';
 //            R=email
 var HR_SHEET_ID       = '1KeSelcGyp8ijUQOmzUjFlX78TOScMWAFm7Hjf33Doyo';
 var HR_TAB_NAME       = '2025-2026';
-var HR_COLS           = 18;
+// v6.44: A:O(1-15) дані, P(16)=формула life-cycle, Q(17)=reserved, R(18)=email,
+//   S(19)=Паспорт, T(20)=Ставка ЗП, U(21)=Умови роботи, V(22)=Модель розрахунку.
+//   Append-only: існуючі колонки не зсуваються. HR_COLS 18→22.
+var HR_COLS           = 23;   // v6.48: +W='Оцінка (JSON)' (OKR-оцінка співробітника)
 var HR_AUDIT_SHEET    = 'HR_Audit';
 var HR_AUDIT_HEADER   = ['ts','actorId','actorName','action','rowNum','before_json','after_json'];
 
@@ -64,6 +67,29 @@ var MONTHS_UA      = ['вересень','жовтень','листопад','г
 var MONTHS_JS      = [8,9,10,11,0,1,2,3,4,5,6,7];
 var MONTHS_DISPLAY = ['Вересень','Жовтень','Листопад','Грудень','Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень'];
 var MONTHS_CAL = ['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
+
+// ═══ ЄДИНИЙ ЗОННИЙ ПОРЯДОК ЛОКАЦІЙ (single source of truth) — v6.50.4 ═══
+// Дзеркало LOCATION_ORDER у фронт-файлах. CFO-порядок:
+//   садочки → школи → управління → онлайн-школа → кухні.
+// Невідомі назви (поза списком) → у кінець (rank 999), алфавітно.
+var LOCATION_ORDER = [
+  'Осокорки','Позняки','Тичини',"Кар'єрна",'Голосієво','Пуща',
+  'Оранж','Борщагівка','Бровари','Кругла','Бігова',
+  'Школа Осокорки','Школа 228','Житомир',
+  'Нац.Гвардії (Благо)','Манхетен (Благо)',
+  'Онлайн школа','Кухня Київ','Кухня Львів','Іва-Франківськ кухня'
+];
+function locationRank(name){
+  var i = LOCATION_ORDER.indexOf(String(name == null ? '' : name).trim());
+  return i === -1 ? 999 : i;
+}
+function sortByLocationOrder(arr, getName){
+  return (arr || []).slice().sort(function(a, b){
+    var na = getName ? getName(a) : a, nb = getName ? getName(b) : b;
+    var ra = locationRank(na), rb = locationRank(nb);
+    return ra - rb || String(na == null ? '' : na).localeCompare(String(nb == null ? '' : nb), 'uk');
+  });
+}
 
 var GROUP_PATTERNS = [
   /mini.?baby/i, /^baby/i, /find/i, /study/i, /preschool/i,
@@ -214,6 +240,8 @@ function doGet(e) {
     var result;
     if      (action === 'ping')               result = {ok:true, msg:'pong v6.5', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
+    else if (action === 'getLocationCards')    result = getLocationCards();
+    else if (action === 'getLocationCapacity') result = getLocationCapacity();
     else if (action === 'getPayments')        result = getPayments();
     else if (action === 'getPaymentsYearly')  result = getPaymentsYearly();
     else if (action === 'getClients')         result = getClients();
@@ -245,6 +273,9 @@ function doGet(e) {
     else if (action === 'getEmployees')               result = getEmployees(Number(e.parameter && e.parameter.actorId || 0), e.parameter && e.parameter.loc || '');
     else if (action === 'getPredmetnyky')              result = getPredmetnyky(Number(e.parameter && e.parameter.actorId || 0));
     else if (action === 'getInvoiceListData')          result = getInvoiceListData(e.parameter || {});
+    else if (action === 'generateInvoicePDF')          result = generateInvoicePDF(e.parameter || {}); // v6.50
+    else if (action === 'getInvoiceStatusReport')      result = getInvoiceStatusReport(e.parameter || {}); // v6.50.3
+    else if (action === 'getFillStatus')               result = getFillStatus(e.parameter || {});           // v6.51
     else                                             result = {ok:false, error:'Unknown action: ' + action};
     return jsonOut(result);
   } catch(err) {
@@ -262,6 +293,7 @@ function doPost(e) {
     else if (body.action === 'saveHealthRecord') result = saveHealthRecord(body);
     else if (body.action === 'deleteHealthRecord')    result = deleteHealthRecord(body);
     else if (body.action === 'writeAbsenceToPayment')    result = writeAbsenceToPayment(body);
+    else if (body.action === 'exportVacationDiscountToPayments') result = exportVacationDiscountToPayments(body || {});
     else if (body.action === 'importAbsencesFromPayment') result = importAbsencesFromPayment(body.loc || '');
     else if (body.action === 'confirmBdayMatch')          result = confirmBdayMatch(body.childId || '', body.confirmedBy || '');
     else if (body.action === 'unconfirmBdayMatch')        result = unconfirmBdayMatch(body.childId || '');
@@ -281,6 +313,7 @@ function doPost(e) {
     else if (body.action === 'bulkAttendanceMarks')       result = bulkAttendanceMarks(body || {});
     else if (body.action === 'bulkRemoveAttendanceMarks') result = bulkRemoveAttendanceMarks(body || {});
     else if (body.action === 'exportAttendanceToPayments') result = exportAttendanceToPayments(body || {});
+    else if (body.action === 'reconcilePreview')            result = reconcilePreview(body || {}); // v6.51 ФАЗА 1
     else if (body.action === 'exportToSalaryExtras')      result = exportToSalaryExtras(body || {});
     else if (body.action === 'exportAttendance')          result = exportAttendance(body || {});
     else if (body.action === 'addPredmetny')              result = addPredmetny(body.data || {});
@@ -298,6 +331,7 @@ function doPost(e) {
     else if (body.action === 'setUserPassword')           result = setUserPassword(body.username || '', body.newPassword || '', body.actorId || 0);
     else if (body.action === 'resetAllLocationPasswords') result = resetAllLocationPasswords(body.actorId || 0);
     else if (body.action === 'saveEmployee')              result = saveEmployee(Number(body.actorId || 0), body.payload || {}, body.rowNum || null);
+    else if (body.action === 'saveLocationCard')          result = saveLocationCard(Number(body.actorId || 0), body.payload || {});
     else if (body.action === 'deleteEmployee')            result = deleteEmployee(Number(body.actorId || 0), body.rowNum || 0);
     else if (body.action === 'savePredmetnykyLesson')     result = savePredmetnykyLesson(Number(body.actorId || 0), body.lesson || {});
     else if (body.action === 'deletePredmetnykyLesson')   result = deletePredmetnykyLesson(Number(body.actorId || 0), Number(body.lessonId || 0));
@@ -306,6 +340,11 @@ function doPost(e) {
     else if (body.action === 'runPredmetnykyHrSeed')        result = _seedPredmetnykyAssignmentsFromHR();
     else if (body.action === 'clearAllPredmetnykyLessons')  result = clearAllPredmetnykyLessons(Number(body.actorId || 0), body.location || body.loc || '');
     else if (body.action === 'exportPredmetnykyToSalary')   result = exportPredmetnykyToSalary(body || {});
+    else if (body.action === 'generateInvoicePDF')          result = generateInvoicePDF(body || {});   // v6.50
+    else if (body.action === 'sendInvoiceEmail')            result = sendInvoiceEmail(body || {});      // v6.50
+    else if (body.action === 'bulkSendInvoices')            result = bulkSendInvoices(body || {});      // v6.50
+    else if (body.action === 'logViberSent')                result = logViberSent(body || {});          // v6.50.3
+    else if (body.action === 'getInvoiceStatusReport')      result = getInvoiceStatusReport(body || {}); // v6.50.3
     else result = {ok:false, error:'Unknown action'};
     return jsonOut(result);
   } catch(err) {
@@ -339,7 +378,93 @@ function getLocations() {
       pw: trim(row[5]) || ''
     });
   }
+  locs = sortByLocationOrder(locs, function(l){ return l.loc; });   // v6.50.4: єдиний зонний порядок
   return {ok:true, data:locs};
+}
+
+// ─── v6.45: КАРТКА ЛОКАЦІЇ (новий аркуш «Локації» у CONFIG-таблиці) ───────────
+// Окремий named-аркуш; getLocations (реєстр, getSheets()[0]) НЕ чіпаємо.
+var LOCATIONS_TAB = 'Локації';
+// v6.45.4: + 'documents' (JSON: договір/ліцензія/сертифікати/поліси + власні типи).
+var LOC_COLS = ['loc','fullName','format','license','legalAddr','factAddr','phone','email',
+  'area','rooms','features','playground','shelter','wifi','capacity','docsNote','updatedBy','updatedAt','documents'];
+
+// Idempotent: створює аркуш + гарантує ВСІ заголовки LOC_COLS (відсутні додає в кінець,
+// існуючі колонки/дані не зсуває). Тому нова колонка 'documents' з'явиться автоматично.
+function ensureLocationsSheet(){
+  var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var sh = ss.getSheetByName(LOCATIONS_TAB);
+  if (!sh){
+    sh = ss.insertSheet(LOCATIONS_TAB);
+    sh.getRange(1, 1, 1, LOC_COLS.length).setValues([LOC_COLS]);
+    sh.setFrozenRows(1);
+    return sh;
+  }
+  var lastCol = sh.getLastColumn();
+  var hdr = lastCol > 0 ? sh.getRange(1, 1, 1, lastCol).getValues()[0].map(String) : [];
+  var changed = false;
+  LOC_COLS.forEach(function(c){ if (hdr.indexOf(c) === -1){ hdr.push(c); changed = true; } });
+  if (changed) sh.getRange(1, 1, 1, hdr.length).setValues([hdr]);
+  return sh;
+}
+
+// Читання всіх карток → {loc: {field:val,...}}
+function getLocationCards(){
+  var sh = ensureLocationsSheet();
+  var data = sh.getDataRange().getValues();
+  if (data.length < 2) return {ok:true, data:{}};
+  var hdr = data[0].map(String), out = {};
+  for (var r = 1; r < data.length; r++){
+    var loc = trim(String(data[r][0] || '')); if (!loc) continue;
+    var o = {};
+    for (var c = 0; c < hdr.length; c++) o[hdr[c]] = String(data[r][c] == null ? '' : data[r][c]);
+    out[loc] = o;
+  }
+  return {ok:true, data:out};
+}
+
+// Легка вибірка лише capacity для дашборду → {loc: number}
+function getLocationCapacity(){
+  var cards = getLocationCards().data, cap = {};
+  Object.keys(cards).forEach(function(l){ cap[l] = Number(cards[l].capacity) || 0; });
+  return {ok:true, data:cap};
+}
+
+// Запис картки (OVERWRITE по loc). Права: mgmt — будь-яка, director — лише своя
+// (дзеркало _canEditEmployee).
+function saveLocationCard(actorId, payload){
+  try {
+    var actor = _getActor(actorId);
+    var loc = trim(String((payload && payload.loc) || ''));
+    if (!loc) return {ok:false, error:'Missing loc', code:'VALIDATION'};
+    if (!_canEditEmployee(actor, loc))
+      return {ok:false, error:'Permission denied for location "' + loc + '"', code:'PERM_DENIED'};
+
+    var lock = LockService.getDocumentLock();
+    if (!lock.tryLock(10000)) return {ok:false, error:'Could not acquire lock', code:'LOCK_TIMEOUT'};
+    try {
+      var sh = ensureLocationsSheet();
+      var data = sh.getDataRange().getValues();
+      var hdr = (data[0] || LOC_COLS).map(String);   // header-driven: рядок будуємо за фактичним заголовком
+      var locIdx = hdr.indexOf('loc'); if (locIdx < 0) locIdx = 0;
+      var now = formatDate(new Date());
+      var row = hdr.map(function(k){
+        if (k === 'updatedBy') return actor ? (actor.name || '') : '';
+        if (k === 'updatedAt') return now;
+        return payload[k] != null ? payload[k] : '';
+      });
+      for (var r = 1; r < data.length; r++){
+        if (trim(String(data[r][locIdx] || '')) === loc){
+          sh.getRange(r + 1, 1, 1, row.length).setValues([row]);
+          return {ok:true, action:'updated', loc:loc};
+        }
+      }
+      sh.appendRow(row);
+      return {ok:true, action:'created', loc:loc};
+    } finally { lock.releaseLock(); }
+  } catch(e){
+    return {ok:false, error: e.message || String(e)};
+  }
 }
 
 function getPayments() {
@@ -394,7 +519,12 @@ function ensureClientsHeader(sheet) {
     'Створено','Оновлено',
     // v6.26 Етап 1A — поля для PDF-рахунків (email + підписант + дод. договір).
     // Append-only: index 29 ('Створено') не зсувається — saveClient row[29] лишається коректним.
-    'Email мами','Email тата','Підписант договору','Номер додаткового договору'
+    'Email мами','Email тата','Підписант договору','Номер додаткового договору',
+    // v6.46 — здоров'я (JSON): measurements 3 точки навч.року + allergies/chronic/notes.
+    // Append-only: index 29 ('Створено') не зсувається.
+    'Здоров\'я (JSON)',
+    // v6.47 — особистісно-соціальний розвиток (JSON): 46 критеріїв × 3 точки навч.року.
+    'Розвиток (JSON)'
   ];
   var lastCol = sheet.getLastColumn();
   var width = Math.max(lastCol, EXPECTED.length);
@@ -432,7 +562,11 @@ function saveClient(data) {
     data.createdAt||now, now,
     // v6.26 Етап 1A — append-only поля для PDF-рахунків.
     data.momEmail||'', data.dadEmail||'',
-    data.signerParent||'mom', data.additionalContractNumber||''
+    data.signerParent||'mom', data.additionalContractNumber||'',
+    // v6.46 — здоров'я (append-only, не чіпає інші поля)
+    JSON.stringify(data.health||{}),
+    // v6.47 — розвиток (append-only)
+    JSON.stringify(data.development||{})
   ];
   for (var r = 1; r < vals.length; r++) {
     if (String(vals[r][0]) === String(data.id)) {
@@ -828,28 +962,57 @@ function getPaymentsYearly() {
   return {ok:true, data:rows};
 }
 
+// v6.30.2: нормалізує клітинку «Дата» (Date-об'єкт АБО рядок) → 'yyyy-MM-dd'.
+// Корінь бага: appendRow('2026-06-01') авто-конвертувався Sheets у Date, і
+// String(Date)='Mon Jun 01 2026...' ламав строкове порівняння from/to у
+// getAttendance (всі рядки відкидались) + матчинг у saveAttendance (дублі).
+function _attDateIso(cell, tz) {
+  if (cell instanceof Date) {
+    if (isNaN(cell.getTime())) return '';
+    return Utilities.formatDate(cell, tz, 'yyyy-MM-dd');
+  }
+  var s = trim(String(cell == null ? '' : cell));
+  if (!s) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;                      // вже ISO
+  var m = /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/.exec(s);                // DD.MM.YYYY
+  if (m) return m[3] + '-' + ('0'+m[2]).slice(-2) + '-' + ('0'+m[1]).slice(-2);
+  var d = new Date(s);                                              // довгий date-string
+  if (!isNaN(d.getTime())) return Utilities.formatDate(d, tz, 'yyyy-MM-dd');
+  return s;
+}
+
 function getAttendance(e) {
   var params  = e ? (e.parameter || {}) : {};
   var loc     = trim(params.loc  || '');
   var from    = trim(params.from || '');
   var to      = trim(params.to   || '');
   var ss      = getCRMSpreadsheet();
+  var tz      = ss.getSpreadsheetTimeZone() || 'Europe/Kiev';
   var sheet   = ss.getSheetByName(SHEET_ATTENDANCE);
   if (!sheet) return {ok:true, data:[]};
   var vals = sheet.getDataRange().getValues();
   if (vals.length < 2) return {ok:true, data:[]};
   var hdrs = vals[0].map(String);
-  var rows = [];
+  var iDate = hdrs.indexOf('Дата');     if (iDate < 0) iDate = 0;
+  var iCid  = hdrs.indexOf('ID дитини'); if (iCid  < 0) iCid  = 1;
+  var iLoc  = hdrs.indexOf('Локація');   if (iLoc  < 0) iLoc  = 3;
+
+  // dedupe: остання відмітка per (дата, дитина) — як і мерж на фронті.
+  var byKey = {}, order = [];
   for (var r = 1; r < vals.length; r++) {
+    var iso = _attDateIso(vals[r][iDate], tz);
+    if (!iso) continue;
+    if (from && iso < from) continue;
+    if (to   && iso > to)   continue;
+    if (loc  && trim(String(vals[r][iLoc] || '')) !== loc) continue;
     var obj = {};
-    for (var c = 0; c < hdrs.length; c++) obj[hdrs[c]] = String(vals[r][c] || '');
-    var d = obj['Дата'] || '';
-    if (!d) continue;
-    if (from && d < from) continue;
-    if (to   && d > to)   continue;
-    if (loc  && trim(obj['Локація']) !== loc) continue;
-    rows.push(obj);
+    for (var c = 0; c < hdrs.length; c++) obj[hdrs[c]] = String(vals[r][c] == null ? '' : vals[r][c]);
+    obj['Дата'] = iso;                                              // нормалізована ISO-дата
+    var key = iso + '|' + trim(String(vals[r][iCid] || ''));
+    if (!(key in byKey)) order.push(key);
+    byKey[key] = obj;                                              // last wins
   }
+  var rows = order.map(function(k){ return byKey[k]; });
   return {ok:true, data:rows};
 }
 
@@ -857,6 +1020,7 @@ function saveAttendance(body) {
   var records = body.records || [];
   if (!records.length) return {ok:true, saved:0};
   var ss    = getCRMSpreadsheet();
+  var tz    = ss.getSpreadsheetTimeZone() || 'Europe/Kiev';
   var sheet = ss.getSheetByName(SHEET_ATTENDANCE);
   if (!sheet) { sheet = ss.insertSheet(SHEET_ATTENDANCE); writeAttendanceHeader(sheet); }
   var vals = sheet.getDataRange().getValues();
@@ -864,29 +1028,63 @@ function saveAttendance(body) {
   var saved = 0;
 
   records.forEach(function(rec) {
-    var date    = trim(String(rec.date    || ''));
+    var date    = _attDateIso(rec.date, tz);              // нормалізуємо вхідну дату
     var childId = trim(String(rec.childId || ''));
     if (!date || !childId) return;
     var row = [date, childId, rec.childName||'', rec.loc||'', rec.group||'', rec.status||'', rec.updatedBy||'', now];
-    var written = false;
+    // Оновлюємо ОСТАННІЙ існуючий рядок (read бере last) — матчинг через
+    // нормалізовану дату, тож більше НЕ створюємо дублі.
+    var lastIdx = -1;
     for (var r = 1; r < vals.length; r++) {
-      if (String(vals[r][0]) === date && String(vals[r][1]) === childId) {
-        sheet.getRange(r+1, 1, 1, row.length).setValues([row]);
-        vals[r] = row;
-        saved++;
-        written = true;
-        break;
-      }
+      if (_attDateIso(vals[r][0], tz) === date && trim(String(vals[r][1] || '')) === childId) lastIdx = r;
     }
-    if (!written) {
+    if (lastIdx >= 0) {
+      sheet.getRange(lastIdx+1, 1, 1, row.length).setValues([row]);
+      vals[lastIdx] = row;
+    } else {
       sheet.appendRow(row);
       vals.push(row);
-      saved++;
     }
+    saved++;
     mirrorAttendanceToNurseSheet(rec.loc||'', rec.childName||'', date, rec.status||'');
   });
 
   return {ok:true, saved:saved};
+}
+
+// v6.30.2 editor-only: одноразова дедуплікація аркуша «Табель» — лишає
+// ОСТАННІЙ запис per (дата, дитина), нормалізує дати в ISO-текст.
+// Запускати з Apps Script editor → Run → dedupAttendance.
+function dedupAttendance() {
+  var ss    = getCRMSpreadsheet();
+  var tz    = ss.getSpreadsheetTimeZone() || 'Europe/Kiev';
+  var sheet = ss.getSheetByName(SHEET_ATTENDANCE);
+  if (!sheet) return {ok:false, error:'no sheet'};
+  var vals = sheet.getDataRange().getValues();
+  if (vals.length < 2) return {ok:true, kept:0, removed:0};
+  var hdr = vals[0];
+  var byKey = {}, order = [];
+  for (var r = 1; r < vals.length; r++) {
+    var iso = _attDateIso(vals[r][0], tz);
+    var cid = trim(String(vals[r][1] || ''));
+    if (!iso || !cid) continue;
+    var key = iso + '|' + cid;
+    var row = vals[r].slice();
+    row[0] = iso;                                          // ISO-текст
+    if (!(key in byKey)) order.push(key);
+    byKey[key] = row;                                      // last wins
+  }
+  var out = order.map(function(k){ return byKey[k]; });
+  sheet.clearContents();
+  sheet.getRange(1, 1, 1, hdr.length).setValues([hdr]);
+  if (out.length) {
+    sheet.getRange(2, 1, out.length, 1).setNumberFormat('@');   // дата як текст → без авто-Date
+    sheet.getRange(2, 1, out.length, hdr.length).setValues(out);
+  }
+  sheet.setFrozenRows(1);
+  var res = {ok:true, kept:out.length, removed:(vals.length-1)-out.length};
+  Logger.log('[dedupAttendance] ' + JSON.stringify(res));
+  return res;
 }
 
 function getHealthRecords(e) {
@@ -4239,6 +4437,476 @@ function exportAttendanceToPayments(params){
 
 function exportToPayments(params){ return exportAttendanceToPayments(params); }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// v6.51 — АВТО-ЗВІРКА ПЛАТЕЖІВ (виписка ПриватБанку → Payment «Факт навч»/«Факт доп»).
+// ФАЗА 1 (read-only): reconcilePreview — резолв локації/категорії за IBAN,
+//   витяг платника, матч платник→дитина(діти) у межах локації. БЕЗ ЗАПИСІВ.
+//   Парсинг файлу виписки — на фронті (SheetJS); сюди приходить готовий JSON.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// 0-based індекс колонки → літера (26→AA). Для діагностики у прев'ю.
+function _colLetter(idx0){
+  var s = '', n = idx0 + 1;
+  while (n > 0){ var m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); }
+  return s;
+}
+
+// Парс дати платежу: dd.MM.yyyy | dd/MM/yyyy | yyyy-MM-dd | інше → Date|null.
+function _recParseDate(v){
+  if (v instanceof Date) return v;
+  var s = String(v || '').trim(); if (!s) return null;
+  var m = s.match(/^(\d{2})[.\/](\d{2})[.\/](\d{4})/); if (m) return new Date(+m[3], +m[2] - 1, +m[1]);
+  m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);              if (m) return new Date(+m[1], +m[2] - 1, +m[3]);
+  var d = new Date(s); return isNaN(d) ? null : d;
+}
+
+// IBAN (з виписки) → {loc, type, ...} з Реквізити_Локацій (CONFIG). type: studies|extras.
+function _resolveAccountByIban(iban){
+  var norm = String(iban || '').replace(/\s+/g, '').toUpperCase();
+  if (!norm) return null;
+  var sh = SpreadsheetApp.openById(CONFIG_SHEET_ID).getSheetByName('Реквізити_Локацій');
+  if (!sh) return null;
+  var data = sh.getDataRange().getValues();
+  for (var r = 1; r < data.length; r++){
+    var e = String(data[r][4] || '').replace(/\s+/g, '').toUpperCase();   // E = IBAN
+    if (e && e === norm){
+      var typB = String(data[r][1] || '').trim().toLowerCase();           // B = Тип
+      var type = (typB.indexOf('додатков') >= 0) ? 'extras' : 'studies';
+      return { loc: trim(data[r][0]), type: type, typeLabel: trim(data[r][1]), orgName: trim(data[r][2]) };
+    }
+  }
+  return null;
+}
+
+// Header-driven колонка місяця (узагальнення detectCurrentMonthCol під будь-який jsMonth 0-11).
+// Повертає 0-based індекс СТАРТУ блоку місяця (= «Факт навч»), або -1.
+function _detectMonthColByHeader(rows, jsMonth){
+  for (var pass = 0; pass < 2; pass++){
+    for (var r = 0; r < Math.min(3, rows.length); r++){
+      for (var c = 1; c < rows[r].length; c++){
+        var cell = String(rows[r][c] || '').toLowerCase().trim();
+        for (var mi = 0; mi < MONTHS_UA.length; mi++){
+          var hit = pass === 0 ? (cell === MONTHS_UA[mi]) : (cell.indexOf(MONTHS_UA[mi]) >= 0);
+          if (hit && MONTHS_JS[mi] === jsMonth) return c;
+        }
+      }
+    }
+  }
+  return -1;
+}
+// Факт-колонка за категорією: studies → старт блоку (Факт навч); extras → +2 (Факт доп). 0-based.
+function _factColForType(monthStartCol0, type){
+  return type === 'extras' ? (monthStartCol0 + 2) : monthStartCol0;
+}
+
+// Детект колонки «сторона договору» у Payment-листі по ШАПЦІ (нинішня BJ, але без хардкоду).
+function _detectContractPartyCol(rows){
+  for (var r = 0; r < Math.min(5, rows.length); r++){
+    for (var c = 0; c < rows[r].length; c++){
+      var cell = String(rows[r][c] || '').toLowerCase();
+      if (cell.indexOf('сторона договору') >= 0 || cell.indexOf('платник') >= 0) return c;
+    }
+  }
+  return -1;
+}
+
+// Нормалізація ПІБ платника: прізвище+ім'я (по-батькові відкидаємо), апострофи знімаємо,
+// складене прізвище через дефіс лишається цілим. → "прізвище ім'я" (lower).
+function _normPayerName(s){
+  var t = String(s || '').replace(/[`'’ʼ]/g, '').toLowerCase().trim().replace(/\s+/g, ' ');
+  if (!t) return '';
+  var parts = t.split(' ');
+  if (parts.length >= 2) return parts[0] + ' ' + parts[1];   // 3-й токен (по-батькові) ігноруємо
+  return parts[0];
+}
+
+// Витяг платника за дискримінатором коду контрагента:
+//   10 цифр → фізособа (платник = «Назва контрагента»);
+//    8 цифр → юр/банк → шукаємо «Платник <ПІБ>» у призначенні.
+function _extractPayer(rec){
+  var code = String(rec.edrpou || '').replace(/\D/g, '');
+  if (code.length === 10) return { raw: trim(rec.counterparty), via: 'individual' };
+  var purpose = String(rec.purpose || '');
+  var L = '[А-ЯІЇЄҐа-яіїєґ\'’ʼ`\\-]+';
+  var m = purpose.match(new RegExp('платник[\\s:]*(' + L + '\\s+' + L + '(?:\\s+' + L + ')?)', 'i'));
+  if (m) return { raw: m[1].trim(), via: 'bank' };
+  return { raw: trim(rec.counterparty), via: 'bank-unparsed' };
+}
+
+// Індекс «батько → [діти]» у межах локації.
+// Джерела імені сторони договору: (1) Payment «сторона договору» + (2) батьки з CRM-картки.
+// КРИТИЧНО (брати-сестри): один платник може мати кілька дітей → значення = СПИСОК.
+function _buildPayerIndex(loc){
+  var idx = {};   // normParentName -> [{childName, row(0-based у Payment, -1 якщо лише з CRM), group}]
+  function add(parent, child){
+    var nk = _normPayerName(parent); if (!nk || !child.childName) return;
+    (idx[nk] = idx[nk] || []).push(child);
+  }
+  // 1) Payment-файл: ПІБ дитини (A) + «сторона договору» (по шапці)
+  var payRows = [];
+  var reg = _getLocationPaymentRegistry(loc);
+  if (reg && reg.sheetId){
+    var ss = SpreadsheetApp.openById(reg.sheetId);
+    var sh = ss.getSheetByName(reg.sheetName) || ss.getSheets()[0];
+    var data = sh.getDataRange().getValues();
+    var partyCol = _detectContractPartyCol(data);
+    var curGroup = '';
+    for (var r = 3; r < data.length; r++){
+      var name = trim(data[r][0]);
+      if (!name) continue;
+      if (isGroupHeaderRow(data[r], 1)){ curGroup = normalizeGroupName(name); continue; }
+      var child = { childName: name, row: r, group: curGroup };
+      payRows.push(child);
+      if (partyCol >= 0){ var party = trim(data[r][partyCol]); if (party) add(party, child); }
+    }
+  }
+  // 2) CRM-картки: батьки (мама/тато/підписант) для дітей цієї локації → той самий payRow по імені
+  var byNorm = {}; payRows.forEach(function(c){ byNorm[_normNameVac(c.childName)] = c; });
+  var cli = getClients();
+  if (cli && cli.ok){
+    (cli.data || []).forEach(function(o){
+      if (trim(o['Локація']) !== loc) return;
+      var cn = trim(o['ПІБ дитини']); if (!cn) return;
+      var child = byNorm[_normNameVac(cn)] || { childName: cn, row: -1, group: trim(o['Група']) };
+      ['ПІБ мами', 'ПІБ тата', 'Підписант договору'].forEach(function(f){
+        var p = trim(o[f]); if (p) add(p, child);
+      });
+    });
+  }
+  return idx;
+}
+
+// ── ФАЗА 1: PREVIEW (read-only). Вхід: {iban, payments:[{date,amount,purpose,edrpou,counterparty,ref,...}]}.
+function reconcilePreview(body){
+  try{
+    body = body || {};
+    var iban = trim(body.iban);
+    var payments = body.payments || [];
+    var acct = _resolveAccountByIban(iban);
+    if (!acct || !acct.loc) return {ok:false, error:'Рахунок "' + iban + '" не знайдено в Реквізити_Локацій'};
+    var loc = acct.loc, type = acct.type;
+
+    var reg = _getLocationPaymentRegistry(loc);
+    if (!reg || !reg.sheetId) return {ok:false, error:'Локацію "' + loc + '" не знайдено в CONFIG-реєстрі'};
+    var ss = SpreadsheetApp.openById(reg.sheetId);
+    var paySh = ss.getSheetByName(reg.sheetName) || ss.getSheets()[0];
+    var data = paySh.getDataRange().getValues();
+    var idx = _buildPayerIndex(loc);
+
+    var rows = payments.map(function(rec, i){
+      var payer = _extractPayer(rec);
+      var nk = _normPayerName(payer.raw);
+      var cands = (idx[nk] || []);
+      // dedup кандидатів по childName (брати-сестри лишаються — різні childName)
+      var seen = {}, uniq = [];
+      cands.forEach(function(c){ if (!seen[c.childName]){ seen[c.childName] = 1; uniq.push(c); } });
+
+      var d = _recParseDate(rec.date);
+      var jsMonth = d ? d.getMonth() : -1;
+      var monthCol0 = (jsMonth >= 0) ? _detectMonthColByHeader(data, jsMonth) : -1;
+      var factCol0  = (monthCol0 >= 0) ? _factColForType(monthCol0, type) : -1;
+
+      // анти-дубль: лише коли РІВНО один кандидат із реальним рядком — чи факт-клітинка вже непорожня
+      var dup = false;
+      if (uniq.length === 1 && uniq[0].row >= 0 && factCol0 >= 0){
+        var cur = trim((data[uniq[0].row] || [])[factCol0]);
+        if (cur) dup = true;
+      }
+      var status = uniq.length === 0 ? 'none' : (uniq.length === 1 ? (dup ? 'dup' : 'auto') : 'multi');
+
+      return {
+        i: i, date: String(rec.date || ''), amount: Number(rec.amount) || 0, ref: String(rec.ref || ''),
+        payerRaw: payer.raw, payerVia: payer.via, payerNorm: nk,
+        month: (jsMonth + 1), status: status, candidates: uniq,
+        factCol: factCol0 >= 0 ? _colLetter(factCol0) : ''
+      };
+    });
+
+    return {ok:true, loc:loc, type:type, typeLabel:acct.typeLabel, orgName:acct.orgName,
+            iban:iban, count:rows.length, rows:rows};
+  } catch(e){ return {ok:false, error: e.message || String(e)}; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v6.40 — ЗНИЖКА ВІДПУСТКИ → Платежі (колонка "Бюджет навч" таргет-місяця).
+// Дзеркалить exportAttendanceToPayments: журнал (kind='vacation'), baseValue,
+// точковий запис, skip формул/group-header. Знижка = ВІД'ЄМНИЙ доданок.
+// Логіка перерахунку — точна копія v6.36 (clients.html), плюс ОКРУГЛЕННЯ ВГОРУ
+// до тижня для списання ліміту (ceil(днів/5)*5) — узгоджено з карткою.
+// ═══════════════════════════════════════════════════════════════════════════
+function _pad2v(n){ return n < 10 ? '0' + n : '' + n; }
+
+function _vacParseISO(s){
+  if (s instanceof Date) return new Date(s.getFullYear(), s.getMonth(), s.getDate());
+  var m = String(s || '').slice(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m ? new Date(+m[1], +m[2] - 1, +m[3]) : null;
+}
+function _vacISOof(d){ return d.getFullYear() + '-' + _pad2v(d.getMonth() + 1) + '-' + _pad2v(d.getDate()); }
+
+var _VAC_HOL_CACHE = {};
+function _vacHolidaySet(year){
+  if (_VAC_HOL_CACHE[year]) return _VAC_HOL_CACHE[year];
+  var fixed = ['01-01','01-07','03-08','05-01','05-09','06-28','08-24','10-14','12-25'];
+  var movable = {2025:['05-05','06-23'], 2026:['04-12','05-31']};   // Великдень, Трійця
+  var s = {};
+  fixed.forEach(function(dm){ s[year + '-' + dm] = 1; });
+  (movable[year] || []).forEach(function(dm){ s[year + '-' + dm] = 1; });
+  _VAC_HOL_CACHE[year] = s; return s;
+}
+function _vacIsWorkday(d){
+  var wd = d.getDay();
+  return wd !== 0 && wd !== 6 && !_vacHolidaySet(d.getFullYear())[_vacISOof(d)];
+}
+function _vacWorkDaysInMonth(year, month){
+  var days = new Date(year, month, 0).getDate(), n = 0;
+  for (var d = 1; d <= days; d++) if (_vacIsWorkday(new Date(year, month - 1, d))) n++;
+  return n;
+}
+function _vacCountWorkDays(fromISO, toISO){
+  var f = _vacParseISO(fromISO), t = _vacParseISO(toISO);
+  if (!f || !t || t < f) return 0;
+  var n = 0, cur = new Date(f.getTime());
+  while (cur <= t){ if (_vacIsWorkday(cur)) n++; cur.setDate(cur.getDate() + 1); }
+  return n;
+}
+function _vacContractYear(contractISO, refISO){
+  var cd = _vacParseISO(contractISO); if (!cd) return null;
+  var td = _vacParseISO(refISO) || new Date();
+  var diffY = td.getFullYear() - cd.getFullYear();
+  for (var off = diffY - 1; off <= diffY + 1; off++){
+    var f = new Date(cd.getFullYear() + off, cd.getMonth(), cd.getDate());
+    var t = new Date(cd.getFullYear() + off + 1, cd.getMonth(), cd.getDate() - 1);
+    if (td >= f && td <= t) return {from: _vacISOof(f), to: _vacISOof(t)};
+  }
+  var f0 = new Date(cd.getFullYear() + diffY, cd.getMonth(), cd.getDate());
+  var t0 = new Date(cd.getFullYear() + diffY + 1, cd.getMonth(), cd.getDate() - 1);
+  return {from: _vacISOof(f0), to: _vacISOof(t0)};
+}
+// v6.40: списання ліміту ОКРУГЛЯЄТЬСЯ ВГОРУ до тижня для кожної відпустки
+// (ceil(днів/5)*5). Різниця «згорає» (грошей не торкається). Узгоджено з карткою.
+function _vacUsedInContractYear(absences, contractISO, refISO, excludeId){
+  var w = _vacContractYear(contractISO, refISO); if (!w) return 0;
+  var used = 0;
+  (absences || []).forEach(function(a){
+    if (!a || a.type !== 'vacation') return;
+    if (excludeId && a.id === excludeId) return;
+    if (a.status === 'rejected' || a.status === 'cancelled') return;
+    if (!a.from || !a.to) return;
+    var s = (a.from < w.from) ? w.from : a.from;
+    var e = (a.to   > w.to)   ? w.to   : a.to;
+    if (e < s) return;
+    var wd = _vacCountWorkDays(s, e);
+    used += Math.ceil(wd / 5) * 5;          // ⬅️ округлення вгору до тижня
+  });
+  return used;
+}
+function _vacLimitRemaining(absences, contractISO, refISO, excludeId){
+  return Math.max(0, 20 - _vacUsedInContractYear(absences, contractISO, refISO, excludeId));
+}
+// Знижка по місяцях для ОДНОГО періоду — копія calcAbsMonthBreakdown(type='vacation').
+// amount(discount) = round(fee × eligible_days / month_workdays); понад ліміт → 0.
+function _vacMonthBreakdown(fromISO, toISO, fee, allAbsences, contractISO, selfId){
+  var f = _vacParseISO(fromISO), t = _vacParseISO(toISO);
+  if (!f || !t || t < f) return [];
+  var mmap = {}, cur = new Date(f.getTime());
+  while (cur <= t){
+    if (_vacIsWorkday(cur)){
+      var y = cur.getFullYear(), mo = cur.getMonth() + 1, mk = y + '-' + _pad2v(mo);
+      if (!mmap[mk]) mmap[mk] = {ym: mk, y: y, m: mo, vacDays: 0};
+      mmap[mk].vacDays++;
+    }
+    cur.setDate(cur.getDate() + 1);
+  }
+  var arr = Object.keys(mmap).sort().map(function(k){ return mmap[k]; });
+  var remaining = _vacLimitRemaining(allAbsences, contractISO, fromISO, selfId);
+  return arr.map(function(mi){
+    var mwd = _vacWorkDaysInMonth(mi.y, mi.m);
+    var eligible = Math.min(mi.vacDays, Math.max(0, remaining));
+    remaining -= eligible;
+    var discount = (fee > 0 && mwd > 0) ? Math.round(fee * eligible / mwd) : 0;
+    return {ym: mi.ym, y: mi.y, m: mi.m, vacDays: mi.vacDays, monthWorkDays: mwd,
+            eligibleDays: eligible, overLimitDays: mi.vacDays - eligible, discount: discount};
+  });
+}
+var _VAC_SCHOOL_LOCS = ['Школа Осокорки','Школа 228','Онлайн школа'];
+function _vacContractType(contractISO, group, loc){
+  if (_VAC_SCHOOL_LOCS.indexOf(loc || '') !== -1) return 'school-no-absence';
+  if (!contractISO) return 'standard';
+  if (contractISO >= '2025-10-01') return 'new';                          // лише хвороба
+  if (/preschool|розумник/i.test(String(group || ''))) return 'preschool'; // без перерахунків
+  return 'standard';
+}
+function _vacContractISO(v){
+  if (v instanceof Date) return _vacISOof(new Date(v.getFullYear(), v.getMonth(), v.getDate()));
+  var s = String(v || '').slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : '';
+}
+function _vacParseAbsences(json){
+  if (Array.isArray(json)) return json;
+  try { return JSON.parse(String(json || '[]')) || []; } catch(e){ return []; }
+}
+function _normNameVac(s){ return String(s || '').replace(/[\s ]+/g, '').toLowerCase(); }
+function _vacEntryDateISO(ts){
+  if (ts instanceof Date) return _vacISOof(new Date(ts.getFullYear(), ts.getMonth(), ts.getDate()));
+  var s = String(ts || '');
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  var d = new Date(s);
+  return isNaN(d.getTime()) ? '' : _vacISOof(d);
+}
+// Куди йде знижка за місяць відпустки: timestamp внесення < 1-ше число місяця
+// відпустки → той самий місяць; >= 1-ше → наступний (рахунок уже виставлений).
+function determineTargetMonth(vacationMonth, vacationYear, entryTimestamp){
+  var firstISO = vacationYear + '-' + _pad2v(vacationMonth) + '-01';
+  var entryISO = _vacEntryDateISO(entryTimestamp);
+  if (!entryISO)            return {month: vacationMonth, year: vacationYear, reason: 'no-timestamp→той самий місяць'};
+  if (entryISO < firstISO)  return {month: vacationMonth, year: vacationYear, reason: 'внесено до 1-го→той самий місяць'};
+  var nm = _nextMonth(vacationMonth, vacationYear);
+  return {month: nm.month, year: nm.year, reason: 'внесено 1-го+→наступний місяць'};
+}
+
+function exportVacationDiscountToPayments(params){
+  try {
+    var loc   = String(params.loc || '').trim();
+    var month = Number(params.month);
+    var year  = Number(params.year) || new Date().getFullYear();
+    if (!loc) return {ok: false, error: 'Параметр loc обовʼязковий'};
+    if (!month || month < 1 || month > 12) return {ok: false, error: 'month має бути 1-12'};
+    var monthName = MONTHS_CAL_UA[month - 1];
+
+    // === 1. Клієнти локації → знижка, що РОУТИТЬСЯ в таргет (month,year) ===
+    var cliRes = getClients();
+    if (!cliRes.ok) return cliRes;
+    var clients = (cliRes.data || []).filter(function(o){ return String(o['Локація'] || '').trim() === loc; });
+
+    var discByNorm = {};   // normName → {name, discount(+)}
+    var routing = [];
+    clients.forEach(function(o){
+      var name = trim(String(o['ПІБ дитини'] || ''));
+      if (!name) return;
+      var contractISO = _vacContractISO(o['Дата договору']);
+      var fee = Number(o['Сума договору']) || 0;
+      var ct  = _vacContractType(contractISO, o['Група'], loc);
+      if (ct !== 'standard') return;                              // п.6 виключення
+      var abs = _vacParseAbsences(o['Відсутності (JSON)']);
+      abs.forEach(function(a){
+        if (!a || a.type !== 'vacation') return;                  // п.7 хворобу не чіпаємо
+        if (a.status === 'rejected' || a.status === 'cancelled') return; // п.8
+        if (!a.from || !a.to) return;
+        _vacMonthBreakdown(a.from, a.to, fee, abs, contractISO, a.id).forEach(function(mb){
+          if (mb.discount <= 0) return;
+          var tgt = determineTargetMonth(mb.m, mb.y, a.createdAt);
+          if (tgt.year !== year || tgt.month !== month) return;
+          var nk = _normNameVac(name);
+          (discByNorm[nk] = discByNorm[nk] || {name: name, discount: 0}).discount += mb.discount;
+          routing.push({child: name, vacMonth: mb.ym, discount: mb.discount,
+                        routedTo: tgt.year + '-' + _pad2v(tgt.month), reason: tgt.reason});
+        });
+      });
+    });
+
+    // === 2. Payment-файл локації ===
+    var reg = _getLocationPaymentRegistry(loc);
+    if (!reg || !reg.sheetId) return {ok: false, error: 'Локацію "' + loc + '" не знайдено в CONFIG-реєстрі'};
+    var ss    = SpreadsheetApp.openById(reg.sheetId);
+    var paySh = ss.getSheetByName(reg.sheetName) || ss.getSheets()[0];
+    var data  = paySh.getDataRange().getValues();
+
+    // === 3. Колонка "Бюджет навч" таргет-місяця + НАСТУПНОГО місяця (v6.41) ===
+    var monthStartCol0  = 1 + (month - 1) * 5;
+    var budgetNavchCol1 = monthStartCol0 + 4 + 1;   // 1-based (січень = F = 6)
+    var nextNavchCol1   = budgetNavchCol1 + 5;       // той самий рядок, +1 місяць
+    // Захист N+1 можливий лише в межах того ж річного листа (міс. 1-11).
+    // Грудень → січень наступного року = інший лист/файл → захист пропускаємо.
+    var canProtectNext  = (month <= 11);
+
+    // === 4. Журнал kind='vacation' + значення/формули колонок ===
+    var lastRow      = paySh.getLastRow();
+    var colValues    = paySh.getRange(1, budgetNavchCol1, lastRow, 1).getValues();
+    var colFormulas  = paySh.getRange(1, budgetNavchCol1, lastRow, 1).getFormulas();
+    var nextFormulas = canProtectNext ? paySh.getRange(1, nextNavchCol1, lastRow, 1).getFormulas() : [];
+    var journal      = _readJournalForTarget(loc, 'vacation', year, month);
+
+    var DATA_START = 3, rowByNorm = {};
+    for (var r = DATA_START; r < data.length; r++){
+      var nm = trim(String(data[r][0] || ''));
+      if (!nm || isGroupHeaderRow(data[r], 1)) continue;          // п.12 group-header
+      var nk0 = _normNameVac(nm);
+      if (!rowByNorm.hasOwnProperty(nk0)) rowByNorm[nk0] = r;
+    }
+
+    // === 5. Точковий запис через журнал (знижка = ВІД'ЄМНИЙ доданок) ===
+    var journalOps = [], details = [], notFound = [];
+    var cellsWritten = 0, formulaConverted = 0, nextProtected = 0, updated = 0, totalDisc = 0;
+
+    Object.keys(rowByNorm).forEach(function(nk){
+      var rowIdx0 = rowByNorm[nk];
+      // v6.41: формульні рядки БІЛЬШЕ НЕ пропускаємо. getValues() дає обчислене
+      // значення формули (напр. 21000), яке стає базою; setValue замінює формулу числом.
+      var wasFormula   = !!(colFormulas[rowIdx0] && colFormulas[rowIdx0][0]);
+      var payName      = trim(String(data[rowIdx0][0] || ''));
+      var currentValue = Number(colValues[rowIdx0][0]) || 0;  // результат формули
+      var je           = journal.byNormName[nk];
+      var lastWritten  = je ? je.sum : 0;                  // попередня знижка (від'ємна)
+      var baseValue    = currentValue - lastWritten;       // недисконтована база
+      var disc         = discByNorm[nk] ? Math.round(discByNorm[nk].discount) : 0;
+      var newSum       = disc > 0 ? -disc : 0;             // ⬅️ ЗМЕНШЕННЯ бюджету
+      var newValue     = baseValue + newSum;
+
+      if (newValue !== currentValue){
+        paySh.getRange(rowIdx0 + 1, budgetNavchCol1).setValue(newValue);  // замінює формулу числом
+        cellsWritten++;
+        if (wasFormula) formulaConverted++;
+      }
+
+      // v6.41: ЗАХИСТ НАСТУПНОГО МІСЯЦЯ. Якщо пишемо знижку (disc>0) і N+1 містить
+      // формулу (=N) — заморожуємо N+1 = baseValue (недисконтована, напр. 21000),
+      // інакше N+1 успадкував би дисконтоване число. У журнал НЕ пишемо (технічна дія).
+      if (disc > 0 && canProtectNext && nextFormulas[rowIdx0] && nextFormulas[rowIdx0][0]){
+        paySh.getRange(rowIdx0 + 1, nextNavchCol1).setValue(baseValue);
+        nextProtected++;
+        Logger.log('[vacDiscount] PROTECT next-month row=%s "%s": формула %s → %s',
+          rowIdx0 + 1, payName, nextFormulas[rowIdx0][0], baseValue);
+      }
+
+      if (newSum !== lastWritten){
+        journalOps.push({nk: nk, loc: loc, kind: 'vacation', name: payName,
+                         year: year, month: month, newSum: newSum});
+      }
+      if (disc > 0){
+        updated++; totalDisc += disc;
+        details.push({child: payName, discount: disc, currentBefore: currentValue,
+                      wasFormula: wasFormula, base: baseValue, newCell: newValue,
+                      row: rowIdx0 + 1, status: 'discounted'});
+      } else if (lastWritten !== 0){                        // п.8 скасування → повертаємо бюджет
+        details.push({child: payName, discount: 0, currentBefore: currentValue,
+                      lastWritten: lastWritten, base: baseValue, newCell: newValue,
+                      row: rowIdx0 + 1, status: 'restored'});
+      }
+    });
+
+    Object.keys(discByNorm).forEach(function(nk){
+      if (!rowByNorm.hasOwnProperty(nk)) notFound.push(discByNorm[nk].name);
+    });
+
+    _commitJournalUpdates(journal, journalOps);
+    Logger.log('[vacDiscount] loc=%s %s/%s: updated=%s totalDisc=%s cells=%s formulaConv=%s nextProtected=%s notFound=%s',
+      loc, month, year, updated, totalDisc, cellsWritten, formulaConverted, nextProtected, JSON.stringify(notFound));
+
+    return {
+      ok: true, loc: loc, targetMonth: monthName, targetMonthNum: month, year: year,
+      budgetNavchCol: budgetNavchCol1, updated: updated, totalDiscount: totalDisc,
+      cellsWritten: cellsWritten,
+      formulaCellsConverted: formulaConverted,    // v6.41: формул→число у таргеті
+      nextMonthProtected: nextProtected,          // v6.41: скільки N+1 заморожено
+      nextMonthProtectable: canProtectNext,       // false для грудня
+      notFound: notFound, details: details, routing: routing
+    };
+  } catch(e){
+    Logger.log('[exportVacationDiscount] EXCEPTION: %s\n%s', e && e.message, e && e.stack);
+    return {ok: false, error: String(e && e.message || e)};
+  }
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // Тест: запусти вручну з Apps Script editor (View → Executions → дивись Логи).
 // Викликає exportAttendanceToPayments({loc:"Голосієво", month:6, year:2026})
@@ -4318,7 +4986,10 @@ function exportToSalaryExtras(params){
       var fact = 0;
       if (a.teacherModel === 'За дитину'){
         fact = stat.count * a.teacherRate;
-      } else if (a.teacherModel === 'За заняття'){
+      } else if (a.teacherModel === 'За заняття' || a.teacherModel === 'За захід'){
+        // v6.39: "За захід" рахується ідентично "За заняття" — фіксована сума
+        // за кожну унікальну дату (захід), незалежно від кількості дітей.
+        // Семантично окрема модель (Театр, Майстер-клас, вистави), формула та сама.
         fact = Object.keys(stat.dates).length * a.teacherRate;
       }
       // Ключ — нормалізована назва (lowercase + без whitespace), як у Payment.
@@ -4886,7 +5557,8 @@ function generateInvoicePDF(opts){
       return {ok:false, error:'У дитини "' + childName + '" немає додаткових занять за ' + MONTHS_CAL[month - 1] + ' ' + year + '. Рахунок не формується.'};
     }
     ch.extrasBreakdown.forEach(function(b){
-      lines.push({name: b.name + ' ' + childName, qty: b.count, price: b.price, sum: b.total});
+      // v6.50.1: НЕ дублюємо ПІБ дитини в назві послуги (вона вгорі у "Замовник").
+      lines.push({name: b.name, qty: b.count, price: b.price, sum: b.total});
     });
     var adj = Number(ch.extrasAdjustment) || 0;
     if (adj > 0)      lines.push({name: LABEL_DEBT,    qty: 1, price: adj, sum: adj});
@@ -4945,6 +5617,643 @@ function generateInvoicePDF(opts){
   };
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// v6.50 — EMAIL-РОЗСИЛКА РАХУНКІВ (PDF у вкладенні) + ЛОГ "Розсилки_Рахунків"
+//   sendInvoiceEmail(opts) — 1 лист підписанту, до 2 PDF (навчання+додаткові,
+//     різні ЮО). bulkSendInvoices(opts) — серверний цикл по локації.
+//   Лог — аркуш "Розсилки_Рахунків" у CONFIG_SHEET: 1 рядок на КОЖЕН рахунок/ЮО.
+// ═══════════════════════════════════════════════════════════════════════════
+var INVOICE_LOG_TAB    = 'Розсилки_Рахунків';
+var INVOICE_LOG_HEADER = ['Дата+час','Дитина','Локація','Тип','Юрособа',
+  'Номер рахунку','Email','Сума','Статус','Хто надіслав','Помилка'];
+
+// Аркуш логу у CONFIG_SHEET (вся фін-інфра разом). Авто-створення з шапкою.
+function _getInvoiceLogSheet(){
+  var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var sh = ss.getSheetByName(INVOICE_LOG_TAB);
+  if (!sh){
+    sh = ss.insertSheet(INVOICE_LOG_TAB);
+    sh.getRange(1, 1, 1, INVOICE_LOG_HEADER.length).setValues([INVOICE_LOG_HEADER]);
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+
+// row: {child, loc, type, ju, invoiceNumber, email, sum, status, actor, error}
+function _logInvoiceSend(row){
+  try {
+    var sh = _getInvoiceLogSheet();
+    var now = Utilities.formatDate(new Date(), 'Europe/Kiev', 'dd.MM.yyyy HH:mm:ss');
+    sh.appendRow([
+      now,
+      String(row.child || ''),
+      String(row.loc || ''),
+      String(row.type || ''),
+      String(row.ju || ''),
+      String(row.invoiceNumber || ''),
+      String(row.email || ''),
+      Number(row.sum || 0),
+      String(row.status || ''),
+      String(row.actor || ''),
+      String(row.error || '')
+    ]);
+  } catch(e){
+    Logger.log('[invLog] append fail: %s', e && e.message);
+  }
+}
+
+function _invTypeUk(type){ return type === 'extras' ? 'Додаткові' : 'Навчання'; }
+
+// Короткий HTML-лист (перелік рахунків з ЮО/сумою/№).
+function _buildInvoiceEmailHtml(childName, monthLabel, invoices){
+  var rows = invoices.map(function(inv){
+    return '<li><b>' + inv.typeUk + '</b> — ' + _fmtUah(inv.sum) + ' грн' +
+      ' <span style="color:#666">(' + inv.juName + ', ЄДРПОУ ' + inv.edrpou +
+      ', рахунок №' + inv.invoiceNumber + ')</span></li>';
+  }).join('');
+  return [
+    '<div style="font-family:Arial,sans-serif;font-size:14px;color:#222;line-height:1.6">',
+    '<p>Доброго дня!</p>',
+    '<p>Надсилаємо рахунки <b>m.kids</b> за <b>' + monthLabel + '</b> для <b>' + childName + '</b>:</p>',
+    '<ul>' + rows + '</ul>',
+    '<p>Деталі та банківські реквізити — у вкладених PDF-файлах.</p>',
+    '<p style="color:#888;font-size:12px">Лист сформовано автоматично системою m.kids.</p>',
+    '</div>'
+  ].join('');
+}
+
+// Один лист підписанту з 1-2 PDF. Логує КОЖЕН рахунок (1 рядок/ЮО).
+// opts: {childName, loc, invoiceDate, actorName,
+//        payMonth, payYear, extMonth, extYear, sendStudies, sendExtras}
+function sendInvoiceEmail(opts){
+  opts = opts || {};
+  var childName = String(opts.childName || '').trim();
+  var loc       = String(opts.loc || '').trim();
+  var actor     = String(opts.actorName || '').trim();
+  if (!childName) return {ok:false, error:'childName обовʼязковий'};
+  if (!loc)       return {ok:false, error:'loc обовʼязковий'};
+
+  var sendStudies = !!opts.sendStudies;
+  var sendExtras  = !!opts.sendExtras;
+  if (!sendStudies && !sendExtras) return {ok:false, error:'Не вказано що надсилати (sendStudies/sendExtras)'};
+
+  // email підписанта
+  var cd = _invoiceClientData(childName, loc, 'studies');
+  if (!cd.found) return {ok:false, error:'Дитину "' + childName + '" не знайдено в Клієнти для локації "' + loc + '".'};
+  var email = String(cd.signerEmail || '').trim();
+  if (!email){
+    _logInvoiceSend({child:childName, loc:loc, type:'—', ju:'—', invoiceNumber:'—',
+      email:'', sum:0, status:'помилка', actor:actor, error:'нема email підписанта'});
+    return {ok:false, error:'У підписанта дитини "' + childName + '" немає email.', noEmail:true};
+  }
+
+  var payMonth = Number(opts.payMonth || 0), payYear = Number(opts.payYear || 0);
+  var extMonth = Number(opts.extMonth || 0), extYear = Number(opts.extYear || 0);
+  var invoiceDate = String(opts.invoiceDate || '').trim();
+
+  var attachments = [], invoices = [], errors = [];
+  function buildOne(type, month, year){
+    var res = generateInvoicePDF({childName:childName, loc:loc, type:type,
+      month:month, year:year, invoiceDate:invoiceDate});
+    if (!res.ok){
+      errors.push(_invTypeUk(type) + ': ' + res.error);
+      _logInvoiceSend({child:childName, loc:loc, type:_invTypeUk(type), ju:'—',
+        invoiceNumber:'—', email:email, sum:0, status:'помилка', actor:actor, error:res.error});
+      return;
+    }
+    attachments.push(Utilities.newBlob(Utilities.base64Decode(res.pdfBase64),
+      'application/pdf', res.pdfFilename));
+    invoices.push({type:type, typeUk:_invTypeUk(type), invoiceNumber:res.invoiceNumber,
+      sum:res.sum, juName:res.juName, edrpou:res.edrpou});
+  }
+  if (sendStudies) buildOne('studies', payMonth, payYear);
+  if (sendExtras)  buildOne('extras',  extMonth, extYear);
+
+  if (!attachments.length){
+    return {ok:false, error: errors.join('; ') || 'жодного PDF не сформовано'};
+  }
+
+  var monthLabel = (payMonth >= 1 && payMonth <= 12) ? (MONTHS_CAL[payMonth-1] + ' ' + payYear)
+                 : (extMonth >= 1 && extMonth <= 12) ? (MONTHS_CAL[extMonth-1] + ' ' + extYear) : '';
+  var subject = 'Рахунок m.kids — ' + monthLabel + ' — ' + childName;
+  var html    = _buildInvoiceEmailHtml(childName, monthLabel, invoices);
+  var plain   = 'Доброго дня! Надсилаємо рахунки m.kids за ' + monthLabel + ' для ' + childName +
+                '. Деталі — у вкладених PDF.';
+
+  try {
+    MailApp.sendEmail(email, subject, plain, {htmlBody: html, attachments: attachments, name: 'm.kids'});
+  } catch(e){
+    var em = String(e && e.message || e);
+    invoices.forEach(function(inv){
+      _logInvoiceSend({child:childName, loc:loc, type:inv.typeUk, ju:inv.juName,
+        invoiceNumber:inv.invoiceNumber, email:email, sum:inv.sum,
+        status:'помилка', actor:actor, error:'MailApp: ' + em});
+    });
+    return {ok:false, error:'MailApp: ' + em};
+  }
+
+  var partial = errors.length ? ('частково: ' + errors.join('; ')) : '';
+  invoices.forEach(function(inv){
+    _logInvoiceSend({child:childName, loc:loc, type:inv.typeUk, ju:inv.juName,
+      invoiceNumber:inv.invoiceNumber, email:email, sum:inv.sum,
+      status:'надіслано', actor:actor, error:partial});
+  });
+
+  Logger.log('[sendInvoiceEmail] OK "%s" → %s | %s рахунків%s',
+    childName, email, invoices.length, errors.length ? (' (частково: ' + errors.join('; ') + ')') : '');
+  return {ok:true, email:email, sent:invoices.length, invoices:invoices,
+    partialErrors: errors.length ? errors : undefined};
+}
+
+// Серверний цикл по локації (для крон/одноразового запуску). Фронт «Надіслати всім»
+// робить власний цикл (для live-прогресу), теж через sendInvoiceEmail.
+// opts: {loc, payMonth, payYear, extMonth, extYear, invoiceDate, actorName}
+function bulkSendInvoices(opts){
+  opts = opts || {};
+  var loc      = String(opts.loc || '').trim();
+  var payMonth = Number(opts.payMonth || 0), payYear = Number(opts.payYear || 0);
+  var extMonth = Number(opts.extMonth || 0), extYear = Number(opts.extYear || 0);
+  var invoiceDate = String(opts.invoiceDate || '').trim();
+  var actor    = String(opts.actorName || '').trim();
+  if (!loc) return {ok:false, error:'loc обовʼязковий'};
+
+  var inv = getInvoiceListData({loc:loc, payMonth:payMonth, payYear:payYear,
+    extMonth:extMonth, extYear:extYear});
+  if (!inv.ok) return inv;
+
+  var sent = 0, failed = 0, noEmail = 0, details = [];
+  (inv.children || []).forEach(function(c){
+    var hasStudies = (Number(c.paymentSum) || 0) > 0;
+    var hasExtras  = (Number(c.extrasSum)  || 0) > 0;
+    if (!hasStudies && !hasExtras) return;
+    if (!c.signerEmail){ noEmail++; details.push({name:c.name, status:'без email'}); return; }
+    var r = sendInvoiceEmail({childName:c.name, loc:loc, invoiceDate:invoiceDate, actorName:actor,
+      payMonth:payMonth, payYear:payYear, extMonth:extMonth, extYear:extYear,
+      sendStudies:hasStudies, sendExtras:hasExtras});
+    if (r.ok){ sent++; details.push({name:c.name, status:'надіслано', sent:r.sent}); }
+    else     { failed++; details.push({name:c.name, status:'помилка', error:r.error}); }
+  });
+
+  Logger.log('[bulkSendInvoices] loc=%s | sent=%s failed=%s noEmail=%s', loc, sent, failed, noEmail);
+  return {ok:true, loc:loc, sent:sent, failed:failed, noEmail:noEmail, details:details};
+}
+
+// ТЕСТ: один реальний лист (редактор Apps Script → Run → перевір Inbox + лог-аркуш).
+// Заміни childName/loc на свою тестову дитину з email-підписантом перед запуском.
+function testSendInvoiceEmailOne(){
+  var res = sendInvoiceEmail({
+    childName: 'Матущенко Сара', loc: 'Осокорки',
+    payMonth: 6, payYear: 2026, extMonth: 5, extYear: 2026,
+    invoiceDate: '01.06.2026', actorName: 'TEST',
+    sendStudies: true, sendExtras: false
+  });
+  Logger.log('[testSendInvoiceEmailOne] %s', JSON.stringify(res));
+  return res;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v6.50.3 — СТАТУСИ РОЗСИЛКИ (бейджі) + ЗВІТ ДЛЯ CFO
+//   logViberSent(opts) — авто-лог кліку 💬 у новий аркуш "Viber_Розсилки".
+//   getInvoiceStatusReport(opts) — per-child статуси (для бейджів) + агрегат
+//     по локаціях (для CFO-звіту). Email-статус з "Розсилки_Рахунків",
+//     Viber-статус з "Viber_Розсилки". Фільтр по місяцю надсилання.
+// ═══════════════════════════════════════════════════════════════════════════
+var VIBER_LOG_TAB    = 'Viber_Розсилки';
+var VIBER_LOG_HEADER = ['Дата+час','Дитина','Локація','Телефон','Директор'];
+
+function _getViberLogSheet(){
+  var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var sh = ss.getSheetByName(VIBER_LOG_TAB);
+  if (!sh){
+    sh = ss.insertSheet(VIBER_LOG_TAB);
+    sh.getRange(1, 1, 1, VIBER_LOG_HEADER.length).setValues([VIBER_LOG_HEADER]);
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+
+// Авто-позначка Viber при кліку 💬 (фронт шле POST). opts: {childName, loc, phone, actorName}
+function logViberSent(opts){
+  opts = opts || {};
+  var child = String(opts.childName || '').trim();
+  var loc   = String(opts.loc || '').trim();
+  if (!child || !loc) return {ok:false, error:'childName+loc обовʼязкові'};
+  try {
+    var sh = _getViberLogSheet();
+    var now = Utilities.formatDate(new Date(), 'Europe/Kiev', 'dd.MM.yyyy HH:mm:ss');
+    sh.appendRow([now, child, loc, String(opts.phone || ''), String(opts.actorName || '')]);
+    return {ok:true, ts:now};
+  } catch(e){
+    return {ok:false, error:String(e && e.message || e)};
+  }
+}
+
+// Статуси + агрегат. opts: {loc?, month?(1-12), year?} — month/year фільтрують по ДАТІ надсилання.
+function getInvoiceStatusReport(opts){
+  try {
+    opts = opts || {};
+    var locFilter = String(opts.loc || '').trim();
+    var month = Number(opts.month || 0);
+    var year  = Number(opts.year  || 0);
+
+    function inPeriod(tsStr){
+      if (!month && !year) return true;
+      var m = String(tsStr || '').match(/^(\d{2})\.(\d{2})\.(\d{4})/);
+      if (!m) return false;
+      if (month && Number(m[2]) !== month) return false;
+      if (year  && Number(m[3]) !== year)  return false;
+      return true;
+    }
+
+    // ── EMAIL-лог ("Розсилки_Рахунків") ──
+    var emailByKey = {};   // "child||loc" → {status, ts}
+    var errorsByLoc = {};
+    var ve = _getInvoiceLogSheet().getDataRange().getValues();
+    for (var r = 1; r < ve.length; r++){
+      var ts = String(ve[r][0] || ''), child = String(ve[r][1] || '').trim();
+      var loc = String(ve[r][2] || '').trim(), status = String(ve[r][8] || '').trim();
+      if (!child || !inPeriod(ts)) continue;
+      var key = child + '||' + loc;
+      if (status === 'надіслано'){
+        emailByKey[key] = {status:'надіслано', ts:ts};   // останній надісланий «перебиває» помилку
+      } else if (status === 'помилка'){
+        errorsByLoc[loc] = (errorsByLoc[loc] || 0) + 1;
+        if (!emailByKey[key]) emailByKey[key] = {status:'помилка', ts:ts};
+      }
+    }
+
+    // ── VIBER-лог ("Viber_Розсилки") ──
+    var viberByKey = {};
+    var vv = _getViberLogSheet().getDataRange().getValues();
+    for (var r2 = 1; r2 < vv.length; r2++){
+      var ts2 = String(vv[r2][0] || ''), child2 = String(vv[r2][1] || '').trim();
+      var loc2 = String(vv[r2][2] || '').trim();
+      if (!child2 || !inPeriod(ts2)) continue;
+      viberByKey[child2 + '||' + loc2] = {ts:ts2};
+    }
+
+    // ── per-child для поточної локації (бейджі на сторінці Рахунків) ──
+    var byChild = {};
+    if (locFilter){
+      Object.keys(emailByKey).forEach(function(k){
+        var p = k.split('||'); if (p[1] !== locFilter) return;
+        (byChild[p[0]] = byChild[p[0]] || {}).email = emailByKey[k];
+      });
+      Object.keys(viberByKey).forEach(function(k){
+        var p = k.split('||'); if (p[1] !== locFilter) return;
+        (byChild[p[0]] = byChild[p[0]] || {}).viber = viberByKey[k];
+      });
+    }
+
+    // ── кількість активних дітей по локаціях ──
+    var kidsByLoc = {};
+    var gc = getClients();
+    if (gc.ok){
+      (gc.data || []).forEach(function(c){
+        var st = String(c['Статус'] || '').trim();
+        if (st !== 'active' && st !== 'adaptation') return;
+        var loc = String(c['Локація'] || '').trim();
+        if (loc) kidsByLoc[loc] = (kidsByLoc[loc] || 0) + 1;
+      });
+    }
+
+    // ── distinct надіслано по локаціях ──
+    var emailSentByLoc = {}, viberSentByLoc = {};
+    Object.keys(emailByKey).forEach(function(k){
+      if (emailByKey[k].status !== 'надіслано') return;
+      var loc = k.split('||')[1]; emailSentByLoc[loc] = (emailSentByLoc[loc] || 0) + 1;
+    });
+    Object.keys(viberByKey).forEach(function(k){
+      var loc = k.split('||')[1]; viberSentByLoc[loc] = (viberSentByLoc[loc] || 0) + 1;
+    });
+
+    var locSet = {};
+    [kidsByLoc, emailSentByLoc, viberSentByLoc, errorsByLoc].forEach(function(o){
+      Object.keys(o).forEach(function(l){ locSet[l] = 1; });
+    });
+    var report = Object.keys(locSet).map(function(l){
+      var kids = kidsByLoc[l] || 0, es = emailSentByLoc[l] || 0, vs = viberSentByLoc[l] || 0;
+      return {loc:l, kids:kids, emailSent:es, viberSent:vs, errors:errorsByLoc[l] || 0,
+        emailPct: kids ? Math.round(es * 100 / kids) : 0,
+        viberPct: kids ? Math.round(vs * 100 / kids) : 0};
+    }).sort(function(a,b){ return a.loc.localeCompare(b.loc, 'uk'); });
+
+    var tot = {loc:'УСЯ МЕРЕЖА', kids:0, emailSent:0, viberSent:0, errors:0};
+    report.forEach(function(x){ tot.kids += x.kids; tot.emailSent += x.emailSent; tot.viberSent += x.viberSent; tot.errors += x.errors; });
+    tot.emailPct = tot.kids ? Math.round(tot.emailSent * 100 / tot.kids) : 0;
+    tot.viberPct = tot.kids ? Math.round(tot.viberSent * 100 / tot.kids) : 0;
+
+    return {ok:true, loc:locFilter, month:month, year:year, byChild:byChild, report:report, total:tot};
+  } catch(e){
+    return {ok:false, error:String(e && e.message || e)};
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v6.51 — КОНТРОЛЬ ЗАПОВНЕННЯ (CFO): за дату показує по ВСІХ локаціях, де
+//   заповнено відвідуваність дітей (по групах) і табель співробітників.
+//   ОДНЕ читання аркуша "Табель". Дату нормалізуємо самі (tz-safe), фільтр на
+//   сервері. Повертаємо компактний JSON (весь Табель НЕ віддаємо).
+// ═══════════════════════════════════════════════════════════════════════════
+// Порт isTeacherTypeForTabel (index.html) — виключення предметників зі штату.
+var _FILL_TABEL_CORE_RE = /вихователь|помічник|директор|дирек|медсестр|психолог|тьютор|тімлі|охорон|водій|кухар|прибиральниц|посудомийниц|фінансист|юрист|методист|заступ|зам |сео|смм|маркет|тренер|операці|академічн|раннього розвитку|вчитель/;
+var _FILL_TABEL_SUBJ_RE = /англійськ|польськ|іспанськ|французськ|німецьк|музик|фітнес|логопед|танц|айкідо|робототехнік|інформатик|хореограф|вокал|малюванн|шах/;
+var _FILL_TABEL_SUBJ_EXACT = ['арт','лего','театр','карате','каратэ'];
+function _fillIsTeacher(typ, pos){
+  var t = String(typ || '').trim().toLowerCase();
+  if (/предметник/.test(t) || /додаткових/.test(t) || t === 'subject_teacher' || t === 'extras_teacher') return true;
+  var p = String(pos || '').trim().toLowerCase();
+  if (!p) return false;
+  var toks = p.split(/[\\\/,]+/).map(function(s){ return s.trim(); }).filter(Boolean);
+  if (toks.some(function(x){ return _FILL_TABEL_CORE_RE.test(x); })) return false;   // основна роль → лишаємо
+  return toks.some(function(x){ return _FILL_TABEL_SUBJ_RE.test(x) || _FILL_TABEL_SUBJ_EXACT.indexOf(x) !== -1; });
+}
+// Активний співробітник (порт isActive/isFired/декрет).
+function _fillEmpActive(e){
+  if (e.fired && String(e.fired).trim()) return false;
+  if (e.stat && /звіл/i.test(e.stat)) return false;
+  if (e.stat && /декрет/i.test(e.stat)) return false;
+  return true;
+}
+// Нормалізація дати в ISO БЕЗ зсуву таймзони: Date-обʼєкти форматуємо у tz таблиці.
+function _fillNormD(v, tz){
+  if (v instanceof Date) return Utilities.formatDate(v, tz, 'yyyy-MM-dd');
+  var s = String(v == null ? '' : v).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  var m = s.match(/^(\d{2})\.(\d{2})\.(\d{4})/);
+  if (m) return m[3] + '-' + m[2] + '-' + m[1];
+  var d = new Date(s);
+  return isNaN(d) ? '' : Utilities.formatDate(d, tz, 'yyyy-MM-dd');
+}
+// Вихідний / держ.свято (фіксовані дати; рухомі — Великдень/Трійця — не враховуємо).
+var _FILL_UA_HOLIDAYS = {
+  '01-01':'Новий рік','03-08':'8 Березня','05-01':'День праці','05-09':'День памʼяті',
+  '06-28':'День Конституції','08-24':'День Незалежності','10-01':'День захисників','12-25':'Різдво'
+};
+function _fillNonWorking(dateISO){
+  var p = dateISO.split('-');
+  var dw = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2])).getDay();  // weekday TZ-незалежний
+  if (dw === 0 || dw === 6) return {nonWorking:true, reason:'Вихідний'};
+  var md = p[1] + '-' + p[2];
+  if (_FILL_UA_HOLIDAYS[md]) return {nonWorking:true, reason:_FILL_UA_HOLIDAYS[md]};
+  return {nonWorking:false, reason:''};
+}
+
+// Очікувані групи/діти/персонал (спільне для single-day і range).
+// expGroups[loc]={group->activeKids}; expKids[loc]=DISTINCT діти; expStaff[loc]=персонал(−предметники).
+function _fillExpected(){
+  var expGroups = {}, expKids = {}, expStaff = {};
+  var crm = getClients();
+  if (crm.ok){
+    (crm.data || []).forEach(function(c){
+      var st = String(c['Статус'] || '').trim();
+      if (st !== 'active' && st !== 'adaptation') return;
+      var loc = String(c['Локація'] || '').trim();
+      if (!loc) return;
+      var grp = String(c['Група'] || '').trim() || '—';
+      (expGroups[loc] = expGroups[loc] || {});
+      expGroups[loc][grp] = (expGroups[loc][grp] || 0) + 1;
+      expKids[loc] = (expKids[loc] || 0) + 1;
+    });
+  }
+  var hrSh = SpreadsheetApp.openById(HR_SHEET_ID).getSheetByName(HR_TAB_NAME);
+  if (hrSh){
+    var hr = hrSh.getDataRange().getValues();
+    for (var i = 1; i < hr.length; i++){
+      if (!hr[i] || (!hr[i][4] && !hr[i][5])) continue;   // нема ПІБ
+      var e = _parseEmpRow(hr[i], i + 1);
+      if (!_fillEmpActive(e)) continue;
+      if (_fillIsTeacher(e.typ, e.pos)) continue;
+      if (e.loc) expStaff[e.loc] = (expStaff[e.loc] || 0) + 1;
+    }
+  }
+  return {expGroups:expGroups, expKids:expKids, expStaff:expStaff};
+}
+
+// «Коли» формату 'dd.MM.yyyy HH:mm' → сортувальний ключ 'yyyyMMddHHmm' (для «найпізніший час»).
+// Невідомий/порожній формат → '' (програє будь-якому реальному timestamp).
+function _fillAtKey(at){
+  var m = String(at || '').match(/^(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2})/);
+  return m ? (m[3] + m[2] + m[1] + m[4] + m[5]) : '';
+}
+
+// Список ISO-дат from..to включно (TZ-незалежний крок по компонентах).
+function _fillDateList(from, to){
+  var list = [];
+  var s = from.split('-'), e = to.split('-');
+  var d   = new Date(Number(s[0]), Number(s[1]) - 1, Number(s[2]));
+  var end = new Date(Number(e[0]), Number(e[1]) - 1, Number(e[2]));
+  var guard = 0;
+  while (d <= end && guard++ < 400){
+    var y = d.getFullYear(), m = d.getMonth() + 1, dd = d.getDate();
+    list.push(y + '-' + (m < 10 ? '0' + m : m) + '-' + (dd < 10 ? '0' + dd : dd));
+    d.setDate(d.getDate() + 1);
+  }
+  return list;
+}
+
+// v6.51.3: режим діапазону (Тиждень/Місяць). ОДНЕ читання "Табель" на from..to
+// (без циклу по днях). По кожній локації окремо діти/табель: daysFilled(🟢),
+// daysPartial(🟡), daysEmpty(🔴), workingDays, byDay[{date,childrenStatus,timesheetStatus}].
+function _getFillStatusRange(from, to){
+  var ss = getCRMSpreadsheet();
+  var tz = ss.getSpreadsheetTimeZone() || 'Europe/Kiev';
+  var exp = _fillExpected();
+  var dayList = _fillDateList(from, to);
+
+  // Одне читання Табель → byDate[date][loc] = {kidIds:{}, staffIds:{}} (distinct id).
+  var byDate = {};
+  var attSh = ss.getSheetByName(SHEET_ATTENDANCE);
+  if (attSh){
+    var av = attSh.getDataRange().getValues();
+    for (var r = 1; r < av.length; r++){
+      var row = av[r];
+      var d = _fillNormD(row[0], tz);
+      if (!d || d < from || d > to) continue;          // ISO-рядки → лексикографічне порівняння
+      var id = String(row[1] || '').trim();
+      var loc = String(row[3] || '').trim();
+      var status = String(row[5] || '').trim();
+      if (!loc || !status) continue;                   // «заповнено» = непорожній Статус
+      var dd = (byDate[d] = byDate[d] || {});
+      var cell = (dd[loc] = dd[loc] || {kidIds:{}, staffIds:{}});
+      if (id.indexOf('STAFF::') === 0) cell.staffIds[id] = true;
+      else cell.kidIds[id] = true;
+    }
+  }
+
+  // Локації: union очікуваних + побачених у Табелі, зонний порядок.
+  var allLocs = {};
+  Object.keys(exp.expGroups).forEach(function(l){ allLocs[l] = 1; });
+  Object.keys(exp.expStaff).forEach(function(l){ allLocs[l] = 1; });
+  Object.keys(byDate).forEach(function(d){ Object.keys(byDate[d]).forEach(function(l){ allLocs[l] = 1; }); });
+  var locList = sortByLocationOrder(Object.keys(allLocs));
+
+  // Робочих днів у діапазоні (однаково для всіх локацій).
+  var workingDays = 0;
+  dayList.forEach(function(d){ if (!_fillNonWorking(d).nonWorking) workingDays++; });
+
+  function rs(filled, working, partial){
+    if (working === 0) return 'gray';
+    if (filled >= working) return 'green';
+    if (filled === 0 && partial === 0) return 'red';
+    return 'yellow';
+  }
+
+  var summary = {mode:'range', childrenGreen:0, childrenTotal:0,
+                 timesheetGreen:0, timesheetTotal:0, red:0, workingDays:workingDays};
+  var locations = locList.map(function(loc){
+    var cF = 0, cP = 0, cE = 0, tF = 0, tP = 0, tE = 0;
+    var ckExp = exp.expKids[loc] || 0, sExp = exp.expStaff[loc] || 0;
+    var byDay = dayList.map(function(d){
+      if (_fillNonWorking(d).nonWorking) return {date:d, nw:true, childrenStatus:'gray', timesheetStatus:'gray'};
+      var cell = byDate[d] && byDate[d][loc];
+      var ckMarked = cell ? Object.keys(cell.kidIds).length : 0;
+      var cs = ckMarked === 0 ? 'red' : (ckExp > 0 && ckMarked >= ckExp ? 'green' : 'yellow');
+      if (cs === 'green') cF++; else if (cs === 'yellow') cP++; else cE++;
+      var smk = cell ? Object.keys(cell.staffIds).length : 0;
+      var ts = smk === 0 ? 'red' : (sExp > 0 && smk >= sExp ? 'green' : 'yellow');
+      if (ts === 'green') tF++; else if (ts === 'yellow') tP++; else tE++;
+      return {date:d, nw:false, childrenStatus:cs, timesheetStatus:ts};
+    });
+    var cStatus = rs(cF, workingDays, cP), tStatus = rs(tF, workingDays, tP);
+    summary.childrenTotal++; summary.timesheetTotal++;
+    if (cStatus === 'green') summary.childrenGreen++;
+    if (tStatus === 'green') summary.timesheetGreen++;
+    if (cStatus === 'red') summary.red++;
+    if (tStatus === 'red') summary.red++;
+    return {loc:loc,
+      children:{status:cStatus, daysFilled:cF, daysPartial:cP, daysEmpty:cE, workingDays:workingDays, expected:ckExp},
+      timesheet:{status:tStatus, daysFilled:tF, daysPartial:tP, daysEmpty:tE, workingDays:workingDays, expected:sExp},
+      byDay:byDay};
+  });
+
+  return {ok:true, mode:'range', from:from, to:to, nonWorking:false,
+          workingDays:workingDays, summary:summary, locations:locations};
+}
+
+// params: {date:'YYYY-MM-DD'} (День) АБО {from, to} (Тиждень/Місяць → range-режим).
+function getFillStatus(params){
+  try {
+    params = params || {};
+    var date = String(params.date || '').trim();
+    var from = String(params.from || '').trim();
+    var to   = String(params.to   || '').trim();
+
+    // v6.51.3: якщо передано валідні from&to → режим діапазону.
+    if (/^\d{4}-\d{2}-\d{2}$/.test(from) && /^\d{4}-\d{2}-\d{2}$/.test(to)){
+      return _getFillStatusRange(from, to);
+    }
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return {ok:false, error:'param date=YYYY-MM-DD обовʼязковий'};
+
+    var ss = getCRMSpreadsheet();
+    var tz = ss.getSpreadsheetTimeZone() || 'Europe/Kiev';
+
+    // 1+2) Очікувані групи/діти/персонал (спільний хелпер з range-режимом).
+    var _exp = _fillExpected();
+    var expGroups = _exp.expGroups, expKids = _exp.expKids, expStaff = _exp.expStaff;
+
+    // 3) Одне читання "Табель" → marked діти/персонал за дату (дедуп last-wins по id)
+    var attSh = ss.getSheetByName(SHEET_ATTENDANCE);
+    var kidMarked = {};      // loc -> group -> {ids:{}, by, at}
+    var markedKidIds = {};   // v6.51.1: loc -> {childId:true} (distinct, для location-level)
+    var kidWho = {};         // v6.51.4: loc -> {set:{}, cnt, bestKey, bestBy, bestAt} (хто+коли відмітив дітей)
+    var staffMarked = {};    // loc -> {ids:{}, by, at}
+    if (attSh){
+      var av = attSh.getDataRange().getValues();
+      for (var r = 1; r < av.length; r++){
+        var row = av[r];
+        if (_fillNormD(row[0], tz) !== date) continue;
+        var id = String(row[1] || '').trim();
+        var loc = String(row[3] || '').trim();
+        var status = String(row[5] || '').trim();
+        if (!loc || !status) continue;                 // «заповнено» = непорожній Статус
+        var by = String(row[6] || '').trim(), at = String(row[7] || '').trim();
+        if (id.indexOf('STAFF::') === 0){
+          var so = (staffMarked[loc] = staffMarked[loc] || {ids:{}, by:'', at:''});
+          so.ids[id] = true; if (by) so.by = by; if (at) so.at = at;
+        } else {
+          var g = String(row[4] || '').trim() || '—';
+          var kl = (kidMarked[loc] = kidMarked[loc] || {});
+          var kg = (kl[g] = kl[g] || {ids:{}, by:'', at:''});
+          kg.ids[id] = true; if (by) kg.by = by; if (at) kg.at = at;
+          (markedKidIds[loc] = markedKidIds[loc] || {})[id] = true;   // v6.51.1 distinct по локації
+          // v6.51.4: location-level «хто + коли» по реальних дитячих рядках (поле Ким).
+          if (by){
+            var kw = (kidWho[loc] = kidWho[loc] || {set:{}, cnt:0, bestKey:null, bestBy:'', bestAt:''});
+            if (!kw.set[by]){ kw.set[by] = true; kw.cnt++; }
+            var atk = _fillAtKey(at);
+            if (kw.bestKey === null || atk >= kw.bestKey){ kw.bestKey = atk; kw.bestBy = by; kw.bestAt = at; }
+          }
+        }
+      }
+    }
+
+    // 4) Збираємо по локаціях у LOCATION_ORDER
+    var allLocs = {};
+    [expGroups, expStaff, kidMarked, staffMarked].forEach(function(o){
+      Object.keys(o).forEach(function(l){ allLocs[l] = 1; });
+    });
+    var locList = sortByLocationOrder(Object.keys(allLocs));
+
+    var summary = {childrenGreen:0, childrenTotal:0, groupsGreen:0, groupsTotal:0,
+                   timesheetGreen:0, timesheetTotal:0, red:0};
+    var locations = locList.map(function(loc){
+      // v6.51.1: location-level відвідуваність — DISTINCT childId (не сума по групах).
+      var ckExp = expKids[loc] || 0;
+      var ckMarked = markedKidIds[loc] ? Object.keys(markedKidIds[loc]).length : 0;
+      var ckStatus = ckMarked === 0 ? 'red' : (ckExp > 0 && ckMarked >= ckExp ? 'green' : 'yellow');
+      summary.childrenTotal++;
+      if (ckStatus === 'green') summary.childrenGreen++;
+
+      var grpNames = {};
+      Object.keys(expGroups[loc] || {}).forEach(function(g){ grpNames[g] = 1; });
+      Object.keys(kidMarked[loc]  || {}).forEach(function(g){ grpNames[g] = 1; });
+      var groups = Object.keys(grpNames).sort(function(a,b){ return a.localeCompare(b, 'uk'); }).map(function(g){
+        var expected = (expGroups[loc] && expGroups[loc][g]) || 0;
+        var mk = kidMarked[loc] && kidMarked[loc][g];
+        var marked = mk ? Object.keys(mk.ids).length : 0;
+        var status = marked === 0 ? 'red' : (expected > 0 && marked >= expected ? 'green' : 'yellow');
+        summary.groupsTotal++;
+        if (status === 'green') summary.groupsGreen++;
+        if (status === 'red') summary.red++;
+        return {group:g, teacher:(mk && mk.by) || '', status:status, marked:marked,
+                expected:expected, by:(mk && mk.by) || '', at:(mk && mk.at) || ''};
+      });
+      var expS = expStaff[loc] || 0;
+      var sm = staffMarked[loc];
+      var smk = sm ? Object.keys(sm.ids).length : 0;
+      var tStatus = smk === 0 ? 'red' : (expS > 0 && smk >= expS ? 'green' : 'yellow');
+      summary.timesheetTotal++;
+      if (tStatus === 'green') summary.timesheetGreen++;
+      if (tStatus === 'red') summary.red++;
+      var kw = kidWho[loc];
+      return {loc:loc,
+              children:{status:ckStatus, marked:ckMarked, expected:ckExp,             // v6.51.1 location-level
+                        by:(kw && kw.bestBy) || '', at:(kw && kw.bestAt) || '',       // v6.51.4 хто+коли (найпізніший)
+                        byCount:(kw && kw.cnt) || 0},
+              groups:groups,
+              timesheet:{status:tStatus, marked:smk, expected:expS, by:(sm && sm.by) || '', at:(sm && sm.at) || ''}};
+    });
+
+    var nw = _fillNonWorking(date);
+    return {ok:true, date:date, nonWorking:nw.nonWorking, nonWorkingReason:nw.reason,
+            summary:summary, locations:locations};
+  } catch(e){
+    return {ok:false, error:String(e && e.message || e)};
+  }
+}
+
+// ТЕСТ (Apps Script editor → Run): сьогоднішня дата. Перевір, що _normD не ріже
+// дати через таймзону (порівняй із реальними відмітками у листі "Табель").
+function testGetFillStatus(){
+  var d = Utilities.formatDate(new Date(), 'Europe/Kiev', 'yyyy-MM-dd');
+  var r = getFillStatus({date: d});
+  Logger.log('[testGetFillStatus] date=%s ok=%s locations=%s summary=%s',
+    d, r.ok, r.locations && r.locations.length, JSON.stringify(r.summary));
+  return r;
+}
+
 // v6.11.25 read-guard: договір-поля могли зберегтись як Date (Sheets auto-coerce
 // дато-схожого тексту). Захист на ВИВОДІ: Date → ''; інакше String(v).trim().
 // Дані в БД НЕ змінює — лише не дає Date потрапити у рахунок/UI.
@@ -4981,7 +6290,7 @@ function _getInvoiceRequisites(loc, type){
 
 // Підписант (mom/dad → ПІБ) + номер договору з картки Клієнти.
 function _invoiceClientData(childName, loc, type){
-  var res = {found:false, signerParent:'', signerName:'', contractNumber:'', entryFeeSchedule:[]};
+  var res = {found:false, signerParent:'', signerName:'', signerEmail:'', signerPhone:'', contractNumber:'', entryFeeSchedule:[]};
   var gc = getClients();
   if (!gc.ok) return res;
   var nn = String(childName).trim(), ll = String(loc).trim();
@@ -4996,6 +6305,11 @@ function _invoiceClientData(childName, loc, type){
     res.signerName = (signer === 'dad') ? String(c['ПІБ тата'] || '').trim()
                    : (signer === 'mom') ? String(c['ПІБ мами'] || '').trim()
                    : '';
+    // v6.50: контакти підписанта (для email/viber-розсилки).
+    res.signerEmail = (signer === 'dad') ? String(c['Email тата']   || '').trim()
+                    : (signer === 'mom') ? String(c['Email мами']   || '').trim() : '';
+    res.signerPhone = (signer === 'dad') ? String(c['Телефон тата'] || '').trim()
+                    : (signer === 'mom') ? String(c['Телефон мами'] || '').trim() : '';
     res.contractNumber = (type === 'extras')
       ? _contractStr(c['Номер додаткового договору'])   // v6.11.25 read-guard проти Date
       : _contractStr(c['Номер договору']);
@@ -6838,6 +8152,79 @@ function _nextPredmetnyRowId(sh){
   return max + 1;
 }
 
+// ── PHANTOM-CATALOG CLEANUP (v6.28.3, editor-only) ─────────────────────────
+// Видаляє рядки Предметники_Каталог, чия Локація НЕ існує у getLocations
+// (CONFIG sheet — джерело правди). Напр. дубль «Осокорки сад» (5 рядків,
+// ідентичних «Осокорки»). dryRun за замовчуванням; реальне видалення —
+// лише з opts.confirm='YES_DELETE'. Зразок: syncGroupsFromPayments.
+//   testCleanupPhantomPredCatalog()         → dry-run (нічого не пише)
+//   runCleanupPhantomPredCatalogREAL()       → реальне видалення
+function cleanupPhantomPredCatalog(opts){
+  opts = opts || {};
+  var dryRun = (opts.dryRun !== false);
+  if (!dryRun && opts.confirm !== 'YES_DELETE'){
+    Logger.log('[cleanupPhantomCatalog] ⚠ REAL-режим заблоковано: бракує confirm="YES_DELETE". Працюю як DRY-RUN.');
+    dryRun = true;
+  }
+
+  // 1. Канонічні локації з CONFIG.
+  var locRes = getLocations();
+  if (!locRes || !locRes.ok) return {ok:false, error:'getLocations failed'};
+  var canonical = {};
+  locRes.data.forEach(function(l){ if (l && l.loc) canonical[String(l.loc).trim()] = true; });
+
+  // 2. Скан каталогу → фантомні рядки (loc не в canonical).
+  var sh = _getPredmetnyCatalogSheet(false);
+  var lastRow = sh.getLastRow();
+  if (lastRow < 2) return {ok:true, dryRun:dryRun, phantomRows:0, deleted:0, byLoc:{}};
+  var data = sh.getRange(2, 1, lastRow - 1, PREDMETNY_CATALOG_HEADER.length).getValues();
+
+  var phantom = [];               // {rowNum, loc, subject, rate, id}
+  var byLoc = {};
+  for (var i = 0; i < data.length; i++){
+    var rec = _parsePredmetnyCatRow(data[i]);
+    if (!rec.loc) continue;
+    if (canonical[rec.loc]) continue;             // легітимна локація — пропускаємо
+    phantom.push({rowNum: i + 2, loc: rec.loc, subject: rec.subject, rate: rec.rate, id: rec.id});
+    byLoc[rec.loc] = (byLoc[rec.loc] || 0) + 1;
+  }
+
+  Logger.log('[cleanupPhantomCatalog] ─────────────────────────────');
+  Logger.log('[cleanupPhantomCatalog] dryRun=%s | фантомних рядків=%s', dryRun, phantom.length);
+  Object.keys(byLoc).sort().forEach(function(loc){
+    Logger.log('   ▼ %s (%s)', loc, byLoc[loc]);
+  });
+  phantom.forEach(function(p){
+    Logger.log('     row %s | %s | %s | ставка=%s | id=%s', p.rowNum, p.loc, p.subject, p.rate, p.id);
+  });
+
+  if (dryRun){
+    Logger.log('[cleanupPhantomCatalog] DRY-RUN — нічого не видалено. Для видалення: runCleanupPhantomPredCatalogREAL()');
+    return {ok:true, dryRun:true, phantomRows:phantom.length, byLoc:byLoc,
+            rows:phantom};
+  }
+
+  // 3. Реальне видалення — з НИЗУ догори (щоб індекси не зсувались).
+  var rowNums = phantom.map(function(p){ return p.rowNum; }).sort(function(a, b){ return b - a; });
+  for (var j = 0; j < rowNums.length; j++){
+    sh.deleteRow(rowNums[j]);
+  }
+  Logger.log('[cleanupPhantomCatalog] ✅ Видалено %s рядків.', rowNums.length);
+  return {ok:true, dryRun:false, phantomRows:phantom.length, deleted:rowNums.length,
+          byLoc:byLoc, rows:phantom};
+}
+
+function testCleanupPhantomPredCatalog(){
+  var res = cleanupPhantomPredCatalog({dryRun:true});
+  Logger.log('RESULT: ' + JSON.stringify(res));
+  return res;
+}
+function runCleanupPhantomPredCatalogREAL(){
+  var res = cleanupPhantomPredCatalog({dryRun:false, confirm:'YES_DELETE'});
+  Logger.log('RESULT: ' + JSON.stringify(res));
+  return res;
+}
+
 // ── Каталог CRUD ──────────────────────────────────────────────────────────
 function getPredmetnyCatalog(loc){
   try {
@@ -7403,8 +8790,8 @@ function exportPredmetnyToSalary(params){
 // Експорт предметників у Salary для всіх 11 локацій + зведена таблиця.
 // УВАГА: реально пише у Salary-файли. Запускати ВРУЧНУ.
 function exportAllPredmetnyToSalary(month, year){
-  var LOCS = ['Голосієво','Бігова','Борщагівка','Бровари',"Кар'єрна",'Кругла',
-              'Оранж','Осокорки','Позняки','Пуща','Тичини'];
+  var LOCS = sortByLocationOrder(['Голосієво','Бігова','Борщагівка','Бровари',"Кар'єрна",'Кругла',
+              'Оранж','Осокорки','Позняки','Пуща','Тичини']);   // v6.50.4 зонний порядок
   var lines = [];
   LOCS.forEach(function(loc){
     var r = exportPredmetnyToSalary({loc: loc, month: month, year: year});
@@ -8217,8 +9604,8 @@ function _fixSalaryConfigBugs(){
 // із секцією "Вчителі-предметники" у Salary-файлі локації. Запускати ВРУЧНУ
 // з Apps Script editor; звіт — у Execution log.
 function auditPredmetnyInSalary(){
-  var LOCS = ['Голосієво','Бігова','Борщагівка','Бровари',"Кар'єрна",'Кругла',
-              'Оранж','Осокорки','Позняки','Пуща','Тичини'];
+  var LOCS = sortByLocationOrder(['Голосієво','Бігова','Борщагівка','Бровари',"Кар'єрна",'Кругла',
+              'Оранж','Осокорки','Позняки','Пуща','Тичини']);   // v6.50.4 зонний порядок
   var reg = _salaryGetRegistry();
   if (!reg.ok){ Logger.log('Salary-реєстр: %s', reg.error); return reg; }
   var regByLoc = {};
@@ -8315,8 +9702,8 @@ function auditPredmetnyInSalary(){
 function exportAllPredmetnyToSalary_DRY_RUN(month, year){
   month = Number(month); year = Number(year) || new Date().getFullYear();
   if (!month || month < 1 || month > 12){ Logger.log('month має бути 1-12'); return; }
-  var LOCS = ['Голосієво','Бігова','Борщагівка','Бровари',"Кар'єрна",'Кругла',
-              'Оранж','Осокорки','Позняки','Пуща','Тичини'];
+  var LOCS = sortByLocationOrder(['Голосієво','Бігова','Борщагівка','Бровари',"Кар'єрна",'Кругла',
+              'Оранж','Осокорки','Позняки','Пуща','Тичини']);   // v6.50.4 зонний порядок
   var ICON = {P1:'✅', P2:'🔵', P3:'🟡', P4:'🟠', P5:'🟣', P6:'🟢', P7:'❌'};
   var NOTE = {
     P2: ' (префікс зі ставкою)',
@@ -8640,6 +10027,104 @@ function _getHrSheet(){
   return sh;
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// UNIFY LVIV LOCATION NAMES (editor-only) — лише HR Співробітники.
+// «Львів Кругла»→«Кругла», «Львів Бігова»→«Бігова» (синхрон з CONFIG).
+// Торкаємось ВИКЛЮЧНО колонки C (Локація) листа HR '2025-2026'.
+//   diagUnifyLvivLocationNames()      — dry-run (нічого не пише)
+//   runUnifyLvivLocationNamesREAL()   — реальна заміна + backup у Props
+//   runRollbackUnifyLvivLocationNames() — відкат з backup
+// ═══════════════════════════════════════════════════════════════════
+var UNIFY_LVIV_MAP        = { 'Львів Кругла':'Кругла', 'Львів Бігова':'Бігова' };
+var UNIFY_LVIV_LOC_COL    = 3;                      // колонка C = Локація (1-based)
+var UNIFY_LVIV_BACKUP_KEY = 'UNIFY_LVIV_LOC_BACKUP';
+
+function diagUnifyLvivLocationNames(){
+  var sh = _getHrSheet();
+  var lastRow = sh.getLastRow();
+  if (lastRow < 2) return {ok:true, dryRun:true, total:0, toChange:0, byName:{}};
+  var locs = sh.getRange(2, UNIFY_LVIV_LOC_COL, lastRow - 1, 1).getValues();
+  var byName = {}, rows = [];
+  for (var i = 0; i < locs.length; i++){
+    var v = String(locs[i][0] == null ? '' : locs[i][0]).trim();
+    if (UNIFY_LVIV_MAP.hasOwnProperty(v)){
+      byName[v] = (byName[v] || 0) + 1;
+      rows.push({row:i + 2, from:v, to:UNIFY_LVIV_MAP[v]});
+    }
+  }
+  Logger.log('[diagUnifyLviv] DRY-RUN | total=%s toChange=%s | %s',
+    lastRow - 1, rows.length, JSON.stringify(byName));
+  rows.forEach(function(r){ Logger.log('   row %s: «%s» → «%s»', r.row, r.from, r.to); });
+  return {ok:true, dryRun:true, total:lastRow - 1, toChange:rows.length, byName:byName, rows:rows};
+}
+
+function runUnifyLvivLocationNamesREAL(){
+  var lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    var sh = _getHrSheet();
+    var lastRow = sh.getLastRow();
+    if (lastRow < 2) return {ok:true, changed:0, msg:'порожній лист'};
+    var range = sh.getRange(2, UNIFY_LVIV_LOC_COL, lastRow - 1, 1);
+    var locs = range.getValues();
+    var backup = [], byName = {}, changed = 0;
+    for (var i = 0; i < locs.length; i++){
+      var v = String(locs[i][0] == null ? '' : locs[i][0]).trim();
+      if (UNIFY_LVIV_MAP.hasOwnProperty(v)){
+        backup.push({row:i + 2, old:locs[i][0]});      // зберігаємо ОРИГІНАЛ
+        locs[i][0] = UNIFY_LVIV_MAP[v];
+        byName[v] = (byName[v] || 0) + 1;
+        changed++;
+      }
+    }
+    if (!changed) return {ok:true, changed:0, msg:'нема що змінювати'};
+    var stamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
+    // backup ПЕРЕД записом (для відкату). Лише якщо ще нема бекапу — щоб
+    // повторний запуск не затер оригінали.
+    var props = PropertiesService.getScriptProperties();
+    if (!props.getProperty(UNIFY_LVIV_BACKUP_KEY)){
+      props.setProperty(UNIFY_LVIV_BACKUP_KEY, JSON.stringify(
+        {ts:stamp, sheetId:HR_SHEET_ID, tab:HR_TAB_NAME, col:UNIFY_LVIV_LOC_COL, items:backup}));
+    }
+    range.setValues(locs);
+    var res = {ok:true, changed:changed, byName:byName, backupTs:stamp};
+    Logger.log('[runUnifyLvivREAL] ' + JSON.stringify(res));
+    return res;
+  } catch(e){
+    Logger.log('[runUnifyLvivREAL] EXCEPTION: %s', e && e.message);
+    return {ok:false, error: e && e.message || String(e)};
+  } finally {
+    try { lock.releaseLock(); } catch(_e){}
+  }
+}
+
+function runRollbackUnifyLvivLocationNames(){
+  var raw = PropertiesService.getScriptProperties().getProperty(UNIFY_LVIV_BACKUP_KEY);
+  if (!raw) return {ok:false, error:'Немає бекапу (runUnifyLvivLocationNamesREAL ще не запускався)'};
+  var b;
+  try { b = JSON.parse(raw); } catch(e){ return {ok:false, error:'Бекап пошкоджений'}; }
+  var lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    var sh = _getHrSheet();
+    var col = b.col || UNIFY_LVIV_LOC_COL;
+    var restored = 0;
+    (b.items || []).forEach(function(it){
+      sh.getRange(it.row, col).setValue(it.old);
+      restored++;
+    });
+    // прибираємо бекап після успішного відкату
+    PropertiesService.getScriptProperties().deleteProperty(UNIFY_LVIV_BACKUP_KEY);
+    var res = {ok:true, restored:restored, fromTs:b.ts};
+    Logger.log('[rollbackUnifyLviv] ' + JSON.stringify(res));
+    return res;
+  } catch(e){
+    return {ok:false, error: e && e.message || String(e)};
+  } finally {
+    try { lock.releaseLock(); } catch(_e){}
+  }
+}
+
 function _getHrAuditSheet(){
   var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
   var sh = ss.getSheetByName(HR_AUDIT_SHEET);
@@ -8748,6 +10233,12 @@ function _parseEmpRow(row, rowNum){
     fired:    fired,
     // P (idx 15) — formula, не повертаємо. Q (idx 16) — reserved.
     email:    s(row[17]),
+    // v6.44 — нові поля картки (append-only).
+    passport:  s(row[18]),   // S
+    rate:      s(row[19]),   // T — Ставка ЗП
+    workCond:  s(row[20]),   // U — Умови роботи (Договір/ФОП/ЦПХ/ГПД…)
+    calcModel: s(row[21]),   // V — Модель розрахунку (За заняття/За дитину/За захід)
+    assessment: s(row[22]),  // W — Оцінка (JSON) v6.48
     archived: fired !== ''
   };
 }
@@ -8884,6 +10375,14 @@ function saveEmployee(actorId, payload, rowNum){
 
       var newAtoO = _payloadToAtoO(payload);
       var email   = String(payload.email || '').trim();
+      // v6.44 — нові поля картки (append-only S:V). Зберігаємо як текст.
+      var passport  = String(payload.passport  || '').trim();   // S
+      var rate      = String(payload.rate      || '').trim();   // T
+      var workCond  = String(payload.workCond  || '').trim();   // U
+      var calcModel = String(payload.calcModel || '').trim();   // V
+      // v6.48 — assessment (W): об'єкт {templateId:{period:{...}}} → JSON-рядок.
+      var assessment = (payload.assessment == null) ? null
+                     : (typeof payload.assessment === 'string' ? payload.assessment : JSON.stringify(payload.assessment));
 
       // ── UPDATE ─────────────────────────────────────────
       if (rowNum){
@@ -8903,6 +10402,10 @@ function saveEmployee(actorId, payload, rowNum){
         // Пишемо A:O (15 cols) і R (1 col). P (formula) + Q (reserved) — НЕ чіпаємо.
         sh.getRange(rowNum, 1,  1, 15).setValues([newAtoO]);
         sh.getRange(rowNum, 18, 1, 1).setValue(email);
+        // v6.44 — S:V (Паспорт, Ставка, Умови, Модель). Append-only, поза P/Q.
+        sh.getRange(rowNum, 19, 1, 4).setValues([[passport, rate, workCond, calcModel]]);
+        // v6.48 — W (assessment) пишемо ЛИШЕ якщо передано (модалка/реактивація не шлють → не затираємо).
+        if (assessment != null) sh.getRange(rowNum, 23, 1, 1).setValue(assessment);
 
         var updated = _parseEmpRow(sh.getRange(rowNum, 1, 1, HR_COLS).getValues()[0], rowNum);
         _writeHrAudit(actor, 'update', rowNum, existing, updated);
@@ -8913,8 +10416,9 @@ function saveEmployee(actorId, payload, rowNum){
       var dupNew = _findEmpDuplicate(allEmps, payload, null);
       if (dupNew) return {ok:false, error:'Duplicate employee in same location (row ' + dupNew.rowNum + ')', code:'DUPLICATE'};
 
-      // appendRow з 18 cols: A-O (15) + ['',''] (P,Q) + R (email)
-      var fullRow = newAtoO.concat(['', '', email]);
+      // appendRow з 22 cols: A-O (15) + ['',''] (P,Q) + R (email) + S:V (v6.44).
+      // P-формула — порожня тут, копіюється з row 2 одразу після append.
+      var fullRow = newAtoO.concat(['', '', email, passport, rate, workCond, calcModel, (assessment != null ? assessment : '')]);
       sh.appendRow(fullRow);
       var newRowNum = sh.getLastRow();
 
@@ -8938,6 +10442,26 @@ function saveEmployee(actorId, payload, rowNum){
   } catch(e){
     return {ok:false, error: e.message || String(e)};
   }
+}
+
+// v6.44 — one-shot міграція: підписує заголовки нових колонок S:V у HR-аркуші.
+//   Запускати ВРУЧНУ з Apps Script editor (без routing у doPost). Безпечно
+//   повторно: пише лише порожні клітинки заголовка, дані рядків не чіпає.
+//   saveEmployee і так пише дані у S:V навіть без заголовків — це лише підписи.
+function migrateHrAddCardFields(){
+  var sh = _getHrSheet();
+  var HEAD = { 19:'Паспорт', 20:'Ставка ЗП', 21:'Умови роботи', 22:'Модель розрахунку', 23:'Оцінка (JSON)' };
+  var done = [];
+  Object.keys(HEAD).forEach(function(col){
+    col = Number(col);
+    var cell = sh.getRange(1, col);
+    if (String(cell.getValue() || '').trim() === ''){
+      cell.setValue(HEAD[col]);
+      done.push(HEAD[col]);
+    }
+  });
+  Logger.log('[migrateHrAddCardFields] ✓ підписано заголовків: %s', done.length ? JSON.stringify(done) : 'none (вже існували)');
+  return {ok:true, added:done};
 }
 
 // deleteEmployee(actorId, rowNum) — soft-delete (O = today, формула P
@@ -8976,16 +10500,19 @@ function deleteEmployee(actorId, rowNum){
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  PREDMETNYKY — ВЧИТЕЛІ-ПРЕДМЕТНИКИ (v6.11)
+//  PREDMETNYKY — ВЧИТЕЛІ-ПРЕДМЕТНИКИ (v6.11, per-group fix v6.28.2)
 // ═══════════════════════════════════════════════════════════════════════════
 // Облік проведених занять: 1 рядок Predmetnyky_Lessons = 1 заняття.
-// Норма = (region × subject × group_type) на місяць. Сума по
-// (location, group, subject, year-month) у Lessons ≤ норма.
+// Норма = (region × subject × group_TYPE) на місяць — матриця НЕ змінюється.
+// v6.28.2: норма ТИПУ застосовується до КОЖНОЇ реальної групи окремо.
+//   Напр. Осокорки × Англійська × Find = 10. Три реальні Find-групи
+//   (Find-iki Вікторія / Find-iki 2 Марія / Find-iki Маша Вовк) проводять
+//   ПО 10 занять кожна → ліміт рахується по ПОВНІЙ назві групи (L.group).
 // "Чомусики" — без ліміту (норма 0 у всіх клітинках = сигнал unlimited).
 // Не торкаємось v6.5 (Предметники_Каталог читаємо тільки).
 //
-// Дві нові таблиці (у CRM_SHEET, auto-create):
-//   • Predmetnyky_Norms    — норми + idempotent seed (12 рядків).
+// Дві таблиці (у CRM_SHEET, auto-create):
+//   • Predmetnyky_Norms    — норми по group_type + idempotent seed (12 рядків).
 //   • Predmetnyky_Lessons  — журнал занять.
 //
 // Permission-модель:
@@ -9098,6 +10625,7 @@ function _seedPredmetnykyNorms(){
 
 // ── Loaders (Norms + Catalog) ────────────────────────────────────
 // Norms sheet → {'Київ': {'Англійська': {miniBaby:8,...}, ...}, 'Львів': {...}}
+// Норма — по group_TYPE (matriця не змінюється).
 function _loadPredNorms(){
   var sh = _getPredNormsSheet(true);
   var data = sh.getDataRange().getValues();
@@ -9116,6 +10644,44 @@ function _loadPredNorms(){
       Preschool: Number(row[6]) || 0
     };
   }
+  return out;
+}
+
+// Норма ТИПУ для (loc, subject, повна_назва_групи): нормалізуємо назву
+// групи → group_type, дивимось матрицю по region. 0 = не передбачено
+// (або тип не розпізнано). Чомусики не має ліміту (обробляється у caller).
+function _getPredNormByType(loc, subject, group){
+  var gt = _normalizeGroupType(group);
+  if (!gt) return 0;                              // нестандартна назва → без ліміту
+  var region = _predLocToRegion(loc);
+  var norms = _loadPredNorms();
+  return (norms[region] && norms[region][subject] && norms[region][subject][gt]) || 0;
+}
+
+// Реальні групи локацій з листа Клієнти (distinct непорожні Група).
+// locFilter='' → усі локації. → {'Голосієво': ['Baby-ki', 'Find-iki', ...]}
+function _loadRealGroups(locFilter){
+  var out = {};
+  var sh = getCRMSpreadsheet().getSheetByName(SHEET_CLIENTS);
+  if (!sh || sh.getLastRow() < 2) return out;
+  var data = sh.getDataRange().getValues();
+  var hdrs = data[0].map(String);
+  var colLoc = hdrs.indexOf('Локація');  if (colLoc < 0) colLoc = 2;
+  var colGrp = hdrs.indexOf('Група');    if (colGrp < 0) colGrp = 3;
+  var filter = String(locFilter || '').trim();
+  var seen = {};                                   // "loc|group" → true
+  for (var i = 1; i < data.length; i++){
+    var loc = String(data[i][colLoc] || '').trim();
+    var grp = String(data[i][colGrp] || '').trim();
+    if (!loc || !grp) continue;
+    if (filter && loc !== filter) continue;
+    var k = loc + '|' + grp;
+    if (seen[k]) continue;
+    seen[k] = true;
+    if (!out[loc]) out[loc] = [];
+    out[loc].push(grp);
+  }
+  Object.keys(out).forEach(function(l){ out[l].sort(); });
   return out;
 }
 
@@ -9273,7 +10839,8 @@ function _loadPredLessons(locFilter){
 // ── PUBLIC API ───────────────────────────────────────────────────
 
 // GET ?action=getPredmetnyky&actorId=N
-// {ok, teachers, norms (всі), catalog (scoped), lessons (scoped), scope}
+// {ok, teachers, norms (по group_type, всі), groups (реальні групи локацій,
+//  scoped), catalog (scoped), lessons (scoped), assignments, scope}
 function getPredmetnyky(actorId){
   try {
     var actor = _getActor(actorId);
@@ -9284,7 +10851,8 @@ function getPredmetnyky(actorId){
     return {
       ok:           true,
       teachers:     _loadPredTeachers(scope),
-      norms:        _loadPredNorms(),
+      norms:        _loadPredNorms(),               // матриця по group_type
+      groups:       _loadRealGroups(scope),         // реальні групи локацій
       catalog:      _loadPredCatalog(scope),
       lessons:      _loadPredLessons(scope),
       assignments:  _loadPredAssignments(scope),
@@ -9296,8 +10864,11 @@ function getPredmetnyky(actorId){
 }
 
 // POST {action:'savePredmetnykyLesson', actorId, lesson:{empKey, location, group, subject, date}}
-// Success:  {ok:true, id, current, norm}
+// Success:  {ok:true, id, current, norm}  (norm=0 → ліміту немає / unlimited)
 // Errors:   {ok:false, code:'BAD_SUBJECT'|'BAD_GROUP'|'NORM_REACHED'|'PERM_DENIED'|..., error, ...}
+// v6.28.2: ліміт рахується по ПОВНІЙ назві групи (кожна реальна група веде
+//   свою норму свого ТИПУ). Норма береться з матриці по group_type. BAD_GROUP
+//   тепер означає "групи немає в локації" (а не "тип не розпізнано").
 function savePredmetnykyLesson(actorId, lesson){
   try {
     var actor = _getActor(actorId);
@@ -9316,11 +10887,17 @@ function savePredmetnykyLesson(actorId, lesson){
     if (!dateStr)  return {ok:false, error:'date is required'};
     if (PRED_SUBJECTS.indexOf(subject) === -1)
       return {ok:false, code:'BAD_SUBJECT', error:'Unknown subject: ' + subject};
-    var groupType = _normalizeGroupType(group);
-    if (!groupType)
-      return {ok:false, code:'BAD_GROUP', error:'Unknown group type for: ' + group};
     var ym = _lessonYearMonth(dateStr);
     if (!ym) return {ok:false, error:'Bad date format: ' + dateStr};
+
+    // ── валідація групи: чи існує така група в локації (lenient) ──
+    // Реальні групи беремо з Клієнтів. Якщо для локації список груп НЕ
+    // порожній і групи в ньому немає — відмова. Якщо груп нема взагалі
+    // (порожні Клієнти) — пропускаємо перевірку, не блокуємо.
+    var realGroups = (_loadRealGroups(location)[location]) || [];
+    if (realGroups.length && realGroups.indexOf(group) === -1)
+      return {ok:false, code:'BAD_GROUP',
+              error:'Групи "' + group + '" немає в локації ' + location, group:group};
 
     // ── permission ──
     if (!_canEditPredmetnyky(actor, location))
@@ -9329,32 +10906,26 @@ function savePredmetnykyLesson(actorId, lesson){
     var lock = LockService.getScriptLock();
     lock.waitLock(15000);
     try {
-      // ── norm check ──
-      // Чомусики — без ліміту (норма 0 у всіх клітинках = сигнал unlimited).
-      // Для решти: norm == 0 → BAD_GROUP (заборонена комбінація);
-      //          count >= norm → NORM_REACHED (місячний ліміт вичерпано).
-      var current = 0, norm = 0, region = _predLocToRegion(location);
-      if (subject !== PRED_UNLIMITED_SUBJ){
-        var norms = _loadPredNorms();
-        norm = (norms[region] && norms[region][subject] && norms[region][subject][groupType]) || 0;
-        if (norm <= 0){
-          return {ok:false, code:'BAD_GROUP',
-                  error:'No norm for ' + region + '/' + subject + '/' + groupType,
-                  region:region, groupType:groupType, norm:0};
-        }
-        var existing = _loadPredLessons(null);
+      // ── norm check (норма по ТИПУ, ліміт по ПОВНІЙ назві групи) ──
+      // norm > 0 → enforced місячний ліміт по (location, ПОВНА група, subject).
+      // Чомусики / нестандартна назва / тип з нормою 0 → ліміту немає.
+      var current = 0;
+      var norm = (subject === PRED_UNLIMITED_SUBJ)
+        ? 0
+        : _getPredNormByType(location, subject, group);
+      if (norm > 0){
+        var existing = _loadPredLessons(location);
         for (var i = 0; i < existing.length; i++){
           var L = existing[i];
-          if (L.loc     !== location) continue;
-          if (L.group   !== group)    continue;
-          if (L.subject !== subject)  continue;
+          if (L.group   !== group)   continue;        // ← ПОВНА назва групи
+          if (L.subject !== subject) continue;
           var lym = _lessonYearMonth(L.date);
           if (!lym || lym.y !== ym.y || lym.m !== ym.m) continue;
           current++;
         }
         if (current >= norm){
           return {ok:false, code:'NORM_REACHED', error:'norm_reached',
-                  current:current, norm:norm, region:region, groupType:groupType};
+                  current:current, norm:norm, group:group, subject:subject};
         }
       }
 
@@ -10126,11 +11697,12 @@ function exportPredmetnykyToSalary(params){
   }
 }
 
-// ── TESTS ────────────────────────────────────────────────────────
+// ── TESTS (v6.11, per-group fix v6.28.2) ──────────────────────────
 // Запускати з Apps Script editor → Run → _testPredmetnykyBackend.
 // Actor: CFO Мельніченко Ірина (ID=1), testDate=15.01.2199 (далеке майбутнє
-// щоб не колізіювати з реальними lessons). Side-effects: створює/видаляє
-// рядки у Predmetnyky_Lessons; cleanup в кінці.
+// щоб не колізіювати з реальними lessons). Тест НЕ чіпає норми (матриця).
+// Для ліміту обирає РЕАЛЬНУ групу локації з найменшою ненульовою нормою
+// (норма береться по типу). Side-effects: створює/видаляє рядки у Lessons.
 function _testPredmetnykyBackend(){
   var actorId  = 1;                  // CFO Мельніченко Ірина
   var testDate = '15.01.2199';
@@ -10169,7 +11741,7 @@ function _testPredmetnykyBackend(){
   }
   ok('1b. teachers ≥ 5', got.teachers.length >= 5, 'got=' + got.teachers.length);
   ok('1c. norms[Київ][Англійська]',  !!(got.norms.Київ  && got.norms.Київ['Англійська']));
-  ok('1d. norms[Львів][Музика]',     !!(got.norms.Львів && got.norms.Львів['Музика']));
+  ok('1d. groups is object', got.groups && typeof got.groups === 'object');
   ok('1e. lessons is array', Array.isArray(got.lessons));
   ok('1f. catalog is array', Array.isArray(got.catalog));
 
@@ -10180,85 +11752,131 @@ function _testPredmetnykyBackend(){
     if (l && PRED_LVIV_LOCATIONS.indexOf(l) === -1){ testLoc = l; break; }
   }
   var testEmpKey = (got.teachers[0] && got.teachers[0].empKey) || 'e5_TEST_TEST_TEST';
-  Logger.log('  fixture: loc=' + testLoc + ', empKey=' + testEmpKey);
+  var region     = _predLocToRegion(testLoc);
+  var groupsHere = (got.groups && got.groups[testLoc]) || [];
+  Logger.log('  fixture: loc=' + testLoc + ', region=' + region +
+             ', empKey=' + testEmpKey + ', realGroups=' + groupsHere.length);
 
-  // Базовий lesson: Київ/Психолог/Baby, norm=2 (найменша ненульова).
-  var L = {empKey:testEmpKey, location:testLoc, group:'Baby-ki', subject:'Психолог', date:testDate};
-
-  // ── 2. save first lesson ──
-  var r2 = savePredmetnykyLesson(actorId, L);
-  ok('2a. save first lesson ok', r2 && r2.ok === true, r2 && r2.error);
-  ok('2b. response has id', r2 && r2.id > 0, r2 && ('id=' + r2.id));
-  ok('2c. current=1, norm=2', r2 && r2.current === 1 && r2.norm === 2,
-     r2 ? ('current=' + r2.current + ', norm=' + r2.norm) : 'no response');
-  if (r2 && r2.id) createdIds.push(r2.id);
-
-  // ── 3. fill-to-norm (2 of 2) ──
-  var r3 = savePredmetnykyLesson(actorId, L);
-  ok('3a. fill to norm ok', r3 && r3.ok === true, r3 && r3.error);
-  ok('3b. current=2, norm=2', r3 && r3.current === 2 && r3.norm === 2,
-     r3 ? ('current=' + r3.current + ', norm=' + r3.norm) : 'no response');
-  if (r3 && r3.id) createdIds.push(r3.id);
-
-  // ── 4. overflow → NORM_REACHED ──
-  var r4 = savePredmetnykyLesson(actorId, L);
-  ok('4. overflow → NORM_REACHED',
-     r4 && r4.ok === false && r4.code === 'NORM_REACHED',
-     r4 && (r4.code + ' current=' + r4.current + ' norm=' + r4.norm));
-
-  // ── 5. empty fields → error (без code, бо це базова валідація) ──
-  var r5a = savePredmetnykyLesson(actorId,
-    {empKey:'', location:testLoc, group:'Baby-ki', subject:'Психолог', date:testDate});
-  ok('5a. empty empKey → error', r5a && r5a.ok === false && /empKey/i.test(r5a.error || ''),
-     r5a && r5a.error);
-
-  var r5b = savePredmetnykyLesson(actorId,
-    {empKey:testEmpKey, location:testLoc, group:'', subject:'Психолог', date:testDate});
-  ok('5b. empty group → error', r5b && r5b.ok === false && /group/i.test(r5b.error || ''),
-     r5b && r5b.error);
-
-  var r5c = savePredmetnykyLesson(actorId,
-    {empKey:testEmpKey, location:testLoc, group:'Baby-ki', subject:'', date:testDate});
-  ok('5c. empty subject → error', r5c && r5c.ok === false && /subject/i.test(r5c.error || ''),
-     r5c && r5c.error);
-
-  // ── 6. unknown groupType → BAD_GROUP ──
-  var r6 = savePredmetnykyLesson(actorId,
-    {empKey:testEmpKey, location:testLoc, group:'XYZ-Garbage', subject:'Психолог', date:testDate});
-  ok('6. unknown groupType → BAD_GROUP',
-     r6 && r6.ok === false && r6.code === 'BAD_GROUP',
-     r6 && (r6.code + ' / ' + r6.error));
-
-  // ── 7. norm=0 (Київ/Логопед/miniBaby) → BAD_GROUP with norm:0 ──
-  var r7 = savePredmetnykyLesson(actorId,
-    {empKey:testEmpKey, location:testLoc, group:'miniBaby-ki', subject:'Логопед', date:testDate});
-  ok('7a. norm=0 → BAD_GROUP',
-     r7 && r7.ok === false && r7.code === 'BAD_GROUP',
-     r7 && (r7.code + ' norm=' + r7.norm));
-  ok('7b. norm=0 response includes norm:0', r7 && r7.norm === 0, r7 && ('norm=' + r7.norm));
-
-  // 7c. Чомусики (unlimited) — норма скіпається, save завжди ok.
-  var r7c = savePredmetnykyLesson(actorId,
-    {empKey:testEmpKey, location:testLoc, group:'Baby-ki', subject:'Чомусики', date:testDate});
-  ok('7c. Чомусики unlimited → ok', r7c && r7c.ok === true, r7c && r7c.error);
-  if (r7c && r7c.id) createdIds.push(r7c.id);
-
-  // ── 8. delete створеного → ok ──
-  if (createdIds.length){
-    var idDel = createdIds[0];
-    var r8 = deletePredmetnykyLesson(actorId, idDel);
-    ok('8. delete created → ok', r8 && r8.ok === true,
-       r8 ? ('id=' + idDel + ', ' + (r8.error || 'ok')) : 'no response');
-    if (r8 && r8.ok) createdIds.shift();
-  } else {
-    ok('8. delete created → ok', false, 'no created lessons to delete');
+  // Обираємо РЕАЛЬНУ групу + предмет з найменшою ненульовою нормою (по типу).
+  var best = null;   // {group, subject, norm}
+  for (var gi = 0; gi < groupsHere.length; gi++){
+    var gt = _normalizeGroupType(groupsHere[gi]);
+    if (!gt) continue;
+    for (var si = 0; si < PRED_SUBJECTS.length; si++){
+      var subj = PRED_SUBJECTS[si];
+      if (subj === PRED_UNLIMITED_SUBJ) continue;
+      var nv = (got.norms[region] && got.norms[region][subj] &&
+                got.norms[region][subj][gt]) || 0;
+      if (nv > 0 && (!best || nv < best.norm))
+        best = {group:groupsHere[gi], subject:subj, norm:nv};
+    }
   }
 
-  // ── 9. delete фейкового id → NOT_FOUND ──
-  var r9 = deletePredmetnykyLesson(actorId, 999999999);
-  ok('9. delete missing → NOT_FOUND',
-     r9 && r9.ok === false && r9.code === 'NOT_FOUND',
-     r9 && r9.code);
+  if (!best){
+    // Нема реальних груп з ненульовою нормою → ліміт-тести пропускаємо.
+    Logger.log('  ⚠ Нема реальної групи з нормою>0 у ' + testLoc + ' — тести 2-5 SKIP');
+    ok('2-5. limit tests (skipped — no real group with norm)', true, 'skipped');
+  } else {
+    Logger.log('  limit fixture: group="' + best.group + '" subj=' + best.subject + ' norm=' + best.norm);
+    var L = {empKey:testEmpKey, location:testLoc, group:best.group, subject:best.subject, date:testDate};
+
+    // ── 2. save first lesson → current=1, norm=best.norm ──
+    var r2 = savePredmetnykyLesson(actorId, L);
+    ok('2a. save first lesson ok', r2 && r2.ok === true, r2 && r2.error);
+    ok('2b. current=1, norm=' + best.norm, r2 && r2.current === 1 && r2.norm === best.norm,
+       r2 ? ('current=' + r2.current + ', norm=' + r2.norm) : 'no response');
+    if (r2 && r2.id) createdIds.push(r2.id);
+
+    // ── 3. fill to norm ──
+    var safety = 0;
+    while (createdIds.length < best.norm && safety++ < 60){
+      var rf = savePredmetnykyLesson(actorId, L);
+      if (!rf || !rf.ok) break;
+      if (rf.id) createdIds.push(rf.id);
+    }
+    ok('3. filled to norm (' + createdIds.length + '/' + best.norm + ')',
+       createdIds.length === best.norm, 'created=' + createdIds.length);
+
+    // ── 4. overflow → NORM_REACHED ──
+    var r4 = savePredmetnykyLesson(actorId, L);
+    ok('4. overflow → NORM_REACHED',
+       r4 && r4.ok === false && r4.code === 'NORM_REACHED',
+       r4 && (r4.code + ' current=' + r4.current + ' norm=' + r4.norm));
+
+    // ── 5. ІНША реальна група того ж типу веде СВОЮ норму (не аґреговано) ──
+    var other = null;
+    for (var gj = 0; gj < groupsHere.length; gj++){
+      if (groupsHere[gj] === best.group) continue;
+      if (_normalizeGroupType(groupsHere[gj]) === _normalizeGroupType(best.group)){ other = groupsHere[gj]; break; }
+    }
+    if (other){
+      var r5 = savePredmetnykyLesson(actorId,
+        {empKey:testEmpKey, location:testLoc, group:other, subject:best.subject, date:testDate});
+      ok('5. інша група того ж типу → current=1 (своя норма)',
+         r5 && r5.ok === true && r5.current === 1 && r5.norm === best.norm,
+         r5 ? ('group=' + other + ' current=' + r5.current + ' norm=' + r5.norm) : 'no response');
+      if (r5 && r5.id) createdIds.push(r5.id);
+    } else {
+      ok('5. інша група того ж типу (skipped — нема другої)', true, 'skipped');
+    }
+  }
+
+  // Група для валідаційних тестів: реальна, якщо є; інакше синтетична
+  // (коли груп нема — existence-перевірка лояльна й не блокує).
+  var anyGroup = groupsHere.length ? groupsHere[0] : 'Find-iki ТЕСТ';
+
+  // ── 6. empty fields → error ──
+  var r6a = savePredmetnykyLesson(actorId,
+    {empKey:'', location:testLoc, group:anyGroup, subject:'Англійська', date:testDate});
+  ok('6a. empty empKey → error', r6a && r6a.ok === false && /empKey/i.test(r6a.error || ''), r6a && r6a.error);
+  var r6b = savePredmetnykyLesson(actorId,
+    {empKey:testEmpKey, location:testLoc, group:'', subject:'Англійська', date:testDate});
+  ok('6b. empty group → error', r6b && r6b.ok === false && /group/i.test(r6b.error || ''), r6b && r6b.error);
+  var r6c = savePredmetnykyLesson(actorId,
+    {empKey:testEmpKey, location:testLoc, group:anyGroup, subject:'', date:testDate});
+  ok('6c. empty subject → error', r6c && r6c.ok === false && /subject/i.test(r6c.error || ''), r6c && r6c.error);
+
+  // ── 7. unknown subject → BAD_SUBJECT ──
+  var r7 = savePredmetnykyLesson(actorId,
+    {empKey:testEmpKey, location:testLoc, group:anyGroup, subject:'НеіснуючийПредмет', date:testDate});
+  ok('7. unknown subject → BAD_SUBJECT', r7 && r7.ok === false && r7.code === 'BAD_SUBJECT',
+     r7 && (r7.code + ' / ' + r7.error));
+
+  // ── 8. неіснуюча група в локації → BAD_GROUP (лише якщо є реальні групи) ──
+  if (groupsHere.length){
+    var r8 = savePredmetnykyLesson(actorId,
+      {empKey:testEmpKey, location:testLoc, group:'НЕ-ІСНУЄ-zzz-9000', subject:'Англійська', date:testDate});
+    ok('8. неіснуюча група → BAD_GROUP', r8 && r8.ok === false && r8.code === 'BAD_GROUP',
+       r8 && (r8.code + ' / ' + r8.error));
+  } else {
+    ok('8. неіснуюча група → BAD_GROUP (skipped — нема реальних груп)', true, 'skipped');
+  }
+
+  // ── 9. Чомусики (unlimited) на реальній групі → ok без ліміту ──
+  var r9 = savePredmetnykyLesson(actorId,
+    {empKey:testEmpKey, location:testLoc, group:anyGroup, subject:'Чомусики', date:testDate});
+  ok('9a. Чомусики → ok, norm=0', r9 && r9.ok === true && r9.norm === 0,
+     r9 ? ('ok=' + r9.ok + ' norm=' + r9.norm) : 'no response');
+  if (r9 && r9.id) createdIds.push(r9.id);
+  var r9b = savePredmetnykyLesson(actorId,
+    {empKey:testEmpKey, location:testLoc, group:anyGroup, subject:'Чомусики', date:testDate});
+  ok('9b. Чомусики 2nd save still ok (unlimited)', r9b && r9b.ok === true, r9b && r9b.error);
+  if (r9b && r9b.id) createdIds.push(r9b.id);
+
+  // ── 10. delete створеного → ok ──
+  if (createdIds.length){
+    var idDel = createdIds[0];
+    var r10 = deletePredmetnykyLesson(actorId, idDel);
+    ok('10. delete created → ok', r10 && r10.ok === true,
+       r10 ? ('id=' + idDel + ', ' + (r10.error || 'ok')) : 'no response');
+    if (r10 && r10.ok) createdIds.shift();
+  } else {
+    ok('10. delete created → ok', false, 'no created lessons to delete');
+  }
+
+  // ── 11. delete фейкового id → NOT_FOUND ──
+  var r11 = deletePredmetnykyLesson(actorId, 999999999);
+  ok('11. delete missing → NOT_FOUND', r11 && r11.ok === false && r11.code === 'NOT_FOUND', r11 && r11.code);
 
   // ── cleanup ──
   cleanup();
