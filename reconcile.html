@@ -351,8 +351,8 @@ select,input{font-family:inherit}
       <div class="hd-meta" id="meta">завантаж виписку ПриватБанку (.xls / .xlsx / .csv)</div>
     </div>
     <div class="hd-ctrl">
-      <input type="file" id="rcFile" accept=".xls,.xlsx,.csv" style="display:none" onchange="rcOnFile(this)">
-      <button class="btn btn-primary" onclick="document.getElementById('rcFile').click()">📂 Обрати виписку</button>
+      <input type="file" id="rcFile" accept=".xls,.xlsx,.csv" multiple style="display:none" onchange="rcOnFile(this)">
+      <button class="btn btn-primary" onclick="document.getElementById('rcFile').click()">📂 Обрати виписки</button>
     </div>
   </div>
 
@@ -925,7 +925,7 @@ function renderFillRange(){
 //   бекенд reconcilePreview (резолв локації за IBAN + матч платник→дитина) →
 //   прев'ю-таблиця зі статусами. БЕЗ ЗАПИСІВ.
 // ═══════════════════════════════════════════════════════════════
-var RC = { iban:'', rows:[], preview:null, busy:false };
+var RC = { busy:false, groups:[] };   // groups: [{fileName, ok, error, preview}]
 
 var _RC_STAT = {
   auto:  {icon:'🟢', cls:'green',  txt:'авто'},
@@ -935,7 +935,6 @@ var _RC_STAT = {
 };
 
 function rcMatrix(aoa){
-  // нормалізуємо всі рядки в масив рядкових клітинок
   return (aoa||[]).map(function(row){ return (row||[]).map(function(c){ return c==null?'':String(c); }); });
 }
 
@@ -954,17 +953,10 @@ function rcFindIban(m){
 // Знаходить рядок-заголовок таблиці транзакцій і мапить колонки за підписами.
 function rcFindTable(m){
   var want = {
-    n:        ['№','номер'],
-    date:     ['дата'],
-    time:     ['час'],
-    amount:   ['сума'],
-    currency: ['валют'],
-    purpose:  ['призначен'],
-    edrpou:   ['єдрпоу','рнокпп','код'],
-    counterparty:['контрагент','найменування','назва'],
-    account:  ['рахунок'],
-    mfo:      ['мфо'],
-    ref:      ['референс','reference','ref']
+    n:['№','номер'], date:['дата'], time:['час'], amount:['сума'], currency:['валют'],
+    purpose:['призначен'], edrpou:['єдрпоу','рнокпп','код'],
+    counterparty:['контрагент','найменування','назва'], account:['рахунок'], mfo:['мфо'],
+    ref:['референс','reference','ref']
   };
   for (var r=0;r<Math.min(40,m.length);r++){
     var row=m[r].map(function(s){return s.toLowerCase();});
@@ -983,108 +975,123 @@ function rcFindTable(m){
   return null;
 }
 
-function rcOnFile(input){
-  var f=input.files&&input.files[0]; if(!f) return;
+// Парс ОДНОГО файлу → Promise<{fileName, iban, payments}> (reject з повідомленням).
+function rcParseFile(f){
+  return new Promise(function(resolve, reject){
+    var reader=new FileReader();
+    reader.onload=function(ev){
+      try{
+        var wb=XLSX.read(new Uint8Array(ev.target.result),{type:'array',cellDates:false,raw:true});
+        var ws=wb.Sheets[wb.SheetNames[0]];
+        var aoa=XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:false});
+        var m=rcMatrix(aoa);
+        var iban=rcFindIban(m);
+        var tbl=rcFindTable(m);
+        if(!iban) return reject('немає номера рахунку (UA…)');
+        if(!tbl||tbl.map.date==null||tbl.map.amount==null) return reject('не розпізнано таблицю (Дата/Сума)');
+        var pays=[];
+        for (var r=tbl.headerRow+1;r<m.length;r++){
+          var row=m[r]; var g=function(key){ var c=tbl.map[key]; return c==null?'':String(row[c]||'').trim(); };
+          var dateV=g('date'), amtRaw=g('amount');
+          if(!dateV && !amtRaw) continue;
+          var amt=parseFloat(amtRaw.replace(/\s/g,'').replace(',','.'));
+          if(isNaN(amt)||amt<=0) continue;                 // лише надходження
+          pays.push({ date:dateV, time:g('time'), amount:amt, currency:g('currency'),
+                      purpose:g('purpose'), edrpou:g('edrpou'), counterparty:g('counterparty'),
+                      account:g('account'), mfo:g('mfo'), ref:g('ref') });
+        }
+        if(!pays.length) return reject('немає вхідних платежів (сума > 0)');
+        resolve({ fileName:f.name, iban:iban, payments:pays });
+      }catch(e){ reject('помилка парсингу: '+(e&&e.message||e)); }
+    };
+    reader.onerror=function(){ reject('не вдалося прочитати файл'); };
+    reader.readAsArrayBuffer(f);
+  });
+}
+
+async function rcOnFile(input){
+  var files=input.files; if(!files||!files.length) return;
   if (typeof XLSX==='undefined'){ showToast('❌ Бібліотека XLSX не завантажена','error'); return; }
-  $('meta').textContent='Файл: '+f.name;
-  var reader=new FileReader();
-  reader.onload=function(ev){
-    try{
-      var wb=XLSX.read(new Uint8Array(ev.target.result),{type:'array',cellDates:false,raw:true});
-      var ws=wb.Sheets[wb.SheetNames[0]];
-      var aoa=XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:false});
-      var m=rcMatrix(aoa);
-      var iban=rcFindIban(m);
-      var tbl=rcFindTable(m);
-      if(!iban){ rcError('У файлі не знайдено номер рахунку (UA…). Перевір, що це виписка ПриватБанку.'); return; }
-      if(!tbl||tbl.map.date==null||tbl.map.amount==null){ rcError('Не вдалося розпізнати таблицю транзакцій (немає колонок Дата/Сума).'); return; }
-      var pays=[];
-      for (var r=tbl.headerRow+1;r<m.length;r++){
-        var row=m[r]; var g=function(key){ var c=tbl.map[key]; return c==null?'':String(row[c]||'').trim(); };
-        var dateV=g('date'), amtRaw=g('amount');
-        if(!dateV && !amtRaw) continue;
-        var amt=parseFloat(amtRaw.replace(/\s/g,'').replace(',','.'));
-        if(isNaN(amt)) continue;
-        if(amt<=0) continue;                          // лише надходження
-        pays.push({ date:dateV, time:g('time'), amount:amt, currency:g('currency'),
-                    purpose:g('purpose'), edrpou:g('edrpou'), counterparty:g('counterparty'),
-                    account:g('account'), mfo:g('mfo'), ref:g('ref') });
-      }
-      if(!pays.length){ rcError('У виписці не знайдено вхідних платежів (сума > 0).'); return; }
-      RC.iban=iban; RC.rows=pays;
-      rcSendPreview();
-    }catch(e){ rcError('Помилка парсингу файлу: '+(e&&e.message||e)); }
-  };
-  reader.onerror=function(){ rcError('Не вдалося прочитати файл.'); };
-  reader.readAsArrayBuffer(f);
-}
-
-function rcError(msg){
-  $('rcBanner').innerHTML='';
-  $('rcSummary').innerHTML='';
-  $('rcApplyBar').style.display='none';
-  $('rcWrap').innerHTML='<div class="inv-empty">❌ '+escapeHtml(msg)+'</div>';
-}
-
-async function rcSendPreview(){
   if(RC.busy) return; RC.busy=true;
-  $('rcWrap').innerHTML='<div class="inv-loading">⏳ Зіставлення платників з дітьми…</div>';
+  $('meta').textContent=files.length+' файл(ів)';
+  $('rcBanner').innerHTML=''; $('rcSummary').innerHTML=''; $('rcApplyBar').style.display='none';
+  $('rcWrap').innerHTML='<div class="inv-loading">⏳ Парсинг і зіставлення…</div>';
+  RC.groups=[];
   try{
-    var r=await fetch(CFG.SCRIPT_URL,{
-      method:'POST', redirect:'follow',
-      headers:{'Content-Type':'text/plain;charset=utf-8'},
-      body:JSON.stringify({action:'reconcilePreview', iban:RC.iban, payments:RC.rows})
-    });
-    var j=await r.json();
-    if(!j.ok) throw new Error(j.error||'preview failed');
-    RC.preview=j;
-    rcRender();
-  }catch(e){ rcError(String(e&&e.message||e)); }
-  finally{ RC.busy=false; }
+    for (var i=0;i<files.length;i++){
+      var fname=files[i].name, parsed=null, perr=null;
+      try{ parsed=await rcParseFile(files[i]); }catch(e){ perr=String(e); }
+      if(perr){ RC.groups.push({fileName:fname, ok:false, error:perr}); continue; }
+      try{
+        var r=await fetch(CFG.SCRIPT_URL,{ method:'POST', redirect:'follow',
+          headers:{'Content-Type':'text/plain;charset=utf-8'},
+          body:JSON.stringify({action:'reconcilePreview', iban:parsed.iban, payments:parsed.payments}) });
+        var j=await r.json();
+        if(!j.ok) RC.groups.push({fileName:fname, ok:false, error:j.error||'preview failed'});
+        else { j.fileName=fname; RC.groups.push({fileName:fname, ok:true, preview:j}); }
+      }catch(e2){ RC.groups.push({fileName:fname, ok:false, error:String(e2&&e2.message||e2)}); }
+    }
+    rcRenderAll();
+  } finally { RC.busy=false; input.value=''; }   // value='' → повторний вибір тих самих файлів спрацює
 }
 
-function rcRender(){
-  var p=RC.preview; if(!p) return;
-  var cnt={auto:0,multi:0,none:0,dup:0};
-  p.rows.forEach(function(x){ cnt[x.status]=(cnt[x.status]||0)+1; });
-
-  $('rcBanner').innerHTML='<div class="fc-banner" style="padding:14px 16px;border-radius:12px;background:#eef6ff;border:1px solid #cfe3fb;margin-bottom:12px">'
-    +'<b>'+escapeHtml(p.loc)+'</b> · '+escapeHtml(p.typeLabel||(p.type==='extras'?'Додаткові':'Навчання'))
-    +' <span style="color:var(--gray)">('+escapeHtml(p.orgName||'')+')</span><br>'
-    +'<span style="font-size:12px;color:var(--gray)">Рахунок: '+escapeHtml(p.iban)+' · платежів: '+p.count+'</span></div>';
-
-  $('rcSummary').innerHTML=['auto','multi','none','dup'].map(function(s){
-    return '<span class="fc-stat '+_RC_STAT[s].cls+'">'+_RC_STAT[s].icon+' '+_RC_STAT[s].txt+': '+(cnt[s]||0)+'</span>';
-  }).join('');
-
+function rcRowsHtml(p){
   var h='<div style="overflow-x:auto"><table class="inv-table"><thead><tr>'
-    +'<th>Дата</th><th>Сума</th><th>Платник (з виписки)</th><th>Статус</th><th>Дитина → рядок</th><th>Міс./Кол.</th></tr></thead><tbody>';
+    +'<th>Дата</th><th>Сума</th><th>Платник (виписка)</th><th>Прізв.</th><th>Статус</th><th>Дитина → рядок</th><th>Міс./Кол.</th></tr></thead><tbody>';
   p.rows.forEach(function(x){
     var st=_RC_STAT[x.status]||_RC_STAT.none;
     var child='';
     if(x.status==='multi'){
-      child='<select class="rc-sel" data-i="'+x.i+'">'
-        +'<option value="">— оберіть —</option>'
+      child='<select class="rc-sel" data-i="'+x.i+'"><option value="">— оберіть —</option>'
         +x.candidates.map(function(c,ci){ return '<option value="'+ci+'">'+escapeHtml(c.childName)+(c.group?' ('+escapeHtml(c.group)+')':'')+'</option>'; }).join('')
         +'</select>';
     } else if(x.candidates&&x.candidates.length){
       var c=x.candidates[0];
       child=escapeHtml(c.childName)+(c.group?' <span style="color:var(--gray);font-size:11px">('+escapeHtml(c.group)+')</span>':'')+(c.row>=0?' <span style="color:var(--gray);font-size:11px">р.'+(c.row+1)+'</span>':'');
-    } else {
-      child='<span style="color:var(--gray)">—</span>';
-    }
+    } else child='<span style="color:var(--gray)">—</span>';
     h+='<tr>'
       +'<td data-label="Дата">'+escapeHtml(x.date)+'</td>'
       +'<td data-label="Сума" style="text-align:right;white-space:nowrap"><b>'+fmtUah(x.amount)+'</b></td>'
       +'<td data-label="Платник">'+escapeHtml(x.payerRaw)+(x.payerVia&&x.payerVia!=='individual'?' <span style="color:var(--gray);font-size:11px">['+escapeHtml(x.payerVia)+']</span>':'')+'</td>'
+      +'<td data-label="Прізв."><span style="color:var(--gray);font-size:12px">'+escapeHtml(x.payerSurname||'')+'</span></td>'
       +'<td data-label="Статус"><span class="fc-stat '+st.cls+'">'+st.icon+' '+st.txt+'</span></td>'
       +'<td data-label="Дитина">'+child+'</td>'
       +'<td data-label="Кол.">'+(x.month||'?')+' / '+(x.factCol||'?')+'</td>'
       +'</tr>';
   });
-  h+='</tbody></table></div>';
-  $('rcWrap').innerHTML=h;
-  $('rcApplyBar').style.display='';
+  return h+'</tbody></table></div>';
+}
+
+function rcRenderAll(){
+  var total={auto:0,multi:0,none:0,dup:0};
+  var okGroups=RC.groups.filter(function(g){return g.ok;});
+  okGroups.forEach(function(g){ g.preview.rows.forEach(function(x){ total[x.status]=(total[x.status]||0)+1; }); });
+
+  $('rcSummary').innerHTML=['auto','multi','none','dup'].map(function(s){
+    return '<span class="fc-stat '+_RC_STAT[s].cls+'">'+_RC_STAT[s].icon+' '+_RC_STAT[s].txt+': '+(total[s]||0)+'</span>';
+  }).join('');
+
+  var html='';
+  // помилкові файли
+  RC.groups.filter(function(g){return !g.ok;}).forEach(function(g){
+    html+='<div class="inv-empty" style="text-align:left;margin-bottom:10px">❌ <b>'+escapeHtml(g.fileName)+'</b>: '+escapeHtml(g.error)+'</div>';
+  });
+  // успішні — згруповано по локація · категорія
+  okGroups.forEach(function(g){
+    var p=g.preview, d=p.diag||{};
+    var diagTxt='індекс прізвищ: дитина '+(d.fromChild||0)+' · BJ '+(d.fromBJ||0)+(d.bjColDetected?'':' ⚠ колонку «сторона договору» НЕ знайдено')+' · картка '+(d.fromCard||0);
+    html+='<div style="margin-bottom:18px">'
+      +'<div class="fc-banner" style="padding:12px 14px;border-radius:12px;background:#eef6ff;border:1px solid #cfe3fb;margin-bottom:8px">'
+      +'<b>'+escapeHtml(p.loc)+'</b> · '+escapeHtml(p.typeLabel||(p.type==='extras'?'Додаткові':'Навчання'))
+      +' <span style="color:var(--gray)">('+escapeHtml(p.orgName||'')+')</span><br>'
+      +'<span style="font-size:12px;color:var(--gray)">📄 '+escapeHtml(p.fileName||'')+' · рахунок '+escapeHtml(p.iban)+' · платежів: '+p.count+'</span><br>'
+      +'<span style="font-size:11px;color:var(--gray)">'+escapeHtml(diagTxt)+'</span>'
+      +'</div>'+rcRowsHtml(p)+'</div>';
+  });
+  if(!html) html='<div class="inv-empty">Нічого не розпізнано.</div>';
+  $('rcBanner').innerHTML='';
+  $('rcWrap').innerHTML=html;
+  $('rcApplyBar').style.display = okGroups.length ? '' : 'none';
 }
 
 (async function bootstrap(){

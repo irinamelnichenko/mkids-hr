@@ -4510,39 +4510,49 @@ function _detectContractPartyCol(rows){
   return -1;
 }
 
-// Нормалізація ПІБ платника: прізвище+ім'я (по-батькові відкидаємо), апострофи знімаємо,
-// складене прізвище через дефіс лишається цілим. → "прізвище ім'я" (lower).
+// Нормалізація ПІБ (повна): апострофи знімаємо, lower, схлопуємо пробіли. Для показу.
 function _normPayerName(s){
-  var t = String(s || '').replace(/[`'’ʼ]/g, '').toLowerCase().trim().replace(/\s+/g, ' ');
+  return String(s || '').replace(/[`'’ʼ]/g, '').toLowerCase().trim().replace(/\s+/g, ' ');
+}
+// КЛЮЧ МАТЧИНГУ = ПРІЗВИЩЕ (перший токен). Платник-батько часто має інше ІМ'Я,
+// ніж parent у BJ (мама) — тож матчимо лише по прізвищу. Складене прізвище через
+// дефіс лишається цілим токеном.
+function _surnameKey(s){
+  var t = _normPayerName(s);
   if (!t) return '';
-  var parts = t.split(' ');
-  if (parts.length >= 2) return parts[0] + ' ' + parts[1];   // 3-й токен (по-батькові) ігноруємо
-  return parts[0];
+  return t.split(' ')[0];
 }
 
 // Витяг платника за дискримінатором коду контрагента:
 //   10 цифр → фізособа (платник = «Назва контрагента»);
-//    8 цифр → юр/банк → шукаємо «Платник <ПІБ>» у призначенні.
+//    8 цифр → юр/банк → шукаємо «Платник <ПІБ>» у призначенні (тягнемо повне ПІБ).
 function _extractPayer(rec){
   var code = String(rec.edrpou || '').replace(/\D/g, '');
   if (code.length === 10) return { raw: trim(rec.counterparty), via: 'individual' };
   var purpose = String(rec.purpose || '');
-  var L = '[А-ЯІЇЄҐа-яіїєґ\'’ʼ`\\-]+';
-  var m = purpose.match(new RegExp('платник[\\s:]*(' + L + '\\s+' + L + '(?:\\s+' + L + ')?)', 'i'));
+  // Прізвище (з великої) + до 2 наступних токенів (ім'я/по-батькові/ініціали з крапками).
+  var m = purpose.match(/платник[\s:]*([А-ЯІЇЄҐ][а-яіїєґ'’ʼ`\-]+(?:\s+[А-ЯІЇЄҐ][а-яіїєґ'’ʼ`.]*){0,2})/i);
   if (m) return { raw: m[1].trim(), via: 'bank' };
   return { raw: trim(rec.counterparty), via: 'bank-unparsed' };
 }
 
-// Індекс «батько → [діти]» у межах локації.
-// Джерела імені сторони договору: (1) Payment «сторона договору» + (2) батьки з CRM-картки.
-// КРИТИЧНО (брати-сестри): один платник може мати кілька дітей → значення = СПИСОК.
+// Індекс «ПРІЗВИЩЕ → [діти]» у межах локації. Три джерела прізвища:
+//   (A) ПІБ ДИТИНИ (кол. A Payment) — прізвище дитини часто = прізвище платника;
+//   (BJ) «сторона договору» у Payment;
+//   (картка) батьки з CRM (мама/тато/підписант).
+// Один платник може мати кілька дітей (брати-сестри) → значення = СПИСОК (dedup по childName).
+// Повертає {index, diag:{bjColDetected, fromChild, fromBJ, fromCard}}.
 function _buildPayerIndex(loc){
-  var idx = {};   // normParentName -> [{childName, row(0-based у Payment, -1 якщо лише з CRM), group}]
-  function add(parent, child){
-    var nk = _normPayerName(parent); if (!nk || !child.childName) return;
-    (idx[nk] = idx[nk] || []).push(child);
+  var idx = {};   // surnameKey -> [{childName, row(0-based; -1 якщо лише з CRM), group}]
+  var diag = { bjColDetected: false, fromChild: 0, fromBJ: 0, fromCard: 0 };
+  // add: childName унікальний у межах ключа-прізвища (одну дитину з різних джерел не дублюємо)
+  function add(surnameSrc, child){
+    var sk = _surnameKey(surnameSrc); if (!sk || !child.childName) return false;
+    var list = (idx[sk] = idx[sk] || []);
+    for (var i = 0; i < list.length; i++) if (list[i].childName === child.childName) return false;
+    list.push(child); return true;
   }
-  // 1) Payment-файл: ПІБ дитини (A) + «сторона договору» (по шапці)
+  // 1) Payment-файл: ПІБ дитини (A) [джерело A] + «сторона договору» (по шапці) [джерело BJ]
   var payRows = [];
   var reg = _getLocationPaymentRegistry(loc);
   if (reg && reg.sheetId){
@@ -4550,6 +4560,7 @@ function _buildPayerIndex(loc){
     var sh = ss.getSheetByName(reg.sheetName) || ss.getSheets()[0];
     var data = sh.getDataRange().getValues();
     var partyCol = _detectContractPartyCol(data);
+    diag.bjColDetected = (partyCol >= 0);
     var curGroup = '';
     for (var r = 3; r < data.length; r++){
       var name = trim(data[r][0]);
@@ -4557,7 +4568,8 @@ function _buildPayerIndex(loc){
       if (isGroupHeaderRow(data[r], 1)){ curGroup = normalizeGroupName(name); continue; }
       var child = { childName: name, row: r, group: curGroup };
       payRows.push(child);
-      if (partyCol >= 0){ var party = trim(data[r][partyCol]); if (party) add(party, child); }
+      if (add(name, child)) diag.fromChild++;                              // прізвище ДИТИНИ
+      if (partyCol >= 0){ var party = trim(data[r][partyCol]); if (party && add(party, child)) diag.fromBJ++; }
     }
   }
   // 2) CRM-картки: батьки (мама/тато/підписант) для дітей цієї локації → той самий payRow по імені
@@ -4569,11 +4581,11 @@ function _buildPayerIndex(loc){
       var cn = trim(o['ПІБ дитини']); if (!cn) return;
       var child = byNorm[_normNameVac(cn)] || { childName: cn, row: -1, group: trim(o['Група']) };
       ['ПІБ мами', 'ПІБ тата', 'Підписант договору'].forEach(function(f){
-        var p = trim(o[f]); if (p) add(p, child);
+        var p = trim(o[f]); if (p && add(p, child)) diag.fromCard++;
       });
     });
   }
-  return idx;
+  return { index: idx, diag: diag };
 }
 
 // ── ФАЗА 1: PREVIEW (read-only). Вхід: {iban, payments:[{date,amount,purpose,edrpou,counterparty,ref,...}]}.
@@ -4591,15 +4603,13 @@ function reconcilePreview(body){
     var ss = SpreadsheetApp.openById(reg.sheetId);
     var paySh = ss.getSheetByName(reg.sheetName) || ss.getSheets()[0];
     var data = paySh.getDataRange().getValues();
-    var idx = _buildPayerIndex(loc);
+    var built = _buildPayerIndex(loc);
+    var idx = built.index;
 
     var rows = payments.map(function(rec, i){
       var payer = _extractPayer(rec);
-      var nk = _normPayerName(payer.raw);
-      var cands = (idx[nk] || []);
-      // dedup кандидатів по childName (брати-сестри лишаються — різні childName)
-      var seen = {}, uniq = [];
-      cands.forEach(function(c){ if (!seen[c.childName]){ seen[c.childName] = 1; uniq.push(c); } });
+      var sk = _surnameKey(payer.raw);               // КЛЮЧ = ПРІЗВИЩЕ платника
+      var uniq = (idx[sk] || []).slice();            // вже dedup по childName в індексі
 
       var d = _recParseDate(rec.date);
       var jsMonth = d ? d.getMonth() : -1;
@@ -4616,14 +4626,14 @@ function reconcilePreview(body){
 
       return {
         i: i, date: String(rec.date || ''), amount: Number(rec.amount) || 0, ref: String(rec.ref || ''),
-        payerRaw: payer.raw, payerVia: payer.via, payerNorm: nk,
+        payerRaw: payer.raw, payerVia: payer.via, payerSurname: sk,
         month: (jsMonth + 1), status: status, candidates: uniq,
         factCol: factCol0 >= 0 ? _colLetter(factCol0) : ''
       };
     });
 
     return {ok:true, loc:loc, type:type, typeLabel:acct.typeLabel, orgName:acct.orgName,
-            iban:iban, count:rows.length, rows:rows};
+            iban:iban, count:rows.length, rows:rows, diag:built.diag};
   } catch(e){ return {ok:false, error: e.message || String(e)}; }
 }
 
