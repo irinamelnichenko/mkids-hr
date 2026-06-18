@@ -10809,6 +10809,148 @@ function inspectDevTemplates(){
   Logger.log('═══ inspectDevTemplates done ═══');
 }
 
+// buildDevTemplatesJS() — генерує готовий JS-обʼєкт DEVELOPMENT_TEMPLATES (вікові шаблони)
+//   із файлів-джерел. Запускати ВРУЧНУ з редактора Apps Script. НЕ webapp.
+//   Нічого НЕ пише — лише Logger.log. Потребує Advanced Drive Service (Drive).
+//   Секції розпізнаються ПО канонічному списку (не по bold). Якщо канонічна секція
+//   трапляється вдруге в межах файлу — парсинг цього файлу зупиняється (сміттєвий дубль).
+function buildDevTemplatesJS(){
+  var MASTER_ID = '1od1nd818xMEcszMX_WCFdciL63x4X2pSQpd6LMqGDAc';
+  Logger.log('═══ buildDevTemplatesJS ═══ master=%s', MASTER_ID);
+
+  var SECTIONS = [
+    'Емоційний інтелект',
+    'Соціальна адаптація',
+    'Уміння вирішувати конфлікти',
+    'Самостійність у прийнятті рішень',
+    'Мовленнєвий розвиток',
+    'Сенсорно-пізнавальний розвиток',
+    'Ігрова діяльність',
+    'Предметно-практична діяльність',
+    'Художньо-естетичний розвиток'
+  ];
+  var SKIP = [
+    'Маса тіла','Довжина тіла (зріст)','Обхват голови','Обхват грудної клітки',
+    'Особистісно-соціальний розвиток:','Столбец 1'
+  ];
+
+  // Нормалізація для порівняння: lowercase + стиснути пробіли + прибрати хвостову пунктуацію.
+  function norm(s){
+    return String(s == null ? '' : s).toLowerCase().replace(/\s+/g, ' ').trim().replace(/[:;.,\-\s]+$/, '');
+  }
+  var SECTION_MAP = {};                 // norm → канонічний текст
+  SECTIONS.forEach(function(s){ SECTION_MAP[norm(s)] = s; });
+  var SKIP_SET = {};
+  SKIP.forEach(function(s){ SKIP_SET[norm(s)] = true; });
+  function isSkip(nt){ return SKIP_SET[nt] || nt.indexOf('столбец') === 0; }
+
+  // Норм-група → ключ шаблону (preschool I/II → preschool; пробіли прибираємо).
+  function groupKey(g){
+    return String(g == null ? '' : g).toLowerCase().trim()
+      .replace(/\s+(i{1,3}|\d+)$/, '').replace(/\s+/g, '');
+  }
+
+  // Конвертація .xlsx → тимчасовий Sheet. Повертає {ssId, isTemp} або null.
+  function toSheet(id){
+    var mime;
+    try { mime = DriveApp.getFileById(id).getMimeType(); }
+    catch(e){ Logger.log('  ✗ getMimeType: %s', e && e.message || e); return null; }
+    if (mime === MimeType.GOOGLE_SHEETS) return { ssId: id, isTemp: false };
+    if (typeof Drive === 'undefined'){ Logger.log('  ⚠ Drive advanced service недоступний.'); return null; }
+    try {
+      var blob = DriveApp.getFileById(id).getBlob();
+      var meta = { name: 'tmp_devbld_' + new Date().getTime(), mimeType: MimeType.GOOGLE_SHEETS };
+      var created;
+      if (Drive.Files && typeof Drive.Files.create === 'function')      created = Drive.Files.create(meta, blob);
+      else if (Drive.Files && typeof Drive.Files.insert === 'function') created = Drive.Files.insert({ title: meta.name, mimeType: meta.mimeType }, blob, { convert: true });
+      else { Logger.log('  ⚠ Drive.Files.create/insert не знайдено.'); return null; }
+      var ssId = created && (created.id || created.getId && created.getId());
+      if (!ssId){ Logger.log('  ✗ Конвертація: немає id.'); return null; }
+      return { ssId: ssId, isTemp: true };
+    } catch(e){ Logger.log('  ✗ Конвертація: %s', e && e.message || e); return null; }
+  }
+
+  var master, data;
+  try {
+    master = SpreadsheetApp.openById(MASTER_ID);
+    data   = master.getSheets()[0].getDataRange().getValues();
+  } catch(e){ Logger.log('✗ Майстер не відкрився: %s', e && e.message || e); return; }
+
+  // По одному файлу на унікальний ключ групи.
+  var seen = {}, picked = [];
+  for (var i = 1; i < data.length; i++){
+    var id = String(data[i][2] == null ? '' : data[i][2]).trim();
+    if (!id) continue;
+    var key = groupKey(data[i][1]);
+    if (!key || seen[key]) continue;
+    seen[key] = true;
+    picked.push({ key: key, loc: String(data[i][0] || '').trim(), grp: String(data[i][1] || '').trim(), id: id });
+  }
+  Logger.log('Унікальних груп: %s → [%s]', picked.length, picked.map(function(p){ return p.key; }).join(', '));
+
+  var result = {}, summary = [];
+
+  picked.forEach(function(p){
+    var conv = toSheet(p.id);
+    if (!conv) { summary.push(p.key + ': ПРОПУЩЕНО (конвертація)'); return; }
+    try {
+      var tpl = SpreadsheetApp.openById(conv.ssId).getSheets()[0];
+      var rows = Math.min(120, tpl.getMaxRows());
+      var aVals = tpl.getRange(1, 1, rows, 1).getValues();
+
+      var sections = [];          // [{title, items:[]}]
+      var openedNorm = {};        // norm секції → вже відкривалась?
+      var curr = null, lastText = '', stopped = false;
+
+      for (var r = 0; r < rows && !stopped; r++){
+        var raw = String(aVals[r][0] == null ? '' : aVals[r][0]).trim();
+        if (!raw) continue;
+        var nt = norm(raw);
+        if (SECTION_MAP[nt]){
+          if (openedNorm[nt]){ stopped = true; break; }   // секція вдруге → сміттєвий дубль
+          openedNorm[nt] = true;
+          curr = { title: SECTION_MAP[nt], items: [] };
+          sections.push(curr);
+          lastText = '';
+          continue;
+        }
+        if (isSkip(nt)) continue;
+        if (!curr) continue;                              // критерій до першої секції — ігноруємо
+        if (nt === lastText) continue;                    // послідовний дубль тексту
+        lastText = nt;
+        curr.items.push(raw);
+      }
+
+      // Зібрати у render-сумісний обʼєкт.
+      var tplObj = {}, critCount = 0;
+      sections.forEach(function(sec, si){
+        var idx = si + 1;
+        var items = sec.items.map(function(text, ci){
+          critCount++;
+          return { id: idx + '.' + (ci + 1), text: text };
+        });
+        tplObj[String(idx)] = { title: sec.title, items: items };
+      });
+      result[p.key] = tplObj;
+      summary.push(p.key + ': ' + sections.length + ' секцій, ' + critCount + ' критеріїв' + (stopped ? ' (стоп на дублі)' : ''));
+    } catch(e){
+      Logger.log('  ✗ [%s] парсинг: %s', p.key, e && e.message || e);
+      summary.push(p.key + ': ПОМИЛКА');
+    } finally {
+      if (conv.isTemp && conv.ssId){
+        try { DriveApp.getFileById(conv.ssId).setTrashed(true); }
+        catch(e){ Logger.log('  ⚠ temp %s не видалено: %s', conv.ssId, e && e.message || e); }
+      }
+    }
+  });
+
+  Logger.log('───── ПІДСУМОК ─────');
+  summary.forEach(function(s){ Logger.log('  ' + s); });
+  Logger.log('───── ГОТОВИЙ JS (копіюй у фронт) ─────');
+  Logger.log('var DEVELOPMENT_TEMPLATES = ' + JSON.stringify(result, null, 2) + ';');
+  Logger.log('═══ buildDevTemplatesJS done ═══');
+}
+
 // deleteEmployee(actorId, rowNum) — soft-delete (O = today, формула P
 // автоматично переробить "life-cycle" з активного на "X років Y місяців").
 function deleteEmployee(actorId, rowNum){
