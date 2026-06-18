@@ -10585,6 +10585,72 @@ function migrateHrAddCardFields(){
   return {ok:true, added:done};
 }
 
+// inspectDevSources() — РОЗВІДНИК для майбутнього імпорту розвитку дітей.
+//   Запускати ВРУЧНУ з редактора Apps Script (як migrateHrAddCardFields).
+//   НЕ webapp-екшен. Нічого НЕ пише — лише Logger.log.
+//   Майстер: A=Локація, B=Група, C=Spreadsheet ID. Бере перші 2 рядки з непорожнім C,
+//   відкриває кожен файл і показує аркуші + превʼю першого аркуша (12×26).
+function inspectDevSources(){
+  var MASTER_ID = '1od1nd818xMEcszMX_WCFdciL63x4X2pSQpd6LMqGDAc';
+  Logger.log('═══ inspectDevSources ═══ master=%s', MASTER_ID);
+
+  var master, msheet, data;
+  try {
+    master = SpreadsheetApp.openById(MASTER_ID);
+    msheet = master.getSheets()[0];
+    data   = msheet.getDataRange().getValues();
+  } catch(e){
+    Logger.log('✗ Не вдалося відкрити майстер: %s', e && e.message || e);
+    return;
+  }
+  Logger.log('Майстер: "%s" · аркуш "%s" · рядків=%s', master.getName(), msheet.getName(), data.length);
+  Logger.log('Шапка (A/B/C): %s', JSON.stringify((data[0] || []).slice(0, 3)));
+
+  // Перші 2 рядки з непорожнім C (Spreadsheet ID).
+  var picked = [];
+  for (var i = 1; i < data.length && picked.length < 2; i++){
+    var c = String(data[i][2] == null ? '' : data[i][2]).trim();
+    if (c) picked.push({ row: i + 1, loc: String(data[i][0] || '').trim(), grp: String(data[i][1] || '').trim(), id: c });
+  }
+  Logger.log('Знайдено рядків з ID: показую %s', picked.length);
+
+  picked.forEach(function(p, n){
+    Logger.log('───── [%s] рядок %s · Локація="%s" · Група="%s" · ID=%s', n + 1, p.row, p.loc, p.grp, p.id);
+    var ss;
+    try {
+      ss = SpreadsheetApp.openById(p.id);
+    } catch(e){
+      Logger.log('  ✗ openById не вдався: %s', e && e.message || e);
+      return;
+    }
+    Logger.log('  Файл: "%s"', ss.getName());
+    var sheets = ss.getSheets();
+    sheets.forEach(function(sh){
+      Logger.log('    • аркуш "%s" [%s рядків x %s колонок]', sh.getName(), sh.getMaxRows(), sh.getMaxColumns());
+    });
+
+    // Превʼю першого аркуша: перші 12 рядків × до 26 колонок.
+    try {
+      var first = sheets[0];
+      var rows = Math.min(12, first.getMaxRows());
+      var cols = Math.min(26, first.getMaxColumns());
+      if (rows && cols){
+        var vals = first.getRange(1, 1, rows, cols).getValues();
+        Logger.log('  Превʼю першого аркуша "%s" (%s×%s):', first.getName(), rows, cols);
+        vals.forEach(function(r, ri){
+          Logger.log('    r%s: %s', ri + 1, JSON.stringify(r));
+        });
+      } else {
+        Logger.log('  (перший аркуш порожній)');
+      }
+    } catch(e){
+      Logger.log('  ✗ Превʼю не вдалося: %s', e && e.message || e);
+    }
+  });
+
+  Logger.log('═══ inspectDevSources done ═══');
+}
+
 // deleteEmployee(actorId, rowNum) — soft-delete (O = today, формула P
 // автоматично переробить "life-cycle" з активного на "X років Y місяців").
 function deleteEmployee(actorId, rowNum){
