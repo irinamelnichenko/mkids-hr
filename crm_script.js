@@ -10695,6 +10695,120 @@ function inspectDevSources(){
   Logger.log('═══ inspectDevSources done ═══');
 }
 
+// inspectDevTemplates() — РОЗВІДНИК шаблонів критеріїв по вікових групах.
+//   Запускати ВРУЧНУ з редактора Apps Script (як inspectDevSources). НЕ webapp.
+//   Нічого НЕ пише — лише Logger.log. Потребує Advanced Drive Service (Drive).
+//   По одному файлу на кожну УНІКАЛЬНУ нормалізовану групу (preschool I/II → preschool),
+//   макс 6. Для кожного: перший аркуш (шаблон) — колонка A + жирність (секції vs критерії).
+function inspectDevTemplates(){
+  var MASTER_ID = '1od1nd818xMEcszMX_WCFdciL63x4X2pSQpd6LMqGDAc';
+  Logger.log('═══ inspectDevTemplates ═══ master=%s', MASTER_ID);
+
+  // Конвертація .xlsx → тимчасовий Google Sheet. Повертає {ssId, isTemp} або null.
+  function toSheet(id){
+    var mime;
+    try { mime = DriveApp.getFileById(id).getMimeType(); }
+    catch(e){ Logger.log('  ✗ getMimeType: %s', e && e.message || e); return null; }
+    if (mime === MimeType.GOOGLE_SHEETS) return { ssId: id, isTemp: false };
+    if (typeof Drive === 'undefined'){
+      Logger.log('  ⚠ Advanced Drive Service «Drive» недоступний. Services (+) → Drive API.');
+      return null;
+    }
+    try {
+      var blob = DriveApp.getFileById(id).getBlob();
+      var meta = { name: 'tmp_devtpl_' + new Date().getTime(), mimeType: MimeType.GOOGLE_SHEETS };
+      var created;
+      if (Drive.Files && typeof Drive.Files.create === 'function')      created = Drive.Files.create(meta, blob);                                              // v3
+      else if (Drive.Files && typeof Drive.Files.insert === 'function') created = Drive.Files.insert({ title: meta.name, mimeType: meta.mimeType }, blob, { convert: true }); // v2
+      else { Logger.log('  ⚠ Drive.Files.create/insert не знайдено.'); return null; }
+      var ssId = created && (created.id || created.getId && created.getId());
+      if (!ssId){ Logger.log('  ✗ Конвертація: немає id.'); return null; }
+      return { ssId: ssId, isTemp: true };
+    } catch(e){ Logger.log('  ✗ Конвертація: %s', e && e.message || e); return null; }
+  }
+
+  // Нормалізація групи: lowercase + trim + прибрати хвіст " i"/" ii"/" iii"/" 1"/" 2".
+  function normGroup(g){
+    return String(g == null ? '' : g).toLowerCase().trim().replace(/\s+(i{1,3}|\d+)$/, '').trim();
+  }
+
+  var master, data;
+  try {
+    master = SpreadsheetApp.openById(MASTER_ID);
+    data   = master.getSheets()[0].getDataRange().getValues();
+  } catch(e){
+    Logger.log('✗ Не вдалося відкрити майстер: %s', e && e.message || e);
+    return;
+  }
+
+  // По одному файлу на унікальну нормалізовану групу (макс 6).
+  var seen = {}, picked = [];
+  for (var i = 1; i < data.length && picked.length < 6; i++){
+    var id = String(data[i][2] == null ? '' : data[i][2]).trim();
+    if (!id) continue;
+    var loc = String(data[i][0] || '').trim();
+    var grp = String(data[i][1] || '').trim();
+    var norm = normGroup(grp);
+    if (!norm || seen[norm]) continue;
+    seen[norm] = true;
+    picked.push({ norm: norm, loc: loc, grp: grp, id: id });
+  }
+  Logger.log('Унікальних груп до перевірки: %s', picked.length);
+
+  picked.forEach(function(p, n){
+    Logger.log('=== ГРУПА: %s · %s/%s · %s ===', p.norm, p.loc, p.grp, p.id);
+    var conv = toSheet(p.id);
+    if (!conv) return;
+    try {
+      var ss = SpreadsheetApp.openById(conv.ssId);
+      var sheets = ss.getSheets();
+      var tpl = sheets[0];
+      Logger.log('  Шаблон-аркуш: "%s" [%s рядків x %s колонок]', tpl.getName(), tpl.getMaxRows(), tpl.getMaxColumns());
+
+      // Рядок 1: де періоди (B/C/D).
+      var hdr = tpl.getRange(1, 1, 1, Math.min(4, tpl.getMaxColumns())).getValues()[0];
+      Logger.log('  Шапка: A="%s" B="%s" C="%s" D="%s"', hdr[0] || '', hdr[1] || '', hdr[2] || '', hdr[3] || '');
+
+      // Колонка A, рядки 1..120: текст + жирність (секції=BOLD, критерії=normal).
+      var rows = Math.min(120, tpl.getMaxRows());
+      var aVals    = tpl.getRange(1, 1, rows, 1).getValues();
+      var aWeights = tpl.getRange(1, 1, rows, 1).getFontWeights();
+      Logger.log('  Колонка A (непорожні, %s рядків скановано):', rows);
+      for (var r = 0; r < rows; r++){
+        var txt = String(aVals[r][0] == null ? '' : aVals[r][0]).trim();
+        if (!txt) continue;
+        var bold = String(aWeights[r][0]).toLowerCase() === 'bold';
+        Logger.log('    R%s [%s] "%s"', r + 1, bold ? 'BOLD' : 'normal', txt);
+      }
+
+      // ДОДАТКОВО лише для ПЕРШОГО файлу: sheets[1] (перша дитина) — формат оцінок.
+      if (n === 0){
+        var kid = sheets[1];
+        if (kid){
+          Logger.log('  ── ПЕРША ДИТИНА: аркуш "%s" — рядки 1..30, колонки A–D ──', kid.getName());
+          var kr = Math.min(30, kid.getMaxRows());
+          var kc = Math.min(4, kid.getMaxColumns());
+          var kvals = kid.getRange(1, 1, kr, kc).getValues();
+          kvals.forEach(function(row, ri){
+            Logger.log('    r%s: %s', ri + 1, JSON.stringify(row));
+          });
+        } else {
+          Logger.log('  (другого аркуша (дитини) немає)');
+        }
+      }
+    } catch(e){
+      Logger.log('  ✗ Читання не вдалося: %s', e && e.message || e);
+    } finally {
+      if (conv.isTemp && conv.ssId){
+        try { DriveApp.getFileById(conv.ssId).setTrashed(true); Logger.log('  🗑 тимчасовий файл — у кошик'); }
+        catch(e){ Logger.log('  ⚠ не видалив temp %s: %s', conv.ssId, e && e.message || e); }
+      }
+    }
+  });
+
+  Logger.log('═══ inspectDevTemplates done ═══');
+}
+
 // deleteEmployee(actorId, rowNum) — soft-delete (O = today, формула P
 // автоматично переробить "life-cycle" з активного на "X років Y місяців").
 function deleteEmployee(actorId, rowNum){
