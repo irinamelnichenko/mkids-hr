@@ -50,8 +50,9 @@ var HR_SHEET_ID       = '1KeSelcGyp8ijUQOmzUjFlX78TOScMWAFm7Hjf33Doyo';
 var HR_TAB_NAME       = '2025-2026';
 // v6.44: A:O(1-15) дані, P(16)=формула life-cycle, Q(17)=reserved, R(18)=email,
 //   S(19)=Паспорт, T(20)=Ставка ЗП, U(21)=Умови роботи, V(22)=Модель розрахунку.
-//   Append-only: існуючі колонки не зсуваються. HR_COLS 18→22.
-var HR_COLS           = 23;   // v6.48: +W='Оцінка (JSON)' (OKR-оцінка співробітника)
+//   W(23)=Оцінка (JSON), X(24)=Дата виходу з декрету.
+//   Append-only: існуючі колонки не зсуваються.
+var HR_COLS           = 24;   // v6.59: +X='Дата виходу з декрету' (планована дата повернення)
 var HR_AUDIT_SHEET    = 'HR_Audit';
 var HR_AUDIT_HEADER   = ['ts','actorId','actorName','action','rowNum','before_json','after_json'];
 
@@ -10352,6 +10353,7 @@ function _parseEmpRow(row, rowNum){
     workCond:  s(row[20]),   // U — Умови роботи (Договір/ФОП/ЦПХ/ГПД…)
     calcModel: s(row[21]),   // V — Модель розрахунку (За заняття/За дитину/За захід)
     assessment: s(row[22]),  // W — Оцінка (JSON) v6.48
+    matReturn: _fmtDateDmy(row[23]),  // X — Дата виходу з декрету v6.59
     archived: fired !== ''
   };
 }
@@ -10496,6 +10498,9 @@ function saveEmployee(actorId, payload, rowNum){
       // v6.48 — assessment (W): об'єкт {templateId:{period:{...}}} → JSON-рядок.
       var assessment = (payload.assessment == null) ? null
                      : (typeof payload.assessment === 'string' ? payload.assessment : JSON.stringify(payload.assessment));
+      // v6.59 — X (Дата виходу з декрету). null = ключ не переданий (реактивація/інші
+      //   часткові payload) → НЕ затираємо. '' = поле очищене у модалці → пишемо порожнє.
+      var matReturn = (payload.matReturn == null) ? null : _parseDateInput(payload.matReturn);
 
       // ── UPDATE ─────────────────────────────────────────
       if (rowNum){
@@ -10519,6 +10524,8 @@ function saveEmployee(actorId, payload, rowNum){
         sh.getRange(rowNum, 19, 1, 4).setValues([[passport, rate, workCond, calcModel]]);
         // v6.48 — W (assessment) пишемо ЛИШЕ якщо передано (модалка/реактивація не шлють → не затираємо).
         if (assessment != null) sh.getRange(rowNum, 23, 1, 1).setValue(assessment);
+        // v6.59 — X (Дата виходу з декрету) пишемо ЛИШЕ якщо ключ переданий.
+        if (matReturn != null) sh.getRange(rowNum, 24, 1, 1).setValue(matReturn);
 
         var updated = _parseEmpRow(sh.getRange(rowNum, 1, 1, HR_COLS).getValues()[0], rowNum);
         _writeHrAudit(actor, 'update', rowNum, existing, updated);
@@ -10529,9 +10536,10 @@ function saveEmployee(actorId, payload, rowNum){
       var dupNew = _findEmpDuplicate(allEmps, payload, null);
       if (dupNew) return {ok:false, error:'Duplicate employee in same location (row ' + dupNew.rowNum + ')', code:'DUPLICATE'};
 
-      // appendRow з 22 cols: A-O (15) + ['',''] (P,Q) + R (email) + S:V (v6.44).
+      // appendRow з 24 cols: A-O (15) + ['',''] (P,Q) + R (email) + S:V (v6.44) + W (v6.48) + X (v6.59).
       // P-формула — порожня тут, копіюється з row 2 одразу після append.
-      var fullRow = newAtoO.concat(['', '', email, passport, rate, workCond, calcModel, (assessment != null ? assessment : '')]);
+      var fullRow = newAtoO.concat(['', '', email, passport, rate, workCond, calcModel,
+        (assessment != null ? assessment : ''), (matReturn != null ? matReturn : '')]);
       sh.appendRow(fullRow);
       var newRowNum = sh.getLastRow();
 
@@ -10563,7 +10571,7 @@ function saveEmployee(actorId, payload, rowNum){
 //   saveEmployee і так пише дані у S:V навіть без заголовків — це лише підписи.
 function migrateHrAddCardFields(){
   var sh = _getHrSheet();
-  var HEAD = { 19:'Паспорт', 20:'Ставка ЗП', 21:'Умови роботи', 22:'Модель розрахунку', 23:'Оцінка (JSON)' };
+  var HEAD = { 19:'Паспорт', 20:'Ставка ЗП', 21:'Умови роботи', 22:'Модель розрахунку', 23:'Оцінка (JSON)', 24:'Дата виходу з декрету' };
   var done = [];
   Object.keys(HEAD).forEach(function(col){
     col = Number(col);

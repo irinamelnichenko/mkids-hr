@@ -939,7 +939,8 @@ async function fetchEmps(force=false) {
         rate:(row[19]||'').trim(),     // T=Ставка ЗП
         workCond:(row[20]||'').trim(), // U=Умови роботи
         calcModel:(row[21]||'').trim(),// V=Модель розрахунку
-        assessment:(()=>{try{return JSON.parse(row[22]||'{}')||{};}catch(e){return {};}})() // W=Оцінка(JSON) v6.48
+        assessment:(()=>{try{return JSON.parse(row[22]||'{}')||{};}catch(e){return {};}})(), // W=Оцінка(JSON) v6.48
+        matReturn:(row[23]||'').trim() // X=Дата виходу з декрету v6.59
       };
     }).filter(e=>e && (e.last||e.first)).map((e,i)=>({...e,id:i}));
     localStorage.setItem(CFG.CK, JSON.stringify({data:S.emps,ts:Date.now()}));
@@ -1707,6 +1708,9 @@ function openEmpEditor(empId){
   document.getElementById('empF_rate').value       = isEdit ? (emp.rate      || '') : '';
   document.getElementById('empF_workCond').value   = isEdit ? (emp.workCond  || '') : '';
   document.getElementById('empF_calcModel').value  = isEdit ? (emp.calcModel || '') : '';
+  // v6.59 — планована дата виходу з декрету
+  document.getElementById('empF_matReturn').value = isEdit ? _dmyToIso(emp.matReturn) : '';
+  _empToggleMatReturn();
 
   // Footer
   document.getElementById('empEditDelBtn').style.display =
@@ -1720,6 +1724,15 @@ function openEmpEditor(empId){
 
 function closeEmpEditor(){
   document.getElementById('empEditOverlay').classList.remove('show');
+}
+
+// v6.59 — поле «Дата виходу з декрету» показуємо лише коли статус = декрет.
+function _empToggleMatReturn(){
+  var sel = document.getElementById('empF_stat');
+  var wrap = document.getElementById('empF_matReturn_wrap');
+  if (!sel || !wrap) return;
+  var isMat = /декрет|вагітн|догляд за дит|по догляду|матер/i.test(sel.value || '');
+  wrap.style.display = isMat ? '' : 'none';
 }
 
 // Esc to close
@@ -1753,7 +1766,9 @@ function _empCollectPayload(){
     passport:  $('empF_passport'),
     rate:      $('empF_rate'),
     workCond:  $('empF_workCond'),
-    calcModel: $('empF_calcModel')
+    calcModel: $('empF_calcModel'),
+    // v6.59 — планована дата виходу з декрету
+    matReturn: _isoToDmy($('empF_matReturn'))
   };
 }
 
@@ -2133,6 +2148,25 @@ function visible(){
 // «активних» лічильників, відпусток/лікарняних. Дані НЕ змінюються.
 function isMaternity(e){
   return !!(e && e.stat && /декрет|вагітн|догляд за дит|по догляду|матер/i.test(e.stat));
+}
+// v6.59 — планована дата виходу з декрету + попередження.
+// «Пора виводити» = статус=декрет І до дати лишилось ≤14 днів АБО вона вже минула.
+function matReturnInfo(e){
+  if(!isMaternity(e)) return null;
+  var d = e && e.matReturn ? pd(e.matReturn) : null;
+  if(!d) return null;
+  var today=new Date(); today.setHours(0,0,0,0); d.setHours(0,0,0,0);
+  var days=Math.round((d-today)/86400000);
+  return { date:d, days:days, due: days<=14 };
+}
+function _matDM(d){ return String(d.getDate()).padStart(2,'0')+'.'+String(d.getMonth()+1).padStart(2,'0'); }
+function matReturnBadge(e){
+  var info=matReturnInfo(e); if(!info||!info.due) return '';
+  var dd=_matDM(info.date);
+  var txt = info.days<0 ? ('⚠️ Пора виводити з декрету (прострочено '+dd+')')
+          : info.days===0 ? ('⚠️ Пора виводити з декрету (сьогодні '+dd+')')
+          : ('⚠️ Пора виводити з декрету ('+dd+')');
+  return '<span class="badge" style="background:#fdecea;border:1px solid #e74c3c;color:#c0392b;font-weight:600" title="Планована дата виходу з декрету: '+dd+'">'+txt+'</span>';
 }
 function isActive(e){
   if(e.fired&&e.fired.trim())return false;
@@ -2715,7 +2749,16 @@ function renderEmps(){
         📋 Потребують оновлення: ${_incTotal} з ${_cmplActive.length}${_incRed?` · 🔴 ${_incRed}`:''}
       </label>`:''}
       ${isHR?`<button class="btn btn-secondary btn-sm" onclick="exportCSV()" title="Завантажити Excel">📊 Excel</button>`:''}
-      ${(function(){var mc=emps.filter(isMaternity).length;return mc?`<span class="badge bb" style="margin-left:auto" title="Співробітниць у декретній відпустці">👶 Декретниць: ${mc}</span>`:'';})()}
+      ${(function(){
+        var mat=emps.filter(isMaternity); var mc=mat.length; if(!mc) return '';
+        var due=mat.filter(function(e){var i=matReturnInfo(e);return i&&i.due;});
+        var dueHtml='';
+        if(due.length){
+          var names=due.map(function(e){return esc(fullName(e))+' ('+_matDM(matReturnInfo(e).date)+')';}).join(', ');
+          dueHtml=`<span class="badge" style="background:#fdecea;border:1px solid #e74c3c;color:#c0392b;font-weight:600;margin-left:8px" title="${names}">⚠️ Пора виводити: ${due.length} — ${names}</span>`;
+        }
+        return `<span class="badge bb" style="margin-left:auto" title="Співробітниць у декретній відпустці">👶 Декретниць: ${mc}</span>${dueHtml}`;
+      })()}
       <span style="${emps.filter(isMaternity).length?'':'margin-left:auto;'}font-size:12px;color:var(--gray)">${f.length} / ${emps.length}</span>
     </div>
     <div class="card"><div class="tbl-wrap"><table>
@@ -2738,7 +2781,7 @@ function renderEmps(){
           </div></td>
           ${isHR?`<td style="font-size:12px">${e.loc||'—'}</td>`:''}
           <td style="font-size:12px">${e.pos||'—'}</td>
-          <td>${isMaternity(e)?'<span class="badge bb">👶 Декрет</span>':isOnVac(e.key)?'<span class="badge bb">відпустка</span>':isOnSick(e.key)?'<span class="badge bo">лікарняний</span>':act?'<span class="badge bg">активний</span>':'<span class="badge bgr">звільнений</span>'}</td>
+          <td>${isMaternity(e)?'<span class="badge bb">👶 Декрет</span>'+matReturnBadge(e):isOnVac(e.key)?'<span class="badge bb">відпустка</span>':isOnSick(e.key)?'<span class="badge bo">лікарняний</span>':act?'<span class="badge bg">активний</span>':'<span class="badge bgr">звільнений</span>'}</td>
           <td style="font-size:12px">${fmtTenure(e)}</td>
           <td><div style="display:flex;align-items:center;gap:6px">
             <span style="font-weight:800;color:${ov?'#e74c3c':'var(--dark)'}">${vu}</span>
@@ -2896,6 +2939,7 @@ function _empFullPayload(e,assessmentObj){
     phone:e.phone||'',pos:e.pos||'',stat:e.stat||'',bday:e.bday||'',bmon:e.bmon||'',bdate:e.bdate||'',
     wday:e.wday||'',hired:e.hired||'',fired:e.fired||'',email:e.email||'',
     passport:e.passport||'',rate:e.rate||'',workCond:e.workCond||'',calcModel:e.calcModel||'',
+    matReturn:e.matReturn||'',
     assessment:assessmentObj };
 }
 async function saveAssessment(empId){
@@ -2964,7 +3008,7 @@ function renderEmpCard(){
         </div>
       </div>
       ${isMaternity(e)?`<div style="margin:14px;padding:12px 16px;border-radius:8px;background:#f3e8fb;border:1px solid #8e44ad;color:#6c3483;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
-        <span>👶 <strong>У декретній відпустці</strong> — не показується в табелі та зарплаті, не рахується активною.</span>
+        <span>👶 <strong>У декретній відпустці</strong> — не показується в табелі та зарплаті, не рахується активною.${(function(){var i=matReturnInfo(e);return i?' Планований вихід: <strong>'+fmtDate(i.date)+'</strong>.':'';})()} ${matReturnBadge(e)}</span>
         ${canEmpEdit(e)?`<button class="btn btn-sm" onclick="reactivateMaternity(${e.id})" style="background:#27ae60;color:#fff;border-color:#27ae60;white-space:nowrap">↩ Повернути в активні</button>`:''}
       </div>`:''}
       ${isFired(e)?`<div style="margin:14px;padding:12px 16px;border-radius:8px;background:#fdecea;border:1px solid #e74c3c;color:#c0392b;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
@@ -5248,7 +5292,7 @@ window.addEventListener('DOMContentLoaded',async()=>{
             <input type="text" id="empF_pos" list="empPosSuggest" required placeholder="напр. вихователь">
             <datalist id="empPosSuggest"></datalist>
           </div>
-          <div class="emp-edit-field"><label>Статус</label><select id="empF_stat"></select></div>
+          <div class="emp-edit-field"><label>Статус</label><select id="empF_stat" onchange="_empToggleMatReturn()"></select></div>
         </div>
       </div>
 
@@ -5261,6 +5305,11 @@ window.addEventListener('DOMContentLoaded',async()=>{
         <div class="emp-edit-field" style="margin-bottom:0">
           <label>Дата звільнення</label>
           <input type="date" lang="uk" id="empF_fired">
+        </div>
+        <!-- v6.59: планована дата виходу з декрету (показується лише при статусі «декрет») -->
+        <div class="emp-edit-field" id="empF_matReturn_wrap" style="margin-top:14px;margin-bottom:0;display:none">
+          <label>👶 Дата виходу з декрету <span class="field-hint" style="display:inline">(планована)</span></label>
+          <input type="date" lang="uk" id="empF_matReturn">
         </div>
       </div>
 

@@ -660,7 +660,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
       <div class="tab" onclick="switchTab(5)" data-permission="card-child-history">📊 Історія оплат</div>
       <div class="tab" onclick="switchTab(6)" data-permission="card-child-notes">📝 Нотатки</div>
       <div class="tab" onclick="switchTab(7)" data-permission="card-child-health">🩺 Здоров'я</div>
-      <div class="tab" onclick="switchTab(8)" data-permission="card-child-health">🌱 Розвиток</div>
+      <div class="tab" onclick="switchTab(8)" data-permission="card-child-development">🌱 Розвиток</div>
       <div class="tab" onclick="switchTab(9)" data-permission="card-child-banner">📄 Документи</div>
     </div>
     <div class="modal-bd">
@@ -847,7 +847,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
       <!-- Tab 7: Здоров'я -->
       <div class="tab-pane" id="tp7" data-permission="card-child-health"></div>
       <!-- Розвиток (v6.47.2) — DOM-індекс 8 = switchTab(8); ПЕРЕД Документи -->
-      <div class="tab-pane" id="tp9" data-permission="card-child-health"></div>
+      <div class="tab-pane" id="tp9" data-permission="card-child-development"></div>
       <!-- Документи — DOM-індекс 9 = switchTab(9) -->
       <!-- Tab 8: Документи -->
       <div class="tab-pane" id="tp8" data-permission="card-child-banner">
@@ -2005,7 +2005,7 @@ const PERMISSIONS = {
     'card-employee-salary-tab','card-employee-vacations-tab','card-employee-sickleave-tab',
     'card-child-banner','card-child-contract','card-child-fees',
     'card-child-vacations','card-child-payments','card-child-history',
-    'card-child-notes','card-child-health',
+    'card-child-notes','card-child-health','card-child-development',
     'finance','medical','salary-mgmt','hr-actions'
   ],
 
@@ -2026,7 +2026,7 @@ const PERMISSIONS = {
     'card-employee-salary-tab','card-employee-vacations-tab','card-employee-sickleave-tab',
     'card-child-banner','card-child-contract','card-child-fees',
     'card-child-vacations','card-child-payments','card-child-history',
-    'card-child-notes','card-child-health',
+    'card-child-notes','card-child-health','card-child-development',
     'finance','medical','salary-mgmt','hr-actions'
   ],
 
@@ -2047,7 +2047,7 @@ const PERMISSIONS = {
     'card-employee-salary-tab','card-employee-vacations-tab','card-employee-sickleave-tab',
     'card-child-banner','card-child-contract','card-child-fees',
     'card-child-vacations','card-child-payments','card-child-history',
-    'card-child-notes','card-child-health',
+    'card-child-notes','card-child-health','card-child-development',
     'finance','medical','hr-actions'
   ],
 
@@ -2115,7 +2115,7 @@ const PERMISSIONS = {
     'card-employee-salary-tab','card-employee-vacations-tab','card-employee-sickleave-tab',
     'card-child-banner','card-child-contract','card-child-fees',
     'card-child-vacations','card-child-payments','card-child-history',
-    'card-child-notes','card-child-health',
+    'card-child-notes','card-child-health','card-child-development',
     'finance','medical','hr-actions',
     'invoices'
   ],
@@ -2129,9 +2129,10 @@ const PERMISSIONS = {
     'card-employee-info',
     'card-employee-vacations-tab','card-employee-sickleave-tab',
     'card-child-banner','card-child-contract','card-child-vacations',
-    'card-child-notes','card-child-health'
+    'card-child-notes','card-child-health','card-child-development'
   ],
-  vyhovatel: ['activities','attendance-view','attendance-edit']
+  vyhovatel: ['activities','attendance-view','attendance-edit',
+    'clients_list','card-child-banner','card-child-development']
 };
 // Задачник: tasks — менеджмент + director; tasks-create — лише менеджмент.
 (function(){
@@ -5428,7 +5429,11 @@ var DEVELOPMENT_CRITERIA={
    {id:'9.3',text:'Відображає сюжет у малюнку'},{id:'9.4',text:'Бере участь у міні-виставах'},
    {id:'9.5',text:'Має улюблені твори/казки'},{id:'9.6',text:'Радіє власним малюнкам, показує їх'}]}
 };
-function canEditDevelopment(){ return isHR()||isNurse(); }   // B1: director — лише перегляд
+function canEditDevelopment(){
+  if(isHR()||isNurse()) return true;
+  var r=String(S&&S.user&&S.user.role||'').toLowerCase();
+  return r==='director'||r==='vyhovatel';
+}
 function _devPeriodLabel(key){ var p=String(key).split('-'); var lbl=({'09':'Вересень','01':'Січень','06':'Червень'})[p[1]]||key; return lbl+' '+(p[0]||''); }
 function toggleDevSection(sec){ if(!S._devOpen)S._devOpen={}; S._devOpen[sec]=!S._devOpen[sec]; renderDevelopmentTab(); }
 function setDevCell(critId, periodKey, val){
