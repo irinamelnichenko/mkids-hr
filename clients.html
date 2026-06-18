@@ -2131,8 +2131,7 @@ const PERMISSIONS = {
     'card-child-banner','card-child-contract','card-child-vacations',
     'card-child-notes','card-child-health','card-child-development'
   ],
-  vyhovatel: ['activities','attendance-view','attendance-edit',
-    'clients_list','card-child-banner','card-child-development']
+  vyhovatel: ['activities','attendance-view','attendance-edit','clients_list','card-child-development']
 };
 // Задачник: tasks — менеджмент + director; tasks-create — лише менеджмент.
 (function(){
@@ -3128,6 +3127,16 @@ function openChild(id,group,teacher,loc,name){
   document.getElementById('tp3').innerHTML='';
   populateForm(id);
   document.getElementById('mChild').classList.remove('hidden');
+  // v6.60: якщо вкладка 0 (Основне) прихована за роллю (напр. вихователь) —
+  // відкрити ПЕРШУ видиму вкладку (та її панель), щоб картка не була порожня.
+  (function(){
+    var tabs=document.querySelectorAll('#mChildTabs .tab');
+    if(!tabs.length) return;
+    if(tabs[0].style.display!=='none') return;   // Основне видиме — лишаємо tab 0
+    for(var i=0;i<tabs.length;i++){
+      if(tabs[i].style.display!=='none'){ switchTab(i); break; }
+    }
+  })();
 }
 function closeModal(id){ document.getElementById(id).classList.add('hidden'); }
 
