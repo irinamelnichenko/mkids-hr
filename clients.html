@@ -878,7 +878,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
       <button class="btn btn-sm" id="btnTerminate" data-permission="terminate_contract" onclick="openTerminate()" style="display:none;background:#c0392b;color:#fff;border-color:#c0392b">🚪 Розірвати договір</button>
       <button class="btn btn-sm" id="btnRestore" data-permission="terminate_contract" onclick="restoreContract()" style="display:none;background:#fff;color:#27ae60;border:1.5px solid #27ae60">↶ Повернути в активні</button>
       <button class="btn btn-secondary" onclick="closeModal('mChild')">Скасувати</button>
-      <button class="btn btn-primary" onclick="saveChild()">💾 Зберегти</button>
+      <button class="btn btn-primary" data-permission="card-child-banner" onclick="saveChild()">💾 Зберегти</button>
     </div>
   </div>
 </div>
@@ -3114,7 +3114,7 @@ function openChild(id,group,teacher,loc,name){
   if(!card.group) card.group=group;
   if(!card.teacher) card.teacher=teacher;
   if(!card.loc) card.loc=loc;
-  document.getElementById('btnDeleteChild').style.display='';
+  document.getElementById('btnDeleteChild').style.display = hasPerm('card-child-banner') ? '' : 'none';
   setLocFieldMode(false);
   document.getElementById('mChildTitle').innerHTML='👤 '+esc(card.name||'')+(healthHasFlags(card)?' <span class="badge bo" style="font-size:11px;vertical-align:middle" title="Алергії/хронічні — див. вкладку Здоров\'я">⚠ Здоров\'я</span>':'');  // v6.46 бейдж
   S.curTab=0;
