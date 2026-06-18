@@ -2460,6 +2460,16 @@ function calcStats(locsArr, groupFilter){
 
 function toggleOnlyDebtors(){ S.onlyDebtors=!S.onlyDebtors; renderClients(); }
 
+function _ageCell(ymd){
+  var s=normalizeDateYMD(ymd||'');
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(s)) return '<span style="color:var(--gray2)">—</span>';
+  var p=s.split('-'),by=+p[0],bm=+p[1],bd=+p[2];
+  var now=new Date(),y=now.getFullYear()-by,m=now.getMonth()+1-bm,d=now.getDate()-bd;
+  if(d<0)m--;
+  if(m<0){y--;m+=12;}
+  if(y<0||y>120) return '<span style="color:var(--gray2)">—</span>';
+  return '<span style="font-weight:600">'+y+'р</span>'+(m>0?' <span style="color:var(--gray);font-size:11px">'+m+'м</span>':'');
+}
 function renderClients(){
   var monthStripHtml=buildMonthStrip();
   var locs=visibleLocs();
@@ -2644,7 +2654,7 @@ function renderClients(){
         +'</span>'
         +'</span></div>'
         +'<div class="tbl-wrap"><table><thead><tr>'
-        +'<th>Ім\'я дитини</th><th data-permission="finance">Статус оплати</th>'
+        +'<th>Ім\'я дитини</th><th>Вік</th><th data-permission="finance">Статус оплати</th>'
         +'<th data-permission="finance">Факт (навч+доп)</th><th data-permission="finance">Бюджет разом</th><th data-permission="finance">Вступний</th><th>Телефон</th><th></th>'
         +'</tr></thead><tbody>';
 
@@ -2704,6 +2714,7 @@ function renderClients(){
         }
         html+='<tr class="clickable" onclick="openChild('+escAttrJS(ch.id||'')+','+escAttrJS(ch.group||'')+','+escAttrJS(ch.teacher||grp.teacher||'')+','+escAttrJS(ch.loc||'')+','+escAttrJS(ch.name||'')+')">'
           +'<td><span class="child-link">'+esc(ch.name)+'</span>'+getAbsBadge(ch.id)+'</td>'
+          +'<td>'+_ageCell(ch.bday||card.bday||'')+'</td>'
           +'<td data-permission="finance">'+payBadge(ch.status,debtAmt,over)+'</td>'
           +'<td data-permission="finance" style="font-weight:600">'+(factTotal?fmtN(factTotal):'—')+'</td>'
           +'<td data-permission="finance">'+budCell+'</td>'
