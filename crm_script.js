@@ -10944,10 +10944,13 @@ function buildDevTemplatesJS(){
     }
   });
 
-  Logger.log('───── ПІДСУМОК ─────');
-  summary.forEach(function(s){ Logger.log('  ' + s); });
-  Logger.log('───── ГОТОВИЙ JS (копіюй у фронт) ─────');
-  Logger.log('var DEVELOPMENT_TEMPLATES = ' + JSON.stringify(result, null, 2) + ';');
+  // Вивід — ОКРЕМИЙ Logger.log на кожну групу (щоб довгий JSON не обрізався).
+  Logger.log('───── ШАБЛОНИ (по групах) ─────');
+  Object.keys(result).forEach(function(key){
+    Logger.log('=== ШАБЛОН: ' + key + ' ===');
+    Logger.log(JSON.stringify(result[key], null, 2));
+  });
+  Logger.log('───── ПІДСУМОК ───── ' + summary.join(' | '));
   Logger.log('═══ buildDevTemplatesJS done ═══');
 }
 
