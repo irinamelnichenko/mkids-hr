@@ -10616,21 +10616,56 @@ function inspectDevSources(){
 
   picked.forEach(function(p, n){
     Logger.log('───── [%s] рядок %s · Локація="%s" · Група="%s" · ID=%s', n + 1, p.row, p.loc, p.grp, p.id);
-    var ss;
+
+    // 1) mimeType — підтвердити, чи це нативний Sheet, чи .xlsx у Drive.
+    var mime;
     try {
-      ss = SpreadsheetApp.openById(p.id);
+      mime = DriveApp.getFileById(p.id).getMimeType();
+      Logger.log('  mimeType: %s', mime);
     } catch(e){
-      Logger.log('  ✗ openById не вдався: %s', e && e.message || e);
+      Logger.log('  ✗ getFileById/getMimeType: %s', e && e.message || e);
       return;
     }
-    Logger.log('  Файл: "%s"', ss.getName());
-    var sheets = ss.getSheets();
-    sheets.forEach(function(sh){
-      Logger.log('    • аркуш "%s" [%s рядків x %s колонок]', sh.getName(), sh.getMaxRows(), sh.getMaxColumns());
-    });
 
-    // Превʼю першого аркуша: перші 12 рядків × до 26 колонок.
+    // 2) Якщо НЕ Google Sheet — конвертуємо у тимчасовий Sheet через Advanced Drive Service.
+    var ssId = null, isTemp = false;
+    if (mime === MimeType.GOOGLE_SHEETS){
+      ssId = p.id;
+    } else {
+      if (typeof Drive === 'undefined'){
+        Logger.log('  ⚠ Advanced Drive Service «Drive» недоступний. Увімкни в редакторі: Services (+) → Drive API, потім перезапусти. Пропускаю цей файл.');
+        return;
+      }
+      try {
+        var blob = DriveApp.getFileById(p.id).getBlob();
+        var meta = { name: 'tmp_dev_' + new Date().getTime(), mimeType: MimeType.GOOGLE_SHEETS };
+        var created;
+        if (Drive.Files && typeof Drive.Files.create === 'function'){
+          created = Drive.Files.create(meta, blob);                                              // Drive API v3
+        } else if (Drive.Files && typeof Drive.Files.insert === 'function'){
+          created = Drive.Files.insert({ title: meta.name, mimeType: meta.mimeType }, blob, { convert: true }); // v2
+        } else {
+          Logger.log('  ⚠ Drive.Files.create/insert не знайдено — невідома версія Drive API. Пропускаю.');
+          return;
+        }
+        ssId = created && (created.id || created.getId && created.getId());
+        if (!ssId){ Logger.log('  ✗ Конвертація: не отримав id тимчасового файлу.'); return; }
+        isTemp = true;
+        Logger.log('  ✓ .xlsx сконвертовано у тимчасовий Sheet id=%s', ssId);
+      } catch(e){
+        Logger.log('  ✗ Конвертація не вдалася: %s', e && e.message || e);
+        return;
+      }
+    }
+
+    // 3) Читаємо аркуші + превʼю першого (12 × до 26). Тимчасовий файл прибираємо у finally.
     try {
+      var ss = SpreadsheetApp.openById(ssId);
+      Logger.log('  Sheet: "%s"', ss.getName());
+      var sheets = ss.getSheets();
+      sheets.forEach(function(sh){
+        Logger.log('    • аркуш "%s" [%s рядків x %s колонок]', sh.getName(), sh.getMaxRows(), sh.getMaxColumns());
+      });
       var first = sheets[0];
       var rows = Math.min(12, first.getMaxRows());
       var cols = Math.min(26, first.getMaxColumns());
@@ -10644,7 +10679,16 @@ function inspectDevSources(){
         Logger.log('  (перший аркуш порожній)');
       }
     } catch(e){
-      Logger.log('  ✗ Превʼю не вдалося: %s', e && e.message || e);
+      Logger.log('  ✗ Читання Sheet не вдалося: %s', e && e.message || e);
+    } finally {
+      if (isTemp && ssId){
+        try {
+          DriveApp.getFileById(ssId).setTrashed(true);
+          Logger.log('  🗑 тимчасовий файл переміщено у кошик');
+        } catch(e){
+          Logger.log('  ⚠ не вдалося видалити тимчасовий %s: %s', ssId, e && e.message || e);
+        }
+      }
     }
   });
 
