@@ -12385,3 +12385,167 @@ function testExportHolosievo() {
   Logger.log('RESULT: ' + JSON.stringify(result));
   return result;
 }
+
+
+// ІМПОРТ РОЗВИТКУ ДІТЕЙ з Excel-файлів майстер-таблиці у CRM.
+//   dryRunDevImport() — ПРЕВ'Ю (нічого не пише, лише Logger.log).
+//   runDevImport()    — ЗАПИС у CRM (Розвиток JSON + Здоров'я JSON, точкові комірки).
+// Запускати ВРУЧНУ з редактора Apps Script. Потребує Advanced Drive Service (Drive).
+function dryRunDevImport(){ return _devImportRun(false); }
+function runDevImport(){ return _devImportRun(true); }
+
+function _devImportRun(doWrite){
+  var MASTER_ID = '1od1nd818xMEcszMX_WCFdciL63x4X2pSQpd6LMqGDAc';
+  var SY = 2025;
+  var PERIODS = { '09':SY+'-09', '01':(SY+1)+'-01', '06':(SY+1)+'-06' };
+  Logger.log('=== %s DEV IMPORT === master=%s', doWrite ? 'RUN(write)' : 'DRY-RUN', MASTER_ID);
+
+  var SECTIONS = ['Емоційний інтелект','Соціальна адаптація','Уміння вирішувати конфлікти',
+    'Самостійність у прийнятті рішень','Мовленнєвий розвиток','Сенсорно-пізнавальний розвиток',
+    'Ігрова діяльність','Предметно-практична діяльність','Художньо-естетичний розвиток'];
+  var MEAS = [['Маса тіла','weight'],['Довжина тіла (зріст)','height'],
+    ['Обхват голови','headCirc'],['Обхват грудної клітки','chestCirc']];
+  var SKIP = ['Особистісно-соціальний розвиток:','Столбец 1'];
+
+  function norm(s){ return String(s==null?'':s).toLowerCase().replace(/\s+/g,' ').trim().replace(/[:;.,\-\s]+$/,''); }
+  function nkey(s){ return String(s==null?'':s).toLowerCase().replace(/ /g,' ').replace(/\s+/g,' ').trim(); }
+  var SECTION_MAP={}; SECTIONS.forEach(function(s){ SECTION_MAP[norm(s)]=s; });
+  var MEAS_MAP={}; MEAS.forEach(function(m){ MEAS_MAP[norm(m[0])]=m[1]; });
+  var SKIP_SET={}; SKIP.forEach(function(s){ SKIP_SET[norm(s)]=true; });
+  function isSkip(nt){ return SKIP_SET[nt] || nt.indexOf('столбец')===0; }
+  function score(v){ var t=String(v==null?'':v).trim(); if(t==='*')return '+'; if(t==='-'||t==='–'||t==='—'||t==='−')return '−'; return null; }
+
+  function toSheet(id){
+    var mime; try{ mime=DriveApp.getFileById(id).getMimeType(); }catch(e){ return {err:'getMimeType: '+(e&&e.message||e)}; }
+    if(mime===MimeType.GOOGLE_SHEETS) return {ssId:id,isTemp:false};
+    if(typeof Drive==='undefined') return {err:'Drive advanced service unavailable'};
+    try{
+      var blob=DriveApp.getFileById(id).getBlob();
+      var meta={name:'tmp_devimp_'+new Date().getTime(),mimeType:MimeType.GOOGLE_SHEETS};
+      var created;
+      if(Drive.Files&&typeof Drive.Files.create==='function') created=Drive.Files.create(meta,blob);
+      else if(Drive.Files&&typeof Drive.Files.insert==='function') created=Drive.Files.insert({title:meta.name,mimeType:meta.mimeType},blob,{convert:true});
+      else return {err:'Drive.Files.create/insert not found'};
+      var ssId=created&&(created.id||(created.getId&&created.getId()));
+      if(!ssId) return {err:'convert: no id'};
+      return {ssId:ssId,isTemp:true};
+    }catch(e){ return {err:'convert: '+(e&&e.message||e)}; }
+  }
+
+  var ss=getCRMSpreadsheet(), clSheet=ss.getSheetByName(SHEET_CLIENTS);
+  if(!clSheet){ Logger.log('NO Clients sheet'); return {ok:false}; }
+  var clVals=clSheet.getDataRange().getValues(), clHead=clVals[0];
+  function colIdx(name){ for(var c=0;c<clHead.length;c++) if(String(clHead[c]).trim()===name) return c; return -1; }
+  var ciName=colIdx('ПІБ дитини'), ciLoc=colIdx('Локація'), ciDev=colIdx('Розвиток (JSON)'), ciHea=colIdx("Здоров'я (JSON)");
+  if(ciName<0||ciLoc<0||ciDev<0||ciHea<0){ Logger.log('cols not found: name=%s loc=%s dev=%s health=%s',ciName,ciLoc,ciDev,ciHea); return {ok:false}; }
+  var byPib={};
+  for(var r=1;r<clVals.length;r++){
+    if(!clVals[r][0]) continue;
+    var k=nkey(clVals[r][ciName]); if(!k) continue;
+    (byPib[k]=byPib[k]||[]).push({rowIndex:r,name:String(clVals[r][ciName]).trim(),loc:nkey(clVals[r][ciLoc]),id:clVals[r][0]});
+  }
+
+  var master,mdata;
+  try{ master=SpreadsheetApp.openById(MASTER_ID); mdata=master.getSheets()[0].getDataRange().getValues(); }
+  catch(e){ Logger.log('master: %s',e&&e.message||e); return {ok:false}; }
+
+  var stat={files:0,filesSkipped:0,tabs:0,matched:0,unmatched:0,conflict:0,emptyTabs:0,critWritten:0,measWritten:0,rowsToWrite:{}};
+  var unmatchedList=[], conflictList=[];
+  var pendingDev={}, pendingHea={};
+
+  for(var mi=1; mi<mdata.length; mi++){
+    var loc=String(mdata[mi][0]||'').trim(), grp=String(mdata[mi][1]||'').trim(), fid=String(mdata[mi][2]==null?'':mdata[mi][2]).trim();
+    if(!fid) continue;
+    var conv=toSheet(fid);
+    if(conv.err){ stat.filesSkipped++; Logger.log('  x [%s/%s] %s',loc,grp,conv.err); continue; }
+    stat.files++;
+    try{
+      var sheets=SpreadsheetApp.openById(conv.ssId).getSheets();
+      for(var si=0; si<sheets.length; si++){
+        var sh=sheets[si], pib=String(sh.getName()||'').trim(), npib=nkey(pib);
+        if(npib==='піб'||npib==='пиб'||npib==='шаблон'||npib.indexOf('столбец')===0||!npib) continue;
+        var lastR=sh.getLastRow(), lastC=Math.min(sh.getLastColumn(),8);
+        if(lastR<2||lastC<2) continue;
+        var rows=Math.min(lastR,140);
+        var vals=sh.getRange(1,1,rows,lastC).getValues();
+        stat.tabs++;
+
+        var pcols={};
+        for(var c=1;c<lastC;c++){ var h=norm(vals[0][c]);
+          if(h.indexOf('верес')>=0) pcols[c]=PERIODS['09'];
+          else if(h.indexOf('січ')>=0||h.indexOf('сiч')>=0) pcols[c]=PERIODS['01'];
+          else if(h.indexOf('червен')>=0) pcols[c]=PERIODS['06']; }
+        if(!Object.keys(pcols).length){ pcols[1]=PERIODS['09']; pcols[2]=PERIODS['01']; pcols[3]=PERIODS['06']; }
+
+        var dev={}, meas={}, secIdx=0, itemIdx=0, lastText='', curOpened={}, stopped=false, nCrit=0, nMeasCells=0;
+        for(var rr=0; rr<rows && !stopped; rr++){
+          var raw=String(vals[rr][0]==null?'':vals[rr][0]).trim();
+          if(!raw) continue;
+          var nt=norm(raw);
+          if(MEAS_MAP[nt]){ var field=MEAS_MAP[nt];
+            for(var pc in pcols){ var mv=String(vals[rr][pc]==null?'':vals[rr][pc]).trim();
+              if(mv){ var pk=pcols[pc]; (meas[pk]=meas[pk]||{})[field]=mv; nMeasCells++; } }
+            continue; }
+          if(SECTION_MAP[nt]){ if(curOpened[nt]){ stopped=true; break; } curOpened[nt]=true; secIdx++; itemIdx=0; lastText=''; continue; }
+          if(isSkip(nt)) continue;
+          if(!secIdx) continue;
+          if(nt===lastText) continue;
+          lastText=nt; itemIdx++;
+          var critId=secIdx+'.'+itemIdx;
+          for(var pc2 in pcols){ var sv=score(vals[rr][pc2]);
+            if(sv){ var pk2=pcols[pc2]; (dev[pk2]=dev[pk2]||{criteria:{}}).criteria[critId]=sv; nCrit++; } }
+        }
+
+        if(nCrit===0 && nMeasCells===0){ stat.emptyTabs++; continue; }
+
+        var cand=byPib[npib]||[], pick=null, conflict=false;
+        if(cand.length===1) pick=cand[0];
+        else if(cand.length>1){ var byLoc=cand.filter(function(x){return x.loc===nkey(loc);});
+          if(byLoc.length===1) pick=byLoc[0]; else conflict=true; }
+
+        if(!pick){
+          if(conflict){ stat.conflict++; conflictList.push(pib+' @ '+loc+' ('+grp+') cand:'+cand.length); }
+          else { stat.unmatched++; unmatchedList.push(pib+' @ '+loc+' ('+grp+')'); }
+          continue;
+        }
+        stat.matched++;
+        stat.critWritten+=nCrit; stat.measWritten+=nMeasCells;
+        stat.rowsToWrite[pick.rowIndex]=true;
+
+        if(nCrit>0){
+          var exD=pendingDev[pick.rowIndex];
+          if(!exD){ try{ exD=JSON.parse(clVals[pick.rowIndex][ciDev]||'{}'); }catch(e){ exD={}; } pendingDev[pick.rowIndex]=exD; }
+          for(var pk3 in dev){ if(!exD[pk3]) exD[pk3]={criteria:{}}; if(!exD[pk3].criteria) exD[pk3].criteria={};
+            for(var cid in dev[pk3].criteria) exD[pk3].criteria[cid]=dev[pk3].criteria[cid];
+            exD[pk3].by='Імпорт'; exD[pk3].at=formatDate(new Date()); }
+        }
+        if(nMeasCells>0){
+          var exH=pendingHea[pick.rowIndex];
+          if(!exH){ try{ exH=JSON.parse(clVals[pick.rowIndex][ciHea]||'{}'); }catch(e){ exH={}; } pendingHea[pick.rowIndex]=exH; }
+          if(!exH.measurements) exH.measurements={};
+          for(var pk4 in meas){ var rec=exH.measurements[pk4]||{};
+            for(var f in meas[pk4]) rec[f]=meas[pk4][f]; rec.by='Імпорт'; rec.at=formatDate(new Date());
+            exH.measurements[pk4]=rec; }
+        }
+      }
+    }catch(e){ Logger.log('  x [%s/%s] %s',loc,grp,e&&e.message||e); }
+    finally{ if(conv.isTemp&&conv.ssId){ try{ DriveApp.getFileById(conv.ssId).setTrashed(true); }catch(e){} } }
+  }
+
+  var written=0;
+  if(doWrite){
+    for(var ri in pendingDev){ clSheet.getRange(Number(ri)+1, ciDev+1).setValue(JSON.stringify(pendingDev[ri])); written++; }
+    for(var ri2 in pendingHea){ clSheet.getRange(Number(ri2)+1, ciHea+1).setValue(JSON.stringify(pendingHea[ri2])); }
+  }
+
+  Logger.log('----- SUMMARY -----');
+  Logger.log('Files: %s (skipped: %s)', stat.files, stat.filesSkipped);
+  Logger.log('Child tabs: %s | matched: %s | NOT found: %s | conflicts: %s | empty: %s',
+    stat.tabs, stat.matched, stat.unmatched, stat.conflict, stat.emptyTabs);
+  Logger.log('Scores to write: %s | measures: %s | cards: %s', stat.critWritten, stat.measWritten, Object.keys(stat.rowsToWrite).length);
+  if(unmatchedList.length){ Logger.log('-- NOT found in CRM (%s): --', unmatchedList.length); unmatchedList.forEach(function(s){ Logger.log('  - '+s); }); }
+  if(conflictList.length){ Logger.log('-- CONFLICTS same name (%s): --', conflictList.length); conflictList.forEach(function(s){ Logger.log('  - '+s); }); }
+  Logger.log(doWrite ? ('WROTE cards: '+written) : 'DRY-RUN - nothing written. Review list above, then run runDevImport.');
+  Logger.log('=== DEV IMPORT done ===');
+  return {ok:true, write:doWrite, matched:stat.matched, unmatched:stat.unmatched, conflict:stat.conflict, crit:stat.critWritten, cards:Object.keys(stat.rowsToWrite).length};
+}
