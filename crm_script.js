@@ -12409,6 +12409,33 @@ function _devImportRun(doWrite){
 
   function norm(s){ return String(s==null?'':s).toLowerCase().replace(/\s+/g,' ').trim().replace(/[:;.,\-\s]+$/,''); }
   function nkey(s){ return String(s==null?'':s).toLowerCase().replace(/ /g,' ').replace(/\s+/g,' ').trim(); }
+  function nameTokens(s){
+    var t=nkey(s).replace(/[()\.,_]/g,' ').replace(/\s+/g,' ').trim();
+    var parts=t.split(' '), out=[];
+    for(var i=0;i<parts.length;i++){ var p=parts[i]; if(p.length>=2 && !/^\d+$/.test(p)) out.push(p); }
+    return out;
+  }
+  function editLE1(a,b){
+    if(a===b) return true;
+    var la=a.length, lb=b.length;
+    if(Math.abs(la-lb)>1) return false;
+    if(la===lb){ var d=0; for(var i=0;i<la;i++){ if(a[i]!==b[i]){ if(++d>1) return false; } } return true; }
+    var sh=la<lb?a:b, lo=la<lb?b:a, i2=0,j=0,sk=0;
+    while(i2<sh.length && j<lo.length){ if(sh[i2]===lo[j]){ i2++; j++; } else { if(++sk>1) return false; j++; } }
+    return true;
+  }
+  function tokMatch(S,C){
+    var usedS={},usedC={},exact=0;
+    for(var i=0;i<S.length;i++){ for(var j=0;j<C.length;j++){
+      if(!usedS['s'+i] && !usedC['c'+j] && S[i]===C[j]){ usedS['s'+i]=1; usedC['c'+j]=1; exact++; break; } }}
+    if(exact>=2) return true;
+    if(exact>=1){
+      for(var i3=0;i3<S.length;i3++){ if(usedS['s'+i3])continue;
+        for(var j3=0;j3<C.length;j3++){ if(usedC['c'+j3])continue;
+          if(S[i3].length>=4 && C[j3].length>=4 && editLE1(S[i3],C[j3])) return true; }}
+    }
+    return false;
+  }
   var SECTION_MAP={}; SECTIONS.forEach(function(s){ SECTION_MAP[norm(s)]=s; });
   var MEAS_MAP={}; MEAS.forEach(function(m){ MEAS_MAP[norm(m[0])]=m[1]; });
   var SKIP_SET={}; SKIP.forEach(function(s){ SKIP_SET[norm(s)]=true; });
@@ -12438,11 +12465,15 @@ function _devImportRun(doWrite){
   function colIdx(name){ for(var c=0;c<clHead.length;c++) if(String(clHead[c]).trim()===name) return c; return -1; }
   var ciName=colIdx('ПІБ дитини'), ciLoc=colIdx('Локація'), ciDev=colIdx('Розвиток (JSON)'), ciHea=colIdx("Здоров'я (JSON)");
   if(ciName<0||ciLoc<0||ciDev<0||ciHea<0){ Logger.log('cols not found: name=%s loc=%s dev=%s health=%s',ciName,ciLoc,ciDev,ciHea); return {ok:false}; }
-  var byPib={};
+
+  var refs=[], tokIndex={};
   for(var r=1;r<clVals.length;r++){
     if(!clVals[r][0]) continue;
-    var k=nkey(clVals[r][ciName]); if(!k) continue;
-    (byPib[k]=byPib[k]||[]).push({rowIndex:r,name:String(clVals[r][ciName]).trim(),loc:nkey(clVals[r][ciLoc]),id:clVals[r][0]});
+    var nm=String(clVals[r][ciName]||'').trim(); if(!nm) continue;
+    var toks=nameTokens(nm);
+    var idx=refs.length; refs.push({rowIndex:r,name:nm,loc:nkey(clVals[r][ciLoc]),tokens:toks});
+    var seen={};
+    for(var ti=0;ti<toks.length;ti++){ var tk=toks[ti]; if(seen[tk])continue; seen[tk]=1; (tokIndex[tk]=tokIndex[tk]||[]).push(idx); }
   }
 
   var master,mdata;
@@ -12450,7 +12481,7 @@ function _devImportRun(doWrite){
   catch(e){ Logger.log('master: %s',e&&e.message||e); return {ok:false}; }
 
   var stat={files:0,filesSkipped:0,tabs:0,matched:0,unmatched:0,conflict:0,emptyTabs:0,critWritten:0,measWritten:0,rowsToWrite:{}};
-  var unmatchedList=[], conflictList=[];
+  var unmatchedList=[], conflictList=[], matchedFuzzy=[];
   var pendingDev={}, pendingHea={};
 
   for(var mi=1; mi<mdata.length; mi++){
@@ -12498,16 +12529,23 @@ function _devImportRun(doWrite){
 
         if(nCrit===0 && nMeasCells===0){ stat.emptyTabs++; continue; }
 
-        var cand=byPib[npib]||[], pick=null, conflict=false;
-        if(cand.length===1) pick=cand[0];
-        else if(cand.length>1){ var byLoc=cand.filter(function(x){return x.loc===nkey(loc);});
+        var stoks=nameTokens(pib), matches=[], seenC={}, exactHit=false;
+        if(stoks.length>=2){
+          for(var s2=0;s2<stoks.length;s2++){ var lst=tokIndex[stoks[s2]]; if(!lst)continue;
+            for(var li=0;li<lst.length;li++){ var ci=lst[li]; if(seenC[ci])continue; seenC[ci]=1;
+              if(tokMatch(stoks, refs[ci].tokens)){ matches.push(refs[ci]); if(nkey(refs[ci].name)===npib) exactHit=true; } } }
+        }
+        var pick=null, conflict=false;
+        if(matches.length===1) pick=matches[0];
+        else if(matches.length>1){ var byLoc=matches.filter(function(x){return x.loc===nkey(loc);});
           if(byLoc.length===1) pick=byLoc[0]; else conflict=true; }
 
         if(!pick){
-          if(conflict){ stat.conflict++; conflictList.push(pib+' @ '+loc+' ('+grp+') cand:'+cand.length); }
+          if(conflict){ stat.conflict++; conflictList.push(pib+' @ '+loc+' ('+grp+') cand:'+matches.length); }
           else { stat.unmatched++; unmatchedList.push(pib+' @ '+loc+' ('+grp+')'); }
           continue;
         }
+        if(!exactHit) matchedFuzzy.push(pib+' -> '+pick.name+' @ '+loc);
         stat.matched++;
         stat.critWritten+=nCrit; stat.measWritten+=nMeasCells;
         stat.rowsToWrite[pick.rowIndex]=true;
@@ -12543,6 +12581,7 @@ function _devImportRun(doWrite){
   Logger.log('Child tabs: %s | matched: %s | NOT found: %s | conflicts: %s | empty: %s',
     stat.tabs, stat.matched, stat.unmatched, stat.conflict, stat.emptyTabs);
   Logger.log('Scores to write: %s | measures: %s | cards: %s', stat.critWritten, stat.measWritten, Object.keys(stat.rowsToWrite).length);
+  if(matchedFuzzy.length){ Logger.log('-- matched via smart (review, %s): --', matchedFuzzy.length); matchedFuzzy.forEach(function(s){ Logger.log('  ~ '+s); }); }
   if(unmatchedList.length){ Logger.log('-- NOT found in CRM (%s): --', unmatchedList.length); unmatchedList.forEach(function(s){ Logger.log('  - '+s); }); }
   if(conflictList.length){ Logger.log('-- CONFLICTS same name (%s): --', conflictList.length); conflictList.forEach(function(s){ Logger.log('  - '+s); }); }
   Logger.log(doWrite ? ('WROTE cards: '+written) : 'DRY-RUN - nothing written. Review list above, then run runDevImport.');
