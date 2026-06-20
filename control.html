@@ -989,5 +989,11 @@ if ('serviceWorker' in navigator) {
   document.addEventListener('click',function(e){ if(e.target.closest&&e.target.closest('.nav-item')) close(); });
 })();
 </script>
+<script>
+/* v6.62.1: auto-refresh fill status (focus + visibility + 60s) so stale reads self-correct */
+window.addEventListener('focus', function(){ try{ if(typeof loadFill==='function' && typeof FC!=='undefined' && !FC.loading) loadFill(); }catch(e){} });
+document.addEventListener('visibilitychange', function(){ try{ if(document.visibilityState==='visible' && typeof loadFill==='function' && typeof FC!=='undefined' && !FC.loading) loadFill(); }catch(e){} });
+setInterval(function(){ try{ if(document.visibilityState==='visible' && typeof loadFill==='function' && typeof FC!=='undefined' && !FC.loading) loadFill(); }catch(e){} }, 60000);
+</script>
 </body>
 </html>

@@ -4703,7 +4703,7 @@ function getTabel(loc,date){
 }
 function saveTabel(loc,date,data){
   localStorage.setItem(tabelKey(loc,date),JSON.stringify(data));
-  pushTabelToCloud(loc,date,data);  // v6.27.4: синхронізація табеля співробітників у хмару
+  queueTabelCloudSave(loc,date,data);  // v6.62.1: debounced+batched cloud save (reliable)
 }
 // v6.27.4: Табель співробітників раніше зберігався ЛИШЕ в localStorage → CFO на іншому
 // пристрої бачив нулі. Тепер синкаємо через існуючі saveAttendance/getAttendance (лист 'Табель')
@@ -4721,6 +4721,24 @@ function pushTabelToCloud(loc,date,data){
     fetch(url,{method:'POST',mode:'no-cors',redirect:'follow',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'saveAttendance',records:recs})}).catch(function(){});
   }catch(e){ console.warn('pushTabelToCloud',e); }
 }
+// v6.62.1: queue+debounce timesheet cloud-save (mirror kids flushAttCloudSave).
+//   One batched no-cors write per location instead of one per cell -> less contention,
+//   so the whole timesheet reliably lands. Plus flush on page close.
+var _tabelSaveTimer=null, _tabelPending={};
+function queueTabelCloudSave(loc,date,data){
+  _tabelPending[loc+'||'+date]={loc:loc,date:date,data:data};
+  if(_tabelSaveTimer) clearTimeout(_tabelSaveTimer);
+  _tabelSaveTimer=setTimeout(flushTabelCloudSave,1200);
+}
+function flushTabelCloudSave(){
+  if(_tabelSaveTimer){ clearTimeout(_tabelSaveTimer); _tabelSaveTimer=null; }
+  var ks=Object.keys(_tabelPending); if(!ks.length) return;
+  var pend=_tabelPending; _tabelPending={};
+  ks.forEach(function(k){ var pp=pend[k]; pushTabelToCloud(pp.loc,pp.date,pp.data); });
+}
+window.addEventListener('beforeunload',function(){ try{ flushTabelCloudSave(); }catch(e){} });
+window.addEventListener('pagehide',function(){ try{ flushTabelCloudSave(); }catch(e){} });
+
 // Підвантаження табеля співробітників з хмари (тільки рядки STAFF::) у localStorage.
 function loadTabelFromCloud(loc,from,to,onDone){
   var url=authScriptUrl(); if(!url||!loc){ if(onDone)onDone('no-url'); return; }
