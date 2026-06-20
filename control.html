@@ -719,6 +719,9 @@ function applyRoleVisibility(){
     var visible = (allowed === 'all') || (Array.isArray(allowed) && allowed.indexOf(perm) >= 0);
     el.style.display = visible ? '' : 'none';
   });
+  var _isNetFCRC = (typeof isNetworkRole === 'function' && isNetworkRole(role));
+  var _fcEl = document.getElementById('navFillControl'); if (_fcEl) _fcEl.style.display = _isNetFCRC ? '' : 'none';
+  var _rcEl = document.getElementById('navReconcile');   if (_rcEl) _rcEl.style.display = _isNetFCRC ? '' : 'none';
   document.querySelectorAll('[data-section]').forEach(function(section){
     var sectionName = section.dataset.section;
     var items = document.querySelectorAll('[data-permission][data-parent="' + sectionName + '"]');
