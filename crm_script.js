@@ -6115,20 +6115,51 @@ function _fillNonWorking(dateISO){
 
 // Очікувані групи/діти/персонал (спільне для single-day і range).
 // expGroups[loc]={group->activeKids}; expKids[loc]=DISTINCT діти; expStaff[loc]=персонал(−предметники).
+// v6.64.2: швидке читання Табеля — лише останні ~50k рядків (cols A-H),
+// з відкатом на повне читання, якщо запит старший за вікно.
+function _fillReadAttendance(attSh, tz, neededFrom){
+  if (!attSh) return [];
+  var lastRow = attSh.getLastRow();
+  if (lastRow < 2) return [];
+  var cap = 50000;
+  var startRow = Math.max(2, lastRow - cap + 1);
+  var av = attSh.getRange(startRow, 1, lastRow - startRow + 1, 8).getValues();
+  if (startRow > 2 && neededFrom){
+    var earliest = null;
+    for (var k = 0; k < av.length; k++){
+      var dd = _fillNormD(av[k][0], tz);
+      if (dd && (earliest === null || dd < earliest)) earliest = dd;
+    }
+    if (earliest && earliest > neededFrom){
+      av = attSh.getRange(2, 1, lastRow - 1, 8).getValues();
+    }
+  }
+  return av;
+}
+
 function _fillExpected(){
   var expGroups = {}, expKids = {}, expStaff = {};
-  var crm = getClients();
-  if (crm.ok){
-    (crm.data || []).forEach(function(c){
-      var st = String(c['Статус'] || '').trim();
-      if (st !== 'active' && st !== 'adaptation') return;
-      var loc = String(c['Локація'] || '').trim();
-      if (!loc) return;
-      var grp = String(c['Група'] || '').trim() || '—';
-      (expGroups[loc] = expGroups[loc] || {});
-      expGroups[loc][grp] = (expGroups[loc][grp] || 0) + 1;
-      expKids[loc] = (expKids[loc] || 0) + 1;
-    });
+// v6.64.1: читаємо лише потрібні колонки клієнтів (без JSON Розвиток/Здоров'я) — інакше getFillStatus читає мегабайти JSON і тормозить.
+  var _cs = getCRMSpreadsheet().getSheetByName(SHEET_CLIENTS);
+  if (_cs && _cs.getLastRow() >= 2){
+    var _hdr = _cs.getRange(1, 1, 1, _cs.getLastColumn()).getValues()[0];
+    var _ci = function(n){ for (var i = 0; i < _hdr.length; i++){ if (String(_hdr[i]).trim() === n) return i; } return -1; };
+    var _iId = _ci('ID'), _iSt = _ci('Статус'), _iLoc = _ci('Локація'), _iGr = _ci('Група');
+    if (_iSt >= 0 && _iLoc >= 0){
+      var _maxC = Math.max(_iId, _iSt, _iLoc, _iGr) + 1;
+      var _cv = _cs.getRange(1, 1, _cs.getLastRow(), _maxC).getValues();
+      for (var _r = 1; _r < _cv.length; _r++){
+        if (_iId >= 0 && !_cv[_r][_iId]) continue;
+        var st = String(_cv[_r][_iSt] || '').trim();
+        if (st !== 'active' && st !== 'adaptation') continue;
+        var loc = String(_cv[_r][_iLoc] || '').trim();
+        if (!loc) continue;
+        var grp = (_iGr >= 0 ? String(_cv[_r][_iGr] || '').trim() : '') || '—';
+        (expGroups[loc] = expGroups[loc] || {});
+        expGroups[loc][grp] = (expGroups[loc][grp] || 0) + 1;
+        expKids[loc] = (expKids[loc] || 0) + 1;
+      }
+    }
   }
   var hrSh = SpreadsheetApp.openById(HR_SHEET_ID).getSheetByName(HR_TAB_NAME);
   if (hrSh){
@@ -6179,8 +6210,8 @@ function _getFillStatusRange(from, to){
   var byDate = {};
   var attSh = ss.getSheetByName(SHEET_ATTENDANCE);
   if (attSh){
-    var av = attSh.getDataRange().getValues();
-    for (var r = 1; r < av.length; r++){
+    var av = _fillReadAttendance(attSh, tz, from);
+    for (var r = 0; r < av.length; r++){
       var row = av[r];
       var d = _fillNormD(row[0], tz);
       if (!d || d < from || d > to) continue;          // ISO-рядки → лексикографічне порівняння
@@ -6203,8 +6234,9 @@ function _getFillStatusRange(from, to){
   var locList = sortByLocationOrder(Object.keys(allLocs));
 
   // Робочих днів у діапазоні (однаково для всіх локацій).
+  var _todayISO = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
   var workingDays = 0;
-  dayList.forEach(function(d){ if (!_fillNonWorking(d).nonWorking) workingDays++; });
+  dayList.forEach(function(d){ if (d <= _todayISO && !_fillNonWorking(d).nonWorking) workingDays++; });
 
   function rs(filled, working, partial){
     if (working === 0) return 'gray';
@@ -6219,13 +6251,14 @@ function _getFillStatusRange(from, to){
     var cF = 0, cP = 0, cE = 0, tF = 0, tP = 0, tE = 0;
     var ckExp = exp.expKids[loc] || 0, sExp = exp.expStaff[loc] || 0;
     var byDay = dayList.map(function(d){
+      if (d > _todayISO) return {date:d, future:true, childrenStatus:'gray', timesheetStatus:'gray'};
       if (_fillNonWorking(d).nonWorking) return {date:d, nw:true, childrenStatus:'gray', timesheetStatus:'gray'};
       var cell = byDate[d] && byDate[d][loc];
       var ckMarked = cell ? Object.keys(cell.kidIds).length : 0;
-      var cs = ckMarked === 0 ? 'red' : (ckExp > 0 && ckMarked >= ckExp ? 'green' : 'yellow');
+      var cs = ckMarked === 0 ? 'red' : 'green';
       if (cs === 'green') cF++; else if (cs === 'yellow') cP++; else cE++;
       var smk = cell ? Object.keys(cell.staffIds).length : 0;
-      var ts = smk === 0 ? 'red' : (sExp > 0 && smk >= sExp ? 'green' : 'yellow');
+      var ts = smk === 0 ? 'red' : 'green';
       if (ts === 'green') tF++; else if (ts === 'yellow') tP++; else tE++;
       return {date:d, nw:false, childrenStatus:cs, timesheetStatus:ts};
     });
@@ -6274,8 +6307,8 @@ function getFillStatus(params){
     var kidWho = {};         // v6.51.4: loc -> {set:{}, cnt, bestKey, bestBy, bestAt} (хто+коли відмітив дітей)
     var staffMarked = {};    // loc -> {ids:{}, by, at}
     if (attSh){
-      var av = attSh.getDataRange().getValues();
-      for (var r = 1; r < av.length; r++){
+      var av = _fillReadAttendance(attSh, tz, date);
+      for (var r = 0; r < av.length; r++){
         var row = av[r];
         if (_fillNormD(row[0], tz) !== date) continue;
         var id = String(row[1] || '').trim();
@@ -6316,7 +6349,7 @@ function getFillStatus(params){
       // v6.51.1: location-level відвідуваність — DISTINCT childId (не сума по групах).
       var ckExp = expKids[loc] || 0;
       var ckMarked = markedKidIds[loc] ? Object.keys(markedKidIds[loc]).length : 0;
-      var ckStatus = ckMarked === 0 ? 'red' : (ckExp > 0 && ckMarked >= ckExp ? 'green' : 'yellow');
+      var ckStatus = ckMarked === 0 ? 'red' : 'green';
       summary.childrenTotal++;
       if (ckStatus === 'green') summary.childrenGreen++;
 
@@ -6327,7 +6360,7 @@ function getFillStatus(params){
         var expected = (expGroups[loc] && expGroups[loc][g]) || 0;
         var mk = kidMarked[loc] && kidMarked[loc][g];
         var marked = mk ? Object.keys(mk.ids).length : 0;
-        var status = marked === 0 ? 'red' : (expected > 0 && marked >= expected ? 'green' : 'yellow');
+        var status = marked === 0 ? 'red' : 'green';
         summary.groupsTotal++;
         if (status === 'green') summary.groupsGreen++;
         if (status === 'red') summary.red++;
@@ -6337,7 +6370,7 @@ function getFillStatus(params){
       var expS = expStaff[loc] || 0;
       var sm = staffMarked[loc];
       var smk = sm ? Object.keys(sm.ids).length : 0;
-      var tStatus = smk === 0 ? 'red' : (expS > 0 && smk >= expS ? 'green' : 'yellow');
+      var tStatus = smk === 0 ? 'red' : 'green';
       summary.timesheetTotal++;
       if (tStatus === 'green') summary.timesheetGreen++;
       if (tStatus === 'red') summary.red++;
@@ -12587,4 +12620,25 @@ function _devImportRun(doWrite){
   Logger.log(doWrite ? ('WROTE cards: '+written) : 'DRY-RUN - nothing written. Review list above, then run runDevImport.');
   Logger.log('=== DEV IMPORT done ===');
   return {ok:true, write:doWrite, matched:stat.matched, unmatched:stat.unmatched, conflict:stat.conflict, crit:stat.critWritten, cards:Object.keys(stat.rowsToWrite).length};
+}
+
+
+// v6.64.2: діагностика швидкості — запустити вручну, дивитись Execution log.
+function diagFillPerf(){
+  var ss = getCRMSpreadsheet();
+  var tz = ss.getSpreadsheetTimeZone() || 'Europe/Kiev';
+  var attSh = ss.getSheetByName(SHEET_ATTENDANCE);
+  Logger.log('Tabel rows=%s cols=%s', attSh ? attSh.getLastRow() : 0, attSh ? attSh.getLastColumn() : 0);
+  var t0 = new Date().getTime();
+  _fillExpected();
+  var t1 = new Date().getTime();
+  Logger.log('_fillExpected (HR+clients): %s ms', t1 - t0);
+  var today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
+  var av = _fillReadAttendance(attSh, tz, today);
+  var t2 = new Date().getTime();
+  Logger.log('attendance CAPPED read: %s rows, %s ms', av.length, t2 - t1);
+  var full = attSh ? attSh.getDataRange().getValues() : [];
+  var t3 = new Date().getTime();
+  Logger.log('attendance FULL read: %s rows, %s ms', full.length, t3 - t2);
+  Logger.log('TOTAL: %s ms', t3 - t0);
 }
