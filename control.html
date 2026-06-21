@@ -234,6 +234,14 @@ select,input{font-family:inherit}
         <span class="nav-badge hidden" id="tasksBadge">0</span>
       </div>
 
+      <div class="nav-item active" id="navFillControl" style="display:none"
+           onclick="window.location.href='control.html'">
+        <span class="ni">📋</span> Контроль заповнення
+      </div>
+      <div class="nav-item" id="navReconcile" style="display:none"
+           onclick="window.location.href='reconcile.html'">
+        <span class="ni">💳</span> Звірка платежів
+      </div>
       <div class="nav-sec" data-section="crm">👶 КЛІЄНТИ CRM</div>
       <div class="nav-item" data-permission="clients_list" data-parent="crm" data-perm-page="clients"
            onclick="goPerm('clients_list')">
@@ -312,14 +320,6 @@ select,input{font-family:inherit}
       <div class="nav-item" id="navInvReport" data-parent="finance" style="display:none"
            onclick="window.location.href='invoice_report.html'">
         <span class="ni">📊</span> Звіт розсилок
-      </div>
-      <div class="nav-item active" id="navFillControl" data-parent="finance" style="display:none"
-           onclick="window.location.href='control.html'">
-        <span class="ni">📋</span> Контроль заповнення
-      </div>
-      <div class="nav-item" id="navReconcile" data-parent="finance" style="display:none"
-           onclick="window.location.href='reconcile.html'">
-        <span class="ni">💳</span> Звірка платежів
       </div>
       <div class="nav-item" data-permission="predmetnyky" data-parent="finance" data-perm-page="predmetnyky"
            onclick="window.location.href='predmetnyky.html'">
