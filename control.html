@@ -794,7 +794,7 @@ function setPeriod(p){
 }
 
 async function loadFill(silent){
-  if (FC.loading) return;
+  if (FC._ctl){ try { FC._ctl._superseded = true; FC._ctl.abort(); } catch(_a){} }
   FC.loading = true;
   FC.date = $('fcDate').value || _todayISO();
   if (!silent){
@@ -818,21 +818,26 @@ async function loadFill(silent){
   }
   $('meta').textContent = metaTxt;
 
+  var _ctl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+  FC._ctl = _ctl;
+  var _to = setTimeout(function(){ try { if (_ctl){ _ctl._timedOut = true; _ctl.abort(); } } catch(_e){} }, 35000);
   try {
-    var r = await fetch(url, {redirect: 'follow'});
+    var r = await fetch(url, {redirect: 'follow', signal: _ctl ? _ctl.signal : undefined});
     if (!r.ok) throw new Error('HTTP ' + r.status);
     var j = await r.json();
     if (!j.ok) throw new Error(j.error || 'failed');
     FC.data = j;
     if (j.mode === 'range') renderFillRange(); else renderFill();
   } catch(e){
-    if (!silent){
+    if (_ctl && _ctl._superseded){ /* replaced by newer load */ }
+    else if (!silent){
       FC.data = null;
-      var _msg = (e && e.name === 'AbortError') ? 'Сервер відповідає повільно — натисніть «Оновити».' : ('Помилка: ' + String(e && e.message || e));
+      var _msg = (_ctl && _ctl._timedOut) ? 'Сервер відповідає повільно — натисніть «Оновити».' : ('Помилка: ' + String(e && e.message || e));
       $('fcWrap').innerHTML = '<div class="inv-empty">⚠️ ' + escapeHtml(_msg) + '</div>';
     }
   } finally {
-    FC.loading = false;
+    clearTimeout(_to);
+    if (FC._ctl === _ctl){ FC._ctl = null; FC.loading = false; }
   }
 }
 
