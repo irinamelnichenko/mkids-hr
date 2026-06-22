@@ -5076,6 +5076,35 @@ function testExportVolkov(){
 // Викладач якого місяця працював → Budget колонка наступного місяця
 // (зарплату нараховують у наступному місяці після того як викладач відпрацював)
 // ═══════════════════════════════════════════════════════════════════════════
+// v6.66: safe salary activity<->row matcher (does NOT touch _journalNormName / journal keys)
+function _salaryFold2(x){
+  return String(x || '')
+    .replace(/['\u02BC`\u2018\u2019]/g, '')
+    .replace(/\u0456/g, '\u0438')
+    .replace(/\u0457/g, '\u0438')
+    .replace(/\u0454/g, '\u0435')
+    .replace(/\u0451/g, '\u0435');
+}
+var SALARY_ALIASES = {
+  '\u0430\u043d\u0433\u043b\u0456\u0439\u0441\u044c\u043a\u0430\u0433\u0440\u0443\u043f\u043e\u0432\u0456': ['\u0430\u043d\u0433\u043b\u0456\u0439\u0441\u044c\u043a\u0430', '\u0430\u043d\u0433\u043b\u0456\u0439\u0441\u044c\u043a\u0430\u043c\u043e\u0432\u0430', 'englishtoschool', 'english'],
+  '\u0456\u043d\u0434\u0438\u0432\u0456\u0434\u0443\u0430\u043b\u044c\u043d\u0456\u0437\u043b\u043e\u0433\u043e\u043f\u0435\u0434\u043e\u043c': ['\u043b\u043e\u0433\u043e\u043f\u0435\u0434']
+};
+function _salaryMatchRow(lname, actRowByLname, foldedRowMap){
+  if (actRowByLname[lname] > 0) return actRowByLname[lname];
+  var f = _salaryFold2(lname);
+  if (foldedRowMap[f] > 0) return foldedRowMap[f];
+  var aliases = SALARY_ALIASES[lname];
+  if (aliases){
+    for (var i = 0; i < aliases.length; i++){
+      var al = aliases[i];
+      if (actRowByLname[al] > 0) return actRowByLname[al];
+      var af = _salaryFold2(al);
+      if (foldedRowMap[af] > 0) return foldedRowMap[af];
+    }
+  }
+  return -1;
+}
+
 function exportToSalaryExtras(params){
   try {
     var loc = String(params.loc || '').trim();
@@ -5214,6 +5243,11 @@ function exportToSalaryExtras(params){
       }
     });
     Logger.log('[exportToSalaryExtras] actRowByLname (тільки extras-секція): %s', JSON.stringify(actRowByLname));
+    var _salaryFoldedRowMap = {};
+    Object.keys(actRowByLname).forEach(function(k){
+      var ff = _salaryFold2(k);
+      if (!_salaryFoldedRowMap.hasOwnProperty(ff)) _salaryFoldedRowMap[ff] = actRowByLname[k];
+    });
 
     // === РОЗУМНЕ ПЕРЕЗАПИСУВАННЯ через журнал (kind=salary) ===
     // baseValue = currentCell - lastWritten; newCell = baseValue + newFact.
@@ -5235,7 +5269,7 @@ function exportToSalaryExtras(params){
     // інакше якщо викладача прибрали з активних, попередня сума не очиститься.
     allActive.forEach(function(a){
       var lname = _journalNormName(a.name);
-      var rowFound = actRowByLname[lname] || -1;
+      var rowFound = _salaryMatchRow(lname, actRowByLname, _salaryFoldedRowMap);
       if (rowFound <= 0){
         // Активність є у каталозі, але рядка у Salary-листі для неї нема.
         // Записувати ні куди. Лиш діагностика.
