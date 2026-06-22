@@ -5744,7 +5744,7 @@ function generateInvoicePDF(opts){
     total = Number(ch.extrasSum) || 0;
   } else {
     var sum = _invoiceSumFromYearly(childName, loc, month, type);
-    lines.push({name: 'Оплата за навчання ' + childName, qty: 1, price: sum, sum: sum});
+    lines.push({name: 'Оплата за навчання', qty: 1, price: sum, sum: sum});
     total = sum;
     // v6.11.26: вступний внесок — план у картці = джерело правди. Додаємо рядки, де
     // paid!==true і дата платежу <= останній день поточного місяця (вкл. прострочені).
@@ -5756,15 +5756,23 @@ function generateInvoicePDF(opts){
       if (!iso || iso > cutoffISO) return;            // невалідна або майбутня дата → пропустити
       var amt = Number(p.amount) || 0;
       if (amt <= 0) return;
-      lines.push({name: 'Вступний внесок ' + childName, qty: 1, price: amt, sum: amt});
+      lines.push({name: 'Вступний внесок', qty: 1, price: amt, sum: amt});
       total += amt;
     });
   }
 
   var invoiceNumber = _getNextInvoiceNumber(req.edrpou, req.name);
 
+  var _mLabel = (MONTHS_CAL[month - 1] || '').toLowerCase() + ' ' + year;
+  var _title = (type === 'extras')
+    ? ('Оплата за організацію освітніх послуг та додаткових занять (гуртків) ' + childName + ', ' + _mLabel)
+    : ('Оплата за навчання ' + childName + ', ' + _mLabel);
+  var _dueText = String(opts.dueText || '').trim() || 'Оплата до 5 числа поточного місяця';
+
   var html = _buildInvoiceHtml({
     req: req,
+    title: _title,
+    dueText: _dueText,
     invoiceNumber: invoiceNumber,
     invoiceDate: invoiceDate,
     buyerName: buyerDisplay,
@@ -6642,10 +6650,7 @@ function _buildInvoiceHtml(d){
 '  .total { text-align:right; font-weight:700; font-size:13px; margin-top:10px; }',
 '  .summary { margin-top:8px; line-height:1.6; }',
 '</style></head><body>',
-'  <div class="head">',
-'    <div>' + logoHtml + '</div>',
-'  </div>',
-'  <h1>Рахунок на оплату №' + d.invoiceNumber + ' від ' + d.invoiceDate + '</h1>',
+'  <h1>' + d.title + '</h1>',
 '  <div class="party">',
 '    <div><b>Постачальник:</b> ' + req.name + '</div>',
 '    <div>ЄДРПОУ: ' + req.edrpou + '</div>',
@@ -6662,6 +6667,7 @@ rowsHtml,
 '  <div class="total">Разом: ' + totalStr + ' грн.</div>',
 '  <div class="summary">Всього найменувань ' + lineCount + ', на суму ' + totalStr + ' грн.</div>',
 '  <div class="summary"><b>Сума прописом:</b> ' + d.sumWords + '</div>',
+(d.dueText ? '  <div class="summary" style="margin-top:12px"><b>Термін оплати:</b> ' + d.dueText + '</div>' : ''),
 '</body></html>'
   ].join('\n');
 }
