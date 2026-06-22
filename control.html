@@ -351,9 +351,9 @@ select,input{font-family:inherit}
     </div>
     <div class="hd-ctrl">
       <div class="fc-period" id="fcPeriod">
-        <button data-p="day" class="active" onclick="setPeriod('day')">День</button>
+        <button data-p="day" onclick="setPeriod('day')">День</button>
         <button data-p="week" onclick="setPeriod('week')">Тиждень</button>
-        <button data-p="month" onclick="setPeriod('month')">Місяць</button>
+        <button data-p="month" class="active" onclick="setPeriod('month')">Місяць</button>
       </div>
       <input type="date" id="fcDate" class="month-sel">
       <button id="refreshBtn" class="btn btn-primary" onclick="loadFill()">🔄 Оновити</button>
@@ -759,7 +759,7 @@ function hasPerm(p){
 //     (задвоєні суфікс-багом); колонки діти/табель показують хто+коли.
 //   • Тиждень/Місяць (range) — X/Y днів по локації + інлайн смужка по днях.
 // ═══════════════════════════════════════════════════════════════
-var FC = { date: '', period: 'day', data: null, loading: false };
+var FC = { date: '', period: 'month', data: null, loading: false };
 var _FC_ICON = {green:'🟢', yellow:'🟡', red:'🔴', gray:'⚪'};
 function fcStat(st, txt, dim){
   var s = dim ? 'gray' : (st || 'gray');
