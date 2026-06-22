@@ -483,7 +483,11 @@ function doLogout(){
 async function loadLocationsForSelector(){
   try {
     var url = CFG.SCRIPT_URL + '?action=getLocations';
-    var r = await fetch(url, {redirect: 'follow'});
+    var _ctl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    var _to = setTimeout(function(){ try { if (_ctl) _ctl.abort(); } catch(_e){} }, 35000);
+    var r;
+    try { r = await fetch(url, {redirect: 'follow', signal: _ctl ? _ctl.signal : undefined}); }
+    finally { clearTimeout(_to); }
     if (!r.ok) throw new Error('HTTP ' + r.status);
     var j = await r.json();
     if (!j.ok) throw new Error(j.error || 'getLocations failed');
@@ -789,13 +793,15 @@ function setPeriod(p){
   loadFill();
 }
 
-async function loadFill(){
+async function loadFill(silent){
   if (FC.loading) return;
   FC.loading = true;
   FC.date = $('fcDate').value || _todayISO();
-  $('fcBanner').innerHTML = '';
-  $('fcChips').innerHTML = '';
-  $('fcWrap').innerHTML = '<div class="inv-loading">⏳ Завантаження…</div>';
+  if (!silent){
+    $('fcBanner').innerHTML = '';
+    $('fcChips').innerHTML = '';
+    $('fcWrap').innerHTML = '<div class="inv-loading">⏳ Завантаження…</div>';
+  }
 
   var url, metaTxt;
   if (FC.period === 'week'){
@@ -820,8 +826,11 @@ async function loadFill(){
     FC.data = j;
     if (j.mode === 'range') renderFillRange(); else renderFill();
   } catch(e){
-    FC.data = null;
-    $('fcWrap').innerHTML = '<div class="inv-empty">❌ Помилка: ' + escapeHtml(String(e && e.message || e)) + '</div>';
+    if (!silent){
+      FC.data = null;
+      var _msg = (e && e.name === 'AbortError') ? 'Сервер відповідає повільно — натисніть «Оновити».' : ('Помилка: ' + String(e && e.message || e));
+      $('fcWrap').innerHTML = '<div class="inv-empty">⚠️ ' + escapeHtml(_msg) + '</div>';
+    }
   } finally {
     FC.loading = false;
   }
@@ -938,7 +947,7 @@ function renderFillRange(){
 
   FC.date = _todayISO();
   $('fcDate').value = FC.date;
-  $('fcDate').addEventListener('change', loadFill);
+  $('fcDate').addEventListener('change', function(){ loadFill(); });
   $('meta').textContent = 'Дата: ' + FC.date;
   $('loadBox').classList.add('hidden');
   $('content').classList.remove('hidden');
@@ -991,9 +1000,9 @@ if ('serviceWorker' in navigator) {
 </script>
 <script>
 /* v6.62.1: auto-refresh fill status (focus + visibility + 60s) so stale reads self-correct */
-window.addEventListener('focus', function(){ try{ if(typeof loadFill==='function' && typeof FC!=='undefined' && !FC.loading) loadFill(); }catch(e){} });
-document.addEventListener('visibilitychange', function(){ try{ if(document.visibilityState==='visible' && typeof loadFill==='function' && typeof FC!=='undefined' && !FC.loading) loadFill(); }catch(e){} });
-setInterval(function(){ try{ if(document.visibilityState==='visible' && typeof loadFill==='function' && typeof FC!=='undefined' && !FC.loading) loadFill(); }catch(e){} }, 60000);
+window.addEventListener('focus', function(){ try{ if(typeof loadFill==='function' && typeof FC!=='undefined' && !FC.loading) loadFill(true); }catch(e){} });
+document.addEventListener('visibilitychange', function(){ try{ if(document.visibilityState==='visible' && typeof loadFill==='function' && typeof FC!=='undefined' && !FC.loading) loadFill(true); }catch(e){} });
+setInterval(function(){ try{ if(document.visibilityState==='visible' && typeof loadFill==='function' && typeof FC!=='undefined' && !FC.loading) loadFill(true); }catch(e){} }, 60000);
 </script>
 </body>
 </html>
