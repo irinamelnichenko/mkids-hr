@@ -3630,6 +3630,14 @@ function addActivity(data){
     ];
     if (!row[1]) return {ok: false, error: 'Поле "Локація" обовʼязкове'};
     if (!row[2]) return {ok: false, error: 'Поле "Назва заняття" обовʼязкове'};
+    var _tz = sh.getParent().getSpreadsheetTimeZone() || 'Europe/Kiev';
+    var _key = _attDupKey(row[1], row[4], row[5], _tz);
+    var _ex = sh.getDataRange().getValues();
+    for (var _i = 1; _i < _ex.length; _i++){
+      if (_attDupKey(_ex[_i][1], _ex[_i][4], _ex[_i][5], _tz) === _key){
+        return {ok: true, id: _ex[_i][0], dup: true};
+      }
+    }
     sh.appendRow(row);
     return {ok: true, id: id};
   } catch(e){
@@ -3976,6 +3984,19 @@ function diagAttendanceMarksRecent(){
   }
 }
 
+// v6.65: dedup guard helpers for extras attendance (prevents double rows -> double pay)
+function _attDateISO(v, tz){
+  if (v instanceof Date) return Utilities.formatDate(v, tz, 'yyyy-MM-dd');
+  var sx = String(v || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(sx)) return sx;
+  var d = new Date(sx);
+  if (!isNaN(d.getTime())) return Utilities.formatDate(d, tz, 'yyyy-MM-dd');
+  return sx;
+}
+function _attDupKey(date, child, actId, tz){
+  return _attDateISO(date, tz) + '|' + String(child || '').trim().toLowerCase().replace(/\s+/g,' ') + '|' + (Number(actId) || 0);
+}
+
 function addAttendanceMark(data){
   try {
     var sh = _getAttendanceSheet(true);
@@ -4035,6 +4056,12 @@ function bulkAttendanceMarks(body){
     var results = [];
     var rows = [];
     var now = new Date();
+    var _tz = sh.getParent().getSpreadsheetTimeZone() || 'Europe/Kiev';
+    var _seen = {};
+    var _exVals = sh.getDataRange().getValues();
+    for (var _e = 1; _e < _exVals.length; _e++){
+      _seen[_attDupKey(_exVals[_e][1], _exVals[_e][4], _exVals[_e][5], _tz)] = true;
+    }
     for (var i = 0; i < items.length; i++){
       var d = items[i] || {};
       var date  = String(d.date  || '').trim();
@@ -4044,6 +4071,9 @@ function bulkAttendanceMarks(body){
         results.push({ok: false, error: 'Поля Дата/Дитина/id_заняття обовʼязкові'});
         continue;
       }
+      var _k = _attDupKey(date, child, actId, _tz);
+      if (_seen[_k]){ results.push({ok: true, dup: true}); continue; }
+      _seen[_k] = true;
       var id = nextId++;
       rows.push([
         id, date,
