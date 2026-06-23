@@ -4565,16 +4565,20 @@ function _surnameKey(s){
 // Витяг платника за дискримінатором коду контрагента:
 //   10 цифр → фізособа (платник = «Назва контрагента»);
 //    8 цифр → юр/банк → шукаємо «Платник <ПІБ>» у призначенні (тягнемо повне ПІБ).
+function _fixHomoglyph(s){
+  return String(s || '').replace(/i/g, 'і').replace(/I/g, 'І');
+}
 function _extractPayer(rec){
   var code = String(rec.edrpou || '').replace(/\D/g, '');
-  if (code.length === 10) return { raw: trim(rec.counterparty), via: 'individual' };
-  var purpose = String(rec.purpose || '');
+  var cp = _fixHomoglyph(rec.counterparty);
+  if (code.length === 10) return { raw: trim(cp), via: 'individual' };
+  var purpose = _fixHomoglyph(String(rec.purpose || ''));
   // Прізвище (з великої) + до 2 наступних токенів (ім'я/по-батькові/ініціали з крапками).
   var m = purpose.match(/платник[\s:]*([А-ЯІЇЄҐ][а-яіїєґ'’ʼ`\-]+(?:\s+[А-ЯІЇЄҐ][а-яіїєґ'’ʼ`.]*){0,2})/i);
   if (m) return { raw: m[1].trim(), via: 'bank' };
   var v = purpose.match(/[Вв]ід\s+([А-ЯІЇЄҐ][а-яіїєґ'’ʼ`\-]+(?:\s+[А-ЯІЇЄҐ][а-яіїєґ'’ʼ`.]*){0,2})/);
   if (v) return { raw: v[1].trim(), via: 'bank-vid' };
-  return { raw: trim(rec.counterparty), via: 'bank-unparsed' };
+  return { raw: trim(cp), via: 'bank-unparsed' };
 }
 
 // Індекс «ПРІЗВИЩЕ → [діти]» у межах локації. Три джерела прізвища:
