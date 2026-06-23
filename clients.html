@@ -1024,6 +1024,7 @@ var S = {
   // v6.30 — об'єднаний архів клієнтів (розірвані + випускники)
   archiveTab: 'all',   // 'all'|'terminated'|'graduated'
   archSort:   'date',  // 'date'|'loc'
+  sortAge:    '',      // ''|'old'|'young'
   termLoc:    '',      // фільтр локації
   // v6.30.1 — точний вибір періоду: тип + конкретне значення
   archPeriodType: 'month',  // 'month'|'quarter'|'year'|'all'
@@ -2470,6 +2471,7 @@ function calcStats(locsArr, groupFilter){
 }
 
 function toggleOnlyDebtors(){ S.onlyDebtors=!S.onlyDebtors; renderClients(); }
+function toggleAgeSort(){ S.sortAge = S.sortAge==='' ? 'old' : (S.sortAge==='old' ? 'young' : ''); renderClients(); }
 
 function _ageCell(ymd){
   var s=normalizeDateYMD(ymd||'');
@@ -2649,6 +2651,16 @@ function renderClients(){
         if(searching&&ch.name.toLowerCase().indexOf(S.searchQ.trim().toLowerCase())<0) return false;
         return true;
       });
+      if(S.sortAge){
+        children=children.slice().sort(function(a,b){
+          var ba=normalizeDateYMD(a.bday||(S.crm[a.id]||{}).bday||'');
+          var bb=normalizeDateYMD(b.bday||(S.crm[b.id]||{}).bday||'');
+          var va=/^\d{4}-\d{2}-\d{2}$/.test(ba), vb=/^\d{4}-\d{2}-\d{2}$/.test(bb);
+          if(!va&&!vb) return 0; if(!va) return 1; if(!vb) return -1;
+          if(ba===bb) return 0;
+          return S.sortAge==='old' ? (ba<bb?-1:1) : (ba<bb?1:-1);
+        });
+      }
       if(!children.length) return;
       totalGroupsRendered++;
 
@@ -2665,7 +2677,7 @@ function renderClients(){
         +'</span>'
         +'</span></div>'
         +'<div class="tbl-wrap"><table><thead><tr>'
-        +'<th>Ім\'я дитини</th><th>Вік</th><th data-permission="finance">Статус оплати</th>'
+        +'<th>Ім\'я дитини</th><th onclick="toggleAgeSort()" style="cursor:pointer;user-select:none" title="сортування за віком">Вік'+(S.sortAge==='old'?' ↑':S.sortAge==='young'?' ↓':' ⇵')+'</th><th data-permission="finance">Статус оплати</th>'
         +'<th data-permission="finance">Факт (навч+доп)</th><th data-permission="finance">Бюджет разом</th><th data-permission="finance">Вступний</th><th>Телефон</th><th></th>'
         +'</tr></thead><tbody>';
 
