@@ -12735,3 +12735,23 @@ function diagFillPerf(){
   Logger.log('attendance FULL read: %s rows, %s ms', full.length, t3 - t2);
   Logger.log('TOTAL: %s ms', t3 - t0);
 }
+
+function diagBdayBrovary(){
+  var cli = getClients();
+  Logger.log('clients ok: ' + (cli && cli.ok));
+  var n=0;
+  (cli.data||[]).forEach(function(o){
+    var loc=String(o['Локація']||'');
+    if(loc.toLowerCase().indexOf('бровар')<0) return;
+    n++;
+    if(n<=12) Logger.log('CRM | loc="'+loc+'" | name="'+String(o['ПІБ дитини']||'')+'" | bdayRaw="'+String(o['Дата народження']||'')+'" | parsed="'+(parseRegistryBday(o['Дата народження'])||'')+'"');
+  });
+  Logger.log('=== Бровари у CRM-картках: '+n+' дітей ===');
+  var crmSS=getCRMSpreadsheet();
+  var payData=crmSS.getSheetByName(SHEET_PAYMENTS).getDataRange().getValues();
+  var payHdr=payData[0].map(function(h){return String(h||'');});
+  var locI=payHdr.indexOf('Локація');
+  var locs={};
+  for(var i=1;i<payData.length;i++){ var l=String(payData[i][locI]||''); if(l.toLowerCase().indexOf('бровар')>=0) locs[l]=(locs[l]||0)+1; }
+  Logger.log('=== Оплати Бровари — назви локацій: '+JSON.stringify(locs)+' ===');
+}
