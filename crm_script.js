@@ -4630,7 +4630,7 @@ function _buildPayerIndex(loc){
       });
     });
   }
-  return { index: idx, diag: diag };
+  return { index: idx, diag: diag, roster: payRows.map(function(c){ return { name: c.childName, row: c.row, group: c.group }; }) };
 }
 
 // ── ФАЗА 1: PREVIEW (read-only). Вхід: {iban, payments:[{date,amount,purpose,edrpou,counterparty,ref,...}]}.
@@ -4691,6 +4691,7 @@ function reconcilePreview(body){
 
     return {ok:true, loc:loc, type:type, typeLabel:acct.typeLabel, orgName:acct.orgName,
             iban:iban, count:rows.length, rows:rows, diag:built.diag,
+            roster:(built.roster||[]),
             processedDates:Object.keys(processed)};
   } catch(e){ return {ok:false, error: e.message || String(e)}; }
 }

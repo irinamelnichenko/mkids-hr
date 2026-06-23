@@ -1058,6 +1058,8 @@ function rcToday(){
 function rcResolveRow(x, g){
   var tgt=document.querySelector('.rc-target[data-g="'+g+'"][data-i="'+x.i+'"]');
   if(tgt){ return tgt.value==='uo237' ? {row:236, childName:'УО → рядок 237'} : null; }
+  var ros=document.querySelector('.rc-roster[data-g="'+g+'"][data-i="'+x.i+'"]');
+  if(ros){ return ros.value!=='' ? {row:+ros.value, childName:ros.options[ros.selectedIndex].text} : null; }
   if(x.status==='auto' && x.candidates && x.candidates.length){
     return x.candidates[0].row>=0 ? x.candidates[0] : null;
   }
@@ -1087,7 +1089,9 @@ function rcRowsHtml(p, g){
   p.rows.forEach(function(x){
     var st=_RC_STAT[x.status]||_RC_STAT.none;
     var isUO=(String(x.payerSurname||'').toLowerCase()==='уо')||/^\s*УО\b/.test(x.payerRaw||'');
-    var writable=(x.status==='auto' && x.candidates && x.candidates.length && x.candidates[0].row>=0) || (x.status==='multi') || isUO;
+    var hasCand=(x.candidates && x.candidates.length && x.candidates[0].row>=0);
+    var canManual=!isUO && !hasCand && x.status!=='auto' && x.status!=='multi' && (p.roster && p.roster.length);
+    var writable=(x.status==='auto' && x.candidates && x.candidates.length && x.candidates[0].row>=0) || (x.status==='multi') || isUO || canManual;
     var chkDisabled=(x.status!=='auto' && !isUO);   // УО — увімкнено й позначено за умовч.
     var chk = writable
       ? '<input type="checkbox" class="rc-chk" data-g="'+g+'" data-i="'+x.i+'"'+(chkDisabled?' disabled':'')+(isUO?' checked':'')+'>'
@@ -1103,6 +1107,10 @@ function rcRowsHtml(p, g){
       if(x.existing>0) child+=' <span style="color:#2980b9;font-size:11px">· вже '+fmtUah(x.existing)+', додасться +'+fmtUah(x.amount)+'</span>';
     } else if(isUO){
       child='<select class="rc-target" data-g="'+g+'" data-i="'+x.i+'" onchange="rcChkToggle2(this)"><option value="">— пропустити —</option><option value="uo237" selected>УО → рядок 237</option></select>';
+    } else if(canManual){
+      child='<select class="rc-roster" data-g="'+g+'" data-i="'+x.i+'" onchange="rcChkToggle2(this)"><option value="">— обрати дитину —</option>'
+        + p.roster.map(function(rc){ return '<option value="'+rc.row+'">'+escapeHtml(rc.name)+(rc.group?' ('+escapeHtml(rc.group)+')':'')+'</option>'; }).join('')
+        + '</select>';
     } else child='<span style="color:var(--gray)">—</span>';
     if(writable){
       child+=' <select class="rc-type" data-g="'+g+'" data-i="'+x.i+'" title="стовпець" style="margin-left:4px;font-size:11px">'
