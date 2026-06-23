@@ -1100,41 +1100,106 @@ function _invViberText(c){
   return L.join('\n');
 }
 // Відкриває Viber з готовим текстом; fallback (Telegram → SMS) якщо не відкрилось.
-function invSendViber(childId){
+function _invCopyText(txt, btn){
+  function done(ok){
+    if (!btn) return;
+    var old = btn.getAttribute('data-lbl') || btn.textContent;
+    btn.textContent = ok ? '✓ Скопійовано' : '✗ Помилка';
+    setTimeout(function(){ btn.textContent = old; }, 1500);
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(txt).then(function(){ done(true); }, function(){ done(false); });
+  } else {
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = txt; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.focus(); ta.select();
+      var ok = document.execCommand('copy'); document.body.removeChild(ta); done(ok);
+    } catch(e){ done(false); }
+  }
+}
+
+function _invViberCss(){
+  if (document.getElementById('vmodal-css')) return;
+  var st = document.createElement('style'); st.id = 'vmodal-css';
+  st.textContent =
+    '.vmodal-ov{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:9999;padding:16px;}' +
+    '.vmodal{background:#fff;border-radius:16px;max-width:560px;width:100%;max-height:90vh;overflow:auto;box-shadow:0 12px 40px rgba(0,0,0,.25);padding:18px;}' +
+    '.vmodal-head{font-weight:700;font-size:17px;display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;}' +
+    '.vmodal-x{cursor:pointer;font-size:24px;color:#999;line-height:1;padding:0 6px;}' +
+    '.vmodal-sub{font-size:13px;color:#666;margin-bottom:14px;line-height:1.4;}' +
+    '.vmodal-card{border:1px solid #e6e6e6;border-radius:12px;padding:12px;margin-bottom:12px;background:#fafafa;}' +
+    '.vmodal-lbl{font-weight:600;margin-bottom:8px;font-size:14px;}' +
+    '.vmodal-ta{width:100%;box-sizing:border-box;height:200px;font-family:inherit;font-size:13px;line-height:1.45;border:1px solid #ddd;border-radius:8px;padding:10px;resize:vertical;background:#fff;}' +
+    '.vmodal-row{display:flex;gap:8px;margin-top:8px;}' +
+    '.vmodal-foot{display:flex;gap:8px;justify-content:flex-end;margin-top:6px;}' +
+    '.vmodal-btn{flex:1;text-align:center;padding:10px 12px;border-radius:9px;border:1px solid #d0d0d0;background:#fff;cursor:pointer;font-size:14px;font-weight:600;text-decoration:none;color:#222;display:inline-block;}' +
+    '.vmodal-btn.send{background:#7360f2;color:#fff;border-color:#7360f2;}' +
+    '.vmodal-btn.mark{background:#1faa59;color:#fff;border-color:#1faa59;flex:0 0 auto;}' +
+    '.vmodal-btn.close{flex:0 0 auto;}';
+  document.head.appendChild(st);
+}
+
+function _invViberModal(c, messages, intl){
+  _invViberCss();
+  var lbl = function(t){ return t === 'extras' ? '🎨 Додаткові заняття' : '📚 Навчання'; };
+  var esc = function(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
+  var ov = document.createElement('div'); ov.className = 'vmodal-ov';
+  var cards = messages.map(function(m, i){
+    var viberUrl = 'viber://chat?number=%2B' + intl + '&text=' + encodeURIComponent(m.text);
+    return '<div class="vmodal-card">' +
+      '<div class="vmodal-lbl">' + lbl(m.type) + ' — ' + fmtUah(m.sum) + ' грн</div>' +
+      '<textarea class="vmodal-ta" readonly>' + esc(m.text) + '</textarea>' +
+      '<div class="vmodal-row">' +
+        '<button class="vmodal-btn copy" data-i="' + i + '" data-lbl="📋 Копіювати">📋 Копіювати</button>' +
+        '<a class="vmodal-btn send" href="' + viberUrl + '">💬 Надіслати у Viber</a>' +
+      '</div></div>';
+  }).join('');
+  ov.innerHTML = '<div class="vmodal">' +
+    '<div class="vmodal-head">💬 Рахунок → ' + esc(c.signerName || c.name) + '<span class="vmodal-x">×</span></div>' +
+    '<div class="vmodal-sub">Надішли обидва повідомлення у Viber (' + esc(c.signerPhone) + '). На телефоні текст підставиться сам; на компʼютері — скопіюй і встав.</div>' +
+    cards +
+    '<div class="vmodal-foot">' +
+      '<button class="vmodal-btn mark">✓ Позначити надісланим</button>' +
+      '<button class="vmodal-btn close">Закрити</button>' +
+    '</div></div>';
+  document.body.appendChild(ov);
+  function close(){ try { document.body.removeChild(ov); } catch(e){} }
+  ov.querySelector('.vmodal-x').onclick = close;
+  ov.querySelector('.close').onclick = close;
+  ov.onclick = function(e){ if (e.target === ov) close(); };
+  Array.prototype.forEach.call(ov.querySelectorAll('.copy'), function(b){
+    b.onclick = function(){ _invCopyText(messages[Number(b.getAttribute('data-i'))].text, b); };
+  });
+  ov.querySelector('.mark').onclick = function(){
+    invApi({action:'logViberSent', childName:c.name, loc:CFG.LOC, phone:c.signerPhone, actorName:_invActor()}).catch(function(){});
+    _invMarkLocal(c.name, 'viber', {ts:'щойно'});
+    showToast('✓ Позначено надісланим', 'ok', 2500);
+    close();
+  };
+}
+
+async function invSendViber(childId){
   var c = _invFindChild(childId);
   if (!c){ showToast('❌ Дитину не знайдено', 'err'); return; }
   if (!c.signerPhone){ showToast('❌ У підписанта немає телефону', 'err'); return; }
   var intl = _invNormPhone(c.signerPhone);
   if (intl.length < 11){ showToast('❌ Невірний телефон: ' + c.signerPhone, 'err'); return; }
-
-  var enc = encodeURIComponent(_invViberText(c));
-  var viberUrl = 'viber://chat?number=%2B' + intl + '&text=' + enc;
-
-  // Детектуємо, чи застосунок перехопив фокус (значить Viber відкрився).
-  var left = false;
-  function onLeave(){ left = true; }
-  document.addEventListener('visibilitychange', onLeave);
-  window.addEventListener('blur', onLeave);
-
-  showToast('💬 Відкриваємо Viber → ' + c.signerName, 'info', 2500);
-  window.location.href = viberUrl;
-
-  // v6.50.3: авто-позначка Viber (лог на бекенд + бейдж одразу).
-  invApi({action: 'logViberSent', childName: c.name, loc: CFG.LOC,
-    phone: c.signerPhone, actorName: _invActor()}).catch(function(){});
-  _invMarkLocal(c.name, 'viber', {ts: 'щойно'});
-
-  setTimeout(function(){
-    document.removeEventListener('visibilitychange', onLeave);
-    window.removeEventListener('blur', onLeave);
-    if (left || document.hidden) return;   // Viber відкрився — все ок
-    // Fallback: Telegram → SMS
-    if (confirm('Не відкрилось Viber? Спробувати Telegram?')){
-      window.location.href = 'https://t.me/+' + intl + '?text=' + enc;
-    } else if (confirm('Надіслати через SMS?')){
-      window.location.href = 'sms:+' + intl + '?body=' + enc;
-    }
-  }, 1800);
+  showToast('⏳ Готуємо повідомлення…', 'info', 60000);
+  try {
+    var res = await invApi({
+      action: 'invoiceViberMessage',
+      childName: c.name, loc: CFG.LOC,
+      sendStudies: (c.paymentSum || 0) > 0,
+      sendExtras:  (c.extrasSum  || 0) > 0,
+      payMonth: INV.payMonth, payYear: INV.payYear,
+      extMonth: INV.extMonth, extYear: INV.extYear
+    });
+    if (!res.messages || !res.messages.length){ showToast('❌ Нема сум для рахунку', 'err'); return; }
+    _invViberModal(c, res.messages, intl);
+  } catch(e){
+    showToast('❌ ' + (e.message || 'Помилка'), 'err', 5000);
+  }
 }
 
 // 📬 — масова: послідовно по дітях з email і сумою > 0, з прогрес-тостом.
