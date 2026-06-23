@@ -4572,6 +4572,8 @@ function _extractPayer(rec){
   // Прізвище (з великої) + до 2 наступних токенів (ім'я/по-батькові/ініціали з крапками).
   var m = purpose.match(/платник[\s:]*([А-ЯІЇЄҐ][а-яіїєґ'’ʼ`\-]+(?:\s+[А-ЯІЇЄҐ][а-яіїєґ'’ʼ`.]*){0,2})/i);
   if (m) return { raw: m[1].trim(), via: 'bank' };
+  var v = purpose.match(/[Вв]ід\s+([А-ЯІЇЄҐ][а-яіїєґ'’ʼ`\-]+(?:\s+[А-ЯІЇЄҐ][а-яіїєґ'’ʼ`.]*){0,2})/);
+  if (v) return { raw: v[1].trim(), via: 'bank-vid' };
   return { raw: trim(rec.counterparty), via: 'bank-unparsed' };
 }
 
