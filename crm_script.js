@@ -343,6 +343,7 @@ function doPost(e) {
     else if (body.action === 'clearAllPredmetnykyLessons')  result = clearAllPredmetnykyLessons(Number(body.actorId || 0), body.location || body.loc || '');
     else if (body.action === 'exportPredmetnykyToSalary')   result = exportPredmetnykyToSalary(body || {});
     else if (body.action === 'generateInvoicePDF')          result = generateInvoicePDF(body || {});   // v6.50
+    else if (body.action === 'invoicePdfLink')              result = invoicePdfLink(body || {});       // v6.72 Viber link
     else if (body.action === 'sendInvoiceEmail')            result = sendInvoiceEmail(body || {});      // v6.50
     else if (body.action === 'bulkSendInvoices')            result = bulkSendInvoices(body || {});      // v6.50
     else if (body.action === 'logViberSent')                result = logViberSent(body || {});          // v6.50.3
@@ -5712,6 +5713,35 @@ function testGetInvoiceListData(){
 //   CSS-текст "m.kids" (оранж), або <img> якщо в H є Logo_URL.
 // КРОК 1C.2 (потім): рядки Борг/Переплата для extras. 1C.3+: фронт/email/viber.
 // ═══════════════════════════════════════════════════════════════════════════
+function _getInvoiceDriveFolder(){
+  var name = 'm.kids Рахунки (Viber)';
+  var it = DriveApp.getFoldersByName(name);
+  return it.hasNext() ? it.next() : DriveApp.createFolder(name);
+}
+
+function invoicePdfLink(opts){
+  var res = generateInvoicePDF(opts || {});
+  if (!res || !res.ok) return {ok:false, error:(res && res.error) || 'PDF не згенеровано'};
+  try {
+    var folder = _getInvoiceDriveFolder();
+    var fname = res.pdfFilename || ('Рахунок.pdf');
+    var existing = folder.getFilesByName(fname);
+    while (existing.hasNext()) { try { existing.next().setTrashed(true); } catch(e){} }
+    var bytes = Utilities.base64Decode(res.pdfBase64);
+    var blob = Utilities.newBlob(bytes, 'application/pdf', fname);
+    var file = folder.createFile(blob);
+    try { file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch(e){}
+    return {ok:true, url:file.getUrl(), filename:fname, sum:res.sum};
+  } catch(e){
+    return {ok:false, error:'Drive: ' + (e.message || e)};
+  }
+}
+
+function testInvoicePdfLink(){
+  var r = invoicePdfLink({childName:'Матущенко Сара', loc:'Осокорки', type:'studies', month:6, year:2026, invoiceDate:'01.06.2026'});
+  Logger.log('[testInvoicePdfLink] %s', JSON.stringify(r));
+}
+
 function generateInvoicePDF(opts){
   opts = opts || {};
   var childName = String(opts.childName || '').trim();
