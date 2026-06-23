@@ -344,6 +344,7 @@ function doPost(e) {
     else if (body.action === 'exportPredmetnykyToSalary')   result = exportPredmetnykyToSalary(body || {});
     else if (body.action === 'generateInvoicePDF')          result = generateInvoicePDF(body || {});   // v6.50
     else if (body.action === 'invoicePdfLink')              result = invoicePdfLink(body || {});       // v6.72 Viber link
+    else if (body.action === 'invoiceViberMessage')         result = invoiceViberMessage(body || {});   // v6.72 Viber text
     else if (body.action === 'sendInvoiceEmail')            result = sendInvoiceEmail(body || {});      // v6.50
     else if (body.action === 'bulkSendInvoices')            result = bulkSendInvoices(body || {});      // v6.50
     else if (body.action === 'logViberSent')                result = logViberSent(body || {});          // v6.50.3
@@ -5713,6 +5714,93 @@ function testGetInvoiceListData(){
 //   CSS-текст "m.kids" (оранж), або <img> якщо в H є Logo_URL.
 // КРОК 1C.2 (потім): рядки Борг/Переплата для extras. 1C.3+: фронт/email/viber.
 // ═══════════════════════════════════════════════════════════════════════════
+function _fmtUahSrv(n){
+  n = Math.round(Number(n) || 0); var neg = n < 0; var d = String(Math.abs(n)); var o = '';
+  for (var i = 0; i < d.length; i++){ if (i > 0 && (d.length - i) % 3 === 0) o += ' '; o += d.charAt(i); }
+  return (neg ? '-' : '') + o;
+}
+
+function _invoicePurposeTitle(type, childName, m, y){
+  var mn = (m >= 1 && m <= 12) ? MONTHS_CAL[m-1].toLowerCase() : '';
+  var base = (type === 'extras')
+    ? 'Оплата за організацію освітніх послуг та додаткових занять (гуртків) '
+    : 'Оплата за навчання ';
+  return base + childName + ', ' + mn + ' ' + y;
+}
+
+function _firstName(full){
+  var parts = String(full || '').trim().split(/\s+/);
+  return parts.length >= 2 ? parts[1] : (parts[0] || '');
+}
+
+function _invoicePurposeTitle(type, childName, m, y){
+  var mn = (m >= 1 && m <= 12) ? MONTHS_CAL[m-1].toLowerCase() : '';
+  var base = (type === 'extras')
+    ? 'Оплата за організацію освітніх послуг та додаткових занять (гуртків) '
+    : 'Оплата за навчання ';
+  return base + childName + ', ' + mn + ' ' + y;
+}
+
+function invoiceViberMessage(opts){
+  opts = opts || {};
+  var childName = String(opts.childName || '').trim();
+  var loc = String(opts.loc || '').trim();
+  if (!childName || !loc) return {ok:false, error:'childName/loc'};
+  var types = [];
+  if (opts.sendStudies) types.push({t:'studies', m:Number(opts.payMonth || opts.month || 0), y:Number(opts.payYear || opts.year || 0)});
+  if (opts.sendExtras)  types.push({t:'extras',  m:Number(opts.extMonth || opts.month || 0), y:Number(opts.extYear || opts.year || 0)});
+  if (!types.length) return {ok:false, error:'Немає сум'};
+  var messages = [], errs = [], grand = 0;
+  for (var i = 0; i < types.length; i++){
+    var ty = types[i];
+    var r = invoicePdfLink({childName:childName, loc:loc, type:ty.t, month:ty.m, year:ty.y, invoiceDate:opts.invoiceDate});
+    if (!r || !r.ok){ errs.push((ty.t === 'extras' ? 'Додаткові' : 'Навчання') + ': ' + ((r && r.error) || '?')); continue; }
+    grand += Number(r.sum) || 0;
+    var fn = _firstName(r.buyerName);
+    var greet = fn ? ('Доброго дня, ' + fn + '! 🌞') : 'Доброго дня! 🌞';
+    var title = _invoicePurposeTitle(ty.t, childName, ty.m, ty.y);
+    var L = [];
+    L.push('*m.kids ' + loc + '*');
+    L.push('');
+    L.push(greet);
+    L.push('Надсилаємо рахунок для оплати.');
+    L.push('');
+    L.push(title);
+    L.push('');
+    if (ty.t === 'extras' && r.lines && r.lines.length){
+      r.lines.forEach(function(ln){
+        if ((Number(ln.sum) || 0) === 0) return;
+        L.push('• ' + ln.name + ((Number(ln.qty) || 0) > 1 ? ' ×' + ln.qty : '') + ' — ' + _fmtUahSrv(ln.sum) + ' грн');
+      });
+      L.push('');
+    }
+    L.push('Сума до сплати: ' + _fmtUahSrv(r.sum) + ' грн');
+    L.push('');
+    L.push('Реквізити для оплати:');
+    if (r.juName) L.push('Отримувач: ' + r.juName);
+    if (r.iban)   L.push('IBAN: ' + r.iban);
+    if (r.edrpou) L.push('ЄДРПОУ/РНОКПП: ' + r.edrpou);
+    L.push('');
+    L.push('Рахунок (PDF): ' + r.url);
+    L.push('');
+    L.push('Дякуємо! ❤️');
+    messages.push({type:ty.t, title:title, text:L.join('\n'), url:r.url, sum:r.sum});
+  }
+  if (!messages.length) return {ok:false, error:(errs.join('; ') || 'Не вдалось')};
+  return {ok:true, messages:messages, sum:grand, errors:errs};
+}
+
+function testViberMessage(){
+  var r = invoiceViberMessage({childName:'Сапогов Рінат', loc:'Осокорки', sendStudies:true, sendExtras:true, payMonth:6, payYear:2026, extMonth:6, extYear:2026, invoiceDate:'01.06.2026'});
+  Logger.log('ok=%s | повідомлень=%s', r.ok, r.ok ? r.messages.length : 0);
+  if (r.ok) r.messages.forEach(function(m){ Logger.log('\n===== %s =====\n%s\n=====', m.type, m.text); });
+  else Logger.log('ERROR: %s', r.error);
+}
+
+
+
+
+
 function _getInvoiceDriveFolder(){
   var name = 'm.kids Рахунки (Viber)';
   var it = DriveApp.getFoldersByName(name);
@@ -5731,7 +5819,7 @@ function invoicePdfLink(opts){
     var blob = Utilities.newBlob(bytes, 'application/pdf', fname);
     var file = folder.createFile(blob);
     try { file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch(e){}
-    return {ok:true, url:file.getUrl(), filename:fname, sum:res.sum};
+    return {ok:true, url:file.getUrl(), filename:fname, sum:res.sum, juName:res.juName, edrpou:res.edrpou, iban:res.iban, bank:res.bank, lines:res.lines, buyerName:res.buyerName};
   } catch(e){
     return {ok:false, error:'Drive: ' + (e.message || e)};
   }
@@ -5851,6 +5939,9 @@ function generateInvoicePDF(opts){
     sum: total,
     juName: req.name,
     edrpou: req.edrpou,
+    iban: req.iban,
+    bank: req.bank,
+    lines: lines,
     buyerName: buyerDisplay,
     sumWords: _numberToUkrainianWords(total)
   };
@@ -6543,7 +6634,10 @@ function _getInvoiceRequisites(loc, type){
   var vals = sh.getDataRange().getValues();
   for (var r = 0; r < vals.length; r++){
     if (String(vals[r][0] || '').trim() !== loc) continue;
-    if (String(vals[r][1] || '').trim() !== typeUk) continue;   // заголовок не співпаде з реальним loc+типом
+    var _tv = String(vals[r][1] || '').trim().toLowerCase();
+    var _isExtras = _tv.indexOf('гуртк') >= 0 || _tv.indexOf('додаткових занять') >= 0 || _tv === 'додаткові заняття';
+    var _isStudies = !_isExtras && _tv.indexOf('навчання') >= 0;
+    if ((type === 'extras') ? !_isExtras : !_isStudies) continue;   // гнучке зіставлення типу (старі/нові назви)
     var name = String(vals[r][2] || '').trim();
     return {
       ok: true,
@@ -12784,4 +12878,17 @@ function diagBdayBrovary(){
   var locs={};
   for(var i=1;i<payData.length;i++){ var l=String(payData[i][locI]||''); if(l.toLowerCase().indexOf('бровар')>=0) locs[l]=(locs[l]||0)+1; }
   Logger.log('=== Оплати Бровари — назви локацій: '+JSON.stringify(locs)+' ===');
+}
+
+function diagInvoiceRequisites(){
+  var sh = SpreadsheetApp.openById(CONFIG_SHEET_ID).getSheetByName('Реквізити_Локацій');
+  if (!sh) { Logger.log('❌ Аркуш "Реквізити_Локацій" не знайдено'); return; }
+  var vals = sh.getDataRange().getValues();
+  Logger.log('=== Реквізити_Локацій: %s рядків ===', vals.length);
+  for (var r = 0; r < vals.length; r++){
+    var a = JSON.stringify(String(vals[r][0] == null ? '' : vals[r][0]));
+    var b = JSON.stringify(String(vals[r][1] == null ? '' : vals[r][1]));
+    var nm = String(vals[r][2] || '');
+    Logger.log('row %s | loc=%s | type=%s | name="%s"', r, a, b, nm);
+  }
 }
