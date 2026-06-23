@@ -2092,6 +2092,21 @@ function syncBdayStatusSheet() {
   var rowsOut = [];
   var nowStr = formatDate(new Date());
 
+  // fallback-джерело дати: картка CRM (Клієнти), якщо в реєстрі порожньо
+  var crmBdayByKey = {};
+  try {
+    var _cliRes = getClients();
+    if (_cliRes && _cliRes.ok) {
+      (_cliRes.data || []).forEach(function(o){
+        var _cn = String(o['ПІБ дитини'] || '').trim();
+        var _cloc = String(o['Локація'] || '').trim();
+        if (!_cn || !_cloc) return;
+        var _b = parseRegistryBday(o['Дата народження']) || '';
+        if (_b) crmBdayByKey[_normChildName(_cn) + '|' + _cloc] = _b;
+      });
+    }
+  } catch (e) {}
+
   for (var pr = 1; pr < payData.length; pr++) {
     var name = String(payData[pr][nameI] || '').trim();
     var loc  = String(payData[pr][locI]  || '').trim();
@@ -2165,6 +2180,7 @@ function syncBdayStatusSheet() {
     }
 
     stats[status] = (stats[status] || 0) + 1;
+    if (!bdayOut) { var _fb = crmBdayByKey[norm + '|' + loc]; if (_fb) bdayOut = _fb; }
     rowsOut.push([id, name, loc, bdayOut, cnOut, status, matchedRegOut, nowStr, '', '']);
   }
 
