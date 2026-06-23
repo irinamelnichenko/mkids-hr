@@ -1056,6 +1056,8 @@ function rcToday(){
 
 // Чи можна писати рядок: auto (1 кандидат із рядком у Payment) АБО multi з обраним.
 function rcResolveRow(x, g){
+  var tgt=document.querySelector('.rc-target[data-g="'+g+'"][data-i="'+x.i+'"]');
+  if(tgt){ return tgt.value==='uo237' ? {row:236, childName:'УО → рядок 237'} : null; }
   if(x.status==='auto' && x.candidates && x.candidates.length){
     return x.candidates[0].row>=0 ? x.candidates[0] : null;
   }
@@ -1071,17 +1073,24 @@ function rcChkToggle(sel){          // multi: чекбокс активний л
   var chk=document.querySelector('.rc-chk[data-g="'+g+'"][data-i="'+i+'"]');
   if(chk){ chk.disabled = (sel.value===''); if(sel.value==='') chk.checked=false; }
 }
+function rcChkToggle2(sel){
+  var g=sel.getAttribute('data-g'), i=sel.getAttribute('data-i');
+  var chk=document.querySelector('.rc-chk[data-g="'+g+'"][data-i="'+i+'"]');
+  if(chk){ chk.disabled=(sel.value===''); if(sel.value==='') chk.checked=false; }
+}
 
 function rcRowsHtml(p, g){
   var today=rcToday();
   var h='<div style="overflow-x:auto"><table class="inv-table"><thead><tr>'
     +'<th style="width:34px"></th><th>Дата</th><th>Сума</th><th>Платник (виписка)</th><th>Прізв.</th><th>Статус</th><th>Дитина → рядок</th><th>Міс./Кол.</th></tr></thead><tbody>';
+  var defType=(p.type==='extras')?'extras':'navch';
   p.rows.forEach(function(x){
     var st=_RC_STAT[x.status]||_RC_STAT.none;
-    var writable=(x.status==='auto' && x.candidates && x.candidates.length && x.candidates[0].row>=0) || (x.status==='multi');
-    var chkDisabled=(x.status!=='auto');   // multi вмикається після вибору; none — ніколи
+    var isUO=(String(x.payerSurname||'').toLowerCase()==='уо')||/^\s*УО\b/.test(x.payerRaw||'');
+    var writable=(x.status==='auto' && x.candidates && x.candidates.length && x.candidates[0].row>=0) || (x.status==='multi') || isUO;
+    var chkDisabled=(x.status!=='auto' && !isUO);   // УО — увімкнено й позначено за умовч.
     var chk = writable
-      ? '<input type="checkbox" class="rc-chk" data-g="'+g+'" data-i="'+x.i+'"'+(chkDisabled?' disabled':'')+'>'
+      ? '<input type="checkbox" class="rc-chk" data-g="'+g+'" data-i="'+x.i+'"'+(chkDisabled?' disabled':'')+(isUO?' checked':'')+'>'
       : '';
     var child='';
     if(x.status==='multi'){
@@ -1092,7 +1101,15 @@ function rcRowsHtml(p, g){
       var c=x.candidates[0];
       child=escapeHtml(c.childName)+(c.group?' <span style="color:var(--gray);font-size:11px">('+escapeHtml(c.group)+')</span>':'')+(c.row>=0?' <span style="color:var(--gray);font-size:11px">р.'+(c.row+1)+'</span>':' <span style="color:var(--red2);font-size:11px">нема рядка в Payment</span>');
       if(x.existing>0) child+=' <span style="color:#2980b9;font-size:11px">· вже '+fmtUah(x.existing)+', додасться +'+fmtUah(x.amount)+'</span>';
+    } else if(isUO){
+      child='<select class="rc-target" data-g="'+g+'" data-i="'+x.i+'" onchange="rcChkToggle2(this)"><option value="">— пропустити —</option><option value="uo237" selected>УО → рядок 237</option></select>';
     } else child='<span style="color:var(--gray)">—</span>';
+    if(writable){
+      child+=' <select class="rc-type" data-g="'+g+'" data-i="'+x.i+'" title="стовпець" style="margin-left:4px;font-size:11px">'
+        +'<option value="navch"'+(defType==='navch'?' selected':'')+'>навч.</option>'
+        +'<option value="extras"'+(defType==='extras'?' selected':'')+'>доп</option>'
+        +'<option value="vstup">вступ</option></select>';
+    }
     var dateCell=escapeHtml(x.date)+(x.date===today?' <span title="сьогодні — день незавершений" style="color:var(--orange);font-size:11px">⚠</span>':'');
     h+='<tr>'
       +'<td>'+chk+'</td>'
@@ -1163,7 +1180,8 @@ async function rcApply(){
       var chk=document.querySelector('.rc-chk[data-g="'+gi+'"][data-i="'+x.i+'"]');
       if(!chk||!chk.checked) return;
       var cand=rcResolveRow(x, gi); if(!cand) return;
-      items.push({childRow:cand.row, childName:cand.childName, amount:x.amount, date:x.date, ref:x.ref, payerRaw:x.payerRaw});
+      var tsel=document.querySelector('.rc-type[data-g="'+gi+'"][data-i="'+x.i+'"]');
+      items.push({childRow:cand.row, childName:cand.childName, amount:x.amount, date:x.date, ref:x.ref, payerRaw:x.payerRaw, type:(tsel?tsel.value:undefined)});
       totalSum+=x.amount;
     });
     if(items.length){ batch.push({iban:p.iban, items:items, label:p.loc+' · '+(p.typeLabel||'')}); totalItems+=items.length; }

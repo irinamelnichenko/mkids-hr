@@ -4528,7 +4528,7 @@ function _detectMonthColByHeader(rows, jsMonth){
 }
 // Факт-колонка за категорією: studies → старт блоку (Факт навч); extras → +2 (Факт доп). 0-based.
 function _factColForType(monthStartCol0, type){
-  return type === 'extras' ? (monthStartCol0 + 2) : monthStartCol0;
+  return type === 'extras' ? (monthStartCol0 + 2) : (type === 'vstup' ? (monthStartCol0 + 1) : monthStartCol0);
 }
 
 // Детект колонки «сторона договору» у Payment-листі по ШАПЦІ (нинішня BJ, але без хардкоду).
@@ -4753,7 +4753,7 @@ function reconcileApply(body){
       var jsMonth = d ? d.getMonth() : -1;
       var monthCol0 = (jsMonth >= 0) ? _detectMonthColByHeader(data, jsMonth) : -1;
       if (monthCol0 < 0){ errors++; details.push({childName:childName, status:'error', msg:'місяць не знайдено в шапці — НЕ записано'}); return; }
-      var factCol0 = _factColForType(monthCol0, type);
+      var factCol0 = _factColForType(monthCol0, it.type || type);
 
       if (paySh.getRange(childRow + 1, factCol0 + 1).getFormula()){
         skipped++; details.push({childName:childName, status:'skipped-formula'}); return;
