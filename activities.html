@@ -4539,6 +4539,9 @@ function exportPreviewCSV(){
   <button class="bnav-item active" type="button" onclick="window.scrollTo({top:0,behavior:'smooth'})">
     <span class="ic">📋</span><span>Заняття</span>
   </button>
+  <button class="bnav-item" type="button" onclick="window.location.href='clients.html'">
+    <span class="ic">🌱</span><span>Розвиток</span>
+  </button>
   <button class="bnav-item" type="button" onclick="window.location.reload()">
     <span class="ic">🔄</span><span>Оновити</span>
   </button>
@@ -4580,6 +4583,28 @@ if (navigator.onLine && typeof replayOfflineQueue === 'function'){
   });
   bd.addEventListener('click',close);
   document.addEventListener('click',function(e){ if(e.target.closest&&e.target.closest('.nav-item')) close(); });
+})();
+</script>
+<script>
+/* SW-AUTO-UPDATE v1 */
+(function(){
+  if (!('serviceWorker' in navigator)) return;
+  var hadController = !!navigator.serviceWorker.controller;
+  var pending=false, done=false;
+  navigator.serviceWorker.ready.then(function(reg){
+    setInterval(function(){ try{ reg.update(); }catch(e){} }, 60000);
+    document.addEventListener('visibilitychange', function(){
+      if (document.visibilityState==='visible'){
+        try{ reg.update(); }catch(e){}
+        if (pending && !done){ done=true; location.reload(); }
+      }
+    });
+  }).catch(function(){});
+  navigator.serviceWorker.addEventListener('controllerchange', function(){
+    if (done || !hadController) return;
+    if (document.visibilityState==='hidden'){ done=true; location.reload(); }
+    else { pending=true; }
+  });
 })();
 </script>
 </body>

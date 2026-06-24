@@ -4180,6 +4180,10 @@ function _nextMonth(month, year){
   return {month: nm, year: ny};
 }
 
+function _prevMonth(month, year){
+  return (Number(month) <= 1) ? {month: 12, year: Number(year) - 1} : {month: Number(month) - 1, year: Number(year)};
+}
+
 // Знаходить sheetId+listName файлу локації з CONFIG-реєстру локацій
 function _getLocationPaymentRegistry(loc){
   var configSS    = SpreadsheetApp.openById(CONFIG_SHEET_ID);
@@ -4652,6 +4656,32 @@ function _buildPayerIndex(loc){
 }
 
 // ── ФАЗА 1: PREVIEW (read-only). Вхід: {iban, payments:[{date,amount,purpose,edrpou,counterparty,ref,...}]}.
+// v6.74 — фолбек: якщо по платнику дитину не знайдено — шукаємо прізвища дітей у призначенні (транзитні рахунки, платник ≠ сторона договору).
+
+
+// v6.74 — пошук дітей по ВСЬОМУ тексту виписки (призначення + контрагент + платник + усі поля).
+function _recSearchBlob(rec){
+  var blob = '';
+  if (rec && typeof rec === 'object'){
+    for (var k in rec){ if (rec.hasOwnProperty(k) && typeof rec[k] === 'string') blob += ' ' + rec[k]; }
+  }
+  if (typeof _fixHomoglyph === 'function') blob = _fixHomoglyph(blob);
+  return blob;
+}
+function _scanRecordForChildren(rec, idx){
+  var out = [], seen = {};
+  var toks = _recSearchBlob(rec).match(/[А-ЯІЇЄҐ][а-яіїєґ'’ʼ`\-]{2,}/g) || [];
+  for (var i = 0; i < toks.length; i++){
+    var sk = _surnameKey(toks[i]); var list = idx[sk];
+    if (!list) continue;
+    for (var j = 0; j < list.length; j++){
+      if (seen[list[j].childName]) continue;
+      seen[list[j].childName] = true; out.push(list[j]);
+    }
+  }
+  return out;
+}
+
 function reconcilePreview(body){
   try{
     body = body || {};
@@ -4683,7 +4713,19 @@ function reconcilePreview(body){
     var rows = payments.map(function(rec, i){
       var payer = _extractPayer(rec);
       var sk = _surnameKey(payer.raw);               // КЛЮЧ = ПРІЗВИЩЕ платника
-      var uniq = (idx[sk] || []).slice();            // вже dedup по childName в індексі
+      var uniq = (idx[sk] || []).slice();
+      var matchVia = uniq.length ? 'payer' : '';
+      var _pm = _scanRecordForChildren(rec, idx);
+      if (_pm.length){
+        var _seen = {}; uniq.forEach(function(c){ _seen[c.childName] = 1; });
+        _pm.forEach(function(c){ if (!_seen[c.childName]){ _seen[c.childName] = 1; uniq.push(c); } });
+        if (!matchVia) matchVia = 'text';
+      }
+      var matchVia = uniq.length ? 'payer' : '';
+      if (uniq.length === 0){
+        var _pm = _scanPurposeForChildren(String(rec.purpose || ''), idx);
+        if (_pm.length){ uniq = _pm; matchVia = 'purpose'; }
+      }            // вже dedup по childName в індексі
 
       var d = _recParseDate(rec.date);
       var jsMonth = d ? d.getMonth() : -1;
@@ -4701,7 +4743,7 @@ function reconcilePreview(body){
 
       return {
         i: i, date: String(rec.date || ''), amount: Number(rec.amount) || 0, ref: String(rec.ref || ''),
-        payerRaw: payer.raw, payerVia: payer.via, payerSurname: sk,
+        payerRaw: payer.raw, payerVia: payer.via, payerSurname: sk, matchVia: matchVia,
         month: (jsMonth + 1), status: status, candidates: uniq, existing: existing,
         factCol: factCol0 >= 0 ? _colLetter(factCol0) : ''
       };
@@ -5546,6 +5588,10 @@ function exportAttendance(params){
 // Підписант (signerName/Phone/Email) — з картки клієнта (поле "Підписант договору").
 // Той самий endpoint буде reused у 1C при генерації PDF.
 // ═══════════════════════════════════════════════════════════════════════════
+
+
+
+
 function getInvoiceListData(params){
   try {
     var loc      = String(params.loc      || '').trim();
@@ -5741,6 +5787,18 @@ function _invoicePurposeTitle(type, childName, m, y){
   return base + childName + ', ' + mn + ' ' + y;
 }
 
+function _vocativeUa(name){
+  name = String(name||'').trim(); if (!name) return name;
+  var low=name.toLowerCase(), last=low.slice(-1), last2=low.slice(-2);
+  if (last2==='ія') return name.slice(0,-1)+'є';
+  if (last==='а')  return name.slice(0,-1)+'о';
+  if (last==='я')  return name.slice(0,-1)+'е';
+  if (last2==='ій') return name.slice(0,-1)+'ю';
+  if (last==='о')  return name.slice(0,-1)+'е';
+  if ('бвгґджзклмнпрстфхцчшщ'.indexOf(last)>=0) return name+'е';
+  return name;
+}
+
 function invoiceViberMessage(opts){
   opts = opts || {};
   var childName = String(opts.childName || '').trim();
@@ -5757,7 +5815,7 @@ function invoiceViberMessage(opts){
     if (!r || !r.ok){ errs.push((ty.t === 'extras' ? 'Додаткові' : 'Навчання') + ': ' + ((r && r.error) || '?')); continue; }
     grand += Number(r.sum) || 0;
     var fn = _firstName(r.buyerName);
-    var greet = fn ? ('Доброго дня, ' + fn + '! 🌞') : 'Доброго дня! 🌞';
+    var greet = fn ? ('Доброго дня, ' + _vocativeUa(fn) + '! 🌞') : 'Доброго дня! 🌞';
     var title = _invoicePurposeTitle(ty.t, childName, ty.m, ty.y);
     var L = [];
     L.push('*m.kids ' + loc + '*');
@@ -5783,7 +5841,7 @@ function invoiceViberMessage(opts){
     L.push('');
     L.push('Рахунок (PDF): ' + r.url);
     L.push('');
-    L.push('Дякуємо! ❤️');
+    L.push('Дякуємо! 🍊');
     messages.push({type:ty.t, title:title, text:L.join('\n'), url:r.url, sum:r.sum});
   }
   if (!messages.length) return {ok:false, error:(errs.join('; ') || 'Не вдалось')};
@@ -11366,9 +11424,19 @@ function _seedPredmetnykyNorms(){
 // ── Loaders (Norms + Catalog) ────────────────────────────────────
 // Norms sheet → {'Київ': {'Англійська': {miniBaby:8,...}, ...}, 'Львів': {...}}
 // Норма — по group_TYPE (matriця не змінюється).
-function _loadPredNorms(){
+function _predNormsUseOld(targetYmd){
+  var d = targetYmd || Utilities.formatDate(new Date(), 'Europe/Kiev', 'yyyy-MM-dd');
+  return String(d) < '2026-09-01';
+}
+function _predPickNorm(row, useOld, oldIdx, newIdx){
+  if (!useOld) return Number(row[newIdx]) || 0;
+  var raw = row[oldIdx]; var v = Number(raw);
+  return (raw !== '' && raw !== null && isFinite(v)) ? v : (Number(row[newIdx]) || 0);
+}
+function _loadPredNorms(targetYmd){
   var sh = _getPredNormsSheet(true);
   var data = sh.getDataRange().getValues();
+  var useOld = _predNormsUseOld(targetYmd);
   var out = {};
   for (var i = 1; i < data.length; i++){
     var row = data[i];
@@ -11377,11 +11445,11 @@ function _loadPredNorms(){
     if (!region || !subject) continue;
     if (!out[region]) out[region] = {};
     out[region][subject] = {
-      miniBaby:  Number(row[2]) || 0,
-      Baby:      Number(row[3]) || 0,
-      Find:      Number(row[4]) || 0,
-      Study:     Number(row[5]) || 0,
-      Preschool: Number(row[6]) || 0
+      miniBaby:  _predPickNorm(row, useOld, 8, 2),
+      Baby:      _predPickNorm(row, useOld, 9, 3),
+      Find:      _predPickNorm(row, useOld, 10, 4),
+      Study:     _predPickNorm(row, useOld, 11, 5),
+      Preschool: _predPickNorm(row, useOld, 12, 6)
     };
   }
   return out;
