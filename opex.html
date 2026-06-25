@@ -729,6 +729,7 @@ var PERMISSIONS = {
   ],
 
   rnd_director: [
+    /*R&D-opex*/ 'opex',
     /*R&D+*/ 'card-child-development','card-child-health','activities-edit','attendance-edit',
     'dashboard',
     'clients_list','attendance_kids',
@@ -1676,7 +1677,10 @@ async function loadDetail(force){
   }
   try {
     var data = await fetchData(force);
-    S.data = data;
+    S.data = data; /*R&D-opex-filter*/
+    if (S.user && String(S.user.role).toLowerCase()==='rnd_director' && S.data && S.data.categories){
+      S.data.categories = S.data.categories.filter(function(c){ return String(c.name||'').toLowerCase().indexOf('методичн')>=0; });
+    }
     $('loadBox').classList.add('hidden');
     $('content').classList.remove('hidden');
     applyMode();
