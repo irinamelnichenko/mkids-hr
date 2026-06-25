@@ -4816,14 +4816,12 @@ function reconcileApply(body){
       if (monthCol0 < 0){ errors++; details.push({childName:childName, status:'error', msg:'місяць не знайдено в шапці — НЕ записано'}); return; }
       var factCol0 = _factColForType(monthCol0, it.type || type);
 
-      if (paySh.getRange(childRow + 1, factCol0 + 1).getFormula()){
-        skipped++; details.push({childName:childName, status:'skipped-formula'}); return;
-      }
-
+      var cell = paySh.getRange(childRow + 1, factCol0 + 1);
       var okey = childRow + ',' + factCol0;
-      var prev = overlay.hasOwnProperty(okey) ? overlay[okey] : (Number(toNum(data[childRow][factCol0])) || 0);
+      // якщо формула — беремо її обчислене значення і замінюємо числом (значення + платіж)
+      var prev = overlay.hasOwnProperty(okey) ? overlay[okey] : (Number(toNum(cell.getValue())) || 0);
       var nv = prev + amount;
-      paySh.getRange(childRow + 1, factCol0 + 1).setValue(nv);
+      cell.setValue(nv);
       overlay[okey] = nv;
       applied[dupKey] = true;                      // анти-дубль і в межах батчу
       written++;
@@ -9884,6 +9882,20 @@ function _isPasswordAdmin(actorId){
 }
 
 // Записує SHA-256(newPassword) у рядок листа "Користувачі" з логіном username.
+function fixPolyakova(){
+  var sh = _getUsersSheet();
+  var data = sh.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++){
+    if (String(data[i][1] || '').indexOf('Поляков') >= 0){
+      Logger.log('Рядок %s | ПІБ=%s | логін=%s | роль=%s | активний=%s', i+1, data[i][1], data[i][2], data[i][4], data[i][6]);
+      var r = setUserPassword(String(data[i][2]).trim(), 'Mkids2026Rnd', 1);
+      Logger.log('Скидання пароля: %s', JSON.stringify(r));
+      return;
+    }
+  }
+  Logger.log('Полякову не знайдено в листі Користувачі');
+}
+
 function setUserPassword(username, newPassword, actorId){
   try {
     if (!_isPasswordAdmin(actorId))
