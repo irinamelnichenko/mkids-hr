@@ -5673,6 +5673,59 @@ function diagNewInvoice(loc){
   Logger.log('=== всього: %s ===', n);
 }
 
+function diagDupAbsences(){
+  var ss=getCRMSpreadsheet();
+  var sheet=ss.getSheetByName(SHEET_CLIENTS);
+  var vals=sheet.getDataRange().getValues();
+  var hdrs=vals[0].map(String);
+  var colAbs=hdrs.indexOf('Відсутності (JSON)');
+  var colName=-1;
+  for(var k=0;k<hdrs.length;k++){ if(hdrs[k].indexOf("м'я")>=0||hdrs[k].indexOf('ПІБ')>=0){ colName=k; break; } }
+  if(colName<0) colName=1;
+  var colLoc=hdrs.indexOf('Локація'); if(colLoc<0) colLoc=2;
+  if(colAbs<0){ Logger.log('⚠ нема колонки Відсутності (JSON)'); return; }
+  var totalDup=0, kidsDup=0;
+  for(var r=1;r<vals.length;r++){
+    var raw=vals[r][colAbs]; if(!raw) continue;
+    var arr; try{ arr=JSON.parse(raw); }catch(e){ continue; }
+    if(!arr||!arr.length) continue;
+    var seen={}, dups=[];
+    arr.forEach(function(a){
+      if(!a||a.status==='cancelled'||a.status==='rejected') return;
+      var key=(a.type||'')+'|'+(a.from||'')+'|'+(a.to||'');
+      if(seen[key]){ dups.push(a); } else seen[key]=a;
+    });
+    if(dups.length){
+      kidsDup++; totalDup+=dups.length;
+      Logger.log('[%s] %s — дублів: %s | %s', vals[r][colLoc], vals[r][colName], dups.length, dups.map(function(d){return (d.type||'')+' '+(d.from||'')+'→'+(d.to||'')+' '+(d.totalPct||'')+'%';}).join(' ; '));
+    }
+  }
+  Logger.log('=== дітей з дублями: %s | всього зайвих записів: %s ===', kidsDup, totalDup);
+}
+
+function diagChildAbsences(namePart){
+  namePart = (namePart||'Заяні').toLowerCase();
+  var ss=getCRMSpreadsheet();
+  var sheet=ss.getSheetByName(SHEET_CLIENTS);
+  var vals=sheet.getDataRange().getValues();
+  var hdrs=vals[0].map(String);
+  var colAbs=hdrs.indexOf('Відсутності (JSON)');
+  var colName=-1; for(var k=0;k<hdrs.length;k++){ if(hdrs[k].indexOf("м'я")>=0||hdrs[k].indexOf('ПІБ')>=0){ colName=k; break; } } if(colName<0) colName=1;
+  var colLoc=hdrs.indexOf('Локація'); if(colLoc<0) colLoc=2;
+  var colGrp=hdrs.indexOf('Група'); if(colGrp<0) colGrp=3;
+  var n=0;
+  for(var r=1;r<vals.length;r++){
+    var nm=String(vals[r][colName]||'');
+    if(nm.toLowerCase().indexOf(namePart)<0) continue;
+    n++;
+    var id=String(vals[r][0]);
+    var raw=vals[r][colAbs]; var arr=[]; try{ arr=JSON.parse(raw)||[]; }catch(e){}
+    Logger.log('—— Рядок %s | id=%s | лок=%s | група=%s | відсутностей: %s', r+1, id, vals[r][colLoc], vals[r][colGrp], arr.length);
+    arr.forEach(function(a,i){ if(!a) return; Logger.log('     [%s] %s %s→%s | %s | %s%% | createdBy=%s createdAt=%s id=%s', i, a.type, a.from, a.to, a.status, a.totalPct, a.createdBy, (a.createdAt||'').slice(0,16), a.id); });
+  }
+  Logger.log('=== рядків з "%s": %s ===', namePart, n);
+}
+
 function getInvoiceListData(params){
   try {
     var loc      = String(params.loc      || '').trim();

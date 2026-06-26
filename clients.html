@@ -4137,6 +4137,9 @@ function absPreviewUpdate(){
 
 async function saveAbsencePeriod(){
   var id=S.editId; if(!id) return;
+  if(S._absSaving) return;  // v6.82: захист від подвійного збереження (дубль відпустки)
+  S._absSaving=true;
+  try {
   var typeEl=document.getElementById('absNewType');
   var from=(document.getElementById('absNewFrom')||{}).value;
   var to=(document.getElementById('absNewTo')||{}).value;
@@ -4224,6 +4227,7 @@ async function saveAbsencePeriod(){
   if(type==='vacation' && ct==='standard'){
     await _refreshVacTargets(c.loc||'', _vacTargetMonthsForRange(from,to,now));
   }
+  } finally { S._absSaving=false; }
 }
 
 async function deleteAbsencePeriod(idx){
