@@ -5590,6 +5590,89 @@ function exportAttendance(params){
 
 
 
+
+
+function diagDopPicture(loc){
+  loc = loc || 'Осокорки';
+  var r = getInvoiceListData({loc:loc, payMonth:6, payYear:2026, extMonth:6, extYear:2026});
+  var actBy = {};
+  if (r && r.ok){ (r.children||[]).forEach(function(c){
+    var lines = (c.extrasBreakdown||[]).map(function(b){ return b.name+'×'+b.count+'='+b.total; }).join(', ');
+    actBy[c.name] = {sum: Number(c.extrasBreakdownSum)||0, lines: lines};
+  }); }
+  var sh = getCRMSpreadsheet().getSheetByName(SHEET_YEARLY);
+  var v = sh.getDataRange().getValues();
+  var h = v[0].map(function(x){ return String(x); });
+  var nameI=h.indexOf("Ім'я дитини"), locI=h.indexOf('Локація');
+  var cb=h.indexOf('Червень-Бюджет-доп'), cf=h.indexOf('Червень-Факт-доп');
+  var lb=h.indexOf('Липень-Бюджет-доп'), lf=h.indexOf('Липень-Факт-доп');
+  Logger.log('=== %s | заняття червня + ДОП Червень→Липень ===', loc);
+  var n=0;
+  for (var i=1;i<v.length;i++){
+    if (String(v[i][locI]).trim()!==loc) continue;
+    var nm=String(v[i][nameI]).trim(); if(!nm) continue;
+    var cbV=Number(v[i][cb])||0, cfV=Number(v[i][cf])||0, lbV=Number(v[i][lb])||0, lfV=Number(v[i][lf])||0;
+    var act=actBy[nm]||{sum:0,lines:''};
+    if (cbV===0&&cfV===0&&lbV===0&&lfV===0&&act.sum===0) continue;
+    n++;
+    var debtCh=cbV-cfV; var flag=debtCh>0.5?('  ← борг '+debtCh):'';
+    Logger.log('%s | заняття чер=%s [%s] | Чер: Б=%s Ф=%s | Лип: Б=%s Ф=%s%s', nm, act.sum, act.lines, cbV, cfV, lbV, lfV, flag);
+  }
+  Logger.log('=== всього: %s ===', n);
+}
+
+function diagNavchPicture(loc){
+  loc = loc || 'Осокорки';
+  var sh = getCRMSpreadsheet().getSheetByName(SHEET_YEARLY);
+  var v = sh.getDataRange().getValues();
+  var h = v[0].map(function(x){ return String(x); });
+  var nameI=h.indexOf("Ім'я дитини"), locI=h.indexOf('Локація');
+  var cb=h.indexOf('Червень-Бюджет-навч'), cf=h.indexOf('Червень-Факт-навч');
+  var lb=h.indexOf('Липень-Бюджет-навч'), lf=h.indexOf('Липень-Факт-навч');
+  if (cb<0){ Logger.log('⚠ колонки навч не знайдено (Червень-Бюджет-навч=%s)', cb); return; }
+  Logger.log('=== %s | НАВЧАННЯ Червень→Липень ===', loc);
+  var n=0, debtors=0;
+  for (var i=1;i<v.length;i++){
+    if (String(v[i][locI]).trim()!==loc) continue;
+    var nm=String(v[i][nameI]).trim(); if(!nm) continue;
+    var cbV=Number(v[i][cb])||0, cfV=Number(v[i][cf])||0, lbV=Number(v[i][lb])||0, lfV=Number(v[i][lf])||0;
+    if (cbV===0&&cfV===0&&lbV===0&&lfV===0) continue;
+    n++; var debt=cbV-cfV; var flag=debt>0.5?('  ← борг '+debt):(debt<-0.5?('  ← перепл '+(-debt)):'');
+    if(debt>0.5) debtors++;
+    Logger.log('%s | Чер: Б=%s Ф=%s | Лип: Б=%s Ф=%s%s', nm, cbV, cfV, lbV, lfV, flag);
+  }
+  Logger.log('=== всього: %s | боржників (Чер Б>Ф): %s ===', n, debtors);
+}
+
+
+
+function diagNewInvoice(loc){
+  loc = loc || 'Осокорки';
+  var sh = getCRMSpreadsheet().getSheetByName(SHEET_YEARLY);
+  var v = sh.getDataRange().getValues();
+  var h = v[0].map(function(x){ return String(x); });
+  var nameI=h.indexOf("Ім'я дитини"), locI=h.indexOf('Локація');
+  function col(c){ return h.indexOf(c); }
+  var cBn=col('Червень-Бюджет-навч'), cFn=col('Червень-Факт-навч');
+  var cBd=col('Червень-Бюджет-доп'), cFd=col('Червень-Факт-доп');
+  var lBn=col('Липень-Бюджет-навч'), lBd=col('Липень-Бюджет-доп');
+  Logger.log('=== ПРОЕКТ РАХУНКІВ | локація=%s ===', loc);
+  function num(r,i){ return i>=0 ? (Number(v[r][i])||0) : 0; }
+  function ds(x){ return x>0.5?('+борг '+x):(x<-0.5?('перепл '+(-x)):'0'); }
+  var n=0;
+  for (var i=1;i<v.length;i++){
+    if (String(v[i][locI]).trim()!==loc) continue;
+    var nm=String(v[i][nameI]).trim(); if(!nm) continue;
+    var navchCur=num(i,lBn), navchDebt=num(i,cBn)-num(i,cFn);
+    var dopCur=num(i,lBd), dopDebt=num(i,cBd)-num(i,cFd);
+    var total=navchCur+navchDebt+dopCur+dopDebt;
+    if (navchCur===0 && dopCur===0 && navchDebt===0 && dopDebt===0) continue;
+    n++;
+    Logger.log('[%s] %s (рядок %s) | навч: %s (борг %s) | доп: %s (борг %s) | РАЗОМ=%s', loc, nm, (i+1), navchCur, ds(navchDebt), dopCur, ds(dopDebt), total);
+  }
+  Logger.log('=== всього: %s ===', n);
+}
+
 function getInvoiceListData(params){
   try {
     var loc      = String(params.loc      || '').trim();

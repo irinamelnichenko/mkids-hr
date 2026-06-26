@@ -3498,9 +3498,24 @@ function recalcDiscount(){
   if(t==='standard'){
     var vacAmt=(c.absences||[]).filter(function(a){ return a.type==='vacation'&&(!a.id||a.status==='done')&&a.monthsBreakdown&&a.monthsBreakdown.length; })
       .reduce(function(s,a){ return s+a.monthsBreakdown.reduce(function(ss,mb){ return ss+(mb.amount||0); },0); },0);
-    var remain=getVacationLimitRemaining(c, today(), null);
+    var _cy=getContractYear(c.contractDate, today());
+    var _curRem=getVacationLimitRemaining(c, today(), null);
+    function _fmtCY(iso){ if(!iso) return ''; var pp=String(iso).split('-'); return pp[2]+'.'+pp[1]+'.'+pp[0]; }
+    var vacBoxes='';
+    if(_cy){
+      var _hasNext=(c.absences||[]).some(function(a){ return a&&a.type==='vacation'&&a.status!=='cancelled'&&a.status!=='rejected'&&a.from&&a.from>_cy.to; });
+      if(_hasNext){
+        var _nd=pd(_cy.to); _nd.setDate(_nd.getDate()+1); var _ns=isoOf(_nd);
+        var _ny=getContractYear(c.contractDate, _ns);
+        var _nextRem=getVacationLimitRemaining(c, _ns, null);
+        vacBoxes='<div class="vac-box"><div class="vac-num">'+_curRem+'</div><div><div class="vac-lbl">Цей рік (до '+_fmtCY(_cy.to)+')</div><div class="vac-lbl">з 20 роб.днів</div></div></div>'
+                +'<div class="vac-box"><div class="vac-num">'+_nextRem+'</div><div><div class="vac-lbl">Новий рік (з '+_fmtCY(_ny.from)+')</div><div class="vac-lbl">з 20 роб.днів</div></div></div>';
+      }
+    }
+    if(!vacBoxes){ vacBoxes='<div class="vac-box"><div class="vac-num">'+_curRem+'</div><div><div class="vac-lbl">Залишок ліміту</div><div class="vac-lbl">з 20 роб.днів/рік</div></div></div>'; }
+    var remain=_curRem;
     var html='<div style="display:flex;gap:10px;flex-wrap:wrap">'
-      +'<div class="vac-box"><div class="vac-num">'+remain+'</div><div><div class="vac-lbl">Залишок ліміту</div><div class="vac-lbl">з 20 роб.днів/рік</div></div></div>'
+      +vacBoxes
       +(fee>0?'<div class="vac-box"><div class="vac-num" style="color:var(--green)">−'+fmtN(vacAmt)+'</div><div><div class="vac-lbl">Знижка за відпустки (грн)</div></div></div>':'')
       +'</div>'
       +'<div class="alert alert-info" style="margin-top:8px;font-size:12px">🏖 Відпустка (формула v6.36): <b>до сплати = ціна × відвідані / робочі_дні_місяця</b>. Ліміт 20 роб.днів на договірний рік; понад ліміт — повна оплата. Деталі по періодах — вкладка «Відсутності».</div>';
