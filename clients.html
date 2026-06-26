@@ -3822,11 +3822,11 @@ function getContractYear(contractDate, todayStr){
   for(var off=diffY-1;off<=diffY+1;off++){
     var f=new Date(cd.getFullYear()+off,cd.getMonth(),cd.getDate());
     var t2=new Date(cd.getFullYear()+off+1,cd.getMonth(),cd.getDate()-1);
-    if(td>=f&&td<=t2) return {from:isoOf(f),to:isoOf(t2)};
+    if(td>=f&&td<=t2) return {from:f.toISOString().slice(0,10),to:t2.toISOString().slice(0,10)};
   }
   var f0=new Date(cd.getFullYear()+diffY,cd.getMonth(),cd.getDate());
   var t0=new Date(cd.getFullYear()+diffY+1,cd.getMonth(),cd.getDate()-1);
-  return {from:isoOf(f0),to:isoOf(t0)};
+  return {from:f0.toISOString().slice(0,10),to:t0.toISOString().slice(0,10)};
 }
 
 // Конвертує старий формат відсутностей в новий (in-place)
@@ -3943,28 +3943,6 @@ function renderAbsences(){
   sickWeeks=Math.min(4,sickWeeks);
   var vacWeeksRemain=Math.max(0,4-vacWeeks);
   var sickWeeksRemain=Math.max(0,4-sickWeeks);
-  function _vacWeeksYr(refISO){
-    var w=getContractYear(contractDate, refISO); if(!w) return {weeks:0, w:null};
-    var tot=0;
-    abs.forEach(function(a){
-      if(a.type!=='vacation'||a.status==='rejected'||a.status==='cancelled') return;
-      if(!a.from) return;
-      if(a.from < w.from || a.from > w.to) return;
-      tot += Math.min(4, Math.ceil((a.workDays||a.days||0)/5));
-    });
-    return {weeks:Math.min(4,tot), w:w};
-  }
-  var _vCur=_vacWeeksYr(today());
-  var _vCurW=_vCur.weeks, _vCurRem=Math.max(0,4-_vCurW);
-  var _hasNextVac=false, _vNextW=0, _vNextRem=0, _nyW=null;
-  if(_vCur.w){
-    _hasNextVac=abs.some(function(a){ return a.type==='vacation'&&a.status!=='rejected'&&a.status!=='cancelled'&&a.from&&a.from>_vCur.w.to; });
-    if(_hasNextVac){
-      var _nd=pd(_vCur.w.to); _nd.setDate(_nd.getDate()+1); var _nyStart=isoOf(_nd);
-      var _vN=_vacWeeksYr(_nyStart); _vNextW=_vN.weeks; _vNextRem=Math.max(0,4-_vNextW); _nyW=_vN.w;
-    }
-  }
-  function _fmtCY2(iso){ if(!iso) return ''; var pp=String(iso).split('-'); return pp[2]+'.'+pp[1]+'.'+pp[0]; }
 
   var CT_LABEL={standard:'Стандарт',preschool:'Preschool','new':'Новий','sick-only':'Новий','school-no-absence':'Школа'};
   var html='';
@@ -3991,24 +3969,11 @@ function renderAbsences(){
   } else {
     html+='<div class="abs-counters">';
     if(vacAvail){
-      if(_hasNextVac){
-        html+=''
-        +'<div class="abs-cnt"><div class="abs-cnt-lbl">🏖 Відпустка · цей рік (до '+_fmtCY2(_vCur.w.to)+')</div>'
-          +'<div class="abs-cnt-val">'+_vCurW+' <span style="font-size:13px;font-weight:400;color:var(--gray)">з 4 тижнів</span></div>'
-          +'<div class="abs-cnt-sub">залишок: '+_vCurRem+' тиж</div>'
-          +'<div class="abs-pbar"><div class="abs-pbar-fill'+(_vCurW>=4?' over':'')+'" style="width:'+Math.min(100,Math.round(_vCurW/4*100))+'%"></div></div></div>';
-        html+=''
-        +'<div class="abs-cnt"><div class="abs-cnt-lbl">🏖 Відпустка · новий рік (з '+_fmtCY2(_nyW.from)+')</div>'
-          +'<div class="abs-cnt-val">'+_vNextW+' <span style="font-size:13px;font-weight:400;color:var(--gray)">з 4 тижнів</span></div>'
-          +'<div class="abs-cnt-sub">залишок: '+_vNextRem+' тиж</div>'
-          +'<div class="abs-pbar"><div class="abs-pbar-fill'+(_vNextW>=4?' over':'')+'" style="width:'+Math.min(100,Math.round(_vNextW/4*100))+'%"></div></div></div>';
-      } else {
-        html+=''
-        +'<div class="abs-cnt"><div class="abs-cnt-lbl">🏖 Відпустка</div>'
-          +'<div class="abs-cnt-val">'+_vCurW+' <span style="font-size:13px;font-weight:400;color:var(--gray)">з 4 тижнів</span></div>'
-          +'<div class="abs-cnt-sub">залишок: '+_vCurRem+' тиж</div>'
-          +'<div class="abs-pbar"><div class="abs-pbar-fill'+(_vCurW>=4?' over':'')+'" style="width:'+Math.min(100,Math.round(_vCurW/4*100))+'%"></div></div></div>';
-      }
+      var vp=Math.min(100,Math.round(vacWeeks/4*100));
+      html+='<div class="abs-cnt"><div class="abs-cnt-lbl">🏖 Відпустка</div>'
+        +'<div class="abs-cnt-val">'+vacWeeks+' <span style="font-size:13px;font-weight:400;color:var(--gray)">з 4 тижнів</span></div>'
+        +'<div class="abs-cnt-sub">залишок: '+vacWeeksRemain+' тиж</div>'
+        +'<div class="abs-pbar"><div class="abs-pbar-fill'+(vacWeeks>=4?' over':'')+'" style="width:'+vp+'%"></div></div></div>';
     }
     if(sickAvail){
       var sp=Math.min(100,Math.round(sickWeeks/4*100));
