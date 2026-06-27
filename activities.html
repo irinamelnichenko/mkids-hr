@@ -1617,12 +1617,21 @@ async function loadCatalog(force){
     }
     throw new Error('backend unavailable');
   } catch(e){
-    // 2. Fallback: HARDCODED + local overrides
-    console.warn('[activities] backend fallback:', e && e.message || e);
+    // v6.83: БЕЗ фейкового HARDCODED. Якщо є локальні правки — їх; інакше чесна помилка.
+    console.warn('[activities] catalog load failed:', e && e.message || e);
     var local = _loadLocalOverrides();
-    S.items = (local && local.items) ? local.items : HARDCODED_CATALOG.slice();
-    $('loadBox').classList.add('hidden');
-    renderCatalog();
+    if (local && local.items && local.items.length){
+      S.items = local.items;
+      $('loadBox').classList.add('hidden');
+      renderCatalog();
+    } else {
+      S.items = [];
+      $('loadBox').classList.add('hidden');
+      $('catalogTable').classList.add('hidden');
+      $('catalogEmpty').classList.add('hidden');
+      $('errBox').innerHTML = '⚠️ Не вдалося завантажити каталог із сервера (можливо, сервер перевантажений). Дані не втрачені — спробуйте ще раз. <button onclick="loadCatalog()" style="margin-left:8px;padding:4px 14px;border-radius:8px;border:1px solid #ccc;background:#fff;cursor:pointer;font-weight:600">↻ Оновити</button>';
+      $('errBox').classList.remove('hidden');
+    }
   }
 }
 

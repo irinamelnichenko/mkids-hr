@@ -5726,6 +5726,138 @@ function diagChildAbsences(namePart){
   Logger.log('=== рядків з "%s": %s ===', namePart, n);
 }
 
+function diagOranzhDates(loc){
+  loc = loc || 'Оранж';
+  function dkey(v){
+    if(v instanceof Date){ return Utilities.formatDate(v, 'Europe/Kiev', 'yyyy-MM-dd'); }
+    var ss=String(v||'').trim();
+    if(/^\d{4}-\d{2}-\d{2}/.test(ss)) return ss.slice(0,10);
+    var m=ss.match(/^(\d{1,2})[.\/](\d{1,2})[.\/](\d{4})/);
+    if(m) return m[3]+'-'+('0'+m[2]).slice(-2)+'-'+('0'+m[1]).slice(-2);
+    return ss;
+  }
+  var from='2026-06-01', to='2026-06-30';
+  var tab={}, dop={};
+  var crm=getCRMSpreadsheet().getSheetByName(SHEET_ATTENDANCE);
+  if(crm){
+    var tv=crm.getDataRange().getValues();
+    for(var i=1;i<tv.length;i++){
+      if(String(tv[i][3]||'').trim()!==loc) continue;
+      var d=dkey(tv[i][0]); if(d<from||d>to) continue;
+      tab[d]=(tab[d]||0)+1;
+    }
+  }
+  var dsh=_getAttendanceSheet(false);
+  if(dsh){
+    var dv=dsh.getDataRange().getValues();
+    for(var j=1;j<dv.length;j++){
+      var rec=_parseAttendanceRow(dv[j]);
+      if(String(rec.loc||'').trim()!==loc) continue;
+      var dd=dkey(rec.date); if(dd<from||dd>to) continue;
+      dop[dd]=(dop[dd]||0)+1;
+    }
+  }
+  Logger.log('=== %s | табель + допи по днях ЧЕРВЕНЬ ===', loc);
+  var wd=['Нд','Пн','Вт','Ср','Чт','Пт','Сб'];
+  var tabTot=0, dopTot=0;
+  for(var dnum=1; dnum<=30; dnum++){
+    var key='2026-06-'+('0'+dnum).slice(-2);
+    var dt=new Date(2026,5,dnum); var w=wd[dt.getDay()];
+    var t=tab[key]||0, dd2=dop[key]||0;
+    tabTot+=t; dopTot+=dd2;
+    var isWeekend=(dt.getDay()===0||dt.getDay()===6);
+    var flag=(!isWeekend && t===0 && dd2===0)?'  ← ПОРОЖНІЙ будній':'';
+    Logger.log('%s %s | табель: %s | допи: %s%s', w, key, t, dd2, flag);
+  }
+  Logger.log('=== РАЗОМ червень | табель: %s | допи: %s ===', tabTot, dopTot);
+}
+
+function diagDopByWeekday(){
+  function dkey(v){
+    if(v instanceof Date){ return Utilities.formatDate(v, 'Europe/Kiev', 'yyyy-MM-dd'); }
+    var ss=String(v||'').trim();
+    if(/^\d{4}-\d{2}-\d{2}/.test(ss)) return ss.slice(0,10);
+    var m=ss.match(/^(\d{1,2})[.\/](\d{1,2})[.\/](\d{4})/);
+    if(m) return m[3]+'-'+('0'+m[2]).slice(-2)+'-'+('0'+m[1]).slice(-2);
+    return ss;
+  }
+  var wd=['Нд','Пн','Вт','Ср','Чт','Пт','Сб'];
+  var dsh=_getAttendanceSheet(false);
+  var dv=dsh.getDataRange().getValues();
+  var byLoc={};
+  for(var j=1;j<dv.length;j++){
+    var rec=_parseAttendanceRow(dv[j]);
+    var dd=dkey(rec.date); if(dd<'2026-06-01'||dd>'2026-06-30') continue;
+    var loc=String(rec.loc||'?').trim();
+    var parts=dd.split('-'); var dt=new Date(+parts[0], +parts[1]-1, +parts[2]); var w=dt.getDay();
+    if(!byLoc[loc]) byLoc[loc]=[0,0,0,0,0,0,0];
+    byLoc[loc][w]++;
+  }
+  Logger.log('=== ДОПИ по днях тижня (червень), по локаціях ===');
+  Object.keys(byLoc).sort().forEach(function(loc){
+    var c=byLoc[loc];
+    Logger.log('%s | Пн=%s Вт=%s Ср=%s Чт=%s Пт=%s | (Сб=%s Нд=%s)', loc, c[1], c[2], c[3], c[4], c[5], c[6], c[0]);
+  });
+}
+
+function diagOranzhDopDetail(loc){
+  loc = loc || 'Оранж';
+  function dkey(v){
+    if(v instanceof Date){ return Utilities.formatDate(v, 'Europe/Kiev', 'yyyy-MM-dd'); }
+    var ss=String(v||'').trim();
+    if(/^\d{4}-\d{2}-\d{2}/.test(ss)) return ss.slice(0,10);
+    var m=ss.match(/^(\d{1,2})[.\/](\d{1,2})[.\/](\d{4})/);
+    if(m) return m[3]+'-'+('0'+m[2]).slice(-2)+'-'+('0'+m[1]).slice(-2);
+    return ss;
+  }
+  var wd=['Нд','Пн','Вт','Ср','Чт','Пт','Сб'];
+  var dsh=_getAttendanceSheet(false);
+  var dv=dsh.getDataRange().getValues();
+  var byAct={};
+  for(var j=1;j<dv.length;j++){
+    var rec=_parseAttendanceRow(dv[j]);
+    if(String(rec.loc||'').trim()!==loc) continue;
+    var dd=dkey(rec.date); if(dd<'2026-06-01'||dd>'2026-06-30') continue;
+    var act=String(rec.activityName||'?').trim();
+    if(!byAct[act]) byAct[act]={};
+    byAct[act][dd]=(byAct[act][dd]||0)+1;
+  }
+  Logger.log('=== %s | заняття × дати (червень) ===', loc);
+  Object.keys(byAct).sort().forEach(function(act){
+    var dates=Object.keys(byAct[act]).sort();
+    var parts=dates.map(function(d){ var pp=d.split('-'); var dt=new Date(+pp[0],+pp[1]-1,+pp[2]); return wd[dt.getDay()]+' '+d.slice(8)+'.06('+byAct[act][d]+')'; });
+    Logger.log('%s: %s', act, parts.join('  '));
+  });
+}
+
+function diagCatalog(loc){
+  loc = loc || 'Оранж';
+  Logger.log('=== %s | КАТАЛОГ (джерело правди) ===', loc);
+  var cat=getActivitiesCatalog(loc);
+  if(cat&&cat.items){
+    cat.items.forEach(function(a){
+      Logger.log('  %s | ціна=%s | ставка=%s | %s | %s', a.name, a.clientPrice, a.teacherRate, a.payType, (a.active?'активне':'—'));
+    });
+    Logger.log('  (всього занять: %s)', cat.items.length);
+  } else { Logger.log('  помилка каталогу'); }
+  function dkey(v){ if(v instanceof Date){ return Utilities.formatDate(v,'Europe/Kiev','yyyy-MM-dd'); } var ss=String(v||'').trim(); if(/^\d{4}-\d{2}-\d{2}/.test(ss)) return ss.slice(0,10); var m=ss.match(/^(\d{1,2})[.\/](\d{1,2})[.\/](\d{4})/); if(m) return m[3]+'-'+('0'+m[2]).slice(-2)+'-'+('0'+m[1]).slice(-2); return ss; }
+  Logger.log('=== %s | ЦІНИ В ПОЗНАЧКАХ (червень) — по них рахується ===', loc);
+  var dsh=_getAttendanceSheet(false); var dv=dsh.getDataRange().getValues();
+  var byAct={};
+  for(var j=1;j<dv.length;j++){
+    var rec=_parseAttendanceRow(dv[j]);
+    if(String(rec.loc||'').trim()!==loc) continue;
+    var dd=dkey(rec.date); if(dd<'2026-06-01'||dd>'2026-06-30') continue;
+    var act=String(rec.activityName||'?').trim(); var pr=Number(rec.price)||0;
+    if(!byAct[act]) byAct[act]={};
+    byAct[act][pr]=(byAct[act][pr]||0)+1;
+  }
+  Object.keys(byAct).sort().forEach(function(act){
+    var prices=Object.keys(byAct[act]).map(function(pr){ return pr+'₴×'+byAct[act][pr]; }).join('  ');
+    Logger.log('  %s: %s', act, prices);
+  });
+}
+
 function getInvoiceListData(params){
   try {
     var loc      = String(params.loc      || '').trim();
