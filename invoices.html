@@ -798,6 +798,10 @@ async function loadInvoiceData(){
   }
   INV.loading = true;
   INV.lastLoc = CFG.LOC;
+  // v6.87: зміна місяця/типів/локації → ключ кешу інший → скидаємо стан прогріву.
+  INV._prewarmDone = null;
+  var _pwb = $('invPrewarmBtn');
+  if (_pwb){ _pwb.disabled = false; _pwb.textContent = '⚡ Підготувати Viber'; _pwb.style.background = ''; _pwb.style.color = ''; }
   $('invListWrap').innerHTML = '<div class="inv-loading">⏳ Завантаження даних…</div>';
   $('invSummary').textContent = 'Завантаження…';
   try {
@@ -1266,12 +1270,20 @@ async function invPrewarmAll(){
     }
     done++; paint();
   }
+  // v6.87: стійкий видимий стан — кнопка лишається зеленою з підсумком і часом.
+  var _d = new Date();
+  var at = ('0' + _d.getHours()).slice(-2) + ':' + ('0' + _d.getMinutes()).slice(-2);
+  var okCnt = total - skipped;   // готові = нові + ті, що вже були в кеші
+  INV._prewarmDone = { total: total, ok: okCnt, skipped: skipped, cached: cached, at: at };
   if (btn){
-    btn.disabled = false;
-    btn.textContent = '⚡ Підготувати Viber';
+    btn.disabled = false;   // кнопка активна — повторний клік догріє нове, кешоване пропустить
+    btn.textContent = '✓ Підготовлено ' + okCnt + '/' + total + ' · ' + at;
+    btn.style.background = '#1faa59';
+    btn.style.color = '#fff';
   }
-  showToast('✓ Готово, можна надсилати · підготовлено ' + (total - skipped) + ' / ' + total +
-            (skipped ? (' · пропущено ' + skipped) : ''), 'ok', 5000);
+  showToast('✓ Готово, можна надсилати · підготовлено ' + okCnt + ' / ' + total +
+            ' · вже було ' + cached +
+            (skipped ? (' · пропущено ' + skipped) : ''), 'ok', 6000);
 }
 
 // 📬 — масова: послідовно по дітях з email і сумою > 0, з прогрес-тостом.
