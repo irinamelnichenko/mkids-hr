@@ -5,7 +5,7 @@
 //   • GET до /macros/ (Apps Script) → network-only, fallback на cache
 //   • GET до інших static URLs → cache-first з фоновим оновленням
 
-var CACHE = 'mkids-cache-v6.86';
+var CACHE = 'mkids-cache-v6.87';
 var SHELL = [
   './',
   'activities.html',

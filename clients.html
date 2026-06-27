@@ -1155,6 +1155,38 @@ function getVacationUsedInContractYear(c, refISO, excludeAbsId){
 function getVacationLimitRemaining(c, refISO, excludeAbsId){
   return Math.max(0, 20 - getVacationUsedInContractYear(c, refISO||today(), excludeAbsId));
 }
+// v6.88: інфо про залишок ліміту — поточний договірний рік + (опційно) наступний,
+// якщо у клієнта є відпустка, що потрапляє в наступний договірний рік (старий період
+// ще не закінчився, а беруть нову на новий рік → показуємо обидва залишки).
+function getVacationRemainInfo(c, refISO, excludeAbsId){
+  refISO = refISO || today();
+  var info = { curRemain: getVacationLimitRemaining(c, refISO, excludeAbsId),
+               curYear: null, hasNext: false, nextRemain: 20, nextYear: null };
+  if(!c || !c.contractDate) return info;
+  var cy = getContractYear(c.contractDate, refISO);
+  info.curYear = cy;
+  if(!cy) return info;
+  // Наступний договірний рік: містить день після cur.to.
+  var nf = pd(cy.to); if(!nf) return info;
+  nf.setDate(nf.getDate()+1);
+  var nextRef = isoOf(nf);
+  var ny = getContractYear(c.contractDate, nextRef);
+  if(!ny) return info;
+  // Чи є активна відпустка, що перетинає наступний договірний рік?
+  var hit = (c.absences||[]).some(function(a){
+    if(!a || a.type!=='vacation') return false;
+    if(excludeAbsId && a.id===excludeAbsId) return false;
+    if(a.status==='rejected'||a.status==='cancelled') return false;
+    if(!a.from || !a.to) return false;
+    return a.to>=ny.from && a.from<=ny.to;   // перетин діапазонів
+  });
+  if(hit){
+    info.hasNext = true;
+    info.nextYear = ny;
+    info.nextRemain = getVacationLimitRemaining(c, nextRef, excludeAbsId);
+  }
+  return info;
+}
 
 function translitUA(str){
   var T={'а':'a','б':'b','в':'v','г':'h','ґ':'g','д':'d','е':'e','є':'ye','ж':'zh','з':'z','и':'y',
@@ -3498,9 +3530,16 @@ function recalcDiscount(){
   if(t==='standard'){
     var vacAmt=(c.absences||[]).filter(function(a){ return a.type==='vacation'&&(!a.id||a.status==='done')&&a.monthsBreakdown&&a.monthsBreakdown.length; })
       .reduce(function(s,a){ return s+a.monthsBreakdown.reduce(function(ss,mb){ return ss+(mb.amount||0); },0); },0);
-    var remain=getVacationLimitRemaining(c, today(), null);
+    var vri=getVacationRemainInfo(c, today(), null);
+    var remainBoxes;
+    if(vri.hasNext){
+      remainBoxes='<div class="vac-box"><div class="vac-num">'+vri.curRemain+'</div><div><div class="vac-lbl">Цей рік'+(vri.curYear?' (до '+fmtD(vri.curYear.to)+')':'')+'</div><div class="vac-lbl">залишок з 20 роб.днів</div></div></div>'
+        +'<div class="vac-box"><div class="vac-num">'+vri.nextRemain+'</div><div><div class="vac-lbl">Новий рік'+(vri.nextYear?' (з '+fmtD(vri.nextYear.from)+')':'')+'</div><div class="vac-lbl">залишок з 20 роб.днів</div></div></div>';
+    } else {
+      remainBoxes='<div class="vac-box"><div class="vac-num">'+vri.curRemain+'</div><div><div class="vac-lbl">Залишок ліміту</div><div class="vac-lbl">з 20 роб.днів/рік</div></div></div>';
+    }
     var html='<div style="display:flex;gap:10px;flex-wrap:wrap">'
-      +'<div class="vac-box"><div class="vac-num">'+remain+'</div><div><div class="vac-lbl">Залишок ліміту</div><div class="vac-lbl">з 20 роб.днів/рік</div></div></div>'
+      +remainBoxes
       +(fee>0?'<div class="vac-box"><div class="vac-num" style="color:var(--green)">−'+fmtN(vacAmt)+'</div><div><div class="vac-lbl">Знижка за відпустки (грн)</div></div></div>':'')
       +'</div>'
       +'<div class="alert alert-info" style="margin-top:8px;font-size:12px">🏖 Відпустка (формула v6.36): <b>до сплати = ціна × відвідані / робочі_дні_місяця</b>. Ліміт 20 роб.днів на договірний рік; понад ліміт — повна оплата. Деталі по періодах — вкладка «Відсутності».</div>';
