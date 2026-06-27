@@ -3933,10 +3933,16 @@ function getAttendanceMarks(filters){
 }
 
 function _nextAttendanceId(sh){
-  var data = sh.getDataRange().getValues();
+  // v6.84: O(1) — читаємо лише останній рядок (ID лише дописуються).
+  // Раніше читався весь аркуш — тримало замок довго під навантаженням.
+  var last = sh.getLastRow();
+  if (last < 2) return 1;
+  var lastId = Number(sh.getRange(last, 1).getValue()) || 0;
+  if (lastId > 0) return lastId + 1;
+  var ids = sh.getRange(2, 1, last - 1, 1).getValues();
   var max = 0;
-  for (var i = 1; i < data.length; i++){
-    var n = Number(data[i][0]) || 0;
+  for (var i = 0; i < ids.length; i++){
+    var n = Number(ids[i][0]) || 0;
     if (n > max) max = n;
   }
   return max + 1;
@@ -5858,6 +5864,59 @@ function diagCatalog(loc){
   });
 }
 
+function diagRequisites(){
+  var sh=SpreadsheetApp.openById(CONFIG_SHEET_ID).getSheetByName('Реквізити_Локацій');
+  if(!sh){ Logger.log('немає аркуша'); return; }
+  var v=sh.getDataRange().getValues();
+  var hdr=v[0].map(function(x,i){ return i+':'+String(x); });
+  Logger.log('=== ЗАГОЛОВКИ ===');
+  Logger.log(hdr.join(' | '));
+  var linkCol=-1;
+  for(var i=0;i<v[0].length;i++){ if(String(v[0][i]).indexOf('Посилання')>=0){ linkCol=i; break; } }
+  Logger.log('=== колонка Посилання_на_оплату = індекс %s (реадер очікує 6) ===', linkCol);
+  Logger.log('=== ЛОКАЦІЯ | ТИП | ПОСИЛАННЯ ===');
+  for(var r=1;r<v.length;r++){
+    var loc=String(v[r][0]||'').trim(); if(!loc) continue;
+    var typ=String(v[r][1]||'').trim();
+    var link=linkCol>=0?String(v[r][linkCol]||'').trim():'';
+    Logger.log('%s | %s | %s', loc, typ, link||'(порожньо)');
+  }
+}
+
+function diagReqLookup(){
+  ['Осокорки','Оранж'].forEach(function(loc){
+    ['studies','extras'].forEach(function(t){
+      var r=_getInvoiceRequisites(loc,t);
+      if(r&&r.ok){ Logger.log('%s/%s → OK | ЮО=%s | IBAN=%s | link=%s', loc, t, r.name, r.iban, r.payLink||'(порожньо)'); }
+      else { Logger.log('%s/%s → ПОМИЛКА: %s', loc, t, r&&r.error); }
+    });
+  });
+}
+
+function diagSigner(namePart){
+  namePart=(namePart||'Огієнко').toLowerCase();
+  var gc=getClients(); if(!gc.ok){ Logger.log('getClients fail'); return; }
+  var list=gc.data||[];
+  var found=0;
+  for(var i=0;i<list.length;i++){
+    var c=list[i];
+    var nm=String(c['ПІБ дитини']||'');
+    if(nm.toLowerCase().indexOf(namePart)<0) continue;
+    found++;
+    Logger.log('—— %s | лок=%s', nm, c['Локація']);
+    Logger.log('   Підписант договору = [%s]', c['Підписант договору']);
+    Logger.log('   ПІБ мами = [%s]', c['ПІБ мами']);
+    Logger.log('   ПІБ тата = [%s]', c['ПІБ тата']);
+    Logger.log('   Телефон мами = [%s]', c['Телефон мами']);
+    var rel=Object.keys(c).filter(function(k){ var kl=k.toLowerCase(); return kl.indexOf('мам')>=0||kl.indexOf('тат')>=0||kl.indexOf('підпис')>=0||kl.indexOf('піб')>=0; });
+    Logger.log('   всі релевантні ключі: %s', JSON.stringify(rel));
+    rel.forEach(function(k){ var v=String(c[k]||'').trim(); if(v) Logger.log('      [%s] = [%s]', k, v); });
+    var d=_invoiceClientData(nm, String(c['Локація']||''), 'studies');
+    Logger.log('   ЧИТАЧ рахунку: signerParent=[%s] signerName=[%s] phone=[%s]', d.signerParent, d.signerName, d.signerPhone);
+  }
+  if(!found) Logger.log('не знайдено: %s', namePart);
+}
+
 function getInvoiceListData(params){
   try {
     var loc      = String(params.loc      || '').trim();
@@ -6100,6 +6159,7 @@ function invoiceViberMessage(opts){
     }
     L.push('Сума до сплати: ' + _fmtUahSrv(r.sum) + ' грн');
     L.push('');
+    if (r.payLink){ L.push('Оплатити карткою (натисніть):'); L.push(r.payLink); L.push(''); }
     L.push('Реквізити для оплати:');
     if (r.juName) L.push('Отримувач: ' + r.juName);
     if (r.iban)   L.push('IBAN: ' + r.iban);
@@ -6143,7 +6203,7 @@ function invoicePdfLink(opts){
     var blob = Utilities.newBlob(bytes, 'application/pdf', fname);
     var file = folder.createFile(blob);
     try { file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch(e){}
-    return {ok:true, url:file.getUrl(), filename:fname, sum:res.sum, juName:res.juName, edrpou:res.edrpou, iban:res.iban, bank:res.bank, lines:res.lines, buyerName:res.buyerName};
+    return {ok:true, url:file.getUrl(), filename:fname, sum:res.sum, juName:res.juName, edrpou:res.edrpou, iban:res.iban, bank:res.bank, payLink:res.payLink, lines:res.lines, buyerName:res.buyerName};
   } catch(e){
     return {ok:false, error:'Drive: ' + (e.message || e)};
   }
@@ -6265,6 +6325,7 @@ function generateInvoicePDF(opts){
     edrpou: req.edrpou,
     iban: req.iban,
     bank: req.bank,
+    payLink: req.payLink,
     lines: lines,
     buyerName: buyerDisplay,
     sumWords: _numberToUkrainianWords(total)
@@ -6985,29 +7046,36 @@ function _invoiceClientData(childName, loc, type){
   if (!gc.ok) return res;
   var nn = String(childName).trim(), ll = String(loc).trim();
   var list = gc.data || [];
+  // v6.85: серед можливих ДУБЛІВ картки обираємо ту, де заповнений ПІБ підписанта
+  // (порожні чернетки авто-синку з Оплати-Рік не блокують рахунок).
+  var picked = null, firstMatch = null;
   for (var i = 0; i < list.length; i++){
-    var c = list[i];
-    if (String(c['ПІБ дитини'] || '').trim() !== nn) continue;
-    if (String(c['Локація']    || '').trim() !== ll) continue;
-    res.found = true;
-    var signer = String(c['Підписант договору'] || '').trim();  // '' / 'mom' / 'dad' — НЕ дефолтимо
-    res.signerParent = signer;
-    res.signerName = (signer === 'dad') ? String(c['ПІБ тата'] || '').trim()
-                   : (signer === 'mom') ? String(c['ПІБ мами'] || '').trim()
-                   : '';
-    // v6.50: контакти підписанта (для email/viber-розсилки).
-    res.signerEmail = (signer === 'dad') ? String(c['Email тата']   || '').trim()
-                    : (signer === 'mom') ? String(c['Email мами']   || '').trim() : '';
-    res.signerPhone = (signer === 'dad') ? String(c['Телефон тата'] || '').trim()
-                    : (signer === 'mom') ? String(c['Телефон мами'] || '').trim() : '';
-    res.contractNumber = (type === 'extras')
-      ? _contractStr(c['Номер додаткового договору'])   // v6.11.25 read-guard проти Date
-      : _contractStr(c['Номер договору']);
-    // v6.11.26: графік вступного (для рахунку навчання) — JSON з колонки "Графік внеску (JSON)".
-    try { var efs = JSON.parse(c['Графік внеску (JSON)'] || '[]'); res.entryFeeSchedule = Array.isArray(efs) ? efs : []; }
-    catch(e){ res.entryFeeSchedule = []; }
-    break;
+    var cc = list[i];
+    if (String(cc['ПІБ дитини'] || '').trim() !== nn) continue;
+    if (String(cc['Локація']    || '').trim() !== ll) continue;
+    if (!firstMatch) firstMatch = cc;
+    var sg = String(cc['Підписант договору'] || '').trim();
+    var snm = (sg === 'dad') ? String(cc['ПІБ тата'] || '').trim()
+            : (sg === 'mom') ? String(cc['ПІБ мами'] || '').trim() : '';
+    if (snm){ picked = cc; break; }
   }
+  var c = picked || firstMatch;
+  if (!c) return res;
+  res.found = true;
+  var signer = String(c['Підписант договору'] || '').trim();
+  res.signerParent = signer;
+  res.signerName = (signer === 'dad') ? String(c['ПІБ тата'] || '').trim()
+                 : (signer === 'mom') ? String(c['ПІБ мами'] || '').trim()
+                 : '';
+  res.signerEmail = (signer === 'dad') ? String(c['Email тата']   || '').trim()
+                  : (signer === 'mom') ? String(c['Email мами']   || '').trim() : '';
+  res.signerPhone = (signer === 'dad') ? String(c['Телефон тата'] || '').trim()
+                  : (signer === 'mom') ? String(c['Телефон мами'] || '').trim() : '';
+  res.contractNumber = (type === 'extras')
+    ? _contractStr(c['Номер додаткового договору'])
+    : _contractStr(c['Номер договору']);
+  try { var efs = JSON.parse(c['Графік внеску (JSON)'] || '[]'); res.entryFeeSchedule = Array.isArray(efs) ? efs : []; }
+  catch(e){ res.entryFeeSchedule = []; }
   return res;
 }
 

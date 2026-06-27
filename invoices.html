@@ -331,6 +331,7 @@ select,input{font-family:inherit}
       </div>
       <div class="inv-bulk-row">
         <div class="inv-bulk-info" id="invSummary">Завантаження…</div>
+        <button class="btn" id="invPrewarmBtn" onclick="invPrewarmAll()">⚡ Підготувати Viber</button>
         <button class="btn btn-primary" id="invBulkBtn" onclick="invBulkSend()">📬 Надіслати всім</button>
       </div>
       <input id="invSearch" class="inv-search" type="text" placeholder="🔍 Пошук дитини або групи..." oninput="INV.searchQ=this.value; renderInvoiceList()">
@@ -1181,27 +1182,96 @@ function _invViberModal(c, messages, intl){
   };
 }
 
+var _viberMsgCache = {};
 async function invSendViber(childId){
   var c = _invFindChild(childId);
   if (!c){ showToast('❌ Дитину не знайдено', 'err'); return; }
   if (!c.signerPhone){ showToast('❌ У підписанта немає телефону', 'err'); return; }
   var intl = _invNormPhone(c.signerPhone);
   if (intl.length < 11){ showToast('❌ Невірний телефон: ' + c.signerPhone, 'err'); return; }
+  // v6.86: кеш повідомлень — повторний клік на ту саму дитину/місяць не б'є бекенд.
+  var sStudies = (c.paymentSum || 0) > 0, sExtras = (c.extrasSum || 0) > 0;
+  var ckey = [c.name, CFG.LOC, sStudies?1:0, sExtras?1:0,
+              INV.payMonth, INV.payYear, INV.extMonth, INV.extYear].join('|');
+  if (_viberMsgCache[ckey] && _viberMsgCache[ckey].length){
+    _invViberModal(c, _viberMsgCache[ckey], intl);
+    return;
+  }
   showToast('⏳ Готуємо повідомлення…', 'info', 60000);
   try {
     var res = await invApi({
       action: 'invoiceViberMessage',
       childName: c.name, loc: CFG.LOC,
-      sendStudies: (c.paymentSum || 0) > 0,
-      sendExtras:  (c.extrasSum  || 0) > 0,
+      sendStudies: sStudies,
+      sendExtras:  sExtras,
       payMonth: INV.payMonth, payYear: INV.payYear,
       extMonth: INV.extMonth, extYear: INV.extYear
     });
     if (!res.messages || !res.messages.length){ showToast('❌ Нема сум для рахунку', 'err'); return; }
+    _viberMsgCache[ckey] = res.messages;
     _invViberModal(c, res.messages, intl);
   } catch(e){
     showToast('❌ ' + (e.message || 'Помилка'), 'err', 5000);
   }
+}
+
+// ⚡ v6.86: масовий прогрів кешу Viber — послідовно (Apps Script однопотоковий).
+// Ключ кешу та параметри виклику — РІВНО як у invSendViber, інакше кеш не співпаде.
+async function invPrewarmAll(){
+  if (!INV.data || !INV.data.children){ showToast('Немає даних', 'err'); return; }
+  // Те саме джерело + фільтр, що й renderInvoiceList().
+  var children = INV.data.children || [];
+  var q = (INV.searchQ || '').trim().toLowerCase();
+  var list = !q ? children : children.filter(function(c){
+    return (String(c.name || '').toLowerCase().indexOf(q) >= 0)
+        || (String(c.group || '').toLowerCase().indexOf(q) >= 0)
+        || (String(c.signerName || '').toLowerCase().indexOf(q) >= 0);
+  });
+  // Тільки ті, кому реально активна 💬 (є телефон підписанта) і є сума.
+  var targets = list.filter(function(c){
+    return !!c.signerPhone && ((c.paymentSum || 0) > 0 || (c.extrasSum || 0) > 0);
+  });
+  var btn = $('invPrewarmBtn');
+  var total = targets.length;
+  if (!total){ showToast('Немає кого готувати', 'info'); return; }
+  if (btn){ btn.disabled = true; }
+  var done = 0, cached = 0, skipped = 0;
+  function paint(){ if (btn) btn.textContent = '⚡ Підготовка ' + done + ' / ' + total; }
+  paint();
+  for (var i = 0; i < targets.length; i++){
+    var c = targets[i];
+    var intl = _invNormPhone(c.signerPhone);
+    if (intl.length < 11){ skipped++; done++; paint(); continue; }
+    // КЛЮЧ — точна копія з invSendViber.
+    var sStudies = (c.paymentSum || 0) > 0, sExtras = (c.extrasSum || 0) > 0;
+    var ckey = [c.name, CFG.LOC, sStudies?1:0, sExtras?1:0,
+                INV.payMonth, INV.payYear, INV.extMonth, INV.extYear].join('|');
+    if (_viberMsgCache[ckey] && _viberMsgCache[ckey].length){ cached++; done++; paint(); continue; }
+    try {
+      var res = await invApi({
+        action: 'invoiceViberMessage',
+        childName: c.name, loc: CFG.LOC,
+        sendStudies: sStudies,
+        sendExtras:  sExtras,
+        payMonth: INV.payMonth, payYear: INV.payYear,
+        extMonth: INV.extMonth, extYear: INV.extYear
+      });
+      if (res && res.messages && res.messages.length){
+        _viberMsgCache[ckey] = res.messages;
+      } else {
+        skipped++;
+      }
+    } catch(e){
+      skipped++;   // не зупиняємось — рахуємо як пропущену
+    }
+    done++; paint();
+  }
+  if (btn){
+    btn.disabled = false;
+    btn.textContent = '⚡ Підготувати Viber';
+  }
+  showToast('✓ Готово, можна надсилати · підготовлено ' + (total - skipped) + ' / ' + total +
+            (skipped ? (' · пропущено ' + skipped) : ''), 'ok', 5000);
 }
 
 // 📬 — масова: послідовно по дітях з email і сумою > 0, з прогрес-тостом.
