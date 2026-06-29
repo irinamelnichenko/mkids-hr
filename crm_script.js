@@ -13308,3 +13308,77 @@ function diagInvoiceRequisites(){
     Logger.log('row %s | loc=%s | type=%s | name="%s"', r, a, b, nm);
   }
 }
+
+function backupAbsences(){
+  var ss = getCRMSpreadsheet();
+  var sh = ss.getSheetByName(SHEET_CLIENTS);
+  var vals = sh.getDataRange().getValues();
+  var hdr = vals[0];
+  var iAbs = hdr.indexOf('Відсутності (JSON)');
+  var iName = hdr.indexOf('ПІБ дитини');
+  if(iAbs<0){ Logger.log('❌ колонка не знайдена'); return; }
+  var stamp = Utilities.formatDate(new Date(), 'GMT+3', 'yyyyMMdd_HHmmss');
+  var bName = 'BACKUP_absences_'+stamp;
+  var bk = ss.insertSheet(bName);
+  var out = [['row','name','absences_json']];
+  for(var r=1;r<vals.length;r++){
+    out.push([r+1, String(vals[r][iName]||''), String(vals[r][iAbs]||'')]);
+  }
+  bk.getRange(1,1,out.length,3).setValues(out);
+  Logger.log('✅ Бекап створено: аркуш "'+bName+'", рядків='+(out.length-1));
+}
+
+function cleanImportDups(APPLY){
+  var ss = getCRMSpreadsheet();
+  var sh = ss.getSheetByName(SHEET_CLIENTS);
+  var vals = sh.getDataRange().getValues();
+  var hdr = vals[0];
+  var iAbs = hdr.indexOf('Відсутності (JSON)');
+  var iName = hdr.indexOf('ПІБ дитини');
+  var mode = APPLY ? '🔴 РЕАЛЬНЕ ВИДАЛЕННЯ' : '🟡 DRY-RUN (тільки показ)';
+  Logger.log('=== '+mode+' ===');
+  var totDel=0, totRows=0;
+  for(var r=1;r<vals.length;r++){
+    var raw=String(vals[r][iAbs]||'');
+    if(raw.length<5) continue;
+    var arr; try{ arr=JSON.parse(raw); }catch(e){ continue; }
+    if(!arr||!arr.length) continue;
+    var byKey={};
+    arr.forEach(function(a){
+      if(a.type!=='vacation'){ return; }
+      if(a.status==='cancelled'||a.status==='rejected'){ return; }
+      var key='';
+      var m=String(a.note||'').match(/Payment:\s*"([^"]+)"/);
+      if(m){ key='imp:'+m[1].toLowerCase().replace(/\s+/g,''); }
+      else if(a.from){ key='rng:'+a.from+'_'+a.to; }
+      else { return; }
+      (byKey[key]=byKey[key]||[]).push(a);
+    });
+    var toDelete={};
+    Object.keys(byKey).forEach(function(k){
+      var g=byKey[k];
+      if(g.length<2) return;
+      var withDates=g.filter(function(a){ return !!a.from; });
+      var noDates=g.filter(function(a){ return !a.from; });
+      if(withDates.length>0 && noDates.length>0){
+        noDates.forEach(function(a){ toDelete[a.id]=true; });
+      }
+    });
+    var delIds=Object.keys(toDelete);
+    if(delIds.length){
+      totRows++;
+      totDel+=delIds.length;
+      Logger.log('РЯДОК '+(r+1)+' | '+String(vals[r][iName]||'')+' → видалити '+delIds.length+' дубль(ів):');
+      arr.forEach(function(a){
+        if(toDelete[a.id]) Logger.log('    ❌ '+a.id+' from='+a.from+' note='+String(a.note||'').substring(0,45));
+      });
+      if(APPLY){
+        var kept=arr.filter(function(a){ return !toDelete[a.id]; });
+        sh.getRange(r+1, iAbs+1).setValue(JSON.stringify(kept));
+      }
+    }
+  }
+  Logger.log('=== ПІДСУМОК: рядків='+totRows+' | видалити записів='+totDel+' | режим='+(APPLY?'ЗАСТОСОВАНО':'тільки показ')+' ===');
+}
+function cleanImportDupsDryRun(){ cleanImportDups(false); }
+function cleanImportDupsApply(){ cleanImportDups(true); }
