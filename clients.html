@@ -3452,7 +3452,7 @@ function updateContractType(){
   var date=document.getElementById('fContractDate').value;
   var group=document.getElementById('fGroup').value;
   var loc=document.getElementById('fLoc').value;
-  var t=getContractType3(date,group,loc);
+  var t=getContractType3(date,group,loc,document.getElementById('fName').value);
   document.getElementById('fContractType').value=t;
   var labels={
     'standard':          '📋 Стандарт — відпустка (пропорційно, до 01.10.2025)',
@@ -3706,8 +3706,21 @@ function getContractType2(contractDate, group){
 
 var SCHOOL_LOCS=['Школа Осокорки','Школа 228','Онлайн школа'];
 
+// v6.94: нормалізація для матчингу імен (дефіси/невидимі/апострофи/пробіли/регістр).
+function _normForMatch(s){
+  return String(s==null?'':s)
+    .replace(/[ ​‌‍﻿‎‏]/g,'')
+    .replace(/[‐‑‒–—−]/g,'-')
+    .replace(/[‘’ʼ′]/g,"'")
+    .replace(/\s+/g,' ').trim().toLowerCase();
+}
+// v6.94: ТИМЧАСОВИЙ хардкод-список винятків — діти з договором ≥01.10.2025, яким
+// зберігаємо відпустку (тип 'standard' замість 'new'). Матч по нормалізованому ПІБ.
+var VAC_EXCEPTIONS=['андреєва ангеліна','тандиряк северин','гаркуша богдан','мельничук дарина','скоріна аліса','городний яким'];
+
 // Тип договору з урахуванням локації (школи не ведуть облік відпусток)
-function getContractType3(contractDate, group, loc){
+function getContractType3(contractDate, group, loc, name){
+  if(name && VAC_EXCEPTIONS.indexOf(_normForMatch(name))!==-1) return 'standard';
   if(SCHOOL_LOCS.indexOf(loc||'')!==-1) return 'school-no-absence';
   return getContractType2(contractDate, group);
 }
@@ -3928,7 +3941,7 @@ function renderAbsences(){
   var contractDate=c.contractDate||'';
   var group=c.group||'';
   var fee=+(c.monthlyFee||0);
-  var ct=getContractType3(contractDate,group,c.loc||'');
+  var ct=getContractType3(contractDate,group,c.loc||'',c.name);
   var contractYear=contractDate?getContractYear(contractDate,today()):null;
   var abs=c.absences||[];
   var who=isHR()?'HR':(S.user&&S.user.loc?S.user.loc:'Директор');
@@ -4150,7 +4163,7 @@ async function saveAbsencePeriod(){
   if(to<from){ alert('Дата кінця має бути після початку'); return; }
   var type=typeEl.value;
   var c=S.crm[id]||{}; var fee=+(c.monthlyFee||0);
-  var ct=getContractType3(c.contractDate||'',c.group||'',c.loc||'');
+  var ct=getContractType3(c.contractDate||'',c.group||'',c.loc||'',c.name);
   if(ct==='school-no-absence'){ alert('Для шкіл не ведеться облік відпусток'); return; }
   if(ct==='preschool'){ alert('Preschool: перерахунки не передбачені договором'); return; }
   if((ct==='new'||ct==='sick-only')&&type==='vacation'){ alert('Договір від 01.10.2025+: лише лікарняний'); return; }
@@ -4190,7 +4203,7 @@ async function saveAbsencePeriod(){
     renderAbsences(); recalcDiscount();
     // Авто-експорт знижки: оновлюємо таргет-місяці СТАРОГО і НОВОГО періодів
     // (якщо стара або нова відпустка — vacation; для standard-договору).
-    if((em.oldType==='vacation'||type==='vacation') && getContractType3(c.contractDate||'',c.group||'',c.loc||'')==='standard'){
+    if((em.oldType==='vacation'||type==='vacation') && getContractType3(c.contractDate||'',c.group||'',c.loc||'',c.name)==='standard'){
       var tg={};
       _vacTargetMonthsForRange(em.oldFrom,em.oldTo,aRec.createdAt).forEach(function(x){ tg[x.year+'-'+x.month]=x; });
       _vacTargetMonthsForRange(from,to,aRec.createdAt).forEach(function(x){ tg[x.year+'-'+x.month]=x; });
@@ -4246,7 +4259,7 @@ async function deleteAbsencePeriod(idx){
   localStorage.removeItem(CFG.CLI_CACHE);
   renderAbsences(); recalcDiscount();
   // v6.40: авто-відміна знижки видаленої відпустки (export порахує 0 → повернення).
-  if(wasVacation && getContractType3(c.contractDate||'',c.group||'',c.loc||'')==='standard'){
+  if(wasVacation && getContractType3(c.contractDate||'',c.group||'',c.loc||'',c.name)==='standard'){
     await _refreshVacTargets(c.loc||'', tgts);
   }
 }
@@ -4278,7 +4291,7 @@ async function cancelAbsencePeriod(cid,aid){
   localStorage.removeItem(CFG.CLI_CACHE);
   renderAbsences(); recalcDiscount();
   // v6.40: авто-відміна знижки в Платежах (export порахує 0 → бюджет повернеться).
-  if(wasVacation && getContractType3(c.contractDate||'',c.group||'',c.loc||'')==='standard'){
+  if(wasVacation && getContractType3(c.contractDate||'',c.group||'',c.loc||'',c.name)==='standard'){
     await _refreshVacTargets(c.loc||'', tgts);
   }
 }
