@@ -3942,6 +3942,9 @@ function renderAbsences(){
   sickWeeks=Math.min(4,sickWeeks);
   var vacWeeksRemain=Math.max(0,4-vacWeeks);
   var sickWeeksRemain=Math.max(0,4-sickWeeks);
+  // v6.93: лічильник відпустки — по ПОТОЧНОМУ договірному році в роб.днях (з 20), а не сумарно «4 тижні».
+  var vacUsedDays=getVacationUsedInContractYear(c, today());
+  var vacRemainDays=getVacationLimitRemaining(c, today());
 
   var CT_LABEL={standard:'Стандарт',preschool:'Preschool','new':'Новий','sick-only':'Новий','school-no-absence':'Школа'};
   var html='';
@@ -3968,11 +3971,11 @@ function renderAbsences(){
   } else {
     html+='<div class="abs-counters">';
     if(vacAvail){
-      var vp=Math.min(100,Math.round(vacWeeks/4*100));
+      var vp=Math.min(100,Math.round(vacUsedDays/20*100));
       html+='<div class="abs-cnt"><div class="abs-cnt-lbl">🏖 Відпустка</div>'
-        +'<div class="abs-cnt-val">'+vacWeeks+' <span style="font-size:13px;font-weight:400;color:var(--gray)">з 4 тижнів</span></div>'
-        +'<div class="abs-cnt-sub">залишок: '+vacWeeksRemain+' тиж</div>'
-        +'<div class="abs-pbar"><div class="abs-pbar-fill'+(vacWeeks>=4?' over':'')+'" style="width:'+vp+'%"></div></div></div>';
+        +'<div class="abs-cnt-val">'+vacUsedDays+' <span style="font-size:13px;font-weight:400;color:var(--gray)">з 20 роб.днів</span></div>'
+        +'<div class="abs-cnt-sub">залишок: '+vacRemainDays+' роб.днів</div>'
+        +'<div class="abs-pbar"><div class="abs-pbar-fill'+(vacUsedDays>=20?' over':'')+'" style="width:'+vp+'%"></div></div></div>';
     }
     if(sickAvail){
       var sp=Math.min(100,Math.round(sickWeeks/4*100));
