@@ -4721,16 +4721,13 @@ function reconcilePreview(body){
       var sk = _surnameKey(payer.raw);               // КЛЮЧ = ПРІЗВИЩЕ платника
       var uniq = (idx[sk] || []).slice();
       var matchVia = uniq.length ? 'payer' : '';
+      // _scanRecordForChildren сканує ВЕСЬ blob запису (включно з purpose),
+      // тож окремий purpose-фолбек зайвий. Текстовий матч → мітка 'text'.
       var _pm = _scanRecordForChildren(rec, idx);
       if (_pm.length){
         var _seen = {}; uniq.forEach(function(c){ _seen[c.childName] = 1; });
         _pm.forEach(function(c){ if (!_seen[c.childName]){ _seen[c.childName] = 1; uniq.push(c); } });
         if (!matchVia) matchVia = 'text';
-      }
-      var matchVia = uniq.length ? 'payer' : '';
-      if (uniq.length === 0){
-        var _pm = _scanPurposeForChildren(String(rec.purpose || ''), idx);
-        if (_pm.length){ uniq = _pm; matchVia = 'purpose'; }
       }            // вже dedup по childName в індексі
 
       var d = _recParseDate(rec.date);
@@ -7018,7 +7015,7 @@ function _getInvoiceRequisites(loc, type){
   if (!sh) return {ok:false, error:'Аркуш "Реквізити_Локацій" не знайдено в CONFIG_SHEET'};
   var vals = sh.getDataRange().getValues();
   for (var r = 0; r < vals.length; r++){
-    if (String(vals[r][0] || '').trim() !== loc) continue;
+    if (_normForMatch(vals[r][0]) !== _normForMatch(loc)) continue;
     var _tv = String(vals[r][1] || '').trim().toLowerCase();
     var _isExtras = _tv.indexOf('гуртк') >= 0 || _tv.indexOf('додаткових занять') >= 0 || _tv === 'додаткові заняття';
     var _isStudies = !_isExtras && _tv.indexOf('навчання') >= 0;
@@ -7051,8 +7048,8 @@ function _invoiceClientData(childName, loc, type){
   var picked = null, firstMatch = null;
   for (var i = 0; i < list.length; i++){
     var cc = list[i];
-    if (String(cc['ПІБ дитини'] || '').trim() !== nn) continue;
-    if (String(cc['Локація']    || '').trim() !== ll) continue;
+    if (_normForMatch(cc['ПІБ дитини']) !== _normForMatch(nn)) continue;
+    if (_normForMatch(cc['Локація'])    !== _normForMatch(ll)) continue;
     if (!firstMatch) firstMatch = cc;
     var sg = String(cc['Підписант договору'] || '').trim();
     var snm = (sg === 'dad') ? String(cc['ПІБ тата'] || '').trim()
@@ -13382,3 +13379,69 @@ function cleanImportDups(APPLY){
 }
 function cleanImportDupsDryRun(){ cleanImportDups(false); }
 function cleanImportDupsApply(){ cleanImportDups(true); }
+
+function _normForMatch(s){
+  return String(s == null ? '' : s)
+    .replace(/[ ​‌‍﻿‎‏]/g, '')
+    .replace(/[‐‑‒–—−]/g, '-')
+    .replace(/[‘’ʼ′]/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function diagMatchAll(){
+  var ss = getCRMSpreadsheet();
+  var cli = getClients();
+  var clientSet = {};
+  var iN, iL;
+  (function(){
+    var sh = ss.getSheetByName(SHEET_CLIENTS);
+    var v = sh.getDataRange().getValues();
+    var h = v[0];
+    iN = h.indexOf('ПІБ дитини'); iL = h.indexOf('Локація');
+    for(var r=1;r<v.length;r++){
+      var key = _normForMatch(v[r][iN]) + '|||' + _normForMatch(v[r][iL]);
+      clientSet[key] = true;
+    }
+  })();
+  var at = ss.getSheetByName(SHEET_ATTENDANCE);
+  var av = at.getDataRange().getValues();
+  var ah = av[0];
+  var aN = ah.indexOf('ПІБ дитини'); if(aN<0) aN = ah.indexOf("Ім'я");
+  var aL = ah.indexOf('Локація');
+  Logger.log('=== Табель: name col='+aN+' loc col='+aL+' | Клієнти: name='+iN+' loc='+iL+' ===');
+  var miss=0, strictMiss=0, byLoc={};
+  var clientStrict={};
+  (function(){
+    var sh = ss.getSheetByName(SHEET_CLIENTS);
+    var v = sh.getDataRange().getValues();
+    for(var r=1;r<v.length;r++){
+      clientStrict[String(v[r][iN]||'').trim()+'|||'+String(v[r][iL]||'').trim()] = true;
+    }
+  })();
+  for(var r=1;r<av.length;r++){
+    var nm = String(av[r][aN]||'').trim();
+    var lc = String(av[r][aL]||'').trim();
+    if(!nm) continue;
+    var normKey = _normForMatch(nm)+'|||'+_normForMatch(lc);
+    var strictKey = nm+'|||'+lc;
+    var nFound = !!clientSet[normKey];
+    var sFound = !!clientStrict[strictKey];
+    if(!sFound){
+      strictMiss++;
+      byLoc[lc] = (byLoc[lc]||0)+1;
+      if(!nFound){
+        miss++;
+        Logger.log('❌ НЕ ЗНАЙДЕНО НАВІТЬ ПІСЛЯ НОРМ: "'+nm+'" | "'+lc+'"');
+      } else {
+        Logger.log('🟡 строго НІ, після норм ТАК: "'+nm+'" | "'+lc+'"');
+      }
+    }
+  }
+  Logger.log('=== ПІДСУМОК ===');
+  Logger.log('Строго не знаходиться: '+strictMiss+' дітей');
+  Logger.log('З них норм-фікс рятує: '+(strictMiss-miss));
+  Logger.log('Лишається проблемних після норм: '+miss);
+  Logger.log('По локаціях (строгий міс): '+JSON.stringify(byLoc));
+}
