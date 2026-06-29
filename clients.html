@@ -1161,7 +1161,7 @@ function getVacationLimitRemaining(c, refISO, excludeAbsId){
 function getVacationRemainInfo(c, refISO, excludeAbsId){
   refISO = refISO || today();
   var info = { curRemain: getVacationLimitRemaining(c, refISO, excludeAbsId),
-               curYear: null, hasNext: false, nextRemain: 20, nextYear: null };
+               curYear: null, hasNext: false, nextRemain: 20, nextYear: null, transition: null };
   if(!c || !c.contractDate) return info;
   var cy = getContractYear(c.contractDate, refISO);
   info.curYear = cy;
@@ -1184,6 +1184,7 @@ function getVacationRemainInfo(c, refISO, excludeAbsId){
     info.hasNext = true;
     info.nextYear = ny;
     info.nextRemain = getVacationLimitRemaining(c, nextRef, excludeAbsId);
+    info.transition = ny.from;   // єдина дата переходу: кінець цього = початок наступного року
   }
   return info;
 }
@@ -3533,8 +3534,9 @@ function recalcDiscount(){
     var vri=getVacationRemainInfo(c, today(), null);
     var remainBoxes;
     if(vri.hasNext){
-      remainBoxes='<div class="vac-box"><div class="vac-num">'+vri.curRemain+'</div><div><div class="vac-lbl">Цей рік'+(vri.curYear?' (до '+fmtD(vri.curYear.to)+')':'')+'</div><div class="vac-lbl">залишок з 20 роб.днів</div></div></div>'
-        +'<div class="vac-box"><div class="vac-num">'+vri.nextRemain+'</div><div><div class="vac-lbl">Новий рік'+(vri.nextYear?' (з '+fmtD(vri.nextYear.from)+')':'')+'</div><div class="vac-lbl">залишок з 20 роб.днів</div></div></div>';
+      var _tr=vri.transition?fmtD(vri.transition):'';
+      remainBoxes='<div class="vac-box"><div class="vac-num">'+vri.curRemain+'</div><div><div class="vac-lbl">Цей рік'+(_tr?' (до '+_tr+')':'')+'</div><div class="vac-lbl">залишок з 20 роб.днів</div></div></div>'
+        +'<div class="vac-box"><div class="vac-num">'+vri.nextRemain+'</div><div><div class="vac-lbl">Наступний рік'+(_tr?' (з '+_tr+')':'')+'</div><div class="vac-lbl">залишок з 20 роб.днів</div></div></div>';
     } else {
       remainBoxes='<div class="vac-box"><div class="vac-num">'+vri.curRemain+'</div><div><div class="vac-lbl">Залишок ліміту</div><div class="vac-lbl">з 20 роб.днів/рік</div></div></div>';
     }
@@ -4144,11 +4146,20 @@ function absPreviewUpdate(){
 
   if(type==='vacation'){
     // v6.36: пропорційно по днях + ліміт 20 роб.днів/договірний рік.
-    var remain=getVacationLimitRemaining(c, from, (S._absEditMode&&S._absEditMode.aid)||null);
+    // v6.88: показ двох договірних років, якщо відпустка зачіпає наступний рік.
+    var _exAid=(S._absEditMode&&S._absEditMode.aid)||null;
+    var vri=getVacationRemainInfo(c, from, _exAid);
+    var remain=vri.curRemain;
     var totalElig=bd.reduce(function(s,mb){ return s+(mb.eligibleDays||0); },0);
     var totalOver=bd.reduce(function(s,mb){ return s+(mb.overLimitDays||0); },0);
     var totalAmt=bd.reduce(function(s,mb){ return s+(mb.amount||0); },0);
-    lines.push('<b>Залишок ліміту у цьому договірному році: '+remain+' з 20 роб.днів</b>');
+    if(vri.hasNext){
+      var _tr=vri.transition?fmtD(vri.transition):'';
+      lines.push('<b>Цей рік'+(_tr?' (до '+_tr+')':'')+': залишок '+vri.curRemain+' з 20 роб.днів</b>');
+      lines.push('<b>Наступний рік'+(_tr?' (з '+_tr+')':'')+': залишок '+vri.nextRemain+' з 20 роб.днів</b>');
+    } else {
+      lines.push('<b>Залишок ліміту у цьому договірному році: '+remain+' з 20 роб.днів</b>');
+    }
     bd.forEach(function(mb){
       var ml=CFG.MONTHS_DISP[+mb.month.split('-')[1]-1]||mb.month;
       var hol=mb.monthHolidays>0?(' (з них '+mb.monthHolidays+' свято)'):'';
