@@ -925,18 +925,25 @@ function renderInvoiceList(){
         '<td data-label="Контакти"><span class="inv-contact-ind">' + pIcon + eIcon + '</span></td>' +
         '<td data-label="Статус">' + _invBadge(c) + '</td>' +
         '<td data-label="Дії"><div class="inv-actions">' +
-          '<button class="inv-act-btn" title="Завантажити PDF"' + (hasAnySum ? '' : ' disabled') +
-            ' onclick="invDownloadPdf(\'' + idEsc + '\', this)">📄</button>' +
-          '<button class="inv-act-btn" title="Надіслати Email"' + (canEmail ? '' : ' disabled') +
-            ' onclick="invSendEmail(\'' + idEsc + '\', this)">📧</button>' +
-          '<button class="inv-act-btn" title="Надіслати Viber"' + (canViber ? '' : ' disabled') +
-            ' onclick="invSendViber(\'' + idEsc + '\')">💬</button>' +
+          '<button class="inv-act-btn inv-act" title="Завантажити PDF" data-act="pdf" data-id="' + idEsc + '"' + (hasAnySum ? '' : ' disabled') + '>📄</button>' +
+          '<button class="inv-act-btn inv-act" title="Надіслати Email" data-act="email" data-id="' + idEsc + '"' + (canEmail ? '' : ' disabled') + '>📧</button>' +
+          '<button class="inv-act-btn inv-act" title="Надіслати Viber" data-act="viber" data-id="' + idEsc + '"' + (canViber ? '' : ' disabled') + '>💬</button>' +
         '</div></td>' +
       '</tr>';
     });
   });
   html += '</tbody></table>';
   $('invListWrap').innerHTML = html;
+  // v6.91: дії через data-id + addEventListener — апостроф/лапки в id (напр. локація
+  // «Кар'єрна») більше не ламають inline-onclick (SyntaxError: missing ) ...).
+  Array.prototype.forEach.call($('invListWrap').querySelectorAll('button.inv-act'), function(b){
+    b.addEventListener('click', function(){
+      var id = this.dataset.id, act = this.dataset.act;
+      if (act === 'pdf')        invDownloadPdf(id, this);
+      else if (act === 'email') invSendEmail(id, this);
+      else if (act === 'viber') invSendViber(id);
+    });
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════
