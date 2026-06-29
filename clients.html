@@ -3469,7 +3469,7 @@ function updateContractUI(){
   var t=document.getElementById('fContractType').value;
   var el=document.getElementById('contractInfo'); if(!el) return;
   if(t==='standard')   el.textContent='Стандарт: відпустка перераховується ПРОПОРЦІЙНО (ціна × відвідані / робочі_дні_місяця), ліміт 20 роб.днів на договірний рік; понад ліміт — повна оплата. Хвороба не перераховується.';
-  else if(t==='preschool') el.textContent='Preschool: без перерахунків. Ні відпустка, ні хвороба не впливають на суму.';
+  else if(t==='preschool') el.textContent='Preschool: відпустка лише червень-серпень (01.06–31.08), перераховується як стандарт; хвороба — без змін.';
   else if(t==='school-no-absence') el.textContent='Школа: облік відпусток не ведеться. Перерахунки не передбачені.';
   else el.textContent='Після 01.10.2025: ТІЛЬКИ хвороба до 4 тижнів на рік (1 тиж→5%, 2→10%, 3→15%, 4→20%). Відпустка не перераховується.';
   recalcDiscount();
@@ -3484,17 +3484,13 @@ function recalcDiscount(){
   // Враховуємо тільки підтверджені (done) або legacy відсутності
   var abs=(c.absences||[]).filter(function(a){ return !a.id||a.status==='done'; });
 
-  if(t==='preschool'){
-    el.innerHTML='<div class="alert alert-info" style="margin-top:4px">Preschool: перерахунки не передбачені договором.</div>';
-    return;
-  }
   if(t==='school-no-absence'){
     el.innerHTML='<div class="alert alert-info" style="margin-top:4px">Школа: перерахунки не передбачені.</div>';
     return;
   }
 
-  // ── ВІДПУСТКА (standard, v6.36): пропорційна формула + ліміт 20/рік ──
-  if(t==='standard'){
+  // ── ВІДПУСТКА (standard + preschool-літо, v6.36): пропорційна формула + ліміт 20/рік ──
+  if(t==='standard'||t==='preschool'){
     var vacAmt=(c.absences||[]).filter(function(a){ return a.type==='vacation'&&(!a.id||a.status==='done')&&a.monthsBreakdown&&a.monthsBreakdown.length; })
       .reduce(function(s,a){ return s+a.monthsBreakdown.reduce(function(ss,mb){ return ss+(mb.amount||0); },0); },0);
     var remain=getVacationLimitRemaining(c, today(), null);
@@ -3975,12 +3971,10 @@ function renderAbsences(){
   }
 
   // Блок 2: Лічильники
-  var vacAvail=ct==='standard';
+  var vacAvail=(ct==='standard'||ct==='preschool');   // v6.95: preschool — відпустка лише літо (01.06–31.08)
   var sickAvail=(ct==='sick-only'||ct==='new');
   if(ct==='school-no-absence'){
     html+='<div class="alert alert-info" style="margin-top:4px">🏠 Для шкіл не ведеться облік відпусток. Перерахунки не передбачені.</div>';
-  } else if(ct==='preschool'){
-    html+='<div class="alert alert-info" style="margin-top:4px">Перерахунки не передбачені договором (Preschool).</div>';
   } else {
     html+='<div class="abs-counters">';
     if(vacAvail){
@@ -3998,6 +3992,7 @@ function renderAbsences(){
         +'<div class="abs-pbar"><div class="abs-pbar-fill'+(sickWeeks>=4?' over':'')+'" style="width:'+sp+'%"></div></div></div>';
     }
     html+='</div>'; // abs-counters
+    if(ct==='preschool') html+='<div class="alert alert-info" style="margin-top:4px">Preschool: відпустка лише червень-серпень (01.06–31.08).</div>';
   }
 
   // Перевіряємо streak лікарняних (з табеля)
@@ -4010,9 +4005,9 @@ function renderAbsences(){
   }
 
   // Блок 3: Форма або кнопка + список
-  if(S._absFormOpen && ct!=='preschool' && ct!=='school-no-absence'){
+  if(S._absFormOpen && ct!=='school-no-absence'){
     html+=renderAbsAddForm(ct,fee,abs,vacAvail,sickAvail,S._absEditMode||null);
-  } else if(ct!=='preschool' && ct!=='school-no-absence'){
+  } else if(ct!=='school-no-absence'){
     html+='<button class="btn btn-secondary btn-sm" onclick="S._absFormOpen=true;renderAbsences()">➕ Додати період</button>';
   }
 
@@ -4165,7 +4160,12 @@ async function saveAbsencePeriod(){
   var c=S.crm[id]||{}; var fee=+(c.monthlyFee||0);
   var ct=getContractType3(c.contractDate||'',c.group||'',c.loc||'',c.name);
   if(ct==='school-no-absence'){ alert('Для шкіл не ведеться облік відпусток'); return; }
-  if(ct==='preschool'){ alert('Preschool: перерахунки не передбачені договором'); return; }
+  if(ct==='preschool'){
+    if(type!=='vacation'){ alert('Preschool: дозволена лише відпустка'); return; }
+    var _mf=parseInt(from.substr(5,2),10), _mt=parseInt(to.substr(5,2),10);
+    if(_mf<6||_mf>8||_mt<6||_mt>8){ alert('Preschool: відпустка лише червень-серпень (01.06–31.08)'); return; }
+    // інакше (preschool + vacation + літо) — пропускаємо далі, рахуємо як standard
+  }
   if((ct==='new'||ct==='sick-only')&&type==='vacation'){ alert('Договір від 01.10.2025+: лише лікарняний'); return; }
   var wd=countWorkDays(from,to);
   if(!wd){ alert('У вказаному діапазоні немає робочих днів (Пн-Пт)'); return; }
@@ -4203,7 +4203,7 @@ async function saveAbsencePeriod(){
     renderAbsences(); recalcDiscount();
     // Авто-експорт знижки: оновлюємо таргет-місяці СТАРОГО і НОВОГО періодів
     // (якщо стара або нова відпустка — vacation; для standard-договору).
-    if((em.oldType==='vacation'||type==='vacation') && getContractType3(c.contractDate||'',c.group||'',c.loc||'',c.name)==='standard'){
+    if((em.oldType==='vacation'||type==='vacation') && ['standard','preschool'].indexOf(getContractType3(c.contractDate||'',c.group||'',c.loc||'',c.name))!==-1){
       var tg={};
       _vacTargetMonthsForRange(em.oldFrom,em.oldTo,aRec.createdAt).forEach(function(x){ tg[x.year+'-'+x.month]=x; });
       _vacTargetMonthsForRange(from,to,aRec.createdAt).forEach(function(x){ tg[x.year+'-'+x.month]=x; });
@@ -4237,9 +4237,9 @@ async function saveAbsencePeriod(){
   localStorage.removeItem(CFG.CLI_CACHE);
   renderAbsences();
   recalcDiscount();
-  // Авто-експорт знижки в Платежі (тільки відпустка, standard-договір).
-  // ct вже провалідовано вище (preschool/new/school → alert+return).
-  if(type==='vacation' && ct==='standard'){
+  // Авто-експорт знижки в Платежі: відпустка для standard АБО preschool (літо 01.06–31.08).
+  // ct вже провалідовано вище (new/sick-only/school + не-літній preschool → alert+return).
+  if(type==='vacation' && (ct==='standard'||ct==='preschool')){
     await _refreshVacTargets(c.loc||'', _vacTargetMonthsForRange(from,to,now));
   }
   } finally { S._absSaving=false; }
@@ -4259,7 +4259,7 @@ async function deleteAbsencePeriod(idx){
   localStorage.removeItem(CFG.CLI_CACHE);
   renderAbsences(); recalcDiscount();
   // v6.40: авто-відміна знижки видаленої відпустки (export порахує 0 → повернення).
-  if(wasVacation && getContractType3(c.contractDate||'',c.group||'',c.loc||'',c.name)==='standard'){
+  if(wasVacation && ['standard','preschool'].indexOf(getContractType3(c.contractDate||'',c.group||'',c.loc||'',c.name))!==-1){
     await _refreshVacTargets(c.loc||'', tgts);
   }
 }
@@ -4291,7 +4291,7 @@ async function cancelAbsencePeriod(cid,aid){
   localStorage.removeItem(CFG.CLI_CACHE);
   renderAbsences(); recalcDiscount();
   // v6.40: авто-відміна знижки в Платежах (export порахує 0 → бюджет повернеться).
-  if(wasVacation && getContractType3(c.contractDate||'',c.group||'',c.loc||'',c.name)==='standard'){
+  if(wasVacation && ['standard','preschool'].indexOf(getContractType3(c.contractDate||'',c.group||'',c.loc||'',c.name))!==-1){
     await _refreshVacTargets(c.loc||'', tgts);
   }
 }
