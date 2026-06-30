@@ -309,6 +309,7 @@ select,input{font-family:inherit}
     </div>
     <div class="hd-ctrl">
       <select id="locSel" class="month-sel hidden"></select>
+      <button id="reexportLocBtn" class="btn" onclick="reexportCurrentLocation()" title="Повний перерахунок вибраної локації: Платежі + ЗП + агрегат Оплати-Рік">🔄 Перерахувати локацію</button>
       <button id="refreshBtn" class="btn btn-primary" onclick="loadInvoiceData()">🔄 Оновити</button>
     </div>
   </div>
@@ -695,6 +696,13 @@ function applyRoleVisibility(){
   var _isNetFCRC = (typeof isNetworkRole === 'function' && isNetworkRole(role));
   var _fcEl = document.getElementById('navFillControl'); if (_fcEl) _fcEl.style.display = _isNetFCRC ? '' : 'none';
   var _rcEl = document.getElementById('navReconcile');   if (_rcEl) _rcEl.style.display = _isNetFCRC ? '' : 'none';
+  // v6.99: тимчасово приховано для director (доробляємо й відкриємо пізніше — повернути: скоротити список або видалити блок).
+  // ЛИШЕ для director; інші ролі не зачіпаємо. Код вкладок/роутів не видаляємо.
+  if (role === 'director'){
+    ['dashboard','tasks','analytics_clients','analytics_hr','categories','overview_analytics'].forEach(function(p){
+      document.querySelectorAll('[data-permission="' + p + '"]').forEach(function(el){ el.style.display = 'none'; });
+    });
+  }
   document.querySelectorAll('[data-section]').forEach(function(section){
     var sectionName = section.dataset.section;
     var items = document.querySelectorAll('[data-permission][data-parent="' + sectionName + '"]');
@@ -960,6 +968,32 @@ async function invApi(payload){
   var j = await r.json();
   if (!j.ok) throw new Error(j.error || 'failed');
   return j;
+}
+
+// 🔄 Перерахувати локацію: повний перерахунок ВИБРАНОЇ локації (Платежі + ЗП +
+// агрегат Оплати-Рік) за вибраний місяць додаткових, потім перезавантаження таблиці.
+async function reexportCurrentLocation(){
+  var loc = CFG.LOC;
+  if (!loc){ alert('Локацію не вибрано'); return; }
+  var m = INV.extMonth, y = INV.extYear;
+  if (!confirm('Повний перерахунок локації "' + loc + '" за ' + (INV_MONTHS[m-1]||m) + ' ' + y +
+               ' (Платежі + ЗП + агрегат).\nЦе може зайняти ~30–60 секунд. Продовжити?')) return;
+  var btn = document.getElementById('reexportLocBtn');
+  var orig = btn ? btn.innerHTML : '';
+  if (btn){ btn.disabled = true; btn.innerHTML = '⏳ Перераховую...'; }
+  try {
+    var res = await invApi({action: 'reexportLocation', loc: loc, month: m, year: y});   // {ok, payment, salary, aggregate}
+    await loadInvoiceData();
+    var pay = res.payment || {}, sal = res.salary || {}, agg = res.aggregate || {};
+    alert('Готово: ' + loc + ' (' + (INV_MONTHS[m-1]||m) + ' ' + y + ')' +
+          '\nПлатежі: оновлено ' + (pay.updated||0) + ', сума ' + (pay.totalAmount||0) + ' грн' +
+          '\nЗП: оновлено ' + (sal.updated||0) + ', сума ' + (sal.totalFact||0) + ' грн' +
+          '\nАгрегат Оплати-Рік: рядків ' + (agg.rows||0));
+  } catch(e){
+    alert('Не вдалось перерахувати: ' + (e && e.message || e));
+  } finally {
+    if (btn){ btn.disabled = false; btn.innerHTML = orig; }
+  }
 }
 function _invFindChild(id){
   if (!INV.data || !INV.data.children) return null;
