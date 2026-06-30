@@ -1193,6 +1193,37 @@ function apiPost(body){
     });
 }
 
+// ── ВІКНО РЕДАГУВАННЯ (тижневе замикання) ───────────────
+// CFO (роль cfo або ID=1) — без обмежень. Інакше відкрито лише Пн-Пт ПОТОЧНОГО
+// тижня; із суботи цей тиждень замикається (Сб/Нд + усе минуле/майбутнє = locked).
+// dateISO — формат 'YYYY-MM-DD'. Час — локальний (=Київ у браузері директора).
+function isCFO(){
+  return !!(S.user && (String(S.user.role || '').toLowerCase() === 'cfo' || Number(S.user.id) === 1));
+}
+function _editIsoOf(d){
+  return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+}
+function isWeekLocked(dateISO){
+  if (isCFO()) return false;                       // CFO — завжди розблоковано
+  if (!dateISO) return true;                       // невідома дата → блок
+  var now = new Date();
+  var dow = now.getDay();                           // 0=Нд, 1=Пн … 6=Сб
+  if (dow === 6 || dow === 0) return true;          // з суботи — увесь поточний тиждень замкнено
+  var mon = new Date(now); mon.setDate(now.getDate() + (1 - dow));   // Пн поточного тижня
+  var fri = new Date(mon);  fri.setDate(mon.getDate() + 4);          // Пт
+  return !(dateISO >= _editIsoOf(mon) && dateISO <= _editIsoOf(fri)); // поза Пн-Пт → locked
+}
+// Відпустки/хвороба: forward-only (сьогодні і далі). CFO — будь-яка дата.
+function isAbsenceDateAllowed(dateISO){
+  if (isCFO()) return true;
+  return !!dateISO && dateISO >= _editIsoOf(new Date());
+}
+// dd.mm.yyyy → yyyy-mm-dd (формат клітинок предметників)
+function _dmyToIso(dmy){
+  var p = String(dmy || '').split('.');
+  return p.length === 3 ? (p[2] + '-' + p[1] + '-' + p[0]) : '';
+}
+
 // ── PERMISSIONS (write) v6.11 ───────────────
 function canEditPred(targetLoc){
   if (!S.user || !S.user.role) return false;
@@ -1575,8 +1606,10 @@ function renderDayCell(loc, R, subject, D, canEdit){
   //   • view-only або saving — disabled visually
   //   • !hasRate (ставка не в каталозі) — disabled
   //   • maxed + не checked — disabled (можна uncheck існуючі)
+  //   • locked — дата поза поточним тижнем (тижневе замикання; CFO не блокується)
   //   • assignment не обов'язковий (empKey fallback всередині toggle handler)
-  var disabled = !canEdit || !R.hasRate || (R.isMaxed && !checked);
+  var locked   = isWeekLocked(_dmyToIso(D.dmy));
+  var disabled = !canEdit || !R.hasRate || (R.isMaxed && !checked) || locked;
 
   var cls = 'pred-cell-day';
   if (D.isToday)   cls += ' today';
@@ -1588,9 +1621,11 @@ function renderDayCell(loc, R, subject, D, canEdit){
     ? ' onclick="onCheckboxToggle(\'' + escapeJs(loc) + '\', \'' + escapeJs(R.groupName) +
       '\', \'' + escapeJs(subject) + '\', \'' + D.dmy + '\')"'
     : '';
-  var title = disabled
-    ? (R.isMaxed && !checked ? 'Норму досягнуто' : '')
-    : (checked ? 'Натисни щоб видалити заняття' : 'Натисни щоб провести заняття');
+  var title = locked
+    ? '🔒 Тиждень замкнено — редагує лише CFO'
+    : (disabled
+        ? (R.isMaxed && !checked ? 'Норму досягнуто' : '')
+        : (checked ? 'Натисни щоб видалити заняття' : 'Натисни щоб провести заняття'));
 
   return '<div class="' + cls + '"' + handler +
     (title ? ' title="' + escapeHtml(title) + '"' : '') + '>' +
@@ -1626,6 +1661,7 @@ function refreshAll(){
 // v6.28.2: groupName — ПОВНА назва реальної групи (не тип).
 function onCheckboxToggle(loc, groupName, subj, dateDmy){
   if (!canEditPred(loc)){ showToast('🚫 Немає дозволу', 'err'); return; }
+  if (isWeekLocked(_dmyToIso(dateDmy))){ showToast('🔒 Тиждень замкнено — редагує лише CFO', 'err'); return; }
   if (getRateFor(loc, subj) == null){
     showToast('🚫 Немає ставки в каталозі. Додай у Предметники_Каталог', 'err');
     return;
