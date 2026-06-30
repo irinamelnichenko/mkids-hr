@@ -2166,6 +2166,31 @@ const PERM_LOCAL_ACTION = {
 const NETWORK_ROLES = ['hr','cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo'];
 function isNetworkRole(role){ return NETWORK_ROLES.indexOf(String(role || '').toLowerCase()) !== -1; }
 
+// ── ВІКНО РЕДАГУВАННЯ (тижневе замикання) ───────────────
+// CFO (роль cfo або ID=1) — без обмежень. Інакше відкрито лише Пн-Пт ПОТОЧНОГО
+// тижня; із суботи цей тиждень замикається (Сб/Нд + усе минуле/майбутнє = locked).
+function isCFO(){
+  return !!(S.user && (String(S.user.role || '').toLowerCase() === 'cfo' || Number(S.user.id) === 1));
+}
+function _editIsoOf(d){
+  return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+}
+function isWeekLocked(dateISO){
+  if (isCFO()) return false;
+  if (!dateISO) return true;
+  var now = new Date();
+  var dow = now.getDay();                            // 0=Нд, 1=Пн … 6=Сб
+  if (dow === 6 || dow === 0) return true;           // з суботи — увесь поточний тиждень замкнено
+  var mon = new Date(now); mon.setDate(now.getDate() + (1 - dow));
+  var fri = new Date(mon);  fri.setDate(mon.getDate() + 4);
+  return !(dateISO >= _editIsoOf(mon) && dateISO <= _editIsoOf(fri));
+}
+// Відпустки/хвороба: forward-only (сьогодні і далі). CFO — будь-яка дата.
+function isAbsenceDateAllowed(dateISO){
+  if (isCFO()) return true;
+  return !!dateISO && dateISO >= _editIsoOf(new Date());
+}
+
 function roleLabel(role){
   return ({
     hr:'CFO', cfo:'CFO', ceo:'CEO', cco:'CCO', coo:'COO',
@@ -4156,6 +4181,8 @@ async function saveAbsencePeriod(){
   var note=(document.getElementById('absNewNote')||{}).value||'';
   if(!typeEl||!from||!to){ alert('Вкажіть тип та дати'); return; }
   if(to<from){ alert('Дата кінця має бути після початку'); return; }
+  // Forward-only: відпустку/хворобу можна ставити лише від сьогодні; минулим числом — лише CFO.
+  if(!isAbsenceDateAllowed(from)){ alert('Відпустку можна ставити лише від сьогодні. Минулим числом — зверніться до CFO.'); return; }
   var type=typeEl.value;
   var c=S.crm[id]||{}; var fee=+(c.monthlyFee||0);
   var ct=getContractType3(c.contractDate||'',c.group||'',c.loc||'',c.name);
@@ -4769,6 +4796,7 @@ function getSickStreak(childId, toDate){
 }
 
 function setAttStatus(dateStr, cId, status){
+  if(isWeekLocked(dateStr)) return;   // тижневе замикання (CFO не блокується) — мовчазний дата-guard
   if(!S.att[dateStr]) S.att[dateStr]={};
   if(status==='') delete S.att[dateStr][cId];
   else S.att[dateStr][cId]=status;
@@ -4785,6 +4813,7 @@ function cycleAttStatus(dateStr, cId){
 }
 
 function markAllPresent(dateStr, loc, group){
+  if(isWeekLocked(dateStr)){ alert('🔒 Тиждень замкнено — редагує лише CFO'); return; }
   // Відмічає всіх дітей локації/групи присутніми якщо ще не відмічені
   // Якщо loc='' — використовує поточний відфільтрований список (S._displayLocs)
   var locs=loc?[loc]:(S._displayLocs&&S._displayLocs.length?S._displayLocs:Object.keys(S.groups));
@@ -5130,7 +5159,7 @@ function renderAttendanceWeek(locs,group){
           var st=(S.att[d]||{})[ch.id]||'';
           var cls=ATT_STATUS_CLASS[st]||'';
           var ico=ATT_STATUS_ICON[st]||'';
-          rows+='<td><button class="att-btn '+cls+'" title="'+esc(ATT_STATUS_LABEL[st]||'Не відмічено')+'" onclick="cycleAttStatus('+escAttrJS(d)+','+escAttrJS(ch.id)+')">'+ico+'</button></td>';
+          rows+='<td><button class="att-btn '+cls+'"'+(isWeekLocked(d)?' disabled title="🔒 Тиждень замкнено — редагує лише CFO"':' title="'+esc(ATT_STATUS_LABEL[st]||'Не відмічено')+'"')+' onclick="cycleAttStatus('+escAttrJS(d)+','+escAttrJS(ch.id)+')">'+ico+'</button></td>';
         });
         rows+='</tr>';
       });
@@ -5175,7 +5204,7 @@ function renderAttendanceDay(locs,group){
           +'<span class="att-day-name" onclick="openChild('+escAttrJS(ch.id)+','+escAttrJS(ch.group)+','+escAttrJS(ch.teacher||'')+','+escAttrJS(ch.loc)+','+escAttrJS(ch.name)+')">'+esc(ch.name)+streakHtml+'</span>'
           +'<div class="att-day-btns">'
           +['present','sick','vacation','absent'].map(function(s){
-            return '<button class="att-day-btn'+(st===s?' att-s-'+s:'')+'" title="'+ATT_STATUS_LABEL[s]+'" onclick="setAttStatus('+escAttrJS(dateStr)+','+escAttrJS(ch.id)+','+escAttrJS(st===s?'':s)+');renderAttendance()">'+ATT_STATUS_ICON[s]+'</button>';
+            return '<button class="att-day-btn'+(st===s?' att-s-'+s:'')+'"'+(isWeekLocked(dateStr)?' disabled title="🔒 Тиждень замкнено — редагує лише CFO"':' title="'+ATT_STATUS_LABEL[s]+'"')+' onclick="setAttStatus('+escAttrJS(dateStr)+','+escAttrJS(ch.id)+','+escAttrJS(st===s?'':s)+');renderAttendance()">'+ATT_STATUS_ICON[s]+'</button>';
           }).join('')
           +'</div></div>';
       });
@@ -5247,7 +5276,7 @@ function renderAttendanceMonth(locs,group){
           else if(st==='sick') cs++;
           else if(st==='vacation') cv++;
           else if(st==='absent') ca++;
-          return '<td style="padding:2px;text-align:center"><button class="att-btn '+cls+'" style="width:28px;height:28px;font-size:12px" title="'+esc(ATT_STATUS_LABEL[st]||'Не відмічено')+' — '+fmtD(d)+'" onclick="cycleAttStatus('+escAttrJS(d)+','+escAttrJS(ch.id)+')">'+ico+'</button></td>';
+          return '<td style="padding:2px;text-align:center"><button class="att-btn '+cls+'"'+(isWeekLocked(d)?' disabled':'')+' style="width:28px;height:28px;font-size:12px" title="'+(isWeekLocked(d)?'🔒 Тиждень замкнено — редагує лише CFO':esc(ATT_STATUS_LABEL[st]||'Не відмічено')+' — '+fmtD(d))+'" onclick="cycleAttStatus('+escAttrJS(d)+','+escAttrJS(ch.id)+')">'+ico+'</button></td>';
         }).join('');
         tbody+='<tr>'
           +'<td class="nc" style="position:sticky;left:0;background:#fff;z-index:1;font-size:12px" title="'+esc(ch.name)+'">'+esc(ch.name.split(' ').slice(0,2).join(' '))+'</td>'
