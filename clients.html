@@ -4271,9 +4271,10 @@ async function saveAbsencePeriod(){
   localStorage.removeItem(CFG.CLI_CACHE);
   renderAbsences();
   recalcDiscount();
-  // Авто-експорт знижки в Платежі: відпустка для standard АБО preschool (літо 01.06–31.08).
-  // ct вже провалідовано вище (new/sick-only/school + не-літній preschool → alert+return).
-  if(type==='vacation' && (ct==='standard'||ct==='preschool')){
+  // Авто-експорт знижки в Платежі:
+  //   • відпустка — лише standard/preschool (літо для preschool валідовано вище);
+  //   • хвороба — будь-який тип (school вже відсіяно вище). Бекенд рахує % за тижнями.
+  if((type==='vacation' && (ct==='standard'||ct==='preschool')) || type==='sick'){
     await _refreshVacTargets(c.loc||'', _vacTargetMonthsForRange(from,to,now));
   }
   } finally { S._absSaving=false; }
@@ -4357,6 +4358,17 @@ function markAbsDone(cid,absId,fromHR){
         .catch(function(err){ console.warn('Payment sync failed:',err); });
     }
   } catch(err){ console.warn('markAbsDone payment sync error:',err); }
+  // СТРАТЕГІЧНИЙ ФІКС: погодження HR теж пише знижку в Payment (відпустка + хвороба).
+  // Запис absence уже в хмарі (додавали як pending) — бекенд рахує і pending, і done,
+  // тож сума не залежить від статусу. school не чіпаємо. Fire-and-forget.
+  try {
+    var _c2=getCRMCard(cid);
+    var _a2=(_c2.absences||[]).find(function(x){ return x.id===absId; });
+    if(_a2 && (_a2.type==='vacation'||_a2.type==='sick') && SCHOOL_LOCS.indexOf(_c2.loc||'')===-1){
+      _refreshVacTargets(_c2.loc||'', _vacTargetMonthsForRange(_a2.from,_a2.to,_a2.createdAt))
+        .catch(function(e){ console.warn('markAbsDone discount export failed:',e); });
+    }
+  } catch(err2){ console.warn('markAbsDone discount export error:',err2); }
   if(fromHR) renderAbsRequests(); else { renderAbsences(); recalcDiscount(); }
 }
 
