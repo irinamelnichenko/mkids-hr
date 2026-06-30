@@ -1970,6 +1970,26 @@ function hasPerm(p){
   return Array.isArray(allowed) && allowed.indexOf(p) !== -1;
 }
 
+// ── ВІКНО РЕДАГУВАННЯ (тижневе замикання) ───────────────
+// CFO (роль cfo або ID=1) — без обмежень. Інакше відкрито лише Пн-Пт ПОТОЧНОГО
+// тижня; із суботи цей тиждень замикається (Сб/Нд + усе минуле/майбутнє = locked).
+function isCFO(){
+  return !!(S.user && (String(S.user.role || '').toLowerCase() === 'cfo' || Number(S.user.id) === 1));
+}
+function _editIsoOf(d){
+  return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+}
+function isWeekLocked(dateISO){
+  if (isCFO()) return false;
+  if (!dateISO) return true;
+  var now = new Date();
+  var dow = now.getDay();                            // 0=Нд, 1=Пн … 6=Сб
+  if (dow === 6 || dow === 0) return true;           // з суботи — увесь поточний тиждень замкнено
+  var mon = new Date(now); mon.setDate(now.getDate() + (1 - dow));
+  var fri = new Date(mon);  fri.setDate(mon.getDate() + 4);
+  return !(dateISO >= _editIsoOf(mon) && dateISO <= _editIsoOf(fri));
+}
+
 function applyRoleVisibility(){
   if (!S || !S.user || !S.user.role) return;
   // Defensive lowercase: PERMISSIONS keys всі lowercase, тому шукаємо нормалізовано.
@@ -4899,10 +4919,12 @@ function renderTabel(){
   let tableHtml='';
   if(isDayView){
     const tbl=getTabel(activeLoc,tabelDay);
+    const tabelLocked=isWeekLocked(tabelDay);   // тижневе замикання (CFO не блокується)
     tableHtml=`<div class="card">
-      <div class="card-hd"><h3>📋 ${activeLoc||'—'} — ${periodLabel}</h3>
-        <button class="btn btn-primary btn-sm" onclick="autoFillTabel('${escJs(activeLoc)}','${tabelDay}')">⚡ Всі присутні</button>
+      <div class="card-hd"><h3>📋 ${activeLoc||'—'} — ${periodLabel}${tabelLocked?' 🔒':''}</h3>
+        <button class="btn btn-primary btn-sm" ${tabelLocked?'disabled':''} onclick="autoFillTabel('${escJs(activeLoc)}','${tabelDay}')">⚡ Всі присутні</button>
       </div>
+      ${tabelLocked?`<div style="padding:6px 12px;font-size:12px;color:var(--gray)">🔒 Тиждень замкнено — редагує лише CFO</div>`:''}
       <div class="tbl-wrap"><table>
         <thead><tr><th>Співробітник</th><th>Посада</th><th>Статус</th><th>Час приходу</th><th>Примітка</th></tr></thead>
         <tbody>${emps.length===0?`<tr><td colspan="5" style="text-align:center;padding:30px;color:var(--gray)">Немає співробітників</td></tr>`:
@@ -4911,12 +4933,12 @@ function renderTabel(){
           return`<tr>
             <td onclick="nav('employee',${e.id})" title="Відкрити картку"><strong class="emp-link">${fullName(e)}</strong></td>
             <td style="font-size:12px;color:var(--gray)">${e.pos||'—'}</td>
-            <td><select style="padding:4px 8px;border:1.5px solid var(--gray2);border-radius:6px;font-size:12px;background:#fff" onchange="setTabelStatus('${escJs(activeLoc)}','${tabelDay}','${escJs(e.key)}',this.value)">
+            <td><select ${tabelLocked?'disabled':''} style="padding:4px 8px;border:1.5px solid var(--gray2);border-radius:6px;font-size:12px;background:#fff" onchange="setTabelStatus('${escJs(activeLoc)}','${tabelDay}','${escJs(e.key)}',this.value)">
               <option value="">— Оберіть —</option>
               ${Object.entries(TABEL_STATUSES).map(([k,v])=>`<option value="${k}" ${st===k?'selected':''}>${v.label}</option>`).join('')}
             </select></td>
-            <td>${(st==='present'||st==='late')?`<input type="time" value="${row.time||''}" style="padding:4px 8px;border:1.5px solid var(--gray2);border-radius:6px;font-size:12px" onchange="setTabelTime('${escJs(activeLoc)}','${tabelDay}','${escJs(e.key)}',this.value)">`:row.time||'—'}</td>
-            <td><input type="text" value="${(row.note||'').replace(/"/g,'&quot;')}" placeholder="Примітка…" style="padding:4px 8px;border:1.5px solid var(--gray2);border-radius:6px;font-size:12px;width:140px" onchange="setTabelNote('${escJs(activeLoc)}','${tabelDay}','${escJs(e.key)}',this.value)"></td>
+            <td>${(st==='present'||st==='late')?`<input type="time" ${tabelLocked?'disabled':''} value="${row.time||''}" style="padding:4px 8px;border:1.5px solid var(--gray2);border-radius:6px;font-size:12px" onchange="setTabelTime('${escJs(activeLoc)}','${tabelDay}','${escJs(e.key)}',this.value)">`:row.time||'—'}</td>
+            <td><input type="text" ${tabelLocked?'disabled':''} value="${(row.note||'').replace(/"/g,'&quot;')}" placeholder="Примітка…" style="padding:4px 8px;border:1.5px solid var(--gray2);border-radius:6px;font-size:12px;width:140px" onchange="setTabelNote('${escJs(activeLoc)}','${tabelDay}','${escJs(e.key)}',this.value)"></td>
           </tr>`;}).join('')}
         </tbody>
       </table></div>
@@ -5035,6 +5057,7 @@ function renderTabel(){
 }
 
 function setTabelStatus(loc,date,key,status){
+  if(isWeekLocked(date)){toast('🔒 Тиждень замкнено — редагує лише CFO');renderTabel();return;}
   const t=getTabel(loc,date);
   if(!t[key])t[key]={};
   t[key].status=status;
@@ -5042,14 +5065,17 @@ function setTabelStatus(loc,date,key,status){
   saveTabel(loc,date,t);renderTabel();
 }
 function setTabelTime(loc,date,key,time){
+  if(isWeekLocked(date)){toast('🔒 Тиждень замкнено — редагує лише CFO');return;}
   const t=getTabel(loc,date);if(!t[key])t[key]={};
   t[key].time=time;saveTabel(loc,date,t);
 }
 function setTabelNote(loc,date,key,note){
+  if(isWeekLocked(date)){toast('🔒 Тиждень замкнено — редагує лише CFO');return;}
   const t=getTabel(loc,date);if(!t[key])t[key]={};
   t[key].note=note;saveTabel(loc,date,t);
 }
 function autoFillTabel(loc,date){
+  if(isWeekLocked(date)){toast('🔒 Тиждень замкнено — редагує лише CFO');return;}
   const emps=S.emps.filter(e=>isActive(e)&&e.loc===loc);
   const t=getTabel(loc,date);
   emps.forEach(e=>{if(!t[e.key]||!t[e.key].status){t[e.key]={status:'present',time:'09:00',note:''}}});
