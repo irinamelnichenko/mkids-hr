@@ -1496,6 +1496,26 @@ function applyRoleVisibility(){
     ' total=' + totalCount + ' hidden=' + hiddenCount);
 }
 
+// ── ВІКНО РЕДАГУВАННЯ (тижневе замикання) ───────────────
+// CFO (роль cfo або ID=1) — без обмежень. Інакше відкрито лише Пн-Пт ПОТОЧНОГО
+// тижня; із суботи цей тиждень замикається (Сб/Нд + усе минуле/майбутнє = locked).
+function isCFO(){
+  return !!(S.user && (String(S.user.role || '').toLowerCase() === 'cfo' || Number(S.user.id) === 1));
+}
+function _editIsoOf(d){
+  return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+}
+function isWeekLocked(dateISO){
+  if (isCFO()) return false;
+  if (!dateISO) return true;
+  var now = new Date();
+  var dow = now.getDay();                            // 0=Нд, 1=Пн … 6=Сб
+  if (dow === 6 || dow === 0) return true;           // з суботи — увесь поточний тиждень замкнено
+  var mon = new Date(now); mon.setDate(now.getDate() + (1 - dow));
+  var fri = new Date(mon);  fri.setDate(mon.getDate() + 4);
+  return !(dateISO >= _editIsoOf(mon) && dateISO <= _editIsoOf(fri));
+}
+
 function hasPerm(p){
   if (!S || !S.user || !S.user.role) return false;
   var r = String(S.user.role || '').toLowerCase().trim();
@@ -2719,7 +2739,8 @@ function renderAttList(){
     if (bulkEl) bulkEl.classList.add('hidden');
     return;
   }
-  var canEdit = hasPerm('attendance-edit');
+  var locked = isWeekLocked(ATT.date);                 // тижневе замикання за обраною датою
+  var canEdit = hasPerm('attendance-edit') && !locked; // locked → клітинки сірі/disabled
   var html = '';
   ATT.children.forEach(function(child){
     var mark = _markFor(child, act.id);
@@ -2754,6 +2775,7 @@ function renderAttList(){
   listEl.onclick = function(e){
     var row = e.target.closest && e.target.closest('.att-list-row');
     if (!row) return;
+    if (isWeekLocked(ATT.date)){ showToast('🔒 Тиждень замкнено — редагує лише CFO', 'err'); return; }
     var btn = row.querySelector('.att-cell');
     if (!btn || btn.disabled) return;
     toggleAttendance(btn);
@@ -2809,6 +2831,7 @@ async function bulkMarkAll(){
   if (ATT.bulkRunning) return;
   if (!ATT.activity){ showToast('Спочатку оберіть заняття', 'err'); return; }
   if (!hasPerm('attendance-edit')){ showToast('🚫 Немає прав', 'err'); return; }
+  if (isWeekLocked(ATT.date)){ showToast('🔒 Тиждень замкнено — редагує лише CFO', 'err'); return; }
   var unmarked = [];
   ATT.children.forEach(function(child){
     if (!_markFor(child, ATT.activity)) unmarked.push(child);
@@ -2822,6 +2845,7 @@ async function bulkClearAll(){
   if (ATT.bulkRunning) return;
   if (!ATT.activity){ showToast('Спочатку оберіть заняття', 'err'); return; }
   if (!hasPerm('attendance-edit')){ showToast('🚫 Немає прав', 'err'); return; }
+  if (isWeekLocked(ATT.date)){ showToast('🔒 Тиждень замкнено — редагує лише CFO', 'err'); return; }
   var marked = [];
   ATT.children.forEach(function(child){
     if (_markFor(child, ATT.activity)) marked.push(child);
@@ -3110,6 +3134,7 @@ async function toggleAttendance(btn){
     showToast('Немає прав на редагування відвідуваності', 'err');
     return;
   }
+  if (isWeekLocked(ATT.date)){ showToast('🔒 Тиждень замкнено — редагує лише CFO', 'err'); return; }
   var child = btn.dataset.child;
   var actId = Number(btn.dataset.actId);
   var actName = btn.dataset.actName;
