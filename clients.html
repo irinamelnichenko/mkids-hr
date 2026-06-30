@@ -2249,6 +2249,13 @@ function applyRoleVisibility(){
   var _isNetFCRC = (typeof isNetworkRole === 'function' && isNetworkRole(role));
   var _fcEl = document.getElementById('navFillControl'); if (_fcEl) _fcEl.style.display = _isNetFCRC ? '' : 'none';
   var _rcEl = document.getElementById('navReconcile');   if (_rcEl) _rcEl.style.display = _isNetFCRC ? '' : 'none';
+  // v6.99: тимчасово приховано для director (доробляємо й відкриємо пізніше — повернути: скоротити список або видалити блок).
+  // ЛИШЕ для director; інші ролі не зачіпаємо. Код вкладок/роутів не видаляємо.
+  if (role === 'director'){
+    ['dashboard','tasks','analytics_clients','analytics_hr','categories','overview_analytics'].forEach(function(p){
+      document.querySelectorAll('[data-permission="' + p + '"]').forEach(function(el){ el.style.display = 'none'; });
+    });
+  }
   document.querySelectorAll('[data-section]').forEach(function(section){
     var sectionName = section.dataset.section;
     var items = document.querySelectorAll('[data-permission][data-parent="' + sectionName + '"]');
