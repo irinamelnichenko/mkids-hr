@@ -3794,10 +3794,13 @@ function splitVacationIntoWeekSlots(fromDate, toDate){
 // Дзеркалить determineTargetMonth на бекенді: timestamp внесення < 1-ше число
 // місяця відпустки → той самий місяць; інакше → наступний.
 function _feDetermineTargetMonth(vacMonth, vacYear, createdAt){
-  var firstISO=vacYear+'-'+String(vacMonth).padStart(2,'0')+'-01';
   var entryISO=(createdAt instanceof Date)?createdAt.toISOString().slice(0,10):String(createdAt||'').slice(0,10);
   if(!/^\d{4}-\d{2}-\d{2}/.test(entryISO)) return {month:vacMonth,year:vacYear};
-  if(entryISO<firstISO) return {month:vacMonth,year:vacYear};
+  // v6.55: місячне порівняння (не денне). Внесено ≤ місяця відсутності → той самий
+  // місяць (рахунок ще не виставлений); внесено пізніше → наступний. Фікс бага 1-го числа.
+  var absKey=vacYear+'-'+String(vacMonth).padStart(2,'0');
+  var entryKey=entryISO.slice(0,7);
+  if(entryKey<=absKey) return {month:vacMonth,year:vacYear};
   var nm=(vacMonth===12)?{m:1,y:vacYear+1}:{m:vacMonth+1,y:vacYear};
   return {month:nm.m,year:nm.y};
 }
