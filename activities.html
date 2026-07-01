@@ -832,6 +832,9 @@ select,input,textarea{font-family:inherit}
   .attg-cell.on{background:#e8f8f0;border-color:#bce8d3;color:#1e8449}
   .attg-cell.today{border-top:2px solid #2f80ed}
   .attg-cell.disabled{opacity:.45;cursor:not-allowed;background:#f7f9fb}
+  /* минулі (заблоковані) клітинки з відміткою — фон сірий, але сам ✅ яскравий */
+  .attg-cell.on.disabled{opacity:1}
+  .attg-cell.on.disabled .attg-cb{opacity:1}
   .attg-cell.saving{opacity:.6;cursor:wait}
   .attg-cb{pointer-events:none}
   .attg-empty{padding:14px;color:#8a97a6}
