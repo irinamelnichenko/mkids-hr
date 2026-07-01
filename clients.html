@@ -3533,15 +3533,18 @@ function recalcDiscount(){
       +'<div class="alert alert-info" style="margin-top:8px;font-size:12px">🏖 Відпустка (формула v6.36): <b>до сплати = ціна × відвідані / робочі_дні_місяця</b>. Ліміт 20 роб.днів на договірний рік; понад ліміт — повна оплата. Деталі по періодах — вкладка «Відсутності».</div>';
     el.innerHTML=html; return;
   }
-  // ── ХВОРОБА (else) — стара логіка % за тижнями (НЕ чіпаємо) ──
-  var sickDays=abs.filter(function(a){ return a.type==='sick'; }).reduce(function(s,a){ return s+(a.workDays||a.days||0); },0);
-  var sickW=Math.min(4,weeksCeil(sickDays));
-  var totalPct=[0,5,10,15,20][sickW];
+  // ── ХВОРОБА (v6.58): PER-RECORD — кожен лікарняний рахується ОКРЕМО (дні поспіль),
+  //    шкала за _sickUseNew(loc, місяць_from). Сумуємо знижки по всіх записах. ──
+  var sickRecs=(c.absences||[]).filter(function(a){ return a.type==='sick' && (!a.id||a.status==='done') && a.from && a.to; });
+  var totalSickDisc=0, totSickDays=0;
+  sickRecs.forEach(function(a){
+    calcAbsMonthBreakdown('sick', a.from, a.to, fee, c).forEach(function(m){ totalSickDisc+=(m.amount||0); totSickDays+=(m.workDays||0); });
+  });
   var html='<div style="display:flex;gap:10px;flex-wrap:wrap">'
-    +'<div class="vac-box"><div class="vac-num">'+weeksCeil(sickDays)+'</div><div><div class="vac-lbl">Тижнів хвороби</div>'+(weeksCeil(sickDays)>4?'<div class="vac-lbl" style="color:var(--red2)">Ліміт вичерпано</div>':'')+'</div></div>';
-  if(fee>0) html+='<div class="vac-box"><div class="vac-num">'+totalPct+'%</div><div><div class="vac-lbl">Знижка</div><div class="vac-lbl">−'+fmtN(Math.round(fee*totalPct/100))+' грн</div></div></div>'
-    +'<div class="vac-box"><div class="vac-num" style="color:var(--green)">'+fmtN(Math.round(fee*(1-totalPct/100)))+'</div><div><div class="vac-lbl">До сплати (грн)</div></div></div>';
-  html+='</div>';
+    +'<div class="vac-box"><div class="vac-num">'+sickRecs.length+'</div><div><div class="vac-lbl">Лікарняних</div><div class="vac-lbl">'+totSickDays+' роб.дн разом</div></div></div>';
+  if(fee>0) html+='<div class="vac-box"><div class="vac-num" style="color:var(--green)">−'+fmtN(totalSickDisc)+'</div><div><div class="vac-lbl">Знижка за хворобу (грн)</div></div></div>';
+  html+='</div>'
+    +'<div class="alert alert-info" style="margin-top:8px;font-size:12px">🤒 Хвороба (нова шкала з 07.2026; Бровари з 06.2026): 5-10 роб.дн→5%, 11-15→10%, 16-20→15%, 21+→20%; &lt;5 днів→0%. Кожен лікарняний — ОКРЕМО (дні поспіль). До 06.2026 (крім Бровар) — стара шкала.</div>';
   el.innerHTML=html;
 }
 
@@ -3890,6 +3893,11 @@ function migrateAbsences(c){
 }
 
 // Розбиває відсутність по місяцях, повертає [{month,workDays,weeks,pct,amount}]
+// v6.58: шкала хвороби (дзеркало бекенду) — нова з 07.2026, Бровари з 06.2026.
+var NEW_SICK_FROM=202607, NEW_SICK_LOC_EXCEPTIONS={'Бровари':202606};
+function _sickUseNew(loc,y,m){ var ym=Number(y)*100+Number(m); if(ym>=NEW_SICK_FROM) return true; var ex=NEW_SICK_LOC_EXCEPTIONS[String(loc||'').trim()]; return !!(ex&&ym>=ex); }
+function _sickNewScalePct(days){ if(days<5)return 0; if(days<=10)return 5; if(days<=15)return 10; if(days<=20)return 15; return 20; }
+
 function calcAbsMonthBreakdown(type, fromStr, toStr, fee, c, excludeAbsId){
   var f=pd(fromStr), t=pd(toStr);
   if(!f||!t||t<f) return [];
@@ -3925,7 +3933,7 @@ function calcAbsMonthBreakdown(type, fromStr, toStr, fee, c, excludeAbsId){
     });
   }
 
-  // ── ХВОРОБА: стара логіка (% за тижнями 5/10/15/20) — НЕ ЧІПАЄМО ──
+  // ── ХВОРОБА: шкала за _sickUseNew(loc, місяць_from). Стара гілка — без змін ──
   var mmap={}, cur=new Date(f.getTime());
   while(cur<=t){
     var d=cur.getDay();
@@ -3935,20 +3943,37 @@ function calcAbsMonthBreakdown(type, fromStr, toStr, fee, c, excludeAbsId){
     }
     cur.setDate(cur.getDate()+1);
   }
-  var PCT=[0,5,10,15,20];
   var monthsArr=Object.keys(mmap).sort().map(function(mk){
     return {month:mk,workDays:mmap[mk],weeks:0,pct:0,amount:0};
   });
   var totalDays=monthsArr.reduce(function(s,m){ return s+m.workDays; },0);
-  var totalWeeks=Math.min(4,Math.ceil(totalDays/5));
-  var sorted=monthsArr.slice().sort(function(a,b){ return b.workDays-a.workDays; });
-  var weeksLeft=totalWeeks;
-  for(var i=0;i<sorted.length;i++){
-    var mi=sorted[i];
-    if(i===sorted.length-1){ mi.weeks=Math.max(0,weeksLeft); }
-    else { mi.weeks=Math.min(Math.ceil(mi.workDays/5),weeksLeft); weeksLeft-=mi.weeks; }
-    mi.pct=PCT[Math.min(4,mi.weeks)];
-    mi.amount=fee>0?Math.round(fee*mi.pct/100):0;
+  var useNewSick=_sickUseNew(c?c.loc:'', f.getFullYear(), f.getMonth()+1);
+  if(!useNewSick){
+    // СТАРА шкала — без змін
+    var PCT=[0,5,10,15,20];
+    var totalWeeks=Math.min(4,Math.ceil(totalDays/5));
+    var sorted=monthsArr.slice().sort(function(a,b){ return b.workDays-a.workDays; });
+    var weeksLeft=totalWeeks;
+    for(var i=0;i<sorted.length;i++){
+      var mi=sorted[i];
+      if(i===sorted.length-1){ mi.weeks=Math.max(0,weeksLeft); }
+      else { mi.weeks=Math.min(Math.ceil(mi.workDays/5),weeksLeft); weeksLeft-=mi.weeks; }
+      mi.pct=PCT[Math.min(4,mi.weeks)];
+      mi.amount=fee>0?Math.round(fee*mi.pct/100):0;
+    }
+  } else {
+    // НОВА шкала — % від сумарних днів поспіль; discount рознесено пропорційно роб.дням
+    var totalPct=_sickNewScalePct(totalDays);
+    var totalDisc=fee>0?Math.round(fee*totalPct/100):0;
+    var sortedN=monthsArr.slice().sort(function(a,b){ return b.workDays-a.workDays; });
+    var acc=0;
+    for(var j=0;j<sortedN.length;j++){
+      var mj=sortedN[j];
+      mj.weeks=Math.min(4,Math.ceil(mj.workDays/5));
+      mj.amount=(j===sortedN.length-1)?Math.max(0,totalDisc-acc):((totalDays>0)?Math.round(totalDisc*mj.workDays/totalDays):0);
+      if(j!==sortedN.length-1) acc+=mj.amount;
+      mj.pct=fee>0?Math.round(mj.amount/fee*100):0;
+    }
   }
   return monthsArr;
 }
