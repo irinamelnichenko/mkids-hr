@@ -810,6 +810,33 @@ select,input,textarea{font-family:inherit}
     </div>
   </div>
 
+  <!-- ── СІТКА МІСЯЦЯ (візуал як предметники) ── -->
+  <style>
+  .att-vm-chips{display:flex;gap:6px}
+  .att-vm-chip{border:1.5px solid var(--gray2,#d7dde5);background:#fff;border-radius:99px;padding:4px 10px;cursor:pointer;font-size:12px;font-weight:700;color:var(--dark2,#33475b)}
+  .att-vm-chip.active{background:#2f80ed;color:#fff;border-color:#2f80ed}
+  .attg-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+  .attg-navbtn{border:1.5px solid var(--gray2,#d7dde5);background:#fff;border-radius:8px;padding:2px 12px;cursor:pointer;font-size:18px;font-weight:800;line-height:1.2;color:var(--dark2,#33475b)}
+  .attg-navbtn:hover{background:#f0f7ff}
+  .attg-title{font-weight:800;font-size:15px}
+  .attg-wrap{overflow-x:auto;background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.06);padding:8px}
+  .attg{display:grid;gap:2px;min-width:max-content}
+  .attg-cnr{position:sticky;left:0;z-index:2;background:#f5f8fc;font-weight:700;font-size:12px;padding:6px 8px;display:flex;align-items:center;border-radius:6px}
+  .attg-th{background:#f5f8fc;text-align:center;padding:4px 0;font-size:11px;line-height:1.15;border-radius:6px}
+  .attg-th.today{border-top:3px solid #2f80ed}
+  .attg-th .wd{display:block;color:#8a97a6}
+  .attg-th .dd{display:block;font-weight:800}
+  .attg-name{position:sticky;left:0;z-index:1;background:#fff;font-size:13px;padding:5px 8px;white-space:nowrap;border-right:1px solid #eef2f7;display:flex;align-items:center;overflow:hidden;text-overflow:ellipsis;max-width:180px}
+  .attg-cell{display:flex;align-items:center;justify-content:center;min-width:34px;height:30px;border-radius:6px;background:#fff;border:1px solid #eef2f7;cursor:pointer;font-size:13px;user-select:none;color:#c3ccd6}
+  .attg-cell:hover{background:#f0f7ff}
+  .attg-cell.on{background:#e8f8f0;border-color:#bce8d3;color:#1e8449}
+  .attg-cell.today{border-top:2px solid #2f80ed}
+  .attg-cell.disabled{opacity:.45;cursor:not-allowed;background:#f7f9fb}
+  .attg-cell.saving{opacity:.6;cursor:wait}
+  .attg-cb{pointer-events:none}
+  .attg-empty{padding:14px;color:#8a97a6}
+  </style>
+
   <!-- ── ETAP 2: ВІДВІДУВАНІСТЬ (v6.22: 2-колонковий лейаут на desktop) ── -->
   <div id="attendanceMode" class="hidden">
     <h3 class="att-page-title">📝 Відвідуваність</h3>
@@ -834,6 +861,13 @@ select,input,textarea{font-family:inherit}
           <div class="att-fg">
             <label>🧩 Заняття</label>
             <select id="attActivitySel"><option value="">— оберіть —</option></select>
+          </div>
+          <div class="att-fg">
+            <label>👁 Вигляд</label>
+            <div class="att-vm-chips" id="attViewMode">
+              <button type="button" class="att-vm-chip active" data-vm="list">📋 День</button>
+              <button type="button" class="att-vm-chip" data-vm="grid">🗓 Місяць</button>
+            </div>
           </div>
           <div class="att-counter" id="attCounter">—</div>
         </div>
@@ -862,6 +896,9 @@ select,input,textarea{font-family:inherit}
 
         <!-- v6.20: плоский список дітей -->
         <div id="attList" class="att-list hidden"></div>
+
+        <!-- сітка місяця (діти × дні), як предметники -->
+        <div id="attMonthGrid" class="att-mgrid-wrap hidden"></div>
 
         <div id="attSummary" class="att-summary hidden">
           <div class="att-sum-card">
@@ -2374,8 +2411,18 @@ var ATT = {
   marksLoadedAt: 0,
   inFlight: {},    // {compositeKey: true} — блокуємо подвійні toggle
   syncStatus: {},  // v6.22: {child|actId: {state:'pending'|'ok'|'queued'|'err', ts}}
-  bulkRunning: false  // v6.22: lock для bulk-операцій
+  bulkRunning: false,  // v6.22: lock для bulk-операцій
+  // ── СІТКА МІСЯЦЯ (діти × дні) ──
+  viewMode: 'list',   // 'list' | 'grid'
+  gridYear: 0,
+  gridMonth: 0,
+  gridMarks: [],      // усі відмітки групи (всі дати), фільтруємо по activityId+місяцю
+  gridMarksKey: '',
+  gridMarksLoadedAt: 0,
+  gridInFlight: {}    // {child|actId|iso: true}
 };
+var ATT_MONTHS_UA = ['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
+var ATT_WD_UA = ['Нд','Пн','Вт','Ср','Чт','Пт','Сб'];
 var ATT_ACTIVITY_LS_KEY = 'mkids_att_activity';
 var ATT_CHILDREN_TTL = 60 * 1000;
 var ATT_MARKS_TTL    = 60 * 1000;
@@ -2430,8 +2477,8 @@ async function initAttendanceTab(){
     ATT.activity = Number(this.value) || 0;
     try { localStorage.setItem(ATT_ACTIVITY_LS_KEY, String(ATT.activity)); } catch(e){}
     ATT.syncStatus = {};
-    renderAttList();
-    renderAttTeacherBox();
+    if (ATT.viewMode === 'grid'){ renderMonthGrid(); }
+    else { renderAttList(); renderAttTeacherBox(); }
   });
 
   // v6.22: chips для швидкого вибору дати
@@ -2444,6 +2491,20 @@ async function initAttendanceTab(){
   // v6.22: bulk-кнопки
   $('attBulkMarkBtn').addEventListener('click', bulkMarkAll);
   $('attBulkClearBtn').addEventListener('click', bulkClearAll);
+
+  // ── СІТКА МІСЯЦЯ: перемикач вигляду + делеговані кліки по сітці ──
+  $('attViewMode').addEventListener('click', function(e){
+    var b = e.target.closest && e.target.closest('.att-vm-chip');
+    if (!b) return;
+    setViewMode(b.dataset.vm || 'list');
+  });
+  $('attMonthGrid').addEventListener('click', function(e){
+    var nav = e.target.closest && e.target.closest('[data-gnav]');
+    if (nav){ gridChangeMonth(nav.dataset.gnav === 'prev' ? -1 : 1); return; }
+    var cell = e.target.closest && e.target.closest('.attg-cell[data-child]');
+    if (!cell) return;
+    onGridCellClick(cell.dataset.child, cell.dataset.iso);
+  });
 
   renderAttendanceBoard();
 }
@@ -2614,6 +2675,7 @@ async function renderAttendanceBoard(){
 
   $('attLoading').classList.remove('hidden');
   $('attList').classList.add('hidden');
+  $('attMonthGrid').classList.add('hidden');
   $('attTeacherBox').classList.add('hidden');
   $('attSummary').classList.add('hidden');
   $('attHint').classList.add('hidden');
@@ -2679,11 +2741,23 @@ async function renderAttendanceBoard(){
     return;
   }
 
-  renderAttList();
-  renderAttTeacherBox();
-  renderSummary(acts);
-  $('attLoading').classList.add('hidden');
-  $('attSummary').classList.remove('hidden');
+  if (ATT.viewMode === 'grid'){
+    $('attList').classList.add('hidden');
+    $('attTeacherBox').classList.add('hidden');
+    $('attSummary').classList.add('hidden');
+    var _bulk = $('attBulkActions'); if (_bulk) _bulk.classList.add('hidden');
+    await _loadGridMarks(false);
+    renderMonthGrid();
+    $('attMonthGrid').classList.remove('hidden');
+    $('attLoading').classList.add('hidden');
+  } else {
+    $('attMonthGrid').classList.add('hidden');
+    renderAttList();
+    renderAttTeacherBox();
+    renderSummary(acts);
+    $('attLoading').classList.add('hidden');
+    $('attSummary').classList.remove('hidden');
+  }
 }
 
 // v6.20: dropdown занять для обраної локації
@@ -2719,6 +2793,200 @@ function _markFor(child, activityId){
     if (ATT.marks[i].child === child && ATT.marks[i].activityId === activityId) return ATT.marks[i];
   }
   return null;
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// СІТКА МІСЯЦЯ (діти × дні) — візуал як предметники. Пише в те саме сховище
+// (Додаткові_Відвідуваність) через ті самі addAttendanceMark/removeAttendanceMark,
+// той самий payload → guard від дублів і exportAttendanceToPayments не зачеплені.
+// ══════════════════════════════════════════════════════════════════════════
+function setViewMode(vm){
+  ATT.viewMode = (vm === 'grid') ? 'grid' : 'list';
+  var chips = document.querySelectorAll('.att-vm-chip');
+  for (var i = 0; i < chips.length; i++){
+    chips[i].classList.toggle('active', chips[i].dataset.vm === ATT.viewMode);
+  }
+  renderAttendanceBoard();
+}
+
+// Нормалізація імені дитини — ДЗЕРКАЛО серверного _attDupKey (trim+lower+пробіли),
+// щоб стан клітинки збігався з guard від дублів 1-в-1.
+function _attNormChild(s){ return String(s || '').trim().toLowerCase().replace(/\s+/g,' '); }
+
+// Будні місяця (без Сб/Нд), як buildDays у предметників.
+function _gridDaysOf(year, month){
+  var last = new Date(year, month, 0).getDate();
+  var t = new Date();
+  var todayD = (t.getFullYear() === year && (t.getMonth() + 1) === month) ? t.getDate() : 0;
+  var mm = ('0' + month).slice(-2);
+  var out = [];
+  for (var d = 1; d <= last; d++){
+    var dt = new Date(year, month - 1, d);
+    var wd = dt.getDay();
+    if (wd === 0 || wd === 6) continue;            // пропускаємо вихідні
+    var dd = ('0' + d).slice(-2);
+    out.push({
+      day: d, wd: ATT_WD_UA[wd],
+      iso: year + '-' + mm + '-' + dd,
+      dmy: dd + '.' + mm + '.' + year,
+      isToday: (d === todayD)
+    });
+  }
+  return out;
+}
+
+// Пошук відмітки для клітинки (дитина × заняття × дата).
+function _gridMarkFor(child, actId, iso){
+  var nk = _attNormChild(child);
+  for (var i = 0; i < ATT.gridMarks.length; i++){
+    var m = ATT.gridMarks[i];
+    if (Number(m.activityId) !== Number(actId)) continue;
+    if (m.date !== iso) continue;
+    if (m.child === child || _attNormChild(m.child) === nk) return m;
+  }
+  return null;
+}
+
+// Завантаження ВСІХ відміток групи (всі дати) — один запит, фільтр по activityId+місяцю в рендері.
+async function _loadGridMarks(force){
+  var key = S.activeLoc + '|' + ATT.group;
+  if (!force && ATT.gridMarksKey === key && Date.now() - ATT.gridMarksLoadedAt < ATT_MARKS_TTL){
+    return ATT.gridMarks;
+  }
+  try {
+    var url = CFG.SCRIPT_URL + '?action=getAttendanceMarks' +
+              '&loc='   + encodeURIComponent(S.activeLoc) +
+              '&group=' + encodeURIComponent(ATT.group);
+    var r = await fetch(url, {redirect: 'follow'});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    var json = await r.json();
+    if (!json.ok) throw new Error(json.error || 'getAttendanceMarks failed');
+    ATT.gridMarks = json.items || [];
+    ATT.gridMarksKey = key;
+    ATT.gridMarksLoadedAt = Date.now();
+  } catch(e){
+    console.warn('[attendance grid] load fail:', e && e.message || e);
+    if (ATT.gridMarksKey !== key) ATT.gridMarks = [];
+  }
+  return ATT.gridMarks;
+}
+
+function gridChangeMonth(delta){
+  var m = ATT.gridMonth + delta, y = ATT.gridYear;
+  if (m < 1){ m = 12; y--; } else if (m > 12){ m = 1; y++; }
+  ATT.gridMonth = m; ATT.gridYear = y;
+  renderMonthGrid();
+}
+
+function renderMonthGrid(){
+  var wrap = $('attMonthGrid');
+  if (!wrap) return;
+  // Ініт місяця з обраної дати (перший показ).
+  if (!ATT.gridYear || !ATT.gridMonth){
+    var b = ATT.date ? ATT.date.split('-') : [];
+    var now = new Date();
+    ATT.gridYear  = (b.length === 3) ? Number(b[0]) : now.getFullYear();
+    ATT.gridMonth = (b.length === 3) ? Number(b[1]) : (now.getMonth() + 1);
+  }
+  var acts = _activitiesForLoc(S.activeLoc);
+  var act = null;
+  for (var i = 0; i < acts.length; i++){ if (acts[i].id === ATT.activity){ act = acts[i]; break; } }
+
+  var monthName = ATT_MONTHS_UA[ATT.gridMonth - 1] || ('міс.' + ATT.gridMonth);
+  var head = '<div class="attg-toolbar">' +
+    '<button type="button" class="attg-navbtn" data-gnav="prev" title="Попередній місяць">‹</button>' +
+    '<span class="attg-title">' + monthName + ' ' + ATT.gridYear + '</span>' +
+    '<button type="button" class="attg-navbtn" data-gnav="next" title="Наступний місяць">›</button>' +
+    '<span class="attg-title" style="font-weight:600;color:#8a97a6">· ' + escapeHtml(ATT.group) + ' · ' +
+      (act ? escapeHtml(act.name) + (act.clientPrice ? ' (' + act.clientPrice + '₴)' : '') : '—') +
+    '</span></div>';
+
+  if (!act){ wrap.innerHTML = head + '<div class="attg-empty">Оберіть заняття зі списку.</div>'; return; }
+  if (!ATT.children.length){ wrap.innerHTML = head + '<div class="attg-empty">У групі «' + escapeHtml(ATT.group) + '» немає дітей.</div>'; return; }
+
+  var days = _gridDaysOf(ATT.gridYear, ATT.gridMonth);
+  var nDays = days.length;
+  var cols = '180px repeat(' + nDays + ', minmax(34px, 1fr))';
+  var html = head + '<div class="attg-wrap"><div class="attg" style="grid-template-columns:' + cols + '">';
+
+  // header
+  html += '<div class="attg-cnr">Дитина \\ День</div>';
+  days.forEach(function(D){
+    html += '<div class="attg-th' + (D.isToday ? ' today' : '') + '">' +
+      '<span class="wd">' + D.wd + '</span><span class="dd">' + D.day + '</span></div>';
+  });
+
+  // rows = діти
+  ATT.children.forEach(function(child){
+    html += '<div class="attg-name" title="' + escapeHtml(child) + '">' + escapeHtml(child) + '</div>';
+    days.forEach(function(D){
+      var on      = !!_gridMarkFor(child, act.id, D.iso);
+      var locked  = isWeekLocked(D.iso);
+      var canEdit = hasPerm('attendance-edit') && !locked;
+      var lockKey = child + '|' + act.id + '|' + D.iso;
+      var saving  = !!ATT.gridInFlight[lockKey];
+      var cls = 'attg-cell' + (on ? ' on' : '') + (D.isToday ? ' today' : '') +
+                (canEdit ? '' : ' disabled') + (saving ? ' saving' : '');
+      var glyph = on ? '✅' : (canEdit ? '' : '·');
+      var tip = escapeHtml(child) + ' · ' + D.dmy + (locked ? ' · 🔒 тиждень замкнено' : '');
+      html += '<div class="' + cls + '"' +
+        ((canEdit && !saving) ? (' data-child="' + escapeHtml(child) + '" data-iso="' + D.iso + '"') : '') +
+        ' title="' + tip + '"><span class="attg-cb">' + glyph + '</span></div>';
+    });
+  });
+
+  html += '</div></div>';
+  wrap.innerHTML = html;
+}
+
+async function onGridCellClick(child, iso){
+  if (!hasPerm('attendance-edit')){ showToast('Немає прав на редагування відвідуваності', 'err'); return; }
+  if (isWeekLocked(iso)){ showToast('🔒 Тиждень замкнено — редагує лише CFO', 'err'); return; }
+  var acts = _activitiesForLoc(S.activeLoc), act = null;
+  for (var i = 0; i < acts.length; i++){ if (acts[i].id === ATT.activity){ act = acts[i]; break; } }
+  if (!act){ showToast('🚫 Оберіть заняття', 'err'); return; }
+
+  var lockKey = child + '|' + act.id + '|' + iso;
+  if (ATT.gridInFlight[lockKey]) return;
+  ATT.gridInFlight[lockKey] = true;
+  renderMonthGrid();                                    // оптимістичний "saving"
+
+  var existing = _gridMarkFor(child, act.id, iso);
+  if (existing){
+    var res = await saveBackend('removeAttendanceMark', {id: existing.id});
+    if (res.ok || res.localOnly){
+      ATT.gridMarks = ATT.gridMarks.filter(function(m){ return m.id !== existing.id; });
+      showToast(res.localOnly ? '💾 Знято локально' : '✓ Знято', res.localOnly ? 'info' : 'ok', 1800);
+    } else {
+      showToast('❌ ' + (res.error || 'Не вдалось зняти'), 'err');
+    }
+  } else {
+    var markerName = _markerLabel();
+    var price = Number(act.clientPrice) || 0;
+    var payload = { data: {
+      date: iso, loc: S.activeLoc, group: ATT.group, child: child,
+      activityId: act.id, activityName: act.name, price: price, markedBy: markerName
+    }};
+    var res2 = await saveBackend('addAttendanceMark', payload);
+    if (res2.ok || res2.localOnly){
+      var newId = res2.id || ('local-' + Date.now() + '-' + Math.random().toString(36).slice(2,7));
+      if (!_gridMarkFor(child, act.id, iso)){       // dup:true → уже є, не дублюємо локально
+        ATT.gridMarks.push({
+          id: newId, date: iso, loc: S.activeLoc, group: ATT.group, child: child,
+          activityId: act.id, activityName: act.name, price: price,
+          markedBy: markerName, markedAt: new Date().toISOString()
+        });
+      }
+      showToast(res2.localOnly ? '💾 Відмічено локально' : (res2.dup ? 'вже відмічено' : '✓ Збережено'),
+                res2.localOnly ? 'info' : 'ok', 1800);
+    } else {
+      showToast('❌ ' + (res2.error || 'Не вдалось зберегти'), 'err');
+    }
+  }
+
+  delete ATT.gridInFlight[lockKey];
+  renderMonthGrid();
+  if (typeof scheduleAutoExport === 'function') scheduleAutoExport();
 }
 
 // v6.20: плоский список дітей з одним чекбоксом (для обраного ATT.activity)
