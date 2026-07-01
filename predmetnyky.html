@@ -1287,7 +1287,11 @@ function getNormFor(loc, subj, groupType){
   var region = predLocToRegion(loc);
   var r = S.norms[region]; if (!r) return 0;
   var s = r[subj]; if (!s) return 0;
-  return s[groupType] || 0;
+  var n = s[groupType] || 0;
+  // v6.57: мінімальний місячний ліміт 15 занять для ДОЗВОЛЕНИХ типів (norm>0) — норма
+  // з матриці була нижча за реальну потребу (до 15/міс). 0 = заборонено (не піднімаємо).
+  // Якщо в матриці норма вже >15 — лишаємо її (Math.max). isWeekLocked не зачіпається.
+  return n > 0 ? Math.max(n, 15) : 0;
 }
 // v6.28.2: реальні групи локації (ПОВНІ назви з вихователем), відсортовані
 // за типом (miniBaby→Preschool) і назвою. Кожна реальна група = окремий
