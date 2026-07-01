@@ -2724,7 +2724,9 @@ async function renderAttendanceBoard(){
   }
 
   ATT.children = groups[ATT.group] || [];
-  await _loadMarks(false);
+  // ФІКС A: у grid-режимі _loadMarks (за датою) не потрібен — сітка вантажить свій місяць
+  // окремим _loadGridMarks. Це вдвічі менше важких читань аркуша в grid-режимі.
+  if (ATT.viewMode !== 'grid') await _loadMarks(false);
 
   // Counter для верхньої панелі
   var todayCount = ATT.marks.length;
@@ -2850,16 +2852,30 @@ function _gridMarkFor(child, actId, iso){
   return null;
 }
 
-// Завантаження ВСІХ відміток групи (всі дати) — один запит, фільтр по activityId+місяцю в рендері.
+// Ініт місяця сітки з обраної дати (або поточного місяця).
+function _ensureGridMonth(){
+  if (!ATT.gridYear || !ATT.gridMonth){
+    var b = ATT.date ? ATT.date.split('-') : [];
+    var now = new Date();
+    ATT.gridYear  = (b.length === 3) ? Number(b[0]) : now.getFullYear();
+    ATT.gridMonth = (b.length === 3) ? Number(b[1]) : (now.getMonth() + 1);
+  }
+}
+
+// ФІКС B: вантажимо відмітки групи ТІЛЬКИ за видимий місяць (year+month) — кратно
+// менший payload і менше навантаження на бекенд (фільтр дат на читанні аркуша).
 async function _loadGridMarks(force){
-  var key = S.activeLoc + '|' + ATT.group;
+  _ensureGridMonth();
+  var key = S.activeLoc + '|' + ATT.group + '|' + ATT.gridYear + '|' + ATT.gridMonth;
   if (!force && ATT.gridMarksKey === key && Date.now() - ATT.gridMarksLoadedAt < ATT_MARKS_TTL){
     return ATT.gridMarks;
   }
   try {
     var url = CFG.SCRIPT_URL + '?action=getAttendanceMarks' +
               '&loc='   + encodeURIComponent(S.activeLoc) +
-              '&group=' + encodeURIComponent(ATT.group);
+              '&group=' + encodeURIComponent(ATT.group) +
+              '&year='  + ATT.gridYear +
+              '&month=' + ATT.gridMonth;
     var r = await fetch(url, {redirect: 'follow'});
     if (!r.ok) throw new Error('HTTP ' + r.status);
     var json = await r.json();
@@ -2874,23 +2890,19 @@ async function _loadGridMarks(force){
   return ATT.gridMarks;
 }
 
-function gridChangeMonth(delta){
+// Навігація місяцями: тепер довантажуємо відмітки нового місяця (grid-marks помісячні).
+async function gridChangeMonth(delta){
   var m = ATT.gridMonth + delta, y = ATT.gridYear;
   if (m < 1){ m = 12; y--; } else if (m > 12){ m = 1; y++; }
   ATT.gridMonth = m; ATT.gridYear = y;
+  await _loadGridMarks(false);
   renderMonthGrid();
 }
 
 function renderMonthGrid(){
   var wrap = $('attMonthGrid');
   if (!wrap) return;
-  // Ініт місяця з обраної дати (перший показ).
-  if (!ATT.gridYear || !ATT.gridMonth){
-    var b = ATT.date ? ATT.date.split('-') : [];
-    var now = new Date();
-    ATT.gridYear  = (b.length === 3) ? Number(b[0]) : now.getFullYear();
-    ATT.gridMonth = (b.length === 3) ? Number(b[1]) : (now.getMonth() + 1);
-  }
+  _ensureGridMonth();
   var acts = _activitiesForLoc(S.activeLoc);
   var act = null;
   for (var i = 0; i < acts.length; i++){ if (acts[i].id === ATT.activity){ act = acts[i]; break; } }
