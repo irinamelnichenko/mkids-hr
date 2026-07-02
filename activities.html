@@ -822,10 +822,23 @@ select,input,textarea{font-family:inherit}
   .attg-wrap{overflow-x:auto;background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.06);padding:8px}
   .attg{display:grid;gap:2px;min-width:max-content}
   .attg-cnr{position:sticky;left:0;z-index:2;background:#f5f8fc;font-weight:700;font-size:12px;padding:6px 8px;display:flex;align-items:center;border-radius:6px}
-  .attg-th{background:#f5f8fc;text-align:center;padding:4px 0;font-size:11px;line-height:1.15;border-radius:6px}
+  .attg-th{background:#f5f8fc;text-align:center;padding:4px 0;font-size:11px;line-height:1.15;border-radius:6px;position:relative}
   .attg-th.today{border-top:3px solid #2f80ed}
   .attg-th .wd{display:block;color:#8a97a6}
   .attg-th .dd{display:block;font-weight:800}
+  .attg-th.clickable{cursor:pointer}
+  .attg-th.clickable:hover{background:#e8f0fb}
+  .attg-th.merged{background:#eef3ff;box-shadow:inset 0 0 0 1.5px #b9cdff}
+  .attg-th .mrg{display:block;font-size:10px;line-height:1;margin-top:1px;color:#2f6fed}
+  /* попап обʼєднання груп */
+  .mrg-grp-list{display:flex;flex-direction:column;gap:8px;margin-top:6px}
+  .mrg-grp-row{display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid #e3e9f0;border-radius:9px;cursor:pointer;font-size:14px;background:#fff}
+  .mrg-grp-row:hover{background:#f6f9fd}
+  .mrg-grp-row.locked{background:#eef3ff;border-color:#c7d7f7;cursor:default}
+  .mrg-grp-row input{width:18px;height:18px;flex:none}
+  .mrg-grp-row .glabel{flex:1}
+  .mrg-grp-row .gtag{font-size:11px;color:#2f6fed;font-weight:700}
+  .mrg-hint{font-size:12.5px;color:#6b7b8c;line-height:1.5;margin-bottom:4px}
   .attg-name{position:sticky;left:0;z-index:1;background:#fff;font-size:13px;padding:5px 8px;white-space:nowrap;border-right:1px solid #eef2f7;display:flex;align-items:center;overflow:hidden;text-overflow:ellipsis;max-width:180px}
   .attg-cell{display:flex;align-items:center;justify-content:center;min-width:34px;height:30px;border-radius:6px;background:#fff;border:1px solid #eef2f7;cursor:pointer;font-size:13px;user-select:none;color:#c3ccd6}
   .attg-cell:hover{background:#f0f7ff}
@@ -1104,7 +1117,7 @@ select,input,textarea{font-family:inherit}
           <label>Модель оплати викладача</label>
           <select id="actTeacherModel" onchange="updateModelHint()">
             <option value="">— Оберіть —</option>
-            <option value="За заняття" title="Фіксована сума за кожне проведене заняття (унікальну дату), незалежно від кількості дітей.">За заняття</option>
+            <option value="За заняття" title="Фіксована сума за кожну проведену сесію (група × дата), незалежно від кількості дітей. Кілька груп, обʼєднаних одного дня (🔗 у сітці), рахуються як 1 заняття.">За заняття</option>
             <option value="За дитину" title="Сума множиться на кількість відмічених дітей (дитино-відвідувань).">За дитину</option>
             <option value="За захід" title="Фіксована сума за 1 захід незалежно від кількості дітей. Підходить для Театру, Майстер-класу, вистав.">За захід</option>
           </select>
@@ -1198,6 +1211,26 @@ select,input,textarea{font-family:inherit}
     <div class="modal-bd" id="anaDetailBody"></div>
     <div class="modal-ft">
       <button class="btn btn-secondary" data-close="1">Закрити</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── ОБʼЄДНАННЯ ГРУП (v7.08) ──────────────────────────────── -->
+<div id="mergeModal" class="modal hidden" aria-hidden="true">
+  <div class="modal-overlay" data-close="1"></div>
+  <div class="modal-card" role="dialog" aria-modal="true">
+    <button class="modal-close" data-close="1" aria-label="Закрити">✕</button>
+    <div class="modal-hd">
+      <h3 id="mergeModalTitle">🔗 Обʼєднати групи</h3>
+    </div>
+    <div class="modal-bd">
+      <div class="mrg-hint" id="mergeHint"></div>
+      <div class="mrg-grp-list" id="mergeGrpList"></div>
+    </div>
+    <div class="modal-ft">
+      <button id="mergeUnmergeBtn" class="btn btn-danger" style="margin-right:auto">Розʼєднати</button>
+      <button class="btn btn-secondary" data-close="1">Скасувати</button>
+      <button id="mergeSaveBtn" class="btn btn-primary">Зберегти</button>
     </div>
   </div>
 </div>
@@ -1963,7 +1996,7 @@ function updateModelHint(){
   if (!el) return;
   var v = $('actTeacherModel').value;
   var HINTS = {
-    'За заняття': 'Фіксована сума за кожне проведене заняття (унікальну дату), незалежно від кількості дітей.',
+    'За заняття': 'Фіксована сума за кожну проведену сесію (група × дата), незалежно від кількості дітей. Кілька груп, обʼєднаних одного дня (🔗 у сітці), рахуються як 1 заняття.',
     'За дитину':  'Сума множиться на кількість відмічених дітей (дитино-відвідувань).',
     'За захід':   'Фіксована сума за 1 захід незалежно від кількості дітей. Підходить для Театру, Майстер-класу, вистав.'
   };
@@ -2422,7 +2455,11 @@ var ATT = {
   gridMarks: [],      // усі відмітки групи (всі дати), фільтруємо по activityId+місяцю
   gridMarksKey: '',
   gridMarksLoadedAt: 0,
-  gridInFlight: {}    // {child|actId|iso: true}
+  gridInFlight: {},   // {child|actId|iso: true}
+  // ── ОБʼЄДНАННЯ ГРУП (v7.08) ──
+  gridMerges: [],     // [{id, activityId, date, groups:[...]}] обʼєднання за (loc, activityId, місяць)
+  gridMergesKey: '',
+  gridMergesLoadedAt: 0
 };
 var ATT_MONTHS_UA = ['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
 var ATT_WD_UA = ['Нд','Пн','Вт','Ср','Чт','Пт','Сб'];
@@ -2504,6 +2541,8 @@ async function initAttendanceTab(){
   $('attMonthGrid').addEventListener('click', function(e){
     var nav = e.target.closest && e.target.closest('[data-gnav]');
     if (nav){ gridChangeMonth(nav.dataset.gnav === 'prev' ? -1 : 1); return; }
+    var th = e.target.closest && e.target.closest('.attg-th[data-gday]');
+    if (th){ openMergeModal(th.dataset.gday); return; }
     var cell = e.target.closest && e.target.closest('.attg-cell[data-child]');
     if (!cell) return;
     onGridCellClick(cell.dataset.child, cell.dataset.iso);
@@ -2752,6 +2791,7 @@ async function renderAttendanceBoard(){
     $('attSummary').classList.add('hidden');
     var _bulk = $('attBulkActions'); if (_bulk) _bulk.classList.add('hidden');
     await _loadGridMarks(false);
+    await _loadGridMerges(false);
     renderMonthGrid();
     $('attMonthGrid').classList.remove('hidden');
     $('attLoading').classList.add('hidden');
@@ -2890,12 +2930,65 @@ async function _loadGridMarks(force){
   return ATT.gridMarks;
 }
 
+// v7.08: обʼєднання груп для (loc, activityId, місяць). Ключ БЕЗ групи —
+// merges крос-груповні (одне заняття = кілька груп разом), тож вантажимо по activityId.
+async function _loadGridMerges(force){
+  _ensureGridMonth();
+  var key = S.activeLoc + '|' + ATT.activity + '|' + ATT.gridYear + '|' + ATT.gridMonth;
+  if (!force && ATT.gridMergesKey === key && Date.now() - ATT.gridMergesLoadedAt < ATT_MARKS_TTL){
+    return ATT.gridMerges;
+  }
+  if (!ATT.activity){ ATT.gridMerges = []; ATT.gridMergesKey = key; return ATT.gridMerges; }
+  try {
+    var url = CFG.SCRIPT_URL + '?action=getDopMerges' +
+              '&loc='        + encodeURIComponent(S.activeLoc) +
+              '&activityId='  + encodeURIComponent(ATT.activity) +
+              '&year='  + ATT.gridYear +
+              '&month=' + ATT.gridMonth;
+    var r = await fetch(url, {redirect: 'follow'});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    var json = await r.json();
+    if (!json.ok) throw new Error(json.error || 'getDopMerges failed');
+    ATT.gridMerges = json.items || [];
+    ATT.gridMergesKey = key;
+    ATT.gridMergesLoadedAt = Date.now();
+  } catch(e){
+    console.warn('[attendance grid] merges load fail:', e && e.message || e);
+    if (ATT.gridMergesKey !== key) ATT.gridMerges = [];
+  }
+  return ATT.gridMerges;
+}
+
+// Нормалізація групи (дзеркало _dopNormGroup у бекенді): trim+lowercase+collapse.
+function _mrgNormGroup(s){ return String(s || '').trim().replace(/\s+/g, ' ').toLowerCase(); }
+
+// Merge-запис для (поточне заняття, дата), або null. Один запис на activityId+дату.
+function _mergeForDay(iso){
+  for (var i = 0; i < ATT.gridMerges.length; i++){
+    var m = ATT.gridMerges[i];
+    if (Number(m.activityId) === Number(ATT.activity) && m.date === iso) return m;
+  }
+  return null;
+}
+
+// Чи бере поточна група участь в обʼєднанні того дня (для 🔗-індикатора у ЇЇ сітці).
+function _dayMergedForCurrentGroup(iso){
+  var m = _mergeForDay(iso);
+  if (!m || !Array.isArray(m.groups) || m.groups.length < 2) return null;
+  var cur = _mrgNormGroup(ATT.group);
+  for (var i = 0; i < m.groups.length; i++){
+    if (_mrgNormGroup(m.groups[i]) === cur) return m;
+  }
+  return null;
+}
+
 // Навігація місяцями: тепер довантажуємо відмітки нового місяця (grid-marks помісячні).
 async function gridChangeMonth(delta){
   var m = ATT.gridMonth + delta, y = ATT.gridYear;
   if (m < 1){ m = 12; y--; } else if (m > 12){ m = 1; y++; }
   ATT.gridMonth = m; ATT.gridYear = y;
   await _loadGridMarks(false);
+  await _loadGridMerges(false);
   renderMonthGrid();
 }
 
@@ -2924,11 +3017,20 @@ function renderMonthGrid(){
   var cols = '180px repeat(' + nDays + ', minmax(34px, 1fr))';
   var html = head + '<div class="attg-wrap"><div class="attg" style="grid-template-columns:' + cols + '">';
 
-  // header
+  // header — клікабельний: попап «які групи вела разом цього дня»
+  var canMerge = hasPerm('attendance-edit');
   html += '<div class="attg-cnr">Дитина \\ День</div>';
   days.forEach(function(D){
-    html += '<div class="attg-th' + (D.isToday ? ' today' : '') + '">' +
-      '<span class="wd">' + D.wd + '</span><span class="dd">' + D.day + '</span></div>';
+    var mrg = _dayMergedForCurrentGroup(D.iso);
+    var others = mrg ? mrg.groups.filter(function(g){ return _mrgNormGroup(g) !== _mrgNormGroup(ATT.group); }) : [];
+    var tip = D.dmy + (canMerge ? ' · натисніть, щоб обʼєднати групи' : '') +
+              (mrg ? ' · 🔗 разом із: ' + others.join(', ') : '');
+    html += '<div class="attg-th' + (D.isToday ? ' today' : '') +
+      (canMerge ? ' clickable' : '') + (mrg ? ' merged' : '') + '"' +
+      (canMerge ? ' data-gday="' + D.iso + '"' : '') +
+      ' title="' + escapeHtml(tip) + '">' +
+      '<span class="wd">' + D.wd + '</span><span class="dd">' + D.day + '</span>' +
+      (mrg ? '<span class="mrg">🔗</span>' : '') + '</div>';
   });
 
   // rows = діти
@@ -3002,6 +3104,151 @@ async function onGridCellClick(child, iso){
   delete ATT.gridInFlight[lockKey];
   renderMonthGrid();
   if (typeof scheduleAutoExport === 'function') scheduleAutoExport();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ОБʼЄДНАННЯ ГРУП (v7.08): попап на клік по заголовку дня.
+// «Які групи вела разом цього дня» — галочки; поточна група залочена.
+// Обʼєднані групи схлопуються в 1 заняття у ЗП викладача «За заняття».
+// ═══════════════════════════════════════════════════════════════
+var MRG = { iso: '', busy: false };
+
+function _mrgLocGroups(){
+  var byLoc = (ATT.childrenByLoc && ATT.childrenByLoc[S.activeLoc]) || {};
+  return Object.keys(byLoc);
+}
+
+function openMergeModal(iso){
+  if (!hasPerm('attendance-edit')){ showToast('Немає прав на редагування', 'err'); return; }
+  if (!ATT.activity){ showToast('🚫 Оберіть заняття', 'err'); return; }
+  if (isWeekLocked(iso)){ showToast('🔒 Тиждень замкнено — редагує лише CFO', 'err'); return; }
+  MRG.iso = iso;
+  renderMergeModal();
+  $('mergeModal').classList.remove('hidden');
+  $('mergeModal').setAttribute('aria-hidden', 'false');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeMergeModal(){
+  $('mergeModal').classList.add('hidden');
+  $('mergeModal').setAttribute('aria-hidden', 'true');
+  document.body.style.overflow = '';
+  MRG.iso = '';
+}
+
+function renderMergeModal(){
+  var iso = MRG.iso;
+  var acts = _activitiesForLoc(S.activeLoc), act = null;
+  for (var i = 0; i < acts.length; i++){ if (acts[i].id === ATT.activity){ act = acts[i]; break; } }
+  var actName = act ? act.name : '—';
+  var dmy = (function(){ var b = iso.split('-'); return b.length === 3 ? (b[2] + '.' + b[1] + '.' + b[0]) : iso; })();
+  $('mergeModalTitle').innerHTML = '🔗 ' + escapeHtml(actName) + ' · ' + escapeHtml(dmy);
+
+  var existing = _mergeForDay(iso);
+  var checked = {};
+  if (existing && Array.isArray(existing.groups)){
+    existing.groups.forEach(function(g){ checked[_mrgNormGroup(g)] = true; });
+  }
+  var curNorm = _mrgNormGroup(ATT.group);
+  checked[curNorm] = true;   // поточна група завжди в наборі
+
+  // Список груп = усі групи локації ∪ групи вже збереженого обʼєднання.
+  var groups = _mrgLocGroups().slice();
+  if (existing){
+    existing.groups.forEach(function(g){
+      if (!groups.some(function(x){ return _mrgNormGroup(x) === _mrgNormGroup(g); })) groups.push(g);
+    });
+  }
+  groups.sort(function(a, b){ return a.localeCompare(b, 'uk'); });
+
+  $('mergeHint').innerHTML = 'Позначте групи, які викладач вів <b>разом</b> цього дня — вони рахуються як <b>одне заняття</b> у ЗП (модель «За заняття»/«За захід»). Поточна група залочена.';
+
+  var rows = '';
+  groups.forEach(function(g){
+    var nk = _mrgNormGroup(g);
+    var isCur = (nk === curNorm);
+    var isOn = !!checked[nk];
+    rows += '<label class="mrg-grp-row' + (isCur ? ' locked' : '') + '">' +
+      '<input type="checkbox" data-grp="' + escapeHtml(g) + '"' +
+        (isOn ? ' checked' : '') + (isCur ? ' disabled' : '') + '>' +
+      '<span class="glabel">' + escapeHtml(g) + '</span>' +
+      (isCur ? '<span class="gtag">поточна</span>' : '') +
+    '</label>';
+  });
+  if (!rows) rows = '<div class="muted" style="padding:8px">У локації немає інших груп.</div>';
+  $('mergeGrpList').innerHTML = rows;
+
+  // Кнопка «Розʼєднати» активна лише якщо обʼєднання вже існує.
+  $('mergeUnmergeBtn').style.display = existing ? '' : 'none';
+}
+
+function _mrgCollectGroups(){
+  var out = [];
+  // поточна група (залочений чекбокс disabled — його value не в DOM-checked збірці нижче)
+  out.push(ATT.group);
+  var boxes = $('mergeGrpList').querySelectorAll('input[type="checkbox"]:checked');
+  for (var i = 0; i < boxes.length; i++){
+    var g = boxes[i].getAttribute('data-grp');
+    if (g && _mrgNormGroup(g) !== _mrgNormGroup(ATT.group)) out.push(g);
+  }
+  return out;
+}
+
+async function saveMerge(){
+  if (MRG.busy) return;
+  var iso = MRG.iso;
+  var acts = _activitiesForLoc(S.activeLoc), act = null;
+  for (var i = 0; i < acts.length; i++){ if (acts[i].id === ATT.activity){ act = acts[i]; break; } }
+  if (!act){ showToast('🚫 Оберіть заняття', 'err'); return; }
+  var groups = _mrgCollectGroups();
+  if (groups.length < 2){
+    showToast('Оберіть щонайменше 2 групи, або натисніть «Розʼєднати»', 'err');
+    return;
+  }
+  MRG.busy = true;
+  var res = await saveBackend('saveDopMerge', {
+    loc: S.activeLoc, activityId: act.id, activityName: act.name,
+    date: iso, groups: groups, by: _markerLabel()
+  });
+  MRG.busy = false;
+  if (res.ok || res.localOnly){
+    _applyMergeLocal(iso, act, groups);
+    showToast(res.localOnly ? '💾 Збережено локально' : '✓ Обʼєднано ' + groups.length + ' груп', res.localOnly ? 'info' : 'ok', 2000);
+    closeMergeModal();
+    renderMonthGrid();
+    if (typeof scheduleAutoExport === 'function') scheduleAutoExport();
+  } else {
+    showToast('❌ ' + (res.error || 'Не вдалось зберегти'), 'err');
+  }
+}
+
+async function unmergeDay(){
+  if (MRG.busy) return;
+  var iso = MRG.iso;
+  var existing = _mergeForDay(iso);
+  if (!existing){ closeMergeModal(); return; }
+  MRG.busy = true;
+  var res = await saveBackend('deleteDopMerge', { id: existing.id, loc: S.activeLoc, activityId: ATT.activity, date: iso });
+  MRG.busy = false;
+  if (res.ok || res.localOnly){
+    ATT.gridMerges = ATT.gridMerges.filter(function(m){ return !(Number(m.activityId) === Number(ATT.activity) && m.date === iso); });
+    showToast(res.localOnly ? '💾 Розʼєднано локально' : '✓ Розʼєднано', res.localOnly ? 'info' : 'ok', 1800);
+    closeMergeModal();
+    renderMonthGrid();
+    if (typeof scheduleAutoExport === 'function') scheduleAutoExport();
+  } else {
+    showToast('❌ ' + (res.error || 'Не вдалось розʼєднати'), 'err');
+  }
+}
+
+// Оптимістично оновлюємо ATT.gridMerges (upsert по activityId+date).
+function _applyMergeLocal(iso, act, groups){
+  var rec = null;
+  for (var i = 0; i < ATT.gridMerges.length; i++){
+    if (Number(ATT.gridMerges[i].activityId) === Number(act.id) && ATT.gridMerges[i].date === iso){ rec = ATT.gridMerges[i]; break; }
+  }
+  if (rec){ rec.groups = groups.slice(); rec.activityName = act.name; }
+  else ATT.gridMerges.push({ id: 'local-' + Date.now(), activityId: act.id, activityName: act.name, date: iso, groups: groups.slice() });
 }
 
 // v6.20: плоский список дітей з одним чекбоксом (для обраного ATT.activity)
@@ -3607,16 +3854,20 @@ function bindEventListeners(){
       if (!$('actModal')      .classList.contains('hidden')) closeActivityModal();
       if (!$('copyModal')     .classList.contains('hidden')) closeCopyModal();
       if (!$('anaDetailModal').classList.contains('hidden')) closeAnaDetail();
+      if (!$('mergeModal')    .classList.contains('hidden')) closeMergeModal();
     }
   });
   document.addEventListener('click', function(e){
     var t = e.target;
     if (!t || !t.dataset || t.dataset.close !== '1') return;
     // Закриваємо ту модалку, яка відкрита (overlay/✕ всередині неї).
-    if (!$('anaDetailModal').classList.contains('hidden')) closeAnaDetail();
+    if (!$('mergeModal').classList.contains('hidden')) closeMergeModal();
+    else if (!$('anaDetailModal').classList.contains('hidden')) closeAnaDetail();
     else if (!$('copyModal').classList.contains('hidden')) closeCopyModal();
     else if (!$('actModal') .classList.contains('hidden')) closeActivityModal();
   });
+  $('mergeSaveBtn').addEventListener('click', saveMerge);
+  $('mergeUnmergeBtn').addEventListener('click', unmergeDay);
 }
 
 // ═══════════════════════════════════════════════════════════════
