@@ -868,7 +868,7 @@ select,input,textarea{font-family:inherit}
           </div>
           <div class="att-fg att-fg-date hidden">
             <label>📅 Дата</label>
-            <input type="date" id="attDate">
+            <input type="date" id="attDate" lang="uk">
           </div>
           <div class="att-fg">
             <label>👶 Група</label>
@@ -881,8 +881,8 @@ select,input,textarea{font-family:inherit}
           <div class="att-fg">
             <label>👁 Вигляд</label>
             <div class="att-vm-chips" id="attViewMode">
-              <button type="button" class="att-vm-chip active" data-vm="list">📋 День</button>
-              <button type="button" class="att-vm-chip" data-vm="grid">🗓 Місяць</button>
+              <button type="button" class="att-vm-chip" data-vm="list">📋 День</button>
+              <button type="button" class="att-vm-chip active" data-vm="grid">🗓 Місяць</button>
             </div>
           </div>
           <div class="att-counter" id="attCounter">—</div>
@@ -949,9 +949,9 @@ select,input,textarea{font-family:inherit}
       </div>
       <div class="ana-custom hidden" id="anaCustom">
         <label>З</label>
-        <input type="date" id="anaFrom">
+        <input type="date" id="anaFrom" lang="uk">
         <label>по</label>
-        <input type="date" id="anaTo">
+        <input type="date" id="anaTo" lang="uk">
       </div>
       <div class="ana-fg" style="flex:1;min-width:160px">
         <label>👶 Група</label>
@@ -1932,9 +1932,20 @@ function onActiveLocChange(){
   ATT.group = ''; ATT.marksKey = ''; ATT.marksLoadedAt = 0;
   // Analytics: marks кеш привʼязаний до loc — інвалідуємо.
   if (typeof ANA !== 'undefined'){ ANA.marksLoc = ''; ANA.marksLoadedAt = 0; }
+  _updateCatalogCount();   // лейбл у барі локації завжди свіжий, на будь-якій вкладці
   if (S.mode === 'catalog')         renderCatalog();
   else if (S.mode === 'attendance') renderAttendanceBoard();
   else if (S.mode === 'analytics')  renderAnalytics();
+}
+
+// Лічильник у барі локації. Рахуємо ЗАВЖДИ від поточної S.activeLoc (а не від
+// останнього рендеру каталогу) — інакше на вкладках Відвідуваність/Аналітика
+// лейбл лишався застарілим («N занять у Тичини» при вибраній Оранж).
+function _updateCatalogCount(){
+  var el = $('catalogCount'); if (!el) return;
+  var loc = S.activeLoc || '';
+  var n = (S.items || []).filter(function(a){ return a.loc === loc; }).length;
+  el.textContent = loc ? (n + ' занять · ' + loc) : (n + ' занять');
 }
 
 // ── RENDER CATALOG ──────────────────────────
@@ -1949,7 +1960,7 @@ function renderCatalog(){
   });
 
   var canEdit = hasPerm('activities-edit');
-  $('catalogCount').textContent = items.length + ' занять у "' + loc + '"';
+  _updateCatalogCount();
 
   // Empty state замість таблиці.
   if (!items.length){
@@ -2449,7 +2460,7 @@ var ATT = {
   syncStatus: {},  // v6.22: {child|actId: {state:'pending'|'ok'|'queued'|'err', ts}}
   bulkRunning: false,  // v6.22: lock для bulk-операцій
   // ── СІТКА МІСЯЦЯ (діти × дні) ──
-  viewMode: 'list',   // 'list' | 'grid'
+  viewMode: 'grid',   // 'list' | 'grid' — дефолт «Місяць» (сітка на весь місяць); «День» через перемикач
   gridYear: 0,
   gridMonth: 0,
   gridMarks: [],      // усі відмітки групи (всі дати), фільтруємо по activityId+місяцю
