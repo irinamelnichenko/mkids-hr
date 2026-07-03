@@ -3041,10 +3041,11 @@ function renderMonthGrid(){
         ' · isCFO=' + isCFO() + ' · role=' + (S.user && S.user.role) + ' · id=' + (S.user && S.user.id)); } catch(_){}
   html += '<div class="attg-cnr">Дитина \\ День</div>';
   days.forEach(function(D){
-    var mrg = _dayMergedForCurrentGroup(D.iso);
-    var others = mrg ? mrg.groups.filter(function(g){ return _mrgNormGroup(g) !== _mrgNormGroup(ATT.group); }) : [];
+    // v7.14: 🔗 показуємо для БУДЬ-ЯКОГО обʼєднання цього заняття в цей день
+    // (не лише якщо в ньому поточна група) — merges крос-груповні.
+    var mrg = _mergeForDay(D.iso);
     var tip = D.dmy + (canMerge ? ' · натисніть, щоб обʼєднати групи' : '') +
-              (mrg ? ' · 🔗 разом із: ' + others.join(', ') : '');
+              (mrg ? ' · 🔗 разом: ' + mrg.groups.join(', ') : '');
     html += '<div class="attg-th' + (D.isToday ? ' today' : '') +
       (canMerge ? ' clickable' : '') + (mrg ? ' merged' : '') + '"' +
       (canMerge ? ' data-gday="' + D.iso + '"' : '') +
@@ -3167,12 +3168,15 @@ function renderMergeModal(){
   var existing = _mergeForDay(iso);
   var checked = {};
   if (existing && Array.isArray(existing.groups)){
+    // Редагуємо існуюче обʼєднання — пре-вибір саме його груп (БУДЬ-ЯКІ, не лише поточна).
     existing.groups.forEach(function(g){ checked[_mrgNormGroup(g)] = true; });
+  } else {
+    // Нове обʼєднання — для зручності пре-вибрано поточну групу, але її можна ЗНЯТИ.
+    checked[_mrgNormGroup(ATT.group)] = true;
   }
   var curNorm = _mrgNormGroup(ATT.group);
-  checked[curNorm] = true;   // поточна група завжди в наборі
 
-  // Список груп = усі групи локації ∪ групи вже збереженого обʼєднання.
+  // Список = УСІ групи локації ∪ групи вже збереженого обʼєднання.
   var groups = _mrgLocGroups().slice();
   if (existing){
     existing.groups.forEach(function(g){
@@ -3181,21 +3185,21 @@ function renderMergeModal(){
   }
   groups.sort(function(a, b){ return a.localeCompare(b, 'uk'); });
 
-  $('mergeHint').innerHTML = 'Позначте групи, які викладач вів <b>разом</b> цього дня — вони рахуються як <b>одне заняття</b> у ЗП (модель «За заняття»/«За захід»). Поточна група залочена.';
+  $('mergeHint').innerHTML = 'Позначте <b>будь-які</b> групи, які викладач вів <b>разом</b> цього дня (мін. 2) — вони порахуються як <b>одне заняття</b> у ЗП («За заняття»/«За захід»).';
 
   var rows = '';
   groups.forEach(function(g){
     var nk = _mrgNormGroup(g);
     var isCur = (nk === curNorm);
     var isOn = !!checked[nk];
-    rows += '<label class="mrg-grp-row' + (isCur ? ' locked' : '') + '">' +
-      '<input type="checkbox" data-grp="' + escapeHtml(g) + '"' +
-        (isOn ? ' checked' : '') + (isCur ? ' disabled' : '') + '>' +
+    // v7.14: жодних disabled/locked — Іра вільно комбінує БУДЬ-ЯКІ групи.
+    rows += '<label class="mrg-grp-row">' +
+      '<input type="checkbox" data-grp="' + escapeHtml(g) + '"' + (isOn ? ' checked' : '') + '>' +
       '<span class="glabel">' + escapeHtml(g) + '</span>' +
       (isCur ? '<span class="gtag">поточна</span>' : '') +
     '</label>';
   });
-  if (!rows) rows = '<div class="muted" style="padding:8px">У локації немає інших груп.</div>';
+  if (!rows) rows = '<div class="muted" style="padding:8px">У локації немає груп.</div>';
   $('mergeGrpList').innerHTML = rows;
 
   // Кнопка «Розʼєднати» активна лише якщо обʼєднання вже існує.
@@ -3203,13 +3207,16 @@ function renderMergeModal(){
 }
 
 function _mrgCollectGroups(){
-  var out = [];
-  // поточна група (залочений чекбокс disabled — його value не в DOM-checked збірці нижче)
-  out.push(ATT.group);
+  // v7.14: беремо ЛИШЕ реально позначені чекбокси (будь-які групи), без форсування поточної.
+  var out = [], seen = {};
   var boxes = $('mergeGrpList').querySelectorAll('input[type="checkbox"]:checked');
   for (var i = 0; i < boxes.length; i++){
     var g = boxes[i].getAttribute('data-grp');
-    if (g && _mrgNormGroup(g) !== _mrgNormGroup(ATT.group)) out.push(g);
+    if (!g) continue;
+    var nk = _mrgNormGroup(g);
+    if (seen[nk]) continue;
+    seen[nk] = true;
+    out.push(g);
   }
   return out;
 }
