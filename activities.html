@@ -1235,9 +1235,9 @@ select,input,textarea{font-family:inherit}
       <div class="mrg-grp-list" id="mergeGrpList"></div>
     </div>
     <div class="modal-ft">
-      <button id="mergeUnmergeBtn" class="btn btn-danger" style="margin-right:auto">Розʼєднати</button>
+      <button id="mergeUnmergeBtn" class="btn btn-danger" style="margin-right:auto" onclick="unmergeDay()">Розʼєднати</button>
       <button class="btn btn-secondary" data-close="1">Скасувати</button>
-      <button id="mergeSaveBtn" class="btn btn-primary">Зберегти</button>
+      <button id="mergeSaveBtn" class="btn btn-primary" onclick="saveMerge()">Зберегти</button>
     </div>
   </div>
 </div>
@@ -3241,6 +3241,8 @@ function _mrgCollectGroups(){
 }
 
 async function saveMerge(){
+  try { console.log('[merge] saveMerge клік · дата=' + MRG.iso + ' · заняття=' + ATT.activity +
+        ' · позначено груп=' + _mrgCollectGroups().length + ' →', _mrgCollectGroups()); } catch(_){}
   if (MRG.busy) return;
   var iso = MRG.iso;
   var acts = _activitiesForLoc(S.activeLoc), act = null;
@@ -3248,7 +3250,7 @@ async function saveMerge(){
   if (!act){ showToast('🚫 Оберіть заняття', 'err'); return; }
   var groups = _mrgCollectGroups();
   if (groups.length < 2){
-    showToast('Оберіть щонайменше 2 групи, або натисніть «Розʼєднати»', 'err');
+    showToast('⚠️ Позначте щонайменше 2 групи (зараз ' + groups.length + '), або «Розʼєднати»', 'err', 3000);
     return;
   }
   MRG.busy = true;
@@ -3912,8 +3914,9 @@ function bindEventListeners(){
     else if (!$('copyModal').classList.contains('hidden')) closeCopyModal();
     else if (!$('actModal') .classList.contains('hidden')) closeActivityModal();
   });
-  $('mergeSaveBtn').addEventListener('click', saveMerge);
-  $('mergeUnmergeBtn').addEventListener('click', unmergeDay);
+  // v7.17: кнопки Зберегти/Розʼєднати мають ЯВНИЙ inline onclick у HTML (надійніше —
+  // працюють навіть якщо bindEventListeners не дійшов сюди через ранній виняток).
+  // Делегований listener прибрано щоб не було подвійного виклику.
 }
 
 // ═══════════════════════════════════════════════════════════════
