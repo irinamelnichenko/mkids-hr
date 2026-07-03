@@ -3276,7 +3276,10 @@ async function unmergeDay(){
   var existing = _mergeForDay(iso);
   if (!existing){ closeMergeModal(); return; }
   MRG.busy = true;
-  var res = await saveBackend('deleteDopMerge', { id: existing.id, loc: S.activeLoc, activityId: ATT.activity, date: iso });
+  // Розʼєднання через saveDopMerge з порожнім набором груп: бекенд трактує
+  // groups<2 як зняття обʼєднання (видаляє рядок). Працює на будь-якому проді,
+  // де є saveDopMerge — не залежить від окремого deleteDopMerge (міг бути не задеплоєний).
+  var res = await saveBackend('saveDopMerge', { loc: S.activeLoc, activityId: ATT.activity, date: iso, groups: [] });
   MRG.busy = false;
   if (res.ok || res.localOnly){
     ATT.gridMerges = ATT.gridMerges.filter(function(m){ return !(Number(m.activityId) === Number(ATT.activity) && m.date === iso); });
