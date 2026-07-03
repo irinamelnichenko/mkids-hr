@@ -3035,6 +3035,10 @@ function renderMonthGrid(){
   // CFO-виняток (як у isWeekLocked): CFO завжди може обʼєднувати, навіть якщо
   // роль сесії не мапиться на 'all' у PERMISSIONS.
   var canMerge = hasPerm('attendance-edit') || isCFO();
+  // Діагностика версії/прав (v7.12): відкрий консоль — має бути canMerge=true у CFO.
+  // Якщо цього рядка НЕ видно у консолі — браузер тримає стару версію (треба скинути SW/кеш).
+  try { console.log('[att.grid] build v7.12 · merge-headers ON · canMerge=' + canMerge +
+        ' · isCFO=' + isCFO() + ' · role=' + (S.user && S.user.role) + ' · id=' + (S.user && S.user.id)); } catch(_){}
   html += '<div class="attg-cnr">Дитина \\ День</div>';
   days.forEach(function(D){
     var mrg = _dayMergedForCurrentGroup(D.iso);
