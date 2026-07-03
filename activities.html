@@ -826,10 +826,12 @@ select,input,textarea{font-family:inherit}
   .attg-th.today{border-top:3px solid #2f80ed}
   .attg-th .wd{display:block;color:#8a97a6}
   .attg-th .dd{display:block;font-weight:800}
-  .attg-th.clickable{cursor:pointer}
-  .attg-th.clickable:hover{background:#e8f0fb}
+  .attg-th.clickable{cursor:pointer;transition:background .12s,box-shadow .12s}
+  .attg-th.clickable:hover{background:#dceaff;box-shadow:inset 0 0 0 1.5px #7aa8ff}
+  .attg-th.clickable:hover .mrg{color:#2f6fed}
   .attg-th.merged{background:#eef3ff;box-shadow:inset 0 0 0 1.5px #b9cdff}
   .attg-th .mrg{display:block;font-size:10px;line-height:1;margin-top:1px;color:#2f6fed}
+  .attg-th .mrg.dim{color:#b7c4d4}   /* faint 🔗 = «можна обʼєднати» (день ще без обʼєднання) */
   /* попап обʼєднання груп */
   .mrg-grp-list{display:flex;flex-direction:column;gap:8px;margin-top:6px}
   .mrg-grp-row{display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid #e3e9f0;border-radius:9px;cursor:pointer;font-size:14px;background:#fff}
@@ -2554,8 +2556,12 @@ async function initAttendanceTab(){
   $('attMonthGrid').addEventListener('click', function(e){
     var nav = e.target.closest && e.target.closest('[data-gnav]');
     if (nav){ gridChangeMonth(nav.dataset.gnav === 'prev' ? -1 : 1); return; }
+    // v7.15: заголовки днів тепер мають ЯВНИЙ inline onclick=openMergeModal — делегація
+    // по .attg-th прибрана (уникаємо подвійного виклику). Fallback лишається на data-gday
+    // якщо inline не спрацював (напр. стара розмітка).
     var th = e.target.closest && e.target.closest('.attg-th[data-gday]');
-    if (th){ openMergeModal(th.dataset.gday); return; }
+    if (th && !th.getAttribute('onclick')){ openMergeModal(th.dataset.gday); return; }
+    if (th){ return; }   // inline onclick уже обробив
     var cell = e.target.closest && e.target.closest('.attg-cell[data-child]');
     if (!cell) return;
     onGridCellClick(cell.dataset.child, cell.dataset.iso);
@@ -3037,21 +3043,23 @@ function renderMonthGrid(){
   var canMerge = hasPerm('attendance-edit') || isCFO();
   // Діагностика версії/прав (v7.12): відкрий консоль — має бути canMerge=true у CFO.
   // Якщо цього рядка НЕ видно у консолі — браузер тримає стару версію (треба скинути SW/кеш).
-  try { console.log('[att.grid] build v7.12 · merge-headers ON · canMerge=' + canMerge +
+  try { console.log('[att.grid] build v7.15 · merge-headers ON (inline onclick + 🔗) · canMerge=' + canMerge +
         ' · isCFO=' + isCFO() + ' · role=' + (S.user && S.user.role) + ' · id=' + (S.user && S.user.id)); } catch(_){}
   html += '<div class="attg-cnr">Дитина \\ День</div>';
   days.forEach(function(D){
     // v7.14: 🔗 показуємо для БУДЬ-ЯКОГО обʼєднання цього заняття в цей день
     // (не лише якщо в ньому поточна група) — merges крос-груповні.
     var mrg = _mergeForDay(D.iso);
-    var tip = D.dmy + (canMerge ? ' · натисніть, щоб обʼєднати групи' : '') +
-              (mrg ? ' · 🔗 разом: ' + mrg.groups.join(', ') : '');
+    var tip = D.dmy + (canMerge ? ' · 🔗 клікни, щоб обʼєднати групи' : '') +
+              (mrg ? ' · разом: ' + mrg.groups.join(', ') : '');
+    // v7.15: ЯВНИЙ inline onclick (надійніше за делегацію) + 🔗 на КОЖНому клікабельному
+    // дні (тьмяний = можна обʼєднати, яскравий = вже обʼєднано) — видно, що клікабельно.
     html += '<div class="attg-th' + (D.isToday ? ' today' : '') +
       (canMerge ? ' clickable' : '') + (mrg ? ' merged' : '') + '"' +
-      (canMerge ? ' data-gday="' + D.iso + '"' : '') +
+      (canMerge ? ' data-gday="' + D.iso + '" onclick="openMergeModal(\'' + D.iso + '\')"' : '') +
       ' title="' + escapeHtml(tip) + '">' +
       '<span class="wd">' + D.wd + '</span><span class="dd">' + D.day + '</span>' +
-      (mrg ? '<span class="mrg">🔗</span>' : '') + '</div>';
+      (canMerge ? '<span class="mrg' + (mrg ? '' : ' dim') + '">🔗</span>' : '') + '</div>';
   });
 
   // rows = діти
