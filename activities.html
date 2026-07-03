@@ -878,10 +878,12 @@ select,input,textarea{font-family:inherit}
             <label>🧩 Заняття</label>
             <select id="attActivitySel"><option value="">— оберіть —</option></select>
           </div>
-          <div class="att-fg">
+          <div class="att-fg" style="display:none">
             <label>👁 Вигляд</label>
             <div class="att-vm-chips" id="attViewMode">
-              <button type="button" class="att-vm-chip" data-vm="list">📋 День</button>
+              <!-- v7.10: режим один — сітка «Місяць». Перемикач прихований, «День»
+                   закоментовано (код списку лишається про запас, легко повернути). -->
+              <!-- <button type="button" class="att-vm-chip" data-vm="list">📋 День</button> -->
               <button type="button" class="att-vm-chip active" data-vm="grid">🗓 Місяць</button>
             </div>
           </div>
@@ -2857,7 +2859,8 @@ function _markFor(child, activityId){
 // той самий payload → guard від дублів і exportAttendanceToPayments не зачеплені.
 // ══════════════════════════════════════════════════════════════════════════
 function setViewMode(vm){
-  ATT.viewMode = (vm === 'grid') ? 'grid' : 'list';
+  // v7.10: режим лише «Місяць». «День» вимкнено — примусово grid (перемкнутись не можна).
+  ATT.viewMode = 'grid';
   var chips = document.querySelectorAll('.att-vm-chip');
   for (var i = 0; i < chips.length; i++){
     chips[i].classList.toggle('active', chips[i].dataset.vm === ATT.viewMode);
@@ -3029,7 +3032,9 @@ function renderMonthGrid(){
   var html = head + '<div class="attg-wrap"><div class="attg" style="grid-template-columns:' + cols + '">';
 
   // header — клікабельний: попап «які групи вела разом цього дня»
-  var canMerge = hasPerm('attendance-edit');
+  // CFO-виняток (як у isWeekLocked): CFO завжди може обʼєднувати, навіть якщо
+  // роль сесії не мапиться на 'all' у PERMISSIONS.
+  var canMerge = hasPerm('attendance-edit') || isCFO();
   html += '<div class="attg-cnr">Дитина \\ День</div>';
   days.forEach(function(D){
     var mrg = _dayMergedForCurrentGroup(D.iso);
@@ -3130,7 +3135,7 @@ function _mrgLocGroups(){
 }
 
 function openMergeModal(iso){
-  if (!hasPerm('attendance-edit')){ showToast('Немає прав на редагування', 'err'); return; }
+  if (!hasPerm('attendance-edit') && !isCFO()){ showToast('Немає прав на редагування', 'err'); return; }
   if (!ATT.activity){ showToast('🚫 Оберіть заняття', 'err'); return; }
   if (isWeekLocked(iso)){ showToast('🔒 Тиждень замкнено — редагує лише CFO', 'err'); return; }
   MRG.iso = iso;
