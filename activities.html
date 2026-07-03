@@ -816,6 +816,9 @@ select,input,textarea{font-family:inherit}
   .att-vm-chip{border:1.5px solid var(--gray2,#d7dde5);background:#fff;border-radius:99px;padding:4px 10px;cursor:pointer;font-size:12px;font-weight:700;color:var(--dark2,#33475b)}
   .att-vm-chip.active{background:#2f80ed;color:#fff;border-color:#2f80ed}
   .attg-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+  .attg-mstatus{width:100%;margin:0 0 8px;padding:7px 11px;border-radius:8px;font-size:12.5px;font-weight:600;box-sizing:border-box}
+  .attg-mstatus.on{background:#eaf3ff;color:#1c56b3;border:1px solid #b9cdff}
+  .attg-mstatus.off{background:#fdecec;color:#b3261e;border:1px solid #f3b9b9}
   .attg-navbtn{border:1.5px solid var(--gray2,#d7dde5);background:#fff;border-radius:8px;padding:2px 12px;cursor:pointer;font-size:18px;font-weight:800;line-height:1.2;color:var(--dark2,#33475b)}
   .attg-navbtn:hover{background:#f0f7ff}
   .attg-title{font-weight:800;font-size:15px}
@@ -3029,6 +3032,16 @@ function renderMonthGrid(){
       (act ? escapeHtml(act.name) + (act.clientPrice ? ' (' + act.clientPrice + '₴)' : '') : '—') +
     '</span></div>';
 
+  // v7.16: ВИДИМИЙ статус обʼєднання — щоб одразу було очевидно (без консолі), що
+  // завантажена НОВА версія, і чи клікабельні заголовки (залежить від прав).
+  var canMerge = hasPerm('attendance-edit') || isCFO();
+  head += '<div class="attg-mstatus ' + (canMerge ? 'on' : 'off') + '">' +
+    (canMerge
+      ? '🔗 Обʼєднання днів АКТИВНЕ (build v7.16) — клікни число дня вгорі (Пн1, Вт2…), щоб звести групи'
+      : '🔗 Обʼєднання недоступне: роль «' + escapeHtml(String((S.user && S.user.role) || '?')) +
+        '» без прав (треба CFO або attendance-edit)') +
+    '</div>';
+
   if (!act){ wrap.innerHTML = head + '<div class="attg-empty">Оберіть заняття зі списку.</div>'; return; }
   if (!ATT.children.length){ wrap.innerHTML = head + '<div class="attg-empty">У групі «' + escapeHtml(ATT.group) + '» немає дітей.</div>'; return; }
 
@@ -3040,10 +3053,8 @@ function renderMonthGrid(){
   // header — клікабельний: попап «які групи вела разом цього дня»
   // CFO-виняток (як у isWeekLocked): CFO завжди може обʼєднувати, навіть якщо
   // роль сесії не мапиться на 'all' у PERMISSIONS.
-  var canMerge = hasPerm('attendance-edit') || isCFO();
-  // Діагностика версії/прав (v7.12): відкрий консоль — має бути canMerge=true у CFO.
-  // Якщо цього рядка НЕ видно у консолі — браузер тримає стару версію (треба скинути SW/кеш).
-  try { console.log('[att.grid] build v7.15 · merge-headers ON (inline onclick + 🔗) · canMerge=' + canMerge +
+  // canMerge вже пораховано вище (для статус-банера). Діагностика у консоль:
+  try { console.log('[att.grid] build v7.16 · merge ON (inline onclick + 🔗 + видимий банер) · canMerge=' + canMerge +
         ' · isCFO=' + isCFO() + ' · role=' + (S.user && S.user.role) + ' · id=' + (S.user && S.user.id)); } catch(_){}
   html += '<div class="attg-cnr">Дитина \\ День</div>';
   days.forEach(function(D){
