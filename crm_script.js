@@ -6915,6 +6915,56 @@ function reexportSalaryExtrasAllLocations(month, year){
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// ПОВНИЙ ПЕРЕРАХУНОК ЗП МЕРЕЖІ ЗА ЧЕРВЕНЬ 2026 — і ДОПІВЦІ, і ПРЕДМЕТНИКИ, по
+// ВСІХ локаціях Salary-реєстру, з урахуванням проставлених ОБʼЄДНАНЬ (merges
+// схлопують група×дата в обох потоках — exportToSalaryExtras/_dopCountSessions
+// для допівців та exportPredmetnykyToSalary/_loadPredMergesMap для предметників).
+// Друк по локації: локація | допівці ЗП | предметники ЗП | разом + фінал РАЗОМ
+// по мережі. Ідемпотентно (журнальна дельта в обох експортах) — можна
+// перезапускати після того як директори проставлять ще обʼєднання.
+// БЕЗ параметрів. Запускати ВРУЧНУ з Apps Script editor.
+// ═══════════════════════════════════════════════════════════════════════════
+function reexportAllSalaryJune(){
+  var month = 6, year = 2026;
+  var reg = _salaryGetRegistry();
+  if (!reg.ok){ Logger.log('❌ %s', reg.error); return reg; }
+  var locs = [];
+  reg.rows.forEach(function(r){ if (locs.indexOf(r.loc) < 0) locs.push(r.loc); });
+  Logger.log('═══ ПОВНИЙ ПЕРЕРАХУНОК ЗП МЕРЕЖІ (%s/%s) — локацій=%s ═══', month, year, locs.length);
+  Logger.log('─── локація | допівці ЗП | предметники ЗП | разом ───');
+
+  var summary = [], gDop = 0, gPred = 0, errs = [];
+  locs.forEach(function(loc){
+    // 1) Допівці «За заняття»/«За захід» (session-key група×дата + обʼєднання).
+    var dop  = exportToSalaryExtras({loc: loc, month: month, year: year});
+    // 2) Предметники (унікальні група×дата × ставку + обʼєднання схлопують).
+    var pred = exportPredmetnykyToSalary({loc: loc, month: month, year: year});
+
+    var dopZP  = (dop  && dop.ok)  ? (Number(dop.totalFact)  || 0) : 0;
+    var predZP = (pred && pred.ok) ? (Number(pred.totalFact) || 0) : 0;
+    var sum = dopZP + predZP;
+    gDop += dopZP; gPred += predZP;
+    if (!(dop  && dop.ok))  errs.push(loc + ' · допівці: '     + (dop  && dop.error));
+    if (!(pred && pred.ok)) errs.push(loc + ' · предметники: ' + (pred && pred.error));
+
+    Logger.log('%s | %s | %s | %s', loc, dopZP, predZP, sum);
+    summary.push({
+      loc: loc, dopZP: dopZP, predZP: predZP, total: sum,
+      dopOk: !!(dop && dop.ok), predOk: !!(pred && pred.ok),
+      dopError: dop && dop.error, predError: pred && pred.error
+    });
+  });
+
+  Logger.log('─── РАЗОМ ПО МЕРЕЖІ: допівці=%s | предметники=%s | ВСЬОГО=%s грн ───',
+    gDop, gPred, gDop + gPred);
+  if (errs.length) Logger.log('⚠️ Помилки (%s): %s', errs.length, JSON.stringify(errs));
+
+  return {ok: errs.length === 0, kind: 'salary_full', month: month, year: year,
+          locations: locs.length, totalDop: gDop, totalPred: gPred,
+          grandTotal: gDop + gPred, summary: summary, errors: errs};
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // ПОВНИЙ ПЕРЕРАХУНОК ОДНІЄЇ ЛОКАЦІЇ після виправлення відміток (червень 2026).
 // 3 кроки: Payment (exportAttendanceToPayments) → Salary (exportToSalaryExtras) →
 // Агрегат Оплати-Рік (aggregatePaymentsYearly). Один запуск = і рахунки, і ЗП, і
