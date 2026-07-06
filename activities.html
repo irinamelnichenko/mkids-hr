@@ -3037,7 +3037,7 @@ function renderMonthGrid(){
   var canMerge = hasPerm('attendance-edit') || isCFO();
   head += '<div class="attg-mstatus ' + (canMerge ? 'on' : 'off') + '">' +
     (canMerge
-      ? '🔗 Обʼєднання днів АКТИВНЕ (build v7.16) — клікни число дня вгорі (Пн1, Вт2…), щоб звести групи'
+      ? '🔗 Обʼєднання днів АКТИВНЕ (build v7.19 · будь-який місяць) — клікни число дня вгорі (Пн1, Вт2…), щоб звести групи'
       : '🔗 Обʼєднання недоступне: роль «' + escapeHtml(String((S.user && S.user.role) || '?')) +
         '» без прав (треба CFO або attendance-edit)') +
     '</div>';
@@ -3054,7 +3054,7 @@ function renderMonthGrid(){
   // CFO-виняток (як у isWeekLocked): CFO завжди може обʼєднувати, навіть якщо
   // роль сесії не мапиться на 'all' у PERMISSIONS.
   // canMerge вже пораховано вище (для статус-банера). Діагностика у консоль:
-  try { console.log('[att.grid] build v7.16 · merge ON (inline onclick + 🔗 + видимий банер) · canMerge=' + canMerge +
+  try { console.log('[att.grid] build v7.19 · merge ON (будь-який місяць, без тижн.замка) · canMerge=' + canMerge +
         ' · isCFO=' + isCFO() + ' · role=' + (S.user && S.user.role) + ' · id=' + (S.user && S.user.id)); } catch(_){}
   html += '<div class="attg-cnr">Дитина \\ День</div>';
   days.forEach(function(D){
@@ -3161,7 +3161,10 @@ function _mrgLocGroups(){
 function openMergeModal(iso){
   if (!hasPerm('attendance-edit') && !isCFO()){ showToast('Немає прав на редагування', 'err'); return; }
   if (!ATT.activity){ showToast('🚫 Оберіть заняття', 'err'); return; }
-  if (isWeekLocked(iso)){ showToast('🔒 Тиждень замкнено — редагує лише CFO', 'err'); return; }
+  // v7.19: обʼєднання ≠ редагування відміток. Це окрема дія для ЗП «За заняття».
+  // Директор має могти обʼєднувати БУДЬ-ЯКИЙ місяць своєї локації (у т.ч. минулий:
+  // ЗП за червень проставляється у липні). Тому НЕ блокуємо тижневим замком —
+  // права вже обмежені (attendance-edit/CFO), локація = S.activeLoc директора.
   MRG.iso = iso;
   renderMergeModal();
   $('mergeModal').classList.remove('hidden');
