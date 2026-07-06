@@ -268,6 +268,8 @@ function doGet(e) {
     else if (action === 'getAttendanceMarks')         result = getAttendanceMarks(e.parameter || {});
     else if (action === 'getDopMerges')               result = getDopMerges(e.parameter || {});
     else if (action === 'getPredMerges')              result = getPredMerges(e.parameter || {});
+    else if (action === 'getChomusykyMarks')          result = getChomusykyMarks(e.parameter || {});
+    else if (action === 'getChomusykyReport')         result = getChomusykyReport(e.parameter || {});
     else if (action === 'getPredmetnyCatalog')        result = getPredmetnyCatalog(e.parameter && e.parameter.loc || '');
     else if (action === 'getPredmetnyMarks')          result = getPredmetnyMarks(e.parameter || {});
     else if (action === 'getTasks')                   result = getTasks(e.parameter || {});
@@ -323,6 +325,8 @@ function doPost(e) {
     else if (body.action === 'deleteDopMerge')            result = deleteDopMerge(body || {});
     else if (body.action === 'savePredMerge')             result = savePredMerge(body || {});
     else if (body.action === 'deletePredMerge')           result = deletePredMerge(body || {});
+    else if (body.action === 'addChomusykyMark')          result = addChomusykyMark(body.data || body || {});
+    else if (body.action === 'removeChomusykyMark')       result = removeChomusykyMark(body || {});
     else if (body.action === 'exportAttendance')          result = exportAttendance(body || {});
     else if (body.action === 'addPredmetny')              result = addPredmetny(body.data || {});
     else if (body.action === 'updatePredmetny')           result = updatePredmetny(body.id || 0, body.data || {});
@@ -4485,6 +4489,175 @@ function _predDateToISO(dateInput){
   var iso = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(s);
   if (iso) return iso[1] + '-' + ('0' + iso[2]).slice(-2) + '-' + ('0' + iso[3]).slice(-2);
   return s;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ЧОМУСИКИ · АБОНЕМЕНТ (v7.23) — розвиваючі заняття за абонементом.
+// На відміну від решти предметників (група×дата, ЗП викладача, клієнта не білять),
+// Чомусики: облік ПО ДІТЯХ (дитина×дата, як у допівців) + клієнт платить ФІКСОВАНУ
+// суму за абонемент на N відвідувань/місяць (не за візит).
+// Лист "Чомусики_Відвідуваність": id | Дата | Локація | Дитина | Відмітив | Час.
+// Один рядок = одна дитина відвідала один день.
+//
+// ⚠️ ДЕФОЛТИ бізнес-логіки (Іра скоригує — позначено у відповіді):
+//   • price = 1800 ₴/міс за абонемент, visits = 8 відвідувань включено.
+//   • Білимо ФІКСОВАНО: дитина з ≥1 візитом цього місяця = 1 абонемент (price).
+//     (менше 8 → сума та сама; >8 → поки теж та сама, стоп на абонементі).
+//   • Клієнтський Payment поки НЕ пишемо автоматично (потрібне підтвердження ціни):
+//     getChomusykyReport дає ПРЕВʼЮ суми; запис у Payment — наступний крок.
+// ═══════════════════════════════════════════════════════════════════════════
+var CHOMUSYKY_ATT_SHEET_NAME = 'Чомусики_Відвідуваність';
+var CHOMUSYKY_ATT_HEADER = ['id','Дата','Локація','Дитина','Відмітив','Час'];
+var CHOMUSYKY_SUBSCRIPTION = { price: 1800, visits: 8 };   // ДЕФОЛТ — скоригувати
+
+function _getChomusykyAttSheet(createIfMissing){
+  var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var sh = ss.getSheetByName(CHOMUSYKY_ATT_SHEET_NAME);
+  if (!sh && createIfMissing){
+    sh = ss.insertSheet(CHOMUSYKY_ATT_SHEET_NAME);
+    sh.getRange(1, 1, 1, CHOMUSYKY_ATT_HEADER.length).setValues([CHOMUSYKY_ATT_HEADER]);
+    sh.setFrozenRows(1);
+  }
+  if (!sh) throw new Error('Sheet "' + CHOMUSYKY_ATT_SHEET_NAME + '" не знайдено');
+  return sh;
+}
+
+function _parseChomusykyRow(row){
+  return {
+    id:    Number(row[0]) || 0,
+    date:  _dopDateISO(row[1]),
+    loc:   String(row[2] || '').trim(),
+    child: String(row[3] || '').trim(),
+    by:    String(row[4] || '').trim(),
+    at:    row[5] instanceof Date ? row[5].toISOString() : String(row[5] || '')
+  };
+}
+
+function _nextChomusykyId(sh){
+  var last = sh.getLastRow();
+  if (last < 2) return 1;
+  var lastId = Number(sh.getRange(last, 1).getValue()) || 0;
+  if (lastId > 0) return lastId + 1;
+  var ids = sh.getRange(2, 1, last - 1, 1).getValues();
+  var max = 0;
+  for (var i = 0; i < ids.length; i++){ var n = Number(ids[i][0]) || 0; if (n > max) max = n; }
+  return max + 1;
+}
+
+// GET: відмітки Чомусиків (loc обовʼязковий; опц. year+month / date / child).
+function getChomusykyMarks(filters){
+  try {
+    filters = filters || {};
+    var sh;
+    try { sh = _getChomusykyAttSheet(false); }
+    catch(e){ return {ok: true, items: [], subscription: CHOMUSYKY_SUBSCRIPTION}; }
+    var data = sh.getDataRange().getValues();
+    if (data.length < 2) return {ok: true, items: [], subscription: CHOMUSYKY_SUBSCRIPTION};
+
+    var fLoc = String(filters.loc || '').trim();
+    var fChild = String(filters.child || '').trim();
+    var fDate = String(filters.date || '').trim();
+    var monthPrefix = '';
+    if (filters.year && filters.month){
+      monthPrefix = String(Number(filters.year)) + '-' + ('0' + Number(filters.month)).slice(-2) + '-';
+    }
+    var items = [];
+    for (var i = 1; i < data.length; i++){
+      if (!data[i][0] && !data[i][3]) continue;
+      var m = _parseChomusykyRow(data[i]);
+      if (fLoc && m.loc !== fLoc) continue;
+      if (fChild && m.child !== fChild) continue;
+      if (fDate && m.date !== fDate) continue;
+      if (monthPrefix && m.date.indexOf(monthPrefix) !== 0) continue;
+      items.push(m);
+    }
+    return {ok: true, items: items, subscription: CHOMUSYKY_SUBSCRIPTION};
+  } catch(e){
+    return {ok: false, error: String(e && e.message || e)};
+  }
+}
+
+// POST: додати візит (dedup по loc+child+date). Повертає {ok,id} або {ok,dup}.
+function addChomusykyMark(data){
+  data = data || {};
+  var date  = _dopDateISO(String(data.date || '').trim());
+  var loc   = String(data.loc || '').trim();
+  var child = String(data.child || '').trim();
+  if (!date || !loc || !child) return {ok: false, error: 'Поля date / loc / child обовʼязкові'};
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(30000); }
+  catch(e){ return {ok: false, error: 'LOCK_TIMEOUT: ' + (e && e.message || e)}; }
+  try {
+    var sh = _getChomusykyAttSheet(true);
+    var vals = sh.getDataRange().getValues();
+    for (var i = 1; i < vals.length; i++){
+      var r = _parseChomusykyRow(vals[i]);
+      if (r.loc === loc && r.child === child && r.date === date){
+        return {ok: true, dup: true, id: r.id};
+      }
+    }
+    var id = _nextChomusykyId(sh);
+    sh.appendRow([id, date, loc, child, String(data.by || data.markedBy || '').trim(), new Date()]);
+    return {ok: true, id: id};
+  } catch(e){
+    return {ok: false, error: String(e && e.message || e)};
+  } finally {
+    try { lock.releaseLock(); } catch(_){}
+  }
+}
+
+// POST: прибрати візит — по id АБО по (loc, child, date).
+function removeChomusykyMark(body){
+  body = body || {};
+  var id    = Number(body.id) || 0;
+  var loc   = String(body.loc || '').trim();
+  var child = String(body.child || '').trim();
+  var date  = _dopDateISO(String(body.date || '').trim());
+  if (!id && !(loc && child && date)) return {ok: false, error: 'Треба id АБО (loc + child + date)'};
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(30000); }
+  catch(e){ return {ok: false, error: 'LOCK_TIMEOUT: ' + (e && e.message || e)}; }
+  try {
+    var sh;
+    try { sh = _getChomusykyAttSheet(false); }
+    catch(e){ return {ok: true, removed: false}; }
+    var data = sh.getDataRange().getValues();
+    for (var i = 1; i < data.length; i++){
+      var r = _parseChomusykyRow(data[i]);
+      var hit = id ? (r.id === id) : (r.loc === loc && r.child === child && r.date === date);
+      if (hit){ sh.deleteRow(i + 1); return {ok: true, removed: true}; }
+    }
+    return {ok: true, removed: false};
+  } catch(e){
+    return {ok: false, error: String(e && e.message || e)};
+  } finally {
+    try { lock.releaseLock(); } catch(_){}
+  }
+}
+
+// Звіт по абонементах за місяць: по кожній дитині — к-сть візитів (X з N) + сума
+// абонемента (фіксовано за дитину з ≥1 візитом). ПРЕВʼЮ (без запису в Payment).
+function getChomusykyReport(params){
+  try {
+    params = params || {};
+    var loc = String(params.loc || '').trim();
+    var mk = getChomusykyMarks({loc: loc, year: params.year, month: params.month});
+    if (!mk.ok) return mk;
+    var byChild = {};
+    mk.items.forEach(function(m){
+      if (!byChild[m.child]) byChild[m.child] = 0;
+      byChild[m.child]++;
+    });
+    var sub = CHOMUSYKY_SUBSCRIPTION;
+    var children = Object.keys(byChild).sort(function(a,b){ return a.localeCompare(b,'uk'); })
+      .map(function(c){ return {child: c, visits: byChild[c], included: sub.visits, over: Math.max(0, byChild[c]-sub.visits)}; });
+    var subscribers = children.length;              // дитина з ≥1 візитом = абонент
+    var revenue = subscribers * sub.price;
+    return {ok: true, loc: loc, year: params.year, month: params.month,
+            subscription: sub, subscribers: subscribers, revenue: revenue, children: children};
+  } catch(e){
+    return {ok: false, error: String(e && e.message || e)};
+  }
 }
 
 // ───────────────────────────────────────────────────────────────────────────
