@@ -266,6 +266,7 @@ function doGet(e) {
     else if (action === 'getGroupNorms')             result = getGroupNorms();
     else if (action === 'getActivitiesCatalog')      result = getActivitiesCatalog(e.parameter && e.parameter.loc || '');
     else if (action === 'getAttendanceMarks')         result = getAttendanceMarks(e.parameter || {});
+    else if (action === 'getDopMerges')               result = getDopMerges(e.parameter || {});
     else if (action === 'getPredmetnyCatalog')        result = getPredmetnyCatalog(e.parameter && e.parameter.loc || '');
     else if (action === 'getPredmetnyMarks')          result = getPredmetnyMarks(e.parameter || {});
     else if (action === 'getTasks')                   result = getTasks(e.parameter || {});
@@ -317,6 +318,8 @@ function doPost(e) {
     else if (body.action === 'reconcilePreview')            result = reconcilePreview(body || {}); // v6.51 ФАЗА 1
     else if (body.action === 'reconcileApply')              result = reconcileApply(body || {});   // v6.51.3 ФАЗА 2
     else if (body.action === 'exportToSalaryExtras')      result = exportToSalaryExtras(body || {});
+    else if (body.action === 'saveDopMerge')              result = saveDopMerge(body || {});
+    else if (body.action === 'deleteDopMerge')            result = deleteDopMerge(body || {});
     else if (body.action === 'exportAttendance')          result = exportAttendance(body || {});
     else if (body.action === 'addPredmetny')              result = addPredmetny(body.data || {});
     else if (body.action === 'updatePredmetny')           result = updatePredmetny(body.id || 0, body.data || {});
@@ -349,6 +352,8 @@ function doPost(e) {
     else if (body.action === 'bulkSendInvoices')            result = bulkSendInvoices(body || {});      // v6.50
     else if (body.action === 'logViberSent')                result = logViberSent(body || {});          // v6.50.3
     else if (body.action === 'getInvoiceStatusReport')      result = getInvoiceStatusReport(body || {}); // v6.50.3
+    else if (body.action === 'refreshYearlyAggregate')      result = refreshYearlyAggregate();           // лише агрегат (швидко)
+    else if (body.action === 'reexportLocation')            result = reexportLocationFull(body.loc || '', body.month, body.year); // кнопка "Перерахувати локацію": Payment+Salary+агрегат
     else result = {ok:false, error:'Unknown action'};
     return jsonOut(result);
   } catch(err) {
@@ -945,6 +950,36 @@ function aggregatePaymentsYearly() {
     yearSheet.getRange(2, 1, allRows.length, NUM_COLS).setValues(allRows);
   }
   return {ok:true, rows:allRows.length, errors:errors, updated:updateStr};
+}
+
+// Перезапуск агрегації Оплати-Рік після дедупу/перерахунку додаткових — обгортка з логом.
+// aggregatePaymentsYearly() ІДЕМПОТЕНТНА: clearContents + повний rebuild з per-location
+// Payment-файлів (одним викликом по всіх локаціях). Повторний запуск дає той самий
+// результат. Запускати ВРУЧНУ з редактора (читає всі файли локацій — довго, не через
+// веб-апку, щоб не впертись у ~6-хв ліміт). Після запуску перевір errors:[] — якщо є,
+// діти тих локацій випали з агрегату (бо clearContents стер усе).
+function reaggregateYearlyAfterDedup(){
+  Logger.log('═══ ПЕРЕЗАПУСК АГРЕГАЦІЇ Оплати-Рік ═══');
+  var res = aggregatePaymentsYearly();
+  if (!res || !res.ok){
+    Logger.log('❌ Агрегація НЕ виконана: %s', res && res.error);
+    return res || {ok:false, error:'no result'};
+  }
+  Logger.log('✅ Оплати-Рік перебудовано: рядків=%s | мітка оновлення=%s', res.rows, res.updated);
+  if (res.errors && res.errors.length){
+    Logger.log('⚠️ ПОМИЛКИ по локаціях (%s) — діти цих локацій могли ВИПАСТИ з агрегату, перевір/перезапусти:', res.errors.length);
+    res.errors.forEach(function(e){ Logger.log('   • %s', e); });
+  } else {
+    Logger.log('✓ Помилок по локаціях немає — усі локації агреговані.');
+  }
+  return res;
+}
+
+// POST-екшен для кнопки "🔄 Оновити дані" на сторінці рахунків (invoices.html).
+// Перебудовує Оплати-Рік (aggregatePaymentsYearly) і повертає {ok, rows, errors}.
+function refreshYearlyAggregate(){
+  var res = aggregatePaymentsYearly();
+  return {ok: !!(res && res.ok), rows: (res && res.rows) || 0, errors: (res && res.errors) || []};
 }
 
 function getPaymentsYearly() {
@@ -3915,9 +3950,26 @@ function getAttendanceMarks(filters){
     var sh = _getAttendanceSheet(false);
     var data = sh.getDataRange().getValues();
     if (data.length < 2) return {ok: true, items: []};
+    var _tz = sh.getParent().getSpreadsheetTimeZone() || 'Europe/Kiev';
+    // ФІКС B: фільтр діапазону дат (month+year АБО from/to) — застосовуємо на читанні,
+    // ДО повного парсингу рядка. Кратно зменшує payload і CPU для помісячної сітки.
+    var monthPrefix = '';
+    if (filters.year && filters.month){
+      monthPrefix = String(Number(filters.year)) + '-' + ('0' + Number(filters.month)).slice(-2) + '-';
+    }
+    var fromISO = filters.from ? String(filters.from) : '';
+    var toISO   = filters.to   ? String(filters.to)   : '';
+    var hasDateRange = !!(monthPrefix || fromISO || toISO);
     var items = [];
     for (var i = 1; i < data.length; i++){
       if (!data[i][0] && !data[i][4]) continue;
+      // швидкий фільтр по сирій даті ДО _parseAttendanceRow
+      if (hasDateRange){
+        var _d = _attDateISO(data[i][1], _tz);
+        if (monthPrefix && _d.indexOf(monthPrefix) !== 0) continue;
+        if (fromISO && _d < fromISO) continue;
+        if (toISO   && _d > toISO)   continue;
+      }
       var m = _parseAttendanceRow(data[i]);
       if (filters.date  && m.date !== String(filters.date)) continue;
       if (filters.loc   && m.loc !== String(filters.loc)) continue;
@@ -3946,6 +3998,262 @@ function _nextAttendanceId(sh){
     if (n > max) max = n;
   }
   return max + 1;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ДОДАТКОВІ · ОБʼЄДНАННЯ ГРУП (v7.08)
+// Викладач «За заняття»/«За захід» інколи веде кілька груп РАЗОМ одного дня —
+// це ОДНЕ заняття, не N. Аркуш "Додаткові_Обʼєднання" зберігає такі схлопування:
+//   id | Локація | id_заняття | Назва_заняття | Дата | Групи(JSON) | Ким | Коли
+// Групи(JSON) — масив назв груп, що велись разом того дня (сирі назви, як у сітці).
+// Один запис = один (loc, id_заняття, дата). У exportToSalaryExtras merge-набір
+// схлопує свої групи в 1 сесію (session-key = група×дата).
+//
+// ⚠️ Нормалізація груп — _dopNormGroup: лише trim+lowercase+collapse-spaces.
+// НЕ через normalizeGroupName (та мапить "Preschool 2"→"Preschool" — злила б
+// різні групи в одну). "Preschool" і "Preschool 2" мусять лишатись РІЗНИМИ.
+// ═══════════════════════════════════════════════════════════════════════════
+var DOP_MERGES_SHEET_NAME = 'Додаткові_Обʼєднання';
+var DOP_MERGES_HEADER = ['id','Локація','id_заняття','Назва_заняття','Дата','Групи(JSON)','Ким','Коли'];
+
+function _getDopMergesSheet(createIfMissing){
+  var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var sh = ss.getSheetByName(DOP_MERGES_SHEET_NAME);
+  if (!sh && createIfMissing){
+    sh = ss.insertSheet(DOP_MERGES_SHEET_NAME);
+    sh.getRange(1, 1, 1, DOP_MERGES_HEADER.length).setValues([DOP_MERGES_HEADER]);
+    sh.setFrozenRows(1);
+  }
+  if (!sh) throw new Error('Sheet "' + DOP_MERGES_SHEET_NAME + '" не знайдено. Створіть лист з колонками: ' + DOP_MERGES_HEADER.join(', '));
+  return sh;
+}
+
+// Легка нормалізація групи для співставлення (зберігає цифру-суфікс!).
+function _dopNormGroup(s){
+  return String(s || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function _dopDateISO(v){
+  if (v instanceof Date){
+    var y = v.getFullYear(), m = v.getMonth() + 1, dd = v.getDate();
+    return y + '-' + (m < 10 ? '0' + m : m) + '-' + (dd < 10 ? '0' + dd : dd);
+  }
+  return String(v || '').trim();
+}
+
+function _parseDopMergeGroups(cell){
+  var raw = String(cell || '').trim();
+  if (!raw) return [];
+  try {
+    var arr = JSON.parse(raw);
+    if (Array.isArray(arr)) return arr.map(function(g){ return String(g || '').trim(); }).filter(Boolean);
+  } catch(e){}
+  // fallback: comma-separated
+  return raw.split(/[;,|]/).map(function(g){ return g.trim(); }).filter(Boolean);
+}
+
+function _parseDopMergeRow(row){
+  return {
+    id:           Number(row[0]) || 0,
+    loc:          String(row[1] || '').trim(),
+    activityId:   Number(row[2]) || 0,
+    activityName: String(row[3] || '').trim(),
+    date:         _dopDateISO(row[4]),
+    groups:       _parseDopMergeGroups(row[5]),
+    by:           String(row[6] || '').trim(),
+    at:           row[7] instanceof Date ? row[7].toISOString() : String(row[7] || '')
+  };
+}
+
+function _nextDopMergeId(sh){
+  var last = sh.getLastRow();
+  if (last < 2) return 1;
+  var lastId = Number(sh.getRange(last, 1).getValue()) || 0;
+  if (lastId > 0) return lastId + 1;
+  var ids = sh.getRange(2, 1, last - 1, 1).getValues();
+  var max = 0;
+  for (var i = 0; i < ids.length; i++){
+    var n = Number(ids[i][0]) || 0;
+    if (n > max) max = n;
+  }
+  return max + 1;
+}
+
+// GET: обʼєднання за фільтром (loc обовʼязковий; опц. activityId / date / month+year / from-to).
+function getDopMerges(params){
+  try {
+    params = params || {};
+    var sh;
+    try { sh = _getDopMergesSheet(false); }
+    catch(e){ return {ok: true, items: []}; }   // листа ще нема → порожньо
+    var data = sh.getDataRange().getValues();
+    if (data.length < 2) return {ok: true, items: []};
+
+    var fLoc  = String(params.loc || '').trim();
+    var fAct  = Number(params.activityId) || 0;
+    var fDate = String(params.date || '').trim();
+    var monthPrefix = '';
+    if (params.year && params.month){
+      monthPrefix = String(Number(params.year)) + '-' + ('0' + Number(params.month)).slice(-2) + '-';
+    }
+    var fromISO = params.from ? String(params.from) : '';
+    var toISO   = params.to   ? String(params.to)   : '';
+
+    var items = [];
+    for (var i = 1; i < data.length; i++){
+      if (!data[i][0] && !data[i][1]) continue;
+      var m = _parseDopMergeRow(data[i]);
+      if (fLoc  && m.loc !== fLoc) continue;
+      if (fAct  && m.activityId !== fAct) continue;
+      if (fDate && m.date !== fDate) continue;
+      if (monthPrefix && m.date.indexOf(monthPrefix) !== 0) continue;
+      if (fromISO && m.date < fromISO) continue;
+      if (toISO   && m.date > toISO)   continue;
+      if (m.groups.length < 2) continue;   // одна група = не обʼєднання
+      items.push(m);
+    }
+    return {ok: true, items: items};
+  } catch(e){
+    return {ok: false, error: String(e && e.message || e)};
+  }
+}
+
+// SAVE (upsert по loc+activityId+date). groups<2 → знімаємо обʼєднання (delete).
+function saveDopMerge(body){
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(30000); }
+  catch(e){ return {ok: false, error: 'LOCK_TIMEOUT: ' + (e && e.message || e)}; }
+  try {
+    body = body || {};
+    var loc   = String(body.loc || '').trim();
+    var actId = Number(body.activityId) || 0;
+    var date  = String(body.date || '').trim();
+    if (!loc || !actId || !date){
+      return {ok: false, error: 'Поля loc / activityId / date обовʼязкові'};
+    }
+    // Унікальні групи (по нормалізованому ключу, зберігаємо перше сире написання).
+    var seen = {};
+    var groups = [];
+    (Array.isArray(body.groups) ? body.groups : []).forEach(function(g){
+      var raw = String(g || '').trim();
+      if (!raw) return;
+      var nk = _dopNormGroup(raw);
+      if (seen[nk]) return;
+      seen[nk] = true;
+      groups.push(raw);
+    });
+
+    var sh = _getDopMergesSheet(true);
+    var data = sh.getDataRange().getValues();
+    var foundRow = -1;
+    for (var i = 1; i < data.length; i++){
+      var r = _parseDopMergeRow(data[i]);
+      if (r.loc === loc && r.activityId === actId && r.date === date){ foundRow = i + 1; break; }
+    }
+
+    // <2 груп → це не обʼєднання: якщо був запис — видаляємо (розʼєднання).
+    if (groups.length < 2){
+      if (foundRow > 0){ sh.deleteRow(foundRow); return {ok: true, removed: true, unmerged: true}; }
+      return {ok: true, removed: false, unmerged: true};
+    }
+
+    var actName = String(body.activityName || (foundRow > 0 ? _parseDopMergeRow(data[foundRow - 1]).activityName : '')).trim();
+    var by      = String(body.by || body.markedBy || '').trim();
+    var now     = new Date();
+
+    if (foundRow > 0){
+      // upsert: перезаписуємо групи/назву/ким/коли, id лишаємо.
+      var id = Number(data[foundRow - 1][0]) || _nextDopMergeId(sh);
+      sh.getRange(foundRow, 1, 1, DOP_MERGES_HEADER.length).setValues([[
+        id, loc, actId, actName, date, JSON.stringify(groups), by, now
+      ]]);
+      return {ok: true, id: id, updated: true, groups: groups};
+    } else {
+      var newId = _nextDopMergeId(sh);
+      sh.appendRow([newId, loc, actId, actName, date, JSON.stringify(groups), by, now]);
+      return {ok: true, id: newId, created: true, groups: groups};
+    }
+  } catch(e){
+    return {ok: false, error: String(e && e.message || e)};
+  } finally {
+    try { lock.releaseLock(); } catch(_){}
+  }
+}
+
+// DELETE: по id АБО по (loc, activityId, date).
+function deleteDopMerge(body){
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(30000); }
+  catch(e){ return {ok: false, error: 'LOCK_TIMEOUT: ' + (e && e.message || e)}; }
+  try {
+    body = body || {};
+    var id    = Number(body.id) || 0;
+    var loc   = String(body.loc || '').trim();
+    var actId = Number(body.activityId) || 0;
+    var date  = String(body.date || '').trim();
+    if (!id && !(loc && actId && date)){
+      return {ok: false, error: 'Треба id АБО (loc + activityId + date)'};
+    }
+    var sh;
+    try { sh = _getDopMergesSheet(false); }
+    catch(e){ return {ok: true, removed: false}; }
+    var data = sh.getDataRange().getValues();
+    for (var i = 1; i < data.length; i++){
+      var r = _parseDopMergeRow(data[i]);
+      var hit = id ? (r.id === id) : (r.loc === loc && r.activityId === actId && r.date === date);
+      if (hit){ sh.deleteRow(i + 1); return {ok: true, removed: true}; }
+    }
+    return {ok: true, removed: false};
+  } catch(e){
+    return {ok: false, error: String(e && e.message || e)};
+  } finally {
+    try { lock.releaseLock(); } catch(_){}
+  }
+}
+
+// Завантажує merges локації у діапазоні [dateFrom, dateTo) → мапа для експорту:
+//   { activityId: { 'YYYY-MM-DD': [ [normGroup,...], ... ] } }
+function _loadDopMergesMap(loc, dateFrom, dateTo){
+  var map = {};
+  var sh;
+  try { sh = _getDopMergesSheet(false); }
+  catch(e){ return map; }
+  var data = sh.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++){
+    if (!data[i][1]) continue;
+    var m = _parseDopMergeRow(data[i]);
+    if (m.loc !== loc) continue;
+    if (dateFrom && m.date < dateFrom) continue;
+    if (dateTo   && m.date >= dateTo)  continue;
+    var normSet = m.groups.map(_dopNormGroup).filter(Boolean);
+    if (normSet.length < 2) continue;
+    if (!map[m.activityId]) map[m.activityId] = {};
+    if (!map[m.activityId][m.date]) map[m.activityId][m.date] = [];
+    map[m.activityId][m.date].push(normSet);
+  }
+  return map;
+}
+
+// Рахує кількість СЕСІЙ (session-key = група×дата) з урахуванням обʼєднань.
+//   groupsByDate: { 'YYYY-MM-DD': { normGroup: true } }
+//   mergesForAct: { 'YYYY-MM-DD': [ [normGroup,...], ... ] }
+// Merge-набір, що має ≥1 присутню групу того дня, схлопується в 1 сесію.
+function _dopCountSessions(groupsByDate, mergesForAct){
+  var total = 0;
+  Object.keys(groupsByDate).forEach(function(date){
+    var present = groupsByDate[date];            // {normGroup:true}
+    var mergeSets = (mergesForAct && mergesForAct[date]) || [];
+    var covered = {};
+    var sessions = 0;
+    mergeSets.forEach(function(ms){
+      var any = false;
+      ms.forEach(function(g){ if (present[g]){ any = true; covered[g] = true; } });
+      if (any) sessions++;
+    });
+    Object.keys(present).forEach(function(g){ if (!covered[g]) sessions++; });
+    total += sessions;
+  });
+  return total;
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -4022,28 +4330,47 @@ function _attDupKey(date, child, actId, tz){
 }
 
 function addAttendanceMark(data){
+  // Валідація ДО локу (швидкий фейл).
+  var date  = String(data.date  || '').trim();
+  var child = String(data.child || '').trim();
+  var actId = Number(data.activityId) || 0;
+  if (!date || !child || !actId){
+    return {ok: false, error: 'Поля Дата / Дитина / id_заняття обовʼязкові'};
+  }
+  // DEDUP-GUARD (дзеркало bulkAttendanceMarks): під LockService перевіряємо
+  // _attDupKey (Дата + Дитина норм + id_заняття) проти існуючих рядків — якщо
+  // такий запис уже є, НЕ дублюємо (повертаємо існуючий id, dup:true). Лок також
+  // робить _nextAttendanceId атомарним → прибирає старий race із неунікальними id.
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(30000); }
+  catch(e){ return {ok: false, error: 'LOCK_TIMEOUT: ' + (e && e.message || e)}; }
   try {
-    var sh = _getAttendanceSheet(true);
+    var sh  = _getAttendanceSheet(true);
+    var _tz = sh.getParent().getSpreadsheetTimeZone() || 'Europe/Kiev';
+    var _k  = _attDupKey(date, child, actId, _tz);
+    var _exVals = sh.getDataRange().getValues();
+    for (var _e = 1; _e < _exVals.length; _e++){
+      if (_attDupKey(_exVals[_e][1], _exVals[_e][4], _exVals[_e][5], _tz) === _k){
+        return {ok: true, dup: true, id: Number(_exVals[_e][0]) || 0};   // повтор — тихо ігноруємо
+      }
+    }
     var id = _nextAttendanceId(sh);
     var row = [
-      id,
-      String(data.date  || '').trim(),
+      id, date,
       String(data.loc   || '').trim(),
       String(data.group || '').trim(),
-      String(data.child || '').trim(),
-      Number(data.activityId) || 0,
+      child, actId,
       String(data.activityName || '').trim(),
       Number(data.price) || 0,
       String(data.markedBy || '').trim(),
       new Date()
     ];
-    if (!row[1] || !row[4] || !row[5]){
-      return {ok: false, error: 'Поля Дата / Дитина / id_заняття обовʼязкові'};
-    }
     sh.appendRow(row);
     return {ok: true, id: id};
   } catch(e){
     return {ok: false, error: String(e && e.message || e)};
+  } finally {
+    try { lock.releaseLock(); } catch(_){}
   }
 }
 
@@ -4161,6 +4488,239 @@ function bulkRemoveAttendanceMarks(body){
     return {ok: true, results: results, removed: rowsToDelete.length};
   } catch(e){
     return {ok: false, error: String(e && e.message || e)};
+  } finally {
+    try { lock.releaseLock(); } catch(_){}
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ЧИСТКА ДУБЛІВ ДОДАТКОВИХ ВІДМІТОК (Додаткові_Відвідуваність).
+// Дубль = той самий Дата + Дитина(норм) + id_заняття записаний 2+ разів (роздуває
+// "Факт доп" у рахунках). У кожній групі лишаємо keeper = НАЙРАНІШИЙ Час_відмітки,
+// решту (пізніші) видаляємо.
+// ⚠️ Видалення ТІЛЬКИ ПО ПОЗИЦІЇ РЯДКА (не по id!) — id у цьому аркуші НЕ унікальні
+// (race у _nextAttendanceId без локу), тож removeAttendanceMark(id) знесе чужий рядок.
+// Запускати ВРУЧНУ з Apps Script editor. Порядок: backup → Dry → Apply.
+// ═══════════════════════════════════════════════════════════════════════════
+var _DEDUP_EXTRAS_BACKUP_PREFIX = 'BACKUP_extras_attendance_';
+
+// Час_відмітки → мілісекунди для порівняння (інвалід → +Infinity, щоб НЕ став keeper).
+function _attMarkedAtMs(v){
+  if (v instanceof Date) return v.getTime();
+  var s = String(v || '').trim();
+  if (!s) return Number.POSITIVE_INFINITY;
+  var t = new Date(s).getTime();
+  return isNaN(t) ? Number.POSITIVE_INFINITY : t;
+}
+
+// 1) БЕКАП: повна копія аркуша Додаткові_Відвідуваність у BACKUP_extras_attendance_<stamp>.
+function backupAttendanceExtras(){
+  var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var src = ss.getSheetByName(ATTENDANCE_SHEET_NAME);
+  if (!src){
+    Logger.log('❌ Аркуш "%s" не знайдено — бекап не створено', ATTENDANCE_SHEET_NAME);
+    return {ok: false, error: 'Sheet "' + ATTENDANCE_SHEET_NAME + '" не знайдено'};
+  }
+  var stamp = Utilities.formatDate(new Date(), 'GMT+3', 'yyyyMMdd_HHmmss');
+  var bName = _DEDUP_EXTRAS_BACKUP_PREFIX + stamp;
+  var copy = src.copyTo(ss).setName(bName);
+  var rows = Math.max(0, copy.getLastRow() - 1);
+  Logger.log('✅ Бекап створено: аркуш "%s", рядків даних=%s', bName, rows);
+  return {ok: true, backupSheet: bName, dataRows: rows};
+}
+
+// Спільний сканер: повертає {groups:[{loc,child,date,actId,actName,keeperRow,keeperAt,
+// delRows:[...], delPrice}], totalDelRows, totalOver}. Працює на «сирих» рядках аркуша.
+function _dedupExtrasScan(){
+  var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var sh = ss.getSheetByName(ATTENDANCE_SHEET_NAME);
+  if (!sh) return {ok: false, error: 'Sheet "' + ATTENDANCE_SHEET_NAME + '" не знайдено'};
+  var tz = ss.getSpreadsheetTimeZone() || 'Europe/Kiev';
+  var data = sh.getDataRange().getValues();
+  var buckets = {};   // dupKey → [{row(1-based), child, date, actId, actName, price, atMs}]
+  for (var i = 1; i < data.length; i++){
+    var row = data[i];
+    if (!row[0] && !row[4]) continue;                 // порожній рядок
+    var child = String(row[4] || '').trim();
+    var actId = Number(row[5]) || 0;
+    if (!child || !actId) continue;                   // неповний — не чіпаємо
+    var k = _attDupKey(row[1], child, actId, tz);
+    (buckets[k] = buckets[k] || []).push({
+      row: i + 1,                                     // 1-based позиція у аркуші
+      child: child,
+      date: _attDateISO(row[1], tz),
+      actId: actId,
+      actName: String(row[6] || '').trim(),
+      price: Number(row[7]) || 0,
+      atMs: _attMarkedAtMs(row[9])
+    });
+  }
+  var groups = [], totalDelRows = 0, totalOver = 0;
+  Object.keys(buckets).forEach(function(k){
+    var arr = buckets[k];
+    if (arr.length < 2) return;
+    // keeper = найраніший Час_відмітки; тай-брейк — менший номер рядка (раніший у аркуші)
+    arr.sort(function(a, b){ return (a.atMs - b.atMs) || (a.row - b.row); });
+    var keeper = arr[0];
+    var del = arr.slice(1);
+    var delPrice = del.reduce(function(s, x){ return s + x.price; }, 0);
+    groups.push({
+      loc: String(data[keeper.row - 1][2] || '').trim() || '(порожньо)',
+      child: keeper.child, date: keeper.date, actId: keeper.actId, actName: keeper.actName,
+      keeperRow: keeper.row, keeperAtMs: keeper.atMs,
+      delRows: del.map(function(x){ return x.row; }),
+      delPrice: delPrice
+    });
+    totalDelRows += del.length;
+    totalOver += delPrice;
+  });
+  return {ok: true, groups: groups, totalDelRows: totalDelRows, totalOver: totalOver, tz: tz};
+}
+
+// 2) DRY-RUN: лише Logger.log, НІЧОГО не видаляє.
+function dedupExtrasAttendanceDry(){
+  var scan = _dedupExtrasScan();
+  if (!scan.ok){ Logger.log('❌ %s', scan.error); return scan; }
+  Logger.log('═══ DRY-RUN: чистка дублів додаткових — НІЧОГО НЕ ВИДАЛЯЄМО ═══');
+  Logger.log('Формат: дитина | дата | заняття | на видалення | keeper-рядок | рядки-на-видалення (ПО ПОЗИЦІЇ, не id)');
+
+  var byLoc = {};
+  scan.groups.forEach(function(g){
+    if (!byLoc[g.loc]) byLoc[g.loc] = {groups: 0, delRows: 0, over: 0, items: []};
+    byLoc[g.loc].groups++; byLoc[g.loc].delRows += g.delRows.length; byLoc[g.loc].over += g.delPrice;
+    byLoc[g.loc].items.push(g);
+  });
+
+  Object.keys(byLoc).sort(function(a, b){ return byLoc[b].over - byLoc[a].over; }).forEach(function(loc){
+    var L = byLoc[loc];
+    Logger.log('\n━━━ %s ━━━ груп=%s | видалиться рядків=%s | прибереться завищення=%s грн', loc, L.groups, L.delRows, L.over);
+    L.items.sort(function(a, b){ return b.delPrice - a.delPrice || b.delRows.length - a.delRows.length; }).forEach(function(g){
+      Logger.log('   %s | %s | %s (id%s) | видалити ×%s | keeper-рядок=%s | видалити-рядки[%s]',
+        g.child, g.date, g.actName, g.actId, g.delRows.length, g.keeperRow, g.delRows.join(','));
+    });
+  });
+  Logger.log('\n─── ПІДСУМОК DRY: груп-дублів=%s | рядків на видалення=%s | прибереться завищення=%s грн ───',
+    scan.groups.length, scan.totalDelRows, scan.totalOver);
+  return {ok: true, dupGroups: scan.groups.length, rowsToDelete: scan.totalDelRows, overchargeRemoved: scan.totalOver};
+}
+
+// 3) APPLY: РЕАЛЬНО видаляє пізніші дублі ПО ПОЗИЦІЇ РЯДКА (знизу вгору).
+// Гарантія безпеки: НЕ запуститься, поки немає бекап-аркуша (backupAttendanceExtras).
+function dedupExtrasAttendanceApply(){
+  var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  // safety-guard: вимагаємо хоча б один бекап-аркуш
+  var hasBackup = ss.getSheets().some(function(s){ return s.getName().indexOf(_DEDUP_EXTRAS_BACKUP_PREFIX) === 0; });
+  if (!hasBackup){
+    Logger.log('❌ Бекап не знайдено. Спершу запусти backupAttendanceExtras().');
+    return {ok: false, error: 'Спершу backupAttendanceExtras() — бекап-аркуш відсутній'};
+  }
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(30000); }
+  catch(e){ return {ok: false, error: 'LOCK_TIMEOUT: ' + (e && e.message || e)}; }
+  try {
+    // СВІЖИЙ скан під локом (щоб позиції рядків були актуальні на момент видалення)
+    var scan = _dedupExtrasScan();
+    if (!scan.ok){ Logger.log('❌ %s', scan.error); return scan; }
+    var sh = ss.getSheetByName(ATTENDANCE_SHEET_NAME);
+
+    // зібрати всі позиції на видалення, відсортувати ЗНИЗУ ВГОРУ (щоб індекси не зсувались)
+    var rowsToDelete = [];
+    scan.groups.forEach(function(g){ g.delRows.forEach(function(r){ rowsToDelete.push(r); }); });
+    rowsToDelete.sort(function(a, b){ return b - a; });
+
+    Logger.log('═══ APPLY: видаляю %s дублюючих рядків по позиції (знизу вгору) ═══', rowsToDelete.length);
+    var deleted = 0;
+    for (var i = 0; i < rowsToDelete.length; i++){
+      sh.deleteRow(rowsToDelete[i]);
+      deleted++;
+    }
+    Logger.log('─── ГОТОВО: видалено рядків=%s | прибрано завищення=%s грн | груп оброблено=%s ───',
+      deleted, scan.totalOver, scan.groups.length);
+    return {ok: true, deleted: deleted, overchargeRemoved: scan.totalOver, dupGroups: scan.groups.length};
+  } catch(e){
+    Logger.log('[dedupExtrasApply] EXCEPTION: %s\n%s', e && e.message, e && e.stack);
+    return {ok: false, error: String(e && e.message || e)};
+  } finally {
+    try { lock.releaseLock(); } catch(_){}
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ВИДАЛЕННЯ ХИБНИХ Логопед-відміток (Кругла) — 3 дітям, що НЕ ходять на логопеда.
+// READ-ONLY ФАЙНДЕР: показує точні №рядків у аркуші для звірки ПЕРЕД видаленням.
+// Видалення лише по ПОЗИЦІЇ рядка (id не унікальні). Запускати ВРУЧНУ з редактора.
+// ═══════════════════════════════════════════════════════════════════════════
+var _LOGOPED_FIX_LOC   = 'Кругла';
+var _LOGOPED_FIX_NAMES = ['Голуб Еней', 'Станіславська Софія', 'Неруш Мирон'];
+
+function findLogopedKruglaToDelete(){
+  var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var sh = ss.getSheetByName(ATTENDANCE_SHEET_NAME);
+  if (!sh){ Logger.log('❌ аркуш "%s" не знайдено', ATTENDANCE_SHEET_NAME); return {ok:false, error:'no sheet'}; }
+  var tz = ss.getSpreadsheetTimeZone() || 'Europe/Kiev';
+  var nameSet = _LOGOPED_FIX_NAMES.map(function(n){ return _normForMatch(n); });
+  var data = sh.getDataRange().getValues();
+  var hits = [];
+  for (var i = 1; i < data.length; i++){
+    var row = data[i];
+    if (!row[0] && !row[4]) continue;                              // порожній рядок
+    if (trim(String(row[2])) !== _LOGOPED_FIX_LOC) continue;       // лише Кругла
+    if (!/логопед/i.test(String(row[6] || ''))) continue;          // ЛИШЕ Логопед (Футбол не чіпаємо)
+    if (nameSet.indexOf(_normForMatch(row[4])) === -1) continue;   // лише 3 дитини
+    hits.push({
+      rowPos: i + 1,                                               // позиція в аркуші (1-based)
+      id: row[0],
+      date: _attDateISO(row[1], tz),
+      child: String(row[4] || '').trim(),
+      activity: String(row[6] || '').trim(),
+      price: Number(row[7]) || 0,
+      markedBy: String(row[8] || '').trim(),
+      markedAt: row[9] instanceof Date ? row[9].toISOString() : String(row[9] || '')
+    });
+  }
+  Logger.log('═══ READ-ONLY: Логопед на видалення (loc=%s) — знайдено %s ═══', _LOGOPED_FIX_LOC, hits.length);
+  Logger.log('Формат: №рядка | id | дата | дитина | заняття | ціна | відмітив | час');
+  hits.forEach(function(h){
+    Logger.log('  рядок %s | id=%s | %s | %s | %s | %s грн | %s | %s',
+      h.rowPos, h.id, h.date, h.child, h.activity, h.price, h.markedBy, h.markedAt);
+  });
+  var rowsDesc = hits.map(function(h){ return h.rowPos; }).sort(function(a, b){ return b - a; });
+  Logger.log('─── Позиції на видалення (знизу вгору): [%s] | прибереться: %s грн | НІЧОГО НЕ ВИДАЛЕНО (read-only) ───',
+    rowsDesc.join(','), hits.reduce(function(s, h){ return s + h.price; }, 0));
+  return {ok:true, count:hits.length, rows:rowsDesc, hits:hits};
+}
+
+// APPLY: видаляє знайдені Логопед-рядки ПО ПОЗИЦІЇ (знизу вгору, id не унікальні).
+// Guard: без бекап-аркуша (backupAttendanceExtras) не запускається. LockService +
+// СВІЖИЙ скан під локом (findLogopedKruglaToDelete) — позиції актуальні на момент видалення.
+function deleteLogopedKruglaApply(){
+  var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var hasBackup = ss.getSheets().some(function(s){ return s.getName().indexOf(_DEDUP_EXTRAS_BACKUP_PREFIX) === 0; });
+  if (!hasBackup){
+    Logger.log('❌ Бекап не знайдено. Спершу запусти backupAttendanceExtras().');
+    return {ok:false, error:'Спершу backupAttendanceExtras() — бекап-аркуш відсутній'};
+  }
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(30000); }
+  catch(e){ return {ok:false, error:'LOCK_TIMEOUT: ' + (e && e.message || e)}; }
+  try {
+    var scan = findLogopedKruglaToDelete();        // СВІЖИЙ скан під локом (read-only)
+    if (!scan.ok) return scan;
+    if (!scan.rows || !scan.rows.length){
+      Logger.log('ℹ️ Нічого видаляти — Логопед-рядків не знайдено.');
+      return {ok:true, deleted:0, removedAmount:0};
+    }
+    var sh = ss.getSheetByName(ATTENDANCE_SHEET_NAME);
+    var rowsDesc = scan.rows.slice().sort(function(a, b){ return b - a; });   // ЗНИЗУ ВГОРУ
+    Logger.log('═══ APPLY: видаляю %s Логопед-рядків по позиції (знизу вгору): [%s] ═══', rowsDesc.length, rowsDesc.join(','));
+    var deleted = 0;
+    for (var i = 0; i < rowsDesc.length; i++){ sh.deleteRow(rowsDesc[i]); deleted++; }
+    var removed = scan.hits.reduce(function(s, h){ return s + h.price; }, 0);
+    Logger.log('─── ГОТОВО: видалено рядків=%s | прибрано=%s грн ───', deleted, removed);
+    return {ok:true, deleted:deleted, removedAmount:removed, rows:rowsDesc, hits:scan.hits};
+  } catch(e){
+    Logger.log('[deleteLogopedKrugla] EXCEPTION: %s\n%s', e && e.message, e && e.stack);
+    return {ok:false, error:String(e && e.message || e)};
   } finally {
     try { lock.releaseLock(); } catch(_){}
   }
@@ -4405,21 +4965,20 @@ function exportAttendanceToPayments(params){
     var matchedChildren = {};
     var journalOps = [];
     var cellsWritten = 0;
-    var formulaRowsSkipped = 0;
+    var formulaConverted = 0;
 
-    // ⚠️ ТОЧКОВИЙ запис: НЕ використовуємо setValues на весь стовпець —
-    // це затирало б формули у підсумкових рядках (=SUM(AI24:AI39) → Cashflow).
-    // Пишемо setValue() лише у child-рядки, і лише якщо значення змінилось.
-    // Рядки з формулами не чіпаємо за жодних обставин.
+    // ⚠️ ТОЧКОВИЙ запис: setValue() ЛИШЕ у child-рядки (paymentByNorm побудований без
+    // group-headers), і лише якщо значення змінилось.
+    // v6.x: формульні child-рядки БІЛЬШЕ НЕ пропускаємо (дзеркало exportVacationDiscountToPayments):
+    // getValues() дає ОБЧИСЛЕНЕ значення формули (напр. ручне =-50 → -50) — воно стає базою,
+    // setValue замінює формулу числом, зверху додаються додаткові (−50 + 1350 = 1300).
+    // Підсумкові =SUM-рядки НЕ чіпаються: вони або group-header (не в paymentByNorm), або
+    // не матчать дитину → newSum=0, lastWritten=0 → newValue===currentValue → запису немає.
     Object.keys(paymentByNorm).forEach(function(nk){
       var rowIdx0 = paymentByNorm[nk];
-      if (colFormulas[rowIdx0] && colFormulas[rowIdx0][0]){
-        formulaRowsSkipped++;
-        Logger.log('[exportAttendanceToPayments] skipped formula row %s: %s', rowIdx0 + 1, colFormulas[rowIdx0][0]);
-        return;
-      }
+      var wasFormula   = !!(colFormulas[rowIdx0] && colFormulas[rowIdx0][0]);
       var paymentName  = trim(String(data[rowIdx0][0] || ''));
-      var currentValue = Number(colValues[rowIdx0][0]) || 0;
+      var currentValue = Number(colValues[rowIdx0][0]) || 0;   // результат формули (getValues)
       var je           = journal.byNormName[nk];
       var lastWritten  = je ? je.sum : 0;
       var baseValue    = currentValue - lastWritten;
@@ -4427,10 +4986,11 @@ function exportAttendanceToPayments(params){
       var newSum       = match ? match.sum : 0;
       var newValue     = baseValue + newSum;
 
-      // Точковий запис лише змінених клітинок.
+      // Точковий запис лише змінених клітинок (формула → число відбувається тут же).
       if (newValue !== currentValue){
         paySh.getRange(rowIdx0 + 1, budgetDopCol1).setValue(newValue);
         cellsWritten++;
+        if (wasFormula) formulaConverted++;
       }
 
       if (newSum !== lastWritten){
@@ -4463,7 +5023,7 @@ function exportAttendanceToPayments(params){
       }
     });
 
-    Logger.log('[exportAttendanceToPayments] точковий запис: %s клітинок змінено, %s формульних рядків пропущено', cellsWritten, formulaRowsSkipped);
+    Logger.log('[exportAttendanceToPayments] точковий запис: %s клітинок змінено, %s формул конвертовано в число', cellsWritten, formulaConverted);
 
     _commitJournalUpdates(journal, journalOps);
     Logger.log('[exportAttendanceToPayments] journal upsert: %s op(s)', journalOps.length);
@@ -4478,6 +5038,7 @@ function exportAttendanceToPayments(params){
       ok: true,
       updated: updated,
       totalAmount: totalAmount,
+      formulaCellsConverted: formulaConverted,   // v6.x: формул→число у child-рядках
       notFound: notFound,
       loc: loc,
       sourceMonth: monthName,        // травень (місяць відвідувань)
@@ -4940,8 +5501,87 @@ function _vacMonthBreakdown(fromISO, toISO, fee, allAbsences, contractISO, selfI
             eligibleDays: eligible, overLimitDays: mi.vacDays - eligible, discount: discount};
   });
 }
+// v6.58: ВИБІР ШКАЛИ хвороби за локацією + місяцем ПОЧАТКУ лікарняного (from).
+// Перехід: усі локації — нова шкала з ЛИПНЯ 2026 (NEW_SICK_FROM); Бровари — вже з ЧЕРВНЯ.
+// Нова шкала (роб.дні поспіль): <5=0%, 5-10=5%, 11-15=10%, 16-20=15%, 21+=20%.
+// Стара: [0,5,10,15,20][min(4,ceil(днів/5))]. Стара гілка НЕ змінена (нульовий ризик).
+var NEW_SICK_FROM = 202607;
+var NEW_SICK_LOC_EXCEPTIONS = { 'Бровари': 202606 };
+function _sickUseNew(loc, y, m){
+  var ym = Number(y) * 100 + Number(m);
+  if (ym >= NEW_SICK_FROM) return true;
+  var ex = NEW_SICK_LOC_EXCEPTIONS[String(loc || '').trim()];
+  return !!(ex && ym >= ex);
+}
+function _sickNewScalePct(days){
+  if (days < 5)   return 0;
+  if (days <= 10) return 5;
+  if (days <= 15) return 10;
+  if (days <= 20) return 15;
+  return 20;
+}
+
+// ХВОРОБА: розбивка знижки по місяцях — дзеркало calcAbsMonthBreakdown(type='sick').
+// Роб.дні Пн-Пт (свята НЕ виключаються). Вимір PER-RECORD (один запис поспіль).
+// Шкала обирається _sickUseNew(loc, місяць_from). Стара гілка = попередня логіка 1-в-1.
+function _sickMonthBreakdown(fromISO, toISO, fee, loc){
+  var f = _vacParseISO(fromISO), t = _vacParseISO(toISO);
+  if (!f || !t || t < f || !(fee > 0)) return [];
+  var mmap = {}, cur = new Date(f.getTime());
+  while (cur <= t){
+    var wd = cur.getDay();
+    if (wd !== 0 && wd !== 6){
+      var y = cur.getFullYear(), mo = cur.getMonth() + 1, mk = y + '-' + _pad2v(mo);
+      if (!mmap[mk]) mmap[mk] = {ym: mk, y: y, m: mo, workDays: 0, weeks: 0, discount: 0};
+      mmap[mk].workDays++;
+    }
+    cur.setDate(cur.getDate() + 1);
+  }
+  var arr = Object.keys(mmap).sort().map(function(k){ return mmap[k]; });
+  var totalDays = arr.reduce(function(s, x){ return s + x.workDays; }, 0);
+  var useNew = _sickUseNew(loc, f.getFullYear(), f.getMonth() + 1);
+
+  if (!useNew){
+    // СТАРА шкала — без змін (розподіл тижнів «більший місяць першим»)
+    var totalWeeks = Math.min(4, Math.ceil(totalDays / 5));
+    var PCT = [0, 5, 10, 15, 20];
+    var sorted = arr.slice().sort(function(a, b){ return b.workDays - a.workDays; });
+    var weeksLeft = totalWeeks;
+    for (var i = 0; i < sorted.length; i++){
+      var mi = sorted[i];
+      if (i === sorted.length - 1) mi.weeks = Math.max(0, weeksLeft);
+      else { mi.weeks = Math.min(Math.ceil(mi.workDays / 5), weeksLeft); weeksLeft -= mi.weeks; }
+      mi.discount = Math.round(fee * PCT[Math.min(4, mi.weeks)] / 100);
+    }
+  } else {
+    // НОВА шкала — % від сумарних днів поспіль; discount рознесено по місяцях пропорційно
+    // роб.дням (та сама механіка «більший місяць першим», залишок — останньому місяцю).
+    var totalPct = _sickNewScalePct(totalDays);
+    var totalDisc = Math.round(fee * totalPct / 100);
+    var sortedN = arr.slice().sort(function(a, b){ return b.workDays - a.workDays; });
+    var acc = 0;
+    for (var j = 0; j < sortedN.length; j++){
+      var mj = sortedN[j];
+      mj.weeks = Math.min(4, Math.ceil(mj.workDays / 5));   // лише для відображення
+      if (j === sortedN.length - 1) mj.discount = Math.max(0, totalDisc - acc);
+      else { mj.discount = (totalDays > 0) ? Math.round(totalDisc * mj.workDays / totalDays) : 0; acc += mj.discount; }
+    }
+  }
+  return arr;   // [{ym, y, m, workDays, weeks, discount}]
+}
 var _VAC_SCHOOL_LOCS = ['Школа Осокорки','Школа 228','Онлайн школа'];
-function _vacContractType(contractISO, group, loc){
+// Дзеркало фронту (clients.html getContractType3): діти з договором ≥01.10.2025,
+// яким зберігаємо відпустку як 'standard'. Матч по нормалізованому ПІБ (_normForMatch).
+var _VAC_EXCEPTIONS = ['андреєва ангеліна','тандиряк северин','гаркуша богдан','мельничук дарина','скоріна аліса','городний яким',"щуров мар'ян"];
+// preschool-відпустка зараховується як standard ЛИШЕ якщо весь період у літі
+// (місяці from і to в межах 06–08) — дзеркало saveAbsencePeriod у clients.html.
+function _vacIsSummerPeriod(fromISO, toISO){
+  var mf = parseInt(String(fromISO || '').substr(5, 2), 10);
+  var mt = parseInt(String(toISO   || '').substr(5, 2), 10);
+  return mf >= 6 && mf <= 8 && mt >= 6 && mt <= 8;
+}
+function _vacContractType(contractISO, group, loc, name){
+  if (name && _VAC_EXCEPTIONS.indexOf(_normForMatch(name)) !== -1) return 'standard'; // виняток — перед датою
   if (_VAC_SCHOOL_LOCS.indexOf(loc || '') !== -1) return 'school-no-absence';
   if (!contractISO) return 'standard';
   if (contractISO >= '2025-10-01') return 'new';                          // лише хвороба
@@ -4968,12 +5608,17 @@ function _vacEntryDateISO(ts){
 // Куди йде знижка за місяць відпустки: timestamp внесення < 1-ше число місяця
 // відпустки → той самий місяць; >= 1-ше → наступний (рахунок уже виставлений).
 function determineTargetMonth(vacationMonth, vacationYear, entryTimestamp){
-  var firstISO = vacationYear + '-' + _pad2v(vacationMonth) + '-01';
   var entryISO = _vacEntryDateISO(entryTimestamp);
-  if (!entryISO)            return {month: vacationMonth, year: vacationYear, reason: 'no-timestamp→той самий місяць'};
-  if (entryISO < firstISO)  return {month: vacationMonth, year: vacationYear, reason: 'внесено до 1-го→той самий місяць'};
+  if (!entryISO) return {month: vacationMonth, year: vacationYear, reason: 'no-timestamp→той самий місяць'};
+  // v6.55: порівняння МІСЯЦІВ, не днів. Знижка йде в місяць відсутності, якщо внесено
+  // у ТОЙ САМИЙ місяць або раніше (рахунок того місяця ще не виставлений). Якщо внесено
+  // пізніше (наступний+ календарний місяць) — рахунок уже пішов → наступний місяць.
+  // Фікс бага: раніше «entryISO < 1-ше число» кидало все, внесене 1-го числа, у наступний.
+  var absKey   = vacationYear + '-' + _pad2v(vacationMonth);
+  var entryKey = entryISO.slice(0, 7);
+  if (entryKey <= absKey)  return {month: vacationMonth, year: vacationYear, reason: 'внесено ≤ місяця відсутності→той самий місяць'};
   var nm = _nextMonth(vacationMonth, vacationYear);
-  return {month: nm.month, year: nm.year, reason: 'внесено 1-го+→наступний місяць'};
+  return {month: nm.month, year: nm.year, reason: 'внесено пізніше→наступний місяць'};
 }
 
 function exportVacationDiscountToPayments(params){
@@ -4997,22 +5642,36 @@ function exportVacationDiscountToPayments(params){
       if (!name) return;
       var contractISO = _vacContractISO(o['Дата договору']);
       var fee = Number(o['Сума договору']) || 0;
-      var ct  = _vacContractType(contractISO, o['Група'], loc);
-      if (ct !== 'standard') return;                              // п.6 виключення
+      var ct  = _vacContractType(contractISO, o['Група'], loc, name);
+      if (ct === 'school-no-absence') return;                     // школи — жодних знижок
+      var allowVacation = (ct === 'standard' || ct === 'preschool'); // відпустка — лише standard/preschool
+      var isPreschool   = (ct === 'preschool');
+      // ХВОРОБА застосовна до ВСІХ типів окрім school (включно з 'new': договір ≥01.10.2025 = лише хвороба).
       var abs = _vacParseAbsences(o['Відсутності (JSON)']);
+
+      // Спільний акумулятор: відпустка + хвороба сумуються в discByNorm[nk] →
+      // одна клітинка «Бюджет навч», одна журнальна доріжка kind='vacation' (без зтирань).
+      function _accrue(mb, kind, a){
+        if (mb.discount <= 0) return;
+        var tgt = determineTargetMonth(mb.m, mb.y, a.createdAt);
+        if (tgt.year !== year || tgt.month !== month) return;
+        var nk = _normNameVac(name);
+        (discByNorm[nk] = discByNorm[nk] || {name: name, discount: 0}).discount += mb.discount;
+        routing.push({child: name, kind: kind, vacMonth: mb.ym, discount: mb.discount,
+                      routedTo: tgt.year + '-' + _pad2v(tgt.month), reason: tgt.reason});
+      }
+
       abs.forEach(function(a){
-        if (!a || a.type !== 'vacation') return;                  // п.7 хворобу не чіпаємо
+        if (!a || (a.type !== 'vacation' && a.type !== 'sick')) return;
         if (a.status === 'rejected' || a.status === 'cancelled') return; // п.8
         if (!a.from || !a.to) return;
-        _vacMonthBreakdown(a.from, a.to, fee, abs, contractISO, a.id).forEach(function(mb){
-          if (mb.discount <= 0) return;
-          var tgt = determineTargetMonth(mb.m, mb.y, a.createdAt);
-          if (tgt.year !== year || tgt.month !== month) return;
-          var nk = _normNameVac(name);
-          (discByNorm[nk] = discByNorm[nk] || {name: name, discount: 0}).discount += mb.discount;
-          routing.push({child: name, vacMonth: mb.ym, discount: mb.discount,
-                        routedTo: tgt.year + '-' + _pad2v(tgt.month), reason: tgt.reason});
-        });
+        if (a.type === 'vacation'){
+          if (!allowVacation) return;                                       // new → відпустку не чіпаємо
+          if (isPreschool && !_vacIsSummerPeriod(a.from, a.to)) return;      // preschool — лише літо
+          _vacMonthBreakdown(a.from, a.to, fee, abs, contractISO, a.id).forEach(function(mb){ _accrue(mb, 'vacation', a); });
+        } else { // sick — будь-який тип окрім school (вже відсіяли вище)
+          _sickMonthBreakdown(a.from, a.to, fee, loc).forEach(function(mb){ _accrue(mb, 'sick', a); });
+        }
       });
     });
 
@@ -5119,6 +5778,411 @@ function exportVacationDiscountToPayments(params){
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ONE-SHOT: перенос знижок Борщагівки з СЕРПНЯ 2026 у ЛИПЕНЬ 2026 після фікса
+// determineTargetMonth (баг 1-го числа). Крок 1 — ре-експорт серпня (нова логіка
+// віднесе липневі відпустки до липня → серпень обнулиться/відновиться). Крок 2 —
+// ре-експорт липня (знижки ляжуть у липень). Ідемпотентно: журнал тримає
+// last_written_sum на (loc,kind,рік,місяць) → повторний запуск не подвоює.
+// Run у редакторі БЕЗ параметрів. Не чіпає інші локації.
+// ═══════════════════════════════════════════════════════════════════════════
+function reexportBorshchahivka0708(){
+  var LOC = 'Борщагівка', YEAR = 2026;
+  var WATCH = ['Щуров Марʼян', 'Петрів Олександр', 'Савчук Марія'];
+
+  Logger.log('═══ РЕ-ЕКСПОРТ %s: серпень→липень %s ═══', LOC, YEAR);
+
+  Logger.log('--- Крок 1: ре-експорт СЕРПНЯ (8) — обнулення/відновлення ---');
+  var aug = exportVacationDiscountToPayments({ loc: LOC, month: 8, year: YEAR });
+  Logger.log('серпень: ok=%s updated=%s totalDiscount=%s cells=%s notFound=%s',
+    aug.ok, aug.updated, aug.totalDiscount, aug.cellsWritten, JSON.stringify(aug.notFound));
+
+  Logger.log('--- Крок 2: ре-експорт ЛИПНЯ (7) — запис знижок ---');
+  var jul = exportVacationDiscountToPayments({ loc: LOC, month: 7, year: YEAR });
+  Logger.log('липень: ok=%s updated=%s totalDiscount=%s cells=%s notFound=%s',
+    jul.ok, jul.updated, jul.totalDiscount, jul.cellsWritten, JSON.stringify(jul.notFound));
+
+  // --- Звірка по журналу для 3 цільових дітей ---
+  Logger.log('--- ЗВІРКА журналу (Експорт_Журнал, kind=vacation) ---');
+  var jAug = _readJournalForTarget(LOC, 'vacation', YEAR, 8);
+  var jJul = _readJournalForTarget(LOC, 'vacation', YEAR, 7);
+  WATCH.forEach(function(nm){
+    var nk = _journalNormName(nm);
+    var a = jAug.byNormName[nk], j = jJul.byNormName[nk];
+    Logger.log('  %s → серпень=%s | липень=%s  %s',
+      nm,
+      a ? a.sum : '(нема)',
+      j ? j.sum : '(нема)',
+      (a && a.sum === 0 && j && j.sum < 0) ? '✅ перенесено' : '⚠️ перевір');
+  });
+  Logger.log('Очікувано: серпень=0, липень<0 (Щуров −9130, Петрів −4565, Савчук −9130).');
+
+  return { ok: (aug.ok && jul.ok), august: aug, july: jul };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ONE-SHOT: Бровари — застосувати НОВУ шкалу хвороби до ЧЕРВНЕВИХ лікарняних
+// (виняток переходу). Run у редакторі БЕЗ параметрів. Ідемпотентно (журнал).
+// Прогоняє цільові місяці 7 і 6 2026 (куди маршрутизуються червневі знижки),
+// оновлює агрегат і друкує порівняння стара→нова по кожному червневому лікарняному.
+// ═══════════════════════════════════════════════════════════════════════════
+function reexportBrovaryNewSickScale(){
+  var LOC = 'Бровари', YEAR = 2026;
+  Logger.log('═══ РЕ-ЕКСПОРТ Бровари: нова шкала хвороби (черв.+лип. %s) ═══', YEAR);
+
+  var jul = exportVacationDiscountToPayments({ loc: LOC, month: 7, year: YEAR });
+  var jun = exportVacationDiscountToPayments({ loc: LOC, month: 6, year: YEAR });
+  Logger.log('липень: ok=%s updated=%s totalDiscount=%s', jul.ok, jul.updated, jul.totalDiscount);
+  Logger.log('червень: ok=%s updated=%s totalDiscount=%s', jun.ok, jun.updated, jun.totalDiscount);
+
+  // застосовані знижки-хвороби з routing обох прогонів
+  Logger.log('--- застосовані ЛІКАРНЯНІ (routing kind=sick) ---');
+  [{ r: jul, tgt: 7 }, { r: jun, tgt: 6 }].forEach(function(o){
+    (o.r.routing || []).filter(function(x){ return x.kind === 'sick'; }).forEach(function(x){
+      Logger.log('  [ціль %s] %s | хвороба міс.%s | знижка=%s → %s', o.tgt, x.child, x.vacMonth, x.discount, x.routedTo);
+    });
+  });
+
+  // порівняння стара→нова по ЧЕРВНЕВИХ лікарняних Бровар
+  Logger.log('--- ПОРІВНЯННЯ стара→нова (червневі лікарняні) ---');
+  function _oldSickPct(d){ return [0, 5, 10, 15, 20][Math.min(4, Math.ceil(d / 5))]; }
+  function _wdCount(fromISO, toISO){
+    var f = _vacParseISO(fromISO), t = _vacParseISO(toISO);
+    if (!f || !t || t < f) return 0;
+    var n = 0, c = new Date(f.getTime());
+    while (c <= t){ var w = c.getDay(); if (w !== 0 && w !== 6) n++; c.setDate(c.getDate() + 1); }
+    return n;
+  }
+  var cliRes = getClients();
+  var clients = (cliRes.data || []).filter(function(o){ return String(o['Локація'] || '').trim() === LOC; });
+  var cnt = 0;
+  clients.forEach(function(o){
+    var name = trim(String(o['ПІБ дитини'] || '')), fee = Number(o['Сума договору']) || 0;
+    _vacParseAbsences(o['Відсутності (JSON)']).forEach(function(a){
+      if (!a || a.type !== 'sick' || a.status === 'rejected' || a.status === 'cancelled' || !a.from || !a.to) return;
+      if (String(a.from).slice(0, 7) !== '2026-06') return;                 // лише червневі
+      var d = _wdCount(a.from, a.to), op = _oldSickPct(d), np = _sickNewScalePct(d);
+      cnt++;
+      Logger.log('  %s | %s..%s | роб.дн=%s | стара %s%% (%s) → нова %s%% (%s)',
+        name, a.from, a.to, d, op, Math.round(fee * op / 100), np, Math.round(fee * np / 100));
+    });
+  });
+  if (!cnt) Logger.log('  (червневих лікарняних не знайдено)');
+
+  var agg = aggregatePaymentsYearly();
+  Logger.log('aggregatePaymentsYearly: ok=%s', agg && agg.ok);
+  Logger.log('═══ Готово. Перевір «Оплати» Бровар. ═══');
+  return { ok: (jul.ok && jun.ok), july: jul, june: jun };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ФІКС зламаної бази «Бюджет навч» липня 2026 у 3 дітей Борщагівки.
+// Причина: знижка коректна, але база (повна ціна) у липневій комірці була
+// порожня (Савчук → −9130) або не оновилась/перекрита (Дандикіна ×2 → лишилось
+// 18900 без знижки). Ставимо ФІНАЛЬНЕ значення (ціна − знижка) напряму.
+// Узгоджено з журналом: майбутній ре-експорт рахує база = комірка − остання_знижка
+// (11870−(−9130)=21000; 10683−(−8217)=18900) → значення лишається стабільним.
+//
+// СПОЧАТКУ запусти diagBorshchahivkaJuly() (тільки читання) — покаже рядки,
+// поточні значення, формули й ДУБЛІ. Потім fixBorshchahivkaJulyBudget().
+// ═══════════════════════════════════════════════════════════════════════════
+function _borshJulyBudgetCol1(){ var monthStartCol0 = 1 + (7 - 1) * 5; return monthStartCol0 + 4 + 1; } // =36
+var _BORSH_JULY_TARGETS = [
+  { name: 'Савчук Марія',     value: 11870 },  // 21000 − 9130
+  { name: 'Дандикіна Ніколь', value: 10683 },  // 18900 − 8217
+  { name: 'Дандикіна Емілія', value: 10683 }   // 18900 − 8217
+];
+
+function diagBorshchahivkaJuly(){
+  var reg = _getLocationPaymentRegistry('Борщагівка');
+  if (!reg || !reg.sheetId) { Logger.log('❌ Борщагівка не знайдена в CONFIG'); return {ok:false}; }
+  var ss = SpreadsheetApp.openById(reg.sheetId);
+  var sh = ss.getSheetByName(reg.sheetName) || ss.getSheets()[0];
+  var data = sh.getDataRange().getValues();
+  var col1 = _borshJulyBudgetCol1();
+  var formulas = sh.getRange(1, col1, sh.getLastRow(), 1).getFormulas();
+  var want = {}; _BORSH_JULY_TARGETS.forEach(function(t){ want[_normNameVac(t.name)] = t; });
+  Logger.log('═══ ДІАГНОСТИКА Борщагівка ЛИПЕНЬ «Бюджет навч» (кол.%s) — тільки читання ═══', col1);
+  var found = {};
+  for (var r = 2; r < data.length; r++){
+    var nm = String(data[r][0] || '').trim();
+    if (!nm) continue;
+    var nk = _normNameVac(nm);
+    if (!want[nk]) continue;
+    found[nk] = (found[nk] || 0) + 1;
+    Logger.log('  row %s | "%s" | значення=%s | формула=%s | має бути=%s%s',
+      r + 1, nm, JSON.stringify(data[r][col1 - 1]),
+      (formulas[r] && formulas[r][0]) ? formulas[r][0] : '(число)',
+      want[nk].value, found[nk] > 1 ? '  ⚠️ ДУБЛЬ-РЯДОК' : '');
+  }
+  _BORSH_JULY_TARGETS.forEach(function(t){ if (!found[_normNameVac(t.name)]) Logger.log('  ❌ НЕ ЗНАЙДЕНО: %s', t.name); });
+  Logger.log('Далі: fixBorshchahivkaJulyBudget()');
+  return { ok: true, found: found };
+}
+
+function fixBorshchahivkaJulyBudget(){
+  var reg = _getLocationPaymentRegistry('Борщагівка');
+  if (!reg || !reg.sheetId) { Logger.log('❌ Борщагівка не знайдена в CONFIG'); return {ok:false}; }
+  var ss = SpreadsheetApp.openById(reg.sheetId);
+  var sh = ss.getSheetByName(reg.sheetName) || ss.getSheets()[0];
+  var data = sh.getDataRange().getValues();
+  var col1 = _borshJulyBudgetCol1();
+  var want = {}; _BORSH_JULY_TARGETS.forEach(function(t){ want[_normNameVac(t.name)] = t; });
+  var seen = {}, changed = [];
+  Logger.log('═══ ФІКС Борщагівка ЛИПЕНЬ «Бюджет навч» (кол.%s) ═══', col1);
+  for (var r = 2; r < data.length; r++){
+    var nm = String(data[r][0] || '').trim();
+    if (!nm) continue;
+    var nk = _normNameVac(nm);
+    if (!want[nk]) continue;
+    seen[nk] = (seen[nk] || 0) + 1;
+    if (seen[nk] > 1){
+      Logger.log('  ⚠️ ДУБЛЬ "%s" row %s — НЕ чіпаю (перевір вручну)', nm, r + 1);
+      continue;                                          // тільки перший (авторитетний) рядок
+    }
+    var before = data[r][col1 - 1];
+    if (Number(before) === want[nk].value){
+      Logger.log('  = "%s" row %s вже %s — пропуск', nm, r + 1, want[nk].value);
+    } else {
+      sh.getRange(r + 1, col1).setValue(want[nk].value);  // число, замінює формулу якщо була
+      changed.push({ name: nm, row: r + 1, before: before, after: want[nk].value });
+      Logger.log('  ✔ "%s" row %s: %s → %s', nm, r + 1, JSON.stringify(before), want[nk].value);
+    }
+  }
+  _BORSH_JULY_TARGETS.forEach(function(t){ if (!seen[_normNameVac(t.name)]) Logger.log('  ❌ НЕ ЗНАЙДЕНО (не виправлено): %s', t.name); });
+  Logger.log('═══ Готово: змінено %s комірок. Прогони aggregatePaymentsYearly() для оновлення «Оплати». ═══', changed.length);
+  return { ok: true, changed: changed, seen: seen };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// УНІВЕРСАЛЬНІ РУЧНІ КОРИГУВАННЯ переплат/боргів за додаткові — «Бюджет доп».
+// Директори дають коригування по своїх локаціях; вписуй усі рядки в DOP_OVERPAY_LIST
+// (або передай масив у applyDopOverpay(list)) і запускай РАЗ.
+//   amount ВІД'ЄМНЕ  = переплата (менше до сплати),  amount ДОДАТНЕ = борг (більше).
+//   child — написання ПІБ ЯК У Payment-файлі локації.
+// Механізм (як Мандзюватий -50): amount входить у БАЗУ комірки «Бюджет доп» місяця.
+// exportAttendanceToPayments рахує база = комірка - остання_знижка(kind='payment') і додає
+// допи ЗВЕРХУ → коригування зберігається при кожному перерахунку допів.
+// Ідемпотентно + РЕДАГОВАНО: журнал kind='dop-manual' тримає застосований amount. Повтор
+// із тим самим amount → нічого; зі зміненим → застосує лише ДЕЛЬТУ (amount - попередній).
+// (exportAttendanceToPayments читає лише kind='payment', тож dop-manual його не зачіпає.)
+// Спершу diagDopOverpay() (тільки читання) → потім applyDopOverpay().
+// ═══════════════════════════════════════════════════════════════════════════
+var DOP_ADJ_YEAR = 2026, DOP_ADJ_MONTH = 7;    // місяць коригувань (за потреби зміни)
+var DOP_OVERPAY_LIST = [
+  { loc: 'Оранж', child: 'Пашаев Емир', amount: -500 },
+  { loc: 'Оранж', child: 'Міщенко Лев', amount: -400 }
+  // ↓ додавай інші локації сюди, напр.:
+  // { loc: 'Позняки', child: 'ПІБ як у Payment', amount: -300 },
+  // { loc: 'Бровари', child: 'ПІБ як у Payment', amount:  250 },
+];
+function _dopNorm(s){ return String(s || '').replace(/[\s ]+/g, '').toLowerCase(); }
+function _dopBudgetCol1(month){ var monthStartCol0 = 1 + (month - 1) * 5; return monthStartCol0 + 3 + 1; }
+
+function _dopOverpayRun(list, apply){
+  list = list || [];
+  var col1 = _dopBudgetCol1(DOP_ADJ_MONTH);
+  var monthName = MONTHS_CAL_UA[DOP_ADJ_MONTH - 1];
+  Logger.log('=== %s коригувань «Бюджет доп» %s %s (кол.%s) — %s рядків ===',
+    apply ? 'ФІКС' : 'ДІАГ (тільки читання)', monthName, DOP_ADJ_YEAR, col1, list.length);
+
+  // групуємо по локації — кожен Payment-файл відкриваємо один раз
+  var byLoc = {};
+  list.forEach(function(it){ var L = String(it.loc || '').trim(); (byLoc[L] = byLoc[L] || []).push(it); });
+
+  var totalChanged = 0, results = [];
+  Object.keys(byLoc).forEach(function(loc){
+    var reg = _getLocationPaymentRegistry(loc);
+    if (!reg || !reg.sheetId){ Logger.log('  [X] локацію "%s" не знайдено в CONFIG — пропуск', loc); return; }
+    var ss = SpreadsheetApp.openById(reg.sheetId);
+    var sh = ss.getSheetByName(reg.sheetName) || ss.getSheets()[0];
+    var data = sh.getDataRange().getValues();
+    var formulas = sh.getRange(1, col1, sh.getLastRow(), 1).getFormulas();
+    var journal = _readJournalForTarget(loc, 'dop-manual', DOP_ADJ_YEAR, DOP_ADJ_MONTH);
+
+    // індекс рядків по нормалізованому імені (перший збіг, як exportAttendanceToPayments)
+    var rowByNorm = {};
+    for (var r = 2; r < data.length; r++){
+      var nm0 = trim(String(data[r][0] || ''));
+      if (!nm0 || isGroupHeaderRow(data[r], 1)) continue;
+      var k0 = _dopNorm(nm0);
+      if (!rowByNorm.hasOwnProperty(k0)) rowByNorm[k0] = r;
+    }
+
+    var ops = [];
+    byLoc[loc].forEach(function(it){
+      var child  = String(it.child || '').trim();
+      var amount = Number(it.amount) || 0;
+      var nk = _dopNorm(child);
+      if (!rowByNorm.hasOwnProperty(nk)){
+        Logger.log('  [X] [%s] НЕ ЗНАЙДЕНО у Payment: "%s"', loc, child);
+        results.push({ loc: loc, child: child, status: 'not-found' }); return;
+      }
+      var r = rowByNorm[nk];
+      var cur = Number(data[r][col1 - 1]) || 0;
+      var fml = (formulas[r] && formulas[r][0]) ? formulas[r][0] : '(число)';
+      var jkey = _journalNormName(child);
+      var prev = journal.byNormName[jkey] ? journal.byNormName[jkey].sum : 0;   // раніше застосований amount
+      var delta = amount - prev;
+      if (delta === 0){
+        Logger.log('  [=] [%s] "%s" row %s: amount=%s вже застосовано — пропуск (комірка=%s)', loc, data[r][0], r + 1, amount, cur);
+        results.push({ loc: loc, child: child, row: r + 1, current: cur, amount: amount, status: 'unchanged' }); return;
+      }
+      var next = cur + delta;
+      Logger.log('  %s [%s] "%s" row %s: комірка=%s (формула=%s) | було=%s -> нове=%s (delta %s) -> комірка=%s',
+        apply ? '[v]' : '[.]', loc, data[r][0], r + 1, cur, fml, prev, amount, delta, next);
+      if (apply){
+        sh.getRange(r + 1, col1).setValue(next);
+        ops.push({ nk: jkey, loc: loc, kind: 'dop-manual', name: String(data[r][0]).trim(),
+                   year: DOP_ADJ_YEAR, month: DOP_ADJ_MONTH, newSum: amount });
+        totalChanged++;
+      }
+      results.push({ loc: loc, child: child, row: r + 1, before: cur, after: next, amount: amount, prevAdj: prev, status: apply ? 'applied' : 'preview' });
+    });
+    if (apply && ops.length){ _commitJournalUpdates(journal, ops); Logger.log('  [%s] журнал dop-manual оновлено (%s)', loc, ops.length); }
+  });
+
+  Logger.log('=== Готово%s. Далі: aggregatePaymentsYearly() для оновлення «Оплати». ===', apply ? (' — змінено ' + totalChanged) : ' (тільки читання)');
+  return { ok: true, changed: totalChanged, results: results };
+}
+function diagDopOverpay(list){ return _dopOverpayRun(list || DOP_OVERPAY_LIST, false); }
+function applyDopOverpay(list){ return _dopOverpayRun(list || DOP_OVERPAY_LIST, true); }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ДО-ЕКСПОРТ ЗНИЖОК ВІДПУСТОК — ЛИПЕНЬ 2026 (one-shot backfill).
+// Причина: markAbsDone (погодження) НЕ тригерить експорт знижки — він іде лише
+// при saveAbsencePeriod (додавання). Тому вже погоджені (status='done') липневі
+// відпустки могли не потрапити в Payment. Ці функції перераховують їх через
+// ВИПРАВЛЕНИЙ _vacContractType (винятки + preschool-літо) і дозаписують.
+// Запускати ВРУЧНУ з Apps Script editor (View → Executions → Логи).
+// ═══════════════════════════════════════════════════════════════════════════
+var _REEXPORT_VAC_YEAR  = 2026;
+var _REEXPORT_VAC_MONTH = 7;
+
+// Сканує ВСІХ дітей із vacation-відсутністю status='done' у липні 2026.
+// Повертає [{name, loc, group, fee, ct, julyDiscount(+)}] — знижка, що РОУТИТЬСЯ
+// в липень 2026 (з урахуванням determineTargetMonth) лише по done-відпустках.
+function _reexportVacJulyScan(){
+  var Y = _REEXPORT_VAC_YEAR, M = _REEXPORT_VAC_MONTH;
+  var first = Y + '-' + _pad2v(M) + '-01';
+  var last  = Y + '-' + _pad2v(M) + '-31';
+  var cliRes = getClients();
+  if (!cliRes.ok) return [];
+  var out = [];
+  (cliRes.data || []).forEach(function(o){
+    var name = trim(String(o['ПІБ дитини'] || ''));
+    if (!name) return;
+    var loc  = trim(String(o['Локація'] || ''));
+    var abs  = _vacParseAbsences(o['Відсутності (JSON)']);
+    // тільки ПОГОДЖЕНІ (done) відпустки з періодом, що зачіпає липень 2026
+    var doneJuly = abs.filter(function(a){
+      return a && a.type === 'vacation' && a.status === 'done'
+        && a.from && a.to && a.from <= last && a.to >= first;
+    });
+    if (!doneJuly.length) return;
+
+    var contractISO = _vacContractISO(o['Дата договору']);
+    var fee = Number(o['Сума договору']) || 0;
+    var ct  = _vacContractType(contractISO, o['Група'], loc, name);
+
+    var julyDisc = 0;
+    if (ct === 'standard' || ct === 'preschool'){
+      var isPre = (ct === 'preschool');
+      doneJuly.forEach(function(a){
+        if (isPre && !_vacIsSummerPeriod(a.from, a.to)) return;   // preschool — лише літо
+        _vacMonthBreakdown(a.from, a.to, fee, abs, contractISO, a.id).forEach(function(mb){
+          if (mb.discount <= 0) return;
+          var tgt = determineTargetMonth(mb.m, mb.y, a.createdAt);
+          if (tgt.year === Y && tgt.month === M) julyDisc += mb.discount;   // роут саме в липень
+        });
+      });
+    }
+    out.push({name: name, loc: loc, group: o['Група'] || '', fee: fee,
+              ct: ct, julyDiscount: Math.round(julyDisc)});
+  });
+  return out;
+}
+
+// DRY-RUN: лише Logger.log, НІЧОГО не пише.
+function reexportVacDiscountsJulyDry(){
+  var Y = _REEXPORT_VAC_YEAR, M = _REEXPORT_VAC_MONTH;
+  var list = _reexportVacJulyScan();
+  Logger.log('═══ DRY-RUN: до-експорт знижок відпусток %s/%s — НІЧОГО НЕ ПИШЕМО ═══', M, Y);
+  Logger.log('Формат: ПІБ | локація | знижка | вже в Payment? | дія');
+
+  var journalCache = {};
+  var willWrite = 0, already = 0, skipFee0 = 0, skipZero = 0, totalNew = 0;
+  list.forEach(function(r){
+    if (!journalCache.hasOwnProperty(r.loc)){
+      journalCache[r.loc] = _readJournalForTarget(r.loc, 'vacation', Y, M).byNormName || {};
+    }
+    var je = journalCache[r.loc][_normNameVac(r.name)];
+    var inPayment = !!(je && je.sum);                      // sum < 0 якщо знижка вже записана
+
+    var action;
+    if (r.julyDiscount <= 0){
+      if (r.fee <= 0){ action = 'ПРОПУСК (fee=0)'; skipFee0++; }
+      else           { action = 'ПРОПУСК (знижка=0)'; skipZero++; }
+    } else if (inPayment){
+      action = 'ВЖЕ Є (journal ' + je.sum + ') — не дублюю'; already++;
+    } else {
+      action = 'ЗАПИШЕТЬСЯ −' + r.julyDiscount; willWrite++; totalNew += r.julyDiscount;
+    }
+    Logger.log('%s | %s | %s | %s | %s', r.name, r.loc, r.julyDiscount, inPayment ? 'так' : 'ні', action);
+  });
+  Logger.log('─── ПІДСУМОК DRY: дітей=%s | запишеться=%s (−%s грн) | вже є=%s | пропуск fee=0=%s | пропуск знижка=0=%s ───',
+    list.length, willWrite, totalNew, already, skipFee0, skipZero);
+  return {ok: true, year: Y, month: M, total: list.length, willWrite: willWrite,
+          totalNewDiscount: totalNew, alreadyInPayment: already, skippedFee0: skipFee0, skippedZero: skipZero};
+}
+
+// APPLY: РЕАЛЬНО пише знижку в Payment 'Бюджет навч' липня.
+// Анти-дублювання: делегує в exportVacationDiscountToPayments(loc,7,2026) — той
+// рахує дельту через журнал (kind='vacation'): baseValue = поточне − попередньо_записане,
+// тож повторний запуск ідемпотентний (вже записане НЕ дублюється).
+function reexportVacDiscountsJulyApply(){
+  var Y = _REEXPORT_VAC_YEAR, M = _REEXPORT_VAC_MONTH;
+  var list = _reexportVacJulyScan();
+
+  // унікальні локації, де є що писати (знижка > 0)
+  var locSet = {};
+  list.forEach(function(r){ if (r.julyDiscount > 0) locSet[r.loc] = true; });
+  var locs = Object.keys(locSet);
+  Logger.log('═══ APPLY: до-експорт знижок відпусток %s/%s — локацій=%s ═══', M, Y, locs.length);
+  Logger.log('Формат: ПІБ | локація | знижка | дія');
+
+  // знімок журналу ДО — щоб відрізнити «вже було» від «щойно записано»
+  var before = {};
+  locs.forEach(function(loc){
+    before[loc] = _readJournalForTarget(loc, 'vacation', Y, M).byNormName || {};
+  });
+
+  var written = 0, already = 0, restored = 0, totalWritten = 0, errs = [];
+  locs.forEach(function(loc){
+    var res = exportVacationDiscountToPayments({loc: loc, month: M, year: Y});
+    if (!res || !res.ok){
+      errs.push(loc + ': ' + (res && res.error || '?'));
+      Logger.log('❌ %s — помилка експорту: %s', loc, res && res.error);
+      return;
+    }
+    (res.details || []).forEach(function(d){
+      var wasThere = !!(before[loc][_normNameVac(d.child)] || {}).sum;
+      if (d.status === 'discounted'){
+        if (wasThere){ already++; Logger.log('%s | %s | −%s | ВЖЕ БУЛО (без змін)', d.child, loc, d.discount); }
+        else { written++; totalWritten += d.discount; Logger.log('%s | %s | −%s | ✅ ЗАПИСАНО', d.child, loc, d.discount); }
+      } else if (d.status === 'restored'){
+        restored++; Logger.log('%s | %s | бюджет ВІДНОВЛЕНО (знижку знято)', d.child, loc);
+      }
+    });
+    (res.notFound || []).forEach(function(nm){ Logger.log('⚠️ %s | %s | НЕ ЗНАЙДЕНО рядок у Payment-файлі', nm, loc); });
+  });
+  Logger.log('─── ПІДСУМОК APPLY: записано нових=%s (−%s грн) | вже було=%s | відновлено=%s | помилок=%s ───',
+    written, totalWritten, already, restored, errs.length);
+  return {ok: errs.length === 0, year: Y, month: M, locations: locs,
+          written: written, totalWritten: totalWritten, alreadyInPayment: already,
+          restored: restored, errors: errs};
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // Тест: запусти вручну з Apps Script editor (View → Executions → дивись Логи).
 // Викликає exportAttendanceToPayments({loc:"Голосієво", month:6, year:2026})
@@ -5203,14 +6267,21 @@ function exportToSalaryExtras(params){
     Logger.log('[exportToSalaryExtras] START loc="%s" month=%s year=%s; фільтр [%s..%s)', loc, month, year, dateFrom, dateTo);
     Logger.log('[exportToSalaryExtras] каталог: allActive=%s, withRate=%s, skipped=%s', allActive.length, withRate.length, JSON.stringify(skipped));
 
+    // v7.08: обʼєднання груп (session-key = група×дата). Мапа loc→act→date→[merge-набори].
+    var mergesMap = _loadDopMergesMap(loc, dateFrom, dateTo);
+
     var byActId = {};
     for (var i = 1; i < attData.length; i++){
       var rec = _parseAttendanceRow(attData[i]);
       if (rec.loc !== loc) continue;
       if (rec.date < dateFrom || rec.date >= dateTo) continue;
-      if (!byActId[rec.activityId]) byActId[rec.activityId] = {count: 0, dates: {}};
+      if (!byActId[rec.activityId]) byActId[rec.activityId] = {count: 0, dates: {}, groupsByDate: {}};
       byActId[rec.activityId].count++;
       byActId[rec.activityId].dates[rec.date] = true;
+      // session-key: множина нормалізованих груп у кожну дату (порожня група → '' — 1 сесія/дату, як раніше)
+      var _ng = _dopNormGroup(rec.group);
+      if (!byActId[rec.activityId].groupsByDate[rec.date]) byActId[rec.activityId].groupsByDate[rec.date] = {};
+      byActId[rec.activityId].groupsByDate[rec.date][_ng] = true;
     }
 
     // Резолвимо activityId → назва (для діагностики) з каталогу.
@@ -5223,15 +6294,17 @@ function exportToSalaryExtras(params){
 
     var factByName = {};
     withRate.forEach(function(a){
-      var stat = byActId[a.id] || {count: 0, dates: {}};
+      var stat = byActId[a.id] || {count: 0, dates: {}, groupsByDate: {}};
       var fact = 0;
       if (a.teacherModel === 'За дитину'){
         fact = stat.count * a.teacherRate;
       } else if (a.teacherModel === 'За заняття' || a.teacherModel === 'За захід'){
-        // v6.39: "За захід" рахується ідентично "За заняття" — фіксована сума
-        // за кожну унікальну дату (захід), незалежно від кількості дітей.
-        // Семантично окрема модель (Театр, Майстер-клас, вистави), формула та сама.
-        fact = Object.keys(stat.dates).length * a.teacherRate;
+        // v7.08: "За заняття"/"За захід" — фіксована сума за кожну СЕСІЮ.
+        // Сесія = унікальна (група × дата); обʼєднані одного дня групи схлопуються
+        // у 1 сесію (мапа mergesMap). Раніше рахувались лише унікальні дати — це
+        // недоплачувало викладачам, що ведуть кілька РІЗНИХ груп одного дня.
+        // "За захід" рахується ідентично (Театр/Майстер-клас/вистави).
+        fact = _dopCountSessions(stat.groupsByDate, mergesMap[a.id] || {}) * a.teacherRate;
       }
       // Ключ — нормалізована назва (lowercase + без whitespace), як у Payment.
       factByName[_journalNormName(a.name)] = {fact: fact, name: a.name, hasMarks: stat.count > 0};
@@ -5426,6 +6499,332 @@ function exportToSalaryExtras(params){
     Logger.log('[exportToSalaryExtras] EXCEPTION: %s\n%s', e && e.message, e && e.stack);
     return {ok: false, error: String(e && e.message || e)};
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ПЕРЕРАХУНОК ДОДАТКОВИХ ЗА ЧЕРВЕНЬ 2026 ПІСЛЯ ЧИСТКИ ДУБЛІВ — обгортки.
+// Дублі (143 рядки) видалені з Додаткові_Відвідуваність; суми в Payment/Salary
+// лишились завищені. Перезапуск експортів перепише їх через журнал (дельта
+// baseValue = поточне − останнє_записане) → стають чисті, без подвоєння.
+// Запускати ВРУЧНУ з Apps Script editor. Спершу Payments, перевірити, потім Salary.
+// ═══════════════════════════════════════════════════════════════════════════
+var _REEXPORT_EXTRAS_LOCS = ["Кар'єрна", 'Бровари', 'Пуща', 'Позняки', 'Оранж', 'Осокорки', 'Голосієво'];
+
+// 1) Payment: «Бюджет доп» липня (= N+1 від червня) для 7 локацій.
+function reexportExtrasJune2026Payments(){
+  Logger.log('═══ ПЕРЕРАХУНОК ДОДАТКОВИХ → PAYMENT (червень 2026) — локацій=%s ═══', _REEXPORT_EXTRAS_LOCS.length);
+  var summary = [], okCount = 0, errCount = 0;
+  _REEXPORT_EXTRAS_LOCS.forEach(function(loc){
+    var res = exportAttendanceToPayments({loc: loc, month: 6, year: 2026});
+    if (res && res.ok){
+      okCount++;
+      Logger.log('✅ %s | оновлено=%s | сума=%s грн | notFound=%s',
+        loc, res.updated, res.totalAmount, JSON.stringify(res.notFound || []));
+      summary.push({loc: loc, ok: true, updated: res.updated, total: res.totalAmount, notFound: res.notFound || []});
+    } else {
+      errCount++;
+      Logger.log('❌ %s | помилка: %s', loc, res && res.error);
+      summary.push({loc: loc, ok: false, error: res && res.error});
+    }
+  });
+  Logger.log('─── ПІДСУМОК PAYMENT: успішно=%s | помилок=%s ───', okCount, errCount);
+  return {ok: errCount === 0, kind: 'payment', month: 6, year: 2026, okCount: okCount, errCount: errCount, summary: summary};
+}
+
+// 2) Salary: ЗП викладачів за червень 2026 (count відміток по заняттю) для 7 локацій.
+function reexportExtrasJune2026Salary(){
+  Logger.log('═══ ПЕРЕРАХУНОК ДОДАТКОВИХ → SALARY (червень 2026) — локацій=%s ═══', _REEXPORT_EXTRAS_LOCS.length);
+  var summary = [], okCount = 0, errCount = 0;
+  _REEXPORT_EXTRAS_LOCS.forEach(function(loc){
+    var res = exportToSalaryExtras({loc: loc, month: 6, year: 2026});
+    if (res && res.ok){
+      okCount++;
+      Logger.log('✅ %s | оновлено=%s | сума ЗП=%s грн | notFound=%s | пропущено(без ставки)=%s',
+        loc, res.updated, res.totalFact, JSON.stringify(res.notFound || []), JSON.stringify(res.skipped || []));
+      summary.push({loc: loc, ok: true, updated: res.updated, totalFact: res.totalFact, notFound: res.notFound || [], skipped: res.skipped || []});
+    } else {
+      errCount++;
+      Logger.log('❌ %s | помилка: %s', loc, res && res.error);
+      summary.push({loc: loc, ok: false, error: res && res.error});
+    }
+  });
+  Logger.log('─── ПІДСУМОК SALARY: успішно=%s | помилок=%s ───', okCount, errCount);
+  return {ok: errCount === 0, kind: 'salary', month: 6, year: 2026, okCount: okCount, errCount: errCount, summary: summary};
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ОРАНЖ — червень 2026: ЗП допівців із урахуванням обʼєднань груп + ДРУК по
+// кожному «За заняття»/«За захід»: назва | груп×дат сирих | після обʼєднань |
+// ставка | ЗП. Спершу read-only розклад (діагностика), потім реальний запис у
+// Salary через exportToSalaryExtras (журнальна дельта — ідемпотентно). Обгортка
+// БЕЗ параметрів — запускати ВРУЧНУ з Apps Script editor.
+// «сирі» = сума розрізнених груп×дат до обʼєднань; «після обʼєднань» = сесії, де
+// обʼєднані одного дня групи схлопуються в 1 (_dopCountSessions з mergesMap).
+// ═══════════════════════════════════════════════════════════════════════════
+function reexportSalaryExtrasOrange(){
+  var loc = 'Оранж', month = 6, year = 2026;
+  Logger.log('═══ ОРАНЖ ЗП ДОПІВЦІВ (%s/%s) з обʼєднаннями — РОЗКЛАД + ЗАПИС ═══', month, year);
+
+  // === 1. Каталог занять локації → лише «За заняття»/«За захід» зі ставкою ===
+  var catRes = getActivitiesCatalog(loc);
+  if (!catRes.ok){ Logger.log('❌ каталог: %s', catRes.error); return catRes; }
+  var perLesson = (catRes.items || []).filter(function(a){
+    return a.active && a.teacherRate > 0 &&
+      (a.teacherModel === 'За заняття' || a.teacherModel === 'За захід');
+  });
+
+  // === 2. Відмітки червня → groupsByDate по кожному activityId ===
+  var mm = month < 10 ? '0' + month : String(month);
+  var dateFrom = year + '-' + mm + '-01';
+  var nextM = _nextMonth(month, year);
+  var nmm = nextM.month < 10 ? '0' + nextM.month : String(nextM.month);
+  var dateTo = nextM.year + '-' + nmm + '-01';
+
+  var attSh = _getAttendanceSheet(false);
+  var attData = attSh.getDataRange().getValues();
+  var byActId = {};
+  for (var i = 1; i < attData.length; i++){
+    var rec = _parseAttendanceRow(attData[i]);
+    if (rec.loc !== loc) continue;
+    if (rec.date < dateFrom || rec.date >= dateTo) continue;
+    if (!byActId[rec.activityId]) byActId[rec.activityId] = {};
+    var ng = _dopNormGroup(rec.group);
+    if (!byActId[rec.activityId][rec.date]) byActId[rec.activityId][rec.date] = {};
+    byActId[rec.activityId][rec.date][ng] = true;
+  }
+
+  // === 3. Обʼєднання груп (session-key схлопування) ===
+  var mergesMap = _loadDopMergesMap(loc, dateFrom, dateTo);
+
+  // === 4. ДРУК по кожному «за заняття» ===
+  Logger.log('─── назва | груп×дат сирих | після обʼєднань | ставка | ЗП ───');
+  var rows = [], totalRaw = 0, totalMerged = 0, totalZP = 0;
+  perLesson.forEach(function(a){
+    var gbd    = byActId[a.id] || {};
+    var raw    = _dopCountSessions(gbd, {});                     // до обʼєднань
+    var merged = _dopCountSessions(gbd, mergesMap[a.id] || {});  // після обʼєднань
+    var zp     = merged * a.teacherRate;
+    totalRaw += raw; totalMerged += merged; totalZP += zp;
+    Logger.log('%s | %s | %s | %s | %s', a.name, raw, merged, a.teacherRate, zp);
+    rows.push({name: a.name, model: a.teacherModel, rawSessions: raw, mergedSessions: merged, rate: a.teacherRate, zp: zp});
+  });
+  Logger.log('─── РАЗОМ: сирих=%s | після обʼєднань=%s | ЗП=%s грн (занять=%s) ───',
+    totalRaw, totalMerged, totalZP, rows.length);
+
+  // === 5. Реальний запис у Salary (журнальна дельта, ідемпотентно) ===
+  var exp = exportToSalaryExtras({loc: loc, month: month, year: year});
+  if (exp && exp.ok){
+    Logger.log('✅ ЗАПИС Salary: оновлено=%s | сума ЗП=%s грн | notFound=%s | пропущено(без ставки)=%s',
+      exp.updated, exp.totalFact, JSON.stringify(exp.notFound || []), JSON.stringify(exp.skipped || []));
+  } else {
+    Logger.log('❌ ЗАПИС Salary: %s', exp && exp.error);
+  }
+
+  return {
+    ok: !!(exp && exp.ok),
+    loc: loc, month: month, year: year,
+    rows: rows,
+    totalRawSessions: totalRaw,
+    totalMergedSessions: totalMerged,
+    totalZP: totalZP,
+    write: exp
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// МАСОВИЙ ПЕРЕРАХУНОК SALARY (Додаткові) для ВСІХ локацій Salary-реєстру.
+// Використати після впровадження обʼєднань груп (v7.08) або будь-якої зміни
+// логіки ЗП «За заняття»/«За захід», щоб перезаписати суми в усіх файлах.
+// month/year — місяць ВІДПРАЦЮВАННЯ (ЗП летить у Budget місяця N+1). Дефолт —
+// поточний місяць. Ідемпотентно (журнальна дельта). Запускати ВРУЧНУ з редактора.
+// ═══════════════════════════════════════════════════════════════════════════
+// БЕЗ параметрів → ЧЕРВЕНЬ 2026 (місяць відпрацювання; ЗП летить у Budget липня).
+// Перераховує ЗП допівців по ВСІХ локаціях Salary-реєстру з НОВОЮ логікою
+// session-key (група×дата, кожна група окремо; обʼєднання ще не проставлені —
+// _dopCountSessions застосує mergesMap коли директор їх позначить).
+// Друк по кожній локації: локація | скільки допівців | сума ЗП.
+// «Допівців» = к-сть занять «За заняття»/«За дитину»/«За захід» з нарахованою
+// сумою > 0 (реально відпрацьовані цього місяця). Ідемпотентно (журнальна
+// дельта в exportToSalaryExtras) — можна перезапускати після проставлення
+// обʼєднань, суми лише скоригуються, не подвояться. Запускати ВРУЧНУ з редактора.
+// Параметри опційні (для повторного використання іншими місяцями).
+function reexportSalaryExtrasAllLocations(month, year){
+  month = Number(month) || 6;      // дефолт: червень 2026
+  year  = Number(year)  || 2026;
+  var reg = _salaryGetRegistry();
+  if (!reg.ok){ Logger.log('❌ %s', reg.error); return reg; }
+  var locs = [];
+  reg.rows.forEach(function(r){ if (locs.indexOf(r.loc) < 0) locs.push(r.loc); });
+  Logger.log('═══ МАСОВИЙ ПЕРЕРАХУНОК SALARY ДОДАТКОВИХ (%s/%s) — локацій=%s ═══', month, year, locs.length);
+  Logger.log('─── локація | допівців | сума ЗП ───');
+  var summary = [], okCount = 0, errCount = 0, grandTotal = 0, grandDop = 0;
+  locs.forEach(function(loc){
+    var res = exportToSalaryExtras({loc: loc, month: month, year: year});
+    if (res && res.ok){
+      okCount++;
+      // Скільки допівців реально нараховано (fact>0) з details експорту.
+      var dopCount = (res.details || []).filter(function(d){
+        return d && d.status === 'updated' && Number(d.fact) > 0;
+      }).length;
+      grandTotal += Number(res.totalFact) || 0;
+      grandDop   += dopCount;
+      Logger.log('✅ %s | допівців=%s | ЗП=%s грн | notFound=%s | пропущено=%s',
+        loc, dopCount, res.totalFact, JSON.stringify(res.notFound || []), JSON.stringify(res.skipped || []));
+      summary.push({loc: loc, ok: true, dopCount: dopCount, updated: res.updated, totalFact: res.totalFact, notFound: res.notFound || [], skipped: res.skipped || []});
+    } else {
+      errCount++;
+      Logger.log('❌ %s | помилка: %s', loc, res && res.error);
+      summary.push({loc: loc, ok: false, error: res && res.error});
+    }
+  });
+  Logger.log('─── РАЗОМ: допівців=%s | ЗП=%s грн | локацій успішно=%s | помилок=%s ───',
+    grandDop, grandTotal, okCount, errCount);
+  return {ok: errCount === 0, kind: 'salary', month: month, year: year,
+          okCount: okCount, errCount: errCount, totalDop: grandDop, totalZP: grandTotal, summary: summary};
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ПОВНИЙ ПЕРЕРАХУНОК ОДНІЄЇ ЛОКАЦІЇ після виправлення відміток (червень 2026).
+// 3 кроки: Payment (exportAttendanceToPayments) → Salary (exportToSalaryExtras) →
+// Агрегат Оплати-Рік (aggregatePaymentsYearly). Один запуск = і рахунки, і ЗП, і
+// таблиця рахунків стають коректні. Усі кроки ідемпотентні (журнальна дельта +
+// повний rebuild агрегату). Запускати ВРУЧНУ з редактора (читає файли локацій — довго).
+// ⚠️ aggregatePaymentsYearly() — ГЛОБАЛЬНА (перебудовує весь Оплати-Рік по всіх локаціях),
+//    не per-loc; тут вона завершальним кроком підтягує виправлену локацію в агрегат.
+// ═══════════════════════════════════════════════════════════════════════════
+// month/year — опційні (дефолт червень 2026, щоб старі виклики reexportKruglaFull /
+// reexportAllDedupedLocations не змінились). Кнопка на рахунках передає вибраний місяць.
+function reexportLocationFull(loc, month, year){
+  loc = String(loc || '').trim();
+  if (!loc){ Logger.log('❌ loc обовʼязковий'); return {ok:false, error:'loc обовʼязковий'}; }
+  month = Number(month) || 6;
+  year  = Number(year)  || 2026;
+  Logger.log('═══ ПОВНИЙ ПЕРЕРАХУНОК ЛОКАЦІЇ "%s" (%s/%s) ═══', loc, month, year);
+
+  Logger.log('▶ Крок 1/3: Payment (exportAttendanceToPayments)…');
+  var pay = exportAttendanceToPayments({loc: loc, month: month, year: year});
+  if (pay && pay.ok) Logger.log('  ✅ Payment: оновлено=%s | сума=%s грн | notFound=%s', pay.updated, pay.totalAmount, JSON.stringify(pay.notFound || []));
+  else               Logger.log('  ❌ Payment: %s', pay && pay.error);
+
+  Logger.log('▶ Крок 2/3: Salary (exportToSalaryExtras)…');
+  var sal = exportToSalaryExtras({loc: loc, month: month, year: year});
+  if (sal && sal.ok) Logger.log('  ✅ Salary: оновлено=%s | сума ЗП=%s грн | notFound=%s', sal.updated, sal.totalFact, JSON.stringify(sal.notFound || []));
+  else               Logger.log('  ❌ Salary: %s', sal && sal.error);
+
+  Logger.log('▶ Крок 3/3: Агрегація Оплати-Рік (aggregatePaymentsYearly, глобальна)…');
+  var agg = aggregatePaymentsYearly();
+  if (agg && agg.ok) Logger.log('  ✅ Агрегат: рядків=%s | помилок=%s', agg.rows, (agg.errors || []).length);
+  else               Logger.log('  ❌ Агрегат: %s', agg && agg.error);
+
+  var allOk = !!(pay && pay.ok && sal && sal.ok && agg && agg.ok);
+  Logger.log('─── ПОВНИЙ ПЕРЕРАХУНОК "%s" завершено (ok=%s) ───', loc, allOk);
+  return {ok: allOk, loc: loc, month: month, year: year, payment: pay, salary: sal, aggregate: agg};
+}
+
+// Обгортка для зручного запуску з редактора (без аргументів).
+function reexportKruglaFull(){ return reexportLocationFull('Кругла'); }
+
+// ТИМЧАСОВА обгортка (one-shot, після звірки 2026-06-30): перерахунок 5 проблемних
+// локацій. ⚠️ reexportLocationFull НЕ пише знижки (Бюджет навч) — лише extras+salary+
+// агрегат. Тому тут ОКРЕМО кличемо exportVacationDiscountToPayments (знижки, ТАРГЕТ-
+// місяць = 7), а extras/salary — за місяць ВІДМІТОК = 6. Один фінальний агрегат у кінці.
+// Видалити після використання.
+function reexportProblemLocationsJuly(){
+  var LOCS = ["Кругла", "Бровари", "Пуща", "Кар'єрна", "Бігова"];
+  Logger.log('═══ ПЕРЕРАХУНОК ПРОБЛЕМНИХ ЛОКАЦІЙ (відмітки червня → бюджет липня) ═══');
+  var summary = [];
+  LOCS.forEach(function(loc){
+    Logger.log('\n━━━ %s ━━━', loc);
+    var pay = exportAttendanceToPayments({loc: loc, month: 6, year: 2026});       // додаткові: черв → лип «Бюджет доп»
+    Logger.log(pay && pay.ok ? '  ✅ Доп: оновлено=' + pay.updated + ' сума=' + pay.totalAmount + ' notFound=' + JSON.stringify(pay.notFound || []) : '  ❌ Доп: ' + (pay && pay.error));
+    var sal = exportToSalaryExtras({loc: loc, month: 6, year: 2026});             // ЗП викладачів
+    Logger.log(sal && sal.ok ? '  ✅ ЗП: оновлено=' + sal.updated + ' сума=' + sal.totalFact : '  ❌ ЗП: ' + (sal && sal.error));
+    var dis = exportVacationDiscountToPayments({loc: loc, month: 7, year: 2026}); // ЗНИЖКИ (відпустка+хвороба): ТАРГЕТ липень
+    Logger.log(dis && dis.ok ? '  ✅ Знижки: оновлено=' + dis.updated + ' сума=-' + dis.totalDiscount + ' notFound=' + JSON.stringify(dis.notFound || []) : '  ❌ Знижки: ' + (dis && dis.error));
+    summary.push({loc: loc, payTotal: pay && pay.totalAmount, salTotal: sal && sal.totalFact,
+                  disTotal: dis && dis.totalDiscount, disNotFound: (dis && dis.notFound) || []});
+  });
+  Logger.log('\n═══ ФІНАЛ: aggregatePaymentsYearly() (глобальна, один раз) ═══');
+  var agg = aggregatePaymentsYearly();
+  Logger.log(agg && agg.ok ? '  ✅ Агрегат: рядків=' + agg.rows + ' помилок=' + (agg.errors || []).length : '  ❌ Агрегат: ' + (agg && agg.error));
+  Logger.log('\n─── ГОТОВО (локацій=%s) ───', LOCS.length);
+  return {ok: !!(agg && agg.ok), locations: LOCS, summary: summary, aggregate: agg};
+}
+
+// READ-ONLY скан: знаходить формульні клітинки у колонці «Бюджет доп» липня (col 35)
+// по ВСІХ локаціях-реєстру — щоб знати, кого зачіпав баг пропуску формул. Нічого не пише.
+// Запускати ВРУЧНУ з редактора. month=7 (таргет липня).
+function scanDopFormulasJuly(){
+  var month = 7;
+  var col1 = 1 + (month - 1) * 5 + 3 + 1;   // = 35 (budgetDopCol1)
+  var configSS = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var cfg = configSS.getSheets()[0].getDataRange().getValues();
+  var found = [], locsWith = {};
+  Logger.log('═══ READ-ONLY: формули в «Бюджет доп» липня (col %s) по локаціях ═══', col1);
+  for (var r = 1; r < cfg.length; r++){
+    var loc = trim(String(cfg[r][2] || '')), sheetId = trim(String(cfg[r][3] || ''));
+    var sheetName = trim(String(cfg[r][4] || '')) || 'Payment';
+    if (!loc || !sheetId) continue;
+    try {
+      var sh = SpreadsheetApp.openById(sheetId).getSheetByName(sheetName) || SpreadsheetApp.openById(sheetId).getSheets()[0];
+      var last = sh.getLastRow();
+      if (last < 3) continue;
+      var fs = sh.getRange(1, col1, last, 1).getFormulas();
+      var vs = sh.getRange(1, col1, last, 1).getValues();
+      var names = sh.getRange(1, 1, last, 1).getValues();
+      for (var i = 2; i < last; i++){
+        if (fs[i][0]){
+          var nm = trim(String(names[i][0] || ''));
+          if (!nm || isGroupHeaderRow([names[i][0]], 1)) continue;   // підсумкові/group — ігноруємо
+          found.push({loc: loc, row: i + 1, name: nm, formula: fs[i][0], value: vs[i][0]});
+          locsWith[loc] = (locsWith[loc] || 0) + 1;
+          Logger.log('  %s | row %s | "%s" | %s = %s', loc, i + 1, nm, fs[i][0], vs[i][0]);
+        }
+      }
+    } catch(e){ Logger.log('  ⚠️ %s: %s', loc, e && e.message); }
+  }
+  Logger.log('─── Формул-рядків: %s | локацій з формулами: %s ───', found.length, JSON.stringify(locsWith));
+  return {ok: true, col: col1, totalFormulaRows: found.length, byLoc: locsWith, rows: found};
+}
+
+// Перерахунок УСІХ почищених локацій за один запуск: по кожній — Payment + Salary
+// (per-loc), а агрегацію Оплати-Рік робимо ОДИН РАЗ у кінці (глобальна, поза циклом,
+// щоб не ганяти 8 разів). Усі кроки ідемпотентні. Запускати ВРУЧНУ з редактора
+// (читає файли локацій — довго, не через веб-апку).
+var _REEXPORT_DEDUPED_LOCS = ["Кар'єрна", 'Пуща', 'Бровари', 'Осокорки', 'Позняки', 'Голосієво', 'Борщагівка', 'Кругла'];
+
+function reexportAllDedupedLocations(){
+  Logger.log('═══ ПЕРЕРАХУНОК ПОЧИЩЕНИХ ЛОКАЦІЙ (червень 2026) — локацій=%s ═══', _REEXPORT_DEDUPED_LOCS.length);
+  var perLoc = [], payOk = 0, salOk = 0, errs = [];
+
+  _REEXPORT_DEDUPED_LOCS.forEach(function(loc){
+    Logger.log('\n━━━ %s ━━━', loc);
+
+    Logger.log('  ▶ Payment (exportAttendanceToPayments)…');
+    var pay = exportAttendanceToPayments({loc: loc, month: 6, year: 2026});
+    if (pay && pay.ok){ payOk++; Logger.log('    ✅ Payment: оновлено=%s | сума=%s грн | notFound=%s', pay.updated, pay.totalAmount, JSON.stringify(pay.notFound || [])); }
+    else { errs.push(loc + ' Payment: ' + (pay && pay.error)); Logger.log('    ❌ Payment: %s', pay && pay.error); }
+
+    Logger.log('  ▶ Salary (exportToSalaryExtras)…');
+    var sal = exportToSalaryExtras({loc: loc, month: 6, year: 2026});
+    if (sal && sal.ok){ salOk++; Logger.log('    ✅ Salary: оновлено=%s | сума ЗП=%s грн | notFound=%s', sal.updated, sal.totalFact, JSON.stringify(sal.notFound || [])); }
+    else { errs.push(loc + ' Salary: ' + (sal && sal.error)); Logger.log('    ❌ Salary: %s', sal && sal.error); }
+
+    perLoc.push({loc: loc, payment: pay, salary: sal});
+  });
+
+  // === ФІНАЛЬНА АГРЕГАЦІЯ — один раз, поза циклом ===
+  Logger.log('\n═══ ФІНАЛ: aggregatePaymentsYearly() (глобальна, один раз) ═══');
+  var agg = aggregatePaymentsYearly();
+  if (agg && agg.ok) Logger.log('  ✅ Агрегат Оплати-Рік: рядків=%s | помилок=%s', agg.rows, (agg.errors || []).length);
+  else { errs.push('Aggregate: ' + (agg && agg.error)); Logger.log('  ❌ Агрегат: %s', agg && agg.error); }
+
+  Logger.log('\n─── ПІДСУМОК: Payment ok=%s/%s | Salary ok=%s/%s | агрегат=%s | помилок=%s ───',
+    payOk, _REEXPORT_DEDUPED_LOCS.length, salOk, _REEXPORT_DEDUPED_LOCS.length, (agg && agg.ok) ? 'ok' : 'FAIL', errs.length);
+  if (errs.length) errs.forEach(function(e){ Logger.log('   • %s', e); });
+
+  return {ok: errs.length === 0, locations: _REEXPORT_DEDUPED_LOCS, payOk: payOk, salOk: salOk,
+          aggregate: agg, perLoc: perLoc, errors: errs};
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -5914,6 +7313,87 @@ function diagSigner(namePart){
   if(!found) Logger.log('не знайдено: %s', namePart);
 }
 
+// v6.57: оцінка «заповненості» картки дитини — щоб при дублях лишати РЕАЛЬНУ картку
+// (з договором/сумою/підписантом), а не порожній плейсхолдер. Більший бал = лишаємо.
+function _invoiceCardScore(c){
+  var s = 0;
+  if (String(c['Дата договору']   || '').trim()) s += 8;   // є дата договору
+  if (Number(c['Сума договору']) > 0)             s += 4;   // є сума
+  if (String(c['Номер договору']  || '').trim()) s += 2;   // є номер договору
+  var signer = String(c['Підписант договору'] || '').trim();
+  if (signer) s += 1;
+  var sn = signer === 'dad' ? c['ПІБ тата'] : c['ПІБ мами'];
+  if (String(sn || '').trim()) s += 1;                      // у підписанта є ПІБ
+  var st = String(c['Статус'] || '').trim();
+  if (st === 'active' || st === 'adaptation') s += 1;       // активний > graduated
+  return s;
+}
+
+// v6.57: ДЕДУП дубль-карток у межах локації (той самий нормалізований ПІБ). Борг даних:
+// частина дітей має по 2 картки → getInvoiceListData давав 2 однакові рядки рахунку
+// (paymentSum по імені → однаковий). Лишаємо ОДНУ — з найбільшим _invoiceCardScore.
+// Діти БЕЗ дублів (більшість) не зачіпаються (група розміром 1 → повертається як є).
+function _dedupInvoiceClients(list){
+  var byKey = {};
+  list.forEach(function(c){
+    var k = _normForMatch(c['ПІБ дитини']);                 // loc уже єдина (list відфільтрований)
+    (byKey[k] = byKey[k] || []).push(c);
+  });
+  var out = [], dropped = [];
+  Object.keys(byKey).forEach(function(k){
+    var arr = byKey[k];
+    if (arr.length === 1){ out.push(arr[0]); return; }       // немає дубля — не чіпаємо
+    var best = arr[0], bestScore = _invoiceCardScore(arr[0]);
+    for (var i = 1; i < arr.length; i++){
+      var sc = _invoiceCardScore(arr[i]);
+      if (sc > bestScore){ best = arr[i]; bestScore = sc; }  // строге > → при рівності лишається перший
+    }
+    out.push(best);
+    arr.forEach(function(c){ if (c !== best) dropped.push(String(c['ПІБ дитини'] || '') + '(id=' + String(c['ID'] || '') + ')'); });
+  });
+  if (dropped.length) Logger.log('[getInvoiceListData] дедуп: прибрано %s дубль-карток: %s', dropped.length, JSON.stringify(dropped));
+  return out;
+}
+
+// ONE-SHOT ДІАГНОСТИКА (тільки читання): усі дубль-картки по мережі — id/договір/fee/
+// статус/у Payment/score. Запусти в редакторі → View → Executions → Logs.
+function diagDuplicateClients(){
+  var res = getClients(); if (!res.ok){ Logger.log('❌ getClients fail'); return res; }
+  var rows = res.data || [];
+  var present = {};
+  var paySheet = getCRMSpreadsheet().getSheetByName(SHEET_YEARLY);
+  if (paySheet){
+    var pv = paySheet.getDataRange().getValues();
+    if (pv.length >= 2){
+      var h = pv[0].map(String), ni = h.indexOf('Ім\'я дитини'), li = h.indexOf('Локація');
+      if (ni >= 0 && li >= 0) for (var r = 1; r < pv.length; r++){ present[_normForMatch(pv[r][ni]) + '|' + _normForMatch(pv[r][li])] = true; }
+    }
+  }
+  var map = {};
+  rows.forEach(function(c){
+    var nm = String(c['ПІБ дитини'] || '').trim(); if (!nm) return;
+    var k = _normForMatch(nm) + '|' + _normForMatch(c['Локація']);
+    (map[k] = map[k] || []).push(c);
+  });
+  var groups = Object.keys(map).filter(function(k){ return map[k].length > 1; }).sort();
+  Logger.log('═══ ДУБЛЬ-КАРТКИ КЛІЄНТІВ: %s дітей ═══', groups.length);
+  groups.forEach(function(k){
+    var arr = map[k];
+    Logger.log('▸ %s | %s | ×%s | у Payment=%s', String(arr[0]['ПІБ дитини'] || ''), String(arr[0]['Локація'] || '').trim(), arr.length, present[k] ? 'так' : 'ні');
+    var best = arr[0], bs = _invoiceCardScore(arr[0]);
+    arr.forEach(function(c){ var sc = _invoiceCardScore(c); if (sc > bs){ best = c; bs = sc; } });
+    arr.forEach(function(c){
+      Logger.log('    %s id=%s | договір=%s | fee=%s | статус=%s | №дог=%s | оновл=%s | score=%s',
+        (c === best ? '✅ЛИШИТИ' : '🗑видалити'), String(c['ID'] || ''),
+        String(c['Дата договору'] || '').slice(0, 10) || '—', Number(c['Сума договору']) || 0,
+        String(c['Статус'] || ''), String(c['Номер договору'] || '') || '—',
+        String(c['Оновлено'] || '') || '—', _invoiceCardScore(c));
+    });
+  });
+  Logger.log('✅ЛИШИТИ = найбільший score (заповнена). 🗑 = видалити через deleteClient(id).');
+  return { ok: true, groups: groups.length };
+}
+
 function getInvoiceListData(params){
   try {
     var loc      = String(params.loc      || '').trim();
@@ -5932,8 +7412,14 @@ function getInvoiceListData(params){
     var clients = clientsAll.filter(function(c){
       if (String(c['Локація'] || '').trim() !== loc) return false;
       var st = String(c['Статус'] || '').trim();
-      return st === 'active' || st === 'adaptation';
+      // Fix A: graduated теж кандидат — у циклі нижче лишаємо лише тих, хто має
+      // додаткові за extMonth (extrasBreakdownSum > 0). "Голі" випускники відсіються.
+      return st === 'active' || st === 'adaptation' || st === 'graduated';
     });
+
+    // v6.57: дедуп дубль-карток (той самий ПІБ у цій loc) → 1 дитина = 1 рядок рахунку.
+    // Лишаємо найбільш заповнену картку; діти без дублів не зачіпаються.
+    clients = _dedupInvoiceClients(clients);
 
     // === 2. Payment per-child з "Оплати-Рік" (поля "<Місяць>-Бюджет-навч" + "-доп") ===
     var paymentByName = {};
@@ -6008,6 +7494,9 @@ function getInvoiceListData(params){
       var extrasBreakdownSum = extras.sum;                    // сума занять з відмічань (розписка)
       var extrasSum = extrasByPayment[name] || 0;             // v6.11.16: до сплати = "<Місяць>-Бюджет-доп"
       var extrasAdjustment = extrasSum - extrasBreakdownSum;  // борг(+) / переплата(-) / 0
+      // Fix A: graduated (випускник) показуємо ЛИШЕ якщо є додаткові за extMonth;
+      // "голі" випускники без занять — не показуємо (рахунок тільки на гуртки).
+      if (String(c['Статус'] || '').trim() === 'graduated' && extrasBreakdownSum <= 0) return;
       // фільтр НЕ змінено: показуємо matched у Платежах АБО з реальними відмічаннями
       if (!inPayments && extrasBreakdownSum <= 0) return;
 
@@ -6133,7 +7622,8 @@ function invoiceViberMessage(opts){
   var messages = [], errs = [], grand = 0;
   for (var i = 0; i < types.length; i++){
     var ty = types[i];
-    var r = invoicePdfLink({childName:childName, loc:loc, type:ty.t, month:ty.m, year:ty.y, invoiceDate:opts.invoiceDate});
+    // v6.92: generateInvoicePDF напряму — без створення файлу на Drive (PDF-лінк у Viber не потрібен).
+    var r = generateInvoicePDF({childName:childName, loc:loc, type:ty.t, month:ty.m, year:ty.y, invoiceDate:opts.invoiceDate, dataOnly:true});
     if (!r || !r.ok){ errs.push((ty.t === 'extras' ? 'Додаткові' : 'Навчання') + ': ' + ((r && r.error) || '?')); continue; }
     grand += Number(r.sum) || 0;
     var fn = _firstName(r.buyerName);
@@ -6162,10 +7652,12 @@ function invoiceViberMessage(opts){
     if (r.iban)   L.push('IBAN: ' + r.iban);
     if (r.edrpou) L.push('ЄДРПОУ/РНОКПП: ' + r.edrpou);
     L.push('');
-    L.push('Рахунок (PDF): ' + r.url);
+    // v6.92 ТИМЧАСОВО вимкнено PDF у Viber-повідомленні (повернути: SEND_PDF=true)
+    var SEND_PDF = false;
+    if (SEND_PDF) { L.push('Рахунок (PDF): ' + r.url); }
     L.push('');
     L.push('Дякуємо! 🍊');
-    messages.push({type:ty.t, title:title, text:L.join('\n'), url:r.url, sum:r.sum});
+    messages.push({type:ty.t, title:title, text:L.join('\n'), sum:r.sum});
   }
   if (!messages.length) return {ok:false, error:(errs.join('; ') || 'Не вдалось')};
   return {ok:true, messages:messages, sum:grand, errors:errs};
@@ -6225,13 +7717,16 @@ function generateInvoicePDF(opts){
   var invoiceDate = String(opts.invoiceDate || '').trim() ||
     Utilities.formatDate(new Date(), 'Europe/Kiev', 'dd.MM.yyyy');
 
+  var _ts=Date.now(), _tp=_ts;   // TIMING (dataOnly)
   var req = _getInvoiceRequisites(loc, type);
+  if(opts.dataOnly){ Logger.log('[TIMING] _getInvoiceRequisites: %s ms', Date.now()-_tp); _tp=Date.now(); }
   if (!req.ok){ Logger.log('[invoicePDF] ❌ %s', req.error); return {ok:false, error:req.error}; }
 
   var LABEL_DEBT    = 'Борг попереднього періоду';     // v6.11.24: фіксовані лейбли (легко змінити)
   var LABEL_OVERPAY = 'Переплата минулого періоду';
 
   var client = _invoiceClientData(childName, loc, type);
+  if(opts.dataOnly){ Logger.log('[TIMING] _invoiceClientData: %s ms', Date.now()-_tp); _tp=Date.now(); }
   // v6.11.20: підписант ОБОВʼЯЗКОВИЙ (домовленість з директорами) — без fallback.
   if (!client.found){
     return {ok:false, error:'Дитину "' + childName + '" не знайдено в Клієнти для локації "' + loc + '".'};
@@ -6249,7 +7744,18 @@ function generateInvoicePDF(opts){
   // v6.11.24: позиції таблиці (lines) + загальна сума (total).
   var lines = [], total = 0;
   if (type === 'extras'){
-    var inv = getInvoiceListData({loc: loc, payMonth: month, payYear: year, extMonth: month, extYear: year});
+    // ФІКС асиметрії місяця (таблиця↔Viber/PDF/email): extras-сума (extrasSum) має читатись
+    // з тієї САМОЇ колонки Оплати-Рік, що й таблиця рахунків. Таблиця бере <payMonth>-Бюджет-доп,
+    // де payMonth = місяць ВИСТАВЛЕННЯ рахунку. Класи місяця M експортуються в «Бюджет доп» M+1
+    // (exportAttendanceToPayments, N+1) → правильна колонка = extMonth+1.
+    //   • payMonth беремо з opts (фронт передає той самий, що в таблиці) — пріоритет;
+    //   • якщо не передано — дефолт = extMonth+1 (= дефолтний payMonth таблиці);
+    //   • extMonth лишаємо = month: • рядки-послуги рахуються наживо з Додаткові_Відвідуваність.
+    var _bm = _nextMonth(month, year);
+    var billMonth = Number(opts.payMonth) || _bm.month;
+    var billYear  = Number(opts.payYear)  || _bm.year;
+    var inv = getInvoiceListData({loc: loc, payMonth: billMonth, payYear: billYear, extMonth: month, extYear: year});
+    if(opts.dataOnly){ Logger.log('[TIMING] getInvoiceListData(extras): %s ms', Date.now()-_tp); _tp=Date.now(); }
     if (!inv.ok) return {ok:false, error: inv.error};
     var ch = null;
     (inv.children || []).forEach(function(c){ if (String(c.name).trim() === childName) ch = c; });
@@ -6266,6 +7772,7 @@ function generateInvoicePDF(opts){
     total = Number(ch.extrasSum) || 0;
   } else {
     var sum = _invoiceSumFromYearly(childName, loc, month, type);
+    if(opts.dataOnly){ Logger.log('[TIMING] _invoiceSumFromYearly: %s ms', Date.now()-_tp); _tp=Date.now(); }
     lines.push({name: 'Оплата за навчання', qty: 1, price: sum, sum: sum});
     total = sum;
     // v6.11.26: вступний внесок — план у картці = джерело правди. Додаємо рядки, де
@@ -6281,6 +7788,15 @@ function generateInvoicePDF(opts){
       lines.push({name: 'Вступний внесок', qty: 1, price: amt, sum: amt});
       total += amt;
     });
+  }
+
+  // v6.93: dataOnly — повертаємо лише дані для Viber-повідомлення, БЕЗ номера рахунку
+  // (_getNextInvoiceNumber інкрементує лічильник) та БЕЗ важкої побудови PDF (HTML→PDF).
+  if (opts.dataOnly){
+    Logger.log('[TIMING] ВСЬОГО dataOnly (від _getInvoiceRequisites): %s ms', Date.now()-_ts);
+    return {ok:true, sum:total, juName:req.name, edrpou:req.edrpou, iban:req.iban,
+            bank:req.bank, payLink:req.payLink, lines:lines, buyerName:buyerDisplay,
+            sumWords:_numberToUkrainianWords(total)};
   }
 
   var invoiceNumber = _getNextInvoiceNumber(req.edrpou, req.name);
@@ -12066,6 +13582,9 @@ function savePredmetnykyLesson(actorId, lesson){
       var norm = (subject === PRED_UNLIMITED_SUBJ)
         ? 0
         : _getPredNormByType(location, subject, group);
+      // v6.57: мінімальний місячний ліміт 15 занять для дозволених типів (norm>0) —
+      // дзеркало getNormFor у predmetnyky.html. 0 = заборонено (не піднімаємо).
+      if (norm > 0) norm = Math.max(norm, 15);
       if (norm > 0){
         var existing = _loadPredLessons(location);
         for (var i = 0; i < existing.length; i++){
@@ -13444,4 +14963,136 @@ function diagMatchAll(){
   Logger.log('З них норм-фікс рятує: '+(strictMiss-miss));
   Logger.log('Лишається проблемних після норм: '+miss);
   Logger.log('По локаціях (строгий міс): '+JSON.stringify(byLoc));
+}
+
+
+function diagShysh(){
+  var ss = getCRMSpreadsheet();
+  var sh = ss.getSheetByName(SHEET_CLIENTS);
+  var v = sh.getDataRange().getValues();
+  var h = v[0];
+  var iN = h.indexOf('ПІБ дитини');
+  var iL = h.indexOf('Локація');
+  var iD = h.indexOf('Дата договору');
+  var iA = h.indexOf('Відсутності (JSON)');
+  Logger.log('=== Пошук "Шиш" ===');
+  for(var r=1;r<v.length;r++){
+    var nm=String(v[r][iN]||'');
+    if(nm.toLowerCase().indexOf('шиш')<0) continue;
+    Logger.log('РЯДОК '+(r+1)+': "'+nm+'" | лок='+v[r][iL]+' | договір='+v[r][iD]);
+    var raw=String(v[r][iA]||'');
+    Logger.log('RAW absences: '+raw.substring(0,2000));
+    try{
+      var arr=JSON.parse(raw||'[]');
+      Logger.log('Записів: '+arr.length);
+      arr.forEach(function(a,i){
+        Logger.log('  ['+i+'] type='+a.type+' from='+a.from+' to='+a.to+' days='+(a.workDays||a.days)+' weeks='+a.weeks+' status='+a.status+' note='+String(a.note||'').substring(0,50));
+      });
+    }catch(e){ Logger.log('parse err: '+e); }
+  }
+  Logger.log('=== кінець ===');
+}
+
+function diagShyshCalc(){
+  var contract = new Date(2025,0,20);
+  var todayD = new Date(2026,5,29);
+  function ymd(d){ return Utilities.formatDate(d,'GMT+2','yyyy-MM-dd'); }
+  var diffY = todayD.getFullYear()-contract.getFullYear();
+  Logger.log('Договір=2025-01-20, сьогодні=2026-06-29, diffY='+diffY);
+  for(var off=diffY-1; off<=diffY+1; off++){
+    var from=new Date(contract.getFullYear()+off, contract.getMonth(), contract.getDate());
+    var to=new Date(contract.getFullYear()+off+1, contract.getMonth(), contract.getDate());
+    to.setDate(to.getDate()-1);
+    var contains = (todayD>=from && todayD<=to);
+    Logger.log('  off='+off+': рік ['+ymd(from)+' .. '+ymd(to)+'] містить сьогодні? '+contains);
+  }
+  var abs=[
+    {from:'2025-05-26',to:'2025-05-30'},
+    {from:'2025-06-02',to:'2025-06-06'},
+    {from:'2025-10-06',to:'2025-10-10'},
+    {from:'2025-12-29',to:'2026-01-02'}
+  ];
+  var yFrom=new Date(2026,0,20), yTo=new Date(2027,0,19);
+  Logger.log('=== Поточний договірний рік: 2026-01-20 .. 2027-01-19 ===');
+  var used=0;
+  abs.forEach(function(a){
+    var af=new Date(a.from), at=new Date(a.to);
+    var inYear = (at>=yFrom && af<=yTo);
+    Logger.log('  відпустка '+a.from+'..'+a.to+' → у поточному році? '+inYear);
+  });
+  Logger.log('=== Якщо всі 4 показують FALSE — ліміт має бути 20 (чистий). Якщо хоч одна TRUE — баг меж року ===');
+}
+
+function diagFindVacExc(){
+  var targets = ['Кузьмін','Андрєєв','Андреєв','Вірьовк','Середа','Голодн','Тандиряк','Гаркуш','Мельничук'];
+  var ss = getCRMSpreadsheet();
+  var sh = ss.getSheetByName(SHEET_CLIENTS);
+  var v = sh.getDataRange().getValues();
+  var h = v[0];
+  var iN = h.indexOf('ПІБ дитини');
+  var iL = h.indexOf('Локація');
+  var iD = h.indexOf('Дата договору');
+  Logger.log('=== Пошук дітей-винятків ===');
+  targets.forEach(function(p){
+    var found=false;
+    for(var r=1;r<v.length;r++){
+      var nm=String(v[r][iN]||'');
+      if(nm.toLowerCase().indexOf(p.toLowerCase())>=0){
+        found=true;
+        Logger.log('"'+nm+'" | лок='+v[r][iL]+' | договір='+v[r][iD]);
+      }
+    }
+    if(!found) Logger.log('❌ "'+p+'" не знайдено');
+  });
+  Logger.log('=== кінець ===');
+}
+
+
+function diagFind2(){
+  var targets = ['Скорін','Скоріна','Голодн','Голодний','Голодько'];
+  var ss = getCRMSpreadsheet();
+  var sh = ss.getSheetByName(SHEET_CLIENTS);
+  var v = sh.getDataRange().getValues();
+  var h = v[0];
+  var iN = h.indexOf('ПІБ дитини');
+  var iL = h.indexOf('Локація');
+  var iD = h.indexOf('Дата договору');
+  Logger.log('=== Пошук Скоріна + Голодний ===');
+  targets.forEach(function(p){
+    var found=false;
+    for(var r=1;r<v.length;r++){
+      var nm=String(v[r][iN]||'');
+      if(nm.toLowerCase().indexOf(p.toLowerCase())>=0){
+        found=true;
+        Logger.log('"'+nm+'" | лок='+v[r][iL]+' | договір='+v[r][iD]);
+      }
+    }
+    if(!found) Logger.log('нема: "'+p+'"');
+  });
+  Logger.log('=== кінець ===');
+}
+
+
+function diagFind3(){
+  var targets = ['Городн','Городній','Городний'];
+  var ss = getCRMSpreadsheet();
+  var sh = ss.getSheetByName(SHEET_CLIENTS);
+  var v = sh.getDataRange().getValues();
+  var h = v[0];
+  var iN = h.indexOf('ПІБ дитини');
+  var iL = h.indexOf('Локація');
+  var iD = h.indexOf('Дата договору');
+  Logger.log('=== Пошук Городний ===');
+  targets.forEach(function(p){
+    var found=false;
+    for(var r=1;r<v.length;r++){
+      var nm=String(v[r][iN]||'');
+      if(nm.toLowerCase().indexOf(p.toLowerCase())>=0){
+        found=true;
+        Logger.log('"'+nm+'" | лок='+v[r][iL]+' | договір='+v[r][iD]);
+      }
+    }
+    if(!found) Logger.log('нема: "'+p+'"');
+  });
+  Logger.log('=== кінець ===');
 }
