@@ -1351,7 +1351,19 @@ function parseAbsencePeriod(str, refYear) {
     if (!str) return null;
     if (str instanceof Date) {
       if (isNaN(str.getTime())) return null;
-      return parseAbsencePeriod(pad2(str.getMonth() + 1) + '/' + str.getFullYear(), refYear);
+      // v7.25: Sheets інколи конвертує текст відпустки у Date-клітинку.
+      // День=1 → маркер місяця (синтетичний тиждень місяця). День>1 → конкретна
+      // дата → робочий тиждень від неї (5 роб.днів). Раніше day губився (→ MM/YYYY).
+      var _dd = str.getDate(), _mm = str.getMonth() + 1, _yy = str.getFullYear();
+      if (_dd === 1) return syntheticWeek(_yy, _mm);
+      var _d0 = new Date(_yy, _mm - 1, _dd);
+      while (_d0.getDay() === 0 || _d0.getDay() === 6) _d0.setDate(_d0.getDate() + 1);
+      var _d1 = new Date(_d0); _d1.setDate(_d1.getDate() + 4);
+      return {
+        from: _d0.getFullYear() + '-' + pad2(_d0.getMonth() + 1) + '-' + pad2(_d0.getDate()),
+        to:   _d1.getFullYear() + '-' + pad2(_d1.getMonth() + 1) + '-' + pad2(_d1.getDate()),
+        _synthetic: true, _originalRaw: String(str)
+      };
     }
 
     var s = trim(String(str)).toLowerCase();
@@ -1399,6 +1411,18 @@ function parseAbsencePeriod(str, refYear) {
       return {
         from: m[3] + '-' + pad2(m[2]) + '-' + pad2(m[1]),
         to:   m[6] + '-' + pad2(m[5]) + '-' + pad2(m[4])
+      };
+    }
+
+    // v7.25: діапазон з роком з ОБОХ боків, рік 2- АБО 4-цифровий:
+    // "12.05.26-22.05.26", "09.06.26-23.06.26", "01.02.2026-05.02.2026".
+    m = n.match(/^(\d{1,2})\.(\d{1,2})\.(\d{2}|\d{4})[-–](\d{1,2})\.(\d{1,2})\.(\d{2}|\d{4})$/);
+    if (m) {
+      var _y1 = m[3].length === 2 ? 2000 + (+m[3]) : +m[3];
+      var _y2 = m[6].length === 2 ? 2000 + (+m[6]) : +m[6];
+      return {
+        from: _y1 + '-' + pad2(m[2]) + '-' + pad2(m[1]),
+        to:   _y2 + '-' + pad2(m[5]) + '-' + pad2(m[4])
       };
     }
 
@@ -1451,6 +1475,26 @@ function parseAbsencePeriod(str, refYear) {
       var yr4  = m[2].length === 2 ? 2000 + (+m[2]) : +m[2];
       if (mon4 >= 1 && mon4 <= 12) {
         return syntheticWeek(yr4, mon4);
+      }
+    }
+
+    // v7.25: запасний регекс на JS-формат дати (клітинка-Date, що вже стала рядком):
+    // "Sun Mar 01 2026 10:00:00 GMT+0200 (…)". День=1 → місяць; день>1 → тиждень від дати.
+    m = s.match(/^[a-z]{3}\s+([a-z]{3})\s+(\d{1,2})\s+(\d{4})\b/);
+    if (m) {
+      var EN_MON = {jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
+      var monJ = EN_MON[m[1]];
+      if (monJ) {
+        var dayJ = +m[2], yrJ = +m[3];
+        if (dayJ === 1) return syntheticWeek(yrJ, monJ);
+        var dJ0 = new Date(yrJ, monJ - 1, dayJ);
+        while (dJ0.getDay() === 0 || dJ0.getDay() === 6) dJ0.setDate(dJ0.getDate() + 1);
+        var dJ1 = new Date(dJ0); dJ1.setDate(dJ1.getDate() + 4);
+        return {
+          from: dJ0.getFullYear() + '-' + pad2(dJ0.getMonth() + 1) + '-' + pad2(dJ0.getDate()),
+          to:   dJ1.getFullYear() + '-' + pad2(dJ1.getMonth() + 1) + '-' + pad2(dJ1.getDate()),
+          _synthetic: true, _originalRaw: str
+        };
       }
     }
 
@@ -1770,10 +1814,12 @@ function dryRunImportAbsences(locFilter) {
 
         for (var si2 = 0; si2 < absCols.length; si2++) {
           if (absCols[si2] === null) continue;
-          var slot = trim(String(data[row][absCols[si2]] || ''));
+          var rawCell = data[row][absCols[si2]];                       // v7.25: сира клітинка
+          var slot = trim(String(rawCell || ''));
           if (!slot) continue;
           totalStats.totalSlotsProcessed++;
-          var parsed = parseAbsencePeriod(slot, refYear);
+          // Date-клітинку передаємо ОБʼЄКТОМ (спрацює Date-гілка), інакше рядком.
+          var parsed = parseAbsencePeriod((rawCell instanceof Date) ? rawCell : slot, refYear);
           if (parsed) {
             var pairKey = parsed.from + '|' + parsed.to;
             if (!isNew && existingPairs[pairKey]) {
@@ -1870,7 +1916,13 @@ function importAbsencesFromPayment(locFilter) {
         try {
           var crmKey  = norm(nameCell) + '|' + norm(loc);
           var isNew   = !crmMap.hasOwnProperty(crmKey);
-          var existingAbsences = isNew ? [] : crmMap[crmKey].absences.slice();
+          // v7.25: скидаємо старі VACATION-плейсхолдери без дат (from/to=null) — вони
+          // не несуть інформації і будуть перепарсені з Payment цим же імпортом
+          // (тепер парсер читає Date-формат). Так немає дублю (старий null + новий з
+          // датою) і повторний імпорт лишається ідемпотентним.
+          var existingAbsences = isNew ? [] : crmMap[crmKey].absences.slice().filter(function(a){
+            return !(a && a.type === 'vacation' && !a.from && !a.to);
+          });
 
           var existingPairs = {};
           existingAbsences.forEach(function(a){ if(a.from&&a.to) existingPairs[a.from+'|'+a.to]=true; });
@@ -1878,10 +1930,11 @@ function importAbsencesFromPayment(locFilter) {
           var newAbsences = [];
           for (var si2 = 0; si2 < absCols.length; si2++) {
             if (absCols[si2] === null) continue;
-            var slot = trim(String(data[row][absCols[si2]] || ''));
+            var rawCell = data[row][absCols[si2]];                     // v7.25: сира клітинка
+            var slot = trim(String(rawCell || ''));
             if (!slot) continue;
 
-            var parsed = parseAbsencePeriod(slot, refYear);
+            var parsed = parseAbsencePeriod((rawCell instanceof Date) ? rawCell : slot, refYear);
             if (parsed) {
               var pairKey = parsed.from + '|' + parsed.to;
               if (existingPairs[pairKey]) {
