@@ -1319,6 +1319,21 @@ function _predMergeForDay(iso, subject){
   return null;
 }
 
+// Авторитетна звірка з сервером: тягне ВСІ обʼєднання поточної локації і замінює
+// ними S.merges для цієї локації. Дає правду замість оптимістичного припущення —
+// Apps Script POST повертає HTML (_assumed), тож самому res довіряти не можна;
+// після save/unmerge читаємо реальний стан, щоб 🔗 показувало саме те, що в базі.
+async function _refreshPredMerges(){
+  try {
+    var res = await apiGet('getPredMerges', { loc: S.loc });
+    if (res && res.ok && Array.isArray(res.items)){
+      S.merges = S.merges.filter(function(m){ return m.loc !== S.loc; }).concat(res.items);
+      return true;
+    }
+  } catch(_){}
+  return false;
+}
+
 function openPredMerge(dmy){
   if (!canEditPred(S.loc)){ showToast('🚫 Немає дозволу', 'err'); return; }
   if (!S.subject){ showToast('🚫 Оберіть предмет', 'err'); return; }
@@ -1417,13 +1432,22 @@ async function savePredMerge(){
   try {
     res = await apiPost({ action: 'savePredMerge', loc: S.loc, subject: subject, date: iso, groups: groups, by: _predMarkerLabel() });
   } catch(e){ res = {ok: false, error: String(e && e.message || e)}; }
+  try { console.log('[predMerge] save resp:', res); } catch(_){}
   MRG.busy = false;
   if (res && (res.ok || res._assumed)){
-    _applyPredMergeLocal(iso, subject, groups);
-    showToast('✓ Обʼєднано ' + groups.length + ' груп', 'ok', 2000);
+    _applyPredMergeLocal(iso, subject, groups);         // оптимістично — миттєве 🔗
     closePredMerge();
     renderApp();
-    if (typeof scheduleAutoExport === 'function') scheduleAutoExport(S.loc);
+    await _refreshPredMerges();                          // авторитетна звірка з сервером
+    renderApp();
+    var confirmed = !!_predMergeForDay(iso, subject);
+    try { console.log('[predMerge] server confirmed=' + confirmed + ', S.merges=' + S.merges.length); } catch(_){}
+    if (confirmed){
+      showToast('✓ Обʼєднано ' + groups.length + ' груп', 'ok', 2000);
+      if (typeof scheduleAutoExport === 'function') scheduleAutoExport(S.loc);
+    } else {
+      showToast('⚠️ Збереження не підтвердилось сервером — оновіть сторінку і спробуйте ще раз', 'err', 5000);
+    }
   } else {
     showToast('❌ ' + (res && res.error || 'Не вдалось зберегти'), 'err');
   }
@@ -1443,9 +1467,11 @@ async function unmergePredDay(){
   MRG.busy = false;
   if (res && (res.ok || res._assumed)){
     S.merges = S.merges.filter(function(m){ return !(m.loc === S.loc && m.subject === subject && m.date === iso); });
-    showToast('✓ Розʼєднано', 'ok', 1800);
     closePredMerge();
     renderApp();
+    await _refreshPredMerges();                          // авторитетна звірка з сервером
+    renderApp();
+    showToast('✓ Розʼєднано', 'ok', 1800);
     if (typeof scheduleAutoExport === 'function') scheduleAutoExport(S.loc);
   } else {
     showToast('❌ ' + (res && res.error || 'Не вдалось розʼєднати'), 'err');
@@ -1759,7 +1785,7 @@ function renderTable(loc, subject){
   var canMerge = canEdit;   // canEditPred(loc)
   var mstatus = '<div class="pred-mstatus ' + (canMerge ? 'on' : 'off') + '">' +
     (canMerge
-      ? '🔗 Обʼєднання днів АКТИВНЕ (build v7.20 · будь-який місяць) — клікни число дня вгорі, щоб звести групи предметника в 1 заняття'
+      ? '🔗 Обʼєднання днів АКТИВНЕ (build v7.21 · будь-який місяць) — клікни число дня вгорі, щоб звести групи предметника в 1 заняття'
       : '🔗 Обʼєднання недоступне: роль «' + escapeHtml(String((S.user && S.user.role) || '?')) + '» без прав на цю локацію') +
     '</div>';
 
