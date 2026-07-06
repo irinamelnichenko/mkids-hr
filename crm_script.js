@@ -270,6 +270,7 @@ function doGet(e) {
     else if (action === 'getPredMerges')              result = getPredMerges(e.parameter || {});
     else if (action === 'backupClients')              result = backupClientsAbsences();
     else if (action === 'mergeSplitVacationRows')     result = mergeSplitVacationRows(!(e.parameter && (e.parameter.dryRun === '0' || e.parameter.dryRun === 'false')));
+    else if (action === 'mergeOverlappingVacations')  result = mergeOverlappingVacations(!(e.parameter && (e.parameter.dryRun === '0' || e.parameter.dryRun === 'false')));
     else if (action === 'getChomusykyMarks')          result = getChomusykyMarks(e.parameter || {});
     else if (action === 'getChomusykyReport')         result = getChomusykyReport(e.parameter || {});
     else if (action === 'getPredmetnyCatalog')        result = getPredmetnyCatalog(e.parameter && e.parameter.loc || '');
@@ -749,6 +750,88 @@ function mergeSplitVacationRows(dryRun){
       dryRun, mergedCount, skipped, vacMoved, dryRun ? 0 : toDelete.length);
     return {ok:true, dryRun:dryRun, merged:mergedCount, skipped:skipped,
             vacMoved:vacMoved, rowsDeleted:(dryRun ? 0 : toDelete.length), report:report};
+  } catch(e){
+    return {ok:false, error:String(e && e.message || e)};
+  } finally {
+    try { lock.releaseLock(); } catch(_){}
+  }
+}
+
+// OVERLAP-CLEANUP: у 5 дітей одна реальна відпустка порахована двічі — широка
+// ручна + імпортовані тижневі під-слоти. Зливаємо ПЕРЕКРИТІ відпустки в одну
+// (union діапазонів): лишаємо найширшу як базу (зберігає її monthsBreakdown), її
+// from/to розширюємо до union, workDays/weeks перераховуємо, під-слоти прибираємо.
+// Ідемпотентно (нема перекриттів → noop). dryRun=true за замовч.
+var OVERLAP_CLEANUP_KIDS = [
+  {name:'Свердлик Ясміна', loc:'Бровари'},
+  {name:'Шило Софія',      loc:'Бровари'},
+  {name:'Масліч Поліна',   loc:'Бровари'},
+  {name:'Рибак Влада',     loc:'Осокорки'},
+  {name:'Копил Давид',     loc:'Осокорки'}
+];
+
+function mergeOverlappingVacations(dryRun){
+  dryRun = (dryRun === undefined) ? true : !!dryRun;
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(30000); }
+  catch(e){ return {ok:false, error:'LOCK_TIMEOUT: ' + (e && e.message || e)}; }
+  try {
+    var ss = getCRMSpreadsheet();
+    var sheet = ss.getSheetByName(SHEET_CLIENTS);
+    if (!sheet) return {ok:false, error:'Лист "' + SHEET_CLIENTS + '" не знайдено'};
+    var vals = sheet.getDataRange().getValues();
+    var hdrs = vals[0].map(String);
+    var colName = hdrs.indexOf('ПІБ дитини');        if (colName < 0) colName = 1;
+    var colLoc  = hdrs.indexOf('Локація');           if (colLoc  < 0) colLoc  = 2;
+    var colAbs  = hdrs.indexOf('Відсутності (JSON)'); if (colAbs  < 0) colAbs  = 16;
+    var _nn = function(s){ return String(s || '').trim().toLowerCase().replace(/\s+/g, ' '); };
+    var report = [], changed = 0;
+
+    OVERLAP_CLEANUP_KIDS.forEach(function(kid){
+      var wN = _nn(kid.name), wL = _nn(kid.loc);
+      var rowIdx = -1, abs = null;
+      for (var i = 1; i < vals.length; i++){
+        if (_nn(vals[i][colName]) !== wN) continue;
+        if (_nn(vals[i][colLoc])  !== wL) continue;
+        rowIdx = i + 1; try { abs = JSON.parse(String(vals[i][colAbs] || '[]')); } catch(e){ abs = []; }
+        break;
+      }
+      var e = {name: kid.name, loc: kid.loc};
+      if (rowIdx < 0){ e.action = 'skip'; e.reason = 'рядок не знайдено'; report.push(e); return; }
+
+      var vac   = abs.filter(function(a){ return a && a.type === 'vacation' && a.from && a.to; });
+      var other = abs.filter(function(a){ return !(a && a.type === 'vacation' && a.from && a.to); });
+      vac.sort(function(a, b){ return a.from < b.from ? -1 : (a.from > b.from ? 1 : 0); });
+
+      var groups = [], cur = null;
+      vac.forEach(function(v){
+        if (cur && v.from <= cur._to){ if (v.to > cur._to) cur._to = v.to; cur._m.push(v); }
+        else { cur = {_from: v.from, _to: v.to, _m: [v]}; groups.push(cur); }
+      });
+
+      var newVac = [], removed = 0, merges = [];
+      groups.forEach(function(g){
+        if (g._m.length === 1){ newVac.push(g._m[0]); return; }
+        var base = g._m.slice().sort(function(a, b){ return _countWorkDays(b.from, b.to) - _countWorkDays(a.from, a.to); })[0];
+        var merged = JSON.parse(JSON.stringify(base));
+        merged.from = g._from; merged.to = g._to;
+        merged.workDays = _countWorkDays(g._from, g._to);
+        merged.weeks = Math.min(4, Math.ceil(merged.workDays / 5));
+        merged.note = (merged.note ? merged.note + ' ' : '') + '[overlap-cleanup: злито ' + g._m.length + ']';
+        newVac.push(merged);
+        removed += g._m.length - 1;
+        merges.push({union: g._from + '→' + g._to, from: g._m.map(function(m){ return m.from + '→' + m.to; })});
+      });
+
+      if (removed === 0){ e.action = 'noop'; e.reason = 'перекриттів нема'; report.push(e); return; }
+      e.action = 'merge'; e.removed = removed; e.vacBefore = vac.length; e.vacAfter = newVac.length; e.merges = merges;
+      report.push(e); changed++;
+      if (!dryRun){
+        sheet.getRange(rowIdx, colAbs + 1).setValue(JSON.stringify(other.concat(newVac)));
+      }
+    });
+    Logger.log('[mergeOverlappingVacations] dryRun=%s | changed=%s', dryRun, changed);
+    return {ok:true, dryRun:dryRun, changed:changed, report:report};
   } catch(e){
     return {ok:false, error:String(e && e.message || e)};
   } finally {
@@ -1803,12 +1886,14 @@ function dryRunImportAbsences(locFilter) {
         var crmKey  = norm(nameCell) + '|' + norm(loc);
         var isNew   = !crmMap.hasOwnProperty(crmKey);
         var existingPairs = {};
+        var vacRanges = [];   // v7.25: overlap-guard (дзеркало реального імпорту)
         if (isNew) {
           locStat.newClients++;
           totalStats.wouldCreateNewClient++;
         } else {
           crmMap[crmKey].absences.forEach(function(a){
             if (a.from && a.to) existingPairs[a.from + '|' + a.to] = true;
+            if (a.type === 'vacation' && a.from && a.to) vacRanges.push({from:a.from, to:a.to});
           });
         }
 
@@ -1822,9 +1907,11 @@ function dryRunImportAbsences(locFilter) {
           var parsed = parseAbsencePeriod((rawCell instanceof Date) ? rawCell : slot, refYear);
           if (parsed) {
             var pairKey = parsed.from + '|' + parsed.to;
-            if (!isNew && existingPairs[pairKey]) {
+            var _ovd = vacRanges.some(function(rg){ return parsed.from <= rg.to && rg.from <= parsed.to; });
+            if (!isNew && (existingPairs[pairKey] || _ovd)) {
               locStat.duplicates++; totalStats.duplicates++;
             } else {
+              vacRanges.push({from:parsed.from, to:parsed.to});
               locStat.created++; totalStats.wouldCreate++;
               if (parsed._synthetic) { totalStats.wouldCreateSynthetic++; }
               else                   { totalStats.wouldCreateExact++;      }
@@ -1926,6 +2013,10 @@ function importAbsencesFromPayment(locFilter) {
 
           var existingPairs = {};
           existingAbsences.forEach(function(a){ if(a.from&&a.to) existingPairs[a.from+'|'+a.to]=true; });
+          // v7.25 OVERLAP-GUARD: список наявних відпусток-діапазонів, щоб не додати
+          // слот, що ПЕРЕКРИВАЄ вже наявну (ISO-рядки порівнюються хронологічно).
+          var vacRanges = existingAbsences.filter(function(a){ return a && a.type==='vacation' && a.from && a.to; })
+                                          .map(function(a){ return {from:a.from, to:a.to}; });
 
           var newAbsences = [];
           for (var si2 = 0; si2 < absCols.length; si2++) {
@@ -1937,12 +2028,14 @@ function importAbsencesFromPayment(locFilter) {
             var parsed = parseAbsencePeriod((rawCell instanceof Date) ? rawCell : slot, refYear);
             if (parsed) {
               var pairKey = parsed.from + '|' + parsed.to;
-              if (existingPairs[pairKey]) {
+              var _ov = vacRanges.some(function(rg){ return parsed.from <= rg.to && rg.from <= parsed.to; });
+              if (existingPairs[pairKey] || _ov) {
                 stats.absencesDuplicates++;
               } else {
                 var absObj = _makeImportAbsence(parsed, slot);
                 newAbsences.push(absObj);
                 existingPairs[pairKey] = true;
+                vacRanges.push({from:parsed.from, to:parsed.to});      // й між новими без перекриття
               }
             } else {
               var absPlaceholder = _makeImportAbsence(null, slot);
