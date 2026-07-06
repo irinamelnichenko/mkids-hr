@@ -269,6 +269,7 @@ function doGet(e) {
     else if (action === 'getDopMerges')               result = getDopMerges(e.parameter || {});
     else if (action === 'getPredMerges')              result = getPredMerges(e.parameter || {});
     else if (action === 'backupClients')              result = backupClientsAbsences();
+    else if (action === 'mergeSplitVacationRows')     result = mergeSplitVacationRows(!(e.parameter && (e.parameter.dryRun === '0' || e.parameter.dryRun === 'false')));
     else if (action === 'getChomusykyMarks')          result = getChomusykyMarks(e.parameter || {});
     else if (action === 'getChomusykyReport')         result = getChomusykyReport(e.parameter || {});
     else if (action === 'getPredmetnyCatalog')        result = getPredmetnyCatalog(e.parameter && e.parameter.loc || '');
@@ -662,6 +663,96 @@ function backupClientsAbsences(){
     return {ok:true, backupSheet:name, rows:rows, spreadsheet:ss.getId()};
   } catch(e){
     return {ok:false, error:String(e && e.message || e)};
+  }
+}
+
+// ЗЛИТТЯ рядків-дублів після переводу групи: відпустки зі старого рядка (без
+// договору) → на новий (з договором), старий рядок видаляється. Тільки 6 названих
+// дітей. absences ОБʼЄДНУЮТЬСЯ (union, без втрат). Ідемпотентно (повторний запуск —
+// джерел уже нема → noop). Безпека: якщо у дитини ≠1 рядка з договором → ПРОПУСК.
+// dryRun=true (за замовч.) — лише звіт, БЕЗ запису. Перед реальним — БЕКАП обовʼязково.
+var MERGE_SPLIT_VAC_KIDS = [
+  {name:'Горбачевський Дамір', loc:'Бровари'},
+  {name:'Попов Назарій',       loc:'Бровари'},
+  {name:'Ральков Макар',       loc:'Бровари'},
+  {name:'Свердлик Ясміна',     loc:'Бровари'},
+  {name:'Таркаєва Аліса',      loc:'Бровари'},
+  {name:'Ванієв Дамір',        loc:'Осокорки'}
+];
+
+function mergeSplitVacationRows(dryRun){
+  dryRun = (dryRun === undefined) ? true : !!dryRun;   // дефолт — безпечний dryRun
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(30000); }
+  catch(e){ return {ok:false, error:'LOCK_TIMEOUT: ' + (e && e.message || e)}; }
+  try {
+    var ss = getCRMSpreadsheet();
+    var sheet = ss.getSheetByName(SHEET_CLIENTS);
+    if (!sheet) return {ok:false, error:'Лист "' + SHEET_CLIENTS + '" не знайдено'};
+    var vals = sheet.getDataRange().getValues();
+    var hdrs = vals[0].map(String);
+    var colName = hdrs.indexOf('ПІБ дитини');        if (colName < 0) colName = 1;
+    var colLoc  = hdrs.indexOf('Локація');           if (colLoc  < 0) colLoc  = 2;
+    var colGrp  = hdrs.indexOf('Група');             if (colGrp  < 0) colGrp  = 3;
+    var colCD   = hdrs.indexOf('Дата договору');     if (colCD   < 0) colCD   = 10;
+    var colAbs  = hdrs.indexOf('Відсутності (JSON)'); if (colAbs  < 0) colAbs  = 16;
+    var _nn = function(s){ return String(s || '').trim().toLowerCase().replace(/\s+/g, ' '); };
+    var _vc = function(arr){ return (arr || []).filter(function(a){ return a && a.type === 'vacation'; }).length; };
+
+    var report = [], toDelete = [], mergedCount = 0, skipped = 0, vacMoved = 0;
+
+    MERGE_SPLIT_VAC_KIDS.forEach(function(kid){
+      var wantN = _nn(kid.name), wantL = _nn(kid.loc);
+      var rows = [];
+      for (var i = 1; i < vals.length; i++){
+        if (_nn(vals[i][colName]) !== wantN) continue;
+        if (_nn(vals[i][colLoc])  !== wantL) continue;
+        var abs = []; try { abs = JSON.parse(String(vals[i][colAbs] || '[]')); } catch(e){}
+        rows.push({sheetRow: i + 1, contract: String(vals[i][colCD] || '').trim(), abs: abs, group: String(vals[i][colGrp] || '').trim()});
+      }
+      var contractRows = rows.filter(function(x){ return x.contract; });
+      var sourceRows   = rows.filter(function(x){ return !x.contract && _vc(x.abs) > 0; });
+      var e = {name: kid.name, loc: kid.loc, rowsFound: rows.length};
+
+      if (contractRows.length !== 1){
+        e.action = 'skip';
+        e.reason = contractRows.length === 0 ? 'нема рядка з договором' : (contractRows.length + ' рядків з договором — неоднозначно');
+        skipped++; report.push(e); return;
+      }
+      var tgt = contractRows[0];
+      if (sourceRows.length === 0){
+        e.action = 'noop'; e.reason = 'джерел нема (вже злито)';
+        e.targetGroup = tgt.group; e.vacInTarget = _vc(tgt.abs);
+        report.push(e); return;
+      }
+      var srcAbs = sourceRows.reduce(function(acc, s){ return acc.concat(s.abs); }, []);
+      var merged = _mergeAbsencesUnion(tgt.abs, srcAbs);
+      e.action = 'merge';
+      e.targetGroup = tgt.group; e.targetContract = tgt.contract;
+      e.sourceGroups = sourceRows.map(function(s){ return s.group; });
+      e.vacBefore = _vc(tgt.abs); e.vacMoved = _vc(srcAbs); e.vacAfter = _vc(merged);
+      e.absBefore = tgt.abs.length; e.absAfter = merged.length;
+      report.push(e);
+      mergedCount++; vacMoved += _vc(srcAbs);
+
+      if (!dryRun){
+        sheet.getRange(tgt.sheetRow, colAbs + 1).setValue(JSON.stringify(merged));
+        sourceRows.forEach(function(s){ toDelete.push(s.sheetRow); });
+      }
+    });
+
+    if (!dryRun && toDelete.length){
+      // видаляємо ЗНИЗУ ВГОРУ, щоб номери рядків не зсувались
+      toDelete.sort(function(a, b){ return b - a; }).forEach(function(rn){ sheet.deleteRow(rn); });
+    }
+    Logger.log('[mergeSplitVacationRows] dryRun=%s | merge=%s skip=%s | відпусток=%s | рядків видалено=%s',
+      dryRun, mergedCount, skipped, vacMoved, dryRun ? 0 : toDelete.length);
+    return {ok:true, dryRun:dryRun, merged:mergedCount, skipped:skipped,
+            vacMoved:vacMoved, rowsDeleted:(dryRun ? 0 : toDelete.length), report:report};
+  } catch(e){
+    return {ok:false, error:String(e && e.message || e)};
+  } finally {
+    try { lock.releaseLock(); } catch(_){}
   }
 }
 
