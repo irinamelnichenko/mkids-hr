@@ -262,6 +262,25 @@ select,input,textarea{font-family:inherit}
 .loc-chk.on{background:#e8f8f0;border-color:var(--green);color:var(--green)}
 .loc-chk input{width:auto;margin:0}
 
+/* v7.20 — обʼєднання груп предметників (merge modal + клікабельні заголовки днів) */
+.mrg-hint{font-size:13px;color:var(--dark2);line-height:1.5;margin-bottom:12px}
+.mrg-grp-list{display:flex;flex-direction:column;gap:2px;max-height:340px;overflow-y:auto}
+.mrg-grp-row{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;
+  cursor:pointer;user-select:none;font-size:14px;color:var(--dark2)}
+.mrg-grp-row:hover{background:#f4f7fa}
+.mrg-grp-row input{width:auto;margin:0}
+.mrg-grp-row .glabel{flex:1}
+.mrg-grp-row .gtag{font-size:11px;font-weight:700;color:var(--green);
+  background:#e8f8f0;border-radius:10px;padding:2px 8px}
+.pred-th-day.clickable{cursor:pointer;transition:background .12s}
+.pred-th-day.clickable:hover{background:#eef5ff}
+.pred-th-day .mrg{display:block;font-size:10px;line-height:1;margin-top:2px}
+.pred-th-day .mrg.dim{opacity:.30}
+.pred-th-day.merged{background:#e8f0ff}
+.pred-mstatus{font-size:12px;font-weight:600;border-radius:8px;padding:7px 12px;margin:0 0 10px}
+.pred-mstatus.on{background:#eef5ff;color:#1e40af;border:1px solid #bfdbfe}
+.pred-mstatus.off{background:#fef2f2;color:#b91c1c;border:1px solid #fecaca}
+
 .err{background:#fdf2f2;border:1px solid #fca5a5;color:var(--red);
   padding:14px 18px;border-radius:var(--r);margin-bottom:18px;font-weight:600}
 .loading{display:flex;align-items:center;justify-content:center;padding:60px;
@@ -732,6 +751,24 @@ select,input,textarea{font-family:inherit}
   </div>
 </div>
 
+<!-- v7.20 — ОБʼЄДНАННЯ ГРУП ПРЕДМЕТНИКІВ (група×дата, схлопування у ЗП) -->
+<div id="predMergeModal" class="modal hidden" aria-hidden="true">
+  <div class="modal-overlay" onclick="closePredMerge()"></div>
+  <div class="modal-card">
+    <button class="modal-close" onclick="closePredMerge()" aria-label="Закрити">✕</button>
+    <div class="modal-hd"><h3 id="predMergeTitle">🔗 Обʼєднати групи</h3></div>
+    <div class="modal-bd">
+      <div class="mrg-hint" id="predMergeHint"></div>
+      <div class="mrg-grp-list" id="predMergeGrpList"></div>
+    </div>
+    <div class="modal-ft">
+      <button id="predMergeUnmergeBtn" class="btn btn-danger" style="margin-right:auto" onclick="unmergePredDay()">Розʼєднати</button>
+      <button class="btn btn-secondary" onclick="closePredMerge()">Скасувати</button>
+      <button class="btn btn-primary" onclick="savePredMerge()">Зберегти</button>
+    </div>
+  </div>
+</div>
+
 <div id="actToast" class="toast hidden"></div>
 
 <script>
@@ -795,6 +832,7 @@ var S = {
   lessons:     [],
   catalog:     [],
   assignments: [],
+  merges:      [],                       // v7.20: обʼєднання груп [{loc,subject,date(iso),groups}]
   locations:   [],
   // ── ui ──
   assignModal: null,
@@ -1257,7 +1295,161 @@ function loadPredmetnyky(){
     S.lessons     = res.lessons     || [];
     S.catalog     = res.catalog     || [];
     S.assignments = res.assignments || [];
+    S.merges      = res.predMerges  || [];
   });
+}
+
+// ═══ ОБʼЄДНАННЯ ГРУП ПРЕДМЕТНИКІВ (v7.20) ═══════════════════════════════════
+// Той самий session-key, що й у допівців: група×дата, обʼєднані одного дня групи
+// схлопуються в 1 заняття у ЗП. Ключ = (S.loc, S.subject, date). Директор клікає
+// заголовок дня → позначає групи, які предметник вів РАЗОМ. БЕЗ тижневого замка
+// (обʼєднання ≠ редагування уроку; директор проставляє будь-який місяць).
+var MRG = { iso: '', subject: '', busy: false };
+
+// Нормалізація групи — зберігає цифру-суфікс (Baby-ki ≠ Baby-ki 2). Дзеркало backend _dopNormGroup.
+function _predMrgNorm(s){ return String(s || '').trim().replace(/\s+/g, ' ').toLowerCase(); }
+
+// Знайти обʼєднання для (S.loc, subject, iso).
+function _predMergeForDay(iso, subject){
+  for (var i = 0; i < S.merges.length; i++){
+    var m = S.merges[i];
+    if (m.loc === S.loc && m.subject === subject && m.date === iso &&
+        Array.isArray(m.groups) && m.groups.length >= 2) return m;
+  }
+  return null;
+}
+
+function openPredMerge(dmy){
+  if (!canEditPred(S.loc)){ showToast('🚫 Немає дозволу', 'err'); return; }
+  if (!S.subject){ showToast('🚫 Оберіть предмет', 'err'); return; }
+  // v7.20: БЕЗ isWeekLocked — обʼєднання дозволене за будь-який місяць своєї локації.
+  MRG.iso = _dmyToIso(dmy);
+  MRG.subject = S.subject;
+  renderPredMerge();
+  $('predMergeModal').classList.remove('hidden');
+  $('predMergeModal').setAttribute('aria-hidden', 'false');
+  document.body.style.overflow = 'hidden';
+}
+
+function closePredMerge(){
+  $('predMergeModal').classList.add('hidden');
+  $('predMergeModal').setAttribute('aria-hidden', 'true');
+  document.body.style.overflow = '';
+  MRG.iso = ''; MRG.subject = '';
+}
+
+function renderPredMerge(){
+  var iso = MRG.iso, subject = MRG.subject;
+  var dmy = (function(){ var b = iso.split('-'); return b.length === 3 ? (b[2] + '.' + b[1] + '.' + b[0]) : iso; })();
+  $('predMergeTitle').innerHTML = '🔗 ' + escapeHtml(subject) + ' · ' + escapeHtml(S.loc) + ' · ' + escapeHtml(dmy);
+
+  var existing = _predMergeForDay(iso, subject);
+  var checked = {};
+  if (existing && Array.isArray(existing.groups)){
+    existing.groups.forEach(function(g){ checked[_predMrgNorm(g)] = true; });
+  }
+
+  // Список = реальні групи локації ∪ групи вже збереженого обʼєднання.
+  var groups = realGroupsFor(S.loc).slice();
+  if (existing){
+    existing.groups.forEach(function(g){
+      if (!groups.some(function(x){ return _predMrgNorm(x) === _predMrgNorm(g); })) groups.push(g);
+    });
+  }
+
+  $('predMergeHint').innerHTML = 'Позначте <b>групи</b>, які предметник вів <b>разом</b> цього дня (мін. 2) — вони порахуються як <b>одне заняття</b> у ЗП.';
+
+  var rows = '';
+  groups.forEach(function(g){
+    var nk = _predMrgNorm(g);
+    var isOn = !!checked[nk];
+    rows += '<label class="mrg-grp-row">' +
+      '<input type="checkbox" data-grp="' + escapeHtml(g) + '"' + (isOn ? ' checked' : '') + '>' +
+      '<span class="glabel">' + escapeHtml(g) + '</span>' +
+    '</label>';
+  });
+  if (!rows) rows = '<div class="muted" style="padding:8px">У локації немає груп.</div>';
+  $('predMergeGrpList').innerHTML = rows;
+
+  $('predMergeUnmergeBtn').style.display = existing ? '' : 'none';
+}
+
+function _predCollectGroups(){
+  var out = [], seen = {};
+  var boxes = $('predMergeGrpList').querySelectorAll('input[type="checkbox"]:checked');
+  for (var i = 0; i < boxes.length; i++){
+    var g = boxes[i].getAttribute('data-grp');
+    if (!g) continue;
+    var nk = _predMrgNorm(g);
+    if (seen[nk]) continue;
+    seen[nk] = true;
+    out.push(g);
+  }
+  return out;
+}
+
+function _predMarkerLabel(){
+  if (!S.user) return '';
+  var r = String(S.user.role || '');
+  return r + (S.loc ? (' (' + S.loc + ')') : '');
+}
+
+// Оптимістичний upsert у S.merges по (loc, subject, date).
+function _applyPredMergeLocal(iso, subject, groups){
+  var rec = null;
+  for (var i = 0; i < S.merges.length; i++){
+    if (S.merges[i].loc === S.loc && S.merges[i].subject === subject && S.merges[i].date === iso){ rec = S.merges[i]; break; }
+  }
+  if (rec){ rec.groups = groups.slice(); }
+  else S.merges.push({ id: 'local-' + Date.now(), loc: S.loc, subject: subject, date: iso, groups: groups.slice() });
+}
+
+async function savePredMerge(){
+  if (MRG.busy) return;
+  var iso = MRG.iso, subject = MRG.subject;
+  var groups = _predCollectGroups();
+  if (groups.length < 2){
+    showToast('⚠️ Позначте щонайменше 2 групи (зараз ' + groups.length + '), або «Розʼєднати»', 'err', 3000);
+    return;
+  }
+  MRG.busy = true;
+  var res;
+  try {
+    res = await apiPost({ action: 'savePredMerge', loc: S.loc, subject: subject, date: iso, groups: groups, by: _predMarkerLabel() });
+  } catch(e){ res = {ok: false, error: String(e && e.message || e)}; }
+  MRG.busy = false;
+  if (res && (res.ok || res._assumed)){
+    _applyPredMergeLocal(iso, subject, groups);
+    showToast('✓ Обʼєднано ' + groups.length + ' груп', 'ok', 2000);
+    closePredMerge();
+    renderApp();
+    if (typeof scheduleAutoExport === 'function') scheduleAutoExport(S.loc);
+  } else {
+    showToast('❌ ' + (res && res.error || 'Не вдалось зберегти'), 'err');
+  }
+}
+
+async function unmergePredDay(){
+  if (MRG.busy) return;
+  var iso = MRG.iso, subject = MRG.subject;
+  var existing = _predMergeForDay(iso, subject);
+  if (!existing){ closePredMerge(); return; }
+  MRG.busy = true;
+  var res;
+  try {
+    // groups<2 → бекенд знімає обʼєднання (видаляє рядок).
+    res = await apiPost({ action: 'savePredMerge', loc: S.loc, subject: subject, date: iso, groups: [] });
+  } catch(e){ res = {ok: false, error: String(e && e.message || e)}; }
+  MRG.busy = false;
+  if (res && (res.ok || res._assumed)){
+    S.merges = S.merges.filter(function(m){ return !(m.loc === S.loc && m.subject === subject && m.date === iso); });
+    showToast('✓ Розʼєднано', 'ok', 1800);
+    closePredMerge();
+    renderApp();
+    if (typeof scheduleAutoExport === 'function') scheduleAutoExport(S.loc);
+  } else {
+    showToast('❌ ' + (res && res.error || 'Не вдалось розʼєднати'), 'err');
+  }
 }
 
 // ── SELECTOR HELPERS (v6.11.2) ──────────────
@@ -1562,16 +1754,32 @@ function renderTable(loc, subject){
   });
 
   var gridCols = '160px repeat(' + nDays + ', minmax(36px, 1fr)) 90px';
-  var html = '<div class="pred-table-wrap"><div class="pred-table" style="grid-template-columns:' +
+
+  // ── Статус-банер обʼєднання (v7.20) — миттєвий сигнал: нова версія + права ──
+  var canMerge = canEdit;   // canEditPred(loc)
+  var mstatus = '<div class="pred-mstatus ' + (canMerge ? 'on' : 'off') + '">' +
+    (canMerge
+      ? '🔗 Обʼєднання днів АКТИВНЕ (build v7.20 · будь-який місяць) — клікни число дня вгорі, щоб звести групи предметника в 1 заняття'
+      : '🔗 Обʼєднання недоступне: роль «' + escapeHtml(String((S.user && S.user.role) || '?')) + '» без прав на цю локацію') +
+    '</div>';
+
+  var html = mstatus + '<div class="pred-table-wrap"><div class="pred-table" style="grid-template-columns:' +
               gridCols + '">';
 
-  // ── Header row ──
+  // ── Header row ── (v7.20: заголовок дня клікабельний → попап обʼєднання груп)
   html += '<div class="pred-th-cnr">Група / Дата</div>';
   days.forEach(function(D){
-    var cls = 'pred-th-day' + (D.isToday ? ' today' : '');
-    html += '<div class="' + cls + '">' +
+    var mrg = _predMergeForDay(_dmyToIso(D.dmy), subject);
+    var cls = 'pred-th-day' + (D.isToday ? ' today' : '') +
+              (canMerge ? ' clickable' : '') + (mrg ? ' merged' : '');
+    var tip = D.dmy + (canMerge ? ' · 🔗 клікни, щоб обʼєднати групи' : '') +
+              (mrg ? ' · разом: ' + mrg.groups.join(', ') : '');
+    html += '<div class="' + cls + '"' +
+      (canMerge ? ' onclick="openPredMerge(\'' + D.dmy + '\')"' : '') +
+      ' title="' + escapeHtml(tip) + '">' +
       '<span class="wd">' + D.wd + '</span>' +
       '<span class="dd">' + D.day + '</span>' +
+      (canMerge ? '<span class="mrg' + (mrg ? '' : ' dim') + '">🔗</span>' : '') +
     '</div>';
   });
   html += '<div class="pred-th-counter">Лічильник</div>';
