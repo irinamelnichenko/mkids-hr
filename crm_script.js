@@ -268,6 +268,7 @@ function doGet(e) {
     else if (action === 'getAttendanceMarks')         result = getAttendanceMarks(e.parameter || {});
     else if (action === 'getDopMerges')               result = getDopMerges(e.parameter || {});
     else if (action === 'getPredMerges')              result = getPredMerges(e.parameter || {});
+    else if (action === 'backupClients')              result = backupClientsAbsences();
     else if (action === 'getChomusykyMarks')          result = getChomusykyMarks(e.parameter || {});
     else if (action === 'getChomusykyReport')         result = getChomusykyReport(e.parameter || {});
     else if (action === 'getPredmetnyCatalog')        result = getPredmetnyCatalog(e.parameter && e.parameter.loc || '');
@@ -584,6 +585,7 @@ function saveClient(data) {
     // v6.47 — розвиток (append-only)
     JSON.stringify(data.development||{})
   ];
+  // Primary: точний збіг id → оновлюємо той самий рядок (звичайне редагування).
   for (var r = 1; r < vals.length; r++) {
     if (String(vals[r][0]) === String(data.id)) {
       row[29] = vals[r][29] || data.createdAt || now;
@@ -591,8 +593,76 @@ function saveClient(data) {
       return {ok:true, action:'updated'};
     }
   }
+  // v7.24 АНТИ-ДУБЛЬ: id містить ГРУПУ (c_<ПІБ>_<група>_<локація>) → зміна групи
+  // дає НОВИЙ id, і без цієї перевірки saveClient дописав би ДРУГИЙ рядок (дубль,
+  // через який договір і відпустки розʼїжджались по різних рядках). Якщо існує
+  // рядок ТІЄЇ Ж дитини (ПІБ+локація; дата народження або збігається, або
+  // відсутня — щоб не злити тезок) → ОНОВЛЮЄМО його (переносимо на нову групу),
+  // а absences ОБʼЄДНУЄМО (union), щоб не втратити відпустки при переводі.
+  var _nn = function(s){ return String(s || '').trim().toLowerCase().replace(/\s+/g, ' '); };
+  var wantName = _nn(data.name), wantLoc = _nn(data.loc), wantBday = String(data.bday || '').trim();
+  var cand = -1, candCount = 0;
+  for (var r2 = 1; r2 < vals.length; r2++) {
+    if (_nn(vals[r2][1]) !== wantName) continue;
+    if (_nn(vals[r2][2]) !== wantLoc)  continue;
+    var rowBday = String(vals[r2][5] || '').trim();
+    if (wantBday && rowBday && wantBday !== rowBday) continue;   // різні дати народження = тезки, не чіпаємо
+    candCount++;
+    if (cand < 0) cand = r2;
+  }
+  if (cand >= 0) {
+    if (candCount > 1) Logger.log('[saveClient] АНТИ-ДУБЛЬ: "%s" (%s) має %s рядків-кандидатів — оновлюю перший (row %s)', data.name, data.loc, candCount, cand + 1);
+    var existAbs = [];
+    try { existAbs = JSON.parse(String(vals[cand][16] || '[]')); } catch(e){}
+    var mergedAbs = _mergeAbsencesUnion(existAbs, data.absences || []);
+    row[16] = JSON.stringify(mergedAbs);
+    row[29] = vals[cand][29] || data.createdAt || now;
+    sheet.getRange(cand + 1, 1, 1, row.length).setValues([row]);
+    return {ok:true, action:'updated-moved', mergedAbsences: mergedAbs.length};
+  }
   sheet.appendRow(row);
   return {ok:true, action:'created'};
+}
+
+// Обʼєднання двох списків absences без втрат і без дублів. Ключ: id, інакше
+// from|to|type|note (щоб плейсхолдери з from/to=null теж дедуплікувались за текстом).
+function _mergeAbsencesUnion(a, b){
+  var out = [], seen = {};
+  function key(x){
+    if (x && x.id) return 'id:' + x.id;
+    return 'ft:' + String((x && x.from) || '') + '|' + String((x && x.to) || '') +
+           '|'  + String((x && x.type) || '') + '|' + String((x && x.note) || '');
+  }
+  (a || []).concat(b || []).forEach(function(x){
+    if (!x) return;
+    var k = key(x);
+    if (seen[k]) return;
+    seen[k] = true;
+    out.push(x);
+  });
+  return out;
+}
+
+// БЕКАП: повна копія листа Клієнти (з усіма absences) у новий лист з таймстампом.
+// Не змінює джерело. Запускати ПЕРЕД будь-яким злиттям рядків. Ідемпотентно-безпечно
+// (щоразу новий лист). Викликати через ?action=backupClients.
+function backupClientsAbsences(){
+  try {
+    var ss = getCRMSpreadsheet();
+    var src = ss.getSheetByName(SHEET_CLIENTS);
+    if (!src) return {ok:false, error:'Лист "' + SHEET_CLIENTS + '" не знайдено'};
+    var stamp = Utilities.formatDate(new Date(), 'Europe/Kiev', 'yyyy-MM-dd_HH-mm-ss');
+    var name  = 'Клієнти_BACKUP_' + stamp;
+    var copy  = src.copyTo(ss);
+    copy.setName(name);
+    ss.setActiveSheet(copy);
+    ss.moveActiveSheet(ss.getNumSheets());
+    var rows = Math.max(0, src.getLastRow() - 1);
+    Logger.log('[backupClientsAbsences] створено "%s", рядків=%s', name, rows);
+    return {ok:true, backupSheet:name, rows:rows, spreadsheet:ss.getId()};
+  } catch(e){
+    return {ok:false, error:String(e && e.message || e)};
+  }
 }
 
 // v6.26 Етап 1A — міграція: додає 4 нові колонки у Клієнти-аркуш якщо відсутні.
