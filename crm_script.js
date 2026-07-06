@@ -267,6 +267,7 @@ function doGet(e) {
     else if (action === 'getActivitiesCatalog')      result = getActivitiesCatalog(e.parameter && e.parameter.loc || '');
     else if (action === 'getAttendanceMarks')         result = getAttendanceMarks(e.parameter || {});
     else if (action === 'getDopMerges')               result = getDopMerges(e.parameter || {});
+    else if (action === 'getPredMerges')              result = getPredMerges(e.parameter || {});
     else if (action === 'getPredmetnyCatalog')        result = getPredmetnyCatalog(e.parameter && e.parameter.loc || '');
     else if (action === 'getPredmetnyMarks')          result = getPredmetnyMarks(e.parameter || {});
     else if (action === 'getTasks')                   result = getTasks(e.parameter || {});
@@ -320,6 +321,8 @@ function doPost(e) {
     else if (body.action === 'exportToSalaryExtras')      result = exportToSalaryExtras(body || {});
     else if (body.action === 'saveDopMerge')              result = saveDopMerge(body || {});
     else if (body.action === 'deleteDopMerge')            result = deleteDopMerge(body || {});
+    else if (body.action === 'savePredMerge')             result = savePredMerge(body || {});
+    else if (body.action === 'deletePredMerge')           result = deletePredMerge(body || {});
     else if (body.action === 'exportAttendance')          result = exportAttendance(body || {});
     else if (body.action === 'addPredmetny')              result = addPredmetny(body.data || {});
     else if (body.action === 'updatePredmetny')           result = updatePredmetny(body.id || 0, body.data || {});
@@ -4254,6 +4257,234 @@ function _dopCountSessions(groupsByDate, mergesForAct){
     total += sessions;
   });
   return total;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ПРЕДМЕТНИКИ · ОБʼЄДНАННЯ ГРУП (v7.20) — той самий session-key (група×дата),
+// що й у допівців, але ключ обʼєднання = (Локація, Предмет, Дата) замість
+// (Локація, id_заняття, Дата). Викладач-предметник інколи веде кілька груп
+// РАЗОМ одного дня (напр. Baby-ki + Baby-ki 2 звели в одне заняття) — це ОДНЕ
+// заняття у ЗП, не N. Аркуш "Predmetnyky_Обʼєднання":
+//   id | Локація | Предмет | Дата | Групи(JSON) | Ким | Коли
+// Дата зберігається ISO (YYYY-MM-DD), як у допівців. Нормалізація груп —
+// _dopNormGroup (зберігає цифру-суфікс: Baby-ki ≠ Baby-ki 2). Рахунок сесій —
+// _dopCountSessions (generic, спільна з допівцями).
+// ═══════════════════════════════════════════════════════════════════════════
+var PRED_MERGES_SHEET_NAME = 'Predmetnyky_Обʼєднання';
+var PRED_MERGES_HEADER = ['id','Локація','Предмет','Дата','Групи(JSON)','Ким','Коли'];
+
+function _getPredMergesSheet(createIfMissing){
+  var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var sh = ss.getSheetByName(PRED_MERGES_SHEET_NAME);
+  if (!sh && createIfMissing){
+    sh = ss.insertSheet(PRED_MERGES_SHEET_NAME);
+    sh.getRange(1, 1, 1, PRED_MERGES_HEADER.length).setValues([PRED_MERGES_HEADER]);
+    sh.setFrozenRows(1);
+  }
+  if (!sh) throw new Error('Sheet "' + PRED_MERGES_SHEET_NAME + '" не знайдено. Створіть лист з колонками: ' + PRED_MERGES_HEADER.join(', '));
+  return sh;
+}
+
+function _parsePredMergeRow(row){
+  return {
+    id:      Number(row[0]) || 0,
+    loc:     String(row[1] || '').trim(),
+    subject: String(row[2] || '').trim(),
+    date:    _dopDateISO(row[3]),                 // спільний хелпер із допівцями
+    groups:  _parseDopMergeGroups(row[4]),        // спільний парсер JSON/CSV
+    by:      String(row[5] || '').trim(),
+    at:      row[6] instanceof Date ? row[6].toISOString() : String(row[6] || '')
+  };
+}
+
+function _nextPredMergeId(sh){
+  var last = sh.getLastRow();
+  if (last < 2) return 1;
+  var lastId = Number(sh.getRange(last, 1).getValue()) || 0;
+  if (lastId > 0) return lastId + 1;
+  var ids = sh.getRange(2, 1, last - 1, 1).getValues();
+  var max = 0;
+  for (var i = 0; i < ids.length; i++){ var n = Number(ids[i][0]) || 0; if (n > max) max = n; }
+  return max + 1;
+}
+
+// GET: обʼєднання за фільтром (loc обовʼязковий; опц. subject / date / month+year / from-to).
+function getPredMerges(params){
+  try {
+    params = params || {};
+    var sh;
+    try { sh = _getPredMergesSheet(false); }
+    catch(e){ return {ok: true, items: []}; }
+    var data = sh.getDataRange().getValues();
+    if (data.length < 2) return {ok: true, items: []};
+
+    var fLoc  = String(params.loc || '').trim();
+    var fSubj = String(params.subject || '').trim();
+    var fDate = String(params.date || '').trim();
+    var monthPrefix = '';
+    if (params.year && params.month){
+      monthPrefix = String(Number(params.year)) + '-' + ('0' + Number(params.month)).slice(-2) + '-';
+    }
+    var fromISO = params.from ? String(params.from) : '';
+    var toISO   = params.to   ? String(params.to)   : '';
+
+    var items = [];
+    for (var i = 1; i < data.length; i++){
+      if (!data[i][0] && !data[i][1]) continue;
+      var m = _parsePredMergeRow(data[i]);
+      if (fLoc  && m.loc !== fLoc) continue;
+      if (fSubj && m.subject !== fSubj) continue;
+      if (fDate && m.date !== fDate) continue;
+      if (monthPrefix && m.date.indexOf(monthPrefix) !== 0) continue;
+      if (fromISO && m.date < fromISO) continue;
+      if (toISO   && m.date > toISO)   continue;
+      if (m.groups.length < 2) continue;
+      items.push(m);
+    }
+    return {ok: true, items: items};
+  } catch(e){
+    return {ok: false, error: String(e && e.message || e)};
+  }
+}
+
+// SAVE (upsert по loc+subject+date). groups<2 → знімаємо обʼєднання (delete).
+function savePredMerge(body){
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(30000); }
+  catch(e){ return {ok: false, error: 'LOCK_TIMEOUT: ' + (e && e.message || e)}; }
+  try {
+    body = body || {};
+    var loc  = String(body.loc || '').trim();
+    var subj = String(body.subject || '').trim();
+    var date = String(body.date || '').trim();
+    if (!loc || !subj || !date){
+      return {ok: false, error: 'Поля loc / subject / date обовʼязкові'};
+    }
+    var seen = {}, groups = [];
+    (Array.isArray(body.groups) ? body.groups : []).forEach(function(g){
+      var raw = String(g || '').trim();
+      if (!raw) return;
+      var nk = _dopNormGroup(raw);
+      if (seen[nk]) return;
+      seen[nk] = true;
+      groups.push(raw);
+    });
+
+    var sh = _getPredMergesSheet(true);
+    var data = sh.getDataRange().getValues();
+    var foundRow = -1;
+    for (var i = 1; i < data.length; i++){
+      var r = _parsePredMergeRow(data[i]);
+      if (r.loc === loc && r.subject === subj && r.date === date){ foundRow = i + 1; break; }
+    }
+
+    if (groups.length < 2){
+      if (foundRow > 0){ sh.deleteRow(foundRow); return {ok: true, removed: true, unmerged: true}; }
+      return {ok: true, removed: false, unmerged: true};
+    }
+
+    var by  = String(body.by || body.markedBy || '').trim();
+    var now = new Date();
+    if (foundRow > 0){
+      var id = Number(data[foundRow - 1][0]) || _nextPredMergeId(sh);
+      sh.getRange(foundRow, 1, 1, PRED_MERGES_HEADER.length).setValues([[
+        id, loc, subj, date, JSON.stringify(groups), by, now
+      ]]);
+      return {ok: true, id: id, updated: true, groups: groups};
+    } else {
+      var newId = _nextPredMergeId(sh);
+      sh.appendRow([newId, loc, subj, date, JSON.stringify(groups), by, now]);
+      return {ok: true, id: newId, created: true, groups: groups};
+    }
+  } catch(e){
+    return {ok: false, error: String(e && e.message || e)};
+  } finally {
+    try { lock.releaseLock(); } catch(_){}
+  }
+}
+
+// DELETE: по id АБО по (loc, subject, date).
+function deletePredMerge(body){
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(30000); }
+  catch(e){ return {ok: false, error: 'LOCK_TIMEOUT: ' + (e && e.message || e)}; }
+  try {
+    body = body || {};
+    var id   = Number(body.id) || 0;
+    var loc  = String(body.loc || '').trim();
+    var subj = String(body.subject || '').trim();
+    var date = String(body.date || '').trim();
+    if (!id && !(loc && subj && date)){
+      return {ok: false, error: 'Треба id АБО (loc + subject + date)'};
+    }
+    var sh;
+    try { sh = _getPredMergesSheet(false); }
+    catch(e){ return {ok: true, removed: false}; }
+    var data = sh.getDataRange().getValues();
+    for (var i = 1; i < data.length; i++){
+      var r = _parsePredMergeRow(data[i]);
+      var hit = id ? (r.id === id) : (r.loc === loc && r.subject === subj && r.date === date);
+      if (hit){ sh.deleteRow(i + 1); return {ok: true, removed: true}; }
+    }
+    return {ok: true, removed: false};
+  } catch(e){
+    return {ok: false, error: String(e && e.message || e)};
+  } finally {
+    try { lock.releaseLock(); } catch(_){}
+  }
+}
+
+// Завантажує merges локації у [dateFrom, dateTo) → { subjNormKey: { 'YYYY-MM-DD': [ [normGroup,...], ... ] } }
+// subjNormKey = _dopNormGroup(subject) — стійке співставлення з catalog.subject_norm/lessons.subject.
+function _loadPredMergesMap(loc, dateFrom, dateTo){
+  var map = {};
+  var sh;
+  try { sh = _getPredMergesSheet(false); }
+  catch(e){ return map; }
+  var data = sh.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++){
+    if (!data[i][1]) continue;
+    var m = _parsePredMergeRow(data[i]);
+    if (m.loc !== loc) continue;
+    if (dateFrom && m.date < dateFrom) continue;
+    if (dateTo   && m.date >= dateTo)  continue;
+    var normSet = m.groups.map(_dopNormGroup).filter(Boolean);
+    if (normSet.length < 2) continue;
+    var sk = _dopNormGroup(m.subject);
+    if (!map[sk]) map[sk] = {};
+    if (!map[sk][m.date]) map[sk][m.date] = [];
+    map[sk][m.date].push(normSet);
+  }
+  return map;
+}
+
+// Плоский список merges для фронту (сітка вантажить обʼєднання одним getPredmetnyky).
+// locFilter falsy → всі локації (мережеві ролі); рядок → лише ця локація.
+function _loadPredMergesList(locFilter){
+  var out = [];
+  var sh;
+  try { sh = _getPredMergesSheet(false); }
+  catch(e){ return out; }
+  var data = sh.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++){
+    if (!data[i][1]) continue;
+    var m = _parsePredMergeRow(data[i]);
+    if (locFilter && m.loc !== locFilter) continue;
+    if (m.groups.length < 2) continue;
+    out.push({id: m.id, loc: m.loc, subject: m.subject, date: m.date, groups: m.groups});
+  }
+  return out;
+}
+
+// DMY ("01.06.2026") або Date → ISO ("2026-06-01"). Для співставлення дат уроків з merges.
+function _predDateToISO(dateInput){
+  if (dateInput instanceof Date) return _dopDateISO(dateInput);
+  var s = String(dateInput || '').trim();
+  var dmy = /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/.exec(s);
+  if (dmy) return dmy[3] + '-' + ('0' + dmy[2]).slice(-2) + '-' + ('0' + dmy[1]).slice(-2);
+  var iso = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(s);
+  if (iso) return iso[1] + '-' + ('0' + iso[2]).slice(-2) + '-' + ('0' + iso[3]).slice(-2);
+  return s;
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -13525,6 +13756,7 @@ function getPredmetnyky(actorId){
       catalog:      _loadPredCatalog(scope),
       lessons:      _loadPredLessons(scope),
       assignments:  _loadPredAssignments(scope),
+      predMerges:   _loadPredMergesList(scope),       // v7.20: обʼєднання груп (для сітки)
       scope:        scope || 'all'
     };
   } catch(e){
@@ -14221,16 +14453,30 @@ function exportPredmetnykyToSalary(params){
               info:'No active catalog entries with rate for ' + loc, loc:loc};
     }
 
-    // 2. Lessons → унікальні (group|date) per subject_norm
+    // 2. Lessons → groupsByDate per subject (session-key = група×дата).
+    // v7.20: структура { subjNormKey: { 'YYYY-MM-DD': { normGroup: true } } } —
+    // рахунок через _dopCountSessions (обʼєднання схлопують групи одного дня в 1).
+    // subjNormKey = _dopNormGroup(subject) (стійке співставлення з subject_norm).
     var lessons = _loadPredLessons(loc);
-    var lessonsBySubj = {};
+    var gbdBySubj = {};
     for (var i = 0; i < lessons.length; i++){
       var L = lessons[i];
       var ym = _lessonYearMonth(L.date);
       if (!ym || ym.y !== year || ym.m !== month) continue;
-      if (!lessonsBySubj[L.subject]) lessonsBySubj[L.subject] = {};
-      lessonsBySubj[L.subject][L.group + '|' + L.date] = true;
+      var sk   = _dopNormGroup(L.subject);
+      var dIso = _predDateToISO(L.date);
+      var ng   = _dopNormGroup(L.group);
+      if (!gbdBySubj[sk]) gbdBySubj[sk] = {};
+      if (!gbdBySubj[sk][dIso]) gbdBySubj[sk][dIso] = {};
+      gbdBySubj[sk][dIso][ng] = true;
     }
+    // Обʼєднання предметників (session-key схлопування) за цей місяць.
+    var mm2 = month < 10 ? '0' + month : String(month);
+    var predDateFrom = year + '-' + mm2 + '-01';
+    var predNextM = _nextMonth(month, year);
+    var pnmm = predNextM.month < 10 ? '0' + predNextM.month : String(predNextM.month);
+    var predDateTo = predNextM.year + '-' + pnmm + '-01';
+    var predMergesMap = _loadPredMergesMap(loc, predDateFrom, predDateTo);
 
     // 3. Salary registry → файл локації
     var reg = _salaryGetRegistry();
@@ -14276,8 +14522,10 @@ function exportPredmetnykyToSalary(params){
     // ручні дані / старий v6.5 експорт залишили "забруднену" клітинку
     // і дельта-логіка (currentValue - 0 + fact) накопичувала суму.
     withRate.forEach(function(a){
-      var uniqMap = lessonsBySubj[a.subject_norm];
-      var uniq = uniqMap ? Object.keys(uniqMap).length : 0;
+      var sk   = _dopNormGroup(a.subject_norm);
+      var gbd  = gbdBySubj[sk] || {};
+      // v7.20: група×дата з урахуванням обʼєднань (схлопують групи одного дня в 1).
+      var uniq = _dopCountSessions(gbd, predMergesMap[sk] || {});
       var fact = uniq * a.rate;
       var catName = a.subject_raw + ' ' + a.rate;
       var nk = _journalNormName(catName);
