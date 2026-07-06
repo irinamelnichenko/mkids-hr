@@ -280,6 +280,8 @@ select,input,textarea{font-family:inherit}
 .pred-mstatus{font-size:12px;font-weight:600;border-radius:8px;padding:7px 12px;margin:0 0 10px}
 .pred-mstatus.on{background:#eef5ff;color:#1e40af;border:1px solid #bfdbfe}
 .pred-mstatus.off{background:#fef2f2;color:#b91c1c;border:1px solid #fecaca}
+.pred-merge-note{font-size:12px;font-weight:700;color:#1e40af;background:#eef5ff;
+  border-radius:8px;padding:1px 7px;margin-left:4px}
 
 .err{background:#fdf2f2;border:1px solid #fca5a5;color:var(--red);
   padding:14px 18px;border-radius:var(--r);margin-bottom:18px;font-weight:600}
@@ -1640,7 +1642,7 @@ function renderApp(){
   $('main').innerHTML = renderHeaderCard(S.loc, S.subject) +
                         renderTable(S.loc, S.subject) +
                         renderDangerZone(S.loc);
-  renderFilterCount(countTotalForPage(S.loc, S.subject));
+  renderFilterCount(_predSessionStats(S.loc, S.subject).merged);   // v7.22: merge-aware
 }
 
 function renderDangerZone(loc){
@@ -1672,13 +1674,62 @@ function renderFilterCount(n){
   $('filterCount').textContent = n + ' ' + pluralUk(n, 'заняття', 'заняття', 'занять');
 }
 
+// v7.22: к-сть ЗАНЯТЬ (сесій) для сторінки з урахуванням ОБʼЄДНАНЬ.
+// Сесія = унікальна (група × дата); обʼєднані одного дня групи схлопуються в 1
+// (точне дзеркало backend _dopCountSessions — те, що йде у ЗП Salary).
+// Повертає {raw: до обʼєднань, merged: після обʼєднань}.
+function _predSessionStats(loc, subject){
+  var gbd = {};   // {iso: {normGroup:true}}
+  for (var i = 0; i < S.lessons.length; i++){
+    var L = S.lessons[i];
+    if (L.loc !== loc || L.subject !== subject) continue;
+    var ym = lessonYM(L.date);
+    if (!ym || ym.y !== S.year || ym.m !== S.month) continue;
+    var iso = _dmyToIso(L.date);
+    if (!gbd[iso]) gbd[iso] = {};
+    gbd[iso][_predMrgNorm(L.group)] = true;
+  }
+  var mm = {};    // merges цього (loc, subject) у цьому місяці: {iso:[normSets]}
+  for (var j = 0; j < S.merges.length; j++){
+    var m = S.merges[j];
+    if (m.loc !== loc || m.subject !== subject) continue;
+    var dp = String(m.date).split('-');                 // yyyy-mm-dd
+    if (Number(dp[0]) !== S.year || Number(dp[1]) !== S.month) continue;
+    var ns = (m.groups || []).map(_predMrgNorm).filter(Boolean);
+    if (ns.length < 2) continue;
+    (mm[m.date] = mm[m.date] || []).push(ns);
+  }
+  function cnt(useMerges){
+    var total = 0;
+    Object.keys(gbd).forEach(function(date){
+      var present = gbd[date];
+      var sets = useMerges ? (mm[date] || []) : [];
+      var covered = {}, sess = 0;
+      sets.forEach(function(ms){
+        var any = false;
+        ms.forEach(function(g){ if (present[g]){ any = true; covered[g] = true; } });
+        if (any) sess++;
+      });
+      Object.keys(present).forEach(function(g){ if (!covered[g]) sess++; });
+      total += sess;
+    });
+    return total;
+  }
+  return { raw: cnt(false), merged: cnt(true) };
+}
+
 function renderHeaderCard(loc, subject){
   var canEdit = canEditPred(loc);
   var emoji   = SUBJECT_EMOJI[subject] || '📚';
   var assignment = assignmentFor(loc, subject);
   var teacher = assignment ? findTeacher(assignment.empKey) : null;
   var rate    = getRateFor(loc, subject);
-  var total   = countTotalForPage(loc, subject);
+  var _sess   = _predSessionStats(loc, subject);      // v7.22: merge-aware
+  var total   = _sess.merged;                          // «Разом» = ПІСЛЯ обʼєднань (= ЗП)
+  var _mergedOff = _sess.raw - _sess.merged;           // скільки схлопнуто
+  var _mergeNote = _mergedOff > 0
+    ? ' <span class="pred-merge-note">(−' + _mergedOff + ' обʼєднано)</span>'
+    : '';
 
   // ── Teacher row ──
   var teacherHtml;
@@ -1733,14 +1784,14 @@ function renderHeaderCard(loc, subject){
   if (rate != null){
     totalHtml = '<div class="pred-card-row pred-card-total">' +
       '<span class="pred-card-lbl">Разом за місяць:</span> ' +
-      '<strong>' + total + '</strong> ' + pluralUk(total, 'заняття', 'заняття', 'занять') +
+      '<strong>' + total + '</strong> ' + pluralUk(total, 'заняття', 'заняття', 'занять') + _mergeNote +
       ' × ' + fmtN(rate) + '₴ = ' +
       '<strong class="pred-card-sum">' + fmtN(total * rate) + '₴</strong>' +
     '</div>';
   } else {
     totalHtml = '<div class="pred-card-row pred-card-total">' +
       '<span class="pred-card-lbl">Разом за місяць:</span> ' +
-      '<strong>' + total + '</strong> ' + pluralUk(total, 'заняття', 'заняття', 'занять') +
+      '<strong>' + total + '</strong> ' + pluralUk(total, 'заняття', 'заняття', 'занять') + _mergeNote +
     '</div>';
   }
 
@@ -1785,7 +1836,7 @@ function renderTable(loc, subject){
   var canMerge = canEdit;   // canEditPred(loc)
   var mstatus = '<div class="pred-mstatus ' + (canMerge ? 'on' : 'off') + '">' +
     (canMerge
-      ? '🔗 Обʼєднання днів АКТИВНЕ (build v7.21 · будь-який місяць) — клікни число дня вгорі, щоб звести групи предметника в 1 заняття'
+      ? '🔗 Обʼєднання днів АКТИВНЕ (build v7.22 · лічильник враховує обʼєднання) — клікни число дня вгорі, щоб звести групи предметника в 1 заняття'
       : '🔗 Обʼєднання недоступне: роль «' + escapeHtml(String((S.user && S.user.role) || '?')) + '» без прав на цю локацію') +
     '</div>';
 
