@@ -6286,10 +6286,11 @@ function salaryReconcileApply(body){
     var month = Number(body.month) || (now.getMonth() + 1);
     var year  = Number(body.year)  || now.getFullYear();
     var factCol1 = (month - 1) * 3 + 2;                 // 1-based Факт-колонка (лип=T)
-    // ОКРУГЛЕННЯ суми до цілого (Іра всюди округляє). 'math' — математичне (за замовч.),
-    // 'up' — завжди вгору. Записуємо/логуємо вже округлене → revert знімає те саме.
-    var roundMode = String(body.roundMode || 'math').trim();
-    function roundAmt(x){ return roundMode === 'up' ? Math.ceil(x) : Math.round(x); }
+    // ОКРУГЛЕННЯ суми до цілого. Іра ЗАВЖДИ округлює ВГОРУ (ceil): 2668.05→2669,
+    // 2643.55→2644, 755.30→756. Дефолт 'up'; 'math' лишив як опцію на майбутнє.
+    // Записуємо/логуємо вже округлене → revert знімає те саме.
+    var roundMode = String(body.roundMode || 'up').trim();
+    function roundAmt(x){ return roundMode === 'math' ? Math.round(x) : Math.ceil(x); }
 
     var salIdx = _loadSalaryRowIndex([loc]);
     var reg = _salaryGetRegistry(); if (!reg.ok) return reg;
