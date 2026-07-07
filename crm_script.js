@@ -323,6 +323,7 @@ function doPost(e) {
     else if (body.action === 'exportAttendanceToPayments') result = exportAttendanceToPayments(body || {});
     else if (body.action === 'reconcilePreview')            result = reconcilePreview(body || {}); // v6.51 ФАЗА 1
     else if (body.action === 'salaryReconcilePreview')      result = salaryReconcilePreview(body || {}); // v7.26 ЗП preview
+    else if (body.action === 'salaryReconcileApply')        result = salaryReconcileApply(body || {});   // v7.26 ЗП apply/dryRun/revert
     else if (body.action === 'reconcileApply')              result = reconcileApply(body || {});   // v6.51.3 ФАЗА 2
     else if (body.action === 'exportToSalaryExtras')      result = exportToSalaryExtras(body || {});
     else if (body.action === 'saveDopMerge')              result = saveDopMerge(body || {});
@@ -6250,6 +6251,136 @@ function salaryReconcilePreview(body){
       ambiguous: cnt('ambiguous'), notFound: cnt('not-found'), noSalaryRow: cnt('no-salary-row')
     }};
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+// КРОК 2 — ЗАСТОСУВАННЯ: сума → Факт Salary (поточний місяць, +=), самозбір ІПН+картки
+// в картку (якщо порожні), дедуп по № відомості (VID|vidNo|ІПН), лог. dryRun за замовч.
+var SALARY_RECON_LOG = 'Звірка_ЗП_Лог';
+var SALARY_RECON_LOG_HEADER = ['Коли','Ким','Локація','№відомості','ПІБ(файл)','ІПН','Картка','Співробітник','Salary_рядок','Місяць','Було','Стало','Сума','ІПН_додано','Картка_додано','ДедупКлюч'];
+function _getSalaryReconLogSheet(){
+  var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var sh = ss.getSheetByName(SALARY_RECON_LOG);
+  if (!sh){ sh = ss.insertSheet(SALARY_RECON_LOG); sh.getRange(1,1,1,SALARY_RECON_LOG_HEADER.length).setValues([SALARY_RECON_LOG_HEADER]); sh.setFrozenRows(1); }
+  return sh;
+}
+
+// body = {loc, vidNo, by, month?, year?, mode:'dryRun'|'apply'|'revert', items:[...]}
+//   dryRun — показ без запису; apply — Факт += , запис ІПН/картки, лог, дедуп;
+//   revert — відняти суми цього vidNo з Факту (за логом) + видалити рядки логу
+//            (дедуп знімається), АЛЕ ІПН/картку в HR ЛИШИТИ.
+function salaryReconcileApply(body){
+  body = body || {};
+  var mode = String(body.mode || (body.dryRun ? 'dryRun' : 'dryRun')).trim();
+  var dryRun = (mode !== 'apply' && mode !== 'revert');
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(30000); }
+  catch(e){ return {ok:false, error:'LOCK_TIMEOUT: ' + (e && e.message || e)}; }
+  try {
+    var loc = String(body.loc || '').trim();
+    if (!loc) return {ok:false, error:'loc обовʼязковий'};
+    var vidNo = String(body.vidNo || '').trim();
+    if (!vidNo) return {ok:false, error:'№ відомості обовʼязковий (потрібен для дедупу)'};
+    var by = String(body.by || '?').trim();
+    var items = body.items || [];
+    var now = new Date();
+    var month = Number(body.month) || (now.getMonth() + 1);
+    var year  = Number(body.year)  || now.getFullYear();
+    var factCol1 = (month - 1) * 3 + 2;                 // 1-based Факт-колонка (лип=T)
+
+    var salIdx = _loadSalaryRowIndex([loc]);
+    var reg = _salaryGetRegistry(); if (!reg.ok) return reg;
+    var entry = null; reg.rows.forEach(function(r){ if (r.loc === loc && !entry) entry = r; });
+    if (!entry) return {ok:false, error:'Локація "' + loc + '" не в Salary-реєстрі'};
+    var salSh = SpreadsheetApp.openById(entry.sheetId).getSheetByName(entry.listName) || SpreadsheetApp.openById(entry.sheetId).getSheets()[0];
+    var hrSh = SpreadsheetApp.openById(HR_SHEET_ID).getSheetByName(HR_TAB_NAME);
+    var logSh = _getSalaryReconLogSheet();
+    var lv = logSh.getDataRange().getValues();
+
+    // ── REVERT: відкат сум за логом (loc+vidNo). ІПН/картку НЕ чіпаємо. ──
+    if (mode === 'revert'){
+      var repR = [], delRows = [], reverted = 0;
+      for (var ri = 1; ri < lv.length; ri++){
+        if (String(lv[ri][2]).trim() !== loc) continue;
+        if (String(lv[ri][3]).trim() !== vidNo) continue;
+        var salRaw = String(lv[ri][8] || '').trim();
+        var mon = Number(lv[ri][9]) || month;
+        var amt = Number(lv[ri][12]) || 0;
+        var fcol = (mon - 1) * 3 + 2;
+        var srr = (salIdx[loc] || []).filter(function(r){ return r.raw === salRaw; })[0];
+        var rr = {salaryRow: salRaw, amount: amt, month: mon};
+        if (!srr){ rr.status = 'skip (Salary-рядок не знайдено)'; repR.push(rr); continue; }
+        var curV = Number(toNum(salSh.getRange(srr.rowNum, fcol).getValue())) || 0;
+        var nvR = curV - amt;
+        rr.status = 'reverted'; rr.was = curV; rr.now = nvR;
+        repR.push(rr);
+        salSh.getRange(srr.rowNum, fcol).setValue(nvR);   // віднімаємо
+        delRows.push(ri + 1); reverted++;
+      }
+      delRows.sort(function(a, b){ return b - a; }).forEach(function(rn){ logSh.deleteRow(rn); });  // знімаємо дедуп
+      Logger.log('[salaryReconcileApply] REVERT loc=%s vid=%s | reverted=%s', loc, vidNo, reverted);
+      return {ok:true, mode:'revert', loc:loc, vidNo:vidNo, reverted:reverted, note:'ІПН/картку в HR лишено', report:repR};
+    }
+
+    var hr = _loadHrReconIndex(loc);
+    var applied = {};
+    for (var lr = 1; lr < lv.length; lr++){ var k = String(lv[lr][15] || '').trim(); if (k) applied[k] = true; }
+
+    function uniqList(arr){ var u = {}; (arr || []).forEach(function(e){ u[e.rowNum] = e; }); return Object.keys(u).map(function(k){ return u[k]; }); }
+    var factOverlay = {}, logRows = [], report = [];
+    var written = 0, skipped = 0, unmatched = 0;
+
+    items.forEach(function(it){
+      var ipn = _digitsOnly(it.ipn), nm = _normEmpNm(it.name), surn = nm.split(' ')[0];
+      var amount = Number(it.amount) || 0;
+      var dupKey = 'VID|' + vidNo + '|' + (ipn || nm);
+      var rep = {name: it.name, amount: amount};
+      if (applied[dupKey]){ skipped++; rep.status = 'skipped-dup'; report.push(rep); return; }
+
+      var emp = null, via = 'not-found';
+      if (it.empRowNum){ emp = uniqList(hr.all).filter(function(e){ return e.rowNum === Number(it.empRowNum); })[0] || null; if (emp) via = 'manual'; }
+      if (!emp){
+        if (ipn && hr.byIpn[ipn]){ emp = hr.byIpn[ipn]; via = 'ipn'; }
+        else {
+          var bf = uniqList(nm ? hr.byName[nm] : null);
+          if (bf.length === 1){ emp = bf[0]; via = 'name'; }
+          else if (bf.length > 1){ via = 'ambiguous'; }
+          else { var bs = uniqList(surn ? hr.bySurname[surn] : null);
+            if (bs.length === 1){ emp = bs[0]; via = 'surname'; }
+            else if (bs.length > 1){ via = 'ambiguous'; } }
+        }
+      }
+      if (!emp){ unmatched++; rep.status = (via === 'ambiguous') ? 'ambiguous' : 'not-found'; report.push(rep); return; }
+      var sr = _matchSalaryRow(salIdx[loc] || [], emp);
+      if (!sr){ unmatched++; rep.status = 'no-salary-row'; rep.emp = emp.last + ' ' + emp.first; report.push(rep); return; }
+
+      var salRow = sr.row.rowNum;
+      var prev = factOverlay.hasOwnProperty(salRow) ? factOverlay[salRow] : (Number(toNum(salSh.getRange(salRow, factCol1).getValue())) || 0);
+      var nv = prev + amount;
+      var addIpn  = !emp.ipn  && !!ipn;
+      var addCard = !emp.card && !!it.card;
+      rep.status = 'written'; rep.via = via; rep.emp = emp.pos + ' ' + emp.last + ' ' + emp.first;
+      rep.salaryRow = sr.row.raw; rep.prev = prev; rep.now = nv; rep.ipnAdd = addIpn; rep.cardAdd = addCard;
+      report.push(rep); written++;
+
+      if (!dryRun){
+        salSh.getRange(salRow, factCol1).setValue(nv); factOverlay[salRow] = nv;
+        if (addIpn)  hrSh.getRange(emp.rowNum, 25).setValue(ipn);
+        if (addCard) hrSh.getRange(emp.rowNum, 26).setValue(String(it.card || ''));
+        applied[dupKey] = true;
+        logRows.push([now, by, loc, vidNo, it.name, ipn, String(it.card || ''), emp.last + ' ' + emp.first, sr.row.raw, month, prev, nv, amount, addIpn ? 'так' : '', addCard ? 'так' : '', dupKey]);
+      }
+    });
+
+    if (!dryRun && logRows.length) logSh.getRange(logSh.getLastRow() + 1, 1, logRows.length, SALARY_RECON_LOG_HEADER.length).setValues(logRows);
+    Logger.log('[salaryReconcileApply] dryRun=%s loc=%s vid=%s | written=%s skip=%s unmatched=%s', dryRun, loc, vidNo, written, skipped, unmatched);
+    return {ok:true, dryRun:dryRun, loc:loc, vidNo:vidNo, month:month,
+            written:written, skipped:skipped, unmatched:unmatched,
+            ipnAdded: report.filter(function(r){ return r.ipnAdd; }).length,
+            cardAdded: report.filter(function(r){ return r.cardAdd; }).length,
+            sumWritten: report.filter(function(r){ return r.status === 'written'; }).reduce(function(s, r){ return s + (r.amount || 0); }, 0),
+            report:report};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { try { lock.releaseLock(); } catch(_){} }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
