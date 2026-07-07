@@ -6125,25 +6125,30 @@ function _normEmpNm(s){
 }
 function _digitsOnly(s){ return String(s || '').replace(/\D/g, ''); }
 
-// Індекс HR: byIpn (ІПН→картка) + byName (нормПІБ у 2 перестановках → [картки]).
-// Лише НЕ звільнені (archived=false).
-function _loadHrReconIndex(){
+// Індекс HR у МЕЖАХ ЛОКАЦІЇ (PDF = одна локація): byIpn (ІПН→картка) +
+// byName (нормПІБ у 2 перестановках → [картки]) + bySurname (лише прізвище).
+// Лише НЕ звільнені (archived=false) і loc === locFilter (якщо задано).
+function _loadHrReconIndex(locFilter){
   var sh = SpreadsheetApp.openById(HR_SHEET_ID).getSheetByName(HR_TAB_NAME);
   var last = sh.getLastRow();
-  var byIpn = {}, byName = {}, all = [];
-  if (last < 2) return {byIpn:byIpn, byName:byName, all:all};
+  var byIpn = {}, byName = {}, bySurname = {}, all = [];
+  if (last < 2) return {byIpn:byIpn, byName:byName, bySurname:bySurname, all:all};
+  var wantLoc = String(locFilter || '').trim();
   var data = sh.getRange(2, 1, last - 1, HR_COLS).getValues();
   for (var i = 0; i < data.length; i++){
     var e = _parseEmpRow(data[i], i + 2);
     if (!e.last && !e.first) continue;
     if (e.archived) continue;
+    if (wantLoc && e.loc !== wantLoc) continue;        // вузько: лише вибрана локація
     all.push(e);
     var ik = _digitsOnly(e.ipn);
     if (ik) byIpn[ik] = e;
     var k1 = _normEmpNm(e.last + ' ' + e.first), k2 = _normEmpNm(e.first + ' ' + e.last);
     [k1, k2].forEach(function(k){ if (!k) return; (byName[k] = byName[k] || []).push(e); });
+    var sk = _normEmpNm(e.last);
+    if (sk) (bySurname[sk] = bySurname[sk] || []).push(e);
   }
-  return {byIpn:byIpn, byName:byName, all:all};
+  return {byIpn:byIpn, byName:byName, bySurname:bySurname, all:all};
 }
 
 // Індекс Salary-рядків по локаціях (кожен файл відкриваємо 1 раз; рядки з A4).
@@ -6189,30 +6194,39 @@ function _matchSalaryRow(salaryRows, emp){
   return {row: hits[0], ambiguous: hits.length > 1};
 }
 
-// PREVIEW: body.items = [{name, ipn, card, amount, vidNo}]. Read-only.
+// PREVIEW: body = {loc, items:[{name, ipn, card, amount, vidNo}]}. Read-only.
+// loc ОБОВʼЯЗКОВИЙ (PDF = одна локація) — матч вузько в межах локації.
 function salaryReconcilePreview(body){
   try {
     body = body || {};
+    var loc = String(body.loc || '').trim();
+    if (!loc) return {ok:false, error:'Оберіть локацію (loc обовʼязковий)'};
     var items = body.items || [];
-    var hr = _loadHrReconIndex();
+    var hr = _loadHrReconIndex(loc);
 
+    function uniqList(arr){
+      var u = {}; (arr || []).forEach(function(e){ u[e.rowNum] = e; });
+      return Object.keys(u).map(function(k){ return u[k]; });
+    }
     var pre = items.map(function(it){
       var ipn = _digitsOnly(it.ipn), nm = _normEmpNm(it.name);
+      var surn = nm.split(' ')[0];
       var emp = null, via = 'not-found';
       if (ipn && hr.byIpn[ipn]){ emp = hr.byIpn[ipn]; via = 'ipn'; }
-      else if (nm && hr.byName[nm]){
-        var uniq = {};
-        hr.byName[nm].forEach(function(e){ uniq[e.rowNum] = e; });
-        var list = Object.keys(uniq).map(function(k){ return uniq[k]; });
-        if (list.length === 1){ emp = list[0]; via = 'name'; }
-        else { via = 'ambiguous'; }
+      else {
+        var byFull = uniqList(nm ? hr.byName[nm] : null);
+        if (byFull.length === 1){ emp = byFull[0]; via = 'name'; }
+        else if (byFull.length > 1){ via = 'ambiguous'; }
+        else {
+          var bySur = uniqList(surn ? hr.bySurname[surn] : null);   // fallback: лише прізвище в межах локації
+          if (bySur.length === 1){ emp = bySur[0]; via = 'surname'; }
+          else if (bySur.length > 1){ via = 'ambiguous'; }
+        }
       }
       return {it: it, emp: emp, via: via, ipn: ipn};
     });
 
-    var locs = [];
-    pre.forEach(function(p){ if (p.emp && p.emp.loc && locs.indexOf(p.emp.loc) < 0) locs.push(p.emp.loc); });
-    var salIdx = _loadSalaryRowIndex(locs);
+    var salIdx = _loadSalaryRowIndex([loc]);
 
     var rows = pre.map(function(p){
       var it = p.it, emp = p.emp;
