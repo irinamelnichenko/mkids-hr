@@ -200,6 +200,10 @@ select,input{font-family:inherit}
            onclick="window.location.href='reconcile.html'">
         <span class="ni">💳</span> Звірка платежів
       </div>
+      <div class="nav-item" id="navSalaryRecon" style="display:none"
+           onclick="window.location.href='salary_reconcile.html'">
+        <span class="ni">💰</span> Звірка ЗП
+      </div>
       <div class="nav-sec" data-section="crm">👶 КЛІЄНТИ CRM</div>
       <div class="nav-item" data-permission="clients_list" data-parent="crm" data-perm-page="clients"
            onclick="goPerm('clients_list')">
@@ -696,6 +700,7 @@ function applyRoleVisibility(){
   var _isNetFCRC = (typeof isNetworkRole === 'function' && isNetworkRole(role));
   var _fcEl = document.getElementById('navFillControl'); if (_fcEl) _fcEl.style.display = _isNetFCRC ? '' : 'none';
   var _rcEl = document.getElementById('navReconcile');   if (_rcEl) _rcEl.style.display = _isNetFCRC ? '' : 'none';
+  var _srEl = document.getElementById('navSalaryRecon'); if (_srEl) _srEl.style.display = _isNetFCRC ? '' : 'none';
   // v6.99: тимчасово приховано для director (доробляємо й відкриємо пізніше — повернути: скоротити список або видалити блок).
   // ЛИШЕ для director; інші ролі не зачіпаємо. Код вкладок/роутів не видаляємо.
   if (role === 'director'){

@@ -490,6 +490,10 @@ tr.emp-inc-green>td:first-child{border-left:4px solid transparent}
            onclick="window.location.href='reconcile.html'">
         <span class="ni">💳</span> Звірка платежів
       </div>
+      <div class="nav-item" id="navSalaryRecon" style="display:none"
+           onclick="window.location.href='salary_reconcile.html'">
+        <span class="ni">💰</span> Звірка ЗП
+      </div>
 
       <div class="nav-sec" data-section="crm">👶 КЛІЄНТИ CRM</div>
       <div class="nav-item" data-permission="clients_list" data-parent="crm" data-perm-page="clients"
@@ -2022,6 +2026,8 @@ function applyRoleVisibility(){
   if (_fc) _fc.style.display = _isNet ? '' : 'none';
   var _rc = document.getElementById('navReconcile');
   if (_rc) _rc.style.display = _isNet ? '' : 'none';
+  var _sr = document.getElementById('navSalaryRecon');
+  if (_sr) _sr.style.display = _isNet ? '' : 'none';
   // v6.99: тимчасово приховано для director (доробляємо й відкриємо пізніше — повернути: скоротити список або видалити блок).
   // ЛИШЕ для director; інші ролі не зачіпаємо. Код вкладок/роутів не видаляємо.
   if (role === 'director'){
