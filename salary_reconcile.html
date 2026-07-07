@@ -42,11 +42,13 @@ td.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
 .sumline b{color:var(--dark)}
 #toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--dark);color:#fff;padding:12px 20px;border-radius:8px;font-weight:600;z-index:99;opacity:0;transition:opacity .2s}
 #toast.show{opacity:1}
+.cash-note{background:#fff8e6;border:1px solid #f5d787;color:#8a6414;padding:10px 14px;border-radius:8px;margin-bottom:14px;font-size:13px}
 </style>
 </head>
 <body>
 <h1>💸 Автозвірка ЗП</h1>
-<div class="sub">Відомість розподілу виплат (PDF) → Факт Salary. Самозбір ІПН/картки. Округлення вгору. Готівку додаєш вручну зверху.</div>
+<div class="sub">Відомість розподілу виплат (PDF) → Факт Salary. Самозбір ІПН/картки. Округлення вгору.</div>
+<div class="cash-note">💵 <b>Готівку додайте ВРУЧНУ зверху</b> — автозвірка пише у Факт лише суму з картки (з PDF). Факт = картка (авто) + готівка (вручну).</div>
 
 <div class="card">
   <div class="row">
@@ -237,7 +239,11 @@ function renderPreview(j){
   html += '</tbody></table>';
   $('previewTbl').innerHTML = html;
   var s = j.summary;
-  $('previewSummary').innerHTML = 'Зматчено: <b>'+(s.ipnMatch+s.nameMatch)+'</b> · тезки: <b>'+s.ambiguous+'</b> · не знайдено: <b>'+s.notFound+'</b> · без Salary-рядка: <b>'+s.noSalaryRow+'</b> · сума (вгору): <b>'+PARSED.reduce(function(a,r){return a+Math.ceil(r.amount);},0)+'</b> грн';
+  var matched = s.ipnMatch + s.nameMatch;
+  $('previewSummary').innerHTML = 'Зматчено <b>'+matched+' з '+s.total+'</b> · сума (вгору): <b>'+PARSED.reduce(function(a,r){return a+Math.ceil(r.amount);},0)+'</b> грн'
+    + (s.ambiguous ? ' · ⚠ тезки: <b>'+s.ambiguous+'</b>' : '')
+    + (s.notFound ? ' · ❌ не знайдено: <b>'+s.notFound+'</b>' : '')
+    + (s.noSalaryRow ? ' · ⚠ без Salary-рядка: <b>'+s.noSalaryRow+'</b>' : '');
   $('previewCard').classList.remove('hidden');
   $('previewCard').scrollIntoView({behavior:'smooth'});
 }
@@ -256,10 +262,11 @@ function doApply(){
     $('btnApply').disabled = false; $('btnApply').textContent = '✅ Застосувати (записати у Факт)';
     if (!j || !(j.ok||j._assumed)){ toast('Помилка: '+(j&&j.error||'?')); return; }
     var ipnAdded = j.ipnAdded||0, cardAdded = j.cardAdded||0;
-    $('result').innerHTML = '<div class="card"><div class="ok">✅ Записано у Факт: <b>'+(j.written||0)+'</b> співробітників на <b>'+fmt(j.sumWritten||0)+'</b> грн'
+    $('result').innerHTML = '<div class="card"><div class="ok">✅ Записано у Факт: <b>'+(j.written||0)+' з '+PARSED.length+'</b> співробітників на <b>'+fmt(j.sumWritten||0)+'</b> грн'
       + (j.skipped ? ' · пропущено (дублі): '+j.skipped : '')
       + (j.unmatched ? ' · без матчу: '+j.unmatched : '') + '</div>'
-      + '<div class="sumline">Зібрано у картки: ІПН — <b>'+ipnAdded+'</b>, карток — <b>'+cardAdded+'</b>. Лог: аркуш «Звірка_ЗП_Лог».</div></div>';
+      + '<div class="sumline">Зібрано у картки: ІПН — <b>'+ipnAdded+'</b>, карток — <b>'+cardAdded+'</b>. Лог: аркуш «Звірка_ЗП_Лог».</div>'
+      + '<div class="cash-note" style="margin-top:10px">💵 Не забудь додати ГОТІВКУ вручну зверху у Факт (де є).</div></div>';
     $('result').scrollIntoView({behavior:'smooth'});
     toast('Готово');
   });
