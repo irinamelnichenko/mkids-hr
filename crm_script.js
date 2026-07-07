@@ -6231,12 +6231,11 @@ function salaryReconcilePreview(body){
 
     var rows = pre.map(function(p){
       var it = p.it, emp = p.emp;
-      var out = {name: it.name, ipnFile: it.ipn, cardFile: it.card, amount: Number(it.amount) || 0, via: p.via};
+      var out = {name: it.name, ipnFile: it.ipn, amount: Number(it.amount) || 0, via: p.via};
       if (!emp){ out.status = (p.via === 'ambiguous') ? 'ambiguous' : 'not-found'; return out; }
       out.emp = {last: emp.last, first: emp.first, pos: emp.pos, loc: emp.loc, rowNum: emp.rowNum};
       out.ipnInCard   = !!emp.ipn;
       out.ipnWillAdd  = !emp.ipn && !!p.ipn;
-      out.cardWillAdd = !emp.card && !!it.card;
       var sr = _matchSalaryRow(salIdx[emp.loc] || [], emp);
       if (!sr){ out.status = 'no-salary-row'; return out; }
       out.salaryRow = {rowNum: sr.row.rowNum, raw: sr.row.raw, ambiguous: sr.ambiguous};
@@ -6363,17 +6362,15 @@ function salaryReconcileApply(body){
       var prev = factOverlay.hasOwnProperty(salRow) ? factOverlay[salRow] : (Number(toNum(salSh.getRange(salRow, factCol1).getValue())) || 0);
       var nv = prev + amount;
       var addIpn  = !emp.ipn  && !!ipn;
-      var addCard = !emp.card && !!it.card;
       rep.status = 'written'; rep.via = via; rep.emp = emp.pos + ' ' + emp.last + ' ' + emp.first;
-      rep.salaryRow = sr.row.raw; rep.prev = prev; rep.now = nv; rep.ipnAdd = addIpn; rep.cardAdd = addCard;
+      rep.salaryRow = sr.row.raw; rep.prev = prev; rep.now = nv; rep.ipnAdd = addIpn;
       report.push(rep); written++;
 
       if (!dryRun){
         salSh.getRange(salRow, factCol1).setValue(nv); factOverlay[salRow] = nv;
-        if (addIpn)  hrSh.getRange(emp.rowNum, 25).setValue(ipn);
-        if (addCard) hrSh.getRange(emp.rowNum, 26).setValue(String(it.card || ''));
+        if (addIpn) hrSh.getRange(emp.rowNum, 25).setValue(ipn);   // самозбір лише ІПН (картку не збираємо)
         applied[dupKey] = true;
-        logRows.push([now, by, loc, vidNo, it.name, ipn, String(it.card || ''), emp.last + ' ' + emp.first, sr.row.raw, month, prev, nv, amount, addIpn ? 'так' : '', addCard ? 'так' : '', dupKey]);
+        logRows.push([now, by, loc, vidNo, it.name, ipn, '', emp.last + ' ' + emp.first, sr.row.raw, month, prev, nv, amount, addIpn ? 'так' : '', '', dupKey]);
       }
     });
 
@@ -6382,7 +6379,6 @@ function salaryReconcileApply(body){
     return {ok:true, dryRun:dryRun, loc:loc, vidNo:vidNo, month:month,
             written:written, skipped:skipped, unmatched:unmatched,
             ipnAdded: report.filter(function(r){ return r.ipnAdd; }).length,
-            cardAdded: report.filter(function(r){ return r.cardAdd; }).length,
             sumWritten: report.filter(function(r){ return r.status === 'written'; }).reduce(function(s, r){ return s + (r.amount || 0); }, 0),
             report:report};
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
