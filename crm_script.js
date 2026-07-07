@@ -52,7 +52,7 @@ var HR_TAB_NAME       = '2025-2026';
 //   S(19)=Паспорт, T(20)=Ставка ЗП, U(21)=Умови роботи, V(22)=Модель розрахунку.
 //   W(23)=Оцінка (JSON), X(24)=Дата виходу з декрету.
 //   Append-only: існуючі колонки не зсуваються.
-var HR_COLS           = 24;   // v6.59: +X='Дата виходу з декрету' (планована дата повернення)
+var HR_COLS           = 26;   // v7.26: +Y='ІПН' +Z='Картка' (авто-заповнення з відомості ЗП)
 var HR_AUDIT_SHEET    = 'HR_Audit';
 var HR_AUDIT_HEADER   = ['ts','actorId','actorName','action','rowNum','before_json','after_json'];
 
@@ -322,6 +322,7 @@ function doPost(e) {
     else if (body.action === 'bulkRemoveAttendanceMarks') result = bulkRemoveAttendanceMarks(body || {});
     else if (body.action === 'exportAttendanceToPayments') result = exportAttendanceToPayments(body || {});
     else if (body.action === 'reconcilePreview')            result = reconcilePreview(body || {}); // v6.51 ФАЗА 1
+    else if (body.action === 'salaryReconcilePreview')      result = salaryReconcilePreview(body || {}); // v7.26 ЗП preview
     else if (body.action === 'reconcileApply')              result = reconcileApply(body || {});   // v6.51.3 ФАЗА 2
     else if (body.action === 'exportToSalaryExtras')      result = exportToSalaryExtras(body || {});
     else if (body.action === 'saveDopMerge')              result = saveDopMerge(body || {});
@@ -6109,6 +6110,132 @@ function reconcileApply(body){
     return {ok:true, loc:loc, written:written, skipped:skipped, errors:errors, details:details};
   } catch(e){ return {ok:false, error: e.message || String(e)}; }
   finally { try { lock.releaseLock(); } catch(e){} }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// АВТОЗВІРКА ЗП з PDF "Відомість розподілу виплат" (v7.26, самонавчальна по ІПН).
+// Фронт парсить PDF (pdf.js) → рядки {name, ipn, card, amount, vidNo}. Бекенд:
+//   матч по ІПН (якщо вже в картці) → інакше по ПІБ → співробітник HR → локація →
+//   Salary-рядок. Заодно збирає ІПН/картку в картку. Переюз гомогліфів (_lat2cyr).
+// Крок 1 — PREVIEW (read-only): матч + статуси, БЕЗ записів.
+// ═══════════════════════════════════════════════════════════════════════════
+function _normEmpNm(s){
+  var t = String(s || '').replace(/[`'’ʼ]/g, '').toLowerCase().trim().replace(/\s+/g, ' ');
+  return _lat2cyr(t);                                   // латинські двійники → кирилиця
+}
+function _digitsOnly(s){ return String(s || '').replace(/\D/g, ''); }
+
+// Індекс HR: byIpn (ІПН→картка) + byName (нормПІБ у 2 перестановках → [картки]).
+// Лише НЕ звільнені (archived=false).
+function _loadHrReconIndex(){
+  var sh = SpreadsheetApp.openById(HR_SHEET_ID).getSheetByName(HR_TAB_NAME);
+  var last = sh.getLastRow();
+  var byIpn = {}, byName = {}, all = [];
+  if (last < 2) return {byIpn:byIpn, byName:byName, all:all};
+  var data = sh.getRange(2, 1, last - 1, HR_COLS).getValues();
+  for (var i = 0; i < data.length; i++){
+    var e = _parseEmpRow(data[i], i + 2);
+    if (!e.last && !e.first) continue;
+    if (e.archived) continue;
+    all.push(e);
+    var ik = _digitsOnly(e.ipn);
+    if (ik) byIpn[ik] = e;
+    var k1 = _normEmpNm(e.last + ' ' + e.first), k2 = _normEmpNm(e.first + ' ' + e.last);
+    [k1, k2].forEach(function(k){ if (!k) return; (byName[k] = byName[k] || []).push(e); });
+  }
+  return {byIpn:byIpn, byName:byName, all:all};
+}
+
+// Індекс Salary-рядків по локаціях (кожен файл відкриваємо 1 раз; рядки з A4).
+function _loadSalaryRowIndex(locs){
+  var reg = _salaryGetRegistry();
+  var byLoc = {};
+  if (!reg.ok) return byLoc;
+  var regByLoc = {};
+  reg.rows.forEach(function(r){ if (!regByLoc[r.loc]) regByLoc[r.loc] = r; });
+  locs.forEach(function(loc){
+    if (byLoc[loc]) return;
+    var entry = regByLoc[loc];
+    if (!entry){ byLoc[loc] = []; return; }
+    try {
+      var ss = SpreadsheetApp.openById(entry.sheetId);
+      var sh = ss.getSheetByName(entry.listName) || ss.getSheets()[0];
+      var lastR = sh.getLastRow();
+      var arr = [];
+      if (lastR >= 4){
+        var names = sh.getRange(4, 1, lastR - 3, 1).getValues();
+        for (var i = 0; i < names.length; i++){
+          var raw = String(names[i][0] || '').trim();
+          if (!raw) continue;
+          arr.push({rowNum: i + 4, raw: raw, norm: _normEmpNm(raw)});
+        }
+      }
+      byLoc[loc] = arr;
+    } catch(e){ byLoc[loc] = []; }
+  });
+  return byLoc;
+}
+
+// Salary-рядок для співробітника: norm-назва рядка містить і прізвище, і ім'я.
+// Заняття ("Англійська мова 250") не містять ПІБ → не матчаться. Повертає
+// {row, ambiguous} — ambiguous=true якщо кандидатів >1.
+function _matchSalaryRow(salaryRows, emp){
+  var ln = _normEmpNm(emp.last), fn = _normEmpNm(emp.first);
+  if (!ln) return null;
+  var hits = (salaryRows || []).filter(function(r){
+    return r.norm.indexOf(ln) >= 0 && (!fn || r.norm.indexOf(fn) >= 0);
+  });
+  if (!hits.length) return null;
+  return {row: hits[0], ambiguous: hits.length > 1};
+}
+
+// PREVIEW: body.items = [{name, ipn, card, amount, vidNo}]. Read-only.
+function salaryReconcilePreview(body){
+  try {
+    body = body || {};
+    var items = body.items || [];
+    var hr = _loadHrReconIndex();
+
+    var pre = items.map(function(it){
+      var ipn = _digitsOnly(it.ipn), nm = _normEmpNm(it.name);
+      var emp = null, via = 'not-found';
+      if (ipn && hr.byIpn[ipn]){ emp = hr.byIpn[ipn]; via = 'ipn'; }
+      else if (nm && hr.byName[nm]){
+        var uniq = {};
+        hr.byName[nm].forEach(function(e){ uniq[e.rowNum] = e; });
+        var list = Object.keys(uniq).map(function(k){ return uniq[k]; });
+        if (list.length === 1){ emp = list[0]; via = 'name'; }
+        else { via = 'ambiguous'; }
+      }
+      return {it: it, emp: emp, via: via, ipn: ipn};
+    });
+
+    var locs = [];
+    pre.forEach(function(p){ if (p.emp && p.emp.loc && locs.indexOf(p.emp.loc) < 0) locs.push(p.emp.loc); });
+    var salIdx = _loadSalaryRowIndex(locs);
+
+    var rows = pre.map(function(p){
+      var it = p.it, emp = p.emp;
+      var out = {name: it.name, ipnFile: it.ipn, cardFile: it.card, amount: Number(it.amount) || 0, via: p.via};
+      if (!emp){ out.status = (p.via === 'ambiguous') ? 'ambiguous' : 'not-found'; return out; }
+      out.emp = {last: emp.last, first: emp.first, pos: emp.pos, loc: emp.loc, rowNum: emp.rowNum};
+      out.ipnInCard   = !!emp.ipn;
+      out.ipnWillAdd  = !emp.ipn && !!p.ipn;
+      out.cardWillAdd = !emp.card && !!it.card;
+      var sr = _matchSalaryRow(salIdx[emp.loc] || [], emp);
+      if (!sr){ out.status = 'no-salary-row'; return out; }
+      out.salaryRow = {rowNum: sr.row.rowNum, raw: sr.row.raw, ambiguous: sr.ambiguous};
+      out.status = (p.via === 'ipn') ? 'ipn-match' : 'name-match';
+      return out;
+    });
+
+    var cnt = function(st){ return rows.filter(function(r){ return r.status === st; }).length; };
+    return {ok:true, rows:rows, summary:{
+      total: rows.length, sum: rows.reduce(function(s, r){ return s + (r.amount || 0); }, 0),
+      ipnMatch: cnt('ipn-match'), nameMatch: cnt('name-match'),
+      ambiguous: cnt('ambiguous'), notFound: cnt('not-found'), noSalaryRow: cnt('no-salary-row')
+    }};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -13284,6 +13411,8 @@ function _parseEmpRow(row, rowNum){
     calcModel: s(row[21]),   // V — Модель розрахунку (За заняття/За дитину/За захід)
     assessment: s(row[22]),  // W — Оцінка (JSON) v6.48
     matReturn: _fmtDateDmy(row[23]),  // X — Дата виходу з декрету v6.59
+    ipn:       s(row[24]),   // Y — ІПН/РНОКПП (авто зі звірки ЗП) v7.26
+    card:      s(row[25]),   // Z — Картка/IBAN (авто зі звірки ЗП) v7.26
     archived: fired !== ''
   };
 }
@@ -13501,7 +13630,7 @@ function saveEmployee(actorId, payload, rowNum){
 //   saveEmployee і так пише дані у S:V навіть без заголовків — це лише підписи.
 function migrateHrAddCardFields(){
   var sh = _getHrSheet();
-  var HEAD = { 19:'Паспорт', 20:'Ставка ЗП', 21:'Умови роботи', 22:'Модель розрахунку', 23:'Оцінка (JSON)', 24:'Дата виходу з декрету' };
+  var HEAD = { 19:'Паспорт', 20:'Ставка ЗП', 21:'Умови роботи', 22:'Модель розрахунку', 23:'Оцінка (JSON)', 24:'Дата виходу з декрету', 25:'ІПН', 26:'Картка' };
   var done = [];
   Object.keys(HEAD).forEach(function(col){
     col = Number(col);
