@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>m.kids — Автозвірка ЗП</title>
+<script src="pdf.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--green:#27ae60;--blue:#2980b9;--red:#c0392b;--orange:#e67e22;--dark:#1a2332;--dark2:#2c3e50;
+  --gray:#7f8c8d;--gray2:#bdc3c7;--bg:#f0f4f8;--white:#fff;--r:10px;--sh:0 2px 12px rgba(0,0,0,.08)}
+body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--dark2);font-size:14px;line-height:1.5;padding:16px;max-width:1100px;margin:0 auto}
+.hidden{display:none!important}
+h1{font-size:20px;color:var(--dark);margin-bottom:4px}
+.sub{color:var(--gray);font-size:12px;margin-bottom:16px}
+.card{background:var(--white);border-radius:var(--r);box-shadow:var(--sh);padding:16px;margin-bottom:14px}
+.row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+label{font-size:12px;font-weight:700;color:var(--gray);text-transform:uppercase;letter-spacing:.4px}
+select,input[type=text]{padding:9px 12px;border:1.5px solid var(--gray2);border-radius:8px;font-size:14px;background:#fff;color:var(--dark2)}
+.btn{padding:10px 18px;border:none;border-radius:8px;font-size:14px;font-weight:700;color:#fff;background:var(--blue);cursor:pointer}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn.green{background:var(--green)}
+.btn.gray{background:var(--gray)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{padding:7px 8px;border-bottom:1px solid #eef2f5;text-align:left;vertical-align:middle}
+th{font-size:11px;color:var(--gray);text-transform:uppercase}
+td.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+.badge{display:inline-block;font-size:11px;font-weight:700;border-radius:10px;padding:2px 8px;white-space:nowrap}
+.b-ipn{background:#e8f8f0;color:#1a7a44}
+.b-name{background:#e8f2fb;color:#1e5a8a}
+.b-surname{background:#fef6e7;color:#a86414}
+.b-amb{background:#fff4e5;color:#b5651d}
+.b-nf{background:#fdecea;color:#b03a2e}
+.b-nosal{background:#f0e6fb;color:#6b3fa0}
+.b-add{background:#eef5ff;color:#1e40af;margin-left:4px}
+.hint{font-size:12px;color:var(--gray);margin-top:6px;line-height:1.5}
+.err{background:#fdecea;border:1px solid #f5b7b1;color:var(--red);padding:10px 14px;border-radius:8px;margin:8px 0;font-weight:600}
+.ok{background:#e8f8f0;border:1px solid #a9dfbf;color:#1a7a44;padding:10px 14px;border-radius:8px;margin:8px 0;font-weight:600}
+.file-drop{border:2px dashed var(--gray2);border-radius:10px;padding:22px;text-align:center;color:var(--gray);cursor:pointer}
+.file-drop:hover{border-color:var(--blue);color:var(--blue)}
+.sumline{font-size:13px;color:var(--dark2);margin-top:8px}
+.sumline b{color:var(--dark)}
+#toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--dark);color:#fff;padding:12px 20px;border-radius:8px;font-weight:600;z-index:99;opacity:0;transition:opacity .2s}
+#toast.show{opacity:1}
+</style>
+</head>
+<body>
+<h1>💸 Автозвірка ЗП</h1>
+<div class="sub">Відомість розподілу виплат (PDF) → Факт Salary. Самозбір ІПН/картки. Округлення вгору. Готівку додаєш вручну зверху.</div>
+
+<div class="card">
+  <div class="row">
+    <div><label>Локація</label><br><select id="locSel"><option value="">— завантаження… —</option></select></div>
+    <div style="flex:1;min-width:220px"><label>№ відомості (для дедупу)</label><br><input type="text" id="vidNo" placeholder="напр. 260703PB..." style="width:100%"></div>
+  </div>
+  <div class="hint">1) Обери локацію (один PDF = одна локація). 2) Завантаж PDF-відомість. 3) Звір → Застосуй.</div>
+</div>
+
+<div class="card">
+  <label>PDF-відомість</label>
+  <div class="file-drop" id="drop" onclick="document.getElementById('pdfFile').click()">📄 Клікни або перетягни PDF «Відомість розподілу виплат»</div>
+  <input type="file" id="pdfFile" accept=".pdf" style="display:none" onchange="onPdf(this)">
+  <div id="parseInfo"></div>
+</div>
+
+<div class="card hidden" id="parsedCard">
+  <label>Розпізнано з PDF (перевір очима)</label>
+  <div id="parsedTbl"></div>
+  <div class="row" style="margin-top:12px">
+    <button class="btn" id="btnPreview" onclick="doPreview()">🔍 Звірити зі співробітниками</button>
+  </div>
+</div>
+
+<div class="card hidden" id="previewCard">
+  <label>Результат звірки</label>
+  <div id="previewTbl"></div>
+  <div id="previewSummary" class="sumline"></div>
+  <div class="row" style="margin-top:12px">
+    <button class="btn green" id="btnApply" onclick="doApply()">✅ Застосувати (записати у Факт)</button>
+    <button class="btn gray" onclick="location.reload()">Скасувати</button>
+  </div>
+  <div class="hint">Факт += округлена сума (вгору). Готівку не чіпає. Повторний PDF з тим самим № відомості не подвоїть.</div>
+</div>
+
+<div id="result"></div>
+<div id="toast"></div>
+
+<script>
+'use strict';
+var CFG = { SCRIPT_URL: 'https://script.google.com/macros/s/AKfycbyTSUVlaN4-PpXe47zCSmhVs0Qxy1FDXG_XsB4zcKNpqBxdhDtS9ibM4YFGkGjmPQDFWQ/exec' };
+if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdf.worker.min.js';
+
+var SESSION_KEY = 'mkids_session';
+function getUser(){ try { var s = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null'); return s && s.user ? s.user : null; } catch(e){ return null; } }
+function byLabel(){ var u = getUser(); return u ? (u.role + (u.loc ? ' (' + u.loc + ')' : '')) : 'Автозвірка ЗП'; }
+
+function $(id){ return document.getElementById(id); }
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];}); }
+function toast(m){ var t=$('toast'); t.textContent=m; t.classList.add('show'); setTimeout(function(){t.classList.remove('show');},2200); }
+function fmt(n){ return (Math.round(Number(n)||0)).toLocaleString('uk-UA'); }
+
+// ── стан ──
+var PARSED = [];        // [{name, ipn, card, amount}]
+var PREVIEW = null;     // відповідь salaryReconcilePreview
+var ROSTER = [];        // співробітники локації (для ручного вибору)
+
+// ── локації ──
+fetch(CFG.SCRIPT_URL + '?action=getLocations', {redirect:'follow'}).then(function(r){return r.json();}).then(function(j){
+  var sel = $('locSel');
+  if (!j.ok){ sel.innerHTML = '<option value="">помилка</option>'; return; }
+  sel.innerHTML = '<option value="">— оберіть локацію —</option>' + (j.data||[]).map(function(l){ return '<option>'+esc(l.loc)+'</option>'; }).join('');
+});
+
+// ── PDF ──
+function onPdf(input){
+  var f = input.files && input.files[0]; if (!f) return;
+  if (!window.pdfjsLib){ $('parseInfo').innerHTML = '<div class="err">❌ pdf.js не завантажено</div>'; return; }
+  $('parseInfo').innerHTML = '⏳ Читаю PDF…';
+  var fr = new FileReader();
+  fr.onload = function(){
+    pdfjsLib.getDocument({data: new Uint8Array(fr.result)}).promise.then(function(pdf){
+      var lines = [], fullText = '';
+      var chain = Promise.resolve();
+      for (var p = 1; p <= pdf.numPages; p++){
+        (function(pn){ chain = chain.then(function(){ return pdf.getPage(pn).then(function(page){ return page.getTextContent().then(function(tc){
+          // групуємо у рядки по y (transform[5]), сортуємо у рядку по x (transform[4])
+          var byY = {};
+          tc.items.forEach(function(it){
+            var y = Math.round(it.transform[5]);
+            (byY[y] = byY[y] || []).push({x: it.transform[4], s: it.str});
+          });
+          Object.keys(byY).map(Number).sort(function(a,b){return b-a;}).forEach(function(y){
+            var line = byY[y].sort(function(a,b){return a.x-b.x;}).map(function(o){return o.s;}).join(' ').replace(/\s+/g,' ').trim();
+            if (line){ lines.push(line); fullText += line + '\n'; }
+          });
+        }); }); }); })(p);
+      }
+      chain.then(function(){ parseVidomist(lines, fullText); });
+    }).catch(function(e){ $('parseInfo').innerHTML = '<div class="err">❌ Не читається PDF: '+esc(e.message||e)+'</div>'; });
+  };
+  fr.readAsArrayBuffer(f);
+}
+
+// Витяг рядків {name, ipn, card, amount} з тексту відомості (по патернах у рядку).
+function parseVidomist(lines, fullText){
+  var rows = [];
+  lines.forEach(function(line){
+    var mIpn = line.match(/\b(\d{10})\b/);          // РНОКПП = 10 цифр
+    if (!mIpn) return;
+    var ipn = mIpn[1];
+    // ім'я = кириличні слова ДО ІПН (без №/табельного)
+    var before = line.slice(0, mIpn.index);
+    var nameToks = (before.match(/[А-ЯІЇЄҐ][а-яіїєґ'’A-Za-z\-]+/g) || []);
+    var name = nameToks.slice(0,3).join(' ').trim();
+    // картка (маскована) після ІПН
+    var mCard = line.slice(mIpn.index).match(/(\d{4}[\s*]*\*{2,}[\s*]*\d{2,4}|\d{4}\*+\d+)/);
+    var card = mCard ? mCard[1].replace(/\s+/g,'') : '';
+    // сума = ОСТАННЄ число з копійками у рядку
+    var nums = line.match(/\d[\d ]*[.,]\d{2}/g) || [];
+    var amount = nums.length ? parseFloat(nums[nums.length-1].replace(/\s/g,'').replace(',','.')) : 0;
+    if (name && amount > 0) rows.push({name:name, ipn:ipn, card:card, amount:amount});
+  });
+  PARSED = rows;
+
+  // авто-детект № відомості
+  if (!$('vidNo').value){
+    var mv = fullText.match(/№\s*([0-9A-Za-zПБ]{6,})/) || fullText.match(/\b(\d{6}[A-Z]{2}\w+)/);
+    if (mv) $('vidNo').value = mv[1];
+  }
+
+  if (!rows.length){
+    $('parseInfo').innerHTML = '<div class="err">❌ Не витягнув жодного рядка. Перевір, що це «Відомість розподілу виплат» (з ІПН і сумами), а не список одержувачів.</div>';
+    $('parsedCard').classList.add('hidden'); return;
+  }
+  $('parseInfo').innerHTML = '<div class="ok">✅ Розпізнано '+rows.length+' рядків</div>';
+  var html = '<table><thead><tr><th>ПІБ</th><th>ІПН</th><th>Картка</th><th class="num">Сума (файл)</th><th class="num">→ вгору</th></tr></thead><tbody>';
+  var tot=0;
+  rows.forEach(function(r){ tot += Math.ceil(r.amount);
+    html += '<tr><td>'+esc(r.name)+'</td><td>'+esc(r.ipn)+'</td><td>'+esc(r.card||'—')+'</td><td class="num">'+r.amount.toFixed(2)+'</td><td class="num"><b>'+Math.ceil(r.amount)+'</b></td></tr>';
+  });
+  html += '</tbody></table>';
+  $('parsedTbl').innerHTML = html;
+  $('parsedCard').classList.remove('hidden');
+  $('previewCard').classList.add('hidden');
+}
+
+// ── звірка (preview) ──
+function post(body){
+  return fetch(CFG.SCRIPT_URL, {method:'POST', redirect:'follow', headers:{'Content-Type':'text/plain;charset=utf-8'}, body:JSON.stringify(body)})
+    .then(function(r){return r.text();}).then(function(t){ try{return JSON.parse(t);}catch(_){return {ok:true,_assumed:true};} });
+}
+
+function doPreview(){
+  var loc = $('locSel').value;
+  if (!loc){ toast('Обери локацію'); return; }
+  if (!PARSED.length){ toast('Нема розпізнаних рядків'); return; }
+  $('btnPreview').disabled = true; $('btnPreview').textContent = '⏳ Звіряю…';
+  // ростер локації (для ручного вибору)
+  var pRoster = fetch(CFG.SCRIPT_URL + '?action=getEmployees&actorId=1&loc=' + encodeURIComponent(loc), {redirect:'follow'})
+    .then(function(r){return r.json();}).then(function(j){ ROSTER = ((j.items||j.data||[])).filter(function(e){ return String(e.loc||'').trim()===loc && !String(e.fired||'').trim(); }); }).catch(function(){ ROSTER=[]; });
+  Promise.all([pRoster, post({action:'salaryReconcilePreview', loc:loc, items:PARSED})]).then(function(res){
+    var j = res[1];
+    $('btnPreview').disabled = false; $('btnPreview').textContent = '🔍 Звірити зі співробітниками';
+    if (!j || !j.ok){ toast('Помилка: ' + (j&&j.error||'?')); return; }
+    PREVIEW = j; renderPreview(j);
+  });
+}
+
+function badge(r){
+  if (r.status==='ipn-match') return '<span class="badge b-ipn">✅ по ІПН</span>';
+  if (r.status==='name-match') return r.via==='surname' ? '<span class="badge b-surname">⚠ по прізвищу</span>' : '<span class="badge b-name">✅ по ПІБ</span>';
+  if (r.status==='ambiguous') return '<span class="badge b-amb">⚠ тезки</span>';
+  if (r.status==='no-salary-row') return '<span class="badge b-nosal">⚠ нема Salary-рядка</span>';
+  return '<span class="badge b-nf">❌ не знайдено</span>';
+}
+function rosterOptions(sel){
+  return '<option value="">— обрати вручну —</option>' + ROSTER.map(function(e){
+    return '<option value="'+e.rowNum+'"'+(sel==e.rowNum?' selected':'')+'>'+esc((e.pos||'')+' '+(e.last||'')+' '+(e.first||''))+'</option>';
+  }).join('');
+}
+
+function renderPreview(j){
+  var html = '<table><thead><tr><th>ПІБ (файл)</th><th>Матч</th><th>Співробітник / Salary-рядок</th><th class="num">Сума→</th><th>Збір</th></tr></thead><tbody>';
+  j.rows.forEach(function(r, i){
+    var right;
+    if (r.emp){
+      right = esc(r.emp.pos+' '+r.emp.last+' '+r.emp.first) + '<br><span style="color:var(--gray);font-size:11px">'+ (r.salaryRow ? 'Salary: «'+esc(r.salaryRow.raw)+'»' : '⚠ Salary-рядок не знайдено') +'</span>';
+    } else {
+      right = '<select data-i="'+i+'" class="manualSel">'+rosterOptions('')+'</select>';
+    }
+    var add = [];
+    if (r.ipnWillAdd) add.push('<span class="badge b-add">+ІПН</span>');
+    if (r.cardWillAdd) add.push('<span class="badge b-add">+картка</span>');
+    if (r.ipnInCard) add.push('<span class="badge b-ipn">ІПН вже є</span>');
+    html += '<tr><td>'+esc(r.name)+'</td><td>'+badge(r)+'</td><td>'+right+'</td><td class="num"><b>'+Math.ceil(r.amount)+'</b></td><td>'+add.join(' ')+'</td></tr>';
+  });
+  html += '</tbody></table>';
+  $('previewTbl').innerHTML = html;
+  var s = j.summary;
+  $('previewSummary').innerHTML = 'Зматчено: <b>'+(s.ipnMatch+s.nameMatch)+'</b> · тезки: <b>'+s.ambiguous+'</b> · не знайдено: <b>'+s.notFound+'</b> · без Salary-рядка: <b>'+s.noSalaryRow+'</b> · сума (вгору): <b>'+PARSED.reduce(function(a,r){return a+Math.ceil(r.amount);},0)+'</b> грн';
+  $('previewCard').classList.remove('hidden');
+  $('previewCard').scrollIntoView({behavior:'smooth'});
+}
+
+// ── застосування ──
+function doApply(){
+  var loc = $('locSel').value, vid = $('vidNo').value.trim();
+  if (!vid){ toast('Впиши № відомості (для дедупу)'); $('vidNo').focus(); return; }
+  // збираємо items з ручними виборами
+  var manual = {};
+  document.querySelectorAll('.manualSel').forEach(function(sel){ if (sel.value) manual[sel.getAttribute('data-i')] = Number(sel.value); });
+  var items = PARSED.map(function(p, i){ var o = {name:p.name, ipn:p.ipn, card:p.card, amount:p.amount}; if (manual[i]) o.empRowNum = manual[i]; return o; });
+  if (!confirm('Записати у Факт Salary («'+loc+'»), відомість № '+vid+'?\nОкруглення ВГОРУ, накопичувально (+=), готівку не чіпає, дублі по № відомості пропускаються.')) return;
+  $('btnApply').disabled = true; $('btnApply').textContent = '⏳ Записую…';
+  post({action:'salaryReconcileApply', mode:'apply', loc:loc, vidNo:vid, by:byLabel(), roundMode:'up', items:items}).then(function(j){
+    $('btnApply').disabled = false; $('btnApply').textContent = '✅ Застосувати (записати у Факт)';
+    if (!j || !(j.ok||j._assumed)){ toast('Помилка: '+(j&&j.error||'?')); return; }
+    var ipnAdded = j.ipnAdded||0, cardAdded = j.cardAdded||0;
+    $('result').innerHTML = '<div class="card"><div class="ok">✅ Записано у Факт: <b>'+(j.written||0)+'</b> співробітників на <b>'+fmt(j.sumWritten||0)+'</b> грн'
+      + (j.skipped ? ' · пропущено (дублі): '+j.skipped : '')
+      + (j.unmatched ? ' · без матчу: '+j.unmatched : '') + '</div>'
+      + '<div class="sumline">Зібрано у картки: ІПН — <b>'+ipnAdded+'</b>, карток — <b>'+cardAdded+'</b>. Лог: аркуш «Звірка_ЗП_Лог».</div></div>';
+    $('result').scrollIntoView({behavior:'smooth'});
+    toast('Готово');
+  });
+}
+</script>
+</body>
+</html>
