@@ -6286,6 +6286,10 @@ function salaryReconcileApply(body){
     var month = Number(body.month) || (now.getMonth() + 1);
     var year  = Number(body.year)  || now.getFullYear();
     var factCol1 = (month - 1) * 3 + 2;                 // 1-based Факт-колонка (лип=T)
+    // ОКРУГЛЕННЯ суми до цілого (Іра всюди округляє). 'math' — математичне (за замовч.),
+    // 'up' — завжди вгору. Записуємо/логуємо вже округлене → revert знімає те саме.
+    var roundMode = String(body.roundMode || 'math').trim();
+    function roundAmt(x){ return roundMode === 'up' ? Math.ceil(x) : Math.round(x); }
 
     var salIdx = _loadSalaryRowIndex([loc]);
     var reg = _salaryGetRegistry(); if (!reg.ok) return reg;
@@ -6331,9 +6335,10 @@ function salaryReconcileApply(body){
 
     items.forEach(function(it){
       var ipn = _digitsOnly(it.ipn), nm = _normEmpNm(it.name), surn = nm.split(' ')[0];
-      var amount = Number(it.amount) || 0;
+      var amountRaw = Number(it.amount) || 0;
+      var amount = roundAmt(amountRaw);                 // ← пишемо ОКРУГЛЕНЕ (без копійок)
       var dupKey = 'VID|' + vidNo + '|' + (ipn || nm);
-      var rep = {name: it.name, amount: amount};
+      var rep = {name: it.name, amount: amount, amountRaw: amountRaw};
       if (applied[dupKey]){ skipped++; rep.status = 'skipped-dup'; report.push(rep); return; }
 
       var emp = null, via = 'not-found';
