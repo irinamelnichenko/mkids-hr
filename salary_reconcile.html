@@ -47,7 +47,7 @@ td.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
 </head>
 <body>
 <h1>💸 Автозвірка ЗП</h1>
-<div class="sub">Відомість розподілу виплат (PDF) → Факт Salary. Самозбір ІПН/картки. Округлення вгору.</div>
+<div class="sub">Відомість розподілу виплат (PDF) → Факт Salary. Самозбір ІПН. Округлення вгору.</div>
 <div class="cash-note">💵 <b>Готівку додайте ВРУЧНУ зверху</b> — автозвірка пише у Факт лише суму з картки (з PDF). Факт = картка (авто) + готівка (вручну).</div>
 
 <div class="card">
@@ -154,13 +154,10 @@ function parseVidomist(lines, fullText){
     var before = line.slice(0, mIpn.index);
     var nameToks = (before.match(/[А-ЯІЇЄҐ][а-яіїєґ'’A-Za-z\-]+/g) || []);
     var name = nameToks.slice(0,3).join(' ').trim();
-    // картка (маскована) після ІПН
-    var mCard = line.slice(mIpn.index).match(/(\d{4}[\s*]*\*{2,}[\s*]*\d{2,4}|\d{4}\*+\d+)/);
-    var card = mCard ? mCard[1].replace(/\s+/g,'') : '';
-    // сума = ОСТАННЄ число з копійками у рядку
+    // сума = ОСТАННЄ число з копійками у рядку (картку не тягнемо — ІПН достатньо)
     var nums = line.match(/\d[\d ]*[.,]\d{2}/g) || [];
     var amount = nums.length ? parseFloat(nums[nums.length-1].replace(/\s/g,'').replace(',','.')) : 0;
-    if (name && amount > 0) rows.push({name:name, ipn:ipn, card:card, amount:amount});
+    if (name && amount > 0) rows.push({name:name, ipn:ipn, amount:amount});
   });
   PARSED = rows;
 
@@ -175,10 +172,10 @@ function parseVidomist(lines, fullText){
     $('parsedCard').classList.add('hidden'); return;
   }
   $('parseInfo').innerHTML = '<div class="ok">✅ Розпізнано '+rows.length+' рядків</div>';
-  var html = '<table><thead><tr><th>ПІБ</th><th>ІПН</th><th>Картка</th><th class="num">Сума (файл)</th><th class="num">→ вгору</th></tr></thead><tbody>';
+  var html = '<table><thead><tr><th>ПІБ</th><th>ІПН</th><th class="num">Сума (файл)</th><th class="num">→ вгору</th></tr></thead><tbody>';
   var tot=0;
   rows.forEach(function(r){ tot += Math.ceil(r.amount);
-    html += '<tr><td>'+esc(r.name)+'</td><td>'+esc(r.ipn)+'</td><td>'+esc(r.card||'—')+'</td><td class="num">'+r.amount.toFixed(2)+'</td><td class="num"><b>'+Math.ceil(r.amount)+'</b></td></tr>';
+    html += '<tr><td>'+esc(r.name)+'</td><td>'+esc(r.ipn)+'</td><td class="num">'+r.amount.toFixed(2)+'</td><td class="num"><b>'+Math.ceil(r.amount)+'</b></td></tr>';
   });
   html += '</tbody></table>';
   $('parsedTbl').innerHTML = html;
@@ -232,7 +229,6 @@ function renderPreview(j){
     }
     var add = [];
     if (r.ipnWillAdd) add.push('<span class="badge b-add">+ІПН</span>');
-    if (r.cardWillAdd) add.push('<span class="badge b-add">+картка</span>');
     if (r.ipnInCard) add.push('<span class="badge b-ipn">ІПН вже є</span>');
     html += '<tr><td>'+esc(r.name)+'</td><td>'+badge(r)+'</td><td>'+right+'</td><td class="num"><b>'+Math.ceil(r.amount)+'</b></td><td>'+add.join(' ')+'</td></tr>';
   });
@@ -255,17 +251,17 @@ function doApply(){
   // збираємо items з ручними виборами
   var manual = {};
   document.querySelectorAll('.manualSel').forEach(function(sel){ if (sel.value) manual[sel.getAttribute('data-i')] = Number(sel.value); });
-  var items = PARSED.map(function(p, i){ var o = {name:p.name, ipn:p.ipn, card:p.card, amount:p.amount}; if (manual[i]) o.empRowNum = manual[i]; return o; });
+  var items = PARSED.map(function(p, i){ var o = {name:p.name, ipn:p.ipn, amount:p.amount}; if (manual[i]) o.empRowNum = manual[i]; return o; });
   if (!confirm('Записати у Факт Salary («'+loc+'»), відомість № '+vid+'?\nОкруглення ВГОРУ, накопичувально (+=), готівку не чіпає, дублі по № відомості пропускаються.')) return;
   $('btnApply').disabled = true; $('btnApply').textContent = '⏳ Записую…';
   post({action:'salaryReconcileApply', mode:'apply', loc:loc, vidNo:vid, by:byLabel(), roundMode:'up', items:items}).then(function(j){
     $('btnApply').disabled = false; $('btnApply').textContent = '✅ Застосувати (записати у Факт)';
     if (!j || !(j.ok||j._assumed)){ toast('Помилка: '+(j&&j.error||'?')); return; }
-    var ipnAdded = j.ipnAdded||0, cardAdded = j.cardAdded||0;
+    var ipnAdded = j.ipnAdded||0;
     $('result').innerHTML = '<div class="card"><div class="ok">✅ Записано у Факт: <b>'+(j.written||0)+' з '+PARSED.length+'</b> співробітників на <b>'+fmt(j.sumWritten||0)+'</b> грн'
       + (j.skipped ? ' · пропущено (дублі): '+j.skipped : '')
       + (j.unmatched ? ' · без матчу: '+j.unmatched : '') + '</div>'
-      + '<div class="sumline">Зібрано у картки: ІПН — <b>'+ipnAdded+'</b>, карток — <b>'+cardAdded+'</b>. Лог: аркуш «Звірка_ЗП_Лог».</div>'
+      + '<div class="sumline">Зібрано ІПН у картки: <b>'+ipnAdded+'</b>. Лог: аркуш «Звірка_ЗП_Лог».</div>'
       + '<div class="cash-note" style="margin-top:10px">💵 Не забудь додати ГОТІВКУ вручну зверху у Факт (де є).</div></div>';
     $('result').scrollIntoView({behavior:'smooth'});
     toast('Готово');
