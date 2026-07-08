@@ -958,6 +958,11 @@ select,input,textarea{font-family:inherit}
         <button class="ana-pb" data-period="year">Рік</button>
         <button class="ana-pb" data-period="custom">Період…</button>
       </div>
+      <div class="ana-month-nav hidden" id="anaMonthNav" style="display:flex;align-items:center;gap:8px">
+        <button class="attg-navbtn" data-anav="prev" title="Попередній місяць">‹</button>
+        <span class="attg-title" id="anaMonthLbl"></span>
+        <button class="attg-navbtn" data-anav="next" title="Наступний місяць">›</button>
+      </div>
       <div class="ana-custom hidden" id="anaCustom">
         <label>З</label>
         <input type="date" id="anaFrom" lang="uk">
@@ -3936,6 +3941,8 @@ function bindEventListeners(){
 var ANA = {
   initialized: false,
   period: 'week',
+  anaMonth: (new Date()).getMonth() + 1,   // вибраний місяць для періоду «Місяць» (дефолт поточний)
+  anaYear:  (new Date()).getFullYear(),
   customFrom: '',
   customTo: '',
   group: '',
@@ -3970,8 +3977,10 @@ function _periodRange(){
       fromD = new Date(now); fromD.setDate(now.getDate() - 6);
       return [_isoFromDate(fromD), to];
     case 'month':
-      fromD = new Date(now.getFullYear(), now.getMonth(), 1);
-      return [_isoFromDate(fromD), to];
+      // ВИБРАНИЙ місяць/рік (ANA.anaMonth/anaYear), повний місяць [1-ше..останнє].
+      var mF = new Date(ANA.anaYear, ANA.anaMonth - 1, 1);
+      var mT = new Date(ANA.anaYear, ANA.anaMonth, 0);
+      return [_isoFromDate(mF), _isoFromDate(mT)];
     case 'quarter':
       var qStartMonth = Math.floor(now.getMonth() / 3) * 3;
       fromD = new Date(now.getFullYear(), qStartMonth, 1);
@@ -3984,6 +3993,20 @@ function _periodRange(){
     default:
       return [to, to];
   }
+}
+
+// Лейбл «Липень 2026» у навігаторі періоду «Місяць».
+function _anaUpdMonthLbl(){
+  var el = document.getElementById('anaMonthLbl');
+  if (el) el.textContent = ATT_MONTHS_UA[ANA.anaMonth - 1] + ' ' + ANA.anaYear;
+}
+// Зміна вибраного місяця (з переходом через рік) → перерахунок Аналітики.
+function _anaChangeMonth(delta){
+  var m = ANA.anaMonth + delta, y = ANA.anaYear;
+  if (m < 1){ m = 12; y--; } else if (m > 12){ m = 1; y++; }
+  ANA.anaMonth = m; ANA.anaYear = y;
+  _anaUpdMonthLbl();
+  renderAnalytics();
 }
 
 async function initAnalyticsTab(){
@@ -4001,8 +4024,15 @@ async function initAnalyticsTab(){
       document.querySelectorAll('.ana-pb').forEach(function(x){ x.classList.toggle('active', x === b); });
       ANA.period = p;
       $('anaCustom').classList.toggle('hidden', p !== 'custom');
+      $('anaMonthNav').classList.toggle('hidden', p !== 'month');   // навігатор місяця лише для «Місяць»
+      if (p === 'month') _anaUpdMonthLbl();
       renderAnalytics();
     });
+  });
+  // Навігатор місяця (‹ Місяць Рік ›) — стрілки, як у вкладці «Відвідуваність».
+  _anaUpdMonthLbl();
+  document.querySelectorAll('#anaMonthNav [data-anav]').forEach(function(btn){
+    btn.addEventListener('click', function(){ _anaChangeMonth(this.dataset.anav === 'prev' ? -1 : 1); });
   });
 
   // Custom range default = current month
