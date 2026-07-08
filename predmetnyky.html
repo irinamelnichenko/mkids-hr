@@ -291,6 +291,27 @@ select,input,textarea{font-family:inherit}
 .chom-add select{padding:9px 12px;border:1.5px solid var(--gray2);border-radius:8px;
   font-size:14px;background:#fff;color:var(--dark2);min-width:280px;cursor:pointer}
 .pred-counter-cell.chom-over{color:#b91c1c;font-weight:800;background:#fef2f2}
+/* v7.31 — сітка Чомусиків у стилі «Відвідуваності» (activities.html): заокруглені клітинки */
+.attg-wrap{overflow-x:auto;background:#fff;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.06);padding:8px}
+.attg{display:grid;gap:2px;min-width:max-content}
+.attg-cnr{position:sticky;left:0;z-index:2;background:#f5f8fc;font-weight:700;font-size:12px;padding:6px 8px;display:flex;align-items:center;border-radius:6px}
+.attg-th{background:#f5f8fc;text-align:center;padding:4px 0;font-size:11px;line-height:1.15;border-radius:6px;position:relative}
+.attg-th.today{border-top:3px solid #2f80ed}
+.attg-th .wd{display:block;color:#8a97a6}
+.attg-th .dd{display:block;font-weight:800}
+.attg-cnt-h{display:flex;align-items:center;justify-content:center;font-weight:800;color:#33475b}
+.attg-name{position:sticky;left:0;z-index:1;background:#fff;font-size:13px;padding:5px 8px;white-space:nowrap;border-right:1px solid #eef2f7;display:flex;align-items:center;overflow:hidden;text-overflow:ellipsis;max-width:180px}
+.attg-cell{display:flex;align-items:center;justify-content:center;min-width:34px;height:30px;border-radius:6px;background:#fff;border:1px solid #eef2f7;cursor:pointer;font-size:13px;user-select:none;color:#c3ccd6}
+.attg-cell:hover{background:#f0f7ff}
+.attg-cell.on{background:#e8f8f0;border-color:#bce8d3;color:#1e8449}
+.attg-cell.today{border-top:2px solid #2f80ed}
+.attg-cell.disabled{opacity:.45;cursor:not-allowed;background:#f7f9fb}
+.attg-cell.on.disabled{opacity:1}
+.attg-cell.saving{opacity:.6;cursor:wait}
+.attg-cb{pointer-events:none}
+.attg-cnt{display:flex;align-items:center;justify-content:center;min-width:44px;height:30px;border-radius:6px;background:#f5f8fc;font-size:12px;font-weight:700;color:#33475b}
+.attg-cnt.maxed{background:#e8f8f0;color:#1e8449}
+.attg-cnt.over{background:#fdecec;color:#b3261e;font-weight:800}
 
 .err{background:#fdf2f2;border:1px solid #fca5a5;color:var(--red);
   padding:14px 18px;border-radius:var(--r);margin-bottom:18px;font-weight:600}
@@ -1730,28 +1751,29 @@ function renderChomusyky(loc){
   if (S.chomLoading && !children.length) return card + '<div class="loading"><div class="spinner"></div>Завантаження…</div>';
   if (!children.length) return card + '<div class="pred-empty">У групі «Чомусики» цієї локації нема дітей (перевір Payment).</div>';
 
+  // v7.31: клітинки у стилі «Відвідуваності» (activities.html) — .attg-*. Логіка та сама.
   var nDays = days.length;
-  var gridCols = '180px repeat(' + nDays + ', minmax(30px, 1fr)) 74px';
-  var html = card + '<div class="pred-table-wrap"><div class="pred-table" style="grid-template-columns:' + gridCols + '">';
-  html += '<div class="pred-th-cnr">Дитина \\ Дата</div>';
+  var gridCols = '180px repeat(' + nDays + ', minmax(34px, 1fr)) 56px';
+  var html = card + '<div class="attg-wrap"><div class="attg" style="grid-template-columns:' + gridCols + '">';
+  html += '<div class="attg-cnr">Дитина \\ Дата</div>';
   days.forEach(function(D){
-    html += '<div class="pred-th-day'+(D.isToday?' today':'')+'"><span class="wd">'+D.wd+'</span><span class="dd">'+D.day+'</span></div>';
+    html += '<div class="attg-th'+(D.isToday?' today':'')+'"><span class="wd">'+D.wd+'</span><span class="dd">'+D.day+'</span></div>';
   });
-  html += '<div class="pred-th-counter">X / '+inclVisits+'</div>';
+  html += '<div class="attg-th attg-cnt-h">X/'+inclVisits+'</div>';
   children.forEach(function(child){
-    html += '<div class="pred-row-grp"><div class="pred-grp-name" title="'+escapeHtml(child)+'">'+escapeHtml(child)+'</div></div>';
+    html += '<div class="attg-name" title="'+escapeHtml(child)+'">'+escapeHtml(child)+'</div>';
     days.forEach(function(D){
       var iso = _dmyToIso(D.dmy);
       var on = !!_chomMarkFor(child, iso);
       var saving = !!S.chomSaving[child+'|'+iso];
-      var cls = 'pred-cell-day'+(D.isToday?' today':'')+(on?' checked':'')+(!canEdit?' disabled':'')+(saving?' saving':'');
+      var cls = 'attg-cell'+(on?' on':'')+(D.isToday?' today':'')+(!canEdit?' disabled':'')+(saving?' saving':'');
       html += '<div class="'+cls+'"'+
         (canEdit && !saving ? ' onclick="toggleChomusyky(\''+escapeJs(child)+'\',\''+D.dmy+'\')"' : '')+
-        '>'+(on?'✅':'')+'</div>';
+        '><span class="attg-cb">'+(on?'✅':'')+'</span></div>';
     });
     var v = visits[child]||0;
-    var cCls = 'pred-counter-cell'+(v===inclVisits?' maxed':'')+(v>inclVisits?' chom-over':'');
-    html += '<div class="'+cCls+'">'+v+' / '+inclVisits+'</div>';
+    var cCls = 'attg-cnt'+(v===inclVisits?' maxed':'')+(v>inclVisits?' over':'');
+    html += '<div class="'+cCls+'">'+v+'/'+inclVisits+'</div>';
   });
   html += '</div></div>';
   return html;
