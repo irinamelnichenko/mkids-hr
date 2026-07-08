@@ -852,7 +852,7 @@ var S = {
   // ── v7.23: Чомусики (абонемент, дитина×дата) ──
   chomMarks:      [],                    // [{id,date(iso),loc,child}]
   chomChildrenByLoc: null,               // {loc: [child names]} з getPayments
-  chomSub:        {price: 1800, visits: 8},
+  chomSub:        {visits: 8},
   chomRoster:     [],                    // діти-рядки в сітці (з відмітками ∪ додані вручну)
   chomLoadedKey:  '',                    // 'loc|year|month' — щоб не перезавантажувати
   chomLoading:    false,
@@ -1653,20 +1653,25 @@ function countTotalForPage(loc, subject){
 }
 
 // ── RENDER ──────────────────────────────────
-// ═══ ЧОМУСИКИ · АБОНЕМЕНТ (v7.23) — дитина×дата, лічильник X/N, сума абонементів ═══
-// Окремий модуль: на відміну від решти предметників (група×дата), тут облік ПО ДІТЯХ
-// + клієнт платить фіксований абонемент за N відвідувань/місяць. БЕЗ тижневого замка
-// (нова фіча, бекфіл за минулі місяці). Дефолти 1800₴/8 — з бекенду (S.chomSub).
+// ═══ ЧОМУСИКИ (v7.30, фінальна модель) — дитина×дата, X/8, ЗП викладача за заняття ═══
+// Облік ПО ДІТЯХ групи "Чомусики" (з Payment). Лічильник X/8 — облік абонемента (показ).
+// ЗП викладача = унікальні ДНІ занять × ставку (350). Клієнта НЕ білимо (ціна в Payment).
 var CHOM_SUBJ = 'Чомусики';
+var CHOM_RATE = 350;                 // ставка викладача за заняття (превʼю; факт — з каталогу)
 function _chomKey(){ return S.loc + '|' + S.year + '|' + S.month; }
 function _chomVisitsByChild(){
   var by = {}; S.chomMarks.forEach(function(m){ by[m.child] = (by[m.child]||0)+1; }); return by;
 }
+// Рядки сітки = діти групи "Чомусики" (з Payment) ∪ будь-хто вже відмічений.
 function _chomRosterChildren(){
   var set = {};
+  _chomLocChildren().forEach(function(c){ set[c] = true; });
   S.chomMarks.forEach(function(m){ set[m.child] = true; });
-  S.chomRoster.forEach(function(c){ set[c] = true; });
   return Object.keys(set).sort(function(a,b){ return a.localeCompare(b,'uk'); });
+}
+// Унікальні ДНІ занять (день з ≥1 відміченою дитиною).
+function _chomUniqueDays(){
+  var d = {}; S.chomMarks.forEach(function(m){ d[m.date] = true; }); return Object.keys(d).length;
 }
 function _chomLocChildren(){ return (S.chomChildrenByLoc || {})[S.loc] || []; }
 function _chomMarkFor(child, iso){
@@ -1680,14 +1685,16 @@ async function _ensureChomData(){
   if (S.chomLoadedKey === key || S.chomLoading) return;
   S.chomLoading = true;
   try {
-    if (!S.chomChildrenByLoc){                       // ростер дітей локацій (getPayments, один раз)
+    if (!S.chomChildrenByLoc){                       // ростер = діти ГРУПИ "Чомусики" (getPayments, 1 раз)
       try {
         var pr = await apiGet('getPayments', {});
         var byLoc = {};
         (pr && pr.data || []).forEach(function(row){
           var loc = String(row['Локація']||'').trim();
+          var grp = String(row['Група']||'').trim();
           var name = String(row["Ім'я дитини"]||'').trim();
           if (!loc || !name) return;
+          if (grp.toLowerCase().indexOf('чомусик') === -1) return;   // лише група Чомусики
           if (!byLoc[loc]) byLoc[loc] = [];
           if (byLoc[loc].indexOf(name) === -1) byLoc[loc].push(name);
         });
@@ -1698,7 +1705,6 @@ async function _ensureChomData(){
     var mr = await apiGet('getChomusykyMarks', {loc: S.loc, year: S.year, month: S.month});
     S.chomMarks = (mr && mr.items) || [];
     if (mr && mr.subscription) S.chomSub = mr.subscription;
-    S.chomRoster = [];
     S.chomLoadedKey = key;
   } catch(e){ S.chomMarks = S.chomMarks || []; }
   finally { S.chomLoading = false; if (S.subject === CHOM_SUBJ) renderApp(); }
@@ -1709,36 +1715,29 @@ function renderChomusyky(loc){
   var days = buildDays(S.year, S.month);
   var children = _chomRosterChildren();
   var visits = _chomVisitsByChild();
-  var sub = S.chomSub || {price:1800, visits:8};
-  var subscribers = children.filter(function(c){ return (visits[c]||0) > 0; }).length;
-  var revenue = subscribers * sub.price;
+  var inclVisits = (S.chomSub && S.chomSub.visits) || 8;
+  var uniqueDays = _chomUniqueDays();
+  var salary = uniqueDays * CHOM_RATE;
 
   var card = '<div class="pred-card">' +
     '<div class="pred-card-title"><span class="pred-card-emoji">❓</span> Чомусики · ' + escapeHtml(loc) + ' · ' +
-      escapeHtml(MONTHS[S.month-1]) + ' ' + S.year + ' <span class="chom-badge">АБОНЕМЕНТ</span></div>' +
-    '<div class="pred-card-row"><span class="pred-card-lbl">Абонемент:</span> <strong>' + fmtN(sub.price) + '₴</strong>/міс за <strong>' + sub.visits + '</strong> відвідувань</div>' +
-    '<div class="pred-card-row pred-card-total"><span class="pred-card-lbl">Абонентів цього місяця:</span> <strong>' + subscribers + '</strong> × ' + fmtN(sub.price) + '₴ = <strong class="pred-card-sum">' + fmtN(revenue) + '₴</strong></div>' +
-    '<div class="chom-note">💡 Дефолт 1800₴ за 8 відвідувань — Іра скоригує. Клієнтський Payment поки НЕ пишеться (це превʼю суми).</div>' +
+      escapeHtml(MONTHS[S.month-1]) + ' ' + S.year + ' <span class="chom-badge">за заняття</span></div>' +
+    '<div class="pred-card-row"><span class="pred-card-lbl">Дітей (група Чомусики):</span> <strong>' + children.length + '</strong> · абонемент ' + inclVisits + ' занять/міс</div>' +
+    '<div class="pred-card-row pred-card-total"><span class="pred-card-lbl">Унікальних днів занять:</span> <strong>' + uniqueDays + '</strong> × ' + fmtN(CHOM_RATE) + '₴ = <strong class="pred-card-sum">ЗП ' + fmtN(salary) + '₴</strong></div>' +
+    '<div class="chom-note">💡 ЗП викладача = унікальні ДНІ × ' + CHOM_RATE + '₴ (за заняття, не за дитину). Клієнтський Payment НЕ чіпаємо — ціна абонемента фіксована, невідвідані згорають.</div>' +
   '</div>';
 
   if (S.chomLoading && !children.length) return card + '<div class="loading"><div class="spinner"></div>Завантаження…</div>';
-
-  var locKids = _chomLocChildren().filter(function(c){ return children.indexOf(c) === -1; });
-  var addHtml = canEdit ? ('<div class="chom-add"><select id="chomAddSel" onchange="chomAddChild(this.value)">' +
-    '<option value="">➕ Додати дитину-абонента…</option>' +
-    locKids.map(function(c){ return '<option value="'+escapeHtml(c)+'">'+escapeHtml(c)+'</option>'; }).join('') +
-    '</select></div>') : '';
-
-  if (!children.length) return card + addHtml + '<div class="pred-empty">Ще нема абонентів цього місяця. Додай дитину і познач відвідування 👆</div>';
+  if (!children.length) return card + '<div class="pred-empty">У групі «Чомусики» цієї локації нема дітей (перевір Payment).</div>';
 
   var nDays = days.length;
   var gridCols = '180px repeat(' + nDays + ', minmax(30px, 1fr)) 74px';
-  var html = card + addHtml + '<div class="pred-table-wrap"><div class="pred-table" style="grid-template-columns:' + gridCols + '">';
+  var html = card + '<div class="pred-table-wrap"><div class="pred-table" style="grid-template-columns:' + gridCols + '">';
   html += '<div class="pred-th-cnr">Дитина \\ Дата</div>';
   days.forEach(function(D){
     html += '<div class="pred-th-day'+(D.isToday?' today':'')+'"><span class="wd">'+D.wd+'</span><span class="dd">'+D.day+'</span></div>';
   });
-  html += '<div class="pred-th-counter">X / '+sub.visits+'</div>';
+  html += '<div class="pred-th-counter">X / '+inclVisits+'</div>';
   children.forEach(function(child){
     html += '<div class="pred-row-grp"><div class="pred-grp-name" title="'+escapeHtml(child)+'">'+escapeHtml(child)+'</div></div>';
     days.forEach(function(D){
@@ -1751,8 +1750,8 @@ function renderChomusyky(loc){
         '>'+(on?'✅':'')+'</div>';
     });
     var v = visits[child]||0;
-    var cCls = 'pred-counter-cell'+(v>=sub.visits && v<=sub.visits?' maxed':'')+(v>sub.visits?' chom-over':'');
-    html += '<div class="'+cCls+'">'+v+' / '+sub.visits+'</div>';
+    var cCls = 'pred-counter-cell'+(v===inclVisits?' maxed':'')+(v>inclVisits?' chom-over':'');
+    html += '<div class="'+cCls+'">'+v+' / '+inclVisits+'</div>';
   });
   html += '</div></div>';
   return html;
