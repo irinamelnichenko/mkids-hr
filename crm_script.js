@@ -6240,6 +6240,7 @@ function salaryReconcilePreview(body){
     });
 
     var salIdx = _loadSalaryRowIndex([loc]);
+    var reconMap = _loadSalaryReconMap();               // Етап3: збережені прив'язки emp→рядок
 
     var rows = pre.map(function(p){
       var it = p.it, emp = p.emp;
@@ -6248,6 +6249,18 @@ function salaryReconcilePreview(body){
       out.emp = {last: emp.last, first: emp.first, pos: emp.pos, loc: emp.loc, rowNum: emp.rowNum};
       out.ipnInCard   = !!emp.ipn;
       out.ipnWillAdd  = !emp.ipn && !!p.ipn;
+      // 1) збережена прив'язка (Звірка_Мапа) → показуємо як зматчено (запамʼятано)
+      var mapped = reconMap[loc + '||' + emp.rowNum];
+      if (mapped){
+        var mrow = (salIdx[loc] || []).filter(function(r){ return r.rowNum === Number(mapped); })[0];
+        if (mrow){
+          out.salaryRow = {rowNum: mrow.rowNum, raw: mrow.raw, ambiguous: false};
+          out.mapped = true;
+          out.status = (p.via === 'ipn') ? 'ipn-match' : 'name-match';
+          return out;
+        }
+      }
+      // 2) матч за ПІБ
       var sr = _matchSalaryRow(salIdx[emp.loc] || [], emp);
       if (!sr){ out.status = 'no-salary-row'; return out; }
       out.salaryRow = {rowNum: sr.row.rowNum, raw: sr.row.raw, ambiguous: sr.ambiguous};
@@ -6273,6 +6286,42 @@ function _getSalaryReconLogSheet(){
   var sh = ss.getSheetByName(SALARY_RECON_LOG);
   if (!sh){ sh = ss.insertSheet(SALARY_RECON_LOG); sh.getRange(1,1,1,SALARY_RECON_LOG_HEADER.length).setValues([SALARY_RECON_LOG_HEADER]); sh.setFrozenRows(1); }
   return sh;
+}
+
+// v7.34 Етап3: МАПА прив'язок співробітник→Salary-рядок. Раз вказавши рядок для
+// співробітника, наступного разу автозвірка матчить його авто (обхід _matchSalaryRow).
+var SALARY_RECON_MAP = 'Звірка_Мапа';
+var SALARY_RECON_MAP_HEADER = ['Локація','empRowNum','ПІБ','salaryRowNum','Коли','Ким'];
+function _getSalaryReconMapSheet(){
+  var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var sh = ss.getSheetByName(SALARY_RECON_MAP);
+  if (!sh){ sh = ss.insertSheet(SALARY_RECON_MAP); sh.getRange(1,1,1,SALARY_RECON_MAP_HEADER.length).setValues([SALARY_RECON_MAP_HEADER]); sh.setFrozenRows(1); }
+  return sh;
+}
+// Мапа {"loc||empRowNum": salaryRowNum}. Остання прив'язка виграє.
+function _loadSalaryReconMap(){
+  var v = _getSalaryReconMapSheet().getDataRange().getValues();
+  var map = {};
+  for (var i = 1; i < v.length; i++){
+    var loc = String(v[i][0] || '').trim();
+    var emp = Number(v[i][1]) || 0;
+    var sal = Number(v[i][3]) || 0;
+    if (!loc || !emp || !sal) continue;
+    map[loc + '||' + emp] = sal;
+  }
+  return map;
+}
+// Upsert прив'язки (loc, empRowNum → salaryRowNum) по ключу (loc,empRowNum).
+function _saveSalaryReconMap(loc, empRowNum, pib, salaryRowNum, by, now){
+  var sh = _getSalaryReconMapSheet();
+  var v = sh.getDataRange().getValues();
+  for (var i = 1; i < v.length; i++){
+    if (String(v[i][0]||'').trim() === loc && (Number(v[i][1])||0) === Number(empRowNum)){
+      sh.getRange(i+1, 1, 1, SALARY_RECON_MAP_HEADER.length).setValues([[loc, Number(empRowNum), pib, Number(salaryRowNum), now, by]]);
+      return;
+    }
+  }
+  sh.appendRow([loc, Number(empRowNum), pib, Number(salaryRowNum), now, by]);
 }
 
 // body = {loc, vidNo, by, month?, year?, mode:'dryRun'|'apply'|'revert', items:[...]}
@@ -6342,8 +6391,10 @@ function salaryReconcileApply(body){
     for (var lr = 1; lr < lv.length; lr++){ var k = String(lv[lr][15] || '').trim(); if (k) applied[k] = true; }
 
     function uniqList(arr){ var u = {}; (arr || []).forEach(function(e){ u[e.rowNum] = e; }); return Object.keys(u).map(function(k){ return u[k]; }); }
-    var factOverlay = {}, logRows = [], report = [];
-    var written = 0, skipped = 0, unmatched = 0, noSalaryRow = 0;
+    function _findSalRow(rn){ return (salIdx[loc] || []).filter(function(r){ return r.rowNum === Number(rn); })[0] || null; }
+    var reconMap = _loadSalaryReconMap();            // Етап3: збережені прив'язки emp→рядок
+    var factOverlay = {}, logRows = [], report = [], bindingsSaved = [];
+    var written = 0, skipped = 0, unmatched = 0, noSalaryRow = 0, needSalaryRow = 0;
 
     items.forEach(function(it){
       var ipn = _digitsOnly(it.ipn), nm = _normEmpNm(it.name), surn = nm.split(' ')[0];
@@ -6366,33 +6417,49 @@ function salaryReconcileApply(body){
             else if (bs.length > 1){ via = 'ambiguous'; } }
         }
       }
-      // ── Ціль запису у Salary ──
-      // Етап2: ЯВНИЙ ручний вибір Salary-рядка (salaryRowNum) має ПРІОРИТЕТ і
-      // пише ПРЯМО в цей рядок, ОБХОДЯЧИ _matchSalaryRow (для викладачів/іншого
-      // написання ПІБ). Пише навіть якщо співробітника взагалі не резолвнуто.
+      // ── Ціль запису у Salary (Етап3, пріоритети) ──
+      // 1) ЯВНИЙ salaryRowNum у payload → пиши туди + ЗАПАМʼЯТАЙ прив'язку emp→рядок.
+      // 2) Збережена прив'язка (Звірка_Мапа) для (loc, empRowNum) → авто в той рядок.
+      // 3) _matchSalaryRow за ПІБ (як раніше).
+      // 4) Нема — статус 'need-salary-row' (вкажи рядок один раз), без тихого пропуску.
       var manualSalRowNum = Number(it.salaryRowNum) || 0;
-      var sr = null, writeVia = via;
+      var sr = null, writeVia = via, bindSaved = false;
+
+      // 1) явний вибір рядка + збереження прив'язки
       if (manualSalRowNum){
-        var srow = (salIdx[loc] || []).filter(function(r){ return r.rowNum === manualSalRowNum; })[0] || null;
-        if (srow){ sr = {row: srow, ambiguous: false}; writeVia = 'manual-row'; }
-      }
-      if (!sr){
-        // Без ручного Salary-рядка — потрібен співробітник, далі матч за ПІБ (як раніше).
-        if (!emp){ unmatched++; rep.status = (via === 'ambiguous') ? 'ambiguous' : 'not-found'; report.push(rep); return; }
-        sr = _matchSalaryRow(salIdx[loc] || [], emp);
-        if (!sr){
-          // ДІАГ (Етап 1): співробітника резолвнуто, але Salary-рядка за ПІБ нема →
-          // НЕ ховаємо в 'unmatched'; окремий noSalaryRow + явний текст.
-          noSalaryRow++;
-          rep.status = 'no-salary-row';
-          rep.via = via;
-          rep.emp = emp.pos + ' ' + emp.last + ' ' + emp.first;
-          rep.note = (via === 'manual')
-            ? 'Обрано вручну, але в Salary-листі нема рядка за цим ПІБ (рядок може бути за предметом або з іншим написанням) — впиши/перевір рядок у Salary'
-            : 'Співробітника знайдено, але Salary-рядка за його ПІБ нема';
-          report.push(rep);
-          return;
+        var srow = _findSalRow(manualSalRowNum);
+        if (srow){
+          sr = {row: srow, ambiguous: false}; writeVia = 'manual-row';
+          if (!dryRun && emp && it.empRowNum){
+            _saveSalaryReconMap(loc, emp.rowNum, emp.last + ' ' + emp.first, manualSalRowNum, by, now);
+            reconMap[loc + '||' + emp.rowNum] = manualSalRowNum;
+            bindSaved = true;
+            bindingsSaved.push({emp: emp.pos + ' ' + emp.last + ' ' + emp.first, salaryRow: srow.raw});
+          }
         }
+      }
+      // 2) збережена прив'язка emp→рядок
+      if (!sr && emp){
+        var mapped = reconMap[loc + '||' + emp.rowNum];
+        if (mapped){ var mrow = _findSalRow(mapped); if (mrow){ sr = {row: mrow, ambiguous: false}; writeVia = 'mapped'; } }
+      }
+      // 3) матч за ПІБ
+      if (!sr && emp){
+        var m = _matchSalaryRow(salIdx[loc] || [], emp);
+        if (m){ sr = m; writeVia = via; }
+      }
+      // 4) нема співробітника взагалі → not-found/ambiguous (обери у 1-му дропдауні)
+      if (!sr && !emp){ unmatched++; rep.status = (via === 'ambiguous') ? 'ambiguous' : 'not-found'; report.push(rep); return; }
+      // 5) співробітник є, але рядок не визначено → need-salary-row (2-й дропдаун)
+      if (!sr){
+        needSalaryRow++;
+        rep.status = 'need-salary-row';
+        rep.via = via;
+        rep.emp = emp.pos + ' ' + emp.last + ' ' + emp.first;
+        rep.empRowNum = emp.rowNum;
+        rep.note = 'Вкажи Salary-рядок для цього співробітника один раз — далі запамʼятається (авто)';
+        report.push(rep);
+        return;
       }
 
       var salRow = sr.row.rowNum;
@@ -6404,6 +6471,8 @@ function salaryReconcileApply(body){
       if (writeVia === 'manual-row' && !(via === 'manual' || via === 'ipn')) addIpn = false;
       rep.status = 'written'; rep.via = writeVia; rep.emp = emp ? (emp.pos + ' ' + emp.last + ' ' + emp.first) : '';
       rep.salaryRow = sr.row.raw; rep.prev = prev; rep.now = nv; rep.ipnAdd = addIpn;
+      rep.bindingSaved = bindSaved;                       // щойно запамʼятали прив'язку
+      if (emp) rep.empRowNum = emp.rowNum;
       report.push(rep); written++;
 
       if (!dryRun){
@@ -6415,9 +6484,10 @@ function salaryReconcileApply(body){
     });
 
     if (!dryRun && logRows.length) logSh.getRange(logSh.getLastRow() + 1, 1, logRows.length, SALARY_RECON_LOG_HEADER.length).setValues(logRows);
-    Logger.log('[salaryReconcileApply] dryRun=%s loc=%s vid=%s | written=%s skip=%s unmatched=%s noSalaryRow=%s', dryRun, loc, vidNo, written, skipped, unmatched, noSalaryRow);
+    Logger.log('[salaryReconcileApply] dryRun=%s loc=%s vid=%s | written=%s skip=%s unmatched=%s noSalaryRow=%s needSalaryRow=%s bind=%s', dryRun, loc, vidNo, written, skipped, unmatched, noSalaryRow, needSalaryRow, bindingsSaved.length);
     return {ok:true, dryRun:dryRun, loc:loc, vidNo:vidNo, month:month,
             written:written, skipped:skipped, unmatched:unmatched, noSalaryRow:noSalaryRow,
+            needSalaryRow:needSalaryRow, bindingsSaved:bindingsSaved,
             ipnAdded: report.filter(function(r){ return r.ipnAdd; }).length,
             sumWritten: report.filter(function(r){ return r.status === 'written'; }).reduce(function(s, r){ return s + (r.amount || 0); }, 0),
             report:report};

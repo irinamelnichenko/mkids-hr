@@ -104,8 +104,10 @@ function fmt(n){ return (Math.round(Number(n)||0)).toLocaleString('uk-UA'); }
 // ── стан ──
 var PARSED = [];        // [{name, ipn, card, amount}]
 var PREVIEW = null;     // відповідь salaryReconcilePreview
-var ROSTER = [];        // співробітники локації (лишено для сумісності)
-var SALROWS = [];       // Salary-рядки локації [{rowNum, raw}] — ручний вибір ЦІЛІ запису
+var ROSTER = [];        // співробітники локації (1-й дропдаун — вибір СПІВРОБІТНИКА)
+var SALROWS = [];       // Salary-рядки локації [{rowNum, raw}] (2-й дропдаун — ціль запису)
+var LAST_ITEMS = [];    // останній надісланий items[] (для дозапису need-salary-row)
+var LAST_CTX = null;    // {loc, vid} останнього apply
 
 // ── локації ──
 fetch(CFG.SCRIPT_URL + '?action=getLocations', {redirect:'follow'}).then(function(r){return r.json();}).then(function(j){
@@ -195,11 +197,14 @@ function doPreview(){
   if (!loc){ toast('Обери локацію'); return; }
   if (!PARSED.length){ toast('Нема розпізнаних рядків'); return; }
   $('btnPreview').disabled = true; $('btnPreview').textContent = '⏳ Звіряю…';
-  // Salary-рядки локації — для ручного вибору ЦІЛІ запису (не співробітники!)
+  // 1-й дропдаун — СПІВРОБІТНИКИ локації (вибір людини)
+  var pRoster = fetch(CFG.SCRIPT_URL + '?action=getEmployees&actorId=1&loc=' + encodeURIComponent(loc), {redirect:'follow'})
+    .then(function(r){return r.json();}).then(function(j){ ROSTER = ((j.items||j.data||[])).filter(function(e){ return String(e.loc||'').trim()===loc && !String(e.fired||'').trim(); }); }).catch(function(){ ROSTER=[]; });
+  // 2-й дропдаун — Salary-РЯДКИ локації (ціль запису; показуємо при need-salary-row)
   var pRows = fetch(CFG.SCRIPT_URL + '?action=salaryReconcileRows&loc=' + encodeURIComponent(loc), {redirect:'follow'})
     .then(function(r){return r.json();}).then(function(j){ SALROWS = (j && j.rows) || []; }).catch(function(){ SALROWS=[]; });
-  Promise.all([pRows, post({action:'salaryReconcilePreview', loc:loc, items:PARSED})]).then(function(res){
-    var j = res[1];
+  Promise.all([pRoster, pRows, post({action:'salaryReconcilePreview', loc:loc, items:PARSED})]).then(function(res){
+    var j = res[2];
     $('btnPreview').disabled = false; $('btnPreview').textContent = '🔍 Звірити зі співробітниками';
     if (!j || !j.ok){ toast('Помилка: ' + (j&&j.error||'?')); return; }
     PREVIEW = j; renderPreview(j);
@@ -207,13 +212,19 @@ function doPreview(){
 }
 
 function badge(r){
-  if (r.status==='ipn-match') return '<span class="badge b-ipn">✅ по ІПН</span>';
-  if (r.status==='name-match') return r.via==='surname' ? '<span class="badge b-surname">⚠ по прізвищу</span>' : '<span class="badge b-name">✅ по ПІБ</span>';
+  if (r.status==='ipn-match') return '<span class="badge b-ipn">✅ по ІПН</span>' + (r.mapped?' <span class="badge b-name">🔗 запамʼятано</span>':'');
+  if (r.status==='name-match') return (r.via==='surname' ? '<span class="badge b-surname">⚠ по прізвищу</span>' : '<span class="badge b-name">✅ по ПІБ</span>') + (r.mapped?' <span class="badge b-name">🔗 запамʼятано</span>':'');
   if (r.status==='ambiguous') return '<span class="badge b-amb">⚠ тезки</span>';
   if (r.status==='no-salary-row') return '<span class="badge b-nosal">⚠ нема Salary-рядка</span>';
   return '<span class="badge b-nf">❌ не знайдено</span>';
 }
-// Дропдаун САМИХ Salary-рядків локації (ціль запису). value = номер рядка Salary-листа.
+// 1-й дропдаун: СПІВРОБІТНИКИ HR. value = номер рядка HR (empRowNum).
+function rosterOptions(sel){
+  return '<option value="">— обрати співробітника —</option>' + ROSTER.map(function(e){
+    return '<option value="'+e.rowNum+'"'+(sel==e.rowNum?' selected':'')+'>'+esc((e.pos||'')+' '+(e.last||'')+' '+(e.first||''))+'</option>';
+  }).join('');
+}
+// 2-й дропдаун: САМІ Salary-РЯДКИ локації (ціль запису). value = номер рядка Salary.
 function salaryRowOptions(sel){
   return '<option value="">— обрати Salary-рядок —</option>' + SALROWS.map(function(rw){
     return '<option value="'+rw.rowNum+'"'+(sel==rw.rowNum?' selected':'')+'>'+esc(rw.raw)+'</option>';
@@ -221,17 +232,19 @@ function salaryRowOptions(sel){
 }
 
 function renderPreview(j){
-  var html = '<table><thead><tr><th>ПІБ (файл)</th><th>Матч</th><th>Salary-рядок (ціль запису)</th><th class="num">Сума→</th><th>Збір</th></tr></thead><tbody>';
+  var html = '<table><thead><tr><th>ПІБ (файл)</th><th>Матч</th><th>Співробітник / Salary-рядок</th><th class="num">Сума→</th><th>Збір</th></tr></thead><tbody>';
   j.rows.forEach(function(r, i){
     var right;
     if (r.emp && r.salaryRow){
-      right = esc(r.emp.pos+' '+r.emp.last+' '+r.emp.first) + '<br><span style="color:var(--gray);font-size:11px">Salary: «'+esc(r.salaryRow.raw)+'»</span>';
+      // авто-матч (у т.ч. запамʼятана прив'язка) — ціль відома
+      right = esc(r.emp.pos+' '+r.emp.last+' '+r.emp.first) + '<br><span style="color:var(--gray);font-size:11px">Salary: «'+esc(r.salaryRow.raw)+'»'+(r.mapped?' (запамʼятано)':'')+'</span>';
+    } else if (r.emp && !r.salaryRow){
+      // співробітник відомий, але Salary-рядка нема → 2-й дропдаун (запамʼятається)
+      right = '<span style="color:var(--gray);font-size:11px">'+esc(r.emp.pos+' '+r.emp.last+' '+r.emp.first)+' · ⚠ вкажи рядок один раз — запамʼятається:</span><br>'
+        + '<select data-i="'+i+'" data-emp="'+r.emp.rowNum+'" class="salSel">'+salaryRowOptions('')+'</select>';
     } else {
-      // Нема цілі запису (не знайдено АБО no-salary-row) → обрати Salary-РЯДОК вручну.
-      var lead = r.emp
-        ? '<span style="color:var(--gray);font-size:11px">'+esc(r.emp.pos+' '+r.emp.last+' '+r.emp.first)+' · ⚠ нема Salary-рядка за ПІБ, обери вручну:</span><br>'
-        : '';
-      right = lead + '<select data-i="'+i+'" class="manualSel">'+salaryRowOptions('')+'</select>';
+      // не знайдено → 1-й дропдаун: обрати СПІВРОБІТНИКА
+      right = '<select data-i="'+i+'" class="empSel">'+rosterOptions('')+'</select>';
     }
     var add = [];
     if (r.ipnWillAdd) add.push('<span class="badge b-add">+ІПН</span>');
@@ -254,33 +267,77 @@ function renderPreview(j){
 function doApply(){
   var loc = $('locSel').value, vid = $('vidNo').value.trim();
   if (!vid){ toast('Впиши № відомості (для дедупу)'); $('vidNo').focus(); return; }
-  // збираємо items з ручними виборами Salary-РЯДКА (ціль запису)
-  var manual = {};
-  document.querySelectorAll('.manualSel').forEach(function(sel){ if (sel.value) manual[sel.getAttribute('data-i')] = Number(sel.value); });
-  var items = PARSED.map(function(p, i){ var o = {name:p.name, ipn:p.ipn, amount:p.amount}; if (manual[i]) o.salaryRowNum = manual[i]; return o; });
+  // 1-й дропдаун → empRowNum (вибір людини); 2-й дропдаун → salaryRowNum (ціль).
+  var empPick = {}, salPick = {}, salEmp = {};
+  document.querySelectorAll('.empSel').forEach(function(s){ if (s.value) empPick[s.getAttribute('data-i')] = Number(s.value); });
+  document.querySelectorAll('.salSel').forEach(function(s){ if (s.value){ var i=s.getAttribute('data-i'); salPick[i]=Number(s.value); if (s.getAttribute('data-emp')) salEmp[i]=Number(s.getAttribute('data-emp')); } });
+  var items = PARSED.map(function(p, i){
+    var o = {name:p.name, ipn:p.ipn, amount:p.amount};
+    var pr = PREVIEW && PREVIEW.rows && PREVIEW.rows[i];
+    // empRowNum: явний вибір людини > емп прив'язаний до salSel > емп з авто-матчу preview
+    var empRow = empPick[i] || salEmp[i] || (pr && pr.emp && pr.emp.rowNum) || 0;
+    if (empRow) o.empRowNum = empRow;
+    if (salPick[i]) o.salaryRowNum = salPick[i];
+    return o;
+  });
   if (!confirm('Записати у Факт Salary («'+loc+'»), відомість № '+vid+'?\nОкруглення ВГОРУ, накопичувально (+=), готівку не чіпає, дублі по № відомості пропускаються.')) return;
   $('btnApply').disabled = true; $('btnApply').textContent = '⏳ Записую…';
+  LAST_ITEMS = items; LAST_CTX = {loc:loc, vid:vid};
   post({action:'salaryReconcileApply', mode:'apply', loc:loc, vidNo:vid, by:byLabel(), roundMode:'up', items:items}).then(function(j){
     $('btnApply').disabled = false; $('btnApply').textContent = '✅ Застосувати (записати у Факт)';
     if (!j || !(j.ok||j._assumed)){ toast('Помилка: '+(j&&j.error||'?')); return; }
-    var ipnAdded = j.ipnAdded||0;
-    // рядки no-salary-row (нема цілі запису) — показуємо ЯВНО, а не ховаємо
-    var noSal = (j.report||[]).filter(function(r){ return r.status==='no-salary-row'; });
-    var noSalHtml = '';
-    if (noSal.length){
-      noSalHtml = '<div class="err" style="margin-top:8px">⚠ Не записано (нема Salary-рядка): <b>'+noSal.length+'</b><ul style="margin:6px 0 0 18px;padding:0">'
-        + noSal.map(function(r){ return '<li>'+esc(r.name)+(r.emp?' → '+esc(r.emp):'')+' <span style="color:var(--gray)">— '+esc(r.note||'обери Salary-рядок вручну і застосуй ще раз')+'</span></li>'; }).join('')
-        + '</ul></div>';
-    }
-    $('result').innerHTML = '<div class="card"><div class="ok">✅ Записано у Факт: <b>'+(j.written||0)+' з '+PARSED.length+'</b> співробітників на <b>'+fmt(j.sumWritten||0)+'</b> грн'
-      + (j.skipped ? ' · пропущено (дублі): '+j.skipped : '')
-      + (j.unmatched ? ' · без матчу: '+j.unmatched : '')
-      + (j.noSalaryRow ? ' · ⚠ без Salary-рядка: '+j.noSalaryRow : '') + '</div>'
-      + noSalHtml
-      + '<div class="sumline">Зібрано ІПН у картки: <b>'+ipnAdded+'</b>. Лог: аркуш «Звірка_ЗП_Лог».</div>'
-      + '<div class="cash-note" style="margin-top:10px">💵 Не забудь додати ГОТІВКУ вручну зверху у Факт (де є).</div></div>';
-    $('result').scrollIntoView({behavior:'smooth'});
-    toast(noSal.length ? ('Готово, але '+noSal.length+' без Salary-рядка') : 'Готово');
+    renderApplyResult(j, false);
+  });
+}
+
+// Показ результату apply: записано + запамʼятані прив'язки + рядки, де треба вказати Salary-рядок.
+function renderApplyResult(j, isFollow){
+  var ipnAdded = j.ipnAdded||0;
+  // рядки, де співробітник відомий, але Salary-рядок ще не вказано → 2-й дропдаун
+  var need = [];
+  (j.report||[]).forEach(function(r, idx){ if (r.status==='need-salary-row') need.push({r:r, idx:idx}); });
+  var needHtml = '';
+  if (need.length){
+    needHtml = '<div class="err" style="margin-top:8px">⚠ Треба вказати Salary-рядок (раз — і запамʼятається): <b>'+need.length+'</b>'
+      + '<table style="margin-top:6px"><tbody>'
+      + need.map(function(n){ return '<tr><td>'+esc(n.r.name)+(n.r.emp?' → '+esc(n.r.emp):'')+'</td>'
+          + '<td><select data-i="'+n.idx+'" class="needSalSel">'+salaryRowOptions('')+'</select></td></tr>'; }).join('')
+      + '</tbody></table>'
+      + '<button class="btn green" style="margin-top:8px" onclick="doApplyNeeded()">💾 Дозаписати вказані (і запамʼятати)</button></div>';
+  }
+  // запамʼятані цього разу прив'язки
+  var bs = j.bindingsSaved||[];
+  var bindHtml = bs.length ? '<div class="ok" style="margin-top:8px">💾 Запамʼятав привʼязки: '
+      + bs.map(function(b){ return esc(b.emp)+' → «'+esc(b.salaryRow)+'»'; }).join(', ') + '</div>' : '';
+  var head = isFollow ? '✅ Дозаписано у Факт: ' : '✅ Записано у Факт: ';
+  var html = '<div class="card"><div class="ok">'+head+'<b>'+(j.written||0)+'</b> на <b>'+fmt(j.sumWritten||0)+'</b> грн'
+    + (j.skipped ? ' · пропущено (дублі): '+j.skipped : '')
+    + (j.unmatched ? ' · ❌ без матчу (обери співробітника): '+j.unmatched : '')
+    + (j.needSalaryRow ? ' · ⚠ треба Salary-рядок: '+j.needSalaryRow : '')
+    + (j.noSalaryRow ? ' · ⚠ без Salary-рядка: '+j.noSalaryRow : '') + '</div>'
+    + bindHtml + needHtml
+    + '<div class="sumline">Зібрано ІПН у картки: <b>'+ipnAdded+'</b>. Лог: «Звірка_ЗП_Лог» · Привʼязки: «Звірка_Мапа».</div>'
+    + '<div class="cash-note" style="margin-top:10px">💵 Не забудь додати ГОТІВКУ вручну зверху у Факт (де є).</div></div>';
+  $('result').innerHTML = html;
+  $('result').scrollIntoView({behavior:'smooth'});
+  toast(need.length ? ('Записано, але '+need.length+' без Salary-рядка') : 'Готово');
+}
+
+// Дозапис рядків need-salary-row: шлемо лише їх з обраним salaryRowNum (+ empRowNum з LAST_ITEMS).
+function doApplyNeeded(){
+  if (!LAST_CTX){ toast('Спершу застосуй'); return; }
+  var picks = {};
+  document.querySelectorAll('.needSalSel').forEach(function(s){ if (s.value) picks[s.getAttribute('data-i')] = Number(s.value); });
+  var idxs = Object.keys(picks);
+  if (!idxs.length){ toast('Обери Salary-рядок хоча б для одного'); return; }
+  var items2 = idxs.map(function(i){
+    var src = LAST_ITEMS[i] || {};
+    return {name:src.name, ipn:src.ipn, amount:src.amount, empRowNum:src.empRowNum, salaryRowNum:picks[i]};
+  }).filter(function(o){ return o.empRowNum; });
+  if (!items2.length){ toast('Нема empRowNum для дозапису'); return; }
+  post({action:'salaryReconcileApply', mode:'apply', loc:LAST_CTX.loc, vidNo:LAST_CTX.vid, by:byLabel(), roundMode:'up', items:items2}).then(function(j){
+    if (!j || !(j.ok||j._assumed)){ toast('Помилка: '+(j&&j.error||'?')); return; }
+    renderApplyResult(j, true);
   });
 }
 </script>
