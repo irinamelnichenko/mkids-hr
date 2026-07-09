@@ -260,6 +260,7 @@ function doGet(e) {
     else if (action === 'getOpexOverview')           result = getOpexOverview(e.parameter.year || '');
     else if (action === 'getCategoryAnalytics')      result = getCategoryAnalytics(e.parameter.year || '', e.parameter.month || '');
     else if (action === 'getSalaryData')             result = getSalaryData(e.parameter.loc || '', e.parameter.year || '');
+    else if (action === 'salaryReconcileRows')       result = salaryReconcileRows(e.parameter.loc || '');
     else if (action === 'getSalaryOverview')         result = getSalaryOverview(e.parameter.year || '');
     else if (action === 'getOverviewAnalytics')      result = getOverviewAnalytics(e.parameter.year || '', e.parameter.month || '');
     else if (action === 'getUsers')                  result = getUsers();
@@ -6195,6 +6196,17 @@ function _matchSalaryRow(salaryRows, emp){
   return {row: hits[0], ambiguous: hits.length > 1};
 }
 
+// v7.33 Етап2: список Salary-рядків локації для ручного дропдауна автозвірки.
+// Повертає [{rowNum, raw}] — назви рядків Salary-листа («Музика 230», «Охорона …»),
+// щоб для «не знайдено» Іра вибирала САМ Salary-рядок (ціль запису), не співробітника.
+function salaryReconcileRows(loc){
+  loc = String(loc || '').trim();
+  if (!loc) return {ok:false, error:'loc обовʼязковий'};
+  var idx = _loadSalaryRowIndex([loc]);
+  var rows = (idx[loc] || []).map(function(r){ return {rowNum: r.rowNum, raw: r.raw}; });
+  return {ok:true, loc:loc, rows:rows};
+}
+
 // PREVIEW: body = {loc, items:[{name, ipn, card, amount, vidNo}]}. Read-only.
 // loc ОБОВʼЯЗКОВИЙ (PDF = одна локація) — матч вузько в межах локації.
 function salaryReconcilePreview(body){
@@ -6331,7 +6343,7 @@ function salaryReconcileApply(body){
 
     function uniqList(arr){ var u = {}; (arr || []).forEach(function(e){ u[e.rowNum] = e; }); return Object.keys(u).map(function(k){ return u[k]; }); }
     var factOverlay = {}, logRows = [], report = [];
-    var written = 0, skipped = 0, unmatched = 0;
+    var written = 0, skipped = 0, unmatched = 0, noSalaryRow = 0;
 
     items.forEach(function(it){
       var ipn = _digitsOnly(it.ipn), nm = _normEmpNm(it.name), surn = nm.split(' ')[0];
@@ -6354,30 +6366,58 @@ function salaryReconcileApply(body){
             else if (bs.length > 1){ via = 'ambiguous'; } }
         }
       }
-      if (!emp){ unmatched++; rep.status = (via === 'ambiguous') ? 'ambiguous' : 'not-found'; report.push(rep); return; }
-      var sr = _matchSalaryRow(salIdx[loc] || [], emp);
-      if (!sr){ unmatched++; rep.status = 'no-salary-row'; rep.emp = emp.last + ' ' + emp.first; report.push(rep); return; }
+      // ── Ціль запису у Salary ──
+      // Етап2: ЯВНИЙ ручний вибір Salary-рядка (salaryRowNum) має ПРІОРИТЕТ і
+      // пише ПРЯМО в цей рядок, ОБХОДЯЧИ _matchSalaryRow (для викладачів/іншого
+      // написання ПІБ). Пише навіть якщо співробітника взагалі не резолвнуто.
+      var manualSalRowNum = Number(it.salaryRowNum) || 0;
+      var sr = null, writeVia = via;
+      if (manualSalRowNum){
+        var srow = (salIdx[loc] || []).filter(function(r){ return r.rowNum === manualSalRowNum; })[0] || null;
+        if (srow){ sr = {row: srow, ambiguous: false}; writeVia = 'manual-row'; }
+      }
+      if (!sr){
+        // Без ручного Salary-рядка — потрібен співробітник, далі матч за ПІБ (як раніше).
+        if (!emp){ unmatched++; rep.status = (via === 'ambiguous') ? 'ambiguous' : 'not-found'; report.push(rep); return; }
+        sr = _matchSalaryRow(salIdx[loc] || [], emp);
+        if (!sr){
+          // ДІАГ (Етап 1): співробітника резолвнуто, але Salary-рядка за ПІБ нема →
+          // НЕ ховаємо в 'unmatched'; окремий noSalaryRow + явний текст.
+          noSalaryRow++;
+          rep.status = 'no-salary-row';
+          rep.via = via;
+          rep.emp = emp.pos + ' ' + emp.last + ' ' + emp.first;
+          rep.note = (via === 'manual')
+            ? 'Обрано вручну, але в Salary-листі нема рядка за цим ПІБ (рядок може бути за предметом або з іншим написанням) — впиши/перевір рядок у Salary'
+            : 'Співробітника знайдено, але Salary-рядка за його ПІБ нема';
+          report.push(rep);
+          return;
+        }
+      }
 
       var salRow = sr.row.rowNum;
       var prev = factOverlay.hasOwnProperty(salRow) ? factOverlay[salRow] : (Number(toNum(salSh.getRange(salRow, factCol1).getValue())) || 0);
       var nv = prev + amount;
-      var addIpn  = !emp.ipn  && !!ipn;
-      rep.status = 'written'; rep.via = via; rep.emp = emp.pos + ' ' + emp.last + ' ' + emp.first;
+      // IPN-самозбір лише при НАДІЙНОМУ співробітнику. При ручному Salary-рядку з
+      // лише здогадним ПІБ-матчем (name/surname) ІПН НЕ чіпаємо (щоб не приписати чужому).
+      var addIpn = (emp && !emp.ipn && !!ipn);
+      if (writeVia === 'manual-row' && !(via === 'manual' || via === 'ipn')) addIpn = false;
+      rep.status = 'written'; rep.via = writeVia; rep.emp = emp ? (emp.pos + ' ' + emp.last + ' ' + emp.first) : '';
       rep.salaryRow = sr.row.raw; rep.prev = prev; rep.now = nv; rep.ipnAdd = addIpn;
       report.push(rep); written++;
 
       if (!dryRun){
         salSh.getRange(salRow, factCol1).setValue(nv); factOverlay[salRow] = nv;
-        if (addIpn) hrSh.getRange(emp.rowNum, 25).setValue(ipn);   // самозбір лише ІПН (картку не збираємо)
+        if (addIpn && emp) hrSh.getRange(emp.rowNum, 25).setValue(ipn);   // самозбір лише ІПН (картку не збираємо)
         applied[dupKey] = true;
-        logRows.push([now, by, loc, vidNo, it.name, ipn, '', emp.last + ' ' + emp.first, sr.row.raw, month, prev, nv, amount, addIpn ? 'так' : '', '', dupKey]);
+        logRows.push([now, by, loc, vidNo, it.name, ipn, '', emp ? (emp.last + ' ' + emp.first) : '', sr.row.raw, month, prev, nv, amount, addIpn ? 'так' : '', '', dupKey]);
       }
     });
 
     if (!dryRun && logRows.length) logSh.getRange(logSh.getLastRow() + 1, 1, logRows.length, SALARY_RECON_LOG_HEADER.length).setValues(logRows);
-    Logger.log('[salaryReconcileApply] dryRun=%s loc=%s vid=%s | written=%s skip=%s unmatched=%s', dryRun, loc, vidNo, written, skipped, unmatched);
+    Logger.log('[salaryReconcileApply] dryRun=%s loc=%s vid=%s | written=%s skip=%s unmatched=%s noSalaryRow=%s', dryRun, loc, vidNo, written, skipped, unmatched, noSalaryRow);
     return {ok:true, dryRun:dryRun, loc:loc, vidNo:vidNo, month:month,
-            written:written, skipped:skipped, unmatched:unmatched,
+            written:written, skipped:skipped, unmatched:unmatched, noSalaryRow:noSalaryRow,
             ipnAdded: report.filter(function(r){ return r.ipnAdd; }).length,
             sumWritten: report.filter(function(r){ return r.status === 'written'; }).reduce(function(s, r){ return s + (r.amount || 0); }, 0),
             report:report};
