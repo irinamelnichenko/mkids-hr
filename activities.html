@@ -4532,16 +4532,12 @@ function openAnaDetail(key){
     var ms2 = marks.filter(function(m){ return m.activityId === actId; });
     var cat = (S.items || []).find(function(a){ return a.id === actId; });
     title = '🎯 ' + (cat ? cat.name : 'Заняття ' + actId);
-    var children = {};
-    ms2.forEach(function(m){ children[m.child] = (children[m.child] || 0) + 1; });
+    var childrenSet = {};
+    ms2.forEach(function(m){ childrenSet[m.child] = 1; });
     bodyHtml = '<div class="muted" style="margin-bottom:10px">' + ms2.length +
-               ' відвідувань · ' + Object.keys(children).length + ' дітей</div>';
-    bodyHtml += '<div class="tbl-wrap"><table class="tbl"><thead><tr>' +
-                '<th>Дитина</th><th class="num">Разів</th></tr></thead><tbody>';
-    Object.keys(children).sort(function(a,b){ return children[b] - children[a]; }).forEach(function(c){
-      bodyHtml += '<tr><td>' + escapeHtml(c) + '</td><td class="num">' + children[c] + '</td></tr>';
-    });
-    bodyHtml += '</tbody></table></div>';
+               ' відвідувань · ' + Object.keys(childrenSet).length + ' дітей</div>';
+    // ── ГРУПУВАННЯ ПО ДНЮ: дата · N дітей + поіменний список ──
+    bodyHtml += _anaDayGroups(ms2);
   } else if (kind === 'teacher'){
     var actsForTeacher = (S.items || []).filter(function(a){ return a.loc === S.activeLoc && (a.teacher || '— не вказаний') === val; });
     var actIds = actsForTeacher.map(function(a){ return a.id; });
@@ -4557,19 +4553,19 @@ function openAnaDetail(key){
     bodyHtml = '<div class="muted" style="margin-bottom:10px">' + ms3.length +
                ' відвідувань' +
                (canSeeMoney ? ' · ЗП ' + fmtUah(totalPayout) + ' ₴' : '') + '</div>';
-    bodyHtml += '<div class="tbl-wrap"><table class="tbl"><thead><tr>' +
-                '<th>Заняття</th><th class="num">Разів</th>' +
-                (canSeeMoney ? '<th class="num">ЗП</th>' : '') +
-                '</tr></thead><tbody>';
-    Object.keys(byAct).forEach(function(id){
+    // Групи ПО ЗАНЯТТЮ (заголовок: заняття · N разів · ЗП), всередині — розбивка ПО ДНЯХ
+    Object.keys(byAct).sort(function(a,b){ return byAct[b].length - byAct[a].length; }).forEach(function(id){
       var cat2 = (S.items || []).find(function(a){ return a.id === Number(id); });
       var p = _payoutForActivity(Number(id), byAct[id]);
-      bodyHtml += '<tr><td>' + escapeHtml(cat2 ? cat2.name : 'Заняття ' + id) + '</td>' +
-                  '<td class="num">' + byAct[id].length + '</td>' +
-                  (canSeeMoney ? '<td class="num">' + fmtUah(p) + ' ₴</td>' : '') +
-                  '</tr>';
+      bodyHtml += '<div style="margin-bottom:16px">';
+      bodyHtml += '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;' +
+                  'padding:9px 12px;background:#e8eef4;border-radius:8px;font-weight:800;color:var(--dark)">' +
+                  '<span>' + escapeHtml(cat2 ? cat2.name : 'Заняття ' + id) + '</span>' +
+                  '<span class="muted" style="font-weight:600;white-space:nowrap">' + byAct[id].length + ' разів' +
+                  (canSeeMoney ? ' · ' + fmtUah(p) + ' ₴' : '') + '</span></div>';
+      bodyHtml += '<div style="padding-left:8px;margin-top:8px">' + _anaDayGroups(byAct[id]) + '</div>';
+      bodyHtml += '</div>';
     });
-    bodyHtml += '</tbody></table></div>';
   } else if (kind === 'day'){
     var ms4 = marks.filter(function(m){ return m.date === val; });
     title = '📅 ' + _ddmmyyyy(val);
@@ -4598,6 +4594,29 @@ function closeAnaDetail(){
   $('anaDetailModal').setAttribute('aria-hidden','true');
   document.body.style.overflow = '';
 }
+// Групування марок ПО ДНЮ: заголовок «дата · N дітей» + поіменний список дітей того дня.
+// Дні за датою (спадання). Стиль у тон картки дитини (плашка #f0f4f8, .tbl).
+function _anaDayGroups(msArr){
+  var byDay = {};
+  (msArr || []).forEach(function(m){ (byDay[m.date] = byDay[m.date] || []).push(m); });
+  var days = Object.keys(byDay).sort(function(a, b){ return b.localeCompare(a); });
+  var html = '';
+  days.forEach(function(d){
+    var kidsSet = {};
+    byDay[d].forEach(function(m){ kidsSet[m.child] = 1; });
+    var kids = Object.keys(kidsSet).sort(function(a, b){ return a.localeCompare(b, 'uk'); });
+    html += '<div style="margin-bottom:10px">';
+    html += '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;' +
+            'padding:6px 12px;background:#f0f4f8;border-radius:8px;font-weight:700;color:var(--dark)">' +
+            '<span>' + _ddmmyyyy(d) + '</span>' +
+            '<span class="muted" style="font-weight:600;white-space:nowrap">' + kids.length + ' дітей</span></div>';
+    html += '<div class="tbl-wrap"><table class="tbl"><tbody>';
+    kids.forEach(function(c){ html += '<tr><td>' + escapeHtml(c) + '</td></tr>'; });
+    html += '</tbody></table></div></div>';
+  });
+  return html;
+}
+
 // Фільтр картки дитини за заняттям: показати лише обрану групу (порожнє = всі).
 function _anaChildFilter(v){
   var grps = document.querySelectorAll('#anaDetailBody .ana-child-grp');
