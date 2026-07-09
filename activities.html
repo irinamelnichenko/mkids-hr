@@ -4483,18 +4483,50 @@ function openAnaDetail(key){
     var ms = marks.filter(function(m){ return m.child === val; });
     title = '👶 ' + val;
     var sum = ms.reduce(function(s,m){ return s + (m.price || 0); }, 0);
-    bodyHtml = '<div class="muted" style="margin-bottom:10px">' + ms.length +
-               ' відвідувань · ' + (canSeeMoney ? fmtUah(sum) + ' ₴' : '') + '</div>';
-    bodyHtml += '<div class="tbl-wrap"><table class="tbl"><thead><tr>' +
-                '<th>Дата</th><th>Заняття</th>' +
-                (canSeeMoney ? '<th class="num">Ціна</th>' : '') +
-                '</tr></thead><tbody>';
-    ms.sort(function(a,b){ return b.date.localeCompare(a.date); }).forEach(function(m){
-      bodyHtml += '<tr><td>' + _ddmmyyyy(m.date) + '</td><td>' + escapeHtml(m.activityName) + '</td>' +
-                  (canSeeMoney ? '<td class="num">' + fmtUah(m.price || 0) + ' ₴</td>' : '') +
-                  '</tr>';
+
+    // ── ГРУПУВАННЯ ПО ЗАНЯТТЮ (лише перегрупування відображення; суми не чіпаємо) ──
+    var byActC = {};
+    ms.forEach(function(m){
+      var id = m.activityId;
+      if (!byActC[id]) byActC[id] = {id: id, name: m.activityName, marks: [], sum: 0};
+      byActC[id].marks.push(m); byActC[id].sum += (m.price || 0);
     });
-    bodyHtml += '</tbody></table></div>';
+    var grpsC = Object.keys(byActC).map(function(id){ return byActC[id]; });
+    grpsC.sort(function(a, b){ return b.marks.length - a.marks.length || a.name.localeCompare(b.name, 'uk'); });
+
+    // Загальний підсумок (як було) + місце для підсумку по обраному заняттю
+    bodyHtml = '<div class="muted" style="margin-bottom:10px">' + ms.length +
+               ' відвідувань · ' + (canSeeMoney ? fmtUah(sum) + ' ₴' : '') +
+               '<span id="anaChildFilterSum" style="color:var(--green);font-weight:700"></span></div>';
+
+    // Фільтр «Заняття» (лише коли предметів >1)
+    if (grpsC.length > 1){
+      bodyHtml += '<div style="margin-bottom:12px">' +
+                  '<label class="muted" style="font-size:13px;margin-right:6px">🎯 Заняття:</label>' +
+                  '<select id="anaChildFilter" onchange="_anaChildFilter(this.value)" ' +
+                  'style="padding:6px 10px;border:1px solid #d7dee6;border-radius:8px;font-size:14px;background:#fff">' +
+                  '<option value="">Всі заняття (' + grpsC.length + ')</option>' +
+                  grpsC.map(function(g){ return '<option value="' + g.id + '">' + escapeHtml(g.name) + ' (' + g.marks.length + ')</option>'; }).join('') +
+                  '</select></div>';
+    }
+
+    // Групи: заголовок-підсумок + дати цього заняття
+    grpsC.forEach(function(g){
+      var lbl = g.name + ': ' + g.marks.length + ' разів' + (canSeeMoney ? ' · ' + fmtUah(g.sum) + ' ₴' : '');
+      bodyHtml += '<div class="ana-child-grp" data-act="' + g.id + '" data-label="' + escapeHtml(lbl) + '" style="margin-bottom:14px">';
+      bodyHtml += '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;' +
+                  'padding:8px 12px;background:#f0f4f8;border-radius:8px;font-weight:800;color:var(--dark)">' +
+                  '<span>' + escapeHtml(g.name) + '</span>' +
+                  '<span class="muted" style="font-weight:600;white-space:nowrap">' + g.marks.length + ' разів' +
+                  (canSeeMoney ? ' · ' + fmtUah(g.sum) + ' ₴' : '') + '</span></div>';
+      bodyHtml += '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Дата</th>' +
+                  (canSeeMoney ? '<th class="num">Ціна</th>' : '') + '</tr></thead><tbody>';
+      g.marks.sort(function(a, b){ return b.date.localeCompare(a.date); }).forEach(function(m){
+        bodyHtml += '<tr><td>' + _ddmmyyyy(m.date) + '</td>' +
+                    (canSeeMoney ? '<td class="num">' + fmtUah(m.price || 0) + ' ₴</td>' : '') + '</tr>';
+      });
+      bodyHtml += '</tbody></table></div></div>';
+    });
   } else if (kind === 'activity'){
     var actId = Number(val);
     var ms2 = marks.filter(function(m){ return m.activityId === actId; });
@@ -4565,6 +4597,21 @@ function closeAnaDetail(){
   $('anaDetailModal').classList.add('hidden');
   $('anaDetailModal').setAttribute('aria-hidden','true');
   document.body.style.overflow = '';
+}
+// Фільтр картки дитини за заняттям: показати лише обрану групу (порожнє = всі).
+function _anaChildFilter(v){
+  var grps = document.querySelectorAll('#anaDetailBody .ana-child-grp');
+  for (var i = 0; i < grps.length; i++){
+    grps[i].style.display = (!v || grps[i].getAttribute('data-act') === v) ? '' : 'none';
+  }
+  var sumEl = document.getElementById('anaChildFilterSum');
+  if (sumEl){
+    if (!v){ sumEl.textContent = ''; }
+    else {
+      var g = document.querySelector('#anaDetailBody .ana-child-grp[data-act="' + v + '"]');
+      sumEl.textContent = g ? (' · ' + g.getAttribute('data-label')) : '';
+    }
+  }
 }
 
 // ── CSV EXPORT ──────────────────────────────
