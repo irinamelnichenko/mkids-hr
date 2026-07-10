@@ -13831,7 +13831,7 @@ function saveEmployee(actorId, payload, rowNum){
           return {ok:false, error:'Director cannot move employee to another location', code:'PERM_DENIED'};
 
         var dup = _findEmpDuplicate(allEmps, payload, rowNum);
-        if (dup) return {ok:false, error:'Duplicate employee in same location (row ' + dup.rowNum + ')', code:'DUPLICATE'};
+        if (dup) return {ok:false, error:'Duplicate employee in same location (row ' + dup.rowNum + ')', code:'DUPLICATE', dupRow: dup.rowNum, dupName: ((dup.last||'') + ' ' + (dup.first||'')).trim()};
 
         // Пишемо A:O (15 cols) і R (1 col). P (formula) + Q (reserved) — НЕ чіпаємо.
         sh.getRange(rowNum, 1,  1, 15).setValues([newAtoO]);
@@ -13850,7 +13850,7 @@ function saveEmployee(actorId, payload, rowNum){
 
       // ── CREATE ─────────────────────────────────────────
       var dupNew = _findEmpDuplicate(allEmps, payload, null);
-      if (dupNew) return {ok:false, error:'Duplicate employee in same location (row ' + dupNew.rowNum + ')', code:'DUPLICATE'};
+      if (dupNew) return {ok:false, error:'Duplicate employee in same location (row ' + dupNew.rowNum + ')', code:'DUPLICATE', dupRow: dupNew.rowNum, dupName: ((dupNew.last||'') + ' ' + (dupNew.first||'')).trim()};
 
       // appendRow з 24 cols: A-O (15) + ['',''] (P,Q) + R (email) + S:V (v6.44) + W (v6.48) + X (v6.59).
       // P-формула — порожня тут, копіюється з row 2 одразу після append.

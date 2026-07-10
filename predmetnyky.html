@@ -1548,9 +1548,14 @@ function findTeacher(empKey){
   }
   return null;
 }
+// Толерантний ключ: trim + схлопнути пробіли + lowercase (як нормалізація в бекенді).
+function _normKey(s){ return String(s == null ? '' : s).trim().replace(/\s+/g, ' ').toLowerCase(); }
 function teachersFor(loc, subj){
+  var kLoc = _normKey(loc), kSub = _normKey(subj);
   return S.teachers.filter(function(t){
-    return t.subject === subj && t.locations && t.locations[0] === loc;
+    // толерантний матч loc+subject → наявний викладач потрапляє в кандидати
+    // навіть за дрібних розбіжностей написання (пробіли/регістр).
+    return _normKey(t.subject) === kSub && t.locations && _normKey(t.locations[0]) === kLoc;
   }).sort(function(a, b){
     return a.name.localeCompare(b.name, 'uk');
   });
@@ -2398,6 +2403,36 @@ function submitAssign(){
         hired: hiredIso
       }
     }).then(function(res){
+      // BUG B fix: такий викладач уже є (dup-guard) → НЕ глуха помилка, а пропозиція
+      // використати існуючого: авто-перемикання на UPDATE знайденого рядка (dupRow).
+      if (res && !res.ok && res.code === 'DUPLICATE' && res.dupRow){
+        var who = res.dupName ? (' (' + res.dupName + ')') : '';
+        if (!confirm('Такий викладач уже є' + who + ' у цій локації.\nВикористати існуючого (рядок ' + res.dupRow + ') замість створення нового?')){
+          throw new Error('Скасовано: викладач уже існує (рядок ' + res.dupRow + ')');
+        }
+        return apiPost({
+          action: 'saveEmployee',
+          actorId: S.user.id,
+          rowNum: res.dupRow,                         // ← UPDATE наявного рядка, не CREATE
+          payload: { last: last, first: first, loc: loc, pos: subject, typ: 'Предметник', phone: phone, email: email }
+        }).then(function(u){
+          if (!u || !u.ok) throw new Error('saveEmployee (існуючий): ' + ((u && u.error) || 'unknown'));
+          var uemp = u.employee || {};
+          var uKey = mkEmpKey(uemp.last || last, uemp.first || first, uemp.wday || uemp.hired || isoToDmy(hiredIso));
+          // upsert у локальний S.teachers
+          var hit = false;
+          for (var i = 0; i < S.teachers.length; i++){
+            if (S.teachers[i].empId === res.dupRow){
+              S.teachers[i].empKey = uKey; S.teachers[i].phone = uemp.phone || phone; S.teachers[i].email = uemp.email || email; hit = true; break;
+            }
+          }
+          if (!hit){
+            S.teachers.push({ empId: res.dupRow, empKey: uKey, name: (uemp.last||last)+' '+(uemp.first||first),
+              position: uemp.pos || subject, subject: subject, locations: [loc], phone: uemp.phone||phone, email: uemp.email||email });
+          }
+          return {empKey: uKey, created: false};
+        });
+      }
       if (!res || !res.ok) throw new Error('saveEmployee: ' + ((res && res.error) || 'unknown'));
       var emp = res.employee || {};
       var newEmpKey = mkEmpKey(emp.last || last, emp.first || first, emp.wday || emp.hired || isoToDmy(hiredIso));
