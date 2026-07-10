@@ -1778,6 +1778,24 @@ function readSession(){
   } catch(e) { return null; }
 }
 function clearSession(){ try { localStorage.removeItem(SESSION_KEY); } catch(e){} }
+// v7.38 — гард застарілої сесії: валідний id = число > 0. Стара сесія без id →
+// S.user.id undefined → бекенд «actorId required». Замість глухої помилки — екран перелогіну.
+function _validSessId(u){ return !!(u && Number(u.id) > 0); }
+function _showStaleSession(){
+  try {
+    var o = document.createElement('div');
+    o.id = '_staleSessOverlay';
+    o.setAttribute('style','position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;background:#f0f4f8;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding:20px');
+    o.innerHTML = '<div style="background:#fff;border-radius:16px;padding:36px 30px;max-width:360px;width:100%;text-align:center;box-shadow:0 10px 34px rgba(15,23,42,.14)">' +
+      '<div style="font-size:44px;margin-bottom:12px">🔒</div>' +
+      '<h2 style="font-size:19px;font-weight:800;color:#1e293b;margin:0 0 8px">Сесія застаріла</h2>' +
+      '<p style="color:#64748b;font-size:14px;line-height:1.5;margin:0 0 22px">Дані входу оновились. Будь ласка, увійдіть знову.</p>' +
+      '<button id="_staleReloginBtn" style="width:100%;padding:12px;border:0;border-radius:10px;background:#2563eb;color:#fff;font-size:15px;font-weight:700;cursor:pointer">Увійти знову →</button>' +
+      '</div>';
+    document.body.appendChild(o);
+    document.getElementById('_staleReloginBtn').onclick = function(){ clearSession(); window.location.href = 'index.html'; };
+  } catch(e){ clearSession(); window.location.href = 'index.html'; }
+}
 
 // ── НОВИЙ ЛОГІН: 3 вкладки (Менеджмент / Директор / Медсестра) ────────────
 const ROLE_EMOJI_NEW = {
@@ -7628,6 +7646,7 @@ function renderPayMonths(){
   checkAndClearCache();
 
   var sessUser = readSession();
+  if (sessUser && !_validSessId(sessUser)){ _showStaleSession(); return; }   // застаріла сесія без id → перелогін
   if (sessUser) {
     S.user = sessUser;
     document.getElementById('loginScreen').classList.add('hidden');
