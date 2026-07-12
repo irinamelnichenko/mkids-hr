@@ -6550,6 +6550,16 @@ function _vacContractYear(contractISO, refISO){
   var t0 = new Date(cd.getFullYear() + diffY + 1, cd.getMonth(), cd.getDate() - 1);
   return {from: _vacISOof(f0), to: _vacISOof(t0)};
 }
+// v7.41 — «місяць безперервно»: період триває рівно місяць (від дати до того самого
+// числа наступного місяця, напр. 11.08→10.09). Умова: addDays(to,1) === addMonths(from,1).
+// Дзеркало фронту isFullMonthVacation.
+function isFullMonthVacation(fromISO, toISO){
+  var f = _vacParseISO(fromISO), t = _vacParseISO(toISO);
+  if (!f || !t) return false;
+  var a = new Date(f.getFullYear(), f.getMonth() + 1, f.getDate());   // from + 1 місяць
+  var b = new Date(t.getFullYear(), t.getMonth(), t.getDate() + 1);   // to + 1 день
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
 // v6.40: списання ліміту ОКРУГЛЯЄТЬСЯ ВГОРУ до тижня для кожної відпустки
 // (ceil(днів/5)*5). Різниця «згорає» (грошей не торкається). Узгоджено з карткою.
 function _vacUsedInContractYear(absences, contractISO, refISO, excludeId){
@@ -6560,6 +6570,7 @@ function _vacUsedInContractYear(absences, contractISO, refISO, excludeId){
     if (excludeId && a.id === excludeId) return;
     if (a.status === 'rejected' || a.status === 'cancelled') return;
     if (!a.from || !a.to) return;
+    if (isFullMonthVacation(a.from, a.to)){ used += 20; return; }   // v7.41 місяць безперервно → весь річний ліміт
     var s = (a.from < w.from) ? w.from : a.from;
     var e = (a.to   > w.to)   ? w.to   : a.to;
     if (e < s) return;
@@ -6586,6 +6597,20 @@ function _vacMonthBreakdown(fromISO, toISO, fee, allAbsences, contractISO, selfI
     cur.setDate(cur.getDate() + 1);
   }
   var arr = Object.keys(mmap).sort().map(function(k){ return mmap[k]; });
+  // v7.41 — «місяць безперервно»: знижка 100% = 1×fee, розподілена ПРОПОРЦІЙНО пропущеним
+  // роб.дням кожного календарного місяця; сума частин = рівно fee (останній — залишком).
+  if (isFullMonthVacation(fromISO, toISO)){
+    var totalDaysFM = arr.reduce(function(s, mi){ return s + mi.vacDays; }, 0);
+    var accFM = 0;
+    return arr.map(function(mi, ix){
+      var mwd = _vacWorkDaysInMonth(mi.y, mi.m);
+      var discount = (ix === arr.length - 1) ? (fee - accFM)
+                     : (totalDaysFM > 0 ? Math.round(fee * mi.vacDays / totalDaysFM) : 0);
+      accFM += discount;
+      return {ym: mi.ym, y: mi.y, m: mi.m, vacDays: mi.vacDays, monthWorkDays: mwd,
+              eligibleDays: mi.vacDays, overLimitDays: 0, discount: discount, fullMonth: true};
+    });
+  }
   var remaining = _vacLimitRemaining(allAbsences, contractISO, fromISO, selfId);
   return arr.map(function(mi){
     var mwd = _vacWorkDaysInMonth(mi.y, mi.m);

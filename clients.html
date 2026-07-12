@@ -1135,6 +1135,16 @@ function workDaysInMonthExcludingHolidays(year, month){
   }
   return {workDays:n, holidaysOnWeekday:hol};
 }
+// v7.41 — «місяць безперервно»: період триває рівно місяць (від дати до того самого
+// числа наступного місяця, напр. 11.08→10.09). Умова: addDays(to,1) === addMonths(from,1).
+// Коротші/довші — false. Дзеркало бекенду isFullMonthVacation.
+function isFullMonthVacation(fromStr, toStr){
+  var f=pd(fromStr), t=pd(toStr);
+  if(!f||!t) return false;
+  var a=new Date(f.getFullYear(), f.getMonth()+1, f.getDate());   // from + 1 місяць
+  var b=new Date(t.getFullYear(), t.getMonth(), t.getDate()+1);   // to + 1 день
+  return a.getFullYear()===b.getFullYear() && a.getMonth()===b.getMonth() && a.getDate()===b.getDate();
+}
 // Використано роб.днів відпустки у договірному році, що містить refISO (без excludeId, без rejected/cancelled).
 function getVacationUsedInContractYear(c, refISO, excludeAbsId){
   if(!c||!c.contractDate) return 0;
@@ -1145,6 +1155,7 @@ function getVacationUsedInContractYear(c, refISO, excludeAbsId){
     if(excludeAbsId && a.id===excludeAbsId) return;
     if(a.status==='rejected'||a.status==='cancelled') return;
     if(!a.from||!a.to) return;
+    if(isFullMonthVacation(a.from,a.to)){ used+=20; return; }   // v7.41 місяць безперервно → весь річний ліміт
     var s=(a.from<w.from)?w.from:a.from;
     var e=(a.to>w.to)?w.to:a.to;
     if(e<s) return;
@@ -3941,6 +3952,24 @@ function calcAbsMonthBreakdown(type, fromStr, toStr, fee, c, excludeAbsId){
       curV.setDate(curV.getDate()+1);
     }
     var arr=Object.keys(mmapV).sort().map(function(k){ return mmapV[k]; });
+    // v7.41 — «місяць безперервно» (11.08→10.09): знижка 100% = 1×fee, розподілена
+    // ПРОПОРЦІЙНО пропущеним роб.дням кожного календарного місяця; сума частин = рівно fee
+    // (останній місяць — залишком). Ліміт вичерпується повністю (див. getVacationUsedInContractYear).
+    if(isFullMonthVacation(fromStr,toStr)){
+      var totalDaysFM=arr.reduce(function(s,mi){ return s+mi.vacDays; },0);
+      var accFM=0;
+      return arr.map(function(mi,ix){
+        var wdm=workDaysInMonthExcludingHolidays(mi.y, mi.m);
+        var amount=(ix===arr.length-1) ? (fee-accFM)
+                   : (totalDaysFM>0 ? Math.round(fee*mi.vacDays/totalDaysFM) : 0);
+        accFM+=amount;
+        var pct=(fee>0) ? Math.round(amount/fee*100) : 0;
+        return {month:mi.month, workDays:mi.vacDays, weeks:Math.min(4,Math.ceil(mi.vacDays/5)),
+                pct:pct, amount:amount,
+                monthWorkDays:wdm.workDays, monthHolidays:wdm.holidaysOnWeekday,
+                eligibleDays:mi.vacDays, overLimitDays:0, fullMonth:true};
+      });
+    }
     var remaining = c ? getVacationLimitRemaining(c, fromStr, excludeAbsId) : 20;
     return arr.map(function(mi){
       var wdm=workDaysInMonthExcludingHolidays(mi.y, mi.m);
