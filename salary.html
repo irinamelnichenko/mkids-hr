@@ -429,6 +429,7 @@ select{font-family:inherit}
       <select id="locSel" class="month-sel hidden"></select>
       <select id="periodSel" class="month-sel"></select>
       <select id="monthSel" class="month-sel"></select>
+      <button id="addRowBtn" class="btn btn-secondary hidden" title="Додати dop-рядок у Salary цієї локації (в секцію «Додаткові заняття»)">➕ Рядок</button>
       <button id="refreshBtn" class="btn btn-primary">🔄 Оновити</button>
     </div>
   </div>
@@ -2062,6 +2063,9 @@ function applyMode(){
   if (isHR()){
     $('locSel').classList.toggle('hidden', S.mode !== 'detail');
   }
+  // v7.42 Етап 1: «➕ Рядок» — лише мережеві ролі (CFO/бухгалтер) у режимі «Деталь локації».
+  var addBtn = $('addRowBtn');
+  if (addBtn) addBtn.classList.toggle('hidden', !(isHR() && S.mode === 'detail'));
 }
 
 function gotoDetail(loc){
@@ -2071,6 +2075,28 @@ function gotoDetail(loc){
   S.mode = 'detail';
   applyMode();
   load(false);
+}
+
+// v7.42 Етап 1 — додати dop-рядок у Salary поточної локації (в секцію «Додаткові заняття»).
+function onAddSalaryRow(){
+  if (!CFG.LOC){ alert('Спершу оберіть локацію («Деталь локації»)'); return; }
+  var name = prompt('Назва dop-заняття для нового рядка Salary «' + CFG.LOC + '»\nвведіть ТОЧНО як у каталозі занять (щоб ЗП зматчилась):', '');
+  if (name == null) return;
+  name = String(name).trim();
+  if (!name){ alert('Порожня назва'); return; }
+  if (!confirm('Додати рядок «' + name + '» у Salary «' + CFG.LOC + '»?\nСтвориться в кінці секції «Додаткові заняття». Перед вставкою робиться бекап листа.')) return;
+  var btn = $('addRowBtn'); if (btn){ btn.disabled = true; btn.textContent = '⏳…'; }
+  fetch(CFG.SCRIPT_URL, {method:'POST', redirect:'follow', headers:{'Content-Type':'text/plain;charset=utf-8'},
+    body: JSON.stringify({action:'addSalaryRow', loc: CFG.LOC, name: name, by: (S.user && (S.user.name || S.user.role)) || '?'})})
+    .then(function(r){ return r.text(); })
+    .then(function(t){ var j; try{ j = JSON.parse(t); }catch(_){ j = {ok:true, _assumed:true}; }
+      if (btn){ btn.disabled = false; btn.textContent = '➕ Рядок'; }
+      if (j && j.ok === false){ alert('❌ ' + (j.error || 'Помилка') + (j.existingRow ? ' (row ' + j.existingRow + ')' : '')); return; }
+      alert('✅ Рядок «' + name + '» додано' + (j.insertedRow ? ' (row ' + j.insertedRow + ')' : '') + '. Оновлюю…\nПотім зроби переекспорт місяця, щоб проставилась ЗП.');
+      localStorage.removeItem(CFG.CACHE_KEY);
+      load(true);
+    })
+    .catch(function(e){ if (btn){ btn.disabled = false; btn.textContent = '➕ Рядок'; } alert('Помилка мережі: ' + (e && e.message || e)); });
 }
 
 function updateKpiLabel(){
@@ -2232,6 +2258,8 @@ function bindEventListeners(){
     }
     load(true);
   });
+  var _addBtn = $('addRowBtn');
+  if (_addBtn) _addBtn.addEventListener('click', onAddSalaryRow);
 
   $('mtOverview').addEventListener('click', function(){
     if (S.mode === 'overview') return;
