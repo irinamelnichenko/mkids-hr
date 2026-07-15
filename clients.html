@@ -3929,7 +3929,8 @@ function migrateAbsences(c){
 // Розбиває відсутність по місяцях, повертає [{month,workDays,weeks,pct,amount}]
 // v6.58: шкала хвороби (дзеркало бекенду) — нова з 07.2026, Бровари з 06.2026.
 var NEW_SICK_FROM=202607, NEW_SICK_LOC_EXCEPTIONS={'Бровари':202606};
-function _sickUseNew(loc,y,m){ var ym=Number(y)*100+Number(m); if(ym>=NEW_SICK_FROM) return true; var ex=NEW_SICK_LOC_EXCEPTIONS[String(loc||'').trim()]; return !!(ex&&ym>=ex); }
+// v7.43 — договірна (денна) шкала діє ЗАВЖДИ (рішення Іри). Стара тижнева прибрана.
+function _sickUseNew(loc,y,m){ return true; }
 function _sickNewScalePct(days){ if(days<5)return 0; if(days<=10)return 5; if(days<=15)return 10; if(days<=20)return 15; return 20; }
 
 function calcAbsMonthBreakdown(type, fromStr, toStr, fee, c, excludeAbsId){
