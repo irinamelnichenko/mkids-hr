@@ -1308,10 +1308,23 @@ async function apiGet(action){
   return j;
 }
 
+var CLIENT_FE_VER = 756; // v7.56 версія фронту (kill-switch застарілих вкладок для saveClient)
+var _staleShown=false;
+function _showStaleFeBanner(msg){
+  try{ if(typeof showFloatMsg==='function') showFloatMsg('⚠️ '+(msg||'Стара версія — оновіть'),'err'); }catch(_){}
+  if(_staleShown) return; _staleShown=true;
+  try{
+    var b=document.createElement('div');
+    b.style.cssText='position:fixed;top:0;left:0;right:0;z-index:999999;background:#e74c3c;color:#fff;padding:14px;text-align:center;font-weight:700;font-size:15px;box-shadow:0 2px 8px rgba(0,0,0,.3)';
+    b.innerHTML='⚠️ Стара версія сторінки — зміни НЕ зберігаються. Оновіть: <b>Ctrl+Shift+R</b> (або закрийте і відкрийте застосунок).';
+    document.body.appendChild(b);
+  }catch(e){ try{ alert(msg||'Стара версія. Оновіть: Ctrl+Shift+R'); }catch(_){} }
+}
 async function apiPost(body){
   var url=getScriptUrl();
   if(!url) return;
   try{
+    if(body && typeof body==='object' && body.clientVer==null) body.clientVer=CLIENT_FE_VER; // v7.56: інжект версії у КОЖЕН POST
     var resp = await fetch(url, {
       method:'POST',
       redirect:'follow',
@@ -1320,7 +1333,10 @@ async function apiPost(body){
     });
     var _txt = await resp.text();
     var data; try{ data=JSON.parse(_txt); }catch(_){ data={ok:true,_assumed:true}; }  // v6.27.5: Apps Script 302→HTML = запит дійшов, дані збережено (не показуємо хибну помилку)
-    if(!data.ok) console.warn('[apiPost] server error:', data.error);
+    if(!data.ok){
+      console.warn('[apiPost] server error:', data.error);
+      if(data.error==='STALE_FE'){ _showStaleFeBanner(data.message); }  // v7.56 kill-switch
+    }
     return data;
   }catch(e){
     console.warn('apiPost error:', e);
