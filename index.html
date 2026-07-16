@@ -750,8 +750,10 @@ function setScriptUrl(url){localStorage.setItem(CFG.SCRIPT_URL_KEY,url.trim());}
 
 // Та сама формула, що clients.html:childId і crm_script.js:_childId — щоб
 // згенерований id збігся з ChildID в bday_sync_status коли в Клієнти ID порожнє.
+// v7.48 ЕТАП 2: група ПРИБРАНА з ID → c_<ПІБ[:24]>_<локація[:12]>. Параметр group
+// лишено для сумісності викликів (ігнорується). Було: slice(0,20)+group+slice(0,8).
 function _childId(name, group, loc){
-  return 'c_'+((name||'').trim().slice(0,20))+'_'+((group||'').slice(0,8))+'_'+((loc||'').slice(0,8));
+  return 'c_'+((name||'').trim().slice(0,24))+'_'+((loc||'').slice(0,12));
 }
 
 const S = {
