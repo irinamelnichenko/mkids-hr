@@ -1099,7 +1099,10 @@ function localDateStr(d){
 function pd(s){ if(!s) return null; var p=String(s).split('-'); return p.length===3?new Date(+p[0],+p[1]-1,+p[2]):null; }
 function diffDays(a,b){ return Math.round((b-a)/86400000); }
 function weeksCeil(days){ return Math.ceil(Math.max(0,days)/5); }
-function childId(name,group,loc){ return 'c_'+((name||'').trim().slice(0,20))+'_'+((group||'').slice(0,8))+'_'+((loc||'').slice(0,8)); }
+// v7.47 ЕТАП 2: група ПРИБРАНА з ID → c_<ПІБ>_<локація>. Параметр group лишено для
+// сумісності викликів (ігнорується). Зрізи розширено name[:24], loc[:12]. Зміна групи
+// більше НЕ дає новий id → join Payment↔Клієнти завжди сходиться, привиди не плодяться.
+function childId(name,group,loc){ return 'c_'+((name||'').trim().slice(0,24))+'_'+((loc||'').slice(0,12)); }
 
 // ── v6.36: ВІДПУСТКА — пропорційна формула + ліміт 20 роб.днів/договірний рік ──
 // Держсвята України (хардкод 2025-2026). Свято на Сб/Нд не переноситься (не

@@ -39,6 +39,7 @@ var SHEET_YEARLY     = 'Оплати-Рік';
 var SHEET_CLIENTS    = 'Клієнти';
 var SHEET_ATTENDANCE = 'Табель';
 var SHEET_HEALTH     = 'Здоров\'я';
+var GROUP_HISTORY_SHEET = 'Історія_Груп'; // v7.47 ЕТАП 5: історія переходів груп
 
 // HR-таблиця (картка співробітника, v6.9). Окремий Google Sheet.
 // Структура: A=dir B=typ C=loc D=grp E=last F=first G=phone H=pos I=stat
@@ -327,6 +328,15 @@ function doPost(e) {
     else if (body.action === 'salaryReconcileApply')        result = salaryReconcileApply(body || {});   // v7.26 ЗП apply/dryRun/revert
     else if (body.action === 'reconcileApply')              result = reconcileApply(body || {});   // v6.51.3 ФАЗА 2
     else if (body.action === 'exportToSalaryExtras')      result = exportToSalaryExtras(body || {});
+    else if (body.action === 'recalcSickAbsences')       result = recalcSickAbsences(body || {}); // v7.43 денна шкала
+    else if (body.action === 'mergeClientDuplicate')     result = mergeClientDuplicate(body || {}); // v7.44 злиття дублів
+    else if (body.action === 'patchClientCell')          result = patchClientCell(body || {});    // v7.44 точкова правка клітинки
+    else if (body.action === 'cleanupBackupTabs')        result = cleanupBackupTabs(body || {});  // v7.45 чистка бекап-табів
+    else if (body.action === 'deleteAttendanceRecord')   result = deleteAttendanceRecord(body || {}); // v7.47 видалення садок-Табель запису (childId+date)
+    else if (body.action === 'migrateClientIdFormat')    result = migrateClientIdFormat(body || {});  // v7.47 ЕТАП 2 міграція ID (без групи)
+    else if (body.action === 'normalizeAttendanceIds')   result = normalizeAttendanceIds(body || {}); // v7.47 ремонт Табель-ID по name+loc
+    else if (body.action === 'addSalaryRow')             result = addSalaryRow(body || {});    // v7.42 Етап 1
+    else if (body.action === 'deleteSalaryRow')          result = deleteSalaryRow(body || {}); // v7.42 Етап 1
     else if (body.action === 'saveDopMerge')              result = saveDopMerge(body || {});
     else if (body.action === 'deleteDopMerge')            result = deleteDopMerge(body || {});
     else if (body.action === 'savePredMerge')             result = savePredMerge(body || {});
@@ -590,11 +600,30 @@ function saveClient(data) {
     // v6.47 — розвиток (append-only)
     JSON.stringify(data.development||{})
   ];
+  // v7.47 ЕТАП 2 ЗАХИСТ ТЕЗОК: новий id = c_<ПІБ>_<локація> (без групи). Якщо той
+  // самий id уже зайнятий ІНШОЮ дитиною (непорожня дата народження, що НЕ збігається)
+  // → унікалізуємо суфіксом дати нар., щоб двоє однойменних не перезаписали одне одного.
+  var wantBday0 = String(data.bday || '').trim();
+  if (wantBday0) {
+    for (var rc = 1; rc < vals.length; rc++) {
+      if (String(vals[rc][0]) !== String(data.id)) continue;
+      var rcBday = String(vals[rc][5] || '').trim();
+      if (rcBday && rcBday !== wantBday0) {
+        var _sfx = String(wantBday0).replace(/[^0-9]/g, '').slice(0, 8);
+        data.id = String(data.id) + '_' + (_sfx || 'b');
+        row[0] = data.id;
+        Logger.log('[saveClient] ТЕЗКА: id-колізія → унікалізовано "%s"', data.id);
+        break;
+      }
+    }
+  }
   // Primary: точний збіг id → оновлюємо той самий рядок (звичайне редагування).
   for (var r = 1; r < vals.length; r++) {
     if (String(vals[r][0]) === String(data.id)) {
       row[29] = vals[r][29] || data.createdAt || now;
+      var _oldGrpP = String(vals[r][3] || '');
       sheet.getRange(r+1, 1, 1, row.length).setValues([row]);
+      logGroupChange(data.id, data.name, data.loc, _oldGrpP, data.group, data.updatedBy || data.by || ''); // v7.47 ЕТАП 5
       return {ok:true, action:'updated'};
     }
   }
@@ -622,11 +651,78 @@ function saveClient(data) {
     var mergedAbs = _mergeAbsencesUnion(existAbs, data.absences || []);
     row[16] = JSON.stringify(mergedAbs);
     row[29] = vals[cand][29] || data.createdAt || now;
+    var _oldGrpM = String(vals[cand][3] || '');
     sheet.getRange(cand + 1, 1, 1, row.length).setValues([row]);
+    logGroupChange(data.id, data.name, data.loc, _oldGrpM, data.group, data.updatedBy || data.by || ''); // v7.47 ЕТАП 5: перевід групи
     return {ok:true, action:'updated-moved', mergedAbsences: mergedAbs.length};
   }
   sheet.appendRow(row);
+  logGroupChange(data.id, data.name, data.loc, '', data.group, data.updatedBy || data.by || ''); // v7.47 ЕТАП 5: відкриваємо історію (перше призначення групи)
   return {ok:true, action:'created'};
+}
+
+// v7.47 ЕТАП 5: історія переходів груп. Замість тихого перезапису «Група» — ведемо
+// таймлайн у листі «Історія_Груп». При зміні: закриваємо попередній відкритий запис
+// («По дату» = сьогодні) і відкриваємо новий. oldGrp='' → перше призначення (лише відкриття).
+// Безпечно ідемпотентна: якщо група не змінилась — нічого не пише.
+function logGroupChange(id, name, loc, oldGrp, newGrp, actor){
+  try {
+    var o = String(oldGrp || '').trim(), n = String(newGrp || '').trim();
+    if (o === n) return;                 // без зміни — не логуємо
+    if (!n) return;                      // нова група порожня — нема що відкривати
+    if (!id) return;
+    var ss = getCRMSpreadsheet();
+    var sh = ss.getSheetByName(GROUP_HISTORY_SHEET);
+    if (!sh){
+      sh = ss.insertSheet(GROUP_HISTORY_SHEET);
+      sh.getRange(1, 1, 1, 8).setValues([['ID дитини','ПІБ','Локація','Група','З дати','По дату','Ким','Коли']]);
+      sh.setFrozenRows(1);
+    }
+    var tz    = ss.getSpreadsheetTimeZone() || 'Europe/Kiev';
+    var today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
+    var nowS  = formatDate(new Date());
+    var v = sh.getDataRange().getValues();
+    // закрити попередній ВІДКРИТИЙ запис цієї дитини (порожнє «По дату»); заодно
+    // анти-дубль: якщо останній відкритий запис уже на нову групу — нічого не робимо.
+    for (var i = v.length - 1; i >= 1; i--){
+      if (String(v[i][0]) !== String(id)) continue;
+      if (String(v[i][5] || '').trim()) break;          // вже закритий — далі не шукаємо
+      if (String(v[i][3] || '').trim() === n) return;   // уже відкритий на цю ж групу — не дублюємо
+      sh.getRange(i + 1, 6).setValue(today);            // «По дату» = сьогодні
+      break;
+    }
+    sh.appendRow([id, name || '', loc || '', n, today, '', actor || '', nowS]);
+  } catch(e){ Logger.log('[logGroupChange] %s', e && e.message || e); }
+}
+
+// v7.47: точкове видалення запису садок-Табеля за (ID дитини + Дата). Потрібне для
+// прибирання аномальних Табель-рядків (напр. Чомусики-запис, що має жити в
+// Чомусики_Відвідуваність). Викликати через ?action=deleteAttendanceRecord.
+function deleteAttendanceRecord(body){
+  body = body || {};
+  var cid  = String(body.childId || body.id || '').trim();
+  var date = String(body.date || '').trim();
+  if (!cid || !date) return {ok:false, error:'childId і date обовʼязкові'};
+  try {
+    var ss = getCRMSpreadsheet();
+    var sh = ss.getSheetByName(SHEET_ATTENDANCE);
+    if (!sh) return {ok:false, error:'Лист Табель не знайдено'};
+    var v = sh.getDataRange().getValues();
+    var hd = v[0].map(String);
+    var cDate = hd.indexOf('Дата'), cId = hd.indexOf('ID дитини');
+    if (cDate < 0 || cId < 0) return {ok:false, error:'Колонки Дата/«ID дитини» не знайдено'};
+    var removed = 0;
+    for (var i = v.length - 1; i >= 1; i--){
+      var d = v[i][cDate];
+      var ds = (d instanceof Date) ? Utilities.formatDate(d, ss.getSpreadsheetTimeZone() || 'Europe/Kiev', 'yyyy-MM-dd') : String(d || '').slice(0,10);
+      if (String(v[i][cId] || '').trim() === cid && ds === date.slice(0,10)){
+        sh.deleteRow(i + 1); removed++;
+      }
+    }
+    return {ok:true, removed:removed, childId:cid, date:date};
+  } catch(e){
+    return {ok:false, error:String(e && e.message || e)};
+  }
 }
 
 // Обʼєднання двох списків absences без втрат і без дублів. Ключ: id, інакше
@@ -646,6 +742,418 @@ function _mergeAbsencesUnion(a, b){
     out.push(x);
   });
   return out;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.44 ЕТАП 1 — УНІВЕРСАЛЬНЕ ЗЛИТТЯ дубль-рядка клієнта: sourceId (привид) → targetId.
+//   • union absences (source → target, без втрат/дублів);
+//   • FILL-EMPTY: порожні поля target заповнюються значеннями source (НІКОЛИ не
+//     перезаписує непорожнє target — напр. № договору з привида підтягнеться,
+//     якщо у цільового його нема, а дату target лишаємо);
+//   • ремап 'ID дитини' у Табелі + Здоровʼї: source → target;
+//   • видалення рядка source.
+//   • copyTo-бекап Клієнти + Табель ПЕРЕД мутацією.
+//   • dryRun:true → лише звіт, без запису (для перевірки перед реальним злиттям).
+// Універсально — для решти 43 пар (виклик по кожній parою targetId/sourceId).
+// ═══════════════════════════════════════════════════════════════════════════
+function mergeClientDuplicate(body){
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(60000); } catch(e){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+  try {
+    body = body || {};
+    var targetId = String(body.targetId || '').trim();
+    var sourceId = String(body.sourceId || '').trim();
+    var dryRun   = body.dryRun === true;
+    if (!targetId || !sourceId) return {ok:false, error:'targetId і sourceId обовʼязкові'};
+    if (targetId === sourceId)  return {ok:false, error:'targetId дорівнює sourceId'};
+
+    function _nn(x){ return String(x == null ? '' : x).trim().toLowerCase().replace(/\s+/g, ' '); }
+
+    var ss  = getCRMSpreadsheet();
+    var csh = ss.getSheetByName(SHEET_CLIENTS);
+    if (!csh) return {ok:false, error:'Лист "' + SHEET_CLIENTS + '" не знайдено'};
+    var cv  = csh.getDataRange().getValues();
+    var chd = cv[0].map(String);
+    var cID   = chd.indexOf('ID');
+    var cAbs  = chd.indexOf('Відсутності (JSON)');
+    var cName = chd.indexOf('ПІБ дитини');
+    var cLoc  = chd.indexOf('Локація');
+    var cUpd  = chd.indexOf('Оновлено');
+    if (cID < 0 || cAbs < 0) return {ok:false, error:'Колонки ID/«Відсутності (JSON)» не знайдено'};
+
+    var tRow = -1, sRow = -1;
+    for (var i = 1; i < cv.length; i++){
+      var id = String(cv[i][cID] || '').trim();
+      if (id === targetId) tRow = i;
+      if (id === sourceId) sRow = i;
+    }
+    if (tRow < 0) return {ok:false, error:'targetId не знайдено: ' + targetId};
+    if (sRow < 0) return {ok:false, error:'sourceId не знайдено: ' + sourceId};
+
+    var sameName = _nn(cv[tRow][cName]) === _nn(cv[sRow][cName]);
+    var sameLoc  = _nn(cv[tRow][cLoc])  === _nn(cv[sRow][cLoc]);
+
+    // union absences
+    var tAbs = []; try { tAbs = JSON.parse(String(cv[tRow][cAbs] || '[]')); } catch(e){}
+    var sAbs = []; try { sAbs = JSON.parse(String(cv[sRow][cAbs] || '[]')); } catch(e){}
+    var mergedAbs = _mergeAbsencesUnion(tAbs, sAbs);
+
+    // fill-empty scalar-полів (окрім ID/absences/Оновлено/Нотатки).
+    // Нотатки виключено: привид-рядок несе сміттєвий маркер «Чернетка —
+    // автосинхронізація з Оплати-Рік», який не має потрапляти на цільовий
+    // договірний рядок при злитті. v7.46
+    var cNote = chd.indexOf('Нотатки');
+    var filled = [];
+    for (var c = 0; c < chd.length; c++){
+      if (c === cID || c === cAbs || c === cUpd || c === cNote) continue;
+      var tv  = String(cv[tRow][c] == null ? '' : cv[tRow][c]).trim();
+      var svv = String(cv[sRow][c] == null ? '' : cv[sRow][c]).trim();
+      if (!tv && svv) filled.push({colIdx: c, col: chd[c], val: cv[sRow][c]});
+    }
+
+    // ремап Табель + Здоровʼя (source → target)
+    function scanRemap(sh){
+      if (!sh) return {sh:null, col:-1, rows:[]};
+      var v = sh.getDataRange().getValues();
+      var idc = v[0].map(String).indexOf('ID дитини');
+      if (idc < 0) return {sh:sh, col:-1, rows:[]};
+      var rows = [];
+      for (var r = 1; r < v.length; r++){ if (String(v[r][idc] || '').trim() === sourceId) rows.push(r + 1); }
+      return {sh:sh, col:idc, rows:rows};
+    }
+    var tabR = scanRemap(ss.getSheetByName(SHEET_ATTENDANCE));
+    var hR   = scanRemap(ss.getSheetByName(SHEET_HEALTH));
+
+    var report = {
+      target: targetId, source: sourceId, sameName: sameName, sameLoc: sameLoc,
+      absTarget: tAbs.length, absSource: sAbs.length, absAfter: mergedAbs.length,
+      filledFields: filled.map(function(f){ return f.col + '="' + String(f.val).slice(0,40) + '"'; }),
+      tabelRemap: tabR.rows.length, healthRemap: hR.rows.length
+    };
+    if (dryRun) return {ok:true, dryRun:true, report:report};
+
+    // === БЕКАП ПЕРЕД МУТАЦІЄЮ (copyTo) ===
+    // skipBackup:true — для МАСОВОГО злиття (бекап робиться РАЗ на локацію окремим
+    // backupClients, а не per-pair) — інакше copyTo величезного Табеля щоразу впирається
+    // в ліміт клітинок таблиці («Ця операція не підтримується»).
+    var backups = [];
+    if (body.skipBackup !== true){
+      var tz = ss.getSpreadsheetTimeZone() || 'Europe/Kiev';
+      var stamp = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd_HH-mm-ss');
+      backups.push(csh.copyTo(ss).setName(('Клієнти_MRGBKP_' + stamp).slice(0, 95)).getName());
+      if (tabR.sh) backups.push(tabR.sh.copyTo(ss).setName(('Табель_MRGBKP_' + stamp).slice(0, 95)).getName());
+    }
+
+    // 1) union absences + fill-empty на target
+    csh.getRange(tRow + 1, cAbs + 1).setValue(JSON.stringify(mergedAbs));
+    filled.forEach(function(f){
+      var tr = csh.getRange(tRow + 1, f.colIdx + 1);
+      // ФІКС: копіюємо number-format з source, щоб число (напр. № договору 134905)
+      // не перетворилось на дату у date-форматованій клітинці target.
+      try { tr.setNumberFormat(csh.getRange(sRow + 1, f.colIdx + 1).getNumberFormat()); } catch(e){}
+      tr.setValue(f.val);
+    });
+    if (cUpd >= 0) csh.getRange(tRow + 1, cUpd + 1).setValue(formatDate(new Date()));
+
+    // 2) ремап Табель + Здоровʼя source → target
+    if (tabR.col >= 0) tabR.rows.forEach(function(rn){ tabR.sh.getRange(rn, tabR.col + 1).setValue(targetId); });
+    if (hR.col   >= 0) hR.rows.forEach(function(rn){ hR.sh.getRange(rn, hR.col + 1).setValue(targetId); });
+
+    // 3) видалити source-рядок (індекси Клієнтів не зсувались до цього кроку)
+    csh.deleteRow(sRow + 1);
+
+    report.backups = backups;
+    Logger.log('[mergeClientDuplicate] %s ← %s | abs=%s tabel=%s health=%s bkp=%s',
+      targetId, sourceId, mergedAbs.length, tabR.rows.length, hR.rows.length, JSON.stringify(backups));
+    return {ok:true, report:report};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { try { lock.releaseLock(); } catch(_){} }
+}
+
+// v7.47 ЕТАП 2 МІГРАЦІЯ: переписати ID клієнтів у новий формат c_<ПІБ[:24]>_<лок[:12]>
+// (без групи) + ремапнути 'ID дитини' у Табелі й Здоровʼї та ChildID у bday_sync_status.
+// ПО-ЛОКАЦІЙНО: body.loc обмежує (порожньо = вся мережа — не рекомендовано).
+// dryRun=true (default) → лише прев'ю map + колізії, БЕЗ запису. Реальний запис лише
+// при {dryRun:false, confirm:'YES_WRITE'} → спершу БЕКАП 4 листів, потім ремап.
+// Ідемпотентна: рядки, де old==new, пропускаються. Колізії тезок (той самий new-id,
+// інша дата нар.) → суфікс дати. Осиротілі Табель-ID (нема картки) — рахуються у звіт.
+function migrateClientIdFormat(body){
+  body = body || {};
+  var locFilter = String(body.loc || '').trim();
+  var dryRun = (body.dryRun !== false);
+  if (!dryRun && body.confirm !== 'YES_WRITE'){
+    Logger.log('[migrateId] ⚠ REAL заблоковано: бракує confirm=YES_WRITE. DRY-RUN.');
+    dryRun = true;
+  }
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(30000); } catch(e){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+  try {
+    var ss  = getCRMSpreadsheet();
+    var csh = ss.getSheetByName(SHEET_CLIENTS);
+    if (!csh) return {ok:false, error:'Лист Клієнти не знайдено'};
+    var cv  = csh.getDataRange().getValues();
+    var hd  = cv[0].map(String);
+    var cId = hd.indexOf('ID'), cName = hd.indexOf('ПІБ дитини'), cLoc = hd.indexOf('Локація'), cBday = hd.indexOf('Дата народження');
+    if (cId < 0 || cName < 0 || cLoc < 0) return {ok:false, error:'Колонки ID/ПІБ/Локація не знайдено'};
+
+    function newIdFor(name, loc){
+      return 'c_' + String(name||'').trim().slice(0,24) + '_' + String(loc||'').slice(0,12);
+    }
+    // 1) Побудова map old→new + детект колізій (у межах фільтра локації)
+    var used = {};            // newId → {bday}
+    var dict = {};            // oldId → newId (лише де змінюється)
+    var maps = [], collisions = [], unchanged = 0;
+    for (var i = 1; i < cv.length; i++){
+      var name = String(cv[i][cName] || '').trim(); if (!name) continue;
+      var loc  = String(cv[i][cLoc]  || '').trim();
+      if (locFilter && loc !== locFilter) continue;
+      var oldId = String(cv[i][cId] || '').trim();
+      var bday  = cBday >= 0 ? String(cv[i][cBday] || '').trim() : '';
+      var nid   = newIdFor(name, loc);
+      if (used[nid] && used[nid].bday !== bday && (used[nid].bday || bday)){
+        var sfx = bday.replace(/[^0-9]/g,'').slice(0,8);
+        nid = nid + '_' + (sfx || 'b');
+        collisions.push({name:name, loc:loc, oldId:oldId, resolvedTo:nid});
+      }
+      used[nid] = {bday:bday};
+      if (oldId !== nid){ dict[oldId] = nid; maps.push({oldId:oldId, newId:nid, name:name, loc:loc}); }
+      else unchanged++;
+    }
+
+    // Хелпер підрахунку впливу на лист з ID-колонкою (dryRun: рахує; real: ремапить)
+    function scan(sheetName, colName){
+      var sh = ss.getSheetByName(sheetName);
+      if (!sh) return {sheet:sheetName, found:0, remap:0, orphanLoc:0, sh:null, col:-1};
+      var v = sh.getDataRange().getValues();
+      var idc = v[0].map(String).indexOf(colName);
+      if (idc < 0) return {sheet:sheetName, found:0, remap:0, orphanLoc:0, sh:sh, col:-1};
+      var locc = v[0].map(String).indexOf('Локація');
+      var remap = 0, orphanLoc = 0;
+      for (var r = 1; r < v.length; r++){
+        var cur = String(v[r][idc] || '').trim();
+        if (dict.hasOwnProperty(cur)) remap++;
+        else if (locFilter && locc >= 0 && String(v[r][locc]||'').trim() === locFilter && cur.indexOf('c_') === 0) orphanLoc++;
+      }
+      return {sheet:sheetName, remap:remap, orphanLoc:orphanLoc, sh:sh, col:idc, vals:v};
+    }
+    var tab = scan(SHEET_ATTENDANCE, 'ID дитини');
+    var hea = scan(SHEET_HEALTH,     'ID дитини');
+    var bdy = scan(BDAY_STATUS_SHEET,'ChildID');
+
+    if (dryRun){
+      return {ok:true, dryRun:true, loc:locFilter || 'ALL',
+        toRename:maps.length, unchanged:unchanged, collisions:collisions,
+        tabelRemap:tab.remap, tabelOrphanLoc:tab.orphanLoc,
+        healthRemap:hea.remap, bdayRemap:bdy.remap,
+        sample:maps.slice(0,50)};
+    }
+
+    // 2) БЕКАП 4 листів
+    var tz = ss.getSpreadsheetTimeZone() || 'Europe/Kiev';
+    var stamp = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd_HH-mm-ss');
+    var tag = (locFilter || 'ALL').slice(0,10);
+    var backups = [];
+    function bkp(sh, base){ if (sh) backups.push(sh.copyTo(ss).setName((base+'_MIGBKP_'+tag+'_'+stamp).slice(0,95)).getName()); }
+    bkp(csh, 'Клієнти'); bkp(tab.sh, 'Табель'); bkp(hea.sh, 'Здоровʼя'); bkp(bdy.sh, 'bdaystat');
+
+    // 3) Переписати ID-колонку Клієнтів (одним setValues)
+    var newCol = [];
+    for (var k = 0; k < cv.length; k++){
+      if (k === 0){ newCol.push([cv[0][cId]]); continue; }
+      var ov = String(cv[k][cId] || '').trim();
+      newCol.push([ dict.hasOwnProperty(ov) ? dict[ov] : cv[k][cId] ]);
+    }
+    csh.getRange(1, cId + 1, newCol.length, 1).setValues(newCol);
+
+    // 4) Ремап Табель / Здоровʼя / bday_sync_status (кожен — одним setValues по колонці)
+    function applyRemap(res){
+      if (!res.sh || res.col < 0) return 0;
+      var v = res.vals, col = res.col, changed = 0, out = [];
+      for (var r = 0; r < v.length; r++){
+        if (r === 0){ out.push([v[0][col]]); continue; }
+        var ov = String(v[r][col] || '').trim();
+        if (dict.hasOwnProperty(ov)){ out.push([dict[ov]]); changed++; }
+        else out.push([v[r][col]]);
+      }
+      res.sh.getRange(1, col + 1, out.length, 1).setValues(out);
+      return changed;
+    }
+    var tRemapped = applyRemap(tab);
+    var hRemapped = applyRemap(hea);
+    var bRemapped = applyRemap(bdy);
+
+    Logger.log('[migrateId] loc=%s renamed=%s tabel=%s health=%s bday=%s bkp=%s',
+      locFilter||'ALL', maps.length, tRemapped, hRemapped, bRemapped, JSON.stringify(backups));
+    return {ok:true, dryRun:false, loc:locFilter || 'ALL',
+      renamed:maps.length, unchanged:unchanged, collisions:collisions,
+      tabelRemapped:tRemapped, tabelOrphanLoc:tab.orphanLoc,
+      healthRemapped:hRemapped, bdayRemapped:bRemapped, backups:backups};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { try { lock.releaseLock(); } catch(_){} }
+}
+
+// v7.47 РЕМОНТ (client-ID-aware): лагодить ОСИРОТІЛІ 'ID дитини' у Табелі та ChildID
+// у bday_sync_status після migrateClientIdFormat. БЕЗПЕЧНА логіка:
+//   • запис, чий ID уже Є в Клієнтах (валідний лінк) → НЕ чіпаємо (навіть якщо Табель-
+//     ім'я ≠ ПІБ картки — не ламаємо коректні лінки);
+//   • ОСИРОТІЛИЙ (ID немає в Клієнтах): рахуємо candidate=c_<Ім'я[:24]>_<Локація[:12]>;
+//     якщо candidate Є в Клієнтах → ставимо (ремонт); інакше лишаємо (безкартковий).
+// Ідемпотентна. dryRun=true default; loc обмежує (для садочки-only). Здоровʼя не чіпає.
+// Викликати через ?action=normalizeAttendanceIds.
+function normalizeAttendanceIds(body){
+  body = body || {};
+  var dryRun = (body.dryRun !== false);
+  var locFilter = String(body.loc || '').trim();
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(30000); } catch(e){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+  try {
+    var ss = getCRMSpreadsheet();
+    // множина валідних client-ID
+    var validSet = {};
+    var csh = ss.getSheetByName(SHEET_CLIENTS);
+    if (csh){
+      var cvv = csh.getDataRange().getValues();
+      var cIdx = cvv[0].map(String).indexOf('ID');
+      if (cIdx >= 0) for (var ci = 1; ci < cvv.length; ci++){ var _id = String(cvv[ci][cIdx] || '').trim(); if (_id) validSet[_id] = true; }
+    }
+    function newId(nm, loc){ return 'c_' + String(nm||'').trim().slice(0,24) + '_' + String(loc||'').slice(0,12); }
+    var out = {ok:true, dryRun:dryRun, loc:locFilter || 'ALL'};
+
+    // --- Табель ---
+    var tsh = ss.getSheetByName(SHEET_ATTENDANCE);
+    var tRepaired = 0, tCardless = 0, tLinked = 0, tSamples = [];
+    if (tsh){
+      var tv = tsh.getDataRange().getValues();
+      var th = tv[0].map(String);
+      var iId = th.indexOf('ID дитини'), iNm = th.indexOf("Ім'я дитини"), iLoc = th.indexOf('Локація');
+      if (iId >= 0 && iNm >= 0 && iLoc >= 0){
+        var col = [];
+        for (var r = 0; r < tv.length; r++){
+          if (r === 0){ col.push([tv[0][iId]]); continue; }
+          var cur = String(tv[r][iId] || '').trim();
+          var loc = String(tv[r][iLoc] || '').trim();
+          if (cur.indexOf('c_') !== 0 || (locFilter && loc !== locFilter)){ col.push([tv[r][iId]]); continue; }
+          if (validSet[cur]){ tLinked++; col.push([tv[r][iId]]); continue; }   // валідний лінк — НЕ чіпати
+          var cand = newId(tv[r][iNm], loc);                                    // осиротілий
+          if (validSet[cand]){
+            tRepaired++;
+            if (tSamples.length < 10) tSamples.push(cur + ' → ' + cand);
+            col.push([cand]);
+          } else { tCardless++; col.push([tv[r][iId]]); }                       // безкартковий — лишаємо
+        }
+        if (!dryRun) tsh.getRange(1, iId + 1, col.length, 1).setValues(col);
+      } else out.tabelWarn = 'колонки Табеля не знайдено';
+    }
+    out.tabelRepaired = tRepaired; out.tabelCardless = tCardless; out.tabelLinkedUntouched = tLinked; out.tabelSamples = tSamples;
+
+    // --- bday_sync_status (ChildID) — та сама безпечна логіка ---
+    var bsh = ss.getSheetByName(BDAY_STATUS_SHEET);
+    var bRepaired = 0, bCardless = 0, bLinked = 0;
+    if (bsh){
+      var bv = bsh.getDataRange().getValues();
+      var bh = bv[0].map(String);
+      var bId = bh.indexOf('ChildID'), bNm = bh.indexOf('Name'), bLoc = bh.indexOf('Loc');
+      if (bId >= 0 && bNm >= 0 && bLoc >= 0){
+        var bcol = [];
+        for (var br = 0; br < bv.length; br++){
+          if (br === 0){ bcol.push([bv[0][bId]]); continue; }
+          var bcur = String(bv[br][bId] || '').trim();
+          var bloc = String(bv[br][bLoc] || '').trim();
+          if (bcur.indexOf('c_') !== 0 || (locFilter && bloc !== locFilter)){ bcol.push([bv[br][bId]]); continue; }
+          if (validSet[bcur]){ bLinked++; bcol.push([bv[br][bId]]); continue; }
+          var bcand = newId(bv[br][bNm], bloc);
+          if (validSet[bcand]){ bRepaired++; bcol.push([bcand]); }
+          else { bCardless++; bcol.push([bv[br][bId]]); }
+        }
+        if (!dryRun) bsh.getRange(1, bId + 1, bcol.length, 1).setValues(bcol);
+      }
+    }
+    out.bdayRepaired = bRepaired; out.bdayCardless = bCardless; out.bdayLinkedUntouched = bLinked;
+    return out;
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { try { lock.releaseLock(); } catch(_){} }
+}
+
+// v7.44 — точкове виправлення однієї клітинки клієнта (напр. відновити № договору,
+// зіпсований у date-клітинку). asText:true → формат '@' (текст), щоб число не стало датою.
+function patchClientCell(body){
+  body = body || {};
+  var id  = String(body.id  || '').trim();
+  var col = String(body.col || '').trim();
+  if (!id || !col) return {ok:false, error:'id і col обовʼязкові'};
+  var ss = getCRMSpreadsheet();
+  var sh = ss.getSheetByName(SHEET_CLIENTS);
+  if (!sh) return {ok:false, error:'Лист Клієнти не знайдено'};
+  var v  = sh.getDataRange().getValues();
+  var hd = v[0].map(String);
+  var cID = hd.indexOf('ID'), cCol = hd.indexOf(col);
+  if (cID < 0 || cCol < 0) return {ok:false, error:'Колонку "' + col + '" не знайдено'};
+  for (var i = 1; i < v.length; i++){
+    if (String(v[i][cID] || '').trim() === id){
+      var rng = sh.getRange(i + 1, cCol + 1);
+      var old = v[i][cCol];
+      if (body.asText === true){ rng.setNumberFormat('@'); rng.setValue(String(body.value == null ? '' : body.value)); }
+      else rng.setValue(body.value);
+      return {ok:true, id:id, col:col, oldValue:String(old), newValue:String(body.value)};
+    }
+  }
+  return {ok:false, error:'Клієнта не знайдено: ' + id};
+}
+
+// ЧИСТКА старих бекап-табів (щоб звільнити ліміт клітинок перед масовим злиттям).
+// Ловить листи, чиї імена містять _BKP, _MRGBKP або _BACKUP (регістронезалежно).
+// dryRun=true (за замовч.) — ЛИШЕ список+кількість, БЕЗ видалення. Видаляє тільки
+// при явному dryRun:false. keep — масив точних імен, які НЕ чіпати (захист). Викликати
+// через ?action=cleanupBackupTabs (POST). v7.45
+function cleanupBackupTabs(body){
+  body = body || {};
+  var dryRun = (body.dryRun !== false); // за замовч. true
+  var keep   = {};
+  (body.keep || []).forEach(function(n){ keep[String(n)] = true; });
+  try {
+    var ss = getCRMSpreadsheet();
+    var sheets = ss.getSheets();
+    var re = /(_BKP|_MRGBKP|_BACKUP)/i;
+    var matched = [];
+    sheets.forEach(function(sh){
+      var nm = sh.getName();
+      if (re.test(nm)){
+        matched.push({
+          name: nm,
+          rows: Math.max(0, sh.getLastRow()),
+          cols: Math.max(0, sh.getLastColumn()),
+          cells: Math.max(0, sh.getMaxRows()) * Math.max(0, sh.getMaxColumns()),
+          kept: !!keep[nm]
+        });
+      }
+    });
+    var totalCells = 0; matched.forEach(function(m){ totalCells += m.cells; });
+    var deletable  = matched.filter(function(m){ return !m.kept; });
+    var deleted = [];
+    if (!dryRun){
+      // не даємо знести останній лист таблиці
+      deletable.forEach(function(m){
+        try {
+          if (ss.getNumSheets() <= 1) return;
+          var sh = ss.getSheetByName(m.name);
+          if (sh){ ss.deleteSheet(sh); deleted.push(m.name); }
+        } catch(e){ /* пропуск проблемного листа */ }
+      });
+    }
+    return {
+      ok: true,
+      dryRun: dryRun,
+      totalSheets: sheets.length,
+      matchedCount: matched.length,
+      deletableCount: deletable.length,
+      reclaimableCells: deletable.reduce(function(s,m){ return s + m.cells; }, 0),
+      matchedCells: totalCells,
+      matched: matched,
+      deleted: deleted
+    };
+  } catch(e){
+    return {ok:false, error:String(e && e.message || e)};
+  }
 }
 
 // БЕКАП: повна копія листа Клієнти (з усіма absences) у новий лист з таймстампом.
@@ -2053,7 +2561,7 @@ function importAbsencesFromPayment(locFilter) {
           var clientData;
           if (isNew) {
             clientData = {
-              id:               'c_' + nameCell.trim().slice(0,20) + '_' + curGroupType.slice(0,8) + '_' + loc.slice(0,8),
+              id:               'c_' + nameCell.trim().slice(0,24) + '_' + loc.slice(0,12), // v7.47 ЕТАП 2: без групи
               name:             nameCell,
               loc:              loc,
               group:            curGroup,
@@ -2340,9 +2848,11 @@ function _normChildName(s) {
 }
 
 function _childId(name, group, loc) {
-  return 'c_' + String(name||'').trim().slice(0,20) +
-         '_' + String(group||'').slice(0,8) +
-         '_' + String(loc||'').slice(0,8);
+  // v7.47 ЕТАП 2: група ПРИБРАНА з ID → c_<ПІБ>_<локація>. Параметр group лишено
+  // для сумісності викликів, але в ID НЕ входить (зміна групи більше не плодить
+  // новий id → нема привидів). Зрізи розширено name[:24], loc[:12].
+  return 'c_' + String(name||'').trim().slice(0,24) +
+         '_' + String(loc||'').slice(0,12);
 }
 
 function _commonPrefixLen(a, b) {
@@ -3064,6 +3574,118 @@ function getSalaryData(loc, year) {
     year: year ? Number(year) || year : '',
     rows: rows
   };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.42 ЕТАП 1 — addSalaryRow: додати dop-рядок у Salary-лист локації В КІНЕЦЬ
+// extras-секції (insertRowsAfter останнього extras-рядка). Матч експорту — по
+// назві (тому назва має бути ТОЧНО як у каталозі занять). Бекап листа ПЕРЕД
+// вставкою (copyTo → таб _BKP_<timestamp>). Не зсуває рядки ВИЩЕ (штат/предметники,
+// денумератор). Дубль-чек по нормалізованій назві в extras.
+// ═══════════════════════════════════════════════════════════════════════════
+function _salaryOpenSheet(loc){
+  var reg = _salaryGetRegistry(); if (!reg.ok) return {ok:false, error:reg.error};
+  var entry = null;
+  for (var j = 0; j < reg.rows.length; j++){ if (reg.rows[j].loc === loc){ entry = reg.rows[j]; break; } }
+  if (!entry) return {ok:false, error:'Локація "' + loc + '" не в Salary-реєстрі'};
+  var ss = SpreadsheetApp.openById(entry.sheetId);
+  var sheet = ss.getSheetByName(entry.listName) || ss.getSheets()[0];
+  return {ok:true, ss:ss, sheet:sheet, entry:entry};
+}
+function _salaryBackupSheet(ss, sheet, listName){
+  var tz = ss.getSpreadsheetTimeZone() || 'Europe/Kiev';
+  var stamp = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd_HH-mm-ss');
+  var bkpName = (String(listName || 'Salary') + '_BKP_' + stamp).slice(0, 95);
+  sheet.copyTo(ss).setName(bkpName);
+  return bkpName;
+}
+function addSalaryRow(body){
+  body = body || {};
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(30000); } catch(e){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+  try {
+    var loc  = String(body.loc  || '').trim();
+    var name = String(body.name || '').trim();
+    var by   = String(body.by   || '?').trim();
+    if (!loc)  return {ok:false, error:'loc обовʼязковий'};
+    if (!name) return {ok:false, error:'Назва рядка обовʼязкова'};
+
+    var op = _salaryOpenSheet(loc); if (!op.ok) return op;
+    var ss = op.ss, sheet = op.sheet;
+
+    var lastRow = Math.max(sheet.getLastRow(), 80);
+    var lastCol = Math.max(sheet.getLastColumn(), 37);
+    var data = sheet.getRange(1, 1, lastRow, lastCol).getValues();
+
+    // rawRows як у getSalaryData → класифікація секцій
+    var rawRows = [];
+    for (var rowNum = 4; rowNum <= data.length; rowNum++){
+      var rowArr = data[rowNum - 1] || [];
+      var rawName = String(rowArr[0] || '').trim();
+      if (_salaryIsSkippedRow(rawName)) continue;
+      var tf = 0, tb = 0;
+      for (var m = 1; m <= 12; m++){
+        var fI = (m - 1) * 3 + 1, bI = (m - 1) * 3 + 2;
+        if (fI < lastCol) tf += _opexNum(rowArr[fI]);
+        if (bI < lastCol) tb += _opexNum(rowArr[bI]);
+      }
+      rawRows.push({row: rowNum, name: rawName, fact: tf, budget: tb});
+    }
+    var classified = _classifyAllSalaryRows(rawRows);
+
+    // дубль-чек: така назва вже є серед extras
+    var nk = _journalNormName(name);
+    var lastExtrasRow = 0;
+    for (var i = 0; i < classified.length; i++){
+      var cr = classified[i];
+      if (cr._section !== 'extras' || cr._category === 'section_header') continue;
+      if (_journalNormName(cr.name) === nk)
+        return {ok:false, error:'Рядок "' + name + '" вже існує (row ' + cr.row + ')', existingRow: cr.row};
+      if (cr.row > lastExtrasRow) lastExtrasRow = cr.row;
+    }
+    if (!lastExtrasRow)
+      return {ok:false, error:'Не знайдено extras-секцію (нема dop-рядків/заголовка «Додаткові заняття») — вставляти нема куди безпечно'};
+
+    // БЕКАП листа ПЕРЕД вставкою
+    var bkpName = _salaryBackupSheet(ss, sheet, op.entry.listName);
+
+    // ВСТАВКА після останнього extras-рядка (рядки вище не зсуваються)
+    sheet.insertRowsAfter(lastExtrasRow, 1);
+    var newRow = lastExtrasRow + 1;
+    sheet.getRange(newRow, 1).setValue(name);
+
+    Logger.log('[addSalaryRow] loc=%s name="%s" → row %s (after %s) backup=%s by=%s', loc, name, newRow, lastExtrasRow, bkpName, by);
+    return {ok:true, loc:loc, name:name, insertedRow:newRow, afterRow:lastExtrasRow, backupSheet:bkpName};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { try { lock.releaseLock(); } catch(_){} }
+}
+// Видалення Salary-рядка (тест/відкат). Захист: видаляємо ЛИШЕ якщо всі суми = 0
+// (ніколи не втрачаємо оплачений рядок) і назва збігається з очікуваною (якщо задана).
+function deleteSalaryRow(body){
+  body = body || {};
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(30000); } catch(e){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+  try {
+    var loc  = String(body.loc || '').trim();
+    var row  = Number(body.row) || 0;
+    var expectName = String(body.name || '').trim();
+    if (!loc || !row) return {ok:false, error:'loc і row обовʼязкові'};
+    var op = _salaryOpenSheet(loc); if (!op.ok) return op;
+    var ss = op.ss, sheet = op.sheet;
+    var lastCol = Math.max(sheet.getLastColumn(), 37);
+    var rowArr = sheet.getRange(row, 1, 1, lastCol).getValues()[0];
+    var rname = String(rowArr[0] || '').trim();
+    if (expectName && _journalNormName(rname) !== _journalNormName(expectName))
+      return {ok:false, error:'Назва рядка ("' + rname + '") ≠ очікуваної ("' + expectName + '") — не видаляю'};
+    var sum = 0;
+    for (var c = 1; c < lastCol; c++){ sum += Math.abs(_opexNum(rowArr[c])); }
+    if (sum !== 0) return {ok:false, error:'Рядок "' + rname + '" має ненульові суми — видалення заблоковано (щоб не втратити ЗП)'};
+    var bkpName = _salaryBackupSheet(ss, sheet, op.entry.listName);
+    sheet.deleteRow(row);
+    Logger.log('[deleteSalaryRow] loc=%s row=%s name="%s" backup=%s', loc, row, rname, bkpName);
+    return {ok:true, loc:loc, deletedRow:row, name:rname, backupSheet:bkpName};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { try { lock.releaseLock(); } catch(_){} }
 }
 
 function getSalaryOverview(year) {
@@ -6622,16 +7244,14 @@ function _vacMonthBreakdown(fromISO, toISO, fee, allAbsences, contractISO, selfI
   });
 }
 // v6.58: ВИБІР ШКАЛИ хвороби за локацією + місяцем ПОЧАТКУ лікарняного (from).
-// Перехід: усі локації — нова шкала з ЛИПНЯ 2026 (NEW_SICK_FROM); Бровари — вже з ЧЕРВНЯ.
-// Нова шкала (роб.дні поспіль): <5=0%, 5-10=5%, 11-15=10%, 16-20=15%, 21+=20%.
-// Стара: [0,5,10,15,20][min(4,ceil(днів/5))]. Стара гілка НЕ змінена (нульовий ризик).
+// v7.43 — рішення Іри: ДОГОВІРНА (денна) шкала діє ЗАВЖДИ, для всіх періодів.
+// Стара тижнева PCT[min(4,ceil(днів/5))] БІЛЬШЕ НЕ використовується (тригер завжди true).
+// Денна шкала (роб.дні поспіль): <5=0%, 5-10=5%, 11-15=10%, 16-20=15%, 21+=20%.
+// Константи NEW_SICK_FROM/EXCEPTIONS лишено як історію; на логіку не впливають.
 var NEW_SICK_FROM = 202607;
 var NEW_SICK_LOC_EXCEPTIONS = { 'Бровари': 202606 };
 function _sickUseNew(loc, y, m){
-  var ym = Number(y) * 100 + Number(m);
-  if (ym >= NEW_SICK_FROM) return true;
-  var ex = NEW_SICK_LOC_EXCEPTIONS[String(loc || '').trim()];
-  return !!(ex && ym >= ex);
+  return true;   // завжди денна шкала (без обмеження по місяцю/локації)
 }
 function _sickNewScalePct(days){
   if (days < 5)   return 0;
@@ -6639,6 +7259,73 @@ function _sickNewScalePct(days){
   if (days <= 15) return 10;
   if (days <= 20) return 15;
   return 20;
+}
+
+// v7.43 — перерахунок ОДНОГО sick-запису денною шкалою у форматі monthsBreakdown
+// фронту ({month, workDays, weeks, pct, amount}). Розподіл по місяцях пропорційно
+// роб.дням (більший місяць першим, залишок останньому) — дзеркало calcAbsMonthBreakdown.
+function _recalcSickBreakdown(fromISO, toISO, fee){
+  var f = _vacParseISO(fromISO), t = _vacParseISO(toISO);
+  if (!f || !t || t < f || !(fee > 0)) return {bd: [], totalPct: 0, totalAmount: 0};
+  var mmap = {}, cur = new Date(f.getTime());
+  while (cur <= t){
+    var wd = cur.getDay();
+    if (wd !== 0 && wd !== 6){
+      var y = cur.getFullYear(), mo = cur.getMonth() + 1, mk = y + '-' + _pad2v(mo);
+      if (!mmap[mk]) mmap[mk] = {month: mk, workDays: 0, weeks: 0, pct: 0, amount: 0};
+      mmap[mk].workDays++;
+    }
+    cur.setDate(cur.getDate() + 1);
+  }
+  var arr = Object.keys(mmap).sort().map(function(k){ return mmap[k]; });
+  var totalDays = arr.reduce(function(s, x){ return s + x.workDays; }, 0);
+  var totalPct = _sickNewScalePct(totalDays);
+  var totalDisc = Math.round(fee * totalPct / 100);
+  var sorted = arr.slice().sort(function(a, b){ return b.workDays - a.workDays; });
+  var acc = 0;
+  for (var i = 0; i < sorted.length; i++){
+    var mi = sorted[i];
+    mi.weeks = Math.min(4, Math.ceil(mi.workDays / 5));   // лише для відображення
+    mi.amount = (i === sorted.length - 1) ? Math.max(0, totalDisc - acc)
+              : (totalDays > 0 ? Math.round(totalDisc * mi.workDays / totalDays) : 0);
+    if (i !== sorted.length - 1) acc += mi.amount;
+    mi.pct = (fee > 0) ? Math.round(mi.amount / fee * 100) : 0;
+  }
+  return {bd: arr, totalPct: totalPct, totalAmount: totalDisc};
+}
+// Перерахувати ВСІ sick-записи клієнта денною шкалою + patchClientAbsences (пряма
+// заміна absences-колонки, без union/повного рядка). Відпустку/інші типи НЕ чіпає.
+function recalcSickAbsences(body){
+  body = body || {};
+  var id = String(body.id || '').trim();
+  if (!id) return {ok:false, error:'id обовʼязковий'};
+  var cli = getClients(); if (!cli.ok) return cli;
+  var rowo = null;
+  for (var i = 0; i < (cli.data || []).length; i++){ if (String(cli.data[i]['ID']) === id){ rowo = cli.data[i]; break; } }
+  if (!rowo) return {ok:false, error:'Клієнта не знайдено: ' + id};
+  var fee = Number(rowo['Сума договору']) || 0;
+  var abs = [];
+  try { abs = JSON.parse(String(rowo['Відсутності (JSON)'] || '[]')); } catch(e){ return {ok:false, error:'JSON absences не читається'}; }
+  var changed = [];
+  abs.forEach(function(a){
+    if (!a || a.type !== 'sick') return;
+    if (a.status === 'rejected' || a.status === 'cancelled') return;
+    if (!a.from || !a.to) return;
+    var r = _recalcSickBreakdown(a.from, a.to, fee);
+    var oldPct = a.totalPct, oldAmt = a.totalAmount;
+    if (oldPct !== r.totalPct || oldAmt !== r.totalAmount){
+      a.monthsBreakdown = r.bd;
+      a.totalPct = r.totalPct;
+      a.totalAmount = r.totalAmount;
+      changed.push({from: a.from, to: a.to, workDays: a.workDays,
+                    oldPct: oldPct, newPct: r.totalPct, oldAmount: oldAmt, newAmount: r.totalAmount});
+    }
+  });
+  if (!changed.length) return {ok:true, id:id, name: rowo['ПІБ дитини'], changed: [], note: 'нічого не змінилось (уже денна шкала)'};
+  var res = patchClientAbsences(id, abs);
+  if (!res.ok) return res;
+  Logger.log('[recalcSickAbsences] id=%s changed=%s', id, JSON.stringify(changed));
+  return {ok:true, id:id, name: rowo['ПІБ дитини'], loc: rowo['Локація'], fee: fee, changed: changed};
 }
 
 // ХВОРОБА: розбивка знижки по місяцях — дзеркало calcAbsMonthBreakdown(type='sick').
@@ -10929,8 +11616,8 @@ function testDiagClientsWithoutStatus(){
 //
 // Ключ порівняння нормалізований: trim + collapse spaces + lowercase, щоб
 // "Гайдай Коля " == "Гайдай Коля". Оригінальне написання зберігається для запису.
-// ID генерується за тим самим патерном що clients.html childId():
-//   'c_' + name.trim().slice(0,20) + '_' + group.slice(0,8) + '_' + loc.slice(0,8)
+// ID генерується за тим самим патерном що clients.html childId() (v7.47 без групи):
+//   'c_' + name.trim().slice(0,24) + '_' + loc.slice(0,12)
 // ───────────────────────────────────────────────────────────────────────────
 function syncMissingClientsFromPayments(opts){
   opts = opts || {};
@@ -10989,7 +11676,8 @@ function syncMissingClientsFromPayments(opts){
     return false;
   }
   function genChildId(name, group, loc){
-    return 'c_' + String(name||'').trim().slice(0,20) + '_' + String(group||'').slice(0,8) + '_' + String(loc||'').slice(0,8);
+    // v7.47 ЕТАП 2/4: група ПРИБРАНА з ID → синк матчить картку по name+loc, не плодить привида.
+    return 'c_' + String(name||'').trim().slice(0,24) + '_' + String(loc||'').slice(0,12);
   }
 
   var existing = {};
@@ -11210,6 +11898,7 @@ function syncGroupsFromPayments(opts){
   var cLocIdx   = chdrs.indexOf('Локація');
   var cGroupIdx = chdrs.indexOf('Група');
   var cNotesIdx = chdrs.indexOf('Нотатки');
+  var cIdIdx    = chdrs.indexOf('ID'); // v7.47 ЕТАП 5: для logGroupChange
   if (cNameIdx < 0 || cLocIdx < 0 || cGroupIdx < 0){
     Logger.log('[syncGroups] ❌ Клієнти: cols missing (name=%s loc=%s group=%s)', cNameIdx, cLocIdx, cGroupIdx);
     return {ok:false, error:'clients cols missing'};
@@ -11233,7 +11922,8 @@ function syncGroupsFromPayments(opts){
     }
     var oldGrp = String(crow[cGroupIdx] || '').trim();
     if (normGroup(oldGrp) === normGroup(newGrp)){ skip.same++; continue; }  // однакова → не чіпати
-    candidates.push({row: cr + 1, name: cname, loc: cloc, oldGroup: oldGrp, newGroup: newGrp});
+    candidates.push({row: cr + 1, name: cname, loc: cloc, oldGroup: oldGrp, newGroup: newGrp,
+      id: cIdIdx >= 0 ? String(crow[cIdIdx] || '') : ''});
   }
 
   // === 4. Лог кандидатів (ПОВНИЙ список, згрупований по локаціях) ===
@@ -11280,6 +11970,8 @@ function syncGroupsFromPayments(opts){
       var prev = String(cvals[c.row - 1][cNotesIdx] || '').trim();
       cSheet.getRange(c.row, cNotesIdx + 1).setValue(prev ? (prev + ' | ' + note) : note);
     }
+    // 6c. v7.47 ЕТАП 5 — історія переходу групи
+    logGroupChange(c.id, c.name, c.loc, c.oldGroup, c.newGroup, 'syncGroupsFromPayments');
   });
   Logger.log('[syncGroups] ✅ ОНОВЛЕНО групу у %s картках. Мітка в Нотатках: "%s"', candidates.length, note);
   Logger.log('[syncGroups] ═══════════════════════════════════════');
