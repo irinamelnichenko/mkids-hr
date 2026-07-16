@@ -1104,6 +1104,43 @@ function weeksCeil(days){ return Math.ceil(Math.max(0,days)/5); }
 // більше НЕ дає новий id → join Payment↔Клієнти завжди сходиться, привиди не плодяться.
 function childId(name,group,loc){ return 'c_'+((name||'').trim().slice(0,24))+'_'+((loc||'').slice(0,12)); }
 
+// v7.55 resolveCardId: розв'язує ID КАРТКИ для дитини з Payment/ростера, коли ім'я в
+// Payment коротше за ПІБ у картці (напр. «Стасюк Діана» ↔ картка «Стасюк Діана Дмитрівна»).
+// Логіка: exact(childId) → префікс за WORD-BOUNDARY у тій самій локації → guard: якщо
+// префікс матчить >1 картку (однофамільці) → fallback на childId (НЕ склеюємо різних дітей).
+var _cardIdxCache=null, _cardIdxKeyN=-1;
+function _cardNameIndex(){
+  var n=Object.keys(S.crm||{}).length;
+  if(_cardIdxCache && _cardIdxKeyN===n) return _cardIdxCache;
+  var idx={};
+  Object.keys(S.crm||{}).forEach(function(id){
+    var c=S.crm[id]; if(!c||!c.loc) return;
+    var l=String(c.loc).trim().toLowerCase();
+    var nm=String(c.name||'').trim().toLowerCase().replace(/\s+/g,' ');
+    if(!nm) return;
+    (idx[l]=idx[l]||[]).push({n:nm,id:id});
+  });
+  _cardIdxCache=idx; _cardIdxKeyN=n;
+  return idx;
+}
+function resolveCardId(name, loc){
+  var base=childId(name,loc);
+  if(S.crm && S.crm[base]) return base;                 // exact — картка вже є (не міняється)
+  var n=String(name||'').trim().toLowerCase().replace(/\s+/g,' ');
+  if(!n) return base;
+  var l=String(loc||'').trim().toLowerCase();
+  var list=(_cardNameIndex()[l])||[];
+  var hit=null, cnt=0;
+  for(var i=0;i<list.length;i++){
+    var cn=list[i].n;
+    if(cn===n || cn.indexOf(n+' ')===0 || n.indexOf(cn+' ')===0){  // word-boundary префікс, обидва боки
+      cnt++; hit=list[i].id;
+      if(cnt>1) return base;                              // >1 однофамілець → неоднозначно → fallback
+    }
+  }
+  return cnt===1 ? hit : base;
+}
+
 // ── v6.36: ВІДПУСТКА — пропорційна формула + ліміт 20 роб.днів/договірний рік ──
 // Держсвята України (хардкод 2025-2026). Свято на Сб/Нд не переноситься (не
 // віднімається). Великдень/Трійця — рухомі (дати задані явно).
@@ -1751,7 +1788,7 @@ function buildGroups(){
     var totalNoEntry=fs+fe;
     var budBase=bs+be||bud;
     var debt=budBase>totalNoEntry?budBase-totalNoEntry:0;
-    var id=childId(name,grp,loc);
+    var id=resolveCardId(name,loc); // v7.55: матч на ID картки (exact→префікс) — щоб attendance-грід знаходив марки за повним ПІБ
     var child={
       name:name,loc:loc,group:grp,teacher:grpMap[key].teacher,
       factStudy:fs,factEntry:fv,factExtra:fe,factTotal:total,
@@ -7480,7 +7517,7 @@ function buildGroupsFromYearly(monthIdx){
       result[loc].push(g);
       grpMap[key]=g;
     }
-    var id=childId(name,grp,loc);
+    var id=resolveCardId(name,loc); // v7.55: матч на ID картки (Payment-join)
     var child={name:name,loc:loc,group:grp,teacher:rawTeacher,
       factStudy:fs,factEntry:0,factExtra:fe,factTotal:fs+fe,
       budgetStudy:bs,budgetExtra:be,budget:budget,status:status,debt:debt,id:id};
@@ -7512,7 +7549,7 @@ function renderClientsYearly(monthStripHtml){
 
   // Додаткові CRM-only діти
   var payIds={};
-  filtRows.forEach(function(r){ var name=String(r["Ім'я дитини"]||'').trim(); var loc=String(r['Локація']||'').trim(); if(name&&loc) payIds[childId(name,parseGroupField(String(r['Група']||'')).groupType||'',loc)]=true; });
+  filtRows.forEach(function(r){ var name=String(r["Ім'я дитини"]||'').trim(); var loc=String(r['Локація']||'').trim(); if(name&&loc) payIds[resolveCardId(name,loc)]=true; }); // v7.55: матч на ID картки
   var crmOnlyCount=Object.keys(S.crm).filter(function(id){
     var c=S.crm[id];
     if(!c||!c.name||payIds[id]) return false;
@@ -7589,7 +7626,7 @@ function renderClientsYearly(monthStripHtml){
       var factY=+(row['Факт-Рік']||0);
       var budY=+(row['Бюджет-Рік']||0);
       var debtY=+(row['Борг-Рік']||0);
-      var id=childId(name,grp,loc2);
+      var id=resolveCardId(name,loc2); // v7.55: матч на ID картки (телефон + openChild)
       var card=S.crm[id]||{};
       var phone=card.momPhone||card.dadPhone||'';
       var debtCell=debtY>0?'<b style="color:var(--red2)">'+fmtN(Math.round(debtY))+'</b>':'<span style="color:var(--green)">✅</span>';
