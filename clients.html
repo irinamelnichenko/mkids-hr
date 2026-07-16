@@ -2399,23 +2399,32 @@ async function initApp(){
   setSyncStatus('sync');
   try{
     // v6.28: незалежні виклики — ПАРАЛЕЛЬНО (було 5 послідовних awaits ~16с → ~4-5с).
-    // buildGroups залежить лише від S.payments; loadClients/locations/bday/registry пишуть
-    // незалежні зрізи S.* → безпечно паралелити. Кожен має власний try/catch (нижче).
-    await Promise.all([
-      loadLocations(false),
-      loadPayments(false),
-      loadClients(false),
-      loadBdayStatus(),
-      loadRegistryUrls()
-    ]);
+    // v7.49: allSettled + лог ІМЕНІ винуватця; «Помилка хмари» лише коли впав КРИТИЧНИЙ
+    // лоадер (locations/payments/clients — без них дані реально не завантажились). bday/
+    // registry некритичні → їх падіння НЕ фарбує топбар червоним (чесніший індикатор).
+    var _loaders=[
+      {name:'locations', crit:true,  p:loadLocations(false)},
+      {name:'payments',  crit:true,  p:loadPayments(false)},
+      {name:'clients',   crit:true,  p:loadClients(false)},
+      {name:'bdayStatus',crit:false, p:loadBdayStatus()},
+      {name:'registry',  crit:false, p:loadRegistryUrls()}
+    ];
+    var _res=await Promise.allSettled(_loaders.map(function(l){ return l.p; }));
+    var _critFail=false;
+    _res.forEach(function(r,i){
+      if(r.status==='rejected'){
+        console.error('[initApp] лоадер "'+_loaders[i].name+'" ВПАВ'+(_loaders[i].crit?' (КРИТИЧНИЙ)':' (некритичний)')+':', r.reason);
+        if(_loaders[i].crit) _critFail=true;
+      }
+    });
     buildGroups();   // гарантуємо актуальні групи після паралельного завантаження
     renderView();    // рендеримо ОДРАЗУ — не чекаємо 3MB річних даних
     // Річні дані та вся історія оплат — у фоні, з повторним рендером коли готові
     loadPaymentsYearly(false).then(function(){ renderView(); }).catch(function(e){ console.warn('Yearly load failed:', e); });
     loadAllPayHistory().catch(function(e){ console.warn('History load failed:', e); });
-    setSyncStatus('ok');
+    setSyncStatus(_critFail?'err':'ok');
   }catch(e){
-    console.error('initApp error:',e);
+    console.error('initApp error (несподіваний):',e);
     setSyncStatus('err');
     buildGroups();
   }
@@ -4849,17 +4858,13 @@ function exportAttendanceXlsx(){
   showFloatMsg('📥 Excel: '+ex.rows.length+' дітей');
 }
 
-// Показати кнопку міграції якщо localStorage має старі дані (один раз)
+// v7.49: банер ОБСОЛЕТНИЙ після скиду ATT_KEY v1→v2. Раніше показував «У браузері є
+// дані табеля з минулого» коли S.att мав будь-що. Але після v2 S.att заповнюється ЛИШЕ
+// з хмари (новий формат ID) — не «старими локальними даними». Банер плутав свіжі хмарні
+// дані зі старим кешем (false-positive) → прибрано. exportAttToCloud лишаємо (ручний виклик
+// з картки дитини, ряд.~5961), але авто-банер на гріді більше не показуємо.
 function maybeShowAttMigrationBanner(container, loc){
-  if(localStorage.getItem('crm_att_migrated_'+loc)) return '';
-  var old=S.att;
-  var hasOld=Object.keys(old).some(function(d){ return Object.keys(old[d]||{}).length>0; });
-  if(!hasOld) return '';
-  return '<div class="alert alert-warn" style="margin-bottom:12px">'
-    +'📦 У браузері є дані табеля з минулого. '
-    +'<button class="btn btn-xs btn-primary" style="margin-left:8px" onclick="exportAttToCloud('+escAttrJS(loc)+')">📤 Перенести в хмару</button>'
-    +'<button class="btn btn-xs btn-secondary" style="margin-left:4px" onclick="localStorage.setItem('+escAttrJS('crm_att_migrated_'+(loc||''))+','+escAttrJS('1')+');renderAttendance()">Пропустити</button>'
-    +'</div>';
+  return '';
 }
 
 function exportAttToCloud(loc){
