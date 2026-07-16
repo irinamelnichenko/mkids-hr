@@ -1258,7 +1258,7 @@ function checkAndClearCache(){
 function clearSetupUrl(){ localStorage.removeItem(CFG.SCRIPT_KEY); location.reload(); }
 
 // Прибираємо старий великий yearly-кеш якщо залишився з попередніх версій
-(function(){ try{ localStorage.removeItem('crm_year_v1'); }catch(e){} })();
+(function(){ ['crm_year_v1','crm_att_v1'].forEach(function(k){ try{ localStorage.removeItem(k); }catch(e){} }); })(); // v7.51: +crm_att_v1 (покинутий після ATT_KEY v1→v2, звільняє ~1.3МБ localStorage)
 
 // ─── API CALLS ────────────────────────────────────────────────────────────────
 async function apiGet(action){
@@ -1304,7 +1304,22 @@ async function apiGetFull(params){
 
 // ─── STORAGE ─────────────────────────────────────────────────────────────────
 function loadLocalCRM(){ try{ S.crm=JSON.parse(localStorage.getItem(CFG.SK)||'{}'); }catch(e){ S.crm={}; } }
-function saveLocalCRM(){ localStorage.setItem(CFG.SK,JSON.stringify(S.crm)); }
+function saveLocalCRM(){
+  // v7.51 QUOTA-SAFE: при переповненні localStorage НЕ кидаємо (інакше loadClients
+  // реджектився → «Помилка хмари»). Звільняємо другорядні кеші й пробуємо ще раз;
+  // якщо все одно не влазить — працюємо з хмари (S.crm уже в пам'яті), кеш пропущено.
+  try {
+    localStorage.setItem(CFG.SK, JSON.stringify(S.crm));
+  } catch(e){
+    try {
+      ['crm_att_v1','crm_year_v1', CFG.PAY_CACHE, CFG.CLI_CACHE].forEach(function(k){ try{ if(k) localStorage.removeItem(k); }catch(_){} });
+      localStorage.setItem(CFG.SK, JSON.stringify(S.crm));
+      console.warn('[saveLocalCRM] localStorage quota — звільнив другорядні кеші, CRM закешовано');
+    } catch(e2){
+      console.warn('[saveLocalCRM] localStorage quota — CRM не влазить, працюю з хмари БЕЗ кешу:', e2 && e2.message);
+    }
+  }
+}
 
 var _crmSyncTimers   = {};
 var _lastSaveTs      = 0;
