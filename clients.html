@@ -1258,7 +1258,7 @@ function checkAndClearCache(){
 function clearSetupUrl(){ localStorage.removeItem(CFG.SCRIPT_KEY); location.reload(); }
 
 // Прибираємо старий великий yearly-кеш якщо залишився з попередніх версій
-(function(){ ['crm_year_v1','crm_att_v1'].forEach(function(k){ try{ localStorage.removeItem(k); }catch(e){} }); })(); // v7.51: +crm_att_v1 (покинутий після ATT_KEY v1→v2, звільняє ~1.3МБ localStorage)
+(function(){ ['crm_year_v1','crm_att_v1','crm_cli_v3'].forEach(function(k){ try{ localStorage.removeItem(k); }catch(e){} }); })(); // v7.51: +crm_att_v1 (~1.3МБ); v7.53: +crm_cli_v3 (дубль-кеш клієнтів прибрано, −2.15МБ)
 
 // ─── API CALLS ────────────────────────────────────────────────────────────────
 async function apiGet(action){
@@ -1556,17 +1556,13 @@ async function loadClients(force){
       rows=j.data||[];
       if(!rows.length) throw new Error('empty response from Apps Script');
     }catch(e2){
-      console.warn('[loadClients] network failed, falling back to cache:', e2);
-      var cached=localStorage.getItem(CFG.CLI_CACHE);
-      if(cached){
-        var cp=JSON.parse(cached);
-        console.log('[loadClients] fallback to cache, rows:', cp.data.length);
-        mergeCRMFromCloud(cp.data);
-      }
+      // v7.53: CLI_CACHE (crm_cli_v3) ПРИБРАНО як дубль crm_mkids_v3. Offline-картки
+      // беруться з S.crm, який loadLocalCRM уже завантажив з SK ДО loadClients (initApp).
+      console.warn('[loadClients] мережа впала — offline-режим, картки з S.crm (crm_mkids_v3):', e2 && e2.message);
+      console.log('[loadClients] offline: карток у S.crm =', Object.keys(S.crm||{}).length);
       return;
     }
   }
-  safeSetItem(CFG.CLI_CACHE,JSON.stringify({data:rows,ts:Date.now()}));
   mergeCRMFromCloud(rows);
 }
 
