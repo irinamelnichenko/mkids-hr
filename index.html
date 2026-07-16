@@ -2152,8 +2152,14 @@ async function initApp(){
 }
 async function refreshData(){showLoad();S._tabelCloudLoaded={};await fetchEmps(true);renderView();}
 function fillLoginLocs(){
-  const locs=sortLocationsByZone([...new Set(S.emps.map(e=>e.loc).filter(Boolean))]);  // v6.49.1
+  // v7.48.1 ФІКС БЛОКЕРА: логін-DOM переоформлено в fffe33b — старий #loginLocation
+  // ПРИБРАНО (тепер рольові #loginLocationDir/Nurse/Vyhovatel, які заповнює
+  // populateLoginLocations() на старті, ряд.5296). Без цього guard getElementById
+  // повертав null → «Cannot set innerHTML of null» → await initApp() падав → застосунок
+  // зависав на «Завантаження…». (Баг маскувався SW-кешем; виліз при bump кешу v7.48.)
   const sel=document.getElementById('loginLocation');
+  if(!sel) return;
+  const locs=sortLocationsByZone([...new Set(S.emps.map(e=>e.loc).filter(Boolean))]);
   sel.innerHTML='<option value="">— Оберіть локацію —</option>'+locs.map(l=>`<option value="${l}">${l}</option>`).join('');
 }
 function updateBadges(){
