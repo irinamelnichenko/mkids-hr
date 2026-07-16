@@ -4360,6 +4360,15 @@ async function saveAbsencePeriod(){
   if((ct==='new'||ct==='sick-only')&&type==='vacation'){ alert('Договір від 01.10.2025+: лише лікарняний'); return; }
   var wd=countWorkDays(from,to);
   if(!wd){ alert('У вказаному діапазоні немає робочих днів (Пн-Пт)'); return; }
+  // v7.57 GUARD від ДУБЛІВ/ПЕРЕТИНІВ: той самий тип+період (або перетин) уже внесено → блок.
+  // Причина інциденту: директор тиснула «Внести» багато разів → та сама відпустка ×N → знижка ×N.
+  if(!S._absEditMode){
+    var _exist=(getCRMCard(id).absences||[]).filter(function(a){ return a && a.type===type && a.status!=='rejected' && a.status!=='cancelled' && a.from && a.to; });
+    for(var _i=0;_i<_exist.length;_i++){ var _a=_exist[_i];
+      if(_a.from===from && _a.to===to){ alert('⚠️ Цей період ('+from+'–'+to+') ВЖЕ внесено для цієї дитини. Дубль не додаємо.'); return; }
+      if(from<=_a.to && _a.from<=to){ alert('⚠️ Період перетинається з наявним ('+_a.from+'–'+_a.to+'). Спершу видаліть/змініть той.'); return; }
+    }
+  }
   var who=isHR()?'HR':(S.user&&S.user.role?S.user.role:'director');
   var now=new Date().toISOString();
 
