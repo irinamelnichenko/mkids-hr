@@ -1240,7 +1240,7 @@ function validateRnokpp(inp){
 
 // ─── SCRIPT URL ───────────────────────────────────────────────────────────────
 function getScriptUrl(){ return localStorage.getItem(CFG.SCRIPT_KEY)||CFG.SCRIPT_URL; }
-function setScriptUrl(u){ localStorage.setItem(CFG.SCRIPT_KEY,u.trim()); }
+function setScriptUrl(u){ safeSetItem(CFG.SCRIPT_KEY,u.trim()); }
 
 // Автоматично очищає кеш якщо URL скрипту змінився
 function checkAndClearCache(){
@@ -1251,7 +1251,7 @@ function checkAndClearCache(){
     localStorage.removeItem(CFG.CLI_CACHE);
     localStorage.removeItem(CFG.LOC_CACHE);
     // YEAR_CACHE не використовується (дані тільки в пам'яті)
-    localStorage.setItem('crm_last_builtin_url', builtinUrl);
+    safeSetItem('crm_last_builtin_url', builtinUrl);
     console.log('Cache cleared due to URL change');
   }
 }
@@ -1304,22 +1304,22 @@ async function apiGetFull(params){
 
 // ─── STORAGE ─────────────────────────────────────────────────────────────────
 function loadLocalCRM(){ try{ S.crm=JSON.parse(localStorage.getItem(CFG.SK)||'{}'); }catch(e){ S.crm={}; } }
-function saveLocalCRM(){
-  // v7.51 QUOTA-SAFE: при переповненні localStorage НЕ кидаємо (інакше loadClients
-  // реджектився → «Помилка хмари»). Звільняємо другорядні кеші й пробуємо ще раз;
-  // якщо все одно не влазить — працюємо з хмари (S.crm уже в пам'яті), кеш пропущено.
-  try {
-    localStorage.setItem(CFG.SK, JSON.stringify(S.crm));
-  } catch(e){
-    try {
-      ['crm_att_v1','crm_year_v1', CFG.PAY_CACHE, CFG.CLI_CACHE].forEach(function(k){ try{ if(k) localStorage.removeItem(k); }catch(_){} });
-      localStorage.setItem(CFG.SK, JSON.stringify(S.crm));
-      console.warn('[saveLocalCRM] localStorage quota — звільнив другорядні кеші, CRM закешовано');
-    } catch(e2){
-      console.warn('[saveLocalCRM] localStorage quota — CRM не влазить, працюю з хмари БЕЗ кешу:', e2 && e2.message);
-    }
+// v7.52 ЄДИНИЙ QUOTA-SAFE WRAPPER: усі localStorage.setItem у clients.html ідуть через
+// це. При QuotaExceededError звільняє ДРУГОРЯДНІ кеші (не сам key, не сесію) і пробує ще
+// раз; якщо все одно не влазить — тихо пропускає (return false), НЕ кидає й НЕ червонить
+// індикатор. Критичні потоки (loadClients/auto-refresh) більше не падають через кеш.
+function safeSetItem(key, value){
+  try { localStorage.setItem(key, value); return true; }
+  catch(e){
+    var quota = e && (e.name==='QuotaExceededError' || e.code===22 || e.code===1014 || /quota/i.test(String(e.message||'')));
+    if(!quota){ console.warn('[safeSetItem] '+key+':', e && e.message); return false; }
+    var FREEABLE=['crm_att_v1','crm_year_v1', (typeof CFG!=='undefined'?CFG.PAY_CACHE:''), (typeof CFG!=='undefined'?CFG.CLI_CACHE:''), (typeof CFG!=='undefined'?CFG.LOC_CACHE:'')];
+    FREEABLE.forEach(function(k){ if(k && k!==key){ try{ localStorage.removeItem(k); }catch(_){} } });
+    try { localStorage.setItem(key, value); console.warn('[safeSetItem] quota — звільнив другорядні кеші, записав '+key); return true; }
+    catch(e2){ console.warn('[safeSetItem] quota — "'+key+'" не влазить, пропущено (працюємо з хмари)'); return false; }
   }
 }
+function saveLocalCRM(){ safeSetItem(CFG.SK, JSON.stringify(S.crm)); }
 
 var _crmSyncTimers   = {};
 var _lastSaveTs      = 0;
@@ -1473,7 +1473,7 @@ async function loadLocations(force){
   }
   var j=await apiGet('getLocations');
   S.locs=j.data||[];
-  localStorage.setItem(CFG.LOC_CACHE,JSON.stringify({data:S.locs,ts:Date.now()}));
+  safeSetItem(CFG.LOC_CACHE,JSON.stringify({data:S.locs,ts:Date.now()}));
 }
 
 async function loadPayments(force){
@@ -1495,7 +1495,7 @@ async function loadPayments(force){
   S.payments=rows;
   S.payUpdated=updated;
   S.payMonth=retMonth;
-  localStorage.setItem(CFG.PAY_CACHE,JSON.stringify({data:rows,ts:Date.now(),updated:updated,month:retMonth}));
+  safeSetItem(CFG.PAY_CACHE,JSON.stringify({data:rows,ts:Date.now(),updated:updated,month:retMonth}));
   buildGroups();
 }
 
@@ -1566,7 +1566,7 @@ async function loadClients(force){
       return;
     }
   }
-  localStorage.setItem(CFG.CLI_CACHE,JSON.stringify({data:rows,ts:Date.now()}));
+  safeSetItem(CFG.CLI_CACHE,JSON.stringify({data:rows,ts:Date.now()}));
   mergeCRMFromCloud(rows);
 }
 
@@ -1787,7 +1787,7 @@ var SESSION_KEY = 'mkids_session';
 var SESSION_TTL_MS = 12 * 3600 * 1000;
 
 function saveSession(user){
-  try { localStorage.setItem(SESSION_KEY, JSON.stringify({user: user, t: Date.now()})); } catch(e){}
+  try { safeSetItem(SESSION_KEY, JSON.stringify({user: user, t: Date.now()})); } catch(e){}
 }
 function readSession(){
   try {
@@ -4630,7 +4630,7 @@ function loadAttendanceFromStorage(){
   try{ S.att=JSON.parse(localStorage.getItem(ATT_KEY)||'{}'); }catch(e){ S.att={}; }
 }
 function saveAttendanceToStorage(){
-  try{ localStorage.setItem(ATT_KEY,JSON.stringify(S.att)); }catch(e){ console.warn('att save err',e); }
+  try{ safeSetItem(ATT_KEY,JSON.stringify(S.att)); }catch(e){ console.warn('att save err',e); }
 }
 
 // ── CLOUD ATTENDANCE ──────────────────────────────────────────────────────────
@@ -4895,7 +4895,7 @@ function exportAttToCloud(loc){
   });
   if(!records.length){ showFloatMsg('Немає даних для перенесення'); return; }
   apiPost({action:'saveAttendance',records:records});
-  localStorage.setItem('crm_att_migrated_'+loc,'1');
+  safeSetItem('crm_att_migrated_'+loc,'1');
   showFloatMsg('📤 '+records.length+' записів відправлено в хмару');
   renderAttendance();
 }
@@ -5524,7 +5524,7 @@ function loadHealthLocal(cId){
   try{ return JSON.parse(localStorage.getItem(HEALTH_KEY_PFX+cId)||'[]'); }catch(e){ return []; }
 }
 function saveHealthLocal(cId,records){
-  try{ localStorage.setItem(HEALTH_KEY_PFX+cId,JSON.stringify(records)); }catch(e){}
+  try{ safeSetItem(HEALTH_KEY_PFX+cId,JSON.stringify(records)); }catch(e){}
 }
 // Зворотна сумісність: стара назва
 function loadHealth(cId){ return loadHealthLocal(cId); }
@@ -5979,7 +5979,7 @@ function renderHealthTabWithRecords(id, records){
     migBanner='<div class="alert alert-warn" style="margin-bottom:10px">📦 В браузері є медзаписи з минулого. '
       +'<button class="btn btn-xs btn-primary" style="margin-left:6px" onclick="exportHealthToCloud('
       +escAttrJS(id)+')">📤 Перенести в хмару</button>'
-      +'<button class="btn btn-xs btn-secondary" style="margin-left:4px" onclick="localStorage.setItem('
+      +'<button class="btn btn-xs btn-secondary" style="margin-left:4px" onclick="safeSetItem('
       +escAttrJS('crm_health_migrated_'+(id||''))+','+escAttrJS('1')+');renderHealthTab()">Пропустити</button>'
       +'</div>';
   }
@@ -6085,7 +6085,7 @@ function exportHealthToCloud(cId){
   local.forEach(function(r){
     apiPost({action:'saveHealthRecord',record:{id:r.id,childId:cId,date:r.date,type:r.type,text:r.text||r.desc||'',createdBy:r.by||who}});
   });
-  localStorage.setItem('crm_health_migrated_'+cId,'1');
+  safeSetItem('crm_health_migrated_'+cId,'1');
   showFloatMsg('📤 '+local.length+' записів відправлено в хмару');
   delete S._healthCache[cId];
   renderHealthTab();

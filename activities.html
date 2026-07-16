@@ -1278,6 +1278,17 @@ var LOCATION_ORDER = [
   'Нац.Гвардії (Благо)','Манхетен (Благо)',
   'Онлайн школа','Кухня Київ','Кухня Львів','Іва-Франківськ кухня'
 ];
+// v7.52 QUOTA-SAFE localStorage wrapper (спільний патерн): setItem без крашу.
+function safeSetItem(key, value){
+  try { localStorage.setItem(key, value); return true; }
+  catch(e){
+    var quota = e && (e.name==='QuotaExceededError' || e.code===22 || e.code===1014 || /quota/i.test(String(e.message||'')));
+    if(!quota){ console.warn('[safeSetItem] '+key+':', e && e.message); return false; }
+    ['crm_att_v1','crm_year_v1','crm_pay_v3','crm_cli_v3','crm_locs_v3'].forEach(function(k){ if(k && k!==key){ try{ localStorage.removeItem(k); }catch(_){} } });
+    try { localStorage.setItem(key, value); return true; }
+    catch(e2){ console.warn('[safeSetItem] quota — "'+key+'" пропущено'); return false; }
+  }
+}
 function locationRank(name){
   var i = LOCATION_ORDER.indexOf(String(name == null ? '' : name).trim());
   return i === -1 ? 999 : i;
@@ -1731,7 +1742,7 @@ function _loadLocalOverrides(){
   } catch(e){ return null; }
 }
 function _saveLocalOverrides(items){
-  try { localStorage.setItem(CFG.LOCAL_KEY, JSON.stringify({ts: Date.now(), items: items})); }
+  try { safeSetItem(CFG.LOCAL_KEY, JSON.stringify({ts: Date.now(), items: items})); }
   catch(e){}
 }
 
@@ -1818,7 +1829,7 @@ function _queueOffline(action, payload){
     var q = JSON.parse(localStorage.getItem('mkids_offline_queue') || '[]');
     q.push({action: action, payload: payload, ts: Date.now()});
     if (q.length > 200) q = q.slice(-200);
-    localStorage.setItem('mkids_offline_queue', JSON.stringify(q));
+    safeSetItem('mkids_offline_queue', JSON.stringify(q));
     updatePwaOfflineIndicator();
   } catch(e){ console.warn('[pwa] queue write:', e); }
 }
@@ -1860,7 +1871,7 @@ async function replayOfflineQueue(){
       remaining.push(item);
     }
   }
-  localStorage.setItem('mkids_offline_queue', JSON.stringify(remaining));
+  safeSetItem('mkids_offline_queue', JSON.stringify(remaining));
   updatePwaOfflineIndicator();
   try {
     if (!remaining.length) showToast('✅ Усі записи синхронізовано', 'ok', 3000);
@@ -1898,7 +1909,7 @@ async function ensureHrEmpsLoaded(){
       };
     }).filter(function(e){ return e.last || e.first; });
     S.hrEmps = emps;
-    try { localStorage.setItem(CFG.HR_CACHE_KEY, JSON.stringify({data: emps, ts: Date.now()})); } catch(e){}
+    try { safeSetItem(CFG.HR_CACHE_KEY, JSON.stringify({data: emps, ts: Date.now()})); } catch(e){}
     return emps;
   } catch(e){
     console.warn('[activities] HR fetch fail:', e && e.message || e);
@@ -1955,7 +1966,7 @@ function initGlobalLocSelector(){
   S.activeLoc = sel.value;
   sel.addEventListener('change', function(){
     S.activeLoc = this.value;
-    try { localStorage.setItem(CFG.LAST_LOC_KEY, S.activeLoc); } catch(e){}
+    try { safeSetItem(CFG.LAST_LOC_KEY, S.activeLoc); } catch(e){}
     onActiveLocChange();
   });
 }
@@ -2561,7 +2572,7 @@ async function initAttendanceTab(){
   });
   $('attActivitySel').addEventListener('change', function(){
     ATT.activity = Number(this.value) || 0;
-    try { localStorage.setItem(ATT_ACTIVITY_LS_KEY, String(ATT.activity)); } catch(e){}
+    try { safeSetItem(ATT_ACTIVITY_LS_KEY, String(ATT.activity)); } catch(e){}
     ATT.syncStatus = {};
     if (ATT.viewMode === 'grid'){ renderMonthGrid(); }
     else { renderAttList(); renderAttTeacherBox(); }
@@ -2685,7 +2696,7 @@ async function _loadPayments(){
   });
   ATT.childrenByLoc = byLoc;
   ATT.childrenLoadedAt = Date.now();
-  try { localStorage.setItem(ATT_PAYMENTS_CACHE_KEY, JSON.stringify({byLoc: byLoc, ts: Date.now()})); } catch(e){}
+  try { safeSetItem(ATT_PAYMENTS_CACHE_KEY, JSON.stringify({byLoc: byLoc, ts: Date.now()})); } catch(e){}
   return byLoc;
 }
 
@@ -2741,7 +2752,7 @@ function _saveMarksCache(){
     var raw = localStorage.getItem(ATT_MARKS_CACHE_KEY);
     var c = raw ? JSON.parse(raw) : {};
     c[ATT.marksKey] = {items: ATT.marks, ts: Date.now()};
-    localStorage.setItem(ATT_MARKS_CACHE_KEY, JSON.stringify(c));
+    safeSetItem(ATT_MARKS_CACHE_KEY, JSON.stringify(c));
   } catch(e){}
 }
 
@@ -2873,7 +2884,7 @@ function populateAttActivitySel(acts){
   ATT.activity = prev;
   sel.value = String(ATT.activity || '');
   // persist
-  try { localStorage.setItem(ATT_ACTIVITY_LS_KEY, String(ATT.activity)); } catch(e){}
+  try { safeSetItem(ATT_ACTIVITY_LS_KEY, String(ATT.activity)); } catch(e){}
 }
 
 function _ddmm(iso){
@@ -4152,7 +4163,7 @@ async function _loadAnaMarks(force){
   ANA.marksLoc = S.activeLoc;
   ANA.marksLoadedAt = Date.now();
   try {
-    localStorage.setItem(ANA_MARKS_CACHE_KEY, JSON.stringify({
+    safeSetItem(ANA_MARKS_CACHE_KEY, JSON.stringify({
       loc: S.activeLoc, items: ANA.marks, ts: Date.now()
     }));
   } catch(e){}
@@ -4788,7 +4799,7 @@ function _loadExpLog(){
   } catch(e){}
 }
 function _saveExpLog(){
-  try { localStorage.setItem(EXP_LOG_KEY, JSON.stringify(EXP.log.slice(0, 10))); } catch(e){}
+  try { safeSetItem(EXP_LOG_KEY, JSON.stringify(EXP.log.slice(0, 10))); } catch(e){}
 }
 function _pushLog(status, loc, msg){
   EXP.log.unshift({

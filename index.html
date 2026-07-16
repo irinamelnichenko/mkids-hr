@@ -746,7 +746,20 @@ const CFG = {
 };
 // Apps Script URL for Google Sheets data storage (configurable in settings)
 function getScriptUrl(){return localStorage.getItem(CFG.SCRIPT_URL_KEY)||'';}
-function setScriptUrl(url){localStorage.setItem(CFG.SCRIPT_URL_KEY,url.trim());}
+// v7.52 ЄДИНИЙ QUOTA-SAFE WRAPPER (дзеркало clients.html): усі localStorage.setItem через це.
+// QuotaExceededError → звільнити другорядні кеші → retry → якщо не влазить, тихо пропустити
+// (return false), НЕ кидати. Критичні потоки не падають через переповнення localStorage.
+function safeSetItem(key, value){
+  try { localStorage.setItem(key, value); return true; }
+  catch(e){
+    var quota = e && (e.name==='QuotaExceededError' || e.code===22 || e.code===1014 || /quota/i.test(String(e.message||'')));
+    if(!quota){ console.warn('[safeSetItem] '+key+':', e && e.message); return false; }
+    ['crm_att_v1','crm_year_v1','crm_pay_v3','crm_cli_v3','crm_locs_v3'].forEach(function(k){ if(k && k!==key){ try{ localStorage.removeItem(k); }catch(_){} } });
+    try { localStorage.setItem(key, value); console.warn('[safeSetItem] quota — звільнив кеші, записав '+key); return true; }
+    catch(e2){ console.warn('[safeSetItem] quota — "'+key+'" не влазить, пропущено'); return false; }
+  }
+}
+function setScriptUrl(url){safeSetItem(CFG.SCRIPT_URL_KEY,url.trim());}
 
 // Та сама формула, що clients.html:childId і crm_script.js:_childId — щоб
 // згенерований id збігся з ChildID в bday_sync_status коли в Клієнти ID порожнє.
@@ -766,7 +779,7 @@ const S = {
 // ── STORAGE ──
 function loadRecs() { try { S.recs = JSON.parse(localStorage.getItem(CFG.SK)||'{}'); } catch { S.recs={}; } }
 function saveRecs() {
-  localStorage.setItem(CFG.SK, JSON.stringify(S.recs));
+  safeSetItem(CFG.SK, JSON.stringify(S.recs));
   syncToSheets(); // async, fire-and-forget
 }
 function rec(key) {
@@ -802,7 +815,7 @@ async function loadFromSheets(){
     const j=await r.json();
     if(j.ok && j.data){
       S.recs=j.data;
-      localStorage.setItem(CFG.SK,JSON.stringify(S.recs));
+      safeSetItem(CFG.SK,JSON.stringify(S.recs));
       updSheetsStatus('ok');
       return true;
     }
@@ -863,7 +876,7 @@ async function ensureClientsLoaded(){
       };
     }
     S.crm = crm;
-    try { localStorage.setItem(CRM_BDAY_CACHE_KEY, JSON.stringify({data: crm, ts: Date.now()})); } catch(e) {}
+    try { safeSetItem(CRM_BDAY_CACHE_KEY, JSON.stringify({data: crm, ts: Date.now()})); } catch(e) {}
   } catch(e) {
     console.warn('ensureClientsLoaded failed:', e);
     S.crm = S.crm || {};
@@ -949,7 +962,7 @@ async function fetchEmps(force=false) {
         matReturn:(row[23]||'').trim() // X=Дата виходу з декрету v6.59
       };
     }).filter(e=>e && (e.last||e.first)).map((e,i)=>({...e,id:i}));
-    localStorage.setItem(CFG.CK, JSON.stringify({data:S.emps,ts:Date.now()}));
+    safeSetItem(CFG.CK, JSON.stringify({data:S.emps,ts:Date.now()}));
     freezeEmps();
     S.lastSync=new Date();
     updSync();
@@ -990,7 +1003,7 @@ function autoGenPasswords(){
     if(!nursePws[loc]){nursePws[loc]=genLocPw(loc,'nurse');changed=true;}
     if(!vPws[loc]){vPws[loc]=genLocPw(loc,'vyhovatel');changed=true;}
   });
-  if(changed){localStorage.setItem('hr_dir_pw',JSON.stringify(dirPws));localStorage.setItem('hr_nurse_pw',JSON.stringify(nursePws));localStorage.setItem('hr_vyhovatel_pw',JSON.stringify(vPws));}
+  if(changed){safeSetItem('hr_dir_pw',JSON.stringify(dirPws));safeSetItem('hr_nurse_pw',JSON.stringify(nursePws));safeSetItem('hr_vyhovatel_pw',JSON.stringify(vPws));}
 }
 
 // ── AUTH ──
@@ -1002,10 +1015,10 @@ function getNursePw(loc){
   try{const m=JSON.parse(localStorage.getItem('hr_nurse_pw')||'{}');return m[loc]||genLocPw(loc,'nurse');}catch{return genLocPw(loc,'nurse');}
 }
 function setDirPw(loc,pw){
-  try{const m=JSON.parse(localStorage.getItem('hr_dir_pw')||'{}');m[loc]=pw;localStorage.setItem('hr_dir_pw',JSON.stringify(m));}catch(e){}
+  try{const m=JSON.parse(localStorage.getItem('hr_dir_pw')||'{}');m[loc]=pw;safeSetItem('hr_dir_pw',JSON.stringify(m));}catch(e){}
 }
 function setNursePw(loc,pw){
-  try{const m=JSON.parse(localStorage.getItem('hr_nurse_pw')||'{}');m[loc]=pw;localStorage.setItem('hr_nurse_pw',JSON.stringify(m));}catch(e){}
+  try{const m=JSON.parse(localStorage.getItem('hr_nurse_pw')||'{}');m[loc]=pw;safeSetItem('hr_nurse_pw',JSON.stringify(m));}catch(e){}
 }
 function getAllDirPws(){try{return JSON.parse(localStorage.getItem('hr_dir_pw')||'{}');}catch{return {};}}
 function getAllNursePws(){try{return JSON.parse(localStorage.getItem('hr_nurse_pw')||'{}');}catch{return {};}}
@@ -1013,7 +1026,7 @@ function getVyhovatelPw(loc){
   try{const m=JSON.parse(localStorage.getItem('hr_vyhovatel_pw')||'{}');return m[loc]||genLocPw(loc,'vyhovatel');}catch{return genLocPw(loc,'vyhovatel');}
 }
 function setVyhovatelPw(loc,pw){
-  try{const m=JSON.parse(localStorage.getItem('hr_vyhovatel_pw')||'{}');m[loc]=pw;localStorage.setItem('hr_vyhovatel_pw',JSON.stringify(m));}catch(e){}
+  try{const m=JSON.parse(localStorage.getItem('hr_vyhovatel_pw')||'{}');m[loc]=pw;safeSetItem('hr_vyhovatel_pw',JSON.stringify(m));}catch(e){}
 }
 function getAllVyhovateliPws(){try{return JSON.parse(localStorage.getItem('hr_vyhovatel_pw')||'{}');}catch{return {};}}
 function selectRole(r) {
@@ -1028,7 +1041,7 @@ var SESSION_KEY = 'mkids_session';
 var SESSION_TTL_MS = 12 * 3600 * 1000;
 
 function saveSession(user){
-  try { localStorage.setItem(SESSION_KEY, JSON.stringify({user: user, t: Date.now()})); } catch(e){}
+  try { safeSetItem(SESSION_KEY, JSON.stringify({user: user, t: Date.now()})); } catch(e){}
 }
 function readSession(){
   try {
@@ -4431,7 +4444,7 @@ function saveSettings(){
   const hr=document.getElementById('setPwHR').value;
   if(!hr){alert('Введіть пароль HR');return;}
   CFG.PW.hr=hr;
-  localStorage.setItem('hr_creds',JSON.stringify({hr,director:CFG.PW.director}));
+  safeSetItem('hr_creds',JSON.stringify({hr,director:CFG.PW.director}));
   toast('✅ Пароль HR оновлено');
 }
 function saveScriptUrl(){
@@ -4573,7 +4586,7 @@ function setCustomPw(loc,role,on){
   try{
     const m=getCustomPwSet(), k=role+'.'+translitUA(loc);
     if(on) m[k]=true; else delete m[k];
-    localStorage.setItem('hr_custom_pw',JSON.stringify(m));
+    safeSetItem('hr_custom_pw',JSON.stringify(m));
   }catch(e){}
 }
 // Комірка пароля у таблиці: стандартний — поле зі значенням за формулою;
@@ -4763,7 +4776,7 @@ function getTabel(loc,date){
   try{const d=JSON.parse(localStorage.getItem(tabelKey(loc,date))||'{}');return d;}catch{return {};}
 }
 function saveTabel(loc,date,data){
-  localStorage.setItem(tabelKey(loc,date),JSON.stringify(data));
+  safeSetItem(tabelKey(loc,date),JSON.stringify(data));
   queueTabelCloudSave(loc,date,data);  // v6.62.1: debounced+batched cloud save (reliable)
 }
 // v6.27.4: Табель співробітників раніше зберігався ЛИШЕ в localStorage → CFO на іншому
@@ -4820,7 +4833,7 @@ function loadTabelFromCloud(loc,from,to,onDone){
       Object.keys(byDate).forEach(function(d){
         var t=getTabel(loc,d);
         Object.keys(byDate[d]).forEach(function(k){ if(!t[k])t[k]={}; t[k].status=byDate[d][k]; });
-        localStorage.setItem(tabelKey(loc,d),JSON.stringify(t));
+        safeSetItem(tabelKey(loc,d),JSON.stringify(t));
       });
       if(onDone)onDone(null);    // v6.44.2: успіх ДО renderTabel — прапор стоїть, re-render не зациклиться
       if(n) renderTabel();       // перемалювати з хмарними даними

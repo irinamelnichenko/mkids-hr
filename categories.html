@@ -353,6 +353,17 @@ var LOCATION_ORDER = [
   'Нац.Гвардії (Благо)','Манхетен (Благо)',
   'Онлайн школа','Кухня Київ','Кухня Львів','Іва-Франківськ кухня'
 ];
+// v7.52 QUOTA-SAFE localStorage wrapper (спільний патерн): setItem без крашу.
+function safeSetItem(key, value){
+  try { localStorage.setItem(key, value); return true; }
+  catch(e){
+    var quota = e && (e.name==='QuotaExceededError' || e.code===22 || e.code===1014 || /quota/i.test(String(e.message||'')));
+    if(!quota){ console.warn('[safeSetItem] '+key+':', e && e.message); return false; }
+    ['crm_att_v1','crm_year_v1','crm_pay_v3','crm_cli_v3','crm_locs_v3'].forEach(function(k){ if(k && k!==key){ try{ localStorage.removeItem(k); }catch(_){} } });
+    try { localStorage.setItem(key, value); return true; }
+    catch(e2){ console.warn('[safeSetItem] quota — "'+key+'" пропущено'); return false; }
+  }
+}
 function locationRank(name){
   var i = LOCATION_ORDER.indexOf(String(name == null ? '' : name).trim());
   return i === -1 ? 999 : i;
@@ -401,7 +412,7 @@ function loadSelectedLocs(){
   } catch(e) { return null; }
 }
 function saveSelectedLocs(){
-  try { localStorage.setItem(SEL_LOCS_KEY, JSON.stringify(S.selectedLocs)); } catch(e) {}
+  try { safeSetItem(SEL_LOCS_KEY, JSON.stringify(S.selectedLocs)); } catch(e) {}
 }
 
 // ── HELPERS ─────────────────────────────────
@@ -710,7 +721,7 @@ function loadCache(){
 }
 function saveCache(data){
   try {
-    localStorage.setItem(CFG.CACHE_KEY, JSON.stringify({
+    safeSetItem(CFG.CACHE_KEY, JSON.stringify({
       ts: Date.now(), year: CFG.YEAR, month: S.month, data: data
     }));
   } catch(e){}
