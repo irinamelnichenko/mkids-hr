@@ -4626,7 +4626,20 @@ function loadAttendanceFromStorage(){
   try{ S.att=JSON.parse(localStorage.getItem(ATT_KEY)||'{}'); }catch(e){ S.att={}; }
 }
 function saveAttendanceToStorage(){
-  try{ safeSetItem(ATT_KEY,JSON.stringify(S.att)); }catch(e){ console.warn('att save err',e); }
+  try{
+    var json=JSON.stringify(S.att);
+    // v7.54 БЮДЖЕТ localStorage: S.att не має рознести квоту. Прунимо ЛИШЕ під тиском
+    // (>2МБ) — скидаємо НАЙСТАРІШІ дати (ключі-дати сортуються) до ~1.5МБ. Поки влазить —
+    // тримаємо всю історію (рік/місяць-в'ю не ламаються). Скидання пропорційне (1 прохід).
+    if(json.length > 2*1024*1024){
+      var dates=Object.keys(S.att).sort();                  // старі → нові
+      var dropN=Math.max(1, Math.floor(dates.length*(1 - (1.5*1024*1024/json.length))));
+      for(var i=0;i<dropN && i<dates.length;i++) delete S.att[dates[i]];
+      json=JSON.stringify(S.att);
+      console.warn('[att] localStorage-бюджет: скинуто',dropN,'найстаріших днів, лишилось',Object.keys(S.att).length,'днів ('+(json.length/1048576).toFixed(2)+'МБ)');
+    }
+    safeSetItem(ATT_KEY,json);
+  }catch(e){ console.warn('att save err',e); }
 }
 
 // ── CLOUD ATTENDANCE ──────────────────────────────────────────────────────────
@@ -5062,7 +5075,9 @@ function renderAttendance(){
   } else {
     from=S.attDay; to=S.attDay;
   }
-  var cacheKey=activeLocs.join(',')+'::'+from+'::'+to;
+  // v7.54: cacheKey НЕ залежить від обраної локації — вантажимо ВСІ локації одним запитом,
+  // тож кеш-стан спільний на тиждень. Перемикання локацій у межах тижня = той самий ключ = миттєво.
+  var cacheKey='ALL::'+from+'::'+to;
 
   // v6.49.2 — RENDER-FIRST + retry/backoff + cache-keep (ПОВНИЙ фікс «Помилка хмари»):
   //   Більше НЕ блокуємо рендер повноекранним спінером. Наявний кеш (ростер дітей +
@@ -5074,7 +5089,7 @@ function renderAttendance(){
   //   щоб не хамерити сервер на постійному офлайні).
   if(!S._attLoadedAt) S._attLoadedAt={};
   if(!S._attFailedAt) S._attFailedAt={};
-  var ATT_TTL=5*60*1000;
+  var ATT_TTL=30*60*1000; // v7.54: 5хв→30хв (відвідуваність рідко міняється; saveAttendance інвалідує серверний кеш версією, локальні мітки — оптимістично одразу)
   var FAIL_COOLDOWN=30*1000;
   var isCurrentRange=(from<=curToday && curToday<=to);
   var neverLoaded=!S._attCloudLoaded[cacheKey];
@@ -5084,36 +5099,25 @@ function renderAttendance(){
   // ФОНОВЕ тихе завантаження — і для першого разу, і для протухлого поточного діапазону.
   // Наявний кеш рендеримо нижче ОДРАЗУ (без return). Старі тижні (не current, вже
   // завантажені) — кеш назавжди.
-  // v7.49: хмару тягнемо ЛИШЕ для ОДНІЄЇ активної локації. getAttendance ~8с/лок, тож
-  // «Всі» (HR = 14 лок послідовно) = таймаут → «Помилка хмари». Для «Всі» показуємо кеш +
-  // підказку обрати локацію; при виборі S.attLoc → activeLocs=[1] → швидке підвантаження.
-  if(S.attMode!=='year' && activeLocs.length>1 && (neverLoaded||cacheStale) && !S._attLoading && !recentlyFailed){
-    S._attCloudLoaded[cacheKey]=true; // не крутимо спінер повторно на «Всі»
-    showFloatMsg('Оберіть локацію, щоб оновити табель із хмари','info');
-  } else if(S.attMode!=='year' && activeLocs.length<=1 && (neverLoaded || cacheStale) && !S._attLoading && !recentlyFailed){
+  // v7.54: ОДИН запит на ВСІ локації (getAttendance без loc). getAttendance читає весь лист
+  // незалежно від loc → усі локації коштують стільки ж, як одна (~7с). Заповнює S.att для
+  // ВСІХ → перемикання локацій миттєве, CFO «Всі» працює. Замінює 14-послідовний-цикл
+  // (98с→таймаут) і тимчасовий single-loc guard. Render-first: кеш показуємо одразу нижче.
+  if(S.attMode!=='year' && (neverLoaded || cacheStale) && !S._attLoading && !recentlyFailed){
     S._attLoading=true;
     if(cacheStale) S._attLoadedAt[cacheKey]=Date.now(); // антидубль паралельних циклів
-    if(neverLoaded) showFloatMsg('☁️ Оновлюю табель…','info');
-    var bgLocs=activeLocs.slice();
-    var bgErr=false;
-    (function bgNextLoc(){
-      if(!bgLocs.length){
-        S._attLoading=false;
-        if(!bgErr){
-          S._attCloudLoaded[cacheKey]=true; S._attLoadedAt[cacheKey]=Date.now();
-          delete S._attFailedAt[cacheKey];
-        } else {
-          S._attFailedAt[cacheKey]=Date.now(); // кулдаун перед наступною спробою
-          showFloatMsg('☁️ Табель: хмара недоступна — показано збережене','err');
-        }
-        renderAttendance();
-        return;
+    if(neverLoaded) showFloatMsg('☁️ Оновлюю табель (усі локації)…','info');
+    loadAttendanceCloudRange('', from, to, function(err){   // loc='' → ВСІ локації одним запитом
+      S._attLoading=false;
+      if(!err){
+        S._attCloudLoaded[cacheKey]=true; S._attLoadedAt[cacheKey]=Date.now();
+        delete S._attFailedAt[cacheKey];
+      } else {
+        S._attFailedAt[cacheKey]=Date.now(); // кулдаун перед наступною спробою
+        showFloatMsg('☁️ Табель: хмара недоступна — показано збережене','err');
       }
-      loadAttendanceCloudRange(bgLocs.shift(), from, to, function(err){
-        if(err) bgErr=true;
-        bgNextLoc();
-      });
-    })();
+      renderAttendance();
+    });
     // без return — рендеримо наявний кеш нижче, поки фон оновлює
   }
 
