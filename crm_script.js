@@ -335,6 +335,7 @@ function doPost(e) {
     else if (body.action === 'deleteAttendanceRecord')   result = deleteAttendanceRecord(body || {}); // v7.47 видалення садок-Табель запису (childId+date)
     else if (body.action === 'migrateClientIdFormat')    result = migrateClientIdFormat(body || {});  // v7.47 ЕТАП 2 міграція ID (без групи)
     else if (body.action === 'normalizeAttendanceIds')   result = normalizeAttendanceIds(body || {}); // v7.47 ремонт Табель-ID по name+loc
+    else if (body.action === 'dedupAttendance')          result = dedupAttendanceApi(body || {});     // v7.49 компакт Табеля (найсвіжіший за Коли)
     else if (body.action === 'addSalaryRow')             result = addSalaryRow(body || {});    // v7.42 Етап 1
     else if (body.action === 'deleteSalaryRow')          result = deleteSalaryRow(body || {}); // v7.42 Етап 1
     else if (body.action === 'saveDopMerge')              result = saveDopMerge(body || {});
@@ -1787,12 +1788,29 @@ function getAttendance(e) {
   var loc     = trim(params.loc  || '');
   var from    = trim(params.from || '');
   var to      = trim(params.to   || '');
+  // v7.49 ШВИДКІСТЬ: CacheService (TTL 3хв, ключ loc+from+to). Перший запит читає лист,
+  // наступні того ж зрізу — миттєво. Кеш лише коли задано loc (щоб не кешувати гігантські
+  // повні відповіді >100КБ). Локальний optimistic-апдейт на фронті показує свіжу мітку одразу,
+  // тож 3хв-лаг стосується лише крос-девайс читань.
+  var cache = null, ckey = '';
+  if (loc){
+    try {
+      cache = CacheService.getScriptCache();
+      var ver = cache.get('attver_' + loc) || '0';                 // версія інвалідації (bump у saveAttendance)
+      ckey  = 'att3_' + loc + '_' + ver + '_' + from + '_' + to;
+      var hit = cache.get(ckey);
+      if (hit){ try { return {ok:true, data:JSON.parse(hit), cached:true}; } catch(_c){} }
+    } catch(_ce){ cache = null; }
+  }
   var ss      = getCRMSpreadsheet();
   var tz      = ss.getSpreadsheetTimeZone() || 'Europe/Kiev';
   var sheet   = ss.getSheetByName(SHEET_ATTENDANCE);
   if (!sheet) return {ok:true, data:[]};
-  var vals = sheet.getDataRange().getValues();
-  if (vals.length < 2) return {ok:true, data:[]};
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return {ok:true, data:[]};
+  // v7.49: читаємо лише перші 6 колонок (Дата,ID дитини,Ім'я,Локація,Група,Статус) —
+  // Ким/Коли гріду не потрібні → менший payload/CPU (з дедупленим листом ~4× швидше).
+  var vals = sheet.getRange(1, 1, lastRow, 6).getValues();
   var hdrs = vals[0].map(String);
   var iDate = hdrs.indexOf('Дата');     if (iDate < 0) iDate = 0;
   var iCid  = hdrs.indexOf('ID дитини'); if (iCid  < 0) iCid  = 1;
@@ -1814,6 +1832,7 @@ function getAttendance(e) {
     byKey[key] = obj;                                              // last wins
   }
   var rows = order.map(function(k){ return byKey[k]; });
+  if (cache && ckey){ try { cache.put(ckey, JSON.stringify(rows), 180); } catch(_cp){} }  // 3хв
   return {ok:true, data:rows};
 }
 
@@ -1849,6 +1868,14 @@ function saveAttendance(body) {
     saved++;
     mirrorAttendanceToNurseSheet(rec.loc||'', rec.childName||'', date, rec.status||'');
   });
+
+  // v7.49: інвалідуємо getAttendance-кеш для зачеплених локацій (bump версії) —
+  // щоб нові мітки одразу читались іншими девайсами (не чекали 3хв TTL).
+  try {
+    var _ac = CacheService.getScriptCache(), _ls = {};
+    records.forEach(function(rec){ if (rec.loc) _ls[rec.loc] = true; });
+    Object.keys(_ls).forEach(function(l){ _ac.put('attver_' + l, String(new Date().getTime()), 21600); });
+  } catch(_ie){}
 
   return {ok:true, saved:saved};
 }
@@ -1886,6 +1913,95 @@ function dedupAttendance() {
   var res = {ok:true, kept:out.length, removed:(vals.length-1)-out.length};
   Logger.log('[dedupAttendance] ' + JSON.stringify(res));
   return res;
+}
+
+// v7.49 API-дедуп Табеля: лишає per (дата+дитина) запис із НАЙСВІЖІШИМ «Коли» (не просто
+// останній рядок листа). dryRun=true default — звіт (raw/unique/willRemove + КОНФЛІКТИ
+// статусів: де серед дублів статуси різні, показуємо kept vs dropped). Реальний прогін
+// {dryRun:false, confirm:'YES_WRITE'}: спершу БЕКАП листа (copyTo), потім перезапис.
+// Викликати через ?action=dedupAttendance (POST).
+function dedupAttendanceApi(body){
+  body = body || {};
+  var dryRun = (body.dryRun !== false);
+  if (!dryRun && body.confirm !== 'YES_WRITE'){ dryRun = true; }
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(30000); } catch(e){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+  try {
+    var ss = getCRMSpreadsheet();
+    var tz = ss.getSpreadsheetTimeZone() || 'Europe/Kiev';
+    var sheet = ss.getSheetByName(SHEET_ATTENDANCE);
+    if (!sheet) return {ok:false, error:'Лист Табель не знайдено'};
+    var vals = sheet.getDataRange().getValues();
+    if (vals.length < 2) return {ok:true, rawRows:0, uniqueKept:0, willRemove:0};
+    var hdr = vals[0].map(String);
+    var iDate = hdr.indexOf('Дата');     if (iDate < 0) iDate = 0;
+    var iCid  = hdr.indexOf('ID дитини'); if (iCid  < 0) iCid  = 1;
+    var iLoc  = hdr.indexOf('Локація');   if (iLoc  < 0) iLoc  = 3;
+    var iStat = hdr.indexOf('Статус');    if (iStat < 0) iStat = 5;
+    var iKoli = hdr.indexOf('Коли');      if (iKoli < 0) iKoli = hdr.length - 1;
+
+    // «Коли» → сортоване число (DD.MM.YYYY HH:mm або Date); fallback = порядок рядка
+    function koliVal(v, rowIdx){
+      if (v instanceof Date) return v.getTime();
+      var s = String(v || '').trim();
+      var m = s.match(/^(\d{2})\.(\d{2})\.(\d{4})[ ,]+(\d{1,2}):(\d{2})/);
+      if (m) return new Date(+m[3], +m[2]-1, +m[1], +m[4], +m[5]).getTime();
+      var d = new Date(s); if (!isNaN(d.getTime())) return d.getTime();
+      return rowIdx; // стабільний fallback (пізніший рядок = більше)
+    }
+
+    var best = {}, order = [], conflicts = [], byLocBefore = {}, byLocAfter = {};
+    for (var r = 1; r < vals.length; r++){
+      var iso = _attDateIso(vals[r][iDate], tz);
+      var cid = trim(String(vals[r][iCid] || ''));
+      if (!iso || !cid) continue;
+      var loc = trim(String(vals[r][iLoc] || ''));
+      byLocBefore[loc] = (byLocBefore[loc] || 0) + 1;
+      var key = iso + '|' + cid;
+      var kv  = koliVal(vals[r][iKoli], r);
+      var stat = String(vals[r][iStat] || '');
+      var row = vals[r].slice(); row[iDate] = iso;
+      if (!(key in best)){ best[key] = {row:row, kv:kv, stat:stat, loc:loc}; order.push(key); }
+      else {
+        var b = best[key];
+        var keepNew = (kv >= b.kv);                       // новіший за Коли виграє (рівні → пізніший рядок)
+        var keptStat = keepNew ? stat : b.stat;
+        var dropStat = keepNew ? b.stat : stat;
+        if (keptStat !== dropStat && conflicts.length < 25){
+          conflicts.push({key:key, kept:keptStat, dropped:dropStat});
+        }
+        if (keepNew){ b.row = row; b.kv = kv; b.stat = stat; b.loc = loc; }
+      }
+    }
+    order.forEach(function(k){ var l = best[k].loc; byLocAfter[l] = (byLocAfter[l] || 0) + 1; });
+    var out = order.map(function(k){ return best[k].row; });
+
+    var report = {
+      ok: true, dryRun: dryRun,
+      rawRows: vals.length - 1,
+      uniqueKept: out.length,
+      willRemove: (vals.length - 1) - out.length,
+      conflictCount: conflicts.length,
+      conflictsSample: conflicts,
+      byLocBefore: byLocBefore,
+      byLocAfter: byLocAfter
+    };
+    if (dryRun) return report;
+
+    // БЕКАП + перезапис
+    var stamp = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd_HH-mm-ss');
+    report.backup = sheet.copyTo(ss).setName(('Табель_DEDUPBKP_' + stamp).slice(0, 95)).getName();
+    sheet.clearContents();
+    sheet.getRange(1, 1, 1, hdr.length).setValues([hdr]);
+    if (out.length){
+      sheet.getRange(2, 1, out.length, 1).setNumberFormat('@');        // дата як текст
+      sheet.getRange(2, 1, out.length, hdr.length).setValues(out);
+    }
+    sheet.setFrozenRows(1);
+    Logger.log('[dedupAttendanceApi] ' + JSON.stringify({kept:out.length, removed:report.willRemove, bkp:report.backup}));
+    return report;
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { try { lock.releaseLock(); } catch(_){} }
 }
 
 function getHealthRecords(e) {

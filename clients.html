@@ -4599,7 +4599,7 @@ function delAbsence(i){ deleteAbsencePeriod(i); }
 
 // ─── ATTENDANCE MODULE ────────────────────────────────────────────────────────
 
-var ATT_KEY='crm_att_v1';
+var ATT_KEY='crm_att_v2'; // v7.49: bump v1→v2 → старий кеш зі СТАРО-форматними ID-ключами (до міграції Етап 2) ігнорується, S.att стартує чистим
 
 // Локальний кеш (завантаження при старті, резервне копіювання)
 function loadAttendanceFromStorage(){
@@ -5068,7 +5068,13 @@ function renderAttendance(){
   // ФОНОВЕ тихе завантаження — і для першого разу, і для протухлого поточного діапазону.
   // Наявний кеш рендеримо нижче ОДРАЗУ (без return). Старі тижні (не current, вже
   // завантажені) — кеш назавжди.
-  if(S.attMode!=='year' && (neverLoaded || cacheStale) && !S._attLoading && !recentlyFailed){
+  // v7.49: хмару тягнемо ЛИШЕ для ОДНІЄЇ активної локації. getAttendance ~8с/лок, тож
+  // «Всі» (HR = 14 лок послідовно) = таймаут → «Помилка хмари». Для «Всі» показуємо кеш +
+  // підказку обрати локацію; при виборі S.attLoc → activeLocs=[1] → швидке підвантаження.
+  if(S.attMode!=='year' && activeLocs.length>1 && (neverLoaded||cacheStale) && !S._attLoading && !recentlyFailed){
+    S._attCloudLoaded[cacheKey]=true; // не крутимо спінер повторно на «Всі»
+    showFloatMsg('Оберіть локацію, щоб оновити табель із хмари','info');
+  } else if(S.attMode!=='year' && activeLocs.length<=1 && (neverLoaded || cacheStale) && !S._attLoading && !recentlyFailed){
     S._attLoading=true;
     if(cacheStale) S._attLoadedAt[cacheKey]=Date.now(); // антидубль паралельних циклів
     if(neverLoaded) showFloatMsg('☁️ Оновлюю табель…','info');
