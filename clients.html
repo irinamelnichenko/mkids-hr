@@ -2649,6 +2649,29 @@ function _ageCell(ymd){
   if(y<0||y>120) return '<span style="color:var(--gray2)">—</span>';
   return '<span style="font-weight:600">'+y+'р</span>'+(m>0?' <span style="color:var(--gray);font-size:11px">'+m+'м</span>':'');
 }
+// v7.60 Кнопка «🔄 Синхронізувати відсутніх» (CFO/бухгалтер). Створює чернетки карток
+// для дітей, що є в Payment (ЛИШЕ садочки), але нема в CRM. Дедуп на бекенді (existing).
+// Крок 1 dryRun-прев'ю → підтвердження → крок 2 реальний запис → лічильник.
+async function syncMissingClients(){
+  try{
+    if(!isHR()){ showFloatMsg('🔒 Лише для CFO/бухгалтера'); return; }
+    showFloatMsg('🔄 Перевіряю Payment (садочки)…');
+    var dry=await apiPost({action:'syncMissingClients', dryRun:true, locScope:'kindergartens'});
+    if(!dry||!dry.ok){ showFloatMsg('❌ '+((dry&&dry.error)||'помилка синку')); return; }
+    var n=dry.missingCount||0;
+    if(!n){ showFloatMsg('✅ Усі садочкові діти вже мають картки'); return; }
+    var byLoc=dry.byLoc||{};
+    var lines=Object.keys(byLoc).sort().map(function(l){ return '• '+l+': '+byLoc[l]; }).join('\n');
+    if(!confirm('У Payment (садочки) знайдено '+n+' дітей без карток:\n\n'+lines+'\n\nСтворити '+n+' чернеток карток у CRM?')) return;
+    showFloatMsg('🔄 Створюю картки…');
+    var res=await apiPost({action:'syncMissingClients', locScope:'kindergartens'});
+    if(!res||!res.ok){ showFloatMsg('❌ '+((res&&res.error)||'помилка запису')); return; }
+    showFloatMsg('✅ Створено чернеток карток: '+(res.created||0));
+    try{ localStorage.removeItem(CFG.SK); }catch(e){}
+    setTimeout(function(){ location.reload(); }, 1400);
+  }catch(e){ showFloatMsg('❌ '+(e&&e.message||e)); }
+}
+
 function renderClients(){
   var monthStripHtml=buildMonthStrip();
   var locs=visibleLocs();
@@ -2736,7 +2759,8 @@ function renderClients(){
           ? '<span style="font-size:11px;color:var(--gray);align-self:center">Останнє: '+esc(S.bdayStatusUpdatedAt)+'</span>'
           : '')
       : '')
-    +'<button class="btn btn-secondary btn-sm" onclick="exportClientsXlsx()" style="margin-left:auto;white-space:nowrap">📥 Excel</button>'
+    +(isHR()?'<button class="btn btn-secondary btn-sm" onclick="syncMissingClients()" style="margin-left:auto;white-space:nowrap" title="Створити картки для дітей, що є в Payment (садочки), але нема в CRM">🔄 Синхронізувати відсутніх</button>':'')
+    +'<button class="btn btn-secondary btn-sm" onclick="exportClientsXlsx()" style="'+(isHR()?'':'margin-left:auto;')+'white-space:nowrap">📥 Excel</button>'
     +'<button class="btn btn-primary btn-sm" onclick="openNewChild()" style="white-space:nowrap">➕ Додати дитину</button>'
     +'</div></div></div>'
     // ── 2. stat cards ─────────────────────────────────────────────────────
