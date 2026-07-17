@@ -1297,6 +1297,22 @@ function clearSetupUrl(){ localStorage.removeItem(CFG.SCRIPT_KEY); location.relo
 // Прибираємо старий великий yearly-кеш якщо залишився з попередніх версій
 (function(){ ['crm_year_v1','crm_att_v1','crm_cli_v3'].forEach(function(k){ try{ localStorage.removeItem(k); }catch(e){} }); })(); // v7.51: +crm_att_v1 (~1.3МБ); v7.53: +crm_cli_v3 (дубль-кеш клієнтів прибрано, −2.15МБ)
 
+// v7.58 АВТО-СКИД КЕШУ ПРИ ЗМІНІ ВЕРСІЇ. Директорам НЕ треба лізти в консоль:
+// щойно завантажилась нова збірка (APP_BUILD != збережений), волатильні кеші
+// (картки CRM + відвідуваність) стираються → S.crm перебудується з хмари з нуля.
+// Це остаточно ховає «привидів» (видалені дубль-картки з localStorage) на всіх
+// пристроях автоматично. Ключі логіну/URL Apps Script НЕ чіпаємо.
+var APP_BUILD='7.58';
+(function(){
+  try{
+    if(localStorage.getItem('crm_build')!==APP_BUILD){
+      ['crm_mkids_v3','crm_att_v2','crm_att_v1','crm_pay_v3','crm_year_v1','crm_cli_v3'].forEach(function(k){ try{ localStorage.removeItem(k); }catch(e){} });
+      localStorage.setItem('crm_build',APP_BUILD);
+      console.log('[mkids] новий build '+APP_BUILD+' → волатильні кеші скинуто (авто)');
+    }
+  }catch(e){}
+})();
+
 // ─── API CALLS ────────────────────────────────────────────────────────────────
 async function apiGet(action){
   var url=getScriptUrl();
@@ -1658,6 +1674,13 @@ async function loadRegistryUrls(){
 }
 
 function mergeCRMFromCloud(rows){
+  // v7.58: ХМАРА = ДЖЕРЕЛО ПРАВДИ. loadClients читає ВЕСЬ лист «Клієнти» (повне
+  // завантаження), тож картки, яких нема в хмарі, — це видалені/злиті дублі, що
+  // зависли у localStorage. Прибираємо їх, інакше їхні pending-відсутності далі
+  // рахуються у «Перерахунках» (баг «31 vs 18»: видалені дубль-картки роздували лічильник).
+  var cloudIds={};
+  rows.forEach(function(row){ var id=String(row['ID']||''); if(id) cloudIds[id]=true; });
+  Object.keys(S.crm).forEach(function(id){ if(!cloudIds[id]) delete S.crm[id]; });
   rows.forEach(function(row){
     var id=String(row['ID']||''); if(!id) return;
     function safeJSON(v,def){
