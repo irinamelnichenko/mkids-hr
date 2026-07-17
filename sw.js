@@ -1,11 +1,11 @@
-// m.kids PWA Service Worker (v7.58-crm-prune-stale-cache-autoreset / cache v7.58)
+// m.kids PWA Service Worker (v7.59-salary-reconcile-sidebar / cache v7.59)
 // Cache: static shell (HTML + manifest + icons + xlsx)
 // Strategy:
 //   • POST → завжди network (ніколи не кешуємо)
 //   • GET до /macros/ (Apps Script) → network-only, fallback на cache
 //   • GET до інших static URLs → cache-first з фоновим оновленням
 
-var CACHE = 'mkids-cache-v7.58';
+var CACHE = 'mkids-cache-v7.59';
 var SHELL = [
   './',
   'activities.html',
@@ -13,6 +13,7 @@ var SHELL = [
   'invoice_report.html',
   'control.html',
   'reconcile.html',
+  'salary_reconcile.html',
   'manifest.json',
   'icon-192.png',
   'icon-512.png',
