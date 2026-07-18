@@ -2489,9 +2489,11 @@ async function initApp(){
     // v7.49: allSettled + лог ІМЕНІ винуватця; «Помилка хмари» лише коли впав КРИТИЧНИЙ
     // лоадер (locations/payments/clients — без них дані реально не завантажились). bday/
     // registry некритичні → їх падіння НЕ фарбує топбар червоним (чесніший індикатор).
+    // v7.62 КРИТИЧНІ = лише ДІТИ+ГРУПИ (locations+clients). payments (борги/оплати) —
+    // НЕкритичний: якщо getPayments впав, ростер/групи все одно є → топбар НЕ червоний.
     var _loaders=[
       {name:'locations', crit:true,  p:loadLocations(false)},
-      {name:'payments',  crit:true,  p:loadPayments(false)},
+      {name:'payments',  crit:false, p:loadPayments(false)},
       {name:'clients',   crit:true,  p:loadClients(false)},
       {name:'bdayStatus',crit:false, p:loadBdayStatus()},
       {name:'registry',  crit:false, p:loadRegistryUrls()}
