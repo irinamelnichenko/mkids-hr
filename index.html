@@ -742,10 +742,17 @@ const CFG = {
   SK: 'hr_mkids_v4',
   CK: 'hr_mkids_cache_v7',   // v6.48.1: бамп — інвалідація старого кешу без поля assessment (стейл після імпорту)
   SCRIPT_URL_KEY: 'hr_script_url', // localStorage key for Apps Script URL
+  // v7.61 HARDCODED активний деплой-URL (той самий, що в clients.html). Fallback, щоб
+  // індикатор «Хмарне збереження» НЕ залежав від localStorage (був баг: порожній ключ → «не налаштовано»).
+  SCRIPT_URL: 'https://script.google.com/macros/s/AKfycbyTSUVlaN4-PpXe47zCSmhVs0Qxy1FDXG_XsB4zcKNpqBxdhDtS9ibM4YFGkGjmPQDFWQ/exec',
   TTL: 5 * 60 * 1000
 };
+// v7.61 Прибираємо ЗАСТАРІЛИЙ/ПОРОЖНІЙ hr_script_url, щоб він не перекривав актуальний
+// hardcoded CFG.SCRIPT_URL (старий деплой у localStorage слав запити на мертвий ендпоінт).
+(function(){ try{ var u=localStorage.getItem('hr_script_url'); if(u!==null && String(u).trim()!==CFG.SCRIPT_URL){ localStorage.removeItem('hr_script_url'); } }catch(e){} })();
 // Apps Script URL for Google Sheets data storage (configurable in settings)
-function getScriptUrl(){return localStorage.getItem(CFG.SCRIPT_URL_KEY)||'';}
+// v7.61: fallback на CFG.SCRIPT_URL (як у clients.html) — індикатор більше не залежить від localStorage.
+function getScriptUrl(){return localStorage.getItem(CFG.SCRIPT_URL_KEY)||CFG.SCRIPT_URL;}
 // v7.52 ЄДИНИЙ QUOTA-SAFE WRAPPER (дзеркало clients.html): усі localStorage.setItem через це.
 // QuotaExceededError → звільнити другорядні кеші → retry → якщо не влазить, тихо пропустити
 // (return false), НЕ кидати. Критичні потоки не падають через переповнення localStorage.
