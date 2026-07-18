@@ -929,8 +929,13 @@ function renderInvoiceList(){
       var canEmail  = hasAnySum && !!c.signerEmail;
       var canViber  = !!c.signerPhone;   // v6.50.2: активна якщо є телефон підписанта
       var idEsc = escapeHtml(String(c.id));
+      // v7.63 ⚠️ бейдж «заповніть суму договору»: є Бюджет місяця, а «Сума договору» в
+      // картці порожня → рахунок формується без розбивки боргу. Директор бачить одразу.
+      var needsC = c.needsContract
+        ? ' <span class="inv-badge b-yellow" title="У картці порожня «Сума договору» — рахунок без розбивки боргу. Заповніть суму договору.">⚠️ договір</span>'
+        : '';
       html += '<tr>' +
-        '<td data-label="ПІБ">' + escapeHtml(c.name) + '</td>' +
+        '<td data-label="ПІБ">' + escapeHtml(c.name) + needsC + '</td>' +
         '<td data-label="Навчання">' + pCell + '</td>' +
         '<td data-label="Додаткові">' + eCell + '</td>' +
         '<td data-label="Підписант">' + sName +
