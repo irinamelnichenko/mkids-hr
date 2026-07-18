@@ -1,11 +1,11 @@
-// m.kids PWA Service Worker (v7.63-invoice-debt-split / cache v7.63)
+// m.kids PWA Service Worker (v7.64-cash-payout-sheet / cache v7.64)
 // Cache: static shell (HTML + manifest + icons + xlsx)
 // Strategy:
 //   • POST → завжди network (ніколи не кешуємо)
 //   • GET до /macros/ (Apps Script) → network-only, fallback на cache
 //   • GET до інших static URLs → cache-first з фоновим оновленням
 
-var CACHE = 'mkids-cache-v7.63';
+var CACHE = 'mkids-cache-v7.64';
 var SHELL = [
   './',
   'activities.html',

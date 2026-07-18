@@ -230,6 +230,17 @@ td.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
   <div class="hint">1) Обери локацію (один PDF = одна локація). 2) Завантаж PDF-відомість. 3) Звір → Застосуй.</div>
 </div>
 
+<!-- v7.64 ВІДОМІСТЬ НА ВИДАЧУ ГОТІВКИ: готівка = Σ(Бюджет)−Σ(Факт) наростаючим (січ→місяць) -->
+<div class="card">
+  <div class="row">
+    <div><label>💵 Відомість готівки — місяць (наростаючим із січня)</label><br>
+      <select id="cashMonth"></select></div>
+    <div style="align-self:flex-end"><button class="btn" id="cashBtn" onclick="cashSheet()">🖨 Відомість готівки</button></div>
+  </div>
+  <div class="hint">Готівка = Σ(Бюджет) − Σ(Факт) від січня до обраного місяця по кожному (основний штат). Хто в мінусі/0 — не в листок. Факт = карта; готівку внось у Факт ВРУЧНУ вже ПІСЛЯ видачі. PDF з колонкою «Підпис».</div>
+  <div id="cashInfo" style="margin-top:8px"></div>
+</div>
+
 <div class="card">
   <label>PDF-відомість</label>
   <div class="file-drop" id="drop" onclick="document.getElementById('pdfFile').click()">📄 Клікни або перетягни PDF «Відомість розподілу виплат»</div>
@@ -460,6 +471,37 @@ function parseVidomist(lines, fullText){
 function post(body){
   return fetch(CFG.SCRIPT_URL, {method:'POST', redirect:'follow', headers:{'Content-Type':'text/plain;charset=utf-8'}, body:JSON.stringify(body)})
     .then(function(r){return r.text();}).then(function(t){ try{return JSON.parse(t);}catch(_){return {ok:true,_assumed:true};} });
+}
+
+// ── v7.64 ВІДОМІСТЬ НА ВИДАЧУ ГОТІВКИ ──────────────────────────────────────
+(function fillCashMonths(){
+  var MN=['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
+  var sel=$('cashMonth'); if(!sel) return;
+  var cur=new Date().getMonth()+1;
+  sel.innerHTML=MN.map(function(m,i){ return '<option value="'+(i+1)+'"'+((i+1)===cur?' selected':'')+'>'+m+'</option>'; }).join('');
+})();
+function _dlB64(b64,fname){
+  var bin=atob(b64),len=bin.length,arr=new Uint8Array(len);
+  for(var i=0;i<len;i++) arr[i]=bin.charCodeAt(i);
+  var url=URL.createObjectURL(new Blob([arr],{type:'application/pdf'}));
+  var a=document.createElement('a'); a.href=url; a.download=fname||'vidomist.pdf';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(function(){ URL.revokeObjectURL(url); },1500);
+}
+function cashSheet(){
+  var loc=$('locSel').value;
+  if(!loc){ toast('Обери локацію'); return; }
+  var month=Number($('cashMonth').value)||0;
+  if(!month){ toast('Обери місяць'); return; }
+  var btn=$('cashBtn'); btn.disabled=true; btn.textContent='⏳ Формую…';
+  $('cashInfo').innerHTML='';
+  post({action:'cashPayoutSheet', loc:loc, month:month, year:new Date().getFullYear()}).then(function(j){
+    btn.disabled=false; btn.textContent='🖨 Відомість готівки';
+    if(!j||!j.ok){ toast('Помилка: '+((j&&j.error)||'?')); return; }
+    if(!j.count){ $('cashInfo').innerHTML='<div class="ok">Немає кого включати — усі погашені або переплата (готівка ≤ 0) за період.</div>'; return; }
+    _dlB64(j.pdfBase64, j.filename);
+    $('cashInfo').innerHTML='<div class="ok">✅ Відомість сформовано: <b>'+j.count+'</b> осіб · Разом до видачі <b>'+fmt(j.total)+'</b> грн. PDF завантажено.</div>';
+  });
 }
 
 function doPreview(){
