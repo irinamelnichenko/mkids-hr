@@ -1,5 +1,9 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v6.11
+// m.kids CRM — Google Apps Script v7.65
+// v7.65: reconcileVacationDiscounts(loc, year, month, opts) — звірка належної
+//        знижки за відпустку (з карток) проти журнальної; dryRun=TRUE за
+//        замовчуванням, opts.onlyDiff. Розрахунок і запис — через
+//        exportVacationDiscountToPayments (у неї додано params.dryRun).
 // v6.11: вчителі-предметники v2 — норми по регіонах × предмет × group_type,
 //        журнал занять (Predmetnyky_Lessons), endpoints + тести
 // v6.7: міграція директорів і медсестер у єдиний лист "Користувачі";
@@ -241,7 +245,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v6.5', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.65', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -314,6 +318,7 @@ function doPost(e) {
     else if (body.action === 'deleteHealthRecord')    result = deleteHealthRecord(body);
     else if (body.action === 'writeAbsenceToPayment')    result = writeAbsenceToPayment(body);
     else if (body.action === 'exportVacationDiscountToPayments') result = exportVacationDiscountToPayments(body || {});
+    else if (body.action === 'reconcileVacationDiscounts') result = reconcileVacationDiscounts(body || {}); // v7.65 звірка знижок (dryRun за замовчуванням)
     else if (body.action === 'importAbsencesFromPayment') result = importAbsencesFromPayment(body.loc || '');
     else if (body.action === 'confirmBdayMatch')          result = confirmBdayMatch(body.childId || '', body.confirmedBy || '');
     else if (body.action === 'unconfirmBdayMatch')        result = unconfirmBdayMatch(body.childId || '');
@@ -7674,11 +7679,15 @@ function determineTargetMonth(vacationMonth, vacationYear, entryTimestamp){
   return {month: nm.month, year: nm.year, reason: 'внесено пізніше→наступний місяць'};
 }
 
+// v7.65: params.dryRun === true → усе рахується як завжди (клієнти, роутинг, журнал,
+// details/notFound), але ЖОДНОГО запису: ні в клітинки Payment, ні в захист N+1, ні в
+// журнал. За замовчуванням false — поведінка всіх наявних викликів не змінюється.
 function exportVacationDiscountToPayments(params){
   try {
     var loc   = String(params.loc || '').trim();
     var month = Number(params.month);
     var year  = Number(params.year) || new Date().getFullYear();
+    var dryRun = (params.dryRun === true);
     if (!loc) return {ok: false, error: 'Параметр loc обовʼязковий'};
     if (!month || month < 1 || month > 12) return {ok: false, error: 'month має бути 1-12'};
     var monthName = MONTHS_CAL_UA[month - 1];
@@ -7784,7 +7793,7 @@ function exportVacationDiscountToPayments(params){
       var newValue     = baseValue + newSum;
 
       if (newValue !== currentValue){
-        paySh.getRange(rowIdx0 + 1, budgetNavchCol1).setValue(newValue);  // замінює формулу числом
+        if (!dryRun) paySh.getRange(rowIdx0 + 1, budgetNavchCol1).setValue(newValue);  // замінює формулу числом
         cellsWritten++;
         if (wasFormula) formulaConverted++;
       }
@@ -7793,7 +7802,7 @@ function exportVacationDiscountToPayments(params){
       // формулу (=N) — заморожуємо N+1 = baseValue (недисконтована, напр. 21000),
       // інакше N+1 успадкував би дисконтоване число. У журнал НЕ пишемо (технічна дія).
       if (disc > 0 && canProtectNext && nextFormulas[rowIdx0] && nextFormulas[rowIdx0][0]){
-        paySh.getRange(rowIdx0 + 1, nextNavchCol1).setValue(baseValue);
+        if (!dryRun) paySh.getRange(rowIdx0 + 1, nextNavchCol1).setValue(baseValue);
         nextProtected++;
         Logger.log('[vacDiscount] PROTECT next-month row=%s "%s": формула %s → %s',
           rowIdx0 + 1, payName, nextFormulas[rowIdx0][0], baseValue);
@@ -7807,6 +7816,7 @@ function exportVacationDiscountToPayments(params){
         updated++; totalDisc += disc;
         details.push({child: payName, discount: disc, currentBefore: currentValue,
                       wasFormula: wasFormula, base: baseValue, newCell: newValue,
+                      lastWritten: lastWritten,                      // v7.65: потрібне reconcile
                       row: rowIdx0 + 1, status: 'discounted'});
       } else if (lastWritten !== 0){                        // п.8 скасування → повертаємо бюджет
         details.push({child: payName, discount: 0, currentBefore: currentValue,
@@ -7815,25 +7825,152 @@ function exportVacationDiscountToPayments(params){
       }
     });
 
+    var notFoundDetails = [];                                    // v7.65: ПІБ + сума, що не доїхала
     Object.keys(discByNorm).forEach(function(nk){
-      if (!rowByNorm.hasOwnProperty(nk)) notFound.push(discByNorm[nk].name);
+      if (!rowByNorm.hasOwnProperty(nk)){
+        notFound.push(discByNorm[nk].name);
+        notFoundDetails.push({child: discByNorm[nk].name,
+                              discount: Math.round(discByNorm[nk].discount)});
+      }
     });
 
-    _commitJournalUpdates(journal, journalOps);
-    Logger.log('[vacDiscount] loc=%s %s/%s: updated=%s totalDisc=%s cells=%s formulaConv=%s nextProtected=%s notFound=%s',
-      loc, month, year, updated, totalDisc, cellsWritten, formulaConverted, nextProtected, JSON.stringify(notFound));
+    if (!dryRun) _commitJournalUpdates(journal, journalOps);
+    Logger.log('[vacDiscount] loc=%s %s/%s%s: updated=%s totalDisc=%s cells=%s formulaConv=%s nextProtected=%s notFound=%s',
+      loc, month, year, (dryRun ? ' DRY-RUN' : ''), updated, totalDisc, cellsWritten, formulaConverted, nextProtected, JSON.stringify(notFound));
 
     return {
       ok: true, loc: loc, targetMonth: monthName, targetMonthNum: month, year: year,
+      dryRun: dryRun,                             // v7.65
       budgetNavchCol: budgetNavchCol1, updated: updated, totalDiscount: totalDisc,
-      cellsWritten: cellsWritten,
+      cellsWritten: cellsWritten,                 // при dryRun — скільки клітинок ЗМІНИЛОСЬ БИ
       formulaCellsConverted: formulaConverted,    // v6.41: формул→число у таргеті
       nextMonthProtected: nextProtected,          // v6.41: скільки N+1 заморожено
       nextMonthProtectable: canProtectNext,       // false для грудня
-      notFound: notFound, details: details, routing: routing
+      notFound: notFound, notFoundDetails: notFoundDetails,   // v7.65
+      details: details, routing: routing
     };
   } catch(e){
     Logger.log('[exportVacationDiscount] EXCEPTION: %s\n%s', e && e.message, e && e.stack);
+    return {ok: false, error: String(e && e.message || e)};
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.65 ЗВІРКА ЗНИЖОК ЗА ВІДПУСТКУ: належне (з карток) ↔ фактичне (журнал).
+//
+//   reconcileVacationDiscounts(loc, year, month, opts)
+//   reconcileVacationDiscounts({loc, year, month, dryRun, onlyDiff})
+//
+//   opts.dryRun   — ЗА ЗАМОВЧУВАННЯМ true. Запис лише при явному dryRun === false.
+//   opts.onlyDiff — true → у rows лише позиції з різницею ≠ 0.
+//
+// Розрахунок НЕ дублюється: усе рахує exportVacationDiscountToPayments у режимі
+// dryRun. Застосування (dryRun:false) — виклик ТІЄЇ САМОЇ функції з dryRun:false,
+// тобто єдиний механізм запису на обидва режими. Другого шляху запису не існує.
+//
+// rows містить лише дітей, у яких очікувано > 0 АБО в журналі ≠ 0 (решта дітей
+// локації без відпусток — не аномалія і не показуються).
+//
+// action у rows:
+//   ok             різниці немає
+//   apply          у журналі 0, належить знижка → запишеться вперше
+//   increase       знижка є, але менша за належну → збільшиться
+//   decrease       знижка більша за належну → зменшиться
+//   restore        знижка є, а періодів уже немає → бюджет повернеться до бази
+//   not-in-payment ПІБ картки не матчиться з жодним рядком Payment-файла.
+//                  НЕ виправляється автоматично — треба вирівняти ПІБ
+//                  (setLocPaymentName) або виправити картку. Саме цей випадок
+//                  експорт зараз ковтає мовчки: повертає ok:true зі списком
+//                  у notFound, якого фронт не читає.
+// ═══════════════════════════════════════════════════════════════════════════
+function reconcileVacationDiscounts(loc, year, month, opts){
+  try {
+    // підтримка обох форм виклику: позиційної та об'єктом (як cashPayoutSheet)
+    if (loc && typeof loc === 'object'){
+      var b = loc;
+      opts  = b;
+      month = b.month;
+      year  = b.year;
+      loc   = b.loc;
+    }
+    opts = opts || {};
+    loc   = String(loc || '').trim();
+    month = Number(month);
+    year  = Number(year) || new Date().getFullYear();
+    var dryRun   = (opts.dryRun !== false);        // ⬅️ за замовчуванням TRUE
+    var onlyDiff = (opts.onlyDiff === true);
+    if (!loc) return {ok: false, error: 'Параметр loc обовʼязковий'};
+    if (!month || month < 1 || month > 12) return {ok: false, error: 'month має бути 1-12'};
+
+    // 1) РАХУНОК — завжди спершу без запису, щоб побудувати звіт «до».
+    var calc = exportVacationDiscountToPayments({loc: loc, month: month, year: year, dryRun: true});
+    if (!calc.ok) return calc;
+
+    // 2) ЗВІТ. details дає і належне (discount), і фактичне (lastWritten, від'ємне).
+    var rows = [], toApply = 0, toRestore = 0, toAdjust = 0, matched = 0;
+    var expectedTotal = 0, journalTotal = 0;
+    (calc.details || []).forEach(function(d){
+      var expected = Number(d.discount) || 0;
+      var inJournal = Math.abs(Number(d.lastWritten) || 0);
+      var diff = expected - inJournal;
+      var action;
+      if (diff === 0)            { action = 'ok';       matched++; }
+      else if (inJournal === 0)  { action = 'apply';    toApply++; }
+      else if (expected === 0)   { action = 'restore';  toRestore++; }
+      else if (diff > 0)         { action = 'increase'; toAdjust++; }
+      else                       { action = 'decrease'; toAdjust++; }
+      expectedTotal += expected;
+      journalTotal  += inJournal;
+      if (onlyDiff && diff === 0) return;
+      rows.push({name: d.child, expected: expected, journal: inJournal, diff: diff,
+                 action: action, row: d.row, currentCell: d.currentBefore,
+                 base: d.base, newCell: d.newCell, wasFormula: !!d.wasFormula});
+    });
+
+    // Діти зі знижкою, яких немає в Payment-файлі — окрема, невиправна автоматично гілка.
+    (calc.notFoundDetails || []).forEach(function(nf){
+      var expected = Number(nf.discount) || 0;
+      expectedTotal += expected;
+      rows.push({name: nf.child, expected: expected, journal: 0, diff: expected,
+                 action: 'not-in-payment', row: null, currentCell: null,
+                 base: null, newCell: null, wasFormula: false});
+    });
+
+    rows.sort(function(a, b){ return Math.abs(b.diff) - Math.abs(a.diff); });
+
+    // 3) ЗАСТОСУВАННЯ — той самий механізм запису, що й у звичайного експорту.
+    var applied = null;
+    if (!dryRun){
+      applied = exportVacationDiscountToPayments({loc: loc, month: month, year: year, dryRun: false});
+      if (!applied.ok) return {ok: false, error: 'Звірка порахована, але застосування впало: ' +
+                                                 applied.error, report: rows};
+    }
+
+    Logger.log('[vacReconcile] loc=%s %s/%s dryRun=%s: rows=%s apply=%s adjust=%s restore=%s notFound=%s diffTotal=%s',
+      loc, month, year, dryRun, rows.length, toApply, toAdjust, toRestore,
+      (calc.notFoundDetails || []).length, expectedTotal - journalTotal);
+
+    return {
+      ok: true, dryRun: dryRun, onlyDiff: onlyDiff,
+      loc: loc, year: year, month: month, targetMonth: calc.targetMonth,
+      summary: {
+        rows: rows.length,
+        matched: matched,
+        toApply: toApply,
+        toAdjust: toAdjust,
+        toRestore: toRestore,
+        notFound: (calc.notFoundDetails || []).length,
+        expectedTotal: Math.round(expectedTotal),
+        journalTotal: Math.round(journalTotal),
+        diffTotal: Math.round(expectedTotal - journalTotal)
+      },
+      rows: rows,
+      notFound: calc.notFound || [],
+      routing: calc.routing || [],
+      applied: applied    // null при dryRun; інакше повна відповідь експорту
+    };
+  } catch(e){
+    Logger.log('[vacReconcile] EXCEPTION: %s\n%s', e && e.message, e && e.stack);
     return {ok: false, error: String(e && e.message || e)};
   }
 }
