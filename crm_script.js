@@ -1,5 +1,9 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.65
+// m.kids CRM — Google Apps Script v7.66
+// v7.66: _VAC_EXCEPTIONS — 'бахтін роман павлович' → 'бахтін роман'. У картці ПІБ
+//        без по батькові, тож виняток не матчився: договір 2025-09-30T21:00Z у TZ
+//        Києва читається як 2025-10-01 → ct='new' → відпустка ігнорувалась і
+//        знижка 19 000 грн (Тичини, серпень 2026) не доїжджала в Payment.
 // v7.65: reconcileVacationDiscounts(loc, year, month, opts) — звірка належної
 //        знижки за відпустку (з карток) проти журнальної; dryRun=TRUE за
 //        замовчуванням, opts.onlyDiff. Розрахунок і запис — через
@@ -245,7 +249,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.65', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.66', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -7624,7 +7628,7 @@ function _sickMonthBreakdown(fromISO, toISO, fee, loc){
 var _VAC_SCHOOL_LOCS = ['Школа Осокорки','Школа 228','Онлайн школа'];
 // Дзеркало фронту (clients.html getContractType3): діти з договором ≥01.10.2025,
 // яким зберігаємо відпустку як 'standard'. Матч по нормалізованому ПІБ (_normForMatch).
-var _VAC_EXCEPTIONS = ['андреєва ангеліна','тандиряк северин','гаркуша богдан','мельничук дарина','скоріна аліса','городний яким',"щуров мар'ян",'бахтін богдан','бахтін роман павлович'];
+var _VAC_EXCEPTIONS = ['андреєва ангеліна','тандиряк северин','гаркуша богдан','мельничук дарина','скоріна аліса','городний яким',"щуров мар'ян",'бахтін богдан','бахтін роман'];
 // preschool-відпустка зараховується як standard ЛИШЕ якщо весь період у літі
 // (місяці from і to в межах 06–08) — дзеркало saveAbsencePeriod у clients.html.
 function _vacIsSummerPeriod(fromISO, toISO){
