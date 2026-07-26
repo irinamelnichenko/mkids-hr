@@ -1,5 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.66
+// m.kids CRM — Google Apps Script v7.67
+// v7.67: ХВОРОБА — внесення заднім числом (до 30 днів, to не далі +7) на фронті;
+//        знижка за хворобу ЗАВЖДИ роутиться в НАСТУПНИЙ місяць після місяця хвороби
+//        (determineTargetMonth отримав 4-й аргумент kind). Відпустка — без змін.
 // v7.66: _VAC_EXCEPTIONS — 'бахтін роман павлович' → 'бахтін роман'. У картці ПІБ
 //        без по батькові, тож виняток не матчився: договір 2025-09-30T21:00Z у TZ
 //        Києва читається як 2025-10-01 → ct='new' → відпустка ігнорувалась і
@@ -249,7 +252,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.66', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.67', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -7669,7 +7672,13 @@ function _vacEntryDateISO(ts){
 }
 // Куди йде знижка за місяць відпустки: timestamp внесення < 1-ше число місяця
 // відпустки → той самий місяць; >= 1-ше → наступний (рахунок уже виставлений).
-function determineTargetMonth(vacationMonth, vacationYear, entryTimestamp){
+function determineTargetMonth(vacationMonth, vacationYear, entryTimestamp, kind){
+  // v7.67 ХВОРОБА: довідку приносять постфактум, рахунок місяця хвороби вже виставлений,
+  // тож знижка ЗАВЖДИ йде в наступний місяць — незалежно від дати внесення.
+  if (kind === 'sick'){
+    var nms = _nextMonth(vacationMonth, vacationYear);
+    return {month: nms.month, year: nms.year, reason: 'хвороба→завжди наступний місяць'};
+  }
   var entryISO = _vacEntryDateISO(entryTimestamp);
   if (!entryISO) return {month: vacationMonth, year: vacationYear, reason: 'no-timestamp→той самий місяць'};
   // v6.55: порівняння МІСЯЦІВ, не днів. Знижка йде в місяць відсутності, якщо внесено
@@ -7719,7 +7728,7 @@ function exportVacationDiscountToPayments(params){
       // одна клітинка «Бюджет навч», одна журнальна доріжка kind='vacation' (без зтирань).
       function _accrue(mb, kind, a){
         if (mb.discount <= 0) return;
-        var tgt = determineTargetMonth(mb.m, mb.y, a.createdAt);
+        var tgt = determineTargetMonth(mb.m, mb.y, a.createdAt, kind);   // v7.67: sick → наступний місяць
         if (tgt.year !== year || tgt.month !== month) return;
         var nk = _normNameVac(name);
         var slot = (discByNorm[nk] = discByNorm[nk] || {name: name, discount: 0, seen: {}});
