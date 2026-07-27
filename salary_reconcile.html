@@ -527,7 +527,12 @@ function badge(r){
   if (r.status==='ipn-match') return '<span class="badge b-ipn">✅ по ІПН</span>' + (r.mapped?' <span class="badge b-name">🔗 запамʼятано</span>':'');
   if (r.status==='name-match') return (r.via==='surname' ? '<span class="badge b-surname">⚠ по прізвищу</span>' : '<span class="badge b-name">✅ по ПІБ</span>') + (r.mapped?' <span class="badge b-name">🔗 запамʼятано</span>':'');
   if (r.status==='ambiguous') return '<span class="badge b-amb">⚠ тезки</span>';
-  if (r.status==='no-salary-row') return '<span class="badge b-nosal">⚠ нема Salary-рядка</span>';
+  if (r.status==='no-salary-row'){
+    // v7.70: fuzzy-кандидат знайдений, але Salary-рядок під іншим прізвищем → показуємо і те, й те
+    if (r.via==='similar' && r.emp)
+      return '<span class="badge b-surname">🔍 схоже: '+esc(r.emp.last+' '+r.emp.first)+' ('+Math.round((r.score||0)*100)+'%)</span> <span class="badge b-nosal">⚠ нема Salary-рядка</span>';
+    return '<span class="badge b-nosal">⚠ нема Salary-рядка</span>';
+  }
   // v7.69 fuzzy: схожий за прізвищем — НЕ авто-застосовано, лише пропозиція
   if (r.status==='similar'){
     if (r.emp) return '<span class="badge b-surname">🔍 схоже: '+esc(r.emp.last+' '+r.emp.first)+' ('+Math.round((r.score||0)*100)+'%)</span>';
@@ -591,11 +596,16 @@ function renderPreview(j){
   $('previewTbl').innerHTML = html;
   var s = j.summary;
   var matched = s.ipnMatch + s.nameMatch;
+  // v7.70: fuzzy-кандидати без Salary-рядка (status='no-salary-row', via='similar')
+  // бекенд рахує в noSalaryRow, а не в similar — додаємо їх у «схожих» тут.
+  var simNoSal = (j.rows||[]).filter(function(r){ return r.status==='no-salary-row' && r.via==='similar'; }).length;
+  var similarTotal = (s.similar||0) + simNoSal;
+  var noSalPure = (s.noSalaryRow||0) - simNoSal;   // «чисті» без-рядкові (не similar)
   $('previewSummary').innerHTML = 'Зматчено <b>'+matched+' з '+s.total+'</b> · сума (вгору): <b>'+PARSED.reduce(function(a,r){return a+Math.ceil(r.amount);},0)+'</b> грн'
-    + (s.similar ? ' · 🔍 схожих: <b>'+s.similar+'</b>' : '')
+    + (similarTotal ? ' · 🔍 схожих: <b>'+similarTotal+'</b>' : '')
     + (s.ambiguous ? ' · ⚠ тезки: <b>'+s.ambiguous+'</b>' : '')
     + (s.notFound ? ' · ❌ не знайдено: <b>'+s.notFound+'</b>' : '')
-    + (s.noSalaryRow ? ' · ⚠ без Salary-рядка: <b>'+s.noSalaryRow+'</b>' : '');
+    + (noSalPure > 0 ? ' · ⚠ без Salary-рядка: <b>'+noSalPure+'</b>' : '');
   $('previewCard').classList.remove('hidden');
   $('previewCard').scrollIntoView({behavior:'smooth'});
 }
