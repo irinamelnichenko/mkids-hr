@@ -2308,10 +2308,22 @@ function isWeekLocked(dateISO){
   var fri = new Date(mon);  fri.setDate(mon.getDate() + 4);
   return !(dateISO >= _editIsoOf(mon) && dateISO <= _editIsoOf(fri));
 }
-// Відпустки/хвороба: forward-only (сьогодні і далі). CFO — будь-яка дата.
-function isAbsenceDateAllowed(dateISO){
+// Відпустка: forward-only (сьогодні і далі). CFO — будь-яка дата.
+// v7.67 ХВОРОБА: довідку приносять постфактум, тож дозволяємо минуле в межах 30 днів
+// назад; toISO при цьому не далі ніж сьогодні+7 (щоб «заднім числом» не відкривали
+// період на місяць уперед). Для решти типів поведінка не змінена.
+function isAbsenceDateAllowed(dateISO, type, toISO){
   if (isCFO()) return true;
-  return !!dateISO && dateISO >= _editIsoOf(new Date());
+  if (!dateISO) return false;
+  var today = _editIsoOf(new Date());
+  if (type === 'sick'){
+    var back = new Date(); back.setDate(back.getDate() - 30);
+    var fwd  = new Date(); fwd.setDate(fwd.getDate() + 7);
+    if (dateISO < _editIsoOf(back)) return false;
+    if (toISO && toISO > _editIsoOf(fwd)) return false;
+    return true;
+  }
+  return dateISO >= today;
 }
 
 function roleLabel(role){
@@ -3955,7 +3967,13 @@ function splitVacationIntoWeekSlots(fromDate, toDate){
 // ── v6.40: АВТО-ЕКСПОРТ ЗНИЖКИ ВІДПУСТКИ → ПЛАТЕЖІ ───────────────────────────
 // Дзеркалить determineTargetMonth на бекенді: timestamp внесення < 1-ше число
 // місяця відпустки → той самий місяць; інакше → наступний.
-function _feDetermineTargetMonth(vacMonth, vacYear, createdAt){
+function _feDetermineTargetMonth(vacMonth, vacYear, createdAt, kind){
+  // v7.67 ХВОРОБА: знижка завжди в НАСТУПНИЙ місяць після місяця хвороби (дзеркало
+  // determineTargetMonth у бекенді). Дата внесення для sick значення не має.
+  if(kind==='sick'){
+    var nms=(vacMonth===12)?{m:1,y:vacYear+1}:{m:vacMonth+1,y:vacYear};
+    return {month:nms.m,year:nms.y};
+  }
   var entryISO=(createdAt instanceof Date)?createdAt.toISOString().slice(0,10):String(createdAt||'').slice(0,10);
   if(!/^\d{4}-\d{2}-\d{2}/.test(entryISO)) return {month:vacMonth,year:vacYear};
   // v6.55: місячне порівняння (не денне). Внесено ≤ місяця відсутності → той самий
@@ -3967,12 +3985,12 @@ function _feDetermineTargetMonth(vacMonth, vacYear, createdAt){
   return {month:nm.m,year:nm.y};
 }
 // Унікальні таргет-місяці для діапазону відпустки (для оновлення Платежів).
-function _vacTargetMonthsForRange(fromStr, toStr, createdAt){
+function _vacTargetMonthsForRange(fromStr, toStr, createdAt, kind){
   var f=pd(fromStr), t=pd(toStr), out={};
   if(!f||!t||t<f) return [];
   var cur=new Date(f.getFullYear(), f.getMonth(), 1);
   while(cur<=t){
-    var tgt=_feDetermineTargetMonth(cur.getMonth()+1, cur.getFullYear(), createdAt);
+    var tgt=_feDetermineTargetMonth(cur.getMonth()+1, cur.getFullYear(), createdAt, kind);
     out[tgt.year+'-'+tgt.month]={year:tgt.year, month:tgt.month};
     cur.setMonth(cur.getMonth()+1);
   }
@@ -4394,9 +4412,14 @@ async function saveAbsencePeriod(){
   var note=(document.getElementById('absNewNote')||{}).value||'';
   if(!typeEl||!from||!to){ alert('Вкажіть тип та дати'); return; }
   if(to<from){ alert('Дата кінця має бути після початку'); return; }
-  // Forward-only: відпустку/хворобу можна ставити лише від сьогодні; минулим числом — лише CFO.
-  if(!isAbsenceDateAllowed(from)){ alert('Відпустку можна ставити лише від сьогодні. Минулим числом — зверніться до CFO.'); return; }
   var type=typeEl.value;
+  // v7.67: перевірка ПІСЛЯ визначення типу — відпустка forward-only, хвороба до 30 днів назад.
+  if(!isAbsenceDateAllowed(from, type, to)){
+    alert(type==='sick'
+      ? 'Лікарняний можна вносити не пізніше ніж за 30 днів'
+      : 'Відпустку можна ставити лише від сьогодні. Минулим числом — зверніться до CFO.');
+    return;
+  }
   var c=S.crm[id]||{}; var fee=+(c.monthlyFee||0);
   var ct=getContractType3(c.contractDate||'',c.group||'',c.loc||'',c.name);
   if(ct==='school-no-absence'){ alert('Для шкіл не ведеться облік відпусток'); return; }
@@ -4454,8 +4477,8 @@ async function saveAbsencePeriod(){
     // (якщо стара або нова відпустка — vacation; для standard-договору).
     if((em.oldType==='vacation'||type==='vacation') && ['standard','preschool'].indexOf(getContractType3(c.contractDate||'',c.group||'',c.loc||'',c.name))!==-1){
       var tg={};
-      _vacTargetMonthsForRange(em.oldFrom,em.oldTo,aRec.createdAt).forEach(function(x){ tg[x.year+'-'+x.month]=x; });
-      _vacTargetMonthsForRange(from,to,aRec.createdAt).forEach(function(x){ tg[x.year+'-'+x.month]=x; });
+      _vacTargetMonthsForRange(em.oldFrom,em.oldTo,aRec.createdAt,em.oldType).forEach(function(x){ tg[x.year+'-'+x.month]=x; });
+      _vacTargetMonthsForRange(from,to,aRec.createdAt,type).forEach(function(x){ tg[x.year+'-'+x.month]=x; });
       await _refreshVacTargets(c.loc||'', Object.keys(tg).map(function(k){ return tg[k]; }));
     }
     return;
@@ -4490,7 +4513,7 @@ async function saveAbsencePeriod(){
   //   • відпустка — лише standard/preschool (літо для preschool валідовано вище);
   //   • хвороба — будь-який тип (school вже відсіяно вище). Бекенд рахує % за тижнями.
   if((type==='vacation' && (ct==='standard'||ct==='preschool')) || type==='sick'){
-    await _refreshVacTargets(c.loc||'', _vacTargetMonthsForRange(from,to,now));
+    await _refreshVacTargets(c.loc||'', _vacTargetMonthsForRange(from,to,now,type));
   }
   } finally { S._absSaving=false; }
 }
@@ -4502,7 +4525,7 @@ async function deleteAbsencePeriod(idx){
   // Таргет-місяці фіксуємо ДО видалення запису.
   var del=(c.absences||[])[idx];
   var wasVacation=del && del.type==='vacation' && del.status!=='cancelled' && del.status!=='rejected';
-  var tgts=wasVacation?_vacTargetMonthsForRange(del.from,del.to,del.createdAt):[];
+  var tgts=wasVacation?_vacTargetMonthsForRange(del.from,del.to,del.createdAt,del.type):[];
   c.absences.splice(idx,1);
   saveLocalCRM();
   await apiPost({action:'saveClient',data:Object.assign({id:id},c)});
@@ -4532,7 +4555,7 @@ async function cancelAbsencePeriod(cid,aid){
   var who=isHR()?'HR':(S.user&&S.user.loc?S.user.loc:'Директор');
   // Таргет-місяці фіксуємо ДО зміни статусу (по даті/періоду відпустки).
   var wasVacation=(a.type==='vacation');
-  var tgts=wasVacation?_vacTargetMonthsForRange(a.from,a.to,a.createdAt):[];
+  var tgts=wasVacation?_vacTargetMonthsForRange(a.from,a.to,a.createdAt,a.type):[];
   a.status='cancelled';
   a.statusHistory=a.statusHistory||[];
   a.statusHistory.push({event:'cancelled',at:new Date().toISOString(),by:who,reason:reason.trim()});
@@ -4580,7 +4603,7 @@ function markAbsDone(cid,absId,fromHR){
     var _c2=getCRMCard(cid);
     var _a2=(_c2.absences||[]).find(function(x){ return x.id===absId; });
     if(_a2 && (_a2.type==='vacation'||_a2.type==='sick') && SCHOOL_LOCS.indexOf(_c2.loc||'')===-1){
-      _refreshVacTargets(_c2.loc||'', _vacTargetMonthsForRange(_a2.from,_a2.to,_a2.createdAt))
+      _refreshVacTargets(_c2.loc||'', _vacTargetMonthsForRange(_a2.from,_a2.to,_a2.createdAt,_a2.type))
         .catch(function(e){ console.warn('markAbsDone discount export failed:',e); });
     }
   } catch(err2){ console.warn('markAbsDone discount export error:',err2); }
