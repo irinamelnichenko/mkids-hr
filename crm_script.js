@@ -1,5 +1,9 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.67
+// m.kids CRM — Google Apps Script v7.68
+// v7.68: archived співробітника — ЛИШЕ якщо дата звільнення вже настала
+//        (<= сьогодні, Europe/Kiev). Раніше archived спрацьовував від наявності
+//        дати → людина із завчасно внесеною майбутньою датою звільнення передчасно
+//        випадала з автозвірки ЗП (_loadHrReconIndex пропускає archived).
 // v7.67: ХВОРОБА — внесення заднім числом (до 30 днів, to не далі +7) на фронті;
 //        знижка за хворобу ЗАВЖДИ роутиться в НАСТУПНИЙ місяць після місяця хвороби
 //        (determineTargetMonth отримав 4-й аргумент kind). Відпустка — без змін.
@@ -252,7 +256,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.67', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.68', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -15041,6 +15045,20 @@ function _parseDateInput(s){
 }
 
 // row[18] → Employee object. rowNum — 1-based sheet row (stable ID).
+// v7.68: співробітник вважається архівним ЛИШЕ якщо дата звільнення вже настала
+// (<= сьогодні, Europe/Kiev, порівняння за календарною датою без часу). Раніше
+// archived спрацьовував від самої НАЯВНОСТІ дати — тож людина з завчасно внесеною
+// майбутньою датою звільнення передчасно випадала з автозвірки ЗП, хоча ще працює.
+function _empIsArchived(firedStr){
+  if (!firedStr) return false;
+  var iso = null;
+  var dmy = /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/.exec(firedStr);
+  if (dmy){ iso = dmy[3] + '-' + ('0'+dmy[2]).slice(-2) + '-' + ('0'+dmy[1]).slice(-2); }
+  else { var m2 = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(firedStr); if (m2){ iso = m2[1] + '-' + ('0'+m2[2]).slice(-2) + '-' + ('0'+m2[3]).slice(-2); } }
+  if (!iso) return true;   // нерозпізнаний формат дати → страховка: вважаємо архівним (стара поведінка)
+  var todayIso = Utilities.formatDate(new Date(), 'Europe/Kiev', 'yyyy-MM-dd');
+  return iso <= todayIso;
+}
 function _parseEmpRow(row, rowNum){
   function s(v){ return String(v == null ? '' : v).trim(); }
   var fired = _fmtDateDmy(row[14]);
@@ -15072,7 +15090,7 @@ function _parseEmpRow(row, rowNum){
     matReturn: _fmtDateDmy(row[23]),  // X — Дата виходу з декрету v6.59
     ipn:       s(row[24]),   // Y — ІПН/РНОКПП (авто зі звірки ЗП) v7.26
     card:      s(row[25]),   // Z — Картка/IBAN (авто зі звірки ЗП) v7.26
-    archived: fired !== ''
+    archived: _empIsArchived(fired)
   };
 }
 
