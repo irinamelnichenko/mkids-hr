@@ -1,5 +1,10 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.68
+// m.kids CRM — Google Apps Script v7.69
+// v7.69: автозвірка ЗП — 3-й рівень матчингу (fuzzy за прізвищем, Левенштейн ≥0.80)
+//        як FALLBACK лише коли точний матч (ІПН/повне ПІБ/прізвище-підрядок) не дав
+//        нікого. Статус 'similar' + score; кілька кандидатів → ambiguous+candidates.
+//        НЕ авто-застосовується (тільки preview; apply без fuzzy). Фронт: бейдж +
+//        передобрана випадайка для ручного підтвердження.
 // v7.68: archived співробітника — ЛИШЕ якщо дата звільнення вже настала
 //        (<= сьогодні, Europe/Kiev). Раніше archived спрацьовував від наявності
 //        дати → людина із завчасно внесеною майбутньою датою звільнення передчасно
@@ -256,7 +261,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.68', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.69', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -7074,6 +7079,47 @@ function _matchSalaryRow(salaryRows, emp){
   return {row: hits[0], ambiguous: hits.length > 1};
 }
 
+// v7.69 FUZZY-FALLBACK автозвірки ЗП. Спрацьовує ЛИШЕ у preview і ЛИШЕ коли точний
+// матч (ІПН / повне ПІБ / прізвище-підрядок) не дав нікого. Ніколи не застосовується
+// автоматично — тільки пропозиція для ручного підтвердження.
+function _levSalary(a, b){
+  a = String(a || ''); b = String(b || '');
+  var m = a.length, n = b.length;
+  if (!m) return n; if (!n) return m;
+  var prev = []; for (var j = 0; j <= n; j++) prev[j] = j;
+  for (var i = 1; i <= m; i++){
+    var cur = [i];
+    for (var k = 1; k <= n; k++){
+      cur[k] = Math.min(prev[k] + 1, cur[k-1] + 1, prev[k-1] + (a.charAt(i-1) === b.charAt(k-1) ? 0 : 1));
+    }
+    prev = cur;
+  }
+  return prev[n];
+}
+function _surnameSim(a, b){
+  a = String(a || ''); b = String(b || '');
+  var L = Math.max(a.length, b.length); if (!L) return 0;
+  return 1 - (_levSalary(a, b) / L);
+}
+// hrAll — усі НЕ-архівні співробітники локації (hr.all). surnNorm — норм-прізвище з
+// відомості. Повертає всіх кандидатів зі score >= threshold, відсортованих за спаданням.
+function _fuzzySurnameMatch(hrAll, surnNorm, threshold){
+  if (!surnNorm) return [];
+  var out = [];
+  (hrAll || []).forEach(function(e){
+    var sc = _surnameSim(surnNorm, _normEmpNm(e.last));
+    if (sc >= threshold) out.push({emp: e, score: Math.round(sc * 100) / 100});
+  });
+  out.sort(function(a, b){ return b.score - a.score; });
+  return out;
+}
+// v7.69: статус рядка preview за рівнем матчу (similar не має ставати name-match).
+function _reconStatus(p){
+  if (p.via === 'ipn')     return 'ipn-match';
+  if (p.via === 'similar') return 'similar';
+  return 'name-match';
+}
+
 // v7.33 Етап2: список Salary-рядків локації для ручного дропдауна автозвірки.
 // Повертає [{rowNum, raw}] — назви рядків Salary-листа («Музика 230», «Охорона …»),
 // щоб для «не знайдено» Іра вибирала САМ Salary-рядок (ціль запису), не співробітника.
@@ -7102,7 +7148,7 @@ function salaryReconcilePreview(body){
     var pre = items.map(function(it){
       var ipn = _digitsOnly(it.ipn), nm = _normEmpNm(it.name);
       var surn = nm.split(' ')[0];
-      var emp = null, via = 'not-found';
+      var emp = null, via = 'not-found', score = null, fuzzyCands = null;
       if (ipn && hr.byIpn[ipn]){ emp = hr.byIpn[ipn]; via = 'ipn'; }
       else {
         var byFull = uniqList(nm ? hr.byName[nm] : null);
@@ -7112,9 +7158,16 @@ function salaryReconcilePreview(body){
           var bySur = uniqList(surn ? hr.bySurname[surn] : null);   // fallback: лише прізвище в межах локації
           if (bySur.length === 1){ emp = bySur[0]; via = 'surname'; }
           else if (bySur.length > 1){ via = 'ambiguous'; }
+          else {
+            // v7.69 3-й рівень: ТІЛЬКИ якщо точний матч не дав нікого — fuzzy за
+            // прізвищем (Левенштейн ≥0.80) серед не-архівних локації. НЕ авто-застосовується.
+            var fz = _fuzzySurnameMatch(hr.all, surn, 0.80);
+            if (fz.length === 1){ emp = fz[0].emp; via = 'similar'; score = fz[0].score; }
+            else if (fz.length > 1){ via = 'similar'; fuzzyCands = fz.slice(0, 3); }
+          }
         }
       }
-      return {it: it, emp: emp, via: via, ipn: ipn};
+      return {it: it, emp: emp, via: via, ipn: ipn, score: score, fuzzyCands: fuzzyCands};
     });
 
     var salIdx = _loadSalaryRowIndex([loc]);
@@ -7123,6 +7176,15 @@ function salaryReconcilePreview(body){
     var rows = pre.map(function(p){
       var it = p.it, emp = p.emp;
       var out = {name: it.name, ipnFile: it.ipn, amount: Number(it.amount) || 0, via: p.via};
+      // v7.69 similar-ambiguous: кілька fuzzy-кандидатів (без обраного emp) → список для випадайки.
+      if (!emp && p.via === 'similar' && p.fuzzyCands){
+        out.status = 'similar';
+        out.ambiguous = true;
+        out.candidates = p.fuzzyCands.map(function(c){
+          return {last: c.emp.last, first: c.emp.first, pos: c.emp.pos, rowNum: c.emp.rowNum, score: c.score};
+        });
+        return out;
+      }
       if (!emp){ out.status = (p.via === 'ambiguous') ? 'ambiguous' : 'not-found'; return out; }
       out.emp = {last: emp.last, first: emp.first, pos: emp.pos, loc: emp.loc, rowNum: emp.rowNum};
       out.ipnInCard   = !!emp.ipn;
@@ -7134,7 +7196,8 @@ function salaryReconcilePreview(body){
         if (mrow){
           out.salaryRow = {rowNum: mrow.rowNum, raw: mrow.raw, ambiguous: false};
           out.mapped = true;
-          out.status = (p.via === 'ipn') ? 'ipn-match' : 'name-match';
+          out.status = _reconStatus(p);           // v7.69: similar не «залипає» як name-match
+          if (p.via === 'similar'){ out.score = p.score; out.autoApply = false; }
           return out;
         }
       }
@@ -7142,7 +7205,8 @@ function salaryReconcilePreview(body){
       var sr = _matchSalaryRow(salIdx[emp.loc] || [], emp);
       if (!sr){ out.status = 'no-salary-row'; return out; }
       out.salaryRow = {rowNum: sr.row.rowNum, raw: sr.row.raw, ambiguous: sr.ambiguous};
-      out.status = (p.via === 'ipn') ? 'ipn-match' : 'name-match';
+      out.status = _reconStatus(p);               // v7.69: 'similar' | 'ipn-match' | 'name-match'
+      if (p.via === 'similar'){ out.score = p.score; out.autoApply = false; }
       return out;
     });
 
@@ -7150,6 +7214,7 @@ function salaryReconcilePreview(body){
     return {ok:true, rows:rows, summary:{
       total: rows.length, sum: rows.reduce(function(s, r){ return s + (r.amount || 0); }, 0),
       ipnMatch: cnt('ipn-match'), nameMatch: cnt('name-match'),
+      similar: cnt('similar'),                    // v7.69 лічильник схожих (fuzzy)
       ambiguous: cnt('ambiguous'), notFound: cnt('not-found'), noSalaryRow: cnt('no-salary-row')
     }};
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
