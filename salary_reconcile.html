@@ -528,6 +528,11 @@ function badge(r){
   if (r.status==='name-match') return (r.via==='surname' ? '<span class="badge b-surname">⚠ по прізвищу</span>' : '<span class="badge b-name">✅ по ПІБ</span>') + (r.mapped?' <span class="badge b-name">🔗 запамʼятано</span>':'');
   if (r.status==='ambiguous') return '<span class="badge b-amb">⚠ тезки</span>';
   if (r.status==='no-salary-row') return '<span class="badge b-nosal">⚠ нема Salary-рядка</span>';
+  // v7.69 fuzzy: схожий за прізвищем — НЕ авто-застосовано, лише пропозиція
+  if (r.status==='similar'){
+    if (r.emp) return '<span class="badge b-surname">🔍 схоже: '+esc(r.emp.last+' '+r.emp.first)+' ('+Math.round((r.score||0)*100)+'%)</span>';
+    return '<span class="badge b-surname">🔍 схожі: '+(r.candidates||[]).length+' — оберіть</span>';
+  }
   return '<span class="badge b-nf">❌ не знайдено</span>';
 }
 // 1-й дропдаун: СПІВРОБІТНИКИ HR. value = номер рядка HR (empRowNum).
@@ -542,12 +547,31 @@ function salaryRowOptions(sel){
     return '<option value="'+rw.rowNum+'"'+(sel==rw.rowNum?' selected':'')+'>'+esc(rw.raw)+'</option>';
   }).join('');
 }
+// v7.69: дропдаун співробітників з fuzzy-кандидатами ВГОРІ (зі score), решта ростера нижче.
+// sel — передобраний rowNum (для одиночного similar). cands — [{last,first,pos,rowNum,score}].
+function rosterOptionsFuzzy(sel, cands){
+  var top = (cands||[]).map(function(c){
+    return '<option value="'+c.rowNum+'"'+(sel==c.rowNum?' selected':'')+'>🔍 '+esc((c.pos||'')+' '+(c.last||'')+' '+(c.first||''))+' ('+Math.round((c.score||0)*100)+'%)</option>';
+  }).join('');
+  var used = {}; (cands||[]).forEach(function(c){ used[c.rowNum]=1; });
+  var rest = ROSTER.filter(function(e){ return !used[e.rowNum]; }).map(function(e){
+    return '<option value="'+e.rowNum+'"'+(sel==e.rowNum?' selected':'')+'>'+esc((e.pos||'')+' '+(e.last||'')+' '+(e.first||''))+'</option>';
+  }).join('');
+  return '<option value="">— підтвердьте співробітника —</option>' + top + rest;
+}
 
 function renderPreview(j){
   var html = '<table><thead><tr><th>ПІБ (файл)</th><th>Матч</th><th>Співробітник / Salary-рядок</th><th class="num">Сума→</th><th>Збір</th></tr></thead><tbody>';
   j.rows.forEach(function(r, i){
     var right;
-    if (r.emp && r.salaryRow){
+    if (r.status==='similar'){
+      // v7.69: НЕ авто-застосовуємо — випадайка з передобраним кандидатом (один) або
+      // 3 кандидатами вгорі (ambiguous). Ірина лише підтверджує/уточнює.
+      var preSel = (r.emp && r.emp.rowNum) || '';
+      var cands  = r.candidates || (r.emp ? [{last:r.emp.last, first:r.emp.first, pos:r.emp.pos, rowNum:r.emp.rowNum, score:r.score}] : []);
+      right = '<span style="color:var(--gray);font-size:11px">🔍 схоже за прізвищем — підтвердьте:</span><br>'
+        + '<select data-i="'+i+'" class="empSel">'+rosterOptionsFuzzy(preSel, cands)+'</select>';
+    } else if (r.emp && r.salaryRow){
       // авто-матч (у т.ч. запамʼятана прив'язка) — ціль відома
       right = esc(r.emp.pos+' '+r.emp.last+' '+r.emp.first) + '<br><span style="color:var(--gray);font-size:11px">Salary: «'+esc(r.salaryRow.raw)+'»'+(r.mapped?' (запамʼятано)':'')+'</span>';
     } else if (r.emp && !r.salaryRow){
@@ -568,6 +592,7 @@ function renderPreview(j){
   var s = j.summary;
   var matched = s.ipnMatch + s.nameMatch;
   $('previewSummary').innerHTML = 'Зматчено <b>'+matched+' з '+s.total+'</b> · сума (вгору): <b>'+PARSED.reduce(function(a,r){return a+Math.ceil(r.amount);},0)+'</b> грн'
+    + (s.similar ? ' · 🔍 схожих: <b>'+s.similar+'</b>' : '')
     + (s.ambiguous ? ' · ⚠ тезки: <b>'+s.ambiguous+'</b>' : '')
     + (s.notFound ? ' · ❌ не знайдено: <b>'+s.notFound+'</b>' : '')
     + (s.noSalaryRow ? ' · ⚠ без Salary-рядка: <b>'+s.noSalaryRow+'</b>' : '');
