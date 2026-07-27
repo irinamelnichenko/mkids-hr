@@ -1,5 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.69
+// m.kids CRM — Google Apps Script v7.70
+// v7.70: fuzzy-звірка — similar-score та autoApply виставляються ДО раннього виходу
+//        no-salary-row, тож fuzzy-кандидат (і його score) не губиться, коли Salary-рядок
+//        написаний іншим прізвищем, ніж HR-кандидат.
 // v7.69: автозвірка ЗП — 3-й рівень матчингу (fuzzy за прізвищем, Левенштейн ≥0.80)
 //        як FALLBACK лише коли точний матч (ІПН/повне ПІБ/прізвище-підрядок) не дав
 //        нікого. Статус 'similar' + score; кілька кандидатів → ambiguous+candidates.
@@ -261,7 +264,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.69', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.70', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -7189,6 +7192,9 @@ function salaryReconcilePreview(body){
       out.emp = {last: emp.last, first: emp.first, pos: emp.pos, loc: emp.loc, rowNum: emp.rowNum};
       out.ipnInCard   = !!emp.ipn;
       out.ipnWillAdd  = !emp.ipn && !!p.ipn;
+      // v7.70: similar-мітку + score виставляємо ОДРАЗУ (вище раннього виходу no-salary-row),
+      // щоб fuzzy-кандидат не губився, коли Salary-рядок написаний іншим прізвищем.
+      if (p.via === 'similar'){ out.score = p.score; out.autoApply = false; }
       // 1) збережена прив'язка (Звірка_Мапа) → показуємо як зматчено (запамʼятано)
       var mapped = reconMap[loc + '||' + emp.rowNum];
       if (mapped){
