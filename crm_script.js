@@ -1,5 +1,10 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.76
+// m.kids CRM — Google Apps Script v7.77
+// v7.77: «Факт вступний» у зведеній «Оплати» (parsePaymentSheet/aggregatePayments) тепер =
+//        СУМА колонок «Факт вступ» по ВСІХ 12 місяцях, а не значення поточного місяця. Вступний
+//        внесок разовий: оплата в травні/червні раніше не бачилась у липневому зрізі → індикатор
+//        хибно показував «Вступний не сплачено». Факт навч/Факт доп лишились помісячними (правильно).
+//        Річна агрегація (aggregatePaymentsYearly) не зачеплена — вона читає колонки самостійно.
 // v7.76: ЗНИЖКА ВІДПУСТКИ — нова модель за КАЛЕНДАРНИМИ ТИЖНЯМИ. Тиждень = ceil((кінець−
 //        початок)/7) календарних днів (не робочих). % = тижні×25, максимум 100%; discount =
 //        round(fee×pct/100). Кожен тиждень зараховується місяцю, в якому ПОЧАВСЯ (період через
@@ -292,7 +297,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.76', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.77', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -1760,7 +1765,12 @@ function parsePaymentSheet(data, monthCol, contractCol) {
         groups.push(curGroup);
       }
       var fs = toNum(row[monthCol]);
-      var fv = toNum(row[monthCol + 1]);
+      // v7.77: вступний внесок РАЗОВИЙ (не місячний) — сумуємо «Факт вступ» по ВСІХ 12 місяцях,
+      // а не беремо лише поточний місяць. Блок місяця = 5 колонок від col 1; вступ = 2-га в блоці
+      // (col 1 + mi*5 + 1). Раніше fv = row[monthCol+1] показував вступ лише поточного місяця →
+      // разова оплата, внесена в іншому місяці (напр. травень/червень), не бачилась → «не сплачено».
+      var fv = 0;
+      for (var _mi = 0; _mi < 12; _mi++) { fv += toNum(row[1 + _mi * 5 + 1]); }
       var fe = toNum(row[monthCol + 2]);
       var bd = toNum(row[monthCol + 3]);
       var bs = toNum(row[monthCol + 4]);
