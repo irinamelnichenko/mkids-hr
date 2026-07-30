@@ -1,5 +1,10 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.79
+// m.kids CRM — Google Apps Script v7.80
+// v7.80: getPredmetnyky приймає year+month і віддає МІСЯЧНИЙ зріз — lessons (90% ваги, 2201/рік)
+//        і predMerges фільтруються за місяцем через _loadPredLessons/_loadPredMergesList (опційні
+//        параметри year/month; без них — повна віддача, тож інші виклики не зачеплені).
+//        teachers/norms/groups/catalog/assignments лишаються повними. Відповідь для липня падає
+//        з ~381 КБ до ~166 КБ. Без year/month поведінка як раніше (сумісність).
 // v7.79: ЗАХИСТ ВІД ПІДБОРУ ПАРОЛЯ в authenticate. Лічильник невдалих спроб per-логін у
 //        PropertiesService (кількість + час). 5 невдалих поспіль (вікно 15 хв) → блок на 15 хв
 //        ({ok:false, error:'too_many_attempts'}). Успішний вхід скидає лічильник. CFO (id=1) не
@@ -305,7 +310,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.79', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.80', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -347,7 +352,7 @@ function doGet(e) {
     else if (action === 'getTaskActivity')            result = getTaskActivity(e.parameter && e.parameter.taskId || 0);
     else if (action === 'getDashboardNotifications')  result = getDashboardNotifications(e.parameter && e.parameter.userId || 0, e.parameter && e.parameter.role || '');
     else if (action === 'getEmployees')               result = getEmployees(Number(e.parameter && e.parameter.actorId || 0), e.parameter && e.parameter.loc || '');
-    else if (action === 'getPredmetnyky')              result = getPredmetnyky(Number(e.parameter && e.parameter.actorId || 0));
+    else if (action === 'getPredmetnyky')              result = getPredmetnyky(Number(e.parameter && e.parameter.actorId || 0), Number(e.parameter && e.parameter.year || 0), Number(e.parameter && e.parameter.month || 0)); // v7.80: місячний зріз
     else if (action === 'getInvoiceListData')          result = getInvoiceListData(e.parameter || {});
     else if (action === 'generateInvoicePDF')          result = generateInvoicePDF(e.parameter || {}); // v6.50
     else if (action === 'getInvoiceStatusReport')      result = getInvoiceStatusReport(e.parameter || {}); // v6.50.3
@@ -5780,17 +5785,23 @@ function _loadPredMergesMap(loc, dateFrom, dateTo){
 
 // Плоский список merges для фронту (сітка вантажить обʼєднання одним getPredmetnyky).
 // locFilter falsy → всі локації (мережеві ролі); рядок → лише ця локація.
-function _loadPredMergesList(locFilter){
+function _loadPredMergesList(locFilter, year, month){
   var out = [];
   var sh;
   try { sh = _getPredMergesSheet(false); }
   catch(e){ return out; }
   var data = sh.getDataRange().getValues();
+  var _ymY = Number(year) || 0, _ymM = Number(month) || 0;
+  var _ymFilter = (_ymY > 0 && _ymM > 0);   // v7.80: опційний фільтр за місяцем
   for (var i = 1; i < data.length; i++){
     if (!data[i][1]) continue;
     var m = _parsePredMergeRow(data[i]);
     if (locFilter && m.loc !== locFilter) continue;
     if (m.groups.length < 2) continue;
+    if (_ymFilter){
+      var _ym = _lessonYearMonth(m.date);
+      if (!_ym || _ym.y !== _ymY || _ym.m !== _ymM) continue;
+    }
     out.push({id: m.id, loc: m.loc, subject: m.subject, date: m.date, groups: m.groups});
   }
   return out;
@@ -16294,18 +16305,24 @@ function _loadPredTeachers(locFilter){
 }
 
 // Lessons sheet → [{id, empKey, loc, group, subject, date}].
-function _loadPredLessons(locFilter){
+function _loadPredLessons(locFilter, year, month){
   var sh = _getPredLessonsSheet();
   var lastRow = sh.getLastRow();
   if (lastRow < 2) return [];
   var data = sh.getRange(2, 1, lastRow - 1, PRED_LESSONS_HEADER.length).getValues();
   var out = [];
+  var _ymY = Number(year) || 0, _ymM = Number(month) || 0;
+  var _ymFilter = (_ymY > 0 && _ymM > 0);   // v7.80: опційний фільтр за місяцем
   for (var i = 0; i < data.length; i++){
     var row = data[i];
     var id  = Number(row[0]);
     if (!id) continue;
     var loc = String(row[2] || '').trim();
     if (locFilter && loc !== locFilter) continue;
+    if (_ymFilter){
+      var _ym = _lessonYearMonth(row[5]);
+      if (!_ym || _ym.y !== _ymY || _ym.m !== _ymM) continue;
+    }
     out.push({
       id:      id,
       empKey:  String(row[1] || '').trim(),
@@ -16323,23 +16340,26 @@ function _loadPredLessons(locFilter){
 // GET ?action=getPredmetnyky&actorId=N
 // {ok, teachers, norms (по group_type, всі), groups (реальні групи локацій,
 //  scoped), catalog (scoped), lessons (scoped), assignments, scope}
-function getPredmetnyky(actorId){
+function getPredmetnyky(actorId, year, month){
   try {
     var actor = _getActor(actorId);
     var scope;
     try { scope = _predViewScope(actor); }
     catch(e){ return {ok:false, error:'Permission denied', code:'PERM_DENIED'}; }
 
+    // v7.80: якщо задано year+month — уроки й обʼєднання віддаємо ЛИШЕ за цей місяць
+    // (lessons = 90% ваги відповіді). teachers/norms/groups/catalog/assignments — повні.
     return {
       ok:           true,
       teachers:     _loadPredTeachers(scope),
       norms:        _loadPredNorms(),               // матриця по group_type
       groups:       _loadRealGroups(scope),         // реальні групи локацій
       catalog:      _loadPredCatalog(scope),
-      lessons:      _loadPredLessons(scope),
+      lessons:      _loadPredLessons(scope, year, month),        // v7.80: місячний зріз
       assignments:  _loadPredAssignments(scope),
-      predMerges:   _loadPredMergesList(scope),       // v7.20: обʼєднання груп (для сітки)
-      scope:        scope || 'all'
+      predMerges:   _loadPredMergesList(scope, year, month),     // v7.20 обʼєднання; v7.80 місячний зріз
+      scope:        scope || 'all',
+      slice:        (Number(year) > 0 && Number(month) > 0) ? {year: Number(year), month: Number(month)} : 'all'  // v7.80 діагностика
     };
   } catch(e){
     return {ok:false, error: e.message || String(e)};
