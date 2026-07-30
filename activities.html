@@ -3979,7 +3979,9 @@ var ANA = {
   subTab: 'children',
   marks: [],
   marksLoc: '',
-  marksLoadedAt: 0
+  marksLoadedAt: 0,
+  merges: [],            // v-ana: обʼєднання груп (getDopMerges) для payout «за заняття»
+  mergesKey: ''
 };
 var ANA_MARKS_TTL = 60 * 1000;
 var ANA_MARKS_CACHE_KEY = 'activities_ana_marks_v1';
@@ -4181,6 +4183,74 @@ function _filteredMarks(){
   });
 }
 
+// v-ana: завантажити обʼєднання груп для аналітики (loc + період, усі заняття).
+// Дзеркало серверного _loadDopMergesMap: mergesMap[activityId][date] = [ [normGroup,...], ... ].
+async function _loadAnaMerges(force){
+  var r = _periodRange();
+  var key = S.activeLoc + '|' + r[0] + '|' + r[1];
+  if (!force && ANA.mergesKey === key) return ANA.merges;
+  try {
+    var url = CFG.SCRIPT_URL + '?action=getDopMerges'
+      + '&loc=' + encodeURIComponent(S.activeLoc)
+      + '&from=' + encodeURIComponent(r[0]) + '&to=' + encodeURIComponent(r[1]);
+    var resp = await fetch(url, {redirect:'follow'});
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    var json = await resp.json();
+    if (!json.ok) throw new Error(json.error || 'getDopMerges failed');
+    ANA.merges = json.items || [];
+  } catch(e){
+    console.warn('[ana merges] load fail:', e && e.message || e);
+    ANA.merges = [];
+  }
+  ANA.mergesKey = key;
+  return ANA.merges;
+}
+// mergesMap[actId][date] = [ [normGroup,...], ... ] — лише набори з ≥2 груп.
+function _anaMergesMap(){
+  var map = {};
+  (ANA.merges || []).forEach(function(m){
+    var set = (m.groups || []).map(_mrgNormGroup).filter(Boolean);
+    if (set.length < 2) return;
+    var aid = Number(m.activityId);
+    if (!map[aid]) map[aid] = {};
+    if (!map[aid][m.date]) map[aid][m.date] = [];
+    map[aid][m.date].push(set);
+  });
+  return map;
+}
+// Дзеркало серверного _dopCountSessions: сесія = унікальна (група×дата);
+// обʼєднані одного дня групи схлопуються у 1 сесію.
+function _anaCountSessions(groupsByDate, mergesForAct){
+  var total = 0;
+  Object.keys(groupsByDate).forEach(function(date){
+    var present = groupsByDate[date];                 // {normGroup:true}
+    var mergeSets = (mergesForAct && mergesForAct[date]) || [];
+    var covered = {}, sessions = 0;
+    mergeSets.forEach(function(ms){
+      var any = false;
+      ms.forEach(function(g){ if (present[g]){ any = true; covered[g] = true; } });
+      if (any) sessions++;
+    });
+    Object.keys(present).forEach(function(g){ if (!covered[g]) sessions++; });
+    total += sessions;
+  });
+  return total;
+}
+// groupsByDate з marks заняття: { date: { normGroup:true } }.
+function _anaGroupsByDate(marks){
+  var g = {};
+  marks.forEach(function(m){
+    if (!g[m.date]) g[m.date] = {};
+    var ng = _mrgNormGroup(m.group);
+    if (ng) g[m.date][ng] = true;
+  });
+  return g;
+}
+// Кількість сесій (груп×дата) для заняття — з урахуванням обʼєднань.
+function _anaSessionsForActivity(actId, marks){
+  return _anaCountSessions(_anaGroupsByDate(marks), _anaMergesMap()[Number(actId)] || {});
+}
+
 function _payoutForActivity(actId, marks){
   // marks — лише для цього actId
   if (!marks.length) return 0;
@@ -4191,10 +4261,11 @@ function _payoutForActivity(actId, marks){
   if (cat.teacherModel === 'За дитину'){
     return marks.length * cat.teacherRate;
   }
-  if (cat.teacherModel === 'За заняття'){
-    var dates = {};
-    marks.forEach(function(m){ dates[m.date] = true; });
-    return Object.keys(dates).length * cat.teacherRate;
+  if (cat.teacherModel === 'За заняття' || cat.teacherModel === 'За захід'){
+    // v-ana ФІКС: сесія = унікальна (група×дата), а не унікальна дата (дзеркало
+    // серверного exportToSalaryExtras/_dopCountSessions). Раніше кілька груп одного
+    // дня рахувались як 1 → аналітика недоплачувала vs фактична ЗП.
+    return _anaSessionsForActivity(actId, marks) * cat.teacherRate;
   }
   return 0;
 }
@@ -4210,6 +4281,7 @@ async function renderAnalytics(){
   try {
     if (!S.items || !S.items.length) await loadCatalog(false);
     await _loadAnaMarks(false);
+    await _loadAnaMerges(false);   // v-ana: обʼєднання груп для payout «за заняття»
   } catch(e){
     $('anaLoading').classList.add('hidden');
     showToast('❌ ' + (e && e.message || e), 'err');
@@ -4416,18 +4488,27 @@ function _renderAnaTeachers(marks, search, canSeeMoney){
     var cat = (S.items || []).find(function(a){ return a.id === Number(actId); });
     var teacherKey = (cat && cat.teacher) ? cat.teacher : '— не вказаний';
     if (!byTeacher[teacherKey]){
-      byTeacher[teacherKey] = {name: teacherKey, activities: {}, count: 0, children: {}, payout: 0};
+      byTeacher[teacherKey] = {name: teacherKey, activities: {}, breakdown: [], count: 0, children: {}, payout: 0};
     }
     var t = byTeacher[teacherKey];
-    t.activities[cat ? cat.name : (actMarks[0].activityName || '?')] = (t.activities[cat ? cat.name : actMarks[0].activityName] || 0) + actMarks.length;
+    var actName = cat ? cat.name : (actMarks[0].activityName || '?');
+    t.activities[actName] = (t.activities[actName] || 0) + actMarks.length;
     t.count += actMarks.length;
     actMarks.forEach(function(m){ t.children[m.child] = true; });
-    t.payout += _payoutForActivity(Number(actId), actMarks);
+    var pay = _payoutForActivity(Number(actId), actMarks);
+    t.payout += pay;
+    // v-ana: розбивка ЗП по заняттях — модель, кількість сесій (груп), ставка, сума.
+    var model = cat ? (cat.teacherModel || '—') : '—';
+    var rate  = cat ? (cat.teacherRate || 0) : 0;
+    var units = (model === 'За дитину') ? actMarks.length
+              : (model === 'За заняття' || model === 'За захід') ? _anaSessionsForActivity(Number(actId), actMarks)
+              : 0;
+    t.breakdown.push({act: actName, model: model, units: units, rate: rate, pay: pay});
   });
   var rows = Object.keys(byTeacher).map(function(k){
     var t = byTeacher[k];
     return {
-      name: t.name, activities: t.activities, count: t.count,
+      name: t.name, activities: t.activities, breakdown: t.breakdown, count: t.count,
       uniqueChildren: Object.keys(t.children).length, payout: t.payout
     };
   });
@@ -4435,19 +4516,25 @@ function _renderAnaTeachers(marks, search, canSeeMoney){
   rows.sort(function(a,b){ return b.payout - a.payout; });
 
   $('anaThead').innerHTML =
-    '<tr><th>Викладач</th><th>Заняття</th><th class="num">Разів</th><th class="num">Дітей</th>' +
+    '<tr><th>Викладач</th><th>Заняття · розбивка ЗП</th><th class="num">Разів</th><th class="num">Дітей</th>' +
     (canSeeMoney ? '<th class="num">ЗП до виплати</th>' : '') +
     '</tr>';
 
   var html = '';
   rows.forEach(function(r){
-    var actsHtml = Object.keys(r.activities).map(function(n){
-      return '<span class="ana-tag">' + escapeHtml(n) + ' × ' + r.activities[n] + '</span>';
+    // v-ana: під кожним викладачем — рядки «заняття · N сесій(груп)/дітей × ставка = сума»
+    var bd = r.breakdown.map(function(b){
+      var unitLbl = (b.model === 'За дитину') ? (b.units + ' діт.')
+                  : (b.model === 'За заняття' || b.model === 'За захід') ? (b.units + ' сес.')
+                  : '—';
+      var money = canSeeMoney ? (' × ' + fmtUah(b.rate) + ' = <b>' + fmtUah(b.pay) + ' ₴</b>') : '';
+      return '<div class="ana-tag" style="display:block;margin:2px 0">' + escapeHtml(b.act)
+           + ' <span class="muted">(' + escapeHtml(b.model) + ')</span> · ' + unitLbl + money + '</div>';
     }).join('');
     var nameCls = r.name === '— не вказаний' ? 'muted' : 'cat-name';
     html += '<tr class="ana-row" data-key="teacher:' + escapeHtml(r.name) + '">' +
               '<td class="' + nameCls + '">' + escapeHtml(r.name) + '</td>' +
-              '<td>' + actsHtml + '</td>' +
+              '<td>' + bd + '</td>' +
               '<td class="num">' + r.count + '</td>' +
               '<td class="num">' + r.uniqueChildren + '</td>' +
               (canSeeMoney ? '<td class="num">' + fmtUah(r.payout) + ' ₴</td>' : '') +
@@ -4460,18 +4547,28 @@ function _renderAnaDays(marks, search, canSeeMoney){
   var byDay = {};
   marks.forEach(function(m){
     if (!byDay[m.date]){
-      byDay[m.date] = {date: m.date, activities: {}, children: {}, sum: 0};
+      // v-ana: actGroups — унікальні групи КОЖНОГО заняття за день (для тега «× N груп»);
+      // groups — усі унікальні групи дня (колонка «Груп»); marksByAct — для payout.
+      byDay[m.date] = {date: m.date, activities: {}, actGroups: {}, groups: {}, children: {}, marksByAct: {}, sum: 0};
     }
     var d = byDay[m.date];
-    d.activities[m.activityName] = (d.activities[m.activityName] || 0) + 1;
+    var an = m.activityName;
+    d.activities[an] = (d.activities[an] || 0) + 1;
+    var ng = _mrgNormGroup(m.group);
+    if (ng){ d.groups[ng] = true; (d.actGroups[an] = d.actGroups[an] || {})[ng] = true; }
     d.children[m.child] = true;
+    (d.marksByAct[m.activityId] = d.marksByAct[m.activityId] || []).push(m);
     d.sum += (m.price || 0);
   });
   var rows = Object.keys(byDay).map(function(k){
     var d = byDay[k];
+    // v-ana: payout за день = Σ payout по заняттях цього дня (з урахуванням моделі/обʼєднань)
+    var payout = 0;
+    Object.keys(d.marksByAct).forEach(function(actId){ payout += _payoutForActivity(Number(actId), d.marksByAct[actId]); });
     return {
-      date: d.date, activities: d.activities,
-      uniqueChildren: Object.keys(d.children).length, sum: d.sum
+      date: d.date, activities: d.activities, actGroups: d.actGroups,
+      groupCount: Object.keys(d.groups).length,
+      uniqueChildren: Object.keys(d.children).length, sum: d.sum, payout: payout
     };
   });
   if (search) rows = rows.filter(function(r){
@@ -4481,23 +4578,26 @@ function _renderAnaDays(marks, search, canSeeMoney){
   rows.sort(function(a,b){ return b.date.localeCompare(a.date); });
 
   $('anaThead').innerHTML =
-    '<tr><th>Дата</th><th>Заняття</th><th class="num">Дітей</th>' +
-    (canSeeMoney ? '<th class="num">Сума</th>' : '') +
+    '<tr><th>Дата</th><th>Заняття</th><th class="num">Груп</th><th class="num">Дітей</th>' +
+    (canSeeMoney ? '<th class="num">Дохід</th><th class="num">До виплати</th>' : '') +
     '</tr>';
 
   var html = '';
   rows.forEach(function(r){
+    // v-ana: тег показує кількість ГРУП заняття за день, а не кількість відміток
     var actsHtml = Object.keys(r.activities).map(function(n){
-      return '<span class="ana-tag">' + escapeHtml(n) + ' × ' + r.activities[n] + '</span>';
+      var g = r.actGroups[n] ? Object.keys(r.actGroups[n]).length : 0;
+      return '<span class="ana-tag">' + escapeHtml(n) + ' × ' + g + ' груп</span>';
     }).join('');
     html += '<tr class="ana-row" data-key="day:' + r.date + '">' +
               '<td class="cat-name">' + _ddmmyyyy(r.date) + '</td>' +
               '<td>' + actsHtml + '</td>' +
+              '<td class="num">' + r.groupCount + '</td>' +
               '<td class="num">' + r.uniqueChildren + '</td>' +
-              (canSeeMoney ? '<td class="num">' + fmtUah(r.sum) + ' ₴</td>' : '') +
+              (canSeeMoney ? '<td class="num">' + fmtUah(r.sum) + ' ₴</td><td class="num">' + fmtUah(r.payout) + ' ₴</td>' : '') +
             '</tr>';
   });
-  $('anaTbody').innerHTML = html || '<tr><td colspan="4" class="muted" style="text-align:center;padding:20px">Нічого не знайдено</td></tr>';
+  $('anaTbody').innerHTML = html || '<tr><td colspan="6" class="muted" style="text-align:center;padding:20px">Нічого не знайдено</td></tr>';
 }
 
 // ── DETAIL MODAL ────────────────────────────
@@ -5050,6 +5150,7 @@ async function renderExportPreview(){
   try {
     if (!S.items || !S.items.length) await loadCatalog(false);
     await _loadAnaMarks(false);
+    await _loadAnaMerges(false);   // v-ana: обʼєднання груп для payout «за заняття»
   } catch(e){
     var em = escapeHtml(e.message || e);
     $('expPreviewBody').innerHTML = '<tr><td colspan="4" class="muted" style="text-align:center;padding:20px">' + em + '</td></tr>';
