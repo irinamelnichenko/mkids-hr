@@ -1281,7 +1281,24 @@ function apiGet(action, params){
   Object.keys(params || {}).forEach(function(k){
     url += '&' + k + '=' + encodeURIComponent(params[k]);
   });
-  return fetch(url, {redirect:'follow'}).then(function(r){ return r.json(); });
+  // v7.77: таймаут 45с (AbortController) + 2 повтори на мережевий збій/таймаут (паузи 1с, 3с).
+  // Без цього завислий запит (холодний старт/обрив) лишав спінер «Завантаження…» назавжди.
+  var PAUSES = [1000, 3000];
+  function attempt(tryIdx){
+    var ctrl = new AbortController();
+    var timer = setTimeout(function(){ ctrl.abort(); }, 45000);
+    return fetch(url, {redirect:'follow', signal: ctrl.signal})
+      .then(function(r){ clearTimeout(timer); return r.json(); })
+      .catch(function(err){
+        clearTimeout(timer);
+        if (tryIdx < PAUSES.length){
+          return new Promise(function(res){ setTimeout(res, PAUSES[tryIdx]); })
+            .then(function(){ return attempt(tryIdx + 1); });
+        }
+        throw err;
+      });
+  }
+  return attempt(0);
 }
 function apiPost(body){
   setSync('syncing');
@@ -2766,15 +2783,27 @@ function populateLocSel(){
   }).join('');
   $('fYear').value = String(S.year);
 
+  // v7.77: прогрес під час завантаження — getPredmetnyky ~20с, щоб не виглядало як зависання.
+  $('main').innerHTML = '<div class="loading"><div class="spinner"></div>' +
+    '<div>Завантаження даних… це може зайняти до 30 секунд</div></div>';
+  // v7.77: фолбек — якщо за 50с не завантажилось, показати кнопку оновлення замість вічного спінера.
+  var _loadDone = false;
+  var _slowTimer = setTimeout(function(){
+    if (_loadDone) return;
+    $('main').innerHTML = '<div class="err">Довго вантажиться — натисніть «🔄 Оновити».</div>';
+  }, 50000);
+
   Promise.all([
     apiGet('getLocations')
       .then(function(res){ S.locations = (res && res.data) || []; })
       .catch(function(){ S.locations = []; }),
     loadPredmetnyky()
   ]).then(function(){
+    _loadDone = true; clearTimeout(_slowTimer);
     populateLocSel();
     renderApp();
   }).catch(function(e){
+    _loadDone = true; clearTimeout(_slowTimer);
     showToast('Не вдалося завантажити: ' + (e && e.message || e), 'err');
     $('main').innerHTML = '<div class="err">Помилка завантаження. Натисніть «🔄 Оновити».</div>';
   });

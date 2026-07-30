@@ -1,11 +1,11 @@
-// m.kids PWA Service Worker (v7.76-vacation-calendar-weeks / cache v7.76)
+// m.kids PWA Service Worker (v7.77-predmetnyky-timeout / cache v7.77)
 // Cache: static shell (HTML + manifest + icons + xlsx)
 // Strategy:
 //   • POST → завжди network (ніколи не кешуємо)
 //   • GET до /macros/ (Apps Script) → network-only, fallback на cache
 //   • GET до інших static URLs → cache-first з фоновим оновленням
 
-var CACHE = 'mkids-cache-v7.76';
+var CACHE = 'mkids-cache-v7.77';
 var SHELL = [
   './',
   'activities.html',
