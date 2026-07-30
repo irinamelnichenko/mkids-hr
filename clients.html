@@ -2575,24 +2575,24 @@ async function refreshAll(){
   showSpinner();
   setSyncStatus('sync');
   try{
-    // Дзеркало initApp: КРИТИЧНІ лоадери — лише locations + clients (без них ростер/групи
-    // реально не завантажились). payments/paymentsYearly/payHistory — НЕкритичні: їх падіння
-    // пишемо у консоль, але топбар лишається зеленим. Паралельно через allSettled.
+    // ПОСЛІДОВНО — по одному запиту за раз (як було до allSettled), АЛЕ зі збереженням
+    // поділу crit/non-crit: червоний лише при падінні locations або clients; некритичні
+    // (payments/paymentsYearly/payHistory) — console.error і топбар лишається зеленим.
     var _loaders=[
-      {name:'locations',      crit:true,  p:loadLocations(true)},
-      {name:'payments',       crit:false, p:loadPayments(true)},
-      {name:'clients',        crit:true,  p:loadClients(true)},
-      {name:'paymentsYearly', crit:false, p:loadPaymentsYearly(true)},
-      {name:'payHistory',     crit:false, p:loadAllPayHistory()}
+      {name:'locations',      crit:true,  fn:function(){ return loadLocations(true); }},
+      {name:'payments',       crit:false, fn:function(){ return loadPayments(true); }},
+      {name:'clients',        crit:true,  fn:function(){ return loadClients(true); }},
+      {name:'paymentsYearly', crit:false, fn:function(){ return loadPaymentsYearly(true); }},
+      {name:'payHistory',     crit:false, fn:function(){ return loadAllPayHistory(); }}
     ];
-    var _res=await Promise.allSettled(_loaders.map(function(l){ return l.p; }));
     var _critFail=false;
-    _res.forEach(function(r,i){
-      if(r.status==='rejected'){
-        console.error('[refreshAll] лоадер "'+_loaders[i].name+'" ВПАВ'+(_loaders[i].crit?' (КРИТИЧНИЙ)':' (некритичний)')+':', r.reason);
+    for(var i=0;i<_loaders.length;i++){
+      try{ await _loaders[i].fn(); }
+      catch(e){
+        console.error('[refreshAll] лоадер "'+_loaders[i].name+'" ВПАВ'+(_loaders[i].crit?' (КРИТИЧНИЙ)':' (некритичний)')+':', e);
         if(_loaders[i].crit) _critFail=true;
       }
-    });
+    }
     buildGroups();
     setSyncStatus(_critFail?'err':'ok');   // червоний лише коли впав КРИТИЧНИЙ (як в init)
   }catch(e){
