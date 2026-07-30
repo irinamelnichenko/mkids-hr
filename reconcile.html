@@ -942,7 +942,7 @@ function renderFillRange(){
 //   бекенд reconcilePreview (резолв локації за IBAN + матч платник→дитина) →
 //   прев'ю-таблиця зі статусами. БЕЗ ЗАПИСІВ.
 // ═══════════════════════════════════════════════════════════════
-var RC = { busy:false, parsed:[], groups:[] };   // parsed:[{fileName,iban,payments}] · groups:[{fileName,ok,error,preview}]
+var RC = { busy:false, parsed:[], groups:[], mode:'income' };   // parsed:[{fileName,iban,payments,expenses}] · groups:[{fileName,ok,error,preview}] · mode:'income'|'expenses'
 
 var _RC_STAT = {
   auto:  {icon:'🟢', cls:'green',  txt:'авто'},
@@ -1006,19 +1006,20 @@ function rcParseFile(f){
         var tbl=rcFindTable(m);
         if(!iban) return reject('немає номера рахунку (UA…)');
         if(!tbl||tbl.map.date==null||tbl.map.amount==null) return reject('не розпізнано таблицю (Дата/Сума)');
-        var pays=[];
+        var pays=[], exps=[];   // v7.75: надходження (>0) і витрати (<0) — окремо
         for (var r=tbl.headerRow+1;r<m.length;r++){
           var row=m[r]; var g=function(key){ var c=tbl.map[key]; return c==null?'':String(row[c]||'').trim(); };
           var dateV=g('date'), amtRaw=g('amount');
           if(!dateV && !amtRaw) continue;
           var amt=parseFloat(amtRaw.replace(/\s/g,'').replace(',','.'));
-          if(isNaN(amt)||amt<=0) continue;                 // лише надходження
-          pays.push({ date:dateV, time:g('time'), amount:amt, currency:g('currency'),
-                      purpose:g('purpose'), edrpou:g('edrpou'), counterparty:g('counterparty'),
-                      account:g('account'), mfo:g('mfo'), ref:g('ref') });
+          if(isNaN(amt)||amt===0) continue;
+          var rowObj={ date:dateV, time:g('time'), amount:Math.abs(amt), currency:g('currency'),
+                       purpose:g('purpose'), edrpou:g('edrpou'), counterparty:g('counterparty'),
+                       account:g('account'), mfo:g('mfo'), ref:g('ref') };
+          if(amt>0) pays.push(rowObj); else exps.push(rowObj);   // від'ємні → витрати (сума за модулем)
         }
-        if(!pays.length) return reject('немає вхідних платежів (сума > 0)');
-        resolve({ fileName:f.name, iban:iban, payments:pays });
+        if(!pays.length && !exps.length) return reject('немає операцій (Дата/Сума)');
+        resolve({ fileName:f.name, iban:iban, payments:pays, expenses:exps });
       }catch(e){ reject('помилка парсингу: '+(e&&e.message||e)); }
     };
     reader.onerror=function(){ reject('не вдалося прочитати файл'); };
@@ -1147,7 +1148,80 @@ function rcRowsHtml(p, g){
   return h+'</tbody></table></div>';
 }
 
+// v7.75: перемикач режимів прев'ю (Надходження / Витрати).
+function rcModeSwitchHtml(){
+  var nInc=0, nExp=0;
+  RC.parsed.forEach(function(p){ nInc+=(p.payments||[]).length; nExp+=(p.expenses||[]).length; });
+  function b(m,label,n){
+    var active = RC.mode===m;
+    return '<button onclick="rcSetMode(\''+m+'\')" style="padding:7px 14px;border:1px solid '+(active?'#3b82f6':'#cfe3fb')+';border-radius:10px;'
+      +'background:'+(active?'#3b82f6':'#fff')+';color:'+(active?'#fff':'#334')+';font-weight:600;cursor:pointer;margin-right:8px">'+label+' ('+n+')</button>';
+  }
+  return '<div style="margin-bottom:12px">'+b('income','⬇️ Надходження',nInc)+b('expenses','⬆️ Витрати',nExp)+'</div>';
+}
+function rcSetMode(m){ RC.mode=m; rcRenderAll(); }
+
+// v7.75: групування витрат по контрагенту (ключ = ЄДРПОУ, інакше нормалізована назва).
+function rcExpenseGroups(){
+  var map={};
+  RC.parsed.forEach(function(p){
+    (p.expenses||[]).forEach(function(x){
+      var edr=String(x.edrpou||'').trim();
+      var nm=String(x.counterparty||'').trim();
+      var key=edr || nm.toLowerCase().replace(/\s+/g,' ') || '—';
+      if(!map[key]) map[key]={name:nm||'—', edrpou:edr, count:0, sum:0, purposes:[]};
+      var g=map[key];
+      g.count++; g.sum+=Number(x.amount)||0;
+      if(!g.name || g.name==='—'){ if(nm) g.name=nm; }
+      var pr=String(x.purpose||'').trim();
+      if(pr && g.purposes.length<3 && g.purposes.indexOf(pr)===-1) g.purposes.push(pr);
+    });
+  });
+  return Object.keys(map).map(function(k){ return map[k]; }).sort(function(a,b){ return b.sum-a.sum; });
+}
+
+function rcRenderExpenses(){
+  var groups=rcExpenseGroups();
+  if(!groups.length) return '<div class="inv-empty">У завантажених виписках немає видаткових операцій (сума &lt; 0).</div>';
+  var totalSum=groups.reduce(function(s,g){return s+g.sum;},0);
+  var totalCnt=groups.reduce(function(s,g){return s+g.count;},0);
+  var head='<div class="fc-banner" style="padding:12px 14px;border-radius:12px;background:#fdf0ef;border:1px solid #f6c9c4;margin-bottom:10px">'
+    +'<b>Витрати за виписками</b> · контрагентів: '+groups.length+' · платежів: '+totalCnt
+    +' · сума: <b>'+fmtUah(totalSum)+' ₴</b>'
+    +' <button class="btn btn-secondary btn-sm" style="float:right" onclick="rcExportExpenses()">📤 Excel</button>'
+    +'<div style="font-size:11px;color:var(--gray);margin-top:4px">Тільки перегляд — нічого не записується.</div></div>';
+  var rows=groups.map(function(g){
+    var pr=g.purposes.length ? g.purposes.map(function(s){return escapeHtml(s.length>60?s.slice(0,60)+'…':s);}).join('<br>') : '<span style="color:var(--gray)">—</span>';
+    return '<tr><td>'+escapeHtml(g.name)+'</td>'
+      +'<td>'+(g.edrpou?escapeHtml(g.edrpou):'<span style="color:var(--gray)">—</span>')+'</td>'
+      +'<td class="num">'+g.count+'</td>'
+      +'<td class="num"><b>'+fmtUah(g.sum)+'</b> ₴</td>'
+      +'<td style="font-size:11px">'+pr+'</td></tr>';
+  }).join('');
+  return head+'<div style="overflow-x:auto"><table class="inv-table"><thead><tr>'
+    +'<th>Контрагент</th><th>ЄДРПОУ</th><th class="num">Платежів</th><th class="num">Сума</th><th>Приклади призначень</th>'
+    +'</tr></thead><tbody>'+rows+'</tbody></table></div>';
+}
+
+function rcExportExpenses(){
+  var groups=rcExpenseGroups();
+  if(!groups.length){ showToast('Немає витрат для експорту','info'); return; }
+  var aoa=[['Контрагент','ЄДРПОУ','Платежів','Сума, грн','Приклади призначень']];
+  groups.forEach(function(g){ aoa.push([g.name, g.edrpou, g.count, Math.round(g.sum), g.purposes.join(' | ')]); });
+  var ws=XLSX.utils.aoa_to_sheet(aoa);
+  var wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Витрати');
+  XLSX.writeFile(wb, 'Витрати_виписка_'+rcToday()+'.xlsx');
+}
+
 function rcRenderAll(){
+  // v7.75: режим «Витрати» — окремий перегляд (нічого не записується).
+  if(RC.mode==='expenses'){
+    $('rcSummary').innerHTML='';
+    $('rcBanner').innerHTML='';
+    $('rcWrap').innerHTML=rcModeSwitchHtml()+rcRenderExpenses();
+    $('rcApplyBar').style.display='none';
+    return;
+  }
   var total={auto:0,multi:0,none:0};
   var okGroups=RC.groups.filter(function(g){return g.ok;});
   okGroups.forEach(function(g){ g.preview.rows.forEach(function(x){ if(total[x.status]!=null) total[x.status]++; }); });
@@ -1186,7 +1260,7 @@ function rcRenderAll(){
   });
   if(!html) html='<div class="inv-empty">Нічого не розпізнано.</div>';
   $('rcBanner').innerHTML='';
-  $('rcWrap').innerHTML=html;
+  $('rcWrap').innerHTML=rcModeSwitchHtml()+html;   // v7.75: перемикач Надходження/Витрати вгорі
   $('rcApplyBar').style.display = okGroups.length ? '' : 'none';
 }
 
