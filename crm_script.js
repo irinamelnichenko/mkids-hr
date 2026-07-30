@@ -1,5 +1,14 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.75
+// m.kids CRM — Google Apps Script v7.76
+// v7.76: ЗНИЖКА ВІДПУСТКИ — нова модель за КАЛЕНДАРНИМИ ТИЖНЯМИ. Тиждень = ceil((кінець−
+//        початок)/7) календарних днів (не робочих). % = тижні×25, максимум 100%; discount =
+//        round(fee×pct/100). Кожен тиждень зараховується місяцю, в якому ПОЧАВСЯ (період через
+//        два місяці: 29.07–12.08 → липень 25% + серпень 25%). Цілий рухомий місяць
+//        (isFullMonthVacation) має ПРІОРИТЕТ = 100% у місяць ПОЧАТКУ, хвіст відкидається
+//        (05.08–04.09 → серпень 100%, вересень 0; ніяких 125%). Річний ліміт → 4 ТИЖНІ/договірний
+//        рік (тижні понад ліміт = 0%). Свята прибрано ЗВІДУСІЛЬ у розрахунку відпустки (воєнний
+//        стан): _vacHolidaySet/_vacIsWorkday/_vacWorkDaysInMonth/_vacCountWorkDays видалено. Хвороба
+//        (sick) НЕ зачеплена — рахується окремою денною шкалою. _FILL_UA_HOLIDAYS не чіпано.
 // v7.75: усунено ДЖЕРЕЛО дублів карток у saveClient. _normBdayYMD тепер нормалізує дату
 //        народження в ОДНОМУ поясі (пояс таблиці, фолбек Europe/Kiev): Date → formatDate у
 //        цьому поясі; ISO-рядок з T/Z → парс+формат так само; голий YYYY-MM-DD → як є. Раніше
@@ -283,7 +292,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.75', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.76', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -7518,31 +7527,14 @@ function _vacParseISO(s){
 }
 function _vacISOof(d){ return d.getFullYear() + '-' + _pad2v(d.getMonth() + 1) + '-' + _pad2v(d.getDate()); }
 
-var _VAC_HOL_CACHE = {};
-function _vacHolidaySet(year){
-  if (_VAC_HOL_CACHE[year]) return _VAC_HOL_CACHE[year];
-  var fixed = ['01-01','01-07','03-08','05-01','05-09','06-28','08-24','10-14','12-25'];
-  var movable = {2025:['05-05','06-23'], 2026:['04-12','05-31']};   // Великдень, Трійця
-  var s = {};
-  fixed.forEach(function(dm){ s[year + '-' + dm] = 1; });
-  (movable[year] || []).forEach(function(dm){ s[year + '-' + dm] = 1; });
-  _VAC_HOL_CACHE[year] = s; return s;
-}
-function _vacIsWorkday(d){
-  var wd = d.getDay();
-  return wd !== 0 && wd !== 6 && !_vacHolidaySet(d.getFullYear())[_vacISOof(d)];
-}
-function _vacWorkDaysInMonth(year, month){
-  var days = new Date(year, month, 0).getDate(), n = 0;
-  for (var d = 1; d <= days; d++) if (_vacIsWorkday(new Date(year, month - 1, d))) n++;
-  return n;
-}
-function _vacCountWorkDays(fromISO, toISO){
+// v7.76 — КАЛЕНДАРНІ ТИЖНІ. Свят більше НЕ застосовуємо ніде (воєнний стан):
+// _vacHolidaySet/_vacIsWorkday/_vacWorkDaysInMonth/_vacCountWorkDays ВИДАЛЕНО.
+// Тиждень = ceil((кінець − початок)/7) КАЛЕНДАРНИХ днів (не робочих).
+function _vacWeeksCal(fromISO, toISO){
   var f = _vacParseISO(fromISO), t = _vacParseISO(toISO);
   if (!f || !t || t < f) return 0;
-  var n = 0, cur = new Date(f.getTime());
-  while (cur <= t){ if (_vacIsWorkday(cur)) n++; cur.setDate(cur.getDate() + 1); }
-  return n;
+  var days = Math.round((t.getTime() - f.getTime()) / 86400000);   // кінець − початок
+  return Math.ceil(days / 7);
 }
 function _vacContractYear(contractISO, refISO){
   var cd = _vacParseISO(contractISO); if (!cd) return null;
@@ -7567,8 +7559,8 @@ function isFullMonthVacation(fromISO, toISO){
   var b = new Date(t.getFullYear(), t.getMonth(), t.getDate() + 1);   // to + 1 день
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
-// v6.40: списання ліміту ОКРУГЛЯЄТЬСЯ ВГОРУ до тижня для кожної відпустки
-// (ceil(днів/5)*5). Різниця «згорає» (грошей не торкається). Узгоджено з карткою.
+// v7.76: річний ліміт рахуємо в ТИЖНЯХ (календарних). Ліміт = 4 тижні/договірний рік.
+// Кожна відпустка = ceil((кінець−початок)/7) тижнів; цілий місяць = весь ліміт (4 тижні).
 function _vacUsedInContractYear(absences, contractISO, refISO, excludeId){
   var w = _vacContractYear(contractISO, refISO); if (!w) return 0;
   var used = 0;
@@ -7577,55 +7569,50 @@ function _vacUsedInContractYear(absences, contractISO, refISO, excludeId){
     if (excludeId && a.id === excludeId) return;
     if (a.status === 'rejected' || a.status === 'cancelled') return;
     if (!a.from || !a.to) return;
-    if (isFullMonthVacation(a.from, a.to)){ used += 20; return; }   // v7.41 місяць безперервно → весь річний ліміт
+    if (isFullMonthVacation(a.from, a.to)){ used += 4; return; }    // цілий місяць → весь річний ліміт (4 тижні)
     var s = (a.from < w.from) ? w.from : a.from;
     var e = (a.to   > w.to)   ? w.to   : a.to;
     if (e < s) return;
-    var wd = _vacCountWorkDays(s, e);
-    used += Math.ceil(wd / 5) * 5;          // ⬅️ округлення вгору до тижня
+    used += _vacWeeksCal(s, e);              // ⬅️ тижні = ceil(календарні/7)
   });
   return used;
 }
 function _vacLimitRemaining(absences, contractISO, refISO, excludeId){
-  return Math.max(0, 20 - _vacUsedInContractYear(absences, contractISO, refISO, excludeId));
+  return Math.max(0, 4 - _vacUsedInContractYear(absences, contractISO, refISO, excludeId));  // 4 тижні/рік
 }
-// Знижка по місяцях для ОДНОГО періоду — копія calcAbsMonthBreakdown(type='vacation').
-// amount(discount) = round(fee × eligible_days / month_workdays); понад ліміт → 0.
+// v7.76 — Знижка по місяцях для ОДНОГО періоду (дзеркало calcAbsMonthBreakdown(type='vacation')).
+// Правило: тижні = ceil((кінець−початок)/7) КАЛЕНДАРНИХ днів; % = тижні×25, максимум 100%;
+// discount = round(fee × pct/100). Кожен тиждень зараховується місяцю, в якому ПОЧАВСЯ.
+// Цілий місяць (isFullMonthVacation) має ПРІОРИТЕТ: 100% у місяць ПОЧАТКУ, хвіст відкидається
+// (напр. 05.08–04.09 → серпень 100%, вересень 0; НІЯКИХ 125%). Тижні понад річний ліміт (4) → 0%.
 function _vacMonthBreakdown(fromISO, toISO, fee, allAbsences, contractISO, selfId){
   var f = _vacParseISO(fromISO), t = _vacParseISO(toISO);
   if (!f || !t || t < f) return [];
-  var mmap = {}, cur = new Date(f.getTime());
-  while (cur <= t){
-    if (_vacIsWorkday(cur)){
-      var y = cur.getFullYear(), mo = cur.getMonth() + 1, mk = y + '-' + _pad2v(mo);
-      if (!mmap[mk]) mmap[mk] = {ym: mk, y: y, m: mo, vacDays: 0};
-      mmap[mk].vacDays++;
-    }
-    cur.setDate(cur.getDate() + 1);
-  }
-  var arr = Object.keys(mmap).sort().map(function(k){ return mmap[k]; });
-  // v7.41 — «місяць безперервно»: знижка 100% = 1×fee, розподілена ПРОПОРЦІЙНО пропущеним
-  // роб.дням кожного календарного місяця; сума частин = рівно fee (останній — залишком).
+
+  // ЦІЛИЙ РУХОМИЙ МІСЯЦЬ → 100% у місяць ПОЧАТКУ (пріоритет над потижневим розподілом).
   if (isFullMonthVacation(fromISO, toISO)){
-    var totalDaysFM = arr.reduce(function(s, mi){ return s + mi.vacDays; }, 0);
-    var accFM = 0;
-    return arr.map(function(mi, ix){
-      var mwd = _vacWorkDaysInMonth(mi.y, mi.m);
-      var discount = (ix === arr.length - 1) ? (fee - accFM)
-                     : (totalDaysFM > 0 ? Math.round(fee * mi.vacDays / totalDaysFM) : 0);
-      accFM += discount;
-      return {ym: mi.ym, y: mi.y, m: mi.m, vacDays: mi.vacDays, monthWorkDays: mwd,
-              eligibleDays: mi.vacDays, overLimitDays: 0, discount: discount, fullMonth: true};
-    });
+    var mkFM = f.getFullYear() + '-' + _pad2v(f.getMonth() + 1);
+    return [{ym: mkFM, y: f.getFullYear(), m: f.getMonth() + 1, weeks: 4, eligibleWeeks: 4,
+             overLimitWeeks: 0, pct: 100, discount: (fee > 0 ? Math.round(fee) : 0), fullMonth: true}];
   }
-  var remaining = _vacLimitRemaining(allAbsences, contractISO, fromISO, selfId);
-  return arr.map(function(mi){
-    var mwd = _vacWorkDaysInMonth(mi.y, mi.m);
-    var eligible = Math.min(mi.vacDays, Math.max(0, remaining));
-    remaining -= eligible;
-    var discount = (fee > 0 && mwd > 0) ? Math.round(fee * eligible / mwd) : 0;
-    return {ym: mi.ym, y: mi.y, m: mi.m, vacDays: mi.vacDays, monthWorkDays: mwd,
-            eligibleDays: eligible, overLimitDays: mi.vacDays - eligible, discount: discount};
+
+  var weeks = _vacWeeksCal(fromISO, toISO);
+  if (weeks <= 0) return [];
+  var remaining = _vacLimitRemaining(allAbsences, contractISO, fromISO, selfId);   // у тижнях, ≤4
+  var mmap = {}, order = [];
+  for (var i = 0; i < weeks; i++){
+    var ws = new Date(f.getTime()); ws.setDate(ws.getDate() + 7 * i);   // початок тижня i
+    var mk = ws.getFullYear() + '-' + _pad2v(ws.getMonth() + 1);
+    if (!mmap[mk]){ mmap[mk] = {ym: mk, y: ws.getFullYear(), m: ws.getMonth() + 1, weeks: 0, eligibleWeeks: 0}; order.push(mk); }
+    mmap[mk].weeks++;
+    if (i < remaining) mmap[mk].eligibleWeeks++;   // тиждень понад ліміт (4/рік) → 0%
+  }
+  return order.map(function(mk){
+    var mi = mmap[mk];
+    var pct = Math.min(100, mi.eligibleWeeks * 25);
+    return {ym: mi.ym, y: mi.y, m: mi.m, weeks: mi.weeks, eligibleWeeks: mi.eligibleWeeks,
+            overLimitWeeks: mi.weeks - mi.eligibleWeeks, pct: pct,
+            discount: (fee > 0 ? Math.round(fee * pct / 100) : 0)};
   });
 }
 // v6.58: ВИБІР ШКАЛИ хвороби за локацією + місяцем ПОЧАТКУ лікарняного (from).
