@@ -1366,8 +1366,21 @@ function hasAnyEditPerm(){
 }
 
 // ── DATA LOADER v6.11 ───────────────────────
-function loadPredmetnyky(){
-  return apiGet('getPredmetnyky', {actorId: S.user.id}).then(function(res){
+// v7.80: getPredmetnyky тепер віддає ЛИШЕ обраний місяць (lessons+merges). Кеш по місяцях:
+// повернення на вже завантажений місяць не робить запит. «Stash-on-leave»: перед зміною
+// місяця зберігаємо поточні (можливо відредаговані) S.lessons/S.merges у кеш — тож редагування
+// не губляться і не треба інвалідувати кеш у місцях збереження уроків.
+var _pmCache = {};   // 'year-month' -> {lessons, merges}
+function _pmKey(){ return S.year + '-' + S.month; }
+function _pmStashCurrent(){ _pmCache[_pmKey()] = {lessons: S.lessons, merges: S.merges}; }
+function loadPredmetnyky(force){
+  var key = _pmKey();
+  if (!force && _pmCache[key]){          // кеш-хіт: місячні дані з памʼяті, решта (teachers/norms/…) не змінюється
+    S.lessons = _pmCache[key].lessons || [];
+    S.merges  = _pmCache[key].merges  || [];
+    return Promise.resolve();
+  }
+  return apiGet('getPredmetnyky', {actorId: S.user.id, year: S.year, month: S.month}).then(function(res){
     if (!res || !res.ok) throw new Error(res && res.error || 'Failed to load');
     S.teachers    = res.teachers    || [];
     S.norms       = res.norms       || {};
@@ -1376,6 +1389,7 @@ function loadPredmetnyky(){
     S.catalog     = res.catalog     || [];
     S.assignments = res.assignments || [];
     S.merges      = res.predMerges  || [];
+    _pmCache[key] = {lessons: S.lessons, merges: S.merges};   // v7.80: у кеш
   });
 }
 
@@ -1872,13 +1886,15 @@ function renderApp(){
 
 function renderDangerZone(loc){
   if (!canEditPred(loc)) return '';
+  // v7.80: S.lessons тепер лише поточний місяць → цифра = заняття ЗА МІСЯЦЬ (не бреше).
   var lessonsInLoc = S.lessons.filter(function(L){ return L.loc === loc; }).length;
   if (!lessonsInLoc) return '';
+  var _mLbl = (MONTHS[S.month - 1] || '') + ' ' + S.year;
   return '<div class="pred-danger-zone">' +
     '<button class="btn btn-danger" onclick="onClearAllLessons()">' +
-      '🗑 Очистити ВСІ заняття для «' + escapeHtml(loc) + '» (' + lessonsInLoc + ')' +
+      '🗑 Очистити заняття за ' + escapeHtml(_mLbl) + ' для «' + escapeHtml(loc) + '» (' + lessonsInLoc + ')' +
     '</button>' +
-    '<span class="pred-danger-hint">Тільки для тестів — видалить заняття по всіх місяцях/групах/предметах для цієї локації.</span>' +
+    '<span class="pred-danger-hint">Тільки для тестів. Показано ' + lessonsInLoc + ' за ' + escapeHtml(_mLbl) + '; кнопка видалить заняття цієї локації ПО ВСІХ місяцях/групах/предметах.</span>' +
   '</div>';
 }
 
@@ -2159,14 +2175,20 @@ function onFilterChange(which){
   if (which === 'loc')     S.loc = $('fLoc').value;
   if (which === 'subject') S.subject = $('fSubject').value;
   if (which === 'month'){
+    // v7.80: місяць/рік → перезавантажуємо місячний зріз (з кешу або сервера).
+    _pmStashCurrent();                        // зберегти поточний місяць (з можливими правками)
     S.year  = Number($('fYear').value)  || S.year;
     S.month = Number($('fMonth').value) || S.month;
+    setSync('syncing');
+    loadPredmetnyky().then(function(){ setSync('ok'); renderApp(); })
+      .catch(function(e){ setSync('err', 'Не вдалося завантажити'); renderApp(); showToast('Помилка: ' + (e && e.message || e), 'err'); });
+    return;
   }
   renderApp();
 }
 function refreshAll(){
   setSync('syncing');
-  loadPredmetnyky().then(function(){
+  loadPredmetnyky(true).then(function(){        // v7.80: 🔄 завжди рефетч поточного місяця (в обхід кешу)
     renderApp();
     setSync('ok');
     showToast('🔄 Оновлено', 'ok', 2000);
