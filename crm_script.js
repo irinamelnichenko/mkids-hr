@@ -1,5 +1,9 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.82
+// m.kids CRM — Google Apps Script v7.83
+// v7.83: getPredmetnyky — з уроків прибрано поле empKey (фронт його не читає: грід чіпляє за
+//        loc/group/subject/date, а empKey для збереження резолвиться з призначення/кандидатів).
+//        Це ~29% ваги масиву lessons → відповідь за липень падає з ~182 КБ до ~140 КБ (−23%).
+//        teachers/catalog/assignments/norms — без змін. savePredmetnykyLesson не зачеплено.
 // v7.82: КІЛЬКА незалежних обʼєднань груп в один день (одне заняття × дата). Зберігаються як
 //        ОКРЕМІ РЯДКИ листа Додаткові_Обʼєднання (F лишається плоским масивом = один набір),
 //        тож _loadDopMergesMap/_dopCountSessions і фронтовий _anaMergesMap/_anaCountSessions
@@ -323,7 +327,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.82', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.83', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -16459,8 +16463,9 @@ function _loadPredLessons(locFilter, year, month){
       if (!_ym || _ym.y !== _ymY || _ym.m !== _ymM) continue;
     }
     out.push({
+      // v7.83: empKey ПРИБРАНО — фронт його не читає (грід чіпляє за loc/group/subject/date,
+      // а empKey для збереження резолвиться з призначення/кандидатів). ~29% ваги lessons.
       id:      id,
-      empKey:  String(row[1] || '').trim(),
       loc:     loc,
       group:   String(row[3] || '').trim(),
       subject: String(row[4] || '').trim(),
