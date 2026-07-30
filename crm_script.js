@@ -1,5 +1,9 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.70
+// m.kids CRM — Google Apps Script v7.71
+// v7.71: cashPayoutSheet — шапка «Розрахунок за <місяць> <рік>»; параметр parts
+//        ('both'|'sheet'|'slips'); розрахункові листки _buildCashPayoutSlips (модель B:
+//        Нараховано=Бюджет міс, Виплата на карту=Факт міс, Враховано з минулих=Σ(Б−Ф)
+//        січень→міс−1, До видачі=Враховано+(Нараховано−Виплата)=cash зведеної).
 // v7.70: fuzzy-звірка — similar-score та autoApply виставляються ДО раннього виходу
 //        no-salary-row, тож fuzzy-кандидат (і його score) не губиться, коли Salary-рядок
 //        написаний іншим прізвищем, ніж HR-кандидат.
@@ -264,7 +268,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.70', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.71', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -11241,12 +11245,23 @@ function _buildCashPayoutHtml(d){
 '  .summary { margin-top:8px; line-height:1.6; }',
 '  .signs { margin-top:44px; display:flex; justify-content:space-between; font-size:12px; }',
 '  .signs .s { white-space:nowrap; }',
+'  .slip { page-break-before: always; padding-top:6px; }',
+'  .slip:first-child { page-break-before: auto; }',
+'  .slip h2 { font-size:15px; margin:4px 0 8px; border-bottom:1px solid #111; padding-bottom:4px; }',
+'  .slip .pib { font-size:18px; font-weight:700; margin:8px 0 2px; }',
+'  .slip .pos { color:#555; font-size:12px; margin-bottom:8px; }',
+'  .slip table { max-width:420px; }',
+'  .slip td.lbl { text-align:left; } .slip td.val { text-align:right; white-space:nowrap; }',
+'  .slip tr.out td { font-weight:700; font-size:13px; background:#fff6ef; }',
+'  .slip .words { margin-top:8px; font-size:12px; }',
+'  .slip .sig { margin-top:28px; font-size:12px; }',
 '</style></head><body>',
-'  <div class="head"><span style="display:inline-block;background:#FF6A00;color:#fff;font-weight:700;font-size:20px;padding:6px 14px;border-radius:8px;">m.kids</span></div>',
+(d.parts === 'slips' ? '' :
+['  <div class="head"><span style="display:inline-block;background:#FF6A00;color:#fff;font-weight:700;font-size:20px;padding:6px 14px;border-radius:8px;">m.kids</span></div>',
 '  <h1>Відомість на видачу готівки</h1>',
 '  <div class="meta">',
 '    <div><b>Локація:</b> ' + _cashEsc(d.loc) + '</div>',
-'    <div><b>Період:</b> січень – ' + _cashEsc(d.monthLabel) + ' (наростаючим)</div>',
+'    <div><b>Розрахунок за</b> ' + _cashEsc(d.monthLabel) + '</div>',
 '    <div><b>Дата формування:</b> ' + _cashEsc(d.dateStr) + '</div>',
 '  </div>',
 '  <table>',
@@ -11259,9 +11274,37 @@ rowsHtml,
 '    <div class="s">Видав (касир): __________________ / ______________</div>',
 '    <div class="s">Директор: __________________ / ______________</div>',
 '    <div class="s">Дата: ____________</div>',
-'  </div>',
+'  </div>'].join('\n')),
+(d.parts === 'sheet' ? '' : _buildCashPayoutSlips(d)),
 '</body></html>'
   ].join('\n');
+}
+
+// v7.71 РОЗРАХУНКОВІ ЛИСТКИ. Кожен — з нової сторінки (page-break-before). Модель B:
+//   Нараховано = Бюджет за обраний місяць; Виплата на карту = Факт за обраний місяць;
+//   Враховано з минулих = Σ(Бюджет−Факт) січень→місяць−1; До видачі = Враховано + (Нараховано−Виплата).
+// Порядок листків = порядок зведеної. Усі дані через _cashEsc.
+function _buildCashPayoutSlips(d){
+  return (d.rows || []).map(function(r){
+    return [
+'  <div class="slip">',
+'    <h2>Розрахунковий листок</h2>',
+'    <div class="meta"><b>Локація:</b> ' + _cashEsc(d.loc) +
+     ' · <b>Розрахунок за</b> ' + _cashEsc(d.monthLabel) +
+     ' · <b>Дата формування:</b> ' + _cashEsc(d.dateStr) + '</div>',
+'    <div class="pib">' + _cashEsc(r.pib) + '</div>',
+'    <div class="pos">' + _cashEsc(r.posada) + '</div>',
+'    <table>',
+'      <tr><td class="lbl">Нараховано</td><td class="val">' + _fmtUah(r.accrued) + ' грн</td></tr>',
+'      <tr><td class="lbl">Виплата на карту</td><td class="val">' + _fmtUah(r.card) + ' грн</td></tr>',
+'      <tr><td class="lbl">Враховано з минулих місяців</td><td class="val">' + _fmtUah(r.carried) + ' грн</td></tr>',
+'      <tr class="out"><td class="lbl">До видачі готівкою</td><td class="val">' + _fmtUah(r.cash) + ' грн</td></tr>',
+'    </table>',
+'    <div class="words"><b>Сума прописом:</b> ' + _cashEsc(_numberToUkrainianWords(r.cash)) + '</div>',
+'    <div class="sig">Отримав(ла): __________________ / ______________&nbsp;&nbsp;&nbsp;&nbsp;Дата: __________</div>',
+'  </div>'
+    ].join('\n');
+  }).join('\n');
 }
 
 function cashPayoutSheet(body){
@@ -11270,6 +11313,8 @@ function cashPayoutSheet(body){
     var loc   = String(body.loc || '').trim();
     var month = Number(body.month);
     var year  = Number(body.year) || (new Date()).getFullYear();
+    var parts = String(body.parts || 'both').trim();            // v7.71: 'both' | 'sheet' | 'slips'
+    if (['both','sheet','slips'].indexOf(parts) === -1) parts = 'both';
     if (!loc) return {ok:false, error:'loc обовʼязковий'};
     if (!month || month < 1 || month > 12) return {ok:false, error:'month має бути 1-12'};
     var sd = getSalaryData(loc, year);
@@ -11280,11 +11325,18 @@ function cashPayoutSheet(body){
       if (r._section !== 'main') return;                        // лише основний штат
       if (!r._category || SKIP[r._category]) return;             // не заголовки/підсумки
       var months = r.months || [];
-      var cumB = 0, cumF = 0;
-      for (var m = 0; m < month && m < months.length; m++){ cumB += Number(months[m].budget) || 0; cumF += Number(months[m].fact) || 0; }
-      var cash = cumB - cumF;
+      // v7.71 модель B для листка: розкладаємо на минуле + поточний місяць.
+      var cumB = 0, cumF = 0, prevB = 0, prevF = 0, curB = 0, curF = 0;
+      for (var m = 0; m < month && m < months.length; m++){
+        var b = Number(months[m].budget) || 0, f = Number(months[m].fact) || 0;
+        cumB += b; cumF += f;
+        if (m < month - 1){ prevB += b; prevF += f; }           // січень → місяць−1
+        else { curB = b; curF = f; }                            // обраний місяць
+      }
+      var cash = cumB - cumF;                                    // = зведена; = carried + (curB − curF)
       if (cash <= 0) return;                                     // переплата/погашено → не в листок
-      out.push({name:r.name, category:r._category, posada:_cashPosadaLabel(r._category), pib:_cashStripPosada(r.name), cash:Math.round(cash)});
+      out.push({name:r.name, category:r._category, posada:_cashPosadaLabel(r._category), pib:_cashStripPosada(r.name),
+                cash:Math.round(cash), accrued:Math.round(curB), card:Math.round(curF), carried:Math.round(prevB - prevF)});
     });
     var CATORD = {director:0, teacher:1, assistant:2, nurse:3, guard:4, cleaner:5, duty:6};
     out.sort(function(a, b){
@@ -11292,18 +11344,19 @@ function cashPayoutSheet(body){
       var cb = (CATORD[b.category] == null ? 9 : CATORD[b.category]);
       return ca - cb || a.pib.localeCompare(b.pib, 'uk');
     });
-    var rows = out.map(function(x, i){ return {n:i + 1, pib:x.pib, posada:x.posada, cash:x.cash}; });
+    var rows = out.map(function(x, i){ return {n:i + 1, pib:x.pib, posada:x.posada, cash:x.cash,
+                                               accrued:x.accrued, card:x.card, carried:x.carried}; });
     var total = rows.reduce(function(s, x){ return s + x.cash; }, 0);
     var monthLabel = (MONTHS_CAL[month - 1] || ('міс ' + month)) + ' ' + year;
     var dateStr = Utilities.formatDate(new Date(), 'Europe/Kiev', 'dd.MM.yyyy');
     var html = _buildCashPayoutHtml({loc:loc, monthLabel:monthLabel, rows:rows, total:total,
-                                     totalWords:_numberToUkrainianWords(total), dateStr:dateStr});
+                                     totalWords:_numberToUkrainianWords(total), dateStr:dateStr, parts:parts});
     var safeLoc  = loc.replace(/[\\/:*?"<>|]/g, '_');
-    var filename = 'Відомість_готівка_' + safeLoc + '_' + month + '-' + year + '.pdf';
+    var filename = 'Відомість_готівка_' + safeLoc + '_' + month + '-' + year + (parts === 'slips' ? '_листки' : parts === 'both' ? '_повна' : '') + '.pdf';
     var blob = Utilities.newBlob(html, 'text/html', filename).getAs('application/pdf');
     blob.setName(filename);
     return {ok:true, pdfBase64:Utilities.base64Encode(blob.getBytes()), filename:filename,
-            loc:loc, month:month, year:year, count:rows.length, total:total, rows:rows};
+            loc:loc, month:month, year:year, parts:parts, count:rows.length, total:total, rows:rows};
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 
