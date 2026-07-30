@@ -1,5 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.72
+// m.kids CRM — Google Apps Script v7.73
+// v7.73: шапка відомості готівки (зведена+листки) — «Розрахунок за <попередній місяць>
+//        <рік> · Виплата: <обраний місяць> <рік>» (січень → грудень минулого року).
+//        Формули й ім'я файлу без змін.
 // v7.72: розрахункові листки — 3 на сторінку А4 (розрив після кожного 3-го, пунктир
 //        із ножицями між листками на сторінці, ущільнені стилі); назва рядка «враховано
 //        з минулих» за знаком: >0 «Недовидано за минулі місяці», <0 «Утримано за
@@ -272,7 +275,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.72', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.73', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -11269,7 +11272,7 @@ function _buildCashPayoutHtml(d){
 '  <h1>Відомість на видачу готівки</h1>',
 '  <div class="meta">',
 '    <div><b>Локація:</b> ' + _cashEsc(d.loc) + '</div>',
-'    <div><b>Розрахунок за</b> ' + _cashEsc(d.monthLabel) + '</div>',
+'    <div><b>Розрахунок за</b> ' + _cashEsc(d.accrualLabel) + ' · <b>Виплата:</b> ' + _cashEsc(d.payoutLabel) + '</div>',
 '    <div><b>Дата формування:</b> ' + _cashEsc(d.dateStr) + '</div>',
 '  </div>',
 '  <table>',
@@ -11312,7 +11315,7 @@ function _buildCashPayoutSlips(d){
 '  <div class="slip' + (isCut ? ' slip-cut3' : '') + '">',
 '    <h2>Розрахунковий листок</h2>',
 '    <div class="meta"><b>Локація:</b> ' + _cashEsc(d.loc) +
-     ' · <b>Розрахунок за</b> ' + _cashEsc(d.monthLabel) +
+     ' · <b>Розрахунок за</b> ' + _cashEsc(d.accrualLabel) + ' · <b>Виплата:</b> ' + _cashEsc(d.payoutLabel) +
      ' · <b>Дата формування:</b> ' + _cashEsc(d.dateStr) + '</div>',
 '    <div class="pib">' + _cashEsc(r.pib) + '</div>',
 '    <div class="pos">' + _cashEsc(r.posada) + '</div>',
@@ -11369,9 +11372,13 @@ function cashPayoutSheet(body){
     var rows = out.map(function(x, i){ return {n:i + 1, pib:x.pib, posada:x.posada, cash:x.cash,
                                                accrued:x.accrued, card:x.card, carried:x.carried}; });
     var total = rows.reduce(function(s, x){ return s + x.cash; }, 0);
-    var monthLabel = (MONTHS_CAL[month - 1] || ('міс ' + month)) + ' ' + year;
+    // v7.73: розрахунок за ПОПЕРЕДНІЙ місяць, виплата — за обраний. Січень → грудень минулого року.
+    var prevM = (month === 1) ? 12 : month - 1;
+    var prevY = (month === 1) ? year - 1 : year;
+    var accrualLabel = (MONTHS_CAL[prevM - 1] || ('міс ' + prevM)) + ' ' + prevY;   // «Розрахунок за»
+    var payoutLabel  = (MONTHS_CAL[month - 1] || ('міс ' + month)) + ' ' + year;    // «Виплата»
     var dateStr = Utilities.formatDate(new Date(), 'Europe/Kiev', 'dd.MM.yyyy');
-    var html = _buildCashPayoutHtml({loc:loc, monthLabel:monthLabel, rows:rows, total:total,
+    var html = _buildCashPayoutHtml({loc:loc, accrualLabel:accrualLabel, payoutLabel:payoutLabel, rows:rows, total:total,
                                      totalWords:_numberToUkrainianWords(total), dateStr:dateStr, parts:parts});
     var safeLoc  = loc.replace(/[\\/:*?"<>|]/g, '_');
     var filename = 'Відомість_готівка_' + safeLoc + '_' + month + '-' + year + (parts === 'slips' ? '_листки' : parts === 'both' ? '_повна' : '') + '.pdf';
