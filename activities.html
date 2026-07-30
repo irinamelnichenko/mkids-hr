@@ -1751,7 +1751,7 @@ async function loadCatalog(force){
   $('loadBox').classList.remove('hidden');
   try {
     // 1. Backend
-    var r = await fetch(CFG.SCRIPT_URL + '?action=getActivitiesCatalog', {redirect: 'follow'});
+    var r = await _afTryFetch(CFG.SCRIPT_URL + '?action=getActivitiesCatalog', {redirect: 'follow'});
     if (r.ok){
       var json = await r.json();
       if (json && json.ok && Array.isArray(json.items)){
@@ -1785,6 +1785,23 @@ async function loadCatalog(force){
 // Зберігає API saveBackend(action, payload) для backward-compat усіх callers.
 async function saveBackend(action, payload){
   return safePost(action, payload);
+}
+
+// v7.74: fetch із повторами на МЕРЕЖЕВИЙ збій (Failed to fetch). 3 спроби, паузи 1с, 3с.
+// r.ok/HTTP-помилки НЕ повторюємо (їх інтерпретує caller) — лише network-fail, коли
+// запит не долетів. Повертає Response; кидає після останньої спроби.
+async function _afTryFetch(url, opts, tries){
+  tries = tries || 3;
+  var delays = [1000, 3000];
+  for (var i = 0; i < tries; i++){
+    try { return await fetch(url, opts || {redirect: 'follow'}); }
+    catch(e){
+      if (i < tries - 1){
+        console.warn('[fetch retry] спроба '+(i+1)+' впала, повтор через '+(delays[i]/1000)+'с:', e && e.message);
+        await new Promise(function(rs){ setTimeout(rs, delays[i] || 3000); });
+      } else { throw e; }
+    }
+  }
 }
 
 async function safePost(action, payload, attempt){
@@ -1897,7 +1914,7 @@ async function ensureHrEmpsLoaded(){
   try {
     var url = 'https://sheets.googleapis.com/v4/spreadsheets/' + CFG.HR_SHEET_ID +
               '/values/' + encodeURIComponent(CFG.HR_RANGE) + '?key=' + CFG.HR_API_KEY;
-    var r = await fetch(url);
+    var r = await _afTryFetch(url);
     if (!r.ok) throw new Error('HR HTTP ' + r.status);
     var j = await r.json();
     var emps = (j.values || []).filter(function(row){
@@ -2434,7 +2451,7 @@ var ATT_HR_CACHE = null;
 async function _attEnsureHr(){
   if (ATT_HR_CACHE) return ATT_HR_CACHE;
   try {
-    var r = await fetch(CFG.SCRIPT_URL + '?action=getEmployees&actorId=' + (S.user && S.user.id || 0),
+    var r = await _afTryFetch(CFG.SCRIPT_URL + '?action=getEmployees&actorId=' + (S.user && S.user.id || 0),
                         {redirect: 'follow'});
     var j = await r.json();
     ATT_HR_CACHE = (j && j.ok && j.items) || [];
@@ -2673,7 +2690,7 @@ async function _loadPayments(){
     }
   } catch(e){}
 
-  var r = await fetch(CFG.SCRIPT_URL + '?action=getPayments', {redirect: 'follow'});
+  var r = await _afTryFetch(CFG.SCRIPT_URL + '?action=getPayments', {redirect: 'follow'});
   if (!r.ok) throw new Error('HTTP ' + r.status);
   var json = await r.json();
   if (!json.ok) throw new Error(json.error || 'getPayments failed');
@@ -2727,7 +2744,7 @@ async function _loadMarks(force){
               '&date='  + encodeURIComponent(ATT.date) +
               '&loc='   + encodeURIComponent(S.activeLoc) +
               '&group=' + encodeURIComponent(ATT.group);
-    var r = await fetch(url, {redirect: 'follow'});
+    var r = await _afTryFetch(url, {redirect: 'follow'});
     if (!r.ok) throw new Error('HTTP ' + r.status);
     var json = await r.json();
     if (!json.ok) throw new Error(json.error || 'getAttendanceMarks failed');
@@ -2978,7 +2995,7 @@ async function _loadGridMarks(force){
               '&group=' + encodeURIComponent(ATT.group) +
               '&year='  + ATT.gridYear +
               '&month=' + ATT.gridMonth;
-    var r = await fetch(url, {redirect: 'follow'});
+    var r = await _afTryFetch(url, {redirect: 'follow'});
     if (!r.ok) throw new Error('HTTP ' + r.status);
     var json = await r.json();
     if (!json.ok) throw new Error(json.error || 'getAttendanceMarks failed');
@@ -3007,7 +3024,7 @@ async function _loadGridMerges(force){
               '&activityId='  + encodeURIComponent(ATT.activity) +
               '&year='  + ATT.gridYear +
               '&month=' + ATT.gridMonth;
-    var r = await fetch(url, {redirect: 'follow'});
+    var r = await _afTryFetch(url, {redirect: 'follow'});
     if (!r.ok) throw new Error('HTTP ' + r.status);
     var json = await r.json();
     if (!json.ok) throw new Error(json.error || 'getDopMerges failed');
@@ -4140,7 +4157,7 @@ async function _loadAnaMarks(force){
 
   try {
     var url = CFG.SCRIPT_URL + '?action=getAttendanceMarks&loc=' + encodeURIComponent(S.activeLoc);
-    var r = await fetch(url, {redirect: 'follow'});
+    var r = await _afTryFetch(url, {redirect: 'follow'});
     if (!r.ok) throw new Error('HTTP ' + r.status);
     var json = await r.json();
     if (!json.ok) throw new Error(json.error || 'getAttendanceMarks failed');
@@ -4193,7 +4210,7 @@ async function _loadAnaMerges(force){
     var url = CFG.SCRIPT_URL + '?action=getDopMerges'
       + '&loc=' + encodeURIComponent(S.activeLoc)
       + '&from=' + encodeURIComponent(r[0]) + '&to=' + encodeURIComponent(r[1]);
-    var resp = await fetch(url, {redirect:'follow'});
+    var resp = await _afTryFetch(url, {redirect:'follow'});
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
     var json = await resp.json();
     if (!json.ok) throw new Error(json.error || 'getDopMerges failed');
@@ -5006,7 +5023,7 @@ async function doExportAttendance(loc, month, year, manual){
   }
   setSyncState('syncing', '🔄 Синхронізація з Пейментами + Salary…');
   try {
-    var r = await fetch(CFG.SCRIPT_URL, {
+    var r = await _afTryFetch(CFG.SCRIPT_URL, {   // v7.74: 3 спроби (1с, 3с) на network-fail
       method: 'POST',
       redirect: 'follow',
       headers: {'Content-Type': 'text/plain;charset=utf-8'},
@@ -5060,12 +5077,19 @@ async function doExportAttendance(loc, month, year, manual){
   } catch(e){
     var em = String(e && e.message || e);
     var isUnknown = /unknown action/i.test(em);
+    // v7.74: мережевий збій після 3 спроб — М'ЯКЕ попередження (не червоне), робота з
+    // таблицею занять НЕ блокується (дані вже збережені локально, синк повториться).
+    var isNetwork = /failed to fetch|networkerror|load failed|network request failed/i.test(em);
     if (isUnknown){
       setSyncState('err', '⚠️ Auto-експорт недоступний (потрібен деплой Apps Script)');
       _pushLog('err', loc, 'Apps Script не задеплоєний');
       if (manual){
         showToast('⚠️ Auto-експорт недоступний — потрібен деплой Apps Script. Дані збережено локально.', 'err', 6000);
       }
+    } else if (isNetwork){
+      setSyncState('pending', '⚠ Синхронізація Salary недоступна — мережа. Дані збережено, повторимо пізніше.');
+      _pushLog('err', loc, 'network: ' + em);
+      if (manual) showToast('⚠ Немає зв\'язку з сервером Salary — дані збережено локально, синхронізуємо пізніше.', 'info', 6000);
     } else {
       setSyncState('err', '❌ Помилка: ' + em);
       _pushLog('err', loc, em);
