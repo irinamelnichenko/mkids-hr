@@ -1,5 +1,12 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.80
+// m.kids CRM — Google Apps Script v7.81
+// v7.81: ГАРАНТІЯ знижок відпустки незалежно від фронту. (1) exportVacationDiscountToPayments —
+//        спільний LockService навколо реального запису (клітинка+журнал; dryRun не блокуємо),
+//        щоб фронтовий і тригерний виклики не перетнулись. (2) Нічний тригер о 08:00
+//        nightlyVacExportGuarantee: прогін по всіх садочках × (поточний+наступний) місяць,
+//        ПАЧКАМИ по 4 локації (продовження через one-off _vacExportGuardBatch +2хв, позиція в
+//        PropertiesService) — не впирається в 6-хв ліміт. Лог: локацій оброблено, клітинок змінено.
+//        Ідемпотентно (журнал baseValue) — подвоєння немає. Фронтовий виклик лишено для миттєвості.
 // v7.80: getPredmetnyky приймає year+month і віддає МІСЯЧНИЙ зріз — lessons (90% ваги, 2201/рік)
 //        і predMerges фільтруються за місяцем через _loadPredLessons/_loadPredMergesList (опційні
 //        параметри year/month; без них — повна віддача, тож інші виклики не зачеплені).
@@ -310,7 +317,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.80', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.81', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -1804,7 +1811,9 @@ function createDailyTrigger() {
   for (var i = 0; i < triggers.length; i++) {
     var fn = triggers[i].getHandlerFunction();
     if (fn === 'aggregatePayments' || fn === 'aggregatePaymentsYearly'
-        || fn === 'nightlySyncMissingKindergartens') {
+        || fn === 'nightlySyncMissingKindergartens'
+        || fn === 'nightlyVacExportGuarantee'   // v7.81
+        || fn === '_vacExportGuardBatch') {      // v7.81: спент continuation-тригери
       ScriptApp.deleteTrigger(triggers[i]);
     }
   }
@@ -1818,6 +1827,86 @@ function createDailyTrigger() {
   ScriptApp.newTrigger('nightlySyncMissingKindergartens')
     .timeBased().everyDays(1).atHour(7).nearMinute(30)
     .inTimezone('Europe/Kiev').create();
+  // v7.81: ГАРАНТІЯ знижок відпустки — о 8:00 (ПІСЛЯ агрегації 7:00 і синку 7:30),
+  // щоб не конкурувати. Прогін по садочках × (поточний+наступний) місяць, пачками.
+  ScriptApp.newTrigger('nightlyVacExportGuarantee')
+    .timeBased().everyDays(1).atHour(8)
+    .inTimezone('Europe/Kiev').create();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.81 НІЧНА ГАРАНТІЯ ЗНИЖОК ВІДПУСТКИ (незалежно від фронту).
+// Проганяє exportVacationDiscountToPayments по ВСІХ садочках × (поточний+наступний)
+// місяць. Ідемпотентно (журнал baseValue), під LockService. Розбито на ПАЧКИ по 4
+// локації, щоб не впертись у 6-хв ліміт: продовження — one-off тригер `_vacExportGuardBatch`
+// через 2 хв, позиція/лічильники — у PropertiesService (`vacguard_state`).
+var _VAC_GUARD_BATCH = 4;   // локацій за один запуск (× 2 місяці = 8 експортів)
+var _VAC_GUARD_KEY   = 'vacguard_state';
+
+function nightlyVacExportGuarantee(){
+  _vacGuardDeleteContinuations();   // прибрати відпрацьовані continuation-тригери з минулого разу
+  var props = PropertiesService.getScriptProperties();
+  var locs = [];
+  try {
+    (getLocations().data || []).forEach(function(l){
+      if (String(l.typ || '').trim() === 'Садочок') locs.push(String(l.loc || '').trim());
+    });
+  } catch(e){ Logger.log('[vacGuard] getLocations впав: %s', e && e.message); }
+  var tz  = 'Europe/Kiev';
+  var now = new Date();
+  var y = Number(Utilities.formatDate(now, tz, 'yyyy'));
+  var m = Number(Utilities.formatDate(now, tz, 'MM'));
+  var nm = (m === 12) ? {y: y + 1, m: 1} : {y: y, m: m + 1};
+  var months = [{y: y, m: m}, {y: nm.y, m: nm.m}];
+  var st = {locs: locs, months: months, pos: 0, cells: 0, locsDone: 0, startedAt: now.toISOString()};
+  props.setProperty(_VAC_GUARD_KEY, JSON.stringify(st));
+  Logger.log('[vacGuard] START: %s садочків × міс(%s/%s, %s/%s), пачка=%s',
+    locs.length, m, y, nm.m, nm.y, _VAC_GUARD_BATCH);
+  _vacGuardRunBatch();
+}
+
+// Continuation-handler (окремий, щоб безпечно видаляти спент one-off тригери).
+function _vacExportGuardBatch(){ _vacGuardRunBatch(); }
+
+function _vacGuardRunBatch(){
+  var props = PropertiesService.getScriptProperties();
+  var raw = props.getProperty(_VAC_GUARD_KEY);
+  if (!raw){ Logger.log('[vacGuard] нема стану — пропуск'); return; }
+  var st;
+  try { st = JSON.parse(raw); } catch(e){ props.deleteProperty(_VAC_GUARD_KEY); return; }
+  var end = Math.min(st.pos + _VAC_GUARD_BATCH, st.locs.length);
+  for (var i = st.pos; i < end; i++){
+    var loc = st.locs[i];
+    for (var k = 0; k < st.months.length; k++){
+      var mm = st.months[k];
+      try {
+        var res = exportVacationDiscountToPayments({loc: loc, month: mm.m, year: mm.y});
+        if (res && res.ok) st.cells += (res.cellsWritten || 0);
+        else Logger.log('[vacGuard] ⚠ %s %s/%s: %s', loc, mm.m, mm.y, (res && res.error) || '?');
+      } catch(e){ Logger.log('[vacGuard] EXC %s %s/%s: %s', loc, mm.m, mm.y, e && e.message); }
+    }
+    st.locsDone++;
+  }
+  st.pos = end;
+  props.setProperty(_VAC_GUARD_KEY, JSON.stringify(st));
+  if (st.pos < st.locs.length){
+    _vacGuardDeleteContinuations();
+    ScriptApp.newTrigger('_vacExportGuardBatch').timeBased().after(2 * 60 * 1000).create();
+    Logger.log('[vacGuard] пачка до %s/%s готова, наступна через 2 хв', st.pos, st.locs.length);
+  } else {
+    Logger.log('[vacGuard] ✅ ЗАВЕРШЕНО: локацій оброблено %s, клітинок змінено %s', st.locsDone, st.cells);
+    props.deleteProperty(_VAC_GUARD_KEY);
+    _vacGuardDeleteContinuations();
+  }
+}
+
+function _vacGuardDeleteContinuations(){
+  try {
+    var trs = ScriptApp.getProjectTriggers();
+    for (var i = 0; i < trs.length; i++){
+      if (trs[i].getHandlerFunction() === '_vacExportGuardBatch') ScriptApp.deleteTrigger(trs[i]);
+    }
+  } catch(e){}
 }
 
 function trim(s) { return String(s || '').trim(); }
@@ -7880,6 +7969,7 @@ function determineTargetMonth(vacationMonth, vacationYear, entryTimestamp, kind)
 // details/notFound), але ЖОДНОГО запису: ні в клітинки Payment, ні в захист N+1, ні в
 // журнал. За замовчуванням false — поведінка всіх наявних викликів не змінюється.
 function exportVacationDiscountToPayments(params){
+  var _vacLock = null;   // v7.81
   try {
     var loc   = String(params.loc || '').trim();
     var month = Number(params.month);
@@ -7888,6 +7978,14 @@ function exportVacationDiscountToPayments(params){
     if (!loc) return {ok: false, error: 'Параметр loc обовʼязковий'};
     if (!month || month < 1 || month > 12) return {ok: false, error: 'month має бути 1-12'};
     var monthName = MONTHS_CAL_UA[month - 1];
+    // v7.81: спільний СКРИПТОВИЙ лок навколо реального запису (клітинка + журнал), щоб
+    // фронтовий і нічний тригерний виклики не перетнулись (гонка read→write журналу).
+    // dryRun (reconcile-розрахунок) НЕ блокуємо — він лише читає.
+    if (!dryRun){
+      _vacLock = LockService.getScriptLock();
+      try { _vacLock.waitLock(30000); }
+      catch(_le){ return {ok: false, error: 'LOCK_TIMEOUT — експорт відпустки вже виконується'}; }
+    }
 
     // === 1. Клієнти локації → знижка, що РОУТИТЬСЯ в таргет (month,year) ===
     var cliRes = getClients();
@@ -8049,6 +8147,8 @@ function exportVacationDiscountToPayments(params){
   } catch(e){
     Logger.log('[exportVacationDiscount] EXCEPTION: %s\n%s', e && e.message, e && e.stack);
     return {ok: false, error: String(e && e.message || e)};
+  } finally {
+    if (_vacLock){ try { _vacLock.releaseLock(); } catch(_re){} }   // v7.81
   }
 }
 
