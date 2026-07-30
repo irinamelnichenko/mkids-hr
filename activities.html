@@ -1244,9 +1244,9 @@ select,input,textarea{font-family:inherit}
       <div class="mrg-grp-list" id="mergeGrpList"></div>
     </div>
     <div class="modal-ft">
-      <button id="mergeUnmergeBtn" class="btn btn-danger" style="margin-right:auto" onclick="unmergeDay()">Розʼєднати</button>
+      <button id="mergeUnmergeBtn" class="btn btn-danger" style="margin-right:auto" onclick="unmergeDay()">🗑 Зняти всі набори</button>
       <button class="btn btn-secondary" data-close="1">Скасувати</button>
-      <button id="mergeSaveBtn" class="btn btn-primary" onclick="saveMerge()">Зберегти</button>
+      <button id="mergeSaveBtn" class="btn btn-primary" onclick="saveMerge()">＋ Зберегти набір</button>
     </div>
   </div>
 </div>
@@ -3071,21 +3071,27 @@ async function _loadGridMerges(force){
 function _mrgNormGroup(s){ return String(s || '').trim().replace(/\s+/g, ' ').toLowerCase(); }
 
 // Merge-запис для (поточне заняття, дата), або null. Один запис на activityId+дату.
-function _mergeForDay(iso){
+// v7.82: УСІ набори обʼєднань цього заняття в цей день (мультисет).
+function _mergesForDay(iso){
+  var out = [];
   for (var i = 0; i < ATT.gridMerges.length; i++){
     var m = ATT.gridMerges[i];
-    if (Number(m.activityId) === Number(ATT.activity) && m.date === iso) return m;
+    if (Number(m.activityId) === Number(ATT.activity) && m.date === iso &&
+        Array.isArray(m.groups) && m.groups.length >= 2) out.push(m);
   }
-  return null;
+  return out;
 }
+// Сумісність: перший набір дня (для старих викликів).
+function _mergeForDay(iso){ return _mergesForDay(iso)[0] || null; }
 
-// Чи бере поточна група участь в обʼєднанні того дня (для 🔗-індикатора у ЇЇ сітці).
+// Чи бере поточна група участь у БУДЬ-ЯКОМУ наборі того дня (для 🔗-індикатора).
 function _dayMergedForCurrentGroup(iso){
-  var m = _mergeForDay(iso);
-  if (!m || !Array.isArray(m.groups) || m.groups.length < 2) return null;
   var cur = _mrgNormGroup(ATT.group);
-  for (var i = 0; i < m.groups.length; i++){
-    if (_mrgNormGroup(m.groups[i]) === cur) return m;
+  var sets = _mergesForDay(iso);
+  for (var i = 0; i < sets.length; i++){
+    for (var j = 0; j < sets[i].groups.length; j++){
+      if (_mrgNormGroup(sets[i].groups[j]) === cur) return sets[i];
+    }
   }
   return null;
 }
@@ -3145,17 +3151,18 @@ function renderMonthGrid(){
   days.forEach(function(D){
     // v7.14: 🔗 показуємо для БУДЬ-ЯКОГО обʼєднання цього заняття в цей день
     // (не лише якщо в ньому поточна група) — merges крос-груповні.
-    var mrg = _mergeForDay(D.iso);
+    var mrgs = _mergesForDay(D.iso);          // v7.82: усі набори дня
+    var hasMrg = mrgs.length > 0;
     var tip = D.dmy + (canMerge ? ' · 🔗 клікни, щоб обʼєднати групи' : '') +
-              (mrg ? ' · разом: ' + mrg.groups.join(', ') : '');
+              (hasMrg ? ' · наборів: ' + mrgs.length + ' — ' + mrgs.map(function(s){ return s.groups.join('+'); }).join(' ; ') : '');
     // v7.15: ЯВНИЙ inline onclick (надійніше за делегацію) + 🔗 на КОЖНому клікабельному
     // дні (тьмяний = можна обʼєднати, яскравий = вже обʼєднано) — видно, що клікабельно.
     html += '<div class="attg-th' + (D.isToday ? ' today' : '') +
-      (canMerge ? ' clickable' : '') + (mrg ? ' merged' : '') + '"' +
+      (canMerge ? ' clickable' : '') + (hasMrg ? ' merged' : '') + '"' +
       (canMerge ? ' data-gday="' + D.iso + '" onclick="openMergeModal(\'' + D.iso + '\')"' : '') +
       ' title="' + escapeHtml(tip) + '">' +
       '<span class="wd">' + D.wd + '</span><span class="dd">' + D.day + '</span>' +
-      (canMerge ? '<span class="mrg' + (mrg ? '' : ' dim') + '">🔗</span>' : '') + '</div>';
+      (canMerge ? '<span class="mrg' + (hasMrg ? '' : ' dim') + '">🔗</span>' : '') + '</div>';
   });
 
   // rows = діти
@@ -3272,45 +3279,49 @@ function renderMergeModal(){
   var dmy = (function(){ var b = iso.split('-'); return b.length === 3 ? (b[2] + '.' + b[1] + '.' + b[0]) : iso; })();
   $('mergeModalTitle').innerHTML = '🔗 ' + escapeHtml(actName) + ' · ' + escapeHtml(dmy);
 
-  var existing = _mergeForDay(iso);
-  var checked = {};
-  if (existing && Array.isArray(existing.groups)){
-    // Редагуємо існуюче обʼєднання — пре-вибір саме його груп (БУДЬ-ЯКІ, не лише поточна).
-    existing.groups.forEach(function(g){ checked[_mrgNormGroup(g)] = true; });
-  } else {
-    // Нове обʼєднання — для зручності пре-вибрано поточну групу, але її можна ЗНЯТИ.
-    checked[_mrgNormGroup(ATT.group)] = true;
-  }
+  // v7.82 МУЛЬТИСЕТ: наявні набори дня + пікер НОВОГО набору лише з ВІЛЬНИХ груп.
+  var sets = _mergesForDay(iso);
+  var usedNorm = {};
+  sets.forEach(function(s){ s.groups.forEach(function(g){ usedNorm[_mrgNormGroup(g)] = true; }); });
   var curNorm = _mrgNormGroup(ATT.group);
+  var allGroups = _mrgLocGroups().slice().sort(function(a, b){ return a.localeCompare(b, 'uk'); });
 
-  // Список = УСІ групи локації ∪ групи вже збереженого обʼєднання.
-  var groups = _mrgLocGroups().slice();
-  if (existing){
-    existing.groups.forEach(function(g){
-      if (!groups.some(function(x){ return _mrgNormGroup(x) === _mrgNormGroup(g); })) groups.push(g);
+  var html = '';
+  // Секція 1 — наявні набори картками з ✕.
+  if (sets.length){
+    html += '<div class="mrg-sets" style="margin-bottom:8px">';
+    sets.forEach(function(s, idx){
+      html += '<div style="display:flex;align-items:center;gap:6px;padding:6px 8px;background:#eef6ff;border:1px solid #cfe3fb;border-radius:8px;margin-bottom:4px;font-size:13px">' +
+        '<b>Набір ' + (idx + 1) + ':</b> ' + escapeHtml(s.groups.join(' + ')) +
+        '<button title="Прибрати набір" onclick="mergeRemoveSet(' + JSON.stringify(String(s.id)) + ')" ' +
+          'style="margin-left:auto;border:none;background:#fdecea;color:#c0392b;border-radius:6px;width:24px;height:24px;cursor:pointer;font-weight:700">✕</button>' +
+      '</div>';
     });
+    html += '</div>';
+  } else {
+    html += '<div class="muted" style="padding:4px 2px 8px">Ще немає жодного набору на цей день.</div>';
   }
-  groups.sort(function(a, b){ return a.localeCompare(b, 'uk'); });
-
-  $('mergeHint').innerHTML = 'Позначте <b>будь-які</b> групи, які викладач вів <b>разом</b> цього дня (мін. 2) — вони порахуються як <b>одне заняття</b> у ЗП («За заняття»/«За захід»).';
-
-  var rows = '';
-  groups.forEach(function(g){
+  // Секція 2 — новий набір із вільних груп.
+  html += '<div style="font-weight:600;margin:2px 0 4px">＋ Новий набір (мін. 2 вільні групи):</div>';
+  var freeRows = '';
+  allGroups.forEach(function(g){
     var nk = _mrgNormGroup(g);
-    var isCur = (nk === curNorm);
-    var isOn = !!checked[nk];
-    // v7.14: жодних disabled/locked — Іра вільно комбінує БУДЬ-ЯКІ групи.
-    rows += '<label class="mrg-grp-row">' +
-      '<input type="checkbox" data-grp="' + escapeHtml(g) + '"' + (isOn ? ' checked' : '') + '>' +
+    var used = !!usedNorm[nk];
+    freeRows += '<label class="mrg-grp-row"' + (used ? ' style="opacity:.45"' : '') + '>' +
+      '<input type="checkbox" data-grp="' + escapeHtml(g) + '"' +
+        (used ? ' disabled' : (nk === curNorm ? ' checked' : '')) + '>' +
       '<span class="glabel">' + escapeHtml(g) + '</span>' +
-      (isCur ? '<span class="gtag">поточна</span>' : '') +
+      (used ? '<span class="gtag">у наборі</span>' : (nk === curNorm ? '<span class="gtag">поточна</span>' : '')) +
     '</label>';
   });
-  if (!rows) rows = '<div class="muted" style="padding:8px">У локації немає груп.</div>';
-  $('mergeGrpList').innerHTML = rows;
+  html += (freeRows || '<div class="muted" style="padding:8px">Немає вільних груп для нового набору.</div>');
+  $('mergeGrpList').innerHTML = html;
 
-  // Кнопка «Розʼєднати» активна лише якщо обʼєднання вже існує.
-  $('mergeUnmergeBtn').style.display = existing ? '' : 'none';
+  $('mergeHint').innerHTML = 'Кожен <b>набір</b> — групи, які викладач вів <b>разом</b> як одне заняття. Одна група — лише в одному наборі за день. «Зберегти набір» додає ще один незалежний набір із вільних груп.';
+
+  // Кнопка «Зняти всі набори» — лише якщо набори є.
+  var ub = $('mergeUnmergeBtn');
+  if (ub){ ub.style.display = sets.length ? '' : 'none'; ub.textContent = '🗑 Зняти всі набори'; }
 }
 
 function _mrgCollectGroups(){
@@ -3328,9 +3339,9 @@ function _mrgCollectGroups(){
   return out;
 }
 
+// v7.82: «Зберегти набір» — ДОПИСУЄ новий незалежний набір (без id). Модалка лишається
+// відкритою, щоб директорка могла додати ще набори того ж дня.
 async function saveMerge(){
-  try { console.log('[merge] saveMerge клік · дата=' + MRG.iso + ' · заняття=' + ATT.activity +
-        ' · позначено груп=' + _mrgCollectGroups().length + ' →', _mrgCollectGroups()); } catch(_){}
   if (MRG.busy) return;
   var iso = MRG.iso;
   var acts = _activitiesForLoc(S.activeLoc), act = null;
@@ -3338,56 +3349,72 @@ async function saveMerge(){
   if (!act){ showToast('🚫 Оберіть заняття', 'err'); return; }
   var groups = _mrgCollectGroups();
   if (groups.length < 2){
-    showToast('⚠️ Позначте щонайменше 2 групи (зараз ' + groups.length + '), або «Розʼєднати»', 'err', 3000);
+    showToast('⚠️ Позначте щонайменше 2 вільні групи (зараз ' + groups.length + ')', 'err', 3000);
     return;
   }
   MRG.busy = true;
-  var res = await saveBackend('saveDopMerge', {
+  var res = await saveBackend('saveDopMerge', {   // БЕЗ id → append нового набору
     loc: S.activeLoc, activityId: act.id, activityName: act.name,
     date: iso, groups: groups, by: _markerLabel()
   });
   MRG.busy = false;
   if (res.ok || res.localOnly){
-    _applyMergeLocal(iso, act, groups);
-    showToast(res.localOnly ? '💾 Збережено локально' : '✓ Обʼєднано ' + groups.length + ' груп', res.localOnly ? 'info' : 'ok', 2000);
-    closeMergeModal();
+    _applyMergeAddSet(iso, act, groups, res.id);
+    showToast(res.localOnly ? '💾 Збережено локально' : '✓ Набір додано (' + groups.length + ' груп)', res.localOnly ? 'info' : 'ok', 1800);
+    renderMergeModal();          // модалка відкрита — новий набір у списку, вільні групи оновились
     renderMonthGrid();
     if (typeof scheduleAutoExport === 'function') scheduleAutoExport();
   } else {
-    showToast('❌ ' + (res.error || 'Не вдалось зберегти'), 'err');
+    showToast('❌ ' + (res.error || 'Не вдалось зберегти'), 'err', 4000);   // напр. перетин груп із бекенду
   }
 }
 
+// v7.82: прибрати ОДИН набір за id.
+async function mergeRemoveSet(id){
+  if (MRG.busy) return;
+  var sid = String(id);
+  if (sid.indexOf('local-') === 0){          // офлайн-набір — лише локально
+    ATT.gridMerges = ATT.gridMerges.filter(function(m){ return String(m.id) !== sid; });
+    renderMergeModal(); renderMonthGrid();
+    return;
+  }
+  MRG.busy = true;
+  var res = await saveBackend('deleteDopMerge', { id: Number(id) });
+  MRG.busy = false;
+  if (res.ok || res.localOnly){
+    ATT.gridMerges = ATT.gridMerges.filter(function(m){ return String(m.id) !== sid; });
+    showToast('✓ Набір прибрано', 'ok', 1400);
+    renderMergeModal(); renderMonthGrid();
+    if (typeof scheduleAutoExport === 'function') scheduleAutoExport();
+  } else {
+    showToast('❌ ' + (res.error || 'Не вдалось прибрати'), 'err');
+  }
+}
+
+// v7.82: «Зняти всі набори» дня (deleteDopMerge by-трійка).
 async function unmergeDay(){
   if (MRG.busy) return;
   var iso = MRG.iso;
-  var existing = _mergeForDay(iso);
-  if (!existing){ closeMergeModal(); return; }
+  if (!_mergesForDay(iso).length){ closeMergeModal(); return; }
   MRG.busy = true;
-  // Розʼєднання через saveDopMerge з порожнім набором груп: бекенд трактує
-  // groups<2 як зняття обʼєднання (видаляє рядок). Працює на будь-якому проді,
-  // де є saveDopMerge — не залежить від окремого deleteDopMerge (міг бути не задеплоєний).
-  var res = await saveBackend('saveDopMerge', { loc: S.activeLoc, activityId: ATT.activity, date: iso, groups: [] });
+  var res = await saveBackend('deleteDopMerge', { loc: S.activeLoc, activityId: ATT.activity, date: iso });
   MRG.busy = false;
   if (res.ok || res.localOnly){
     ATT.gridMerges = ATT.gridMerges.filter(function(m){ return !(Number(m.activityId) === Number(ATT.activity) && m.date === iso); });
-    showToast(res.localOnly ? '💾 Розʼєднано локально' : '✓ Розʼєднано', res.localOnly ? 'info' : 'ok', 1800);
-    closeMergeModal();
-    renderMonthGrid();
+    showToast('✓ Усі набори знято', 'ok', 1600);
+    renderMergeModal(); renderMonthGrid();
     if (typeof scheduleAutoExport === 'function') scheduleAutoExport();
   } else {
-    showToast('❌ ' + (res.error || 'Не вдалось розʼєднати'), 'err');
+    showToast('❌ ' + (res.error || 'Не вдалось зняти'), 'err');
   }
 }
 
-// Оптимістично оновлюємо ATT.gridMerges (upsert по activityId+date).
-function _applyMergeLocal(iso, act, groups){
-  var rec = null;
-  for (var i = 0; i < ATT.gridMerges.length; i++){
-    if (Number(ATT.gridMerges[i].activityId) === Number(act.id) && ATT.gridMerges[i].date === iso){ rec = ATT.gridMerges[i]; break; }
-  }
-  if (rec){ rec.groups = groups.slice(); rec.activityName = act.name; }
-  else ATT.gridMerges.push({ id: 'local-' + Date.now(), activityId: act.id, activityName: act.name, date: iso, groups: groups.slice() });
+// v7.82: ДОДАЄ новий набір у ATT.gridMerges (не upsert — кожен набір окремо).
+function _applyMergeAddSet(iso, act, groups, id){
+  ATT.gridMerges.push({
+    id: (id != null ? id : ('local-' + Date.now())),
+    activityId: act.id, activityName: act.name, date: iso, groups: groups.slice()
+  });
 }
 
 // v6.20: плоский список дітей з одним чекбоксом (для обраного ATT.activity)
