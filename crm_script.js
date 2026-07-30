@@ -1,5 +1,9 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.71
+// m.kids CRM — Google Apps Script v7.72
+// v7.72: розрахункові листки — 3 на сторінку А4 (розрив після кожного 3-го, пунктир
+//        із ножицями між листками на сторінці, ущільнені стилі); назва рядка «враховано
+//        з минулих» за знаком: >0 «Недовидано за минулі місяці», <0 «Утримано за
+//        переплату минулих місяців», =0 не показується. Формула «До видачі» без змін.
 // v7.71: cashPayoutSheet — шапка «Розрахунок за <місяць> <рік>»; параметр parts
 //        ('both'|'sheet'|'slips'); розрахункові листки _buildCashPayoutSlips (модель B:
 //        Нараховано=Бюджет міс, Виплата на карту=Факт міс, Враховано з минулих=Σ(Б−Ф)
@@ -268,7 +272,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.71', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.72', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -11245,16 +11249,20 @@ function _buildCashPayoutHtml(d){
 '  .summary { margin-top:8px; line-height:1.6; }',
 '  .signs { margin-top:44px; display:flex; justify-content:space-between; font-size:12px; }',
 '  .signs .s { white-space:nowrap; }',
-'  .slip { page-break-before: always; padding-top:6px; }',
-'  .slip:first-child { page-break-before: auto; }',
-'  .slip h2 { font-size:15px; margin:4px 0 8px; border-bottom:1px solid #111; padding-bottom:4px; }',
-'  .slip .pib { font-size:18px; font-weight:700; margin:8px 0 2px; }',
-'  .slip .pos { color:#555; font-size:12px; margin-bottom:8px; }',
-'  .slip table { max-width:420px; }',
+// v7.72: 3 листки на А4 — розрив ПІСЛЯ кожного третього (page-break-after у .slip-cut3),
+// між листками на сторінці — пунктир із ножицями. Стилі ущільнено, підпис лишено просторим.
+'  .slip { padding-top:2px; }',
+'  .slips-break { page-break-before: always; }',
+'  .slip-cut3 { page-break-after: always; }',
+'  .slip-scissors { text-align:center; color:#999; font-size:11px; letter-spacing:2px; margin:6px 0; }',
+'  .slip h2 { font-size:14px; margin:2px 0 5px; border-bottom:1px solid #111; padding-bottom:3px; }',
+'  .slip .pib { font-size:16px; font-weight:700; margin:5px 0 1px; }',
+'  .slip .pos { color:#555; font-size:11px; margin-bottom:5px; }',
+'  .slip table { max-width:420px; font-size:10px; margin-top:4px; }',
 '  .slip td.lbl { text-align:left; } .slip td.val { text-align:right; white-space:nowrap; }',
-'  .slip tr.out td { font-weight:700; font-size:13px; background:#fff6ef; }',
-'  .slip .words { margin-top:8px; font-size:12px; }',
-'  .slip .sig { margin-top:28px; font-size:12px; }',
+'  .slip tr.out td { font-weight:700; font-size:11px; background:#fff6ef; }',
+'  .slip .words { margin-top:5px; font-size:11px; }',
+'  .slip .sig { margin-top:26px; font-size:12px; }',
 '</style></head><body>',
 (d.parts === 'slips' ? '' :
 ['  <div class="head"><span style="display:inline-block;background:#FF6A00;color:#fff;font-weight:700;font-size:20px;padding:6px 14px;border-radius:8px;">m.kids</span></div>',
@@ -11275,7 +11283,8 @@ rowsHtml,
 '    <div class="s">Директор: __________________ / ______________</div>',
 '    <div class="s">Дата: ____________</div>',
 '  </div>'].join('\n')),
-(d.parts === 'sheet' ? '' : _buildCashPayoutSlips(d)),
+// v7.72: для 'both' — розрив перед блоком листків (зведена на своїй сторінці, листки з нової).
+(d.parts === 'sheet' ? '' : (d.parts === 'both' ? '<div class="slips-break"></div>' : '') + _buildCashPayoutSlips(d)),
 '</body></html>'
   ].join('\n');
 }
@@ -11285,9 +11294,22 @@ rowsHtml,
 //   Враховано з минулих = Σ(Бюджет−Факт) січень→місяць−1; До видачі = Враховано + (Нараховано−Виплата).
 // Порядок листків = порядок зведеної. Усі дані через _cashEsc.
 function _buildCashPayoutSlips(d){
-  return (d.rows || []).map(function(r){
+  var rows = d.rows || [];
+  return rows.map(function(r, i){
+    // v7.72: розрив сторінки після кожного 3-го листка (не після останнього).
+    var isCut = ((i + 1) % 3 === 0) && (i !== rows.length - 1);
+    var isLastOnPage = isCut;                       // після 3-го → нова сторінка, ножиці не треба
+    var scissors = (!isLastOnPage && i !== rows.length - 1)
+      ? '\n  <div class="slip-scissors">- - - - - - - - - - ✂ - - - - - - - - - -</div>' : '';
+    // v7.72: назва рядка «враховано з минулих» — за знаком, сума завжди додатна; 0 → не показувати.
+    var carry = Number(r.carried) || 0, carryRow = '';
+    if (carry > 0){
+      carryRow = '      <tr><td class="lbl">Недовидано за минулі місяці</td><td class="val">' + _fmtUah(carry) + ' грн</td></tr>\n';
+    } else if (carry < 0){
+      carryRow = '      <tr><td class="lbl">Утримано за переплату минулих місяців</td><td class="val">' + _fmtUah(-carry) + ' грн</td></tr>\n';
+    }
     return [
-'  <div class="slip">',
+'  <div class="slip' + (isCut ? ' slip-cut3' : '') + '">',
 '    <h2>Розрахунковий листок</h2>',
 '    <div class="meta"><b>Локація:</b> ' + _cashEsc(d.loc) +
      ' · <b>Розрахунок за</b> ' + _cashEsc(d.monthLabel) +
@@ -11297,12 +11319,12 @@ function _buildCashPayoutSlips(d){
 '    <table>',
 '      <tr><td class="lbl">Нараховано</td><td class="val">' + _fmtUah(r.accrued) + ' грн</td></tr>',
 '      <tr><td class="lbl">Виплата на карту</td><td class="val">' + _fmtUah(r.card) + ' грн</td></tr>',
-'      <tr><td class="lbl">Враховано з минулих місяців</td><td class="val">' + _fmtUah(r.carried) + ' грн</td></tr>',
+carryRow +
 '      <tr class="out"><td class="lbl">До видачі готівкою</td><td class="val">' + _fmtUah(r.cash) + ' грн</td></tr>',
 '    </table>',
 '    <div class="words"><b>Сума прописом:</b> ' + _cashEsc(_numberToUkrainianWords(r.cash)) + '</div>',
 '    <div class="sig">Отримав(ла): __________________ / ______________&nbsp;&nbsp;&nbsp;&nbsp;Дата: __________</div>',
-'  </div>'
+'  </div>' + scissors
     ].join('\n');
   }).join('\n');
 }
