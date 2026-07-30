@@ -1,5 +1,13 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.73
+// m.kids CRM — Google Apps Script v7.75
+// v7.75: усунено ДЖЕРЕЛО дублів карток у saveClient. _normBdayYMD тепер нормалізує дату
+//        народження в ОДНОМУ поясі (пояс таблиці, фолбек Europe/Kiev): Date → formatDate у
+//        цьому поясі; ISO-рядок з T/Z → парс+формат так само; голий YYYY-MM-DD → як є. Раніше
+//        Date-гілка йшла в 'GMT', а рядок брав «перші 10 символів» → off-by-one → хибна «тезка»
+//        → суфікс → дубль (інцидент Коваленко: 5 карток). Той самий нормалізатор застосовано в
+//        анти-дублі name+loc (замість сирого String-порівняння). Плюс: створення НОВОЇ картки з
+//        порожньою локацією заблоковано ({ok:false,error:'no_loc'}); редагування наявної
+//        безлокаційної (точний збіг id) — дозволено. (v7.74 зайнята фронтом.)
 // v7.73: шапка відомості готівки (зведена+листки) — «Розрахунок за <попередній місяць>
 //        <рік> · Виплата: <обраний місяць> <рік>» (січень → грудень минулого року).
 //        Формули й ім'я файлу без змін.
@@ -275,7 +283,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.73', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.75', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -661,17 +669,41 @@ function ensureClientsHeader(sheet) {
 // v7.56 нормалізація дати народження → 'YYYY-MM-DD' (ISO date-part, БЕЗ tz-зсуву). Date-
 // обʼєкт форматуємо в GMT (щоб збіглося з ISO[:10]); ISO-рядок з часом → перші 10 символів.
 // Потрібно, щоб порівняння bday у захисті тезок не давало хибний «різні» через формат/tz.
+// v7.75: часовий пояс CRM-таблиці, лінива кеш-змінна (щоб не смикати
+// getSpreadsheetTimeZone() у циклах). Фолбек — Europe/Kiev, як усюди в файлі.
+var _CRM_TZ_CACHE = null;
+function _crmTZ(){
+  if (_CRM_TZ_CACHE) return _CRM_TZ_CACHE;
+  try { _CRM_TZ_CACHE = getCRMSpreadsheet().getSpreadsheetTimeZone() || 'Europe/Kiev'; }
+  catch(e){ _CRM_TZ_CACHE = 'Europe/Kiev'; }
+  return _CRM_TZ_CACHE;
+}
+
+// v7.75 ФІКС ДЖЕРЕЛА ДУБЛІВ: приводимо дату народження до YYYY-MM-DD в ОДНОМУ поясі
+// (пояс таблиці, фолбек Europe/Kiev). Раніше Date-гілка форматувалась у 'GMT', а рядок
+// брався «перші 10 символів» — тож Date-комірка (2022-08-20T21:00Z) давала 2022-08-20,
+// а той самий день з фронту (рядок після round-trip у Києві) — 2022-08-21 → хибна
+// «тезка» → суфікс → дубль. Тепер обидві сторони рахуються за Києвом і збігаються.
 function _normBdayYMD(v){
   if (v == null) return '';
+  var tz = _crmTZ();
   if (Object.prototype.toString.call(v) === '[object Date]'){
-    try { return Utilities.formatDate(v, 'GMT', 'yyyy-MM-dd'); } catch(e){ return ''; }
+    try { return Utilities.formatDate(v, tz, 'yyyy-MM-dd'); } catch(e){ return ''; }
   }
   var s = String(v).trim();
   if (!s) return '';
+  // Рядок із часом/зоною (ISO з T або Z) — парсимо й форматуємо в поясі таблиці.
+  // Інакше «перші 10 символів» зрізали б UTC-дату на день назад (2022-08-20T21:00Z → 20 замість 21).
+  if (/[TZ]/.test(s)){
+    var d = new Date(s);
+    if (!isNaN(d.getTime())){ try { return Utilities.formatDate(d, tz, 'yyyy-MM-dd'); } catch(e){} }
+  }
+  // Голий YYYY-MM-DD — це вже календарна дата, яку ввів користувач, беремо як є.
   var m = s.match(/^(\d{4}-\d{2}-\d{2})/);
   if (m) return m[1];
-  var d = new Date(s);
-  if (!isNaN(d.getTime())){ try { return Utilities.formatDate(d, 'GMT', 'yyyy-MM-dd'); } catch(e){} }
+  // Інше парсабельне.
+  var d2 = new Date(s);
+  if (!isNaN(d2.getTime())){ try { return Utilities.formatDate(d2, tz, 'yyyy-MM-dd'); } catch(e){} }
   return s;
 }
 
@@ -683,6 +715,19 @@ function saveClient(data) {
   ensureClientsHeader(sheet);
   var vals = sheet.getDataRange().getValues();
   var now = formatDate(new Date());
+  // v7.75 БЛОК ПОРОЖНЬОЇ ЛОКАЦІЇ: картка без локації не звіряється ні з Оплатами, ні з
+  // Табелем і плодить привида (id "c_<ПІБ>_"). Створювати НОВУ таку заборонено; дозволяємо
+  // лише РЕДАГУВАННЯ вже наявної безлокаційної картки (точний збіг id).
+  if (!String(data.loc || '').trim()){
+    var _hasExactNoLoc = false;
+    for (var _q = 1; _q < vals.length; _q++){
+      if (String(vals[_q][0]) === String(data.id)){ _hasExactNoLoc = true; break; }
+    }
+    if (!_hasExactNoLoc){
+      Logger.log('[saveClient] ⛔ no_loc: "%s" без локації — нову картку не створюю', data.name);
+      return {ok:false, error:'no_loc', message:'Локація не вказана — картку не створено.'};
+    }
+  }
   var row = [
     data.id, data.name||'', data.loc||'', data.group||'', data.teacher||'',
     data.bday||'', data.momName||'', data.momPhone||'', data.dadName||'', data.dadPhone||'',
@@ -743,12 +788,14 @@ function saveClient(data) {
   // відсутня — щоб не злити тезок) → ОНОВЛЮЄМО його (переносимо на нову групу),
   // а absences ОБʼЄДНУЄМО (union), щоб не втратити відпустки при переводі.
   var _nn = function(s){ return String(s || '').trim().toLowerCase().replace(/\s+/g, ' '); };
-  var wantName = _nn(data.name), wantLoc = _nn(data.loc), wantBday = String(data.bday || '').trim();
+  // v7.75: дати нар. порівнюємо ЧЕРЕЗ _normBdayYMD (єдиний пояс), а не сирими рядками —
+  // інакше та сама дитина з tz-дрейфом дати (Date vs рядок) хибно вважалась тезкою і не зливалась.
+  var wantName = _nn(data.name), wantLoc = _nn(data.loc), wantBday = _normBdayYMD(data.bday);
   var cand = -1, candCount = 0;
   for (var r2 = 1; r2 < vals.length; r2++) {
     if (_nn(vals[r2][1]) !== wantName) continue;
     if (_nn(vals[r2][2]) !== wantLoc)  continue;
-    var rowBday = String(vals[r2][5] || '').trim();
+    var rowBday = _normBdayYMD(vals[r2][5]);
     if (wantBday && rowBday && wantBday !== rowBday) continue;   // різні дати народження = тезки, не чіпаємо
     candCount++;
     if (cand < 0) cand = r2;
