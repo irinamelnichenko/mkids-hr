@@ -1,5 +1,9 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.78
+// m.kids CRM — Google Apps Script v7.79
+// v7.79: ЗАХИСТ ВІД ПІДБОРУ ПАРОЛЯ в authenticate. Лічильник невдалих спроб per-логін у
+//        PropertiesService (кількість + час). 5 невдалих поспіль (вікно 15 хв) → блок на 15 хв
+//        ({ok:false, error:'too_many_attempts'}). Успішний вхід скидає лічильник. CFO (id=1) не
+//        блокується НІКОЛИ. Невідомий логін теж рахується (захист від перебору логінів).
 // v7.78: рахунок за НАВЧАННЯ — додано рядок переплати (дзеркало доп). Якщо Бюджет-навч місяця
 //        < «Сума договору» → два рядки: «Оплата за навчання» = договір + «Переплата минулого
 //        періоду» = −(договір − Бюджет); Всього = Бюджет. Гілку боргу (Бюджет > договір) не
@@ -301,7 +305,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.78', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.79', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -4554,10 +4558,36 @@ function getUsers() {
   return {ok: true, users: users};
 }
 
+// v7.79 ЗАХИСТ ВІД ПІДБОРУ: лічильник невдалих спроб per-логін у PropertiesService.
+// 5 невдалих поспіль (у вікні 15 хв) → блок на 15 хв. Успіх скидає лічильник.
+// CFO (id=1) не блокується НІКОЛИ (щоб не замкнути себе).
+var _AUTH_MAX_FAILS = 5;
+var _AUTH_WINDOW_MS  = 15 * 60 * 1000;   // 15 хвилин
+function _authFailKey(login){ return 'authfail_' + String(login || '').trim().toLowerCase(); }
+function _authReadFails(props, key){
+  try {
+    var raw = props.getProperty(key);
+    if (!raw) return {count: 0, ts: 0};
+    var p = JSON.parse(raw);
+    return {count: Number(p.c) || 0, ts: Number(p.t) || 0};
+  } catch(e){ return {count: 0, ts: 0}; }
+}
+function _authBumpFails(props, key, rec, now){
+  // «поспіль»: якщо остання спроба у вікні — інкремент; інакше стрік починається з 1.
+  var count = (rec.ts && (now - rec.ts) < _AUTH_WINDOW_MS) ? (rec.count + 1) : 1;
+  try { props.setProperty(key, JSON.stringify({c: count, t: now})); } catch(e){}
+}
+
 function authenticate(login, password) {
   login    = String(login    || '').trim();
   password = String(password == null ? '' : password);
   if (!login || !password) return {ok: false, error: 'Введіть логін і пароль'};
+
+  // v7.79: читаємо лічильник невдалих спроб для цього логіна.
+  var props = null, failKey = _authFailKey(login), fails = {count: 0, ts: 0};
+  try { props = PropertiesService.getScriptProperties(); fails = _authReadFails(props, failKey); } catch(e){ props = null; }
+  var now = Date.now();
+  var isLocked = fails.count >= _AUTH_MAX_FAILS && (now - fails.ts) < _AUTH_WINDOW_MS;
 
   var sh = _getUsersSheet();
   var data = sh.getDataRange().getValues();
@@ -4565,16 +4595,25 @@ function authenticate(login, password) {
     if (!data[i][0]) continue;
     var u = _parseUserRow(data[i]);
     if (u.login !== login) continue;
+    // v7.79: CFO (id=1) не блокується НІКОЛИ. Для решти — якщо заблоковано, реджект до перевірки пароля.
+    if (isLocked && Number(u.id) !== 1)
+      return {ok: false, error: 'too_many_attempts', message: 'Забагато спроб. Спробуйте через 15 хвилин.'};
     if (!u.active) return {ok: false, error: 'Користувача деактивовано'};
     // v6.7: паролі — SHA-256. Plaintext-гілка лишена як страховка на
     // час міграції (після addAllDirectorsAndNurses() всі рядки хешовані).
     var stored = String(u.password == null ? '' : u.password);
-    if (stored !== _sha256(password) && stored !== password)
+    if (stored !== _sha256(password) && stored !== password){
+      if (props) _authBumpFails(props, failKey, fails, now);   // v7.79: +1 невдала
       return {ok: false, error: 'Невірний пароль'};
+    }
     sh.getRange(i + 1, 9).setValue(new Date());
+    if (props){ try { props.deleteProperty(failKey); } catch(e){} }   // v7.79: успіх скидає лічильник
     delete u.password;
     return {ok: true, user: u};
   }
+  // Логін не знайдено — теж рахуємо як невдалу спробу (захист від перебору логінів).
+  if (isLocked) return {ok: false, error: 'too_many_attempts', message: 'Забагато спроб. Спробуйте через 15 хвилин.'};
+  if (props) _authBumpFails(props, failKey, fails, now);
   return {ok: false, error: 'Користувача не знайдено'};
 }
 
