@@ -1,5 +1,11 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.81
+// m.kids CRM — Google Apps Script v7.82
+// v7.82: КІЛЬКА незалежних обʼєднань груп в один день (одне заняття × дата). Зберігаються як
+//        ОКРЕМІ РЯДКИ листа Додаткові_Обʼєднання (F лишається плоским масивом = один набір),
+//        тож _loadDopMergesMap/_dopCountSessions і фронтовий _anaMergesMap/_anaCountSessions
+//        працюють без змін (уже пушать по набору). saveDopMerge: body.id → редагування набору,
+//        без id → ДОПИС нового; група лише в ОДНОМУ наборі на (loc+act+date) — перетин реджектиться.
+//        deleteDopMerge by-(loc,act,date) знімає ВСІ набори дня. Старі 12 записів читаються без міграції.
 // v7.81: ГАРАНТІЯ знижок відпустки незалежно від фронту. (1) exportVacationDiscountToPayments —
 //        спільний LockService навколо реального запису (клітинка+журнал; dryRun не блокуємо),
 //        щоб фронтовий і тригерний виклики не перетнулись. (2) Нічний тригер о 08:00
@@ -317,7 +323,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.81', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.82', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -5535,7 +5541,9 @@ function getDopMerges(params){
   }
 }
 
-// SAVE (upsert по loc+activityId+date). groups<2 → знімаємо обʼєднання (delete).
+// SAVE (v7.82 МУЛЬТИ-НАБОРИ): body.id → редагуємо ЦЕЙ набір; без id → ДОПИСУЄМО новий рядок
+// (не чіпаючи інші набори дня). Група — лише в ОДНОМУ наборі на (loc+activityId+date):
+// перетин з іншим набором → реджект. groups<2 (+id) → зняти цей набір.
 function saveDopMerge(body){
   var lock = LockService.getScriptLock();
   try { lock.waitLock(30000); }
@@ -5562,34 +5570,53 @@ function saveDopMerge(body){
 
     var sh = _getDopMergesSheet(true);
     var data = sh.getDataRange().getValues();
-    var foundRow = -1;
-    for (var i = 1; i < data.length; i++){
-      var r = _parseDopMergeRow(data[i]);
-      if (r.loc === loc && r.activityId === actId && r.date === date){ foundRow = i + 1; break; }
-    }
-
-    // <2 груп → це не обʼєднання: якщо був запис — видаляємо (розʼєднання).
-    if (groups.length < 2){
-      if (foundRow > 0){ sh.deleteRow(foundRow); return {ok: true, removed: true, unmerged: true}; }
-      return {ok: true, removed: false, unmerged: true};
-    }
-
-    var actName = String(body.activityName || (foundRow > 0 ? _parseDopMergeRow(data[foundRow - 1]).activityName : '')).trim();
+    var reqId   = Number(body.id) || 0;                     // v7.82: id набору для редагування
+    var actName = String(body.activityName || '').trim();
     var by      = String(body.by || body.markedBy || '').trim();
     var now     = new Date();
 
-    if (foundRow > 0){
-      // upsert: перезаписуємо групи/назву/ким/коли, id лишаємо.
-      var id = Number(data[foundRow - 1][0]) || _nextDopMergeId(sh);
-      sh.getRange(foundRow, 1, 1, DOP_MERGES_HEADER.length).setValues([[
-        id, loc, actId, actName, date, JSON.stringify(groups), by, now
-      ]]);
-      return {ok: true, id: id, updated: true, groups: groups};
-    } else {
-      var newId = _nextDopMergeId(sh);
-      sh.appendRow([newId, loc, actId, actName, date, JSON.stringify(groups), by, now]);
-      return {ok: true, id: newId, created: true, groups: groups};
+    // v7.82: <2 груп = розʼєднання. З id — видаляємо ЦЕЙ набір; без id — noop.
+    if (groups.length < 2){
+      if (reqId > 0){
+        for (var d1 = 1; d1 < data.length; d1++){
+          if ((Number(data[d1][0]) || 0) === reqId){ sh.deleteRow(d1 + 1); return {ok: true, removed: true, unmerged: true, id: reqId}; }
+        }
+      }
+      return {ok: true, removed: false, unmerged: true};
     }
+
+    // v7.82: група — лише в ОДНОМУ наборі на (loc, activityId, date). Звіряємо перетин з
+    // ІНШИМИ наборами того дня; свій редагований рядок (reqId) — пропускаємо.
+    var wantNorm = {};
+    groups.forEach(function(g){ wantNorm[_dopNormGroup(g)] = g; });
+    var editRow = -1;   // 1-based рядок листа нашого набору (для reqId)
+    for (var i = 1; i < data.length; i++){
+      var r = _parseDopMergeRow(data[i]);
+      if (r.loc !== loc || r.activityId !== actId || r.date !== date) continue;
+      if (reqId > 0 && r.id === reqId){ editRow = i + 1; continue; }
+      for (var k = 0; k < r.groups.length; k++){
+        var nk = _dopNormGroup(r.groups[k]);
+        if (wantNorm[nk]){
+          return {ok: false,
+                  error: 'Група «' + wantNorm[nk] + '» вже в іншому наборі цього дня. Спершу приберіть її з того набору.',
+                  conflictGroup: wantNorm[nk], conflictSetId: r.id};
+        }
+      }
+    }
+
+    if (reqId > 0){
+      // РЕДАГУВАННЯ конкретного набору за id.
+      if (editRow < 0) return {ok: false, error: 'Набір id=' + reqId + ' не знайдено для цієї трійки (loc/activityId/date)'};
+      if (!actName) actName = _parseDopMergeRow(data[editRow - 1]).activityName;
+      sh.getRange(editRow, 1, 1, DOP_MERGES_HEADER.length).setValues([[
+        reqId, loc, actId, actName, date, JSON.stringify(groups), by, now
+      ]]);
+      return {ok: true, id: reqId, updated: true, groups: groups};
+    }
+    // ДОПИСУВАННЯ нового набору (існуючі набори дня НЕ чіпаємо).
+    var newId = _nextDopMergeId(sh);
+    sh.appendRow([newId, loc, actId, actName, date, JSON.stringify(groups), by, now]);
+    return {ok: true, id: newId, created: true, groups: groups};
   } catch(e){
     return {ok: false, error: String(e && e.message || e)};
   } finally {
@@ -5615,12 +5642,20 @@ function deleteDopMerge(body){
     try { sh = _getDopMergesSheet(false); }
     catch(e){ return {ok: true, removed: false}; }
     var data = sh.getDataRange().getValues();
-    for (var i = 1; i < data.length; i++){
-      var r = _parseDopMergeRow(data[i]);
-      var hit = id ? (r.id === id) : (r.loc === loc && r.activityId === actId && r.date === date);
-      if (hit){ sh.deleteRow(i + 1); return {ok: true, removed: true}; }
+    if (id){
+      for (var i = 1; i < data.length; i++){
+        if ((Number(data[i][0]) || 0) === id){ sh.deleteRow(i + 1); return {ok: true, removed: true, count: 1}; }
+      }
+      return {ok: true, removed: false, count: 0};
     }
-    return {ok: true, removed: false};
+    // v7.82: by-(loc, activityId, date) → знімаємо ВСІ набори дня (не лише перший).
+    // Ітеруємо ЗНИЗУ вгору, бо deleteRow зсуває індекси.
+    var removed = 0;
+    for (var j = data.length - 1; j >= 1; j--){
+      var r = _parseDopMergeRow(data[j]);
+      if (r.loc === loc && r.activityId === actId && r.date === date){ sh.deleteRow(j + 1); removed++; }
+    }
+    return {ok: true, removed: removed > 0, count: removed};
   } catch(e){
     return {ok: false, error: String(e && e.message || e)};
   } finally {
