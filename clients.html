@@ -1535,14 +1535,40 @@ function rowsToObjects(values){
 }
 
 // ─── DATA LOADING ─────────────────────────────────────────────────────────────
+// v7.73: apiGet із повторами. tries=3 → початкова спроба + 2 повтори; паузи 1с, потім 3с.
+async function _apiGetRetry(action, tries){
+  tries = tries || 3;
+  var delays = [1000, 3000];
+  for (var i = 0; i < tries; i++){
+    try { return await apiGet(action); }
+    catch(e){
+      if (i < tries - 1){
+        console.warn('['+action+'] спроба '+(i+1)+' впала, повтор через '+(delays[i]/1000)+'с:', e && e.message);
+        await new Promise(function(res){ setTimeout(res, delays[i] || 3000); });
+      } else { throw e; }
+    }
+  }
+}
+
 async function loadLocations(force){
   if(!force){
     var c=localStorage.getItem(CFG.LOC_CACHE);
     if(c){ var p=JSON.parse(c); if(Date.now()-p.ts<CFG.TTL){ S.locs=p.data; return; } }
   }
-  var j=await apiGet('getLocations');
-  S.locs=j.data||[];
-  safeSetItem(CFG.LOC_CACHE,JSON.stringify({data:S.locs,ts:Date.now()}));
+  try {
+    var j=await _apiGetRetry('getLocations', 3);   // v7.73: 3 спроби (1с, 3с)
+    S.locs=j.data||[];
+    safeSetItem(CFG.LOC_CACHE,JSON.stringify({data:S.locs,ts:Date.now()}));
+  } catch(e){
+    // v7.73: мережа впала після повторів → беремо LOC_CACHE (навіть застарілий),
+    // це НЕ критична помилка (індикатор лишається зеленим). Червоний — лише коли й кешу нема.
+    var c2=localStorage.getItem(CFG.LOC_CACHE);
+    if(c2){ try{ var p2=JSON.parse(c2); if(p2 && p2.data && p2.data.length){ S.locs=p2.data;
+      console.warn('[loadLocations] мережа впала після повторів — локації з кешу (застарілі):', e && e.message);
+      return; } }catch(_c){} }
+    console.error('[loadLocations] мережа впала і кешу немає:', e && e.message);
+    throw e;   // критичний фейл → «Помилка хмари»
+  }
 }
 
 async function loadPayments(force){
@@ -1621,13 +1647,14 @@ async function loadClients(force){
     if(!rows.length) throw new Error('empty response');
   }catch(e){
     try{
-      var j=await apiGet('getClients');
+      var j=await _apiGetRetry('getClients', 3);   // v7.73: 3 спроби (1с, 3с) перед offline
       rows=j.data||[];
       if(!rows.length) throw new Error('empty response from Apps Script');
     }catch(e2){
       // v7.53: CLI_CACHE (crm_cli_v3) ПРИБРАНО як дубль crm_mkids_v3. Offline-картки
       // беруться з S.crm, який loadLocalCRM уже завантажив з SK ДО loadClients (initApp).
-      console.warn('[loadClients] мережа впала — offline-режим, картки з S.crm (crm_mkids_v3):', e2 && e2.message);
+      // Це НЕ критична помилка — офлайн-ростер із S.crm є (індикатор лишається зеленим).
+      console.warn('[loadClients] мережа впала після повторів — offline-режим, картки з S.crm (crm_mkids_v3):', e2 && e2.message);
       console.log('[loadClients] offline: карток у S.crm =', Object.keys(S.crm||{}).length);
       return;
     }
