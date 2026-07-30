@@ -1,5 +1,9 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.77
+// m.kids CRM — Google Apps Script v7.78
+// v7.78: рахунок за НАВЧАННЯ — додано рядок переплати (дзеркало доп). Якщо Бюджет-навч місяця
+//        < «Сума договору» → два рядки: «Оплата за навчання» = договір + «Переплата минулого
+//        періоду» = −(договір − Бюджет); Всього = Бюджет. Гілку боргу (Бюджет > договір) не
+//        чіпано; Бюджет = договору → один рядок, як раніше.
 // v7.77: «Факт вступний» у зведеній «Оплати» (parsePaymentSheet/aggregatePayments) тепер =
 //        СУМА колонок «Факт вступ» по ВСІХ 12 місяцях, а не значення поточного місяця. Вступний
 //        внесок разовий: оплата в травні/червні раніше не бачилась у липневому зрізі → індикатор
@@ -297,7 +301,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.77', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.78', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -10295,6 +10299,12 @@ function generateInvoicePDF(opts){
     if (_mf > 0 && sum > _mf){
       lines.push({name: 'Оплата за навчання', qty: 1, price: _mf,         sum: _mf});
       lines.push({name: LABEL_DEBT,            qty: 1, price: (sum - _mf), sum: (sum - _mf)});
+    } else if (_mf > 0 && sum < _mf){
+      // v7.78 ПЕРЕПЛАТА для навчання (дзеркало доп, де adj<0 → LABEL_OVERPAY): якщо Бюджет
+      // місяця < «Сума договору» — договірна сума + від'ємний рядок переплати; total = sum
+      // (= Бюджет), затверджений текст/заголовок недоторкані — лише розбивка рядка.
+      lines.push({name: 'Оплата за навчання', qty: 1, price: _mf,         sum: _mf});
+      lines.push({name: LABEL_OVERPAY,         qty: 1, price: (sum - _mf), sum: (sum - _mf)});
     } else {
       lines.push({name: 'Оплата за навчання', qty: 1, price: sum, sum: sum});
       if (_mf === 0) _needsContract = true;
