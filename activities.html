@@ -1794,14 +1794,40 @@ async function _afTryFetch(url, opts, tries){
   tries = tries || 3;
   var delays = [1000, 3000];
   for (var i = 0; i < tries; i++){
-    try { return await fetch(url, opts || {redirect: 'follow'}); }
+    // v7.78: AbortController з таймаутом 45с — завислий запит абортиться і йде на повтор,
+    // а не висить вічно (спінер «Завантаження…» назавжди). Кожна спроба — свій контролер.
+    var ctrl = new AbortController();
+    var timer = setTimeout(function(){ ctrl.abort(); }, 45000);
+    try {
+      var o = Object.assign({redirect: 'follow'}, opts || {});
+      o.signal = ctrl.signal;
+      var res = await fetch(url, o);
+      clearTimeout(timer);
+      return res;
+    }
     catch(e){
+      clearTimeout(timer);
       if (i < tries - 1){
-        console.warn('[fetch retry] спроба '+(i+1)+' впала, повтор через '+(delays[i]/1000)+'с:', e && e.message);
+        console.warn('[fetch retry] спроба '+(i+1)+' впала/таймаут, повтор через '+(delays[i]/1000)+'с:', e && e.message);
         await new Promise(function(rs){ setTimeout(rs, delays[i] || 3000); });
       } else { throw e; }
     }
   }
+}
+
+// v7.78: фолбек для спінера — якщо за ms контейнер ще показує спінер (завис запит),
+// замінюємо його вміст на «Довго вантажиться — 🔄 Оновити», щоб не висіло вічно.
+// Таймер знімається автоматично: при повторному показі спінера _afSpinnerWatch чистить попередній,
+// а якщо контейнер сховали (.hidden) — колбек нічого не робить.
+var _afSpinTimers = {};
+function _afSpinnerWatch(id, ms){
+  if (_afSpinTimers[id]) clearTimeout(_afSpinTimers[id]);
+  _afSpinTimers[id] = setTimeout(function(){
+    var e = document.getElementById(id);
+    if (e && !e.classList.contains('hidden')){
+      e.innerHTML = '<div style="padding:10px;color:#c0392b;font-weight:600">Довго вантажиться — натисніть «🔄 Оновити».</div>';
+    }
+  }, ms || 50000);
 }
 
 async function safePost(action, payload, attempt){
@@ -2793,7 +2819,10 @@ async function renderAttendanceBoard(){
     return;
   }
 
+  // v7.78: відновлюємо вміст спінера (фолбек міг його перезаписати) + армуємо 50с-фолбек.
+  $('attLoading').innerHTML = '<div class="spinner"></div><div>Завантаження…</div>';
   $('attLoading').classList.remove('hidden');
+  _afSpinnerWatch('attLoading', 50000);
   $('attList').classList.add('hidden');
   $('attMonthGrid').classList.add('hidden');
   $('attTeacherBox').classList.add('hidden');
@@ -4293,7 +4322,10 @@ async function renderAnalytics(){
     $('anaWarn').classList.remove('hidden');
     return;
   }
+  // v7.78: відновити спінер + 50с-фолбек (той самий патерн, що у Відвідуваності).
+  $('anaLoading').innerHTML = '<div class="spinner"></div><div>Розрахунок аналітики…</div>';
   $('anaLoading').classList.remove('hidden');
+  _afSpinnerWatch('anaLoading', 50000);
   $('anaEmpty').classList.add('hidden');
   try {
     if (!S.items || !S.items.length) await loadCatalog(false);
