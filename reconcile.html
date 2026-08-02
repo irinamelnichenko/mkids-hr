@@ -1251,10 +1251,9 @@ async function rcExpLoad(){
   RC.opex.locAuto = (locKeys.length===1);
   // 2) мапа контрагентів
   try{ var rc=await fetch(CFG.SCRIPT_URL+'?action=getOpexContractors',{redirect:'follow'}); var jc=await rc.json(); RC.opex.contractors=(jc&&jc.map)||{}; }catch(e){ RC.opex.contractors={}; }
-  // 3) список локацій для ручного вибору (якщо loc не визначилась)
-  if(!RC.opex.loc){
-    try{ var rl=await fetch(CFG.SCRIPT_URL+'?action=getLocations',{redirect:'follow'}); var jl=await rl.json(); RC.opex.locList=((jl&&jl.data)||[]).map(function(x){return x.loc||x.name||x;}).filter(Boolean); }catch(e){ RC.opex.locList=[]; }
-  }
+  // 3) повний список локацій — потрібен і для ручного вибору локації виписки,
+  //    і для пер-платіжної випадайки локації (v7.86: витрата з рахунку однієї локації в OPEX іншої)
+  try{ var rl=await fetch(CFG.SCRIPT_URL+'?action=getLocations',{redirect:'follow'}); var jl=await rl.json(); RC.opex.locList=((jl&&jl.data)||[]).map(function(x){return x.loc||x.name||x;}).filter(Boolean); }catch(e){ RC.opex.locList=[]; }
   // 3.5) реальні категорії OPEX-файлу локації (фолбек — статичний _OPEX_CATS)
   RC.opex.cats = await rcFetchCats(RC.opex.loc);
   // 4) місяць за замовч. — з дат виписки або поточний
@@ -1342,21 +1341,29 @@ function rcRenderLog(){
   if(!rows.length) return bar+'<div class="inv-empty">Немає записів за вибраними фільтрами.</div>';
 
   var tb=rows.map(function(x){
-    return '<tr>'
+    var isSkip=(String(x.status||'')==='пропущено');
+    var statHtml=isSkip
+      ? '<span style="color:var(--red2)" title="'+escAttr(String(x.reason||''))+'">⏭ пропущено</span>'
+      : '<span style="color:var(--green)">✓ внесено</span>';
+    return '<tr'+(isSkip?' style="background:#fdf0ef"':'')+'>'
       +'<td data-label="Дата">'+escapeHtml(String(x.date||''))+'</td>'
       +'<td data-label="Контрагент">'+escapeHtml(String(x.counterparty||'—'))+'</td>'
       +'<td data-label="ЄДРПОУ">'+escapeHtml(String(x.edrpou||''))+'</td>'
       +'<td data-label="Стаття">'+escapeHtml(String(x.category||''))+'</td>'
       +'<td data-label="Сума" class="num"><b>'+fmtUah(Number(x.amount)||0)+'</b></td>'
       +'<td data-label="Міс." class="num">'+(x.month?escapeHtml(MONTHS_UA_FULL[Number(x.month)-1]||String(x.month)):'—')+'</td>'
+      +'<td data-label="Статус">'+statHtml+'</td>'
       +'<td data-label="Референс"><span style="font-size:11px;color:var(--gray)">'+escapeHtml(String(x.ref||''))+'</span></td>'
       +'<td data-label="Коли"><span style="font-size:11px;color:var(--gray)">'+escapeHtml(String(x.when||''))+'</span></td>'
       +'</tr>';
   }).join('');
   var table='<div style="overflow-x:auto"><table class="inv-table"><thead><tr>'
-    +'<th>Дата</th><th>Контрагент</th><th>ЄДРПОУ</th><th>Стаття</th><th class="num">Сума</th><th class="num">Місяць</th><th>Референс</th><th>Коли</th>'
+    +'<th>Дата</th><th>Контрагент</th><th>ЄДРПОУ</th><th>Стаття</th><th class="num">Сума</th><th class="num">Місяць</th><th>Статус</th><th>Референс</th><th>Коли</th>'
     +'</tr></thead><tbody>'+tb+'</tbody></table></div>';
-  var sum='<div style="margin-top:10px;font-size:14px"><b>Записів:</b> '+rows.length+' &nbsp;·&nbsp; <b>Сума:</b> '+fmtUah(total)+' ₴</div>';
+  // підсумок — лише реально внесені суми (пропуски не рахуємо)
+  var totalIn=rows.reduce(function(s,x){return s+(String(x.status||'')==='пропущено'?0:(Number(x.amount)||0));},0);
+  var nSkip=rows.filter(function(x){return String(x.status||'')==='пропущено';}).length;
+  var sum='<div style="margin-top:10px;font-size:14px"><b>Записів:</b> '+rows.length+(nSkip?(' (з них пропущено '+nSkip+')'):'')+' &nbsp;·&nbsp; <b>Внесена сума:</b> '+fmtUah(totalIn)+' ₴</div>';
   return bar+table+sum;
 }
 
@@ -1380,16 +1387,28 @@ function rcContractorKey(edrpou, name){
   var e=String(edrpou||'').replace(/\D/g,''); if(e) return 'e:'+e;
   return 'n:'+String(name||'').trim().toLowerCase().replace(/\s+/g,' ');
 }
-// Префіл категорії для групи: з мапи контрагентів → інакше ''.
+// v7.86: токен опції «— не вносити —» / значення-маркер у мапі контрагентів (дзеркало бекенду OPEX_SKIP_CAT).
+var RC_SKIP_VAL='__skip__';
+var RC_SKIP_CAT='— не вносити —';
+// Чи ремембернуто контрагента як «завжди вручну» (не автопідставляти статтю).
+function rcExpAlwaysManual(g){
+  var rec=RC.opex.contractors[rcContractorKey(g.edrpou,g.name)];
+  return !!(rec && rec.category===RC_SKIP_CAT);
+}
+// Префіл категорії для групи: ручний вибір → з мапи контрагентів → інакше ''.
+// «Завжди вручну» (маркер у мапі) НЕ автопідставляється — повертає '' (порожньо, вимагає рішення).
 function rcExpCatFor(g){
   var sel=RC.opex.sel[g.key];
   if(sel && sel.category!=null) return sel.category;
   var rec=RC.opex.contractors[rcContractorKey(g.edrpou,g.name)];
-  return (rec&&rec.category)||'';
+  if(rec && rec.category && rec.category!==RC_SKIP_CAT) return rec.category;
+  return '';
 }
 function _rcCats(){ return (RC.opex.cats && RC.opex.cats.length) ? RC.opex.cats : _OPEX_CATS; }   // v7.86: з OPEX-файлу локації, фолбек — статичний
-function _rcCatOptions(selected){
-  return '<option value="">— оберіть статтю —</option>'+_rcCats().map(function(c){
+function _rcCatOptions(selected, includeSkip){
+  var head='<option value="">— оберіть статтю —</option>';
+  if(includeSkip) head+='<option value="'+RC_SKIP_VAL+'"'+(selected===RC_SKIP_VAL?' selected':'')+'>— не вносити —</option>';
+  return head+_rcCats().map(function(c){
     return '<option value="'+escapeHtml(c)+'"'+(c===selected?' selected':'')+'>'+escapeHtml(c)+'</option>';
   }).join('');
 }
@@ -1422,16 +1441,20 @@ function rcRenderExpenses(){
   var rows=groups.map(function(g){
     var sel=RC.opex.sel[g.key]||{};
     var cat=rcExpCatFor(g);
-    var autoFromMap = !!RC.opex.contractors[rcContractorKey(g.edrpou,g.name)] && (sel.category==null);
+    var alwaysManual = rcExpAlwaysManual(g);
+    var autoFromMap = !!RC.opex.contractors[rcContractorKey(g.edrpou,g.name)] && !alwaysManual && (sel.category==null);
     var remember = (sel.remember!=null) ? sel.remember : !autoFromMap;   // за замовч. увімкнено при ручному виборі
     var pr=g.purposes.length ? g.purposes.map(function(s){return escapeHtml(s.length>50?s.slice(0,50)+'…':s);}).join('<br>') : '';
+    var mapBadge = autoFromMap ? ' <span style="font-size:10px;color:#2980b9">·з мапи</span>'
+                 : (alwaysManual ? ' <span style="font-size:10px;color:#b9770a">·завжди вручну</span>' : '');
     var main='<tr>'
-      +'<td>'+escapeHtml(g.name)+(autoFromMap?' <span style="font-size:10px;color:#2980b9">·з мапи</span>':'')+'<div style="font-size:11px;color:var(--gray)">'+pr+'</div></td>'
+      +'<td>'+escapeHtml(g.name)+mapBadge+'<div style="font-size:11px;color:var(--gray)">'+pr+'</div></td>'
       +'<td>'+(g.edrpou?escapeHtml(g.edrpou):'—')+'</td>'
       +'<td class="num">'+g.count+'</td>'
       +'<td class="num"><b>'+fmtUah(g.sum)+'</b></td>'
+      +'<td><select onchange="rcExpOnLoc('+escAttr(g.key)+',this.value)" title="локація OPEX-файлу (за замовч. — локація виписки)">'+_rcLocOptions(sel.loc||RC.opex.loc)+'</select></td>'
       +'<td><select onchange="rcExpOnMonth('+escAttr(g.key)+',this.value)" title="місяць запису (за замовч. — загальний згори)">'+_rcMonthOptions(sel.month||RC.opex.month)+'</select></td>'
-      +'<td><select onchange="rcExpOnCat('+escAttr(g.key)+',this.value)"'+(sel.splits?' disabled':'')+'>'+_rcCatOptions(cat)+'</select>'
+      +'<td><select onchange="rcExpOnCat('+escAttr(g.key)+',this.value)"'+(sel.splits?' disabled':'')+'>'+_rcCatOptions(cat, true)+'</select>'
         +'<label style="display:block;font-size:11px;margin-top:3px"><input type="checkbox" onchange="rcExpOnRemember('+escAttr(g.key)+',this.checked)"'+(remember?' checked':'')+(sel.splits?' disabled':'')+'> запам\'ятати для контрагента</label></td>'
       +'<td>'+(sel.splits?'':'<button class="btn btn-secondary btn-xs" onclick="rcExpSplit('+escAttr(g.key)+')">✂ розбити</button>')+'</td>'
       +'</tr>';
@@ -1440,12 +1463,12 @@ function rcRenderExpenses(){
       var stotal=sel.splits.reduce(function(s,x){return s+(Number(x.amount)||0);},0);
       var okSum=Math.abs(stotal-g.sum)<0.005;
       main+=sel.splits.map(function(sp,si){
-        return '<tr style="background:#fbfdff"><td colspan="5" style="text-align:right;font-size:12px;color:var(--gray)">↳ частина '+(si+1)+'</td>'
+        return '<tr style="background:#fbfdff"><td colspan="6" style="text-align:right;font-size:12px;color:var(--gray)">↳ частина '+(si+1)+'</td>'
           +'<td><select onchange="rcExpSplitCat('+escAttr(g.key)+','+si+',this.value)">'+_rcCatOptions(sp.category)+'</select></td>'
           +'<td><input type="number" step="0.01" value="'+(sp.amount||'')+'" style="width:90px" onchange="rcExpSplitAmt('+escAttr(g.key)+','+si+',this.value)">'
           +' <button class="btn btn-secondary btn-xs" onclick="rcExpSplitDel('+escAttr(g.key)+','+si+')">✕</button></td></tr>';
       }).join('')
-      +'<tr style="background:#fbfdff"><td colspan="5" style="text-align:right">'
+      +'<tr style="background:#fbfdff"><td colspan="6" style="text-align:right">'
         +'<span style="color:'+(okSum?'var(--green)':'var(--red2)')+'">Σ '+fmtUah(stotal)+' / '+fmtUah(g.sum)+'</span></td>'
         +'<td><button class="btn btn-secondary btn-xs" onclick="rcExpSplitAdd('+escAttr(g.key)+')">＋ частина</button></td>'
         +'<td><button class="btn btn-secondary btn-xs" onclick="rcExpSplitCancel('+escAttr(g.key)+')">скасувати розбиття</button></td></tr>';
@@ -1454,7 +1477,7 @@ function rcRenderExpenses(){
   }).join('');
 
   var table='<div style="overflow-x:auto"><table class="inv-table"><thead><tr>'
-    +'<th>Контрагент</th><th>ЄДРПОУ</th><th class="num">Плат.</th><th class="num">Сума</th><th>Місяць</th><th>Стаття бюджету</th><th></th>'
+    +'<th>Контрагент</th><th>ЄДРПОУ</th><th class="num">Плат.</th><th class="num">Сума</th><th>Локація</th><th>Місяць</th><th>Стаття бюджету</th><th></th>'
     +'</tr></thead><tbody>'+rows+'</tbody></table></div>';
 
   // прев'ю dryRun (якщо є) + кнопка Застосувати
@@ -1462,9 +1485,9 @@ function rcRenderExpenses(){
   if(RC.opex.preview){
     var pr2=RC.opex.preview;
     prev='<div style="margin-top:12px"><b>Прев\'ю запису (dryRun):</b> буде '+pr2.written+' · пропущено '+pr2.skipped+'</div>'
-      +'<div style="overflow-x:auto"><table class="inv-table"><thead><tr><th>Стаття</th><th class="num">Рядок</th><th class="num">Міс</th><th class="num">Було</th><th class="num">Стане</th><th>Статус</th></tr></thead><tbody>'
+      +'<div style="overflow-x:auto"><table class="inv-table"><thead><tr><th>Локація</th><th>Стаття</th><th class="num">Рядок</th><th class="num">Міс</th><th class="num">Було</th><th class="num">Стане</th><th>Статус</th></tr></thead><tbody>'
       +(pr2.results||[]).map(function(r){
-        return '<tr><td>'+escapeHtml(r.category||'')+'</td><td class="num">'+(r.row||'—')+'</td><td class="num">'+(r.month||'—')+'</td>'
+        return '<tr><td>'+escapeHtml(r.loc||'')+'</td><td>'+escapeHtml(r.category||'')+'</td><td class="num">'+(r.row||'—')+'</td><td class="num">'+(r.month||'—')+'</td>'
           +'<td class="num">'+(r.before==null?'—':fmtUah(r.before))+'</td><td class="num">'+(r.after==null?'—':fmtUah(r.after))+'</td>'
           +'<td>'+(r.skipped?('<span style="color:var(--red2)">⏭ '+escapeHtml(r.reason||'')+'</span>'):'<span style="color:var(--green)">✓</span>')+'</td></tr>';
       }).join('')+'</tbody></table></div>'
@@ -1477,8 +1500,16 @@ function rcRenderExpenses(){
 async function rcExpSetLoc(v){ RC.opex.loc=v; RC.opex.preview=null; RC.opex.cats=await rcFetchCats(v); rcRenderAll(); }
 function rcExpSetMonth(v){ RC.opex.month=Number(v)||RC.opex.month; RC.opex.preview=null; rcRenderAll(); }
 function rcExpOnMonth(key,v){ _rcSel(key).month=Number(v)||0; RC.opex.preview=null; }   // v7.86: пер-контрагентний місяць
+function rcExpOnLoc(key,v){ _rcSel(key).loc=String(v||''); RC.opex.preview=null; }        // v7.86: пер-контрагентна локація OPEX-файлу
 function rcIncSetMonth(v){ RC.incomeMonth=Number(v)||RC.incomeMonth; rcRenderAll(); }      // v7.86: дефолтний місяць надходжень
-function _rcSel(key){ if(!RC.opex.sel[key]) RC.opex.sel[key]={category:null, remember:null, splits:null}; return RC.opex.sel[key]; }
+function _rcSel(key){ if(!RC.opex.sel[key]) RC.opex.sel[key]={category:null, remember:null, splits:null, month:0, loc:''}; return RC.opex.sel[key]; }
+// v7.86: опції локацій для пер-платіжної випадайки (локація виписки завжди присутня).
+function _rcLocOptions(sel){
+  var list=(RC.opex.locList||[]).slice();
+  if(RC.opex.loc && list.indexOf(RC.opex.loc)<0) list.unshift(RC.opex.loc);
+  if(sel && list.indexOf(sel)<0) list.unshift(sel);
+  return list.map(function(l){return '<option'+(l===sel?' selected':'')+'>'+escapeHtml(l)+'</option>';}).join('');
+}
 function rcExpOnCat(key,v){ var s=_rcSel(key); s.category=v; RC.opex.preview=null; rcRenderAll(); }
 function rcExpOnRemember(key,v){ _rcSel(key).remember=v; }
 function rcExpSplit(key){ var g=rcExpenseGroups().filter(function(x){return x.key===key;})[0]; if(!g)return; _rcSel(key).splits=[{category:rcExpCatFor(g),amount:g.sum}]; RC.opex.preview=null; rcRenderAll(); }
@@ -1493,22 +1524,33 @@ function rcExpBuildItems(){
   var groups=rcExpenseGroups(), items=[], remember=[], errors=[];
   groups.forEach(function(g){
     var sel=RC.opex.sel[g.key]||{};
-    var mon=Number(sel.month)||RC.opex.month;   // v7.86: місяць пер-контрагентно, дефолт — загальний
+    var mon=Number(sel.month)||RC.opex.month;      // v7.86: місяць пер-контрагентно, дефолт — загальний
+    var iloc=String(sel.loc||'')||RC.opex.loc;     // v7.86: локація пер-контрагентно, дефолт — локація виписки
+    var cat=rcExpCatFor(g);
+    // v7.86: рішення «— не вносити —» → skip-рядки (в OPEX не пишуться, лог зі статусом «пропущено»)
+    if(cat===RC_SKIP_VAL){
+      g.pays.forEach(function(pp){
+        items.push({skip:true, amount:pp.amount, month:mon, loc:iloc, edrpou:g.edrpou, ref:pp.ref, date:pp.date, note:g.name});
+      });
+      // «запам'ятати» для skip → контрагент завжди виходить на ручний вибір (маркер у мапі)
+      var remOnS=(sel.remember!=null)?sel.remember:false;
+      if(remOnS && (g.edrpou||g.name)) remember.push({edrpou:g.edrpou, name:g.name, category:RC_SKIP_CAT});
+      return;
+    }
     if(sel.splits){
       var stotal=sel.splits.reduce(function(s,x){return s+(Number(x.amount)||0);},0);
       if(Math.abs(stotal-g.sum)>=0.005){ errors.push('«'+g.name+'»: сума частин '+fmtUah(stotal)+' ≠ '+fmtUah(g.sum)); return; }
       sel.splits.forEach(function(sp,si){
         if(!sp.category){ errors.push('«'+g.name+'»: частина '+(si+1)+' без статті'); return; }
-        items.push({category:sp.category, amount:Number(sp.amount)||0, month:mon, edrpou:g.edrpou,
+        items.push({category:sp.category, amount:Number(sp.amount)||0, month:mon, loc:iloc, edrpou:g.edrpou,
           ref:(g.edrpou||g.key)+'-split-'+si, note:g.name});
       });
       return;
     }
-    var cat=rcExpCatFor(g);
-    if(!cat){ return; }   // без статті — пропускаємо (не помилка)
+    if(!cat){ return; }   // без статті — пропускаємо (не помилка, рішення ще не прийняте)
     // пер-платіжно: справжній ref кожного платежу
     g.pays.forEach(function(pp){
-      items.push({category:cat, amount:pp.amount, month:mon, edrpou:g.edrpou, ref:pp.ref, note:g.name});
+      items.push({category:cat, amount:pp.amount, month:mon, loc:iloc, edrpou:g.edrpou, ref:pp.ref, date:pp.date, note:g.name});
     });
     // запам'ятати контрагента
     var remOn=(sel.remember!=null)?sel.remember:(!RC.opex.contractors[rcContractorKey(g.edrpou,g.name)]);
