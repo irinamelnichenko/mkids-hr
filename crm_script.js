@@ -6,6 +6,10 @@
 //        categories — РЕАЛЬНІ назви рядків OPEX-файлу локації (щоб прев'ю не давало «категорію не
 //        знайдено» через розбіжність назв). (4) Якщо у клітинці факту формула — читаємо обчислене
 //        значення, додаємо суму, пишемо число (накопичене не втрачаємо; лічильник formulaConverted).
+//        Роут getOpexExpensesLog({loc,year,month?,category?}) — читання OPEX_Витрати_Лог (дата,
+//        контрагент з мапи, ЄДРПОУ, сума, категорія, місяць, референс, коли, ким; сорт за датою
+//        спадаюче). МІСЯЦЬ-ОВЕРРАЙД: витрати — it.month>body.month (вже було); надходження
+//        (reconcileApply) — додано it.month>body.month>дата>поточний, обраний місяць → колонка+лог.
 // v7.84: OPEX ВИТРАТИ (бекенд). Лист CONFIG «OPEX_Контрагенти» (ЄДРПОУ|Назва|Категорія|Локація|
 //        Ким|Коли) + getOpexContractors/saveOpexContractor (upsert за ЄДРПОУ/назвою). Лист
 //        «OPEX_Витрати_Лог» (Локація|IBAN|Дата|Референс|ЄДРПОУ|Сума|Категорія|Місяць|Коли|Ким). Роут
@@ -362,6 +366,7 @@ function doGet(e) {
     else if (action === 'getOpexOverview')           result = getOpexOverview(e.parameter.year || '');
     else if (action === 'getOpexContractors')        result = getOpexContractors();                              // v7.84 мапа контрагентів
     else if (action === 'resolveIbanLoc')            result = resolveIbanLoc(e.parameter.iban || '');            // v7.84 IBAN→локація
+    else if (action === 'getOpexExpensesLog')        result = getOpexExpensesLog({loc:e.parameter.loc||'', year:e.parameter.year||'', month:e.parameter.month||'', category:e.parameter.category||''}); // v7.85 читання логу витрат
     else if (action === 'getCategoryAnalytics')      result = getCategoryAnalytics(e.parameter.year || '', e.parameter.month || '');
     else if (action === 'getSalaryData')             result = getSalaryData(e.parameter.loc || '', e.parameter.year || '');
     else if (action === 'salaryReconcileRows')       result = salaryReconcileRows(e.parameter.loc || '');
@@ -3910,6 +3915,57 @@ function _opexLocSheet(loc){
   return null;
 }
 
+// v7.85 Дата рядка логу → число (для сортування). DMY / ISO; NaN якщо не розпізнано.
+function _opexDateNum(s){
+  s = String(s || '').trim();
+  var dmy = /^(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{2,4})/.exec(s);
+  if (dmy){ var y = Number(dmy[3]); if (y < 100) y += 2000; return new Date(y, Number(dmy[2]) - 1, Number(dmy[1])).getTime(); }
+  var iso = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(s);
+  if (iso){ return new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3])).getTime(); }
+  return NaN;
+}
+
+// v7.85 READ: OPEX_Витрати_Лог → рядки витрат. Фільтри loc(обов.)/year/month?/category?.
+// Сорт за датою платежу спадаюче. Контрагент — з мапи OPEX_Контрагенти за ЄДРПОУ.
+function getOpexExpensesLog(body){
+  try {
+    body = body || {};
+    var loc    = String(body.loc || '').trim();
+    var fYear  = Number(body.year) || 0;
+    var fMonth = Number(body.month) || 0;
+    var fCat   = String(body.category || '').trim().toLowerCase();
+    var sh = _opexEnsureCfgSheet(OPEX_EXP_LOG_SHEET, OPEX_EXP_LOG_HEADER, false);
+    if (!sh) return {ok: true, loc: loc, count: 0, items: []};
+    var data = sh.getDataRange().getValues();
+    // мапа ЄДРПОУ(лише цифри) → назва контрагента
+    var nameByEdr = {};
+    try { var gc = getOpexContractors(); if (gc && gc.items) gc.items.forEach(function(r){ var e = String(r.edrpou || '').replace(/\D/g, ''); if (e && r.name) nameByEdr[e] = r.name; }); } catch(_c){}
+    var items = [];
+    for (var i = 1; i < data.length; i++){
+      var r = data[i];
+      if (loc && String(r[0] || '').trim() !== loc) continue;
+      var date = String(r[2] || '').trim();
+      var ref  = String(r[3] || '').trim();
+      var edr  = String(r[4] || '').trim();
+      var amount = _opexNum(r[5]);
+      var cat  = String(r[6] || '').trim();
+      var mon  = Number(r[7]) || 0;
+      var when = (r[8] instanceof Date) ? r[8].toISOString() : String(r[8] || '');
+      var by   = String(r[9] || '').trim();
+      if (fMonth && mon !== fMonth) continue;
+      if (fCat && cat.toLowerCase() !== fCat) continue;
+      var dnum = _opexDateNum(date);
+      if (fYear && !isNaN(dnum) && new Date(dnum).getFullYear() !== fYear) continue;
+      var sortKey = isNaN(dnum) ? (when ? (new Date(when).getTime() || 0) : 0) : dnum;
+      items.push({date: date, counterparty: (nameByEdr[edr.replace(/\D/g, '')] || ''), edrpou: edr,
+                  amount: amount, category: cat, month: mon, ref: ref, when: when, by: by, _sk: sortKey});
+    }
+    items.sort(function(a, b){ return b._sk - a._sk; });   // за датою спадаюче
+    items.forEach(function(x){ delete x._sk; });
+    return {ok: true, loc: loc, count: items.length, items: items};
+  } catch(e){ return {ok: false, error: String(e && e.message || e)}; }
+}
+
 // v7.85 Анти-дубль ключ: референс (або date+edrpou коли ref порожній) + сума + МІСЯЦЬ.
 // Місяць у ключі — щоб split-платежі з однаковою сумою у різні місяці однієї локації не
 // відсіювались хибно; порожній ref → запасний ключ date+edrpou+сума.
@@ -7435,8 +7491,9 @@ function _getReconcileLogSheet(){
   return sh;
 }
 
-// ── ФАЗА 2: ЗАПИС. Вхід: {iban, by, items:[{childRow(0-based), childName, amount, date, ref, payerRaw}]}.
-//   Накопичувально (Факт += сума). Колонка — ТІЛЬКИ по шапці (−1 → помилка, без offset).
+// ── ФАЗА 2: ЗАПИС. Вхід: {iban, by, month?, items:[{childRow(0-based), childName, amount, date, ref, month?, payerRaw}]}.
+//   Накопичувально (Факт += сума). Колонка місяця (v7.85): пріоритет it.month > body.month >
+//   дата платежу > поточний місяць; далі — по шапці (−1 → помилка). Обраний місяць іде в лог.
 //   Ідемпотентність по Референсу (порожній → composite). Skip formula. LockService.
 function reconcileApply(body){
   var lock = LockService.getScriptLock();
@@ -7447,6 +7504,7 @@ function reconcileApply(body){
     var iban = trim(body.iban);
     var by   = trim(body.by) || '?';
     var items = body.items || [];
+    var bodyMonth = Number(body.month) || 0;   // v7.85: глобальний місяць-оверрайд (1-12), опційно
     var acct = _resolveAccountByIban(iban);
     if (!acct || !acct.loc) return {ok:false, error:'Рахунок "' + iban + '" не знайдено в Реквізити_Локацій'};
     var loc = acct.loc, type = acct.type;
@@ -7475,10 +7533,13 @@ function reconcileApply(body){
       if (applied[dupKey]){ skipped++; details.push({childName:childName, status:'skipped-dup', ref:ref}); return; }
       if (!(childRow >= 3) || childRow >= data.length){ errors++; details.push({childName:childName, status:'error', msg:'рядок поза межами'}); return; }
 
-      var d = _recParseDate(dateStr);
-      var jsMonth = d ? d.getMonth() : -1;
-      var monthCol0 = (jsMonth >= 0) ? _detectMonthColByHeader(data, jsMonth) : -1;
-      if (monthCol0 < 0){ errors++; details.push({childName:childName, status:'error', msg:'місяць не знайдено в шапці — НЕ записано'}); return; }
+      // v7.85: місяць колонки — пріоритет it.month > body.month > дата платежу > поточний.
+      var monOv = Number(it.month) || bodyMonth || 0;
+      var jsMonth;
+      if (monOv >= 1 && monOv <= 12){ jsMonth = monOv - 1; }
+      else { var d = _recParseDate(dateStr); jsMonth = d ? d.getMonth() : new Date().getMonth(); }
+      var monthCol0 = _detectMonthColByHeader(data, jsMonth);
+      if (monthCol0 < 0){ errors++; details.push({childName:childName, status:'error', msg:'місяць (' + (jsMonth + 1) + ') не знайдено в шапці — НЕ записано'}); return; }
       var factCol0 = _factColForType(monthCol0, it.type || type);
 
       var cell = paySh.getRange(childRow + 1, factCol0 + 1);
