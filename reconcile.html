@@ -950,7 +950,8 @@ function renderFillRange(){
 var RC = { busy:false, parsed:[], groups:[], mode:'income',
   incomeMonth:(new Date().getMonth()+1),   // v7.86: місяць запису надходжень (за замовч. поточний)
   // v7.84 OPEX-витрати: стан режиму категоризації.
-  opex:{ loaded:false, busy:false, loc:'', locAuto:false, locList:[], contractors:{}, cats:null, sel:{}, month:0, applied:false, preview:null },
+  opex:{ loaded:false, busy:false, loc:'', locAuto:false, locList:[], contractors:{}, cats:null, sel:{}, month:0, applied:false, preview:null,
+         salRowsByLoc:{}, fopMap:null, salPreview:null },   // v7.86: Salary-призначення (рядки extras по локаціях, мапа ФОП→рядки, прев'ю)
   // v7.86 Журнал витрат.
   log:{ loaded:false, busy:false, loc:'', year:(new Date().getFullYear()), month:0, category:'', search:'', rows:[], locList:[] } };
 // 25 статей OPEX (дзеркало _OPEX_NORM_MAP на бекенді).
@@ -1072,7 +1073,8 @@ function rcResetOpexState(){
   RC.opex.loc=''; RC.opex.locAuto=false; RC.opex.locList=[];
   RC.opex.cats=null; RC.opex.sel={}; RC.opex.month=0;
   RC.opex.applied=false; RC.opex.preview=null;
-  // contractors перечитаються у rcExpLoad
+  RC.opex.salRowsByLoc={}; RC.opex.fopMap=null; RC.opex.salPreview=null;   // v7.86: Salary-стан теж скидаємо
+  // contractors/fopMap/salRows перечитаються у rcExpLoad
 }
 // v7.86: скидання стану «Журналу» (loc перевизначиться за новим файлом при наступному відкритті).
 function rcResetLogState(){
@@ -1256,10 +1258,24 @@ async function rcExpLoad(){
   try{ var rl=await fetch(CFG.SCRIPT_URL+'?action=getLocations',{redirect:'follow'}); var jl=await rl.json(); RC.opex.locList=((jl&&jl.data)||[]).map(function(x){return x.loc||x.name||x;}).filter(Boolean); }catch(e){ RC.opex.locList=[]; }
   // 3.5) реальні категорії OPEX-файлу локації (фолбек — статичний _OPEX_CATS)
   RC.opex.cats = await rcFetchCats(RC.opex.loc);
+  // 3.6) v7.86 Salary-призначення: мапа ФОП→рядки (мережева) + рядки extras для локації виписки
+  try{ var rf=await fetch(CFG.SCRIPT_URL+'?action=getSalaryFopMap',{redirect:'follow'}); var jf=await rf.json(); RC.opex.fopMap=(jf&&jf.map)||{}; }catch(e){ RC.opex.fopMap={}; }
+  if(RC.opex.loc) await rcFetchSalRows(RC.opex.loc);
   // 4) місяць за замовч. — з дат виписки або поточний
   RC.opex.month = rcExpGuessMonth() || (new Date().getMonth()+1);
   RC.opex.loaded=true; RC.opex.busy=false;
   rcRenderAll();
+}
+// v7.86: рядки Salary-секції extras локації (getSalaryExtrasRows), з кешем. → [{row,name,months}].
+async function rcFetchSalRows(loc){
+  if(!loc) return [];
+  if(RC.opex.salRowsByLoc[loc]) return RC.opex.salRowsByLoc[loc];
+  try{
+    var r=await fetch(CFG.SCRIPT_URL+'?action=getSalaryExtrasRows&loc='+encodeURIComponent(loc),{redirect:'follow'});
+    var j=await r.json();
+    RC.opex.salRowsByLoc[loc]=(j&&j.ok&&Array.isArray(j.rows))?j.rows:[];
+  }catch(e){ RC.opex.salRowsByLoc[loc]=[]; }
+  return RC.opex.salRowsByLoc[loc];
 }
 // v7.86: реальні назви статей OPEX-файлу локації (getOpexData); null → фолбек на статичний.
 async function rcFetchCats(loc){
@@ -1413,6 +1429,37 @@ function _rcCatOptions(selected, includeSkip){
   }).join('');
 }
 
+// ── v7.86: Salary-призначення (рядки extras локації, мапа ФОП→рядки, префіл) ──
+function _rcSalRows(loc){ return RC.opex.salRowsByLoc[loc]||[]; }
+function _rcSalRowName(loc,row){ var r=_rcSalRows(loc).filter(function(x){return x.row===Number(row);})[0]; return r?r.name:''; }
+function _rcSalRowOptions(loc, selRow){
+  var rows=_rcSalRows(loc);
+  return '<option value="">— оберіть рядок Salary —</option>'+rows.map(function(r){
+    return '<option value="'+r.row+'"'+(Number(selRow)===r.row?' selected':'')+'>'+escapeHtml(r.name)+' (р.'+r.row+')</option>';
+  }).join('');
+}
+// Прив'язки ФОПа з мапи для конкретної локації.
+function rcSalBindings(g, loc){
+  var key=rcContractorKey(g.edrpou,g.name);
+  return ((RC.opex.fopMap&&RC.opex.fopMap[key])||[]).filter(function(b){ return !loc || b.loc===loc; });
+}
+// Одноразовий префіл цілей Salary з мапи ФОП (кілька прив'язок → одразу розбиття).
+function rcSalPrefill(g, loc){
+  var sel=_rcSel(g.key);
+  if(sel._salPrefilled) return;
+  var binds=rcSalBindings(g, loc);
+  if(binds.length>1){
+    var each=Math.round((g.sum/binds.length)*100)/100;
+    sel.salSplits=binds.map(function(b,i){
+      return {row:b.salaryRowNum, amount:(i===binds.length-1 ? Math.round((g.sum-each*(binds.length-1))*100)/100 : each)};
+    });
+    sel.salRow=0;
+  } else if(binds.length===1){
+    sel.salRow=binds[0].salaryRowNum; sel.salSplits=null;
+  }
+  sel._salPrefilled=true;
+}
+
 var MONTHS_UA_FULL=['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
 
 function rcRenderExpenses(){
@@ -1440,26 +1487,59 @@ function rcRenderExpenses(){
 
   var rows=groups.map(function(g){
     var sel=RC.opex.sel[g.key]||{};
+    var dest=sel.dest||'opex';                         // v7.86: OPEX-стаття (за замовч.) або Salary
+    var iloc=String(sel.loc||'')||RC.opex.loc;         // ефективна локація рядка
     var cat=rcExpCatFor(g);
     var alwaysManual = rcExpAlwaysManual(g);
     var autoFromMap = !!RC.opex.contractors[rcContractorKey(g.edrpou,g.name)] && !alwaysManual && (sel.category==null);
-    var remember = (sel.remember!=null) ? sel.remember : !autoFromMap;   // за замовч. увімкнено при ручному виборі
+    var remember = (sel.remember!=null) ? sel.remember : !autoFromMap;   // OPEX: за замовч. увімкнено при ручному виборі
+    var salBinds = (dest==='salary') ? rcSalBindings(g, iloc) : [];
+    var remS = (sel.remember!=null) ? sel.remember : (salBinds.length===0);   // Salary: увімкнено якщо ще нема прив'язки
     var pr=g.purposes.length ? g.purposes.map(function(s){return escapeHtml(s.length>50?s.slice(0,50)+'…':s);}).join('<br>') : '';
-    var mapBadge = autoFromMap ? ' <span style="font-size:10px;color:#2980b9">·з мапи</span>'
+    var mapBadge = (dest==='salary' && salBinds.length) ? ' <span style="font-size:10px;color:#0a8a5f">·з мапи ФОП ('+salBinds.length+')</span>'
+                 : autoFromMap ? ' <span style="font-size:10px;color:#2980b9">·з мапи</span>'
                  : (alwaysManual ? ' <span style="font-size:10px;color:#b9770a">·завжди вручну</span>' : '');
+
+    // перемикач призначення
+    var destSel='<select onchange="rcExpOnDest('+escAttr(g.key)+',this.value)" style="font-size:11px;margin-bottom:4px">'
+      +'<option value="opex"'+(dest==='opex'?' selected':'')+'>OPEX-стаття</option>'
+      +'<option value="salary"'+(dest==='salary'?' selected':'')+'>Salary (ФОП-викладач)</option></select>';
+
+    // цільова клітинка залежно від призначення
+    var targetCell, splitBtn;
+    if(dest==='salary'){
+      var salLoaded=RC.opex.salRowsByLoc.hasOwnProperty(iloc);
+      if(!salLoaded){
+        targetCell=destSel+'<div style="font-size:11px;color:var(--gray)">завантаження рядків Salary…</div>';
+        splitBtn='';
+      } else if(sel.salSplits){
+        targetCell=destSel+'<div style="font-size:11px;color:var(--gray)">розбито на '+sel.salSplits.length+' рядк. — див. нижче</div>'
+          +'<label style="display:block;font-size:11px;margin-top:3px"><input type="checkbox" onchange="rcExpOnRemember('+escAttr(g.key)+',this.checked)"'+(remS?' checked':'')+'> запам\'ятати рядки ФОПа</label>';
+        splitBtn='';
+      } else {
+        targetCell=destSel+'<select onchange="rcSalOnRow('+escAttr(g.key)+',this.value)">'+_rcSalRowOptions(iloc, sel.salRow)+'</select>'
+          +'<label style="display:block;font-size:11px;margin-top:3px"><input type="checkbox" onchange="rcExpOnRemember('+escAttr(g.key)+',this.checked)"'+(remS?' checked':'')+'> запам\'ятати рядок ФОПа</label>';
+        splitBtn='<button class="btn btn-secondary btn-xs" onclick="rcSalSplit('+escAttr(g.key)+')">✂ розбити</button>';
+      }
+    } else {
+      targetCell=destSel+'<select onchange="rcExpOnCat('+escAttr(g.key)+',this.value)"'+(sel.splits?' disabled':'')+'>'+_rcCatOptions(cat, true)+'</select>'
+        +'<label style="display:block;font-size:11px;margin-top:3px"><input type="checkbox" onchange="rcExpOnRemember('+escAttr(g.key)+',this.checked)"'+(remember?' checked':'')+(sel.splits?' disabled':'')+'> запам\'ятати для контрагента</label>';
+      splitBtn=sel.splits?'':'<button class="btn btn-secondary btn-xs" onclick="rcExpSplit('+escAttr(g.key)+')">✂ розбити</button>';
+    }
+
     var main='<tr>'
       +'<td>'+escapeHtml(g.name)+mapBadge+'<div style="font-size:11px;color:var(--gray)">'+pr+'</div></td>'
       +'<td>'+(g.edrpou?escapeHtml(g.edrpou):'—')+'</td>'
       +'<td class="num">'+g.count+'</td>'
       +'<td class="num"><b>'+fmtUah(g.sum)+'</b></td>'
-      +'<td><select onchange="rcExpOnLoc('+escAttr(g.key)+',this.value)" title="локація OPEX-файлу (за замовч. — локація виписки)">'+_rcLocOptions(sel.loc||RC.opex.loc)+'</select></td>'
+      +'<td><select onchange="rcExpOnLoc('+escAttr(g.key)+',this.value)" title="локація файлу (за замовч. — локація виписки)">'+_rcLocOptions(iloc)+'</select></td>'
       +'<td><select onchange="rcExpOnMonth('+escAttr(g.key)+',this.value)" title="місяць запису (за замовч. — загальний згори)">'+_rcMonthOptions(sel.month||RC.opex.month)+'</select></td>'
-      +'<td><select onchange="rcExpOnCat('+escAttr(g.key)+',this.value)"'+(sel.splits?' disabled':'')+'>'+_rcCatOptions(cat, true)+'</select>'
-        +'<label style="display:block;font-size:11px;margin-top:3px"><input type="checkbox" onchange="rcExpOnRemember('+escAttr(g.key)+',this.checked)"'+(remember?' checked':'')+(sel.splits?' disabled':'')+'> запам\'ятати для контрагента</label></td>'
-      +'<td>'+(sel.splits?'':'<button class="btn btn-secondary btn-xs" onclick="rcExpSplit('+escAttr(g.key)+')">✂ розбити</button>')+'</td>'
+      +'<td>'+targetCell+'</td>'
+      +'<td>'+splitBtn+'</td>'
       +'</tr>';
-    // рядки розбиття
-    if(sel.splits){
+
+    // рядки розбиття — OPEX
+    if(dest==='opex' && sel.splits){
       var stotal=sel.splits.reduce(function(s,x){return s+(Number(x.amount)||0);},0);
       var okSum=Math.abs(stotal-g.sum)<0.005;
       main+=sel.splits.map(function(sp,si){
@@ -1473,25 +1553,53 @@ function rcRenderExpenses(){
         +'<td><button class="btn btn-secondary btn-xs" onclick="rcExpSplitAdd('+escAttr(g.key)+')">＋ частина</button></td>'
         +'<td><button class="btn btn-secondary btn-xs" onclick="rcExpSplitCancel('+escAttr(g.key)+')">скасувати розбиття</button></td></tr>';
     }
+    // рядки розбиття — Salary
+    if(dest==='salary' && sel.salSplits){
+      var sst=sel.salSplits.reduce(function(s,x){return s+(Number(x.amount)||0);},0);
+      var sok=Math.abs(sst-g.sum)<0.005;
+      main+=sel.salSplits.map(function(sp,si){
+        return '<tr style="background:#f2fbf7"><td colspan="6" style="text-align:right;font-size:12px;color:var(--gray)">↳ частина '+(si+1)+'</td>'
+          +'<td><select onchange="rcSalSplitRow('+escAttr(g.key)+','+si+',this.value)">'+_rcSalRowOptions(iloc, sp.row)+'</select></td>'
+          +'<td><input type="number" step="0.01" value="'+(sp.amount||'')+'" style="width:90px" onchange="rcSalSplitAmt('+escAttr(g.key)+','+si+',this.value)">'
+          +' <button class="btn btn-secondary btn-xs" onclick="rcSalSplitDel('+escAttr(g.key)+','+si+')">✕</button></td></tr>';
+      }).join('')
+      +'<tr style="background:#f2fbf7"><td colspan="6" style="text-align:right">'
+        +'<span style="color:'+(sok?'var(--green)':'var(--red2)')+'">Σ '+fmtUah(sst)+' / '+fmtUah(g.sum)+'</span></td>'
+        +'<td><button class="btn btn-secondary btn-xs" onclick="rcSalSplitAdd('+escAttr(g.key)+')">＋ частина</button></td>'
+        +'<td><button class="btn btn-secondary btn-xs" onclick="rcSalSplitCancel('+escAttr(g.key)+')">скасувати розбиття</button></td></tr>';
+    }
     return main;
   }).join('');
 
   var table='<div style="overflow-x:auto"><table class="inv-table"><thead><tr>'
-    +'<th>Контрагент</th><th>ЄДРПОУ</th><th class="num">Плат.</th><th class="num">Сума</th><th>Локація</th><th>Місяць</th><th>Стаття бюджету</th><th></th>'
+    +'<th>Контрагент</th><th>ЄДРПОУ</th><th class="num">Плат.</th><th class="num">Сума</th><th>Локація</th><th>Місяць</th><th>Призначення</th><th></th>'
     +'</tr></thead><tbody>'+rows+'</tbody></table></div>';
 
-  // прев'ю dryRun (якщо є) + кнопка Застосувати
+  // прев'ю dryRun (якщо є) — OPEX і Salary окремими таблицями + одна кнопка Застосувати
   var prev='';
   if(RC.opex.preview){
     var pr2=RC.opex.preview;
-    prev='<div style="margin-top:12px"><b>Прев\'ю запису (dryRun):</b> буде '+pr2.written+' · пропущено '+pr2.skipped+'</div>'
+    prev+='<div style="margin-top:12px"><b>Прев\'ю OPEX (dryRun):</b> буде '+pr2.written+' · пропущено '+pr2.skipped+'</div>'
       +'<div style="overflow-x:auto"><table class="inv-table"><thead><tr><th>Локація</th><th>Стаття</th><th class="num">Рядок</th><th class="num">Міс</th><th class="num">Було</th><th class="num">Стане</th><th>Статус</th></tr></thead><tbody>'
       +(pr2.results||[]).map(function(r){
         return '<tr><td>'+escapeHtml(r.loc||'')+'</td><td>'+escapeHtml(r.category||'')+'</td><td class="num">'+(r.row||'—')+'</td><td class="num">'+(r.month||'—')+'</td>'
           +'<td class="num">'+(r.before==null?'—':fmtUah(r.before))+'</td><td class="num">'+(r.after==null?'—':fmtUah(r.after))+'</td>'
           +'<td>'+(r.skipped?('<span style="color:var(--red2)">⏭ '+escapeHtml(r.reason||'')+'</span>'):'<span style="color:var(--green)">✓</span>')+'</td></tr>';
-      }).join('')+'</tbody></table></div>'
-      +(RC.opex.applied?'':'<div style="margin-top:10px"><button class="btn btn-primary" onclick="rcExpApply()">💾 Застосувати ('+pr2.written+')</button></div>');
+      }).join('')+'</tbody></table></div>';
+  }
+  if(RC.opex.salPreview){
+    var ps=RC.opex.salPreview;
+    prev+='<div style="margin-top:12px"><b>Прев\'ю Salary (dryRun) → ФАКТ:</b> буде '+ps.written+' · пропущено '+ps.skipped+'</div>'
+      +'<div style="overflow-x:auto"><table class="inv-table"><thead><tr><th>Локація</th><th class="num">Рядок</th><th>Назва</th><th class="num">Міс</th><th class="num">Було</th><th class="num">Стане</th><th>Статус</th></tr></thead><tbody>'
+      +(ps.results||[]).map(function(r){
+        return '<tr><td>'+escapeHtml(r.loc||'')+'</td><td class="num">'+(r.row||'—')+'</td><td>'+escapeHtml(r.name||'')+'</td><td class="num">'+(r.month||'—')+'</td>'
+          +'<td class="num">'+(r.before==null?'—':fmtUah(r.before))+'</td><td class="num">'+(r.after==null?'—':fmtUah(r.after))+'</td>'
+          +'<td>'+(r.skipped?('<span style="color:var(--red2)">⏭ '+escapeHtml(r.reason||'')+'</span>'):'<span style="color:var(--green)">✓</span>')+'</td></tr>';
+      }).join('')+'</tbody></table></div>';
+  }
+  if((RC.opex.preview||RC.opex.salPreview) && !RC.opex.applied){
+    var totW=((RC.opex.preview&&RC.opex.preview.written)||0)+((RC.opex.salPreview&&RC.opex.salPreview.written)||0);
+    prev+='<div style="margin-top:10px"><button class="btn btn-primary" onclick="rcExpApply()">💾 Застосувати ('+totW+')</button></div>';
   }
   return head+table+prev;
 }
@@ -1499,10 +1607,40 @@ function rcRenderExpenses(){
 // ── handlers ──
 async function rcExpSetLoc(v){ RC.opex.loc=v; RC.opex.preview=null; RC.opex.cats=await rcFetchCats(v); rcRenderAll(); }
 function rcExpSetMonth(v){ RC.opex.month=Number(v)||RC.opex.month; RC.opex.preview=null; rcRenderAll(); }
-function rcExpOnMonth(key,v){ _rcSel(key).month=Number(v)||0; RC.opex.preview=null; }   // v7.86: пер-контрагентний місяць
-function rcExpOnLoc(key,v){ _rcSel(key).loc=String(v||''); RC.opex.preview=null; }        // v7.86: пер-контрагентна локація OPEX-файлу
+function rcExpOnMonth(key,v){ _rcSel(key).month=Number(v)||0; RC.opex.preview=null; RC.opex.salPreview=null; }   // v7.86: пер-контрагентний місяць
+async function rcExpOnLoc(key,v){                                                          // v7.86: пер-контрагентна локація файлу
+  var s=_rcSel(key); s.loc=String(v||''); RC.opex.preview=null; RC.opex.salPreview=null;
+  if(s.dest==='salary'){
+    var loc=s.loc||RC.opex.loc;
+    s.salRow=0; s.salSplits=null; s._salPrefilled=false;   // рядки іншої локації → ціль скидаємо
+    await rcFetchSalRows(loc);
+    var g=rcExpenseGroups().filter(function(x){return x.key===key;})[0];
+    if(g) rcSalPrefill(g, loc);
+    rcRenderAll();
+  }
+}
+// v7.86: перемикач призначення OPEX/Salary; при Salary — довантажити рядки й префіл із мапи ФОП.
+async function rcExpOnDest(key,v){
+  var s=_rcSel(key); s.dest=(v==='salary'?'salary':'opex');
+  RC.opex.preview=null; RC.opex.salPreview=null;
+  if(s.dest==='salary'){
+    var loc=s.loc||RC.opex.loc;
+    await rcFetchSalRows(loc);
+    var g=rcExpenseGroups().filter(function(x){return x.key===key;})[0];
+    if(g){ s._salPrefilled=false; rcSalPrefill(g, loc); }
+  }
+  rcRenderAll();
+}
+// ── Salary target handlers ──
+function rcSalOnRow(key,v){ _rcSel(key).salRow=Number(v)||0; RC.opex.salPreview=null; rcRenderAll(); }
+function rcSalSplit(key){ var g=rcExpenseGroups().filter(function(x){return x.key===key;})[0]; if(!g)return; var s=_rcSel(key); s.salSplits=[{row:(s.salRow||0), amount:g.sum}]; RC.opex.salPreview=null; rcRenderAll(); }
+function rcSalSplitCancel(key){ _rcSel(key).salSplits=null; RC.opex.salPreview=null; rcRenderAll(); }
+function rcSalSplitAdd(key){ _rcSel(key).salSplits.push({row:0,amount:0}); rcRenderAll(); }
+function rcSalSplitDel(key,i){ var s=_rcSel(key); s.salSplits.splice(i,1); if(!s.salSplits.length) s.salSplits=null; RC.opex.salPreview=null; rcRenderAll(); }
+function rcSalSplitRow(key,i,v){ _rcSel(key).salSplits[i].row=Number(v)||0; RC.opex.salPreview=null; }
+function rcSalSplitAmt(key,i,v){ _rcSel(key).salSplits[i].amount=Number(v)||0; RC.opex.salPreview=null; rcRenderAll(); }
 function rcIncSetMonth(v){ RC.incomeMonth=Number(v)||RC.incomeMonth; rcRenderAll(); }      // v7.86: дефолтний місяць надходжень
-function _rcSel(key){ if(!RC.opex.sel[key]) RC.opex.sel[key]={category:null, remember:null, splits:null, month:0, loc:''}; return RC.opex.sel[key]; }
+function _rcSel(key){ if(!RC.opex.sel[key]) RC.opex.sel[key]={category:null, remember:null, splits:null, month:0, loc:'', dest:'opex', salRow:0, salSplits:null}; return RC.opex.sel[key]; }
 // v7.86: опції локацій для пер-платіжної випадайки (локація виписки завжди присутня).
 function _rcLocOptions(sel){
   var list=(RC.opex.locList||[]).slice();
@@ -1519,13 +1657,35 @@ function rcExpSplitDel(key,i){ var s=_rcSel(key); s.splits.splice(i,1); if(!s.sp
 function rcExpSplitCat(key,i,v){ _rcSel(key).splits[i].category=v; RC.opex.preview=null; }
 function rcExpSplitAmt(key,i,v){ _rcSel(key).splits[i].amount=Number(v)||0; RC.opex.preview=null; rcRenderAll(); }
 
-// Побудова items + remember для бекенду. Повертає {items, remember, errors}.
+// Побудова items + remember для бекенду. Повертає {items, remember, salItems, salRemember, errors}.
+// items/remember — для opexAddExpenses (OPEX-статті); salItems/salRemember — для salaryAddExtrasPayments.
 function rcExpBuildItems(){
-  var groups=rcExpenseGroups(), items=[], remember=[], errors=[];
+  var groups=rcExpenseGroups(), items=[], remember=[], salItems=[], salRemember=[], errors=[];
   groups.forEach(function(g){
     var sel=RC.opex.sel[g.key]||{};
     var mon=Number(sel.month)||RC.opex.month;      // v7.86: місяць пер-контрагентно, дефолт — загальний
     var iloc=String(sel.loc||'')||RC.opex.loc;     // v7.86: локація пер-контрагентно, дефолт — локація виписки
+    // ── v7.86: призначення Salary ──
+    if((sel.dest||'opex')==='salary'){
+      var remS=(sel.remember!=null)?sel.remember:(rcSalBindings(g, iloc).length===0);
+      if(sel.salSplits){
+        var sst=sel.salSplits.reduce(function(s,x){return s+(Number(x.amount)||0);},0);
+        if(Math.abs(sst-g.sum)>=0.005){ errors.push('«'+g.name+'» (Salary): сума частин '+fmtUah(sst)+' ≠ '+fmtUah(g.sum)); return; }
+        sel.salSplits.forEach(function(sp,si){
+          if(!sp.row){ errors.push('«'+g.name+'» (Salary): частина '+(si+1)+' без рядка'); return; }
+          salItems.push({salaryRowNum:sp.row, amount:Number(sp.amount)||0, month:mon, loc:iloc, edrpou:g.edrpou,
+            ref:(g.edrpou||g.key)+'-salsplit-'+si, note:g.name});
+          if(remS) salRemember.push({edrpou:g.edrpou, name:g.name, loc:iloc, salaryRowNum:sp.row, activityName:_rcSalRowName(iloc,sp.row), rule:'split'});
+        });
+        return;
+      }
+      if(!sel.salRow){ return; }   // рядок ще не обрано — пропускаємо (не помилка)
+      g.pays.forEach(function(pp){
+        salItems.push({salaryRowNum:sel.salRow, amount:pp.amount, month:mon, loc:iloc, edrpou:g.edrpou, ref:pp.ref, date:pp.date, note:g.name});
+      });
+      if(remS && (g.edrpou||g.name)) salRemember.push({edrpou:g.edrpou, name:g.name, loc:iloc, salaryRowNum:sel.salRow, activityName:_rcSalRowName(iloc,sel.salRow), rule:''});
+      return;
+    }
     var cat=rcExpCatFor(g);
     // v7.86: рішення «— не вносити —» → skip-рядки (в OPEX не пишуться, лог зі статусом «пропущено»)
     if(cat===RC_SKIP_VAL){
@@ -1556,23 +1716,34 @@ function rcExpBuildItems(){
     var remOn=(sel.remember!=null)?sel.remember:(!RC.opex.contractors[rcContractorKey(g.edrpou,g.name)]);
     if(remOn && (g.edrpou||g.name)) remember.push({edrpou:g.edrpou, name:g.name, category:cat});
   });
-  return {items:items, remember:remember, errors:errors};
+  return {items:items, remember:remember, salItems:salItems, salRemember:salRemember, errors:errors};
 }
 
+async function _rcPost(body){
+  var r=await fetch(CFG.SCRIPT_URL,{ method:'POST', redirect:'follow',
+    headers:{'Content-Type':'text/plain;charset=utf-8'}, body:JSON.stringify(body) });
+  return await r.json();
+}
 async function rcExpPreview(){
   if(!RC.opex.loc){ showToast('Спершу оберіть локацію','error'); return; }
   var b=rcExpBuildItems();
   if(b.errors.length){ showToast('⚠️ '+b.errors[0], 'error', 4000); return; }
-  if(!b.items.length){ showToast('Немає рядків зі статтею — оберіть категорії','info'); return; }
+  if(!b.items.length && !b.salItems.length){ showToast('Немає рядків для запису — оберіть статті/рядки','info'); return; }
   RC.opex.busy=true; showToast('Рахую прев\'ю…','info',1500);
+  var yr=new Date().getFullYear();
+  RC.opex.preview=null; RC.opex.salPreview=null;
   try{
-    var r=await fetch(CFG.SCRIPT_URL,{ method:'POST', redirect:'follow',
-      headers:{'Content-Type':'text/plain;charset=utf-8'},
-      body:JSON.stringify({action:'opexAddExpenses', loc:RC.opex.loc, year:new Date().getFullYear(), month:RC.opex.month, dryRun:true, items:b.items}) });
-    var j=await r.json();
-    RC.opex.busy=false;
-    if(!j.ok){ showToast('❌ '+(j.error||'помилка'),'error',4000); return; }
-    RC.opex.preview=j; rcRenderAll();
+    if(b.items.length){
+      var j=await _rcPost({action:'opexAddExpenses', loc:RC.opex.loc, year:yr, month:RC.opex.month, dryRun:true, items:b.items});
+      if(!j.ok){ RC.opex.busy=false; showToast('❌ OPEX: '+(j.error||'помилка'),'error',4000); return; }
+      RC.opex.preview=j;
+    }
+    if(b.salItems.length){
+      var js=await _rcPost({action:'salaryAddExtrasPayments', loc:RC.opex.loc, year:yr, month:RC.opex.month, dryRun:true, items:b.salItems});
+      if(!js.ok){ RC.opex.busy=false; showToast('❌ Salary: '+(js.error||'помилка'),'error',4000); rcRenderAll(); return; }
+      RC.opex.salPreview=js;
+    }
+    RC.opex.busy=false; rcRenderAll();
   }catch(e){ RC.opex.busy=false; showToast('❌ мережа: '+(e&&e.message||e),'error',4000); }
 }
 
@@ -1581,18 +1752,26 @@ async function rcExpApply(){
   if(!RC.opex.loc){ showToast('Спершу оберіть локацію','error'); return; }
   var b=rcExpBuildItems();
   if(b.errors.length){ showToast('⚠️ '+b.errors[0], 'error', 4000); return; }
-  if(!b.items.length){ showToast('Немає рядків для запису','info'); return; }
-  if(!confirm('Записати '+b.items.length+' позицій у OPEX локації «'+RC.opex.loc+'»?')) return;
-  RC.opex.applied=true;   // блокуємо повторне натискання одразу
-  rcRenderAll();
+  if(!b.items.length && !b.salItems.length){ showToast('Немає рядків для запису','info'); return; }
+  var parts=[];
+  if(b.items.length) parts.push(b.items.length+' у OPEX');
+  if(b.salItems.length) parts.push(b.salItems.length+' у Salary (Факт)');
+  if(!confirm('Записати '+parts.join(' + ')+' (локація «'+RC.opex.loc+'»)?')) return;
+  RC.opex.applied=true; rcRenderAll();   // блокуємо повторне натискання одразу
+  var yr=new Date().getFullYear(), msgs=[], anyErr=false;
   try{
-    var r=await fetch(CFG.SCRIPT_URL,{ method:'POST', redirect:'follow',
-      headers:{'Content-Type':'text/plain;charset=utf-8'},
-      body:JSON.stringify({action:'opexAddExpenses', loc:RC.opex.loc, year:new Date().getFullYear(), month:RC.opex.month, dryRun:false, items:b.items, remember:b.remember}) });
-    var j=await r.json();
-    if(!j.ok){ RC.opex.applied=false; showToast('❌ '+(j.error||'помилка'),'error',5000); rcRenderAll(); return; }
-    RC.opex.preview=j;
-    showToast('✅ Записано '+j.written+' · пропущено '+j.skipped+' · контрагентів збережено '+(j.remembered||0), 'ok', 6000);
+    if(b.items.length){
+      var j=await _rcPost({action:'opexAddExpenses', loc:RC.opex.loc, year:yr, month:RC.opex.month, dryRun:false, items:b.items, remember:b.remember});
+      if(!j.ok){ anyErr=true; msgs.push('OPEX: '+(j.error||'помилка')); }
+      else { RC.opex.preview=j; msgs.push('OPEX: записано '+j.written+' · пропущено '+j.skipped+(j.remembered?(' · мапа '+j.remembered):'')); }
+    }
+    if(b.salItems.length){
+      var js=await _rcPost({action:'salaryAddExtrasPayments', loc:RC.opex.loc, year:yr, month:RC.opex.month, dryRun:false, items:b.salItems, remember:b.salRemember});
+      if(!js.ok){ anyErr=true; msgs.push('Salary: '+(js.error||'помилка')); }
+      else { RC.opex.salPreview=js; msgs.push('Salary: записано '+js.written+' · пропущено '+js.skipped+(js.remembered?(' · мапа '+js.remembered):'')); }
+    }
+    if(anyErr) RC.opex.applied=false;
+    showToast((anyErr?'⚠️ ':'✅ ')+msgs.join(' | '), anyErr?'error':'ok', 7000);
     rcRenderAll();
   }catch(e){ RC.opex.applied=false; showToast('❌ мережа: '+(e&&e.message||e),'error',5000); rcRenderAll(); }
 }
