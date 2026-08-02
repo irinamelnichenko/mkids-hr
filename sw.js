@@ -1,11 +1,11 @@
-// m.kids PWA Service Worker (v7.84-opex-expenses / cache v7.86)
+// m.kids PWA Service Worker (v7.86-opex-log-month / cache v7.87)
 // Cache: static shell (HTML + manifest + icons + xlsx)
 // Strategy:
 //   • POST → завжди network (ніколи не кешуємо)
 //   • GET до /macros/ (Apps Script) → network-only, fallback на cache
 //   • GET до інших static URLs → cache-first з фоновим оновленням
 
-var CACHE = 'mkids-cache-v7.86';
+var CACHE = 'mkids-cache-v7.87';
 var SHELL = [
   './',
   'activities.html',
