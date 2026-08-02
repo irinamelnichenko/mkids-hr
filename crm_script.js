@@ -2,7 +2,7 @@
 // m.kids CRM — Google Apps Script v7.84
 // v7.84: OPEX ВИТРАТИ (бекенд). Лист CONFIG «OPEX_Контрагенти» (ЄДРПОУ|Назва|Категорія|Локація|
 //        Ким|Коли) + getOpexContractors/saveOpexContractor (upsert за ЄДРПОУ/назвою). Лист
-//        «OPEX_Витрати_Лог» (Локація|IBAN|Дата|Референс|ЄДРПОУ|Сума|Категорія|Коли|Ким). Роут
+//        «OPEX_Витрати_Лог» (Локація|IBAN|Дата|Референс|ЄДРПОУ|Сума|Категорія|Місяць|Коли|Ким). Роут
 //        opexAddExpenses(loc,year,month,dryRun,items[],remember[]): LockService, матч категорії
 //        (рядки 3-30), додавання суми у факт місяця (0-based (month-1)*3+1), АНТИ-ДУБЛЬ за
 //        референс+сума (лог), dryRun=TRUE за замовчуванням → прев'ю {row,before,after,skipped}.
@@ -3808,7 +3808,7 @@ function _opexNormType(name) {
 var OPEX_CONTRACTORS_SHEET  = 'OPEX_Контрагенти';
 var OPEX_CONTRACTORS_HEADER = ['ЄДРПОУ', 'Назва_контрагента', 'Категорія', 'Локація', 'Ким', 'Коли'];
 var OPEX_EXP_LOG_SHEET      = 'OPEX_Витрати_Лог';
-var OPEX_EXP_LOG_HEADER     = ['Локація', 'IBAN', 'Дата платежу', 'Референс', 'ЄДРПОУ', 'Сума', 'Категорія', 'Коли', 'Ким'];
+var OPEX_EXP_LOG_HEADER     = ['Локація', 'IBAN', 'Дата платежу', 'Референс', 'ЄДРПОУ', 'Сума', 'Категорія', 'Місяць', 'Коли', 'Ким'];
 
 function _opexEnsureCfgSheet(name, header, createIfMissing){
   var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
@@ -3975,7 +3975,7 @@ function opexAddExpenses(body){
 
       if (!dryRun){
         sheet.getRange(row, factCol1).setValue(after);
-        logRows.push([loc, String(it.iban || body.iban || ''), String(it.date || ''), ref, edrpou, amount, cat, now, by]);
+        logRows.push([loc, String(it.iban || body.iban || ''), String(it.date || ''), ref, edrpou, amount, cat, mon, now, by]);
         seen[dedupKey] = true;   // дубль у ЦЬОМУ ж батчі теж відсіється
       }
       written++;
