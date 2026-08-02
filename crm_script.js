@@ -1,5 +1,11 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.84
+// m.kids CRM — Google Apps Script v7.85
+// v7.85: OPEX-витрати — 4 фікси в opexAddExpenses. (1) Анти-дубль: порожній референс → запасний
+//        ключ date+ЄДРПОУ+сума. (2) У ключ дедупу додано МІСЯЦЬ (split-платежі з однаковою сумою
+//        у різні місяці однієї локації більше не відсіюються хибно). (3) Відповідь містить
+//        categories — РЕАЛЬНІ назви рядків OPEX-файлу локації (щоб прев'ю не давало «категорію не
+//        знайдено» через розбіжність назв). (4) Якщо у клітинці факту формула — читаємо обчислене
+//        значення, додаємо суму, пишемо число (накопичене не втрачаємо; лічильник formulaConverted).
 // v7.84: OPEX ВИТРАТИ (бекенд). Лист CONFIG «OPEX_Контрагенти» (ЄДРПОУ|Назва|Категорія|Локація|
 //        Ким|Коли) + getOpexContractors/saveOpexContractor (upsert за ЄДРПОУ/назвою). Лист
 //        «OPEX_Витрати_Лог» (Локація|IBAN|Дата|Референс|ЄДРПОУ|Сума|Категорія|Місяць|Коли|Ким). Роут
@@ -334,7 +340,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.84', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.85', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -3904,8 +3910,19 @@ function _opexLocSheet(loc){
   return null;
 }
 
+// v7.85 Анти-дубль ключ: референс (або date+edrpou коли ref порожній) + сума + МІСЯЦЬ.
+// Місяць у ключі — щоб split-платежі з однаковою сумою у різні місяці однієї локації не
+// відсіювались хибно; порожній ref → запасний ключ date+edrpou+сума.
+function _opexDedupKey(ref, date, edrpou, amount, month){
+  var r = String(ref || '').trim();
+  var base = r ? ('r:' + r)
+               : ('d:' + String(date || '').trim() + '|' + String(edrpou || '').replace(/\D/g, ''));
+  return base + '|' + _opexNum(amount) + '|' + (Number(month) || 0);
+}
+
 // WRITE: додати суми витрат у OPEX (факт місяця). dryRun=true за замовчуванням.
-// items:[{category, amount, month, edrpou, ref, date, iban, note}]. Анти-дубль: референс+сума (у межах loc).
+// items:[{category, amount, month, edrpou, ref, date, iban, note}].
+// Анти-дубль (v7.85): референс+сума+місяць; порожній ref → date+edrpou+сума+місяць.
 function opexAddExpenses(body){
   var lock = null;
   try {
@@ -3927,12 +3944,13 @@ function opexAddExpenses(body){
     var lastRow = Math.max(sheet.getLastRow(), 30);
     var lastCol = Math.max(sheet.getLastColumn(), 37);
     var data = sheet.getRange(1, 1, lastRow, lastCol).getValues();
-    var catRow = {};
+    var catRow = {}, catList = [];   // v7.85: catList — РЕАЛЬНІ назви рядків OPEX-файлу (для прев'ю)
     for (var rn = 3; rn <= 30 && (rn - 1) < data.length; rn++){
       var raw = String(data[rn - 1][0] || '').trim();
       if (_opexIsSkippedCategory(raw)) continue;
-      var nm = _opexNormalizeCategoryName(raw).trim().toLowerCase();
-      if (!catRow.hasOwnProperty(nm)) catRow[nm] = rn;   // перший збіг
+      var normNm = _opexNormalizeCategoryName(raw);
+      var nm = normNm.trim().toLowerCase();
+      if (!catRow.hasOwnProperty(nm)){ catRow[nm] = rn; catList.push(normNm); }   // перший збіг
     }
 
     // існуючий лог для анти-дублю (референс+сума у межах локації)
@@ -3942,7 +3960,8 @@ function opexAddExpenses(body){
       var ld = logSh.getDataRange().getValues();
       for (var li = 1; li < ld.length; li++){
         if (String(ld[li][0] || '').trim() !== loc) continue;
-        seen[String(ld[li][3] || '').trim() + '|' + _opexNum(ld[li][5])] = true;
+        // лог 0-based: 2=Дата, 3=Референс, 4=ЄДРПОУ, 5=Сума, 7=Місяць
+        seen[_opexDedupKey(ld[li][3], ld[li][2], ld[li][4], ld[li][5], ld[li][7])] = true;
       }
     }
 
@@ -3951,31 +3970,39 @@ function opexAddExpenses(body){
       try { lock.waitLock(30000); } catch(_le){ return {ok: false, error: 'LOCK_TIMEOUT — запис OPEX уже виконується'}; }
     }
 
-    var results = [], written = 0, skipped = 0, now = new Date(), logRows = [];
+    var results = [], written = 0, skipped = 0, formulaConverted = 0, now = new Date(), logRows = [];
     items.forEach(function(it){
       var cat    = _opexNormalizeCategoryName(String(it.category || '').trim());
       var amount = _opexNum(it.amount);
       var mon    = Number(it.month) || defMon;
       var ref    = String(it.ref || '').trim();
+      var date   = String(it.date || '').trim();
       var edrpou = String(it.edrpou || '').trim();
-      var out = {category: cat, amount: amount, month: mon, row: null, before: null, after: null, skipped: false, reason: ''};
+      var out = {category: cat, amount: amount, month: mon, row: null, before: null, after: null, skipped: false, reason: '', wasFormula: false};
 
       if (!cat){ out.skipped = true; out.reason = 'порожня категорія'; skipped++; return results.push(out); }
       if (!mon || mon < 1 || mon > 12){ out.skipped = true; out.reason = 'некоректний місяць'; skipped++; return results.push(out); }
       var row = catRow[cat.toLowerCase()];
       if (!row){ out.skipped = true; out.reason = 'категорію не знайдено в OPEX-файлі'; skipped++; return results.push(out); }
-      var dedupKey = ref + '|' + amount;
-      if (ref && seen[dedupKey]){ out.skipped = true; out.reason = 'уже застосовано (референс+сума)'; out.row = row; skipped++; return results.push(out); }
+      // v7.85: анти-дубль референс+сума+місяць; порожній ref → date+edrpou+сума+місяць
+      var dedupKey = _opexDedupKey(ref, date, edrpou, amount, mon);
+      if (seen[dedupKey]){ out.skipped = true; out.reason = 'уже застосовано (дубль)'; out.row = row; skipped++; return results.push(out); }
 
       // 0-based факт місяця = (mon-1)*3+1 → 1-based для getRange: +1
       var factCol1 = (mon - 1) * 3 + 1 + 1;
-      var before = _opexNum(sheet.getRange(row, factCol1).getValue());
+      var cell = sheet.getRange(row, factCol1);
+      // v7.85: якщо у клітинці ФОРМУЛА — getValue() дає ОБЧИСЛЕНЕ значення (накопичене не втрачаємо),
+      // додаємо суму й пишемо число (формула замінюється числом, як у vac-export).
+      var wasFormula = false;
+      try { wasFormula = String(cell.getFormula() || '') !== ''; } catch(_f){}
+      var before = _opexNum(cell.getValue());
       var after  = before + amount;
-      out.row = row; out.before = before; out.after = after;
+      out.row = row; out.before = before; out.after = after; out.wasFormula = wasFormula;
 
       if (!dryRun){
-        sheet.getRange(row, factCol1).setValue(after);
-        logRows.push([loc, String(it.iban || body.iban || ''), String(it.date || ''), ref, edrpou, amount, cat, mon, now, by]);
+        cell.setValue(after);
+        if (wasFormula) formulaConverted++;
+        logRows.push([loc, String(it.iban || body.iban || ''), date, ref, edrpou, amount, cat, mon, now, by]);
         seen[dedupKey] = true;   // дубль у ЦЬОМУ ж батчі теж відсіється
       }
       written++;
@@ -3996,7 +4023,9 @@ function opexAddExpenses(body){
     }
 
     return {ok: true, dryRun: dryRun, loc: loc, year: year,
-            written: written, skipped: skipped, remembered: remembered, results: results};
+            written: written, skipped: skipped, remembered: remembered,
+            formulaConverted: formulaConverted, categories: catList,   // v7.85: реальні назви статей OPEX-файлу
+            results: results};
   } catch(e){
     return {ok: false, error: String(e && e.message || e)};
   } finally {
