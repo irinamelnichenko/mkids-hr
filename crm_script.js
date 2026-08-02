@@ -1,5 +1,39 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.80
+// m.kids CRM — Google Apps Script v7.85
+// v7.85: OPEX-витрати — 4 фікси в opexAddExpenses. (1) Анти-дубль: порожній референс → запасний
+//        ключ date+ЄДРПОУ+сума. (2) У ключ дедупу додано МІСЯЦЬ (split-платежі з однаковою сумою
+//        у різні місяці однієї локації більше не відсіюються хибно). (3) Відповідь містить
+//        categories — РЕАЛЬНІ назви рядків OPEX-файлу локації (щоб прев'ю не давало «категорію не
+//        знайдено» через розбіжність назв). (4) Якщо у клітинці факту формула — читаємо обчислене
+//        значення, додаємо суму, пишемо число (накопичене не втрачаємо; лічильник formulaConverted).
+//        Роут getOpexExpensesLog({loc,year,month?,category?}) — читання OPEX_Витрати_Лог (дата,
+//        контрагент з мапи, ЄДРПОУ, сума, категорія, місяць, референс, коли, ким; сорт за датою
+//        спадаюче). МІСЯЦЬ-ОВЕРРАЙД: витрати — it.month>body.month (вже було); надходження
+//        (reconcileApply) — додано it.month>body.month>дата>поточний, обраний місяць → колонка+лог.
+// v7.84: OPEX ВИТРАТИ (бекенд). Лист CONFIG «OPEX_Контрагенти» (ЄДРПОУ|Назва|Категорія|Локація|
+//        Ким|Коли) + getOpexContractors/saveOpexContractor (upsert за ЄДРПОУ/назвою). Лист
+//        «OPEX_Витрати_Лог» (Локація|IBAN|Дата|Референс|ЄДРПОУ|Сума|Категорія|Місяць|Коли|Ким). Роут
+//        opexAddExpenses(loc,year,month,dryRun,items[],remember[]): LockService, матч категорії
+//        (рядки 3-30), додавання суми у факт місяця (0-based (month-1)*3+1), АНТИ-ДУБЛЬ за
+//        референс+сума (лог), dryRun=TRUE за замовчуванням → прев'ю {row,before,after,skipped}.
+//        Роут resolveIbanLoc(iban) — read-only IBAN→локація. Фронт/запис у OPEX — окремо.
+// v7.83: getPredmetnyky — з уроків прибрано поле empKey (фронт його не читає: грід чіпляє за
+//        loc/group/subject/date, а empKey для збереження резолвиться з призначення/кандидатів).
+//        Це ~29% ваги масиву lessons → відповідь за липень падає з ~182 КБ до ~140 КБ (−23%).
+//        teachers/catalog/assignments/norms — без змін. savePredmetnykyLesson не зачеплено.
+// v7.82: КІЛЬКА незалежних обʼєднань груп в один день (одне заняття × дата). Зберігаються як
+//        ОКРЕМІ РЯДКИ листа Додаткові_Обʼєднання (F лишається плоским масивом = один набір),
+//        тож _loadDopMergesMap/_dopCountSessions і фронтовий _anaMergesMap/_anaCountSessions
+//        працюють без змін (уже пушать по набору). saveDopMerge: body.id → редагування набору,
+//        без id → ДОПИС нового; група лише в ОДНОМУ наборі на (loc+act+date) — перетин реджектиться.
+//        deleteDopMerge by-(loc,act,date) знімає ВСІ набори дня. Старі 12 записів читаються без міграції.
+// v7.81: ГАРАНТІЯ знижок відпустки незалежно від фронту. (1) exportVacationDiscountToPayments —
+//        спільний LockService навколо реального запису (клітинка+журнал; dryRun не блокуємо),
+//        щоб фронтовий і тригерний виклики не перетнулись. (2) Нічний тригер о 08:00
+//        nightlyVacExportGuarantee: прогін по всіх садочках × (поточний+наступний) місяць,
+//        ПАЧКАМИ по 4 локації (продовження через one-off _vacExportGuardBatch +2хв, позиція в
+//        PropertiesService) — не впирається в 6-хв ліміт. Лог: локацій оброблено, клітинок змінено.
+//        Ідемпотентно (журнал baseValue) — подвоєння немає. Фронтовий виклик лишено для миттєвості.
 // v7.80: getPredmetnyky приймає year+month і віддає МІСЯЧНИЙ зріз — lessons (90% ваги, 2201/рік)
 //        і predMerges фільтруються за місяцем через _loadPredLessons/_loadPredMergesList (опційні
 //        параметри year/month; без них — повна віддача, тож інші виклики не зачеплені).
@@ -310,7 +344,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.80', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.85', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -330,6 +364,9 @@ function doGet(e) {
     else if (action === 'importAbsencesFromPayment') result = importAbsencesFromPayment(e.parameter.loc || '');
     else if (action === 'getOpexData')               result = getOpexData(e.parameter.loc || '', e.parameter.year || '');
     else if (action === 'getOpexOverview')           result = getOpexOverview(e.parameter.year || '');
+    else if (action === 'getOpexContractors')        result = getOpexContractors();                              // v7.84 мапа контрагентів
+    else if (action === 'resolveIbanLoc')            result = resolveIbanLoc(e.parameter.iban || '');            // v7.84 IBAN→локація
+    else if (action === 'getOpexExpensesLog')        result = getOpexExpensesLog({loc:e.parameter.loc||'', year:e.parameter.year||'', month:e.parameter.month||'', category:e.parameter.category||''}); // v7.85 читання логу витрат
     else if (action === 'getCategoryAnalytics')      result = getCategoryAnalytics(e.parameter.year || '', e.parameter.month || '');
     else if (action === 'getSalaryData')             result = getSalaryData(e.parameter.loc || '', e.parameter.year || '');
     else if (action === 'salaryReconcileRows')       result = salaryReconcileRows(e.parameter.loc || '');
@@ -425,6 +462,8 @@ function doPost(e) {
     else if (body.action === 'deleteSalaryRow')          result = deleteSalaryRow(body || {}); // v7.42 Етап 1
     else if (body.action === 'saveDopMerge')              result = saveDopMerge(body || {});
     else if (body.action === 'deleteDopMerge')            result = deleteDopMerge(body || {});
+    else if (body.action === 'saveOpexContractor')        result = saveOpexContractor(body || {});   // v7.84 upsert контрагента
+    else if (body.action === 'opexAddExpenses')           result = opexAddExpenses(body || {});      // v7.84 запис витрат у OPEX (dryRun за замовч.)
     else if (body.action === 'savePredMerge')             result = savePredMerge(body || {});
     else if (body.action === 'deletePredMerge')           result = deletePredMerge(body || {});
     else if (body.action === 'addChomusykyMark')          result = addChomusykyMark(body.data || body || {});
@@ -1804,7 +1843,9 @@ function createDailyTrigger() {
   for (var i = 0; i < triggers.length; i++) {
     var fn = triggers[i].getHandlerFunction();
     if (fn === 'aggregatePayments' || fn === 'aggregatePaymentsYearly'
-        || fn === 'nightlySyncMissingKindergartens') {
+        || fn === 'nightlySyncMissingKindergartens'
+        || fn === 'nightlyVacExportGuarantee'   // v7.81
+        || fn === '_vacExportGuardBatch') {      // v7.81: спент continuation-тригери
       ScriptApp.deleteTrigger(triggers[i]);
     }
   }
@@ -1818,6 +1859,86 @@ function createDailyTrigger() {
   ScriptApp.newTrigger('nightlySyncMissingKindergartens')
     .timeBased().everyDays(1).atHour(7).nearMinute(30)
     .inTimezone('Europe/Kiev').create();
+  // v7.81: ГАРАНТІЯ знижок відпустки — о 8:00 (ПІСЛЯ агрегації 7:00 і синку 7:30),
+  // щоб не конкурувати. Прогін по садочках × (поточний+наступний) місяць, пачками.
+  ScriptApp.newTrigger('nightlyVacExportGuarantee')
+    .timeBased().everyDays(1).atHour(8)
+    .inTimezone('Europe/Kiev').create();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.81 НІЧНА ГАРАНТІЯ ЗНИЖОК ВІДПУСТКИ (незалежно від фронту).
+// Проганяє exportVacationDiscountToPayments по ВСІХ садочках × (поточний+наступний)
+// місяць. Ідемпотентно (журнал baseValue), під LockService. Розбито на ПАЧКИ по 4
+// локації, щоб не впертись у 6-хв ліміт: продовження — one-off тригер `_vacExportGuardBatch`
+// через 2 хв, позиція/лічильники — у PropertiesService (`vacguard_state`).
+var _VAC_GUARD_BATCH = 4;   // локацій за один запуск (× 2 місяці = 8 експортів)
+var _VAC_GUARD_KEY   = 'vacguard_state';
+
+function nightlyVacExportGuarantee(){
+  _vacGuardDeleteContinuations();   // прибрати відпрацьовані continuation-тригери з минулого разу
+  var props = PropertiesService.getScriptProperties();
+  var locs = [];
+  try {
+    (getLocations().data || []).forEach(function(l){
+      if (String(l.typ || '').trim() === 'Садочок') locs.push(String(l.loc || '').trim());
+    });
+  } catch(e){ Logger.log('[vacGuard] getLocations впав: %s', e && e.message); }
+  var tz  = 'Europe/Kiev';
+  var now = new Date();
+  var y = Number(Utilities.formatDate(now, tz, 'yyyy'));
+  var m = Number(Utilities.formatDate(now, tz, 'MM'));
+  var nm = (m === 12) ? {y: y + 1, m: 1} : {y: y, m: m + 1};
+  var months = [{y: y, m: m}, {y: nm.y, m: nm.m}];
+  var st = {locs: locs, months: months, pos: 0, cells: 0, locsDone: 0, startedAt: now.toISOString()};
+  props.setProperty(_VAC_GUARD_KEY, JSON.stringify(st));
+  Logger.log('[vacGuard] START: %s садочків × міс(%s/%s, %s/%s), пачка=%s',
+    locs.length, m, y, nm.m, nm.y, _VAC_GUARD_BATCH);
+  _vacGuardRunBatch();
+}
+
+// Continuation-handler (окремий, щоб безпечно видаляти спент one-off тригери).
+function _vacExportGuardBatch(){ _vacGuardRunBatch(); }
+
+function _vacGuardRunBatch(){
+  var props = PropertiesService.getScriptProperties();
+  var raw = props.getProperty(_VAC_GUARD_KEY);
+  if (!raw){ Logger.log('[vacGuard] нема стану — пропуск'); return; }
+  var st;
+  try { st = JSON.parse(raw); } catch(e){ props.deleteProperty(_VAC_GUARD_KEY); return; }
+  var end = Math.min(st.pos + _VAC_GUARD_BATCH, st.locs.length);
+  for (var i = st.pos; i < end; i++){
+    var loc = st.locs[i];
+    for (var k = 0; k < st.months.length; k++){
+      var mm = st.months[k];
+      try {
+        var res = exportVacationDiscountToPayments({loc: loc, month: mm.m, year: mm.y});
+        if (res && res.ok) st.cells += (res.cellsWritten || 0);
+        else Logger.log('[vacGuard] ⚠ %s %s/%s: %s', loc, mm.m, mm.y, (res && res.error) || '?');
+      } catch(e){ Logger.log('[vacGuard] EXC %s %s/%s: %s', loc, mm.m, mm.y, e && e.message); }
+    }
+    st.locsDone++;
+  }
+  st.pos = end;
+  props.setProperty(_VAC_GUARD_KEY, JSON.stringify(st));
+  if (st.pos < st.locs.length){
+    _vacGuardDeleteContinuations();
+    ScriptApp.newTrigger('_vacExportGuardBatch').timeBased().after(2 * 60 * 1000).create();
+    Logger.log('[vacGuard] пачка до %s/%s готова, наступна через 2 хв', st.pos, st.locs.length);
+  } else {
+    Logger.log('[vacGuard] ✅ ЗАВЕРШЕНО: локацій оброблено %s, клітинок змінено %s', st.locsDone, st.cells);
+    props.deleteProperty(_VAC_GUARD_KEY);
+    _vacGuardDeleteContinuations();
+  }
+}
+
+function _vacGuardDeleteContinuations(){
+  try {
+    var trs = ScriptApp.getProjectTriggers();
+    for (var i = 0; i < trs.length; i++){
+      if (trs[i].getHandlerFunction() === '_vacExportGuardBatch') ScriptApp.deleteTrigger(trs[i]);
+    }
+  } catch(e){}
 }
 
 function trim(s) { return String(s || '').trim(); }
@@ -3692,6 +3813,323 @@ function _opexNormType(name) {
   return _OPEX_NORM_MAP[name] || 'unknown';
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.84 OPEX ВИТРАТИ: мапа контрагентів (CONFIG) + запис факту витрат у пер-лок OPEX-файл.
+// ═══════════════════════════════════════════════════════════════════════════
+var OPEX_CONTRACTORS_SHEET  = 'OPEX_Контрагенти';
+var OPEX_CONTRACTORS_HEADER = ['ЄДРПОУ', 'Назва_контрагента', 'Категорія', 'Локація', 'Ким', 'Коли'];
+var OPEX_EXP_LOG_SHEET      = 'OPEX_Витрати_Лог';
+// v7.86: +Статус (внесено/пропущено), +Причина — щоб рішення «не вносити» було видно в журналі.
+var OPEX_EXP_LOG_HEADER     = ['Локація', 'IBAN', 'Дата платежу', 'Референс', 'ЄДРПОУ', 'Сума', 'Категорія', 'Місяць', 'Коли', 'Ким', 'Статус', 'Причина'];
+var OPEX_SKIP_CAT           = '— не вносити —';   // v7.86: маркер рішення «не вносити» / «завжди вручну» у мапі контрагентів
+
+function _opexEnsureCfgSheet(name, header, createIfMissing){
+  var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var sh = ss.getSheetByName(name);
+  if (!sh && createIfMissing){
+    sh = ss.insertSheet(name);
+    sh.getRange(1, 1, 1, header.length).setValues([header]);
+    sh.setFrozenRows(1);
+  }
+  return sh;   // може бути null, якщо не створюємо
+}
+
+// Ключ контрагента: ЄДРПОУ (лише цифри), fallback — нормалізована назва.
+function _opexContractorKey(edrpou, name){
+  var e = String(edrpou || '').replace(/\D/g, '');
+  if (e) return 'e:' + e;
+  return 'n:' + String(name || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+// READ: мапа контрагентів → {name, category, edrpou, loc}.
+function getOpexContractors(){
+  try {
+    var sh = _opexEnsureCfgSheet(OPEX_CONTRACTORS_SHEET, OPEX_CONTRACTORS_HEADER, false);
+    if (!sh) return {ok: true, map: {}, items: []};
+    var data = sh.getDataRange().getValues();
+    var map = {}, items = [];
+    for (var i = 1; i < data.length; i++){
+      var edrpou = String(data[i][0] || '').trim();
+      var name   = String(data[i][1] || '').trim();
+      var cat    = String(data[i][2] || '').trim();
+      var loc    = String(data[i][3] || '').trim();
+      if (!cat || (!edrpou && !name)) continue;
+      var rec = {edrpou: edrpou, name: name, category: cat, loc: loc};
+      map[_opexContractorKey(edrpou, name)] = rec;
+      items.push(rec);
+    }
+    return {ok: true, map: map, items: items};
+  } catch(e){ return {ok: false, error: String(e && e.message || e)}; }
+}
+
+// UPSERT одного контрагента (за ЄДРПОУ, fallback назва).
+function saveOpexContractor(body){
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(30000); } catch(e){ return {ok: false, error: 'LOCK_TIMEOUT'}; }
+  try {
+    body = body || {};
+    var edrpou = String(body.edrpou || '').trim();
+    var name   = String(body.name   || '').trim();
+    var cat    = String(body.category || '').trim();
+    var loc    = String(body.loc || '').trim();
+    var by     = String(body.by || body.markedBy || '').trim();
+    if (!cat) return {ok: false, error: 'category обовʼязкова'};
+    if (!edrpou && !name) return {ok: false, error: 'потрібен edrpou або name'};
+    var sh = _opexEnsureCfgSheet(OPEX_CONTRACTORS_SHEET, OPEX_CONTRACTORS_HEADER, true);
+    var data = sh.getDataRange().getValues();
+    var key = _opexContractorKey(edrpou, name);
+    var now = new Date();
+    for (var i = 1; i < data.length; i++){
+      if (_opexContractorKey(data[i][0], data[i][1]) === key){
+        sh.getRange(i + 1, 1, 1, OPEX_CONTRACTORS_HEADER.length).setValues([[
+          edrpou, name || String(data[i][1] || ''), cat, loc || String(data[i][3] || ''), by, now
+        ]]);
+        return {ok: true, updated: true, key: key, category: cat};
+      }
+    }
+    sh.appendRow([edrpou, name, cat, loc, by, now]);
+    return {ok: true, created: true, key: key, category: cat};
+  } catch(e){ return {ok: false, error: String(e && e.message || e)}; }
+  finally { try { lock.releaseLock(); } catch(_){} }
+}
+
+// READ: IBAN → локація (через Реквізити_Локацій; той самий резолвер, що й у reconcilePreview).
+function resolveIbanLoc(iban){
+  var acct = _resolveAccountByIban(iban);
+  if (!acct || !acct.loc) return {ok: false, error: 'IBAN "' + String(iban || '').trim() + '" не знайдено в Реквізити_Локацій'};
+  return {ok: true, loc: acct.loc, type: acct.type, typeLabel: acct.typeLabel, orgName: acct.orgName};
+}
+
+// Пер-лок OPEX-файл+лист із реєстру CONFIG 'OPEX'. → {sheet, listName} або null.
+function _opexLocSheet(loc){
+  var reg = SpreadsheetApp.openById(CONFIG_SHEET_ID).getSheetByName('OPEX');
+  if (!reg) return null;
+  var regData = reg.getDataRange().getValues();
+  for (var i = 1; i < regData.length; i++){
+    if (String(regData[i][2] || '').trim() === loc){
+      var sheetId  = String(regData[i][3] || '').trim();
+      var listName = String(regData[i][4] || '').trim() || 'OPEX';
+      if (!sheetId) return null;
+      var sh = SpreadsheetApp.openById(sheetId).getSheetByName(listName);
+      return sh ? {sheet: sh, listName: listName} : null;
+    }
+  }
+  return null;
+}
+
+// v7.85 Дата рядка логу → число (для сортування). DMY / ISO; NaN якщо не розпізнано.
+function _opexDateNum(s){
+  s = String(s || '').trim();
+  var dmy = /^(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{2,4})/.exec(s);
+  if (dmy){ var y = Number(dmy[3]); if (y < 100) y += 2000; return new Date(y, Number(dmy[2]) - 1, Number(dmy[1])).getTime(); }
+  var iso = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(s);
+  if (iso){ return new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3])).getTime(); }
+  return NaN;
+}
+
+// v7.85 READ: OPEX_Витрати_Лог → рядки витрат. Фільтри loc(обов.)/year/month?/category?.
+// Сорт за датою платежу спадаюче. Контрагент — з мапи OPEX_Контрагенти за ЄДРПОУ.
+function getOpexExpensesLog(body){
+  try {
+    body = body || {};
+    var loc    = String(body.loc || '').trim();
+    var fYear  = Number(body.year) || 0;
+    var fMonth = Number(body.month) || 0;
+    var fCat   = String(body.category || '').trim().toLowerCase();
+    var sh = _opexEnsureCfgSheet(OPEX_EXP_LOG_SHEET, OPEX_EXP_LOG_HEADER, false);
+    if (!sh) return {ok: true, loc: loc, count: 0, items: []};
+    var data = sh.getDataRange().getValues();
+    // мапа ЄДРПОУ(лише цифри) → назва контрагента
+    var nameByEdr = {};
+    try { var gc = getOpexContractors(); if (gc && gc.items) gc.items.forEach(function(r){ var e = String(r.edrpou || '').replace(/\D/g, ''); if (e && r.name) nameByEdr[e] = r.name; }); } catch(_c){}
+    var items = [];
+    for (var i = 1; i < data.length; i++){
+      var r = data[i];
+      if (loc && String(r[0] || '').trim() !== loc) continue;
+      var date = String(r[2] || '').trim();
+      var ref  = String(r[3] || '').trim();
+      var edr  = String(r[4] || '').trim();
+      var amount = _opexNum(r[5]);
+      var cat  = String(r[6] || '').trim();
+      var mon  = Number(r[7]) || 0;
+      var when = (r[8] instanceof Date) ? r[8].toISOString() : String(r[8] || '');
+      var by   = String(r[9] || '').trim();
+      var status = String(r[10] || '').trim();   // v7.86: внесено/пропущено (порожнє = старі записи = внесено)
+      var reason = String(r[11] || '').trim();
+      if (fMonth && mon !== fMonth) continue;
+      if (fCat && cat.toLowerCase() !== fCat) continue;
+      var dnum = _opexDateNum(date);
+      if (fYear && !isNaN(dnum) && new Date(dnum).getFullYear() !== fYear) continue;
+      var sortKey = isNaN(dnum) ? (when ? (new Date(when).getTime() || 0) : 0) : dnum;
+      items.push({date: date, counterparty: (nameByEdr[edr.replace(/\D/g, '')] || ''), edrpou: edr,
+                  amount: amount, category: cat, month: mon, ref: ref, when: when, by: by,
+                  status: status, reason: reason, _sk: sortKey});
+    }
+    items.sort(function(a, b){ return b._sk - a._sk; });   // за датою спадаюче
+    items.forEach(function(x){ delete x._sk; });
+    return {ok: true, loc: loc, count: items.length, items: items};
+  } catch(e){ return {ok: false, error: String(e && e.message || e)}; }
+}
+
+// v7.85 Анти-дубль ключ: референс (або date+edrpou коли ref порожній) + сума + МІСЯЦЬ.
+// Місяць у ключі — щоб split-платежі з однаковою сумою у різні місяці однієї локації не
+// відсіювались хибно; порожній ref → запасний ключ date+edrpou+сума.
+function _opexDedupKey(ref, date, edrpou, amount, month){
+  var r = String(ref || '').trim();
+  var base = r ? ('r:' + r)
+               : ('d:' + String(date || '').trim() + '|' + String(edrpou || '').replace(/\D/g, ''));
+  return base + '|' + _opexNum(amount) + '|' + (Number(month) || 0);
+}
+
+// WRITE: додати суми витрат у OPEX (факт місяця). dryRun=true за замовчуванням.
+// items:[{category, amount, month, edrpou, ref, date, iban, note, loc, skip}].
+//   • it.loc — цільова локація рядка (за замовч. — глобальний body.loc); сума йде в OPEX-файл ТІЄЇ локації.
+//   • it.skip:true — рішення «не вносити»: в OPEX не пишемо, але в лог кладемо статус «пропущено» з причиною.
+// Анти-дубль (v7.85): референс+сума+місяць; порожній ref → date+edrpou+сума+місяць — пер-локаційно.
+function opexAddExpenses(body){
+  var lock = null;
+  try {
+    body = body || {};
+    var loc    = String(body.loc || '').trim();   // глобальна (за замовч.) локація виписки
+    var year   = Number(body.year) || new Date().getFullYear();
+    var defMon = Number(body.month) || 0;
+    var dryRun = (body.dryRun !== false);   // ⬅️ default TRUE (реальний запис лише dryRun:false)
+    var items  = Array.isArray(body.items) ? body.items : [];
+    var by     = String(body.by || body.markedBy || '').trim();
+    if (!loc) return {ok: false, error: 'loc обовʼязковий'};
+    if (!items.length) return {ok: false, error: 'items порожні'};
+
+    // v7.86: контекст OPEX-файлу кешується ПЕР-ЛОКАЦІЄЮ (рядки можуть іти в різні локації).
+    var ctxCache = {};
+    function getCtx(l){
+      l = String(l || '').trim();
+      if (ctxCache[l]) return ctxCache[l];
+      var ls = _opexLocSheet(l);
+      if (!ls) return (ctxCache[l] = {error: 'OPEX-файл для локації "' + l + '" не знайдено в реєстрі CONFIG.OPEX'});
+      var sheet = ls.sheet;
+      var lastRow = Math.max(sheet.getLastRow(), 30);
+      var lastCol = Math.max(sheet.getLastColumn(), 37);
+      var data = sheet.getRange(1, 1, lastRow, lastCol).getValues();
+      var catRow = {}, catList = [];   // catList — РЕАЛЬНІ назви рядків OPEX-файлу
+      for (var rn = 3; rn <= 30 && (rn - 1) < data.length; rn++){
+        var raw = String(data[rn - 1][0] || '').trim();
+        if (_opexIsSkippedCategory(raw)) continue;
+        var normNm = _opexNormalizeCategoryName(raw);
+        var nm = normNm.trim().toLowerCase();
+        if (!catRow.hasOwnProperty(nm)){ catRow[nm] = rn; catList.push(normNm); }   // перший збіг
+      }
+      return (ctxCache[l] = {sheet: sheet, catRow: catRow, catList: catList});
+    }
+    // глобальну локацію вимагаємо резолвабельною (для categories у відповіді)
+    var gctx = getCtx(loc);
+    if (gctx.error) return {ok: false, error: gctx.error};
+
+    // існуючий лог → анти-дубль ПЕР-ЛОКАЦІЄЮ; окремо реальні записи (блокують повторний запис)
+    // і пропуски (щоб не спамити журнал дублями рішень «не вносити»).
+    var logSh = _opexEnsureCfgSheet(OPEX_EXP_LOG_SHEET, OPEX_EXP_LOG_HEADER, !dryRun);
+    var seenWrite = {}, seenSkip = {};   // loc → {dedupKey:true}
+    if (logSh){
+      var ld = logSh.getDataRange().getValues();
+      for (var li = 1; li < ld.length; li++){
+        var lloc = String(ld[li][0] || '').trim();
+        if (!lloc) continue;
+        // лог 0-based: 2=Дата, 3=Референс, 4=ЄДРПОУ, 5=Сума, 7=Місяць, 10=Статус
+        var k = _opexDedupKey(ld[li][3], ld[li][2], ld[li][4], ld[li][5], ld[li][7]);
+        if (String(ld[li][10] || '').trim() === 'пропущено'){ (seenSkip[lloc] = seenSkip[lloc] || {})[k] = true; }
+        else { (seenWrite[lloc] = seenWrite[lloc] || {})[k] = true; }
+      }
+    }
+
+    if (!dryRun){
+      lock = LockService.getScriptLock();
+      try { lock.waitLock(30000); } catch(_le){ return {ok: false, error: 'LOCK_TIMEOUT — запис OPEX уже виконується'}; }
+      // one-time апгрейд ширини заголовка логу (старі листи мали 10 колонок)
+      if (logSh && logSh.getLastColumn() < OPEX_EXP_LOG_HEADER.length){
+        logSh.getRange(1, 1, 1, OPEX_EXP_LOG_HEADER.length).setValues([OPEX_EXP_LOG_HEADER]);
+      }
+    }
+
+    var results = [], written = 0, skipped = 0, formulaConverted = 0, now = new Date(), logRows = [];
+    items.forEach(function(it){
+      var iloc   = String(it.loc || '').trim() || loc;   // v7.86: цільова локація рядка
+      var amount = _opexNum(it.amount);
+      var mon    = Number(it.month) || defMon;
+      var ref    = String(it.ref || '').trim();
+      var date   = String(it.date || '').trim();
+      var edrpou = String(it.edrpou || '').trim();
+      var iban   = String(it.iban || body.iban || '').trim();
+      var isSkip = (it.skip === true);
+      var cat    = isSkip ? OPEX_SKIP_CAT : _opexNormalizeCategoryName(String(it.category || '').trim());
+      var out = {category: cat, amount: amount, month: mon, loc: iloc, row: null, before: null, after: null, skipped: false, reason: '', wasFormula: false};
+
+      // v7.86: рішення «не вносити» — в OPEX не пишемо, лише лог зі статусом «пропущено».
+      if (isSkip){
+        out.skipped = true; out.reason = 'не вносити (рішення)'; skipped++;
+        var kS = _opexDedupKey(ref, date, edrpou, amount, mon);
+        var alreadyS = seenSkip[iloc] && seenSkip[iloc][kS];
+        if (alreadyS){ out.reason = 'не вносити (вже у журналі)'; return results.push(out); }
+        if (!dryRun){
+          logRows.push([iloc, iban, date, ref, edrpou, amount, cat, (mon || ''), now, by, 'пропущено', out.reason]);
+          (seenSkip[iloc] = seenSkip[iloc] || {})[kS] = true;
+        }
+        return results.push(out);
+      }
+
+      var ctx = getCtx(iloc);
+      if (ctx.error){ out.skipped = true; out.reason = ctx.error; skipped++; return results.push(out); }
+      if (!cat){ out.skipped = true; out.reason = 'порожня категорія'; skipped++; return results.push(out); }
+      if (!mon || mon < 1 || mon > 12){ out.skipped = true; out.reason = 'некоректний місяць'; skipped++; return results.push(out); }
+      var row = ctx.catRow[cat.toLowerCase()];
+      if (!row){ out.skipped = true; out.reason = 'категорію не знайдено в OPEX-файлі'; skipped++; return results.push(out); }
+      // v7.85: анти-дубль референс+сума+місяць; порожній ref → date+edrpou+сума+місяць (пер-локаційно)
+      var dedupKey = _opexDedupKey(ref, date, edrpou, amount, mon);
+      if (seenWrite[iloc] && seenWrite[iloc][dedupKey]){ out.skipped = true; out.reason = 'уже застосовано (дубль)'; out.row = row; skipped++; return results.push(out); }
+
+      // 0-based факт місяця = (mon-1)*3+1 → 1-based для getRange: +1
+      var factCol1 = (mon - 1) * 3 + 1 + 1;
+      var cell = ctx.sheet.getRange(row, factCol1);
+      // v7.85: якщо у клітинці ФОРМУЛА — getValue() дає ОБЧИСЛЕНЕ значення (накопичене не втрачаємо),
+      // додаємо суму й пишемо число (формула замінюється числом, як у vac-export).
+      var wasFormula = false;
+      try { wasFormula = String(cell.getFormula() || '') !== ''; } catch(_f){}
+      var before = _opexNum(cell.getValue());
+      var after  = before + amount;
+      out.row = row; out.before = before; out.after = after; out.wasFormula = wasFormula;
+
+      if (!dryRun){
+        cell.setValue(after);
+        if (wasFormula) formulaConverted++;
+        logRows.push([iloc, iban, date, ref, edrpou, amount, cat, mon, now, by, 'внесено', '']);
+        (seenWrite[iloc] = seenWrite[iloc] || {})[dedupKey] = true;   // дубль у ЦЬОМУ ж батчі теж відсіється
+      }
+      written++;
+      results.push(out);
+    });
+
+    if (!dryRun && logRows.length && logSh){
+      logSh.getRange(logSh.getLastRow() + 1, 1, logRows.length, OPEX_EXP_LOG_HEADER.length).setValues(logRows);
+    }
+
+    // remember → мапа контрагентів (лише при реальному записі)
+    var remembered = 0;
+    if (!dryRun && Array.isArray(body.remember)){
+      body.remember.forEach(function(r){
+        var res = saveOpexContractor({edrpou: r.edrpou, name: r.name, category: r.category, loc: (r.loc || ''), by: by});
+        if (res && res.ok) remembered++;
+      });
+    }
+
+    return {ok: true, dryRun: dryRun, loc: loc, year: year,
+            written: written, skipped: skipped, remembered: remembered,
+            formulaConverted: formulaConverted, categories: gctx.catList,   // v7.85: реальні назви статей OPEX-файлу (глоб. локації)
+            results: results};
+  } catch(e){
+    return {ok: false, error: String(e && e.message || e)};
+  } finally {
+    if (lock){ try { lock.releaseLock(); } catch(_){} }
+  }
+}
+
 function _opexNormalize(value, normType, denoms) {
   if (normType === 'absolute' || normType === 'unknown') return value;
   var d;
@@ -5446,7 +5884,9 @@ function getDopMerges(params){
   }
 }
 
-// SAVE (upsert по loc+activityId+date). groups<2 → знімаємо обʼєднання (delete).
+// SAVE (v7.82 МУЛЬТИ-НАБОРИ): body.id → редагуємо ЦЕЙ набір; без id → ДОПИСУЄМО новий рядок
+// (не чіпаючи інші набори дня). Група — лише в ОДНОМУ наборі на (loc+activityId+date):
+// перетин з іншим набором → реджект. groups<2 (+id) → зняти цей набір.
 function saveDopMerge(body){
   var lock = LockService.getScriptLock();
   try { lock.waitLock(30000); }
@@ -5473,34 +5913,53 @@ function saveDopMerge(body){
 
     var sh = _getDopMergesSheet(true);
     var data = sh.getDataRange().getValues();
-    var foundRow = -1;
-    for (var i = 1; i < data.length; i++){
-      var r = _parseDopMergeRow(data[i]);
-      if (r.loc === loc && r.activityId === actId && r.date === date){ foundRow = i + 1; break; }
-    }
-
-    // <2 груп → це не обʼєднання: якщо був запис — видаляємо (розʼєднання).
-    if (groups.length < 2){
-      if (foundRow > 0){ sh.deleteRow(foundRow); return {ok: true, removed: true, unmerged: true}; }
-      return {ok: true, removed: false, unmerged: true};
-    }
-
-    var actName = String(body.activityName || (foundRow > 0 ? _parseDopMergeRow(data[foundRow - 1]).activityName : '')).trim();
+    var reqId   = Number(body.id) || 0;                     // v7.82: id набору для редагування
+    var actName = String(body.activityName || '').trim();
     var by      = String(body.by || body.markedBy || '').trim();
     var now     = new Date();
 
-    if (foundRow > 0){
-      // upsert: перезаписуємо групи/назву/ким/коли, id лишаємо.
-      var id = Number(data[foundRow - 1][0]) || _nextDopMergeId(sh);
-      sh.getRange(foundRow, 1, 1, DOP_MERGES_HEADER.length).setValues([[
-        id, loc, actId, actName, date, JSON.stringify(groups), by, now
-      ]]);
-      return {ok: true, id: id, updated: true, groups: groups};
-    } else {
-      var newId = _nextDopMergeId(sh);
-      sh.appendRow([newId, loc, actId, actName, date, JSON.stringify(groups), by, now]);
-      return {ok: true, id: newId, created: true, groups: groups};
+    // v7.82: <2 груп = розʼєднання. З id — видаляємо ЦЕЙ набір; без id — noop.
+    if (groups.length < 2){
+      if (reqId > 0){
+        for (var d1 = 1; d1 < data.length; d1++){
+          if ((Number(data[d1][0]) || 0) === reqId){ sh.deleteRow(d1 + 1); return {ok: true, removed: true, unmerged: true, id: reqId}; }
+        }
+      }
+      return {ok: true, removed: false, unmerged: true};
     }
+
+    // v7.82: група — лише в ОДНОМУ наборі на (loc, activityId, date). Звіряємо перетин з
+    // ІНШИМИ наборами того дня; свій редагований рядок (reqId) — пропускаємо.
+    var wantNorm = {};
+    groups.forEach(function(g){ wantNorm[_dopNormGroup(g)] = g; });
+    var editRow = -1;   // 1-based рядок листа нашого набору (для reqId)
+    for (var i = 1; i < data.length; i++){
+      var r = _parseDopMergeRow(data[i]);
+      if (r.loc !== loc || r.activityId !== actId || r.date !== date) continue;
+      if (reqId > 0 && r.id === reqId){ editRow = i + 1; continue; }
+      for (var k = 0; k < r.groups.length; k++){
+        var nk = _dopNormGroup(r.groups[k]);
+        if (wantNorm[nk]){
+          return {ok: false,
+                  error: 'Група «' + wantNorm[nk] + '» вже в іншому наборі цього дня. Спершу приберіть її з того набору.',
+                  conflictGroup: wantNorm[nk], conflictSetId: r.id};
+        }
+      }
+    }
+
+    if (reqId > 0){
+      // РЕДАГУВАННЯ конкретного набору за id.
+      if (editRow < 0) return {ok: false, error: 'Набір id=' + reqId + ' не знайдено для цієї трійки (loc/activityId/date)'};
+      if (!actName) actName = _parseDopMergeRow(data[editRow - 1]).activityName;
+      sh.getRange(editRow, 1, 1, DOP_MERGES_HEADER.length).setValues([[
+        reqId, loc, actId, actName, date, JSON.stringify(groups), by, now
+      ]]);
+      return {ok: true, id: reqId, updated: true, groups: groups};
+    }
+    // ДОПИСУВАННЯ нового набору (існуючі набори дня НЕ чіпаємо).
+    var newId = _nextDopMergeId(sh);
+    sh.appendRow([newId, loc, actId, actName, date, JSON.stringify(groups), by, now]);
+    return {ok: true, id: newId, created: true, groups: groups};
   } catch(e){
     return {ok: false, error: String(e && e.message || e)};
   } finally {
@@ -5526,12 +5985,20 @@ function deleteDopMerge(body){
     try { sh = _getDopMergesSheet(false); }
     catch(e){ return {ok: true, removed: false}; }
     var data = sh.getDataRange().getValues();
-    for (var i = 1; i < data.length; i++){
-      var r = _parseDopMergeRow(data[i]);
-      var hit = id ? (r.id === id) : (r.loc === loc && r.activityId === actId && r.date === date);
-      if (hit){ sh.deleteRow(i + 1); return {ok: true, removed: true}; }
+    if (id){
+      for (var i = 1; i < data.length; i++){
+        if ((Number(data[i][0]) || 0) === id){ sh.deleteRow(i + 1); return {ok: true, removed: true, count: 1}; }
+      }
+      return {ok: true, removed: false, count: 0};
     }
-    return {ok: true, removed: false};
+    // v7.82: by-(loc, activityId, date) → знімаємо ВСІ набори дня (не лише перший).
+    // Ітеруємо ЗНИЗУ вгору, бо deleteRow зсуває індекси.
+    var removed = 0;
+    for (var j = data.length - 1; j >= 1; j--){
+      var r = _parseDopMergeRow(data[j]);
+      if (r.loc === loc && r.activityId === actId && r.date === date){ sh.deleteRow(j + 1); removed++; }
+    }
+    return {ok: true, removed: removed > 0, count: removed};
   } catch(e){
     return {ok: false, error: String(e && e.message || e)};
   } finally {
@@ -7065,8 +7532,9 @@ function _getReconcileLogSheet(){
   return sh;
 }
 
-// ── ФАЗА 2: ЗАПИС. Вхід: {iban, by, items:[{childRow(0-based), childName, amount, date, ref, payerRaw}]}.
-//   Накопичувально (Факт += сума). Колонка — ТІЛЬКИ по шапці (−1 → помилка, без offset).
+// ── ФАЗА 2: ЗАПИС. Вхід: {iban, by, month?, items:[{childRow(0-based), childName, amount, date, ref, month?, payerRaw}]}.
+//   Накопичувально (Факт += сума). Колонка місяця (v7.85): пріоритет it.month > body.month >
+//   дата платежу > поточний місяць; далі — по шапці (−1 → помилка). Обраний місяць іде в лог.
 //   Ідемпотентність по Референсу (порожній → composite). Skip formula. LockService.
 function reconcileApply(body){
   var lock = LockService.getScriptLock();
@@ -7077,6 +7545,7 @@ function reconcileApply(body){
     var iban = trim(body.iban);
     var by   = trim(body.by) || '?';
     var items = body.items || [];
+    var bodyMonth = Number(body.month) || 0;   // v7.85: глобальний місяць-оверрайд (1-12), опційно
     var acct = _resolveAccountByIban(iban);
     if (!acct || !acct.loc) return {ok:false, error:'Рахунок "' + iban + '" не знайдено в Реквізити_Локацій'};
     var loc = acct.loc, type = acct.type;
@@ -7105,10 +7574,13 @@ function reconcileApply(body){
       if (applied[dupKey]){ skipped++; details.push({childName:childName, status:'skipped-dup', ref:ref}); return; }
       if (!(childRow >= 3) || childRow >= data.length){ errors++; details.push({childName:childName, status:'error', msg:'рядок поза межами'}); return; }
 
-      var d = _recParseDate(dateStr);
-      var jsMonth = d ? d.getMonth() : -1;
-      var monthCol0 = (jsMonth >= 0) ? _detectMonthColByHeader(data, jsMonth) : -1;
-      if (monthCol0 < 0){ errors++; details.push({childName:childName, status:'error', msg:'місяць не знайдено в шапці — НЕ записано'}); return; }
+      // v7.85: місяць колонки — пріоритет it.month > body.month > дата платежу > поточний.
+      var monOv = Number(it.month) || bodyMonth || 0;
+      var jsMonth;
+      if (monOv >= 1 && monOv <= 12){ jsMonth = monOv - 1; }
+      else { var d = _recParseDate(dateStr); jsMonth = d ? d.getMonth() : new Date().getMonth(); }
+      var monthCol0 = _detectMonthColByHeader(data, jsMonth);
+      if (monthCol0 < 0){ errors++; details.push({childName:childName, status:'error', msg:'місяць (' + (jsMonth + 1) + ') не знайдено в шапці — НЕ записано'}); return; }
       var factCol0 = _factColForType(monthCol0, it.type || type);
 
       var cell = paySh.getRange(childRow + 1, factCol0 + 1);
@@ -7880,6 +8352,7 @@ function determineTargetMonth(vacationMonth, vacationYear, entryTimestamp, kind)
 // details/notFound), але ЖОДНОГО запису: ні в клітинки Payment, ні в захист N+1, ні в
 // журнал. За замовчуванням false — поведінка всіх наявних викликів не змінюється.
 function exportVacationDiscountToPayments(params){
+  var _vacLock = null;   // v7.81
   try {
     var loc   = String(params.loc || '').trim();
     var month = Number(params.month);
@@ -7888,6 +8361,14 @@ function exportVacationDiscountToPayments(params){
     if (!loc) return {ok: false, error: 'Параметр loc обовʼязковий'};
     if (!month || month < 1 || month > 12) return {ok: false, error: 'month має бути 1-12'};
     var monthName = MONTHS_CAL_UA[month - 1];
+    // v7.81: спільний СКРИПТОВИЙ лок навколо реального запису (клітинка + журнал), щоб
+    // фронтовий і нічний тригерний виклики не перетнулись (гонка read→write журналу).
+    // dryRun (reconcile-розрахунок) НЕ блокуємо — він лише читає.
+    if (!dryRun){
+      _vacLock = LockService.getScriptLock();
+      try { _vacLock.waitLock(30000); }
+      catch(_le){ return {ok: false, error: 'LOCK_TIMEOUT — експорт відпустки вже виконується'}; }
+    }
 
     // === 1. Клієнти локації → знижка, що РОУТИТЬСЯ в таргет (month,year) ===
     var cliRes = getClients();
@@ -8049,6 +8530,8 @@ function exportVacationDiscountToPayments(params){
   } catch(e){
     Logger.log('[exportVacationDiscount] EXCEPTION: %s\n%s', e && e.message, e && e.stack);
     return {ok: false, error: String(e && e.message || e)};
+  } finally {
+    if (_vacLock){ try { _vacLock.releaseLock(); } catch(_re){} }   // v7.81
   }
 }
 
@@ -16324,8 +16807,9 @@ function _loadPredLessons(locFilter, year, month){
       if (!_ym || _ym.y !== _ymY || _ym.m !== _ymM) continue;
     }
     out.push({
+      // v7.83: empKey ПРИБРАНО — фронт його не читає (грід чіпляє за loc/group/subject/date,
+      // а empKey для збереження резолвиться з призначення/кандидатів). ~29% ваги lessons.
       id:      id,
-      empKey:  String(row[1] || '').trim(),
       loc:     loc,
       group:   String(row[3] || '').trim(),
       subject: String(row[4] || '').trim(),
