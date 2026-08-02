@@ -1,4 +1,15 @@
 // ═══════════════════════════════════════════════════════════════════════════
+// m.kids CRM — Google Apps Script v7.86
+// v7.86: getPredmetnyky ШВИДКІСТЬ (8–12с → ~1с при повторному відкритті). (1) Вузькі діапазони
+//        читання: _loadRealGroups читає ЛИШЕ колонки Локація+Група (а не getDataRange() з усіма
+//        ~40 колонками Клієнтів — це був найбільший single-read); _loadPredLessons читає лише перші
+//        6 колонок. Працює й без кешу. (2) КЕШ getPredmetnyky (дзеркало getPayments/getAttendance):
+//        ScriptCache, ключ pred_<scope|all>_<ver>_<year>_<month>, TTL 180с, чанки по 40k якщо >100КБ.
+//        ver = глобальний ключ 'predver' (timestamp), бампиться (_bumpPredVer) після УСПІШНОГО запису
+//        в усіх роутах: save/deletePredmetnykyLesson, clearAllPredmetnykyLessons, save/deletePredmetnyky
+//        Assignment, runPredmetnykyHrSeed, add/update/deletePredmetny (каталог), save/deletePredMerge,
+//        + seed норм. (3) Перевірка норми в savePredmetnykyLesson читає аркуш НАПРЯМУ (_loadPredLessons),
+//        без кешу — щоб не проскочити ліміт; кеш лише для GET-читання гріду.
 // m.kids CRM — Google Apps Script v7.85
 // v7.85: OPEX-витрати — 4 фікси в opexAddExpenses. (1) Анти-дубль: порожній референс → запасний
 //        ключ date+ЄДРПОУ+сума. (2) У ключ дедупу додано МІСЯЦЬ (split-платежі з однаковою сумою
@@ -359,7 +370,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.85', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.86', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -522,11 +533,22 @@ function doPost(e) {
     else if (body.action === 'refreshYearlyAggregate')      result = refreshYearlyAggregate();           // лише агрегат (швидко)
     else if (body.action === 'reexportLocation')            result = reexportLocationFull(body.loc || '', body.month, body.year); // кнопка "Перерахувати локацію": Payment+Salary+агрегат
     else result = {ok:false, error:'Unknown action'};
+    // v7.86: інвалідація кешу getPredmetnyky — бампимо predver після УСПІШНОГО запису,
+    // що змінює дані предметників (уроки/призначення/каталог/обʼєднання/норми/сіди).
+    if (result && result.ok && _PRED_WRITE_ACTIONS[body.action]) _bumpPredVer();
     return jsonOut(result);
   } catch(err) {
     return jsonOut({ok:false, error:err.message || String(err)});
   }
 }
+// v7.86: дії запису, що інвалідують кеш getPredmetnyky.
+var _PRED_WRITE_ACTIONS = {
+  savePredmetnykyLesson:1, deletePredmetnykyLesson:1, clearAllPredmetnykyLessons:1,
+  savePredmetnykyAssignment:1, deletePredmetnykyAssignment:1,
+  runPredmetnykyHrSeed:1,
+  addPredmetny:1, updatePredmetny:1, deletePredmetny:1,   // каталог
+  savePredMerge:1, deletePredMerge:1                       // обʼєднання
+};
 
 function jsonOut(data) {
   return ContentService
@@ -16850,6 +16872,7 @@ function _seedPredmetnykyNorms(){
   if (lastRow > 1) return {ok:true, skipped:true, msg:'Norms already exist ('+(lastRow-1)+' rows)'};
   sh.getRange(2, 1, PRED_NORMS_SEED.length, PRED_NORMS_HEADER.length)
     .setValues(PRED_NORMS_SEED);
+  _bumpPredVer();   // v7.86: зміна норм інвалідує кеш getPredmetnyky
   return {ok:true, seeded: PRED_NORMS_SEED.length};
 }
 
@@ -16904,15 +16927,20 @@ function _loadRealGroups(locFilter){
   var out = {};
   var sh = getCRMSpreadsheet().getSheetByName(SHEET_CLIENTS);
   if (!sh || sh.getLastRow() < 2) return out;
-  var data = sh.getDataRange().getValues();
-  var hdrs = data[0].map(String);
+  // v7.86 ШВИДКІСТЬ: читаємо ЛИШЕ колонки Локація+Група (а не getDataRange() з усіма ~40),
+  // це найбільший single-read у getPredmetnyky. Шапку читаємо окремо для пошуку колонок.
+  var lastRow = sh.getLastRow(), lastCol = sh.getLastColumn();
+  var hdrs = sh.getRange(1, 1, 1, lastCol).getValues()[0].map(String);
   var colLoc = hdrs.indexOf('Локація');  if (colLoc < 0) colLoc = 2;
   var colGrp = hdrs.indexOf('Група');    if (colGrp < 0) colGrp = 3;
+  var lo = Math.min(colLoc, colGrp), hi = Math.max(colLoc, colGrp);
+  var data = sh.getRange(2, lo + 1, lastRow - 1, hi - lo + 1).getValues();   // вузький діапазон (Локація+Група суміжні)
+  var iLoc = colLoc - lo, iGrp = colGrp - lo;
   var filter = String(locFilter || '').trim();
   var seen = {};                                   // "loc|group" → true
-  for (var i = 1; i < data.length; i++){
-    var loc = String(data[i][colLoc] || '').trim();
-    var grp = String(data[i][colGrp] || '').trim();
+  for (var i = 0; i < data.length; i++){
+    var loc = String(data[i][iLoc] || '').trim();
+    var grp = String(data[i][iGrp] || '').trim();
     if (!loc || !grp) continue;
     if (filter && loc !== filter) continue;
     var k = loc + '|' + grp;
@@ -17056,7 +17084,9 @@ function _loadPredLessons(locFilter, year, month){
   var sh = _getPredLessonsSheet();
   var lastRow = sh.getLastRow();
   if (lastRow < 2) return [];
-  var data = sh.getRange(2, 1, lastRow - 1, PRED_LESSONS_HEADER.length).getValues();
+  // v7.86 ШВИДКІСТЬ: читаємо лише перші 6 колонок (id,empKey,loc,group,subject,date) —
+  // Коли/Ким гріду не потрібні (empKey у відповідь не йде з v7.83, але потрібен write-path тут не викликається).
+  var data = sh.getRange(2, 1, lastRow - 1, 6).getValues();
   var out = [];
   var _ymY = Number(year) || 0, _ymM = Number(month) || 0;
   var _ymFilter = (_ymY > 0 && _ymM > 0);   // v7.80: опційний фільтр за місяцем
@@ -17088,6 +17118,27 @@ function _loadPredLessons(locFilter, year, month){
 // GET ?action=getPredmetnyky&actorId=N
 // {ok, teachers, norms (по group_type, всі), groups (реальні групи локацій,
 //  scoped), catalog (scoped), lessons (scoped), assignments, scope}
+// v7.86 КЕШ getPredmetnyky (дзеркало getPayments/getAttendance). ScriptCache, ключ
+// pred_<scope|all>_<ver>_<year>_<month>, TTL 180с. ver = глобальний ключ 'predver'
+// (timestamp), який бампиться у ВСІХ роутах запису предметників → миттєва інвалідація.
+// Відповідь може бути >100КБ → зберігаємо ЧАНКАМИ по 40k (кирилиця 2Б → <80КБ/чанк).
+function _bumpPredVer(){
+  try { CacheService.getScriptCache().put('predver', String(new Date().getTime()), 21600); } catch(_e){}  // TTL 6год
+}
+function _predCacheGet(cache, base){
+  var meta = cache.get(base + '_m'); if (!meta) return null;
+  var n = Number(meta) || 0; if (n <= 0) return null;
+  var keys = []; for (var i = 0; i < n; i++) keys.push(base + '_' + i);
+  var got = cache.getAll(keys), joined = '';
+  for (var j = 0; j < n; j++){ var p = got[base + '_' + j]; if (p == null) return null; joined += p; }
+  try { return JSON.parse(joined); } catch(_p){ return null; }
+}
+function _predCachePut(cache, base, obj, ttl){
+  var json = JSON.stringify(obj), CH = 40000, put = {}, cnt = 0;
+  for (var pos = 0; pos < json.length; pos += CH){ put[base + '_' + cnt] = json.substring(pos, pos + CH); cnt++; }
+  put[base + '_m'] = String(cnt);
+  cache.putAll(put, ttl || 180);
+}
 function getPredmetnyky(actorId, year, month){
   try {
     var actor = _getActor(actorId);
@@ -17095,9 +17146,22 @@ function getPredmetnyky(actorId, year, month){
     try { scope = _predViewScope(actor); }
     catch(e){ return {ok:false, error:'Permission denied', code:'PERM_DENIED'}; }
 
+    var yN = Number(year) || 0, mN = Number(month) || 0;
+    // --- спроба з кешу ---
+    var cache = null, base = '';
+    try { cache = CacheService.getScriptCache(); } catch(_c){ cache = null; }
+    if (cache){
+      try {
+        var ver = cache.get('predver') || '0';
+        base = 'pred_' + (scope || 'all') + '_' + ver + '_' + yN + '_' + mN;
+        var hit = _predCacheGet(cache, base);
+        if (hit){ hit.cached = true; return hit; }
+      } catch(_cr){ cache = null; }
+    }
+
     // v7.80: якщо задано year+month — уроки й обʼєднання віддаємо ЛИШЕ за цей місяць
     // (lessons = 90% ваги відповіді). teachers/norms/groups/catalog/assignments — повні.
-    return {
+    var resp = {
       ok:           true,
       teachers:     _loadPredTeachers(scope),
       norms:        _loadPredNorms(),               // матриця по group_type
@@ -17107,8 +17171,10 @@ function getPredmetnyky(actorId, year, month){
       assignments:  _loadPredAssignments(scope),
       predMerges:   _loadPredMergesList(scope, year, month),     // v7.20 обʼєднання; v7.80 місячний зріз
       scope:        scope || 'all',
-      slice:        (Number(year) > 0 && Number(month) > 0) ? {year: Number(year), month: Number(month)} : 'all'  // v7.80 діагностика
+      slice:        (yN > 0 && mN > 0) ? {year: yN, month: mN} : 'all'  // v7.80 діагностика
     };
+    if (cache && base){ try { _predCachePut(cache, base, resp, 180); } catch(_cw){} }
+    return resp;
   } catch(e){
     return {ok:false, error: e.message || String(e)};
   }
