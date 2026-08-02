@@ -1050,6 +1050,10 @@ async function rcOnFile(input){
   $('rcBanner').innerHTML=''; $('rcSummary').innerHTML=''; $('rcApplyBar').style.display='none';
   $('rcWrap').innerHTML='<div class="inv-loading">⏳ Парсинг…</div>';
   RC.parsed=[]; RC.groups=[];
+  // v7.86: нова виписка — повністю скидаємо стан режимів «Витрати» та «Журнал»,
+  // щоб локація/категорії/місяці/прапорець «Застосовано»/прев'ю не лишались від попереднього файлу.
+  rcResetOpexState();
+  rcResetLogState();
   try{
     for (var i=0;i<files.length;i++){
       var fname=files[i].name;
@@ -1057,7 +1061,25 @@ async function rcOnFile(input){
       catch(e){ RC.groups.push({fileName:fname, ok:false, error:String(e)}); }
     }
     await rcPreviewAll();
+    // якщо користувач лишався у «Витратах»/«Журналі» — перезавантажити їх під новий файл (заново resolveIbanLoc, категорії, контрагенти)
+    if(RC.mode==='expenses') await rcExpLoad();
+    else if(RC.mode==='log') await rcLogLoad();
   } finally { RC.busy=false; input.value=''; }   // value='' → повторний вибір тих самих файлів спрацює
+}
+// v7.86: повне скидання стану режиму «Витрати» (loc перевизначиться у rcExpLoad через resolveIbanLoc).
+function rcResetOpexState(){
+  RC.opex.loaded=false; RC.opex.busy=false;
+  RC.opex.loc=''; RC.opex.locAuto=false; RC.opex.locList=[];
+  RC.opex.cats=null; RC.opex.sel={}; RC.opex.month=0;
+  RC.opex.applied=false; RC.opex.preview=null;
+  // contractors перечитаються у rcExpLoad
+}
+// v7.86: скидання стану «Журналу» (loc перевизначиться за новим файлом при наступному відкритті).
+function rcResetLogState(){
+  RC.log.loaded=false; RC.log.busy=false;
+  RC.log.loc=''; RC.log.cats=null; RC.log.rows=[];
+  RC.log.month=0; RC.log.category=''; RC.log.search='';
+  // year лишаємо — поточний рік як розумний дефолт
 }
 
 // Прогін усіх розпарсених виписок через reconcilePreview (read-only) + рендер.
