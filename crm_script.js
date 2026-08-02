@@ -10,6 +10,21 @@
 //        контрагент з мапи, ЄДРПОУ, сума, категорія, місяць, референс, коли, ким; сорт за датою
 //        спадаюче). МІСЯЦЬ-ОВЕРРАЙД: витрати — it.month>body.month (вже було); надходження
 //        (reconcileApply) — додано it.month>body.month>дата>поточний, обраний місяць → колонка+лог.
+// v7.85+: OPEX per-item локація (it.loc → OPEX-файл тієї локації; дедуп/контекст пер-локаційно) та
+//        рішення «не вносити» (it.skip → в OPEX не пишеться, лог зі статусом «пропущено»+причина).
+//        Лог OPEX_Витрати_Лог розширено колонками Статус, Причина.
+// v7.85+ SALARY-ПРИЗНАЧЕННЯ ДОДАТКОВИХ: платіж ФОПу-викладачу (послуга, не штатна ЗП) можна писати
+//        у Salary-рядок секції extras, а не лише в OPEX-статтю. (1) Лист CONFIG «Salary_ФОП_Мапа»
+//        (ЄДРПОУ|Назва_ФОП|Локація|salaryRowNum|activityName|Правило_поділу|Ким|Коли) +
+//        getSalaryFopMap({loc})/saveSalaryFopBinding(...) — ключ цифри ЄДРПОУ, фолбек нормалізована
+//        назва; один рядок = один зв'язок (ФОП може вести кілька рядків). (2) getSalaryExtrasRows({loc})
+//        — рядки extras-секції {row,name,months[{month,fact}]} для випадайки. (3) salaryAddExtrasPayments(
+//        {loc,year,month,dryRun,items:[{salaryRowNum,amount,month,loc,edrpou,ref,date,skip,note}],remember})
+//        — пише у ФАКТ обраного місяця (кол. (month-1)*3+2, накопичувально; БЮДЖЕТ не чіпає), пер-item
+//        локація, формульні клітинки → читаємо обчислене+додаємо+пишемо числом, LockService, дедуп через
+//        той самий OPEX_Витрати_Лог (Категорія=«→Salary: <назва рядка>»), skip+remember як в OPEX,
+//        dryRun=TRUE за замовч. Записи видно у вкладці «Журнал витрат». Auto-експорт (Бюджет N+1) не
+//        зачеплено — колонки не перетинаються.
 // v7.84: OPEX ВИТРАТИ (бекенд). Лист CONFIG «OPEX_Контрагенти» (ЄДРПОУ|Назва|Категорія|Локація|
 //        Ким|Коли) + getOpexContractors/saveOpexContractor (upsert за ЄДРПОУ/назвою). Лист
 //        «OPEX_Витрати_Лог» (Локація|IBAN|Дата|Референс|ЄДРПОУ|Сума|Категорія|Місяць|Коли|Ким). Роут
@@ -367,6 +382,8 @@ function doGet(e) {
     else if (action === 'getOpexContractors')        result = getOpexContractors();                              // v7.84 мапа контрагентів
     else if (action === 'resolveIbanLoc')            result = resolveIbanLoc(e.parameter.iban || '');            // v7.84 IBAN→локація
     else if (action === 'getOpexExpensesLog')        result = getOpexExpensesLog({loc:e.parameter.loc||'', year:e.parameter.year||'', month:e.parameter.month||'', category:e.parameter.category||''}); // v7.85 читання логу витрат
+    else if (action === 'getSalaryFopMap')           result = getSalaryFopMap({loc:e.parameter.loc||''});         // v7.85+ мапа ФОП→Salary-рядки
+    else if (action === 'getSalaryExtrasRows')       result = getSalaryExtrasRows({loc:e.parameter.loc||''});     // v7.85+ рядки Salary extras для випадайки
     else if (action === 'getCategoryAnalytics')      result = getCategoryAnalytics(e.parameter.year || '', e.parameter.month || '');
     else if (action === 'getSalaryData')             result = getSalaryData(e.parameter.loc || '', e.parameter.year || '');
     else if (action === 'salaryReconcileRows')       result = salaryReconcileRows(e.parameter.loc || '');
@@ -464,6 +481,8 @@ function doPost(e) {
     else if (body.action === 'deleteDopMerge')            result = deleteDopMerge(body || {});
     else if (body.action === 'saveOpexContractor')        result = saveOpexContractor(body || {});   // v7.84 upsert контрагента
     else if (body.action === 'opexAddExpenses')           result = opexAddExpenses(body || {});      // v7.84 запис витрат у OPEX (dryRun за замовч.)
+    else if (body.action === 'saveSalaryFopBinding')      result = saveSalaryFopBinding(body || {});  // v7.85+ upsert зв'язку ФОП→Salary-рядок
+    else if (body.action === 'salaryAddExtrasPayments')   result = salaryAddExtrasPayments(body || {}); // v7.85+ запис платежу ФОПу у ФАКТ Salary-рядка (dryRun за замовч.)
     else if (body.action === 'savePredMerge')             result = savePredMerge(body || {});
     else if (body.action === 'deletePredMerge')           result = deletePredMerge(body || {});
     else if (body.action === 'addChomusykyMark')          result = addChomusykyMark(body.data || body || {});
@@ -4123,6 +4142,251 @@ function opexAddExpenses(body){
             written: written, skipped: skipped, remembered: remembered,
             formulaConverted: formulaConverted, categories: gctx.catList,   // v7.85: реальні назви статей OPEX-файлу (глоб. локації)
             results: results};
+  } catch(e){
+    return {ok: false, error: String(e && e.message || e)};
+  } finally {
+    if (lock){ try { lock.releaseLock(); } catch(_){} }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.85+ SALARY-ПРИЗНАЧЕННЯ ДОДАТКОВИХ: платіж ФОПу-викладачу пишеться у ФАКТ
+// рядка Salary секції extras (послуга, не штатна ЗП). Мапа ФОП→рядки, список
+// extras-рядків для випадайки, накопичувальний запис із дедупом через
+// той самий OPEX_Витрати_Лог (Категорія=«→Salary: <назва рядка>»).
+// ═══════════════════════════════════════════════════════════════════════════
+var SALARY_FOP_MAP_SHEET  = 'Salary_ФОП_Мапа';
+var SALARY_FOP_MAP_HEADER = ['ЄДРПОУ', 'Назва_ФОП', 'Локація', 'salaryRowNum', 'activityName', 'Правило_поділу', 'Ким', 'Коли'];
+
+// READ: мапа ФОП→Salary-рядки. Один ФОП може вести кілька рядків, тож
+// map[ключ] = МАСИВ зв'язків. Ключ — цифри ЄДРПОУ, фолбек нормалізована назва.
+function getSalaryFopMap(body){
+  try {
+    var loc = String((body && body.loc) || (typeof body === 'string' ? body : '')).trim();
+    var sh = _opexEnsureCfgSheet(SALARY_FOP_MAP_SHEET, SALARY_FOP_MAP_HEADER, false);
+    if (!sh) return {ok: true, loc: loc, map: {}, items: []};
+    var data = sh.getDataRange().getValues();
+    var map = {}, items = [];
+    for (var i = 1; i < data.length; i++){
+      var edrpou = String(data[i][0] || '').trim();
+      var name   = String(data[i][1] || '').trim();
+      var rloc   = String(data[i][2] || '').trim();
+      var salRow = Number(data[i][3]) || 0;
+      var act    = String(data[i][4] || '').trim();
+      var rule   = String(data[i][5] || '').trim();
+      if ((!edrpou && !name) || !salRow) continue;
+      if (loc && rloc !== loc) continue;
+      var rec = {edrpou: edrpou, name: name, loc: rloc, salaryRowNum: salRow, activityName: act, rule: rule};
+      var k = _opexContractorKey(edrpou, name);
+      (map[k] = map[k] || []).push(rec);
+      items.push(rec);
+    }
+    return {ok: true, loc: loc, map: map, items: items};
+  } catch(e){ return {ok: false, error: String(e && e.message || e)}; }
+}
+
+// UPSERT одного зв'язку (ФОП × salaryRowNum × loc). Ключ ФОПа — ЄДРПОУ/назва.
+function saveSalaryFopBinding(body){
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(30000); } catch(e){ return {ok: false, error: 'LOCK_TIMEOUT'}; }
+  try {
+    body = body || {};
+    var edrpou = String(body.edrpou || '').trim();
+    var name   = String(body.name   || '').trim();
+    var loc    = String(body.loc    || '').trim();
+    var salRow = Number(body.salaryRowNum) || 0;
+    var act    = String(body.activityName || '').trim();
+    var rule   = String(body.rule || '').trim();
+    var by     = String(body.by || body.markedBy || '').trim();
+    if (!edrpou && !name) return {ok: false, error: 'потрібен edrpou або name'};
+    if (!loc)    return {ok: false, error: 'loc обовʼязковий'};
+    if (!salRow) return {ok: false, error: 'salaryRowNum обовʼязковий'};
+    var sh = _opexEnsureCfgSheet(SALARY_FOP_MAP_SHEET, SALARY_FOP_MAP_HEADER, true);
+    var data = sh.getDataRange().getValues();
+    var key = _opexContractorKey(edrpou, name);
+    var now = new Date();
+    for (var i = 1; i < data.length; i++){
+      if (String(data[i][2] || '').trim() === loc
+          && (Number(data[i][3]) || 0) === salRow
+          && _opexContractorKey(data[i][0], data[i][1]) === key){
+        sh.getRange(i + 1, 1, 1, SALARY_FOP_MAP_HEADER.length).setValues([[
+          edrpou, name || String(data[i][1] || ''), loc, salRow,
+          act || String(data[i][4] || ''), rule, by, now
+        ]]);
+        return {ok: true, updated: true, key: key, salaryRowNum: salRow};
+      }
+    }
+    sh.appendRow([edrpou, name, loc, salRow, act, rule, by, now]);
+    return {ok: true, created: true, key: key, salaryRowNum: salRow};
+  } catch(e){ return {ok: false, error: String(e && e.message || e)}; }
+  finally { try { lock.releaseLock(); } catch(_){} }
+}
+
+// READ: рядки Salary секції extras для випадайки → {row, name, months:[{month, fact}]}.
+function getSalaryExtrasRows(body){
+  try {
+    var loc = String((body && body.loc) || (typeof body === 'string' ? body : '')).trim();
+    if (!loc) return {ok: false, error: 'loc обовʼязковий'};
+    var op = _salaryOpenSheet(loc); if (!op.ok) return op;
+    var sheet = op.sheet;
+    var lastRow = Math.max(sheet.getLastRow(), 80);
+    var lastCol = Math.max(sheet.getLastColumn(), 37);
+    var data = sheet.getRange(1, 1, lastRow, lastCol).getValues();
+    var rawRows = [];
+    for (var rowNum = 4; rowNum <= data.length; rowNum++){
+      var rowArr = data[rowNum - 1] || [];
+      var rawName = String(rowArr[0] || '').trim();
+      if (_salaryIsSkippedRow(rawName)) continue;
+      var tf = 0, tb = 0;
+      for (var m = 1; m <= 12; m++){
+        var fI = (m - 1) * 3 + 1, bI = (m - 1) * 3 + 2;
+        if (fI < lastCol) tf += _opexNum(rowArr[fI]);
+        if (bI < lastCol) tb += _opexNum(rowArr[bI]);
+      }
+      rawRows.push({row: rowNum, name: rawName, fact: tf, budget: tb});
+    }
+    var classified = _classifyAllSalaryRows(rawRows);
+    var rows = [];
+    classified.forEach(function(cr){
+      if (cr._section !== 'extras') return;
+      if (cr._category === 'section_header' || cr._category === 'group_header') return;
+      var rowArr = data[cr.row - 1] || [];
+      var months = [];
+      for (var mm = 1; mm <= 12; mm++){
+        var f = (mm - 1) * 3 + 1;
+        months.push({month: mm, fact: (f < lastCol ? _opexNum(rowArr[f]) : 0)});
+      }
+      rows.push({row: cr.row, name: cr.name, months: months});
+    });
+    return {ok: true, loc: loc, rows: rows};
+  } catch(e){ return {ok: false, error: String(e && e.message || e)}; }
+}
+
+// WRITE: платіж ФОПу-викладачу → ФАКТ обраного місяця Salary-рядка extras (накопичувально).
+// БЮДЖЕТ не чіпаємо (його веде авто-експорт exportToSalaryExtras — колонки не перетинаються).
+// items:[{salaryRowNum, amount, month, loc, edrpou, ref, date, skip, note}]. dryRun=TRUE за замовч.
+// Дедуп — той самий OPEX_Витрати_Лог (референс+сума+місяць пер-локаційно), Категорія=«→Salary: <рядок>».
+function salaryAddExtrasPayments(body){
+  var lock = null;
+  try {
+    body = body || {};
+    var loc    = String(body.loc || '').trim();
+    var year   = Number(body.year) || new Date().getFullYear();
+    var defMon = Number(body.month) || 0;
+    var dryRun = (body.dryRun !== false);   // default TRUE
+    var items  = Array.isArray(body.items) ? body.items : [];
+    var by     = String(body.by || body.markedBy || '').trim();
+    if (!loc) return {ok: false, error: 'loc обовʼязковий'};
+    if (!items.length) return {ok: false, error: 'items порожні'};
+
+    // контекст Salary-файлу пер-локацією (рядки можуть іти в різні локації)
+    var ctxCache = {};
+    function getCtx(l){
+      l = String(l || '').trim();
+      if (ctxCache[l]) return ctxCache[l];
+      var op = _salaryOpenSheet(l);
+      if (!op.ok) return (ctxCache[l] = {error: op.error || ('Salary-файл для локації "' + l + '" не знайдено')});
+      var sheet = op.sheet;
+      var lastRow = Math.max(sheet.getLastRow(), 80);
+      var lastCol = Math.max(sheet.getLastColumn(), 37);
+      var names = sheet.getRange(1, 1, lastRow, 1).getValues();   // для валідації рядка + назви у лог
+      return (ctxCache[l] = {sheet: sheet, lastRow: lastRow, lastCol: lastCol, names: names});
+    }
+    var gctx = getCtx(loc);
+    if (gctx.error) return {ok: false, error: gctx.error};
+
+    // дедуп через OPEX_Витрати_Лог — пер-локаційно; окремо реальні записи і пропуски
+    var logSh = _opexEnsureCfgSheet(OPEX_EXP_LOG_SHEET, OPEX_EXP_LOG_HEADER, !dryRun);
+    var seenWrite = {}, seenSkip = {};
+    if (logSh){
+      var ld = logSh.getDataRange().getValues();
+      for (var li = 1; li < ld.length; li++){
+        var lloc = String(ld[li][0] || '').trim();
+        if (!lloc) continue;
+        var k = _opexDedupKey(ld[li][3], ld[li][2], ld[li][4], ld[li][5], ld[li][7]);
+        if (String(ld[li][10] || '').trim() === 'пропущено'){ (seenSkip[lloc] = seenSkip[lloc] || {})[k] = true; }
+        else { (seenWrite[lloc] = seenWrite[lloc] || {})[k] = true; }
+      }
+    }
+
+    if (!dryRun){
+      lock = LockService.getScriptLock();
+      try { lock.waitLock(30000); } catch(_le){ return {ok: false, error: 'LOCK_TIMEOUT — запис Salary уже виконується'}; }
+      if (logSh && logSh.getLastColumn() < OPEX_EXP_LOG_HEADER.length){
+        logSh.getRange(1, 1, 1, OPEX_EXP_LOG_HEADER.length).setValues([OPEX_EXP_LOG_HEADER]);
+      }
+    }
+
+    var results = [], written = 0, skipped = 0, formulaConverted = 0, now = new Date(), logRows = [];
+    items.forEach(function(it){
+      var iloc   = String(it.loc || '').trim() || loc;
+      var amount = _opexNum(it.amount);
+      var mon    = Number(it.month) || defMon;
+      var ref    = String(it.ref || '').trim();
+      var date   = String(it.date || '').trim();
+      var edrpou = String(it.edrpou || '').trim();
+      var iban   = String(it.iban || body.iban || '').trim();
+      var salRow = Number(it.salaryRowNum) || 0;
+      var isSkip = (it.skip === true);
+      var out = {salaryRowNum: salRow, row: salRow, name: '', amount: amount, month: mon, loc: iloc,
+                 before: null, after: null, skipped: false, reason: '', wasFormula: false};
+
+      // рішення «не вносити» — у Salary не пишемо, лог зі статусом «пропущено»
+      if (isSkip){
+        out.skipped = true; out.reason = 'не вносити (рішення)'; skipped++;
+        var kS = _opexDedupKey(ref, date, edrpou, amount, mon);
+        if (seenSkip[iloc] && seenSkip[iloc][kS]){ out.reason = 'не вносити (вже у журналі)'; return results.push(out); }
+        if (!dryRun){
+          logRows.push([iloc, iban, date, ref, edrpou, amount, '→Salary: (пропуск)', (mon || ''), now, by, 'пропущено', out.reason]);
+          (seenSkip[iloc] = seenSkip[iloc] || {})[kS] = true;
+        }
+        return results.push(out);
+      }
+
+      var ctx = getCtx(iloc);
+      if (ctx.error){ out.skipped = true; out.reason = ctx.error; skipped++; return results.push(out); }
+      if (!salRow || salRow < 4 || salRow > ctx.lastRow){ out.skipped = true; out.reason = 'некоректний salaryRowNum'; skipped++; return results.push(out); }
+      if (!mon || mon < 1 || mon > 12){ out.skipped = true; out.reason = 'некоректний місяць'; skipped++; return results.push(out); }
+      var rowName = String((ctx.names[salRow - 1] || [])[0] || '').trim();
+      out.name = rowName;
+      var dedupKey = _opexDedupKey(ref, date, edrpou, amount, mon);
+      if (seenWrite[iloc] && seenWrite[iloc][dedupKey]){ out.skipped = true; out.reason = 'уже застосовано (дубль)'; skipped++; return results.push(out); }
+
+      var factCol1 = (mon - 1) * 3 + 2;   // 1-based ФАКТ місяця (Бюджет=(mon-1)*3+3 не чіпаємо)
+      var cell = ctx.sheet.getRange(salRow, factCol1);
+      var wasFormula = false;
+      try { wasFormula = String(cell.getFormula() || '') !== ''; } catch(_f){}
+      var before = _opexNum(cell.getValue());
+      var after  = before + amount;
+      out.before = before; out.after = after; out.wasFormula = wasFormula;
+
+      if (!dryRun){
+        cell.setValue(after);
+        if (wasFormula) formulaConverted++;
+        logRows.push([iloc, iban, date, ref, edrpou, amount, '→Salary: ' + rowName, mon, now, by, 'внесено', '']);
+        (seenWrite[iloc] = seenWrite[iloc] || {})[dedupKey] = true;
+      }
+      written++;
+      results.push(out);
+    });
+
+    if (!dryRun && logRows.length && logSh){
+      logSh.getRange(logSh.getLastRow() + 1, 1, logRows.length, OPEX_EXP_LOG_HEADER.length).setValues(logRows);
+    }
+
+    // remember → мапа ФОП→рядок
+    var remembered = 0;
+    if (!dryRun && Array.isArray(body.remember)){
+      body.remember.forEach(function(r){
+        var res = saveSalaryFopBinding({edrpou: r.edrpou, name: r.name, loc: (r.loc || loc),
+          salaryRowNum: r.salaryRowNum, activityName: (r.activityName || ''), rule: (r.rule || ''), by: by});
+        if (res && res.ok) remembered++;
+      });
+    }
+
+    return {ok: true, dryRun: dryRun, loc: loc, year: year,
+            written: written, skipped: skipped, remembered: remembered,
+            formulaConverted: formulaConverted, results: results};
   } catch(e){
     return {ok: false, error: String(e && e.message || e)};
   } finally {
