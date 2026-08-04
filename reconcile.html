@@ -1253,9 +1253,9 @@ async function rcExpLoad(){
   RC.opex.locAuto = (locKeys.length===1);
   // 2) мапа контрагентів
   try{ var rc=await fetch(CFG.SCRIPT_URL+'?action=getOpexContractors',{redirect:'follow'}); var jc=await rc.json(); RC.opex.contractors=(jc&&jc.map)||{}; }catch(e){ RC.opex.contractors={}; }
-  // 3) повний список локацій — потрібен і для ручного вибору локації виписки,
-  //    і для пер-платіжної випадайки локації (v7.86: витрата з рахунку однієї локації в OPEX іншої)
-  try{ var rl=await fetch(CFG.SCRIPT_URL+'?action=getLocations',{redirect:'follow'}); var jl=await rl.json(); RC.opex.locList=((jl&&jl.data)||[]).map(function(x){return x.loc||x.name||x;}).filter(Boolean); }catch(e){ RC.opex.locList=[]; }
+  // 3) повний список локацій — потрібен і для ручного вибору локації виписки, і для пер-платіжної
+  //    випадайки локації. v7.87: джерело — OPEX-реєстр (включає шкільні OPEX-локації), а не Payment.
+  RC.opex.locList = await rcFetchOpexLocations();
   // 3.5) реальні категорії OPEX-файлу локації (фолбек — статичний _OPEX_CATS)
   RC.opex.cats = await rcFetchCats(RC.opex.loc);
   // 3.6) v7.86 Salary-призначення: мапа ФОП→рядки (мережева) + рядки extras для локації виписки
@@ -1287,17 +1287,24 @@ async function rcFetchCats(loc){
   }catch(e){}
   return null;
 }
+// v7.87: список локацій для «Витрат»/«Журналу» — з OPEX-реєстру (getOpexOverview.locations),
+// а не з Payment-реєстру (getLocations), щоб включати шкільні OPEX-локації («Школа Кар'єрна» тощо,
+// яких немає в Payment-реєстрі). Фолбек — [] (порожній список).
+async function rcFetchOpexLocations(){
+  try{
+    var r=await fetch(CFG.SCRIPT_URL+'?action=getOpexOverview&year='+encodeURIComponent(new Date().getFullYear()),{redirect:'follow'});
+    var j=await r.json();
+    if(j&&j.ok&&Array.isArray(j.locations)) return j.locations.map(function(x){return x.loc;}).filter(Boolean);
+  }catch(e){}
+  return [];
+}
 
 /* ═══════════════════ v7.86: ЖУРНАЛ ВИТРАТ (OPEX_Витрати_Лог) ═══════════════════ */
 async function rcLogLoad(){
   RC.log.busy=true;
   $('rcWrap').innerHTML=rcModeSwitchHtml()+'<div class="inv-empty">Завантаження журналу…</div>';
-  // список локацій для фільтра
-  try{
-    var rl=await fetch(CFG.SCRIPT_URL+'?action=getLocations',{redirect:'follow'});
-    var jl=await rl.json();
-    RC.log.locList=((jl&&jl.data)||[]).map(function(x){return x.loc||x.name||x;}).filter(Boolean);
-  }catch(e){ RC.log.locList=[]; }
+  // список локацій для фільтра — v7.87: з OPEX-реєстру (getOpexOverview), як і у «Витратах»
+  RC.log.locList = await rcFetchOpexLocations();
   // дефолтна локація: та, що визначилась у режимі витрат, інакше перша зі списку
   if(!RC.log.loc) RC.log.loc = RC.opex.loc || RC.log.locList[0] || '';
   RC.log.cats = await rcFetchCats(RC.log.loc);
