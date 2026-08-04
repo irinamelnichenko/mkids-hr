@@ -1,5 +1,10 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.86
+// m.kids CRM — Google Apps Script v7.87
+// v7.87: addLocPaymentDop({loc,month,year,name,delta,dryRun}) — точкове коригування колонки
+//        «Бюджет доп» (offset +3, НЕ +4/навчання) у пер-лок Payment-файлі. ДОДАЄ delta до
+//        клітинки (не перезапис абсолютом → перенесені борги/переплати зберігаються). Якщо
+//        after<0 — відмова. dryRun=true за замовч. (повертає before/after/wasFormula). Матч
+//        дитини за _normNameVac з guard на кілька збігів. Формула у клітинці → замінюється числом.
 // v7.86: getPredmetnyky ШВИДКІСТЬ (8–12с → ~1с при повторному відкритті). (1) Вузькі діапазони
 //        читання: _loadRealGroups читає ЛИШЕ колонки Локація+Група (а не getDataRange() з усіма
 //        ~40 колонками Клієнтів — це був найбільший single-read); _loadPredLessons читає лише перші
@@ -370,7 +375,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.86', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.87', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -477,6 +482,7 @@ function doPost(e) {
     else if (body.action === 'mergeClientDuplicate')     result = mergeClientDuplicate(body || {}); // v7.44 злиття дублів
     else if (body.action === 'patchClientCell')          result = patchClientCell(body || {});    // v7.44 точкова правка клітинки
     else if (body.action === 'setLocPaymentBudget')      result = setLocPaymentBudget(body || {}); // v7.57 відновлення клітинки пер-лок бюджету
+    else if (body.action === 'addLocPaymentDop')         result = addLocPaymentDop(body || {}); // v7.87 +delta у «Бюджет доп»
     else if (body.action === 'setLocPaymentName')        result = setLocPaymentName(body || {});   // v7.60 вирівняти імʼя Payment під картку
     else if (body.action === 'syncMissingClients')       result = syncMissingClientsFromPayments({dryRun:(body.dryRun===true), confirm:'YES_WRITE', locScope:(body.locScope||'kindergartens')}); // v7.60 кнопка «Синхронізувати відсутніх» (садочки)
     else if (body.action === 'remapAttendanceId')        result = remapAttendanceId(body || {});   // v7.60 точковий ремап осиротілого ID Табеля
@@ -9010,6 +9016,49 @@ function setLocPaymentBudget(body){
     } catch(_j){}
     return {ok:true, loc:loc, month:month, name:name, before:before, after:value, disc:disc};
   } catch(e){ return {ok:false,error:String(e&&e.message||e)}; }
+}
+
+// POST ?action=addLocPaymentDop {loc, month, year, name, delta, dryRun}.
+// v7.87: ДОДАЄ delta до колонки «Бюджет доп» (offset +3 — НЕ +4/навчання!) у пер-лок Payment-файлі.
+// Не перезаписує абсолютом → перенесені борги/переплати не затираються. Якщо after<0 — відмова.
+// dryRun=true за замовч. Матч дитини за нормалізованим ПІБ (_normNameVac), guard на кілька збігів.
+function addLocPaymentDop(body){
+  try {
+    var loc    = String(body.loc || '').trim();
+    var month  = Number(body.month);
+    var year   = Number(body.year) || new Date().getFullYear();
+    var name   = String(body.name || '').trim();
+    var delta  = Number(body.delta);
+    var dryRun = (body.dryRun !== false);   // default TRUE (реальний запис лише dryRun:false)
+    if (!loc || !month || month < 1 || month > 12 || !name || isNaN(delta))
+      return {ok:false, error:'loc/month(1-12)/name/delta обовʼязкові'};
+    var reg = _getLocationPaymentRegistry(loc);
+    if (!reg || !reg.sheetId) return {ok:false, error:'Локацію "' + loc + '" не знайдено в реєстрі'};
+    var ss = SpreadsheetApp.openById(reg.sheetId);
+    var paySh = ss.getSheetByName(reg.sheetName) || ss.getSheets()[0];
+    var data = paySh.getDataRange().getValues();
+    // 5 колонок/місяць: Факт навч|Факт вступ|Факт доп|«БЮДЖЕТ ДОП»(+3)|Бюджет навч(+4).
+    var budgetDopCol1 = 1 + (month - 1) * 5 + 3 + 1;   // 1-based (січ = 5)
+    var nk = _normNameVac(name);
+    var DATA_START = 3, rowIdx = -1, matches = 0;
+    for (var r = DATA_START; r < data.length; r++){
+      var nm = trim(String(data[r][0] || ''));
+      if (!nm || isGroupHeaderRow(data[r], 1)) continue;
+      if (_normNameVac(nm) === nk){ rowIdx = r; matches++; }
+    }
+    if (matches === 0) return {ok:false, error:'Рядок "' + name + '" не знайдено у файлі ' + loc};
+    if (matches > 1)  return {ok:false, error:'Кілька рядків "' + name + '" у файлі ' + loc + ' — не чіпаю', matches:matches};
+    var cell = paySh.getRange(rowIdx + 1, budgetDopCol1);
+    var wasFormula = false;
+    try { wasFormula = String(cell.getFormula() || '') !== ''; } catch(_f){}
+    var before = Number(cell.getValue()) || 0;   // formula → обчислене значення
+    var after  = before + delta;
+    if (after < 0) return {ok:false, error:'Результат відʼємний (' + after + ') — не пишу', before:before, delta:delta};
+    if (!dryRun) cell.setValue(after);            // формула замінюється числом (як в export/dop-manual)
+    return {ok:true, dryRun:dryRun, loc:loc, month:month, year:year,
+            name:trim(String(data[rowIdx][0])), col:budgetDopCol1,
+            before:before, delta:delta, after:after, wasFormula:wasFormula};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 
 // v7.60 setLocPaymentName: точкова правка КЛІТИНКИ ІМЕНІ (col A) у пер-лок Payment-файлі.
