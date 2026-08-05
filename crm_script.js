@@ -1,5 +1,12 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.88
+// m.kids CRM — Google Apps Script v7.89
+// v7.89: exportAttendanceToPayments B1–B3 — маршрут «Бюджет доп» за датою КОЖНОЇ відмітки
+//        (target = _nextMonth(місяць відмітки); 30.06 → липень завжди), бакети (ПІБ×target),
+//        запис через журнальну дельту base+newSum ключем (loc,'payment',ПІБ,targetY,targetM).
+//        Головний режим (без params.month) перераховує ВЕСЬ рік із поточних відміток та очищає
+//        місяці, де відмітки зникли (_journalMonthsForPayment); params.month лишився для сумісності
+//        (один source-місяць). Ідемпотентно: повтор дає той самий результат — фікс кейсу Пущі,
+//        де Театр 30.06 потрапляв у кілька місяців.
 // v7.88: _VAC_EXCEPTIONS += «букін михайло» (Борщагівка, договір 2026-02-15 ≥ 01.10.2025 → тип 'new',
 //        відпустка ігнорувалась). Виняток повертає йому 'standard' (відпустка рахується). Дзеркало
 //        фронтового VAC_EXCEPTIONS у clients.html.
@@ -378,7 +385,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.88', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.89', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -7333,214 +7340,156 @@ function _commitJournalUpdates(journal, ops){
   }
 }
 
+// v7.89: distinct target-місяці у Експорт_Журнал для (loc,'payment',year) — щоб повний прохід
+// exportAttendanceToPayments очищав місяці, де відмітки зникли (навіть якщо зараз їх нема в бакетах).
+function _journalMonthsForPayment(loc, year){
+  var sh = _getExportJournalSheet();
+  var data = sh.getDataRange().getValues();
+  var seen = {}, out = [];
+  for (var r = 1; r < data.length; r++){
+    if (trim(String(data[r][0])) !== loc) continue;
+    if (trim(String(data[r][1])) !== 'payment') continue;
+    if (Number(data[r][3]) !== Number(year)) continue;
+    var m = Number(data[r][4]) || 0;
+    if (m >= 1 && m <= 12 && !seen[m]){ seen[m] = true; out.push(m); }
+  }
+  return out;
+}
+
 function exportAttendanceToPayments(params){
   try {
     var loc = String(params.loc || '').trim();
-    var month = Number(params.month);
-    var year = Number(params.year) || new Date().getFullYear();
     if (!loc) return {ok: false, error: 'Параметр loc обовʼязковий'};
-    if (!month || month < 1 || month > 12) return {ok: false, error: 'month має бути 1-12'};
+    var year = Number(params.year) || new Date().getFullYear();
+    var srcMonthOne = Number(params.month) || 0;   // опційно: лише цей source-місяць (сумісність)
+    if (srcMonthOne && (srcMonthOne < 1 || srcMonthOne > 12)) return {ok:false, error:'month має бути 1-12'};
+    Logger.log('[exportAttendanceToPayments] START loc="%s" year=%s srcMonthOne=%s', loc, year, srcMonthOne);
 
-    Logger.log('[exportAttendanceToPayments] START loc="%s" month=%s year=%s', loc, month, year);
-
-    var monthName = MONTHS_CAL_UA[month - 1];
-
-    // === 1. Підраховуємо суму додаткових для кожної дитини за вказаний місяць ===
+    // === 1. Відмітки → бакети (ПІБ × target-місяць). target = _nextMonth(місяць САМОЇ відмітки). ===
+    // Відмітка 30.06 → липень ЗАВЖДИ, незалежно від параметрів запуску.
     var attSh = _getAttendanceSheet(false);
     var attData = attSh.getDataRange().getValues();
-    var mm = month < 10 ? '0' + month : String(month);
-    var dateFrom = year + '-' + mm + '-01';
-    var nextM = _nextMonth(month, year);
-    var nmm = nextM.month < 10 ? '0' + nextM.month : String(nextM.month);
-    var dateTo = nextM.year + '-' + nmm + '-01';
-    Logger.log('[exportAttendanceToPayments] фільтр дат: [%s .. %s)  attData.length=%s', dateFrom, dateTo, attData.length);
-
-    var sumPerChild = {};
-    var passedRecords = 0;
-    var skippedByLoc = 0;
-    var skippedByDate = 0;
+    var buckets = {};          // { childName: { targetM(1..12): sum } } — лише target у межах `year`
+    var monthsTouched = {};
+    var srcMonthsSeen = {};
     for (var i = 1; i < attData.length; i++){
       var rec = _parseAttendanceRow(attData[i]);
-      if (rec.loc !== loc){ skippedByLoc++; continue; }
-      if (rec.date < dateFrom || rec.date >= dateTo){
-        skippedByDate++;
-        Logger.log('[exportAttendanceToPayments] skip-by-date: child="%s" date="%s" (поза [%s..%s))', rec.child, rec.date, dateFrom, dateTo);
-        continue;
-      }
-      passedRecords++;
-      sumPerChild[rec.child] = (sumPerChild[rec.child] || 0) + (rec.price || 0);
+      if (rec.loc !== loc) continue;
+      var mday = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(rec.date || ''));
+      if (!mday) continue;
+      var srcY = Number(mday[1]), srcM = Number(mday[2]);
+      if (srcMonthOne && !(srcY === year && srcM === srcMonthOne)) continue;   // фільтр source-місяця
+      var t = _nextMonth(srcM, srcY);              // ← ключове: target від дати ВІДМІТКИ
+      if (t.year !== year) continue;               // ціль поза роком файлу (напр. груд→січ) — інший файл
+      srcMonthsSeen[srcY + '-' + srcM] = true;
+      buckets[rec.child] = buckets[rec.child] || {};
+      buckets[rec.child][t.month] = (buckets[rec.child][t.month] || 0) + (rec.price || 0);
+      monthsTouched[t.month] = true;
     }
-    Logger.log('[exportAttendanceToPayments] attendance: passed=%s, skippedByLoc=%s, skippedByDate=%s', passedRecords, skippedByLoc, skippedByDate);
-    Logger.log('[exportAttendanceToPayments] sumPerChild keys = %s', JSON.stringify(Object.keys(sumPerChild)));
-    Logger.log('[exportAttendanceToPayments] sumPerChild = %s', JSON.stringify(sumPerChild));
 
-    // === 2. Відкриваємо файл локації через CONFIG ===
+    // === 2. Payment-файл локації + індекс імен ===
     var reg = _getLocationPaymentRegistry(loc);
-    if (!reg || !reg.sheetId){
-      Logger.log('[exportAttendanceToPayments] ERROR: локацію "%s" не знайдено в CONFIG', loc);
-      return {ok: false, error: 'Локацію "' + loc + '" не знайдено в CONFIG-реєстрі'};
-    }
-    Logger.log('[exportAttendanceToPayments] registry: sheetId="%s" sheetName="%s"', reg.sheetId, reg.sheetName);
+    if (!reg || !reg.sheetId) return {ok: false, error: 'Локацію "' + loc + '" не знайдено в CONFIG-реєстрі'};
     var paymentSS = SpreadsheetApp.openById(reg.sheetId);
     var paySh = paymentSS.getSheetByName(reg.sheetName) || paymentSS.getSheets()[0];
-    if (!paySh){
-      Logger.log('[exportAttendanceToPayments] ERROR: лист "%s" не знайдено', reg.sheetName);
-      return {ok: false, error: 'Лист "' + reg.sheetName + '" не знайдено у файлі локації'};
-    }
-
-    var data = paySh.getDataRange().getValues();
-    Logger.log('[exportAttendanceToPayments] Payment-лист "%s" відкрито, rows=%s', paySh.getName(), data.length);
-
-    // === 3. Обчислюємо колонку місяця-ТАРГЕТУ (місяць + 1) ===
-    var targetMonthIdx = nextM.month - 1;
-    var monthStartCol0 = 1 + targetMonthIdx * 5;
-    var budgetDopColIdx = monthStartCol0 + 3;
-    var budgetDopCol1 = budgetDopColIdx + 1;
-    var targetMonthName = MONTHS_CAL_UA[targetMonthIdx];
-    Logger.log('[exportAttendanceToPayments] target month: idx=%s (%s), Бюджет доп col=%s (1-based)', targetMonthIdx, targetMonthName, budgetDopCol1);
-
-    // === 4. Толерантний матч імен (lowercase + видалити ВСІ whitespace — пробіли, NBSP, табуляції) ===
-    // "Волков Матвій" / "волков  матвій" / "Волков\u00A0Матвій" / "ВОЛКОВ\tМАТВІЙ" → "волковматвій"
-    function _normName(s){
-      return String(s || '').replace(/[\s\u00A0]+/g, '').toLowerCase();
-    }
+    if (!paySh) return {ok: false, error: 'Лист "' + reg.sheetName + '" не знайдено у файлі локації'};
+    var data     = paySh.getDataRange().getValues();
+    var formulas = paySh.getDataRange().getFormulas();   // один зайвий read замість 12 пер-місячних
+    function _normName(s){ return String(s || '').replace(/[\s ]+/g, '').toLowerCase(); }
     var DATA_START = 3;
-    var matchedRows = {};   // {childName_з_attendance: rowIdx (0-based) у Payment}
-    var paymentByNorm = {}; // {normName: rowIdx (0-based)} — індекс по Payment-листу
-    var paymentNames = [];  // діагностика: усі імена, що ми побачили в Payment
+    var paymentByNorm = {};   // normName → rowIdx0 (перше співпадіння)
     for (var r = DATA_START; r < data.length; r++){
       var nameCell = trim(String(data[r][0] || ''));
-      if (!nameCell) continue;
-      if (isGroupHeaderRow(data[r], 1)) continue;
-      paymentNames.push(nameCell);
-      var nk = _normName(nameCell);
-      // ПЕРШЕ співпадіння імені (якщо тезки в різних групах — пише в першу)
-      if (!paymentByNorm.hasOwnProperty(nk)) paymentByNorm[nk] = r;
+      if (!nameCell || isGroupHeaderRow(data[r], 1)) continue;
+      var nk0 = _normName(nameCell);
+      if (!paymentByNorm.hasOwnProperty(nk0)) paymentByNorm[nk0] = r;
     }
-    Logger.log('[exportAttendanceToPayments] paymentNames.length=%s, перші 10: %s', paymentNames.length, JSON.stringify(paymentNames.slice(0, 10)));
 
-    Object.keys(sumPerChild).forEach(function(childName){
+    // buckets(childName) → sumByNormTarget(normName) : { names, m:{targetM:sum} }
+    var sumByNormTarget = {};
+    Object.keys(buckets).forEach(function(childName){
       var nk = _normName(childName);
-      if (paymentByNorm.hasOwnProperty(nk)){
-        matchedRows[childName] = paymentByNorm[nk];
-        Logger.log('[exportAttendanceToPayments] MATCH: "%s" (norm="%s") → row %s', childName, nk, paymentByNorm[nk] + 1);
-      } else {
-        Logger.log('[exportAttendanceToPayments] NO-MATCH: "%s" (norm="%s") — серед %s імен Payment-листа збігу немає', childName, nk, paymentNames.length);
-      }
+      var tgt = sumByNormTarget[nk] = sumByNormTarget[nk] || {names:{}, m:{}};
+      tgt.names[childName] = true;
+      Object.keys(buckets[childName]).forEach(function(m){ tgt.m[m] = (tgt.m[m] || 0) + buckets[childName][m]; });
     });
 
-    // === 5. РОЗУМНЕ ПЕРЕЗАПИСУВАННЯ через журнал ===
-    // Для кожного child-рядка:
-    //   currentValue = поточне значення клітинки
-    //   lastWritten  = скільки ми поклали туди минулого разу (з журналу)
-    //   baseValue    = currentValue - lastWritten   (ручні поправки фінансиста)
-    //   newSum       = сума з sumPerChild або 0 якщо галочки зняті
-    //   newCell      = baseValue + newSum
-    // Журнал → нова newSum (lastWritten для наступного запуску).
-    //
-    // ⚠️ ПЕРШИЙ запуск після впровадження журналу: lastWritten=0, baseValue
-    //    дорівнює поточному значенню → подвоєння попередніх код-записаних сум.
-    //    Якщо колонка не порожня — обнули її руками одноразово перед запуском.
-    var lastSheetRow = paySh.getLastRow();
-    var colValues   = paySh.getRange(1, budgetDopCol1, lastSheetRow, 1).getValues();
-    var colFormulas = paySh.getRange(1, budgetDopCol1, lastSheetRow, 1).getFormulas();
-    var journal = _readJournalForTarget(loc, 'payment', nextM.year, nextM.month);
-    Logger.log('[exportAttendanceToPayments] journal: %s записів для (%s, payment, %s/%s)', Object.keys(journal.byNormName).length, loc, nextM.year, nextM.month);
+    // === 3. Які target-місяці обробляти ===
+    // full (без month): місяці з відмітками + місяці, наявні в журналі payment (щоб очистити ті,
+    // де відмітки зникли). single (з month): лише _nextMonth(month).
+    var monthsToProcess = {};
+    if (srcMonthOne){
+      var tOne = _nextMonth(srcMonthOne, year);
+      if (tOne.year === year) monthsToProcess[tOne.month] = true;
+    } else {
+      Object.keys(monthsTouched).forEach(function(m){ monthsToProcess[Number(m)] = true; });
+      _journalMonthsForPayment(loc, year).forEach(function(m){ monthsToProcess[m] = true; });
+    }
+    var monthList = Object.keys(monthsToProcess).map(Number).sort(function(a,b){ return a - b; });
 
-    var sumByNorm = {};
-    Object.keys(sumPerChild).forEach(function(childName){
-      sumByNorm[_normName(childName)] = {name: childName, sum: sumPerChild[childName]};
+    // === 4. Пер-місячний запис через журнальну дельту (base + newSum) ===
+    // baseValue = поточне − last_written(журнал(loc,'payment',ПІБ,target)); newCell = base + newSum.
+    // Ідемпотентно: повтор дає той самий результат; повний прохід самокоригується.
+    var updated = 0, totalAmount = 0, cellsWritten = 0, formulaConverted = 0;
+    var details = [], perMonth = [];
+    monthList.forEach(function(m){
+      var budgetDopCol1 = 1 + (m - 1) * 5 + 3 + 1;   // «Бюджет доп» місяця m (offset +3)
+      var col0 = budgetDopCol1 - 1;
+      var journal = _readJournalForTarget(loc, 'payment', year, m);
+      var journalOps = [], mUpd = 0, mSum = 0;
+      Object.keys(paymentByNorm).forEach(function(nk){
+        var rowIdx0      = paymentByNorm[nk];
+        var wasFormula   = !!(formulas[rowIdx0] && formulas[rowIdx0][col0]);
+        var paymentName  = trim(String(data[rowIdx0][0] || ''));
+        var currentValue = Number(data[rowIdx0][col0]) || 0;   // getValues → обчислене значення формули
+        var je           = journal.byNormName[nk];
+        var lastWritten  = je ? je.sum : 0;
+        var baseValue    = currentValue - lastWritten;
+        var st           = sumByNormTarget[nk];
+        var newSum       = (st && st.m[m]) ? st.m[m] : 0;
+        var newValue     = baseValue + newSum;
+        if (newValue !== currentValue){
+          paySh.getRange(rowIdx0 + 1, budgetDopCol1).setValue(newValue);   // формула → число тут же
+          cellsWritten++; if (wasFormula) formulaConverted++;
+        }
+        if (newSum !== lastWritten){
+          journalOps.push({nk:nk, loc:loc, kind:'payment', name:paymentName, year:year, month:m, newSum:newSum});
+        }
+        if (newSum !== 0 || lastWritten !== 0){
+          details.push({child: paymentName, month: m, sum: newSum, currentBefore: currentValue,
+            lastWritten: lastWritten, baseValue: baseValue, newCell: newValue, row: rowIdx0 + 1,
+            status: (newSum !== 0 ? 'updated' : 'cleared')});
+          if (newSum !== 0){ mUpd++; mSum += newSum; }
+        }
+      });
+      _commitJournalUpdates(journal, journalOps);
+      updated += mUpd; totalAmount += mSum;
+      perMonth.push({month: m, monthName: MONTHS_CAL_UA[m-1], updated: mUpd, sum: mSum, ops: journalOps.length});
+      Logger.log('[exportAttendanceToPayments] target %s (%s): updated=%s sum=%s ops=%s', m, MONTHS_CAL_UA[m-1], mUpd, mSum, journalOps.length);
     });
 
-    var updated = 0;
-    var totalAmount = 0;
-    var details = [];
-    var matchedChildren = {};
-    var journalOps = [];
-    var cellsWritten = 0;
-    var formulaConverted = 0;
-
-    // ⚠️ ТОЧКОВИЙ запис: setValue() ЛИШЕ у child-рядки (paymentByNorm побудований без
-    // group-headers), і лише якщо значення змінилось.
-    // v6.x: формульні child-рядки БІЛЬШЕ НЕ пропускаємо (дзеркало exportVacationDiscountToPayments):
-    // getValues() дає ОБЧИСЛЕНЕ значення формули (напр. ручне =-50 → -50) — воно стає базою,
-    // setValue замінює формулу числом, зверху додаються додаткові (−50 + 1350 = 1300).
-    // Підсумкові =SUM-рядки НЕ чіпаються: вони або group-header (не в paymentByNorm), або
-    // не матчать дитину → newSum=0, lastWritten=0 → newValue===currentValue → запису немає.
-    Object.keys(paymentByNorm).forEach(function(nk){
-      var rowIdx0 = paymentByNorm[nk];
-      var wasFormula   = !!(colFormulas[rowIdx0] && colFormulas[rowIdx0][0]);
-      var paymentName  = trim(String(data[rowIdx0][0] || ''));
-      var currentValue = Number(colValues[rowIdx0][0]) || 0;   // результат формули (getValues)
-      var je           = journal.byNormName[nk];
-      var lastWritten  = je ? je.sum : 0;
-      var baseValue    = currentValue - lastWritten;
-      var match        = sumByNorm[nk];
-      var newSum       = match ? match.sum : 0;
-      var newValue     = baseValue + newSum;
-
-      // Точковий запис лише змінених клітинок (формула → число відбувається тут же).
-      if (newValue !== currentValue){
-        paySh.getRange(rowIdx0 + 1, budgetDopCol1).setValue(newValue);
-        cellsWritten++;
-        if (wasFormula) formulaConverted++;
-      }
-
-      if (newSum !== lastWritten){
-        journalOps.push({
-          nk: nk, loc: loc, kind: 'payment', name: paymentName,
-          year: nextM.year, month: nextM.month, newSum: newSum
-        });
-      }
-
-      if (match){
-        matchedRows[match.name] = rowIdx0;
-        matchedChildren[match.name] = true;
-        updated++;
-        totalAmount += newSum;
-        details.push({
-          child: match.name, sum: newSum,
-          currentBefore: currentValue, lastWritten: lastWritten,
-          baseValue: baseValue, newCell: newValue,
-          row: rowIdx0 + 1, status: 'updated'
-        });
-        Logger.log('[exportAttendanceToPayments] WRITE row=%s "%s" cur=%s last=%s base=%s newSum=%s → %s', rowIdx0 + 1, paymentName, currentValue, lastWritten, baseValue, newSum, newValue);
-      } else if (lastWritten !== 0){
-        details.push({
-          child: paymentName, sum: 0,
-          currentBefore: currentValue, lastWritten: lastWritten,
-          baseValue: baseValue, newCell: newValue,
-          row: rowIdx0 + 1, status: 'cleared'
-        });
-        Logger.log('[exportAttendanceToPayments] CLEAR row=%s "%s" cur=%s last=%s base=%s → %s (відмітки зняті)', rowIdx0 + 1, paymentName, currentValue, lastWritten, baseValue, newValue);
+    // not-found: діти з бакетів, чиє імʼя не знайдено у Payment
+    var notFound = [];
+    Object.keys(sumByNormTarget).forEach(function(nk){
+      if (!paymentByNorm.hasOwnProperty(nk)){
+        Object.keys(sumByNormTarget[nk].names).forEach(function(nm){ if (notFound.indexOf(nm) < 0) notFound.push(nm); });
       }
     });
-
-    Logger.log('[exportAttendanceToPayments] точковий запис: %s клітинок змінено, %s формул конвертовано в число', cellsWritten, formulaConverted);
-
-    _commitJournalUpdates(journal, journalOps);
-    Logger.log('[exportAttendanceToPayments] journal upsert: %s op(s)', journalOps.length);
-
-    var notFound = Object.keys(sumPerChild).filter(function(n){ return !matchedChildren[n]; });
-    notFound.forEach(function(n){
-      details.push({child: n, sum: sumPerChild[n], status: 'not-found-in-payment'});
-    });
-    Logger.log('[exportAttendanceToPayments] DONE: updated=%s, totalAmount=%s, notFound=%s', updated, totalAmount, JSON.stringify(notFound));
+    Logger.log('[exportAttendanceToPayments] DONE: months=%s updated=%s totalAmount=%s notFound=%s', JSON.stringify(monthList), updated, totalAmount, JSON.stringify(notFound));
 
     return {
       ok: true,
-      updated: updated,
-      totalAmount: totalAmount,
-      formulaCellsConverted: formulaConverted,   // v6.x: формул→число у child-рядках
+      mode: srcMonthOne ? ('single-source-' + srcMonthOne) : 'full-year',
+      loc: loc, year: year,
+      months: monthList,
+      updated: updated, totalAmount: totalAmount,
+      cellsWritten: cellsWritten, formulaCellsConverted: formulaConverted,
       notFound: notFound,
-      loc: loc,
-      sourceMonth: monthName,        // травень (місяць відвідувань)
-      targetMonth: targetMonthName,  // червень (куди записали бюджет)
-      targetCol: budgetDopCol1,
-      // Діагностика — щоб з фронту видно було, що саме знайшли:
-      attendanceKeys: Object.keys(sumPerChild),
-      paymentNamesCount: paymentNames.length,
-      paymentNamesSample: paymentNames.slice(0, 50),
+      attendanceKeys: Object.keys(buckets),       // сумісність із діагностикою
+      srcMonths: Object.keys(srcMonthsSeen),
+      sourceMonth: srcMonthOne ? MONTHS_CAL_UA[srcMonthOne-1] : 'усі',
+      targetMonth: (srcMonthOne && monthList.length) ? MONTHS_CAL_UA[monthList[0]-1] : 'усі',
+      perMonth: perMonth,
       details: details
     };
   } catch(e){
@@ -7548,7 +7497,6 @@ function exportAttendanceToPayments(params){
     return {ok: false, error: String(e && e.message || e)};
   }
 }
-
 function exportToPayments(params){ return exportAttendanceToPayments(params); }
 
 // ═══════════════════════════════════════════════════════════════════════════
