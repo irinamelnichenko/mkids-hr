@@ -1,5 +1,14 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.90
+// m.kids CRM — Google Apps Script v7.91
+// v7.91: (1) ГЕЙТ ПРИДАТНОСТІ у recalcVacationBreakdowns — перед перерахунком перевіряє
+//        _vacContractType (пропускає 'new'/'school', враховує _VAC_EXCEPTIONS); для preschool
+//        рахує лише коли _vacIsSummerPeriod. Непридатних не чіпає (лишає як є). (2) ЗАКРИТІ
+//        МІСЯЦІ: лист CONFIG «Закриті_Місяці» (Рік|Місяць|Ким|Коли) + closeMonth({year,month})
+//        / getClosedMonths(). Запис у Payment за закритий місяць блокується у exportVacation
+//        DiscountToPayments, exportAttendanceToPayments (пропуск закритих target-місяців),
+//        reconcileApply (пропуск item закритого місяця), addLocPaymentDop, setLocPaymentBudget;
+//        нічна гарантія (nightlyVacExportGuarantee) теж пропускає закриті. recalc пише лише в
+//        картку (monthsBreakdown), у Payment не лізе.
 // v7.90: recalcVacationBreakdowns({loc?,dryRun}) — перерахунок monthsBreakdown у збережених
 //        періодах відпустки за поточним тижневим правилом (pct=eligibleWeeks×25); старий
 //        день-пропорційний формат (eligibleDays/monthWorkDays/overLimitDays) мігрує в
@@ -391,7 +400,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.90', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.91', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -411,6 +420,7 @@ function doGet(e) {
     else if (action === 'importAbsencesFromPayment') result = importAbsencesFromPayment(e.parameter.loc || '');
     else if (action === 'getOpexData')               result = getOpexData(e.parameter.loc || '', e.parameter.year || '');
     else if (action === 'getOpexOverview')           result = getOpexOverview(e.parameter.year || '');
+    else if (action === 'getClosedMonths')            result = getClosedMonths();                                 // v7.91
     else if (action === 'getOpexContractors')        result = getOpexContractors();                              // v7.84 мапа контрагентів
     else if (action === 'resolveIbanLoc')            result = resolveIbanLoc(e.parameter.iban || '');            // v7.84 IBAN→локація
     else if (action === 'getOpexExpensesLog')        result = getOpexExpensesLog({loc:e.parameter.loc||'', year:e.parameter.year||'', month:e.parameter.month||'', category:e.parameter.category||''}); // v7.85 читання логу витрат
@@ -496,6 +506,7 @@ function doPost(e) {
     else if (body.action === 'exportToSalaryExtras')      result = exportToSalaryExtras(body || {});
     else if (body.action === 'recalcSickAbsences')       result = recalcSickAbsences(body || {}); // v7.43 денна шкала
     else if (body.action === 'recalcVacationBreakdowns') result = recalcVacationBreakdowns(body || {});
+    else if (body.action === 'closeMonth')                result = closeMonth(body || {});           // v7.91 закрити місяць
     else if (body.action === 'mergeClientDuplicate')     result = mergeClientDuplicate(body || {}); // v7.44 злиття дублів
     else if (body.action === 'patchClientCell')          result = patchClientCell(body || {});    // v7.44 точкова правка клітинки
     else if (body.action === 'setLocPaymentBudget')      result = setLocPaymentBudget(body || {}); // v7.57 відновлення клітинки пер-лок бюджету
@@ -1976,6 +1987,7 @@ function _vacGuardRunBatch(){
     for (var k = 0; k < st.months.length; k++){
       var mm = st.months[k];
       try {
+        if (_isMonthClosed(mm.y, mm.m)) continue;   // v7.91 нічна гарантія пропускає закриті
         var res = exportVacationDiscountToPayments({loc: loc, month: mm.m, year: mm.y});
         if (res && res.ok) st.cells += (res.cellsWritten || 0);
         else Logger.log('[vacGuard] ⚠ %s %s/%s: %s', loc, mm.m, mm.y, (res && res.error) || '?');
@@ -7433,6 +7445,10 @@ function exportAttendanceToPayments(params){
       _journalMonthsForPayment(loc, year).forEach(function(m){ monthsToProcess[m] = true; });
     }
     var monthList = Object.keys(monthsToProcess).map(Number).sort(function(a,b){ return a - b; });
+    // v7.91: закриті target-місяці НЕ чіпаємо
+    var _closedSet = _closedMonthsSet();
+    var skippedClosed = monthList.filter(function(m){ return _closedSet[year + '-' + m]; });
+    monthList = monthList.filter(function(m){ return !_closedSet[year + '-' + m]; });
 
     // === 4. Пер-місячний запис через журнальну дельту (base + newSum) ===
     // baseValue = поточне − last_written(журнал(loc,'payment',ПІБ,target)); newCell = base + newSum.
@@ -7488,7 +7504,7 @@ function exportAttendanceToPayments(params){
       ok: true,
       mode: srcMonthOne ? ('single-source-' + srcMonthOne) : 'full-year',
       loc: loc, year: year,
-      months: monthList,
+      months: monthList, skippedClosed: skippedClosed,
       updated: updated, totalAmount: totalAmount,
       cellsWritten: cellsWritten, formulaCellsConverted: formulaConverted,
       notFound: notFound,
@@ -7796,6 +7812,8 @@ function reconcileApply(body){
     var by   = trim(body.by) || '?';
     var items = body.items || [];
     var bodyMonth = Number(body.month) || 0;   // v7.85: глобальний місяць-оверрайд (1-12), опційно
+    var _rcYear = Number(body.year) || new Date().getFullYear();   // v7.91
+    var _rcClosed = _closedMonthsSet();                            // v7.91 закриті місяці
     var acct = _resolveAccountByIban(iban);
     if (!acct || !acct.loc) return {ok:false, error:'Рахунок "' + iban + '" не знайдено в Реквізити_Локацій'};
     var loc = acct.loc, type = acct.type;
@@ -7829,6 +7847,7 @@ function reconcileApply(body){
       var jsMonth;
       if (monOv >= 1 && monOv <= 12){ jsMonth = monOv - 1; }
       else { var d = _recParseDate(dateStr); jsMonth = d ? d.getMonth() : new Date().getMonth(); }
+      if (_rcClosed[_rcYear + '-' + (jsMonth + 1)]){ skipped++; details.push({childName: childName, ref: ref, status: 'skipped-closed', month: (jsMonth + 1)}); return; }   // v7.91
       var monthCol0 = _detectMonthColByHeader(data, jsMonth);
       if (monthCol0 < 0){ errors++; details.push({childName:childName, status:'error', msg:'місяць (' + (jsMonth + 1) + ') не знайдено в шапці — НЕ записано'}); return; }
       var factCol0 = _factColForType(monthCol0, it.type || type);
@@ -8486,6 +8505,84 @@ function recalcSickAbsences(body){
   return {ok:true, id:id, name: rowo['ПІБ дитини'], loc: rowo['Локація'], fee: fee, changed: changed};
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.91 ЗАКРИТІ МІСЯЦІ: лист CONFIG «Закриті_Місяці» (Рік|Місяць|Ким|Коли).
+// Будь-який запис у Payment за закритий місяць блокується (export/reconcile/ручні).
+// ═══════════════════════════════════════════════════════════════════════════
+var CLOSED_MONTHS_SHEET  = 'Закриті_Місяці';
+var CLOSED_MONTHS_HEADER = ['Рік', 'Місяць', 'Ким', 'Коли'];
+function _getClosedMonthsSheet(createIfMissing){
+  var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var sh = ss.getSheetByName(CLOSED_MONTHS_SHEET);
+  if (!sh && createIfMissing){
+    sh = ss.insertSheet(CLOSED_MONTHS_SHEET);
+    sh.getRange(1, 1, 1, CLOSED_MONTHS_HEADER.length).setValues([CLOSED_MONTHS_HEADER]);
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+// Множина закритих місяців → { "2026-7": true, ... }. Один прохід для циклів.
+function _closedMonthsSet(){
+  var set = {};
+  try {
+    var sh = _getClosedMonthsSheet(false); if (!sh) return set;
+    var data = sh.getDataRange().getValues();
+    for (var i = 1; i < data.length; i++){
+      var y = Number(data[i][0]) || 0, m = Number(data[i][1]) || 0;
+      if (y && m >= 1 && m <= 12) set[y + '-' + m] = true;
+    }
+  } catch(_e){}
+  return set;
+}
+function _isMonthClosed(year, month){
+  var y = Number(year) || 0, m = Number(month) || 0;
+  if (!y || !m) return false;
+  return !!_closedMonthsSet()[y + '-' + m];
+}
+// Стандартна відмова при спробі запису в закритий місяць.
+function _closedMonthError(year, month){
+  return {ok: false, closedMonth: true,
+          error: 'Місяць ' + month + '/' + year + ' ЗАКРИТИЙ — запис у Payment заблоковано. Відкрийте місяць у «Закриті_Місяці», щоб змінювати.'};
+}
+// READ: перелік закритих місяців.
+function getClosedMonths(){
+  try {
+    var sh = _getClosedMonthsSheet(false);
+    if (!sh) return {ok: true, items: []};
+    var data = sh.getDataRange().getValues();
+    var items = [];
+    for (var i = 1; i < data.length; i++){
+      var y = Number(data[i][0]) || 0, m = Number(data[i][1]) || 0;
+      if (!y || !m) continue;
+      items.push({year: y, month: m, by: String(data[i][2] || ''),
+                  at: (data[i][3] instanceof Date) ? data[i][3].toISOString() : String(data[i][3] || '')});
+    }
+    items.sort(function(a, b){ return (b.year - a.year) || (b.month - a.month); });
+    return {ok: true, items: items};
+  } catch(e){ return {ok: false, error: String(e && e.message || e)}; }
+}
+// WRITE: закрити місяць (ідемпотентно — повторно не дублює).
+function closeMonth(body){
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(30000); } catch(e){ return {ok: false, error: 'LOCK_TIMEOUT'}; }
+  try {
+    body = body || {};
+    var year = Number(body.year), month = Number(body.month);
+    var by = String(body.by || body.markedBy || '').trim();
+    if (!year || month < 1 || month > 12) return {ok: false, error: 'year/month(1-12) обовʼязкові'};
+    var sh = _getClosedMonthsSheet(true);
+    var data = sh.getDataRange().getValues();
+    for (var i = 1; i < data.length; i++){
+      if ((Number(data[i][0]) || 0) === year && (Number(data[i][1]) || 0) === month){
+        return {ok: true, already: true, year: year, month: month};
+      }
+    }
+    sh.appendRow([year, month, by, new Date()]);
+    return {ok: true, created: true, year: year, month: month};
+  } catch(e){ return {ok: false, error: String(e && e.message || e)}; }
+  finally { try { lock.releaseLock(); } catch(_){} }
+}
+
 // v7.90: перерахунок monthsBreakdown у ЗБЕРЕЖЕНИХ періодах відпустки за поточним тижневим
 // правилом (v7.76: pct = eligibleWeeks×25, тиждень зараховується місяцю ПОЧАТКУ, річний ліміт 4
 // тижні). Старі записи з полями eligibleDays/monthWorkDays/overLimitDays мігрують у формат
@@ -8513,11 +8610,16 @@ function recalcVacationBreakdowns(body){
       var contractISO = _vacContractISO(rowo['Дата договору']);
       var id = String(rowo['ID'] || '');
       var name = rowo['ПІБ дитини'];
+      var group = rowo['Група'];
       var clientTouched = false;
       abs.forEach(function(a){
         if (!a || a.type !== 'vacation') return;
         if (a.status === 'rejected' || a.status === 'cancelled') return;
         if (!a.from || !a.to) return;
+        // v7.91 гейт придатності: непридатних не чіпаємо (лишаємо як є)
+        var _vct = _vacContractType(contractISO, group, loc, name);
+        if (_vct === 'new' || _vct === 'school-no-absence') return;
+        if (_vct === 'preschool' && !_vacIsSummerPeriod(a.from, a.to)) return;
         scanned++;
         // новий breakdown у ФРОНТ-форматі ({month, y, m, weeks, eligibleWeeks, overLimitWeeks, pct, amount})
         var nb = _vacMonthBreakdown(a.from, a.to, fee, abs, contractISO, a.id).map(function(mb){
@@ -8682,6 +8784,7 @@ function exportVacationDiscountToPayments(params){
     if (!loc) return {ok: false, error: 'Параметр loc обовʼязковий'};
     if (!month || month < 1 || month > 12) return {ok: false, error: 'month має бути 1-12'};
     var monthName = MONTHS_CAL_UA[month - 1];
+    if (!dryRun && _isMonthClosed(year, month)) return _closedMonthError(year, month);   // v7.91
     // v7.81: спільний СКРИПТОВИЙ лок навколо реального запису (клітинка + журнал), щоб
     // фронтовий і нічний тригерний виклики не перетнулись (гонка read→write журналу).
     // dryRun (reconcile-розрахунок) НЕ блокуємо — він лише читає.
@@ -9023,6 +9126,7 @@ function setLocPaymentBudget(body){
     var loc=String(body.loc||'').trim(); var month=Number(body.month); var year=Number(body.year)||2026;
     var name=String(body.name||'').trim(); var value=Number(body.value); var disc=Number(body.disc||0);
     if(!loc||!month||!name||isNaN(value)) return {ok:false,error:'loc/month/name/value обовʼязкові'};
+    if (_isMonthClosed(year, month)) return _closedMonthError(year, month);   // v7.91
     var reg=_getLocationPaymentRegistry(loc);
     if(!reg||!reg.sheetId) return {ok:false,error:'Локацію не знайдено в реєстрі'};
     var ss=SpreadsheetApp.openById(reg.sheetId);
@@ -9061,6 +9165,7 @@ function addLocPaymentDop(body){
     var dryRun = (body.dryRun !== false);   // default TRUE (реальний запис лише dryRun:false)
     if (!loc || !month || month < 1 || month > 12 || !name || isNaN(delta))
       return {ok:false, error:'loc/month(1-12)/name/delta обовʼязкові'};
+    if (_isMonthClosed(year, month)) return _closedMonthError(year, month);   // v7.91
     var reg = _getLocationPaymentRegistry(loc);
     if (!reg || !reg.sheetId) return {ok:false, error:'Локацію "' + loc + '" не знайдено в реєстрі'};
     var ss = SpreadsheetApp.openById(reg.sheetId);
