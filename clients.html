@@ -3916,7 +3916,7 @@ function countWorkDays(fromStr, toStr){
 // Тип договору за датою + групою
 function getContractType2(contractDate, group){
   if(!contractDate) return 'standard';
-  if(contractDate>='2025-10-01') return 'new';
+  if(String(contractDate).slice(0,10)>='2025-10-01') return 'new';   // v7.90: стабільний детект 'new'
   if(/preschool/i.test(normalizeGroup(group||''))) return 'preschool';
   return 'standard';
 }

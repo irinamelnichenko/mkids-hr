@@ -1,5 +1,11 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.89
+// m.kids CRM — Google Apps Script v7.90
+// v7.90: recalcVacationBreakdowns({loc?,dryRun}) — перерахунок monthsBreakdown у збережених
+//        періодах відпустки за поточним тижневим правилом (pct=eligibleWeeks×25); старий
+//        день-пропорційний формат (eligibleDays/monthWorkDays/overLimitDays) мігрує в
+//        eligibleWeeks/overLimitWeeks. dryRun=true за замовч. (показує було/стане по кожному).
+//        + фронт: getContractType2 звіряє дату договору стабільно (slice(0,10)); dropdown уже
+//        ховав «Відпустка» для 'new' (vacAvail) — тут лише зміцнено детект 'new'.
 // v7.89: exportAttendanceToPayments B1–B3 — маршрут «Бюджет доп» за датою КОЖНОЇ відмітки
 //        (target = _nextMonth(місяць відмітки); 30.06 → липень завжди), бакети (ПІБ×target),
 //        запис через журнальну дельту base+newSum ключем (loc,'payment',ПІБ,targetY,targetM).
@@ -385,7 +391,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.89', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.90', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -489,6 +495,7 @@ function doPost(e) {
     else if (body.action === 'reconcileApply')              result = reconcileApply(body || {});   // v6.51.3 ФАЗА 2
     else if (body.action === 'exportToSalaryExtras')      result = exportToSalaryExtras(body || {});
     else if (body.action === 'recalcSickAbsences')       result = recalcSickAbsences(body || {}); // v7.43 денна шкала
+    else if (body.action === 'recalcVacationBreakdowns') result = recalcVacationBreakdowns(body || {});
     else if (body.action === 'mergeClientDuplicate')     result = mergeClientDuplicate(body || {}); // v7.44 злиття дублів
     else if (body.action === 'patchClientCell')          result = patchClientCell(body || {});    // v7.44 точкова правка клітинки
     else if (body.action === 'setLocPaymentBudget')      result = setLocPaymentBudget(body || {}); // v7.57 відновлення клітинки пер-лок бюджету
@@ -8477,6 +8484,77 @@ function recalcSickAbsences(body){
   if (!res.ok) return res;
   Logger.log('[recalcSickAbsences] id=%s changed=%s', id, JSON.stringify(changed));
   return {ok:true, id:id, name: rowo['ПІБ дитини'], loc: rowo['Локація'], fee: fee, changed: changed};
+}
+
+// v7.90: перерахунок monthsBreakdown у ЗБЕРЕЖЕНИХ періодах відпустки за поточним тижневим
+// правилом (v7.76: pct = eligibleWeeks×25, тиждень зараховується місяцю ПОЧАТКУ, річний ліміт 4
+// тижні). Старі записи з полями eligibleDays/monthWorkDays/overLimitDays мігрують у формат
+// eligibleWeeks/overLimitWeeks. dryRun=true за замовчуванням — лише показує було/стане.
+// POST {loc?, dryRun?}. sick-записи не чіпає (для них — recalcSickAbsences).
+function recalcVacationBreakdowns(body){
+  var lock = null;
+  try {
+    body = body || {};
+    var filterLoc = String(body.loc || '').trim();
+    var dryRun = (body.dryRun !== false);   // default TRUE (реальний запис лише dryRun:false)
+    var cli = getClients(); if (!cli.ok) return cli;
+    var rows = cli.data || [];
+    if (!dryRun){
+      lock = LockService.getScriptLock();
+      try { lock.waitLock(30000); } catch(_le){ return {ok:false, error:'LOCK_TIMEOUT — перерахунок уже виконується'}; }
+    }
+    var changed = [], scanned = 0, recordsChanged = 0, clientsChanged = 0;
+    rows.forEach(function(rowo){
+      var loc = String(rowo['Локація'] || '').trim();
+      if (filterLoc && loc !== filterLoc) return;
+      var abs; try { abs = JSON.parse(String(rowo['Відсутності (JSON)'] || '[]')); } catch(_j){ return; }
+      if (!Array.isArray(abs) || !abs.length) return;
+      var fee = Number(rowo['Сума договору']) || 0;
+      var contractISO = _vacContractISO(rowo['Дата договору']);
+      var id = String(rowo['ID'] || '');
+      var name = rowo['ПІБ дитини'];
+      var clientTouched = false;
+      abs.forEach(function(a){
+        if (!a || a.type !== 'vacation') return;
+        if (a.status === 'rejected' || a.status === 'cancelled') return;
+        if (!a.from || !a.to) return;
+        scanned++;
+        // новий breakdown у ФРОНТ-форматі ({month, y, m, weeks, eligibleWeeks, overLimitWeeks, pct, amount})
+        var nb = _vacMonthBreakdown(a.from, a.to, fee, abs, contractISO, a.id).map(function(mb){
+          return {month: mb.ym, y: mb.y, m: mb.m, weeks: mb.weeks,
+                  eligibleWeeks: mb.eligibleWeeks, overLimitWeeks: mb.overLimitWeeks,
+                  pct: mb.pct, amount: mb.discount, fullMonth: mb.fullMonth || false};
+        });
+        var newPct = nb.reduce(function(s, mb){ return s + mb.pct; }, 0);
+        var newAmt = nb.reduce(function(s, mb){ return s + mb.amount; }, 0);
+        var oldPct = Number(a.totalPct) || 0, oldAmt = Number(a.totalAmount) || 0;
+        var oldBd  = Array.isArray(a.monthsBreakdown) ? a.monthsBreakdown : [];
+        // старий формат = наявність день-пропорційних полів (eligibleDays/monthWorkDays/overLimitDays)
+        var oldFormat = oldBd.some(function(mb){ return mb && (mb.eligibleDays !== undefined || mb.monthWorkDays !== undefined || mb.overLimitDays !== undefined); });
+        if (oldPct === newPct && oldAmt === newAmt && !oldFormat) return;   // без змін
+        recordsChanged++; clientTouched = true;
+        changed.push({
+          id: id, name: name, loc: loc, from: a.from, to: a.to, oldFormat: oldFormat,
+          oldPct: oldPct, newPct: newPct, oldAmount: oldAmt, newAmount: newAmt,
+          oldMonths: oldBd.map(function(mb){ return {m: (mb.month || mb.ym || ''), pct: mb.pct}; }),
+          newMonths: nb.map(function(mb){ return {m: mb.month, weeks: mb.weeks, pct: mb.pct}; })
+        });
+        if (!dryRun){ a.monthsBreakdown = nb; a.totalPct = newPct; a.totalAmount = newAmt; }
+      });
+      if (clientTouched){
+        clientsChanged++;
+        if (!dryRun) patchClientAbsences(id, abs);
+      }
+    });
+    Logger.log('[recalcVacationBreakdowns] loc=%s dryRun=%s scanned=%s recChanged=%s cliChanged=%s', filterLoc || 'усі', dryRun, scanned, recordsChanged, clientsChanged);
+    return {ok: true, dryRun: dryRun, loc: filterLoc || 'усі',
+            scanned: scanned, recordsChanged: recordsChanged, clientsChanged: clientsChanged,
+            changed: changed};
+  } catch(e){
+    return {ok: false, error: String(e && e.message || e)};
+  } finally {
+    if (lock){ try { lock.releaseLock(); } catch(_){} }
+  }
 }
 
 // ХВОРОБА: розбивка знижки по місяцях — дзеркало calcAbsMonthBreakdown(type='sick').
