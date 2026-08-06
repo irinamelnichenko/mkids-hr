@@ -1,5 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.91
+// m.kids CRM — Google Apps Script v7.92
+// v7.92: recalcVacationBreakdowns += параметр onlyFormat — при true пише ЛИШЕ записи без зміни
+//        суми/відсотка (міграція формату eligibleDays→eligibleWeeks), а періоди зі зміною суми
+//        не чіпає. Для контрольованого застосування лише безпечних format-only змін.
 // v7.91: (1) ГЕЙТ ПРИДАТНОСТІ у recalcVacationBreakdowns — перед перерахунком перевіряє
 //        _vacContractType (пропускає 'new'/'school', враховує _VAC_EXCEPTIONS); для preschool
 //        рахує лише коли _vacIsSummerPeriod. Непридатних не чіпає (лишає як є). (2) ЗАКРИТІ
@@ -400,7 +403,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.91', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.92', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -8594,6 +8597,7 @@ function recalcVacationBreakdowns(body){
     body = body || {};
     var filterLoc = String(body.loc || '').trim();
     var dryRun = (body.dryRun !== false);   // default TRUE (реальний запис лише dryRun:false)
+    var onlyFormat = (body.onlyFormat === true);   // v7.92: писати ЛИШЕ format-only (без зміни суми)
     var cli = getClients(); if (!cli.ok) return cli;
     var rows = cli.data || [];
     if (!dryRun){
@@ -8634,6 +8638,7 @@ function recalcVacationBreakdowns(body){
         // старий формат = наявність день-пропорційних полів (eligibleDays/monthWorkDays/overLimitDays)
         var oldFormat = oldBd.some(function(mb){ return mb && (mb.eligibleDays !== undefined || mb.monthWorkDays !== undefined || mb.overLimitDays !== undefined); });
         if (oldPct === newPct && oldAmt === newAmt && !oldFormat) return;   // без змін
+        if (onlyFormat && !(oldPct === newPct && oldAmt === newAmt)) return;   // v7.92: onlyFormat → зміну суми не чіпаємо
         recordsChanged++; clientTouched = true;
         changed.push({
           id: id, name: name, loc: loc, from: a.from, to: a.to, oldFormat: oldFormat,
@@ -8649,7 +8654,7 @@ function recalcVacationBreakdowns(body){
       }
     });
     Logger.log('[recalcVacationBreakdowns] loc=%s dryRun=%s scanned=%s recChanged=%s cliChanged=%s', filterLoc || 'усі', dryRun, scanned, recordsChanged, clientsChanged);
-    return {ok: true, dryRun: dryRun, loc: filterLoc || 'усі',
+    return {ok: true, dryRun: dryRun, onlyFormat: onlyFormat, loc: filterLoc || 'усі',
             scanned: scanned, recordsChanged: recordsChanged, clientsChanged: clientsChanged,
             changed: changed};
   } catch(e){
