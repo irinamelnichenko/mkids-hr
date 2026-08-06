@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>m.kids HR — mkids Дитячі Садочки</title>
 <script src="xlsx.full.min.js"></script>
+<script src="cloud-status.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -801,15 +802,15 @@ function syncToSheets(){
   clearTimeout(_sheetSyncTimer);
   _sheetSyncTimer=setTimeout(()=>_doSyncToSheets(),1200);
 }
+function _recsHaveCache(){
+  return !!(S.recs && (Array.isArray(S.recs) ? S.recs.length : Object.keys(S.recs).length));
+}
 async function _doSyncToSheets(){
   const url=getScriptUrl(); if(!url) return;
   try{
     updSheetsStatus('sync');
-    await fetch(url, {
-      method:'POST', mode:'no-cors',
-      headers:{'Content-Type':'text/plain'},
-      body:JSON.stringify({action:'save',data:S.recs})
-    });
+    // v7.94: спільний cloudFetch (таймаут 45с + 2 ретраї на мережевий збій). no-cors POST.
+    await cloudFetch(url,{ fetch:{ method:'POST', mode:'no-cors', headers:{'Content-Type':'text/plain'}, body:JSON.stringify({action:'save',data:S.recs}) } });
     updSheetsStatus('ok');
   }catch(e){updSheetsStatus('err');}
 }
@@ -817,8 +818,8 @@ async function loadFromSheets(){
   const url=getScriptUrl(); if(!url) return false;
   try{
     updSheetsStatus('sync');
-    const r=await fetch(url+'?action=get',{redirect:'follow'});
-    if(!r.ok) throw new Error(r.status);
+    const r=await cloudFetch(url+'?action=get');   // v7.94: таймаут+ретрай зі спільного шару
+    if(!r.ok) throw new Error(r.status);            // HTTP-статус не ретраїмо
     const j=await r.json();
     if(j.ok && j.data){
       S.recs=j.data;
@@ -826,15 +827,17 @@ async function loadFromSheets(){
       updSheetsStatus('ok');
       return true;
     }
-  }catch(e){console.warn('Sheets load:',e);updSheetsStatus('err');}
+    throw new Error('bad-response');
+  }catch(e){
+    console.warn('Sheets load:',e);
+    // v7.94: є кеш у localStorage → лишаємось ЗЕЛЕНИМИ (працюємо з кешу); червоне лише коли й кешу немає.
+    updSheetsStatus(_recsHaveCache()?'ok':'err');
+  }
   return false;
 }
+// v7.94: тонка обгортка над спільним setCloudStatus (cloud-status.js). Невідомий стан → 'local'.
 function updSheetsStatus(st){
-  const el=document.getElementById('sheetsStatus'); if(!el) return;
-  if(st==='ok'){el.textContent='☁️ Синхронізовано';el.style.color='#27ae60';}
-  else if(st==='sync'){el.textContent='☁️ Синхронізація…';el.style.color='#e67e22';}
-  else if(st==='err'){el.textContent='⚠️ Помилка хмари';el.style.color='#e74c3c';}
-  else{el.textContent='💾 Лише локально';el.style.color='#7f8c8d';}
+  setCloudStatus(({ok:1,sync:1,err:1}[st])?st:'local','sheetsStatus');
 }
 
 // ── SHEETS ──
@@ -2161,7 +2164,8 @@ async function initApp(){
   showLoad();
   await fetchEmps();
   const loaded=await loadFromSheets(); // override with Sheets data if available
-  if(!loaded) updSheetsStatus(getScriptUrl()?'err':'none');
+  // v7.94: loadFromSheets уже виставив ok(кеш)/err. Тут лише випадок «URL не налаштовано».
+  if(!loaded && !getScriptUrl()) updSheetsStatus('none');
   autoGenPasswords();fillLoginLocs();updateBadges();
   // Show cloud sync warning banner in topbar if not configured (HR only)
   if(isNetworkRole(S.user.role)){
