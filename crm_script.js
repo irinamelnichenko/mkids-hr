@@ -1,5 +1,9 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.93
+// m.kids CRM — Google Apps Script v7.94
+// v7.94: getReconcileLog({child?,loc?,from?,to?}) — читання листа Звірки_Платежів (зараховані
+//        клієнтські платежі): дата, локація, платник, дитина, місяць, сума, було/стало, референс.
+//        Фільтр за ПІБ дитини нормалізований (токени, порядок/латиниця/апостроф — ловить різне
+//        написання). Сорт за датою спадаюче. За зразком getOpexExpensesLog.
 // v7.93: exportAttendanceToPayments += dryRun — прев'ю без запису (перелік target-місяців,
 //        perMonth/details з currentBefore/lastWritten/baseValue/newCell). Маршрут за датою
 //        відмітки, бакети, повний прохід та захист закритих місяців — вже з v7.89/v7.91.
@@ -406,12 +410,13 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.93', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.94', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
     else if (action === 'getPayments')        result = getPayments();
     else if (action === 'getPaymentsYearly')  result = getPaymentsYearly();
+    else if (action === 'getReconcileLog')           result = getReconcileLog({child:e.parameter.child||'', loc:e.parameter.loc||'', from:e.parameter.from||'', to:e.parameter.to||''}); // v7.94
     else if (action === 'getClients')         result = getClients();
     else if (action === 'runAggregate')       result = aggregatePayments();
     else if (action === 'syncPayments')        result = syncPayments();
@@ -7803,6 +7808,64 @@ function _getReconcileLogSheet(){
     sh.setFrozenRows(1);
   }
   return sh;
+}
+
+// v7.94 READ: Звірки_Платежів → зараховані клієнтські платежі. Фільтри child(ПІБ, нормалізований —
+// ловить різне написання/порядок/латиницю)/loc/from/to. Сорт за датою платежу спадаюче.
+// За зразком getOpexExpensesLog. Колонки листа (0-based): 0 Коли,1 Ким,2 Локація,3 IBAN,
+// 4 Дата платежу,5 Референс,6 Платник,7 Дитина,8 Рядок,9 Місяць,10 Колонка,11 Сума,12 Було,13 Стало.
+function _recLogNorm(s){
+  s = String(s || '').toLowerCase().replace(/[’ʼ′]/g, "'");
+  var LAT = {a:'а', c:'с', e:'е', i:'і', o:'о', p:'р', x:'х', y:'у'};   // латинські гомогліфи → кирилиця
+  return s.replace(/[aceiopxy]/g, function(ch){ return LAT[ch] || ch; });
+}
+function _recLogTokens(s){ return _recLogNorm(s).match(/[а-яіїєґ']+/g) || []; }
+function getReconcileLog(body){
+  try {
+    body = body || {};
+    var qChild = String(body.child || '').trim();
+    var qLoc   = String(body.loc || '').trim();
+    var fromISO = body.from ? String(body.from) : '';
+    var toISO   = body.to   ? String(body.to)   : '';
+    var qTokens = _recLogTokens(qChild);
+    var sh = SpreadsheetApp.openById(CONFIG_SHEET_ID).getSheetByName(RECONCILE_LOG_SHEET);
+    if (!sh) return {ok: true, count: 0, items: []};
+    var data = sh.getDataRange().getValues();
+    var items = [];
+    for (var i = 1; i < data.length; i++){
+      var r = data[i];
+      var child = String(r[7] || '').trim();
+      if (!child && !r[11]) continue;
+      var loc = String(r[2] || '').trim();
+      if (qLoc && loc !== qLoc) continue;
+      // фільтр за ПІБ дитини: усі токени запиту мають бути в токенах рядка (порядок/написання неважливі)
+      if (qTokens.length){
+        var ct = _recLogTokens(child);
+        var ok = qTokens.every(function(t){ return ct.indexOf(t) >= 0; });
+        if (!ok) continue;
+      }
+      var date = String(r[4] || '').trim();
+      var dnum = _opexDateNum(date);   // reused: DMY/ISO → timestamp (NaN якщо не розпізнано)
+      if (fromISO || toISO){
+        if (!isNaN(dnum)){
+          var iso = new Date(dnum).getFullYear() + '-' + ('0' + (new Date(dnum).getMonth() + 1)).slice(-2) + '-' + ('0' + new Date(dnum).getDate()).slice(-2);
+          if (fromISO && iso < fromISO) continue;
+          if (toISO   && iso > toISO)   continue;
+        }
+      }
+      var when = (r[0] instanceof Date) ? r[0].toISOString() : String(r[0] || '');
+      items.push({
+        date: date, loc: loc, payer: String(r[6] || '').trim(), child: child,
+        month: Number(r[9]) || 0, amount: _opexNum(r[11]),
+        before: _opexNum(r[12]), after: _opexNum(r[13]),
+        ref: String(r[5] || '').trim(), by: String(r[1] || '').trim(), when: when,
+        _sk: isNaN(dnum) ? (when ? (new Date(when).getTime() || 0) : 0) : dnum
+      });
+    }
+    items.sort(function(a, b){ return b._sk - a._sk; });   // за датою спадаюче
+    items.forEach(function(x){ delete x._sk; });
+    return {ok: true, child: qChild, loc: qLoc, count: items.length, items: items};
+  } catch(e){ return {ok: false, error: String(e && e.message || e)}; }
 }
 
 // ── ФАЗА 2: ЗАПИС. Вхід: {iban, by, month?, items:[{childRow(0-based), childName, amount, date, ref, month?, payerRaw}]}.
