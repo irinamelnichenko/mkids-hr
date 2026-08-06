@@ -1,5 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.92
+// m.kids CRM — Google Apps Script v7.93
+// v7.93: exportAttendanceToPayments += dryRun — прев'ю без запису (перелік target-місяців,
+//        perMonth/details з currentBefore/lastWritten/baseValue/newCell). Маршрут за датою
+//        відмітки, бакети, повний прохід та захист закритих місяців — вже з v7.89/v7.91.
 // v7.92: recalcVacationBreakdowns += параметр onlyFormat — при true пише ЛИШЕ записи без зміни
 //        суми/відсотка (міграція формату eligibleDays→eligibleWeeks), а періоди зі зміною суми
 //        не чіпає. Для контрольованого застосування лише безпечних format-only змін.
@@ -403,7 +406,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.92', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.93', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -7384,6 +7387,7 @@ function exportAttendanceToPayments(params){
     if (!loc) return {ok: false, error: 'Параметр loc обовʼязковий'};
     var year = Number(params.year) || new Date().getFullYear();
     var srcMonthOne = Number(params.month) || 0;   // опційно: лише цей source-місяць (сумісність)
+    var dryRun = (params.dryRun === true);          // v7.93: прев'ю без запису
     if (srcMonthOne && (srcMonthOne < 1 || srcMonthOne > 12)) return {ok:false, error:'month має бути 1-12'};
     Logger.log('[exportAttendanceToPayments] START loc="%s" year=%s srcMonthOne=%s', loc, year, srcMonthOne);
 
@@ -7475,7 +7479,7 @@ function exportAttendanceToPayments(params){
         var newSum       = (st && st.m[m]) ? st.m[m] : 0;
         var newValue     = baseValue + newSum;
         if (newValue !== currentValue){
-          paySh.getRange(rowIdx0 + 1, budgetDopCol1).setValue(newValue);   // формула → число тут же
+          if (!dryRun) paySh.getRange(rowIdx0 + 1, budgetDopCol1).setValue(newValue);   // формула → число тут же
           cellsWritten++; if (wasFormula) formulaConverted++;
         }
         if (newSum !== lastWritten){
@@ -7488,7 +7492,7 @@ function exportAttendanceToPayments(params){
           if (newSum !== 0){ mUpd++; mSum += newSum; }
         }
       });
-      _commitJournalUpdates(journal, journalOps);
+      if (!dryRun) _commitJournalUpdates(journal, journalOps);
       updated += mUpd; totalAmount += mSum;
       perMonth.push({month: m, monthName: MONTHS_CAL_UA[m-1], updated: mUpd, sum: mSum, ops: journalOps.length});
       Logger.log('[exportAttendanceToPayments] target %s (%s): updated=%s sum=%s ops=%s', m, MONTHS_CAL_UA[m-1], mUpd, mSum, journalOps.length);
@@ -7507,7 +7511,7 @@ function exportAttendanceToPayments(params){
       ok: true,
       mode: srcMonthOne ? ('single-source-' + srcMonthOne) : 'full-year',
       loc: loc, year: year,
-      months: monthList, skippedClosed: skippedClosed,
+      dryRun: dryRun, months: monthList, skippedClosed: skippedClosed,
       updated: updated, totalAmount: totalAmount,
       cellsWritten: cellsWritten, formulaCellsConverted: formulaConverted,
       notFound: notFound,
