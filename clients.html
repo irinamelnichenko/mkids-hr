@@ -6,7 +6,6 @@
 <title>m.kids CRM — Клієнти</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="xlsx.full.min.js"></script>
-<script src="cloud-status.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -1291,7 +1290,7 @@ var APP_BUILD='7.58';
 async function apiGet(action){
   var url=getScriptUrl();
   if(!url) throw new Error('URL не налаштовано');
-  var r=await cloudFetch(url+'?action='+action);   // v7.94: спільний таймаут+ретрай
+  var r=await fetch(url+'?action='+action,{redirect:'follow'});
   if(!r.ok) throw new Error('HTTP '+r.status);
   var j=await r.json();
   if(!j.ok) throw new Error(j.error||'Помилка сервера');
@@ -1338,7 +1337,7 @@ async function apiGetFull(params){
   var url=getScriptUrl();
   if(!url) throw new Error('URL не налаштовано');
   var qs=Object.keys(params).map(function(k){ return encodeURIComponent(k)+'='+encodeURIComponent(params[k]); }).join('&');
-  var r=await cloudFetch(url+'?'+qs);   // v7.94: спільний таймаут+ретрай
+  var r=await fetch(url+'?'+qs,{redirect:'follow'});
   if(!r.ok) throw new Error('HTTP '+r.status);
   var j=await r.json();
   if(!j.ok) throw new Error(j.error||'Помилка сервера');
@@ -1480,9 +1479,12 @@ function getCRMCard(id){
 }
 
 // ─── SYNC STATUS ─────────────────────────────────────────────────────────────
-// v7.94: тонка обгортка над спільним setCloudStatus (cloud-status.js). Індикатор у #syncStatus.
 function setSyncStatus(st){
-  setCloudStatus(({ok:1,sync:1,err:1}[st])?st:'none','syncStatus');
+  var el=document.getElementById('syncStatus'); if(!el) return;
+  if(st==='ok'){ el.textContent='☁️ Синхронізовано'; el.style.color='#27ae60'; }
+  else if(st==='sync'){ el.textContent='☁️ Синхронізація…'; el.style.color='#e67e22'; }
+  else if(st==='err'){ el.textContent='⚠️ Помилка хмари'; el.style.color='#e74c3c'; }
+  else{ el.textContent=''; }
 }
 
 // ─── DIRECT SHEETS API ────────────────────────────────────────────────────────
