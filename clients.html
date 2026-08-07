@@ -3989,7 +3989,7 @@ function _feDetermineTargetMonth(vacMonth, vacYear, createdAt, kind){
     var nms=(vacMonth===12)?{m:1,y:vacYear+1}:{m:vacMonth+1,y:vacYear};
     return {month:nms.m,year:nms.y};
   }
-  var entryISO=(createdAt instanceof Date)?createdAt.toISOString().slice(0,10):String(createdAt||'').slice(0,10);
+  var entryISO=(createdAt instanceof Date && !isNaN(createdAt.getTime()))?createdAt.toISOString().slice(0,10):String(createdAt||'').slice(0,10);   // v7.95: guard Invalid Date
   if(!/^\d{4}-\d{2}-\d{2}/.test(entryISO)) return {month:vacMonth,year:vacYear};
   // v6.55: місячне порівняння (не денне). Внесено ≤ місяця відсутності → той самий
   // місяць (рахунок ще не виставлений); внесено пізніше → наступний. Фікс бага 1-го числа.
@@ -4054,8 +4054,15 @@ function vacToast(msg){
 
 // Поточний рік договору: {from, to} — від дати договору, не календарний
 function getContractYear(contractDate, todayStr){
-  var cd=pd(contractDate); if(!cd) return null;
-  var td=pd(todayStr)||new Date();
+  // v7.95 ЗАХИСТ: зрізаємо час у ISO-даті ('2024-08-31T21:00:00Z' → '2024-08-31'), інакше pd
+  // дробить по '-' і дає Invalid Date (getFullYear=NaN → toISOString кидає RangeError, картка
+  // не відкривалась). Невалідна дата → console.warn + null (картка відкривається, ліміт=4).
+  var cd=pd(String(contractDate||'').slice(0,10));
+  if(!cd || isNaN(cd.getTime())){
+    if(contractDate) console.warn('[getContractYear] невалідна дата договору — картку відкрито без розрахунку ліміту відпустки:', contractDate);
+    return null;
+  }
+  var td=pd(String(todayStr||'').slice(0,10)); if(!td || isNaN(td.getTime())) td=new Date();
   var diffY=td.getFullYear()-cd.getFullYear();
   for(var off=diffY-1;off<=diffY+1;off++){
     var f=new Date(cd.getFullYear()+off,cd.getMonth(),cd.getDate());
