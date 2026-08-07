@@ -1,5 +1,10 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.94
+// m.kids CRM — Google Apps Script v7.95
+// v7.95: (1) renameAttendanceChild({loc,oldName,newName,dryRun}) — вирівнює написання ПІБ у
+//        відмітках (Додаткові_Відвідуваність, кол. «Дитина») під канонічне; матч нормалізований;
+//        0 збігів/однакові імена → відмова; dryRun за замовч. (2) addPaymentRow({loc,name,group,
+//        dryRun}) — вставляє рядок дитини під заголовком її групи в Payment-файл (ПІБ у col A,
+//        фінансові порожні); група не знайдена/дубль ПІБ → відмова; dryRun за замовч.
 // v7.94: getReconcileLog({child?,loc?,from?,to?}) — читання листа Звірки_Платежів (зараховані
 //        клієнтські платежі): дата, локація, платник, дитина, місяць, сума, було/стало, референс.
 //        Фільтр за ПІБ дитини нормалізований (токени, порядок/латиниця/апостроф — ловить різне
@@ -410,7 +415,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.94', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.95', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -523,6 +528,8 @@ function doPost(e) {
     else if (body.action === 'setLocPaymentBudget')      result = setLocPaymentBudget(body || {}); // v7.57 відновлення клітинки пер-лок бюджету
     else if (body.action === 'addLocPaymentDop')         result = addLocPaymentDop(body || {}); // v7.87 +delta у «Бюджет доп»
     else if (body.action === 'setLocPaymentName')        result = setLocPaymentName(body || {});   // v7.60 вирівняти імʼя Payment під картку
+    else if (body.action === 'renameAttendanceChild')    result = renameAttendanceChild(body || {}); // v7.95
+    else if (body.action === 'addPaymentRow')             result = addPaymentRow(body || {});         // v7.95
     else if (body.action === 'syncMissingClients')       result = syncMissingClientsFromPayments({dryRun:(body.dryRun===true), confirm:'YES_WRITE', locScope:(body.locScope||'kindergartens')}); // v7.60 кнопка «Синхронізувати відсутніх» (садочки)
     else if (body.action === 'remapAttendanceId')        result = remapAttendanceId(body || {});   // v7.60 точковий ремап осиротілого ID Табеля
     else if (body.action === 'cashPayoutSheet')          result = cashPayoutSheet(body || {});      // v7.64 відомість на видачу готівки (PDF)
@@ -9311,6 +9318,102 @@ function setLocPaymentName(body){
     cell.setValue(newName);
     return {ok:true, loc:loc, row:rowIdx+1, before:before, after:newName};
   } catch(e){ return {ok:false,error:String(e&&e.message||e)}; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.95: перейменування дитини у відмітках (Додаткові_Відвідуваність) — вирівнює написання
+// ПІБ під канонічне (картка=Payment), щоб експорт додаткових матчив рядок. Матч нормалізований
+// (_journalNormName: без пробілів+lowercase). dryRun за замовч. Колонки листа: 2=Локація, 4=Дитина.
+function renameAttendanceChild(body){
+  var lock = null;
+  try {
+    body = body || {};
+    var loc     = String(body.loc || '').trim();
+    var oldName = String(body.oldName || '').trim();
+    var newName = String(body.newName || '').trim();
+    var dryRun  = (body.dryRun !== false);   // default TRUE
+    if (!loc || !oldName || !newName) return {ok: false, error: 'loc/oldName/newName обовʼязкові'};
+    if (_journalNormName(oldName) === _journalNormName(newName))
+      return {ok: false, error: 'oldName і newName однакові після нормалізації — нема що міняти'};
+    var sh = _getAttendanceSheet(false);
+    if (!sh) return {ok: false, error: 'Лист «Додаткові_Відвідуваність» не знайдено'};
+    var data = sh.getDataRange().getValues();
+    var COL_LOC = 2, COL_CHILD = 4;   // 0-based
+    var nk = _journalNormName(oldName);
+    var rows = [], distinct = {};
+    for (var r = 1; r < data.length; r++){
+      if (String(data[r][COL_LOC] || '').trim() !== loc) continue;
+      var child = String(data[r][COL_CHILD] || '').trim();
+      if (!child || _journalNormName(child) !== nk) continue;
+      var dt = (data[r][1] instanceof Date) ? data[r][1].toISOString().slice(0, 10) : String(data[r][1] || '');
+      rows.push({row: r + 1, id: data[r][0], date: dt, activity: String(data[r][6] || ''), oldChild: child});
+      distinct[child] = (distinct[child] || 0) + 1;
+    }
+    if (!rows.length) return {ok: false, error: 'У «' + loc + '» немає відміток із «' + oldName + '» — нічого перейменовувати', matched: 0};
+    if (!dryRun){
+      lock = LockService.getScriptLock();
+      try { lock.waitLock(30000); } catch(_le){ return {ok: false, error: 'LOCK_TIMEOUT'}; }
+      rows.forEach(function(x){ var c = sh.getRange(x.row, COL_CHILD + 1); c.setNumberFormat('@'); c.setValue(newName); });
+    }
+    return {ok: true, dryRun: dryRun, loc: loc, oldName: oldName, newName: newName,
+            matched: rows.length, distinctOld: Object.keys(distinct), rows: rows.slice(0, 50)};
+  } catch(e){ return {ok: false, error: String(e && e.message || e)}; }
+  finally { if (lock){ try { lock.releaseLock(); } catch(_){} } }
+}
+
+// v7.95: вставити рядок дитини в Payment-файл локації ПІД заголовком її групи (ПІБ у col A,
+// фінансові колонки порожні — заповнить exportAttendanceToPayments). Група не знайдена або
+// дубль ПІБ → відмова. dryRun за замовч.
+function addPaymentRow(body){
+  var lock = null;
+  try {
+    body = body || {};
+    var loc   = String(body.loc || '').trim();
+    var name  = String(body.name || '').trim();
+    var group = String(body.group || '').trim();
+    var dryRun = (body.dryRun !== false);   // default TRUE
+    if (!loc || !name || !group) return {ok: false, error: 'loc/name/group обовʼязкові'};
+    var reg = _getLocationPaymentRegistry(loc);
+    if (!reg || !reg.sheetId) return {ok: false, error: 'Локацію "' + loc + '" не знайдено в реєстрі Payment'};
+    var ss = SpreadsheetApp.openById(reg.sheetId);
+    var paySh = ss.getSheetByName(reg.sheetName) || ss.getSheets()[0];
+    var data = paySh.getDataRange().getValues();
+    var DATA_START = 3;
+    // 1) дубль ПІБ?
+    var nk = _journalNormName(name);
+    for (var r = DATA_START; r < data.length; r++){
+      var nm = trim(String(data[r][0] || ''));
+      if (!nm || isGroupHeaderRow(data[r], 1)) continue;
+      if (_journalNormName(nm) === nk) return {ok: false, error: 'Рядок «' + name + '» уже є у файлі ' + loc + ' (рядок ' + (r + 1) + ')', existingRow: r + 1};
+    }
+    // 2) заголовок групи (exact-norm, далі startsWith)
+    var gk = _journalNormName(group), headerRow = -1, headers = [];
+    for (var h = 0; h < data.length; h++){
+      if (!isGroupHeaderRow(data[h], 1)) continue;
+      var hn = _journalNormName(String(data[h][0] || ''));
+      headers.push(trim(String(data[h][0] || '')));
+      if (hn === gk || hn.indexOf(gk) === 0 || gk.indexOf(hn) === 0){ headerRow = h; break; }
+    }
+    if (headerRow < 0) return {ok: false, error: 'Групу «' + group + '» не знайдено у файлі ' + loc, groupHeaders: headers};
+    // 3) останній member групи (до наступного header/кінця) → вставляємо після нього
+    var insertAfter = headerRow;   // 0-based
+    for (var m = headerRow + 1; m < data.length; m++){
+      if (isGroupHeaderRow(data[m], 1)) break;
+      if (trim(String(data[m][0] || ''))) insertAfter = m;
+    }
+    var insertAfter1 = insertAfter + 1;   // 1-based рядок, ПІСЛЯ якого вставляємо
+    if (!dryRun){
+      lock = LockService.getScriptLock();
+      try { lock.waitLock(30000); } catch(_le){ return {ok: false, error: 'LOCK_TIMEOUT'}; }
+      paySh.insertRowsAfter(insertAfter1, 1);
+      var cell = paySh.getRange(insertAfter1 + 1, 1);
+      cell.setNumberFormat('@');
+      cell.setValue(name);   // фінансові колонки лишаємо порожніми
+    }
+    return {ok: true, dryRun: dryRun, loc: loc, name: name, group: group,
+            headerRow: headerRow + 1, insertAtRow: insertAfter1 + 1};
+  } catch(e){ return {ok: false, error: String(e && e.message || e)}; }
+  finally { if (lock){ try { lock.releaseLock(); } catch(_){} } }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
