@@ -1,11 +1,11 @@
-// m.kids PWA Service Worker (v7.113-cfo-current-month / cache v7.114)
+// m.kids PWA Service Worker (v7.114-flat-tiles-network-only / cache v7.115)
 // Cache: static shell (HTML + manifest + icons + xlsx)
 // Strategy:
 //   • POST → завжди network (ніколи не кешуємо)
 //   • GET до /macros/ (Apps Script) → network-only, fallback на cache
 //   • GET до інших static URLs → cache-first з фоновим оновленням
 
-var CACHE = 'mkids-cache-v7.114';
+var CACHE = 'mkids-cache-v7.115';
 var SHELL = [
   './',
   'activities.html',

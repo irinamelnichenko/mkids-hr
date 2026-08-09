@@ -2519,8 +2519,14 @@ function _isKompLocation(name){
   });
 }
 function _kompTokens(s){ return _kompNorm(s).replace(/['’ʼ`.,()]/g,' ').split(/\s+/).filter(Boolean); }
-// Лише садки: реальна локація, але НЕ школа і не онлайн (для KPI договорів).
-function _isKompSadok(name){ if(!_isKompLocation(name))return false; var n=_kompNorm(name); return n.indexOf('школ')<0 && n.indexOf('онлайн')<0; }
+// Локації типу «Управління» — виключаються з УСІХ показників дашборда.
+var KOMP_UPRAVL=['Житомир','Нац.Гвардії (Благо)','Манхетен (Благо)','Хіміків (Благо)','Чернігів'];
+function _isKompUpravl(name){ var rt=_kompTokens(name); if(!rt.length)return false;
+  return KOMP_UPRAVL.some(function(u){ var ut=_kompTokens(u); return ut.length&&ut.every(function(t){return rt.indexOf(t)>=0;}); }); }
+// Реальна МЕРЕЖЕВА локація = у реєстрі й НЕ «Управління».
+function _isKompNetwork(name){ return _isKompLocation(name) && !_isKompUpravl(name); }
+// Лише садки: мережева локація, але НЕ школа і не онлайн (для KPI договорів).
+function _isKompSadok(name){ if(!_isKompNetwork(name))return false; var n=_kompNorm(name); return n.indexOf('школ')<0 && n.indexOf('онлайн')<0; }
 // Ранг у LOCATION_ORDER за ТОКЕННОЮ відповідністю (як _isKompLocation): «Львів Кругла», «228 школа»,
 // «Осокорки сад» отримують позицію свого запису реєстру, а не 999. Обираємо найбільш специфічний збіг.
 function _kompLocRank(name){
@@ -2575,7 +2581,7 @@ function _renderKompBlock(){
   var fillHtml;
   if(!kd){ fillHtml='<div class="empty"><span class="ei">🏫</span><p>Завантаження…</p></div>'; }
   else{
-    var rows=scopeLocs(kd.locations).filter(function(l){return _isKompLocation(l.loc);})
+    var rows=scopeLocs(kd.locations).filter(function(l){return _isKompNetwork(l.loc);})
       .map(function(l){ var mo=(l.months&&l.months[m-1])||{}; return {loc:l.loc,contracts:mo.contracts,cap:l.maxLoad,pct:mo.fillPct}; })
       .filter(function(r){ var c=Number(r.contracts),p=Number(r.pct); return (isFinite(c)&&c>0)||(isFinite(p)&&p>0); }); // прибираємо порожні/від'ємні (напр. Онлайн школа −2)
     rows=_kompSortByLoc(rows,function(r){return r.loc;}); // порядок LOCATION_ORDER (токенний)
@@ -2599,7 +2605,7 @@ function _renderKompBlock(){
   if(!kf){ freeHtml='<div class="empty"><span class="ei">🪑</span><p>Завантаження…</p></div>'; }
   else{
     var groups=kf.groups||[];
-    var flocs=(kf.locations||[]).filter(function(x){return _isKompLocation(x.loc);}); // лише реальні локації
+    var flocs=(kf.locations||[]).filter(function(x){return _isKompNetwork(x.loc);}); // лише мережеві локації (без Управління)
     if(!isHR) flocs=flocs.filter(function(x){return x.loc===myLoc;});
     flocs=_kompSortByLoc(flocs,function(l){return l.loc;});
     var colTot={}; groups.forEach(function(g){colTot[g]=0;}); var grand=0;
@@ -2624,7 +2630,7 @@ function _renderKompBlock(){
   var rateHtml, rateAvg=null;
   if(!rk){ rateHtml='<div class="empty"><span class="ei">👨‍🏫</span><p>Завантаження…</p></div>'; }
   else{
-    var active=(rk.teachers||[]).filter(function(t){return !t.archived;});
+    var active=(rk.teachers||[]).filter(function(t){return !t.archived && _isKompNetwork(t.loc);}); // виключаємо Управління (Житомир тощо)
     if(!isHR) active=active.filter(function(t){return t.loc===myLoc;});
     var ts=active.filter(function(t){return t.ratingPct!=null;}).sort(function(a,b){return b.ratingPct-a.ratingPct;});
     if(ts.length){ var sA=0; ts.forEach(function(t){sA+=t.ratingPct;}); rateAvg=Math.round(sA/ts.length*10)/10; }
@@ -2717,8 +2723,8 @@ function _renderKompBlock(){
   function _panelFor(keys){ return (open&&keys.indexOf(open)>=0&&_panels[open])?('<div class="card" style="margin:14px 0 0">'+_panels[open]+'</div>'):''; }
 
   // ── Хвиля 1: CFO-показники за ОБРАНИЙ МІСЯЦЬ (0 = «За рік») ──
-  var cfoBlock='';
-  if(_kompIsCFO()){
+  var cfoOn=_kompIsCFO();
+  if(cfoOn){
     var fmtG=(typeof fmtGrn==='function')?fmtGrn:function(n){return Number(n||0).toLocaleString('uk-UA')+' ₴';};
     var cm=(S.dashCfoMonth==null)?(new Date().getMonth()+1):Number(S.dashCfoMonth); // 0 = за рік
     var perLbl=(cm===0)?'за рік':KOMP_MONTHS[cm-1];
@@ -2730,7 +2736,7 @@ function _renderKompBlock(){
 
     // #1 Борги — як екран «Борги та оплати»: місяць → статус debt/nopay; рік → накопичений Борг-Рік
     var _dbt={}, dbtN=0, dbtSum=0, dbtLoad=(py!=null);
-    if(py){ py.forEach(function(rw){ var loc=String(rw['Локація']||'').trim(); if(!loc)return; var isD=false,val=0;
+    if(py){ py.forEach(function(rw){ var loc=String(rw['Локація']||'').trim(); if(!loc||!_isKompNetwork(loc))return; var isD=false,val=0;
         if(cm===0){ var d=Number(rw['Борг-Рік'])||0; if(d>0){isD=true;val=d;} }
         else { var st=String(rw[mnKey+'-Статус']||'').trim().toLowerCase();
           var fs=Number(rw[mnKey+'-Факт-навч'])||0,fe=Number(rw[mnKey+'-Факт-доп'])||0,bs=Number(rw[mnKey+'-Бюджет-навч'])||0,be=Number(rw[mnKey+'-Бюджет-доп'])||0;
@@ -2742,7 +2748,7 @@ function _renderKompBlock(){
       '<tr style="border-top:2px solid var(--gray2)"><td><strong>Разом</strong></td><td><strong>'+dbtN+'</strong></td><td style="font-weight:800;color:#e74c3c">'+fmtG(dbtSum)+'</td></tr></tbody></table></div>':'<div class="empty"><p>Немає боргів</p></div>');
 
     // #2 Виплата ЗП — за обраний місяць / рік
-    var salLoad=(salOv!=null), salLocs=(salOv&&salOv.locations)||[];
+    var salLoad=(salOv!=null), salLocs=((salOv&&salOv.locations)||[]).filter(function(l){return _isKompNetwork(l.loc);});
     function _salFB(l){ if(cm===0)return {f:Number(l.yearFact)||0,b:Number(l.yearBudget)||0}; var t=(l.monthsTotals||[])[cm-1]||{}; return {f:Number(t.fact)||0,b:Number(t.budget)||0}; }
     var sYF=0,sYB=0; salLocs.forEach(function(l){ var x=_salFB(l); sYF+=x.f; sYB+=x.b; });
     var salPct=sYB?Math.round(sYF/sYB*100):null, salRem=sYB-sYF;
@@ -2756,7 +2762,7 @@ function _renderKompBlock(){
 
     // #4 Причини розірвання — обраний місяць (або всі за рік)
     var termLoad=(kd!=null), termRows=[], termTotal=0;
-    if(kd){ (kd.locations||[]).filter(function(l){return _isKompLocation(l.loc);}).forEach(function(l){
+    if(kd){ (kd.locations||[]).filter(function(l){return _isKompNetwork(l.loc);}).forEach(function(l){
       (l.months||[]).forEach(function(mo){ if(cm>0 && mo.month!==cm) return; var t=Number(mo.terminated)||0; var reason=String(mo.terminationReason||'').trim();
         if(t<0||reason){ var cnt=Math.abs(t); termTotal+=cnt; termRows.push({loc:l.loc,m:mo.month,cnt:cnt,reason:reason}); } }); }); }
     termRows.sort(function(a,b){ return (a.m-b.m) || (_kompLocRank(a.loc)-_kompLocRank(b.loc)); });
@@ -2766,10 +2772,10 @@ function _renderKompBlock(){
     // #3 Маржа = дохід(Факт навч+доп) − ЗП(fact) − OPEX(fact), за обраний місяць / рік
     var mgLoad=(py!=null && salOv!=null && opexOv!=null), revByLoc={};
     function _rowRev(rw){ if(cm===0){ var s=0; DASH_MONTHS.forEach(function(mn){ s+=(Number(rw[mn+'-Факт-навч'])||0)+(Number(rw[mn+'-Факт-доп'])||0); }); return s; } return (Number(rw[mnKey+'-Факт-навч'])||0)+(Number(rw[mnKey+'-Факт-доп'])||0); }
-    if(py){ py.forEach(function(rw){ var loc=String(rw['Локація']||'').trim(); if(!loc)return; revByLoc[loc]=(revByLoc[loc]||0)+_rowRev(rw); }); }
+    if(py){ py.forEach(function(rw){ var loc=String(rw['Локація']||'').trim(); if(!loc||!_isKompNetwork(loc))return; revByLoc[loc]=(revByLoc[loc]||0)+_rowRev(rw); }); }
     function _opxF(l){ if(cm===0)return Number(l.yearFact)||0; var t=(l.monthsTotals||[])[cm-1]||{}; return Number(t.fact)||0; }
     function _mapRankF(list,getVal){ var ex={},rk={}; (list||[]).forEach(function(x){ var v=getVal(x); ex[x.loc]=v; var r=_kompLocRank(x.loc); if(r<999)rk[r]=v; }); return {ex:ex,rk:rk}; }
-    var salMap=_mapRankF(salLocs,function(l){return _salFB(l).f;}), opexMap=_mapRankF((opexOv&&opexOv.locations)||[],_opxF);
+    var salMap=_mapRankF(salLocs,function(l){return _salFB(l).f;}), opexMap=_mapRankF(((opexOv&&opexOv.locations)||[]).filter(function(l){return _isKompNetwork(l.loc);}),_opxF);
     function _look(m,loc){ if(m.ex[loc]!=null)return m.ex[loc]; var r=_kompLocRank(loc); return (r<999&&m.rk[r]!=null)?m.rk[r]:0; }
     var mgRows=_kompSortByLoc(Object.keys(revByLoc).map(function(loc){ var rev=revByLoc[loc],sal=_look(salMap,loc),opx=_look(opexMap,loc); return {loc:loc,rev:rev,sal:sal,opx:opx,margin:rev-sal-opx}; }),function(r){return r.loc;});
     var mRev=0,mSal=0,mOpx=0; mgRows.forEach(function(r){mRev+=r.rev;mSal+=r.sal;mOpx+=r.opx;}); var mMar=mRev-mSal-mOpx;
@@ -2781,28 +2787,16 @@ function _renderKompBlock(){
     tileDefs.salpay={ic:'💸',cls:'si-y',lbl:'Виплата ЗП',val:(salLoad&&salPct!=null?salPct+'%':'—'),sub:(salLoad?'залишок '+fmtG(salRem)+' · '+perLbl:'…')};
     tileDefs.margin={ic:'📈',cls:'si-g',lbl:'Маржа',val:(mgLoad?fmtG(mMar):'—'),sub:'дохід − ЗП − OPEX · '+perLbl};
     tileDefs.term={ic:'🚪',cls:'si-p',lbl:'Причини розірвання',val:(termLoad?termTotal:'—'),sub:'розірвань · '+perLbl};
-    _panels.debt='<div class="card-hd"><h3>💳 Борги</h3><span style="font-size:12px;color:var(--gray)">'+(cm===0?'накопичено (Борг-Рік)':KOMP_MONTHS[cm-1]+' · статус debt/nopay')+'</span></div>'+debtTbl;
-    _panels.salpay='<div class="card-hd"><h3>💸 Виплата ЗП</h3><span style="font-size:12px;color:var(--gray)">'+perLbl+' '+y+'</span></div>'+salTbl;
-    _panels.margin='<div class="card-hd"><h3>📈 Маржа по локації</h3><span style="font-size:12px;color:var(--gray)">'+perLbl+' '+y+' · дохід(факт) − ЗП − OPEX</span></div>'+mgTbl;
-    _panels.term='<div class="card-hd"><h3>🚪 Причини розірвання</h3><span style="font-size:12px;color:var(--gray)">'+perLbl+' '+y+'</span></div>'+termTbl;
-    cfoBlock='<div class="card" style="margin-bottom:16px;border:2px solid #e8eef5"><div class="card-hd" style="flex-wrap:wrap;gap:8px"><h3>💼 Фінанси (CFO) '+y+'</h3><div style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--gray)">Період: '+cfoSel+'</div></div><div style="padding:12px"><div class="stats-grid">'+(_tile('debt')+_tile('salpay')+_tile('margin')+_tile('term'))+'</div>'+_panelFor(['debt','salpay','margin','term'])+'</div></div>';
+    var _cfoHd=function(h3,note){ return '<div class="card-hd" style="flex-wrap:wrap;gap:6px"><h3>'+h3+'</h3><div style="display:flex;align-items:center;gap:8px"><span style="font-size:12px;color:var(--gray)">'+note+'</span>'+cfoSel+'</div></div>'; };
+    _panels.debt=_cfoHd('💳 Борги',(cm===0?'накопичено (Борг-Рік)':KOMP_MONTHS[cm-1]+' · статус debt/nopay'))+debtTbl;
+    _panels.salpay=_cfoHd('💸 Виплата ЗП',perLbl+' '+y)+salTbl;
+    _panels.margin=_cfoHd('📈 Маржа по локації',perLbl+' '+y+' · дохід(факт) − ЗП − OPEX')+mgTbl;
+    _panels.term=_cfoHd('🚪 Причини розірвання',perLbl+' '+y)+termTbl;
   }
+  var _allTiles=_tile('fill')+_tile('free')+_tile('kpi')+_tile('rate')+(cfoOn?(_tile('debt')+_tile('salpay')+_tile('margin')+_tile('term')):'');
   return `
-    <div class="card" style="margin-bottom:16px;border:2px solid #e8eef5">
-      <div class="card-hd"><h3>📋 Комплектація ${y}</h3></div>
-      <div style="padding:12px">
-        <div class="stats-grid">${_tile('fill')+_tile('free')}</div>
-        ${_panelFor(['fill','free'])}
-      </div>
-    </div>
-    <div class="card" style="margin-bottom:16px;border:2px solid #e8eef5">
-      <div class="card-hd"><h3>⭐ Оцінка та KPI ${y}</h3></div>
-      <div style="padding:12px">
-        <div class="stats-grid">${_tile('rate')+_tile('kpi')}</div>
-        ${_panelFor(['rate','kpi'])}
-      </div>
-    </div>
-    ${cfoBlock}`;
+    <div class="stats-grid" style="margin-bottom:16px">${_allTiles}</div>
+    ${_panelFor(['fill','free','kpi','rate','debt','salpay','margin','term'])}`;
 }
 
 function renderDash(){
