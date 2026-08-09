@@ -2616,26 +2616,42 @@ function _renderKompBlock(){
   if(y<curY){ kpiMonths=qAll; }
   else if(y>curY){ kpiMonths=[]; }
   else { if(selQ<curQ){ kpiMonths=qAll; } else if(selQ===curQ){ kpiMonths=qAll.filter(function(mm){return mm<curM;}); kpiInProgress=true; } else { kpiMonths=[]; } }
-  var kpiSub=kpiInProgress ? (Q_LBL[selQ-1]+' · у процесі, '+kpiMonths.length+' з 3 міс.')
+  var kpiSub=kpiInProgress ? (Q_LBL[selQ-1]+' · '+y+' набрано за '+kpiMonths.length+' з 3 міс.')
            : (kpiMonths.length ? (Q_LBL[selQ-1]+' · '+y+' vs '+(y-1)) : (Q_LBL[selQ-1]+' · ще не почався'));
   var qSel='<select class="flt-sel" onchange="dashKpiSetQuarter(this.value)">'+[1,2,3,4].map(function(qq){return '<option value="'+qq+'" '+(qq===selQ?'selected':'')+'>Q'+qq+'</option>';}).join('')+'</select>';
+  // Підписано = «Підписані» + «підписані на майбутній період» (перевірено: Осокорки Q3'25 = 24)
+  var sumSign=function(dataObj,locName,months){ if(!dataObj)return null; var arr=(dataObj.locations||[]).filter(function(x){return x.loc===locName;}); var L=arr[0]; if(!L)return null;
+    var s=0,any=false; months.forEach(function(mm){ var mo=(L.months&&L.months[mm-1])||{}; var a=Number(mo.signed),b=Number(mo.signedFuture); if(isFinite(a)){s+=a;any=true;} if(isFinite(b)){s+=b;any=true;} }); return any?s:null; };
   var kpiHtml;
   if(!kd||!kdPrev){ kpiHtml='<div class="empty"><span class="ei">📝</span><p>Завантаження…</p></div>'; }
-  else if(!kpiMonths.length){ kpiHtml='<div class="empty"><p>Квартал ще не почався</p></div>'; }
-  else{
-    var sumSigned=function(dataObj,locName){ if(!dataObj)return null; var arr=(dataObj.locations||[]).filter(function(x){return x.loc===locName;}); var L=arr[0]; if(!L)return null;
-      var s=0,any=false; kpiMonths.forEach(function(mm){ var mo=(L.months&&L.months[mm-1])||{}; var v=Number(mo.signed); if(isFinite(v)){s+=v;any=true;} }); return any?s:null; };
+  else if(!kpiInProgress && !kpiMonths.length){ kpiHtml='<div class="empty"><p>Квартал ще не почався</p></div>'; }
+  else {
     var locNames=scopeLocs(kd.locations).filter(function(l){return _isKompLocation(l.loc);}).map(function(x){return x.loc;});
-    var kpiRows=locNames.map(function(ln){ var cur=sumSigned(kd,ln),prev=sumSigned(kdPrev,ln); var diff=(cur==null&&prev==null)?null:((cur||0)-(prev||0)); return {loc:ln,cur:cur,prev:prev,diff:diff}; })
-      .filter(function(r){ return (r.cur||0)!==0||(r.prev||0)!==0; }) // прибираємо порожні позиції
-      .sort(function(a,b){return (b.cur||0)-(a.cur||0);});
-    var totCur=0,totPrev=0,bonusBase=0; kpiRows.forEach(function(r){ totCur+=r.cur||0; totPrev+=r.prev||0; if((r.diff||0)>0)bonusBase+=r.diff; });
-    kpiHtml=kpiRows.length?'<div class="tbl-wrap"><table><thead><tr><th>Локація</th><th>'+y+'</th><th>'+(y-1)+'</th><th title="Надлишок над торішнім = база бонусу">Δ надлишок</th></tr></thead><tbody>'+
-      kpiRows.map(function(r){ var d=r.diff; var col=d==null?'var(--gray2)':d>0?'#27ae60':'#95a5a6'; var sg=d>0?'+':'';
-        return '<tr><td><strong>'+esc(r.loc)+'</strong></td><td>'+(r.cur==null?'—':r.cur)+'</td><td style="color:var(--gray)">'+(r.prev==null?'—':r.prev)+'</td><td style="color:'+col+';font-weight:700">'+(d==null?'—':(d>0?sg+d:(d===0?'0':d)))+(d!=null&&d<=0?' <span style="font-size:10px;color:var(--gray)">без бонусу</span>':'')+'</td></tr>';
-      }).join('')+
-      '<tr style="border-top:2px solid var(--gray2)"><td><strong>Разом</strong></td><td><strong>'+totCur+'</strong></td><td style="color:var(--gray)">'+totPrev+'</td><td style="font-weight:800;color:'+(bonusBase>0?'#27ae60':'#95a5a6')+'">'+(bonusBase>0?'+'+bonusBase:'0')+'</td></tr>'+
-      '</tbody></table></div>':'<div class="empty"><p>Немає даних</p></div>';
+    if(kpiInProgress){
+      // Незавершений квартал: набрано (минулі місяці y) проти ЦІЛІ = ПОВНИЙ квартал y-1. Залишилось = ціль − набрано + 1.
+      var rows2=locNames.map(function(ln){ var got=sumSign(kd,ln,kpiMonths), target=sumSign(kdPrev,ln,qAll); return {loc:ln,got:got,target:target}; })
+        .filter(function(r){ return (r.got||0)!==0||(r.target||0)!==0; })
+        .sort(function(a,b){return (b.got||0)-(a.got||0);});
+      var tGot=0,tTgt=0; rows2.forEach(function(r){ tGot+=r.got||0; tTgt+=r.target||0; });
+      kpiHtml=rows2.length?'<div class="tbl-wrap"><table><thead><tr><th>Локація</th><th>'+y+' (набрано)</th><th>'+(y-1)+' (ціль)</th><th title="ціль − набрано + 1">Залишилось</th></tr></thead><tbody>'+
+        rows2.map(function(r){ var rem=(r.target||0)-(r.got||0)+1; var done=rem<=0; var col=done?'#27ae60':'#e67e22';
+          return '<tr><td><strong>'+esc(r.loc)+'</strong></td><td><b>'+(r.got==null?0:r.got)+'</b></td><td style="color:var(--gray)">'+(r.target==null?'—':r.target)+'</td><td style="color:'+col+';font-weight:700">'+(done?'✓':rem)+'</td></tr>';
+        }).join('')+
+        '<tr style="border-top:2px solid var(--gray2)"><td><strong>Разом</strong></td><td><strong>'+tGot+'</strong></td><td style="color:var(--gray)">'+tTgt+'</td><td style="font-weight:800;color:'+((tTgt-tGot+1)<=0?'#27ae60':'#e67e22')+'">'+((tTgt-tGot+1)<=0?'✓':(tTgt-tGot+1))+'</td></tr>'+
+        '</tbody></table></div>':'<div class="empty"><p>Немає даних</p></div>';
+    } else {
+      // Завершений квартал: повне проти повного, Δ надлишок (база бонусу)
+      var kpiRows=locNames.map(function(ln){ var cur=sumSign(kd,ln,qAll),prev=sumSign(kdPrev,ln,qAll); var diff=(cur==null&&prev==null)?null:((cur||0)-(prev||0)); return {loc:ln,cur:cur,prev:prev,diff:diff}; })
+        .filter(function(r){ return (r.cur||0)!==0||(r.prev||0)!==0; })
+        .sort(function(a,b){return (b.cur||0)-(a.cur||0);});
+      var totCur=0,totPrev=0,bonusBase=0; kpiRows.forEach(function(r){ totCur+=r.cur||0; totPrev+=r.prev||0; if((r.diff||0)>0)bonusBase+=r.diff; });
+      kpiHtml=kpiRows.length?'<div class="tbl-wrap"><table><thead><tr><th>Локація</th><th>'+y+'</th><th>'+(y-1)+'</th><th title="Надлишок над торішнім = база бонусу">Δ надлишок</th></tr></thead><tbody>'+
+        kpiRows.map(function(r){ var d=r.diff; var col=d==null?'var(--gray2)':d>0?'#27ae60':'#95a5a6'; var sg=d>0?'+':'';
+          return '<tr><td><strong>'+esc(r.loc)+'</strong></td><td>'+(r.cur==null?'—':r.cur)+'</td><td style="color:var(--gray)">'+(r.prev==null?'—':r.prev)+'</td><td style="color:'+col+';font-weight:700">'+(d==null?'—':(d>0?sg+d:(d===0?'0':d)))+(d!=null&&d<=0?' <span style="font-size:10px;color:var(--gray)">без бонусу</span>':'')+'</td></tr>';
+        }).join('')+
+        '<tr style="border-top:2px solid var(--gray2)"><td><strong>Разом</strong></td><td><strong>'+totCur+'</strong></td><td style="color:var(--gray)">'+totPrev+'</td><td style="font-weight:800;color:'+(bonusBase>0?'#27ae60':'#95a5a6')+'">'+(bonusBase>0?'+'+bonusBase:'0')+'</td></tr>'+
+        '</tbody></table></div>':'<div class="empty"><p>Немає даних</p></div>';
+    }
   }
 
   var netAvg=(rateAvg!=null)?(' · середнє '+rateAvg+'%'):'';
