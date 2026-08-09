@@ -2687,31 +2687,38 @@ function _renderKompBlock(){
   var netAvg=(rateAvg!=null)?(' · середнє '+rateAvg+'%'):'';
   // ── Плитки з підсумками (клікабельні, розгортають таблицю під собою) ──
   var open=S.dashKompOpen||null;
-  var _tiles=[
-    {k:'fill',ic:'🏫',cls:'si-b',lbl:'Наповнюваність',val:(_fillPct!=null?_fillPct+'%':'—'),sub:'по мережі'},
-    {k:'free',ic:'🪑',cls:'si-g',lbl:'Вільні місця (знімок 25.06)',val:(_freeTot!=null?_freeTot:'—'),sub:'всього'},
-    {k:'rate',ic:'👨‍🏫',cls:'si-p',lbl:'Оцінка вихователя',val:(_rateAvg!=null?_rateAvg+'%':'—'),sub:'не оцінено '+_rateUnrated+' з '+_rateActive},
-    {k:'kpi',ic:'📝',cls:'si-y',lbl:'KPI договорів',val:((_kpiGot==null?0:_kpiGot)+' / '+(_kpiTgt==null?0:_kpiTgt)),sub:Q_LBL[selQ-1]}
-  ];
-  var tilesHtml=_tiles.map(function(t){ var op=(open===t.k);
-    return '<div class="stat-card" onclick="dashKompToggle(\''+t.k+'\')" style="cursor:pointer;'+(op?'outline:2px solid #2980b9;outline-offset:-2px;':'')+'">'+
+  var tileDefs={
+    fill:{ic:'🏫',cls:'si-b',lbl:'Наповнюваність',val:(_fillPct!=null?_fillPct+'%':'—'),sub:'по мережі'},
+    free:{ic:'🪑',cls:'si-g',lbl:'Вільні місця (знімок 25.06)',val:(_freeTot!=null?_freeTot:'—'),sub:'всього'},
+    rate:{ic:'👨‍🏫',cls:'si-p',lbl:'Оцінка вихователя',val:(_rateAvg!=null?_rateAvg+'%':'—'),sub:'не оцінено '+_rateUnrated+' з '+_rateActive},
+    kpi:{ic:'📝',cls:'si-y',lbl:'KPI договорів',val:((_kpiGot==null?0:_kpiGot)+' / '+(_kpiTgt==null?0:_kpiTgt)),sub:Q_LBL[selQ-1]}
+  };
+  function _tile(k){ var t=tileDefs[k]; var op=(open===k);
+    return '<div class="stat-card" onclick="dashKompToggle(\''+k+'\')" style="cursor:pointer;'+(op?'outline:2px solid #2980b9;outline-offset:-2px;':'')+'">'+
       '<div class="stat-icon '+t.cls+'">'+t.ic+'</div><div style="min-width:0"><div class="stat-val">'+t.val+'</div>'+
       '<div class="stat-lbl">'+t.lbl+' '+(op?'▾':'▸')+'</div>'+
       '<div style="font-size:11px;color:var(--gray)">'+t.sub+'</div></div></div>';
-  }).join('');
+  }
   var _panels={
     fill:'<div class="card-hd" style="flex-wrap:wrap;gap:6px"><h3>🏫 Наповнюваність</h3><div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--gray)">'+KOMP_MONTHS[m-1]+' '+y+' · Місяць: '+monthSel+'</div></div>'+fillHtml,
     free:'<div class="card-hd"><h3>🪑 Вільні місця (знімок 25.06)</h3><span style="font-size:12px;color:var(--gray)">'+(kf&&kf.tab?esc(kf.tab):'знімок')+'</span></div>'+freeHtml,
     kpi:'<div class="card-hd" style="flex-wrap:wrap;gap:6px"><h3>📝 KPI договорів</h3><div style="display:flex;align-items:center;gap:8px"><span style="font-size:12px;color:var(--gray)">'+kpiSub+'</span>'+qSel+'</div></div>'+kpiHtml,
     rate:'<div class="card-hd"><h3>👨‍🏫 Оцінка вихователя</h3><span style="font-size:12px;color:var(--gray)">середнє за рік '+y+netAvg+'</span></div>'+rateHtml
   };
-  var panelHtml=(open&&_panels[open])?('<div class="card" style="margin:14px 0 0">'+_panels[open]+'</div>'):'';
+  function _panelFor(keys){ return (open&&keys.indexOf(open)>=0&&_panels[open])?('<div class="card" style="margin:14px 0 0">'+_panels[open]+'</div>'):''; }
   return `
     <div class="card" style="margin-bottom:16px;border:2px solid #e8eef5">
-      <div class="card-hd"><h3>📊 Ключові показники ${y}</h3></div>
+      <div class="card-hd"><h3>📋 Комплектація ${y}</h3></div>
       <div style="padding:12px">
-        <div class="stats-grid">${tilesHtml}</div>
-        ${panelHtml}
+        <div class="stats-grid">${_tile('fill')+_tile('free')}</div>
+        ${_panelFor(['fill','free'])}
+      </div>
+    </div>
+    <div class="card" style="margin-bottom:16px;border:2px solid #e8eef5">
+      <div class="card-hd"><h3>⭐ Оцінка та KPI ${y}</h3></div>
+      <div style="padding:12px">
+        <div class="stats-grid">${_tile('rate')+_tile('kpi')}</div>
+        ${_panelFor(['rate','kpi'])}
       </div>
     </div>`;
 }
