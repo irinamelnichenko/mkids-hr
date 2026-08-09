@@ -2519,6 +2519,8 @@ function _isKompLocation(name){
   });
 }
 function _kompTokens(s){ return _kompNorm(s).replace(/['’ʼ`.,()]/g,' ').split(/\s+/).filter(Boolean); }
+// Лише садки: реальна локація, але НЕ школа і не онлайн (для KPI договорів).
+function _isKompSadok(name){ if(!_isKompLocation(name))return false; var n=_kompNorm(name); return n.indexOf('школ')<0 && n.indexOf('онлайн')<0; }
 function _kompYear(){ return new Date().getFullYear(); }
 function _kompMonth(){ return S.dashKompMonth || (new Date().getMonth()+1); }
 async function _ensureKomp(y){ if(!S._komp)S._komp={}; if(S._komp[y]!==undefined)return; S._komp[y]=null;
@@ -2547,8 +2549,8 @@ function _renderKompBlock(){
   else{
     var rows=scopeLocs(kd.locations).filter(function(l){return _isKompLocation(l.loc);})
       .map(function(l){ var mo=(l.months&&l.months[m-1])||{}; return {loc:l.loc,contracts:mo.contracts,cap:l.maxLoad,pct:mo.fillPct}; })
-      .filter(function(r){ var c=Number(r.contracts),p=Number(r.pct); return (isFinite(c)&&c>0)||(isFinite(p)&&p>0); }) // прибираємо порожні/від'ємні (напр. Онлайн школа −2)
-      .sort(function(a,b){return (b.pct||0)-(a.pct||0);});
+      .filter(function(r){ var c=Number(r.contracts),p=Number(r.pct); return (isFinite(c)&&c>0)||(isFinite(p)&&p>0); }); // прибираємо порожні/від'ємні (напр. Онлайн школа −2)
+    rows=sortByLocationOrder(rows,function(r){return r.loc;}); // порядок LOCATION_ORDER
     var sumC=0,sumCap=0; rows.forEach(function(r){ var c=Number(r.contracts); if(isFinite(c)&&c>0)sumC+=c; var cp=Number(r.cap); if(isFinite(cp)&&cp>0)sumCap+=cp; });
     var sumPct=sumCap?Math.round(sumC/sumCap*100):null;
     var mkFill=function(r){ var pct=(r.pct==null)?null:Math.round(r.pct); var col=pct==null?'#bdc3c7':pct>=90?'#e74c3c':pct>=70?'#27ae60':'#e67e22';
@@ -2626,12 +2628,12 @@ function _renderKompBlock(){
   if(!kd||!kdPrev){ kpiHtml='<div class="empty"><span class="ei">📝</span><p>Завантаження…</p></div>'; }
   else if(!kpiInProgress && !kpiMonths.length){ kpiHtml='<div class="empty"><p>Квартал ще не почався</p></div>'; }
   else {
-    var locNames=scopeLocs(kd.locations).filter(function(l){return _isKompLocation(l.loc);}).map(function(x){return x.loc;});
+    var locNames=scopeLocs(kd.locations).filter(function(l){return _isKompSadok(l.loc);}).map(function(x){return x.loc;}); // лише САДИ (без шкіл/онлайн)
     if(kpiInProgress){
       // Незавершений квартал: набрано (минулі місяці y) проти ЦІЛІ = ПОВНИЙ квартал y-1. Залишилось = ціль − набрано + 1.
       var rows2=locNames.map(function(ln){ var got=sumSign(kd,ln,kpiMonths), target=sumSign(kdPrev,ln,qAll); return {loc:ln,got:got,target:target}; })
-        .filter(function(r){ return (r.got||0)!==0||(r.target||0)!==0; })
-        .sort(function(a,b){return (b.got||0)-(a.got||0);});
+        .filter(function(r){ return (r.got||0)!==0||(r.target||0)!==0; });
+      rows2=sortByLocationOrder(rows2,function(r){return r.loc;}); // порядок LOCATION_ORDER
       var tGot=0,tTgt=0; rows2.forEach(function(r){ tGot+=r.got||0; tTgt+=r.target||0; });
       kpiHtml=rows2.length?'<div class="tbl-wrap"><table><thead><tr><th>Локація</th><th>'+y+' (набрано)</th><th>'+(y-1)+' (ціль)</th><th title="ціль − набрано + 1">Залишилось</th></tr></thead><tbody>'+
         rows2.map(function(r){ var rem=(r.target||0)-(r.got||0)+1; var done=rem<=0; var col=done?'#27ae60':'#e67e22';
@@ -2642,8 +2644,8 @@ function _renderKompBlock(){
     } else {
       // Завершений квартал: повне проти повного, Δ надлишок (база бонусу)
       var kpiRows=locNames.map(function(ln){ var cur=sumSign(kd,ln,qAll),prev=sumSign(kdPrev,ln,qAll); var diff=(cur==null&&prev==null)?null:((cur||0)-(prev||0)); return {loc:ln,cur:cur,prev:prev,diff:diff}; })
-        .filter(function(r){ return (r.cur||0)!==0||(r.prev||0)!==0; })
-        .sort(function(a,b){return (b.cur||0)-(a.cur||0);});
+        .filter(function(r){ return (r.cur||0)!==0||(r.prev||0)!==0; });
+      kpiRows=sortByLocationOrder(kpiRows,function(r){return r.loc;}); // порядок LOCATION_ORDER
       var totCur=0,totPrev=0,bonusBase=0; kpiRows.forEach(function(r){ totCur+=r.cur||0; totPrev+=r.prev||0; if((r.diff||0)>0)bonusBase+=r.diff; });
       kpiHtml=kpiRows.length?'<div class="tbl-wrap"><table><thead><tr><th>Локація</th><th>'+y+'</th><th>'+(y-1)+'</th><th title="Надлишок над торішнім = база бонусу">Δ надлишок</th></tr></thead><tbody>'+
         kpiRows.map(function(r){ var d=r.diff; var col=d==null?'var(--gray2)':d>0?'#27ae60':'#95a5a6'; var sg=d>0?'+':'';
@@ -2656,7 +2658,8 @@ function _renderKompBlock(){
 
   var netAvg=(rateAvg!=null)?(' · середнє '+rateAvg+'%'):'';
   return `
-    <div class="card" style="margin-bottom:16px;border:2px solid #e8eef5">
+    <style>.komp-block .tbl-wrap table th,.komp-block .tbl-wrap table td{padding:2px 8px !important;font-size:12px;line-height:1.2}.komp-block .tbl-wrap table thead th{padding:3px 8px !important}.komp-block .prog-wrap{height:8px}</style>
+    <div class="card komp-block" style="margin-bottom:16px;border:2px solid #e8eef5">
       <div class="card-hd" style="flex-wrap:wrap;gap:8px">
         <h3>📋 Комплектація — ${KOMP_MONTHS[m-1]} ${y}</h3>
         <div style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--gray)">Місяць: ${monthSel}</div>
