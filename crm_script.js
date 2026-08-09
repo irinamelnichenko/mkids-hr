@@ -1,5 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.99
+// m.kids CRM — Google Apps Script v7.100
+// v7.100: FIX getVyhovatelRatings — прапорець «архів» рахувався з кол. P (формула, майже завжди
+//         непорожня) → усі оцінені хибно ставали архівними й випадали із середнього/дашборда.
+//         Тепер архів визначається як у _parseEmpRow: _empIsArchived(_fmtDateDmy(row[14])) — кол. O.
 // v7.99: getVyhovatelRatings({year,month?}) — READ-ONLY рейтинг вихователів з кол. W «Оцінка (JSON)»
 //        HR-листа: середня оцінка у % по кожному (погано=1/середньо=2/відмінно=3), з локацією,
 //        сортування спад., + середнє по мережі. Для нового блоку дашборда комплектації.
@@ -432,7 +435,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.99', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.100', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -5828,7 +5831,7 @@ function getVyhovatelRatings(params) {
       if (!name) continue;
       teacherCount++;
       var loc = String(row[2] || '').trim();
-      var archived = String(row[15] || '').trim() !== ''; // P — дата звільнення (формула)
+      var archived = _empIsArchived(_fmtDateDmy(row[14])); // O (idx14) — дата звільнення (як у _parseEmpRow)
 
       var assess = null;
       try { assess = row[22] ? JSON.parse(row[22]) : null; } catch (e) { assess = null; }
