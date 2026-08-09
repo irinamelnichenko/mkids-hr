@@ -1,5 +1,10 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.96
+// m.kids CRM — Google Apps Script v7.97
+// v7.97: (1) getKomplektaciyaData({year,tab?}) — READ-ONLY нормалізація річної вкладки комплектації:
+//        по локаціях і місяцях {вільні місця, макс.загрузка, % заповнення, договори, підписані,
+//        підписані на майбутній період, розірвані, причина розірвання, платежі}. Межі блоків — з
+//        рядка місяців, поля — за підзаголовками (рядок idx2); порожні локації пропускаються.
+//        (2) getKomplektaciyaFreeSeats() — вкладка «вільні місця (25/06)»: по локаціях і типах груп.
 // v7.96: getKomplektaciya({tab?}) — READ-ONLY розвідка окремого файлу «Комплектація»
 //        (spreadsheetId 1IJ81H5k…9YH4). Без tab повертає всі вкладки; з tab — лише вказану.
 //        Для кожної вкладки: заголовки (рядок 1) і перші 5 рядків даних (getDisplayValues),
@@ -419,7 +424,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.96', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.97', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -454,6 +459,8 @@ function doGet(e) {
     else if (action === 'getUsers')                  result = getUsers();
     else if (action === 'getGroupNorms')             result = getGroupNorms();
     else if (action === 'getKomplektaciya')          result = getKomplektaciya({tab: (e.parameter && e.parameter.tab) || ''}); // v7.96 read-only структура файлу комплектації
+    else if (action === 'getKomplektaciyaData')      result = getKomplektaciyaData({year: (e.parameter && e.parameter.year) || '', tab: (e.parameter && e.parameter.tab) || ''}); // v7.97
+    else if (action === 'getKomplektaciyaFreeSeats') result = getKomplektaciyaFreeSeats(); // v7.97
     else if (action === 'getActivitiesCatalog')      result = getActivitiesCatalog(e.parameter && e.parameter.loc || '');
     else if (action === 'getAttendanceMarks')         result = getAttendanceMarks(e.parameter || {});
     else if (action === 'getDopMerges')               result = getDopMerges(e.parameter || {});
@@ -5541,6 +5548,209 @@ function getKomplektaciya(params) {
             tab: wantTab || null, tabCount: out.length, tabs: out};
   } catch (e) {
     return {ok: false, error: String(e && e.message || e), spreadsheetId: KOMPLEKTACIYA_SHEET_ID};
+  }
+}
+
+// ─── v7.97: getKomplektaciyaData({year, tab?}) — READ-ONLY нормалізація річної вкладки.
+//     tab або (за замовч.) 2 останні цифри року: 2026→'26', 2025→'25', … 2019→'19'.
+//     Розкладка: рядок 1 (idx0) порожній; рядок 2 (idx1) — назви місяців (центровані в блоці);
+//     рядок 3 (idx2) — підзаголовки полів; рядки 4+ (idx3+) — дані по локаціях (кол.0 = локація).
+//     Блоки місяців ~8 колонок від кол.5, але реально «пливуть» (8–9), а перший блок несе ще
+//     й річні вільні/макс/% у кол.1–3. Тому межі блоків беремо з рядка місяців, а КОЖНУ колонку
+//     маркуємо за текстом підзаголовка (рядок idx2) — надійно попри дрейф. Порожні локації пропускаємо.
+function _kompClassifyField(txt) {
+  var s = String(txt || '').toLowerCase();
+  if (!s) return null;
+  if (s.indexOf('заповнюваност') >= 0) return 'fillPct';
+  if (s.indexOf('вільн') >= 0) return 'freeSeats';
+  if (s.indexOf('загрузка') >= 0 || s.indexOf('максимальн') >= 0) return 'maxLoad';
+  if (s.indexOf('причин') >= 0) return 'terminationReason';       // «причини розірвання» — до 'розірв'
+  if (s.indexOf('розірв') >= 0) return 'terminated';
+  if (s.indexOf('платеж') >= 0) return 'payments';
+  if (s.indexOf('підписані на майбутн') >= 0) return 'signedFuture';
+  if (s.indexOf('підписані') >= 0) return 'signed';
+  if (s.indexOf('майбутн') >= 0) return 'contractsFuture';        // «майбутній період» (договори)
+  if (s.indexOf('договор') >= 0) return 'contracts';             // «кіл-ть договорів на 1 …»
+  return null;
+}
+
+function getKomplektaciyaData(params) {
+  params = params || {};
+  var year = String(params.year || '').trim();
+  var tab  = String(params.tab || '').trim();
+  var tabName = tab || (year ? year.slice(-2) : '');
+  if (!tabName) return {ok: false, error: 'Вкажіть year (напр. 2026) або tab'};
+  try {
+    var ss = SpreadsheetApp.openById(KOMPLEKTACIYA_SHEET_ID);
+    var sh = ss.getSheetByName(tabName);
+    if (!sh) return {ok: false, error: 'Вкладку "' + tabName + '" не знайдено',
+                     tabs: ss.getSheets().map(function(x){ return x.getName(); })};
+    var lastRow = sh.getLastRow(), lastCol = sh.getLastColumn();
+    if (lastRow < 4 || lastCol < 5) return {ok: false, error: 'Замало даних у вкладці "' + tabName + '"'};
+
+    var vals = sh.getRange(1, 1, lastRow, lastCol).getValues();
+    var monthRow = vals[1] || [];   // idx1 — назви місяців
+    var subRow   = vals[2] || [];   // idx2 — підзаголовки полів
+
+    var MONTHS = ['січень','лютий','березень','квітень','травень','червень',
+                  'липень','серпень','вересень','жовтень','листопад','грудень'];
+    // 1) якорі місяців із рядка назв
+    var anchors = [];
+    for (var c = 0; c < monthRow.length; c++) {
+      var t = String(monthRow[c] || '').toLowerCase();
+      if (!t) continue;
+      for (var mi = 0; mi < 12; mi++) {
+        if (t.indexOf(MONTHS[mi]) >= 0) { anchors.push({m: mi + 1, col: c}); break; }
+      }
+    }
+    anchors.sort(function(a, b){ return a.col - b.col; });
+
+    // 2) межі блоків: 1-й місяць від кол.1 (несе річні вільні/макс/%), решта — за 3 кол. до якоря
+    var blocks = [];
+    for (var i = 0; i < anchors.length; i++) {
+      var start = (i === 0) ? 1 : Math.max(anchors[i].col - 3, blocks[i - 1].end + 1);
+      blocks.push({m: anchors[i].m, start: start, end: 0});
+    }
+    for (var j = 0; j < blocks.length; j++) {
+      blocks[j].end = (j + 1 < blocks.length) ? (blocks[j + 1].start - 1) : (lastCol - 1);
+    }
+    // fallback: якщо назв місяців не знайдено — фіксовані блоки по 8 колонок від кол.5
+    if (blocks.length === 0) {
+      for (var k = 0; k < 12; k++) {
+        var st = 5 + k * 8;
+        if (st > lastCol - 1) break;
+        blocks.push({m: k + 1, start: st, end: Math.min(st + 7, lastCol - 1)});
+      }
+    }
+
+    function parseBlock(dataRow, blk) {
+      var mo = {month: blk.m, freeSeats: null, maxLoad: null, fillPct: null,
+                contracts: null, contractsNoFuture: null, contractsFuture: null,
+                signed: null, signedFuture: null, terminated: null,
+                terminationReason: null, payments: null};
+      for (var c = blk.start; c <= blk.end && c < dataRow.length; c++) {
+        var key = _kompClassifyField(subRow[c]);
+        if (!key) continue;
+        var v = dataRow[c];
+        if (v === '' || v === null || v === undefined) continue;
+        if (key === 'contracts') {
+          if (String(subRow[c]).toLowerCase().indexOf('без майбутн') >= 0) {
+            if (mo.contractsNoFuture == null) mo.contractsNoFuture = v;
+          } else if (mo.contracts == null) { mo.contracts = v; }
+        } else if (mo[key] == null) {
+          mo[key] = v;
+        }
+      }
+      if (mo.contracts == null && mo.contractsNoFuture != null) mo.contracts = mo.contractsNoFuture;
+      return mo;
+    }
+
+    function moHasData(mo) {
+      var keys = ['freeSeats','maxLoad','fillPct','contracts','contractsNoFuture',
+                  'contractsFuture','signed','signedFuture','terminated','terminationReason','payments'];
+      for (var q = 0; q < keys.length; q++) { if (mo[keys[q]] != null && mo[keys[q]] !== '') return true; }
+      return false;
+    }
+
+    var locations = [];
+    for (var r = 3; r < vals.length; r++) {
+      var row = vals[r] || [];
+      var locName = String(row[0] || '').trim();
+      if (!locName) continue;                 // порожні локації пропускаємо
+      var months = [];
+      for (var b = 0; b < blocks.length; b++) months.push(parseBlock(row, blocks[b]));
+      if (!months.some(moHasData)) continue;  // локація без жодних чисел — теж пропускаємо
+      // річні (локаційні) вільні/макс/% — беремо з першого місяця, де вони присутні
+      var loc = {loc: locName, freeSeats: null, maxLoad: null, fillPct: null, months: months};
+      for (var mm = 0; mm < months.length; mm++) {
+        if (loc.freeSeats == null && months[mm].freeSeats != null) loc.freeSeats = months[mm].freeSeats;
+        if (loc.maxLoad   == null && months[mm].maxLoad   != null) loc.maxLoad   = months[mm].maxLoad;
+        if (loc.fillPct   == null && months[mm].fillPct   != null) loc.fillPct   = months[mm].fillPct;
+      }
+      locations.push(loc);
+    }
+
+    return {ok: true, tab: tabName, year: year || null,
+            monthBlocks: blocks.map(function(b){ return {month: b.m, startCol: b.start, endCol: b.end}; }),
+            locationCount: locations.length, locations: locations};
+  } catch (e) {
+    return {ok: false, error: String(e && e.message || e), tab: tabName};
+  }
+}
+
+// ─── v7.97: getKomplektaciyaFreeSeats() — READ-ONLY вкладка «вільні місця (25/06)».
+//     Рядок idx0 — типи груп (кол.1+); idx1 — тотали по типах (+ загальний у кін.); idx2+ — локації
+//     (кол.0 = назва; може займати 2 рядки через об'єднану клітинку — доклеюємо до попередньої локації).
+var KOMPLEKTACIYA_FREESEATS_TAB = 'вільні місця (25/06)';
+
+function getKomplektaciyaFreeSeats() {
+  try {
+    var ss = SpreadsheetApp.openById(KOMPLEKTACIYA_SHEET_ID);
+    var sh = ss.getSheetByName(KOMPLEKTACIYA_FREESEATS_TAB);
+    if (!sh) return {ok: false, error: 'Вкладку "' + KOMPLEKTACIYA_FREESEATS_TAB + '" не знайдено',
+                     tabs: ss.getSheets().map(function(x){ return x.getName(); })};
+    var lastRow = sh.getLastRow(), lastCol = sh.getLastColumn();
+    if (lastRow < 3 || lastCol < 2) return {ok: false, error: 'Замало даних у вкладці вільних місць'};
+
+    var vals = sh.getRange(1, 1, lastRow, lastCol).getValues();
+    var headRow = vals[0] || [], totRow = vals[1] || [];
+
+    // типи груп: непорожні заголовки в кол.1..lastCol-1
+    var groups = [];
+    for (var c = 1; c < lastCol; c++) {
+      var h = String(headRow[c] || '').trim();
+      if (h) groups.push({name: h, col: c});
+    }
+    // тотали по типах + загальний (остання числова колонка без заголовка)
+    var totals = {};
+    for (var g = 0; g < groups.length; g++) totals[groups[g].name] = totRow[groups[g].col];
+    var grand = null;
+    for (var tc = lastCol - 1; tc >= 1; tc--) {
+      var tv = totRow[tc];
+      if ((typeof tv === 'number' || (tv !== '' && tv != null && isFinite(Number(tv)))) &&
+          !String(headRow[tc] || '').trim()) { grand = tv; break; }
+    }
+
+    function collectRow(row) {
+      var byGroup = {}, any = false;
+      for (var k = 0; k < groups.length; k++) {
+        var v = row[groups[k].col];
+        if (v === '' || v == null) continue;
+        byGroup[groups[k].name] = v; any = true;
+      }
+      return {byGroup: byGroup, any: any};
+    }
+
+    var locations = [];
+    for (var r = 2; r < vals.length; r++) {
+      var row = vals[r] || [];
+      var nm = String(row[0] || '').trim();
+      var got = collectRow(row);
+      if (nm) {
+        var entry = {loc: nm, byGroup: {}, rows: []};
+        for (var kk in got.byGroup) entry.byGroup[kk] = got.byGroup[kk];
+        if (got.any) entry.rows.push(got.byGroup);
+        locations.push(entry);
+      } else if (got.any && locations.length) {
+        // об'єднана клітинка локації → доклеюємо до попередньої (сумуємо однакові типи груп)
+        var prev = locations[locations.length - 1];
+        prev.rows.push(got.byGroup);
+        for (var gk in got.byGroup) {
+          var pv = Number(prev.byGroup[gk]) || 0;
+          var nv = Number(got.byGroup[gk]);
+          prev.byGroup[gk] = isFinite(nv) ? (pv + nv) : prev.byGroup[gk];
+        }
+      }
+    }
+    // локації без даних прибираємо
+    locations = locations.filter(function(l){ for (var x in l.byGroup) return true; return false; });
+
+    return {ok: true, tab: KOMPLEKTACIYA_FREESEATS_TAB,
+            groups: groups.map(function(g){ return g.name; }),
+            totals: totals, grandTotal: grand,
+            locationCount: locations.length, locations: locations};
+  } catch (e) {
+    return {ok: false, error: String(e && e.message || e), tab: KOMPLEKTACIYA_FREESEATS_TAB};
   }
 }
 
