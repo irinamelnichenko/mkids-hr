@@ -1,5 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.98
+// m.kids CRM — Google Apps Script v7.99
+// v7.99: getVyhovatelRatings({year,month?}) — READ-ONLY рейтинг вихователів з кол. W «Оцінка (JSON)»
+//        HR-листа: середня оцінка у % по кожному (погано=1/середньо=2/відмінно=3), з локацією,
+//        сортування спад., + середнє по мережі. Для нового блоку дашборда комплектації.
 // v7.98: FIX getKomplektaciyaData — коректне розкладання полів: (а) «договорів без майбутнього
 //        періода» більше не потрапляє у contractsFuture (перевірку 'договор' винесено ПЕРЕД 'майбутн');
 //        (б) у місяцях крім січня колонка «договорів» у джерелі містить % заповнення — тепер це
@@ -429,7 +432,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.98', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.99', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -466,6 +469,7 @@ function doGet(e) {
     else if (action === 'getKomplektaciya')          result = getKomplektaciya({tab: (e.parameter && e.parameter.tab) || ''}); // v7.96 read-only структура файлу комплектації
     else if (action === 'getKomplektaciyaData')      result = getKomplektaciyaData({year: (e.parameter && e.parameter.year) || '', tab: (e.parameter && e.parameter.tab) || ''}); // v7.97
     else if (action === 'getKomplektaciyaFreeSeats') result = getKomplektaciyaFreeSeats(); // v7.97
+    else if (action === 'getVyhovatelRatings')       result = getVyhovatelRatings({year: (e.parameter && e.parameter.year) || '', month: (e.parameter && e.parameter.month) || ''}); // v7.99
     else if (action === 'getActivitiesCatalog')      result = getActivitiesCatalog(e.parameter && e.parameter.loc || '');
     else if (action === 'getAttendanceMarks')         result = getAttendanceMarks(e.parameter || {});
     else if (action === 'getDopMerges')               result = getDopMerges(e.parameter || {});
@@ -5778,6 +5782,94 @@ function getKomplektaciyaFreeSeats() {
             locationCount: locations.length, locations: locations};
   } catch (e) {
     return {ok: false, error: String(e && e.message || e), tab: KOMPLEKTACIYA_FREESEATS_TAB};
+  }
+}
+
+// ─── v7.99: getVyhovatelRatings({year, month?}) — READ-ONLY рейтинг вихователів.
+//     Читає кол. W «Оцінка (JSON)» HR-листа. Оцінка місяця = Σ(балів)/(к-сть·3)·100,
+//     де погано=1/середньо=2/відмінно=3 (рахуємо лише заповнені критерії — як у фронті).
+//     Рейтинг вихователя = середнє по місяцях (month → лише той місяць; без month → всі за рік).
+//     Тільки посади вихователь/тьютор/педагог. Повертає список (спад.) і середнє по мережі.
+function _vyhRatingPct(criteria) {
+  var map = {'погано': 1, 'середньо': 2, 'відмінно': 3};
+  var sum = 0, n = 0;
+  for (var k in criteria) {
+    var v = map[String(criteria[k] || '').toLowerCase()];
+    if (v) { sum += v; n++; }
+  }
+  return n ? {pct: Math.round(sum / (n * 3) * 1000) / 10, filled: n} : null;
+}
+
+function getVyhovatelRatings(params) {
+  params = params || {};
+  var year  = String(params.year || '').trim();
+  var month = (params.month != null && String(params.month).trim() !== '') ? Number(params.month) : null;
+  if (!year) return {ok: false, error: 'Вкажіть year (напр. 2026)'};
+  var TEACHER_KW = ['вихователь', 'тьютор', 'педагог'];
+  try {
+    var sh = SpreadsheetApp.openById(HR_SHEET_ID).getSheetByName(HR_TAB_NAME);
+    if (!sh) return {ok: false, error: 'HR-лист "' + HR_TAB_NAME + '" не знайдено'};
+    var lastRow = sh.getLastRow();
+    if (lastRow < 2) return {ok: true, year: year, month: month, teachers: [], networkAvgPct: null,
+                             teacherCount: 0, ratedCount: 0, unratedCount: 0};
+    var vals = sh.getRange(2, 1, lastRow - 1, 23).getValues(); // A..W
+    var prefix = year + '-';
+    var monthKey = (month != null) ? (year + '-' + ('0' + month).slice(-2)) : null;
+
+    var teachers = [], ratedVals = [], unrated = 0, teacherCount = 0;
+    for (var i = 0; i < vals.length; i++) {
+      var row = vals[i];
+      var posRaw = String(row[7] || '').trim();
+      var pos = posRaw.toLowerCase();
+      if (!pos) continue;
+      var isTeacher = TEACHER_KW.some(function(kw){ return pos.indexOf(kw) >= 0; });
+      if (!isTeacher) continue;
+      var name = (String(row[4] || '').trim() + ' ' + String(row[5] || '').trim()).trim();
+      if (!name) continue;
+      teacherCount++;
+      var loc = String(row[2] || '').trim();
+      var archived = String(row[15] || '').trim() !== ''; // P — дата звільнення (формула)
+
+      var assess = null;
+      try { assess = row[22] ? JSON.parse(row[22]) : null; } catch (e) { assess = null; }
+      var months = [];
+      if (assess && typeof assess === 'object') {
+        for (var tpl in assess) {
+          var byPeriod = assess[tpl];
+          if (!byPeriod || typeof byPeriod !== 'object') continue;
+          for (var per in byPeriod) {
+            if (monthKey) { if (per !== monthKey) continue; }
+            else { if (String(per).indexOf(prefix) !== 0) continue; }
+            var crit = (byPeriod[per] && byPeriod[per].criteria) || {};
+            var sc = _vyhRatingPct(crit);
+            if (sc) months.push({period: per, pct: sc.pct, filled: sc.filled});
+          }
+        }
+      }
+      months.sort(function(a, b){ return a.period < b.period ? -1 : 1; });
+      var ratingPct = null;
+      if (months.length) {
+        var s = 0; for (var m2 = 0; m2 < months.length; m2++) s += months[m2].pct;
+        ratingPct = Math.round(s / months.length * 10) / 10;
+      }
+      if (ratingPct != null) { if (!archived) ratedVals.push(ratingPct); }
+      else unrated++;
+      teachers.push({name: name, loc: loc, pos: posRaw, ratingPct: ratingPct,
+                     monthsCount: months.length, months: months, archived: archived});
+    }
+    teachers.sort(function(a, b){
+      if (a.ratingPct == null && b.ratingPct == null) return 0;
+      if (a.ratingPct == null) return 1;
+      if (b.ratingPct == null) return -1;
+      return b.ratingPct - a.ratingPct;
+    });
+    var networkAvg = ratedVals.length
+      ? Math.round(ratedVals.reduce(function(a, b){ return a + b; }, 0) / ratedVals.length * 10) / 10 : null;
+    return {ok: true, year: year, month: month, scale: {'погано': 1, 'середньо': 2, 'відмінно': 3},
+            teachers: teachers, networkAvgPct: networkAvg, teacherCount: teacherCount,
+            ratedCount: ratedVals.length, unratedCount: unrated};
+  } catch (e) {
+    return {ok: false, error: String(e && e.message || e)};
   }
 }
 
