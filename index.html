@@ -2574,7 +2574,7 @@ function _renderKompBlock(){
       var free=(r.cap==null)?null:(r.cap-(Number(r.contracts)||0)); // місць − договорів
       return '<tr><td><strong>'+esc(r.loc)+'</strong></td><td>'+(r.contracts==null?'—':r.contracts)+'</td><td>'+(r.cap==null?'<span style=color:var(--gray2)>—</span>':r.cap)+'</td>'+
         '<td>'+(free==null?'<span style=color:var(--gray2)>—</span>':'<b style="color:'+(free>0?'#27ae60':'var(--gray)')+'">'+free+'</b>')+'</td>'+
-        '<td style="min-width:150px"><div style="display:flex;align-items:center;gap:8px"><div class="prog-wrap" style="flex:1;margin:0"><div class="prog-bar" style="width:'+(pct||0)+'%;background:'+col+'"></div></div><span style="font-size:12px;font-weight:700;color:'+col+';min-width:40px">'+(pct==null?'—':pct+'%')+'</span></div></td></tr>'; };
+        '<td style="color:'+col+';font-weight:700">'+(pct==null?'—':pct+'%')+'</td></tr>'; };
     var sumFree=sumCap-sumC;
     fillHtml=rows.length?'<div class="tbl-wrap"><table><thead><tr><th>Локація</th><th>Договорів</th><th>Місць</th><th>Вільних</th><th>Заповнення</th></tr></thead><tbody>'+
       rows.map(mkFill).join('')+
@@ -2685,12 +2685,10 @@ function _renderKompBlock(){
         <div style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--gray)">Місяць: ${monthSel}</div>
       </div>
       <div style="padding:12px">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
-          <div class="card" style="margin:0"><div class="card-hd"><h3>🏫 Наповнюваність</h3><span style="font-size:12px;color:var(--gray)">${KOMP_MONTHS[m-1]} ${y}</span></div>${fillHtml}</div>
-          <div class="card" style="margin:0"><div class="card-hd"><h3>👨‍🏫 Оцінка вихователя</h3><span style="font-size:12px;color:var(--gray)">середнє за рік ${y}${netAvg}</span></div>${rateHtml}</div>
-        </div>
+        <div class="card" style="margin:0"><div class="card-hd"><h3>🏫 Наповнюваність</h3><span style="font-size:12px;color:var(--gray)">${KOMP_MONTHS[m-1]} ${y}</span></div>${fillHtml}</div>
         <div class="card" style="margin:14px 0 0"><div class="card-hd"><h3>🪑 Вільні місця</h3><span style="font-size:12px;color:var(--gray)">${kf&&kf.tab?esc(kf.tab):'знімок'}</span></div>${freeHtml}</div>
         <div class="card" style="margin:14px 0 0"><div class="card-hd" style="flex-wrap:wrap;gap:6px"><h3>📝 KPI договорів</h3><div style="display:flex;align-items:center;gap:8px"><span style="font-size:12px;color:var(--gray)">${kpiSub}</span>${qSel}</div></div>${kpiHtml}</div>
+        <div class="card" style="margin:14px 0 0"><div class="card-hd"><h3>👨‍🏫 Оцінка вихователя</h3><span style="font-size:12px;color:var(--gray)">середнє за рік ${y}${netAvg}</span></div>${rateHtml}</div>
       </div>
     </div>`;
 }
