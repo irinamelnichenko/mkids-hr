@@ -2521,6 +2521,23 @@ function _isKompLocation(name){
 function _kompTokens(s){ return _kompNorm(s).replace(/['’ʼ`.,()]/g,' ').split(/\s+/).filter(Boolean); }
 // Лише садки: реальна локація, але НЕ школа і не онлайн (для KPI договорів).
 function _isKompSadok(name){ if(!_isKompLocation(name))return false; var n=_kompNorm(name); return n.indexOf('школ')<0 && n.indexOf('онлайн')<0; }
+// Ранг у LOCATION_ORDER за ТОКЕННОЮ відповідністю (як _isKompLocation): «Львів Кругла», «228 школа»,
+// «Осокорки сад» отримують позицію свого запису реєстру, а не 999. Обираємо найбільш специфічний збіг.
+function _kompLocRank(name){
+  var rt=_kompTokens(name); if(!rt.length) return 999;
+  var best=-1, bestLen=-1;
+  for(var i=0;i<LOCATION_ORDER.length;i++){
+    var lt=_kompTokens(LOCATION_ORDER[i]);
+    if(lt.length && lt.every(function(t){return rt.indexOf(t)>=0;}) && lt.length>bestLen){ bestLen=lt.length; best=i; }
+  }
+  return best<0?999:best;
+}
+function _kompSortByLoc(arr,getName){
+  return (arr||[]).slice().sort(function(a,b){
+    var na=getName?getName(a):a, nb=getName?getName(b):b;
+    return _kompLocRank(na)-_kompLocRank(nb) || String(na==null?'':na).localeCompare(String(nb==null?'':nb),'uk');
+  });
+}
 function _kompYear(){ return new Date().getFullYear(); }
 function _kompMonth(){ return S.dashKompMonth || (new Date().getMonth()+1); }
 async function _ensureKomp(y){ if(!S._komp)S._komp={}; if(S._komp[y]!==undefined)return; S._komp[y]=null;
@@ -2550,7 +2567,7 @@ function _renderKompBlock(){
     var rows=scopeLocs(kd.locations).filter(function(l){return _isKompLocation(l.loc);})
       .map(function(l){ var mo=(l.months&&l.months[m-1])||{}; return {loc:l.loc,contracts:mo.contracts,cap:l.maxLoad,pct:mo.fillPct}; })
       .filter(function(r){ var c=Number(r.contracts),p=Number(r.pct); return (isFinite(c)&&c>0)||(isFinite(p)&&p>0); }); // прибираємо порожні/від'ємні (напр. Онлайн школа −2)
-    rows=sortByLocationOrder(rows,function(r){return r.loc;}); // порядок LOCATION_ORDER
+    rows=_kompSortByLoc(rows,function(r){return r.loc;}); // порядок LOCATION_ORDER (токенний)
     var sumC=0,sumCap=0; rows.forEach(function(r){ var c=Number(r.contracts); if(isFinite(c)&&c>0)sumC+=c; var cp=Number(r.cap); if(isFinite(cp)&&cp>0)sumCap+=cp; });
     var sumPct=sumCap?Math.round(sumC/sumCap*100):null;
     var mkFill=function(r){ var pct=(r.pct==null)?null:Math.round(r.pct); var col=pct==null?'#bdc3c7':pct>=90?'#e74c3c':pct>=70?'#27ae60':'#e67e22';
@@ -2565,25 +2582,29 @@ function _renderKompBlock(){
       '</tbody></table></div>':'<div class="empty"><p>Немає даних за '+KOMP_MONTHS[m-1]+'</p></div>';
   }
 
-  // Картка 2 — Вільні місця: розріз ПО ГРУПАХ (локація · група · вільних, лише >0), згруповано за локацією
+  // Картка 2 — Вільні місця: МАТРИЦЯ локації × типи груп, з підсумками по рядках і стовпцях
   var freeHtml;
   if(!kf){ freeHtml='<div class="empty"><span class="ei">🪑</span><p>Завантаження…</p></div>'; }
   else{
-    var groups=kf.groups||[], totals=kf.totals||{};
+    var groups=kf.groups||[];
     var flocs=(kf.locations||[]).filter(function(x){return _isKompLocation(x.loc);}); // лише реальні локації
     if(!isHR) flocs=flocs.filter(function(x){return x.loc===myLoc;});
-    flocs=sortByLocationOrder(flocs,function(l){return l.loc;});
-    var gstrip=groups.map(function(g){ return '<span class="badge" style="background:#eef4fb;color:#2c5d86;margin:2px">'+esc(g)+': <b>'+(totals[g]!=null?totals[g]:0)+'</b></span>'; }).join('');
-    var body='';
-    flocs.forEach(function(l){
-      var gr=groups.filter(function(g){ return Number(l.byGroup&&l.byGroup[g])>0; }); // лише групи з вільними >0
-      gr.forEach(function(g,i){ var n=Number(l.byGroup[g]);
-        body+='<tr'+(i===0?' style="border-top:1px solid #eef2f7"':'')+'><td>'+(i===0?'<strong>'+esc(l.loc)+'</strong>':'')+'</td><td>'+esc(g)+'</td><td style="text-align:right"><b style="color:#27ae60">'+n+'</b></td></tr>';
-      });
-    });
-    freeHtml='<div style="padding:10px 14px 4px">'+gstrip+'</div>'+
-      (body?'<div class="tbl-wrap"><table><thead><tr><th>Локація</th><th>Група</th><th style="text-align:right">Вільних</th></tr></thead><tbody>'+body+'</tbody></table></div>'
-        :'<div class="empty"><p>Немає вільних місць</p></div>');
+    flocs=_kompSortByLoc(flocs,function(l){return l.loc;});
+    var colTot={}; groups.forEach(function(g){colTot[g]=0;}); var grand=0;
+    var bodyRows=[];
+    flocs.forEach(function(l){ var rowSum=0; var cells=groups.map(function(g){ var n=Number(l.byGroup&&l.byGroup[g]); if(isFinite(n)&&n>0){rowSum+=n;colTot[g]+=n;grand+=n;return n;} return 0; });
+      if(rowSum>0) bodyRows.push({loc:l.loc,cells:cells,sum:rowSum}); });
+    if(!bodyRows.length){ freeHtml='<div class="empty"><p>Немає вільних місць</p></div>'; }
+    else{
+      var head='<tr><th>Локація</th>'+groups.map(function(g){return '<th style="text-align:center">'+esc(g)+'</th>';}).join('')+'<th style="text-align:center">Разом</th></tr>';
+      var brows=bodyRows.map(function(r){ return '<tr><td><strong>'+esc(r.loc)+'</strong></td>'+
+        r.cells.map(function(n){return '<td style="text-align:center">'+(n>0?n:'')+'</td>';}).join('')+
+        '<td style="text-align:center"><b>'+r.sum+'</b></td></tr>'; }).join('');
+      var foot='<tr style="border-top:2px solid var(--gray2)"><td><strong>Разом</strong></td>'+
+        groups.map(function(g){return '<td style="text-align:center"><b>'+(colTot[g]>0?colTot[g]:'')+'</b></td>';}).join('')+
+        '<td style="text-align:center;font-weight:800">'+grand+'</td></tr>';
+      freeHtml='<div class="tbl-wrap"><table><thead>'+head+'</thead><tbody>'+brows+foot+'</tbody></table></div>';
+    }
   }
 
   // Картка 3 — Оцінка вихователя: СЕРЕДНЄ ЗА РІК (не за обраний місяць), «за N міс.» + «Не оцінено»
@@ -2633,7 +2654,7 @@ function _renderKompBlock(){
       // Незавершений квартал: набрано (минулі місяці y) проти ЦІЛІ = ПОВНИЙ квартал y-1. Залишилось = ціль − набрано + 1.
       var rows2=locNames.map(function(ln){ var got=sumSign(kd,ln,kpiMonths), target=sumSign(kdPrev,ln,qAll); return {loc:ln,got:got,target:target}; })
         .filter(function(r){ return (r.got||0)!==0||(r.target||0)!==0; });
-      rows2=sortByLocationOrder(rows2,function(r){return r.loc;}); // порядок LOCATION_ORDER
+      rows2=_kompSortByLoc(rows2,function(r){return r.loc;}); // порядок LOCATION_ORDER (токенний)
       var tGot=0,tTgt=0; rows2.forEach(function(r){ tGot+=r.got||0; tTgt+=r.target||0; });
       kpiHtml=rows2.length?'<div class="tbl-wrap"><table><thead><tr><th>Локація</th><th>'+y+' (набрано)</th><th>'+(y-1)+' (ціль)</th><th title="ціль − набрано + 1">Залишилось</th></tr></thead><tbody>'+
         rows2.map(function(r){ var rem=(r.target||0)-(r.got||0)+1; var done=rem<=0; var col=done?'#27ae60':'#e67e22';
@@ -2645,7 +2666,7 @@ function _renderKompBlock(){
       // Завершений квартал: повне проти повного, Δ надлишок (база бонусу)
       var kpiRows=locNames.map(function(ln){ var cur=sumSign(kd,ln,qAll),prev=sumSign(kdPrev,ln,qAll); var diff=(cur==null&&prev==null)?null:((cur||0)-(prev||0)); return {loc:ln,cur:cur,prev:prev,diff:diff}; })
         .filter(function(r){ return (r.cur||0)!==0||(r.prev||0)!==0; });
-      kpiRows=sortByLocationOrder(kpiRows,function(r){return r.loc;}); // порядок LOCATION_ORDER
+      kpiRows=_kompSortByLoc(kpiRows,function(r){return r.loc;}); // порядок LOCATION_ORDER (токенний)
       var totCur=0,totPrev=0,bonusBase=0; kpiRows.forEach(function(r){ totCur+=r.cur||0; totPrev+=r.prev||0; if((r.diff||0)>0)bonusBase+=r.diff; });
       kpiHtml=kpiRows.length?'<div class="tbl-wrap"><table><thead><tr><th>Локація</th><th>'+y+'</th><th>'+(y-1)+'</th><th title="Надлишок над торішнім = база бонусу">Δ надлишок</th></tr></thead><tbody>'+
         kpiRows.map(function(r){ var d=r.diff; var col=d==null?'var(--gray2)':d>0?'#27ae60':'#95a5a6'; var sg=d>0?'+':'';
