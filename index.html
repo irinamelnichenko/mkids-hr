@@ -2579,7 +2579,7 @@ function _renderKompBlock(){
         '<td style="color:'+col+';font-weight:700">'+(pct==null?'—':pct+'%')+'</td></tr>'; };
     var sumFree=sumCap-sumC;
     _fillPct=sumPct;
-    fillHtml=rows.length?'<div class="tbl-wrap"><table><thead><tr><th>Локація</th><th>Договорів</th><th>Місць</th><th>Вільних</th><th>Заповнення</th></tr></thead><tbody>'+
+    fillHtml=rows.length?'<div class="tbl-wrap"><table><thead><tr><th>Локація</th><th>Договорів</th><th>Місць</th><th>Запас (місць − дог.)</th><th>Заповнення</th></tr></thead><tbody>'+
       rows.map(mkFill).join('')+
       '<tr style="border-top:2px solid var(--gray2)"><td><strong>Разом</strong></td><td><strong>'+sumC+'</strong></td><td>'+(sumCap||'—')+'</td><td><strong style="color:'+(sumFree>0?'#27ae60':'var(--gray)')+'">'+sumFree+'</strong></td><td style="font-weight:800">'+(sumPct==null?'—':sumPct+'%')+'</td></tr>'+
       '</tbody></table></div>':'<div class="empty"><p>Немає даних за '+KOMP_MONTHS[m-1]+'</p></div>';
@@ -2689,7 +2689,7 @@ function _renderKompBlock(){
   var open=S.dashKompOpen||null;
   var _tiles=[
     {k:'fill',ic:'🏫',cls:'si-b',lbl:'Наповнюваність',val:(_fillPct!=null?_fillPct+'%':'—'),sub:'по мережі'},
-    {k:'free',ic:'🪑',cls:'si-g',lbl:'Вільні місця',val:(_freeTot!=null?_freeTot:'—'),sub:'всього'},
+    {k:'free',ic:'🪑',cls:'si-g',lbl:'Вільні місця (знімок 25.06)',val:(_freeTot!=null?_freeTot:'—'),sub:'всього'},
     {k:'rate',ic:'👨‍🏫',cls:'si-p',lbl:'Оцінка вихователя',val:(_rateAvg!=null?_rateAvg+'%':'—'),sub:'не оцінено '+_rateUnrated+' з '+_rateActive},
     {k:'kpi',ic:'📝',cls:'si-y',lbl:'KPI договорів',val:((_kpiGot==null?0:_kpiGot)+' / '+(_kpiTgt==null?0:_kpiTgt)),sub:Q_LBL[selQ-1]}
   ];
@@ -2701,14 +2701,14 @@ function _renderKompBlock(){
   }).join('');
   var _panels={
     fill:'<div class="card-hd" style="flex-wrap:wrap;gap:6px"><h3>🏫 Наповнюваність</h3><div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--gray)">'+KOMP_MONTHS[m-1]+' '+y+' · Місяць: '+monthSel+'</div></div>'+fillHtml,
-    free:'<div class="card-hd"><h3>🪑 Вільні місця</h3><span style="font-size:12px;color:var(--gray)">'+(kf&&kf.tab?esc(kf.tab):'знімок')+'</span></div>'+freeHtml,
+    free:'<div class="card-hd"><h3>🪑 Вільні місця (знімок 25.06)</h3><span style="font-size:12px;color:var(--gray)">'+(kf&&kf.tab?esc(kf.tab):'знімок')+'</span></div>'+freeHtml,
     kpi:'<div class="card-hd" style="flex-wrap:wrap;gap:6px"><h3>📝 KPI договорів</h3><div style="display:flex;align-items:center;gap:8px"><span style="font-size:12px;color:var(--gray)">'+kpiSub+'</span>'+qSel+'</div></div>'+kpiHtml,
     rate:'<div class="card-hd"><h3>👨‍🏫 Оцінка вихователя</h3><span style="font-size:12px;color:var(--gray)">середнє за рік '+y+netAvg+'</span></div>'+rateHtml
   };
   var panelHtml=(open&&_panels[open])?('<div class="card" style="margin:14px 0 0">'+_panels[open]+'</div>'):'';
   return `
     <div class="card" style="margin-bottom:16px;border:2px solid #e8eef5">
-      <div class="card-hd"><h3>📋 Комплектація ${y}</h3></div>
+      <div class="card-hd"><h3>📊 Ключові показники ${y}</h3></div>
       <div style="padding:12px">
         <div class="stats-grid">${tilesHtml}</div>
         ${panelHtml}
