@@ -2512,16 +2512,16 @@ async function _ensureKomp(y){ if(!S._komp)S._komp={}; if(S._komp[y]!==undefined
 async function _ensureKompFree(){ if(S._kompFree!==undefined)return; S._kompFree=null;
   try{ var r=await fetch(authScriptUrl()+'?action=getKomplektaciyaFreeSeats',{redirect:'follow'}); var j=await r.json(); S._kompFree=(j&&j.ok)?j:{locations:[],groups:[],totals:{}}; }
   catch(e){ S._kompFree={locations:[],groups:[],totals:{}}; } }
-async function _ensureRatings(y,m){ if(!S._ratings)S._ratings={}; var k=y+'-'+('0'+m).slice(-2); if(S._ratings[k]!==undefined)return; S._ratings[k]=null;
-  try{ var r=await fetch(authScriptUrl()+'?action=getVyhovatelRatings&year='+y+'&month='+m,{redirect:'follow'}); var j=await r.json(); S._ratings[k]=(j&&j.ok)?j:{teachers:[]}; }
-  catch(e){ S._ratings[k]={teachers:[]}; } }
-function dashKompSetMonth(m){ S.dashKompMonth=+m; _ensureRatings(_kompYear(),_kompMonth()).then(_dashSoftRerender); _renderDashNow(); }
+async function _ensureRatingsYear(y){ if(!S._ratingsY)S._ratingsY={}; if(S._ratingsY[y]!==undefined)return; S._ratingsY[y]=null;
+  try{ var r=await fetch(authScriptUrl()+'?action=getVyhovatelRatings&year='+y,{redirect:'follow'}); var j=await r.json(); S._ratingsY[y]=(j&&j.ok)?j:{teachers:[]}; }
+  catch(e){ S._ratingsY[y]={teachers:[]}; } }
+function dashKompSetMonth(m){ S.dashKompMonth=+m; _renderDashNow(); } // оцінки — за рік, місяць їх не змінює
 
 function _renderKompBlock(){
   var isHR=isNetworkRole(S.user.role), myLoc=S.user.loc||'';
   var y=_kompYear(), m=_kompMonth();
   var kd=(S._komp&&S._komp[y])||null, kdPrev=(S._komp&&S._komp[y-1])||null;
-  var kf=S._kompFree||null, rk=(S._ratings&&S._ratings[y+'-'+('0'+m).slice(-2)])||null;
+  var kf=S._kompFree||null, rk=(S._ratingsY&&S._ratingsY[y])||null; // v7.100 оцінки — середнє за РІК
   function scopeLocs(list){ if(!list)return []; return isHR?list:list.filter(function(x){return x.loc===myLoc;}); }
   var monthSel='<select class="flt-sel" onchange="dashKompSetMonth(this.value)">'+KOMP_MONTHS.map(function(mn,i){return '<option value="'+(i+1)+'" '+((i+1)===m?'selected':'')+'>'+mn+'</option>';}).join('')+'</select>';
 
@@ -2553,16 +2553,27 @@ function _renderKompBlock(){
         :'<div class="empty"><p>Немає вільних місць</p></div>');
   }
 
-  // Картка 3 — Оцінка вихователя (рейтинг спад.)
-  var rateHtml;
+  // Картка 3 — Оцінка вихователя: СЕРЕДНЄ ЗА РІК (не за обраний місяць), «за N міс.» + «Не оцінено»
+  var rateHtml, rateAvg=null;
   if(!rk){ rateHtml='<div class="empty"><span class="ei">👨‍🏫</span><p>Завантаження…</p></div>'; }
   else{
-    var ts=(rk.teachers||[]).filter(function(t){return t.ratingPct!=null&&!t.archived;});
-    if(!isHR) ts=ts.filter(function(t){return t.loc===myLoc;});
-    rateHtml=ts.length?'<div class="tbl-wrap"><table><thead><tr><th>#</th><th>Вихователь</th><th>Локація</th><th>Оцінка</th></tr></thead><tbody>'+
+    var active=(rk.teachers||[]).filter(function(t){return !t.archived;});
+    if(!isHR) active=active.filter(function(t){return t.loc===myLoc;});
+    var ts=active.filter(function(t){return t.ratingPct!=null;}).sort(function(a,b){return b.ratingPct-a.ratingPct;});
+    if(ts.length){ var sA=0; ts.forEach(function(t){sA+=t.ratingPct;}); rateAvg=Math.round(sA/ts.length*10)/10; }
+    var unrated=active.length-ts.length;
+    // локації, де жодного активного вихователя не оцінено
+    var byLoc={}; active.forEach(function(t){ if(!byLoc[t.loc])byLoc[t.loc]={r:0,n:0}; byLoc[t.loc].n++; if(t.ratingPct!=null)byLoc[t.loc].r++; });
+    var unratedLocs=Object.keys(byLoc).filter(function(l){return byLoc[l].r===0;}).sort();
+    var tbl=ts.length?'<div class="tbl-wrap"><table><thead><tr><th>#</th><th>Вихователь</th><th>Локація</th><th>Оцінка</th></tr></thead><tbody>'+
       ts.map(function(t,i){ var p=t.ratingPct; var col=p>=80?'#27ae60':p>=50?'#e67e22':'#e74c3c';
-        return '<tr><td>'+(i+1)+'</td><td><strong>'+esc(t.name)+'</strong></td><td>'+esc(t.loc)+'</td><td><span class="badge" style="background:'+col+'1a;color:'+col+';font-weight:800">'+p+'%</span></td></tr>';
-      }).join('')+'</tbody></table></div>':'<div class="empty"><p>Немає оцінок за '+KOMP_MONTHS[m-1]+' '+y+'</p></div>';
+        return '<tr><td>'+(i+1)+'</td><td><strong>'+esc(t.name)+'</strong></td><td>'+esc(t.loc)+'</td>'+
+          '<td><span class="badge" style="background:'+col+'1a;color:'+col+';font-weight:800">'+p+'%</span> <span style="font-size:11px;color:var(--gray)">за '+(t.monthsCount||0)+' міс.</span></td></tr>';
+      }).join('')+'</tbody></table></div>':'<div class="empty"><p>Немає оцінок за '+y+'</p></div>';
+    var footer='<div style="font-size:12px;color:var(--gray);padding:8px 14px;border-top:1px solid #f0f4f8">'+
+      'Не оцінено: <b style="color:var(--dark2)">'+unrated+'</b> з '+active.length+
+      (unratedLocs.length?'<br>Локації без жодної оцінки: '+unratedLocs.map(esc).join(', '):'')+'</div>';
+    rateHtml=tbl+footer;
   }
 
   // Картка 4 — KPI договорів (квартал vs той самий квартал минулого року)
@@ -2585,7 +2596,7 @@ function _renderKompBlock(){
       '</tbody></table></div>':'<div class="empty"><p>Немає даних</p></div>';
   }
 
-  var netAvg=(rk&&rk.networkAvgPct!=null)?(' · середнє '+rk.networkAvgPct+'%'):'';
+  var netAvg=(rateAvg!=null)?(' · середнє '+rateAvg+'%'):'';
   return `
     <div class="card" style="margin-bottom:16px;border:2px solid #e8eef5">
       <div class="card-hd" style="flex-wrap:wrap;gap:8px">
@@ -2595,7 +2606,7 @@ function _renderKompBlock(){
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:12px">
         <div class="card" style="margin:0"><div class="card-hd"><h3>🏫 Наповнюваність</h3><span style="font-size:12px;color:var(--gray)">${KOMP_MONTHS[m-1]} ${y}</span></div>${fillHtml}</div>
         <div class="card" style="margin:0"><div class="card-hd"><h3>🪑 Вільні місця</h3><span style="font-size:12px;color:var(--gray)">${kf&&kf.tab?esc(kf.tab):'знімок'}</span></div>${freeHtml}</div>
-        <div class="card" style="margin:0"><div class="card-hd"><h3>👨‍🏫 Оцінка вихователя</h3><span style="font-size:12px;color:var(--gray)">${KOMP_MONTHS[m-1]} ${y}${netAvg}</span></div>${rateHtml}</div>
+        <div class="card" style="margin:0"><div class="card-hd"><h3>👨‍🏫 Оцінка вихователя</h3><span style="font-size:12px;color:var(--gray)">середнє за рік ${y}${netAvg}</span></div>${rateHtml}</div>
         <div class="card" style="margin:0"><div class="card-hd"><h3>📝 KPI договорів</h3><span style="font-size:12px;color:var(--gray)">${qLblArr[q-1]} · ${y} vs ${y-1}</span></div>${kpiHtml}</div>
       </div>
     </div>`;
@@ -2609,7 +2620,7 @@ function renderDash(){
   _ensureKomp(_kompYear()).then(_dashSoftRerender);      // v7.99 комплектація (поточний рік)
   _ensureKomp(_kompYear()-1).then(_dashSoftRerender);    // v7.99 минулий рік (для KPI договорів)
   _ensureKompFree().then(_dashSoftRerender);             // v7.99 вільні місця
-  _ensureRatings(_kompYear(),_kompMonth()).then(_dashSoftRerender); // v7.99 оцінки вихователів
+  _ensureRatingsYear(_kompYear()).then(_dashSoftRerender); // v7.100 оцінки вихователів — середнє за рік
   _renderDashNow();
 }
 function _renderDashNow(){
