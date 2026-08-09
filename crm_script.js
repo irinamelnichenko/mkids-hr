@@ -1,5 +1,10 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.97
+// m.kids CRM — Google Apps Script v7.98
+// v7.98: FIX getKomplektaciyaData — коректне розкладання полів: (а) «договорів без майбутнього
+//        періода» більше не потрапляє у contractsFuture (перевірку 'договор' винесено ПЕРЕД 'майбутн');
+//        (б) у місяцях крім січня колонка «договорів» у джерелі містить % заповнення — тепер це
+//        читається як fillPct, а кількість договорів береться з «без майбутнього»; (в) % нормалізується
+//        у пункти (0.575→57.5). Січень має явний заголовок «% заповнюваності», тому там договори = кількість.
 // v7.97: (1) getKomplektaciyaData({year,tab?}) — READ-ONLY нормалізація річної вкладки комплектації:
 //        по локаціях і місяцях {вільні місця, макс.загрузка, % заповнення, договори, підписані,
 //        підписані на майбутній період, розірвані, причина розірвання, платежі}. Межі блоків — з
@@ -424,7 +429,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.97', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.98', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -5561,7 +5566,7 @@ function getKomplektaciya(params) {
 function _kompClassifyField(txt) {
   var s = String(txt || '').toLowerCase();
   if (!s) return null;
-  if (s.indexOf('заповнюваност') >= 0) return 'fillPct';
+  if (s.indexOf('заповнюваност') >= 0) return 'fillPctHeader'; // явний заголовок % (є лише в січні)
   if (s.indexOf('вільн') >= 0) return 'freeSeats';
   if (s.indexOf('загрузка') >= 0 || s.indexOf('максимальн') >= 0) return 'maxLoad';
   if (s.indexOf('причин') >= 0) return 'terminationReason';       // «причини розірвання» — до 'розірв'
@@ -5569,9 +5574,20 @@ function _kompClassifyField(txt) {
   if (s.indexOf('платеж') >= 0) return 'payments';
   if (s.indexOf('підписані на майбутн') >= 0) return 'signedFuture';
   if (s.indexOf('підписані') >= 0) return 'signed';
-  if (s.indexOf('майбутн') >= 0) return 'contractsFuture';        // «майбутній період» (договори)
-  if (s.indexOf('договор') >= 0) return 'contracts';             // «кіл-ть договорів на 1 …»
+  if (s.indexOf('договор') >= 0) {                               // договори — ДО перевірки 'майбутн'
+    return (s.indexOf('без майбутн') >= 0) ? 'contractsNoFuture' : 'contractsPlain';
+  }
+  if (s.indexOf('майбутн') >= 0) return 'contractsFuture';        // «майбутній період»
   return null;
+}
+
+// % у файлі зберігається дробом (0.575) або текстом («68%»); нормалізуємо у пункти (57.5).
+function _kompPct(v) {
+  if (v == null || v === '') return null;
+  if (typeof v === 'string') { var m = Number(v.replace('%', '').replace(',', '.').trim()); return isFinite(m) ? m : v; }
+  var num = Number(v);
+  if (!isFinite(num)) return v;
+  return Math.round((num <= 1.5 ? num * 100 : num) * 10) / 10;
 }
 
 function getKomplektaciyaData(params) {
@@ -5624,22 +5640,33 @@ function getKomplektaciyaData(params) {
     }
 
     function parseBlock(dataRow, blk) {
-      var mo = {month: blk.m, freeSeats: null, maxLoad: null, fillPct: null,
-                contracts: null, contractsNoFuture: null, contractsFuture: null,
-                signed: null, signedFuture: null, terminated: null,
-                terminationReason: null, payments: null};
+      var raw = {};
       for (var c = blk.start; c <= blk.end && c < dataRow.length; c++) {
         var key = _kompClassifyField(subRow[c]);
         if (!key) continue;
         var v = dataRow[c];
         if (v === '' || v === null || v === undefined) continue;
-        if (key === 'contracts') {
-          if (String(subRow[c]).toLowerCase().indexOf('без майбутн') >= 0) {
-            if (mo.contractsNoFuture == null) mo.contractsNoFuture = v;
-          } else if (mo.contracts == null) { mo.contracts = v; }
-        } else if (mo[key] == null) {
-          mo[key] = v;
-        }
+        if (raw[key] == null) raw[key] = v; // перше входження в блоці
+      }
+      var mo = {month: blk.m, freeSeats: raw.freeSeats != null ? raw.freeSeats : null,
+                maxLoad: raw.maxLoad != null ? raw.maxLoad : null, fillPct: null,
+                contracts: null,
+                contractsNoFuture: raw.contractsNoFuture != null ? raw.contractsNoFuture : null,
+                contractsFuture: raw.contractsFuture != null ? raw.contractsFuture : null,
+                signed: raw.signed != null ? raw.signed : null,
+                signedFuture: raw.signedFuture != null ? raw.signedFuture : null,
+                terminated: raw.terminated != null ? raw.terminated : null,
+                terminationReason: raw.terminationReason != null ? raw.terminationReason : null,
+                payments: raw.payments != null ? raw.payments : null};
+      var plain = raw.contractsPlain;
+      if (raw.fillPctHeader != null) {
+        // Січень: є явний заголовок % → plain «договорів» = справжня кількість договорів
+        mo.fillPct = _kompPct(raw.fillPctHeader);
+        if (plain != null) mo.contracts = plain;
+      } else {
+        // Інші місяці: колонка «договорів» у джерелі помилково містить % заповнення
+        if (plain != null) mo.fillPct = _kompPct(plain);
+        if (mo.contractsNoFuture != null) mo.contracts = mo.contractsNoFuture;
       }
       if (mo.contracts == null && mo.contractsNoFuture != null) mo.contracts = mo.contractsNoFuture;
       return mo;
