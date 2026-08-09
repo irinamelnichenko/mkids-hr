@@ -2596,8 +2596,8 @@ function _renderKompBlock(){
       if(rowSum>0) bodyRows.push({loc:l.loc,cells:cells,sum:rowSum}); });
     if(!bodyRows.length){ freeHtml='<div class="empty"><p>Немає вільних місць</p></div>'; }
     else{
-      var head='<tr><th>Локація</th>'+groups.map(function(g){return '<th style="text-align:center">'+esc(g)+'</th>';}).join('')+'<th style="text-align:center">Разом</th></tr>';
-      var brows=bodyRows.map(function(r){ return '<tr><td><strong>'+esc(r.loc)+'</strong></td>'+
+      var head='<tr><th style="white-space:nowrap">Локація</th>'+groups.map(function(g){return '<th style="text-align:center;text-transform:none;white-space:nowrap">'+esc(g)+'</th>';}).join('')+'<th style="text-align:center">Разом</th></tr>';
+      var brows=bodyRows.map(function(r){ return '<tr><td style="white-space:nowrap"><strong>'+esc(r.loc)+'</strong></td>'+
         r.cells.map(function(n){return '<td style="text-align:center">'+(n>0?n:'')+'</td>';}).join('')+
         '<td style="text-align:center"><b>'+r.sum+'</b></td></tr>'; }).join('');
       var foot='<tr style="border-top:2px solid var(--gray2)"><td><strong>Разом</strong></td>'+
@@ -2679,17 +2679,18 @@ function _renderKompBlock(){
 
   var netAvg=(rateAvg!=null)?(' · середнє '+rateAvg+'%'):'';
   return `
-    <style>.komp-block .tbl-wrap table th,.komp-block .tbl-wrap table td{padding:2px 8px !important;font-size:12px;line-height:1.2}.komp-block .tbl-wrap table thead th{padding:3px 8px !important}.komp-block .prog-wrap{height:8px}</style>
-    <div class="card komp-block" style="margin-bottom:16px;border:2px solid #e8eef5">
+    <div class="card" style="margin-bottom:16px;border:2px solid #e8eef5">
       <div class="card-hd" style="flex-wrap:wrap;gap:8px">
         <h3>📋 Комплектація — ${KOMP_MONTHS[m-1]} ${y}</h3>
         <div style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--gray)">Місяць: ${monthSel}</div>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:12px">
-        <div class="card" style="margin:0"><div class="card-hd"><h3>🏫 Наповнюваність</h3><span style="font-size:12px;color:var(--gray)">${KOMP_MONTHS[m-1]} ${y}</span></div>${fillHtml}</div>
-        <div class="card" style="margin:0"><div class="card-hd"><h3>🪑 Вільні місця</h3><span style="font-size:12px;color:var(--gray)">${kf&&kf.tab?esc(kf.tab):'знімок'}</span></div>${freeHtml}</div>
-        <div class="card" style="margin:0"><div class="card-hd"><h3>👨‍🏫 Оцінка вихователя</h3><span style="font-size:12px;color:var(--gray)">середнє за рік ${y}${netAvg}</span></div>${rateHtml}</div>
-        <div class="card" style="margin:0"><div class="card-hd" style="flex-wrap:wrap;gap:6px"><h3>📝 KPI договорів</h3><div style="display:flex;align-items:center;gap:8px"><span style="font-size:12px;color:var(--gray)">${kpiSub}</span>${qSel}</div></div>${kpiHtml}</div>
+      <div style="padding:12px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+          <div class="card" style="margin:0"><div class="card-hd"><h3>🏫 Наповнюваність</h3><span style="font-size:12px;color:var(--gray)">${KOMP_MONTHS[m-1]} ${y}</span></div>${fillHtml}</div>
+          <div class="card" style="margin:0"><div class="card-hd"><h3>👨‍🏫 Оцінка вихователя</h3><span style="font-size:12px;color:var(--gray)">середнє за рік ${y}${netAvg}</span></div>${rateHtml}</div>
+        </div>
+        <div class="card" style="margin:14px 0 0"><div class="card-hd"><h3>🪑 Вільні місця</h3><span style="font-size:12px;color:var(--gray)">${kf&&kf.tab?esc(kf.tab):'знімок'}</span></div>${freeHtml}</div>
+        <div class="card" style="margin:14px 0 0"><div class="card-hd" style="flex-wrap:wrap;gap:6px"><h3>📝 KPI договорів</h3><div style="display:flex;align-items:center;gap:8px"><span style="font-size:12px;color:var(--gray)">${kpiSub}</span>${qSel}</div></div>${kpiHtml}</div>
       </div>
     </div>`;
 }
