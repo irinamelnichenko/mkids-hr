@@ -2519,12 +2519,6 @@ function _isKompLocation(name){
   });
 }
 function _kompTokens(s){ return _kompNorm(s).replace(/['’ʼ`.,()]/g,' ').split(/\s+/).filter(Boolean); }
-// Останній ЗАВЕРШЕНИЙ квартал відносно сьогодні (не поточний).
-function _lastCompletedQ(){
-  var n=new Date(), cy=n.getFullYear(), cm=n.getMonth()+1, qc=Math.ceil(cm/3);
-  var q=(qc>1)?qc-1:4, y=(qc>1)?cy:cy-1, st=(q-1)*3+1;
-  return {y:y, q:q, months:[st,st+1,st+2], cy:cy, cm:cm, qCur:qc};
-}
 function _kompYear(){ return new Date().getFullYear(); }
 function _kompMonth(){ return S.dashKompMonth || (new Date().getMonth()+1); }
 async function _ensureKomp(y){ if(!S._komp)S._komp={}; if(S._komp[y]!==undefined)return; S._komp[y]=null;
@@ -2537,6 +2531,7 @@ async function _ensureRatingsYear(y){ if(!S._ratingsY)S._ratingsY={}; if(S._rati
   try{ var r=await fetch(authScriptUrl()+'?action=getVyhovatelRatings&year='+y,{redirect:'follow'}); var j=await r.json(); S._ratingsY[y]=(j&&j.ok)?j:{teachers:[]}; }
   catch(e){ S._ratingsY[y]={teachers:[]}; } }
 function dashKompSetMonth(m){ S.dashKompMonth=+m; _renderDashNow(); } // оцінки — за рік, місяць їх не змінює
+function dashKpiSetQuarter(q){ S.dashKpiQuarter=+q; _renderDashNow(); }
 
 function _renderKompBlock(){
   var isHR=isNetworkRole(S.user.role), myLoc=S.user.loc||'';
@@ -2604,39 +2599,35 @@ function _renderKompBlock(){
     rateHtml=tbl+footer;
   }
 
-  // Картка 4 — KPI договорів: ОСТАННІЙ ЗАВЕРШЕНИЙ квартал vs той самий квартал y-1. Δ = надлишок над торішнім (база бонусу).
+  // Картка 4 — KPI договорів: ВИБІР КВАРТАЛУ. Завершений → повне порівняння; у процесі → лише минулі місяці
+  // (чесно) проти тих самих місяців y-1. Δ = надлишок над торішнім (база бонусу).
   var Q_LBL=['Q1 (січ–бер)','Q2 (кві–чер)','Q3 (лип–вер)','Q4 (жов–гру)'];
-  var lqi=_lastCompletedQ();
-  var lqY=lqi.y, lqMonths=lqi.months;
-  var kpiSub=Q_LBL[lqi.q-1]+' · '+lqY+' vs '+(lqY-1);
-  var kdLq=(S._komp&&S._komp[lqY])||null, kdLqPrev=(S._komp&&S._komp[lqY-1])||null;
+  var _now=new Date(), curY=_now.getFullYear(), curM=_now.getMonth()+1, curQ=Math.ceil(curM/3);
+  var selQ=S.dashKpiQuarter||curQ, qStart=(selQ-1)*3+1, qAll=[qStart,qStart+1,qStart+2];
+  var kpiMonths, kpiInProgress=false;
+  if(y<curY){ kpiMonths=qAll; }
+  else if(y>curY){ kpiMonths=[]; }
+  else { if(selQ<curQ){ kpiMonths=qAll; } else if(selQ===curQ){ kpiMonths=qAll.filter(function(mm){return mm<curM;}); kpiInProgress=true; } else { kpiMonths=[]; } }
+  var kpiSub=kpiInProgress ? (Q_LBL[selQ-1]+' · у процесі, '+kpiMonths.length+' з 3 міс.')
+           : (kpiMonths.length ? (Q_LBL[selQ-1]+' · '+y+' vs '+(y-1)) : (Q_LBL[selQ-1]+' · ще не почався'));
+  var qSel='<select class="flt-sel" onchange="dashKpiSetQuarter(this.value)">'+[1,2,3,4].map(function(qq){return '<option value="'+qq+'" '+(qq===selQ?'selected':'')+'>Q'+qq+'</option>';}).join('')+'</select>';
   var kpiHtml;
-  if(!kdLq||!kdLqPrev){ kpiHtml='<div class="empty"><span class="ei">📝</span><p>Завантаження…</p></div>'; }
+  if(!kd||!kdPrev){ kpiHtml='<div class="empty"><span class="ei">📝</span><p>Завантаження…</p></div>'; }
+  else if(!kpiMonths.length){ kpiHtml='<div class="empty"><p>Квартал ще не почався</p></div>'; }
   else{
-    var sumSigned=function(dataObj,locName,months){ if(!dataObj)return null; var arr=(dataObj.locations||[]).filter(function(x){return x.loc===locName;}); var L=arr[0]; if(!L)return null;
-      var s=0,any=false; months.forEach(function(mm){ var mo=(L.months&&L.months[mm-1])||{}; var v=Number(mo.signed); if(isFinite(v)){s+=v;any=true;} }); return any?s:null; };
-    var locNames=scopeLocs(kdLq.locations).filter(function(l){return _isKompLocation(l.loc);}).map(function(x){return x.loc;});
-    var kpiRows=locNames.map(function(ln){ var cur=sumSigned(kdLq,ln,lqMonths),prev=sumSigned(kdLqPrev,ln,lqMonths);
-        var diff=(cur==null&&prev==null)?null:((cur||0)-(prev||0)); return {loc:ln,cur:cur,prev:prev,diff:diff}; })
+    var sumSigned=function(dataObj,locName){ if(!dataObj)return null; var arr=(dataObj.locations||[]).filter(function(x){return x.loc===locName;}); var L=arr[0]; if(!L)return null;
+      var s=0,any=false; kpiMonths.forEach(function(mm){ var mo=(L.months&&L.months[mm-1])||{}; var v=Number(mo.signed); if(isFinite(v)){s+=v;any=true;} }); return any?s:null; };
+    var locNames=scopeLocs(kd.locations).filter(function(l){return _isKompLocation(l.loc);}).map(function(x){return x.loc;});
+    var kpiRows=locNames.map(function(ln){ var cur=sumSigned(kd,ln),prev=sumSigned(kdPrev,ln); var diff=(cur==null&&prev==null)?null:((cur||0)-(prev||0)); return {loc:ln,cur:cur,prev:prev,diff:diff}; })
       .filter(function(r){ return (r.cur||0)!==0||(r.prev||0)!==0; }) // прибираємо порожні позиції
       .sort(function(a,b){return (b.cur||0)-(a.cur||0);});
     var totCur=0,totPrev=0,bonusBase=0; kpiRows.forEach(function(r){ totCur+=r.cur||0; totPrev+=r.prev||0; if((r.diff||0)>0)bonusBase+=r.diff; });
-    var table=kpiRows.length?'<div class="tbl-wrap"><table><thead><tr><th>Локація</th><th>'+lqY+'</th><th>'+(lqY-1)+'</th><th title="Надлишок над торішнім = база бонусу">Δ надлишок</th></tr></thead><tbody>'+
+    kpiHtml=kpiRows.length?'<div class="tbl-wrap"><table><thead><tr><th>Локація</th><th>'+y+'</th><th>'+(y-1)+'</th><th title="Надлишок над торішнім = база бонусу">Δ надлишок</th></tr></thead><tbody>'+
       kpiRows.map(function(r){ var d=r.diff; var col=d==null?'var(--gray2)':d>0?'#27ae60':'#95a5a6'; var sg=d>0?'+':'';
         return '<tr><td><strong>'+esc(r.loc)+'</strong></td><td>'+(r.cur==null?'—':r.cur)+'</td><td style="color:var(--gray)">'+(r.prev==null?'—':r.prev)+'</td><td style="color:'+col+';font-weight:700">'+(d==null?'—':(d>0?sg+d:(d===0?'0':d)))+(d!=null&&d<=0?' <span style="font-size:10px;color:var(--gray)">без бонусу</span>':'')+'</td></tr>';
       }).join('')+
       '<tr style="border-top:2px solid var(--gray2)"><td><strong>Разом</strong></td><td><strong>'+totCur+'</strong></td><td style="color:var(--gray)">'+totPrev+'</td><td style="font-weight:800;color:'+(bonusBase>0?'#27ae60':'#95a5a6')+'">'+(bonusBase>0?'+'+bonusBase:'0')+'</td></tr>'+
       '</tbody></table></div>':'<div class="empty"><p>Немає даних</p></div>';
-    // Довідка: поточний квартал у процесі
-    var curQMonths=[(lqi.qCur-1)*3+1,(lqi.qCur-1)*3+2,(lqi.qCur-1)*3+3];
-    var curElapsed=curQMonths.filter(function(mm){return mm<lqi.cm;});
-    var kdCurY=(S._komp&&S._komp[lqi.cy])||null;
-    var curN=0; if(kdCurY&&curElapsed.length){ (kdCurY.locations||[]).filter(function(l){return _isKompLocation(l.loc);}).forEach(function(l){ curElapsed.forEach(function(mm){ var mo=(l.months&&l.months[mm-1])||{}; var v=Number(mo.signed); if(isFinite(v))curN+=v; }); }); }
-    var curLbl=curElapsed.map(function(mm){return KOMP_MONTHS[mm-1].toLowerCase();}).join(', ');
-    var refLine='<div style="font-size:12px;color:var(--gray);padding:8px 14px;border-top:1px solid #f0f4f8">'+
-      (curElapsed.length?('Q'+lqi.qCur+' у процесі: <b style="color:var(--dark2)">'+curN+'</b> договорів ('+curLbl+')'):('Q'+lqi.qCur+' щойно почався'))+
-      ' · бонус — лише за Δ&gt;0 (понад торішній рівень)</div>';
-    kpiHtml=table+refLine;
   }
 
   var netAvg=(rateAvg!=null)?(' · середнє '+rateAvg+'%'):'';
@@ -2650,7 +2641,7 @@ function _renderKompBlock(){
         <div class="card" style="margin:0"><div class="card-hd"><h3>🏫 Наповнюваність</h3><span style="font-size:12px;color:var(--gray)">${KOMP_MONTHS[m-1]} ${y}</span></div>${fillHtml}</div>
         <div class="card" style="margin:0"><div class="card-hd"><h3>🪑 Вільні місця</h3><span style="font-size:12px;color:var(--gray)">${kf&&kf.tab?esc(kf.tab):'знімок'}</span></div>${freeHtml}</div>
         <div class="card" style="margin:0"><div class="card-hd"><h3>👨‍🏫 Оцінка вихователя</h3><span style="font-size:12px;color:var(--gray)">середнє за рік ${y}${netAvg}</span></div>${rateHtml}</div>
-        <div class="card" style="margin:0"><div class="card-hd"><h3>📝 KPI договорів</h3><span style="font-size:12px;color:var(--gray)">${kpiSub}</span></div>${kpiHtml}</div>
+        <div class="card" style="margin:0"><div class="card-hd" style="flex-wrap:wrap;gap:6px"><h3>📝 KPI договорів</h3><div style="display:flex;align-items:center;gap:8px"><span style="font-size:12px;color:var(--gray)">${kpiSub}</span>${qSel}</div></div>${kpiHtml}</div>
       </div>
     </div>`;
 }
@@ -2661,9 +2652,7 @@ function renderDash(){
   _ensureLocCaps().then(_dashSoftRerender);
   _ensureDashYearly().then(_dashSoftRerender);
   _ensureKomp(_kompYear()).then(_dashSoftRerender);      // v7.99 комплектація (поточний рік)
-  var _lq=_lastCompletedQ();                             // v7.101 роки для KPI останнього завершеного кварталу
-  _ensureKomp(_lq.y).then(_dashSoftRerender);
-  _ensureKomp(_lq.y-1).then(_dashSoftRerender);
+  _ensureKomp(_kompYear()-1).then(_dashSoftRerender);    // v7.99 минулий рік (для KPI договорів)
   _ensureKompFree().then(_dashSoftRerender);             // v7.99 вільні місця
   _ensureRatingsYear(_kompYear()).then(_dashSoftRerender); // v7.100 оцінки вихователів — середнє за рік
   _renderDashNow();
