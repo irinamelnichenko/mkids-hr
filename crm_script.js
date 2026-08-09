@@ -1,5 +1,9 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.95
+// m.kids CRM — Google Apps Script v7.96
+// v7.96: getKomplektaciya({tab?}) — READ-ONLY розвідка окремого файлу «Комплектація»
+//        (spreadsheetId 1IJ81H5k…9YH4). Без tab повертає всі вкладки; з tab — лише вказану.
+//        Для кожної вкладки: заголовки (рядок 1) і перші 5 рядків даних (getDisplayValues),
+//        плюс rows/cols. Нічого не пише.
 // v7.95: (1) renameAttendanceChild({loc,oldName,newName,dryRun}) — вирівнює написання ПІБ у
 //        відмітках (Додаткові_Відвідуваність, кол. «Дитина») під канонічне; матч нормалізований;
 //        0 збігів/однакові імена → відмова; dryRun за замовч. (2) addPaymentRow({loc,name,group,
@@ -415,7 +419,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.95', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.96', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -449,6 +453,7 @@ function doGet(e) {
     else if (action === 'getOverviewAnalytics')      result = getOverviewAnalytics(e.parameter.year || '', e.parameter.month || '');
     else if (action === 'getUsers')                  result = getUsers();
     else if (action === 'getGroupNorms')             result = getGroupNorms();
+    else if (action === 'getKomplektaciya')          result = getKomplektaciya({tab: (e.parameter && e.parameter.tab) || ''}); // v7.96 read-only структура файлу комплектації
     else if (action === 'getActivitiesCatalog')      result = getActivitiesCatalog(e.parameter && e.parameter.loc || '');
     else if (action === 'getAttendanceMarks')         result = getAttendanceMarks(e.parameter || {});
     else if (action === 'getDopMerges')               result = getDopMerges(e.parameter || {});
@@ -5498,6 +5503,44 @@ function getGroupNorms() {
     return {ok: true, norms: norms, list: list};
   } catch (e) {
     return {ok: false, error: String(e && e.message || e)};
+  }
+}
+
+// ─── v7.96: getKomplektaciya({tab?}) — READ-ONLY розвідка окремого файлу «Комплектація».
+//     Без tab повертає всі вкладки; з tab — лише вказану. Для кожної вкладки: заголовки
+//     (рядок 1) і перші 5 рядків даних (getDisplayValues), а також rows/cols. Нічого не пише.
+var KOMPLEKTACIYA_SHEET_ID = '1IJ81H5kyeVj3GzRSz6dWJQR6YuLIczVKVj95OtZ9YH4';
+
+function getKomplektaciya(params) {
+  params = params || {};
+  var wantTab = String(params.tab || '').trim();
+  try {
+    var ss = SpreadsheetApp.openById(KOMPLEKTACIYA_SHEET_ID);
+    var allSheets = ss.getSheets();
+    var out = [];
+    for (var s = 0; s < allSheets.length; s++) {
+      var sh = allSheets[s];
+      var nm = sh.getName();
+      if (wantTab && nm !== wantTab) continue;
+      var lastRow = sh.getLastRow();
+      var lastCol = sh.getLastColumn();
+      var entry = {name: nm, rows: lastRow, cols: lastCol, headers: [], sample: []};
+      if (lastRow >= 1 && lastCol >= 1) {
+        var nRead = Math.min(lastRow, 6); // 1 рядок заголовків + до 5 рядків даних
+        var vals = sh.getRange(1, 1, nRead, lastCol).getDisplayValues();
+        entry.headers = vals[0] || [];
+        entry.sample = vals.slice(1); // перші 5 рядків даних
+      }
+      out.push(entry);
+    }
+    if (wantTab && out.length === 0) {
+      return {ok: false, error: 'Вкладку "' + wantTab + '" не знайдено', spreadsheetId: KOMPLEKTACIYA_SHEET_ID,
+              tabs: allSheets.map(function(x){ return x.getName(); })};
+    }
+    return {ok: true, spreadsheetId: KOMPLEKTACIYA_SHEET_ID, spreadsheetName: ss.getName(),
+            tab: wantTab || null, tabCount: out.length, tabs: out};
+  } catch (e) {
+    return {ok: false, error: String(e && e.message || e), spreadsheetId: KOMPLEKTACIYA_SHEET_ID};
   }
 }
 
