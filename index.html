@@ -2504,6 +2504,15 @@ async function _ensureDashYearly(){
 // ─── v7.99: БЛОК КОМПЛЕКТАЦІЇ (наповнюваність / вільні місця / оцінка вихователя / KPI договорів)
 //   Джерела: getKomplektaciyaData (рік і рік-1), getKomplektaciyaFreeSeats, getVyhovatelRatings.
 var KOMP_MONTHS=['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
+function _kompNorm(s){ return String(s||'').replace(/[\s ]+/g,' ').trim().toLowerCase(); }
+// Рядок є реальною локацією, якщо збігається з реєстром LOCATION_ORDER (з урахуванням суфіксів
+// на кшталт «Осокорки сад») і не є назвою місяця / підсумком («всього…»).
+function _isKompLocation(name){
+  var n=_kompNorm(name); if(!n) return false;
+  if(KOMP_MONTHS.some(function(mn){return _kompNorm(mn)===n;})) return false;               // місяць
+  if(/^(всього|разом|загалом|усього|мережа|по мережі|total)\b/.test(n)) return false;        // підсумок
+  return LOCATION_ORDER.some(function(l){ var ln=_kompNorm(l); return n===ln || n.indexOf(ln)===0 || ln.indexOf(n)===0; });
+}
 function _kompYear(){ return new Date().getFullYear(); }
 function _kompMonth(){ return S.dashKompMonth || (new Date().getMonth()+1); }
 async function _ensureKomp(y){ if(!S._komp)S._komp={}; if(S._komp[y]!==undefined)return; S._komp[y]=null;
@@ -2525,17 +2534,23 @@ function _renderKompBlock(){
   function scopeLocs(list){ if(!list)return []; return isHR?list:list.filter(function(x){return x.loc===myLoc;}); }
   var monthSel='<select class="flt-sel" onchange="dashKompSetMonth(this.value)">'+KOMP_MONTHS.map(function(mn,i){return '<option value="'+(i+1)+'" '+((i+1)===m?'selected':'')+'>'+mn+'</option>';}).join('')+'</select>';
 
-  // Картка 1 — Наповнюваність (поточний місяць)
+  // Картка 1 — Наповнюваність (поточний місяць): лише реальні локації, без порожніх/від'ємних, + підсумок
   var fillHtml;
   if(!kd){ fillHtml='<div class="empty"><span class="ei">🏫</span><p>Завантаження…</p></div>'; }
   else{
-    var rows=scopeLocs(kd.locations).map(function(l){ var mo=(l.months&&l.months[m-1])||{}; return {loc:l.loc,contracts:mo.contracts,cap:l.maxLoad,pct:mo.fillPct}; })
-      .filter(function(r){return r.contracts!=null||r.pct!=null;}).sort(function(a,b){return (b.pct||0)-(a.pct||0);});
+    var rows=scopeLocs(kd.locations).filter(function(l){return _isKompLocation(l.loc);})
+      .map(function(l){ var mo=(l.months&&l.months[m-1])||{}; return {loc:l.loc,contracts:mo.contracts,cap:l.maxLoad,pct:mo.fillPct}; })
+      .filter(function(r){ var c=Number(r.contracts),p=Number(r.pct); return (isFinite(c)&&c>0)||(isFinite(p)&&p>0); }) // прибираємо порожні/від'ємні (напр. Онлайн школа −2)
+      .sort(function(a,b){return (b.pct||0)-(a.pct||0);});
+    var sumC=0,sumCap=0; rows.forEach(function(r){ var c=Number(r.contracts); if(isFinite(c)&&c>0)sumC+=c; var cp=Number(r.cap); if(isFinite(cp)&&cp>0)sumCap+=cp; });
+    var sumPct=sumCap?Math.round(sumC/sumCap*100):null;
+    var mkFill=function(r){ var pct=(r.pct==null)?null:Math.round(r.pct); var col=pct==null?'#bdc3c7':pct>=90?'#e74c3c':pct>=70?'#27ae60':'#e67e22';
+      return '<tr><td><strong>'+esc(r.loc)+'</strong></td><td>'+(r.contracts==null?'—':r.contracts)+'</td><td>'+(r.cap==null?'<span style=color:var(--gray2)>—</span>':r.cap)+'</td>'+
+        '<td style="min-width:150px"><div style="display:flex;align-items:center;gap:8px"><div class="prog-wrap" style="flex:1;margin:0"><div class="prog-bar" style="width:'+(pct||0)+'%;background:'+col+'"></div></div><span style="font-size:12px;font-weight:700;color:'+col+';min-width:40px">'+(pct==null?'—':pct+'%')+'</span></div></td></tr>'; };
     fillHtml=rows.length?'<div class="tbl-wrap"><table><thead><tr><th>Локація</th><th>Договорів</th><th>Місць</th><th>Заповнення</th></tr></thead><tbody>'+
-      rows.map(function(r){ var pct=(r.pct==null)?null:Math.round(r.pct); var col=pct==null?'#bdc3c7':pct>=90?'#e74c3c':pct>=70?'#27ae60':'#e67e22';
-        return '<tr><td><strong>'+esc(r.loc)+'</strong></td><td>'+(r.contracts==null?'—':r.contracts)+'</td><td>'+(r.cap==null?'<span style=color:var(--gray2)>—</span>':r.cap)+'</td>'+
-          '<td style="min-width:150px"><div style="display:flex;align-items:center;gap:8px"><div class="prog-wrap" style="flex:1;margin:0"><div class="prog-bar" style="width:'+(pct||0)+'%;background:'+col+'"></div></div><span style="font-size:12px;font-weight:700;color:'+col+';min-width:40px">'+(pct==null?'—':pct+'%')+'</span></div></td></tr>';
-      }).join('')+'</tbody></table></div>':'<div class="empty"><p>Немає даних за '+KOMP_MONTHS[m-1]+'</p></div>';
+      rows.map(mkFill).join('')+
+      '<tr style="border-top:2px solid var(--gray2)"><td><strong>Разом</strong></td><td><strong>'+sumC+'</strong></td><td>'+(sumCap||'—')+'</td><td style="font-weight:800">'+(sumPct==null?'—':sumPct+'%')+'</td></tr>'+
+      '</tbody></table></div>':'<div class="empty"><p>Немає даних за '+KOMP_MONTHS[m-1]+'</p></div>';
   }
 
   // Картка 2 — Вільні місця (знімок з листа)
@@ -2543,7 +2558,8 @@ function _renderKompBlock(){
   if(!kf){ freeHtml='<div class="empty"><span class="ei">🪑</span><p>Завантаження…</p></div>'; }
   else{
     var groups=kf.groups||[], totals=kf.totals||{};
-    var flocs=isHR?(kf.locations||[]):(kf.locations||[]).filter(function(x){return x.loc===myLoc;});
+    var flocs=(kf.locations||[]).filter(function(x){return _isKompLocation(x.loc);}); // лише реальні локації (не місяці/сміття)
+    if(!isHR) flocs=flocs.filter(function(x){return x.loc===myLoc;});
     var gstrip=groups.map(function(g){ return '<span class="badge" style="background:#eef4fb;color:#2c5d86;margin:2px">'+esc(g)+': <b>'+(totals[g]!=null?totals[g]:0)+'</b></span>'; }).join('');
     var locRows=flocs.map(function(l){ var sum=0; for(var k in l.byGroup){ var n=Number(l.byGroup[k]); if(isFinite(n))sum+=n; } return {loc:l.loc,sum:sum}; })
       .filter(function(r){return r.sum>0;}).sort(function(a,b){return b.sum-a.sum;});
@@ -2576,17 +2592,22 @@ function _renderKompBlock(){
     rateHtml=tbl+footer;
   }
 
-  // Картка 4 — KPI договорів (квартал vs той самий квартал минулого року)
-  var q=Math.ceil(m/3), qMonths=[(q-1)*3+1,(q-1)*3+2,(q-1)*3+3];
-  var qLblArr=['Q1 (січ–бер)','Q2 (кві–чер)','Q3 (лип–вер)','Q4 (жов–гру)'];
+  // Картка 4 — KPI договорів: однакові періоди (лише місяці кварталу, що ВЖЕ минули) vs той самий період y-1
+  var _now=new Date(), curY=_now.getFullYear(), curM=_now.getMonth()+1;
+  var q=Math.ceil(m/3), qStart=(q-1)*3+1, qAll=[qStart,qStart+1,qStart+2];
+  var elapsed=qAll.filter(function(mm){ if(y<curY)return true; if(y>curY)return false; return mm<curM; }); // тільки завершені місяці
+  var elapsedLbl=elapsed.map(function(mm){return KOMP_MONTHS[mm-1].toLowerCase();}).join(', ');
+  var kpiSub='Q'+q+(elapsed.length?(', '+elapsedLbl):'')+' ('+elapsed.length+' з 3 міс.)';
   var kpiHtml;
   if(!kd||!kdPrev){ kpiHtml='<div class="empty"><span class="ei">📝</span><p>Завантаження…</p></div>'; }
+  else if(!elapsed.length){ kpiHtml='<div class="empty"><p>Квартал ще не почався — немає завершених місяців</p></div>'; }
   else{
     var signedSum=function(dataObj,locName){ if(!dataObj)return null; var arr=(dataObj.locations||[]).filter(function(x){return x.loc===locName;}); var L=arr[0]; if(!L)return null;
-      var s=0,any=false; qMonths.forEach(function(mm){ var mo=(L.months&&L.months[mm-1])||{}; var v=Number(mo.signed); if(isFinite(v)){s+=v;any=true;} }); return any?s:null; };
-    var locNames=scopeLocs(kd.locations).map(function(x){return x.loc;});
+      var s=0,any=false; elapsed.forEach(function(mm){ var mo=(L.months&&L.months[mm-1])||{}; var v=Number(mo.signed); if(isFinite(v)){s+=v;any=true;} }); return any?s:null; };
+    var locNames=scopeLocs(kd.locations).filter(function(l){return _isKompLocation(l.loc);}).map(function(x){return x.loc;});
     var kpiRows=locNames.map(function(ln){ var cur=signedSum(kd,ln),prev=signedSum(kdPrev,ln); var diff=(cur==null&&prev==null)?null:((cur||0)-(prev||0)); return {loc:ln,cur:cur,prev:prev,diff:diff}; })
-      .filter(function(r){return r.cur!=null||r.prev!=null;}).sort(function(a,b){return (b.cur||0)-(a.cur||0);});
+      .filter(function(r){ return (r.cur||0)!==0||(r.prev||0)!==0; }) // прибираємо порожні позиції
+      .sort(function(a,b){return (b.cur||0)-(a.cur||0);});
     var totCur=0,totPrev=0; kpiRows.forEach(function(r){ totCur+=r.cur||0; totPrev+=r.prev||0; });
     kpiHtml=kpiRows.length?'<div class="tbl-wrap"><table><thead><tr><th>Локація</th><th>'+y+'</th><th>'+(y-1)+'</th><th>Δ</th></tr></thead><tbody>'+
       kpiRows.map(function(r){ var d=r.diff; var col=d==null?'var(--gray2)':d>0?'#27ae60':d<0?'#e74c3c':'var(--gray)'; var sg=d>0?'+':'';
@@ -2607,7 +2628,7 @@ function _renderKompBlock(){
         <div class="card" style="margin:0"><div class="card-hd"><h3>🏫 Наповнюваність</h3><span style="font-size:12px;color:var(--gray)">${KOMP_MONTHS[m-1]} ${y}</span></div>${fillHtml}</div>
         <div class="card" style="margin:0"><div class="card-hd"><h3>🪑 Вільні місця</h3><span style="font-size:12px;color:var(--gray)">${kf&&kf.tab?esc(kf.tab):'знімок'}</span></div>${freeHtml}</div>
         <div class="card" style="margin:0"><div class="card-hd"><h3>👨‍🏫 Оцінка вихователя</h3><span style="font-size:12px;color:var(--gray)">середнє за рік ${y}${netAvg}</span></div>${rateHtml}</div>
-        <div class="card" style="margin:0"><div class="card-hd"><h3>📝 KPI договорів</h3><span style="font-size:12px;color:var(--gray)">${qLblArr[q-1]} · ${y} vs ${y-1}</span></div>${kpiHtml}</div>
+        <div class="card" style="margin:0"><div class="card-hd"><h3>📝 KPI договорів</h3><span style="font-size:12px;color:var(--gray)">${kpiSub} · ${y} vs ${y-1}</span></div>${kpiHtml}</div>
       </div>
     </div>`;
 }
@@ -2676,20 +2697,6 @@ function _renderDashNow(){
     </div>
 
     ${_renderKompBlock()}
-
-    <div class="card" style="margin-bottom:16px">
-      <div class="card-hd"><h3>🏫 Наповнюваність${isHR?' — мережа':' — '+myLoc}</h3><span style="font-size:12px;color:var(--gray)">${totalKids} дітей · ${totalGroups} груп${isHR?' · '+totalLocs+' лок.':''}</span></div>
-      <div class="tbl-wrap"><table>
-        <thead><tr><th>Локація</th><th>Дітей</th><th>Місць</th><th>Заповнення</th><th>Груп</th></tr></thead>
-        <tbody>${locList.length===0?`<tr><td colspan="5" style="text-align:center;padding:24px;color:var(--gray)">${S.crm?'Немає даних дітей':'Завантаження…'}</td></tr>`:
-        locList.map(l=>{const a=locAgg[l],cap=Number(caps[l])||0,pct=cap?Math.min(100,Math.round(a.kids/cap*100)):null,col=pct==null?'#bdc3c7':pct>=90?'#e74c3c':pct>=70?'#27ae60':'#e67e22';
-          return `<tr class="clickable" onclick="filterLoc('${escJs(l)}')">
-            <td><strong>${l}</strong></td><td>${a.kids}</td><td>${cap||'<span style=color:var(--gray2)>—</span>'}</td>
-            <td style="min-width:150px"><div style="display:flex;align-items:center;gap:8px"><div class="prog-wrap" style="flex:1;margin:0"><div class="prog-bar" style="width:${pct||0}%;background:${col}"></div></div><span style="font-size:12px;font-weight:700;color:${col};min-width:36px">${pct==null?'—':pct+'%'}</span></div></td>
-            <td>${a.groups.size}</td></tr>`;}).join('')}</tbody>
-      </table></div>
-      ${Object.keys(caps).length===0?`<div style="font-size:12px;color:var(--gray);padding:8px 16px">💡 Місткість заповнюється в «🏢 Картка локації» → поле «Місткість».</div>`:''}
-    </div>
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
       <div class="card">
