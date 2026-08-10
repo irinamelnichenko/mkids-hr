@@ -2563,6 +2563,9 @@ async function _ensureSalOv(y){ if(!S._salOv)S._salOv={}; if(S._salOv[y]!==undef
 async function _ensureOpexOv(y){ if(!S._opexOv)S._opexOv={}; if(S._opexOv[y]!==undefined)return; S._opexOv[y]=null;
   try{ var r=await fetch(authScriptUrl()+'?action=getOpexOverview&year='+y,{redirect:'follow'}); var j=await r.json(); S._opexOv[y]=(j&&j.ok)?j:{locations:[]}; }
   catch(e){ S._opexOv[y]={locations:[]}; } }
+async function _ensurePayments(){ if(S._payFull!==undefined)return; S._payFull=null; // getPayments — для вступних (рік-кумулятив)
+  try{ var r=await fetch(authScriptUrl()+'?action=getPayments',{redirect:'follow'}); var j=await r.json(); S._payFull=(j&&j.data)?j.data:(Array.isArray(j)?j:[]); }
+  catch(e){ S._payFull=[]; } }
 function dashKompSetMonth(m){ S.dashKompMonth=+m; _renderDashNow(); } // оцінки — за рік, місяць їх не змінює
 function dashKpiSetQuarter(q){ S.dashKpiQuarter=+q; _renderDashNow(); }
 function dashKompToggle(k){ S.dashKompOpen=(S.dashKompOpen===k)?null:k; _renderDashNow(); } // розгортання плиток (одна за раз)
@@ -2783,20 +2786,50 @@ function _renderKompBlock(){
       mgRows.map(function(r){var col=r.margin>=0?'#27ae60':'#e74c3c';return '<tr><td><strong>'+esc(r.loc)+'</strong></td><td>'+fmtG(r.rev)+'</td><td style="color:var(--gray)">'+fmtG(r.sal)+'</td><td style="color:var(--gray)">'+fmtG(r.opx)+'</td><td style="color:'+col+';font-weight:700">'+fmtG(r.margin)+'</td></tr>';}).join('')+
       '<tr style="border-top:2px solid var(--gray2)"><td><strong>Разом</strong></td><td>'+fmtG(mRev)+'</td><td style="color:var(--gray)">'+fmtG(mSal)+'</td><td style="color:var(--gray)">'+fmtG(mOpx)+'</td><td style="font-weight:800;color:'+(mMar>=0?'#27ae60':'#e74c3c')+'">'+fmtG(mMar)+'</td></tr></tbody></table></div>':'<div class="empty"><p>Немає даних</p></div>');
 
+    // #5 Фонд ЗП до обороту (оборот=навч+доп БЕЗ вступних; вступні окремим рядком). Приріст фонду з 2025; оборот 2025 — н/д (бекенд).
+    var salOv25=(S._salOv&&S._salOv[y-1])||null;
+    var p2rLoad=(py!=null && salOv!=null);
+    var salLocs25=((salOv25&&salOv25.locations)||[]).filter(function(l){return _isKompNetwork(l.loc);});
+    var sal25Map=_mapRankF(salLocs25,function(l){return _salFB(l).f;});
+    var payFull=Array.isArray(S._payFull)?S._payFull:null;
+    var vstupTot=0; if(payFull){ payFull.forEach(function(rw){ var loc=String(rw['Локація']||'').trim(); if(loc&&_isKompNetwork(loc)) vstupTot+=Number(rw['Факт вступний'])||0; }); }
+    function _redRule(fundGrow,revGrow){ return (revGrow!=null && fundGrow!=null && fundGrow>revGrow); } // ввімкнеться, коли з'явиться приріст обороту
+    var p2rRows=_kompSortByLoc(Object.keys(revByLoc).map(function(loc){
+      var rev=revByLoc[loc], fund=_look(salMap,loc), fund25=_look(sal25Map,loc);
+      var pct=rev?Math.round(fund/rev*1000)/10:null;
+      var fundGrow=(fund25>0)?Math.round((fund-fund25)/fund25*1000)/10:null;
+      var revGrow=null; // оборот 2025 недоступний фронтом
+      return {loc:loc,rev:rev,fund:fund,pct:pct,fund25:fund25,fundGrow:fundGrow,revGrow:revGrow};
+    }),function(r){return r.loc;});
+    var pRev=0,pFund=0,pFund25=0; p2rRows.forEach(function(r){pRev+=r.rev;pFund+=r.fund;pFund25+=r.fund25;});
+    var pPct=pRev?Math.round(pFund/pRev*1000)/10:null;
+    var pFundGrow=(pFund25>0)?Math.round((pFund-pFund25)/pFund25*1000)/10:null;
+    var p2rTbl=!p2rLoad?'<div class="empty"><p>Завантаження…</p></div>':(p2rRows.length?'<div class="tbl-wrap"><table><thead><tr><th>Локація</th><th>Оборот</th><th>Фонд ЗП</th><th>%</th><th>Оборот '+(y-1)+'</th><th>Приріст обороту</th><th>Приріст фонду</th></tr></thead><tbody>'+
+      p2rRows.map(function(r){ var red=_redRule(r.fundGrow,r.revGrow); var fgCol=red?'#e74c3c':(r.fundGrow==null?'var(--gray2)':r.fundGrow>0?'#e67e22':'#27ae60');
+        return '<tr'+(red?' style="background:#fdecea"':'')+'><td><strong>'+esc(r.loc)+'</strong></td><td>'+fmtG(r.rev)+'</td><td>'+fmtG(r.fund)+'</td><td style="font-weight:700">'+(r.pct==null?'—':r.pct+'%')+'</td><td style="color:var(--gray2)">н/д</td><td style="color:var(--gray2)">н/д</td><td style="color:'+fgCol+';font-weight:700">'+(r.fundGrow==null?'—':(r.fundGrow>0?'+':'')+r.fundGrow+'%')+'</td></tr>';
+      }).join('')+
+      '<tr style="border-top:2px solid var(--gray2)"><td><strong>Разом</strong></td><td>'+fmtG(pRev)+'</td><td>'+fmtG(pFund)+'</td><td style="font-weight:800">'+(pPct==null?'—':pPct+'%')+'</td><td style="color:var(--gray2)">н/д</td><td style="color:var(--gray2)">н/д</td><td style="font-weight:800;color:'+(pFundGrow==null?'var(--gray2)':pFundGrow>0?'#e67e22':'#27ae60')+'">'+(pFundGrow==null?'—':(pFundGrow>0?'+':'')+pFundGrow+'%')+'</td></tr>'+
+      '</tbody></table></div>'+
+      '<div style="font-size:12px;color:var(--gray);padding:8px 4px 2px">Вступні (рік-кумулятив, в обороті НЕ враховані): <b style="color:var(--dark2)">'+fmtG(vstupTot)+'</b></div>'+
+      '<div style="font-size:11px;color:var(--gray2);padding:2px 4px">«Оборот '+(y-1)+'» і «приріст обороту» — н/д: потрібен бекенд-роут за минулий рік. Правило «червоне, якщо приріст фонду > приросту обороту» ввімкнеться після цього.</div>'
+      :'<div class="empty"><p>Немає даних</p></div>');
+
     tileDefs.debt={ic:'💳',cls:'si-r',lbl:'Борги',val:(dbtLoad?fmtG(dbtSum):'—'),sub:(dbtLoad?dbtN+' боржників · '+perLbl:'…')};
     tileDefs.salpay={ic:'💸',cls:'si-y',lbl:'Виплата ЗП',val:(salLoad&&salPct!=null?salPct+'%':'—'),sub:(salLoad?'залишок '+fmtG(salRem)+' · '+perLbl:'…')};
     tileDefs.margin={ic:'📈',cls:'si-g',lbl:'Маржа',val:(mgLoad?fmtG(mMar):'—'),sub:'дохід − ЗП − OPEX · '+perLbl};
     tileDefs.term={ic:'🚪',cls:'si-p',lbl:'Причини розірвання',val:(termLoad?termTotal:'—'),sub:'розірвань · '+perLbl};
+    tileDefs.p2r={ic:'⚖️',cls:'si-b',lbl:'Фонд ЗП / оборот',val:(p2rLoad&&pPct!=null?pPct+'%':'—'),sub:'фонд/оборот · '+perLbl};
     var _cfoHd=function(h3,note){ return '<div class="card-hd" style="flex-wrap:wrap;gap:6px"><h3>'+h3+'</h3><div style="display:flex;align-items:center;gap:8px"><span style="font-size:12px;color:var(--gray)">'+note+'</span>'+cfoSel+'</div></div>'; };
     _panels.debt=_cfoHd('💳 Борги',(cm===0?'накопичено (Борг-Рік)':KOMP_MONTHS[cm-1]+' · статус debt/nopay'))+debtTbl;
     _panels.salpay=_cfoHd('💸 Виплата ЗП',perLbl+' '+y)+salTbl;
     _panels.margin=_cfoHd('📈 Маржа по локації',perLbl+' '+y+' · дохід(факт) − ЗП − OPEX')+mgTbl;
     _panels.term=_cfoHd('🚪 Причини розірвання',perLbl+' '+y)+termTbl;
+    _panels.p2r=_cfoHd('⚖️ Фонд ЗП до обороту',perLbl+' '+y+' · фонд/оборот')+p2rTbl;
   }
-  var _allTiles=_tile('fill')+_tile('free')+_tile('kpi')+_tile('rate')+(cfoOn?(_tile('debt')+_tile('salpay')+_tile('margin')+_tile('term')):'');
+  var _allTiles=_tile('fill')+_tile('free')+_tile('kpi')+_tile('rate')+(cfoOn?(_tile('debt')+_tile('salpay')+_tile('margin')+_tile('p2r')+_tile('term')):'');
   return `
     <div class="stats-grid" style="margin-bottom:16px">${_allTiles}</div>
-    ${_panelFor(['fill','free','kpi','rate','debt','salpay','margin','term'])}`;
+    ${_panelFor(['fill','free','kpi','rate','debt','salpay','margin','p2r','term'])}`;
 }
 
 function renderDash(){
@@ -2808,7 +2841,7 @@ function renderDash(){
   _ensureKomp(_kompYear()-1).then(_dashSoftRerender);    // v7.99 минулий рік (для KPI договорів)
   _ensureKompFree().then(_dashSoftRerender);             // v7.99 вільні місця
   _ensureRatingsYear(_kompYear()).then(_dashSoftRerender); // v7.100 оцінки вихователів — середнє за рік
-  if(_kompIsCFO()){ _ensureSalOv(_kompYear()).then(_dashSoftRerender); _ensureOpexOv(_kompYear()).then(_dashSoftRerender); } // v7.112 CFO: ЗП + OPEX overview
+  if(_kompIsCFO()){ _ensureSalOv(_kompYear()).then(_dashSoftRerender); _ensureSalOv(_kompYear()-1).then(_dashSoftRerender); _ensureOpexOv(_kompYear()).then(_dashSoftRerender); _ensurePayments().then(_dashSoftRerender); } // v7.112/116 CFO
   _renderDashNow();
 }
 function _renderDashNow(){
