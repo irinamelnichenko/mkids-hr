@@ -1,5 +1,13 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.102
+// m.kids CRM — Google Apps Script v7.103
+// v7.103: КОЛОНОК/МІСЯЦЬ per-локація (Школа 228 = 7: додано «харчування»). Прапорець colsPerMonth у
+//         реєстрі Payment (кол. F; default 5, override {'Школа 228':7}). Розкладка через _paymentLayout:
+//         5-кол [навч,вступ,доп,бюдж-доп,бюдж-навч]; 7-кол [навч,вступ,доп,харч,бюдж-доп,бюдж-харч,бюдж-навч].
+//         Усі 7 офсет-місць беруть cpm/layout, а не константу 5: parsePaymentSheet, aggregatePayments(+Yearly),
+//         exportAttendanceToPayments, setLocPaymentBudget, addLocPaymentDop, _dopBudgetCol1, diagLocPayment.
+//         (exportVacationDiscount/one-shot — садок-only, лишились 5.) Захист шкіл від знижок переведено з
+//         хардкод-списку на тип «Школа» з реєстру (_vacSchoolLocSet) — нова школа захищається автоматично.
+//         Треба ре-агрегація (aggregatePaymentsYearly) — тоді вер-гру 228 перестануть бути нулями.
 // v7.102: ПРЕВʼЮ+ЖУРНАЛ для грошових правок (addLocPaymentDop, setLocPaymentBudget, addPaymentRow):
 //         dryRun=true за замовч. (як OPEX/Salary), реальний запис лишає слід у спільному листі
 //         CONFIG «Грошові_Правки_Лог» (коли/ким/роут/локація/дитина/рік/місяць/колонка/було/стало/причина).
@@ -444,7 +452,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.102', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.103', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -1812,6 +1820,24 @@ function makeSheetPublic() {
   return {ok:true, url:ss.getUrl()};
 }
 
+// ═══ v7.103: КОЛОНОК НА МІСЯЦЬ per-локація (Школа 228 = 7: додано «харчування»). ═══
+// Розкладка блоку місяця (0-based офсети від старту блоку):
+//   5-кол (садок/Осокорки): [навч+0][вступ+1][доп+2][бюдж-доп+3][бюдж-навч+4]
+//   7-кол (Школа 228):       [навч+0][вступ+1][доп+2][харч+3][бюдж-доп+4][бюдж-харч+5][бюдж-навч+6]
+// Джерело cpm: реєстр (кол. F), інакше override-мапа, інакше 5.
+var PAYMENT_COLS_OVERRIDE = {'Школа 228': 7};
+function _paymentColsPerMonth(loc, cfgVal){
+  var n = Number(cfgVal);
+  if (isFinite(n) && n >= 5) return n;
+  if (PAYMENT_COLS_OVERRIDE.hasOwnProperty(loc)) return PAYMENT_COLS_OVERRIDE[loc];
+  return 5;
+}
+function _paymentLayout(cpm){
+  cpm = Number(cpm) || 5;
+  if (cpm === 7) return {cpm:7, factNavch:0, factVstup:1, factDop:2, factHarch:3, budDop:4, budHarch:5, budNavch:6};
+  return {cpm:5, factNavch:0, factVstup:1, factDop:2, budDop:3, budNavch:4};
+}
+
 function aggregatePayments() {
   var configSS = SpreadsheetApp.openById(CONFIG_SHEET_ID);
   var configSheet = configSS.getSheets()[0];
@@ -1842,10 +1868,11 @@ function aggregatePayments() {
       var paymentSheet = ss.getSheetByName(sheetName);
       if (!paymentSheet) paymentSheet = ss.getSheets()[0];
       var data = paymentSheet.getDataRange().getValues();
-      var monthCol    = detectCurrentMonthCol(data, curJSMonth);
+      var cpm         = _paymentColsPerMonth(loc, cfgRow[5]);          // v7.103
+      var monthCol    = detectCurrentMonthCol(data, curJSMonth, cpm);
       var contractCol = detectContractDateCol(data);
       Logger.log(loc + ': monthCol=' + monthCol + ', month=' + monthName + ', contractCol=' + contractCol);
-      var groups = parsePaymentSheet(data, monthCol, contractCol);
+      var groups = parsePaymentSheet(data, monthCol, contractCol, cpm);
       Logger.log(loc + ': groups=' + groups.length);
 
       groups.forEach(function(g) {
@@ -1898,7 +1925,8 @@ function detectContractDateCol(data) {
   return -1;
 }
 
-function detectCurrentMonthCol(rows, curJSMonth) {
+function detectCurrentMonthCol(rows, curJSMonth, cpm) {
+  cpm = Number(cpm) || 5;   // v7.103: для fallback-офсету
   for (var r = 0; r < Math.min(3, rows.length); r++) {
     for (var c = 1; c < rows[r].length; c++) {
       var cell = String(rows[r][c] || '').toLowerCase().trim();
@@ -1919,11 +1947,12 @@ function detectCurrentMonthCol(rows, curJSMonth) {
       }
     }
   }
-  var col = 1 + curJSMonth * 5;
+  var col = 1 + curJSMonth * cpm;
   return col;
 }
 
-function parsePaymentSheet(data, monthCol, contractCol) {
+function parsePaymentSheet(data, monthCol, contractCol, cpm) {
+  var _LO = _paymentLayout(cpm);   // v7.103: розкладка блоку (5 або 7 колонок)
   var DATA_START = 3;
   var groups = [];
   var curGroup = null;
@@ -1949,10 +1978,10 @@ function parsePaymentSheet(data, monthCol, contractCol) {
       // (col 1 + mi*5 + 1). Раніше fv = row[monthCol+1] показував вступ лише поточного місяця →
       // разова оплата, внесена в іншому місяці (напр. травень/червень), не бачилась → «не сплачено».
       var fv = 0;
-      for (var _mi = 0; _mi < 12; _mi++) { fv += toNum(row[1 + _mi * 5 + 1]); }
-      var fe = toNum(row[monthCol + 2]);
-      var bd = toNum(row[monthCol + 3]);
-      var bs = toNum(row[monthCol + 4]);
+      for (var _mi = 0; _mi < 12; _mi++) { fv += toNum(row[1 + _mi * _LO.cpm + _LO.factVstup]); }
+      var fe = toNum(row[monthCol + _LO.factDop]);
+      var bd = toNum(row[monthCol + _LO.budDop]);
+      var bs = toNum(row[monthCol + _LO.budNavch]);
       var cd = (contractCol >= 0) ? parseDateDMY(row[contractCol]) : '';
       curGroup.children.push({
         name: nameCell,
@@ -2165,9 +2194,11 @@ function aggregatePaymentsYearly() {
       var paymentSheet = ss.getSheetByName(sheetName);
       if (!paymentSheet) paymentSheet = ss.getSheets()[0];
       var data = paymentSheet.getDataRange().getValues();
-      var curMonthCol  = detectCurrentMonthCol(data, curJSMonth);
+      var cpm          = _paymentColsPerMonth(loc, cfgRow[5]);         // v7.103
+      var _LOy         = _paymentLayout(cpm);
+      var curMonthCol  = detectCurrentMonthCol(data, curJSMonth, cpm);
       var contractCol  = detectContractDateCol(data);
-      var groups       = parsePaymentSheet(data, curMonthCol, contractCol);
+      var groups       = parsePaymentSheet(data, curMonthCol, contractCol, cpm);
       var nameToRow = {};
       for (var ri = 3; ri < data.length; ri++) {
         var nc = trim(String(data[ri][0] || ''));
@@ -2184,12 +2215,12 @@ function aggregatePaymentsYearly() {
           var budYear   = 0;
           var factToday = 0;
           for (var mi = 0; mi < 12; mi++) {
-            var col = 1 + mi * 5;                         // джерело: 5 колонок/місяць у Payment-файлі
-            var fs  = rowData ? toNum(rowData[col])     : 0;  // Факт навч
-            var fv  = rowData ? toNum(rowData[col + 1]) : 0;  // v7.101 Факт вступ (раніше пропускався)
-            var fe  = rowData ? toNum(rowData[col + 2]) : 0;  // Факт доп
-            var be  = rowData ? toNum(rowData[col + 3]) : 0;
-            var bs  = rowData ? toNum(rowData[col + 4]) : 0;
+            var col = 1 + mi * _LOy.cpm;                  // v7.103: старт блоку за cpm локації
+            var fs  = rowData ? toNum(rowData[col + _LOy.factNavch]) : 0;  // Факт навч
+            var fv  = rowData ? toNum(rowData[col + _LOy.factVstup]) : 0;  // Факт вступ
+            var fe  = rowData ? toNum(rowData[col + _LOy.factDop])   : 0;  // Факт доп
+            var be  = rowData ? toNum(rowData[col + _LOy.budDop])    : 0;  // Бюджет доп
+            var bs  = rowData ? toNum(rowData[col + _LOy.budNavch])  : 0;  // Бюджет навч
             var totalNoEntry = fs + fe;
             var budget       = bs + be;
             var mStatus;
@@ -2962,7 +2993,7 @@ function _makeImportAbsence(parsed, rawSlot) {
 }
 
 function dryRunImportAbsences(locFilter) {
-  var SCHOOL_LOCS_SKIP = ['Школа Осокорки', 'Школа 228', 'Онлайн школа'];
+  var SCHOOL_LOCS_SKIP = Object.keys(_vacSchoolLocSet());   // v7.103: тип «Школа» з реєстру + fallback
   var refYear = new Date().getFullYear();
   var norm    = function(s){ return String(s||'').trim().toLowerCase().replace(/\s+/g,' '); };
 
@@ -3075,7 +3106,7 @@ function dryRunImportAbsences(locFilter) {
 }
 
 function importAbsencesFromPayment(locFilter) {
-  var SCHOOL_LOCS_SKIP = ['Школа Осокорки', 'Школа 228', 'Онлайн школа'];
+  var SCHOOL_LOCS_SKIP = Object.keys(_vacSchoolLocSet());   // v7.103: тип «Школа» з реєстру + fallback
   var refYear = new Date().getFullYear();
   var norm    = function(s){ return String(s||'').trim().toLowerCase().replace(/\s+/g,' '); };
   var nowISO  = new Date().toISOString();
@@ -7699,8 +7730,9 @@ function _getLocationPaymentRegistry(loc){
   for (var r = 1; r < data.length; r++){
     if (trim(data[r][2]) === loc){
       return {
-        sheetId:   trim(data[r][3]),
-        sheetName: trim(data[r][4]) || 'Payment'
+        sheetId:      trim(data[r][3]),
+        sheetName:    trim(data[r][4]) || 'Payment',
+        colsPerMonth: _paymentColsPerMonth(loc, data[r][5])   // v7.103: 5/7 (реєстр кол.F → override → 5)
       };
     }
   }
@@ -7879,7 +7911,8 @@ function exportAttendanceToPayments(params){
     var updated = 0, totalAmount = 0, cellsWritten = 0, formulaConverted = 0;
     var details = [], perMonth = [];
     monthList.forEach(function(m){
-      var budgetDopCol1 = 1 + (m - 1) * 5 + 3 + 1;   // «Бюджет доп» місяця m (offset +3)
+      var _cpmE = reg.colsPerMonth || 5, _LOe = _paymentLayout(_cpmE);   // v7.103
+      var budgetDopCol1 = 1 + (m - 1) * _cpmE + _LOe.budDop + 1;         // «Бюджет доп» місяця m
       var col0 = budgetDopCol1 - 1;
       var journal = _readJournalForTarget(loc, 'payment', year, m);
       var journalOps = [], mUpd = 0, mSum = 0;
@@ -9190,7 +9223,18 @@ function _sickMonthBreakdown(fromISO, toISO, fee, loc){
   }
   return arr;   // [{ym, y, m, workDays, weeks, discount}]
 }
-var _VAC_SCHOOL_LOCS = ['Школа Осокорки','Школа 228','Онлайн школа'];
+var _VAC_SCHOOL_LOCS = ['Школа Осокорки','Школа 228','Онлайн школа'];   // fallback (плюс усі typ='Школа' з реєстру)
+// v7.103: множина шкільних локацій = тип «Школа» з реєстру + fallback-список.
+// Нова школа (напр. «Школа Кар'єрна») з typ='Школа' автоматично отримує захист від знижок.
+var _VAC_SCHOOL_SET_CACHE = null;
+function _vacSchoolLocSet(){
+  if (_VAC_SCHOOL_SET_CACHE) return _VAC_SCHOOL_SET_CACHE;
+  var set = {};
+  _VAC_SCHOOL_LOCS.forEach(function(x){ set[x] = true; });
+  try { (getLocations().data || []).forEach(function(l){ if (String(l.typ||'').trim() === 'Школа') set[String(l.loc||'').trim()] = true; }); } catch(e){}
+  _VAC_SCHOOL_SET_CACHE = set;
+  return set;
+}
 // Дзеркало фронту (clients.html getContractType3): діти з договором ≥01.10.2025,
 // яким зберігаємо відпустку як 'standard'. Матч по нормалізованому ПІБ (_normForMatch).
 var _VAC_EXCEPTIONS = ['андреєва ангеліна','тандиряк северин','гаркуша богдан','мельничук дарина','скоріна аліса','городний яким',"щуров мар'ян",'бахтін богдан','бахтін роман','букін михайло'];
@@ -9203,7 +9247,7 @@ function _vacIsSummerPeriod(fromISO, toISO){
 }
 function _vacContractType(contractISO, group, loc, name){
   if (name && _VAC_EXCEPTIONS.indexOf(_normForMatch(name)) !== -1) return 'standard'; // виняток — перед датою
-  if (_VAC_SCHOOL_LOCS.indexOf(loc || '') !== -1) return 'school-no-absence';
+  if (_vacSchoolLocSet()[loc || '']) return 'school-no-absence';   // v7.103: тип «Школа» з реєстру
   if (!contractISO) return 'standard';
   if (contractISO >= '2025-10-01') return 'new';                          // лише хвороба
   if (/preschool|розумник/i.test(String(group || ''))) return 'preschool'; // без перерахунків
@@ -9576,9 +9620,10 @@ function diagLocPayment(e){
     var ss = SpreadsheetApp.openById(reg.sheetId);
     var paySh = ss.getSheetByName(reg.sheetName) || ss.getSheets()[0];
     var data = paySh.getDataRange().getValues();
-    var monthStartCol0 = 1 + (month - 1) * 5;
-    var budgetNavchCol1 = monthStartCol0 + 4 + 1;
-    var nextNavchCol1 = budgetNavchCol1 + 5;
+    var _cpm = reg.colsPerMonth || 5, _LO = _paymentLayout(_cpm);       // v7.103
+    var monthStartCol0 = 1 + (month - 1) * _cpm;
+    var budgetNavchCol1 = monthStartCol0 + _LO.budNavch + 1;
+    var nextNavchCol1 = (1 + month * _cpm) + _LO.budNavch + 1;
     var lastRow = paySh.getLastRow();
     var colV = paySh.getRange(1, budgetNavchCol1, lastRow, 1).getValues();
     var nextV = (month <= 11) ? paySh.getRange(1, nextNavchCol1, lastRow, 1).getValues() : [];
@@ -9675,7 +9720,8 @@ function setLocPaymentBudget(body){
     var ss=SpreadsheetApp.openById(reg.sheetId);
     var paySh=ss.getSheetByName(reg.sheetName)||ss.getSheets()[0];
     var data=paySh.getDataRange().getValues();
-    var budgetNavchCol1=1+(month-1)*5+4+1;
+    var _cpm=reg.colsPerMonth||5, _LO=_paymentLayout(_cpm);            // v7.103
+    var budgetNavchCol1=1+(month-1)*_cpm+_LO.budNavch+1;
     var nk=_normNameVac(name);
     var DATA_START=3, rowIdx=-1;
     for(var r=DATA_START;r<data.length;r++){
@@ -9718,8 +9764,9 @@ function addLocPaymentDop(body){
     var ss = SpreadsheetApp.openById(reg.sheetId);
     var paySh = ss.getSheetByName(reg.sheetName) || ss.getSheets()[0];
     var data = paySh.getDataRange().getValues();
-    // 5 колонок/місяць: Факт навч|Факт вступ|Факт доп|«БЮДЖЕТ ДОП»(+3)|Бюджет навч(+4).
-    var budgetDopCol1 = 1 + (month - 1) * 5 + 3 + 1;   // 1-based (січ = 5)
+    // v7.103: розкладка з cpm локації (5 або 7 колонок). Бюджет-доп: 5-кол +3, 7-кол +4.
+    var _cpm = reg.colsPerMonth || 5, _LO = _paymentLayout(_cpm);
+    var budgetDopCol1 = 1 + (month - 1) * _cpm + _LO.budDop + 1;
     var nk = _normNameVac(name);
     var DATA_START = 3, rowIdx = -1, matches = 0;
     for (var r = DATA_START; r < data.length; r++){
@@ -10089,11 +10136,11 @@ var DOP_OVERPAY_LIST = [
   // { loc: 'Бровари', child: 'ПІБ як у Payment', amount:  250 },
 ];
 function _dopNorm(s){ return String(s || '').replace(/[\s ]+/g, '').toLowerCase(); }
-function _dopBudgetCol1(month){ var monthStartCol0 = 1 + (month - 1) * 5; return monthStartCol0 + 3 + 1; }
+function _dopBudgetCol1(month, cpm){ var LO = _paymentLayout(cpm); return 1 + (month - 1) * LO.cpm + LO.budDop + 1; } // v7.103 cpm-aware (Бюджет доп)
 
 function _dopOverpayRun(list, apply){
   list = list || [];
-  var col1 = _dopBudgetCol1(DOP_ADJ_MONTH);
+  var col1 = _dopBudgetCol1(DOP_ADJ_MONTH);   // дефолтний лог (садок=5); реальний col — per-loc нижче
   var monthName = MONTHS_CAL_UA[DOP_ADJ_MONTH - 1];
   Logger.log('=== %s коригувань «Бюджет доп» %s %s (кол.%s) — %s рядків ===',
     apply ? 'ФІКС' : 'ДІАГ (тільки читання)', monthName, DOP_ADJ_YEAR, col1, list.length);
@@ -10106,6 +10153,7 @@ function _dopOverpayRun(list, apply){
   Object.keys(byLoc).forEach(function(loc){
     var reg = _getLocationPaymentRegistry(loc);
     if (!reg || !reg.sheetId){ Logger.log('  [X] локацію "%s" не знайдено в CONFIG — пропуск', loc); return; }
+    var col1 = _dopBudgetCol1(DOP_ADJ_MONTH, reg.colsPerMonth);   // v7.103 per-loc cpm
     var ss = SpreadsheetApp.openById(reg.sheetId);
     var sh = ss.getSheetByName(reg.sheetName) || ss.getSheets()[0];
     var data = sh.getDataRange().getValues();
