@@ -1,5 +1,9 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.100
+// m.kids CRM — Google Apps Script v7.101
+// v7.101: (1) Оплати-Рік += помісячна колонка «<міс>-Факт-вступ» (вступні окремо, НЕ згорнуто;
+//         Факт-Рік лишається навч+доп). Блок місяця 5→6 колонок; усі споживачі читають за
+//         назвою заголовка (indexOf), тож індекси не поплили. (2) installNightlyYearlyAggregateTrigger()
+//         — окремий тригер: aggregatePaymentsYearly о 09:00, ПІСЛЯ нічної гарантії знижок (08:00).
 // v7.100: FIX getVyhovatelRatings — прапорець «архів» рахувався з кол. P (формула, майже завжди
 //         непорожня) → усі оцінені хибно ставали архівними й випадали із середнього/дашборда.
 //         Тепер архів визначається як у _parseEmpRow: _empIsArchived(_fmtDateDmy(row[14])) — кол. O.
@@ -435,7 +439,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.100', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.101', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -1983,6 +1987,24 @@ function createDailyTrigger() {
     .inTimezone('Europe/Kiev').create();
 }
 
+// v7.101: ОКРЕМИЙ нічний тригер — aggregatePaymentsYearly раз на добу о 9:00 (ПІСЛЯ нічної
+// гарантії знижок о 8:00 та її пачок), щоб річний агрегат уже містив свіжі знижки.
+// Запусти ВРУЧНУ в редакторі один раз. Видаляє всі наявні тригери aggregatePaymentsYearly
+// і ставить один на 09:00 Kyiv. Увага: якщо потім перезапустити createDailyTrigger(), він
+// поверне aggregatePaymentsYearly на 07:00 — тоді знову запусти цю функцію.
+function installNightlyYearlyAggregateTrigger(){
+  var removed = 0;
+  var trs = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < trs.length; i++){
+    if (trs[i].getHandlerFunction() === 'aggregatePaymentsYearly'){ ScriptApp.deleteTrigger(trs[i]); removed++; }
+  }
+  ScriptApp.newTrigger('aggregatePaymentsYearly')
+    .timeBased().everyDays(1).atHour(9).inTimezone('Europe/Kiev').create();
+  var res = {ok:true, removed:removed, scheduled:'09:00 Europe/Kiev', after:'nightlyVacExportGuarantee (08:00)'};
+  Logger.log('[installNightlyYearlyAggregateTrigger] %s', JSON.stringify(res));
+  return res;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // v7.81 НІЧНА ГАРАНТІЯ ЗНИЖОК ВІДПУСТКИ (незалежно від фронту).
 // Проганяє exportVacationDiscountToPayments по ВСІХ садочках × (поточний+наступний)
@@ -2105,7 +2127,7 @@ function writeYearlyHeader(sheet) {
   sheet.clearContents();
   var hdr = ['Локація','Напрямок','Тип','Група','Вихователь',"Ім'я дитини"];
   MONTHS_CAL.forEach(function(m) {
-    hdr.push(m+'-Факт-навч', m+'-Факт-доп', m+'-Бюджет-навч', m+'-Бюджет-доп', m+'-Статус');
+    hdr.push(m+'-Факт-навч', m+'-Факт-доп', m+'-Факт-вступ', m+'-Бюджет-навч', m+'-Бюджет-доп', m+'-Статус'); // v7.101 +Факт-вступ (окремо, не згорнуто)
   });
   hdr.push('Факт-Рік','Бюджет-Рік','Борг-Рік','Зібрано-На-Сьогодні','Оновлено');
   sheet.appendRow(hdr);
@@ -2156,9 +2178,10 @@ function aggregatePaymentsYearly() {
           var budYear   = 0;
           var factToday = 0;
           for (var mi = 0; mi < 12; mi++) {
-            var col = 1 + mi * 5;
-            var fs  = rowData ? toNum(rowData[col])     : 0;
-            var fe  = rowData ? toNum(rowData[col + 2]) : 0;
+            var col = 1 + mi * 5;                         // джерело: 5 колонок/місяць у Payment-файлі
+            var fs  = rowData ? toNum(rowData[col])     : 0;  // Факт навч
+            var fv  = rowData ? toNum(rowData[col + 1]) : 0;  // v7.101 Факт вступ (раніше пропускався)
+            var fe  = rowData ? toNum(rowData[col + 2]) : 0;  // Факт доп
             var be  = rowData ? toNum(rowData[col + 3]) : 0;
             var bs  = rowData ? toNum(rowData[col + 4]) : 0;
             var totalNoEntry = fs + fe;
@@ -2169,8 +2192,8 @@ function aggregatePaymentsYearly() {
             else if (totalNoEntry > budget)             mStatus = 'over';
             else if (totalNoEntry >= budget)            mStatus = 'paid';
             else                                        mStatus = 'debt';
-            rowOut.push(fs, fe, bs, be, mStatus);
-            factYear  += totalNoEntry;
+            rowOut.push(fs, fe, fv, bs, be, mStatus);     // v7.101 порядок = заголовок (навч,доп,вступ,бюдж-навч,бюдж-доп,статус)
+            factYear  += totalNoEntry;                    // Факт-Рік лишаємо навч+доп (вступ окремо, не сюди)
             budYear   += budget;
             if (mi <= curJSMonth) factToday += totalNoEntry;
           }
@@ -2185,7 +2208,7 @@ function aggregatePaymentsYearly() {
   }
   yearSheet.clearContents();
   writeYearlyHeader(yearSheet);
-  var NUM_COLS = 6 + 12 * 5 + 5;
+  var NUM_COLS = 6 + 12 * 6 + 5;   // v7.101: блок місяця 5→6 (додано Факт-вступ)
   if (allRows.length > 0) {
     yearSheet.getRange(2, 1, allRows.length, NUM_COLS).setValues(allRows);
   }
