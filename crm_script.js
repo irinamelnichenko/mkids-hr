@@ -1,5 +1,10 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.101
+// m.kids CRM — Google Apps Script v7.102
+// v7.102: ПРЕВʼЮ+ЖУРНАЛ для грошових правок (addLocPaymentDop, setLocPaymentBudget, addPaymentRow):
+//         dryRun=true за замовч. (як OPEX/Salary), реальний запис лишає слід у спільному листі
+//         CONFIG «Грошові_Правки_Лог» (коли/ким/роут/локація/дитина/рік/місяць/колонка/було/стало/причина).
+//         Читання — getMoneyJournal({loc?,child?,year?,month?}). УВАГА: setLocPaymentBudget тепер
+//         за замовч. dryRun — фронт-виклики мають передавати dryRun:false для реального запису.
 // v7.101: (1) Оплати-Рік += помісячна колонка «<міс>-Факт-вступ» (вступні окремо, НЕ згорнуто;
 //         Факт-Рік лишається навч+доп). Блок місяця 5→6 колонок; усі споживачі читають за
 //         назвою заголовка (indexOf), тож індекси не поплили. (2) installNightlyYearlyAggregateTrigger()
@@ -439,7 +444,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.101', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.102', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -477,6 +482,7 @@ function doGet(e) {
     else if (action === 'getKomplektaciyaData')      result = getKomplektaciyaData({year: (e.parameter && e.parameter.year) || '', tab: (e.parameter && e.parameter.tab) || ''}); // v7.97
     else if (action === 'getKomplektaciyaFreeSeats') result = getKomplektaciyaFreeSeats(); // v7.97
     else if (action === 'getVyhovatelRatings')       result = getVyhovatelRatings({year: (e.parameter && e.parameter.year) || '', month: (e.parameter && e.parameter.month) || ''}); // v7.99
+    else if (action === 'getMoneyJournal')           result = getMoneyJournal({loc:e.parameter.loc||'', child:e.parameter.child||'', year:e.parameter.year||'', month:e.parameter.month||''}); // v7.102 журнал грошових правок
     else if (action === 'getActivitiesCatalog')      result = getActivitiesCatalog(e.parameter && e.parameter.loc || '');
     else if (action === 'getAttendanceMarks')         result = getAttendanceMarks(e.parameter || {});
     else if (action === 'getDopMerges')               result = getDopMerges(e.parameter || {});
@@ -9598,9 +9604,69 @@ function diagLocPayment(e){
 // журналу lastWritten=−disc, щоб наступний export рахував base коректно). Матч рядка за
 // _normNameVac (латиниця/кирилиця нормалізуються, якщо _normNameVac це вміє). Викликати
 // POST ?action=setLocPaymentBudget {loc,month,year,name,value,disc}.
+// ═══ v7.102: СПІЛЬНИЙ ЖУРНАЛ ГРОШОВИХ ПРАВОК (addLocPaymentDop, setLocPaymentBudget, addPaymentRow) ═══
+// Окремий лист у CONFIG. Кожен реальний запис (dryRun:false) лишає слід: коли/ким/роут/локація/
+// дитина/рік/місяць/колонка/було/стало/причина. Читання — getMoneyJournal з фільтрами.
+var MONEY_JOURNAL_SHEET  = 'Грошові_Правки_Лог';
+var MONEY_JOURNAL_HEADER = ['Коли','Ким','Роут','Локація','Дитина','Рік','Місяць','Колонка','Було','Стало','Причина'];
+function _moneyJournalSheet(create){
+  var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var sh = ss.getSheetByName(MONEY_JOURNAL_SHEET);
+  if (!sh){ if (!create) return null; sh = ss.insertSheet(MONEY_JOURNAL_SHEET);
+    sh.getRange(1,1,1,MONEY_JOURNAL_HEADER.length).setValues([MONEY_JOURNAL_HEADER]); sh.setFrozenRows(1); }
+  else if (sh.getLastColumn() < MONEY_JOURNAL_HEADER.length){
+    sh.getRange(1,1,1,MONEY_JOURNAL_HEADER.length).setValues([MONEY_JOURNAL_HEADER]); }
+  return sh;
+}
+function _moneyJournalLog(entries){
+  if (!entries || !entries.length) return;
+  try {
+    var sh = _moneyJournalSheet(true);
+    var stamp = formatDate(new Date());
+    var rows = entries.map(function(e){ return [stamp, String(e.by||''), String(e.route||''), String(e.loc||''),
+      String(e.name||''), (e.year!=null?e.year:''), (e.month!=null?e.month:''), String(e.col||''),
+      (e.before!=null?e.before:''), (e.after!=null?e.after:''), String(e.reason||'')]; });
+    sh.getRange(sh.getLastRow()+1, 1, rows.length, MONEY_JOURNAL_HEADER.length).setValues(rows);
+  } catch(_e){ Logger.log('[_moneyJournalLog] ERR %s', _e && _e.message); }
+}
+// Читання журналу з фільтрами. GET ?action=getMoneyJournal&loc=&child=&year=&month=
+function getMoneyJournal(params){
+  params = params || {};
+  var fLoc = String(params.loc||'').trim().toLowerCase();
+  var fChild = _journalNormName(String(params.child||''));
+  var fYear = String(params.year||'').trim();
+  var fMonth = String(params.month||'').trim();
+  try {
+    var sh = _moneyJournalSheet(false);
+    if (!sh) return {ok:true, total:0, rows:[]};
+    var vals = sh.getDataRange().getValues();
+    if (vals.length < 2) return {ok:true, total:0, rows:[]};
+    var h = vals[0].map(String), idx = {};
+    MONEY_JOURNAL_HEADER.forEach(function(k){ idx[k] = h.indexOf(k); });
+    var out = [];
+    for (var r = 1; r < vals.length; r++){
+      var row = vals[r];
+      var loc = String(row[idx['Локація']] || ''), child = String(row[idx['Дитина']] || '');
+      var yr = String(row[idx['Рік']] || ''), mo = String(row[idx['Місяць']] || '');
+      if (fLoc && loc.toLowerCase() !== fLoc) continue;
+      if (fChild && _journalNormName(child) !== fChild) continue;
+      if (fYear && yr !== fYear) continue;
+      if (fMonth && mo !== fMonth) continue;
+      out.push({when:String(row[idx['Коли']]||''), by:String(row[idx['Ким']]||''), route:String(row[idx['Роут']]||''),
+        loc:loc, child:child, year:yr, month:mo, col:String(row[idx['Колонка']]||''),
+        before:row[idx['Було']], after:row[idx['Стало']], reason:String(row[idx['Причина']]||'')});
+    }
+    out.reverse();   // новіші зверху
+    return {ok:true, total:out.length, rows:out};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+// v7.102: dryRun за замовч. TRUE (як OPEX/Salary) + журнал. УВАГА: фронт-виклики мають ПЕРЕДАВАТИ
+// dryRun:false для реального запису (раніше писало беззастережно).
 function setLocPaymentBudget(body){
   try {
     var loc=String(body.loc||'').trim(); var month=Number(body.month); var year=Number(body.year)||2026;
+    var dryRun=(body.dryRun!==false);   // v7.102 default TRUE
     var name=String(body.name||'').trim(); var value=Number(body.value); var disc=Number(body.disc||0);
     if(!loc||!month||!name||isNaN(value)) return {ok:false,error:'loc/month/name/value обовʼязкові'};
     if (_isMonthClosed(year, month)) return _closedMonthError(year, month);   // v7.91
@@ -9619,12 +9685,16 @@ function setLocPaymentBudget(body){
     }
     if(rowIdx<0) return {ok:false,error:'Рядок "'+name+'" не знайдено у файлі '+loc};
     var before=Number(paySh.getRange(rowIdx+1,budgetNavchCol1).getValue())||0;
-    paySh.getRange(rowIdx+1,budgetNavchCol1).setValue(value);
-    try {
-      _commitJournalUpdates(_readJournalForTarget(loc,'vacation',year,month),
-        [{nk:nk, loc:loc, kind:'vacation', name:trim(String(data[rowIdx][0])), year:year, month:month, newSum:(disc>0?-disc:0)}]);
-    } catch(_j){}
-    return {ok:true, loc:loc, month:month, name:name, before:before, after:value, disc:disc};
+    if(!dryRun){
+      paySh.getRange(rowIdx+1,budgetNavchCol1).setValue(value);
+      try {
+        _commitJournalUpdates(_readJournalForTarget(loc,'vacation',year,month),
+          [{nk:nk, loc:loc, kind:'vacation', name:trim(String(data[rowIdx][0])), year:year, month:month, newSum:(disc>0?-disc:0)}]);
+      } catch(_j){}
+      _moneyJournalLog([{by:body.by, route:'setLocPaymentBudget', loc:loc, name:trim(String(data[rowIdx][0])),
+        year:year, month:month, col:'Бюджет-навч', before:before, after:value, reason:body.reason}]);
+    }
+    return {ok:true, dryRun:dryRun, loc:loc, month:month, name:name, before:before, after:value, disc:disc};
   } catch(e){ return {ok:false,error:String(e&&e.message||e)}; }
 }
 
@@ -9665,7 +9735,11 @@ function addLocPaymentDop(body){
     var before = Number(cell.getValue()) || 0;   // formula → обчислене значення
     var after  = before + delta;
     if (after < 0) return {ok:false, error:'Результат відʼємний (' + after + ') — не пишу', before:before, delta:delta};
-    if (!dryRun) cell.setValue(after);            // формула замінюється числом (як в export/dop-manual)
+    if (!dryRun){
+      cell.setValue(after);                       // формула замінюється числом (як в export/dop-manual)
+      _moneyJournalLog([{by:body.by, route:'addLocPaymentDop', loc:loc, name:trim(String(data[rowIdx][0])),
+        year:year, month:month, col:'Бюджет-доп', before:before, after:after, reason:body.reason}]);
+    }
     return {ok:true, dryRun:dryRun, loc:loc, month:month, year:year,
             name:trim(String(data[rowIdx][0])), col:budgetDopCol1,
             before:before, delta:delta, after:after, wasFormula:wasFormula};
@@ -9807,6 +9881,8 @@ function addPaymentRow(body){
       var cell = paySh.getRange(insertAfter1 + 1, 1);
       cell.setNumberFormat('@');
       cell.setValue(name);   // фінансові колонки лишаємо порожніми
+      _moneyJournalLog([{by:body.by, route:'addPaymentRow', loc:loc, name:name, year:'', month:'',
+        col:'новий рядок (кол A), група '+group, before:'', after:name, reason:body.reason}]);
     }
     return {ok: true, dryRun: dryRun, loc: loc, name: name, group: group,
             headerRow: headerRow + 1, insertAtRow: insertAfter1 + 1};
