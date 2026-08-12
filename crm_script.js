@@ -1,5 +1,11 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.105
+// m.kids CRM — Google Apps Script v7.106
+// v7.106: ВІДНОВЛЕНО хмарну синхронізацію дашборд-записів (S.recs: відпустки/лікарняні/зарплати/
+//         нотатки). Бекенд не мав action=get/save («Unknown action: get») — дані жили лише в
+//         localStorage. Додано getDashRecords()/saveDashRecords() + маршрути 'get' (doGet) і 'save'
+//         (doPost). Сховище: аркуш «Дашборд_Записи» [Ключ, JSON, Оновлено], рядок на ключ (upsert).
+//         Фронт на завантаженні ЗЛИВАЄ локальне з хмарним (об'єднання по _id, без затирання) і
+//         пушить назад → одноразова міграція localStorage у таблицю без втрат; індикатор зеленіє.
 // v7.105: renameClientGroup({loc,oldGroup,newGroup,dryRun}) — масове перейменування ГРУПИ в картках
 //         Клієнти для локації (кол. «Група» + «Оновлено»), dryRun=true за замовч. (лічить картки).
 // v7.104: ХАРЧУВАННЯ (по днях → Payment «Бюджет-харчування» +5, лише 7-кол локації). Крок 0:
@@ -460,7 +466,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.105', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.106', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -521,6 +527,7 @@ function doGet(e) {
     else if (action === 'generateInvoicePDF')          result = generateInvoicePDF(e.parameter || {}); // v6.50
     else if (action === 'getInvoiceStatusReport')      result = getInvoiceStatusReport(e.parameter || {}); // v6.50.3
     else if (action === 'getFillStatus')               result = getFillStatus(e.parameter || {});           // v6.51
+    else if (action === 'get')                         result = getDashRecords();                            // v7.106 дашборд-записи (S.recs) — читання
     else                                             result = {ok:false, error:'Unknown action: ' + action};
     return jsonOut(result);
   } catch(err) {
@@ -640,6 +647,7 @@ function doPost(e) {
     else if (body.action === 'getInvoiceStatusReport')      result = getInvoiceStatusReport(body || {}); // v6.50.3
     else if (body.action === 'refreshYearlyAggregate')      result = refreshYearlyAggregate();           // лише агрегат (швидко)
     else if (body.action === 'reexportLocation')            result = reexportLocationFull(body.loc || '', body.month, body.year); // кнопка "Перерахувати локацію": Payment+Salary+агрегат
+    else if (body.action === 'save')                        result = saveDashRecords(body.data || {});   // v7.106 дашборд-записи (S.recs) — збереження (upsert по ключу)
     else result = {ok:false, error:'Unknown action'};
     // v7.86: інвалідація кешу getPredmetnyky — бампимо predver після УСПІШНОГО запису,
     // що змінює дані предметників (уроки/призначення/каталог/обʼєднання/норми/сіди).
@@ -9983,6 +9991,72 @@ function _moneyJournalLog(entries){
     sh.getRange(sh.getLastRow()+1, 1, rows.length, MONEY_JOURNAL_HEADER.length).setValues(rows);
   } catch(_e){ Logger.log('[_moneyJournalLog] ERR %s', _e && _e.message); }
 }
+
+// ─── ДАШБОРД-ЗАПИСИ: хмарна синхронізація S.recs (відпустки/лікарняні/зарплати/нотатки) ──────
+// v7.106: фронт дашборда тримає S.recs = { <ключ>: {vacs:[],sicks:[],sals:[],notes:[]} } і синхронить
+// через GET ?action=get та POST {action:'save',data:S.recs}. Раніше бекенд цих action не мав
+// («Unknown action: get») → дані жили лише в localStorage. Зберігаємо ПО РЯДКУ НА КЛЮЧ (по одному
+// співробітнику), щоб уникнути ліміту 50k символів на клітинку та робити точковий upsert.
+var DASH_RECORDS_SHEET  = 'Дашборд_Записи';
+var DASH_RECORDS_HEADER = ['Ключ','JSON','Оновлено'];
+function _dashRecordsSheet(create){
+  var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var sh = ss.getSheetByName(DASH_RECORDS_SHEET);
+  if (!sh){ if (!create) return null; sh = ss.insertSheet(DASH_RECORDS_SHEET);
+    sh.getRange(1,1,1,DASH_RECORDS_HEADER.length).setValues([DASH_RECORDS_HEADER]); sh.setFrozenRows(1); }
+  return sh;
+}
+function _normDashRec(r){
+  r = r || {};
+  return { vacs:  Array.isArray(r.vacs)  ? r.vacs  : [],
+           sicks: Array.isArray(r.sicks) ? r.sicks : [],
+           sals:  Array.isArray(r.sals)  ? r.sals  : [],
+           notes: Array.isArray(r.notes) ? r.notes : [] };
+}
+// GET ?action=get → {ok:true, data:{ <ключ>:{vacs,sicks,sals,notes}, ... }}
+function getDashRecords(){
+  try {
+    var sh = _dashRecordsSheet(false);
+    var data = {};
+    if (sh && sh.getLastRow() > 1){
+      var vals = sh.getRange(2, 1, sh.getLastRow()-1, 2).getValues(); // Ключ, JSON
+      for (var i=0;i<vals.length;i++){
+        var key = String(vals[i][0]||'').trim(); if (!key) continue;
+        var raw = vals[i][1];
+        if (raw==null || raw===''){ data[key] = _normDashRec(null); continue; }
+        try { data[key] = _normDashRec(JSON.parse(raw)); }
+        catch(_e){ data[key] = _normDashRec(null); }
+      }
+    }
+    return {ok:true, data:data};
+  } catch(err){ return {ok:false, error:err.message || String(err)}; }
+}
+// POST {action:'save', data:{...}} — UPSERT по ключу (перезапис рядка ключа тим, що прислав клієнт).
+// Клієнт перед першим збереженням уже ЗЛИВ локальне з хмарним (merge на завантаженні), тож перезапис
+// авторитетний і коректно розповсюджує видалення; ключі, яких немає у payload, НЕ чіпаємо (не втрачаємо).
+function saveDashRecords(data){
+  try {
+    data = data || {};
+    var sh = _dashRecordsSheet(true);
+    var last = sh.getLastRow();
+    var rowOf = {};
+    if (last > 1){
+      var keys = sh.getRange(2, 1, last-1, 1).getValues();
+      for (var i=0;i<keys.length;i++){ var k=String(keys[i][0]||'').trim(); if (k) rowOf[k]=i+2; }
+    }
+    var stamp = formatDate(new Date());
+    var appendRows = [];
+    Object.keys(data).forEach(function(key){
+      key = String(key||'').trim(); if (!key) return;
+      var json = JSON.stringify(_normDashRec(data[key]));
+      if (rowOf[key]) sh.getRange(rowOf[key], 2, 1, 2).setValues([[json, stamp]]);
+      else            appendRows.push([key, json, stamp]);
+    });
+    if (appendRows.length) sh.getRange(sh.getLastRow()+1, 1, appendRows.length, DASH_RECORDS_HEADER.length).setValues(appendRows);
+    return {ok:true, saved:Object.keys(data).length};
+  } catch(err){ return {ok:false, error:err.message || String(err)}; }
+}
+
 // Читання журналу з фільтрами. GET ?action=getMoneyJournal&loc=&child=&year=&month=
 function getMoneyJournal(params){
   params = params || {};

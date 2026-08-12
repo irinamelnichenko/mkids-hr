@@ -858,8 +858,14 @@ async function loadFromSheets(){
     }
     const j=await r.json();
     if(j && j.ok && j.data){
-      S.recs=j.data;
+      // v7.106: ЗЛИТТЯ локального (localStorage) з хмарним, а НЕ затирання — одноразова міграція без втрат.
+      // Об'єднуємо по _id (див. _mergeRecs). Якщо локальне додало щось поверх хмари — пушимо назад у хмару.
+      const cloud=j.data||{};
+      const merged=_mergeRecs(S.recs||{}, cloud);
+      const grew=JSON.stringify(merged)!==JSON.stringify(cloud); // локальні записи, яких не було у хмарі
+      S.recs=merged;
       safeSetItem(CFG.SK,JSON.stringify(S.recs));
+      if(grew) syncToSheets(); // залити локальні доповнення у хмару (fire-and-forget, debounce)
       updSheetsStatus('ok');
       return true;
     }
@@ -874,6 +880,30 @@ async function loadFromSheets(){
     updSheetsStatus(_recsHaveCache()?'ok':'err', 'HR-записи (мережа)');
   }
   return false;
+}
+// v7.106: злиття двох наборів S.recs без втрат. Об'єднуємо по _id у кожному кошику (vacs/sicks/sals/notes);
+// елементи без _id дедупимо за повним JSON. Ключі беремо з обох боків. Використовується при завантаженні
+// з хмари, щоб локальні (localStorage) записи не затерлись хмарними і навпаки.
+function _mergeRecsArr(x,y){
+  x=Array.isArray(x)?x:[]; y=Array.isArray(y)?y:[];
+  var seen={}, out=[];
+  x.concat(y).forEach(function(it){
+    if(!it||typeof it!=='object') return;
+    var id=(it._id!=null)?('#'+String(it._id)):('~'+JSON.stringify(it));
+    if(seen[id]) return; seen[id]=1; out.push(it);
+  });
+  return out;
+}
+function _mergeRecsOne(a,b){
+  a=a||{}; b=b||{};
+  return { vacs:_mergeRecsArr(a.vacs,b.vacs), sicks:_mergeRecsArr(a.sicks,b.sicks),
+           sals:_mergeRecsArr(a.sals,b.sals), notes:_mergeRecsArr(a.notes,b.notes) };
+}
+function _mergeRecs(a,b){
+  a=a||{}; b=b||{}; var out={}, k;
+  for(k in a){ if(Object.prototype.hasOwnProperty.call(a,k)) out[k]=_mergeRecsOne(a[k], b[k]); }
+  for(k in b){ if(Object.prototype.hasOwnProperty.call(b,k) && !out[k]) out[k]=_mergeRecsOne(a[k], b[k]); }
+  return out;
 }
 // v7.105: обгортка над ІНЛАЙН setCloudStatus. Невідомий стан → 'local'. reason → tooltip при червоному.
 function updSheetsStatus(st, reason){
