@@ -200,7 +200,7 @@ function splitViews(){ var top=[],bot=[]; S.tabs.forEach(function(t){ (/обід
 // Обіди взаємовиключні: активний лише один із цих id на день.
 function lunchIds(){ return S.tabs.filter(function(t){return /обід|обед/i.test(t.name);}).map(function(t){return t.id;}); }
 function isLunch(id){ return lunchIds().indexOf(id)>=0; }
-// act = 'cell' | 'day' — однозначне делегування за data-act.
+// act = 'cell' — індивідуальне відмічання (масового немає).
 function tgBlock(act, attrs, isOn){
   var sv=splitViews();
   function one(t){ var on=isOn(t);
