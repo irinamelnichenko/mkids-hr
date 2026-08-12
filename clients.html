@@ -1294,7 +1294,7 @@ var APP_BUILD='7.58';
 async function apiGet(action){
   var url=getScriptUrl();
   if(!url) throw new Error('URL не налаштовано');
-  var r=await fetch(url+'?action='+action,{redirect:'follow'});
+  var r=await cloudFetch(url+'?action='+action,{redirect:'follow'});   // v7.105 retry
   if(!r.ok) throw new Error('HTTP '+r.status);
   var j=await r.json();
   if(!j.ok) throw new Error(j.error||'Помилка сервера');
@@ -1341,7 +1341,7 @@ async function apiGetFull(params){
   var url=getScriptUrl();
   if(!url) throw new Error('URL не налаштовано');
   var qs=Object.keys(params).map(function(k){ return encodeURIComponent(k)+'='+encodeURIComponent(params[k]); }).join('&');
-  var r=await fetch(url+'?'+qs,{redirect:'follow'});
+  var r=await cloudFetch(url+'?'+qs,{redirect:'follow'});   // v7.105 retry
   if(!r.ok) throw new Error('HTTP '+r.status);
   var j=await r.json();
   if(!j.ok) throw new Error(j.error||'Помилка сервера');
@@ -1483,12 +1483,24 @@ function getCRMCard(id){
 }
 
 // ─── SYNC STATUS ─────────────────────────────────────────────────────────────
-function setSyncStatus(st){
+function setSyncStatus(st, reason){
   var el=document.getElementById('syncStatus'); if(!el) return;
   if(st==='ok'){ el.textContent='☁️ Синхронізовано'; el.style.color='#27ae60'; }
   else if(st==='sync'){ el.textContent='☁️ Синхронізація…'; el.style.color='#e67e22'; }
   else if(st==='err'){ el.textContent='⚠️ Помилка хмари'; el.style.color='#e74c3c'; }
   else{ el.textContent=''; }
+  el.title=(st==='err'&&reason)?('Не завантажилось: '+reason):'';   // v7.105: причина в тултипі
+}
+// v7.105: cloudFetch ІНЛАЙНОМ (таймаут 45с + 2 повтори 1с/3с лише на мережевий збій).
+var _CF_RETRIES=[1000,3000];
+function _cfSleep(ms){ return new Promise(function(r){ setTimeout(r,ms); }); }
+async function cloudFetch(url,opts){
+  opts=opts||{}; var tmo=opts.timeoutMs||45000, del=opts.retries||_CF_RETRIES;
+  var init=Object.assign({redirect:'follow'},opts.fetch||{}), n=del.length+1, last;
+  for(var i=0;i<n;i++){ var c=new AbortController(); var t=setTimeout(function(){ try{c.abort();}catch(_){} },tmo);
+    try{ var r=await fetch(url,Object.assign({},init,{signal:c.signal})); clearTimeout(t); return r; }
+    catch(e){ clearTimeout(t); last=e; if(i<n-1){ await _cfSleep(del[i]); continue; } throw last; } }
+  throw last;
 }
 
 // ─── DIRECT SHEETS API ────────────────────────────────────────────────────────
@@ -1597,7 +1609,7 @@ async function loadPaymentsYearly(force){
   try{
     var url=getScriptUrl();
     if(!url) throw new Error('URL не налаштовано');
-    var r=await fetch(url+'?action=getPaymentsYearly',{redirect:'follow'});
+    var r=await cloudFetch(url+'?action=getPaymentsYearly',{redirect:'follow'});   // v7.105 retry
     if(!r.ok) throw new Error('HTTP '+r.status);
     var j=await r.json();
     if(!j.ok) throw new Error(j.error||'Сервер повернув ok:false');
@@ -2515,11 +2527,11 @@ async function initApp(){
       {name:'registry',  crit:false, p:loadRegistryUrls()}
     ];
     var _res=await Promise.allSettled(_loaders.map(function(l){ return l.p; }));
-    var _critFail=false;
+    var _critFail=false, _failNames=[];
     _res.forEach(function(r,i){
       if(r.status==='rejected'){
         console.error('[initApp] лоадер "'+_loaders[i].name+'" ВПАВ'+(_loaders[i].crit?' (КРИТИЧНИЙ)':' (некритичний)')+':', r.reason);
-        if(_loaders[i].crit) _critFail=true;
+        if(_loaders[i].crit){ _critFail=true; _failNames.push(_loaders[i].name); }
       }
     });
     buildGroups();   // гарантуємо актуальні групи після паралельного завантаження
@@ -2527,7 +2539,7 @@ async function initApp(){
     // Річні дані та вся історія оплат — у фоні, з повторним рендером коли готові
     loadPaymentsYearly(false).then(function(){ renderView(); }).catch(function(e){ console.warn('Yearly load failed:', e); });
     loadAllPayHistory().catch(function(e){ console.warn('History load failed:', e); });
-    setSyncStatus(_critFail?'err':'ok');
+    setSyncStatus(_critFail?'err':'ok', _failNames.join(', '));
   }catch(e){
     console.error('initApp error (несподіваний):',e);
     setSyncStatus('err');
@@ -2589,16 +2601,16 @@ async function refreshAll(){
       {name:'paymentsYearly', crit:false, fn:function(){ return loadPaymentsYearly(true); }},
       {name:'payHistory',     crit:false, fn:function(){ return loadAllPayHistory(); }}
     ];
-    var _critFail=false;
+    var _critFail=false, _failNames=[];
     for(var i=0;i<_loaders.length;i++){
       try{ await _loaders[i].fn(); }
       catch(e){
         console.error('[refreshAll] лоадер "'+_loaders[i].name+'" ВПАВ'+(_loaders[i].crit?' (КРИТИЧНИЙ)':' (некритичний)')+':', e);
-        if(_loaders[i].crit) _critFail=true;
+        if(_loaders[i].crit){ _critFail=true; _failNames.push(_loaders[i].name); }
       }
     }
     buildGroups();
-    setSyncStatus(_critFail?'err':'ok');   // червоний лише коли впав КРИТИЧНИЙ (як в init)
+    setSyncStatus(_critFail?'err':'ok', _failNames.join(', '));   // червоний лише коли впав КРИТИЧНИЙ (як в init)
   }catch(e){
     console.error('refreshAll error (несподіваний):',e);
     setSyncStatus('err');

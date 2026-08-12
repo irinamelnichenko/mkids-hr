@@ -66,6 +66,7 @@
 <body>
 <div class="top">
   <h1>🍽 Харчування</h1>
+  <span id="syncStatus" style="font-size:12px"></span>
   <select id="locSel" class="flt"></select>
   <select id="clsSel" class="flt" title="Клас"></select>
   <div class="mnav">
@@ -103,7 +104,17 @@ function goLogin(){ document.body.innerHTML='<div style="padding:60px;text-align
 async function _fetch(url,opts){ var c=new AbortController(); var t=setTimeout(function(){c.abort();},45000);
   try{ var o=Object.assign({redirect:'follow'},opts||{}); o.signal=c.signal; var r=await fetch(url,o); clearTimeout(t); return r; }
   catch(e){ clearTimeout(t); throw e; } }
-async function apiGet(action,qs){ var r=await _fetch(CFG.SCRIPT_URL+'?action='+action+(qs?'&'+qs:'')); return r.json(); }
+// v7.105: cloudFetch — таймаут 45с + 2 повтори (1с,3с) лише на мережевий збій. ТІЛЬКИ для читань (GET); записи (apiPost) не ретраїмо.
+var _CF_RETRIES=[1000,3000]; function _cfSleep(ms){return new Promise(function(r){setTimeout(r,ms);});}
+async function cloudFetch(url,opts){ opts=opts||{}; var tmo=opts.timeoutMs||45000, del=opts.retries||_CF_RETRIES;
+  var init=Object.assign({redirect:'follow'},opts.fetch||{}), n=del.length+1, last;
+  for(var i=0;i<n;i++){ var c=new AbortController(); var t=setTimeout(function(){try{c.abort();}catch(_){}},tmo);
+    try{ var r=await fetch(url,Object.assign({},init,{signal:c.signal})); clearTimeout(t); return r; }
+    catch(e){ clearTimeout(t); last=e; if(i<n-1){ await _cfSleep(del[i]); continue; } throw last; } } throw last; }
+var _CLAB={ sync:{t:'☁️ Синхронізація…',c:'#e67e22'}, ok:{t:'☁️ Синхронізовано',c:'#16a34a'}, err:{t:'⚠️ Помилка хмари',c:'#dc2626'}, none:{t:'',c:'#94a3b8'} };
+function setCloudStatus(state,reason){ var el=document.getElementById('syncStatus'); if(!el)return; var s=_CLAB[state]||_CLAB.none;
+  el.textContent=s.t; el.style.color=s.c; el.title=(state==='err'&&reason)?('Не завантажилось: '+reason):''; }
+async function apiGet(action,qs){ var r=await cloudFetch(CFG.SCRIPT_URL+'?action='+action+(qs?'&'+qs:'')); return r.json(); }
 async function apiPost(body){ var r=await _fetch(CFG.SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(body)});
   var txt=await r.text(); try{ return JSON.parse(txt); }catch(_){ return {ok:true,_assumed:true}; } }
 function enc(s){ return encodeURIComponent(s); }
@@ -155,6 +166,7 @@ function confirmLoss(){ return !dirtyCount() || confirm('Є незбережен
 async function loadAll(){
   document.getElementById('mLbl').textContent=MONTHS[S.m-1]+' '+S.y;
   document.getElementById('main').innerHTML='<div class="empty">Завантаження…</div>';
+  setCloudStatus('sync');
   try{
     var cat=await apiGet('getMealCatalog','loc='+enc(S.loc));
     S.cat=((cat&&cat.items)||[]).filter(function(x){return x.active;}).map(function(x,i){ x.label=shortLabel(x.name); x.color=TG_COLORS[i%TG_COLORS.length]; return x; });
@@ -178,7 +190,8 @@ async function loadAll(){
     if(S.activeTab==null || (S.activeTab!=='all' && S.activeTab>=S.tabs.length)) S.activeTab=0;
     fillClassSel();
     render();
-  }catch(e){ document.getElementById('main').innerHTML='<div class="empty">Помилка завантаження: '+esc(e&&e.message||e)+'</div>'; }
+    setCloudStatus('ok');
+  }catch(e){ setCloudStatus('err','каталог/діти харчування'); document.getElementById('main').innerHTML='<div class="empty">Помилка завантаження: '+esc(e&&e.message||e)+'</div>'; }
 }
 
 function monthDays(){ var days=[], dim=new Date(S.y,S.m,0).getDate();

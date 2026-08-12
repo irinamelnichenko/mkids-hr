@@ -5,7 +5,29 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>m.kids HR — mkids Дитячі Садочки</title>
 <script src="xlsx.full.min.js"></script>
-<script src="cloud-status.js"></script>
+<script>
+/* v7.105: ХМАРНИЙ ШАР ІНЛАЙНОМ (НЕ окремий файл — SW не має віддати сторінку без нього й впасти).
+   cloudFetch: таймаут 45с + 2 повтори (1с, 3с) ЛИШЕ на мережевий збій (HTTP-статус не ретраїмо).
+   setCloudStatus(state, elId, reason): індикатор; при 'err' reason → tooltip (title), який саме лоадер упав. */
+(function(g){
+  var RETRIES=[1000,3000];
+  function _sleep(ms){ return new Promise(function(r){ setTimeout(r,ms); }); }
+  async function cloudFetch(url,opts){
+    opts=opts||{}; var tmo=opts.timeoutMs||45000, del=opts.retries||RETRIES;
+    var init=Object.assign({redirect:'follow'},opts.fetch||{}), n=del.length+1, last;
+    for(var i=0;i<n;i++){ var c=new AbortController(); var t=setTimeout(function(){ try{c.abort();}catch(_){} },tmo);
+      try{ var r=await fetch(url,Object.assign({},init,{signal:c.signal})); clearTimeout(t); return r; }
+      catch(e){ clearTimeout(t); last=e; if(i<n-1){ await _sleep(del[i]); continue; } throw last; } }
+    throw last;
+  }
+  var LAB={ sync:{t:'☁️ Синхронізація…',c:'#e67e22'}, ok:{t:'☁️ Синхронізовано',c:'#27ae60'},
+            err:{t:'⚠️ Помилка хмари',c:'#e74c3c'}, local:{t:'💾 Лише локально',c:'#7f8c8d'}, none:{t:'',c:'#7f8c8d'} };
+  function setCloudStatus(state,elId,reason){ var el=document.getElementById(elId||'sheetsStatus'); if(!el) return;
+    var s=LAB[state]||LAB.none; el.textContent=s.t; el.style.color=s.c;
+    el.title=(state==='err'&&reason)?('Не завантажилось: '+reason):''; }
+  g.cloudFetch=cloudFetch; g.setCloudStatus=setCloudStatus;
+})(window);
+</script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -835,13 +857,13 @@ async function loadFromSheets(){
   }catch(e){
     console.warn('Sheets load:',e);
     // v7.94: є кеш у localStorage → лишаємось ЗЕЛЕНИМИ (працюємо з кешу); червоне лише коли й кешу немає.
-    updSheetsStatus(_recsHaveCache()?'ok':'err');
+    updSheetsStatus(_recsHaveCache()?'ok':'err', 'get (HR-записи)');
   }
   return false;
 }
-// v7.94: тонка обгортка над спільним setCloudStatus (cloud-status.js). Невідомий стан → 'local'.
-function updSheetsStatus(st){
-  setCloudStatus(({ok:1,sync:1,err:1}[st])?st:'local','sheetsStatus');
+// v7.105: обгортка над ІНЛАЙН setCloudStatus. Невідомий стан → 'local'. reason → tooltip при червоному.
+function updSheetsStatus(st, reason){
+  setCloudStatus(({ok:1,sync:1,err:1}[st])?st:'local','sheetsStatus', reason);
 }
 
 // ── SHEETS ──
