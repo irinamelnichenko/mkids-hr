@@ -50,14 +50,27 @@
   .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#111827;color:#fff;padding:10px 16px;border-radius:10px;z-index:200;opacity:0;transition:.2s;pointer-events:none;font-weight:600}
   .toast.show{opacity:1}
   .empty{padding:40px;text-align:center;color:var(--gray)}
-  .legend{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--gray);padding:6px 14px}
-  .legend span b{padding:1px 6px;border-radius:5px;color:#fff;margin-right:4px}
+  .tabs{display:flex;gap:6px;flex-wrap:wrap}
+  .tab{border:1.5px solid var(--line);background:#fff;border-radius:9px;padding:6px 11px;font-weight:700;cursor:pointer;font-size:13px;color:var(--gray)}
+  .tab.on{background:#f8fafc}
+  table.grid td.kid{white-space:nowrap}
+  table.grid td.kid small{color:var(--gray);font-size:10px}
+  th.clik,td.cell.clik{cursor:pointer}
+  th.clik:hover{background:#eef2ff}
+  td.cell{position:relative;min-width:34px;height:26px}
+  td.cell.clik:hover{background:#eef2ff}
+  td.cell .mk{display:inline-block;font-size:13px;line-height:22px;min-width:22px}
+  td.cell .mk.on{border-radius:6px;filter:saturate(1.2)}
+  td.cell .dots{position:absolute;bottom:1px;left:50%;transform:translateX(-50%);display:flex;gap:2px}
+  td.cell .dots i{width:5px;height:5px;border-radius:50%;display:inline-block}
+  td.cell.view{font-size:12px;white-space:nowrap;min-width:44px}
 </style>
 </head>
 <body>
 <div class="top">
   <h1>🍽 Харчування</h1>
   <select id="locSel" class="flt"></select>
+  <select id="clsSel" class="flt" title="Клас"></select>
   <div class="mnav">
     <button class="btn sec" id="mPrev">◀</button><b id="mLbl">—</b><button class="btn sec" id="mNext">▶</button>
   </div>
@@ -76,7 +89,7 @@ var CFG = { SCRIPT_URL: 'https://script.google.com/macros/s/AKfycbyTSUVlaN4-PpXe
 var MONTHS = ['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
 var WD = ['Нд','Пн','Вт','Ср','Чт','Пт','Сб'];
 var TG_COLORS = ['#2563eb','#ea580c','#16a34a','#7c3aed','#db2777'];
-var S = { user:null, loc:'', y:0, m:0, cat:[], kids:[], marks:{}, orig:{}, clients:null };
+var S = { user:null, loc:'', y:0, m:0, cat:[], tabs:[], activeTab:0, kids:[], classes:[], classFilter:null, marks:{}, orig:{}, clients:null };
 
 // ── AUTH (shared session) ──
 var SESSION_KEY='mkids_session', SESSION_TTL_MS=12*3600*1000;
@@ -130,7 +143,8 @@ async function init(){
   }catch(e){ document.getElementById('main').innerHTML='<div class="empty">Помилка ініціалізації: '+esc(e&&e.message||e)+'</div>'; console.error('[meals] init', e); }
 }
 function wireTop(){
-  document.getElementById('locSel').onchange=function(){ S.loc=this.value; loadAll(); };
+  document.getElementById('locSel').onchange=function(){ if(!confirmLoss())return; S.loc=this.value; S.classFilter=null; loadAll(); };
+  document.getElementById('clsSel').onchange=function(){ S.classFilter=this.value; render(); };
   document.getElementById('mPrev').onclick=function(){ if(!confirmLoss())return; S.m--; if(S.m<1){S.m=12;S.y--;} loadAll(); };
   document.getElementById('mNext').onclick=function(){ if(!confirmLoss())return; S.m++; if(S.m>12){S.m=1;S.y++;} loadAll(); };
   document.getElementById('refreshBtn').onclick=function(){ if(!confirmLoss())return; loadAll(); };
@@ -156,54 +170,100 @@ async function loadAll(){
     var mk=await apiGet('getMealMarks','loc='+enc(S.loc)+'&year='+S.y+'&month='+S.m);
     S.marks={}; (mk.marks||[]).forEach(function(m){ S.marks[markKey(m.child,m.date,m.itemId)]=true; });
     S.orig=Object.assign({},S.marks);
+    // класи (групи школи)
+    var gset={}; S.kids.forEach(function(k){ if(k.group) gset[k.group]=1; });
+    S.classes=Object.keys(gset).sort(function(a,b){return a.localeCompare(b,'uk');});
+    var myCls=teacherClass();
+    if(myCls){ S.classFilter=myCls; }
+    else if(S.classFilter==null || (S.classFilter!=='__all__' && S.classes.indexOf(S.classFilter)<0)){ S.classFilter=S.classes[0]||'__all__'; }
+    // вкладки з каталогу (по одній на вид)
+    S.tabs=S.cat.map(function(x){ return {id:x.id, name:x.name, price:x.price, icon:iconFor(x.name), color:x.color}; });
+    if(S.activeTab==null || (S.activeTab!=='all' && S.activeTab>=S.tabs.length)) S.activeTab=0;
+    fillClassSel();
     render();
   }catch(e){ document.getElementById('main').innerHTML='<div class="empty">Помилка завантаження: '+esc(e&&e.message||e)+'</div>'; }
 }
 
-function monthDays(){ var days=[]; var dim=new Date(S.y,S.m,0).getDate();
-  for(var d=1;d<=dim;d++){ var dt=new Date(S.y,S.m-1,d); var dow=dt.getDay(); var iso=S.y+'-'+('0'+S.m).slice(-2)+'-'+('0'+d).slice(-2);
-    days.push({d:d,iso:iso,dow:dow,we:(dow===0||dow===6)}); } return days; }
+function monthDays(){ var days=[], dim=new Date(S.y,S.m,0).getDate();
+  for(var d=1;d<=dim;d++){ var dow=new Date(S.y,S.m-1,d).getDay(); if(dow===0||dow===6) continue;   // лише будні (Сб/Нд прибрано)
+    days.push({d:d, iso:S.y+'-'+('0'+S.m).slice(-2)+'-'+('0'+d).slice(-2), dow:dow}); }
+  return days; }
+function visKids(){ return (S.classFilter==='__all__') ? S.kids : S.kids.filter(function(k){return k.group===S.classFilter;}); }
+function iconFor(name){ var n=String(name||'').toLowerCase();
+  if(n.indexOf('вечер')>=0) return '🍛🥡'; if(n.indexOf('кейтер')>=0) return '🍲🥡'; if(n.indexOf('шкіл')>=0) return '🍲'; return '🍽'; }
+function priceOf(id){ var p=S.cat.filter(function(x){return x.id===id;})[0]; return p?p.price:0; }
+function teacherClass(){ if(isHR()||String(S.user.role||'')==='director') return ''; return String(S.user.group||S.user.class||'').trim()||''; }
+function fillClassSel(){ var sel=document.getElementById('clsSel'); if(!sel) return; var locked=!!teacherClass();
+  var opts=''; if(isHR()) opts+='<option value="__all__"'+(S.classFilter==='__all__'?' selected':'')+'>Усі класи</option>';
+  opts+=S.classes.map(function(c){return '<option value="'+esc(c)+'"'+(c===S.classFilter?' selected':'')+'>'+esc(c)+'</option>';}).join('');
+  sel.innerHTML=opts; sel.disabled=locked; sel.style.display=S.classes.length?'':'none'; }
 
 function render(){
-  if(!S.cat.length){ document.getElementById('main').innerHTML='<div class="empty">Немає активних позицій у каталозі.</div>'; return; }
-  var days=monthDays();
-  var legend='<div class="legend">'+S.cat.map(function(p){return '<span><b style="background:'+p.color+'">'+esc(p.label)+'</b>'+esc(p.name)+' · '+fmtG(p.price)+'</span>';}).join('')+'</div>';
-  var head='<tr><th class="kidh">Дитина</th>'+days.map(function(x){return '<th class="'+(x.we?'we':'')+'">'+x.d+'<br><small>'+WD[x.dow]+'</small></th>';}).join('')+'<th class="toth">Σ міс</th></tr>';
-  var body=S.kids.map(function(k,ci){
-    var cells=days.map(function(x){
-      var tg=S.cat.map(function(p){ var on=!!S.marks[markKey(k.name,x.iso,p.id)];
-        return '<span class="tg'+(on?' on':'')+'" data-ci="'+ci+'" data-d="'+x.iso+'" data-it="'+p.id+'" style="'+(on?'background:'+p.color:'')+'" title="'+esc(p.name)+'">'+esc(p.label)+'</span>'; }).join('');
-      return '<td class="cell'+(x.we?' we':'')+'">'+tg+'</td>';
-    }).join('');
-    return '<tr><td class="kid"><b>'+esc(k.name)+'</b><small>'+esc(k.group)+'</small></td>'+cells+'<td class="tot" data-kt="'+ci+'">0</td></tr>';
-  }).join('');
+  if(!S.tabs || !S.tabs.length){ document.getElementById('main').innerHTML='<div class="empty">Немає активних позицій у каталозі.</div>'; return; }
+  var editable=(S.activeTab!=='all');
+  var tabsHtml=S.tabs.map(function(t,i){ return '<button class="tab'+(S.activeTab===i?' on':'')+'" data-tab="'+i+'" style="'+(S.activeTab===i?'border-color:'+t.color+';color:'+t.color:'')+'">'+t.icon+' '+esc(t.name)+'</button>'; }).join('')
+    +'<button class="tab'+(!editable?' on':'')+'" data-tab="all">👁 Усе разом</button>';
+  var bulk=editable?'<button class="btn sec" id="bulkAll">✓ Позначити всім весь місяць</button>':'<span class="muted">Режим перегляду — без редагування</span>';
   document.getElementById('main').innerHTML=
-    '<div class="card"><div class="hd"><h3>'+esc(S.loc)+' · '+MONTHS[S.m-1]+' '+S.y+'</h3><span class="muted">'+S.kids.length+' дітей · клік по літері ставить/знімає · вихідні недоступні</span></div>'+
-    legend+
-    '<div class="tblwrap"><table class="grid"><thead>'+head+'</thead><tbody>'+body+'</tbody></table></div>'+
-    '<div class="foot"><div>По школі за місяць: <span id="schoolTot">0</span></div><div class="muted" id="dirtyLbl"></div></div></div>'+
+    '<div class="card"><div class="hd" style="gap:8px"><div class="tabs">'+tabsHtml+'</div><span class="sp" style="flex:1"></span>'+bulk+'</div>'+
+    '<div class="tblwrap"><table class="grid"><thead id="gHead"></thead><tbody id="gBody"></tbody></table></div>'+
+    '<div class="foot"><div>По класу: <span id="clsTot">0</span></div><div>По школі: <span id="schoolTot">0</span></div><div class="muted" id="dirtyLbl"></div></div></div>'+
     priceEditor();
-  var tbl=document.querySelector('table.grid');
-  tbl.addEventListener('click',onToggle);
   document.getElementById('savePricesBtn').onclick=savePrices;
-  recalc();
+  document.querySelector('.tabs').addEventListener('click',function(e){ var b=e.target.closest('.tab'); if(!b)return; var t=b.dataset.tab; S.activeTab=(t==='all')?'all':+t; render(); });
+  if(editable){ var ba=document.getElementById('bulkAll'); if(ba) ba.onclick=bulkAllMonth; }
+  renderHead(); renderBody(); wireGrid(); recalc();
 }
-
-function onToggle(e){ var t=e.target; if(!t.classList.contains('tg')) return; if(t.closest('td').classList.contains('we')) return;
-  var ci=+t.dataset.ci, iso=t.dataset.d, it=+t.dataset.it; var k=markKey(S.kids[ci].name,iso,it);
-  if(S.marks[k]){ delete S.marks[k]; t.classList.remove('on'); t.style.background=''; }
-  else { S.marks[k]=true; var p=S.cat.filter(function(x){return x.id===it;})[0]; t.classList.add('on'); t.style.background=p?p.color:'#2563eb'; }
-  recalc();
+function renderHead(){
+  var days=monthDays(), editable=(S.activeTab!=='all');
+  document.getElementById('gHead').innerHTML='<tr><th class="kidh">Дитина</th>'+
+    days.map(function(x){ return '<th'+(editable?' class="clik" data-date="'+x.iso+'" title="Позначити всім цього дня"':'')+'>'+x.d+'<br><small>'+WD[x.dow]+'</small></th>'; }).join('')+
+    '<th class="toth">Σ міс</th></tr>';
 }
-function priceOf(id){ var p=S.cat.filter(function(x){return x.id===id;})[0]; return p?p.price:0; }
+function renderBody(){
+  var days=monthDays(), kids=visKids(), editable=(S.activeTab!=='all'), act=editable?S.tabs[S.activeTab]:null;
+  var html=kids.map(function(k,ci){
+    var cells=days.map(function(x){
+      if(editable){
+        var on=!!S.marks[markKey(k.name,x.iso,act.id)];
+        var dots=S.tabs.filter(function(t,ti){ return ti!==S.activeTab && S.marks[markKey(k.name,x.iso,t.id)]; }).map(function(o){return '<i style="background:'+o.color+'"></i>';}).join('');
+        return '<td class="cell clik" data-ci="'+ci+'" data-d="'+x.iso+'"><span class="mk'+(on?' on':'')+'" style="'+(on?'background:'+act.color:'')+'">'+(on?act.icon:'')+'</span>'+(dots?'<span class="dots">'+dots+'</span>':'')+'</td>';
+      } else {
+        var pres=S.tabs.filter(function(t){ return S.marks[markKey(k.name,x.iso,t.id)]; }).map(function(p){return p.icon;}).join(' ');
+        return '<td class="cell view">'+pres+'</td>';
+      }
+    }).join('');
+    return '<tr><td class="kid'+(editable?' clik':'')+'"'+(editable?' data-nci="'+ci+'" title="Позначити весь місяць дитині"':'')+'><b>'+esc(k.name)+'</b> <small>'+esc(k.group)+'</small></td>'+cells+'<td class="tot" data-kt="'+ci+'">0</td></tr>';
+  }).join('');
+  document.getElementById('gBody').innerHTML=html || '<tr><td class="kid" colspan="99">Немає дітей у класі</td></tr>';
+}
+function wireGrid(){
+  if(S.activeTab==='all') return;
+  document.getElementById('gBody').onclick=function(e){
+    var cell=e.target.closest('td.cell'); if(cell && cell.dataset.ci!=null){ toggleMark(visKids()[+cell.dataset.ci].name, cell.dataset.d, S.tabs[S.activeTab].id); renderBody(); recalc(); return; }
+    var nm=e.target.closest('td.kid'); if(nm && nm.dataset.nci!=null){ toggleMonthKid(visKids()[+nm.dataset.nci].name); renderBody(); recalc(); }
+  };
+  document.getElementById('gHead').onclick=function(e){ var th=e.target.closest('th.clik'); if(th && th.dataset.date){ toggleDayAll(th.dataset.date); renderBody(); recalc(); } };
+}
+function toggleMark(child,iso,id){ var k=markKey(child,iso,id); if(S.marks[k]) delete S.marks[k]; else S.marks[k]=true; }
+function toggleMonthKid(child){ var id=S.tabs[S.activeTab].id, days=monthDays();
+  var all=days.every(function(x){return S.marks[markKey(child,x.iso,id)];});
+  days.forEach(function(x){ var k=markKey(child,x.iso,id); if(all) delete S.marks[k]; else S.marks[k]=true; }); }
+function toggleDayAll(iso){ var id=S.tabs[S.activeTab].id, kids=visKids();
+  var all=kids.every(function(k){return S.marks[markKey(k.name,iso,id)];});
+  kids.forEach(function(k){ var kk=markKey(k.name,iso,id); if(all) delete S.marks[kk]; else S.marks[kk]=true; }); }
+function bulkAllMonth(){ var id=S.tabs[S.activeTab].id, kids=visKids(), days=monthDays(), all=true;
+  kids.forEach(function(k){ days.forEach(function(x){ if(!S.marks[markKey(k.name,x.iso,id)]) all=false; }); });
+  kids.forEach(function(k){ days.forEach(function(x){ var kk=markKey(k.name,x.iso,id); if(all) delete S.marks[kk]; else S.marks[kk]=true; }); });
+  renderBody(); recalc(); }
 function recalc(){
-  var perKid={}, total=0;
-  Object.keys(S.marks).forEach(function(k){ var parts=k.split('||'); var child=parts[0], id=+parts[2]; var pr=priceOf(id);
-    perKid[child]=(perKid[child]||0)+pr; total+=pr; });
-  S.kids.forEach(function(k,ci){ var td=document.querySelector('td.tot[data-kt="'+ci+'"]'); if(td) td.textContent=fmtG(perKid[k.name]||0); });
-  var st=document.getElementById('schoolTot'); if(st) st.textContent=fmtG(total);
+  var kids=visKids(), perKid={}, classTot=0, schoolTot=0;
+  Object.keys(S.marks).forEach(function(k){ var p=k.split('||'); perKid[p[0]]=(perKid[p[0]]||0)+priceOf(+p[2]); schoolTot+=priceOf(+p[2]); });
+  kids.forEach(function(k,ci){ var td=document.querySelector('td.tot[data-kt="'+ci+'"]'); var v=perKid[k.name]||0; if(td) td.textContent=fmtG(v); classTot+=v; });
+  var ct=document.getElementById('clsTot'); if(ct) ct.textContent=fmtG(classTot);
+  var st=document.getElementById('schoolTot'); if(st) st.textContent=fmtG(schoolTot);
   var dc=dirtyCount(); document.getElementById('saveBtn').disabled=!dc; document.getElementById('saveBtn').textContent='💾 Зберегти'+(dc?' ('+dc+')':'');
-  var dl=document.getElementById('dirtyLbl'); if(dl) dl.textContent=dc?('Незбережених змін: '+dc):'Усе збережено';
+  var dl=document.getElementById('dirtyLbl'); if(dl) dl.textContent=dc?('Незбережених: '+dc):'Усе збережено';
 }
 function dirtyCount(){ var n=0; var seen={};
   Object.keys(S.marks).forEach(function(k){ if(!S.orig[k]) n++; seen[k]=1; });
