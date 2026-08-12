@@ -26,7 +26,10 @@
   var LAB={ sync:{t:'☁️ Синхронізація…',c:'#e67e22'}, ok:{t:'☁️ Синхронізовано',c:'#27ae60'},
             err:{t:'⚠️ Помилка хмари',c:'#e74c3c'}, local:{t:'💾 Лише локально',c:'#7f8c8d'}, none:{t:'',c:'#7f8c8d'} };
   function setCloudStatus(state,elId,reason){ var el=document.getElementById(elId||'sheetsStatus'); if(!el) return;
-    var s=LAB[state]||LAB.none; el.textContent=s.t; el.style.color=s.c;
+    var s=LAB[state]||LAB.none;
+    // v7.127: при червоному — причину видно ПРЯМО В ТЕКСТІ (тултип ненадійний), плюс дублюємо в title.
+    el.textContent=(state==='err'&&reason)?(s.t+': '+reason):s.t;
+    el.style.color=s.c;
     el.title=(state==='err'&&reason)?('Не завантажилось: '+reason):''; }
   g.cloudFetch=cloudFetch; g.setCloudStatus=setCloudStatus;
 })(window);
@@ -848,19 +851,27 @@ async function loadFromSheets(){
   try{
     updSheetsStatus('sync');
     const r=await cloudFetch(url+'?action=get');   // v7.94: таймаут+ретрай зі спільного шару
-    if(!r.ok) throw new Error(r.status);            // HTTP-статус не ретраїмо
+    if(!r.ok){
+      // HTTP 5xx/503 (недоступність хмари) — cloudFetch уже повторив; червоне лише коли й кешу немає.
+      updSheetsStatus(_recsHaveCache()?'ok':'err', 'HR-записи (HTTP '+r.status+')');
+      return false;
+    }
     const j=await r.json();
-    if(j.ok && j.data){
+    if(j && j.ok && j.data){
       S.recs=j.data;
       safeSetItem(CFG.SK,JSON.stringify(S.recs));
       updSheetsStatus('ok');
       return true;
     }
-    throw new Error('bad-response');
+    // v7.127: сервер ДОСТУПНИЙ, але хмарну синхронізацію записів не підтримує
+    // (бекенд не має action=get/save — «Unknown action») або дані порожні. Це НЕ «Помилка хмари»:
+    // S.recs — локальне сховище (localStorage). Зелений якщо є кеш, інакше 💾 Лише локально. Ніколи не червоне.
+    updSheetsStatus(_recsHaveCache()?'ok':'local');
+    return false;
   }catch(e){
     console.warn('Sheets load:',e);
-    // v7.94: є кеш у localStorage → лишаємось ЗЕЛЕНИМИ (працюємо з кешу); червоне лише коли й кешу немає.
-    updSheetsStatus(_recsHaveCache()?'ok':'err', 'get (HR-записи)');
+    // Мережевий збій/таймаут (хмара недоступна) — червоне ЛИШЕ коли й кешу немає.
+    updSheetsStatus(_recsHaveCache()?'ok':'err', 'HR-записи (мережа)');
   }
   return false;
 }

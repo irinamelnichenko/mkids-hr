@@ -115,7 +115,7 @@ async function cloudFetch(url,opts){ opts=opts||{}; var tmo=opts.timeoutMs||4500
     catch(e){ clearTimeout(t); last=e; if(i<n-1){ await _cfSleep(del[i]); continue; } throw last; } } throw last; }
 var _CLAB={ sync:{t:'☁️ Синхронізація…',c:'#e67e22'}, ok:{t:'☁️ Синхронізовано',c:'#16a34a'}, err:{t:'⚠️ Помилка хмари',c:'#dc2626'}, none:{t:'',c:'#94a3b8'} };
 function setCloudStatus(state,reason){ var el=document.getElementById('syncStatus'); if(!el)return; var s=_CLAB[state]||_CLAB.none;
-  el.textContent=s.t; el.style.color=s.c; el.title=(state==='err'&&reason)?('Не завантажилось: '+reason):''; }
+  el.textContent=(state==='err'&&reason)?(s.t+': '+reason):s.t; el.style.color=s.c; el.title=(state==='err'&&reason)?('Не завантажилось: '+reason):''; } // v7.127: причина в тексті
 async function apiGet(action,qs){ var r=await cloudFetch(CFG.SCRIPT_URL+'?action='+action+(qs?'&'+qs:'')); return r.json(); }
 async function apiPost(body){ var r=await _fetch(CFG.SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(body)});
   var txt=await r.text(); try{ return JSON.parse(txt); }catch(_){ return {ok:true,_assumed:true}; } }

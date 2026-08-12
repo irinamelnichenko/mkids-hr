@@ -1487,7 +1487,7 @@ function setSyncStatus(st, reason){
   var el=document.getElementById('syncStatus'); if(!el) return;
   if(st==='ok'){ el.textContent='☁️ Синхронізовано'; el.style.color='#27ae60'; }
   else if(st==='sync'){ el.textContent='☁️ Синхронізація…'; el.style.color='#e67e22'; }
-  else if(st==='err'){ el.textContent='⚠️ Помилка хмари'; el.style.color='#e74c3c'; }
+  else if(st==='err'){ el.textContent='⚠️ Помилка хмари'+(reason?(': '+reason):''); el.style.color='#e74c3c'; } // v7.127: причина в тексті
   else{ el.textContent=''; }
   el.title=(st==='err'&&reason)?('Не завантажилось: '+reason):'';   // v7.105: причина в тултипі
 }
