@@ -56,8 +56,6 @@
   table.grid td.kid small{color:var(--gray);font-size:10px}
   table.grid td.cell{padding:2px 3px;text-align:center;white-space:nowrap}
   th.dcol small{color:var(--mut);font-weight:600}
-  .dtg{margin-top:3px;line-height:1}
-  .usim{display:block;font-size:9px;color:var(--mut);margin-bottom:1px}
   .tgb{display:flex;flex-direction:column;align-items:center;gap:2px}
   .tgr{display:flex;justify-content:center;gap:3px}
   .tg{display:inline-block;font-size:19px;line-height:28px;height:28px;min-width:28px;text-align:center;vertical-align:middle;padding:0 1px;margin:1px;border:1px solid transparent;border-radius:7px;cursor:pointer;opacity:.28;filter:grayscale(1)}
@@ -222,11 +220,7 @@ function render(){
   renderHead(); renderBody(); wireGrid(); recalc();
 }
 function renderHead(){
-  var days=monthDays(), kids=visKids();
-  var ths=days.map(function(x){
-    var tgs=tgBlock('day', function(t){return 'data-date="'+x.iso+'"';}, function(t){ return kids.length && kids.every(function(k){return S.marks[markKey(k.name,x.iso,t.id)];}); });
-    return '<th class="dcol">'+x.d+' <small>'+WD[x.dow]+'</small><div class="dtg"><span class="usim">усім</span>'+tgs+'</div></th>';
-  }).join('');
+  var ths=monthDays().map(function(x){ return '<th class="dcol">'+x.d+' <small>'+WD[x.dow]+'</small></th>'; }).join('');
   document.getElementById('gHead').innerHTML='<tr><th class="kidh">Дитина</th>'+ths+'<th class="toth">Σ міс</th></tr>';
 }
 function renderBody(){
@@ -242,22 +236,14 @@ function renderBody(){
 }
 function refresh(){ renderHead(); renderBody(); recalc(); }
 function wireGrid(){
-  document.getElementById('gBody').onclick=function(e){ var t=e.target.closest('.tg'); if(!t) return; var act=t.dataset.act, it=+t.dataset.it;
-    if(act==='cell'){ toggleMark(visKids()[+t.dataset.ci].name, t.dataset.d, it); refresh(); }        // лише ця дитина, цей день
+  document.getElementById('gBody').onclick=function(e){ var t=e.target.closest('.tg'); if(!t || t.dataset.act!=='cell') return;
+    toggleMark(visKids()[+t.dataset.ci].name, t.dataset.d, +t.dataset.it); refresh();   // лише ця дитина, цей день, ця позиція
   };
-  document.getElementById('gHead').onclick=function(e){ var t=e.target.closest('.tg'); if(!t || t.dataset.act!=='day') return; toggleDayAll(t.dataset.date, +t.dataset.it); refresh(); }; // усі діти класу, цей день
 }
 function toggleMark(child,iso,id){ var k=markKey(child,iso,id);
   if(S.marks[k]){ delete S.marks[k]; return; }                                   // активний → зняти
   S.marks[k]=true;
   if(isLunch(id)) lunchIds().forEach(function(oid){ if(oid!==id) delete S.marks[markKey(child,iso,oid)]; });   // ексклюзив обідів
-}
-function toggleDayAll(iso,id){ var kids=visKids();
-  var all=kids.length && kids.every(function(k){return S.marks[markKey(k.name,iso,id)];});
-  kids.forEach(function(k){ var kk=markKey(k.name,iso,id);
-    if(all){ delete S.marks[kk]; }
-    else { S.marks[kk]=true; if(isLunch(id)) lunchIds().forEach(function(oid){ if(oid!==id) delete S.marks[markKey(k.name,iso,oid)]; }); }
-  });
 }
 function recalc(){
   var kids=visKids(), perKid={}, classTot=0, schoolTot=0;
