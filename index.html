@@ -16,7 +16,10 @@
     opts=opts||{}; var tmo=opts.timeoutMs||45000, del=opts.retries||RETRIES;
     var init=Object.assign({redirect:'follow'},opts.fetch||{}), n=del.length+1, last;
     for(var i=0;i<n;i++){ var c=new AbortController(); var t=setTimeout(function(){ try{c.abort();}catch(_){} },tmo);
-      try{ var r=await fetch(url,Object.assign({},init,{signal:c.signal})); clearTimeout(t); return r; }
+      try{ var r=await fetch(url,Object.assign({},init,{signal:c.signal})); clearTimeout(t);
+        // 5xx / SW-офлайн(503) — це не «успіх», а транзиентний збій великих відповідей → повтор (status 0 = opaque POST, не чіпаємо)
+        if(r&&r.status>=500&&i<n-1){ await _sleep(del[i]); continue; }
+        return r; }
       catch(e){ clearTimeout(t); last=e; if(i<n-1){ await _sleep(del[i]); continue; } throw last; } }
     throw last;
   }
@@ -2517,13 +2520,13 @@ var DASH_MONTHS=['Січень','Лютий','Березень','Квітень'
 function _dashSoftRerender(){ if(S.view==='dashboard') _renderDashNow(); }
 async function _ensureLocCaps(){
   if(S._locCaps) return S._locCaps;
-  try{ var r=await fetch(authScriptUrl()+'?action=getLocationCapacity',{redirect:'follow'}); var j=await r.json(); S._locCaps=(j&&j.data)||{}; }
+  try{ var r=await cloudFetch(authScriptUrl()+'?action=getLocationCapacity',{redirect:'follow'}); var j=await r.json(); S._locCaps=(j&&j.data)||{}; }
   catch(e){ S._locCaps=S._locCaps||{}; }
   return S._locCaps;
 }
 async function _ensureDashYearly(){
   if(S._dashYearly) return S._dashYearly;
-  try{ var r=await fetch(authScriptUrl()+'?action=getPaymentsYearly',{redirect:'follow'}); var j=await r.json(); S._dashYearly=(j&&j.data)||[]; }
+  try{ var r=await cloudFetch(authScriptUrl()+'?action=getPaymentsYearly',{redirect:'follow'}); var j=await r.json(); S._dashYearly=(j&&j.data)||[]; }
   catch(e){ S._dashYearly=S._dashYearly||[]; }
   return S._dashYearly;
 }
@@ -2573,24 +2576,24 @@ function _kompSortByLoc(arr,getName){
 function _kompYear(){ return new Date().getFullYear(); }
 function _kompMonth(){ return S.dashKompMonth || (new Date().getMonth()+1); }
 async function _ensureKomp(y){ if(!S._komp)S._komp={}; if(S._komp[y]!==undefined)return; S._komp[y]=null;
-  try{ var r=await fetch(authScriptUrl()+'?action=getKomplektaciyaData&year='+y,{redirect:'follow'}); var j=await r.json(); S._komp[y]=(j&&j.ok)?j:{locations:[]}; }
+  try{ var r=await cloudFetch(authScriptUrl()+'?action=getKomplektaciyaData&year='+y,{redirect:'follow'}); var j=await r.json(); S._komp[y]=(j&&j.ok)?j:{locations:[]}; }
   catch(e){ S._komp[y]={locations:[]}; } }
 async function _ensureKompFree(){ if(S._kompFree!==undefined)return; S._kompFree=null;
-  try{ var r=await fetch(authScriptUrl()+'?action=getKomplektaciyaFreeSeats',{redirect:'follow'}); var j=await r.json(); S._kompFree=(j&&j.ok)?j:{locations:[],groups:[],totals:{}}; }
+  try{ var r=await cloudFetch(authScriptUrl()+'?action=getKomplektaciyaFreeSeats',{redirect:'follow'}); var j=await r.json(); S._kompFree=(j&&j.ok)?j:{locations:[],groups:[],totals:{}}; }
   catch(e){ S._kompFree={locations:[],groups:[],totals:{}}; } }
 async function _ensureRatingsYear(y){ if(!S._ratingsY)S._ratingsY={}; if(S._ratingsY[y]!==undefined)return; S._ratingsY[y]=null;
-  try{ var r=await fetch(authScriptUrl()+'?action=getVyhovatelRatings&year='+y,{redirect:'follow'}); var j=await r.json(); S._ratingsY[y]=(j&&j.ok)?j:{teachers:[]}; }
+  try{ var r=await cloudFetch(authScriptUrl()+'?action=getVyhovatelRatings&year='+y,{redirect:'follow'}); var j=await r.json(); S._ratingsY[y]=(j&&j.ok)?j:{teachers:[]}; }
   catch(e){ S._ratingsY[y]={teachers:[]}; } }
 // v7.112: CFO-показники (Хвиля 1) — лише читання наявних роутів
 function _kompIsCFO(){ return !!(S.user && (String(S.user.role||'').toLowerCase()==='cfo' || Number(S.user.id)===1)); }
 async function _ensureSalOv(y){ if(!S._salOv)S._salOv={}; if(S._salOv[y]!==undefined)return; S._salOv[y]=null;
-  try{ var r=await fetch(authScriptUrl()+'?action=getSalaryOverview&year='+y,{redirect:'follow'}); var j=await r.json(); S._salOv[y]=(j&&j.ok)?j:{locations:[]}; }
+  try{ var r=await cloudFetch(authScriptUrl()+'?action=getSalaryOverview&year='+y,{redirect:'follow'}); var j=await r.json(); S._salOv[y]=(j&&j.ok)?j:{locations:[]}; }
   catch(e){ S._salOv[y]={locations:[]}; } }
 async function _ensureOpexOv(y){ if(!S._opexOv)S._opexOv={}; if(S._opexOv[y]!==undefined)return; S._opexOv[y]=null;
-  try{ var r=await fetch(authScriptUrl()+'?action=getOpexOverview&year='+y,{redirect:'follow'}); var j=await r.json(); S._opexOv[y]=(j&&j.ok)?j:{locations:[]}; }
+  try{ var r=await cloudFetch(authScriptUrl()+'?action=getOpexOverview&year='+y,{redirect:'follow'}); var j=await r.json(); S._opexOv[y]=(j&&j.ok)?j:{locations:[]}; }
   catch(e){ S._opexOv[y]={locations:[]}; } }
 async function _ensurePayments(){ if(S._payFull!==undefined)return; S._payFull=null; // getPayments — для вступних (рік-кумулятив)
-  try{ var r=await fetch(authScriptUrl()+'?action=getPayments',{redirect:'follow'}); var j=await r.json(); S._payFull=(j&&j.data)?j.data:(Array.isArray(j)?j:[]); }
+  try{ var r=await cloudFetch(authScriptUrl()+'?action=getPayments',{redirect:'follow'}); var j=await r.json(); S._payFull=(j&&j.data)?j.data:(Array.isArray(j)?j:[]); }
   catch(e){ S._payFull=[]; } }
 function dashKompSetMonth(m){ S.dashKompMonth=+m; _renderDashNow(); } // оцінки — за рік, місяць їх не змінює
 function dashKpiSetQuarter(q){ S.dashKpiQuarter=+q; _renderDashNow(); }
