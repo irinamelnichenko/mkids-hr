@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.104
+// m.kids CRM — Google Apps Script v7.105
+// v7.105: renameClientGroup({loc,oldGroup,newGroup,dryRun}) — масове перейменування ГРУПИ в картках
+//         Клієнти для локації (кол. «Група» + «Оновлено»), dryRun=true за замовч. (лічить картки).
 // v7.104: ХАРЧУВАННЯ (по днях → Payment «Бюджет-харчування» +5, лише 7-кол локації). Крок 0:
 //         diagLocPayment тепер віддає й Факт-харч (+3)/Бюджет-харч (+5). Листи «Харчування_Каталог»
 //         + «Харчування_Відвідуваність». Роути: getMealCatalog/saveMealItem, addMealMark(БАТЧ)/getMealMarks,
@@ -458,7 +460,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.104', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.105', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -580,6 +582,7 @@ function doPost(e) {
     else if (body.action === 'setLocPaymentName')        result = setLocPaymentName(body || {});   // v7.60 вирівняти імʼя Payment під картку
     else if (body.action === 'renameAttendanceChild')    result = renameAttendanceChild(body || {}); // v7.95
     else if (body.action === 'addPaymentRow')             result = addPaymentRow(body || {});         // v7.95
+    else if (body.action === 'renameClientGroup')         result = renameClientGroup(body || {});     // v7.105 масове перейменування групи в картках
     else if (body.action === 'saveMealItem')              result = saveMealItem(body || {});          // v7.104 харчування — позиція каталогу
     else if (body.action === 'addMealMark')               result = addMealMark(body || {});           // v7.104 харчування — відмітки (батч)
     else if (body.action === 'exportMealToPayments')      result = exportMealToPayments(body || {});  // v7.104 харчування → Бюджет-харчування (dryRun default)
@@ -844,6 +847,48 @@ function getClients() {
     rows.push(obj);
   }
   return {ok:true, data:rows};
+}
+
+// v7.105: масове перейменування ГРУПИ в картках Клієнти (кол. «Група») для локації.
+// POST renameClientGroup {loc, oldGroup, newGroup, dryRun}. dryRun=true за замовч. — лише лічить.
+// Матч: Локація===loc І Група===oldGroup (точний trim). Пише кол. «Група» (+ «Оновлено») під LockService.
+function renameClientGroup(body){
+  body = body || {};
+  var loc  = String(body.loc || '').trim();
+  var oldG = String(body.oldGroup || '').trim();
+  var newG = String(body.newGroup || '').trim();
+  var dryRun = (body.dryRun !== false);
+  if (!loc || !oldG || !newG) return {ok:false, error:'loc/oldGroup/newGroup обовʼязкові'};
+  if (oldG === newG) return {ok:false, error:'oldGroup і newGroup однакові'};
+  var lock = null;
+  try {
+    var ss = getCRMSpreadsheet(); var sh = ss.getSheetByName(SHEET_CLIENTS);
+    if (!sh) return {ok:false, error:'Лист "'+SHEET_CLIENTS+'" не знайдено'};
+    var vals = sh.getDataRange().getValues(); var H = vals[0].map(String);
+    var iLoc = H.indexOf('Локація'), iGrp = H.indexOf('Група'), iName = H.indexOf('ПІБ дитини'), iUpd = H.indexOf('Оновлено');
+    if (iLoc < 0 || iGrp < 0) return {ok:false, error:'Колонки Локація/Група не знайдено у "'+SHEET_CLIENTS+'"'};
+    var matchedRows = [], names = [];
+    for (var r = 1; r < vals.length; r++){
+      if (!vals[r][0]) continue;
+      if (String(vals[r][iLoc]||'').trim() === loc && String(vals[r][iGrp]||'').trim() === oldG){
+        matchedRows.push(r); names.push(String(vals[r][iName]||'').trim());
+      }
+    }
+    if (!dryRun && matchedRows.length){
+      lock = LockService.getScriptLock(); try { lock.waitLock(30000); } catch(e){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+      var stamp = formatDate(new Date());
+      var colG = sh.getRange(1, iGrp+1, vals.length, 1).getValues();
+      matchedRows.forEach(function(r){ colG[r][0] = newG; });
+      sh.getRange(1, iGrp+1, vals.length, 1).setValues(colG);
+      if (iUpd >= 0){
+        var colU = sh.getRange(1, iUpd+1, vals.length, 1).getValues();
+        matchedRows.forEach(function(r){ colU[r][0] = stamp; });
+        sh.getRange(1, iUpd+1, vals.length, 1).setValues(colU);
+      }
+    }
+    return {ok:true, dryRun:dryRun, loc:loc, oldGroup:oldG, newGroup:newG, matched:matchedRows.length, rows:names.slice(0,60)};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { if (lock){ try { lock.releaseLock(); } catch(_){} } }
 }
 
 function ensureClientsHeader(sheet) {
