@@ -1,5 +1,11 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.103
+// m.kids CRM — Google Apps Script v7.104
+// v7.104: ХАРЧУВАННЯ (по днях → Payment «Бюджет-харчування» +5, лише 7-кол локації). Крок 0:
+//         diagLocPayment тепер віддає й Факт-харч (+3)/Бюджет-харч (+5). Листи «Харчування_Каталог»
+//         + «Харчування_Відвідуваність». Роути: getMealCatalog/saveMealItem, addMealMark(БАТЧ)/getMealMarks,
+//         exportMealToPayments (копія exportAttendanceToPayments, ціль +5, per-mark routing, журнал
+//         kind='meal' base+newSum, захист закритих, dryRun default TRUE). Вмикання: colsPerMonth==7 І
+//         активні позиції в каталозі (без хардкоду на 228). Дедуп відмітки: Дата+Дитина+id_позиції.
 // v7.103: КОЛОНОК/МІСЯЦЬ per-локація (Школа 228 = 7: додано «харчування»). Прапорець colsPerMonth у
 //         реєстрі Payment (кол. F; default 5, override {'Школа 228':7}). Розкладка через _paymentLayout:
 //         5-кол [навч,вступ,доп,бюдж-доп,бюдж-навч]; 7-кол [навч,вступ,доп,харч,бюдж-доп,бюдж-харч,бюдж-навч].
@@ -452,7 +458,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.103', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.104', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -491,6 +497,8 @@ function doGet(e) {
     else if (action === 'getKomplektaciyaFreeSeats') result = getKomplektaciyaFreeSeats(); // v7.97
     else if (action === 'getVyhovatelRatings')       result = getVyhovatelRatings({year: (e.parameter && e.parameter.year) || '', month: (e.parameter && e.parameter.month) || ''}); // v7.99
     else if (action === 'getMoneyJournal')           result = getMoneyJournal({loc:e.parameter.loc||'', child:e.parameter.child||'', year:e.parameter.year||'', month:e.parameter.month||''}); // v7.102 журнал грошових правок
+    else if (action === 'getMealCatalog')            result = getMealCatalog(e.parameter.loc || '');                                                                    // v7.104 харчування — каталог
+    else if (action === 'getMealMarks')              result = getMealMarks({loc:e.parameter.loc||'', year:e.parameter.year||'', month:e.parameter.month||''});          // v7.104 харчування — відмітки
     else if (action === 'getActivitiesCatalog')      result = getActivitiesCatalog(e.parameter && e.parameter.loc || '');
     else if (action === 'getAttendanceMarks')         result = getAttendanceMarks(e.parameter || {});
     else if (action === 'getDopMerges')               result = getDopMerges(e.parameter || {});
@@ -572,6 +580,9 @@ function doPost(e) {
     else if (body.action === 'setLocPaymentName')        result = setLocPaymentName(body || {});   // v7.60 вирівняти імʼя Payment під картку
     else if (body.action === 'renameAttendanceChild')    result = renameAttendanceChild(body || {}); // v7.95
     else if (body.action === 'addPaymentRow')             result = addPaymentRow(body || {});         // v7.95
+    else if (body.action === 'saveMealItem')              result = saveMealItem(body || {});          // v7.104 харчування — позиція каталогу
+    else if (body.action === 'addMealMark')               result = addMealMark(body || {});           // v7.104 харчування — відмітки (батч)
+    else if (body.action === 'exportMealToPayments')      result = exportMealToPayments(body || {});  // v7.104 харчування → Бюджет-харчування (dryRun default)
     else if (body.action === 'syncMissingClients')       result = syncMissingClientsFromPayments({dryRun:(body.dryRun===true), confirm:'YES_WRITE', locScope:(body.locScope||'kindergartens')}); // v7.60 кнопка «Синхронізувати відсутніх» (садочки)
     else if (body.action === 'remapAttendanceId')        result = remapAttendanceId(body || {});   // v7.60 точковий ремап осиротілого ID Табеля
     else if (body.action === 'cashPayoutSheet')          result = cashPayoutSheet(body || {});      // v7.64 відомість на видачу готівки (PDF)
@@ -7979,6 +7990,250 @@ function exportAttendanceToPayments(params){
 function exportToPayments(params){ return exportAttendanceToPayments(params); }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// v7.104 ХАРЧУВАННЯ (по днях → Payment «Бюджет-харчування», offset +5, лише 7-кол локації).
+// Каталог позицій (обід шкільний/кейтеринг, вечеря) з цінами per-локація; відмітки по днях
+// (батч); експорт сумує Σ(відмітки×ціна) по місяцях у Бюджет-харчування. Модель = Додаткові,
+// але ціль +5 і власний журнал kind='meal'. Вмикання: colsPerMonth==7 І є активні позиції.
+// ═══════════════════════════════════════════════════════════════════════════
+var MEAL_CATALOG_SHEET  = 'Харчування_Каталог';
+var MEAL_CATALOG_HEADER = ['id','Локація','Позиція','Ціна','Активне'];
+var MEAL_ATT_SHEET      = 'Харчування_Відвідуваність';
+var MEAL_ATT_HEADER     = ['id','Дата','Локація','Група','Дитина','id_позиції','Назва_позиції','Ціна','Відмітив','Час_відмітки'];
+
+function _mealCatalogSheet(create){
+  var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var sh = ss.getSheetByName(MEAL_CATALOG_SHEET);
+  if (!sh){ if (!create) return null; sh = ss.insertSheet(MEAL_CATALOG_SHEET);
+    sh.getRange(1,1,1,MEAL_CATALOG_HEADER.length).setValues([MEAL_CATALOG_HEADER]); sh.setFrozenRows(1); }
+  return sh;
+}
+function _mealAttSheet(create){
+  var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var sh = ss.getSheetByName(MEAL_ATT_SHEET);
+  if (!sh){ if (!create) return null; sh = ss.insertSheet(MEAL_ATT_SHEET);
+    sh.getRange(1,1,1,MEAL_ATT_HEADER.length).setValues([MEAL_ATT_HEADER]); sh.setFrozenRows(1); }
+  return sh;
+}
+function _mealDupKey(date, child, itemId, tz){
+  var d = (date instanceof Date) ? Utilities.formatDate(date, tz||'Europe/Kiev', 'yyyy-MM-dd') : String(date||'').slice(0,10);
+  return d + '|' + String(child||'').replace(/[\s ]+/g,'').toLowerCase() + '|' + (Number(itemId)||0);
+}
+function _nextMealId(sh, vals){ vals = vals || sh.getDataRange().getValues(); var mx=0;
+  for (var i=1;i<vals.length;i++){ var n=Number(vals[i][0])||0; if (n>mx) mx=n; } return mx+1; }
+
+// ── Каталог ──────────────────────────────────────────────────────────────────
+function getMealCatalog(loc){
+  try {
+    var sh = _mealCatalogSheet(false); if (!sh) return {ok:true, items:[]};
+    var vals = sh.getDataRange().getValues(); var fl = String(loc||'').trim(); var items = [];
+    for (var i=1;i<vals.length;i++){ var r=vals[i]; var l=String(r[1]||'').trim(); if (!l) continue; if (fl && l!==fl) continue;
+      items.push({id:Number(r[0])||0, loc:l, name:String(r[2]||'').trim(), price:Number(r[3])||0,
+                  active:(String(r[4]).toLowerCase()!=='ні' && r[4]!==false && r[4]!==0 && String(r[4]).trim()!=='')});
+    }
+    return {ok:true, items:items};
+  } catch(e){ return {ok:false, error:String(e&&e.message||e)}; }
+}
+function saveMealItem(body){
+  try {
+    body = body || {};
+    var loc = String(body.loc||'').trim();
+    var name = String(body.name||body.position||'').trim();
+    var price = Number(body.price); var id = Number(body.id)||0;
+    var active = (body.active===false || String(body.active).toLowerCase()==='ні') ? 'ні' : 'так';
+    if (!loc || !name || isNaN(price)) return {ok:false, error:'loc/name/price обовʼязкові'};
+    var sh = _mealCatalogSheet(true); var vals = sh.getDataRange().getValues();
+    var foundRow = -1, mx = 0;
+    for (var i=1;i<vals.length;i++){ var n=Number(vals[i][0])||0; if (n>mx) mx=n;
+      if (id && n===id) foundRow = i+1;
+      else if (!id && String(vals[i][1]||'').trim()===loc && String(vals[i][2]||'').trim()===name){ foundRow=i+1; id=n; }
+    }
+    if (foundRow < 0){ id = mx+1; sh.appendRow([id, loc, name, price, active]); return {ok:true, id:id, created:true}; }
+    sh.getRange(foundRow,1,1,MEAL_CATALOG_HEADER.length).setValues([[id, loc, name, price, active]]);
+    return {ok:true, id:id, updated:true};
+  } catch(e){ return {ok:false, error:String(e&&e.message||e)}; }
+}
+// Вмикання: 7-кол розкладка (є колонка харчування) І активні позиції в каталозі.
+function _mealEnabled(loc){
+  var reg = _getLocationPaymentRegistry(loc);
+  if (!reg || (reg.colsPerMonth||5) !== 7) return false;
+  var c = getMealCatalog(loc);
+  return !!(c.ok && c.items && c.items.some(function(x){ return x.active; }));
+}
+
+// ── Відмітки (БАТЧ) ───────────────────────────────────────────────────────────
+function addMealMark(body){
+  body = body || {};
+  var loc = String(body.loc||'').trim();
+  var markedBy = String(body.markedBy||body.by||'').trim();
+  var marks = Array.isArray(body.marks) ? body.marks : [];
+  if (!loc) return {ok:false, error:'loc обовʼязковий'};
+  if (!_mealEnabled(loc)) return {ok:false, error:'Харчування не ввімкнено для «'+loc+'» (треба colsPerMonth=7 і активні позиції в каталозі)'};
+  if (!marks.length) return {ok:false, error:'marks порожній'};
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(30000); } catch(e){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+  try {
+    var sh = _mealAttSheet(true);
+    var tz = sh.getParent().getSpreadsheetTimeZone() || 'Europe/Kiev';
+    var vals = sh.getDataRange().getValues();
+    var existing = {};   // dupKey → rowNum(1-based)
+    for (var e=1;e<vals.length;e++){ var k0=_mealDupKey(vals[e][1], vals[e][4], vals[e][5], tz); if (!existing.hasOwnProperty(k0)) existing[k0]=e+1; }
+    var toAppend = [], toDelete = [], added=0, skipped=0, removed=0, errors=[];
+    var nextId = _nextMealId(sh, vals);
+    marks.forEach(function(mk){
+      var date = String(mk.date||'').slice(0,10);
+      var child = String(mk.child||'').trim();
+      var itemId = Number(mk.itemId)||0;
+      if (!date || !child || !itemId){ errors.push('пропущено (date/child/itemId): '+JSON.stringify(mk)); return; }
+      var k = _mealDupKey(date, child, itemId, tz);
+      if (mk.remove){ if (typeof existing[k]==='number'){ toDelete.push(existing[k]); delete existing[k]; removed++; } return; }
+      if (existing.hasOwnProperty(k)){ skipped++; return; }
+      toAppend.push([ nextId++, date, loc, String(mk.group||'').trim(), child, itemId,
+        String(mk.itemName||'').trim(), Number(mk.price)||0, markedBy, new Date() ]);
+      existing[k] = true; added++;
+    });
+    toDelete.sort(function(a,b){ return b-a; }).forEach(function(rn){ sh.deleteRow(rn); });
+    if (toAppend.length) sh.getRange(sh.getLastRow()+1,1,toAppend.length,MEAL_ATT_HEADER.length).setValues(toAppend);
+    return {ok:true, added:added, skipped:skipped, removed:removed, errors:errors};
+  } catch(e){ return {ok:false, error:String(e&&e.message||e)}; }
+  finally { try{ lock.releaseLock(); }catch(_){} }
+}
+function getMealMarks(filters){
+  filters = filters || {};
+  var loc = String(filters.loc||'').trim();
+  var y = String(filters.year||'').trim(), mo = String(filters.month||'').trim();
+  try {
+    var sh = _mealAttSheet(false); if (!sh) return {ok:true, total:0, marks:[]};
+    var vals = sh.getDataRange().getValues(); var out = [];
+    for (var i=1;i<vals.length;i++){ var row=vals[i];
+      var d=row[1]; var ds=(d instanceof Date)? Utilities.formatDate(d,'Europe/Kiev','yyyy-MM-dd') : String(d||'').slice(0,10);
+      if (loc && String(row[2]||'').trim()!==loc) continue;
+      if (y && ds.slice(0,4)!==y) continue;
+      if (mo && String(Number(ds.slice(5,7))||'') !== String(Number(mo)||'')) continue;
+      out.push({id:Number(row[0])||0, date:ds, loc:String(row[2]||''), group:String(row[3]||''),
+        child:String(row[4]||''), itemId:Number(row[5])||0, itemName:String(row[6]||''),
+        price:Number(row[7])||0, by:String(row[8]||'')});
+    }
+    return {ok:true, total:out.length, marks:out};
+  } catch(e){ return {ok:false, error:String(e&&e.message||e)}; }
+}
+
+// ── Експорт у Payment «Бюджет-харчування» (+5) ────────────────────────────────
+function _journalMonthsForKind(loc, year, kind){
+  var sh = _getExportJournalSheet(); var data = sh.getDataRange().getValues(); var seen={}, out=[];
+  for (var r=1;r<data.length;r++){
+    if (trim(String(data[r][0]))!==loc) continue;
+    if (trim(String(data[r][1]))!==kind) continue;
+    if (Number(data[r][3])!==Number(year)) continue;
+    var m=Number(data[r][4])||0; if (m>=1&&m<=12&&!seen[m]){ seen[m]=true; out.push(m); }
+  }
+  return out;
+}
+function exportMealToPayments(params){
+  try {
+    params = params || {};
+    var loc = String(params.loc||'').trim();
+    if (!loc) return {ok:false, error:'Параметр loc обовʼязковий'};
+    var year = Number(params.year) || new Date().getFullYear();
+    var srcMonthOne = Number(params.month) || 0;
+    var dryRun = (params.dryRun !== false);   // v7.104 default TRUE
+    var reg = _getLocationPaymentRegistry(loc);
+    if (!reg || !reg.sheetId) return {ok:false, error:'Локацію "'+loc+'" не знайдено в CONFIG-реєстрі'};
+    var _cpm = reg.colsPerMonth || 5, _LO = _paymentLayout(_cpm);
+    if (_cpm !== 7 || _LO.budHarch == null) return {ok:false, error:'У «'+loc+'» немає колонки харчування (colsPerMonth≠7)'};
+
+    // 1. Відмітки харчування → бакети (ПІБ × target-місяць = _nextMonth(дати відмітки))
+    var attSh = _mealAttSheet(false);
+    var attData = attSh ? attSh.getDataRange().getValues() : [];
+    var buckets = {}, monthsTouched = {}, srcMonthsSeen = {};
+    for (var i=1;i<attData.length;i++){
+      var row = attData[i];
+      if (String(row[2]||'').trim() !== loc) continue;
+      var d = row[1]; var ds = (d instanceof Date)? Utilities.formatDate(d,'Europe/Kiev','yyyy-MM-dd') : String(d||'').slice(0,10);
+      var mday = /^(\d{4})-(\d{2})-(\d{2})/.exec(ds); if (!mday) continue;
+      var srcY = Number(mday[1]), srcM = Number(mday[2]);
+      if (srcMonthOne && !(srcY===year && srcM===srcMonthOne)) continue;
+      var t = _nextMonth(srcM, srcY); if (t.year !== year) continue;
+      srcMonthsSeen[srcY+'-'+srcM] = true;
+      var child = String(row[4]||'').trim(); var price = Number(row[7])||0;
+      buckets[child] = buckets[child] || {};
+      buckets[child][t.month] = (buckets[child][t.month] || 0) + price;
+      monthsTouched[t.month] = true;
+    }
+
+    // 2. Payment-файл + індекс імен
+    var paymentSS = SpreadsheetApp.openById(reg.sheetId);
+    var paySh = paymentSS.getSheetByName(reg.sheetName) || paymentSS.getSheets()[0];
+    var data = paySh.getDataRange().getValues();
+    var formulas = paySh.getDataRange().getFormulas();
+    function _normName(s){ return String(s||'').replace(/[\s ]+/g,'').toLowerCase(); }
+    var DATA_START = 3, paymentByNorm = {};
+    for (var r=DATA_START;r<data.length;r++){
+      var nameCell = trim(String(data[r][0]||''));
+      if (!nameCell || isGroupHeaderRow(data[r], 1)) continue;
+      var nk0 = _normName(nameCell); if (!paymentByNorm.hasOwnProperty(nk0)) paymentByNorm[nk0] = r;
+    }
+    var sumByNormTarget = {};
+    Object.keys(buckets).forEach(function(childName){
+      var nk = _normName(childName);
+      var tgt = sumByNormTarget[nk] = sumByNormTarget[nk] || {names:{}, m:{}};
+      tgt.names[childName] = true;
+      Object.keys(buckets[childName]).forEach(function(m){ tgt.m[m] = (tgt.m[m]||0) + buckets[childName][m]; });
+    });
+
+    // 3. target-місяці (+ журнал kind='meal' для очистки де відмітки зникли)
+    var monthsToProcess = {};
+    if (srcMonthOne){ var tOne=_nextMonth(srcMonthOne,year); if (tOne.year===year) monthsToProcess[tOne.month]=true; }
+    else { Object.keys(monthsTouched).forEach(function(m){ monthsToProcess[Number(m)]=true; });
+           _journalMonthsForKind(loc, year, 'meal').forEach(function(m){ monthsToProcess[m]=true; }); }
+    var monthList = Object.keys(monthsToProcess).map(Number).sort(function(a,b){ return a-b; });
+    var _closedSet = _closedMonthsSet();
+    var skippedClosed = monthList.filter(function(m){ return _closedSet[year+'-'+m]; });
+    monthList = monthList.filter(function(m){ return !_closedSet[year+'-'+m]; });
+
+    // 4. Пер-місячний запис у Бюджет-харчування через журнал (base + newSum)
+    var updated=0, totalAmount=0, cellsWritten=0, formulaConverted=0, details=[], perMonth=[];
+    monthList.forEach(function(m){
+      var budHarchCol1 = 1 + (m-1)*_cpm + _LO.budHarch + 1;   // ← ЦІЛЬ: Бюджет-харчування (+5)
+      var col0 = budHarchCol1 - 1;
+      var journal = _readJournalForTarget(loc, 'meal', year, m);
+      var journalOps=[], mUpd=0, mSum=0;
+      Object.keys(paymentByNorm).forEach(function(nk){
+        var rowIdx0 = paymentByNorm[nk];
+        var wasFormula = !!(formulas[rowIdx0] && formulas[rowIdx0][col0]);
+        var paymentName = trim(String(data[rowIdx0][0]||''));
+        var currentValue = Number(data[rowIdx0][col0]) || 0;
+        var je = journal.byNormName[nk]; var lastWritten = je ? je.sum : 0;
+        var baseValue = currentValue - lastWritten;
+        var st = sumByNormTarget[nk]; var newSum = (st && st.m[m]) ? st.m[m] : 0;
+        var newValue = baseValue + newSum;
+        if (newValue !== currentValue){ if (!dryRun) paySh.getRange(rowIdx0+1, budHarchCol1).setValue(newValue);
+          cellsWritten++; if (wasFormula) formulaConverted++; }
+        if (newSum !== lastWritten) journalOps.push({nk:nk, loc:loc, kind:'meal', name:paymentName, year:year, month:m, newSum:newSum});
+        if (newSum !== 0 || lastWritten !== 0){
+          details.push({child:paymentName, month:m, sum:newSum, currentBefore:currentValue, lastWritten:lastWritten,
+            baseValue:baseValue, newCell:newValue, row:rowIdx0+1, status:(newSum!==0?'updated':'cleared')});
+          if (newSum !== 0){ mUpd++; mSum += newSum; }
+        }
+      });
+      if (!dryRun) _commitJournalUpdates(journal, journalOps);
+      updated += mUpd; totalAmount += mSum;
+      perMonth.push({month:m, monthName:MONTHS_CAL_UA[m-1], updated:mUpd, sum:mSum, ops:journalOps.length});
+    });
+    var notFound = [];
+    Object.keys(sumByNormTarget).forEach(function(nk){ if (!paymentByNorm.hasOwnProperty(nk))
+      Object.keys(sumByNormTarget[nk].names).forEach(function(nm){ if (notFound.indexOf(nm)<0) notFound.push(nm); }); });
+
+    return {ok:true, target:'Бюджет-харчування', loc:loc, year:year, dryRun:dryRun,
+      months:monthList, skippedClosed:skippedClosed, updated:updated, totalAmount:totalAmount,
+      cellsWritten:cellsWritten, formulaCellsConverted:formulaConverted, notFound:notFound,
+      srcMonths:Object.keys(srcMonthsSeen), perMonth:perMonth, details:details};
+  } catch(e){
+    Logger.log('[exportMealToPayments] EXCEPTION: %s\n%s', e&&e.message, e&&e.stack);
+    return {ok:false, error:String(e&&e.message||e)};
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // v6.51 — АВТО-ЗВІРКА ПЛАТЕЖІВ (виписка ПриватБанку → Payment «Факт навч»/«Факт доп»).
 // ФАЗА 1 (read-only): reconcilePreview — резолв локації/категорії за IBAN,
 //   витяг платника, матч платник→дитина(діти) у межах локації. БЕЗ ЗАПИСІВ.
@@ -9627,6 +9882,12 @@ function diagLocPayment(e){
     var lastRow = paySh.getLastRow();
     var colV = paySh.getRange(1, budgetNavchCol1, lastRow, 1).getValues();
     var nextV = (month <= 11) ? paySh.getRange(1, nextNavchCol1, lastRow, 1).getValues() : [];
+    // v7.104 КРОК 0: якщо є колонка харчування (7-кол) — читаємо Факт-харч (+3) і Бюджет-харч (+5)
+    var hasHarch = (_LO.factHarch != null && _LO.budHarch != null);
+    var factHarchCol1 = hasHarch ? (monthStartCol0 + _LO.factHarch + 1) : 0;
+    var budHarchCol1  = hasHarch ? (monthStartCol0 + _LO.budHarch  + 1) : 0;
+    var factHarchV = hasHarch ? paySh.getRange(1, factHarchCol1, lastRow, 1).getValues() : [];
+    var budHarchV  = hasHarch ? paySh.getRange(1, budHarchCol1,  lastRow, 1).getValues() : [];
     var jV = _readJournalForTarget(loc, 'vacation', year, month);
     var DATA_START = 3, out = [];
     for (var r = DATA_START; r < data.length; r++){
@@ -9637,9 +9898,12 @@ function diagLocPayment(e){
       var lw = je ? je.sum : 0;
       var cur = Number(colV[r][0]) || 0;
       out.push({name:nm, row:r+1, budget:cur, next:(nextV.length?(Number(nextV[r][0])||0):null),
+                factHarch:(hasHarch?(Number(factHarchV[r][0])||0):null),
+                budHarch:(hasHarch?(Number(budHarchV[r][0])||0):null),
                 lastWritten:lw, base:(cur - lw)});
     }
     return {ok:true, loc:loc, month:month, year:year, sheetName:(reg.sheetName||''),
+            colsPerMonth:_cpm, hasHarch:hasHarch, factHarchCol:factHarchCol1, budHarchCol:budHarchCol1,
             budgetCol:budgetNavchCol1, rowsCount:out.length, rows:out};
   } catch(err){ return {ok:false, error:String(err && err.message || err)}; }
 }
