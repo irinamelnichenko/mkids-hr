@@ -50,20 +50,18 @@
   .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#111827;color:#fff;padding:10px 16px;border-radius:10px;z-index:200;opacity:0;transition:.2s;pointer-events:none;font-weight:600}
   .toast.show{opacity:1}
   .empty{padding:40px;text-align:center;color:var(--gray)}
-  .tabs{display:flex;gap:6px;flex-wrap:wrap}
-  .tab{border:1.5px solid var(--line);background:#fff;border-radius:9px;padding:6px 11px;font-weight:700;cursor:pointer;font-size:13px;color:var(--gray)}
-  .tab.on{background:#f8fafc}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--dark)}
+  .legend b{display:inline-block;padding:1px 6px;border-radius:6px;margin-right:3px}
+  .bulkbar{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
+  .bulkbar .bulkv{padding:5px 9px;font-size:15px}
   table.grid td.kid{white-space:nowrap}
   table.grid td.kid small{color:var(--gray);font-size:10px}
-  th.clik,td.cell.clik{cursor:pointer}
-  th.clik:hover{background:#eef2ff}
-  td.cell{position:relative;min-width:34px;height:26px}
-  td.cell.clik:hover{background:#eef2ff}
-  td.cell .mk{display:inline-block;font-size:13px;line-height:22px;min-width:22px}
-  td.cell .mk.on{border-radius:6px;filter:saturate(1.2)}
-  td.cell .dots{position:absolute;bottom:1px;left:50%;transform:translateX(-50%);display:flex;gap:2px}
-  td.cell .dots i{width:5px;height:5px;border-radius:50%;display:inline-block}
-  td.cell.view{font-size:12px;white-space:nowrap;min-width:44px}
+  table.grid td.cell{padding:1px 2px;text-align:center;white-space:nowrap}
+  th.dcol small{color:var(--mut);font-weight:600}
+  .dtg,.ntg{margin-top:2px;white-space:nowrap;line-height:1}
+  .tg{display:inline-block;font-size:12px;line-height:1;padding:1px 2px;margin:0;border:1px solid transparent;border-radius:5px;cursor:pointer;opacity:.28;filter:grayscale(1)}
+  .tg:hover{opacity:.6}
+  .tg.on{opacity:1;filter:none}
 </style>
 </head>
 <body>
@@ -190,7 +188,7 @@ function monthDays(){ var days=[], dim=new Date(S.y,S.m,0).getDate();
   return days; }
 function visKids(){ return (S.classFilter==='__all__') ? S.kids : S.kids.filter(function(k){return k.group===S.classFilter;}); }
 function iconFor(name){ var n=String(name||'').toLowerCase();
-  if(n.indexOf('вечер')>=0) return '🍛🥡'; if(n.indexOf('кейтер')>=0) return '🍲🥡'; if(n.indexOf('шкіл')>=0) return '🍲'; return '🍽'; }
+  if(n.indexOf('вечер')>=0) return '🍛'; if(n.indexOf('кейтер')>=0) return '🥡'; if(n.indexOf('шкіл')>=0) return '🍲'; return '🍽'; }
 function priceOf(id){ var p=S.cat.filter(function(x){return x.id===id;})[0]; return p?p.price:0; }
 function teacherClass(){ if(isHR()||String(S.user.role||'')==='director') return ''; return String(S.user.group||S.user.class||'').trim()||''; }
 function fillClassSel(){ var sel=document.getElementById('clsSel'); if(!sel) return; var locked=!!teacherClass();
@@ -198,64 +196,60 @@ function fillClassSel(){ var sel=document.getElementById('clsSel'); if(!sel) ret
   opts+=S.classes.map(function(c){return '<option value="'+esc(c)+'"'+(c===S.classFilter?' selected':'')+'>'+esc(c)+'</option>';}).join('');
   sel.innerHTML=opts; sel.disabled=locked; sel.style.display=S.classes.length?'':'none'; }
 
+function tgSpan(extraCls,attrs,on,color,icon,title){ return '<span class="tg'+(extraCls?' '+extraCls:'')+(on?' on':'')+'" '+attrs+' style="'+(on?'background:'+color+';border-color:'+color:'')+'" title="'+title+'">'+icon+'</span>'; }
 function render(){
   if(!S.tabs || !S.tabs.length){ document.getElementById('main').innerHTML='<div class="empty">Немає активних позицій у каталозі.</div>'; return; }
-  var editable=(S.activeTab!=='all');
-  var tabsHtml=S.tabs.map(function(t,i){ return '<button class="tab'+(S.activeTab===i?' on':'')+'" data-tab="'+i+'" style="'+(S.activeTab===i?'border-color:'+t.color+';color:'+t.color:'')+'">'+t.icon+' '+esc(t.name)+'</button>'; }).join('')
-    +'<button class="tab'+(!editable?' on':'')+'" data-tab="all">👁 Усе разом</button>';
-  var bulk=editable?'<button class="btn sec" id="bulkAll">✓ Позначити всім весь місяць</button>':'<span class="muted">Режим перегляду — без редагування</span>';
+  var legend='<div class="legend">'+S.tabs.map(function(t){return '<span><b style="background:'+t.color+'">'+t.icon+'</b> '+esc(t.name)+' · '+fmtG(t.price)+'</span>';}).join('')+'</div>';
+  var picker='<div class="bulkbar"><span class="muted">Позначити всім весь місяць:</span>'+S.tabs.map(function(t){return '<button class="btn sec bulkv" data-it="'+t.id+'" title="'+esc(t.name)+'" style="color:'+t.color+'">'+t.icon+'</button>';}).join('')+'</div>';
   document.getElementById('main').innerHTML=
-    '<div class="card"><div class="hd" style="gap:8px"><div class="tabs">'+tabsHtml+'</div><span class="sp" style="flex:1"></span>'+bulk+'</div>'+
+    '<div class="card"><div class="hd" style="gap:10px">'+legend+'<span style="flex:1"></span>'+picker+'</div>'+
     '<div class="tblwrap"><table class="grid"><thead id="gHead"></thead><tbody id="gBody"></tbody></table></div>'+
     '<div class="foot"><div>По класу: <span id="clsTot">0</span></div><div>По школі: <span id="schoolTot">0</span></div><div class="muted" id="dirtyLbl"></div></div></div>'+
     priceEditor();
   document.getElementById('savePricesBtn').onclick=savePrices;
-  document.querySelector('.tabs').addEventListener('click',function(e){ var b=e.target.closest('.tab'); if(!b)return; var t=b.dataset.tab; S.activeTab=(t==='all')?'all':+t; render(); });
-  if(editable){ var ba=document.getElementById('bulkAll'); if(ba) ba.onclick=bulkAllMonth; }
+  document.querySelector('.bulkbar').addEventListener('click',function(e){ var b=e.target.closest('.bulkv'); if(b) bulkAllMonth(+b.dataset.it); });
   renderHead(); renderBody(); wireGrid(); recalc();
 }
 function renderHead(){
-  var days=monthDays(), editable=(S.activeTab!=='all');
-  document.getElementById('gHead').innerHTML='<tr><th class="kidh">Дитина</th>'+
-    days.map(function(x){ return '<th'+(editable?' class="clik" data-date="'+x.iso+'" title="Позначити всім цього дня"':'')+'>'+x.d+'<br><small>'+WD[x.dow]+'</small></th>'; }).join('')+
-    '<th class="toth">Σ міс</th></tr>';
+  var days=monthDays(), kids=visKids();
+  var ths=days.map(function(x){
+    var tgs=S.tabs.map(function(t){ var all=kids.length && kids.every(function(k){return S.marks[markKey(k.name,x.iso,t.id)];});
+      return tgSpan('date','data-date="'+x.iso+'" data-it="'+t.id+'"',all,t.color,t.icon,esc(t.name)+' — усім '+x.d); }).join('');
+    return '<th class="dcol">'+x.d+' <small>'+WD[x.dow]+'</small><div class="dtg">'+tgs+'</div></th>';
+  }).join('');
+  document.getElementById('gHead').innerHTML='<tr><th class="kidh">Дитина</th>'+ths+'<th class="toth">Σ міс</th></tr>';
 }
 function renderBody(){
-  var days=monthDays(), kids=visKids(), editable=(S.activeTab!=='all'), act=editable?S.tabs[S.activeTab]:null;
+  var days=monthDays(), kids=visKids();
   var html=kids.map(function(k,ci){
+    var nameTg=S.tabs.map(function(t){ var all=days.length && days.every(function(x){return S.marks[markKey(k.name,x.iso,t.id)];});
+      return tgSpan('name','data-nci="'+ci+'" data-it="'+t.id+'"',all,t.color,t.icon,esc(t.name)+' — весь місяць'); }).join('');
     var cells=days.map(function(x){
-      if(editable){
-        var on=!!S.marks[markKey(k.name,x.iso,act.id)];
-        var dots=S.tabs.filter(function(t,ti){ return ti!==S.activeTab && S.marks[markKey(k.name,x.iso,t.id)]; }).map(function(o){return '<i style="background:'+o.color+'"></i>';}).join('');
-        return '<td class="cell clik" data-ci="'+ci+'" data-d="'+x.iso+'"><span class="mk'+(on?' on':'')+'" style="'+(on?'background:'+act.color:'')+'">'+(on?act.icon:'')+'</span>'+(dots?'<span class="dots">'+dots+'</span>':'')+'</td>';
-      } else {
-        var pres=S.tabs.filter(function(t){ return S.marks[markKey(k.name,x.iso,t.id)]; }).map(function(p){return p.icon;}).join(' ');
-        return '<td class="cell view">'+pres+'</td>';
-      }
+      var tgs=S.tabs.map(function(t){ var on=!!S.marks[markKey(k.name,x.iso,t.id)];
+        return tgSpan('c','data-ci="'+ci+'" data-d="'+x.iso+'" data-it="'+t.id+'"',on,t.color,t.icon,esc(t.name)); }).join('');
+      return '<td class="cell">'+tgs+'</td>';
     }).join('');
-    return '<tr><td class="kid'+(editable?' clik':'')+'"'+(editable?' data-nci="'+ci+'" title="Позначити весь місяць дитині"':'')+'><b>'+esc(k.name)+'</b> <small>'+esc(k.group)+'</small></td>'+cells+'<td class="tot" data-kt="'+ci+'">0</td></tr>';
+    return '<tr><td class="kid"><b>'+esc(k.name)+'</b> <small>'+esc(k.group)+'</small><div class="ntg">'+nameTg+'</div></td>'+cells+'<td class="tot" data-kt="'+ci+'">0</td></tr>';
   }).join('');
   document.getElementById('gBody').innerHTML=html || '<tr><td class="kid" colspan="99">Немає дітей у класі</td></tr>';
 }
+function refresh(){ renderHead(); renderBody(); recalc(); }
 function wireGrid(){
-  if(S.activeTab==='all') return;
-  document.getElementById('gBody').onclick=function(e){
-    var cell=e.target.closest('td.cell'); if(cell && cell.dataset.ci!=null){ toggleMark(visKids()[+cell.dataset.ci].name, cell.dataset.d, S.tabs[S.activeTab].id); renderBody(); recalc(); return; }
-    var nm=e.target.closest('td.kid'); if(nm && nm.dataset.nci!=null){ toggleMonthKid(visKids()[+nm.dataset.nci].name); renderBody(); recalc(); }
+  document.getElementById('gBody').onclick=function(e){ var t=e.target.closest('.tg'); if(!t) return;
+    if(t.dataset.ci!=null){ toggleMark(visKids()[+t.dataset.ci].name, t.dataset.d, +t.dataset.it); refresh(); return; }
+    if(t.dataset.nci!=null){ toggleMonthKid(visKids()[+t.dataset.nci].name, +t.dataset.it); refresh(); return; }
   };
-  document.getElementById('gHead').onclick=function(e){ var th=e.target.closest('th.clik'); if(th && th.dataset.date){ toggleDayAll(th.dataset.date); renderBody(); recalc(); } };
+  document.getElementById('gHead').onclick=function(e){ var t=e.target.closest('.tg.date'); if(t){ toggleDayAll(t.dataset.date, +t.dataset.it); refresh(); } };
 }
 function toggleMark(child,iso,id){ var k=markKey(child,iso,id); if(S.marks[k]) delete S.marks[k]; else S.marks[k]=true; }
-function toggleMonthKid(child){ var id=S.tabs[S.activeTab].id, days=monthDays();
-  var all=days.every(function(x){return S.marks[markKey(child,x.iso,id)];});
+function toggleMonthKid(child,id){ var days=monthDays(); var all=days.length && days.every(function(x){return S.marks[markKey(child,x.iso,id)];});
   days.forEach(function(x){ var k=markKey(child,x.iso,id); if(all) delete S.marks[k]; else S.marks[k]=true; }); }
-function toggleDayAll(iso){ var id=S.tabs[S.activeTab].id, kids=visKids();
-  var all=kids.every(function(k){return S.marks[markKey(k.name,iso,id)];});
+function toggleDayAll(iso,id){ var kids=visKids(); var all=kids.length && kids.every(function(k){return S.marks[markKey(k.name,iso,id)];});
   kids.forEach(function(k){ var kk=markKey(k.name,iso,id); if(all) delete S.marks[kk]; else S.marks[kk]=true; }); }
-function bulkAllMonth(){ var id=S.tabs[S.activeTab].id, kids=visKids(), days=monthDays(), all=true;
+function bulkAllMonth(id){ var kids=visKids(), days=monthDays(), all=true;
   kids.forEach(function(k){ days.forEach(function(x){ if(!S.marks[markKey(k.name,x.iso,id)]) all=false; }); });
   kids.forEach(function(k){ days.forEach(function(x){ var kk=markKey(k.name,x.iso,id); if(all) delete S.marks[kk]; else S.marks[kk]=true; }); });
-  renderBody(); recalc(); }
+  refresh(); }
 function recalc(){
   var kids=visKids(), perKid={}, classTot=0, schoolTot=0;
   Object.keys(S.marks).forEach(function(k){ var p=k.split('||'); perKid[p[0]]=(perKid[p[0]]||0)+priceOf(+p[2]); schoolTot+=priceOf(+p[2]); });
