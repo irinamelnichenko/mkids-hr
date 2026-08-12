@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Харчування — m.kids</title>
+<link rel="manifest" href="manifest.json">
+<style>
+  :root{--b:#2563eb;--g:#16a34a;--r:#dc2626;--o:#ea580c;--mut:#94a3b8;--bg:#f1f5f9;--line:#e2e8f0;--dark:#1e293b;--gray:#64748b}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--dark);font-size:14px}
+  .top{position:sticky;top:0;z-index:30;background:#fff;border-bottom:1px solid var(--line);padding:10px 14px;display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+  .top h1{font-size:18px;margin:0;font-weight:800}
+  .sp{flex:1}
+  select,input,button{font:inherit}
+  .btn{border:0;border-radius:9px;padding:8px 12px;font-weight:700;cursor:pointer;color:#fff;background:var(--b)}
+  .btn.g{background:var(--g)} .btn.sec{background:#fff;color:var(--dark);border:1px solid var(--line)} .btn:disabled{opacity:.5;cursor:default}
+  .flt{padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:#fff}
+  .mnav{display:flex;align-items:center;gap:6px}
+  .mnav b{min-width:130px;text-align:center}
+  .wrap{padding:12px}
+  .card{background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-bottom:14px}
+  .card .hd{padding:10px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .card .hd h3{margin:0;font-size:15px}
+  .muted{color:var(--gray);font-size:12px}
+  .tblwrap{overflow:auto;max-height:72vh}
+  table.grid{border-collapse:separate;border-spacing:0;font-size:12px}
+  table.grid th,table.grid td{border-right:1px solid var(--line);border-bottom:1px solid var(--line);padding:0}
+  table.grid thead th{position:sticky;top:0;z-index:6;background:#f8fafc;text-align:center;padding:4px 3px;font-weight:700;white-space:nowrap}
+  table.grid thead th.we{background:#eef1f5;color:var(--mut)}
+  table.grid td.kid,table.grid th.kidh{position:sticky;left:0;z-index:5;background:#fff;text-align:left;padding:4px 8px;min-width:180px;max-width:180px;border-right:2px solid var(--line)}
+  table.grid thead th.kidh{z-index:8;background:#f8fafc}
+  table.grid td.kid small{color:var(--gray);display:block;font-size:10px}
+  td.tot,th.toth{position:sticky;right:0;z-index:5;background:#fff;text-align:right;padding:4px 8px;min-width:80px;font-weight:800;border-left:2px solid var(--line)}
+  thead th.toth{z-index:8;background:#f8fafc}
+  td.cell{padding:2px;text-align:center;min-width:74px}
+  td.cell.we{background:#f6f8fa}
+  .tg{display:inline-block;min-width:20px;padding:2px 4px;margin:1px;border:1px solid var(--line);border-radius:6px;font-size:10px;font-weight:800;color:var(--gray);cursor:pointer;user-select:none;line-height:1.2}
+  .tg.on{color:#fff;border-color:transparent}
+  .we .tg{opacity:.3;pointer-events:none}
+  tbody tr:nth-child(even) td.kid{background:#fbfcfe}
+  .prices{padding:12px 14px;display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end}
+  .prices .pit{display:flex;flex-direction:column;gap:3px}
+  .prices label{font-size:12px;color:var(--gray)}
+  .prices input{width:110px;padding:7px 9px;border:1px solid var(--line);border-radius:8px}
+  .foot{padding:9px 14px;font-weight:800;border-top:1px solid var(--line);display:flex;gap:20px;flex-wrap:wrap}
+  .modal{position:fixed;inset:0;background:rgba(15,23,42,.45);display:none;align-items:center;justify-content:center;z-index:100;padding:16px}
+  .modal.show{display:flex}
+  .mcard{background:#fff;border-radius:14px;max-width:560px;width:100%;max-height:85vh;overflow:auto;padding:18px}
+  .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#111827;color:#fff;padding:10px 16px;border-radius:10px;z-index:200;opacity:0;transition:.2s;pointer-events:none;font-weight:600}
+  .toast.show{opacity:1}
+  .empty{padding:40px;text-align:center;color:var(--gray)}
+  .legend{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--gray);padding:6px 14px}
+  .legend span b{padding:1px 6px;border-radius:5px;color:#fff;margin-right:4px}
+</style>
+</head>
+<body>
+<div class="top">
+  <h1>🍽 Харчування</h1>
+  <select id="locSel" class="flt"></select>
+  <div class="mnav">
+    <button class="btn sec" id="mPrev">◀</button><b id="mLbl">—</b><button class="btn sec" id="mNext">▶</button>
+  </div>
+  <span class="sp"></span>
+  <button class="btn sec" id="refreshBtn">🔄</button>
+  <button class="btn" id="saveBtn" disabled>💾 Зберегти</button>
+  <button class="btn g" id="exportBtn">📤 Експорт у Payment</button>
+</div>
+<div class="wrap" id="main"><div class="empty">Завантаження…</div></div>
+
+<div class="modal" id="modal"><div class="mcard" id="mcard"></div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+var CFG = { SCRIPT_URL: 'https://script.google.com/macros/s/AKfycbyTSUVlaN4-PpXe47zCSmhVs0Qxy1FDXG_XsB4zcKNpqBxdhDtS9ibM4YFGkGjmPQDFWQ/exec' };
+var MONTHS = ['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
+var WD = ['Нд','Пн','Вт','Ср','Чт','Пт','Сб'];
+var TG_COLORS = ['#2563eb','#ea580c','#16a34a','#7c3aed','#db2777'];
+var S = { user:null, loc:'', y:0, m:0, cat:[], kids:[], marks:{}, orig:{}, clients:null };
+
+// ── AUTH (shared session) ──
+var SESSION_KEY='mkids_session', SESSION_TTL_MS=12*3600*1000;
+var NETWORK_ROLES=['hr','cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo'];
+function readSession(){ try{ var s=JSON.parse(localStorage.getItem(SESSION_KEY)||'null');
+  if(!s||!s.user||!s.t) return null; if(typeof s.user.role!=='string') return null; if(Date.now()-s.t>SESSION_TTL_MS) return null;
+  s.user.role=String(s.user.role||'').toLowerCase().trim();
+  if(NETWORK_ROLES.indexOf(s.user.role)!==-1 && s.user.loc!==''){ s.user.origLoc=s.user.loc; s.user.loc=''; }
+  return s.user; }catch(e){ return null; } }
+function isHR(){ return S.user && NETWORK_ROLES.indexOf(S.user.role)!==-1; }
+function goLogin(){ document.body.innerHTML='<div style="padding:60px;text-align:center;font-family:system-ui"><div style="font-size:44px">🔒</div><h2>Потрібно увійти</h2><p style="color:#64748b">Відкрийте головний застосунок і увійдіть.</p><a href="index.html" style="display:inline-block;margin-top:10px;padding:12px 20px;background:#2563eb;color:#fff;border-radius:10px;text-decoration:none;font-weight:700">Увійти →</a></div>'; }
+
+// ── API ──
+async function _fetch(url,opts){ var c=new AbortController(); var t=setTimeout(function(){c.abort();},45000);
+  try{ var o=Object.assign({redirect:'follow'},opts||{}); o.signal=c.signal; var r=await fetch(url,o); clearTimeout(t); return r; }
+  catch(e){ clearTimeout(t); throw e; } }
+async function apiGet(action,qs){ var r=await _fetch(CFG.SCRIPT_URL+'?action='+action+(qs?'&'+qs:'')); return r.json(); }
+async function apiPost(body){ var r=await _fetch(CFG.SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(body)});
+  var txt=await r.text(); try{ return JSON.parse(txt); }catch(_){ return {ok:true,_assumed:true}; } }
+function enc(s){ return encodeURIComponent(s); }
+
+function toast(msg){ var t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show'); setTimeout(function(){t.classList.remove('show');},2600); }
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); }
+function fmtG(n){ return (Number(n)||0).toLocaleString('uk-UA')+' ₴'; }
+function shortLabel(name){ var w=String(name||'').trim().split(/\s+/); return (w.map(function(x){return (x[0]||'').toUpperCase();}).join('').slice(0,3))||'?'; }
+function markKey(child,date,itemId){ return child+'||'+date+'||'+itemId; }
+
+// ── Завантаження локацій (школи з харчуванням) ──
+async function init(){
+  S.user=readSession(); if(!S.user){ goLogin(); return; }
+  var now=new Date(); S.y=now.getFullYear(); S.m=now.getMonth()+1;
+  // список шкіл
+  var locs=[];
+  try{ var jl=await apiGet('getLocations'); (jl.data||jl.locations||[]).forEach(function(l){
+    var typ=String(l.typ||'').trim(), loc=String(l.loc||'').trim();
+    if(typ==='Школа' || /школа/i.test(loc)) locs.push(loc); }); }catch(e){}
+  if(!isHR()){ var my=S.user.origLoc||S.user.loc||''; locs=locs.filter(function(l){return l===my;}); }
+  // лишаємо лише ті, де є каталог харчування (проксі «ввімкнено»)
+  var enabled=[];
+  for(var i=0;i<locs.length;i++){ try{ var c=await apiGet('getMealCatalog','loc='+enc(locs[i])); if(c.ok && c.items && c.items.length) enabled.push(locs[i]); }catch(e){} }
+  var sel=document.getElementById('locSel');
+  if(!enabled.length){ document.getElementById('main').innerHTML='<div class="empty">Харчування не налаштоване для доступних локацій.<br><span class="muted">Потрібна 7-колонкова розкладка Payment і позиції в каталозі.</span></div>'; sel.style.display='none'; wireTop(); return; }
+  sel.innerHTML=enabled.map(function(l){return '<option>'+esc(l)+'</option>';}).join('');
+  S.loc=enabled[0];
+  wireTop();
+  await loadAll();
+}
+function wireTop(){
+  document.getElementById('locSel').onchange=function(){ S.loc=this.value; loadAll(); };
+  document.getElementById('mPrev').onclick=function(){ if(!confirmLoss())return; S.m--; if(S.m<1){S.m=12;S.y--;} loadAll(); };
+  document.getElementById('mNext').onclick=function(){ if(!confirmLoss())return; S.m++; if(S.m>12){S.m=1;S.y++;} loadAll(); };
+  document.getElementById('refreshBtn').onclick=function(){ if(!confirmLoss())return; loadAll(); };
+  document.getElementById('saveBtn').onclick=saveMarks;
+  document.getElementById('exportBtn').onclick=doExportPreview;
+  document.getElementById('mcard').addEventListener('click',function(e){ if(e.target.dataset.close) closeModal(); });
+}
+function confirmLoss(){ return !dirtyCount() || confirm('Є незбережені відмітки. Втратити їх?'); }
+
+// ── Завантаження місяця ──
+async function loadAll(){
+  document.getElementById('mLbl').textContent=MONTHS[S.m-1]+' '+S.y;
+  document.getElementById('main').innerHTML='<div class="empty">Завантаження…</div>';
+  try{
+    var cat=await apiGet('getMealCatalog','loc='+enc(S.loc));
+    S.cat=(cat.items||[]).filter(function(x){return x.active;}).map(function(x,i){ x.label=shortLabel(x.name); x.color=TG_COLORS[i%TG_COLORS.length]; return x; });
+    if(!S.clients){ var cl=await apiGet('getClients'); S.clients=cl.data||cl||[]; }
+    S.kids=S.clients.filter(function(r){ return String(r['Локація']||'')===S.loc && String(r['Статус']||'').toLowerCase()==='active'; })
+      .map(function(r){ return {name:String(r['ПІБ дитини']||'').trim(), group:String(r['Група']||'').trim()}; })
+      .filter(function(k){return k.name;})
+      .sort(function(a,b){ return (a.group+a.name).localeCompare(b.group+b.name,'uk'); });
+    var mk=await apiGet('getMealMarks','loc='+enc(S.loc)+'&year='+S.y+'&month='+S.m);
+    S.marks={}; (mk.marks||[]).forEach(function(m){ S.marks[markKey(m.child,m.date,m.itemId)]=true; });
+    S.orig=Object.assign({},S.marks);
+    render();
+  }catch(e){ document.getElementById('main').innerHTML='<div class="empty">Помилка завантаження: '+esc(e&&e.message||e)+'</div>'; }
+}
+
+function monthDays(){ var days=[]; var dim=new Date(S.y,S.m,0).getDate();
+  for(var d=1;d<=dim;d++){ var dt=new Date(S.y,S.m-1,d); var dow=dt.getDay(); var iso=S.y+'-'+('0'+S.m).slice(-2)+'-'+('0'+d).slice(-2);
+    days.push({d:d,iso:iso,dow:dow,we:(dow===0||dow===6)}); } return days; }
+
+function render(){
+  if(!S.cat.length){ document.getElementById('main').innerHTML='<div class="empty">Немає активних позицій у каталозі.</div>'; return; }
+  var days=monthDays();
+  var legend='<div class="legend">'+S.cat.map(function(p){return '<span><b style="background:'+p.color+'">'+esc(p.label)+'</b>'+esc(p.name)+' · '+fmtG(p.price)+'</span>';}).join('')+'</div>';
+  var head='<tr><th class="kidh">Дитина</th>'+days.map(function(x){return '<th class="'+(x.we?'we':'')+'">'+x.d+'<br><small>'+WD[x.dow]+'</small></th>';}).join('')+'<th class="toth">Σ міс</th></tr>';
+  var body=S.kids.map(function(k,ci){
+    var cells=days.map(function(x){
+      var tg=S.cat.map(function(p){ var on=!!S.marks[markKey(k.name,x.iso,p.id)];
+        return '<span class="tg'+(on?' on':'')+'" data-ci="'+ci+'" data-d="'+x.iso+'" data-it="'+p.id+'" style="'+(on?'background:'+p.color:'')+'" title="'+esc(p.name)+'">'+esc(p.label)+'</span>'; }).join('');
+      return '<td class="cell'+(x.we?' we':'')+'">'+tg+'</td>';
+    }).join('');
+    return '<tr><td class="kid"><b>'+esc(k.name)+'</b><small>'+esc(k.group)+'</small></td>'+cells+'<td class="tot" data-kt="'+ci+'">0</td></tr>';
+  }).join('');
+  document.getElementById('main').innerHTML=
+    '<div class="card"><div class="hd"><h3>'+esc(S.loc)+' · '+MONTHS[S.m-1]+' '+S.y+'</h3><span class="muted">'+S.kids.length+' дітей · клік по літері ставить/знімає · вихідні недоступні</span></div>'+
+    legend+
+    '<div class="tblwrap"><table class="grid"><thead>'+head+'</thead><tbody>'+body+'</tbody></table></div>'+
+    '<div class="foot"><div>По школі за місяць: <span id="schoolTot">0</span></div><div class="muted" id="dirtyLbl"></div></div></div>'+
+    priceEditor();
+  var tbl=document.querySelector('table.grid');
+  tbl.addEventListener('click',onToggle);
+  document.getElementById('savePricesBtn').onclick=savePrices;
+  recalc();
+}
+
+function onToggle(e){ var t=e.target; if(!t.classList.contains('tg')) return; if(t.closest('td').classList.contains('we')) return;
+  var ci=+t.dataset.ci, iso=t.dataset.d, it=+t.dataset.it; var k=markKey(S.kids[ci].name,iso,it);
+  if(S.marks[k]){ delete S.marks[k]; t.classList.remove('on'); t.style.background=''; }
+  else { S.marks[k]=true; var p=S.cat.filter(function(x){return x.id===it;})[0]; t.classList.add('on'); t.style.background=p?p.color:'#2563eb'; }
+  recalc();
+}
+function priceOf(id){ var p=S.cat.filter(function(x){return x.id===id;})[0]; return p?p.price:0; }
+function recalc(){
+  var perKid={}, total=0;
+  Object.keys(S.marks).forEach(function(k){ var parts=k.split('||'); var child=parts[0], id=+parts[2]; var pr=priceOf(id);
+    perKid[child]=(perKid[child]||0)+pr; total+=pr; });
+  S.kids.forEach(function(k,ci){ var td=document.querySelector('td.tot[data-kt="'+ci+'"]'); if(td) td.textContent=fmtG(perKid[k.name]||0); });
+  var st=document.getElementById('schoolTot'); if(st) st.textContent=fmtG(total);
+  var dc=dirtyCount(); document.getElementById('saveBtn').disabled=!dc; document.getElementById('saveBtn').textContent='💾 Зберегти'+(dc?' ('+dc+')':'');
+  var dl=document.getElementById('dirtyLbl'); if(dl) dl.textContent=dc?('Незбережених змін: '+dc):'Усе збережено';
+}
+function dirtyCount(){ var n=0; var seen={};
+  Object.keys(S.marks).forEach(function(k){ if(!S.orig[k]) n++; seen[k]=1; });
+  Object.keys(S.orig).forEach(function(k){ if(!S.marks[k]) n++; });
+  return n; }
+
+// ── Збереження (батч) ──
+async function saveMarks(){
+  var adds=[], rems=[];
+  Object.keys(S.marks).forEach(function(k){ if(!S.orig[k]){ var p=k.split('||'); var kid=findKid(p[0]);
+    var pos=S.cat.filter(function(x){return x.id===+p[2];})[0]||{};
+    adds.push({date:p[1],child:p[0],group:kid?kid.group:'',itemId:+p[2],itemName:pos.name||'',price:pos.price||0}); } });
+  Object.keys(S.orig).forEach(function(k){ if(!S.marks[k]){ var p=k.split('||'); rems.push({date:p[1],child:p[0],itemId:+p[2],remove:true}); } });
+  var marks=adds.concat(rems); if(!marks.length){ toast('Немає змін'); return; }
+  var btn=document.getElementById('saveBtn'); btn.disabled=true; btn.textContent='Збереження…';
+  var res=await apiPost({action:'addMealMark',loc:S.loc,markedBy:(S.user.role||'')+' '+(S.user.origLoc||S.user.loc||''),marks:marks});
+  if(res && res.ok){ S.orig=Object.assign({},S.marks); toast('Збережено: +'+(res.added||0)+' / −'+(res.removed||0)); recalc(); }
+  else { toast('Помилка: '+(res&&res.error||'?')); btn.disabled=false; }
+}
+function findKid(name){ return S.kids.filter(function(k){return k.name===name;})[0]; }
+
+// ── Ціни позицій ──
+function priceEditor(){
+  return '<div class="card"><div class="hd"><h3>💰 Ціни позицій</h3><span class="muted">'+esc(S.loc)+'</span></div>'+
+    '<div class="prices">'+S.cat.map(function(p){ return '<div class="pit"><label><b style="background:'+p.color+';color:#fff;padding:1px 5px;border-radius:4px">'+esc(p.label)+'</b> '+esc(p.name)+'</label><input type="number" min="0" step="1" value="'+p.price+'" data-pid="'+p.id+'"></div>'; }).join('')+
+    '<button class="btn" id="savePricesBtn">Зберегти ціни</button></div></div>';
+}
+async function savePrices(){
+  var inputs=document.querySelectorAll('.prices input[data-pid]'); var changed=[];
+  inputs.forEach(function(inp){ var id=+inp.dataset.pid; var p=S.cat.filter(function(x){return x.id===id;})[0]; var v=Number(inp.value);
+    if(p && !isNaN(v) && v!==p.price) changed.push({id:id,name:p.name,price:v}); });
+  if(!changed.length){ toast('Ціни без змін'); return; }
+  for(var i=0;i<changed.length;i++){ await apiPost({action:'saveMealItem',loc:S.loc,id:changed[i].id,name:changed[i].name,price:changed[i].price,active:true}); }
+  toast('Ціни оновлено ('+changed.length+')'); await loadAll();
+}
+
+// ── Експорт у Payment ──
+async function doExportPreview(){
+  if(dirtyCount()){ if(!confirm('Є незбережені відмітки — вони не потраплять в export. Продовжити?')) return; }
+  openModal('<h3 style="margin:0 0 10px">📤 Експорт у Payment — прев\'ю</h3><div class="muted">Рахую…</div>');
+  var res=await apiPost({action:'exportMealToPayments',loc:S.loc,year:S.y,dryRun:true});
+  if(!res||!res.ok){ setModal('<h3>Помилка</h3><p>'+esc(res&&res.error||'?')+'</p><button class="btn sec" data-close="1">Закрити</button>'); return; }
+  var rows=(res.perMonth||[]).filter(function(x){return x.sum||x.updated;}).map(function(x){return '<tr><td>'+MONTHS[x.month-1]+'</td><td style="text-align:right">'+x.updated+'</td><td style="text-align:right">'+fmtG(x.sum)+'</td></tr>';}).join('');
+  var nf=(res.notFound||[]);
+  var html='<h3 style="margin:0 0 8px">📤 Прев\'ю експорту · '+esc(S.loc)+' '+S.y+'</h3>'+
+    '<div class="muted" style="margin-bottom:8px">Ціль: Бюджет-харчування · оновлено рядків: <b>'+res.updated+'</b> · сума: <b>'+fmtG(res.totalAmount)+'</b></div>'+
+    (rows?'<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr><th style="text-align:left">Місяць</th><th style="text-align:right">Дітей</th><th style="text-align:right">Сума</th></tr></thead><tbody>'+rows+'</tbody></table>':'<p class="muted">Немає сум до запису.</p>')+
+    (res.skippedClosed&&res.skippedClosed.length?'<p class="muted">Пропущено закриті місяці: '+res.skippedClosed.map(function(m){return MONTHS[m-1];}).join(', ')+'</p>':'')+
+    (nf.length?'<p style="color:#dc2626">Не знайдено в Payment ('+nf.length+'): '+nf.slice(0,12).map(esc).join(', ')+(nf.length>12?'…':'')+'</p>':'')+
+    '<div style="display:flex;gap:10px;margin-top:14px"><button class="btn g" id="doWriteBtn">✅ Записати у Payment</button><button class="btn sec" data-close="1">Скасувати</button></div>';
+  setModal(html);
+  document.getElementById('doWriteBtn').onclick=async function(){ this.disabled=true; this.textContent='Запис…';
+    var w=await apiPost({action:'exportMealToPayments',loc:S.loc,year:S.y,dryRun:false});
+    if(w&&w.ok){ toast('Записано у Payment: '+fmtG(w.totalAmount)); closeModal(); } else { toast('Помилка: '+(w&&w.error||'?')); this.disabled=false; } };
+}
+
+// ── Modal ──
+function openModal(html){ setModal(html); document.getElementById('modal').classList.add('show'); }
+function setModal(html){ document.getElementById('mcard').innerHTML=html; }
+function closeModal(){ document.getElementById('modal').classList.remove('show'); }
+document.getElementById('modal').addEventListener('click',function(e){ if(e.target.id==='modal') closeModal(); });
+
+init();
+</script>
+</body>
+</html>
