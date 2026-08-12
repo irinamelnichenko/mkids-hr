@@ -58,7 +58,8 @@
   table.grid td.kid small{color:var(--gray);font-size:10px}
   table.grid td.cell{padding:2px 3px;text-align:center;white-space:nowrap}
   th.dcol small{color:var(--mut);font-weight:600}
-  .dtg,.ntg{margin-top:3px;white-space:nowrap;line-height:1}
+  .dtg,.ntg{margin-top:3px;line-height:1}
+  .tgr{display:flex;justify-content:center;gap:3px}
   .tg{display:inline-block;font-size:19px;line-height:28px;height:28px;min-width:28px;text-align:center;vertical-align:middle;padding:0 1px;margin:1px;border:1px solid transparent;border-radius:7px;cursor:pointer;opacity:.28;filter:grayscale(1)}
   .tg:hover{opacity:.6}
   .tg.on{opacity:1;filter:none}
@@ -196,7 +197,16 @@ function fillClassSel(){ var sel=document.getElementById('clsSel'); if(!sel) ret
   opts+=S.classes.map(function(c){return '<option value="'+esc(c)+'"'+(c===S.classFilter?' selected':'')+'>'+esc(c)+'</option>';}).join('');
   sel.innerHTML=opts; sel.disabled=locked; sel.style.display=S.classes.length?'':'none'; }
 
-function tgSpan(extraCls,attrs,on,color,icon,title){ return '<span class="tg'+(extraCls?' '+extraCls:'')+(on?' on':'')+'" '+attrs+' style="'+(on?'background:'+color+';border-color:'+color:'')+'" title="'+title+'">'+icon+'</span>'; }
+// Дві обідні позиції у верхньому рядку, вечеря — у нижньому.
+function splitViews(){ var top=[],bot=[]; S.tabs.forEach(function(t){ (/вечер/i.test(t.name)?bot:top).push(t); }); if(!top.length){ top=S.tabs.slice(0,2); bot=S.tabs.slice(2); } return {top:top,bot:bot}; }
+// act = 'cell' | 'month' | 'day' — однозначне делегування (не покладаємось на наявність data-атрибута).
+function tgBlock(act, attrs, isOn){
+  var sv=splitViews();
+  function one(t){ var on=isOn(t);
+    return '<span class="tg'+(on?' on':'')+'" data-act="'+act+'" data-it="'+t.id+'" '+attrs(t)+' style="'+(on?'background:'+t.color+';border-color:'+t.color:'')+'" title="'+esc(t.name)+'">'+t.icon+'</span>'; }
+  function row(list){ return list.length ? '<div class="tgr">'+list.map(one).join('')+'</div>' : ''; }
+  return row(sv.top)+row(sv.bot);
+}
 function render(){
   if(!S.tabs || !S.tabs.length){ document.getElementById('main').innerHTML='<div class="empty">Немає активних позицій у каталозі.</div>'; return; }
   var legend='<div class="legend">'+S.tabs.map(function(t){return '<span><b style="background:'+t.color+'">'+t.icon+'</b> '+esc(t.name)+' · '+fmtG(t.price)+'</span>';}).join('')+'</div>';
@@ -213,8 +223,7 @@ function render(){
 function renderHead(){
   var days=monthDays(), kids=visKids();
   var ths=days.map(function(x){
-    var tgs=S.tabs.map(function(t){ var all=kids.length && kids.every(function(k){return S.marks[markKey(k.name,x.iso,t.id)];});
-      return tgSpan('date','data-date="'+x.iso+'" data-it="'+t.id+'"',all,t.color,t.icon,esc(t.name)+' — усім '+x.d); }).join('');
+    var tgs=tgBlock('day', function(t){return 'data-date="'+x.iso+'"';}, function(t){ return kids.length && kids.every(function(k){return S.marks[markKey(k.name,x.iso,t.id)];}); });
     return '<th class="dcol">'+x.d+' <small>'+WD[x.dow]+'</small><div class="dtg">'+tgs+'</div></th>';
   }).join('');
   document.getElementById('gHead').innerHTML='<tr><th class="kidh">Дитина</th>'+ths+'<th class="toth">Σ міс</th></tr>';
@@ -222,11 +231,9 @@ function renderHead(){
 function renderBody(){
   var days=monthDays(), kids=visKids();
   var html=kids.map(function(k,ci){
-    var nameTg=S.tabs.map(function(t){ var all=days.length && days.every(function(x){return S.marks[markKey(k.name,x.iso,t.id)];});
-      return tgSpan('name','data-nci="'+ci+'" data-it="'+t.id+'"',all,t.color,t.icon,esc(t.name)+' — весь місяць'); }).join('');
+    var nameTg=tgBlock('month', function(t){return 'data-nci="'+ci+'"';}, function(t){ return days.length && days.every(function(x){return S.marks[markKey(k.name,x.iso,t.id)];}); });
     var cells=days.map(function(x){
-      var tgs=S.tabs.map(function(t){ var on=!!S.marks[markKey(k.name,x.iso,t.id)];
-        return tgSpan('c','data-ci="'+ci+'" data-d="'+x.iso+'" data-it="'+t.id+'"',on,t.color,t.icon,esc(t.name)); }).join('');
+      var tgs=tgBlock('cell', function(t){return 'data-ci="'+ci+'" data-d="'+x.iso+'"';}, function(t){ return !!S.marks[markKey(k.name,x.iso,t.id)]; });
       return '<td class="cell">'+tgs+'</td>';
     }).join('');
     return '<tr><td class="kid"><b>'+esc(k.name)+'</b> <small>'+esc(k.group)+'</small><div class="ntg">'+nameTg+'</div></td>'+cells+'<td class="tot" data-kt="'+ci+'">0</td></tr>';
@@ -235,11 +242,11 @@ function renderBody(){
 }
 function refresh(){ renderHead(); renderBody(); recalc(); }
 function wireGrid(){
-  document.getElementById('gBody').onclick=function(e){ var t=e.target.closest('.tg'); if(!t) return;
-    if(t.dataset.ci!=null){ toggleMark(visKids()[+t.dataset.ci].name, t.dataset.d, +t.dataset.it); refresh(); return; }
-    if(t.dataset.nci!=null){ toggleMonthKid(visKids()[+t.dataset.nci].name, +t.dataset.it); refresh(); return; }
+  document.getElementById('gBody').onclick=function(e){ var t=e.target.closest('.tg'); if(!t) return; var act=t.dataset.act, it=+t.dataset.it;
+    if(act==='cell'){ toggleMark(visKids()[+t.dataset.ci].name, t.dataset.d, it); refresh(); }        // лише ця дитина, цей день
+    else if(act==='month'){ toggleMonthKid(visKids()[+t.dataset.nci].name, it); refresh(); }           // весь місяць — лише ця дитина
   };
-  document.getElementById('gHead').onclick=function(e){ var t=e.target.closest('.tg.date'); if(t){ toggleDayAll(t.dataset.date, +t.dataset.it); refresh(); } };
+  document.getElementById('gHead').onclick=function(e){ var t=e.target.closest('.tg'); if(!t || t.dataset.act!=='day') return; toggleDayAll(t.dataset.date, +t.dataset.it); refresh(); }; // усі діти класу, цей день
 }
 function toggleMark(child,iso,id){ var k=markKey(child,iso,id); if(S.marks[k]) delete S.marks[k]; else S.marks[k]=true; }
 function toggleMonthKid(child,id){ var days=monthDays(); var all=days.length && days.every(function(x){return S.marks[markKey(child,x.iso,id)];});
