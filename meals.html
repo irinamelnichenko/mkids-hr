@@ -106,23 +106,28 @@ function markKey(child,date,itemId){ return child+'||'+date+'||'+itemId; }
 
 // ── Завантаження локацій (школи з харчуванням) ──
 async function init(){
-  S.user=readSession(); if(!S.user){ goLogin(); return; }
-  var now=new Date(); S.y=now.getFullYear(); S.m=now.getMonth()+1;
-  // список шкіл
-  var locs=[];
-  try{ var jl=await apiGet('getLocations'); (jl.data||jl.locations||[]).forEach(function(l){
-    var typ=String(l.typ||'').trim(), loc=String(l.loc||'').trim();
-    if(typ==='Школа' || /школа/i.test(loc)) locs.push(loc); }); }catch(e){}
-  if(!isHR()){ var my=S.user.origLoc||S.user.loc||''; locs=locs.filter(function(l){return l===my;}); }
-  // лишаємо лише ті, де є каталог харчування (проксі «ввімкнено»)
-  var enabled=[];
-  for(var i=0;i<locs.length;i++){ try{ var c=await apiGet('getMealCatalog','loc='+enc(locs[i])); if(c.ok && c.items && c.items.length) enabled.push(locs[i]); }catch(e){} }
-  var sel=document.getElementById('locSel');
-  if(!enabled.length){ document.getElementById('main').innerHTML='<div class="empty">Харчування не налаштоване для доступних локацій.<br><span class="muted">Потрібна 7-колонкова розкладка Payment і позиції в каталозі.</span></div>'; sel.style.display='none'; wireTop(); return; }
-  sel.innerHTML=enabled.map(function(l){return '<option>'+esc(l)+'</option>';}).join('');
-  S.loc=enabled[0];
-  wireTop();
-  await loadAll();
+  try{
+    S.user=readSession(); if(!S.user){ goLogin(); return; }
+    var now=new Date(); S.y=now.getFullYear(); S.m=now.getMonth()+1;
+    document.getElementById('mLbl').textContent=MONTHS[S.m-1]+' '+S.y;   // місяць видно одразу
+    wireTop();
+    // 1) список шкіл із getLocations
+    var schools=[];
+    try{ var jl=await apiGet('getLocations'); var arr=(jl&&jl.data)||(Array.isArray(jl)?jl:[])||[];
+      arr.forEach(function(l){ var typ=String(l.typ||'').trim(), loc=String(l.loc||'').trim();
+        if(typ==='Школа' || /школа/i.test(loc)) schools.push(loc); });
+    }catch(e){ console.warn('[meals] getLocations:', e&&e.message); }
+    if(!isHR()){ var my=String(S.user.origLoc||S.user.loc||'').trim(); var f=schools.filter(function(l){return l===my;}); schools=(f.length||!my)?f:[my]; }
+    if(!schools.length){ document.getElementById('main').innerHTML='<div class="empty">Немає доступних шкіл для вашого доступу.</div>'; return; }
+    // 2) паралельна перевірка «ввімкнено» (є каталог); якщо жодної — фолбек показуємо всі, гейт у loadAll
+    var checks=await Promise.all(schools.map(function(loc){
+      return apiGet('getMealCatalog','loc='+enc(loc)).then(function(c){ return (c&&c.ok&&c.items&&c.items.length)?loc:null; }).catch(function(){ return null; });
+    }));
+    var enabled=checks.filter(Boolean); var list=enabled.length?enabled:schools;
+    document.getElementById('locSel').innerHTML=list.map(function(l){return '<option>'+esc(l)+'</option>';}).join('');
+    S.loc=list[0];
+    await loadAll();
+  }catch(e){ document.getElementById('main').innerHTML='<div class="empty">Помилка ініціалізації: '+esc(e&&e.message||e)+'</div>'; console.error('[meals] init', e); }
 }
 function wireTop(){
   document.getElementById('locSel').onchange=function(){ S.loc=this.value; loadAll(); };
@@ -141,8 +146,9 @@ async function loadAll(){
   document.getElementById('main').innerHTML='<div class="empty">Завантаження…</div>';
   try{
     var cat=await apiGet('getMealCatalog','loc='+enc(S.loc));
-    S.cat=(cat.items||[]).filter(function(x){return x.active;}).map(function(x,i){ x.label=shortLabel(x.name); x.color=TG_COLORS[i%TG_COLORS.length]; return x; });
-    if(!S.clients){ var cl=await apiGet('getClients'); S.clients=cl.data||cl||[]; }
+    S.cat=((cat&&cat.items)||[]).filter(function(x){return x.active;}).map(function(x,i){ x.label=shortLabel(x.name); x.color=TG_COLORS[i%TG_COLORS.length]; return x; });
+    if(!S.cat.length){ document.getElementById('main').innerHTML='<div class="empty">Харчування не налаштоване для «'+esc(S.loc)+'».<br><span class="muted">Потрібні активні позиції в каталозі та 7-колонкова розкладка Payment.</span></div>'; return; }
+    if(!S.clients){ var cl=await apiGet('getClients'); S.clients=(cl&&cl.data)||(Array.isArray(cl)?cl:[])||[]; }
     S.kids=S.clients.filter(function(r){ return String(r['Локація']||'')===S.loc && String(r['Статус']||'').toLowerCase()==='active'; })
       .map(function(r){ return {name:String(r['ПІБ дитини']||'').trim(), group:String(r['Група']||'').trim()}; })
       .filter(function(k){return k.name;})
