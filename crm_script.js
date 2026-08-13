@@ -1,5 +1,11 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.106
+// m.kids CRM — Google Apps Script v7.107
+// v7.107: PAYMENT — джерело правди для груп. Роут syncCardGroupsFromPayment({loc,dryRun}) підтягує
+//         КАРТКУ (Клієнти.Група) під Payment: для кожної дитини порівнює групу в картці з групою в
+//         Payment, різні → оновлює картку. Матч по норм. ПІБ у межах локації; неоднозначні (одне ПІБ
+//         → різні групи в Payment) пропускаються. dryRun=true за замовч. (список: дитина, було, стане).
+//         Фронт (activities.html): ростер сітки знову з Payment (оверлей із картки відкочено);
+//         пошук відміток по дитині (без &group) лишається.
 // v7.106: ВІДНОВЛЕНО хмарну синхронізацію дашборд-записів (S.recs: відпустки/лікарняні/зарплати/
 //         нотатки). Бекенд не мав action=get/save («Unknown action: get») — дані жили лише в
 //         localStorage. Додано getDashRecords()/saveDashRecords() + маршрути 'get' (doGet) і 'save'
@@ -466,7 +472,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.106', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.107', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -590,6 +596,7 @@ function doPost(e) {
     else if (body.action === 'renameAttendanceChild')    result = renameAttendanceChild(body || {}); // v7.95
     else if (body.action === 'addPaymentRow')             result = addPaymentRow(body || {});         // v7.95
     else if (body.action === 'renameClientGroup')         result = renameClientGroup(body || {});     // v7.105 масове перейменування групи в картках
+    else if (body.action === 'syncCardGroupsFromPayment') result = syncCardGroupsFromPayment(body || {}); // v7.107 картки ← Payment (dryRun за замовч.)
     else if (body.action === 'saveMealItem')              result = saveMealItem(body || {});          // v7.104 харчування — позиція каталогу
     else if (body.action === 'addMealMark')               result = addMealMark(body || {});           // v7.104 харчування — відмітки (батч)
     else if (body.action === 'exportMealToPayments')      result = exportMealToPayments(body || {});  // v7.104 харчування → Бюджет-харчування (dryRun default)
@@ -895,6 +902,75 @@ function renameClientGroup(body){
       }
     }
     return {ok:true, dryRun:dryRun, loc:loc, oldGroup:oldG, newGroup:newG, matched:matchedRows.length, rows:names.slice(0,60)};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { if (lock){ try { lock.releaseLock(); } catch(_){} } }
+}
+
+// v7.107: PAYMENT = джерело правди для груп. Синхронізує КАРТКУ (Клієнти.Група) під Payment:
+// для кожної дитини порівнює групу в картці з групою в Payment; якщо різні — оновлює картку під Payment.
+// Матч по нормалізованому ПІБ у межах локації. dryRun=true за замовч. (лише список: дитина, було, стане).
+function _syncNormPib(s){ return String(s || '').trim().replace(/\s+/g, ' ').toLowerCase(); }
+function syncCardGroupsFromPayment(body){
+  body = body || {};
+  var loc    = String(body.loc || '').trim();
+  var dryRun = (body.dryRun !== false);            // TRUE за замовчуванням
+  var lock = null;
+  try {
+    // 1) Payment-групи per (loc, normPib). getPayments() — платіжні рядки з колонкою «Група».
+    var pay = getPayments();
+    var payData = (pay && pay.data) || [];
+    var payMap = {};                                // key = loc||normPib -> {group, ambiguous}
+    payData.forEach(function(row){
+      var l = String(row['Локація'] || '').trim();
+      if (loc && l !== loc) return;
+      var nm = _syncNormPib(row["Ім'я дитини"]);
+      var g  = String(row['Група'] || '').trim();
+      if (!l || !nm || !g) return;
+      var k = l + '||' + nm;
+      if (!payMap[k]) payMap[k] = {group:g, ambiguous:false};
+      else if (_syncNormPib(payMap[k].group) !== _syncNormPib(g)) payMap[k].ambiguous = true; // одне ПІБ → різні групи
+    });
+
+    // 2) Клієнти — порівняння й (за потреби) оновлення групи під Payment.
+    var ss = getCRMSpreadsheet(); var sh = ss.getSheetByName(SHEET_CLIENTS);
+    if (!sh) return {ok:false, error:'Лист "'+SHEET_CLIENTS+'" не знайдено'};
+    var vals = sh.getDataRange().getValues(); var H = vals[0].map(String);
+    var iLoc = H.indexOf('Локація'), iGrp = H.indexOf('Група'), iName = H.indexOf('ПІБ дитини'), iUpd = H.indexOf('Оновлено');
+    if (iLoc < 0 || iGrp < 0 || iName < 0) return {ok:false, error:'Колонки Локація/Група/ПІБ дитини не знайдено у "'+SHEET_CLIENTS+'"'};
+
+    var changes = [], ambiguous = [], updates = [];
+    for (var r = 1; r < vals.length; r++){
+      if (!vals[r][0]) continue;
+      var l = String(vals[r][iLoc]||'').trim();
+      if (loc && l !== loc) continue;
+      var pib = String(vals[r][iName]||'').trim();
+      var nm  = _syncNormPib(pib);
+      var cg  = String(vals[r][iGrp]||'').trim();
+      if (!l || !nm) continue;
+      var pm = payMap[l + '||' + nm];
+      if (!pm) continue;                                        // нема у Payment цього місяця — не чіпаємо
+      if (pm.ambiguous){ ambiguous.push({loc:l, name:pib, card:cg}); continue; } // неоднозначно → пропуск
+      if (_syncNormPib(cg) === _syncNormPib(pm.group)) continue; // вже збігається
+      changes.push({loc:l, name:pib, from:cg, to:pm.group});
+      updates.push({row:r, group:pm.group});
+    }
+
+    if (!dryRun && updates.length){
+      lock = LockService.getScriptLock(); try { lock.waitLock(30000); } catch(e){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+      var stamp = formatDate(new Date());
+      var colG = sh.getRange(1, iGrp+1, vals.length, 1).getValues();
+      updates.forEach(function(u){ colG[u.row][0] = u.group; });
+      sh.getRange(1, iGrp+1, vals.length, 1).setValues(colG);
+      if (iUpd >= 0){
+        var colU = sh.getRange(1, iUpd+1, vals.length, 1).getValues();
+        updates.forEach(function(u){ colU[u.row][0] = stamp; });
+        sh.getRange(1, iUpd+1, vals.length, 1).setValues(colU);
+      }
+      SpreadsheetApp.flush();
+    }
+    return {ok:true, dryRun:dryRun, loc:loc||'(усі)', updated:(dryRun?0:updates.length),
+            diffCount:changes.length, ambiguousCount:ambiguous.length,
+            changes:changes.slice(0,500), ambiguous:ambiguous.slice(0,200)};
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
   finally { if (lock){ try { lock.releaseLock(); } catch(_){} } }
 }

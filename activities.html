@@ -2725,37 +2725,17 @@ async function _loadPayments(){
   var json = await r.json();
   if (!json.ok) throw new Error(json.error || 'getPayments failed');
 
-  // v7.107: ПОТОЧНА група дитини береться з КАРТКИ (Клієнти), а не з застарілого рядка getPayments —
-  // щоб перенесена дитина зʼявилась у своїй теперішній групі. Набір дітей лишається з getPayments
-  // (лише активні/платні); картка тільки КОРИГУЄ групу. Зшивання по нормалізованому імені (_attNormChild).
-  var cardGrp = {}; // {loc: {normName: 'Група'}}
-  try {
-    var rc = await _afTryFetch(CFG.SCRIPT_URL + '?action=getClients', {redirect: 'follow'});
-    if (rc.ok){
-      var jc = await rc.json();
-      ((jc && jc.data) || []).forEach(function(c){
-        var loc = String(c['Локація'] || '').trim();
-        var nm  = _attNormChild(c['ПІБ дитини'] || '');
-        var g   = String(c['Група'] || '').trim();
-        if (!loc || !nm || !g) return;
-        if (!cardGrp[loc]) cardGrp[loc] = {};
-        cardGrp[loc][nm] = g;                       // остання картка локації виграє
-      });
-    }
-  } catch(e){ console.warn('[attendance] getClients overlay skip:', e && e.message || e); }
-
+  // v7.107: ростер бере групу з PAYMENT (джерело правди) — картки підтягуються за Payment окремим
+  // роутом syncCardGroupsFromPayment, а не навпаки. (Оверлей із картки відкочено.)
   var byLoc = {};
   (json.data || []).forEach(function(row){
     var loc   = String(row['Локація'] || '').trim();
-    var payGrp = String(row['Група']   || '').trim();
+    var rawGrp = String(row['Група']   || '').trim();
     var name   = String(row["Ім'я дитини"] || '').trim();
-    if (!loc || !name) return;
-    // поточна група з картки, якщо знайшли по імені; інакше — застаріла з getPayments
-    var grp = (cardGrp[loc] && cardGrp[loc][_attNormChild(name)]) || payGrp;
-    if (!grp) return;
+    if (!loc || !rawGrp || !name) return;
     if (!byLoc[loc]) byLoc[loc] = {};
-    if (!byLoc[loc][grp]) byLoc[loc][grp] = [];
-    if (byLoc[loc][grp].indexOf(name) === -1) byLoc[loc][grp].push(name);
+    if (!byLoc[loc][rawGrp]) byLoc[loc][rawGrp] = [];
+    if (byLoc[loc][rawGrp].indexOf(name) === -1) byLoc[loc][rawGrp].push(name);
   });
   // Сортуємо імена в кожній групі.
   Object.keys(byLoc).forEach(function(loc){
