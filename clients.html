@@ -3557,20 +3557,19 @@ function renderPayHistory(){
   var id=S.editId;
   var card=S.crm[id]||{};
   var childName=(card.name||'').toLowerCase().trim();
-  var childGroup=(card.group||'').trim();
   var childLoc=(card.loc||'').trim();
 
   // Шукаємо по S.allPayRows або S.payments (fallback)
   var source = S.allPayRows.length ? S.allPayRows : S.payments;
 
-  // Знаходимо всі рядки цього клієнта
+  // v7.107: історія КОНКРЕТНОЇ дитини — матч по ІМЕНІ + ЛОКАЦІЇ, БЕЗ групи.
+  // Ім'я+локація однозначно ідентифікують дитину (як childId = 'c_'+ім'я+'_'+локація),
+  // а група у старих рядках оплат — це історія; після перейменування групи (Baby-ki→Find-iki)
+  // старі рядки під старою назвою мусять лишатись видимими під дитиною.
   var myRows = source.filter(function(row){
     var rName=String(row["Ім'я дитини"]||'').toLowerCase().trim();
-    var rGrp=String(row['Група']||'').trim();
     var rLoc=String(row['Локація']||'').trim();
-    // Матч по імені + або група, або локація
     if(!rName || rName !== childName) return false;
-    if(childGroup && rGrp && rGrp !== childGroup) return false;
     if(childLoc && rLoc && rLoc !== childLoc) return false;
     return true;
   });
