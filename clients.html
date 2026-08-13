@@ -3551,133 +3551,64 @@ function renderPayStatus(id){
 }
 
 // ─── ІСТОРІЯ ОПЛАТ КЛІЄНТА ────────────────────────────────────────────────────
-function renderPayHistory(){
+async function renderPayHistory(){
   var el=document.getElementById('payHistContent');
   if(!el) return;
   var id=S.editId;
   var card=S.crm[id]||{};
-  var childName=(card.name||'').toLowerCase().trim();
-  var childLoc=(card.loc||'').trim();
+  var name=(card.name||'').trim();
+  var loc=(card.loc||'').trim();
+  var year=(new Date()).getFullYear();
+  if(!name||!loc){ el.innerHTML='<div class="empty"><span class="ei">📊</span><h4>Немає даних</h4><p>Не вказано дитину або локацію.</p></div>'; return; }
+  el.innerHTML='<div class="loading"><div class="spinner"></div><p>Завантаження історії за '+year+'…</p></div>';
+  // v7.108: історія за ВЕСЬ рік напряму з Payment-файлу (по імені+локації, без групи).
+  var j;
+  try{ j=await apiGet('getAllPayments&loc='+encodeURIComponent(loc)+'&name='+encodeURIComponent(name)+'&year='+year); }
+  catch(e){ el.innerHTML='<div class="empty"><span class="ei">⚠️</span><h4>Не вдалось завантажити</h4><p>'+esc(e.message||String(e))+'</p>'
+      +'<button class="btn btn-secondary btn-sm" style="margin-top:12px" onclick="renderPayHistory()">🔄 Ще раз</button></div>'; return; }
+  if(!j||!j.ok){ el.innerHTML='<div class="empty"><span class="ei">⚠️</span><h4>Помилка</h4><p>'+esc((j&&j.error)||'невідома')+'</p>'
+      +'<button class="btn btn-secondary btn-sm" style="margin-top:12px" onclick="renderPayHistory()">🔄 Ще раз</button></div>'; return; }
+  if(!j.found){ el.innerHTML='<div class="empty"><span class="ei">📊</span><h4>Дитину не знайдено в Payment-файлі</h4>'
+      +'<p>'+esc(name)+' · '+esc(loc)+' — рядок за '+year+' відсутній.</p>'
+      +'<button class="btn btn-secondary btn-sm" style="margin-top:12px" onclick="renderPayHistory()">🔄 Оновити</button></div>'; return; }
 
-  // Шукаємо по S.allPayRows або S.payments (fallback)
-  var source = S.allPayRows.length ? S.allPayRows : S.payments;
-
-  // v7.107: історія КОНКРЕТНОЇ дитини — матч по ІМЕНІ + ЛОКАЦІЇ, БЕЗ групи.
-  // Ім'я+локація однозначно ідентифікують дитину (як childId = 'c_'+ім'я+'_'+локація),
-  // а група у старих рядках оплат — це історія; після перейменування групи (Baby-ki→Find-iki)
-  // старі рядки під старою назвою мусять лишатись видимими під дитиною.
-  var myRows = source.filter(function(row){
-    var rName=String(row["Ім'я дитини"]||'').toLowerCase().trim();
-    var rLoc=String(row['Локація']||'').trim();
-    if(!rName || rName !== childName) return false;
-    if(childLoc && rLoc && rLoc !== childLoc) return false;
-    return true;
-  });
-
-  if(!myRows.length){
-    // Якщо лише поточний місяць — шукаємо у S.payments
-    var cur = S.payments.filter(function(row){
-      var rName=String(row["Ім'я дитини"]||'').toLowerCase().trim();
-      return rName === childName;
-    });
-    if(cur.length){
-      myRows = cur;
-    }
-  }
-
-  if(!myRows.length){
-    el.innerHTML='<div class="empty"><span class="ei">📊</span><h4>Немає даних оплат</h4>'
-      +'<p>Клієнт ще не з\'явився в платіжній системі або дані не завантажені.</p>'
-      +'<button class="btn btn-secondary btn-sm" style="margin-top:12px" onclick="loadAllPayHistory().then(renderPayHistory)">🔄 Оновити</button></div>';
-    return;
-  }
-
-  // Групуємо по місяцю (колонка "Місяць" або парсимо з рядка)
-  var byMonth={};
-  myRows.forEach(function(row){
-    var month=String(row['Місяць']||row['місяць']||'').trim();
-    if(!month){
-      // спробуємо знайти хоч якийсь ідентифікатор місяця
-      month='Поточний місяць';
-    }
-    if(!byMonth[month]) byMonth[month]=[];
-    byMonth[month].push(row);
-  });
-
-  // Сортуємо місяці (намагаємось за CFG.MONTHS_UA порядком)
-  var monthKeys=Object.keys(byMonth);
-  monthKeys.sort(function(a,b){
-    var ai=CFG.MONTHS_UA.indexOf(a.toLowerCase());
-    var bi=CFG.MONTHS_UA.indexOf(b.toLowerCase());
-    if(ai<0&&bi<0) return a.localeCompare(b,'uk');
-    if(ai<0) return 1;
-    if(bi<0) return -1;
-    return ai-bi;
-  });
-
-  // Підсумки за весь час
-  var totalFact=0, totalBudget=0;
-
+  var hasH=!!j.hasHarch, cur=(new Date()).getMonth(); // 0-based поточний місяць
   var html='<div style="margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">'
-    +'<div style="font-size:14px;font-weight:700;color:var(--dark)">📊 Історія оплат — '+monthKeys.length+' міс.</div>'
-    +'<button class="btn btn-secondary btn-sm" onclick="loadAllPayHistory().then(renderPayHistory)">🔄 Оновити</button>'
-    +'</div>';
-
+    +'<div style="font-size:14px;font-weight:700;color:var(--dark)">📊 Історія оплат — '+year+' · '+esc(j.loc)+(j.group?' · '+esc(j.group):'')+'</div>'
+    +'<button class="btn btn-secondary btn-sm" onclick="renderPayHistory()">🔄 Оновити</button></div>';
   html+='<div class="tbl-wrap"><table class="pay-hist-table"><thead><tr>'
-    +'<th>Місяць</th><th>Навчання</th><th>Вступний</th><th>Доп.</th>'
-    +'<th>Факт разом</th><th>Бюджет</th><th>Статус</th>'
-    +'</tr></thead><tbody>';
+    +'<th>Місяць</th><th>Факт навч</th><th>Бюдж навч</th><th>Факт доп</th><th>Бюдж доп</th>'
+    +(hasH?'<th>Факт харч</th><th>Бюдж харч</th>':'')
+    +'<th>Вступний</th><th>Статус</th></tr></thead><tbody>';
 
-  monthKeys.forEach(function(month){
-    var rows=byMonth[month];
-    // Якщо кілька рядків за місяць — беремо останній або сумуємо
-    var row=rows[rows.length-1];
-    var fs=+(row['Факт навчання']||0);
-    var fv=+(row['Факт вступний']||0);
-    var fe=+(row['Факт доп.']||0);
-    var total=+(row['Факт разом']||0)||(fs+fv+fe);
-    var bud=+(row['Бюджет разом']||0)||+(row['Бюджет']||0)||( +(row['Бюджет навчання']||0) + +(row['Бюджет доп.']||0) );
-    var status=String(row['Статус']||'');
-    totalFact+=total;
-    totalBudget+=bud;
-
-    var statusBadge;
-    if(status==='paid') statusBadge='<span class="badge bg">✅ Оплачено</span>';
-    else if(status==='debt') statusBadge='<span class="badge br">❌ Борг</span>';
-    else if(status==='nopay') statusBadge='<span class="badge br">❌ Борг</span>';
-    else if(status==='over') statusBadge='<span class="badge by">💰 Переплата</span>';
-    else statusBadge='<span class="badge bgr">—</span>';
-
-    var diff=total-bud;
-    var factCls=total===0?'':total>=bud?'pay-hist-paid':'pay-hist-debt';
-
-    html+='<tr>'
-      +'<td class="pay-hist-month">'+esc(month)+'</td>'
-      +'<td>'+(fs?fmtN(fs):'—')+'</td>'
-      +'<td>'+(fv?fmtN(fv):'—')+'</td>'
-      +'<td>'+(fe?fmtN(fe):'—')+'</td>'
-      +'<td class="'+factCls+'">'+fmtN(total)+'</td>'
-      +'<td>'+fmtN(bud)+'</td>'
-      +'<td>'+statusBadge+'</td>'
-      +'</tr>';
+  (j.months||[]).forEach(function(m){
+    var mi=m.month-1, isCur=mi===cur, isFut=mi>cur;
+    var badge;
+    if(isFut) badge='<span style="color:var(--gray2);font-size:12px">— майбутній</span>';
+    else if(m.status==='paid') badge='<span class="badge bg">✅ Оплачено</span>';
+    else if(m.status==='over') badge='<span class="badge by">💰 Переплата</span>';
+    else if(m.status==='debt'){ var d=(m.budStudy+m.budExtra)-(m.factStudy+m.factExtra); badge='<span class="badge br">❌ Борг '+fmtN(Math.round(d>0?d:0))+'</span>'; }
+    else if(m.status==='nopay') badge='<span class="badge br">⛔ Не платив</span>';
+    else badge='<span class="badge bgr">—</span>';
+    var rowStyle=isCur?'background:#e8f8f0;font-weight:600':(isFut?'color:var(--gray2)':'');
+    function cell(v){ return '<td>'+(v?fmtN(v):'—')+'</td>'; }
+    html+='<tr style="'+rowStyle+'">'
+      +'<td>'+(isCur?'▶ ':'')+esc(CFG.MONTHS_DISP[mi]||m.month)+'</td>'
+      +cell(m.factStudy)+cell(m.budStudy)+cell(m.factExtra)+cell(m.budExtra)
+      +(hasH?cell(m.factHarch)+cell(m.budHarch):'')
+      +cell(m.entry)+'<td>'+badge+'</td></tr>';
   });
 
-  // Підсумковий рядок
-  var diffTotal=totalFact-totalBudget;
+  var t=j.totals||{};
   html+='<tr style="background:#f8fafc;font-weight:700;border-top:2px solid #e8ecf0">'
-    +'<td>Всього</td><td colspan="3" style="color:var(--gray);font-size:12px">'+monthKeys.length+' місяців</td>'
-    +'<td class="'+(totalFact>=totalBudget?'pay-hist-paid':'pay-hist-debt')+'">'+fmtN(totalFact)+'</td>'
-    +'<td>'+fmtN(totalBudget)+'</td>'
-    +'<td>'+(diffTotal>=0?'<span style="color:var(--green)">+'+fmtN(Math.round(diffTotal))+'</span>':'<span style="color:var(--red2)">'+fmtN(Math.round(diffTotal))+'</span>')+'</td>'
+    +'<td>Разом '+year+'</td>'
+    +'<td>'+fmtN(t.factStudy||0)+'</td><td>'+fmtN(t.budStudy||0)+'</td>'
+    +'<td>'+fmtN(t.factExtra||0)+'</td><td>'+fmtN(t.budExtra||0)+'</td>'
+    +(hasH?'<td>'+fmtN(t.factHarch||0)+'</td><td>'+fmtN(t.budHarch||0)+'</td>':'')
+    +'<td>'+fmtN(t.entry||0)+'</td>'
+    +'<td>'+((t.debt||0)>0?'<span style="color:var(--red2)">Борг '+fmtN(Math.round(t.debt))+'</span>':'<span style="color:var(--green)">Оплачено ✅</span>')+'</td>'
     +'</tr>';
-
   html+='</tbody></table></div>';
-
-  // Якщо лише поточний місяць — показуємо підказку
-  if(S.allPayRows.length===0||S.allPayRows===S.payments){
-    html+='<div class="alert alert-warn" style="margin-top:12px;font-size:12px">⚠️ Показано тільки поточний місяць. Для повної історії потрібно додати action <b>getAllPayments</b> в Apps Script.</div>';
-  }
-
   el.innerHTML=html;
 }
 

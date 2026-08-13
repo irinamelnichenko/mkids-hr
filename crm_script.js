@@ -1,5 +1,9 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.107
+// m.kids CRM — Google Apps Script v7.108
+// v7.108: getAllPayments({loc,name,year}) — історія оплат КОНКРЕТНОЇ дитини за весь рік напряму з
+//         Payment-файлу локації (факт/бюджет навчання, факт/бюджет доп, вступний, статус по 12 міс.;
+//         + факт/бюджет харчування для 7-колонкових локацій — colsPerMonth з реєстру). Матч по норм.
+//         ПІБ. Фронт: вкладка «Історія оплат» у картці показує весь рік, а не лише поточний місяць.
 // v7.107: PAYMENT — джерело правди для груп. Роут syncCardGroupsFromPayment({loc,dryRun}) підтягує
 //         КАРТКУ (Клієнти.Група) під Payment: для кожної дитини порівнює групу в картці з групою в
 //         Payment, різні → оновлює картку. Матч по норм. ПІБ у межах локації; неоднозначні (одне ПІБ
@@ -472,12 +476,13 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.107', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.108', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
     else if (action === 'getPayments')        result = getPayments();
     else if (action === 'getPaymentsYearly')  result = getPaymentsYearly();
+    else if (action === 'getAllPayments')     result = getAllPayments({loc:(e.parameter&&e.parameter.loc)||'', name:(e.parameter&&e.parameter.name)||'', year:(e.parameter&&e.parameter.year)||''}); // v7.108 історія оплат дитини за рік з Payment-файлу
     else if (action === 'getReconcileLog')           result = getReconcileLog({child:e.parameter.child||'', loc:e.parameter.loc||'', from:e.parameter.from||'', to:e.parameter.to||''}); // v7.94
     else if (action === 'getClients')         result = getClients();
     else if (action === 'runAggregate')       result = aggregatePayments();
@@ -2132,6 +2137,64 @@ function parsePaymentSheet(data, monthCol, contractCol, cpm) {
     }
   }
   return groups.filter(function(g){ return g.children.length > 0; });
+}
+
+// v7.108: ІСТОРІЯ ОПЛАТ ДИТИНИ ЗА ВЕСЬ РІК — читає Payment-файл локації напряму (джерело правди),
+// повертає по дитині всі 12 місяців: факт/бюджет навчання, факт/бюджет доп, вступний, статус
+// (+ факт/бюджет харчування, якщо локація 7-колонкова, як Школа 228 — colsPerMonth з реєстру).
+// Матч дитини по нормалізованому ПІБ. GET ?action=getAllPayments&loc=&name=&year=
+function getAllPayments(params){
+  params = params || {};
+  var loc  = String(params.loc || '').trim();
+  var name = String(params.name || '').trim();
+  var year = Number(params.year) || (new Date()).getFullYear();
+  if (!loc || !name) return {ok:false, error:'loc і name обовʼязкові'};
+  try {
+    var reg = _getLocationPaymentRegistry(loc);
+    if (!reg || !reg.sheetId) return {ok:false, error:'Локацію "'+loc+'" не знайдено в реєстрі'};
+    var ss = SpreadsheetApp.openById(reg.sheetId);
+    var paySh = ss.getSheetByName(reg.sheetName) || ss.getSheets()[0];
+    var data = paySh.getDataRange().getValues();
+    var cpm = reg.colsPerMonth || 5, LO = _paymentLayout(cpm);
+    var hasHarch = (LO.factHarch != null && LO.budHarch != null);
+    var want = _syncNormPib(name);
+    var DATA_START = 3, curGroup = '', foundRow = null, foundName = '', foundGroup = '';
+    for (var r = DATA_START; r < data.length; r++){
+      var nmCell = trim(String(data[r][0] || ''));
+      if (!nmCell) continue;
+      if (isGroupHeaderRow(data[r], 1)){ curGroup = normalizeGroupName(nmCell); continue; }
+      if (_syncNormPib(nmCell) === want){ foundRow = data[r]; foundName = nmCell; foundGroup = curGroup; break; }
+    }
+    if (!foundRow) return {ok:true, found:false, loc:loc, name:name, year:year, colsPerMonth:cpm, hasHarch:hasHarch, months:[]};
+
+    var months = [], T = {factStudy:0, budStudy:0, factExtra:0, budExtra:0, entry:0, factHarch:0, budHarch:0};
+    for (var m = 1; m <= 12; m++){
+      var bs0  = 1 + (m - 1) * cpm;                 // 0-based старт блоку місяця
+      var fNav = toNum(foundRow[bs0 + LO.factNavch]);
+      var fVst = toNum(foundRow[bs0 + LO.factVstup]);
+      var fDop = toNum(foundRow[bs0 + LO.factDop]);
+      var bDop = toNum(foundRow[bs0 + LO.budDop]);
+      var bNav = toNum(foundRow[bs0 + LO.budNavch]);
+      var fHar = hasHarch ? toNum(foundRow[bs0 + LO.factHarch]) : 0;
+      var bHar = hasHarch ? toNum(foundRow[bs0 + LO.budHarch])  : 0;
+      // Статус — як в aggregatePayments: по навчання+доп, без вступного й без харчування.
+      var totalNoEntry = fNav + fDop, br = bNav + bDop, status;
+      if (br === 0 && totalNoEntry === 0) status = 'unknown';
+      else if (totalNoEntry === 0 && br > 0) status = 'nopay';
+      else if (totalNoEntry >  br) status = 'over';
+      else if (totalNoEntry >= br) status = 'paid';
+      else                         status = 'debt';
+      months.push({month:m, factStudy:fNav, budStudy:bNav, factExtra:fDop, budExtra:bDop, entry:fVst,
+                   factHarch:(hasHarch?fHar:null), budHarch:(hasHarch?bHar:null), status:status});
+      T.factStudy+=fNav; T.budStudy+=bNav; T.factExtra+=fDop; T.budExtra+=bDop; T.entry+=fVst; T.factHarch+=fHar; T.budHarch+=bHar;
+    }
+    var debtY = (T.budStudy + T.budExtra) - (T.factStudy + T.factExtra);
+    return {ok:true, found:true, loc:loc, name:foundName, group:foundGroup, year:year,
+            colsPerMonth:cpm, hasHarch:hasHarch, months:months,
+            totals:{factStudy:T.factStudy, budStudy:T.budStudy, factExtra:T.factExtra, budExtra:T.budExtra,
+                    entry:T.entry, factHarch:(hasHarch?T.factHarch:null), budHarch:(hasHarch?T.budHarch:null),
+                    debt:(debtY>0?debtY:0)}};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 
 function createDailyTrigger() {
