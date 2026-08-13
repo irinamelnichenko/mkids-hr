@@ -1,4 +1,12 @@
 // ═══════════════════════════════════════════════════════════════════════════
+// m.kids CRM — Google Apps Script v7.109
+// v7.109: БЕЗПЕКА (Частина 1). (1) Новий роут getBdayStatus — читає лист bday_sync_status
+//         (замість прямого читання з фронту публічним API-ключем). (2) getUsers — ЛИШЕ роль CFO
+//         (перевірка через _getActor) і НІКОЛИ не віддає колонку «Пароль» (delete u.password).
+//         (3) Прибрано makeSheetPublic() + роут 'makePublic' (більше не робимо CRM-таблицю публічною).
+//         (4) Видалено тестові testGenerateInvoiceStudies/Extras (шарили PDF через ANYONE_WITH_LINK);
+//         реальний invoicePdfLink лишено робочим із позначкою на перегляд. Фронт переходить на роути
+//         getClients/getEmployees/getBdayStatus і повністю прибирає API_KEY та ID таблиць.
 // m.kids CRM — Google Apps Script v7.108
 // v7.108: getAllPayments({loc,name,year}) — історія оплат КОНКРЕТНОЇ дитини за весь рік напряму з
 //         Payment-файлу локації (факт/бюджет навчання, факт/бюджет доп, вступний, статус по 12 міс.;
@@ -476,7 +484,7 @@ function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.108', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.109', ts: new Date().toISOString()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -490,7 +498,7 @@ function doGet(e) {
     else if (action === 'runAggregateYearly') result = aggregatePaymentsYearly();
     else if (action === 'runSyncBdayStatus')  result = syncBdayStatusSheet();
     else if (action === 'getRegistryUrls')    result = getRegistryUrls();
-    else if (action === 'makePublic')         result = makeSheetPublic();
+    else if (action === 'getBdayStatus')      result = getBdayStatus();                                            // v7.109 роут замість прямого читання листа з фронту
     else if (action === 'getAttendance')      result = getAttendance(e);
     else if (action === 'diagLocPayment')     result = diagLocPayment(e); // v7.57 read-only: пер-лок Payment-файл
     else if (action === 'getHealthRecords')         result = getHealthRecords(e);
@@ -509,7 +517,7 @@ function doGet(e) {
     else if (action === 'salaryReconcileRows')       result = salaryReconcileRows(e.parameter.loc || '');
     else if (action === 'getSalaryOverview')         result = getSalaryOverview(e.parameter.year || '');
     else if (action === 'getOverviewAnalytics')      result = getOverviewAnalytics(e.parameter.year || '', e.parameter.month || '');
-    else if (action === 'getUsers')                  result = getUsers();
+    else if (action === 'getUsers')                  result = getUsers(Number(e.parameter && e.parameter.actorId || 0)); // v7.109 CFO-only, без пароля
     else if (action === 'getGroupNorms')             result = getGroupNorms();
     else if (action === 'getKomplektaciya')          result = getKomplektaciya({tab: (e.parameter && e.parameter.tab) || ''}); // v7.96 read-only структура файлу комплектації
     else if (action === 'getKomplektaciyaData')      result = getKomplektaciyaData({year: (e.parameter && e.parameter.year) || '', tab: (e.parameter && e.parameter.tab) || ''}); // v7.97
@@ -867,6 +875,27 @@ function getClients() {
     rows.push(obj);
   }
   return {ok:true, data:rows};
+}
+
+// v7.109: getBdayStatus — читає лист bday_sync_status (CRM) і віддає рядками-обʼєктами.
+// Замінює прямі читання листа з фронту публічним API-ключем (index.html/clients.html).
+function getBdayStatus() {
+  try {
+    var ss = getCRMSpreadsheet();
+    var sh = ss.getSheetByName(BDAY_STATUS_SHEET);
+    if (!sh) return {ok:true, data:[]};
+    var vals = sh.getDataRange().getValues();
+    if (vals.length < 2) return {ok:true, data:[]};
+    var headers = vals[0];
+    var rows = [];
+    for (var r = 1; r < vals.length; r++) {
+      if (!vals[r][0]) continue;
+      var obj = {};
+      for (var c = 0; c < headers.length; c++) obj[String(headers[c])] = vals[r][c];
+      rows.push(obj);
+    }
+    return {ok:true, data:rows};
+  } catch(e){ return {ok:false, error:e.message || String(e)}; }
 }
 
 // v7.105: масове перейменування ГРУПИ в картках Клієнти (кол. «Група») для локації.
@@ -1956,13 +1985,6 @@ function deleteClient(id) {
     }
   }
   return {ok:false, error:'Not found'};
-}
-
-function makeSheetPublic() {
-  var ss = getCRMSpreadsheet();
-  var file = DriveApp.getFileById(ss.getId());
-  file.setSharing(DriveApp.Access.ANYONE, DriveApp.Permission.VIEW);
-  return {ok:true, url:ss.getUrl()};
 }
 
 // ═══ v7.103: КОЛОНОК НА МІСЯЦЬ per-локація (Школа 228 = 7: додано «харчування»). ═══
@@ -5616,13 +5638,22 @@ function _parseUserRow(row) {
   };
 }
 
-function getUsers() {
+// v7.109: getUsers — ЛИШЕ роль CFO, і НІКОЛИ не віддає колонку «Пароль».
+// (Логін-екран не залежить від цього роуту — має hardcoded fallback MGMT_FALLBACK.)
+function getUsers(actorId) {
+  var actor = null;
+  try { actor = _getActor(Number(actorId) || 0); } catch(_e){ actor = null; }
+  if (!actor || String(actor.role || '').toLowerCase().trim() !== 'cfo') {
+    return {ok:false, error:'Permission denied', code:'PERM_DENIED'};
+  }
   var sh = _getUsersSheet();
   var data = sh.getDataRange().getValues();
   var users = [];
   for (var i = 1; i < data.length; i++) {
     if (!data[i][0]) continue;
-    users.push(_parseUserRow(data[i]));
+    var u = _parseUserRow(data[i]);
+    delete u.password;                 // пароль назовні НЕ виходить
+    users.push(u);
   }
   return {ok: true, users: users};
 }
@@ -12429,6 +12460,8 @@ function invoicePdfLink(opts){
     var bytes = Utilities.base64Decode(res.pdfBase64);
     var blob = Utilities.newBlob(bytes, 'application/pdf', fname);
     var file = folder.createFile(blob);
+    // ⚠️ v7.109 БЕЗПЕКА-ПОЗНАЧКА: реальний рахунок-PDF шариться ANYONE_WITH_LINK (щоб надіслати платнику).
+    // PDF містить ПІБ дитини/суму/реквізити. Лишено робочим; переглянути — обмежити доступ/термін дії посилання.
     try { file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch(e){}
     return {ok:true, url:file.getUrl(), filename:fname, sum:res.sum, juName:res.juName, edrpou:res.edrpou, iban:res.iban, bank:res.bank, payLink:res.payLink, lines:res.lines, buyerName:res.buyerName};
   } catch(e){
@@ -13711,19 +13744,7 @@ function _numberToUkrainianWords(amount){
 }
 
 // ТЕСТ: Гайдай Коля / Осокорки / червень 2026 / навчання → PDF у Drive (root), URL у лог.
-function testGenerateInvoiceStudies(){
-  var res = generateInvoicePDF({childName: 'Матущенко Сара', loc: 'Осокорки', type: 'studies', month: 6, year: 2026, invoiceDate: '01.06.2026'});
-  if (!res.ok){ Logger.log('[testInvoice] ❌ %s', res.error); return res; }
-  var bytes = Utilities.base64Decode(res.pdfBase64);
-  var blob = Utilities.newBlob(bytes, 'application/pdf', res.pdfFilename);
-  var file = DriveApp.createFile(blob);
-  try { file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch(e){}
-  Logger.log('[testInvoice] ✅ №%s | сума=%s (%s) | ЮО="%s" | покупець="%s"',
-    res.invoiceNumber, res.sum, res.sumWords, res.juName, res.buyerName);
-  Logger.log('[testInvoice] PDF URL:     %s', file.getUrl());
-  Logger.log('[testInvoice] download:    %s', 'https://drive.google.com/uc?export=download&id=' + file.getId());
-  return res;
-}
+// v7.109: testGenerateInvoiceStudies() ВИДАЛЕНО — тестова функція шарила PDF через ANYONE_WITH_LINK.
 
 // ───────────────────────────────────────────────────────────────────────────
 // v6.11.26 ТЕСТ вступного: записує план Матущенко Сарі (2×5000₴, 15.06 + 15.07.2026,
@@ -14062,19 +14083,7 @@ function testRollbackTestExtrasDryRun(){ return rollbackTestExtras({dryRun:true}
 function runRollbackTestExtras(){ return rollbackTestExtras({dryRun:false, confirm:'YES_WRITE'}); }
 
 // ТЕСТ extras-рахунку: Матущенко Сара / Осокорки / травень 2026 → PDF у Drive, URL у лог.
-function testGenerateInvoiceExtras(){
-  var res = generateInvoicePDF({childName: 'Матущенко Сара', loc: 'Осокорки', type: 'extras', month: 5, year: 2026, invoiceDate: '01.06.2026'});
-  if (!res.ok){ Logger.log('[testInvoiceExtras] ❌ %s', res.error); return res; }
-  var bytes = Utilities.base64Decode(res.pdfBase64);
-  var blob = Utilities.newBlob(bytes, 'application/pdf', res.pdfFilename);
-  var file = DriveApp.createFile(blob);
-  try { file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch(e){}
-  Logger.log('[testInvoiceExtras] ✅ №%s | сума=%s (%s) | ЮО="%s" | замовник="%s"',
-    res.invoiceNumber, res.sum, res.sumWords, res.juName, res.buyerName);
-  Logger.log('[testInvoiceExtras] PDF URL:  %s', file.getUrl());
-  Logger.log('[testInvoiceExtras] download: %s', 'https://drive.google.com/uc?export=download&id=' + file.getId());
-  return res;
-}
+// v7.109: testGenerateInvoiceExtras() ВИДАЛЕНО — тестова функція шарила PDF через ANYONE_WITH_LINK.
 
 // ───────────────────────────────────────────────────────────────────────────
 // v6.11.25 ДІАГНОСТИКА (КРОК B): скан усіх Клієнти на договір-поля, що збереглись
