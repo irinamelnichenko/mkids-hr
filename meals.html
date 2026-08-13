@@ -284,8 +284,30 @@ async function saveMarks(){
   var marks=adds.concat(rems); if(!marks.length){ toast('Немає змін'); return; }
   var btn=document.getElementById('saveBtn'); btn.disabled=true; btn.textContent='Збереження…';
   var res=await apiPost({action:'addMealMark',loc:S.loc,markedBy:(S.user.role||'')+' '+(S.user.origLoc||S.user.loc||''),marks:marks});
-  if(res && res.ok){ S.orig=Object.assign({},S.marks); toast('Збережено: +'+(res.added||0)+' / −'+(res.removed||0)); recalc(); }
+  if(res && res.ok){ S.orig=Object.assign({},S.marks); toast('Збережено: +'+(res.added||0)+' / −'+(res.removed||0)); recalc();
+    btn.disabled=false; btn.textContent='💾 Зберегти';
+    autoExportMeals(); }                                    // v7.108: одразу тихо в Payment (як додаткові)
   else { toast('Помилка: '+(res&&res.error||'?')); btn.disabled=false; }
+}
+// v7.108: тихий авто-експорт харчування у Payment ОДРАЗУ після збереження відміток — як у «Додаткових»
+// (scheduleAutoExport). Без прев'ю. Ідемпотентно (base+newSum у журналі), захист закритих місяців — на
+// боці бекенду (skippedClosed). Кнопка ручного експорту («📤 Експорт у Payment») лишається.
+async function autoExportMeals(){
+  try{
+    if(typeof setCloudStatus==='function') setCloudStatus('sync','харчування→Payment');
+    var w=await apiPost({action:'exportMealToPayments',loc:S.loc,year:S.y,dryRun:false});
+    if(w && w.ok){
+      if(w.totalAmount || w.updated) toast('📤 У Payment: '+fmtG(w.totalAmount||0)+' ('+(w.updated||0)+' рядків)');
+      if(w.skippedClosed && w.skippedClosed.length) toast('Пропущено закриті: '+w.skippedClosed.map(function(m){return MONTHS[m-1];}).join(', '));
+      if(typeof setCloudStatus==='function') setCloudStatus('ok');
+    } else {
+      if(typeof setCloudStatus==='function') setCloudStatus('err','експорт харчування');
+      console.warn('[meals auto-export]', w && w.error);
+    }
+  }catch(e){
+    if(typeof setCloudStatus==='function') setCloudStatus('err','експорт харчування');
+    console.warn('[meals auto-export]', e && e.message || e);
+  }
 }
 function findKid(name){ return S.kids.filter(function(k){return k.name===name;})[0]; }
 
