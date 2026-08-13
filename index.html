@@ -772,10 +772,7 @@ tr.emp-inc-green>td:first-child{border-left:4px solid transparent}
 'use strict';
 
 const CFG = {
-  API_KEY: 'AIzaSyBXY-1iAKeBdyWc7gbtNOe66yBa5-Mcmlc',
-  SHEET_ID: '1KeSelcGyp8ijUQOmzUjFlX78TOScMWAFm7Hjf33Doyo',
-  CRM_SHEET_ID: '1pA2q84BFsXWuUchIlu8um853od_PXr7KepLpTovUjLo',
-  RANGE: "'2025-2026'!A2:Z3000",  // v6.44: R→V; v6.48: V→Z (W=Оцінка JSON, інакше колонка поза діапазоном — урок v6.47.2)
+  // v7.109 БЕЗПЕКА: API_KEY / SHEET_ID / CRM_SHEET_ID / RANGE прибрано — читаємо через роути getClients/getEmployees/getBdayStatus.
   VAC_TEACHER: 28,
   VAC_DEFAULT: 14,
   PW: { hr: 'hr2024', director: 'dir2024' },
@@ -937,29 +934,25 @@ async function ensureClientsLoaded(){
     }
   } catch(e) {}
   try {
-    const range = encodeURIComponent("'Клієнти'!A1:F3000");
-    const url = `https://sheets.googleapis.com/v4/spreadsheets/${CFG.CRM_SHEET_ID}/values/${range}?key=${CFG.API_KEY}`;
-    const r = await fetch(url);
+    // v7.109 БЕЗПЕКА: бекендний роут getClients замість прямого читання листа публічним ключем.
+    const r = await fetch(authScriptUrl() + '?action=getClients', {redirect:'follow'});
     if (!r.ok) throw new Error(r.status);
     const j = await r.json();
-    const rows = j.values || [];
-    const hdr = rows[0] || [];
-    const ix = (n) => hdr.indexOf(n);
-    const idI=ix('ID'), nameI=ix('ПІБ дитини'), locI=ix('Локація'), groupI=ix('Група'), bdayI=ix('Дата народження');
+    const rows = (j && j.data) || [];
     const crm = {};
-    for (let i=1; i<rows.length; i++) {
+    for (let i=0; i<rows.length; i++) {
       const row = rows[i];
-      const name = row[nameI] || '';
-      const loc = row[locI] || '';
-      const group = row[groupI] || '';
+      const name = String(row['ПІБ дитини'] || '');
+      const loc = String(row['Локація'] || '');
+      const group = String(row['Група'] || '');
       if (!name && !loc) continue;
-      const id = row[idI] || _childId(name, group, loc);
+      const id = row['ID'] || _childId(name, group, loc);
       crm[id] = {
         id: id,
         name: name,
         loc: loc,
         group: group,
-        bday: row[bdayI] || ''
+        bday: String(row['Дата народження'] || '')
       };
     }
     S.crm = crm;
@@ -973,29 +966,24 @@ async function ensureClientsLoaded(){
 async function loadBdayStatus(){
   if (S.bdayStatus && Object.keys(S.bdayStatus).length) return;
   try {
-    const range = encodeURIComponent("'bday_sync_status'!A1:J3000");
-    const url = `https://sheets.googleapis.com/v4/spreadsheets/${CFG.CRM_SHEET_ID}/values/${range}?key=${CFG.API_KEY}`;
-    const r = await fetch(url);
+    // v7.109 БЕЗПЕКА: бекендний роут getBdayStatus замість прямого читання листа публічним ключем.
+    const r = await fetch(authScriptUrl() + '?action=getBdayStatus', {redirect:'follow'});
     if (!r.ok) throw new Error(r.status);
     const j = await r.json();
-    const rows = j.values || [];
-    if (rows.length < 2) { S.bdayStatus = {}; return; }
-    const hdr = rows[0];
-    const ix = (n) => hdr.indexOf(n);
-    const idI=ix('ChildID'), nameI=ix('Name'), locI=ix('Loc'),
-          bdayI=ix('Bday'), cnI=ix('ContractNumber'), statusI=ix('Status'), matI=ix('MatchedRegName');
+    const rows = (j && j.data) || [];
+    if (!rows.length) { S.bdayStatus = {}; return; }
     const map = {};
-    for (let i=1; i<rows.length; i++) {
+    for (let i=0; i<rows.length; i++) {
       const row = rows[i];
-      const id = String(row[idI]||'').trim();
+      const id = String(row['ChildID']||'').trim();
       if (!id) continue;
       map[id] = {
-        name: String(row[nameI]||'').trim(),
-        loc:  String(row[locI]||'').trim(),
-        bday: String(row[bdayI]||'').trim(),
-        contractNumber: String(row[cnI]||'').trim(),
-        status: String(row[statusI]||'').trim(),
-        matchedReg: String(row[matI]||'').trim()
+        name: String(row['Name']||'').trim(),
+        loc:  String(row['Loc']||'').trim(),
+        bday: String(row['Bday']||'').trim(),
+        contractNumber: String(row['ContractNumber']||'').trim(),
+        status: String(row['Status']||'').trim(),
+        matchedReg: String(row['MatchedRegName']||'').trim()
       };
     }
     S.bdayStatus = map;
@@ -1010,51 +998,35 @@ async function fetchEmps(force=false) {
     const c = localStorage.getItem(CFG.CK);
     if (c) { const {data,ts}=JSON.parse(c); if (Date.now()-ts < CFG.TTL) { S.emps=data; freezeEmps(); S.lastSync=new Date(ts); updSync(); return; } }
   }
-  const url = `https://sheets.googleapis.com/v4/spreadsheets/${CFG.SHEET_ID}/values/${CFG.RANGE}?key=${CFG.API_KEY}`;
+  // v7.109 БЕЗПЕКА: бекендний роут getEmployees замість прямого читання HR-листа публічним ключем.
+  // Роль/скоуп бере бекенд із actorId (менеджмент → усі; директор/медсестра/вихователь → своя локація).
+  const url = authScriptUrl() + '?action=getEmployees&actorId=' + encodeURIComponent((S.user && S.user.id) || 0);
   try {
-    const r = await fetch(url);
+    const r = await fetch(url, {redirect:'follow'});
     if (!r.ok) throw new Error(r.status);
     const j = await r.json();
-    // rowNum: 1-based sheet row (RANGE стартує з A2 → i=0 ⇒ row 2). Потрібен
-    // для saveEmployee/deleteEmployee Apps Script — обчислюємо ДО будь-яких
-    // .filter(), щоб індекс відповідав реальному рядку в Google Sheets.
-    S.emps = (j.values||[]).map((row,i)=>{
-      if (!row.some(c=>c&&c.trim())) return null;
-      return {
-        rowNum: i + 2,
-        _rowIdx: i,
-        key: mkKey(row[4],row[5],row[12]||row[13]),
-        dir:(row[0]||'').trim(),  // A=Напрямок
-        typ:(row[1]||'').trim(),  // B=Тип
-        loc:(row[2]||'').trim(),  // C=Локація
-        grp:(row[3]||'').trim(),  // D=Група
-        last:(row[4]||'').trim(), // E=Прізвище
-        first:(row[5]||'').trim(),// F=Ім'я
-        phone:(()=>{const p=(row[6]||'').trim().replace(/\s/g,'');return p&&!p.startsWith('0')&&/^\d{9}$/.test(p)?'0'+p:p;})(),// G=Контакт
-        pos:(row[7]||'').trim(),  // H=Посада
-        stat:(row[8]||'').trim(), // I=Статус
-        bday:(row[9]||'').trim(), // J=День нар.
-        bmon:(row[10]||'').trim(),// K=Місяць нар.
-        bdate:(row[11]||'').trim(),// L=Дата народження (повна)
-        wday:(row[12]||'').trim(), // M=Перший робочий день
-        hired:(row[13]||'').trim(),// N=Дата працевлаштування
-        fired:(row[14]||'').trim(),// O=Дата звільнення
-        email:(row[17]||'').trim(),// R=Електронна адреса
-        // v6.44 — нові поля картки (append-only S:V)
-        passport:(row[18]||'').trim(), // S=Паспорт
-        rate:(row[19]||'').trim(),     // T=Ставка ЗП
-        workCond:(row[20]||'').trim(), // U=Умови роботи
-        calcModel:(row[21]||'').trim(),// V=Модель розрахунку
-        assessment:(()=>{try{return JSON.parse(row[22]||'{}')||{};}catch(e){return {};}})(), // W=Оцінка(JSON) v6.48
-        matReturn:(row[23]||'').trim() // X=Дата виходу з декрету v6.59
-      };
-    }).filter(e=>e && (e.last||e.first)).map((e,i)=>({...e,id:i}));
+    if (!j || !j.ok) throw new Error((j && (j.error||j.code)) || 'getEmployees failed');
+    // items уже містять ті самі поля (_parseEmpRow). Доповнюємо тим, що фронт рахував локально:
+    // _rowIdx (з rowNum), key (mkKey), нормалізований телефон, assessment як обʼєкт, id (індекс).
+    S.emps = (j.items||[]).filter(e=>e && (e.last||e.first)).map((e,i)=>{
+      let p=String(e.phone||'').trim().replace(/\s/g,'');
+      if (p && !p.startsWith('0') && /^\d{9}$/.test(p)) p='0'+p;
+      let assessment={};
+      try { assessment = (typeof e.assessment==='string' ? JSON.parse(e.assessment||'{}') : (e.assessment||{})) || {}; } catch(_e){ assessment={}; }
+      return Object.assign({}, e, {
+        _rowIdx: (Number(e.rowNum)||2) - 2,
+        key: mkKey(e.last, e.first, e.wday||e.hired),
+        phone: p,
+        assessment: assessment,
+        id: i
+      });
+    });
     safeSetItem(CFG.CK, JSON.stringify({data:S.emps,ts:Date.now()}));
     freezeEmps();
     S.lastSync=new Date();
     updSync();
   } catch(e) {
-    console.error('Sheets',e);
+    console.error('getEmployees',e);
     const c=localStorage.getItem(CFG.CK);
     if (c) S.emps=JSON.parse(c).data;
     updSync(true);

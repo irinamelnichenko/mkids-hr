@@ -631,9 +631,7 @@ var CFG = {
   OVERVIEW_CACHE_TTL: 5 * 60 * 1000,
   // HR Sheets — той самий лист що index.html (fetchEmps). Кеш ключ ділимо
   // з ним щоб не дублювати запит.
-  HR_API_KEY:    'AIzaSyBXY-1iAKeBdyWc7gbtNOe66yBa5-Mcmlc',
-  HR_SHEET_ID:   '1KeSelcGyp8ijUQOmzUjFlX78TOScMWAFm7Hjf33Doyo',
-  HR_RANGE:      "'2025-2026'!A2:R3000",
+  // v7.109 БЕЗПЕКА: HR_API_KEY / HR_SHEET_ID / HR_RANGE прибрано — HR читаємо роутом getEmployees.
   HR_CACHE_KEY:  'hr_mkids_cache_v6',
   HR_CACHE_TTL:  5 * 60 * 1000
 };
@@ -1129,31 +1127,28 @@ async function ensureHrEmpsLoaded(force){
       }
     } catch(e){}
   }
-  var url = 'https://sheets.googleapis.com/v4/spreadsheets/' + CFG.HR_SHEET_ID +
-            '/values/' + encodeURIComponent(CFG.HR_RANGE) +
-            '?key=' + CFG.HR_API_KEY;
-  var r = await fetch(url);
+  // v7.109 БЕЗПЕКА: бекендний роут getEmployees замість прямого читання HR-листа публічним ключем.
+  var url = CFG.SCRIPT_URL + '?action=getEmployees&actorId=' + encodeURIComponent((S.user && S.user.id) || 0);
+  var r = await fetch(url, {redirect:'follow'});
   if (!r.ok) throw new Error('HR Sheets HTTP ' + r.status);
   var j = await r.json();
-  var emps = (j.values || []).filter(function(row){
-    return row.some(function(c){ return c && String(c).trim(); });
-  }).map(function(row, i){
+  var emps = ((j && j.items) || []).map(function(e){
     return {
-      _rowIdx: i,
-      dir:   (row[0]  || '').trim(),
-      typ:   (row[1]  || '').trim(),
-      loc:   (row[2]  || '').trim(),
-      grp:   (row[3]  || '').trim(),
-      last:  (row[4]  || '').trim(),
-      first: (row[5]  || '').trim(),
-      phone: (row[6]  || '').trim(),
-      pos:   (row[7]  || '').trim(),
-      stat:  (row[8]  || '').trim(),
-      bdate: (row[11] || '').trim(),
-      wday:  (row[12] || '').trim(),
-      hired: (row[13] || '').trim(),
-      fired: (row[14] || '').trim(),
-      email: (row[17] || '').trim()
+      _rowIdx: (Number(e.rowNum)||2) - 2,   // 0-based рядок HR-листа (rowNum − 2)
+      dir:   (e.dir   || '').trim(),
+      typ:   (e.typ   || '').trim(),
+      loc:   (e.loc   || '').trim(),
+      grp:   (e.grp   || '').trim(),
+      last:  (e.last  || '').trim(),
+      first: (e.first || '').trim(),
+      phone: (e.phone || '').trim(),
+      pos:   (e.pos   || '').trim(),
+      stat:  (e.stat  || '').trim(),
+      bdate: (e.bdate || '').trim(),
+      wday:  (e.wday  || '').trim(),
+      hired: (e.hired || '').trim(),
+      fired: (e.fired || '').trim(),
+      email: (e.email || '').trim()
     };
   }).filter(function(e){ return e.last || e.first; });
   try { safeSetItem(CFG.HR_CACHE_KEY, JSON.stringify({data: emps, ts: Date.now()})); } catch(e){}

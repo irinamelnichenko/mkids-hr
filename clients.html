@@ -1006,8 +1006,7 @@ var CFG = {
   CLI_CACHE:     'crm_cli_v3',
   PW_HR:         'hr2024',
   TTL:           15 * 60 * 1000,
-  API_KEY:       'AIzaSyBXY-1iAKeBdyWc7gbtNOe66yBa5-Mcmlc',
-  CRM_SHEET_ID:  '1pA2q84BFsXWuUchIlu8um853od_PXr7KepLpTovUjLo',
+  // v7.109 БЕЗПЕКА: прямий API_KEY і CRM_SHEET_ID прибрано — усі читання через бекендні роути.
   MONTHS_UA:    ['січень','лютий','березень','квітень','травень','червень','липень','серпень','вересень','жовтень','листопад','грудень'],
   MONTHS_JS:    [0,1,2,3,4,5,6,7,8,9,10,11],
   MONTHS_DISP:  ['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'],
@@ -1518,24 +1517,8 @@ async function cloudFetch(url,opts){
 }
 
 // ─── DIRECT SHEETS API ────────────────────────────────────────────────────────
-async function sheetsRead(sheetName, range){
-  var r=encodeURIComponent("'"+sheetName+"'!"+range);
-  var url='https://sheets.googleapis.com/v4/spreadsheets/'+CFG.CRM_SHEET_ID+'/values/'+r+'?key='+CFG.API_KEY;
-  var res=await fetch(url);
-  if(!res.ok) throw new Error('HTTP '+res.status);
-  var j=await res.json();
-  if(j.error) throw new Error(j.error.message||j.error.status);
-  return j.values||[];
-}
-function rowsToObjects(values){
-  if(!values||values.length<2) return [];
-  var hdr=values[0];
-  return values.slice(1).map(function(row){
-    var o={};
-    hdr.forEach(function(h,i){ o[String(h)]=row[i]!==undefined?row[i]:''; });
-    return o;
-  }).filter(function(o){ return Object.keys(o).some(function(k){ return o[k]!==''; }); });
-}
+// v7.109 БЕЗПЕКА: sheetsRead/rowsToObjects (прямий доступ до Google Sheets API публічним ключем)
+// ПРИБРАНО. Клієнти й bday-статус тепер читаються бекендними роутами getClients/getBdayStatus.
 
 // ─── DATA LOADING ─────────────────────────────────────────────────────────────
 // v7.73: apiGet із повторами. tries=3 → початкова спроба + 2 повтори; паузи 1с, потім 3с.
@@ -1645,30 +1628,24 @@ async function loadClients(force){
   console.log('[loadClients] fetching from Sheets...');
   var rows=[];
   try{
-    var vals=await sheetsRead('Клієнти','A1:AO2000');  // v6.47.2: AE→AO — охопити Email/Здоров'я(AJ)/Розвиток(AK), інакше нові колонки не читались
-    rows=rowsToObjects(vals).filter(function(r){ return r['ID']; });
-    if(!rows.length) throw new Error('empty response');
-  }catch(e){
-    try{
-      var j=await _apiGetRetry('getClients', 3);   // v7.73: 3 спроби (1с, 3с) перед offline
-      rows=j.data||[];
-      if(!rows.length) throw new Error('empty response from Apps Script');
-    }catch(e2){
-      // v7.53: CLI_CACHE (crm_cli_v3) ПРИБРАНО як дубль crm_mkids_v3. Offline-картки
-      // беруться з S.crm, який loadLocalCRM уже завантажив з SK ДО loadClients (initApp).
-      // Це НЕ критична помилка — офлайн-ростер із S.crm є (індикатор лишається зеленим).
-      console.warn('[loadClients] мережа впала після повторів — offline-режим, картки з S.crm (crm_mkids_v3):', e2 && e2.message);
-      console.log('[loadClients] offline: карток у S.crm =', Object.keys(S.crm||{}).length);
-      return;
-    }
+    // v7.109: лише бекендний роут getClients (прямий ключ прибрано). Повертає ті самі
+    // обʼєкти-рядки, що й раніше rowsToObjects — mergeCRMFromCloud уже сумісний (був fallback).
+    var j=await _apiGetRetry('getClients', 3);   // 3 спроби (1с, 3с) перед offline
+    rows=(j&&j.data)||[];
+    if(!rows.length) throw new Error('empty response from Apps Script');
+  }catch(e2){
+    // Offline-картки беруться з S.crm (loadLocalCRM завантажив із SK до loadClients).
+    console.warn('[loadClients] мережа впала після повторів — offline-режим, картки з S.crm:', e2 && e2.message);
+    console.log('[loadClients] offline: карток у S.crm =', Object.keys(S.crm||{}).length);
+    return;
   }
   mergeCRMFromCloud(rows);
 }
 
 async function loadBdayStatus(){
   try {
-    var vals = await sheetsRead('bday_sync_status', 'A1:J3000');
-    var rows = rowsToObjects(vals).filter(function(r){ return r['ChildID']; });
+    var jb = await apiGet('getBdayStatus');                       // v7.109: роут замість прямого читання
+    var rows = ((jb&&jb.data)||[]).filter(function(r){ return r['ChildID']; });
     var map = {};
     rows.forEach(function(r){
       var id = String(r['ChildID']||'').trim();
@@ -3212,16 +3189,7 @@ function renderSettings(){
     +'</tbody></table></div>'
     +'<div style="margin-top:10px"><button class="btn btn-secondary btn-sm" onclick="refreshAll()">🔄 Оновити</button></div>'
     +'</div></div>'
-
-    +'<div class="card"><div class="card-hd"><h3>📁 CRM таблиця</h3></div><div class="modal-bd">'
-    +'<div class="alert alert-info" style="margin-bottom:12px">CRM Sheet ID: <code style="font-size:11px">'+esc(CFG.CRM_SHEET_ID)+'</code></div>'
-    +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">'
-    +'<a href="https://docs.google.com/spreadsheets/d/'+esc(CFG.CRM_SHEET_ID)+'" target="_blank" class="btn btn-secondary btn-sm">📊 Відкрити CRM таблицю</a>'
-    +'<button class="btn btn-secondary btn-sm" onclick="makeSheetPublic()">🔓 Відкрити публічний доступ</button>'
-    +'</div>'
-    +'<div id="publicMsg" style="font-size:13px"></div>'
-    +'<div class="alert alert-warn" style="margin-top:10px;font-size:12px">⚠️ Публічний доступ дозволяє читати дані таблиці без авторизації. Запис залишається тільки через Apps Script.</div>'
-    +'</div></div>'
+    // v7.109 БЕЗПЕКА: картку «CRM таблиця» (ID таблиці + «відкрити публічний доступ») прибрано.
     +'</div>';
 }
 
@@ -3308,22 +3276,7 @@ async function triggerAggregate(){
   }
 }
 
-async function makeSheetPublic(){
-  var el=document.getElementById('publicMsg');
-  el.innerHTML='<span style="color:var(--orange)">🔓 Відкриваємо доступ…</span>';
-  try{
-    var j=await apiGet('makePublic');
-    if(j.ok){
-      el.innerHTML='<span style="color:var(--green)">✅ Публічний доступ відкрито.</span>';
-      localStorage.removeItem(CFG.PAY_CACHE);
-      localStorage.removeItem(CFG.CLI_CACHE);
-    } else {
-      el.innerHTML='<span style="color:var(--red2)">❌ '+esc(j.error||'Помилка')+'</span>';
-    }
-  }catch(e){
-    el.innerHTML='<span style="color:var(--red2)">❌ '+esc(e.message)+'</span>';
-  }
-}
+// v7.109 БЕЗПЕКА: функцію makeSheetPublic() прибрано (роут makePublic видалено з бекенду).
 
 // ─── CHILD CARD MODAL ─────────────────────────────────────────────────────────
 function setLocFieldMode(isNew){
@@ -4706,9 +4659,7 @@ function renderAbsRequests(){
     } else if(a.totalPct){
       calcInfo='−'+a.totalPct+'%'+(a.totalAmount>0?' (−'+fmtN(a.totalAmount)+' грн)':'');
     }
-    var locObj=S.locs.find(function(l){ return l.loc===c.loc; });
-    var sheetUrl=locObj&&locObj.sheetName
-      ?'https://docs.google.com/spreadsheets/d/'+CFG.CRM_SHEET_ID+'/edit#gid=0':'';
+    var sheetUrl='';   // v7.109 БЕЗПЕКА: посилання на CRM-таблицю прибрано (не світимо ID)
     var actions='';
     if(a.status==='pending'||a.status==='processing'){
       actions=(sheetUrl?'<a href="'+esc(sheetUrl)+'" target="_blank" class="btn btn-xs btn-secondary" style="text-decoration:none;font-size:11px">📄 Відкрити Sheet</a> ':'')
