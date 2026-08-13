@@ -1,26 +1,20 @@
 {
-  "name": "m.kids HR",
-  "short_name": "m.kids",
-  "description": "m.kids HR — CRM для садочків та шкіл m.kids",
+  "name": "m.kids System",
+  "short_name": "m.kids System",
+  "description": "m.kids System — CRM для садочків та шкіл m.kids",
+  "id": "/mkids-hr/",
   "start_url": "/mkids-hr/",
   "scope": "/mkids-hr/",
   "display": "standalone",
+  "display_override": ["standalone"],
   "orientation": "portrait",
   "background_color": "#ffffff",
   "theme_color": "#FF6B35",
   "lang": "uk",
   "icons": [
-    {
-      "src": "icon-192.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any maskable"
-    },
-    {
-      "src": "icon-512.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "any maskable"
-    }
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ]
 }
