@@ -678,6 +678,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
       <div class="tab" onclick="switchTab(7)" data-permission="card-child-health">🩺 Здоров'я</div>
       <div class="tab" onclick="switchTab(8)" data-permission="card-child-development">🌱 Розвиток</div>
       <div class="tab" onclick="switchTab(9)" data-permission="card-child-banner">📄 Документи</div>
+      <div class="tab" onclick="switchTab(10)" data-permission="card-child-history">🎨 Додаткові</div>
     </div>
     <div class="modal-bd">
       <!-- v6.29: банер розірваного договору (показується якщо статус=terminated) -->
@@ -886,6 +887,10 @@ tbody tr.clickable:hover td{background:#f0f7ff}
           <input type="text" id="fDadDoc" placeholder="напр. серія+номер паспорта або номер ID-карти"></div>
         <div class="fg"><label>РНОКПП тата</label>
           <input type="text" id="fDadRnokpp" placeholder="10 цифр" maxlength="10" oninput="validateRnokpp(this)"></div>
+      </div>
+      <!-- Tab 10: Додаткові (v7.108) — DOM-індекс 10 = switchTab(10), останній -->
+      <div class="tab-pane" id="tp10" data-permission="card-child-history">
+        <div class="loading"><div class="spinner"></div><p>Завантаження…</p></div>
       </div>
     </div>
     <div class="modal-ft">
@@ -3411,6 +3416,65 @@ function switchTab(i){
   if(i===5) renderPayHistory();
   if(i===7) renderHealthTab();
   if(i===8) renderDevelopmentTab();   // v6.47.2: Розвиток — tab 8 (перед Документи)
+  if(i===10) renderExtrasHistory();   // v7.108: Додаткові заняття + харчування по дитині
+}
+
+// v7.108: історія ДОДАТКОВИХ занять (і харчування) КОНКРЕТНОЇ дитини за рік, по місяцях.
+// Дані по імені+локації, БЕЗ фільтра групи — щоб історія лишалась при перейменуванні груп.
+async function renderExtrasHistory(){
+  var el=document.getElementById('tp10');
+  if(!el) return;
+  var id=S.editId, card=S.crm[id]||{};
+  var name=(card.name||'').trim(), loc=(card.loc||'').trim();
+  var year=(new Date()).getFullYear();
+  if(!name||!loc){ el.innerHTML='<div class="empty"><span class="ei">🎨</span><h4>Немає даних</h4><p>Не вказано дитину або локацію.</p></div>'; return; }
+  el.innerHTML='<div class="loading"><div class="spinner"></div><p>Завантаження додаткових за '+year+'…</p></div>';
+  function nrm(s){ return String(s||'').trim().toLowerCase().replace(/\s+/g,' '); }
+  var want=nrm(name), aJson=null, mJson=null;
+  try{
+    var res=await Promise.all([
+      apiGet('getAttendanceMarks&loc='+encodeURIComponent(loc)+'&from='+year+'-01-01&to='+year+'-12-31'),
+      apiGet('getMealMarks&loc='+encodeURIComponent(loc)+'&year='+year).catch(function(){ return {ok:true, marks:[]}; })
+    ]);
+    aJson=res[0]; mJson=res[1];
+  }catch(e){
+    el.innerHTML='<div class="empty"><span class="ei">⚠️</span><h4>Не вдалось завантажити</h4><p>'+esc(e.message||String(e))+'</p>'
+      +'<button class="btn btn-secondary btn-sm" style="margin-top:12px" onclick="renderExtrasHistory()">🔄 Ще раз</button></div>'; return;
+  }
+  var acts=((aJson&&aJson.items)||[]).filter(function(m){ return nrm(m.child)===want; });
+  var meals=((mJson&&mJson.marks)||[]).filter(function(m){ return nrm(m.child)===want; });
+
+  function block(list, nameKey, emoji){
+    var byM={}; list.forEach(function(x){ var mk=String(x.date||'').slice(0,7); if(mk.length===7)(byM[mk]=byM[mk]||[]).push(x); });
+    var keys=Object.keys(byM).sort().reverse(), yTot=0, yCnt=0, h='';
+    keys.forEach(function(mk){
+      var arr=byM[mk].slice().sort(function(a,b){ return String(a.date).localeCompare(String(b.date)); });
+      var sub=arr.reduce(function(s,x){ return s+(Number(x.price)||0); },0); yTot+=sub; yCnt+=arr.length;
+      var mi=+mk.split('-')[1]-1;
+      h+='<div style="margin:10px 0 4px;font-weight:700;color:var(--dark)">▸ '+esc(CFG.MONTHS_DISP[mi]||mk)+' '+mk.slice(0,4)+' — '+arr.length+' · '+fmtN(sub)+' грн</div>';
+      h+='<table class="pay-hist-table"><tbody>';
+      arr.forEach(function(x){
+        var dd=String(x.date).slice(8,10)+'.'+String(x.date).slice(5,7);
+        h+='<tr><td style="width:70px">'+dd+'</td><td>'+esc(x[nameKey]||'—')+'</td><td style="text-align:right;width:90px">'+fmtN(Number(x.price)||0)+'</td></tr>';
+      });
+      h+='</tbody></table>';
+    });
+    if(!keys.length) return {html:'<div class="empty" style="padding:14px"><span class="ei">'+emoji+'</span><p>Немає записів за '+year+'</p></div>', tot:0, cnt:0};
+    h+='<div style="margin-top:8px;padding-top:8px;border-top:2px solid #e8ecf0;font-weight:700">РАЗОМ за рік: '+yCnt+' · '+fmtN(yTot)+' грн</div>';
+    return {html:h, tot:yTot, cnt:yCnt};
+  }
+
+  var aBlk=block(acts, 'activityName', '🎨');
+  var html='<div style="font-size:14px;font-weight:700;color:var(--dark);margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">'
+    +'<span>🎨 Додаткові заняття — '+year+' · по дитині (незалежно від групи)</span>'
+    +'<button class="btn btn-secondary btn-sm" onclick="renderExtrasHistory()">🔄 Оновити</button></div>';
+  html+='<div class="tbl-wrap">'+aBlk.html+'</div>';
+  if(meals.length){
+    var mBlk=block(meals, 'itemName', '🍽');
+    html+='<div style="font-size:14px;font-weight:700;color:var(--dark);margin:20px 0 6px">🍽 Харчування — '+year+'</div>';
+    html+='<div class="tbl-wrap">'+mBlk.html+'</div>';
+  }
+  el.innerHTML=html;
 }
 
 function populateForm(id){
