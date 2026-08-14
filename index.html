@@ -938,7 +938,7 @@ async function ensureClientsLoaded(){
     const r = await fetch(authScriptUrl() + '?action=getClients', {redirect:'follow'});
     if (!r.ok) throw new Error(r.status);
     const j = await r.json();
-    const rows = (j && j.data) || [];
+    const rows = _normRows((j && j.data) || []);   // v7.110: типізовані значення → рядки
     const crm = {};
     for (let i=0; i<rows.length; i++) {
       const row = rows[i];
@@ -970,7 +970,7 @@ async function loadBdayStatus(){
     const r = await fetch(authScriptUrl() + '?action=getBdayStatus', {redirect:'follow'});
     if (!r.ok) throw new Error(r.status);
     const j = await r.json();
-    const rows = (j && j.data) || [];
+    const rows = _normRows((j && j.data) || []);   // v7.110: типізовані значення → рядки
     if (!rows.length) { S.bdayStatus = {}; return; }
     const map = {};
     for (let i=0; i<rows.length; i++) {
@@ -2411,6 +2411,25 @@ function esc(s){return String(s||'').replace(/"/g,'&quot;').replace(/</g,'&lt;')
 // onclick="fn('${escJs(x)}')". Екранує \ і ' (інакше апостроф у назві локації,
 // напр. "Кар'єрна", ламає JS-рядок), плюс " та < для безпеки HTML-атрибута.
 function escJs(s){return String(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'&quot;').replace(/</g,'&lt;');}
+// v7.110: нормалізація рядків getClients/getBdayStatus — число→рядок; ISO-datetime→YYYY-MM-DD (Київ),
+// щоб дати народження/договору не з'їжджали на день від timezone і код не отримував Date/число.
+function _normCellVal(v){
+  if (v == null) return '';
+  if (typeof v === 'number')  return String(v);
+  if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';
+  if (typeof v === 'string'){
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(v)){
+      var d = new Date(v);
+      if (!isNaN(d.getTime())){
+        try { return new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Kiev',year:'numeric',month:'2-digit',day:'2-digit'}).format(d); }
+        catch(_e){ return v.slice(0,10); }
+      }
+    }
+    return v;
+  }
+  return String(v);
+}
+function _normRows(rows){ return (rows||[]).map(function(r){ var o={}; for (var k in r){ if (Object.prototype.hasOwnProperty.call(r,k)) o[k]=_normCellVal(r[k]); } return o; }); }
 // Кожен set() рендерить новий DOM. applyRoleVisibility() викликаємо одразу
 // щоб data-permission атрибути на свіжих елементах (картки співробітників,
 // списки тощо) оброблялись — інакше нові елементи лишаються видимими попри

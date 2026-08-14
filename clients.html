@@ -1090,7 +1090,32 @@ var S = {
 };
 
 // ─── UTILS ────────────────────────────────────────────────────────────────────
-function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+// v7.110: esc приводить до рядка через String() — getClients віддає ТИПІЗОВАНІ значення
+// (числа: Сума/Вступний/РНОКПП; ISO-дати), а не рядки, як раніше пряме читання таблиці.
+function esc(s){ return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+// v7.110: нормалізація рядків getClients/getBdayStatus у СТАРИЙ рядковий контракт:
+// число → рядок; ISO-datetime → YYYY-MM-DD у Києві (усуває off-by-one від timezone).
+function _normCellVal(v){
+  if (v == null) return '';
+  if (typeof v === 'number')  return String(v);
+  if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';
+  if (typeof v === 'string'){
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(v)){
+      var d = new Date(v);
+      if (!isNaN(d.getTime())){
+        try { return new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Kiev',year:'numeric',month:'2-digit',day:'2-digit'}).format(d); }
+        catch(_e){ return v.slice(0,10); }
+      }
+    }
+    return v;
+  }
+  return String(v);
+}
+function _normRows(rows){
+  return (rows||[]).map(function(r){
+    var o={}; for (var k in r){ if (Object.prototype.hasOwnProperty.call(r,k)) o[k]=_normCellVal(r[k]); } return o;
+  });
+}
 // JSON.stringify дає валідний JS-літерал в "..." з усіма екранованими спецсимволами.
 // Далі HTML-encode для безпечного вставлення в атрибут (виходить в "..." обгортці onclick).
 function escAttrJS(s) {
@@ -1631,7 +1656,7 @@ async function loadClients(force){
     // v7.109: лише бекендний роут getClients (прямий ключ прибрано). Повертає ті самі
     // обʼєкти-рядки, що й раніше rowsToObjects — mergeCRMFromCloud уже сумісний (був fallback).
     var j=await _apiGetRetry('getClients', 3);   // 3 спроби (1с, 3с) перед offline
-    rows=(j&&j.data)||[];
+    rows=_normRows((j&&j.data)||[]);             // v7.110: типізовані значення → рядки (як раніше)
     if(!rows.length) throw new Error('empty response from Apps Script');
   }catch(e2){
     // Offline-картки беруться з S.crm (loadLocalCRM завантажив із SK до loadClients).
@@ -1645,7 +1670,7 @@ async function loadClients(force){
 async function loadBdayStatus(){
   try {
     var jb = await apiGet('getBdayStatus');                       // v7.109: роут замість прямого читання
-    var rows = ((jb&&jb.data)||[]).filter(function(r){ return r['ChildID']; });
+    var rows = _normRows((jb&&jb.data)||[]).filter(function(r){ return r['ChildID']; }); // v7.110: типізовані → рядки
     var map = {};
     rows.forEach(function(r){
       var id = String(r['ChildID']||'').trim();
