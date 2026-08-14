@@ -1,4 +1,12 @@
 // ═══════════════════════════════════════════════════════════════════════════
+// m.kids CRM — Google Apps Script v7.110
+// v7.110: ТОКЕН-АВТОРИЗАЦІЯ (Частина 2). Секрет у PropertiesService (AUTH_TOKEN_SECRET, ніколи в коді).
+//         authenticate видає підписаний токен base64url(payload).base64url(HMAC-SHA256(payload,SECRET)),
+//         payload={id,role,loc,exp=+12год}. Гейт у doGet/doPost:
+//           ЕТАП 1 (зараз): лише ЛОГ у лист «Авторизація_Лог», хто без токена — НЕ блокує.
+//           ЕТАП 2 (прапорець Script Property AUTH_ENFORCE='1'): відмова без токена; роль/локація з
+//           токена — _getActor/_isPasswordAdmin/задачі беруть id з токена (не з actorId), getSalaryData
+//           скоупить локацію з токена. Поки AUTH_ENFORCE не '1' — поведінка НЕ змінюється. ping без токена.
 // m.kids CRM — Google Apps Script v7.109
 // v7.109: БЕЗПЕКА (Частина 1). (1) Новий роут getBdayStatus — читає лист bday_sync_status
 //         (замість прямого читання з фронту публічним API-ключем). (2) getUsers — ЛИШЕ роль CFO
@@ -480,11 +488,85 @@ function writeClientsHeader(sheet) {
   sheet.setFrozenRows(1);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.110 ТОКЕН-АВТОРИЗАЦІЯ (Частина 2). Секрет — ЛИШЕ у PropertiesService (ніколи в коді/фронті).
+// authenticate видає токен: base64url(payload) + '.' + base64url(HMAC-SHA256(payload, SECRET)),
+// payload = {id, role, loc, exp}, exp = +12год. Гейт у doGet/doPost:
+//   ЕТАП 1 (зараз): лише ЛОГ, хто прийшов без токена — НЕ блокує.
+//   ЕТАП 2 (прапорець AUTH_ENFORCE='1' у Script Properties): відмова без токена + роль/локація з токена.
+// ping і authenticate — завжди без токена.
+// ═══════════════════════════════════════════════════════════════════════════
+var _CURRENT_AUTH = null;                 // виставляється гейтом на час ОДНОГО запиту
+var AUTH_LOG_SHEET = 'Авторизація_Лог';
+
+function _authSecret(){
+  var p = PropertiesService.getScriptProperties();
+  var s = p.getProperty('AUTH_TOKEN_SECRET');
+  if (!s){
+    var raw = Utilities.getUuid() + '|' + Utilities.getUuid();
+    s = Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, raw));
+    p.setProperty('AUTH_TOKEN_SECRET', s);   // створюється РАЗ, лишається у PropertiesService
+  }
+  return s;
+}
+function _authEnforceOn(){                    // ЕТАП 2 вмикається встановленням AUTH_ENFORCE='1'
+  try { return String(PropertiesService.getScriptProperties().getProperty('AUTH_ENFORCE') || '') === '1'; }
+  catch(_e){ return false; }
+}
+function _b64u(str){ return Utilities.base64EncodeWebSafe(str).replace(/=+$/, ''); }
+function _b64uBytes(bytes){ return Utilities.base64EncodeWebSafe(bytes).replace(/=+$/, ''); }
+function _authHmac(msg){ return _b64uBytes(Utilities.computeHmacSha256Signature(msg, _authSecret())); }
+function _issueToken(u){
+  var payload = { id: Number(u.id) || 0, role: String(u.role || '').toLowerCase().trim(),
+                  loc: String(u.loc || ''), exp: Date.now() + 12 * 3600 * 1000 };
+  var pj = JSON.stringify(payload);
+  return _b64u(pj) + '.' + _authHmac(pj);
+}
+function _verifyToken(token){
+  try {
+    token = String(token || ''); var dot = token.indexOf('.');
+    if (dot <= 0) return null;
+    var p64 = token.slice(0, dot), sig = token.slice(dot + 1);
+    var pj = Utilities.newBlob(Utilities.base64DecodeWebSafe(p64)).getDataAsString();
+    if (sig !== _authHmac(pj)) return null;                              // підпис не збігся
+    var payload = JSON.parse(pj);
+    if (!payload || !payload.exp || Date.now() > Number(payload.exp)) return null;  // прострочено
+    return payload;
+  } catch(_e){ return null; }
+}
+// Ефективний id актора: коли ЕТАП 2 увімкнено і є валідний токен — беремо id З ТОКЕНА
+// (ігноруємо клієнтський actorId, щоб його не підмінили). Інакше — як передали (ЕТАП 1: без змін).
+function _resolveActorId(actorId){
+  if (_authEnforceOn() && _CURRENT_AUTH && _CURRENT_AUTH.id) return Number(_CURRENT_AUTH.id);
+  return Number(actorId) || 0;
+}
+function _authLogMissing(action, method){    // ЕТАП 1: бачимо, які виклики прийшли без токена
+  try {
+    var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+    var sh = ss.getSheetByName(AUTH_LOG_SHEET);
+    if (!sh){ sh = ss.insertSheet(AUTH_LOG_SHEET); sh.getRange(1,1,1,3).setValues([['Коли','action','method']]); sh.setFrozenRows(1); }
+    if (sh.getLastRow() > 5000) return;      // запобіжник від розростання
+    sh.appendRow([formatDate(new Date()), String(action || ''), String(method || '')]);
+  } catch(_e){}
+}
+// Гейт: null → пропускаємо; обʼєкт-відмова → блокуємо (лише коли AUTH_ENFORCE).
+function _authGate(action, token, method){
+  _CURRENT_AUTH = null;
+  if (action === 'ping' || action === 'authenticate') return null;       // завжди без токена
+  var payload = _verifyToken(token);
+  if (payload){ _CURRENT_AUTH = payload; return null; }                   // валідний токен
+  _authLogMissing(action, method);                                       // ЕТАП 1: лог
+  if (_authEnforceOn()) return {ok:false, code:'AUTH', error:'Не авторизовано (потрібен токен)'};  // ЕТАП 2
+  return null;                                                           // ЕТАП 1: пропускаємо
+}
+
 function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
+    var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
+    if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.109', ts: new Date().toISOString()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.110', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -557,6 +639,8 @@ function doGet(e) {
 function doPost(e) {
   try {
     var body = JSON.parse(e.postData.contents);
+    var _g = _authGate(body.action, body.token || '', 'POST');   // v7.110
+    if (_g) return jsonOut(_g);
     var result;
     if      (body.action === 'saveClient'){
       // v7.56 KILL-SWITCH застарілих фронтів: приймаємо лише від фронту з актуальною версією
@@ -4943,6 +5027,13 @@ function getSalaryData(loc, year) {
   loc = String(loc || '').trim();
   if (!loc) return {ok:false, error:'Missing loc'};
 
+  // v7.110 ЕТАП-2 (за прапорцем): локацію беремо з ТОКЕНА — не-менеджмент лише свою.
+  if (_authEnforceOn() && _CURRENT_AUTH){
+    var _r = String(_CURRENT_AUTH.role || '').toLowerCase().trim();
+    if (EMP_MGMT_ROLES.indexOf(_r) === -1 && String(_CURRENT_AUTH.loc || '').trim() !== loc)
+      return {ok:false, code:'AUTH', error:'Доступ лише до своєї локації'};
+  }
+
   var reg = _salaryGetRegistry();
   if (!reg.ok) return reg;
 
@@ -5709,7 +5800,7 @@ function authenticate(login, password) {
     sh.getRange(i + 1, 9).setValue(new Date());
     if (props){ try { props.deleteProperty(failKey); } catch(e){} }   // v7.79: успіх скидає лічильник
     delete u.password;
-    return {ok: true, user: u};
+    return {ok: true, user: u, token: _issueToken(u)};               // v7.110: підписаний токен (12год)
   }
   // Логін не знайдено — теж рахуємо як невдалу спробу (захист від перебору логінів).
   if (isLocked) return {ok: false, error: 'too_many_attempts', message: 'Забагато спроб. Спробуйте через 15 хвилин.'};
@@ -16299,6 +16390,7 @@ function getTasks(filters){
 // ── updateTaskStatus ───────────────────────────────────────────────────────
 function updateTaskStatus(taskId, newStatus, actorId){
   try {
+    actorId = _resolveActorId(actorId);   // v7.110 ЕТАП-2 (за прапорцем)
     var nid = Number(taskId) || 0;
     var VALID = ['new','in_progress','done'];
     if (!nid) return {ok:false, error:'Missing taskId'};
@@ -16331,6 +16423,7 @@ function updateTaskStatus(taskId, newStatus, actorId){
 // ── updateTask (редагування — лише автор) ─────────────────────────────────
 function updateTask(taskId, data, actorId){
   try {
+    actorId = _resolveActorId(actorId);   // v7.110 ЕТАП-2 (за прапорцем)
     var nid = Number(taskId) || 0;
     if (!nid) return {ok:false, error:'Missing taskId'};
     data = data || {};
@@ -16363,6 +16456,7 @@ function updateTask(taskId, data, actorId){
 // ── addTaskComment ─────────────────────────────────────────────────────────
 function addTaskComment(taskId, comment, fileUrl, actorId){
   try {
+    actorId = _resolveActorId(actorId);   // v7.110 ЕТАП-2 (за прапорцем)
     var nid = Number(taskId) || 0;
     if (!nid) return {ok:false, error:'Missing taskId'};
     comment = String(comment || '').trim();
@@ -16396,6 +16490,7 @@ function addTaskComment(taskId, comment, fileUrl, actorId){
 // ── deleteTask (м'яке видалення — лише автор) ──────────────────────────────
 function deleteTask(taskId, actorId){
   try {
+    actorId = _resolveActorId(actorId);   // v7.110 ЕТАП-2 (за прапорцем)
     var nid = Number(taskId) || 0;
     if (!nid) return {ok:false, error:'Missing taskId'};
     var actor = Number(actorId) || 0;
@@ -16705,7 +16800,7 @@ var PW_ADMIN_ROLES = ['cfo','hr','ceo','cco','coo'];
 // Перевірка ролі через session: actorId — id поточного користувача;
 // роль перечитується з листа "Користувачі" (не довіряємо клієнту).
 function _isPasswordAdmin(actorId){
-  var id = Number(actorId) || 0;
+  var id = _resolveActorId(actorId);   // v7.110 ЕТАП-2 (за прапорцем): id з токена
   if (!id) return false;
   var sh = _getUsersSheet();
   var data = sh.getDataRange().getValues();
@@ -17409,6 +17504,7 @@ function _getHrAuditSheet(){
 
 // ── Actor / permissions ────────────────────────────────────────────
 function _getActor(actorId){
+  actorId = _resolveActorId(actorId);   // v7.110 ЕТАП-2 (за прапорцем): id з ТОКЕНА, не з клієнтського actorId
   if (!actorId) throw new Error('actorId required');
   var sh = _getUsersSheet();
   var data = sh.getDataRange().getValues();
