@@ -1287,6 +1287,10 @@ function renderSyncLog(){
 function toggleSyncLog(){ $('syncLog').classList.toggle('hidden'); }
 
 // ── API ─────────────────────────────────────
+/* v7.110 токен-авторизація: токен у localStorage['mkids_session'].token; додаємо в КОЖЕН запит (GET-param / POST-body). */
+function _authTok(){ try { return (JSON.parse(localStorage.getItem('mkids_session')||'null')||{}).token || ''; } catch(e){ return ''; } }
+function _tokUrl(u){ var t=_authTok(); if(!t) return u; return /[?&]token=/.test(u) ? u : (u + (u.indexOf('?')>=0?'&':'?') + 'token=' + encodeURIComponent(t)); }
+function _tokBody(b){ try{ if(b && typeof b==='object' && b.token==null) b.token=_authTok(); }catch(e){} return b; }
 function apiGet(action, params){
   var url = CFG.SCRIPT_URL + '?action=' + encodeURIComponent(action);
   Object.keys(params || {}).forEach(function(k){
@@ -1294,6 +1298,7 @@ function apiGet(action, params){
   });
   // v7.77: таймаут 45с (AbortController) + 2 повтори на мережевий збій/таймаут (паузи 1с, 3с).
   // Без цього завислий запит (холодний старт/обрив) лишав спінер «Завантаження…» назавжди.
+  url = _tokUrl(url);
   var PAUSES = [1000, 3000];
   function attempt(tryIdx){
     var ctrl = new AbortController();
@@ -1316,7 +1321,7 @@ function apiPost(body){
   return fetch(CFG.SCRIPT_URL, {
     method:'POST', redirect:'follow',
     headers:{'Content-Type':'text/plain;charset=utf-8'},
-    body:JSON.stringify(body)
+    body:JSON.stringify(_tokBody(body))
   }).then(function(r){ return r.text(); })
     .then(function(t){ var res; try{res=JSON.parse(t);}catch(_){res={ok:true,_assumed:true};}  // v6.27.5: HTML-редірект = успіх
       setSync(res && res.ok ? 'ok' : 'err',

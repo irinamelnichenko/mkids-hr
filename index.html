@@ -20,7 +20,12 @@
   var RETRIES=[1000,3000];
   function _sleep(ms){ return new Promise(function(r){ setTimeout(r,ms); }); }
   async function cloudFetch(url,opts){
-    opts=opts||{}; var tmo=opts.timeoutMs||45000, del=opts.retries||RETRIES;
+    opts=opts||{};
+    try{ var _t=(JSON.parse(localStorage.getItem('mkids_session')||'null')||{}).token||'';
+      if(_t){ var _m=(opts.fetch&&(opts.fetch.method||'')).toUpperCase();
+        if(_m==='POST'){ if(opts.fetch&&typeof opts.fetch.body==='string'){ var _b=JSON.parse(opts.fetch.body); if(_b&&_b.token==null){ _b.token=_t; opts.fetch.body=JSON.stringify(_b); } } }
+        else if(!/[?&]token=/.test(url)){ url += (url.indexOf('?')>=0?'&':'?')+'token='+encodeURIComponent(_t); } } }catch(_e){}
+    var tmo=opts.timeoutMs||45000, del=opts.retries||RETRIES;
     var init=Object.assign({redirect:'follow'},opts.fetch||{}), n=del.length+1, last;
     for(var i=0;i<n;i++){ var c=new AbortController(); var t=setTimeout(function(){ try{c.abort();}catch(_){} },tmo);
       try{ var r=await fetch(url,Object.assign({},init,{signal:c.signal})); clearTimeout(t);
@@ -935,7 +940,7 @@ async function ensureClientsLoaded(){
   } catch(e) {}
   try {
     // v7.109 БЕЗПЕКА: бекендний роут getClients замість прямого читання листа публічним ключем.
-    const r = await fetch(authScriptUrl() + '?action=getClients', {redirect:'follow'});
+    const r = await fetch(_tokUrl(authScriptUrl() + '?action=getClients'), {redirect:'follow'});
     if (!r.ok) throw new Error(r.status);
     const j = await r.json();
     const rows = _normRows((j && j.data) || []);   // v7.110: типізовані значення → рядки
@@ -967,7 +972,7 @@ async function loadBdayStatus(){
   if (S.bdayStatus && Object.keys(S.bdayStatus).length) return;
   try {
     // v7.109 БЕЗПЕКА: бекендний роут getBdayStatus замість прямого читання листа публічним ключем.
-    const r = await fetch(authScriptUrl() + '?action=getBdayStatus', {redirect:'follow'});
+    const r = await fetch(_tokUrl(authScriptUrl() + '?action=getBdayStatus'), {redirect:'follow'});
     if (!r.ok) throw new Error(r.status);
     const j = await r.json();
     const rows = _normRows((j && j.data) || []);   // v7.110: типізовані значення → рядки
@@ -1099,8 +1104,8 @@ function selectRole(r) {
 var SESSION_KEY = 'mkids_session';
 var SESSION_TTL_MS = 12 * 3600 * 1000;
 
-function saveSession(user){
-  try { safeSetItem(SESSION_KEY, JSON.stringify({user: user, t: Date.now()})); } catch(e){}
+function saveSession(user, token){
+  try { var _p={}; try{_p=JSON.parse(localStorage.getItem(SESSION_KEY)||'null')||{};}catch(e){} safeSetItem(SESSION_KEY, JSON.stringify({user: user, t: Date.now(), token: token || _p.token || ''})); } catch(e){}
 }
 function readSession(){
   try {
@@ -1257,7 +1262,7 @@ function _parseUsersResponse(text){
   try { return JSON.parse(t.slice(i, j + 1)); } catch(e){ return null; }
 }
 async function _fetchUsersOnce(){
-  var r = await fetch(authScriptUrl() + '?action=getUsers', {redirect:'follow'});
+  var r = await fetch(_tokUrl(authScriptUrl() + '?action=getUsers'), {redirect:'follow'});
   var text = await r.text();
   var json = _parseUsersResponse(text);
   if (!json) throw new Error('non-JSON response (len=' + text.length + ')');
@@ -1319,7 +1324,7 @@ async function loadUsersForDropdown(){
 async function diagLoginTabs(){
   var out = {url: authScriptUrl()};
   try {
-    var r = await fetch(authScriptUrl() + '?action=getUsers', {redirect:'follow'});
+    var r = await fetch(_tokUrl(authScriptUrl() + '?action=getUsers'), {redirect:'follow'});
     out.httpStatus = r.status;
     var text = await r.text();
     out.rawLength = text.length;
@@ -1379,7 +1384,7 @@ async function doLoginMain(){
     }
     S.f = {loc:'',pos:'',status:'працює',dir:'',typ:''};
     S.q = '';
-    saveSession(S.user);
+    saveSession(S.user, json.token);   // v7.110 токен
     document.getElementById('loginScreen').classList.add('hidden');
     document.getElementById('app').classList.remove('hidden');
     updUserUI(); await initApp();
@@ -1416,7 +1421,7 @@ async function doLoginLocation(role, locFieldId, pwFieldId){
     S.user.role = String(S.user.role || '').toLowerCase().trim();
     S.f = {loc:'',pos:'',status:'працює',dir:'',typ:''};
     S.q = '';
-    saveSession(S.user);
+    saveSession(S.user, json.token);   // v7.110 токен
     // Вихователь не має доступу до Дашборду — одразу на Додаткові заняття.
     if (S.user.role === 'vyhovatel'){ window.location.href = 'activities.html'; return; }
     document.getElementById('loginScreen').classList.add('hidden');
@@ -2430,6 +2435,10 @@ function _normCellVal(v){
   return String(v);
 }
 function _normRows(rows){ return (rows||[]).map(function(r){ var o={}; for (var k in r){ if (Object.prototype.hasOwnProperty.call(r,k)) o[k]=_normCellVal(r[k]); } return o; }); }
+/* v7.110 токен-авторизація */
+function _authTok(){ try { return (JSON.parse(localStorage.getItem('mkids_session')||'null')||{}).token || ''; } catch(e){ return ''; } }
+function _tokUrl(u){ var t=_authTok(); if(!t) return u; return /[?&]token=/.test(u) ? u : (u + (u.indexOf('?')>=0?'&':'?') + 'token=' + encodeURIComponent(t)); }
+function _tokBody(b){ try{ if(b && typeof b==='object' && b.token==null) b.token=_authTok(); }catch(e){} return b; }
 // Кожен set() рендерить новий DOM. applyRoleVisibility() викликаємо одразу
 // щоб data-permission атрибути на свіжих елементах (картки співробітників,
 // списки тощо) оброблялись — інакше нові елементи лишаються видимими попри
@@ -3011,7 +3020,7 @@ function renderLocCard(){
   showLoad();                                   // явний спінер при вході
   ensureClientsLoaded().then(_locCardSoftRerender).catch(_locCardSoftRerender);
   if(!S._locCards){
-    fetch(authScriptUrl()+'?action=getLocationCards',{redirect:'follow'})
+    fetch(_tokUrl(authScriptUrl()+'?action=getLocationCards'), {redirect:'follow'})
       .then(function(r){ return r.json(); })
       .then(function(j){ S._locCards=(j&&j.data)||{}; })
       .catch(function(){ S._locCards=S._locCards||{}; })
@@ -5014,7 +5023,7 @@ async function saveLocUserPw(loc,role,safeId){
   try{
     const r=await fetch(authScriptUrl(),{method:'POST',redirect:'follow',
       headers:{'Content-Type':'text/plain;charset=utf-8'},
-      body:JSON.stringify({action:'setUserPassword',username:login,newPassword:pw,actorId:(S.user&&S.user.id)||0})});
+      body:JSON.stringify(_tokBody({action:'setUserPassword',username:login,newPassword:pw,actorId:(S.user&&S.user.id)||0}))});
     const j=await r.json();
     if(!j.ok){toast('❌ '+(j.error||'Помилка'));return;}
     setCustomPw(loc,role,pw!==genLocPw(loc,role));   // нестандартний → 🔒
@@ -5029,7 +5038,7 @@ async function restoreLocUserPw(loc,role){
   try{
     const r=await fetch(authScriptUrl(),{method:'POST',redirect:'follow',
       headers:{'Content-Type':'text/plain;charset=utf-8'},
-      body:JSON.stringify({action:'setUserPassword',username:login,newPassword:genLocPw(loc,role),actorId:(S.user&&S.user.id)||0})});
+      body:JSON.stringify(_tokBody({action:'setUserPassword',username:login,newPassword:genLocPw(loc,role),actorId:(S.user&&S.user.id)||0}))});
     const j=await r.json();
     if(!j.ok){toast('❌ '+(j.error||'Помилка'));return;}
     setCustomPw(loc,role,false);
@@ -5049,7 +5058,7 @@ async function regenAllPws(){
   try{
     const r=await fetch(authScriptUrl(),{method:'POST',redirect:'follow',
       headers:{'Content-Type':'text/plain;charset=utf-8'},
-      body:JSON.stringify({action:'resetAllLocationPasswords',actorId:(S.user&&S.user.id)||0})});
+      body:JSON.stringify(_tokBody({action:'resetAllLocationPasswords',actorId:(S.user&&S.user.id)||0}))});
     const j=await r.json();
     if(!j.ok){toast('❌ '+(j.error||'Помилка'));return;}
     localStorage.removeItem('hr_custom_pw');   // усі знову стандартні

@@ -1785,6 +1785,10 @@ async function loadCatalog(force){
 
 // v6.12 PWA: safePost з retry (3x exp backoff) + localStorage offline queue.
 // Зберігає API saveBackend(action, payload) для backward-compat усіх callers.
+/* v7.110 токен-авторизація: токен у localStorage['mkids_session'].token; додаємо в КОЖЕН запит (GET-param / POST-body). */
+function _authTok(){ try { return (JSON.parse(localStorage.getItem('mkids_session')||'null')||{}).token || ''; } catch(e){ return ''; } }
+function _tokUrl(u){ var t=_authTok(); if(!t) return u; return /[?&]token=/.test(u) ? u : (u + (u.indexOf('?')>=0?'&':'?') + 'token=' + encodeURIComponent(t)); }
+function _tokBody(b){ try{ if(b && typeof b==='object' && b.token==null) b.token=_authTok(); }catch(e){} return b; }
 async function saveBackend(action, payload){
   return safePost(action, payload);
 }
@@ -1793,7 +1797,7 @@ async function saveBackend(action, payload){
 // r.ok/HTTP-помилки НЕ повторюємо (їх інтерпретує caller) — лише network-fail, коли
 // запит не долетів. Повертає Response; кидає після останньої спроби.
 async function _afTryFetch(url, opts, tries){
-  tries = tries || 3;
+  tries = tries || 3; url = _tokUrl(url);
   var delays = [1000, 3000];
   for (var i = 0; i < tries; i++){
     // v7.78: AbortController з таймаутом 45с — завислий запит абортиться і йде на повтор,
@@ -1834,7 +1838,7 @@ function _afSpinnerWatch(id, ms){
 
 async function safePost(action, payload, attempt){
   attempt = attempt || 0;
-  var body = JSON.stringify(Object.assign({action: action}, payload || {}));
+  var body = JSON.stringify(_tokBody(Object.assign({action: action}, payload || {})));
   try {
     var r = await fetch(CFG.SCRIPT_URL, {
       method: 'POST', redirect: 'follow',
