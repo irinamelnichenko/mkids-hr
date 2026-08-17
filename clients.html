@@ -639,6 +639,11 @@ tbody tr.clickable:hover td{background:#f0f7ff}
         <span class="ni">📁</span> Архів клієнтів
       </div>
 
+      <div class="nav-item" data-permission="clients_list" data-perm-page="clients"
+           data-v="needsAttention" onclick="navNeedsAttention()">
+        <span class="ni">✋</span> Потребують уваги
+      </div>
+
       <div class="nav-item" data-permission="settings" data-perm-page="index"
            onclick="goPerm('settings')">
         <span class="ni">⚙️</span> Налаштування
@@ -2641,8 +2646,9 @@ function showSpinner(){ document.getElementById('main').innerHTML='<div class="l
 function toggleSidebar(){ document.getElementById('sidebar').classList.toggle('open'); }
 
 // ─── NAVIGATION ──────────────────────────────────────────────────────────────
-var TITLES={clients:'👶 Список дітей',debts:'💰 Борги та оплати',settings:'⚙️ Налаштування',absRequests:'💼 Перерахунки бюджету',attendance:'📋 Табель відвідування',archive:'📁 Архів клієнтів'};
+var TITLES={clients:'👶 Список дітей',debts:'💰 Борги та оплати',settings:'⚙️ Налаштування',absRequests:'💼 Перерахунки бюджету',attendance:'📋 Табель відвідування',archive:'📁 Архів клієнтів',needsAttention:'✋ Потребують уваги'};
 function navArchive(){ nav('archive'); }
+function navNeedsAttention(){ nav('needsAttention'); }
 function nav(view){
   S.mainTab='clients'; // скидаємо аналітику при навігації
   S.view=view;
@@ -2658,6 +2664,7 @@ function renderView(){
   else if(S.view==='absRequests') renderAbsRequests();
   else if(S.view==='attendance') renderAttendance();
   else if(S.view==='archive') renderArchive();
+  else if(S.view==='needsAttention') renderNeedsAttention();
   else renderSettings();
 }
 function switchMainTab(tab){
@@ -6485,6 +6492,95 @@ function fmtDateUa(s){
 // Розірвані (status='terminated') + Випускники (status='graduated'/'graduate')
 // в одному в'ю з табами. Платежі НЕ чіпаються; борг підтягуємо з платіжного
 // рядка (якщо клієнт ще там є). Scoped по ролі.
+// ═══ v7.117 «Потребують уваги»: картки active без рядка в Payment ═══════════
+function _naFmtDate(s){
+  s=String(s||'').trim(); if(!s) return '—';
+  var m=/^(\d{4})-(\d{2})-(\d{2})/.exec(s); if(m) return m[3]+'.'+m[2]+'.'+m[1];
+  m=/^(\d{1,2})\.(\d{1,2})\.(\d{4})/.exec(s); if(m) return ('0'+m[1]).slice(-2)+'.'+('0'+m[2]).slice(-2)+'.'+m[3];
+  return s.slice(0,10);
+}
+var _NA_CATLABEL={decide:'на рішення','merge-card':'дублі','drift-pay':'імена',junk:'тест'};
+function _naRenderHtml(items){
+  if(!items.length) return '<div style="padding:28px;color:var(--gray);font-size:15px">✅ Немає карток, що потребують уваги — усі active-картки мають рядок у Payment.</div>';
+  var byCat={decide:0,'merge-card':0,'drift-pay':0,junk:0};
+  items.forEach(function(x){ byCat[x.cat]=(byCat[x.cat]||0)+1; });
+  var locs={}; items.forEach(function(x){ (locs[x.loc]=locs[x.loc]||[]).push(x); });
+  var order=Object.keys(locs).sort(function(a,b){ return locs[b].length-locs[a].length || a.localeCompare(b,'uk'); });
+  var CO={decide:0,'merge-card':1,'drift-pay':2,junk:3};
+  var h='';
+  h+='<div style="padding:4px 4px 0">';
+  h+='<p style="color:var(--gray);font-size:13.5px;max-width:80ch;margin:0 0 14px">Картки зі статусом <b>активна</b> без рядка в Payment за поточний місяць. Зникають зі списків і не потрапляють в архів. <b>Нічого не архівується автоматично</b> — рішення за вами.</p>';
+  h+='<div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px">';
+  [['всього',items.length,'#F2622E'],['на рішення',byCat.decide,''],['дублі',byCat['merge-card'],'#2F6DB3'],['імена',byCat['drift-pay'],'#C77A12'],['тест',byCat.junk,'#8A7E73']].forEach(function(s){
+    h+='<div style="background:var(--card,#fff);border:1px solid var(--line,#e5ded7);border-radius:11px;padding:10px 15px;min-width:96px">'
+      +'<div style="font-size:24px;font-weight:750;line-height:1'+(s[2]?';color:'+s[2]:'')+'">'+s[1]+'</div>'
+      +'<div style="font-size:11.5px;color:var(--gray)">'+s[0]+'</div></div>';
+  });
+  h+='</div></div>';
+  order.forEach(function(loc){
+    var rows=locs[loc].slice().sort(function(a,b){ return (CO[a.cat]-CO[b.cat]) || a.name.localeCompare(b.name,'uk'); });
+    var fl=rows.filter(function(r){ return r.cat!=='decide'; }).length;
+    h+='<div style="margin-top:20px"><div style="display:flex;align-items:baseline;gap:10px;border-bottom:1px solid var(--line,#e5ded7);padding-bottom:7px;margin-bottom:9px">'
+      +'<span style="font-size:15.5px;font-weight:700">'+esc(loc)+'</span>'
+      +'<span style="font-size:12px;color:var(--gray)">'+rows.length+'</span>'
+      +(fl?'<span style="margin-left:auto;font-size:11.5px;color:#C77A12">⚑ '+fl+' на виправлення</span>':'')+'</div>';
+    rows.forEach(function(r){ h+=_naRow(r); });
+    h+='</div>';
+  });
+  return '<div style="max-width:1000px">'+h+'</div>';
+}
+function _naRow(r){
+  var bg={'merge-card':'#EAF1F9','drift-pay':'#FBF1DF','junk':'#F0ECE7'}[r.cat]||'var(--card,#fff)';
+  var bd={'merge-card':'#9dc0e8','drift-pay':'#e6c68a','junk':'#ddd6cf'}[r.cat]||'var(--line,#e5ded7)';
+  var meta='<div style="font-size:12px;color:var(--gray);margin-top:2px">Група: <b style="color:var(--ink,#2a2622)">'+esc(r.group||'—')+'</b> · Створена: <b style="color:var(--ink,#2a2622)">'+_naFmtDate(r.created)+'</b></div>';
+  var idJ=escAttrJS(r.id), nmJ=escAttrJS(r.name), locJ=escAttrJS(r.loc), grpJ=escAttrJS(r.group||''), mJ=escAttrJS(r.match||'');
+  var open='onclick="openChild('+idJ+','+grpJ+',\'\','+locJ+','+nmJ+')"';
+  var badge='', acts='';
+  if(r.cat==='junk'){
+    badge='<div style="font-size:11.5px;color:#8A7E73;margin-top:5px">🧪 тестова / сміттєва картка</div>';
+    acts='<button class="btn btn-xs btn-danger" onclick="naDelete('+idJ+','+nmJ+')">🗑 Видалити</button>';
+  } else if(r.cat==='merge-card'){
+    badge='<div style="font-size:11.5px;color:#2F6DB3;margin-top:5px">⧉ дубль — та сама дитина, що картка «'+esc(r.match)+'»</div>';
+    acts='<button class="btn btn-xs" style="background:#2F6DB3;color:#fff;border-color:#2F6DB3" onclick="naMerge('+idJ+','+nmJ+','+mJ+')">⧉ Об\'єднати (видалити дубль)</button>'
+        +'<button class="btn btn-xs" '+open+'>Відкрити картку</button>';
+  } else if(r.cat==='drift-pay'){
+    badge='<div style="font-size:11.5px;color:#C77A12;margin-top:5px">✎ схоже на рядок Payment «'+esc(r.match)+'» — виправити ім\'я</div>';
+    acts='<button class="btn btn-xs" style="background:#C77A12;color:#fff;border-color:#C77A12" '+open+'>✎ Виправити (відкрити)</button>'
+        +'<button class="btn btn-xs btn-danger" onclick="naDelete('+idJ+','+nmJ+')">🗑 Видалити</button>';
+  } else {
+    acts='<button class="btn btn-xs btn-primary" '+open+'>Відкрити картку →</button>'
+        +'<button class="btn btn-xs btn-danger" onclick="naDelete('+idJ+','+nmJ+')">🗑 Видалити</button>';
+  }
+  return '<div style="display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;justify-content:space-between;background:'+bg+';border:1px solid '+bd+';border-radius:10px;padding:11px 14px;margin-bottom:8px">'
+    +'<div style="min-width:220px"><div style="font-weight:650;font-size:14.5px">'+esc(r.name)+'</div>'+meta+badge+'</div>'
+    +'<div style="display:flex;flex-wrap:wrap;gap:6px">'+acts+'</div></div>';
+}
+async function naDelete(id, name){
+  if(!confirm('Видалити картку «'+name+'»?\n\nЦе прибере її зі списку клієнтів. Дію не можна скасувати.')) return;
+  try{ await apiPost({action:'deleteClient', id:id}); }
+  catch(e){ if(typeof showFloatMsg==='function') showFloatMsg('Помилка видалення: '+(e.message||e),'err'); return; }
+  if(typeof showFloatMsg==='function') showFloatMsg('Картку «'+name+'» видалено','ok');
+  if(S.crm) delete S.crm[id];
+  renderNeedsAttention();
+}
+async function naMerge(id, name, match){
+  if(!confirm('Об\'єднати: «'+name+'» — це та сама дитина, що картка «'+match+'».\n\nБуде ВИДАЛЕНО дубль «'+name+'», лишиться «'+match+'» (яка в Payment).\nПродовжити?')) return;
+  try{ await apiPost({action:'deleteClient', id:id}); }
+  catch(e){ if(typeof showFloatMsg==='function') showFloatMsg('Помилка: '+(e.message||e),'err'); return; }
+  if(typeof showFloatMsg==='function') showFloatMsg('Дубль «'+name+'» прибрано, лишилась «'+match+'»','ok');
+  if(S.crm) delete S.crm[id];
+  renderNeedsAttention();
+}
+async function renderNeedsAttention(){
+  var main=document.getElementById('main');
+  main.innerHTML='<div style="padding:24px;color:var(--gray)">Завантаження…</div>';
+  var j;
+  try{ j=await apiGet('getNeedsAttention'); }
+  catch(e){ main.innerHTML='<div style="padding:24px;color:#c0392b">Помилка завантаження: '+esc(e.message||String(e))+'</div>'; return; }
+  var items=(j.items||[]).slice();
+  if(!isHR()){ var myloc=(S.user&&S.user.loc)||''; items=items.filter(function(x){ return x.loc===myloc; }); }
+  main.innerHTML=_naRenderHtml(items);
+}
 function findPayChildById(id){
   for(var loc in S.groups){
     var gs=S.groups[loc];
