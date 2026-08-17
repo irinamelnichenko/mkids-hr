@@ -2334,6 +2334,7 @@ function createDailyTrigger() {
     if (fn === 'aggregatePayments' || fn === 'aggregatePaymentsYearly'
         || fn === 'nightlySyncMissingKindergartens'
         || fn === 'nightlyVacExportGuarantee'   // v7.81
+        || fn === 'nightlyDepartureSnapshot'    // v7.116: знімок вибуття (ідемпотентно)
         || fn === '_vacExportGuardBatch') {      // v7.81: спент continuation-тригери
       ScriptApp.deleteTrigger(triggers[i]);
     }
