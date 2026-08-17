@@ -583,7 +583,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.114', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.115', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -717,6 +717,7 @@ function doPost(e) {
     else if (body.action === 'syncMissingClients')       result = syncMissingClientsFromPayments({dryRun:(body.dryRun===true), confirm:'YES_WRITE', locScope:(body.locScope||'kindergartens')}); // v7.60 кнопка «Синхронізувати відсутніх» (садочки)
     else if (body.action === 'remapAttendanceId')        result = remapAttendanceId(body || {});   // v7.60 точковий ремап осиротілого ID Табеля
     else if (body.action === 'renameSchoolChildrenClean') result = renameSchoolChildrenClean(body || {});   // v7.114 чистка ПІБ школярів + ремап childId
+    else if (body.action === 'cleanSchoolClassPaymentNames') result = cleanSchoolClassPaymentNames(body || {});   // v7.115 чистка кодів у рядках Payment
     else if (body.action === 'cashPayoutSheet')          result = cashPayoutSheet(body || {});      // v7.64 відомість на видачу готівки (PDF)
     else if (body.action === 'cleanupBackupTabs')        result = cleanupBackupTabs(body || {});  // v7.45 чистка бекап-табів
     else if (body.action === 'deleteAttendanceRecord')   result = deleteAttendanceRecord(body || {}); // v7.47 видалення садок-Табель запису (childId+date)
@@ -15041,6 +15042,55 @@ function _renamePaymentRowName(loc, oldName, newName){
     if (_journalNormName(nm) === target){ psh.getRange(r+1, 1).setValue(newName); return true; }
   }
   return false;
+}
+
+// v7.115: чистка кодованих імен у рядках Payment-файлу локації — для випадку, коли КАРТКА вже
+// чиста (напр. створена синком), а рядок Payment лишився з номером/кодом («15. Хачатрян Емілія
+// 04_29»). Чистить ім'я в кол. A кожного НЕ-заголовкового рядка, якщо _cleanSchoolName щось міняє
+// і виходить >=2 слова. Табірні рядки вже чисті → не змінюються. exclude — масив сирих імен, які
+// не чіпати (напр. Хачатрян до рішення Ірини). POST {loc, dryRun?, exclude?, by?}. dryRun DEFAULT true.
+function cleanSchoolClassPaymentNames(body){
+  body = body || {};
+  var loc    = String(body.loc||'').trim();
+  var dryRun = (body.dryRun !== false);
+  var by     = String(body.by||'');
+  var exclude = {};
+  (body.exclude||[]).forEach(function(n){ exclude[_journalNormName(n)] = true; });
+  if (!loc) return {ok:false, error:'loc обовʼязковий'};
+  try {
+    var reg = _getLocationPaymentRegistry(loc);
+    if (!reg || !reg.sheetId) return {ok:false, error:'Payment-файл не знайдено для '+loc};
+    var pss = SpreadsheetApp.openById(reg.sheetId);
+    var psh = (reg.sheetName && pss.getSheetByName(reg.sheetName)) || pss.getSheets()[0];
+    if (!psh) return {ok:false, error:'Аркуш Payment не знайдено'};
+    var data = psh.getDataRange().getValues();
+    var changes = [], skippedExcluded = [];
+    for (var r=3;r<data.length;r++){
+      var raw = String(data[r][0]||'').trim();
+      if (!raw) continue;
+      if (isGroupHeaderRow(data[r], 1)) continue;
+      var cleaned = _cleanSchoolName(raw);
+      if (!cleaned || cleaned === raw) continue;
+      if (cleaned.split(/\s+/).filter(function(x){return x;}).length < 2) continue;
+      if (exclude[_journalNormName(raw)]){ skippedExcluded.push(raw); continue; }
+      changes.push({row:r+1, oldName:raw, newName:cleaned});
+    }
+    if (!dryRun){
+      var lock = LockService.getScriptLock();
+      try { lock.waitLock(60000); } catch(_le){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+      try {
+        changes.forEach(function(c){ psh.getRange(c.row, 1).setValue(c.newName); });
+        try {
+          _moneyJournalLog(changes.map(function(c){
+            return {by:by, route:'cleanSchoolClassPaymentNames', loc:loc, name:c.newName,
+                    col:'Payment.ПІБ', before:c.oldName, after:c.newName, reason:'чистка кодів у рядку Payment'};
+          }));
+        } catch(_je){}
+      } finally { try { lock.releaseLock(); } catch(_){} }
+    }
+    return {ok:true, dryRun:dryRun, loc:loc, count:changes.length,
+            excluded:skippedExcluded, changes:changes.slice(0,200)};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 
 function syncMissingClientsFromPayments(opts){
