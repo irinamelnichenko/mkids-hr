@@ -583,7 +583,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.115', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.116', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -718,6 +718,7 @@ function doPost(e) {
     else if (body.action === 'remapAttendanceId')        result = remapAttendanceId(body || {});   // v7.60 точковий ремап осиротілого ID Табеля
     else if (body.action === 'renameSchoolChildrenClean') result = renameSchoolChildrenClean(body || {});   // v7.114 чистка ПІБ школярів + ремап childId
     else if (body.action === 'cleanSchoolClassPaymentNames') result = cleanSchoolClassPaymentNames(body || {});   // v7.115 чистка кодів у рядках Payment
+    else if (body.action === 'snapshotPaymentRoster')     result = snapshotPaymentRosterAndLogDepartures(body || {});   // v7.116 знімок ростера + журнал вибуття
     else if (body.action === 'cashPayoutSheet')          result = cashPayoutSheet(body || {});      // v7.64 відомість на видачу готівки (PDF)
     else if (body.action === 'cleanupBackupTabs')        result = cleanupBackupTabs(body || {});  // v7.45 чистка бекап-табів
     else if (body.action === 'deleteAttendanceRecord')   result = deleteAttendanceRecord(body || {}); // v7.47 видалення садок-Табель запису (childId+date)
@@ -2351,6 +2352,11 @@ function createDailyTrigger() {
   // щоб не конкурувати. Прогін по садочках × (поточний+наступний) місяць, пачками.
   ScriptApp.newTrigger('nightlyVacExportGuarantee')
     .timeBased().everyDays(1).atHour(8)
+    .inTimezone('Europe/Kiev').create();
+  // v7.116: знімок ростера Payment + журнал вибуття — о 8:15 (ПІСЛЯ агрегації і синку),
+  // щоб зловити тих, кого прибрали з Payment. Перший запуск лише сіє знімок.
+  ScriptApp.newTrigger('nightlyDepartureSnapshot')
+    .timeBased().everyDays(1).atHour(8).nearMinute(15)
     .inTimezone('Europe/Kiev').create();
 }
 
@@ -15331,6 +15337,81 @@ function nightlySyncMissingKindergartens(){
   // v7.112: тепер САДКИ + ШКОЛИ (locScope:'kids_schools'). Табірні рядки (Табір/Вільних N) не заводяться.
   return syncMissingClientsFromPayments({dryRun: false, confirm: 'YES_WRITE', locScope: 'kids_schools'});
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.116 ВАРІАНТ B: слід при вибутті з Payment. Агрегати перебудовуються з джерела,
+// тож коли дитину прибирають із Payment (у т.ч. руками в таблиці) — сліду «коли пішла»
+// ніде немає. Тримаємо ЗНІМОК ростера (_PaymentRoster) і щоночі порівнюємо з поточним:
+// хто був учора й зник сьогодні → рядок у «Журнал_Вибуття» (ПІБ, локація, група, останній
+// місяць у Payment, дата виявлення). Перший запуск лише сіє знімок (немає бази для порівняння).
+// Знімок будуємо з Оплати-Рік (має групу + помісячні), тож ПІСЛЯ нічної aggregatePaymentsYearly.
+// ═══════════════════════════════════════════════════════════════════════════
+var ROSTER_SNAPSHOT_SHEET = '_PaymentRoster';
+var DEPARTURE_LOG_SHEET   = 'Журнал_Вибуття';
+function snapshotPaymentRosterAndLogDepartures(body){
+  body = body || {};
+  var dryRun = (body.dryRun !== false);   // тільки dryRun===false пише
+  try {
+    var crm = getCRMSpreadsheet();
+    var ysh = crm.getSheetByName(SHEET_YEARLY);
+    if (!ysh) return {ok:false, error:'Оплати-Рік не знайдено'};
+    var yv = ysh.getDataRange().getValues();
+    if (yv.length < 2) return {ok:false, error:'Оплати-Рік порожній'};
+    var yh = yv[0].map(String);
+    var iName=yh.indexOf("Ім'я дитини"), iLoc=yh.indexOf('Локація'), iGrp=yh.indexOf('Група');
+    if (iName<0 || iLoc<0) return {ok:false, error:'Колонки Ім\'я/Локація не знайдено в Оплати-Рік'};
+    var MONTHS=['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
+    var mCols = MONTHS.map(function(m){ return [yh.indexOf(m+'-Факт-навч'),yh.indexOf(m+'-Факт-доп'),yh.indexOf(m+'-Факт-вступ'),yh.indexOf(m+'-Бюджет-навч'),yh.indexOf(m+'-Бюджет-доп')]; });
+    function norm(s){ return String(s||'').trim().replace(/\s+/g,' ').toLowerCase(); }
+    function lastMonth(row){
+      var last='';
+      for (var mi=0; mi<12; mi++){
+        for (var k=0;k<mCols[mi].length;k++){ var ci=mCols[mi][k]; if(ci>=0){ var v=parseFloat(row[ci]); if(isFinite(v)&&v>0){ last=MONTHS[mi]; break; } } }
+      }
+      return last;
+    }
+    var current={};
+    for (var r=1;r<yv.length;r++){
+      var nm=String(yv[r][iName]||'').trim(); if(!nm) continue;
+      var loc=String(yv[r][iLoc]||'').trim();
+      current[norm(nm)+'|'+norm(loc)] = {name:nm, loc:loc, group:(iGrp>=0?String(yv[r][iGrp]||''):''), lastMonth:lastMonth(yv[r])};
+    }
+    // попередній знімок
+    var snap = crm.getSheetByName(ROSTER_SNAPSHOT_SHEET);
+    var prev={};
+    if (snap){
+      var sv=snap.getDataRange().getValues();
+      for (var s=1;s<sv.length;s++){ var k=String(sv[s][0]||''); if(!k) continue;
+        prev[k]={name:String(sv[s][1]||''), loc:String(sv[s][2]||''), group:String(sv[s][3]||''), lastMonth:String(sv[s][4]||'')}; }
+    }
+    var first = !snap || Object.keys(prev).length===0;
+    var departures=[];
+    if (!first) Object.keys(prev).forEach(function(k){ if(!current[k]) departures.push(prev[k]); });
+
+    if (!dryRun){
+      var lock=LockService.getScriptLock(); try{lock.waitLock(60000);}catch(_le){ return {ok:false,error:'LOCK_TIMEOUT'}; }
+      try{
+        if (departures.length){
+          var dlog = crm.getSheetByName(DEPARTURE_LOG_SHEET);
+          if(!dlog){ dlog=crm.insertSheet(DEPARTURE_LOG_SHEET); dlog.appendRow(['Дата виявлення','ПІБ','Локація','Група','Останній місяць у Payment','Джерело']); }
+          var today=formatDate(new Date());
+          var drows=departures.map(function(d){ return [today, d.name, d.loc, d.group, d.lastMonth, 'nightly-diff']; });
+          dlog.getRange(dlog.getLastRow()+1,1,drows.length,6).setValues(drows);
+        }
+        if(!snap) snap=crm.insertSheet(ROSTER_SNAPSHOT_SHEET);
+        snap.clearContents();
+        var stamp=formatDate(new Date());
+        var out=[['key','ПІБ','Локація','Група','ОстМісяць','Оновлено']];
+        Object.keys(current).forEach(function(k){ var c=current[k]; out.push([k,c.name,c.loc,c.group,c.lastMonth,stamp]); });
+        snap.getRange(1,1,out.length,6).setValues(out);
+      } finally { try{lock.releaseLock();}catch(_){} }
+    }
+    return {ok:true, dryRun:dryRun, firstRun:first, currentCount:Object.keys(current).length,
+            prevCount:Object.keys(prev).length, departures:departures.length, sample:departures.slice(0,50)};
+  } catch(e){ return {ok:false, error:String(e&&e.message||e)}; }
+}
+// Нічна обгортка (тригер викликає без аргументів → треба dryRun:false явно).
+function nightlyDepartureSnapshot(){ return snapshotPaymentRosterAndLogDepartures({dryRun:false}); }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // v6.11.12: syncGroupsFromPayments — Платежі (Оплати-Рік) = ДЖЕРЕЛО ПРАВДИ для
