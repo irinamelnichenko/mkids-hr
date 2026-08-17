@@ -1,4 +1,11 @@
 // ═══════════════════════════════════════════════════════════════════════════
+// m.kids CRM — Google Apps Script v7.111
+// v7.111: ФАЗА 1 — авто-заведення НОВОЇ картки дитини у Payment. saveClient(action:created)
+//         викликає _autoCreatePaymentForNewCard: (1) addPaymentRow(loc,name,group) з ґардами —
+//         дитина вже є → status:'exists' (тихо), групи нема → status:'no_group' + список наявних
+//         (не падає); (2) якщо є monthlyFee — setLocPaymentBudget «Бюджет-навч» з поточного місяця
+//         до грудня; (3) _aggregateOneLoc — переагрегує ЛИШЕ цю локацію в «Оплати» (+скид кешу
+//         getPayments). Усе в журнал «Грошові_Правки_Лог». Статус повертається у полі payment.
 // m.kids CRM — Google Apps Script v7.110
 // v7.110: ТОКЕН-АВТОРИЗАЦІЯ (Частина 2). Секрет у PropertiesService (AUTH_TOKEN_SECRET, ніколи в коді).
 //         authenticate видає підписаний токен base64url(payload).base64url(HMAC-SHA256(payload,SECRET)),
@@ -566,7 +573,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.110', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.111', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -1273,7 +1280,11 @@ function saveClient(data) {
   }
   sheet.appendRow(row);
   logGroupChange(data.id, data.name, data.loc, '', data.group, data.updatedBy || data.by || ''); // v7.47 ЕТАП 5: відкриваємо історію (перше призначення групи)
-  return {ok:true, action:'created'};
+  // v7.111 ФАЗА 1: авто-заведення НОВОЇ картки у Payment (рядок + бюджет + переагрегація локації).
+  // Не валить збереження картки — повертаємо статус у payment.
+  var _payStatus;
+  try { _payStatus = _autoCreatePaymentForNewCard(data); } catch(_pe){ _payStatus = {status:'error', error:String(_pe && _pe.message || _pe)}; }
+  return {ok:true, action:'created', payment:_payStatus};
 }
 
 // v7.47 ЕТАП 5: історія переходів груп. Замість тихого перезапису «Група» — ведемо
@@ -10579,6 +10590,82 @@ function addPaymentRow(body){
             headerRow: headerRow + 1, insertAtRow: insertAfter1 + 1};
   } catch(e){ return {ok: false, error: String(e && e.message || e)}; }
   finally { if (lock){ try { lock.releaseLock(); } catch(_){} } }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.111 ФАЗА 1: авто-заведення нової картки у Payment.
+// _bustPayCache — скидає CacheService getPayments (щоб свіжий агрегат був видно одразу).
+function _bustPayCache(){ try { var c = CacheService.getScriptCache(); if (c) c.remove('pay_meta_' + _PAY_CACHE_VER); } catch(_e){} }
+
+// Переагрегація ЛИШЕ однієї локації в лист «Оплати»: інші локації лишаються як є,
+// рядки цієї локації перечитуються з живого Payment-файлу (поточний місяць).
+function _aggregateOneLoc(loc){
+  loc = String(loc || '').trim();
+  if (!loc) return {ok:false, error:'loc обовʼязковий'};
+  try {
+    var configSS = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+    var configData = configSS.getSheets()[0].getDataRange().getValues();
+    var cfg = null;
+    for (var r = 1; r < configData.length; r++){ if (trim(configData[r][2]) === loc){ cfg = configData[r]; break; } }
+    if (!cfg) return {ok:false, error:'Локацію "'+loc+'" не знайдено в реєстрі'};
+    var dir = trim(cfg[0]), typ = trim(cfg[1]), sheetId = trim(cfg[3]), sheetName = trim(cfg[4]) || 'Payment';
+    if (!sheetId) return {ok:false, error:'Немає sheetId для "'+loc+'"'};
+    var now = new Date(), curJSMonth = now.getMonth(), monthName = getMonthDisplayName(curJSMonth), updateStr = formatDate(now);
+    var pss = SpreadsheetApp.openById(sheetId), psh = pss.getSheetByName(sheetName) || pss.getSheets()[0];
+    var pdata = psh.getDataRange().getValues();
+    var cpm = _paymentColsPerMonth(loc, cfg[5]);
+    var monthCol = detectCurrentMonthCol(pdata, curJSMonth, cpm), contractCol = detectContractDateCol(pdata);
+    var groups = parsePaymentSheet(pdata, monthCol, contractCol, cpm), locRows = [];
+    groups.forEach(function(g){ g.children.forEach(function(ch){
+      var fs = ch.factStudy||0, fv = ch.factEntry||0, fe = ch.factExtra||0, bd = ch.budExtra||0, bs = ch.budStudy||0;
+      var total = fs+fv+fe, br = bs+bd, tne = fs+fe, status;
+      if (br===0 && tne===0) status='unknown'; else if (tne===0 && br>0) status='nopay';
+      else if (tne>br) status='over'; else if (tne>=br) status='paid'; else status='debt';
+      locRows.push([loc, dir, typ, g.group, g.teacher, ch.name, fs, fv, fe, total, bs, bd, br, status, monthName, updateStr, ch.contractDate||'']);
+    }); });
+    var crmSS = getCRMSpreadsheet();
+    var agg = crmSS.getSheetByName(SHEET_PAYMENTS);
+    if (!agg){ agg = crmSS.insertSheet(SHEET_PAYMENTS, 0); writePaymentsHeader(agg); }
+    var av = agg.getDataRange().getValues(), other = [];
+    for (var i = 1; i < av.length; i++){ if (!av[i][0]) continue; if (trim(String(av[i][0])) !== loc) other.push(av[i].slice(0,17)); }
+    var out = other.concat(locRows);
+    var lock = LockService.getScriptLock();
+    try { lock.waitLock(30000); } catch(e){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+    try {
+      if (agg.getLastRow() > 1) agg.getRange(2, 1, agg.getLastRow()-1, 17).clearContent();
+      if (out.length) agg.getRange(2, 1, out.length, 17).setValues(out);
+      _bustPayCache();
+    } finally { try { lock.releaseLock(); } catch(_){} }
+    return {ok:true, loc:loc, locRows:locRows.length, totalRows:out.length};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+// Оркестратор: викликається з saveClient для НОВОЇ картки. Не падає — повертає статус.
+function _autoCreatePaymentForNewCard(data){
+  try {
+    var loc = String(data.loc||'').trim(), name = String(data.name||'').trim(), group = String(data.group||'').trim();
+    var by = data.updatedBy || data.by || '';
+    if (!loc || !name || !group) return {status:'skipped', reason:'no loc/name/group'};
+    // 1) рядок у Payment (з ґардами)
+    var ap = addPaymentRow({loc:loc, name:name, group:group, dryRun:false, by:by, reason:'авто зі створення картки'});
+    if (!ap.ok){
+      if (ap.existingRow)  return {status:'exists', row:ap.existingRow};              // дитина вже є → тихо
+      if (ap.groupHeaders) return {status:'no_group', group:group, groups:ap.groupHeaders}; // групи нема → попередження
+      return {status:'error', error:ap.error};
+    }
+    // 2) бюджет навчання з ПОТОЧНОГО місяця до грудня (якщо є сума договору)
+    var sum = Number(data.monthlyFee) || 0, budgetMonths = [];
+    if (sum > 0){
+      var y = (new Date()).getFullYear(), m0 = (new Date()).getMonth() + 1;
+      for (var m = m0; m <= 12; m++){
+        var sb = setLocPaymentBudget({loc:loc, name:name, year:y, month:m, value:sum, dryRun:false, by:by, reason:'авто-бюджет зі створення картки'});
+        if (sb && sb.ok) budgetMonths.push(m);
+      }
+    }
+    // 3) переагрегувати ЛИШЕ цю локацію (не всю мережу)
+    var ag = _aggregateOneLoc(loc);
+    return {status:'created', row:ap.insertAtRow, group:group, budgetMonths:budgetMonths, aggregated:!!(ag && ag.ok)};
+  } catch(e){ return {status:'error', error:String(e && e.message || e)}; }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
