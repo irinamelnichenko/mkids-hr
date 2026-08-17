@@ -15009,7 +15009,7 @@ function syncMissingClientsFromPayments(opts){
   //   4) Бюджет-Рік > 0 OR Факт-Рік > 0 (фінансова активність)
   var missing = [];
   var seenNew = {};
-  var skip = {header:0, numeric:0, test:0, zeroSum:0, noLoc:0, existing:0, dupInPay:0, outScope:0, camp:0};
+  var skip = {header:0, numeric:0, test:0, zeroSum:0, noLoc:0, existing:0, dupInPay:0, outScope:0, camp:0, incomplete:0};
   var skipNumericSamples = [];
   for (var pr = 1; pr < pvals.length; pr++){
     var prow    = pvals[pr];
@@ -15037,6 +15037,9 @@ function syncMissingClientsFromPayments(opts){
     if (budRik <= 0 && faktRik <= 0){ skip.zeroSum++; continue; }
 
     var cname = _cleanChildName(name);                  // v7.113: чисте ПІБ (без префікса/коду, з виправленнями)
+    // v7.113: неповне ПІБ (лише ім'я, напр. «Лев» без прізвища) — НЕ створюємо картку,
+    // пропускаємо. Директор допише прізвище — синк підхопить наступного разу.
+    if (cname.split(/\s+/).filter(function(x){ return x; }).length < 2){ skip.incomplete++; continue; }
     var key = normKey(cname, loc);
     if (existing[key]){ skip.existing++; continue; }   // вже є в Клієнти (зіставлення по cleaned-ПІБ)
     if (seenNew[key]){ skip.dupInPay++; continue; }     // дубль у самій Оплати-Рік (напр. Шевченко Влад=Владислав)
@@ -15057,6 +15060,7 @@ function syncMissingClientsFromPayments(opts){
   Logger.log('  · вже є в Клієнти:               %s', skip.existing);
   Logger.log('  · дубль у Оплати-Рік:            %s', skip.dupInPay);
   Logger.log('  · табір/спейсери (Табір/Вільних): %s', skip.camp);
+  Logger.log('  · неповне ПІБ (лише імʼя):        %s', skip.incomplete);
   Logger.log('  · поза скоупом (не садочок):     %s', skip.outScope);
   Logger.log('[syncMissing] ─────────────────────────────────────');
 
