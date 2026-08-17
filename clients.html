@@ -1425,7 +1425,10 @@ function syncCRMCardToCloud(id){
   var payload = Object.assign({id: id}, card);
   console.log('CRM cloud sync: pushing ' + id);
   _lastSaveTs = Date.now();
-  apiPost({action:'saveClient', data:payload}).catch(function(e){
+  apiPost({action:'saveClient', data:payload}).then(function(res){
+    // v7.111: для НОВОЇ картки бекенд повертає action:'created' + payment{status,...} — показуємо результат
+    if(res && res.action==='created' && res.payment) _showPaymentResult(res.payment);
+  }).catch(function(e){
     console.warn('CRM sync failed for ' + id + ':', e);
   });
 }
@@ -3310,6 +3313,7 @@ function setLocFieldMode(isNew){
     if(isHR()){
       sel.innerHTML='<option value="">— Оберіть локацію —</option>'
         +sortByLocationOrder(S.locs, function(l){ return l.loc; }).map(function(l){ return '<option value="'+esc(l.loc)+'">'+esc(l.loc)+'</option>'; }).join('');   // v6.50.4 зонний
+      sel.onchange=function(){ _populateGroupDropdown(sel.value||'', ''); };   // v7.111: мережа обрала локацію → оновити групи
     } else {
       sel.innerHTML='<option value="'+esc(S.user.loc||'')+'">'+esc(S.user.loc||'')+'</option>';
       sel.value=S.user.loc||'';
@@ -3323,6 +3327,37 @@ function setLocFieldMode(isNew){
   }
 }
 
+// v7.111: наповнення випадайки груп РЕАЛЬНИМИ групами локації з getPayments (S.payments) —
+// для шкіл це класи, для садків — групи (з суфіксом вихователя). Назва має точно збігатись
+// із заголовком у Payment, щоб авто-заведення дитини влучило у групу.
+function _populateGroupDropdown(loc, selected){
+  var sel=document.getElementById('fGroup'); if(!sel) return;
+  loc=String(loc||'').trim(); selected=String(selected||'');
+  var seen={}, groups=[];
+  (S.payments||[]).forEach(function(row){
+    if(String(row['Локація']||'').trim()!==loc) return;
+    var g=String(row['Група']||'').trim();
+    if(g && !seen[g]){ seen[g]=1; groups.push(g); }
+  });
+  groups.sort(function(a,b){ return a.localeCompare(b,'uk'); });
+  var html='<option value="">— Оберіть групу —</option>';
+  groups.forEach(function(g){ html+='<option value="'+esc(g)+'">'+esc(g)+'</option>'; });
+  if(selected && groups.indexOf(selected)<0) html+='<option value="'+esc(selected)+'">'+esc(selected)+' (поточна)</option>';
+  sel.innerHTML=html;
+  sel.value=selected;
+  if(sel.value!==selected) sel.selectedIndex=0;
+}
+// v7.111: показ результату авто-заведення у Payment (з відповіді saveClient.payment).
+function _showPaymentResult(p){
+  if(!p || !p.status) return;
+  var msg, type='ok';
+  if(p.status==='created'){ msg='✅ Заведено в Payment'+((p.budgetMonths&&p.budgetMonths.length)?(' + бюджет ('+p.budgetMonths.length+' міс)'):''); type='ok'; }
+  else if(p.status==='exists'){ msg='ℹ️ Дитина вже є в Payment'; type='info'; }
+  else if(p.status==='no_group'){ msg='⚠️ Групи «'+(p.group||'')+'» немає в Payment — заведіть вручну'+((p.groups&&p.groups.length)?('. Наявні: '+p.groups.slice(0,8).join(', ')):''); type='err'; }
+  else if(p.status==='skipped'){ return; }
+  else { msg='⚠️ Payment: '+(p.error||'помилка'); type='err'; }
+  try{ if(typeof showFloatMsg==='function') showFloatMsg(msg,type); else alert(msg); }catch(e){}
+}
 function openNewChild(){
   S.editId=null;
   S.isNew=true;
@@ -3350,6 +3385,8 @@ function openNewChild(){
   document.getElementById('tp3').innerHTML='';
   S._absFormOpen=false;
   setLocFieldMode(true);
+  // v7.111: групи з реальних груп локації (директор — своя; мережа — після вибору в fLocSel)
+  _populateGroupDropdown(isHR()?(document.getElementById('fLocSel').value||''):(S.user.loc||''), '');
   updateContractType();
   document.getElementById('mChild').classList.remove('hidden');
 }
@@ -3470,21 +3507,9 @@ function populateForm(id){
   document.getElementById('fName').value=c.name||'';
   document.getElementById('fBday').value=c.bday||'';
   document.getElementById('fLoc').value=c.loc||'';
-  // fGroup: якщо c.group не збігається з жодним option — браузер мовчки
-  // лишає попереднє значення. Гарантуємо коректне встановлення.
-  var groupSel=document.getElementById('fGroup');
-  var desiredGroup=c.group||'';
-  var hasOption=false;
-  for(var oi=0;oi<groupSel.options.length;oi++){
-    if(groupSel.options[oi].value===desiredGroup){ hasOption=true; break; }
-  }
-  if(!hasOption && desiredGroup){
-    var opt=document.createElement('option');
-    opt.value=desiredGroup; opt.textContent=desiredGroup;
-    groupSel.appendChild(opt);
-  }
-  groupSel.value=desiredGroup;
-  if(groupSel.value!==desiredGroup) groupSel.selectedIndex=0;
+  // v7.111: групи з реальних груп локації (getPayments), а не хардкод. Поточну групу картки
+  // додаємо окремим пунктом, якщо її вже нема серед актуальних (перейменована/вибула).
+  _populateGroupDropdown(c.loc||'', c.group||'');
   document.getElementById('fTeacher').value=c.teacher||'';
   syncStatusField(c);   // v6.29.3: read-only для розірваних / dropdown для випускника
   // v6.35: префіл полів випуску (показуються лише для статусу «Випускник»).
