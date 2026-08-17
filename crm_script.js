@@ -1,5 +1,10 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.112
+// m.kids CRM — Google Apps Script v7.113
+// v7.113: синк — ЧИСТКА ПІБ школярів. _cleanChildName прибирає номер-префікс «15. » і дату-код
+//         « 04_29»/« 08-21» + точкові виправлення (Алісія Чупрун→Чупрун Алісія; Антонецць→Антонець;
+//         Шевченко Влад=Владислав — одна картка). Зіставлення з наявними картками — по CLEANED-ПІБ
+//         (тож «брудні» картки школярів не дублюються, а нові заводяться чистими). Табір/«Вільних N»
+//         лишаються виключеними (v7.112): учнів беремо лише з класових груп.
 // v7.112: nightlySyncMissingKindergartens тепер САДКИ + ШКОЛИ (locScope:'kids_schools' = typ Садочок|Школа;
 //         Управління поза скоупом). Синк ВИКЛЮЧАЄ табірні рядки: група «Табір»/«Вільних N» або назва-рядок
 //         «Табір» не створюють карток (canікулярне відвідування, не учні класу). Скоуп/фільтр — у
@@ -578,7 +583,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.112', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.113', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -14977,12 +14982,21 @@ function syncMissingClientsFromPayments(opts){
     // v7.47 ЕТАП 2/4: група ПРИБРАНА з ID → синк матчить картку по name+loc, не плодить привида.
     return 'c_' + String(name||'').trim().slice(0,24) + '_' + String(loc||'').slice(0,12);
   }
+  // v7.113: чистка ПІБ школярів — прибираємо номер-префікс «15. » і дату-код у кінці « 04_29»/« 08-21».
+  // Застосовується до ОБОХ боків (рядок Payment і наявна картка) → cleaned-ім'я зіставляється, тож
+  // існуючі «брудні» картки не дублюються, а НОВІ заводяться вже чистими. Плюс точкові виправлення
+  // (перевернуте ПІБ / друк / дубль) з узгодженого списку.
+  function _cleanChildName(nm){
+    var s = String(nm||'').replace(/^\s*\d+\.\s*/, '').replace(/\s+\d{1,2}[_\-]\d{1,2}\s*$/, '').replace(/\s+/g,' ').trim();
+    var FIX = { 'алісія чупрун':'Чупрун Алісія', 'антонецць злата':'Антонець Злата', 'шевченко влад':'Шевченко Владислав' };
+    return FIX[s.toLowerCase()] || s;
+  }
 
   var existing = {};
   for (var cr = 1; cr < cvals.length; cr++){
     var cn = cvals[cr][cNameIdx];
     if (!String(cn||'').trim()) continue;
-    existing[normKey(cn, cvals[cr][cLocIdx])] = true;
+    existing[normKey(_cleanChildName(cn), cvals[cr][cLocIdx])] = true;   // v7.113: cleaned-ім'я
   }
   Logger.log('[syncMissing] Клієнти: %s рядків даних, %s унікальних name+loc ключів',
     cvals.length - 1, Object.keys(existing).length);
@@ -15022,12 +15036,13 @@ function syncMissingClientsFromPayments(opts){
     // (4) має фінансову активність за рік
     if (budRik <= 0 && faktRik <= 0){ skip.zeroSum++; continue; }
 
-    var key = normKey(name, loc);
-    if (existing[key]){ skip.existing++; continue; }   // вже є в Клієнти
-    if (seenNew[key]){ skip.dupInPay++; continue; }     // дубль у самій Оплати-Рік
+    var cname = _cleanChildName(name);                  // v7.113: чисте ПІБ (без префікса/коду, з виправленнями)
+    var key = normKey(cname, loc);
+    if (existing[key]){ skip.existing++; continue; }   // вже є в Клієнти (зіставлення по cleaned-ПІБ)
+    if (seenNew[key]){ skip.dupInPay++; continue; }     // дубль у самій Оплати-Рік (напр. Шевченко Влад=Владислав)
     seenNew[key] = true;
-    missing.push({name:name, loc:loc, group:group, teacher:teacher,
-      budRik:budRik, faktRik:faktRik, id:genChildId(name, group, loc)});
+    missing.push({name:cname, loc:loc, group:group, teacher:teacher,
+      budRik:budRik, faktRik:faktRik, id:genChildId(cname, group, loc)});
   }
 
   // === 4. Лог відсіяних + по локаціях + перші 50 ===
