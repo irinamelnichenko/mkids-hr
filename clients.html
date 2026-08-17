@@ -1536,7 +1536,7 @@ var _CF_RETRIES=[1000,3000];
 function _cfSleep(ms){ return new Promise(function(r){ setTimeout(r,ms); }); }
 async function cloudFetch(url,opts){
   opts=opts||{};
-  var _m=(opts.fetch&&(opts.fetch.method||'')).toUpperCase();
+  var _m=((opts.fetch&&opts.fetch.method)||'').toUpperCase();   // v7.110 FIX: метод за замовч. GET; guard від undefined opts.fetch
   if(_m==='POST'){ try{ if(opts.fetch&&typeof opts.fetch.body==='string'){ var _b=JSON.parse(opts.fetch.body); if(_b&&_b.token==null){ _b.token=_authTok(); opts.fetch.body=JSON.stringify(_b); } } }catch(_e){} } else { url=_tokUrl(url); }
   var tmo=opts.timeoutMs||45000, del=opts.retries||_CF_RETRIES;
   var init=Object.assign({redirect:'follow'},opts.fetch||{}), n=del.length+1, last;
@@ -1614,18 +1614,10 @@ async function loadPayments(force){
 
 // ─── LOAD ALL PAYMENT HISTORY (всі місяці) ────────────────────────────────────
 async function loadAllPayHistory(){
-  // Намагаємось читати всі листи Payment_YYYY-MM або Payment_MonthName
-  // Спочатку пробуємо через Apps Script
-  S.allPayRows=[];
-  try{
-    var j=await apiGet('getAllPayments');
-    S.allPayRows=j.data||[];
-    console.log('All payment history loaded: '+S.allPayRows.length+' rows');
-  }catch(e){
-    // Fallback: використовуємо поточні S.payments як єдиний доступний місяць
-    console.warn('getAllPayments not available, using current month data');
-    S.allPayRows=S.payments.slice();
-  }
+  // v7.110: getAllPayments — ПОКАРТКОВИЙ роут (потребує loc+name), а НЕ «всі рядки»,
+  // тож param-less виклик завжди падав («not available»). Історія оплат у картці
+  // (renderPayHistory) тягне рік окремо per-child; тут достатньо поточних рядків.
+  S.allPayRows = (S.payments || []).slice();
 }
 
 // Річні дані НЕ зберігаються в localStorage (занадто великі — 1136 дітей × 71 колонка).

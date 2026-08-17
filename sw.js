@@ -1,11 +1,11 @@
-// m.kids PWA Service Worker (v7.138-auth-token-stage1 / cache v7.139)
+// m.kids PWA Service Worker (v7.139-cloudfetch-method-fix / cache v7.140)
 // Cache: static shell (HTML + manifest + icons + xlsx)
 // Strategy:
 //   • POST → завжди network (ніколи не кешуємо)
 //   • GET до /macros/ (Apps Script) → network-only, fallback на cache
 //   • GET до інших static URLs → cache-first з фоновим оновленням
 
-var CACHE = 'mkids-cache-v7.139';
+var CACHE = 'mkids-cache-v7.140';
 var SHELL = [
   './',
   'activities.html',

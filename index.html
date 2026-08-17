@@ -22,7 +22,7 @@
   async function cloudFetch(url,opts){
     opts=opts||{};
     try{ var _t=(JSON.parse(localStorage.getItem('mkids_session')||'null')||{}).token||'';
-      if(_t){ var _m=(opts.fetch&&(opts.fetch.method||'')).toUpperCase();
+      if(_t){ var _m=((opts.fetch&&opts.fetch.method)||'').toUpperCase();
         if(_m==='POST'){ if(opts.fetch&&typeof opts.fetch.body==='string'){ var _b=JSON.parse(opts.fetch.body); if(_b&&_b.token==null){ _b.token=_t; opts.fetch.body=JSON.stringify(_b); } } }
         else if(!/[?&]token=/.test(url)){ url += (url.indexOf('?')>=0?'&':'?')+'token='+encodeURIComponent(_t); } } }catch(_e){}
     var tmo=opts.timeoutMs||45000, del=opts.retries||RETRIES;
