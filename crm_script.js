@@ -583,7 +583,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.113', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.114', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -716,6 +716,7 @@ function doPost(e) {
     else if (body.action === 'exportMealToPayments')      result = exportMealToPayments(body || {});  // v7.104 харчування → Бюджет-харчування (dryRun default)
     else if (body.action === 'syncMissingClients')       result = syncMissingClientsFromPayments({dryRun:(body.dryRun===true), confirm:'YES_WRITE', locScope:(body.locScope||'kindergartens')}); // v7.60 кнопка «Синхронізувати відсутніх» (садочки)
     else if (body.action === 'remapAttendanceId')        result = remapAttendanceId(body || {});   // v7.60 точковий ремап осиротілого ID Табеля
+    else if (body.action === 'renameSchoolChildrenClean') result = renameSchoolChildrenClean(body || {});   // v7.114 чистка ПІБ школярів + ремап childId
     else if (body.action === 'cashPayoutSheet')          result = cashPayoutSheet(body || {});      // v7.64 відомість на видачу готівки (PDF)
     else if (body.action === 'cleanupBackupTabs')        result = cleanupBackupTabs(body || {});  // v7.45 чистка бекап-табів
     else if (body.action === 'deleteAttendanceRecord')   result = deleteAttendanceRecord(body || {}); // v7.47 видалення садок-Табель запису (childId+date)
@@ -14899,6 +14900,149 @@ function testDiagClientsWithoutStatus(){
 // ID генерується за тим самим патерном що clients.html childId() (v7.47 без групи):
 //   'c_' + name.trim().slice(0,24) + '_' + loc.slice(0,12)
 // ───────────────────────────────────────────────────────────────────────────
+// v7.114: спільна чистка ПІБ школярів (top-level, використовує і синк, і перейменування).
+// Прибирає номер-префікс «15. », хвіст «N клас ...», дату-код « 04_29»/« 08-21»; точкові фікси.
+function _cleanSchoolName(nm){
+  var s = String(nm||'')
+    .replace(/^\s*\d+\.\s*/, '')                   // «15. » на початку
+    .replace(/\s+\d+\s*клас.*$/i, '')              // «... 3 клас 25-26» → від «N клас» і далі
+    .replace(/\s+\d{1,2}[_\-]\d{1,2}\s*$/, '')     // дата-код у кінці « 04_29» / « 08-21»
+    .replace(/\s+/g,' ').trim();
+  var FIX = { 'алісія чупрун':'Чупрун Алісія', 'антонецць злата':'Антонець Злата', 'шевченко влад':'Шевченко Владислав' };
+  return FIX[s.toLowerCase()] || s;
+}
+// v7.114: card childId за тим самим патерном, що clients.html childId() (без групи).
+function _genChildCardId(name, loc){
+  return 'c_' + String(name||'').trim().slice(0,24) + '_' + String(loc||'').slice(0,12);
+}
+
+// v7.114: перейменування ІСНУЮЧИХ «брудних» карток школи у чисте «Прізвище Ім'я».
+// Зміна ПІБ → змінюється childId, тож РЕМАПИМО всі листи, що ключуються по id:
+//   Табель («ID дитини»), Здоров'я («ID дитини»), bday_sync_status («ChildID»), Історія_Груп («ID дитини»).
+// Плюс перейменовуємо відповідний рядок у Payment-файлі (по СТАРОМУ імені → лише КЛАСОВИЙ рядок,
+// табірний рядок вже чистий і не чіпається). Оплати матчаться по імені, не по id.
+// POST {loc, dryRun?, by?}. dryRun DEFAULT true. Колізії (два різні ПІБ → одне чисте / newId вже
+// зайнятий іншою карткою) → НЕ застосовуємо, повертаємо список. LockService, журнал.
+function renameSchoolChildrenClean(body){
+  body = body || {};
+  var loc    = String(body.loc || '').trim();
+  var dryRun = (body.dryRun !== false);   // тільки dryRun===false вмикає запис
+  var by     = String(body.by || '');
+  if (!loc) return {ok:false, error:'loc обовʼязковий'};
+  try {
+    var ss  = getCRMSpreadsheet();
+    var csh = ss.getSheetByName(SHEET_CLIENTS);
+    if (!csh) return {ok:false, error:'Лист Клієнти не знайдено'};
+    var cv = csh.getDataRange().getValues();
+    var CH = cv[0].map(String);
+    var iId=CH.indexOf('ID'), iName=CH.indexOf('ПІБ дитини'), iLoc=CH.indexOf('Локація'), iUpd=CH.indexOf('Оновлено');
+    if (iId<0 || iName<0 || iLoc<0) return {ok:false, error:'Колонки ID/«ПІБ дитини»/Локація не знайдено'};
+
+    // 1) зібрати брудні картки локації + виявити колізії
+    var changes = [], byNewId = {}, existIds = {}, collisions = [];
+    for (var r=1;r<cv.length;r++){
+      var eid = String(cv[r][iId]||'').trim();
+      if (eid) existIds[eid] = String(cv[r][iName]||'').trim();
+    }
+    for (var r2=1;r2<cv.length;r2++){
+      if (!cv[r2][iId]) continue;
+      if (String(cv[r2][iLoc]||'').trim() !== loc) continue;
+      var oldName = String(cv[r2][iName]||'').trim();
+      var newName = _cleanSchoolName(oldName);
+      if (!newName || newName === oldName) continue;               // вже чисте
+      if (newName.split(/\s+/).filter(function(x){return x;}).length < 2) continue; // неповне ПІБ — не чіпаємо
+      var oldId = String(cv[r2][iId]||'').trim();
+      var newId = _genChildCardId(newName, loc);
+      var ch = {row:r2+1, oldName:oldName, newName:newName, oldId:oldId, newId:newId};
+      if (byNewId[newId]) collisions.push({type:'dup-clean', newId:newId, a:byNewId[newId].oldName, b:oldName});
+      else if (existIds[newId] && newId !== oldId) collisions.push({type:'existing-id', newId:newId, existingName:existIds[newId], from:oldName});
+      byNewId[newId] = ch;
+      changes.push(ch);
+    }
+
+    // 2) словник ремапу oldId→newId (лише де id реально змінюється)
+    var dict = {};
+    changes.forEach(function(c){ if (c.oldId && c.newId && c.oldId !== c.newId) dict[c.oldId] = c.newId; });
+
+    // helper: підрахунок/застосування ремапу колонки id
+    function remapCol(sheetName, colName, apply){
+      var s = ss.getSheetByName(sheetName); if(!s) return 0;
+      var v = s.getDataRange().getValues(); if(v.length<2) return 0;
+      var ci = v[0].map(String).indexOf(colName); if(ci<0) return 0;
+      var changed=0, out=[];
+      for(var k=0;k<v.length;k++){
+        if(k===0){ out.push([v[0][ci]]); continue; }
+        var ov=String(v[k][ci]||'').trim();
+        if(dict.hasOwnProperty(ov)){ out.push([dict[ov]]); changed++; } else out.push([v[k][ci]]);
+      }
+      if(apply && changed) s.getRange(1, ci+1, out.length, 1).setValues(out);
+      return changed;
+    }
+    var remap = {
+      tabel:   remapCol(SHEET_ATTENDANCE,   'ID дитини', false),
+      health:  remapCol(SHEET_HEALTH,       'ID дитини', false),
+      bday:    remapCol(BDAY_STATUS_SHEET,  'ChildID',   false),
+      history: remapCol(GROUP_HISTORY_SHEET,'ID дитини', false)
+    };
+
+    var payRenamed = [];
+    if (!dryRun){
+      if (collisions.length) return {ok:false, error:'КОЛІЗІЇ — не застосовано', collisions:collisions, count:changes.length};
+      var lock = LockService.getScriptLock();
+      try { lock.waitLock(60000); } catch(_le){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+      try {
+        var stamp = formatDate(new Date());
+        // 2a) Клієнти: ПІБ + childId (одним setValue на клітину)
+        changes.forEach(function(c){
+          csh.getRange(c.row, iName+1).setValue(c.newName);
+          csh.getRange(c.row, iId+1).setValue(c.newId);
+          if (iUpd>=0) csh.getRange(c.row, iUpd+1).setValue(stamp);
+        });
+        // 2b) ремап id по всіх листах
+        remap.tabel   = remapCol(SHEET_ATTENDANCE,   'ID дитини', true);
+        remap.health  = remapCol(SHEET_HEALTH,       'ID дитини', true);
+        remap.bday    = remapCol(BDAY_STATUS_SHEET,  'ChildID',   true);
+        remap.history = remapCol(GROUP_HISTORY_SHEET,'ID дитини', true);
+        // 2c) Payment: перейменувати рядок по СТАРОМУ (брудному) імені → чисте (лише класовий рядок)
+        changes.forEach(function(c){
+          try { if (_renamePaymentRowName(loc, c.oldName, c.newName)) payRenamed.push(c.newName); } catch(_pe){}
+        });
+        // журнал
+        try {
+          _moneyJournalLog(changes.map(function(c){
+            return {by:by, route:'renameSchoolChildrenClean', loc:loc, name:c.newName,
+                    col:'ПІБ/childId', before:c.oldName, after:c.newName, reason:'чистка ПІБ школярів'};
+          }));
+        } catch(_je){}
+      } finally { try { lock.releaseLock(); } catch(_){} }
+    }
+
+    return {ok:true, dryRun:dryRun, loc:loc, count:changes.length,
+            collisions:collisions, remap:remap, payRenamed:payRenamed,
+            changes:changes.slice(0,300)};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+// v7.114: перейменувати рядок у Payment-файлі локації по СТАРОМУ імені (нормалізованому) → нове.
+// Матчить лише РЯДКИ-ДІТЕЙ (не заголовки груп), перший збіг. Брудне старе ім'я ≠ чисте табірне,
+// тож зачіпає саме класовий рядок; табірний рядок (вже чистий) лишається недоторканим.
+function _renamePaymentRowName(loc, oldName, newName){
+  var reg = _getLocationPaymentRegistry(loc);
+  if (!reg || !reg.sheetId) return false;
+  var pss = SpreadsheetApp.openById(reg.sheetId);
+  var psh = (reg.sheetName && pss.getSheetByName(reg.sheetName)) || pss.getSheets()[0];
+  if (!psh) return false;
+  var data = psh.getDataRange().getValues();
+  var target = _journalNormName(oldName);
+  for (var r=3;r<data.length;r++){
+    var nm = String(data[r][0]||'').trim();
+    if (!nm) continue;
+    if (isGroupHeaderRow(data[r], 1)) continue;
+    if (_journalNormName(nm) === target){ psh.getRange(r+1, 1).setValue(newName); return true; }
+  }
+  return false;
+}
+
 function syncMissingClientsFromPayments(opts){
   opts = opts || {};
   // default dryRun=true: лише opts.dryRun === false вмикає реальний режим.
@@ -14982,15 +15126,7 @@ function syncMissingClientsFromPayments(opts){
     // v7.47 ЕТАП 2/4: група ПРИБРАНА з ID → синк матчить картку по name+loc, не плодить привида.
     return 'c_' + String(name||'').trim().slice(0,24) + '_' + String(loc||'').slice(0,12);
   }
-  // v7.113: чистка ПІБ школярів — прибираємо номер-префікс «15. » і дату-код у кінці « 04_29»/« 08-21».
-  // Застосовується до ОБОХ боків (рядок Payment і наявна картка) → cleaned-ім'я зіставляється, тож
-  // існуючі «брудні» картки не дублюються, а НОВІ заводяться вже чистими. Плюс точкові виправлення
-  // (перевернуте ПІБ / друк / дубль) з узгодженого списку.
-  function _cleanChildName(nm){
-    var s = String(nm||'').replace(/^\s*\d+\.\s*/, '').replace(/\s+\d{1,2}[_\-]\d{1,2}\s*$/, '').replace(/\s+/g,' ').trim();
-    var FIX = { 'алісія чупрун':'Чупрун Алісія', 'антонецць злата':'Антонець Злата', 'шевченко влад':'Шевченко Владислав' };
-    return FIX[s.toLowerCase()] || s;
-  }
+  function _cleanChildName(nm){ return _cleanSchoolName(nm); }   // v7.114: делегуємо у спільну top-level
 
   var existing = {};
   for (var cr = 1; cr < cvals.length; cr++){
