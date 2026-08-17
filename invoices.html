@@ -394,6 +394,29 @@ function sortByLocationOrder(arr, getName){
 }
 function sortLocationsByZone(locs){ return sortByLocationOrder(locs); }
 
+/* v7.110 токен-авторизація: ЄДИНИЙ перехоплювач fetch — додає токен у КОЖЕН запит до бекенду
+   (GET -> &token=, POST -> у тіло). Усі опції захищені від undefined. */
+(function(){
+  if (window.__mkFetchTokenPatched) return; window.__mkFetchTokenPatched = true;
+  var _of = window.fetch.bind(window);
+  function _tok(){ try { return (JSON.parse(localStorage.getItem('mkids_session')||'null')||{}).token || ''; } catch(e){ return ''; } }
+  window.fetch = function(input, init){
+    try {
+      var t = _tok();
+      var url = (typeof input === 'string') ? input : (input && input.url) || '';
+      if (t && url.indexOf('script.google.com') >= 0){
+        init = init || {};
+        var m = ((init && init.method) || 'GET').toUpperCase();
+        if (m === 'POST'){
+          if (typeof init.body === 'string'){ try { var b = JSON.parse(init.body); if (b && b.token == null){ b.token = t; init.body = JSON.stringify(b); } } catch(_e){} }
+        } else if (typeof input === 'string' && !/[?&]token=/.test(input)){
+          input = input + (input.indexOf('?') >= 0 ? '&' : '?') + 'token=' + encodeURIComponent(t);
+        }
+      }
+    } catch(_e){}
+    return _of(input, init);
+  };
+})();
 var CFG = {
   SCRIPT_URL: 'https://script.google.com/macros/s/AKfycbyTSUVlaN4-PpXe47zCSmhVs0Qxy1FDXG_XsB4zcKNpqBxdhDtS9ibM4YFGkGjmPQDFWQ/exec',
   LOC: 'Голосієво'
