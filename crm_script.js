@@ -583,7 +583,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.116', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.117', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -597,6 +597,7 @@ function doGet(e) {
     else if (action === 'runAggregateYearly') result = aggregatePaymentsYearly();
     else if (action === 'runSyncBdayStatus')  result = syncBdayStatusSheet();
     else if (action === 'getRegistryUrls')    result = getRegistryUrls();
+    else if (action === 'getNeedsAttention') result = getNeedsAttention();   // v7.117 картки active без Payment
     else if (action === 'getBdayStatus')      result = getBdayStatus();                                            // v7.109 роут замість прямого читання листа з фронту
     else if (action === 'getAttendance')      result = getAttendance(e);
     else if (action === 'diagLocPayment')     result = diagLocPayment(e); // v7.57 read-only: пер-лок Payment-файл
@@ -15098,6 +15099,91 @@ function cleanSchoolClassPaymentNames(body){
     return {ok:true, dryRun:dryRun, loc:loc, count:changes.length,
             excluded:skippedExcluded, changes:changes.slice(0,200)};
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.117 «Потребують уваги»: картки active без рядка в Payment за поточний місяць.
+// Класифікація: junk (тест/сміття) · merge-card (дубль існуючої картки — перевернуте/
+// неповне/орфо ім'я тієї ж дитини) · drift-pay (ім'я ≠ рядок Payment — виправити) ·
+// decide (справжній кандидат: розірвати/випустити/повернути/видалити). Read-only.
+// ═══════════════════════════════════════════════════════════════════════════
+function _naNorm(s){ return String(s||'').trim().replace(/\s+/g,' ').toLowerCase(); }
+function _naCleanToks(s){
+  return String(s||'').toLowerCase().replace(/[()]/g,' ').split(/\s+/).filter(function(t){ return t && !/^\d+$/.test(t); });
+}
+function _naAlign(a,b){
+  var ta=_naCleanToks(a), tb=_naCleanToks(b);
+  if(!ta.length || !tb.length) return false;
+  var sa={}, sb={}; ta.forEach(function(t){sa[t]=1;}); tb.forEach(function(t){sb[t]=1;});
+  var hasCommon=false, ra=[], rb=[];
+  ta.forEach(function(t){ if(sb[t]) hasCommon=true; else ra.push(t); });
+  tb.forEach(function(t){ if(!sa[t]) rb.push(t); });
+  if(ra.length===0 && rb.length===0) return true;                       // однакові слова (перевернуте)
+  if(ra.length<=1 && rb.length<=1 && hasCommon){
+    if(ra.length===0 || rb.length===0) return true;                     // підмножина (код прибрано)
+    return _surnameSim(ra[0], rb[0]) >= 0.72;                           // той токен схожий (орфографія)
+  }
+  return false;
+}
+function _naClassify(name, loc, cards, pays){
+  var nm=_naNorm(name);
+  if (nm.indexOf('тест')>=0 || !_naCleanToks(name).length) return {cat:'junk', match:''};
+  // 1) ДУБЛЬ існуючої картки (пріоритет над Payment)
+  for (var i=0;i<cards.length;i++){
+    if(_naNorm(cards[i])===nm) continue;
+    var ct=_naCleanToks(cards[i]), nt=_naCleanToks(name);
+    if(nt.length && nt.length<ct.length){
+      var ctset={}, sub=true; ct.forEach(function(t){ctset[t]=1;});
+      nt.forEach(function(t){ if(!ctset[t]) sub=false; });
+      if(sub && ct.length>=2) return {cat:'merge-card', match:cards[i]};
+    }
+    if(_naAlign(name, cards[i])) return {cat:'merge-card', match:cards[i]};
+  }
+  // 2) орфографія vs рядок Payment
+  for (var j=0;j<pays.length;j++){
+    if(_naNorm(pays[j])===nm) continue;
+    if(_naAlign(name, pays[j])) return {cat:'drift-pay', match:pays[j]};
+  }
+  return {cat:'decide', match:''};
+}
+function getNeedsAttention(){
+  try {
+    var crm = getCRMSpreadsheet();
+    var csh = crm.getSheetByName(SHEET_CLIENTS);
+    if(!csh) return {ok:false, error:'Клієнти не знайдено'};
+    var cv = csh.getDataRange().getValues(); var CH=cv[0].map(String);
+    var iName=CH.indexOf('ПІБ дитини'), iLoc=CH.indexOf('Локація'), iGrp=CH.indexOf('Група'),
+        iStat=CH.indexOf('Статус'), iCr=CH.indexOf('Створено'), iId=CH.indexOf('ID');
+    // поточний ростер Payment («Оплати» — поточний місяць)
+    var payByLoc={}, payset={};
+    var psh = crm.getSheetByName(SHEET_PAYMENTS);
+    if (psh){
+      var pv=psh.getDataRange().getValues(); var PH=pv[0].map(String);
+      var pN=PH.indexOf("Ім'я дитини"), pL=PH.indexOf('Локація');
+      for (var r=1;r<pv.length;r++){
+        var pnm=String(pv[r][pN]||'').trim(); if(!pnm) continue;
+        var ploc=String(pv[r][pL]||'').trim(), lk=_naNorm(ploc);
+        (payByLoc[lk]=payByLoc[lk]||[]).push(pnm);
+        payset[_naNorm(pnm)+'|'+lk]=true;
+      }
+    }
+    // усі картки по локації (для merge-детекції)
+    var cardsByLoc={};
+    for (var c=1;c<cv.length;c++){ if(!cv[c][iId]) continue;
+      var lk2=_naNorm(cv[c][iLoc]); (cardsByLoc[lk2]=cardsByLoc[lk2]||[]).push(String(cv[c][iName]||'').trim()); }
+    var items=[], byCat={decide:0,'merge-card':0,'drift-pay':0,junk:0};
+    for (var k=1;k<cv.length;k++){ if(!cv[k][iId]) continue;
+      if(_naNorm(cv[k][iStat])!=='active') continue;
+      var name=String(cv[k][iName]||'').trim(), loc=String(cv[k][iLoc]||'').trim(), lk3=_naNorm(loc);
+      if (payset[_naNorm(name)+'|'+lk3]) continue;                       // є в Payment → не чіпаємо
+      var cl=_naClassify(name, loc, cardsByLoc[lk3]||[], payByLoc[lk3]||[]);
+      byCat[cl.cat]=(byCat[cl.cat]||0)+1;
+      items.push({id:String(cv[k][iId]||''), name:name, loc:loc,
+        group:(iGrp>=0?String(cv[k][iGrp]||''):''), created:(iCr>=0?String(cv[k][iCr]||''):''),
+        cat:cl.cat, match:cl.match});
+    }
+    return {ok:true, total:items.length, byCat:byCat, items:items};
+  } catch(e){ return {ok:false, error:String(e&&e.message||e)}; }
 }
 
 function syncMissingClientsFromPayments(opts){
