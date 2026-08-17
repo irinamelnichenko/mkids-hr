@@ -1,4 +1,9 @@
 // ═══════════════════════════════════════════════════════════════════════════
+// m.kids CRM — Google Apps Script v7.112
+// v7.112: nightlySyncMissingKindergartens тепер САДКИ + ШКОЛИ (locScope:'kids_schools' = typ Садочок|Школа;
+//         Управління поза скоупом). Синк ВИКЛЮЧАЄ табірні рядки: група «Табір»/«Вільних N» або назва-рядок
+//         «Табір» не створюють карток (canікулярне відвідування, не учні класу). Скоуп/фільтр — у
+//         syncMissingClientsFromPayments; лог skip.camp. dryRun за замовч. лишається safe (confirm='YES_WRITE').
 // m.kids CRM — Google Apps Script v7.111
 // v7.111: ФАЗА 1 — авто-заведення НОВОЇ картки дитини у Payment. saveClient(action:created)
 //         викликає _autoCreatePaymentForNewCard: (1) addPaymentRow(loc,name,group) з ґардами —
@@ -573,7 +578,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.111', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.112', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -14904,16 +14909,19 @@ function syncMissingClientsFromPayments(opts){
   // v7.60 SCOPE-ФІЛЬТР ЛОКАЦІЙ. locScope='kindergartens' → синкати ЛИШЕ садочки
   // (typ='Садочок' у CONFIG-реєстрі; Школи/Управління(Благо,Житомир) пропускаємо).
   // Список береться ДИНАМІЧНО з getLocations() — без хардкоду.
+  // v7.112: scope 'kids_schools' = Садочок + Школа (для нічного синку зі школами);
+  // 'kindergartens' = лише Садочок (як було). Управління (Благо/Житомир) завжди поза скоупом.
   var scope = String(opts.locScope || '').trim();
   var kgSet = null;
-  if (scope === 'kindergartens'){
+  if (scope === 'kindergartens' || scope === 'kids_schools'){
     kgSet = {};
+    var _okTypes = (scope === 'kids_schools') ? {'Садочок':1, 'Школа':1} : {'Садочок':1};
     try {
       (getLocations().data || []).forEach(function(l){
-        if (String(l.typ || '').trim() === 'Садочок') kgSet[String(l.loc || '').trim()] = true;
+        if (_okTypes[String(l.typ || '').trim()]) kgSet[String(l.loc || '').trim()] = true;
       });
     } catch(_ke){ Logger.log('[syncMissing] ⚠ getLocations впав: %s — скоуп не застосовано', _ke); kgSet = null; }
-    Logger.log('[syncMissing] SCOPE=kindergartens: %s садочків у фільтрі', kgSet ? Object.keys(kgSet).length : 'н/д');
+    Logger.log('[syncMissing] SCOPE=%s: %s локацій у фільтрі', scope, kgSet ? Object.keys(kgSet).length : 'н/д');
   }
 
   // v7.60 LockService: тригер (7:30) і кнопка не мають зіткнутись/подвоїти.
@@ -14987,7 +14995,7 @@ function syncMissingClientsFromPayments(opts){
   //   4) Бюджет-Рік > 0 OR Факт-Рік > 0 (фінансова активність)
   var missing = [];
   var seenNew = {};
-  var skip = {header:0, numeric:0, test:0, zeroSum:0, noLoc:0, existing:0, dupInPay:0, outScope:0};
+  var skip = {header:0, numeric:0, test:0, zeroSum:0, noLoc:0, existing:0, dupInPay:0, outScope:0, camp:0};
   var skipNumericSamples = [];
   for (var pr = 1; pr < pvals.length; pr++){
     var prow    = pvals[pr];
@@ -15008,6 +15016,9 @@ function syncMissingClientsFromPayments(opts){
     if (!loc){ skip.noLoc++; continue; }
     // v7.60 SCOPE: поза скоупом (не садочок) → пропускаємо
     if (kgSet && !kgSet[loc]){ skip.outScope++; continue; }
+    // v7.112 ТАБІР/спейсери: рядки під заголовком «Табір» і під спейсерами «Вільних N»
+    // (та сама назва-рядок «Табір») — це відвідування на канікулах, НЕ учні класу → НЕ створюємо картку.
+    if (/вільних/i.test(group) || /табір/i.test(group) || /^\s*табір\s*$/i.test(name)){ skip.camp++; continue; }
     // (4) має фінансову активність за рік
     if (budRik <= 0 && faktRik <= 0){ skip.zeroSum++; continue; }
 
@@ -15030,6 +15041,7 @@ function syncMissingClientsFromPayments(opts){
   Logger.log('  · нульова сума (Бюджет+Факт=0):   %s', skip.zeroSum);
   Logger.log('  · вже є в Клієнти:               %s', skip.existing);
   Logger.log('  · дубль у Оплати-Рік:            %s', skip.dupInPay);
+  Logger.log('  · табір/спейсери (Табір/Вільних): %s', skip.camp);
   Logger.log('  · поза скоупом (не садочок):     %s', skip.outScope);
   Logger.log('[syncMissing] ─────────────────────────────────────');
 
@@ -15111,7 +15123,8 @@ function runSyncMissingREAL_792(){
 // чернеток карток ЛИШЕ по САДОЧКАХ (locScope='kindergartens'). Ідемпотентно (дедуп
 // existing/seenNew) + LockService всередині. Реєструється у createDailyTrigger.
 function nightlySyncMissingKindergartens(){
-  return syncMissingClientsFromPayments({dryRun: false, confirm: 'YES_WRITE', locScope: 'kindergartens'});
+  // v7.112: тепер САДКИ + ШКОЛИ (locScope:'kids_schools'). Табірні рядки (Табір/Вільних N) не заводяться.
+  return syncMissingClientsFromPayments({dryRun: false, confirm: 'YES_WRITE', locScope: 'kids_schools'});
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
