@@ -671,7 +671,16 @@ function tgWebhook(e){
     var cq  = up.callback_query || null;
     var allow = String(_leadsChatId()||'');
     var chatId = msg ? String(msg.chat && msg.chat.id) : (cq && cq.message ? String(cq.message.chat.id) : '');
-    if (allow && chatId && chatId !== allow) return {ok:true, ignored:'chat', chat:chatId};   // не наша група
+    // Міграція групи → супергрупа: chat_id змінюється. Приймаємо новий і оновлюємо Property.
+    if (msg && msg.migrate_to_chat_id){
+      PropertiesService.getScriptProperties().setProperty('LEADS_CHAT_ID', String(msg.migrate_to_chat_id));
+      _tgErr('migrate', 'LEADS_CHAT_ID '+allow+' → '+msg.migrate_to_chat_id);
+      return {ok:true, migrated:String(msg.migrate_to_chat_id)};
+    }
+    if (allow && chatId && chatId !== allow){
+      _tgErr('ignored-chat', 'got='+chatId+' expected='+allow);   // діагностика: бачимо реальний chat_id
+      return {ok:true, ignored:'chat', chat:chatId};
+    }
     // ЕТАП 4: натискання кнопки картки
     if (cq){ _tgHandleCallback(cq); return {ok:true, kind:'callback'}; }
     // ЕТАП 3-6: текст
@@ -1012,7 +1021,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.131', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.132', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
