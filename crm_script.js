@@ -594,7 +594,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.118', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.119', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -631,7 +631,7 @@ function doGet(e) {
     else if (action === 'getOverviewAnalytics')      result = getOverviewAnalytics(e.parameter.year || '', e.parameter.month || '');
     else if (action === 'getUsers')                  result = getUsers(Number(e.parameter && e.parameter.actorId || 0)); // v7.109 CFO-only, без пароля
     else if (action === 'getGroupNorms')             result = getGroupNorms();
-    else if (action === 'getKomplektaciya')          result = getKomplektaciya({tab: (e.parameter && e.parameter.tab) || ''}); // v7.96 read-only структура файлу комплектації
+    else if (action === 'getKomplektaciya')          result = getKomplektaciya({tab: (e.parameter && e.parameter.tab) || '', spreadsheetId: (e.parameter && e.parameter.spreadsheetId) || '', stats: (e.parameter && e.parameter.stats) || ''}); // v7.96/v7.118 read-only структура файлу (+spreadsheetId,+stats)
     else if (action === 'getKomplektaciyaData')      result = getKomplektaciyaData({year: (e.parameter && e.parameter.year) || '', tab: (e.parameter && e.parameter.tab) || ''}); // v7.97
     else if (action === 'getKomplektaciyaFreeSeats') result = getKomplektaciyaFreeSeats(); // v7.97
     else if (action === 'getVyhovatelRatings')       result = getVyhovatelRatings({year: (e.parameter && e.parameter.year) || '', month: (e.parameter && e.parameter.month) || ''}); // v7.99
@@ -5958,11 +5958,22 @@ function getGroupNorms() {
 //     (рядок 1) і перші 5 рядків даних (getDisplayValues), а також rows/cols. Нічого не пише.
 var KOMPLEKTACIYA_SHEET_ID = '1IJ81H5kyeVj3GzRSz6dWJQR6YuLIczVKVj95OtZ9YH4';
 
+// v7.118: read-only структура будь-якого файлу. params.spreadsheetId (за замовч.
+// KOMPLEKTACIYA_SHEET_ID) · params.tab (одна вкладка) · params.stats (true → fill-rate
+// по колонках, distinct-семпли, діапазон дат). Нічого не пише.
+function _reconParseDate(s){
+  var m=/^(\d{1,2})[.\/](\d{1,2})[.\/](\d{4})/.exec(s); if(m) return Number(m[3])*10000+Number(m[2])*100+Number(m[1]);
+  m=/^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(s); if(m) return Number(m[1])*10000+Number(m[2])*100+Number(m[3]);
+  return null;
+}
+function _reconFmtD(n){ if(!n) return ''; n=String(n); return n.slice(6,8)+'.'+n.slice(4,6)+'.'+n.slice(0,4); }
 function getKomplektaciya(params) {
   params = params || {};
   var wantTab = String(params.tab || '').trim();
+  var SSID = String(params.spreadsheetId || '').trim() || KOMPLEKTACIYA_SHEET_ID;
+  var stats = (params.stats === true || String(params.stats)==='1' || String(params.stats)==='true');
   try {
-    var ss = SpreadsheetApp.openById(KOMPLEKTACIYA_SHEET_ID);
+    var ss = SpreadsheetApp.openById(SSID);
     var allSheets = ss.getSheets();
     var out = [];
     for (var s = 0; s < allSheets.length; s++) {
@@ -5973,21 +5984,44 @@ function getKomplektaciya(params) {
       var lastCol = sh.getLastColumn();
       var entry = {name: nm, rows: lastRow, cols: lastCol, headers: [], sample: []};
       if (lastRow >= 1 && lastCol >= 1) {
-        var nRead = Math.min(lastRow, 6); // 1 рядок заголовків + до 5 рядків даних
+        var nRead = Math.min(lastRow, 6);
         var vals = sh.getRange(1, 1, nRead, lastCol).getDisplayValues();
         entry.headers = vals[0] || [];
-        entry.sample = vals.slice(1); // перші 5 рядків даних
+        entry.sample = vals.slice(1);
+        if (stats && lastRow > 1) {
+          var cap = Math.min(lastRow - 1, 8000);
+          var all = sh.getRange(2, 1, cap, lastCol).getDisplayValues();
+          var cols = [];
+          for (var c = 0; c < lastCol; c++) {
+            var filled = 0, distinct = {}, distinctN = 0, dcount = 0, dmin = null, dmax = null;
+            for (var r = 0; r < all.length; r++) {
+              var cell = String(all[r][c] == null ? '' : all[r][c]).trim();
+              if (!cell) continue;
+              filled++;
+              if (distinctN < 15 && !distinct.hasOwnProperty(cell)) { distinct[cell] = 1; distinctN++; }
+              var d = _reconParseDate(cell);
+              if (d) { dcount++; if (!dmin || d < dmin) dmin = d; if (!dmax || d > dmax) dmax = d; }
+            }
+            var col = {i: c, header: entry.headers[c] || ('col' + (c + 1)), filled: filled,
+                       total: all.length, pct: all.length ? Math.round(filled / all.length * 100) : 0,
+                       samples: Object.keys(distinct).slice(0, 10)};
+            if (dcount > 0 && dcount >= filled * 0.5) col.dateRange = [_reconFmtD(dmin), _reconFmtD(dmax)];
+            cols.push(col);
+          }
+          entry.scanned = all.length;
+          entry.colStats = cols;
+        }
       }
       out.push(entry);
     }
     if (wantTab && out.length === 0) {
-      return {ok: false, error: 'Вкладку "' + wantTab + '" не знайдено', spreadsheetId: KOMPLEKTACIYA_SHEET_ID,
+      return {ok: false, error: 'Вкладку "' + wantTab + '" не знайдено', spreadsheetId: SSID,
               tabs: allSheets.map(function(x){ return x.getName(); })};
     }
-    return {ok: true, spreadsheetId: KOMPLEKTACIYA_SHEET_ID, spreadsheetName: ss.getName(),
+    return {ok: true, spreadsheetId: SSID, spreadsheetName: ss.getName(),
             tab: wantTab || null, tabCount: out.length, tabs: out};
   } catch (e) {
-    return {ok: false, error: String(e && e.message || e), spreadsheetId: KOMPLEKTACIYA_SHEET_ID};
+    return {ok: false, error: String(e && e.message || e), spreadsheetId: SSID};
   }
 }
 
