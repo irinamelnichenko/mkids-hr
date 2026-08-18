@@ -566,6 +566,34 @@ function _authLogMissing(action, method){    // ЕТАП 1: бачимо, які
     sh.appendRow([formatDate(new Date()), String(action || ''), String(method || '')]);
   } catch(_e){}
 }
+// v7.122: діагностика Telegram-бота лідів. Токен береться зі Script Properties
+// (TELEGRAM_BOT_TOKEN) і НЕ повертається у відповідь. getMe (хто бот) + getUpdates
+// (чи бачить повідомлення групи, які chat_id). getUpdates не спрацює, якщо вже
+// встановлено webhook (тоді Telegram віддає порожньо/409) — на етапі налаштування ок.
+function tgGetUpdates(){
+  try{
+    var tok = PropertiesService.getScriptProperties().getProperty('TELEGRAM_BOT_TOKEN');
+    if(!tok) return {ok:false, error:'TELEGRAM_BOT_TOKEN не знайдено у Script Properties'};
+    var base = 'https://api.telegram.org/bot'+tok;
+    var me = JSON.parse(UrlFetchApp.fetch(base+'/getMe', {muteHttpExceptions:true}).getContentText());
+    var up = JSON.parse(UrlFetchApp.fetch(base+'/getUpdates', {muteHttpExceptions:true}).getContentText());
+    // безпечний зріз апдейтів: chat + текст + відправник, без службового
+    var chats = {};
+    (up.result||[]).forEach(function(u){
+      var m = u.message || u.edited_message || u.channel_post || (u.my_chat_member && {chat:u.my_chat_member.chat});
+      if(m && m.chat){ chats[m.chat.id] = {id:m.chat.id, type:m.chat.type, title:m.chat.title||'', username:m.chat.username||''}; }
+    });
+    var msgs = (up.result||[]).slice(-15).map(function(u){
+      var m = u.message || u.edited_message || {};
+      return {update_id:u.update_id, chat_id:(m.chat&&m.chat.id), chat_title:(m.chat&&m.chat.title)||'',
+              from:(m.from&&(m.from.username||m.from.first_name))||'', text:(m.text||'').slice(0,80),
+              date:m.date||''};
+    });
+    return {ok:true, bot:(me.result&&{id:me.result.id, username:me.result.username, name:me.result.first_name})||me,
+            getUpdates_ok:up.ok, description:up.description, updateCount:(up.result||[]).length,
+            chats:Object.keys(chats).map(function(k){return chats[k];}), lastMessages:msgs};
+  }catch(e){ return {ok:false, error:String(e&&e.message||e)}; }
+}
 // v7.118: діагностика ЕТАПу 1 — читаємо «Авторизація_Лог» (хто приходив без токена).
 function getAuthLog(){
   try {
@@ -594,7 +622,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.121', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.122', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -610,6 +638,7 @@ function doGet(e) {
     else if (action === 'getRegistryUrls')    result = getRegistryUrls();
     else if (action === 'getNeedsAttention') result = getNeedsAttention();   // v7.117 картки active без Payment
     else if (action === 'getAuthLog')         result = getAuthLog();   // v7.118 діагностика Авторизація_Лог
+    else if (action === 'tgGetUpdates')       result = tgGetUpdates();   // v7.122 діагностика Telegram-бота
     else if (action === 'getBdayStatus')      result = getBdayStatus();                                            // v7.109 роут замість прямого читання листа з фронту
     else if (action === 'getAttendance')      result = getAttendance(e);
     else if (action === 'diagLocPayment')     result = diagLocPayment(e); // v7.57 read-only: пер-лок Payment-файл
