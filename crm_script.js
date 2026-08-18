@@ -707,9 +707,12 @@ function tgWebhook(e){
         _tgSend(allow, '🧹 Закрито тестових лідів (були «нові»): <b>'+cl.count+'</b>', {reply_to_message_id: msg.message_id});
         return {ok:true, kind:'closeold', count:cl.count};
       }
-      // ЕТАП 6: відповідь у тред картки (reply) → лог + збагачення картки (навіть із цифрами)
+      // ЕТАП 6: відповідь у тред картки АБО у force_reply-запит примітки → лог + збагачення
       if (msg.reply_to_message && !/^\/(newlead|lead)\b/i.test(txt)){
-        if (_tgHandleReply(String(msg.reply_to_message.message_id), txt, who)) return {ok:true, kind:'reply-log'};
+        var rmid = String(msg.reply_to_message.message_id);
+        var target = rmid;
+        try{ var mapped = CacheService.getScriptCache().get('tgnote_'+rmid); if(mapped) target = mapped; }catch(_c){}  // примітка → картка
+        if (_tgHandleReply(target, txt, who)) return {ok:true, kind:'reply-log'};
       }
       // ЕТАП 3+4: команда /newlead АБО будь-який текст із телефоном ≥9 цифр → новий лід
       if (/^\/(newlead|lead)\b/i.test(txt) || txt.replace(/\D/g,'').length>=9){
@@ -802,7 +805,7 @@ function _leadKb(id, mode){
   return {inline_keyboard:[
     [{text:'📞 Додзвонився', callback_data:'L|'+id+'|call_ok'}, {text:'🔕 Не відповів', callback_data:'L|'+id+'|call_no'}],
     [{text:'🗓 Екскурсія', callback_data:'L|'+id+'|exc'}, {text:'✍️ Договір', callback_data:'L|'+id+'|sign'}],
-    [{text:'🚫 Відмова', callback_data:'L|'+id+'|refuse'}]
+    [{text:'🚫 Відмова', callback_data:'L|'+id+'|refuse'}, {text:'📝 Примітка', callback_data:'L|'+id+'|note'}]
   ]};
 }
 var LB = {}; LEADS_BOT_HEADER.forEach(function(h,i){ LB[h]=i; });   // мапа колонок
@@ -874,6 +877,7 @@ function _tgHandleCallback(cq){
     if(parts[0]!=='L') return;
     var id=parts[1], act=parts[2];
     var who=cq.from && (cq.from.username?('@'+cq.from.username):(cq.from.first_name||'')) || '';
+    if(act==='note'){ _tgPromptNote(id, cq); return; }   // 📝 Примітка → force_reply, без зміни статусу
     var res=_tgUpdateLead(id, act, who);
     if(res && res.changed && res.ld){   // 2) подвійне натискання (changed:false) → нічого не редагуємо
       var closed=(res.ld.status==='signed'||res.ld.status==='refused');
@@ -884,6 +888,24 @@ function _tgHandleCallback(cq){
   } catch(err){ /* ACK уже надіслано */ }
 }
 function _leadMs(s){ var m=String(s||'').match(/(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2})/); return m?new Date(+m[3],+m[2]-1,+m[1],+m[4],+m[5]).getTime():null; }
+
+// 📝 Примітка: шлемо force_reply-запит (як reply на картку → тред), мапимо message_id
+// цього запиту → message_id картки в Cache. Людина одразу пише у підставлене поле, не
+// обираючи «Відповісти». Її текст прилетить як reply на наш запит → мапимо назад на лід.
+function _tgPromptNote(id, cq){
+  var sh=_leadsBotSheet(); var v=sh.getDataRange().getValues();
+  for(var r=1;r<v.length;r++){
+    if(String(v[r][LB.lead_id])!==String(id)) continue;
+    var chat=v[r][LB.tg_chat_id], mid=v[r][LB.tg_message_id];
+    var f=cq.from||{};
+    var mention = f.username ? ('@'+f.username) : ('<a href="tg://user?id='+f.id+'">'+_htmlEsc(f.first_name||'ви')+'</a>');
+    var p=_tgSend(chat, '📝 '+mention+', напишіть примітку — поле вже підставлено:',
+      {reply_to_message_id:mid, reply_markup:{force_reply:true, selective:true, input_field_placeholder:'Примітка до ліда…'}});
+    var pmid = p && p.result && p.result.message_id;
+    if(pmid){ try{ CacheService.getScriptCache().put('tgnote_'+pmid, String(mid), 3600); }catch(_){} }
+    return;
+  }
+}
 
 // ── ЕТАП 5: SLA 15 хв. Тайм-тригер щохвилини. Лід у статусі 'new' без першої реакції:
 // >15 хв → нагадування в тред; >30 хв → ескалація. Прапорці r1/r2 у колонці reminders.
@@ -1035,7 +1057,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.133', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.134', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
