@@ -842,12 +842,14 @@ function _leadMs(s){ var m=String(s||'').match(/(\d{2})\.(\d{2})\.(\d{4})\s+(\d{
 function tgSlaCheck(){
   try{
     var sh=_leadsBotSheet(); var v=sh.getDataRange().getValues(); var chat=_leadsChatId();
-    var nowMs=new Date().getTime(), now=formatDate(new Date());
+    var now=formatDate(new Date());          // «зараз» у Києві, тим самим форматом, що created_at
+    var nowRef=_leadMs(now);                 // парсимо тим самим _leadMs → зсув поясу скорочується
     for(var r=1;r<v.length;r++){
       var row=v[r];
       if(String(row[LB.status])!=='new' || row[LB.first_reaction_at]) continue;   // тільки без реакції
-      var cMs=_leadMs(row[LB.created_at]); if(cMs==null) continue;
-      var mins=Math.round((nowMs-cMs)/60000);
+      var cMs=_leadMs(row[LB.created_at]); if(cMs==null || nowRef==null) continue;
+      var mins=Math.round((nowRef-cMs)/60000);
+      if(mins<0) continue;                    // захист від майбутніх дат
       var rem={}; try{rem=JSON.parse(row[LB.reminders]||'{}');}catch(_){}
       var mid=row[LB.tg_message_id], fired=false;
       if(mins>=30 && !rem.r2){ _tgSend(chat,'‼️ <b>30 хв без реакції</b> — ескалація. Хто бере ліда?',{reply_to_message_id:mid}); rem.r2=now; fired=true; }
@@ -970,7 +972,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.128', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.129', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
