@@ -573,7 +573,7 @@ function _authLogMissing(action, method){    // ЕТАП 1: бачимо, які
 var LEADS_BOT_SHEET = 'Ліди_Бот';
 var LEADS_BOT_HEADER = ['lead_id','created_at','source','локація','phone','parent','child',
   'child_age','comment','tg_chat_id','tg_message_id','status','assignee','first_reaction_at',
-  'sla_ok','refusal_reason','reminders','log','client_id','updated_at'];
+  'sla_ok','refusal_reason','reminders','log','client_id','updated_at','excursion_date'];
 function _tgProp(k){ return PropertiesService.getScriptProperties().getProperty(k) || ''; }
 function _tgTok(){ return _tgProp('TELEGRAM_BOT_TOKEN'); }
 function _leadsChatId(){ return _tgProp('LEADS_CHAT_ID'); }
@@ -598,7 +598,10 @@ function _leadsBotSheet(){
   var ss = getCRMSpreadsheet();
   var sh = ss.getSheetByName(LEADS_BOT_SHEET);
   if(!sh){ sh = ss.insertSheet(LEADS_BOT_SHEET);
-    sh.getRange(1,1,1,LEADS_BOT_HEADER.length).setValues([LEADS_BOT_HEADER]); sh.setFrozenRows(1); }
+    sh.getRange(1,1,1,LEADS_BOT_HEADER.length).setValues([LEADS_BOT_HEADER]); sh.setFrozenRows(1); return sh; }
+  // еволюція схеми: тільки ДОПИСУЄМО відсутні колонки в кінець (порядок наявних не чіпаємо).
+  var hdr = sh.getRange(1,1,1,Math.max(sh.getLastColumn(),LEADS_BOT_HEADER.length)).getValues()[0].map(String);
+  for(var i=0;i<LEADS_BOT_HEADER.length;i++){ if(hdr[i]!==LEADS_BOT_HEADER[i]) sh.getRange(1,i+1).setValue(LEADS_BOT_HEADER[i]); }
   return sh;
 }
 // Одноразове налаштування: зберегти chat_id + згенерувати секрет вебхука + створити лист +
@@ -658,9 +661,9 @@ function tgWebhook(e){
     if (msg && msg.text){
       var txt = String(msg.text);
       var who = (msg.from && (msg.from.username?('@'+msg.from.username):(msg.from.first_name||''))) || '';
-      // ЕТАП 6: відповідь у тред картки (reply) → лог ліда (навіть якщо містить цифри)
+      // ЕТАП 6: відповідь у тред картки (reply) → лог + збагачення картки (навіть із цифрами)
       if (msg.reply_to_message && !/^\/(newlead|lead)\b/i.test(txt)){
-        if (_tgAppendReplyLog(String(msg.reply_to_message.message_id), txt, who)) return {ok:true, kind:'reply-log'};
+        if (_tgHandleReply(String(msg.reply_to_message.message_id), txt, who)) return {ok:true, kind:'reply-log'};
       }
       // ЕТАП 3+4: команда /newlead АБО будь-який текст із телефоном ≥9 цифр → новий лід
       if (/^\/(newlead|lead)\b/i.test(txt) || txt.replace(/\D/g,'').length>=9){
@@ -735,6 +738,7 @@ function _leadCardText(ld){
   if(ld.parent) lines.push('👤 '+_htmlEsc(ld.parent));
   if(ld.phone) lines.push('📞 '+_htmlEsc(ld.phone));
   if(ld.source) lines.push('🔗 '+_htmlEsc(ld.source));
+  if(ld.excursion_date) lines.push('🗓 Екскурсія: '+_htmlEsc(ld.excursion_date));
   if(ld.comment) lines.push('📝 '+_htmlEsc(ld.comment));
   lines.push('🕒 '+_htmlEsc(ld.created_at||''));
   lines.push('');
@@ -757,7 +761,8 @@ var LB = {}; LEADS_BOT_HEADER.forEach(function(h,i){ LB[h]=i; });   // мапа 
 function _leadObj(row){
   return {lead_id:row[LB.lead_id], created_at:row[LB.created_at], source:row[LB.source], loc:row[LB['локація']],
     phone:row[LB.phone], parent:row[LB.parent], child:row[LB.child], age:row[LB.child_age], comment:row[LB.comment],
-    chat_id:row[LB.tg_chat_id], tg_message_id:row[LB.tg_message_id], status:row[LB.status], assignee:row[LB.assignee]};
+    chat_id:row[LB.tg_chat_id], tg_message_id:row[LB.tg_message_id], status:row[LB.status], assignee:row[LB.assignee],
+    excursion_date:row[LB.excursion_date]};
 }
 function _leadMinutes(a, b){   // рядки 'dd.MM.yyyy HH:mm'
   function ms(s){ var m=String(s||'').match(/(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2})/); if(!m)return null;
@@ -853,17 +858,57 @@ function tgSlaCheck(){
   }catch(e){ return {ok:false, error:String(e&&e.message||e)}; }
 }
 
-// ── ЕТАП 6: відповідь текстом у тред картки → дописуємо в лог ліда. Повертає true, якщо
-// знайшли лід за message_id картки (reply_to). Інакше false (звичайний чат).
-function _tgAppendReplyLog(replyMid, text, who){
+// Збагачення картки з тексту відповіді: дата екскурсії, вік, телефон, ім'я. Мутує row,
+// повертає список змін (людською мовою). Порожні поля заповнюємо; наявні НЕ перезаписуємо
+// (крім імені — якщо у відповіді повніше, напр. «Коваленко Софія» замість «Софія»).
+function _enrichFromReply(row, text){
+  var changes=[]; var t=' '+String(text||'')+' ';
+  // 1) дата екскурсії: «екск[урсія] <дд.мм[.рр]>»
+  var em=t.match(/екскурс[а-яіїєґ]*|\bекск\b/i);
+  var dm=t.match(/\b(\d{1,2})[.\/](\d{1,2})(?:[.\/](\d{2,4}))?\b/);
+  if(em && dm){
+    var d=('0'+dm[1]).slice(-2)+'.'+('0'+dm[2]).slice(-2)+(dm[3]?('.'+(dm[3].length===2?'20'+dm[3]:dm[3])):'');
+    if(String(row[LB.excursion_date])!==d){ row[LB.excursion_date]=d; changes.push('екскурсія '+d); }
+    if(['new','called','no_answer',''].indexOf(String(row[LB.status]))>=0){ row[LB.status]='excursion'; changes.push('статус→екскурсія'); }
+    t=t.replace(em[0],' ').replace(dm[0],' ');
+  }
+  // 2) вік — reply авторитетний: оновлюємо, якщо явно названо (одиниця рок/рік/міс обов'язкова)
+  var am=t.match(/(\d{1,2}([.,]\d)?)\s*(рок[а-яіїєґ]*|роч[а-яіїєґ]*|рік[а-яіїєґ]*|год[а-яіїєґ]*|міс[а-яіїєґ]*)/i);
+  if(am){ var age=am[0].replace(/\s+/g,' ').trim(); if(String(row[LB.child_age]).trim()!==age){ row[LB.child_age]=age; changes.push('вік '+age);} t=t.replace(am[0],' '); }
+  // 3) телефон
+  var pm=t.match(/(\+?\d[\d\s().\-]{7,}\d)/);
+  if(pm){ var ph=_fmtPhone(pm[1]); if(ph.replace(/\D/g,'').length>=9 && !String(row[LB.phone]).trim()){ row[LB.phone]=ph; changes.push('телефон '+ph);} t=t.replace(pm[1],' '); }
+  // 4) імʼя дитини (1-2 слова з великої літери)
+  t=t.replace(/[,;]+/g,' ');
+  var nm=t.match(/[А-ЯІЇЄ][а-яіїє'’ʼ\-]{1,}(?:\s+[А-ЯІЇЄ][а-яіїє'’ʼ\-]{1,})?/);
+  if(nm){ var name=nm[0].replace(/\s+/g,' ').trim(); var cur=String(row[LB.child]||'').trim();
+    if(name.toLowerCase()!==cur.toLowerCase() && (cur==='' || name.split(' ').length>cur.split(' ').length)){
+      row[LB.child]=name; changes.push('імʼя '+name);
+    }
+  }
+  return changes;
+}
+// ── ЕТАП 6: відповідь у тред картки → лог + збагачення полів + видиме оновлення картки.
+// Повертає true, якщо знайшли лід за message_id картки (reply_to). Інакше false.
+function _tgHandleReply(replyMid, text, who){
   if(!replyMid || !text) return false;
   var sh=_leadsBotSheet(); var v=sh.getDataRange().getValues(); var now=formatDate(new Date());
   for(var r=1;r<v.length;r++){
     if(String(v[r][LB.tg_message_id])!==String(replyMid)) continue;
-    var row=v[r]; var arr=[]; try{arr=JSON.parse(row[LB.log]||'[]');}catch(_){}
-    arr.push({ts:now, who:who, text:String(text).slice(0,300)});
-    row[LB.log]=JSON.stringify(arr); row[LB.updated_at]=now;
+    var row=v[r];
+    var arr=[]; try{arr=JSON.parse(row[LB.log]||'[]');}catch(_){}
+    arr.push({ts:now, who:who, text:String(text).slice(0,300)}); row[LB.log]=JSON.stringify(arr);
+    var changes=_enrichFromReply(row, text);
+    if(changes.length && !String(row[LB.first_reaction_at]).trim()){ row[LB.first_reaction_at]=now;
+      if(!String(row[LB.assignee]).trim()) row[LB.assignee]=who;
+      var mins=_leadMinutes(row[LB.created_at], now); if(mins!=null) row[LB.sla_ok]=(mins<=15)?'YES':'NO'; }
+    row[LB.updated_at]=now;
     sh.getRange(r+1,1,1,row.length).setValues([row]);
+    if(changes.length){
+      var ld=_leadObj(row), closed=(ld.status==='signed'||ld.status==='refused');
+      _tgApi('editMessageText',{chat_id:ld.chat_id, message_id:ld.tg_message_id, text:_leadCardText(ld), parse_mode:'HTML', reply_markup: closed?{inline_keyboard:[]}:_leadKb(ld.lead_id)});
+      _tgSend(ld.chat_id, '📝 Картку оновлено: '+_htmlEsc(changes.join(', ')), {reply_to_message_id:replyMid});
+    }
     return true;
   }
   return false;
@@ -925,7 +970,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.127', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.128', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
