@@ -634,6 +634,18 @@ function _tgErr(where, e){
     sh.appendRow([formatDate(new Date()), String(where||''), String((e&&e.stack)||(e&&e.message)||e).slice(0,500)]);
   }catch(_){}
 }
+function tgDiag2(){
+  var out={};
+  try{ out.lasthit = CacheService.getScriptCache().get('tg_lasthit') || null; }catch(e){ out.cacheErr=String(e&&e.message||e); }
+  try{ out.chatIdProp = _leadsChatId(); }catch(e){ out.propErr=String(e&&e.message||e); }
+  try{
+    var i=_tgApi('getWebhookInfo',{});
+    out.webhook = (i&&i.result) ? {url:String(i.result.url||'').replace(/s=[^&]+/,'s=***'),
+      pending:i.result.pending_update_count, last_error:i.result.last_error_message||'',
+      last_error_date:i.result.last_error_date||'', max_conn:i.result.max_connections} : i;
+  }catch(e){ out.whErr=String(e&&e.message||e); }
+  return {ok:true, diag:out};
+}
 function getTgErr(){
   try{ var sh=getCRMSpreadsheet().getSheetByName('TG_Err'); if(!sh) return {ok:true, rows:[]};
     var v=sh.getDataRange().getValues(); return {ok:true, rows:v.slice(Math.max(1,v.length-20))};
@@ -677,6 +689,8 @@ function tgWebhook(e){
       _tgErr('migrate', 'LEADS_CHAT_ID '+allow+' → '+msg.migrate_to_chat_id);
       return {ok:true, migrated:String(msg.migrate_to_chat_id)};
     }
+    // діагностика, НЕзалежна від таблиці: фіксуємо кожен вхідний апдейт у Cache
+    try{ CacheService.getScriptCache().put('tg_lasthit', String(new Date().getTime())+'|chat='+chatId+'|allow='+allow+'|'+(cq?'cb':(msg?'msg':'?'))+'|'+((msg&&msg.text)||'').slice(0,30), 1800); }catch(_lh){}
     if (allow && chatId && chatId !== allow){
       _tgErr('ignored-chat', 'got='+chatId+' expected='+allow);   // діагностика: бачимо реальний chat_id
       return {ok:true, ignored:'chat', chat:chatId};
@@ -1021,7 +1035,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.132', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.133', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -1038,6 +1052,7 @@ function doGet(e) {
     else if (action === 'getNeedsAttention') result = getNeedsAttention();   // v7.117 картки active без Payment
     else if (action === 'getAuthLog')         result = getAuthLog();   // v7.118 діагностика Авторизація_Лог
     else if (action === 'getTgErr')           result = getTgErr();   // діагностика помилок бота лідів
+    else if (action === 'tgDiag2')            result = tgDiag2();   // діагностика: чи викликається вебхук + стан у Telegram
     else if (action === 'tgGetUpdates')       result = tgGetUpdates();   // v7.122 діагностика Telegram-бота
     else if (action === 'getBdayStatus')      result = getBdayStatus();                                            // v7.109 роут замість прямого читання листа з фронту
     else if (action === 'getAttendance')      result = getAttendance(e);
