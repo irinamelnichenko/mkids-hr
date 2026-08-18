@@ -596,12 +596,17 @@ function _tgSend(chatId, text, extra){
 // Лист «Ліди_Бот» (створюємо з заголовком за потреби).
 function _leadsBotSheet(){
   var ss = getCRMSpreadsheet();
+  var need = LEADS_BOT_HEADER.length;
   var sh = ss.getSheetByName(LEADS_BOT_SHEET);
-  if(!sh){ sh = ss.insertSheet(LEADS_BOT_SHEET);
-    sh.getRange(1,1,1,LEADS_BOT_HEADER.length).setValues([LEADS_BOT_HEADER]); sh.setFrozenRows(1); return sh; }
-  // еволюція схеми: тільки ДОПИСУЄМО відсутні колонки в кінець (порядок наявних не чіпаємо).
-  var hdr = sh.getRange(1,1,1,Math.max(sh.getLastColumn(),LEADS_BOT_HEADER.length)).getValues()[0].map(String);
-  for(var i=0;i<LEADS_BOT_HEADER.length;i++){ if(hdr[i]!==LEADS_BOT_HEADER[i]) sh.getRange(1,i+1).setValue(LEADS_BOT_HEADER[i]); }
+  if(!sh) sh = ss.insertSheet(LEADS_BOT_SHEET);
+  // грід має вмістити всі колонки, ІНАКШЕ getRange/setValue за межами кидає помилку.
+  if(sh.getMaxColumns() < need) sh.insertColumnsAfter(sh.getMaxColumns(), need - sh.getMaxColumns());
+  var lastCol = sh.getLastColumn();
+  var hdr = lastCol>0 ? sh.getRange(1,1,1,lastCol).getValues()[0].map(String) : [];
+  var changed=false;
+  // еволюція схеми: тільки ДОПИСУЄМО відсутні/невідповідні заголовки (порядок наявних не чіпаємо).
+  for(var i=0;i<need;i++){ if(hdr[i]!==LEADS_BOT_HEADER[i]){ sh.getRange(1,i+1).setValue(LEADS_BOT_HEADER[i]); changed=true; } }
+  if(changed) sh.setFrozenRows(1);
   return sh;
 }
 // Одноразове налаштування: зберегти chat_id + згенерувати секрет вебхука + створити лист +
@@ -622,6 +627,18 @@ function tgAdminSetup(body){
 }
 
 function _htmlEsc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+// Лог помилок бота (щоб бачити runtime-падіння вебхука без доступу до логів Apps Script).
+function _tgErr(where, e){
+  try{ var ss=getCRMSpreadsheet(); var sh=ss.getSheetByName('TG_Err');
+    if(!sh){ sh=ss.insertSheet('TG_Err'); sh.appendRow(['ts','where','error']); }
+    sh.appendRow([formatDate(new Date()), String(where||''), String((e&&e.stack)||(e&&e.message)||e).slice(0,500)]);
+  }catch(_){}
+}
+function getTgErr(){
+  try{ var sh=getCRMSpreadsheet().getSheetByName('TG_Err'); if(!sh) return {ok:true, rows:[]};
+    var v=sh.getDataRange().getValues(); return {ok:true, rows:v.slice(Math.max(1,v.length-20))};
+  }catch(e){ return {ok:false, error:String(e&&e.message||e)}; }
+}
 
 // Ідемпотентність вебхука: Telegram повторно доставляє апдейт, якщо не отримав 200
 // достатньо швидко (Apps Script буває повільним). Позначаємо update_id як оброблений
@@ -673,14 +690,16 @@ function tgWebhook(e){
       }
       // ЕТАП 3+4: команда /newlead АБО будь-який текст із телефоном ≥9 цифр → новий лід
       if (/^\/(newlead|lead)\b/i.test(txt) || txt.replace(/\D/g,'').length>=9){
-        var parsed = _parseLead(txt);
-        var cr = _tgCreateLead(parsed, who);
-        return {ok:true, kind:'newlead', id:cr.id};
+        try{
+          var parsed = _parseLead(txt);
+          var cr = _tgCreateLead(parsed, who);
+          return {ok:true, kind:'newlead', id:cr.id};
+        }catch(ce){ _tgErr('createLead', ce); try{ _tgSend(allow,'⚠️ Помилка створення картки (залоговано).'); }catch(_){}; return {ok:false, stage:'create', error:String(ce&&ce.message||ce)}; }
       }
       return {ok:true, kind:'ignored'};   // звичайний чат
     }
     return {ok:true, kind:'other'};
-  } catch(err){ return {ok:false, error:String(err&&err.message||err)}; }
+  } catch(err){ _tgErr('webhook', err); return {ok:false, error:String(err&&err.message||err)}; }
 }
 // Реєстрація вебхука в Telegram: url = <exec>?action=tgWebhook&s=<secret>. body.url — override.
 function tgSetWebhook(body){
@@ -993,7 +1012,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.130', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.131', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -1009,6 +1028,7 @@ function doGet(e) {
     else if (action === 'getRegistryUrls')    result = getRegistryUrls();
     else if (action === 'getNeedsAttention') result = getNeedsAttention();   // v7.117 картки active без Payment
     else if (action === 'getAuthLog')         result = getAuthLog();   // v7.118 діагностика Авторизація_Лог
+    else if (action === 'getTgErr')           result = getTgErr();   // діагностика помилок бота лідів
     else if (action === 'tgGetUpdates')       result = tgGetUpdates();   // v7.122 діагностика Telegram-бота
     else if (action === 'getBdayStatus')      result = getBdayStatus();                                            // v7.109 роут замість прямого читання листа з фронту
     else if (action === 'getAttendance')      result = getAttendance(e);
