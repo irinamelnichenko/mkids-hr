@@ -594,7 +594,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.119', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.120', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -631,7 +631,7 @@ function doGet(e) {
     else if (action === 'getOverviewAnalytics')      result = getOverviewAnalytics(e.parameter.year || '', e.parameter.month || '');
     else if (action === 'getUsers')                  result = getUsers(Number(e.parameter && e.parameter.actorId || 0)); // v7.109 CFO-only, без пароля
     else if (action === 'getGroupNorms')             result = getGroupNorms();
-    else if (action === 'getKomplektaciya')          result = getKomplektaciya({tab: (e.parameter && e.parameter.tab) || '', spreadsheetId: (e.parameter && e.parameter.spreadsheetId) || '', stats: (e.parameter && e.parameter.stats) || ''}); // v7.96/v7.118 read-only структура файлу (+spreadsheetId,+stats)
+    else if (action === 'getKomplektaciya')          result = getKomplektaciya({tab: (e.parameter && e.parameter.tab) || '', spreadsheetId: (e.parameter && e.parameter.spreadsheetId) || '', stats: (e.parameter && e.parameter.stats) || '', full: (e.parameter && e.parameter.full) || ''}); // v7.96/v7.118/v7.120 read-only структура (+spreadsheetId,+stats,+full)
     else if (action === 'getKomplektaciyaData')      result = getKomplektaciyaData({year: (e.parameter && e.parameter.year) || '', tab: (e.parameter && e.parameter.tab) || ''}); // v7.97
     else if (action === 'getKomplektaciyaFreeSeats') result = getKomplektaciyaFreeSeats(); // v7.97
     else if (action === 'getVyhovatelRatings')       result = getVyhovatelRatings({year: (e.parameter && e.parameter.year) || '', month: (e.parameter && e.parameter.month) || ''}); // v7.99
@@ -5988,6 +5988,11 @@ function getKomplektaciya(params) {
         var vals = sh.getRange(1, 1, nRead, lastCol).getDisplayValues();
         entry.headers = vals[0] || [];
         entry.sample = vals.slice(1);
+        var full = (params.full === true || String(params.full)==='1' || String(params.full)==='true');
+        if (full) {
+          var capF = Math.min(lastRow, 8000);
+          entry.values = sh.getRange(1, 1, capF, lastCol).getDisplayValues();  // усі рядки (вкл. заголовки)
+        }
         if (stats && lastRow > 1) {
           var cap = Math.min(lastRow - 1, 8000);
           var all = sh.getRange(2, 1, cap, lastCol).getDisplayValues();
