@@ -661,6 +661,12 @@ function tgWebhook(e){
     if (msg && msg.text){
       var txt = String(msg.text);
       var who = (msg.from && (msg.from.username?('@'+msg.from.username):(msg.from.first_name||''))) || '';
+      // службова команда: закрити всі «нові» ліди (тестові)
+      if (/^\/closeold\b/i.test(txt)){
+        var cl=_tgCloseOldLeads(who);
+        _tgSend(allow, '🧹 Закрито тестових лідів (були «нові»): <b>'+cl.count+'</b>', {reply_to_message_id: msg.message_id});
+        return {ok:true, kind:'closeold', count:cl.count};
+      }
       // ЕТАП 6: відповідь у тред картки (reply) → лог + збагачення картки (навіть із цифрами)
       if (msg.reply_to_message && !/^\/(newlead|lead)\b/i.test(txt)){
         if (_tgHandleReply(String(msg.reply_to_message.message_id), txt, who)) return {ok:true, kind:'reply-log'};
@@ -728,7 +734,7 @@ function _parseLead(text){
 // ── ЕТАП 4: картка ліда + кнопки + обробка callback ─────────────────────────
 var LEAD_STATUS_LABEL = {new:'🟡 новий — чекає реакції (SLA 15 хв)', in_progress:'🔵 в роботі',
   called:'📞 додзвонились', no_answer:'🔕 не відповів', excursion:'🗓 записаний на екскурсію',
-  signed:'✅ підписали договір', refused:'🚫 відмова'};
+  signed:'✅ підписали договір', refused:'🚫 відмова', closed:'🧹 закрито (тест)'};
 var LEAD_REFUSE = [ ['move','переїзд','переїзд / за кордон'], ['money','фінанси','фінанси / дорого'],
   ['school','школа','школа / держсадок'], ['far','далеко','логістика / далеко'],
   ['think','думає','думає / майбутній період'], ['other','інше','інше'] ];
@@ -890,6 +896,21 @@ function _enrichFromReply(row, text){
   }
   return changes;
 }
+// Службова команда /closeold: закриває всі ліди в статусі «новий» (щоб не сипались SLA-
+// нагадування по тестових). Ставить статус 'closed', прибирає кнопки, пише в лог.
+function _tgCloseOldLeads(who){
+  var sh=_leadsBotSheet(); var v=sh.getDataRange().getValues(); var now=formatDate(new Date()); var n=0;
+  for(var r=1;r<v.length;r++){
+    var row=v[r];
+    if(String(row[LB.status])!=='new') continue;
+    row[LB.status]='closed'; row[LB.updated_at]=now;
+    var arr=[]; try{arr=JSON.parse(row[LB.log]||'[]');}catch(_){}; arr.push({ts:now,who:who,act:'closeold'}); row[LB.log]=JSON.stringify(arr);
+    sh.getRange(r+1,1,1,row.length).setValues([row]);
+    try{ _tgApi('editMessageReplyMarkup',{chat_id:row[LB.tg_chat_id], message_id:row[LB.tg_message_id], reply_markup:{inline_keyboard:[]}}); }catch(_e){}
+    n++;
+  }
+  return {count:n};
+}
 // ── ЕТАП 6: відповідь у тред картки → лог + збагачення полів + видиме оновлення картки.
 // Повертає true, якщо знайшли лід за message_id картки (reply_to). Інакше false.
 function _tgHandleReply(replyMid, text, who){
@@ -972,7 +993,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.129', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.130', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
