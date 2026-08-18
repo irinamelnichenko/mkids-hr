@@ -654,16 +654,21 @@ function tgWebhook(e){
     if (allow && chatId && chatId !== allow) return {ok:true, ignored:'chat', chat:chatId};   // не наша група
     // ЕТАП 4: натискання кнопки картки
     if (cq){ _tgHandleCallback(cq); return {ok:true, kind:'callback'}; }
-    // ЕТАП 3+4: текст → новий лід (команда /newlead АБО будь-який текст із телефоном ≥9 цифр)
+    // ЕТАП 3-6: текст
     if (msg && msg.text){
       var txt = String(msg.text);
       var who = (msg.from && (msg.from.username?('@'+msg.from.username):(msg.from.first_name||''))) || '';
+      // ЕТАП 6: відповідь у тред картки (reply) → лог ліда (навіть якщо містить цифри)
+      if (msg.reply_to_message && !/^\/(newlead|lead)\b/i.test(txt)){
+        if (_tgAppendReplyLog(String(msg.reply_to_message.message_id), txt, who)) return {ok:true, kind:'reply-log'};
+      }
+      // ЕТАП 3+4: команда /newlead АБО будь-який текст із телефоном ≥9 цифр → новий лід
       if (/^\/(newlead|lead)\b/i.test(txt) || txt.replace(/\D/g,'').length>=9){
         var parsed = _parseLead(txt);
         var cr = _tgCreateLead(parsed, who);
         return {ok:true, kind:'newlead', id:cr.id};
       }
-      return {ok:true, kind:'ignored'};   // звичайний чат (Етап 6 підключить reply→лог)
+      return {ok:true, kind:'ignored'};   // звичайний чат
     }
     return {ok:true, kind:'other'};
   } catch(err){ return {ok:false, error:String(err&&err.message||err)}; }
@@ -743,7 +748,6 @@ function _leadKb(id, mode){
     return {inline_keyboard:rows};
   }
   return {inline_keyboard:[
-    [{text:'✅ Беру', callback_data:'L|'+id+'|take'}],
     [{text:'📞 Додзвонився', callback_data:'L|'+id+'|call_ok'}, {text:'🔕 Не відповів', callback_data:'L|'+id+'|call_no'}],
     [{text:'🗓 Екскурсія', callback_data:'L|'+id+'|exc'}, {text:'✍️ Договір', callback_data:'L|'+id+'|sign'}],
     [{text:'🚫 Відмова', callback_data:'L|'+id+'|refuse'}]
@@ -826,6 +830,44 @@ function _tgHandleCallback(cq){
     }
   } catch(err){ /* ACK уже надіслано */ }
 }
+function _leadMs(s){ var m=String(s||'').match(/(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2})/); return m?new Date(+m[3],+m[2]-1,+m[1],+m[4],+m[5]).getTime():null; }
+
+// ── ЕТАП 5: SLA 15 хв. Тайм-тригер щохвилини. Лід у статусі 'new' без першої реакції:
+// >15 хв → нагадування в тред; >30 хв → ескалація. Прапорці r1/r2 у колонці reminders.
+function tgSlaCheck(){
+  try{
+    var sh=_leadsBotSheet(); var v=sh.getDataRange().getValues(); var chat=_leadsChatId();
+    var nowMs=new Date().getTime(), now=formatDate(new Date());
+    for(var r=1;r<v.length;r++){
+      var row=v[r];
+      if(String(row[LB.status])!=='new' || row[LB.first_reaction_at]) continue;   // тільки без реакції
+      var cMs=_leadMs(row[LB.created_at]); if(cMs==null) continue;
+      var mins=Math.round((nowMs-cMs)/60000);
+      var rem={}; try{rem=JSON.parse(row[LB.reminders]||'{}');}catch(_){}
+      var mid=row[LB.tg_message_id], fired=false;
+      if(mins>=30 && !rem.r2){ _tgSend(chat,'‼️ <b>30 хв без реакції</b> — ескалація. Хто бере ліда?',{reply_to_message_id:mid}); rem.r2=now; fired=true; }
+      else if(mins>=15 && !rem.r1){ _tgSend(chat,'⏰ <b>Лід без реакції 15 хв</b> — хто бере?',{reply_to_message_id:mid}); rem.r1=now; fired=true; }
+      if(fired){ row[LB.reminders]=JSON.stringify(rem); row[LB.updated_at]=now; sh.getRange(r+1,1,1,row.length).setValues([row]); }
+    }
+    return {ok:true};
+  }catch(e){ return {ok:false, error:String(e&&e.message||e)}; }
+}
+
+// ── ЕТАП 6: відповідь текстом у тред картки → дописуємо в лог ліда. Повертає true, якщо
+// знайшли лід за message_id картки (reply_to). Інакше false (звичайний чат).
+function _tgAppendReplyLog(replyMid, text, who){
+  if(!replyMid || !text) return false;
+  var sh=_leadsBotSheet(); var v=sh.getDataRange().getValues(); var now=formatDate(new Date());
+  for(var r=1;r<v.length;r++){
+    if(String(v[r][LB.tg_message_id])!==String(replyMid)) continue;
+    var row=v[r]; var arr=[]; try{arr=JSON.parse(row[LB.log]||'[]');}catch(_){}
+    arr.push({ts:now, who:who, text:String(text).slice(0,300)});
+    row[LB.log]=JSON.stringify(arr); row[LB.updated_at]=now;
+    sh.getRange(r+1,1,1,row.length).setValues([row]);
+    return true;
+  }
+  return false;
+}
 
 // v7.122: діагностика Telegram-бота лідів. Токен береться зі Script Properties
 // (TELEGRAM_BOT_TOKEN) і НЕ повертається у відповідь. getMe (хто бот) + getUpdates
@@ -883,7 +925,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.126', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.127', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -2643,6 +2685,7 @@ function createDailyTrigger() {
         || fn === 'nightlySyncMissingKindergartens'
         || fn === 'nightlyVacExportGuarantee'   // v7.81
         || fn === 'nightlyDepartureSnapshot'    // v7.116: знімок вибуття (ідемпотентно)
+        || fn === 'tgSlaCheck'                  // бот лідів: SLA-чек щохвилини (ідемпотентно)
         || fn === '_vacExportGuardBatch') {      // v7.81: спент continuation-тригери
       ScriptApp.deleteTrigger(triggers[i]);
     }
@@ -2667,6 +2710,8 @@ function createDailyTrigger() {
   ScriptApp.newTrigger('nightlyDepartureSnapshot')
     .timeBased().everyDays(1).atHour(8).nearMinute(15)
     .inTimezone('Europe/Kiev').create();
+  // Бот лідів: SLA 15/30 хв — перевірка щохвилини.
+  ScriptApp.newTrigger('tgSlaCheck').timeBased().everyMinutes(1).create();
 }
 
 // v7.101: ОКРЕМИЙ нічний тригер — aggregatePaymentsYearly раз на добу о 9:00 (ПІСЛЯ нічної
