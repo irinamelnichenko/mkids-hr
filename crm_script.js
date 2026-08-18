@@ -872,25 +872,20 @@ function _tgUpdateLead(id, act, who){
 function _tgHandleCallback(cq){
   // 1) МИТТЄВИЙ ACK — до будь-якої повільної роботи з листом (щоб директорка бачила реакцію одразу).
   try{ _tgApi('answerCallbackQuery',{callback_query_id:cq.id, text:'✅ Прийнято'}); }catch(_a){}
-  var act='?';
   try{
     var parts=String(cq.data||'').split('|');
-    if(parts[0]!=='L'){ _tgErr('cb','not-L data='+cq.data); return; }
-    var id=parts[1]; act=parts[2];
+    if(parts[0]!=='L') return;
+    var id=parts[1], act=parts[2];
     var who=cq.from && (cq.from.username?('@'+cq.from.username):(cq.from.first_name||'')) || '';
-    _tgErr('cb','act='+act);   // ДІАГНОСТИКА: який callback прийшов
     if(act==='note'){ _tgPromptNote(id, cq); return; }   // 📝 Примітка → force_reply, без зміни статусу
     var res=_tgUpdateLead(id, act, who);
-    _tgErr('cb-res','act='+act+' res='+(res?('changed='+res.changed+' mode='+res.mode+' status='+(res.ld&&res.ld.status)):'null'));
-    if(res && res.changed && res.ld){   // 2) подвійне натискання (changed:false) → нічого не редагуємо
+    if(res && res.changed && res.ld){   // подвійне натискання (changed:false) → нічого не редагуємо
       var closed=(res.ld.status==='signed'||res.ld.status==='refused');
-      var edit;
-      if(res.mode==='refuse'){ edit=_tgApi('editMessageReplyMarkup',{chat_id:res.ld.chat_id, message_id:res.ld.tg_message_id, reply_markup:_leadKb(id,'refuse')}); }
-      else if(res.mode==='menu'){ edit=_tgApi('editMessageReplyMarkup',{chat_id:res.ld.chat_id, message_id:res.ld.tg_message_id, reply_markup:_leadKb(id)}); }
-      else { edit=_tgApi('editMessageText',{chat_id:res.ld.chat_id, message_id:res.ld.tg_message_id, text:_leadCardText(res.ld), parse_mode:'HTML', reply_markup: closed?{inline_keyboard:[]}:_leadKb(id)}); }
-      if(edit && edit.ok===false) _tgErr('cb-edit-fail','act='+act+' tg='+(edit.description||''));
+      if(res.mode==='refuse')      _tgApi('editMessageReplyMarkup',{chat_id:res.ld.chat_id, message_id:res.ld.tg_message_id, reply_markup:_leadKb(id,'refuse')});
+      else if(res.mode==='menu')   _tgApi('editMessageReplyMarkup',{chat_id:res.ld.chat_id, message_id:res.ld.tg_message_id, reply_markup:_leadKb(id)});
+      else _tgApi('editMessageText',{chat_id:res.ld.chat_id, message_id:res.ld.tg_message_id, text:_leadCardText(res.ld), parse_mode:'HTML', reply_markup: closed?{inline_keyboard:[]}:_leadKb(id)});
     }
-  } catch(err){ _tgErr('cb-err','act='+act+' '+String(err&&err.stack||err&&err.message||err)); }
+  } catch(err){ _tgErr('cb-err', String(err&&err.message||err)); }   // лог лише на реальну помилку
 }
 function _leadMs(s){ var m=String(s||'').match(/(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2})/); return m?new Date(+m[3],+m[2]-1,+m[1],+m[4],+m[5]).getTime():null; }
 
@@ -1062,7 +1057,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.135', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.136', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
