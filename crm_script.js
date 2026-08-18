@@ -618,6 +618,44 @@ function tgAdminSetup(body){
   } catch(e){ return {ok:false, error:String(e&&e.message||e)}; }
 }
 
+function _htmlEsc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// ЕТАП 2: вебхук. Секрет — у query (?s=), бо Apps Script doPost не читає заголовки,
+// тож звіряємо TG_WEBHOOK_SECRET із e.parameter.s. Приймаємо лише апдейти з LEADS_CHAT_ID.
+function tgWebhook(e){
+  try{
+    var secret = _tgProp('TG_WEBHOOK_SECRET');
+    if(!secret || !e || !e.parameter || String(e.parameter.s) !== secret) return {ok:false, error:'bad secret'};
+    var up = {};
+    try { up = JSON.parse(e.postData.contents); } catch(_p){ return {ok:true, note:'no body'}; }
+    var msg = up.message || up.edited_message || null;
+    var cq  = up.callback_query || null;
+    var allow = String(_leadsChatId()||'');
+    var chatId = msg ? String(msg.chat && msg.chat.id) : (cq && cq.message ? String(cq.message.chat.id) : '');
+    if (allow && chatId && chatId !== allow) return {ok:true, ignored:'chat', chat:chatId};   // не наша група
+    // ЕТАП 2 (тимчасово): ехо на текст — доказ, що вебхук ловить повідомлення групи.
+    if (msg && msg.text){
+      _tgSend(allow, '🔔 Вебхук отримав: <i>'+_htmlEsc(msg.text).slice(0,140)+'</i>', {reply_to_message_id: msg.message_id});
+    }
+    return {ok:true, kind: cq?'callback':(msg?'message':'other')};
+  } catch(err){ return {ok:false, error:String(err&&err.message||err)}; }
+}
+// Реєстрація вебхука в Telegram: url = <exec>?action=tgWebhook&s=<secret>. body.url — override.
+function tgSetWebhook(body){
+  body = body || {};
+  try{
+    var secret = _tgProp('TG_WEBHOOK_SECRET');
+    if(!secret) return {ok:false, error:'нема TG_WEBHOOK_SECRET — спершу tgAdminSetup'};
+    var base = String(body.url||'').trim() || ScriptApp.getService().getUrl();
+    if(!base) return {ok:false, error:'нема exec-URL — передай url'};
+    var hook = base + (base.indexOf('?')>=0?'&':'?') + 'action=tgWebhook&s=' + encodeURIComponent(secret);
+    var r = _tgApi('setWebhook', {url:hook, allowed_updates:['message','edited_message','callback_query'], drop_pending_updates:true});
+    var info = _tgApi('getWebhookInfo', {});
+    return {ok:!!(r&&r.ok), telegram:r, webhookUrlMasked: hook.replace(secret,'***'),
+            info:(info&&info.result)?{url:(info.result.url||'').replace(secret,'***'), pending:info.result.pending_update_count, last_error:info.result.last_error_message||''}:info};
+  } catch(e){ return {ok:false, error:String(e&&e.message||e)}; }
+}
+
 // v7.122: діагностика Telegram-бота лідів. Токен береться зі Script Properties
 // (TELEGRAM_BOT_TOKEN) і НЕ повертається у відповідь. getMe (хто бот) + getUpdates
 // (чи бачить повідомлення групи, які chat_id). getUpdates не спрацює, якщо вже
@@ -674,7 +712,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.123', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.124', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -749,6 +787,9 @@ function doGet(e) {
 
 function doPost(e) {
   try {
+    // Telegram-вебхук: тіло — update без поля action, ідентифікуємо по ?action=tgWebhook.
+    // Оминає _authGate (перевірка — секрет у query), парсить update сам.
+    if (e && e.parameter && e.parameter.action === 'tgWebhook') return jsonOut(tgWebhook(e));
     var body = JSON.parse(e.postData.contents);
     var _g = _authGate(body.action, body.token || '', 'POST');   // v7.110
     if (_g) return jsonOut(_g);
@@ -814,6 +855,7 @@ function doPost(e) {
     else if (body.action === 'cleanSchoolClassPaymentNames') result = cleanSchoolClassPaymentNames(body || {});   // v7.115 чистка кодів у рядках Payment
     else if (body.action === 'snapshotPaymentRoster')     result = snapshotPaymentRosterAndLogDepartures(body || {});   // v7.116 знімок ростера + журнал вибуття
     else if (body.action === 'tgAdminSetup')              result = tgAdminSetup(body || {});   // ЕТАП 1 бот лідів: chat_id+секрет+лист
+    else if (body.action === 'tgSetWebhook')              result = tgSetWebhook(body || {});   // ЕТАП 2 бот лідів: реєстрація вебхука
     else if (body.action === 'cashPayoutSheet')          result = cashPayoutSheet(body || {});      // v7.64 відомість на видачу готівки (PDF)
     else if (body.action === 'cleanupBackupTabs')        result = cleanupBackupTabs(body || {});  // v7.45 чистка бекап-табів
     else if (body.action === 'deleteAttendanceRecord')   result = deleteAttendanceRecord(body || {}); // v7.47 видалення садок-Табель запису (childId+date)
