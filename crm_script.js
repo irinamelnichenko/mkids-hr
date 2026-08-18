@@ -594,7 +594,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.120', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.121', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -5990,7 +5990,7 @@ function getKomplektaciya(params) {
         entry.sample = vals.slice(1);
         var full = (params.full === true || String(params.full)==='1' || String(params.full)==='true');
         if (full) {
-          var capF = Math.min(lastRow, 8000);
+          var capF = Math.min(lastRow, 12000);
           entry.values = sh.getRange(1, 1, capF, lastCol).getDisplayValues();  // усі рядки (вкл. заголовки)
         }
         if (stats && lastRow > 1) {
