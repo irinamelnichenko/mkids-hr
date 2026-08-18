@@ -566,6 +566,58 @@ function _authLogMissing(action, method){    // ЕТАП 1: бачимо, які
     sh.appendRow([formatDate(new Date()), String(action || ''), String(method || '')]);
   } catch(_e){}
 }
+// ═══════════════════════════════════════════════════════════════════════════
+// БОТ ЛІДІВ (Telegram) — ЕТАП 1: фундамент. Токен/чат/секрет — у Script Properties,
+// нічого не хардкодимо. Лист «Ліди_Бот» — сховище лідів.
+// ═══════════════════════════════════════════════════════════════════════════
+var LEADS_BOT_SHEET = 'Ліди_Бот';
+var LEADS_BOT_HEADER = ['lead_id','created_at','source','локація','phone','parent','child',
+  'child_age','comment','tg_chat_id','tg_message_id','status','assignee','first_reaction_at',
+  'sla_ok','refusal_reason','reminders','log','client_id','updated_at'];
+function _tgProp(k){ return PropertiesService.getScriptProperties().getProperty(k) || ''; }
+function _tgTok(){ return _tgProp('TELEGRAM_BOT_TOKEN'); }
+function _leadsChatId(){ return _tgProp('LEADS_CHAT_ID'); }
+// Виклик Telegram Bot API. Повертає розпарсений JSON (або {ok:false,...}).
+function _tgApi(method, payload){
+  var tok = _tgTok();
+  if(!tok) return {ok:false, description:'no token'};
+  var res = UrlFetchApp.fetch('https://api.telegram.org/bot'+tok+'/'+method, {
+    method:'post', contentType:'application/json',
+    payload: JSON.stringify(payload||{}), muteHttpExceptions:true
+  });
+  try { return JSON.parse(res.getContentText()); } catch(e){ return {ok:false, description:String(res.getContentText()).slice(0,200)}; }
+}
+// sendMessage у чат. extra: {reply_markup, reply_to_message_id, ...}. HTML-розмітка.
+function _tgSend(chatId, text, extra){
+  var p = {chat_id:chatId, text:String(text), parse_mode:'HTML', disable_web_page_preview:true};
+  if(extra) for(var k in extra) p[k]=extra[k];
+  return _tgApi('sendMessage', p);
+}
+// Лист «Ліди_Бот» (створюємо з заголовком за потреби).
+function _leadsBotSheet(){
+  var ss = getCRMSpreadsheet();
+  var sh = ss.getSheetByName(LEADS_BOT_SHEET);
+  if(!sh){ sh = ss.insertSheet(LEADS_BOT_SHEET);
+    sh.getRange(1,1,1,LEADS_BOT_HEADER.length).setValues([LEADS_BOT_HEADER]); sh.setFrozenRows(1); }
+  return sh;
+}
+// Одноразове налаштування: зберегти chat_id + згенерувати секрет вебхука + створити лист +
+// тестове повідомлення в групу. POST {chatId?}. Ідемпотентно.
+function tgAdminSetup(body){
+  body = body || {};
+  try {
+    var props = PropertiesService.getScriptProperties();
+    var chatId = String(body.chatId || _leadsChatId() || '-5438615519').trim();
+    props.setProperty('LEADS_CHAT_ID', chatId);
+    var secret = _tgProp('TG_WEBHOOK_SECRET');
+    if(!secret){ secret = 'lb_' + Utilities.getUuid().replace(/-/g,'').slice(0,24); props.setProperty('TG_WEBHOOK_SECRET', secret); }
+    var sh = _leadsBotSheet();
+    var send = _tgSend(chatId, '🤖 <b>Бот лідів на зв’язку.</b>\nchat_id збережено, лист «Ліди_Бот» готовий. (Етап 1)');
+    return {ok:true, chatId:chatId, secretSet:!!secret, sheetRows:sh.getLastRow(),
+            sendOk:!!(send&&send.ok), sendErr:(send&&send.ok)?'':(send&&send.description)};
+  } catch(e){ return {ok:false, error:String(e&&e.message||e)}; }
+}
+
 // v7.122: діагностика Telegram-бота лідів. Токен береться зі Script Properties
 // (TELEGRAM_BOT_TOKEN) і НЕ повертається у відповідь. getMe (хто бот) + getUpdates
 // (чи бачить повідомлення групи, які chat_id). getUpdates не спрацює, якщо вже
@@ -622,7 +674,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.122', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.123', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -761,6 +813,7 @@ function doPost(e) {
     else if (body.action === 'renameSchoolChildrenClean') result = renameSchoolChildrenClean(body || {});   // v7.114 чистка ПІБ школярів + ремап childId
     else if (body.action === 'cleanSchoolClassPaymentNames') result = cleanSchoolClassPaymentNames(body || {});   // v7.115 чистка кодів у рядках Payment
     else if (body.action === 'snapshotPaymentRoster')     result = snapshotPaymentRosterAndLogDepartures(body || {});   // v7.116 знімок ростера + журнал вибуття
+    else if (body.action === 'tgAdminSetup')              result = tgAdminSetup(body || {});   // ЕТАП 1 бот лідів: chat_id+секрет+лист
     else if (body.action === 'cashPayoutSheet')          result = cashPayoutSheet(body || {});      // v7.64 відомість на видачу готівки (PDF)
     else if (body.action === 'cleanupBackupTabs')        result = cleanupBackupTabs(body || {});  // v7.45 чистка бекап-табів
     else if (body.action === 'deleteAttendanceRecord')   result = deleteAttendanceRecord(body || {}); // v7.47 видалення садок-Табель запису (childId+date)
