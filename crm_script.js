@@ -707,7 +707,7 @@ function _parseLead(text){
   try{ (getLocations().data||[]).forEach(function(l){ var nm=String(l.loc||'').trim();
     if(nm && !res.loc && new RegExp(_reEsc(nm),'i').test(t)){ res.loc=nm; t=t.replace(new RegExp(_reEsc(nm),'i'),' '); } }); }catch(_e){}
   for(var i=0;i<LEAD_SOURCES.length;i++){ if(LEAD_SOURCES[i][0].test(t)){ res.source=LEAD_SOURCES[i][1]; t=t.replace(LEAD_SOURCES[i][0],' '); break; } }
-  var am = t.match(/(\d{1,2}([.,]\d)?)\s*(рок\w*|роч\w*|рік|\bр\b|год\w*|\bг\b|міс\w*)/i);
+  var am = t.match(/(\d{1,2}([.,]\d)?)\s*(рок[а-яіїєґ]*|роч[а-яіїєґ]*|рік[а-яіїєґ]*|\bр\.?|год[а-яіїєґ]*|\bг\.?|міс[а-яіїєґ]*)/i);
   if(am){ res.age=am[0].replace(/\s+/g,' ').trim(); t=t.replace(am[0],' '); }
   else { var an=t.match(/\b([1-7])\b/); if(an){ res.age=an[1]; t=t.replace(an[0],' '); } }
   t = t.replace(/[,;]+/g,' ').replace(/\s+/g,' ').trim();
@@ -787,6 +787,12 @@ function _tgUpdateLead(id, act, who){
     function addlog(a){ var arr=[]; try{arr=JSON.parse(row[LB.log]||'[]');}catch(_){}; arr.push({ts:now,who:who,act:a}); row[LB.log]=JSON.stringify(arr); }
     var reactive={take:1,call_ok:1,call_no:1,exc:1,sign:1};
     var isRef = act.indexOf('r:')===0;
+    // ЗАХИСТ ВІД ПОДВІЙНОГО НАТИСКАННЯ: та сама дія → той самий статус → нічого не робимо.
+    var TARGET={take:'in_progress',call_ok:'called',call_no:'no_answer',exc:'excursion',sign:'signed'};
+    var tgt = isRef ? null : TARGET[act];
+    if(tgt && String(row[LB.status])===tgt && !(act==='take' && !row[LB.assignee])){
+      return {ld:_leadObj(row), toast:'', changed:false, mode:'done'};
+    }
     if((reactive[act]||isRef) && !row[LB.first_reaction_at]){ row[LB.first_reaction_at]=now;
       var mins=_leadMinutes(row[LB.created_at], now); if(mins!=null) row[LB.sla_ok]=(mins<=15)?'YES':'NO'; }
     if(act==='take'){ row[LB.status]='in_progress'; row[LB.assignee]=who; toast='Взяли в роботу'; addlog('take'); }
@@ -799,25 +805,26 @@ function _tgUpdateLead(id, act, who){
     else if(act==='refuse'||act==='back'){ /* лише зміна клавіатури */ }
     row[LB.updated_at]=now;
     sh.getRange(r+1,1,1,row.length).setValues([row]);
-    return {ld:_leadObj(row), toast:toast, mode:(act==='refuse'?'refuse':(act==='back'?'menu':'done'))};
+    return {ld:_leadObj(row), toast:toast, changed:true, mode:(act==='refuse'?'refuse':(act==='back'?'menu':'done'))};
   }
   return null;
 }
 function _tgHandleCallback(cq){
+  // 1) МИТТЄВИЙ ACK — до будь-якої повільної роботи з листом (щоб директорка бачила реакцію одразу).
+  try{ _tgApi('answerCallbackQuery',{callback_query_id:cq.id, text:'✅ Прийнято'}); }catch(_a){}
   try{
     var parts=String(cq.data||'').split('|');
-    if(parts[0]!=='L'){ _tgApi('answerCallbackQuery',{callback_query_id:cq.id}); return; }
+    if(parts[0]!=='L') return;
     var id=parts[1], act=parts[2];
     var who=cq.from && (cq.from.username?('@'+cq.from.username):(cq.from.first_name||'')) || '';
     var res=_tgUpdateLead(id, act, who);
-    if(res && res.ld){
+    if(res && res.changed && res.ld){   // 2) подвійне натискання (changed:false) → нічого не редагуємо
       var closed=(res.ld.status==='signed'||res.ld.status==='refused');
       if(res.mode==='refuse'){ _tgApi('editMessageReplyMarkup',{chat_id:res.ld.chat_id, message_id:res.ld.tg_message_id, reply_markup:_leadKb(id,'refuse')}); }
       else if(res.mode==='menu'){ _tgApi('editMessageReplyMarkup',{chat_id:res.ld.chat_id, message_id:res.ld.tg_message_id, reply_markup:_leadKb(id)}); }
       else { _tgApi('editMessageText',{chat_id:res.ld.chat_id, message_id:res.ld.tg_message_id, text:_leadCardText(res.ld), parse_mode:'HTML', reply_markup: closed?{inline_keyboard:[]}:_leadKb(id)}); }
     }
-    _tgApi('answerCallbackQuery',{callback_query_id:cq.id, text:(res&&res.toast)||''});
-  } catch(err){ try{ _tgApi('answerCallbackQuery',{callback_query_id:cq.id, text:'помилка'}); }catch(_){} }
+  } catch(err){ /* ACK уже надіслано */ }
 }
 
 // v7.122: діагностика Telegram-бота лідів. Токен береться зі Script Properties
@@ -876,7 +883,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.125', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.126', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
