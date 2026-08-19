@@ -559,25 +559,315 @@ function writeClientsHeader(sheet) {
 }
 
 
+
 // ═══════════════════════════════════════════════════════════════════════════
-// v7.152 getLeads — дані для екрана лідів у CRM. ТІЛЬКИ ЧИТАННЯ.
-// Скоупінг: менеджмент бачить усі локації, директорка — лише свою.
-// Під AUTH_ENFORCE роль/локація беруться З ТОКЕНА (клієнтські ігноруються),
-// як у getSalaryData. Поки прапорець вимкнено — як передав фронт.
+// v7.153 ІСТОРІЯ ЛІДІВ 2024–2026.
+// Джерело: окремий файл, вкладка «ВСІ дані» (8788 рядків, з них ~4131 зі змістом
+// — решта порожній баласт із прапорцем «підписали договір»=0, який НЕ рахуємо).
+// Імпорт разовий і повторюваний: APPLY перебудовує аркуш Ліди_Історія з нуля,
+// тож повторний запуск не дублює дані.
 // ═══════════════════════════════════════════════════════════════════════════
-// 'dd.MM.yyyy HH:mm' -> 'yyyy-MM-dd' (сортується і порівнюється як рядок).
+var LEADS_HIST_SRC_ID  = '1XfLgI_0hEObGylpTTRVHPOjkEB6crW5YNW816gy4Vdg';
+var LEADS_HIST_SRC_TAB = 'ВСІ дані';
+var LEADS_HIST_SHEET   = 'Ліди_Історія';
+var LEADS_HIST_HEADER  = ['lead_id','created_at','day','source','локація','phone','parent','child',
+  'child_age','status','signed','did_call','did_exc','did_refuse','excursion_date','callback_date',
+  'refusal_reason','comment','month','year'];
+
+// Єдиний словник джерел. Усе, чого тут немає (POSM, борд, числа від зсуву колонок), → 'інше'.
+// Tic-Tok зводимо в SMM: це той самий соцмедійний канал, окремою позицією в словнику він не заявлений.
+var LEAD_SRC_MAP = {
+  'сайт|google':'сайт/Google', 'сайт':'сайт/Google', 'google':'сайт/Google',
+  'smm':'SMM', 'tic-tok':'SMM', 'tiktok':'SMM', 'інстаграм':'SMM', 'instagram':'SMM',
+  'рек.| прох. мимо':'рекомендації', 'рекомендації':'рекомендації', 'рек.':'рекомендації',
+  'з минулого періода':'з минулого періоду', 'з минулого періоду':'з минулого періоду'
+};
+var LEAD_SRC_ALL = ['сайт/Google','SMM','рекомендації','з минулого періоду','інше'];
+function _leadSrcNorm(v){
+  var k = String(v == null ? '' : v).trim().toLowerCase().replace(/\s+/g,' ');
+  if (!k) return '';
+  return LEAD_SRC_MAP[k] || 'інше';
+}
+
+// Статуси історії → наш словник. Прапорець «підписали договір» має пріоритет над текстом.
+var LEAD_HIST_STATUS = {
+  'підписали договір':'signed', 'підписав договір':'signed',
+  'нам відмовили':'refused', 'ми відмовили':'refused',
+  'пропав':'unreachable', 'зателефонува пропав':'unreachable', 'був на екск пропав':'unreachable',
+  'на майбутній період':'callback_later', 'цікавить майбутній період':'callback_later',
+  'були на екскурсії, думають':'excursion', 'записався на екск':'excursion'
+};
+function _leadHistStatus(excSt, callSt, signed){
+  if (signed) return 'signed';
+  var a = String(excSt||'').trim().toLowerCase();
+  var b = String(callSt||'').trim().toLowerCase();
+  return LEAD_HIST_STATUS[a] || LEAD_HIST_STATUS[b] || (a || b ? 'closed' : '');
+}
+
+// 'dd.MM.yyyy' | Date | 'dd.MM' -> 'yyyy-MM-dd' ('' якщо року немає або він явно сміттєвий).
+function _histDay(v, fallbackYear){
+  if (v == null || v === '') return '';
+  if (Object.prototype.toString.call(v) === '[object Date]')
+    return Utilities.formatDate(v, 'Europe/Kiev', 'yyyy-MM-dd');
+  var s = String(v).trim();
+  var m = s.match(/^(\d{1,2})[.\/](\d{1,2})[.\/](\d{4})/);
+  if (m){
+    var y = +m[3];
+    if (y < 2015 || y > 2100) return '';          // 1900 / 2525 — сміття, не дата
+    return m[3] + '-' + ('0'+m[2]).slice(-2) + '-' + ('0'+m[1]).slice(-2);
+  }
+  m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (m) return m[1] + '-' + ('0'+m[2]).slice(-2) + '-' + ('0'+m[3]).slice(-2);
+  // 'dd.MM' без року — беремо рік з колонки «рік», якщо він адекватний
+  m = s.match(/^(\d{1,2})[.\/](\d{1,2})$/);
+  if (m && fallbackYear && +fallbackYear >= 2015 && +fallbackYear <= 2100)
+    return String(fallbackYear) + '-' + ('0'+m[2]).slice(-2) + '-' + ('0'+m[1]).slice(-2);
+  return '';
+}
+
+function IMPORT_LEADS_HISTORY_DRYRUN(){ _importLeadsHistory(true); }
+function IMPORT_LEADS_HISTORY_APPLY(){  _importLeadsHistory(false); }
+
+function _importLeadsHistory(dryRun){
+  var out = [];
+  function o(l){ out.push(l); if (out.length >= 60){ Logger.log(out.join('\n')); out = []; } }
+  function flush(){ if (out.length) Logger.log(out.join('\n')); out = []; }
+
+  o('IMPORT_LEADS_HISTORY — ' + (dryRun ? 'DRY RUN (нічого не пишеться)' : '*** APPLY ***'));
+
+  var src;
+  try { src = SpreadsheetApp.openById(LEADS_HIST_SRC_ID); }
+  catch(e){ o('!! файл-джерело не відкривається: ' + (e.message||e)); return flush(); }
+  var ssh = src.getSheetByName(LEADS_HIST_SRC_TAB);
+  if (!ssh){ o('!! немає вкладки «' + LEADS_HIST_SRC_TAB + '»'); return flush(); }
+
+  var v = ssh.getDataRange().getValues();
+  o('Прочитано рядків (з заголовком): ' + v.length);
+  var H = {}; (v[0]||[]).forEach(function(h,i){ H[String(h).trim().toLowerCase()] = i; });
+  function col(name){ var i = H[name.toLowerCase()]; return (i === undefined) ? -1 : i; }
+
+  var iLoc=col('локація'), iDate=col('дата'), iPhone=col('телефон'), iPar=col('імя одного з батьків'),
+      iChild=col('імя дитини'), iAge=col('вік дитини'), iSrc=col('джерело ліда'),
+      iCall=col('статус дзвінка'), iCbD=col('дата повторного дзвінка'), iCall2=col('статус повторного дзвінка'),
+      iExcD=col('дата екскурсії'), iExcS=col('статус екскурсії'), iCom=col('коментар'),
+      iSign=col('підписали договір'), iMon=col('місяць'), iYear=col('рік');
+  if (iDate < 0) iDate = col('дата ');   // у джерелі заголовок з хвостовим пробілом
+  if (iLoc < 0 || iSign < 0){ o('!! не знайдено ключових колонок «Локація»/«підписали договір»'); return flush(); }
+
+  var rows = [], skipped = 0, badSrc = {}, badYear = 0, seen = {};
+  for (var r = 1; r < v.length; r++){
+    var row = v[r];
+    function g(i){ return i >= 0 ? row[i] : ''; }
+    var phone = String(g(iPhone)||'').trim(), dateRaw = g(iDate),
+        child = String(g(iChild)||'').trim(), srcRaw = String(g(iSrc)||'').trim();
+
+    // Порожній баласт: прапорець «підписали договір»=0 стоїть у ТИСЯЧАХ порожніх рядків,
+    // тому вважаємо рядок змістовним лише за наявності дати/телефону/дитини/джерела.
+    if (!dateRaw && !phone && !child && !srcRaw){ skipped++; continue; }
+
+    var year = String(g(iYear)||'').trim();
+    if (year && (+year < 2015 || +year > 2100)){ badYear++; year = ''; }
+    var day = _histDay(dateRaw, year);
+    var signed = String(g(iSign)||'').trim() === '1';
+    var srcN = _leadSrcNorm(srcRaw);
+    if (srcRaw && srcN === 'інше') badSrc[srcRaw] = (badSrc[srcRaw]||0) + 1;
+
+    var excD = _histDay(g(iExcD), year);
+    var callSt = String(g(iCall)||'').trim(), callSt2 = String(g(iCall2)||'').trim();
+    var excSt  = String(g(iExcS)||'').trim();
+    var status = _leadHistStatus(excSt, callSt2 || callSt, signed);
+
+    // Стабільний id: історія імпортується повторно, id не має «пливти» між запусками.
+    var base = 'h_' + (day||'nd') + '_' + (phone.replace(/\D/g,'') || 'np') + '_' + (String(g(iLoc)||'').trim());
+    var id = base; var k = 2; while (seen[id]){ id = base + '#' + (k++); } seen[id] = 1;
+
+    rows.push([
+      id, day ? day : '', day,
+      srcN, String(g(iLoc)||'').trim(), phone, String(g(iPar)||'').trim(), child,
+      String(g(iAge)||'').trim(), status, signed ? 1 : 0,
+      (callSt || callSt2) ? 1 : 0,
+      (excD || excSt || /екск/i.test(callSt) || /екск/i.test(callSt2)) ? 1 : 0,
+      (status === 'refused') ? 1 : 0,
+      excD, _histDay(g(iCbD), year),
+      (status === 'refused') ? (excSt || callSt2 || callSt) : '',
+      String(g(iCom)||'').trim(),
+      String(g(iMon)||'').trim(), year
+    ]);
+  }
+
+  o('Змістовних рядків : ' + rows.length);
+  o('Порожній баласт   : ' + skipped + ' (пропущено)');
+  o('Договорів (=1)    : ' + rows.filter(function(x){ return x[10] === 1; }).length);
+  o('Без дати          : ' + rows.filter(function(x){ return !x[2]; }).length);
+  o('Сміттєвий рік     : ' + badYear + ' (очищено)');
+  var bs = []; for (var k2 in badSrc) bs.push(k2 + '×' + badSrc[k2]);
+  o('Джерела → «інше»  : ' + (bs.join(', ') || '—'));
+  var byLoc = {}; rows.forEach(function(x){ byLoc[x[4]] = (byLoc[x[4]]||0)+1; });
+  var ls = []; for (var k3 in byLoc) ls.push(k3 + '=' + byLoc[k3]);
+  o('Локацій           : ' + Object.keys(byLoc).length + ' → ' + ls.join(', '));
+
+  if (dryRun){ o(''); o('DRY RUN — нічого не записано. Далі: IMPORT_LEADS_HISTORY_APPLY()'); return flush(); }
+
+  var ss = getCRMSpreadsheet();
+  var sh = ss.getSheetByName(LEADS_HIST_SHEET);
+  if (!sh) sh = ss.insertSheet(LEADS_HIST_SHEET);
+  // Перебудова з нуля — імпорт ідемпотентний, повторний запуск не дублює.
+  sh.clear();
+  if (sh.getMaxColumns() < LEADS_HIST_HEADER.length)
+    sh.insertColumnsAfter(sh.getMaxColumns(), LEADS_HIST_HEADER.length - sh.getMaxColumns());
+  if (sh.getMaxRows() < rows.length + 1) sh.insertRowsAfter(sh.getMaxRows(), rows.length + 1 - sh.getMaxRows());
+  sh.getRange(1,1,1,LEADS_HIST_HEADER.length).setValues([LEADS_HIST_HEADER]);
+  sh.setFrozenRows(1);
+  var cPh = LEADS_HIST_HEADER.indexOf('phone') + 1;
+  try { sh.getRange(1, cPh, sh.getMaxRows(), 1).setNumberFormat('@'); } catch(_tf){}
+  if (rows.length) sh.getRange(2,1,rows.length,LEADS_HIST_HEADER.length).setValues(rows);
+  SpreadsheetApp.flush();
+  o('');
+  o('ЗАПИСАНО в «' + LEADS_HIST_SHEET + '»: ' + rows.length + ' рядків.');
+  flush();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.153 getLeads — історія + нові ліди разом. ТІЛЬКИ ЧИТАННЯ.
+// Скоупінг: менеджмент — усі локації, директорка — своя. Під AUTH_ENFORCE
+// роль/локація беруться З ТОКЕНА (клієнтські ігноруються), як у getSalaryData.
+// Агрегати рахуються НА СЕРВЕРІ по всій вибірці; у браузер їде лише зріз
+// рядків для таблиці, інакше 4k+ історичних рядків щоразу летіли б у JSON.
+// ═══════════════════════════════════════════════════════════════════════════
+var LEADS_ROWS_CAP = 800;
+
+// 'dd.MM.yyyy HH:mm' -> 'yyyy-MM-dd'
 function _leadDayKey(s){
-  var m = String(s||'').match(/(\d{1,2})\.(\d{1,2})\.(\d{4})/);
-  if(m) return m[3]+'-'+('0'+m[2]).slice(-2)+'-'+('0'+m[1]).slice(-2);
-  m = String(s||'').match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-  return m ? (m[1]+'-'+('0'+m[2]).slice(-2)+'-'+('0'+m[3]).slice(-2)) : '';
+  if (s == null || s === '') return '';
+  if (Object.prototype.toString.call(s) === '[object Date]')
+    return Utilities.formatDate(s, 'Europe/Kiev', 'yyyy-MM-dd');
+  var m = String(s).match(/(\d{1,2})\.(\d{1,2})\.(\d{4})/);
+  if (m) return m[3] + '-' + ('0'+m[2]).slice(-2) + '-' + ('0'+m[1]).slice(-2);
+  m = String(s).match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  return m ? (m[1] + '-' + ('0'+m[2]).slice(-2) + '-' + ('0'+m[3]).slice(-2)) : '';
+}
+function _leadDayMs(day){
+  if (!day) return null;
+  var p = String(day).split('-');
+  return p.length === 3 ? Date.UTC(+p[0], +p[1]-1, +p[2]) : null;
+}
+// Причини відмов історії — вільний текст. Зводимо до тих самих груп, що й у боті.
+function _leadRefuseNorm(txt){
+  var s = String(txt || '').toLowerCase();
+  if (!s.trim()) return 'не вказано';
+  if (/дорог|фінанс|ціна|вартіст|бюджет/.test(s))        return 'фінанси / дорого';
+  if (/далек|логістик|незручн|добира/.test(s))           return 'логістика / далеко';
+  if (/переїзд|за кордон|виїзд|іншу країн/.test(s))      return 'переїзд / за кордон';
+  if (/школ|держсад|садок|інший сад|конкурент/.test(s))  return 'школа / держсадок';
+  if (/пропав|не відповіда|не бере|недоступ/.test(s))    return 'зник із контакту';
+  if (/майбутн|пізніше|наступн/.test(s))                 return 'на майбутній період';
+  if (/ми відмовили/.test(s))                            return 'відмовили ми';
+  return 'інше';
+}
+
+function _leadsFromBot(){
+  var sh = _leadsBotSheet();
+  var v  = sh.getDataRange().getValues();
+  var out = [], today = _tgDayObj(0).dm, tomorrow = _tgDayObj(1).dm;
+  for (var r = 1; r < v.length; r++){
+    var row = v[r];
+    if (!String(row[LB.lead_id] || '').trim()) continue;
+
+    var acts = []; try { acts = JSON.parse(row[LB.log] || '[]') || []; } catch(_e){ acts = []; }
+    function firstTs(pref){
+      for (var i = 0; i < acts.length; i++)
+        if (String((acts[i] && acts[i].act) || '').indexOf(pref) === 0) return acts[i].ts;
+      return '';
+    }
+    function did(pref){ return !!firstTs(pref); }
+
+    var st  = String(row[LB.status] || '').trim();
+    var exd = String(row[LB.excursion_date] || '').trim();
+    var cbd = String(row[LB.callback_date]  || '').trim();
+    var didCall   = did('call_ok') || st==='called' || st==='excursion' || st==='signed';
+    var didExc    = did('exc')     || st==='excursion' || st==='signed' || !!exd;
+    var didSign   = did('sign')    || st==='signed';
+    var didRefuse = did('refuse')  || st==='refused';
+
+    // Час життя: перший дзвінок → договір. Обидві мітки є лише в журналі бота.
+    var life = null;
+    if (didSign){
+      var a = _leadDayKey(firstTs('call_ok') || row[LB.created_at]);
+      var b = _leadDayKey(firstTs('sign'));
+      var A = _leadDayMs(a), B = _leadDayMs(b);
+      if (A != null && B != null && B >= A) life = Math.round((B - A) / 86400000);
+    }
+    var srcRaw = String(row[LB.source] || '').trim();
+
+    out.push({
+      id: String(row[LB.lead_id] || ''), origin: 'bot',
+      created: String(row[LB.created_at] || ''), day: _leadDayKey(row[LB.created_at]),
+      loc: String(row[LB['локація']] || '').trim(),
+      source: srcRaw ? (_leadSrcNorm(srcRaw) || 'інше') : '', sourceRaw: srcRaw,
+      phone: _fmtPhone(row[LB.phone]),
+      parent: String(row[LB.parent] || ''), child: String(row[LB.child] || ''),
+      age: String(row[LB.child_age] || ''), status: st,
+      assignee: String(row[LB.assignee] || ''),
+      reacted: String(row[LB.first_reaction_at] || ''),
+      reactMin: _leadMinutes(row[LB.created_at], row[LB.first_reaction_at]),
+      slaOk: String(row[LB.sla_ok] || ''),
+      excDate: exd, excTime: _fmtTime(row[LB.excursion_time]),
+      cbDate: cbd,  cbTime: _fmtTime(row[LB.callback_time]),
+      refusal: String(row[LB.refusal_reason] || ''),
+      refuseGroup: didRefuse ? _leadRefuseNorm(row[LB.refusal_reason] || row[LB.notes]) : '',
+      comment: String(row[LB.comment] || ''),
+      cbToday: (cbd === today), excTomorrow: (exd === tomorrow),
+      didCall: didCall, didExc: didExc, didSign: didSign, didRefuse: didRefuse,
+      lifeDays: life, excDays: null
+    });
+  }
+  return out;
+}
+
+function _leadsFromHistory(){
+  var ss = getCRMSpreadsheet();
+  var sh = ss.getSheetByName(LEADS_HIST_SHEET);
+  if (!sh || sh.getLastRow() < 2) return [];
+  var v = sh.getDataRange().getValues();
+  var H = {}; (v[0]||[]).forEach(function(h,i){ H[String(h).trim()] = i; });
+  function g(row, name){ var i = H[name]; return (i === undefined) ? '' : row[i]; }
+  var out = [];
+  for (var r = 1; r < v.length; r++){
+    var row = v[r];
+    var day  = String(g(row,'day') || '').trim();
+    var exd  = String(g(row,'excursion_date') || '').trim();
+    var sign = String(g(row,'signed')) === '1' || g(row,'signed') === 1;
+    // Час до екскурсії — єдиний інтервал, який історія дозволяє порахувати:
+    // дати договору в джерелі НЕМАЄ, тому lifeDays тут завжди null.
+    var ex = null, A = _leadDayMs(day), B = _leadDayMs(exd);
+    if (A != null && B != null && B >= A) ex = Math.round((B - A) / 86400000);
+    out.push({
+      id: String(g(row,'lead_id') || ''), origin: 'history',
+      created: day, day: day,
+      loc: String(g(row,'локація') || '').trim(),
+      source: String(g(row,'source') || '').trim(), sourceRaw: String(g(row,'source') || '').trim(),
+      phone: String(g(row,'phone') || ''),
+      parent: String(g(row,'parent') || ''), child: String(g(row,'child') || ''),
+      age: String(g(row,'child_age') || ''), status: String(g(row,'status') || ''),
+      assignee: '', reacted: '', reactMin: null, slaOk: '',
+      excDate: exd, excTime: '', cbDate: String(g(row,'callback_date') || ''), cbTime: '',
+      refusal: String(g(row,'refusal_reason') || ''),
+      refuseGroup: (String(g(row,'did_refuse')) === '1' || g(row,'did_refuse') === 1)
+                   ? _leadRefuseNorm(String(g(row,'refusal_reason') || '') + ' ' + String(g(row,'comment') || '')) : '',
+      comment: String(g(row,'comment') || ''),
+      cbToday: false, excTomorrow: false,
+      didCall:   (String(g(row,'did_call'))   === '1' || g(row,'did_call')   === 1),
+      didExc:    (String(g(row,'did_exc'))    === '1' || g(row,'did_exc')    === 1),
+      didSign:   sign,
+      didRefuse: (String(g(row,'did_refuse')) === '1' || g(row,'did_refuse') === 1),
+      lifeDays: null, excDays: ex
+    });
+  }
+  return out;
 }
 
 function getLeads(p){
   p = p || {};
-  var sh = _leadsBotSheet();
-  var v  = sh.getDataRange().getValues();
-
   var role  = String(p.role || '').toLowerCase().trim();
   var myLoc = String(p.loc  || '').trim();
   if (_authEnforceOn() && _CURRENT_AUTH){
@@ -586,83 +876,235 @@ function getLeads(p){
   }
   var seeAll = EMP_MGMT_ROLES.indexOf(role) >= 0;
 
-  var fLoc  = String(p.filterLoc || '').trim();
-  var fSt   = String(p.status    || '').trim();
-  var fSrc  = String(p.source    || '').trim();
-  var from  = _leadDayKey(p.from), to = _leadDayKey(p.to);
+  var include = String(p.include || 'all').trim();          // all | bot | history
+  var all = [];
+  if (include !== 'history') all = all.concat(_leadsFromBot());
+  if (include !== 'bot')     all = all.concat(_leadsFromHistory());
 
-  var today    = _tgDayObj(0).dm;
-  var tomorrow = _tgDayObj(1).dm;
+  var fLoc = String(p.filterLoc || '').trim();
+  var fSt  = String(p.status || '').trim();
+  var fSrc = String(p.source || '').trim();
+  var from = _leadDayKey(p.from) || String(p.from || '').slice(0,10);
+  var to   = _leadDayKey(p.to)   || String(p.to   || '').slice(0,10);
 
-  var rows = [], locSet = {}, srcSet = {};
+  var locSet = {}, srcSet = {}, rows = [];
+  for (var i = 0; i < all.length; i++){
+    var r = all[i];
+    if (r.loc)    locSet[r.loc] = 1;
+    if (r.source) srcSet[r.source] = 1;
+    if (!seeAll && myLoc && r.loc !== myLoc) continue;      // скоупінг ПЕРЕД фільтрами
+    if (from && r.day && r.day < from) continue;
+    if (to   && r.day && r.day > to)   continue;
+    if (from && !r.day) continue;                            // без дати — поза будь-яким періодом
+    if (fLoc && r.loc !== fLoc) continue;
+    if (fSt  && r.status !== fSt) continue;
+    if (fSrc && r.source !== fSrc) continue;
+    rows.push(r);
+  }
+
+  // ── агрегати по ВСІЙ вибірці ──
+  function bump(o, k){ if (!o[k]) o[k] = {n:0, call:0, exc:0, sign:0, ref:0}; return o[k]; }
+  var A = {
+    total:0, call:0, exc:0, sign:0, ref:0,
+    byMonth:{}, bySource:{}, byLoc:{}, bySourceMonth:{}, refusals:{}, directors:{},
+    reactN:0, reactSum:0, react15:0, reactNone:0,
+    lifeN:0, lifeSum:0, excN:0, excSum:0
+  };
+  rows.forEach(function(r){
+    A.total++;
+    if (r.didCall) A.call++;
+    if (r.didExc)  A.exc++;
+    if (r.didSign) A.sign++;
+    if (r.didRefuse) A.ref++;
+
+    var ym = (r.day || '').slice(0,7);
+    if (ym){ var m = A.byMonth[ym] || (A.byMonth[ym] = {n:0, sign:0}); m.n++; if (r.didSign) m.sign++; }
+
+    var sk = r.source || '—';
+    var g = bump(A.bySource, sk); g.n++;
+    if (r.didCall) g.call++; if (r.didExc) g.exc++; if (r.didSign) g.sign++; if (r.didRefuse) g.ref++;
+
+    var lk = r.loc || '—';
+    var gl = bump(A.byLoc, lk); gl.n++;
+    if (r.didCall) gl.call++; if (r.didExc) gl.exc++; if (r.didSign) gl.sign++; if (r.didRefuse) gl.ref++;
+
+    if (ym){
+      var sm = A.bySourceMonth[sk] || (A.bySourceMonth[sk] = {});
+      var c  = sm[ym] || (sm[ym] = {n:0, sign:0});
+      c.n++; if (r.didSign) c.sign++;
+    }
+    if (r.didRefuse){ var rg = r.refuseGroup || 'не вказано'; A.refusals[rg] = (A.refusals[rg]||0) + 1; }
+
+    if (r.origin === 'bot'){
+      var d = r.assignee || '—';
+      var dd = A.directors[d] || (A.directors[d] = {n:0, sign:0, reactN:0, reactSum:0, react15:0});
+      dd.n++; if (r.didSign) dd.sign++;
+      if (r.reactMin !== null && r.reactMin !== undefined){
+        dd.reactN++; dd.reactSum += r.reactMin; if (r.reactMin <= 15) dd.react15++;
+      }
+      if (r.reactMin !== null && r.reactMin !== undefined){
+        A.reactN++; A.reactSum += r.reactMin; if (r.reactMin <= 15) A.react15++;
+      } else A.reactNone++;
+    }
+    if (r.lifeDays !== null && r.lifeDays !== undefined){ A.lifeN++; A.lifeSum += r.lifeDays; }
+    if (r.excDays  !== null && r.excDays  !== undefined){ A.excN++;  A.excSum  += r.excDays; }
+  });
+
+  // таблиця — лише свіжий зріз; про обрізання повідомляємо явно, без тихого приховування
+  rows.sort(function(a,b){ return String(b.day||'').localeCompare(String(a.day||'')); });
+  var shown = rows.slice(0, LEADS_ROWS_CAP);
+
+  function keys(o){ var a=[]; for (var k in o) a.push(k); return a.sort(); }
+  return {ok:true, rows:shown, rowsTotal:rows.length, rowsShown:shown.length, cap:LEADS_ROWS_CAP,
+          agg:A, locations:keys(locSet), sources:LEAD_SRC_ALL,
+          statusLabels:LEAD_STATUS_LABEL, today:_tgDayObj(0).dm, tomorrow:_tgDayObj(1).dm,
+          role:role, seeAll:seeAll, myLoc:myLoc, include:include};
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.153 ЩОДЕННЕ ЗВЕДЕННЯ по лідах — щоранку о 9:00 у групу.
+// Встановити тригер один раз: installLeadsDigestTrigger().
+// ═══════════════════════════════════════════════════════════════════════════
+function installLeadsDigestTrigger(){
+  ScriptApp.getProjectTriggers().forEach(function(t){
+    if (t.getHandlerFunction() === 'tgDailyDigest') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('tgDailyDigest').timeBased().atHour(9).nearMinute(0).everyDays(1).create();
+  Logger.log('Тригер tgDailyDigest встановлено на 9:00 щодня.');
+}
+
+function tgDailyDigest(){
+  var sh = _leadsBotSheet();
+  var v  = sh.getDataRange().getValues();
+  var today = _tgDayObj(0).dm, tomorrow = _tgDayObj(1).dm, yest = _tgDayObj(-1).dm;
+  var nowMs = Date.now();
+
+  var newY = 0, signedY = [], stale = [], cbToday = [], excToday = [], excTomorrow = [];
 
   for (var r = 1; r < v.length; r++){
     var row = v[r];
     if (!String(row[LB.lead_id] || '').trim()) continue;
 
-    var loc = String(row[LB['локація']] || '').trim();
-    var src = String(row[LB.source]     || '').trim();
-    if (loc) locSet[loc] = 1;
-    if (src) srcSet[src] = 1;
+    var created = String(row[LB.created_at] || '');
+    var cDM = created.slice(0,5);                       // 'dd.MM' з 'dd.MM.yyyy HH:mm'
+    var st  = String(row[LB.status] || '').trim();
+    var ld  = _leadObj(row);
 
-    // скоупінг ПЕРЕД фільтрами: директорка взагалі не має бачити чужі локації
-    if (!seeAll && myLoc && loc !== myLoc) continue;
+    if (cDM === yest) newY++;
 
-    var key = _leadDayKey(row[LB.created_at]);
-    if (from && key && key < from) continue;
-    if (to   && key && key > to)   continue;
-    if (fLoc && loc !== fLoc) continue;
-    if (fSt  && String(row[LB.status] || '').trim() !== fSt) continue;
-    if (fSrc && src !== fSrc) continue;
+    // підписано вчора — за міткою часу в журналі, а не за поточним статусом
+    var acts = []; try { acts = JSON.parse(row[LB.log] || '[]') || []; } catch(_e){ acts = []; }
+    for (var i = 0; i < acts.length; i++){
+      var a = acts[i];
+      if (String(a && a.act || '') === 'sign' && String(a.ts || '').slice(0,5) === yest){ signedY.push(ld); break; }
+    }
 
-    var mins = _leadMinutes(row[LB.created_at], row[LB.first_reaction_at]);
-    var cbd  = String(row[LB.callback_date]  || '').trim();
-    var exd  = String(row[LB.excursion_date] || '').trim();
-    var st   = String(row[LB.status] || '').trim();
+    // без реакції довше 15 хв і досі відкритий
+    if (!String(row[LB.first_reaction_at] || '').trim() && st !== 'signed' && st !== 'refused' && st !== 'closed'){
+      var ms = _leadMs(created);
+      if (ms != null && (nowMs - ms) > 15 * 60000) stale.push({ld:ld, mins: Math.round((nowMs - ms)/60000)});
+    }
 
-    // Воронку не побудувати з поточного статусу: у ліда він ОДИН, а етапи накопичувальні
-    // (той, хто підписав, раніше пройшов дзвінок і екскурсію). Тому дістаємо з логу.
-    // act: 'call_ok' | 'exc' | 'exc:24.08' | 'exctime:14:30' | 'sign' | 'refuse:…'
-    var acts = []; try { acts = JSON.parse(row[LB.log] || '[]') || []; } catch(_lg){ acts = []; }
-    function did(pref){ for (var i=0;i<acts.length;i++){ if (String(acts[i] && acts[i].act || '').indexOf(pref) === 0) return true; } return false; }
-    // Статус — запасний варіант: якщо лог порожній або лід редагували повз бота.
-    var didCall   = did('call_ok') || st==='called' || st==='excursion' || st==='signed';
-    var didExc    = did('exc')     || st==='excursion' || st==='signed' || !!exd;
-    var didSign   = did('sign')    || st==='signed';
-    var didRefuse = did('refuse')  || st==='refused';
-
-    rows.push({
-      id:        String(row[LB.lead_id] || ''),
-      created:   String(row[LB.created_at] || ''),
-      day:       key,
-      loc:       loc,
-      source:    src,
-      phone:     _fmtPhone(row[LB.phone]),
-      parent:    String(row[LB.parent] || ''),
-      child:     String(row[LB.child]  || ''),
-      age:       String(row[LB.child_age] || ''),
-      status:    String(row[LB.status] || ''),
-      assignee:  String(row[LB.assignee] || ''),
-      reacted:   String(row[LB.first_reaction_at] || ''),
-      reactMin:  (mins == null ? null : mins),
-      slaOk:     String(row[LB.sla_ok] || ''),
-      excDate:   exd,
-      excTime:   _fmtTime(row[LB.excursion_time]),
-      cbDate:    cbd,
-      cbTime:    _fmtTime(row[LB.callback_time]),
-      refusal:   String(row[LB.refusal_reason] || ''),
-      comment:   String(row[LB.comment] || ''),
-      notes:     String(row[LB.notes]   || ''),
-      cbToday:   (cbd === today),
-      excTomorrow: (exd === tomorrow),
-      didCall:   didCall, didExc: didExc, didSign: didSign, didRefuse: didRefuse
-    });
+    if (String(row[LB.callback_date]  || '').trim() === today)    cbToday.push(ld);
+    if (String(row[LB.excursion_date] || '').trim() === today)    excToday.push(ld);
+    if (String(row[LB.excursion_date] || '').trim() === tomorrow) excTomorrow.push(ld);
   }
 
-  function keys(o){ var a=[]; for(var k in o) a.push(k); return a.sort(); }
-  return {ok:true, rows:rows, locations:keys(locSet), sources:keys(srcSet),
-          statusLabels:LEAD_STATUS_LABEL, today:today, tomorrow:tomorrow,
-          role:role, seeAll:seeAll, myLoc:myLoc};
+  function who(ld){
+    var d = null; try { d = _tgDirectorFor(ld.loc); } catch(_e){}
+    return (d && (d.username || d.user_id)) ? _tgMention(d) : _htmlEsc(ld.loc || '—');
+  }
+  function line(ld, extra){
+    return '• ' + _htmlEsc(ld.child || ld.parent || ld.phone || '—')
+         + ' · ' + _htmlEsc(ld.loc || '—')
+         + (ld.phone ? ' · ' + _htmlEsc(ld.phone) : '')
+         + (extra ? ' — ' + extra : '');
+  }
+
+  var L = ['☀️ <b>Зведення по лідах</b> · ' + today, ''];
+  L.push('🆕 Нових лідів учора (' + yest + '): <b>' + newY + '</b>');
+  L.push('✍️ Підписано вчора: <b>' + signedY.length + '</b>');
+  signedY.forEach(function(ld){ L.push('   ' + line(ld)); });
+
+  L.push('');
+  if (stale.length){
+    L.push('🔴 <b>Без реакції понад 15 хв: ' + stale.length + '</b>');
+    stale.sort(function(a,b){ return b.mins - a.mins; });
+    stale.forEach(function(x){ L.push(line(x.ld, x.mins + ' хв') + ' → ' + who(x.ld)); });
+  } else {
+    L.push('🟢 Лідів без реакції немає');
+  }
+
+  L.push('');
+  L.push('☎️ <b>Передзвонити сьогодні: ' + cbToday.length + '</b>');
+  cbToday.forEach(function(ld){ L.push(line(ld, (ld.callback_time ? 'о ' + _htmlEsc(ld.callback_time) : 'час не вказано')) + ' → ' + who(ld)); });
+
+  L.push('');
+  L.push('🗓 <b>Екскурсії сьогодні: ' + excToday.length + '</b>');
+  excToday.forEach(function(ld){ L.push(line(ld, ld.excursion_time ? 'о ' + _htmlEsc(ld.excursion_time) : 'час не вказано')); });
+  L.push('🗓 Екскурсії завтра (' + tomorrow + '): <b>' + excTomorrow.length + '</b>');
+  excTomorrow.forEach(function(ld){ L.push(line(ld, ld.excursion_time ? 'о ' + _htmlEsc(ld.excursion_time) : 'час не вказано')); });
+
+  var txt = L.join('\n');
+  if (txt.length > 3900) txt = txt.slice(0, 3880) + '\n…(обрізано)';
+  _tgSend(_leadsChatId(), txt, {});
+  return {ok:true, newY:newY, signed:signedY.length, stale:stale.length,
+          cb:cbToday.length, excToday:excToday.length, excTomorrow:excTomorrow.length};
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.153 ФОРМА З САЙТУ → лід у бота. ЕНДПОЙНТ НАПИСАНО, АЛЕ ВИМКНЕНО:
+// поки в Script Properties немає WEB_LEAD_SECRET, будь-який виклик отримує
+// відмову. Увімкнення = задати секрет і передати його тому, хто веде сайт.
+// Гейт авторизації обходиться так само, як tgWebhook: власний секрет у query.
+// Опис контракту для сайту — у LEADS_WEB_FORM.md.
+// ═══════════════════════════════════════════════════════════════════════════
+var WEB_LEAD_SECRET_KEY = 'WEB_LEAD_SECRET';
+var WEB_LEAD_DEDUP_H    = 24;     // той самий телефон у межах N годин → не дублюємо
+var WEB_LEAD_MAX_PER_H  = 30;     // грубий стоп на флуд з одного джерела
+
+function webLeadIntake(e){
+  try {
+    var props  = PropertiesService.getScriptProperties();
+    var secret = String(props.getProperty(WEB_LEAD_SECRET_KEY) || '');
+    if (!secret) return {ok:false, code:'DISABLED',
+      error:'Ендпойнт вимкнено: у Script Properties немає WEB_LEAD_SECRET.'};
+
+    var body = {};
+    try { body = JSON.parse((e && e.postData && e.postData.contents) || '{}'); } catch(_p){ body = {}; }
+    var given = String((e && e.parameter && e.parameter.s) || body.secret || '');
+    if (given !== secret) return {ok:false, code:'FORBIDDEN', error:'Невірний секрет'};
+
+    // Honeypot: приховане поле, яке людина не заповнює, а бот — заповнює.
+    if (String(body.hp || '').trim()) return {ok:true, ignored:'honeypot'};
+
+    var phone = _fmtPhone(body.phone);
+    if (phone.replace(/\D/g,'').length < 9) return {ok:false, code:'BAD_PHONE', error:'Телефон некоректний'};
+
+    var cache = CacheService.getScriptCache();
+    var hKey  = 'weblead_h_' + Utilities.formatDate(new Date(), 'Europe/Kiev', 'yyyyMMddHH');
+    var cnt   = Number(cache.get(hKey) || 0);
+    if (cnt >= WEB_LEAD_MAX_PER_H) return {ok:false, code:'RATE', error:'Забагато заявок за годину'};
+    cache.put(hKey, String(cnt + 1), 3600);
+
+    var dKey = 'weblead_p_' + phone.replace(/\D/g,'');
+    if (cache.get(dKey)) return {ok:true, duplicate:true, message:'Заявка з цим номером уже прийнята'};
+    cache.put(dKey, '1', WEB_LEAD_DEDUP_H * 3600);
+
+    var parsed = {
+      phone:   phone,
+      loc:     String(body.loc || '').trim(),
+      source:  _leadSrcNorm(body.source || 'сайт|Google') || 'сайт/Google',
+      parent:  String(body.parent  || '').trim().slice(0,80),
+      child:   String(body.child   || '').trim().slice(0,80),
+      age:     String(body.age     || '').trim().slice(0,20),
+      comment: String(body.comment || '').trim().slice(0,300)
+    };
+    var res = _tgCreateLead(parsed, 'сайт');
+    return {ok:true, id: res && res.id};
+  } catch(err){
+    return {ok:false, code:'ERR', error:String(err && err.message || err)};
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1466,7 +1908,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.152', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.153', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -1547,6 +1989,9 @@ function doPost(e) {
     // Telegram-вебхук: тіло — update без поля action, ідентифікуємо по ?action=tgWebhook.
     // Оминає _authGate (перевірка — секрет у query), парсить update сам.
     if (e && e.parameter && e.parameter.action === 'tgWebhook') return jsonOut(tgWebhook(e));
+    // v7.153 форма з сайту: власний секрет у query, тому теж повз _authGate.
+    // Поки WEB_LEAD_SECRET не заданий — webLeadIntake сам відмовляє.
+    if (e && e.parameter && e.parameter.action === 'webLead')   return jsonOut(webLeadIntake(e));
     var body = JSON.parse(e.postData.contents);
     var _g = _authGate(body.action, body.token || '', 'POST');   // v7.110
     if (_g) return jsonOut(_g);

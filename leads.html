@@ -265,6 +265,15 @@ table.ld td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:n
 .ld-call .when.cb{color:var(--orange)}
 .ld-call .when.exc{color:var(--blue)}
 .ld-phone{font-variant-numeric:tabular-nums;white-space:nowrap}
+
+/* v7.153 */
+.ld-bar{height:8px;background:var(--bg);border-radius:4px;overflow:hidden}
+.ld-bar i{display:block;height:100%;background:var(--blue2);border-radius:4px}
+.ld-drop{color:var(--red)!important}
+.ld-tag{display:inline-block;padding:1px 6px;border-radius:8px;background:var(--bg);
+  color:var(--gray);font-size:10px;font-weight:800;vertical-align:middle}
+.fc-period button.active{background:var(--blue);color:#fff}
+
 </style>
 </head>
 <body>
@@ -422,6 +431,12 @@ table.ld td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:n
       <div class="hd-meta" id="meta">завантаження…</div>
     </div>
     <div class="hd-ctrl">
+      <div class="fc-period" id="ldPreset">
+        <button data-r="30"   onclick="setPreset(30)">30 днів</button>
+        <button data-r="365"  onclick="setPreset(365)">Рік</button>
+        <button data-r="730"  class="active" onclick="setPreset(730)">2 роки</button>
+        <button data-r="0"    onclick="setPreset(0)">Усе</button>
+      </div>
       <input type="date" id="fFrom" class="month-sel" title="Період з">
       <input type="date" id="fTo" class="month-sel" title="Період по">
       <button id="refreshBtn" class="btn btn-primary" onclick="loadLeads()">🔄 Оновити</button>
@@ -433,16 +448,21 @@ table.ld td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:n
   <div id="content" class="hidden">
 
     <div class="ld-filters">
-      <label>Локація <select id="fLoc" onchange="renderAll()"></select></label>
-      <label>Статус <select id="fStatus" onchange="renderAll()"></select></label>
-      <label>Джерело <select id="fSource" onchange="renderAll()"></select></label>
+      <label>Дані <select id="fInclude" onchange="loadLeads()">
+        <option value="all">історія + нові</option>
+        <option value="bot">лише нові (бот)</option>
+        <option value="history">лише історія</option>
+      </select></label>
+      <label>Локація <select id="fLoc" onchange="loadLeads()"></select></label>
+      <label>Статус <select id="fStatus" onchange="loadLeads()"></select></label>
+      <label>Джерело <select id="fSource" onchange="loadLeads()"></select></label>
       <button class="btn" onclick="resetFilters()">Скинути фільтри</button>
     </div>
 
     <div class="inv-card">
       <h3 class="ld-h">Воронка за період</h3>
       <div id="funnel" class="ld-funnel"></div>
-      <p class="ld-note">Етапи накопичувальні: рахуються з історії дій ліда, а не з поточного статусу.
+      <p class="ld-note">Етапи накопичувальні: беруться з історії дій ліда, а не з поточного статусу.
         Відсоток під стрілкою — конверсія з попереднього етапу.</p>
     </div>
 
@@ -452,9 +472,21 @@ table.ld td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:n
         <div id="callList"></div>
       </div>
       <div class="inv-card">
-        <h3 class="ld-h">⏱ Час реакції</h3>
+        <h3 class="ld-h">⏱ Час реакції <span class="ld-cnt">— лише ліди з бота</span></h3>
         <div id="reaction"></div>
       </div>
+    </div>
+
+    <div class="inv-card">
+      <h3 class="ld-h">📈 Динаміка по місяцях</h3>
+      <div class="ld-scroll" id="byMonth"></div>
+    </div>
+
+    <div class="inv-card">
+      <h3 class="ld-h">Конверсія за джерелом у розрізі місяців</h3>
+      <div class="ld-scroll" id="srcMonth"></div>
+      <p class="ld-note">У клітинці — конверсія в договір і кількість лідів.
+        <span class="ld-drop">Червоним</span> — канал просів більш ніж на чверть проти свого ж середнього за період.</p>
     </div>
 
     <div class="ld-two">
@@ -468,8 +500,25 @@ table.ld td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:n
       </div>
     </div>
 
+    <div class="ld-two">
+      <div class="inv-card">
+        <h3 class="ld-h">⏳ Час життя ліда</h3>
+        <div id="life"></div>
+      </div>
+      <div class="inv-card">
+        <h3 class="ld-h">🚫 Причини відмов</h3>
+        <div class="ld-scroll" id="refusals"></div>
+      </div>
+    </div>
+
+    <div class="inv-card">
+      <h3 class="ld-h">👤 Рейтинг директорок <span class="ld-cnt">— лише ліди з бота, де є відповідальна</span></h3>
+      <div class="ld-scroll" id="directors"></div>
+    </div>
+
     <div class="inv-card">
       <h3 class="ld-h">Ліди <span class="ld-cnt" id="cnt"></span></h3>
+      <div id="capNote"></div>
       <div class="ld-scroll" id="tbl"></div>
     </div>
 
@@ -923,12 +972,12 @@ function hasPerm(p){
 
 
 // ═══════════════════════════════════════════════════════════════
-// v7.152 — ЕКРАН ЛІДІВ.
-//   Дані: роут getLeads (аркуш «Ліди_Бот»). Скоупінг ролі — на бекенді:
-//   менеджмент бачить усі локації, директорка лише свою. Фільтри локації/
-//   статусу/джерела застосовуються на клієнті (миттєво), період — на сервері.
+// v7.153 — ЕКРАН ЛІДІВ: історія 2024–2026 + нові ліди з бота.
+//   Усі агрегати рахує БЕКЕНД по повній вибірці; сюди приїздить лише
+//   зріз рядків для таблиці. Тому фільтри (локація/статус/джерело/дані)
+//   теж серверні — інакше цифри у блоках і в таблиці розійшлися б.
 // ═══════════════════════════════════════════════════════════════
-var LD = { rows: [], meta: null, loading: false };
+var LD = { rows: [], agg: null, meta: null, loading: false };
 
 var STATUS_PILL = {
   new:            {t:'новий',        bg:'#fff4d6', c:'#8a6d00'},
@@ -939,24 +988,26 @@ var STATUS_PILL = {
   excursion:      {t:'екскурсія',    bg:'#ece5fb', c:'#4b3a8a'},
   signed:         {t:'договір',      bg:'#eafaf1', c:'#1e7a48'},
   refused:        {t:'відмова',      bg:'#fdecea', c:'#a12c1e'},
-  unreachable:    {t:'не додзвон.',  bg:'#f1f3f4', c:'#5f6b6d'},
+  unreachable:    {t:'зник',         bg:'#f1f3f4', c:'#5f6b6d'},
   closed:         {t:'закрито',      bg:'#f1f3f4', c:'#5f6b6d'}
 };
 function pill(st){
   var p = STATUS_PILL[st] || {t:(st || '—'), bg:'#f1f3f4', c:'#5f6b6d'};
   return '<span class="ld-pill" style="background:' + p.bg + ';color:' + p.c + '">' + escapeHtml(p.t) + '</span>';
 }
-
 function _isoShift(days){
   var d = new Date(); d.setDate(d.getDate() + days);
   var m = d.getMonth() + 1, dd = d.getDate();
   return d.getFullYear() + '-' + (m < 10 ? '0' : '') + m + '-' + (dd < 10 ? '0' : '') + dd;
 }
-// created = 'dd.MM.yyyy HH:mm' — для сортування беремо day (yyyy-MM-dd) + HHmm,
-// бо localeCompare по 'dd.MM.yyyy' дав би хибний порядок між місяцями.
-function _sortKey(r){
-  var m = String(r.created || '').match(/(\d{1,2}):(\d{2})\s*$/);
-  return (r.day || '') + ' ' + (m ? (('0' + m[1]).slice(-2) + m[2]) : '0000');
+function pctS(a, b){ return b > 0 ? Math.round(a * 100 / b) + '%' : '—'; }
+
+function setPreset(days){
+  var btns = document.querySelectorAll('#ldPreset button');
+  for (var i = 0; i < btns.length; i++) btns[i].classList.toggle('active', Number(btns[i].dataset.r) === days);
+  $('fFrom').value = days ? _isoShift(-days) : '';
+  $('fTo').value   = days ? _isoShift(0)     : '';
+  loadLeads();
 }
 
 async function loadLeads(){
@@ -966,19 +1017,24 @@ async function loadLeads(){
   $('errBox').classList.add('hidden');
   try {
     var u = CFG.SCRIPT_URL + '?action=getLeads'
-          + '&role=' + encodeURIComponent(S.user.role || '')
-          + '&loc='  + encodeURIComponent(S.user.origLoc || S.user.loc || '')
-          + '&from=' + encodeURIComponent($('fFrom').value || '')
-          + '&to='   + encodeURIComponent($('fTo').value || '');
+          + '&role='      + encodeURIComponent(S.user.role || '')
+          + '&loc='       + encodeURIComponent(S.user.origLoc || S.user.loc || '')
+          + '&include='   + encodeURIComponent($('fInclude').value || 'all')
+          + '&filterLoc=' + encodeURIComponent($('fLoc').value || '')
+          + '&status='    + encodeURIComponent($('fStatus').value || '')
+          + '&source='    + encodeURIComponent($('fSource').value || '')
+          + '&from='      + encodeURIComponent($('fFrom').value || '')
+          + '&to='        + encodeURIComponent($('fTo').value || '');
     var r = await fetch(u, {redirect:'follow'});
     var j = await r.json();
     if (!j || !j.ok) throw new Error((j && j.error) || 'Порожня відповідь бекенду');
     LD.rows = j.rows || [];
+    LD.agg  = j.agg  || null;
     LD.meta = j;
     fillFilters();
     renderAll();
-    $('meta').textContent = 'Період ' + ($('fFrom').value || '—') + ' … ' + ($('fTo').value || '—')
-      + ' · ' + (j.seeAll ? 'усі локації' : ('локація: ' + (j.myLoc || '—')));
+    $('meta').textContent = 'Період ' + ($('fFrom').value || 'усе') + ' … ' + ($('fTo').value || 'сьогодні')
+      + ' · ' + j.rowsTotal + ' лідів · ' + (j.seeAll ? 'усі локації' : ('локація: ' + (j.myLoc || '—')));
     $('loadBox').classList.add('hidden');
     $('content').classList.remove('hidden');
   } catch (e){
@@ -991,67 +1047,47 @@ async function loadLeads(){
   }
 }
 
-// Селекти наповнюємо з ТОГО, що реально прийшло, — щоб не пропонувати
-// локацію, якої директорка все одно не побачить.
 function fillFilters(){
   var locs = sortLocationsByZone((LD.meta && LD.meta.locations) || []);
   var srcs = (LD.meta && LD.meta.sources) || [];
   var sts  = [];
-  LD.rows.forEach(function(r){ if (r.status && sts.indexOf(r.status) < 0) sts.push(r.status); });
-  sts.sort();
-
-  function opts(el, list, labelFn, keep){
-    var cur = keep ? el.value : '';
+  for (var k in STATUS_PILL) sts.push(k);
+  function opts(el, list, labelFn){
+    var cur = el.value;
     var h = '<option value="">— усі —</option>';
     list.forEach(function(v){ h += '<option value="' + escapeHtml(v) + '">' + escapeHtml(labelFn ? labelFn(v) : v) + '</option>'; });
     el.innerHTML = h;
     if (cur && list.indexOf(cur) >= 0) el.value = cur;
   }
-  opts($('fLoc'), locs, null, true);
-  opts($('fSource'), srcs, null, true);
-  opts($('fStatus'), sts, function(s){ return (STATUS_PILL[s] && STATUS_PILL[s].t) || s; }, true);
+  opts($('fLoc'), locs, null);
+  opts($('fSource'), srcs, null);
+  opts($('fStatus'), sts, function(s){ return (STATUS_PILL[s] && STATUS_PILL[s].t) || s; });
 }
-
 function resetFilters(){
-  $('fLoc').value = ''; $('fStatus').value = ''; $('fSource').value = '';
-  renderAll();
-}
-
-function filtered(){
-  var fl = $('fLoc').value, fs = $('fStatus').value, fr = $('fSource').value;
-  return LD.rows.filter(function(r){
-    if (fl && r.loc !== fl) return false;
-    if (fs && r.status !== fs) return false;
-    if (fr && r.source !== fr) return false;
-    return true;
-  });
+  $('fLoc').value = ''; $('fStatus').value = ''; $('fSource').value = ''; $('fInclude').value = 'all';
+  loadLeads();
 }
 
 function renderAll(){
-  renderFunnel();
-  renderCallList();
-  renderReaction();
-  groupTable(function(r){ return r.source; }, 'Джерело',  'bySource');
-  groupTable(function(r){ return r.loc; },    'Локація',  'byLoc');
-  renderTable();
+  renderFunnel(); renderCallList(); renderReaction();
+  renderMonths(); renderSrcMonth();
+  renderGroup('bySource', 'Джерело', 'bySource');
+  renderGroup('byLoc',    'Локація', 'byLoc');
+  renderLife(); renderRefusals(); renderDirectors(); renderTable();
 }
 
 function renderFunnel(){
-  var rows  = filtered();
-  var total = rows.length;
-  function cnt(f){ var n = 0; rows.forEach(function(r){ if (r[f]) n++; }); return n; }
-  var call = cnt('didCall'), exc = cnt('didExc'), sign = cnt('didSign'), ref = cnt('didRefuse');
-  function pct(a, b){ return b > 0 ? Math.round(a * 100 / b) + '%' : '—'; }
+  var a = LD.agg; if (!a){ $('funnel').innerHTML = ''; return; }
   function stage(n, l, cls){
     return '<div class="ld-stage ' + (cls || '') + '"><div class="n">' + n + '</div><div class="l">' + l + '</div></div>';
   }
   function arrow(p){ return '<div class="ld-arrow"><span>&rarr;</span>' + p + '</div>'; }
   $('funnel').innerHTML =
-      stage(total, 'нові')
-    + arrow(pct(call, total)) + stage(call, 'додзвонились')
-    + arrow(pct(exc, call))   + stage(exc, 'екскурсія')
-    + arrow(pct(sign, exc))   + stage(sign, 'договір', 'signed')
-    + arrow(pct(ref, total))  + stage(ref, 'відмова', 'refused');
+      stage(a.total, 'нові')
+    + arrow(pctS(a.call, a.total)) + stage(a.call, 'додзвонились')
+    + arrow(pctS(a.exc, a.call))   + stage(a.exc, 'екскурсія')
+    + arrow(pctS(a.sign, a.exc))   + stage(a.sign, 'договір', 'signed')
+    + arrow(pctS(a.ref, a.total))  + stage(a.ref, 'відмова', 'refused');
 }
 
 function callRow(r, cls, when){
@@ -1063,9 +1099,9 @@ function callRow(r, cls, when){
     + '</div><div class="when ' + cls + '">' + escapeHtml(when) + '</div></div>';
 }
 function renderCallList(){
-  var rows = filtered(), html = '';
-  rows.forEach(function(r){ if (r.cbToday) html += callRow(r, 'cb', 'передзвонити' + (r.cbTime ? ' о ' + r.cbTime : '')); });
-  rows.forEach(function(r){ if (r.excTomorrow) html += callRow(r, 'exc', 'екскурсія завтра' + (r.excTime ? ' о ' + r.excTime : '')); });
+  var html = '';
+  LD.rows.forEach(function(r){ if (r.cbToday) html += callRow(r, 'cb', 'передзвонити' + (r.cbTime ? ' о ' + r.cbTime : '')); });
+  LD.rows.forEach(function(r){ if (r.excTomorrow) html += callRow(r, 'exc', 'екскурсія завтра' + (r.excTime ? ' о ' + r.excTime : '')); });
   $('callList').innerHTML = html || '<div class="ld-empty">На сьогодні передзвонів і завтрашніх екскурсій немає</div>';
 }
 
@@ -1073,66 +1109,155 @@ function kpi(k, v, cls){
   return '<div class="ld-kpi"><span class="k">' + k + '</span><span class="v ' + (cls || '') + '">' + v + '</span></div>';
 }
 function renderReaction(){
-  var all = filtered();
-  var withR = all.filter(function(r){ return r.reactMin !== null && r.reactMin !== undefined; });
-  var n = withR.length, sum = 0;
-  withR.forEach(function(r){ sum += r.reactMin; });
-  var avg  = n ? Math.round(sum / n) : null;
-  var in15 = withR.filter(function(r){ return r.reactMin <= 15; }).length;
-  var p    = n ? Math.round(in15 * 100 / n) : 0;
-  var noR  = all.length - n;
+  var a = LD.agg; if (!a) return;
+  var avg = a.reactN ? Math.round(a.reactSum / a.reactN) : null;
+  var p   = a.reactN ? Math.round(a.react15 * 100 / a.reactN) : 0;
   $('reaction').innerHTML =
       kpi('Середній час першої реакції', avg === null ? '—' : (avg + ' хв'), avg === null ? '' : (avg <= 15 ? 'good' : 'bad'))
-    + kpi('Вклались у 15 хв', n ? (in15 + ' з ' + n + ' · ' + p + '%') : '—', n ? (p >= 80 ? 'good' : (p >= 50 ? '' : 'bad')) : '')
-    + kpi('Без жодної реакції', noR + ' з ' + all.length, noR > 0 ? 'bad' : 'good');
+    + kpi('Вклались у 15 хв', a.reactN ? (a.react15 + ' з ' + a.reactN + ' · ' + p + '%') : '—',
+          a.reactN ? (p >= 80 ? 'good' : (p >= 50 ? '' : 'bad')) : '')
+    + kpi('Без жодної реакції', a.reactNone, a.reactNone > 0 ? 'bad' : 'good');
 }
 
-function groupTable(keyFn, headLabel, elId){
-  var map = {}, rows = filtered();
-  rows.forEach(function(r){
-    var k = keyFn(r) || '—';
-    if (!map[k]) map[k] = {n:0, call:0, exc:0, sign:0};
-    var g = map[k]; g.n++;
-    if (r.didCall) g.call++;
-    if (r.didExc)  g.exc++;
-    if (r.didSign) g.sign++;
+function renderMonths(){
+  var a = LD.agg; if (!a) return;
+  var ms = Object.keys(a.byMonth).sort();
+  if (!ms.length){ $('byMonth').innerHTML = '<div class="ld-empty">Немає даних за цим періодом</div>'; return; }
+  var max = 0; ms.forEach(function(m){ if (a.byMonth[m].n > max) max = a.byMonth[m].n; });
+  var h = '<table class="ld"><thead><tr><th>Місяць</th><th class="num">лідів</th><th class="num">договорів</th>'
+        + '<th class="num">конверсія</th><th style="width:40%">&nbsp;</th></tr></thead><tbody>';
+  ms.forEach(function(m){
+    var g = a.byMonth[m], cv = g.n ? Math.round(g.sign * 100 / g.n) : 0;
+    var w = max ? Math.round(g.n * 100 / max) : 0;
+    h += '<tr><td>' + escapeHtml(m) + '</td><td class="num">' + g.n + '</td><td class="num">' + g.sign + '</td>'
+       + '<td class="num"><b>' + cv + '%</b></td>'
+       + '<td><div class="ld-bar"><i style="width:' + w + '%"></i></div></td></tr>';
   });
-  var keys = Object.keys(map).sort(function(a, b){ return map[b].n - map[a].n; });
-  if (!keys.length){ $(elId).innerHTML = '<div class="ld-empty">Немає даних за цими фільтрами</div>'; return; }
+  $('byMonth').innerHTML = h + '</tbody></table>';
+}
+
+function renderSrcMonth(){
+  var a = LD.agg; if (!a) return;
+  var srcs = Object.keys(a.bySourceMonth);
+  var mset = {};
+  srcs.forEach(function(s){ for (var m in a.bySourceMonth[s]) mset[m] = 1; });
+  var ms = Object.keys(mset).sort();
+  if (!srcs.length || !ms.length){ $('srcMonth').innerHTML = '<div class="ld-empty">Немає даних</div>'; return; }
+  // середня конверсія каналу за період — база, щоб побачити просідання
+  var base = {};
+  srcs.forEach(function(s){
+    var n = 0, sg = 0;
+    for (var m in a.bySourceMonth[s]){ n += a.bySourceMonth[s][m].n; sg += a.bySourceMonth[s][m].sign; }
+    base[s] = n ? (sg * 100 / n) : 0;
+  });
+  var h = '<table class="ld"><thead><tr><th>Джерело</th>';
+  ms.forEach(function(m){ h += '<th class="num">' + escapeHtml(m.slice(2)) + '</th>'; });
+  h += '</tr></thead><tbody>';
+  srcs.sort().forEach(function(s){
+    h += '<tr><td>' + escapeHtml(s) + '</td>';
+    ms.forEach(function(m){
+      var c = a.bySourceMonth[s][m];
+      if (!c || !c.n){ h += '<td class="num" style="color:var(--gray2)">—</td>'; return; }
+      var cv = c.sign * 100 / c.n;
+      var drop = base[s] > 0 && cv < base[s] * 0.75;
+      h += '<td class="num' + (drop ? ' ld-drop' : '') + '"><b>' + Math.round(cv) + '%</b>'
+         + '<div style="font-size:10px;color:var(--gray)">' + c.n + '</div></td>';
+    });
+    h += '</tr>';
+  });
+  $('srcMonth').innerHTML = h + '</tbody></table>';
+}
+
+function renderGroup(aggKey, headLabel, elId){
+  var a = LD.agg; if (!a) return;
+  var src = a[aggKey] || {};
+  var keys = Object.keys(src).sort(function(x, y){ return src[y].n - src[x].n; });
+  if (!keys.length){ $(elId).innerHTML = '<div class="ld-empty">Немає даних</div>'; return; }
   var h = '<table class="ld"><thead><tr><th>' + headLabel + '</th>'
         + '<th class="num">лідів</th><th class="num">дзвінок</th><th class="num">екскурсія</th>'
         + '<th class="num">договір</th><th class="num">конверсія</th></tr></thead><tbody>';
   keys.forEach(function(k){
-    var g = map[k];
-    h += '<tr><td>' + escapeHtml(k) + '</td>'
-       + '<td class="num">' + g.n + '</td><td class="num">' + g.call + '</td>'
+    var g = src[k];
+    h += '<tr><td>' + escapeHtml(k) + '</td><td class="num">' + g.n + '</td><td class="num">' + g.call + '</td>'
        + '<td class="num">' + g.exc + '</td><td class="num">' + g.sign + '</td>'
        + '<td class="num"><b>' + (g.n ? Math.round(g.sign * 100 / g.n) : 0) + '%</b></td></tr>';
   });
   $(elId).innerHTML = h + '</tbody></table>';
 }
 
+function renderLife(){
+  var a = LD.agg; if (!a) return;
+  var life = a.lifeN ? Math.round(a.lifeSum / a.lifeN) : null;
+  var exc  = a.excN  ? Math.round(a.excSum  / a.excN)  : null;
+  $('life').innerHTML =
+      kpi('Перший дзвінок → договір', life === null ? '—' : (life + ' дн.'), '')
+    + kpi('Лід → екскурсія', exc === null ? '—' : (exc + ' дн.'), '')
+    + '<p class="ld-note">Перший показник рахується лише по лідах з бота: '
+    + a.lifeN + ' з ' + a.sign + ' договорів. В історичній вигрузці <b>дати договору немає</b> — '
+    + 'є лише прапорець, тому для неї цей інтервал не визначений. '
+    + 'Другий показник покриває ' + a.excN + ' лідів і рахується скрізь, де є обидві дати.</p>';
+}
+
+function renderRefusals(){
+  var a = LD.agg; if (!a) return;
+  var keys = Object.keys(a.refusals).sort(function(x, y){ return a.refusals[y] - a.refusals[x]; });
+  if (!keys.length){ $('refusals').innerHTML = '<div class="ld-empty">Відмов за цим періодом немає</div>'; return; }
+  var tot = 0; keys.forEach(function(k){ tot += a.refusals[k]; });
+  var h = '<table class="ld"><thead><tr><th>Причина</th><th class="num">к-сть</th><th class="num">частка</th></tr></thead><tbody>';
+  keys.forEach(function(k){
+    h += '<tr><td>' + escapeHtml(k) + '</td><td class="num">' + a.refusals[k] + '</td>'
+       + '<td class="num"><b>' + Math.round(a.refusals[k] * 100 / tot) + '%</b></td></tr>';
+  });
+  $('refusals').innerHTML = h + '</tbody></table>';
+}
+
+function renderDirectors(){
+  var a = LD.agg; if (!a) return;
+  var keys = Object.keys(a.directors).filter(function(k){ return k && k !== '—'; })
+                   .sort(function(x, y){ return a.directors[y].n - a.directors[x].n; });
+  if (!keys.length){ $('directors').innerHTML = '<div class="ld-empty">Немає лідів з призначеною відповідальною</div>'; return; }
+  var h = '<table class="ld"><thead><tr><th>Директорка</th><th class="num">лідів</th><th class="num">договорів</th>'
+        + '<th class="num">конверсія</th><th class="num">сер. реакція</th><th class="num">у 15 хв</th></tr></thead><tbody>';
+  keys.forEach(function(k){
+    var d = a.directors[k];
+    var av = d.reactN ? Math.round(d.reactSum / d.reactN) : null;
+    var p  = d.reactN ? Math.round(d.react15 * 100 / d.reactN) : null;
+    h += '<tr><td>' + escapeHtml(k) + '</td><td class="num">' + d.n + '</td><td class="num">' + d.sign + '</td>'
+       + '<td class="num"><b>' + (d.n ? Math.round(d.sign * 100 / d.n) : 0) + '%</b></td>'
+       + '<td class="num"' + (av !== null && av > 15 ? ' style="color:var(--red);font-weight:700"' : '') + '>'
+       + (av === null ? '—' : av + ' хв') + '</td>'
+       + '<td class="num">' + (p === null ? '—' : p + '%') + '</td></tr>';
+  });
+  $('directors').innerHTML = h + '</tbody></table>';
+}
+
 function renderTable(){
-  var rows = filtered().slice().sort(function(a, b){ return _sortKey(b).localeCompare(_sortKey(a)); });
-  $('cnt').textContent = '· ' + rows.length + ' з ' + LD.rows.length;
+  var rows = LD.rows, m = LD.meta;
+  $('cnt').textContent = '· показано ' + (m ? m.rowsShown : rows.length) + ' з ' + (m ? m.rowsTotal : rows.length);
+  $('capNote').innerHTML = (m && m.rowsTotal > m.rowsShown)
+    ? '<p class="ld-note">Таблиця показує ' + m.rowsShown + ' найсвіжіших рядків з ' + m.rowsTotal
+      + ' (ліміт ' + m.cap + '). <b>Усі показники вище пораховані по повній вибірці</b>, не по цьому зрізу. '
+      + 'Щоб побачити решту — звузьте період або фільтри.</p>'
+    : '';
   if (!rows.length){ $('tbl').innerHTML = '<div class="ld-empty">Немає лідів за цими фільтрами</div>'; return; }
   var h = '<table class="ld"><thead><tr>'
         + '<th>Дата</th><th>Локація</th><th>Дитина</th><th>Телефон</th><th>Джерело</th>'
         + '<th>Статус</th><th>Відповідальна</th><th class="num">Реакція</th></tr></thead><tbody>';
   rows.forEach(function(r){
     var rm = (r.reactMin === null || r.reactMin === undefined)
-      ? '<span style="color:var(--red)">—</span>'
-      : (r.reactMin + ' хв');
-    if (r.reactMin !== null && r.reactMin !== undefined && r.reactMin > 15){
-      rm = '<span style="color:var(--red);font-weight:700">' + r.reactMin + ' хв</span>';
-    }
+      ? '<span style="color:var(--gray2)">—</span>'
+      : (r.reactMin > 15
+          ? '<span style="color:var(--red);font-weight:700">' + r.reactMin + ' хв</span>'
+          : (r.reactMin + ' хв'));
     h += '<tr>'
-       + '<td>' + escapeHtml(r.created || '—') + '</td>'
+       + '<td>' + escapeHtml(r.created || r.day || '—')
+       + (r.origin === 'history' ? ' <span class="ld-tag">архів</span>' : '') + '</td>'
        + '<td>' + escapeHtml(r.loc || '—') + '</td>'
        + '<td>' + escapeHtml(r.child || '—') + (r.age ? ' <span style="color:var(--gray)">' + escapeHtml(r.age) + '</span>' : '') + '</td>'
        + '<td class="ld-phone">' + escapeHtml(r.phone || '—') + '</td>'
        + '<td>' + escapeHtml(r.source || '—') + '</td>'
-       + '<td>' + pill(r.status) + (r.refusal ? '<div style="font-size:11px;color:var(--gray);margin-top:3px">' + escapeHtml(r.refusal) + '</div>' : '') + '</td>'
+       + '<td>' + pill(r.status)
+       + (r.refuseGroup ? '<div style="font-size:11px;color:var(--gray);margin-top:3px">' + escapeHtml(r.refuseGroup) + '</div>' : '') + '</td>'
        + '<td>' + escapeHtml(r.assignee || '—') + '</td>'
        + '<td class="num">' + rm + '</td>'
        + '</tr>';
@@ -1144,12 +1269,11 @@ function renderTable(){
   var sessUser = readSession();
   if (!sessUser){ window.location.href = 'index.html'; return; }
   S.user = sessUser;
-  // Доступ: мережеві ролі + директорка. Вихователь/медсестра — на дашборд.
   var role = String(S.user.role || '').toLowerCase().trim();
   if (!isNetworkRole(role) && role !== 'director'){ window.location.href = 'index.html'; return; }
   updUserUI();
   var nv = $('navLeads'); if (nv) nv.style.display = '';
-  $('fFrom').value = _isoShift(-30);
+  $('fFrom').value = _isoShift(-730);
   $('fTo').value   = _isoShift(0);
   $('fFrom').addEventListener('change', function(){ loadLeads(); });
   $('fTo').addEventListener('change',   function(){ loadLeads(); });
