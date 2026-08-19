@@ -733,9 +733,14 @@ function tgSetWebhook(body){
   try{
     var secret = _tgProp('TG_WEBHOOK_SECRET');
     if(!secret) return {ok:false, error:'нема TG_WEBHOOK_SECRET — спершу tgAdminSetup'};
-    var base = String(body.url||'').trim() || ScriptApp.getService().getUrl();
-    if(!base) return {ok:false, error:'нема exec-URL — передай url'};
-    var hook = base + (base.indexOf('?')>=0?'&':'?') + 'action=tgWebhook&s=' + encodeURIComponent(secret);
+    var hook;
+    if(String(body.hookUrl||'').trim()){
+      hook = String(body.hookUrl).trim();   // напр. URL Cloudflare-воркера (релей) — беремо як є
+    } else {
+      var base = String(body.url||'').trim() || ScriptApp.getService().getUrl();
+      if(!base) return {ok:false, error:'нема exec-URL — передай url або hookUrl'};
+      hook = base + (base.indexOf('?')>=0?'&':'?') + 'action=tgWebhook&s=' + encodeURIComponent(secret);
+    }
     var r = _tgApi('setWebhook', {url:hook, allowed_updates:['message','edited_message','callback_query'], drop_pending_updates:true});
     var info = _tgApi('getWebhookInfo', {});
     return {ok:!!(r&&r.ok), telegram:r, webhookUrlMasked: hook.replace(secret,'***'),
@@ -1057,7 +1062,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.136', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.137', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
