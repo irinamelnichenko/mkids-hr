@@ -573,7 +573,54 @@ function _authLogMissing(action, method){    // ЕТАП 1: бачимо, які
 var LEADS_BOT_SHEET = 'Ліди_Бот';
 var LEADS_BOT_HEADER = ['lead_id','created_at','source','локація','phone','parent','child',
   'child_age','comment','tg_chat_id','tg_message_id','status','assignee','first_reaction_at',
-  'sla_ok','refusal_reason','reminders','log','client_id','updated_at','excursion_date'];
+  'sla_ok','refusal_reason','reminders','log','client_id','updated_at','excursion_date',
+  'notes','call_attempts','last_noanswer_at'];
+// Лист прив'язки директорів до локацій: локація · username · user_id · ПІБ. Рядок '*' = усі локації.
+var TG_DIRECTORS_SHEET = 'ТГ_Директори';
+var TG_DIR_HEADER = ['локація','username','user_id','ПІБ'];
+function _tgDirsSheet(){
+  var ss=getCRMSpreadsheet(); var sh=ss.getSheetByName(TG_DIRECTORS_SHEET);
+  if(!sh){ sh=ss.insertSheet(TG_DIRECTORS_SHEET); sh.getRange(1,1,1,TG_DIR_HEADER.length).setValues([TG_DIR_HEADER]); sh.setFrozenRows(1); }
+  return sh;
+}
+function _tgNorm(s){ return String(s||'').trim().replace(/\s+/g,' ').toLowerCase(); }
+// Директор для локації: точний збіг, інакше рядок '*'. Повертає {row, username, user_id, name}.
+function _tgDirectorFor(loc){
+  var sh=_tgDirsSheet(); var v=sh.getDataRange().getValues(); var star=null;
+  for(var r=1;r<v.length;r++){
+    var l=String(v[r][0]||'').trim();
+    var rec={row:r+1, loc:l, username:String(v[r][1]||'').replace(/^@/,'').trim(), user_id:String(v[r][2]||'').trim(), name:String(v[r][3]||'').trim()};
+    if(l==='*') star=rec;
+    else if(_tgNorm(l)===_tgNorm(loc)) return rec;
+  }
+  return star;
+}
+// Автовизначення user_id при першому натисканні: якщо username збігається, а user_id порожній — вписуємо.
+function _tgLearnUserId(username, user_id){
+  if(!username || !user_id) return;
+  var sh=_tgDirsSheet(); var v=sh.getDataRange().getValues();
+  for(var r=1;r<v.length;r++){
+    if(String(v[r][1]||'').replace(/^@/,'').trim().toLowerCase()===String(username).toLowerCase() && !String(v[r][2]||'').trim()){
+      sh.getRange(r+1,3).setValue(String(user_id));
+    }
+  }
+}
+function _tgMention(d){
+  if(!d) return '';
+  if(d.username) return '@'+d.username;
+  if(d.user_id)  return '<a href="tg://user?id='+d.user_id+'">'+_htmlEsc(d.name||'відповідальна')+'</a>';
+  return _htmlEsc(d.name||'');
+}
+// Прив'язати @Ira_Melnichenk0 до ВСІХ локацій (рядок '*'). Пізніше директорів додамо точковими рядками.
+function tgSeedDirectors(body){
+  body=body||{};
+  var un=String(body.username||'Ira_Melnichenk0').replace(/^@/,'');
+  var name=String(body.name||'Ірина Мельниченко');
+  var sh=_tgDirsSheet(); var v=sh.getDataRange().getValues();
+  for(var r=1;r<v.length;r++){ if(String(v[r][0]||'').trim()==='*'){ sh.getRange(r+1,1,1,4).setValues([['*',un,String(v[r][2]||''),name]]); return {ok:true, updated:'*', username:un}; } }
+  sh.appendRow(['*', un, '', name]);
+  return {ok:true, added:'*', username:un};
+}
 function _tgProp(k){ return PropertiesService.getScriptProperties().getProperty(k) || ''; }
 function _tgTok(){ return _tgProp('TELEGRAM_BOT_TOKEN'); }
 function _leadsChatId(){ return _tgProp('LEADS_CHAT_ID'); }
@@ -634,24 +681,6 @@ function _tgErr(where, e){
     sh.appendRow([formatDate(new Date()), String(where||''), String((e&&e.stack)||(e&&e.message)||e).slice(0,500)]);
   }catch(_){}
 }
-function tgDiag2(){
-  var out={};
-  try{ out.lasthit = CacheService.getScriptCache().get('tg_lasthit') || null; }catch(e){ out.cacheErr=String(e&&e.message||e); }
-  try{ out.chatIdProp = _leadsChatId(); }catch(e){ out.propErr=String(e&&e.message||e); }
-  try{
-    var i=_tgApi('getWebhookInfo',{});
-    out.webhook = (i&&i.result) ? {url:String(i.result.url||'').replace(/s=[^&]+/,'s=***'),
-      pending:i.result.pending_update_count, last_error:i.result.last_error_message||'',
-      last_error_date:i.result.last_error_date||'', max_conn:i.result.max_connections} : i;
-  }catch(e){ out.whErr=String(e&&e.message||e); }
-  return {ok:true, diag:out};
-}
-function getTgSecret(){ return {ok:true, secret:_tgProp('TG_WEBHOOK_SECRET')}; }   // тимчасово: для налаштування env SECRET воркера
-function getTgErr(){
-  try{ var sh=getCRMSpreadsheet().getSheetByName('TG_Err'); if(!sh) return {ok:true, rows:[]};
-    var v=sh.getDataRange().getValues(); return {ok:true, rows:v.slice(Math.max(1,v.length-20))};
-  }catch(e){ return {ok:false, error:String(e&&e.message||e)}; }
-}
 
 // Ідемпотентність вебхука: Telegram повторно доставляє апдейт, якщо не отримав 200
 // достатньо швидко (Apps Script буває повільним). Позначаємо update_id як оброблений
@@ -690,11 +719,8 @@ function tgWebhook(e){
       _tgErr('migrate', 'LEADS_CHAT_ID '+allow+' → '+msg.migrate_to_chat_id);
       return {ok:true, migrated:String(msg.migrate_to_chat_id)};
     }
-    // діагностика, НЕзалежна від таблиці: фіксуємо кожен вхідний апдейт у Cache
-    try{ CacheService.getScriptCache().put('tg_lasthit', String(new Date().getTime())+'|chat='+chatId+'|allow='+allow+'|'+(cq?'cb':(msg?'msg':'?'))+'|'+((msg&&msg.text)||'').slice(0,30), 1800); }catch(_lh){}
     if (allow && chatId && chatId !== allow){
-      _tgErr('ignored-chat', 'got='+chatId+' expected='+allow);   // діагностика: бачимо реальний chat_id
-      return {ok:true, ignored:'chat', chat:chatId};
+      return {ok:true, ignored:'chat', chat:chatId};   // не наша група
     }
     // ЕТАП 4: натискання кнопки картки
     if (cq){ _tgHandleCallback(cq); return {ok:true, kind:'callback'}; }
@@ -711,9 +737,11 @@ function tgWebhook(e){
       // ЕТАП 6: відповідь у тред картки АБО у force_reply-запит примітки → лог + збагачення
       if (msg.reply_to_message && !/^\/(newlead|lead)\b/i.test(txt)){
         var rmid = String(msg.reply_to_message.message_id);
-        var target = rmid;
-        try{ var mapped = CacheService.getScriptCache().get('tgnote_'+rmid); if(mapped) target = mapped; }catch(_c){}  // примітка → картка
-        if (_tgHandleReply(target, txt, who)) return {ok:true, kind:'reply-log'};
+        var noteCard=null, excCard=null;
+        try{ noteCard=CacheService.getScriptCache().get('tgnote_'+rmid); excCard=CacheService.getScriptCache().get('tgexc_'+rmid); }catch(_c){}
+        if (excCard){ if(_tgHandleReply(excCard, txt, who, {promptMid:rmid, kind:'exc'})) return {ok:true, kind:'exc-reply'}; }
+        var target = noteCard || rmid;
+        if (_tgHandleReply(target, txt, who, {promptMid: noteCard?rmid:null, kind:'note'})) return {ok:true, kind:'reply-log'};
       }
       // ЕТАП 3+4: команда /newlead АБО будь-який текст із телефоном ≥9 цифр → новий лід
       if (/^\/(newlead|lead)\b/i.test(txt) || txt.replace(/\D/g,'').length>=9){
@@ -785,7 +813,8 @@ function _parseLead(text){
 // ── ЕТАП 4: картка ліда + кнопки + обробка callback ─────────────────────────
 var LEAD_STATUS_LABEL = {new:'🟡 новий — чекає реакції (SLA 15 хв)', in_progress:'🔵 в роботі',
   called:'📞 додзвонились', no_answer:'🔕 не відповів', excursion:'🗓 записаний на екскурсію',
-  signed:'✅ підписали договір', refused:'🚫 відмова', closed:'🧹 закрито (тест)'};
+  signed:'✅ підписали договір', refused:'🚫 відмова', closed:'🧹 закрито (тест)',
+  unreachable:'📵 не вдалось додзвонитись'};
 var LEAD_REFUSE = [ ['move','переїзд','переїзд / за кордон'], ['money','фінанси','фінанси / дорого'],
   ['school','школа','школа / держсадок'], ['far','далеко','логістика / далеко'],
   ['think','думає','думає / майбутній період'], ['other','інше','інше'] ];
@@ -796,8 +825,13 @@ function _leadCardText(ld){
   if(ld.phone) lines.push('📞 '+_htmlEsc(ld.phone));
   if(ld.source) lines.push('🔗 '+_htmlEsc(ld.source));
   if(ld.excursion_date) lines.push('🗓 Екскурсія: '+_htmlEsc(ld.excursion_date));
-  if(ld.comment) lines.push('📝 '+_htmlEsc(ld.comment));
+  if(ld.comment) lines.push('💬 '+_htmlEsc(ld.comment));
+  // примітки (кожна окремим рядком «📝 Примітка: …»)
+  if(ld.notes){ String(ld.notes).split('\n').filter(function(x){return x.trim();}).forEach(function(n){ lines.push('📝 Примітка: '+_htmlEsc(n)); }); }
   lines.push('🕒 '+_htmlEsc(ld.created_at||''));
+  // відповідальний директор за локацією (тег)
+  var d=null; try{ d=_tgDirectorFor(ld.loc); }catch(_){}
+  if(d && (d.username||d.user_id)) lines.push('👤 Відповідальна: '+_tgMention(d));
   lines.push('');
   lines.push('Статус: <b>'+(LEAD_STATUS_LABEL[ld.status]||ld.status)+'</b>'+(ld.assignee?' · '+_htmlEsc(ld.assignee):''));
   return lines.join('\n');
@@ -814,12 +848,31 @@ function _leadKb(id, mode){
     [{text:'🚫 Відмова', callback_data:'L|'+id+'|refuse'}, {text:'📝 Примітка', callback_data:'L|'+id+'|note'}]
   ]};
 }
+// Клавіатура вибору дати екскурсії: сьогодні · завтра · 7 днів наперед · інша дата.
+function _leadExcKb(id){
+  var WD=['Нд','Пн','Вт','Ср','Чт','Пт','Сб']; var rows=[]; var now=new Date();
+  for(var i=0;i<7;i++){
+    var d=new Date(now.getTime()+i*86400000);
+    var ddmm=Utilities.formatDate(d,'Europe/Kiev','dd.MM');
+    var wd=Number(Utilities.formatDate(d,'Europe/Kiev','u'))%7;
+    var label=(i===0?'Сьогодні':(i===1?'Завтра':WD[wd]))+' '+ddmm;
+    rows.push([{text:label, callback_data:'L|'+id+'|exd:'+ddmm}]);
+  }
+  rows.push([{text:'✏️ Інша дата', callback_data:'L|'+id+'|exother'}, {text:'← назад', callback_data:'L|'+id+'|back'}]);
+  return {inline_keyboard:rows};
+}
 var LB = {}; LEADS_BOT_HEADER.forEach(function(h,i){ LB[h]=i; });   // мапа колонок
+// Редагувати лише клавіатуру картки ліда за id.
+function _tgEditKb(id, kb){
+  var sh=_leadsBotSheet(); var v=sh.getDataRange().getValues();
+  for(var r=1;r<v.length;r++){ if(String(v[r][LB.lead_id])!==String(id)) continue;
+    _tgApi('editMessageReplyMarkup',{chat_id:v[r][LB.tg_chat_id], message_id:v[r][LB.tg_message_id], reply_markup:kb}); return; }
+}
 function _leadObj(row){
   return {lead_id:row[LB.lead_id], created_at:row[LB.created_at], source:row[LB.source], loc:row[LB['локація']],
     phone:row[LB.phone], parent:row[LB.parent], child:row[LB.child], age:row[LB.child_age], comment:row[LB.comment],
     chat_id:row[LB.tg_chat_id], tg_message_id:row[LB.tg_message_id], status:row[LB.status], assignee:row[LB.assignee],
-    excursion_date:row[LB.excursion_date]};
+    excursion_date:row[LB.excursion_date], notes:row[LB.notes]};
 }
 function _leadMinutes(a, b){   // рядки 'dd.MM.yyyy HH:mm'
   function ms(s){ var m=String(s||'').match(/(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2})/); if(!m)return null;
@@ -853,17 +906,19 @@ function _tgUpdateLead(id, act, who){
     function addlog(a){ var arr=[]; try{arr=JSON.parse(row[LB.log]||'[]');}catch(_){}; arr.push({ts:now,who:who,act:a}); row[LB.log]=JSON.stringify(arr); }
     var reactive={take:1,call_ok:1,call_no:1,exc:1,sign:1};
     var isRef = act.indexOf('r:')===0;
+    var isExd = act.indexOf('exd:')===0;
     // ЗАХИСТ ВІД ПОДВІЙНОГО НАТИСКАННЯ: та сама дія → той самий статус → нічого не робимо.
     var TARGET={take:'in_progress',call_ok:'called',call_no:'no_answer',exc:'excursion',sign:'signed'};
-    var tgt = isRef ? null : TARGET[act];
+    var tgt = (isRef||isExd) ? null : TARGET[act];
     if(tgt && String(row[LB.status])===tgt && !(act==='take' && !row[LB.assignee])){
       return {ld:_leadObj(row), toast:'', changed:false, mode:'done'};
     }
-    if((reactive[act]||isRef) && !row[LB.first_reaction_at]){ row[LB.first_reaction_at]=now;
+    if((reactive[act]||isRef||isExd) && !row[LB.first_reaction_at]){ row[LB.first_reaction_at]=now;
       var mins=_leadMinutes(row[LB.created_at], now); if(mins!=null) row[LB.sla_ok]=(mins<=15)?'YES':'NO'; }
     if(act==='take'){ row[LB.status]='in_progress'; row[LB.assignee]=who; toast='Взяли в роботу'; addlog('take'); }
     else if(act==='call_ok'){ row[LB.status]='called'; if(!row[LB.assignee])row[LB.assignee]=who; toast='Додзвонились'; addlog('call_ok'); }
-    else if(act==='call_no'){ row[LB.status]='no_answer'; if(!row[LB.assignee])row[LB.assignee]=who; toast='Не відповів'; addlog('call_no'); }
+    else if(act==='call_no'){ row[LB.status]='no_answer'; if(!row[LB.assignee])row[LB.assignee]=who; row[LB.call_attempts]=0; row[LB.last_noanswer_at]=now; toast='Не відповів'; addlog('call_no'); }
+    else if(isExd){ var xd=act.slice(4); row[LB.excursion_date]=xd; row[LB.status]='excursion'; if(!row[LB.assignee])row[LB.assignee]=who; toast='Екскурсія '+xd; addlog('exc:'+xd); }
     else if(act==='exc'){ row[LB.status]='excursion'; if(!row[LB.assignee])row[LB.assignee]=who; toast='Записано на екскурсію'; addlog('exc'); }
     else if(act==='sign'){ row[LB.status]='signed'; if(!row[LB.assignee])row[LB.assignee]=who; toast='Договір 🎉'; addlog('sign'); }
     else if(isRef){ var code=act.slice(2); var full=(LEAD_REFUSE.filter(function(x){return x[0]===code;})[0]||[])[2]||code;
@@ -883,7 +938,10 @@ function _tgHandleCallback(cq){
     if(parts[0]!=='L') return;
     var id=parts[1], act=parts[2];
     var who=cq.from && (cq.from.username?('@'+cq.from.username):(cq.from.first_name||'')) || '';
-    if(act==='note'){ _tgPromptNote(id, cq); return; }   // 📝 Примітка → force_reply, без зміни статусу
+    try{ if(cq.from && cq.from.username && cq.from.id) _tgLearnUserId(cq.from.username, cq.from.id); }catch(_lu){}  // автозаповнення user_id
+    if(act==='note'){ _tgPromptNote(id, cq); return; }        // 📝 Примітка → force_reply
+    if(act==='exc'){ _tgEditKb(id, _leadExcKb(id)); return; }  // 🗓 Екскурсія → підменю дат
+    if(act==='exother'){ _tgPromptExc(id, cq); return; }       // ✏️ Інша дата → force_reply
     var res=_tgUpdateLead(id, act, who);
     if(res && res.changed && res.ld){   // подвійне натискання (changed:false) → нічого не редагуємо
       var closed=(res.ld.status==='signed'||res.ld.status==='refused');
@@ -921,16 +979,29 @@ function tgSlaCheck(){
     var now=formatDate(new Date());          // «зараз» у Києві, тим самим форматом, що created_at
     var nowRef=_leadMs(now);                 // парсимо тим самим _leadMs → зсув поясу скорочується
     for(var r=1;r<v.length;r++){
-      var row=v[r];
-      if(String(row[LB.status])!=='new' || row[LB.first_reaction_at]) continue;   // тільки без реакції
-      var cMs=_leadMs(row[LB.created_at]); if(cMs==null || nowRef==null) continue;
-      var mins=Math.round((nowRef-cMs)/60000);
-      if(mins<0) continue;                    // захист від майбутніх дат
-      var rem={}; try{rem=JSON.parse(row[LB.reminders]||'{}');}catch(_){}
+      var row=v[r]; var st=String(row[LB.status]); if(nowRef==null) continue;
       var mid=row[LB.tg_message_id], fired=false;
-      if(mins>=30 && !rem.r2){ _tgSend(chat,'‼️ <b>30 хв без реакції</b> — ескалація. Хто бере ліда?',{reply_to_message_id:mid}); rem.r2=now; fired=true; }
-      else if(mins>=15 && !rem.r1){ _tgSend(chat,'⏰ <b>Лід без реакції 15 хв</b> — хто бере?',{reply_to_message_id:mid}); rem.r1=now; fired=true; }
-      if(fired){ row[LB.reminders]=JSON.stringify(rem); row[LB.updated_at]=now; sh.getRange(r+1,1,1,row.length).setValues([row]); }
+      var d=null; try{ d=_tgDirectorFor(row[LB['локація']]); }catch(_d){}
+      var men=_tgMention(d);
+      // ── SLA 15/30 хв для лідів без першої реакції ──
+      if(st==='new' && !row[LB.first_reaction_at]){
+        var cMs=_leadMs(row[LB.created_at]); if(cMs==null) continue;
+        var mins=Math.round((nowRef-cMs)/60000); if(mins<0) continue;
+        var rem={}; try{rem=JSON.parse(row[LB.reminders]||'{}');}catch(_){}
+        if(mins>=30 && !rem.r2){ _tgSend(chat,'‼️ '+(men||'')+' <b>30 хв без реакції</b> — ескалація!',{reply_to_message_id:mid}); rem.r2=now; fired=true; }
+        else if(mins>=15 && !rem.r1){ _tgSend(chat,'⏰ '+(men||'хто бере?')+', <b>лід без реакції 15 хв</b>',{reply_to_message_id:mid}); rem.r1=now; fired=true; }
+        if(fired){ row[LB.reminders]=JSON.stringify(rem); row[LB.updated_at]=now; sh.getRange(r+1,1,1,row.length).setValues([row]); }
+      }
+      // ── «Не відповів»: кожні 2 год нагадування (до 3×), потім статус «не вдалось» ──
+      else if(st==='no_answer'){
+        var lastMs=_leadMs(row[LB.last_noanswer_at]||row[LB.updated_at]); if(lastMs==null) continue;
+        var hrs=(nowRef-lastMs)/3600000; var att=Number(row[LB.call_attempts]||0);
+        if(hrs>=2){
+          if(att>=3){ row[LB.status]='unreachable'; var _a=[]; try{_a=JSON.parse(row[LB.log]||'[]');}catch(_){}; _a.push({ts:now,who:'system',act:'unreachable'}); row[LB.log]=JSON.stringify(_a); _tgSend(chat,'📵 '+(men||'')+' 3 спроби без відповіді — статус «не вдалось додзвонитись».',{reply_to_message_id:mid}); }
+          else { att++; _tgSend(chat,'🔁 '+(men||'')+', час набрати ще раз (спроба '+att+'/3)',{reply_to_message_id:mid}); row[LB.call_attempts]=att; row[LB.last_noanswer_at]=now; }
+          row[LB.updated_at]=now; sh.getRange(r+1,1,1,row.length).setValues([row]);
+        }
+      }
     }
     return {ok:true};
   }catch(e){ return {ok:false, error:String(e&&e.message||e)}; }
@@ -983,28 +1054,46 @@ function _tgCloseOldLeads(who){
 }
 // ── ЕТАП 6: відповідь у тред картки → лог + збагачення полів + видиме оновлення картки.
 // Повертає true, якщо знайшли лід за message_id картки (reply_to). Інакше false.
-function _tgHandleReply(replyMid, text, who){
-  if(!replyMid || !text) return false;
+function _tgHandleReply(cardMid, text, who, opts){
+  opts=opts||{};
+  if(!cardMid || !text) return false;
   var sh=_leadsBotSheet(); var v=sh.getDataRange().getValues(); var now=formatDate(new Date());
   for(var r=1;r<v.length;r++){
-    if(String(v[r][LB.tg_message_id])!==String(replyMid)) continue;
+    if(String(v[r][LB.tg_message_id])!==String(cardMid)) continue;
     var row=v[r];
     var arr=[]; try{arr=JSON.parse(row[LB.log]||'[]');}catch(_){}
     arr.push({ts:now, who:who, text:String(text).slice(0,300)}); row[LB.log]=JSON.stringify(arr);
-    var changes=_enrichFromReply(row, text);
-    if(changes.length && !String(row[LB.first_reaction_at]).trim()){ row[LB.first_reaction_at]=now;
+    // текст примітки → колонка notes (показується в картці рядком «📝 Примітка: …»)
+    var prev=String(row[LB.notes]||''); row[LB.notes]=(prev?prev+'\n':'')+String(text).slice(0,200);
+    // «інша дата» — ставимо дату екскурсії з голого тексту
+    if(opts.kind==='exc'){ var dm=String(text).match(/(\d{1,2})[.\/](\d{1,2})(?:[.\/](\d{2,4}))?/);
+      if(dm){ row[LB.excursion_date]=('0'+dm[1]).slice(-2)+'.'+('0'+dm[2]).slice(-2)+(dm[3]?('.'+(dm[3].length===2?'20'+dm[3]:dm[3])):'');
+        if(['new','called','no_answer',''].indexOf(String(row[LB.status]))>=0) row[LB.status]='excursion'; } }
+    _enrichFromReply(row, text);   // дата екскурсії/ім'я/вік із тексту (якщо є ключові слова)
+    if(!String(row[LB.first_reaction_at]).trim()){ row[LB.first_reaction_at]=now;
       if(!String(row[LB.assignee]).trim()) row[LB.assignee]=who;
       var mins=_leadMinutes(row[LB.created_at], now); if(mins!=null) row[LB.sla_ok]=(mins<=15)?'YES':'NO'; }
     row[LB.updated_at]=now;
     sh.getRange(r+1,1,1,row.length).setValues([row]);
-    if(changes.length){
-      var ld=_leadObj(row), closed=(ld.status==='signed'||ld.status==='refused');
-      _tgApi('editMessageText',{chat_id:ld.chat_id, message_id:ld.tg_message_id, text:_leadCardText(ld), parse_mode:'HTML', reply_markup: closed?{inline_keyboard:[]}:_leadKb(ld.lead_id)});
-      _tgSend(ld.chat_id, '📝 Картку оновлено: '+_htmlEsc(changes.join(', ')), {reply_to_message_id:replyMid});
-    }
+    var ld=_leadObj(row), closed=(ld.status==='signed'||ld.status==='refused');
+    _tgApi('editMessageText',{chat_id:ld.chat_id, message_id:ld.tg_message_id, text:_leadCardText(ld), parse_mode:'HTML', reply_markup: closed?{inline_keyboard:[]}:_leadKb(ld.lead_id)});
+    if(opts.promptMid){ try{ _tgApi('deleteMessage',{chat_id:ld.chat_id, message_id:opts.promptMid}); }catch(_){} }  // прибрати запрошення
     return true;
   }
   return false;
+}
+function _tgPromptExc(id, cq){
+  var sh=_leadsBotSheet(); var v=sh.getDataRange().getValues();
+  for(var r=1;r<v.length;r++){
+    if(String(v[r][LB.lead_id])!==String(id)) continue;
+    var chat=v[r][LB.tg_chat_id], mid=v[r][LB.tg_message_id]; var f=cq.from||{};
+    var mention=f.username?('@'+f.username):('<a href="tg://user?id='+f.id+'">'+_htmlEsc(f.first_name||'ви')+'</a>');
+    var p=_tgSend(chat, '✏️ '+mention+', напишіть дату екскурсії (напр. 26.08):',
+      {reply_to_message_id:mid, reply_markup:{force_reply:true, selective:true, input_field_placeholder:'ДД.ММ'}});
+    var pmid=p&&p.result&&p.result.message_id;
+    if(pmid){ try{ CacheService.getScriptCache().put('tgexc_'+pmid, String(mid), 3600); }catch(_){} }
+    return;
+  }
 }
 
 // v7.122: діагностика Telegram-бота лідів. Токен береться зі Script Properties
@@ -1063,7 +1152,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.139', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.140', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -1079,9 +1168,6 @@ function doGet(e) {
     else if (action === 'getRegistryUrls')    result = getRegistryUrls();
     else if (action === 'getNeedsAttention') result = getNeedsAttention();   // v7.117 картки active без Payment
     else if (action === 'getAuthLog')         result = getAuthLog();   // v7.118 діагностика Авторизація_Лог
-    else if (action === 'getTgErr')           result = getTgErr();   // діагностика помилок бота лідів
-    else if (action === 'tgDiag2')            result = tgDiag2();   // діагностика: чи викликається вебхук + стан у Telegram
-    else if (action === 'getTgSecret')        result = getTgSecret();   // тимчасово: значення секрету для env воркера
     else if (action === 'tgGetUpdates')       result = tgGetUpdates();   // v7.122 діагностика Telegram-бота
     else if (action === 'getBdayStatus')      result = getBdayStatus();                                            // v7.109 роут замість прямого читання листа з фронту
     else if (action === 'getAttendance')      result = getAttendance(e);
@@ -1210,6 +1296,7 @@ function doPost(e) {
     else if (body.action === 'snapshotPaymentRoster')     result = snapshotPaymentRosterAndLogDepartures(body || {});   // v7.116 знімок ростера + журнал вибуття
     else if (body.action === 'tgAdminSetup')              result = tgAdminSetup(body || {});   // ЕТАП 1 бот лідів: chat_id+секрет+лист
     else if (body.action === 'tgSetWebhook')              result = tgSetWebhook(body || {});   // ЕТАП 2 бот лідів: реєстрація вебхука
+    else if (body.action === 'tgSeedDirectors')           result = tgSeedDirectors(body || {});   // прив'язка директорів до локацій
     else if (body.action === 'cashPayoutSheet')          result = cashPayoutSheet(body || {});      // v7.64 відомість на видачу готівки (PDF)
     else if (body.action === 'cleanupBackupTabs')        result = cleanupBackupTabs(body || {});  // v7.45 чистка бекап-табів
     else if (body.action === 'deleteAttendanceRecord')   result = deleteAttendanceRecord(body || {}); // v7.47 видалення садок-Табель запису (childId+date)
