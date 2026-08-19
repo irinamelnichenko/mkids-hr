@@ -570,8 +570,8 @@ function _authLogMissing(action, method){    // ЕТАП 1: бачимо, які
 // БОТ ЛІДІВ (Telegram) — ЕТАП 1: фундамент. Токен/чат/секрет — у Script Properties,
 // нічого не хардкодимо. Лист «Ліди_Бот» — сховище лідів.
 // ═══════════════════════════════════════════════════════════════════════════
-// ТИМЧАСОВО для тесту: зменшені пороги нагадувань. Повернути TG_TEST=false для продакшн.
-var TG_TEST = true;
+// Пороги нагадувань. TG_TEST=true — зменшені (для тесту); false — робочі.
+var TG_TEST = false;
 var TG_M15  = TG_TEST ? 1 : 15;        // хв: перше нагадування
 var TG_M30  = TG_TEST ? 2 : 30;        // хв: ескалація
 var TG_CALLH= TG_TEST ? (3/60) : 2;    // год: інтервал «не відповів»
@@ -1242,7 +1242,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.145', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.146', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -1258,7 +1258,6 @@ function doGet(e) {
     else if (action === 'getRegistryUrls')    result = getRegistryUrls();
     else if (action === 'getNeedsAttention') result = getNeedsAttention();   // v7.117 картки active без Payment
     else if (action === 'getAuthLog')         result = getAuthLog();   // v7.118 діагностика Авторизація_Лог
-    else if (action === 'getTgErr'){ var _es=getCRMSpreadsheet().getSheetByName('TG_Err'); result={ok:true, rows:_es?_es.getDataRange().getValues().slice(-15):[]}; }
     else if (action === 'tgGetUpdates')       result = tgGetUpdates();   // v7.122 діагностика Telegram-бота
     else if (action === 'getBdayStatus')      result = getBdayStatus();                                            // v7.109 роут замість прямого читання листа з фронту
     else if (action === 'getAttendance')      result = getAttendance(e);
