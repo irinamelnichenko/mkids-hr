@@ -198,6 +198,10 @@ select,input{font-family:inherit}
         <span class="ni">📋</span> Задачник
         <span class="nav-badge hidden" id="tasksBadge">0</span>
       </div>
+      <div class="nav-item" id="navLeads" style="display:none"
+           onclick="window.location.href='leads.html'">
+        <span class="ni">🎯</span> Ліди
+      </div>
 
       <div class="nav-item" id="navFillControl" style="display:none"
            onclick="window.location.href='control.html'">
@@ -1575,6 +1579,24 @@ if ('serviceWorker' in navigator) {
   window._revealMealsMenu=_revealMealsMenu;
   if(typeof applyRoleVisibility==='function'){ var _o=applyRoleVisibility; applyRoleVisibility=function(){ var r=_o.apply(this,arguments); try{_revealMealsMenu();}catch(e){} return r; }; }
   window.addEventListener('load', function(){ setTimeout(_revealMealsMenu, 1200); });
+})();
+</script>
+
+<script>
+/* v7.152: пункт «Ліди» — мережеві ролі + директорка; решті не показуємо. */
+(function(){
+  var ALLOW=['hr','cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo','director'];
+  function reveal(){
+    var el=document.getElementById('navLeads'); if(!el) return;
+    var u=(window.S&&S.user)||null; if(!u){ el.style.display='none'; return; }
+    el.style.display = ALLOW.indexOf(String(u.role||'').toLowerCase().trim())!==-1 ? '' : 'none';
+  }
+  window._revealLeadsMenu=reveal;
+  if(typeof applyRoleVisibility==='function'){
+    var _o=applyRoleVisibility;
+    applyRoleVisibility=function(){ var r=_o.apply(this,arguments); try{reveal();}catch(e){} return r; };
+  }
+  window.addEventListener('load', function(){ setTimeout(reveal, 600); });
 })();
 </script>
 

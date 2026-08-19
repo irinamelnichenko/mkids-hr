@@ -558,6 +558,113 @@ function writeClientsHeader(sheet) {
   sheet.setFrozenRows(1);
 }
 
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.152 getLeads — дані для екрана лідів у CRM. ТІЛЬКИ ЧИТАННЯ.
+// Скоупінг: менеджмент бачить усі локації, директорка — лише свою.
+// Під AUTH_ENFORCE роль/локація беруться З ТОКЕНА (клієнтські ігноруються),
+// як у getSalaryData. Поки прапорець вимкнено — як передав фронт.
+// ═══════════════════════════════════════════════════════════════════════════
+// 'dd.MM.yyyy HH:mm' -> 'yyyy-MM-dd' (сортується і порівнюється як рядок).
+function _leadDayKey(s){
+  var m = String(s||'').match(/(\d{1,2})\.(\d{1,2})\.(\d{4})/);
+  if(m) return m[3]+'-'+('0'+m[2]).slice(-2)+'-'+('0'+m[1]).slice(-2);
+  m = String(s||'').match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  return m ? (m[1]+'-'+('0'+m[2]).slice(-2)+'-'+('0'+m[3]).slice(-2)) : '';
+}
+
+function getLeads(p){
+  p = p || {};
+  var sh = _leadsBotSheet();
+  var v  = sh.getDataRange().getValues();
+
+  var role  = String(p.role || '').toLowerCase().trim();
+  var myLoc = String(p.loc  || '').trim();
+  if (_authEnforceOn() && _CURRENT_AUTH){
+    role  = String(_CURRENT_AUTH.role || '').toLowerCase().trim();
+    myLoc = String(_CURRENT_AUTH.loc  || '').trim();
+  }
+  var seeAll = EMP_MGMT_ROLES.indexOf(role) >= 0;
+
+  var fLoc  = String(p.filterLoc || '').trim();
+  var fSt   = String(p.status    || '').trim();
+  var fSrc  = String(p.source    || '').trim();
+  var from  = _leadDayKey(p.from), to = _leadDayKey(p.to);
+
+  var today    = _tgDayObj(0).dm;
+  var tomorrow = _tgDayObj(1).dm;
+
+  var rows = [], locSet = {}, srcSet = {};
+
+  for (var r = 1; r < v.length; r++){
+    var row = v[r];
+    if (!String(row[LB.lead_id] || '').trim()) continue;
+
+    var loc = String(row[LB['локація']] || '').trim();
+    var src = String(row[LB.source]     || '').trim();
+    if (loc) locSet[loc] = 1;
+    if (src) srcSet[src] = 1;
+
+    // скоупінг ПЕРЕД фільтрами: директорка взагалі не має бачити чужі локації
+    if (!seeAll && myLoc && loc !== myLoc) continue;
+
+    var key = _leadDayKey(row[LB.created_at]);
+    if (from && key && key < from) continue;
+    if (to   && key && key > to)   continue;
+    if (fLoc && loc !== fLoc) continue;
+    if (fSt  && String(row[LB.status] || '').trim() !== fSt) continue;
+    if (fSrc && src !== fSrc) continue;
+
+    var mins = _leadMinutes(row[LB.created_at], row[LB.first_reaction_at]);
+    var cbd  = String(row[LB.callback_date]  || '').trim();
+    var exd  = String(row[LB.excursion_date] || '').trim();
+    var st   = String(row[LB.status] || '').trim();
+
+    // Воронку не побудувати з поточного статусу: у ліда він ОДИН, а етапи накопичувальні
+    // (той, хто підписав, раніше пройшов дзвінок і екскурсію). Тому дістаємо з логу.
+    // act: 'call_ok' | 'exc' | 'exc:24.08' | 'exctime:14:30' | 'sign' | 'refuse:…'
+    var acts = []; try { acts = JSON.parse(row[LB.log] || '[]') || []; } catch(_lg){ acts = []; }
+    function did(pref){ for (var i=0;i<acts.length;i++){ if (String(acts[i] && acts[i].act || '').indexOf(pref) === 0) return true; } return false; }
+    // Статус — запасний варіант: якщо лог порожній або лід редагували повз бота.
+    var didCall   = did('call_ok') || st==='called' || st==='excursion' || st==='signed';
+    var didExc    = did('exc')     || st==='excursion' || st==='signed' || !!exd;
+    var didSign   = did('sign')    || st==='signed';
+    var didRefuse = did('refuse')  || st==='refused';
+
+    rows.push({
+      id:        String(row[LB.lead_id] || ''),
+      created:   String(row[LB.created_at] || ''),
+      day:       key,
+      loc:       loc,
+      source:    src,
+      phone:     _fmtPhone(row[LB.phone]),
+      parent:    String(row[LB.parent] || ''),
+      child:     String(row[LB.child]  || ''),
+      age:       String(row[LB.child_age] || ''),
+      status:    String(row[LB.status] || ''),
+      assignee:  String(row[LB.assignee] || ''),
+      reacted:   String(row[LB.first_reaction_at] || ''),
+      reactMin:  (mins == null ? null : mins),
+      slaOk:     String(row[LB.sla_ok] || ''),
+      excDate:   exd,
+      excTime:   _fmtTime(row[LB.excursion_time]),
+      cbDate:    cbd,
+      cbTime:    _fmtTime(row[LB.callback_time]),
+      refusal:   String(row[LB.refusal_reason] || ''),
+      comment:   String(row[LB.comment] || ''),
+      notes:     String(row[LB.notes]   || ''),
+      cbToday:   (cbd === today),
+      excTomorrow: (exd === tomorrow),
+      didCall:   didCall, didExc: didExc, didSign: didSign, didRefuse: didRefuse
+    });
+  }
+
+  function keys(o){ var a=[]; for(var k in o) a.push(k); return a.sort(); }
+  return {ok:true, rows:rows, locations:keys(locSet), sources:keys(srcSet),
+          statusLabels:LEAD_STATUS_LABEL, today:today, tomorrow:tomorrow,
+          role:role, seeAll:seeAll, myLoc:myLoc};
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // v7.110 ТОКЕН-АВТОРИЗАЦІЯ (Частина 2). Секрет — ЛИШЕ у PropertiesService (ніколи в коді/фронті).
 // authenticate видає токен: base64url(payload) + '.' + base64url(HMAC-SHA256(payload, SECRET)),
@@ -731,7 +838,9 @@ function _leadsBotSheet(){
   for(var i=0;i<need;i++){ if(hdr[i]!==LEADS_BOT_HEADER[i]){ sh.getRange(1,i+1).setValue(LEADS_BOT_HEADER[i]); changed=true; } }
   if(changed) sh.setFrozenRows(1);
   // час екскурсії/передзвону — ПЛАЙН-ТЕКСТ, щоб Sheets не коерсив «10:00» у дату 1899.
-  ['excursion_time','callback_time'].forEach(function(cn){ var c=LEADS_BOT_HEADER.indexOf(cn)+1;
+  // v7.152: 'phone' сюди ж — Sheets трактує провідний '+' як формулу і зберігає ЧИСЛО,
+  // через що '+380…' перечитувалось як 380… і плюс зникав з картки.
+  ['excursion_time','callback_time','phone'].forEach(function(cn){ var c=LEADS_BOT_HEADER.indexOf(cn)+1;
     if(c>0){ try{ sh.getRange(1,c,sh.getMaxRows(),1).setNumberFormat('@'); }catch(_tf){} } });
   return sh;
 }
@@ -932,32 +1041,52 @@ function _leadKb(id, mode){
   ]};
 }
 function _tgDayDM(i){ return Utilities.formatDate(new Date(new Date().getTime()+i*86400000),'Europe/Kiev','dd.MM'); }
-// Дата екскурсії — конкретні числа: сьогодні + 2 (19.08 · 20.08 · 21.08) · Інша дата.
-function _leadExcKb(id){
-  return {inline_keyboard:[
-    [0,1,2].map(function(i){ var d=_tgDayDM(i); return {text:d, callback_data:'L|'+id+'|exd:'+d}; }),
-    [{text:'✏️ Інша дата', callback_data:'L|'+id+'|exother'}, {text:'← назад', callback_data:'L|'+id+'|back'}]
-  ]};
+// ═══ v7.152: дата й час — ЛИШЕ кнопками. Ручний ввід лишається останнім пунктом «✏️ Інша». ═══
+var LEAD_WD = ['нд','пн','вт','ср','чт','пт','сб'];
+// День зі зсувом i: {dm:'24.08', wd:'пн'}. День тижня рахуємо з дати В КИЄВІ через UTC-конструктор,
+// щоб не залежати від локалі рантайму (formatDate('EEE') віддає англійські назви).
+function _tgDayObj(i){
+  var d = new Date(new Date().getTime() + i*86400000);
+  var s = Utilities.formatDate(d, 'Europe/Kiev', 'yyyy-MM-dd').split('-');
+  var wd = new Date(Date.UTC(+s[0], +s[1]-1, +s[2])).getUTCDay();
+  return { dm: s[2]+'.'+s[1], wd: LEAD_WD[wd] };
 }
-// Клавіатура часу (спільна): prefix=ext (екскурсія) / cbt (передзвон), otherAct — кнопка «Інший».
-var LEAD_EXC_TIMES=['9:00','10:00','11:00','12:00','15:00','16:00'];
-function _leadTimeKb(id, prefix, otherAct){
-  var rows=[]; for(var i=0;i<LEAD_EXC_TIMES.length;i+=3){
-    rows.push(LEAD_EXC_TIMES.slice(i,i+3).map(function(t){ return {text:t, callback_data:'L|'+id+'|'+prefix+':'+t}; }));
-  }
-  rows.push([{text:'✏️ Інший', callback_data:'L|'+id+'|'+otherAct}]);
+// Дата: Сьогодні · Завтра · Післязавтра, далі 7 днів уперед («пн 24.08»), потім Інша / назад.
+// Тиждень починаємо з +3, бо перші три дні вже є кнопками вище — інакше дублювались би.
+function _leadDateKb(id, prefix, otherAct){
+  var rows = [], quick = ['Сьогодні','Завтра','Післязавтра'];
+  rows.push([0,1,2].map(function(i){
+    return {text: quick[i], callback_data:'L|'+id+'|'+prefix+':'+_tgDayObj(i).dm};
+  }));
+  var week = [];
+  for (var i=3;i<=9;i++){ var d=_tgDayObj(i); week.push({text:d.wd+' '+d.dm, callback_data:'L|'+id+'|'+prefix+':'+d.dm}); }
+  for (var j=0;j<week.length;j+=3) rows.push(week.slice(j,j+3));
+  rows.push([{text:'✏️ Інша', callback_data:'L|'+id+'|'+otherAct}, {text:'← назад', callback_data:'L|'+id+'|back'}]);
   return {inline_keyboard:rows};
 }
-function _leadExcTimeKb(id){ return _leadTimeKb(id,'ext','extother'); }
-function _leadCbTimeKb(id){  return _leadTimeKb(id,'cbt','cbtother'); }
-// Дата передзвону — сьогодні + наступні 4 дні реальними числами (19.08 · 20.08 …) + Інша дата.
-function _leadCbKb(id){
+function _leadExcKb(id){ return _leadDateKb(id,'exd','exother'); }
+function _leadCbKb(id){  return _leadDateKb(id,'cbd','cbother'); }
+
+// Час, КРОК 1 — година. callback: <prefix>h:<H>  (напр. exth:14)
+var LEAD_HOURS   = [[9,10,11,12],[13,14,15,16],[17,18]];
+var LEAD_MINUTES = ['00','15','30','45'];
+function _leadHourKb(id, prefix, otherAct){
+  var rows = LEAD_HOURS.map(function(g){
+    return g.map(function(h){ return {text:String(h), callback_data:'L|'+id+'|'+prefix+'h:'+h}; });
+  });
+  rows.push([{text:'✏️ Інший', callback_data:'L|'+id+'|'+otherAct}, {text:'← назад', callback_data:'L|'+id+'|back'}]);
+  return {inline_keyboard:rows};
+}
+// Час, КРОК 2 — хвилини. callback: <prefix>:<H>:<MM> — це вже ФІНАЛЬНИЙ формат,
+// який розбирає _tgUpdateLead через act.slice(4), тому там нічого міняти не треба.
+function _leadMinKb(id, prefix, hour){
   return {inline_keyboard:[
-    [0,1,2].map(function(i){ var d=_tgDayDM(i); return {text:d, callback_data:'L|'+id+'|cbd:'+d}; }),
-    [3,4].map(function(i){ var d=_tgDayDM(i); return {text:d, callback_data:'L|'+id+'|cbd:'+d}; }),
-    [{text:'✏️ Інша дата', callback_data:'L|'+id+'|cbother'}, {text:'← назад', callback_data:'L|'+id+'|back'}]
+    LEAD_MINUTES.map(function(m){ return {text:':'+m, callback_data:'L|'+id+'|'+prefix+':'+hour+':'+m}; }),
+    [{text:'← назад', callback_data:'L|'+id+'|'+prefix+'back'}]
   ]};
 }
+function _leadExcTimeKb(id){ return _leadHourKb(id,'ext','extother'); }
+function _leadCbTimeKb(id){  return _leadHourKb(id,'cbt','cbtother'); }
 // Підменю після «📞 Додзвонився»: сюди винесено «⏳ Передзвонити пізніше».
 function _leadCalledKb(id){
   return {inline_keyboard:[
@@ -975,7 +1104,7 @@ function _tgEditKb(id, kb){
 }
 function _leadObj(row){
   return {lead_id:row[LB.lead_id], created_at:row[LB.created_at], source:row[LB.source], loc:row[LB['локація']],
-    phone:row[LB.phone], parent:row[LB.parent], child:row[LB.child], age:row[LB.child_age], comment:row[LB.comment],
+    phone:_fmtPhone(row[LB.phone]), parent:row[LB.parent], child:row[LB.child], age:row[LB.child_age], comment:row[LB.comment],
     chat_id:row[LB.tg_chat_id], tg_message_id:row[LB.tg_message_id], status:row[LB.status], assignee:row[LB.assignee],
     excursion_date:row[LB.excursion_date], excursion_time:_fmtTime(row[LB.excursion_time]),
     callback_date:row[LB.callback_date], callback_time:_fmtTime(row[LB.callback_time]), notes:row[LB.notes]};
@@ -1060,6 +1189,12 @@ function _tgHandleCallback(cq){
     if(act==='later'){ _tgEditKb(id, _leadCbKb(id)); return; }          // ⏳ Передзвонити → дати кнопками
     if(act.indexOf('cbd:')===0){ var rb=_tgUpdateLead(id, act, who);    // дата передзвону → у картку + питаємо час
       if(rb&&rb.ld) _tgApi('editMessageText',{chat_id:rb.ld.chat_id, message_id:rb.ld.tg_message_id, text:_leadCardText(rb.ld), parse_mode:'HTML', reply_markup:_leadCbTimeKb(id)}); return; }
+    // Час, крок 1 → крок 2 (година обрана → показуємо хвилини) і повернення назад до годин.
+    // 'exth:'/'cbth:' НЕ конфліктують з 'ext:'/'cbt:' — indexOf дає -1, бо після ext іде 'h'.
+    if(act.indexOf('exth:')===0){ _tgEditKb(id, _leadMinKb(id,'ext',act.slice(5))); return; }
+    if(act.indexOf('cbth:')===0){ _tgEditKb(id, _leadMinKb(id,'cbt',act.slice(5))); return; }
+    if(act==='extback'){ _tgEditKb(id, _leadExcTimeKb(id)); return; }
+    if(act==='cbtback'){ _tgEditKb(id, _leadCbTimeKb(id)); return; }
     if(act==='exc'){ _tgEditKb(id, _leadExcKb(id)); return; }           // 🗓 Екскурсія → дати
     if(act.indexOf('exd:')===0){ var rd=_tgUpdateLead(id, act, who);    // дата → у картку + питаємо час
       if(rd&&rd.ld) _tgApi('editMessageText',{chat_id:rd.ld.chat_id, message_id:rd.ld.tg_message_id, text:_leadCardText(rd.ld), parse_mode:'HTML', reply_markup:_leadExcTimeKb(id)}); return; }
@@ -1331,7 +1466,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.151', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.152', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -1348,6 +1483,7 @@ function doGet(e) {
     else if (action === 'getNeedsAttention') result = getNeedsAttention();   // v7.117 картки active без Payment
     else if (action === 'getAuthLog')         result = getAuthLog();   // v7.118 діагностика Авторизація_Лог
     else if (action === 'tgGetUpdates')       result = tgGetUpdates();   // v7.122 діагностика Telegram-бота
+    else if (action === 'getLeads')           result = getLeads(e.parameter || {});   // v7.152 екран лідів
     else if (action === 'getBdayStatus')      result = getBdayStatus();                                            // v7.109 роут замість прямого читання листа з фронту
     else if (action === 'getAttendance')      result = getAttendance(e);
     else if (action === 'diagLocPayment')     result = diagLocPayment(e); // v7.57 read-only: пер-лок Payment-файл
