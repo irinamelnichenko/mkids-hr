@@ -877,11 +877,11 @@ function _leadExcTimeKb(id){
   rows.push([{text:'✏️ Інший час', callback_data:'L|'+id+'|extother'}]);
   return {inline_keyboard:rows};
 }
-// Дата передзвону — найближчі 5 днів реальними числами (20.08 · 21.08 …) + Інша дата.
+// Дата передзвону — сьогодні + наступні 4 дні реальними числами (19.08 · 20.08 …) + Інша дата.
 function _leadCbKb(id){
   return {inline_keyboard:[
-    [1,2,3].map(function(i){ var d=_tgDayDM(i); return {text:d, callback_data:'L|'+id+'|cbd:'+d}; }),
-    [4,5].map(function(i){ var d=_tgDayDM(i); return {text:d, callback_data:'L|'+id+'|cbd:'+d}; }),
+    [0,1,2].map(function(i){ var d=_tgDayDM(i); return {text:d, callback_data:'L|'+id+'|cbd:'+d}; }),
+    [3,4].map(function(i){ var d=_tgDayDM(i); return {text:d, callback_data:'L|'+id+'|cbd:'+d}; }),
     [{text:'✏️ Інша дата', callback_data:'L|'+id+'|cbother'}, {text:'← назад', callback_data:'L|'+id+'|back'}]
   ]};
 }
@@ -1242,7 +1242,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.144', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.145', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
