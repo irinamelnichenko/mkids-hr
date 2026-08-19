@@ -965,6 +965,7 @@ function _tgHandleCallback(cq){
     if(parts[0]!=='L'){ _tgAck(cq); return; }
     var id=parts[1], act=parts[2];
     var who=cq.from && (cq.from.username?('@'+cq.from.username):(cq.from.first_name||'')) || '';
+    _tgErr('cb', 'act='+act);   // ТИМЧАСОВО: діагностика callback
     try{ if(cq.from && cq.from.username && cq.from.id) _tgLearnUserId(cq.from.username, cq.from.id); }catch(_lu){}  // автозаповнення user_id
     // Кнопки, що чекають ВВІД: лише popup-підтвердження, НІЧОГО в чат; наступне повідомлення = ввід.
     if(act==='note'){    _tgAck(cq,'✍️ Напишіть примітку наступним повідомленням'); _tgSetPending(cq, id, 'note');    return; }
@@ -1231,7 +1232,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.142', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.143', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -1247,6 +1248,7 @@ function doGet(e) {
     else if (action === 'getRegistryUrls')    result = getRegistryUrls();
     else if (action === 'getNeedsAttention') result = getNeedsAttention();   // v7.117 картки active без Payment
     else if (action === 'getAuthLog')         result = getAuthLog();   // v7.118 діагностика Авторизація_Лог
+    else if (action === 'getTgErr'){ var _es=getCRMSpreadsheet().getSheetByName('TG_Err'); result={ok:true, rows:_es?_es.getDataRange().getValues().slice(-15):[]}; }
     else if (action === 'tgGetUpdates')       result = tgGetUpdates();   // v7.122 діагностика Telegram-бота
     else if (action === 'getBdayStatus')      result = getBdayStatus();                                            // v7.109 роут замість прямого читання листа з фронту
     else if (action === 'getAttendance')      result = getAttendance(e);
