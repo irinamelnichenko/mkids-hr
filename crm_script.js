@@ -646,6 +646,7 @@ function tgDiag2(){
   }catch(e){ out.whErr=String(e&&e.message||e); }
   return {ok:true, diag:out};
 }
+function getTgSecret(){ return {ok:true, secret:_tgProp('TG_WEBHOOK_SECRET')}; }   // тимчасово: для налаштування env SECRET воркера
 function getTgErr(){
   try{ var sh=getCRMSpreadsheet().getSheetByName('TG_Err'); if(!sh) return {ok:true, rows:[]};
     var v=sh.getDataRange().getValues(); return {ok:true, rows:v.slice(Math.max(1,v.length-20))};
@@ -1062,7 +1063,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.138', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.139', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -1080,6 +1081,7 @@ function doGet(e) {
     else if (action === 'getAuthLog')         result = getAuthLog();   // v7.118 діагностика Авторизація_Лог
     else if (action === 'getTgErr')           result = getTgErr();   // діагностика помилок бота лідів
     else if (action === 'tgDiag2')            result = tgDiag2();   // діагностика: чи викликається вебхук + стан у Telegram
+    else if (action === 'getTgSecret')        result = getTgSecret();   // тимчасово: значення секрету для env воркера
     else if (action === 'tgGetUpdates')       result = tgGetUpdates();   // v7.122 діагностика Telegram-бота
     else if (action === 'getBdayStatus')      result = getBdayStatus();                                            // v7.109 роут замість прямого читання листа з фронту
     else if (action === 'getAttendance')      result = getAttendance(e);
