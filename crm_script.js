@@ -21612,6 +21612,15 @@ function _publishAggregate(ss, targetName, headerFn, rows, numCols, opts){
 
   var stage = ss.insertSheet(stageName);
   try {
+    // Свіжий аркуш — 1000×26. Розширюємо ПІД дані ДО запису, інакше setValues
+    // впаде з «range exceeds grid limits»: Оплати-Рік = 83 колонки, а Оплати
+    // вже перевалили за 1000 рядків.
+    var needRows = rows.length + 1;
+    if (stage.getMaxRows() < needRows)
+      stage.insertRowsAfter(stage.getMaxRows(), needRows - stage.getMaxRows());
+    if (stage.getMaxColumns() < numCols)
+      stage.insertColumnsAfter(stage.getMaxColumns(), numCols - stage.getMaxColumns());
+
     headerFn(stage);
     if (rows.length > 0) stage.getRange(2, 1, rows.length, numCols).setValues(rows);
     SpreadsheetApp.flush();
@@ -21652,7 +21661,8 @@ function _publishAggregate(ss, targetName, headerFn, rows, numCols, opts){
       var base = _SAFE_BACKUP_PREFIX + targetName + '_';
       var olds = ss.getSheets().filter(function(s){ return s.getName().indexOf(base) === 0; })
                    .sort(function(a, b){ return a.getName() < b.getName() ? 1 : -1; });
-      for (var i = _SAFE_KEEP_BACKUPS - 1; i < olds.length; i++){
+      // цей список ВКЛЮЧАЄ щойно створений архів, тому поріг без -1
+      for (var i = _SAFE_KEEP_BACKUPS; i < olds.length; i++){
         try { ss.deleteSheet(olds[i]); } catch(_e){}
       }
     }
