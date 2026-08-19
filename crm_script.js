@@ -860,13 +860,11 @@ function _leadKb(id, mode){
     [{text:'🚫 Відмова', callback_data:'L|'+id+'|refuse'}, {text:'📝 Примітка', callback_data:'L|'+id+'|note'}]
   ]};
 }
-// Дата екскурсії: Сьогодні · Завтра · Післязавтра · Інша дата.
+function _tgDayDM(i){ return Utilities.formatDate(new Date(new Date().getTime()+i*86400000),'Europe/Kiev','dd.MM'); }
+// Дата екскурсії — конкретні числа: сьогодні + 2 (19.08 · 20.08 · 21.08) · Інша дата.
 function _leadExcKb(id){
-  var now=new Date(); function dm(i){ return Utilities.formatDate(new Date(now.getTime()+i*86400000),'Europe/Kiev','dd.MM'); }
   return {inline_keyboard:[
-    [{text:'Сьогодні '+dm(0), callback_data:'L|'+id+'|exd:'+dm(0)}],
-    [{text:'Завтра '+dm(1), callback_data:'L|'+id+'|exd:'+dm(1)}],
-    [{text:'Післязавтра '+dm(2), callback_data:'L|'+id+'|exd:'+dm(2)}],
+    [0,1,2].map(function(i){ var d=_tgDayDM(i); return {text:d, callback_data:'L|'+id+'|exd:'+d}; }),
     [{text:'✏️ Інша дата', callback_data:'L|'+id+'|exother'}, {text:'← назад', callback_data:'L|'+id+'|back'}]
   ]};
 }
@@ -878,6 +876,14 @@ function _leadExcTimeKb(id){
   }
   rows.push([{text:'✏️ Інший час', callback_data:'L|'+id+'|extother'}]);
   return {inline_keyboard:rows};
+}
+// Дата передзвону — найближчі 5 днів реальними числами (20.08 · 21.08 …) + Інша дата.
+function _leadCbKb(id){
+  return {inline_keyboard:[
+    [1,2,3].map(function(i){ var d=_tgDayDM(i); return {text:d, callback_data:'L|'+id+'|cbd:'+d}; }),
+    [4,5].map(function(i){ var d=_tgDayDM(i); return {text:d, callback_data:'L|'+id+'|cbd:'+d}; }),
+    [{text:'✏️ Інша дата', callback_data:'L|'+id+'|cbother'}, {text:'← назад', callback_data:'L|'+id+'|back'}]
+  ]};
 }
 // Підменю після «📞 Додзвонився»: сюди винесено «⏳ Передзвонити пізніше».
 function _leadCalledKb(id){
@@ -935,19 +941,21 @@ function _tgUpdateLead(id, act, who){
     var isRef = act.indexOf('r:')===0;
     var isExd = act.indexOf('exd:')===0;
     var isExt = act.indexOf('ext:')===0;
+    var isCbd = act.indexOf('cbd:')===0;
     // ЗАХИСТ ВІД ПОДВІЙНОГО НАТИСКАННЯ: та сама дія → той самий статус → нічого не робимо.
     var TARGET={take:'in_progress',call_ok:'called',call_no:'no_answer',exc:'excursion',sign:'signed'};
-    var tgt = (isRef||isExd||isExt) ? null : TARGET[act];
+    var tgt = (isRef||isExd||isExt||isCbd) ? null : TARGET[act];
     if(tgt && String(row[LB.status])===tgt && !(act==='take' && !row[LB.assignee])){
       return {ld:_leadObj(row), toast:'', changed:false, mode:'done'};
     }
-    if((reactive[act]||isRef||isExd||isExt) && !row[LB.first_reaction_at]){ row[LB.first_reaction_at]=now;
+    if((reactive[act]||isRef||isExd||isExt||isCbd) && !row[LB.first_reaction_at]){ row[LB.first_reaction_at]=now;
       var mins=_leadMinutes(row[LB.created_at], now); if(mins!=null) row[LB.sla_ok]=(mins<=15)?'YES':'NO'; }
     if(act==='take'){ row[LB.status]='in_progress'; row[LB.assignee]=who; toast='Взяли в роботу'; addlog('take'); }
     else if(act==='call_ok'){ row[LB.status]='called'; if(!row[LB.assignee])row[LB.assignee]=who; toast='Додзвонились'; addlog('call_ok'); }
     else if(act==='call_no'){ row[LB.status]='no_answer'; if(!row[LB.assignee])row[LB.assignee]=who; row[LB.call_attempts]=0; row[LB.last_noanswer_at]=now; toast='Не відповів'; addlog('call_no'); }
     else if(isExd){ var xd=act.slice(4); row[LB.excursion_date]=xd; row[LB.status]='excursion'; if(!row[LB.assignee])row[LB.assignee]=who; toast='Екскурсія '+xd; addlog('exc:'+xd); }
     else if(act.indexOf('ext:')===0){ var xt=act.slice(4); row[LB.excursion_time]=xt; row[LB.status]='excursion'; if(!row[LB.assignee])row[LB.assignee]=who; toast='Екскурсія о '+xt; addlog('exctime:'+xt); }
+    else if(isCbd){ var cd=act.slice(4); row[LB.callback_date]=cd; row[LB.status]='callback_later'; if(!row[LB.assignee])row[LB.assignee]=who; toast='Передзвонити '+cd; addlog('callback:'+cd); }
     else if(act==='exc'){ row[LB.status]='excursion'; if(!row[LB.assignee])row[LB.assignee]=who; toast='Записано на екскурсію'; addlog('exc'); }
     else if(act==='sign'){ row[LB.status]='signed'; if(!row[LB.assignee])row[LB.assignee]=who; toast='Договір 🎉'; addlog('sign'); }
     else if(isRef){ var code=act.slice(2); var full=(LEAD_REFUSE.filter(function(x){return x[0]===code;})[0]||[])[2]||code;
@@ -965,15 +973,17 @@ function _tgHandleCallback(cq){
     if(parts[0]!=='L'){ _tgAck(cq); return; }
     var id=parts[1], act=parts[2];
     var who=cq.from && (cq.from.username?('@'+cq.from.username):(cq.from.first_name||'')) || '';
-    _tgErr('cb', 'act='+act);   // ТИМЧАСОВО: діагностика callback
     try{ if(cq.from && cq.from.username && cq.from.id) _tgLearnUserId(cq.from.username, cq.from.id); }catch(_lu){}  // автозаповнення user_id
     // Кнопки, що чекають ВВІД: лише popup-підтвердження, НІЧОГО в чат; наступне повідомлення = ввід.
     if(act==='note'){    _tgAck(cq,'✍️ Напишіть примітку наступним повідомленням'); _tgSetPending(cq, id, 'note');    return; }
     if(act==='exother'){ _tgAck(cq,'✍️ Напишіть дату екскурсії (26.08)');            _tgSetPending(cq, id, 'excdate'); return; }
     if(act==='extother'){_tgAck(cq,'✍️ Напишіть час екскурсії (14:30)');             _tgSetPending(cq, id, 'exctime'); return; }
-    if(act==='later'){   _tgAck(cq,'✍️ Напишіть дату передзвону (26.08)');           _tgSetPending(cq, id, 'cbdate');  return; }
+    if(act==='cbother'){ _tgAck(cq,'✍️ Напишіть дату передзвону (26.08)');          _tgSetPending(cq, id, 'cbdate');  return; }
     // Меню-переходи (лише клавіатура)
     _tgAck(cq);
+    if(act==='later'){ _tgEditKb(id, _leadCbKb(id)); return; }          // ⏳ Передзвонити → дати кнопками
+    if(act.indexOf('cbd:')===0){ var rb=_tgUpdateLead(id, act, who);    // дата передзвону → у картку
+      if(rb&&rb.ld) _tgApi('editMessageText',{chat_id:rb.ld.chat_id, message_id:rb.ld.tg_message_id, text:_leadCardText(rb.ld), parse_mode:'HTML', reply_markup:_leadKb(id)}); return; }
     if(act==='exc'){ _tgEditKb(id, _leadExcKb(id)); return; }           // 🗓 Екскурсія → дати
     if(act.indexOf('exd:')===0){ var rd=_tgUpdateLead(id, act, who);    // дата → у картку + питаємо час
       if(rd&&rd.ld) _tgApi('editMessageText',{chat_id:rd.ld.chat_id, message_id:rd.ld.tg_message_id, text:_leadCardText(rd.ld), parse_mode:'HTML', reply_markup:_leadExcTimeKb(id)}); return; }
@@ -1232,7 +1242,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.143', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.144', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
