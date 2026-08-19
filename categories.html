@@ -388,17 +388,47 @@ function sortByLocationOrder(arr, getName){
 }
 function sortLocationsByZone(locs){ return sortByLocationOrder(locs); }
 
-/* v7.110 токен-авторизація: ЄДИНИЙ перехоплювач fetch — додає токен у КОЖЕН запит до бекенду
-   (GET -> &token=, POST -> у тіло). Усі опції захищені від undefined. */
+/* v7.151 токен-авторизація: ЄДИНИЙ перехоплювач fetch — додає токен у КОЖЕН запит до бекенду
+   (GET -> &token=, POST -> у тіло) і ловить відмову code:'AUTH' (сесія протухла) -> логін.
+   Ідемпотентний: повторне підключення нічого не робить. Усі опції захищені від undefined. */
 (function(){
   if (window.__mkFetchTokenPatched) return; window.__mkFetchTokenPatched = true;
   var _of = window.fetch.bind(window);
   function _tok(){ try { return (JSON.parse(localStorage.getItem('mkids_session')||'null')||{}).token || ''; } catch(e){ return ''; } }
+  /* Сесія протухла -> чистимо і кидаємо на логін. Спрацьовує рівно один раз.
+     Відмову «Доступ лише до своєї локації» НЕ чіпаємо — то не протухла сесія, а брак прав. */
+  function _kick(){
+    if (window.__mkAuthKicked) return; window.__mkAuthKicked = true;
+    try { localStorage.removeItem('mkids_session'); } catch(_e){}
+    try { alert('Сесія закінчилась, увійдіть знову'); } catch(_e){}
+    try { window.location.href = 'index.html'; } catch(_e){}
+  }
+  /* Відповідь Apps Script приходить БЕЗ Content-Length (chunked), тож розмір наперед невідомий:
+     читаємо лише ПЕРШИЙ чанк клона. Оригінал не чіпаємо, виклик не блокуємо. */
+  function _watch(r){
+    try {
+      var c = r.clone();
+      if (!c.body || !c.body.getReader) return r;
+      var rd = c.body.getReader();
+      rd.read().then(function(res){
+        try {
+          if (res && res.value){
+            var s = new TextDecoder('utf-8').decode(res.value);
+            if (s.indexOf('"AUTH"') >= 0 && s.indexOf('Не авторизовано') >= 0) _kick();
+          }
+        } catch(_e){}
+        try { rd.cancel(); } catch(_e){}
+      }, function(){ try { rd.cancel(); } catch(_e){} });
+    } catch(_e){}
+    return r;
+  }
   window.fetch = function(input, init){
+    var url = '';
+    try { url = (typeof input === 'string') ? input : (input && input.url) || ''; } catch(_e){}
+    if (url.indexOf('script.google.com') < 0) return _of(input, init);   // сторонні запити не чіпаємо
     try {
       var t = _tok();
-      var url = (typeof input === 'string') ? input : (input && input.url) || '';
-      if (t && url.indexOf('script.google.com') >= 0){
+      if (t){
         init = init || {};
         var m = ((init && init.method) || 'GET').toUpperCase();
         if (m === 'POST'){
@@ -408,7 +438,7 @@ function sortLocationsByZone(locs){ return sortByLocationOrder(locs); }
         }
       }
     } catch(_e){}
-    return _of(input, init);
+    return _of(input, init).then(_watch);
   };
 })();
 var CFG = {
@@ -477,7 +507,7 @@ function unitLabel(t){
 
 // ── AUTH (shared session) ───────────────────
 var SESSION_KEY = 'mkids_session';
-var SESSION_TTL_MS = 12 * 3600 * 1000;
+var SESSION_TTL_MS = 7 * 24 * 3600 * 1000;
 function readSession(){
   try {
     var s = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null');

@@ -1,2 +1,5 @@
 .claude/
 .DS_Store
+
+# застарілі локальні бекапи бекенду — джерело правди лише crm_script.js
+crm_script.js.bak_*

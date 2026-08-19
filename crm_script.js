@@ -561,13 +561,28 @@ function writeClientsHeader(sheet) {
 // ═══════════════════════════════════════════════════════════════════════════
 // v7.110 ТОКЕН-АВТОРИЗАЦІЯ (Частина 2). Секрет — ЛИШЕ у PropertiesService (ніколи в коді/фронті).
 // authenticate видає токен: base64url(payload) + '.' + base64url(HMAC-SHA256(payload, SECRET)),
-// payload = {id, role, loc, exp}, exp = +12год. Гейт у doGet/doPost:
+// payload = {id, role, loc, exp}, exp = +7 діб (v7.151; було 12 год). Гейт у doGet/doPost:
 //   ЕТАП 1 (зараз): лише ЛОГ, хто прийшов без токена — НЕ блокує.
 //   ЕТАП 2 (прапорець AUTH_ENFORCE='1' у Script Properties): відмова без токена + роль/локація з токена.
 // ping і authenticate — завжди без токена.
 // ═══════════════════════════════════════════════════════════════════════════
 var _CURRENT_AUTH = null;                 // виставляється гейтом на час ОДНОГО запиту
 var AUTH_LOG_SHEET = 'Авторизація_Лог';
+var AUTH_LOG_MAX   = 5000;   // стеля рядків логу
+var AUTH_LOG_TRIM  = 1000;   // скільки найстаріших зрізати при досягненні стелі
+
+// Разова утиліта ДЛЯ РЕДАКТОРА (не роут): повністю чистить Авторизація_Лог.
+// Потрібна тому, що лог упирався в 5000 рядків і перестав писати ще 17.08.
+function clearAuthLog(){
+  var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var sh = ss.getSheetByName(AUTH_LOG_SHEET);
+  if (!sh){ Logger.log('Аркуша «' + AUTH_LOG_SHEET + '» немає — чистити нічого.'); return; }
+  var lr = sh.getLastRow();
+  if (lr < 2){ Logger.log('Лог уже порожній.'); return; }
+  sh.deleteRows(2, lr - 1);
+  SpreadsheetApp.flush();
+  Logger.log('Авторизація_Лог очищено: видалено ' + (lr - 1) + ' рядків, заголовок лишився.');
+}
 
 function _authSecret(){
   var p = PropertiesService.getScriptProperties();
@@ -588,7 +603,7 @@ function _b64uBytes(bytes){ return Utilities.base64EncodeWebSafe(bytes).replace(
 function _authHmac(msg){ return _b64uBytes(Utilities.computeHmacSha256Signature(msg, _authSecret())); }
 function _issueToken(u){
   var payload = { id: Number(u.id) || 0, role: String(u.role || '').toLowerCase().trim(),
-                  loc: String(u.loc || ''), exp: Date.now() + 12 * 3600 * 1000 };
+                  loc: String(u.loc || ''), exp: Date.now() + 7 * 24 * 3600 * 1000 };   // v7.151: 7 діб (було 12 год)
   var pj = JSON.stringify(payload);
   return _b64u(pj) + '.' + _authHmac(pj);
 }
@@ -615,7 +630,10 @@ function _authLogMissing(action, method){    // ЕТАП 1: бачимо, які
     var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
     var sh = ss.getSheetByName(AUTH_LOG_SHEET);
     if (!sh){ sh = ss.insertSheet(AUTH_LOG_SHEET); sh.getRange(1,1,1,3).setValues([['Коли','action','method']]); sh.setFrozenRows(1); }
-    if (sh.getLastRow() > 5000) return;      // запобіжник від розростання
+    // v7.151: було `if (getLastRow() > 5000) return;` — лог МОВЧКИ вмирав назавжди
+    // і виглядав як «викликів без токена більше немає». Тепер ротація по колу.
+    var _lr = sh.getLastRow();
+    if (_lr > AUTH_LOG_MAX) sh.deleteRows(2, Math.min(AUTH_LOG_TRIM, _lr - 1));   // рядок 1 = заголовок
     sh.appendRow([formatDate(new Date()), String(action || ''), String(method || '')]);
   } catch(_e){}
 }
@@ -1313,7 +1331,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.150', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.151', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
