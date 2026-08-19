@@ -745,8 +745,8 @@ function tgWebhook(e){
       // ОЧІКУВАНИЙ ВВІД: якщо ця людина щойно тапнула кнопку вводу — її наступне повідомлення = ввід.
       var pend=null; try{ pend=CacheService.getScriptCache().get('tgpend_'+(msg.from&&msg.from.id)); }catch(_p){}
       if (pend){
-        var pp=pend.split('|');   // leadId | kind
-        var okp=_tgHandlePending(pp[0], pp[1], txt, who, null, String(msg.message_id));
+        var pp=pend.split('|');   // leadId | kind | promptMid
+        var okp=_tgHandlePending(pp[0], pp[1], txt, who, pp[2], String(msg.message_id));
         try{ CacheService.getScriptCache().remove('tgpend_'+msg.from.id); }catch(_){}
         if(okp) return {ok:true, kind:'pending:'+pp[1]};
       }
@@ -975,10 +975,10 @@ function _tgHandleCallback(cq){
     var who=cq.from && (cq.from.username?('@'+cq.from.username):(cq.from.first_name||'')) || '';
     try{ if(cq.from && cq.from.username && cq.from.id) _tgLearnUserId(cq.from.username, cq.from.id); }catch(_lu){}  // автозаповнення user_id
     // Кнопки, що чекають ВВІД: лише popup-підтвердження, НІЧОГО в чат; наступне повідомлення = ввід.
-    if(act==='note'){    _tgAck(cq,'✍️ Напишіть примітку наступним повідомленням'); _tgSetPending(cq, id, 'note');    return; }
-    if(act==='exother'){ _tgAck(cq,'✍️ Напишіть дату екскурсії (26.08)');            _tgSetPending(cq, id, 'excdate'); return; }
-    if(act==='extother'){_tgAck(cq,'✍️ Напишіть час екскурсії (14:30)');             _tgSetPending(cq, id, 'exctime'); return; }
-    if(act==='cbother'){ _tgAck(cq,'✍️ Напишіть дату передзвону (26.08)');          _tgSetPending(cq, id, 'cbdate');  return; }
+    if(act==='note'){    _tgAck(cq); _tgSetPending(cq, id, 'note',    'напишіть примітку:',              'Примітка до ліда'); return; }
+    if(act==='exother'){ _tgAck(cq); _tgSetPending(cq, id, 'excdate', 'напишіть дату екскурсії (26.08):','ДД.ММ'); return; }
+    if(act==='extother'){_tgAck(cq); _tgSetPending(cq, id, 'exctime', 'напишіть час екскурсії (14:30):', 'ГГ:ХХ'); return; }
+    if(act==='cbother'){ _tgAck(cq); _tgSetPending(cq, id, 'cbdate',  'напишіть дату передзвону (26.08):','ДД.ММ'); return; }
     // Меню-переходи (лише клавіатура)
     _tgAck(cq);
     if(act==='later'){ _tgEditKb(id, _leadCbKb(id)); return; }          // ⏳ Передзвонити → дати кнопками
@@ -1014,9 +1014,20 @@ function _tgAck(cq, text){ try{ _tgApi('answerCallbackQuery',{callback_query_id:
 // НАДІЙНИЙ «очікуваний ввід»: стан по user_id (не залежить від reply-зв'язки). Тапнула кнопку →
 // НАСТУПНЕ її текстове повідомлення в групі трактуємо як ввід (примітка/дата/час/передзвон),
 // пишемо в картку, а її повідомлення + запрошення ВИДАЛЯЄМО. Cache 5 хв.
-// Ставить стан очікуваного вводу для user_id. НІЧОГО не пише в чат (підтвердження — popup ACK).
-function _tgSetPending(cq, id, kind){
-  try{ CacheService.getScriptCache().put('tgpend_'+(cq.from&&cq.from.id), String(id)+'|'+kind, 300); }catch(_){}
+// Показує ВИДИМЕ поле введення (force_reply з підписом, звернене до того, хто натиснув) і ставить
+// стан очікуваного вводу по user_id. promptMid зберігаємо, щоб потім видалити запрошення разом із
+// повідомленням користувача. Наступне текстове повідомлення цієї людини → ввід.
+function _tgSetPending(cq, id, kind, promptText, placeholder){
+  var sh=_leadsBotSheet(); var v=sh.getDataRange().getValues();
+  for(var r=1;r<v.length;r++){
+    if(String(v[r][LB.lead_id])!==String(id)) continue;
+    var chat=v[r][LB.tg_chat_id], mid=v[r][LB.tg_message_id]; var f=cq.from||{};
+    var mention = f.username ? ('@'+f.username) : ('<a href="tg://user?id='+f.id+'">'+_htmlEsc(f.first_name||'ви')+'</a>');
+    var p=_tgSend(chat, mention+', '+promptText, {reply_to_message_id:mid, reply_markup:{force_reply:true, selective:true, input_field_placeholder:placeholder}});
+    var pmid=p&&p.result&&p.result.message_id;
+    try{ CacheService.getScriptCache().put('tgpend_'+f.id, String(id)+'|'+kind+'|'+(pmid||''), 300); }catch(_){}
+    return;
+  }
 }
 // Обробка очікуваного вводу. leadId + kind + текст. Видаляє повідомлення користувача і запрошення.
 function _tgHandlePending(leadId, kind, text, who, promptMid, userMsgId){
@@ -1242,7 +1253,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.146', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.147', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
