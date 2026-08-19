@@ -1,4 +1,24 @@
 // ═══════════════════════════════════════════════════════════════════════════
+// m.kids CRM — Google Apps Script v7.149
+// v7.149: БЕЗПЕКА ДАНИХ (привід: 13–17.08.26 Predmetnyky_Lessons очищено повністю,
+//         2205 уроків → 0; корінь — фронт рахував уроки ЛИШЕ за поточний місяць
+//         (v7.80 зріз), а бекенд стирав ВСІ місяці).
+//   1. clearAllPredmetnykyLessons — двокрокове підтвердження: без confirm===назва
+//      локації повертає CONFIRM_REQUIRED з willDelete і byMonth, нічого не чіпаючи.
+//      Перед реальним видаленням — знімок аркуша. Фронт (predmetnyky.html) показує
+//      справжню кількість по місяцях, узяту з бекенду, а не з місячного зрізу.
+//   2. _safeBackupSheet/_guardMassDelete — копія аркуша у BKP_<ім'я>_<stamp> ПЕРЕД
+//      масовим видаленням; лишаються 3 найновіші знімки. Підключено до: очищення
+//      уроків, mergeSplitVacationRows, bulkRemoveAttendanceMarks, dedupExtras,
+//      Логопед-чистки, bulkMealMarks, salaryReconcile revert, cleanupPhantomCatalog.
+//   3. _publishAggregate — aggregatePayments і aggregatePaymentsYearly більше НЕ
+//      роблять clearContents наперед: збирають у _stage_<ім'я>, перевіряють (не
+//      порожньо; не менше 50% попередніх рядків) і лише тоді міняють місцями;
+//      старий аркуш лишається архівом. Збій збору → бойові дані недоторкані.
+//   4. importPredmetnykyLessons / repairPredmetnykyLessons — відновлення уроків:
+//      імпорт зі старої версії з дедупом (Location+Group+Subject+Date) і видачею
+//      нових наскрізних ID; repair — дедуп + перенумерація після ручної вставки.
+//   5. getHrAudit — read-only читання HR_Audit (хто/коли що робив).
 // m.kids CRM — Google Apps Script v7.113
 // v7.113: синк — ЧИСТКА ПІБ школярів. _cleanChildName прибирає номер-префікс «15. » і дату-код
 //         « 04_29»/« 08-21» + точкові виправлення (Алісія Чупрун→Чупрун Алісія; Антонецць→Антонець;
@@ -1260,7 +1280,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.148', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.149', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -1316,6 +1336,8 @@ function doGet(e) {
     else if (action === 'getChomusykyReport')         result = getChomusykyReport(e.parameter || {});
     else if (action === 'getPredmetnyCatalog')        result = getPredmetnyCatalog(e.parameter && e.parameter.loc || '');
     else if (action === 'getPredmetnyMarks')          result = getPredmetnyMarks(e.parameter || {});
+    else if (action === 'getHrAudit')                  result = getHrAudit(e.parameter || {});                                          // v7.149 read-only аудит
+    else if (action === 'repairPredmetnykyLessons')    result = repairPredmetnykyLessons(Number(e.parameter && e.parameter.actorId || 0), {dryRun:true}); // v7.149 GET = ЗАВЖДИ dryRun, запис лише POST-ом
     else if (action === 'getTasks')                   result = getTasks(e.parameter || {});
     else if (action === 'getTaskActivity')            result = getTaskActivity(e.parameter && e.parameter.taskId || 0);
     else if (action === 'getDashboardNotifications')  result = getDashboardNotifications(e.parameter && e.parameter.userId || 0, e.parameter && e.parameter.role || '');
@@ -1446,7 +1468,9 @@ function doPost(e) {
     else if (body.action === 'savePredmetnykyAssignment')   result = savePredmetnykyAssignment(Number(body.actorId || 0), body.payload || body.data || {});
     else if (body.action === 'deletePredmetnykyAssignment') result = deletePredmetnykyAssignment(Number(body.actorId || 0), Number(body.id || 0));
     else if (body.action === 'runPredmetnykyHrSeed')        result = _seedPredmetnykyAssignmentsFromHR();
-    else if (body.action === 'clearAllPredmetnykyLessons')  result = clearAllPredmetnykyLessons(Number(body.actorId || 0), body.location || body.loc || '');
+    else if (body.action === 'clearAllPredmetnykyLessons')  result = clearAllPredmetnykyLessons(Number(body.actorId || 0), body.location || body.loc || '', body); // v7.149 +confirm
+    else if (body.action === 'importPredmetnykyLessons')    result = importPredmetnykyLessons(Number(body.actorId || 0), body);          // v7.149 імпорт уроків
+    else if (body.action === 'repairPredmetnykyLessons')    result = repairPredmetnykyLessons(Number(body.actorId || 0), body);          // v7.149 дедуп + перенумерація
     else if (body.action === 'exportPredmetnykyToSalary')   result = exportPredmetnykyToSalary(body || {});
     else if (body.action === 'generateInvoicePDF')          result = generateInvoicePDF(body || {});   // v6.50
     else if (body.action === 'invoicePdfLink')              result = invoicePdfLink(body || {});       // v6.72 Viber link
@@ -1472,6 +1496,7 @@ var _PRED_WRITE_ACTIONS = {
   savePredmetnykyLesson:1, deletePredmetnykyLesson:1, clearAllPredmetnykyLessons:1,
   savePredmetnykyAssignment:1, deletePredmetnykyAssignment:1,
   runPredmetnykyHrSeed:1,
+  importPredmetnykyLessons:1, repairPredmetnykyLessons:1,   // v7.149
   addPredmetny:1, updatePredmetny:1, deletePredmetny:1,   // каталог
   savePredMerge:1, deletePredMerge:1                       // обʼєднання
 };
@@ -2625,6 +2650,7 @@ function mergeSplitVacationRows(dryRun){
     });
 
     if (!dryRun && toDelete.length){
+      _guardMassDelete(sheet, toDelete.length, 'mergeVacations');   // v7.149 знімок перед видаленням
       // видаляємо ЗНИЗУ ВГОРУ, щоб номери рядків не зсувались
       toDelete.sort(function(a, b){ return b - a; }).forEach(function(rn){ sheet.deleteRow(rn); });
     }
@@ -2867,13 +2893,20 @@ function aggregatePayments() {
     }
   }
 
-  paySheet.clearContents();
-  writePaymentsHeader(paySheet);
-  if (allRows.length > 0) {
-    paySheet.getRange(2, 1, allRows.length, 17).setValues(allRows);
+  // v7.149: збираємо у тимчасовий аркуш і підміняємо ЛИШЕ при успіху.
+  // Ніякого clearContents наперед: якщо збір впав або дав підозріло мало
+  // рядків — «Оплати» лишаються цілими, а помилка йде нагору.
+  var pub;
+  try {
+    pub = _publishAggregate(crmSS, SHEET_PAYMENTS, writePaymentsHeader, allRows, 17, {});
+  } catch(pubErr) {
+    Logger.log('❌ Публікацію «%s» скасовано: %s', SHEET_PAYMENTS, pubErr && pubErr.message);
+    return {ok:false, error:String(pubErr && pubErr.message || pubErr),
+            rows:allRows.length, errors:errors, aborted:true, month:monthName};
   }
   Logger.log('Done: ' + allRows.length + ' rows, ' + errors.length + ' errors');
-  return {ok:true, rows:allRows.length, errors:errors, month:monthName, updated:updateStr};
+  return {ok:true, rows:allRows.length, errors:errors, month:monthName, updated:updateStr,
+          prevRows:pub.prevRows, backupSheet:pub.backupSheet};
 }
 
 function detectContractDateCol(data) {
@@ -3271,13 +3304,18 @@ function aggregatePaymentsYearly() {
       errors.push(loc + ': ' + e.message);
     }
   }
-  yearSheet.clearContents();
-  writeYearlyHeader(yearSheet);
+  // v7.149: staging + підміна лише при успіху (див. aggregatePayments).
   var NUM_COLS = 6 + 12 * 6 + 5;   // v7.101: блок місяця 5→6 (додано Факт-вступ)
-  if (allRows.length > 0) {
-    yearSheet.getRange(2, 1, allRows.length, NUM_COLS).setValues(allRows);
+  var pubY;
+  try {
+    pubY = _publishAggregate(crmSS, SHEET_YEARLY, writeYearlyHeader, allRows, NUM_COLS, {});
+  } catch(pubErr) {
+    Logger.log('❌ Публікацію «%s» скасовано: %s', SHEET_YEARLY, pubErr && pubErr.message);
+    return {ok:false, error:String(pubErr && pubErr.message || pubErr),
+            rows:allRows.length, errors:errors, aborted:true};
   }
-  return {ok:true, rows:allRows.length, errors:errors, updated:updateStr};
+  return {ok:true, rows:allRows.length, errors:errors, updated:updateStr,
+          prevRows:pubY.prevRows, backupSheet:pubY.backupSheet};
 }
 
 // Перезапуск агрегації Оплати-Рік після дедупу/перерахунку додаткових — обгортка з логом.
@@ -8530,6 +8568,7 @@ function bulkRemoveAttendanceMarks(body){
         found[rid] = true;
       }
     }
+    _guardMassDelete(sh, rowsToDelete.length, 'bulkRemoveMarks');   // v7.149 знімок перед видаленням
     rowsToDelete.sort(function(a, b){ return b - a; });
     for (var j = 0; j < rowsToDelete.length; j++){
       sh.deleteRow(rowsToDelete[j]);
@@ -8684,6 +8723,7 @@ function dedupExtrasAttendanceApply(){
     rowsToDelete.sort(function(a, b){ return b - a; });
 
     Logger.log('═══ APPLY: видаляю %s дублюючих рядків по позиції (знизу вгору) ═══', rowsToDelete.length);
+    _guardMassDelete(sh, rowsToDelete.length, 'dedupExtras');   // v7.149 знімок перед видаленням
     var deleted = 0;
     for (var i = 0; i < rowsToDelete.length; i++){
       sh.deleteRow(rowsToDelete[i]);
@@ -8768,6 +8808,7 @@ function deleteLogopedKruglaApply(){
     var sh = ss.getSheetByName(ATTENDANCE_SHEET_NAME);
     var rowsDesc = scan.rows.slice().sort(function(a, b){ return b - a; });   // ЗНИЗУ ВГОРУ
     Logger.log('═══ APPLY: видаляю %s Логопед-рядків по позиції (знизу вгору): [%s] ═══', rowsDesc.length, rowsDesc.join(','));
+    _guardMassDelete(sh, rowsDesc.length, 'logopedCleanup');   // v7.149 знімок перед видаленням
     var deleted = 0;
     for (var i = 0; i < rowsDesc.length; i++){ sh.deleteRow(rowsDesc[i]); deleted++; }
     var removed = scan.hits.reduce(function(s, h){ return s + h.price; }, 0);
@@ -9163,6 +9204,7 @@ function addMealMark(body){
         String(mk.itemName||'').trim(), Number(mk.price)||0, markedBy, new Date() ]);
       existing[k] = true; added++;
     });
+    if (toDelete.length) _guardMassDelete(sh, toDelete.length, 'bulkMeals');   // v7.149 знімок перед видаленням
     toDelete.sort(function(a,b){ return b-a; }).forEach(function(rn){ sh.deleteRow(rn); });
     if (toAppend.length) sh.getRange(sh.getLastRow()+1,1,toAppend.length,MEAL_ATT_HEADER.length).setValues(toAppend);
     return {ok:true, added:added, skipped:skipped, removed:removed, errors:errors};
@@ -10043,6 +10085,7 @@ function salaryReconcileApply(body){
         salSh.getRange(srr.rowNum, fcol).setValue(nvR);   // віднімаємо
         delRows.push(ri + 1); reverted++;
       }
+      if (delRows.length) _guardMassDelete(logSh, delRows.length, 'salaryRevert');   // v7.149 знімок перед видаленням
       delRows.sort(function(a, b){ return b - a; }).forEach(function(rn){ logSh.deleteRow(rn); });  // знімаємо дедуп
       Logger.log('[salaryReconcileApply] REVERT loc=%s vid=%s | reverted=%s', loc, vidNo, reverted);
       return {ok:true, mode:'revert', loc:loc, vidNo:vidNo, reverted:reverted, note:'ІПН/картку в HR лишено', report:repR};
@@ -16754,6 +16797,7 @@ function cleanupPhantomPredCatalog(opts){
 
   // 3. Реальне видалення — з НИЗУ догори (щоб індекси не зсувались).
   var rowNums = phantom.map(function(p){ return p.rowNum; }).sort(function(a, b){ return b - a; });
+  _guardMassDelete(sh, rowNums.length, 'phantomCatalog');   // v7.149 знімок перед видаленням
   for (var j = 0; j < rowNums.length; j++){
     sh.deleteRow(rowNums[j]);
   }
@@ -20461,8 +20505,9 @@ function deletePredmetnykyAssignment(actorId, id){
 // DESTRUCTIVE: видаляє ВСІ заняття для конкретної локації (по всіх
 // місяцях/групах/предметах). Корисно для тестових скидань.
 // Permission: cfo/ceo/coo/cco або director у власній локації.
-function clearAllPredmetnykyLessons(actorId, location){
+function clearAllPredmetnykyLessons(actorId, location, opts){
   try {
+    opts = opts || {};
     var actor = _getActor(actorId);
     var loc = String(location || '').trim();
     if (!loc) return {ok:false, error:'location required'};
@@ -20479,21 +20524,49 @@ function clearAllPredmetnykyLessons(actorId, location){
       var data = sh.getRange(2, 1, lastRow - 1, PRED_LESSONS_HEADER.length).getValues();
       var rowsToDelete = [];
       var deletedIds = [];
+      var byMonth = {};
       for (var i = 0; i < data.length; i++){
         if (String(data[i][2] || '').trim() !== loc) continue;
         rowsToDelete.push(i + 2);
         deletedIds.push(Number(data[i][0]) || 0);
+        var ym = _lessonYearMonth(data[i][5]);
+        if (ym){
+          var mk = ym.y + '-' + ('0' + ym.m).slice(-2);
+          byMonth[mk] = (byMonth[mk] || 0) + 1;
+        }
       }
+
+      // v7.149 ДВОКРОКОВЕ ПІДТВЕРДЖЕННЯ.
+      // Без confirm === точна назва локації нічого не видаляємо, а повертаємо
+      // ПЕРЕДПЕРЕГЛЯД: скільки рядків і за які місяці піде під ніж. Це закриває
+      // діру, через яку фронт показував кількість лише за ПОТОЧНИЙ місяць
+      // (v7.80 монтяний зріз), а бекенд стирав УСІ місяці.
+      var confirm = String(opts.confirm == null ? '' : opts.confirm).trim();
+      if (confirm !== loc){
+        return {
+          ok: false, code: 'CONFIRM_REQUIRED', loc: loc,
+          willDelete: rowsToDelete.length, byMonth: byMonth,
+          message: 'Буде стерто ' + rowsToDelete.length + ' уроків локації «' + loc +
+                   '» за ВСІ місяці. Для підтвердження надішли confirm: "' + loc + '".'
+        };
+      }
+      if (!rowsToDelete.length) return {ok:true, deleted:0, loc:loc, willDelete:0};
+
+      // v7.149 знімок аркуша ПЕРЕД видаленням
+      var backupSheet = _guardMassDelete(sh, rowsToDelete.length, 'predClear');
+
       // Видалення з низу — щоб індекси не зсувались.
       rowsToDelete.sort(function(a, b){ return b - a; });
       for (var j = 0; j < rowsToDelete.length; j++){
         sh.deleteRow(rowsToDelete[j]);
       }
       _writeHrAudit(actor, 'pred_clear_lessons', 0,
-        {loc:loc, count:deletedIds.length}, null);
-      Logger.log('[clearAllPredmetnykyLessons] loc="%s" deleted=%s actor=%s',
-        loc, rowsToDelete.length, actor.id);
-      return {ok:true, deleted:rowsToDelete.length, loc:loc, ids:deletedIds};
+        {loc:loc, count:deletedIds.length, byMonth:byMonth, ids:deletedIds.slice(0, 500)},
+        {backupSheet:backupSheet});
+      Logger.log('[clearAllPredmetnykyLessons] loc="%s" deleted=%s actor=%s backup=%s',
+        loc, rowsToDelete.length, actor.id, backupSheet);
+      return {ok:true, deleted:rowsToDelete.length, loc:loc, byMonth:byMonth,
+              backupSheet:backupSheet, ids:deletedIds};
     } finally {
       lock.releaseLock();
     }
@@ -20504,8 +20577,10 @@ function clearAllPredmetnykyLessons(actorId, location){
 
 // Apps Script editor wrapper: _clearAllPredmetnykyLessons('Голосієво')
 // Викликає clearAllPredmetnykyLessons як CFO (actorId=1).
-function _clearAllPredmetnykyLessons(location){
-  var res = clearAllPredmetnykyLessons(1, location);
+function _clearAllPredmetnykyLessons(location, confirm){
+  // Без 2-го аргументу — лише ПЕРЕДПЕРЕГЛЯД (скільки і за які місяці).
+  // Щоб реально стерти: _clearAllPredmetnykyLessons('Оранж', 'Оранж')
+  var res = clearAllPredmetnykyLessons(1, location, {confirm: confirm});
   Logger.log('RESULT: ' + JSON.stringify(res));
   return res;
 }
@@ -21466,4 +21541,433 @@ function diagFind3(){
     if(!found) Logger.log('нема: "'+p+'"');
   });
   Logger.log('=== кінець ===');
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.149 — БЕЗПЕКА ДАНИХ: знімки перед масовим видаленням, безпечна агрегація,
+//          відновлення уроків предметників, читання HR_Audit.
+// Привід: 13–17.08.2026 лист Predmetnyky_Lessons було очищено повністю
+// (2205 уроків → 0). Причина ймовірно у тому, що фронт показував кількість
+// уроків ЛИШЕ за поточний місяць (v7.80 монтяний зріз), а бекенд видаляв
+// ВСІ місяці. Нижче — і технічний захист, і чесний передперегляд.
+// ═══════════════════════════════════════════════════════════════════════════
+
+var _SAFE_BACKUP_PREFIX   = 'BKP_';   // НЕ підпадає під cleanupBackupTabs (/_BKP|_MRGBKP|_BACKUP/)
+var _SAFE_KEEP_BACKUPS    = 3;        // скільки знімків одного аркуша тримаємо
+var _SAFE_MIN_ROWS_BACKUP = 1;        // від скількох рядків робимо знімок
+
+// Повна копія аркуша у BKP_<ім'я>_<yyyyMMdd_HHmmss>[_tag].
+// Старі знімки ТОГО Ж аркуша підчищаються, лишається _SAFE_KEEP_BACKUPS найновіших —
+// щоб не впертись у ліміт клітинок таблиці. Ніколи не кидає: збій бекапу не має
+// ламати основну дію, але порожнє ім'я в результаті = знімка немає.
+function _safeBackupSheet(sheet, tag){
+  try {
+    if (!sheet) return '';
+    var ss    = sheet.getParent();
+    var base  = _SAFE_BACKUP_PREFIX + sheet.getName();
+    var stamp = Utilities.formatDate(new Date(), 'GMT+3', 'yyyyMMdd_HHmmss');
+    var name  = base + '_' + stamp + (tag ? '_' + String(tag).slice(0, 20) : '');
+    sheet.copyTo(ss).setName(name);
+    var olds = ss.getSheets().filter(function(s){
+      var n = s.getName();
+      return n !== name && n.indexOf(base + '_') === 0;
+    }).sort(function(a, b){ return a.getName() < b.getName() ? 1 : -1; });   // новіші перші
+    for (var i = _SAFE_KEEP_BACKUPS - 1; i < olds.length; i++){
+      try { ss.deleteSheet(olds[i]); } catch(_e){}
+    }
+    Logger.log('[safeBackup] %s → %s', sheet.getName(), name);
+    return name;
+  } catch(e){
+    Logger.log('[safeBackup] ⚠️ не вдалось: %s', e && e.message);
+    return '';
+  }
+}
+
+// Обгортка для масових видалень: спершу знімок, потім хай видаляють.
+// Повертає ім'я знімка ('' якщо не робився).
+function _guardMassDelete(sheet, count, tag){
+  if (!sheet || !count || count < _SAFE_MIN_ROWS_BACKUP) return '';
+  return _safeBackupSheet(sheet, tag);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// БЕЗПЕЧНА ПУБЛІКАЦІЯ АГРЕГАТУ (v7.149)
+// Замість "clearContents наперед + пишемо результат" — збираємо у тимчасовий
+// аркуш _stage_<ім'я>, перевіряємо, і лише при успіху міняємо місцями.
+// Бойовий аркуш до останнього моменту лишається цілим: якщо збір впав або дав
+// підозріло мало рядків — підміни не буде, дані на місці.
+// ─────────────────────────────────────────────────────────────────────────
+function _publishAggregate(ss, targetName, headerFn, rows, numCols, opts){
+  opts = opts || {};
+  var minRatio = (opts.minRatio == null) ? 0.5 : opts.minRatio;
+  var stageName = '_stage_' + targetName;
+
+  var stale = ss.getSheetByName(stageName);
+  if (stale) ss.deleteSheet(stale);
+
+  var prev     = ss.getSheetByName(targetName);
+  var prevRows = prev ? Math.max(0, prev.getLastRow() - 1) : 0;
+  var prevIdx  = prev ? prev.getIndex() : 0;
+
+  var stage = ss.insertSheet(stageName);
+  try {
+    headerFn(stage);
+    if (rows.length > 0) stage.getRange(2, 1, rows.length, numCols).setValues(rows);
+    SpreadsheetApp.flush();
+
+    // ── ВАЛІДАЦІЯ ДО ПІДМІНИ ──
+    var wrote = Math.max(0, stage.getLastRow() - 1);
+    if (wrote !== rows.length)
+      throw new Error('staging: записано ' + wrote + ' рядків із ' + rows.length);
+    if (rows.length === 0 && prevRows > 0 && !opts.allowEmpty)
+      throw new Error('агрегат порожній, а в «' + targetName + '» було ' + prevRows +
+                      ' рядків — підміну скасовано, дані збережено');
+    if (prevRows > 0 && rows.length < prevRows * minRatio)
+      throw new Error('агрегат ' + rows.length + ' рядків проти ' + prevRows +
+                      ' попередніх (менше ' + Math.round(minRatio * 100) +
+                      '%) — підміну скасовано, дані збережено');
+
+    // ── ПІДМІНА: старий у архів, staging стає бойовим ──
+    var stamp = Utilities.formatDate(new Date(), 'GMT+3', 'yyyyMMdd_HHmmss');
+    var archName = '';
+    if (prev){
+      archName = _SAFE_BACKUP_PREFIX + targetName + '_' + stamp;
+      prev.setName(archName);
+    }
+    try {
+      stage.setName(targetName);
+    } catch(swapErr){
+      // Підміна не вдалась уже ПІСЛЯ перейменування бойового — повертаємо
+      // йому ім'я, інакше «Оплати» зникнуть для всього коду.
+      if (prev){ try { prev.setName(targetName); } catch(_e){} }
+      throw swapErr;
+    }
+    if (prevIdx > 0){
+      ss.setActiveSheet(stage);
+      ss.moveActiveSheet(prevIdx);
+    }
+    if (prev){
+      // тримаємо обмежену кількість архівів цього аркуша
+      var base = _SAFE_BACKUP_PREFIX + targetName + '_';
+      var olds = ss.getSheets().filter(function(s){ return s.getName().indexOf(base) === 0; })
+                   .sort(function(a, b){ return a.getName() < b.getName() ? 1 : -1; });
+      for (var i = _SAFE_KEEP_BACKUPS - 1; i < olds.length; i++){
+        try { ss.deleteSheet(olds[i]); } catch(_e){}
+      }
+    }
+    Logger.log('[publishAggregate] %s: %s рядків (було %s), архів=%s',
+               targetName, rows.length, prevRows, archName);
+    return {ok:true, rows:rows.length, prevRows:prevRows, backupSheet:archName, swapped:true};
+
+  } catch(e){
+    try {
+      var s2 = ss.getSheetByName(stageName);
+      if (s2) ss.deleteSheet(s2);
+    } catch(_e){}
+    Logger.log('[publishAggregate] ❌ %s: %s — бойовий аркуш НЕ змінено', targetName, e && e.message);
+    throw e;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// HR_AUDIT — read-only (v7.149)
+// GET ?action=getHrAudit&actorId=1&filter=pred_clear_lessons&limit=100
+// Аркуш HR_Audit лежить у CONFIG-таблиці. Колонки:
+//   ts | actorId | actorName | action | rowNum | before_json | after_json
+// ─────────────────────────────────────────────────────────────────────────
+function getHrAudit(params){
+  try {
+    params = params || {};
+    var actor = _getActor(Number(params.actorId || 0));
+    if (!_canViewEmployees(actor))
+      return {ok:false, code:'PERM_DENIED', error:'Permission denied'};
+
+    var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+    var sh = ss.getSheetByName(HR_AUDIT_SHEET);
+    if (!sh) return {ok:true, items:[], total:0, note:'аркуша HR_Audit ще немає'};
+
+    var lastRow = sh.getLastRow();
+    if (lastRow < 2) return {ok:true, items:[], total:0};
+
+    var data   = sh.getRange(2, 1, lastRow - 1, HR_AUDIT_HEADER.length).getValues();
+    var filter = String(params.filter || params.actionFilter || '').trim().toLowerCase();
+    var from   = String(params.from || '').trim();   // 'YYYY-MM-DD'
+    var to     = String(params.to   || '').trim();
+    var limit  = Math.min(Number(params.limit || 100) || 100, 1000);
+    var tz     = ss.getSpreadsheetTimeZone() || 'Europe/Kiev';
+
+    var items = [];
+    for (var i = data.length - 1; i >= 0; i--){          // найновіші першими
+      var row = data[i];
+      var act = String(row[3] || '').trim();
+      if (filter && act.toLowerCase().indexOf(filter) === -1) continue;
+      var tsRaw = row[0];
+      var iso = (tsRaw instanceof Date)
+        ? Utilities.formatDate(tsRaw, tz, "yyyy-MM-dd'T'HH:mm:ss")
+        : String(tsRaw || '');
+      if (from && iso.slice(0, 10) < from) continue;
+      if (to   && iso.slice(0, 10) > to)   continue;
+      items.push({
+        row:        i + 2,
+        ts:         iso,
+        actorId:    Number(row[1]) || 0,
+        actorName:  String(row[2] || ''),
+        action:     act,
+        rowNum:     Number(row[4]) || 0,
+        before:     String(row[5] || ''),
+        after:      String(row[6] || '')
+      });
+      if (items.length >= limit) break;
+    }
+    return {ok:true, items:items, total:data.length, returned:items.length};
+  } catch(e){
+    return {ok:false, error:String(e && e.message || e)};
+  }
+}
+
+// Обгортка для редактора Apps Script: _showPredClearAudit()
+function _showPredClearAudit(){
+  var res = getHrAudit({actorId:1, filter:'pred_clear', limit:50});
+  Logger.log('=== HR_Audit: очищення уроків предметників ===');
+  if (!res.ok){ Logger.log('❌ %s', res.error); return res; }
+  if (!res.items.length){ Logger.log('Записів не знайдено (усього рядків аудиту: %s)', res.total); return res; }
+  res.items.forEach(function(it){
+    Logger.log('%s | %s (id=%s) | %s | %s', it.ts, it.actorName, it.actorId, it.action, it.before);
+  });
+  return res;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// ВІДНОВЛЕННЯ УРОКІВ ПРЕДМЕТНИКІВ (v7.149)
+//
+// Аркуш:   Predmetnyky_Lessons   (у CRM-таблиці, не в CONFIG)
+// Колонки: ID | EmpKey | Location | Group | Subject | Date | CreatedAt | CreatedBy
+//
+// Ключ дубля — Location + Group + Subject + Date. Це принципово: експорт у Salary
+// рахує УНІКАЛЬНІ (group, date) на предмет, тож зайвий дубль завищив би виплату.
+// ─────────────────────────────────────────────────────────────────────────
+
+function _predLessonDupKey(loc, group, subject, dateVal){
+  return [
+    String(loc     || '').trim(),
+    String(group   || '').trim(),
+    String(subject || '').trim(),
+    _fmtLessonDate(dateVal)
+  ].join('|');
+}
+
+// Зчитує сирі рядки аркуша уроків у зручний вигляд.
+function _predLessonsRaw(sh){
+  var lastRow = sh.getLastRow();
+  if (lastRow < 2) return [];
+  return sh.getRange(2, 1, lastRow - 1, PRED_LESSONS_HEADER.length).getValues();
+}
+
+// importPredmetnykyLessons — ДОЛИВАЄ уроки зі старої версії аркуша.
+//   POST {action:'importPredmetnykyLessons', actorId:1,
+//         rows:   [[ID,EmpKey,Location,Group,Subject,Date,CreatedAt,CreatedBy], ...] }
+//     або
+//         lessons:[{loc, group, subject, date, empKey, createdAt, createdBy}, ...]
+//     + dryRun:true  — лише порахувати, нічого не писати
+//
+// ID у вхідних даних ІГНОРУЄТЬСЯ — видаються нові, наскрізні. Це важливо, бо
+// старі ID (1…2205) зіткнулись би з новими (1…10) і deletePredmetnykyLesson
+// видаляв би не той рядок.
+function importPredmetnykyLessons(actorId, body){
+  try {
+    body = body || {};
+    var actor = _getActor(Number(actorId || 0));
+
+    var incoming = [];
+    if (Array.isArray(body.rows)){
+      body.rows.forEach(function(r){
+        if (!Array.isArray(r)) return;
+        incoming.push({
+          empKey:    String(r[1] || '').trim(),
+          loc:       String(r[2] || '').trim(),
+          group:     String(r[3] || '').trim(),
+          subject:   String(r[4] || '').trim(),
+          date:      r[5],
+          createdAt: r[6] || '',
+          createdBy: r[7] || ''
+        });
+      });
+    }
+    if (Array.isArray(body.lessons)){
+      body.lessons.forEach(function(o){
+        if (!o) return;
+        incoming.push({
+          empKey:    String(o.empKey || '').trim(),
+          loc:       String(o.loc || o.location || '').trim(),
+          group:     String(o.group || '').trim(),
+          subject:   String(o.subject || '').trim(),
+          date:      o.date,
+          createdAt: o.createdAt || '',
+          createdBy: o.createdBy || ''
+        });
+      });
+    }
+    if (!incoming.length) return {ok:false, error:'Порожньо: передай rows[] або lessons[]'};
+
+    // права — по кожній локації, що трапилась у наборі
+    var locs = {};
+    incoming.forEach(function(x){ if (x.loc) locs[x.loc] = 1; });
+    var denied = Object.keys(locs).filter(function(l){ return !_canEditPredmetnyky(actor, l); });
+    if (denied.length)
+      return {ok:false, code:'PERM_DENIED', error:'Немає дозволу на локації: ' + denied.join(', ')};
+
+    var dryRun = (body.dryRun === true || body.dryRun === 'true');
+
+    var lock = LockService.getScriptLock();
+    lock.waitLock(30000);
+    try {
+      var sh   = _getPredLessonsSheet();
+      var have = {};
+      _predLessonsRaw(sh).forEach(function(r){
+        have[_predLessonDupKey(r[2], r[3], r[4], r[5])] = true;
+      });
+
+      var toAppend = [], skippedDup = 0, skippedBad = 0, byMonth = {}, byLoc = {};
+      var nextId = _nextPredLessonId(sh);
+
+      incoming.forEach(function(x){
+        if (!x.loc || !x.group || !x.subject || !x.date){ skippedBad++; return; }
+        var ym = _lessonYearMonth(x.date);
+        if (!ym){ skippedBad++; return; }
+        var key = _predLessonDupKey(x.loc, x.group, x.subject, x.date);
+        if (have[key]){ skippedDup++; return; }
+        have[key] = true;
+
+        var dv = (x.date instanceof Date) ? x.date : _parseDateInput(String(x.date));
+        var mk = ym.y + '-' + ('0' + ym.m).slice(-2);
+        byMonth[mk]  = (byMonth[mk]  || 0) + 1;
+        byLoc[x.loc] = (byLoc[x.loc] || 0) + 1;
+
+        toAppend.push([
+          nextId++,
+          x.empKey,
+          x.loc,
+          x.group,
+          x.subject,
+          (dv instanceof Date) ? dv : String(x.date),
+          x.createdAt || new Date(),
+          x.createdBy || actor.id
+        ]);
+      });
+
+      if (dryRun){
+        return {ok:true, dryRun:true, wouldInsert:toAppend.length,
+                skippedDuplicates:skippedDup, skippedBad:skippedBad,
+                byMonth:byMonth, byLoc:byLoc};
+      }
+      if (!toAppend.length){
+        return {ok:true, inserted:0, skippedDuplicates:skippedDup, skippedBad:skippedBad,
+                note:'усе вже є в аркуші'};
+      }
+
+      var backupSheet = _guardMassDelete(sh, sh.getLastRow() - 1, 'beforeImport');
+      sh.getRange(sh.getLastRow() + 1, 1, toAppend.length, PRED_LESSONS_HEADER.length)
+        .setValues(toAppend);
+
+      _writeHrAudit(actor, 'pred_import_lessons', 0,
+        {backupSheet:backupSheet},
+        {inserted:toAppend.length, skippedDuplicates:skippedDup, byMonth:byMonth, byLoc:byLoc});
+      _bumpPredVer();
+
+      Logger.log('[importPredmetnykyLessons] +%s уроків | дублів пропущено=%s | бекап=%s',
+                 toAppend.length, skippedDup, backupSheet);
+      return {ok:true, inserted:toAppend.length, skippedDuplicates:skippedDup,
+              skippedBad:skippedBad, byMonth:byMonth, byLoc:byLoc,
+              backupSheet:backupSheet, totalNow: Math.max(0, sh.getLastRow() - 1)};
+    } finally {
+      lock.releaseLock();
+    }
+  } catch(e){
+    return {ok:false, error:String(e && e.message || e)};
+  }
+}
+
+// repairPredmetnykyLessons — ПІСЛЯ РУЧНОЇ вставки рядків у аркуш:
+//   1) прибирає дублі (Location+Group+Subject+Date), лишаючи найраніший CreatedAt;
+//   2) перенумеровує ID наскрізно 1..N, щоб не було двох рядків з однаковим ID.
+//   GET/POST {action:'repairPredmetnykyLessons', actorId:1, dryRun:true}
+//   dryRun за замовчуванням TRUE — спершу показує, що зробить.
+function repairPredmetnykyLessons(actorId, opts){
+  try {
+    opts = opts || {};
+    var actor = _getActor(Number(actorId || 0));
+    if (!_canViewEmployees(actor))
+      return {ok:false, code:'PERM_DENIED', error:'Permission denied'};
+    var dryRun = !(opts.dryRun === false || opts.dryRun === 'false' || opts.dryRun === '0');
+
+    var lock = LockService.getScriptLock();
+    lock.waitLock(30000);
+    try {
+      var sh   = _getPredLessonsSheet();
+      var data = _predLessonsRaw(sh);
+      if (!data.length) return {ok:true, total:0, note:'аркуш порожній'};
+
+      var seen = {}, kept = [], dups = 0;
+      var byMonth = {}, byLoc = {};
+      data.forEach(function(r){
+        var key = _predLessonDupKey(r[2], r[3], r[4], r[5]);
+        if (seen[key]){ dups++; return; }
+        seen[key] = true;
+        kept.push(r);
+        var ym = _lessonYearMonth(r[5]);
+        if (ym){
+          var mk = ym.y + '-' + ('0' + ym.m).slice(-2);
+          byMonth[mk] = (byMonth[mk] || 0) + 1;
+        }
+        var l = String(r[2] || '').trim();
+        if (l) byLoc[l] = (byLoc[l] || 0) + 1;
+      });
+
+      // ID, що повторюються у поточному аркуші
+      var idSeen = {}, dupIds = 0;
+      data.forEach(function(r){
+        var id = Number(r[0]) || 0;
+        if (idSeen[id]) dupIds++;
+        idSeen[id] = true;
+      });
+
+      if (dryRun){
+        return {ok:true, dryRun:true, total:data.length, wouldKeep:kept.length,
+                wouldRemoveDuplicates:dups, duplicateIds:dupIds,
+                byMonth:byMonth, byLoc:byLoc,
+                note:'нічого не змінено; для застосування — dryRun:false'};
+      }
+
+      var backupSheet = _guardMassDelete(sh, data.length, 'beforeRepair');
+
+      for (var i = 0; i < kept.length; i++) kept[i][0] = i + 1;   // наскрізна нумерація
+
+      sh.getRange(2, 1, data.length, PRED_LESSONS_HEADER.length).clearContent();
+      if (kept.length)
+        sh.getRange(2, 1, kept.length, PRED_LESSONS_HEADER.length).setValues(kept);
+
+      _writeHrAudit(actor, 'pred_repair_lessons', 0,
+        {before:data.length, backupSheet:backupSheet},
+        {after:kept.length, removedDuplicates:dups, byMonth:byMonth});
+      _bumpPredVer();
+
+      Logger.log('[repairPredmetnykyLessons] %s → %s (дублів прибрано %s), бекап=%s',
+                 data.length, kept.length, dups, backupSheet);
+      return {ok:true, before:data.length, after:kept.length, removedDuplicates:dups,
+              byMonth:byMonth, byLoc:byLoc, backupSheet:backupSheet};
+    } finally {
+      lock.releaseLock();
+    }
+  } catch(e){
+    return {ok:false, error:String(e && e.message || e)};
+  }
+}
+
+// Обгортка для редактора: _repairPredLessons()      — показати план
+//                          _repairPredLessons(true)  — застосувати
+function _repairPredLessons(apply){
+  var res = repairPredmetnykyLessons(1, {dryRun: !apply});
+  Logger.log('RESULT: ' + JSON.stringify(res));
+  return res;
 }

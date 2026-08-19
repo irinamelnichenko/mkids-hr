@@ -2704,27 +2704,58 @@ function runAutoExport(loc){
 }
 
 // Destructive: видалити ВСІ заняття для поточної локації.
-// Double-confirm: 1) звичайний confirm, 2) prompt з типуванням назви локації.
+// v7.149: кількість беремо З БЕКЕНДУ, а не з S.lessons.
+// S.lessons з v7.80 — зріз ЛИШЕ за поточний місяць, тому старий підрахунок
+// показував, напр., «44 заняття», а стиралось 2205 за всі місяці.
+// Тепер: 1-й виклик без confirm → бекенд повертає CONFIRM_REQUIRED з реальним
+// willDelete і розкладкою по місяцях; 2-й виклик — з confirm = назва локації.
 function onClearAllLessons(){
   var loc = S.loc;
   if (!loc){ showToast('Спершу обери локацію', 'err'); return; }
   if (!canEditPred(loc)){ showToast('🚫 Немає дозволу', 'err'); return; }
-  var n = S.lessons.filter(function(L){ return L.loc === loc; }).length;
-  if (!n){ showToast('Немає занять для видалення', 'info'); return; }
 
-  if (!confirm('⚠️ ВИДАЛИТИ ВСІ ' + n + ' ' +
-               pluralUk(n, 'заняття', 'заняття', 'занять') +
-               ' для «' + loc + '»?\n\nЦе по всіх місяцях/групах/предметах. Відмінити НЕ МОЖНА.')) return;
-
-  var typed = prompt('Введи назву локації щоб підтвердити: «' + loc + '»');
-  if (typed !== loc){ showToast('Назва не співпала — скасовано', 'info'); return; }
-
-  setSync('syncing', '🗑 Видалення…');
+  setSync('syncing', '🔍 Рахую…');
   apiPost({
     action: 'clearAllPredmetnykyLessons',
     actorId: S.user.id,
     location: loc
+  }).then(function(prev){
+    if (prev && prev.ok && !prev.deleted){
+      setSync('ok', '');
+      showToast('Немає занять для видалення', 'info');
+      return;
+    }
+    if (!prev || prev.code !== 'CONFIRM_REQUIRED'){
+      var em = '🚫 ' + ((prev && prev.error) || 'Не вдалось порахувати');
+      setSync('err', em); showToast(em, 'err', 6000);
+      return;
+    }
+    setSync('ok', '');
+    var n = prev.willDelete || 0;
+    if (!n){ showToast('Немає занять для видалення', 'info'); return; }
+
+    var bm = prev.byMonth || {};
+    var months = Object.keys(bm).sort().map(function(k){ return '   ' + k + ': ' + bm[k]; }).join('\n');
+
+    if (!confirm('⚠️ ВИДАЛИТИ ВСІ ' + n + ' ' +
+                 pluralUk(n, 'заняття', 'заняття', 'занять') +
+                 ' для «' + loc + '»?\n\n' +
+                 'По місяцях:\n' + months + '\n\n' +
+                 'Це ВСІ місяці, групи й предмети — не лише поточний місяць.\n' +
+                 'Копія аркуша збережеться автоматично, але відкат — руками.')) return;
+
+    var typed = prompt('Введи назву локації щоб підтвердити видалення ' + n + ' занять: «' + loc + '»');
+    if (typed !== loc){ showToast('Назва не співпала — скасовано', 'info'); return; }
+
+    setSync('syncing', '🗑 Видалення…');
+    return apiPost({
+      action: 'clearAllPredmetnykyLessons',
+      actorId: S.user.id,
+      location: loc,
+      confirm: loc
+    });
   }).then(function(res){
+    if (res === undefined) return;
     if (!res || !res.ok){
       var msg = '🚫 ' + ((res && res.error) || 'Помилка видалення');
       setSync('err', msg);
@@ -2737,7 +2768,8 @@ function onClearAllLessons(){
     setSync('ok', '✅ Видалено ' + res.deleted + ' занять');
     showToast('✅ Видалено ' + res.deleted + ' ' +
               pluralUk(res.deleted, 'заняття', 'заняття', 'занять') +
-              ' для «' + loc + '»', 'ok', 5000);
+              ' для «' + loc + '»' +
+              (res.backupSheet ? ' · копія: ' + res.backupSheet : ''), 'ok', 7000);
     scheduleAutoExport(loc);
   }).catch(function(e){
     setSync('err', 'Помилка мережі');
