@@ -1,5 +1,12 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.149
+// m.kids CRM — Google Apps Script v7.150
+// v7.150: getCRMSpreadsheet більше НЕ створює таблиць. Прибрано мовчазний фолбек
+//         (SpreadsheetApp.create + setProperty('CRM_SHEET_ID')), який 19.08.2026
+//         тричі за день підміняв бойову таблицю на новостворену порожню й виглядав
+//         як масова втрата даних. ID тепер константа CRM_SHEET_ID_CANON; властивість
+//         читається лише для звірки й ніколи не перезаписується; збій openById кидає
+//         помилку з ID замість тихої підміни. setupSheetsStructure відв'язано від
+//         автоматичного шляху. У коді не лишилось жодного SpreadsheetApp.create.
 // v7.149: БЕЗПЕКА ДАНИХ (привід: 13–17.08.26 Predmetnyky_Lessons очищено повністю,
 //         2205 уроків → 0; корінь — фронт рахував уроки ЛИШЕ за поточний місяць
 //         (v7.80 зріз), а бекенд стирав ВСІ місяці).
@@ -325,6 +332,9 @@ var CONFIG_SHEET_ID  = '11NEIEBzaMiIDFnJB9RXqKnRqjCJjNyHVqylrX7cRZhc';
 var SHEET_PAYMENTS   = 'Оплати';
 var SHEET_YEARLY     = 'Оплати-Рік';
 var SHEET_CLIENTS    = 'Клієнти';
+// v7.150: канонічний ID CRM-таблиці — ЖОРСТКО в коді, не з властивості.
+// Єдине джерело правди для getCRMSpreadsheet(). Змінювати лише свідомо, руками.
+var CRM_SHEET_ID_CANON = '1pA2q84BFsXWuUchIlu8um853od_PXr7KepLpTovUjLo';
 var SHEET_ATTENDANCE = 'Табель';
 var SHEET_HEALTH     = 'Здоров\'я';
 var GROUP_HISTORY_SHEET = 'Історія_Груп'; // v7.47 ЕТАП 5: історія переходів груп
@@ -428,8 +438,10 @@ function setup() {
   Logger.log('Setup done.');
 }
 
+// Ручний ремонт властивості (запускати з редактора). З v7.150 сама властивість
+// на адресацію НЕ впливає — лишено, щоб привести її у відповідність канону.
 function fixCRMSheetId() {
-  var correctId = '1pA2q84BFsXWuUchIlu8um853od_PXr7KepLpTovUjLo';
+  var correctId = CRM_SHEET_ID_CANON;
   var props = PropertiesService.getScriptProperties();
   Logger.log('Поточний CRM_SHEET_ID: ' + props.getProperty('CRM_SHEET_ID'));
   props.setProperty('CRM_SHEET_ID', correctId);
@@ -443,20 +455,38 @@ function getProps() {
   return PropertiesService.getScriptProperties();
 }
 
+// v7.150 КРИТИЧНО. Раніше тут був фолбек: якщо openById падав (квота, таймаут,
+// тимчасова відмова прав) — виняток ПРОКОВТУВАВСЯ, скрипт створював НОВУ порожню
+// таблицю й перезаписував CRM_SHEET_ID на неї. Мовчки. Наступні виклики штатно
+// працювали з порожнім файлом, а бойові дані лишались у старому.
+// 19.08.2026 це спрацювало ТРИЧІ за день (10:24, 17:53 і ще раз), і виглядало як
+// «зникли Клієнти/Табель/уроки»: 1165 карток, 48541 рядок Табеля і 2479 уроків
+// увесь час лежали цілі в 1pA2q84…, просто бекенд дивився не туди.
+//
+// Тепер: ID захардкоджено, властивість НІКОЛИ не пишеться, таблиця НІКОЛИ не
+// створюється автоматично. Збій openById = гучна помилка з ID у тексті.
 function getCRMSpreadsheet() {
-  var props = getProps();
-  var id = props.getProperty('CRM_SHEET_ID');
-  if (id) {
-    try {
-      var ss = SpreadsheetApp.openById(id);
-      ensureSheetsExist(ss);
-      return ss;
-    } catch(e) {}
+  var id = CRM_SHEET_ID_CANON;
+
+  // Властивість лишається лише для діагностики: читаємо, порівнюємо, НЕ пишемо
+  // і НЕ використовуємо для адресації.
+  try {
+    var prop = getProps().getProperty('CRM_SHEET_ID');
+    if (prop && prop !== id)
+      Logger.log('[getCRMSpreadsheet] ⚠️ властивість CRM_SHEET_ID="%s" ≠ канонічного "%s" — ІГНОРУЄТЬСЯ', prop, id);
+  } catch(_e){}
+
+  var ss;
+  try {
+    ss = SpreadsheetApp.openById(id);
+  } catch(e) {
+    throw new Error('CRM-таблиця НЕ відкривається (id=' + id + '): ' +
+      (e && e.message || e) +
+      ' | Нова таблиця НЕ створюється — це навмисно (v7.150). ' +
+      'Перевір доступ до файлу та квоти й повтори; НЕ підміняй ID.');
   }
-  var newSS = SpreadsheetApp.create('m.kids CRM Data');
-  props.setProperty('CRM_SHEET_ID', newSS.getId());
-  setupSheetsStructure(newSS);
-  return newSS;
+  ensureSheetsExist(ss);
+  return ss;
 }
 
 function ensureSheetsExist(ss) {
@@ -478,6 +508,9 @@ function ensureSheetsExist(ss) {
   }
 }
 
+// v7.150: НЕ викликається автоматично (єдиний виклик був у видаленому фолбеку
+// getCRMSpreadsheet). Лишено для ручного першого налаштування НОВОЇ таблиці.
+// Перейменовує перший аркуш і чистить його — на бойовій таблиці НЕ запускати.
 function setupSheetsStructure(ss) {
   var sheets = ss.getSheets();
   sheets[0].setName(SHEET_PAYMENTS);
@@ -1280,7 +1313,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.149', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.150', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
