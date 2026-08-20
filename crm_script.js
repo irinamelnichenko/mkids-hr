@@ -2739,6 +2739,188 @@ function _deleteMigbkp(dryRun){
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// v7.166 ХВІСТ РЕМАПУ: описки і відсутні картки.
+//
+// ORPHAN_ALIAS — сирітська ID → НАЯВНА картка. Потрібен там, де точний матч
+// за ПІБ не спрацює: у відмітках описка, а картка вже існує з правильним ПІБ.
+// Кожну пару перевірено вручну (локація, група, діапазони дат) — автоматично
+// описку від іншої дитини не відрізнити, тому таблиця тільки ручна.
+// ═══════════════════════════════════════════════════════════════════════════
+var ORPHAN_ALIAS = {
+  // описка в прізвищі, картка є, дати НЕ перетинаються → чистий перенос
+  'c_Скульбуденко Софія_miniBaby_Борщагів': {name:'Скольбуденко Софія', loc:'Борщагівка'},
+  'c_Лрпушанська Софія_miniBaby_Бігова':    {name:'Лопушанська Софія',  loc:'Бігова'},
+  // скорочене ім'я, картка є
+  'c_Блідна Віка_Preschoo_Пуща':            {name:'Блідна Вікторія',    loc:'Пуща'},
+  // латинська 'C' у прізвищі — картка з кириличною 'С' існує
+  'c_Cук Лера_':                            {name:'Сук Лера',           loc:'Кар\'єрна'},
+  // 'Емир' проти 'Емір'
+  'c_Пашаев Емир_':                         {name:'Пашаев Емір',        loc:'Оранж'},
+  // дати ПЕРЕТИНАЮТЬСЯ — обидві відмітки стануть дублями і будуть видалені
+  'c_Залопожнюк Діана_Baby-ki_Кругла':      {name:'Задорожнюк Діана',   loc:'Кругла'},
+  // 'Іванка' проти 'Іванна'; картка ІСНУЄ, але вона terminated — див. звіт
+  'c_Денисенко Іванка_':                    {name:'Денисенко Іванна',   loc:'Кар\'єрна'}
+};
+
+// Кожен елемент = ОДНА нова картка. Усередині — сирітські ID, чиї відмітки їй належать
+// (у Сьомки Рината їх два). ПІБ, локація і група беруться з ОСТАННЬОЇ відмітки.
+var ORPHAN_CREATE_FROM = [
+  ['c_Захарченко Давід_'],
+  ['c_Ващенко Макар_Study-ki_Бровари'],
+  ['c_Сьомка Ринат_', 'c_Сьомка Ринат_Study-ki_Пуща']
+];
+var ORPHAN_NEW_NOTE = 'створено %d% при ремапі, статус уточнити в директорки';
+
+function CREATE_MISSING_CARDS_DRYRUN(){ _createMissingCards(true); }
+function CREATE_MISSING_CARDS_APPLY(){  _createMissingCards(false); }
+
+function _createMissingCards(dryRun){
+  var out=[];
+  function o(l){ out.push(l); if(out.length>=60){ Logger.log(out.join('\n')); out=[]; } }
+  function flush(){ if(out.length) Logger.log(out.join('\n')); out=[]; }
+
+  var ss=getCRMSpreadsheet();
+  var tz=ss.getSpreadsheetTimeZone() || 'Europe/Kiev';
+  o('═══ CREATE_MISSING_CARDS — ' + (dryRun?'DRY RUN (нічого не пишеться)':'*** ЗАПИС ***') + ' ═══');
+
+  var csh=ss.getSheetByName(SHEET_CLIENTS);
+  var ash=ss.getSheetByName(SHEET_ATTENDANCE);
+  if(!csh||!ash){ o('!! Немає Клієнти або Табель'); return flush(); }
+
+  var cv=csh.getDataRange().getValues();
+  var chh=cv[0].map(function(x){ return String(x).trim(); });
+  function ci(n){ return chh.indexOf(n); }
+  var iId=ci('ID'), iNm=ci('ПІБ дитини'), iLc=ci('Локація'), iGr=ci('Група'),
+      iSt=ci('Статус'), iNo=ci('Нотатки'), iCr=ci('Створено'), iUp=ci('Оновлено');
+  if(iId<0||iNm<0||iLc<0){ o('!! У Клієнтах немає ID / ПІБ дитини / Локація'); return flush(); }
+
+  var haveId={}, haveNameLoc={};
+  for(var r=1;r<cv.length;r++){
+    var id=String(cv[r][iId]||'').trim(); if(id) haveId[id]=true;
+    haveNameLoc[_rmNorm(cv[r][iNm])+'||'+_rmNorm(cv[r][iLc])]=String(cv[r][iId]||'').trim();
+  }
+
+  var av=ash.getDataRange().getValues();
+  var ahh=av[0].map(function(x){ return String(x).trim(); });
+  var aDt=ahh.indexOf('Дата'), aId=ahh.indexOf('ID дитини'),
+      aNm=ahh.indexOf("Ім'я дитини"), aLc=ahh.indexOf('Локація'), aGr=ahh.indexOf('Група');
+
+  // зібрати відмітки по кожній сирітській ID
+  var marks={};
+  for(var r2=1;r2<av.length;r2++){
+    var oid=String(av[r2][aId]||'').trim(); if(!oid) continue;
+    (marks[oid]=marks[oid]||[]).push({
+      d:_attDateIso(av[r2][aDt],tz), nm:String(av[r2][aNm]||'').trim(),
+      lc:String(aLc>=0?av[r2][aLc]:'').trim(), gr:String(aGr>=0?av[r2][aGr]:'').trim()
+    });
+  }
+
+  var today=Utilities.formatDate(new Date(), tz, 'dd.MM');
+  var note=ORPHAN_NEW_NOTE.replace('%d%', today);
+  var now=formatDate(new Date());
+  var plan=[], skip=[];
+
+  ORPHAN_CREATE_FROM.forEach(function(ids){
+    var all=[];
+    ids.forEach(function(x){ (marks[x]||[]).forEach(function(m){ all.push(m); }); });
+    if(!all.length){ skip.push({ids:ids, why:'відміток не знайдено'}); return; }
+    all.sort(function(a,b){ return String(a.d).localeCompare(String(b.d)); });
+    var last=all[all.length-1];
+    var nm=last.nm, lc=last.lc, gr=last.gr;
+    if(!nm||!lc){ skip.push({ids:ids, why:'у відмітках порожнє ПІБ або локація'}); return; }
+    var newId=_mkChildId(nm, lc);
+    var exists=haveNameLoc[_rmNorm(nm)+'||'+_rmNorm(lc)];
+    if(exists){ skip.push({ids:ids, why:'картка вже існує: '+exists}); return; }
+    if(haveId[newId]){ skip.push({ids:ids, why:'ID вже зайнято: '+newId}); return; }
+    plan.push({ids:ids, id:newId, nm:nm, lc:lc, gr:gr, n:all.length,
+               from:all[0].d, to:last.d});
+  });
+
+  o('');
+  o('══ НОВІ КАРТКИ: ' + plan.length + ' ══');
+  o('  ' + _rmPad('ПІБ',24) + _rmPad('локація',14) + _rmPad('група',22) +
+    _rmPad('відм.',7) + _rmPad('період',26) + 'нова ID');
+  plan.forEach(function(p){
+    o('  ' + _rmPad(p.nm,24) + _rmPad(p.lc,14) + _rmPad(p.gr||'—',22) +
+      _rmPad(String(p.n),7) + _rmPad(p.from+' … '+p.to,26) + p.id);
+    if(p.ids.length>1) o('      зводимо ID: ' + p.ids.join('  +  '));
+  });
+  o('');
+  o('  Статус: active · Нотатки: «' + note + '»');
+  if(skip.length){
+    o('');
+    o('══ ПРОПУЩЕНО: ' + skip.length + ' ══');
+    skip.forEach(function(s){ o('  ' + _rmPad(s.ids.join(', ').slice(0,54),56) + s.why); });
+  }
+
+  // ── звіт по описках: що зробить ремап через ORPHAN_ALIAS ──
+  var seen={};
+  for(var r3=1;r3<av.length;r3++){
+    seen[_attDateIso(av[r3][aDt],tz)+'||'+String(av[r3][aId]||'').trim()]=true;
+  }
+  o('');
+  o('══ ОПИСКИ → НАЯВНІ КАРТКИ (ORPHAN_ALIAS) ══');
+  o('  ' + _rmPad('сирітська ID',44) + _rmPad('ціль',24) + _rmPad('відм.',7) +
+    _rmPad('перенести',11) + _rmPad('дублі',7) + 'статус картки');
+  Object.keys(ORPHAN_ALIAS).sort().forEach(function(oid){
+    var al=ORPHAN_ALIAS[oid];
+    var tid=haveNameLoc[_rmNorm(al.name)+'||'+_rmNorm(al.loc)];
+    var mk=marks[oid]||[];
+    if(!tid){ o('  ' + _rmPad(oid.slice(0,42),44) + _rmPad(al.name,24) + '!! ЦІЛЬОВОЇ КАРТКИ НЕ ЗНАЙДЕНО'); return; }
+    var mov=0, dup=0;
+    mk.forEach(function(m){ if(seen[m.d+'||'+tid]) dup++; else mov++; });
+    var st='';
+    for(var q=1;q<cv.length;q++) if(String(cv[q][iId]||'').trim()===tid){ st=String(cv[q][iSt]||'').trim(); break; }
+    o('  ' + _rmPad(oid.slice(0,42),44) + _rmPad(al.name,24) + _rmPad(String(mk.length),7) +
+      _rmPad(String(mov),11) + _rmPad(String(dup),7) + st + (st==='terminated'?'  ← УВАГА':''));
+  });
+  o('');
+  o('  Ці переноси робить REMAP_ORPHAN_ATTENDANCE_APPLY() — тут лише звіт.');
+
+  if(dryRun){
+    o('');
+    o('DRY RUN — нічого не створено. Далі: CREATE_MISSING_CARDS_APPLY()');
+    return flush();
+  }
+  if(!plan.length){ o(''); o('Створювати нічого.'); return flush(); }
+
+  var lock=LockService.getScriptLock();
+  if(!lock.tryLock(30000)){ o('!! lock зайнятий — ПЕРЕРВАНО'); return flush(); }
+  try{
+    var start=csh.getLastRow()+1;
+    var rows=plan.map(function(p){
+      var row=new Array(chh.length).fill('');
+      row[iId]=p.id; row[iNm]=p.nm; row[iLc]=p.lc;
+      if(iGr>=0) row[iGr]=p.gr;
+      if(iSt>=0) row[iSt]='active';
+      if(iNo>=0) row[iNo]=note;
+      if(iCr>=0) row[iCr]=now;
+      if(iUp>=0) row[iUp]=now;
+      return row;
+    });
+    if(csh.getMaxRows() < start+rows.length-1)
+      csh.insertRowsAfter(csh.getMaxRows(), start+rows.length-1-csh.getMaxRows());
+    csh.getRange(start,1,rows.length,chh.length).setValues(rows);
+    SpreadsheetApp.flush();
+    o('');
+    o('╔════════ ТОЧКА ВІДКАТУ ════════╗');
+    o('  Клієнти, рядків до запису : ' + (start-1));
+    o('  додано рядки              : ' + start + '–' + (start+rows.length-1));
+    o('  відкат = видалити саме ці рядки (запис ЛИШЕ дописує)');
+    o('╚═══════════════════════════════╝');
+    o('');
+    o('Створено карток: ' + rows.length);
+    plan.forEach(function(p){ o('   ' + _rmPad(p.nm,24) + p.id); });
+    o('');
+    o('Далі: REMAP_ORPHAN_ATTENDANCE_DRYRUN() → APPLY — він перенесе відмітки');
+    o('на нові картки (точний матч за ПІБ) і на описки (через ORPHAN_ALIAS).');
+  }catch(e){
+    o('!! ПОМИЛКА: ' + (e.message||e));
+  }finally{ lock.releaseLock(); }
+  flush();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // v7.163 РЕМАП СИРІТСЬКИХ ВІДМІТОК У ТАБЕЛІ.
 // v7.162 зупинив ПРИПЛИВ; ці функції розбирають те, що вже накопичилось.
 //   REMAP_ORPHAN_ATTENDANCE_DRYRUN() — лише звіт, нічого не пише
@@ -2828,9 +3010,22 @@ function _remapOrphanAttendance(dryRun){
     if(skip[oldId]){ skipped.push({oldId:oldId, g:g, why:'стоп-лист (інша дитина)'}); return; }
     var nm=_rmNorm(g.name), lc=_rmNorm(g.loc);
     if(!nm){ nocard.push({oldId:oldId, g:g, why:'порожнє ПІБ у рядку'}); return; }
-    var cand=uniq(byNameLoc[nm+'||'+lc]);
-    var how='ПІБ+локація';
-    if(cand.length!==1){ cand=uniq(byName[nm]); how='ПІБ (усі локації)'; }
+    var cand, how;
+    // v7.166: ручна таблиця описок має пріоритет — точний матч за ПІБ там
+    // не спрацює саме тому, що ПІБ у відмітці записаний з помилкою.
+    var al=ORPHAN_ALIAS[oldId];
+    if(al){
+      cand=uniq(byNameLoc[_rmNorm(al.name)+'||'+_rmNorm(al.loc)]);
+      how='описка → '+al.name;
+      if(cand.length!==1){
+        nocard.push({oldId:oldId, g:g, why:'alias: картки «'+al.name+'» ('+al.loc+') не знайдено або їх кілька'});
+        return;
+      }
+    } else {
+      cand=uniq(byNameLoc[nm+'||'+lc]);
+      how='ПІБ+локація';
+      if(cand.length!==1){ cand=uniq(byName[nm]); how='ПІБ (усі локації)'; }
+    }
     if(cand.length===0){ nocard.push({oldId:oldId, g:g, why:'картки з таким ПІБ немає'}); return; }
     if(cand.length>1){ amb.push({oldId:oldId, g:g, cands:cand}); return; }
     if(cand[0]===oldId){ nocard.push({oldId:oldId, g:g, why:'ціль = сама себе'}); return; }
@@ -3429,7 +3624,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.165', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.166', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
