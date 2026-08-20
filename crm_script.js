@@ -578,7 +578,8 @@ var LEADS_HIST_HEADER  = ['lead_id','created_at','day','source','локація'
 // Tic-Tok зводимо в SMM: це той самий соцмедійний канал, окремою позицією в словнику він не заявлений.
 var LEAD_SRC_MAP = {
   'сайт|google':'сайт/Google', 'сайт':'сайт/Google', 'google':'сайт/Google',
-  'smm':'SMM', 'tic-tok':'SMM', 'tiktok':'SMM', 'інстаграм':'SMM', 'instagram':'SMM',
+  'smm':'SMM', 'смм':'SMM', 'tic-tok':'SMM', 'tiktok':'SMM', 'тікток':'SMM',
+  'інстаграм':'SMM', 'instagram':'SMM', 'інст':'SMM',
   'рек.| прох. мимо':'рекомендації', 'рекомендації':'рекомендації', 'рек.':'рекомендації',
   'з минулого періода':'з минулого періоду', 'з минулого періоду':'з минулого періоду'
 };
@@ -2094,6 +2095,153 @@ function _leadMinutes(a, b){   // рядки 'dd.MM.yyyy HH:mm'
     return new Date(+m[3], +m[2]-1, +m[1], +m[4], +m[5]).getTime(); }
   var A=ms(a), B=ms(b); if(A==null||B==null) return null; return Math.round((B-A)/60000);
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.159 ДЗЕРКАЛО У ФАЙЛ МАРКЕТОЛОГА.
+// Після кожної дії бота рядок ліда дописується/оновлюється у вкладці локації
+// того файлу, з яким він звик працювати — у ЙОГО форматі й ЙОГО термінами.
+//
+// Ключ зіставлення — lead_id у службовій колонці T (20), поза робочою зоною:
+// без нього кожна дія плодила б новий рядок замість оновлення наявного.
+//
+// Розкладка вкладки локації (перевірено на «Бровари», «Позняки»):
+//   рядок 1      — шапка
+//   рядки 2–4    — формули-підсумки маркетолога, ЧІПАТИ НЕ МОЖНА
+//   рядок 5+     — дані
+//
+// Збій дзеркала НІКОЛИ не валить бота: усе загорнуто в _mirrorSafe → TG_Err.
+// ═══════════════════════════════════════════════════════════════════════════
+var MIRROR_FILE_ID   = '1XfLgI_0hEObGylpTTRVHPOjkEB6crW5YNW816gy4Vdg';
+var MIRROR_HEADER    = ['школа','дата ','телефон','імя одного з батьків','імя дитини','вік дитини',
+                        'джерело ліда','статус дзвінка','дата повторного дзвінка',
+                        'статус повторного дзвінка','дата екскурсії','статус екскурсії','коментар'];
+var MIRROR_ID_COL    = 20;   // службова колонка lead_id
+var MIRROR_FIRST_ROW = 5;    // нижче формул-підсумків
+
+// Назви локацій у CRM і у файлі маркетолога РІЗНІ — без мапи ліди пішли б у нові вкладки.
+var MIRROR_TABS = {
+  'осокорки':'Осокорки садочок', 'школа осокорки':'Осокорки школа', 'осокорки школа':'Осокорки школа',
+  "кар'єрна":"Кар'єрна школа", "кар'єрна школа":"Кар'єрна школа",
+  'кругла':'Львів Кругла', 'львів кругла':'Львів Кругла',
+  'бігова':'Львів Бігова', 'львів бігова':'Львів Бігова',
+  'школа 228':'228 школа', '228 школа':'228 школа',
+  'позняки':'Позняки', 'тичини':'Тичини', 'бровари':'Бровари', 'борщагівка':'Борщагівка',
+  'пуща':'Пуща', 'житомир':'Житомир', 'чернігів':'Чернігів',
+  'караваєві дачі':'Караваєві Дачі', 'теремки 2':'Теремки 2', 'крюківщина':'Крюківщина'
+};
+// Наші статуси → його словник (узятий з фактичних значень у файлі, не вигаданий).
+var MIRROR_CALL_ST = {
+  'new':'', 'in_progress':'', 'called':'зателефонував/думає',
+  'no_answer':'Зателефонува пропав', 'unreachable':'Зателефонува пропав',
+  'callback_later':'Цікавить майбутній період', 'excursion':'Записався на ЕКСК',
+  'signed':'Підписав договір', 'refused':'Нам відмовили', 'closed':''
+};
+var MIRROR_EXC_ST = {
+  'signed':'підписали договір', 'refused':'нам відмовили',
+  'no_answer':'пропав', 'unreachable':'пропав',
+  'callback_later':'На майбутній період',
+  // 'excursion' — записаний, але результату ще немає: порожньо, а не вигаданий підсумок
+  'excursion':'', 'new':'', 'in_progress':'', 'called':'', 'closed':''
+};
+var MIRROR_SRC = {'сайт/Google':'сайт|Google', 'SMM':'SMM', 'рекомендації':'рек.| прох. мимо',
+                  'з минулого періоду':'з минулого періода', 'інше':''};
+
+function _mirrorPhone(p){ var d=String(p||'').replace(/\D/g,''); return d.length>9 ? d.slice(-9) : d; }
+function _mirrorDate(v){ var m=String(v||'').match(/(\d{1,2})\.(\d{1,2})\.(\d{4})/); return m?m[0]:''; }
+function _mirrorTabName(loc){
+  var k=_tgNorm(loc);
+  return MIRROR_TABS[k] || String(loc||'').trim() || 'Без локації';
+}
+
+// Невідоме джерело пишемо ЯК Є, а не порожнім: '' у файлі маркетолога
+// виглядало б як «джерело не вказали», хоча воно відоме, просто не в словнику.
+function _mirrorSrc(srcN, raw){
+  if(srcN && srcN!=='інше' && MIRROR_SRC[srcN]) return MIRROR_SRC[srcN];
+  return String(raw||'').trim();
+}
+function _mirrorRowValues(row, tabName){
+  var st  = String(row[LB.status]||'').trim();
+  var src = String(row[LB.source]||'').trim();
+  var srcN= (typeof _leadSrcNorm==='function') ? _leadSrcNorm(src) : src;
+  var comment = [String(row[LB.comment]||'').trim(), String(row[LB.notes]||'').replace(/\n/g,' · ').trim()]
+                  .filter(function(x){ return x; }).join(' · ');
+  return [
+    tabName,
+    _mirrorDate(row[LB.created_at]),
+    _mirrorPhone(row[LB.phone]),
+    String(row[LB.parent]||''),
+    String(row[LB.child]||''),
+    String(row[LB.child_age]||''),
+    _mirrorSrc(srcN, src),
+    (MIRROR_CALL_ST.hasOwnProperty(st) ? MIRROR_CALL_ST[st] : ''),
+    String(row[LB.callback_date]||''),
+    (MIRROR_CALL_ST.hasOwnProperty(st) ? MIRROR_CALL_ST[st] : ''),
+    String(row[LB.excursion_date]||''),
+    (MIRROR_EXC_ST.hasOwnProperty(st) ? MIRROR_EXC_ST[st] : ''),
+    comment.slice(0,500)
+  ];
+}
+
+function _mirrorLead(row){
+  var id=String(row[LB.lead_id]||'').trim();
+  if(!id) return false;
+
+  var tabName=_mirrorTabName(row[LB['локація']]);
+  var ss=SpreadsheetApp.openById(MIRROR_FILE_ID);
+  var sh=ss.getSheetByName(tabName);
+  if(!sh){
+    // Вкладки для цієї локації у файлі немає (напр. Голосієво, Оранж). Створюємо з
+    // тією ж шапкою і КАЖЕМО про це в TG_Err — тихо загубити лід гірше.
+    sh=ss.insertSheet(tabName);
+    sh.getRange(1,1,1,MIRROR_HEADER.length).setValues([MIRROR_HEADER]);
+    sh.setFrozenRows(1);
+    _tgErr('mirror-newtab','створено вкладку «'+tabName+'» — у файлі маркетолога її не було');
+  }
+  if(String(sh.getRange(1,MIRROR_ID_COL).getValue()).trim()!=='lead_id')
+    sh.getRange(1,MIRROR_ID_COL).setValue('lead_id');
+
+  var last=sh.getLastRow(), target=0;
+  if(last>=1){
+    var ids=sh.getRange(1,MIRROR_ID_COL,last,1).getValues();
+    for(var i=0;i<ids.length;i++){ if(String(ids[i][0]).trim()===id){ target=i+1; break; } }
+  }
+  if(!target){
+    target=Math.max(last+1, MIRROR_FIRST_ROW);
+    if(sh.getMaxRows()<target) sh.insertRowsAfter(sh.getMaxRows(), target-sh.getMaxRows());
+  }
+  sh.getRange(target,1,1,MIRROR_HEADER.length).setValues([_mirrorRowValues(row, tabName)]);
+  sh.getRange(target,MIRROR_ID_COL).setValue(id);
+  return true;
+}
+
+// Єдина точка виклику. Бот працює далі, навіть якщо файл недоступний.
+function _mirrorSafe(row){
+  try{ return _mirrorLead(row); }
+  catch(e){ _tgErr('mirror', e); return false; }
+}
+
+// ── Разова заливка вже наявних лідів (дзеркало вмикається не з нуля) ──
+function MIRROR_RESYNC_DRYRUN(){ _mirrorResync(true); }
+function MIRROR_RESYNC_ALL(){    _mirrorResync(false); }
+function _mirrorResync(dryRun){
+  var out=['MIRROR_RESYNC — '+(dryRun?'DRY RUN':'*** ЗАПИС ***')];
+  var sh=_leadsBotSheet(), v=sh.getDataRange().getValues();
+  var byTab={}, ok=0, fail=0;
+  for(var r=1;r<v.length;r++){
+    var row=v[r]; if(!String(row[LB.lead_id]||'').trim()) continue;
+    var tab=_mirrorTabName(row[LB['локація']]);
+    byTab[tab]=(byTab[tab]||0)+1;
+    if(dryRun) continue;
+    if(_mirrorSafe(row)) ok++; else fail++;
+  }
+  out.push('');
+  for(var k in byTab) out.push('  '+_pad2(k,26)+byTab[k]);
+  out.push('');
+  out.push(dryRun ? 'DRY RUN — нічого не записано. Далі: MIRROR_RESYNC_ALL()'
+                  : ('Записано: '+ok+' · збоїв: '+fail+' (дивись TG_Err)'));
+  Logger.log(out.join('\n'));
+}
+
 function _tgCreateLead(parsed, who){
   var sh = _leadsBotSheet();
   var id = 'ld_'+Utilities.getUuid().replace(/-/g,'').slice(0,8);
@@ -2111,6 +2259,7 @@ function _tgCreateLead(parsed, who){
   row[LB.comment]=parsed.comment; row[LB.tg_chat_id]=chat; row[LB.tg_message_id]=mid; row[LB.status]='new';
   row[LB.reminders]=JSON.stringify({}); row[LB.log]=JSON.stringify(log); row[LB.updated_at]=now;
   sh.appendRow(row);
+  _mirrorSafe(row);                                  // v7.159 дзеркало у файл маркетолога
   return {ok:true, id:id, mid:mid, sendOk:!!(sent&&sent.ok)};
 }
 
@@ -2200,6 +2349,7 @@ function _tgUpdateLead(id, act, who){
     else if(act==='refuse'||act==='back'){ /* лише зміна клавіатури */ }
     row[LB.updated_at]=now;
     sh.getRange(r+1,1,1,row.length).setValues([row]);
+    _mirrorSafe(row);                                  // v7.159
     return {ld:_leadObj(row), toast:toast, changed:true, mode:(act==='refuse'?'refuse':(act==='back'?'menu':'done'))};
   }
   return null;
@@ -2230,6 +2380,7 @@ function _repairLeadConflicts(dryRun){
     a.push({ts:now,who:'system',act:'cb_cleared:repair'}); row[LB.log]=JSON.stringify(a);
     row[LB.updated_at]=now;
     sh.getRange(r+1,1,1,row.length).setValues([row]);
+    _mirrorSafe(row);                                  // v7.159: передзвін почистили — видно і в дзеркалі
     try{
       var ld=_leadObj(row), closed=(st==='signed'||st==='refused');
       _tgApi('editMessageText',{chat_id:ld.chat_id, message_id:ld.tg_message_id,
@@ -2422,6 +2573,7 @@ function _tgHandlePending(leadId, kind, text, who, promptMid, userMsgId){
       var mins=_leadMinutes(row[LB.created_at], now); if(mins!=null) row[LB.sla_ok]=(mins<=15)?'YES':'NO'; 
       var _rm=_remGet(row); _rm.r1=now; _rm.r2=now; _remSet(row,_rm); }   // v7.156: реакція закриває SLA
     row[LB.updated_at]=now; sh.getRange(r+1,1,1,row.length).setValues([row]);
+    _mirrorSafe(row);                                  // v7.159
     var ld=_leadObj(row), closed=(ld.status==='signed'||ld.status==='refused');
     _tgApi('editMessageText',{chat_id:ld.chat_id, message_id:ld.tg_message_id, text:_leadCardText(ld), parse_mode:'HTML', reply_markup: nextKb || (closed?{inline_keyboard:[]}:_leadKb(leadId))});
     try{ if(promptMid) _tgApi('deleteMessage',{chat_id:chat, message_id:promptMid}); }catch(_){}   // прибрати запрошення
@@ -2475,6 +2627,7 @@ function tgSlaCheck(){
           if(att>=3){ row[LB.status]='unreachable'; var _a=[]; try{_a=JSON.parse(row[LB.log]||'[]');}catch(_){}; _a.push({ts:now,who:'system',act:'unreachable'}); row[LB.log]=JSON.stringify(_a); _tgSend(chat,'📵 '+men+' 3 спроби без відповіді — статус «не вдалось додзвонитись».'+warn,{reply_to_message_id:mid}); }
           else { att++; _tgSend(chat,'🔁 '+men+', час набрати ще раз (спроба '+att+'/3)'+warn,{reply_to_message_id:mid}); row[LB.call_attempts]=att; row[LB.last_noanswer_at]=now; }
           row[LB.updated_at]=now; sh.getRange(r+1,1,1,row.length).setValues([row]);
+          _mirrorSafe(row);                            // v7.159: статус міг стати «unreachable»
         }
       }
       // ── Екскурсія: напередодні 18:00 · за 2 год · наступний ранок якщо статус не змінився ──
@@ -2564,6 +2717,7 @@ function _tgCloseOldLeads(who){
     row[LB.status]='closed'; row[LB.updated_at]=now;
     var arr=[]; try{arr=JSON.parse(row[LB.log]||'[]');}catch(_){}; arr.push({ts:now,who:who,act:'closeold'}); row[LB.log]=JSON.stringify(arr);
     sh.getRange(r+1,1,1,row.length).setValues([row]);
+    _mirrorSafe(row);                                  // v7.159
     try{ _tgApi('editMessageReplyMarkup',{chat_id:row[LB.tg_chat_id], message_id:row[LB.tg_message_id], reply_markup:{inline_keyboard:[]}}); }catch(_e){}
     n++;
   }
@@ -2607,6 +2761,7 @@ function _tgHandleReply(cardMid, text, who, opts){
       var _rm=_remGet(row); _rm.r1=now; _rm.r2=now; _remSet(row,_rm); }   // v7.156: реакція закриває SLA
     row[LB.updated_at]=now;
     sh.getRange(r+1,1,1,row.length).setValues([row]);
+    _mirrorSafe(row);                                  // v7.159
     var ld=_leadObj(row), closed=(ld.status==='signed'||ld.status==='refused');
     // дата є, часу немає → одразу показуємо клавіатуру годин, як з меню
     _tgApi('editMessageText',{chat_id:ld.chat_id, message_id:ld.tg_message_id, text:_leadCardText(ld), parse_mode:'HTML',
@@ -2672,7 +2827,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.158', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.159', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
