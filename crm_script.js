@@ -1411,9 +1411,12 @@ function tgSetWebhook(body){
 }
 
 // ── ЕТАП 3: парсер вільного тексту в лід ────────────────────────────────────
+// v7.155: додано кириличне «смм» (патерн ловив лише латинське smm) і тікток.
+// «\bінст\b» прибрано: JS-межа слова з кирилицею не працює, тож умова була мертва —
+// замість неї «інст» з довільним закінченням, а ціле слово вирізає _cutWholeWord.
 var LEAD_SOURCES = [
   [/google|сайт|гугл/i, 'сайт|Google'],
-  [/smm|інстаграм|instagram|facebook|фейсбук|\bінст\b/i, 'SMM'],
+  [/smm|смм|інстаграм|instagram|інст|facebook|фейсбук|тікток|тік-ток|tiktok|tik-tok/i, 'SMM'],
   [/реком|порад|знайом|сарафан/i, 'рек.| прох. мимо'],
   [/прох|мимо|вивіск|борд/i, 'прох. мимо']
 ];
@@ -1425,21 +1428,73 @@ function _fmtPhone(raw){
   return d?('+'+d):'';
 }
 function _reEsc(s){ return String(s).replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); }
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.155 Розбір тексту ліда: цілі слова, час, нерозпізнаний залишок.
+//
+// JS \b спирається на \w = [A-Za-z0-9_], тому для кирилиці межа слова НЕ
+// працює: /\bекск\b/ і /\bінст\b/ не збігались ніколи. Скрізь, де потрібна
+// межа слова по-кириличному, розширюємо межі вручну.
+// ═══════════════════════════════════════════════════════════════════════════
+function _isWordCh(c){ return /[0-9A-Za-zА-Яа-яЁёІіЇїЄєҐґ'’ʼ\-]/.test(c); }
+
+// Вирізає ЦІЛЕ слово, у яке потрапив збіг. Було: t.replace(re,' ') різало лише
+// підрядок, і «рекомендація» лишала по собі «ендація», яка падала в коментар.
+function _cutWholeWord(t, re){
+  var s = String(t), m = s.match(re);
+  if (!m) return {t:s, hit:false, word:''};
+  var i = m.index, j = i + m[0].length;
+  while (i > 0        && _isWordCh(s.charAt(i-1))) i--;
+  while (j < s.length && _isWordCh(s.charAt(j)))   j++;
+  return {t: s.slice(0,i) + ' ' + s.slice(j), hit:true, word: s.slice(i,j)};
+}
+
+// Час із тексту. Спершу формат з двокрапкою — його з датою не сплутати.
+// Далі «о 14» / «об 11:30»; lookahead не дає зʼїсти «о 25.08» як 25-ту годину.
+function _extractTime(t){
+  var s = String(t||''), m = s.match(/(\d{1,2}):(\d{2})/);
+  if (m && +m[1] <= 23 && +m[2] <= 59) return {time:(+m[1])+':'+m[2], rest:s.replace(m[0],' ')};
+  m = s.match(/(^|[\s,;(])о[бй]?\s*(\d{1,2})(?::(\d{2}))?(?![.\/:\d])/i);
+  if (m && +m[2] <= 23 && (!m[3] || +m[3] <= 59))
+    return {time:(+m[2])+':'+(m[3] || '00'), rest:s.replace(m[0], (m[1]||'') + ' ')};
+  return {time:'', rest:s};
+}
+
+// Нерозпізнаний залишок: без розділових і без службових слів, що лишились
+// від вирізаних конструкцій («о» від «о 14:00», «на» від «на 25.08»).
+var LEAD_STOPWORDS = {'о':1,'об':1,'на':1,'в':1,'у':1,'з':1,'зі':1,'і':1,'й':1,'та':1,'до':1,'за':1,'ж':1,'же':1,'-':1};
+function _leadResidual(t){
+  var s = String(t||'').replace(/[,;]+/g,' ').replace(/\s+/g,' ').trim();
+  if(!s) return '';
+  var meaningful = s.split(' ').filter(function(w){
+    var k = w.toLowerCase().replace(/^[.!?()]+|[.!?()]+$/g,'');
+    return k && !LEAD_STOPWORDS[k];
+  });
+  // Службові слова прибираємо ЛИШЕ для перевірки «чи лишилось хоч щось»: якщо це
+  // самий хвіст від вирізаного («о» від «о 14:00») — залишку немає. Якщо ж є
+  // змістовні слова, повертаємо текст ЯК Є — викидати «на» з живої примітки не можна.
+  return meaningful.length ? s : '';
+}
+
 function _parseLead(text){
   var t = String(text||'').replace(/^\/(newlead|lead)\b\s*/i,'').trim();
   var res = {phone:'', loc:'', source:'', parent:'', child:'', age:'', comment:''};
   var pm = t.match(/(\+?\d[\d\s().\-]{7,}\d)/);
   if(pm){ var ph=_fmtPhone(pm[1]); if(ph.replace(/\D/g,'').length>=9){ res.phone=ph; t=t.replace(pm[1],' '); } }
   try{ (getLocations().data||[]).forEach(function(l){ var nm=String(l.loc||'').trim();
-    if(nm && !res.loc && new RegExp(_reEsc(nm),'i').test(t)){ res.loc=nm; t=t.replace(new RegExp(_reEsc(nm),'i'),' '); } }); }catch(_e){}
-  for(var i=0;i<LEAD_SOURCES.length;i++){ if(LEAD_SOURCES[i][0].test(t)){ res.source=LEAD_SOURCES[i][1]; t=t.replace(LEAD_SOURCES[i][0],' '); break; } }
+    if(nm && !res.loc){ var cl=_cutWholeWord(t, new RegExp(_reEsc(nm),'i')); if(cl.hit){ res.loc=nm; t=cl.t; } } }); }catch(_e){}
+  // Ціле слово, а не підрядок: «рекомендація» має зникнути повністю,
+  // інакше залишок «ендація» падає в коментар (те саме для сайт/гугл/інстаграм/смм).
+  for(var i=0;i<LEAD_SOURCES.length;i++){
+    var cs=_cutWholeWord(t, LEAD_SOURCES[i][0]);
+    if(cs.hit){ res.source=LEAD_SOURCES[i][1]; t=cs.t; break; }
+  }
   var am = t.match(/(\d{1,2}([.,]\d)?)\s*(рок[а-яіїєґ]*|роч[а-яіїєґ]*|рік[а-яіїєґ]*|\bр\.?|год[а-яіїєґ]*|\bг\.?|міс[а-яіїєґ]*)/i);
   if(am){ res.age=am[0].replace(/\s+/g,' ').trim(); t=t.replace(am[0],' '); }
   else { var an=t.match(/\b([1-7])\b/); if(an){ res.age=an[1]; t=t.replace(an[0],' '); } }
   t = t.replace(/[,;]+/g,' ').replace(/\s+/g,' ').trim();
   var nm2 = t.match(/[А-ЯІЇЄA-Z][а-яіїєa-z'’ʼ\-]{1,}/);
   if(nm2){ res.child=nm2[0]; t=t.replace(nm2[0],' '); }
-  res.comment = t.replace(/\s+/g,' ').trim();
+  res.comment = _leadResidual(t);   // v7.155: «з гугла» більше не лишає коментар «з»
   return res;
 }
 
@@ -1779,9 +1834,12 @@ function _tgHandlePending(leadId, kind, text, who, promptMid, userMsgId){
     // v7.154: ручний ввід «✏️ Інша» йде ПОВЗ _tgUpdateLead, тому взаємовиключність
     // станів треба тримати і тут — інакше дірка лишилася б саме в цьому шляху.
     } else if(kind==='excdate'){
-      var dm=String(text).match(/(\d{1,2})[.\/](\d{1,2})/); if(dm){ row[LB.excursion_date]=('0'+dm[1]).slice(-2)+'.'+('0'+dm[2]).slice(-2); row[LB.status]='excursion';
+      var _et=_extractTime(String(text)); var _tx=_et.time?_et.rest:String(text);
+      var dm=_tx.match(/(\d{1,2})[.\/](\d{1,2})/); if(dm){ row[LB.excursion_date]=('0'+dm[1]).slice(-2)+'.'+('0'+dm[2]).slice(-2); row[LB.status]='excursion';
         if(_leadClearCallback(row)) a.push({ts:now,who:who,act:'cb_cleared:exc'});
-        _leadArmExc(row); nextKb=_leadExcTimeKb(leadId); }
+        _leadArmExc(row);
+        // час уже названий у тексті → не питаємо його вдруге
+        if(_et.time){ row[LB.excursion_time]=_et.time; nextKb=null; } else nextKb=_leadExcTimeKb(leadId); }
     } else if(kind==='exctime'){
       var tm=String(text).match(/(\d{1,2})[:.](\d{2})/); if(tm){ row[LB.excursion_time]=(+tm[1])+':'+tm[2]; row[LB.status]='excursion';
         if(_leadClearCallback(row)) a.push({ts:now,who:who,act:'cb_cleared:exc'});
@@ -1874,31 +1932,52 @@ function tgSlaCheck(){
 // повертає список змін (людською мовою). Порожні поля заповнюємо; наявні НЕ перезаписуємо
 // (крім імені — якщо у відповіді повніше, напр. «Коваленко Софія» замість «Софія»).
 function _enrichFromReply(row, text){
-  var changes=[]; var t=' '+String(text||'')+' ';
-  // 1) дата екскурсії: «екск[урсія] <дд.мм[.рр]>»
-  var em=t.match(/екскурс[а-яіїєґ]*|\bекск\b/i);
-  var dm=t.match(/\b(\d{1,2})[.\/](\d{1,2})(?:[.\/](\d{2,4}))?\b/);
-  if(em && dm){
-    var d=('0'+dm[1]).slice(-2)+'.'+('0'+dm[2]).slice(-2)+(dm[3]?('.'+(dm[3].length===2?'20'+dm[3]:dm[3])):'');
-    if(String(row[LB.excursion_date])!==d){ row[LB.excursion_date]=d; changes.push('екскурсія '+d); }
-    if(['new','called','no_answer',''].indexOf(String(row[LB.status]))>=0){ row[LB.status]='excursion'; changes.push('статус→екскурсія'); }
-    t=t.replace(em[0],' ').replace(dm[0],' ');
+  var changes=[]; var t=' '+String(text||'')+' '; var askExcTime=false;
+
+  // 1) екскурсія. «екск[…]» без \b — кирилична межа слова в JS не працює.
+  //    Час дістаємо ЛИШЕ в цій гілці: інакше «передзвонила о 14:00» втратила б
+  //    час із примітки, бо він пішов би нікуди.
+  var cx=_cutWholeWord(t, /екск[а-яіїєґ]*/i);
+  if(cx.hit){
+    var tm=_extractTime(cx.t); var timeFound=tm.time;
+    var t2 = timeFound ? tm.rest : cx.t;
+    var dm=t2.match(/(\d{1,2})[.\/](\d{1,2})(?:[.\/](\d{2,4}))?/);
+    if(dm){
+      t=t2.replace(dm[0],' ');
+      var d=('0'+dm[1]).slice(-2)+'.'+('0'+dm[2]).slice(-2)+(dm[3]?('.'+(dm[3].length===2?'20'+dm[3]:dm[3])):'');
+      if(String(row[LB.excursion_date])!==d){ row[LB.excursion_date]=d; changes.push('екскурсія '+d); }
+      if(['new','called','no_answer',''].indexOf(String(row[LB.status]))>=0){ row[LB.status]='excursion'; changes.push('статус→екскурсія'); }
+      // взаємовиключність станів (v7.154) має діяти і на шляху реплаю
+      if(_leadClearCallback(row)) changes.push('передзвін скасовано');
+      _leadArmExc(row);
+      if(timeFound){
+        if(String(_fmtTime(row[LB.excursion_time]))!==timeFound){ row[LB.excursion_time]=timeFound; changes.push('час '+timeFound); }
+      } else if(!String(row[LB.excursion_time]||'').trim()){
+        askExcTime=true;                       // часу в тексті немає → спитаємо кнопками
+      }
+    }
+    // слово «екскурсія» без дати лишаємо в тексті: це змістовна примітка
+    // («були на екскурсії, думають»), а не службовий залишок.
   }
-  // 2) вік — reply авторитетний: оновлюємо, якщо явно названо (одиниця рок/рік/міс обов'язкова)
+
+  // 2) вік — reply авторитетний: оновлюємо, якщо явно названо одиницю
   var am=t.match(/(\d{1,2}([.,]\d)?)\s*(рок[а-яіїєґ]*|роч[а-яіїєґ]*|рік[а-яіїєґ]*|год[а-яіїєґ]*|міс[а-яіїєґ]*)/i);
   if(am){ var age=am[0].replace(/\s+/g,' ').trim(); if(String(row[LB.child_age]).trim()!==age){ row[LB.child_age]=age; changes.push('вік '+age);} t=t.replace(am[0],' '); }
+
   // 3) телефон
   var pm=t.match(/(\+?\d[\d\s().\-]{7,}\d)/);
   if(pm){ var ph=_fmtPhone(pm[1]); if(ph.replace(/\D/g,'').length>=9 && !String(row[LB.phone]).trim()){ row[LB.phone]=ph; changes.push('телефон '+ph);} t=t.replace(pm[1],' '); }
+
   // 4) імʼя дитини (1-2 слова з великої літери)
   t=t.replace(/[,;]+/g,' ');
   var nm=t.match(/[А-ЯІЇЄ][а-яіїє'’ʼ\-]{1,}(?:\s+[А-ЯІЇЄ][а-яіїє'’ʼ\-]{1,})?/);
   if(nm){ var name=nm[0].replace(/\s+/g,' ').trim(); var cur=String(row[LB.child]||'').trim();
     if(name.toLowerCase()!==cur.toLowerCase() && (cur==='' || name.split(' ').length>cur.split(' ').length)){
       row[LB.child]=name; changes.push('імʼя '+name);
+      t=t.replace(nm[0],' ');    // v7.155: розпізнане імʼя теж прибираємо із залишку
     }
   }
-  return changes;
+  return {changes:changes, rest:_leadResidual(t), askExcTime:askExcTime};
 }
 // Службова команда /closeold: закриває всі ліди в статусі «новий» (щоб не сипались SLA-
 // нагадування по тестових). Ставить статус 'closed', прибирає кнопки, пише в лог.
@@ -1926,20 +2005,36 @@ function _tgHandleReply(cardMid, text, who, opts){
     var row=v[r];
     var arr=[]; try{arr=JSON.parse(row[LB.log]||'[]');}catch(_){}
     arr.push({ts:now, who:who, text:String(text).slice(0,300)}); row[LB.log]=JSON.stringify(arr);
-    // текст примітки → колонка notes (показується в картці рядком «📝 Примітка: …»)
-    var prev=String(row[LB.notes]||''); row[LB.notes]=(prev?prev+'\n':'')+String(text).slice(0,200);
-    // «інша дата» — ставимо дату екскурсії з голого тексту
-    if(opts.kind==='exc'){ var dm=String(text).match(/(\d{1,2})[.\/](\d{1,2})(?:[.\/](\d{2,4}))?/);
-      if(dm){ row[LB.excursion_date]=('0'+dm[1]).slice(-2)+'.'+('0'+dm[2]).slice(-2)+(dm[3]?('.'+(dm[3].length===2?'20'+dm[3]:dm[3])):'');
-        if(['new','called','no_answer',''].indexOf(String(row[LB.status]))>=0) row[LB.status]='excursion'; } }
-    _enrichFromReply(row, text);   // дата екскурсії/ім'я/вік із тексту (якщо є ключові слова)
+    // v7.155: СПЕРШУ розпізнаємо поля, і лише нерозпізнаний залишок іде в примітку.
+    // Було навпаки — у notes лягав увесь текст, тож «екскурсія 25.08» одночасно
+    // оновлювала дату і дублювалась рядком «📝 Примітка: екскурсія 25.08».
+    var askTime=false, rest=String(text);
+    if(opts.kind==='exc'){
+      // після кнопки «✏️ Інша дата» текст буває голим «25.08», без слова «екскурсія»
+      var et=_extractTime(rest); var etime=et.time; if(etime) rest=et.rest;
+      var dmx=rest.match(/(\d{1,2})[.\/](\d{1,2})(?:[.\/](\d{2,4}))?/);
+      if(dmx){
+        rest=rest.replace(dmx[0],' ');
+        row[LB.excursion_date]=('0'+dmx[1]).slice(-2)+'.'+('0'+dmx[2]).slice(-2)+(dmx[3]?('.'+(dmx[3].length===2?'20'+dmx[3]:dmx[3])):'');
+        if(['new','called','no_answer',''].indexOf(String(row[LB.status]))>=0) row[LB.status]='excursion';
+        _leadClearCallback(row); _leadArmExc(row);
+        if(etime) row[LB.excursion_time]=etime;
+        else if(!String(row[LB.excursion_time]||'').trim()) askTime=true;
+      }
+    }
+    var enr=_enrichFromReply(row, rest);
+    if(enr.askExcTime) askTime=true;
+    var restFinal=_leadResidual(enr.rest);
+    if(restFinal){ var prevN=String(row[LB.notes]||''); row[LB.notes]=(prevN?prevN+'\n':'')+restFinal.slice(0,200); }
     if(!String(row[LB.first_reaction_at]).trim()){ row[LB.first_reaction_at]=now;
       if(!String(row[LB.assignee]).trim()) row[LB.assignee]=who;
       var mins=_leadMinutes(row[LB.created_at], now); if(mins!=null) row[LB.sla_ok]=(mins<=15)?'YES':'NO'; }
     row[LB.updated_at]=now;
     sh.getRange(r+1,1,1,row.length).setValues([row]);
     var ld=_leadObj(row), closed=(ld.status==='signed'||ld.status==='refused');
-    _tgApi('editMessageText',{chat_id:ld.chat_id, message_id:ld.tg_message_id, text:_leadCardText(ld), parse_mode:'HTML', reply_markup: closed?{inline_keyboard:[]}:_leadKb(ld.lead_id)});
+    // дата є, часу немає → одразу показуємо клавіатуру годин, як з меню
+    _tgApi('editMessageText',{chat_id:ld.chat_id, message_id:ld.tg_message_id, text:_leadCardText(ld), parse_mode:'HTML',
+      reply_markup: closed ? {inline_keyboard:[]} : (askTime ? _leadExcTimeKb(ld.lead_id) : _leadKb(ld.lead_id))});
     if(opts.promptMid){ try{ _tgApi('deleteMessage',{chat_id:ld.chat_id, message_id:opts.promptMid}); }catch(_){} }  // прибрати запрошення
     return true;
   }
@@ -2001,7 +2096,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.154', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.155', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
