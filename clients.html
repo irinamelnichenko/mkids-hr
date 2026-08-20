@@ -1161,33 +1161,63 @@ var _cardIdxCache=null, _cardIdxKeyN=-1;
 function _cardNameIndex(){
   var n=Object.keys(S.crm||{}).length;
   if(_cardIdxCache && _cardIdxKeyN===n) return _cardIdxCache;
-  var idx={};
+  var idx={byLoc:{}, byName:{}};
   Object.keys(S.crm||{}).forEach(function(id){
-    var c=S.crm[id]; if(!c||!c.loc) return;
-    var l=String(c.loc).trim().toLowerCase();
+    var c=S.crm[id]; if(!c) return;
     var nm=String(c.name||'').trim().toLowerCase().replace(/\s+/g,' ');
     if(!nm) return;
-    (idx[l]=idx[l]||[]).push({n:nm,id:id});
+    // v7.162: картки БЕЗ локації тепер ТЕЖ в індексі (ключ ''). Раніше вони
+    // відсіювались (`if(!c||!c.loc) return;`), тож дитина без локації ніколи не
+    // знаходилась і щоразу отримувала обчислену id — джерело сиріт у Табелі.
+    var l=String(c.loc||'').trim().toLowerCase();
+    (idx.byLoc[l]=idx.byLoc[l]||[]).push({n:nm,id:id});
+    (idx.byName[nm]=idx.byName[nm]||[]).push(id);
   });
   _cardIdxCache=idx; _cardIdxKeyN=n;
   return idx;
 }
+// v7.162: ЗБЕРЕЖЕНА id картки має пріоритет над обчисленою. Обчислення лишається
+// крайнім засобом, бо будь-яка розбіжність (хвостовий пробіл від loc.slice(0,12),
+// виправлена описка в ПІБ, суфікс-дата в id) давала id, якої немає в Клієнтах.
+function _uniqSorted(arr){
+  var m={}; arr.forEach(function(x){ m[x]=1; });
+  return Object.keys(m).sort();          // sort → вибір стабільний між перезавантаженнями
+}
 function resolveCardId(name, loc){
-  var base=childId(name,loc);
-  if(S.crm && S.crm[base]) return base;                 // exact — картка вже є (не міняється)
   var n=String(name||'').trim().toLowerCase().replace(/\s+/g,' ');
-  if(!n) return base;
   var l=String(loc||'').trim().toLowerCase();
-  var list=(_cardNameIndex()[l])||[];
-  var hit=null, cnt=0;
+  // v7.162: було childId(name,loc) — loc потрапляв у параметр group, третій
+  // аргумент лишався undefined, і формула давала 'c_ПІБ_' без локації.
+  var base=childId(name,'',loc);
+  if(!n) return base;
+  var idx=_cardNameIndex();
+
+  // 1) точний ПІБ у цій локації
+  var list=(idx.byLoc[l])||[], exact=[], pref=[];
   for(var i=0;i<list.length;i++){
     var cn=list[i].n;
-    if(cn===n || cn.indexOf(n+' ')===0 || n.indexOf(cn+' ')===0){  // word-boundary префікс, обидва боки
-      cnt++; hit=list[i].id;
-      if(cnt>1) return base;                              // >1 однофамілець → неоднозначно → fallback
-    }
+    if(cn===n) exact.push(list[i].id);
+    else if(cn.indexOf(n+' ')===0 || n.indexOf(cn+' ')===0) pref.push(list[i].id);
   }
-  return cnt===1 ? hit : base;
+  var ex=_uniqSorted(exact);
+  if(ex.length===1) return ex[0];
+  if(ex.length>1)   return base;         // різні id на однаковий ПІБ → не склеюємо навмання
+  var pr=_uniqSorted(pref);
+  if(pr.length===1) return pr[0];
+  if(pr.length>1)   return base;          // однофамільці
+
+  // 2) картки без локації
+  var noloc=(idx.byLoc[''])||[], nl=[];
+  for(var j=0;j<noloc.length;j++) if(noloc[j].n===n) nl.push(noloc[j].id);
+  nl=_uniqSorted(nl);
+  if(nl.length===1) return nl[0];
+
+  // 3) унікальний ПІБ по ВСІХ локаціях — рятує розбіжність написання локації
+  //    та переїзд дитини між локаціями (картка одна, локація в ній інша).
+  var g=_uniqSorted(idx.byName[n]||[]);
+  if(g.length===1) return g[0];
+
+  return base;
 }
 
 // ── v7.76: ВІДПУСТКА — за КАЛЕНДАРНИМИ ТИЖНЯМИ + ліміт 4 тижні/договірний рік ──

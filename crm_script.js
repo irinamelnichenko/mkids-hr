@@ -2951,7 +2951,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.161', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.162', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -5126,10 +5126,31 @@ function saveAttendance(body) {
   var now  = formatDate(new Date());
   var saved = 0;
 
+  // v7.162: childId приймався БЕЗ жодної перевірки, тож биті id з фронту тихо
+  // осідали в Табелі — 947 сиріт накопичилось за три місяці, поки ніхто не бачив.
+  // Відмітку все одно зберігаємо (дані дорожчі), але сигнал має бути гучним.
+  var knownIds = {};
+  try {
+    var csh = ss.getSheetByName(SHEET_CLIENTS);
+    if (csh && csh.getLastRow() > 1){
+      var ch = csh.getRange(1,1,1,csh.getLastColumn()).getValues()[0].map(function(x){ return String(x).trim(); });
+      var ci = ch.indexOf('ID');
+      if (ci >= 0){
+        var col = csh.getRange(2, ci+1, csh.getLastRow()-1, 1).getValues();
+        for (var q = 0; q < col.length; q++){
+          var kid = trim(String(col[q][0] || ''));
+          if (kid) knownIds[kid] = true;
+        }
+      }
+    }
+  } catch(_ke){ knownIds = null; }   // не змогли прочитати — не блокуємо збереження
+  var unknown = [];
+
   records.forEach(function(rec) {
     var date    = _attDateIso(rec.date, tz);              // нормалізуємо вхідну дату
     var childId = trim(String(rec.childId || ''));
     if (!date || !childId) return;
+    if (knownIds && !knownIds[childId]) unknown.push(childId + ' · ' + (rec.childName||'—') + ' · ' + (rec.loc||'—') + ' · ' + date);
     var row = [date, childId, rec.childName||'', rec.loc||'', rec.group||'', rec.status||'', rec.updatedBy||'', now];
     // Оновлюємо ОСТАННІЙ існуючий рядок (read бере last) — матчинг через
     // нормалізовану дату, тож більше НЕ створюємо дублі.
@@ -5147,6 +5168,13 @@ function saveAttendance(body) {
     saved++;
     mirrorAttendanceToNurseSheet(rec.loc||'', rec.childName||'', date, rec.status||'');
   });
+
+  if (unknown.length){
+    _tgErr('attendance-orphan',
+      'Відміток на неіснуючі ID: ' + unknown.length + ' з ' + records.length +
+      ' (від ' + (records[0] && records[0].updatedBy || '—') + ')\n' +
+      unknown.slice(0, 20).join('\n') + (unknown.length > 20 ? '\n…ще ' + (unknown.length - 20) : ''));
+  }
 
   // v7.49: інвалідуємо getAttendance-кеш для зачеплених локацій (bump версії) —
   // щоб нові мітки одразу читались іншими девайсами (не чекали 3хв TTL).
