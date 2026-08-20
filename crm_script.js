@@ -1575,6 +1575,33 @@ function _tgCreateLead(parsed, who){
   sh.appendRow(row);
   return {ok:true, id:id, mid:mid, sendOk:!!(sent&&sent.ok)};
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.154 ВЗАЄМОВИКЛЮЧНІ СТАНИ ліда.
+// Було: призначення екскурсії не чіпало дату передзвону, тож у картці могло
+// стояти водночас «Екскурсія: 20.08 о 10:00» і «Передзвонити: 20.08 о 9:00».
+// Правило: екскурсія/договір скасовують передзвін; відмова скасовує і передзвін,
+// і нагадування про екскурсію.
+//
+// «Скасувати нагадування» = виставити його прапорець як уже відпрацьований:
+// планувальник (tgSlaCheck) шле лише те, для чого прапорця ще немає.
+// Дзеркальна дія — arm: ПРИБРАТИ прапорець при призначенні НОВОЇ дати, інакше
+// нагадування по новій даті так і не спрацювало б.
+// ═══════════════════════════════════════════════════════════════════════════
+function _remGet(row){ var r={}; try{ r=JSON.parse(row[LB.reminders]||'{}'); }catch(_e){} return r; }
+function _remSet(row, r){ row[LB.reminders]=JSON.stringify(r); }
+function _leadCancelCb(row){  var r=_remGet(row); r.cb=1; _remSet(row,r); }
+function _leadArmCb(row){     var r=_remGet(row); delete r.cb; _remSet(row,r); }
+function _leadCancelExc(row){ var r=_remGet(row); r.exEve=1; r.ex2h=1; r.exAfter=1; _remSet(row,r); }
+function _leadArmExc(row){    var r=_remGet(row); delete r.exEve; delete r.ex2h; delete r.exAfter; _remSet(row,r); }
+// Чистить дату/час передзвону і знімає його нагадування. true — якщо було що чистити.
+function _leadClearCallback(row){
+  var had = !!(String(row[LB.callback_date]||'').trim() || String(row[LB.callback_time]||'').trim());
+  row[LB.callback_date]=''; row[LB.callback_time]='';
+  _leadCancelCb(row);
+  return had;
+}
+
 function _tgUpdateLead(id, act, who){
   var sh=_leadsBotSheet(); var v=sh.getDataRange().getValues();
   for(var r=1;r<v.length;r++){
@@ -1598,14 +1625,32 @@ function _tgUpdateLead(id, act, who){
     if(act==='take'){ row[LB.status]='in_progress'; row[LB.assignee]=who; toast='Взяли в роботу'; addlog('take'); }
     else if(act==='call_ok'){ row[LB.status]='called'; if(!row[LB.assignee])row[LB.assignee]=who; toast='Додзвонились'; addlog('call_ok'); }
     else if(act==='call_no'){ row[LB.status]='no_answer'; if(!row[LB.assignee])row[LB.assignee]=who; row[LB.call_attempts]=0; row[LB.last_noanswer_at]=now; toast='Не відповів'; addlog('call_no'); }
-    else if(isExd){ var xd=act.slice(4); row[LB.excursion_date]=xd; row[LB.status]='excursion'; if(!row[LB.assignee])row[LB.assignee]=who; toast='Екскурсія '+xd; addlog('exc:'+xd); }
-    else if(act.indexOf('ext:')===0){ var xt=act.slice(4); row[LB.excursion_time]=xt; row[LB.status]='excursion'; if(!row[LB.assignee])row[LB.assignee]=who; toast='Екскурсія о '+xt; addlog('exctime:'+xt); }
-    else if(isCbd){ var cd=act.slice(4); row[LB.callback_date]=cd; row[LB.status]='callback_later'; if(!row[LB.assignee])row[LB.assignee]=who; toast='Передзвонити '+cd; addlog('callback:'+cd); }
-    else if(isCbt){ var ct=act.slice(4); row[LB.callback_time]=ct; row[LB.status]='callback_later'; if(!row[LB.assignee])row[LB.assignee]=who; toast='Передзвонити о '+ct; addlog('cbtime:'+ct); }
-    else if(act==='exc'){ row[LB.status]='excursion'; if(!row[LB.assignee])row[LB.assignee]=who; toast='Записано на екскурсію'; addlog('exc'); }
-    else if(act==='sign'){ row[LB.status]='signed'; if(!row[LB.assignee])row[LB.assignee]=who; toast='Договір 🎉'; addlog('sign'); }
+    else if(isExd){ var xd=act.slice(4); row[LB.excursion_date]=xd; row[LB.status]='excursion'; if(!row[LB.assignee])row[LB.assignee]=who;
+      if(_leadClearCallback(row)) addlog('cb_cleared:exc');
+      _leadArmExc(row);                                   // нова дата → нагадування переозброїти
+      toast='Екскурсія '+xd; addlog('exc:'+xd); }
+    else if(act.indexOf('ext:')===0){ var xt=act.slice(4); row[LB.excursion_time]=xt; row[LB.status]='excursion'; if(!row[LB.assignee])row[LB.assignee]=who;
+      if(_leadClearCallback(row)) addlog('cb_cleared:exc');
+      _leadArmExc(row);                                   // час змінився → «за 2 год» рахувати наново
+      toast='Екскурсія о '+xt; addlog('exctime:'+xt); }
+    else if(isCbd){ var cd=act.slice(4); row[LB.callback_date]=cd; row[LB.status]='callback_later'; if(!row[LB.assignee])row[LB.assignee]=who;
+      _leadArmCb(row);                                    // нова дата → нагадування переозброїти
+      toast='Передзвонити '+cd; addlog('callback:'+cd); }
+    else if(isCbt){ var ct=act.slice(4); row[LB.callback_time]=ct; row[LB.status]='callback_later'; if(!row[LB.assignee])row[LB.assignee]=who;
+      _leadArmCb(row);
+      toast='Передзвонити о '+ct; addlog('cbtime:'+ct); }
+    else if(act==='exc'){ row[LB.status]='excursion'; if(!row[LB.assignee])row[LB.assignee]=who;
+      if(_leadClearCallback(row)) addlog('cb_cleared:exc');
+      toast='Записано на екскурсію'; addlog('exc'); }
+    else if(act==='sign'){ row[LB.status]='signed'; if(!row[LB.assignee])row[LB.assignee]=who;
+      if(_leadClearCallback(row)) addlog('cb_cleared:sign');
+      toast='Договір 🎉'; addlog('sign'); }
     else if(isRef){ var code=act.slice(2); var full=(LEAD_REFUSE.filter(function(x){return x[0]===code;})[0]||[])[2]||code;
-      row[LB.status]='refused'; row[LB.refusal_reason]=full; if(!row[LB.assignee])row[LB.assignee]=who; toast='Відмова: '+full; addlog('refuse:'+full); }
+      row[LB.status]='refused'; row[LB.refusal_reason]=full; if(!row[LB.assignee])row[LB.assignee]=who;
+      if(_leadClearCallback(row)) addlog('cb_cleared:refuse');
+      _leadCancelExc(row);                                  // саму дату екскурсії лишаємо — це факт історії
+      addlog('exc_rem_cancelled:refuse');
+      toast='Відмова: '+full; addlog('refuse:'+full); }
     else if(act==='refuse'||act==='back'){ /* лише зміна клавіатури */ }
     row[LB.updated_at]=now;
     sh.getRange(r+1,1,1,row.length).setValues([row]);
@@ -1613,6 +1658,45 @@ function _tgUpdateLead(id, act, who){
   }
   return null;
 }
+
+// Разовий ремонт уже зіпсованих карток: правило працює лише на НОВІ дії, тож
+// ліди, у яких конфлікт стоїть просто зараз, треба почистити окремо.
+// REPAIR_LEAD_CONFLICTS() — показує; ..._APPLY() — чистить і перемальовує картки.
+function REPAIR_LEAD_CONFLICTS(){ _repairLeadConflicts(true); }
+function REPAIR_LEAD_CONFLICTS_APPLY(){ _repairLeadConflicts(false); }
+
+function _repairLeadConflicts(dryRun){
+  var sh=_leadsBotSheet(); var v=sh.getDataRange().getValues(); var now=formatDate(new Date());
+  var out=['REPAIR_LEAD_CONFLICTS — '+(dryRun?'DRY RUN':'*** APPLY ***')], fixed=0;
+  var KILL={excursion:1, signed:1, refused:1};
+  for(var r=1;r<v.length;r++){
+    var row=v[r]; if(!String(row[LB.lead_id]||'').trim()) continue;
+    var st=String(row[LB.status]||'').trim();
+    var cbd=String(row[LB.callback_date]||'').trim(), cbt=String(row[LB.callback_time]||'').trim();
+    if(!KILL[st] || (!cbd && !cbt)) continue;
+    fixed++;
+    out.push('  '+_pad2(String(row[LB.lead_id]),14)+' статус='+_pad2(st,12)+
+             ' екск='+_pad2(String(row[LB.excursion_date]||'—'),8)+' передзвін='+cbd+(cbt?(' о '+cbt):''));
+    if(dryRun) continue;
+    _leadClearCallback(row);
+    if(st==='refused') _leadCancelExc(row);
+    var a=[]; try{a=JSON.parse(row[LB.log]||'[]');}catch(_e){}
+    a.push({ts:now,who:'system',act:'cb_cleared:repair'}); row[LB.log]=JSON.stringify(a);
+    row[LB.updated_at]=now;
+    sh.getRange(r+1,1,1,row.length).setValues([row]);
+    try{
+      var ld=_leadObj(row), closed=(st==='signed'||st==='refused');
+      _tgApi('editMessageText',{chat_id:ld.chat_id, message_id:ld.tg_message_id,
+        text:_leadCardText(ld), parse_mode:'HTML',
+        reply_markup: closed?{inline_keyboard:[]}:_leadKb(ld.lead_id)});
+    }catch(_e2){}
+  }
+  out.push('');
+  out.push('Карток з конфліктом: '+fixed+(dryRun?' — нічого не змінено. Далі: REPAIR_LEAD_CONFLICTS_APPLY()':' — почищено, картки перемальовано.'));
+  Logger.log(out.join('\n'));
+}
+function _pad2(s,n){ s=String(s); while(s.length<n) s+=' '; return s; }
+
 function _tgHandleCallback(cq){
   try{
     var parts=String(cq.data||'').split('|');
@@ -1692,15 +1776,24 @@ function _tgHandlePending(leadId, kind, text, who, promptMid, userMsgId){
     if(kind==='note'){
       var prev=String(row[LB.notes]||''); row[LB.notes]=(prev?prev+'\n':'')+String(text).slice(0,200);
       _enrichFromReply(row, text);
+    // v7.154: ручний ввід «✏️ Інша» йде ПОВЗ _tgUpdateLead, тому взаємовиключність
+    // станів треба тримати і тут — інакше дірка лишилася б саме в цьому шляху.
     } else if(kind==='excdate'){
-      var dm=String(text).match(/(\d{1,2})[.\/](\d{1,2})/); if(dm){ row[LB.excursion_date]=('0'+dm[1]).slice(-2)+'.'+('0'+dm[2]).slice(-2); row[LB.status]='excursion'; nextKb=_leadExcTimeKb(leadId); }
+      var dm=String(text).match(/(\d{1,2})[.\/](\d{1,2})/); if(dm){ row[LB.excursion_date]=('0'+dm[1]).slice(-2)+'.'+('0'+dm[2]).slice(-2); row[LB.status]='excursion';
+        if(_leadClearCallback(row)) a.push({ts:now,who:who,act:'cb_cleared:exc'});
+        _leadArmExc(row); nextKb=_leadExcTimeKb(leadId); }
     } else if(kind==='exctime'){
-      var tm=String(text).match(/(\d{1,2})[:.](\d{2})/); if(tm){ row[LB.excursion_time]=(+tm[1])+':'+tm[2]; row[LB.status]='excursion'; }
+      var tm=String(text).match(/(\d{1,2})[:.](\d{2})/); if(tm){ row[LB.excursion_time]=(+tm[1])+':'+tm[2]; row[LB.status]='excursion';
+        if(_leadClearCallback(row)) a.push({ts:now,who:who,act:'cb_cleared:exc'});
+        _leadArmExc(row); }
     } else if(kind==='cbdate'){
-      var cm=String(text).match(/(\d{1,2})[.\/](\d{1,2})/); if(cm){ row[LB.callback_date]=('0'+cm[1]).slice(-2)+'.'+('0'+cm[2]).slice(-2); row[LB.status]='callback_later'; nextKb=_leadCbTimeKb(leadId); }
+      var cm=String(text).match(/(\d{1,2})[.\/](\d{1,2})/); if(cm){ row[LB.callback_date]=('0'+cm[1]).slice(-2)+'.'+('0'+cm[2]).slice(-2); row[LB.status]='callback_later';
+        _leadArmCb(row); nextKb=_leadCbTimeKb(leadId); }
     } else if(kind==='cbtime'){
-      var ct2=String(text).match(/(\d{1,2})[:.](\d{2})/); if(ct2){ row[LB.callback_time]=(+ct2[1])+':'+ct2[2]; row[LB.status]='callback_later'; }
+      var ct2=String(text).match(/(\d{1,2})[:.](\d{2})/); if(ct2){ row[LB.callback_time]=(+ct2[1])+':'+ct2[2]; row[LB.status]='callback_later';
+        _leadArmCb(row); }
     }
+    row[LB.log]=JSON.stringify(a);   // гілки вище могли дописати в журнал — пересеріалізуємо
     if(!String(row[LB.first_reaction_at]).trim()){ row[LB.first_reaction_at]=now; if(!String(row[LB.assignee]).trim()) row[LB.assignee]=who;
       var mins=_leadMinutes(row[LB.created_at], now); if(mins!=null) row[LB.sla_ok]=(mins<=15)?'YES':'NO'; }
     row[LB.updated_at]=now; sh.getRange(r+1,1,1,row.length).setValues([row]);
@@ -1908,7 +2001,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.153', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.154', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
