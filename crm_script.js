@@ -2828,7 +2828,7 @@ function _createMissingCards(dryRun){
     var last=all[all.length-1];
     var nm=last.nm, lc=last.lc, gr=last.gr;
     if(!nm||!lc){ skip.push({ids:ids, why:'у відмітках порожнє ПІБ або локація'}); return; }
-    var newId=_mkChildId(nm, lc);
+    var newId=_genChildCardId(nm, lc);   // v7.166: у бекенді генератор називається так (_mkChildId — фронтова назва)
     var exists=haveNameLoc[_rmNorm(nm)+'||'+_rmNorm(lc)];
     if(exists){ skip.push({ids:ids, why:'картка вже існує: '+exists}); return; }
     if(haveId[newId]){ skip.push({ids:ids, why:'ID вже зайнято: '+newId}); return; }
@@ -3624,7 +3624,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.166', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.167', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
