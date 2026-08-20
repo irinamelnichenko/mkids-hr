@@ -819,7 +819,11 @@ function _leadsFromBot(){
       comment: String(row[LB.comment] || ''),
       cbToday: (cbd === today), excTomorrow: (exd === tomorrow),
       didCall: didCall, didExc: didExc, didSign: didSign, didRefuse: didRefuse,
-      lifeDays: life, excDays: null
+      lifeDays: life, excDays: null,
+      campaign: String(row[LB['кампанія']] || '').trim(),      // v7.169
+      clientId: String(row[LB.client_id] || '').trim(),
+      signTs:  firstTs('sign'),
+      contractSum: 0, monthsStay: null
     });
   }
   return out;
@@ -867,6 +871,29 @@ function _leadsFromHistory(){
   return out;
 }
 
+// v7.169: картка дитини як джерело грошей і тривалості. Ключ — lead.client_id,
+// проставлений при натисканні «Договір» (або при створенні картки постфактум).
+function _leadClientIndex(){
+  var idx={};
+  try{
+    var ss=getCRMSpreadsheet(), sh=ss.getSheetByName(SHEET_CLIENTS);
+    if(!sh || sh.getLastRow()<2) return idx;
+    var v=sh.getDataRange().getValues();
+    var h=v[0].map(function(x){ return String(x).trim(); });
+    var iId=h.indexOf('ID'), iSum=h.indexOf('Сума договору'),
+        iOpen=h.indexOf('Дата договору'), iEnd=h.indexOf('Дата розірвання'), iSt=h.indexOf('Статус');
+    if(iId<0) return idx;
+    for(var r=1;r<v.length;r++){
+      var id=String(v[r][iId]||'').trim(); if(!id) continue;
+      idx[id]={ sum:Number(iSum>=0?v[r][iSum]:0)||0,
+                open:_leadDayKey(iOpen>=0?v[r][iOpen]:''),
+                end:_leadDayKey(iEnd>=0?v[r][iEnd]:''),
+                status:String(iSt>=0?v[r][iSt]:'').trim() };
+    }
+  }catch(_e){}
+  return idx;
+}
+
 function getLeads(p){
   p = p || {};
   var role  = String(p.role || '').toLowerCase().trim();
@@ -903,13 +930,29 @@ function getLeads(p){
     rows.push(r);
   }
 
+  // v7.169: підтягуємо гроші й тривалість із картки дитини
+  var cidx=_leadClientIndex();
+  var todayKey=_leadDayKey(Utilities.formatDate(new Date(),'Europe/Kiev','dd.MM.yyyy')+' 00:00');
+  rows.forEach(function(r){
+    var c=r.clientId ? cidx[r.clientId] : null;
+    if(!c) return;
+    r.contractSum=c.sum||0;
+    var A=_leadDayMs(c.open), B=_leadDayMs(c.end||todayKey);
+    if(A!=null && B!=null && B>=A) r.monthsStay=Math.round((B-A)/86400000/30.44*10)/10;
+    if(!r.lifeDays && c.open){
+      var S=_leadDayMs(r.day), E=_leadDayMs(c.open);
+      if(S!=null && E!=null && E>=S) r.lifeDays=Math.round((E-S)/86400000);
+    }
+  });
+
   // ── агрегати по ВСІЙ вибірці ──
   function bump(o, k){ if (!o[k]) o[k] = {n:0, call:0, exc:0, sign:0, ref:0}; return o[k]; }
   var A = {
     total:0, call:0, exc:0, sign:0, ref:0,
     byMonth:{}, bySource:{}, byLoc:{}, bySourceMonth:{}, refusals:{}, directors:{},
     reactN:0, reactSum:0, react15:0, reactNone:0,
-    lifeN:0, lifeSum:0, excN:0, excSum:0
+    lifeN:0, lifeSum:0, excN:0, excSum:0,
+    revenueBySource:{}, linkedSigned:0, staySum:0, stayN:0, campaigns:{}   // v7.169
   };
   rows.forEach(function(r){
     A.total++;
@@ -949,14 +992,29 @@ function getLeads(p){
     }
     if (r.lifeDays !== null && r.lifeDays !== undefined){ A.lifeN++; A.lifeSum += r.lifeDays; }
     if (r.excDays  !== null && r.excDays  !== undefined){ A.excN++;  A.excSum  += r.excDays; }
+    // v7.169
+    if (r.contractSum){ A.revenueBySource[sk]=(A.revenueBySource[sk]||0)+r.contractSum; }
+    if (r.didSign && r.clientId) A.linkedSigned++;
+    if (r.monthsStay !== null && r.monthsStay !== undefined){ A.stayN++; A.staySum += r.monthsStay; }
+    if (r.campaign){
+      var ck=r.campaign;
+      var cg=A.campaigns[ck] || (A.campaigns[ck]={n:0, sign:0, sum:0});
+      cg.n++; if(r.didSign) cg.sign++; cg.sum += (r.contractSum||0);
+    }
   });
 
   // таблиця — лише свіжий зріз; про обрізання повідомляємо явно, без тихого приховування
   rows.sort(function(a,b){ return String(b.day||'').localeCompare(String(a.day||'')); });
   var shown = rows.slice(0, LEADS_ROWS_CAP);
 
+  // v7.169: витрати тягнемо тим самим запитом — інакше фронт мав би два
+  // незалежні періоди, і вартість ліда рахувалась би не по тій вибірці.
+  var spend=null;
+  try{ spend=getAdSpend({from:p.from, to:p.to, loc:(seeAll?String(p.filterLoc||'').trim():myLoc)}); }
+  catch(_sp){ spend={ok:false, error:String(_sp&&_sp.message||_sp)}; }
+
   function keys(o){ var a=[]; for (var k in o) a.push(k); return a.sort(); }
-  return {ok:true, rows:shown, rowsTotal:rows.length, rowsShown:shown.length, cap:LEADS_ROWS_CAP,
+  return {ok:true, rows:shown, rowsTotal:rows.length, rowsShown:shown.length, cap:LEADS_ROWS_CAP, spend:spend,
           agg:A, locations:keys(locSet), sources:LEAD_SRC_ALL,
           statusLabels:LEAD_STATUS_LABEL, today:_tgDayObj(0).dm, tomorrow:_tgDayObj(1).dm,
           role:role, seeAll:seeAll, myLoc:myLoc, include:include};
@@ -1479,7 +1537,8 @@ function webLeadIntake(e){
       parent:  String(body.parent  || '').trim().slice(0,80),
       child:   String(body.child   || '').trim().slice(0,80),
       age:     String(body.age     || '').trim().slice(0,20),
-      comment: String(body.comment || '').trim().slice(0,300)
+      comment: String(body.comment || '').trim().slice(0,300),
+      campaign: String(body.campaign || body.utm_campaign || '').trim().slice(0,120)   // v7.169 utm
     };
     var res = _tgCreateLead(parsed, 'сайт');
     return {ok:true, id: res && res.id};
@@ -1580,7 +1639,8 @@ var LEADS_BOT_SHEET = 'Ліди_Бот';
 var LEADS_BOT_HEADER = ['lead_id','created_at','source','локація','phone','parent','child',
   'child_age','comment','tg_chat_id','tg_message_id','status','assignee','first_reaction_at',
   'sla_ok','refusal_reason','reminders','log','client_id','updated_at','excursion_date',
-  'notes','call_attempts','last_noanswer_at','excursion_time','callback_date','callback_time'];
+  'notes','call_attempts','last_noanswer_at','excursion_time','callback_date','callback_time',
+  'кампанія'];   // v7.169: append-only, індекси наявних колонок не зсуваються
 // Лист прив'язки директорів до локацій: локація · username · user_id · ПІБ. Рядок '*' = усі локації.
 var TG_DIRECTORS_SHEET = 'ТГ_Директори';
 var TG_DIR_HEADER = ['локація','username','user_id','ПІБ'];
@@ -1982,7 +2042,13 @@ function _leadResidual(t){
 
 function _parseLead(text){
   var t = String(text||'').replace(/^\/(newlead|lead)\b\s*/i,'').trim();
-  var res = {phone:'', loc:'', source:'', parent:'', child:'', age:'', comment:''};
+  var res = {phone:'', loc:'', source:'', parent:'', child:'', age:'', comment:'', campaign:''};
+  // v7.169: «кампанія: знижка вересень» — мітку і значення вирізаємо разом,
+  // до коми або кінця рядка, щоб хвіст не осів у коментарі.
+  // БЕЗ \b: у JS межа слова спирається на \w=[A-Za-z0-9_], тож перед кирилицею
+  // вона не спрацьовує — та сама пастка, що з «екск»/«інст» у v7.155.
+  var km = t.match(/(кампан[іи][яії]|campaign|utm_campaign)\s*[:\-—]\s*([^,;\n]{1,120})/i);
+  if(km){ res.campaign = km[2].trim(); t = t.replace(km[0], ' '); }
   var pm = t.match(/(\+?\d[\d\s().\-]{7,}\d)/);
   if(pm){ var ph=_fmtPhone(pm[1]); if(ph.replace(/\D/g,'').length>=9){ res.phone=ph; t=t.replace(pm[1],' '); } }
   try{ (getLocations().data||[]).forEach(function(l){ var nm=String(l.loc||'').trim();
@@ -2017,6 +2083,7 @@ function _leadCardText(ld){
   if(ld.parent) lines.push('👤 '+_htmlEsc(ld.parent));
   if(ld.phone) lines.push('📞 '+_htmlEsc(ld.phone));
   if(ld.source) lines.push('🔗 '+_htmlEsc(ld.source));
+  if(ld.campaign) lines.push('🏷 '+_htmlEsc(ld.campaign));   // v7.169
   if(ld.excursion_date) lines.push('🗓 Екскурсія: '+_htmlEsc(ld.excursion_date)+(ld.excursion_time?(' о '+_htmlEsc(ld.excursion_time)):''));
   if(ld.callback_date) lines.push('⏳ Передзвонити: '+_htmlEsc(ld.callback_date)+(ld.callback_time?(' о '+_htmlEsc(ld.callback_time)):''));
   if(ld.comment) lines.push('💬 '+_htmlEsc(ld.comment));
@@ -2044,7 +2111,8 @@ function _leadKb(id, mode){
     [{text:'🚫 Відмова', callback_data:'L|'+id+'|refuse'}, {text:'📝 Примітка', callback_data:'L|'+id+'|note'}],
     // v7.157: перше натискання будь-якої кнопки призначає відповідальну (v7.156),
     // тому потрібен явний спосіб передати лід — натискає той, ХТО ЗАБИРАЄ.
-    [{text:'🔄 Передати мені', callback_data:'L|'+id+'|reassign'}]
+    [{text:'🏷 Кампанія', callback_data:'L|'+id+'|campaign'},
+     {text:'🔄 Передати мені', callback_data:'L|'+id+'|reassign'}]
   ]};
 }
 function _tgDayDM(i){ return Utilities.formatDate(new Date(new Date().getTime()+i*86400000),'Europe/Kiev','dd.MM'); }
@@ -2112,6 +2180,7 @@ function _tgEditKb(id, kb){
 function _leadObj(row){
   return {lead_id:row[LB.lead_id], created_at:row[LB.created_at], source:row[LB.source], loc:row[LB['локація']],
     phone:_fmtPhone(row[LB.phone]), parent:row[LB.parent], child:row[LB.child], age:row[LB.child_age], comment:row[LB.comment],
+    campaign:row[LB['кампанія']], client_id:row[LB.client_id],   // v7.169
     chat_id:row[LB.tg_chat_id], tg_message_id:row[LB.tg_message_id], status:row[LB.status], assignee:row[LB.assignee],
     excursion_date:row[LB.excursion_date], excursion_time:_fmtTime(row[LB.excursion_time]),
     callback_date:row[LB.callback_date], callback_time:_fmtTime(row[LB.callback_time]), notes:row[LB.notes]};
@@ -2372,6 +2441,7 @@ function _tgCreateLead(parsed, who){
   var now = formatDate(new Date());
   var chat = _leadsChatId();
   var ld = {lead_id:id, created_at:now, source:parsed.source, loc:parsed.loc, phone:parsed.phone,
+    campaign:parsed.campaign||'',
     parent:parsed.parent||'', child:parsed.child, age:parsed.age, comment:parsed.comment,
     chat_id:chat, status:'new', assignee:''};
   var sent = _tgSend(chat, _leadCardText(ld), {reply_markup:_leadKb(id)});
@@ -2381,6 +2451,7 @@ function _tgCreateLead(parsed, who){
   row[LB.lead_id]=id; row[LB.created_at]=now; row[LB.source]=parsed.source; row[LB['локація']]=parsed.loc;
   row[LB.phone]=parsed.phone; row[LB.parent]=parsed.parent||''; row[LB.child]=parsed.child; row[LB.child_age]=parsed.age;
   row[LB.comment]=parsed.comment; row[LB.tg_chat_id]=chat; row[LB.tg_message_id]=mid; row[LB.status]='new';
+  row[LB['кампанія']]=parsed.campaign||'';   // v7.169
   row[LB.reminders]=JSON.stringify({}); row[LB.log]=JSON.stringify(log); row[LB.updated_at]=now;
   sh.appendRow(row);
   _mirrorSafe(row);                                  // v7.159 дзеркало у файл маркетолога
@@ -2463,6 +2534,8 @@ function _tgUpdateLead(id, act, who){
     }
     else if(act==='sign'){ row[LB.status]='signed'; if(!row[LB.assignee])row[LB.assignee]=who;
       if(_leadClearCallback(row)) addlog('cb_cleared:sign');
+      var _cid=_linkLeadToCard(row);            // v7.169
+      if(_cid){ row[LB.client_id]=_cid; addlog('linked:'+_cid); }
       toast='Договір 🎉'; addlog('sign'); }
     else if(isRef){ var code=act.slice(2); var full=(LEAD_REFUSE.filter(function(x){return x[0]===code;})[0]||[])[2]||code;
       row[LB.status]='refused'; row[LB.refusal_reason]=full; if(!row[LB.assignee])row[LB.assignee]=who;
@@ -2921,6 +2994,201 @@ function _createMissingCards(dryRun){
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// v7.169 РЕКЛАМНІ ВИТРАТИ. Аркуш у CONFIG-таблиці, заповнюється вручну.
+// Локація «мережа» = витрата на всю мережу, а не на конкретний садок.
+// ═══════════════════════════════════════════════════════════════════════════
+var AD_SPEND_SHEET  = 'Реклама_Витрати';
+var AD_SPEND_HEADER = ['місяць','рік','канал','локація','кампанія','сума','нотатка'];
+var AD_CHANNELS     = ['Instagram','Facebook','Google','SMM','офлайн','інше'];
+var AD_LOC_NETWORK  = 'мережа';
+// Канал реклами → джерело ліда. Без цієї мапи вартість ліда не порахувати:
+// у витратах канали рекламні, у лідів — словник джерел.
+var AD_CHANNEL_TO_SRC = {
+  'instagram':'SMM', 'facebook':'SMM', 'smm':'SMM',
+  'google':'сайт/Google', 'сайт':'сайт/Google',
+  'офлайн':'інше', 'інше':'інше'
+};
+function _adSrcOf(ch){ return AD_CHANNEL_TO_SRC[String(ch||'').trim().toLowerCase()] || 'інше'; }
+
+function SETUP_AD_SPEND_SHEET(){
+  var ss=SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var sh=ss.getSheetByName(AD_SPEND_SHEET), created=false;
+  if(!sh){ sh=ss.insertSheet(AD_SPEND_SHEET); created=true; }
+  _ensureHeaderRow(sh, AD_SPEND_HEADER);
+  // випадайки, щоб канал і локація не роз'їхались написанням
+  try{
+    var chRule=SpreadsheetApp.newDataValidation().requireValueInList(AD_CHANNELS, true).setAllowInvalid(false).build();
+    sh.getRange(2,3,sh.getMaxRows()-1,1).setDataValidation(chRule);
+    var locs=[AD_LOC_NETWORK];
+    try{ (getLocations().data||[]).forEach(function(l){ var n=String(l.loc||'').trim(); if(n) locs.push(n); }); }catch(_e){}
+    var lcRule=SpreadsheetApp.newDataValidation().requireValueInList(locs, true).setAllowInvalid(true).build();
+    sh.getRange(2,4,sh.getMaxRows()-1,1).setDataValidation(lcRule);
+    sh.getRange(2,6,sh.getMaxRows()-1,1).setNumberFormat('#,##0.00');
+  }catch(_v){}
+  SpreadsheetApp.flush();
+  var out=['═══ SETUP_AD_SPEND_SHEET ═══',
+    (created?'Аркуш СТВОРЕНО: ':'Аркуш уже був: ')+AD_SPEND_SHEET+'  (CONFIG-таблиця)',
+    'Колонки: '+AD_SPEND_HEADER.join(' · '),'',
+    'Канал — випадайка: '+AD_CHANNELS.join(' / '),
+    'Локація — випадайка з CONFIG + «'+AD_LOC_NETWORK+'» для мережевих витрат',
+    'Сума — число, формат з двома знаками','',
+    'Приклад рядка:  9 · 2026 · Instagram · мережа · знижка вересень · 12000 · тест',
+    '','Заповнюй вручну; роут getAdSpend читає це на екран лідів.'];
+  Logger.log(out.join('\n'));
+}
+
+// Читання витрат. Фільтри: year, month, loc, channel. Порожній фільтр = усе.
+function getAdSpend(p){
+  p=p||{};
+  var ss=SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var sh=ss.getSheetByName(AD_SPEND_SHEET);
+  if(!sh || sh.getLastRow()<2) return {ok:true, rows:[], byChannel:{}, bySource:{}, total:0, note:'аркуш порожній або відсутній'};
+  var v=sh.getDataRange().getValues();
+  var h=v[0].map(function(x){ return String(x).trim(); });
+  function ix(n){ return h.indexOf(n); }
+  var iM=ix('місяць'), iY=ix('рік'), iC=ix('канал'), iL=ix('локація'), iK=ix('кампанія'), iS=ix('сума'), iN=ix('нотатка');
+  if(iM<0||iY<0||iC<0||iS<0) return {ok:false, error:'У «'+AD_SPEND_SHEET+'» бракує колонок місяць/рік/канал/сума'};
+
+  var fY=String(p.year||'').trim(), fM=String(p.month||'').trim();
+  var fL=String(p.loc||'').trim(),  fC=String(p.channel||'').trim();
+  var from=String(p.from||'').slice(0,7), to=String(p.to||'').slice(0,7);   // 'yyyy-MM'
+
+  var rows=[], byChannel={}, bySource={}, total=0;
+  for(var r=1;r<v.length;r++){
+    var mo=String(v[r][iM]||'').trim(), yr=String(v[r][iY]||'').trim();
+    var ch=String(v[r][iC]||'').trim(), lc=String(iL>=0?v[r][iL]:'').trim();
+    var sum=Number(v[r][iS]||0)||0;
+    if(!ch && !sum) continue;
+    var ym = (yr && mo) ? (yr+'-'+('0'+mo).slice(-2)) : '';
+    if(fY && yr!==fY) continue;
+    if(fM && String(Number(mo))!==String(Number(fM))) continue;
+    if(fL && lc!==fL) continue;
+    if(fC && ch!==fC) continue;
+    if(from && ym && ym<from) continue;
+    if(to   && ym && ym>to)   continue;
+    var src=_adSrcOf(ch);
+    rows.push({month:mo, year:yr, ym:ym, channel:ch, loc:lc, campaign:String(iK>=0?v[r][iK]:'').trim(),
+               sum:sum, note:String(iN>=0?v[r][iN]:'').trim(), source:src});
+    byChannel[ch]=(byChannel[ch]||0)+sum;
+    bySource[src]=(bySource[src]||0)+sum;
+    total+=sum;
+  }
+  return {ok:true, rows:rows, byChannel:byChannel, bySource:bySource, total:total,
+          channels:AD_CHANNELS, network:AD_LOC_NETWORK};
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.169 ЗВ'ЯЗОК ЛІД ↔ КАРТКА ДИТИНИ.
+// Наскрізний шлях лід → договір → скільки заплатив → коли пішов тримається
+// на двох полях: lead_id у картці і client_id у ліді. Пишемо ОБИДВА, щоб
+// зв'язок читався з будь-якого боку без перебору.
+// ═══════════════════════════════════════════════════════════════════════════
+function _clientsSheetAndHeader(){
+  var ss=getCRMSpreadsheet(), sh=ss.getSheetByName(SHEET_CLIENTS);
+  if(!sh) return null;
+  ensureClientsHeader(sh);
+  var h=sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0].map(function(x){ return String(x).trim(); });
+  return {sh:sh, h:h};
+}
+
+// Договір підписано → знайти картку за ПІБ+локація і зшити. Якщо картки ще
+// немає — нічого не робимо: зв'яжемо при її створенні (_linkCardToLead).
+function _linkLeadToCard(leadRow){
+  try{
+    var nm=_rmNorm(leadRow[LB.child]), lc=_rmNorm(leadRow[LB['локація']]);
+    if(!nm) return '';
+    var c=_clientsSheetAndHeader(); if(!c) return '';
+    var iId=c.h.indexOf('ID'), iNm=c.h.indexOf('ПІБ дитини'), iLc=c.h.indexOf('Локація'), iLd=c.h.indexOf('lead_id');
+    if(iId<0||iNm<0||iLd<0) return '';
+    var v=c.sh.getDataRange().getValues(), hit=-1, cnt=0;
+    for(var r=1;r<v.length;r++){
+      if(_rmNorm(v[r][iNm])!==nm) continue;
+      if(lc && iLc>=0 && _rmNorm(v[r][iLc])!==lc) continue;
+      cnt++; hit=r;
+    }
+    if(cnt!==1) return '';                     // 0 або кілька — не гадаємо
+    c.sh.getRange(hit+1, iLd+1).setValue(String(leadRow[LB.lead_id]||''));
+    return String(v[hit][iId]||'');
+  }catch(e){ _tgErr('link-lead-card', e); return ''; }
+}
+
+// Картку щойно створено → чи чекає на неї підписаний лід без client_id.
+function _linkCardToLead(data){
+  try{
+    var nm=_rmNorm(data && data.name), lc=_rmNorm(data && data.loc);
+    if(!nm) return;
+    var sh=_leadsBotSheet(), v=sh.getDataRange().getValues();
+    var hit=-1, cnt=0;
+    for(var r=1;r<v.length;r++){
+      if(String(v[r][LB.status]||'').trim()!=='signed') continue;
+      if(String(v[r][LB.client_id]||'').trim()) continue;      // вже зшито
+      if(_rmNorm(v[r][LB.child])!==nm) continue;
+      if(lc && _rmNorm(v[r][LB['локація']])!==lc) continue;
+      cnt++; hit=r;
+    }
+    if(cnt!==1) return;
+    v[hit][LB.client_id]=String(data.id||'');
+    v[hit][LB.updated_at]=formatDate(new Date());
+    sh.getRange(hit+1,1,1,v[hit].length).setValues([v[hit]]);
+    var c=_clientsSheetAndHeader();
+    if(c){
+      var iId=c.h.indexOf('ID'), iLd=c.h.indexOf('lead_id');
+      if(iId>=0 && iLd>=0){
+        var cv=c.sh.getDataRange().getValues();
+        for(var q=1;q<cv.length;q++){
+          if(String(cv[q][iId]||'').trim()===String(data.id||'').trim()){
+            c.sh.getRange(q+1, iLd+1).setValue(String(v[hit][LB.lead_id]||'')); break;
+          }
+        }
+      }
+    }
+  }catch(e){ _tgErr('link-card-lead', e); }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.169 «НАГАДАТИ» з екрана лідів — бот пише директорці ОСОБИСТО.
+// POST {action:'remindLead', leadId, reason, byName}
+// ═══════════════════════════════════════════════════════════════════════════
+function remindLead(body){
+  body=body||{};
+  var id=String(body.leadId||'').trim();
+  if(!id) return {ok:false, error:'Не вказано leadId'};
+  var sh=_leadsBotSheet(), v=sh.getDataRange().getValues();
+  for(var r=1;r<v.length;r++){
+    if(String(v[r][LB.lead_id]||'').trim()!==id) continue;
+    var row=v[r], ld=_leadObj(row);
+    var w=_tgWhoFor(ld.loc);
+    if(w.missing || !w.tag)
+      return {ok:false, error:'Для локації «'+(ld.loc||'—')+'» директорку не призначено в ТГ_Директори'};
+    var d=_tgDirectorExact(ld.loc);
+    var uid=d && d.user_id ? String(d.user_id) : '';
+    if(!uid) return {ok:false, error:'У директорки «'+(d&&d.name||'')+'» не заповнено user_id — хай натисне будь-яку кнопку в боті'};
+
+    var L=['🔔 <b>Нагадування по ліду</b>'];
+    if(body.reason) L.push(_htmlEsc(String(body.reason).slice(0,200)));
+    L.push('');
+    L.push('👶 '+_htmlEsc(ld.child||ld.parent||'—')+(ld.age?', '+_htmlEsc(ld.age):''));
+    if(ld.phone) L.push('📞 '+_htmlEsc(ld.phone));
+    L.push('📍 '+_htmlEsc(ld.loc||'—'));
+    L.push('Статус: <b>'+(LEAD_STATUS_LABEL[ld.status]||ld.status)+'</b>');
+    if(ld.callback_date)  L.push('⏳ Передзвонити: '+_htmlEsc(ld.callback_date)+(ld.callback_time?(' о '+_htmlEsc(ld.callback_time)):''));
+    if(ld.excursion_date) L.push('🗓 Екскурсія: '+_htmlEsc(ld.excursion_date)+(ld.excursion_time?(' о '+_htmlEsc(ld.excursion_time)):''));
+    if(body.byName) L.push('');
+    if(body.byName) L.push('<i>надіслала '+_htmlEsc(String(body.byName).slice(0,60))+'</i>');
+
+    var res=_tgSend(uid, L.join('\n'), {});
+    if(!(res&&res.ok))
+      return {ok:false, error:'Telegram: '+String((res&&res.description)||'невідома помилка').slice(0,160)};
+    var a=[]; try{ a=JSON.parse(row[LB.log]||'[]'); }catch(_e){}
+    a.push({ts:formatDate(new Date()), who:String(body.byName||'CRM'), act:'remind:'+String(body.reason||'')});
+    row[LB.log]=JSON.stringify(a); row[LB.updated_at]=formatDate(new Date());
+    sh.getRange(r+1,1,1,row.length).setValues([row]);
+    return {ok:true, to:(d.name||d.username||uid), lead:id};
+  }
+  return {ok:false, error:'Лід '+id+' не знайдено'};
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // v7.168 РАЗОВА: заголовок колонки A у дзеркалі «школа» → «локація».
 // «школа» дісталась у спадок від файлу маркетолога, хоча в колонці лежить
 // назва локації (Голосієво, Позняки, Бровари). Дані правильні — правимо
@@ -3347,6 +3615,7 @@ function _tgHandleCallback(cq){
     _leadTouchReaction(id, who);
     // Кнопки, що чекають ВВІД: лише popup-підтвердження, НІЧОГО в чат; наступне повідомлення = ввід.
     if(act==='note'){    _tgAck(cq); _tgSetPending(cq, id, 'note',    'напишіть примітку:',              'Примітка до ліда'); return; }
+    if(act==='campaign'){_tgAck(cq); _tgSetPending(cq, id, 'campaign','напишіть кампанію:',              'напр. знижка вересень'); return; }   // v7.169
     if(act==='exother'){ _tgAck(cq); _tgSetPending(cq, id, 'excdate', 'напишіть дату екскурсії (26.08):','ДД.ММ'); return; }
     if(act==='extother'){_tgAck(cq); _tgSetPending(cq, id, 'exctime', 'напишіть час екскурсії (14:30):', 'ГГ:ХХ'); return; }
     if(act==='cbother'){ _tgAck(cq); _tgSetPending(cq, id, 'cbdate',  'напишіть дату передзвону (26.08):','ДД.ММ'); return; }
@@ -3433,6 +3702,8 @@ function _tgHandlePending(leadId, kind, text, who, promptMid, userMsgId){
     } else if(kind==='cbdate'){
       var cm=String(text).match(/(\d{1,2})[.\/](\d{1,2})/); if(cm){ row[LB.callback_date]=('0'+cm[1]).slice(-2)+'.'+('0'+cm[2]).slice(-2); row[LB.status]='callback_later';
         _leadArmCb(row); nextKb=_leadCbTimeKb(leadId); }
+    } else if(kind==='campaign'){
+      row[LB['кампанія']]=String(text).trim().slice(0,120);   // v7.169
     } else if(kind==='cbtime'){
       var ct2=String(text).match(/(\d{1,2})[:.](\d{2})/); if(ct2){ row[LB.callback_time]=(+ct2[1])+':'+ct2[2]; row[LB.status]='callback_later';
         _leadArmCb(row); }
@@ -3696,7 +3967,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.168', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.169', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -3714,6 +3985,7 @@ function doGet(e) {
     else if (action === 'getAuthLog')         result = getAuthLog();   // v7.118 діагностика Авторизація_Лог
     else if (action === 'tgGetUpdates')       result = tgGetUpdates();   // v7.122 діагностика Telegram-бота
     else if (action === 'getLeads')           result = getLeads(e.parameter || {});   // v7.152 екран лідів
+    else if (action === 'getAdSpend')         result = getAdSpend(e.parameter || {});   // v7.169 рекламні витрати
     else if (action === 'sendOwnerReport')    result = sendOwnerReport(e.parameter || {});   // v7.158 тижневий звіт власнику
     else if (action === 'getBdayStatus')      result = getBdayStatus();                                            // v7.109 роут замість прямого читання листа з фронту
     else if (action === 'getAttendance')      result = getAttendance(e);
@@ -3785,7 +4057,8 @@ function doPost(e) {
     var _g = _authGate(body.action, body.token || '', 'POST');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (body.action === 'saveClient'){
+    if      (body.action === 'remindLead')       result = remindLead(body || {});   // v7.169
+    else if (body.action === 'saveClient'){
       // v7.56 KILL-SWITCH застарілих фронтів: приймаємо лише від фронту з актуальною версією
       // (body.clientVer або data._ver >= CLIENT_MIN_FE_VER). Стара вкладка (старий childId зі
       // старою формулою) → РЕДЖЕКТ, щоб не плодила дубль-картки. Внутрішні виклики saveClient
@@ -4263,7 +4536,9 @@ function ensureClientsHeader(sheet) {
     // Append-only: index 29 ('Створено') не зсувається.
     'Здоров\'я (JSON)',
     // v6.47 — особистісно-соціальний розвиток (JSON): 46 критеріїв × 3 точки навч.року.
-    'Розвиток (JSON)'
+    'Розвиток (JSON)',
+    // v7.169 — звʼязок із лідом: наскрізний шлях лід → договір → оплати → вихід.
+    'lead_id'
   ];
   var lastCol = sheet.getLastColumn();
   var width = Math.max(lastCol, EXPECTED.length);
@@ -4424,6 +4699,7 @@ function saveClient(data) {
     return {ok:true, action:'updated-moved', mergedAbsences: mergedAbs.length};
   }
   sheet.appendRow(row);
+  try { _linkCardToLead(data); } catch(_ll){}   // v7.169: підписаний лід чекав на цю картку
   logGroupChange(data.id, data.name, data.loc, '', data.group, data.updatedBy || data.by || ''); // v7.47 ЕТАП 5: відкриваємо історію (перше призначення групи)
   // v7.111 ФАЗА 1: авто-заведення НОВОЇ картки у Payment (рядок + бюджет + переагрегація локації).
   // Не валить збереження картки — повертаємо статус у payment.

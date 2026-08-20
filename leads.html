@@ -270,6 +270,11 @@ table.ld td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:n
 .ld-bar{height:8px;background:var(--bg);border-radius:4px;overflow:hidden}
 .ld-bar i{display:block;height:100%;background:var(--blue2);border-radius:4px}
 .ld-drop{color:var(--red)!important}
+.ld-chase-card{border-left:4px solid #c0392b}
+.ld-chase-grp{margin-bottom:14px}
+.ld-chase-h{font-size:13px;font-weight:800;color:var(--dark);padding-left:8px;
+  border-left:3px solid var(--gray2);margin-bottom:4px}
+.ld-remind{padding:5px 10px;font-size:12px;white-space:nowrap;align-self:center}
 .ld-tag{display:inline-block;padding:1px 6px;border-radius:8px;background:var(--bg);
   color:var(--gray);font-size:10px;font-weight:800;vertical-align:middle}
 .fc-period button.active{background:var(--blue);color:#fff}
@@ -459,6 +464,14 @@ table.ld td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:n
       <button class="btn" onclick="resetFilters()">Скинути фільтри</button>
     </div>
 
+    <div class="inv-card ld-chase-card">
+      <h3 class="ld-h">🎯 КОГО НАЗДОГНАТИ <span class="ld-cnt" id="chaseCnt"></span></h3>
+      <div id="chase"></div>
+      <p class="ld-note">Кнопка «нагадати» пише директорці локації <b>особисто в Telegram</b>.
+        Потрібен заповнений user_id у ТГ_Директори — він зʼявляється після першого натискання нею
+        будь-якої кнопки в боті.</p>
+    </div>
+
     <div class="inv-card">
       <h3 class="ld-h">Воронка за період</h3>
       <div id="funnel" class="ld-funnel"></div>
@@ -474,6 +487,22 @@ table.ld td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:n
       <div class="inv-card">
         <h3 class="ld-h">⏱ Час реакції <span class="ld-cnt">— лише ліди з бота</span></h3>
         <div id="reaction"></div>
+      </div>
+    </div>
+
+    <div class="inv-card">
+      <h3 class="ld-h">💰 Вартість і окупність каналу</h3>
+      <div class="ld-scroll" id="spend"></div>
+    </div>
+
+    <div class="ld-two">
+      <div class="inv-card">
+        <h3 class="ld-h">🔄 Життєвий цикл</h3>
+        <div id="cycle"></div>
+      </div>
+      <div class="inv-card">
+        <h3 class="ld-h">🏷 Кампанії</h3>
+        <div class="ld-scroll" id="camps"></div>
       </div>
     </div>
 
@@ -1069,6 +1098,7 @@ function resetFilters(){
 }
 
 function renderAll(){
+  renderChase(); renderSpend(); renderCycle(); renderCamps();
   renderFunnel(); renderCallList(); renderReaction();
   renderMonths(); renderSrcMonth();
   renderGroup('bySource', 'Джерело', 'bySource');
@@ -1263,6 +1293,141 @@ function renderTable(){
        + '</tr>';
   });
   $('tbl').innerHTML = h + '</tbody></table>';
+}
+
+// ═══ v7.169 ГРОШІ, ЖИТТЄВИЙ ЦИКЛ, КОГО НАЗДОГНАТИ ═══
+function money(n){ return (Math.round(Number(n)||0)).toString().replace(/\B(?=(\d{3})+(?!\d))/g,' '); }
+
+function renderSpend(){
+  var a=LD.agg, sp=LD.meta && LD.meta.spend;
+  if(!a){ return; }
+  if(!sp || !sp.ok || !sp.total){
+    $('spend').innerHTML='<div class="ld-empty">Витрат за цей період немає. Заповни аркуш «Реклама_Витрати» — '
+      + 'тоді тут зʼявиться вартість ліда, вартість договору й окупність.</div>';
+    return;
+  }
+  var srcs={}; Object.keys(sp.bySource||{}).forEach(function(s){ srcs[s]=1; });
+  Object.keys(a.bySource||{}).forEach(function(s){ srcs[s]=1; });
+  var keys=Object.keys(srcs).sort();
+  var h='<table class="ld"><thead><tr><th>Джерело</th><th class="num">витрати</th>'
+      + '<th class="num">лідів</th><th class="num">₴/лід</th>'
+      + '<th class="num">договорів</th><th class="num">₴/договір</th>'
+      + '<th class="num">принесли</th><th class="num">окупність</th></tr></thead><tbody>';
+  var tS=0,tN=0,tG=0,tR=0;
+  keys.forEach(function(s){
+    var spend=sp.bySource[s]||0, g=a.bySource[s]||{n:0,sign:0}, rev=(a.revenueBySource||{})[s]||0;
+    tS+=spend; tN+=g.n; tG+=g.sign; tR+=rev;
+    var cpl=g.n? spend/g.n : null, cpc=g.sign? spend/g.sign : null;
+    var roi=spend? rev/spend : null;
+    h+='<tr><td>'+escapeHtml(s)+'</td>'
+      +'<td class="num">'+money(spend)+'</td>'
+      +'<td class="num">'+g.n+'</td>'
+      +'<td class="num">'+(cpl===null?'—':money(cpl))+'</td>'
+      +'<td class="num">'+g.sign+'</td>'
+      +'<td class="num">'+(cpc===null?'—':money(cpc))+'</td>'
+      +'<td class="num">'+money(rev)+'</td>'
+      +'<td class="num"><b'+(roi!==null&&roi<1?' style="color:var(--red)"':'')+'>'
+      +(roi===null?'—':(Math.round(roi*100)/100)+'×')+'</b></td></tr>';
+  });
+  h+='<tr style="font-weight:800;background:var(--bg)"><td>Разом</td>'
+    +'<td class="num">'+money(tS)+'</td><td class="num">'+tN+'</td>'
+    +'<td class="num">'+(tN?money(tS/tN):'—')+'</td><td class="num">'+tG+'</td>'
+    +'<td class="num">'+(tG?money(tS/tG):'—')+'</td><td class="num">'+money(tR)+'</td>'
+    +'<td class="num">'+(tS?(Math.round(tR/tS*100)/100)+'×':'—')+'</td></tr>';
+  $('spend').innerHTML=h+'</tbody></table>'
+    +'<p class="ld-note">«Принесли» — сума договорів дітей, зшитих із лідом через кнопку «Договір». '
+    +'Зшито '+(a.linkedSigned||0)+' з '+a.sign+' договорів; незшиті у виручку не потрапляють.</p>';
+}
+
+function renderCycle(){
+  var a=LD.agg; if(!a) return;
+  var l1=a.excN? Math.round(a.excSum/a.excN) : null;
+  var l2=a.lifeN? Math.round(a.lifeSum/a.lifeN) : null;
+  var l3=a.stayN? Math.round(a.staySum/a.stayN*10)/10 : null;
+  $('cycle').innerHTML=
+      kpi('Лід → екскурсія', l1===null?'—':(l1+' дн.'))
+    + kpi('Лід → договір', l2===null?'—':(l2+' дн.'))
+    + kpi('Ходить у садок', l3===null?'—':(l3+' міс.'))
+    + '<p class="ld-note">Покриття: екскурсія '+a.excN+' · договір '+a.lifeN+' · тривалість '+a.stayN
+    + '. Останнє рахується від дати договору в картці до розірвання або сьогодні.</p>';
+}
+
+// dd.MM → чи вже минуло (у межах поточного року)
+function _dmPast(dm, inclusive){
+  var m=/^(\d{1,2})\.(\d{1,2})$/.exec(String(dm||'').trim()); if(!m) return false;
+  var t=(LD.meta&&LD.meta.today)||''; var tm=/^(\d{1,2})\.(\d{1,2})$/.exec(t); if(!tm) return false;
+  var a=(+m[2])*100+(+m[1]), b=(+tm[2])*100+(+tm[1]);
+  return inclusive ? a<=b : a<b;
+}
+function _daysSince(day){
+  if(!day) return null;
+  var p=String(day).split('-'); if(p.length!==3) return null;
+  return Math.round((Date.now()-Date.UTC(+p[0],+p[1]-1,+p[2]))/86400000);
+}
+
+var CHASE=[
+  {k:'noreact', t:'Без реакції',              c:'#c0392b', f:function(r){ return r.origin==='bot' && (r.reactMin===null||r.reactMin===undefined) && ['signed','refused','closed'].indexOf(r.status)<0; }},
+  {k:'cbover',  t:'Прострочений передзвін',   c:'#e67e22', f:function(r){ return r.status==='callback_later' && _dmPast(r.cbDate,false); }},
+  {k:'future',  t:'«На майбутній період» — час настав', c:'#e67e22', f:function(r){ return r.status==='callback_later' && _dmPast(r.cbDate,true) && !_dmPast(r.cbDate,false); }},
+  {k:'noshow',  t:'Не дійшли на екскурсію',   c:'#8e44ad', f:function(r){ return r.status==='excursion' && r.excDate && _dmPast(r.excDate,false); }},
+  {k:'think',   t:'«Думає» довше 7 днів',     c:'#7f8c8d', f:function(r){ var d=_daysSince(r.day); return ['called','excursion'].indexOf(r.status)>=0 && d!==null && d>7; }}
+];
+function renderChase(){
+  var rows=LD.rows||[], html='', total=0;
+  CHASE.forEach(function(c){
+    var sel=rows.filter(c.f);
+    if(!sel.length) return;
+    total+=sel.length;
+    html+='<div class="ld-chase-grp"><div class="ld-chase-h" style="border-color:'+c.c+'">'
+        + escapeHtml(c.t)+' <span class="ld-cnt">'+sel.length+'</span></div>';
+    sel.slice(0,40).forEach(function(r){
+      html+='<div class="ld-call"><div>'
+        + '<div class="who">'+escapeHtml(r.child||r.parent||'—')+'</div>'
+        + '<div class="sub">'+escapeHtml(r.loc||'—')+' · <span class="ld-phone">'+escapeHtml(r.phone||'—')+'</span>'
+        + (r.assignee?' · '+escapeHtml(r.assignee):'')
+        + (r.cbDate?' · передзвін '+escapeHtml(r.cbDate):'')
+        + (r.excDate?' · екскурсія '+escapeHtml(r.excDate):'') + '</div></div>'
+        + '<button class="btn btn-primary ld-remind" onclick="remindLead(this,\''
+        + escapeHtml(r.id)+'\',\''+escapeHtml(c.t)+'\')">🔔 нагадати</button></div>';
+    });
+    if(sel.length>40) html+='<div class="ld-note">…показано 40 з '+sel.length+'</div>';
+    html+='</div>';
+  });
+  $('chaseCnt').textContent = total ? ('· '+total) : '';
+  $('chase').innerHTML = html || '<div class="ld-empty">Нікого наздоганяти — усе під контролем</div>';
+}
+
+async function remindLead(btn, leadId, reason){
+  btn.disabled=true; var old=btn.textContent; btn.textContent='…';
+  try{
+    var r=await fetch(CFG.SCRIPT_URL, {method:'POST', redirect:'follow',
+      headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body:JSON.stringify({action:'remindLead', leadId:leadId, reason:reason,
+                           byName:(S.user&&S.user.role)||''})});
+    var j=await r.json();
+    if(j&&j.ok){ btn.textContent='✔ '+(j.to||'надіслано'); btn.classList.remove('btn-primary'); }
+    else { btn.textContent='✖'; btn.title=(j&&j.error)||'помилка'; btn.disabled=false;
+           showToast((j&&j.error)||'Не вдалось надіслати','err',6000); }
+  }catch(e){
+    btn.textContent=old; btn.disabled=false;
+    showToast('Не вдалось надіслати: '+((e&&e.message)||e),'err',6000);
+  }
+}
+
+function renderCamps(){
+  var a=LD.agg; if(!a) return;
+  var ks=Object.keys(a.campaigns||{}).sort(function(x,y){ return a.campaigns[y].n-a.campaigns[x].n; });
+  if(!ks.length){ $('camps').innerHTML='<div class="ld-empty">Кампанії ще не проставлені. '
+    + 'У боті кнопка «🏷 Кампанія», або текстом при створенні: «кампанія: знижка вересень».</div>'; return; }
+  var h='<table class="ld"><thead><tr><th>Кампанія</th><th class="num">лідів</th>'
+      + '<th class="num">договорів</th><th class="num">конверсія</th><th class="num">принесли</th></tr></thead><tbody>';
+  ks.forEach(function(k){
+    var g=a.campaigns[k];
+    h+='<tr><td>'+escapeHtml(k)+'</td><td class="num">'+g.n+'</td><td class="num">'+g.sign+'</td>'
+      +'<td class="num"><b>'+(g.n?Math.round(g.sign*100/g.n):0)+'%</b></td>'
+      +'<td class="num">'+money(g.sum)+'</td></tr>';
+  });
+  $('camps').innerHTML=h+'</tbody></table>';
 }
 
 (async function bootstrap(){
