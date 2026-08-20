@@ -1232,6 +1232,112 @@ function _tgMention(d){
   return _htmlEsc(d.name||'');
 }
 // Прив'язати @Ira_Melnichenk0 до ВСІХ локацій (рядок '*'). Пізніше директорів додамо точковими рядками.
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.157 SEED_DIRECTORS_ME — вписати себе в ТГ_Директори на ВСІ локації.
+//
+// Рядок '*' сам по собі НЕ підходить: з v7.156 він вважається ескалацією, а не
+// призначеною директоркою (_tgWhoFor віддає missing:true), тож кожна картка
+// показувала б «⚠️ Відповідальну не призначено», а нагадування — попередження.
+// Тому пишемо ПОІМЕННИЙ рядок на кожну локацію з CONFIG + '*' як ескалацію.
+//
+// Ідемпотентно: наявні рядки оновлюються, user_id НЕ затирається (він
+// заповнюється сам при першому натисканні кнопки через _tgLearnUserId).
+// Пізніше замінити на реальних директорок = змінити username у потрібних рядках.
+// ═══════════════════════════════════════════════════════════════════════════
+var SEED_ME_USERNAME = 'Ira_Melnichenk0';
+var SEED_ME_NAME     = 'Мельніченко Ірина';
+
+function SEED_DIRECTORS_ME_DRYRUN(){ _seedDirectorsMe(true); }
+function SEED_DIRECTORS_ME(){        _seedDirectorsMe(false); }
+
+function _seedDirectorsMe(dryRun){
+  var out = [];
+  function o(l){ out.push(l); }
+  o('═══ SEED_DIRECTORS_ME — ' + (dryRun ? 'DRY RUN (нічого не пишеться)' : '*** ЗАПИС ***') + ' ═══');
+  o('username : @' + SEED_ME_USERNAME);
+  o('ПІБ      : ' + SEED_ME_NAME);
+  o('');
+
+  var locs = [];
+  try {
+    (getLocations().data || []).forEach(function(l){
+      var n = String(l.loc || '').trim();
+      if (n && locs.indexOf(n) < 0) locs.push(n);
+    });
+  } catch(e){ o('!! getLocations(): ' + (e.message || e)); }
+
+  if (!locs.length){ o('!! Локацій не знайдено — писати нема куди.'); Logger.log(out.join('\n')); return; }
+  o('Локацій у CONFIG: ' + locs.length + ' → ' + locs.join(', '));
+  o('');
+
+  var sh = _tgDirsSheet();
+  var v  = sh.getDataRange().getValues();
+
+  // індекс наявних рядків за нормалізованою назвою локації
+  var idx = {};
+  for (var r = 1; r < v.length; r++){
+    var l = String(v[r][0] || '').trim();
+    if (l) idx[_tgNorm(l)] = r;      // 0-based у v, рядок аркуша = r+1
+  }
+
+  var targets = locs.concat(['*']);   // '*' лишається як ескалація
+  var updates = [], appends = [], same = 0;
+
+  targets.forEach(function(loc){
+    var key = _tgNorm(loc), r = idx[key];
+    if (r === undefined){
+      appends.push([loc, SEED_ME_USERNAME, '', SEED_ME_NAME]);
+      o('  ДОДАТИ    ' + _pad2(loc, 22) + ' @' + SEED_ME_USERNAME);
+      return;
+    }
+    var curU = String(v[r][1] || '').replace(/^@/,'').trim();
+    var curId= String(v[r][2] || '').trim();
+    var curN = String(v[r][3] || '').trim();
+    if (curU === SEED_ME_USERNAME && curN === SEED_ME_NAME){
+      same++;
+      o('  БЕЗ ЗМІН  ' + _pad2(loc, 22) + ' @' + curU + (curId ? '  user_id=' + curId : '  user_id порожній'));
+      return;
+    }
+    updates.push({row:r + 1, vals:[String(v[r][0]), SEED_ME_USERNAME, curId, SEED_ME_NAME]});
+    o('  ОНОВИТИ   ' + _pad2(loc, 22) + ' @' + (curU || '—') + ' → @' + SEED_ME_USERNAME +
+      (curId ? '  (user_id=' + curId + ' збережено)' : ''));
+  });
+
+  o('');
+  o('Додати: ' + appends.length + ' · оновити: ' + updates.length + ' · без змін: ' + same);
+
+  if (dryRun){
+    o('');
+    o('DRY RUN — нічого не записано. Далі: SEED_DIRECTORS_ME()');
+    Logger.log(out.join('\n'));
+    return;
+  }
+
+  updates.forEach(function(u){ sh.getRange(u.row, 1, 1, 4).setValues([u.vals]); });
+  if (appends.length){
+    var start = sh.getLastRow() + 1;
+    if (sh.getMaxRows() < start + appends.length - 1)
+      sh.insertRowsAfter(sh.getMaxRows(), start + appends.length - 1 - sh.getMaxRows());
+    sh.getRange(start, 1, appends.length, 4).setValues(appends);
+  }
+  SpreadsheetApp.flush();
+  _TG_DIRS_CACHE = null;                       // кеш читання став неактуальним
+
+  // Показуємо аркуш ЯК ВІН Є після запису — щоб не вірити на слово.
+  var after = sh.getDataRange().getValues();
+  o('');
+  o('═══ ТГ_Директори після запису (' + (after.length - 1) + ' рядків) ═══');
+  o('  ' + _pad2('локація', 22) + _pad2('username', 20) + _pad2('user_id', 14) + 'ПІБ');
+  for (var k = 1; k < after.length; k++){
+    if (!String(after[k][0] || '').trim()) continue;
+    o('  ' + _pad2(String(after[k][0]), 22) + _pad2('@' + String(after[k][1] || ''), 20) +
+      _pad2(String(after[k][2] || '—'), 14) + String(after[k][3] || ''));
+  }
+  o('');
+  o('user_id заповниться сам при першому натисканні кнопки на картці ліда.');
+  Logger.log(out.join('\n'));
+}
+
 function tgSeedDirectors(body){
   body=body||{};
   var un=String(body.username||'Ira_Melnichenk0').replace(/^@/,'');
@@ -1531,7 +1637,10 @@ function _leadKb(id, mode){
   return {inline_keyboard:[
     [{text:'📞 Додзвонився', callback_data:'L|'+id+'|call_ok'}, {text:'🔕 Не відповів', callback_data:'L|'+id+'|call_no'}],
     [{text:'🗓 Екскурсія', callback_data:'L|'+id+'|exc'}, {text:'✍️ Договір', callback_data:'L|'+id+'|sign'}],
-    [{text:'🚫 Відмова', callback_data:'L|'+id+'|refuse'}, {text:'📝 Примітка', callback_data:'L|'+id+'|note'}]
+    [{text:'🚫 Відмова', callback_data:'L|'+id+'|refuse'}, {text:'📝 Примітка', callback_data:'L|'+id+'|note'}],
+    // v7.157: перше натискання будь-якої кнопки призначає відповідальну (v7.156),
+    // тому потрібен явний спосіб передати лід — натискає той, ХТО ЗАБИРАЄ.
+    [{text:'🔄 Передати мені', callback_data:'L|'+id+'|reassign'}]
   ]};
 }
 function _tgDayDM(i){ return Utilities.formatDate(new Date(new Date().getTime()+i*86400000),'Europe/Kiev','dd.MM'); }
@@ -1694,6 +1803,14 @@ function _tgUpdateLead(id, act, who){
     else if(act==='exc'){ row[LB.status]='excursion'; if(!row[LB.assignee])row[LB.assignee]=who;
       if(_leadClearCallback(row)) addlog('cb_cleared:exc');
       toast='Записано на екскурсію'; addlog('exc'); }
+    else if(act==='reassign'){
+      // Перше натискання будь-якої кнопки вже могло призначити цю ж людину
+      // (_leadTouchReaction), тож «уже за вами» звучало б дивно — просто
+      // підтверджуємо власника, а в журнал пишемо лише реальну зміну.
+      var prevA=String(row[LB.assignee]||'').trim();
+      row[LB.assignee]=who; toast='Відповідальна: '+who;
+      if(prevA!==who) addlog('reassign:'+(prevA||'—')+'→'+who);
+    }
     else if(act==='sign'){ row[LB.status]='signed'; if(!row[LB.assignee])row[LB.assignee]=who;
       if(_leadClearCallback(row)) addlog('cb_cleared:sign');
       toast='Договір 🎉'; addlog('sign'); }
@@ -2178,7 +2295,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.156', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.157', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
