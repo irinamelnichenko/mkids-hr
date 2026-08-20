@@ -4,12 +4,12 @@
 
 | | |
 |---|---|
-| Версія у репозиторії | **v7.160** |
-| md5 | `5293e851836f6ac2c1d88df30acdd77a` |
-| Розмір | 1332410 байт |
+| Версія у репозиторії | **v7.161** |
+| md5 | `661543df75be452ffa85811219b7b9ff` |
+| Розмір | 1338080 байт |
 | Зафіксовано | 2026-08-19 |
-| Версія у проді | **v7.150** — v7.160 ЩЕ НЕ ЗАДЕПЛОЄНО |
-| Перевірка | `action=ping` → має стати `pong v7.160` після деплою |
+| Версія у проді | **v7.150** — v7.161 ЩЕ НЕ ЗАДЕПЛОЄНО |
+| Перевірка | `action=ping` → має стати `pong v7.161` після деплою |
 
 ## Як це працює
 
@@ -35,8 +35,9 @@ curl -sL "https://script.google.com/macros/s/AKfycbyTSUVlaN4-PpXe47zCSmhVs0Qxy1F
 
 1. `IMPORT_LEADS_HISTORY_DRYRUN()` → перевірити лог → `IMPORT_LEADS_HISTORY_APPLY()`
    (створює аркуш `Ліди_Історія`; повторний запуск перебудовує його, не дублює).
-2. `MIRROR_RESYNC_DRYRUN()` → `MIRROR_RESYNC_ALL()` — залити наявні ліди
-   в файл маркетолога; далі дзеркало оновлюється саме.
+2. `SETUP_MIRROR_SPREADSHEET_DRYRUN()` → `SETUP_MIRROR_SPREADSHEET()` — структура
+   в окремій таблиці 1RLdzmff… + Script Property `LEADS_MIRROR_ID`.
+   Потім `MIRROR_RESYNC_DRYRUN()` → `MIRROR_RESYNC_ALL()`.
 3. `SEED_REPORT_RECIPIENTS()` → `installOwnerReportTrigger()` — тижневий звіт
    власнику щопонеділка о 9:00. Спершу написати боту в особисті, інакше
    Telegram не дасть йому почати діалог.

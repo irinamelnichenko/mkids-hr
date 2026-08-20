@@ -2137,7 +2137,16 @@ function _leadMinutes(a, b){   // рядки 'dd.MM.yyyy HH:mm'
 //
 // Збій дзеркала НІКОЛИ не валить бота: усе загорнуто в _mirrorSafe → TG_Err.
 // ═══════════════════════════════════════════════════════════════════════════
-var MIRROR_FILE_ID   = '1XfLgI_0hEObGylpTTRVHPOjkEB6crW5YNW816gy4Vdg';
+// v7.161: ціль дзеркала — ОКРЕМА таблиця, id лише у Script Property LEADS_MIRROR_ID.
+// У коді дзеркала його немає навмисно: щоб не можна було випадково знову записати
+// у файл маркетолога. Поки property не задано — дзеркало не пише і каже про це в TG_Err.
+var MIRROR_ID_PROP   = 'LEADS_MIRROR_ID';
+function _mirrorFileId(){
+  var id = String(PropertiesService.getScriptProperties().getProperty(MIRROR_ID_PROP) || '').trim();
+  if(!id) throw new Error('Дзеркало не налаштоване: порожній Script Property ' + MIRROR_ID_PROP
+    + '. Запусти SETUP_MIRROR_SPREADSHEET().');
+  return id;
+}
 var MIRROR_HEADER    = ['школа','дата ','телефон','імя одного з батьків','імя дитини','вік дитини',
                         'джерело ліда','статус дзвінка','дата повторного дзвінка',
                         'статус повторного дзвінка','дата екскурсії','статус екскурсії','коментар'];
@@ -2208,20 +2217,31 @@ function _mirrorRowValues(row, tabName){
   ];
 }
 
+// Одна точка створення вкладки: шапка в рядку 1, рядки 2–4 лишаються порожні
+// під підсумки, дані з рядка 5, службова колонка T під lead_id.
+function _mirrorInitTab(ss, tabName){
+  var sh=ss.getSheetByName(tabName);
+  if(!sh) sh=ss.insertSheet(tabName);
+  if(sh.getMaxColumns() < MIRROR_ID_COL)
+    sh.insertColumnsAfter(sh.getMaxColumns(), MIRROR_ID_COL - sh.getMaxColumns());
+  sh.getRange(1,1,1,MIRROR_HEADER.length).setValues([MIRROR_HEADER]);
+  sh.getRange(1,MIRROR_ID_COL).setValue('lead_id');
+  sh.setFrozenRows(1);
+  return sh;
+}
+
 function _mirrorLead(row){
   var id=String(row[LB.lead_id]||'').trim();
   if(!id) return false;
 
   var tabName=_mirrorTabName(row[LB['локація']]);
-  var ss=SpreadsheetApp.openById(MIRROR_FILE_ID);
+  var ss=SpreadsheetApp.openById(_mirrorFileId());
   var sh=ss.getSheetByName(tabName);
   if(!sh){
     // Вкладки для цієї локації у файлі немає (напр. Голосієво, Оранж). Створюємо з
     // тією ж шапкою і КАЖЕМО про це в TG_Err — тихо загубити лід гірше.
-    sh=ss.insertSheet(tabName);
-    sh.getRange(1,1,1,MIRROR_HEADER.length).setValues([MIRROR_HEADER]);
-    sh.setFrozenRows(1);
-    _tgErr('mirror-newtab','створено вкладку «'+tabName+'» — у файлі маркетолога її не було');
+    sh=_mirrorInitTab(ss, tabName);
+    _tgErr('mirror-newtab','створено вкладку «'+tabName+'» — у таблиці дзеркала її не було');
   }
   if(String(sh.getRange(1,MIRROR_ID_COL).getValue()).trim()!=='lead_id')
     sh.getRange(1,MIRROR_ID_COL).setValue('lead_id');
@@ -2244,6 +2264,84 @@ function _mirrorLead(row){
 function _mirrorSafe(row){
   try{ return _mirrorLead(row); }
   catch(e){ _tgErr('mirror', e); return false; }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.161 РАЗОВА НАЛАШТУВАЛЬНА ФУНКЦІЯ — тільки для редактора.
+// Робочий код її НЕ викликає. Створює в новій (порожній) таблиці структуру за
+// зразком файлу маркетолога і записує її id у Script Property.
+//   SETUP_MIRROR_SPREADSHEET_DRYRUN() — показує, що буде створено
+//   SETUP_MIRROR_SPREADSHEET()        — створює і прописує property
+// Повторний запуск безпечний: наявні вкладки не перестворюються, дані не чіпаються.
+// ═══════════════════════════════════════════════════════════════════════════
+var MIRROR_NEW_SPREADSHEET_ID = '1RLdzmffPpppLLds32T4ujg2qUKcYKk8yzObBHlVCASw';
+
+function SETUP_MIRROR_SPREADSHEET_DRYRUN(){ _setupMirrorSpreadsheet(true); }
+function SETUP_MIRROR_SPREADSHEET(){        _setupMirrorSpreadsheet(false); }
+
+function _setupMirrorSpreadsheet(dryRun){
+  var out=['═══ SETUP_MIRROR_SPREADSHEET — '+(dryRun?'DRY RUN':'*** ЗАПИС ***')+' ═══'];
+  out.push('Цільова таблиця: '+MIRROR_NEW_SPREADSHEET_ID);
+
+  var locs=[];
+  try{
+    (getLocations().data||[]).forEach(function(l){
+      var n=String(l.loc||'').trim(); if(n && locs.indexOf(n)<0) locs.push(n);
+    });
+  }catch(e){ out.push('!! getLocations(): '+(e.message||e)); Logger.log(out.join('\n')); return; }
+  if(!locs.length){ out.push('!! Локацій не знайдено.'); Logger.log(out.join('\n')); return; }
+
+  var ss;
+  try{ ss=SpreadsheetApp.openById(MIRROR_NEW_SPREADSHEET_ID); }
+  catch(e2){ out.push('!! Таблиця не відкривається: '+(e2.message||e2)); Logger.log(out.join('\n')); return; }
+  out.push('Назва: '+ss.getName());
+  out.push('');
+
+  var plan=[];
+  locs.forEach(function(loc){
+    var tab=_mirrorTabName(loc);
+    plan.push({loc:loc, tab:tab, exists:!!ss.getSheetByName(tab)});
+  });
+  out.push('Локацій з CONFIG: '+locs.length);
+  out.push('  '+_pad2('локація в CRM',24)+_pad2('вкладка дзеркала',24)+'стан');
+  plan.forEach(function(p){
+    out.push('  '+_pad2(p.loc,24)+_pad2(p.tab,24)+(p.exists?'вже є':'СТВОРИТИ'));
+  });
+
+  if(dryRun){
+    out.push('');
+    out.push('Розкладка кожної вкладки: рядок 1 — шапка ('+MIRROR_HEADER.length+' колонок),');
+    out.push('рядки 2–4 порожні під підсумки, дані з рядка '+MIRROR_FIRST_ROW+', колонка T — lead_id.');
+    out.push('');
+    out.push('DRY RUN — нічого не створено. Далі: SETUP_MIRROR_SPREADSHEET()');
+    Logger.log(out.join('\n')); return;
+  }
+
+  var made=0;
+  plan.forEach(function(p){ _mirrorInitTab(ss, p.tab); if(!p.exists) made++; });
+
+  // Порожня вкладка за замовчуванням у новій таблиці — прибираємо, щоб не плутала.
+  ['Sheet1','Аркуш1','Лист1'].forEach(function(n){
+    var d=ss.getSheetByName(n);
+    if(d && ss.getSheets().length>1 && d.getLastRow()===0){ ss.deleteSheet(d); out.push('Видалено порожню вкладку «'+n+'»'); }
+  });
+
+  PropertiesService.getScriptProperties().setProperty(MIRROR_ID_PROP, MIRROR_NEW_SPREADSHEET_ID);
+  SpreadsheetApp.flush();
+
+  out.push('');
+  out.push('Створено вкладок: '+made+' · усього у таблиці: '+ss.getSheets().length);
+  out.push('Script Property '+MIRROR_ID_PROP+' = '+MIRROR_NEW_SPREADSHEET_ID);
+  out.push('');
+  out.push('═══ Підсумок вкладок ═══');
+  ss.getSheets().forEach(function(sh){
+    var h=sh.getRange(1,1).getValue(), t=sh.getRange(1,MIRROR_ID_COL).getValue();
+    out.push('  '+_pad2(sh.getName(),26)+'A1='+_pad2(String(h||'—'),12)+'T1='+String(t||'—'));
+  });
+  out.push('');
+  out.push('Далі: MIRROR_RESYNC_DRYRUN() → MIRROR_RESYNC_ALL()');
+  Logger.log(out.join('\n'));
 }
 
 // ── Разова заливка вже наявних лідів (дзеркало вмикається не з нуля) ──
@@ -2853,7 +2951,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.160', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.161', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
