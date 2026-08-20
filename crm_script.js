@@ -982,6 +982,7 @@ function _rcptSheet(){
     sh.setFrozenRows(1);
     try{ sh.getRange(1,2,sh.getMaxRows(),1).setNumberFormat('@'); }catch(_e){}  // user_id — текст
   }
+  _ensureHeaderRow(sh, REPORT_RCPT_HEADER);   // v7.160: той самий клас помилки
   return sh;
 }
 // Активні отримувачі. Рядок без user_id повертаємо теж, але позначеним:
@@ -1586,7 +1587,25 @@ var TG_DIR_HEADER = ['локація','username','user_id','ПІБ'];
 function _tgDirsSheet(){
   var ss=getCRMSpreadsheet(); var sh=ss.getSheetByName(TG_DIRECTORS_SHEET);
   if(!sh){ sh=ss.insertSheet(TG_DIRECTORS_SHEET); sh.getRange(1,1,1,TG_DIR_HEADER.length).setValues([TG_DIR_HEADER]); sh.setFrozenRows(1); }
+  _ensureHeaderRow(sh, TG_DIR_HEADER);
   return sh;
+}
+
+// v7.160: усі читачі аркушів-довідників починають з рядка 2, вважаючи рядок 1
+// заголовком. Якщо заголовка НЕМАЄ, перший рядок даних мовчки випадає з обробки —
+// саме так «Осокорки» зникла після SEED_DIRECTORS_ME. Тут це лікується один раз:
+// коли в рядку 1 лежать дані, він ЗСУВАЄТЬСЯ вниз, а не затирається.
+function _ensureHeaderRow(sh, header){
+  var lastCol=sh.getLastColumn(), lastRow=sh.getLastRow();
+  var first = (lastCol>0 && lastRow>0)
+    ? sh.getRange(1,1,1,Math.max(lastCol, header.length)).getValues()[0] : [];
+  var looksHeader = String(first[0]||'').trim().toLowerCase()===String(header[0]).trim().toLowerCase()
+                 && String(first[1]||'').trim().toLowerCase()===String(header[1]).trim().toLowerCase();
+  if(looksHeader) return false;
+  if(lastRow>0 && String(first[0]||'').trim()) sh.insertRowBefore(1);   // рядок 1 = дані → зсуваємо
+  sh.getRange(1,1,1,header.length).setValues([header]);
+  sh.setFrozenRows(1);
+  return true;
 }
 function _tgNorm(s){ return String(s||'').trim().replace(/\s+/g,' ').toLowerCase(); }
 // Директор для локації: точний збіг, інакше рядок '*'. Повертає {row, username, user_id, name}.
@@ -1648,8 +1667,12 @@ function _seedDirectorsMe(dryRun){
   o('Локацій у CONFIG: ' + locs.length + ' → ' + locs.join(', '));
   o('');
 
-  var sh = _tgDirsSheet();
+  var sh = _tgDirsSheet();          // всередині вже гарантовано є рядок-заголовок
   var v  = sh.getDataRange().getValues();
+  if(String((v[0]||[])[0]||'').trim().toLowerCase() !== String(TG_DIR_HEADER[0]).toLowerCase()){
+    o('!! Рядок 1 не схожий на заголовок — перервано, щоб не зіпсувати дані.');
+    Logger.log(out.join('\n')); return;
+  }
 
   // індекс наявних рядків за нормалізованою назвою локації
   var idx = {};
@@ -1693,10 +1716,13 @@ function _seedDirectorsMe(dryRun){
 
   updates.forEach(function(u){ sh.getRange(u.row, 1, 1, 4).setValues([u.vals]); });
   if (appends.length){
-    var start = sh.getLastRow() + 1;
+    // Math.max(…, 2): на аркуші без даних getLastRow() дає 0 або 1, і без цієї
+    // межі перший рядок ліг би в рядок 1, тобто став би «заголовком» і зник.
+    var start = Math.max(sh.getLastRow() + 1, 2);
     if (sh.getMaxRows() < start + appends.length - 1)
       sh.insertRowsAfter(sh.getMaxRows(), start + appends.length - 1 - sh.getMaxRows());
     sh.getRange(start, 1, appends.length, 4).setValues(appends);
+    o('Дописано рядки ' + start + '–' + (start + appends.length - 1));
   }
   SpreadsheetApp.flush();
   _TG_DIRS_CACHE = null;                       // кеш читання став неактуальним
@@ -2827,7 +2853,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.159', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.160', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
