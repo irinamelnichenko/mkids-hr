@@ -1011,8 +1011,10 @@ function tgDailyDigest(){
   }
 
   function who(ld){
-    var d = null; try { d = _tgDirectorFor(ld.loc); } catch(_e){}
-    return (d && (d.username || d.user_id)) ? _tgMention(d) : _htmlEsc(ld.loc || '—');
+    var w = _tgWhoFor(ld.loc);
+    // v7.156: раніше при відсутній директорці підставлялась просто назва локації,
+    // і зведення виглядало нормально, хоча лід нікому не належав.
+    return w.missing ? ((w.tag ? w.tag + ' ' : '') + '⚠️ немає директорки для «' + _htmlEsc(w.loc) + '»') : w.tag;
   }
   function line(ld, extra){
     return '• ' + _htmlEsc(ld.child || ld.parent || ld.phone || '—')
@@ -1210,16 +1212,9 @@ function _tgDirsSheet(){
 }
 function _tgNorm(s){ return String(s||'').trim().replace(/\s+/g,' ').toLowerCase(); }
 // Директор для локації: точний збіг, інакше рядок '*'. Повертає {row, username, user_id, name}.
-function _tgDirectorFor(loc){
-  var sh=_tgDirsSheet(); var v=sh.getDataRange().getValues(); var star=null;
-  for(var r=1;r<v.length;r++){
-    var l=String(v[r][0]||'').trim();
-    var rec={row:r+1, loc:l, username:String(v[r][1]||'').replace(/^@/,'').trim(), user_id:String(v[r][2]||'').trim(), name:String(v[r][3]||'').trim()};
-    if(l==='*') star=rec;
-    else if(_tgNorm(l)===_tgNorm(loc)) return rec;
-  }
-  return star;
-}
+// v7.156: _tgDirectorFor прибрано — він мовчки підставляв рядок '*' замість
+// відсутньої директорки, через що «нікому не належить» виглядало як норма.
+// Замість нього: _tgDirectorExact (точний запис) + _tgWhoFor (тег + попередження).
 // Автовизначення user_id при першому натисканні: якщо username збігається, а user_id порожній — вписуємо.
 function _tgLearnUserId(username, user_id){
   if(!username || !user_id) return;
@@ -1519,8 +1514,10 @@ function _leadCardText(ld){
   if(ld.notes){ String(ld.notes).split('\n').filter(function(x){return x.trim();}).forEach(function(n){ lines.push('📝 Примітка: '+_htmlEsc(n)); }); }
   lines.push('🕒 '+_htmlEsc(ld.created_at||''));
   // відповідальний директор за локацією (тег)
-  var d=null; try{ d=_tgDirectorFor(ld.loc); }catch(_){}
-  if(d && (d.username||d.user_id)) lines.push('👤 Відповідальна: '+_tgMention(d));
+  // v7.156: якщо директорки для локації немає — кажемо це в картці, а не мовчимо.
+  var _w=null; try{ _w=_tgWhoFor(ld.loc); }catch(_){}
+  if(_w && !_w.missing) lines.push('👤 Відповідальна: '+_w.tag);
+  else if(_w) lines.push('⚠️ Відповідальну не призначено в ТГ_Директори');
   lines.push('');
   lines.push('Статус: <b>'+(LEAD_STATUS_LABEL[ld.status]||ld.status)+'</b>'+(ld.assignee?' · '+_htmlEsc(ld.assignee):''));
   return lines.join('\n');
@@ -1752,13 +1749,88 @@ function _repairLeadConflicts(dryRun){
 }
 function _pad2(s,n){ s=String(s); while(s.length<n) s+=' '; return s; }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.156 ХТО ВІДПОВІДАЄ ЗА ЛОКАЦІЮ.
+// _tgDirectorFor підставляє рядок '*' як запасний, тому «директорки немає»
+// було не відрізнити від «є загальний запис» — і нагадування йшло в нікуди
+// («⏰ хто бере?» або взагалі з порожнім тегом в ескалації на 30 хв).
+// ═══════════════════════════════════════════════════════════════════════════
+var _TG_DIRS_CACHE = null;
+function _tgDirsRows(){                       // один читальний прохід на виконання,
+  if(_TG_DIRS_CACHE) return _TG_DIRS_CACHE;   // а не по разу на кожен лід у tgSlaCheck
+  _TG_DIRS_CACHE = _tgDirsSheet().getDataRange().getValues();
+  return _TG_DIRS_CACHE;
+}
+function _tgDirsRow(r){
+  return {row:r+1, loc:String(_tgDirsRows()[r][0]||'').trim(),
+          username:String(_tgDirsRows()[r][1]||'').replace(/^@/,'').trim(),
+          user_id:String(_tgDirsRows()[r][2]||'').trim(),
+          name:String(_tgDirsRows()[r][3]||'').trim()};
+}
+// Точний запис по локації, БЕЗ підстановки '*'.
+function _tgDirectorExact(loc){
+  var v=_tgDirsRows();
+  for(var r=1;r<v.length;r++){
+    var l=String(v[r][0]||'').trim();
+    if(!l || l==='*') continue;
+    if(_tgNorm(l)===_tgNorm(loc)) return _tgDirsRow(r);
+  }
+  return null;
+}
+function _tgStarDirector(){
+  var v=_tgDirsRows();
+  for(var r=1;r<v.length;r++) if(String(v[r][0]||'').trim()==='*') return _tgDirsRow(r);
+  return null;
+}
+// tag — кого тегати; missing:true — призначеної директорки немає, лід нічий:
+// тегаємо ескалацію ('*') і прямо пишемо, що саме не налаштовано.
+function _tgWhoFor(loc){
+  var d=null; try{ d=_tgDirectorExact(loc); }catch(_e){}
+  var tag=_tgMention(d);
+  var L=String(loc||'').trim() || '—';
+  if(tag) return {tag:tag, missing:false, loc:L, warn:''};
+  var star=null; try{ star=_tgStarDirector(); }catch(_e2){}
+  return {tag:_tgMention(star), missing:true, loc:L,
+          warn:'⚠️ <b>'+_htmlEsc(L)+'</b> — директорку не призначено в ТГ_Директори'};
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.156 БУДЬ-ЯКА ДІЯ ПО ЛІДУ = РЕАКЦІЯ.
+// Раніше реакцію фіксували лише «результативні» дії. Кнопки, що просто
+// показують клавіатуру («🗓 Екскурсія», «⏳ Передзвонити», крок годин/хвилин,
+// «← назад») і кнопки очікуваного вводу («📝 Примітка», «✏️ Інша») рядок не
+// писали взагалі — тож SLA спокійно відраховував 15 хв і смикав директорку
+// по ліду, який уже в роботі.
+// ═══════════════════════════════════════════════════════════════════════════
+function _leadTouchReaction(id, who){
+  try{
+    var sh=_leadsBotSheet(); var v=sh.getDataRange().getValues(); var now=formatDate(new Date());
+    for(var r=1;r<v.length;r++){
+      if(String(v[r][LB.lead_id])!==String(id)) continue;
+      var row=v[r];
+      if(String(row[LB.first_reaction_at]||'').trim()) return false;   // вже зафіксовано
+      row[LB.first_reaction_at]=now;
+      if(!String(row[LB.assignee]||'').trim() && who) row[LB.assignee]=who;
+      var mins=_leadMinutes(row[LB.created_at], now);
+      if(mins!=null) row[LB.sla_ok]=(mins<=15)?'YES':'NO';
+      var rem=_remGet(row); rem.r1=now; rem.r2=now; _remSet(row,rem);   // SLA закрито
+      row[LB.updated_at]=now;
+      sh.getRange(r+1,1,1,row.length).setValues([row]);
+      return true;
+    }
+  }catch(_e){}
+  return false;
+}
+
 function _tgHandleCallback(cq){
   try{
     var parts=String(cq.data||'').split('|');
     if(parts[0]!=='L'){ _tgAck(cq); return; }
     var id=parts[1], act=parts[2];
     var who=cq.from && (cq.from.username?('@'+cq.from.username):(cq.from.first_name||'')) || '';
-    try{ if(cq.from && cq.from.username && cq.from.id) _tgLearnUserId(cq.from.username, cq.from.id); }catch(_lu){}  // автозаповнення user_id
+    try{ if(cq.from && cq.from.username && cq.from.id){ _tgLearnUserId(cq.from.username, cq.from.id); _TG_DIRS_CACHE=null; } }catch(_lu){}  // автозаповнення user_id
+    // v7.156: фіксуємо реакцію ДО розгалуження — байдуже, яку саме кнопку натиснули.
+    _leadTouchReaction(id, who);
     // Кнопки, що чекають ВВІД: лише popup-підтвердження, НІЧОГО в чат; наступне повідомлення = ввід.
     if(act==='note'){    _tgAck(cq); _tgSetPending(cq, id, 'note',    'напишіть примітку:',              'Примітка до ліда'); return; }
     if(act==='exother'){ _tgAck(cq); _tgSetPending(cq, id, 'excdate', 'напишіть дату екскурсії (26.08):','ДД.ММ'); return; }
@@ -1853,7 +1925,8 @@ function _tgHandlePending(leadId, kind, text, who, promptMid, userMsgId){
     }
     row[LB.log]=JSON.stringify(a);   // гілки вище могли дописати в журнал — пересеріалізуємо
     if(!String(row[LB.first_reaction_at]).trim()){ row[LB.first_reaction_at]=now; if(!String(row[LB.assignee]).trim()) row[LB.assignee]=who;
-      var mins=_leadMinutes(row[LB.created_at], now); if(mins!=null) row[LB.sla_ok]=(mins<=15)?'YES':'NO'; }
+      var mins=_leadMinutes(row[LB.created_at], now); if(mins!=null) row[LB.sla_ok]=(mins<=15)?'YES':'NO'; 
+      var _rm=_remGet(row); _rm.r1=now; _rm.r2=now; _remSet(row,_rm); }   // v7.156: реакція закриває SLA
     row[LB.updated_at]=now; sh.getRange(r+1,1,1,row.length).setValues([row]);
     var ld=_leadObj(row), closed=(ld.status==='signed'||ld.status==='refused');
     _tgApi('editMessageText',{chat_id:ld.chat_id, message_id:ld.tg_message_id, text:_leadCardText(ld), parse_mode:'HTML', reply_markup: nextKb || (closed?{inline_keyboard:[]}:_leadKb(leadId))});
@@ -1881,15 +1954,23 @@ function tgSlaCheck(){
     for(var r=1;r<v.length;r++){
       var row=v[r]; var st=String(row[LB.status]); if(nowRef==null) continue;
       var mid=row[LB.tg_message_id], fired=false;
-      var d=null; try{ d=_tgDirectorFor(row[LB['локація']]); }catch(_d){}
-      var men=_tgMention(d);
+      var w=_tgWhoFor(row[LB['локація']]);
+      var men=w.tag, warn=w.warn ? ('\n'+w.warn) : '';
       // ── SLA 15/30 хв для лідів без першої реакції ──
       if(st==='new' && !row[LB.first_reaction_at]){
         var cMs=_leadMs(row[LB.created_at]); if(cMs==null) continue;
         var mins=Math.round((nowRef-cMs)/60000); if(mins<0) continue;
         var rem={}; try{rem=JSON.parse(row[LB.reminders]||'{}');}catch(_){}
-        if(mins>=TG_M30 && !rem.r2){ _tgSend(chat,'‼️ '+(men||'')+' <b>лід без реакції — ескалація!</b>',{reply_to_message_id:mid}); rem.r2=now; fired=true; }
-        else if(mins>=TG_M15 && !rem.r1){ _tgSend(chat,'⏰ '+(men||'хто бере?')+', <b>лід без реакції</b>',{reply_to_message_id:mid}); rem.r1=now; fired=true; }
+        if(w.missing){
+          // Директорки для локації немає → лід нічий. Не чекаємо 30 хв на ескалацію:
+          // одразу тегаємо '*' і прямо кажемо, чого бракує в ТГ_Директори.
+          if(mins>=TG_M15 && !rem.r1){
+            _tgSend(chat,(men?men+', ':'')+'<b>лід без реакції і без відповідальної</b>'+warn,{reply_to_message_id:mid});
+            rem.r1=now; rem.r2=now; fired=true;   // друге нагадування вже зайве
+          }
+        }
+        else if(mins>=TG_M30 && !rem.r2){ _tgSend(chat,'‼️ '+men+' <b>лід без реакції — ескалація!</b>',{reply_to_message_id:mid}); rem.r2=now; fired=true; }
+        else if(mins>=TG_M15 && !rem.r1){ _tgSend(chat,'⏰ '+men+', <b>лід без реакції</b>',{reply_to_message_id:mid}); rem.r1=now; fired=true; }
         if(fired){ row[LB.reminders]=JSON.stringify(rem); row[LB.updated_at]=now; sh.getRange(r+1,1,1,row.length).setValues([row]); }
       }
       // ── «Не відповів»: кожні 2 год нагадування (до 3×), потім статус «не вдалось» ──
@@ -1897,8 +1978,8 @@ function tgSlaCheck(){
         var lastMs=_leadMs(row[LB.last_noanswer_at]||row[LB.updated_at]); if(lastMs==null) continue;
         var hrs=(nowRef-lastMs)/3600000; var att=Number(row[LB.call_attempts]||0);
         if(hrs>=TG_CALLH){
-          if(att>=3){ row[LB.status]='unreachable'; var _a=[]; try{_a=JSON.parse(row[LB.log]||'[]');}catch(_){}; _a.push({ts:now,who:'system',act:'unreachable'}); row[LB.log]=JSON.stringify(_a); _tgSend(chat,'📵 '+(men||'')+' 3 спроби без відповіді — статус «не вдалось додзвонитись».',{reply_to_message_id:mid}); }
-          else { att++; _tgSend(chat,'🔁 '+(men||'')+', час набрати ще раз (спроба '+att+'/3)',{reply_to_message_id:mid}); row[LB.call_attempts]=att; row[LB.last_noanswer_at]=now; }
+          if(att>=3){ row[LB.status]='unreachable'; var _a=[]; try{_a=JSON.parse(row[LB.log]||'[]');}catch(_){}; _a.push({ts:now,who:'system',act:'unreachable'}); row[LB.log]=JSON.stringify(_a); _tgSend(chat,'📵 '+men+' 3 спроби без відповіді — статус «не вдалось додзвонитись».'+warn,{reply_to_message_id:mid}); }
+          else { att++; _tgSend(chat,'🔁 '+men+', час набрати ще раз (спроба '+att+'/3)'+warn,{reply_to_message_id:mid}); row[LB.call_attempts]=att; row[LB.last_noanswer_at]=now; }
           row[LB.updated_at]=now; sh.getRange(r+1,1,1,row.length).setValues([row]);
         }
       }
@@ -1912,16 +1993,16 @@ function tgSlaCheck(){
         var pre2 = TG_TEST ? (excDT-2*60000) : (excDT-2*HR);     // тест: -2хв · прод: за 2 год
         var after= TG_TEST ? (excDT+4*60000) : (day00+33*HR);    // тест: +4хв · прод: наступний ранок 9:00
         var ch=false;
-        if(!rem.exEve && _past(eve)){ if(_due(eve)) _tgSend(chat,'🔔 '+(men||'')+' завтра о '+tt+' екскурсія — '+_htmlEsc(row[LB.child]||'лід'),{reply_to_message_id:mid}); rem.exEve=1; ch=true; }
-        if(!rem.ex2h && _past(pre2)){ if(_due(pre2)) _tgSend(chat,'⏰ '+(men||'')+' за 2 год екскурсія о '+tt,{reply_to_message_id:mid}); rem.ex2h=1; ch=true; }
-        if(!rem.exAfter && _past(after)){ if(_due(after)) _tgSend(chat,'❓ '+(men||'')+' чим закінчилась екскурсія? онови статус ліда',{reply_to_message_id:mid}); rem.exAfter=1; ch=true; }
+        if(!rem.exEve && _past(eve)){ if(_due(eve)) _tgSend(chat,'🔔 '+men+' завтра о '+tt+' екскурсія — '+_htmlEsc(row[LB.child]||'лід')+warn,{reply_to_message_id:mid}); rem.exEve=1; ch=true; }
+        if(!rem.ex2h && _past(pre2)){ if(_due(pre2)) _tgSend(chat,'⏰ '+men+' за 2 год екскурсія о '+tt+warn,{reply_to_message_id:mid}); rem.ex2h=1; ch=true; }
+        if(!rem.exAfter && _past(after)){ if(_due(after)) _tgSend(chat,'❓ '+men+' чим закінчилась екскурсія? онови статус ліда'+warn,{reply_to_message_id:mid}); rem.exAfter=1; ch=true; }
         if(ch){ row[LB.reminders]=JSON.stringify(rem); row[LB.updated_at]=now; sh.getRange(r+1,1,1,row.length).setValues([row]); }
       }
       // ── Передзвонити пізніше: вранці того дня о 9:00 ──
       else if(st==='callback_later' && row[LB.callback_date]){
         var rem2={}; try{rem2=JSON.parse(row[LB.reminders]||'{}');}catch(_){}
         var cbT=_mkMs(row[LB.callback_date], _fmtTime(row[LB.callback_time]) || (TG_TEST?'00:00':'09:00'));   // о призначеному часі
-        if(cbT!=null && !rem2.cb && _past(cbT)){ if(_due(cbT)) _tgSend(chat,'📞 '+(men||'')+' час передзвонити ('+_htmlEsc(row[LB.callback_date])+(_fmtTime(row[LB.callback_time])?(' о '+_fmtTime(row[LB.callback_time])):'')+')',{reply_to_message_id:mid}); rem2.cb=1; row[LB.reminders]=JSON.stringify(rem2); row[LB.updated_at]=now; sh.getRange(r+1,1,1,row.length).setValues([row]); }
+        if(cbT!=null && !rem2.cb && _past(cbT)){ if(_due(cbT)) _tgSend(chat,'📞 '+men+' час передзвонити ('+_htmlEsc(row[LB.callback_date])+(_fmtTime(row[LB.callback_time])?(' о '+_fmtTime(row[LB.callback_time])):'')+')'+warn,{reply_to_message_id:mid}); rem2.cb=1; row[LB.reminders]=JSON.stringify(rem2); row[LB.updated_at]=now; sh.getRange(r+1,1,1,row.length).setValues([row]); }
       }
     }
     return {ok:true};
@@ -2028,7 +2109,8 @@ function _tgHandleReply(cardMid, text, who, opts){
     if(restFinal){ var prevN=String(row[LB.notes]||''); row[LB.notes]=(prevN?prevN+'\n':'')+restFinal.slice(0,200); }
     if(!String(row[LB.first_reaction_at]).trim()){ row[LB.first_reaction_at]=now;
       if(!String(row[LB.assignee]).trim()) row[LB.assignee]=who;
-      var mins=_leadMinutes(row[LB.created_at], now); if(mins!=null) row[LB.sla_ok]=(mins<=15)?'YES':'NO'; }
+      var mins=_leadMinutes(row[LB.created_at], now); if(mins!=null) row[LB.sla_ok]=(mins<=15)?'YES':'NO'; 
+      var _rm=_remGet(row); _rm.r1=now; _rm.r2=now; _remSet(row,_rm); }   // v7.156: реакція закриває SLA
     row[LB.updated_at]=now;
     sh.getRange(r+1,1,1,row.length).setValues([row]);
     var ld=_leadObj(row), closed=(ld.status==='signed'||ld.status==='refused');
@@ -2096,7 +2178,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.155', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.156', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
