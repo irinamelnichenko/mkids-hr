@@ -2479,6 +2479,209 @@ function _tgUpdateLead(id, act, who){
   return null;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.163 РЕМАП СИРІТСЬКИХ ВІДМІТОК У ТАБЕЛІ.
+// v7.162 зупинив ПРИПЛИВ; ці функції розбирають те, що вже накопичилось.
+//   REMAP_ORPHAN_ATTENDANCE_DRYRUN() — лише звіт, нічого не пише
+//   REMAP_ORPHAN_ATTENDANCE_APPLY()  — переносить і чистить дублі
+//
+// Зіставлення ЛИШЕ за точним ПІБ. Описки («Скульбуденко» ↔ «Скольбуденко»)
+// свідомо НЕ ремапляться: відрізнити описку від іншої дитини автоматично
+// неможливо — Лукащук Мирон і Лукащук Мартін це різні діти.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Явний стоп-лист: схожі прізвища, але РІЗНІ діти. Точний матч їх і так не
+// візьме, але лишаємо запобіжник на випадок пом'якшення правил у майбутньому.
+var REMAP_SKIP_IDS = [
+  'c_Лукащук Мирон_Baby-ki_Борщагів',
+  'c_Волошина Мирослава_Baby-ki_Борщагів',
+  'c_Дрижирук Тимофій_miniBaby_Бровари'
+];
+// Тестове сміття — видаляємо беззастережно.
+var REMAP_DELETE_IDS = ['DIAG_TEST_DELETEME'];
+
+function _rmNorm(s){ return String(s == null ? '' : s).trim().toLowerCase().replace(/\s+/g,' '); }
+function _rmPad(s,n){ s=String(s); while(s.length<n) s+=' '; return s; }
+
+function REMAP_ORPHAN_ATTENDANCE_DRYRUN(){ _remapOrphanAttendance(true); }
+function REMAP_ORPHAN_ATTENDANCE_APPLY(){  _remapOrphanAttendance(false); }
+
+function _remapOrphanAttendance(dryRun){
+  var out=[];
+  function o(l){ out.push(l); if(out.length>=60){ Logger.log(out.join('\n')); out=[]; } }
+  function flush(){ if(out.length) Logger.log(out.join('\n')); out=[]; }
+
+  o('═══ REMAP_ORPHAN_ATTENDANCE — ' + (dryRun ? 'DRY RUN (нічого не пишеться)' : '*** ЗАПИС ***') + ' ═══');
+
+  var ss = getCRMSpreadsheet();
+  var tz = ss.getSpreadsheetTimeZone() || 'Europe/Kiev';
+
+  // ── картки ──
+  var csh = ss.getSheetByName(SHEET_CLIENTS);
+  if(!csh || csh.getLastRow() < 2){ o('!! Аркуш «' + SHEET_CLIENTS + '» порожній'); return flush(); }
+  var cv = csh.getDataRange().getValues();
+  var ch = cv[0].map(function(x){ return String(x).trim(); });
+  var iId=ch.indexOf('ID'), iNm=ch.indexOf('ПІБ дитини'), iLc=ch.indexOf('Локація'), iSt=ch.indexOf('Статус');
+  if(iId<0||iNm<0){ o('!! У Клієнтах немає ID / ПІБ дитини'); return flush(); }
+
+  var known={}, byNameLoc={}, byName={}, statusOf={};
+  for(var r=1;r<cv.length;r++){
+    var id=String(cv[r][iId]||'').trim(); if(!id) continue;
+    known[id]=true; statusOf[id]=String(cv[r][iSt]||'').trim();
+    var nm=_rmNorm(cv[r][iNm]); if(!nm) continue;
+    var lc=_rmNorm(iLc>=0?cv[r][iLc]:'');
+    (byNameLoc[nm+'||'+lc]=byNameLoc[nm+'||'+lc]||[]).push(id);
+    (byName[nm]=byName[nm]||[]).push(id);
+  }
+  function uniq(a){ var m={},k=[]; (a||[]).forEach(function(x){ if(!m[x]){m[x]=1;k.push(x);} }); return k.sort(); }
+  o('Карток: ' + (cv.length-1));
+
+  // ── табель ──
+  var ash = ss.getSheetByName(SHEET_ATTENDANCE);
+  if(!ash || ash.getLastRow() < 2){ o('!! Аркуш «' + SHEET_ATTENDANCE + '» порожній'); return flush(); }
+  var av = ash.getDataRange().getValues();
+  var ah = av[0].map(function(x){ return String(x).trim(); });
+  var aDt=ah.indexOf('Дата'), aId=ah.indexOf('ID дитини'), aNm=ah.indexOf("Ім'я дитини"), aLc=ah.indexOf('Локація');
+  if(aDt<0||aId<0){ o('!! У Табелі немає Дата / ID дитини'); return flush(); }
+  o('Рядків у Табелі: ' + (av.length-1) + '   (аркушевий рядок = індекс + 1)');
+
+  var skip={}; REMAP_SKIP_IDS.forEach(function(x){ skip[x]=true; });
+  var kill={}; REMAP_DELETE_IDS.forEach(function(x){ kill[x]=true; });
+
+  // ── 1. згрупувати сирітські рядки за ID ──
+  var groups={}, keep={};
+  for(var r2=1;r2<av.length;r2++){
+    var id2=String(av[r2][aId]||'').trim();
+    var dk=_attDateIso(av[r2][aDt], tz);
+    if(!id2) continue;
+    if(known[id2] || id2.indexOf('STAFF::')===0){ keep[dk+'||'+id2]=true; continue; }   // здорові рядки
+    var g=groups[id2] || (groups[id2]={rows:[], name:'', loc:''});
+    g.rows.push({idx:r2, row:r2+1, date:dk});
+    if(!g.name) g.name=String(av[r2][aNm]||'').trim();
+    if(!g.loc)  g.loc =String(aLc>=0?av[r2][aLc]:'').trim();
+  }
+
+  // ── 2. вирішити долю кожної сирітської ID ──
+  var plan=[], amb=[], nocard=[], skipped=[], killed=[];
+  Object.keys(groups).sort().forEach(function(oldId){
+    var g=groups[oldId];
+    if(kill[oldId]){ killed.push({oldId:oldId, g:g}); return; }
+    if(skip[oldId]){ skipped.push({oldId:oldId, g:g, why:'стоп-лист (інша дитина)'}); return; }
+    var nm=_rmNorm(g.name), lc=_rmNorm(g.loc);
+    if(!nm){ nocard.push({oldId:oldId, g:g, why:'порожнє ПІБ у рядку'}); return; }
+    var cand=uniq(byNameLoc[nm+'||'+lc]);
+    var how='ПІБ+локація';
+    if(cand.length!==1){ cand=uniq(byName[nm]); how='ПІБ (усі локації)'; }
+    if(cand.length===0){ nocard.push({oldId:oldId, g:g, why:'картки з таким ПІБ немає'}); return; }
+    if(cand.length>1){ amb.push({oldId:oldId, g:g, cands:cand}); return; }
+    if(cand[0]===oldId){ nocard.push({oldId:oldId, g:g, why:'ціль = сама себе'}); return; }
+    plan.push({oldId:oldId, newId:cand[0], g:g, how:how});
+  });
+
+  // ── 3. розкласти рядки на «перенести» і «видалити як дубль» ──
+  var upd=[], del=[];
+  plan.forEach(function(p){
+    p.move=0; p.dup=0;
+    p.g.rows.forEach(function(x){
+      var k=x.date+'||'+p.newId;
+      if(keep[k]){ del.push({row:x.row, why:'дубль ' + x.date + ' → ' + p.newId}); p.dup++; }
+      else { keep[k]=true; upd.push({row:x.row, newId:p.newId}); p.move++; }
+    });
+  });
+  killed.forEach(function(k){ k.g.rows.forEach(function(x){ del.push({row:x.row, why:'тестовий рядок ' + k.oldId}); }); });
+
+  // ── звіт ──
+  o('');
+  o('══ ЗІСТАВЛЕНО ОДНОЗНАЧНО: ' + plan.length + ' ID ══');
+  o('  ' + _rmPad('стара ID',40) + _rmPad('нова ID',40) + _rmPad('ПІБ',24) + _rmPad('локація',14) +
+    _rmPad('відм.',7) + _rmPad('дубль',7) + _rmPad('статус',12) + 'як');
+  plan.sort(function(a,b){ return (b.move+b.dup)-(a.move+a.dup); }).forEach(function(p){
+    o('  ' + _rmPad(p.oldId.slice(0,38),40) + _rmPad(p.newId.slice(0,38),40) +
+      _rmPad(p.g.name.slice(0,22),24) + _rmPad(p.g.loc.slice(0,12),14) +
+      _rmPad(String(p.move),7) + _rmPad(String(p.dup),7) +
+      _rmPad(statusOf[p.newId]||'—',12) + p.how);
+  });
+
+  function block(title, arr, extra){
+    o(''); o('══ ' + title + ': ' + arr.length + ' ══');
+    arr.forEach(function(x){
+      o('  ' + _rmPad(x.oldId.slice(0,42),44) + _rmPad(x.g.name.slice(0,22),24) +
+        _rmPad(x.g.loc.slice(0,12),14) + _rmPad(x.g.rows.length + ' відм.',10) + (extra?extra(x):''));
+    });
+  }
+  block('НЕОДНОЗНАЧНІ — не чіпаємо', amb, function(x){ return 'кандидати: ' + x.cands.join(' , '); });
+  block('БЕЗ КАРТКИ — не чіпаємо', nocard, function(x){ return x.why; });
+  block('СТОП-ЛИСТ — не чіпаємо', skipped, function(x){ return x.why; });
+  block('НА ВИДАЛЕННЯ (тестові)', killed, function(){ return ''; });
+
+  o('');
+  o('╔═════════════════ ПІДСУМОК ═════════════════╗');
+  o('  ID зіставлено однозначно : ' + plan.length);
+  o('  рядків ПЕРЕНЕСТИ         : ' + upd.length);
+  o('  рядків ВИДАЛИТИ як дублі : ' + (del.length - killed.reduce(function(s,k){return s+k.g.rows.length;},0)));
+  o('  рядків ВИДАЛИТИ тестових : ' + killed.reduce(function(s,k){return s+k.g.rows.length;},0));
+  o('  не чіпаємо (ID)          : ' + (amb.length + nocard.length + skipped.length));
+  o('╚════════════════════════════════════════════╝');
+
+  if(dryRun){
+    o('');
+    o('DRY RUN — нічого не записано. Далі: REMAP_ORPHAN_ATTENDANCE_APPLY()');
+    return flush();
+  }
+
+  // ── ЗАПИС ──
+  var lock=LockService.getScriptLock();
+  if(!lock.tryLock(30000)){ o('!! lock зайнятий — ПЕРЕРВАНО'); return flush(); }
+  try{
+    var stamp=Utilities.formatDate(new Date(), tz, 'yyyyMMdd_HHmmss');
+    var lastBefore=ash.getLastRow();
+
+    // Точка відкату. УВАГА: сам по собі lastRow тут НЕ відкат — на відміну від
+    // міграції B1 ми не тільки дописуємо, а ПРАВИМО і ВИДАЛЯЄМО рядки. Тому
+    // оригінали всіх зачеплених рядків спершу лягають в окремий аркуш.
+    var touched={};
+    upd.forEach(function(u){ touched[u.row]=true; });
+    del.forEach(function(d){ touched[d.row]=true; });
+    var rowsNums=Object.keys(touched).map(Number).sort(function(a,b){ return a-b; });
+    var backup=[ah.concat(['_рядок_до_ремапу']) ];
+    rowsNums.forEach(function(rn){ backup.push(av[rn-1].slice().concat([rn])); });
+    var bname=('BACKUP_Табель_ремап_'+stamp).substring(0,95);
+    var bsh=ss.insertSheet(bname);
+    bsh.getRange(1,1,backup.length,backup[0].length).setValues(backup);
+    bsh.setFrozenRows(1);
+
+    o('');
+    o('╔════════ ТОЧКА ВІДКАТУ ════════╗');
+    o('  Табель, рядків до правки : ' + lastBefore);
+    o('  оригінали зачеплених     : ' + bname + '  (' + rowsNums.length + ' рядків)');
+    o('  відкат = повернути ці рядки за номером із колонки «_рядок_до_ремапу»');
+    o('╚═══════════════════════════════╝');
+
+    // 1) перенесення — точкова правка колонки ID, рядки не зсуваються
+    upd.forEach(function(u){ ash.getRange(u.row, aId+1).setValue(u.newId); });
+    SpreadsheetApp.flush();
+    o('');
+    o('Перенесено: ' + upd.length + ' рядків');
+
+    // 2) видалення — ЗНИЗУ ВГОРУ, інакше номери попливуть
+    var delRows=del.map(function(d){ return d.row; }).sort(function(a,b){ return b-a; });
+    var prev=-1, dn=0;
+    delRows.forEach(function(rn){ if(rn===prev) return; ash.deleteRow(rn); prev=rn; dn++; });
+    SpreadsheetApp.flush();
+    o('Видалено: ' + dn + ' рядків');
+    o('');
+    o('Табель: було ' + lastBefore + ' → стало ' + ash.getLastRow() +
+      '   (очікувано ' + (lastBefore - dn) + ')');
+    if(ash.getLastRow() !== lastBefore - dn) o('!! РОЗБІЖНІСТЬ — перевір аркуш вручну');
+  }catch(e){
+    o('!! ПОМИЛКА: ' + (e.message||e));
+    o('!! Дивись BACKUP_Табель_ремап_* — там оригінали з номерами рядків.');
+  }finally{
+    lock.releaseLock();
+  }
+  flush();
+}
+
 // Разовий ремонт уже зіпсованих карток: правило працює лише на НОВІ дії, тож
 // ліди, у яких конфлікт стоїть просто зараз, треба почистити окремо.
 // REPAIR_LEAD_CONFLICTS() — показує; ..._APPLY() — чистить і перемальовує картки.
@@ -2951,7 +3154,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.162', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.163', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
