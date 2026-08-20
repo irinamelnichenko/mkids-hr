@@ -2147,7 +2147,7 @@ function _mirrorFileId(){
     + '. Запусти SETUP_MIRROR_SPREADSHEET().');
   return id;
 }
-var MIRROR_HEADER    = ['школа','дата ','телефон','імя одного з батьків','імя дитини','вік дитини',
+var MIRROR_HEADER    = ['локація','дата ','телефон','імя одного з батьків','імя дитини','вік дитини',
                         'джерело ліда','статус дзвінка','дата повторного дзвінка',
                         'статус повторного дзвінка','дата екскурсії','статус екскурсії','коментар'];
 var MIRROR_ID_COL    = 20;   // службова колонка lead_id
@@ -2921,6 +2921,78 @@ function _createMissingCards(dryRun){
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// v7.168 РАЗОВА: заголовок колонки A у дзеркалі «школа» → «локація».
+// «школа» дісталась у спадок від файлу маркетолога, хоча в колонці лежить
+// назва локації (Голосієво, Позняки, Бровари). Дані правильні — правимо
+// ЛИШЕ клітинку A1, більше нічого не чіпаємо.
+//
+// Константу MIRROR_HEADER теж змінено, інакше _mirrorInitTab повернув би
+// «школа» назад при створенні наступної вкладки.
+// ═══════════════════════════════════════════════════════════════════════════
+function RENAME_MIRROR_HEADER_DRYRUN(){ _renameMirrorHeader(true); }
+function RENAME_MIRROR_HEADER_APPLY(){  _renameMirrorHeader(false); }
+
+function _renameMirrorHeader(dryRun){
+  var out=[];
+  function o(l){ out.push(l); if(out.length>=60){ Logger.log(out.join('\n')); out=[]; } }
+  function flush(){ if(out.length) Logger.log(out.join('\n')); out=[]; }
+
+  o('═══ RENAME_MIRROR_HEADER — ' + (dryRun?'DRY RUN (нічого не пишеться)':'*** ЗАПИС ***') + ' ═══');
+
+  var id;
+  try{ id=_mirrorFileId(); }
+  catch(e){ o('!! ' + (e.message||e)); return flush(); }
+
+  var ss;
+  try{ ss=SpreadsheetApp.openById(id); }
+  catch(e2){ o('!! Таблиця-дзеркало не відкривається: ' + (e2.message||e2)); return flush(); }
+
+  var WANT=MIRROR_HEADER[0];          // 'локація'
+  var OLD ='школа';
+  o('Дзеркало: ' + ss.getName());
+  o('A1: «' + OLD + '» → «' + WANT + '»');
+  o('');
+
+  var todo=[], ok=0, foreign=[];
+  ss.getSheets().forEach(function(sh){
+    var a1=String(sh.getRange(1,1).getValue()).trim();
+    var b1=String(sh.getRange(1,2).getValue()).trim();
+    // Запобіжник: правимо лише вкладки з розкладкою дзеркала. Якщо B1 не збігається
+    // з другою колонкою шаблону — це не наша вкладка, не чіпаємо.
+    if(b1!==String(MIRROR_HEADER[1]).trim()){ foreign.push({n:sh.getName(), a1:a1, b1:b1}); return; }
+    if(a1===WANT){ ok++; return; }
+    todo.push({sh:sh, n:sh.getName(), a1:a1});
+  });
+
+  o('  ' + _rmPad('вкладка',30) + _rmPad('A1 зараз',16) + 'дія');
+  todo.forEach(function(x){ o('  ' + _rmPad(x.n.slice(0,28),30) + _rmPad('«'+x.a1+'»',16) + 'ПЕРЕЙМЕНУВАТИ'); });
+  if(ok) o('  (уже «' + WANT + '»: ' + ok + ' вкладок — пропускаємо)');
+  if(foreign.length){
+    o('');
+    o('  ── не схожі на вкладку дзеркала, НЕ чіпаємо ──');
+    foreign.forEach(function(x){ o('     ' + _rmPad(x.n.slice(0,30),32) + 'A1=«'+x.a1+'»  B1=«'+x.b1+'»'); });
+  }
+
+  o('');
+  o('  до правки: ' + todo.length + ' · вже коректних: ' + ok + ' · пропущено: ' + foreign.length);
+
+  if(dryRun){
+    o('');
+    o('DRY RUN — нічого не змінено. Далі: RENAME_MIRROR_HEADER_APPLY()');
+    return flush();
+  }
+  if(!todo.length){ o(''); o('Міняти нічого.'); return flush(); }
+
+  todo.forEach(function(x){ x.sh.getRange(1,1).setValue(WANT); });
+  SpreadsheetApp.flush();
+
+  o('');
+  o('Перейменовано вкладок: ' + todo.length);
+  o('Змінено ЛИШЕ клітинку A1 у кожній — дані і решта шапки недоторкані.');
+  flush();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // v7.163 РЕМАП СИРІТСЬКИХ ВІДМІТОК У ТАБЕЛІ.
 // v7.162 зупинив ПРИПЛИВ; ці функції розбирають те, що вже накопичилось.
 //   REMAP_ORPHAN_ATTENDANCE_DRYRUN() — лише звіт, нічого не пише
@@ -3624,7 +3696,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.167', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.168', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
