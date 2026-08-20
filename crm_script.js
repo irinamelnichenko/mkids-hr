@@ -962,6 +962,383 @@ function getLeads(p){
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// v7.158 ТИЖНЕВИЙ ЗВІТ ВЛАСНИКУ.
+// Щопонеділка о 9:00 — особистим повідомленням у Telegram: текст + графіки
+// картинками (видно одразу, без відкривання файлу) + той самий звіт у PDF.
+// Отримувачі — аркуш «Звіт_Отримувачі», а не хардкод.
+// Ручний запуск: ?action=sendOwnerReport  (додатково &dry=1 — не слати, лише
+// повернути текст; &to=<user_id> — надіслати лише одному).
+// ═══════════════════════════════════════════════════════════════════════════
+var REPORT_RCPT_SHEET  = 'Звіт_Отримувачі';
+var REPORT_RCPT_HEADER = ['ПІБ','telegram user_id','активний'];
+var REPORT_WEEKS_BACK  = 12;
+
+function _rcptSheet(){
+  var ss=getCRMSpreadsheet(), sh=ss.getSheetByName(REPORT_RCPT_SHEET);
+  if(!sh){
+    sh=ss.insertSheet(REPORT_RCPT_SHEET);
+    sh.getRange(1,1,1,REPORT_RCPT_HEADER.length).setValues([REPORT_RCPT_HEADER]);
+    sh.setFrozenRows(1);
+    try{ sh.getRange(1,2,sh.getMaxRows(),1).setNumberFormat('@'); }catch(_e){}  // user_id — текст
+  }
+  return sh;
+}
+// Активні отримувачі. Рядок без user_id повертаємо теж, але позначеним:
+// про нього треба сказати вголос, інакше звіт «успішно» піде нікому.
+function _reportRecipients(){
+  var v=_rcptSheet().getDataRange().getValues(), out=[];
+  for(var r=1;r<v.length;r++){
+    var name=String(v[r][0]||'').trim();
+    var uid =String(v[r][1]||'').trim().replace(/\.0$/,'');
+    var act =String(v[r][2]||'').trim().toLowerCase();
+    if(!name && !uid) continue;
+    if(['так','yes','1','true','+','y'].indexOf(act)<0) continue;
+    out.push({name:name, uid:uid, ok:!!uid});
+  }
+  return out;
+}
+
+// ── Тижні. Понеділок–неділя, у київському календарі. Рахуємо через UTC-конструктор,
+//    щоб не залежати від поясу рантайму (та сама пастка, що з днями тижня у v7.152).
+function _dayUTC(iso){ var p=String(iso).split('-'); return Date.UTC(+p[0],+p[1]-1,+p[2]); }
+function _isoUTC(ms){ var d=new Date(ms);
+  return d.getUTCFullYear()+'-'+('0'+(d.getUTCMonth()+1)).slice(-2)+'-'+('0'+d.getUTCDate()).slice(-2); }
+function _todayISOKyiv(){ return Utilities.formatDate(new Date(),'Europe/Kiev','yyyy-MM-dd'); }
+function _mondayISO(iso){
+  var ms=_dayUTC(iso), wd=new Date(ms).getUTCDay();       // 0=нд
+  return _isoUTC(ms - ((wd===0?6:wd-1))*86400000);
+}
+// offset=1 → минулий повний тиждень (саме він у понеділковому звіті), 0 → поточний.
+function _weekRange(offset){
+  var mon=_dayUTC(_mondayISO(_todayISOKyiv())) - offset*7*86400000;
+  return {from:_isoUTC(mon), to:_isoUTC(mon+6*86400000)};
+}
+function _dm(iso){ var p=String(iso).split('-'); return p[2]+'.'+p[1]; }
+
+// ── Метрики по зрізу рядків ──
+function _reportAgg(rows){
+  var a={total:0,call:0,exc:0,sign:0,ref:0,reactN:0,reactSum:0,react15:0,reactNone:0,
+         bySource:{},byLoc:{},refusals:{}};
+  rows.forEach(function(r){
+    a.total++;
+    if(r.didCall) a.call++;
+    if(r.didExc)  a.exc++;
+    if(r.didSign) a.sign++;
+    if(r.didRefuse) a.ref++;
+    function bump(o,k){ if(!o[k]) o[k]={n:0,sign:0}; return o[k]; }
+    var s=bump(a.bySource, r.source||'—'); s.n++; if(r.didSign) s.sign++;
+    var l=bump(a.byLoc,    r.loc||'—');    l.n++; if(r.didSign) l.sign++;
+    if(r.didRefuse){ var g=r.refuseGroup||'не вказано'; a.refusals[g]=(a.refusals[g]||0)+1; }
+    if(r.origin==='bot'){
+      if(r.reactMin!==null && r.reactMin!==undefined){
+        a.reactN++; a.reactSum+=r.reactMin; if(r.reactMin<=15) a.react15++;
+      } else a.reactNone++;
+    }
+  });
+  return a;
+}
+function _conv(a){ return a.total ? (a.sign*100/a.total) : 0; }
+function _pct(x,y){ return y>0 ? Math.round(x*100/y)+'%' : '—'; }
+
+// Стрілка порівняння. п.п. для відсотків, штуки для решти.
+function _arrow(cur, prev, unit){
+  var d=cur-prev;
+  var sign = d>0 ? '▲ +' : (d<0 ? '▼ -' : '→ ');
+  var val  = (unit==='pp') ? (Math.round(Math.abs(d)*10)/10) : Math.abs(d);
+  if(d===0) return '→ без змін (' + (unit==='pp' ? (Math.round(prev*10)/10)+'%' : prev) + ')';
+  return sign + val + (unit==='pp' ? ' п.п.' : '') + ' (' + (unit==='pp' ? (Math.round(prev*10)/10)+'%' : prev) + ')';
+}
+
+// ── Текст звіту (HTML для Telegram) ──
+function _reportText(R){
+  var L=[];
+  L.push('📊 <b>Звіт по лідах</b>');
+  L.push(_dm(R.range.from)+' – '+_dm(R.range.to)+'.'+R.range.to.slice(0,4));
+  L.push('');
+
+  var c=R.cur, p=R.prev;
+  L.push('<b>ГОЛОВНЕ</b>  <i>(у дужках — попередній тиждень)</i>');
+  L.push('Нових лідів   <b>'+c.total+'</b>   '+_arrow(c.total, p.total));
+  L.push('Екскурсій     <b>'+c.exc+'</b>   '+_arrow(c.exc, p.exc));
+  L.push('Договорів     <b>'+c.sign+'</b>   '+_arrow(c.sign, p.sign));
+  L.push('Конверсія     <b>'+(Math.round(_conv(c)*10)/10)+'%</b>   '+_arrow(_conv(c), _conv(p), 'pp'));
+  L.push('');
+
+  L.push('<b>ВОРОНКА</b>');
+  L.push('нові <b>'+c.total+'</b> → додзвонились <b>'+c.call+'</b> ('+_pct(c.call,c.total)+')');
+  L.push('→ екскурсія <b>'+c.exc+'</b> ('+_pct(c.exc,c.call)+') → договір <b>'+c.sign+'</b> ('+_pct(c.sign,c.exc)+')');
+  if(c.ref) L.push('відмов: <b>'+c.ref+'</b> ('+_pct(c.ref,c.total)+' від усіх)');
+  L.push('');
+
+  L.push('<b>ДЖЕРЕЛА</b>');
+  if(!R.sources.length) L.push('<i>немає даних</i>');
+  R.sources.forEach(function(s){
+    L.push(_htmlEsc(s.key)+' — '+s.n+' лід., '+s.sign+' дог., <b>'+Math.round(s.cv)+'%</b>'
+      + (s.drop ? '  ⚠️ просів (сер. за 12 тиж. '+Math.round(s.base)+'%)' : ''));
+  });
+  L.push('');
+
+  L.push('<b>ЛОКАЦІЇ</b>');
+  if(R.locTop.length){
+    L.push('Топ: '+R.locTop.map(function(x){ return _htmlEsc(x.key)+' '+Math.round(x.cv)+'% ('+x.sign+'/'+x.n+')'; }).join(' · '));
+  }
+  if(R.locBottom.length){
+    L.push('Антитоп: '+R.locBottom.map(function(x){ return _htmlEsc(x.key)+' '+Math.round(x.cv)+'% ('+x.sign+'/'+x.n+')'; }).join(' · '));
+  }
+  if(!R.locTop.length && !R.locBottom.length) L.push('<i>немає даних</i>');
+  L.push('');
+
+  L.push('<b>ШВИДКІСТЬ РЕАКЦІЇ</b>');
+  if(c.reactN){
+    L.push('середня <b>'+Math.round(c.reactSum/c.reactN)+' хв</b> · у 15 хв вклались <b>'
+      + c.react15+' з '+c.reactN+'</b> ('+_pct(c.react15,c.reactN)+')');
+  } else L.push('<i>немає лідів з бота за цей тиждень</i>');
+  if(c.reactNone) L.push('без жодної реакції: <b>'+c.reactNone+'</b>');
+  L.push('');
+
+  L.push('<b>ВІДМОВИ</b>');
+  if(!R.refusals.length) L.push('<i>відмов не було</i>');
+  R.refusals.forEach(function(x){ L.push(_htmlEsc(x.key)+' — <b>'+x.n+'</b>'); });
+
+  if(R.note){ L.push(''); L.push('<i>'+_htmlEsc(R.note)+'</i>'); }
+  var s=L.join('\n');
+  return s.length>3900 ? s.slice(0,3880)+'\n…(обрізано)' : s;
+}
+
+// ── Збір усього звіту ──
+function _buildOwnerReport(){
+  var all=[];
+  try{ all=all.concat(_leadsFromBot()); }catch(_e1){}
+  try{ all=all.concat(_leadsFromHistory()); }catch(_e2){}
+
+  var range=_weekRange(1), prevRange=_weekRange(2);
+  function slice(rg){ return all.filter(function(r){ return r.day && r.day>=rg.from && r.day<=rg.to; }); }
+  var cur=_reportAgg(slice(range)), prev=_reportAgg(slice(prevRange));
+
+  // 12 тижнів: динаміка + база для «канал просів»
+  var weeks=[], srcBase={};
+  for(var w=REPORT_WEEKS_BACK; w>=1; w--){
+    var rg=_weekRange(w), a=_reportAgg(slice(rg));
+    weeks.push({label:_dm(rg.from), leads:a.total, signs:a.sign});
+    for(var k in a.bySource){
+      if(!srcBase[k]) srcBase[k]={n:0,sign:0};
+      srcBase[k].n+=a.bySource[k].n; srcBase[k].sign+=a.bySource[k].sign;
+    }
+  }
+
+  var sources=[];
+  for(var s in cur.bySource){
+    var g=cur.bySource[s], cv=g.n?g.sign*100/g.n:0;
+    var b=srcBase[s], base=(b&&b.n)?b.sign*100/b.n:0;
+    // «Просів» рахуємо лише коли є на чому базуватись: на 1–2 лідах відсоток
+    // стрибає з 0 на 100 і підсвітка була б шумом, а не сигналом.
+    sources.push({key:s, n:g.n, sign:g.sign, cv:cv, base:base,
+                  drop:(g.n>=3 && base>0 && cv < base*0.75)});
+  }
+  sources.sort(function(x,y){ return y.n-x.n; });
+
+  var locs=[];
+  for(var l in cur.byLoc){
+    var gl=cur.byLoc[l];
+    if(gl.n<1) continue;
+    locs.push({key:l, n:gl.n, sign:gl.sign, cv:gl.n?gl.sign*100/gl.n:0});
+  }
+  locs.sort(function(x,y){ return (y.cv-x.cv) || (y.n-x.n); });
+  var locTop=locs.slice(0,3);
+  var locBottom=locs.slice(-3).reverse().filter(function(x){ return locTop.indexOf(x)<0; });
+
+  var refusals=[];
+  for(var rk in cur.refusals) refusals.push({key:rk, n:cur.refusals[rk]});
+  refusals.sort(function(x,y){ return y.n-x.n; });
+
+  var note='';
+  if(!cur.total) note='За цей тиждень лідів не було — цифри нульові, це не збій.';
+
+  return {range:range, prevRange:prevRange, cur:cur, prev:prev,
+          weeks:weeks, sources:sources, locTop:locTop, locBottom:locBottom,
+          refusals:refusals, note:note};
+}
+
+// ── Графіки. Кожен у своєму try: збій одного не має валити весь звіт. ──
+function _reportCharts(R){
+  var out=[];
+  try{
+    var dt=Charts.newDataTable()
+      .addColumn(Charts.ColumnType.STRING,'Тиждень')
+      .addColumn(Charts.ColumnType.NUMBER,'Ліди')
+      .addColumn(Charts.ColumnType.NUMBER,'Договори');
+    R.weeks.forEach(function(w){ dt.addRow([w.label, w.leads, w.signs]); });
+    var ch=Charts.newColumnChart().setDataTable(dt.build())
+      .setTitle('Ліди і договори — '+REPORT_WEEKS_BACK+' тижнів')
+      .setLegendPosition(Charts.Position.BOTTOM)
+      .setDimensions(900,420).build();
+    out.push({title:'Динаміка за '+REPORT_WEEKS_BACK+' тижнів', blob:ch.getBlob().setName('weeks.png'), w:900, h:420});
+  }catch(e){ out.push({title:'Динаміка', blob:null, err:String(e&&e.message||e)}); }
+
+  try{
+    if(R.sources.length){
+      var d2=Charts.newDataTable()
+        .addColumn(Charts.ColumnType.STRING,'Джерело')
+        .addColumn(Charts.ColumnType.NUMBER,'Конверсія, %');
+      R.sources.forEach(function(s){ d2.addRow([s.key, Math.round(s.cv*10)/10]); });
+      var c2=Charts.newBarChart().setDataTable(d2.build())
+        .setTitle('Конверсія за джерелом, %').setDimensions(900,360).build();
+      out.push({title:'Конверсія за джерелом', blob:c2.getBlob().setName('sources.png'), w:900, h:360});
+    }
+  }catch(e2){ out.push({title:'Джерела', blob:null, err:String(e2&&e2.message||e2)}); }
+
+  try{
+    var locs=R.locTop.concat(R.locBottom);
+    if(locs.length){
+      var d3=Charts.newDataTable()
+        .addColumn(Charts.ColumnType.STRING,'Локація')
+        .addColumn(Charts.ColumnType.NUMBER,'Конверсія, %');
+      locs.forEach(function(x){ d3.addRow([x.key, Math.round(x.cv*10)/10]); });
+      var c3=Charts.newBarChart().setDataTable(d3.build())
+        .setTitle('Конверсія за локаціями, % (топ і антитоп)').setDimensions(900,360).build();
+      out.push({title:'Конверсія за локаціями', blob:c3.getBlob().setName('locs.png'), w:900, h:360});
+    }
+  }catch(e3){ out.push({title:'Локації', blob:null, err:String(e3&&e3.message||e3)}); }
+
+  return out;
+}
+
+function _stripTags(s){
+  return String(s||'').replace(/<br\s*\/?>/gi,'\n').replace(/<[^>]+>/g,'')
+    .replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&').replace(/&quot;/g,'"').replace(/&#39;/g,"'");
+}
+
+// ── PDF. Через тимчасовий Google Doc: конвертер HTML→PDF картинки з data:-URI
+//    не рендерить, а в Doc вони вставляються надійно. Файл одразу в кошик.
+function _reportPdf(R, htmlText, charts){
+  var title='Звіт по лідах '+_dm(R.range.from)+'–'+_dm(R.range.to)+'.'+R.range.to.slice(0,4);
+  var doc=DocumentApp.create(title), b=doc.getBody();
+  b.appendParagraph(title).setHeading(DocumentApp.ParagraphHeading.HEADING1);
+  _stripTags(htmlText).split('\n').forEach(function(line){ b.appendParagraph(line); });
+  charts.forEach(function(c){
+    if(!c || !c.blob) return;
+    b.appendParagraph(c.title).setHeading(DocumentApp.ParagraphHeading.HEADING2);
+    try{
+      var img=b.appendImage(c.blob.copyBlob());   // копія: оригінал ще піде в Telegram
+      var W=460; img.setWidth(W); img.setHeight(Math.round(W*(c.h||420)/(c.w||900)));
+    }catch(_i){}
+  });
+  doc.saveAndClose();
+  var id=doc.getId();
+  var pdf=DriveApp.getFileById(id).getAs('application/pdf').setName(title+'.pdf');
+  var bytes=pdf.getBytes();                        // матеріалізуємо ДО видалення файлу
+  try{ DriveApp.getFileById(id).setTrashed(true); }catch(_t){}
+  return Utilities.newBlob(bytes,'application/pdf',title+'.pdf');
+}
+
+// ── Відправка файлів. _tgApi шле JSON, для файлів потрібен multipart:
+//    UrlFetchApp сам перемикається на нього, коли в payload лежить Blob.
+function _tgSendFile(method, chatId, field, blob, caption){
+  var tok=_tgTok(); if(!tok) return {ok:false, description:'no token'};
+  var payload={chat_id:String(chatId)};
+  payload[field]=blob;
+  if(caption){ payload.caption=String(caption).slice(0,1000); payload.parse_mode='HTML'; }
+  try{
+    var res=UrlFetchApp.fetch('https://api.telegram.org/bot'+tok+'/'+method,
+      {method:'post', payload:payload, muteHttpExceptions:true});
+    return JSON.parse(res.getContentText());
+  }catch(e){ return {ok:false, description:String(e&&e.message||e)}; }
+}
+
+// ── Головна: зібрати і надіслати ──
+function sendOwnerReport(params){
+  params=params||{};
+  var R, text;
+  try{ R=_buildOwnerReport(); text=_reportText(R); }
+  catch(e){ return {ok:false, error:'Не вдалось зібрати звіт: '+String(e&&e.message||e)}; }
+
+  if(String(params.dry||'')==='1')
+    return {ok:true, dryRun:true, range:R.range, text:_stripTags(text)};
+
+  var rcpts = params.to
+    ? [{name:'ручний запуск', uid:String(params.to).trim(), ok:true}]
+    : _reportRecipients();
+
+  var noUid=rcpts.filter(function(x){ return !x.ok; }).map(function(x){ return x.name; });
+  var live =rcpts.filter(function(x){ return x.ok; });
+  if(!live.length){
+    return {ok:false, error:'Немає жодного отримувача з user_id у «'+REPORT_RCPT_SHEET+'»',
+            noUid:noUid};
+  }
+
+  var charts=_reportCharts(R);
+  var pdf=null, pdfErr='';
+  try{ pdf=_reportPdf(R, text, charts); }catch(e2){ pdfErr=String(e2&&e2.message||e2); }
+
+  var sent=[];
+  live.forEach(function(p){
+    var st={name:p.name, uid:p.uid, text:false, photos:0, pdf:false, error:''};
+    var r1=_tgSend(p.uid, text, {});
+    st.text=!!(r1&&r1.ok);
+    // Найчастіша причина відмови: людина ще не написала боту жодного разу —
+    // Telegram забороняє боту починати діалог першим.
+    if(!st.text) st.error=String((r1&&r1.description)||'').slice(0,160);
+    if(st.text){
+      charts.forEach(function(c){
+        if(!c.blob) return;
+        var r2=_tgSendFile('sendPhoto', p.uid, 'photo', c.blob, c.title);
+        if(r2&&r2.ok) st.photos++;
+      });
+      if(pdf){ var r3=_tgSendFile('sendDocument', p.uid, 'document', pdf, 'Звіт у PDF'); st.pdf=!!(r3&&r3.ok); }
+    }
+    sent.push(st);
+  });
+
+  return {ok:true, range:R.range, recipients:sent, noUid:noUid,
+          chartsBuilt:charts.filter(function(c){return !!c.blob;}).length,
+          chartErrors:charts.filter(function(c){return !!c.err;}).map(function(c){return c.title+': '+c.err;}),
+          pdf:!!pdf, pdfError:pdfErr};
+}
+
+// ── Тригер: щопонеділка о 9:00 ──
+function installOwnerReportTrigger(){
+  ScriptApp.getProjectTriggers().forEach(function(t){
+    if(t.getHandlerFunction()==='weeklyOwnerReport') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('weeklyOwnerReport').timeBased()
+    .onWeekDay(ScriptApp.WeekDay.MONDAY).atHour(9).nearMinute(0).create();
+  Logger.log('Тригер weeklyOwnerReport встановлено: щопонеділка о 9:00.');
+}
+function weeklyOwnerReport(){ var r=sendOwnerReport({}); Logger.log(JSON.stringify(r)); return r; }
+
+// ── Разове наповнення аркуша отримувачів ──
+function SEED_REPORT_RECIPIENTS(){
+  var sh=_rcptSheet(), v=sh.getDataRange().getValues(), out=[];
+  out.push('═══ SEED_REPORT_RECIPIENTS ═══');
+  var uid='';
+  try{ var star=_tgStarDirector(); if(star && star.user_id) uid=String(star.user_id); }catch(_e){}
+  out.push(uid ? ('user_id узято з ТГ_Директори: '+uid)
+               : 'user_id ще невідомий — заповниться після першого натискання кнопки в боті;');
+  if(!uid) out.push('до того звіт цій людині НЕ піде, і sendOwnerReport скаже про це прямо.');
+
+  var name='Мельніченко Ірина', found=-1;
+  for(var r=1;r<v.length;r++) if(String(v[r][0]||'').trim()===name){ found=r+1; break; }
+  if(found>0){
+    var curId=String(v[found-1][1]||'').trim();
+    sh.getRange(found,1,1,3).setValues([[name, curId||uid, 'так']]);
+    out.push('ОНОВЛЕНО рядок '+found+': '+name+' · user_id='+(curId||uid||'—')+' · активний=так');
+  } else {
+    sh.appendRow([name, uid, 'так']);
+    out.push('ДОДАНО: '+name+' · user_id='+(uid||'—')+' · активний=так');
+  }
+  SpreadsheetApp.flush();
+  var after=sh.getDataRange().getValues();
+  out.push('');
+  out.push('═══ '+REPORT_RCPT_SHEET+' ═══');
+  out.push('  '+_pad2('ПІБ',26)+_pad2('user_id',16)+'активний');
+  for(var k=1;k<after.length;k++){
+    if(!String(after[k][0]||'').trim() && !String(after[k][1]||'').trim()) continue;
+    out.push('  '+_pad2(String(after[k][0]||''),26)+_pad2(String(after[k][1]||'—'),16)+String(after[k][2]||''));
+  }
+  Logger.log(out.join('\n'));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // v7.153 ЩОДЕННЕ ЗВЕДЕННЯ по лідах — щоранку о 9:00 у групу.
 // Встановити тригер один раз: installLeadsDigestTrigger().
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2295,7 +2672,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.157', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.158', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -2313,6 +2690,7 @@ function doGet(e) {
     else if (action === 'getAuthLog')         result = getAuthLog();   // v7.118 діагностика Авторизація_Лог
     else if (action === 'tgGetUpdates')       result = tgGetUpdates();   // v7.122 діагностика Telegram-бота
     else if (action === 'getLeads')           result = getLeads(e.parameter || {});   // v7.152 екран лідів
+    else if (action === 'sendOwnerReport')    result = sendOwnerReport(e.parameter || {});   // v7.158 тижневий звіт власнику
     else if (action === 'getBdayStatus')      result = getBdayStatus();                                            // v7.109 роут замість прямого читання листа з фронту
     else if (action === 'getAttendance')      result = getAttendance(e);
     else if (action === 'diagLocPayment')     result = diagLocPayment(e); // v7.57 read-only: пер-лок Payment-файл
