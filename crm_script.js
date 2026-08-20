@@ -2480,6 +2480,102 @@ function _tgUpdateLead(id, act, who){
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// v7.164 AUDIT_SHEET_CELLS — скільки комірок з'їдає кожен аркуш.
+// ТІЛЬКИ ЧИТАННЯ, нічого не видаляє.
+//
+// Ліміт Google Sheets — 10 млн комірок НА КНИГУ, і рахуються ВСІ комірки
+// сітки, а не лише заповнені. Аркуш 1000×26 коштує 26 000 комірок, навіть
+// якщо в ньому три рядки. Тому колонка «сітка» важливіша за «заповнено».
+// ═══════════════════════════════════════════════════════════════════════════
+var SHEET_CELL_LIMIT = 10000000;
+
+// Схоже на бекап/копію: за цими шаблонами аркуш потрапляє в звіт як кандидат.
+var BACKUP_NAME_PATTERNS = [
+  /MIGBKP/i, /BACKUP/i, /бекап/i, /backup/i, /_bak/i,
+  /^Copy of /i, /копія/i, /\bCopy\b/, /_OLD$/i, /_старе$/i
+];
+function _isBackupName(n){
+  for(var i=0;i<BACKUP_NAME_PATTERNS.length;i++) if(BACKUP_NAME_PATTERNS[i].test(n)) return true;
+  return false;
+}
+// Дата з назви: 20260630 | 30_06_2026 | 30-06-2026 | 2026-06-30
+function _dateFromName(n){
+  var m=String(n).match(/(20\d{2})(\d{2})(\d{2})/);
+  if(m) return m[1]+'-'+m[2]+'-'+m[3];
+  m=String(n).match(/(\d{2})[_.-](\d{2})[_.-](20\d{2})/);
+  if(m) return m[3]+'-'+m[2]+'-'+m[1];
+  m=String(n).match(/(20\d{2})[_.-](\d{2})[_.-](\d{2})/);
+  if(m) return m[1]+'-'+m[2]+'-'+m[3];
+  return '';
+}
+function _acPad(s,n){ s=String(s); while(s.length<n) s+=' '; return s; }
+function _acNum(n){ return String(n).replace(/\B(?=(\d{3})+(?!\d))/g,' '); }
+
+function AUDIT_SHEET_CELLS(){
+  var ss=getCRMSpreadsheet();
+  var out=[];
+  function o(l){ out.push(l); if(out.length>=60){ Logger.log(out.join('\n')); out=[]; } }
+
+  o('═══ AUDIT_SHEET_CELLS — ' + ss.getName() + ' ═══');
+  var sheets=ss.getSheets(), rows=[], total=0;
+  sheets.forEach(function(sh){
+    var mr=sh.getMaxRows(), mc=sh.getMaxColumns(), cells=mr*mc;
+    total+=cells;
+    rows.push({name:sh.getName(), mr:mr, mc:mc, cells:cells,
+               lr:sh.getLastRow(), lc:sh.getLastColumn(),
+               bak:_isBackupName(sh.getName()), date:_dateFromName(sh.getName())});
+  });
+  rows.sort(function(a,b){ return b.cells-a.cells; });
+
+  o('Аркушів: ' + sheets.length);
+  o('Комірок у книзі: ' + _acNum(total) + ' з ' + _acNum(SHEET_CELL_LIMIT) +
+    '  (' + (total*100/SHEET_CELL_LIMIT).toFixed(1) + '%)');
+  o('Вільно: ' + _acNum(SHEET_CELL_LIMIT-total));
+  o('');
+  o('  ' + _acPad('аркуш',46) + _acPad('сітка',13) + _acPad('рядків×кол',14) +
+    _acPad('заповнено',14) + _acPad('дата',12) + 'бекап');
+  o('  ' + new Array(104).join('─'));
+  rows.forEach(function(r){
+    o('  ' + _acPad(r.name.slice(0,44),46) + _acPad(_acNum(r.cells),13) +
+      _acPad(r.mr+'×'+r.mc,14) + _acPad(r.lr+'×'+r.lc,14) +
+      _acPad(r.date||'—',12) + (r.bak?'так':''));
+  });
+
+  // ── зведення по бекапах ──
+  var bak=rows.filter(function(r){ return r.bak; });
+  var bakCells=bak.reduce(function(s,r){ return s+r.cells; },0);
+  o('');
+  o('══ КАНДИДАТИ НА ПРИБИРАННЯ ══');
+  o('  аркушів схожих на бекап : ' + bak.length + ' з ' + rows.length);
+  o('  вони займають           : ' + _acNum(bakCells) +
+    '  (' + (bakCells*100/total).toFixed(1) + '% книги)');
+
+  function group(label, filt){
+    var g=rows.filter(filt);
+    var c=g.reduce(function(s,r){ return s+r.cells; },0);
+    o('');
+    o('  ── ' + label + ': ' + g.length + ' аркушів, ' + _acNum(c) + ' комірок ──');
+    g.forEach(function(r){ o('     ' + _acPad(r.name.slice(0,46),48) + _acPad(_acNum(r.cells),12) + (r.date||'—')); });
+    return c;
+  }
+  var mig    = group('MIGBKP', function(r){ return /MIGBKP/i.test(r.name); });
+  var migJul = group('MIGBKP за липень 2026', function(r){ return /MIGBKP/i.test(r.name) && r.date.indexOf('2026-07')===0; });
+  var other  = group('решта бекапів (не MIGBKP)', function(r){ return r.bak && !/MIGBKP/i.test(r.name); });
+
+  o('');
+  o('╔═══════════ СКІЛЬКИ ЗВІЛЬНИТЬСЯ ═══════════╗');
+  o('  видалити MIGBKP за липень : ' + _acNum(migJul) + '  → стане ' + ((total-migJul)*100/SHEET_CELL_LIMIT).toFixed(1) + '% ліміту');
+  o('  видалити ВСІ MIGBKP       : ' + _acNum(mig)    + '  → стане ' + ((total-mig)*100/SHEET_CELL_LIMIT).toFixed(1) + '%');
+  o('  видалити ВСІ бекапи       : ' + _acNum(bakCells) + '  → стане ' + ((total-bakCells)*100/SHEET_CELL_LIMIT).toFixed(1) + '%');
+  o('╚═══════════════════════════════════════════╝');
+  o('');
+  o('Нічого не видалено — це лише звіт.');
+  o('Порада: аркуш із запасом порожніх рядків коштує так само, як заповнений.');
+  o('Часто дешевше обрізати сітку (видалити зайві рядки/колонки), ніж аркуш цілком.');
+  if(out.length) Logger.log(out.join('\n'));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // v7.163 РЕМАП СИРІТСЬКИХ ВІДМІТОК У ТАБЕЛІ.
 // v7.162 зупинив ПРИПЛИВ; ці функції розбирають те, що вже накопичилось.
 //   REMAP_ORPHAN_ATTENDANCE_DRYRUN() — лише звіт, нічого не пише
@@ -2637,24 +2733,40 @@ function _remapOrphanAttendance(dryRun){
     var lastBefore=ash.getLastRow();
 
     // Точка відкату. УВАГА: сам по собі lastRow тут НЕ відкат — на відміну від
-    // міграції B1 ми не тільки дописуємо, а ПРАВИМО і ВИДАЛЯЄМО рядки. Тому
-    // оригінали всіх зачеплених рядків спершу лягають в окремий аркуш.
+    // міграції B1 ми не тільки дописуємо, а ПРАВИМО і ВИДАЛЯЄМО рядки.
+    //
+    // v7.164: знімок іде у JSON-ФАЙЛ НА DRIVE, а не в аркуш цієї ж книги.
+    // Раніше створювався аркуш BACKUP_Табель_ремап_* — і APPLY падав із
+    // «кількість комірок перевищить 10 000 000»: книга й так на межі через
+    // старі бекап-аркуші. Файл на Drive не коштує жодної комірки.
     var touched={};
     upd.forEach(function(u){ touched[u.row]=true; });
     del.forEach(function(d){ touched[d.row]=true; });
     var rowsNums=Object.keys(touched).map(Number).sort(function(a,b){ return a-b; });
-    var backup=[ah.concat(['_рядок_до_ремапу']) ];
-    rowsNums.forEach(function(rn){ backup.push(av[rn-1].slice().concat([rn])); });
-    var bname=('BACKUP_Табель_ремап_'+stamp).substring(0,95);
-    var bsh=ss.insertSheet(bname);
-    bsh.getRange(1,1,backup.length,backup[0].length).setValues(backup);
-    bsh.setFrozenRows(1);
+
+    var snap={ stamp:stamp, spreadsheetId:ss.getId(), sheet:SHEET_ATTENDANCE,
+               header:ah, note:'оригінали рядків ДО ремапу; row = номер рядка на той момент',
+               rows:[] };
+    rowsNums.forEach(function(rn){
+      snap.rows.push({ row:rn, values: av[rn-1].map(function(c){
+        return (c instanceof Date) ? Utilities.formatDate(c, tz, 'yyyy-MM-dd') : c;
+      })});
+    });
+    var fname='BACKUP_Табель_ремап_'+stamp+'.json';
+    var bfile=DriveApp.createFile(fname, JSON.stringify(snap), 'application/json');
+    // кладемо поруч із самою таблицею, якщо вдається дістати її теку
+    try{
+      var par=DriveApp.getFileById(ss.getId()).getParents();
+      if(par.hasNext()){ var f=par.next(); f.addFile(bfile); DriveApp.getRootFolder().removeFile(bfile); }
+    }catch(_mv){}
 
     o('');
     o('╔════════ ТОЧКА ВІДКАТУ ════════╗');
     o('  Табель, рядків до правки : ' + lastBefore);
-    o('  оригінали зачеплених     : ' + bname + '  (' + rowsNums.length + ' рядків)');
-    o('  відкат = повернути ці рядки за номером із колонки «_рядок_до_ремапу»');
+    o('  знімок оригіналів        : ' + fname + '  (' + rowsNums.length + ' рядків)');
+    o('  файл                     : ' + bfile.getUrl());
+    o('  id                       : ' + bfile.getId());
+    o('  У книзі НІЧОГО не створено — знімок лежить на Drive.');
     o('╚═══════════════════════════════╝');
 
     // 1) перенесення — точкова правка колонки ID, рядки не зсуваються
@@ -2675,7 +2787,7 @@ function _remapOrphanAttendance(dryRun){
     if(ash.getLastRow() !== lastBefore - dn) o('!! РОЗБІЖНІСТЬ — перевір аркуш вручну');
   }catch(e){
     o('!! ПОМИЛКА: ' + (e.message||e));
-    o('!! Дивись BACKUP_Табель_ремап_* — там оригінали з номерами рядків.');
+    o('!! Дивись JSON-знімок на Drive (посилання вище) — там оригінали з номерами рядків.');
   }finally{
     lock.releaseLock();
   }
@@ -3154,7 +3266,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.163', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.164', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
