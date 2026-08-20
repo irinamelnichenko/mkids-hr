@@ -2576,6 +2576,169 @@ function AUDIT_SHEET_CELLS(){
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// v7.165 DELETE_MIGBKP — прибирання липневих MIGBKP-аркушів.
+// Книга впритул до ліміту 10 млн комірок, через це впав ремап Табеля.
+//
+//   DELETE_MIGBKP_DRYRUN() — показує, що піде під ніж
+//   DELETE_MIGBKP_APPLY()  — вигружає кожен аркуш у JSON на Drive і видаляє
+//
+// Критерій ЖОРСТКИЙ і подвійний: «MIGBKP» у назві І дата з назви у липні 2026.
+// Клієнти_BACKUP_*, BACKUP_* за серпень, Оплати_бекап_* не підпадають.
+// ═══════════════════════════════════════════════════════════════════════════
+var MIGBKP_MONTH     = '2026-07';   // який місяць прибираємо
+var MIGBKP_MAX_SHEETS = 30;         // більше — отже критерій зачепив зайве, зупиняємось
+var MIGBKP_TIME_MS    = 5 * 60000;  // стоп за 5 хв: 6-хвилинний ліміт Apps Script
+
+function _migbkpTargets(ss){
+  var out=[];
+  ss.getSheets().forEach(function(sh){
+    var n=sh.getName();
+    if(!/MIGBKP/i.test(n)) return;                       // умова 1: MIGBKP у назві
+    var d=_dateFromName(n);
+    if(d.indexOf(MIGBKP_MONTH)!==0) return;              // умова 2: дата саме цього місяця
+    out.push({sh:sh, name:n, date:d, mr:sh.getMaxRows(), mc:sh.getMaxColumns(),
+              cells:sh.getMaxRows()*sh.getMaxColumns(), lr:sh.getLastRow(), lc:sh.getLastColumn()});
+  });
+  out.sort(function(a,b){ return b.cells-a.cells; });
+  return out;
+}
+function _bookCells(ss){
+  var t=0; ss.getSheets().forEach(function(sh){ t+=sh.getMaxRows()*sh.getMaxColumns(); }); return t;
+}
+
+function DELETE_MIGBKP_DRYRUN(){ _deleteMigbkp(true); }
+function DELETE_MIGBKP_APPLY(){  _deleteMigbkp(false); }
+
+function _deleteMigbkp(dryRun){
+  var out=[];
+  function o(l){ out.push(l); if(out.length>=60){ Logger.log(out.join('\n')); out=[]; } }
+  function flush(){ if(out.length) Logger.log(out.join('\n')); out=[]; }
+
+  var t0=Date.now();
+  var ss=getCRMSpreadsheet();
+  var tz=ss.getSpreadsheetTimeZone() || 'Europe/Kiev';
+  o('═══ DELETE_MIGBKP — ' + (dryRun ? 'DRY RUN (нічого не видаляється)' : '*** ВИДАЛЕННЯ ***') + ' ═══');
+  o('Книга: ' + ss.getName());
+
+  var before=_bookCells(ss);
+  o('Комірок зараз: ' + _acNum(before) + ' з ' + _acNum(SHEET_CELL_LIMIT) +
+    '  · вільно ' + _acNum(SHEET_CELL_LIMIT-before));
+
+  var tg=_migbkpTargets(ss);
+  o('');
+  o('Критерій: «MIGBKP» у назві ТА дата ' + MIGBKP_MONTH + '.*');
+  o('Підпадає аркушів: ' + tg.length);
+
+  if(!tg.length){ o('Нічого не знайдено — виходимо.'); return flush(); }
+  if(tg.length > MIGBKP_MAX_SHEETS){
+    o('!! ' + tg.length + ' аркушів — це більше за очікуване (' + MIGBKP_MAX_SHEETS + ').');
+    o('!! Схоже, критерій зачепив зайве. ПЕРЕРВАНО, нічого не змінено.');
+    return flush();
+  }
+
+  var sum=tg.reduce(function(s,x){ return s+x.cells; },0);
+  o('');
+  o('  ' + _acPad('аркуш',46) + _acPad('комірок',13) + _acPad('сітка',14) + _acPad('заповнено',14) + 'дата');
+  o('  ' + new Array(100).join('─'));
+  tg.forEach(function(x){
+    o('  ' + _acPad(x.name.slice(0,44),46) + _acPad(_acNum(x.cells),13) +
+      _acPad(x.mr+'×'+x.mc,14) + _acPad(x.lr+'×'+x.lc,14) + x.date);
+  });
+  o('');
+  o('  РАЗОМ звільниться: ' + _acNum(sum) + '  → стане ' +
+    _acNum(before-sum) + ' (' + ((before-sum)*100/SHEET_CELL_LIMIT).toFixed(1) + '% ліміту)');
+
+  // ── що НЕ чіпаємо: показуємо явно, щоб було видно межу ──
+  var spared=[];
+  ss.getSheets().forEach(function(sh){
+    var n=sh.getName();
+    if(!_isBackupName(n)) return;
+    for(var i=0;i<tg.length;i++) if(tg[i].name===n) return;
+    spared.push({n:n, c:sh.getMaxRows()*sh.getMaxColumns(), d:_dateFromName(n)});
+  });
+  o('');
+  o('  ── бекапи, які ЛИШАЮТЬСЯ (' + spared.length + ') ──');
+  spared.sort(function(a,b){ return b.c-a.c; }).forEach(function(x){
+    o('     ' + _acPad(x.n.slice(0,46),48) + _acPad(_acNum(x.c),13) + (x.d||'—'));
+  });
+
+  if(dryRun){
+    o('');
+    o('DRY RUN — нічого не видалено. Далі: DELETE_MIGBKP_APPLY()');
+    return flush();
+  }
+
+  // ── ВИДАЛЕННЯ ──
+  var stamp=Utilities.formatDate(new Date(), tz, 'yyyyMMdd_HHmmss');
+  var folder=null;
+  try{
+    var par=DriveApp.getFileById(ss.getId()).getParents();
+    var base=par.hasNext() ? par.next() : DriveApp.getRootFolder();
+    folder=base.createFolder('MIGBKP_архів_' + stamp);
+  }catch(e){
+    try{ folder=DriveApp.getRootFolder().createFolder('MIGBKP_архів_' + stamp); }
+    catch(e2){ o('!! Не вдалось створити теку на Drive: ' + (e2.message||e2)); o('!! ПЕРЕРВАНО — без місця для вигрузки не видаляємо.'); return flush(); }
+  }
+  o('');
+  o('Тека архіву: ' + folder.getUrl());
+  o('');
+
+  var done=0, freed=0, left=[];
+  for(var i=0;i<tg.length;i++){
+    var x=tg[i];
+    if(Date.now()-t0 > MIGBKP_TIME_MS){
+      for(var k=i;k<tg.length;k++) left.push(tg[k].name);
+      break;
+    }
+    try{
+      var vals = x.lr>0 ? x.sh.getDataRange().getValues() : [];
+      var snap = {sheet:x.name, exportedAt:formatDate(new Date()), spreadsheetId:ss.getId(),
+                  maxRows:x.mr, maxCols:x.mc, rows:vals.length,
+                  values: vals.map(function(row){
+                    return row.map(function(c){
+                      return (c instanceof Date) ? Utilities.formatDate(c, tz, 'yyyy-MM-dd HH:mm') : c;
+                    });
+                  })};
+      var payload=JSON.stringify(snap);
+      var f=folder.createFile(x.name + '.json', payload, 'application/json');
+
+      // ПЕРЕВІРКА ПЕРЕД ВИДАЛЕННЯМ: якщо файл порожній або підозріло малий —
+      // аркуш НЕ чіпаємо. Втратити дані через тихий збій вигрузки неприпустимо.
+      var sz=f.getSize();
+      if(!sz || sz < payload.length*0.5){
+        o('  !! ' + _acPad(x.name.slice(0,40),42) + 'вигрузка підозріла (' + sz + ' б) — АРКУШ ЛИШЕНО');
+        continue;
+      }
+      o('  ✔ ' + _acPad(x.name.slice(0,40),42) + _acPad(vals.length + ' рядків',14) +
+        _acPad(_acNum(sz) + ' б',14) + f.getUrl());
+      ss.deleteSheet(x.sh);
+      freed += x.cells; done++;
+    }catch(err){
+      o('  !! ' + _acPad(x.name.slice(0,40),42) + 'ПОМИЛКА: ' + (err.message||err) + ' — аркуш лишено');
+    }
+  }
+  SpreadsheetApp.flush();
+
+  var after=_bookCells(ss);
+  o('');
+  o('╔═════════════ ПІДСУМОК ═════════════╗');
+  o('  видалено аркушів : ' + done + ' з ' + tg.length);
+  o('  звільнено комірок: ' + _acNum(freed));
+  o('  було / стало     : ' + _acNum(before) + ' → ' + _acNum(after));
+  o('  вільно тепер     : ' + _acNum(SHEET_CELL_LIMIT-after) +
+    '  (' + (after*100/SHEET_CELL_LIMIT).toFixed(1) + '% ліміту)');
+  o('  архів            : ' + folder.getUrl());
+  o('╚════════════════════════════════════╝');
+  if(left.length){
+    o('');
+    o('Не встигли за ' + (MIGBKP_TIME_MS/60000) + ' хв — лишилось ' + left.length + ':');
+    left.forEach(function(n){ o('   ' + n); });
+    o('Запусти DELETE_MIGBKP_APPLY() ще раз — продовжить з решти.');
+  }
+  flush();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // v7.163 РЕМАП СИРІТСЬКИХ ВІДМІТОК У ТАБЕЛІ.
 // v7.162 зупинив ПРИПЛИВ; ці функції розбирають те, що вже накопичилось.
 //   REMAP_ORPHAN_ATTENDANCE_DRYRUN() — лише звіт, нічого не пише
@@ -3266,7 +3429,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.164', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.165', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
