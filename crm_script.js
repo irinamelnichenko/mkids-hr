@@ -2994,7 +2994,9 @@ function _createMissingCards(dryRun){
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// v7.169 РЕКЛАМНІ ВИТРАТИ. Аркуш у CONFIG-таблиці, заповнюється вручну.
+// v7.170 РЕКЛАМНІ ВИТРАТИ — у ТАБЛИЦІ-ДЗЕРКАЛІ лідів, а не в CONFIG.
+// Витрати читає людина поруч із лідами; у CONFIG вони губились серед
+// службових аркушів. Адреса — та сама Script Property LEADS_MIRROR_ID.
 // Локація «мережа» = витрата на всю мережу, а не на конкретний садок.
 // ═══════════════════════════════════════════════════════════════════════════
 var AD_SPEND_SHEET  = 'Реклама_Витрати';
@@ -3011,7 +3013,10 @@ var AD_CHANNEL_TO_SRC = {
 function _adSrcOf(ch){ return AD_CHANNEL_TO_SRC[String(ch||'').trim().toLowerCase()] || 'інше'; }
 
 function SETUP_AD_SPEND_SHEET(){
-  var ss=SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var id;
+  try{ id=_mirrorFileId(); }
+  catch(e){ Logger.log('!! ' + (e.message||e) + '\nСпершу SETUP_MIRROR_SPREADSHEET().'); return; }
+  var ss=SpreadsheetApp.openById(id);
   var sh=ss.getSheetByName(AD_SPEND_SHEET), created=false;
   if(!sh){ sh=ss.insertSheet(AD_SPEND_SHEET); created=true; }
   _ensureHeaderRow(sh, AD_SPEND_HEADER);
@@ -3026,8 +3031,22 @@ function SETUP_AD_SPEND_SHEET(){
     sh.getRange(2,6,sh.getMaxRows()-1,1).setNumberFormat('#,##0.00');
   }catch(_v){}
   SpreadsheetApp.flush();
+  // Старий аркуш у CONFIG: видаляємо ЛИШЕ порожній. Якщо там уже щось набрано —
+  // не чіпаємо і кажемо про це: тихо перенести чужі дані гірше, ніж лишити дубль.
+  var oldNote='';
+  try{
+    var cfg=SpreadsheetApp.openById(CONFIG_SHEET_ID);
+    var oldSh=cfg.getSheetByName(AD_SPEND_SHEET);
+    if(!oldSh) oldNote='У CONFIG такого аркуша немає — прибирати нічого.';
+    else if(oldSh.getLastRow()<=1){ cfg.deleteSheet(oldSh); oldNote='Старий порожній аркуш у CONFIG ВИДАЛЕНО.'; }
+    else oldNote='!! У CONFIG лишився аркуш «'+AD_SPEND_SHEET+'» з '+(oldSh.getLastRow()-1)+
+                 ' рядками даних — НЕ видаляв. Перенеси їх сюди вручну і видали сама.';
+  }catch(_o){ oldNote='Стан старого аркуша в CONFIG перевірити не вдалось: '+(_o.message||_o); }
+
   var out=['═══ SETUP_AD_SPEND_SHEET ═══',
-    (created?'Аркуш СТВОРЕНО: ':'Аркуш уже був: ')+AD_SPEND_SHEET+'  (CONFIG-таблиця)',
+    'Таблиця: '+ss.getName()+'  (дзеркало лідів)',
+    (created?'Аркуш СТВОРЕНО: ':'Аркуш уже був: ')+AD_SPEND_SHEET,
+    oldNote,
     'Колонки: '+AD_SPEND_HEADER.join(' · '),'',
     'Канал — випадайка: '+AD_CHANNELS.join(' / '),
     'Локація — випадайка з CONFIG + «'+AD_LOC_NETWORK+'» для мережевих витрат',
@@ -3040,7 +3059,9 @@ function SETUP_AD_SPEND_SHEET(){
 // Читання витрат. Фільтри: year, month, loc, channel. Порожній фільтр = усе.
 function getAdSpend(p){
   p=p||{};
-  var ss=SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var ss;
+  try{ ss=SpreadsheetApp.openById(_mirrorFileId()); }
+  catch(e){ return {ok:false, error:'Витрати живуть у таблиці-дзеркалі: '+(e.message||e)}; }
   var sh=ss.getSheetByName(AD_SPEND_SHEET);
   if(!sh || sh.getLastRow()<2) return {ok:true, rows:[], byChannel:{}, bySource:{}, total:0, note:'аркуш порожній або відсутній'};
   var v=sh.getDataRange().getValues();
@@ -3967,7 +3988,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.169', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.170', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
