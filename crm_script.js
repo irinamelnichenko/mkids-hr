@@ -839,8 +839,12 @@ function _leadsFromHistory(){
   var out = [];
   for (var r = 1; r < v.length; r++){
     var row = v[r];
-    var day  = String(g(row,'day') || '').trim();
-    var exd  = String(g(row,'excursion_date') || '').trim();
+    // v7.171 КОРІНЬ ПРОБЛЕМИ ЗІ ЗВІТОМ: Sheets віддає ці клітинки Date-обʼєктами,
+    // а String(Date) дає «Wed Jun 12 2024…». Через це фільтр періоду порівнював
+    // «Wed Jun…» з «2026-08-10» і відкидав ВСЮ історію, а byMonth збирав ключі
+    // на кшталт «Wed Jun». Проганяємо через _leadDayKey — він знає про Date.
+    var day  = _leadDayKey(g(row,'day'));
+    var exd  = _leadDayKey(g(row,'excursion_date'));
     var sign = String(g(row,'signed')) === '1' || g(row,'signed') === 1;
     // Час до екскурсії — єдиний інтервал, який історія дозволяє порахувати:
     // дати договору в джерелі НЕМАЄ, тому lifeDays тут завжди null.
@@ -855,7 +859,7 @@ function _leadsFromHistory(){
       parent: String(g(row,'parent') || ''), child: String(g(row,'child') || ''),
       age: String(g(row,'child_age') || ''), status: String(g(row,'status') || ''),
       assignee: '', reacted: '', reactMin: null, slaOk: '',
-      excDate: exd, excTime: '', cbDate: String(g(row,'callback_date') || ''), cbTime: '',
+      excDate: exd, excTime: '', cbDate: _leadDayKey(g(row,'callback_date')), cbTime: '',
       refusal: String(g(row,'refusal_reason') || ''),
       refuseGroup: (String(g(row,'did_refuse')) === '1' || g(row,'did_refuse') === 1)
                    ? _leadRefuseNorm(String(g(row,'refusal_reason') || '') + ' ' + String(g(row,'comment') || '')) : '',
@@ -1113,7 +1117,9 @@ function _arrow(cur, prev, unit){
 function _reportText(R){
   var L=[];
   L.push('📊 <b>Звіт по лідах</b>');
-  L.push(_dm(R.range.from)+' – '+_dm(R.range.to)+'.'+R.range.to.slice(0,4));
+  L.push(_dm(R.range.from)+' – '+_dm(R.range.to)+'.'+R.range.to.slice(0,4)
+    + (R.partial ? '  <i>(тиждень ще не завершився)</i>' : ''));
+  L.push('<i>джерела: бот '+R.botN+' · архів '+R.histN+'</i>');
   L.push('');
 
   var c=R.cur, p=R.prev;
@@ -1148,7 +1154,7 @@ function _reportText(R){
   if(!R.locTop.length && !R.locBottom.length) L.push('<i>немає даних</i>');
   L.push('');
 
-  L.push('<b>ШВИДКІСТЬ РЕАКЦІЇ</b>');
+  L.push('<b>ШВИДКІСТЬ РЕАКЦІЇ</b>  <i>(лише ліди з бота: '+R.botN+' з '+c.total+')</i>');
   if(c.reactN){
     L.push('середня <b>'+Math.round(c.reactSum/c.reactN)+' хв</b> · у 15 хв вклались <b>'
       + c.react15+' з '+c.reactN+'</b> ('+_pct(c.react15,c.reactN)+')');
@@ -1156,7 +1162,9 @@ function _reportText(R){
   if(c.reactNone) L.push('без жодної реакції: <b>'+c.reactNone+'</b>');
   L.push('');
 
-  L.push('<b>ВІДМОВИ</b>');
+  var refKnown=0, refTot=0;
+  R.refusals.forEach(function(x){ refTot+=x.n; if(x.key!=='не вказано') refKnown+=x.n; });
+  L.push('<b>ВІДМОВИ</b>' + (refTot ? ('  <i>(причину видно у '+refKnown+' з '+refTot+')</i>') : ''));
   if(!R.refusals.length) L.push('<i>відмов не було</i>');
   R.refusals.forEach(function(x){ L.push(_htmlEsc(x.key)+' — <b>'+x.n+'</b>'); });
 
@@ -1166,12 +1174,28 @@ function _reportText(R){
 }
 
 // ── Збір усього звіту ──
-function _buildOwnerReport(){
-  var all=[];
-  try{ all=all.concat(_leadsFromBot()); }catch(_e1){}
-  try{ all=all.concat(_leadsFromHistory()); }catch(_e2){}
+function _buildOwnerReport(opts){
+  opts=opts||{};
+  var all=[], srcErr=[];
+  // Порожній catch ховав збій джерела: звіт малював нулі й виглядав справним.
+  try{ all=all.concat(_leadsFromBot()); }catch(_e1){ srcErr.push('Ліди_Бот: '+(_e1.message||_e1)); }
+  try{ all=all.concat(_leadsFromHistory()); }catch(_e2){ srcErr.push('Ліди_Історія: '+(_e2.message||_e2)); }
 
-  var range=_weekRange(1), prevRange=_weekRange(2);
+  // week=1 — останній ПОВНИЙ тиждень (так шле понеділковий тригер).
+  // week=0 — поточний тиждень ДО СЬОГОДНІ; для ручного запуску серед тижня
+  // це єдине, що показує свіжі дані. Порівнюємо з тим самим відтинком
+  // попереднього тижня, інакше «пн–пт проти пн–нд» завжди програвало б.
+  var wk = (opts.week===undefined||opts.week===null||opts.week==='') ? 1 : Number(opts.week);
+  var range, prevRange, partial=false;
+  if(wk===0){
+    var mon=_dayUTC(_mondayISO(_todayISOKyiv())), today=_dayUTC(_todayISOKyiv());
+    var span=Math.round((today-mon)/86400000);
+    range={from:_isoUTC(mon), to:_isoUTC(today)};
+    prevRange={from:_isoUTC(mon-7*86400000), to:_isoUTC(mon-7*86400000+span*86400000)};
+    partial=true;
+  } else {
+    range=_weekRange(wk); prevRange=_weekRange(wk+1);
+  }
   function slice(rg){ return all.filter(function(r){ return r.day && r.day>=rg.from && r.day<=rg.to; }); }
   var cur=_reportAgg(slice(range)), prev=_reportAgg(slice(prevRange));
 
@@ -1212,9 +1236,14 @@ function _buildOwnerReport(){
   refusals.sort(function(x,y){ return y.n-x.n; });
 
   var note='';
-  if(!cur.total) note='За цей тиждень лідів не було — цифри нульові, це не збій.';
+  if(!cur.total) note='За цей період лідів не було — цифри нульові, це не збій.';
+  if(srcErr.length) note=(note?note+' ':'')+'ЗБІЙ ДЖЕРЕЛА: '+srcErr.join(' · ');
 
-  return {range:range, prevRange:prevRange, cur:cur, prev:prev,
+  var botN=0, histN=0;
+  slice(range).forEach(function(r){ if(r.origin==='bot') botN++; else histN++; });
+
+  return {range:range, prevRange:prevRange, partial:partial, botN:botN, histN:histN,
+          cur:cur, prev:prev,
           weeks:weeks, sources:sources, locTop:locTop, locBottom:locBottom,
           refusals:refusals, note:note};
 }
@@ -1306,10 +1335,16 @@ function _tgSendFile(method, chatId, field, blob, caption){
 }
 
 // ── Головна: зібрати і надіслати ──
+// Ручний виклик без &week= має показувати СВІЖЕ, а не позаминулий тиждень.
+function _ownerReportParams(p){
+  p=p||{};
+  if(p.week===undefined||p.week===null||p.week==='') p.week='0';
+  return p;
+}
 function sendOwnerReport(params){
   params=params||{};
   var R, text;
-  try{ R=_buildOwnerReport(); text=_reportText(R); }
+  try{ R=_buildOwnerReport({week: params.week}); text=_reportText(R); }
   catch(e){ return {ok:false, error:'Не вдалось зібрати звіт: '+String(e&&e.message||e)}; }
 
   if(String(params.dry||'')==='1')
@@ -1364,7 +1399,8 @@ function installOwnerReportTrigger(){
     .onWeekDay(ScriptApp.WeekDay.MONDAY).atHour(9).nearMinute(0).create();
   Logger.log('Тригер weeklyOwnerReport встановлено: щопонеділка о 9:00.');
 }
-function weeklyOwnerReport(){ var r=sendOwnerReport({}); Logger.log(JSON.stringify(r)); return r; }
+// Тригер шле ЗАВЖДИ завершений тиждень; ручний запуск без параметра — поточний.
+function weeklyOwnerReport(){ var r=sendOwnerReport({week:1}); Logger.log(JSON.stringify(r)); return r; }
 
 // ── Разове наповнення аркуша отримувачів ──
 function SEED_REPORT_RECIPIENTS(){
@@ -3988,7 +4024,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.170', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.171', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -4007,7 +4043,7 @@ function doGet(e) {
     else if (action === 'tgGetUpdates')       result = tgGetUpdates();   // v7.122 діагностика Telegram-бота
     else if (action === 'getLeads')           result = getLeads(e.parameter || {});   // v7.152 екран лідів
     else if (action === 'getAdSpend')         result = getAdSpend(e.parameter || {});   // v7.169 рекламні витрати
-    else if (action === 'sendOwnerReport')    result = sendOwnerReport(e.parameter || {});   // v7.158 тижневий звіт власнику
+    else if (action === 'sendOwnerReport')    result = sendOwnerReport(_ownerReportParams(e.parameter || {}));   // v7.158; v7.171 ручний запуск = поточний тиждень
     else if (action === 'getBdayStatus')      result = getBdayStatus();                                            // v7.109 роут замість прямого читання листа з фронту
     else if (action === 'getAttendance')      result = getAttendance(e);
     else if (action === 'diagLocPayment')     result = diagLocPayment(e); // v7.57 read-only: пер-лок Payment-файл
