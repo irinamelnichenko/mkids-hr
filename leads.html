@@ -271,6 +271,20 @@ table.ld td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:n
 .ld-bar i{display:block;height:100%;background:var(--blue2);border-radius:4px}
 .ld-drop{color:var(--red)!important}
 .ld-chase-card{border-left:4px solid #c0392b}
+.ld-conv-card{border-left:4px solid var(--blue)}
+.ld-cvrow{display:flex;flex-wrap:wrap;gap:12px}
+.ld-cv{flex:1;min-width:190px;background:var(--bg);border-radius:10px;padding:14px;text-align:center}
+.ld-cv.hot{background:#eaf3fb;outline:2px solid var(--blue2)}
+.ld-cv .l{font-size:12px;font-weight:700;color:var(--gray)}
+.ld-cv .v{font-size:34px;font-weight:800;color:var(--dark);line-height:1.1;margin:2px 0}
+.ld-cv .s{font-size:12px;color:var(--gray)}
+.ld-cv .a{font-size:12px;font-weight:800;margin-top:6px}
+.ld-up{color:var(--green)} .ld-dn{color:var(--red)} .ld-nc{color:var(--gray)}
+.ld-rank{margin-bottom:12px}
+.ld-rank-h{font-size:12px;font-weight:800;color:var(--gray);padding-left:8px;
+  border-left:3px solid var(--gray2);margin-bottom:4px}
+.ld-rank.up .ld-rank-h{border-color:var(--green)}
+.ld-rank.dn .ld-rank-h{border-color:var(--red)}
 .ld-chase-grp{margin-bottom:14px}
 .ld-chase-h{font-size:13px;font-weight:800;color:var(--dark);padding-left:8px;
   border-left:3px solid var(--gray2);margin-bottom:4px}
@@ -470,6 +484,17 @@ table.ld td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:n
       <p class="ld-note">Кнопка «нагадати» пише директорці локації <b>особисто в Telegram</b>.
         Потрібен заповнений user_id у ТГ_Директори — він зʼявляється після першого натискання нею
         будь-якої кнопки в боті.</p>
+    </div>
+
+    <div class="inv-card ld-conv-card">
+      <h3 class="ld-h">🎯 КОНВЕРСІЯ — головне</h3>
+      <div id="conv" class="ld-cvrow"></div>
+      <p class="ld-note" id="convNote"></p>
+    </div>
+
+    <div class="inv-card">
+      <h3 class="ld-h">🏆 Локації за конверсією</h3>
+      <div id="locRank"></div>
     </div>
 
     <div class="inv-card">
@@ -1098,7 +1123,7 @@ function resetFilters(){
 }
 
 function renderAll(){
-  renderChase(); renderSpend(); renderCycle(); renderCamps();
+  renderChase(); renderConv(); renderLocRank(); renderSpend(); renderCycle(); renderCamps();
   renderFunnel(); renderCallList(); renderReaction();
   renderMonths(); renderSrcMonth();
   renderGroup('bySource', 'Джерело', 'bySource');
@@ -1154,13 +1179,18 @@ function renderMonths(){
   var ms = Object.keys(a.byMonth).sort();
   if (!ms.length){ $('byMonth').innerHTML = '<div class="ld-empty">Немає даних за цим періодом</div>'; return; }
   var max = 0; ms.forEach(function(m){ if (a.byMonth[m].n > max) max = a.byMonth[m].n; });
-  var h = '<table class="ld"><thead><tr><th>Місяць</th><th class="num">лідів</th><th class="num">договорів</th>'
-        + '<th class="num">конверсія</th><th style="width:40%">&nbsp;</th></tr></thead><tbody>';
+  var h = '<table class="ld"><thead><tr><th>Місяць</th><th class="num">лідів</th>'
+        + '<th class="num">екскурсій</th><th class="num">договорів</th>'
+        + '<th class="num">лід→дог</th><th class="num">екск→дог</th>'
+        + '<th style="width:26%">&nbsp;</th></tr></thead><tbody>';
   ms.forEach(function(m){
     var g = a.byMonth[m], cv = g.n ? Math.round(g.sign * 100 / g.n) : 0;
+    var ec = g.exc ? Math.round(g.sign * 100 / g.exc) : 0;
     var w = max ? Math.round(g.n * 100 / max) : 0;
-    h += '<tr><td>' + escapeHtml(m) + '</td><td class="num">' + g.n + '</td><td class="num">' + g.sign + '</td>'
+    h += '<tr><td>' + escapeHtml(m) + '</td><td class="num">' + g.n + '</td>'
+       + '<td class="num">' + (g.exc||0) + '</td><td class="num">' + g.sign + '</td>'
        + '<td class="num"><b>' + cv + '%</b></td>'
+       + '<td class="num"><b>' + ec + '%</b></td>'
        + '<td><div class="ld-bar"><i style="width:' + w + '%"></i></div></td></tr>';
   });
   $('byMonth').innerHTML = h + '</tbody></table>';
@@ -1201,18 +1231,28 @@ function renderSrcMonth(){
 function renderGroup(aggKey, headLabel, elId){
   var a = LD.agg; if (!a) return;
   var src = a[aggKey] || {};
-  var keys = Object.keys(src).sort(function(x, y){ return src[y].n - src[x].n; });
+  // v7.172: «без локації»/«без джерела» домінували і робили таблицю нечитабельною.
+  // Прибираємо їх з рейтингу, але НЕ ховаємо — окремим рядком під таблицею.
+  var skipK = (aggKey==='byLoc') ? ((LD.meta&&LD.meta.noLocLabel)||'без локації')
+                                 : ((LD.meta&&LD.meta.noSrcLabel)||'без джерела');
+  var skipped = src[skipK] ? src[skipK].n : 0;
+  var keys = Object.keys(src).filter(function(k){ return k!==skipK; })
+                   .sort(function(x, y){ return src[y].n - src[x].n; });
   if (!keys.length){ $(elId).innerHTML = '<div class="ld-empty">Немає даних</div>'; return; }
   var h = '<table class="ld"><thead><tr><th>' + headLabel + '</th>'
         + '<th class="num">лідів</th><th class="num">дзвінок</th><th class="num">екскурсія</th>'
-        + '<th class="num">договір</th><th class="num">конверсія</th></tr></thead><tbody>';
+        + '<th class="num">договір</th><th class="num">конверсія</th>'
+        + '<th class="num">екск→дог</th></tr></thead><tbody>';
   keys.forEach(function(k){
     var g = src[k];
     h += '<tr><td>' + escapeHtml(k) + '</td><td class="num">' + g.n + '</td><td class="num">' + g.call + '</td>'
        + '<td class="num">' + g.exc + '</td><td class="num">' + g.sign + '</td>'
-       + '<td class="num"><b>' + (g.n ? Math.round(g.sign * 100 / g.n) : 0) + '%</b></td></tr>';
+       + '<td class="num"><b>' + (g.n ? Math.round(g.sign * 100 / g.n) : 0) + '%</b></td>'
+       + '<td class="num"><i>' + (g.exc ? Math.round(g.sign * 100 / g.exc) : 0) + '%</i></td></tr>';
   });
-  $(elId).innerHTML = h + '</tbody></table>';
+  $(elId).innerHTML = h + '</tbody></table>'
+    + (skipped ? '<p class="ld-note">' + escapeHtml(skipK) + ': ' + skipped
+                 + ' лідів — у рейтинг і графіки не входять</p>' : '');
 }
 
 function renderLife(){
@@ -1428,6 +1468,71 @@ function renderCamps(){
       +'<td class="num">'+money(g.sum)+'</td></tr>';
   });
   $('camps').innerHTML=h+'</tbody></table>';
+}
+
+// ═══ v7.172 ГОЛОВНА КОНВЕРСІЯ ═══
+function _cvp(x,y){ return y>0 ? (x*100/y) : 0; }
+function _ppArrow(cur, prev){
+  var d=cur-prev, v=Math.round(Math.abs(d)*10)/10;
+  if(!prev && !cur) return '<span class="ld-nc">—</span>';
+  if(Math.abs(d)<0.05) return '<span class="ld-nc">без змін</span>';
+  return '<span class="'+(d>0?'ld-up':'ld-dn')+'">'+(d>0?'▲ +':'▼ -')+v+' п.п.</span>';
+}
+function renderConv(){
+  var a=LD.agg, pv=(LD.meta&&LD.meta.prev)||{total:0,exc:0,sign:0};
+  if(!a){ return; }
+  var e1=_cvp(a.exc,a.total),  q1=_cvp(pv.exc,pv.total);
+  var e2=_cvp(a.sign,a.exc),   q2=_cvp(pv.sign,pv.exc);
+  var e3=_cvp(a.sign,a.total), q3=_cvp(pv.sign,pv.total);
+  function big(lbl,val,cnt,arr,hot){
+    return '<div class="ld-cv'+(hot?' hot':'')+'"><div class="l">'+lbl+'</div>'
+      + '<div class="v">'+Math.round(val)+'%</div>'
+      + '<div class="s">'+cnt+'</div><div class="a">'+arr+'</div></div>';
+  }
+  $('conv').innerHTML =
+      big('лід → екскурсія', e1, a.exc+' з '+a.total, _ppArrow(e1,q1))
+    + big('екскурсія → договір', e2, a.sign+' з '+a.exc, _ppArrow(e2,q2), true)
+    + big('лід → договір', e3, a.sign+' з '+a.total, _ppArrow(e3,q3));
+  var note='Порівняння з попереднім періодом тієї ж довжини'
+    + (pv.from ? ' ('+pv.from+' … '+pv.to+')' : '') + '. ';
+  if(a.exc && e2<q2) note+='<b class="ld-dn">Просідає саме екскурсія → договір</b> — приходять і не залишаються.';
+  else if(a.exc) note+='Екскурсія → договір — найважливіший крок: до нього людина вже дійшла ногами.';
+  $('convNote').innerHTML=note;
+}
+
+// топ/антитоп локацій за конверсією, з порогом
+function renderLocRank(){
+  var a=LD.agg; if(!a) return;
+  var minN=(LD.meta&&LD.meta.locMin)||5, noLoc=(LD.meta&&LD.meta.noLocLabel)||'без локації';
+  var arr=[], skipped=0, noname=0;
+  Object.keys(a.byLoc||{}).forEach(function(k){
+    var g=a.byLoc[k];
+    if(k===noLoc){ noname+=g.n; return; }
+    if(g.n<minN){ skipped++; return; }
+    arr.push({k:k, n:g.n, exc:g.exc||0, sign:g.sign, cv:_cvp(g.sign,g.n), ec:_cvp(g.sign,g.exc||0)});
+  });
+  arr.sort(function(x,y){ return (y.cv-x.cv)||(y.n-x.n); });
+  if(!arr.length){
+    $('locRank').innerHTML='<div class="ld-empty">Жодна локація не набрала '+minN+' лідів за період</div>';
+    return;
+  }
+  var top=arr.slice(0,3), bot=arr.slice(-3).reverse().filter(function(x){ return top.indexOf(x)<0; });
+  function tbl(title,rows,cls){
+    if(!rows.length) return '';
+    var h='<div class="ld-rank '+cls+'"><div class="ld-rank-h">'+title+'</div><table class="ld"><tbody>';
+    rows.forEach(function(x){
+      h+='<tr><td>'+escapeHtml(x.k)+'</td><td class="num">'+x.n+' лід.</td>'
+        +'<td class="num">екск '+x.exc+'</td><td class="num">дог '+x.sign+'</td>'
+        +'<td class="num"><b>'+Math.round(x.cv)+'%</b></td>'
+        +'<td class="num"><i>екск→дог '+Math.round(x.ec)+'%</i></td></tr>';
+    });
+    return h+'</tbody></table></div>';
+  }
+  var note=[];
+  if(skipped) note.push('відсіяно за порогом &lt;'+minN+' лідів: '+skipped+' локацій');
+  if(noname)  note.push('без локації: '+noname+' лідів — у рейтинг не входять');
+  $('locRank').innerHTML = tbl('Топ',top,'up') + tbl('Антитоп',bot,'dn')
+    + (note.length ? '<p class="ld-note">'+note.join(' · ')+'</p>' : '');
 }
 
 (async function bootstrap(){

@@ -966,13 +966,14 @@ function getLeads(p){
     if (r.didRefuse) A.ref++;
 
     var ym = (r.day || '').slice(0,7);
-    if (ym){ var m = A.byMonth[ym] || (A.byMonth[ym] = {n:0, sign:0}); m.n++; if (r.didSign) m.sign++; }
+    if (ym){ var m = A.byMonth[ym] || (A.byMonth[ym] = {n:0, exc:0, sign:0});
+             m.n++; if (r.didExc) m.exc++; if (r.didSign) m.sign++; }
 
-    var sk = r.source || '—';
+    var sk = r.source || LBL_NO_SRC;   // v7.172: «—» читалось як збій
     var g = bump(A.bySource, sk); g.n++;
     if (r.didCall) g.call++; if (r.didExc) g.exc++; if (r.didSign) g.sign++; if (r.didRefuse) g.ref++;
 
-    var lk = r.loc || '—';
+    var lk = r.loc || LBL_NO_LOC;
     var gl = bump(A.byLoc, lk); gl.n++;
     if (r.didCall) gl.call++; if (r.didExc) gl.exc++; if (r.didSign) gl.sign++; if (r.didRefuse) gl.ref++;
 
@@ -1007,6 +1008,27 @@ function getLeads(p){
     }
   });
 
+  // v7.172: попередній період ТІЄЇ Ж довжини — щоб на екрані було з чим
+  // порівняти конверсію. Рахуємо коротко: повний агрегат тут не потрібен.
+  var prevBrief={total:0, exc:0, sign:0, from:'', to:''};
+  if (from && to){
+    var mA=_leadDayMs(from), mB=_leadDayMs(to);
+    if (mA != null && mB != null){
+      var spanD = Math.round((mB-mA)/86400000) + 1;
+      var pFrom = _isoUTC(mA - spanD*86400000), pTo = _isoUTC(mA - 86400000);
+      prevBrief.from=pFrom; prevBrief.to=pTo;
+      for (var q = 0; q < all.length; q++){
+        var rr = all[q];
+        if (!rr.day || rr.day < pFrom || rr.day > pTo) continue;
+        if (!seeAll && myLoc && rr.loc !== myLoc) continue;
+        if (fLoc && rr.loc !== fLoc) continue;
+        if (fSt  && rr.status !== fSt) continue;
+        if (fSrc && rr.source !== fSrc) continue;
+        prevBrief.total++; if (rr.didExc) prevBrief.exc++; if (rr.didSign) prevBrief.sign++;
+      }
+    }
+  }
+
   // таблиця — лише свіжий зріз; про обрізання повідомляємо явно, без тихого приховування
   rows.sort(function(a,b){ return String(b.day||'').localeCompare(String(a.day||'')); });
   var shown = rows.slice(0, LEADS_ROWS_CAP);
@@ -1019,6 +1041,7 @@ function getLeads(p){
 
   function keys(o){ var a=[]; for (var k in o) a.push(k); return a.sort(); }
   return {ok:true, rows:shown, rowsTotal:rows.length, rowsShown:shown.length, cap:LEADS_ROWS_CAP, spend:spend,
+          prev:prevBrief, noLocLabel:LBL_NO_LOC, noSrcLabel:LBL_NO_SRC, locMin:LOC_MIN_LEADS,
           agg:A, locations:keys(locSet), sources:LEAD_SRC_ALL,
           statusLabels:LEAD_STATUS_LABEL, today:_tgDayObj(0).dm, tomorrow:_tgDayObj(1).dm,
           role:role, seeAll:seeAll, myLoc:myLoc, include:include};
@@ -1035,6 +1058,12 @@ function getLeads(p){
 var REPORT_RCPT_SHEET  = 'Звіт_Отримувачі';
 var REPORT_RCPT_HEADER = ['ПІБ','telegram user_id','активний'];
 var REPORT_WEEKS_BACK  = 12;
+var REPORT_MONTHS_BACK = 12;
+// «—» у зведеннях читається як збій. Порожні значення — це відома дірка в
+// історичних даних, тож називаємо її прямо, а не ховаємо за прочерком.
+var LBL_NO_LOC = 'без локації';
+var LBL_NO_SRC = 'без джерела';
+var LOC_MIN_LEADS = 5;   // менше — відсоток стрибає (1 лід + 1 договір = 100%)
 
 function _rcptSheet(){
   var ss=getCRMSpreadsheet(), sh=ss.getSheetByName(REPORT_RCPT_SHEET);
@@ -1082,17 +1111,20 @@ function _dm(iso){ var p=String(iso).split('-'); return p[2]+'.'+p[1]; }
 // ── Метрики по зрізу рядків ──
 function _reportAgg(rows){
   var a={total:0,call:0,exc:0,sign:0,ref:0,reactN:0,reactSum:0,react15:0,reactNone:0,
-         bySource:{},byLoc:{},refusals:{}};
+         bySource:{},byLoc:{},refusals:{},byMonth:{}};
   rows.forEach(function(r){
     a.total++;
     if(r.didCall) a.call++;
     if(r.didExc)  a.exc++;
     if(r.didSign) a.sign++;
     if(r.didRefuse) a.ref++;
-    function bump(o,k){ if(!o[k]) o[k]={n:0,sign:0}; return o[k]; }
-    var s=bump(a.bySource, r.source||'—'); s.n++; if(r.didSign) s.sign++;
-    var l=bump(a.byLoc,    r.loc||'—');    l.n++; if(r.didSign) l.sign++;
+    function bump(o,k){ if(!o[k]) o[k]={n:0,exc:0,sign:0}; return o[k]; }
+    var s=bump(a.bySource, r.source||LBL_NO_SRC); s.n++; if(r.didExc) s.exc++; if(r.didSign) s.sign++;
+    var l=bump(a.byLoc,    r.loc||LBL_NO_LOC);    l.n++; if(r.didExc) l.exc++; if(r.didSign) l.sign++;
     if(r.didRefuse){ var g=r.refuseGroup||'не вказано'; a.refusals[g]=(a.refusals[g]||0)+1; }
+    var ym=String(r.day||'').slice(0,7);
+    if(ym){ var m=a.byMonth[ym]||(a.byMonth[ym]={n:0,exc:0,sign:0});
+            m.n++; if(r.didExc) m.exc++; if(r.didSign) m.sign++; }
     if(r.origin==='bot'){
       if(r.reactMin!==null && r.reactMin!==undefined){
         a.reactN++; a.reactSum+=r.reactMin; if(r.reactMin<=15) a.react15++;
@@ -1114,6 +1146,7 @@ function _arrow(cur, prev, unit){
 }
 
 // ── Текст звіту (HTML для Telegram) ──
+function _rpad(v,n){ var s=String(v); while(s.length<n) s+=' '; return s; }
 function _reportText(R){
   var L=[];
   L.push('📊 <b>Звіт по лідах</b>');
@@ -1130,6 +1163,27 @@ function _reportText(R){
   L.push('Конверсія     <b>'+(Math.round(_conv(c)*10)/10)+'%</b>   '+_arrow(_conv(c), _conv(p), 'pp'));
   L.push('');
 
+  // ГОЛОВНЕ, заради чого звіт: люди доходять до екскурсії й не залишаються.
+  function cv(x,y){ return y>0 ? (x*100/y) : 0; }
+  var e1=cv(c.exc,c.total),  p1=cv(p.exc,p.total);
+  var e2=cv(c.sign,c.exc),   p2=cv(p.sign,p.exc);
+  var e3=cv(c.sign,c.total), p3=cv(p.sign,p.total);
+  L.push('🎯 <b>КОНВЕРСІЯ</b>');
+  L.push('лід → екскурсія      <b>'+Math.round(e1)+'%</b>  ('+c.exc+' з '+c.total+')   '+_arrow(e1,p1,'pp'));
+  L.push('екскурсія → договір  <b>'+Math.round(e2)+'%</b>  ('+c.sign+' з '+c.exc+')   '+_arrow(e2,p2,'pp'));
+  L.push('лід → договір        <b>'+Math.round(e3)+'%</b>  ('+c.sign+' з '+c.total+')   '+_arrow(e3,p3,'pp'));
+  if(c.exc && e2 < p2) L.push('<i>просідає саме екскурсія → договір: приходять і не залишаються</i>');
+  L.push('');
+
+  if(R.months && R.months.length){
+    L.push('<b>ЕКСКУРСІЯ → ДОГОВІР ПО МІСЯЦЯХ</b>');
+    R.months.forEach(function(m){
+      L.push(m.ym+'   лідів '+_rpad(m.n,5)+' екск '+_rpad(m.exc,5)+' дог '+_rpad(m.sign,5)
+        + '  <b>'+(m.exc?Math.round(m.sign*100/m.exc):0)+'%</b>');
+    });
+    L.push('');
+  }
+
   L.push('<b>ВОРОНКА</b>');
   L.push('нові <b>'+c.total+'</b> → додзвонились <b>'+c.call+'</b> ('+_pct(c.call,c.total)+')');
   L.push('→ екскурсія <b>'+c.exc+'</b> ('+_pct(c.exc,c.call)+') → договір <b>'+c.sign+'</b> ('+_pct(c.sign,c.exc)+')');
@@ -1139,19 +1193,20 @@ function _reportText(R){
   L.push('<b>ДЖЕРЕЛА</b>');
   if(!R.sources.length) L.push('<i>немає даних</i>');
   R.sources.forEach(function(s){
-    L.push(_htmlEsc(s.key)+' — '+s.n+' лід., '+s.sign+' дог., <b>'+Math.round(s.cv)+'%</b>'
+    L.push(_htmlEsc(s.key)+' — '+s.n+' лід. → екск '+s.exc+' → дог '+s.sign
+      + '  <b>'+Math.round(s.cv)+'%</b>  <i>(екск→дог '+Math.round(s.ec)+'%)</i>'
       + (s.drop ? '  ⚠️ просів (сер. за 12 тиж. '+Math.round(s.base)+'%)' : ''));
   });
+  if(R.srcNoName) L.push('<i>без джерела: '+R.srcNoName+' лідів — у графіки не входять</i>');
   L.push('');
 
-  L.push('<b>ЛОКАЦІЇ</b>');
-  if(R.locTop.length){
-    L.push('Топ: '+R.locTop.map(function(x){ return _htmlEsc(x.key)+' '+Math.round(x.cv)+'% ('+x.sign+'/'+x.n+')'; }).join(' · '));
-  }
-  if(R.locBottom.length){
-    L.push('Антитоп: '+R.locBottom.map(function(x){ return _htmlEsc(x.key)+' '+Math.round(x.cv)+'% ('+x.sign+'/'+x.n+')'; }).join(' · '));
-  }
-  if(!R.locTop.length && !R.locBottom.length) L.push('<i>немає даних</i>');
+  L.push('<b>ЛОКАЦІЇ</b>  <i>(від '+LOC_MIN_LEADS+' лідів)</i>');
+  function locLine(x){ return _htmlEsc(x.key)+' '+Math.round(x.cv)+'% ('+x.sign+'/'+x.n+')'; }
+  if(R.locTop.length)    L.push('Топ: '+R.locTop.map(locLine).join(' · '));
+  if(R.locBottom.length) L.push('Антитоп: '+R.locBottom.map(locLine).join(' · '));
+  if(!R.locTop.length && !R.locBottom.length) L.push('<i>жодна локація не набрала '+LOC_MIN_LEADS+' лідів</i>');
+  if(R.locSkipped) L.push('<i>відсіяно за порогом: '+R.locSkipped+' локацій</i>');
+  if(R.locNoName)  L.push('<i>без локації: '+R.locNoName+' лідів — у рейтинг не входять</i>');
   L.push('');
 
   L.push('<b>ШВИДКІСТЬ РЕАКЦІЇ</b>  <i>(лише ліди з бота: '+R.botN+' з '+c.total+')</i>');
@@ -1210,22 +1265,26 @@ function _buildOwnerReport(opts){
     }
   }
 
-  var sources=[];
+  var sources=[], srcNoName=0;
   for(var s in cur.bySource){
+    if(s===LBL_NO_SRC){ srcNoName+=cur.bySource[s].n; continue; }   // не в графік
     var g=cur.bySource[s], cv=g.n?g.sign*100/g.n:0;
     var b=srcBase[s], base=(b&&b.n)?b.sign*100/b.n:0;
     // «Просів» рахуємо лише коли є на чому базуватись: на 1–2 лідах відсоток
     // стрибає з 0 на 100 і підсвітка була б шумом, а не сигналом.
-    sources.push({key:s, n:g.n, sign:g.sign, cv:cv, base:base,
+    sources.push({key:s, n:g.n, exc:g.exc||0, sign:g.sign, cv:cv, base:base,
+                  ec:(g.exc?g.sign*100/g.exc:0),
                   drop:(g.n>=3 && base>0 && cv < base*0.75)});
   }
   sources.sort(function(x,y){ return y.n-x.n; });
 
-  var locs=[];
+  var locs=[], locSkipped=0, locNoName=0;
   for(var l in cur.byLoc){
     var gl=cur.byLoc[l];
-    if(gl.n<1) continue;
-    locs.push({key:l, n:gl.n, sign:gl.sign, cv:gl.n?gl.sign*100/gl.n:0});
+    if(l===LBL_NO_LOC){ locNoName+=gl.n; continue; }        // без назви — окремим рядком, не в рейтинг
+    if(gl.n<LOC_MIN_LEADS){ locSkipped++; continue; }        // поріг: інакше 1 лід = 100%
+    locs.push({key:l, n:gl.n, exc:gl.exc||0, sign:gl.sign,
+               cv:gl.n?gl.sign*100/gl.n:0, ec:gl.exc?gl.sign*100/gl.exc:0});
   }
   locs.sort(function(x,y){ return (y.cv-x.cv) || (y.n-x.n); });
   var locTop=locs.slice(0,3);
@@ -1242,7 +1301,15 @@ function _buildOwnerReport(opts){
   var botN=0, histN=0;
   slice(range).forEach(function(r){ if(r.origin==='bot') botN++; else histN++; });
 
+  // 12 місяців: де саме просідає екскурсія → договір
+  var months=[];
+  var mAll=_reportAgg(all);
+  var mk=[]; for(var mm in mAll.byMonth) mk.push(mm);
+  mk.sort(); mk=mk.slice(-REPORT_MONTHS_BACK);
+  mk.forEach(function(m){ var g=mAll.byMonth[m]; months.push({ym:m, n:g.n, exc:g.exc, sign:g.sign}); });
+
   return {range:range, prevRange:prevRange, partial:partial, botN:botN, histN:histN,
+          months:months, locSkipped:locSkipped, locNoName:locNoName, srcNoName:srcNoName,
           cur:cur, prev:prev,
           weeks:weeks, sources:sources, locTop:locTop, locBottom:locBottom,
           refusals:refusals, note:note};
@@ -1265,11 +1332,12 @@ function _reportCharts(R){
   }catch(e){ out.push({title:'Динаміка', blob:null, err:String(e&&e.message||e)}); }
 
   try{
-    if(R.sources.length){
+    var srcCh=R.sources.filter(function(s){ return s.key!==LBL_NO_SRC && s.n>0; });
+    if(srcCh.length){
       var d2=Charts.newDataTable()
         .addColumn(Charts.ColumnType.STRING,'Джерело')
         .addColumn(Charts.ColumnType.NUMBER,'Конверсія, %');
-      R.sources.forEach(function(s){ d2.addRow([s.key, Math.round(s.cv*10)/10]); });
+      srcCh.forEach(function(s){ d2.addRow([s.key, Math.round(s.cv*10)/10]); });
       var c2=Charts.newBarChart().setDataTable(d2.build())
         .setTitle('Конверсія за джерелом, %').setDimensions(900,360).build();
       out.push({title:'Конверсія за джерелом', blob:c2.getBlob().setName('sources.png'), w:900, h:360});
@@ -1277,7 +1345,8 @@ function _reportCharts(R){
   }catch(e2){ out.push({title:'Джерела', blob:null, err:String(e2&&e2.message||e2)}); }
 
   try{
-    var locs=R.locTop.concat(R.locBottom);
+    // топ/антитоп уже без «без локації» і нижче порогу — саме тому графік читабельний
+    var locs=R.locTop.concat(R.locBottom).filter(function(x){ return x.key!==LBL_NO_LOC; });
     if(locs.length){
       var d3=Charts.newDataTable()
         .addColumn(Charts.ColumnType.STRING,'Локація')
@@ -1288,6 +1357,18 @@ function _reportCharts(R){
       out.push({title:'Конверсія за локаціями', blob:c3.getBlob().setName('locs.png'), w:900, h:360});
     }
   }catch(e3){ out.push({title:'Локації', blob:null, err:String(e3&&e3.message||e3)}); }
+
+  try{
+    if(R.months && R.months.length){
+      var d4=Charts.newDataTable()
+        .addColumn(Charts.ColumnType.STRING,'Місяць')
+        .addColumn(Charts.ColumnType.NUMBER,'екскурсія → договір, %');
+      R.months.forEach(function(m){ d4.addRow([m.ym, m.exc?Math.round(m.sign*1000/m.exc)/10:0]); });
+      var c4=Charts.newColumnChart().setDataTable(d4.build())
+        .setTitle('Екскурсія → договір по місяцях, %').setDimensions(900,380).build();
+      out.push({title:'Екскурсія → договір по місяцях', blob:c4.getBlob().setName('conv.png'), w:900, h:380});
+    }
+  }catch(e4){ out.push({title:'Конверсія по місяцях', blob:null, err:String(e4&&e4.message||e4)}); }
 
   return out;
 }
@@ -4024,7 +4105,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.171', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.172', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
