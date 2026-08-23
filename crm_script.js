@@ -3580,6 +3580,10 @@ function refreshLeadsAnalytics(){
   sh.getCharts().forEach(function(c){ sh.removeChart(c); });
   try { sh.getSlicers().forEach(function(s){ s.remove(); }); } catch(_s){}
   sh.clear();
+  // clear() НЕ знімає обʼєднання, а запис у клітинку, що входить в обʼєднання й не
+  // є його лівою верхньою, Apps Script проковтує МОВЧКИ — без винятку і без сліду.
+  // Саме так виглядає порожній блок рядків 10-48 при цілих рядках 9 і 49+.
+  try { sh.getRange(1, 1, sh.getMaxRows(), sh.getMaxColumns()).breakApart(); } catch(_bm){}
   sh.clearConditionalFormatRules();
   if (sh.getMaxColumns() < 26) sh.insertColumnsAfter(sh.getMaxColumns(), 26 - sh.getMaxColumns());
   if (sh.getMaxRows() < 200)   sh.insertRowsAfter(sh.getMaxRows(), 200 - sh.getMaxRows());
@@ -3904,7 +3908,17 @@ function _anCharts(sh, months, monTop, monN, rk, locN, refTop, refN, srcErr){
   try{ var d = SpreadsheetApp.openById(_mirrorFileId()).getSheetByName(LEADS_AN_DATA); if (d) d.hideSheet(); }catch(_h){}
 
   SpreadsheetApp.flush();
-  return {ok:true, charts:made, chartErrors:failed, sourceErrors:srcErr,
+
+  // Перевірка після запису: чи справді в аркуші те, що ми туди щойно написали.
+  var writeCheck = {};
+  try {
+    ['A9','A10','A11','B17','A25','A39','A49','B71'].forEach(function(a1){
+      var rr = sh.getRange(a1);
+      writeCheck[a1] = String(rr.getDisplayValue() || rr.getFormula() || '').slice(0, 40) || '(порожньо)';
+    });
+  } catch(_wc){}
+
+  return {ok:true, charts:made, chartErrors:failed, sourceErrors:srcErr, writeCheck:writeCheck,
           note:'Період і фільтри — клітинки B2/B3 і B5/B7. Перерахунок формулами миттєвий; '
              + 'скрипт потрібен лише щоб перечитати самі ліди.'};
 }
@@ -3959,9 +3973,9 @@ function anDiag(){
     sep: dsh ? _anSep(ss, dsh) : '?',   // що саме розбирає ця таблиця: ',' чи ';'
     cells: {}, firstErrors: []
   };
-  ['A2','B2','A3','B3','B5','B6','B7','D6','E6','D7','X2','X3','B11','B17','C18','A25','B25','C25'].forEach(function(a1){
+  ['A2','B2','A3','B3','B5','B6','B7','D6','E6','D7','X2','X3','A10','A11','B17','A25','B25','A39','A49','B51','B71','C71','E71','B91'].forEach(function(a1){
     var r = sh.getRange(a1);
-    out.cells[a1] = {f: String(r.getFormula()).slice(0, 200), v: String(r.getDisplayValue()).slice(0, 70)};
+    out.cells[a1] = {f: String(r.getFormula()).slice(0, 400), v: String(r.getDisplayValue()).slice(0, 70)};
   });
 
   // перша ж клітинка з помилкою разом із її формулою — щоб бачити, на чому падає
@@ -3976,6 +3990,40 @@ function anDiag(){
       }
     }
   }
+  // ── обʼєднання: чи не ковтають вони записи в рядки 10-48 ──
+  try {
+    out.merges = sh.getRange(1, 1, sh.getMaxRows(), sh.getMaxColumns())
+                   .getMergedRanges().map(function(r2){ return r2.getA1Notation(); }).slice(0, 40);
+  } catch(_mg){ out.merges = ['(не прочитались)']; }
+
+  // ── робочі формули: рядки 45-99, де вони точно є ──
+  out.block = [];
+  try {
+    var r1 = 45, rN = Math.min(sh.getLastRow(), 99) - r1 + 1;
+    if (rN > 0){
+      var bf = sh.getRange(r1, 1, rN, 6).getFormulas();
+      var bv = sh.getRange(r1, 1, rN, 6).getDisplayValues();
+      for (var bi = 0; bi < bf.length && out.block.length < 12; bi++){
+        for (var bj = 0; bj < bf[bi].length && out.block.length < 12; bj++){
+          if (bf[bi][bj]) out.block.push({cell: sh.getRange(r1 + bi, bj + 1).getA1Notation(),
+                                          v: String(bv[bi][bj]).slice(0, 40),
+                                          f: String(bf[bi][bj]).slice(0, 400)});
+        }
+      }
+    }
+  } catch(_bl){ out.block = ['(не прочитались)']; }
+
+  // ── тип значень на аркуші даних: текст чи Date ──
+  out.dataTypes = {};
+  try {
+    ['A2','B2','C2','G2','A3'].forEach(function(a1){
+      var v = dsh.getRange(a1).getValue();
+      out.dataTypes[a1] = {type: Object.prototype.toString.call(v).replace(/\[object |\]/g, ''),
+                           raw: String(v).slice(0, 30),
+                           fmt: String(dsh.getRange(a1).getNumberFormat()).slice(0, 20)};
+    });
+  } catch(_dt){ out.dataTypes = {error: '(не прочитались)'}; }
+
   return out;
 }
 
@@ -4791,7 +4839,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.182', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.183', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
