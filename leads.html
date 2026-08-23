@@ -303,11 +303,23 @@ table.ld td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:n
 .ld-chips{display:inline-flex;gap:4px;align-items:center}
 .ld-chip{background:#fdf0e3;color:#a05a00;border-radius:10px;padding:3px 9px;font-size:11px;font-weight:800}
 .ld-chip.x{background:var(--bg);color:var(--gray);cursor:pointer}
+/* v7.176 компактний рядок фільтрів */
+.ld-bar{display:flex;flex-wrap:wrap;align-items:center;gap:6px;width:100%}
+.ld-bar-right{display:flex;align-items:center;gap:6px;margin-left:auto}
+.ld-quick button{padding:5px 9px;font-size:12px}
+.month-sel.sm{padding:5px 7px;font-size:12px;height:30px}
+.ld-more{padding:4px 9px;font-size:14px;line-height:1}
+.ld-range{display:inline-flex;gap:6px}
+.ld-more-btn{margin-top:8px;padding:5px 10px;font-size:12px}
+.ld-base{font-size:10px;color:var(--gray2);font-weight:600}
+.ld-legend{font-size:11px;color:var(--gray);margin:0 0 8px}
+@media(max-width:768px){ .ld-bar-right{margin-left:0} }
 .ld-sep td{background:var(--bg);font-size:11px;font-weight:800;color:var(--gray);
   text-transform:uppercase;letter-spacing:.03em}
 .ld-off td{color:var(--gray)}
 .ld-sub{font-weight:600;color:var(--gray2);font-style:normal;font-size:11px}
-.ld-cvrow{display:flex;flex-wrap:wrap;gap:12px}
+.ld-cvrow{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:20px}
+#funnel{margin-top:4px;padding-top:16px;border-top:1px solid var(--bg)}
 .ld-cv{flex:1;min-width:190px;background:var(--bg);border-radius:10px;padding:14px;text-align:center}
 .ld-cv.hot{background:#eaf3fb;outline:2px solid var(--blue2)}
 .ld-cv .l{font-size:12px;font-weight:700;color:var(--gray)}
@@ -484,27 +496,32 @@ table.ld td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:n
       <h1>🎯 Ліди</h1>
       <div class="hd-meta" id="meta">завантаження…</div>
     </div>
-    <div class="hd-ctrl">
-      <div class="fc-period" id="ldPreset">
-        <button data-r="m0"  onclick="setMonthQuick(0)">Цей місяць</button>
-        <button data-r="m1"  onclick="setMonthQuick(-1)">Минулий</button>
-        <button data-r="30"  onclick="setPreset(30)">30 днів</button>
-        <button data-r="365" onclick="setPreset(365)">Рік</button>
+    <div class="hd-ctrl ld-bar">
+      <div class="fc-period ld-quick" id="ldPreset">
+        <button data-r="m0"  onclick="setMonthQuick(0)">цей міс.</button>
+        <button data-r="m1"  onclick="setMonthQuick(-1)">минулий</button>
+        <button data-r="30"  onclick="setPreset(30)">30 дн.</button>
+        <button data-r="365" onclick="setPreset(365)">рік</button>
         <button data-r="730" class="active" onclick="setPreset(730)">2 роки</button>
-        <button data-r="0"   onclick="setPreset(0)">Усе</button>
+        <button data-r="0"   onclick="setPreset(0)">усе</button>
       </div>
-      <select id="fMonth" class="month-sel" onchange="applyMY()" title="Місяць"></select>
-      <select id="fYear"  class="month-sel" onchange="applyMY()" title="Рік"></select>
-      <input type="date" id="fFrom" class="month-sel" title="Період з">
-      <input type="date" id="fTo" class="month-sel" title="Період по">
-      <select id="fLoc" class="month-sel" onchange="loadLeads()" title="Локація"></select>
-      <select id="fInclude" class="month-sel" onchange="loadLeads()" title="Джерело даних">
-        <option value="all">історія + нові</option>
-        <option value="bot">лише нові</option>
-        <option value="history">лише історія</option>
-      </select>
-      <span id="fChips" class="ld-chips"></span>
-      <button id="refreshBtn" class="btn btn-primary" onclick="loadLeads()">🔄 Оновити</button>
+      <select id="fMonth" class="month-sel sm" onchange="applyMY()" title="Місяць"></select>
+      <select id="fYear"  class="month-sel sm" onchange="applyMY()" title="Рік"></select>
+      <button class="btn ld-more" id="rangeBtn" onclick="toggleRange()" title="Довільні дати">📅</button>
+      <span id="rangeBox" class="ld-range hidden">
+        <input type="date" id="fFrom" class="month-sel sm" title="Період з">
+        <input type="date" id="fTo" class="month-sel sm" title="Період по">
+      </span>
+      <span class="ld-bar-right">
+        <select id="fLoc" class="month-sel sm" onchange="loadLeads()" title="Локація"></select>
+        <select id="fInclude" class="month-sel sm" onchange="loadLeads()" title="Джерело даних">
+          <option value="all">історія + нові</option>
+          <option value="bot">лише нові</option>
+          <option value="history">лише історія</option>
+        </select>
+        <span id="fChips" class="ld-chips"></span>
+        <button id="refreshBtn" class="btn btn-primary" onclick="loadLeads()">🔄</button>
+      </span>
     </div>
   </div>
 
@@ -576,6 +593,10 @@ table.ld td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:n
       <div class="inv-card" id="c-spend">
         <h3 class="ld-h">💰 Вартість і окупність <button class="ld-q" onclick="hint(this)">?</button></h3>
         <div class="ld-scroll" id="spend"></div>
+      </div>
+      <div class="inv-card" id="c-bysrc2">
+        <h3 class="ld-h">Конверсія за джерелом</h3>
+        <div class="ld-scroll" id="bySource2"></div>
       </div>
       <div class="inv-card" id="c-camps">
         <h3 class="ld-h">🏷 Кампанії</h3>
@@ -1092,7 +1113,7 @@ function hasPerm(p){
 //   зріз рядків для таблиці. Тому фільтри (локація/статус/джерело/дані)
 //   теж серверні — інакше цифри у блоках і в таблиці розійшлися б.
 // ═══════════════════════════════════════════════════════════════
-var LD = { rows: [], agg: null, meta: null, loading: false };
+var LD = { rows: [], agg: null, meta: null, loading: false, srcMonthAll: false };
 
 var STATUS_PILL = {
   new:            {t:'новий',        bg:'#fff4d6', c:'#8a6d00'},
@@ -1133,6 +1154,11 @@ function _markPreset(v){
 }
 // Місяць+рік і ручні дати — два способи задати те саме вікно. Щоб не показувати
 // «липень 2025», коли насправді діють інші дати, вибір з одного боку скидає інший.
+function toggleRange(){
+  var b=$('rangeBox'); if(!b) return;
+  b.classList.toggle('hidden');
+  $('rangeBtn').classList.toggle('btn-primary', !b.classList.contains('hidden'));
+}
 function _clearMY(){ var m=$('fMonth'), y=$('fYear'); if(m) m.value=''; if(y) y.value=''; }
 function applyMY(){
   var m=$('fMonth').value, y=$('fYear').value;
@@ -1229,7 +1255,7 @@ function renderAll(){
   renderGroup('bySource','Джерело','bySource');
   renderGroup('byLoc','Локація','byLoc', true);
   renderRefusals();
-  renderSpend(); renderCamps(); renderCycle();                             // КАНАЛИ
+  renderSpend(); renderGroup('bySource','Джерело','bySource2'); renderCamps(); renderCycle();  // КАНАЛИ
   renderLocRank(); renderGroup('byLoc','Локація','byLoc2', true); renderDirectors();  // ЛОКАЦІЇ
   renderMonths(); renderByWeek(); renderSrcMonth();                        // ДИНАМІКА
   renderTable();                                                           // СПИСОК
@@ -1297,7 +1323,8 @@ function renderMonths(){
   var ms = Object.keys(a.byMonth).sort();
   if (!ms.length){ $('byMonth').innerHTML = '<div class="ld-empty">Немає даних за цим періодом</div>'; return; }
   var max = 0; ms.forEach(function(m){ if (a.byMonth[m].n > max) max = a.byMonth[m].n; });
-  var h = '<table class="ld"><thead><tr><th>Місяць</th><th class="num">лідів</th>'
+  var h = legend('л→д = договір ÷ лідів · е→д = договір ÷ екскурсій')
+        + '<table class="ld"><thead><tr><th>Місяць</th><th class="num">лідів</th>'
         + '<th class="num">екск.</th><th class="num">дог.</th>'
         + '<th class="num">л→д</th><th class="num">е→д</th>'
         + '<th style="width:22%">&nbsp;</th></tr></thead><tbody>';
@@ -1307,8 +1334,8 @@ function renderMonths(){
     var w = max ? Math.round(g.n * 100 / max) : 0;
     h += '<tr><td>' + escapeHtml(m) + '</td><td class="num">' + g.n + '</td>'
        + '<td class="num">' + (g.exc||0) + '</td><td class="num">' + g.sign + '</td>'
-       + '<td class="num"><b>' + cv + '%</b></td>'
-       + '<td class="num"><b>' + ec + '%</b></td>'
+       + '<td class="num">' + pctCell(g.sign, g.n) + '</td>'
+       + '<td class="num">' + pctCell(g.sign, g.exc) + '</td>'
        + '<td><div class="ld-bar"><i style="width:' + w + '%"></i></div></td></tr>';
   });
   $('byMonth').innerHTML = h + '</tbody></table>';
@@ -1319,8 +1346,16 @@ function renderSrcMonth(){
   var srcs = Object.keys(a.bySourceMonth);
   var mset = {};
   srcs.forEach(function(s){ for (var m in a.bySourceMonth[s]) mset[m] = 1; });
-  var ms = Object.keys(mset).sort();
-  if (!srcs.length || !ms.length){ $('srcMonth').innerHTML = '<div class="ld-empty">Немає даних</div>'; return; }
+  var msAll = Object.keys(mset).sort();
+  if (!srcs.length || !msAll.length){ $('srcMonth').innerHTML = '<div class="ld-empty">Немає даних</div>'; return; }
+  // v7.176: 24 колонки не влазять на екран. Типово — останні 6 місяців.
+  var ms = LD.srcMonthAll ? msAll : msAll.slice(-6);
+  var more = (msAll.length > ms.length)
+    ? '<button class="btn ld-more-btn" onclick="LD.srcMonthAll=true;renderSrcMonth()">показати всі '
+      + msAll.length + ' місяців</button>'
+    : (LD.srcMonthAll && msAll.length > 6
+        ? '<button class="btn ld-more-btn" onclick="LD.srcMonthAll=false;renderSrcMonth()">згорнути до 6</button>'
+        : '');
   // середня конверсія каналу за період — база, щоб побачити просідання
   var base = {};
   srcs.forEach(function(s){
@@ -1343,7 +1378,7 @@ function renderSrcMonth(){
     });
     h += '</tr>';
   });
-  $('srcMonth').innerHTML = h + '</tbody></table>';
+  $('srcMonth').innerHTML = h + '</tbody></table>' + more;
 }
 
 // v7.174: ordered=true → порядок з CONFIG, сталий між періодами. Локації поза
@@ -1368,7 +1403,8 @@ function renderGroup(aggKey, headLabel, elId, ordered){
                  .sort(function(x, y){ return src[y].n - src[x].n; });
   }
   if (!keys.length && !closed.length){ $(elId).innerHTML = '<div class="ld-empty">Немає даних</div>'; return; }
-  var h = '<table class="ld"><thead><tr><th>' + headLabel + '</th>'
+  var h = legend('конв. = договір ÷ лідів · е→д = договір ÷ екскурсій')
+        + '<table class="ld"><thead><tr><th>' + headLabel + '</th>'
         + '<th class="num">лідів</th><th class="num">дзв.</th><th class="num">екск.</th>'
         + '<th class="num">дог.</th><th class="num">конв.</th>'
         + '<th class="num">е→д</th></tr></thead><tbody>';
@@ -1376,8 +1412,8 @@ function renderGroup(aggKey, headLabel, elId, ordered){
     var g = src[k];
     h += '<tr><td>' + escapeHtml(k) + '</td><td class="num">' + g.n + '</td><td class="num">' + g.call + '</td>'
        + '<td class="num">' + g.exc + '</td><td class="num">' + g.sign + '</td>'
-       + '<td class="num"><b>' + (g.n ? Math.round(g.sign * 100 / g.n) : 0) + '%</b></td>'
-       + '<td class="num"><i>' + (g.exc ? Math.round(g.sign * 100 / g.exc) : 0) + '%</i></td></tr>';
+       + '<td class="num">' + pctCell(g.sign, g.n) + '</td>'
+       + '<td class="num">' + pctCell(g.sign, g.exc) + '</td></tr>';
   });
   if (closed.length){
     h += '<tr class="ld-sep"><td colspan="7">закриті — немає в CONFIG</td></tr>';
@@ -1386,8 +1422,8 @@ function renderGroup(aggKey, headLabel, elId, ordered){
       h += '<tr class="ld-off"><td>' + escapeHtml(k) + '</td><td class="num">' + g.n + '</td>'
          + '<td class="num">' + g.call + '</td><td class="num">' + g.exc + '</td>'
          + '<td class="num">' + g.sign + '</td>'
-         + '<td class="num"><b>' + (g.n ? Math.round(g.sign * 100 / g.n) : 0) + '%</b></td>'
-         + '<td class="num"><i>' + (g.exc ? Math.round(g.sign * 100 / g.exc) : 0) + '%</i></td></tr>';
+         + '<td class="num">' + pctCell(g.sign, g.n) + '</td>'
+         + '<td class="num">' + pctCell(g.sign, g.exc) + '</td></tr>';
     });
   }
   $(elId).innerHTML = h + '</tbody></table>'
@@ -1487,7 +1523,12 @@ function renderSpend(){
   var a=LD.agg, sp=LD.meta && LD.meta.spend;
   if(!a){ return; }
   if(!sp || !sp.ok || !sp.total){
-    _card('c-spend', false);   // порожній блок не малюємо
+    // v7.176: на вкладці КАНАЛИ ховати нічого не можна — лишалася майже порожня
+    // сторінка. Пояснюємо, чого бракує і що зробити.
+    _card('c-spend', true);
+    $('spend').innerHTML='<div class="ld-empty">Витрат за цей період немає.<br>'
+      + 'Заповни аркуш «Реклама_Витрати» у таблиці-дзеркалі — тоді тут буде '
+      + 'вартість ліда, вартість договору й окупність каналу.</div>';
     return;
   }
   _card('c-spend', true);
@@ -1609,7 +1650,12 @@ async function remindLead(btn, leadId, reason){
 function renderCamps(){
   var a=LD.agg; if(!a) return;
   var ks=Object.keys(a.campaigns||{}).sort(function(x,y){ return a.campaigns[y].n-a.campaigns[x].n; });
-  if(!ks.length){ _card('c-camps', false); return; }
+  if(!ks.length){
+    _card('c-camps', true);
+    $('camps').innerHTML='<div class="ld-empty">Кампанії ще не проставлені.<br>'
+      + 'У боті кнопка «🏷 Кампанія», або текстом при створенні: «кампанія: знижка вересень».</div>';
+    return;
+  }
   _card('c-camps', true);
   var h='<table class="ld"><thead><tr><th>Кампанія</th><th class="num">лідів</th>'
       + '<th class="num">договорів</th><th class="num">конверсія</th><th class="num">принесли</th></tr></thead><tbody>';
@@ -1624,6 +1670,12 @@ function renderCamps(){
 
 // ═══ v7.172 ГОЛОВНА КОНВЕРСІЯ ═══
 function _cvp(x,y){ return y>0 ? (x*100/y) : 0; }
+// v7.176: «23%» без бази не читається — незрозуміло, від чого рахується.
+function pctCell(a,b){
+  if(!b) return '<span style="color:var(--gray2)">—</span>';
+  return '<b>'+Math.round(a*100/b)+'%</b> <span class="ld-base">('+a+'/'+b+')</span>';
+}
+function legend(txt){ return '<p class="ld-legend">'+txt+'</p>'; }
 function _ppArrow(cur, prev){
   var d=cur-prev, v=Math.round(Math.abs(d)*10)/10;
   if(!prev && !cur) return '<span class="ld-nc">—</span>';
@@ -1734,14 +1786,15 @@ function renderByWeek(){
   if(!ks.length){ _card('c-week', false); return; }
   _card('c-week', true);
   var max=0; ks.forEach(function(k){ if(w[k].n>max) max=w[k].n; });
-  var h='<table class="ld"><thead><tr><th>Тиждень</th><th class="num">лідів</th>'
+  var h=legend('е→д = договір ÷ екскурсій')
+      + '<table class="ld"><thead><tr><th>Тиждень</th><th class="num">лідів</th>'
       + '<th class="num">екск.</th><th class="num">дог.</th>'
       + '<th class="num">е→д</th><th style="width:26%">&nbsp;</th></tr></thead><tbody>';
   ks.forEach(function(k){
     var g=w[k], ec=g.exc?Math.round(g.sign*100/g.exc):0;
     h+='<tr><td>'+escapeHtml(k)+'</td><td class="num">'+g.n+'</td>'
       +'<td class="num">'+g.exc+'</td><td class="num">'+g.sign+'</td>'
-      +'<td class="num"><b>'+ec+'%</b></td>'
+      +'<td class="num">'+pctCell(g.sign,g.exc)+'</td>'
       +'<td><div class="ld-bar"><i style="width:'+(max?Math.round(g.n*100/max):0)+'%"></i></div></td></tr>';
   });
   $('byWeek').innerHTML=h+'</tbody></table>';
