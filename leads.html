@@ -304,16 +304,34 @@ table.ld td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:n
 .ld-chip{background:#fdf0e3;color:#a05a00;border-radius:10px;padding:3px 9px;font-size:11px;font-weight:800}
 .ld-chip.x{background:var(--bg);color:var(--gray);cursor:pointer}
 /* v7.176 компактний рядок фільтрів */
-.ld-bar{display:flex;flex-wrap:wrap;align-items:center;gap:6px;width:100%}
-.ld-bar-right{display:flex;align-items:center;gap:6px;margin-left:auto}
-.ld-quick button{padding:5px 9px;font-size:12px}
-.month-sel.sm{padding:5px 7px;font-size:12px;height:30px}
-.ld-more{padding:4px 9px;font-size:14px;line-height:1}
-.ld-range{display:inline-flex;gap:6px}
+/* v7.177: КЛАС ПЕРЕЙМЕНОВАНО. «.ld-bar» уже зайнятий смужкою прогресу в
+   таблицях (height:8px; overflow:hidden) — через збіг імен панель фільтрів
+   схлопувалась у 8-піксельну смужку і обрізала все всередині. */
+.ld-fbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;width:100%;
+  min-height:38px;overflow:visible}
+.ld-fbar>*{flex:0 0 auto}
+.ld-fbar-right{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-left:auto}
+.ld-quick{flex-wrap:nowrap}
+.ld-quick button{padding:0 10px;height:32px;font-size:12px;line-height:32px;white-space:nowrap}
+.month-sel.sm{padding:0 8px;height:32px;font-size:12px;line-height:normal}
+.ld-fbar .btn{height:32px;padding:0 12px;font-size:13px;line-height:32px}
+.ld-more{padding:0 10px}
+.ld-range{display:inline-flex;gap:6px;align-items:center}
 .ld-more-btn{margin-top:8px;padding:5px 10px;font-size:12px}
 .ld-base{font-size:10px;color:var(--gray2);font-weight:600}
 .ld-legend{font-size:11px;color:var(--gray);margin:0 0 8px}
-@media(max-width:768px){ .ld-bar-right{margin-left:0} }
+/* Попередження і пояснення «чому рядків менше» — НЕ ховаємо під «?»:
+   без них таблиця виглядає неповною без причини. */
+.ld-warn{font-size:12px;color:var(--orange);font-weight:600;margin:0 0 8px}
+@media(max-width:900px){ .ld-fbar-right{margin-left:0;width:100%} }
+/* На вузькому екрані шість кнопок не влазять у групу, а .fc-period має
+   overflow:hidden — тобто вони б обрізались. Розпускаємо їх окремими пігулками. */
+@media(max-width:640px){
+  .ld-quick{flex-wrap:wrap;overflow:visible;border:0;gap:4px}
+  .ld-quick button{border:1.5px solid var(--gray2);border-radius:8px}
+  .ld-quick button+button{border-left:1.5px solid var(--gray2)}
+  .ld-fbar{gap:6px}
+}
 .ld-sep td{background:var(--bg);font-size:11px;font-weight:800;color:var(--gray);
   text-transform:uppercase;letter-spacing:.03em}
 .ld-off td{color:var(--gray)}
@@ -496,7 +514,7 @@ table.ld td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:n
       <h1>🎯 Ліди</h1>
       <div class="hd-meta" id="meta">завантаження…</div>
     </div>
-    <div class="hd-ctrl ld-bar">
+    <div class="hd-ctrl ld-fbar">
       <div class="fc-period ld-quick" id="ldPreset">
         <button data-r="m0"  onclick="setMonthQuick(0)">цей міс.</button>
         <button data-r="m1"  onclick="setMonthQuick(-1)">минулий</button>
@@ -512,7 +530,7 @@ table.ld td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:n
         <input type="date" id="fFrom" class="month-sel sm" title="Період з">
         <input type="date" id="fTo" class="month-sel sm" title="Період по">
       </span>
-      <span class="ld-bar-right">
+      <span class="ld-fbar-right">
         <select id="fLoc" class="month-sel sm" onchange="loadLeads()" title="Локація"></select>
         <select id="fInclude" class="month-sel sm" onchange="loadLeads()" title="Джерело даних">
           <option value="all">історія + нові</option>
@@ -1427,7 +1445,7 @@ function renderGroup(aggKey, headLabel, elId, ordered){
     });
   }
   $(elId).innerHTML = h + '</tbody></table>'
-    + (skipped ? '<p class="ld-note">' + escapeHtml(skipK) + ': ' + skipped
+    + (skipped ? '<p class="ld-legend">' + escapeHtml(skipK) + ': ' + skipped
                  + ' лідів — у рейтинг і графіки не входять</p>' : '');
 }
 
@@ -1486,7 +1504,7 @@ function renderTable(){
   var rows = LD.rows, m = LD.meta;
   $('cnt').textContent = '· показано ' + (m ? m.rowsShown : rows.length) + ' з ' + (m ? m.rowsTotal : rows.length);
   $('capNote').innerHTML = (m && m.rowsTotal > m.rowsShown)
-    ? '<p class="ld-note">Таблиця показує ' + m.rowsShown + ' найсвіжіших рядків з ' + m.rowsTotal
+    ? '<p class="ld-warn">Таблиця показує ' + m.rowsShown + ' найсвіжіших рядків з ' + m.rowsTotal
       + ' (ліміт ' + m.cap + '). <b>Усі показники вище пораховані по повній вибірці</b>, не по цьому зрізу. '
       + 'Щоб побачити решту — звузьте період або фільтри.</p>'
     : '';
@@ -1736,7 +1754,7 @@ function renderLocRank(){
   if(skipped) note.push('відсіяно за порогом &lt;'+minN+' лідів: '+skipped+' локацій');
   if(noname)  note.push('без локації: '+noname+' лідів — у рейтинг не входять');
   $('locRank').innerHTML = tbl('Топ',top,'up') + tbl('Антитоп',bot,'dn')
-    + (note.length ? '<p class="ld-note">'+note.join(' · ')+'</p>' : '');
+    + (note.length ? '<p class="ld-legend">'+note.join(' · ')+'</p>' : '');
 }
 
 // ═══ v7.173 ВКЛАДКИ, KPI, ПРИХОВУВАННЯ ПОРОЖНЬОГО ═══
