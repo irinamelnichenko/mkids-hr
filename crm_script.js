@@ -803,7 +803,7 @@ function _leadsFromBot(){
     out.push({
       id: String(row[LB.lead_id] || ''), origin: 'bot',
       created: String(row[LB.created_at] || ''), day: _leadDayKey(row[LB.created_at]),
-      loc: String(row[LB['локація']] || '').trim(),
+      loc: _leadLocCanon(row[LB['локація']]),   // v7.175: у боті вже CONFIG-назви, але зводимо однаково
       source: srcRaw ? (_leadSrcNorm(srcRaw) || 'інше') : '', sourceRaw: srcRaw,
       phone: _fmtPhone(row[LB.phone]),
       parent: String(row[LB.parent] || ''), child: String(row[LB.child] || ''),
@@ -827,6 +827,26 @@ function _leadsFromBot(){
     });
   }
   return out;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.175 ЗВЕДЕННЯ НАЗВ ЛОКАЦІЙ. В історії вони інші, ніж у CONFIG, через що
+// «Осокорки сад», «Львів Кругла», «228 школа» падали в групу «закриті», хоча
+// всі працюють. Зводимо ПРИ ЧИТАННІ — далі всі споживачі бачать назви CONFIG.
+// Дзеркало має дзеркальну мапу (MIRROR_TABS) у другий бік.
+// ═══════════════════════════════════════════════════════════════════════════
+var LEAD_LOC_CANON = {
+  'осокорки сад':'Осокорки', 'осокорки садочок':'Осокорки',
+  'осокорки школа':'Школа Осокорки', 'школа осокорки':'Школа Осокорки',
+  'львів кругла':'Кругла', 'кругла':'Кругла',
+  'львів бігова':'Бігова', 'бігова':'Бігова',
+  '228 школа':'Школа 228', 'школа 228':'Школа 228',
+  "кар'єрна школа":"Кар'єрна", 'кар’єрна школа':"Кар'єрна", 'кар’єрна':"Кар'єрна"
+};
+function _leadLocCanon(loc){
+  var s=String(loc||'').trim();
+  if(!s) return '';
+  return LEAD_LOC_CANON[s.toLowerCase().replace(/\s+/g,' ')] || s;
 }
 
 function _leadsFromHistory(){
@@ -853,7 +873,7 @@ function _leadsFromHistory(){
     out.push({
       id: String(g(row,'lead_id') || ''), origin: 'history',
       created: day, day: day,
-      loc: String(g(row,'локація') || '').trim(),
+      loc: _leadLocCanon(g(row,'локація')),
       source: String(g(row,'source') || '').trim(), sourceRaw: String(g(row,'source') || '').trim(),
       phone: String(g(row,'phone') || ''),
       parent: String(g(row,'parent') || ''), child: String(g(row,'child') || ''),
@@ -4130,7 +4150,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.174', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.175', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();

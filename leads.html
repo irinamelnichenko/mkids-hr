@@ -250,9 +250,15 @@ select,input{font-family:inherit}
 /* таблиці */
 .ld-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
 table.ld{width:100%;border-collapse:collapse;font-size:13px}
-table.ld th{text-align:left;font-size:11px;font-weight:800;color:var(--gray);text-transform:uppercase;
-  letter-spacing:.03em;padding:8px 10px;border-bottom:2px solid var(--bg);white-space:nowrap}
-table.ld td{padding:9px 10px;border-bottom:1px solid var(--bg);vertical-align:top}
+table.ld th{text-align:left;font-size:10px;font-weight:800;color:var(--gray);text-transform:uppercase;
+  letter-spacing:.02em;padding:5px 7px;border-bottom:2px solid var(--bg);white-space:nowrap}
+table.ld td{padding:5px 7px;border-bottom:1px solid var(--bg);vertical-align:top;font-size:12px}
+/* v7.175: перша колонка липка — при горизонтальному скролі видно, ЧИЙ це рядок */
+table.ld th:first-child, table.ld td:first-child{position:sticky;left:0;z-index:2;
+  background:var(--white);box-shadow:1px 0 0 var(--bg)}
+table.ld tbody tr:hover td:first-child{background:var(--bg)}
+table.ld .ld-sep td:first-child{background:var(--bg)}
+table.ld td.num{padding-left:6px;padding-right:6px}
 table.ld tbody tr:hover{background:var(--bg)}
 table.ld td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .ld-pill{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:800;white-space:nowrap}
@@ -480,11 +486,15 @@ table.ld td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:n
     </div>
     <div class="hd-ctrl">
       <div class="fc-period" id="ldPreset">
-        <button data-r="30"   onclick="setPreset(30)">30 днів</button>
-        <button data-r="365"  onclick="setPreset(365)">Рік</button>
-        <button data-r="730"  class="active" onclick="setPreset(730)">2 роки</button>
-        <button data-r="0"    onclick="setPreset(0)">Усе</button>
+        <button data-r="m0"  onclick="setMonthQuick(0)">Цей місяць</button>
+        <button data-r="m1"  onclick="setMonthQuick(-1)">Минулий</button>
+        <button data-r="30"  onclick="setPreset(30)">30 днів</button>
+        <button data-r="365" onclick="setPreset(365)">Рік</button>
+        <button data-r="730" class="active" onclick="setPreset(730)">2 роки</button>
+        <button data-r="0"   onclick="setPreset(0)">Усе</button>
       </div>
+      <select id="fMonth" class="month-sel" onchange="applyMY()" title="Місяць"></select>
+      <select id="fYear"  class="month-sel" onchange="applyMY()" title="Рік"></select>
       <input type="date" id="fFrom" class="month-sel" title="Період з">
       <input type="date" id="fTo" class="month-sel" title="Період по">
       <select id="fLoc" class="month-sel" onchange="loadLeads()" title="Локація"></select>
@@ -1107,9 +1117,47 @@ function _isoShift(days){
 }
 function pctS(a, b){ return b > 0 ? Math.round(a * 100 / b) + '%' : '—'; }
 
+var LD_MONTHS=['січень','лютий','березень','квітень','травень','червень',
+               'липень','серпень','вересень','жовтень','листопад','грудень'];
+function fillMY(){
+  var h='<option value="">— місяць —</option><option value="all">весь рік</option>';
+  for(var i=1;i<=12;i++) h+='<option value="'+i+'">'+LD_MONTHS[i-1]+'</option>';
+  $('fMonth').innerHTML=h;
+  var y=new Date().getFullYear(), hy='<option value="">— рік —</option>';
+  for(var q=y;q>=2024;q--) hy+='<option value="'+q+'">'+q+'</option>';
+  $('fYear').innerHTML=hy;
+}
+function _markPreset(v){
+  var b=document.querySelectorAll('#ldPreset button');
+  for(var i=0;i<b.length;i++) b[i].classList.toggle('active', String(b[i].dataset.r)===String(v));
+}
+// Місяць+рік і ручні дати — два способи задати те саме вікно. Щоб не показувати
+// «липень 2025», коли насправді діють інші дати, вибір з одного боку скидає інший.
+function _clearMY(){ var m=$('fMonth'), y=$('fYear'); if(m) m.value=''; if(y) y.value=''; }
+function applyMY(){
+  var m=$('fMonth').value, y=$('fYear').value;
+  if(!y){ return; }                       // без року місяць нічого не означає
+  if(!m) { m='all'; $('fMonth').value='all'; }
+  var from,to;
+  if(m==='all'){ from=y+'-01-01'; to=y+'-12-31'; }
+  else{
+    var mm=('0'+m).slice(-2), last=new Date(Number(y), Number(m), 0).getDate();
+    from=y+'-'+mm+'-01'; to=y+'-'+mm+'-'+('0'+last).slice(-2);
+  }
+  $('fFrom').value=from; $('fTo').value=to;
+  _markPreset('');
+  loadLeads();
+}
+function setMonthQuick(off){
+  var d=new Date(); d.setDate(1); d.setMonth(d.getMonth()+off);
+  $('fYear').value=String(d.getFullYear());
+  $('fMonth').value=String(d.getMonth()+1);
+  applyMY();
+  _markPreset(off===0?'m0':'m1');
+}
 function setPreset(days){
-  var btns = document.querySelectorAll('#ldPreset button');
-  for (var i = 0; i < btns.length; i++) btns[i].classList.toggle('active', Number(btns[i].dataset.r) === days);
+  _markPreset(days);
+  _clearMY();
   $('fFrom').value = days ? _isoShift(-days) : '';
   $('fTo').value   = days ? _isoShift(0)     : '';
   loadLeads();
@@ -1250,9 +1298,9 @@ function renderMonths(){
   if (!ms.length){ $('byMonth').innerHTML = '<div class="ld-empty">Немає даних за цим періодом</div>'; return; }
   var max = 0; ms.forEach(function(m){ if (a.byMonth[m].n > max) max = a.byMonth[m].n; });
   var h = '<table class="ld"><thead><tr><th>Місяць</th><th class="num">лідів</th>'
-        + '<th class="num">екскурсій</th><th class="num">договорів</th>'
-        + '<th class="num">лід→дог</th><th class="num">екск→дог</th>'
-        + '<th style="width:26%">&nbsp;</th></tr></thead><tbody>';
+        + '<th class="num">екск.</th><th class="num">дог.</th>'
+        + '<th class="num">л→д</th><th class="num">е→д</th>'
+        + '<th style="width:22%">&nbsp;</th></tr></thead><tbody>';
   ms.forEach(function(m){
     var g = a.byMonth[m], cv = g.n ? Math.round(g.sign * 100 / g.n) : 0;
     var ec = g.exc ? Math.round(g.sign * 100 / g.exc) : 0;
@@ -1321,9 +1369,9 @@ function renderGroup(aggKey, headLabel, elId, ordered){
   }
   if (!keys.length && !closed.length){ $(elId).innerHTML = '<div class="ld-empty">Немає даних</div>'; return; }
   var h = '<table class="ld"><thead><tr><th>' + headLabel + '</th>'
-        + '<th class="num">лідів</th><th class="num">дзвінок</th><th class="num">екскурсія</th>'
-        + '<th class="num">договір</th><th class="num">конверсія</th>'
-        + '<th class="num">екск→дог</th></tr></thead><tbody>';
+        + '<th class="num">лідів</th><th class="num">дзв.</th><th class="num">екск.</th>'
+        + '<th class="num">дог.</th><th class="num">конв.</th>'
+        + '<th class="num">е→д</th></tr></thead><tbody>';
   keys.forEach(function(k){
     var g = src[k];
     h += '<tr><td>' + escapeHtml(k) + '</td><td class="num">' + g.n + '</td><td class="num">' + g.call + '</td>'
@@ -1448,8 +1496,8 @@ function renderSpend(){
   var keys=Object.keys(srcs).sort();
   var h='<table class="ld"><thead><tr><th>Джерело</th><th class="num">витрати</th>'
       + '<th class="num">лідів</th><th class="num">₴/лід</th>'
-      + '<th class="num">договорів</th><th class="num">₴/договір</th>'
-      + '<th class="num">принесли</th><th class="num">окупність</th></tr></thead><tbody>';
+      + '<th class="num">дог.</th><th class="num">₴/дог.</th>'
+      + '<th class="num">принесли</th><th class="num">окуп.</th></tr></thead><tbody>';
   var tS=0,tN=0,tG=0,tR=0;
   keys.forEach(function(s){
     var spend=sp.bySource[s]||0, g=a.bySource[s]||{n:0,sign:0}, rev=(a.revenueBySource||{})[s]||0;
@@ -1686,9 +1734,9 @@ function renderByWeek(){
   if(!ks.length){ _card('c-week', false); return; }
   _card('c-week', true);
   var max=0; ks.forEach(function(k){ if(w[k].n>max) max=w[k].n; });
-  var h='<table class="ld"><thead><tr><th>Тиждень з</th><th class="num">лідів</th>'
-      + '<th class="num">екскурсій</th><th class="num">договорів</th>'
-      + '<th class="num">екск→дог</th><th style="width:30%">&nbsp;</th></tr></thead><tbody>';
+  var h='<table class="ld"><thead><tr><th>Тиждень</th><th class="num">лідів</th>'
+      + '<th class="num">екск.</th><th class="num">дог.</th>'
+      + '<th class="num">е→д</th><th style="width:26%">&nbsp;</th></tr></thead><tbody>';
   ks.forEach(function(k){
     var g=w[k], ec=g.exc?Math.round(g.sign*100/g.exc):0;
     h+='<tr><td>'+escapeHtml(k)+'</td><td class="num">'+g.n+'</td>'
@@ -1710,8 +1758,9 @@ function renderByWeek(){
   var nv = $('navLeads'); if (nv) nv.style.display = '';
   $('fFrom').value = _isoShift(-730);
   $('fTo').value   = _isoShift(0);
-  $('fFrom').addEventListener('change', function(){ loadLeads(); });
-  $('fTo').addEventListener('change',   function(){ loadLeads(); });
+  fillMY();
+  $('fFrom').addEventListener('change', function(){ _clearMY(); _markPreset(''); loadLeads(); });
+  $('fTo').addEventListener('change',   function(){ _clearMY(); _markPreset(''); loadLeads(); });
   await loadLeads();
 })();
 </script>
