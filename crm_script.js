@@ -3445,6 +3445,13 @@ function _anWriteData(ss, rows){
   return {sh: sh, n: out.length - 1};
 }
 
+// Сітка аркуша мусить покривати діапазон, на який дивляться формули.
+function _anEnsureRows(sh, need){
+  var have = sh.getMaxRows();
+  if (have < need) sh.insertRowsAfter(have, need - have);
+  return sh.getMaxRows();
+}
+
 // Ряди для SPARKLINE: локація × 12 останніх місяців. Тренд свідомо НЕ залежить
 // від фільтрів — це довга картинка по локації, а не зріз поточного вибору.
 function _anWriteSpark(sh, rows, months){
@@ -3501,6 +3508,11 @@ function refreshLeadsAnalytics(){
 
   var dat = _anWriteData(ss, all);
   AN_MAXROW = Math.max(dat.n + 500, 1000);   // формули рахують лише по реальних даних
+  // КРИТИЧНО (v7.181): _anWriteData вирощує аркуш рівно під дані (n+1 рядок), а
+  // AN_MAXROW бере ще +500 запасу — і формули починають посилатися на рядки, яких
+  // у сітці НЕМАЄ. Google Sheets такий діапазон не парсить, тож увесь аркуш стає
+  // #ERROR!, і жоден IFERROR цього не ловить: помилка розбору, а не значення.
+  _anEnsureRows(dat.sh, AN_MAXROW);
 
   var sh = ss.getSheetByName(LEADS_AN_SHEET);
   if (!sh) sh = ss.insertSheet(LEADS_AN_SHEET, 0);
@@ -3868,6 +3880,45 @@ function applyQuickPeriod(){
   sh.getRange('B3').setValue(to);
   SpreadsheetApp.flush();
   return refreshLeadsAnalytics();
+}
+
+// Read-only знімок дашборда: що НАСПРАВДІ стоїть у клітинках — формула, показане
+// значення, розмір сітки, локаль. Таблиця приватна й ззовні не читається, тож без
+// цього роуту діагностика #ERROR! зводиться до здогадів.
+function anDiag(){
+  var ss;
+  try { ss = SpreadsheetApp.openById(_mirrorFileId()); }
+  catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  var sh = ss.getSheetByName(LEADS_AN_SHEET), dsh = ss.getSheetByName(LEADS_AN_DATA);
+  if (!sh) return {ok:false, error:'немає аркуша «' + LEADS_AN_SHEET + '»'};
+
+  var out = {
+    ok: true,
+    file: {id: ss.getId(), name: ss.getName(), locale: ss.getSpreadsheetLocale(), tz: ss.getSpreadsheetTimeZone()},
+    sheets: ss.getSheets().map(function(s2){ return s2.getName() + ' ' + s2.getMaxRows() + '×' + s2.getMaxColumns(); }),
+    an: {rows: sh.getMaxRows(), cols: sh.getMaxColumns(), lastRow: sh.getLastRow()},
+    data: dsh ? {rows: dsh.getMaxRows(), cols: dsh.getMaxColumns(), lastRow: dsh.getLastRow()} : null,
+    anMaxRow: AN_MAXROW,
+    cells: {}, firstErrors: []
+  };
+  ['A2','B2','A3','B3','B5','B6','B7','D6','E6','D7','X2','X3','B11','B17','C18','A25','B25','C25'].forEach(function(a1){
+    var r = sh.getRange(a1);
+    out.cells[a1] = {f: String(r.getFormula()).slice(0, 200), v: String(r.getDisplayValue()).slice(0, 70)};
+  });
+
+  // перша ж клітинка з помилкою разом із її формулою — щоб бачити, на чому падає
+  var rows = Math.min(sh.getLastRow() || 1, 140), cols = Math.min(sh.getLastColumn() || 1, 14);
+  var dv = sh.getRange(1, 1, rows, cols).getDisplayValues();
+  var fs = sh.getRange(1, 1, rows, cols).getFormulas();
+  for (var i = 0; i < rows && out.firstErrors.length < 4; i++){
+    for (var j = 0; j < cols && out.firstErrors.length < 4; j++){
+      if (/^#(ERROR!|REF!|VALUE!|NAME\?|NUM!|DIV\/0!|N\/A)/.test(String(dv[i][j]))){
+        out.firstErrors.push({cell: sh.getRange(i + 1, j + 1).getA1Notation(),
+                              v: dv[i][j], f: String(fs[i][j]).slice(0, 260)});
+      }
+    }
+  }
+  return out;
 }
 
 function SETUP_LEADS_ANALYTICS(){
@@ -4682,7 +4733,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.180', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.181', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -4700,6 +4751,7 @@ function doGet(e) {
     else if (action === 'getAuthLog')         result = getAuthLog();   // v7.118 діагностика Авторизація_Лог
     else if (action === 'tgGetUpdates')       result = tgGetUpdates();   // v7.122 діагностика Telegram-бота
     else if (action === 'getLeads')           result = getLeads(e.parameter || {});   // v7.152 екран лідів
+    else if (action === 'anDiag')             result = anDiag();   // v7.181 read-only знімок клітинок дашборда
     else if (action === 'getAdSpend')         result = getAdSpend(e.parameter || {});   // v7.169 рекламні витрати
     else if (action === 'sendOwnerReport')    result = sendOwnerReport(_ownerReportParams(e.parameter || {}));   // v7.158; v7.171 ручний запуск = поточний тиждень
     else if (action === 'getBdayStatus')      result = getBdayStatus();                                            // v7.109 роут замість прямого читання листа з фронту
