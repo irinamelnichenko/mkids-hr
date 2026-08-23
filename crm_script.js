@@ -953,7 +953,7 @@ function getLeads(p){
   function bump(o, k){ if (!o[k]) o[k] = {n:0, call:0, exc:0, sign:0, ref:0}; return o[k]; }
   var A = {
     total:0, call:0, exc:0, sign:0, ref:0,
-    byMonth:{}, bySource:{}, byLoc:{}, bySourceMonth:{}, refusals:{}, directors:{},
+    byMonth:{}, byWeek:{}, bySource:{}, byLoc:{}, bySourceMonth:{}, refusals:{}, directors:{},
     reactN:0, reactSum:0, react15:0, reactNone:0,
     lifeN:0, lifeSum:0, excN:0, excSum:0,
     revenueBySource:{}, linkedSigned:0, staySum:0, stayN:0, campaigns:{}   // v7.169
@@ -968,6 +968,12 @@ function getLeads(p){
     var ym = (r.day || '').slice(0,7);
     if (ym){ var m = A.byMonth[ym] || (A.byMonth[ym] = {n:0, exc:0, sign:0});
              m.n++; if (r.didExc) m.exc++; if (r.didSign) m.sign++; }
+    // v7.173: тижні для вкладки «Динаміка». Ключ — понеділок того тижня.
+    if (r.day){
+      var wk = _mondayISO(r.day);
+      var wg = A.byWeek[wk] || (A.byWeek[wk] = {n:0, exc:0, sign:0});
+      wg.n++; if (r.didExc) wg.exc++; if (r.didSign) wg.sign++;
+    }
 
     var sk = r.source || LBL_NO_SRC;   // v7.172: «—» читалось як збій
     var g = bump(A.bySource, sk); g.n++;
@@ -4105,7 +4111,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.172', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.173', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
