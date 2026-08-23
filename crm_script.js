@@ -785,9 +785,9 @@ function _leadsFromBot(){
     var st  = String(row[LB.status] || '').trim();
     var exd = String(row[LB.excursion_date] || '').trim();
     var cbd = String(row[LB.callback_date]  || '').trim();
-    var didCall   = did('call_ok') || st==='called' || st==='excursion' || st==='signed';
-    var didExc    = did('exc')     || st==='excursion' || st==='signed' || !!exd;
     var didSign   = did('sign')    || st==='signed';
+    var didExc    = did('exc')     || st==='excursion' || st==='signed' || !!exd || didSign;
+    var didCall   = did('call_ok') || st==='called' || st==='excursion' || st==='signed' || didExc;
     var didRefuse = did('refuse')  || st==='refused';
 
     // Час життя: перший дзвінок → договір. Обидві мітки є лише в журналі бота.
@@ -865,8 +865,12 @@ function _leadsFromHistory(){
                    ? _leadRefuseNorm(String(g(row,'refusal_reason') || '') + ' ' + String(g(row,'comment') || '')) : '',
       comment: String(g(row,'comment') || ''),
       cbToday: false, excTomorrow: false,
-      didCall:   (String(g(row,'did_call'))   === '1' || g(row,'did_call')   === 1),
-      didExc:    (String(g(row,'did_exc'))    === '1' || g(row,'did_exc')    === 1),
+      // v7.174 етапи НАКОПИЧУВАЛЬНІ: в історії статус екскурсії часто проставлений
+      // без етапу дзвінка, через що виходило «додзвонились 2086 → екскурсія 2297 (110%)».
+      // Хто був на екскурсії — очевидно, до нього дзвонили.
+      didCall:   (String(g(row,'did_call')) === '1' || g(row,'did_call') === 1)
+                 || (String(g(row,'did_exc')) === '1' || g(row,'did_exc') === 1) || sign,
+      didExc:    (String(g(row,'did_exc'))  === '1' || g(row,'did_exc')  === 1) || sign,
       didSign:   sign,
       didRefuse: (String(g(row,'did_refuse')) === '1' || g(row,'did_refuse') === 1),
       lifeDays: null, excDays: ex
@@ -956,7 +960,8 @@ function getLeads(p){
     byMonth:{}, byWeek:{}, bySource:{}, byLoc:{}, bySourceMonth:{}, refusals:{}, directors:{},
     reactN:0, reactSum:0, react15:0, reactNone:0,
     lifeN:0, lifeSum:0, excN:0, excSum:0,
-    revenueBySource:{}, linkedSigned:0, staySum:0, stayN:0, campaigns:{}   // v7.169
+    revenueBySource:{}, linkedSigned:0, staySum:0, stayN:0, campaigns:{},   // v7.169
+    rawOther:{}   // v7.174: сирі тексти, що впали в «інше» — щоб розширити словник
   };
   rows.forEach(function(r){
     A.total++;
@@ -988,7 +993,14 @@ function getLeads(p){
       var c  = sm[ym] || (sm[ym] = {n:0, sign:0});
       c.n++; if (r.didSign) c.sign++;
     }
-    if (r.didRefuse){ var rg = r.refuseGroup || 'не вказано'; A.refusals[rg] = (A.refusals[rg]||0) + 1; }
+    if (r.didRefuse){
+      var rg = r.refuseGroup || 'не вказано';
+      A.refusals[rg] = (A.refusals[rg]||0) + 1;
+      if (rg === 'інше'){
+        var raw = String(r.refusal || r.comment || '').replace(/\s+/g,' ').trim().slice(0,80);
+        if (raw) A.rawOther[raw] = (A.rawOther[raw]||0) + 1;
+      }
+    }
 
     if (r.origin === 'bot'){
       var d = r.assignee || '—';
@@ -1045,8 +1057,15 @@ function getLeads(p){
   try{ spend=getAdSpend({from:p.from, to:p.to, loc:(seeAll?String(p.filterLoc||'').trim():myLoc)}); }
   catch(_sp){ spend={ok:false, error:String(_sp&&_sp.message||_sp)}; }
 
+  // v7.174: порядок локацій має бути СТАЛИЙ, інакше при зміні періоду рядки
+  // стрибають і за конкретною локацією неможливо стежити. Беремо порядок з CONFIG;
+  // усе, чого там немає (закриті локації), фронт покаже окремою групою в кінці.
+  var configLocs=[];
+  try{ (getLocations().data||[]).forEach(function(l){ var n=String(l.loc||'').trim(); if(n) configLocs.push(n); }); }
+  catch(_cl){}
+
   function keys(o){ var a=[]; for (var k in o) a.push(k); return a.sort(); }
-  return {ok:true, rows:shown, rowsTotal:rows.length, rowsShown:shown.length, cap:LEADS_ROWS_CAP, spend:spend,
+  return {ok:true, rows:shown, configLocs:configLocs, rowsTotal:rows.length, rowsShown:shown.length, cap:LEADS_ROWS_CAP, spend:spend,
           prev:prevBrief, noLocLabel:LBL_NO_LOC, noSrcLabel:LBL_NO_SRC, locMin:LOC_MIN_LEADS,
           agg:A, locations:keys(locSet), sources:LEAD_SRC_ALL,
           statusLabels:LEAD_STATUS_LABEL, today:_tgDayObj(0).dm, tomorrow:_tgDayObj(1).dm,
@@ -4111,7 +4130,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.173', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.174', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
