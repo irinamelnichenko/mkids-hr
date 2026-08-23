@@ -311,8 +311,7 @@ table.ld td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:n
   min-height:38px;overflow:visible}
 .ld-fbar>*{flex:0 0 auto}
 .ld-fbar-right{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-left:auto}
-.ld-quick{flex-wrap:nowrap}
-.ld-quick button{padding:0 10px;height:32px;font-size:12px;line-height:32px;white-space:nowrap}
+.ld-lbl{font-size:12px;font-weight:700;color:var(--gray)}
 .month-sel.sm{padding:0 8px;height:32px;font-size:12px;line-height:normal}
 .ld-fbar .btn{height:32px;padding:0 12px;font-size:13px;line-height:32px}
 .ld-more{padding:0 10px}
@@ -326,12 +325,7 @@ table.ld td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:n
 @media(max-width:900px){ .ld-fbar-right{margin-left:0;width:100%} }
 /* На вузькому екрані шість кнопок не влазять у групу, а .fc-period має
    overflow:hidden — тобто вони б обрізались. Розпускаємо їх окремими пігулками. */
-@media(max-width:640px){
-  .ld-quick{flex-wrap:wrap;overflow:visible;border:0;gap:4px}
-  .ld-quick button{border:1.5px solid var(--gray2);border-radius:8px}
-  .ld-quick button+button{border-left:1.5px solid var(--gray2)}
-  .ld-fbar{gap:6px}
-}
+@media(max-width:640px){ .ld-fbar{gap:6px} .ld-range{flex-wrap:wrap} }
 .ld-sep td{background:var(--bg);font-size:11px;font-weight:800;color:var(--gray);
   text-transform:uppercase;letter-spacing:.03em}
 .ld-off td{color:var(--gray)}
@@ -515,20 +509,15 @@ table.ld td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:n
       <div class="hd-meta" id="meta">завантаження…</div>
     </div>
     <div class="hd-ctrl ld-fbar">
-      <div class="fc-period ld-quick" id="ldPreset">
-        <button data-r="m0"  onclick="setMonthQuick(0)">цей міс.</button>
-        <button data-r="m1"  onclick="setMonthQuick(-1)">минулий</button>
-        <button data-r="30"  onclick="setPreset(30)">30 дн.</button>
-        <button data-r="365" onclick="setPreset(365)">рік</button>
-        <button data-r="730" class="active" onclick="setPreset(730)">2 роки</button>
-        <button data-r="0"   onclick="setPreset(0)">усе</button>
-      </div>
-      <select id="fMonth" class="month-sel sm" onchange="applyMY()" title="Місяць"></select>
-      <select id="fYear"  class="month-sel sm" onchange="applyMY()" title="Рік"></select>
-      <button class="btn ld-more" id="rangeBtn" onclick="toggleRange()" title="Довільні дати">📅</button>
-      <span id="rangeBox" class="ld-range hidden">
+      <span class="ld-range">
+        <span class="ld-lbl">з</span>
         <input type="date" id="fFrom" class="month-sel sm" title="Період з">
+        <span class="ld-lbl">по</span>
         <input type="date" id="fTo" class="month-sel sm" title="Період по">
+      </span>
+      <span class="ld-range">
+        <select id="fMonth" class="month-sel sm" onchange="applyMY()" title="Швидкий вибір місяця"></select>
+        <select id="fYear"  class="month-sel sm" onchange="applyMY()" title="Рік"></select>
       </span>
       <span class="ld-fbar-right">
         <select id="fLoc" class="month-sel sm" onchange="loadLeads()" title="Локація"></select>
@@ -1166,17 +1155,9 @@ function fillMY(){
   for(var q=y;q>=2024;q--) hy+='<option value="'+q+'">'+q+'</option>';
   $('fYear').innerHTML=hy;
 }
-function _markPreset(v){
-  var b=document.querySelectorAll('#ldPreset button');
-  for(var i=0;i<b.length;i++) b[i].classList.toggle('active', String(b[i].dataset.r)===String(v));
-}
+// v7.178: пресети прибрано — період задається датами або парою місяць+рік.
 // Місяць+рік і ручні дати — два способи задати те саме вікно. Щоб не показувати
 // «липень 2025», коли насправді діють інші дати, вибір з одного боку скидає інший.
-function toggleRange(){
-  var b=$('rangeBox'); if(!b) return;
-  b.classList.toggle('hidden');
-  $('rangeBtn').classList.toggle('btn-primary', !b.classList.contains('hidden'));
-}
 function _clearMY(){ var m=$('fMonth'), y=$('fYear'); if(m) m.value=''; if(y) y.value=''; }
 function applyMY(){
   var m=$('fMonth').value, y=$('fYear').value;
@@ -1189,21 +1170,6 @@ function applyMY(){
     from=y+'-'+mm+'-01'; to=y+'-'+mm+'-'+('0'+last).slice(-2);
   }
   $('fFrom').value=from; $('fTo').value=to;
-  _markPreset('');
-  loadLeads();
-}
-function setMonthQuick(off){
-  var d=new Date(); d.setDate(1); d.setMonth(d.getMonth()+off);
-  $('fYear').value=String(d.getFullYear());
-  $('fMonth').value=String(d.getMonth()+1);
-  applyMY();
-  _markPreset(off===0?'m0':'m1');
-}
-function setPreset(days){
-  _markPreset(days);
-  _clearMY();
-  $('fFrom').value = days ? _isoShift(-days) : '';
-  $('fTo').value   = days ? _isoShift(0)     : '';
   loadLeads();
 }
 
@@ -1827,11 +1793,15 @@ function renderByWeek(){
   if (!isNetworkRole(role) && role !== 'director'){ window.location.href = 'index.html'; return; }
   updUserUI();
   var nv = $('navLeads'); if (nv) nv.style.display = '';
-  $('fFrom').value = _isoShift(-730);
-  $('fTo').value   = _isoShift(0);
+  // v7.178: за замовчуванням — поточний рік цілком
+  var _y = new Date().getFullYear();
+  $('fYear').value  = String(_y);
+  $('fMonth').value = 'all';
+  $('fFrom').value  = _y + '-01-01';
+  $('fTo').value    = _y + '-12-31';
   fillMY();
-  $('fFrom').addEventListener('change', function(){ _clearMY(); _markPreset(''); loadLeads(); });
-  $('fTo').addEventListener('change',   function(){ _clearMY(); _markPreset(''); loadLeads(); });
+  $('fFrom').addEventListener('change', function(){ _clearMY(); loadLeads(); });
+  $('fTo').addEventListener('change',   function(){ _clearMY(); loadLeads(); });
   await loadLeads();
 })();
 </script>

@@ -3372,6 +3372,195 @@ function remindLead(body){
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// v7.178 ВКЛАДКА «Аналітика» в таблиці-дзеркалі лідів.
+// Ті самі числа, що на екрані лідів, але в таблиці — щоб дивитись без CRM.
+// Джерела ті самі: Ліди_Історія + Ліди_Бот, той самий агрегатор _reportAgg,
+// тож розбіжності між екраном і аркушем виключені за побудовою.
+//
+//   SETUP_LEADS_ANALYTICS()        — створити вкладку і порахувати вперше
+//   refreshLeadsAnalytics()        — перерахунок (тригер уночі + пункт меню)
+//   installLeadsAnalyticsTriggers()— нічний тригер о 3:00 + меню в таблиці
+//
+// Період — клітинки B1 («з») і B2 («по»), ТЕКСТОМ у форматі yyyy-MM-dd:
+// як дати Sheets коерсить їх у Date, а ми вже наступали на це з історією.
+// ═══════════════════════════════════════════════════════════════════════════
+var LEADS_AN_SHEET = 'Аналітика';
+
+function _anPeriodDefault(){
+  var y = Utilities.formatDate(new Date(), 'Europe/Kiev', 'yyyy');
+  return {from: y + '-01-01', to: y + '-12-31'};
+}
+function _anSheet(ss){
+  var sh = ss.getSheetByName(LEADS_AN_SHEET);
+  if (sh) return sh;
+  sh = ss.insertSheet(LEADS_AN_SHEET, 0);
+  var d = _anPeriodDefault();
+  sh.getRange('A1').setValue('з');
+  sh.getRange('A2').setValue('по');
+  sh.getRange('A3').setValue('оновлено');
+  sh.getRange('B1:B2').setNumberFormat('@');
+  sh.getRange('B1').setValue(d.from);
+  sh.getRange('B2').setValue(d.to);
+  sh.getRange('A1:A3').setFontWeight('bold');
+  sh.setColumnWidth(1, 230);
+  sh.setColumnWidth(2, 110);
+  sh.setFrozenRows(3);
+  return sh;
+}
+
+function SETUP_LEADS_ANALYTICS(){
+  var id;
+  try { id = _mirrorFileId(); }
+  catch(e){ Logger.log('!! ' + (e.message||e) + '\nСпершу SETUP_MIRROR_SPREADSHEET().'); return; }
+  var ss = SpreadsheetApp.openById(id);
+  _anSheet(ss);
+  var res = refreshLeadsAnalytics();
+  Logger.log('═══ SETUP_LEADS_ANALYTICS ═══\n' +
+    'Таблиця: ' + ss.getName() + '\n' +
+    'Вкладка: ' + LEADS_AN_SHEET + '\n' +
+    'Період у B1/B2 — міняй там, потім «Перерахувати».\n' +
+    JSON.stringify(res));
+}
+
+function refreshLeadsAnalytics(){
+  var ss, sh;
+  try { ss = SpreadsheetApp.openById(_mirrorFileId()); }
+  catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  sh = _anSheet(ss);
+
+  var d = _anPeriodDefault();
+  var from = _leadDayKey(sh.getRange('B1').getValue()) || d.from;
+  var to   = _leadDayKey(sh.getRange('B2').getValue()) || d.to;
+
+  var all = [], srcErr = [];
+  try { all = all.concat(_leadsFromBot()); }      catch(e1){ srcErr.push('Ліди_Бот: ' + (e1.message||e1)); }
+  try { all = all.concat(_leadsFromHistory()); }  catch(e2){ srcErr.push('Ліди_Історія: ' + (e2.message||e2)); }
+  var rows = all.filter(function(r){ return r.day && r.day >= from && r.day <= to; });
+  var a = _reportAgg(rows);
+  var botN = 0; rows.forEach(function(r){ if (r.origin === 'bot') botN++; });
+
+  // повне перемальовування: чистимо все нижче шапки і всі графіки
+  sh.getCharts().forEach(function(c){ sh.removeChart(c); });
+  // Графіки якоряться у колонці 8 — переконуємось, що сітка до неї дотягується.
+  if (sh.getMaxColumns() < 8) sh.insertColumnsAfter(sh.getMaxColumns(), 8 - sh.getMaxColumns());
+  var lastRow = sh.getMaxRows();
+  if (lastRow > 4) sh.getRange(5, 1, lastRow - 4, sh.getMaxColumns()).clear();
+
+  var out = [], meta = {};
+  function push(arr){ out.push(arr); }
+  function blank(){ out.push(['','','','','','']); }
+  function head(title){ out.push([title,'','','','','']); meta[title] = out.length + 4; }  // 1-based рядок аркуша
+
+  function pct(x, y){ return y > 0 ? Math.round(x * 1000 / y) / 10 : 0; }
+
+  head('ГОЛОВНЕ');
+  push(['Лідів', a.total, '', '', '', '']);
+  push(['Екскурсій', a.exc, '', '', '', '']);
+  push(['Договорів', a.sign, '', '', '', '']);
+  push(['Відмов', a.ref, '', '', '', '']);
+  push(['Лід → екскурсія, %', pct(a.exc, a.total), '', '', '', '']);
+  push(['Екскурсія → договір, %', pct(a.sign, a.exc), '', '', '', '']);
+  push(['Лід → договір, %', pct(a.sign, a.total), '', '', '', '']);
+  blank();
+
+  head('ВОРОНКА');
+  push(['Етап', 'Кількість', 'Від попереднього, %', '', '', '']);
+  push(['Нові', a.total, '', '', '', '']);
+  push(['Додзвонились', a.call, pct(a.call, a.total), '', '', '']);
+  push(['Екскурсія', a.exc, pct(a.exc, a.call), '', '', '']);
+  push(['Договір', a.sign, pct(a.sign, a.exc), '', '', '']);
+  blank();
+
+  function tableBlock(title, obj, skipKey){
+    head(title);
+    push(['Назва', 'Лідів', 'Екскурсій', 'Договорів', 'Лід→дог, %', 'Екск→дог, %']);
+    var startRow = out.length + 4 + 1;     // перший рядок ДАНИХ на аркуші
+    var keys = [], skipped = 0;
+    for (var k in obj){ if (k === skipKey){ skipped = obj[k].n; continue; } keys.push(k); }
+    keys.sort(function(x, y){ return obj[y].n - obj[x].n; });
+    keys.forEach(function(k){
+      var g = obj[k];
+      push([k, g.n, g.exc || 0, g.sign, pct(g.sign, g.n), pct(g.sign, g.exc || 0)]);
+    });
+    if (skipKey && skipped) push([skipKey + ' (у графіки не входить)', skipped, '', '', '', '']);
+    blank();
+    return {row: startRow, n: keys.length};
+  }
+
+  var srcBlock = tableBlock('ДЖЕРЕЛА', a.bySource, LBL_NO_SRC);
+  var locBlock = tableBlock('ЛОКАЦІЇ', a.byLoc,    LBL_NO_LOC);
+
+  head('ПО МІСЯЦЯХ');
+  push(['Місяць', 'Лідів', 'Екскурсій', 'Договорів', 'Лід→дог, %', 'Екск→дог, %']);
+  var monRow = out.length + 4 + 1;
+  var mk = []; for (var m in a.byMonth) mk.push(m);
+  mk.sort();
+  mk.forEach(function(m){
+    var g = a.byMonth[m];
+    push([m, g.n, g.exc, g.sign, pct(g.sign, g.n), pct(g.sign, g.exc)]);
+  });
+  var monN = mk.length;
+  blank();
+
+  head('ПРИЧИНИ ВІДМОВ');
+  push(['Причина', 'Кількість', 'Частка, %', '', '', '']);
+  var rk = []; for (var rr in a.refusals) rk.push(rr);
+  rk.sort(function(x, y){ return a.refusals[y] - a.refusals[x]; });
+  var refTot = 0; rk.forEach(function(k){ refTot += a.refusals[k]; });
+  rk.forEach(function(k){ push([k, a.refusals[k], pct(a.refusals[k], refTot), '', '', '']); });
+
+  // Сітка може бути коротшою за звіт — інакше setValues кине помилку діапазону.
+  if (sh.getMaxRows() < out.length + 4)
+    sh.insertRowsAfter(sh.getMaxRows(), out.length + 4 - sh.getMaxRows());
+  sh.getRange(5, 1, out.length, 6).setValues(out);
+  sh.getRange('B3').setValue(formatDate(new Date()) + '  ·  період ' + from + ' … ' + to +
+    '  ·  лідів ' + rows.length + ' (бот ' + botN + ' / архів ' + (rows.length - botN) + ')' +
+    (srcErr.length ? '  ·  ЗБІЙ: ' + srcErr.join(' ') : ''));
+
+  // жирні заголовки блоків
+  for (var title in meta) sh.getRange(meta[title], 1, 1, 6).setFontWeight('bold').setBackground('#f0f4f8');
+
+  // ── графіки ──
+  function chart(type, labelRow, n, cols, title, anchorRow){
+    if (!n) return;
+    var b = sh.newChart().setChartType(type).setOption('title', title)
+             .setOption('height', 320).setOption('width', 520);
+    b.addRange(sh.getRange(labelRow, 1, n, 1));
+    cols.forEach(function(c){ b.addRange(sh.getRange(labelRow, c, n, 1)); });
+    b.setPosition(anchorRow, 8, 0, 0);
+    sh.insertChart(b.build());
+  }
+  chart(Charts.ChartType.COLUMN, monRow, monN, [2, 4], 'Ліди і договори по місяцях', 5);
+  chart(Charts.ChartType.BAR, srcBlock.row, srcBlock.n, [5], 'Конверсія за джерелом, %', 22);
+  chart(Charts.ChartType.BAR, locBlock.row, locBlock.n, [5], 'Конверсія за локацією, %', 39);
+
+  SpreadsheetApp.flush();
+  return {ok:true, from:from, to:to, rows:rows.length, bot:botN,
+          sources:srcBlock.n, locs:locBlock.n, months:monN, errors:srcErr};
+}
+
+// Меню в самій таблиці: кнопку-малюнок скриптом не створити, а пункт меню — можна.
+function onMirrorOpen(){
+  try{
+    SpreadsheetApp.openById(_mirrorFileId())
+      .addMenu('m.kids', [{name:'Перерахувати аналітику', functionName:'refreshLeadsAnalytics'}]);
+  }catch(_e){}
+}
+function installLeadsAnalyticsTriggers(){
+  var id;
+  try{ id=_mirrorFileId(); }
+  catch(e){ Logger.log('!! ' + (e.message||e)); return; }
+  ScriptApp.getProjectTriggers().forEach(function(t){
+    var f = t.getHandlerFunction();
+    if (f === 'refreshLeadsAnalytics' || f === 'onMirrorOpen') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('refreshLeadsAnalytics').timeBased().atHour(3).nearMinute(0).everyDays(1).create();
+  ScriptApp.newTrigger('onMirrorOpen').forSpreadsheet(id).onOpen().create();
+  Logger.log('Тригери встановлено:\n· refreshLeadsAnalytics — щоночі о 3:00\n' +
+             '· onMirrorOpen — меню «m.kids → Перерахувати аналітику» у таблиці-дзеркалі');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // v7.168 РАЗОВА: заголовок колонки A у дзеркалі «школа» → «локація».
 // «школа» дісталась у спадок від файлу маркетолога, хоча в колонці лежить
 // назва локації (Голосієво, Позняки, Бровари). Дані правильні — правимо
@@ -4150,7 +4339,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.175', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.178', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
