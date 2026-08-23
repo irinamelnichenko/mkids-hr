@@ -3599,6 +3599,30 @@ function refreshLeadsAnalytics(){
   // є його лівою верхньою, Apps Script проковтує МОВЧКИ — без винятку і без сліду.
   // Саме так виглядає порожній блок рядків 10-48 при цілих рядках 9 і 49+.
   try { sh.getRange(1, 1, sh.getMaxRows(), sh.getMaxColumns()).breakApart(); } catch(_bm){}
+
+  // ── ПРОБА (v7.185): чи приймає цей аркуш записи в рядки 10-48 ──────────────
+  // Секції звітують OK, винятків немає, обʼєднань немає — а рядків 10-48 на
+  // аркуші не зʼявляється. Пишемо мітки напряму й одразу читаємо назад: якщо
+  // мітка не читається, запис глушить сам Sheets, а не логіка побудови.
+  try {
+    sh.getRange('A10').setValue('ПРОБА-10');
+    sh.getRange('A47').setValue('ПРОБА-47');
+    sh.getRange('A49').setValue('ПРОБА-49');
+    SpreadsheetApp.flush();
+    AN_STEPS.push('проба: A10=' + JSON.stringify(String(sh.getRange('A10').getValue()))
+                + ' A47=' + JSON.stringify(String(sh.getRange('A47').getValue()))
+                + ' A49=' + JSON.stringify(String(sh.getRange('A49').getValue())));
+    AN_STEPS.push('аркуш: ' + JSON.stringify(sh.getName()) + ' id=' + sh.getSheetId()
+                + ' index=' + sh.getIndex() + ' rows=' + sh.getMaxRows()
+                + ' hidden10=' + sh.isRowHiddenByUser(10)
+                + ' h10=' + sh.getRowHeight(10) + ' h49=' + sh.getRowHeight(49));
+    AN_STEPS.push('схожі аркуші: ' + ss.getSheets().filter(function(x){ return /налітик/i.test(x.getName()); })
+                .map(function(x){ return JSON.stringify(x.getName()) + '#' + x.getSheetId(); }).join(' | '));
+    var prot = sh.getProtections(SpreadsheetApp.ProtectionType.RANGE) || [];
+    AN_STEPS.push('захищені діапазони: ' + (prot.length
+                ? prot.map(function(x){ try{ return x.getRange().getA1Notation(); }catch(_p){ return '?'; } }).join(' | ')
+                : 'немає'));
+  } catch(e10){ AN_STEPS.push('проба впала: ' + (e10 && e10.message || e10)); }
   sh.clearConditionalFormatRules();
   if (sh.getMaxColumns() < 26) sh.insertColumnsAfter(sh.getMaxColumns(), 26 - sh.getMaxColumns());
   if (sh.getMaxRows() < 200)   sh.insertRowsAfter(sh.getMaxRows(), 200 - sh.getMaxRows());
@@ -4866,7 +4890,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.184', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.185', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
