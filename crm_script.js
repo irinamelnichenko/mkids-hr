@@ -3391,6 +3391,9 @@ var LEADS_AN_DATA   = '_Аналітика_дані';
 // Тому підганяємо під фактичний обсяг при кожному перерахунку.
 var AN_MAXROW       = 20000;
 var AN_ALL          = 'усі';
+// Роздільник аргументів у формулах. Залежить від локалі ТАБЛИЦІ, а не скрипта:
+// див. _anSep(). Виставляється при кожному перерахунку.
+var AN_SEP          = ',';
 
 // палітра
 var AN_C_BG   = '#ffffff', AN_C_HEAD = '#1e2d3d', AN_C_ACC = '#2980b9';
@@ -3443,6 +3446,52 @@ function _anWriteData(ss, rows){
   sh.getRange(1, 1, 1, head.length).setFontWeight('bold');
   sh.setFrozenRows(1);
   return {sh: sh, n: out.length - 1};
+}
+
+// Локаль таблиці вирішує синтаксис формул. Там, де десятковий роздільник — кома
+// (ru_RU, uk_UA, de_DE…), Sheets чекає між аргументами ';' і взагалі не розбирає
+// кому: клітинка стає #ERROR!. Саме на цьому дашборд лежав від v7.179 — і IFERROR
+// не рятував, бо це помилка РОЗБОРУ, а не значення.
+//
+// Визначаємо не за списком локалей (він застаріє й збреше), а пробною формулою в
+// самій таблиці: що вона порахувала, те й правда. Локаль беремо лише для логу й
+// для запасного шляху, якщо проба не вдалась.
+function _anSep(ss, sh){
+  var loc = String(ss.getSpreadsheetLocale() || '');
+  try{
+    var probe = sh.getRange(1, sh.getMaxColumns());
+    probe.setFormula('=SUM(1,2)');
+    SpreadsheetApp.flush();
+    var ok = (Number(probe.getValue()) === 3);   // не розібралась → #ERROR! → NaN
+    probe.clearContent();
+    return ok ? ',' : ';';
+  }catch(_e){
+    return /^en/i.test(loc) ? ',' : ';';
+  }
+}
+
+// Переклад готової формули під локаль. Коми — лише ті, що є роздільниками:
+// всередині рядків у лапках (включно з подвоєними "" ) вони лишаються комами,
+// а всередині літерала масиву {…} колонки розділяє '\\', не ';'.
+function _anLoc(f){
+  if (AN_SEP === ',') return f;
+  var out = '', q = false, depth = 0;
+  for (var i = 0; i < f.length; i++){
+    var c = f.charAt(i);
+    if (q){
+      out += c;
+      if (c === '"'){
+        if (f.charAt(i + 1) === '"'){ out += '"'; i++; }   // "" всередині рядка
+        else q = false;
+      }
+      continue;
+    }
+    if (c === '"'){ q = true; out += c; continue; }
+    if (c === '{') depth++;
+    else if (c === '}') depth--;
+    out += (c === ',') ? (depth > 0 ? '\\' : AN_SEP) : c;
+  }
+  return out;
 }
 
 // Сітка аркуша мусить покривати діапазон, на який дивляться формули.
@@ -3513,6 +3562,7 @@ function refreshLeadsAnalytics(){
   // у сітці НЕМАЄ. Google Sheets такий діапазон не парсить, тож увесь аркуш стає
   // #ERROR!, і жоден IFERROR цього не ловить: помилка розбору, а не значення.
   _anEnsureRows(dat.sh, AN_MAXROW);
+  AN_SEP = _anSep(ss, dat.sh);   // синтаксис формул — під локаль ЦІЄЇ таблиці
 
   var sh = ss.getSheetByName(LEADS_AN_SHEET);
   if (!sh) sh = ss.insertSheet(LEADS_AN_SHEET, 0);
@@ -3536,10 +3586,17 @@ function refreshLeadsAnalytics(){
   sh.setHiddenGridlines(true);
 
   var y = Utilities.formatDate(new Date(), 'Europe/Kiev', 'yyyy');
+  // Нульовий період (в обох клітинках одна дата) — не вибір користувача, а слід
+  // від старої розкладки, де в B2 опинялася дата «по». Звіт із нього порожній,
+  // тому відкочуємось на поточний рік.
+  var anWarn = '';
+  if (keep.from && keep.to && keep.from === keep.to){
+    anWarn = '⚠ період був нульовий (' + keep.from + ') — повернув поточний рік';
+    keep.from = ''; keep.to = '';
+  }
   var from = keep.from || (y + '-01-01');
   var to   = keep.to   || (y + '-12-31');
   // порівняння лексикографічне — для 'yyyy-MM-dd' це те саме, що хронологічне
-  var anWarn = '';
   if (from > to){ var _sw = from; from = to; to = _sw; anWarn = '⚠ дати були навпаки — поміняв місцями'; }
   var months = _anMonths(to);
 
@@ -3621,8 +3678,8 @@ function _anCountPrev(extra){
 // і причину не видно: замість цього в клітинці стоїть «—».
 function _anSafe(f){
   var body = String(f).replace(/^=/, '');
-  if (/^IFERROR\(/i.test(body)) return '=' + body;
-  return '=IFERROR(' + body + ',"—")';
+  if (/^IFERROR\(/i.test(body)) return _anLoc('=' + body);
+  return _anLoc('=IFERROR(' + body + ',"—")');
 }
 
 function _anBuildBody(sh, dat, spark, months, srcErr){
@@ -3899,6 +3956,7 @@ function anDiag(){
     an: {rows: sh.getMaxRows(), cols: sh.getMaxColumns(), lastRow: sh.getLastRow()},
     data: dsh ? {rows: dsh.getMaxRows(), cols: dsh.getMaxColumns(), lastRow: dsh.getLastRow()} : null,
     anMaxRow: AN_MAXROW,
+    sep: dsh ? _anSep(ss, dsh) : '?',   // що саме розбирає ця таблиця: ',' чи ';'
     cells: {}, firstErrors: []
   };
   ['A2','B2','A3','B3','B5','B6','B7','D6','E6','D7','X2','X3','B11','B17','C18','A25','B25','C25'].forEach(function(a1){
@@ -4733,7 +4791,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.181', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.182', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
