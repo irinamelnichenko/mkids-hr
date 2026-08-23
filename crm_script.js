@@ -3478,6 +3478,18 @@ function _anMonths(toIso){
   return out;
 }
 
+// Клітинки керування B2/B3 — СУВОРО текст 'yyyy-MM-dd'. Усе інше відкидаємо:
+// Date-обʼєкт, мітку часу, залишок від старої розкладки аркуша. У v7.179
+// розкладку зсунули (було B1=з·B2=по·B3=оновлено, стало B2=з·B3=по), і читання
+// «збережи вибір користувача» підсунуло в «з» стару дату «по», а в «по» — мітку
+// часу. DATEVALUE від такого = #VALUE!, і весь звіт ставав #ERROR!.
+function _anValidDate(v){
+  if (v === null || v === undefined) return '';
+  if (Object.prototype.toString.call(v) === '[object Date]') return '';
+  var s = String(v).trim();
+  return /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(s) ? s : '';
+}
+
 function refreshLeadsAnalytics(){
   var ss;
   try { ss = SpreadsheetApp.openById(_mirrorFileId()); }
@@ -3496,8 +3508,8 @@ function refreshLeadsAnalytics(){
   // зберігаємо вибір користувача між перерахунками
   var keep = {};
   try {
-    keep.from = String(sh.getRange('B2').getValue() || '');
-    keep.to   = String(sh.getRange('B3').getValue() || '');
+    keep.from = _anValidDate(sh.getRange('B2').getValue());
+    keep.to   = _anValidDate(sh.getRange('B3').getValue());
     keep.loc  = String(sh.getRange('B5').getValue() || '');
     keep.src  = String(sh.getRange('B6').getValue() || '');
     keep.st   = String(sh.getRange('B7').getValue() || '');
@@ -3514,6 +3526,9 @@ function refreshLeadsAnalytics(){
   var y = Utilities.formatDate(new Date(), 'Europe/Kiev', 'yyyy');
   var from = keep.from || (y + '-01-01');
   var to   = keep.to   || (y + '-12-31');
+  // порівняння лексикографічне — для 'yyyy-MM-dd' це те саме, що хронологічне
+  var anWarn = '';
+  if (from > to){ var _sw = from; from = to; to = _sw; anWarn = '⚠ дати були навпаки — поміняв місцями'; }
   var months = _anMonths(to);
 
   var spark = _anWriteSpark(dat.sh, all, months);
@@ -3538,7 +3553,7 @@ function refreshLeadsAnalytics(){
   var mNames = ['весь рік','01','02','03','04','05','06','07','08','09','10','11','12'];
   _anValidate(sh, 'E3', years);
   _anValidate(sh, 'E4', mNames);
-  sh.getRange('F3').setValue('← обери рік і місяць, потім тисни «застосувати» в меню');
+  sh.getRange('F3').setValue('← обери рік і місяць, потім меню m.kids → «Застосувати швидкий період»');
 
   function distinct(idx){
     var m = {}, o = [AN_ALL];
@@ -3560,6 +3575,8 @@ function refreshLeadsAnalytics(){
   sh.getRange('D6').setValue('оновлено');
   sh.getRange('E6').setValue(formatDate(new Date()) + ' · лідів у базі: ' + dat.n +
     (srcErr.length ? ' · ЗБІЙ: ' + srcErr.join(' ') : ''));
+
+  sh.getRange('D7').setValue(anWarn).setFontColor(anWarn ? '#e67c73' : '#000000').setFontWeight('bold');
 
   return _anBuildBody(sh, dat, spark, months, srcErr);
 }
@@ -3587,14 +3604,23 @@ function _anCountPrev(extra){
   return 'SUMPRODUCT(' + p.join('*') + ')';
 }
 
+// Кожна формула дашборда — під IFERROR. Одна зіпсована клітинка керування
+// (або порожній період) інакше перетворює весь аркуш на суцільне #ERROR!,
+// і причину не видно: замість цього в клітинці стоїть «—».
+function _anSafe(f){
+  var body = String(f).replace(/^=/, '');
+  if (/^IFERROR\(/i.test(body)) return '=' + body;
+  return '=IFERROR(' + body + ',"—")';
+}
+
 function _anBuildBody(sh, dat, spark, months, srcErr){
   var D = _anQ(LEADS_AN_DATA) + '!';
   var CALL = _anD('F'), EXC = _anD('G'), SIGN = _anD('H'), REF = _anD('I');
 
   // службові клітинки попереднього періоду
   sh.getRange('X1').setValue('службове — не чіпати');
-  sh.getRange('X2').setFormula('=TEXT(DATEVALUE($B$2)-(DATEVALUE($B$3)-DATEVALUE($B$2)+1),"yyyy-mm-dd")');
-  sh.getRange('X3').setFormula('=TEXT(DATEVALUE($B$2)-1,"yyyy-mm-dd")');
+  sh.getRange('X2').setFormula(_anSafe('=TEXT(DATEVALUE($B$2)-(DATEVALUE($B$3)-DATEVALUE($B$2)+1),"yyyy-mm-dd")'));
+  sh.getRange('X3').setFormula(_anSafe('=TEXT(DATEVALUE($B$2)-1,"yyyy-mm-dd")'));
 
   // ═══ 1. ПЛИТКИ KPI ═══
   var tiles = [
@@ -3614,12 +3640,12 @@ function _anBuildBody(sh, dat, spark, months, srcErr){
     var dlt = sh.getRange(12, c, 1, 2).merge()
       .setFontSize(10).setFontWeight('bold').setHorizontalAlignment('center');
     if (tiles[i].pct){
-      big.setFormula('=IF(' + _anCount(EXC) + '=0,"—",TEXT(' + _anCount(SIGN) + '/' + _anCount(EXC) + ',"0.0%"))');
-      dlt.setFormula('=IF(OR(' + _anCount(EXC) + '=0,' + _anCountPrev(EXC) + '=0),"",'
-        + 'TEXT(' + _anCount(SIGN) + '/' + _anCount(EXC) + '-' + _anCountPrev(SIGN) + '/' + _anCountPrev(EXC) + ',"▲ +0.0%;▼ -0.0%;= 0.0%"))');
+      big.setFormula(_anSafe('=IF(' + _anCount(EXC) + '=0,"—",TEXT(' + _anCount(SIGN) + '/' + _anCount(EXC) + ',"0.0%"))'));
+      dlt.setFormula(_anSafe('=IF(OR(' + _anCount(EXC) + '=0,' + _anCountPrev(EXC) + '=0),"",'
+        + 'TEXT(' + _anCount(SIGN) + '/' + _anCount(EXC) + '-' + _anCountPrev(SIGN) + '/' + _anCountPrev(EXC) + ',"▲ +0.0%;▼ -0.0%;= 0.0%"))'));
     } else {
-      big.setFormula('=' + tiles[i].cur);
-      dlt.setFormula('=TEXT(' + tiles[i].cur + '-' + tiles[i].prev + ',"▲ +0;▼ -0;= 0")');
+      big.setFormula(_anSafe('=' + tiles[i].cur));
+      dlt.setFormula(_anSafe('=TEXT(' + tiles[i].cur + '-' + tiles[i].prev + ',"▲ +0;▼ -0;= 0")'));
     }
     sh.getRange(10, c, 3, 2).setBackground('#f7f9fb').setBorder(true, true, true, true, false, false, '#e3e9ef', SpreadsheetApp.BorderStyle.SOLID);
   }
@@ -3637,8 +3663,8 @@ function _anBuildBody(sh, dat, spark, months, srcErr){
   ];
   for (var f = 0; f < fun.length; f++){
     sh.getRange(17 + f, 1).setValue(fun[f][0]);
-    sh.getRange(17 + f, 2).setFormula(fun[f][1]);
-    if (fun[f][2]) sh.getRange(17 + f, 3).setFormula(fun[f][2]);
+    sh.getRange(17 + f, 2).setFormula(_anSafe(fun[f][1]));
+    if (fun[f][2]) sh.getRange(17 + f, 3).setFormula(_anSafe(fun[f][2]));
   }
 
   // ═══ 3. ПО МІСЯЦЯХ ═══
@@ -3648,9 +3674,9 @@ function _anBuildBody(sh, dat, spark, months, srcErr){
     var r = 25 + m, ym = '"' + months[m] + '"';
     var mf = '(' + _anD('B') + '=' + ym + ')';
     sh.getRange(r, 1).setValue(months[m]);
-    sh.getRange(r, 2).setFormula('=' + _anCount(mf, {period:false}));
-    sh.getRange(r, 3).setFormula('=IF(' + _anCount(mf + '*' + EXC, {period:false}) + '=0,"",'
-      + 'ROUND(100*' + _anCount(mf + '*' + SIGN, {period:false}) + '/' + _anCount(mf + '*' + EXC, {period:false}) + ',1))');
+    sh.getRange(r, 2).setFormula(_anSafe('=' + _anCount(mf, {period:false})));
+    sh.getRange(r, 3).setFormula(_anSafe('=IF(' + _anCount(mf + '*' + EXC, {period:false}) + '=0,"",'
+      + 'ROUND(100*' + _anCount(mf + '*' + SIGN, {period:false}) + '/' + _anCount(mf + '*' + EXC, {period:false}) + ',1))'));
   }
   var monTop = 25, monN = months.length;
 
@@ -3670,7 +3696,7 @@ function _anHeat(sh, top, title, dimCol, dimList, months, skipFilter){
       var cond = '(' + _anD(dimCol) + '=' + lbl + ')*(' + _anD('B') + '="' + months[j] + '")';
       var opts = {period:false}; opts[skipFilter] = false;
       var den = _anCount(cond + '*' + EXC, opts), num = _anCount(cond + '*' + SIGN, opts);
-      sh.getRange(r, 2 + j).setFormula('=IF(' + den + '=0,"",ROUND(100*' + num + '/' + den + '))');
+      sh.getRange(r, 2 + j).setFormula(_anSafe('=IF(' + den + '=0,"",ROUND(100*' + num + '/' + den + '))'));
     }
   }
   var rng = sh.getRange(top + 2, 2, Math.max(dimList.length, 1), months.length);
@@ -3708,13 +3734,13 @@ function _anBuildHeat(sh, dat, spark, months, monTop, monN, srcErr){
     var r = rk + 2 + i, lbl = '"' + String(locList[i]).replace(/"/g, '""') + '"';
     var cond = '(' + _anD('C') + '=' + lbl + ')';
     sh.getRange(r, 1).setValue(locList[i]);
-    sh.getRange(r, 2).setFormula('=' + _anCount(cond, {loc:false}));
-    sh.getRange(r, 3).setFormula('=' + _anCount(cond + '*' + EXC, {loc:false}));
-    sh.getRange(r, 4).setFormula('=' + _anCount(cond + '*' + SIGN, {loc:false}));
-    sh.getRange(r, 5).setFormula('=IF(' + _anCount(cond + '*' + EXC, {loc:false}) + '=0,"",ROUND(100*'
-      + _anCount(cond + '*' + SIGN, {loc:false}) + '/' + _anCount(cond + '*' + EXC, {loc:false}) + '))');
-    sh.getRange(r, 6).setFormula('=IFERROR(SPARKLINE(OFFSET(' + Q1 + ',MATCH($A' + r + ',' + P + ',0),0,1,12),'
-      + '{"charttype","column";"color","' + AN_C_ACC + '";"empty","zero"}),"")');
+    sh.getRange(r, 2).setFormula(_anSafe('=' + _anCount(cond, {loc:false})));
+    sh.getRange(r, 3).setFormula(_anSafe('=' + _anCount(cond + '*' + EXC, {loc:false})));
+    sh.getRange(r, 4).setFormula(_anSafe('=' + _anCount(cond + '*' + SIGN, {loc:false})));
+    sh.getRange(r, 5).setFormula(_anSafe('=IF(' + _anCount(cond + '*' + EXC, {loc:false}) + '=0,"",ROUND(100*'
+      + _anCount(cond + '*' + SIGN, {loc:false}) + '/' + _anCount(cond + '*' + EXC, {loc:false}) + '))'));
+    sh.getRange(r, 6).setFormula(_anSafe('=IFERROR(SPARKLINE(OFFSET(' + Q1 + ',MATCH($A' + r + ',' + P + ',0),0,1,12),'
+      + '{"charttype","column";"color","' + AN_C_ACC + '";"empty","zero"}),"")'));
   }
   try{
     var cr = sh.getRange(rk + 2, 5, Math.max(locList.length, 1), 1);
@@ -3735,7 +3761,7 @@ function _anBuildHeat(sh, dat, spark, months, monTop, monN, srcErr){
   for (var g = 0; g < groups.length; g++){
     var lb = '"' + groups[g] + '"';
     sh.getRange(rf + 2 + g, 1).setValue(groups[g]);
-    sh.getRange(rf + 2 + g, 2).setFormula('=' + _anCount('(' + _anD('J') + '=' + lb + ')'));
+    sh.getRange(rf + 2 + g, 2).setFormula(_anSafe('=' + _anCount('(' + _anD('J') + '=' + lb + ')')));
   }
   var refTop = rf + 2, refN = groups.length;
 
@@ -3814,6 +3840,36 @@ function _anCharts(sh, months, monTop, monN, rk, locN, refTop, refN, srcErr){
              + 'скрипт потрібен лише щоб перечитати самі ліди.'};
 }
 
+// Швидкий вибір періоду: E3 = рік, E4 = «весь рік» або '01'..'12'.
+// Пише B2/B3 текстом 'yyyy-MM-dd' і перечитує дашборд — вікно місяців і
+// спарклайни рахуються від дати «по», тому одним записом у клітинки не обійтись.
+function applyQuickPeriod(){
+  var ss;
+  try { ss = SpreadsheetApp.openById(_mirrorFileId()); }
+  catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  var sh = ss.getSheetByName(LEADS_AN_SHEET);
+  if (!sh) return {ok:false, error:'немає аркуша «' + LEADS_AN_SHEET + '»'};
+
+  var y = String(sh.getRange('E3').getValue() || '').trim();
+  var m = String(sh.getRange('E4').getValue() || '').trim();
+  if (!/^\d{4}$/.test(y)) y = Utilities.formatDate(new Date(), 'Europe/Kiev', 'yyyy');
+
+  var from, to;
+  if (/^(0[1-9]|1[0-2])$/.test(m)){
+    var last = new Date(Number(y), Number(m), 0).getDate();   // день 0 наступного = останній цього
+    from = y + '-' + m + '-01';
+    to   = y + '-' + m + '-' + ('0' + last).slice(-2);
+  } else {
+    from = y + '-01-01';
+    to   = y + '-12-31';
+  }
+  sh.getRange('B2:B3').setNumberFormat('@');
+  sh.getRange('B2').setValue(from);
+  sh.getRange('B3').setValue(to);
+  SpreadsheetApp.flush();
+  return refreshLeadsAnalytics();
+}
+
 function SETUP_LEADS_ANALYTICS(){
   var id;
   try { id = _mirrorFileId(); }
@@ -3829,7 +3885,8 @@ function SETUP_LEADS_ANALYTICS(){
 function onMirrorOpen(){
   try{
     SpreadsheetApp.openById(_mirrorFileId())
-      .addMenu('m.kids', [{name:'Перерахувати аналітику', functionName:'refreshLeadsAnalytics'}]);
+      .addMenu('m.kids', [{name:'Перерахувати аналітику',       functionName:'refreshLeadsAnalytics'},
+                          {name:'Застосувати швидкий період', functionName:'applyQuickPeriod'}]);
   }catch(_e){}
 }
 function installLeadsAnalyticsTriggers(){
@@ -4625,7 +4682,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.179', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.180', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
