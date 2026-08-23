@@ -3372,171 +3372,457 @@ function remindLead(body){
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// v7.178 ВКЛАДКА «Аналітика» в таблиці-дзеркалі лідів.
-// Ті самі числа, що на екрані лідів, але в таблиці — щоб дивитись без CRM.
-// Джерела ті самі: Ліди_Історія + Ліди_Бот, той самий агрегатор _reportAgg,
-// тож розбіжності між екраном і аркушем виключені за побудовою.
+// v7.179 ІНТЕРАКТИВНИЙ ДАШБОРД «Аналітика».
 //
-//   SETUP_LEADS_ANALYTICS()        — створити вкладку і порахувати вперше
-//   refreshLeadsAnalytics()        — перерахунок (тригер уночі + пункт меню)
-//   installLeadsAnalyticsTriggers()— нічний тригер о 3:00 + меню в таблиці
+// Головне рішення: скрипт кладе ПЛОСКУ таблицю лідів на приховану вкладку
+// «_Аналітика_дані», а на «Аналітика» пише ЛИШЕ ФОРМУЛИ. Тому зміна періоду
+// чи фільтра перераховує все миттєво силами Sheets — скрипт для цього не
+// потрібен. Скрипт запускається лише коли треба перечитати самі ліди.
 //
-// Період — клітинки B1 («з») і B2 («по»), ТЕКСТОМ у форматі yyyy-MM-dd:
-// як дати Sheets коерсить їх у Date, а ми вже наступали на це з історією.
+// Дати в даних і в клітинках керування — ТЕКСТ 'yyyy-MM-dd'. Порівняння
+// лексикографічне і працює як хронологічне; Date-обʼєкти тут уже одного разу
+// тихо обнулили звіт (v7.171), тому свідомо їх не використовуємо.
 // ═══════════════════════════════════════════════════════════════════════════
-var LEADS_AN_SHEET = 'Аналітика';
+var LEADS_AN_SHEET  = 'Аналітика';
+var LEADS_AN_DATA   = '_Аналітика_дані';
+// Межа діапазонів у формулах. Відкриті діапазони (A2:A) ламають SUMPRODUCT
+// розбіжністю розмірів, а завелика межа коштує швидкості: теплові карти дають
+// сотні SUMPRODUCT, і кожен зайвий рядок множиться на їхню кількість.
+// Тому підганяємо під фактичний обсяг при кожному перерахунку.
+var AN_MAXROW       = 20000;
+var AN_ALL          = 'усі';
 
-function _anPeriodDefault(){
-  var y = Utilities.formatDate(new Date(), 'Europe/Kiev', 'yyyy');
-  return {from: y + '-01-01', to: y + '-12-31'};
+// палітра
+var AN_C_BG   = '#ffffff', AN_C_HEAD = '#1e2d3d', AN_C_ACC = '#2980b9';
+var AN_C_GOOD = '#57bb8a', AN_C_MID  = '#ffd666', AN_C_BAD = '#e67c73';
+
+function _anQ(s){ return "'" + String(s).replace(/'/g, "''") + "'"; }
+function _anD(col){ return _anQ(LEADS_AN_DATA) + '!$' + col + '$2:$' + col + '$' + AN_MAXROW; }
+
+// Спільні множники фільтра. which: які саме фільтри застосовувати.
+function _anFilter(opts){
+  opts = opts || {};
+  var f = [];
+  if (opts.period !== false) f.push('(' + _anD('A') + '>=$B$2)*(' + _anD('A') + '<=$B$3)');
+  if (opts.loc    !== false) f.push('(($B$5="' + AN_ALL + '")+(' + _anD('C') + '=$B$5))');
+  if (opts.src    !== false) f.push('(($B$6="' + AN_ALL + '")+(' + _anD('D') + '=$B$6))');
+  if (opts.status !== false) f.push('(($B$7="' + AN_ALL + '")+(' + _anD('E') + '=$B$7))');
+  return f.join('*');
 }
-function _anSheet(ss){
+// Лічильник із довільними додатковими умовами.
+function _anCount(extra, opts){
+  var parts = [_anFilter(opts)];
+  if (extra) parts.push(extra);
+  return 'SUMPRODUCT(' + parts.join('*') + ')';
+}
+function _anPct(numExtra, denExtra, opts){
+  var n = _anCount(numExtra, opts), d = _anCount(denExtra, opts);
+  return '=IF(' + d + '=0,"",ROUND(100*' + n + '/' + d + ',1))';
+}
+
+// ── плоска таблиця лідів на приховану вкладку ──
+function _anWriteData(ss, rows){
+  var sh = ss.getSheetByName(LEADS_AN_DATA);
+  if (!sh) sh = ss.insertSheet(LEADS_AN_DATA);
+  sh.clear();
+  var head = ['day','ym','loc','source','status','call','exc','sign','ref','refGroup','reactMin','campaign','origin'];
+  var out = [head];
+  rows.forEach(function(r){
+    out.push([
+      r.day || '', String(r.day || '').slice(0, 7),
+      r.loc || LBL_NO_LOC, r.source || LBL_NO_SRC, r.status || '',
+      r.didCall ? 1 : 0, r.didExc ? 1 : 0, r.didSign ? 1 : 0, r.didRefuse ? 1 : 0,
+      r.didRefuse ? (r.refuseGroup || 'не вказано') : '',
+      (r.reactMin === null || r.reactMin === undefined) ? '' : r.reactMin,
+      r.campaign || '', r.origin || ''
+    ]);
+  });
+  if (sh.getMaxRows() < out.length) sh.insertRowsAfter(sh.getMaxRows(), out.length - sh.getMaxRows());
+  if (sh.getMaxColumns() < 30)      sh.insertColumnsAfter(sh.getMaxColumns(), 30 - sh.getMaxColumns());
+  sh.getRange(1, 1, out.length, head.length).setValues(out);
+  sh.getRange(1, 1, 1, head.length).setFontWeight('bold');
+  sh.setFrozenRows(1);
+  return {sh: sh, n: out.length - 1};
+}
+
+// Ряди для SPARKLINE: локація × 12 останніх місяців. Тренд свідомо НЕ залежить
+// від фільтрів — це довга картинка по локації, а не зріз поточного вибору.
+function _anWriteSpark(sh, rows, months){
+  var byLoc = {};
+  rows.forEach(function(r){
+    var l = r.loc || LBL_NO_LOC, m = String(r.day || '').slice(0, 7);
+    if (!m) return;
+    (byLoc[l] = byLoc[l] || {})[m] = (byLoc[l][m] || 0) + 1;
+  });
+  var keys = []; for (var k in byLoc) keys.push(k);
+  keys.sort();
+  var out = [['loc'].concat(months)];
+  keys.forEach(function(l){
+    var row = [l];
+    months.forEach(function(m){ row.push(byLoc[l][m] || 0); });
+    out.push(row);
+  });
+  sh.getRange(1, 16, out.length, out[0].length).setValues(out);   // колонка P
+  return {row0: 2, n: keys.length, keys: keys};
+}
+
+// ── останні 12 місяців, що закінчуються місяцем «по» ──
+function _anMonths(toIso){
+  var p = String(toIso).split('-');
+  var y = +p[0], m = +p[1], out = [];
+  for (var i = 11; i >= 0; i--){
+    var mm = m - i, yy = y;
+    while (mm <= 0){ mm += 12; yy--; }
+    out.push(yy + '-' + ('0' + mm).slice(-2));
+  }
+  return out;
+}
+
+function refreshLeadsAnalytics(){
+  var ss;
+  try { ss = SpreadsheetApp.openById(_mirrorFileId()); }
+  catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+
+  var all = [], srcErr = [];
+  try { all = all.concat(_leadsFromBot()); }     catch(e1){ srcErr.push('Ліди_Бот: ' + (e1.message||e1)); }
+  try { all = all.concat(_leadsFromHistory()); } catch(e2){ srcErr.push('Ліди_Історія: ' + (e2.message||e2)); }
+
+  var dat = _anWriteData(ss, all);
+  AN_MAXROW = Math.max(dat.n + 500, 1000);   // формули рахують лише по реальних даних
+
   var sh = ss.getSheetByName(LEADS_AN_SHEET);
-  if (sh) return sh;
-  sh = ss.insertSheet(LEADS_AN_SHEET, 0);
-  var d = _anPeriodDefault();
-  sh.getRange('A1').setValue('з');
-  sh.getRange('A2').setValue('по');
-  sh.getRange('A3').setValue('оновлено');
-  sh.getRange('B1:B2').setNumberFormat('@');
-  sh.getRange('B1').setValue(d.from);
-  sh.getRange('B2').setValue(d.to);
-  sh.getRange('A1:A3').setFontWeight('bold');
-  sh.setColumnWidth(1, 230);
-  sh.setColumnWidth(2, 110);
-  sh.setFrozenRows(3);
-  return sh;
+  if (!sh) sh = ss.insertSheet(LEADS_AN_SHEET, 0);
+
+  // зберігаємо вибір користувача між перерахунками
+  var keep = {};
+  try {
+    keep.from = String(sh.getRange('B2').getValue() || '');
+    keep.to   = String(sh.getRange('B3').getValue() || '');
+    keep.loc  = String(sh.getRange('B5').getValue() || '');
+    keep.src  = String(sh.getRange('B6').getValue() || '');
+    keep.st   = String(sh.getRange('B7').getValue() || '');
+  } catch(_k){}
+
+  sh.getCharts().forEach(function(c){ sh.removeChart(c); });
+  try { sh.getSlicers().forEach(function(s){ s.remove(); }); } catch(_s){}
+  sh.clear();
+  sh.clearConditionalFormatRules();
+  if (sh.getMaxColumns() < 26) sh.insertColumnsAfter(sh.getMaxColumns(), 26 - sh.getMaxColumns());
+  if (sh.getMaxRows() < 200)   sh.insertRowsAfter(sh.getMaxRows(), 200 - sh.getMaxRows());
+  sh.setHiddenGridlines(true);
+
+  var y = Utilities.formatDate(new Date(), 'Europe/Kiev', 'yyyy');
+  var from = keep.from || (y + '-01-01');
+  var to   = keep.to   || (y + '-12-31');
+  var months = _anMonths(to);
+
+  var spark = _anWriteSpark(dat.sh, all, months);
+
+  // ══ КЕРУВАННЯ ══
+  sh.getRange('A1').setValue('ПЕРІОД І ФІЛЬТРИ').setFontWeight('bold').setFontColor(AN_C_HEAD);
+  sh.getRange('A2').setValue('з');
+  sh.getRange('A3').setValue('по');
+  sh.getRange('A5').setValue('локація');
+  sh.getRange('A6').setValue('джерело');
+  sh.getRange('A7').setValue('статус');
+  sh.getRange('B2:B3').setNumberFormat('@');
+  sh.getRange('B2').setValue(from);
+  sh.getRange('B3').setValue(to);
+
+  // швидкий вибір періоду — окремі випадайки, які ПЕРЕЗАПИСУЮТЬ B2/B3 формулою нижче
+  sh.getRange('D2').setValue('швидко:');
+  sh.getRange('D3').setValue('рік');
+  sh.getRange('D4').setValue('місяць');
+  var years = [], nowY = Number(y);
+  for (var q = nowY; q >= 2024; q--) years.push(String(q));
+  var mNames = ['весь рік','01','02','03','04','05','06','07','08','09','10','11','12'];
+  _anValidate(sh, 'E3', years);
+  _anValidate(sh, 'E4', mNames);
+  sh.getRange('F3').setValue('← обери рік і місяць, потім тисни «застосувати» в меню');
+
+  function distinct(idx){
+    var m = {}, o = [AN_ALL];
+    all.forEach(function(r){
+      var v = idx === 'loc' ? (r.loc || LBL_NO_LOC)
+            : idx === 'src' ? (r.source || LBL_NO_SRC) : (r.status || '');
+      if (v && !m[v]){ m[v] = 1; o.push(v); }
+    });
+    return o;
+  }
+  _anValidate(sh, 'B5', distinct('loc'));
+  _anValidate(sh, 'B6', distinct('src'));
+  _anValidate(sh, 'B7', distinct('status'));
+  sh.getRange('B5').setValue(keep.loc || AN_ALL);
+  sh.getRange('B6').setValue(keep.src || AN_ALL);
+  sh.getRange('B7').setValue(keep.st  || AN_ALL);
+  sh.getRange('A1:A7').setFontWeight('bold');
+
+  sh.getRange('D6').setValue('оновлено');
+  sh.getRange('E6').setValue(formatDate(new Date()) + ' · лідів у базі: ' + dat.n +
+    (srcErr.length ? ' · ЗБІЙ: ' + srcErr.join(' ') : ''));
+
+  return _anBuildBody(sh, dat, spark, months, srcErr);
+}
+
+function _anValidate(sh, a1, list){
+  try{
+    var rule = SpreadsheetApp.newDataValidation().requireValueInList(list, true)
+                 .setAllowInvalid(false).build();
+    sh.getRange(a1).setDataValidation(rule);
+  }catch(_e){}
+}
+
+// Попередній період тієї ж довжини — у службових клітинках X2/X3 (колонка схована).
+function _anFilterPrev(opts){
+  opts = opts || {};
+  var f = ['(' + _anD('A') + '>=$X$2)*(' + _anD('A') + '<=$X$3)'];
+  if (opts.loc    !== false) f.push('(($B$5="' + AN_ALL + '")+(' + _anD('C') + '=$B$5))');
+  if (opts.src    !== false) f.push('(($B$6="' + AN_ALL + '")+(' + _anD('D') + '=$B$6))');
+  if (opts.status !== false) f.push('(($B$7="' + AN_ALL + '")+(' + _anD('E') + '=$B$7))');
+  return f.join('*');
+}
+function _anCountPrev(extra){
+  var p = [_anFilterPrev()];
+  if (extra) p.push(extra);
+  return 'SUMPRODUCT(' + p.join('*') + ')';
+}
+
+function _anBuildBody(sh, dat, spark, months, srcErr){
+  var D = _anQ(LEADS_AN_DATA) + '!';
+  var CALL = _anD('F'), EXC = _anD('G'), SIGN = _anD('H'), REF = _anD('I');
+
+  // службові клітинки попереднього періоду
+  sh.getRange('X1').setValue('службове — не чіпати');
+  sh.getRange('X2').setFormula('=TEXT(DATEVALUE($B$2)-(DATEVALUE($B$3)-DATEVALUE($B$2)+1),"yyyy-mm-dd")');
+  sh.getRange('X3').setFormula('=TEXT(DATEVALUE($B$2)-1,"yyyy-mm-dd")');
+
+  // ═══ 1. ПЛИТКИ KPI ═══
+  var tiles = [
+    {t:'ЛІДИ',            cur:_anCount(''),     prev:_anCountPrev(''),     pct:false},
+    {t:'ЕКСКУРСІЇ',       cur:_anCount(EXC),    prev:_anCountPrev(EXC),    pct:false},
+    {t:'ДОГОВОРИ',        cur:_anCount(SIGN),   prev:_anCountPrev(SIGN),   pct:false},
+    {t:'ЕКСКУРСІЯ → ДОГОВІР', cur:null, prev:null, pct:true}
+  ];
+  sh.getRange('A9').setValue('ГОЛОВНЕ').setFontWeight('bold').setFontColor(AN_C_HEAD);
+  for (var i = 0; i < tiles.length; i++){
+    var c = 1 + i * 2;                                  // A, C, E, G
+    sh.getRange(10, c, 1, 2).merge().setValue(tiles[i].t)
+      .setFontSize(9).setFontWeight('bold').setFontColor('#7f8c8d')
+      .setHorizontalAlignment('center');
+    var big = sh.getRange(11, c, 1, 2).merge()
+      .setFontSize(26).setFontWeight('bold').setHorizontalAlignment('center');
+    var dlt = sh.getRange(12, c, 1, 2).merge()
+      .setFontSize(10).setFontWeight('bold').setHorizontalAlignment('center');
+    if (tiles[i].pct){
+      big.setFormula('=IF(' + _anCount(EXC) + '=0,"—",TEXT(' + _anCount(SIGN) + '/' + _anCount(EXC) + ',"0.0%"))');
+      dlt.setFormula('=IF(OR(' + _anCount(EXC) + '=0,' + _anCountPrev(EXC) + '=0),"",'
+        + 'TEXT(' + _anCount(SIGN) + '/' + _anCount(EXC) + '-' + _anCountPrev(SIGN) + '/' + _anCountPrev(EXC) + ',"▲ +0.0%;▼ -0.0%;= 0.0%"))');
+    } else {
+      big.setFormula('=' + tiles[i].cur);
+      dlt.setFormula('=TEXT(' + tiles[i].cur + '-' + tiles[i].prev + ',"▲ +0;▼ -0;= 0")');
+    }
+    sh.getRange(10, c, 3, 2).setBackground('#f7f9fb').setBorder(true, true, true, true, false, false, '#e3e9ef', SpreadsheetApp.BorderStyle.SOLID);
+  }
+  sh.getRange('A13').setValue('порівняння — з попереднім періодом такої ж довжини')
+    .setFontSize(9).setFontColor('#95a5a6');
+
+  // ═══ 2. ВОРОНКА ═══
+  sh.getRange('A15').setValue('ВОРОНКА').setFontWeight('bold').setFontColor(AN_C_HEAD);
+  sh.getRange('A16:C16').setValues([['Етап','Кількість','Конверсія, %']]).setFontWeight('bold');
+  var fun = [
+    ['Нові',         '=' + _anCount(''),     ''],
+    ['Додзвонились', '=' + _anCount(CALL),   _anPct(CALL, '')],
+    ['Екскурсія',    '=' + _anCount(EXC),    _anPct(EXC, CALL)],
+    ['Договір',      '=' + _anCount(SIGN),   _anPct(SIGN, EXC)]
+  ];
+  for (var f = 0; f < fun.length; f++){
+    sh.getRange(17 + f, 1).setValue(fun[f][0]);
+    sh.getRange(17 + f, 2).setFormula(fun[f][1]);
+    if (fun[f][2]) sh.getRange(17 + f, 3).setFormula(fun[f][2]);
+  }
+
+  // ═══ 3. ПО МІСЯЦЯХ ═══
+  sh.getRange('A23').setValue('ДИНАМІКА ПО МІСЯЦЯХ').setFontWeight('bold').setFontColor(AN_C_HEAD);
+  sh.getRange('A24:C24').setValues([['Місяць','Лідів','Конверсія екск→дог, %']]).setFontWeight('bold');
+  for (var m = 0; m < months.length; m++){
+    var r = 25 + m, ym = '"' + months[m] + '"';
+    var mf = '(' + _anD('B') + '=' + ym + ')';
+    sh.getRange(r, 1).setValue(months[m]);
+    sh.getRange(r, 2).setFormula('=' + _anCount(mf, {period:false}));
+    sh.getRange(r, 3).setFormula('=IF(' + _anCount(mf + '*' + EXC, {period:false}) + '=0,"",'
+      + 'ROUND(100*' + _anCount(mf + '*' + SIGN, {period:false}) + '/' + _anCount(mf + '*' + EXC, {period:false}) + ',1))');
+  }
+  var monTop = 25, monN = months.length;
+
+  return _anBuildHeat(sh, dat, spark, months, monTop, monN, srcErr);
+}
+
+// Теплова карта «вимір × місяць»: конверсія екск→дог кольором.
+function _anHeat(sh, top, title, dimCol, dimList, months, skipFilter){
+  sh.getRange(top, 1).setValue(title).setFontWeight('bold').setFontColor(AN_C_HEAD);
+  var hdr = [''].concat(months.map(function(m){ return m.slice(2); }));
+  sh.getRange(top + 1, 1, 1, hdr.length).setValues([hdr]).setFontWeight('bold');
+  var EXC = _anD('G'), SIGN = _anD('H');
+  for (var i = 0; i < dimList.length; i++){
+    var r = top + 2 + i, lbl = '"' + String(dimList[i]).replace(/"/g, '""') + '"';
+    sh.getRange(r, 1).setValue(dimList[i]);
+    for (var j = 0; j < months.length; j++){
+      var cond = '(' + _anD(dimCol) + '=' + lbl + ')*(' + _anD('B') + '="' + months[j] + '")';
+      var opts = {period:false}; opts[skipFilter] = false;
+      var den = _anCount(cond + '*' + EXC, opts), num = _anCount(cond + '*' + SIGN, opts);
+      sh.getRange(r, 2 + j).setFormula('=IF(' + den + '=0,"",ROUND(100*' + num + '/' + den + '))');
+    }
+  }
+  var rng = sh.getRange(top + 2, 2, Math.max(dimList.length, 1), months.length);
+  try{
+    var rule = SpreadsheetApp.newConditionalFormatRule()
+      .setGradientMinpointWithValue(AN_C_BAD,  SpreadsheetApp.InterpolationType.NUMBER, '0')
+      .setGradientMidpointWithValue(AN_C_MID,  SpreadsheetApp.InterpolationType.NUMBER, '25')
+      .setGradientMaxpointWithValue(AN_C_GOOD, SpreadsheetApp.InterpolationType.NUMBER, '50')
+      .setRanges([rng]).build();
+    var rules = sh.getConditionalFormatRules(); rules.push(rule); sh.setConditionalFormatRules(rules);
+  }catch(_cf){}
+  return top + 2 + dimList.length + 2;
+}
+
+function _anBuildHeat(sh, dat, spark, months, monTop, monN, srcErr){
+  var EXC = _anD('G'), SIGN = _anD('H'), REF = _anD('I');
+  var srcList = LEAD_SRC_ALL.concat([LBL_NO_SRC]);
+  var locList = spark.keys;
+
+  var next = monTop + monN + 2;
+  next = _anHeat(sh, next, 'ТЕПЛОВА КАРТА · ДЖЕРЕЛО × МІСЯЦЬ (конверсія екск→дог, %)',
+                 'D', srcList, months, 'src');
+  next = _anHeat(sh, next, 'ТЕПЛОВА КАРТА · ЛОКАЦІЯ × МІСЯЦЬ (конверсія екск→дог, %)',
+                 'C', locList, months, 'loc');
+
+  // ═══ РЕЙТИНГ ЛОКАЦІЙ ЗІ СПАРКЛАЙНАМИ ═══
+  var rk = next;
+  sh.getRange(rk, 1).setValue('ЛОКАЦІЇ · РЕЙТИНГ І ТРЕНД').setFontWeight('bold').setFontColor(AN_C_HEAD);
+  sh.getRange(rk + 1, 1, 1, 6)
+    .setValues([['Локація','Лідів','Екскурсій','Договорів','Конверсія екск→дог, %','Тренд лідів, 12 міс.']])
+    .setFontWeight('bold');
+  var P = _anQ(LEADS_AN_DATA) + '!$P$2:$P$' + (spark.n + 1);
+  var Q1 = _anQ(LEADS_AN_DATA) + '!$Q$1';
+  for (var i = 0; i < locList.length; i++){
+    var r = rk + 2 + i, lbl = '"' + String(locList[i]).replace(/"/g, '""') + '"';
+    var cond = '(' + _anD('C') + '=' + lbl + ')';
+    sh.getRange(r, 1).setValue(locList[i]);
+    sh.getRange(r, 2).setFormula('=' + _anCount(cond, {loc:false}));
+    sh.getRange(r, 3).setFormula('=' + _anCount(cond + '*' + EXC, {loc:false}));
+    sh.getRange(r, 4).setFormula('=' + _anCount(cond + '*' + SIGN, {loc:false}));
+    sh.getRange(r, 5).setFormula('=IF(' + _anCount(cond + '*' + EXC, {loc:false}) + '=0,"",ROUND(100*'
+      + _anCount(cond + '*' + SIGN, {loc:false}) + '/' + _anCount(cond + '*' + EXC, {loc:false}) + '))');
+    sh.getRange(r, 6).setFormula('=IFERROR(SPARKLINE(OFFSET(' + Q1 + ',MATCH($A' + r + ',' + P + ',0),0,1,12),'
+      + '{"charttype","column";"color","' + AN_C_ACC + '";"empty","zero"}),"")');
+  }
+  try{
+    var cr = sh.getRange(rk + 2, 5, Math.max(locList.length, 1), 1);
+    var rule = SpreadsheetApp.newConditionalFormatRule()
+      .setGradientMinpointWithValue(AN_C_BAD,  SpreadsheetApp.InterpolationType.NUMBER, '0')
+      .setGradientMidpointWithValue(AN_C_MID,  SpreadsheetApp.InterpolationType.NUMBER, '25')
+      .setGradientMaxpointWithValue(AN_C_GOOD, SpreadsheetApp.InterpolationType.NUMBER, '50')
+      .setRanges([cr]).build();
+    var rr = sh.getConditionalFormatRules(); rr.push(rule); sh.setConditionalFormatRules(rr);
+  }catch(_c2){}
+
+  // ═══ ПРИЧИНИ ВІДМОВ ═══
+  var rf = rk + 2 + locList.length + 2;
+  var groups = ['фінанси / дорого','логістика / далеко','переїзд / за кордон','школа / держсадок',
+                'зник із контакту','на майбутній період','відмовили ми','інше','не вказано'];
+  sh.getRange(rf, 1).setValue('ПРИЧИНИ ВІДМОВ').setFontWeight('bold').setFontColor(AN_C_HEAD);
+  sh.getRange(rf + 1, 1, 1, 2).setValues([['Причина','Кількість']]).setFontWeight('bold');
+  for (var g = 0; g < groups.length; g++){
+    var lb = '"' + groups[g] + '"';
+    sh.getRange(rf + 2 + g, 1).setValue(groups[g]);
+    sh.getRange(rf + 2 + g, 2).setFormula('=' + _anCount('(' + _anD('J') + '=' + lb + ')'));
+  }
+  var refTop = rf + 2, refN = groups.length;
+
+  return _anCharts(sh, months, monTop, monN, rk, locList.length, refTop, refN, srcErr);
+}
+
+function _anCharts(sh, months, monTop, monN, rk, locN, refTop, refN, srcErr){
+  var made = [], failed = [];
+
+  // Воронка: стовпчики етапів + лінія конверсії на другій осі
+  try{
+    var c1 = sh.newChart().setChartType(Charts.ChartType.COMBO)
+      .addRange(sh.getRange(17, 1, 4, 1))
+      .addRange(sh.getRange(17, 2, 4, 1))
+      .addRange(sh.getRange(17, 3, 4, 1))
+      .setOption('title', 'Воронка: етапи і конверсія між ними')
+      .setOption('series', {0:{type:'bars', color:AN_C_ACC},
+                            1:{type:'line', color:'#e67e22', targetAxisIndex:1, lineWidth:3}})
+      .setOption('vAxes', {0:{title:'лідів'}, 1:{title:'конверсія, %'}})
+      .setOption('hAxis', {title:'етап'})
+      .setOption('legend', {position:'bottom'})
+      .setOption('width', 560).setOption('height', 300)
+      .setPosition(15, 5, 0, 0).build();
+    sh.insertChart(c1); made.push('воронка');
+  }catch(e1){ failed.push('воронка: ' + (e1.message||e1)); }
+
+  // Динаміка: ліди стовпчиками, конверсія лінією на другій осі
+  try{
+    var c2 = sh.newChart().setChartType(Charts.ChartType.COMBO)
+      .addRange(sh.getRange(monTop, 1, monN, 1))
+      .addRange(sh.getRange(monTop, 2, monN, 1))
+      .addRange(sh.getRange(monTop, 3, monN, 1))
+      .setOption('title', 'Ліди і конверсія по місяцях')
+      .setOption('series', {0:{type:'bars', color:AN_C_ACC},
+                            1:{type:'line', color:'#27ae60', targetAxisIndex:1, lineWidth:3, pointSize:5}})
+      .setOption('vAxes', {0:{title:'лідів'}, 1:{title:'екск→дог, %'}})
+      .setOption('hAxis', {title:'місяць'})
+      .setOption('legend', {position:'bottom'})
+      .setOption('width', 760).setOption('height', 320)
+      .setPosition(monTop, 5, 0, 0).build();
+    sh.insertChart(c2); made.push('динаміка');
+  }catch(e2){ failed.push('динаміка: ' + (e2.message||e2)); }
+
+  // Причини відмов — кругова
+  try{
+    var c3 = sh.newChart().setChartType(Charts.ChartType.PIE)
+      .addRange(sh.getRange(refTop, 1, refN, 1))
+      .addRange(sh.getRange(refTop, 2, refN, 1))
+      .setOption('title', 'Причини відмов')
+      .setOption('legend', {position:'right'})
+      .setOption('pieHole', 0.4)
+      .setOption('width', 520).setOption('height', 320)
+      .setPosition(refTop, 5, 0, 0).build();
+    sh.insertChart(c3); made.push('відмови');
+  }catch(e3){ failed.push('відмови: ' + (e3.message||e3)); }
+
+  // ═══ ОФОРМЛЕННЯ ═══
+  try{
+    sh.setColumnWidth(1, 230);
+    for (var c = 2; c <= 14; c++) sh.setColumnWidth(c, 62);
+    sh.setColumnWidth(6, 150);                       // колонка спарклайнів
+    sh.setFrozenRows(7);
+    sh.setFrozenColumns(1);
+    sh.hideColumns(24, 3);                           // X, Y, Z — службові
+    sh.getRange(1, 1, sh.getMaxRows(), 26).setFontFamily('Inter').setFontSize(10);
+    // розмір шрифту плиток уже виставлено при їх створенні — тут не чіпаємо,
+    // бо діапазон B11:H11 перетинає обʼєднані клітинки лише частково
+    for (var t2 = 0; t2 < 4; t2++) sh.getRange(11, 1 + t2 * 2).setFontSize(26);
+  }catch(_f){}
+
+  try{ var d = SpreadsheetApp.openById(_mirrorFileId()).getSheetByName(LEADS_AN_DATA); if (d) d.hideSheet(); }catch(_h){}
+
+  SpreadsheetApp.flush();
+  return {ok:true, charts:made, chartErrors:failed, sourceErrors:srcErr,
+          note:'Період і фільтри — клітинки B2/B3 і B5/B7. Перерахунок формулами миттєвий; '
+             + 'скрипт потрібен лише щоб перечитати самі ліди.'};
 }
 
 function SETUP_LEADS_ANALYTICS(){
   var id;
   try { id = _mirrorFileId(); }
   catch(e){ Logger.log('!! ' + (e.message||e) + '\nСпершу SETUP_MIRROR_SPREADSHEET().'); return; }
-  var ss = SpreadsheetApp.openById(id);
-  _anSheet(ss);
   var res = refreshLeadsAnalytics();
   Logger.log('═══ SETUP_LEADS_ANALYTICS ═══\n' +
-    'Таблиця: ' + ss.getName() + '\n' +
-    'Вкладка: ' + LEADS_AN_SHEET + '\n' +
-    'Період у B1/B2 — міняй там, потім «Перерахувати».\n' +
-    JSON.stringify(res));
-}
-
-function refreshLeadsAnalytics(){
-  var ss, sh;
-  try { ss = SpreadsheetApp.openById(_mirrorFileId()); }
-  catch(e){ return {ok:false, error:String(e && e.message || e)}; }
-  sh = _anSheet(ss);
-
-  var d = _anPeriodDefault();
-  var from = _leadDayKey(sh.getRange('B1').getValue()) || d.from;
-  var to   = _leadDayKey(sh.getRange('B2').getValue()) || d.to;
-
-  var all = [], srcErr = [];
-  try { all = all.concat(_leadsFromBot()); }      catch(e1){ srcErr.push('Ліди_Бот: ' + (e1.message||e1)); }
-  try { all = all.concat(_leadsFromHistory()); }  catch(e2){ srcErr.push('Ліди_Історія: ' + (e2.message||e2)); }
-  var rows = all.filter(function(r){ return r.day && r.day >= from && r.day <= to; });
-  var a = _reportAgg(rows);
-  var botN = 0; rows.forEach(function(r){ if (r.origin === 'bot') botN++; });
-
-  // повне перемальовування: чистимо все нижче шапки і всі графіки
-  sh.getCharts().forEach(function(c){ sh.removeChart(c); });
-  // Графіки якоряться у колонці 8 — переконуємось, що сітка до неї дотягується.
-  if (sh.getMaxColumns() < 8) sh.insertColumnsAfter(sh.getMaxColumns(), 8 - sh.getMaxColumns());
-  var lastRow = sh.getMaxRows();
-  if (lastRow > 4) sh.getRange(5, 1, lastRow - 4, sh.getMaxColumns()).clear();
-
-  var out = [], meta = {};
-  function push(arr){ out.push(arr); }
-  function blank(){ out.push(['','','','','','']); }
-  function head(title){ out.push([title,'','','','','']); meta[title] = out.length + 4; }  // 1-based рядок аркуша
-
-  function pct(x, y){ return y > 0 ? Math.round(x * 1000 / y) / 10 : 0; }
-
-  head('ГОЛОВНЕ');
-  push(['Лідів', a.total, '', '', '', '']);
-  push(['Екскурсій', a.exc, '', '', '', '']);
-  push(['Договорів', a.sign, '', '', '', '']);
-  push(['Відмов', a.ref, '', '', '', '']);
-  push(['Лід → екскурсія, %', pct(a.exc, a.total), '', '', '', '']);
-  push(['Екскурсія → договір, %', pct(a.sign, a.exc), '', '', '', '']);
-  push(['Лід → договір, %', pct(a.sign, a.total), '', '', '', '']);
-  blank();
-
-  head('ВОРОНКА');
-  push(['Етап', 'Кількість', 'Від попереднього, %', '', '', '']);
-  push(['Нові', a.total, '', '', '', '']);
-  push(['Додзвонились', a.call, pct(a.call, a.total), '', '', '']);
-  push(['Екскурсія', a.exc, pct(a.exc, a.call), '', '', '']);
-  push(['Договір', a.sign, pct(a.sign, a.exc), '', '', '']);
-  blank();
-
-  function tableBlock(title, obj, skipKey){
-    head(title);
-    push(['Назва', 'Лідів', 'Екскурсій', 'Договорів', 'Лід→дог, %', 'Екск→дог, %']);
-    var startRow = out.length + 4 + 1;     // перший рядок ДАНИХ на аркуші
-    var keys = [], skipped = 0;
-    for (var k in obj){ if (k === skipKey){ skipped = obj[k].n; continue; } keys.push(k); }
-    keys.sort(function(x, y){ return obj[y].n - obj[x].n; });
-    keys.forEach(function(k){
-      var g = obj[k];
-      push([k, g.n, g.exc || 0, g.sign, pct(g.sign, g.n), pct(g.sign, g.exc || 0)]);
-    });
-    if (skipKey && skipped) push([skipKey + ' (у графіки не входить)', skipped, '', '', '', '']);
-    blank();
-    return {row: startRow, n: keys.length};
-  }
-
-  var srcBlock = tableBlock('ДЖЕРЕЛА', a.bySource, LBL_NO_SRC);
-  var locBlock = tableBlock('ЛОКАЦІЇ', a.byLoc,    LBL_NO_LOC);
-
-  head('ПО МІСЯЦЯХ');
-  push(['Місяць', 'Лідів', 'Екскурсій', 'Договорів', 'Лід→дог, %', 'Екск→дог, %']);
-  var monRow = out.length + 4 + 1;
-  var mk = []; for (var m in a.byMonth) mk.push(m);
-  mk.sort();
-  mk.forEach(function(m){
-    var g = a.byMonth[m];
-    push([m, g.n, g.exc, g.sign, pct(g.sign, g.n), pct(g.sign, g.exc)]);
-  });
-  var monN = mk.length;
-  blank();
-
-  head('ПРИЧИНИ ВІДМОВ');
-  push(['Причина', 'Кількість', 'Частка, %', '', '', '']);
-  var rk = []; for (var rr in a.refusals) rk.push(rr);
-  rk.sort(function(x, y){ return a.refusals[y] - a.refusals[x]; });
-  var refTot = 0; rk.forEach(function(k){ refTot += a.refusals[k]; });
-  rk.forEach(function(k){ push([k, a.refusals[k], pct(a.refusals[k], refTot), '', '', '']); });
-
-  // Сітка може бути коротшою за звіт — інакше setValues кине помилку діапазону.
-  if (sh.getMaxRows() < out.length + 4)
-    sh.insertRowsAfter(sh.getMaxRows(), out.length + 4 - sh.getMaxRows());
-  sh.getRange(5, 1, out.length, 6).setValues(out);
-  sh.getRange('B3').setValue(formatDate(new Date()) + '  ·  період ' + from + ' … ' + to +
-    '  ·  лідів ' + rows.length + ' (бот ' + botN + ' / архів ' + (rows.length - botN) + ')' +
-    (srcErr.length ? '  ·  ЗБІЙ: ' + srcErr.join(' ') : ''));
-
-  // жирні заголовки блоків
-  for (var title in meta) sh.getRange(meta[title], 1, 1, 6).setFontWeight('bold').setBackground('#f0f4f8');
-
-  // ── графіки ──
-  function chart(type, labelRow, n, cols, title, anchorRow){
-    if (!n) return;
-    var b = sh.newChart().setChartType(type).setOption('title', title)
-             .setOption('height', 320).setOption('width', 520);
-    b.addRange(sh.getRange(labelRow, 1, n, 1));
-    cols.forEach(function(c){ b.addRange(sh.getRange(labelRow, c, n, 1)); });
-    b.setPosition(anchorRow, 8, 0, 0);
-    sh.insertChart(b.build());
-  }
-  chart(Charts.ChartType.COLUMN, monRow, monN, [2, 4], 'Ліди і договори по місяцях', 5);
-  chart(Charts.ChartType.BAR, srcBlock.row, srcBlock.n, [5], 'Конверсія за джерелом, %', 22);
-  chart(Charts.ChartType.BAR, locBlock.row, locBlock.n, [5], 'Конверсія за локацією, %', 39);
-
-  SpreadsheetApp.flush();
-  return {ok:true, from:from, to:to, rows:rows.length, bot:botN,
-          sources:srcBlock.n, locs:locBlock.n, months:monN, errors:srcErr};
+    'Таблиця: ' + SpreadsheetApp.openById(id).getName() + '\n' +
+    'Вкладки: «' + LEADS_AN_SHEET + '» (візуалізація) і «' + LEADS_AN_DATA + '» (дані, схована)\n' +
+    JSON.stringify(res, null, 1));
 }
 
 // Меню в самій таблиці: кнопку-малюнок скриптом не створити, а пункт меню — можна.
@@ -4339,7 +4625,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.178', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.179', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
