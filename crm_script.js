@@ -3394,6 +3394,9 @@ var AN_ALL          = 'усі';
 // Роздільник аргументів у формулах. Залежить від локалі ТАБЛИЦІ, а не скрипта:
 // див. _anSep(). Виставляється при кожному перерахунку.
 var AN_SEP          = ',';
+// Покроковий журнал побудови. Секція, яка мовчки не записалась, інакше не
+// відрізняється від секції, якої немає: винятку немає, лог порожній.
+var AN_STEPS        = [];
 
 // палітра
 var AN_C_BG   = '#ffffff', AN_C_HEAD = '#1e2d3d', AN_C_ACC = '#2980b9';
@@ -3442,6 +3445,11 @@ function _anWriteData(ss, rows){
   });
   if (sh.getMaxRows() < out.length) sh.insertRowsAfter(sh.getMaxRows(), out.length - sh.getMaxRows());
   if (sh.getMaxColumns() < 30)      sh.insertColumnsAfter(sh.getMaxColumns(), 30 - sh.getMaxColumns());
+  // A=day і B=ym мусять лишитись ТЕКСТОМ. clear() стирає й формати, після чого
+  // setValues мовчки перетворює '2026-08-18' на Date — а Date у Sheets завжди
+  // менша за будь-який текст, тож порівняння з текстовими B2/B3 дає FALSE у
+  // кожному рядку і весь дашборд рахує нулі. Формат '@' до запису це знімає.
+  sh.getRange(1, 1, out.length, 2).setNumberFormat('@');
   sh.getRange(1, 1, out.length, head.length).setValues(out);
   sh.getRange(1, 1, 1, head.length).setFontWeight('bold');
   sh.setFrozenRows(1);
@@ -3492,6 +3500,12 @@ function _anLoc(f){
     out += (c === ',') ? (depth > 0 ? '\\' : AN_SEP) : c;
   }
   return out;
+}
+
+// Виконати секцію й записати результат у журнал, не валячи всю побудову.
+function _anStep(name, fn){
+  try { fn(); AN_STEPS.push('OK ' + name); }
+  catch(e){ AN_STEPS.push('ЗБІЙ ' + name + ' — ' + (e && e.message || e)); }
 }
 
 // Сітка аркуша мусить покривати діапазон, на який дивляться формули.
@@ -3547,6 +3561,7 @@ function _anValidDate(v){
 }
 
 function refreshLeadsAnalytics(){
+  AN_STEPS = [];
   var ss;
   try { ss = SpreadsheetApp.openById(_mirrorFileId()); }
   catch(e){ return {ok:false, error:String(e && e.message || e)}; }
@@ -3703,6 +3718,7 @@ function _anBuildBody(sh, dat, spark, months, srcErr){
     {t:'ЕКСКУРСІЯ → ДОГОВІР', cur:null, prev:null, pct:true}
   ];
   sh.getRange('A9').setValue('ГОЛОВНЕ').setFontWeight('bold').setFontColor(AN_C_HEAD);
+  _anStep('плитки KPI (10-13)', function(){
   for (var i = 0; i < tiles.length; i++){
     var c = 1 + i * 2;                                  // A, C, E, G
     sh.getRange(10, c, 1, 2).merge().setValue(tiles[i].t)
@@ -3724,8 +3740,10 @@ function _anBuildBody(sh, dat, spark, months, srcErr){
   }
   sh.getRange('A13').setValue('порівняння — з попереднім періодом такої ж довжини')
     .setFontSize(9).setFontColor('#95a5a6');
+  });
 
   // ═══ 2. ВОРОНКА ═══
+  _anStep('воронка (15-20)', function(){
   sh.getRange('A15').setValue('ВОРОНКА').setFontWeight('bold').setFontColor(AN_C_HEAD);
   sh.getRange('A16:C16').setValues([['Етап','Кількість','Конверсія, %']]).setFontWeight('bold');
   var fun = [
@@ -3739,8 +3757,10 @@ function _anBuildBody(sh, dat, spark, months, srcErr){
     sh.getRange(17 + f, 2).setFormula(_anSafe(fun[f][1]));
     if (fun[f][2]) sh.getRange(17 + f, 3).setFormula(_anSafe(fun[f][2]));
   }
+  });
 
   // ═══ 3. ПО МІСЯЦЯХ ═══
+  _anStep('динаміка по місяцях (23-36)', function(){
   sh.getRange('A23').setValue('ДИНАМІКА ПО МІСЯЦЯХ').setFontWeight('bold').setFontColor(AN_C_HEAD);
   sh.getRange('A24:C24').setValues([['Місяць','Лідів','Конверсія екск→дог, %']]).setFontWeight('bold');
   for (var m = 0; m < months.length; m++){
@@ -3751,6 +3771,7 @@ function _anBuildBody(sh, dat, spark, months, srcErr){
     sh.getRange(r, 3).setFormula(_anSafe('=IF(' + _anCount(mf + '*' + EXC, {period:false}) + '=0,"",'
       + 'ROUND(100*' + _anCount(mf + '*' + SIGN, {period:false}) + '/' + _anCount(mf + '*' + EXC, {period:false}) + ',1))'));
   }
+  });
   var monTop = 25, monN = months.length;
 
   return _anBuildHeat(sh, dat, spark, months, monTop, monN, srcErr);
@@ -3789,11 +3810,17 @@ function _anBuildHeat(sh, dat, spark, months, monTop, monN, srcErr){
   var srcList = LEAD_SRC_ALL.concat([LBL_NO_SRC]);
   var locList = spark.keys;
 
-  var next = monTop + monN + 2;
-  next = _anHeat(sh, next, 'ТЕПЛОВА КАРТА · ДЖЕРЕЛО × МІСЯЦЬ (конверсія екск→дог, %)',
+  var next = monTop + monN + 2, _n = next;
+  _anStep('теплова ДЖЕРЕЛО (від ' + next + ')', function(){
+    _n = _anHeat(sh, _n, 'ТЕПЛОВА КАРТА · ДЖЕРЕЛО × МІСЯЦЬ (конверсія екск→дог, %)',
                  'D', srcList, months, 'src');
-  next = _anHeat(sh, next, 'ТЕПЛОВА КАРТА · ЛОКАЦІЯ × МІСЯЦЬ (конверсія екск→дог, %)',
+  });
+  next = _n;
+  _anStep('теплова ЛОКАЦІЯ (від ' + next + ')', function(){
+    _n = _anHeat(sh, _n, 'ТЕПЛОВА КАРТА · ЛОКАЦІЯ × МІСЯЦЬ (конверсія екск→дог, %)',
                  'C', locList, months, 'loc');
+  });
+  next = _n;
 
   // ═══ РЕЙТИНГ ЛОКАЦІЙ ЗІ СПАРКЛАЙНАМИ ═══
   var rk = next;
@@ -3918,7 +3945,7 @@ function _anCharts(sh, months, monTop, monN, rk, locN, refTop, refN, srcErr){
     });
   } catch(_wc){}
 
-  return {ok:true, charts:made, chartErrors:failed, sourceErrors:srcErr, writeCheck:writeCheck,
+  return {ok:true, charts:made, chartErrors:failed, sourceErrors:srcErr, steps:AN_STEPS, writeCheck:writeCheck,
           note:'Період і фільтри — клітинки B2/B3 і B5/B7. Перерахунок формулами миттєвий; '
              + 'скрипт потрібен лише щоб перечитати самі ліди.'};
 }
@@ -4839,7 +4866,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.183', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.184', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -4858,6 +4885,7 @@ function doGet(e) {
     else if (action === 'tgGetUpdates')       result = tgGetUpdates();   // v7.122 діагностика Telegram-бота
     else if (action === 'getLeads')           result = getLeads(e.parameter || {});   // v7.152 екран лідів
     else if (action === 'anDiag')             result = anDiag();   // v7.181 read-only знімок клітинок дашборда
+    else if (action === 'refreshAnalytics')   result = refreshLeadsAnalytics();   // v7.184 перерахунок дашборда без редактора
     else if (action === 'getAdSpend')         result = getAdSpend(e.parameter || {});   // v7.169 рекламні витрати
     else if (action === 'sendOwnerReport')    result = sendOwnerReport(_ownerReportParams(e.parameter || {}));   // v7.158; v7.171 ручний запуск = поточний тиждень
     else if (action === 'getBdayStatus')      result = getBdayStatus();                                            // v7.109 роут замість прямого читання листа з фронту
