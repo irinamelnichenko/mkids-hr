@@ -168,6 +168,24 @@ input,select,textarea{font-family:inherit}
 .stat-val{font-size:28px;font-weight:900;line-height:1;color:var(--dark)}
 .stat-lbl{font-size:11px;color:var(--gray);margin-top:3px}
 
+/* TABEL: сітка «По днях» — липка перша колонка, вихідні сірим */
+.tg-wrap{overflow-x:auto;max-height:70vh}
+table.tg{width:auto;min-width:100%;border-collapse:separate;border-spacing:0;font-size:12px}
+table.tg th,table.tg td{border-bottom:1px solid #eef1f4;padding:4px 2px;text-align:center;white-space:nowrap}
+table.tg thead th{position:sticky;top:0;z-index:2;background:#f8fafc;padding:6px 2px;
+  font-size:10px;line-height:1.25;text-transform:none;letter-spacing:0}
+table.tg .tg-nm{position:sticky;left:0;z-index:3;background:#fff;text-align:left;
+  min-width:180px;max-width:220px;padding:6px 10px;box-shadow:2px 0 4px rgba(0,0,0,.05);
+  overflow:hidden;text-overflow:ellipsis}
+table.tg thead .tg-nm{z-index:4;background:#f8fafc}
+table.tg .tg-nm .pos{font-size:10px;color:var(--gray);font-weight:400}
+table.tg .wknd{background:#f1f3f5;color:#9aa5b1}
+table.tg .tg-today{background:#e8f8f0}
+table.tg td.tg-c{width:30px;font-size:14px;cursor:pointer}
+table.tg td.tg-c:hover{outline:2px solid var(--blue,#3498db);outline-offset:-2px}
+table.tg .tg-t{background:#f8fafc;font-weight:700;min-width:34px}
+table.tg tbody tr:hover .tg-nm{background:#f7fbff}
+
 /* TABLE */
 .tbl-wrap{overflow-x:auto}
 table{width:100%;border-collapse:collapse}
@@ -5222,6 +5240,11 @@ function exportTabelXlsx(){
   if(t.mode==='day'){
     aoa=[['Співробітник','Посада','Статус','Час приходу','Примітка']];
     t.rows.forEach(r=>aoa.push([r.name,r.pos,r.status,r.time,r.note]));
+  } else if(t.mode==='days'){
+    aoa=[['Співробітник','Посада'].concat((t.days||[]).map(d=>d.day+' '+d.wd))
+         .concat(['✅','⏰','❌','🏥','🏖️','📝'])];
+    t.rows.forEach(r=>aoa.push([r.name,r.pos].concat(r.cells||[])
+      .concat([r.present,r.late,r.absent,r.sick,r.vacation,r.notset])));
   } else {
     aoa=[['Співробітник','Посада','Присутній','Спізнився','Відсутній','Лікарняний','Відпустка','Не заповнено']];
     t.rows.forEach(r=>aoa.push([r.name,r.pos,r.present,r.late,r.absent,r.sick,r.vacation,r.notset]));
@@ -5241,6 +5264,11 @@ function exportVacSchedXlsx(){
 
 // ── ТАБЕЛЬ ВІДВІДУВАНОСТІ ──
 const TABEL_STATUSES={present:{label:'✅ Присутній',color:'#27ae60'},absent:{label:'❌ Відсутній',color:'#e74c3c'},late:{label:'⏰ Спізнився',color:'#e67e22'},vacation:{label:'🏖️ Відпустка',color:'#3498db'},sick:{label:'🏥 Лікарняний',color:'#9b59b6'}};
+// Позначки для сітки «По днях» — беремо з тих самих статусів, щоб екран, легенда
+// й Excel не розʼїхались. Порожня клітинка = не заповнено.
+const TABEL_GLYPH={present:'✅',late:'⏰',absent:'❌',sick:'🏥',vacation:'🏖️'};
+const TABEL_ORDER=['present','late','absent','sick','vacation','notset'];
+const TABEL_THEAD={present:'✅',late:'⏰',absent:'❌',sick:'🏥',vacation:'🏖️',notset:'📝'};
 
 function tabelKey(loc,date){return `tabel_${loc}_${date}`;}
 function getTabel(loc,date){
@@ -5312,6 +5340,7 @@ function loadTabelFromCloud(loc,from,to,onDone){
 }
 
 let tabelPeriod='day';
+let tabelView='sum';        // 'sum' | 'days' — «Підсумки» чи сітка по днях
 let tabelTypFilter='';
 let tabelYear=new Date().getFullYear();
 let tabelMonth=new Date().getMonth();
@@ -5319,6 +5348,24 @@ let tabelDay=new Date().toISOString().split('T')[0]; // конкретна да�
 
 const MONTH_NAMES=['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
 
+// Локальна ISO-дата. toISOString() бере UTC, тож для Києва (+2/+3) віддає
+// ПОПЕРЕДНІЙ день: new Date(2026,6,1).toISOString() → '2026-06-30'. Через це
+// місячний діапазон з'їжджав на добу — у сітці по днях це видно одразу.
+function tabelIso(d){
+  return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2);
+}
+const TABEL_WD=['нд','пн','вт','ср','чт','пт','сб'];
+// Усі дні діапазону підряд — вихідні теж, вони в сітці сірі.
+function tabelDaysInRange(from,to){
+  const out=[],d=new Date(from+'T00:00:00'),end=new Date(to+'T00:00:00');
+  const today=tabelIso(new Date());
+  while(d<=end){
+    const dw=d.getDay(),iso=tabelIso(d);
+    out.push({iso:iso,day:d.getDate(),wd:TABEL_WD[dw],weekend:(dw===0||dw===6),today:iso===today});
+    d.setDate(d.getDate()+1);
+  }
+  return out;
+}
 function workDaysInRange(from,to){
   let count=0,d=new Date(from);d.setHours(0,0,0,0);
   const end=new Date(to);end.setHours(0,0,0,0);
@@ -5370,16 +5417,16 @@ function renderTabel(){
     const d=new Date(tabelDay),day=d.getDay()||7;
     const f=new Date(d);f.setDate(d.getDate()-day+1);
     const t2=new Date(f);t2.setDate(f.getDate()+4);
-    from=f.toISOString().split('T')[0];to=t2.toISOString().split('T')[0];
+    from=tabelIso(f);to=tabelIso(t2);
     periodLabel=`${fmtDate(from)} — ${fmtDate(to)}`;
   } else if(tabelPeriod==='month'){
-    from=new Date(tabelYear,tabelMonth,1).toISOString().split('T')[0];
-    to=new Date(tabelYear,tabelMonth+1,0).toISOString().split('T')[0];
+    from=tabelIso(new Date(tabelYear,tabelMonth,1));
+    to=tabelIso(new Date(tabelYear,tabelMonth+1,0));
     periodLabel=`${MONTH_NAMES[tabelMonth]} ${tabelYear}`;
   } else if(tabelPeriod==='quarter'){
     const q=Math.floor(tabelMonth/3);
-    from=new Date(tabelYear,q*3,1).toISOString().split('T')[0];
-    to=new Date(tabelYear,q*3+3,0).toISOString().split('T')[0];
+    from=tabelIso(new Date(tabelYear,q*3,1));
+    to=tabelIso(new Date(tabelYear,q*3+3,0));
     periodLabel=`${q+1}-й квартал ${tabelYear}`;
   } else {
     from=`${tabelYear}-01-01`;to=`${tabelYear}-12-31`;
@@ -5414,6 +5461,21 @@ function renderTabel(){
   }
 
   const isDayView=tabelPeriod==='day';
+  // Сітка по днях має сенс лише там, де днів небагато: квартал — це 90 колонок,
+  // рік — 365, і читати таке неможливо. Там лишаються самі підсумки.
+  const canDaysView=(tabelPeriod==='week'||tabelPeriod==='month');
+  const isDaysView=!isDayView&&canDaysView&&tabelView==='days';
+  const tabDays=isDaysView?tabelDaysInRange(from,to):[];
+  const tabByDay={};
+  if(isDaysView) tabDays.forEach(d=>{tabByDay[d.iso]=getTabel(activeLoc,d.iso);});
+  // Підсумок рядка рахуємо ТІЛЬКИ по робочих днях — тими самими правилами, що й
+  // вигляд «Підсумки», інакше перемикач мовчки міняв би цифри.
+  function tabRowCount(e){
+    const c={present:0,late:0,absent:0,sick:0,vacation:0,notset:0};
+    tabDays.forEach(d=>{ if(d.weekend) return;
+      const st=(tabByDay[d.iso][e.key]||{}).status||'notset'; c[st]=(c[st]||0)+1; });
+    return c;
+  }
 
   // Підсумок для одного дня
   let summary='';
@@ -5466,6 +5528,47 @@ function renderTabel(){
         </tbody>
       </table></div>
     </div>`;
+  } else if(isDaysView){
+    // Сітка: співробітники по рядках, числа місяця по колонках.
+    const workDays=workDaysInRange(from,to);
+    const esc1=v=>String(v).replace(/"/g,'&quot;');
+    tableHtml=`<div class="card">
+      <div class="card-hd"><h3>📋 ${activeLoc||'—'} — ${periodLabel} (${workDays} роб.днів)</h3>
+        <span style="font-size:11px;color:var(--gray)">✅ присутній · ⏰ спізнився · ❌ відсутній · 🏥 лікарняний · 🏖️ відпустка · порожньо — не заповнено</span>
+      </div>
+      <div class="tg-wrap"><table class="tg">
+        <thead><tr>
+          <th class="tg-nm">Співробітник</th>
+          ${tabDays.map(d=>`<th class="${d.weekend?'wknd':''}${d.today?' tg-today':''}" title="${d.wd}, ${fmtDate(d.iso)}">${d.day}<br>${d.wd}</th>`).join('')}
+          ${TABEL_ORDER.map(k=>`<th class="tg-t" title="${esc1(k==='notset'?'Не заповнено':TABEL_STATUSES[k].label)}">${TABEL_THEAD[k]}</th>`).join('')}
+        </tr></thead>
+        <tbody>${emps.length===0?`<tr><td class="tg-nm">—</td><td colspan="${tabDays.length+6}" style="text-align:center;padding:30px;color:var(--gray)">Немає співробітників</td></tr>`:
+        emps.map(e=>{
+          const cnt=tabRowCount(e);
+          const cells=tabDays.map(d=>{
+            const row=tabByDay[d.iso][e.key]||{};
+            const st=row.status||'';
+            const tip=fullName(e)+' · '+fmtDate(d.iso)+' · '+(st?TABEL_STATUSES[st].label:'не заповнено')
+              +(row.time?' · '+row.time:'')+(row.note?' · '+row.note:'')
+              +(d.weekend?' · вихідний (у підсумок не входить)':'');
+            return `<td class="tg-c${d.weekend?' wknd':''}${d.today?' tg-today':''}" title="${esc1(tip)}"
+              onclick="tabelPeriod='day';tabelDay='${d.iso}';renderTabel()">${TABEL_GLYPH[st]||''}</td>`;
+          }).join('');
+          return `<tr>
+            <td class="tg-nm" onclick="nav('employee',${e.id})" title="Відкрити картку">
+              <strong class="emp-link">${fullName(e)}</strong><div class="pos">${e.pos||'—'}</div></td>
+            ${cells}
+            <td class="tg-t" style="color:#27ae60">${cnt.present}</td>
+            <td class="tg-t" style="color:#e67e22">${cnt.late}</td>
+            <td class="tg-t" style="color:#e74c3c">${cnt.absent}</td>
+            <td class="tg-t" style="color:#9b59b6">${cnt.sick}</td>
+            <td class="tg-t" style="color:#3498db">${cnt.vacation}</td>
+            <td class="tg-t" style="color:#bdc3c7">${cnt.notset}</td>
+          </tr>`;}).join('')}
+        </tbody>
+      </table></div>
+      <div style="padding:8px 14px;font-size:11px;color:var(--gray)">Клік по клітинці відкриває той день у вигляді «Дата» — там статус можна змінити.</div>
+    </div>`;
   } else {
     // Зведена таблиця за тиждень/місяць/квартал/рік — без колонки "невідомо", без рядка "разом"
     const workDays=workDaysInRange(from,to);
@@ -5503,8 +5606,18 @@ function renderTabel(){
   }
 
   // Збір рядків для XLSX-експорту (день / зведений період).
-  S._tabelExport={mode:isDayView?'day':'period',loc:activeLoc,period:periodLabel,rows:[]};
-  if(isDayView){
+  S._tabelExport={mode:isDayView?'day':(isDaysView?'days':'period'),loc:activeLoc,period:periodLabel,
+    days:tabDays.map(d=>({day:d.day,wd:d.wd,weekend:d.weekend})),rows:[]};
+  if(isDaysView){
+    // Excel вивантажує саме те, що на екрані: ті самі позначки в тих самих колонках.
+    emps.forEach(e=>{
+      const cnt=tabRowCount(e);
+      S._tabelExport.rows.push({name:fullName(e),pos:e.pos||'',
+        cells:tabDays.map(d=>TABEL_GLYPH[(tabByDay[d.iso][e.key]||{}).status||'']||''),
+        present:cnt.present,late:cnt.late,absent:cnt.absent,
+        sick:cnt.sick,vacation:cnt.vacation,notset:cnt.notset});
+    });
+  } else if(isDayView){
     const tblX=getTabel(activeLoc,tabelDay);
     emps.forEach(e=>{
       const row=tblX[e.key]||{};
@@ -5552,6 +5665,10 @@ function renderTabel(){
         ${[['day','Дата'],['week','Тиждень'],['month','Місяць'],['quarter','Квартал'],['year','Рік']].map(([p,l])=>
         `<button class="btn btn-${tabelPeriod===p?'primary':'secondary'} btn-sm" onclick="tabelPeriod='${p}';renderTabel()">${l}</button>`).join('')}
       </div>
+      ${(!isDayView&&canDaysView)?`<div style="display:flex;gap:4px">
+        ${[['sum','Підсумки'],['days','По днях']].map(([v,l])=>
+        `<button class="btn btn-${tabelView===v?'primary':'secondary'} btn-sm" onclick="tabelView='${v}';renderTabel()">${l}</button>`).join('')}
+      </div>`:''}
       ${showDatePicker?`<input type="date" lang="uk" class="flt-sel" value="${tabelDay}" onchange="tabelDay=this.value;renderTabel()" style="min-width:150px">`:''}
       ${showMonthSel?`
         <select class="flt-sel" style="min-width:110px" onchange="tabelMonth=+this.value;renderTabel()">
