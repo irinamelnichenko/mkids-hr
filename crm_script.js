@@ -4890,7 +4890,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.188', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.189', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -15067,35 +15067,50 @@ function repriceAttendanceMarks(body){
   finally { if (lock){ try { lock.releaseLock(); } catch(_){} } }
 }
 
-// ── Разовий кейс: «Пінна вечірка» Пуща 07.08.2026, 600 → 800 ─────────────────
-// Липнева пінна (01.07) НЕ чіпається — фільтр по точній даті її відсікає, і вона
-// видно висить у skippedOtherDates звіту.
-// Порядок: PINNA_PUSHCHA_0708_DRYRUN() → звірити список → PINNA_PUSHCHA_0708_APPLY().
+// ── Разові кейси переоцінки ──────────────────────────────────────────────────
+// Редактор Apps Script запускає лише функції БЕЗ аргументів, тому на кожен кейс —
+// пара DRYRUN/APPLY над спільним раннером. Порядок завжди: DRYRUN → звірити
+// список у Logger → APPLY.
+function _repriceCase(cfg, dryRun){
+  var p = {};
+  for (var k in cfg) p[k] = cfg[k];
+  p.dryRun = dryRun;
+  var res = repriceAttendanceMarks(p);
+
+  Logger.log('═══ %s · %s · %s · %s ═══',
+    cfg.activityName, cfg.loc, cfg.date, dryRun ? 'DRY-RUN' : 'ЗАПИС');
+  if (!res.ok){ Logger.log('❌ %s', res.error); return res; }
+  Logger.log('─── рядок | id | дитина | група | ціна ───');
+  (res.rows || []).forEach(function(h){
+    Logger.log('%s | %s | %s | %s | %s → %s', h.row, h.id, h.child, h.group, h.price, cfg.newPrice);
+  });
+  Logger.log('РАЗОМ: %s відміток · Δ=+%s ₴', res.matched, res.deltaTotal);
+  Logger.log('НЕ чіпали (інші дати цього заняття): %s', JSON.stringify(res.skippedOtherDates));
+  if (dryRun) Logger.log('Це DRY-RUN, у таблицю нічого не записано.');
+  return res;
+}
+
+// «Пінна вечірка» Пуща 07.08.2026, 600 → 800.
+// Липнева пінна (01.07, 19 відміток) НЕ чіпається — фільтр точної дати її відсікає,
+// і вона видно висить у skippedOtherDates звіту.
 var _PINNA_PUSHCHA_0708 = {
   loc:'Пуща', activityName:'Пінна вечірка', date:'2026-08-07',
   oldPrice:600, newPrice:800, expected:11
 };
+function PINNA_PUSHCHA_0708_DRYRUN(){ return _repriceCase(_PINNA_PUSHCHA_0708, true);  }
+function PINNA_PUSHCHA_0708_APPLY(){  return _repriceCase(_PINNA_PUSHCHA_0708, false); }
 
-function PINNA_PUSHCHA_0708_DRYRUN(){ return _pinnaPushcha0708(true);  }
-function PINNA_PUSHCHA_0708_APPLY(){  return _pinnaPushcha0708(false); }
-
-function _pinnaPushcha0708(dryRun){
-  var p = {};
-  for (var k in _PINNA_PUSHCHA_0708) p[k] = _PINNA_PUSHCHA_0708[k];
-  p.dryRun = dryRun;
-  var res = repriceAttendanceMarks(p);
-
-  Logger.log('═══ ПІННА ВЕЧІРКА · Пуща · 07.08.2026 · %s ═══', dryRun ? 'DRY-RUN' : 'ЗАПИС');
-  if (!res.ok){ Logger.log('❌ %s', res.error); return res; }
-  Logger.log('─── рядок | id | дитина | група | ціна ───');
-  (res.rows || []).forEach(function(h){
-    Logger.log('%s | %s | %s | %s | %s → %s', h.row, h.id, h.child, h.group, h.price, p.newPrice);
-  });
-  Logger.log('РАЗОМ: %s відміток · Δ=+%s ₴', res.matched, res.deltaTotal);
-  Logger.log('НЕ чіпали (інші дати цього заняття): %s', JSON.stringify(res.skippedOtherDates));
-  if (dryRun) Logger.log('Це DRY-RUN, у таблицю нічого не записано. Запис — PINNA_PUSHCHA_0708_APPLY()');
-  return res;
-}
+// v7.189: «Театр» Кар'єрна 28.08.2026, 450 → 550 (ціну в каталозі підняли 28.08).
+// Локація пишеться через ПРЯМИЙ апостроф U+0027 — саме так вона лежить у таблиці;
+// типографський ’ (U+2019) дав би 0 збігів.
+// НЕ чіпаються попередні Театри тієї ж локації, теж по 450: 01.06 (44), 12.06 (5),
+// 24.06 (3), 07.07 (48) — усі вони підуть у skippedOtherDates.
+var _TEATR_KARIERNA_2808 = {
+  loc:"Кар'єрна", activityName:'Театр', date:'2026-08-28',
+  oldPrice:450, newPrice:550, expected:31
+};
+function TEATR_KARIERNA_2808_DRYRUN(){ return _repriceCase(_TEATR_KARIERNA_2808, true);  }
+function TEATR_KARIERNA_2808_APPLY(){  return _repriceCase(_TEATR_KARIERNA_2808, false); }
 
 // v7.95: вставити рядок дитини в Payment-файл локації ПІД заголовком її групи (ПІБ у col A,
 // фінансові колонки порожні — заповнить exportAttendanceToPayments). Група не знайдена або
