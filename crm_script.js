@@ -4890,7 +4890,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.187', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.188', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -14985,6 +14985,116 @@ function renameAttendanceChild(body){
             matched: rows.length, distinctOld: Object.keys(distinct), rows: rows.slice(0, 50)};
   } catch(e){ return {ok: false, error: String(e && e.message || e)}; }
   finally { if (lock){ try { lock.releaseLock(); } catch(_){} } }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.188: точкова ПЕРЕОЦІНКА відміток у «Додаткові_Відвідуваність» (кол. H «Ціна»).
+// Ціна вморожується у відмітку в момент проставляння, тому правка ціни в каталозі
+// занять НЕ переписує вже проставлені відмітки — і експорт у Payment далі носить
+// стару суму. Лікується тільки правкою самих відміток, чим і займається ця функція.
+//
+// Матч рядка: локація + назва заняття (нормалізована) + ТОЧНА дата + СТАРА ціна.
+// Дата читається через _parseAttendanceRow (локальна tz таблиці), а НЕ через
+// toISOString: 07.08 о 00:00 у GMT+3 в UTC — це 06.08 21:00, і toISOString дав би
+// «2026-08-06», через що матч мовчки не спрацював би.
+//
+// GUARD `expected`: скільки рядків МАЄ збігтись. Розбіжність → відмова без запису.
+// Це захист від «дата поїхала на добу» і від «зачепили сусідній місяць».
+// Рядки з тією ж назвою заняття, але іншою датою/ціною, у звіт потрапляють
+// окремими лічильниками (skippedOtherDates/skippedOtherPrices) — видно, що НЕ чіпали.
+//
+// dryRun за замовчуванням TRUE. Запускати ВРУЧНУ з редактора Apps Script.
+// ═══════════════════════════════════════════════════════════════════════════
+function repriceAttendanceMarks(body){
+  var lock = null;
+  try {
+    body = body || {};
+    var loc      = String(body.loc || '').trim();
+    var actName  = String(body.activityName || '').trim();
+    var date     = String(body.date || '').trim();          // 'YYYY-MM-DD'
+    var oldPrice = Number(body.oldPrice);
+    var newPrice = Number(body.newPrice);
+    var expected = (body.expected == null) ? null : Number(body.expected);
+    var dryRun   = (body.dryRun !== false);                 // default TRUE
+
+    if (!loc || !actName || !date)          return {ok:false, error:'loc/activityName/date обовʼязкові'};
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date))  return {ok:false, error:'date має бути у форматі YYYY-MM-DD'};
+    if (!(oldPrice >= 0))                   return {ok:false, error:'oldPrice обовʼязковий (число)'};
+    if (!(newPrice > 0))                    return {ok:false, error:'newPrice має бути > 0'};
+    if (oldPrice === newPrice)              return {ok:false, error:'oldPrice дорівнює newPrice — нема що міняти'};
+
+    var sh = _getAttendanceSheet(false);
+    if (!sh) return {ok:false, error:'Лист «' + ATTENDANCE_SHEET_NAME + '» не знайдено'};
+    var data = sh.getDataRange().getValues();
+    var COL_PRICE = 7;                                      // 0-based → кол. H «Ціна»
+    var ak = _journalNormName(actName);
+
+    var hits = [], otherDates = {}, otherPrices = {};
+    for (var r = 1; r < data.length; r++){
+      var rec = _parseAttendanceRow(data[r]);
+      if (rec.loc !== loc) continue;
+      if (_journalNormName(rec.activityName) !== ak) continue;
+      if (rec.date !== date){  otherDates[rec.date]   = (otherDates[rec.date]   || 0) + 1; continue; }
+      if (rec.price !== oldPrice){ otherPrices[rec.price] = (otherPrices[rec.price] || 0) + 1; continue; }
+      hits.push({row:r + 1, id:rec.id, child:rec.child, group:rec.group, price:rec.price});
+    }
+
+    var report = {ok:true, dryRun:dryRun, loc:loc, activityName:actName, date:date,
+                  oldPrice:oldPrice, newPrice:newPrice, expected:expected,
+                  matched:hits.length, rows:hits,
+                  skippedOtherDates:otherDates, skippedOtherPrices:otherPrices,
+                  deltaTotal:(newPrice - oldPrice) * hits.length};
+
+    if (!hits.length){
+      report.ok = false;
+      report.error = 'Жодної відмітки не збіглось — звір дату/стару ціну/назву заняття';
+    } else if (expected !== null && hits.length !== expected){
+      report.ok = false;
+      report.error = 'Збіглось ' + hits.length + ', а очікувалось ' + expected + ' — НЕ пишу';
+    }
+
+    Logger.log('[repriceAttendanceMarks] %s', JSON.stringify(report));
+    if (!report.ok || dryRun) return report;
+
+    lock = LockService.getScriptLock();
+    try { lock.waitLock(30000); } catch(_le){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+    hits.forEach(function(h){ sh.getRange(h.row, COL_PRICE + 1).setValue(newPrice); });
+    report.written = hits.length;
+    Logger.log('[repriceAttendanceMarks] ✅ записано %s рядків, Δ=%s ₴', hits.length, report.deltaTotal);
+    return report;
+
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { if (lock){ try { lock.releaseLock(); } catch(_){} } }
+}
+
+// ── Разовий кейс: «Пінна вечірка» Пуща 07.08.2026, 600 → 800 ─────────────────
+// Липнева пінна (01.07) НЕ чіпається — фільтр по точній даті її відсікає, і вона
+// видно висить у skippedOtherDates звіту.
+// Порядок: PINNA_PUSHCHA_0708_DRYRUN() → звірити список → PINNA_PUSHCHA_0708_APPLY().
+var _PINNA_PUSHCHA_0708 = {
+  loc:'Пуща', activityName:'Пінна вечірка', date:'2026-08-07',
+  oldPrice:600, newPrice:800, expected:11
+};
+
+function PINNA_PUSHCHA_0708_DRYRUN(){ return _pinnaPushcha0708(true);  }
+function PINNA_PUSHCHA_0708_APPLY(){  return _pinnaPushcha0708(false); }
+
+function _pinnaPushcha0708(dryRun){
+  var p = {};
+  for (var k in _PINNA_PUSHCHA_0708) p[k] = _PINNA_PUSHCHA_0708[k];
+  p.dryRun = dryRun;
+  var res = repriceAttendanceMarks(p);
+
+  Logger.log('═══ ПІННА ВЕЧІРКА · Пуща · 07.08.2026 · %s ═══', dryRun ? 'DRY-RUN' : 'ЗАПИС');
+  if (!res.ok){ Logger.log('❌ %s', res.error); return res; }
+  Logger.log('─── рядок | id | дитина | група | ціна ───');
+  (res.rows || []).forEach(function(h){
+    Logger.log('%s | %s | %s | %s | %s → %s', h.row, h.id, h.child, h.group, h.price, p.newPrice);
+  });
+  Logger.log('РАЗОМ: %s відміток · Δ=+%s ₴', res.matched, res.deltaTotal);
+  Logger.log('НЕ чіпали (інші дати цього заняття): %s', JSON.stringify(res.skippedOtherDates));
+  if (dryRun) Logger.log('Це DRY-RUN, у таблицю нічого не записано. Запис — PINNA_PUSHCHA_0708_APPLY()');
+  return res;
 }
 
 // v7.95: вставити рядок дитини в Payment-файл локації ПІД заголовком її групи (ПІБ у col A,
