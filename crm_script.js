@@ -4890,7 +4890,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.185', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.187', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -11578,6 +11578,18 @@ function _loadDopMergesMap(loc, dateFrom, dateTo){
 //   groupsByDate: { 'YYYY-MM-DD': { normGroup: true } }
 //   mergesForAct: { 'YYYY-MM-DD': [ [normGroup,...], ... ] }
 // Merge-набір, що має ≥1 присутню групу того дня, схлопується в 1 сесію.
+// Одиниці, за які нараховується ставка виконавця.
+//   «За заняття» — сесія = унікальна пара (група × дата); обʼєднані групи одного
+//                  дня схлопуються в одну сесію (мапа обʼєднань).
+//   «За захід»   — захід ОДИН на день: вистава, майстер-клас, пінна вечірка.
+//                  Скільки груп на нього привели — байдуже, ставка раз за ДАТУ.
+// До v7.187 обидві моделі рахувались однаково, через сесії, і «За захід»
+// множився на кількість груп: Пуща 07.08 — три групи, 21 000 ₴ замість 7 000 ₴.
+function _dopCountUnits(model, groupsByDate, mergesForAct){
+  if (model === 'За захід') return Object.keys(groupsByDate || {}).length;
+  return _dopCountSessions(groupsByDate, mergesForAct);
+}
+
 function _dopCountSessions(groupsByDate, mergesForAct){
   var total = 0;
   Object.keys(groupsByDate).forEach(function(date){
@@ -15630,12 +15642,10 @@ function exportToSalaryExtras(params){
       if (a.teacherModel === 'За дитину'){
         fact = stat.count * a.teacherRate;
       } else if (a.teacherModel === 'За заняття' || a.teacherModel === 'За захід'){
-        // v7.08: "За заняття"/"За захід" — фіксована сума за кожну СЕСІЮ.
-        // Сесія = унікальна (група × дата); обʼєднані одного дня групи схлопуються
-        // у 1 сесію (мапа mergesMap). Раніше рахувались лише унікальні дати — це
-        // недоплачувало викладачам, що ведуть кілька РІЗНИХ груп одного дня.
-        // "За захід" рахується ідентично (Театр/Майстер-клас/вистави).
-        fact = _dopCountSessions(stat.groupsByDate, mergesMap[a.id] || {}) * a.teacherRate;
+        // v7.08: «За заняття» — фіксована сума за кожну СЕСІЮ (група × дата);
+        // обʼєднані одного дня групи схлопуються у 1 сесію (мапа mergesMap).
+        // v7.187: «За захід» рахується ІНАКШЕ — ставка за кожну унікальну ДАТУ.
+        fact = _dopCountUnits(a.teacherModel, stat.groupsByDate, mergesMap[a.id] || {}) * a.teacherRate;
       }
       // Ключ — нормалізована назва (lowercase + без whitespace), як у Payment.
       factByName[_journalNormName(a.name)] = {fact: fact, name: a.name, hasMarks: stat.count > 0};
@@ -15932,8 +15942,8 @@ function reexportSalaryExtrasOrange(){
   var rows = [], totalRaw = 0, totalMerged = 0, totalZP = 0;
   perLesson.forEach(function(a){
     var gbd    = byActId[a.id] || {};
-    var raw    = _dopCountSessions(gbd, {});                     // до обʼєднань
-    var merged = _dopCountSessions(gbd, mergesMap[a.id] || {});  // після обʼєднань
+    var raw    = _dopCountUnits(a.teacherModel, gbd, {});                     // до обʼєднань
+    var merged = _dopCountUnits(a.teacherModel, gbd, mergesMap[a.id] || {});  // після обʼєднань
     var zp     = merged * a.teacherRate;
     totalRaw += raw; totalMerged += merged; totalZP += zp;
     Logger.log('%s | %s | %s | %s | %s', a.name, raw, merged, a.teacherRate, zp);
