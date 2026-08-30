@@ -4890,7 +4890,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.193', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.194', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -23704,12 +23704,13 @@ var PRED_NORMS_SEED = [
   // шкільні класи: _normalizeGroupType('4 Б клас') не мапиться в жоден
   // PRED_GROUP_TYPES і norm однаково виходить 0. Рядки заводимо явно, щоб
   // матриця норм була повна й видима в інтерфейсі.
+  // v7.194: ЛИШЕ Київ. Німецька/іспанська/фізкультура є у Школі 228; у
+  // львівських локаціях (Кругла, Бігова) цих предметів немає, і рядки там
+  // тільки засмічували б матрицю норм. Якщо додати назад у сід — наступний
+  // MIGRATE_PRED_NORMS_APPLY() заведе їх повторно.
   ['Київ',  'Німецька',    0, 0,  0,  0,  0],
   ['Київ',  'Іспанська',   0, 0,  0,  0,  0],
-  ['Київ',  'Фізкультура', 0, 0,  0,  0,  0],
-  ['Львів', 'Німецька',    0, 0,  0,  0,  0],
-  ['Львів', 'Іспанська',   0, 0,  0,  0,  0],
-  ['Львів', 'Фізкультура', 0, 0,  0,  0,  0]
+  ['Київ',  'Фізкультура', 0, 0,  0,  0,  0]
 ];
 
 // ── Normalizers ──────────────────────────────────────────────────
@@ -23821,6 +23822,90 @@ function migratePredNormsAddMissing(dryRun){
   _bumpPredVer();   // норми змінились → інвалідуємо кеш getPredmetnyky
   Logger.log('✅ додано %s рядків норм', missing.length);
   return {ok:true, added:missing.length, missing:missing};
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.194: точкове ВИДАЛЕННЯ рядків з Predmetnyky_Norms за парами (регіон, предмет).
+// Потрібне, бо migratePredNormsAddMissing() заливає ВЕСЬ PRED_NORMS_SEED, а
+// три шкільні предмети (німецька/іспанська/фізкультура) реально є лише в Києві.
+// Львівські рядки — зайві: у Круглій і Біговій цих предметів немає.
+//
+// ⚠️ Разом із цією функцією з PRED_NORMS_SEED прибрано львівські рядки трьох
+// нових предметів. Без цього повторний запуск MIGRATE_PRED_NORMS_APPLY()
+// завів би їх назад — видалення було б одноразовим і незворотним по суті.
+//
+// Видаляє знизу вгору, щоб не поїхали номери рядків. dryRun за замовч. TRUE.
+// ═══════════════════════════════════════════════════════════════════════════
+function removePredNormRows(body){
+  var lock = null;
+  try {
+    body = body || {};
+    var pairs  = Array.isArray(body.pairs) ? body.pairs : [];
+    var dryRun = (body.dryRun !== false);
+    if (!pairs.length) return {ok:false, error:'pairs порожній'};
+
+    var sh = _getPredNormsSheet(false);
+    var lastRow = sh.getLastRow();
+    if (lastRow < 2) return {ok:false, error:'Лист норм порожній'};
+    var data = sh.getRange(2, 1, lastRow - 1, PRED_NORMS_HEADER.length).getValues();
+
+    var found = [], missing = [];
+    pairs.forEach(function(p){
+      var reg = String(p.region || p[0] || '').trim();
+      var sub = String(p.subject || p[1] || '').trim();
+      var hit = null;
+      for (var i = 0; i < data.length; i++){
+        if (String(data[i][0] || '').trim() !== reg) continue;
+        if (String(data[i][1] || '').trim() !== sub) continue;
+        hit = {row: i + 2, region: reg, subject: sub, values: data[i].slice(2)};
+        break;
+      }
+      if (hit) found.push(hit); else missing.push(reg + ' | ' + sub);
+    });
+
+    var report = {ok:true, dryRun:dryRun, willDelete:found.length,
+                  rows:found, notFound:missing, rowsBefore:lastRow - 1};
+    Logger.log('[removePredNormRows] %s', JSON.stringify(report));
+    if (dryRun) return report;
+
+    lock = LockService.getScriptLock();
+    try { lock.waitLock(30000); } catch(_le){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+    found.sort(function(a, b){ return b.row - a.row; })
+         .forEach(function(h){ sh.deleteRow(h.row); });
+    _bumpPredVer();
+    report.deleted   = found.length;
+    report.rowsAfter = sh.getLastRow() - 1;
+    Logger.log('[removePredNormRows] ✅ видалено %s, лишилось %s', report.deleted, report.rowsAfter);
+    return report;
+
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { if (lock){ try { lock.releaseLock(); } catch(_){} } }
+}
+
+// Разовий кейс: прибрати львівські рядки трьох шкільних предметів.
+var _LVIV_SCHOOL_SUBJ_ROWS = [
+  {region:'Львів', subject:'Німецька'},
+  {region:'Львів', subject:'Іспанська'},
+  {region:'Львів', subject:'Фізкультура'}
+];
+
+function REMOVE_LVIV_SCHOOL_NORMS_DRYRUN(){ return _removeLvivSchoolNorms(true);  }
+function REMOVE_LVIV_SCHOOL_NORMS_APPLY(){  return _removeLvivSchoolNorms(false); }
+
+function _removeLvivSchoolNorms(dryRun){
+  var res = removePredNormRows({pairs:_LVIV_SCHOOL_SUBJ_ROWS, dryRun:dryRun});
+  Logger.log('═══ НОРМИ · прибирання львівських шкільних предметів · %s ═══',
+    dryRun ? 'DRY-RUN' : 'ЗАПИС');
+  if (!res.ok){ Logger.log('❌ %s', res.error); return res; }
+  Logger.log('рядків у листі до: %s', res.rowsBefore);
+  (res.rows || []).forEach(function(h){
+    Logger.log('   рядок %s | %s | %s | %s', h.row, h.region, h.subject, h.values.join(' '));
+  });
+  if ((res.notFound || []).length) Logger.log('НЕ ЗНАЙДЕНО: %s', res.notFound.join(', '));
+  Logger.log('ВИДАЛИТИ: %s', res.willDelete);
+  if (dryRun) Logger.log('Це DRY-RUN, нічого не видалено. Запис — REMOVE_LVIV_SCHOOL_NORMS_APPLY()');
+  else Logger.log('Лишилось рядків: %s', res.rowsAfter);
+  return res;
 }
 
 function MIGRATE_PRED_NORMS_DRYRUN(){ return migratePredNormsAddMissing(true);  }
