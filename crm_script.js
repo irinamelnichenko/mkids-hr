@@ -4890,7 +4890,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.195', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.196', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -9572,12 +9572,15 @@ function renameSalaryRow(body){
       if (!rowNum || !expect || !to){ errors.push('row/expectName/newName обовʼязкові: ' + JSON.stringify(p)); return; }
       if (rowNum < 1 || rowNum > lastRow){ errors.push('рядок ' + rowNum + ' поза межами'); return; }
       var cur = String(names[rowNum - 1][0] == null ? '' : names[rowNum - 1][0]).trim();
-      if (_journalNormName(cur) !== _journalNormName(expect)){
-        errors.push('рядок ' + rowNum + ': у клітинці «' + cur + '», очікувалось «' + expect + '» — НЕ чіпаю');
-        return;
-      }
+      // ІДЕМПОТЕНТНІСТЬ: спершу перевіряємо, чи не стоїть уже ЦІЛЬОВА назва.
+      // Інакше повторний запуск (або ручне перейменування до нас) впирався б
+      // у guard і звітував помилкою про вже виконану роботу. v7.196.
       if (_journalNormName(cur) === _journalNormName(to)){
         plan.push({row:rowNum, from:cur, to:to, skip:'уже так називається'});
+        return;
+      }
+      if (_journalNormName(cur) !== _journalNormName(expect)){
+        errors.push('рядок ' + rowNum + ': у клітинці «' + cur + '», очікувалось «' + expect + '» — НЕ чіпаю');
         return;
       }
       plan.push({row:rowNum, from:cur, to:to});
@@ -9607,11 +9610,24 @@ function renameSalaryRow(body){
 
 // Разовий кейс: два рядки Школи Осокорки під формат «<предмет> <ставка>».
 // Суми і бюджети не чіпаються — пишеться виключно колонка A.
+// v7.196: усі шість рядків «за урок» під формат «<предмет> <ставка>», де
+// <предмет> — ПОВНА назва позиції каталогу. Саме це ім'я будує матчер
+// (_findPredmetnySalaryRow) і шукає його з початку рядка.
+// Рядки з фіксованим окладом (41, 42, 45, 46, 47, 48) сюди НЕ входять:
+// вони не мають позицій у каталозі предметників, експорт їх не торкається.
 var _SHOSOK_SALARY_RENAMES = [
+  {row:40, expectName:'Архітектура 450грн урок',
+           newName:'Архітектура 450'},
+  {row:43, expectName:'Фітнес 450/заняття Олександр Султанов',
+           newName:'Фітнес Олександр Султанов 500'},
   {row:44, expectName:'Хореография 450/заняття Олександр Султанов',
-           newName:'Хореографія 500 Олександр Султанов'},
+           newName:'Хореографія Олександр Султанов 500'},
   {row:49, expectName:'психолог 700 Ірина',
-           newName:'Психолог Ірина 700'}
+           newName:'Психолог Ірина 700'},
+  {row:50, expectName:'психолог  Маруфенко 450грн',
+           newName:'Психолог Маруфенко 450'},
+  {row:51, expectName:'Speaking club  1000 1 год   Марко',
+           newName:'Speaking club Марко 1000'}
 ];
 
 function RENAME_SHOSOK_SALARY_DRYRUN(){ return _renameShosokSalary(true);  }
