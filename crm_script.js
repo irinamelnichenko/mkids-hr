@@ -4890,7 +4890,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.192', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.193', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -20942,13 +20942,17 @@ function seedLocationPredmetnyky(body){
 // exportPredmetnykyToSalary не візьме ЖОДНОГО рядка (фільтр `a.rate > 0`).
 // Порядок: SEED_SH228_PRED_DRYRUN() → звірити звіт → SEED_SH228_PRED_APPLY().
 var _SH228_PREDMETNYKY = [
-  {subject:'Кримська Юлія англійська',     rate:0, teacher:'Кримська Юлія'},
-  {subject:'Пахалюк Ксенія англійська',    rate:0, teacher:'Пахалюк Ксенія'},
-  {subject:'Маришина Юлія англійська',     rate:0, teacher:'Маришина Юлія'},
-  {subject:'Пахалюк Ксенія німецька мова', rate:0, teacher:'Пахалюк Ксенія'},
-  {subject:'Хитрова Аня психолог',         rate:0, teacher:'Хитрова Аня'},
+  // v7.193: колонка «Викладач» лишається ПОРОЖНЬОЮ — у постановці були лише
+  // назва і ставка. Похідні імена («Кримська Юлія» з «Кримська Юлія
+  // англійська») створили б третій варіант написання поряд із HR
+  // («Марішина Юлія», «Хитрова Анна») і Salary («Маришина», «Хитрова Аня»).
+  {subject:'Кримська Юлія англійська',     rate:0, teacher:''},
+  {subject:'Пахалюк Ксенія англійська',    rate:0, teacher:''},
+  {subject:'Маришина Юлія англійська',     rate:0, teacher:''},
+  {subject:'Пахалюк Ксенія німецька мова', rate:0, teacher:''},
+  {subject:'Хитрова Аня психолог',         rate:0, teacher:''},
   {subject:'Іспанська мова',               rate:0, teacher:''},
-  {subject:'Лакіза Ірина фізкультура',     rate:0, teacher:'Лакіза Ірина'}
+  {subject:'Лакіза Ірина фізкультура',     rate:0, teacher:''}
 ];
 
 function SEED_SH228_PRED_DRYRUN(){ return _seedSh228Pred(true);  }
