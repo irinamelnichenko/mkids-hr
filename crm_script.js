@@ -4890,7 +4890,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.198', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.199', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -20782,7 +20782,9 @@ function testDiagGroupFormats(){
 // ═══════════════════════════════════════════════════════════════════════════
 var PREDMETNY_CATALOG_SHEET  = 'Предметники_Каталог';
 var PREDMETNY_ATT_SHEET      = 'Предметники_Відвідуваність';
-var PREDMETNY_CATALOG_HEADER = ['id','Локація','Предмет','Ставка_за_заняття','Викладач','Активне'];
+// v7.199 (Б.2): + EmpKey — прив'язка позиції каталогу до конкретного виконавця.
+// Колонка G дописується в КІНЕЦЬ, наявні шість не зсуваються.
+var PREDMETNY_CATALOG_HEADER = ['id','Локація','Предмет','Ставка_за_заняття','Викладач','Активне','EmpKey'];
 var PREDMETNY_ATT_HEADER     = ['id','Дата','Локація','Група','Дитина','id_предмета','Назва_предмета','Ставка','Відмітив','Час_відмітки'];
 
 function _getPredmetnyCatalogSheet(createIfMissing){
@@ -20817,7 +20819,8 @@ function _parsePredmetnyCatRow(row){
     rate:    Number(row[3]) || 0,
     teacher: String(row[4] || '').trim(),
     active:  row[5] === true ||
-             /^(true|так|y|1|active|активне|✅)$/i.test(String(row[5] || '').trim())
+             /^(true|так|y|1|active|активне|✅)$/i.test(String(row[5] || '').trim()),
+    empKey:  String(row[6] || '').trim()      // v7.199 (Б.2)
   };
 }
 
@@ -20959,7 +20962,8 @@ function addPredmetny(data){
       String(data.subject || '').trim(),
       Number(data.rate) || 0,
       String(data.teacher || '').trim(),
-      data.active !== false
+      data.active !== false,
+      String(data.empKey || '').trim()      // v7.199 (Б.2)
     ];
     if (!row[1]) return {ok: false, error: 'Поле "Локація" обовʼязкове'};
     if (!row[2]) return {ok: false, error: 'Поле "Предмет" обовʼязкове'};
@@ -21128,6 +21132,120 @@ function _seedSh228Pred(dryRun){
   return res;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.199 (Б.2): прив'язка позицій «Предметники_Каталог» до виконавців (EmpKey).
+// Матч рядка — за парою локація+предмет (точна назва позиції). Guard: перед
+// записом звіряємо, що такий empKey реально існує серед викладачів локації
+// (_loadPredTeachers) — інакше в каталог осіла б прив'язка в нікуди.
+// Порожній empKey у мапі = свідомо лишити поле порожнім, це не помилка.
+// dryRun за замовчуванням TRUE.
+//
+// ⚠️ empKey НЕ є стабільним ідентифікатором: він будується як
+// e5_<прізвище>_<імʼя>_<дата виходу|прийому>, тож зміна будь-якого з трьох
+// полів у HR його змінює. Прив'язка це переживе лише доти, доки HR не правлять.
+// Довгострокове рішення — окрема незмінна колонка-UID у HR (див. звіт).
+// ═══════════════════════════════════════════════════════════════════════════
+function bindPredmetnyEmpKeys(body){
+  var lock = null;
+  try {
+    body = body || {};
+    var loc    = String(body.loc || '').trim();
+    var map    = body.map || {};          // {назва позиції: empKey}
+    var dryRun = (body.dryRun !== false);
+    if (!loc) return {ok:false, error:'loc обовʼязковий'};
+    if (!Object.keys(map).length) return {ok:false, error:'map порожній'};
+
+    var sh = _getPredmetnyCatalogSheet(false);
+    if (!sh) return {ok:false, error:'Лист «Предметники_Каталог» не знайдено'};
+    var lastRow = sh.getLastRow();
+    if (lastRow < 2) return {ok:false, error:'Каталог порожній'};
+    var data = sh.getRange(2, 1, lastRow - 1, PREDMETNY_CATALOG_HEADER.length).getValues();
+
+    // Заголовок колонки G міг ще не існувати (лист створено до v7.199).
+    var hdr = sh.getRange(1, 1, 1, Math.max(sh.getLastColumn(), PREDMETNY_CATALOG_HEADER.length)).getValues()[0];
+    var needHeader = String(hdr[6] || '').trim() !== 'EmpKey';
+
+    var known = {};
+    _loadPredTeachers(loc).forEach(function(t){ known[t.empKey] = t.name; });
+
+    var plan = [], errors = [];
+    Object.keys(map).forEach(function(subj){
+      var want = String(map[subj] || '').trim();
+      var hit = null;
+      for (var i = 0; i < data.length; i++){
+        if (String(data[i][1] || '').trim() !== loc) continue;
+        if (_journalNormName(String(data[i][2] || '')) !== _journalNormName(subj)) continue;
+        hit = {row: i + 2, id: data[i][0], subject: String(data[i][2] || '').trim(),
+               current: String(data[i][6] || '').trim()};
+        break;
+      }
+      if (!hit){ errors.push('позицію «' + subj + '» не знайдено в каталозі ' + loc); return; }
+      if (want && !known.hasOwnProperty(want)){
+        errors.push('empKey «' + want + '» немає серед викладачів ' + loc + ' — НЕ пишу');
+        return;
+      }
+      if (hit.current === want){ plan.push({row:hit.row, subject:hit.subject, empKey:want, skip:'уже так'}); return; }
+      plan.push({row:hit.row, id:hit.id, subject:hit.subject,
+                 from:hit.current, empKey:want, teacher:(want ? known[want] : '(порожньо)')});
+    });
+
+    var todo = plan.filter(function(x){ return !x.skip; });
+    var report = {ok: errors.length === 0, dryRun:dryRun, loc:loc,
+                  willBind: todo.length, plan:plan, errors:errors,
+                  headerAction: needHeader ? 'створити «EmpKey» у кол. G' : 'кол. G уже є'};
+    Logger.log('[bindPredmetnyEmpKeys] %s', JSON.stringify(report));
+    if (!report.ok || dryRun) return report;
+
+    lock = LockService.getScriptLock();
+    try { lock.waitLock(30000); } catch(_le){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+    if (needHeader) sh.getRange(1, 7).setValue('EmpKey');
+    todo.forEach(function(x){
+      var c = sh.getRange(x.row, 7);
+      c.setNumberFormat('@');
+      c.setValue(x.empKey);
+    });
+    _bumpPredVer();
+    report.bound = todo.length;
+    Logger.log('[bindPredmetnyEmpKeys] ✅ прив\'язано %s', report.bound);
+    return report;
+
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { if (lock){ try { lock.releaseLock(); } catch(_){} } }
+}
+
+// Разовий кейс: Школа 228. Іспанська мова і Лакіза Ірина фізкультура свідомо
+// лишаються без прив'язки — виконавці ще не визначені.
+var _SH228_EMPKEY_MAP = {
+  'Кримська Юлія англійська':     'e5_Кримська_Юлія_09.02.2026',
+  'Пахалюк Ксенія англійська':    'e5_Пахалюк_Ксенія_',
+  'Маришина Юлія англійська':     'e5_Марішина_Юлія_13.01.2025',
+  'Пахалюк Ксенія німецька мова': 'e5_Пахалюк_Ксенія_',
+  'Хитрова Аня психолог':         'e5_Хитрова_Анна_'
+};
+
+function BIND_SH228_EMPKEYS_DRYRUN(){ return _bindSh228(true);  }
+function BIND_SH228_EMPKEYS_APPLY(){  return _bindSh228(false); }
+
+function _bindSh228(dryRun){
+  var res = bindPredmetnyEmpKeys({loc:'Школа 228', map:_SH228_EMPKEY_MAP, dryRun:dryRun});
+  Logger.log('═══ Б.2 · Школа 228 · прив\'язка EmpKey · %s ═══', dryRun ? 'DRY-RUN' : 'ЗАПИС');
+  if (!res.ok){
+    Logger.log('❌ не виконую:');
+    (res.errors || []).forEach(function(e){ Logger.log('   %s', e); });
+    if (res.error) Logger.log('   %s', res.error);
+    return res;
+  }
+  Logger.log('колонка: %s', res.headerAction);
+  (res.plan || []).forEach(function(x){
+    if (x.skip) Logger.log('   рядок %s  %s — %s', x.row, x.subject, x.skip);
+    else Logger.log('   рядок %s  %-30s → %s  (%s)', x.row, x.subject, x.empKey, x.teacher);
+  });
+  Logger.log('ПРИВʼЯЗАТИ: %s', res.willBind);
+  Logger.log('БЕЗ ПРИВʼЯЗКИ (свідомо): Іспанська мова, Лакіза Ірина фізкультура');
+  if (dryRun) Logger.log('Це DRY-RUN, у таблицю нічого не записано. Запис — BIND_SH228_EMPKEYS_APPLY()');
+  return res;
+}
+
 function updatePredmetny(id, data){
   try {
     var nid = Number(id);
@@ -21142,6 +21260,7 @@ function updatePredmetny(id, data){
       if ('rate'    in data) sh.getRange(r1, 4).setValue(Number(data.rate) || 0);
       if ('teacher' in data) sh.getRange(r1, 5).setValue(String(data.teacher || '').trim());
       if ('active'  in data) sh.getRange(r1, 6).setValue(data.active !== false);
+      if ('empKey'  in data) sh.getRange(r1, 7).setValue(String(data.empKey || '').trim());   // v7.199
       return {ok: true};
     }
     return {ok: false, error: 'Предмет не знайдено'};
@@ -24160,7 +24279,8 @@ function _loadPredCatalog(locFilter){
       subject_norm: _normalizeSubject(rec.subject),   // може бути null
       rate:         rec.rate || null,
       teacher:      rec.teacher,
-      active:       rec.active
+      active:       rec.active,
+      empKey:       rec.empKey                        // v7.199 (Б.2)
     });
   }
   return out;
