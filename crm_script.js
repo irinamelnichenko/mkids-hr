@@ -4890,7 +4890,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.190', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.191', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -20828,6 +20828,160 @@ function addPredmetny(data){
   } catch(e){
     return {ok: false, error: String(e && e.message || e)};
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.191: НАПОВНЕННЯ «Предметники_Каталог» пакетом позицій для локації.
+// Разова утиліта під запуск ВРУЧНУ з редактора Apps Script.
+//
+// Дублі ловимо за ключем локація+предмет (idempotent). Додатково dry-run
+// ПРОГАНЯЄ КОЖНУ позицію через реальні перевірки експорту й каже, чи вона
+// взагалі доїде до Salary:
+//   1) _normalizeSubject(subject) — якщо null, рядок НІКОЛИ не потрапить
+//      в exportPredmetnykyToSalary (фільтр `a.subject_norm`);
+//   2) rate > 0 — нульова ставка теж відсікається тим самим фільтром;
+//   3) _findPredmetnySalaryRow(subject, rate) — який рядок Salary зматчиться
+//      і за яким пріоритетом (P1..P6), чи буде створено новий (P7).
+// Тобто каталог заводиться, і одразу видно, що з нього поїде, а що ні.
+// dryRun за замовчуванням TRUE.
+// ═══════════════════════════════════════════════════════════════════════════
+function seedLocationPredmetnyky(body){
+  var lock = null;
+  try {
+    body = body || {};
+    var loc    = String(body.loc || '').trim();
+    var items  = Array.isArray(body.items) ? body.items : [];
+    var dryRun = (body.dryRun !== false);
+    if (!loc) return {ok:false, error:'loc обовʼязковий'};
+    if (!items.length) return {ok:false, error:'items порожній'};
+
+    var sh = _getPredmetnyCatalogSheet(true);
+    var data = sh.getDataRange().getValues();
+
+    var byName = {};
+    for (var r = 1; r < data.length; r++){
+      if (String(data[r][1] || '').trim() !== loc) continue;
+      byName[_journalNormName(String(data[r][2] || ''))] = {row:r + 1, id:data[r][0]};
+    }
+
+    // рядки Salary локації — для передбачення матчу
+    var salaryRows = [], salErr = null;
+    try {
+      var op = _salaryOpenSheet(loc);
+      if (op && op.ok){
+        var lastRow = Math.max(op.sheet.getLastRow(), 80);
+        var names = op.sheet.getRange(1, 1, lastRow, 1).getValues();
+        for (var k = 3; k < names.length; k++){
+          var raw = String(names[k][0] == null ? '' : names[k][0]).trim();
+          if (!raw) continue;
+          salaryRows.push({row:k + 1, raw:raw, norm:_journalNormName(raw), soft:_softNorm(raw)});
+        }
+      } else salErr = (op && op.error) || 'Salary не відкрився';
+    } catch(_se){ salErr = String(_se && _se.message || _se); }
+
+    var nextId = _nextPredmetnyRowId(sh);
+    var toAdd = [], skipped = [], blocked = [], buckets = {};
+
+    items.forEach(function(it){
+      var subject = String(it.subject || '').trim();
+      if (!subject){ skipped.push({subject:'(порожньо)', why:'subject обовʼязковий'}); return; }
+      var nk = _journalNormName(subject);
+      if (byName.hasOwnProperty(nk)){
+        skipped.push({subject:subject, why:'вже є в локації (рядок ' + byName[nk].row + ')'});
+        return;
+      }
+      var rate = Number(it.rate) || 0;
+      var snorm = _normalizeSubject(subject);
+      var found = salaryRows.length ? _findPredmetnySalaryRow(salaryRows, subject, rate) : null;
+
+      var why = [];
+      if (!snorm) why.push('subject_norm=null — предмет поза PRED_SUBJECTS, експорт його НЕ бачить');
+      if (!(rate > 0)) why.push('ставка 0 — фільтр `rate > 0` відсікає');
+      if (why.length) blocked.push({subject:subject, why:why});
+      if (snorm) (buckets[snorm] = buckets[snorm] || []).push(subject);
+
+      byName[nk] = {row:0, id:nextId};
+      toAdd.push({
+        id: nextId++, loc: loc, subject: subject, rate: rate,
+        teacher: String(it.teacher || '').trim(),
+        active: it.active !== false,
+        subjectNorm: snorm,
+        salaryRow: found ? found.row : 0,
+        salaryName: found ? found.matchedAs : '',
+        salaryPriority: found ? found.priority : 'P7'
+      });
+    });
+
+    var shared = [];
+    Object.keys(buckets).forEach(function(s){
+      if (buckets[s].length > 1) shared.push({subjectNorm:s, entries:buckets[s]});
+    });
+
+    var report = {ok:true, dryRun:dryRun, loc:loc, willAdd:toAdd.length,
+                  add:toAdd, skipped:skipped, blocked:blocked,
+                  sharedLessonBuckets:shared, salaryRowsRead:salaryRows.length,
+                  salaryError:salErr};
+    Logger.log('[seedLocationPredmetnyky] %s', JSON.stringify(report).slice(0, 1500));
+    if (dryRun) return report;
+
+    lock = LockService.getScriptLock();
+    try { lock.waitLock(30000); } catch(_le){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+    toAdd.forEach(function(a){
+      sh.appendRow([a.id, a.loc, a.subject, a.rate, a.teacher, a.active]);
+    });
+    report.added = toAdd.length;
+    Logger.log('[seedLocationPredmetnyky] ✅ додано %s', report.added);
+    return report;
+
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { if (lock){ try { lock.releaseLock(); } catch(_){} } }
+}
+
+// ── Разовий кейс: каталог предметників Школи 228 ─────────────────────────────
+// Ставки 0 — за домовленістю проставляються у вересні по факту. Поки вони 0,
+// exportPredmetnykyToSalary не візьме ЖОДНОГО рядка (фільтр `a.rate > 0`).
+// Порядок: SEED_SH228_PRED_DRYRUN() → звірити звіт → SEED_SH228_PRED_APPLY().
+var _SH228_PREDMETNYKY = [
+  {subject:'Кримська Юлія англійська',     rate:0, teacher:'Кримська Юлія'},
+  {subject:'Пахалюк Ксенія англійська',    rate:0, teacher:'Пахалюк Ксенія'},
+  {subject:'Маришина Юлія англійська',     rate:0, teacher:'Маришина Юлія'},
+  {subject:'Пахалюк Ксенія німецька мова', rate:0, teacher:'Пахалюк Ксенія'},
+  {subject:'Хитрова Аня психолог',         rate:0, teacher:'Хитрова Аня'},
+  {subject:'Іспанська мова',               rate:0, teacher:''},
+  {subject:'Лакіза Ірина фізкультура',     rate:0, teacher:'Лакіза Ірина'}
+];
+
+function SEED_SH228_PRED_DRYRUN(){ return _seedSh228Pred(true);  }
+function SEED_SH228_PRED_APPLY(){  return _seedSh228Pred(false); }
+
+function _seedSh228Pred(dryRun){
+  var res = seedLocationPredmetnyky({loc:'Школа 228', items:_SH228_PREDMETNYKY, dryRun:dryRun});
+  Logger.log('═══ КАТАЛОГ ПРЕДМЕТНИКІВ · Школа 228 · %s ═══', dryRun ? 'DRY-RUN' : 'ЗАПИС');
+  if (!res.ok){ Logger.log('❌ %s', res.error); return res; }
+  if (res.salaryError) Logger.log('⚠️ Salary не прочитався: %s', res.salaryError);
+  Logger.log('─── предмет | ставка | subject_norm | рядок Salary | пріоритет ───');
+  (res.add || []).forEach(function(a){
+    Logger.log('%s | %s | %s | %s | %s', a.subject, a.rate, a.subjectNorm || 'null',
+      a.salaryRow ? (a.salaryRow + ' «' + a.salaryName + '»') : 'НЕ ЗНАЙДЕНО (створить новий)',
+      a.salaryPriority);
+  });
+  Logger.log('ДОДАТИ: %s (прочитано рядків Salary: %s)', res.willAdd, res.salaryRowsRead);
+  if ((res.skipped || []).length){
+    Logger.log('ПРОПУЩЕНО (вже є):');
+    res.skipped.forEach(function(s){ Logger.log('   %s — %s', s.subject, s.why); });
+  }
+  if ((res.blocked || []).length){
+    Logger.log('⛔ НЕ ДОЇДЕ ДО SALARY (каталог заведеться, але експорт пропустить):');
+    res.blocked.forEach(function(b){ Logger.log('   %s → %s', b.subject, b.why.join(' · ')); });
+  }
+  if ((res.sharedLessonBuckets || []).length){
+    Logger.log('⚠️ СПІЛЬНИЙ ЛІЧИЛЬНИК УРОКІВ (уроки рахуються по subject_norm, не по людині):');
+    res.sharedLessonBuckets.forEach(function(b){
+      Logger.log('   %s ← %s', b.subjectNorm, b.entries.join(' | '));
+    });
+  }
+  if (dryRun) Logger.log('Це DRY-RUN, у таблицю нічого не записано. Запис — SEED_SH228_PRED_APPLY()');
+  return res;
 }
 
 function updatePredmetny(id, data){
