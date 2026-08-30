@@ -4890,7 +4890,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.189', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.190', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -11032,6 +11032,193 @@ function updateActivity(id, data){
   } catch(e){
     return {ok: false, error: String(e && e.message || e)};
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.190: НАПОВНЕННЯ КАТАЛОГУ «Додаткові_Каталог» пакетом позицій + прибирання
+// рядків за id. Разова утиліта під запуск ВРУЧНУ з редактора Apps Script.
+//
+// ⚠️ ЧОМУ НЕ ЧЕРЕЗ addActivity(): його dedup-guard викликає _attDupKey(loc,
+// teacherModel, teacherRate) — функцію, писану для ВІДМІТОК (date|child|actId).
+// Через це ключ дубля виходить «локація|модель|ставка», а НАЗВА заняття у нього
+// не входить взагалі. Два різні гуртки локації з однаковою моделлю і ставкою
+// вважаються одним, і другий тихо відкидається з {ok:true, dup:true} — тобто
+// викликач бачить УСПІХ. На пакеті Школи 228 це з'їдало б 7 позицій із 16
+// (Робототехніка і Друк 3D = дубль 3D; Логопед/Кінусайга/Пірографія = дубль
+// Вокалу; Модельне агентство = дубль Hand Made; Шахи = дубль ART).
+// Тому пишемо рядки напряму, а дублі ловимо за ПРАВИЛЬНИМ ключем: локація+назва.
+//
+// GUARD: якщо в локації вже є позиція з такою назвою — вона пропускається
+// (idempotent), а не дублюється. dryRun за замовчуванням TRUE.
+// ═══════════════════════════════════════════════════════════════════════════
+var ACT_MIN_GROUP_HEADER = 'Мін_група';     // кол. J — довідкове поле (див. нижче)
+
+function seedLocationActivities(body){
+  var lock = null;
+  try {
+    body = body || {};
+    var loc     = String(body.loc || '').trim();
+    var items   = Array.isArray(body.items) ? body.items : [];
+    var dropIds = Array.isArray(body.dropIds) ? body.dropIds.map(Number) : [];
+    var dryRun  = (body.dryRun !== false);                  // default TRUE
+    if (!loc) return {ok:false, error:'loc обовʼязковий'};
+    if (!items.length && !dropIds.length) return {ok:false, error:'нема ні items, ні dropIds'};
+
+    var sh = _getActivitiesSheet(true);
+    var data = sh.getDataRange().getValues();
+    var hdr  = (data[0] || []).map(function(x){ return String(x || '').trim(); });
+
+    // кол. J «Мін_група»: у штатній схемі ACTIVITIES_HEADER її НЕМАЄ (9 колонок).
+    // Мінімальний розмір групи ніде в коді не читається — тримаємо як довідку
+    // поруч із позицією, щоб цифра з домовленостей не загубилась.
+    var minCol = hdr.indexOf(ACT_MIN_GROUP_HEADER) + 1;     // 1-based, 0 = немає
+    var needHeader = (minCol === 0);
+
+    // існуючі назви локації (правильний ключ дубля)
+    var byName = {};
+    for (var r = 1; r < data.length; r++){
+      if (String(data[r][1] || '').trim() !== loc) continue;
+      byName[_journalNormName(String(data[r][2] || ''))] = {row:r + 1, id:data[r][0], name:String(data[r][2] || '')};
+    }
+
+    // ── рядки на видалення (за id, точний матч) ──
+    var toDrop = [];
+    dropIds.forEach(function(did){
+      for (var r = 1; r < data.length; r++){
+        if (Number(data[r][0]) === did){
+          toDrop.push({row:r + 1, id:did, name:String(data[r][2] || ''), loc:String(data[r][1] || '')});
+          return;
+        }
+      }
+      toDrop.push({row:0, id:did, name:'(не знайдено)', loc:''});
+    });
+
+    // ── позиції на додавання ──
+    var nextId = _nextActivityId(sh);
+    var toAdd = [], skipped = [], collisions = {};
+    items.forEach(function(it){
+      var name = String(it.name || '').trim();
+      if (!name){ skipped.push({name:'(порожня назва)', why:'name обовʼязковий'}); return; }
+      var nk = _journalNormName(name);
+      if (byName.hasOwnProperty(nk)){
+        skipped.push({name:name, why:'вже є в локації (рядок ' + byName[nk].row + ', id ' + byName[nk].id + ')'});
+        return;
+      }
+      // діагностика: що САМЕ відкинув би addActivity на цьому ж наборі
+      var ck = String(it.teacherModel || '') + '|' + Number(it.teacherRate || 0);
+      (collisions[ck] = collisions[ck] || []).push(name);
+      byName[nk] = {row:0, id:nextId, name:name};
+      toAdd.push({
+        id: nextId++, loc: loc, name: name,
+        clientPrice: Number(it.clientPrice) || 0,
+        teacherModel: String(it.teacherModel || '').trim(),
+        teacherRate: Number(it.teacherRate) || 0,
+        teacher: String(it.teacher || '').trim(),
+        active: it.active !== false,
+        payType: String(it.payType || '').trim(),
+        minGroup: Number(it.minGroup) || 0
+      });
+    });
+
+    var wouldBreakInApi = [];
+    Object.keys(collisions).forEach(function(k){
+      if (collisions[k].length > 1) wouldBreakInApi.push({key:k, names:collisions[k]});
+    });
+
+    var report = {
+      ok:true, dryRun:dryRun, loc:loc,
+      willAdd: toAdd.length, willDrop: toDrop.filter(function(d){ return d.row > 0; }).length,
+      add: toAdd, drop: toDrop, skipped: skipped,
+      minGroupColumn: needHeader ? ('буде створено «' + ACT_MIN_GROUP_HEADER + '» у кол. ' + (hdr.length + 1)) : ('кол. ' + minCol),
+      addActivityWouldDrop: wouldBreakInApi
+    };
+
+    Logger.log('[seedLocationActivities] %s', JSON.stringify(report).slice(0, 1500));
+    if (dryRun) return report;
+
+    lock = LockService.getScriptLock();
+    try { lock.waitLock(30000); } catch(_le){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+
+    if (needHeader){
+      minCol = hdr.length + 1;
+      sh.getRange(1, minCol).setValue(ACT_MIN_GROUP_HEADER);
+    }
+    // 1) додаємо
+    toAdd.forEach(function(a){
+      sh.appendRow([a.id, a.loc, a.name, a.clientPrice, a.teacherModel,
+                    a.teacherRate, a.teacher, a.active, a.payType]);
+      sh.getRange(sh.getLastRow(), minCol).setValue(a.minGroup);
+    });
+    // 2) видаляємо знизу вгору, щоб не поїхали номери рядків
+    toDrop.filter(function(d){ return d.row > 0; })
+          .sort(function(x, y){ return y.row - x.row; })
+          .forEach(function(d){ sh.deleteRow(d.row); });
+
+    report.added   = toAdd.length;
+    report.dropped = toDrop.filter(function(d){ return d.row > 0; }).length;
+    Logger.log('[seedLocationActivities] ✅ додано %s, видалено %s', report.added, report.dropped);
+    return report;
+
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { if (lock){ try { lock.releaseLock(); } catch(_){} } }
+}
+
+// ── Разовий кейс: каталог додаткових Школи 228 (діють з вересня 2026) ────────
+// «тип оплати» з домовленостей: дитина → «За дитину» (ставка × к-сть відмічених),
+//                               група  → «За заняття» (фікс за сесію, незалежно
+//                                        від к-сті дітей).
+// minGroup — мінімальний розмір групи. У схемі каталогу такого поля НЕМАЄ і
+// жоден код його не читає; пишемо в кол. J як довідку, щоб цифра не загубилась.
+// Порядок: SEED_SH228_ACTIVITIES_DRYRUN() → звірити → SEED_SH228_ACTIVITIES_APPLY().
+var _SH228_ACTIVITIES = [
+  {name:'3D',                 teacherRate:270, teacherModel:'За дитину',  minGroup:1, clientPrice:420},
+  {name:'ART',                teacherRate:700, teacherModel:'За заняття', minGroup:5, clientPrice:410},
+  {name:'Hand Made',          teacherRate:300, teacherModel:'За дитину',  minGroup:1, clientPrice:470},
+  {name:'Вокал',              teacherRate:250, teacherModel:'За дитину',  minGroup:1, clientPrice:390},
+  {name:'Гончарство',         teacherRate:200, teacherModel:'За дитину',  minGroup:1, clientPrice:320},
+  {name:'Друк 3D принтер',    teacherRate:270, teacherModel:'За дитину',  minGroup:1, clientPrice:420},
+  {name:'Індиви',             teacherRate:350, teacherModel:'За дитину',  minGroup:1, clientPrice:700},
+  {name:'Кінусайга',          teacherRate:250, teacherModel:'За дитину',  minGroup:1, clientPrice:390},
+  {name:'Логопед',            teacherRate:250, teacherModel:'За дитину',  minGroup:1, clientPrice:390},
+  {name:'Майнкрафт',          teacherRate:290, teacherModel:'За дитину',  minGroup:1, clientPrice:450},
+  {name:'Модельне агентство', teacherRate:300, teacherModel:'За дитину',  minGroup:1, clientPrice:470},
+  {name:'Пірографія',         teacherRate:250, teacherModel:'За дитину',  minGroup:1, clientPrice:390},
+  {name:'Психолог',           teacherRate:600, teacherModel:'За дитину',  minGroup:1, clientPrice:930},
+  {name:'Робототехніка',      teacherRate:270, teacherModel:'За дитину',  minGroup:1, clientPrice:420},
+  {name:'Speaking club',      teacherRate:650, teacherModel:'За заняття', minGroup:5, clientPrice:450},
+  {name:'Шахи',               teacherRate:700, teacherModel:'За заняття', minGroup:5, clientPrice:410}
+];
+var _SH228_DROP_IDS = [98, 99];   // тестові рядки з прогону 30.08.2026
+
+function SEED_SH228_ACTIVITIES_DRYRUN(){ return _seedSh228(true);  }
+function SEED_SH228_ACTIVITIES_APPLY(){  return _seedSh228(false); }
+
+function _seedSh228(dryRun){
+  var res = seedLocationActivities({
+    loc:'Школа 228', items:_SH228_ACTIVITIES, dropIds:_SH228_DROP_IDS, dryRun:dryRun
+  });
+  Logger.log('═══ КАТАЛОГ ДОДАТКОВИХ · Школа 228 · %s ═══', dryRun ? 'DRY-RUN' : 'ЗАПИС');
+  if (!res.ok){ Logger.log('❌ %s', res.error); return res; }
+  Logger.log('─── назва | модель | ставка | ціна клієнту | мін.група | id ───');
+  (res.add || []).forEach(function(a){
+    Logger.log('%s | %s | %s | %s | %s | id=%s',
+      a.name, a.teacherModel, a.teacherRate, a.clientPrice, a.minGroup, a.id);
+  });
+  Logger.log('ДОДАТИ: %s | ВИДАЛИТИ: %s', res.willAdd, res.willDrop);
+  (res.drop || []).forEach(function(d){
+    Logger.log('   видалення id=%s «%s» %s', d.id, d.name, d.row ? ('рядок ' + d.row) : '— НЕ ЗНАЙДЕНО');
+  });
+  if ((res.skipped || []).length){
+    Logger.log('ПРОПУЩЕНО (вже є):');
+    res.skipped.forEach(function(s){ Logger.log('   %s — %s', s.name, s.why); });
+  }
+  Logger.log('Мін_група: %s', res.minGroupColumn);
+  if ((res.addActivityWouldDrop || []).length){
+    Logger.log('⚠️ Через addActivity() ці позиції злиплися б у одну (баг ключа локація|модель|ставка):');
+    res.addActivityWouldDrop.forEach(function(c){ Logger.log('   [%s] → %s', c.key, c.names.join(', ')); });
+  }
+  if (dryRun) Logger.log('Це DRY-RUN, у таблицю нічого не записано. Запис — SEED_SH228_ACTIVITIES_APPLY()');
+  return res;
 }
 
 function deleteActivity(id){
