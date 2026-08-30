@@ -4890,7 +4890,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.196', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.197', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -16012,6 +16012,7 @@ function exportToSalaryExtras(params){
     var loc = String(params.loc || '').trim();
     var month = Number(params.month);
     var year = Number(params.year) || new Date().getFullYear();
+    var force = (params.force === true);   // v7.197: обхід guard'а нульових відміток
     if (!loc) return {ok: false, error: 'Параметр loc обовʼязковий'};
     if (!month || month < 1 || month > 12) return {ok: false, error: 'month має бути 1-12'};
 
@@ -16041,6 +16042,7 @@ function exportToSalaryExtras(params){
     var mergesMap = _loadDopMergesMap(loc, dateFrom, dateTo);
 
     var byActId = {};
+    var _marksInPeriod = 0;   // v7.197: лічильник для guard
     for (var i = 1; i < attData.length; i++){
       var rec = _parseAttendanceRow(attData[i]);
       if (rec.loc !== loc) continue;
@@ -16052,6 +16054,21 @@ function exportToSalaryExtras(params){
       var _ng = _dopNormGroup(rec.group);
       if (!byActId[rec.activityId].groupsByDate[rec.date]) byActId[rec.activityId].groupsByDate[rec.date] = {};
       byActId[rec.activityId].groupsByDate[rec.date][_ng] = true;
+      _marksInPeriod++;
+    }
+
+    // ── v7.197 GUARD: нуль відміток за місяць → НЕ пишемо ────────────────
+    // Клітинка Salary заняття належить цьому експорту, тож за відсутності
+    // відміток він чесно проставить нулі — і зітре суми, які туди завели
+    // планово. Це коректно наприкінці місяця (факт заміняє план) і руйнівно
+    // на його початку. Тому: нуль відміток → попередження і вихід.
+    // Обійти можна лише явним force:true (напр. свідоме обнулення локації).
+    if (_marksInPeriod === 0 && !force){
+      Logger.log('[exportToSalaryExtras] ⛔ %s: нуль відміток за %s/%s — вихід без запису', loc, month, year);
+      return {ok:false, code:'NO_MARKS', skipped:true, loc:loc, month:month, year:year,
+              marksInPeriod:0,
+              error:'У «' + loc + '» немає жодної відмітки додаткових за ' + monthName + ' ' + year +
+                    '. Запис скасовано, щоб не обнулити наявні суми. Для свідомого обнулення — force:true.'};
     }
 
     // Резолвимо activityId → назва (для діагностики) з каталогу.
@@ -16425,9 +16442,16 @@ function reexportSalaryExtrasAllLocations(month, year){
   reg.rows.forEach(function(r){ if (locs.indexOf(r.loc) < 0) locs.push(r.loc); });
   Logger.log('═══ МАСОВИЙ ПЕРЕРАХУНОК SALARY ДОДАТКОВИХ (%s/%s) — локацій=%s ═══', month, year, locs.length);
   Logger.log('─── локація | допівців | сума ЗП ───');
-  var summary = [], okCount = 0, errCount = 0, grandTotal = 0, grandDop = 0;
+  var summary = [], okCount = 0, errCount = 0, skipCount = 0, grandTotal = 0, grandDop = 0;
   locs.forEach(function(loc){
     var res = exportToSalaryExtras({loc: loc, month: month, year: year});
+    // v7.197: guard нульових відміток — це НЕ помилка, а свідомий пропуск.
+    if (res && res.code === 'NO_MARKS'){
+      skipCount++;
+      Logger.log('⏭  %s | пропущено: нуль відміток за %s/%s (запис не робився)', loc, month, year);
+      summary.push({loc: loc, ok: true, skipped: true, reason: 'NO_MARKS'});
+      return;
+    }
     if (res && res.ok){
       okCount++;
       // Скільки допівців реально нараховано (fact>0) з details експорту.
@@ -16445,10 +16469,11 @@ function reexportSalaryExtrasAllLocations(month, year){
       summary.push({loc: loc, ok: false, error: res && res.error});
     }
   });
-  Logger.log('─── РАЗОМ: допівців=%s | ЗП=%s грн | локацій успішно=%s | помилок=%s ───',
-    grandDop, grandTotal, okCount, errCount);
+  Logger.log('─── РАЗОМ: допівців=%s | ЗП=%s грн | локацій успішно=%s | пропущено=%s | помилок=%s ───',
+    grandDop, grandTotal, okCount, skipCount, errCount);
   return {ok: errCount === 0, kind: 'salary', month: month, year: year,
-          okCount: okCount, errCount: errCount, totalDop: grandDop, totalZP: grandTotal, summary: summary};
+          okCount: okCount, errCount: errCount, skipCount: skipCount,
+          totalDop: grandDop, totalZP: grandTotal, summary: summary};
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -25043,6 +25068,7 @@ function exportPredmetnykyToSalary(params){
     // (reexportAllSalaryJune, reexportLocationFull викликають без параметра і
     // мають далі писати). Вмикається лише явним dryRun:true.
     var dryRun  = (params.dryRun === true);
+    var force   = (params.force === true);   // v7.197: обхід guard'а нульових уроків
 
     if (!loc) return {ok:false, error:'loc обовʼязковий'};
     if (!month || month < 1 || month > 12) return {ok:false, error:'month має бути 1-12'};
@@ -25074,6 +25100,7 @@ function exportPredmetnykyToSalary(params){
     // subjNormKey = _dopNormGroup(subject) (стійке співставлення з subject_norm).
     var lessons = _loadPredLessons(loc);
     var gbdBySubj = {};
+    var _lessonsInPeriod = 0;   // v7.197: лічильник для guard
     for (var i = 0; i < lessons.length; i++){
       var L = lessons[i];
       var ym = _lessonYearMonth(L.date);
@@ -25084,6 +25111,20 @@ function exportPredmetnykyToSalary(params){
       if (!gbdBySubj[sk]) gbdBySubj[sk] = {};
       if (!gbdBySubj[sk][dIso]) gbdBySubj[sk][dIso] = {};
       gbdBySubj[sk][dIso][ng] = true;
+      _lessonsInPeriod++;
+    }
+
+    // ── v7.197 GUARD: нуль уроків за місяць → НЕ пишемо ──────────────────
+    // Та сама логіка, що в exportToSalaryExtras: клітинка «<предмет> <ставка>»
+    // належить цьому експорту, і за відсутності уроків він перезапише її нулем.
+    // Додатково тут спрацював би P7 — створив би дублюючі рядки з нулями.
+    if (_lessonsInPeriod === 0 && !force){
+      Logger.log('[exportPredmetnykyToSalary] ⛔ %s: нуль уроків за %s/%s — вихід без запису', loc, month, year);
+      return {ok:false, code:'NO_LESSONS', skipped:true, loc:loc, month:month, year:year,
+              lessonsInPeriod:0,
+              error:'У «' + loc + '» немає жодного уроку предметників за ' + month + '/' + year +
+                    '. Запис скасовано, щоб не обнулити наявні суми і не створити дублі рядків. ' +
+                    'Для свідомого обнулення — force:true.'};
     }
     // Обʼєднання предметників (session-key схлопування) за цей місяць.
     var mm2 = month < 10 ? '0' + month : String(month);
