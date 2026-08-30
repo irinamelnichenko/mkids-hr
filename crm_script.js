@@ -4890,7 +4890,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.194', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.195', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -9537,6 +9537,105 @@ function _salaryBackupSheet(ss, sheet, listName){
   sheet.copyTo(ss).setName(bkpName);
   return bkpName;
 }
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.195: перейменування рядка Salary (лише колонка A). Потрібне, бо матчер
+// предметників будує ім'я як «<предмет> <ставка>» і шукає його З ПОЧАТКУ рядка:
+// «психолог 700 Ірина» під цей формат не підпадає й іде в P7 — тобто експорт
+// СТВОРИВ БИ дубль поряд із наявним рядком замість того щоб оновити його.
+//
+// GUARD: обовʼязковий expectName — звіряємо, що в клітинці саме те, що ми
+// думаємо (нормалізовано, без урахування пробілів і регістру). Розбіжність →
+// відмова. Пишемо ТІЛЬКИ A; суми, бюджети й формули інших колонок не чіпаємо.
+// Перед записом — copyTo-бекап аркуша. dryRun за замовчуванням TRUE.
+// ═══════════════════════════════════════════════════════════════════════════
+function renameSalaryRow(body){
+  var lock = null;
+  try {
+    body = body || {};
+    var loc     = String(body.loc || '').trim();
+    var pairs   = Array.isArray(body.pairs) ? body.pairs : [];
+    var dryRun  = (body.dryRun !== false);
+    if (!loc) return {ok:false, error:'loc обовʼязковий'};
+    if (!pairs.length) return {ok:false, error:'pairs порожній'};
+
+    var op = _salaryOpenSheet(loc);
+    if (!op.ok) return op;
+    var sheet = op.sheet;
+    var lastRow = Math.max(sheet.getLastRow(), 80);
+    var names = sheet.getRange(1, 1, lastRow, 1).getValues();
+
+    var plan = [], errors = [];
+    pairs.forEach(function(p){
+      var rowNum = Number(p.row) || 0;
+      var expect = String(p.expectName || '').trim();
+      var to     = String(p.newName || '').trim();
+      if (!rowNum || !expect || !to){ errors.push('row/expectName/newName обовʼязкові: ' + JSON.stringify(p)); return; }
+      if (rowNum < 1 || rowNum > lastRow){ errors.push('рядок ' + rowNum + ' поза межами'); return; }
+      var cur = String(names[rowNum - 1][0] == null ? '' : names[rowNum - 1][0]).trim();
+      if (_journalNormName(cur) !== _journalNormName(expect)){
+        errors.push('рядок ' + rowNum + ': у клітинці «' + cur + '», очікувалось «' + expect + '» — НЕ чіпаю');
+        return;
+      }
+      if (_journalNormName(cur) === _journalNormName(to)){
+        plan.push({row:rowNum, from:cur, to:to, skip:'уже так називається'});
+        return;
+      }
+      plan.push({row:rowNum, from:cur, to:to});
+    });
+
+    var todo = plan.filter(function(x){ return !x.skip; });
+    var report = {ok: errors.length === 0, dryRun:dryRun, loc:loc,
+                  willRename: todo.length, plan:plan, errors:errors};
+    Logger.log('[renameSalaryRow] %s', JSON.stringify(report));
+    if (!report.ok || dryRun) return report;
+
+    lock = LockService.getScriptLock();
+    try { lock.waitLock(30000); } catch(_le){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+    report.backupSheet = _salaryBackupSheet(op.ss, sheet, op.entry.listName);
+    todo.forEach(function(x){
+      var cell = sheet.getRange(x.row, 1);
+      cell.setNumberFormat('@');
+      cell.setValue(x.to);
+    });
+    report.renamed = todo.length;
+    Logger.log('[renameSalaryRow] ✅ перейменовано %s, бекап %s', report.renamed, report.backupSheet);
+    return report;
+
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { if (lock){ try { lock.releaseLock(); } catch(_){} } }
+}
+
+// Разовий кейс: два рядки Школи Осокорки під формат «<предмет> <ставка>».
+// Суми і бюджети не чіпаються — пишеться виключно колонка A.
+var _SHOSOK_SALARY_RENAMES = [
+  {row:44, expectName:'Хореография 450/заняття Олександр Султанов',
+           newName:'Хореографія 500 Олександр Султанов'},
+  {row:49, expectName:'психолог 700 Ірина',
+           newName:'Психолог Ірина 700'}
+];
+
+function RENAME_SHOSOK_SALARY_DRYRUN(){ return _renameShosokSalary(true);  }
+function RENAME_SHOSOK_SALARY_APPLY(){  return _renameShosokSalary(false); }
+
+function _renameShosokSalary(dryRun){
+  var res = renameSalaryRow({loc:'Школа Осокорки', pairs:_SHOSOK_SALARY_RENAMES, dryRun:dryRun});
+  Logger.log('═══ SALARY · Школа Осокорки · перейменування · %s ═══', dryRun ? 'DRY-RUN' : 'ЗАПИС');
+  if (!res.ok){
+    Logger.log('❌ не виконую:');
+    (res.errors || []).forEach(function(e){ Logger.log('   %s', e); });
+    if (res.error) Logger.log('   %s', res.error);
+    return res;
+  }
+  (res.plan || []).forEach(function(x){
+    if (x.skip) Logger.log('   рядок %s — %s', x.row, x.skip);
+    else Logger.log('   рядок %s: «%s»\n              → «%s»', x.row, x.from, x.to);
+  });
+  Logger.log('ПЕРЕЙМЕНУВАТИ: %s', res.willRename);
+  if (dryRun) Logger.log('Це DRY-RUN, у таблицю нічого не записано. Запис — RENAME_SHOSOK_SALARY_APPLY()');
+  else Logger.log('Бекап аркуша: %s', res.backupSheet);
+  return res;
+}
+
 function addSalaryRow(body){
   body = body || {};
   var lock = LockService.getScriptLock();
@@ -23662,7 +23761,8 @@ var PRED_LESSONS_HEADER   = ['ID','EmpKey','Location','Group','Subject','Date','
 
 // Нормалізовані назви предметів для системи норм.
 var PRED_SUBJECTS         = ['Англійська','Музика','Хореограф','Логопед','Психолог','Чомусики',
-                             'Німецька','Іспанська','Фізкультура'];   // v7.192: предмети школи
+                             'Німецька','Іспанська','Фізкультура',    // v7.192: предмети школи
+                             'Архітектура','Фітнес','Speaking club']; // v7.195: Школа Осокорки
 var PRED_UNLIMITED_SUBJ   = 'Чомусики';   // норму НЕ перевіряємо
 var PRED_GROUP_TYPES      = ['miniBaby','Baby','Find','Study','Preschool'];
 var PRED_LVIV_LOCATIONS   = ['Кругла','Бігова'];   // все інше → 'Київ'
@@ -23710,7 +23810,11 @@ var PRED_NORMS_SEED = [
   // MIGRATE_PRED_NORMS_APPLY() заведе їх повторно.
   ['Київ',  'Німецька',    0, 0,  0,  0,  0],
   ['Київ',  'Іспанська',   0, 0,  0,  0,  0],
-  ['Київ',  'Фізкультура', 0, 0,  0,  0,  0]
+  ['Київ',  'Фізкультура', 0, 0,  0,  0,  0],
+  // v7.195: Школа Осокорки. Нулі = ліміту немає, як і в решти шкільних предметів.
+  ['Київ',  'Архітектура',   0, 0,  0,  0,  0],
+  ['Київ',  'Фітнес',        0, 0,  0,  0,  0],
+  ['Київ',  'Speaking club', 0, 0,  0,  0,  0]
 ];
 
 // ── Normalizers ──────────────────────────────────────────────────
@@ -23752,6 +23856,15 @@ function _normalizeSubject(raw){
   if (low.indexOf('испан')   !== -1) return 'Іспанська';
   if (low.indexOf('фізкультур') !== -1) return 'Фізкультура';
   if (low.indexOf('физкультур') !== -1) return 'Фізкультура';
+  // v7.195: предмети Школи Осокорки.
+  // ⚠️ «фітнес» — ОКРЕМИЙ предмет, не синонім фізкультури: у Salary це різні
+  // рядки з різними виконавцями, і злиття їх в один subject_norm склеїло б
+  // лічильники уроків. Тому фрагмент свій і перевіряється окремо.
+  if (low.indexOf('архітектур') !== -1) return 'Архітектура';
+  if (low.indexOf('архитектур') !== -1) return 'Архітектура';
+  if (low.indexOf('фітнес')     !== -1) return 'Фітнес';
+  if (low.indexOf('фитнес')     !== -1) return 'Фітнес';
+  if (low.indexOf('speaking')   !== -1) return 'Speaking club';
   return null;
 }
 
@@ -24910,6 +25023,10 @@ function exportPredmetnykyToSalary(params){
     var loc     = String(params.loc || '').trim();
     var month   = Number(params.month);
     var year    = Number(params.year) || new Date().getFullYear();
+    // v7.195: dryRun. Default FALSE — щоб не змінити поведінку наявних викликів
+    // (reexportAllSalaryJune, reexportLocationFull викликають без параметра і
+    // мають далі писати). Вмикається лише явним dryRun:true.
+    var dryRun  = (params.dryRun === true);
 
     if (!loc) return {ok:false, error:'loc обовʼязковий'};
     if (!month || month < 1 || month > 12) return {ok:false, error:'month має бути 1-12'};
@@ -25034,7 +25151,7 @@ function exportPredmetnykyToSalary(params){
       var currentValue = Number(budgetColValues[rowIdx0][0]) || 0;
       var newValue    = fact;                  // ← OVERWRITE (не дельта)
       if (newValue !== currentValue){
-        sheet.getRange(found.row, budgetCol).setValue(newValue);
+        if (!dryRun) sheet.getRange(found.row, budgetCol).setValue(newValue);
         cellsWritten++;
       }
       // Журнал лишається для аудиту (last_written_sum + timestamp).
@@ -25057,14 +25174,16 @@ function exportPredmetnykyToSalary(params){
     p7queue.forEach(function(p){
       var newRow;
       if (maxMatchedRow > 0){
-        sheet.insertRowsAfter(maxMatchedRow, 1);
+        if (!dryRun) sheet.insertRowsAfter(maxMatchedRow, 1);
         newRow = maxMatchedRow + 1;
         maxMatchedRow = newRow;
       } else {
         newRow = sheet.getLastRow() + 1;
       }
-      sheet.getRange(newRow, 1).setValue(p.subject + ' ' + p.rate);
-      sheet.getRange(newRow, budgetCol).setValue(p.fact);
+      if (!dryRun){
+        sheet.getRange(newRow, 1).setValue(p.subject + ' ' + p.rate);
+        sheet.getRange(newRow, budgetCol).setValue(p.fact);
+      }
       cellsWritten++;
       journalOps.push({nk:p.nk, loc:loc, kind:'predmetnyky', name:p.catName,
         year:nextM.year, month:nextM.month, newSum:p.fact});
@@ -25074,13 +25193,14 @@ function exportPredmetnykyToSalary(params){
         priority:'P7', row:newRow, status:'row-added'});
     });
 
-    _commitJournalUpdates(journal, journalOps);
+    if (!dryRun) _commitJournalUpdates(journal, journalOps);
     Logger.log('[%s] СВОДКА: catalog=%s | P1=%s P2=%s P3=%s P4=%s P5=%s P6=%s P7=%s | клітинок=%s формул-пропущено=%s',
       loc, stats.attempts, stats.p1, stats.p2, stats.p3, stats.p4, stats.p5, stats.p6, stats.p7,
       cellsWritten, formulaRowsSkipped);
 
     return {
       ok: true,
+      dryRun: dryRun,
       loc: loc,
       sourceMonth: sourceMonthName,
       targetMonth: targetMonthName,
