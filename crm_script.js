@@ -4890,7 +4890,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.197', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.198', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -24269,7 +24269,7 @@ function _loadPredTeachers(locFilter){
 }
 
 // Lessons sheet → [{id, empKey, loc, group, subject, date}].
-function _loadPredLessons(locFilter, year, month){
+function _loadPredLessons(locFilter, year, month, withEmpKey){
   var sh = _getPredLessonsSheet();
   var lastRow = sh.getLastRow();
   if (lastRow < 2) return [];
@@ -24289,15 +24289,21 @@ function _loadPredLessons(locFilter, year, month){
       var _ym = _lessonYearMonth(row[5]);
       if (!_ym || _ym.y !== _ymY || _ym.m !== _ymM) continue;
     }
-    out.push({
-      // v7.83: empKey ПРИБРАНО — фронт його не читає (грід чіпляє за loc/group/subject/date,
-      // а empKey для збереження резолвиться з призначення/кандидатів). ~29% ваги lessons.
+    var _rec = {
+      // v7.83: empKey ПРИБРАНО з відповіді ФРОНТУ — грід чіпляє за
+      // loc/group/subject/date, а empKey для збереження резолвиться з
+      // призначення/кандидатів. Це ~29% ваги lessons, тож default лишаємо слim.
+      // v7.198 (блок Б.1): withEmpKey=true повертає його назад — серверним
+      // споживачам (exportPredmetnykyToSalary) він потрібен, щоб рахувати
+      // уроки на пару викладач+предмет, а не на предмет цілком.
       id:      id,
       loc:     loc,
       group:   String(row[3] || '').trim(),
       subject: String(row[4] || '').trim(),
       date:    _fmtLessonDate(row[5])
-    });
+    };
+    if (withEmpKey) _rec.empKey = String(row[1] || '').trim();
+    out.push(_rec);
   }
   return out;
 }
@@ -25098,8 +25104,14 @@ function exportPredmetnykyToSalary(params){
     // v7.20: структура { subjNormKey: { 'YYYY-MM-DD': { normGroup: true } } } —
     // рахунок через _dopCountSessions (обʼєднання схлопують групи одного дня в 1).
     // subjNormKey = _dopNormGroup(subject) (стійке співставлення з subject_norm).
-    var lessons = _loadPredLessons(loc);
+    var lessons = _loadPredLessons(loc, 0, 0, true);   // v7.198: з empKey
     var gbdBySubj = {};
+    // v7.198 (Б.1): ПАРАЛЕЛЬНИЙ кошик по парі (empKey|subject). Нарахування поки
+    // читає gbdBySubj — поведінка не змінюється. Перемикання на пари робиться в
+    // Б.3, коли в каталозі зʼявиться колонка EmpKey; доти цей кошик лише
+    // діагностичний і дає звірку «по-предметному vs по-викладачному».
+    var gbdByTeacher = {};
+    var _emptyEmpKey = 0;
     var _lessonsInPeriod = 0;   // v7.197: лічильник для guard
     for (var i = 0; i < lessons.length; i++){
       var L = lessons[i];
@@ -25111,6 +25123,12 @@ function exportPredmetnykyToSalary(params){
       if (!gbdBySubj[sk]) gbdBySubj[sk] = {};
       if (!gbdBySubj[sk][dIso]) gbdBySubj[sk][dIso] = {};
       gbdBySubj[sk][dIso][ng] = true;
+      var _ek = String(L.empKey || '').trim();
+      if (!_ek) _emptyEmpKey++;
+      var tk = (_ek || '(порожній)') + '|' + sk;
+      if (!gbdByTeacher[tk]) gbdByTeacher[tk] = {};
+      if (!gbdByTeacher[tk][dIso]) gbdByTeacher[tk][dIso] = {};
+      gbdByTeacher[tk][dIso][ng] = true;
       _lessonsInPeriod++;
     }
 
@@ -25255,9 +25273,34 @@ function exportPredmetnykyToSalary(params){
       loc, stats.attempts, stats.p1, stats.p2, stats.p3, stats.p4, stats.p5, stats.p6, stats.p7,
       cellsWritten, formulaRowsSkipped);
 
+    // v7.198 (Б.1+Б.5): звірка «по-предметному vs по-викладачному».
+    // Для кожного предмета рахуємо сесії старим способом і суму сесій по кожному
+    // empKey окремо. Рівність = перехід на пари нічого не змінить (у локації один
+    // виконавець на предмет). Розбіжність = предмет ділять кілька людей, і саме
+    // там Б.3 змінить суми. teachersPerSubject показує, скільки їх.
+    var _recon = [];
+    Object.keys(gbdBySubj).forEach(function(sk){
+      var bySubj = _dopCountSessions(gbdBySubj[sk], predMergesMap[sk] || {});
+      var perTeacher = {}, sumTeachers = 0;
+      Object.keys(gbdByTeacher).forEach(function(tk){
+        var p = tk.split('|');
+        if (p.slice(1).join('|') !== sk) return;
+        var c = _dopCountSessions(gbdByTeacher[tk], predMergesMap[sk] || {});
+        perTeacher[p[0]] = c;
+        sumTeachers += c;
+      });
+      _recon.push({subject: sk, sessionsBySubject: bySubj,
+                   sessionsSumByTeacher: sumTeachers,
+                   teachersPerSubject: Object.keys(perTeacher).length,
+                   perTeacher: perTeacher,
+                   identical: (bySubj === sumTeachers && Object.keys(perTeacher).length <= 1)});
+    });
+
     return {
       ok: true,
       dryRun: dryRun,
+      reconTeacherVsSubject: _recon,
+      lessonsWithoutEmpKey: _emptyEmpKey,
       loc: loc,
       sourceMonth: sourceMonthName,
       targetMonth: targetMonthName,
