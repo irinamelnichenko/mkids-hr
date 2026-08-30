@@ -4890,7 +4890,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.191', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.192', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -23657,7 +23657,8 @@ var PRED_NORMS_HEADER     = ['Регіон','Предмет','miniBaby','Baby','
 var PRED_LESSONS_HEADER   = ['ID','EmpKey','Location','Group','Subject','Date','CreatedAt','CreatedBy'];
 
 // Нормалізовані назви предметів для системи норм.
-var PRED_SUBJECTS         = ['Англійська','Музика','Хореограф','Логопед','Психолог','Чомусики'];
+var PRED_SUBJECTS         = ['Англійська','Музика','Хореограф','Логопед','Психолог','Чомусики',
+                             'Німецька','Іспанська','Фізкультура'];   // v7.192: предмети школи
 var PRED_UNLIMITED_SUBJ   = 'Чомусики';   // норму НЕ перевіряємо
 var PRED_GROUP_TYPES      = ['miniBaby','Baby','Find','Study','Preschool'];
 var PRED_LVIV_LOCATIONS   = ['Кругла','Бігова'];   // все інше → 'Київ'
@@ -23671,7 +23672,11 @@ var CATALOG_TO_NORM_MAP = {
   'Хореограф':             'Хореограф',
   'Психолог':              'Психолог',
   'Чомусики':              'Чомусики',
-  'Підготовка до школи':   null
+  'Підготовка до школи':   null,
+  // v7.192: предмети школи
+  'Німецька мова':         'Німецька',
+  'Іспанська мова':        'Іспанська',
+  'Фізкультура':           'Фізкультура'
 };
 
 var PRED_EDIT_ROLES_ANY = ['cfo','ceo','coo','cco'];   // будь-яка локація
@@ -23690,7 +23695,17 @@ var PRED_NORMS_SEED = [
   ['Львів', 'Хореограф',  6, 6,  6,  6,  6],
   ['Львів', 'Логопед',    0, 4,  4,  4,  4],
   ['Львів', 'Психолог',   0, 0,  0,  0,  0],
-  ['Львів', 'Чомусики',   0, 0,  0,  0,  0]    // unlimited
+  ['Львів', 'Чомусики',   0, 0,  0,  0,  0],   // unlimited
+  // v7.192: предмети школи. Нулі = ліміту немає — так само, як зараз поводяться
+  // шкільні класи: _normalizeGroupType('4 Б клас') не мапиться в жоден
+  // PRED_GROUP_TYPES і norm однаково виходить 0. Рядки заводимо явно, щоб
+  // матриця норм була повна й видима в інтерфейсі.
+  ['Київ',  'Німецька',    0, 0,  0,  0,  0],
+  ['Київ',  'Іспанська',   0, 0,  0,  0,  0],
+  ['Київ',  'Фізкультура', 0, 0,  0,  0,  0],
+  ['Львів', 'Німецька',    0, 0,  0,  0,  0],
+  ['Львів', 'Іспанська',   0, 0,  0,  0,  0],
+  ['Львів', 'Фізкультура', 0, 0,  0,  0,  0]
 ];
 
 // ── Normalizers ──────────────────────────────────────────────────
@@ -23723,6 +23738,15 @@ function _normalizeSubject(raw){
   if (low.indexOf('логопед') !== -1) return 'Логопед';
   if (low.indexOf('психол')  !== -1) return 'Психолог';
   if (low.indexOf('чомус')   !== -1) return 'Чомусики';
+  // v7.192: предмети школи. Дублі 'немец'/'испан'/'физкультур' — навмисно:
+  // у Salary Школи 228 рядки записані русизмами ('Пахалюк Ксенія немецька
+  // мова 300'), і каталог має нормалізуватись однаково в обох написаннях.
+  if (low.indexOf('німец')   !== -1) return 'Німецька';
+  if (low.indexOf('немец')   !== -1) return 'Німецька';
+  if (low.indexOf('іспан')   !== -1) return 'Іспанська';
+  if (low.indexOf('испан')   !== -1) return 'Іспанська';
+  if (low.indexOf('фізкультур') !== -1) return 'Фізкультура';
+  if (low.indexOf('физкультур') !== -1) return 'Фізкультура';
   return null;
 }
 
@@ -23752,6 +23776,51 @@ function _seedPredmetnykyNorms(){
   _bumpPredVer();   // v7.86: зміна норм інвалідує кеш getPredmetnyky
   return {ok:true, seeded: PRED_NORMS_SEED.length};
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.192: ДОЗАСІВ норм для предметів, доданих у PRED_SUBJECTS пізніше.
+// _seedPredmetnykyNorms() засіває лист ЛИШЕ якщо він порожній, тож на робочій
+// таблиці нові предмети туди самі не потраплять. Ця міграція додає рівно ті
+// пари (регіон, предмет) з PRED_NORMS_SEED, яких у листі ще немає. Наявні
+// рядки не чіпає — якщо норму правили руками, правка збережеться.
+// Ідемпотентна. dryRun за замовчуванням TRUE.
+// ═══════════════════════════════════════════════════════════════════════════
+function migratePredNormsAddMissing(dryRun){
+  dryRun = (dryRun !== false);
+  var sh = _getPredNormsSheet(false);
+  var lastRow = sh.getLastRow();
+  var have = {};
+  if (lastRow > 1){
+    var data = sh.getRange(2, 1, lastRow - 1, PRED_NORMS_HEADER.length).getValues();
+    for (var i = 0; i < data.length; i++){
+      var reg = String(data[i][0] || '').trim();
+      var sub = String(data[i][1] || '').trim();
+      if (reg && sub) have[reg + '|' + sub] = i + 2;
+    }
+  }
+  var missing = [];
+  PRED_NORMS_SEED.forEach(function(row){
+    var k = String(row[0]).trim() + '|' + String(row[1]).trim();
+    if (!have.hasOwnProperty(k)) missing.push(row);
+  });
+
+  Logger.log('═══ ДОЗАСІВ НОРМ ПРЕДМЕТНИКІВ · %s ═══', dryRun ? 'DRY-RUN' : 'ЗАПИС');
+  Logger.log('у листі: %s пар | у сіді: %s | бракує: %s',
+    Object.keys(have).length, PRED_NORMS_SEED.length, missing.length);
+  missing.forEach(function(r){ Logger.log('   + %s | %s | %s', r[0], r[1], r.slice(2).join(' ')); });
+  if (!missing.length){ Logger.log('Нічого додавати — усі пари вже є.'); return {ok:true, added:0, missing:[]}; }
+  if (dryRun){
+    Logger.log('Це DRY-RUN, нічого не записано. Запис — MIGRATE_PRED_NORMS_APPLY()');
+    return {ok:true, dryRun:true, willAdd:missing.length, missing:missing};
+  }
+  sh.getRange(sh.getLastRow() + 1, 1, missing.length, PRED_NORMS_HEADER.length).setValues(missing);
+  _bumpPredVer();   // норми змінились → інвалідуємо кеш getPredmetnyky
+  Logger.log('✅ додано %s рядків норм', missing.length);
+  return {ok:true, added:missing.length, missing:missing};
+}
+
+function MIGRATE_PRED_NORMS_DRYRUN(){ return migratePredNormsAddMissing(true);  }
+function MIGRATE_PRED_NORMS_APPLY(){  return migratePredNormsAddMissing(false); }
 
 // ── Loaders (Norms + Catalog) ────────────────────────────────────
 // Norms sheet → {'Київ': {'Англійська': {miniBaby:8,...}, ...}, 'Львів': {...}}
