@@ -4890,7 +4890,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.199', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.200', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -20784,7 +20784,7 @@ var PREDMETNY_CATALOG_SHEET  = 'Предметники_Каталог';
 var PREDMETNY_ATT_SHEET      = 'Предметники_Відвідуваність';
 // v7.199 (Б.2): + EmpKey — прив'язка позиції каталогу до конкретного виконавця.
 // Колонка G дописується в КІНЕЦЬ, наявні шість не зсуваються.
-var PREDMETNY_CATALOG_HEADER = ['id','Локація','Предмет','Ставка_за_заняття','Викладач','Активне','EmpKey'];
+var PREDMETNY_CATALOG_HEADER = ['id','Локація','Предмет','Ставка_за_заняття','Викладач','Активне','EmpKey','UID'];   // v7.200 (UID.3)
 var PREDMETNY_ATT_HEADER     = ['id','Дата','Локація','Група','Дитина','id_предмета','Назва_предмета','Ставка','Відмітив','Час_відмітки'];
 
 function _getPredmetnyCatalogSheet(createIfMissing){
@@ -20820,7 +20820,8 @@ function _parsePredmetnyCatRow(row){
     teacher: String(row[4] || '').trim(),
     active:  row[5] === true ||
              /^(true|так|y|1|active|активне|✅)$/i.test(String(row[5] || '').trim()),
-    empKey:  String(row[6] || '').trim()      // v7.199 (Б.2)
+    empKey:  String(row[6] || '').trim(),     // v7.199 (Б.2)
+    uid:     String(row[7] || '').trim()      // v7.200 (UID.4)
   };
 }
 
@@ -20963,7 +20964,8 @@ function addPredmetny(data){
       Number(data.rate) || 0,
       String(data.teacher || '').trim(),
       data.active !== false,
-      String(data.empKey || '').trim()      // v7.199 (Б.2)
+      String(data.empKey || '').trim(),     // v7.199 (Б.2)
+      _uidForEmpKey(data.empKey)            // v7.200 (UID.5)
     ];
     if (!row[1]) return {ok: false, error: 'Поле "Локація" обовʼязкове'};
     if (!row[2]) return {ok: false, error: 'Поле "Предмет" обовʼязкове'};
@@ -21167,6 +21169,9 @@ function bindPredmetnyEmpKeys(body){
 
     var known = {};
     _loadPredTeachers(loc).forEach(function(t){ known[t.empKey] = t.name; });
+    // v7.200: одна мапа на весь виклик — _uidForEmpKey читав би HR на кожен рядок.
+    var _uidMap = {};
+    try { _uidMap = _buildEmpKeyToUidMap().map; } catch(_e){ _uidMap = {}; }
 
     var plan = [], errors = [];
     Object.keys(map).forEach(function(subj){
@@ -21186,7 +21191,8 @@ function bindPredmetnyEmpKeys(body){
       }
       if (hit.current === want){ plan.push({row:hit.row, subject:hit.subject, empKey:want, skip:'уже так'}); return; }
       plan.push({row:hit.row, id:hit.id, subject:hit.subject,
-                 from:hit.current, empKey:want, teacher:(want ? known[want] : '(порожньо)')});
+                 from:hit.current, empKey:want, uid:(want ? (_uidMap[want] || '') : ''),
+                 teacher:(want ? known[want] : '(порожньо)')});
     });
 
     var todo = plan.filter(function(x){ return !x.skip; });
@@ -21203,6 +21209,8 @@ function bindPredmetnyEmpKeys(body){
       var c = sh.getRange(x.row, 7);
       c.setNumberFormat('@');
       c.setValue(x.empKey);
+      // v7.200 (UID.5): каталог одразу отримує і UID, щоб не лишався напівстан.
+      sh.getRange(x.row, PRED_CATALOG_UID_COL).setValue(x.uid || '');
     });
     _bumpPredVer();
     report.bound = todo.length;
@@ -21238,7 +21246,7 @@ function _bindSh228(dryRun){
   Logger.log('колонка: %s', res.headerAction);
   (res.plan || []).forEach(function(x){
     if (x.skip) Logger.log('   рядок %s  %s — %s', x.row, x.subject, x.skip);
-    else Logger.log('   рядок %s  %-30s → %s  (%s)', x.row, x.subject, x.empKey, x.teacher);
+    else Logger.log('   рядок %s  %-30s → %s  UID=%s  (%s)', x.row, x.subject, x.empKey, x.uid || '—', x.teacher);
   });
   Logger.log('ПРИВʼЯЗАТИ: %s', res.willBind);
   Logger.log('БЕЗ ПРИВʼЯЗКИ (свідомо): Іспанська мова, Лакіза Ірина фізкультура');
@@ -21260,7 +21268,10 @@ function updatePredmetny(id, data){
       if ('rate'    in data) sh.getRange(r1, 4).setValue(Number(data.rate) || 0);
       if ('teacher' in data) sh.getRange(r1, 5).setValue(String(data.teacher || '').trim());
       if ('active'  in data) sh.getRange(r1, 6).setValue(data.active !== false);
-      if ('empKey'  in data) sh.getRange(r1, 7).setValue(String(data.empKey || '').trim());   // v7.199
+      if ('empKey'  in data){
+        sh.getRange(r1, 7).setValue(String(data.empKey || '').trim());                          // v7.199
+        sh.getRange(r1, PRED_CATALOG_UID_COL).setValue(_uidForEmpKey(data.empKey));             // v7.200 (UID.5)
+      }
       return {ok: true};
     }
     return {ok: false, error: 'Предмет не знайдено'};
@@ -23917,7 +23928,7 @@ function deleteEmployee(actorId, rowNum){
 var PRED_NORMS_TAB        = 'Predmetnyky_Norms';     // CRM_SHEET
 var PRED_LESSONS_TAB      = 'Predmetnyky_Lessons';   // CRM_SHEET
 var PRED_NORMS_HEADER     = ['Регіон','Предмет','miniBaby','Baby','Find','Study','Preschool'];
-var PRED_LESSONS_HEADER   = ['ID','EmpKey','Location','Group','Subject','Date','CreatedAt','CreatedBy'];
+var PRED_LESSONS_HEADER   = ['ID','EmpKey','Location','Group','Subject','Date','CreatedAt','CreatedBy','UID'];   // v7.200 (UID.3)
 
 // Нормалізовані назви предметів для системи норм.
 var PRED_SUBJECTS         = ['Англійська','Музика','Хореограф','Логопед','Психолог','Чомусики',
@@ -24280,7 +24291,8 @@ function _loadPredCatalog(locFilter){
       rate:         rec.rate || null,
       teacher:      rec.teacher,
       active:       rec.active,
-      empKey:       rec.empKey                        // v7.199 (Б.2)
+      empKey:       rec.empKey,                       // v7.199 (Б.2)
+      uid:          rec.uid                           // v7.200 (UID.4)
     });
   }
   return out;
@@ -24395,7 +24407,8 @@ function _loadPredLessons(locFilter, year, month, withEmpKey){
   if (lastRow < 2) return [];
   // v7.86 ШВИДКІСТЬ: читаємо лише перші 6 колонок (id,empKey,loc,group,subject,date) —
   // Коли/Ким гріду не потрібні (empKey у відповідь не йде з v7.83, але потрібен write-path тут не викликається).
-  var data = sh.getRange(2, 1, lastRow - 1, 6).getValues();
+  // v7.200: читаємо всі колонки — потрібен UID (I). Було 6.
+  var data = sh.getRange(2, 1, lastRow - 1, PRED_LESSONS_HEADER.length).getValues();
   var out = [];
   var _ymY = Number(year) || 0, _ymM = Number(month) || 0;
   var _ymFilter = (_ymY > 0 && _ymM > 0);   // v7.80: опційний фільтр за місяцем
@@ -24422,7 +24435,10 @@ function _loadPredLessons(locFilter, year, month, withEmpKey){
       subject: String(row[4] || '').trim(),
       date:    _fmtLessonDate(row[5])
     };
-    if (withEmpKey) _rec.empKey = String(row[1] || '').trim();
+    if (withEmpKey){
+      _rec.empKey = String(row[1] || '').trim();
+      _rec.uid    = String(row[8] || '').trim();      // v7.200 (UID.4)
+    }
     out.push(_rec);
   }
   return out;
@@ -24501,6 +24517,196 @@ function getPredmetnyky(actorId, year, month){
 // v6.28.2: ліміт рахується по ПОВНІЙ назві групи (кожна реальна група веде
 //   свою норму свого ТИПУ). Норма береться з матриці по group_type. BAD_GROUP
 //   тепер означає "групи немає в локації" (а не "тип не розпізнано").
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.200 — UID: НЕЗМІННИЙ ідентифікатор співробітника.
+//
+// Навіщо. Досі звʼязок «урок → людина» тримався на empKey =
+// e5_<прізвище>_<імʼя>_<дата виходу|прийому>. Це склейка ТРЬОХ змінних полів
+// HR: заповнили дату — ключ став іншим рядком, і всі уроки/призначення на
+// старий ключ осиротіли мовчки. Заміряно по мережі: 20 із 71 викладача (28%)
+// мають порожній хвіст або «н\д», тобто перша ж правка HR їх рве.
+// empId теж не рятує — це rowNum HR-аркуша, зсувається при вставці рядка.
+//
+// UID — просте зростаюче число в окремій колонці HR. Пишеться раз і НІКОЛИ
+// не міняється: ні при зміні прізвища, ні при заповненні дати, ні при
+// перенесенні рядка.
+//
+// Міграція АДИТИВНА: колонки EmpKey скрізь лишаються, поруч зʼявляється UID.
+// Читання: спершу UID, фолбек на empKey (UID.4). Запис: обидва (UID.5).
+// ═══════════════════════════════════════════════════════════════════════════
+var HR_UID_COL        = 27;          // AA — після Z(26). Append-only.
+var HR_UID_HEADER     = 'UID';
+var PRED_LESSONS_UID_COL = 9;        // I — після CreatedBy(8)
+var PRED_ASSIGN_UID_COL  = 7;        // G — після CreatedBy(6)
+var PRED_CATALOG_UID_COL = 8;        // H — після EmpKey(7)
+
+// ── UID.2: мапа empKey → UID ────────────────────────────────────────────────
+// Читає HR НАПРЯМУ, включно з архівними й звільненими: уроки посилаються і на
+// тих, кого вже нема в _loadPredTeachers. Знімати ДО правок HR — після них
+// empKey уже не вкаже на людину.
+// Повертає {map, dupes, noUid} — dupes: один empKey на кілька рядків HR
+// (реальні дублі людей), noUid: рядки без UID (міграцію UID.1 не робили).
+function _buildEmpKeyToUidMap(){
+  var sh = _getHrSheet();
+  var lastRow = sh.getLastRow();
+  if (lastRow < 2) return {map:{}, dupes:[], noUid:[], total:0};
+  var data = sh.getRange(2, 1, lastRow - 1, HR_COLS).getValues();
+  var uids = sh.getRange(2, HR_UID_COL, lastRow - 1, 1).getValues();
+  var map = {}, dupes = [], noUid = [], total = 0;
+  for (var i = 0; i < data.length; i++){
+    var emp = _parseEmpRow(data[i], i + 2);
+    if (!emp.last && !emp.first) continue;
+    total++;
+    var uid = String(uids[i][0] || '').trim();
+    var key = _mkEmpKey(emp.last, emp.first, emp.wday || emp.hired);
+    if (!uid){ noUid.push({row:i + 2, name:(emp.last + ' ' + emp.first).trim(), empKey:key}); continue; }
+    if (map.hasOwnProperty(key) && map[key] !== uid){
+      dupes.push({empKey:key, uids:[map[key], uid], name:(emp.last + ' ' + emp.first).trim(), row:i + 2});
+    }
+    if (!map.hasOwnProperty(key)) map[key] = uid;
+  }
+  return {map:map, dupes:dupes, noUid:noUid, total:total};
+}
+
+// Резолвер для write-path (UID.5). '' якщо не знайдено — це не помилка.
+function _uidForEmpKey(empKey){
+  var k = String(empKey || '').trim();
+  if (!k) return '';
+  try { return _buildEmpKeyToUidMap().map[k] || ''; } catch(e){ return ''; }
+}
+
+// ── UID.1: проставити UID усім рядкам HR ───────────────────────────────────
+// Нумерація продовжує максимум наявних, тож повторний запуск не переприсвоює.
+// Пише ТІЛЬКИ в порожні клітинки — уже виданий UID недоторканний.
+function migrateHrAssignUids(dryRun){
+  dryRun = (dryRun !== false);
+  var sh = _getHrSheet();
+  var lastRow = sh.getLastRow();
+  if (lastRow < 2) return {ok:false, error:'HR порожній'};
+  var data = sh.getRange(2, 1, lastRow - 1, HR_COLS).getValues();
+  var uids = sh.getRange(2, HR_UID_COL, lastRow - 1, 1).getValues();
+  var hdr  = String(sh.getRange(1, HR_UID_COL).getValue() || '').trim();
+  var needHeader = (hdr !== HR_UID_HEADER);
+
+  var maxUid = 0, already = 0, plan = [];
+  for (var i = 0; i < data.length; i++){
+    var u = Number(uids[i][0]);
+    if (u > maxUid) maxUid = u;
+    if (String(uids[i][0] || '').trim()) already++;
+  }
+  var next = maxUid + 1;
+  for (var j = 0; j < data.length; j++){
+    var emp = _parseEmpRow(data[j], j + 2);
+    if (!emp.last && !emp.first) continue;
+    if (String(uids[j][0] || '').trim()) continue;
+    plan.push({row:j + 2, uid:next++, name:(emp.last + ' ' + emp.first).trim(),
+               loc:emp.loc, empKey:_mkEmpKey(emp.last, emp.first, emp.wday || emp.hired)});
+  }
+
+  Logger.log('═══ UID.1 · HR · %s ═══', dryRun ? 'DRY-RUN' : 'ЗАПИС');
+  Logger.log('рядків HR з ПІБ: %s | вже мають UID: %s | видати: %s | заголовок: %s',
+    plan.length + already, already, plan.length, needHeader ? 'створити «UID» у кол. AA' : 'уже є');
+  plan.slice(0, 30).forEach(function(p){ Logger.log('   рд%s → UID %s  %s (%s)', p.row, p.uid, p.name, p.loc); });
+  if (plan.length > 30) Logger.log('   … ще %s', plan.length - 30);
+  if (dryRun){
+    Logger.log('Це DRY-RUN, нічого не записано. Запис — UID1_ASSIGN_HR_APPLY()');
+    return {ok:true, dryRun:true, willAssign:plan.length, already:already, plan:plan, needHeader:needHeader};
+  }
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(30000); } catch(e){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+  try {
+    if (needHeader) sh.getRange(1, HR_UID_COL).setValue(HR_UID_HEADER);
+    plan.forEach(function(p){ sh.getRange(p.row, HR_UID_COL).setValue(p.uid); });
+    Logger.log('✅ видано UID: %s', plan.length);
+    return {ok:true, assigned:plan.length, already:already};
+  } finally { try { lock.releaseLock(); } catch(_){} }
+}
+
+// ── UID.3: проставити UID у трьох таблицях за empKey ────────────────────────
+// which: 'lessons' | 'assignments' | 'catalog'
+function migrateTableUids(which, dryRun){
+  dryRun = (dryRun !== false);
+  var CFG = {
+    lessons:     {sheet:_getPredLessonsSheet(),      hdr:PRED_LESSONS_HEADER,        keyCol:2, uidCol:PRED_LESSONS_UID_COL, label:'Predmetnyky_Lessons'},
+    assignments: {sheet:_getPredAssignSheet(),       hdr:PRED_ASSIGN_HEADER,         keyCol:4, uidCol:PRED_ASSIGN_UID_COL,  label:'Predmetnyky_Assignments'},
+    catalog:     {sheet:_getPredmetnyCatalogSheet(false), hdr:PREDMETNY_CATALOG_HEADER, keyCol:7, uidCol:PRED_CATALOG_UID_COL, label:'Предметники_Каталог'}
+  }[which];
+  if (!CFG || !CFG.sheet) return {ok:false, error:'невідома таблиця: ' + which};
+
+  var m = _buildEmpKeyToUidMap();
+  if (m.noUid.length)
+    return {ok:false, code:'HR_NOT_MIGRATED',
+            error:'У HR ще ' + m.noUid.length + ' рядків без UID — спершу UID1_ASSIGN_HR_APPLY()'};
+
+  var sh = CFG.sheet;
+  var lastRow = sh.getLastRow();
+  if (lastRow < 2) return {ok:true, dryRun:dryRun, label:CFG.label, rows:0, resolved:0, unresolved:0, missing:[]};
+  var keys = sh.getRange(2, CFG.keyCol, lastRow - 1, 1).getValues();
+  var cur  = sh.getRange(2, CFG.uidCol, lastRow - 1, 1).getValues();
+  var needHeader = String(sh.getRange(1, CFG.uidCol).getValue() || '').trim() !== 'UID';
+
+  var plan = [], resolved = 0, unresolved = 0, skipped = 0, byMissing = {};
+  for (var i = 0; i < keys.length; i++){
+    var k = String(keys[i][0] || '').trim();
+    if (String(cur[i][0] || '').trim()){ skipped++; continue; }   // вже проставлено
+    if (!k){ unresolved++; byMissing['(порожній EmpKey)'] = (byMissing['(порожній EmpKey)'] || 0) + 1; continue; }
+    var uid = m.map[k];
+    if (!uid){ unresolved++; byMissing[k] = (byMissing[k] || 0) + 1; continue; }
+    plan.push({row:i + 2, uid:uid}); resolved++;
+  }
+  var missing = Object.keys(byMissing).map(function(k){ return {empKey:k, rows:byMissing[k]}; })
+                      .sort(function(a, b){ return b.rows - a.rows; });
+
+  Logger.log('═══ UID.3 · %s · %s ═══', CFG.label, dryRun ? 'DRY-RUN' : 'ЗАПИС');
+  Logger.log('рядків: %s | вже з UID: %s | ЗАРЕЗОЛВЛЕНО: %s | НЕ ЗАРЕЗОЛВЛЕНО: %s',
+    lastRow - 1, skipped, resolved, unresolved);
+  if (missing.length){
+    Logger.log('─── не зарезолвлені (empKey → скільки рядків) ───');
+    missing.forEach(function(x){ Logger.log('   %-46s %s', x.empKey, x.rows); });
+  }
+  if (m.dupes.length) Logger.log('⚠️ дублі empKey у HR: %s', JSON.stringify(m.dupes));
+  if (dryRun){
+    Logger.log('Це DRY-RUN, нічого не записано.');
+    return {ok:true, dryRun:true, label:CFG.label, rows:lastRow - 1, alreadyHadUid:skipped,
+            resolved:resolved, unresolved:unresolved, missing:missing, hrDupes:m.dupes};
+  }
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(60000); } catch(e){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+  try {
+    if (needHeader) sh.getRange(1, CFG.uidCol).setValue('UID');
+    plan.forEach(function(p){ sh.getRange(p.row, CFG.uidCol).setValue(p.uid); });
+    Logger.log('✅ проставлено UID: %s (не зарезолвлено %s)', resolved, unresolved);
+    return {ok:true, label:CFG.label, written:resolved, unresolved:unresolved, missing:missing};
+  } finally { try { lock.releaseLock(); } catch(_){} }
+}
+
+// ── Обгортки під редактор (аргументів Run не передає) ───────────────────────
+function UID1_ASSIGN_HR_DRYRUN(){        return migrateHrAssignUids(true);  }
+function UID1_ASSIGN_HR_APPLY(){         return migrateHrAssignUids(false); }
+function UID3_LESSONS_DRYRUN(){          return migrateTableUids('lessons', true);      }
+function UID3_LESSONS_APPLY(){           return migrateTableUids('lessons', false);     }
+function UID3_ASSIGNMENTS_DRYRUN(){      return migrateTableUids('assignments', true);  }
+function UID3_ASSIGNMENTS_APPLY(){       return migrateTableUids('assignments', false); }
+function UID3_CATALOG_DRYRUN(){          return migrateTableUids('catalog', true);      }
+function UID3_CATALOG_APPLY(){           return migrateTableUids('catalog', false);     }
+
+// Зведений DRY-RUN по всіх кроках — нічого не пише.
+function UID_MIGRATION_STATUS(){
+  var m = _buildEmpKeyToUidMap();
+  Logger.log('═══ UID · СТАТУС МІГРАЦІЇ ═══');
+  Logger.log('HR: рядків з ПІБ=%s | з UID=%s | без UID=%s | дублів empKey=%s',
+    m.total, Object.keys(m.map).length, m.noUid.length, m.dupes.length);
+  m.noUid.slice(0, 20).forEach(function(x){ Logger.log('   без UID: рд%s %s', x.row, x.name); });
+  m.dupes.forEach(function(d){ Logger.log('   ⚠️ дубль empKey %s → UID %s (рд%s %s)', d.empKey, d.uids.join('/'), d.row, d.name); });
+  ['lessons','assignments','catalog'].forEach(function(w){
+    var r = migrateTableUids(w, true);
+    if (r.ok) Logger.log('%s: рядків=%s з UID=%s резолв=%s НЕ резолв=%s',
+      r.label, r.rows, r.alreadyHadUid, r.resolved, r.unresolved);
+    else Logger.log('%s: %s', w, r.error);
+  });
+  return {ok:true};
+}
+
 function savePredmetnykyLesson(actorId, lesson){
   try {
     var actor = _getActor(actorId);
@@ -24576,7 +24782,8 @@ function savePredmetnykyLesson(actorId, lesson){
         subject,
         dateVal instanceof Date ? dateVal : dateStr,
         new Date(),
-        actor.id
+        actor.id,
+        _uidForEmpKey(empKey)      // v7.200 (UID.5): пишемо обидва
       ]);
       _writeHrAudit(actor, 'pred_save_lesson', id, null,
                     {empKey:empKey, location:location, group:group, subject:subject, date:dateStr});
@@ -24636,7 +24843,7 @@ function deletePredmetnykyLesson(actorId, lessonId){
 // ═══════════════════════════════════════════════════════════════════
 var PRED_ASSIGN_TAB    = 'Predmetnyky_Assignments';        // CRM_SHEET
 // v6.11.9: схема — один викладач per (loc, subject), без колонки Group.
-var PRED_ASSIGN_HEADER = ['ID','Location','Subject','EmpKey','CreatedAt','CreatedBy'];
+var PRED_ASSIGN_HEADER = ['ID','Location','Subject','EmpKey','CreatedAt','CreatedBy','UID'];   // v7.200 (UID.3)
 
 var PRED_GROUP_NAME_BY_TYPE = {
   miniBaby:'miniBaby-ki', Baby:'Baby-ki', Find:'Find-iki',
@@ -24733,7 +24940,8 @@ function _loadPredAssignments(locFilter){
       id:      id,
       loc:     loc,
       subject: String(data[i][2] || '').trim(),
-      empKey:  String(data[i][3] || '').trim()
+      empKey:  String(data[i][3] || '').trim(),
+      uid:     String(data[i][6] || '').trim()      // v7.200 (UID.4)
     });
   }
   return out;
@@ -24998,6 +25206,7 @@ function savePredmetnykyAssignment(actorId, payload){
             result.updated = false;
           } else {
             sh.getRange(rowNum, 4).setValue(empKey);
+            sh.getRange(rowNum, PRED_ASSIGN_UID_COL).setValue(_uidForEmpKey(empKey));   // v7.200 (UID.5)
             _writeHrAudit(actor, 'pred_save_assign', existingId,
               {empKey:beforeEmpKey},
               {empKey:empKey, loc:loc, subject:subject});
@@ -25243,7 +25452,8 @@ function exportPredmetnykyToSalary(params){
       if (!gbdBySubj[sk]) gbdBySubj[sk] = {};
       if (!gbdBySubj[sk][dIso]) gbdBySubj[sk][dIso] = {};
       gbdBySubj[sk][dIso][ng] = true;
-      var _ek = String(L.empKey || '').trim();
+      // v7.200 (UID.4): ключ кошика — UID, фолбек на empKey.
+      var _ek = String(L.uid || '').trim() || String(L.empKey || '').trim();
       if (!_ek) _emptyEmpKey++;
       var tk = (_ek || '(порожній)') + '|' + sk;
       if (!gbdByTeacher[tk]) gbdByTeacher[tk] = {};
