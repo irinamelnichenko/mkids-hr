@@ -400,8 +400,21 @@ var GROUP_PATTERNS = [
   /^\s*\d+\s*([dDsS]\s*(клас|кл)?|класс?|кл\.?|[бвБВ])/
 ];
 
-function normalizeGroupName(raw) {
+// v7.202: локація типу «Школа»? Клас у ній — самостійна назва («4 клас», «3D»),
+// а не різновид садкової групи, тож нормалізувати його НЕ можна.
+function _isSchoolLoc(typ, loc){
+  return /школ/i.test(String(typ || '')) || /школ/i.test(String(loc || ''));
+}
+
+// v7.202: keepSchoolAsIs — для шкіл повертаємо назву заголовка ЯК Є.
+// Причина: два останні правила схлопували будь-який клас у слово «Школа»
+// (/^\d+\s*(клас|кл|D|S|Б|В)/ і /^школа$/), тож перейменування класів у
+// Payment-файлі не доїжджало до агрегату — «4 клас», «3D», «3S» ставали одним
+// «Школа». Розпізнавання заголовка (isGroupHeaderRow) НЕ чіпаємо: воно й далі
+// має ловити «3D» як початок секції, інакше діти зіллються в «(без групи)».
+function normalizeGroupName(raw, keepSchoolAsIs) {
   var s = trim(raw);
+  if (keepSchoolAsIs) return s;
   if (/mini.?baby/i.test(s))  return 'miniBaby-ki';
   if (/^baby/i.test(s))       return 'Baby-ki';
   if (/find/i.test(s))        return 'Find-iki';
@@ -4890,7 +4903,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.200', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.202', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -6481,7 +6494,7 @@ function aggregatePayments() {
       var monthCol    = detectCurrentMonthCol(data, curJSMonth, cpm);
       var contractCol = detectContractDateCol(data);
       Logger.log(loc + ': monthCol=' + monthCol + ', month=' + monthName + ', contractCol=' + contractCol);
-      var groups = parsePaymentSheet(data, monthCol, contractCol, cpm);
+      var groups = parsePaymentSheet(data, monthCol, contractCol, cpm, loc, typ);   // v7.202
       Logger.log(loc + ': groups=' + groups.length);
 
       groups.forEach(function(g) {
@@ -6567,7 +6580,8 @@ function detectCurrentMonthCol(rows, curJSMonth, cpm) {
   return col;
 }
 
-function parsePaymentSheet(data, monthCol, contractCol, cpm) {
+function parsePaymentSheet(data, monthCol, contractCol, cpm, loc, typ) {
+  var _keepSchool = _isSchoolLoc(typ, loc);   // v7.202
   var _LO = _paymentLayout(cpm);   // v7.103: розкладка блоку (5 або 7 колонок)
   var DATA_START = 3;
   var groups = [];
@@ -6579,7 +6593,7 @@ function parsePaymentSheet(data, monthCol, contractCol, cpm) {
     if (isGroupHeaderRow(row, monthCol)) {
       var firstSpace = nameCell.search(/\s/);
       var teacher = firstSpace > 0 ? nameCell.slice(firstSpace).trim() : '';
-      var groupName = normalizeGroupName(nameCell);
+      var groupName = normalizeGroupName(nameCell, _keepSchool);   // v7.202
       var groupKey = groupName + (teacher ? ' ' + teacher : '');
       curGroup = {group: groupKey, teacher: teacher, children: []};
       groups.push(curGroup);
@@ -6881,7 +6895,7 @@ function aggregatePaymentsYearly() {
       var _LOy         = _paymentLayout(cpm);
       var curMonthCol  = detectCurrentMonthCol(data, curJSMonth, cpm);
       var contractCol  = detectContractDateCol(data);
-      var groups       = parsePaymentSheet(data, curMonthCol, contractCol, cpm);
+      var groups       = parsePaymentSheet(data, curMonthCol, contractCol, cpm, loc, typ);   // v7.202
       var nameToRow = {};
       for (var ri = 3; ri < data.length; ri++) {
         var nc = trim(String(data[ri][0] || ''));
@@ -15494,7 +15508,7 @@ function _aggregateOneLoc(loc){
     var pdata = psh.getDataRange().getValues();
     var cpm = _paymentColsPerMonth(loc, cfg[5]);
     var monthCol = detectCurrentMonthCol(pdata, curJSMonth, cpm), contractCol = detectContractDateCol(pdata);
-    var groups = parsePaymentSheet(pdata, monthCol, contractCol, cpm), locRows = [];
+    var groups = parsePaymentSheet(pdata, monthCol, contractCol, cpm, loc, typ), locRows = [];   // v7.202
     groups.forEach(function(g){ g.children.forEach(function(ch){
       var fs = ch.factStudy||0, fv = ch.factEntry||0, fe = ch.factExtra||0, bd = ch.budExtra||0, bs = ch.budStudy||0;
       var total = fs+fv+fe, br = bs+bd, tne = fs+fe, status;
