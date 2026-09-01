@@ -1862,6 +1862,24 @@ function extractTeacher(raw){
   return parseGroupField(raw).teacher;
 }
 
+// v7.201: для локацій типу «Школа» групування йде за ФАКТИЧНОЮ назвою класу з
+// КАРТКИ, а не через довідник типів садка. Причина: parseGroupField схлопує
+// будь-який клас у єдиний тип «Школа» (правила /^\d+\s*(клас|Б|В|D|S)/ і
+// /^школа$/), тож у табелі всі класи зливались в одну секцію, а там, де в
+// Оплатах група порожня, — у «(без групи)». Картки при цьому містять коректні
+// назви: «4 Б клас», «Школа клас 2025» тощо.
+// Джерело: S.crm[resolveCardId(ПІБ, локація)].group. Якщо картки немає або в
+// ній порожня група — падаємо на стару поведінку (група з Оплат).
+function _schoolGroupFromCard(name, loc){
+  try{
+    if(getLocTypeByLoc(loc)!=='Школа') return '';
+    var id=resolveCardId(name, loc);
+    var c=id && S.crm ? S.crm[id] : null;
+    var g=c ? String(c.group||'').trim() : '';
+    return g || '';
+  }catch(e){ return ''; }
+}
+
 function buildGroups(){
   S.groups={};
   var grpMap={};
@@ -1874,12 +1892,15 @@ function buildGroups(){
     if(grp==='__skip__') return;
     var name=String(row["Ім'я дитини"]||'').trim();
     if(!loc||!name) return;
+    // v7.201: школа — беремо клас із картки як є.
+    var _schoolGrp=_schoolGroupFromCard(name, loc);
 
     if(!S.payMonth) S.payMonth=String(row['Місяць']||'').trim();
     // Вихователь: з окремої колонки або витягнутий з назви групи
     var rawTeacher=String(row['Вихователь']||'').trim()||parsed.teacher;
     // Ключ групи = локація + тип групи + вихователь (щоб Preschool Юля і Preschool Наталія були різними)
-    var grpKey=grp+(rawTeacher?' '+rawTeacher:'');
+    // v7.201: у школі ключ = сама назва класу, без домішування вихователя.
+    var grpKey=_schoolGrp ? _schoolGrp : (grp+(rawTeacher?' '+rawTeacher:''));
 
     if(!S.groups[loc]) S.groups[loc]=[];
     var key=loc+'||'+grpKey;
@@ -7806,6 +7827,11 @@ function buildGroupsFromYearly(monthIdx){
     if(!loc||!name) return;
     var parsed=parseGroupField(rawGrp);
     var grp=parsed.groupType||rawGrp;
+    // v7.201: школа — клас із картки (див. коментар у buildGroups). Ця функція
+    // перезаписує S.groups при перегляді НЕ поточного місяця, тож без дзеркальної
+    // правки табель показував би класи лише для поточного місяця.
+    var _schoolGrp=_schoolGroupFromCard(name, loc);
+    if(_schoolGrp) grp=_schoolGrp;
     var rawTeacher=String(row['Вихователь']||'').trim();
     var fs=+(row[mName+'-Факт-навч']||0);
     var fe=+(row[mName+'-Факт-доп']||0);
@@ -7815,7 +7841,7 @@ function buildGroupsFromYearly(monthIdx){
     var budget=bs+be;
     var totalNoEntry=fs+fe;
     var debt=budget>totalNoEntry?budget-totalNoEntry:0;
-    var grpKey=grp+(rawTeacher?' '+rawTeacher:'');
+    var grpKey=_schoolGrp ? _schoolGrp : (grp+(rawTeacher?' '+rawTeacher:''));   // v7.201
     var key=loc+'||'+grpKey;
     if(!result[loc]) result[loc]=[];
     if(!grpMap[key]){
