@@ -4903,7 +4903,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.202', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.203', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -6591,8 +6591,14 @@ function parsePaymentSheet(data, monthCol, contractCol, cpm, loc, typ) {
     var nameCell = trim(String(row[0] || ''));
     if (!nameCell) continue;
     if (isGroupHeaderRow(row, monthCol)) {
+      // v7.203: у школі вихователя з заголовка НЕ витягуємо — уся назва є назвою
+      // класу. Інакше «4 клас» ділилось на групу «4 клас» + «вихователя» «клас»,
+      // і ключ виходив «4 клас клас». Дзеркалить фронт (parseGroupField:
+      // if(groupType==='Школа') return {groupType, teacher:''}).
+      // Для садків поведінка не змінена: «Preschool Юля» → група Preschool,
+      // вихователь «Юля».
       var firstSpace = nameCell.search(/\s/);
-      var teacher = firstSpace > 0 ? nameCell.slice(firstSpace).trim() : '';
+      var teacher = (!_keepSchool && firstSpace > 0) ? nameCell.slice(firstSpace).trim() : '';
       var groupName = normalizeGroupName(nameCell, _keepSchool);   // v7.202
       var groupKey = groupName + (teacher ? ' ' + teacher : '');
       curGroup = {group: groupKey, teacher: teacher, children: []};
