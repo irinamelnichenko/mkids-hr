@@ -1694,8 +1694,7 @@ const PERMISSIONS = {
     'invoices'
   ],
 
-  nurse: [
-    'dashboard',
+  nurse: [                                                          // v7.204: без dashboard
     'clients_list','attendance_kids',
     'employees','vacations','sick_leaves',
     'calendar','vacation_schedule',
@@ -2303,7 +2302,20 @@ async function initApp(){
     const el=document.getElementById('sheetsStatus');
     if(!getScriptUrl()&&el){el.innerHTML='<span style="cursor:pointer;text-decoration:underline" onclick="nav(\'settings\')">⚠️ Хмарне збереження не налаштовано</span>';el.style.color='#e67e22';}
   }
-  nav('dashboard');
+  nav(_homeView());   // v7.204: без дозволу dashboard — на першу доступну сторінку
+}
+
+// v7.204: куди вести роль, якій дашборд недоступний. Матриця PERMISSIONS сама
+// нічого не ховає від навігації: nav() гейтить лише 'settings', а renderView()
+// малює dashboard і за замовчуванням. Тож без цього медсестра після кожного
+// входу однаково приземлялась би на дашборд, попри прибраний дозвіл.
+function _homeView(){
+  if (hasPerm('dashboard')) return 'dashboard';
+  var order = [['employees','employees'], ['vacations','vacations'],
+               ['sick_leaves','sick'],    ['calendar','birthdays'],
+               ['vacation_schedule','vacschedule']];
+  for (var i = 0; i < order.length; i++) if (hasPerm(order[i][0])) return order[i][1];
+  return 'employees';
 }
 async function refreshData(){showLoad();S._tabelCloudLoaded={};await fetchEmps(true);renderView();}
 function fillLoginLocs(){
@@ -5394,7 +5406,7 @@ function sortByPosition(arr){
 function renderTabel(){
   // v6.28.1: медсестра відмічає ТІЛЬКИ дітей — табель співробітників їй недоступний
   // (страхуємо ще й тут, бо дашборд-картка «Присутні сьогодні» теж веде на nav('tabel')).
-  if(typeof isNurse==='function' && isNurse()){ nav('dashboard'); return; }
+  if(typeof isNurse==='function' && isNurse()){ nav(_homeView()); return; }   // v7.204: не на дашборд
   const isHR=isNetworkRole(S.user.role);
   if(!S.f)S.f={};
 
