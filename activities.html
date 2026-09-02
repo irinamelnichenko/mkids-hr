@@ -2833,12 +2833,33 @@ async function _applySchoolRoster(loc){
     }
   }
   var rs = ATT_SCHOOL_ROSTER[loc];
-  if (!rs || !rs.isSchool) return;
+  if (!rs) return;
+
+  // v7.208: випускники й розірвані — геть з екрана відміток у БУДЬ-ЯКІЙ локації.
+  // Для садків це вся правка: група й далі береться з Payment, бо там вона вірна,
+  // просто дитина, яка вже не ходить, у списку не висить.
+  var dead = {};
+  (rs.inactive || []).forEach(function(nm){ dead[nm] = true; });
 
   var src = ATT.childrenByLoc[loc] || {};
+
+  if (!rs.isSchool){
+    if (!(rs.inactive || []).length) return;
+    var outK = {}, cntK = 0, offK = 0;
+    Object.keys(src).forEach(function(g){
+      var list = (src[g] || []).filter(function(nm){ if (dead[nm]){ offK++; return false; } return true; });
+      if (list.length){ outK[g] = list; cntK += list.length; }
+    });
+    if (!cntK) return;                             // нічого не лишилось — краще старий список
+    ATT.childrenByLoc[loc] = outK;
+    if (offK) console.log('[ростер] ' + loc + ': прибрано випускників/розірваних — ' + offK);
+    return;
+  }
+
   var out = {}, kept = 0, dropped = 0;
   Object.keys(src).forEach(function(g){
     (src[g] || []).forEach(function(nm){
+      if (dead[nm]){ dropped++; return; }          // v7.208: картка є, але дитина вже не ходить
       var grp = rs.byName[nm];
       if (!grp){ dropped++; return; }              // немає активної картки — не показуємо
       if (!out[grp]) out[grp] = [];

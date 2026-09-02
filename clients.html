@@ -5238,7 +5238,7 @@ function markAllPresent(dateStr, loc, group){
   // Якщо loc='' — використовує поточний відфільтрований список (S._displayLocs)
   var locs=loc?[loc]:(S._displayLocs&&S._displayLocs.length?S._displayLocs:Object.keys(S.groups));
   locs.forEach(function(l){
-    (S.groups[l]||[]).forEach(function(g){
+    (attGroups(l)).forEach(function(g){
       if(group&&g.group!==group) return;
       g.children.forEach(function(ch){
         var cur=(S.att[dateStr]||{})[ch.id]||'';
@@ -5310,6 +5310,31 @@ var ATT_STATUS_CLASS={present:'att-s-present',sick:'att-s-sick',vacation:'att-s-
 var ATT_STATUS_LABEL={present:'Присутній',sick:'Хворий',vacation:'Відпустка',absent:'Відсутній (інше)'};
 var DAY_UA=['Нд','Пн','Вт','Ср','Чт','Пт','Сб'];
 var DAY_UA_FULL=['Неділя','Понеділок','Вівторок','Середа','Четвер','Пятниця','Субота'];
+
+// v7.208: табель відвідування — робочий екран, тут відмічають щодня. Випускників
+// і розірваних у ньому бути не має. Фільтруємо за СТАТУСОМ КАРТКИ, а не за назвою
+// групи: група в Payment може бути будь-яка, а статус — єдине надійне джерело.
+// S.groups НЕ чіпаємо: його ж читають «Список дітей», «Борги та оплати» й
+// аналітика, де випускники мають лишатись (за ними тягнуться реальні бюджети).
+// Дитину без картки НЕ ховаємо: у Житомирі, Манхетені та Нац.Гвардії таких 68 —
+// це реальні діти, чиї картки ще не завели.
+function _kidGone(ch){
+  var c = ch && ch.id ? S.crm[ch.id] : null;
+  if (!c) return false;
+  var st = String(c.status || '').trim();
+  return isGraduatedStatus(st) || st === 'terminated';
+}
+function attGroups(loc){
+  var src = S.groups[loc] || [];
+  var out = [];
+  for (var i = 0; i < src.length; i++){
+    var g = src[i];
+    var kids = (g.children || []).filter(function(ch){ return !_kidGone(ch); });
+    if (!kids.length) continue;                 // група з самих випускників зникає
+    out.push(Object.assign({}, g, {children: kids}));
+  }
+  return out;
+}
 
 function renderAttendance(){
   var main=document.getElementById('main'); if(!main) return;
@@ -5412,7 +5437,7 @@ function renderAttendance(){
   // Всі групи з усіх activeLocs (для дропдауну груп)
   var allGroupNames=[];
   activeLocs.forEach(function(loc){
-    (S.groups[loc]||[]).forEach(function(g){
+    (attGroups(loc)).forEach(function(g){
       if(allGroupNames.indexOf(g.group)<0) allGroupNames.push(g.group);
     });
   });
@@ -5457,7 +5482,7 @@ function renderAttendance(){
   // ── Підпис поточного вибору ────────────────────────────────────────────────
   var childCount=0;
   activeLocs.forEach(function(loc){
-    (S.groups[loc]||[]).forEach(function(g){
+    (attGroups(loc)).forEach(function(g){
       if(activeGroup&&g.group!==activeGroup) return;
       childCount+=g.children.length;
     });
@@ -5486,7 +5511,7 @@ function renderAttendance(){
     // Збір для XLSX — по дитині 12 місяців к-сті присутніх днів.
     S._attExport={mode:'year',year:S.attYear,loc:locLabel,rows:[]};
     activeLocs.forEach(function(loc){
-      (S.groups[loc]||[]).forEach(function(g){
+      (attGroups(loc)).forEach(function(g){
         if(activeGroup&&g.group!==activeGroup) return;
         g.children.forEach(function(ch){
           var months=[];
@@ -5510,7 +5535,7 @@ function renderAttendance(){
   // Збір рядків для XLSX-експорту разом із підрахунком статистики.
   S._attExport={mode:S.attMode,days:statDays.slice(),loc:locLabel,rows:[]};
   activeLocs.forEach(function(loc){
-    (S.groups[loc]||[]).forEach(function(g){
+    (attGroups(loc)).forEach(function(g){
       if(activeGroup&&g.group!==activeGroup) return;
       g.children.forEach(function(ch){
         var row={loc:loc,group:g.group,name:ch.name,byDay:{},
@@ -5562,7 +5587,7 @@ function renderAttendanceWeek(locs,group){
 
   var rows='';
   locs.forEach(function(loc){
-    var locGroups=S.groups[loc]||[];
+    var locGroups=attGroups(loc);
     if(!locGroups.length) return;
     if(multiLoc) rows+='<tr class="att-loc-row"><td colspan="'+(days.length+1)+'">📍 '+esc(loc)+'</td></tr>';
     locGroups.forEach(function(g){
@@ -5607,7 +5632,7 @@ function renderAttendanceDay(locs,group){
 
   var rows='';
   locs.forEach(function(loc){
-    var locGroups=S.groups[loc]||[];
+    var locGroups=attGroups(loc);
     if(!locGroups.length) return;
     if(multiLoc) rows+='<div style="font-size:13px;font-weight:800;color:var(--dark);padding:10px 0 4px;border-top:2px solid var(--gray2);margin-top:8px">📍 '+esc(loc)+'</div>';
     locGroups.forEach(function(g){
@@ -5676,7 +5701,7 @@ function renderAttendanceMonth(locs,group){
   var tbody='<tbody>';
   var anyRows=false;
   locs.forEach(function(loc){
-    var locGroups=S.groups[loc]||[];
+    var locGroups=attGroups(loc);
     if(!locGroups.length) return;
     if(multiLoc) tbody+='<tr class="att-loc-row"><td colspan="'+(days.length+5)+'">📍 '+esc(loc)+'</td></tr>';
     locGroups.forEach(function(g){
@@ -5744,7 +5769,7 @@ function renderAttendanceYear(locs,group){
   var tbody='<tbody>';
   var anyRows=false;
   locs.forEach(function(loc){
-    var locGroups=S.groups[loc]||[];
+    var locGroups=attGroups(loc);
     if(!locGroups.length) return;
     if(multiLoc) tbody+='<tr class="att-loc-row"><td colspan="'+(12+4)+'">📍 '+esc(loc)+'</td></tr>';
     locGroups.forEach(function(g){

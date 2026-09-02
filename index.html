@@ -3010,12 +3010,24 @@ function renderDash(){
   if(_kompIsCFO()){ _ensureSalOv(_kompYear()).then(_dashSoftRerender); _ensureSalOv(_kompYear()-1).then(_dashSoftRerender); _ensureOpexOv(_kompYear()).then(_dashSoftRerender); _ensurePayments().then(_dashSoftRerender); } // v7.112/116 CFO
   _renderDashNow();
 }
+// v7.208: «дитина ходить зараз?» — єдиний критерій для операційних лічильників.
+// Статус, а не група: група в картці може бути будь-якою, зокрема «Школа клас 2025».
+// Картку без статусу вважаємо активною (у листі Клієнти дефолт саме такий).
+function _isCurrentKid(c){
+  if(!c) return false;
+  const st=String(c.status||'active').trim();
+  return st!=='graduated' && st!=='graduate' && st!=='terminated';
+}
 function _renderDashNow(){
   if(S.view!=='dashboard') return;
   const isHR=isNetworkRole(S.user.role);
   const myLoc=S.user.loc||'';
   // ── діти + групи (S.crm) ──
-  const kids=S.crm?Object.values(S.crm):[];
+  // v7.208: дашборд відповідає на питання «скільки дітей У НАС ЗАРАЗ», тож
+  // випускники й розірвані в лічильник не йдуть. До цієї правки Object.values(S.crm)
+  // брав усі картки поспіль — 44 graduated + 80 terminated завищували цифру по
+  // мережі, а в «Групах» висіли класи на кшталт «Школа клас 2025».
+  const kids=(S.crm?Object.values(S.crm):[]).filter(_isCurrentKid);
   const scopedKids=isHR?kids:kids.filter(c=>c.loc===myLoc);
   const caps=S._locCaps||{};
   const locAgg={};
@@ -3128,7 +3140,7 @@ function _renderLocCardNow(){
   const c=(S._locCards&&S._locCards[loc])||{};
   const canEdit=isHR||(String(S.user.role||'').toLowerCase()==='director'&&S.user.loc===loc);
   const team=_locTeam(loc);
-  const grpCnt=S.crm?new Set(Object.values(S.crm).filter(x=>x.loc===loc&&x.group).map(x=>x.group)).size:0;
+  const grpCnt=S.crm?new Set(Object.values(S.crm).filter(x=>_isCurrentKid(x)&&x.loc===loc&&x.group).map(x=>x.group)).size:0;   // v7.208
   const v=(k)=>esc(c[k]||'');
   const fld=(id,label,val,ro)=>`<div class="ii" style="margin-bottom:0"><label>${label}</label><input id="${id}" value="${esc(val||'')}" ${ro?'disabled':''} style="width:100%;padding:7px 10px;border:1.5px solid var(--gray2);border-radius:7px;font-size:14px"></div>`;
   const taLbl='Особливості';

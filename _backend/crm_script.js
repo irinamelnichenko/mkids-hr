@@ -4903,7 +4903,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.205', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.208', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -24276,6 +24276,12 @@ function _loadRealGroups(locFilter){
   var lo = Math.min(colLoc, colGrp), hi = Math.max(colLoc, colGrp);
   var data = sh.getRange(2, lo + 1, lastRow - 1, hi - lo + 1).getValues();   // вузький діапазон (Локація+Група суміжні)
   var iLoc = colLoc - lo, iGrp = colGrp - lo;
+  // v7.208: предметники — робочий екран, тож групи будуємо лише з АКТИВНИХ карток.
+  // Інакше в матриці висять «Школа клас», «Школа клас 2025» тощо — групи, у яких
+  // самі випускники. Читаємо Статус окремим вузьким діапазоном, щоб не розтягувати
+  // основний (Локація+Група суміжні, Статус далеко праворуч).
+  var colSt = hdrs.indexOf('Статус');
+  var stData = (colSt >= 0) ? sh.getRange(2, colSt + 1, lastRow - 1, 1).getValues() : null;
   var filter = String(locFilter || '').trim();
   var seen = {};                                   // "loc|group" → true
   for (var i = 0; i < data.length; i++){
@@ -24283,6 +24289,10 @@ function _loadRealGroups(locFilter){
     var grp = String(data[i][iGrp] || '').trim();
     if (!loc || !grp) continue;
     if (filter && loc !== filter) continue;
+    if (stData){
+      var st = String(stData[i][0] || '').trim();
+      if (st === 'graduated' || st === 'graduate' || st === 'terminated') continue;
+    }
     var k = loc + '|' + grp;
     if (seen[k]) continue;
     seen[k] = true;
@@ -24300,9 +24310,16 @@ function _loadRealGroups(locFilter){
 // «(без групи)». Табель цей самий баг уже обходить через картки (clients.html
 // v7.201) — цей роут дає той самий обхід сторінці додаткових, не тягнучи на
 // телефон вихователя весь getClients (~1200 карток з ~40 колонками).
-// Для НЕшкільних локацій повертає isSchool:false — фронт нічого не змінює.
-// У ростер ідуть ЛИШЕ картки зі статусом active/adaptation: випускники й
-// сміттєві рядки Payment («Табір», «11», «Вільних 8 8») відсіюються.
+// Для НЕшкільних локацій byName порожній (isSchool:false) — там група й далі
+// береться з Payment. У ростер ідуть ЛИШЕ картки active/adaptation: випускники
+// й сміттєві рядки Payment («Табір», «11», «Вільних 8 8») відсіюються.
+//
+// v7.208: додано inactive[] — ПІБ карток зі статусом graduated/terminated, і це
+// рахується для ЛОКАЦІЙ БУДЬ-ЯКОГО ТИПУ. Робочі екрани (відмітки додаткових,
+// табель відвідування) ховають цих дітей; екрани грошей та історії — ні.
+// Свідомо НЕ ховаємо тих, у кого картки немає взагалі: у Житомирі, Манхетені
+// та Нац.Гвардії таких 68 — це реальні діти, чиї картки ще не завели, і
+// прибрати їх зі списку відміток означало б зупинити роботу трьох локацій.
 function getSchoolRoster(loc){
   loc = String(loc || '').trim();
   if (!loc) return {ok:false, error:'Параметр loc обовʼязковий'};
@@ -24315,10 +24332,12 @@ function getSchoolRoster(loc){
       if (_normForMatch(list[i].loc) === _normForMatch(loc)){ typ = list[i].typ; break; }
     }
   } catch(e){}
-  if (!_isSchoolLoc(typ, loc)) return {ok:true, loc:loc, typ:typ, isSchool:false, byName:{}, groups:[]};
+  var isSchool = _isSchoolLoc(typ, loc);
 
   var sh = getCRMSpreadsheet().getSheetByName(SHEET_CLIENTS);
-  if (!sh || sh.getLastRow() < 2) return {ok:true, loc:loc, typ:typ, isSchool:true, byName:{}, groups:[]};
+  if (!sh || sh.getLastRow() < 2){
+    return {ok:true, loc:loc, typ:typ, isSchool:isSchool, byName:{}, groups:[], inactive:[]};
+  }
 
   // Вузьке читання, як у _loadRealGroups: беремо лише потрібні колонки.
   var lastRow = sh.getLastRow(), lastCol = sh.getLastColumn();
@@ -24335,21 +24354,33 @@ function getSchoolRoster(loc){
   var data = sh.getRange(2, lo + 1, lastRow - 1, hi - lo + 1).getValues();
 
   var byName = {}, seenGrp = {}, groups = [], skippedNoGroup = 0, skippedStatus = 0;
+  var inactive = [], seenInact = {};
   for (var r = 0; r < data.length; r++){
     if (_normForMatch(data[r][cLoc - lo]) !== _normForMatch(loc)) continue;
-    var st = (cSt >= 0) ? String(data[r][cSt - lo] || '').trim() : 'active';
-    if (st !== 'active' && st !== 'adaptation'){ skippedStatus++; continue; }
     var nm = String(data[r][cName - lo] || '').trim();
-    var gr = String(data[r][cGrp - lo] || '').trim();
     if (!nm) continue;
+    var st = (cSt >= 0) ? String(data[r][cSt - lo] || '').trim() : 'active';
+
+    // v7.208: картка є, але дитина вже не ходить → у ЖОДНОМУ робочому екрані
+    // її бути не має, незалежно від типу локації. Список віддаємо окремо, бо
+    // для садків byName не будується (там група береться з Payment як і раніше).
+    if (st === 'graduated' || st === 'graduate' || st === 'terminated'){
+      if (!seenInact[nm]){ seenInact[nm] = true; inactive.push(nm); }
+      skippedStatus++;
+      continue;
+    }
+    if (!isSchool) continue;                      // садкам потрібен лише inactive
+
+    var gr = String(data[r][cGrp - lo] || '').trim();
     if (!gr){ skippedNoGroup++; continue; }
-    if (byName[nm]) continue;                      // дублі карток: перша виграє
+    if (byName[nm]) continue;                     // дублі карток: перша виграє
     byName[nm] = gr;
     if (!seenGrp[gr]){ seenGrp[gr] = true; groups.push(gr); }
   }
   groups.sort(function(a, b){ return String(a).localeCompare(String(b), 'uk'); });
-  return {ok:true, loc:loc, typ:typ, isSchool:true, byName:byName, groups:groups,
-          count:Object.keys(byName).length, skippedStatus:skippedStatus, skippedNoGroup:skippedNoGroup};
+  return {ok:true, loc:loc, typ:typ, isSchool:isSchool, byName:byName, groups:groups,
+          inactive:inactive, count:Object.keys(byName).length,
+          skippedStatus:skippedStatus, skippedNoGroup:skippedNoGroup};
 }
 
 // Існуючий Предметники_Каталог → [{loc, subject_raw, subject_norm, rate, teacher, active}].
