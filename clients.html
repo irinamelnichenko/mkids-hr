@@ -1930,12 +1930,24 @@ function _cardGroupOf(name, loc){
     return c ? String(c.group||'').trim() : '';
   }catch(e){ return ''; }
 }
-// v7.225: заголовок групи без потрійного повтору. У Нац.Гвардії назва групи
-// вже містить ПІБ вихователя, тож окремий рядок «Вихователь: …» дублював його.
-function _grpHasTeacher(group, teacher){
+// v7.226: ХВІСТ ЗАГОЛОВКА ГРУПИ. Друга частина («… · хвіст») малюється лише
+// тоді, коли несе НОВУ інформацію. Приклади, які вона дублювала:
+//   «Білик Герман Олександрович (Малахова) · Білик Герман Олександрович (Малахова)»
+//   «Білик Маркус (Михайлова) · Білик Маркус (Михайлова) 535»
+//   «Пізнайки 3-4 · 2026-03-03T22:00:00.000Z»   ← Sheets прочитав «3-4» як дату
+//   «Розумники 6-7,Надія · 6-7,Надія»
+// Порожній рядок = не показувати.
+function _grpTail(group, teacher){
   var g=nameFold(group), t=nameFold(teacher);
-  if(!t) return true;                 // немає кого показувати
-  return !!g && g.indexOf(t)>=0;      // ПІБ уже всередині назви
+  if(!t) return '';
+  if(/^\d{4}-\d{2}-\d{2}/.test(t)) return '';            // ISO-дата замість вихователя
+  if(!/[a-z\u0430-\u044f\u0456\u0457\u0454\u0491]/i.test(t)) return '';   // самі цифри/розділові
+  if(g && (g.indexOf(t)>=0 || t.indexOf(g)>=0)) return ''; // одне міститься в іншому
+  return String(teacher||'').trim();
+}
+// Сумісність із v7.225: true = окремий рядок «Вихователь: …» НЕ потрібен.
+function _grpHasTeacher(group, teacher){
+  return !_grpTail(group, teacher);
 }
 function _schoolCardInfo(name, loc){
   try{
@@ -5655,7 +5667,7 @@ function renderAttendanceWeek(locs,group){
     if(multiLoc) rows+='<tr class="att-loc-row"><td colspan="'+(days.length+1)+'">📍 '+esc(loc)+'</td></tr>';
     locGroups.forEach(function(g){
       if(group&&g.group!==group) return;
-      rows+='<tr class="grp-row"><td colspan="'+(days.length+1)+'">📚 '+esc(g.group)+(g.teacher?' · '+esc(g.teacher):'')+'</td></tr>';
+      rows+='<tr class="grp-row"><td colspan="'+(days.length+1)+'">📚 '+esc(g.group)+(_grpTail(g.group,g.teacher)?' · '+esc(_grpTail(g.group,g.teacher)):'')+'</td></tr>';
       g.children.forEach(function(ch){
         var streak=getSickStreak(ch.id,todayStr);
         var streakHtml=streak>=3?'<span class="att-streak">'+streak+'д🤒</span>':'';
@@ -5700,7 +5712,7 @@ function renderAttendanceDay(locs,group){
     if(multiLoc) rows+='<div style="font-size:13px;font-weight:800;color:var(--dark);padding:10px 0 4px;border-top:2px solid var(--gray2);margin-top:8px">📍 '+esc(loc)+'</div>';
     locGroups.forEach(function(g){
       if(group&&g.group!==group) return;
-      rows+='<div style="font-size:12px;font-weight:700;text-transform:uppercase;color:var(--gray);padding:8px 0 4px">📚 '+esc(g.group)+(g.teacher?' · '+esc(g.teacher):'')+'</div>';
+      rows+='<div style="font-size:12px;font-weight:700;text-transform:uppercase;color:var(--gray);padding:8px 0 4px">📚 '+esc(g.group)+(_grpTail(g.group,g.teacher)?' · '+esc(_grpTail(g.group,g.teacher)):'')+'</div>';
       g.children.forEach(function(ch){
         var st=(S.att[dateStr]||{})[ch.id]||'';
         var streak=getSickStreak(ch.id,todayStr);
@@ -5770,7 +5782,7 @@ function renderAttendanceMonth(locs,group){
     locGroups.forEach(function(g){
       if(group&&g.group!==group) return;
       anyRows=true;
-      tbody+='<tr class="grp-row"><td colspan="'+(days.length+5)+'">📚 '+esc(g.group)+(g.teacher?' · '+esc(g.teacher):'')+'</td></tr>';
+      tbody+='<tr class="grp-row"><td colspan="'+(days.length+5)+'">📚 '+esc(g.group)+(_grpTail(g.group,g.teacher)?' · '+esc(_grpTail(g.group,g.teacher)):'')+'</td></tr>';
       g.children.forEach(function(ch){
         var cp=0,cs=0,cv=0,ca=0;
         var cells=days.map(function(d){
@@ -5838,7 +5850,7 @@ function renderAttendanceYear(locs,group){
     locGroups.forEach(function(g){
       if(group&&g.group!==group) return;
       anyRows=true;
-      tbody+='<tr class="grp-row"><td colspan="'+(12+4)+'">📚 '+esc(g.group)+(g.teacher?' · '+esc(g.teacher):'')+'</td></tr>';
+      tbody+='<tr class="grp-row"><td colspan="'+(12+4)+'">📚 '+esc(g.group)+(_grpTail(g.group,g.teacher)?' · '+esc(_grpTail(g.group,g.teacher)):'')+'</td></tr>';
       g.children.forEach(function(ch){
         var totP=0,totS=0,totV=0;
         var cells=CFG.MONTHS_SHORT.map(function(m,i){
