@@ -4903,7 +4903,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.208', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.209', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -4963,6 +4963,8 @@ function doGet(e) {
     else if (action === 'getChomusykyMarks')          result = getChomusykyMarks(e.parameter || {});
     else if (action === 'getChomusykyReport')         result = getChomusykyReport(e.parameter || {});
     else if (action === 'getSchoolRoster')            result = getSchoolRoster(e.parameter && e.parameter.loc || '');   // v7.205 read-only: клас із картки для локацій типу «Школа»
+    else if (action === 'dryRunBlankBlocks')          result = dryRunBlankBlocks(e.parameter || {});                    // v7.209 read-only: що змінить «порожній рядок закриває блок»
+    else if (action === 'purgeAutoDraftCards')        result = purgeAutoDraftCards({names:String((e.parameter&&e.parameter.names)||'').split('|').filter(String), loc:(e.parameter&&e.parameter.loc)||'', createdPrefix:(e.parameter&&e.parameter.createdPrefix)||'', dryRun:true});   // v7.209 GET = ЗАВЖДИ dryRun, видалення лише POST-ом
     else if (action === 'getPredmetnyCatalog')        result = getPredmetnyCatalog(e.parameter && e.parameter.loc || '');
     else if (action === 'getPredmetnyMarks')          result = getPredmetnyMarks(e.parameter || {});
     else if (action === 'getHrAudit')                  result = getHrAudit(e.parameter || {});                                          // v7.149 read-only аудит
@@ -5105,6 +5107,7 @@ function doPost(e) {
     else if (body.action === 'importPredmetnykyLessons')    result = importPredmetnykyLessons(Number(body.actorId || 0), body);          // v7.149 імпорт уроків
     else if (body.action === 'repairPredmetnykyLessons')    result = repairPredmetnykyLessons(Number(body.actorId || 0), body);          // v7.149 дедуп + перенумерація
     else if (body.action === 'exportPredmetnykyToSalary')   result = exportPredmetnykyToSalary(body || {});
+    else if (body.action === 'purgeAutoDraftCards')         result = purgeAutoDraftCards(body || {});  // v7.209
     else if (body.action === 'generateInvoicePDF')          result = generateInvoicePDF(body || {});   // v6.50
     else if (body.action === 'invoicePdfLink')              result = invoicePdfLink(body || {});       // v6.72 Viber link
     else if (body.action === 'invoiceViberMessage')         result = invoiceViberMessage(body || {});   // v6.72 Viber text
@@ -5453,6 +5456,183 @@ function syncCardGroupsFromPayment(body){
     return {ok:true, dryRun:dryRun, loc:loc||'(усі)', updated:(dryRun?0:updates.length),
             diffCount:changes.length, ambiguousCount:ambiguous.length,
             changes:changes.slice(0,500), ambiguous:ambiguous.slice(0,200)};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { if (lock){ try { lock.releaseLock(); } catch(_){} } }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.209 DRY-RUN: що змінить правило «порожній рядок закриває блок групи».
+// Читає Payment-файли як aggregatePayments і парсить КОЖЕН двічі — старим
+// режимом і новим — та показує різницю по групах і по дітях.
+// GET ?action=dryRunBlankBlocks[&loc=…]. Нічого не пише.
+// ═══════════════════════════════════════════════════════════════════════════
+function dryRunBlankBlocks(params){
+  params = params || {};
+  var only = String(params.loc || '').trim();
+  try {
+    var configSheet = SpreadsheetApp.openById(CONFIG_SHEET_ID).getSheets()[0];
+    var cfg = configSheet.getDataRange().getValues();
+    var curJSMonth = (new Date()).getMonth();
+    var out = [], totalMoved = 0, totalLocs = 0, errors = [];
+
+    for (var r = 1; r < cfg.length; r++){
+      var typ = trim(cfg[r][1]), loc = trim(cfg[r][2]);
+      var sheetId = trim(cfg[r][3]), sheetName = trim(cfg[r][4]) || 'Payment';
+      if (!loc || !sheetId) continue;
+      if (only && loc !== only) continue;
+      try {
+        var ss = SpreadsheetApp.openById(sheetId);
+        var psh = ss.getSheetByName(sheetName) || ss.getSheets()[0];
+        var data = psh.getDataRange().getValues();
+        var cpm = _paymentColsPerMonth(loc, cfg[r][5]);
+        var mc  = detectCurrentMonthCol(data, curJSMonth, cpm);
+        var cc  = detectContractDateCol(data);
+
+        function flat(groups){
+          var m = {};
+          groups.forEach(function(g){
+            g.children.forEach(function(ch){ m[String(ch.name).trim()] = g.group; });
+          });
+          return m;
+        }
+        var oldG = parsePaymentSheet(data, mc, cc, cpm, loc, typ, false);
+        var newG = parsePaymentSheet(data, mc, cc, cpm, loc, typ, true);
+        var a = flat(oldG), b = flat(newG);
+
+        var moved = [], toNoGroup = 0;
+        Object.keys(a).forEach(function(nm){
+          if (a[nm] !== b[nm]){
+            moved.push({name:nm, from:a[nm], to:(b[nm] === undefined ? '(зник)' : b[nm])});
+            if (b[nm] === '(без групи)') toNoGroup++;
+          }
+        });
+        function counts(groups){
+          var c = {};
+          groups.forEach(function(g){ c[g.group] = (c[g.group] || 0) + g.children.length; });
+          return c;
+        }
+        out.push({loc:loc, typ:typ,
+                  groupsBefore:oldG.length, groupsAfter:newG.length,
+                  kidsBefore:Object.keys(a).length, kidsAfter:Object.keys(b).length,
+                  moved:moved.length, movedToNoGroup:toNoGroup,
+                  countsBefore:counts(oldG), countsAfter:counts(newG),
+                  sample:moved.slice(0, 40)});
+        totalMoved += moved.length; totalLocs++;
+      } catch(e){ errors.push({loc:loc, error:String(e && e.message || e)}); }
+    }
+    return {ok:true, dryRun:true, locations:totalLocs, totalMoved:totalMoved, errors:errors, rows:out};
+  } catch(err){ return {ok:false, error:String(err && err.message || err)}; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.209 ЧИСТКА ПОРОЖНІХ ЧЕРНЕТОК автосинку.
+// POST {names:[…], loc, createdPrefix, dryRun?, confirm?}. dryRun DEFAULT true;
+// реальне видалення додатково вимагає confirm:'YES_DELETE'.
+// Видаляє ЛИШЕ картку, що пройшла ВСІ перевірки: створена вказаним прогоном,
+// жодного разу не редагована людиною, без батьків/телефонів/пошти, без сум і
+// номера договору, статус active, порожні JSON-и, і НЕМАЄ звʼязаних записів у
+// Табелі / Здоровʼї / Історії груп. Перед видаленням рядки дублюються в
+// BKP_Клієнти_чернетки_<штамп>.
+// ═══════════════════════════════════════════════════════════════════════════
+function purgeAutoDraftCards(body){
+  body = body || {};
+  var names  = body.names || [];
+  var loc    = String(body.loc || '').trim();
+  var stamp  = String(body.createdPrefix || '').trim();
+  var dryRun = (body.dryRun !== false);
+  if (!dryRun && body.confirm !== 'YES_DELETE'){
+    return {ok:false, error:'Реальне видалення вимагає confirm:"YES_DELETE"'};
+  }
+  if (!names.length || !loc) return {ok:false, error:'names[] і loc обовʼязкові'};
+
+  var lock = null;
+  try {
+    var ss = getCRMSpreadsheet();
+    var sh = ss.getSheetByName(SHEET_CLIENTS);
+    if (!sh) return {ok:false, error:'Лист Клієнти не знайдено'};
+    var vals = sh.getDataRange().getValues();
+    var H = vals[0].map(String);
+    function ci(n){ return H.indexOf(n); }
+    var iId=ci('ID'), iName=ci('ПІБ дитини'), iLoc=ci('Локація'), iGrp=ci('Група');
+    var iMom=ci('ПІБ мами'), iMomP=ci('Телефон мами'), iDad=ci('ПІБ тата'), iDadP=ci('Телефон тата');
+    var iMomE=ci('Email мами'), iDadE=ci('Email тата');
+    var iFee=ci('Сума договору'), iEntry=ci('Вступний внесок'), iCNum=ci('Номер договору');
+    var iSt=ci('Статус'), iAbs=ci('Відсутності (JSON)'), iCre=ci('Створено'), iUpd=ci('Оновлено');
+    if (iId<0 || iName<0 || iLoc<0) return {ok:false, error:'Колонки ID/ПІБ/Локація не знайдено'};
+
+    // звʼязані записи по id дитини — рахуємо один раз
+    function idsInSheet(sheetName, colName){
+      var s = ss.getSheetByName(sheetName); if (!s) return {};
+      var v = s.getDataRange().getValues(); if (v.length < 2) return {};
+      var c = v[0].map(String).indexOf(colName); if (c < 0) return {};
+      var m = {};
+      for (var k = 1; k < v.length; k++){
+        var id = String(v[k][c] || '').trim(); if (id) m[id] = (m[id] || 0) + 1;
+      }
+      return m;
+    }
+    var inTabel  = idsInSheet(SHEET_ATTENDANCE,    'ID дитини');
+    var inHealth = idsInSheet(SHEET_HEALTH,        'ID дитини');
+    var inHist   = idsInSheet(GROUP_HISTORY_SHEET, 'ID дитини');
+
+    function norm(x){ return String(x||'').trim().replace(/\s+/g,' ').toLowerCase(); }
+    var want = {}; names.forEach(function(n){ want[norm(n)] = true; });
+
+    var ready = [], refused = [], notFound = {};
+    Object.keys(want).forEach(function(k){ notFound[k] = true; });
+
+    for (var r = 1; r < vals.length; r++){
+      var nm = String(vals[r][iName] || '').trim();
+      if (!want[norm(nm)]) continue;
+      if (String(vals[r][iLoc] || '').trim() !== loc) continue;
+      delete notFound[norm(nm)];
+      var id = String(vals[r][iId] || '').trim();
+      var why = [];
+      function filled(i){ return i >= 0 && String(vals[r][i] || '').trim() !== ''; }
+      var cre = String(vals[r][iCre] || '').trim(), upd = String(vals[r][iUpd] || '').trim();
+      if (stamp && cre.indexOf(stamp) !== 0) why.push('створено не в цьому прогоні: "' + cre + '"');
+      if (cre !== upd)                       why.push('картку вже редагували: оновлено "' + upd + '"');
+      if (filled(iMom) || filled(iDad))      why.push('заповнено ПІБ батьків');
+      if (filled(iMomP)|| filled(iDadP))     why.push('є телефон');
+      if (filled(iMomE)|| filled(iDadE))     why.push('є email');
+      if ((Number(vals[r][iFee])   || 0) > 0) why.push('сума договору > 0');
+      if ((Number(vals[r][iEntry]) || 0) > 0) why.push('вступний внесок > 0');
+      if (filled(iCNum))                     why.push('є номер договору');
+      if (iSt >= 0 && String(vals[r][iSt] || '').trim() !== 'active') why.push('статус не active');
+      var absTxt = iAbs >= 0 ? String(vals[r][iAbs] || '').trim() : '';
+      if (absTxt && absTxt !== '[]')         why.push('є відсутності');
+      if (inTabel[id])  why.push('у Табелі ' + inTabel[id] + ' записів');
+      if (inHealth[id]) why.push('у Здоровʼї ' + inHealth[id] + ' записів');
+      if (inHist[id])   why.push('в Історії груп ' + inHist[id] + ' записів');
+
+      var rec = {row:r+1, id:id, name:nm, group:String(vals[r][iGrp]||''), created:cre, updated:upd};
+      if (why.length){ rec.reasons = why; refused.push(rec); }
+      else ready.push(rec);
+    }
+
+    var res = {ok:true, dryRun:dryRun, loc:loc, requested:names.length,
+               willDelete:ready.length, refusedCount:refused.length,
+               ready:ready, refused:refused, notFound:Object.keys(notFound)};
+    if (dryRun) return res;
+    if (!ready.length) return res;
+
+    lock = LockService.getScriptLock();
+    try { lock.waitLock(30000); } catch(e){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+
+    // бекап рядків, що видаляємо
+    var bName = 'BKP_Клієнти_чернетки_' + Utilities.formatDate(new Date(), 'GMT+3', 'yyyyMMdd_HHmmss');
+    var bk = ss.insertSheet(bName);
+    var dump = [H.slice()];
+    ready.forEach(function(x){ dump.push(vals[x.row - 1].slice()); });
+    bk.getRange(1, 1, dump.length, H.length).setValues(dump);
+
+    // знизу вгору, щоб не поїхали індекси
+    ready.slice().sort(function(a, b){ return b.row - a.row; })
+         .forEach(function(x){ sh.deleteRow(x.row); });
+    SpreadsheetApp.flush();
+    res.deleted = ready.length;
+    res.backupSheet = bName;
+    return res;
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
   finally { if (lock){ try { lock.releaseLock(); } catch(_){} } }
 }
@@ -6581,8 +6761,19 @@ function detectCurrentMonthCol(rows, curJSMonth, cpm) {
   return col;
 }
 
-function parsePaymentSheet(data, monthCol, contractCol, cpm, loc, typ) {
+// v7.209: порожній рядок ЗАКРИВАЄ блок групи.
+// Було: «поточна група» тяглася від заголовка до наступного заголовка, а порожні
+// рядки просто пропускались. У Payment Школи Осокорки після блоку 1D (рядки
+// 171-183) ідуть три порожні рядки, а далі безіменний хвіст 187-208 — і всі
+// 22 рядки хвоста приклеювались до 1D. Агрегат показував 1D = 35 замість 13,
+// а нічний синк заводив із цього хвоста чернетки карток із групою «1D».
+// Прапорець винесено в константу, щоб dryRunBlankBlocks міг порівняти обидва
+// режими на живих файлах, не чіпаючи бойові виклики.
+var BLANK_CLOSES_BLOCK = true;
+
+function parsePaymentSheet(data, monthCol, contractCol, cpm, loc, typ, closeOnBlank) {
   var _keepSchool = _isSchoolLoc(typ, loc);   // v7.202
+  var _closeBlank = (closeOnBlank === undefined) ? BLANK_CLOSES_BLOCK : !!closeOnBlank;
   var _LO = _paymentLayout(cpm);   // v7.103: розкладка блоку (5 або 7 колонок)
   var DATA_START = 3;
   var groups = [];
@@ -6590,7 +6781,7 @@ function parsePaymentSheet(data, monthCol, contractCol, cpm, loc, typ) {
   for (var r = DATA_START; r < data.length; r++) {
     var row = data[r];
     var nameCell = trim(String(row[0] || ''));
-    if (!nameCell) continue;
+    if (!nameCell){ if (_closeBlank) curGroup = null; continue; }
     if (isGroupHeaderRow(row, monthCol)) {
       // v7.203: у школі вихователя з заголовка НЕ витягуємо — уся назва є назвою
       // класу. Інакше «4 клас» ділилось на групу «4 клас» + «вихователя» «клас»,
@@ -20168,6 +20359,24 @@ function syncMissingClientsFromPayments(opts){
     if (n.toLowerCase().indexOf('тест') === 0) return true;  // "ТЕСТ Документи" тощо
     return false;
   }
+  // v7.209: чи схожий рядок на ПІБ дитини. Застосовується ЛИШЕ при СТВОРЕННІ
+  // чернетки — там консервативність безпечна: у гіршому разі директор заведе
+  // картку руками. Відсіює те, що чинні фільтри пропускали: «Саврасні 2»
+  // (цифра в імені), «Перевертень/Добрицька» і «Невгень/Хом'як» (слеш —
+  // це два прізвища в одному рядку), «Солодка Тея (бронь)» (дужки).
+  function _looksLikeChildName(nm){
+    var n = String(nm || '').trim().replace(/\s+/g, ' ');
+    if (!n) return false;
+    if (/[0-9]/.test(n)) return false;                     // цифра будь-де
+    if (/[\/\\()\[\]{}<>=+*_|#№@]/.test(n)) return false;  // службова пунктуація
+    var parts = n.split(' ');
+    if (parts.length < 2) return false;                    // потрібні мінімум прізвище + ім'я
+    for (var i = 0; i < parts.length; i++){
+      if (parts[i].length < 2) return false;
+      if (!/^[A-Za-zА-Яа-яЄІЇҐєіїґ]/.test(parts[i])) return false;   // слово починається з літери
+    }
+    return true;
+  }
   function genChildId(name, group, loc){
     // v7.47 ЕТАП 2/4: група ПРИБРАНА з ID → синк матчить картку по name+loc, не плодить привида.
     return 'c_' + String(name||'').trim().slice(0,24) + '_' + String(loc||'').slice(0,12);
@@ -20191,8 +20400,9 @@ function syncMissingClientsFromPayments(opts){
   //   4) Бюджет-Рік > 0 OR Факт-Рік > 0 (фінансова активність)
   var missing = [];
   var seenNew = {};
-  var skip = {header:0, numeric:0, test:0, zeroSum:0, noLoc:0, existing:0, dupInPay:0, outScope:0, camp:0, incomplete:0};
+  var skip = {header:0, numeric:0, test:0, zeroSum:0, noLoc:0, existing:0, dupInPay:0, outScope:0, camp:0, incomplete:0, notName:0};
   var skipNumericSamples = [];
+  var skipNotNameSamples = [];   // v7.209
   for (var pr = 1; pr < pvals.length; pr++){
     var prow    = pvals[pr];
     var name    = String(prow[pNameIdx] || '').trim();
@@ -20219,6 +20429,8 @@ function syncMissingClientsFromPayments(opts){
     if (budRik <= 0 && faktRik <= 0){ skip.zeroSum++; continue; }
 
     var cname = _cleanChildName(name);                  // v7.113: чисте ПІБ (без префікса/коду, з виправленнями)
+    // v7.209: не схоже на ПІБ → не заводимо картку
+    if (!_looksLikeChildName(cname)){ skip.notName++; if (skipNotNameSamples.length < 20) skipNotNameSamples.push(cname); continue; }
     // v7.113: неповне ПІБ (лише ім'я, напр. «Лев» без прізвища) — НЕ створюємо картку,
     // пропускаємо. Директор допише прізвище — синк підхопить наступного разу.
     if (cname.split(/\s+/).filter(function(x){ return x; }).length < 2){ skip.incomplete++; continue; }
@@ -20243,6 +20455,8 @@ function syncMissingClientsFromPayments(opts){
   Logger.log('  · дубль у Оплати-Рік:            %s', skip.dupInPay);
   Logger.log('  · табір/спейсери (Табір/Вільних): %s', skip.camp);
   Logger.log('  · неповне ПІБ (лише імʼя):        %s', skip.incomplete);
+  Logger.log('  · не схоже на ПІБ (v7.209):       %s  %s', skip.notName,
+    skipNotNameSamples.length ? '(приклади: ' + JSON.stringify(skipNotNameSamples) + ')' : '');
   Logger.log('  · поза скоупом (не садочок):     %s', skip.outScope);
   Logger.log('[syncMissing] ─────────────────────────────────────');
 
@@ -20263,6 +20477,7 @@ function syncMissingClientsFromPayments(opts){
     Logger.log('[syncMissing] DRY-RUN — нічого не записано. %s рядків БУДЕ створено при dryRun=false', missing.length);
     Logger.log('[syncMissing] ═══════════════════════════════════════');
     return {ok:true, dryRun:true, scope:(scope||'ALL'), missingCount:missing.length, byLoc:byLoc, skip:skip,
+      notNameSamples: skipNotNameSamples,
       preview: missing.map(function(m){ return {name:m.name, loc:m.loc, budRik:m.budRik, faktRik:m.faktRik}; })};
   }
 
@@ -20324,8 +20539,14 @@ function runSyncMissingREAL_792(){
 // чернеток карток ЛИШЕ по САДОЧКАХ (locScope='kindergartens'). Ідемпотентно (дедуп
 // existing/seenNew) + LockService всередині. Реєструється у createDailyTrigger.
 function nightlySyncMissingKindergartens(){
-  // v7.112: тепер САДКИ + ШКОЛИ (locScope:'kids_schools'). Табірні рядки (Табір/Вільних N) не заводяться.
-  return syncMissingClientsFromPayments({dryRun: false, confirm: 'YES_WRITE', locScope: 'kids_schools'});
+  // v7.209: ПОВЕРНУТО до 'kindergartens' — школи зі скоупу прибрано.
+  // Причина: у шкільних Payment-файлах блоки класів розділені порожніми рядками
+  // й безіменними хвостами, тож синк заводив чернетки з чужою групою. 31.08.2026
+  // о 07:29 так з'явились 9 порожніх карток у Школі Осокорки, усі з групою «1D»
+  // (насправді — рядки 189-207, зовсім інша частина файлу). Школярів заводимо
+  // руками або окремим прогоном renameSchoolChildrenClean/синку зі свідомим
+  // locScope:'kids_schools'.
+  return syncMissingClientsFromPayments({dryRun: false, confirm: 'YES_WRITE', locScope: 'kindergartens'});
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
