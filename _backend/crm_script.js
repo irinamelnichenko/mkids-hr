@@ -4903,7 +4903,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.217', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.218', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -6873,9 +6873,17 @@ var BLANK_CLOSES_BLOCK_SCHOOL = 3;   // школи: три підряд поро
 // спершу dryRunPayFilters показує, що саме зникне по кожній локації.
 //   0 = вимкнено (поведінка до v7.217), 1 = увімкнено.
 var PAY_FILTERS_ON = 0;
+var FREESEATS_DROP_BLOCK = 0;   // v7.218: 0 = лише заголовок, 1 = блок цілком
 
 // (1) Заголовок «…вільних місць N» / «Вільних 8 8» — не група, а лічильник
-//     вільних місць. Блок під ним ігнорується цілком.
+//     вільних місць.
+//     v7.218 РЕЖИМ: 0 = прибираємо ЛИШЕ заголовок, діти під ним падають у
+//     «(без групи)»; 1 = ігноруємо блок цілком.
+//     Чому 0 за замовчуванням: dryRun показав, що під заголовком
+//     «15 Вільних  місць 9» у Школі 228 лежить СПРАВЖНЯ дитина —
+//     Плотнікова Софія. Режим «блок цілком» прибирав її разом зі сміттям.
+//     Числові рядки («9», «10», «12») і так знімає фільтр (2), тож режим 0
+//     чистить усе те саме, але жодної дитини не втрачає.
 function _isFreeSeatsHeader(nameCell){
   return /вільн/i.test(String(nameCell || ''));
 }
@@ -6920,7 +6928,11 @@ function parsePaymentSheet(data, monthCol, contractCol, cpm, loc, typ, closeOnBl
     if (isGroupHeaderRow(row, monthCol)) {
       // v7.217 (1): «…вільних місць N» — службовий лічильник. Група не
       // створюється, блок під ним ігнорується до наступного заголовка.
-      if (_filters && _isFreeSeatsHeader(nameCell)){ curGroup = null; _inServiceBlock = true; continue; }
+      if (_filters && _isFreeSeatsHeader(nameCell)){
+        curGroup = null;
+        _inServiceBlock = !!FREESEATS_DROP_BLOCK;   // v7.218: за замовч. дітей НЕ ковтаємо
+        continue;
+      }
       _inServiceBlock = false;
       // v7.203: у школі вихователя з заголовка НЕ витягуємо — уся назва є назвою
       // класу. Інакше «4 клас» ділилось на групу «4 клас» + «вихователя» «клас»,
