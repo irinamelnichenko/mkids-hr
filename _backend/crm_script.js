@@ -538,7 +538,8 @@ function writePaymentsHeader(sheet) {
     'Локація','Напрямок','Тип','Група','Вихователь',"Ім'я дитини",
     'Факт навчання','Факт вступний','Факт доп.','Факт разом',
     'Бюджет навчання','Бюджет доп.','Бюджет разом',
-    'Статус','Місяць','Оновлено','Дата договору'
+    'Статус','Місяць','Оновлено','Дата договору',
+    'Група як у файлі'   // v7.222 append-only: СИРИЙ заголовок блоку з Payment
   ]);
   sheet.setFrozenRows(1);
 }
@@ -4903,7 +4904,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.221', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.222', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -4967,6 +4968,7 @@ function doGet(e) {
     else if (action === 'dryRunPayFilters')           result = dryRunPayFilters(e.parameter || {});                     // v7.217 read-only: що відсіють фільтри службових рядків
     else if (action === 'dryRunNameFold')             result = dryRunNameFold(e.parameter || {});                       // v7.220 read-only: які картки склеїть зведення лапок
     else if (action === 'diagPayHeaders')             result = diagPayHeaders(e.parameter || {});                       // v7.221 read-only: СИРІ заголовки груп із Payment
+    else if (action === 'dryRunRawGroups')            result = dryRunRawGroups(e.parameter || {});                      // v7.222 read-only: що змінить перехід синку на сиру назву
     else if (action === 'purgeAutoDraftCards')        result = purgeAutoDraftCards({names:String((e.parameter&&e.parameter.names)||'').split('|').filter(String), loc:(e.parameter&&e.parameter.loc)||'', createdPrefix:(e.parameter&&e.parameter.createdPrefix)||'', dryRun:true});   // v7.209 GET = ЗАВЖДИ dryRun, видалення лише POST-ом
     else if (action === 'getPredmetnyCatalog')        result = getPredmetnyCatalog(e.parameter && e.parameter.loc || '');
     else if (action === 'getPredmetnyMarks')          result = getPredmetnyMarks(e.parameter || {});
@@ -5431,7 +5433,12 @@ function syncCardGroupsFromPayment(body){
       var l = String(row['Локація'] || '').trim();
       if (loc && l !== loc) return;
       var nm = _syncNormPib(row["Ім'я дитини"]);
-      var g  = String(row['Група'] || '').trim();
+      // v7.222: у картку пишемо назву ЯК У ФАЙЛІ («Карапузи 2-3», «мама+я»).
+      // Нормалізована («Baby-ki») лишається в агрегаті й далі тримає норми,
+      // знижки й ліміти — але людині в картці треба бачити те, що директорка
+      // бачить у своєму Payment. Фолбек на нормалізовану: у старому агрегаті
+      // колонки ще немає, тож до першого runAggregate поведінка стара.
+      var g  = String(row['Група як у файлі'] || '').trim() || String(row['Група'] || '').trim();
       if (!l || !nm || !g) return;
       var k = l + '||' + nm;
       if (!payMap[k]) payMap[k] = {group:g, ambiguous:false};
@@ -5851,6 +5858,52 @@ function diagPayHeaders(params){
     }
     return {ok: true, readOnly: true, errors: errors, rows: out};
   } catch(err){ return {ok: false, error: String(err && err.message || err)}; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.222 DRY-RUN: що змінить перехід синку на СИРУ назву групи.
+// Порівнює дві поведінки на тих самих даних: стару (пишемо нормалізовану
+// «Група») і нову (пишемо «Група як у файлі»). Показує по локаціях, у скількох
+// карток значення відрізняється і які саме пари. GET ?action=dryRunRawGroups.
+// Нічого не пише. Потребує свіжого runAggregate — інакше нової колонки немає.
+// ═══════════════════════════════════════════════════════════════════════════
+function dryRunRawGroups(params){
+  params = params || {};
+  var only = String(params.loc || '').trim();
+  try {
+    var pay = getPayments();
+    var rows = (pay && pay.data) || [];
+    var hasRaw = rows.length && rows[0].hasOwnProperty('Група як у файлі');
+    var gc = getClients();
+    if (!gc.ok) return gc;
+    var cardBy = {};
+    (gc.data || []).forEach(function(c){
+      var l = String(c['Локація'] || '').trim();
+      if (!l) return;
+      cardBy[l + '||' + _syncNormPib(c['ПІБ дитини'])] = String(c['Група'] || '').trim();
+    });
+    var byLoc = {}, diffs = [];
+    rows.forEach(function(r){
+      var l = String(r['Локація'] || '').trim();
+      if (!l || (only && l !== only)) return;
+      var norm = String(r['Група'] || '').trim();
+      var raw  = String(r['Група як у файлі'] || '').trim();
+      if (!norm) return;
+      byLoc[l] = byLoc[l] || {rows:0, sameNameInFile:0, wouldChange:0, noRaw:0};
+      byLoc[l].rows++;
+      if (!raw){ byLoc[l].noRaw++; return; }
+      if (_normForMatch(raw) === _normForMatch(norm)){ byLoc[l].sameNameInFile++; return; }
+      var cur = cardBy[l + '||' + _syncNormPib(r["Ім'я дитини"])];
+      if (cur === undefined) return;                 // картки немає — синк не чіпає
+      if (_normForMatch(cur) === _normForMatch(raw)) return;  // вже стоїть сира
+      byLoc[l].wouldChange++;
+      if (diffs.length < 400) diffs.push({loc:l, name:String(r["Ім'я дитини"]||''),
+                                          card:cur, oldWrite:norm, newWrite:raw});
+    });
+    var tot = 0; Object.keys(byLoc).forEach(function(l){ tot += byLoc[l].wouldChange; });
+    return {ok:true, dryRun:true, aggregateHasRawColumn:hasRaw,
+            totalWouldChange:tot, byLoc:byLoc, diffs:diffs};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 
 function ensureClientsHeader(sheet) {
@@ -6915,7 +6968,8 @@ function aggregatePayments() {
             g.group, g.teacher, ch.name,
             fs, fv, fe, total, bs, bd, br,
             status, monthName, updateStr,
-            ch.contractDate || ''
+            ch.contractDate || '',
+            g.rawGroup || ''            // v7.222
           ]);
         });
       });
@@ -7083,12 +7137,16 @@ function parsePaymentSheet(data, monthCol, contractCol, cpm, loc, typ, closeOnBl
       if (_filters && teacher && _isGroupTypeToken(teacher)) teacher = '';
       var groupName = normalizeGroupName(nameCell, _keepSchool);   // v7.202
       var groupKey = groupName + (teacher ? ' ' + teacher : '');
-      curGroup = {group: groupKey, teacher: teacher, children: []};
+      // v7.222: rawGroup — заголовок ЯК У ФАЙЛІ («Карапузи 2-3», «Дослідники 4-5»).
+      // group/groupKey лишаються нормалізованими: на них тримаються норми, знижки,
+      // ліміти й уся матриця типів. Сира назва потрібна лише там, де її бачить
+      // людина — насамперед у картці дитини.
+      curGroup = {group: groupKey, teacher: teacher, rawGroup: nameCell, children: []};
       groups.push(curGroup);
     } else {
       if (_filters && _inServiceBlock) continue;   // v7.217 (1): діти службового блоку
       if (!curGroup) {
-        curGroup = {group:'(без групи)', teacher:'', children:[]};
+        curGroup = {group:'(без групи)', teacher:'', rawGroup:'', children:[]};
         groups.push(curGroup);
       }
       var fs = toNum(row[monthCol]);
