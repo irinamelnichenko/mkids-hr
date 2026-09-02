@@ -4904,7 +4904,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.222', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.223', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -6984,7 +6984,7 @@ function aggregatePayments() {
   // рядків — «Оплати» лишаються цілими, а помилка йде нагору.
   var pub;
   try {
-    pub = _publishAggregate(crmSS, SHEET_PAYMENTS, writePaymentsHeader, allRows, 17, {});
+    pub = _publishAggregate(crmSS, SHEET_PAYMENTS, writePaymentsHeader, allRows, 18, {});   // v7.223: 17→18 («Група як у файлі»)
   } catch(pubErr) {
     Logger.log('❌ Публікацію «%s» скасовано: %s', SHEET_PAYMENTS, pubErr && pubErr.message);
     return {ok:false, error:String(pubErr && pubErr.message || pubErr),
