@@ -1870,14 +1870,25 @@ function extractTeacher(raw){
 // назви: «4 Б клас», «Школа клас 2025» тощо.
 // Джерело: S.crm[resolveCardId(ПІБ, локація)].group. Якщо картки немає або в
 // ній порожня група — падаємо на стару поведінку (група з Оплат).
-function _schoolGroupFromCard(name, loc){
+// v7.206: повертає {isSchool, card} — щоб табель міг не лише взяти клас із
+// картки, а й ВІДСІЯТИ рядки Payment, у яких картки немає взагалі. Такі рядки —
+// службове наповнення самого файлу («Табір», «11», «Перевертень/Добрицька»,
+// «Невгень/Хом'як», «9», «10»); парсер приймає їх за дітей, бо єдина перевірка
+// перед гілкою «дитина» — це «клітинка не порожня». Гроші в них завжди нульові,
+// тож приховування нічого не ховає. Випускники НЕ відсіюються: у них картка є,
+// і за ними тягнуться реальні бюджети (на Школі Осокорки — 7 карток по 31 000 ₴
+// у вересні), які директорка має бачити.
+function _schoolCardInfo(name, loc){
   try{
-    if(getLocTypeByLoc(loc)!=='Школа') return '';
+    if(getLocTypeByLoc(loc)!=='Школа') return {isSchool:false, card:null};
     var id=resolveCardId(name, loc);
     var c=id && S.crm ? S.crm[id] : null;
-    var g=c ? String(c.group||'').trim() : '';
-    return g || '';
-  }catch(e){ return ''; }
+    return {isSchool:true, card:c||null};
+  }catch(e){ return {isSchool:false, card:null}; }
+}
+function _schoolGroupFromCard(name, loc){
+  var i=_schoolCardInfo(name, loc);
+  return i.card ? String(i.card.group||'').trim() : '';
 }
 
 function buildGroups(){
@@ -1893,7 +1904,10 @@ function buildGroups(){
     var name=String(row["Ім'я дитини"]||'').trim();
     if(!loc||!name) return;
     // v7.201: школа — беремо клас із картки як є.
-    var _schoolGrp=_schoolGroupFromCard(name, loc);
+    // v7.206: у школі рядок без картки — службовий рядок Payment, не дитина.
+    var _sch=_schoolCardInfo(name, loc);
+    if(_sch.isSchool && !_sch.card) return;
+    var _schoolGrp=_sch.card ? String(_sch.card.group||'').trim() : '';
 
     if(!S.payMonth) S.payMonth=String(row['Місяць']||'').trim();
     // Вихователь: з окремої колонки або витягнутий з назви групи
@@ -7814,6 +7828,30 @@ function calcYearlyStats(rows){
   return {kids:kids,debtors:debtors,debt:debt,collected:collected,budYear:budYear};
 }
 
+// v7.206: річна таблиця (renderClientsYearly) — пласка, без секцій-груп, і до
+// цієї версії читала «Група» напряму з «Оплати-Рік», обминаючи правку v7.201.
+// Через це і випадайка «Всі групи», і колонка «Група» показували для шкіл
+// схлопнуті назви з Payment, а службові рядки файлу висіли як діти.
+// Ці два хелпери дають річній таблиці ту саму логіку, що вже має місячна.
+function _yearlyRowVisible(row){
+  var name=String(row["Ім'я дитини"]||'').trim();
+  var loc=String(row['Локація']||'').trim();
+  if(!name||!loc) return false;
+  var sch=_schoolCardInfo(name, loc);
+  return !(sch.isSchool && !sch.card);
+}
+function _yearlyGroupOf(row){
+  var name=String(row["Ім'я дитини"]||'').trim();
+  var loc=String(row['Локація']||'').trim();
+  var raw=String(row['Група']||'').trim();
+  var sch=_schoolCardInfo(name, loc);
+  if(sch.isSchool && sch.card){
+    var g=String(sch.card.group||'').trim();
+    if(g) return g;
+  }
+  return parseGroupField(raw).groupType||raw;
+}
+
 // Будує структуру груп (аналог S.groups) з S.yearlyData для конкретного місяця
 function buildGroupsFromYearly(monthIdx){
   var mName=CFG.MONTHS_DISP[monthIdx];
@@ -7829,7 +7867,10 @@ function buildGroupsFromYearly(monthIdx){
     // v7.201: школа — клас із картки (див. коментар у buildGroups). Ця функція
     // перезаписує S.groups при перегляді НЕ поточного місяця, тож без дзеркальної
     // правки табель показував би класи лише для поточного місяця.
-    var _schoolGrp=_schoolGroupFromCard(name, loc);
+    // v7.206: у школі рядок без картки — службовий рядок Payment, не дитина.
+    var _sch=_schoolCardInfo(name, loc);
+    if(_sch.isSchool && !_sch.card) return;
+    var _schoolGrp=_sch.card ? String(_sch.card.group||'').trim() : '';
     if(_schoolGrp) grp=_schoolGrp;
     var rawTeacher=String(row['Вихователь']||'').trim();
     var fs=+(row[mName+'-Факт-навч']||0);
@@ -7871,7 +7912,7 @@ function renderClientsYearly(monthStripHtml){
 
   // v6.42: при активному пошуку — глобально по ВСІХ локаціях.
   var searching=!!(S.searchQ&&S.searchQ.trim());
-  var visRows=getYearlyForLocs(locs);
+  var visRows=getYearlyForLocs(locs).filter(_yearlyRowVisible);   // v7.206
   var yst=calcYearlyStats(visRows);
 
   // Фільтруємо за S.selLoc якщо вибрана (але НЕ під час пошуку)
@@ -7901,7 +7942,8 @@ function renderClientsYearly(monthStripHtml){
 
   // Фільтри
   var allGroups=[];
-  filtRows.forEach(function(r){ var g=parseGroupField(String(r['Група']||'')).groupType||String(r['Група']||''); if(allGroups.indexOf(g)<0) allGroups.push(g); });
+  filtRows.forEach(function(r){ var g=_yearlyGroupOf(r); if(g&&allGroups.indexOf(g)<0) allGroups.push(g); });   // v7.206
+  allGroups.sort(function(a,b){ return String(a).localeCompare(String(b),'uk'); });
 
   html+='<div class="filters">'
     +'<input class="search-inp" placeholder="🔍 Пошук по імені…" value="'+esc(S.searchQ)+'" oninput="S.searchQ=this.value;renderClients()">'
@@ -7927,7 +7969,7 @@ function renderClientsYearly(monthStripHtml){
     // Фільтри
     var dispRows=locRows.filter(function(r){
       var name=String(r["Ім'я дитини"]||'').trim();
-      var grp=parseGroupField(String(r['Група']||'')).groupType||'';
+      var grp=_yearlyGroupOf(r);   // v7.206
       if(S.selGroup&&grp!==S.selGroup) return false;
       if(S.selStatus==='debtors'&&!(+(r['Борг-Рік']||0)>0)) return false;
       if(searching&&name.toLowerCase().indexOf(S.searchQ.trim().toLowerCase())<0) return false;
@@ -7950,8 +7992,7 @@ function renderClientsYearly(monthStripHtml){
 
     dispRows.forEach(function(row){
       var name=String(row["Ім'я дитини"]||'').trim();
-      var rawGrp=String(row['Група']||'').trim();
-      var grp=parseGroupField(rawGrp).groupType||rawGrp;
+      var grp=_yearlyGroupOf(row);   // v7.206
       var teacher=String(row['Вихователь']||'').trim();
       var loc2=String(row['Локація']||'').trim();
       var factY=+(row['Факт-Рік']||0);
