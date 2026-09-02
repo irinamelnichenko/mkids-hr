@@ -1,11 +1,11 @@
-// m.kids PWA Service Worker (v7.213-school-card-same-loc-only / cache v7.213)
+// m.kids PWA Service Worker (v7.214-vyhovatel-schools-predmetnyky / cache v7.214)
 // Cache: static shell (HTML + manifest + icons + xlsx)
 // Strategy:
 //   • POST → завжди network (ніколи не кешуємо)
 //   • GET до /macros/ (Apps Script) → network-only, fallback на cache
 //   • GET до інших static URLs → cache-first з фоновим оновленням
 
-var CACHE = 'mkids-cache-v7.213';
+var CACHE = 'mkids-cache-v7.214';
 var SHELL = [
   './',
   'activities.html',

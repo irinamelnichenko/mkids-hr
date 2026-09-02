@@ -1311,16 +1311,23 @@ function _buildLocOptions(allowedGroups, placeholder){
   return html;
 }
 // Фільтр локацій за роллю (типом локації):
-//   Директор  — садочки + школи + управління (без кухонь)
-//   Медсестра — садочки + школи (без управління і кухонь)
-//   Вихователь — лише садочки
+//   Директор   — садочки + школи + управління (без кухонь)
+//   Медсестра  — садочки + школи + управління (без кухонь)   // v7.214: +Управління
+//   Вихователь — садочки + школи + управління (без кухонь)   // v7.214: +Школи +Управління
+// Кухні не показуємо ЖОДНІЙ ролі — дітей там немає, а акаунти існують лише як
+// заготовки з migrateAllLocationUsers.
+// v7.214: до цієї правки вкладка «Вихователь» бачила самі садочки, тож у школи
+// й локації типу «Управління» зайти було нікуди — і виглядало це як «акаунтів
+// немає». Насправді акаунти є всі 19 (по одному на локацію з LOCATION_USER_LOCS),
+// активні, з робочими паролями _locPassword(loc,'vyhovatel'); їх ховав саме цей
+// список. Бекенд типу локації для vyhovatel не перевіряє — лише логін+пароль.
 function populateLoginLocations(){
   var dir = document.getElementById('loginLocationDir');
   if (dir) dir.innerHTML = _buildLocOptions(['Садочки','Школи','Управління'], '— Оберіть локацію —');
   var nurse = document.getElementById('loginLocationNurse');
-  if (nurse) nurse.innerHTML = _buildLocOptions(['Садочки','Школи'], '— Оберіть локацію —');
+  if (nurse) nurse.innerHTML = _buildLocOptions(['Садочки','Школи','Управління'], '— Оберіть локацію —');
   var vyh = document.getElementById('loginLocationVyhovatel');
-  if (vyh) vyh.innerHTML = _buildLocOptions(['Садочки'], '— Оберіть садочок —');
+  if (vyh) vyh.innerHTML = _buildLocOptions(['Садочки','Школи','Управління'], '— Оберіть локацію —');
 }
 
 // Завантажуємо список користувачів для Менеджмент-dropdown.
@@ -1704,7 +1711,7 @@ const PERMISSIONS = {
     'card-child-banner','card-child-contract','card-child-vacations',
     'card-child-notes','card-child-health'
   ],
-  vyhovatel: ['activities','attendance-view','attendance-edit','clients_list','card-child-development']
+  vyhovatel: ['activities','predmetnyky','attendance-view','attendance-edit','clients_list','card-child-development']   // v7.214: +predmetnyky (шкільна вихователька веде свій клас)
 };
 // Задачник: tasks — менеджмент + director; tasks-create — лише менеджмент.
 (function(){
