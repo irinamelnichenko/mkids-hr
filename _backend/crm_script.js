@@ -4903,7 +4903,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.210', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.211', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -6772,11 +6772,24 @@ function detectCurrentMonthCol(rows, curJSMonth, cpm) {
 // між блоками стоїть серія порожніх (у Школі Осокорки — три: рядки 184-186).
 // Тому закриваємо блок лише після N ПІДРЯД порожніх рядків.
 // 0 = правило вимкнено (поведінка до v7.209).
-var BLANK_CLOSES_BLOCK = 0;
+//
+// v7.211 ПІДІБРАНО ПОРІГ. dryRunBlankBlocks по всіх 16 локаціях × пороги 1..6:
+//   поріг   1     2     3     4     5     6     ← скільки дітей переїде в мережі
+//   всього  569   212   125   52    34    32
+//   Школа Осокорки  22   22   22    0    0    0     ← розрив між блоками = рівно 3
+// Єдиного порогу на всю мережу немає: N=3 лікує школу, але зачіпає 103 дитини
+// в садках (Оранж 17, Манхетен 15, Голосієво 13, Борщагівка 12, Пуща 10…),
+// бо в садкових файлах між підгрупами трапляються дві-три порожні поспіль.
+// Тому правило вмикаємо ТІЛЬКИ для локацій типу «Школа»: там воно дає рівно
+// те, що треба (1D 35 → 13, у «(без групи)» їде сміття + випускники), а садки
+// не чіпаються взагалі.
+var BLANK_CLOSES_BLOCK        = 0;   // садки: вимкнено
+var BLANK_CLOSES_BLOCK_SCHOOL = 3;   // школи: три підряд порожні закривають блок
 
 function parsePaymentSheet(data, monthCol, contractCol, cpm, loc, typ, closeOnBlank) {
   var _keepSchool = _isSchoolLoc(typ, loc);   // v7.202
-  var _minBlank = (closeOnBlank === undefined) ? BLANK_CLOSES_BLOCK : closeOnBlank;
+  var _defBlank = _keepSchool ? BLANK_CLOSES_BLOCK_SCHOOL : BLANK_CLOSES_BLOCK;
+  var _minBlank = (closeOnBlank === undefined) ? _defBlank : closeOnBlank;
   _minBlank = (_minBlank === true) ? 1 : (Number(_minBlank) || 0);
   var _blankRun = 0;
   var _LO = _paymentLayout(cpm);   // v7.103: розкладка блоку (5 або 7 колонок)
