@@ -4903,7 +4903,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.211', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.212', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -5416,6 +5416,20 @@ function syncCardGroupsFromPayment(body){
       else if (_syncNormPib(payMap[k].group) !== _syncNormPib(g)) payMap[k].ambiguous = true; // одне ПІБ → різні групи
     });
 
+    // v7.212 ЗАХИСТ: у локаціях типу «Школа» НІКОЛИ не писати в картку «(без групи)».
+    // «(без групи)» — не назва групи, а синтетична мітка парсера для рядків, що
+    // лежать поза будь-яким блоком. У шкільних Payment-файлах таких багато: хвости
+    // після класів, службові рядки, випускники. Після v7.211 у Школі Осокорки їх
+    // 37. Без цього захисту синк вписав би «(без групи)» у 37 карток і стер справжні
+    // класи — рівно та пастка, від якої 01.09 довелось вручну відсіювати 15 дітей.
+    var _schoolLoc = {};
+    try {
+      (getLocations().data || []).forEach(function(l){
+        if (_isSchoolLoc(l.typ, l.loc)) _schoolLoc[String(l.loc || '').trim()] = true;
+      });
+    } catch(_e){ Logger.log('[syncCardGroups] ⚠ getLocations впав: %s — захист «(без групи)» не застосовано', _e); }
+    var NO_GROUP = _normForMatch('(без групи)');
+
     // 2) Клієнти — порівняння й (за потреби) оновлення групи під Payment.
     var ss = getCRMSpreadsheet(); var sh = ss.getSheetByName(SHEET_CLIENTS);
     if (!sh) return {ok:false, error:'Лист "'+SHEET_CLIENTS+'" не знайдено'};
@@ -5423,7 +5437,7 @@ function syncCardGroupsFromPayment(body){
     var iLoc = H.indexOf('Локація'), iGrp = H.indexOf('Група'), iName = H.indexOf('ПІБ дитини'), iUpd = H.indexOf('Оновлено');
     if (iLoc < 0 || iGrp < 0 || iName < 0) return {ok:false, error:'Колонки Локація/Група/ПІБ дитини не знайдено у "'+SHEET_CLIENTS+'"'};
 
-    var changes = [], ambiguous = [], updates = [];
+    var changes = [], ambiguous = [], updates = [], noGroupSkipped = [];   // v7.212
     for (var r = 1; r < vals.length; r++){
       if (!vals[r][0]) continue;
       var l = String(vals[r][iLoc]||'').trim();
@@ -5435,6 +5449,11 @@ function syncCardGroupsFromPayment(body){
       var pm = payMap[l + '||' + nm];
       if (!pm) continue;                                        // нема у Payment цього місяця — не чіпаємо
       if (pm.ambiguous){ ambiguous.push({loc:l, name:pib, card:cg}); continue; } // неоднозначно → пропуск
+      // v7.212: школа + «(без групи)» → не чіпаємо картку, лише повідомляємо
+      if (_schoolLoc[l] && _normForMatch(pm.group) === NO_GROUP){
+        noGroupSkipped.push({loc:l, name:pib, card:cg});
+        continue;
+      }
       if (_syncNormPib(cg) === _syncNormPib(pm.group)) continue; // вже збігається
       changes.push({loc:l, name:pib, from:cg, to:pm.group});
       updates.push({row:r, group:pm.group});
@@ -5455,6 +5474,8 @@ function syncCardGroupsFromPayment(body){
     }
     return {ok:true, dryRun:dryRun, loc:loc||'(усі)', updated:(dryRun?0:updates.length),
             diffCount:changes.length, ambiguousCount:ambiguous.length,
+            noGroupSkippedCount:noGroupSkipped.length,                    // v7.212
+            noGroupSkipped:noGroupSkipped.slice(0,500),
             changes:changes.slice(0,500), ambiguous:ambiguous.slice(0,200)};
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
   finally { if (lock){ try { lock.releaseLock(); } catch(_){} } }
