@@ -2805,6 +2805,57 @@ async function _loadPayments(){
   return byLoc;
 }
 
+// ── v7.205: школи — групи з КАРТОК, а не з агрегату «Оплати» ──────────────────
+// Проблема. _loadPayments будує ростер із листа «Оплати», а там для шкіл усі
+// класи схлопнуті в «Школа»/«Школа клас» (normalizeGroupName до v7.202), плюс
+// діти з порожньою групою в Payment-файлі падають у «(без групи)». Для Школи
+// Осокорки це давало «Школа 103 · Школа клас 17 · (без групи) 15» замість семи
+// реальних класів. Табель це вже обходить через картки (clients.html v7.201).
+// Рішення. Роут getSchoolRoster(loc) віддає {ПІБ: клас} з карток. Він сам
+// вирішує, чи локація шкільна: для садків повертає isSchool:false і ми не
+// чіпаємо нічого. Вантажимо лише для активної локації й кешуємо на сесію —
+// повний getClients (~1200 карток) на телефон вихователя не тягнемо.
+// Побічний ефект: у ростер потрапляють ЛИШЕ діти з активною карткою, тож із
+// списку зникають випускники й сміттєві рядки Payment («Табір», «11»).
+// Запобіжник: якщо перетин порожній — лишаємо старий ростер як є.
+var ATT_SCHOOL_ROSTER = {};   // {loc: {isSchool, byName, groups}}
+
+async function _applySchoolRoster(loc){
+  if (!loc || !ATT.childrenByLoc) return;
+  if (!ATT_SCHOOL_ROSTER[loc]){
+    try {
+      var r = await _afTryFetch(CFG.SCRIPT_URL + '?action=getSchoolRoster&loc=' + encodeURIComponent(loc),
+                                {redirect: 'follow'});
+      var j = await r.json();
+      ATT_SCHOOL_ROSTER[loc] = (j && j.ok) ? j : {isSchool: false, byName: {}};
+    } catch(e){
+      ATT_SCHOOL_ROSTER[loc] = {isSchool: false, byName: {}};   // мережа впала — стара поведінка
+    }
+  }
+  var rs = ATT_SCHOOL_ROSTER[loc];
+  if (!rs || !rs.isSchool) return;
+
+  var src = ATT.childrenByLoc[loc] || {};
+  var out = {}, kept = 0, dropped = 0;
+  Object.keys(src).forEach(function(g){
+    (src[g] || []).forEach(function(nm){
+      var grp = rs.byName[nm];
+      if (!grp){ dropped++; return; }              // немає активної картки — не показуємо
+      if (!out[grp]) out[grp] = [];
+      if (out[grp].indexOf(nm) === -1){ out[grp].push(nm); kept++; }
+    });
+  });
+  if (!kept){
+    console.warn('[школа] ростер із карток порожній для "' + loc + '" — лишаю групи з Оплат');
+    return;
+  }
+  Object.keys(out).forEach(function(g){
+    out[g].sort(function(a, b){ return a.localeCompare(b, 'uk'); });
+  });
+  ATT.childrenByLoc[loc] = out;
+  if (dropped) console.log('[школа] ' + loc + ': у ростері ' + kept + ', відсіяно без активної картки — ' + dropped);
+}
+
 // ── Marks ───────────────────────────────────
 function _marksFilterKey(){ return [ATT.date, S.activeLoc].join('|'); } // v7.107: без групи — відмітки по дитині (loc+дата), матч у клітинці по імені
 
@@ -2895,6 +2946,7 @@ async function renderAttendanceBoard(){
   try {
     if (!S.items || !S.items.length) await loadCatalog(false);
     await _loadPayments();
+    await _applySchoolRoster(S.activeLoc);   // v7.205: школи — класи з карток
   } catch(e){
     $('attLoading').classList.add('hidden');
     $('attHint').textContent = '❌ ' + (e && e.message || e);

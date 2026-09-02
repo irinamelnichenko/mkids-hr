@@ -4903,7 +4903,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.203', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.205', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -4962,6 +4962,7 @@ function doGet(e) {
     else if (action === 'mergeOverlappingVacations')  result = mergeOverlappingVacations(!(e.parameter && (e.parameter.dryRun === '0' || e.parameter.dryRun === 'false')));
     else if (action === 'getChomusykyMarks')          result = getChomusykyMarks(e.parameter || {});
     else if (action === 'getChomusykyReport')         result = getChomusykyReport(e.parameter || {});
+    else if (action === 'getSchoolRoster')            result = getSchoolRoster(e.parameter && e.parameter.loc || '');   // v7.205 read-only: клас із картки для локацій типу «Школа»
     else if (action === 'getPredmetnyCatalog')        result = getPredmetnyCatalog(e.parameter && e.parameter.loc || '');
     else if (action === 'getPredmetnyMarks')          result = getPredmetnyMarks(e.parameter || {});
     else if (action === 'getHrAudit')                  result = getHrAudit(e.parameter || {});                                          // v7.149 read-only аудит
@@ -24290,6 +24291,65 @@ function _loadRealGroups(locFilter){
   }
   Object.keys(out).forEach(function(l){ out[l].sort(); });
   return out;
+}
+
+// ─── v7.205: РОСТЕР ШКОЛИ З КАРТОК (read-only) ───────────────────────────────
+// Навіщо. Екран додаткових (activities.html) будує список груп з агрегату
+// «Оплати». До v7.202 normalizeGroupName схлопував будь-який клас у слово
+// «Школа»/«Школа клас», а діти, у яких у Payment-файлі група порожня, падали в
+// «(без групи)». Табель цей самий баг уже обходить через картки (clients.html
+// v7.201) — цей роут дає той самий обхід сторінці додаткових, не тягнучи на
+// телефон вихователя весь getClients (~1200 карток з ~40 колонками).
+// Для НЕшкільних локацій повертає isSchool:false — фронт нічого не змінює.
+// У ростер ідуть ЛИШЕ картки зі статусом active/adaptation: випускники й
+// сміттєві рядки Payment («Табір», «11», «Вільних 8 8») відсіюються.
+function getSchoolRoster(loc){
+  loc = String(loc || '').trim();
+  if (!loc) return {ok:false, error:'Параметр loc обовʼязковий'};
+
+  var typ = '';
+  try {
+    var lr = getLocations();
+    var list = (lr && lr.data) || [];
+    for (var i = 0; i < list.length; i++){
+      if (_normForMatch(list[i].loc) === _normForMatch(loc)){ typ = list[i].typ; break; }
+    }
+  } catch(e){}
+  if (!_isSchoolLoc(typ, loc)) return {ok:true, loc:loc, typ:typ, isSchool:false, byName:{}, groups:[]};
+
+  var sh = getCRMSpreadsheet().getSheetByName(SHEET_CLIENTS);
+  if (!sh || sh.getLastRow() < 2) return {ok:true, loc:loc, typ:typ, isSchool:true, byName:{}, groups:[]};
+
+  // Вузьке читання, як у _loadRealGroups: беремо лише потрібні колонки.
+  var lastRow = sh.getLastRow(), lastCol = sh.getLastColumn();
+  var hdrs = sh.getRange(1, 1, 1, lastCol).getValues()[0].map(String);
+  var cName = hdrs.indexOf('ПІБ дитини');
+  var cLoc  = hdrs.indexOf('Локація');
+  var cGrp  = hdrs.indexOf('Група');
+  var cSt   = hdrs.indexOf('Статус');
+  if (cName < 0 || cLoc < 0 || cGrp < 0){
+    return {ok:false, error:'Клієнти: не знайдено колонки ПІБ дитини / Локація / Група'};
+  }
+  var cols = [cName, cLoc, cGrp]; if (cSt >= 0) cols.push(cSt);
+  var lo = Math.min.apply(null, cols), hi = Math.max.apply(null, cols);
+  var data = sh.getRange(2, lo + 1, lastRow - 1, hi - lo + 1).getValues();
+
+  var byName = {}, seenGrp = {}, groups = [], skippedNoGroup = 0, skippedStatus = 0;
+  for (var r = 0; r < data.length; r++){
+    if (_normForMatch(data[r][cLoc - lo]) !== _normForMatch(loc)) continue;
+    var st = (cSt >= 0) ? String(data[r][cSt - lo] || '').trim() : 'active';
+    if (st !== 'active' && st !== 'adaptation'){ skippedStatus++; continue; }
+    var nm = String(data[r][cName - lo] || '').trim();
+    var gr = String(data[r][cGrp - lo] || '').trim();
+    if (!nm) continue;
+    if (!gr){ skippedNoGroup++; continue; }
+    if (byName[nm]) continue;                      // дублі карток: перша виграє
+    byName[nm] = gr;
+    if (!seenGrp[gr]){ seenGrp[gr] = true; groups.push(gr); }
+  }
+  groups.sort(function(a, b){ return String(a).localeCompare(String(b), 'uk'); });
+  return {ok:true, loc:loc, typ:typ, isSchool:true, byName:byName, groups:groups,
+          count:Object.keys(byName).length, skippedStatus:skippedStatus, skippedNoGroup:skippedNoGroup};
 }
 
 // Існуючий Предметники_Каталог → [{loc, subject_raw, subject_norm, rate, teacher, active}].
