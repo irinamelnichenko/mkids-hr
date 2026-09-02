@@ -4903,7 +4903,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.209', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.210', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -5495,29 +5495,27 @@ function dryRunBlankBlocks(params){
           });
           return m;
         }
-        var oldG = parsePaymentSheet(data, mc, cc, cpm, loc, typ, false);
-        var newG = parsePaymentSheet(data, mc, cc, cpm, loc, typ, true);
-        var a = flat(oldG), b = flat(newG);
-
-        var moved = [], toNoGroup = 0;
-        Object.keys(a).forEach(function(nm){
-          if (a[nm] !== b[nm]){
-            moved.push({name:nm, from:a[nm], to:(b[nm] === undefined ? '(зник)' : b[nm])});
-            if (b[nm] === '(без групи)') toNoGroup++;
-          }
-        });
         function counts(groups){
           var c = {};
           groups.forEach(function(g){ c[g.group] = (c[g.group] || 0) + g.children.length; });
           return c;
         }
-        out.push({loc:loc, typ:typ,
-                  groupsBefore:oldG.length, groupsAfter:newG.length,
-                  kidsBefore:Object.keys(a).length, kidsAfter:Object.keys(b).length,
-                  moved:moved.length, movedToNoGroup:toNoGroup,
-                  countsBefore:counts(oldG), countsAfter:counts(newG),
-                  sample:moved.slice(0, 40)});
-        totalMoved += moved.length; totalLocs++;
+        var oldG = parsePaymentSheet(data, mc, cc, cpm, loc, typ, 0);
+        var a = flat(oldG);
+        // v7.210: перебираємо ПОРОГИ підряд-порожніх рядків 1..6 за один прохід.
+        var byThr = {}, sample1 = null;
+        for (var t = 1; t <= 6; t++){
+          var g2 = parsePaymentSheet(data, mc, cc, cpm, loc, typ, t);
+          var b2 = flat(g2), mv = [];
+          Object.keys(a).forEach(function(nm){
+            if (a[nm] !== b2[nm]) mv.push({name:nm, from:a[nm], to:(b2[nm] === undefined ? '(зник)' : b2[nm])});
+          });
+          byThr[t] = {groups:g2.length, moved:mv.length, counts:counts(g2)};
+          if (t === (Number(params.sampleThr) || 3)) sample1 = mv.slice(0, 40);
+        }
+        out.push({loc:loc, typ:typ, groupsBefore:oldG.length, kids:Object.keys(a).length,
+                  countsBefore:counts(oldG), byThreshold:byThr, sample:sample1});
+        totalMoved += byThr[1].moved; totalLocs++;
       } catch(e){ errors.push({loc:loc, error:String(e && e.message || e)}); }
     }
     return {ok:true, dryRun:true, locations:totalLocs, totalMoved:totalMoved, errors:errors, rows:out};
@@ -6767,13 +6765,20 @@ function detectCurrentMonthCol(rows, curJSMonth, cpm) {
 // 171-183) ідуть три порожні рядки, а далі безіменний хвіст 187-208 — і всі
 // 22 рядки хвоста приклеювались до 1D. Агрегат показував 1D = 35 замість 13,
 // а нічний синк заводив із цього хвоста чернетки карток із групою «1D».
-// Прапорець винесено в константу, щоб dryRunBlankBlocks міг порівняти обидва
-// режими на живих файлах, не чіпаючи бойові виклики.
-var BLANK_CLOSES_BLOCK = true;
+// v7.210 ВАЖЛИВО: поріг, а не булеве. Перший dryRun по всіх 16 локаціях показав,
+// що «будь-який порожній рядок закриває блок» ламає садки: у Пущі Preschool
+// розсипався 18 → 3, по мережі 569 дітей поїхали в «(без групи)». Причина —
+// всередині живих блоків трапляються ОДИНИЧНІ порожні рядки-роздільники, а
+// між блоками стоїть серія порожніх (у Школі Осокорки — три: рядки 184-186).
+// Тому закриваємо блок лише після N ПІДРЯД порожніх рядків.
+// 0 = правило вимкнено (поведінка до v7.209).
+var BLANK_CLOSES_BLOCK = 0;
 
 function parsePaymentSheet(data, monthCol, contractCol, cpm, loc, typ, closeOnBlank) {
   var _keepSchool = _isSchoolLoc(typ, loc);   // v7.202
-  var _closeBlank = (closeOnBlank === undefined) ? BLANK_CLOSES_BLOCK : !!closeOnBlank;
+  var _minBlank = (closeOnBlank === undefined) ? BLANK_CLOSES_BLOCK : closeOnBlank;
+  _minBlank = (_minBlank === true) ? 1 : (Number(_minBlank) || 0);
+  var _blankRun = 0;
   var _LO = _paymentLayout(cpm);   // v7.103: розкладка блоку (5 або 7 колонок)
   var DATA_START = 3;
   var groups = [];
@@ -6781,7 +6786,12 @@ function parsePaymentSheet(data, monthCol, contractCol, cpm, loc, typ, closeOnBl
   for (var r = DATA_START; r < data.length; r++) {
     var row = data[r];
     var nameCell = trim(String(row[0] || ''));
-    if (!nameCell){ if (_closeBlank) curGroup = null; continue; }
+    if (!nameCell){
+      _blankRun++;
+      if (_minBlank && _blankRun >= _minBlank) curGroup = null;
+      continue;
+    }
+    _blankRun = 0;
     if (isGroupHeaderRow(row, monthCol)) {
       // v7.203: у школі вихователя з заголовка НЕ витягуємо — уся назва є назвою
       // класу. Інакше «4 клас» ділилось на групу «4 клас» + «вихователя» «клас»,
