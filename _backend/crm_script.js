@@ -4904,7 +4904,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.223', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.224', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -7031,6 +7031,50 @@ function detectCurrentMonthCol(rows, curJSMonth, cpm) {
   return col;
 }
 
+// ─── v7.224: ЧИСТКА СИРОЇ НАЗВИ ГРУПИ ПЕРЕД ЗАПИСОМ У КАРТКУ ───────────────
+// v7.222 навчив синк писати назву ЯК У ФАЙЛІ. dryRun показав, що у файлах вона
+// подекуди крива: Житомир «Findi-ki» і «mini Baby-ki», Тичини «Findi-Ki»,
+// Нац.Гвардії «535 Білик Маркус (Михайлова) 535». Замість правити 16 файлів
+// руками — чистимо на льоту.
+//   (1) англійські типи зводимо до канонічних: усе, що після зняття
+//       роздільників читається як findiki/minibabyki/babyki/studyki/preschool,
+//       стає Find-iki / miniBaby-ki / Baby-ki / Study-ki / Preschool.
+//       Хвіст після типу («2», «3-4 Ольга і Соломія») лишається як є.
+//   (2) номер кабінету на початку знімаємо, і дубль того самого номера в кінці.
+//       Тільки для НЕшкільних локацій: у школах «4 клас», «3D», «1S» починаються
+//       з цифри законно.
+//   (3) українські назви (Пізнайки, Розумники, мама+я) не чіпаємо — канонічні.
+var _RAW_CANON = [
+  ['minibabyki', 'miniBaby-ki'],
+  ['babyki',     'Baby-ki'],
+  ['findiki',    'Find-iki'],
+  ['studyki',    'Study-ki'],
+  ['preschool',  'Preschool']
+];
+function _cleanRawGroup(raw, keepSchool){
+  var s = trim(raw);
+  if (!s) return '';
+  if (keepSchool) return s;                       // класи шкіл — як є
+  var m = s.match(/^(\d+)\s+(.*)$/);
+  if (m){
+    var lead = m[1], rest = trim(m[2]);
+    rest = rest.replace(new RegExp('\\s+' + lead + '\\s*$'), '');   // дубль у кінці
+    s = trim(rest) || s;
+  }
+  var letters = '', idx = [];
+  for (var i = 0; i < s.length; i++){
+    var ch = s.charAt(i);
+    if (/[A-Za-zА-Яа-яЄІЇҐєіїґ]/.test(ch)){ letters += ch.toLowerCase(); idx.push(i); }
+  }
+  for (var c = 0; c < _RAW_CANON.length; c++){
+    var key = _RAW_CANON[c][0];
+    if (letters.indexOf(key) !== 0) continue;
+    var tail = trim(s.slice(idx[key.length - 1] + 1)).replace(/^[\s\-–—,\.]+/, '');
+    return _RAW_CANON[c][1] + (tail ? ' ' + tail : '');
+  }
+  return s;
+}
+
 // v7.209: порожній рядок ЗАКРИВАЄ блок групи.
 // Було: «поточна група» тяглася від заголовка до наступного заголовка, а порожні
 // рядки просто пропускались. У Payment Школи Осокорки після блоку 1D (рядки
@@ -7141,7 +7185,7 @@ function parsePaymentSheet(data, monthCol, contractCol, cpm, loc, typ, closeOnBl
       // group/groupKey лишаються нормалізованими: на них тримаються норми, знижки,
       // ліміти й уся матриця типів. Сира назва потрібна лише там, де її бачить
       // людина — насамперед у картці дитини.
-      curGroup = {group: groupKey, teacher: teacher, rawGroup: nameCell, children: []};
+      curGroup = {group: groupKey, teacher: teacher, rawGroup: _cleanRawGroup(nameCell, _keepSchool), children: []};   // v7.224
       groups.push(curGroup);
     } else {
       if (_filters && _inServiceBlock) continue;   // v7.217 (1): діти службового блоку
