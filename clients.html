@@ -1158,13 +1158,26 @@ function childId(name,group,loc){ return 'c_'+((name||'').trim().slice(0,24))+'_
 // Логіка: exact(childId) → префікс за WORD-BOUNDARY у тій самій локації → guard: якщо
 // префікс матчить >1 картку (однофамільці) → fallback на childId (НЕ склеюємо різних дітей).
 var _cardIdxCache=null, _cardIdxKeyN=-1;
+// v7.220: те саме зведення лапок/апострофів, що й на бекенді (_nameFold).
+// Дзеркало обовʼязкове: якщо фронт вважає «Гриб Дар"я» і «Гриб Дарʼя» різними
+// дітьми, а бекенд — однією, картка й платіжний рядок розʼїдуться знову.
+var _APOSTROPHES_FE = /[\u0022\u0027\u2018\u2019\u201A\u201B\u201C\u201D\u201E\u201F\u02BC\u02B9\u02BB\u0060\u00B4\u2032\u2033\u00AB\u00BB]/g;
+function nameFold(s){
+  return String(s==null?'':s)
+    .replace(/[\u200B\u200C\u200D\uFEFF\u200E\u200F]/g,'')
+    .replace(_APOSTROPHES_FE, "'")
+    .replace(/[\u2010-\u2015\u2212]/g,'-')
+    .replace(/[\s\u00A0]+/g,' ')
+    .trim()
+    .toLowerCase();
+}
 function _cardNameIndex(){
   var n=Object.keys(S.crm||{}).length;
   if(_cardIdxCache && _cardIdxKeyN===n) return _cardIdxCache;
   var idx={byLoc:{}, byName:{}};
   Object.keys(S.crm||{}).forEach(function(id){
     var c=S.crm[id]; if(!c) return;
-    var nm=String(c.name||'').trim().toLowerCase().replace(/\s+/g,' ');
+    var nm=nameFold(c.name);   // v7.220
     if(!nm) return;
     // v7.162: картки БЕЗ локації тепер ТЕЖ в індексі (ключ ''). Раніше вони
     // відсіювались (`if(!c||!c.loc) return;`), тож дитина без локації ніколи не
@@ -1184,8 +1197,8 @@ function _uniqSorted(arr){
   return Object.keys(m).sort();          // sort → вибір стабільний між перезавантаженнями
 }
 function resolveCardId(name, loc){
-  var n=String(name||'').trim().toLowerCase().replace(/\s+/g,' ');
-  var l=String(loc||'').trim().toLowerCase();
+  var n=nameFold(name);      // v7.220
+  var l=nameFold(loc);       // v7.220
   // v7.162: було childId(name,loc) — loc потрапляв у параметр group, третій
   // аргумент лишався undefined, і формула давала 'c_ПІБ_' без локації.
   var base=childId(name,'',loc);
@@ -1889,8 +1902,7 @@ function extractTeacher(raw){
 // Для школи правило просте: дитина або має картку саме в цій школі, або її тут
 // немає. Садків це не стосується — там resolveCardId лишається як був.
 function _cardIdInLoc(name, loc){
-  var n=String(name||'').trim().toLowerCase().replace(/\s+/g,' ');
-  var l=String(loc||'').trim().toLowerCase();
+  var n=nameFold(name), l=nameFold(loc);   // v7.220
   if(!n||!l) return '';
   var list=(_cardNameIndex().byLoc[l])||[], exact=[], pref=[];
   for(var i=0;i<list.length;i++){

@@ -4903,7 +4903,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.219', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.220', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -4965,6 +4965,7 @@ function doGet(e) {
     else if (action === 'getSchoolRoster')            result = getSchoolRoster(e.parameter && e.parameter.loc || '');   // v7.205 read-only: клас із картки для локацій типу «Школа»
     else if (action === 'dryRunBlankBlocks')          result = dryRunBlankBlocks(e.parameter || {});                    // v7.209 read-only: що змінить «порожній рядок закриває блок»
     else if (action === 'dryRunPayFilters')           result = dryRunPayFilters(e.parameter || {});                     // v7.217 read-only: що відсіють фільтри службових рядків
+    else if (action === 'dryRunNameFold')             result = dryRunNameFold(e.parameter || {});                       // v7.220 read-only: які картки склеїть зведення лапок
     else if (action === 'purgeAutoDraftCards')        result = purgeAutoDraftCards({names:String((e.parameter&&e.parameter.names)||'').split('|').filter(String), loc:(e.parameter&&e.parameter.loc)||'', createdPrefix:(e.parameter&&e.parameter.createdPrefix)||'', dryRun:true});   // v7.209 GET = ЗАВЖДИ dryRun, видалення лише POST-ом
     else if (action === 'getPredmetnyCatalog')        result = getPredmetnyCatalog(e.parameter && e.parameter.loc || '');
     else if (action === 'getPredmetnyMarks')          result = getPredmetnyMarks(e.parameter || {});
@@ -5395,7 +5396,26 @@ function renameClientGroup(body){
 // v7.107: PAYMENT = джерело правди для груп. Синхронізує КАРТКУ (Клієнти.Група) під Payment:
 // для кожної дитини порівнює групу в картці з групою в Payment; якщо різні — оновлює картку під Payment.
 // Матч по нормалізованому ПІБ у межах локації. dryRun=true за замовч. (лише список: дитина, було, стане).
-function _syncNormPib(s){ return String(s || '').trim().replace(/\s+/g, ' ').toLowerCase(); }
+// ─── v7.220: ЄДИНА НОРМАЛІЗАЦІЯ ПІБ ДИТИНИ ДЛЯ ЗІСТАВЛЕННЯ ─────────────────
+// Привід: у Житомирі картка «Гриб Дар"я» (подвійна лапка) і рядок Payment
+// «Гриб Дарʼя» (апостроф) вважались різними дітьми — автосинк завів другу
+// картку, і на одну дитину стало дві активні.
+// Зводимо до одного символу ВСІ варіанти лапки/апострофа, схлопуємо пробіли
+// (включно з нерозривними) і регістр. Використовується ЛИШЕ для порівняння —
+// у самі дані нічого не пишеться, id наявних карток не змінюються.
+var _APOSTROPHES = /[\u0022\u0027\u2018\u2019\u201A\u201B\u201C\u201D\u201E\u201F\u02BC\u02B9\u02BB\u0060\u00B4\u2032\u2033\u00AB\u00BB]/g;
+function _nameFold(s){
+  return String(s == null ? '' : s)
+    .replace(/[\u200B\u200C\u200D\uFEFF\u200E\u200F]/g, '')
+    .replace(_APOSTROPHES, "'")
+    .replace(/[\u2010-\u2015\u2212]/g, '-')
+    .replace(/[\s\u00A0]+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+function _nameFoldTight(s){ return _nameFold(s).replace(/\s+/g, ''); }
+// v7.220: делегує у _nameFold — тепер лапки теж зводяться.
+function _syncNormPib(s){ return _nameFold(s); }
 function syncCardGroupsFromPayment(body){
   body = body || {};
   var loc    = String(body.loc || '').trim();
@@ -5714,6 +5734,72 @@ function dryRunPayFilters(params){
             totalRemovedKids:totals.kids, totalRemovedGroups:totals.groups,
             errors:errors, rows:out};
   } catch(err){ return {ok:false, error:String(err && err.message || err)}; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.220 DRY-RUN: скільки пар карток зійдеться в одну після зведення лапок.
+// Порівнює СТАРУ нормалізацію (trim+пробіли+регістр) з новою (_nameFold) і
+// показує: (а) картки, що склеюються між собою; (б) рядки Payment, які раніше
+// не знаходили картку, а тепер знайдуть. GET ?action=dryRunNameFold[&loc=…].
+// Нічого не пише і нічого не зливає.
+// ═══════════════════════════════════════════════════════════════════════════
+function dryRunNameFold(params){
+  params = params || {};
+  var only = String(params.loc || '').trim();
+  function oldNorm(s){ return String(s || '').trim().replace(/\s+/g, ' ').toLowerCase(); }
+  try {
+    var gc = getClients();
+    if (!gc.ok) return gc;
+    var cards = (gc.data || []).filter(function(c){
+      var l = String(c['Локація'] || '').trim();
+      return l && (!only || l === only);
+    });
+    // (а) картки, що склеюються
+    var byNew = {}, pairs = [];
+    cards.forEach(function(c){
+      var loc = String(c['Локація'] || '').trim();
+      var k = loc + '||' + _nameFold(c['ПІБ дитини']);
+      (byNew[k] = byNew[k] || []).push(c);
+    });
+    Object.keys(byNew).forEach(function(k){
+      var g = byNew[k];
+      if (g.length < 2) return;
+      var oldKeys = {};
+      g.forEach(function(c){ oldKeys[oldNorm(c['ПІБ дитини'])] = 1; });
+      if (Object.keys(oldKeys).length < 2) return;   // і раніше були дублями — не наша заслуга
+      pairs.push({loc: g[0]['Локація'],
+        cards: g.map(function(c){
+          return {name: String(c['ПІБ дитини'] || ''), id: String(c['ID'] || ''),
+                  group: String(c['Група'] || ''), status: String(c['Статус'] || '')};
+        })});
+    });
+    // (б) рядки Payment, що тепер знайдуть картку
+    var cardOld = {}, cardNew = {};
+    cards.forEach(function(c){
+      var loc = String(c['Локація'] || '').trim();
+      cardOld[loc + '||' + oldNorm(c['ПІБ дитини'])] = String(c['ПІБ дитини'] || '');
+      cardNew[loc + '||' + _nameFold(c['ПІБ дитини'])] = String(c['ПІБ дитини'] || '');
+    });
+    var pay = getPayments();
+    var newly = [];
+    ((pay && pay.data) || []).forEach(function(row){
+      var loc = String(row['Локація'] || '').trim();
+      if (!loc || (only && loc !== only)) return;
+      var nm = String(row["Ім'я дитини"] || '').trim();
+      if (!nm) return;
+      var ko = loc + '||' + oldNorm(nm), kn = loc + '||' + _nameFold(nm);
+      if (!cardOld.hasOwnProperty(ko) && cardNew.hasOwnProperty(kn)){
+        newly.push({loc: loc, payName: nm, cardName: cardNew[kn], group: String(row['Група'] || '')});
+      }
+    });
+    var byLoc = {};
+    pairs.forEach(function(p){ byLoc[p.loc] = byLoc[p.loc] || {pairs: 0, newly: 0}; byLoc[p.loc].pairs++; });
+    newly.forEach(function(n){ byLoc[n.loc] = byLoc[n.loc] || {pairs: 0, newly: 0}; byLoc[n.loc].newly++; });
+    return {ok: true, dryRun: true, scope: only || '(усі)',
+            cardsScanned: cards.length,
+            collapsingGroups: pairs.length, newlyMatched: newly.length,
+            byLoc: byLoc, pairs: pairs.slice(0, 100), newly: newly.slice(0, 100)};
+  } catch(e){ return {ok: false, error: String(e && e.message || e)}; }
 }
 
 function ensureClientsHeader(sheet) {
@@ -13214,7 +13300,7 @@ function _getExportJournalSheet(){
 }
 
 function _journalNormName(s){
-  return String(s || '').replace(/[\s\u00A0]+/g, '').toLowerCase();
+  return _nameFoldTight(s);   // v7.220: + зведення лапок/апострофів
 }
 
 // Зчитує усі записи журналу для (loc, kind, year, month). Ключ — норм-ім'я.
@@ -13323,7 +13409,7 @@ function exportAttendanceToPayments(params){
     if (!paySh) return {ok: false, error: 'Лист "' + reg.sheetName + '" не знайдено у файлі локації'};
     var data     = paySh.getDataRange().getValues();
     var formulas = paySh.getDataRange().getFormulas();   // один зайвий read замість 12 пер-місячних
-    function _normName(s){ return String(s || '').replace(/[\s ]+/g, '').toLowerCase(); }
+    function _normName(s){ return _nameFoldTight(s); }   // v7.220
     var DATA_START = 3;
     var paymentByNorm = {};   // normName → rowIdx0 (перше співпадіння)
     for (var r = DATA_START; r < data.length; r++){
@@ -13609,7 +13695,7 @@ function exportMealToPayments(params){
     var paySh = paymentSS.getSheetByName(reg.sheetName) || paymentSS.getSheets()[0];
     var data = paySh.getDataRange().getValues();
     var formulas = paySh.getDataRange().getFormulas();
-    function _normName(s){ return String(s||'').replace(/[\s ]+/g,'').toLowerCase(); }
+    function _normName(s){ return _nameFoldTight(s); }   // v7.220
     var DATA_START = 3, paymentByNorm = {};
     for (var r=DATA_START;r<data.length;r++){
       var nameCell = trim(String(data[r][0]||''));
@@ -14963,7 +15049,7 @@ function _vacParseAbsences(json){
   try { return JSON.parse(String(json || '[]')) || []; } catch(e){ return []; }
 }
 function _normNameVac(s){
-  s = String(s || '').replace(/[\s ]+/g, '').toLowerCase();
+  s = _nameFoldTight(s);   // v7.220
   // v7.57: сплутані ЛАТИНСЬКІ літери -> кирилиця (імена кирилицею, тож латинська = одрук).
   // Робить матч Cук<->Сук стійким (інцидент Сук Лера з латин C).
   var _m = {'c':'с','o':'о','e':'е','a':'а','p':'р','x':'х','y':'у','i':'і','k':'к','m':'м','t':'т'};
@@ -20034,9 +20120,7 @@ function testDiagSapogov(){
 // ───────────────────────────────────────────────────────────────────────────
 function diagClientsWithoutStatus(){
   function normKey(name, loc){
-    var n = String(name||'').trim().replace(/\s+/g,' ').toLowerCase();
-    var l = String(loc ||'').trim().replace(/\s+/g,' ').toLowerCase();
-    return n + '|' + l;
+    return _nameFold(name) + '|' + _nameFold(loc);   // v7.220
   }
 
   Logger.log('[diagNoStatus] ═══════════════════════════════════════');
@@ -20503,9 +20587,7 @@ function syncMissingClientsFromPayments(opts){
   var cLocIdx  = chdrs.indexOf('Локація');
 
   function normKey(name, loc){
-    var n = String(name||'').trim().replace(/\s+/g,' ').toLowerCase();
-    var l = String(loc ||'').trim().replace(/\s+/g,' ').toLowerCase();
-    return n + '|' + l;
+    return _nameFold(name) + '|' + _nameFold(loc);   // v7.220
   }
   function isServiceRow(name){
     var n = String(name||'').trim();
@@ -20800,9 +20882,7 @@ function syncGroupsFromPayments(opts){
   Logger.log('[syncGroups] START dryRun=%s', dryRun);
 
   function normKey(name, loc){
-    var n = String(name||'').trim().replace(/\s+/g,' ').toLowerCase();
-    var l = String(loc ||'').trim().replace(/\s+/g,' ').toLowerCase();
-    return n + '|' + l;
+    return _nameFold(name) + '|' + _nameFold(loc);   // v7.220
   }
   function normGroup(g){
     return String(g||'').trim().replace(/\s+/g,' ').toLowerCase();
