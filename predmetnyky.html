@@ -2723,16 +2723,27 @@ function removeAssign(){
 // ── AUTO-EXPORT (v6.11.10 — debounce 2s + clearer toasts) ────
 // Викликає exportPredmetnykyToSalary після save/delete lesson або
 // зміни ставки. Зменшено з 5s до 2s — щоб користувач швидше бачив зміни.
-function scheduleAutoExport(loc){
+function scheduleAutoExport(loc, opts){
   if (!loc) return;
   if (S.autoExportTimer){ clearTimeout(S.autoExportTimer); }
   setSync('pending', '↻ Salary через 2 сек…');
   S.autoExportTimer = setTimeout(function(){
     S.autoExportTimer = null;
-    runAutoExport(loc);
+    runAutoExport(loc, opts);
   }, 2000);
 }
-function runAutoExport(loc){
+// v7.216: guard v7.197 (NO_LESSONS) — це НЕ помилка, а нормальний стан початку
+// місяця: уроків ще нуль, тож бекенд свідомо не пише в Salary, щоб не обнулити
+// наявні суми. Логіку guard не чіпаємо — він і далі скасовує запис. Міняємо лише
+// подачу: замість червоного «⚠️ Salary не оновлено: …» — сіре інфо, без тоста.
+// Тост показуємо ЛИШЕ коли користувач сам натиснув «Sync Salary» (opts.manual),
+// бо тоді він чекає на відповідь. Автоекспорт після чужих дій мовчить.
+function _isEmptyPeriodSkip(res){
+  return !!(res && res.skipped === true &&
+            (res.code === 'NO_LESSONS' || res.code === 'NO_MARKS'));
+}
+function runAutoExport(loc, opts){
+  opts = opts || {};
   setSync('syncing', '↻ Salary…');
   return apiPost({
     action: 'exportPredmetnykyToSalary',
@@ -2749,6 +2760,11 @@ function runAutoExport(loc){
       setSync('ok', msg);
       // Toast тільки для значущих змін (cells>0) щоб не спамити
       if (cells > 0) showToast(msg + ' · ' + escapeHtml(res.targetMonth || '') + '', 'ok', 4000);
+    } else if (_isEmptyPeriodSkip(res)){
+      // v7.216: порожній місяць — сірий стан, у журнал синку не пишемо
+      var soft = 'Ще немає уроків за ' + S.month + '/' + S.year;
+      setSync('idle', soft);
+      if (opts.manual) showToast(soft + ' — Salary не змінювався', 'info', 4000);
     } else {
       var err = (res && res.error) || 'невідома помилка';
       var fullMsg = '⚠️ Salary не оновлено: ' + err;
@@ -2843,7 +2859,7 @@ function manualSyncSalary(){
   if (S.autoExportTimer){ clearTimeout(S.autoExportTimer); S.autoExportTimer = null; }
   var btn = $('btnSyncSalary');
   if (btn){ btn.disabled = true; btn.textContent = '⏳ Sync…'; }
-  runAutoExport(S.loc).finally(function(){
+  runAutoExport(S.loc, {manual:true}).finally(function(){   // v7.216: ручний sync — показуємо результат
     if (btn){ btn.disabled = false; btn.textContent = '💸 Sync Salary'; }
   });
 }
