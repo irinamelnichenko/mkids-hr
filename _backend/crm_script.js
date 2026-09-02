@@ -4903,7 +4903,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.212', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.217', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -4964,6 +4964,7 @@ function doGet(e) {
     else if (action === 'getChomusykyReport')         result = getChomusykyReport(e.parameter || {});
     else if (action === 'getSchoolRoster')            result = getSchoolRoster(e.parameter && e.parameter.loc || '');   // v7.205 read-only: клас із картки для локацій типу «Школа»
     else if (action === 'dryRunBlankBlocks')          result = dryRunBlankBlocks(e.parameter || {});                    // v7.209 read-only: що змінить «порожній рядок закриває блок»
+    else if (action === 'dryRunPayFilters')           result = dryRunPayFilters(e.parameter || {});                     // v7.217 read-only: що відсіють фільтри службових рядків
     else if (action === 'purgeAutoDraftCards')        result = purgeAutoDraftCards({names:String((e.parameter&&e.parameter.names)||'').split('|').filter(String), loc:(e.parameter&&e.parameter.loc)||'', createdPrefix:(e.parameter&&e.parameter.createdPrefix)||'', dryRun:true});   // v7.209 GET = ЗАВЖДИ dryRun, видалення лише POST-ом
     else if (action === 'getPredmetnyCatalog')        result = getPredmetnyCatalog(e.parameter && e.parameter.loc || '');
     else if (action === 'getPredmetnyMarks')          result = getPredmetnyMarks(e.parameter || {});
@@ -5654,6 +5655,65 @@ function purgeAutoDraftCards(body){
     return res;
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
   finally { if (lock){ try { lock.releaseLock(); } catch(_){} } }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.217 DRY-RUN: що відсіють три фільтри службових рядків.
+// Парсить кожен Payment-файл двічі — без фільтрів і з ними — і показує різницю
+// поіменно. GET ?action=dryRunPayFilters[&loc=…]. Нічого не пише.
+// ═══════════════════════════════════════════════════════════════════════════
+function dryRunPayFilters(params){
+  params = params || {};
+  var only = String(params.loc || '').trim();
+  try {
+    var cfg = SpreadsheetApp.openById(CONFIG_SHEET_ID).getSheets()[0].getDataRange().getValues();
+    var curJSMonth = (new Date()).getMonth();
+    var out = [], totals = {kids:0, groups:0}, errors = [];
+
+    for (var r = 1; r < cfg.length; r++){
+      var typ = trim(cfg[r][1]), loc = trim(cfg[r][2]);
+      var sheetId = trim(cfg[r][3]), sheetName = trim(cfg[r][4]) || 'Payment';
+      if (!loc || !sheetId) continue;
+      if (only && loc !== only) continue;
+      try {
+        var ss = SpreadsheetApp.openById(sheetId);
+        var psh = ss.getSheetByName(sheetName) || ss.getSheets()[0];
+        var data = psh.getDataRange().getValues();
+        var cpm = _paymentColsPerMonth(loc, cfg[r][5]);
+        var mc  = detectCurrentMonthCol(data, curJSMonth, cpm);
+        var cc  = detectContractDateCol(data);
+
+        var gOff = parsePaymentSheet(data, mc, cc, cpm, loc, typ, undefined, true);   // фільтри ВИМК
+        var gOn  = parsePaymentSheet(data, mc, cc, cpm, loc, typ, undefined, false);  // фільтри УВІМК
+
+        function flat(gs){
+          var m = {};
+          gs.forEach(function(g){
+            g.children.forEach(function(ch){ m[String(ch.name).trim()] = g.group + (g.teacher ? ' | ' + g.teacher : ''); });
+          });
+          return m;
+        }
+        var a = flat(gOff), b = flat(gOn);
+        var removed = [], regrouped = [];
+        Object.keys(a).forEach(function(nm){
+          if (!b.hasOwnProperty(nm)) removed.push({name:nm, from:a[nm]});
+          else if (a[nm] !== b[nm]) regrouped.push({name:nm, from:a[nm], to:b[nm]});
+        });
+        function names(gs){ return gs.map(function(g){ return g.group + (g.teacher ? ' | ' + g.teacher : ''); }); }
+        out.push({loc:loc, typ:typ,
+                  kidsBefore:Object.keys(a).length, kidsAfter:Object.keys(b).length,
+                  groupsBefore:gOff.length, groupsAfter:gOn.length,
+                  removedCount:removed.length, regroupedCount:regrouped.length,
+                  removed:removed.slice(0, 60), regrouped:regrouped.slice(0, 60),
+                  groupNamesBefore:names(gOff), groupNamesAfter:names(gOn)});
+        totals.kids += removed.length;
+        totals.groups += (gOff.length - gOn.length);
+      } catch(e){ errors.push({loc:loc, error:String(e && e.message || e)}); }
+    }
+    return {ok:true, dryRun:true, filtersFlag:PAY_FILTERS_ON,
+            totalRemovedKids:totals.kids, totalRemovedGroups:totals.groups,
+            errors:errors, rows:out};
+  } catch(err){ return {ok:false, error:String(err && err.message || err)}; }
 }
 
 function ensureClientsHeader(sheet) {
@@ -6807,11 +6867,40 @@ function detectCurrentMonthCol(rows, curJSMonth, cpm) {
 var BLANK_CLOSES_BLOCK        = 0;   // садки: вимкнено
 var BLANK_CLOSES_BLOCK_SCHOOL = 3;   // школи: три підряд порожні закривають блок
 
-function parsePaymentSheet(data, monthCol, contractCol, cpm, loc, typ, closeOnBlank) {
+// ─── v7.217: ТРИ ФІЛЬТРИ СЛУЖБОВИХ РЯДКІВ PAYMENT ───────────────────────────
+// Досі службові рядки доводилось чистити руками в кожному файлі. Парсер має
+// відсіювати їх сам. Прапорець вимкнений: деплой НЕ дорівнює застосуванню,
+// спершу dryRunPayFilters показує, що саме зникне по кожній локації.
+//   0 = вимкнено (поведінка до v7.217), 1 = увімкнено.
+var PAY_FILTERS_ON = 0;
+
+// (1) Заголовок «…вільних місць N» / «Вільних 8 8» — не група, а лічильник
+//     вільних місць. Блок під ним ігнорується цілком.
+function _isFreeSeatsHeader(nameCell){
+  return /вільн/i.test(String(nameCell || ''));
+}
+// (2) ПІБ із самих цифр («12», «8», «0») — не дитина, а залишок місць.
+function _isNumericName(nameCell){
+  return /^\s*\d+([.,]\d+)?\s*$/.test(String(nameCell || ''));
+}
+// (3) «вихователь», який сам є типом групи («miniBaby-ki Baby-ki» → «Baby-ki»),
+//     це другий тип у заголовку, а не людина. Ім'я вихователя типом не буває.
+function _isGroupTypeToken(s){
+  s = trim(s);
+  if (!s) return false;
+  for (var i = 0; i < GROUP_PATTERNS.length; i++){
+    if (GROUP_PATTERNS[i].test(s)) return true;
+  }
+  return false;
+}
+
+function parsePaymentSheet(data, monthCol, contractCol, cpm, loc, typ, closeOnBlank, disableFilters) {
   var _keepSchool = _isSchoolLoc(typ, loc);   // v7.202
   var _defBlank = _keepSchool ? BLANK_CLOSES_BLOCK_SCHOOL : BLANK_CLOSES_BLOCK;
   var _minBlank = (closeOnBlank === undefined) ? _defBlank : closeOnBlank;
   _minBlank = (_minBlank === true) ? 1 : (Number(_minBlank) || 0);
+  var _filters = (disableFilters === undefined) ? !!PAY_FILTERS_ON : !disableFilters;
+  var _inServiceBlock = false;               // v7.217: під заголовком «вільних місць»
   var _blankRun = 0;
   var _LO = _paymentLayout(cpm);   // v7.103: розкладка блоку (5 або 7 колонок)
   var DATA_START = 3;
@@ -6826,7 +6915,13 @@ function parsePaymentSheet(data, monthCol, contractCol, cpm, loc, typ, closeOnBl
       continue;
     }
     _blankRun = 0;
+    // v7.217 (2): рядок-число — не дитина й не заголовок, просто пропускаємо.
+    if (_filters && _isNumericName(nameCell)) continue;
     if (isGroupHeaderRow(row, monthCol)) {
+      // v7.217 (1): «…вільних місць N» — службовий лічильник. Група не
+      // створюється, блок під ним ігнорується до наступного заголовка.
+      if (_filters && _isFreeSeatsHeader(nameCell)){ curGroup = null; _inServiceBlock = true; continue; }
+      _inServiceBlock = false;
       // v7.203: у школі вихователя з заголовка НЕ витягуємо — уся назва є назвою
       // класу. Інакше «4 клас» ділилось на групу «4 клас» + «вихователя» «клас»,
       // і ключ виходив «4 клас клас». Дзеркалить фронт (parseGroupField:
@@ -6835,11 +6930,14 @@ function parsePaymentSheet(data, monthCol, contractCol, cpm, loc, typ, closeOnBl
       // вихователь «Юля».
       var firstSpace = nameCell.search(/\s/);
       var teacher = (!_keepSchool && firstSpace > 0) ? nameCell.slice(firstSpace).trim() : '';
+      // v7.217 (3): «вихователь» — це насправді другий тип групи → відкидаємо.
+      if (_filters && teacher && _isGroupTypeToken(teacher)) teacher = '';
       var groupName = normalizeGroupName(nameCell, _keepSchool);   // v7.202
       var groupKey = groupName + (teacher ? ' ' + teacher : '');
       curGroup = {group: groupKey, teacher: teacher, children: []};
       groups.push(curGroup);
     } else {
+      if (_filters && _inServiceBlock) continue;   // v7.217 (1): діти службового блоку
       if (!curGroup) {
         curGroup = {group:'(без групи)', teacher:'', children:[]};
         groups.push(curGroup);
