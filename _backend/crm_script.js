@@ -4903,7 +4903,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.220', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.221', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -4966,6 +4966,7 @@ function doGet(e) {
     else if (action === 'dryRunBlankBlocks')          result = dryRunBlankBlocks(e.parameter || {});                    // v7.209 read-only: що змінить «порожній рядок закриває блок»
     else if (action === 'dryRunPayFilters')           result = dryRunPayFilters(e.parameter || {});                     // v7.217 read-only: що відсіють фільтри службових рядків
     else if (action === 'dryRunNameFold')             result = dryRunNameFold(e.parameter || {});                       // v7.220 read-only: які картки склеїть зведення лапок
+    else if (action === 'diagPayHeaders')             result = diagPayHeaders(e.parameter || {});                       // v7.221 read-only: СИРІ заголовки груп із Payment
     else if (action === 'purgeAutoDraftCards')        result = purgeAutoDraftCards({names:String((e.parameter&&e.parameter.names)||'').split('|').filter(String), loc:(e.parameter&&e.parameter.loc)||'', createdPrefix:(e.parameter&&e.parameter.createdPrefix)||'', dryRun:true});   // v7.209 GET = ЗАВЖДИ dryRun, видалення лише POST-ом
     else if (action === 'getPredmetnyCatalog')        result = getPredmetnyCatalog(e.parameter && e.parameter.loc || '');
     else if (action === 'getPredmetnyMarks')          result = getPredmetnyMarks(e.parameter || {});
@@ -5800,6 +5801,56 @@ function dryRunNameFold(params){
             collapsingGroups: pairs.length, newlyMatched: newly.length,
             byLoc: byLoc, pairs: pairs.slice(0, 100), newly: newly.slice(0, 100)};
   } catch(e){ return {ok: false, error: String(e && e.message || e)}; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.221 READ-ONLY: СИРІ заголовки груп із Payment-файлу.
+// Навіщо. В агрегаті «Оплати» лежить УЖЕ нормалізована назва: normalizeGroupName
+// зводить «Малюки»/«Карапузи» → Baby-ki, «Пізнайки»/«Мандрівники»/«Дослідники»
+// → Study-ki, «Розумники» → Preschool, «Бешкетники» → Find-iki, «мама+я» →
+// miniBaby-ki. Тобто з агрегату НЕМОЖЛИВО дізнатись, як група називається у
+// файлі насправді. Цей роут читає колонку A напряму й показує оригінал.
+// GET ?action=diagPayHeaders&loc=… (без loc — усі локації). Нічого не пише.
+// ═══════════════════════════════════════════════════════════════════════════
+function diagPayHeaders(params){
+  params = params || {};
+  var only = String(params.loc || '').trim();
+  try {
+    var cfg = SpreadsheetApp.openById(CONFIG_SHEET_ID).getSheets()[0].getDataRange().getValues();
+    var out = [], errors = [];
+    for (var r = 1; r < cfg.length; r++){
+      var typ = trim(cfg[r][1]), loc = trim(cfg[r][2]);
+      var sheetId = trim(cfg[r][3]), sheetName = trim(cfg[r][4]) || 'Payment';
+      if (!loc || !sheetId) continue;
+      if (only && loc !== only) continue;
+      try {
+        var ss = SpreadsheetApp.openById(sheetId);
+        var psh = ss.getSheetByName(sheetName) || ss.getSheets()[0];
+        var lastRow = psh.getLastRow();
+        var colA = psh.getRange(1, 1, lastRow, 1).getValues();
+        var keepSchool = _isSchoolLoc(typ, loc);
+        var heads = [], kidsAfter = 0, cur = null;
+        for (var i = 0; i < colA.length; i++){
+          var cell = trim(String(colA[i][0] == null ? '' : colA[i][0]));
+          if (!cell) continue;
+          if (i + 1 < 4) continue;                       // DATA_START = 3 (0-based)
+          if (!isGroupHeaderRow([cell], 1)) { if (cur) cur.kids++; continue; }
+          var firstSpace = cell.search(/\s/);
+          var teacher = (!keepSchool && firstSpace > 0) ? cell.slice(firstSpace).trim() : '';
+          var isType = (teacher && _isGroupTypeToken(teacher));
+          cur = {row: i + 1, raw: cell,
+                 normalized: normalizeGroupName(cell, keepSchool),
+                 teacherRaw: teacher,
+                 teacherDropped: !!isType,
+                 isFreeSeats: _isFreeSeatsHeader(cell),
+                 kids: 0};
+          heads.push(cur);
+        }
+        out.push({loc: loc, typ: typ, lastRow: lastRow, headers: heads});
+      } catch(e){ errors.push({loc: loc, error: String(e && e.message || e)}); }
+    }
+    return {ok: true, readOnly: true, errors: errors, rows: out};
+  } catch(err){ return {ok: false, error: String(err && err.message || err)}; }
 }
 
 function ensureClientsHeader(sheet) {
