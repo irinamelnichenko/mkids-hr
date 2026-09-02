@@ -1915,6 +1915,28 @@ function _cardIdInLoc(name, loc){
   var pr=_uniqSorted(pref); if(pr.length===1) return pr[0];
   return '';
 }
+// v7.225: ЄДИНЕ ДЖЕРЕЛО НАЗВИ ГРУПИ — картка дитини, для БУДЬ-ЯКОЇ локації.
+// Було: назва бралася з агрегату «Оплати», тобто нормалізована + хвіст-вихователь
+// («Study-ki 3-4», «Школа Білик Герман Олександрович (Малахова)»). Після того як
+// картки отримали назви директорок («Пізнайки 3-4 Ольга і Соломія», «Білик Герман
+// Олександрович (Малахова)»), екрани розʼїхались із картками.
+// Пошук СУВОРО в межах локації (_cardIdInLoc) — глобальний фолбек resolveCardId
+// колись притягнув у Школу Осокорки класи Школи 228.
+// Порожньо → викликач лишає стару поведінку (назва з Оплат).
+function _cardGroupOf(name, loc){
+  try{
+    var id=_cardIdInLoc(name, loc);
+    var c=id && S.crm ? S.crm[id] : null;
+    return c ? String(c.group||'').trim() : '';
+  }catch(e){ return ''; }
+}
+// v7.225: заголовок групи без потрійного повтору. У Нац.Гвардії назва групи
+// вже містить ПІБ вихователя, тож окремий рядок «Вихователь: …» дублював його.
+function _grpHasTeacher(group, teacher){
+  var g=nameFold(group), t=nameFold(teacher);
+  if(!t) return true;                 // немає кого показувати
+  return !!g && g.indexOf(t)>=0;      // ПІБ уже всередині назви
+}
 function _schoolCardInfo(name, loc){
   try{
     if(getLocTypeByLoc(loc)!=='Школа') return {isSchool:false, card:null};
@@ -1946,6 +1968,8 @@ function buildGroups(){
     // v7.206: у школі рядок без картки — службовий рядок Payment, не дитина.
     var _sch=_schoolCardInfo(name, loc);
     if(_sch.isSchool && !_sch.card) return;
+    // v7.225: група з КАРТКИ для будь-якої локації, не лише для школи.
+    var _cardGrp=_cardGroupOf(name, loc);
     var _schoolGrp=_sch.card ? String(_sch.card.group||'').trim() : '';
 
     if(!S.payMonth) S.payMonth=String(row['Місяць']||'').trim();
@@ -1953,7 +1977,7 @@ function buildGroups(){
     var rawTeacher=String(row['Вихователь']||'').trim()||parsed.teacher;
     // Ключ групи = локація + тип групи + вихователь (щоб Preschool Юля і Preschool Наталія були різними)
     // v7.201: у школі ключ = сама назва класу, без домішування вихователя.
-    var grpKey=_schoolGrp ? _schoolGrp : (grp+(rawTeacher?' '+rawTeacher:''));
+    var grpKey=_cardGrp || (_schoolGrp ? _schoolGrp : (grp+(rawTeacher?' '+rawTeacher:'')));   // v7.225
 
     if(!S.groups[loc]) S.groups[loc]=[];
     var key=loc+'||'+grpKey;
@@ -3092,7 +3116,7 @@ function renderClients(){
       html+='<div class="card" style="margin-bottom:16px">'
         +'<div class="card-hd"><h3>👥 '+esc(grp.group)+'</h3>'
         +'<span style="font-size:12px;color:var(--gray)">'
-        +(grp.teacher?'Вихователь: '+esc(grp.teacher)+' &nbsp;|&nbsp; ':'')
+        +((grp.teacher && !_grpHasTeacher(grp.group, grp.teacher))?'Вихователь: '+esc(grp.teacher)+' &nbsp;|&nbsp; ':'')   // v7.225
         +children.length+' дітей'
         +'<span data-permission="finance">'
         +(grpDebtors?' &nbsp;|&nbsp; <span style="color:var(--red2)">'+grpDebtors+' боржників, '+fmtN(Math.round(grpDebt))+' грн</span>':' &nbsp;|&nbsp; <span style="color:var(--green)">всі сплатили ✅</span>')
@@ -7908,6 +7932,8 @@ function _yearlyGroupOf(row){
   var name=String(row["Ім'я дитини"]||'').trim();
   var loc=String(row['Локація']||'').trim();
   var raw=String(row['Група']||'').trim();
+  var cg=_cardGroupOf(name, loc);        // v7.225: картка — єдине джерело
+  if(cg) return cg;
   var sch=_schoolCardInfo(name, loc);
   if(sch.isSchool && sch.card){
     var g=String(sch.card.group||'').trim();
@@ -7934,8 +7960,9 @@ function buildGroupsFromYearly(monthIdx){
     // v7.206: у школі рядок без картки — службовий рядок Payment, не дитина.
     var _sch=_schoolCardInfo(name, loc);
     if(_sch.isSchool && !_sch.card) return;
+    var _cardGrp=_cardGroupOf(name, loc);            // v7.225
     var _schoolGrp=_sch.card ? String(_sch.card.group||'').trim() : '';
-    if(_schoolGrp) grp=_schoolGrp;
+    if(_cardGrp) grp=_cardGrp; else if(_schoolGrp) grp=_schoolGrp;
     var rawTeacher=String(row['Вихователь']||'').trim();
     var fs=+(row[mName+'-Факт-навч']||0);
     var fe=+(row[mName+'-Факт-доп']||0);
@@ -7945,7 +7972,7 @@ function buildGroupsFromYearly(monthIdx){
     var budget=bs+be;
     var totalNoEntry=fs+fe;
     var debt=budget>totalNoEntry?budget-totalNoEntry:0;
-    var grpKey=_schoolGrp ? _schoolGrp : (grp+(rawTeacher?' '+rawTeacher:''));   // v7.201
+    var grpKey=_cardGrp || (_schoolGrp ? _schoolGrp : (grp+(rawTeacher?' '+rawTeacher:'')));   // v7.225
     var key=loc+'||'+grpKey;
     if(!result[loc]) result[loc]=[];
     if(!grpMap[key]){

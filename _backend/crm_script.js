@@ -4904,7 +4904,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.224', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.225', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -24977,8 +24977,9 @@ function getSchoolRoster(loc){
       skippedStatus++;
       continue;
     }
-    if (!isSchool) continue;                      // садкам потрібен лише inactive
-
+    // v7.225: byName будуємо для ЛОКАЦІЙ БУДЬ-ЯКОГО ТИПУ. Раніше садки виходили
+    // тут, і екран додаткових не мав звідки взяти назву групи з картки — показував
+    // нормалізовану з Оплат («Study-ki 3-4» замість «Пізнайки 3-4 Ольга і Соломія»).
     var gr = String(data[r][cGrp - lo] || '').trim();
     if (!gr){ skippedNoGroup++; continue; }
     if (byName[nm]) continue;                     // дублі карток: перша виграє

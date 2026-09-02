@@ -2843,15 +2843,27 @@ async function _applySchoolRoster(loc){
   var src = ATT.childrenByLoc[loc] || {};
 
   if (!rs.isSchool){
-    if (!(rs.inactive || []).length) return;
-    var outK = {}, cntK = 0, offK = 0;
+    // v7.225: у САДКАХ теж перегруповуємо за карткою — випадайка «Група» має
+    // показувати назву директорки («Пізнайки 3-4 Ольга і Соломія»), а не
+    // нормалізовану з Оплат («Study-ki 3-4»). Але дитину БЕЗ картки не ховаємо:
+    // у нових локаціях карток ще бракує, і зникнення дітей зупинило б відмітки.
+    var outK = {}, cntK = 0, offK = 0, noCard = 0;
     Object.keys(src).forEach(function(g){
-      var list = (src[g] || []).filter(function(nm){ if (dead[nm]){ offK++; return false; } return true; });
-      if (list.length){ outK[g] = list; cntK += list.length; }
+      (src[g] || []).forEach(function(nm){
+        if (dead[nm]){ offK++; return; }
+        var grp = rs.byName[nm];
+        if (!grp){ grp = g; noCard++; }            // картки немає — лишаємо групу з Оплат
+        if (!outK[grp]) outK[grp] = [];
+        if (outK[grp].indexOf(nm) === -1){ outK[grp].push(nm); cntK++; }
+      });
     });
     if (!cntK) return;                             // нічого не лишилось — краще старий список
+    Object.keys(outK).forEach(function(g){
+      outK[g].sort(function(a, b){ return a.localeCompare(b, 'uk'); });
+    });
     ATT.childrenByLoc[loc] = outK;
-    if (offK) console.log('[ростер] ' + loc + ': прибрано випускників/розірваних — ' + offK);
+    if (offK || noCard) console.log('[ростер] ' + loc + ': прибрано ' + offK +
+      ', без картки (лишені з групою з Оплат) — ' + noCard);
     return;
   }
 
