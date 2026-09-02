@@ -1878,11 +1878,38 @@ function extractTeacher(raw){
 // тож приховування нічого не ховає. Випускники НЕ відсіюються: у них картка є,
 // і за ними тягнуться реальні бюджети (на Школі Осокорки — 7 карток по 31 000 ₴
 // у вересні), які директорка має бачити.
+// v7.213: СУВОРИЙ пошук картки В МЕЖАХ ЛОКАЦІЇ — крок 1 resolveCardId без його
+// глобальних фолбеків (картки без локації + «унікальний ПІБ по ВСІХ локаціях»).
+// Навіщо. Фолбек «унікальний ПІБ» рятує дитину при переїзді між локаціями, але у
+// шкіл дає протилежний ефект. Поки в Антонець Злати / Косміної Мілани / Чупрун
+// Алісії було ПО ДВІ картки (чернетка в Школі Осокорки + справжня в Школі 228),
+// фолбек мовчав. 02.09 чернетки видалили — картка лишилась одна, фолбек почав
+// віддавати картку Школи 228, і в табелі Школи Осокорки з'явились секції
+// «4 В клас», «2 клас 25/26», «4 Б клас» — класи ЧУЖОЇ школи.
+// Для школи правило просте: дитина або має картку саме в цій школі, або її тут
+// немає. Садків це не стосується — там resolveCardId лишається як був.
+function _cardIdInLoc(name, loc){
+  var n=String(name||'').trim().toLowerCase().replace(/\s+/g,' ');
+  var l=String(loc||'').trim().toLowerCase();
+  if(!n||!l) return '';
+  var list=(_cardNameIndex().byLoc[l])||[], exact=[], pref=[];
+  for(var i=0;i<list.length;i++){
+    var cn=list[i].n;
+    if(cn===n) exact.push(list[i].id);
+    else if(cn.indexOf(n+' ')===0 || n.indexOf(cn+' ')===0) pref.push(list[i].id);
+  }
+  var ex=_uniqSorted(exact); if(ex.length===1) return ex[0];
+  if(ex.length>1) return '';                 // однакові ПІБ у локації — не вгадуємо
+  var pr=_uniqSorted(pref); if(pr.length===1) return pr[0];
+  return '';
+}
 function _schoolCardInfo(name, loc){
   try{
     if(getLocTypeByLoc(loc)!=='Школа') return {isSchool:false, card:null};
-    var id=resolveCardId(name, loc);
+    var id=_cardIdInLoc(name, loc);
     var c=id && S.crm ? S.crm[id] : null;
+    // подвійний запобіжник: картка мусить належати саме цій локації
+    if(c && String(c.loc||'').trim().toLowerCase()!==String(loc||'').trim().toLowerCase()) c=null;
     return {isSchool:true, card:c||null};
   }catch(e){ return {isSchool:false, card:null}; }
 }
