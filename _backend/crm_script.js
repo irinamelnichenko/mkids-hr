@@ -394,7 +394,7 @@ function sortByLocationOrder(arr, getName){
 
 var GROUP_PATTERNS = [
   /mini.?baby/i, /^baby/i, /find/i, /study/i, /preschool/i,
-  /чомус/i, /^школа$/i, /^гхзд$/i,
+  /чомус/i, /^школа$/i, /^школа\s+\d+\b/i, /^гхзд$/i,   // v7.227: «Школа 1 (…)» — теж заголовок
   /мама[\s\+]*я/i, /малюк/i, /карапуз/i, /пізнайк/i,
   /бешкетн/i, /мандрівн/i, /дослідн/i, /розумник/i,
   /^\s*\d+\s*([dDsS]\s*(клас|кл)?|класс?|кл\.?|[бвБВ])/
@@ -4904,7 +4904,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.225', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.227', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -5113,6 +5113,7 @@ function doPost(e) {
     else if (body.action === 'repairPredmetnykyLessons')    result = repairPredmetnykyLessons(Number(body.actorId || 0), body);          // v7.149 дедуп + перенумерація
     else if (body.action === 'exportPredmetnykyToSalary')   result = exportPredmetnykyToSalary(body || {});
     else if (body.action === 'purgeAutoDraftCards')         result = purgeAutoDraftCards(body || {});  // v7.209
+    else if (body.action === 'renamePayGroupHeader')        result = renamePayGroupHeader(body || {}); // v7.227
     else if (body.action === 'generateInvoicePDF')          result = generateInvoicePDF(body || {});   // v6.50
     else if (body.action === 'invoicePdfLink')              result = invoicePdfLink(body || {});       // v6.72 Viber link
     else if (body.action === 'invoiceViberMessage')         result = invoiceViberMessage(body || {});   // v6.72 Viber text
@@ -5903,6 +5904,64 @@ function dryRunRawGroups(params){
     var tot = 0; Object.keys(byLoc).forEach(function(l){ tot += byLoc[l].wouldChange; });
     return {ok:true, dryRun:true, aggregateHasRawColumn:hasRaw,
             totalWouldChange:tot, byLoc:byLoc, diffs:diffs};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.227 ПЕРЕЙМЕНУВАННЯ ЗАГОЛОВКА ГРУПИ у Payment-файлі локації.
+// POST {loc, pairs:[{from,to}], dryRun?, confirm?}. dryRun DEFAULT true;
+// реальний запис вимагає ще й confirm:'YES_RENAME'.
+// Матч по ТОЧНОМУ значенню клітинки A (після trim) — щоб не зачепити схожі.
+// Перейменовує ВСІ входження: у Нац.Гвардії «383 Білик Герман…» стоїть двічі
+// (рядки 6 і 59), і пропустити одне означало б розколоти групу навпіл.
+// Повертає старі значення — за ними правку можна відкотити тим самим роутом.
+// ═══════════════════════════════════════════════════════════════════════════
+function renamePayGroupHeader(body){
+  body = body || {};
+  var loc    = String(body.loc || '').trim();
+  var pairs  = body.pairs || [];
+  var dryRun = (body.dryRun !== false);
+  if (!dryRun && body.confirm !== 'YES_RENAME'){
+    return {ok:false, error:'Реальний запис вимагає confirm:"YES_RENAME"'};
+  }
+  if (!loc || !pairs.length) return {ok:false, error:'loc і pairs[] обовʼязкові'};
+  try {
+    var reg = _getLocationPaymentRegistry(loc);
+    if (!reg || !reg.sheetId) return {ok:false, error:'Локацію "' + loc + '" не знайдено в реєстрі'};
+    var ss  = SpreadsheetApp.openById(reg.sheetId);
+    var sh  = ss.getSheetByName(reg.sheetName) || ss.getSheets()[0];
+    var lastRow = sh.getLastRow();
+    var colA = sh.getRange(1, 1, lastRow, 1).getValues();
+
+    var map = {};
+    pairs.forEach(function(p){ map[trim(p.from)] = trim(p.to); });
+
+    var hits = [], notFound = {};
+    Object.keys(map).forEach(function(k){ notFound[k] = true; });
+    for (var i = 0; i < colA.length; i++){
+      var cur = trim(String(colA[i][0] == null ? '' : colA[i][0]));
+      if (!cur || !map.hasOwnProperty(cur)) continue;
+      delete notFound[cur];
+      hits.push({row: i + 1, from: cur, to: map[cur],
+                 wasHeader: isGroupHeaderRow([cur], 1),
+                 willBeHeader: isGroupHeaderRow([map[cur]], 1)});
+    }
+    var risky = hits.filter(function(h){ return h.wasHeader && !h.willBeHeader; });
+    var res = {ok:true, dryRun:dryRun, loc:loc, sheetName:(reg.sheetName || ''),
+               found:hits.length, hits:hits, notFound:Object.keys(notFound),
+               riskyCount:risky.length, risky:risky};
+    if (risky.length){
+      res.ok = false;
+      res.error = 'Нова назва не розпізнається як заголовок групи — діти під нею ' +
+                  'потраплять у попередній блок. Запис скасовано.';
+      return res;
+    }
+    if (dryRun || !hits.length) return res;
+
+    hits.forEach(function(h){ sh.getRange(h.row, 1).setValue(h.to); });
+    SpreadsheetApp.flush();
+    res.renamed = hits.length;
+    return res;
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 
