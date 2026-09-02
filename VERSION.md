@@ -1,6 +1,6 @@
 # Джерело правди
 
-**`~/Desktop/BOT/HR mkids_bot/crm_script.js`** — єдине джерело правди для бекенду.
+**`~/Desktop/BOT/HR mkids_bot/_backend/crm_script.js`** — єдине джерело правди для бекенду.
 
 | | |
 |---|---|
