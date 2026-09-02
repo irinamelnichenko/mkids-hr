@@ -4903,7 +4903,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.218', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.219', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -6872,7 +6872,7 @@ var BLANK_CLOSES_BLOCK_SCHOOL = 3;   // школи: три підряд поро
 // відсіювати їх сам. Прапорець вимкнений: деплой НЕ дорівнює застосуванню,
 // спершу dryRunPayFilters показує, що саме зникне по кожній локації.
 //   0 = вимкнено (поведінка до v7.217), 1 = увімкнено.
-var PAY_FILTERS_ON = 0;
+var PAY_FILTERS_ON = 1;   // v7.219: УВІМКНЕНО після двох dryRun-ів (див. коміт)
 var FREESEATS_DROP_BLOCK = 0;   // v7.218: 0 = лише заголовок, 1 = блок цілком
 
 // (1) Заголовок «…вільних місць N» / «Вільних 8 8» — не група, а лічильник
