@@ -855,8 +855,12 @@ var MONTHS = ['Січень','Лютий','Березень','Квітень','�
               'Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
 
 // ── PRED v6.11 (мирорить backend constants) ─────────────────────
+// v7.231: PRED_SUBJECTS більше НЕ джерело випадайки предметів — лише порядок
+// сортування й дзеркало backend-констант. Що бачить локація, вирішує
+// Предметники_Каталог (див. subjectsFor).
 var PRED_SUBJECTS       = ['Англійська','Музика','Хореограф','Логопед','Психолог','Чомусики',
-                           'Німецька','Іспанська','Фізкультура'];   // v7.192: предмети школи
+                           'Німецька','Іспанська','Фізкультура',     // v7.192: предмети школи
+                           'Архітектура','Фітнес','Speaking club'];  // v7.195: Школа Осокорки
 var PRED_UNLIMITED_SUBJ = 'Чомусики';
 var PRED_GROUP_TYPES    = ['miniBaby','Baby','Find','Study','Preschool'];
 var PRED_LVIV_LOCATIONS = ['Кругла','Бігова'];
@@ -867,7 +871,8 @@ var GROUP_NAME_BY_TYPE  = {
 var SUBJECT_EMOJI = {
   'Англійська':'📚','Музика':'🎵','Хореограф':'💃',
   'Логопед':'💬','Психолог':'🧠','Чомусики':'❓',
-  'Німецька':'🇩🇪','Іспанська':'🇪🇸','Фізкультура':'⚽'
+  'Німецька':'🇩🇪','Іспанська':'🇪🇸','Фізкультура':'⚽',
+  'Архітектура':'🏛️','Фітнес':'🤸','Speaking club':'🗣️'   // v7.231
 };
 var PRED_EDIT_ROLES = ['cfo','ceo','coo','cco','rnd_director'];   // any loc; director — own loc
 
@@ -1687,7 +1692,52 @@ function assignmentFor(loc, subj){
   }
   return null;
 }
+// v7.231: локація типу «Школа»? Дзеркало backend _predIsSchoolLoc — тип беремо
+// з реєстру CONFIG (S.locations), фолбек — назва локації.
+function isSchoolLoc(loc){
+  var l = String(loc || '').trim();
+  if (!l) return false;
+  for (var i = 0; i < S.locations.length; i++){
+    var r = S.locations[i];
+    if (r && String(r.loc || '').trim() === l)
+      return /школ/i.test(String(r.typ || '')) || /школ/i.test(l);
+  }
+  return /школ/i.test(l);
+}
+
+// v7.231: предмети локації = АКТИВНІ позиції Предметники_Каталог (нормалізовані
+// subject_norm), а не хардкод PRED_SUBJECTS. Садок бачить свої, школа — свої;
+// шкільні предмети в садку більше не показуються. loc='' (Всі локації) → обʼєднання.
+// Чомусики: у 9 з 11 садків це НЕ каталожна позиція (свій екран відміток, ліміту
+// не має), але садок його бачить завжди. Школам не додаємо.
+function subjectsFor(loc){
+  var l = String(loc || '').trim();
+  var seen = {}, out = [];
+  for (var i = 0; i < S.catalog.length; i++){
+    var c = S.catalog[i];
+    if (!c || !c.active) continue;
+    if (l && c.loc !== l) continue;
+    var s = c.subject_norm;
+    if (!s || seen[s]) continue;
+    seen[s] = 1; out.push(s);
+  }
+  // out.length — щоб «Управління» (Житомир, Благо) з порожнім каталогом не
+  // отримало Чомусики й не виглядало як локація з предметниками.
+  if (out.length && !seen[PRED_UNLIMITED_SUBJ] && (!l || !isSchoolLoc(l))){
+    seen[PRED_UNLIMITED_SUBJ] = 1; out.push(PRED_UNLIMITED_SUBJ);
+  }
+  out.sort(function(a, b){
+    var ia = PRED_SUBJECTS.indexOf(a); if (ia === -1) ia = 99;
+    var ib = PRED_SUBJECTS.indexOf(b); if (ib === -1) ib = 99;
+    return ia - ib || String(a).localeCompare(String(b), 'uk');
+  });
+  return out;
+}
+
 function getNormFor(loc, subj, groupType){
+  // v7.231: стеля за матрицею норм — ТІЛЬКИ для садків. У школах клас не мапиться
+  // в тип садкової групи, а предмети погодинні — ліміту немає.
+  if (isSchoolLoc(loc)) return 0;
   var region = predLocToRegion(loc);
   var r = S.norms[region]; if (!r) return 0;
   var s = r[subj]; if (!s) return 0;
@@ -2259,7 +2309,10 @@ function renderDayCell(loc, R, subject, D, canEdit){
 
 // ── FILTERS & HANDLERS ──────────────────────
 function onFilterChange(which){
-  if (which === 'loc')     S.loc = $('fLoc').value;
+  if (which === 'loc'){
+    S.loc = $('fLoc').value;
+    populateSubjectSel();          // v7.231: інша локація — інший каталог предметів
+  }
   if (which === 'subject') S.subject = $('fSubject').value;
   if (which === 'month'){
     // v7.80: місяць/рік → перезавантажуємо місячний зріз (з кешу або сервера).
@@ -2276,6 +2329,7 @@ function onFilterChange(which){
 function refreshAll(){
   setSync('syncing');
   loadPredmetnyky(true).then(function(){        // v7.80: 🔄 завжди рефетч поточного місяця (в обхід кешу)
+    populateSubjectSel();                       // v7.231: каталог міг змінитись — перебудувати випадайку
     renderApp();
     setSync('ok');
     showToast('🔄 Оновлено', 'ok', 2000);
@@ -2914,6 +2968,26 @@ function populateLocSel(){
   }
 }
 
+// v7.231: випадайка предметів будується з каталогу ОБРАНОЇ локації.
+// Викликається після завантаження даних (потрібен S.catalog) і на зміні локації.
+function populateSubjectSel(){
+  var sel = $('fSubject');
+  if (!sel) return;
+  var subs = subjectsFor(S.loc);
+  if (!subs.length){
+    sel.innerHTML = '<option value="">— немає предметів у каталозі —</option>';
+    sel.value = ''; S.subject = ''; sel.disabled = true;
+    return;
+  }
+  sel.disabled = false;
+  sel.innerHTML = subs.map(function(s){
+    var em = SUBJECT_EMOJI[s] || '📚';
+    return '<option value="' + escapeHtml(s) + '">' + em + ' ' + escapeHtml(s) + '</option>';
+  }).join('');
+  if (subs.indexOf(S.subject) === -1) S.subject = subs[0];   // предмета немає в цій локації → перший доступний
+  sel.value = S.subject;
+}
+
 (function init(){
   S.user = readSession();
   if (!S.user){ window.location.href = 'index.html'; return; }
@@ -2922,12 +2996,11 @@ function populateLocSel(){
   $('syncIndicator').classList.remove('hidden');
   setSync('idle');
 
-  // Subject dropdown — обов'язковий filter
-  $('fSubject').innerHTML = PRED_SUBJECTS.map(function(s){
-    var em = SUBJECT_EMOJI[s] || '📚';
-    return '<option value="' + escapeHtml(s) + '">' + em + ' ' + escapeHtml(s) + '</option>';
-  }).join('');
-  $('fSubject').value = S.subject;
+  // Subject dropdown — обов'язковий filter.
+  // v7.231: список приходить з Предметники_Каталог локації, тож наповнюємо його
+  // не тут, а в populateSubjectSel() після завантаження (S.catalog + S.locations).
+  $('fSubject').innerHTML = '<option value="">завантаження…</option>';
+  $('fSubject').disabled = true;
 
   // Populate Ukrainian month/year dropdowns
   $('fMonth').innerHTML = MONTHS.map(function(m, i){
@@ -2958,6 +3031,7 @@ function populateLocSel(){
   ]).then(function(){
     _loadDone = true; clearTimeout(_slowTimer);
     populateLocSel();
+    populateSubjectSel();          // v7.231: після populateLocSel — S.loc уже визначено
     renderApp();
   }).catch(function(e){
     _loadDone = true; clearTimeout(_slowTimer);

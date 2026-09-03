@@ -1,5 +1,25 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.150
+// m.kids CRM — Google Apps Script v7.231
+// v7.231: ПРЕДМЕТИ З КАТАЛОГУ ЛОКАЦІЇ, а не з хардкоду PRED_SUBJECTS. Випадайка
+//         предметників будувалась зі спільного списку, тож у садку висіли шкільні
+//         предмети (Німецька, Іспанська, Фізкультура, Архітектура, Фітнес,
+//         Speaking club), а в школі — садкові. Тепер джерело — активні позиції
+//         Предметники_Каталог: садок бачить свої (Англійська/Логопед/Музика/
+//         Хореограф + Чомусики), школа — свої. Чомусики додаються садкам завжди
+//         (свій екран відміток, каталожного рядка в 9 з 11 садків немає).
+//   • _predSubjectsForLoc(loc) — бекенд-джерело списку; дзеркало subjectsFor у
+//     predmetnyky.html.
+//   • savePredmetnykyLesson: валідація предмета по каталогу локації (lenient —
+//     порожній каталог не блокує), код BAD_SUBJECT_FOR_LOC.
+//   • СТЕЛЯ ТІЛЬКИ ДЛЯ САДКІВ: _predCeilingFor і norm-check повертають 0 для
+//     локацій типу «Школа» (_predIsSchoolLoc через реєстр CONFIG). Раніше в
+//     школах ліміту теж не виходило, але лише як побічний ефект нормалізації
+//     назви класу; тепер це явне правило.
+//   • Шість київських рядків матриці норм (Німецька, Іспанська, Фізкультура,
+//     Архітектура, Фітнес, Speaking club) лишаються з порожнім вересневим
+//     блоком навмисно — це шкільні предмети, норми до них не застосовуються.
+//   • diagPredSubjects — read-only: що бачить кожна локація + чи діє стеля.
+// v7.150: getCRMSpreadsheet більше НЕ створює таблиць. Прибрано мовчазний фолбек
 // v7.150: getCRMSpreadsheet більше НЕ створює таблиць. Прибрано мовчазний фолбек
 //         (SpreadsheetApp.create + setProperty('CRM_SHEET_ID')), який 19.08.2026
 //         тричі за день підміняв бойову таблицю на новостворену порожню й виглядав
@@ -4904,7 +4924,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.230', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.231', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -4970,6 +4990,7 @@ function doGet(e) {
     else if (action === 'diagPayHeaders')             result = diagPayHeaders(e.parameter || {});                       // v7.221 read-only: СИРІ заголовки груп із Payment
     else if (action === 'dryRunRawGroups')            result = dryRunRawGroups(e.parameter || {});                      // v7.222 read-only: що змінить перехід синку на сиру назву
     else if (action === 'diagPredNorms')              result = diagPredNorms(e.parameter || {});                        // v7.230 read-only: обидва блоки норм + перевищення
+    else if (action === 'diagPredSubjects')           result = diagPredSubjects(e.parameter || {});                     // v7.231 read-only: предмети кожної локації з каталогу
     else if (action === 'purgeAutoDraftCards')        result = purgeAutoDraftCards({names:String((e.parameter&&e.parameter.names)||'').split('|').filter(String), loc:(e.parameter&&e.parameter.loc)||'', createdPrefix:(e.parameter&&e.parameter.createdPrefix)||'', dryRun:true});   // v7.209 GET = ЗАВЖДИ dryRun, видалення лише POST-ом
     else if (action === 'getPredmetnyCatalog')        result = getPredmetnyCatalog(e.parameter && e.parameter.loc || '');
     else if (action === 'getPredmetnyMarks')          result = getPredmetnyMarks(e.parameter || {});
@@ -6010,6 +6031,45 @@ function diagPredNorms(params){
     return {ok:true, readOnly:true, forMonth:(month + '/' + year),
             usesOldBlock:_predNormsUseOld(ymd), combos:Object.keys(byKey).length,
             overCount:over.length, over:over, rows:rows};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.231 READ-ONLY: що бачить кожна локація у випадайці предметів.
+// Джерело — Предметники_Каталог (active + _normalizeSubject), а не PRED_SUBJECTS.
+// Показує тип локації, чи діє стеля норм, і сирі позиції, які не нормалізувались.
+// GET ?action=diagPredSubjects[&loc=]. Нічого не пише.
+// ═══════════════════════════════════════════════════════════════════════════
+function diagPredSubjects(params){
+  params = params || {};
+  var only = String(params.loc || '').trim();
+  try {
+    var locs = (getLocations().data || []);
+    var cat  = _loadPredCatalog('');
+    var byLoc = {};
+    cat.forEach(function(c){ (byLoc[c.loc] = byLoc[c.loc] || []).push(c); });
+    var rows = [];
+    locs.forEach(function(l){
+      var loc = String(l.loc || '').trim();
+      if (only && loc !== only) return;
+      var mine = (byLoc[loc] || []).filter(function(c){ return c.active; });
+      var isSchool = _predIsSchoolLoc(loc);
+      rows.push({
+        loc:            loc,
+        typ:            String(l.typ || ''),
+        isSchool:       isSchool,
+        ceilingApplies: !isSchool,
+        subjects:       _predSubjectsForLoc(loc),
+        catalogRows:    mine.length,
+        unmapped:       mine.filter(function(c){ return !c.subject_norm; })
+                            .map(function(c){ return c.subject_raw; })
+      });
+    });
+    var orphan = Object.keys(byLoc).filter(function(l){
+      for (var i = 0; i < locs.length; i++) if (String(locs[i].loc || '').trim() === l) return false;
+      return true;
+    });
+    return {ok:true, readOnly:true, locations:rows.length, rows:rows, catalogLocsNotInRegistry:orphan};
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 
@@ -24982,10 +25042,45 @@ function _loadPredNorms(targetYmd){
 // v7.230: ЄДИНА стеля для (локація, предмет, повна назва групи). Дзеркалить
 // правило v6.57 з savePredmetnykyLesson: норма>0 підіймається щонайменше до 15.
 // 0 = ліміту немає (Чомусики, нерозпізнаний тип, норма 0 у матриці).
+// v7.231: стеля діє ТІЛЬКИ в садках. У школах «група» — це клас («4 Б», «3D»),
+// він не мапиться в жоден PRED_GROUP_TYPES, а предмети погодинні. Досі ліміту
+// там і так не виходило (norm=0 через нерозпізнаний тип), але це був побічний
+// ефект нормалізації назви, а не правило. Тепер правило явне.
 function _predCeilingFor(loc, subject, group){
   if (subject === PRED_UNLIMITED_SUBJ) return 0;
+  if (_predIsSchoolLoc(loc)) return 0;
   var n = _getPredNormByType(loc, subject, group);
   return n > 0 ? Math.max(n, 15) : 0;
+}
+// v7.231: локація типу «Школа» з реєстру CONFIG. Реюз _vacSchoolLocSet (той самий
+// реєстр + кеш + фолбек на хардкод-список), щоб нова школа підхопилась сама.
+function _predIsSchoolLoc(loc){
+  var l = String(loc || '').trim();
+  if (!l) return false;
+  try { if (_vacSchoolLocSet()[l]) return true; } catch(e){}
+  return /школ/i.test(l);
+}
+// v7.231: предмети локації = АКТИВНІ позиції Предметники_Каталог (нормалізовані).
+// Дзеркало subjectsFor у predmetnyky.html. Чомусики додаємо садкам завжди (свій
+// екран відміток, ліміту немає, каталожного рядка в 9 з 11 садків немає).
+function _predSubjectsForLoc(loc){
+  var l = String(loc || '').trim();
+  var seen = {}, out = [];
+  var cat = _loadPredCatalog(l);
+  for (var i = 0; i < cat.length; i++){
+    var c = cat[i];
+    if (!c.active || !c.subject_norm || seen[c.subject_norm]) continue;
+    seen[c.subject_norm] = true; out.push(c.subject_norm);
+  }
+  // out.length — щоб «Управління» (Житомир, Благо) з порожнім каталогом не
+  // отримало Чомусики й не виглядало як локація з предметниками.
+  if (out.length && l && !_predIsSchoolLoc(l) && !seen[PRED_UNLIMITED_SUBJ]) out.push(PRED_UNLIMITED_SUBJ);
+  out.sort(function(a, b){
+    var ia = PRED_SUBJECTS.indexOf(a); if (ia === -1) ia = 99;
+    var ib = PRED_SUBJECTS.indexOf(b); if (ib === -1) ib = 99;
+    return ia - ib || String(a).localeCompare(String(b), 'uk');
+  });
+  return out;
 }
 function _getPredNormByType(loc, subject, group){
   var gt = _normalizeGroupType(group);
@@ -25574,6 +25669,16 @@ function savePredmetnykyLesson(actorId, lesson){
     var ym = _lessonYearMonth(dateStr);
     if (!ym) return {ok:false, error:'Bad date format: ' + dateStr};
 
+    // ── v7.231 валідація предмета ПО КАТАЛОГУ ЛОКАЦІЇ (lenient, як і групи) ──
+    // Випадайка тепер будується з Предметники_Каталог, тож шкільний предмет у
+    // садку (і навпаки) з UI не прийде. Це захист від прямого виклику й старого
+    // кешу фронту. Якщо каталог локації порожній — не блокуємо.
+    var locSubjects = _predSubjectsForLoc(location);
+    if (locSubjects.length && locSubjects.indexOf(subject) === -1)
+      return {ok:false, code:'BAD_SUBJECT_FOR_LOC',
+              error:'Предмета "' + subject + '" немає в каталозі локації ' + location,
+              subject:subject, location:location, allowed:locSubjects};
+
     // ── валідація групи: чи існує така група в локації (lenient) ──
     // Реальні групи беремо з Клієнтів. Якщо для локації список груп НЕ
     // порожній і групи в ньому немає — відмова. Якщо груп нема взагалі
@@ -25593,8 +25698,9 @@ function savePredmetnykyLesson(actorId, lesson){
       // ── norm check (норма по ТИПУ, ліміт по ПОВНІЙ назві групи) ──
       // norm > 0 → enforced місячний ліміт по (location, ПОВНА група, subject).
       // Чомусики / нестандартна назва / тип з нормою 0 → ліміту немає.
+      // v7.231: у школах стелі немає — норми за матрицею стосуються лише садків.
       var current = 0;
-      var norm = (subject === PRED_UNLIMITED_SUBJ)
+      var norm = (subject === PRED_UNLIMITED_SUBJ || _predIsSchoolLoc(location))
         ? 0
         : _getPredNormByType(location, subject, group);
       // v6.57: мінімальний місячний ліміт 15 занять для дозволених типів (norm>0) —
