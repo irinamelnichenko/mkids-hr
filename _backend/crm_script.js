@@ -1,5 +1,13 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.231
+// m.kids CRM — Google Apps Script v7.232
+// v7.232: РІЗНІ заголовки з однаковим нормалізованим ключем більше не зливаються
+//         в одну групу. Манхетен: «Пізнайки 3-4» (14 дітей) і «Мандрівники 3-4»
+//         (12) обидва нормалізувались у ключ «Study-ki 3-4» — екрани показували
+//         6 груп на 26 дітей замість 7 груп. _disambiguateGroupKeys додає до
+//         ключа сиру назву: «Study-ki 3-4 (Пізнайки)». Однакові заголовки в
+//         різних блоках (Нац.Гвардії: два блоки «Школа 2 (Білик Герман)»)
+//         лишаються однією групою. Нормалізований префікс збережено — на ньому
+//         тримається _normalizeGroupType (норми/ліміти/знижки).
 // v7.231: ПРЕДМЕТИ З КАТАЛОГУ ЛОКАЦІЇ, а не з хардкоду PRED_SUBJECTS. Випадайка
 //         предметників будувалась зі спільного списку, тож у садку висіли шкільні
 //         предмети (Німецька, Іспанська, Фізкультура, Архітектура, Фітнес,
@@ -4924,7 +4932,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.231', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.232', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -7384,7 +7392,31 @@ function parsePaymentSheet(data, monthCol, contractCol, cpm, loc, typ, closeOnBl
       });
     }
   }
-  return groups.filter(function(g){ return g.children.length > 0; });
+  return _disambiguateGroupKeys(groups.filter(function(g){ return g.children.length > 0; }));
+}
+
+// v7.232: РІЗНІ заголовки з однаковим нормалізованим ключем — це РІЗНІ групи.
+// Манхетен: «Пізнайки 3-4» і «Мандрівники 3-4» обидва дають ключ «Study-ki 3-4»
+// (тип + «вихователь» 3-4), тож на екранах зливались в одну групу на 26 дітей
+// замість двох (14 + 12) — локація показувала 6 груп замість 7.
+// Розрізняємо СИРОЮ назвою: «Study-ki 3-4 (Пізнайки)».
+// Однакові заголовки в різних блоках (Нац.Гвардії: два блоки
+// «Школа 2 (Білик Герман)») лишаються ОДНІЄЮ групою — ключ чіпаємо лише там, де
+// сирі назви різні. Нормалізований префікс зберігаємо: на ньому тримається
+// _normalizeGroupType (норми, ліміти, знижки), який українських назв не знає.
+function _disambiguateGroupKeys(groups){
+  var rawsByKey = {};
+  groups.forEach(function(g){
+    var k = g.group || '';
+    (rawsByKey[k] = rawsByKey[k] || {})[String(g.rawGroup || '')] = true;
+  });
+  groups.forEach(function(g){
+    var raws = Object.keys(rawsByKey[g.group || ''] || {});
+    if (raws.length < 2) return;
+    var tag = trim(String(g.rawGroup || '').split(/[\s,]+/)[0]);
+    if (tag) g.group = g.group + ' (' + tag + ')';
+  });
+  return groups;
 }
 
 // v7.108: ІСТОРІЯ ОПЛАТ ДИТИНИ ЗА ВЕСЬ РІК — читає Payment-файл локації напряму (джерело правди),
