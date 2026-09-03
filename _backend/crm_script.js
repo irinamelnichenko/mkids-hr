@@ -1,5 +1,17 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.234
+// m.kids CRM — Google Apps Script v7.235
+// v7.235: exportAttendanceToPayments — режим force (клітинка = сума відміток).
+//         Привід: у Пущі експорт серпневих відміток у вересневий «Бюджет доп.»
+//         відпрацював (журнал: 25 дітей, 45 500 ₴), а потім суми стерли прямо в
+//         аркуші, повз роути з журналюванням. Дельта-логіка (база = поточне −
+//         записане) на це дає від'ємну базу, тож повторний експорт відновлює 0:
+//         вважає, що суму зняли навмисно.
+//         force пише рівно суму відміток і лишає журнал у злагоді з клітинкою.
+//         ЧОМУ НЕ «скинути журнал і повторити»: після скиду база = поточне, і
+//         дитина з ЦІЛОЮ клітинкою отримала б суму вдруге (1400 → 2800).
+//         Зачіпає лише дітей із ненульовою сумою відміток; решта — звичайним
+//         шляхом, щоб force не стирав ручні добавки в чужих клітинках.
+//         Вимагає явний source-місяць; запис — confirm 'YES_FORCE'.
 // v7.234: РЕЄСТР ЯВНИХ ЗАГОЛОВКІВ Payment — аркуш CONFIG «Payment_Заголовки»
 //         (Локація | Заголовок). Привід: блоки, підписані ПІБ, жодним патерном не
 //         розпізнаються, а без цього діти під ними падають у попередній блок.
@@ -5001,7 +5013,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.234', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.235', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -13986,6 +13998,19 @@ function exportAttendanceToPayments(params){
     var srcMonthOne = Number(params.month) || 0;   // опційно: лише цей source-місяць (сумісність)
     var dryRun = (params.dryRun === true);          // v7.93: прев'ю без запису
     if (srcMonthOne && (srcMonthOne < 1 || srcMonthOne > 12)) return {ok:false, error:'month має бути 1-12'};
+    // v7.235 FORCE: клітинка = сума відміток, без дельти. Для випадку «експорт
+    // відпрацював, а потім суми стерли руками в аркуші»: журнал каже, що записано,
+    // тож дельта (поточне − записане) дає від'ємну базу й повторний експорт нічого
+    // не відновлює. Force пише рівно суму відміток і вирівнює журнал під неї —
+    // після цього звичайний експорт знову ідемпотентний.
+    // ЧОМУ НЕ «скинути журнал і повторити»: там база = поточне, тож дитина, у якої
+    // клітинка ЦІЛА, отримала б суму вдруге (1400 → 2800).
+    // Зачіпає ЛИШЕ дітей із ненульовою сумою відміток; ті, у кого 0, ідуть
+    // звичайним шляхом (щоб force не стирав ручні добавки в чужих клітинках).
+    var force = (params.force === true);
+    if (force && !srcMonthOne) return {ok:false, error:'force вимагає явний month (source-місяць)'};
+    if (force && !dryRun && params.confirm !== 'YES_FORCE')
+      return {ok:false, error:'force-запис вимагає confirm:"YES_FORCE"'};
     Logger.log('[exportAttendanceToPayments] START loc="%s" year=%s srcMonthOne=%s', loc, year, srcMonthOne);
 
     // === 1. Відмітки → бакети (ПІБ × target-місяць). target = _nextMonth(місяць САМОЇ відмітки). ===
@@ -14075,7 +14100,9 @@ function exportAttendanceToPayments(params){
         var baseValue    = currentValue - lastWritten;
         var st           = sumByNormTarget[nk];
         var newSum       = (st && st.m[m]) ? st.m[m] : 0;
-        var newValue     = baseValue + newSum;
+        // v7.235: у force-режимі клітинка = сума відміток (база ігнорується),
+        // але тільки там, де відмітки є.
+        var newValue     = (force && newSum !== 0) ? newSum : (baseValue + newSum);
         if (newValue !== currentValue){
           if (!dryRun) paySh.getRange(rowIdx0 + 1, budgetDopCol1).setValue(newValue);   // формула → число тут же
           cellsWritten++; if (wasFormula) formulaConverted++;
@@ -14086,7 +14113,8 @@ function exportAttendanceToPayments(params){
         if (newSum !== 0 || lastWritten !== 0){
           details.push({child: paymentName, month: m, sum: newSum, currentBefore: currentValue,
             lastWritten: lastWritten, baseValue: baseValue, newCell: newValue, row: rowIdx0 + 1,
-            status: (newSum !== 0 ? 'updated' : 'cleared')});
+            status: (force && newSum !== 0 && newValue !== currentValue) ? 'forced'
+                    : (newSum !== 0 ? 'updated' : 'cleared')});
           if (newSum !== 0){ mUpd++; mSum += newSum; }
         }
       });
@@ -14109,7 +14137,7 @@ function exportAttendanceToPayments(params){
       ok: true,
       mode: srcMonthOne ? ('single-source-' + srcMonthOne) : 'full-year',
       loc: loc, year: year,
-      dryRun: dryRun, months: monthList, skippedClosed: skippedClosed,
+      dryRun: dryRun, force: force, months: monthList, skippedClosed: skippedClosed,
       updated: updated, totalAmount: totalAmount,
       cellsWritten: cellsWritten, formulaCellsConverted: formulaConverted,
       notFound: notFound,
