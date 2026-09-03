@@ -4904,7 +4904,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.228', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.230', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -4969,6 +4969,7 @@ function doGet(e) {
     else if (action === 'dryRunNameFold')             result = dryRunNameFold(e.parameter || {});                       // v7.220 read-only: які картки склеїть зведення лапок
     else if (action === 'diagPayHeaders')             result = diagPayHeaders(e.parameter || {});                       // v7.221 read-only: СИРІ заголовки груп із Payment
     else if (action === 'dryRunRawGroups')            result = dryRunRawGroups(e.parameter || {});                      // v7.222 read-only: що змінить перехід синку на сиру назву
+    else if (action === 'diagPredNorms')              result = diagPredNorms(e.parameter || {});                        // v7.230 read-only: обидва блоки норм + перевищення
     else if (action === 'purgeAutoDraftCards')        result = purgeAutoDraftCards({names:String((e.parameter&&e.parameter.names)||'').split('|').filter(String), loc:(e.parameter&&e.parameter.loc)||'', createdPrefix:(e.parameter&&e.parameter.createdPrefix)||'', dryRun:true});   // v7.209 GET = ЗАВЖДИ dryRun, видалення лише POST-ом
     else if (action === 'getPredmetnyCatalog')        result = getPredmetnyCatalog(e.parameter && e.parameter.loc || '');
     else if (action === 'getPredmetnyMarks')          result = getPredmetnyMarks(e.parameter || {});
@@ -5962,6 +5963,53 @@ function renamePayGroupHeader(body){
     SpreadsheetApp.flush();
     res.renamed = hits.length;
     return res;
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.230 READ-ONLY: обидва блоки матриці норм поруч + перевищення за вересневим.
+// Лівий блок C-G — норми до 01.09.2026, правий I-M — з 01.09.2026.
+// GET ?action=diagPredNorms[&year=&month=]. Нічого не пише.
+// ═══════════════════════════════════════════════════════════════════════════
+function diagPredNorms(params){
+  params = params || {};
+  var year  = Number(params.year)  || 2026;
+  var month = Number(params.month) || 9;
+  try {
+    var sh = _getPredNormsSheet(true);
+    var data = sh.getDataRange().getValues();
+    var TYPES = ['miniBaby','Baby','Find','Study','Preschool'];
+    var rows = [];
+    for (var i = 1; i < data.length; i++){
+      var r = data[i];
+      var region = String(r[0] || '').trim(), subject = String(r[1] || '').trim();
+      if (!region || !subject) continue;
+      var oldB = {}, newB = {};
+      for (var t = 0; t < TYPES.length; t++){
+        oldB[TYPES[t]] = (r[2 + t] === '' || r[2 + t] == null) ? null : (Number(r[2 + t]) || 0);
+        newB[TYPES[t]] = (r[8 + t] === '' || r[8 + t] == null) ? null : (Number(r[8 + t]) || 0);
+      }
+      var diff = TYPES.some(function(t){ return oldB[t] !== newB[t]; });
+      rows.push({region:region, subject:subject, old:oldB, neu:newB, differs:diff});
+    }
+    // перевищення за ДІЮЧИМИ на вказаний місяць нормами
+    var ymd = year + '-' + ('0' + month).slice(-2) + '-01';
+    var lessons = _loadPredLessons('', year, month);
+    var byKey = {};
+    lessons.forEach(function(L){
+      var k = L.loc + '||' + L.group + '||' + L.subject;
+      (byKey[k] = byKey[k] || {})[L.date] = true;
+    });
+    var over = [];
+    Object.keys(byKey).forEach(function(k){
+      var p = k.split('||'), loc = p[0], grp = p[1], subj = p[2];
+      var n = Object.keys(byKey[k]).length;
+      var ceil = _predCeilingFor(loc, subj, grp);
+      if (ceil > 0 && n > ceil) over.push({loc:loc, group:grp, subject:subj, marked:n, ceiling:ceil, over:n - ceil});
+    });
+    return {ok:true, readOnly:true, forMonth:(month + '/' + year),
+            usesOldBlock:_predNormsUseOld(ymd), combos:Object.keys(byKey).length,
+            overCount:over.length, over:over, rows:rows};
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 
@@ -24895,7 +24943,13 @@ function _predNormsUseOld(targetYmd){
   var d = targetYmd || Utilities.formatDate(new Date(), 'Europe/Kiev', 'yyyy-MM-dd');
   return String(d) < '2026-09-01';
 }
-function _predPickNorm(row, useOld, oldIdx, newIdx){
+// v7.230 ФІКС ПЕРЕПЛУТАНИХ БЛОКІВ. Виклики передають (…, 8, 2): 8 = колонка I
+// (новий блок, норми з 1 вересня), 2 = колонка C (старий блок). А сигнатура
+// називала третій параметр oldIdx, четвертий newIdx — тобто рівно навпаки.
+// Через це для вересня читався СТАРИЙ блок C-G, а до вересня — новий I-M.
+// Порядок параметрів приведено до порядку викликів; логіка не змінена:
+//   з 01.09.2026 → I-M; до того → C-G, а якщо стара клітинка порожня — I-M.
+function _predPickNorm(row, useOld, newIdx, oldIdx){
   if (!useOld) return Number(row[newIdx]) || 0;
   var raw = row[oldIdx]; var v = Number(raw);
   return (raw !== '' && raw !== null && isFinite(v)) ? v : (Number(row[newIdx]) || 0);
@@ -24925,6 +24979,14 @@ function _loadPredNorms(targetYmd){
 // Норма ТИПУ для (loc, subject, повна_назва_групи): нормалізуємо назву
 // групи → group_type, дивимось матрицю по region. 0 = не передбачено
 // (або тип не розпізнано). Чомусики не має ліміту (обробляється у caller).
+// v7.230: ЄДИНА стеля для (локація, предмет, повна назва групи). Дзеркалить
+// правило v6.57 з savePredmetnykyLesson: норма>0 підіймається щонайменше до 15.
+// 0 = ліміту немає (Чомусики, нерозпізнаний тип, норма 0 у матриці).
+function _predCeilingFor(loc, subject, group){
+  if (subject === PRED_UNLIMITED_SUBJ) return 0;
+  var n = _getPredNormByType(loc, subject, group);
+  return n > 0 ? Math.max(n, 15) : 0;
+}
 function _getPredNormByType(loc, subject, group){
   var gt = _normalizeGroupType(group);
   if (!gt) return 0;                              // нестандартна назва → без ліміту
@@ -26314,6 +26376,33 @@ function exportPredmetnykyToSalary(params){
       var gbd  = gbdBySubj[sk] || {};
       // v7.20: група×дата з урахуванням обʼєднань (схлопують групи одного дня в 1).
       var uniq = _dopCountSessions(gbd, predMergesMap[sk] || {});
+      // v7.230 СТЕЛЯ. Досі норма перевірялась ЛИШЕ при відмітці
+      // (savePredmetnykyLesson → NORM_REACHED). Заняття, що потрапили в журнал
+      // повз відмітку — правкою аркуша, імпортом, старим кодом — оплачувались
+      // повністю. Тепер рахуємо перевищення по КОЖНІЙ групі окремо й віднімаємо
+      // його з підсумку. Обʼєднання не чіпаємо: вони лише зменшують лічильник,
+      // тож зрізаємо надлишок із сирих (до-мержевих) значень.
+      var capExcess = 0, capDetail = [];
+      Object.keys(gbd).forEach(function(dIso){
+        Object.keys(gbd[dIso] || {}).forEach(function(g){
+          capDetail.push(g);
+        });
+      });
+      var perGroup = {};
+      capDetail.forEach(function(g){ perGroup[g] = (perGroup[g] || 0) + 1; });
+      var overGroups = [];
+      Object.keys(perGroup).forEach(function(g){
+        var ceil = _predCeilingFor(loc, a.subject_norm, g);
+        if (ceil > 0 && perGroup[g] > ceil){
+          capExcess += (perGroup[g] - ceil);
+          overGroups.push({group:g, count:perGroup[g], ceiling:ceil, over:perGroup[g] - ceil});
+        }
+      });
+      if (capExcess > 0){
+        uniq = Math.max(0, uniq - capExcess);
+        Logger.log('[%s] %s → СТЕЛЯ: знято %s занять понад норму %s',
+          loc, a.subject_raw, capExcess, JSON.stringify(overGroups));
+      }
       var fact = uniq * a.rate;
       var catName = a.subject_raw + ' ' + a.rate;
       var nk = _journalNormName(catName);
