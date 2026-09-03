@@ -1,5 +1,17 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.232
+// m.kids CRM — Google Apps Script v7.233
+// v7.233: ЗВУЖЕНО ПАТЕРН ЗАГОЛОВКА-КЛАСУ. Правило «число + D/S/Б/В/клас» не мало
+//         прив'язки до межі токена, тож заголовком групи ставав будь-який рядок
+//         «число + прізвище на Б/В»: у Нац.Гвардії «613 Бельмега Мія» і
+//         «555 Брилковська Діана Олегівна» різали блок і ковтали дітей під собою.
+//         Тепер PAY_CLASS_HEADER_RE — єдине джерело для GROUP_PATTERNS і
+//         normalizeGroupName: не більше двох цифр + клас-токен до межі слова.
+//         «4 клас», «3D», «4 Б Іванова» лишаються заголовками; «613 Бельмега» — ні.
+//         Прогін по всіх 16 локаціях: змінюються рівно ці два рядки.
+//   • purgePaymentGhostRows — прибирання названих рядків-привидів із Payment.
+//     Видаляє лише те, що в names[], не є заголовком, не має картки в Клієнтах і
+//     має нулі в усіх 12 місяцях. dryRun за замовчуванням, запис — confirm
+//     'YES_PURGE', перед видаленням знімок аркуша.
 // v7.232: РІЗНІ заголовки з однаковим нормалізованим ключем більше не зливаються
 //         в одну групу. Манхетен: «Пізнайки 3-4» (14 дітей) і «Мандрівники 3-4»
 //         (12) обидва нормалізувались у ключ «Study-ki 3-4» — екрани показували
@@ -420,12 +432,21 @@ function sortByLocationOrder(arr, getName){
   });
 }
 
+// v7.233: ЗАГОЛОВОК-КЛАС («4 клас», «3D», «4 Б»). Раніше правило було
+// /^\s*\d+\s*([dDsS]\s*(клас|кл)?|класс?|кл\.?|[бвБВ])/ — без прив'язки до кінця
+// токена, тож під нього падав будь-який рядок «число + прізвище на Б/В»:
+// «613 Бельмега Мія», «555 Брилковська Діана Олегівна» у Нац.Гвардії ставали
+// заголовками груп. Тепер: не більше двох цифр (класів 613 не буває) і клас-токен
+// має закінчуватись межею слова — «4 Б Іванова» ще заголовок, «613 Бельмега» вже ні.
+// ЄДИНЕ джерело: використовується і в GROUP_PATTERNS, і в normalizeGroupName.
+var PAY_CLASS_HEADER_RE = /^\s*\d{1,2}\s*(?:[dDsS]|[бвБВ]|клас(?:с)?|кл\.?)(?:\s|$)/i;
+
 var GROUP_PATTERNS = [
   /mini.?baby/i, /^baby/i, /find/i, /study/i, /preschool/i,
   /чомус/i, /^школа$/i, /^школа\s+\d+\b/i, /^гхзд$/i,   // v7.227: «Школа 1 (…)» — теж заголовок
   /мама[\s\+]*я/i, /малюк/i, /карапуз/i, /пізнайк/i,
   /бешкетн/i, /мандрівн/i, /дослідн/i, /розумник/i,
-  /^\s*\d+\s*([dDsS]\s*(клас|кл)?|класс?|кл\.?|[бвБВ])/
+  PAY_CLASS_HEADER_RE                                   // v7.233: звужено, див. коментар вище
 ];
 
 // v7.202: локація типу «Школа»? Клас у ній — самостійна назва («4 клас», «3D»),
@@ -458,7 +479,7 @@ function normalizeGroupName(raw, keepSchoolAsIs) {
   if (/мандрівн/i.test(s))      return 'Study-ki';
   if (/дослідн/i.test(s))       return 'Study-ki';
   if (/розумник/i.test(s))      return 'Preschool';
-  if (/^\s*\d+\s*([dDsS]\s*(клас|кл)?|класс?|кл\.?|[бвБВ])/i.test(s)) return 'Школа';
+  if (PAY_CLASS_HEADER_RE.test(s)) return 'Школа';      // v7.233: той самий патерн, що й у GROUP_PATTERNS
   if (/^школа$/i.test(s))       return 'Школа';
   return s;
 }
@@ -4932,7 +4953,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.232', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.233', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -5143,6 +5164,7 @@ function doPost(e) {
     else if (body.action === 'repairPredmetnykyLessons')    result = repairPredmetnykyLessons(Number(body.actorId || 0), body);          // v7.149 дедуп + перенумерація
     else if (body.action === 'exportPredmetnykyToSalary')   result = exportPredmetnykyToSalary(body || {});
     else if (body.action === 'purgeAutoDraftCards')         result = purgeAutoDraftCards(body || {});  // v7.209
+    else if (body.action === 'purgePaymentGhostRows')  result = purgePaymentGhostRows(body || {});   // v7.233 рядки-привиди в Payment (dryRun за замовч.)
     else if (body.action === 'renamePayGroupHeader')        result = renamePayGroupHeader(body || {}); // v7.227
     else if (body.action === 'generateInvoicePDF')          result = generateInvoicePDF(body || {});   // v6.50
     else if (body.action === 'invoicePdfLink')              result = invoicePdfLink(body || {});       // v6.72 Viber link
@@ -6039,6 +6061,96 @@ function diagPredNorms(params){
     return {ok:true, readOnly:true, forMonth:(month + '/' + year),
             usesOldBlock:_predNormsUseOld(ymd), combos:Object.keys(byKey).length,
             overCount:over.length, over:over, rows:rows};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.233: ПРИБИРАННЯ РЯДКІВ-ПРИВИДІВ у Payment-файлі локації.
+// Привід: у Нац.Гвардії рядки «613 Бельмега Мія» / «555 Брилковська Діана
+// Олегівна» жили як «заголовки груп» лише через надто широкий числовий патерн.
+// Після його звуження (v7.233) вони стають дітьми й додають локації +2 до
+// ростера, хоча ні карток, ні грошей за ними немає.
+// Захист (усе одночасно, інакше рядок НЕ чіпаємо):
+//   • назва в явному списку names[] — «прибери все зайве» тут неможливе;
+//   • рядок НЕ заголовок групи;
+//   • картки з таким ПІБ немає в Клієнтах (у БУДЬ-якому статусі);
+//   • нулі в усіх 12 місяцях: факт-навч/вступ/доп і бюджет-навч/доп.
+// dryRun=TRUE за замовчуванням; запис вимагає confirm:'YES_PURGE'.
+// Перед видаленням — знімок аркуша (_safeBackupSheet). Рядки видаляються знизу
+// вгору, щоб не з'їхала нумерація.
+// POST {action:'purgePaymentGhostRows', loc, names:[], dryRun, confirm}
+// ═══════════════════════════════════════════════════════════════════════════
+function purgePaymentGhostRows(body){
+  body = body || {};
+  var loc    = String(body.loc || '').trim();
+  var names  = body.names || [];
+  var dryRun = (body.dryRun !== false);
+  if (!loc)          return {ok:false, error:'loc обовʼязковий'};
+  if (!names.length) return {ok:false, error:'names[] обовʼязковий — видаляємо лише названі рядки'};
+  if (!dryRun && body.confirm !== 'YES_PURGE')
+    return {ok:false, error:'Реальне видалення вимагає confirm:"YES_PURGE"'};
+  try {
+    var reg = _getLocationPaymentRegistry(loc);
+    if (!reg || !reg.sheetId) return {ok:false, error:'Локацію "' + loc + '" не знайдено в реєстрі'};
+    var ss = SpreadsheetApp.openById(reg.sheetId);
+    var sh = (reg.sheetName && ss.getSheetByName(reg.sheetName)) || ss.getSheets()[0];
+    var data = sh.getDataRange().getValues();
+    var cpm = _paymentColsPerMonth(loc, null), LO = _paymentLayout(cpm);
+
+    // картки локації — по нормалізованому ПІБ, БУДЬ-який статус
+    var cards = {};
+    var gc = getClients();
+    (gc.data || []).forEach(function(c){
+      if (String(c['Локація'] || '').trim() !== loc) return;
+      cards[_syncNormPib(c['ПІБ дитини'])] = String(c['Статус'] || '');
+    });
+
+    var want = {};
+    names.forEach(function(n){ want[trim(String(n))] = true; });
+
+    var hits = [], skipped = [];
+    for (var r = 3; r < data.length; r++){
+      var nm = trim(String(data[r][0] || ''));
+      if (!nm || !want[nm]) continue;
+      var why = [];
+      if (isGroupHeaderRow(data[r], 1)) why.push('це заголовок групи');
+      var st = cards[_syncNormPib(nm)];
+      if (st !== undefined) why.push('є картка (статус: ' + (st || 'порожній') + ')');
+      var money = 0, cells = [];
+      for (var m = 0; m < 12; m++){
+        var b0 = 1 + m * cpm;
+        var vals = [toNum(data[r][b0 + LO.factNavch]), toNum(data[r][b0 + LO.factVstup]),
+                    toNum(data[r][b0 + LO.factDop]),   toNum(data[r][b0 + LO.budDop]),
+                    toNum(data[r][b0 + LO.budNavch])];
+        if (LO.factHarch != null) vals.push(toNum(data[r][b0 + LO.factHarch]), toNum(data[r][b0 + LO.budHarch]));
+        for (var v = 0; v < vals.length; v++){
+          if (vals[v]){ money += vals[v]; if (cells.length < 6) cells.push(MONTHS_CAL[m] + '=' + vals[v]); }
+        }
+      }
+      if (money) why.push('є суми: ' + cells.join(', '));
+      var rec = {row: r + 1, name: nm, money: money, cardStatus: (st === undefined ? null : st)};
+      if (why.length){ rec.why = why; skipped.push(rec); } else hits.push(rec);
+    }
+
+    var notFound = Object.keys(want).filter(function(n){
+      for (var i = 0; i < hits.length; i++)    if (hits[i].name === n)    return false;
+      for (var j = 0; j < skipped.length; j++) if (skipped[j].name === n) return false;
+      return true;
+    });
+    var res = {ok:true, dryRun:dryRun, loc:loc, sheetName:(reg.sheetName || ''),
+               willDelete:hits.length, rows:hits, skipped:skipped, notFound:notFound};
+    if (dryRun || !hits.length) return res;
+
+    var lock = LockService.getScriptLock();
+    try { lock.waitLock(30000); } catch(_le){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+    try {
+      res.backupSheet = _safeBackupSheet(sh, 'ghostrows');
+      hits.slice().sort(function(a, b){ return b.row - a.row; })   // знизу вгору
+          .forEach(function(h){ sh.deleteRow(h.row); });
+      SpreadsheetApp.flush();
+      res.deleted = hits.length;
+    } finally { try { lock.releaseLock(); } catch(_lr){} }
+    return res;
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 
