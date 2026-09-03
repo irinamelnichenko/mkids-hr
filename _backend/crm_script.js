@@ -1,5 +1,17 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.233
+// m.kids CRM — Google Apps Script v7.234
+// v7.234: РЕЄСТР ЯВНИХ ЗАГОЛОВКІВ Payment — аркуш CONFIG «Payment_Заголовки»
+//         (Локація | Заголовок). Привід: блоки, підписані ПІБ, жодним патерном не
+//         розпізнаються, а без цього діти під ними падають у попередній блок.
+//         Досі це обходили службовим префіксом «Школа N» — вигаданою назвою.
+//         Тепер назва блоку може бути будь-якою: рядок із реєстру = заголовок.
+//         Персональні дані свідомо живуть у таблиці, а не в цьому файлі:
+//         репозиторій публічний, у коді лише механізм.
+//   • isGroupHeaderRow перевіряє реєстр ПЕРШИМ (точний матч по _nameFold).
+//   • parsePaymentSheet не виколупує «вихователя» із заголовка з реєстру — уся
+//     назва є назвою групи (те саме правило, що v7.228 для «Школа N»).
+//   • diagPayHeaderOverrides (GET) / savePayHeaderOverrides (POST, dryRun за
+//     замовчуванням, запис — confirm 'YES_HEADERS').
 // v7.233: ЗВУЖЕНО ПАТЕРН ЗАГОЛОВКА-КЛАСУ. Правило «число + D/S/Б/В/клас» не мало
 //         прив'язки до межі токена, тож заголовком групи ставав будь-який рядок
 //         «число + прізвище на Б/В»: у Нац.Гвардії «613 Бельмега Мія» і
@@ -484,9 +496,45 @@ function normalizeGroupName(raw, keepSchoolAsIs) {
   return s;
 }
 
+// ═══ v7.234: РЕЄСТР ЯВНИХ ЗАГОЛОВКІВ (аркуш CONFIG «Payment_Заголовки») ═══
+// Навіщо: назва блоку не завжди схожа на групу. У Нац.Гвардії шкільні блоки
+// підписані ПІБ («Прізвище Ім'я (Прізвище)») — жоден патерн їх не ловить, а без
+// цього діти під ними падають у попередній блок. Раніше рішенням був службовий
+// префікс «Школа N», але це вигадана назва, якої в житті немає.
+// Чому в ТАБЛИЦІ, а не в коді: у списку — ПІБ дітей і батьків, а репозиторій
+// публічний. У коді лишається лише механізм, персональні дані — у CONFIG.
+// Аркуш: Локація | Заголовок (по рядку на заголовок). Матч — точний, по
+// згорнутому тексту (_nameFold), без прив'язки до локації: тексти унікальні,
+// а isGroupHeaderRow локації не знає.
+var PAY_HEADERS_TAB = 'Payment_Заголовки';
+var _PAY_HDR_OVERRIDE_CACHE = null;
+function _payHeaderOverrideSet(){
+  if (_PAY_HDR_OVERRIDE_CACHE) return _PAY_HDR_OVERRIDE_CACHE;
+  var set = {};
+  try {
+    var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+    var sh = ss.getSheetByName(PAY_HEADERS_TAB);
+    if (sh && sh.getLastRow() > 1){
+      var v = sh.getRange(2, 1, sh.getLastRow() - 1, 2).getValues();
+      for (var i = 0; i < v.length; i++){
+        var txt = trim(String(v[i][1] || ''));
+        if (txt) set[_nameFold(txt)] = trim(String(v[i][0] || '')) || true;
+      }
+    }
+  } catch(e){ Logger.log('[payHeaders] ⚠️ реєстр недоступний: %s', e && e.message); }
+  _PAY_HDR_OVERRIDE_CACHE = set;
+  return set;
+}
+function _isPayHeaderOverride(nameCell){
+  var s = trim(String(nameCell || ''));
+  if (!s) return false;
+  return !!_payHeaderOverrideSet()[_nameFold(s)];
+}
+
 function isGroupHeaderRow(row, monthCol) {
   var nameCell = trim(String(row[0] || ''));
   if (!nameCell) return false;
+  if (_isPayHeaderOverride(nameCell)) return true;          // v7.234: явний реєстр
   for (var i = 0; i < GROUP_PATTERNS.length; i++) {
     if (GROUP_PATTERNS[i].test(nameCell)) return true;
   }
@@ -4953,7 +5001,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.233', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.234', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -5019,6 +5067,7 @@ function doGet(e) {
     else if (action === 'diagPayHeaders')             result = diagPayHeaders(e.parameter || {});                       // v7.221 read-only: СИРІ заголовки груп із Payment
     else if (action === 'dryRunRawGroups')            result = dryRunRawGroups(e.parameter || {});                      // v7.222 read-only: що змінить перехід синку на сиру назву
     else if (action === 'diagPredNorms')              result = diagPredNorms(e.parameter || {});                        // v7.230 read-only: обидва блоки норм + перевищення
+    else if (action === 'diagPayHeaderOverrides')     result = diagPayHeaderOverrides(e.parameter || {});               // v7.234 read-only: реєстр явних заголовків Payment
     else if (action === 'diagPredSubjects')           result = diagPredSubjects(e.parameter || {});                     // v7.231 read-only: предмети кожної локації з каталогу
     else if (action === 'purgeAutoDraftCards')        result = purgeAutoDraftCards({names:String((e.parameter&&e.parameter.names)||'').split('|').filter(String), loc:(e.parameter&&e.parameter.loc)||'', createdPrefix:(e.parameter&&e.parameter.createdPrefix)||'', dryRun:true});   // v7.209 GET = ЗАВЖДИ dryRun, видалення лише POST-ом
     else if (action === 'getPredmetnyCatalog')        result = getPredmetnyCatalog(e.parameter && e.parameter.loc || '');
@@ -5164,6 +5213,7 @@ function doPost(e) {
     else if (body.action === 'repairPredmetnykyLessons')    result = repairPredmetnykyLessons(Number(body.actorId || 0), body);          // v7.149 дедуп + перенумерація
     else if (body.action === 'exportPredmetnykyToSalary')   result = exportPredmetnykyToSalary(body || {});
     else if (body.action === 'purgeAutoDraftCards')         result = purgeAutoDraftCards(body || {});  // v7.209
+    else if (body.action === 'savePayHeaderOverrides') result = savePayHeaderOverrides(body || {});   // v7.234 реєстр заголовків (dryRun за замовч.)
     else if (body.action === 'purgePaymentGhostRows')  result = purgePaymentGhostRows(body || {});   // v7.233 рядки-привиди в Payment (dryRun за замовч.)
     else if (body.action === 'renamePayGroupHeader')        result = renamePayGroupHeader(body || {}); // v7.227
     else if (body.action === 'generateInvoicePDF')          result = generateInvoicePDF(body || {});   // v6.50
@@ -6061,6 +6111,92 @@ function diagPredNorms(params){
     return {ok:true, readOnly:true, forMonth:(month + '/' + year),
             usesOldBlock:_predNormsUseOld(ymd), combos:Object.keys(byKey).length,
             overCount:over.length, over:over, rows:rows};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.234: реєстр явних заголовків Payment (аркуш CONFIG «Payment_Заголовки»).
+// READ:  GET  ?action=diagPayHeaderOverrides[&loc=]
+// WRITE: POST {action:'savePayHeaderOverrides', loc, headers:[], mode:'replace'|'add',
+//              dryRun, confirm:'YES_HEADERS'}
+// mode 'replace' (за замовч.) — рядки цієї локації замінюються переданим списком;
+// 'add' — лише додає ті, яких ще немає. Персональні дані лишаються в таблиці.
+// ═══════════════════════════════════════════════════════════════════════════
+function _getPayHeadersSheet(){
+  var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var sh = ss.getSheetByName(PAY_HEADERS_TAB);
+  if (!sh){
+    sh = ss.insertSheet(PAY_HEADERS_TAB);
+    sh.getRange(1, 1, 1, 2).setValues([['Локація', 'Заголовок']]);
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+function diagPayHeaderOverrides(params){
+  params = params || {};
+  var only = String(params.loc || '').trim();
+  try {
+    var sh = _getPayHeadersSheet();
+    var out = [];
+    if (sh.getLastRow() > 1){
+      var v = sh.getRange(2, 1, sh.getLastRow() - 1, 2).getValues();
+      for (var i = 0; i < v.length; i++){
+        var loc = trim(String(v[i][0] || '')), txt = trim(String(v[i][1] || ''));
+        if (!txt) continue;
+        if (only && loc !== only) continue;
+        out.push({row: i + 2, loc: loc, header: txt});
+      }
+    }
+    return {ok:true, readOnly:true, tab:PAY_HEADERS_TAB, count:out.length, rows:out};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+function savePayHeaderOverrides(body){
+  body = body || {};
+  var loc     = String(body.loc || '').trim();
+  var headers = (body.headers || []).map(function(h){ return trim(String(h)); }).filter(String);
+  var mode    = String(body.mode || 'replace');
+  var dryRun  = (body.dryRun !== false);
+  if (!loc) return {ok:false, error:'loc обовʼязковий'};
+  if (!dryRun && body.confirm !== 'YES_HEADERS')
+    return {ok:false, error:'Реальний запис вимагає confirm:"YES_HEADERS"'};
+  try {
+    var sh = _getPayHeadersSheet();
+    var cur = [];
+    if (sh.getLastRow() > 1){
+      var v = sh.getRange(2, 1, sh.getLastRow() - 1, 2).getValues();
+      for (var i = 0; i < v.length; i++){
+        var l = trim(String(v[i][0] || '')), t = trim(String(v[i][1] || ''));
+        if (t) cur.push({loc:l, header:t});
+      }
+    }
+    var mine = cur.filter(function(x){ return x.loc === loc; });
+    var others = cur.filter(function(x){ return x.loc !== loc; });
+    var have = {}; mine.forEach(function(x){ have[_nameFold(x.header)] = true; });
+    var added = headers.filter(function(h){ return !have[_nameFold(h)]; });
+    var removed = (mode === 'replace')
+      ? mine.filter(function(x){
+          for (var i = 0; i < headers.length; i++) if (_nameFold(headers[i]) === _nameFold(x.header)) return false;
+          return true;
+        }).map(function(x){ return x.header; })
+      : [];
+    var next = (mode === 'replace')
+      ? others.concat(headers.map(function(h){ return {loc:loc, header:h}; }))
+      : cur.concat(added.map(function(h){ return {loc:loc, header:h}; }));
+    var res = {ok:true, dryRun:dryRun, loc:loc, mode:mode,
+               added:added.length, removed:removed.length, total:next.length,
+               addedRows:added, removedRows:removed};
+    if (dryRun) return res;
+    var lock = LockService.getScriptLock();
+    try { lock.waitLock(30000); } catch(_le){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+    try {
+      if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, 2).clearContent();
+      if (next.length)
+        sh.getRange(2, 1, next.length, 2).setValues(next.map(function(x){ return [x.loc, x.header]; }));
+      SpreadsheetApp.flush();
+      _PAY_HDR_OVERRIDE_CACHE = null;   // інвалідуємо кеш поточного виконання
+      res.written = next.length;
+    } finally { try { lock.releaseLock(); } catch(_lr){} }
+    return res;
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 
@@ -7468,7 +7604,11 @@ function parsePaymentSheet(data, monthCol, contractCol, cpm, loc, typ, closeOnBl
       // «Школа 1 (Білик Маркус) 1 (Білик Маркус)» — назва подвоєна.
       // Дзеркалить правило v7.203 для шкільних локацій, лише за формою заголовка.
       var _numberedSchool = /^школа\s+\d+\b/i.test(nameCell);
-      var teacher = (!_keepSchool && !_numberedSchool && firstSpace > 0) ? nameCell.slice(firstSpace).trim() : '';
+      // v7.234: заголовок із реєстру — теж уся назва цілком. Інакше з
+      // «Прізвище Ім'я (Прізвище)» вихователем стало б «Ім'я (Прізвище)», а
+      // groupKey подвоївся б — та сама вада, що v7.228 виправив для «Школа N».
+      var _regHeader = _isPayHeaderOverride(nameCell);
+      var teacher = (!_keepSchool && !_numberedSchool && !_regHeader && firstSpace > 0) ? nameCell.slice(firstSpace).trim() : '';
       // v7.217 (3): «вихователь» — це насправді другий тип групи → відкидаємо.
       if (_filters && teacher && _isGroupTypeToken(teacher)) teacher = '';
       var groupName = normalizeGroupName(nameCell, _keepSchool);   // v7.202
