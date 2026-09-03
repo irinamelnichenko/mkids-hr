@@ -4904,7 +4904,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.227', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.228', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -7235,7 +7235,12 @@ function parsePaymentSheet(data, monthCol, contractCol, cpm, loc, typ, closeOnBl
       // Для садків поведінка не змінена: «Preschool Юля» → група Preschool,
       // вихователь «Юля».
       var firstSpace = nameCell.search(/\s/);
-      var teacher = (!_keepSchool && firstSpace > 0) ? nameCell.slice(firstSpace).trim() : '';
+      // v7.228: «Школа 1 (Білик Маркус)» — уся назва є назвою класу, вихователя з
+      // неї не витягуємо. Інакше teacher='1 (Білик Маркус)', а groupKey виходить
+      // «Школа 1 (Білик Маркус) 1 (Білик Маркус)» — назва подвоєна.
+      // Дзеркалить правило v7.203 для шкільних локацій, лише за формою заголовка.
+      var _numberedSchool = /^школа\s+\d+\b/i.test(nameCell);
+      var teacher = (!_keepSchool && !_numberedSchool && firstSpace > 0) ? nameCell.slice(firstSpace).trim() : '';
       // v7.217 (3): «вихователь» — це насправді другий тип групи → відкидаємо.
       if (_filters && teacher && _isGroupTypeToken(teacher)) teacher = '';
       var groupName = normalizeGroupName(nameCell, _keepSchool);   // v7.202

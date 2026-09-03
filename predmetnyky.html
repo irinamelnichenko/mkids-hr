@@ -953,14 +953,25 @@ function lessonSortKey(dmy){
 function predLocToRegion(loc){
   return PRED_LVIV_LOCATIONS.indexOf(String(loc||'').trim()) !== -1 ? 'Львів' : 'Київ';
 }
+// v7.229: + УКРАЇНСЬКІ назви груп. Манхетен і Нац.Гвардії ведуть групи так, як
+// їх називають директорки («Карапузи 2-3», «Пізнайки 3-4», «мама+я»), і після
+// v7.225 ці назви прийшли в сітку предметників із карток. Тип не розпізнавався,
+// тож норма ставала ∞, а рядок падав у кінець сортування.
+// Набір фрагментів дзеркалить normalizeGroupName у бекенді — одне джерело правди
+// щодо того, який тип відповідає українській назві.
 function normalizeGroupType(grp){
   var s = String(grp || '').trim();
   if (!s) return null;
   if (/mini[\s\-]?baby/i.test(s))             return 'miniBaby';
+  if (/мама[\s\+]*я/i.test(s))                return 'miniBaby';
   if (/^baby[\-\s]?ki|^baby$/i.test(s))       return 'Baby';
+  if (/малюк|карапуз/i.test(s))               return 'Baby';
   if (/find[\-\s]?iki/i.test(s))              return 'Find';
+  if (/бешкетн/i.test(s))                     return 'Find';
   if (/study[\-\s]?ki/i.test(s))              return 'Study';
+  if (/пізнайк|мандрівн|дослідн/i.test(s))    return 'Study';
   if (/preschool|шкільн|підготов/i.test(s))   return 'Preschool';
+  if (/розумник/i.test(s))                    return 'Preschool';
   return null;
 }
 function pluralUk(n, one, few, many){
