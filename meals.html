@@ -263,8 +263,6 @@
   </div>
   <span class="sp"></span>
   <button class="btn sec" id="refreshBtn">🔄</button>
-  <button class="btn" id="saveBtn" disabled>💾 Зберегти</button>
-  <button class="btn g" id="exportBtn">📤 Експорт у Payment</button>
 </div>
 <div class="wrap" id="main"><div class="empty">Завантаження…</div></div>
 
@@ -646,7 +644,10 @@ async function cloudFetch(url,opts){ opts=opts||{}; url=_tokUrl(url); var tmo=op
     catch(e){ clearTimeout(t); last=e; if(i<n-1){ await _cfSleep(del[i]); continue; } throw last; } } throw last; }
 var _CLAB={ sync:{t:'☁️ Синхронізація…',c:'#e67e22'}, ok:{t:'☁️ Синхронізовано',c:'#16a34a'}, err:{t:'⚠️ Помилка хмари',c:'#dc2626'}, none:{t:'',c:'#94a3b8'} };
 function setCloudStatus(state,reason){ var el=document.getElementById('syncStatus'); if(!el)return; var s=_CLAB[state]||_CLAB.none;
-  el.textContent=(state==='err'&&reason)?(s.t+': '+reason):s.t; el.style.color=s.c; el.title=(state==='err'&&reason)?('Не завантажилось: '+reason):''; } // v7.127: причина в тексті
+  // v7.244: причину показуємо і для 'sync' — інакше відлік «збереження через 5с»
+  // не було видно, а індикатор лишився єдиним джерелом стану.
+  el.textContent=((state==='err'||state==='sync')&&reason)?(s.t+' · '+reason):s.t;
+  el.style.color=s.c; el.title=(state==='err'&&reason)?('Не завантажилось: '+reason):''; }
 async function apiGet(action,qs){ var r=await cloudFetch(CFG.SCRIPT_URL+'?action='+action+(qs?'&'+qs:'')); return r.json(); }
 async function apiPost(body){ var r=await _fetch(CFG.SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(_tokBody(body))});
   var txt=await r.text(); try{ return JSON.parse(txt); }catch(_){ return {ok:true,_assumed:true}; } }
@@ -698,17 +699,16 @@ function wireTop(){
     if(!el){ miss.push(id); return; }
     if(ev==='click' && el.addEventListener) el.addEventListener('click',fn); else el[ev]=fn;
   }
-  on('locSel','onchange',function(){ if(!confirmLoss())return; S.loc=document.getElementById('locSel').value; S.classFilter=null; loadAll(); });
+  on('locSel','onchange',async function(){ await flushMealSync(); S.loc=document.getElementById('locSel').value; S.classFilter=null; loadAll(); });
   on('clsSel','onchange',function(){ S.classFilter=document.getElementById('clsSel').value; render(); });
-  on('mPrev','onclick',function(){ if(!confirmLoss())return; S.m--; if(S.m<1){S.m=12;S.y--;} loadAll(); });
-  on('mNext','onclick',function(){ if(!confirmLoss())return; S.m++; if(S.m>12){S.m=1;S.y++;} loadAll(); });
-  on('refreshBtn','onclick',function(){ if(!confirmLoss())return; loadAll(); });
-  on('saveBtn','onclick',saveMarks);
-  on('exportBtn','onclick',doExportPreview);
+  on('mPrev','onclick',async function(){ await flushMealSync(); S.m--; if(S.m<1){S.m=12;S.y--;} loadAll(); });
+  on('mNext','onclick',async function(){ await flushMealSync(); S.m++; if(S.m>12){S.m=1;S.y++;} loadAll(); });
+  on('refreshBtn','onclick',async function(){ await flushMealSync(); loadAll(); });
   on('mcard','click',function(e){ if(e.target.dataset.close) closeModal(); });
   if(miss.length) console.warn('[meals] немає елементів шапки:', miss.join(', '));
 }
-function confirmLoss(){ return !dirtyCount() || confirm('Є незбережені відмітки. Втратити їх?'); }
+// v7.244: confirmLoss прибрано — відмітки зберігаються самі, а перед зміною
+// місяця/локації синк робиться негайно (flushMealSync).
 
 // ── Завантаження місяця ──
 async function loadAll(){
@@ -803,9 +803,10 @@ function wireGrid(){
   };
 }
 function toggleMark(child,iso,id){ var k=markKey(child,iso,id);
-  if(S.marks[k]){ delete S.marks[k]; return; }                                   // активний → зняти
+  if(S.marks[k]){ delete S.marks[k]; scheduleMealSync(); return; }   // v7.244                                   // активний → зняти
   S.marks[k]=true;
   if(isLunch(id)) lunchIds().forEach(function(oid){ if(oid!==id) delete S.marks[markKey(child,iso,oid)]; });   // ексклюзив обідів
+  scheduleMealSync();   // v7.244
 }
 function recalc(){
   var kids=visKids(), perKid={}, classTot=0, schoolTot=0;
@@ -813,9 +814,7 @@ function recalc(){
   kids.forEach(function(k,ci){ var td=document.querySelector('td.tot[data-kt="'+ci+'"]'); var v=perKid[k.name]||0; if(td) td.textContent=fmtG(v); classTot+=v; });
   var ct=document.getElementById('clsTot'); if(ct) ct.textContent=fmtG(classTot);
   var st=document.getElementById('schoolTot'); if(st) st.textContent=fmtG(schoolTot);
-  var dc=dirtyCount(); var _sb=document.getElementById('saveBtn');
-  if(_sb){ _sb.disabled=!dc; _sb.textContent='💾 Зберегти'+(dc?' ('+dc+')':''); }   // v7.243 null-guard
-  var dl=document.getElementById('dirtyLbl'); if(dl) dl.textContent=dc?('Незбережених: '+dc):'Усе збережено';
+  updDirtyLbl();   // v7.244: статус замість кнопки «Зберегти»
 }
 function dirtyCount(){ var n=0; var seen={};
   Object.keys(S.marks).forEach(function(k){ if(!S.orig[k]) n++; seen[k]=1; });
@@ -823,19 +822,67 @@ function dirtyCount(){ var n=0; var seen={};
   return n; }
 
 // ── Збереження (батч) ──
-async function saveMarks(){
+// ── v7.244 АВТОСИНК (як у «Додаткових»): 5с після останньої відмітки →
+// збереження відміток + експорт у Payment ОДНИМ пакетом. Кнопок «Зберегти» і
+// «Експорт у Payment» більше немає; стан видно в індикаторі синхронізації.
+var SYNC = { timer:null, tick:null, until:0, running:false };
+function syncPending(){ return !!SYNC.timer || SYNC.running; }
+function scheduleMealSync(){
+  if (SYNC.timer) clearTimeout(SYNC.timer);
+  if (SYNC.tick)  clearInterval(SYNC.tick);
+  SYNC.until = Date.now() + 5000;
+  setCloudStatus('sync','збереження через 5с');
+  SYNC.tick = setInterval(function(){
+    var left = Math.max(0, Math.ceil((SYNC.until - Date.now())/1000));
+    if (left <= 0){ clearInterval(SYNC.tick); SYNC.tick=null; return; }
+    setCloudStatus('sync','збереження через '+left+'с');
+  }, 500);
+  SYNC.timer = setTimeout(function(){ SYNC.timer=null;
+    if (SYNC.tick){ clearInterval(SYNC.tick); SYNC.tick=null; }
+    runMealSync();
+  }, 5000);
+}
+// Негайний прогін (перед зміною місяця/локації чи закриттям вкладки).
+async function flushMealSync(){
+  if (SYNC.timer){ clearTimeout(SYNC.timer); SYNC.timer=null; }
+  if (SYNC.tick){ clearInterval(SYNC.tick); SYNC.tick=null; }
+  if (dirtyCount()) await runMealSync();
+}
+async function runMealSync(){
+  if (SYNC.running) return;
+  if (!dirtyCount()) { setCloudStatus('ok'); return; }
+  SYNC.running = true;
+  try {
+    setCloudStatus('sync','збереження відміток');
+    var okSave = await saveMarks(true);
+    if (!okSave) return;                       // помилку вже показано
+    setCloudStatus('sync','харчування→Payment');
+    await autoExportMeals();
+  } finally { SYNC.running = false; updDirtyLbl(); }
+}
+function updDirtyLbl(){
+  var dl = document.getElementById('dirtyLbl'); if (!dl) return;
+  var dc = dirtyCount();
+  dl.textContent = SYNC.running ? 'Синхронізація…' : (dc ? ('Незбережених: '+dc+' — запис за 5с') : 'Усе збережено');
+}
+
+async function saveMarks(silent){
   var adds=[], rems=[];
   Object.keys(S.marks).forEach(function(k){ if(!S.orig[k]){ var p=k.split('||'); var kid=findKid(p[0]);
     var pos=S.cat.filter(function(x){return x.id===+p[2];})[0]||{};
     adds.push({date:p[1],child:p[0],group:kid?kid.group:'',itemId:+p[2],itemName:pos.name||'',price:pos.price||0}); } });
   Object.keys(S.orig).forEach(function(k){ if(!S.marks[k]){ var p=k.split('||'); rems.push({date:p[1],child:p[0],itemId:+p[2],remove:true}); } });
-  var marks=adds.concat(rems); if(!marks.length){ toast('Немає змін'); return; }
-  var btn=document.getElementById('saveBtn'); if(btn){ btn.disabled=true; btn.textContent='Збереження…'; }
+  var marks=adds.concat(rems);
+  if(!marks.length){ if(!silent) toast('Немає змін'); return true; }
   var res=await apiPost({action:'addMealMark',loc:S.loc,markedBy:(S.user.role||'')+' '+(S.user.origLoc||S.user.loc||''),marks:marks});
-  if(res && res.ok){ S.orig=Object.assign({},S.marks); toast('Збережено: +'+(res.added||0)+' / −'+(res.removed||0)); recalc();
-    btn.disabled=false; btn.textContent='💾 Зберегти';
-    autoExportMeals(); }                                    // v7.108: одразу тихо в Payment (як додаткові)
-  else { toast('Помилка: '+(res&&res.error||'?')); btn.disabled=false; }
+  if(res && res.ok){
+    S.orig=Object.assign({},S.marks); recalc();
+    if(!silent) toast('Збережено: +'+(res.added||0)+' / −'+(res.removed||0));
+    return true;             // v7.244: експорт кличе runMealSync одразу після цього, не тут
+  }
+  setCloudStatus('err','збереження відміток');
+  toast('Помилка збереження: '+(res&&res.error||'?'));
+  return false;
 }
 // v7.108: тихий авто-експорт харчування у Payment ОДРАЗУ після збереження відміток — як у «Додаткових»
 // (scheduleAutoExport). Без прев'ю. Ідемпотентно (base+newSum у журналі), захист закритих місяців — на
@@ -875,24 +922,8 @@ async function savePrices(){
 }
 
 // ── Експорт у Payment ──
-async function doExportPreview(){
-  if(dirtyCount()){ if(!confirm('Є незбережені відмітки — вони не потраплять в export. Продовжити?')) return; }
-  openModal('<h3 style="margin:0 0 10px">📤 Експорт у Payment — прев\'ю</h3><div class="muted">Рахую…</div>');
-  var res=await apiPost({action:'exportMealToPayments',loc:S.loc,year:S.y,dryRun:true});
-  if(!res||!res.ok){ setModal('<h3>Помилка</h3><p>'+esc(res&&res.error||'?')+'</p><button class="btn sec" data-close="1">Закрити</button>'); return; }
-  var rows=(res.perMonth||[]).filter(function(x){return x.sum||x.updated;}).map(function(x){return '<tr><td>'+MONTHS[x.month-1]+'</td><td style="text-align:right">'+x.updated+'</td><td style="text-align:right">'+fmtG(x.sum)+'</td></tr>';}).join('');
-  var nf=(res.notFound||[]);
-  var html='<h3 style="margin:0 0 8px">📤 Прев\'ю експорту · '+esc(S.loc)+' '+S.y+'</h3>'+
-    '<div class="muted" style="margin-bottom:8px">Ціль: Бюджет-харчування · оновлено рядків: <b>'+res.updated+'</b> · сума: <b>'+fmtG(res.totalAmount)+'</b></div>'+
-    (rows?'<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr><th style="text-align:left">Місяць</th><th style="text-align:right">Дітей</th><th style="text-align:right">Сума</th></tr></thead><tbody>'+rows+'</tbody></table>':'<p class="muted">Немає сум до запису.</p>')+
-    (res.skippedClosed&&res.skippedClosed.length?'<p class="muted">Пропущено закриті місяці: '+res.skippedClosed.map(function(m){return MONTHS[m-1];}).join(', ')+'</p>':'')+
-    (nf.length?'<p style="color:#dc2626">Не знайдено в Payment ('+nf.length+'): '+nf.slice(0,12).map(esc).join(', ')+(nf.length>12?'…':'')+'</p>':'')+
-    '<div style="display:flex;gap:10px;margin-top:14px"><button class="btn g" id="doWriteBtn">✅ Записати у Payment</button><button class="btn sec" data-close="1">Скасувати</button></div>';
-  setModal(html);
-  document.getElementById('doWriteBtn').onclick=async function(){ this.disabled=true; this.textContent='Запис…';
-    var w=await apiPost({action:'exportMealToPayments',loc:S.loc,year:S.y,dryRun:false});
-    if(w&&w.ok){ toast('Записано у Payment: '+fmtG(w.totalAmount)); closeModal(); } else { toast('Помилка: '+(w&&w.error||'?')); this.disabled=false; } };
-}
+// v7.244: doExportPreview (модалка ручного експорту) прибрано разом із кнопкою —
+// експорт іде автоматично після кожного пакета відміток.
 
 // ── Modal ──
 function openModal(html){ setModal(html); document.getElementById('modal').classList.add('show'); }
@@ -904,6 +935,13 @@ function closeModal(){ document.getElementById('modal').classList.remove('show')
   if (m) m.addEventListener('click',function(e){ if(e.target.id==='modal') closeModal(); });
   else console.warn('[meals] #modal не знайдено — модалку вимкнено, решта працює'); })();
 
+// v7.244: не даємо піти з незбереженими відмітками — синк іде негайно.
+window.addEventListener('beforeunload', function(e){
+  if (!dirtyCount() && !syncPending()) return;
+  try { runMealSync(); } catch(_e){}
+  e.preventDefault(); e.returnValue = '';
+});
+
 // v7.243 СТОРОЖ: якщо через 30с #main усе ще на «Завантаження…», показуємо, що
 // саме не спрацювало, замість вічного спінера. Плюс глобальний onerror — щоб
 // помилка верхнього рівня була ВИДНА, а не ховалась у консолі.
@@ -914,7 +952,7 @@ function closeModal(){ document.getElementById('modal').classList.remove('show')
   setTimeout(function(){
     var m = document.getElementById('main');
     if (!m || m.innerHTML.indexOf('Завантаження…') === -1) return;
-    var miss = ['main','locSel','clsSel','mLbl','saveBtn','exportBtn','modal','toast']
+    var miss = ['main','locSel','clsSel','mLbl','refreshBtn','modal','toast']   // v7.244: кнопок збереження/експорту більше немає
       .filter(function(id){ return !document.getElementById(id); });
     m.innerHTML = '<div class="empty">Не вдалося завантажити за 30 секунд.<br><span class="muted">' +
       (lastErr ? ('Помилка: ' + esc(lastErr) + '<br>') : '') +
