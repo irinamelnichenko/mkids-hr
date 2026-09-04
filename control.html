@@ -798,6 +798,26 @@ function goPerm(perm){
 
 var PERMISSIONS_BUILD_VERSION = 'matrix-2026-05-04';
 
+
+// v7.241 ХАРЧУВАННЯ — доступ: CFO (усі локації) + директорка Школи 228. Більше ніхто.
+// Право 'meals' у матриці не роздається нікому: cfo проходить як 'all', а для
+// director вирішує локація, чого матриця роль-до-права виразити не може.
+// Замінює сніпет v7.105, який показував пункт усім мережевим ролям і будь-якій
+// директорці з каталогом харчування (асинхронний fetch на кожній сторінці).
+var MEALS_LOC = 'Школа 228';
+function canSeeMeals(){
+  var u = (window.S && S.user) || null; if (!u) return false;
+  var r = String(u.role || '').toLowerCase().trim();
+  if (r === 'cfo') return true;                       // hr теж 'all', але харчування не бачить
+  if (r === 'director') return String(u.origLoc || u.loc || '').trim() === MEALS_LOC;
+  return false;
+}
+function applyMealsVisibility(){
+  document.querySelectorAll('[data-permission="meals"]').forEach(function(el){
+    el.style.display = canSeeMeals() ? '' : 'none';
+  });
+}
+
 function applyRoleVisibility(){
   if (!S || !S.user || !S.user.role) return;
   var role = String(S.user.role || '').toLowerCase().trim();
@@ -816,6 +836,8 @@ function applyRoleVisibility(){
   // Подвійна логіка (матриця + окремий список приховувань) і була причиною того,
   // що пункт зникав із меню, а сторінка лишалась доступною за посиланням.
   // Єдине джерело прав — PERMISSIONS.
+  applyMealsVisibility();   // v7.241: харчування — CFO + директорка Школи 228
+
   document.querySelectorAll('[data-section]').forEach(function(section){
     var sectionName = section.dataset.section;
     var items = document.querySelectorAll('[data-permission][data-parent="' + sectionName + '"]');
@@ -1119,27 +1141,6 @@ setInterval(function(){ try{ if(document.visibilityState==='visible' && typeof l
     if (document.visibilityState==='hidden'){ done=true; location.reload(); }
     else { pending=true; }
   });
-})();
-</script>
-<script>
-/* v7.105: пункт «Харчування» — CFO/мережеві завжди; директор — лише якщо в локації є каталог харчування (cpm7). */
-(function(){
-  var NET=['hr','cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo'];
-  var MEALS_URL='https://script.google.com/macros/s/AKfycbyTSUVlaN4-PpXe47zCSmhVs0Qxy1FDXG_XsB4zcKNpqBxdhDtS9ibM4YFGkGjmPQDFWQ/exec';
-  function _revealMealsMenu(){
-    var el=document.querySelector('[data-perm-page="meals"]'); if(!el) return;
-    var u=(window.S&&S.user)||null; if(!u){ el.style.display='none'; return; }
-    var role=String(u.role||'').toLowerCase();
-    if(NET.indexOf(role)!==-1){ el.style.display=''; return; }
-    var loc=String(u.origLoc||u.loc||'').trim(); if(!loc){ el.style.display='none'; return; }
-    fetch(MEALS_URL+'?action=getMealCatalog&loc='+encodeURIComponent(loc),{redirect:'follow'})
-      .then(function(r){return r.json();})
-      .then(function(j){ el.style.display=(j&&j.items&&j.items.length)?'':'none'; })
-      .catch(function(){ el.style.display='none'; });
-  }
-  window._revealMealsMenu=_revealMealsMenu;
-  if(typeof applyRoleVisibility==='function'){ var _o=applyRoleVisibility; applyRoleVisibility=function(){ var r=_o.apply(this,arguments); try{_revealMealsMenu();}catch(e){} return r; }; }
-  window.addEventListener('load', function(){ setTimeout(_revealMealsMenu, 1200); });
 })();
 </script>
 
