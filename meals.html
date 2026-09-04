@@ -652,7 +652,7 @@ async function apiPost(body){ var r=await _fetch(CFG.SCRIPT_URL,{method:'POST',h
   var txt=await r.text(); try{ return JSON.parse(txt); }catch(_){ return {ok:true,_assumed:true}; } }
 function enc(s){ return encodeURIComponent(s); }
 
-function toast(msg){ var t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show'); setTimeout(function(){t.classList.remove('show');},2600); }
+function toast(msg){ var t=document.getElementById('toast'); if(!t){ console.warn('[meals] toast:',msg); return; } t.textContent=msg; t.classList.add('show'); setTimeout(function(){t.classList.remove('show');},2600); }
 function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); }
 function fmtG(n){ return (Number(n)||0).toLocaleString('uk-UA')+' ₴'; }
 function shortLabel(name){ var w=String(name||'').trim().split(/\s+/); return (w.map(function(x){return (x[0]||'').toUpperCase();}).join('').slice(0,3))||'?'; }
@@ -663,7 +663,10 @@ async function init(){
   try{
     S.user=readSession(); if(!S.user){ goLogin(); return; }
     if(!mealsPermGate()) return;               // v7.240: право 'meals' обовʼязкове
-    updUserUI(); markActiveNav();              // v7.240: роль/локація в сайдбарі + активний пункт
+    // v7.243: шелл (сайдбар/шапка) — в ізоляції. Якщо він упаде, дані мають
+    // вантажитись однаково; до v7.243 будь-яка його помилка обривала init().
+    try { updUserUI(); markActiveNav(); }
+    catch(e){ console.warn('[meals] шелл не піднявся:', e && e.message); }
     var now=new Date(); S.y=now.getFullYear(); S.m=now.getMonth()+1;
     document.getElementById('mLbl').textContent=MONTHS[S.m-1]+' '+S.y;   // місяць видно одразу
     wireTop();
@@ -685,15 +688,25 @@ async function init(){
     await loadAll();
   }catch(e){ document.getElementById('main').innerHTML='<div class="empty">Помилка ініціалізації: '+esc(e&&e.message||e)+'</div>'; console.error('[meals] init', e); }
 }
+// v7.243: кожен елемент — з перевіркою. Раніше будь-який відсутній вузол кидав
+// TypeError, init() обривався ще до завантаження даних, і сторінка лишалась на
+// «Завантаження…». Тепер зникла кнопка коштує лише цієї кнопки.
 function wireTop(){
-  document.getElementById('locSel').onchange=function(){ if(!confirmLoss())return; S.loc=this.value; S.classFilter=null; loadAll(); };
-  document.getElementById('clsSel').onchange=function(){ S.classFilter=this.value; render(); };
-  document.getElementById('mPrev').onclick=function(){ if(!confirmLoss())return; S.m--; if(S.m<1){S.m=12;S.y--;} loadAll(); };
-  document.getElementById('mNext').onclick=function(){ if(!confirmLoss())return; S.m++; if(S.m>12){S.m=1;S.y++;} loadAll(); };
-  document.getElementById('refreshBtn').onclick=function(){ if(!confirmLoss())return; loadAll(); };
-  document.getElementById('saveBtn').onclick=saveMarks;
-  document.getElementById('exportBtn').onclick=doExportPreview;
-  document.getElementById('mcard').addEventListener('click',function(e){ if(e.target.dataset.close) closeModal(); });
+  var miss=[];
+  function on(id, ev, fn){
+    var el=document.getElementById(id);
+    if(!el){ miss.push(id); return; }
+    if(ev==='click' && el.addEventListener) el.addEventListener('click',fn); else el[ev]=fn;
+  }
+  on('locSel','onchange',function(){ if(!confirmLoss())return; S.loc=document.getElementById('locSel').value; S.classFilter=null; loadAll(); });
+  on('clsSel','onchange',function(){ S.classFilter=document.getElementById('clsSel').value; render(); });
+  on('mPrev','onclick',function(){ if(!confirmLoss())return; S.m--; if(S.m<1){S.m=12;S.y--;} loadAll(); });
+  on('mNext','onclick',function(){ if(!confirmLoss())return; S.m++; if(S.m>12){S.m=1;S.y++;} loadAll(); });
+  on('refreshBtn','onclick',function(){ if(!confirmLoss())return; loadAll(); });
+  on('saveBtn','onclick',saveMarks);
+  on('exportBtn','onclick',doExportPreview);
+  on('mcard','click',function(e){ if(e.target.dataset.close) closeModal(); });
+  if(miss.length) console.warn('[meals] немає елементів шапки:', miss.join(', '));
 }
 function confirmLoss(){ return !dirtyCount() || confirm('Є незбережені відмітки. Втратити їх?'); }
 
@@ -764,12 +777,12 @@ function render(){
     '<div class="tblwrap"><table class="grid"><thead id="gHead"></thead><tbody id="gBody"></tbody></table></div>'+
     '<div class="foot"><div>По класу: <span id="clsTot">0</span></div><div>По школі: <span id="schoolTot">0</span></div><div class="muted" id="dirtyLbl"></div></div></div>'+
     priceEditor();
-  document.getElementById('savePricesBtn').onclick=savePrices;
+  var _sp=document.getElementById('savePricesBtn'); if(_sp) _sp.onclick=savePrices;   // v7.243 null-guard
   renderHead(); renderBody(); wireGrid(); recalc();
 }
 function renderHead(){
   var ths=monthDays().map(function(x){ return '<th class="dcol">'+x.d+' <small>'+WD[x.dow]+'</small></th>'; }).join('');
-  document.getElementById('gHead').innerHTML='<tr><th class="kidh">Дитина</th>'+ths+'<th class="toth">Σ міс</th></tr>';
+  var _gh=document.getElementById('gHead'); if(_gh) _gh.innerHTML='<tr><th class="kidh">Дитина</th>'+ths+'<th class="toth">Σ міс</th></tr>';
 }
 function renderBody(){
   var days=monthDays(), kids=visKids();
@@ -780,11 +793,12 @@ function renderBody(){
     }).join('');
     return '<tr><td class="kid"><b>'+esc(k.name)+'</b> <small>'+esc(k.group)+'</small></td>'+cells+'<td class="tot" data-kt="'+ci+'">0</td></tr>';
   }).join('');
-  document.getElementById('gBody').innerHTML=html || '<tr><td class="kid" colspan="99">Немає дітей у класі</td></tr>';
+  var _gb=document.getElementById('gBody'); if(_gb) _gb.innerHTML=html || '<tr><td class="kid" colspan="99">Немає дітей у класі</td></tr>';
 }
 function refresh(){ renderHead(); renderBody(); recalc(); }
 function wireGrid(){
-  document.getElementById('gBody').onclick=function(e){ var t=e.target.closest('.tg'); if(!t || t.dataset.act!=='cell') return;
+  var _gb=document.getElementById('gBody');   // v7.243: власний пошук — _gb із renderBody() тут не видно
+  if(_gb) _gb.onclick=function(e){ var t=e.target.closest('.tg'); if(!t || t.dataset.act!=='cell') return;
     toggleMark(visKids()[+t.dataset.ci].name, t.dataset.d, +t.dataset.it); refresh();   // лише ця дитина, цей день, ця позиція
   };
 }
@@ -799,7 +813,8 @@ function recalc(){
   kids.forEach(function(k,ci){ var td=document.querySelector('td.tot[data-kt="'+ci+'"]'); var v=perKid[k.name]||0; if(td) td.textContent=fmtG(v); classTot+=v; });
   var ct=document.getElementById('clsTot'); if(ct) ct.textContent=fmtG(classTot);
   var st=document.getElementById('schoolTot'); if(st) st.textContent=fmtG(schoolTot);
-  var dc=dirtyCount(); document.getElementById('saveBtn').disabled=!dc; document.getElementById('saveBtn').textContent='💾 Зберегти'+(dc?' ('+dc+')':'');
+  var dc=dirtyCount(); var _sb=document.getElementById('saveBtn');
+  if(_sb){ _sb.disabled=!dc; _sb.textContent='💾 Зберегти'+(dc?' ('+dc+')':''); }   // v7.243 null-guard
   var dl=document.getElementById('dirtyLbl'); if(dl) dl.textContent=dc?('Незбережених: '+dc):'Усе збережено';
 }
 function dirtyCount(){ var n=0; var seen={};
@@ -815,7 +830,7 @@ async function saveMarks(){
     adds.push({date:p[1],child:p[0],group:kid?kid.group:'',itemId:+p[2],itemName:pos.name||'',price:pos.price||0}); } });
   Object.keys(S.orig).forEach(function(k){ if(!S.marks[k]){ var p=k.split('||'); rems.push({date:p[1],child:p[0],itemId:+p[2],remove:true}); } });
   var marks=adds.concat(rems); if(!marks.length){ toast('Немає змін'); return; }
-  var btn=document.getElementById('saveBtn'); btn.disabled=true; btn.textContent='Збереження…';
+  var btn=document.getElementById('saveBtn'); if(btn){ btn.disabled=true; btn.textContent='Збереження…'; }
   var res=await apiPost({action:'addMealMark',loc:S.loc,markedBy:(S.user.role||'')+' '+(S.user.origLoc||S.user.loc||''),marks:marks});
   if(res && res.ok){ S.orig=Object.assign({},S.marks); toast('Збережено: +'+(res.added||0)+' / −'+(res.removed||0)); recalc();
     btn.disabled=false; btn.textContent='💾 Зберегти';
@@ -883,9 +898,36 @@ async function doExportPreview(){
 function openModal(html){ setModal(html); document.getElementById('modal').classList.add('show'); }
 function setModal(html){ document.getElementById('mcard').innerHTML=html; }
 function closeModal(){ document.getElementById('modal').classList.remove('show'); }
-document.getElementById('modal').addEventListener('click',function(e){ if(e.target.id==='modal') closeModal(); });
+// v7.243: null-guard. Раніше падіння тут (елемента ще/вже немає) вбивало ВЕСЬ
+// скрипт до виклику init(), і сторінка мовчки лишалась на «Завантаження…».
+(function(){ var m=document.getElementById('modal');
+  if (m) m.addEventListener('click',function(e){ if(e.target.id==='modal') closeModal(); });
+  else console.warn('[meals] #modal не знайдено — модалку вимкнено, решта працює'); })();
 
-init();
+// v7.243 СТОРОЖ: якщо через 30с #main усе ще на «Завантаження…», показуємо, що
+// саме не спрацювало, замість вічного спінера. Плюс глобальний onerror — щоб
+// помилка верхнього рівня була ВИДНА, а не ховалась у консолі.
+(function(){
+  var lastErr = null;
+  window.addEventListener('error', function(e){ lastErr = (e && (e.message || (e.error && e.error.message))) || 'невідома помилка'; });
+  window.addEventListener('unhandledrejection', function(e){ lastErr = 'promise: ' + ((e && e.reason && e.reason.message) || e.reason || '?'); });
+  setTimeout(function(){
+    var m = document.getElementById('main');
+    if (!m || m.innerHTML.indexOf('Завантаження…') === -1) return;
+    var miss = ['main','locSel','clsSel','mLbl','saveBtn','exportBtn','modal','toast']
+      .filter(function(id){ return !document.getElementById(id); });
+    m.innerHTML = '<div class="empty">Не вдалося завантажити за 30 секунд.<br><span class="muted">' +
+      (lastErr ? ('Помилка: ' + esc(lastErr) + '<br>') : '') +
+      (miss.length ? ('Немає елементів: ' + miss.join(', ') + '<br>') : '') +
+      'Локація: ' + esc(S.loc || '—') + ' · роль: ' + esc((S.user && S.user.role) || '—') +
+      '</span></div>';
+  }, 30000);
+})();
+
+// v7.243: чекаємо на DOM. Скрипт стоїть у кінці body, але під SW/PWA сторінка
+// може виконуватись із ще недобудованим DOM — тоді getElementById повертав null.
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+else init();
 </script>
 <script>
 /* v7.152: пункт «Ліди» — мережеві ролі + директорка; решті не показуємо. */
