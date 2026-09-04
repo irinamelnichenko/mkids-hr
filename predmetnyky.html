@@ -1240,6 +1240,29 @@ var PERMISSIONS = {
 })();
 
 
+// v7.247 ПРАВА, ПРИВ'ЯЗАНІ ДО ЛОКАЦІЇ. Матриця зіставляє роль із правом і умову
+// «тільки в цій локації» виразити не може. Тому для вихователя Школи 228 права
+// додаються в рантаймі — один раз, коли вже відома сесія. Далі все інше
+// (hasPerm, goPerm, #hash-роутинг, applyRoleVisibility, гейти сторінок)
+// працює без окремих винятків у кожному місці.
+// Вихователі решти локацій нічого не отримують.
+var SCHOOL228_LOC = 'Школа 228';
+var _locPermsDone = false;
+function _applyLocScopedPerms(){
+  if (_locPermsDone) return;
+  var u = null;
+  try { u = (typeof S !== 'undefined' && S && S.user) ? S.user : null; } catch(e){}
+  if (!u || !u.role) return;                       // сесії ще немає — спробуємо пізніше
+  var r   = String(u.role || '').toLowerCase().trim();
+  var loc = String(u.origLoc || u.loc || '').trim();
+  if (r === 'vyhovatel' && loc === SCHOOL228_LOC && Array.isArray(PERMISSIONS.vyhovatel)){
+    ['attendance_kids','meals'].forEach(function(p){
+      if (PERMISSIONS.vyhovatel.indexOf(p) === -1) PERMISSIONS.vyhovatel.push(p);
+    });
+  }
+  _locPermsDone = true;
+}
+
 // v7.241 ХАРЧУВАННЯ — доступ: CFO (усі локації) + директорка Школи 228. Більше ніхто.
 // Право 'meals' у матриці не роздається нікому: cfo проходить як 'all', а для
 // director вирішує локація, чого матриця роль-до-права виразити не може.
@@ -1256,7 +1279,8 @@ function canSeeMeals(){
   if (!u) return false;
   var r = String(u.role || '').toLowerCase().trim();
   if (r === 'cfo') return true;                       // hr теж 'all', але харчування не бачить
-  if (r === 'director') return String(u.origLoc || u.loc || '').trim() === MEALS_LOC;
+  if (r === 'director')  return String(u.origLoc || u.loc || '').trim() === MEALS_LOC;
+  if (r === 'vyhovatel') return String(u.origLoc || u.loc || '').trim() === MEALS_LOC;   // v7.247
   return false;
 }
 function applyMealsVisibility(){
@@ -1266,6 +1290,7 @@ function applyMealsVisibility(){
 }
 
 function applyRoleVisibility(){
+  _applyLocScopedPerms();   // v7.247
   if (!S || !S.user || !S.user.role) return;
   var role = String(S.user.role || '').toLowerCase().trim();
   var allowed = PERMISSIONS[role];
@@ -1294,6 +1319,7 @@ function applyRoleVisibility(){
   });
 }
 function hasPerm(p){
+  _applyLocScopedPerms();   // v7.247
   if (!S || !S.user || !S.user.role) return false;
   var r = String(S.user.role || '').toLowerCase().trim();
   var allowed = PERMISSIONS[r];
