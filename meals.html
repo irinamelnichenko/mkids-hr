@@ -12,6 +12,9 @@
 <meta name="apple-mobile-web-app-title" content="m.kids System">
 <link rel="manifest" href="manifest.json">
 <style>
+
+  /* v7.240: спільний шелл (сайдбар/шапка) — змінні під ті самі імена, що в решті сторінок */
+  :root{--sw:230px;--sidebar:#1e293b;--green:#16a34a;--green2:#4ade80;--gray2:#e2e8f0;--dark2:#1e293b}
   :root{--b:#2563eb;--g:#16a34a;--r:#dc2626;--o:#ea580c;--mut:#94a3b8;--bg:#f1f5f9;--line:#e2e8f0;--dark:#1e293b;--gray:#64748b}
   *{box-sizing:border-box}
   body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--dark);font-size:14px}
@@ -67,10 +70,190 @@
   .tg{display:inline-block;font-size:19px;line-height:28px;height:28px;min-width:28px;text-align:center;vertical-align:middle;padding:0 1px;margin:1px;border:1px solid transparent;border-radius:7px;cursor:pointer;opacity:.28;filter:grayscale(1)}
   .tg:hover{opacity:.6}
   .tg.on{opacity:1;filter:none}
+/* ── SIDEBAR (shared shell з salary.html) ───── */
+#app{display:flex;min-height:100vh}
+.sidebar{width:var(--sw);background:var(--sidebar);display:flex;flex-direction:column;
+  position:fixed;top:0;left:0;height:100vh;z-index:100;overflow-y:auto}
+.sb-brand{padding:20px;border-bottom:1px solid rgba(255,255,255,.1)}
+.sb-brand h2{color:#fff;font-size:16px;font-weight:800}
+.sb-brand p{color:rgba(255,255,255,.45);font-size:11px;margin-top:2px}
+.sb-user{padding:14px 20px;display:flex;align-items:center;gap:10px;border-bottom:1px solid rgba(255,255,255,.1)}
+.avatar{width:36px;height:36px;background:var(--green);border-radius:50%;
+  display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:13px;flex-shrink:0}
+.sb-user-info p{color:#fff;font-size:13px;font-weight:600}
+.sb-user-info span{color:rgba(255,255,255,.45);font-size:11px}
+.sb-nav{flex:1;padding:10px 0}
+.nav-sec{padding:4px 18px;font-size:10px;text-transform:uppercase;letter-spacing:1px;
+  color:rgba(255,255,255,.28);margin:14px 0 4px}
+.nav-item{display:flex;align-items:center;gap:10px;padding:10px 20px;
+  color:rgba(255,255,255,.6);cursor:pointer;transition:all .2s;font-size:13.5px;
+  border-left:3px solid transparent;user-select:none}
+.nav-item:hover{background:rgba(255,255,255,.06);color:#fff}
+.nav-item.active{background:rgba(39,174,96,.18);color:var(--green2);border-left-color:var(--green)}
+.nav-item .ni{width:20px;text-align:center;font-size:15px}
+.sb-footer{padding:14px 20px;border-top:1px solid rgba(255,255,255,.1)}
+.sb-footer .btn{width:100%;background:rgba(255,255,255,.07);color:rgba(255,255,255,.65);
+  border:none;justify-content:center;font-size:13px}
+.sb-footer .btn:hover{background:rgba(255,255,255,.15);color:#fff}
+.main{margin-left:var(--sw);flex:1;display:flex;flex-direction:column;min-height:100vh}
+.menu-toggle{display:none;padding:8px 10px;background:#fff;
+  border:1.5px solid var(--gray2);border-radius:8px;font-size:18px;color:var(--dark2);cursor:pointer}
+.menu-toggle:hover{background:#f4f7fa}
+@media(max-width:768px){
+  .sidebar{transform:translateX(-100%);transition:transform .3s}
+  .sidebar.open{transform:translateX(0)}
+  .main{margin-left:0}
+  .menu-toggle{display:inline-flex;align-items:center}
+}
+
+/* v7.240: власна шапка meals лишається, але їде всередині .main і дістає гамбургер */
+.top .menu-toggle{margin-right:4px}
 </style>
 </head>
 <body>
+<div id="app">
+  <nav class="sidebar" id="sidebar">
+    <div class="sb-brand">
+      <h2>🍊 m.kids</h2>
+      <p>m.kids System</p>
+    </div>
+    <div class="sb-user">
+      <div class="avatar" id="uAvatar">…</div>
+      <div class="sb-user-info">
+        <p id="uName">…</p>
+        <span id="uLoc">…</span>
+      </div>
+    </div>
+    <nav class="sb-nav">
+      <div class="nav-item" data-permission="dashboard" data-perm-page="index"
+           onclick="goPerm('dashboard')">
+        <span class="ni">📊</span> Дашборд
+      </div>
+
+      <div class="nav-item" data-permission="tasks" data-perm-page="tasks"
+           onclick="window.location.href='tasks.html'">
+        <span class="ni">📋</span> Задачник
+        <span class="nav-badge hidden" id="tasksBadge">0</span>
+      </div>
+      <div class="nav-item" id="navLeads" style="display:none"
+           onclick="window.location.href='leads.html'">
+        <span class="ni">🎯</span> Ліди
+      </div>
+
+      <div class="nav-item" id="navFillControl" style="display:none"
+           onclick="window.location.href='control.html'">
+        <span class="ni">📋</span> Контроль заповнення
+      </div>
+      <div class="nav-item" id="navReconcile" style="display:none"
+           onclick="window.location.href='reconcile.html'">
+        <span class="ni">💳</span> Звірка платежів
+      </div>
+      <div class="nav-item" id="navSalaryRecon" style="display:none"
+           onclick="window.location.href='salary_reconcile.html'">
+        <span class="ni">💰</span> Звірка ЗП
+      </div>
+      <div class="nav-sec" data-section="crm">👶 КЛІЄНТИ CRM</div>
+      <div class="nav-item" data-permission="clients_list" data-parent="crm" data-perm-page="clients"
+           onclick="goPerm('clients_list')">
+        <span class="ni">👶</span> Список дітей
+      </div>
+      <div class="nav-item" data-permission="payments" data-parent="crm" data-perm-page="clients"
+           onclick="goPerm('payments')">
+        <span class="ni">💰</span> Борги та оплати
+      </div>
+      <div class="nav-item" data-permission="attendance_kids" data-parent="crm" data-perm-page="clients"
+           onclick="goPerm('attendance_kids')">
+        <span class="ni">📋</span> Табель відвідуваності
+      </div>
+      <div class="nav-item" data-permission="recalc" data-parent="crm" data-perm-page="clients"
+           onclick="goPerm('recalc')">
+        <span class="ni">💼</span> Перерахунки
+      </div>
+
+      <div class="nav-sec" data-section="hr">👤 HR</div>
+      <div class="nav-item" data-permission="employees" data-parent="hr" data-perm-page="index"
+           onclick="goPerm('employees')">
+        <span class="ni">👥</span> Співробітники
+      </div>
+      <div class="nav-item" data-permission="timesheet_staff" data-parent="hr" data-perm-page="index"
+           onclick="goPerm('timesheet_staff')">
+        <span class="ni">📋</span> Табель співробітників
+      </div>
+      <div class="nav-item" data-permission="vacations" data-parent="hr" data-perm-page="index"
+           onclick="goPerm('vacations')">
+        <span class="ni">🏖️</span> Відпустки
+      </div>
+      <div class="nav-item" data-permission="sick_leaves" data-parent="hr" data-perm-page="index"
+           onclick="goPerm('sick_leaves')">
+        <span class="ni">🏥</span> Лікарняні
+      </div>
+      <div class="nav-item" data-permission="calendar" data-parent="hr" data-perm-page="index"
+           onclick="goPerm('calendar')">
+        <span class="ni">🗓️</span> Календар подій
+      </div>
+      <div class="nav-item" data-permission="vacation_schedule" data-parent="hr" data-perm-page="index"
+           onclick="goPerm('vacation_schedule')">
+        <span class="ni">🌴</span> Графік відпусток
+      </div>
+
+      <div class="nav-sec" data-section="analytics">📈 АНАЛІТИКА</div>
+      <div class="nav-item" data-permission="analytics_clients" data-parent="analytics" data-perm-page="clients"
+           onclick="goPerm('analytics_clients')">
+        <span class="ni">📊</span> Аналітика по клієнтам
+      </div>
+      <div class="nav-item" data-permission="analytics_hr" data-parent="analytics" data-perm-page="index"
+           onclick="goPerm('analytics_hr')">
+        <span class="ni">📈</span> Аналітика по HR
+      </div>
+
+      <div class="nav-sec" data-section="finance">📊 FINANCE</div>
+      <div class="nav-item" data-permission="opex" data-parent="finance" data-perm-page="opex"
+           onclick="goPerm('opex')">
+        <span class="ni">💰</span> Opex
+      </div>
+      <div class="nav-item" data-permission="salary" data-parent="finance" data-perm-page="salary"
+           onclick="goPerm('salary')">
+        <span class="ni">💼</span> Salary
+      </div>
+      <div class="nav-item" data-permission="activities" data-parent="finance" data-perm-page="activities"
+           onclick="goPerm('activities')">
+        <span class="ni">🏃</span> Додаткові заняття
+      </div>
+      <div class="nav-item" data-permission="predmetnyky" data-parent="finance" data-perm-page="predmetnyky"
+           onclick="window.location.href='predmetnyky.html'">
+        <span class="ni">🏫</span> Вчителі-предметники
+      </div>
+      <div class="nav-item active" data-permission="meals" data-parent="finance" data-perm-page="meals"
+           onclick="window.location.href='meals.html'">
+        <span class="ni">🍽</span> Харчування
+      </div>
+      <div class="nav-item" data-permission="invoices" data-parent="finance" data-perm-page="invoices"
+           onclick="window.location.href='invoices.html'">
+        <span class="ni">📧</span> Рахунки
+      </div>
+      <div class="nav-item" data-permission="categories" data-parent="finance" data-perm-page="categories"
+           onclick="goPerm('categories')">
+        <span class="ni">📊</span> Категорії
+      </div>
+      <div class="nav-item" data-permission="overview_analytics" data-parent="finance" data-perm-page="analytics"
+           onclick="goPerm('overview_analytics')">
+        <span class="ni">📊</span> Зведена аналітика
+      </div>
+
+      <div class="nav-item" data-permission="settings" data-perm-page="index"
+           onclick="goPerm('settings')">
+        <span class="ni">⚙️</span> Налаштування
+      </div>
+    </nav>
+    <div class="sb-footer">
+      <button class="btn" onclick="doLogout()">🚪 Вийти</button>
+    </div>
+  </nav>
+
+  <main class="main">
+
 <div class="top">
+  <button class="menu-toggle" onclick="toggleSidebar()" aria-label="Меню">☰</button>
   <h1>🍽 Харчування</h1>
   <span id="syncStatus" style="font-size:12px"></span>
   <select id="locSel" class="flt"></select>
@@ -88,6 +271,8 @@
 <div class="modal" id="modal"><div class="mcard" id="mcard"></div></div>
 <div class="toast" id="toast"></div>
 
+  </main>
+</div>
 <script>
 var CFG = { SCRIPT_URL: 'https://script.google.com/macros/s/AKfycbyTSUVlaN4-PpXe47zCSmhVs0Qxy1FDXG_XsB4zcKNpqBxdhDtS9ibM4YFGkGjmPQDFWQ/exec' };
 var MONTHS = ['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
@@ -153,6 +338,270 @@ var SESSION_KEY='mkids_session', SESSION_TTL_MS = 7 * 24 * 3600 * 1000;
 })();
 
 var NETWORK_ROLES=['hr','cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo'];
+
+// ── v7.240 СПІЛЬНИЙ ШЕЛЛ: матриця прав, сайдбар, шапка ──────────────────
+var CURRENT_PAGE = 'meals';
+function $(id){ return document.getElementById(id); }
+function isNetworkRole(role){ return NETWORK_ROLES.indexOf(String(role||'').toLowerCase()) !== -1; }
+var PERMISSIONS = {
+  cfo: 'all',
+  ceo: [
+    'dashboard',
+    'clients_list','payments','attendance_kids','recalc',
+    'employees','timesheet_staff','vacations','sick_leaves',
+    'calendar','vacation_schedule',
+    'analytics_clients','analytics_hr',
+    'opex','categories','salary','overview_analytics',
+    'activities','activities-view','activities-edit',
+    'predmetnyky',
+    'attendance-view','attendance-edit',
+    'export-payments',
+    'client_birthdays',
+    'card-employee-info',
+    'card-employee-salary-button','card-employee-vacation-button','card-employee-sick-button',
+    'card-employee-salary-tab','card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract','card-child-fees',
+    'card-child-vacations','card-child-payments','card-child-history',
+    'card-child-notes','card-child-health',
+    'finance','medical','salary-mgmt','hr-actions'
+  ],
+  cco: [
+    'dashboard',
+    'clients_list','payments','attendance_kids','recalc',
+    'employees','timesheet_staff','vacations','sick_leaves',
+    'calendar','vacation_schedule',
+    'analytics_clients','analytics_hr',
+    'opex','categories','salary','overview_analytics',
+    'activities','activities-view','activities-edit',
+    'predmetnyky',
+    'attendance-view','attendance-edit',
+    'export-payments',
+    'client_birthdays',
+    'card-employee-info',
+    'card-employee-salary-button','card-employee-vacation-button','card-employee-sick-button',
+    'card-employee-salary-tab','card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract','card-child-fees',
+    'card-child-vacations','card-child-payments','card-child-history',
+    'card-child-notes','card-child-health',
+    'finance','medical','salary-mgmt','hr-actions'
+  ],
+  coo: [
+    'dashboard',
+    'clients_list','payments','attendance_kids','recalc',
+    'employees','timesheet_staff','vacations','sick_leaves',
+    'calendar','vacation_schedule',
+    'analytics_clients','analytics_hr',
+    'opex','categories','salary','overview_analytics',
+    'activities','activities-view','activities-edit',
+    'predmetnyky',
+    'attendance-view','attendance-edit',
+    'export-payments',
+    'client_birthdays',
+    'card-employee-info',
+    'card-employee-salary-button','card-employee-vacation-button','card-employee-sick-button',
+    'card-employee-salary-tab','card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract','card-child-fees',
+    'card-child-vacations','card-child-payments','card-child-history',
+    'card-child-notes','card-child-health',
+    'finance','medical','hr-actions'
+  ],
+  rnd_director: [
+    /*R&D-opex*/ 'opex',
+    /*R&D+*/ 'card-child-development','card-child-health','activities-edit','attendance-edit',
+    'dashboard',
+    'clients_list','attendance_kids',
+    'employees','timesheet_staff','vacations','sick_leaves',
+    'calendar','vacation_schedule',
+    'analytics_hr',
+    'activities','activities-view',
+    'predmetnyky',
+    'attendance-view',
+    'client_birthdays',
+    'card-employee-info',
+    'card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract',
+    'card-child-vacations','card-child-notes'
+  ],
+  hr_trainer: [
+    'dashboard',
+    'clients_list','attendance_kids',
+    'employees','timesheet_staff','vacations','sick_leaves',
+    'calendar','vacation_schedule',
+    'analytics_hr',
+    'activities','activities-view',
+    'predmetnyky',
+    'attendance-view',
+    'client_birthdays',
+    'card-employee-info',
+    'card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract',
+    'card-child-vacations','card-child-notes'
+  ],
+  legal: [
+    'dashboard',
+    'clients_list','payments','attendance_kids',
+    'employees','timesheet_staff',
+    'calendar',
+    'client_birthdays',
+    'card-employee-info',
+    'card-child-banner','card-child-contract',
+    'card-child-vacations','card-child-payments','card-child-history',
+    'card-child-notes',
+    'finance'
+  ],
+  hr: 'all',
+  // v7.237: меню директора починається зі «Списку дітей». Прибрано з САМОЇ
+  // матриці (а не лише з видимості): dashboard, tasks, analytics_clients,
+  // analytics_hr — інакше пункт зникав із сайдбару, але сторінка лишалась
+  // доступною за прямим посиланням і через #hash.
+  director: [
+    'clients_list','payments','attendance_kids',
+    'employees','timesheet_staff','vacations','sick_leaves',
+    'calendar','vacation_schedule',
+    'opex','salary',   // v7.238: без categories і overview_analytics
+    'activities','activities-view','activities-edit',
+    'predmetnyky',
+    'attendance-view','attendance-edit',
+    'export-payments',
+    'client_birthdays',
+    'card-employee-info',
+    'card-employee-salary-button','card-employee-vacation-button','card-employee-sick-button',
+    'card-employee-salary-tab','card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract','card-child-fees',
+    'card-child-vacations','card-child-payments','card-child-history',
+    'card-child-notes','card-child-health',
+    'finance','medical','hr-actions',
+    'invoices'
+  ],
+  nurse: [                                                          // v7.215: без dashboard (доробка v7.204)
+    'clients_list','attendance_kids',
+    'employees','vacations','sick_leaves',
+    'calendar','vacation_schedule',
+    'medical',
+    'card-employee-info',
+    'card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract','card-child-vacations',
+    'card-child-notes','card-child-health'
+  ],
+  vyhovatel: ['activities','predmetnyky','attendance-view','attendance-edit','clients_list','card-child-development']   // v7.214: +predmetnyky (шкільна вихователька веде свій клас)
+};
+(function(){
+  ['ceo','cco','coo','rnd_director','hr_trainer','legal'].forEach(function(r){
+    if (Array.isArray(PERMISSIONS[r])){ PERMISSIONS[r].push('tasks'); PERMISSIONS[r].push('tasks-create'); }
+  });
+  PERMISSIONS.cmo = ['dashboard','tasks','tasks-create'];
+})();
+
+function applyRoleVisibility(){
+  if (!S || !S.user || !S.user.role) return;
+  var role = String(S.user.role || '').toLowerCase().trim();
+  var allowed = PERMISSIONS[role];
+  document.querySelectorAll('[data-permission]').forEach(function(el){
+    var perm = el.dataset.permission;
+    var visible = (allowed === 'all') || (Array.isArray(allowed) && allowed.indexOf(perm) !== -1);
+    el.style.display = visible ? '' : 'none';
+  });
+  var _isNetFCRC = (typeof isNetworkRole === 'function' && isNetworkRole(role));
+  var _fcEl = document.getElementById('navFillControl'); if (_fcEl) _fcEl.style.display = _isNetFCRC ? '' : 'none';
+  var _rcEl = document.getElementById('navReconcile');   if (_rcEl) _rcEl.style.display = _isNetFCRC ? '' : 'none';
+  var _srEl = document.getElementById('navSalaryRecon'); if (_srEl) _srEl.style.display = _isNetFCRC ? '' : 'none';
+  // v7.239: блок v6.99 прибрано. Він ховав у director dashboard/tasks/analytics_*/
+  // categories/overview_analytics, яких із v7.237–v7.238 немає в самій матриці.
+  // Подвійна логіка (матриця + окремий список приховувань) і була причиною того,
+  // що пункт зникав із меню, а сторінка лишалась доступною за посиланням.
+  // Єдине джерело прав — PERMISSIONS.
+  document.querySelectorAll('[data-section]').forEach(function(section){
+    var name = section.dataset.section;
+    var items = document.querySelectorAll('[data-permission][data-parent="' + name + '"]');
+    var any = false;
+    items.forEach(function(it){ if (it.style.display !== 'none') any = true; });
+    section.style.display = any ? '' : 'none';
+  });
+}
+
+function hasPerm(p){
+  if (!S || !S.user || !S.user.role) return false;
+  var r = String(S.user.role || '').toLowerCase().trim();
+  var allowed = PERMISSIONS[r];
+  if (allowed === 'all') return true;
+  return Array.isArray(allowed) && allowed.indexOf(p) !== -1;
+}
+
+function goPerm(perm){
+  // v7.237: перехід тільки з правом (див. index.html).
+  if (typeof hasPerm === 'function' && !hasPerm(perm)) return;
+  var items = document.querySelectorAll('[data-permission="' + perm + '"]');
+  var target = items[0] && items[0].dataset.permPage;
+  if (target === CURRENT_PAGE) return;
+  var targetFile = target === 'clients'    ? 'clients.html'
+                 : target === 'opex'       ? 'opex.html'
+                 : target === 'categories' ? 'categories.html'
+                 : target === 'salary'     ? 'salary.html'
+                 : target === 'activities' ? 'activities.html'
+                 : target === 'predmetnyky'? 'predmetnyky.html'
+                 : target === 'analytics'  ? 'analytics.html'
+                 : 'index.html';
+  location.href = targetFile + '#' + perm;
+}
+
+function roleLabel(role){
+  return ({
+    hr:'CFO', cfo:'CFO', ceo:'CEO', cco:'CCO', coo:'COO',
+    rnd_director:'R&D Director', hr_trainer:'L&D', legal:'Legal', cmo:'CMO',
+    director:'Директор', nurse:'Медсестра'
+  })[String(role||'').toLowerCase()] || role;
+}
+
+function avatarText(role){
+  return ({
+    hr:'CFO', cfo:'CFO', ceo:'CEO', cco:'CCO', coo:'COO',
+    rnd_director:'R&D', hr_trainer:'L&D', legal:'Lg', cmo:'CMO',
+    director:'Д', nurse:'М'
+  })[String(role||'').toLowerCase()] || '?';
+}
+
+function locLabel(){
+  if (!S.user) return '';
+  if (isNetworkRole(S.user.role)) return 'Всі локації';
+  return S.user.loc || '';
+}
+
+function updUserUI(){
+  if (!S.user) return;
+  var r = S.user.role;
+  $('uName').textContent   = roleLabel(r);
+  $('uLoc').textContent    = locLabel();
+  $('uAvatar').textContent = avatarText(r);
+  applyRoleVisibility();
+}
+
+function toggleSidebar(){ var s=$('sidebar'); if(s) s.classList.toggle('open'); }
+// Підсвітка поточного пункту меню.
+function markActiveNav(){
+  document.querySelectorAll('.nav-item').forEach(function(el){ el.classList.remove('active'); });
+  var el = document.querySelector('.nav-item[data-permission="meals"]');
+  if (el) el.classList.add('active');
+}
+// Гейт за правом: без 'meals' сторінка не відкривається навіть за прямим посиланням.
+// Кому дозволено «Харчування». Дзеркалить правило показу пункту меню (v7.105):
+// матриця дає 'meals' лише cfo/hr ('all'), але сніпет v7.105 показує пункт усім
+// мережевим ролям, а директорці — якщо в її локації є каталог харчування.
+// Гейт мусить збігатися з меню, інакше ceo відкривав би пункт і вилітав звідси.
+// Для директорки остаточний фільтр робить сама сторінка: список шкіл звужується
+// до її локації, і без каталогу вона бачить «Немає доступних шкіл».
+function mealsAllowed(){
+  var r = String((S.user && S.user.role) || '').toLowerCase().trim();
+  if (hasPerm('meals')) return true;
+  if (isNetworkRole(r)) return true;
+  if (r === 'director')  return true;
+  return false;
+}
+function mealsPermGate(){
+  if (mealsAllowed()) return true;
+  location.replace('clients.html');
+  return false;
+}
+
 function readSession(){ try{ var s=JSON.parse(localStorage.getItem(SESSION_KEY)||'null');
   if(!s||!s.user||!s.t) return null; if(typeof s.user.role!=='string') return null; if(Date.now()-s.t>SESSION_TTL_MS) return null;
   s.user.role=String(s.user.role||'').toLowerCase().trim();
@@ -196,6 +645,8 @@ function markKey(child,date,itemId){ return child+'||'+date+'||'+itemId; }
 async function init(){
   try{
     S.user=readSession(); if(!S.user){ goLogin(); return; }
+    if(!mealsPermGate()) return;               // v7.240: право 'meals' обовʼязкове
+    updUserUI(); markActiveNav();              // v7.240: роль/локація в сайдбарі + активний пункт
     var now=new Date(); S.y=now.getFullYear(); S.m=now.getMonth()+1;
     document.getElementById('mLbl').textContent=MONTHS[S.m-1]+' '+S.y;   // місяць видно одразу
     wireTop();
@@ -418,6 +869,44 @@ function closeModal(){ document.getElementById('modal').classList.remove('show')
 document.getElementById('modal').addEventListener('click',function(e){ if(e.target.id==='modal') closeModal(); });
 
 init();
+</script>
+<script>
+/* v7.105: пункт «Харчування» — CFO/мережеві завжди; директор — лише якщо в локації є каталог харчування (cpm7). */
+(function(){
+  var NET=['hr','cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo'];
+  var MEALS_URL='https://script.google.com/macros/s/AKfycbyTSUVlaN4-PpXe47zCSmhVs0Qxy1FDXG_XsB4zcKNpqBxdhDtS9ibM4YFGkGjmPQDFWQ/exec';
+  function _revealMealsMenu(){
+    var el=document.querySelector('[data-perm-page="meals"]'); if(!el) return;
+    var u=(window.S&&S.user)||null; if(!u){ el.style.display='none'; return; }
+    var role=String(u.role||'').toLowerCase();
+    if(NET.indexOf(role)!==-1){ el.style.display=''; return; }
+    var loc=String(u.origLoc||u.loc||'').trim(); if(!loc){ el.style.display='none'; return; }
+    fetch(MEALS_URL+'?action=getMealCatalog&loc='+encodeURIComponent(loc),{redirect:'follow'})
+      .then(function(r){return r.json();})
+      .then(function(j){ el.style.display=(j&&j.items&&j.items.length)?'':'none'; })
+      .catch(function(){ el.style.display='none'; });
+  }
+  window._revealMealsMenu=_revealMealsMenu;
+  if(typeof applyRoleVisibility==='function'){ var _o=applyRoleVisibility; applyRoleVisibility=function(){ var r=_o.apply(this,arguments); try{_revealMealsMenu();}catch(e){} return r; }; }
+  window.addEventListener('load', function(){ setTimeout(_revealMealsMenu, 1200); });
+})();
+</script>
+<script>
+/* v7.152: пункт «Ліди» — мережеві ролі + директорка; решті не показуємо. */
+(function(){
+  var ALLOW=['hr','cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo'];   // v7.237: без director
+  function reveal(){
+    var el=document.getElementById('navLeads'); if(!el) return;
+    var u=(window.S&&S.user)||null; if(!u){ el.style.display='none'; return; }
+    el.style.display = ALLOW.indexOf(String(u.role||'').toLowerCase().trim())!==-1 ? '' : 'none';
+  }
+  window._revealLeadsMenu=reveal;
+  if(typeof applyRoleVisibility==='function'){
+    var _o=applyRoleVisibility;
+    applyRoleVisibility=function(){ var r=_o.apply(this,arguments); try{reveal();}catch(e){} return r; };
+  }
+  window.addEventListener('load', function(){ setTimeout(reveal, 600); });
+})();
 </script>
 </body>
 </html>
