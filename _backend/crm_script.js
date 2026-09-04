@@ -1,5 +1,15 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.245
+// m.kids CRM — Google Apps Script v7.246
+// v7.246: блок «…вибули» більше не група. У Житомирі заголовок «Preschool
+//         вибули» на 13 випускників читався як жива група: ростер показував 82
+//         дитини замість 69, група лізла у випадайку «Додаткових», і на
+//         випускника можна було поставити відмітку.
+//         _isGraduatedHeader (/вибул|випускник/i) — службовий заголовок, блок
+//         під ним ігнорується ЦІЛКОМ. Це навмисно суворіше за «вільних місць»:
+//         там під заголовком колись знайшлась справжня дитина, тож блок не
+//         ковтаємо; тут навпаки — увесь блок історичний.
+//         Прогін по всіх 16 локаціях: такий блок є рівно один (Житомир, −13);
+//         решта 15 локацій не змінюються ні на дитину.
 // v7.245: ОДНА НАЗВА ГРУПИ НА ВСІХ ЕКРАНАХ. Табель і додаткові читають агрегат і
 //         показували нормалізований тип («Study-ki 3-4 Ольга і Соломія»), а
 //         предметники беруть групи з карток і показували «Пізнайки» — три екрани
@@ -5041,7 +5051,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.245', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.246', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -7729,6 +7739,17 @@ var FREESEATS_DROP_BLOCK = 0;   // v7.218: 0 = лише заголовок, 1 = 
 function _isFreeSeatsHeader(nameCell){
   return /вільн/i.test(String(nameCell || ''));
 }
+// (1б) v7.246: заголовок «…вибули» / «…випускники» — службовий, як «вільних
+//      місць», але блок під ним ігнорується ЦІЛКОМ. Це діти, що вже пішли:
+//      у Житомирі блок «Preschool вибули» на 13 випускників рахувався живою
+//      групою — ростер показував 82 замість 69, і на випускника можна було
+//      поставити відмітку в «Додаткових».
+//      Відрізняється від «вільних місць» саме режимом: там під заголовком
+//      знайшлась справжня дитина, тож блок не ковтаємо; тут навпаки — весь блок
+//      історичний, і його треба прибрати повністю.
+function _isGraduatedHeader(nameCell){
+  return /вибул|випускник/i.test(String(nameCell || ''));
+}
 // (2) ПІБ із самих цифр («12», «8», «0») — не дитина, а залишок місць.
 function _isNumericName(nameCell){
   return /^\s*\d+([.,]\d+)?\s*$/.test(String(nameCell || ''));
@@ -7768,6 +7789,12 @@ function parsePaymentSheet(data, monthCol, contractCol, cpm, loc, typ, closeOnBl
     // v7.217 (2): рядок-число — не дитина й не заголовок, просто пропускаємо.
     if (_filters && _isNumericName(nameCell)) continue;
     if (isGroupHeaderRow(row, monthCol)) {
+      // v7.246: «…вибули» — блок випускників, ігноруємо цілком.
+      if (_filters && _isGraduatedHeader(nameCell)){
+        curGroup = null;
+        _inServiceBlock = true;
+        continue;
+      }
       // v7.217 (1): «…вільних місць N» — службовий лічильник. Група не
       // створюється, блок під ним ігнорується до наступного заголовка.
       if (_filters && _isFreeSeatsHeader(nameCell)){
