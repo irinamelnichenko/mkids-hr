@@ -1602,12 +1602,14 @@ var PERMISSIONS = {
     // активності — не бачить (немає 'activities')
   ],
   hr: 'all',
+  // v7.237: меню директора починається зі «Списку дітей». Прибрано з САМОЇ
+  // матриці (а не лише з видимості): dashboard, tasks, analytics_clients,
+  // analytics_hr — інакше пункт зникав із сайдбару, але сторінка лишалась
+  // доступною за прямим посиланням і через #hash.
   director: [
-    'dashboard',
     'clients_list','payments','attendance_kids',
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
-    'analytics_clients','analytics_hr',
     'opex','categories','salary','overview_analytics',
     'activities','activities-view','activities-edit',
     'predmetnyky',
@@ -1640,7 +1642,6 @@ var PERMISSIONS = {
   ['ceo','cco','coo','rnd_director','hr_trainer','legal'].forEach(function(r){
     if (Array.isArray(PERMISSIONS[r])){ PERMISSIONS[r].push('tasks'); PERMISSIONS[r].push('tasks-create'); }
   });
-  if (Array.isArray(PERMISSIONS.director)) PERMISSIONS.director.push('tasks');
   PERMISSIONS.cmo = ['dashboard','tasks','tasks-create'];
 })();
 
@@ -1711,6 +1712,8 @@ function hasPerm(p){
 }
 
 function goPerm(perm){
+  // v7.237: перехід тільки з правом (див. index.html).
+  if (typeof hasPerm === 'function' && !hasPerm(perm)) return;
   var items = document.querySelectorAll('[data-permission="' + perm + '"]');
   var target = items[0] && items[0].dataset.permPage;
   if (target === CURRENT_PAGE) return;
@@ -5749,7 +5752,7 @@ if (navigator.onLine && typeof replayOfflineQueue === 'function'){
 <script>
 /* v7.152: пункт «Ліди» — мережеві ролі + директорка; решті не показуємо. */
 (function(){
-  var ALLOW=['hr','cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo','director'];
+  var ALLOW=['hr','cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo'];   // v7.237: без director
   function reveal(){
     var el=document.getElementById('navLeads'); if(!el) return;
     var u=(window.S&&S.user)||null; if(!u){ el.style.display='none'; return; }

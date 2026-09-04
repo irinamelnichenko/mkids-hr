@@ -2494,7 +2494,7 @@ if ('serviceWorker' in navigator) {
 <script>
 /* v7.152: пункт «Ліди» — мережеві ролі + директорка; решті не показуємо. */
 (function(){
-  var ALLOW=['hr','cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo','director'];
+  var ALLOW=['hr','cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo'];   // v7.237: без director
   function reveal(){
     var el=document.getElementById('navLeads'); if(!el) return;
     var u=(window.S&&S.user)||null; if(!u){ el.style.display='none'; return; }

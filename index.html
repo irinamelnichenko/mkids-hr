@@ -1679,12 +1679,14 @@ const PERMISSIONS = {
   // ── Локаційні ролі (стара система паролів — поки лишаються) ──────
   hr: 'all',                                                   // legacy 'hr2024' — приберемо в Кроку 7
 
+  // v7.237: меню директора починається зі «Списку дітей». Прибрано з САМОЇ
+  // матриці (а не лише з видимості): dashboard, tasks, analytics_clients,
+  // analytics_hr — інакше пункт зникав із сайдбару, але сторінка лишалась
+  // доступною за прямим посиланням і через #hash.
   director: [
-    'dashboard',
     'clients_list','payments','attendance_kids',
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
-    'analytics_clients','analytics_hr',
     'opex','categories','salary','overview_analytics',
     'activities','activities-view','activities-edit',
     'predmetnyky',
@@ -1718,7 +1720,6 @@ const PERMISSIONS = {
   ['ceo','cco','coo','rnd_director','hr_trainer','legal'].forEach(function(r){
     if (Array.isArray(PERMISSIONS[r])){ PERMISSIONS[r].push('tasks'); PERMISSIONS[r].push('tasks-create'); }
   });
-  if (Array.isArray(PERMISSIONS.director)) PERMISSIONS.director.push('tasks');
   if (Array.isArray(PERMISSIONS.director)) PERMISSIONS.director.push('loccard'); // v6.45: директор бачить картку своєї локації
   PERMISSIONS.cmo = ['dashboard','tasks','tasks-create'];
 })();
@@ -2127,6 +2128,9 @@ async function postToScript(action, body){
 }
 
 function goPerm(perm){
+  // v7.237: перехід тільки з правом. Раніше пункт лише ховався, а goPerm
+  // спрацьовував із будь-якого місця (hash, консоль, стара вкладка).
+  if (typeof hasPerm === 'function' && !hasPerm(perm)) return;
   const items = document.querySelectorAll('[data-permission="' + perm + '"]');
   const target = items[0] && items[0].dataset.permPage;
   if (target === CURRENT_PAGE) {
@@ -6140,7 +6144,7 @@ if ('serviceWorker' in navigator) {
 <script>
 /* v7.152: пункт «Ліди» — мережеві ролі + директорка; решті не показуємо. */
 (function(){
-  var ALLOW=['hr','cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo','director'];
+  var ALLOW=['hr','cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo'];   // v7.237: без director
   function reveal(){
     var el=document.getElementById('navLeads'); if(!el) return;
     var u=(window.S&&S.user)||null; if(!u){ el.style.display='none'; return; }

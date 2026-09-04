@@ -91,6 +91,20 @@ td.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
 </style>
 </head>
 <body>
+<script>
+/* v7.237 ВІДСІЧЕННЯ ПРЯМОГО ПЕРЕХОДУ. Сайдбар ховає пункт, але сама сторінка
+   лишалась доступною за посиланням — тепер роль без права одразу вилітає на
+   «Список дітей». Виконується ДО рендеру, щоб контент не блимав. */
+(function(){
+  var DENY = ['director','nurse','vyhovatel'];
+  try {
+    var s = JSON.parse(localStorage.getItem('mkids_session') || 'null');
+    var r = String((s && s.user && s.user.role) || '').toLowerCase().trim();
+    if (r && DENY.indexOf(r) !== -1) { location.replace('clients.html'); }
+  } catch(e){}
+})();
+</script>
+
 <div id="app">
   <nav class="sidebar" id="sidebar">
     <div class="sb-brand">
@@ -788,7 +802,7 @@ function doApplyNeeded(){
 <script>
 /* v7.152: пункт «Ліди» — мережеві ролі + директорка; решті не показуємо. */
 (function(){
-  var ALLOW=['hr','cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo','director'];
+  var ALLOW=['hr','cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo'];   // v7.237: без director
   function reveal(){
     var el=document.getElementById('navLeads'); if(!el) return;
     var u=(window.S&&S.user)||null; if(!u){ el.style.display='none'; return; }
