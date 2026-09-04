@@ -1656,7 +1656,13 @@ console.log('[mkids] permissions build:', PERMISSIONS_BUILD_VERSION);
 // директорці з каталогом харчування (асинхронний fetch на кожній сторінці).
 var MEALS_LOC = 'Школа 228';
 function canSeeMeals(){
-  var u = (window.S && S.user) || null; if (!u) return false;
+  // v7.242: НЕ через window.S — в index.html стан оголошено як `const S`, а
+  // const/let не чіпляються до window, тож window.S там undefined і пункт
+  // ховався від усіх, зокрема від CFO. Пряме звертання до S бачить і const,
+  // і var (script-level lexical scope спільний для всіх <script> сторінки).
+  var u = null;
+  try { u = (typeof S !== 'undefined' && S && S.user) ? S.user : null; } catch(e){ u = null; }
+  if (!u) return false;
   var r = String(u.role || '').toLowerCase().trim();
   if (r === 'cfo') return true;                       // hr теж 'all', але харчування не бачить
   if (r === 'director') return String(u.origLoc || u.loc || '').trim() === MEALS_LOC;
@@ -5754,7 +5760,8 @@ if (navigator.onLine && typeof replayOfflineQueue === 'function'){
   var ALLOW=['hr','cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo'];   // v7.237: без director
   function reveal(){
     var el=document.getElementById('navLeads'); if(!el) return;
-    var u=(window.S&&S.user)||null; if(!u){ el.style.display='none'; return; }
+    var u=null; try{ u=(typeof S!=='undefined'&&S&&S.user)?S.user:null; }catch(e){}   // v7.242: див. canSeeMeals
+    if(!u){ el.style.display='none'; return; }
     el.style.display = ALLOW.indexOf(String(u.role||'').toLowerCase().trim())!==-1 ? '' : 'none';
   }
   window._revealLeadsMenu=reveal;
