@@ -1,5 +1,18 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.236
+// m.kids CRM — Google Apps Script v7.245
+// v7.245: ОДНА НАЗВА ГРУПИ НА ВСІХ ЕКРАНАХ. Табель і додаткові читають агрегат і
+//         показували нормалізований тип («Study-ki 3-4 Ольга і Соломія»), а
+//         предметники беруть групи з карток і показували «Пізнайки» — три екрани
+//         звали одну групу по-різному. Тепер у колонку «Група» агрегат пише
+//         НАЗВУ З ФАЙЛУ (rawGroup); нормалізований ключ лишається всередині
+//         parsePaymentSheet і далі тримає внутрішню логіку.
+//   • _normalizeGroupType розпізнає й українські назви (мама+я, малюки,
+//     карапузи, бешкетники, пізнайки, мандрівники, дослідники, розумники).
+//     Без цього після чистки назв від імен вихователів латинського токена не
+//     лишалось, тип не визначався, і норма зі стелею мовчки ставали нульовими.
+//   • aggregatePayments скидає кеш getPayments (_bustPayCache). Кеш живе 120с і
+//     не інвалідувався при перебудові — після агрегації екрани ще дві хвилини
+//     показували старі групи.
 // v7.236: НОРМИ ПРЕДМЕТНИКІВ РІВНЯ ЛОКАЦІЇ. Матриця була одна на регіон
 //         (Київ/Львів), тож дві локації одного міста не могли мати різні норми.
 //         Новий аркуш CRM «Predmetnyky_Norms_Loc»: Локація | Предмет | Група |
@@ -5028,7 +5041,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.236', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.245', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -7547,9 +7560,15 @@ function aggregatePayments() {
           else if (totalNoEntry > br)  status = 'over';
           else if (totalNoEntry >= br) status = 'paid';
           else                         status = 'debt';
+          // v7.245: у колонку «Група» пишемо НАЗВУ З ФАЙЛУ (rawGroup), а не
+          // нормалізований тип. Досі табель і додаткові показували «Study-ki
+          // 3-4 Ольга і Соломія», а предметники (беруть групи з карток) —
+          // «Пізнайки»: три екрани про ту саму групу називали її по-різному.
+          // Нормалізований ключ лишається в g.group і далі тримає внутрішню
+          // логіку; сира назва їде і в «Група», і в «Група як у файлі».
           allRows.push([
             loc, dir, typ,
-            g.group, g.teacher, ch.name,
+            (g.rawGroup || g.group), g.teacher, ch.name,
             fs, fv, fe, total, bs, bd, br,
             status, monthName, updateStr,
             ch.contractDate || '',
@@ -7574,6 +7593,10 @@ function aggregatePayments() {
     return {ok:false, error:String(pubErr && pubErr.message || pubErr),
             rows:allRows.length, errors:errors, aborted:true, month:monthName};
   }
+  // v7.245: getPayments кешує відповідь на 120с у ScriptCache, а агрегація цей
+  // кеш не скидала — після перебудови екрани ще дві хвилини показували старі
+  // групи, і це виглядало як «агрегат не оновився».
+  _bustPayCache();
   Logger.log('Done: ' + allRows.length + ' rows, ' + errors.length + ' errors');
   return {ok:true, rows:allRows.length, errors:errors, month:monthName, updated:updateStr,
           prevRows:pub.prevRows, backupSheet:pub.backupSheet};
@@ -25263,6 +25286,15 @@ function _normalizeGroupType(grp){
   if (/find[\-\s]?iki/i.test(s))              return 'Find';
   if (/study[\-\s]?ki/i.test(s))              return 'Study';
   if (/preschool|шкільн|підготов/i.test(s))   return 'Preschool';
+  // v7.245: українські назви груп — дзеркало normalizeGroupName. Потрібно, бо
+  // після чистки назв («Пізнайки 3-4 Ольга і Соломія» → «Пізнайки») латинського
+  // токена в назві не лишилось, і тип не визначався: норма й стеля мовчки
+  // ставали нульовими.
+  if (/мама[\s\+]*я/i.test(s))                return 'miniBaby';
+  if (/малюк|карапуз/i.test(s))               return 'Baby';
+  if (/бешкетн/i.test(s))                     return 'Find';
+  if (/пізнайк|мандрівн|дослідн/i.test(s))    return 'Study';
+  if (/розумник/i.test(s))                    return 'Preschool';
   return null;
 }
 
