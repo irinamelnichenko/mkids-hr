@@ -1,5 +1,20 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.235
+// m.kids CRM — Google Apps Script v7.236
+// v7.236: НОРМИ ПРЕДМЕТНИКІВ РІВНЯ ЛОКАЦІЇ. Матриця була одна на регіон
+//         (Київ/Львів), тож дві локації одного міста не могли мати різні норми.
+//         Новий аркуш CRM «Predmetnyky_Norms_Loc»: Локація | Предмет | Група |
+//         Норма. «Група» — повна назва («Пізнайки 3-4»), або тип групи, або «*».
+//         Пошук: назва → тип → «*» → регіональна матриця (фолбек незмінний, тож
+//         локації без власних рядків працюють як раніше).
+//         Форма «повна назва» потрібна принципово: у Манхетені «Пізнайки 3-4»
+//         (10), «Мандрівники 3-4» (15) і «Дослідники 4-5» (15) — усі тип Study,
+//         типом ці норми не виражаються.
+//   • Нові предмети: Спорт, Польська (+ нормалізація сирих назв).
+//   • Чомусики додаються у випадайку ЛИШЕ локаціям типу «Садочок» (було: будь-якій
+//     не-школі з непорожнім каталогом) — інакше вони заїхали б у Благо/Житомир,
+//     щойно там з'явиться каталог.
+//   • diagPredLocNorms (GET), savePredLocNorms і seedPredCatalog (POST, dryRun за
+//     замовчуванням, запис — confirm 'YES_NORMS' / 'YES_CATALOG').
 // v7.235: exportAttendanceToPayments — режим force (клітинка = сума відміток).
 //         Привід: у Пущі експорт серпневих відміток у вересневий «Бюджет доп.»
 //         відпрацював (журнал: 25 дітей, 45 500 ₴), а потім суми стерли прямо в
@@ -5013,7 +5028,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.235', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.236', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -5079,6 +5094,7 @@ function doGet(e) {
     else if (action === 'diagPayHeaders')             result = diagPayHeaders(e.parameter || {});                       // v7.221 read-only: СИРІ заголовки груп із Payment
     else if (action === 'dryRunRawGroups')            result = dryRunRawGroups(e.parameter || {});                      // v7.222 read-only: що змінить перехід синку на сиру назву
     else if (action === 'diagPredNorms')              result = diagPredNorms(e.parameter || {});                        // v7.230 read-only: обидва блоки норм + перевищення
+    else if (action === 'diagPredLocNorms')           result = diagPredLocNorms(e.parameter || {});                     // v7.236 read-only: норми рівня локації
     else if (action === 'diagPayHeaderOverrides')     result = diagPayHeaderOverrides(e.parameter || {});               // v7.234 read-only: реєстр явних заголовків Payment
     else if (action === 'diagPredSubjects')           result = diagPredSubjects(e.parameter || {});                     // v7.231 read-only: предмети кожної локації з каталогу
     else if (action === 'purgeAutoDraftCards')        result = purgeAutoDraftCards({names:String((e.parameter&&e.parameter.names)||'').split('|').filter(String), loc:(e.parameter&&e.parameter.loc)||'', createdPrefix:(e.parameter&&e.parameter.createdPrefix)||'', dryRun:true});   // v7.209 GET = ЗАВЖДИ dryRun, видалення лише POST-ом
@@ -5225,6 +5241,8 @@ function doPost(e) {
     else if (body.action === 'repairPredmetnykyLessons')    result = repairPredmetnykyLessons(Number(body.actorId || 0), body);          // v7.149 дедуп + перенумерація
     else if (body.action === 'exportPredmetnykyToSalary')   result = exportPredmetnykyToSalary(body || {});
     else if (body.action === 'purgeAutoDraftCards')         result = purgeAutoDraftCards(body || {});  // v7.209
+    else if (body.action === 'savePredLocNorms')       result = savePredLocNorms(body || {});         // v7.236 норми локації (dryRun за замовч.)
+    else if (body.action === 'seedPredCatalog')        result = seedPredCatalog(body || {});          // v7.236 сівба каталогу предметників (dryRun за замовч.)
     else if (body.action === 'savePayHeaderOverrides') result = savePayHeaderOverrides(body || {});   // v7.234 реєстр заголовків (dryRun за замовч.)
     else if (body.action === 'purgePaymentGhostRows')  result = purgePaymentGhostRows(body || {});   // v7.233 рядки-привиди в Payment (dryRun за замовч.)
     else if (body.action === 'renamePayGroupHeader')        result = renamePayGroupHeader(body || {}); // v7.227
@@ -6123,6 +6141,137 @@ function diagPredNorms(params){
     return {ok:true, readOnly:true, forMonth:(month + '/' + year),
             usesOldBlock:_predNormsUseOld(ymd), combos:Object.keys(byKey).length,
             overCount:over.length, over:over, rows:rows};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.236: норми рівня локації + сівба каталогу предметників.
+// READ:  GET  ?action=diagPredLocNorms[&loc=]
+// WRITE: POST {action:'savePredLocNorms', loc, rows:[{subject,group,norm}],
+//              mode:'replace'|'add', dryRun, confirm:'YES_NORMS'}
+//        POST {action:'seedPredCatalog', loc, subjects:[], rate?, dryRun,
+//              confirm:'YES_CATALOG'}
+// mode 'replace' — рядки цієї локації замінюються переданим списком.
+// seedPredCatalog додає ЛИШЕ відсутні позиції; наявні не чіпає (ставку не
+// перетирає). rate за замовчуванням 0 — ставку ставити окремо.
+// ═══════════════════════════════════════════════════════════════════════════
+function diagPredLocNorms(params){
+  params = params || {};
+  var only = String(params.loc || '').trim();
+  try {
+    var sh = _getPredLocNormsSheet(false);
+    var rows = [];
+    if (sh && sh.getLastRow() > 1){
+      var v = sh.getRange(2, 1, sh.getLastRow() - 1, PRED_NORMS_LOC_HEADER.length).getValues();
+      for (var i = 0; i < v.length; i++){
+        var loc = trim(String(v[i][0] || ''));
+        if (!loc || (only && loc !== only)) continue;
+        rows.push({row:i + 2, loc:loc, subject:trim(String(v[i][1] || '')),
+                   group:trim(String(v[i][2] || '')), norm:Number(v[i][3]) || 0});
+      }
+    }
+    var byLoc = {};
+    rows.forEach(function(r){ (byLoc[r.loc] = byLoc[r.loc] || []).push(r.subject + ' / ' + r.group + ' = ' + r.norm); });
+    return {ok:true, readOnly:true, tab:PRED_NORMS_LOC_TAB, count:rows.length, rows:rows, byLoc:byLoc};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+function savePredLocNorms(body){
+  body = body || {};
+  var loc    = String(body.loc || '').trim();
+  var rowsIn = body.rows || [];
+  var mode   = String(body.mode || 'replace');
+  var dryRun = (body.dryRun !== false);
+  if (!loc) return {ok:false, error:'loc обовʼязковий'};
+  if (!dryRun && body.confirm !== 'YES_NORMS')
+    return {ok:false, error:'Реальний запис вимагає confirm:"YES_NORMS"'};
+  var bad = [];
+  var want = rowsIn.map(function(r){
+    var subj = trim(String(r.subject || '')), grp = trim(String(r.group || '')), n = Number(r.norm);
+    if (!subj || !grp || !isFinite(n)) bad.push(r);
+    else if (PRED_SUBJECTS.indexOf(subj) === -1) bad.push({subject:subj, why:'предмет поза PRED_SUBJECTS'});
+    return {loc:loc, subject:subj, group:grp, norm:n};
+  });
+  if (bad.length) return {ok:false, error:'Некоректні рядки', bad:bad};
+  try {
+    var sh = _getPredLocNormsSheet(true);
+    var cur = [];
+    if (sh.getLastRow() > 1){
+      var v = sh.getRange(2, 1, sh.getLastRow() - 1, PRED_NORMS_LOC_HEADER.length).getValues();
+      for (var i = 0; i < v.length; i++){
+        var l = trim(String(v[i][0] || ''));
+        if (!l) continue;
+        cur.push({loc:l, subject:trim(String(v[i][1] || '')), group:trim(String(v[i][2] || '')), norm:Number(v[i][3]) || 0});
+      }
+    }
+    var others = cur.filter(function(x){ return x.loc !== loc; });
+    var mine   = cur.filter(function(x){ return x.loc === loc; });
+    var next = (mode === 'replace') ? others.concat(want) : cur.concat(want);
+    var res = {ok:true, dryRun:dryRun, loc:loc, mode:mode,
+               had:mine.length, willHave:want.length, totalRows:next.length,
+               preview:want.map(function(x){ return x.subject + ' / ' + x.group + ' = ' + x.norm; })};
+    if (dryRun) return res;
+    var lock = LockService.getScriptLock();
+    try { lock.waitLock(30000); } catch(_le){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+    try {
+      if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, PRED_NORMS_LOC_HEADER.length).clearContent();
+      if (next.length)
+        sh.getRange(2, 1, next.length, PRED_NORMS_LOC_HEADER.length)
+          .setValues(next.map(function(x){ return [x.loc, x.subject, x.group, x.norm]; }));
+      SpreadsheetApp.flush();
+      _PRED_LOC_NORMS_CACHE = null;
+      _bumpPredVer();
+      res.written = next.length;
+    } finally { try { lock.releaseLock(); } catch(_lr){} }
+    return res;
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+function seedPredCatalog(body){
+  body = body || {};
+  var loc      = String(body.loc || '').trim();
+  var subjects = (body.subjects || []).map(function(s){ return trim(String(s)); }).filter(String);
+  var rate     = (body.rate === undefined || body.rate === null || body.rate === '') ? 0 : Number(body.rate);
+  var dryRun   = (body.dryRun !== false);
+  if (!loc)           return {ok:false, error:'loc обовʼязковий'};
+  if (!subjects.length) return {ok:false, error:'subjects[] обовʼязковий'};
+  if (!isFinite(rate) || rate < 0) return {ok:false, error:'Некоректна ставка'};
+  if (!dryRun && body.confirm !== 'YES_CATALOG')
+    return {ok:false, error:'Реальний запис вимагає confirm:"YES_CATALOG"'};
+  var unknown = subjects.filter(function(s){ return PRED_SUBJECTS.indexOf(s) === -1; });
+  if (unknown.length) return {ok:false, error:'Предмети поза PRED_SUBJECTS', unknown:unknown};
+  try {
+    var have = {};
+    _loadPredCatalog(loc).forEach(function(c){ if (c.subject_norm) have[c.subject_norm] = c; });
+    var toAdd = subjects.filter(function(s){ return !have[s]; });
+    var skip  = subjects.filter(function(s){ return !!have[s]; });
+    var res = {ok:true, dryRun:dryRun, loc:loc, rate:rate,
+               willAdd:toAdd.length, add:toAdd,
+               alreadyThere:skip.map(function(s){ return s + ' (ставка ' + (have[s].rate || 0) + ')'; }),
+               resultingSubjects:null};
+    if (dryRun){
+      var sim = Object.keys(have).concat(toAdd);
+      if (_predLocTyp(loc) === 'Садочок' && sim.indexOf(PRED_UNLIMITED_SUBJ) === -1) sim.push(PRED_UNLIMITED_SUBJ);
+      sim.sort(function(a, b){
+        var ia = PRED_SUBJECTS.indexOf(a); if (ia === -1) ia = 99;
+        var ib = PRED_SUBJECTS.indexOf(b); if (ib === -1) ib = 99;
+        return ia - ib || String(a).localeCompare(String(b), 'uk');
+      });
+      res.resultingSubjects = sim;
+      return res;
+    }
+    var lock = LockService.getScriptLock();
+    try { lock.waitLock(30000); } catch(_le){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+    try {
+      var sh = _getPredmetnyCatalogSheet(true);
+      toAdd.forEach(function(s){
+        var newId = _nextPredmetnyRowId(sh);
+        sh.appendRow([newId, loc, s, rate, '', true]);
+      });
+      SpreadsheetApp.flush();
+      _bumpPredVer();
+      res.added = toAdd.length;
+      res.resultingSubjects = _predSubjectsForLoc(loc);
+    } finally { try { lock.releaseLock(); } catch(_lr){} }
+    return res;
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 
@@ -25046,7 +25195,8 @@ var PRED_LESSONS_HEADER   = ['ID','EmpKey','Location','Group','Subject','Date','
 // Нормалізовані назви предметів для системи норм.
 var PRED_SUBJECTS         = ['Англійська','Музика','Хореограф','Логопед','Психолог','Чомусики',
                              'Німецька','Іспанська','Фізкультура',    // v7.192: предмети школи
-                             'Архітектура','Фітнес','Speaking club']; // v7.195: Школа Осокорки
+                             'Архітектура','Фітнес','Speaking club',  // v7.195: Школа Осокорки
+                             'Спорт','Польська'];                     // v7.236: Благо (Нац.Гвардії, Манхетен)
 var PRED_UNLIMITED_SUBJ   = 'Чомусики';   // норму НЕ перевіряємо
 var PRED_GROUP_TYPES      = ['miniBaby','Baby','Find','Study','Preschool'];
 var PRED_LVIV_LOCATIONS   = ['Кругла','Бігова'];   // все інше → 'Київ'
@@ -25149,6 +25299,12 @@ function _normalizeSubject(raw){
   if (low.indexOf('фітнес')     !== -1) return 'Фітнес';
   if (low.indexOf('фитнес')     !== -1) return 'Фітнес';
   if (low.indexOf('speaking')   !== -1) return 'Speaking club';
+  // v7.236: Благо. «Спорт» — окремий предмет, не синонім фізкультури: у Школі
+  // Осокорки фізкультура й фітнес — різні рядки Salary з різними виконавцями,
+  // тож змішувати їх в один subject_norm не можна.
+  if (low.indexOf('спорт')      !== -1) return 'Спорт';
+  if (low.indexOf('польськ')    !== -1) return 'Польська';
+  if (low.indexOf('польск')     !== -1) return 'Польська';
   return null;
 }
 
@@ -25358,11 +25514,18 @@ function _loadPredNorms(targetYmd){
 // він не мапиться в жоден PRED_GROUP_TYPES, а предмети погодинні. Досі ліміту
 // там і так не виходило (norm=0 через нерозпізнаний тип), але це був побічний
 // ефект нормалізації назви, а не правило. Тепер правило явне.
+// v7.236 ПІДЛОГА 15 — ЛИШЕ ДЛЯ РЕГІОНАЛЬНОЇ МАТРИЦІ. Правило v6.57 підіймало
+// будь-яку ненульову норму щонайменше до 15/міс. Для норм рівня локації це
+// зробило б їх мертвими: Музика 8, Логопед 4, Психолог 4, Англійська 8/10/12 —
+// усі перетворились би на ту саму стелю 15 і нічого не обмежували. Тому норма,
+// задана явно для локації, діє ЯК Є; підлога лишається тільки там, де вона й
+// була — у регіональній матриці (щоб не змінити поведінку 13 інших локацій).
 function _predCeilingFor(loc, subject, group){
   if (subject === PRED_UNLIMITED_SUBJ) return 0;
   if (_predIsSchoolLoc(loc)) return 0;
-  var n = _getPredNormByType(loc, subject, group);
-  return n > 0 ? Math.max(n, 15) : 0;
+  var r = _predNormLookup(loc, subject, group);
+  if (r.norm <= 0) return 0;
+  return (r.src === 'loc') ? r.norm : Math.max(r.norm, 15);
 }
 // v7.231: локація типу «Школа» з реєстру CONFIG. Реюз _vacSchoolLocSet (той самий
 // реєстр + кеш + фолбек на хардкод-список), щоб нова школа підхопилась сама.
@@ -25375,6 +25538,19 @@ function _predIsSchoolLoc(loc){
 // v7.231: предмети локації = АКТИВНІ позиції Предметники_Каталог (нормалізовані).
 // Дзеркало subjectsFor у predmetnyky.html. Чомусики додаємо садкам завжди (свій
 // екран відміток, ліміту немає, каталожного рядка в 9 з 11 садків немає).
+// v7.236: тип локації з реєстру CONFIG ('Садочок' | 'Школа' | 'Управління'),
+// з кешем на виконання — використовується в гарячих циклах.
+var _PRED_LOC_TYP_CACHE = null;
+function _predLocTyp(loc){
+  if (!_PRED_LOC_TYP_CACHE){
+    var m = {};
+    try { (getLocations().data || []).forEach(function(l){ m[trim(String(l.loc || ''))] = trim(String(l.typ || '')); }); }
+    catch(e){ Logger.log('[predLocTyp] ⚠️ %s', e && e.message); }
+    _PRED_LOC_TYP_CACHE = m;
+  }
+  return _PRED_LOC_TYP_CACHE[String(loc || '').trim()] || '';
+}
+
 function _predSubjectsForLoc(loc){
   var l = String(loc || '').trim();
   var seen = {}, out = [];
@@ -25384,9 +25560,12 @@ function _predSubjectsForLoc(loc){
     if (!c.active || !c.subject_norm || seen[c.subject_norm]) continue;
     seen[c.subject_norm] = true; out.push(c.subject_norm);
   }
-  // out.length — щоб «Управління» (Житомир, Благо) з порожнім каталогом не
-  // отримало Чомусики й не виглядало як локація з предметниками.
-  if (out.length && l && !_predIsSchoolLoc(l) && !seen[PRED_UNLIMITED_SUBJ]) out.push(PRED_UNLIMITED_SUBJ);
+  // Чомусики — не каталожна позиція у 9 з 11 садків (свій екран відміток, ліміту
+  // немає), але садок його бачить завжди.
+  // v7.236: ЛИШЕ для типу «Садочок». Раніше умовою було «не школа + непорожній
+  // каталог», і щойно в Благо/Житомира з'явився б каталог, туди б заїхали
+  // Чомусики, яких там немає. Тип беремо з реєстру CONFIG.
+  if (l && _predLocTyp(l) === 'Садочок' && !seen[PRED_UNLIMITED_SUBJ]) out.push(PRED_UNLIMITED_SUBJ);
   out.sort(function(a, b){
     var ia = PRED_SUBJECTS.indexOf(a); if (ia === -1) ia = 99;
     var ib = PRED_SUBJECTS.indexOf(b); if (ib === -1) ib = 99;
@@ -25394,12 +25573,75 @@ function _predSubjectsForLoc(loc){
   });
   return out;
 }
-function _getPredNormByType(loc, subject, group){
+// ═══ v7.236: НОРМИ РІВНЯ ЛОКАЦІЇ (аркуш CRM «Predmetnyky_Norms_Loc») ═══
+// Регіональна матриця (Київ/Львів) лишається як фолбек — локації без власних
+// рядків працюють як працювали (Житомир = Київ).
+// Аркуш: Локація | Предмет | Група | Норма.
+// «Група» — три форми, у порядку спадання пріоритету:
+//   1) ПОВНА назва групи як у картках/файлі («Пізнайки 3-4») — точний матч;
+//   2) тип групи (miniBaby|Baby|Find|Study|Preschool);
+//   3) «*» — будь-яка група локації.
+// Чому потрібна форма (1): у Манхетені «Пізнайки 3-4» (10), «Мандрівники 3-4»
+// (15) і «Дослідники 4-5» (15) — усі тип Study. Типом ці норми не виражаються.
+// Норма 0 = ліміту немає (як і в регіональній матриці).
+var PRED_NORMS_LOC_TAB = 'Predmetnyky_Norms_Loc';
+var PRED_NORMS_LOC_HEADER = ['Локація','Предмет','Група','Норма'];
+var _PRED_LOC_NORMS_CACHE = null;
+function _getPredLocNormsSheet(create){
+  var ss = getCRMSpreadsheet();
+  var sh = ss.getSheetByName(PRED_NORMS_LOC_TAB);
+  if (!sh && create !== false){
+    sh = ss.insertSheet(PRED_NORMS_LOC_TAB);
+    sh.getRange(1, 1, 1, PRED_NORMS_LOC_HEADER.length).setValues([PRED_NORMS_LOC_HEADER]);
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+// → {loc: {subject: {byName:{foldedGroup:норма}, byType:{Study:норма}, any:норма|null}}}
+function _loadPredLocNorms(){
+  if (_PRED_LOC_NORMS_CACHE) return _PRED_LOC_NORMS_CACHE;
+  var out = {};
+  try {
+    var sh = _getPredLocNormsSheet(false);
+    if (sh && sh.getLastRow() > 1){
+      var v = sh.getRange(2, 1, sh.getLastRow() - 1, PRED_NORMS_LOC_HEADER.length).getValues();
+      for (var i = 0; i < v.length; i++){
+        var loc = trim(String(v[i][0] || '')), subj = trim(String(v[i][1] || ''));
+        var grp = trim(String(v[i][2] || '')), raw = v[i][3];
+        if (!loc || !subj || grp === '') continue;
+        if (raw === '' || raw === null) continue;
+        var n = Number(raw); if (!isFinite(n)) continue;
+        var L = out[loc] = out[loc] || {};
+        var S = L[subj] = L[subj] || {byName:{}, byType:{}, any:null};
+        if (grp === '*') S.any = n;
+        else if (PRED_GROUP_TYPES.indexOf(grp) !== -1) S.byType[grp] = n;
+        else S.byName[_nameFold(grp)] = n;
+      }
+    }
+  } catch(e){ Logger.log('[predLocNorms] ⚠️ %s', e && e.message); }
+  _PRED_LOC_NORMS_CACHE = out;
+  return out;
+}
+// → {norm, src:'loc'|'region'|'none'}. Порядок: назва групи → тип → «*» → регіон.
+function _predNormLookup(loc, subject, group){
+  var L = _loadPredLocNorms()[String(loc || '').trim()];
+  var S = L && L[subject];
+  if (S){
+    var byName = S.byName[_nameFold(group)];
+    if (byName !== undefined) return {norm:byName, src:'loc'};
+    var gt0 = _normalizeGroupType(group);
+    if (gt0 && S.byType[gt0] !== undefined) return {norm:S.byType[gt0], src:'loc'};
+    if (S.any !== null) return {norm:S.any, src:'loc'};
+  }
   var gt = _normalizeGroupType(group);
-  if (!gt) return 0;                              // нестандартна назва → без ліміту
+  if (!gt) return {norm:0, src:'none'};            // нестандартна назва → без ліміту
   var region = _predLocToRegion(loc);
   var norms = _loadPredNorms();
-  return (norms[region] && norms[region][subject] && norms[region][subject][gt]) || 0;
+  var n = (norms[region] && norms[region][subject] && norms[region][subject][gt]) || 0;
+  return {norm:n, src:(n ? 'region' : 'none')};
+}
+function _getPredNormByType(loc, subject, group){
+  return _predNormLookup(loc, subject, group).norm;
 }
 
 // Реальні групи локацій з листа Клієнти (distinct непорожні Група).
@@ -25749,6 +25991,7 @@ function getPredmetnyky(actorId, year, month){
       ok:           true,
       teachers:     _loadPredTeachers(scope),
       norms:        _loadPredNorms(),               // матриця по group_type
+      locNorms:     _loadPredLocNorms(),            // v7.236: норми рівня локації
       groups:       _loadRealGroups(scope),         // реальні групи локацій
       catalog:      _loadPredCatalog(scope),
       lessons:      _loadPredLessons(scope, year, month),        // v7.80: місячний зріз
@@ -26011,13 +26254,10 @@ function savePredmetnykyLesson(actorId, lesson){
       // norm > 0 → enforced місячний ліміт по (location, ПОВНА група, subject).
       // Чомусики / нестандартна назва / тип з нормою 0 → ліміту немає.
       // v7.231: у школах стелі немає — норми за матрицею стосуються лише садків.
+      // v7.236: рахунок стелі більше не дублюється тут — єдине джерело
+      // _predCeilingFor (воно ж знає про підлогу 15 лише для регіональної матриці).
       var current = 0;
-      var norm = (subject === PRED_UNLIMITED_SUBJ || _predIsSchoolLoc(location))
-        ? 0
-        : _getPredNormByType(location, subject, group);
-      // v6.57: мінімальний місячний ліміт 15 занять для дозволених типів (norm>0) —
-      // дзеркало getNormFor у predmetnyky.html. 0 = заборонено (не піднімаємо).
-      if (norm > 0) norm = Math.max(norm, 15);
+      var norm = _predCeilingFor(location, subject, group);
       if (norm > 0){
         var existing = _loadPredLessons(location);
         for (var i = 0; i < existing.length; i++){

@@ -860,7 +860,8 @@ var MONTHS = ['Січень','Лютий','Березень','Квітень','�
 // Предметники_Каталог (див. subjectsFor).
 var PRED_SUBJECTS       = ['Англійська','Музика','Хореограф','Логопед','Психолог','Чомусики',
                            'Німецька','Іспанська','Фізкультура',     // v7.192: предмети школи
-                           'Архітектура','Фітнес','Speaking club'];  // v7.195: Школа Осокорки
+                           'Архітектура','Фітнес','Speaking club',  // v7.195: Школа Осокорки
+                           'Спорт','Польська'];                     // v7.236: Благо
 var PRED_UNLIMITED_SUBJ = 'Чомусики';
 var PRED_GROUP_TYPES    = ['miniBaby','Baby','Find','Study','Preschool'];
 var PRED_LVIV_LOCATIONS = ['Кругла','Бігова'];
@@ -872,7 +873,8 @@ var SUBJECT_EMOJI = {
   'Англійська':'📚','Музика':'🎵','Хореограф':'💃',
   'Логопед':'💬','Психолог':'🧠','Чомусики':'❓',
   'Німецька':'🇩🇪','Іспанська':'🇪🇸','Фізкультура':'⚽',
-  'Архітектура':'🏛️','Фітнес':'🤸','Speaking club':'🗣️'   // v7.231
+  'Архітектура':'🏛️','Фітнес':'🤸','Speaking club':'🗣️',  // v7.231
+  'Спорт':'🏃','Польська':'🇵🇱'                            // v7.236
 };
 var PRED_EDIT_ROLES = ['cfo','ceo','coo','cco','rnd_director'];   // any loc; director — own loc
 
@@ -889,6 +891,7 @@ var S = {
   groups:      {},                       // v6.28.2: {loc: [повні назви реальних груп]}
   lessons:     [],
   catalog:     [],
+  locNorms:    {},                       // v7.236: {loc:{subject:{byName,byType,any}}}
   assignments: [],
   merges:      [],                       // v7.20: обʼєднання груп [{loc,subject,date(iso),groups}]
   locations:   [],
@@ -1479,6 +1482,7 @@ function loadPredmetnyky(force){
     S.groups      = res.groups      || {};
     S.lessons     = res.lessons     || [];
     S.catalog     = res.catalog     || [];
+    S.locNorms    = res.locNorms    || {};      // v7.236: норми рівня локації
     S.assignments = res.assignments || [];
     S.merges      = res.predMerges  || [];
     _pmCache[key] = {lessons: S.lessons, merges: S.merges};   // v7.80: у кеш
@@ -1694,6 +1698,16 @@ function assignmentFor(loc, subj){
 }
 // v7.231: локація типу «Школа»? Дзеркало backend _predIsSchoolLoc — тип беремо
 // з реєстру CONFIG (S.locations), фолбек — назва локації.
+// v7.236: тип локації з реєстру CONFIG (S.locations).
+function locTyp(loc){
+  var l = String(loc || '').trim();
+  for (var i = 0; i < S.locations.length; i++){
+    var r = S.locations[i];
+    if (r && String(r.loc || '').trim() === l) return String(r.typ || '').trim();
+  }
+  return '';
+}
+
 function isSchoolLoc(loc){
   var l = String(loc || '').trim();
   if (!l) return false;
@@ -1721,9 +1735,11 @@ function subjectsFor(loc){
     if (!s || seen[s]) continue;
     seen[s] = 1; out.push(s);
   }
-  // out.length — щоб «Управління» (Житомир, Благо) з порожнім каталогом не
-  // отримало Чомусики й не виглядало як локація з предметниками.
-  if (out.length && !seen[PRED_UNLIMITED_SUBJ] && (!l || !isSchoolLoc(l))){
+  // v7.236: Чомусики — ЛИШЕ локаціям типу «Садочок» (дзеркало backend
+  // _predSubjectsForLoc). Було «будь-яка не-школа з непорожнім каталогом», і
+  // щойно в Благо/Житомира з'явився б каталог, туди б заїхали Чомусики.
+  // loc='' (Всі локації) — показуємо, бо садочки в мережі є.
+  if (!seen[PRED_UNLIMITED_SUBJ] && (!l || locTyp(l) === 'Садочок')){
     seen[PRED_UNLIMITED_SUBJ] = 1; out.push(PRED_UNLIMITED_SUBJ);
   }
   out.sort(function(a, b){
@@ -1734,10 +1750,25 @@ function subjectsFor(loc){
   return out;
 }
 
-function getNormFor(loc, subj, groupType){
+// v7.236: норми рівня локації (S.locNorms) мають пріоритет над регіональною
+// матрицею і діють ЯК Є — без підлоги 15 (інакше Музика 8 / Логопед 4 стали б
+// однаковою стелею 15). Пошук: повна назва групи → тип → «*».
+// Дзеркало backend _predNormLookup.
+function locNormFor(loc, subj, groupName, groupType){
+  var m = (S.locNorms && S.locNorms[loc] && S.locNorms[loc][subj]) || null;
+  if (!m) return null;
+  var k = String(groupName || '').trim().toLowerCase().replace(/\s+/g,' ');
+  if (m.byName && m.byName[k] !== undefined) return m.byName[k];
+  if (groupType && m.byType && m.byType[groupType] !== undefined) return m.byType[groupType];
+  if (m.any !== null && m.any !== undefined) return m.any;
+  return null;
+}
+function getNormFor(loc, subj, groupType, groupName){
   // v7.231: стеля за матрицею норм — ТІЛЬКИ для садків. У школах клас не мапиться
   // в тип садкової групи, а предмети погодинні — ліміту немає.
   if (isSchoolLoc(loc)) return 0;
+  var ln = locNormFor(loc, subj, groupName, groupType);
+  if (ln !== null) return ln > 0 ? ln : 0;
   var region = predLocToRegion(loc);
   var r = S.norms[region]; if (!r) return 0;
   var s = r[subj]; if (!s) return 0;
@@ -2198,9 +2229,12 @@ function renderTable(loc, subject){
   // застосовується до КОЖНОЇ групи окремо; лічильник — по повній назві.
   var rows = realGroupsFor(loc).map(function(groupName){
     var gt           = normalizeGroupType(groupName);            // тип або null
-    // unlimited: предмет Чомусики АБО тип не розпізнано (нема норми в матриці)
-    var rowUnlimited = isUnlimited || !gt;
-    var norm         = rowUnlimited ? 0 : getNormFor(loc, subject, gt);
+    // v7.236: норма може бути задана на ПОВНУ назву групи, тож нерозпізнаний тип
+    // сам по собі більше не означає «без ліміту» — спершу дивимось норми локації.
+    var locN         = locNormFor(loc, subject, groupName, gt);
+    // unlimited: предмет Чомусики АБО тип не розпізнано і власної норми немає
+    var rowUnlimited = isUnlimited || (!gt && locN === null);
+    var norm         = rowUnlimited ? 0 : getNormFor(loc, subject, gt, groupName);
     var isForbidden  = !rowUnlimited && norm <= 0;               // тип з нормою 0 у матриці
     var count        = isForbidden ? 0 : countLessonsInRow(loc, groupName, subject);
     var isMaxed      = !rowUnlimited && count >= norm;
