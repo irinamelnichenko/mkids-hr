@@ -1,5 +1,23 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.253
+// m.kids CRM — Google Apps Script v7.254
+// v7.254: ЗП ПІД-ЛОКАЦІЇ. «Школа Кар'єрна» не існувала для зарплати:
+//         getSalaryData падав з «Location not found in Salary registry», а
+//         salaryReconcileRows мовчки віддавав ПОРОЖНІЙ список — на екрані звірки
+//         локація є, а рядків-цілей нема, і це виглядає як «нічого не знайшлось».
+//         Власного аркуша Salary у школи немає (на відміну від OPEX, де є окремий
+//         «OPEX школа»), тож реєстр отримує ВІРТУАЛЬНИЙ рядок на аркуш хоста, а
+//         рядки розрізаються всередині аркуша: під-локація бере блок «Школа»,
+//         хост — усе інше. Розріз застосовано в getSalaryData, getSalaryOverview
+//         і _loadSalaryRowIndex (звірка ЗП) — щоб суми не порахувались двічі.
+//   • Прапорець блоку (_inSchoolGroup) залічує школі й загальний штат, що стоїть
+//     нижче. Розбір по місяцях: медсестра має факт із СІЧНЯ, охорона — з січня по
+//     серпень, тобто цілий рік до появи школи; прибиральниця — лише за ВЕРЕСЕНЬ
+//     (1 932 при бюджеті 74 000), тобто найнята разом зі школою. Тому виняток
+//     іменний (медсестра, охорона), а не за категорією: прибиральниця теж
+//     location-wide категорія, але вона саме шкільна.
+//   • Запис у Salary під-локації ЗАБОРОНЕНО (addSalaryRow): рядок пішов би в
+//     extras-секцію аркуша хоста й мовчки змішав садок зі школою.
+//   • dryRunSalarySplit (GET) — обидва боки розрізу з сумами, read-only.
 // v7.253: ПІД-ЛОКАЦІЯ + ПРАВИЛО КАРТКИ У ЗВІРЦІ ПЛАТЕЖІВ.
 //   (1) «Школа Кар'єрна» — окрема локація (свій рахунок, свій аркуш OPEX), але
 //       власного Payment-файлу не має: її 4 дитини лежать блоком «Школа» у файлі
@@ -5119,7 +5137,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.253', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.254', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -5132,6 +5150,7 @@ function doGet(e) {
     else if (action === 'dryRunSchoolRoster') result = dryRunSchoolRoster();   // v7.252 ростер шкіл за картками (read-only)
     else if (action === 'dryRunPayerIndex')   result = dryRunPayerIndex(e.parameter || {});   // v7.253 ростер звірки платежів (read-only)
     else if (action === 'dryRunSubLoc')       result = dryRunSubLoc();                        // v7.253 під-локації в агрегаті (read-only)
+    else if (action === 'dryRunSalarySplit')  result = dryRunSalarySplit();                   // v7.254 розріз Salary хост/під-локація (read-only)
     else if (action === 'syncPayments')        result = syncPayments();
     else if (action === 'runAggregateYearly') result = aggregatePaymentsYearly();
     else if (action === 'runSyncBdayStatus')  result = syncBdayStatusSheet();
@@ -8175,9 +8194,43 @@ function _disambiguateGroupKeys(groups){
 // 73 = 69 садок + 4 школа, жодна дитина не загублена і не подвоєна.
 // Картки школярів лежать під ЛОКАЦІЄЮ ХОСТА («Кар'єрна», група «Школа») —
 // тож і активність картки, і батьків для звірки шукаємо в хоста.
+// salaryExclude — рядки, які парсер залічує блоку «Школа», але які насправді
+// спільні з садком. Виписка по місяцях каже, хто є хто: медсестра має факт із
+// СІЧНЯ, охорона — з січня по серпень (тобто цілий рік до появи школи), а
+// прибиральниця — лише за ВЕРЕСЕНЬ (1 932 при бюджеті 74 000), тобто найнята
+// разом зі школою. Тому список іменний, а не «категорія nurse/guard/cleaner»:
+// прибиральниця теж location-wide категорія, але вона саме шкільна.
 var PAY_SUBLOCATIONS = {
-  "Школа Кар'єрна": { host: "Кар'єрна", group: "Школа" }
+  "Школа Кар'єрна": {
+    host: "Кар'єрна", group: "Школа",
+    salaryExclude: [/медсестр/i, /охран|охорон/i]
+  }
 };
+// Контекст розрізу Salary: mine=true — локація Є блоком (бере лише його);
+// mine=false — локація ХОСТ (віддає блок). null — звичайна локація, без змін.
+function _salarySubContext(loc){
+  var sub = _subLocOf(loc);
+  if (sub) return {mine:true, exclude:(sub.salaryExclude || [])};
+  var hs = _subLocsOfHost(loc);
+  if (hs.length){
+    var s = PAY_SUBLOCATIONS[hs[0].loc] || {};
+    return {mine:false, exclude:(s.salaryExclude || [])};
+  }
+  return null;
+}
+// Номери рядків Salary, що належать блоку під-локації. Класифікувати треба
+// ПОВНИЙ список рядків: state machine скидає прапорець на секційних заголовках
+// («Додаткові заняття»), і без них блок «Школа» протік би в extras.
+function _salaryBlockRowSet(classified, excludeRe){
+  var set = {};
+  (classified || []).forEach(function(r){
+    if (!r._inSchoolGroup) return;
+    var nm = String(r.name || '');
+    for (var i = 0; i < (excludeRe || []).length; i++) if (excludeRe[i].test(nm)) return;
+    set[r.row] = true;
+  });
+  return set;
+}
 function _subLocOf(loc){
   var k = trim(String(loc || ''));
   return PAY_SUBLOCATIONS.hasOwnProperty(k) ? PAY_SUBLOCATIONS[k] : null;
@@ -8476,6 +8529,70 @@ function dryRunSubLoc(){
     } catch(e){
       Logger.log('   ❌ %s: %s', loc, e.message);
       report.push({loc:loc, error:e.message});
+    }
+  });
+  return {ok:true, dryRun:true, report:report};
+}
+
+// v7.254 dryRun: як розріжеться Salary між хостом і під-локацією. Read-only.
+// GET ?action=dryRunSalarySplit
+function dryRunSalarySplit(){
+  var reg = _salaryGetRegistry();
+  if (!reg.ok) return reg;
+  var report = [];
+  Logger.log('═══ РОЗРІЗ SALARY · ХОСТ ↔ ПІД-ЛОКАЦІЯ · DRY-RUN ═══');
+  reg.rows.forEach(function(entry){
+    var ctx = _salarySubContext(entry.loc);
+    if (!ctx) return;
+    try {
+      var sh = SpreadsheetApp.openById(entry.sheetId).getSheetByName(entry.listName);
+      if (!sh){ report.push({loc:entry.loc, error:'аркуш не знайдено'}); return; }
+      var lastRow = Math.max(sh.getLastRow(), 80), lastCol = Math.max(sh.getLastColumn(), 37);
+      var data = sh.getRange(1, 1, lastRow, lastCol).getValues();
+      var rawAll = [];
+      for (var rn = 4; rn <= data.length; rn++){
+        var ra = data[rn - 1] || [], nm = String(ra[0] || '').trim();
+        if (_salaryIsSkippedRow(nm)) continue;
+        var tf = 0, tb = 0;
+        for (var m = 1; m <= 12; m++){
+          var fi = (m - 1) * 3 + 1, bi = (m - 1) * 3 + 2;
+          if (fi < lastCol) tf += _opexNum(ra[fi]);
+          if (bi < lastCol) tb += _opexNum(ra[bi]);
+        }
+        rawAll.push({row:rn, name:nm, fact:tf, budget:tb});
+      }
+      var classified = _classifyAllSalaryRows(rawAll);
+      var set = _salaryBlockRowSet(classified, ctx.exclude);
+      var mine = [], rest = [], mf = 0, mb = 0, rf = 0, rb = 0;
+      classified.forEach(function(r){
+        if (r._category === 'section_header') return;
+        if (set[r.row]){ mine.push(r); mf += r.fact || 0; mb += r.budget || 0; }
+        else           { rest.push(r); rf += r.fact || 0; rb += r.budget || 0; }
+      });
+      // що прапорець блоку залічив школі, а список винятків повернув садку
+      var excluded = [];
+      classified.forEach(function(r){
+        if (!r._inSchoolGroup || set[r.row]) return;
+        excluded.push('row ' + r.row + ' «' + r.name + '» (факт ' + Math.round(r.fact || 0) + ')');
+      });
+      Logger.log('── %s%s: усього рядків %s', entry.loc,
+        entry.virtual ? '  (віртуальний рядок реєстру, аркуш ' + entry.host + ')' : '', classified.length);
+      Logger.log('   блок школи: %s рядків · факт %s · бюджет %s', mine.length, Math.round(mf), Math.round(mb));
+      Logger.log('   решта (садок): %s рядків · факт %s · бюджет %s', rest.length, Math.round(rf), Math.round(rb));
+      Logger.log('   ця локація отримає: %s', ctx.mine ? 'БЛОК ШКОЛИ' : 'РЕШТУ');
+      if (excluded.length) Logger.log('   повернуто садку списком винятків: %s', excluded.join(', '));
+      mine.forEach(function(r){ Logger.log('      row %s | %s | cat=%s | факт %s бюдж %s',
+        r.row, r.name, r._category, Math.round(r.fact || 0), Math.round(r.budget || 0)); });
+      report.push({loc:entry.loc, virtual:!!entry.virtual, host:(entry.host || null),
+                   takes:(ctx.mine ? 'school-block' : 'rest'),
+                   blockRows:mine.length, blockFact:Math.round(mf), blockBudget:Math.round(mb),
+                   restRows:rest.length, restFact:Math.round(rf), restBudget:Math.round(rb),
+                   excluded:excluded,
+                   block:mine.map(function(r){ return {row:r.row, name:r.name, cat:r._category,
+                                                       fact:Math.round(r.fact || 0), budget:Math.round(r.budget || 0)}; })});
+    } catch(e){
+      Logger.log('   ❌ %s: %s', entry.loc, e.message);
+      report.push({loc:entry.loc, error:e.message});
     }
   });
   return {ok:true, dryRun:true, report:report};
@@ -11298,7 +11415,32 @@ function _salaryGetRegistry() {
       listName: listName
     });
   }
+  // v7.254: під-локація без власного рядка в реєстрі отримує ВІРТУАЛЬНИЙ —
+  // той самий аркуш, що й у хоста. Інакше «Школа Кар'єрна» не існує для ЗП:
+  // getSalaryData падав з «Location not found», а salaryReconcileRows мовчки
+  // віддавав порожній список — на екрані звірки локація є, а цілей нема.
+  // Аркуша «Salary школа» у файлі немає (на відміну від OPEX, де є «OPEX школа»),
+  // тож рядки розрізаються всередині аркуша хоста — див. _salaryBlockRowSet.
+  rows = _salaryAddVirtualSubRows(rows);
   return {ok:true, rows:rows};
+}
+
+function _salaryAddVirtualSubRows(rows){
+  var have = {};
+  rows.forEach(function(r){ have[_nameFold(r.loc)] = true; });
+  var out = rows.slice();
+  for (var k in PAY_SUBLOCATIONS){
+    if (!PAY_SUBLOCATIONS.hasOwnProperty(k)) continue;
+    if (have[_nameFold(k)]) continue;                 // є власний рядок — не чіпаємо
+    var host = PAY_SUBLOCATIONS[k].host;
+    for (var i = 0; i < rows.length; i++){
+      if (_nameFold(rows[i].loc) !== _nameFold(host)) continue;
+      out.push({typ:'Школа', loc:k, sheetId:rows[i].sheetId, listName:rows[i].listName,
+                virtual:true, host:rows[i].loc});
+      break;
+    }
+  }
+  return out;
 }
 
 function getSalaryData(loc, year) {
@@ -11367,6 +11509,13 @@ function getSalaryData(loc, year) {
 
   var classified = _classifyAllSalaryRows(rawRows);
 
+  // v7.254: розріз блоку під-локації. Хост віддає блок, під-локація бере лише його.
+  var _ctx = _salarySubContext(loc);
+  if (_ctx){
+    var _set = _salaryBlockRowSet(classified, _ctx.exclude);
+    classified = classified.filter(function(r){ return _ctx.mine ? !!_set[r.row] : !_set[r.row]; });
+  }
+
   // DEBUG: перші 5 класифікованих рядків.
   for (var d = 0; d < Math.min(5, classified.length); d++){
     Logger.log('[getSalaryData:%s] "%s" → cat=%s sec=%s',
@@ -11397,6 +11546,10 @@ function _salaryOpenSheet(loc){
   var entry = null;
   for (var j = 0; j < reg.rows.length; j++){ if (reg.rows[j].loc === loc){ entry = reg.rows[j]; break; } }
   if (!entry) return {ok:false, error:'Локація "' + loc + '" не в Salary-реєстрі'};
+  // v7.254: віртуальний рядок під-локації — лише для ЧИТАННЯ. Запис пішов би в
+  // аркуш хоста, у чужу extras-секцію, і мовчки змішав садок зі школою.
+  if (entry.virtual) return {ok:false, error:'Локація "' + loc + '" не має власного аркуша Salary — ' +
+    'це блок у ' + entry.host + '. Запис недоступний.'};
   var ss = SpreadsheetApp.openById(entry.sheetId);
   var sheet = ss.getSheetByName(entry.listName) || ss.getSheets()[0];
   return {ok:true, ss:ss, sheet:sheet, entry:entry};
@@ -11641,6 +11794,28 @@ function getSalaryOverview(year) {
         if (_salaryIsSkippedRow(rawName))  continue;
         if (_salaryIsSubtotalRow(rawName)) continue;
         rowIdxs.push(idx);
+      }
+
+      // v7.254: розріз блоку під-локації. Класифікуємо ПОВНИЙ список рядків —
+      // rowIdxs уже без subtotal-рядків, а саме вони перемикають state machine,
+      // тож на ньому прапорець блоку протік би в extras.
+      var _ctx = _salarySubContext(entry.loc);
+      if (_ctx){
+        var _rawAll = [];
+        for (var _rn = 4; _rn <= data.length; _rn++){
+          var _ra = data[_rn - 1] || [];
+          var _nm = String(_ra[0] || '').trim();
+          if (_salaryIsSkippedRow(_nm)) continue;
+          var _tf = 0, _tb = 0;
+          for (var _m = 1; _m <= 12; _m++){
+            var _fi = (_m - 1) * 3 + 1, _bi = (_m - 1) * 3 + 2;
+            if (_fi < width) _tf += _opexNum(_ra[_fi]);
+            if (_bi < width) _tb += _opexNum(_ra[_bi]);
+          }
+          _rawAll.push({row:_rn, name:_nm, fact:_tf, budget:_tb});
+        }
+        var _set = _salaryBlockRowSet(_classifyAllSalaryRows(_rawAll), _ctx.exclude);
+        rowIdxs = rowIdxs.filter(function(ix){ return _ctx.mine ? !!_set[ix + 1] : !_set[ix + 1]; });
       }
 
       var monthsTotals = [];
@@ -15739,6 +15914,28 @@ function _loadSalaryRowIndex(locs){
           if (!raw) continue;
           arr.push({rowNum: i + 4, raw: raw, norm: _normEmpNm(raw)});
         }
+      }
+      // v7.254: під-локація/хост — розріз блоку. Тут потрібні суми, тож читаємо
+      // сітку цілком; звичайні локації лишаються на дешевому читанні колонки A.
+      var _ctx = _salarySubContext(loc);
+      if (_ctx && lastR >= 4){
+        var _lastC = Math.max(sh.getLastColumn(), 37);
+        var _grid = sh.getRange(1, 1, lastR, _lastC).getValues();
+        var _rawAll = [];
+        for (var _rn = 4; _rn <= _grid.length; _rn++){
+          var _ra = _grid[_rn - 1] || [];
+          var _nm = String(_ra[0] || '').trim();
+          if (_salaryIsSkippedRow(_nm)) continue;
+          var _tf = 0, _tb = 0;
+          for (var _m = 1; _m <= 12; _m++){
+            var _fi = (_m - 1) * 3 + 1, _bi = (_m - 1) * 3 + 2;
+            if (_fi < _lastC) _tf += _opexNum(_ra[_fi]);
+            if (_bi < _lastC) _tb += _opexNum(_ra[_bi]);
+          }
+          _rawAll.push({row:_rn, name:_nm, fact:_tf, budget:_tb});
+        }
+        var _set = _salaryBlockRowSet(_classifyAllSalaryRows(_rawAll), _ctx.exclude);
+        arr = arr.filter(function(r){ return _ctx.mine ? !!_set[r.rowNum] : !_set[r.rowNum]; });
       }
       byLoc[loc] = arr;
     } catch(e){ byLoc[loc] = []; }
