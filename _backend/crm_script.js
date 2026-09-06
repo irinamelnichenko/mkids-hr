@@ -1,5 +1,15 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.246
+// m.kids CRM — Google Apps Script v7.248
+// v7.248: movePaymentRowsToBlock — перенесення рядків у службовий блок «Вибули»
+//         в кінці Payment. Дитина більше не ходить, але за нею оплати цього
+//         року: видалити рядок = стерти гроші, лишити на місці = рахується
+//         живою. Перенесення розвʼязує обидва — суми лишаються у файлі, а
+//         парсер блок ігнорує (v7.246).
+//         Рядки рухаються через Sheet.moveRows: значення, формули й формати
+//         їдуть як є, без read/write. Позиція рядка перечитується перед кожним
+//         кроком, бо після переносу нумерація нижче зсувається.
+//         Заголовок блоку перевіряється _isGraduatedHeader — інакше відмова:
+//         блок із нерозпізнаною назвою лишився б живою групою.
 // v7.246: блок «…вибули» більше не група. У Житомирі заголовок «Preschool
 //         вибули» на 13 випускників читався як жива група: ростер показував 82
 //         дитини замість 69, група лізла у випадайку «Додаткових», і на
@@ -5051,7 +5061,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.246', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.248', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -5267,6 +5277,7 @@ function doPost(e) {
     else if (body.action === 'savePredLocNorms')       result = savePredLocNorms(body || {});         // v7.236 норми локації (dryRun за замовч.)
     else if (body.action === 'seedPredCatalog')        result = seedPredCatalog(body || {});          // v7.236 сівба каталогу предметників (dryRun за замовч.)
     else if (body.action === 'savePayHeaderOverrides') result = savePayHeaderOverrides(body || {});   // v7.234 реєстр заголовків (dryRun за замовч.)
+    else if (body.action === 'movePaymentRowsToBlock')  result = movePaymentRowsToBlock(body || {});   // v7.248 перенесення рядків у блок «Вибули»
     else if (body.action === 'purgePaymentGhostRows')  result = purgePaymentGhostRows(body || {});   // v7.233 рядки-привиди в Payment (dryRun за замовч.)
     else if (body.action === 'renamePayGroupHeader')        result = renamePayGroupHeader(body || {}); // v7.227
     else if (body.action === 'generateInvoicePDF')          result = generateInvoicePDF(body || {});   // v6.50
@@ -6379,6 +6390,94 @@ function savePayHeaderOverrides(body){
       SpreadsheetApp.flush();
       _PAY_HDR_OVERRIDE_CACHE = null;   // інвалідуємо кеш поточного виконання
       res.written = next.length;
+    } finally { try { lock.releaseLock(); } catch(_lr){} }
+    return res;
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.248: ПЕРЕНЕСЕННЯ РЯДКІВ У СЛУЖБОВИЙ БЛОК (за замовчуванням «Вибули»).
+// Навіщо: дитина більше не ходить, але за нею є оплати цього року. Видалити
+// рядок — стерти гроші; лишити на місці — вона рахується живою в ростері.
+// Перенесення в блок «Вибули» в кінці файлу розвʼязує обидва: суми лишаються у
+// файлі, а парсер (v7.246 _isGraduatedHeader) блок ігнорує.
+// Рядки рухаємо через Sheet.moveRows — переносяться ЗНАЧЕННЯ, ФОРМУЛИ і формати
+// як є; жодного read/write значень, тож нічого не губиться й не конвертується.
+// Рядок шукаємо за точним ПІБ і ПЕРЕЧИТУЄМО перед кожним кроком: після кожного
+// переносу нумерація нижче зсувається.
+// POST {action:'movePaymentRowsToBlock', loc, names:[], title?, dryRun, confirm:'YES_MOVE'}
+// ═══════════════════════════════════════════════════════════════════════════
+function movePaymentRowsToBlock(body){
+  body = body || {};
+  var loc    = String(body.loc || '').trim();
+  var title  = String(body.title || 'Вибули').trim();
+  var names  = (body.names || []).map(function(n){ return trim(String(n)); }).filter(String);
+  var dryRun = (body.dryRun !== false);
+  if (!loc)          return {ok:false, error:'loc обовʼязковий'};
+  if (!names.length) return {ok:false, error:'names[] обовʼязковий'};
+  if (!dryRun && body.confirm !== 'YES_MOVE')
+    return {ok:false, error:'Реальне перенесення вимагає confirm:"YES_MOVE"'};
+  if (!_isGraduatedHeader(title))
+    return {ok:false, error:'Заголовок «' + title + '» не розпізнається як службовий (_isGraduatedHeader) — блок лишиться живою групою'};
+  try {
+    var reg = _getLocationPaymentRegistry(loc);
+    if (!reg || !reg.sheetId) return {ok:false, error:'Локацію "' + loc + '" не знайдено в реєстрі'};
+    var ss = SpreadsheetApp.openById(reg.sheetId);
+    var sh = (reg.sheetName && ss.getSheetByName(reg.sheetName)) || ss.getSheets()[0];
+
+    function colA(){
+      var lr = sh.getLastRow();
+      return lr ? sh.getRange(1, 1, lr, 1).getValues() : [];
+    }
+    function findRow(name){
+      var v = colA();
+      for (var i = 3; i < v.length; i++){            // DATA_START = 3
+        if (trim(String(v[i][0] || '')) === name) return i + 1;
+      }
+      return 0;
+    }
+    var data = sh.getDataRange().getValues();
+    var plan = [], notFound = [], headers = [];
+    names.forEach(function(n){
+      var r = findRow(n);
+      if (!r){ notFound.push(n); return; }
+      if (isGroupHeaderRow(data[r - 1] || [n], 1)){ headers.push(n); return; }
+      plan.push({name:n, row:r});
+    });
+    var res = {ok:true, dryRun:dryRun, loc:loc, title:title,
+               willMove:plan.length, rows:plan, notFound:notFound, skippedHeaders:headers,
+               blockRow:(sh.getLastRow() + 2)};
+    if (headers.length){
+      res.ok = false;
+      res.error = 'Серед names[] є заголовки груп — перенесення скасовано: ' + headers.join(', ');
+      return res;
+    }
+    if (dryRun || !plan.length) return res;
+
+    var lock = LockService.getScriptLock();
+    try { lock.waitLock(30000); } catch(_le){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+    try {
+      res.backupSheet = _safeBackupSheet(sh, 'moveblock');
+      // 1) заголовок блоку в кінці (через порожній рядок), якщо його ще немає
+      var hdrRow = findRow(title);
+      if (!hdrRow){
+        hdrRow = sh.getLastRow() + 2;
+        sh.getRange(hdrRow, 1).setValue(title);
+        SpreadsheetApp.flush();
+      }
+      res.blockRow = hdrRow;
+      // 2) переносимо по одному, щоразу перечитуючи позицію
+      var moved = 0;
+      plan.forEach(function(p){
+        var r = findRow(p.name);
+        if (!r) return;
+        sh.moveRows(sh.getRange(r, 1), sh.getLastRow() + 1);
+        moved++;
+      });
+      SpreadsheetApp.flush();
+      res.moved = moved;
+      res.blockRow = findRow(title);
     } finally { try { lock.releaseLock(); } catch(_lr){} }
     return res;
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
