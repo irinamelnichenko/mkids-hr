@@ -1,5 +1,19 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.251
+// m.kids CRM — Google Apps Script v7.252
+// v7.252: РОСТЕР ШКІЛ — ЗА КАРТКАМИ, НЕ ЗА БЛОКАМИ PAYMENT. Payment-файли шкіл
+//         накопичили історію: випускники лежать поруч із живими, сім дітей
+//         Школи 228 мали по два рядки, частина рядків — поза блоками. Агрегат
+//         давав 121 рядок замість 71 («1 клас» = 37, «(без групи)» = 32);
+//         в Осокорках — 135 і 36 «без групи». Самі файли правити не можна:
+//         v7.248–v7.251 це вже пробували й відкотили, бо в рядках гроші за рік.
+//         Тепер для локацій типу «Школа»: у ростер іде лише дитина з активною
+//         карткою (active/adaptation), група береться з картки, дублі
+//         схлопуються в одну дитину з сумою грошей обох рядків.
+//         Садків правило не торкається — там заголовок блоку і є групою.
+//         Якщо на локації немає жодної активної картки, проєкція пропускається
+//         і лишається розбір Payment (інакше локація мовчки обнулилась би).
+//         Річний агрегат не чіпаємо: там випускник має лишатись зі своїми сумами.
+//         dryRunSchoolRoster (GET) — що саме зміниться по кожній школі.
 // v7.251: restorePaymentFromBackup — відкат Payment-аркуша з бекап-вкладки того
 //         самого файлу. Діапазон бекапу копіюється поверх робочого аркуша
 //         (Range.copyTo): значення, формули й формати. Аркуш лишається тим самим
@@ -5086,7 +5100,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.251', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.252', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -5096,6 +5110,7 @@ function doGet(e) {
     else if (action === 'getReconcileLog')           result = getReconcileLog({child:e.parameter.child||'', loc:e.parameter.loc||'', from:e.parameter.from||'', to:e.parameter.to||''}); // v7.94
     else if (action === 'getClients')         result = getClients();
     else if (action === 'runAggregate')       result = aggregatePayments();
+    else if (action === 'dryRunSchoolRoster') result = dryRunSchoolRoster();   // v7.252 ростер шкіл за картками (read-only)
     else if (action === 'syncPayments')        result = syncPayments();
     else if (action === 'runAggregateYearly') result = aggregatePaymentsYearly();
     else if (action === 'runSyncBdayStatus')  result = syncBdayStatusSheet();
@@ -7759,6 +7774,7 @@ function aggregatePayments() {
   var updateStr = formatDate(now);
   var allRows = [];
   var errors  = [];
+  var _cards  = null;   // v7.252: індекс активних карток, читається лише якщо є школа
 
   for (var r = 1; r < configData.length; r++) {
     var cfgRow    = configData[r];
@@ -7779,6 +7795,16 @@ function aggregatePayments() {
       var contractCol = detectContractDateCol(data);
       Logger.log(loc + ': monthCol=' + monthCol + ', month=' + monthName + ', contractCol=' + contractCol);
       var groups = parsePaymentSheet(data, monthCol, contractCol, cpm, loc, typ);   // v7.202
+      // v7.252: у школах ростер — за активними картками, група з картки, дублі
+      // схлопуються. Payment лишається джерелом ЛИШЕ грошей.
+      if (_isSchoolLoc(typ, loc)) {
+        if (_cards === null) _cards = _activeCardsByLoc();
+        var _st = {};
+        groups = _schoolRosterFromCards(groups, loc, _cards, _st);
+        if (_st.skipped) Logger.log(loc + ': ⚠ активних карток немає — ростер лишено за Payment');
+        else Logger.log(loc + ': ростер за картками — ' + _st.kept + ' дітей, ' +
+                        _st.dropped.length + ' без активної картки, ' + _st.merged.length + ' дублів схлопнуто');
+      }
       Logger.log(loc + ': groups=' + groups.length);
 
       groups.forEach(function(g) {
@@ -8107,6 +8133,149 @@ function _disambiguateGroupKeys(groups){
     if (tag) g.group = g.group + ' (' + tag + ')';
   });
   return groups;
+}
+
+// ═══ v7.252: РОСТЕР ШКОЛИ БУДУЄТЬСЯ ЗА КАРТКАМИ, А НЕ ЗА БЛОКАМИ PAYMENT ═══
+// Привід: Payment-файли шкіл накопичили історію — випускники лежать поруч із
+// живими дітьми, у семи дітей Школи 228 по два рядки, а частина рядків взагалі
+// поза блоками. Агрегат показував 121 рядок замість 71: «1 клас» = 37 і
+// «(без групи)» = 32. В Осокорках те саме — 135 рядків і 36 «без групи».
+// Правити самі файли не можна (v7.248–v7.251 це вже пробували й відкотили):
+// у них живуть гроші за весь рік, а перенесення/видалення рядків їх зачіпає.
+//
+// Тож джерелом ростера для локацій типу «Школа» стає КАРТКА в «Клієнтах»:
+//   (1) у ростер потрапляє лише дитина з активною карткою (active/adaptation)
+//       на цій локації — випускник відпадає незалежно від того, у якому блоці
+//       Payment він лежить і чи є над ним заголовок «вибули»;
+//   (2) група береться з картки (кол. «Група»), а не з заголовка блоку —
+//       заголовки в файлах шкіл ненадійні, а картка й так лишається джерелом
+//       груп для предметників (див. v7.245: одна назва групи на всіх екранах);
+//   (3) дублі схлопуються в одну дитину, а гроші рядків-дублів сумуються —
+//       інакше сім дітей 228 рахувались би двічі, а просте відкидання другого
+//       рядка стерло б із локації частину сум.
+// Садків правило не торкається: там заголовки блоків — єдине джерело груп.
+//
+// БЕЗПЕКА: якщо на локації немає ЖОДНОЇ активної картки — проєкція
+// пропускається і лишається розбір Payment. Інакше локація, у якій картки ще
+// не завели, мовчки обнулилась би.
+// Вихователь для школи лишається порожнім (правило v7.203): у шкільних картках
+// у цій колонці не люди, а хвости назв («клас 26/27», «Б клас»).
+// Річний агрегат (aggregatePaymentsYearly) НЕ чіпаємо: це грошова історія за
+// рік, і випускник має лишатись у ній зі своїми сумами.
+
+// Індекс активних карток: локація(fold) → ПІБ(fold) → {group}.
+// Читається один раз на прогін агрегації.
+function _activeCardsByLoc(){
+  var idx = {};
+  var res = getClients();
+  if (!res || !res.ok) return idx;
+  (res.data || []).forEach(function(c){
+    var st = String(c['Статус'] || '').trim();
+    if (st !== 'active' && st !== 'adaptation') return;
+    var l = _nameFold(c['Локація']);
+    var n = _nameFold(c['ПІБ дитини']);
+    if (!l || !n) return;
+    if (!idx[l]) idx[l] = {};
+    if (!idx[l][n]) idx[l][n] = {group: trim(String(c['Група'] || ''))};
+  });
+  return idx;
+}
+
+// Перебудова груп локації-школи за картками. Повертає той самий формат, що й
+// parsePaymentSheet: [{group, teacher, rawGroup, children:[…]}].
+// Другим значенням (через out) віддає статистику для dryRun-звіту.
+function _schoolRosterFromCards(groups, loc, cardsIdx, out){
+  var cards = (cardsIdx || {})[_nameFold(loc)];
+  var stat = out || {};
+  stat.before = 0; stat.kept = 0; stat.dropped = []; stat.merged = [];
+  if (!cards || !Object.keys(cards).length){ stat.skipped = true; return groups; }
+
+  var byName = {}, order = [];
+  groups.forEach(function(g){
+    (g.children || []).forEach(function(ch){
+      stat.before++;
+      var key = _nameFold(ch.name);
+      if (!key) return;
+      if (!cards[key]){ stat.dropped.push(ch.name); return; }
+      var prev = byName[key];
+      if (!prev){
+        byName[key] = {
+          name: ch.name,
+          factStudy: ch.factStudy || 0, factEntry: ch.factEntry || 0,
+          factExtra: ch.factExtra || 0, budExtra: ch.budExtra || 0,
+          budStudy:  ch.budStudy  || 0, contractDate: ch.contractDate || ''
+        };
+        order.push(key);
+        return;
+      }
+      // дубль: гроші сумуємо, дату договору беремо першу непорожню
+      prev.factStudy += ch.factStudy || 0;
+      prev.factEntry += ch.factEntry || 0;
+      prev.factExtra += ch.factExtra || 0;
+      prev.budExtra  += ch.budExtra  || 0;
+      prev.budStudy  += ch.budStudy  || 0;
+      if (!prev.contractDate && ch.contractDate) prev.contractDate = ch.contractDate;
+      stat.merged.push(ch.name);
+    });
+  });
+
+  var byGroup = {};
+  order.forEach(function(key){
+    var g = trim(cards[key].group) || '(без групи)';
+    if (!byGroup[g]) byGroup[g] = {group: g, teacher: '', rawGroup: g, children: []};
+    byGroup[g].children.push(byName[key]);
+    stat.kept++;
+  });
+  var names = Object.keys(byGroup).sort(function(a, b){ return String(a).localeCompare(String(b), 'uk'); });
+  stat.groups = names.length;
+  return names.map(function(n){ return byGroup[n]; });
+}
+
+// dryRun: що саме дасть правило по кожній школі. Нічого не пише.
+// GET ?action=dryRunSchoolRoster
+function dryRunSchoolRoster(){
+  var configSS   = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var configData = configSS.getSheets()[0].getDataRange().getValues();
+  var now = new Date(), curJSMonth = now.getMonth();
+  var idx = _activeCardsByLoc();
+  var report = [];
+  Logger.log('═══ РОСТЕР ШКІЛ ЗА КАРТКАМИ · DRY-RUN ═══');
+  for (var r = 1; r < configData.length; r++){
+    var cfgRow = configData[r];
+    var typ = trim(cfgRow[1]), loc = trim(cfgRow[2]), sheetId = trim(cfgRow[3]);
+    var sheetName = trim(cfgRow[4]) || 'Payment';
+    if (!loc || !sheetId || !_isSchoolLoc(typ, loc)) continue;
+    try {
+      var ss = SpreadsheetApp.openById(sheetId);
+      var sh = ss.getSheetByName(sheetName) || ss.getSheets()[0];
+      var data = sh.getDataRange().getValues();
+      var cpm = _paymentColsPerMonth(loc, cfgRow[5]);
+      var groups = parsePaymentSheet(data, detectCurrentMonthCol(data, curJSMonth, cpm),
+                                     detectContractDateCol(data), cpm, loc, typ);
+      var before = 0, beforeGroups = {};
+      groups.forEach(function(g){ before += g.children.length; beforeGroups[g.group] = g.children.length; });
+      var stat = {};
+      var after = _schoolRosterFromCards(groups, loc, idx, stat);
+      var afterGroups = {};
+      after.forEach(function(g){ afterGroups[g.group] = g.children.length; });
+      Logger.log('── %s: %s → %s дітей, %s → %s груп%s',
+        loc, before, stat.skipped ? before : stat.kept,
+        Object.keys(beforeGroups).length, Object.keys(afterGroups).length,
+        stat.skipped ? '  ⚠ ПРОПУЩЕНО: немає активних карток' : '');
+      Logger.log('   було:  %s', JSON.stringify(beforeGroups));
+      Logger.log('   стане: %s', JSON.stringify(afterGroups));
+      Logger.log('   без активної картки (%s): %s', stat.dropped.length, stat.dropped.join(', ') || '—');
+      Logger.log('   схлопнуті дублі (%s): %s', stat.merged.length, stat.merged.join(', ') || '—');
+      report.push({loc:loc, before:before, after:(stat.skipped ? before : stat.kept),
+                   groupsBefore:Object.keys(beforeGroups).length, groupsAfter:Object.keys(afterGroups).length,
+                   beforeGroups:beforeGroups, afterGroups:afterGroups,
+                   dropped:stat.dropped, merged:stat.merged, skipped:!!stat.skipped});
+    } catch(e){
+      Logger.log('   ❌ %s: %s', loc, e.message);
+      report.push({loc:loc, error:e.message});
+    }
+  }
+  return {ok:true, dryRun:true, report:report};
 }
 
 // v7.108: ІСТОРІЯ ОПЛАТ ДИТИНИ ЗА ВЕСЬ РІК — читає Payment-файл локації напряму (джерело правди),
