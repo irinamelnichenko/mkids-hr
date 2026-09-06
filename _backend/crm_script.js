@@ -1,5 +1,24 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.252
+// m.kids CRM — Google Apps Script v7.253
+// v7.253: ПІД-ЛОКАЦІЯ + ПРАВИЛО КАРТКИ У ЗВІРЦІ ПЛАТЕЖІВ.
+//   (1) «Школа Кар'єрна» — окрема локація (свій рахунок, свій аркуш OPEX), але
+//       власного Payment-файлу не має: її 4 дитини лежать блоком «Школа» у файлі
+//       садка Кар'єрної, і реєстр локацій вказує на ТОЙ САМИЙ spreadsheet.
+//       Без правила обидві локації читали б увесь файл: садок — 73 дитини разом
+//       зі школярами, школа — теж 73, а агрегат поклав би кожну дитину двічі.
+//       PAY_SUBLOCATIONS: під-локація бере ЛИШЕ свій блок, хост цей блок ВІДДАЄ.
+//       73 = 69 садок + 4 школа. Картки школярів лежать під локацією хоста
+//       («Кар'єрна», група «Школа») — там і шукаємо активність та батьків.
+//   (2) _buildPayerIndex навчено правилу v7.252: для локацій типу «Школа» ростер
+//       звірки платежів будується за АКТИВНИМИ КАРТКАМИ, група береться з картки,
+//       дублі рядків схлопуються (лишається перший рядок). Досі звірка читала
+//       Payment сирим і бачила 124 дитини по Школі 228 (замість 71) і 136 по
+//       Школі Осокорки (замість 98) — платіж можна було повісити на випускника
+//       або на другий рядок тієї самої дитини.
+//       Батьків із карток для школи теж беремо лише з активних.
+//   • _getLocationPaymentRegistry повертає ще й typ локації.
+//   • dryRunPayerIndex (GET) — шлях кожного рядка у звірці; dryRunSubLoc (GET) —
+//     що правило під-локації зробить з агрегатом. Обидва read-only.
 // v7.252: РОСТЕР ШКІЛ — ЗА КАРТКАМИ, НЕ ЗА БЛОКАМИ PAYMENT. Payment-файли шкіл
 //         накопичили історію: випускники лежать поруч із живими, сім дітей
 //         Школи 228 мали по два рядки, частина рядків — поза блоками. Агрегат
@@ -5100,7 +5119,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.252', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.253', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -5111,6 +5130,8 @@ function doGet(e) {
     else if (action === 'getClients')         result = getClients();
     else if (action === 'runAggregate')       result = aggregatePayments();
     else if (action === 'dryRunSchoolRoster') result = dryRunSchoolRoster();   // v7.252 ростер шкіл за картками (read-only)
+    else if (action === 'dryRunPayerIndex')   result = dryRunPayerIndex(e.parameter || {});   // v7.253 ростер звірки платежів (read-only)
+    else if (action === 'dryRunSubLoc')       result = dryRunSubLoc();                        // v7.253 під-локації в агрегаті (read-only)
     else if (action === 'syncPayments')        result = syncPayments();
     else if (action === 'runAggregateYearly') result = aggregatePaymentsYearly();
     else if (action === 'runSyncBdayStatus')  result = syncBdayStatusSheet();
@@ -7795,6 +7816,14 @@ function aggregatePayments() {
       var contractCol = detectContractDateCol(data);
       Logger.log(loc + ': monthCol=' + monthCol + ', month=' + monthName + ', contractCol=' + contractCol);
       var groups = parsePaymentSheet(data, monthCol, contractCol, cpm, loc, typ);   // v7.202
+      // v7.253: хост віддає блоки своїх під-локацій — інакше та сама дитина
+      // потрапила б в агрегат двічі (під садком і під школою).
+      var _taken = _subLocsOfHost(loc);
+      if (_taken.length) {
+        var _b4 = groups.length;
+        groups = _dropSubLocBlocks(groups, _taken);
+        Logger.log(loc + ': віддано блоків під-локаціям — ' + (_b4 - groups.length));
+      }
       // v7.252: у школах ростер — за активними картками, група з картки, дублі
       // схлопуються. Payment лишається джерелом ЛИШЕ грошей.
       if (_isSchoolLoc(typ, loc)) {
@@ -8135,6 +8164,50 @@ function _disambiguateGroupKeys(groups){
   return groups;
 }
 
+// ═══ v7.253: ПІД-ЛОКАЦІЯ — ЛОКАЦІЯ, ЩО ЖИВЕ БЛОКОМ У ЧУЖОМУ PAYMENT ═══════
+// «Школа Кар'єрна» — окрема локація в реєстрі (свій рахунок, свій аркуш OPEX,
+// свої рядки ЗП), але власного Payment-файлу вона не має: її 4 дитини лежать
+// блоком «Школа» у файлі садка Кар'єрної. Реєстр локацій вказує на ТОЙ САМИЙ
+// spreadsheet, що й садок, тож без правила обидві локації читали б увесь файл:
+// садок показував би 73 дитини (з 4 школярами), школа — теж 73, а агрегат
+// поклав би кожну дитину двічі.
+// Правило симетричне: під-локація бере ЛИШЕ свій блок, хост цей блок ВІДДАЄ.
+// 73 = 69 садок + 4 школа, жодна дитина не загублена і не подвоєна.
+// Картки школярів лежать під ЛОКАЦІЄЮ ХОСТА («Кар'єрна», група «Школа») —
+// тож і активність картки, і батьків для звірки шукаємо в хоста.
+var PAY_SUBLOCATIONS = {
+  "Школа Кар'єрна": { host: "Кар'єрна", group: "Школа" }
+};
+function _subLocOf(loc){
+  var k = trim(String(loc || ''));
+  return PAY_SUBLOCATIONS.hasOwnProperty(k) ? PAY_SUBLOCATIONS[k] : null;
+}
+function _subLocsOfHost(host){
+  var out = [], h = _nameFold(host);
+  if (!h) return out;
+  for (var k in PAY_SUBLOCATIONS){
+    if (!PAY_SUBLOCATIONS.hasOwnProperty(k)) continue;
+    if (_nameFold(PAY_SUBLOCATIONS[k].host) === h) out.push({loc: k, group: PAY_SUBLOCATIONS[k].group});
+  }
+  return out;
+}
+// Рядок/група належить блоку з назвою groupName? Звіряємо і нормалізовану, і сиру
+// назву — заголовок «Школа» нормалізується сам у себе, але для інших блоків
+// («4 клас» → «Школа» без keepSchool) сира назва єдина надійна.
+function _sameBlock(o, groupName){
+  var t = _nameFold(groupName);
+  if (!t) return false;
+  return _nameFold(o && o.group) === t || _nameFold(o && o.rawGroup) === t;
+}
+// Хост віддає блоки своїх під-локацій (для агрегату — на рівні груп).
+function _dropSubLocBlocks(groups, taken){
+  if (!taken || !taken.length) return groups;
+  return groups.filter(function(g){
+    for (var i = 0; i < taken.length; i++) if (_sameBlock(g, taken[i].group)) return false;
+    return true;
+  });
+}
+
 // ═══ v7.252: РОСТЕР ШКОЛИ БУДУЄТЬСЯ ЗА КАРТКАМИ, А НЕ ЗА БЛОКАМИ PAYMENT ═══
 // Привід: Payment-файли шкіл накопичили історію — випускники лежать поруч із
 // живими дітьми, у семи дітей Школи 228 по два рядки, а частина рядків взагалі
@@ -8185,18 +8258,31 @@ function _activeCardsByLoc(){
 // parsePaymentSheet: [{group, teacher, rawGroup, children:[…]}].
 // Другим значенням (через out) віддає статистику для dryRun-звіту.
 function _schoolRosterFromCards(groups, loc, cardsIdx, out){
-  var cards = (cardsIdx || {})[_nameFold(loc)];
+  // v7.253: у під-локації свого набору карток немає — вони лежать під хостом,
+  // і відрізняються групою («Кар'єрна» + група «Школа»).
+  var _sub = _subLocOf(loc);
+  var cards = (cardsIdx || {})[_nameFold(_sub ? _sub.host : loc)];
   var stat = out || {};
   stat.before = 0; stat.kept = 0; stat.dropped = []; stat.merged = [];
   if (!cards || !Object.keys(cards).length){ stat.skipped = true; return groups; }
 
   var byName = {}, order = [];
   groups.forEach(function(g){
+    // v7.253: під-локація бере рядки СВОГО БЛОКУ, а не всіх дітей, чия картка
+    // називає цей блок. Різниця принципова: двоє школярів Кар'єрної мають ЩЕ Й
+    // старий садковий рядок із грошима за січень–липень. Фільтр за карткою
+    // забрав би перший-ліпший рядок дитини — тобто садковий, з нулями у
+    // вересні, — а шкільний із 27 500 порахував би дублем і відкинув.
+    if (_sub && !_sameBlock(g, _sub.group)){
+      (g.children || []).forEach(function(ch){ stat.before++; stat.dropped.push(ch.name); });
+      return;
+    }
     (g.children || []).forEach(function(ch){
       stat.before++;
       var key = _nameFold(ch.name);
       if (!key) return;
       if (!cards[key]){ stat.dropped.push(ch.name); return; }
+      if (_sub && _nameFold(cards[key].group) !== _nameFold(_sub.group)){ stat.dropped.push(ch.name); return; }
       var prev = byName[key];
       if (!prev){
         byName[key] = {
@@ -8275,6 +8361,123 @@ function dryRunSchoolRoster(){
       report.push({loc:loc, error:e.message});
     }
   }
+  return {ok:true, dryRun:true, report:report};
+}
+
+// v7.253 dryRun: що дасть правило під-локації + правило картки в ЗВІРЦІ ПЛАТЕЖІВ.
+// Нічого не пише — просто будує індекс і показує шлях кожного рядка.
+// GET ?action=dryRunPayerIndex[&loc=…]
+function dryRunPayerIndex(params){
+  params = params || {};
+  var only = trim(String(params.loc || ''));
+  var configSS   = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var configData = configSS.getSheets()[0].getDataRange().getValues();
+  var targets = [];
+  for (var r = 1; r < configData.length; r++){
+    var typ = trim(configData[r][1]), loc = trim(configData[r][2]), sid = trim(configData[r][3]);
+    if (!loc || !sid) continue;
+    if (only){ if (loc === only) targets.push({loc:loc, typ:typ}); continue; }
+    // без loc: усі школи + усі хости під-локацій (їх теж зачіпає правило)
+    if (_isSchoolLoc(typ, loc) || _subLocsOfHost(loc).length) targets.push({loc:loc, typ:typ});
+  }
+  var report = [];
+  Logger.log('═══ ЗВІРКА ПЛАТЕЖІВ · РОСТЕР · DRY-RUN ═══');
+  targets.forEach(function(t){
+    try {
+      var built = _buildPayerIndex(t.loc);
+      var d = built.diag, roster = built.roster || [];
+      var byGroup = {};
+      roster.forEach(function(c){ var g = c.group || '(без групи)'; byGroup[g] = (byGroup[g] || 0) + 1; });
+      var sub = _subLocOf(t.loc);
+      Logger.log('── %s (%s)%s', t.loc, t.typ, sub ? '  ← блок «' + sub.group + '» у файлі ' + sub.host : '');
+      Logger.log('   прочитано з Payment: %s → у ростері: %s', d.scanned, roster.length);
+      Logger.log('   віддано/відкинуто: блок під-локації %s · без активної картки %s · дублів схлопнуто %s',
+                 d.droppedBlock, d.droppedNoCard, d.mergedDup);
+      Logger.log('   правило картки: %s | ключів за прізвищем: дитина %s, сторона договору %s, батьки %s',
+                 d.cardRule ? 'УВІМКНЕНО' : 'ні', d.fromChild, d.fromBJ, d.fromCard);
+      Logger.log('   групи: %s', JSON.stringify(byGroup));
+      report.push({loc:t.loc, typ:t.typ, sub:(sub || null), scanned:d.scanned, roster:roster.length,
+                   droppedBlock:d.droppedBlock, droppedNoCard:d.droppedNoCard, mergedDup:d.mergedDup,
+                   cardRule:d.cardRule, fromChild:d.fromChild, fromBJ:d.fromBJ, fromCard:d.fromCard,
+                   groups:byGroup});
+    } catch(e){
+      Logger.log('   ❌ %s: %s', t.loc, e.message);
+      report.push({loc:t.loc, error:e.message});
+    }
+  });
+  return {ok:true, dryRun:true, report:report};
+}
+
+// v7.253 dryRun: що правило під-локації зробить з АГРЕГАТОМ — скільки дітей
+// втратить хост і скільки отримає під-локація. Read-only.
+// GET ?action=dryRunSubLoc
+function dryRunSubLoc(){
+  var configSS   = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var configData = configSS.getSheets()[0].getDataRange().getValues();
+  var now = new Date(), curJSMonth = now.getMonth();
+  var idx = _activeCardsByLoc();
+  var byLoc = {};
+  for (var r = 1; r < configData.length; r++){
+    var cfgRow = configData[r];
+    var typ = trim(cfgRow[1]), loc = trim(cfgRow[2]), sid = trim(cfgRow[3]);
+    if (!loc || !sid) continue;
+    if (!_subLocOf(loc) && !_subLocsOfHost(loc).length) continue;
+    byLoc[loc] = {typ:typ, cfgRow:cfgRow};
+  }
+  var report = [];
+  Logger.log('═══ ПІД-ЛОКАЦІЇ В АГРЕГАТІ · DRY-RUN ═══');
+  Object.keys(byLoc).forEach(function(loc){
+    var typ = byLoc[loc].typ, cfgRow = byLoc[loc].cfgRow;
+    try {
+      var ss = SpreadsheetApp.openById(trim(cfgRow[3]));
+      var sh = ss.getSheetByName(trim(cfgRow[4]) || 'Payment') || ss.getSheets()[0];
+      var data = sh.getDataRange().getValues();
+      var cpm  = _paymentColsPerMonth(loc, cfgRow[5]);
+      var groups = parsePaymentSheet(data, detectCurrentMonthCol(data, curJSMonth, cpm),
+                                     detectContractDateCol(data), cpm, loc, typ);
+      var before = 0; groups.forEach(function(g){ before += g.children.length; });
+      var taken = _subLocsOfHost(loc);
+      var afterDrop = taken.length ? _dropSubLocBlocks(groups, taken) : groups;
+      var droppedKids = before; afterDrop.forEach(function(g){ droppedKids -= g.children.length; });
+      var stat = {}, final = afterDrop;
+      if (_isSchoolLoc(typ, loc)) final = _schoolRosterFromCards(afterDrop, loc, idx, stat);
+      var after = 0, gmap = {};
+      final.forEach(function(g){ after += g.children.length; gmap[g.group] = g.children.length; });
+      var sub = _subLocOf(loc);
+      // Дитина, що має рядок і в блоці під-локації, і деінде у файлі хоста:
+      // це не помилка (у садковому рядку лежать гроші за попередні місяці),
+      // але в місячному агрегаті вона з'явиться під ОБОМА локаціями.
+      var alsoInHost = [];
+      if (sub){
+        var inBlock = {}, outBlock = {};
+        groups.forEach(function(g){
+          var mine = _sameBlock(g, sub.group);
+          (g.children || []).forEach(function(ch){
+            var k = _nameFold(ch.name);
+            if (mine) inBlock[k] = ch.name; else outBlock[k] = (outBlock[k] || g.group);
+          });
+        });
+        Object.keys(inBlock).forEach(function(k){
+          if (outBlock.hasOwnProperty(k)) alsoInHost.push(inBlock[k] + ' (ще й у «' + outBlock[k] + '»)');
+        });
+      }
+      Logger.log('── %s (%s)%s: %s → %s дітей%s',
+        loc, typ, sub ? '  ← блок «' + sub.group + '» у файлі ' + sub.host : '',
+        before, after, taken.length ? '  (віддано під-локаціям: ' + droppedKids + ')' : '');
+      Logger.log('   групи: %s', JSON.stringify(gmap));
+      if (alsoInHost.length) Logger.log('   ⚠ подвійні рядки у файлі хоста (%s): %s',
+                                        alsoInHost.length, alsoInHost.join(', '));
+      if (stat.dropped) Logger.log('   без активної картки: %s | дублів схлопнуто: %s',
+                                   stat.dropped.length, (stat.merged || []).length);
+      report.push({loc:loc, typ:typ, sub:(sub || null), before:before, after:after,
+                   givenAway:droppedKids, groups:gmap, alsoInHost:alsoInHost,
+                   noCard:(stat.dropped || []).length, merged:(stat.merged || []).length,
+                   skipped:!!stat.skipped});
+    } catch(e){
+      Logger.log('   ❌ %s: %s', loc, e.message);
+      report.push({loc:loc, error:e.message});
+    }
+  });
   return {ok:true, dryRun:true, report:report};
 }
 
@@ -14486,6 +14689,7 @@ function _getLocationPaymentRegistry(loc){
   for (var r = 1; r < data.length; r++){
     if (trim(data[r][2]) === loc){
       return {
+        typ:          trim(data[r][1]),                       // v7.253: тип локації (Садочок/Школа/Управління)
         sheetId:      trim(data[r][3]),
         sheetName:    trim(data[r][4]) || 'Payment',
         colsPerMonth: _paymentColsPerMonth(loc, data[r][5])   // v7.103: 5/7 (реєстр кол.F → override → 5)
@@ -15115,7 +15319,11 @@ function _extractPayer(rec){
 // Повертає {index, diag:{bjColDetected, fromChild, fromBJ, fromCard}}.
 function _buildPayerIndex(loc){
   var idx = {};   // surnameKey -> [{childName, row(0-based; -1 якщо лише з CRM), group}]
-  var diag = { bjColDetected: false, fromChild: 0, fromBJ: 0, fromCard: 0 };
+  // v7.253: діагностика показує ПОВНИЙ шлях рядка — скільки прочитано з файлу,
+  // скільки віддано під-локації, скільки відкинуто без активної картки і
+  // скільки дублів схлопнуто. scanned vs roster = поведінка до і після правила.
+  var diag = { bjColDetected:false, fromChild:0, fromBJ:0, fromCard:0,
+               scanned:0, droppedBlock:0, droppedNoCard:0, mergedDup:0, cardRule:false };
   // add: childName унікальний у межах ключа-прізвища (одну дитину з різних джерел не дублюємо)
   function add(surnameSrc, child){
     var sk = _surnameKey(surnameSrc); if (!sk || !child.childName) return false;
@@ -15123,32 +15331,98 @@ function _buildPayerIndex(loc){
     for (var i = 0; i < list.length; i++) if (list[i].childName === child.childName) return false;
     list.push(child); return true;
   }
-  // 1) Payment-файл: ПІБ дитини (A) [джерело A] + «сторона договору» (по шапці) [джерело BJ]
-  var payRows = [];
-  var reg = _getLocationPaymentRegistry(loc);
+
+  var sub      = _subLocOf(loc);              // ця локація — блок у чужому файлі?
+  var taken    = _subLocsOfHost(loc);         // …чи навпаки, хост для чиїхось блоків?
+  var cardsLoc = sub ? sub.host : loc;        // де шукати картки цих дітей
+  var reg      = _getLocationPaymentRegistry(loc);
+  var isSchool = _isSchoolLoc(reg && reg.typ, loc);
+
+  // 1) Payment-файл: спершу ТІЛЬКИ читаємо рядки. Фільтри — окремими кроками нижче,
+  //    інакше правило блоку й правило картки не можна ні побачити, ні перевірити.
+  var scanned = [];
   if (reg && reg.sheetId){
     var ss = SpreadsheetApp.openById(reg.sheetId);
     var sh = ss.getSheetByName(reg.sheetName) || ss.getSheets()[0];
     var data = sh.getDataRange().getValues();
     var partyCol = _detectContractPartyCol(data);
     diag.bjColDetected = (partyCol >= 0);
-    var curGroup = '';
+    var curGroup = '', curRaw = '';
     for (var r = 3; r < data.length; r++){
       var name = trim(data[r][0]);
       if (!name) continue;
-      if (isGroupHeaderRow(data[r], 1)){ curGroup = normalizeGroupName(name); continue; }
-      var child = { childName: name, row: r, group: curGroup };
-      payRows.push(child);
-      if (add(name, child)) diag.fromChild++;                              // прізвище ДИТИНИ
-      if (partyCol >= 0){ var party = trim(data[r][partyCol]); if (party && add(party, child)) diag.fromBJ++; }
+      if (isGroupHeaderRow(data[r], 1)){
+        curRaw   = name;
+        curGroup = normalizeGroupName(name, isSchool);   // v7.253: у школі клас лишається як є
+        continue;
+      }
+      scanned.push({ childName:name, row:r, group:curGroup, rawGroup:curRaw,
+                     party: (partyCol >= 0) ? trim(data[r][partyCol]) : '' });
     }
   }
-  // 2) CRM-картки: батьки (мама/тато/підписант) для дітей цієї локації → той самий payRow по імені
+  diag.scanned = scanned.length;
+
+  // 2) v7.253 БЛОК ПІД-ЛОКАЦІЇ. Під-локація бере лише свій блок; хост його віддає.
+  var rows = scanned.filter(function(c){
+    if (sub){
+      if (_sameBlock(c, sub.group)) return true;
+      diag.droppedBlock++; return false;
+    }
+    for (var i = 0; i < taken.length; i++){
+      if (_sameBlock(c, taken[i].group)){ diag.droppedBlock++; return false; }
+    }
+    return true;
+  });
+
+  // 3) v7.253 ПРАВИЛО ШКОЛИ (те саме, що v7.252 в агрегаті): у звірку потрапляє
+  //    лише дитина з активною карткою, група береться з картки, дублі рядків
+  //    схлопуються. Без цього платіж можна було повісити на випускника або на
+  //    другий рядок тієї самої дитини: по Школі 228 індекс бачив 124 дитини
+  //    замість 71, по Школі Осокорки — 136 замість 98.
+  //    Дубль → лишаємо ПЕРШИЙ рядок: гроші однаково їдуть тій самій дитині, а
+  //    оператор більше не мусить вибирати між двома однаковими кандидатами.
+  //    БЕЗПЕКА: локація без жодної активної картки правило пропускає (як у v7.252).
+  if (isSchool){
+    var bucket = (_activeCardsByLoc() || {})[_nameFold(cardsLoc)] || {};
+    if (Object.keys(bucket).length){
+      diag.cardRule = true;
+      var seen = {}, kept = [];
+      rows.forEach(function(c){
+        var key  = _nameFold(c.childName);
+        var card = bucket[key];
+        if (!card){ diag.droppedNoCard++; return; }
+        if (sub && _nameFold(card.group) !== _nameFold(sub.group)){ diag.droppedNoCard++; return; }
+        if (seen[key]){ diag.mergedDup++; return; }
+        seen[key] = true;
+        c.group = trim(card.group) || c.group;
+        kept.push(c);
+      });
+      rows = kept;
+    }
+  }
+
+  // 4) Індекс: прізвище ДИТИНИ [джерело A] + «сторона договору» [джерело BJ].
+  var payRows = [];
+  rows.forEach(function(c){
+    var child = { childName: c.childName, row: c.row, group: c.group };
+    payRows.push(child);
+    if (add(c.childName, child)) diag.fromChild++;
+    if (c.party && add(c.party, child)) diag.fromBJ++;
+  });
+
+  // 5) CRM-картки: батьки (мама/тато/підписант) → той самий payRow по імені.
+  //    Картки беремо з локації-хоста (для під-локації — з садка), для школи —
+  //    лише активні, для під-локації — лише її блок.
   var byNorm = {}; payRows.forEach(function(c){ byNorm[_normNameVac(c.childName)] = c; });
   var cli = getClients();
   if (cli && cli.ok){
     (cli.data || []).forEach(function(o){
-      if (trim(o['Локація']) !== loc) return;
+      if (trim(o['Локація']) !== cardsLoc) return;
+      if (isSchool){
+        var st = trim(o['Статус']);
+        if (st !== 'active' && st !== 'adaptation') return;
+      }
+      if (sub && _nameFold(o['Група']) !== _nameFold(sub.group)) return;
       var cn = trim(o['ПІБ дитини']); if (!cn) return;
       var child = byNorm[_normNameVac(cn)] || { childName: cn, row: -1, group: trim(o['Група']) };
       ['ПІБ мами', 'ПІБ тата', 'Підписант договору'].forEach(function(f){
