@@ -1,5 +1,11 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.248
+// m.kids CRM — Google Apps Script v7.249
+// v7.249: «Вибули» окремим словом — тепер заголовок. isGroupHeaderRow його не
+//         знав, тож правило _isGraduatedHeader (v7.246) не спрацьовувало і блок
+//         під ним не ігнорувався: 42 перенесені рядки Школи 228 впали в
+//         «(без групи)». Житомирське «Preschool вибули» працювало випадково —
+//         його ловило слово «Preschool». Після цієї правки заголовок можна
+//         писати просто «Вибули».
 // v7.248: movePaymentRowsToBlock — перенесення рядків у службовий блок «Вибули»
 //         в кінці Payment. Дитина більше не ходить, але за нею оплати цього
 //         року: видалити рядок = стерти гроші, лишити на місці = рахується
@@ -598,7 +604,12 @@ function isGroupHeaderRow(row, monthCol) {
   for (var i = 0; i < GROUP_PATTERNS.length; i++) {
     if (GROUP_PATTERNS[i].test(nameCell)) return true;
   }
-  if (/вільних|місць|разом|всього|оплата за/i.test(nameCell)) return true;
+  // v7.249: «Вибули» окремим словом теж заголовок. Без цього рядок «Вибули» не
+  // проходив isGroupHeaderRow, правило _isGraduatedHeader (v7.246) до нього не
+  // доходило — і блок під ним не ігнорувався, а сипався в «(без групи)».
+  // Житомирське «Preschool вибули» працювало лише випадково: його ловило слово
+  // «Preschool», а не «вибули».
+  if (/вільних|місць|разом|всього|оплата за|вибул|випускник/i.test(nameCell)) return true;
   return false;
 }
 
@@ -5061,7 +5072,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.248', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.249', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
