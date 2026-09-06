@@ -1,5 +1,12 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.249
+// m.kids CRM — Google Apps Script v7.250
+// v7.250: movePaymentRowsToBlock приймає rows:[{row,name}] — адресацію за
+//         НОМЕРОМ рядка. Потрібно там, де те саме ПІБ трапляється у файлі двічі:
+//         пошук за іменем знаходить ПЕРШИЙ рядок, а перенести треба саме дубль
+//         (Школа 228: сім дітей мали по два рядки). ПІБ у парі звіряється з тим,
+//         що реально стоїть у клітинці — інакше відмова, бо номер міг зсунутися
+//         між dryRun і apply. Під час переносу враховується зсув уже
+//         перенесених рядків.
 // v7.249: «Вибули» окремим словом — тепер заголовок. isGroupHeaderRow його не
 //         знав, тож правило _isGraduatedHeader (v7.246) не спрацьовувало і блок
 //         під ним не ігнорувався: 42 перенесені рядки Школи 228 впали в
@@ -5072,7 +5079,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.249', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.250', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -6424,9 +6431,17 @@ function movePaymentRowsToBlock(body){
   var loc    = String(body.loc || '').trim();
   var title  = String(body.title || 'Вибули').trim();
   var names  = (body.names || []).map(function(n){ return trim(String(n)); }).filter(String);
+  // v7.250: адресація за НОМЕРОМ рядка — [{row, name}]. Потрібна, коли те саме
+  // ПІБ трапляється у файлі двічі: пошук за іменем знаходить ПЕРШИЙ рядок, а
+  // перенести треба саме дубль. name у парі обовʼязковий і звіряється з тим, що
+  // реально стоїть у клітинці: якщо не збігається — відмова, бо номер рядка міг
+  // зсунутися між dryRun і apply.
+  var pairs  = (body.rows || []).map(function(x){
+    return {row: Number(x && x.row) || 0, name: trim(String((x && x.name) || ''))};
+  }).filter(function(x){ return x.row > 0; });
   var dryRun = (body.dryRun !== false);
-  if (!loc)          return {ok:false, error:'loc обовʼязковий'};
-  if (!names.length) return {ok:false, error:'names[] обовʼязковий'};
+  if (!loc)                          return {ok:false, error:'loc обовʼязковий'};
+  if (!names.length && !pairs.length) return {ok:false, error:'names[] або rows[] обовʼязковий'};
   if (!dryRun && body.confirm !== 'YES_MOVE')
     return {ok:false, error:'Реальне перенесення вимагає confirm:"YES_MOVE"'};
   if (!_isGraduatedHeader(title))
@@ -6449,7 +6464,17 @@ function movePaymentRowsToBlock(body){
       return 0;
     }
     var data = sh.getDataRange().getValues();
-    var plan = [], notFound = [], headers = [];
+    var plan = [], notFound = [], headers = [], mismatched = [];
+    pairs.forEach(function(pr){                       // v7.250: за номером рядка
+      var actual = trim(String((data[pr.row - 1] || [])[0] || ''));
+      if (!actual){ notFound.push('рядок ' + pr.row + ' (порожній)'); return; }
+      if (pr.name && actual !== pr.name){
+        mismatched.push('рядок ' + pr.row + ': очікували «' + pr.name + '», а там «' + actual + '»');
+        return;
+      }
+      if (isGroupHeaderRow(data[pr.row - 1], 1)){ headers.push(actual); return; }
+      plan.push({name:actual, row:pr.row, byRow:true});
+    });
     names.forEach(function(n){
       var r = findRow(n);
       if (!r){ notFound.push(n); return; }
@@ -6458,7 +6483,12 @@ function movePaymentRowsToBlock(body){
     });
     var res = {ok:true, dryRun:dryRun, loc:loc, title:title,
                willMove:plan.length, rows:plan, notFound:notFound, skippedHeaders:headers,
-               blockRow:(sh.getLastRow() + 2)};
+               mismatched:mismatched, blockRow:(sh.getLastRow() + 2)};
+    if (mismatched.length){
+      res.ok = false;
+      res.error = 'Номер рядка не збігається з ПІБ — перенесення скасовано: ' + mismatched.join('; ');
+      return res;
+    }
     if (headers.length){
       res.ok = false;
       res.error = 'Серед names[] є заголовки груп — перенесення скасовано: ' + headers.join(', ');
@@ -6479,12 +6509,21 @@ function movePaymentRowsToBlock(body){
       }
       res.blockRow = hdrRow;
       // 2) переносимо по одному, щоразу перечитуючи позицію
-      var moved = 0;
+      var moved = 0, shift = 0;
+      plan.sort(function(a, b){ return a.row - b.row; });
       plan.forEach(function(p){
-        var r = findRow(p.name);
+        var r;
+        if (p.byRow){
+          // рядки нижче вже перенесених зсуваються вгору на кількість переміщених
+          r = p.row - shift;
+          var actual = trim(String(sh.getRange(r, 1).getValue() || ''));
+          if (actual !== p.name){ Logger.log('[moveBlock] пропуск: у рядку %s тепер «%s», очікували «%s»', r, actual, p.name); return; }
+        } else {
+          r = findRow(p.name);
+        }
         if (!r) return;
         sh.moveRows(sh.getRange(r, 1), sh.getLastRow() + 1);
-        moved++;
+        moved++; shift++;
       });
       SpreadsheetApp.flush();
       res.moved = moved;
