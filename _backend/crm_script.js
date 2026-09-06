@@ -1,5 +1,12 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.250
+// m.kids CRM — Google Apps Script v7.251
+// v7.251: restorePaymentFromBackup — відкат Payment-аркуша з бекап-вкладки того
+//         самого файлу. Діапазон бекапу копіюється поверх робочого аркуша
+//         (Range.copyTo): значення, формули й формати. Аркуш лишається тим самим
+//         обʼєктом — sheetId не змінюється, тож зовнішні посилання і реєстр
+//         локацій не ламаються. Перед відновленням — знімок поточного стану.
+//         dryRun показує розміри обох аркушів, кількість клітинок із формулами
+//         і кількість дітей у названому блоці — щоб було з чим звірити після.
 // v7.250: movePaymentRowsToBlock приймає rows:[{row,name}] — адресацію за
 //         НОМЕРОМ рядка. Потрібно там, де те саме ПІБ трапляється у файлі двічі:
 //         пошук за іменем знаходить ПЕРШИЙ рядок, а перенести треба саме дубль
@@ -5079,7 +5086,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.250', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.251', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -5295,6 +5302,7 @@ function doPost(e) {
     else if (body.action === 'savePredLocNorms')       result = savePredLocNorms(body || {});         // v7.236 норми локації (dryRun за замовч.)
     else if (body.action === 'seedPredCatalog')        result = seedPredCatalog(body || {});          // v7.236 сівба каталогу предметників (dryRun за замовч.)
     else if (body.action === 'savePayHeaderOverrides') result = savePayHeaderOverrides(body || {});   // v7.234 реєстр заголовків (dryRun за замовч.)
+    else if (body.action === 'restorePaymentFromBackup') result = restorePaymentFromBackup(body || {});  // v7.251 відкат аркуша з бекап-вкладки
     else if (body.action === 'movePaymentRowsToBlock')  result = movePaymentRowsToBlock(body || {});   // v7.248 перенесення рядків у блок «Вибули»
     else if (body.action === 'purgePaymentGhostRows')  result = purgePaymentGhostRows(body || {});   // v7.233 рядки-привиди в Payment (dryRun за замовч.)
     else if (body.action === 'renamePayGroupHeader')        result = renamePayGroupHeader(body || {}); // v7.227
@@ -6413,6 +6421,76 @@ function savePayHeaderOverrides(body){
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.251: ВІДНОВЛЕННЯ Payment-аркуша з бекап-вкладки того ж файлу.
+// Копіюємо діапазон бекапу поверх робочого аркуша (Range.copyTo) — переносяться
+// значення, ФОРМУЛИ і формати. Аркуш лишається тим самим обʼєктом: sheetId не
+// змінюється, тож зовнішні посилання й реєстр локацій не ламаються (тому не
+// перейменовуємо вкладки й не копіюємо аркуш цілком).
+// Перед відновленням — знімок поточного стану (_safeBackupSheet, тег 'prerestore').
+// dryRun за замовчуванням: показує розміри обох аркушів, кількість клітинок із
+// формулами і скільки дітей у названому блоці — щоб було з чим звірити ПІСЛЯ.
+// POST {action:'restorePaymentFromBackup', loc, backupSheet, block?, dryRun, confirm:'YES_RESTORE'}
+// ═══════════════════════════════════════════════════════════════════════════
+function restorePaymentFromBackup(body){
+  body = body || {};
+  var loc    = String(body.loc || '').trim();
+  var bkpNm  = String(body.backupSheet || '').trim();
+  var block  = String(body.block || '').trim();
+  var dryRun = (body.dryRun !== false);
+  if (!loc)   return {ok:false, error:'loc обовʼязковий'};
+  if (!bkpNm) return {ok:false, error:'backupSheet обовʼязковий'};
+  if (!dryRun && body.confirm !== 'YES_RESTORE')
+    return {ok:false, error:'Відновлення вимагає confirm:"YES_RESTORE"'};
+  try {
+    var reg = _getLocationPaymentRegistry(loc);
+    if (!reg || !reg.sheetId) return {ok:false, error:'Локацію "' + loc + '" не знайдено в реєстрі'};
+    var ss  = SpreadsheetApp.openById(reg.sheetId);
+    var tgt = (reg.sheetName && ss.getSheetByName(reg.sheetName)) || ss.getSheets()[0];
+    var bkp = ss.getSheetByName(bkpNm);
+    if (!bkp) return {ok:false, error:'Бекап-вкладку «' + bkpNm + '» не знайдено у файлі',
+                      sheets: ss.getSheets().map(function(s){ return s.getName(); })};
+
+    function stats(sh){
+      var lr = sh.getLastRow(), lc = sh.getLastColumn();
+      var f = lr ? sh.getRange(1, 1, lr, lc).getFormulas() : [];
+      var nf = 0;
+      for (var i = 0; i < f.length; i++)
+        for (var j = 0; j < f[i].length; j++) if (f[i][j]) nf++;
+      var kids = null;
+      if (block){
+        var a = lr ? sh.getRange(1, 1, lr, 1).getValues() : [];
+        var inBlock = false; kids = 0;
+        for (var r = 3; r < a.length; r++){
+          var nm = trim(String(a[r][0] || ''));
+          if (!nm) continue;
+          if (isGroupHeaderRow([nm], 1)){ inBlock = (nm === block); continue; }
+          if (inBlock) kids++;
+        }
+      }
+      return {name:sh.getName(), lastRow:lr, lastCol:lc, formulaCells:nf, kidsInBlock:kids};
+    }
+    var before = stats(tgt), src = stats(bkp);
+    var res = {ok:true, dryRun:dryRun, loc:loc, backupSheet:bkpNm, block:(block || null),
+               current:before, backup:src,
+               sheets: ss.getSheets().map(function(s){ return s.getName(); })};
+    if (dryRun) return res;
+
+    var lock = LockService.getScriptLock();
+    try { lock.waitLock(60000); } catch(_le){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+    try {
+      res.snapshotBefore = _safeBackupSheet(tgt, 'prerestore');
+      tgt.clear();                                             // значення + формати
+      bkp.getDataRange().copyTo(tgt.getRange(1, 1));           // значення + формули + формати
+      SpreadsheetApp.flush();
+      res.after = stats(tgt);
+      res.restored = true;
+    } finally { try { lock.releaseLock(); } catch(_lr){} }
+    return res;
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // v7.248: ПЕРЕНЕСЕННЯ РЯДКІВ У СЛУЖБОВИЙ БЛОК (за замовчуванням «Вибули»).
