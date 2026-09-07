@@ -1,5 +1,16 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.263
+// m.kids CRM — Google Apps Script v7.264
+// v7.264: INSTALL_EXPORT_GUARD_TRIGGER — постановка нічної гарантії на розклад
+//         із коду. Google не дає створити тригер через інтерфейс, а сам собою
+//         код на розклад не стає, тож функція ставить його з редактора:
+//         щодня, вікно 08:00–09:00, Europe/Kiev.
+//         Ідемпотентно — спершу видаляє ВСІ наявні nightlyExportGuarantee і
+//         спент-continuation _exportGuardBatch. Дублі тригерів коштували нам
+//         цілого дня (старий aggregatePayments о 06:21 затирав агрегат), тож
+//         повторний запуск інсталятора нічого не подвоїть.
+//         Заразом друкує ПОВНИЙ список тригерів проєкту з позначкою дублів —
+//         сторінка «Мої тригери» може бути недоступна так само, як і створення.
+//   • LIST_PROJECT_TRIGGERS — те саме, але тільки читання.
 // v7.263: nightlyExportGuarantee — скоуп розширено на ВСІ локації реєстру.
 //         У v7.262 я скопіював фільтр «Садочок|Школа» з відпусткової гарантії,
 //         і три локації типу «Управління» лишились поза прогоном: Житомир,
@@ -5253,7 +5264,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.263', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.264', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -9091,6 +9102,78 @@ function _expGuardRunBatch(){
     props.deleteProperty(_EXP_GUARD_KEY);
     _expGuardDeleteContinuations();
   }
+}
+
+// ═══ v7.264: ІНСТАЛЯТОР ТРИГЕРА НІЧНОЇ ГАРАНТІЇ ════════════════════════════
+// Привід: Google не дає створити тригер через інтерфейс, а сам собою код на
+// розклад не стає. Ця функція робить це з редактора — і заразом друкує ПОВНИЙ
+// список тригерів проєкту, бо сторінка «Мої тригери» теж може бути недоступна.
+//
+// ЯК ЗАПУСТИТИ: редактор Apps Script → обрати у випадайці функцію
+// INSTALL_EXPORT_GUARD_TRIGGER → «Виконати». Один раз.
+//
+// Ідемпотентно: спершу видаляє ВСІ наявні тригери nightlyExportGuarantee, тож
+// повторний запуск не наплодить дублів. Саме дублі тригерів коштували нам дня —
+// старий aggregatePayments о 06:21 затирав агрегат, і знайти його було важко.
+// Заразом прибирає спент-continuation тригери _exportGuardBatch.
+function INSTALL_EXPORT_GUARD_TRIGGER(){
+  var removed = 0, all = [];
+  try {
+    var trs = ScriptApp.getProjectTriggers();
+    for (var i = 0; i < trs.length; i++){
+      var fn = trs[i].getHandlerFunction();
+      if (fn === 'nightlyExportGuarantee' || fn === '_exportGuardBatch'){
+        ScriptApp.deleteTrigger(trs[i]); removed++;
+      }
+    }
+  } catch(e){ Logger.log('⚠ не вдалось прибрати старі: %s', e && e.message); }
+
+  ScriptApp.newTrigger('nightlyExportGuarantee')
+    .timeBased().everyDays(1).atHour(8)      // вікно 08:00–09:00, хвилину обирає Google
+    .inTimezone('Europe/Kiev').create();
+
+  Logger.log('═══ ТРИГЕР ВСТАНОВЛЕНО ═══');
+  Logger.log('nightlyExportGuarantee · щодня · вікно 08:00–09:00 (Europe/Kiev)');
+  Logger.log('прибрано старих/спент: %s', removed);
+
+  // Повний список тригерів проєкту — щоб було видно дублі й забуте.
+  try {
+    var now = ScriptApp.getProjectTriggers();
+    Logger.log('\n═══ УСІ ТРИГЕРИ ПРОЄКТУ (%s) ═══', now.length);
+    var byFn = {};
+    for (var k = 0; k < now.length; k++){
+      var f = now[k].getHandlerFunction();
+      byFn[f] = (byFn[f] || 0) + 1;
+      Logger.log('  %s · %s · %s', f, now[k].getEventType(), now[k].getTriggerSourceId() || 'time');
+    }
+    var dups = [];
+    for (var f2 in byFn) if (byFn[f2] > 1) dups.push(f2 + ' ×' + byFn[f2]);
+    if (dups.length) Logger.log('\n⚠ ДУБЛІ ТРИГЕРІВ: %s — зайві варто видалити', dups.join(', '));
+    else Logger.log('\n✅ дублів тригерів немає');
+  } catch(e){ Logger.log('⚠ список тригерів недоступний: %s', e && e.message); }
+
+  return {ok:true, installed:'nightlyExportGuarantee', hour:'08:00-09:00', removedOld:removed};
+}
+
+// Read-only: лише показати тригери, нічого не створюючи.
+// Запуск із редактора: LIST_PROJECT_TRIGGERS.
+function LIST_PROJECT_TRIGGERS(){
+  var out = [];
+  try {
+    var trs = ScriptApp.getProjectTriggers();
+    Logger.log('═══ ТРИГЕРИ ПРОЄКТУ (%s) ═══', trs.length);
+    var byFn = {};
+    for (var i = 0; i < trs.length; i++){
+      var f = trs[i].getHandlerFunction();
+      byFn[f] = (byFn[f] || 0) + 1;
+      out.push({fn: f, type: String(trs[i].getEventType())});
+      Logger.log('  %s · %s', f, trs[i].getEventType());
+    }
+    var dups = [];
+    for (var f2 in byFn) if (byFn[f2] > 1) dups.push(f2 + ' ×' + byFn[f2]);
+    Logger.log(dups.length ? ('\n⚠ ДУБЛІ: ' + dups.join(', ')) : '\n✅ дублів немає');
+  } catch(e){ Logger.log('❌ %s', e && e.message); return {ok:false, error:e.message}; }
+  return {ok:true, count:out.length, triggers:out};
 }
 
 function _expGuardDeleteContinuations(){
