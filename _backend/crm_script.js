@@ -1,5 +1,21 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.255
+// m.kids CRM — Google Apps Script v7.256
+// v7.256: ЗАПОБІЖНИК ДУБЛЬ-ID У НІЧНОМУ СИНКУ. ID картки будується з ПІБ+локації
+//         один раз і не перераховується (на ньому Табель, Здоровʼя, Історія_Груп),
+//         а syncMissingClientsFromPayments шукає картку за ПІБ. Тож після
+//         перейменування («Калініченко»→«Каліченко») синк не знаходить дитину під
+//         новим іменем, заводить чернетку — і genChildId дає рівно той ID, що вже
+//         стоїть на перейменованій картці. Так виникли 7 пар карток зі СПІЛЬНИМ ID:
+//         patchClientCell і saveClient бачать лише першу, а відмітки Табеля
+//         рахуються на обидві разом, тож purgeAutoDraftCards відмовляється чіпати
+//         будь-яку з них.
+//         Тепер синк збирає ще й набір ЗАЙНЯТИХ ID і пропускає створення, якщо
+//         цільовий ID уже існує (skip.idTaken + приклади в лозі). Умова лише
+//         забороняє запис, нічого не змінює.
+//   • Формула ID винесена в top-level _genChildId — одна на синк і на звіт.
+//   • dryRunIdMismatch (GET) — картки, чий ID не відповідає поточному ПІБ:
+//     окремо колізії (цільовий ID зайнятий), окремо перейменування, окремо старі
+//     формати ID. Read-only.
 // v7.255: ВИНЯТКИ ВІДПУСТКИ +9 (Кругла). Дев'ятеро дітей із preschool-договором
 //         отримують тип 'standard', тобто відпустку поза літом. Списків ДВА і
 //         гейтить форму саме фронтовий (clients.html VAC_EXCEPTIONS) — правити
@@ -5148,7 +5164,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.255', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.256', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -5162,6 +5178,7 @@ function doGet(e) {
     else if (action === 'dryRunPayerIndex')   result = dryRunPayerIndex(e.parameter || {});   // v7.253 ростер звірки платежів (read-only)
     else if (action === 'dryRunSubLoc')       result = dryRunSubLoc();                        // v7.253 під-локації в агрегаті (read-only)
     else if (action === 'dryRunSalarySplit')  result = dryRunSalarySplit();                   // v7.254 розріз Salary хост/під-локація (read-only)
+    else if (action === 'dryRunIdMismatch')   result = dryRunIdMismatch(e.parameter || {});     // v7.256 ID картки проти ПІБ (read-only)
     else if (action === 'syncPayments')        result = syncPayments();
     else if (action === 'runAggregateYearly') result = aggregatePaymentsYearly();
     else if (action === 'runSyncBdayStatus')  result = syncBdayStatusSheet();
@@ -8607,6 +8624,100 @@ function dryRunSalarySplit(){
     }
   });
   return {ok:true, dryRun:true, report:report};
+}
+
+// ═══ v7.256: ID КАРТКИ ПРОТИ ПОТОЧНОГО ПІБ ══════════════════════════════════
+// ID дитини будується з ПІБ+локації ОДИН РАЗ, при створенні, і далі не
+// перераховується — на нього зав'язані Табель, Здоров'я та Історія_Груп.
+// Тому після перейменування картки її ID зберігає СТАРЕ написання. Само по
+// собі це нешкідливо, але синк шукає картку за ПІБ: не знайшовши дитину під
+// новим іменем, він заводить чернетку — і генерує їй рівно той самий ID.
+// Так з'явилось 7 пар карток зі спільним ID (розведені й прибрані 07.09.2026).
+// Формула одна на весь файл: нею користуються і синк, і цей звіт.
+function _genChildId(name, loc){
+  return 'c_' + String(name || '').trim().slice(0, 24) + '_' + String(loc || '').slice(0, 12);
+}
+
+// dryRun: картки, чий ID не відповідає поточному ПІБ+локації. Нічого не пише.
+// Головне поле — collision: ID, який згенерувався б із ПОТОЧНОГО імені, уже
+// зайнятий іншою карткою. Такі пари — наступні дублі, щойно синк їх торкнеться.
+// GET ?action=dryRunIdMismatch[&loc=…]
+function dryRunIdMismatch(params){
+  params = params || {};
+  var only = trim(String(params.loc || ''));
+  var res = getClients();
+  if (!res || !res.ok) return res || {ok:false, error:'getClients failed'};
+  var all = res.data || [];
+  // ВАЖЛИВО: ID НЕ обрізаємо. Для локацій із довгою назвою хвіст ID — це рівно
+  // 12 символів назви, і для «Нац.Гвардії (Благо)» це «Нац.Гвардії » з пробілом
+  // на кінці. trim() на одному боці порівняння дає 110 хибних розбіжностей.
+  var byId = {};
+  all.forEach(function(c){ var i = String(c['ID'] == null ? '' : c['ID']); if (i) byId[i] = (byId[i] || 0) + 1; });
+
+  var rows = [], dupId = [];
+  all.forEach(function(c){
+    var loc = trim(String(c['Локація'] || ''));
+    if (only && loc !== only) return;
+    var cur  = String(c['ID'] == null ? '' : c['ID']);          // без trim — див. вище
+    var name = trim(String(c['ПІБ дитини'] || ''));
+    if (!cur || !name) return;
+    if (byId[cur] > 1) dupId.push({id:cur, name:name, loc:loc, status:trim(String(c['Статус'] || ''))});
+    var exp = _genChildId(name, loc);
+    if (cur === exp) return;
+    // Відрізняємо ПЕРЕЙМЕНУВАННЯ від просто старого формату ID.
+    // Старий формат: ПІБ на початку правильний, а далі зайвий хвіст
+    // (`_Кругла_20220517`, `__20241224`) — колізій не дає, чіпати не треба.
+    // Перейменування: у ID стоїть ІНШЕ написання ПІБ — саме воно плодить дублі.
+    var idBody = (cur.indexOf('c_') === 0) ? cur.slice(2) : cur;
+    var nm24   = name.slice(0, 24);
+    var sameName = _nameFold(idBody.slice(0, nm24.length)) === _nameFold(nm24);
+    if (!sameName){
+      // ПІБ у картці подовжили («Крістіан» → «Крістіан Владиславович»):
+      // ID тримає обрізаний початок того самого імені — це теж не перейменування.
+      var head = idBody.split('_')[0];
+      if (head && _nameFold(nm24).indexOf(_nameFold(head)) === 0) sameName = true;
+    }
+    var idName = idBody.replace(/_[^_]*$/, '');
+    var renamed = !sameName;
+    rows.push({
+      id: cur, expectedId: exp, name: name, loc: loc,
+      status: trim(String(c['Статус'] || '')),
+      idSaysName: idName,
+      renamed: renamed,                       // ПІБ у ID інший, ніж у картці
+      collision: !!byId[exp],                 // цільовий ID уже зайнятий
+      collisionWith: byId[exp] ? exp : ''
+    });
+  });
+
+  rows.sort(function(a, b){
+    if (a.collision !== b.collision) return a.collision ? -1 : 1;
+    if (a.renamed   !== b.renamed)   return a.renamed   ? -1 : 1;
+    return String(a.loc).localeCompare(String(b.loc), 'uk');
+  });
+  var col = rows.filter(function(r){ return r.collision; });
+  var ren = rows.filter(function(r){ return r.renamed && !r.collision; });
+
+  Logger.log('═══ ID КАРТКИ ПРОТИ ПІБ · DRY-RUN ═══');
+  Logger.log('карток: %s · розбіжностей: %s · з них перейменування: %s · КОЛІЗІЙ: %s · карток зі спільним ID: %s',
+    all.length, rows.length, ren.length + col.length, col.length, dupId.length);
+  if (col.length){
+    Logger.log('── КОЛІЗІЇ (цільовий ID уже зайнятий — тут синк зробив би дубль) ──');
+    col.forEach(function(r){ Logger.log('   %s (%s, %s) · ID "%s" · цільовий "%s" ЗАЙНЯТИЙ', r.name, r.loc, r.status, r.id, r.expectedId); });
+  }
+  if (ren.length){
+    Logger.log('── ПЕРЕЙМЕНОВАНІ (ID тримає ІНШЕ ПІБ — наступні кандидати на дубль) ──');
+    ren.forEach(function(r){ Logger.log('   картка «%s» · ID каже «%s» · %s · %s', r.name, r.idSaysName, r.loc, r.status); });
+  }
+  var other = rows.filter(function(r){ return !r.renamed && !r.collision; });
+  if (other.length){
+    Logger.log('── СТАРІ ФОРМАТИ ID (з датою народження / без локації) — колізій не дають ──');
+    other.forEach(function(r){ Logger.log('   %s (%s) · ID "%s"', r.name, r.loc, r.id); });
+  }
+  if (dupId.length) Logger.log('⚠ КАРТКИ ЗІ СПІЛЬНИМ ID: %s', JSON.stringify(dupId));
+
+  return {ok:true, dryRun:true, clients:all.length,
+          mismatched:rows.length, collisions:col.length, renamed:ren.length,
+          sharedId:dupId, rows:rows};
 }
 
 // v7.108: ІСТОРІЯ ОПЛАТ ДИТИНИ ЗА ВЕСЬ РІК — читає Payment-файл локації напряму (джерело правди),
@@ -22336,15 +22447,26 @@ function syncMissingClientsFromPayments(opts){
   }
   function genChildId(name, group, loc){
     // v7.47 ЕТАП 2/4: група ПРИБРАНА з ID → синк матчить картку по name+loc, не плодить привида.
-    return 'c_' + String(name||'').trim().slice(0,24) + '_' + String(loc||'').slice(0,12);
+    return _genChildId(name, loc);   // v7.256: формула винесена нагору (спільна зі звітом)
   }
   function _cleanChildName(nm){ return _cleanSchoolName(nm); }   // v7.114: делегуємо у спільну top-level
 
   var existing = {};
+  // v7.256: додатково збираємо ЗАЙНЯТІ ID. Причина — дублі з однаковим ID:
+  // ID генерується з ПІБ і НІКОЛИ не перераховується, а синк шукає картку за ПІБ.
+  // Тож після перейменування («Калініченко»→«Каліченко») картки з новим іменем
+  // синк не знаходить, будує чернетку — і genChildId дає рівно той ID, що вже
+  // стоїть на перейменованій картці. Так з'явилось 7 пар дублів.
+  var existingIds = {};
+  var cIdIdx = chdrs.indexOf('ID');
   for (var cr = 1; cr < cvals.length; cr++){
     var cn = cvals[cr][cNameIdx];
     if (!String(cn||'').trim()) continue;
     existing[normKey(_cleanChildName(cn), cvals[cr][cLocIdx])] = true;   // v7.113: cleaned-ім'я
+    if (cIdIdx >= 0){
+      var _cid = String(cvals[cr][cIdIdx] || '').trim();
+      if (_cid) existingIds[_cid] = String(cn||'').trim();
+    }
   }
   Logger.log('[syncMissing] Клієнти: %s рядків даних, %s унікальних name+loc ключів',
     cvals.length - 1, Object.keys(existing).length);
@@ -22357,7 +22479,8 @@ function syncMissingClientsFromPayments(opts){
   //   4) Бюджет-Рік > 0 OR Факт-Рік > 0 (фінансова активність)
   var missing = [];
   var seenNew = {};
-  var skip = {header:0, numeric:0, test:0, zeroSum:0, noLoc:0, existing:0, dupInPay:0, outScope:0, camp:0, incomplete:0, notName:0};
+  var skip = {header:0, numeric:0, test:0, zeroSum:0, noLoc:0, existing:0, dupInPay:0, outScope:0, camp:0, incomplete:0, notName:0, idTaken:0};
+  var idTakenSamples = [];   // v7.256
   var skipNumericSamples = [];
   var skipNotNameSamples = [];   // v7.209
   for (var pr = 1; pr < pvals.length; pr++){
@@ -22394,9 +22517,21 @@ function syncMissingClientsFromPayments(opts){
     var key = normKey(cname, loc);
     if (existing[key]){ skip.existing++; continue; }   // вже є в Клієнти (зіставлення по cleaned-ПІБ)
     if (seenNew[key]){ skip.dupInPay++; continue; }     // дубль у самій Оплати-Рік (напр. Шевченко Влад=Владислав)
+    // v7.256 ЗАПОБІЖНИК ДУБЛЬ-ID: згенерований ID уже зайнятий — значить, картка
+    // існує, просто під іншим написанням ПІБ (її перейменували, а ID лишився
+    // старим). Створювати другу з тим самим ID не можна: обидві копії стають
+    // невідрізненними для patchClientCell/saveClient, а відмітки Табеля
+    // рахуються на них разом. Пропускаємо і ГУЧНО кажемо про розбіжність.
+    var _newId = genChildId(cname, group, loc);
+    if (existingIds[_newId]){
+      skip.idTaken++;
+      if (idTakenSamples.length < 20)
+        idTakenSamples.push(cname + ' (' + loc + ') → ID "' + _newId + '" уже в картки «' + existingIds[_newId] + '»');
+      continue;
+    }
     seenNew[key] = true;
     missing.push({name:cname, loc:loc, group:group, teacher:teacher,
-      budRik:budRik, faktRik:faktRik, id:genChildId(cname, group, loc)});
+      budRik:budRik, faktRik:faktRik, id:_newId});
   }
 
   // === 4. Лог відсіяних + по локаціях + перші 50 ===
@@ -22410,6 +22545,8 @@ function syncMissingClientsFromPayments(opts){
   Logger.log('  · нульова сума (Бюджет+Факт=0):   %s', skip.zeroSum);
   Logger.log('  · вже є в Клієнти:               %s', skip.existing);
   Logger.log('  · дубль у Оплати-Рік:            %s', skip.dupInPay);
+  Logger.log('  · ID зайнятий (перейменована картка): %s%s', skip.idTaken,
+    idTakenSamples.length ? '\n      ' + idTakenSamples.join('\n      ') : '');
   Logger.log('  · табір/спейсери (Табір/Вільних): %s', skip.camp);
   Logger.log('  · неповне ПІБ (лише імʼя):        %s', skip.incomplete);
   Logger.log('  · не схоже на ПІБ (v7.209):       %s  %s', skip.notName,
