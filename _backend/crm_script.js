@@ -1,5 +1,14 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.262
+// m.kids CRM — Google Apps Script v7.263
+// v7.263: nightlyExportGuarantee — скоуп розширено на ВСІ локації реєстру.
+//         У v7.262 я скопіював фільтр «Садочок|Школа» з відпусткової гарантії,
+//         і три локації типу «Управління» лишились поза прогоном: Житомир,
+//         Манхетен (Благо), Нац.Гвардії (Благо). А відмітки в них є — за
+//         вересень 59, 16 і 13. Тобто гарантія обходила б саме ті локації, що
+//         в аудиті вже виглядали недоведеними (нульові ставки, позиції без
+//         рядка в Salary).
+//         Локації без відміток нічого не коштують: експорт віддає updated=0.
+//         Було 14 локацій × 2 місяці = 28 пар, стало 17 × 2 = 34.
 // v7.262: ТРИ ДОРОБКИ ПІСЛЯ АУДИТУ НІЧНИХ ТРИГЕРІВ.
 //   (1) РІЧНИЙ АГРЕГАТ, варіант B. «Школа Кар'єрна» вказує на той самий
 //       Payment-файл, що й садок, тож aggregatePaymentsYearly рахував усю
@@ -5244,7 +5253,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.262', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.263', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -9003,11 +9012,18 @@ var _EXP_GUARD_KEY   = 'expguard_state';
 function nightlyExportGuarantee(){
   _expGuardDeleteContinuations();          // прибрати спент-тригери з минулого разу
   var props = PropertiesService.getScriptProperties();
+  // v7.263: БЕЗ фільтра типу — беремо ВСІ локації реєстру.
+  // У першій редакції я скопіював фільтр «Садочок|Школа» з відпусткової
+  // гарантії, і за бортом лишились три локації типу «Управління» —
+  // Житомир, Манхетен (Благо), Нац.Гвардії (Благо). А в них є відмітки:
+  // за вересень 59, 16 і 13 відповідно. Тобто саме ті локації, що в аудиті
+  // виглядали недоведеними, гарантія обходила б стороною.
+  // Локації без відміток нічого не коштують: експорт віддає updated=0.
   var locs = [];
   try {
     (getLocations().data || []).forEach(function(l){
-      var t = String(l.typ || '').trim();
-      if (t === 'Садочок' || t === 'Школа') locs.push(String(l.loc || '').trim());
+      var nm = String(l.loc || '').trim();
+      if (nm) locs.push(nm);
     });
   } catch(e){ Logger.log('[expGuard] getLocations впав: %s', e && e.message); }
   if (!locs.length){ Logger.log('[expGuard] локацій нема — пропуск'); return; }
@@ -9095,9 +9111,9 @@ function dryRunExportGuard(){
   var months = [{y: pm.y, m: pm.m}, {y: y, m: m}];
   var out = [], locs = [];
   try {
-    (getLocations().data || []).forEach(function(l){
-      var t = String(l.typ || '').trim();
-      if (t === 'Садочок' || t === 'Школа') locs.push(String(l.loc || '').trim());
+    (getLocations().data || []).forEach(function(l){   // v7.263: усі локації реєстру
+      var nm = String(l.loc || '').trim();
+      if (nm) locs.push(nm);
     });
   } catch(e){ return {ok:false, error:e.message}; }
   Logger.log('═══ НІЧНА ГАРАНТІЯ ЕКСПОРТУ · DRY-RUN ═══');
