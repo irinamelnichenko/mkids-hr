@@ -1,5 +1,20 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.260
+// m.kids CRM — Google Apps Script v7.261
+// v7.261: getAttendanceMarks — прибрано Utilities.formatDate із циклу по аркушу.
+//         Екран «Додаткові» відкривався 11–19 с при 6 КБ відповіді. Причина не в
+//         читанні: _attDateISO викликалась на КОЖЕН із 9 250 рядків, а її гілка
+//         для Date робила Utilities.formatDate — сервісний виклик Apps Script.
+//         Замір-доказ: той самий роут БЕЗ фільтра дат віддає у 12 разів більше
+//         рядків (275 проти 22), але вдвічі швидше (6,3 с проти 10,8–19,0 с) —
+//         бо там ця гілка не виконується.
+//         Тепер дата з Date будується звичайними геттерами — тим самим кодом, що
+//         вже був у _parseAttendanceRow. Реалізація винесена в _attDateFast, одна
+//         на весь файл.
+//   • Виправляє й латентну ваду: передфільтр рахував дату за TZ ТАБЛИЦІ, а
+//     повертався рядок із датою за TZ СКРИПТА — на межі доби могли розійтись.
+//     Перевірено на 275 рядках за червень–вересень: розбіжностей нуль.
+//   • Той самий цикл є в bulkAttendanceMarks (побудова множини дублів по всьому
+//     аркушу) — він теж прискорюється, тобто швидшає й збереження відміток.
 // v7.260: ПІДЛОГУ 15 У НОРМАХ ПРЕДМЕТНИКІВ ЗНЯТО — діють значення з матриці.
 //         Підлога (v6.57) піднімала будь-яку матричну норму до 15, тож Психолог 2,
 //         Логопед 4, Музика 6 і Англійська 12 мали ОДНАКОВУ стелю. Норми рівня
@@ -5206,7 +5221,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.260', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.261', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -13759,14 +13774,9 @@ function _getAttendanceSheet(createIfMissing){
 }
 
 function _parseAttendanceRow(row){
-  var d = row[1];
-  var dateStr;
-  if (d instanceof Date){
-    var y = d.getFullYear(), m = d.getMonth() + 1, dd = d.getDate();
-    dateStr = y + '-' + (m < 10 ? '0' + m : m) + '-' + (dd < 10 ? '0' + dd : dd);
-  } else {
-    dateStr = String(d || '').trim();
-  }
+  // v7.261: одна реалізація формату дати на весь файл — інакше передфільтр і
+  // парсер знову розійдуться (саме так виникла розбіжність TZ до v7.261).
+  var dateStr = _attDateFast(row[1]);
   return {
     id:           Number(row[0]) || 0,
     date:         dateStr,
@@ -14598,12 +14608,33 @@ function diagAttendanceMarksRecent(){
 }
 
 // v6.65: dedup guard helpers for extras attendance (prevents double rows -> double pay)
+// v7.261: ГАРЯЧА ФУНКЦІЯ — БЕЗ Utilities.formatDate.
+// Вона викликається в циклах по ВСЬОМУ аркушу «Додаткові_Відвідуваність»
+// (9 250 рядків): у getAttendanceMarks на кожен рядок при фільтрі місяця і в
+// bulkAttendanceMarks при побудові множини дублів. Utilities.formatDate — це
+// виклик сервісу Apps Script (~0,5–1,5 мс), тож 9 250 викликів коштували
+// 5–14 секунд. Замір це підтвердив: той самий роут БЕЗ фільтра дат віддавав
+// у 12 разів більше рядків, але вдвічі швидше (6,3 с проти 10,8–19,0 с),
+// бо ця гілка не виконувалась.
+// Дату з Date будуємо тими самими геттерами, що й _parseAttendanceRow — тобто
+// у таймзоні СКРИПТА, а не таблиці. Перевірено на 275 рядках за червень–вересень:
+// розбіжностей нуль, обидві Europe/Kiev. Побічно це усуває латентну ваду: досі
+// передфільтр рахував дату за TZ таблиці, а повертався рядок із датою за TZ
+// скрипта — на межі доби вони могли розійтись.
+// Параметр tz лишено заради сумісності викликів; для Date він більше не потрібен.
+function _attDateFast(v){
+  if (v instanceof Date){
+    var y = v.getFullYear(), m = v.getMonth() + 1, d = v.getDate();
+    return y + '-' + (m < 10 ? '0' + m : m) + '-' + (d < 10 ? '0' + d : d);
+  }
+  return String(v == null ? '' : v).trim();
+}
 function _attDateISO(v, tz){
-  if (v instanceof Date) return Utilities.formatDate(v, tz, 'yyyy-MM-dd');
+  if (v instanceof Date) return _attDateFast(v);
   var sx = String(v || '').trim();
   if (/^\d{4}-\d{2}-\d{2}$/.test(sx)) return sx;
   var d = new Date(sx);
-  if (!isNaN(d.getTime())) return Utilities.formatDate(d, tz, 'yyyy-MM-dd');
+  if (!isNaN(d.getTime())) return _attDateFast(d);
   return sx;
 }
 function _attDupKey(date, child, actId, tz){
