@@ -1,5 +1,16 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.254
+// m.kids CRM — Google Apps Script v7.255
+// v7.255: ВИНЯТКИ ВІДПУСТКИ +9 (Кругла). Дев'ятеро дітей із preschool-договором
+//         отримують тип 'standard', тобто відпустку поза літом. Списків ДВА і
+//         гейтить форму саме фронтовий (clients.html VAC_EXCEPTIONS) — правити
+//         треба обидва, інакше бекенд рахує, а форма відмовляє.
+//         Дані не чіпаються: історія відсутностей лишається як є, лічильник
+//         тижнів від типу договору не залежить (рахує всі vacation-періоди).
+//         НАСЛІДОК, про який слід знати: раніше внесені НЕ-літні періоди цих
+//         дітей досі пропускались як непридатні (_vacIsSummerPeriod), а тепер
+//         стають придатними для знижки. Самі по собі вони нічого не змінюють,
+//         але перерахунок місяця або reconcileVacationDiscounts тепер їх
+//         врахує — див. список у комміті.
 // v7.254: ЗП ПІД-ЛОКАЦІЇ. «Школа Кар'єрна» не існувала для зарплати:
 //         getSalaryData падав з «Location not found in Salary registry», а
 //         salaryReconcileRows мовчки віддавав ПОРОЖНІЙ список — на екрані звірки
@@ -5137,7 +5148,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.254', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.255', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -16726,7 +16737,14 @@ function _vacSchoolLocSet(){
 }
 // Дзеркало фронту (clients.html getContractType3): діти з договором ≥01.10.2025,
 // яким зберігаємо відпустку як 'standard'. Матч по нормалізованому ПІБ (_normForMatch).
-var _VAC_EXCEPTIONS = ['андреєва ангеліна','тандиряк северин','гаркуша богдан','мельничук дарина','скоріна аліса','городний яким',"щуров мар'ян",'бахтін богдан','бахтін роман','букін михайло'];
+var _VAC_EXCEPTIONS = [
+  'андреєва ангеліна','тандиряк северин','гаркуша богдан','мельничук дарина','скоріна аліса',
+  'городний яким',"щуров мар'ян",'бахтін богдан','бахтін роман','букін михайло',
+  // v7.255 (07.09.2026): дев'ятеро Круглої з preschool-договором — відпустка поза
+  // літом. Ключ = _normForMatch(ПІБ картки). Мельничук Дарина вже вище.
+  'волощук олівія','нагачевська софія','якимець артур','димарчук аделіна','подоляк божена',
+  'терешко макар','мельничук ксенія','шиш устим','черних поліна',
+];
 // preschool-відпустка зараховується як standard ЛИШЕ якщо весь період у літі
 // (місяці from і to в межах 06–08) — дзеркало saveAbsencePeriod у clients.html.
 function _vacIsSummerPeriod(fromISO, toISO){
