@@ -866,6 +866,10 @@ select,input,textarea{font-family:inherit}
   .attg-cell.on.disabled{opacity:1}
   .attg-cell.on.disabled .attg-cb{opacity:1}
   .attg-cell.saving{opacity:.6;cursor:wait}
+  /* v7.258: відмітка вже стоїть, але ще не долетіла на сервер — галочка
+     видима одразу, лише трохи тьмяніша й з пунктиром. Зникає за ~1,5 с. */
+  .attg-cell.pending{border-style:dashed}
+  .attg-cell.pending .attg-cb{opacity:.55}
   .attg-cb{pointer-events:none}
   .attg-empty{padding:14px;color:#8a97a6}
   </style>
@@ -2122,6 +2126,8 @@ function initGlobalLocSelector(){
   }
   S.activeLoc = sel.value;
   sel.addEventListener('change', function(){
+    // v7.258: віддаємо відмітки й експорт СТАРОЇ локації, поки вона ще в EXP.pendingFor
+    try { if (typeof flushGridAndExport === 'function') flushGridAndExport('зміна локації'); } catch(_){}
     S.activeLoc = this.value;
     try { safeSetItem(CFG.LAST_LOC_KEY, S.activeLoc); } catch(e){}
     onActiveLocChange();
@@ -2716,6 +2722,7 @@ async function initAttendanceTab(){
 
   // Event handlers
   $('attDate').addEventListener('change', function(){
+    try { if (typeof flushGridAndExport === 'function') flushGridAndExport('зміна дати'); } catch(_){}   // v7.258
     ATT.date = this.value;
     // v6.22: ручна зміна дати = "calendar" mode (chips перерендерить setDateChip)
     _setDateChipActive('calendar');
@@ -3299,6 +3306,7 @@ function _dayMergedForCurrentGroup(iso){
 
 // Навігація місяцями: тепер довантажуємо відмітки нового місяця (grid-marks помісячні).
 async function gridChangeMonth(delta){
+  try { await flushGridAndExport('зміна місяця'); } catch(_){}   // v7.258
   var m = ATT.gridMonth + delta, y = ATT.gridYear;
   if (m < 1){ m = 12; y--; } else if (m > 12){ m = 1; y++; }
   ATT.gridMonth = m; ATT.gridYear = y;
@@ -3375,8 +3383,10 @@ function renderMonthGrid(){
       var canEdit = hasPerm('attendance-edit') && !locked;
       var lockKey = child + '|' + act.id + '|' + D.iso;
       var saving  = !!ATT.gridInFlight[lockKey];
+      var _mk     = _gridMarkFor(child, act.id, D.iso);
+      var pending = !!(_mk && _mk._pending);
       var cls = 'attg-cell' + (on ? ' on' : '') + (D.isToday ? ' today' : '') +
-                (canEdit ? '' : ' disabled') + (saving ? ' saving' : '');
+                (canEdit ? '' : ' disabled') + (saving ? ' saving' : '') + (pending ? ' pending' : '');
       var glyph = on ? '✅' : (canEdit ? '' : '·');
       var tip = escapeHtml(child) + ' · ' + D.dmy + (locked ? ' · 🔒 тиждень замкнено' : '');
       html += '<div class="' + cls + '"' +
@@ -3389,6 +3399,121 @@ function renderMonthGrid(){
   wrap.innerHTML = html;
 }
 
+// ═══ v7.258: ВІДМІТКА СТАВИТЬСЯ МИТТЄВО, ЗАПИС ІДЕ ПАКЕТОМ У ФОНІ ═══════════
+// Було: один POST на клік, і UI ЧЕКАВ відповідь — галочка з'являлась через
+// 5–7 с (порожній виклик Apps Script коштує ~5 с сам по собі). Плюс кожна
+// відмітка перезапускала авто-експорт, а він важчий за все інше.
+// Стало: стан міняється синхронно, галочка є одразу, а запис накопичується
+// 1,5 с і йде ОДНИМ bulkAttendanceMarks — тим самим роутом, що вже
+// використовує масовий режим. Помилка → відмітку прибираємо назад і кажемо.
+var GRID_QUEUE_DELAY_MS = 1500;
+var GQ = {
+  add: [],          // [mark] — локальні відмітки, ще не відправлені
+  del: [],          // [{id, mark}] — зняття вже збережених
+  delWaiting: [],   // {child, activityId, date} — зняти, щойно add отримає серверний id
+  timer: null,
+  sending: false
+};
+function _gridMarkById(id){
+  for (var i = 0; i < ATT.gridMarks.length; i++) if (ATT.gridMarks[i].id === id) return ATT.gridMarks[i];
+  return null;
+}
+function _gridDropById(id){
+  ATT.gridMarks = ATT.gridMarks.filter(function(m){ return m.id !== id; });
+}
+function _gqSameSlot(a, child, actId, iso){
+  return a.child === child && Number(a.activityId) === Number(actId) && a.date === iso;
+}
+function _gqSchedule(){
+  if (GQ.timer) clearTimeout(GQ.timer);
+  GQ.timer = setTimeout(function(){ GQ.timer = null; _gqFlush(); }, GRID_QUEUE_DELAY_MS);
+  _gqUpdateBadge();
+}
+function _gqPending(){ return GQ.add.length + GQ.del.length + (GQ.sending ? 1 : 0); }
+function _gqUpdateBadge(){
+  try {
+    var n = GQ.add.length + GQ.del.length;
+    if (GQ.sending)   setSyncState('syncing', '💾 Зберігаю відмітки…');
+    else if (n > 0)   setSyncState('pending', '💾 До збереження: ' + n);
+  } catch(_){}
+}
+// Зняти те, що ще не відправлене → просто прибрати з черги (нічого писати не треба).
+// Зняти те, що ЗАРАЗ у польоті → відкласти до отримання серверного id, інакше
+// рядок лишиться на сервері назавжди (а це гроші в Пейментах).
+function _gqQueueRemove(existing, child, actId, iso){
+  for (var i = 0; i < GQ.add.length; i++){
+    if (_gqSameSlot(GQ.add[i], child, actId, iso)){ GQ.add.splice(i, 1); _gqSchedule(); return; }
+  }
+  if (String(existing.id).indexOf('local-') === 0){
+    GQ.delWaiting.push({child: child, activityId: Number(actId), date: iso});
+    return;
+  }
+  GQ.del.push({id: existing.id, mark: existing});
+  _gqSchedule();
+}
+function _gqPromoteWaitingDeletes(){
+  if (!GQ.delWaiting.length) return;
+  var still = [];
+  GQ.delWaiting.forEach(function(w){
+    var m = _gridMarkFor(w.child, w.activityId, w.date);
+    if (!m) return;                                     // уже зняли інакше
+    if (String(m.id).indexOf('local-') === 0){ still.push(w); return; }
+    _gridDropById(m.id);
+    GQ.del.push({id: m.id, mark: m});
+  });
+  GQ.delWaiting = still;
+  if (GQ.del.length) _gqSchedule();
+}
+async function _gqFlush(){
+  if (GQ.sending) return;
+  if (!GQ.add.length && !GQ.del.length) return;
+  GQ.sending = true;
+  _gqUpdateBadge();
+  var adds = GQ.add.splice(0, GQ.add.length);
+  var dels = GQ.del.splice(0, GQ.del.length);
+  try {
+    if (adds.length){
+      var items = adds.map(function(m){
+        return {date:m.date, loc:m.loc, group:m.group, child:m.child,
+                activityId:m.activityId, activityName:m.activityName,
+                price:m.price, markedBy:m.markedBy};
+      });
+      var res = await saveBackend('bulkAttendanceMarks', {items: items});
+      if (res && res.ok && Array.isArray(res.results)){
+        for (var i = 0; i < adds.length; i++){
+          var rr = res.results[i], cur = _gridMarkById(adds[i].id);
+          if (!cur) continue;                                  // встигли зняти вручну
+          if (rr && rr.ok){ if (rr.id) cur.id = rr.id; delete cur._pending; }
+          else { _gridDropById(adds[i].id);
+                 showToast('❌ ' + ((rr && rr.error) || 'не збереглось') + ' — ' + adds[i].child, 'err', 4000); }
+        }
+      } else if (res && res.localOnly){
+        adds.forEach(function(m){ var c = _gridMarkById(m.id); if (c){ delete c._pending; c._localOnly = true; } });
+        showToast('💾 Збережено локально — відправимо коли зʼявиться мережа', 'info', 4000);
+      } else {
+        adds.forEach(function(m){ _gridDropById(m.id); });
+        showToast('❌ ' + ((res && res.error) || 'Не вдалось зберегти'), 'err', 5000);
+      }
+    }
+    if (dels.length){
+      var res2 = await saveBackend('bulkRemoveAttendanceMarks', {ids: dels.map(function(d){ return d.id; })});
+      if (!(res2 && (res2.ok || res2.localOnly))){
+        dels.forEach(function(d){ if (!_gridMarkById(d.id)) ATT.gridMarks.push(d.mark); });
+        showToast('❌ ' + ((res2 && res2.error) || 'Не вдалось зняти'), 'err', 5000);
+      }
+    }
+  } catch(e){
+    adds.forEach(function(m){ _gridDropById(m.id); });
+    dels.forEach(function(d){ if (!_gridMarkById(d.id)) ATT.gridMarks.push(d.mark); });
+    showToast('❌ ' + (e && e.message || e), 'err', 5000);
+  }
+  GQ.sending = false;
+  _gqPromoteWaitingDeletes();
+  renderMonthGrid();
+  if (GQ.add.length || GQ.del.length) _gqSchedule();
+  else if (!GQ.sending) _gqUpdateBadge();
+}
+
 async function onGridCellClick(child, iso){
   if (!hasPerm('attendance-edit')){ showToast('Немає прав на редагування відвідуваності', 'err'); return; }
   if (isWeekLocked(iso)){ showToast('🔒 Тиждень замкнено — редагує лише CFO', 'err'); return; }
@@ -3396,46 +3521,24 @@ async function onGridCellClick(child, iso){
   for (var i = 0; i < acts.length; i++){ if (acts[i].id === ATT.activity){ act = acts[i]; break; } }
   if (!act){ showToast('🚫 Оберіть заняття', 'err'); return; }
 
-  var lockKey = child + '|' + act.id + '|' + iso;
-  if (ATT.gridInFlight[lockKey]) return;
-  ATT.gridInFlight[lockKey] = true;
-  renderMonthGrid();                                    // оптимістичний "saving"
-
   var existing = _gridMarkFor(child, act.id, iso);
   if (existing){
-    var res = await saveBackend('removeAttendanceMark', {id: existing.id});
-    if (res.ok || res.localOnly){
-      ATT.gridMarks = ATT.gridMarks.filter(function(m){ return m.id !== existing.id; });
-      showToast(res.localOnly ? '💾 Знято локально' : '✓ Знято', res.localOnly ? 'info' : 'ok', 1800);
-    } else {
-      showToast('❌ ' + (res.error || 'Не вдалось зняти'), 'err');
-    }
+    _gridDropById(existing.id);                 // знімаємо ОДРАЗУ
+    renderMonthGrid();
+    _gqQueueRemove(existing, child, act.id, iso);
   } else {
-    var markerName = _markerLabel();
-    var price = Number(act.clientPrice) || 0;
-    var payload = { data: {
+    var mark = {
+      id: 'local-' + Date.now() + '-' + Math.random().toString(36).slice(2,7),
       date: iso, loc: S.activeLoc, group: ATT.group, child: child,
-      activityId: act.id, activityName: act.name, price: price, markedBy: markerName
-    }};
-    var res2 = await saveBackend('addAttendanceMark', payload);
-    if (res2.ok || res2.localOnly){
-      var newId = res2.id || ('local-' + Date.now() + '-' + Math.random().toString(36).slice(2,7));
-      if (!_gridMarkFor(child, act.id, iso)){       // dup:true → уже є, не дублюємо локально
-        ATT.gridMarks.push({
-          id: newId, date: iso, loc: S.activeLoc, group: ATT.group, child: child,
-          activityId: act.id, activityName: act.name, price: price,
-          markedBy: markerName, markedAt: new Date().toISOString()
-        });
-      }
-      showToast(res2.localOnly ? '💾 Відмічено локально' : (res2.dup ? 'вже відмічено' : '✓ Збережено'),
-                res2.localOnly ? 'info' : 'ok', 1800);
-    } else {
-      showToast('❌ ' + (res2.error || 'Не вдалось зберегти'), 'err');
-    }
+      activityId: act.id, activityName: act.name,
+      price: Number(act.clientPrice) || 0, markedBy: _markerLabel(),
+      markedAt: new Date().toISOString(), _pending: true
+    };
+    ATT.gridMarks.push(mark);                   // галочка ОДРАЗУ
+    renderMonthGrid();
+    GQ.add.push(mark);
+    _gqSchedule();
   }
-
-  delete ATT.gridInFlight[lockKey];
-  renderMonthGrid();
   if (typeof scheduleAutoExport === 'function') scheduleAutoExport();
 }
 
@@ -5243,6 +5346,35 @@ function toggleSyncLogPanel(){
 
 // Викликаємо з toggleAttendance — після кожної відмітки запускаємо
 // debounce 5с. Кожен новий toggle — скидає таймер.
+// ═══ v7.258: АВТО-ЕКСПОРТ ПРИБРАНО З ГАРЯЧОГО ШЛЯХУ ════════════════════════
+// Було 5 с: кожна відмітка перезапускала таймер, і після кожної паузи довшої за
+// 5 с вихователька чекала повний exportAttendance (Пейменти + Salary, ~11–20 с).
+// Тобто найважча операція системи бігала частіше за всі інші разом.
+// Стало 90 с + ПРИМУСОВИЙ скид у моменти, коли робота з екраном завершується:
+// зміна локації, місяця чи дати, згортання вкладки, кнопка «Синхронізувати».
+// Гроші доїжджають у Пейменти не через 5 с, а через півтори хвилини — або
+// одразу, щойно вихователька перемкнулась чи закрила екран.
+var AUTO_EXPORT_DELAY_MS = 90000;
+function _fmtLeft(ms){
+  var sec = Math.max(0, Math.ceil(ms / 1000));
+  return (sec >= 60) ? (Math.floor(sec / 60) + ' хв ' + (sec % 60) + ' с') : (sec + ' с');
+}
+// Спершу дописати відмітки, ПОТІМ експортувати — інакше експорт не побачить
+// щойно поставленого. Викликається на всіх виходах з екрана.
+async function flushGridAndExport(reason){
+  try {
+    if (GQ.timer){ clearTimeout(GQ.timer); GQ.timer = null; }
+    if (GQ.add.length || GQ.del.length || GQ.sending) await _gqFlush();
+  } catch(_){}
+  if (!EXP.pendingFor && !EXP.pendingTimer) return false;
+  if (EXP.pendingTimer){ clearTimeout(EXP.pendingTimer); EXP.pendingTimer = null; }
+  if (EXP.countdownTimer){ clearInterval(EXP.countdownTimer); EXP.countdownTimer = null; }
+  var spec = EXP.pendingFor; EXP.pendingFor = null;
+  if (!spec) return false;
+  try { console.log('[att.grid] примусовий експорт:', reason || ''); } catch(_){}
+  doExportAttendance(spec.loc, spec.month, spec.year, /*manual*/ false);
+  return true;
+}
 function scheduleAutoExport(){
   // Авто-експорт запускає кожен, хто може ставити відмітки (attendance-edit) —
   // вихователі та директори на місцях, не лише CFO.
@@ -5260,18 +5392,18 @@ function scheduleAutoExport(){
   if (EXP.countdownTimer) clearInterval(EXP.countdownTimer);
 
   EXP.pendingFor = {loc: loc, month: month, year: year};
-  EXP.pendingUntil = Date.now() + 5000;
+  EXP.pendingUntil = Date.now() + AUTO_EXPORT_DELAY_MS;
 
-  // Show countdown in indicator.
-  setSyncState('pending', '⏳ Синхронізація з Пейментами через 5с…');
+  // v7.258: countdown раз на секунду (було двічі) — рідше смикаємо DOM.
+  setSyncState('pending', '⏳ Синхронізація з Пейментами через ' + _fmtLeft(AUTO_EXPORT_DELAY_MS) + '…');
   EXP.countdownTimer = setInterval(function(){
-    var remaining = Math.max(0, Math.ceil((EXP.pendingUntil - Date.now()) / 1000));
-    if (remaining <= 0){
+    var left = EXP.pendingUntil - Date.now();
+    if (left <= 0){
       clearInterval(EXP.countdownTimer); EXP.countdownTimer = null;
       return;
     }
-    setSyncState('pending', '⏳ Синхронізація з Пейментами через ' + remaining + 'с…');
-  }, 500);
+    setSyncState('pending', '⏳ Синхронізація з Пейментами через ' + _fmtLeft(left) + '…');
+  }, 1000);
 
   EXP.pendingTimer = setTimeout(function(){
     EXP.pendingTimer = null;
@@ -5290,6 +5422,10 @@ async function doExportAttendance(loc, month, year, manual){
     if (manual) showToast('Немає прав на експорт', 'err');
     return null;
   }
+  // v7.258: експортуємо ЗАРАЗ — відкладений таймер більше не потрібен.
+  if (EXP.pendingTimer){ clearTimeout(EXP.pendingTimer); EXP.pendingTimer = null; }
+  if (EXP.countdownTimer){ clearInterval(EXP.countdownTimer); EXP.countdownTimer = null; }
+  EXP.pendingFor = null;
   setSyncState('syncing', '🔄 Синхронізація з Пейментами + Salary…');
   try {
     var r = await _afTryFetch(CFG.SCRIPT_URL, {   // v7.74: 3 спроби (1с, 3с) на network-fail
@@ -5412,7 +5548,9 @@ function initExportTab(){
     renderExportPreview();
   });
 
-  $('expDoBtn').addEventListener('click', function(){
+  $('expDoBtn').addEventListener('click', async function(){
+    // v7.258: спершу дописуємо чергу відміток, інакше експорт їх не побачить
+    try { if (GQ.timer){ clearTimeout(GQ.timer); GQ.timer = null; } if (GQ.add.length || GQ.del.length) await _gqFlush(); } catch(_){}
     doExportAttendance(S.activeLoc, EXP.month, EXP.year, /*manual*/ true);
   });
   $('expPrevMonthBtn').addEventListener('click', function(){
@@ -5799,5 +5937,20 @@ if (navigator.onLine && typeof replayOfflineQueue === 'function'){
 })();
 </script>
 
+<script>
+// ═══ v7.258: не лишати відмітки й експорт «у повітрі» при виході з екрана ═══
+// Вкладку згорнули або сторінку закривають — дописуємо чергу відміток і віддаємо
+// відкладений експорт одразу, не чекаючи 90 с. Усе під try: при вивантаженні
+// сторінки fetch може не долетіти, і це не привід кидати помилку користувачці.
+(function(){
+  function _leave(reason){
+    try { if (typeof flushGridAndExport === 'function') flushGridAndExport(reason); } catch(_){}
+  }
+  document.addEventListener('visibilitychange', function(){
+    if (document.visibilityState === 'hidden') _leave('вкладку згорнуто');
+  });
+  window.addEventListener('pagehide', function(){ _leave('сторінку закрито'); });
+})();
+</script>
 </body>
 </html>
