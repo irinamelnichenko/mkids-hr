@@ -1,5 +1,28 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.261
+// m.kids CRM — Google Apps Script v7.262
+// v7.262: ТРИ ДОРОБКИ ПІСЛЯ АУДИТУ НІЧНИХ ТРИГЕРІВ.
+//   (1) РІЧНИЙ АГРЕГАТ, варіант B. «Школа Кар'єрна» вказує на той самий
+//       Payment-файл, що й садок, тож aggregatePaymentsYearly рахував усю
+//       Кар'єрну ДВІЧІ: 1125 рядків замість 965. Тепер тут діє правило
+//       під-локації (хост віддає блок, під-локація бере тільки свій).
+//       Правило КАРТКИ (v7.252) сюди свідомо НЕ переносимо: місячний агрегат —
+//       знімок місяця, а річний читають заради грошей за ВЕСЬ рік, тож
+//       випускник із оплатою за березень має лишитись зі своїми сумами.
+//       Школа 228 і Школа Осокорки в річному й далі ширші за місячний.
+//   (2) nightlyExportGuarantee о 08:30 — Salary й OPEX не оновлювались ЖОДНИМ
+//       тригером: експорт відміток запускався лише з екрана. Якщо вихователька
+//       закрила вкладку раніше за автоекспорт (з v7.258 це 90 с), сума не їхала.
+//       Тепер щоночі проходимо всі локації за поточний і попередній місяць.
+//       Ідемпотентно (дельта в «Експорт_Журнал»), закриті місяці пропускаються.
+//       Пачками по 3 локації + continuation-тригер, як у відпустковій гарантії:
+//       17 локацій × 2 місяці × 2 під-експорти не вміщаються в 6-хв ліміт.
+//       dryRunExportGuard (GET) — що зробила б гарантія, без запису.
+//   (3) ВИБУЛІ В getNeedsAttention. nightlyDepartureSnapshot фіксує зниклих із
+//       Payment у «Журнал_Вибуття», але статус картки не міняє — і журнал ріс
+//       сам по собі (151 запис), його ніхто не читав. Тепер такі картки
+//       приходять у звіт категорією 'departed' із датою виявлення й останнім
+//       місяцем у Payment. Статус НЕ міняється автоматично: дитину могли
+//       тимчасово прибрати з файлу — рішення за людиною.
 // v7.261: getAttendanceMarks — прибрано Utilities.formatDate із циклу по аркушу.
 //         Екран «Додаткові» відкривався 11–19 с при 6 КБ відповіді. Причина не в
 //         читанні: _attDateISO викликалась на КОЖЕН із 9 250 рядків, а її гілка
@@ -5221,7 +5244,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.261', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.262', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -5236,6 +5259,7 @@ function doGet(e) {
     else if (action === 'dryRunSubLoc')       result = dryRunSubLoc();                        // v7.253 під-локації в агрегаті (read-only)
     else if (action === 'dryRunSalarySplit')  result = dryRunSalarySplit();                   // v7.254 розріз Salary хост/під-локація (read-only)
     else if (action === 'dryRunIdMismatch')   result = dryRunIdMismatch(e.parameter || {});     // v7.256 ID картки проти ПІБ (read-only)
+    else if (action === 'dryRunExportGuard')  result = dryRunExportGuard();                    // v7.262 нічна гарантія експорту (read-only)
     else if (action === 'syncPayments')        result = syncPayments();
     else if (action === 'runAggregateYearly') result = aggregatePaymentsYearly();
     else if (action === 'runSyncBdayStatus')  result = syncBdayStatusSheet();
@@ -8959,6 +8983,145 @@ function _vacGuardRunBatch(){
   }
 }
 
+// ═══ v7.262: НІЧНА ГАРАНТІЯ ЕКСПОРТУ ВІДМІТОК (08:30) ══════════════════════
+// Привід: Salary й OPEX не оновлювались автоматично ЖОДНИМ тригером. Експорт
+// відміток у Payment і Salary запускався лише з екрана — автоекспортом після
+// відмітки або кнопкою. Тобто якщо вихователька відмітила заняття й закрила
+// вкладку раніше, ніж спрацював таймер (а з v7.258 це 90 с), сума не поїде,
+// доки хтось не відкриє екран знову.
+// Тепер щоночі о 08:30 проходимо ВСІ локації за поточний і попередній місяць.
+// Ідемпотентно: обидва під-експорти працюють через дельту в «Експорт_Журнал»
+// (записане vs поточне), тож повторний прогін нічого не подвоює. Закриті місяці
+// пропускає сам бекенд.
+// Пачками, як у відпустковій гарантії: 17 локацій × 2 місяці × 2 під-експорти
+// (Payment + Salary) — це до 11 хвилин, у 6-хвилинний ліміт не вміщається.
+// Продовження — one-off тригер _exportGuardBatch через 2 хв, позиція в
+// ScriptProperties.
+var _EXP_GUARD_BATCH = 3;    // локацій за прогін (× 2 місяці × 2 експорти = 12)
+var _EXP_GUARD_KEY   = 'expguard_state';
+
+function nightlyExportGuarantee(){
+  _expGuardDeleteContinuations();          // прибрати спент-тригери з минулого разу
+  var props = PropertiesService.getScriptProperties();
+  var locs = [];
+  try {
+    (getLocations().data || []).forEach(function(l){
+      var t = String(l.typ || '').trim();
+      if (t === 'Садочок' || t === 'Школа') locs.push(String(l.loc || '').trim());
+    });
+  } catch(e){ Logger.log('[expGuard] getLocations впав: %s', e && e.message); }
+  if (!locs.length){ Logger.log('[expGuard] локацій нема — пропуск'); return; }
+
+  var tz  = 'Europe/Kiev';
+  var now = new Date();
+  var y = Number(Utilities.formatDate(now, tz, 'yyyy'));
+  var m = Number(Utilities.formatDate(now, tz, 'MM'));
+  var pm = (m === 1) ? {y: y - 1, m: 12} : {y: y, m: m - 1};
+  // поточний + ПОПЕРЕДНІЙ місяць: відмітка кінця місяця цілиться в наступний,
+  // тож на початку місяця треба дотиснути ще й хвіст попереднього.
+  var months = [{y: pm.y, m: pm.m}, {y: y, m: m}];
+
+  var st = {locs: locs, months: months, pos: 0,
+            pCells: 0, sCells: 0, pSum: 0, sSum: 0, errs: [], locsDone: 0,
+            startedAt: now.toISOString()};
+  props.setProperty(_EXP_GUARD_KEY, JSON.stringify(st));
+  Logger.log('[expGuard] START: %s локацій × міс(%s/%s, %s/%s), пачка=%s',
+    locs.length, pm.m, pm.y, m, y, _EXP_GUARD_BATCH);
+  _expGuardRunBatch();
+}
+
+// Continuation-handler (окремий, щоб безпечно видаляти спент one-off тригери).
+function _exportGuardBatch(){ _expGuardRunBatch(); }
+
+function _expGuardRunBatch(){
+  var props = PropertiesService.getScriptProperties();
+  var raw = props.getProperty(_EXP_GUARD_KEY);
+  if (!raw){ Logger.log('[expGuard] нема стану — пропуск'); return; }
+  var st;
+  try { st = JSON.parse(raw); } catch(e){ props.deleteProperty(_EXP_GUARD_KEY); return; }
+
+  var end = Math.min(st.pos + _EXP_GUARD_BATCH, st.locs.length);
+  for (var i = st.pos; i < end; i++){
+    var loc = st.locs[i];
+    for (var k = 0; k < st.months.length; k++){
+      var mm = st.months[k];
+      try {
+        if (_isMonthClosed(mm.y, mm.m)) continue;          // закритий місяць не чіпаємо
+        var res = exportAttendance({loc: loc, month: mm.m, year: mm.y});
+        var p = (res && res.payments) || {}, sa = (res && res.salary) || {};
+        if (p.ok){ st.pCells += (p.cellsWritten || 0); st.pSum += (p.totalAmount || 0); }
+        else if (p.error) st.errs.push(loc + ' ' + mm.m + '/' + mm.y + ' P: ' + p.error);
+        if (sa.ok){ st.sCells += (sa.cellsWritten || 0); st.sSum += (sa.totalFact || 0); }
+        else if (sa.error) st.errs.push(loc + ' ' + mm.m + '/' + mm.y + ' S: ' + sa.error);
+      } catch(e){
+        st.errs.push(loc + ' ' + mm.m + '/' + mm.y + ' EXC: ' + (e && e.message || e));
+        Logger.log('[expGuard] EXC %s %s/%s: %s', loc, mm.m, mm.y, e && e.message);
+      }
+    }
+    st.locsDone++;
+  }
+  st.pos = end;
+  if (st.errs.length > 40) st.errs = st.errs.slice(0, 40);   // не роздувати property
+  props.setProperty(_EXP_GUARD_KEY, JSON.stringify(st));
+
+  if (st.pos < st.locs.length){
+    _expGuardDeleteContinuations();
+    ScriptApp.newTrigger('_exportGuardBatch').timeBased().after(2 * 60 * 1000).create();
+    Logger.log('[expGuard] пачка до %s/%s готова, наступна через 2 хв', st.pos, st.locs.length);
+  } else {
+    Logger.log('[expGuard] ✅ ЗАВЕРШЕНО: локацій %s · Payment: клітинок %s на %s ₴ · Salary: клітинок %s на %s ₴',
+      st.locsDone, st.pCells, Math.round(st.pSum), st.sCells, Math.round(st.sSum));
+    if (st.errs.length) Logger.log('[expGuard] ⚠ проблеми (%s):\n  %s', st.errs.length, st.errs.join('\n  '));
+    props.deleteProperty(_EXP_GUARD_KEY);
+    _expGuardDeleteContinuations();
+  }
+}
+
+function _expGuardDeleteContinuations(){
+  try {
+    var trs = ScriptApp.getProjectTriggers();
+    for (var i = 0; i < trs.length; i++){
+      if (trs[i].getHandlerFunction() === '_exportGuardBatch') ScriptApp.deleteTrigger(trs[i]);
+    }
+  } catch(e){}
+}
+
+// Read-only: що зробила б гарантія, нічого не пишучи. GET ?action=dryRunExportGuard
+function dryRunExportGuard(){
+  var tz = 'Europe/Kiev', now = new Date();
+  var y = Number(Utilities.formatDate(now, tz, 'yyyy'));
+  var m = Number(Utilities.formatDate(now, tz, 'MM'));
+  var pm = (m === 1) ? {y: y - 1, m: 12} : {y: y, m: m - 1};
+  var months = [{y: pm.y, m: pm.m}, {y: y, m: m}];
+  var out = [], locs = [];
+  try {
+    (getLocations().data || []).forEach(function(l){
+      var t = String(l.typ || '').trim();
+      if (t === 'Садочок' || t === 'Школа') locs.push(String(l.loc || '').trim());
+    });
+  } catch(e){ return {ok:false, error:e.message}; }
+  Logger.log('═══ НІЧНА ГАРАНТІЯ ЕКСПОРТУ · DRY-RUN ═══');
+  locs.forEach(function(loc){
+    months.forEach(function(mm){
+      var closed = false;
+      try { closed = _isMonthClosed(mm.y, mm.m); } catch(e){}
+      if (closed){ out.push({loc:loc, year:mm.y, month:mm.m, skipped:'closed'}); return; }
+      try {
+        var r = exportAttendanceToPayments({loc:loc, year:mm.y, month:mm.m, dryRun:true});
+        out.push({loc:loc, year:mm.y, month:mm.m,
+                  updated:(r && r.updated) || 0, totalAmount:(r && r.totalAmount) || 0,
+                  cellsWouldWrite:(r && r.cellsWritten) || 0, error:(r && r.ok) ? '' : (r && r.error) || ''});
+        Logger.log('   %s %s/%s: дітей %s · сума %s · клітинок до запису %s',
+          loc, mm.m, mm.y, (r && r.updated) || 0, (r && r.totalAmount) || 0, (r && r.cellsWritten) || 0);
+      } catch(e){ out.push({loc:loc, year:mm.y, month:mm.m, error:String(e && e.message || e)}); }
+    });
+  });
+  var need = out.filter(function(x){ return (x.cellsWouldWrite || 0) > 0; });
+  Logger.log('── потребують запису: %s з %s пар (локація×місяць)', need.length, out.length);
+  return {ok:true, dryRun:true, months:months, rows:out,
+          needWrite:need.length, pairs:out.length};
+}
+
 function _vacGuardDeleteContinuations(){
   try {
     var trs = ScriptApp.getProjectTriggers();
@@ -9051,6 +9214,27 @@ function aggregatePaymentsYearly() {
       var curMonthCol  = detectCurrentMonthCol(data, curJSMonth, cpm);
       var contractCol  = detectContractDateCol(data);
       var groups       = parsePaymentSheet(data, curMonthCol, contractCol, cpm, loc, typ);   // v7.202
+      // v7.262 ВАРІАНТ B: у річному агрегаті діє ЛИШЕ правило під-локації.
+      // Причина: «Школа Кар'єрна» вказує на той самий Payment-файл, що й садок,
+      // тож без цього річний аркуш рахував усю Кар'єрну ДВІЧІ — 73 рядки під
+      // садком і ті самі 73 під школою (1125 рядків замість 965).
+      // Правило КАРТКИ (v7.252) сюди свідомо НЕ переносимо: у місячному агрегаті
+      // це знімок одного місяця, а річний читають, щоб бачити гроші за ВЕСЬ рік —
+      // випускник із оплатою за березень має там лишитись зі своїми сумами.
+      // Тому Школа 228 і Школа Осокорки в річному й далі ширші за місячний.
+      var _ySub = _subLocOf(loc);
+      if (_ySub){
+        var _yb = groups.length;
+        groups = groups.filter(function(g){ return _sameBlock(g, _ySub.group); });
+        Logger.log(loc + ' [рік]: під-локація — лишено блок «' + _ySub.group + '», груп ' + _yb + ' → ' + groups.length);
+      } else {
+        var _yTaken = _subLocsOfHost(loc);
+        if (_yTaken.length){
+          var _yb2 = groups.length;
+          groups = _dropSubLocBlocks(groups, _yTaken);
+          Logger.log(loc + ' [рік]: віддано блоків під-локаціям — ' + (_yb2 - groups.length));
+        }
+      }
       var nameToRow = {};
       for (var ri = 3; ri < data.length; ri++) {
         var nc = trim(String(data[ri][0] || ''));
@@ -22422,11 +22606,42 @@ function getNeedsAttention(){
     var cardsByLoc={};
     for (var c=1;c<cv.length;c++){ if(!cv[c][iId]) continue;
       var lk2=_naNorm(cv[c][iLoc]); (cardsByLoc[lk2]=cardsByLoc[lk2]||[]).push(String(cv[c][iName]||'').trim()); }
-    var items=[], byCat={decide:0,'merge-card':0,'drift-pay':0,junk:0};
+    var items=[], byCat={decide:0,'merge-card':0,'drift-pay':0,junk:0,departed:0};
+    // v7.262: індекс «Журнал_Вибуття» — дитина зникла з Payment, і нічний
+    // nightlyDepartureSnapshot це зафіксував. Статус картки він НЕ міняє (і не
+    // має: дитину могли тимчасово прибрати з файлу або переставити рядок), тож
+    // журнал ріс сам по собі — 151 запис, і ніхто його не читав. Тепер вибулі
+    // приходять у цей звіт окремою категорією, а рішення лишається за людиною.
+    var departedBy = {};
+    try {
+      var dsh = crm.getSheetByName(DEPARTURE_LOG_SHEET);
+      if (dsh && dsh.getLastRow() > 1){
+        var dv2 = dsh.getDataRange().getValues();
+        for (var q = 1; q < dv2.length; q++){
+          var dnm = String(dv2[q][1] || '').trim(); if (!dnm) continue;
+          var dkey = _naNorm(dnm) + '|' + _naNorm(dv2[q][2]);
+          // останній запис виграє: якщо дитина зникала кілька разів, показуємо свіжий
+          departedBy[dkey] = {seen: String(dv2[q][0] || ''), group: String(dv2[q][3] || ''),
+                              lastMonth: String(dv2[q][4] || '')};
+        }
+      }
+    } catch(_de){ Logger.log('[needsAttention] Журнал_Вибуття: %s', _de && _de.message); }
+
     for (var k=1;k<cv.length;k++){ if(!cv[k][iId]) continue;
       if(_naNorm(cv[k][iStat])!=='active') continue;
       var name=String(cv[k][iName]||'').trim(), loc=String(cv[k][iLoc]||'').trim(), lk3=_naNorm(loc);
       if (payset[_naNorm(name)+'|'+lk3]) continue;                       // є в Payment → не чіпаємо
+      var _dep = departedBy[_naNorm(name)+'|'+lk3];
+      if (_dep){
+        // Картка ще active, але дитина вже зникла з Payment — і ми знаємо КОЛИ.
+        // Це точніший сигнал, ніж евристика _naClassify, тож він має пріоритет.
+        byCat.departed++;
+        items.push({id:String(cv[k][iId]||''), name:name, loc:loc,
+          group:(iGrp>=0?String(cv[k][iGrp]||''):''), created:(iCr>=0?String(cv[k][iCr]||''):''),
+          cat:'departed', match:'',
+          departedAt:_dep.seen, lastPaymentMonth:_dep.lastMonth, payGroup:_dep.group});
+        continue;
+      }
       var cl=_naClassify(name, loc, cardsByLoc[lk3]||[], payByLoc[lk3]||[]);
       byCat[cl.cat]=(byCat[cl.cat]||0)+1;
       items.push({id:String(cv[k][iId]||''), name:name, loc:loc,
