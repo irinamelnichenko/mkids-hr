@@ -1,5 +1,19 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.256
+// m.kids CRM — Google Apps Script v7.257
+// v7.257: saveAttendance більше не б'є тривогу на власний простір імен.
+//         Перевірка knownIds (v7.162) звіряла childId зі списком ДІТЕЙ (колонка
+//         «ID» аркуша «Клієнти»), а табель співробітників навмисно пише
+//         «STAFF::<empKey>» (v6.27.4). Збігу там не буде ніколи, тож попередження
+//         стріляло на КОЖЕН пакет табеля — 1153 із 1165 записів TG_Err виявились
+//         хибною тривогою, і за цим шумом не було видно 12 справжніх збоїв.
+//         Дані при цьому НЕ губились: unknown.push не має return, відмітка
+//         зберігається завжди (перевірено: у «Табелі» 1302 STAFF-рядки по
+//         Осокорках, 942 по Круглій, читаються назад через getAttendance).
+//   • mirrorAttendanceToNurseSheet більше не викликається для STAFF-записів: він
+//     і так нічого не робив (співробітниці немає серед рядків-дітей), але
+//     відкривав таблицю медсестри на кожну відмітку.
+//   • ATT_STAFF_PREFIX — константа поруч зі SHEET_ATTENDANCE; решта бекенду цей
+//     префікс уже знала (dedupAttendance, звіт по табелю).
 // v7.256: ЗАПОБІЖНИК ДУБЛЬ-ID У НІЧНОМУ СИНКУ. ID картки будується з ПІБ+локації
 //         один раз і не перераховується (на ньому Табель, Здоровʼя, Історія_Груп),
 //         а syncMissingClientsFromPayments шукає картку за ПІБ. Тож після
@@ -546,6 +560,9 @@ var SHEET_CLIENTS    = 'Клієнти';
 // Єдине джерело правди для getCRMSpreadsheet(). Змінювати лише свідомо, руками.
 var CRM_SHEET_ID_CANON = '1pA2q84BFsXWuUchIlu8um853od_PXr7KepLpTovUjLo';
 var SHEET_ATTENDANCE = 'Табель';
+// v7.257: префікс табеля СПІВРОБІТНИКІВ у колонці «ID дитини» (заведено v6.27.4).
+// Такий id навмисно не перетинається з дітьми й не зачіпає білінг.
+var ATT_STAFF_PREFIX = 'STAFF::';
 var SHEET_HEALTH     = 'Здоров\'я';
 var GROUP_HISTORY_SHEET = 'Історія_Груп'; // v7.47 ЕТАП 5: історія переходів груп
 var CLIENT_MIN_FE_VER = 756; // v7.56 KILL-SWITCH: saveClient приймається лише від фронту з _ver >= цього (стара вкладка → реджект, щоб не плодила дубль-картки старим childId)
@@ -5164,7 +5181,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.256', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.257', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -9206,7 +9223,16 @@ function saveAttendance(body) {
     var date    = _attDateIso(rec.date, tz);              // нормалізуємо вхідну дату
     var childId = trim(String(rec.childId || ''));
     if (!date || !childId) return;
-    if (knownIds && !knownIds[childId]) unknown.push(childId + ' · ' + (rec.childName||'—') + ' · ' + (rec.loc||'—') + ' · ' + date);
+    // v7.257: «STAFF::<empKey>» — НАВМИСНИЙ простір імен табеля співробітників
+    // (v6.27.4), він і не має бути в реєстрі дітей. Перевірка knownIds (v7.162)
+    // звіряє id з колонкою «ID» аркуша «Клієнти», тобто зі списком ДІТЕЙ, тож на
+    // кожен пакет табеля стріляло попередження — звідси стабільні «13 з 13».
+    // Результат: 1153 з 1165 записів TG_Err були хибною тривогою, і за ними не
+    // видно справжніх збоїв. Дані при цьому не губились: unknown.push нижче не
+    // має return, відмітка зберігається завжди.
+    // Решта бекенду цей префікс уже знає (див. dedupAttendance, звіт по табелю).
+    var isStaff = (childId.indexOf(ATT_STAFF_PREFIX) === 0);
+    if (knownIds && !isStaff && !knownIds[childId]) unknown.push(childId + ' · ' + (rec.childName||'—') + ' · ' + (rec.loc||'—') + ' · ' + date);
     var row = [date, childId, rec.childName||'', rec.loc||'', rec.group||'', rec.status||'', rec.updatedBy||'', now];
     // Оновлюємо ОСТАННІЙ існуючий рядок (read бере last) — матчинг через
     // нормалізовану дату, тож більше НЕ створюємо дублі.
@@ -9222,7 +9248,10 @@ function saveAttendance(body) {
       vals.push(row);
     }
     saved++;
-    mirrorAttendanceToNurseSheet(rec.loc||'', rec.childName||'', date, rec.status||'');
+    // v7.257: дзеркало в аркуш медсестри — лише для ДІТЕЙ. Для STAFF-записів воно
+    // й так нічого не робило (findChildRow не знаходить співробітницю серед дітей),
+    // але відкривало таблицю медсестри на кожну відмітку.
+    if (!isStaff) mirrorAttendanceToNurseSheet(rec.loc||'', rec.childName||'', date, rec.status||'');
   });
 
   if (unknown.length){
