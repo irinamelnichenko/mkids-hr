@@ -1,5 +1,16 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.257
+// m.kids CRM — Google Apps Script v7.259
+// v7.259: bulkPredmetnykyLessons — пакетне збереження уроків предметників.
+//         Екран слав по одному POST на клік, і галочка з'являлась лише у .then,
+//         тобто вихователька чекала повний оберт (~5–7 с, з яких ~5 с коштує сам
+//         виклик Apps Script). Тепер фронт накопичує зміни 1,5 с і шле пачкою.
+//         Перевірки ті самі, що поштучно: предмет, каталог локації, група, права,
+//         норма. Важкі читання (каталог, реальні групи, наявні уроки) — ОДИН раз
+//         на локацію; норма рахується в памʼяті наростаючим підсумком, інакше
+//         десять уроків в одну групу проскочили б повз ліміт.
+//         Спершу видалення, потім додавання: зняте заняття звільняє місце під
+//         нормою в тій самій пачці. Індекси added[]/removed[] збігаються з
+//         індексами вхідних add[]/removeIds[].
 // v7.257: saveAttendance більше не б'є тривогу на власний простір імен.
 //         Перевірка knownIds (v7.162) звіряла childId зі списком ДІТЕЙ (колонка
 //         «ID» аркуша «Клієнти»), а табель співробітників навмисно пише
@@ -5181,7 +5192,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.257', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.259', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -5390,6 +5401,7 @@ function doPost(e) {
     else if (body.action === 'saveLocationCard')          result = saveLocationCard(Number(body.actorId || 0), body.payload || {});
     else if (body.action === 'deleteEmployee')            result = deleteEmployee(Number(body.actorId || 0), body.rowNum || 0);
     else if (body.action === 'savePredmetnykyLesson')     result = savePredmetnykyLesson(Number(body.actorId || 0), body.lesson || {});
+    else if (body.action === 'bulkPredmetnykyLessons')    result = bulkPredmetnykyLessons(Number(body.actorId || 0), body.add || [], body.removeIds || []);   // v7.259 пакет
     else if (body.action === 'deletePredmetnykyLesson')   result = deletePredmetnykyLesson(Number(body.actorId || 0), Number(body.lessonId || 0));
     else if (body.action === 'savePredmetnykyAssignment')   result = savePredmetnykyAssignment(Number(body.actorId || 0), body.payload || body.data || {});
     else if (body.action === 'deletePredmetnykyAssignment') result = deletePredmetnykyAssignment(Number(body.actorId || 0), Number(body.id || 0));
@@ -5428,6 +5440,7 @@ function doPost(e) {
 // v7.86: дії запису, що інвалідують кеш getPredmetnyky.
 var _PRED_WRITE_ACTIONS = {
   savePredmetnykyLesson:1, deletePredmetnykyLesson:1, clearAllPredmetnykyLessons:1,
+  bulkPredmetnykyLessons:1,                                // v7.259
   savePredmetnykyAssignment:1, deletePredmetnykyAssignment:1,
   runPredmetnykyHrSeed:1,
   importPredmetnykyLessons:1, repairPredmetnykyLessons:1,   // v7.149
@@ -27402,6 +27415,156 @@ function savePredmetnykyLesson(actorId, lesson){
       _writeHrAudit(actor, 'pred_save_lesson', id, null,
                     {empKey:empKey, location:location, group:group, subject:subject, date:dateStr});
       return {ok:true, id:id, current: current + 1, norm: norm};
+    } finally {
+      lock.releaseLock();
+    }
+  } catch(e){
+    return {ok:false, error: e.message || String(e)};
+  }
+}
+
+// ═══ v7.259: ПАКЕТНЕ ЗБЕРЕЖЕННЯ УРОКІВ ПРЕДМЕТНИКІВ ════════════════════════
+// Екран предметників слав по одному POST на кожен клік, і галочка з'являлась
+// лише у .then — тобто вихователька чекала повний оберт (~5–7 с, з яких ~5 с
+// коштує сам виклик Apps Script). Тепер фронт накопичує зміни 1,5 с і шле їх
+// сюди однією пачкою.
+// Перевірки ті самі, що в savePredmetnykyLesson — предмет, каталог локації,
+// група, права, норма. Різниця лише в тому, що важкі читання (каталог, реальні
+// групи, наявні уроки) робляться ОДИН раз на локацію, а норма рахується в
+// памʼяті наростаючим підсумком, інакше десять уроків у ту саму групу
+// проскочили б повз ліміт.
+// Спершу видалення, потім додавання: зняте заняття звільняє місце під нормою
+// в тій самій пачці.
+// POST {action:'bulkPredmetnykyLessons', actorId, add:[lesson…], removeIds:[id…]}
+//   → {ok, added:[{ok,id}|{ok:false,code,error}], removed:[{ok}|{ok:false,…}]}
+// Індекси відповідей збігаються з індексами вхідних масивів.
+function bulkPredmetnykyLessons(actorId, add, removeIds){
+  try {
+    var actor = _getActor(actorId);
+    add       = Array.isArray(add) ? add : [];
+    removeIds = Array.isArray(removeIds) ? removeIds : [];
+    if (!add.length && !removeIds.length) return {ok:false, error:'Порожній пакет'};
+
+    var lock = LockService.getScriptLock();
+    try { lock.waitLock(30000); }
+    catch(e){ return {ok:false, error:'LOCK_TIMEOUT: ' + (e && e.message || e)}; }
+    try {
+      var sh = _getPredLessonsSheet();
+      var lastRow = sh.getLastRow();
+      var grid = (lastRow >= 2) ? sh.getRange(2, 1, lastRow - 1, PRED_LESSONS_HEADER.length).getValues() : [];
+
+      // ── кеші на весь виклик: кожне з цих читань важке ──
+      var cSubj = {}, cGroups = {}, cPerm = {}, cCeil = {}, cLessons = {};
+      function subjectsOf(loc){ if (!(loc in cSubj)) cSubj[loc] = _predSubjectsForLoc(loc) || []; return cSubj[loc]; }
+      function groupsOf(loc){ if (!(loc in cGroups)) cGroups[loc] = (_loadRealGroups(loc)[loc]) || []; return cGroups[loc]; }
+      function canEdit(loc){ if (!(loc in cPerm)) cPerm[loc] = !!_canEditPredmetnyky(actor, loc); return cPerm[loc]; }
+      function ceilOf(loc, subj, grp){
+        var k = loc + '|' + subj + '|' + grp;
+        if (!(k in cCeil)) cCeil[k] = _predCeilingFor(loc, subj, grp);
+        return cCeil[k];
+      }
+      // Поточна кількість уроків (loc, ПОВНА група, subject, рік-місяць).
+      function countKey(loc, grp, subj, ym){ return loc + '|' + grp + '|' + subj + '|' + ym.y + '-' + ym.m; }
+      var counts = {};
+      function currentCount(loc, grp, subj, ym){
+        var k = countKey(loc, grp, subj, ym);
+        if (k in counts) return counts[k];
+        if (!(loc in cLessons)) cLessons[loc] = _loadPredLessons(loc) || [];
+        var n = 0, arr = cLessons[loc];
+        for (var i = 0; i < arr.length; i++){
+          var L = arr[i];
+          if (L.group !== grp || L.subject !== subj) continue;
+          var lym = _lessonYearMonth(L.date);
+          if (!lym || lym.y !== ym.y || lym.m !== ym.m) continue;
+          n++;
+        }
+        counts[k] = n;
+        return n;
+      }
+
+      // ── 1. ВИДАЛЕННЯ (спершу — звільняють місце під нормою) ──
+      var removed = [], rowsToDelete = [];
+      for (var r = 0; r < removeIds.length; r++){
+        var rid = Number(removeIds[r]) || 0;
+        if (!rid){ removed.push({ok:false, error:'lessonId is required'}); continue; }
+        var found = -1;
+        for (var g = 0; g < grid.length; g++){ if (Number(grid[g][0]) === rid){ found = g; break; } }
+        if (found < 0){ removed.push({ok:false, code:'NOT_FOUND', error:'Lesson not found'}); continue; }
+        var rloc = String(grid[found][2] || '').trim();
+        if (!canEdit(rloc)){ removed.push({ok:false, code:'PERM_DENIED', error:'Permission denied'}); continue; }
+        var rgrp = String(grid[found][3] || '').trim();
+        var rsub = String(grid[found][4] || '').trim();
+        var rym  = _lessonYearMonth(_fmtLessonDate(grid[found][5]));
+        if (rym){
+          var ck = countKey(rloc, rgrp, rsub, rym);
+          if (ck in counts) counts[ck] = Math.max(0, counts[ck] - 1);
+        }
+        _writeHrAudit(actor, 'pred_delete_lesson', rid, {
+          empKey: String(grid[found][1] || '').trim(), location: rloc,
+          group: rgrp, subject: rsub, date: _fmtLessonDate(grid[found][5])
+        }, null);
+        rowsToDelete.push(found + 2);        // номер рядка в аркуші
+        grid[found][0] = '';                 // щоб той самий id не знайшовся вдруге
+        removed.push({ok:true});
+      }
+      // знизу вгору, щоб не поїхали індекси
+      rowsToDelete.sort(function(a, b){ return b - a; }).forEach(function(rn){ sh.deleteRow(rn); });
+
+      // ── 2. ДОДАВАННЯ ──
+      var added = [], rows = [];
+      var nextId = _nextPredLessonId(sh);
+      for (var i = 0; i < add.length; i++){
+        var d = add[i] || {};
+        var empKey   = String(d.empKey   || '').trim();
+        var location = String(d.location || '').trim();
+        var group    = String(d.group    || '').trim();
+        var subject  = String(d.subject  || '').trim();
+        var dateStr  = String(d.date     || '').trim();
+        if (!empKey || !location || !group || !subject || !dateStr){
+          added.push({ok:false, error:'empKey/location/group/subject/date обовʼязкові'}); continue;
+        }
+        if (PRED_SUBJECTS.indexOf(subject) === -1){
+          added.push({ok:false, code:'BAD_SUBJECT', error:'Unknown subject: ' + subject}); continue;
+        }
+        var ym = _lessonYearMonth(dateStr);
+        if (!ym){ added.push({ok:false, error:'Bad date format: ' + dateStr}); continue; }
+        var locSubjects = subjectsOf(location);
+        if (locSubjects.length && locSubjects.indexOf(subject) === -1){
+          added.push({ok:false, code:'BAD_SUBJECT_FOR_LOC',
+                      error:'Предмета "' + subject + '" немає в каталозі локації ' + location}); continue;
+        }
+        var realGroups = groupsOf(location);
+        if (realGroups.length && realGroups.indexOf(group) === -1){
+          added.push({ok:false, code:'BAD_GROUP',
+                      error:'Групи "' + group + '" немає в локації ' + location, group:group}); continue;
+        }
+        if (!canEdit(location)){ added.push({ok:false, code:'PERM_DENIED', error:'Permission denied'}); continue; }
+
+        var norm = ceilOf(location, subject, group);
+        if (norm > 0){
+          var cur = currentCount(location, group, subject, ym);
+          if (cur >= norm){
+            added.push({ok:false, code:'NORM_REACHED', error:'norm_reached',
+                        current:cur, norm:norm, group:group, subject:subject}); continue;
+          }
+          counts[countKey(location, group, subject, ym)] = cur + 1;   // наростаючий підсумок
+        }
+
+        var id = nextId++;
+        var dateVal = _parseDateInput(dateStr);
+        rows.push([id, empKey, location, group, subject,
+                   (dateVal instanceof Date ? dateVal : dateStr),
+                   new Date(), actor.id, _uidForEmpKey(empKey)]);
+        _writeHrAudit(actor, 'pred_save_lesson', id, null,
+                      {empKey:empKey, location:location, group:group, subject:subject, date:dateStr});
+        added.push({ok:true, id:id, norm:norm});
+      }
+      if (rows.length){
+        sh.getRange(sh.getLastRow() + 1, 1, rows.length, PRED_LESSONS_HEADER.length).setValues(rows);
+      }
+      return {ok:true, added:added, removed:removed,
+              addedCount: added.filter(function(x){ return x.ok; }).length,
+              removedCount: removed.filter(function(x){ return x.ok; }).length};
     } finally {
       lock.releaseLock();
     }

@@ -853,20 +853,19 @@ function dirtyCount(){ var n=0; var seen={};
 // «Експорт у Payment» більше немає; стан видно в індикаторі синхронізації.
 var SYNC = { timer:null, tick:null, until:0, running:false };
 function syncPending(){ return !!SYNC.timer || SYNC.running; }
+// v7.259: 5 с → 1,5 с. Екран і так працює правильно (стан локальний, запис
+// пакетом), але півтори секунди приводять його у відповідність до «Додаткових»
+// і «Предметників» — щоб очікування скрізь було однакове.
+var MEAL_QUEUE_DELAY_MS = 1500;
 function scheduleMealSync(){
   if (SYNC.timer) clearTimeout(SYNC.timer);
   if (SYNC.tick)  clearInterval(SYNC.tick);
-  SYNC.until = Date.now() + 5000;
-  setCloudStatus('sync','збереження через 5с');
-  SYNC.tick = setInterval(function(){
-    var left = Math.max(0, Math.ceil((SYNC.until - Date.now())/1000));
-    if (left <= 0){ clearInterval(SYNC.tick); SYNC.tick=null; return; }
-    setCloudStatus('sync','збереження через '+left+'с');
-  }, 500);
+  SYNC.until = Date.now() + MEAL_QUEUE_DELAY_MS;
+  setCloudStatus('sync','збереження…');
   SYNC.timer = setTimeout(function(){ SYNC.timer=null;
     if (SYNC.tick){ clearInterval(SYNC.tick); SYNC.tick=null; }
     runMealSync();
-  }, 5000);
+  }, MEAL_QUEUE_DELAY_MS);
 }
 // Негайний прогін (перед зміною місяця/локації чи закриттям вкладки).
 async function flushMealSync(){
@@ -889,7 +888,7 @@ async function runMealSync(){
 function updDirtyLbl(){
   var dl = document.getElementById('dirtyLbl'); if (!dl) return;
   var dc = dirtyCount();
-  dl.textContent = SYNC.running ? 'Синхронізація…' : (dc ? ('Незбережених: '+dc+' — запис за 5с') : 'Усе збережено');
+  dl.textContent = SYNC.running ? 'Синхронізація…' : (dc ? ('Незбережених: '+dc) : 'Усе збережено');
 }
 
 async function saveMarks(silent){
@@ -1009,6 +1008,18 @@ else init();
     applyRoleVisibility=function(){ var r=_o.apply(this,arguments); try{reveal();}catch(e){} return r; };
   }
   window.addEventListener('load', function(){ setTimeout(reveal, 600); });
+})();
+</script>
+<script>
+// v7.259: згорнули вкладку або закривають сторінку — дописуємо відмітки одразу,
+// не чекаючи таймера. flushMealSync уже висить на зміні локації/місяця й на
+// кнопці оновлення; бракувало саме виходу з екрана.
+(function(){
+  function _leave(){ try { if (typeof flushMealSync === 'function') flushMealSync(); } catch(_){} }
+  document.addEventListener('visibilitychange', function(){
+    if (document.visibilityState === 'hidden') _leave();
+  });
+  window.addEventListener('pagehide', _leave);
 })();
 </script>
 </body>

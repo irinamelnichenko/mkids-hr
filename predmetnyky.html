@@ -471,6 +471,9 @@ select,input,textarea{font-family:inherit}
 .pred-cell-day.checked:hover:not(.disabled){background:#d1f1de}
 .pred-cell-day.disabled{cursor:not-allowed;opacity:.5}
 .pred-cell-day.saving{opacity:.6;cursor:wait}
+/* v7.259: урок поставлено, але ще не підтверджено сервером */
+.pred-cell-day.pending{border-style:dashed}
+.pred-cell-day.pending input{opacity:.55}
 .pred-cell-day.today{border-top:3px solid var(--blue)}
 
 .pred-cb{width:22px;height:22px;border-radius:5px;border:2px solid #cbd0d6;
@@ -2363,7 +2366,10 @@ function renderDayCell(loc, R, subject, D, canEdit){
   var lesson  = lessonByCell(loc, R.groupName, subject, D.dmy);
   var checked = !!lesson;
   var lockKey = cellLockKey(loc, R.groupName, subject, D.dmy);
-  var saving  = !!S.savingCells[lockKey];
+  // v7.259: клітинка більше не «saving» (запис іде у фоні) — але поки урок не
+  // підтверджений сервером, показуємо його пунктиром.
+  var saving  = false;
+  var pending = !!(lesson && lesson._pending);
 
   // Disabled:
   //   • view-only або saving — disabled visually
@@ -2374,7 +2380,7 @@ function renderDayCell(loc, R, subject, D, canEdit){
   var locked   = isWeekLocked(_dmyToIso(D.dmy));
   var disabled = !canEdit || !R.hasRate || (R.isMaxed && !checked) || locked;
 
-  var cls = 'pred-cell-day';
+  var cls = 'pred-cell-day' + (pending ? ' pending' : '');
   if (D.isToday)   cls += ' today';
   if (checked)     cls += ' checked';
   if (disabled)    cls += ' disabled';
@@ -2398,6 +2404,8 @@ function renderDayCell(loc, R, subject, D, canEdit){
 
 // ── FILTERS & HANDLERS ──────────────────────
 function onFilterChange(which){
+  // v7.259: віддаємо уроки й експорт ПОПЕРЕДНЬОГО зрізу, поки він ще в стані
+  try { if (typeof flushPredAndExport === 'function') flushPredAndExport('зміна фільтра: ' + which); } catch(_){}
   if (which === 'loc'){
     S.loc = $('fLoc').value;
     populateSubjectSel();          // v7.231: інша локація — інший каталог предметів
@@ -2432,6 +2440,119 @@ function refreshAll(){
 // Rate-gate (не assignment) + per-cell lock + idempotent upsert.
 // empKey resolution: assignment → перший HR кандидат → '_unassigned' sentinel.
 // v6.28.2: groupName — ПОВНА назва реальної групи (не тип).
+// ═══ v7.259: ГАЛОЧКА МИТТЄВО, ЗАПИС ПАКЕТОМ У ФОНІ ════════════════════════
+// Було: один POST на клік, і урок з'являвся в S.lessons лише у .then — тобто
+// вихователька чекала повний оберт (~5–7 с). Стало: стан міняється синхронно,
+// а зміни накопичуються 1,5 с і йдуть одним bulkPredmetnykyLessons.
+// ВАЖЛИВО: тут сервер може ЗАКОННО відмовити — норму досягнуто (NORM_REACHED),
+// чужа група, немає прав. Тоді галочку прибираємо назад і кажемо причину.
+// Це відрізняє екран від «Додаткових», де відмова буває лише на дублі.
+var PRED_QUEUE_DELAY_MS = 1500;
+var PQ = { add: [], del: [], delWaiting: [], timer: null, sending: false };
+
+function _pqLocalId(){ return 'local-' + Date.now() + '-' + Math.random().toString(36).slice(2,7); }
+function _pqDropLesson(id){ S.lessons = S.lessons.filter(function(L){ return L.id !== id; }); }
+function _pqLessonById(id){
+  for (var i = 0; i < S.lessons.length; i++) if (S.lessons[i].id === id) return S.lessons[i];
+  return null;
+}
+function _pqSameCell(x, loc, grp, subj, dmy){
+  return x.loc === loc && x.group === grp && x.subject === subj && x.date === dmy;
+}
+function _pqSchedule(){
+  if (PQ.timer) clearTimeout(PQ.timer);
+  PQ.timer = setTimeout(function(){ PQ.timer = null; _pqFlush(); }, PRED_QUEUE_DELAY_MS);
+  var n = PQ.add.length + PQ.del.length;
+  if (n) setSync('pending', '💾 До збереження: ' + n);
+}
+// Зняття ще не відправленого — просто прибрати з черги.
+// Зняття того, що ЗАРАЗ у польоті — відкласти до отримання серверного id,
+// інакше урок лишиться на сервері назавжди (а це ЗП викладача).
+function _pqQueueRemove(existing, loc, grp, subj, dmy){
+  for (var i = 0; i < PQ.add.length; i++){
+    if (_pqSameCell(PQ.add[i], loc, grp, subj, dmy)){ PQ.add.splice(i, 1); _pqSchedule(); return; }
+  }
+  if (String(existing.id).indexOf('local-') === 0){
+    PQ.delWaiting.push({loc:loc, group:grp, subject:subj, date:dmy});
+    return;
+  }
+  PQ.del.push({id: existing.id, lesson: existing});
+  _pqSchedule();
+}
+function _pqPromoteWaiting(){
+  if (!PQ.delWaiting.length) return;
+  var still = [];
+  PQ.delWaiting.forEach(function(w){
+    var L = lessonByCell(w.loc, w.group, w.subject, w.date);
+    if (!L) return;
+    if (String(L.id).indexOf('local-') === 0){ still.push(w); return; }
+    _pqDropLesson(L.id);
+    PQ.del.push({id: L.id, lesson: L});
+  });
+  PQ.delWaiting = still;
+  if (PQ.del.length) _pqSchedule();
+}
+async function _pqFlush(){
+  if (PQ.sending) return;
+  if (!PQ.add.length && !PQ.del.length) return;
+  PQ.sending = true;
+  setSync('syncing', '💾 Зберігаю…');
+  var adds = PQ.add.splice(0, PQ.add.length);
+  var dels = PQ.del.splice(0, PQ.del.length);
+  var loc  = (adds[0] && adds[0].loc) || (dels[0] && dels[0].lesson && dels[0].lesson.loc) || S.loc;
+  try {
+    var res = await apiPost({
+      action: 'bulkPredmetnykyLessons', actorId: S.user.id,
+      add: adds.map(function(a){
+        return {empKey:a.empKey, location:a.loc, group:a.group, subject:a.subject, date:a.date};
+      }),
+      removeIds: dels.map(function(d){ return d.id; })
+    });
+    if (res && res.ok && Array.isArray(res.added)){
+      for (var i = 0; i < adds.length; i++){
+        var rr = res.added[i], cur = _pqLessonById(adds[i].id);
+        if (!cur) continue;                                  // встигли зняти вручну
+        if (rr && rr.ok){ if (rr.id) cur.id = rr.id; delete cur._pending; }
+        else {
+          _pqDropLesson(adds[i].id);
+          var msg;
+          if      (rr && rr.code === 'NORM_REACHED') msg = '⚠️ Норму досягнуто (' + rr.current + '/' + rr.norm + ') — ' + adds[i].group;
+          else if (rr && rr.code === 'BAD_GROUP')    msg = '🚫 ' + (rr.error || 'Заборонена комбінація');
+          else if (rr && rr.code === 'PERM_DENIED')  msg = '🚫 Немає дозволу';
+          else                                       msg = (rr && rr.error) || 'Не збереглось';
+          showToast(msg, 'err', 4000);
+        }
+      }
+      if (Array.isArray(res.removed)){
+        for (var k = 0; k < dels.length; k++){
+          var dr = res.removed[k];
+          if (dr && (dr.ok || dr.code === 'NOT_FOUND')) continue;   // NOT_FOUND = вже немає, це ок
+          if (!_pqLessonById(dels[k].id)) S.lessons.push(dels[k].lesson);
+          showToast('❌ ' + ((dr && dr.error) || 'Не вдалось зняти'), 'err', 4000);
+        }
+      }
+      setSync('ok');
+    } else {
+      adds.forEach(function(a){ _pqDropLesson(a.id); });
+      dels.forEach(function(d){ if (!_pqLessonById(d.id)) S.lessons.push(d.lesson); });
+      setSync('err', 'Не вдалось зберегти');
+      showToast('❌ ' + ((res && res.error) || 'Не вдалось зберегти'), 'err', 5000);
+    }
+  } catch(e){
+    adds.forEach(function(a){ _pqDropLesson(a.id); });
+    dels.forEach(function(d){ if (!_pqLessonById(d.id)) S.lessons.push(d.lesson); });
+    setSync('err', 'Помилка мережі');
+    showToast('❌ ' + (e && e.message || e), 'err', 5000);
+  }
+  PQ.sending = false;
+  _pqPromoteWaiting();
+  renderApp();
+  if (PQ.add.length || PQ.del.length) _pqSchedule();
+  else scheduleAutoExport(loc);
+}
+
+// ── CHECKBOX TOGGLE ─────────────────────────
+// v6.28.2: groupName — ПОВНА назва реальної групи (не тип).
 function onCheckboxToggle(loc, groupName, subj, dateDmy){
   if (!canEditPred(loc)){ showToast('🚫 Немає дозволу', 'err'); return; }
   if (isWeekLocked(_dmyToIso(dateDmy))){ showToast('🔒 Тиждень замкнено — редагує лише CFO', 'err'); return; }
@@ -2449,78 +2570,20 @@ function onCheckboxToggle(loc, groupName, subj, dateDmy){
     empKey = cands.length ? cands[0].empKey : '_unassigned';
   }
 
-  var lockKey = cellLockKey(loc, groupName, subj, dateDmy);
-  if (S.savingCells[lockKey]) return;       // GUARD проти подвійного клацання
-  S.savingCells[lockKey] = true;
-  renderApp();
-
   var existing = lessonByCell(loc, groupName, subj, dateDmy);
   if (existing){
-    apiPost({
-      action:'deletePredmetnykyLesson', actorId: S.user.id, lessonId: existing.id
-    }).then(function(res){
-      delete S.savingCells[lockKey];
-      if (!res || !res.ok){
-        if (res && res.code === 'NOT_FOUND'){
-          S.lessons = S.lessons.filter(function(L){ return L.id !== existing.id; });
-          renderApp();
-          showToast('Заняття вже було видалено', 'info');
-          scheduleAutoExport(loc);
-        } else {
-          renderApp();
-          showToast((res && res.error) || 'Помилка видалення', 'err');
-        }
-        return;
-      }
-      S.lessons = S.lessons.filter(function(L){ return L.id !== existing.id; });
-      renderApp();
-      scheduleAutoExport(loc);
-    }).catch(function(e){
-      delete S.savingCells[lockKey];
-      renderApp();
-      showToast('Помилка мережі: ' + (e && e.message || e), 'err');
-    });
+    _pqDropLesson(existing.id);                       // знімаємо ОДРАЗУ
+    renderApp();
+    _pqQueueRemove(existing, loc, groupName, subj, dateDmy);
   } else {
-    apiPost({
-      action:'savePredmetnykyLesson', actorId: S.user.id,
-      lesson: {
-        empKey:   empKey,
-        location: loc,
-        group:    groupName,
-        subject:  subj,
-        date:     dateDmy
-      }
-    }).then(function(res){
-      delete S.savingCells[lockKey];
-      if (!res || !res.ok){
-        var msg;
-        if      (res && res.code === 'NORM_REACHED') msg = '⚠️ Норму досягнуто (' + res.current + '/' + res.norm + ')';
-        else if (res && res.code === 'BAD_GROUP')    msg = '🚫 ' + (res.error || 'Заборонена комбінація');
-        else if (res && res.code === 'PERM_DENIED')  msg = '🚫 Немає дозволу';
-        else                                         msg = (res && res.error) || 'Невідома помилка';
-        renderApp();
-        showToast(msg, 'err');
-        return;
-      }
-      // IDEMPOTENT upsert — фікс багу "1 клік = 2 заняття":
-      // видаляємо будь-який lesson з тим самим id (від race condition),
-      // потім додаємо свіжий.
-      S.lessons = S.lessons.filter(function(L){ return L.id !== res.id; });
-      S.lessons.push({
-        id:      res.id,
-        empKey:  empKey,
-        loc:     loc,
-        group:   groupName,
-        subject: subj,
-        date:    dateDmy
-      });
-      renderApp();
-      scheduleAutoExport(loc);
-    }).catch(function(e){
-      delete S.savingCells[lockKey];
-      renderApp();
-      showToast('Помилка мережі: ' + (e && e.message || e), 'err');
-    });
+    var lesson = {
+      id: _pqLocalId(), empKey: empKey, loc: loc, group: groupName,
+      subject: subj, date: dateDmy, _pending: true
+    };
+    S.lessons.push(lesson);                           // галочка ОДРАЗУ
+    renderApp();
+    PQ.add.push(lesson);
+    _pqSchedule();
   }
 }
 
@@ -2877,14 +2940,37 @@ function removeAssign(){
 // ── AUTO-EXPORT (v6.11.10 — debounce 2s + clearer toasts) ────
 // Викликає exportPredmetnykyToSalary після save/delete lesson або
 // зміни ставки. Зменшено з 5s до 2s — щоб користувач швидше бачив зміни.
+// ═══ v7.259: АВТОЕКСПОРТ У SALARY ПРИБРАНО З ГАРЯЧОГО ШЛЯХУ ════════════════
+// Було 2 с: кожен урок перезапускав таймер, і найважча операція екрана бігала
+// частіше за всі інші разом. Стало 90 с + примусовий скид, коли робота з
+// екраном завершується: зміна локації, місяця, предмета, згортання вкладки,
+// кнопка «Sync Salary».
+var PRED_AUTO_EXPORT_MS = 90000;
 function scheduleAutoExport(loc, opts){
   if (!loc) return;
   if (S.autoExportTimer){ clearTimeout(S.autoExportTimer); }
-  setSync('pending', '↻ Salary через 2 сек…');
+  S.autoExportPending = {loc: loc, opts: opts || null};
+  setSync('pending', '↻ Salary через ' + Math.round(PRED_AUTO_EXPORT_MS / 1000) + ' с…');
   S.autoExportTimer = setTimeout(function(){
     S.autoExportTimer = null;
+    S.autoExportPending = null;
     runAutoExport(loc, opts);
-  }, 2000);
+  }, PRED_AUTO_EXPORT_MS);
+}
+// Спершу дописати уроки, ПОТІМ експортувати — інакше експорт не побачить
+// щойно поставленого. Викликається на всіх виходах з екрана.
+async function flushPredAndExport(reason){
+  try {
+    if (PQ.timer){ clearTimeout(PQ.timer); PQ.timer = null; }
+    if (PQ.add.length || PQ.del.length || PQ.sending) await _pqFlush();
+  } catch(_){}
+  var pend = S.autoExportPending;
+  if (S.autoExportTimer){ clearTimeout(S.autoExportTimer); S.autoExportTimer = null; }
+  S.autoExportPending = null;
+  if (!pend) return false;
+  try { console.log('[pred] примусовий експорт:', reason || ''); } catch(_){}
+  runAutoExport(pend.loc, pend.opts);
+  return true;
 }
 // v7.216: guard v7.197 (NO_LESSONS) — це НЕ помилка, а нормальний стан початку
 // місяця: уроків ще нуль, тож бекенд свідомо не пише в Salary, щоб не обнулити
@@ -2898,6 +2984,9 @@ function _isEmptyPeriodSkip(res){
 }
 function runAutoExport(loc, opts){
   opts = opts || {};
+  // v7.259: експортуємо ЗАРАЗ — відкладений таймер більше не потрібен
+  if (S.autoExportTimer){ clearTimeout(S.autoExportTimer); S.autoExportTimer = null; }
+  S.autoExportPending = null;
   setSync('syncing', '↻ Salary…');
   return apiPost({
     action: 'exportPredmetnykyToSalary',
@@ -3009,6 +3098,8 @@ function onClearAllLessons(){
 
 // Manual sync — миттєвий експорт без debounce.
 function manualSyncSalary(){
+  // v7.259: спершу дописуємо чергу уроків, інакше експорт їх не побачить
+  try { if (PQ.timer){ clearTimeout(PQ.timer); PQ.timer = null; } if (PQ.add.length || PQ.del.length) { _pqFlush().then(function(){}); } } catch(_){}
   if (!S.loc){ showToast('Спершу обери локацію', 'err'); return; }
   if (S.autoExportTimer){ clearTimeout(S.autoExportTimer); S.autoExportTimer = null; }
   var btn = $('btnSyncSalary');
@@ -3216,5 +3307,17 @@ if ('serviceWorker' in navigator) {
 })();
 </script>
 
+<script>
+// v7.259: не лишати уроки й експорт «у повітрі» при виході з екрана.
+(function(){
+  function _leave(reason){
+    try { if (typeof flushPredAndExport === 'function') flushPredAndExport(reason); } catch(_){}
+  }
+  document.addEventListener('visibilitychange', function(){
+    if (document.visibilityState === 'hidden') _leave('вкладку згорнуто');
+  });
+  window.addEventListener('pagehide', function(){ _leave('сторінку закрито'); });
+})();
+</script>
 </body>
 </html>

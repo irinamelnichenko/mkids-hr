@@ -5399,6 +5399,12 @@ function flushTabelCloudSave(){
 }
 window.addEventListener('beforeunload',function(){ try{ flushTabelCloudSave(); }catch(e){} });
 window.addEventListener('pagehide',function(){ try{ flushTabelCloudSave(); }catch(e){} });
+// v7.259: беforeunload/pagehide на мобільних спрацьовують не завжди — при
+// перемиканні застосунку браузер часто дає лише visibilitychange. Без цього
+// остання пачка відміток могла зависнути в дебаунсі й не долетіти.
+document.addEventListener('visibilitychange',function(){
+  if (document.visibilityState==='hidden'){ try{ flushTabelCloudSave(); }catch(e){} }
+});
 
 // Підвантаження табеля співробітників з хмари (тільки рядки STAFF::) у localStorage.
 function loadTabelFromCloud(loc,from,to,onDone){
