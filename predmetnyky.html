@@ -289,6 +289,17 @@ select,input,textarea{font-family:inherit}
 .pred-mstatus.off{background:#fef2f2;color:#b91c1c;border:1px solid #fecaca}
 .pred-merge-note{font-size:12px;font-weight:700;color:#1e40af;background:#eef5ff;
   border-radius:8px;padding:1px 7px;margin-left:4px}
+/* v7.265 — поділ групи на підгрупи (зворотна операція до обʼєднання) */
+.pred-split-note{font-size:12px;font-weight:700;color:#92400e;background:#fef3c7;
+  border-radius:8px;padding:1px 7px;margin-left:4px}
+.pred-th-day.split{background:#fef3c7}
+.pred-th-day.merged.split{background:linear-gradient(90deg,#e8f0ff 50%,#fef3c7 50%)}
+.pred-th-day .spl{display:block;font-size:10px;line-height:1;margin-top:1px}
+.pred-th-day .spl.dim{opacity:.30}
+.mrg-sep{margin:16px 0 10px;border-top:1px solid var(--gray2);padding-top:14px}
+.mrg-grp-row.split-on{background:#fffbeb}
+.mrg-grp-row .stag{font-size:11px;font-weight:700;color:#92400e;
+  background:#fef3c7;border-radius:10px;padding:2px 8px}
 /* v7.23 — Чомусики (абонемент) */
 .chom-badge{font-size:11px;font-weight:800;color:#7c3aed;background:#f3e8ff;
   border-radius:10px;padding:2px 9px;letter-spacing:.4px}
@@ -810,10 +821,14 @@ select,input,textarea{font-family:inherit}
   <div class="modal-overlay" onclick="closePredMerge()"></div>
   <div class="modal-card">
     <button class="modal-close" onclick="closePredMerge()" aria-label="Закрити">✕</button>
-    <div class="modal-hd"><h3 id="predMergeTitle">🔗 Обʼєднати групи</h3></div>
+    <div class="modal-hd"><h3 id="predMergeTitle">🔗✂️ Обʼєднати / поділити групи</h3></div>
     <div class="modal-bd">
       <div class="mrg-hint" id="predMergeHint"></div>
       <div class="mrg-grp-list" id="predMergeGrpList"></div>
+      <div class="mrg-sep">
+        <div class="mrg-hint" id="predSplitHint"></div>
+        <div class="mrg-grp-list" id="predSplitGrpList"></div>
+      </div>
     </div>
     <div class="modal-ft">
       <button id="predMergeUnmergeBtn" class="btn btn-danger" style="margin-right:auto" onclick="unmergePredDay()">Розʼєднати</button>
@@ -897,6 +912,7 @@ var S = {
   locNorms:    {},                       // v7.236: {loc:{subject:{byName,byType,any}}}
   assignments: [],
   merges:      [],                       // v7.20: обʼєднання груп [{loc,subject,date(iso),groups}]
+  splits:      [],                       // v7.265: поділ груп [{loc,subject,date(iso),group,parts}]
   locations:   [],
   // ── v7.23: Чомусики (абонемент, дитина×дата) ──
   chomMarks:      [],                    // [{id,date(iso),loc,child}]
@@ -1544,6 +1560,8 @@ function loadPredmetnyky(force){
     S.assignments = res.assignments || [];
     S.merges      = res.predMerges  || [];
     _pmCache[key] = {lessons: S.lessons, merges: S.merges};   // v7.80: у кеш
+    // v7.265: поділи локації — окремий легкий запит, не блокує рендер
+    _refreshPredSplits().then(function(ok){ if (ok) renderApp(); });
   });
 }
 
@@ -1571,6 +1589,49 @@ function _predMergeForDay(iso, subject){
 // ними S.merges для цієї локації. Дає правду замість оптимістичного припущення —
 // Apps Script POST повертає HTML (_assumed), тож самому res довіряти не можна;
 // після save/unmerge читаємо реальний стан, щоб 🔗 показувало саме те, що в базі.
+// ═══ ПОДІЛ ГРУПИ НА ПІДГРУПИ (v7.265) ═══════════════════════════════════════
+// Зворотна операція до обʼєднання. Викладач ділить клас навпіл і проводить
+// заняття ДВІЧІ — платимо за два. Дитина була на одному занятті у своїй
+// підгрупі, тож її сума не змінюється. Норма теж: вона рахує ДАТИ.
+// Обʼєднання виграє: якщо група в наборі обʼєднання цього дня — поділ мовчить
+// (набір = одна сесія за визначенням).
+// Ключ = (S.loc, subject, date, group). Дзеркало backend _loadPredSplitsMap.
+function _predSplitsForDay(iso, subject){
+  var out = {};                                        // {normGroup: parts}
+  for (var i = 0; i < S.splits.length; i++){
+    var sp = S.splits[i];
+    if (sp.loc !== S.loc || sp.subject !== subject || sp.date !== iso) continue;
+    if (!(Number(sp.parts) > 1)) continue;
+    out[_predMrgNorm(sp.group)] = Number(sp.parts);
+  }
+  return out;
+}
+function _predHasSplitDay(iso, subject){
+  return Object.keys(_predSplitsForDay(iso, subject)).length > 0;
+}
+
+// Оптимістичний upsert/видалення в S.splits по (loc, subject, date, group).
+function _applyPredSplitLocal(iso, subject, group, parts){
+  var nk = _predMrgNorm(group);
+  S.splits = S.splits.filter(function(sp){
+    return !(sp.loc === S.loc && sp.subject === subject && sp.date === iso &&
+             _predMrgNorm(sp.group) === nk);
+  });
+  if (parts > 1) S.splits.push({id:'local-' + Date.now() + '-' + nk, loc:S.loc,
+                                subject:subject, date:iso, group:group, parts:parts});
+}
+
+async function _refreshPredSplits(){
+  try {
+    var res = await apiGet('getPredSplits', { loc: S.loc });
+    if (res && res.ok && Array.isArray(res.items)){
+      S.splits = S.splits.filter(function(sp){ return sp.loc !== S.loc; }).concat(res.items);
+      return true;
+    }
+  } catch(_){}
+  return false;
+}
+
 async function _refreshPredMerges(){
   try {
     var res = await apiGet('getPredMerges', { loc: S.loc });
@@ -1604,7 +1665,7 @@ function closePredMerge(){
 function renderPredMerge(){
   var iso = MRG.iso, subject = MRG.subject;
   var dmy = (function(){ var b = iso.split('-'); return b.length === 3 ? (b[2] + '.' + b[1] + '.' + b[0]) : iso; })();
-  $('predMergeTitle').innerHTML = '🔗 ' + escapeHtml(subject) + ' · ' + escapeHtml(S.loc) + ' · ' + escapeHtml(dmy);
+  $('predMergeTitle').innerHTML = '🔗✂️ ' + escapeHtml(subject) + ' · ' + escapeHtml(S.loc) + ' · ' + escapeHtml(dmy);
 
   var existing = _predMergeForDay(iso, subject);
   var checked = {};
@@ -1634,7 +1695,55 @@ function renderPredMerge(){
   if (!rows) rows = '<div class="muted" style="padding:8px">У локації немає груп.</div>';
   $('predMergeGrpList').innerHTML = rows;
 
-  $('predMergeUnmergeBtn').style.display = existing ? '' : 'none';
+  // ── v7.265: секція ПОДІЛУ ────────────────────────────────────────────────
+  var splitsNow = _predSplitsForDay(iso, subject);
+  MRG.splitBefore = splitsNow;                          // база для дельти при збереженні
+  $('predSplitHint').innerHTML = '✂️ Позначте <b>групи</b>, які цього дня викладач ' +
+    'ділив на <b>дві підгрупи</b> і проводив заняття <b>двічі</b> — у ЗП порахується ' +
+    '<b>два заняття</b>. Дитині й нормі це нічого не змінює.';
+  var srows = '';
+  groups.forEach(function(g){
+    var nk = _predMrgNorm(g);
+    var isOn = !!splitsNow[nk];
+    srows += '<label class="mrg-grp-row' + (isOn ? ' split-on' : '') + '">' +
+      '<input type="checkbox" data-sgrp="' + escapeHtml(g) + '"' + (isOn ? ' checked' : '') + '>' +
+      '<span class="glabel">' + escapeHtml(g) + '</span>' +
+      '<span class="stag">×2</span>' +
+    '</label>';
+  });
+  if (!srows) srows = '<div class="muted" style="padding:8px">У локації немає груп.</div>';
+  $('predSplitGrpList').innerHTML = srows;
+}
+
+// Позначені групи поділу → {normGroup: originalName}
+function _predCollectSplits(){
+  var out = {};
+  var boxes = $('predSplitGrpList').querySelectorAll('input[type="checkbox"]:checked');
+  for (var i = 0; i < boxes.length; i++){
+    var g = boxes[i].getAttribute('data-sgrp');
+    if (g) out[_predMrgNorm(g)] = g;
+  }
+  return out;
+}
+
+// Зберігає ЛИШЕ дельту (що вмикали/вимикали). Повертає кількість записів.
+async function _predSaveSplitDelta(iso, subject){
+  var before = MRG.splitBefore || {};
+  var after  = _predCollectSplits();
+  var todo = [];
+  Object.keys(after).forEach(function(nk){ if (!before[nk]) todo.push({group:after[nk], parts:2}); });
+  Object.keys(before).forEach(function(nk){
+    if (after[nk]) return;
+    todo.push({group:nk, parts:1});                     // 1 = зняти поділ
+  });
+  for (var i = 0; i < todo.length; i++){
+    try {
+      await apiPost({ action:'savePredSplit', loc:S.loc, subject:subject, date:iso,
+                      group:todo[i].group, parts:todo[i].parts, by:_predMarkerLabel() });
+    } catch(e){ try { console.log('[predSplit] fail:', e); } catch(_){} }
+    _applyPredSplitLocal(iso, subject, todo[i].group, todo[i].parts);
+  }
+  return todo.length;
 }
 
 function _predCollectGroups(){
@@ -1671,27 +1780,47 @@ async function savePredMerge(){
   if (MRG.busy) return;
   var iso = MRG.iso, subject = MRG.subject;
   var groups = _predCollectGroups();
-  if (groups.length < 2){
-    showToast('⚠️ Позначте щонайменше 2 групи (зараз ' + groups.length + '), або «Розʼєднати»', 'err', 3000);
+  // v7.265: одна кнопка «Зберегти» для обох секцій. Порожній список обʼєднання —
+  // не помилка: користувач міг прийти сюди лише за поділом.
+  var splitsChanged = (function(){
+    var b = MRG.splitBefore || {}, a = _predCollectSplits();
+    var ks = Object.keys(b).concat(Object.keys(a));
+    for (var i = 0; i < ks.length; i++){ if (!!b[ks[i]] !== !!a[ks[i]]) return true; }
+    return false;
+  })();
+  if (groups.length === 1){
+    showToast('⚠️ Для обʼєднання потрібно щонайменше 2 групи, або «Розʼєднати»', 'err', 3000);
     return;
   }
+  if (!groups.length && !splitsChanged){ closePredMerge(); return; }
+
   MRG.busy = true;
-  var res;
-  try {
-    res = await apiPost({ action: 'savePredMerge', loc: S.loc, subject: subject, date: iso, groups: groups, by: _predMarkerLabel() });
-  } catch(e){ res = {ok: false, error: String(e && e.message || e)}; }
-  try { console.log('[predMerge] save resp:', res); } catch(_){}
+  var res = {ok:true};
+  if (groups.length >= 2){
+    try {
+      res = await apiPost({ action: 'savePredMerge', loc: S.loc, subject: subject, date: iso, groups: groups, by: _predMarkerLabel() });
+    } catch(e){ res = {ok: false, error: String(e && e.message || e)}; }
+    try { console.log('[predMerge] save resp:', res); } catch(_){}
+  }
+  var splitCount = 0;
+  if (res && (res.ok || res._assumed) && splitsChanged){
+    splitCount = await _predSaveSplitDelta(iso, subject);
+  }
   MRG.busy = false;
   if (res && (res.ok || res._assumed)){
-    _applyPredMergeLocal(iso, subject, groups);         // оптимістично — миттєве 🔗
+    if (groups.length >= 2) _applyPredMergeLocal(iso, subject, groups);   // оптимістично — миттєве 🔗
     closePredMerge();
     renderApp();
     await _refreshPredMerges();                          // авторитетна звірка з сервером
+    if (splitCount) await _refreshPredSplits();
     renderApp();
-    var confirmed = !!_predMergeForDay(iso, subject);
+    var confirmed = groups.length >= 2 ? !!_predMergeForDay(iso, subject) : true;
     try { console.log('[predMerge] server confirmed=' + confirmed + ', S.merges=' + S.merges.length); } catch(_){}
     if (confirmed){
-      showToast('✓ Обʼєднано ' + groups.length + ' груп', 'ok', 2000);
+      var msg = [];
+      if (groups.length >= 2) msg.push('обʼєднано ' + groups.length + ' груп');
+      if (splitCount) msg.push('поділ оновлено (' + splitCount + ')');
+      showToast('✓ ' + msg.join(', '), 'ok', 2000);
       if (typeof scheduleAutoExport === 'function') scheduleAutoExport(S.loc);
     } else {
       showToast('⚠️ Збереження не підтвердилось сервером — оновіть сторінку і спробуйте ще раз', 'err', 5000);
@@ -2108,7 +2237,7 @@ function renderApp(){
   $('main').innerHTML = renderHeaderCard(S.loc, S.subject) +
                         renderTable(S.loc, S.subject) +
                         renderDangerZone(S.loc);
-  renderFilterCount(_predSessionStats(S.loc, S.subject).merged);   // v7.22: merge-aware
+  renderFilterCount(_predSessionStats(S.loc, S.subject).final);   // v7.22 merge-aware, v7.265 split-aware
 }
 
 function renderDangerZone(loc){
@@ -2167,23 +2296,38 @@ function _predSessionStats(loc, subject){
     if (ns.length < 2) continue;
     (mm[m.date] = mm[m.date] || []).push(ns);
   }
-  function cnt(useMerges){
+  // v7.265: поділи цього (loc, subject) у цьому місяці: {iso:{normGroup:parts}}
+  var sp = {};
+  for (var k = 0; k < S.splits.length; k++){
+    var x = S.splits[k];
+    if (x.loc !== loc || x.subject !== subject) continue;
+    var xp = String(x.date).split('-');
+    if (Number(xp[0]) !== S.year || Number(xp[1]) !== S.month) continue;
+    if (!(Number(x.parts) > 1)) continue;
+    (sp[x.date] = sp[x.date] || {})[_predMrgNorm(x.group)] = Number(x.parts);
+  }
+  // Дзеркало backend _dopCountSessions: обʼєднання виграє над поділом.
+  function cnt(useMerges, useSplits){
     var total = 0;
     Object.keys(gbd).forEach(function(date){
       var present = gbd[date];
       var sets = useMerges ? (mm[date] || []) : [];
+      var spl  = useSplits ? (sp[date] || {}) : {};
       var covered = {}, sess = 0;
       sets.forEach(function(ms){
         var any = false;
         ms.forEach(function(g){ if (present[g]){ any = true; covered[g] = true; } });
         if (any) sess++;
       });
-      Object.keys(present).forEach(function(g){ if (!covered[g]) sess++; });
+      Object.keys(present).forEach(function(g){
+        if (covered[g]) return;
+        sess += (Number(spl[g]) > 1 ? Number(spl[g]) : 1);
+      });
       total += sess;
     });
     return total;
   }
-  return { raw: cnt(false), merged: cnt(true) };
+  return { raw: cnt(false, false), merged: cnt(true, false), final: cnt(true, true) };
 }
 
 function renderHeaderCard(loc, subject){
@@ -2192,12 +2336,14 @@ function renderHeaderCard(loc, subject){
   var assignment = assignmentFor(loc, subject);
   var teacher = assignment ? findTeacher(assignment.empKey) : null;
   var rate    = getRateFor(loc, subject);
-  var _sess   = _predSessionStats(loc, subject);      // v7.22: merge-aware
-  var total   = _sess.merged;                          // «Разом» = ПІСЛЯ обʼєднань (= ЗП)
+  var _sess   = _predSessionStats(loc, subject);      // v7.22: merge-aware, v7.265: split-aware
+  var total   = _sess.final;                           // «Разом» = після обʼєднань І поділу (= ЗП)
   var _mergedOff = _sess.raw - _sess.merged;           // скільки схлопнуто
-  var _mergeNote = _mergedOff > 0
-    ? ' <span class="pred-merge-note">(−' + _mergedOff + ' обʼєднано)</span>'
-    : '';
+  var _splitOn   = _sess.final - _sess.merged;         // скільки додав поділ
+  var _mergeNote = (_mergedOff > 0
+      ? ' <span class="pred-merge-note">(−' + _mergedOff + ' обʼєднано)</span>' : '') +
+    (_splitOn > 0
+      ? ' <span class="pred-split-note">(+' + _splitOn + ' поділено)</span>' : '');
 
   // ── Teacher row ──
   var teacherHtml;
@@ -2317,17 +2463,23 @@ function renderTable(loc, subject){
   // ── Header row ── (v7.20: заголовок дня клікабельний → попап обʼєднання груп)
   html += '<div class="pred-th-cnr">Група / Дата</div>';
   days.forEach(function(D){
-    var mrg = _predMergeForDay(_dmyToIso(D.dmy), subject);
+    var _iso = _dmyToIso(D.dmy);
+    var mrg = _predMergeForDay(_iso, subject);
+    var spl = _predSplitsForDay(_iso, subject);         // v7.265
+    var splNames = Object.keys(spl);
     var cls = 'pred-th-day' + (D.isToday ? ' today' : '') +
-              (canMerge ? ' clickable' : '') + (mrg ? ' merged' : '');
-    var tip = D.dmy + (canMerge ? ' · 🔗 клікни, щоб обʼєднати групи' : '') +
-              (mrg ? ' · разом: ' + mrg.groups.join(', ') : '');
+              (canMerge ? ' clickable' : '') + (mrg ? ' merged' : '') +
+              (splNames.length ? ' split' : '');
+    var tip = D.dmy + (canMerge ? ' · 🔗 клікни, щоб обʼєднати або поділити групи' : '') +
+              (mrg ? ' · разом: ' + mrg.groups.join(', ') : '') +
+              (splNames.length ? ' · поділено ×2: ' + splNames.join(', ') : '');
     html += '<div class="' + cls + '"' +
       (canMerge ? ' onclick="openPredMerge(\'' + D.dmy + '\')"' : '') +
       ' title="' + escapeHtml(tip) + '">' +
       '<span class="wd">' + D.wd + '</span>' +
       '<span class="dd">' + D.day + '</span>' +
       (canMerge ? '<span class="mrg' + (mrg ? '' : ' dim') + '">🔗</span>' : '') +
+      (splNames.length ? '<span class="spl">✂️</span>' : '') +
     '</div>';
   });
   html += '<div class="pred-th-counter">Лічильник</div>';
@@ -2410,6 +2562,8 @@ function onFilterChange(which){
   if (which === 'loc'){
     S.loc = $('fLoc').value;
     populateSubjectSel();          // v7.231: інша локація — інший каталог предметів
+    // v7.265: поділи зберігаються по локації, не по місяцю — тягнемо на зміну локації
+    _refreshPredSplits().then(function(){ renderApp(); });
   }
   if (which === 'subject') S.subject = $('fSubject').value;
   if (which === 'month'){

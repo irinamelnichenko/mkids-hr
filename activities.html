@@ -856,6 +856,13 @@ select,input,textarea{font-family:inherit}
   .mrg-grp-row .glabel{flex:1}
   .mrg-grp-row .gtag{font-size:11px;color:#2f6fed;font-weight:700}
   .mrg-hint{font-size:12.5px;color:#6b7b8c;line-height:1.5;margin-bottom:4px}
+  /* v7.265 — поділ групи на підгрупи (лише модель «За заняття») */
+  .mrg-sep{margin:16px 0 10px;border-top:1px solid #e3e9f0;padding-top:14px}
+  .mrg-grp-row.split-on{background:#fffbeb;border-color:#fcd34d}
+  .mrg-grp-row .stag{font-size:11px;color:#92400e;font-weight:700;
+    background:#fef3c7;border-radius:10px;padding:2px 8px}
+  .attg-th.split{background:#fef3c7}
+  .attg-th .spl{display:block;font-size:10px;line-height:1;margin-top:1px}
   .attg-name{position:sticky;left:0;z-index:1;background:#fff;font-size:13px;padding:5px 8px;white-space:nowrap;border-right:1px solid #eef2f7;display:flex;align-items:center;overflow:hidden;text-overflow:ellipsis;max-width:180px}
   .attg-cell{display:flex;align-items:center;justify-content:center;min-width:34px;height:30px;border-radius:6px;background:#fff;border:1px solid #eef2f7;cursor:pointer;font-size:13px;user-select:none;color:#c3ccd6}
   .attg-cell:hover{background:#f0f7ff}
@@ -1254,10 +1261,15 @@ select,input,textarea{font-family:inherit}
     <div class="modal-bd">
       <div class="mrg-hint" id="mergeHint"></div>
       <div class="mrg-grp-list" id="mergeGrpList"></div>
+      <div class="mrg-sep" id="splitSection" style="display:none">
+        <div class="mrg-hint" id="splitHint"></div>
+        <div class="mrg-grp-list" id="splitGrpList"></div>
+      </div>
     </div>
     <div class="modal-ft">
       <button id="mergeUnmergeBtn" class="btn btn-danger" style="margin-right:auto" onclick="unmergeDay()">🗑 Зняти всі набори</button>
       <button class="btn btn-secondary" data-close="1">Скасувати</button>
+      <button id="splitSaveBtn" class="btn btn-primary" style="display:none;background:#d97706;border-color:#d97706" onclick="saveSplit()">✂️ Зберегти поділ</button>
       <button id="mergeSaveBtn" class="btn btn-primary" onclick="saveMerge()">＋ Зберегти набір</button>
     </div>
   </div>
@@ -2679,7 +2691,10 @@ var ATT = {
   // ── ОБʼЄДНАННЯ ГРУП (v7.08) ──
   gridMerges: [],     // [{id, activityId, date, groups:[...]}] обʼєднання за (loc, activityId, місяць)
   gridMergesKey: '',
-  gridMergesLoadedAt: 0
+  gridMergesLoadedAt: 0,
+  gridSplits: [],     // v7.265: [{id, activityId, date, group, parts}] поділи за (loc, місяць)
+  gridSplitsKey: '',
+  gridSplitsLoadedAt: 0
 };
 var ATT_MONTHS_UA = ['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
 var ATT_WD_UA = ['Нд','Пн','Вт','Ср','Чт','Пт','Сб'];
@@ -3107,6 +3122,7 @@ async function renderAttendanceBoard(){
     var _bulk = $('attBulkActions'); if (_bulk) _bulk.classList.add('hidden');
     await _loadGridMarks(false);
     await _loadGridMerges(false);
+    await _loadGridSplits(false);
     renderMonthGrid();
     $('attMonthGrid').classList.remove('hidden');
     $('attLoading').classList.add('hidden');
@@ -3275,6 +3291,55 @@ async function _loadGridMerges(force){
   return ATT.gridMerges;
 }
 
+// ═══ ПОДІЛ ГРУПИ НА ПІДГРУПИ (v7.265) ═══════════════════════════════════════
+// Зворотна операція до обʼєднання: одна група одного дня = ДВА заняття викладачу.
+// Дитині — одне (її сума йде з відміток, а не з сесій). Показуємо ЛИШЕ для
+// моделі «За заняття»: у «За дитину» платять за відмітки, у «За захід» — за дату.
+// Обʼєднання виграє: група всередині набору ігнорує свій поділ.
+async function _loadGridSplits(force){
+  _ensureGridMonth();
+  var key = S.activeLoc;
+  if (!force && ATT.gridSplitsKey === key && Date.now() - ATT.gridSplitsLoadedAt < ATT_MARKS_TTL){
+    return ATT.gridSplits;
+  }
+  try {
+    var url = CFG.SCRIPT_URL + '?action=getDopSplits&loc=' + encodeURIComponent(S.activeLoc);
+    var r = await _afTryFetch(url, {redirect: 'follow'});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    var json = await r.json();
+    if (!json.ok) throw new Error(json.error || 'getDopSplits failed');
+    ATT.gridSplits = json.items || [];
+    ATT.gridSplitsKey = key;
+    ATT.gridSplitsLoadedAt = Date.now();
+  } catch(e){
+    console.warn('[attendance grid] splits load fail:', e && e.message || e);
+    if (ATT.gridSplitsKey !== key) ATT.gridSplits = [];
+  }
+  return ATT.gridSplits;
+}
+
+// Поділи поточного заняття в цей день: {normGroup: parts}
+function _splitsForDay(iso){
+  var out = {};
+  for (var i = 0; i < ATT.gridSplits.length; i++){
+    var x = ATT.gridSplits[i];
+    if (Number(x.activityId) !== Number(ATT.activity) || x.date !== iso) continue;
+    if (!(Number(x.parts) > 1)) continue;
+    out[_mrgNormGroup(x.group)] = Number(x.parts);
+  }
+  return out;
+}
+
+// Оптимістичний upsert/видалення в ATT.gridSplits.
+function _applySplitLocal(iso, actId, group, parts){
+  var nk = _mrgNormGroup(group);
+  ATT.gridSplits = ATT.gridSplits.filter(function(x){
+    return !(Number(x.activityId) === Number(actId) && x.date === iso && _mrgNormGroup(x.group) === nk);
+  });
+  if (parts > 1) ATT.gridSplits.push({id:'local-' + Date.now() + '-' + nk, loc:S.activeLoc,
+                                      activityId:Number(actId), date:iso, group:group, parts:parts});
+}
+
 // Нормалізація групи (дзеркало _dopNormGroup у бекенді): trim+lowercase+collapse.
 function _mrgNormGroup(s){ return String(s || '').trim().replace(/\s+/g, ' ').toLowerCase(); }
 
@@ -3312,6 +3377,7 @@ async function gridChangeMonth(delta){
   ATT.gridMonth = m; ATT.gridYear = y;
   await _loadGridMarks(false);
   await _loadGridMerges(false);
+  await _loadGridSplits(false);
   renderMonthGrid();
 }
 
@@ -3362,16 +3428,19 @@ function renderMonthGrid(){
     // (не лише якщо в ньому поточна група) — merges крос-груповні.
     var mrgs = _mergesForDay(D.iso);          // v7.82: усі набори дня
     var hasMrg = mrgs.length > 0;
-    var tip = D.dmy + (canMerge ? ' · 🔗 клікни, щоб обʼєднати групи' : '') +
+    var _spl = _splitsForDay(D.iso), _splN = Object.keys(_spl).length;   // v7.265
+    var tip = D.dmy + (canMerge ? ' · 🔗 клікни, щоб обʼєднати або поділити групи' : '')
+              + (_splN ? ' · поділено ×2: ' + Object.keys(_spl).join(', ') : '') +
               (hasMrg ? ' · наборів: ' + mrgs.length + ' — ' + mrgs.map(function(s){ return s.groups.join('+'); }).join(' ; ') : '');
     // v7.15: ЯВНИЙ inline onclick (надійніше за делегацію) + 🔗 на КОЖНому клікабельному
     // дні (тьмяний = можна обʼєднати, яскравий = вже обʼєднано) — видно, що клікабельно.
     html += '<div class="attg-th' + (D.isToday ? ' today' : '') +
-      (canMerge ? ' clickable' : '') + (hasMrg ? ' merged' : '') + '"' +
+      (canMerge ? ' clickable' : '') + (hasMrg ? ' merged' : '') + (_splN ? ' split' : '') + '"' +
       (canMerge ? ' data-gday="' + D.iso + '" onclick="openMergeModal(\'' + D.iso + '\')"' : '') +
       ' title="' + escapeHtml(tip) + '">' +
       '<span class="wd">' + D.wd + '</span><span class="dd">' + D.day + '</span>' +
-      (canMerge ? '<span class="mrg' + (hasMrg ? '' : ' dim') + '">🔗</span>' : '') + '</div>';
+      (canMerge ? '<span class="mrg' + (hasMrg ? '' : ' dim') + '">🔗</span>' : '') +
+      (_splN ? '<span class="spl">✂️</span>' : '') + '</div>';
   });
 
   // rows = діти
@@ -3626,6 +3695,87 @@ function renderMergeModal(){
   // Кнопка «Зняти всі набори» — лише якщо набори є.
   var ub = $('mergeUnmergeBtn');
   if (ub){ ub.style.display = sets.length ? '' : 'none'; ub.textContent = '🗑 Зняти всі набори'; }
+
+  // ── v7.265: секція ПОДІЛУ — тільки для моделі «За заняття» ───────────────
+  var sec = $('splitSection');
+  var isPerLesson = !!act && act.teacherModel === 'За заняття';
+  MRG.splitBefore = null;
+  if (!sec) return;
+  if (!isPerLesson){
+    sec.style.display = 'none';
+    var sb0 = $('splitSaveBtn'); if (sb0) sb0.style.display = 'none';
+    return;
+  }
+  sec.style.display = '';
+  var sb = $('splitSaveBtn'); if (sb) sb.style.display = '';
+  var splitsNow = _splitsForDay(iso);
+  MRG.splitBefore = splitsNow;                        // база для дельти
+  $('splitHint').innerHTML = '✂️ Позначте <b>групи</b>, які цього дня викладач ділив ' +
+    'на <b>дві підгрупи</b> і проводив заняття <b>двічі</b> — у ЗП порахується ' +
+    '<b>два заняття</b>. Дитині це нічого не змінює: вона була на одному. ' +
+    'Групи всередині набору обʼєднання поділ ігнорують.';
+  var srows = '';
+  allGroups.forEach(function(g){
+    var nk = _mrgNormGroup(g);
+    var inSet = !!usedNorm[nk];
+    var isOn = !!splitsNow[nk];
+    srows += '<label class="mrg-grp-row' + (isOn ? ' split-on' : '') + '"' +
+        (inSet ? ' style="opacity:.45"' : '') + '>' +
+      '<input type="checkbox" data-sgrp="' + escapeHtml(g) + '"' +
+        (inSet ? ' disabled' : '') + (isOn ? ' checked' : '') + '>' +
+      '<span class="glabel">' + escapeHtml(g) + '</span>' +
+      (inSet ? '<span class="gtag">у наборі</span>' : '<span class="stag">×2</span>') +
+    '</label>';
+  });
+  $('splitGrpList').innerHTML = srows ||
+    '<div class="muted" style="padding:8px">Немає груп для поділу.</div>';
+}
+
+// Позначені групи поділу → {normGroup: originalName}
+function _mrgCollectSplits(){
+  var out = {};
+  var box = $('splitGrpList');
+  if (!box) return out;
+  var boxes = box.querySelectorAll('input[type="checkbox"]:checked');
+  for (var i = 0; i < boxes.length; i++){
+    var g = boxes[i].getAttribute('data-sgrp');
+    if (g) out[_mrgNormGroup(g)] = g;
+  }
+  return out;
+}
+
+// Зберігає ЛИШЕ дельту поділу. parts:1 = зняти. Повертає кількість записів.
+async function _saveSplitDelta(iso, act){
+  var before = MRG.splitBefore || {};
+  var after  = _mrgCollectSplits();
+  var todo = [];
+  Object.keys(after).forEach(function(nk){ if (!before[nk]) todo.push({group:after[nk], parts:2}); });
+  Object.keys(before).forEach(function(nk){ if (!after[nk]) todo.push({group:nk, parts:1}); });
+  for (var i = 0; i < todo.length; i++){
+    await saveBackend('saveDopSplit', {
+      loc: S.activeLoc, activityId: act.id, activityName: act.name,
+      date: iso, group: todo[i].group, parts: todo[i].parts, by: _markerLabel()
+    });
+    _applySplitLocal(iso, act.id, todo[i].group, todo[i].parts);
+  }
+  return todo.length;
+}
+
+// v7.265: окрема кнопка — зберігає ТІЛЬКИ поділ, не чіпаючи набори обʼєднання.
+async function saveSplit(){
+  if (MRG.busy) return;
+  var iso = MRG.iso;
+  var acts = _activitiesForLoc(S.activeLoc), act = null;
+  for (var i = 0; i < acts.length; i++){ if (acts[i].id === ATT.activity){ act = acts[i]; break; } }
+  if (!act){ showToast('🚫 Оберіть заняття', 'err'); return; }
+  MRG.busy = true;
+  var n = await _saveSplitDelta(iso, act);
+  MRG.busy = false;
+  if (!n){ showToast('Нічого не змінилось', 'info', 1400); return; }
+  showToast('✓ Поділ оновлено (' + n + ')', 'ok', 1800);
+  renderMergeModal();
+  renderMonthGrid();
+  if (typeof scheduleAutoExport === 'function') scheduleAutoExport();
 }
 
 function _mrgCollectGroups(){

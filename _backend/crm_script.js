@@ -1,5 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.264
+// m.kids CRM — Google Apps Script v7.265
+// v7.265: ПОДІЛ ГРУПИ НА ПІДГРУПИ — зворотна до обʼєднання операція. Одна група
+//         одного дня = дві сесії викладачу («За заняття» + предметники).
+//         Дитині й нормі — без змін. Аркуші «Додаткові_Поділ»/«Predmetnyky_Поділ».
 // v7.264: INSTALL_EXPORT_GUARD_TRIGGER — постановка нічної гарантії на розклад
 //         із коду. Google не дає створити тригер через інтерфейс, а сам собою
 //         код на розклад не стає, тож функція ставить його з редактора:
@@ -5264,7 +5267,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.264', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.265', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -5324,6 +5327,9 @@ function doGet(e) {
     else if (action === 'getAttendanceMarks')         result = getAttendanceMarks(e.parameter || {});
     else if (action === 'getDopMerges')               result = getDopMerges(e.parameter || {});
     else if (action === 'getPredMerges')              result = getPredMerges(e.parameter || {});
+    else if (action === 'getDopSplits')               result = getDopSplits(e.parameter || {});
+    else if (action === 'getPredSplits')              result = getPredSplits(e.parameter || {});
+    else if (action === 'dryRunSplits')               result = dryRunSplits(e.parameter || {});
     else if (action === 'backupClients')              result = backupClientsAbsences();
     else if (action === 'mergeSplitVacationRows')     result = mergeSplitVacationRows(!(e.parameter && (e.parameter.dryRun === '0' || e.parameter.dryRun === 'false')));
     else if (action === 'mergeOverlappingVacations')  result = mergeOverlappingVacations(!(e.parameter && (e.parameter.dryRun === '0' || e.parameter.dryRun === 'false')));
@@ -5447,12 +5453,14 @@ function doPost(e) {
     else if (body.action === 'deleteSalaryRow')          result = deleteSalaryRow(body || {}); // v7.42 Етап 1
     else if (body.action === 'saveDopMerge')              result = saveDopMerge(body || {});
     else if (body.action === 'deleteDopMerge')            result = deleteDopMerge(body || {});
+    else if (body.action === 'saveDopSplit')              result = saveDopSplit(body || {});
     else if (body.action === 'saveOpexContractor')        result = saveOpexContractor(body || {});   // v7.84 upsert контрагента
     else if (body.action === 'opexAddExpenses')           result = opexAddExpenses(body || {});      // v7.84 запис витрат у OPEX (dryRun за замовч.)
     else if (body.action === 'saveSalaryFopBinding')      result = saveSalaryFopBinding(body || {});  // v7.85+ upsert зв'язку ФОП→Salary-рядок
     else if (body.action === 'salaryAddExtrasPayments')   result = salaryAddExtrasPayments(body || {}); // v7.85+ запис платежу ФОПу у ФАКТ Salary-рядка (dryRun за замовч.)
     else if (body.action === 'savePredMerge')             result = savePredMerge(body || {});
     else if (body.action === 'deletePredMerge')           result = deletePredMerge(body || {});
+    else if (body.action === 'savePredSplit')             result = savePredSplit(body || {});
     else if (body.action === 'addChomusykyMark')          result = addChomusykyMark(body.data || body || {});
     else if (body.action === 'removeChomusykyMark')       result = removeChomusykyMark(body || {});
     else if (body.action === 'exportAttendance')          result = exportAttendance(body || {});
@@ -5518,7 +5526,8 @@ var _PRED_WRITE_ACTIONS = {
   runPredmetnykyHrSeed:1,
   importPredmetnykyLessons:1, repairPredmetnykyLessons:1,   // v7.149
   addPredmetny:1, updatePredmetny:1, deletePredmetny:1,   // каталог
-  savePredMerge:1, deletePredMerge:1                       // обʼєднання
+  savePredMerge:1, deletePredMerge:1,                      // обʼєднання
+  savePredSplit:1                                          // поділ (v7.265)
 };
 
 function jsonOut(data) {
@@ -14404,27 +14413,274 @@ function _loadDopMergesMap(loc, dateFrom, dateTo){
 //                  Скільки груп на нього привели — байдуже, ставка раз за ДАТУ.
 // До v7.187 обидві моделі рахувались однаково, через сесії, і «За захід»
 // множився на кількість груп: Пуща 07.08 — три групи, 21 000 ₴ замість 7 000 ₴.
-function _dopCountUnits(model, groupsByDate, mergesForAct){
+// v7.265: третій аргумент — мапа поділу {дата:{нормГрупа:частин}}. «За захід»
+// його не бачить свідомо: там ставка за ДАТУ, а не за проведення, тож поділити
+// пінну вечірку навпіл не можна — вона одна.
+function _dopCountUnits(model, groupsByDate, mergesForAct, splitsForAct){
   if (model === 'За захід') return Object.keys(groupsByDate || {}).length;
-  return _dopCountSessions(groupsByDate, mergesForAct);
+  return _dopCountSessions(groupsByDate, mergesForAct, splitsForAct);
 }
 
-function _dopCountSessions(groupsByDate, mergesForAct){
+function _dopCountSessions(groupsByDate, mergesForAct, splitsForAct){
   var total = 0;
   Object.keys(groupsByDate).forEach(function(date){
     var present = groupsByDate[date];            // {normGroup:true}
     var mergeSets = (mergesForAct && mergesForAct[date]) || [];
+    var splits    = (splitsForAct && splitsForAct[date]) || {};
     var covered = {};
     var sessions = 0;
     mergeSets.forEach(function(ms){
       var any = false;
       ms.forEach(function(g){ if (present[g]){ any = true; covered[g] = true; } });
-      if (any) sessions++;
+      if (any) sessions++;                       // обʼєднання виграє: набір = 1 сесія,
+    });                                          // поділ груп усередині нього ігнорується
+    Object.keys(present).forEach(function(g){
+      if (covered[g]) return;
+      sessions += _splitPartsOf(splits[g]);      // 1, якщо поділу немає
     });
-    Object.keys(present).forEach(function(g){ if (!covered[g]) sessions++; });
     total += sessions;
   });
   return total;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.265 · ПОДІЛ ГРУПИ НА ПІДГРУПИ — зворотна операція до обʼєднання.
+//
+// Обʼєднання: кілька груп одного дня → ОДНА сесія (менше платимо викладачу).
+// Поділ:      одна група одного дня  → ДВІ сесії (більше платимо викладачу).
+// Привід: викладач ділить клас навпіл і проводить заняття двічі поспіль.
+//
+// ЩО НЕ ЗМІНЮЄТЬСЯ:
+//   • ДИТИНІ — нічого. Її сума рахується в exportAttendanceToPayments із
+//     ВІДМІТОК (ціна × відмітки), а там поняття сесії немає в принципі.
+//     Дитина була на одному занятті у своїй підгрупі — платить за одне.
+//   • НОРМА — нічого. Стеля предметників рахує РЯДКИ уроків
+//     (_predCeilingFor / savePredmetnykyLesson), а поділ рядків не додає.
+//     Рішення: норма — про навантаження дитини, тож поділ її не стосується.
+//
+// ДЕ ДІЄ: лише там, де платять ЗА СЕСІЮ —
+//   • предметники (там модель завжди посесійна);
+//   • додаткові з моделлю «За заняття» (55 із 193 активних позицій).
+//   Для «За дитину» (127 позицій) поділ безглуздий — ті самі діти, та сама
+//   кількість відміток; для «За захід» (11) рахуються унікальні ДАТИ.
+//
+// ЧОМУ ОКРЕМІ АРКУШІ, А НЕ ті самі, що обʼєднання:
+//   семантика протилежна (набір груп проти однієї), обидва можуть діяти в один
+//   день для різних груп, і відкат поділу не має зачіпати обʼєднання.
+//
+// ВЗАЄМОДІЯ З ОБʼЄДНАННЯМ: обʼєднання ВИГРАЄ. Якщо група потрапила в merge-набір
+// того дня, її поділ ігнорується — набір і так рахується як одна сесія.
+// Інакше довелося б відповідати на питання «дві групи звели разом, і одну з них
+// ділили — це скільки сесій?», на яке немає очевидної відповіді.
+// ═══════════════════════════════════════════════════════════════════════════
+var DOP_SPLITS_SHEET_NAME  = 'Додаткові_Поділ';
+var DOP_SPLITS_HEADER      = ['id','Локація','id_заняття','Назва_заняття','Дата','Група','Частин','Ким','Коли'];
+var PRED_SPLITS_SHEET_NAME = 'Predmetnyky_Поділ';
+var PRED_SPLITS_HEADER     = ['id','Локація','Предмет','Дата','Група','Частин','Ким','Коли'];
+var SPLIT_MAX_PARTS        = 4;    // поділ завжди на 2, але схема не заважає 3-4
+
+function _getSplitsSheet(name, header, createIfMissing){
+  var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var sh = ss.getSheetByName(name);
+  if (!sh && createIfMissing){
+    sh = ss.insertSheet(name);
+    sh.getRange(1, 1, 1, header.length).setValues([header]);
+    sh.setFrozenRows(1);
+  }
+  if (!sh) throw new Error('Аркуш "' + name + '" не знайдено. Колонки: ' + header.join(', '));
+  return sh;
+}
+function _nextSplitId(sh){
+  var last = sh.getLastRow();
+  if (last < 2) return 1;
+  return (Number(sh.getRange(last, 1).getValue()) || 0) + 1;
+}
+function _splitPartsOf(v){
+  var n = Number(v) || 0;
+  if (n < 2) return 1;                       // 1 = поділу немає
+  return Math.min(n, SPLIT_MAX_PARTS);
+}
+
+// ── мапи для експорту: {ключ: {дата: {нормГрупа: частин}}} ─────────────────
+function _loadDopSplitsMap(loc, dateFrom, dateTo){
+  var map = {};
+  var sh; try { sh = _getSplitsSheet(DOP_SPLITS_SHEET_NAME, DOP_SPLITS_HEADER, false); } catch(e){ return map; }
+  var data = sh.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++){
+    if (!data[i][1]) continue;
+    if (trim(String(data[i][1])) !== loc) continue;
+    var date = _dopDateISO(data[i][4]);
+    if (dateFrom && date < dateFrom) continue;
+    if (dateTo   && date >= dateTo)  continue;
+    var parts = _splitPartsOf(data[i][6]);
+    if (parts < 2) continue;
+    var act = Number(data[i][2]) || 0;
+    var g = _dopNormGroup(data[i][5]);
+    if (!act || !g) continue;
+    if (!map[act]) map[act] = {};
+    if (!map[act][date]) map[act][date] = {};
+    map[act][date][g] = parts;
+  }
+  return map;
+}
+function _loadPredSplitsMap(loc, dateFrom, dateTo){
+  var map = {};
+  var sh; try { sh = _getSplitsSheet(PRED_SPLITS_SHEET_NAME, PRED_SPLITS_HEADER, false); } catch(e){ return map; }
+  var data = sh.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++){
+    if (!data[i][1]) continue;
+    if (trim(String(data[i][1])) !== loc) continue;
+    var date = _dopDateISO(data[i][3]);
+    if (dateFrom && date < dateFrom) continue;
+    if (dateTo   && date >= dateTo)  continue;
+    var parts = _splitPartsOf(data[i][5]);
+    if (parts < 2) continue;
+    var sk = _dopNormGroup(data[i][2]);
+    var g  = _dopNormGroup(data[i][4]);
+    if (!sk || !g) continue;
+    if (!map[sk]) map[sk] = {};
+    if (!map[sk][date]) map[sk][date] = {};
+    map[sk][date][g] = parts;
+  }
+  return map;
+}
+
+// ── плоскі списки для фронту ──────────────────────────────────────────────
+function getDopSplits(params){
+  params = params || {};
+  var locFilter = trim(String(params.loc || ''));
+  var out = [];
+  var sh; try { sh = _getSplitsSheet(DOP_SPLITS_SHEET_NAME, DOP_SPLITS_HEADER, false); } catch(e){ return {ok:true, items:[]}; }
+  var data = sh.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++){
+    if (!data[i][1]) continue;
+    var loc = trim(String(data[i][1]));
+    if (locFilter && loc !== locFilter) continue;
+    var parts = _splitPartsOf(data[i][6]);
+    if (parts < 2) continue;
+    out.push({id:Number(data[i][0])||0, loc:loc, activityId:Number(data[i][2])||0,
+              activityName:trim(String(data[i][3])), date:_dopDateISO(data[i][4]),
+              group:trim(String(data[i][5])), parts:parts});
+  }
+  return {ok:true, items:out};
+}
+function getPredSplits(params){
+  params = params || {};
+  var locFilter = trim(String(params.loc || ''));
+  var out = [];
+  var sh; try { sh = _getSplitsSheet(PRED_SPLITS_SHEET_NAME, PRED_SPLITS_HEADER, false); } catch(e){ return {ok:true, items:[]}; }
+  var data = sh.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++){
+    if (!data[i][1]) continue;
+    var loc = trim(String(data[i][1]));
+    if (locFilter && loc !== locFilter) continue;
+    var parts = _splitPartsOf(data[i][5]);
+    if (parts < 2) continue;
+    out.push({id:Number(data[i][0])||0, loc:loc, subject:trim(String(data[i][2])),
+              date:_dopDateISO(data[i][3]), group:trim(String(data[i][4])), parts:parts});
+  }
+  return {ok:true, items:out};
+}
+
+// ── запис: parts<2 → запис ВИДАЛЯЄТЬСЯ (як groups<2 знімає обʼєднання) ─────
+function saveDopSplit(body){
+  body = body || {};
+  var loc  = trim(String(body.loc || ''));
+  var act  = Number(body.activityId) || 0;
+  var date = _dopDateISO(body.date);
+  var grp  = trim(String(body.group || ''));
+  var parts = _splitPartsOf(body.parts === undefined ? 2 : body.parts);
+  if (!loc || !act || !date || !grp) return {ok:false, error:'loc/activityId/date/group обовʼязкові'};
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(20000); } catch(e){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+  try {
+    var sh = _getSplitsSheet(DOP_SPLITS_SHEET_NAME, DOP_SPLITS_HEADER, true);
+    var data = sh.getDataRange().getValues();
+    var found = -1;
+    for (var i = 1; i < data.length; i++){
+      if (trim(String(data[i][1])) !== loc) continue;
+      if ((Number(data[i][2]) || 0) !== act) continue;
+      if (_dopDateISO(data[i][4]) !== date) continue;
+      if (_dopNormGroup(data[i][5]) !== _dopNormGroup(grp)) continue;
+      found = i + 1; break;
+    }
+    if (parts < 2){
+      if (found > 0){ sh.deleteRow(found); return {ok:true, removed:true, loc:loc, date:date, group:grp}; }
+      return {ok:true, removed:false, noop:true};
+    }
+    var row = [ (found > 0 ? data[found-1][0] : _nextSplitId(sh)), loc, act,
+                trim(String(body.activityName || '')), date, grp, parts,
+                trim(String(body.by || '')), formatDate(new Date()) ];
+    if (found > 0) sh.getRange(found, 1, 1, DOP_SPLITS_HEADER.length).setValues([row]);
+    else           sh.appendRow(row);
+    return {ok:true, saved:true, parts:parts, loc:loc, date:date, group:grp};
+  } finally { lock.releaseLock(); }
+}
+function savePredSplit(body){
+  body = body || {};
+  var loc  = trim(String(body.loc || ''));
+  var subj = trim(String(body.subject || ''));
+  var date = _dopDateISO(body.date);
+  var grp  = trim(String(body.group || ''));
+  var parts = _splitPartsOf(body.parts === undefined ? 2 : body.parts);
+  if (!loc || !subj || !date || !grp) return {ok:false, error:'loc/subject/date/group обовʼязкові'};
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(20000); } catch(e){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+  try {
+    var sh = _getSplitsSheet(PRED_SPLITS_SHEET_NAME, PRED_SPLITS_HEADER, true);
+    var data = sh.getDataRange().getValues();
+    var found = -1;
+    for (var i = 1; i < data.length; i++){
+      if (trim(String(data[i][1])) !== loc) continue;
+      if (_dopNormGroup(data[i][2]) !== _dopNormGroup(subj)) continue;
+      if (_dopDateISO(data[i][3]) !== date) continue;
+      if (_dopNormGroup(data[i][4]) !== _dopNormGroup(grp)) continue;
+      found = i + 1; break;
+    }
+    if (parts < 2){
+      if (found > 0){ sh.deleteRow(found); return {ok:true, removed:true, loc:loc, date:date, group:grp}; }
+      return {ok:true, removed:false, noop:true};
+    }
+    var row = [ (found > 0 ? data[found-1][0] : _nextSplitId(sh)), loc, subj, date, grp, parts,
+                trim(String(body.by || '')), formatDate(new Date()) ];
+    if (found > 0) sh.getRange(found, 1, 1, PRED_SPLITS_HEADER.length).setValues([row]);
+    else           sh.appendRow(row);
+    return {ok:true, saved:true, parts:parts, loc:loc, date:date, group:grp};
+  } finally { lock.releaseLock(); }
+}
+
+// Read-only: скільки сесій дасть поділ по локації за місяць. GET ?action=dryRunSplits&loc=&year=&month=
+function dryRunSplits(params){
+  params = params || {};
+  var loc = trim(String(params.loc || ''));
+  var year = Number(params.year) || new Date().getFullYear();
+  var month = Number(params.month) || (new Date().getMonth() + 1);
+  if (!loc) return {ok:false, error:'loc обовʼязковий'};
+  var mm = month < 10 ? '0' + month : String(month);
+  var from = year + '-' + mm + '-01';
+  var nm = _nextMonth(month, year);
+  var to = nm.year + '-' + (nm.month < 10 ? '0' + nm.month : String(nm.month)) + '-01';
+  var dop = _loadDopSplitsMap(loc, from, to);
+  var pred = _loadPredSplitsMap(loc, from, to);
+  function flat(m, label){
+    var out = [];
+    Object.keys(m).forEach(function(k){
+      Object.keys(m[k]).forEach(function(d){
+        Object.keys(m[k][d]).forEach(function(g){
+          out.push({key:k, date:d, group:g, parts:m[k][d][g], kind:label, extraSessions:m[k][d][g] - 1});
+        });
+      });
+    });
+    return out;
+  }
+  var rows = flat(dop, 'додаткові').concat(flat(pred, 'предметники'));
+  var extra = rows.reduce(function(s, r){ return s + r.extraSessions; }, 0);
+  Logger.log('═══ ПОДІЛ ГРУП · %s · %s/%s ═══', loc, month, year);
+  rows.forEach(function(r){ Logger.log('   %s · %s · %s · %s → %s частин (+%s сесій)',
+    r.kind, r.key, r.date, r.group, r.parts, r.extraSessions); });
+  Logger.log('   разом додаткових сесій: %s', extra);
+  return {ok:true, dryRun:true, loc:loc, year:year, month:month,
+          rows:rows, records:rows.length, extraSessions:extra};
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -18694,6 +18950,8 @@ function exportToSalaryExtras(params){
 
     // v7.08: обʼєднання груп (session-key = група×дата). Мапа loc→act→date→[merge-набори].
     var mergesMap = _loadDopMergesMap(loc, dateFrom, dateTo);
+    // v7.265: поділ груп на підгрупи — зворотна операція. Мапа act→date→{група:частин}.
+    var splitsMap = _loadDopSplitsMap(loc, dateFrom, dateTo);
 
     var byActId = {};
     var _marksInPeriod = 0;   // v7.197: лічильник для guard
@@ -18743,7 +19001,9 @@ function exportToSalaryExtras(params){
         // v7.08: «За заняття» — фіксована сума за кожну СЕСІЮ (група × дата);
         // обʼєднані одного дня групи схлопуються у 1 сесію (мапа mergesMap).
         // v7.187: «За захід» рахується ІНАКШЕ — ставка за кожну унікальну ДАТУ.
-        fact = _dopCountUnits(a.teacherModel, stat.groupsByDate, mergesMap[a.id] || {}) * a.teacherRate;
+        // v7.265: поділ множить сесію на кількість підгруп (тільки «За заняття»).
+        fact = _dopCountUnits(a.teacherModel, stat.groupsByDate,
+                              mergesMap[a.id] || {}, splitsMap[a.id] || {}) * a.teacherRate;
       }
       // Ключ — нормалізована назва (lowercase + без whitespace), як у Payment.
       factByName[_journalNormName(a.name)] = {fact: fact, name: a.name, hasMarks: stat.count > 0};
@@ -19032,23 +19292,26 @@ function reexportSalaryExtrasOrange(){
     byActId[rec.activityId][rec.date][ng] = true;
   }
 
-  // === 3. Обʼєднання груп (session-key схлопування) ===
+  // === 3. Обʼєднання і поділ груп (session-key схлопування / множення) ===
   var mergesMap = _loadDopMergesMap(loc, dateFrom, dateTo);
+  var splitsMap = _loadDopSplitsMap(loc, dateFrom, dateTo);
 
   // === 4. ДРУК по кожному «за заняття» ===
-  Logger.log('─── назва | груп×дат сирих | після обʼєднань | ставка | ЗП ───');
-  var rows = [], totalRaw = 0, totalMerged = 0, totalZP = 0;
+  Logger.log('─── назва | груп×дат сирих | після обʼєднань | після поділу | ставка | ЗП ───');
+  var rows = [], totalRaw = 0, totalMerged = 0, totalFinal = 0, totalZP = 0;
   perLesson.forEach(function(a){
     var gbd    = byActId[a.id] || {};
     var raw    = _dopCountUnits(a.teacherModel, gbd, {});                     // до обʼєднань
     var merged = _dopCountUnits(a.teacherModel, gbd, mergesMap[a.id] || {});  // після обʼєднань
-    var zp     = merged * a.teacherRate;
-    totalRaw += raw; totalMerged += merged; totalZP += zp;
-    Logger.log('%s | %s | %s | %s | %s', a.name, raw, merged, a.teacherRate, zp);
-    rows.push({name: a.name, model: a.teacherModel, rawSessions: raw, mergedSessions: merged, rate: a.teacherRate, zp: zp});
+    var final_ = _dopCountUnits(a.teacherModel, gbd, mergesMap[a.id] || {}, splitsMap[a.id] || {});
+    var zp     = final_ * a.teacherRate;
+    totalRaw += raw; totalMerged += merged; totalFinal += final_; totalZP += zp;
+    Logger.log('%s | %s | %s | %s | %s | %s', a.name, raw, merged, final_, a.teacherRate, zp);
+    rows.push({name: a.name, model: a.teacherModel, rawSessions: raw, mergedSessions: merged,
+               finalSessions: final_, splitExtra: final_ - merged, rate: a.teacherRate, zp: zp});
   });
-  Logger.log('─── РАЗОМ: сирих=%s | після обʼєднань=%s | ЗП=%s грн (занять=%s) ───',
-    totalRaw, totalMerged, totalZP, rows.length);
+  Logger.log('─── РАЗОМ: сирих=%s | після обʼєднань=%s | після поділу=%s | ЗП=%s грн (занять=%s) ───',
+    totalRaw, totalMerged, totalFinal, totalZP, rows.length);
 
   // === 5. Реальний запис у Salary (журнальна дельта, ідемпотентно) ===
   var exp = exportToSalaryExtras({loc: loc, month: month, year: year});
@@ -19065,6 +19328,7 @@ function reexportSalaryExtrasOrange(){
     rows: rows,
     totalRawSessions: totalRaw,
     totalMergedSessions: totalMerged,
+    totalFinalSessions: totalFinal,
     totalZP: totalZP,
     write: exp
   };
@@ -28629,6 +28893,8 @@ function exportPredmetnykyToSalary(params){
     var pnmm = predNextM.month < 10 ? '0' + predNextM.month : String(predNextM.month);
     var predDateTo = predNextM.year + '-' + pnmm + '-01';
     var predMergesMap = _loadPredMergesMap(loc, predDateFrom, predDateTo);
+    // v7.265: поділ класу на підгрупи — множить сесію, не чіпає норму учня.
+    var predSplitsMap = _loadPredSplitsMap(loc, predDateFrom, predDateTo);
 
     // 3. Salary registry → файл локації
     var reg = _salaryGetRegistry();
@@ -28677,13 +28943,16 @@ function exportPredmetnykyToSalary(params){
       var sk   = _dopNormGroup(a.subject_norm);
       var gbd  = gbdBySubj[sk] || {};
       // v7.20: група×дата з урахуванням обʼєднань (схлопують групи одного дня в 1).
-      var uniq = _dopCountSessions(gbd, predMergesMap[sk] || {});
+      // v7.265: і поділу — клас, поділений на дві підгрупи, дає дві сесії.
+      var uniq = _dopCountSessions(gbd, predMergesMap[sk] || {}, predSplitsMap[sk] || {});
       // v7.230 СТЕЛЯ. Досі норма перевірялась ЛИШЕ при відмітці
       // (savePredmetnykyLesson → NORM_REACHED). Заняття, що потрапили в журнал
       // повз відмітку — правкою аркуша, імпортом, старим кодом — оплачувались
       // повністю. Тепер рахуємо перевищення по КОЖНІЙ групі окремо й віднімаємо
       // його з підсумку. Обʼєднання не чіпаємо: вони лише зменшують лічильник,
       // тож зрізаємо надлишок із сирих (до-мержевих) значень.
+      // v7.265: perGroup рахує ДАТИ, а поділ дат не додає — тож норма лишається
+      // «за одне заняття» і поділ на неї не впливає, як і домовлено.
       var capExcess = 0, capDetail = [];
       Object.keys(gbd).forEach(function(dIso){
         Object.keys(gbd[dIso] || {}).forEach(function(g){
@@ -28785,12 +29054,12 @@ function exportPredmetnykyToSalary(params){
     // там Б.3 змінить суми. teachersPerSubject показує, скільки їх.
     var _recon = [];
     Object.keys(gbdBySubj).forEach(function(sk){
-      var bySubj = _dopCountSessions(gbdBySubj[sk], predMergesMap[sk] || {});
+      var bySubj = _dopCountSessions(gbdBySubj[sk], predMergesMap[sk] || {}, predSplitsMap[sk] || {});
       var perTeacher = {}, sumTeachers = 0;
       Object.keys(gbdByTeacher).forEach(function(tk){
         var p = tk.split('|');
         if (p.slice(1).join('|') !== sk) return;
-        var c = _dopCountSessions(gbdByTeacher[tk], predMergesMap[sk] || {});
+        var c = _dopCountSessions(gbdByTeacher[tk], predMergesMap[sk] || {}, predSplitsMap[sk] || {});
         perTeacher[p[0]] = c;
         sumTeachers += c;
       });
