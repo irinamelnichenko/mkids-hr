@@ -1,5 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.266
+// m.kids CRM — Google Apps Script v7.267
+// v7.267: картки під-локації можуть жити у ДВОХ місцях — під хостом із групою
+//         блоку (як було) або прямо на під-локації. Досі друге мовчки давало
+//         kept=0 і зносило локацію з «Оплати». + dryRunSchoolRoster&simulateMove=1
 // v7.266: фікс v7.265 — insertSheet+setValues(шапка)+appendRow в одному виконанні
 //         клали дані ПОВЕРХ шапки (setValues буферизується, appendRow бачить
 //         lastRow=0). Додано flush(), самолікування шапки і читання по id.
@@ -5270,7 +5273,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.266', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.267', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -5280,7 +5283,7 @@ function doGet(e) {
     else if (action === 'getReconcileLog')           result = getReconcileLog({child:e.parameter.child||'', loc:e.parameter.loc||'', from:e.parameter.from||'', to:e.parameter.to||''}); // v7.94
     else if (action === 'getClients')         result = getClients();
     else if (action === 'runAggregate')       result = aggregatePayments();
-    else if (action === 'dryRunSchoolRoster') result = dryRunSchoolRoster();   // v7.252 ростер шкіл за картками (read-only)
+    else if (action === 'dryRunSchoolRoster') result = dryRunSchoolRoster(e.parameter || {});   // v7.252 ростер шкіл за картками; v7.267 &simulateMove=1
     else if (action === 'dryRunPayerIndex')   result = dryRunPayerIndex(e.parameter || {});   // v7.253 ростер звірки платежів (read-only)
     else if (action === 'dryRunSubLoc')       result = dryRunSubLoc();                        // v7.253 під-локації в агрегаті (read-only)
     else if (action === 'dryRunSalarySplit')  result = dryRunSalarySplit();                   // v7.254 розріз Salary хост/під-локація (read-only)
@@ -8456,12 +8459,34 @@ function _activeCardsByLoc(){
 // Другим значенням (через out) віддає статистику для dryRun-звіту.
 function _schoolRosterFromCards(groups, loc, cardsIdx, out){
   // v7.253: у під-локації свого набору карток немає — вони лежать під хостом,
-  // і відрізняються групою («Кар'єрна» + група «Школа»).
+  //         і відрізняються групою («Кар'єрна» + група «Школа»).
+  // v7.267: тепер ДВА місця. Картку під-локації можна тримати або під хостом із
+  //         групою блоку (як було), або прямо на самій під-локації. Раніше друге
+  //         мовчки ламало агрегат: перенос карток на «Школа Кар'єрна» лишав
+  //         cards = картки «Кар'єрної», жодна з чотирьох там не знаходилась,
+  //         kept=0, фолбеку немає — і локація зникала з «Оплати» разом із
+  //         203 550 ₴. Тепер обидва розклади дають той самий ростер.
   var _sub = _subLocOf(loc);
-  var cards = (cardsIdx || {})[_nameFold(_sub ? _sub.host : loc)];
+  var _idx = cardsIdx || {};
+  var ownCards  = _idx[_nameFold(loc)] || null;                              // на самій локації
+  var hostCards = _sub ? (_idx[_nameFold(_sub.host)] || null) : null;        // під хостом
   var stat = out || {};
   stat.before = 0; stat.kept = 0; stat.dropped = []; stat.merged = [];
-  if (!cards || !Object.keys(cards).length){ stat.skipped = true; return groups; }
+  stat.cardsOwn  = ownCards  ? Object.keys(ownCards).length  : 0;
+  stat.cardsHost = hostCards ? Object.keys(hostCards).length : 0;
+  if (!stat.cardsOwn && !stat.cardsHost){ stat.skipped = true; return groups; }
+
+  // Картка дитини для ЦІЄЇ локації, або null. Для під-локації: спершу власна
+  // (група береться з неї як є), потім хостова — але лише якщо її група збігається
+  // з групою блоку, інакше це садкова картка сусіда, а не наш школяр.
+  function _cardFor(key){
+    var c = ownCards && ownCards[key];
+    if (c) return c;
+    if (!_sub) return null;
+    c = hostCards && hostCards[key];
+    if (c && _nameFold(c.group) === _nameFold(_sub.group)) return c;
+    return null;
+  }
 
   var byName = {}, order = [];
   groups.forEach(function(g){
@@ -8478,12 +8503,12 @@ function _schoolRosterFromCards(groups, loc, cardsIdx, out){
       stat.before++;
       var key = _nameFold(ch.name);
       if (!key) return;
-      if (!cards[key]){ stat.dropped.push(ch.name); return; }
-      if (_sub && _nameFold(cards[key].group) !== _nameFold(_sub.group)){ stat.dropped.push(ch.name); return; }
+      var card = _cardFor(key);
+      if (!card){ stat.dropped.push(ch.name); return; }
       var prev = byName[key];
       if (!prev){
         byName[key] = {
-          name: ch.name,
+          name: ch.name, cardGroup: trim(String(card.group || '')),
           factStudy: ch.factStudy || 0, factEntry: ch.factEntry || 0,
           factExtra: ch.factExtra || 0, budExtra: ch.budExtra || 0,
           budStudy:  ch.budStudy  || 0, contractDate: ch.contractDate || ''
@@ -8504,7 +8529,7 @@ function _schoolRosterFromCards(groups, loc, cardsIdx, out){
 
   var byGroup = {};
   order.forEach(function(key){
-    var g = trim(cards[key].group) || '(без групи)';
+    var g = byName[key].cardGroup || '(без групи)';
     if (!byGroup[g]) byGroup[g] = {group: g, teacher: '', rawGroup: g, children: []};
     byGroup[g].children.push(byName[key]);
     stat.kept++;
@@ -8516,11 +8541,40 @@ function _schoolRosterFromCards(groups, loc, cardsIdx, out){
 
 // dryRun: що саме дасть правило по кожній школі. Нічого не пише.
 // GET ?action=dryRunSchoolRoster
-function dryRunSchoolRoster(){
+// v7.267: ?simulateMove=1 додатково рахує ростер на СИМУЛЬОВАНОМУ індексі
+// карток — так, ніби картки під-локацій уже перенесені з хоста на саму
+// під-локацію. Нічого не пише: індекс будується в памʼяті. Це і є доказ, що
+// перенос безпечний ще ДО того, як його зробили.
+function _simulateSubLocCardMove(idx){
+  var out = {};
+  Object.keys(idx).forEach(function(l){
+    out[l] = {};
+    Object.keys(idx[l]).forEach(function(n){ out[l][n] = idx[l][n]; });
+  });
+  Object.keys(PAY_SUBLOCATIONS || {}).forEach(function(subName){
+    var sub = PAY_SUBLOCATIONS[subName];
+    var hostKey = _nameFold(sub.host), subKey = _nameFold(subName);
+    if (!out[hostKey]) return;
+    if (!out[subKey]) out[subKey] = {};
+    Object.keys(out[hostKey]).forEach(function(n){
+      if (_nameFold(out[hostKey][n].group) !== _nameFold(sub.group)) return;
+      out[subKey][n] = out[hostKey][n];      // переїхала на під-локацію
+      delete out[hostKey][n];                // і зникла з хоста
+    });
+  });
+  return out;
+}
+
+function dryRunSchoolRoster(params){
+  params = params || {};
+  var simulate = String((params || {}).simulateMove || '') === '1';
   var configSS   = SpreadsheetApp.openById(CONFIG_SHEET_ID);
   var configData = configSS.getSheets()[0].getDataRange().getValues();
   var now = new Date(), curJSMonth = now.getMonth();
-  var idx = _activeCardsByLoc();
+  var idxReal = _activeCardsByLoc();
+  var idx = simulate ? _simulateSubLocCardMove(idxReal) : idxReal;
+  Logger.log(simulate ? '⚙️ СИМУЛЯЦІЯ: картки під-локацій перенесені на під-локацію'
+                      : '📄 Реальний індекс карток (як зараз у «Клієнтах»)');
   var report = [];
   Logger.log('═══ РОСТЕР ШКІЛ ЗА КАРТКАМИ · DRY-RUN ═══');
   for (var r = 1; r < configData.length; r++){
@@ -8552,13 +8606,14 @@ function dryRunSchoolRoster(){
       report.push({loc:loc, before:before, after:(stat.skipped ? before : stat.kept),
                    groupsBefore:Object.keys(beforeGroups).length, groupsAfter:Object.keys(afterGroups).length,
                    beforeGroups:beforeGroups, afterGroups:afterGroups,
+                   cardsOwn:stat.cardsOwn, cardsHost:stat.cardsHost,
                    dropped:stat.dropped, merged:stat.merged, skipped:!!stat.skipped});
     } catch(e){
       Logger.log('   ❌ %s: %s', loc, e.message);
       report.push({loc:loc, error:e.message});
     }
   }
-  return {ok:true, dryRun:true, report:report};
+  return {ok:true, dryRun:true, simulateMove:simulate, report:report};
 }
 
 // v7.253 dryRun: що дасть правило під-локації + правило картки в ЗВІРЦІ ПЛАТЕЖІВ.
