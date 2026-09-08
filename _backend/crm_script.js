@@ -1,5 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.265
+// m.kids CRM — Google Apps Script v7.266
+// v7.266: фікс v7.265 — insertSheet+setValues(шапка)+appendRow в одному виконанні
+//         клали дані ПОВЕРХ шапки (setValues буферизується, appendRow бачить
+//         lastRow=0). Додано flush(), самолікування шапки і читання по id.
 // v7.265: ПОДІЛ ГРУПИ НА ПІДГРУПИ — зворотна до обʼєднання операція. Одна група
 //         одного дня = дві сесії викладачу («За заняття» + предметники).
 //         Дитині й нормі — без змін. Аркуші «Додаткові_Поділ»/«Predmetnyky_Поділ».
@@ -5267,7 +5270,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.265', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.266', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -5283,6 +5286,7 @@ function doGet(e) {
     else if (action === 'dryRunSalarySplit')  result = dryRunSalarySplit();                   // v7.254 розріз Salary хост/під-локація (read-only)
     else if (action === 'dryRunIdMismatch')   result = dryRunIdMismatch(e.parameter || {});     // v7.256 ID картки проти ПІБ (read-only)
     else if (action === 'dryRunExportGuard')  result = dryRunExportGuard();                    // v7.262 нічна гарантія експорту (read-only)
+    else if (action === 'getExportGuardStatus') result = getExportGuardStatus();                // v7.266 чим закінчився останній прогін
     else if (action === 'syncPayments')        result = syncPayments();
     else if (action === 'runAggregateYearly') result = aggregatePaymentsYearly();
     else if (action === 'runSyncBdayStatus')  result = syncBdayStatusSheet();
@@ -9028,6 +9032,7 @@ function _vacGuardRunBatch(){
 // ScriptProperties.
 var _EXP_GUARD_BATCH = 3;    // локацій за прогін (× 2 місяці × 2 експорти = 12)
 var _EXP_GUARD_KEY   = 'expguard_state';
+var _EXP_GUARD_LAST_KEY = 'expguard_last';   // v7.266: підсумок останнього прогону
 
 function nightlyExportGuarantee(){
   _expGuardDeleteContinuations();          // прибрати спент-тригери з минулого разу
@@ -9108,9 +9113,50 @@ function _expGuardRunBatch(){
     Logger.log('[expGuard] ✅ ЗАВЕРШЕНО: локацій %s · Payment: клітинок %s на %s ₴ · Salary: клітинок %s на %s ₴',
       st.locsDone, st.pCells, Math.round(st.pSum), st.sCells, Math.round(st.sSum));
     if (st.errs.length) Logger.log('[expGuard] ⚠ проблеми (%s):\n  %s', st.errs.length, st.errs.join('\n  '));
+    // v7.266: підсумок ПЕРЕЖИВАЄ запуск. Досі єдиним слідом був Logger, а він
+    // живе тільки в Executions редактора — з фронту й через curl не видно, і на
+    // питання «чи відпрацювала гарантія» не було чим відповісти: «Експорт_Журнал»
+    // пише лише ДАТУ, без години, тож ранкові записи не відрізнити від денних.
+    try {
+      props.setProperty(_EXP_GUARD_LAST_KEY, JSON.stringify({
+        finishedAt: new Date().toISOString(), startedAt: st.startedAt || '',
+        locs: st.locs.length, locsDone: st.locsDone, months: st.months,
+        pCells: st.pCells, pSum: Math.round(st.pSum),
+        sCells: st.sCells, sSum: Math.round(st.sSum),
+        errs: st.errs.slice(0, 20)
+      }));
+    } catch(e){ Logger.log('[expGuard] не зміг зберегти підсумок: %s', e && e.message); }
     props.deleteProperty(_EXP_GUARD_KEY);
     _expGuardDeleteContinuations();
   }
+}
+
+// Read-only: чим закінчився ОСТАННІЙ прогін гарантії + чи не завис поточний.
+// GET ?action=getExportGuardStatus
+function getExportGuardStatus(){
+  var props = PropertiesService.getScriptProperties();
+  var out = {ok: true, running: false, last: null};
+  var cur = props.getProperty(_EXP_GUARD_KEY);
+  if (cur){
+    try {
+      var st = JSON.parse(cur);
+      var mins = st.startedAt ? Math.round((Date.now() - new Date(st.startedAt).getTime()) / 60000) : null;
+      out.running = true;
+      out.current = {startedAt: st.startedAt, pos: st.pos, locs: (st.locs || []).length,
+                     locsDone: st.locsDone, minutesAgo: mins,
+                     stuck: (mins !== null && mins > 45)};   // 17 локацій ≈ 12 хв
+    } catch(e){ out.current = {parseError: String(e && e.message)}; }
+  }
+  var last = props.getProperty(_EXP_GUARD_LAST_KEY);
+  if (last){
+    try {
+      out.last = JSON.parse(last);
+      out.last.hoursAgo = out.last.finishedAt
+        ? Math.round((Date.now() - new Date(out.last.finishedAt).getTime()) / 36000) / 100 : null;
+    } catch(e){ out.last = {parseError: String(e && e.message)}; }
+  }
+  if (!out.last && !out.running) out.note = 'Гарантія ще жодного разу не дійшла до кінця з часу деплою v7.266.';
+  return out;
 }
 
 // ═══ v7.264: ІНСТАЛЯТОР ТРИГЕРА НІЧНОЇ ГАРАНТІЇ ════════════════════════════
@@ -14485,14 +14531,28 @@ function _getSplitsSheet(name, header, createIfMissing){
   if (!sh && createIfMissing){
     sh = ss.insertSheet(name);
     sh.getRange(1, 1, 1, header.length).setValues([header]);
-    sh.setFrozenRows(1);
+    SpreadsheetApp.flush();     // ⚠️ без цього appendRow нижче бачить lastRow=0
+    sh.setFrozenRows(1);        //    і кладе дані ПОВЕРХ шапки, у рядок 1
   }
   if (!sh) throw new Error('Аркуш "' + name + '" не знайдено. Колонки: ' + header.join(', '));
+  // Самолікування шапки, якщо її вже затерло (аркуші, створені до фіксу).
+  if (createIfMissing && sh.getLastRow() > 0 && !_isSplitHeaderRow(sh.getRange(1, 1).getValue())){
+    sh.insertRowBefore(1);
+    sh.getRange(1, 1, 1, header.length).setValues([header]);
+    SpreadsheetApp.flush();
+    sh.setFrozenRows(1);
+  }
   return sh;
 }
+function _isSplitHeaderRow(firstCell){
+  return String(firstCell == null ? '' : firstCell).trim().toLowerCase() === 'id';
+}
+// Рядок даних = перша колонка є числовим id. Шапка ('id') і порожні рядки
+// відсіюються самі, тож читання не залежить від того, чи шапка на місці.
+function _splitRowId(row){ return Number(row && row[0]) || 0; }
 function _nextSplitId(sh){
   var last = sh.getLastRow();
-  if (last < 2) return 1;
+  if (last < 1) return 1;
   return (Number(sh.getRange(last, 1).getValue()) || 0) + 1;
 }
 function _splitPartsOf(v){
@@ -14506,8 +14566,8 @@ function _loadDopSplitsMap(loc, dateFrom, dateTo){
   var map = {};
   var sh; try { sh = _getSplitsSheet(DOP_SPLITS_SHEET_NAME, DOP_SPLITS_HEADER, false); } catch(e){ return map; }
   var data = sh.getDataRange().getValues();
-  for (var i = 1; i < data.length; i++){
-    if (!data[i][1]) continue;
+  for (var i = 0; i < data.length; i++){
+    if (!_splitRowId(data[i]) || !data[i][1]) continue;
     if (trim(String(data[i][1])) !== loc) continue;
     var date = _dopDateISO(data[i][4]);
     if (dateFrom && date < dateFrom) continue;
@@ -14527,8 +14587,8 @@ function _loadPredSplitsMap(loc, dateFrom, dateTo){
   var map = {};
   var sh; try { sh = _getSplitsSheet(PRED_SPLITS_SHEET_NAME, PRED_SPLITS_HEADER, false); } catch(e){ return map; }
   var data = sh.getDataRange().getValues();
-  for (var i = 1; i < data.length; i++){
-    if (!data[i][1]) continue;
+  for (var i = 0; i < data.length; i++){
+    if (!_splitRowId(data[i]) || !data[i][1]) continue;
     if (trim(String(data[i][1])) !== loc) continue;
     var date = _dopDateISO(data[i][3]);
     if (dateFrom && date < dateFrom) continue;
@@ -14552,8 +14612,8 @@ function getDopSplits(params){
   var out = [];
   var sh; try { sh = _getSplitsSheet(DOP_SPLITS_SHEET_NAME, DOP_SPLITS_HEADER, false); } catch(e){ return {ok:true, items:[]}; }
   var data = sh.getDataRange().getValues();
-  for (var i = 1; i < data.length; i++){
-    if (!data[i][1]) continue;
+  for (var i = 0; i < data.length; i++){
+    if (!_splitRowId(data[i]) || !data[i][1]) continue;
     var loc = trim(String(data[i][1]));
     if (locFilter && loc !== locFilter) continue;
     var parts = _splitPartsOf(data[i][6]);
@@ -14570,8 +14630,8 @@ function getPredSplits(params){
   var out = [];
   var sh; try { sh = _getSplitsSheet(PRED_SPLITS_SHEET_NAME, PRED_SPLITS_HEADER, false); } catch(e){ return {ok:true, items:[]}; }
   var data = sh.getDataRange().getValues();
-  for (var i = 1; i < data.length; i++){
-    if (!data[i][1]) continue;
+  for (var i = 0; i < data.length; i++){
+    if (!_splitRowId(data[i]) || !data[i][1]) continue;
     var loc = trim(String(data[i][1]));
     if (locFilter && loc !== locFilter) continue;
     var parts = _splitPartsOf(data[i][5]);
@@ -14597,7 +14657,8 @@ function saveDopSplit(body){
     var sh = _getSplitsSheet(DOP_SPLITS_SHEET_NAME, DOP_SPLITS_HEADER, true);
     var data = sh.getDataRange().getValues();
     var found = -1;
-    for (var i = 1; i < data.length; i++){
+    for (var i = 0; i < data.length; i++){
+      if (!_splitRowId(data[i])) continue;
       if (trim(String(data[i][1])) !== loc) continue;
       if ((Number(data[i][2]) || 0) !== act) continue;
       if (_dopDateISO(data[i][4]) !== date) continue;
@@ -14630,7 +14691,8 @@ function savePredSplit(body){
     var sh = _getSplitsSheet(PRED_SPLITS_SHEET_NAME, PRED_SPLITS_HEADER, true);
     var data = sh.getDataRange().getValues();
     var found = -1;
-    for (var i = 1; i < data.length; i++){
+    for (var i = 0; i < data.length; i++){
+      if (!_splitRowId(data[i])) continue;
       if (trim(String(data[i][1])) !== loc) continue;
       if (_dopNormGroup(data[i][2]) !== _dopNormGroup(subj)) continue;
       if (_dopDateISO(data[i][3]) !== date) continue;
