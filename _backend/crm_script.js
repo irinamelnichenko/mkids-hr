@@ -1,5 +1,9 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.267
+// m.kids CRM — Google Apps Script v7.268
+// v7.268: кілька виконавців одного предмета в одній локації — точні назви в
+//         CATALOG_TO_NORM_MAP розводять позиції каталогу. Психолог Ірина /
+//         Маруфенко (Осокорки) і три англійські Школи 228. Досі один урок
+//         психолога оплачувався ДВІЧІ. + dryRunPredOrphanLessons.
 // v7.267: картки під-локації можуть жити у ДВОХ місцях — під хостом із групою
 //         блоку (як було) або прямо на під-локації. Досі друге мовчки давало
 //         kept=0 і зносило локацію з «Оплати». + dryRunSchoolRoster&simulateMove=1
@@ -5273,7 +5277,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.267', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.268', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -5337,6 +5341,7 @@ function doGet(e) {
     else if (action === 'getDopSplits')               result = getDopSplits(e.parameter || {});
     else if (action === 'getPredSplits')              result = getPredSplits(e.parameter || {});
     else if (action === 'dryRunSplits')               result = dryRunSplits(e.parameter || {});
+    else if (action === 'dryRunPredOrphanLessons')    result = dryRunPredOrphanLessons(e.parameter || {});   // v7.268
     else if (action === 'backupClients')              result = backupClientsAbsences();
     else if (action === 'mergeSplitVacationRows')     result = mergeSplitVacationRows(!(e.parameter && (e.parameter.dryRun === '0' || e.parameter.dryRun === 'false')));
     else if (action === 'mergeOverlappingVacations')  result = mergeOverlappingVacations(!(e.parameter && (e.parameter.dryRun === '0' || e.parameter.dryRun === 'false')));
@@ -5468,6 +5473,7 @@ function doPost(e) {
     else if (body.action === 'savePredMerge')             result = savePredMerge(body || {});
     else if (body.action === 'deletePredMerge')           result = deletePredMerge(body || {});
     else if (body.action === 'savePredSplit')             result = savePredSplit(body || {});
+    else if (body.action === 'remapPredLessonSubject')    result = remapPredLessonSubject(body || {});   // v7.268
     else if (body.action === 'addChomusykyMark')          result = addChomusykyMark(body.data || body || {});
     else if (body.action === 'removeChomusykyMark')       result = removeChomusykyMark(body || {});
     else if (body.action === 'exportAttendance')          result = exportAttendance(body || {});
@@ -5534,7 +5540,8 @@ var _PRED_WRITE_ACTIONS = {
   importPredmetnykyLessons:1, repairPredmetnykyLessons:1,   // v7.149
   addPredmetny:1, updatePredmetny:1, deletePredmetny:1,   // каталог
   savePredMerge:1, deletePredMerge:1,                      // обʼєднання
-  savePredSplit:1                                          // поділ (v7.265)
+  savePredSplit:1,                                         // поділ (v7.265)
+  remapPredLessonSubject:1                                 // перепризначення предмета (v7.268)
 };
 
 function jsonOut(data) {
@@ -27050,7 +27057,10 @@ var PRED_LESSONS_HEADER   = ['ID','EmpKey','Location','Group','Subject','Date','
 var PRED_SUBJECTS         = ['Англійська','Музика','Хореограф','Логопед','Психолог','Чомусики',
                              'Німецька','Іспанська','Фізкультура',    // v7.192: предмети школи
                              'Архітектура','Фітнес','Speaking club',  // v7.195: Школа Осокорки
-                             'Спорт','Польська'];                     // v7.236: Благо (Нац.Гвардії, Манхетен)
+                             'Спорт','Польська',                      // v7.236: Благо (Нац.Гвардії, Манхетен)
+                             // v7.268: іменні позиції — кілька виконавців одного предмета
+                             'Англійська Кримська','Англійська Пахалюк','Англійська Маришина',
+                             'Психолог Ірина','Психолог Маруфенко'];
 var PRED_UNLIMITED_SUBJ   = 'Чомусики';   // норму НЕ перевіряємо
 var PRED_GROUP_TYPES      = ['miniBaby','Baby','Find','Study','Preschool'];
 var PRED_LVIV_LOCATIONS   = ['Кругла','Бігова'];   // все інше → 'Київ'
@@ -27068,7 +27078,28 @@ var CATALOG_TO_NORM_MAP = {
   // v7.192: предмети школи
   'Німецька мова':         'Німецька',
   'Іспанська мова':        'Іспанська',
-  'Фізкультура':           'Фізкультура'
+  'Фізкультура':           'Фізкультура',
+  // ── v7.268: ОДНА ЛОКАЦІЯ, КІЛЬКА ВИКЛАДАЧІВ ОДНОГО ПРЕДМЕТА ────────────
+  // Фрагментні правила нижче зводять будь-яке «…психол…» в один «Психолог»,
+  // а «…англ…» — в одну «Англійську». Поки на предмет один виконавець, це
+  // зручно. Щойно їх двоє — позиції каталогу стають нерозрізненними, і
+  // ламається ТРИ речі одразу:
+  //   • випадайка (subjectsFor дедуплікує по subject_norm) — один пункт;
+  //   • ставка (getRateFor віддає ПЕРШУ активну позицію);
+  //   • ЗП: обидві позиції читають один і той самий gbdBySubj[sk] і кожна
+  //     множить його на свою ставку — один урок оплачується двічі.
+  // Підтверджено на живих даних 09.09.2026: Школа Осокорки, 1 урок психолога
+  // → «Психолог Ірина 450» 450 ₴ + «Психолог Маруфенко 450» 450 ₴.
+  // Точна назва в цій мапі перевіряється ПЕРШОЮ, тож фрагмент до неї не дійде
+  // і кожна позиція дістає власний subject_norm.
+  'Психолог Ірина':              'Психолог Ірина',
+  'Психолог Маруфенко':          'Психолог Маруфенко',
+  // Школа 228: три вчительки англійської. Ставки поки 0, уроків у локації
+  // нуль — тому розділяємо зараз, поки нічого не треба переписувати заднім
+  // числом. Інакше з першою ж проставленою ставкою почалося б потроєння.
+  'Кримська Юлія англійська':    'Англійська Кримська',
+  'Пахалюк Ксенія англійська':   'Англійська Пахалюк',
+  'Маришина Юлія англійська':    'Англійська Маришина'
 };
 
 var PRED_EDIT_ROLES_ANY = ['cfo','ceo','coo','cco'];   // будь-яка локація
@@ -27678,6 +27709,109 @@ function _getPredLessonsSheet(){
     sh.setFrozenRows(1);
   }
   return sh;
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.268 · ОСИРОТІЛІ УРОКИ ПІСЛЯ РОЗДІЛЕННЯ ПОЗИЦІЇ КАТАЛОГУ
+//
+// Урок зберігає НОРМАЛІЗОВАНУ назву предмета (Predmetnyky_Lessons.Subject), а
+// не id позиції каталогу. Коли одну позицію ділять на дві іменні («Психолог» →
+// «Психолог Ірина» + «Психолог Маруфенко»), уроки зі старою назвою перестають
+// належати будь-якій активній позиції — і тихо випадають з ЗП обох.
+//
+// Ця пара роутів робить перехід видимим:
+//   dryRunPredOrphanLessons — read-only список таких уроків + куди їх можна
+//                             перепризначити (активні позиції тієї ж локації);
+//   remapPredLessonSubject  — переписує Subject одного уроку за id.
+//
+// Автоматично НЕ вирішуємо, кому віддати урок: у даних немає поля «чия пара».
+// EmpKey — це ХТО ПОСТАВИВ відмітку, а не хто вів заняття, і покладатись на
+// нього не можна. Рішення за людиною.
+// ═══════════════════════════════════════════════════════════════════════════
+function dryRunPredOrphanLessons(params){
+  params = params || {};
+  var locFilter = trim(String(params.loc || ''));
+  var sh = _getPredLessonsSheet();
+  if (!sh || sh.getLastRow() < 2) return {ok:true, dryRun:true, orphans:[], total:0};
+  var data = sh.getRange(2, 1, sh.getLastRow() - 1, PRED_LESSONS_HEADER.length).getValues();
+
+  var allowedByLoc = {};      // loc → {subject_norm: [позиції каталогу]}
+  function allowedFor(loc){
+    if (allowedByLoc[loc]) return allowedByLoc[loc];
+    var m = {};
+    _loadPredCatalog(loc).forEach(function(c){
+      if (!c.active || !c.subject_norm) return;
+      (m[c.subject_norm] = m[c.subject_norm] || []).push(
+        {raw: c.subject_raw, rate: c.rate});
+    });
+    allowedByLoc[loc] = m;
+    return m;
+  }
+
+  var orphans = [], byLoc = {};
+  for (var i = 0; i < data.length; i++){
+    var loc  = trim(String(data[i][2]));
+    var subj = trim(String(data[i][4]));
+    if (!loc || !subj) continue;
+    if (locFilter && loc !== locFilter) continue;
+    if (subj === PRED_UNLIMITED_SUBJ) continue;          // Чомусики — не каталожні
+    var allowed = allowedFor(loc);
+    if (allowed[subj]) continue;                          // позиція є — усе гаразд
+    var options = Object.keys(allowed).sort();
+    orphans.push({
+      id:      Number(data[i][0]) || 0,
+      loc:     loc,
+      group:   trim(String(data[i][3])),
+      subject: subj,
+      date:    _dopDateISO(data[i][5]),
+      empKey:  trim(String(data[i][1])),                  // ХТО ПОЗНАЧИВ, не хто вів
+      createdBy: trim(String(data[i][7])),
+      canBecome: options.filter(function(o){ return _nameFold(o).indexOf(_nameFold(subj)) === 0
+                                                 || _nameFold(subj).indexOf(_nameFold(o)) === 0; }),
+      allOptions: options
+    });
+    byLoc[loc] = (byLoc[loc] || 0) + 1;
+  }
+  Logger.log('═══ ОСИРОТІЛІ УРОКИ · %s ═══', locFilter || 'усі локації');
+  orphans.forEach(function(o){
+    Logger.log('   id=%s · %s · %s · гр.%s · «%s» → варіанти: %s',
+      o.id, o.loc, o.date, o.group, o.subject, (o.canBecome.join(' | ') || o.allOptions.join(' | ') || '—'));
+  });
+  Logger.log('   разом: %s', orphans.length);
+  return {ok:true, dryRun:true, orphans:orphans, total:orphans.length, byLoc:byLoc};
+}
+
+// Переписує Subject одного уроку. Пише ТІЛЬКИ при confirm:'YES_WRITE' —
+// вибір виконавця незворотний для ЗП, тож випадкового виклику бути не має.
+function remapPredLessonSubject(body){
+  body = body || {};
+  var id      = Number(body.id) || 0;
+  var subject = trim(String(body.subject || ''));
+  var dryRun  = (body.dryRun !== false);
+  if (!id || !subject) return {ok:false, error:'id і subject обовʼязкові'};
+  if (!dryRun && body.confirm !== 'YES_WRITE')
+    return {ok:false, error:"Для запису потрібні dryRun:false І confirm:'YES_WRITE'"};
+
+  var sh = _getPredLessonsSheet();
+  var data = sh.getRange(2, 1, sh.getLastRow() - 1, PRED_LESSONS_HEADER.length).getValues();
+  for (var i = 0; i < data.length; i++){
+    if ((Number(data[i][0]) || 0) !== id) continue;
+    var loc = trim(String(data[i][2])), old = trim(String(data[i][4]));
+    // Цільова назва мусить бути активною позицією каталогу ЦІЄЇ локації,
+    // інакше урок просто переїде з однієї сирітської назви в іншу.
+    var ok = false;
+    _loadPredCatalog(loc).forEach(function(c){
+      if (c.active && c.subject_norm === subject) ok = true;
+    });
+    if (!ok) return {ok:false, error:'«' + subject + '» не є активною позицією каталогу «' + loc + '»'};
+    if (dryRun) return {ok:true, dryRun:true, id:id, loc:loc, group:trim(String(data[i][3])),
+                        date:_dopDateISO(data[i][5]), from:old, to:subject, wouldWrite:true};
+    sh.getRange(i + 2, 5).setValue(subject);              // колонка 5 = Subject
+    Logger.log('[remapPredLesson] id=%s %s: «%s» → «%s»', id, loc, old, subject);
+    return {ok:true, written:true, id:id, loc:loc, from:old, to:subject};
+  }
+  return {ok:false, error:'Урок id=' + id + ' не знайдено'};
 }
 
 // ── Endpoint helpers ─────────────────────────────────────────────
