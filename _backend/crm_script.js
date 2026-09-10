@@ -5277,7 +5277,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.268', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.269', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -9577,6 +9577,15 @@ function _attDateIso(cell, tz) {
   return s;
 }
 
+// v7.269: дата рядка Табеля → ISO, на кожен рядок. Швидкий шлях для Date-клітинок
+// (а це майже всі) — рахунок на місці, як у _attDateFast, без Utilities.formatDate:
+// це виклик Apps Script API, і на 47 тис. рядків він коштував більше, ніж саме
+// читання аркуша. Рядкові значення (старі 'DD.MM.YYYY' і довгі date-string)
+// нормалізує _attDateIso — поведінка для них не змінилась.
+function _attRowIso(cell, tz){
+  return (cell instanceof Date) ? _attDateFast(cell) : _attDateIso(cell, tz);
+}
+
 function getAttendance(e) {
   var params  = e ? (e.parameter || {}) : {};
   var loc     = trim(params.loc  || '');
@@ -9604,16 +9613,47 @@ function getAttendance(e) {
   if (lastRow < 2) return {ok:true, data:[]};
   // v7.49: читаємо лише перші 6 колонок (Дата,ID дитини,Ім'я,Локація,Група,Статус) —
   // Ким/Коли гріду не потрібні → менший payload/CPU (з дедупленим листом ~4× швидше).
-  var vals = sheet.getRange(1, 1, lastRow, 6).getValues();
-  var hdrs = vals[0].map(String);
+  // v7.269: заголовки окремим (дешевим) читанням — вони потрібні ДО основного, щоб
+  // знати колонку «Дата» для вікна рядків.
+  var hdrs = sheet.getRange(1, 1, 1, 6).getValues()[0].map(String);
   var iDate = hdrs.indexOf('Дата');     if (iDate < 0) iDate = 0;
   var iCid  = hdrs.indexOf('ID дитини'); if (iCid  < 0) iCid  = 1;
   var iLoc  = hdrs.indexOf('Локація');   if (iLoc  < 0) iLoc  = 3;
 
+  // ── v7.269 ВІКНО РЯДКІВ ЗА ДІАПАЗОНОМ ДАТ ────────────────────────────────
+  // Було: читали ВЕСЬ лист (lastRow × 6) і відсіювали в циклі. На 47 тис. рядків
+  // це 10.8 МБ і ~40 с, тоді як екран тижня потребує 4% рядків, а місяць однієї
+  // локації — 1%. Фільтр from/to працював, але вже ПІСЛЯ того, як усе прочитано,
+  // тож нічого не економив — саме тому фронт і не бачив сенсу його передавати.
+  // Тепер, коли задано from/to: спершу ОДНА колонка «Дата» (у 6 разів менше даних),
+  // потім лише блок від першого до останнього влучного рядка. Лист майже
+  // впорядкований за датою, тож блок вузький; беремо min..max індексів, тож жоден
+  // влучний рядок за межі блоку не випаде навіть при безладі в порядку рядків.
+  var vals;
+  if (from || to){
+    var dcol = sheet.getRange(2, iDate + 1, lastRow - 1, 1).getValues();
+    var lo = -1, hi = -1;
+    for (var i = 0; i < dcol.length; i++){
+      var di = _attRowIso(dcol[i][0], tz);
+      if (!di) continue;
+      if (from && di < from) continue;
+      if (to   && di > to)   continue;
+      if (lo === -1) lo = i;
+      hi = i;
+    }
+    if (lo === -1){                                                 // у діапазоні нічого
+      if (cache && ckey){ try { cache.put(ckey, '[]', 180); } catch(_cp0){} }
+      return {ok:true, data:[]};
+    }
+    vals = sheet.getRange(2 + lo, 1, hi - lo + 1, 6).getValues();
+  } else {
+    vals = sheet.getRange(2, 1, lastRow - 1, 6).getValues();
+  }
+
   // dedupe: остання відмітка per (дата, дитина) — як і мерж на фронті.
   var byKey = {}, order = [];
-  for (var r = 1; r < vals.length; r++) {
-    var iso = _attDateIso(vals[r][iDate], tz);
+  for (var r = 0; r < vals.length; r++) {
+    var iso = _attRowIso(vals[r][iDate], tz);
     if (!iso) continue;
     if (from && iso < from) continue;
     if (to   && iso > to)   continue;
@@ -9678,9 +9718,12 @@ function saveAttendance(body) {
     var row = [date, childId, rec.childName||'', rec.loc||'', rec.group||'', rec.status||'', rec.updatedBy||'', now];
     // Оновлюємо ОСТАННІЙ існуючий рядок (read бере last) — матчинг через
     // нормалізовану дату, тож більше НЕ створюємо дублі.
+    // v7.269: _attRowIso замість _attDateIso. Цей цикл проходить УВЕСЬ лист на
+    // КОЖНУ відмітку пакета: 13 відміток × 47 тис. рядків = 600 тис. викликів
+    // Utilities.formatDate, і саме вони робили збереження табеля повільним.
     var lastIdx = -1;
     for (var r = 1; r < vals.length; r++) {
-      if (_attDateIso(vals[r][0], tz) === date && trim(String(vals[r][1] || '')) === childId) lastIdx = r;
+      if (_attRowIso(vals[r][0], tz) === date && trim(String(vals[r][1] || '')) === childId) lastIdx = r;
     }
     if (lastIdx >= 0) {
       sheet.getRange(lastIdx+1, 1, 1, row.length).setValues([row]);
@@ -9727,7 +9770,7 @@ function dedupAttendance() {
   var hdr = vals[0];
   var byKey = {}, order = [];
   for (var r = 1; r < vals.length; r++) {
-    var iso = _attDateIso(vals[r][0], tz);
+    var iso = _attRowIso(vals[r][0], tz);          // v7.269: швидкий шлях для Date-клітинок
     var cid = trim(String(vals[r][1] || ''));
     if (!iso || !cid) continue;
     var key = iso + '|' + cid;
@@ -9786,7 +9829,7 @@ function dedupAttendanceApi(body){
 
     var best = {}, order = [], conflicts = [], byLocBefore = {}, byLocAfter = {};
     for (var r = 1; r < vals.length; r++){
-      var iso = _attDateIso(vals[r][iDate], tz);
+      var iso = _attRowIso(vals[r][iDate], tz);    // v7.269: швидкий шлях для Date-клітинок
       var cid = trim(String(vals[r][iCid] || ''));
       if (!iso || !cid) continue;
       var loc = trim(String(vals[r][iLoc] || ''));

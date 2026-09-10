@@ -5409,11 +5409,15 @@ document.addEventListener('visibilitychange',function(){
 // Підвантаження табеля співробітників з хмари (тільки рядки STAFF::) у localStorage.
 function loadTabelFromCloud(loc,from,to,onDone){
   var url=authScriptUrl(); if(!url||!loc){ if(onDone)onDone('no-url'); return; }
-  // ВАЖЛИВО: getAttendance з from/to ЛАМАЄТЬСЯ — дата в листі 'Табель' зберігається як Date-тип,
-  // бекенд робить рядкове порівняння і відсікає всі рядки. Тому тягнемо БЕЗ діапазону (лише loc)
-  // і нормалізуємо+фільтруємо дату на клієнті. (Бекенд-баг getAttendance — окремий техборг.)
+  // v7.269: from/to знову передаємо. Раніше тут стояло «getAttendance з from/to
+  // ЛАМАЄТЬСЯ» — і тягнули весь аркуш (1.5 МБ на локацію), фільтруючи на клієнті.
+  // Насправді бекенд нормалізує дату правильно, але фільтрував уже ПІСЛЯ читання
+  // всього листа, тож діапазон нічого не економив. Тепер бекенд читає лише вікно
+  // потрібних рядків: та сама відповідь важить ~108 КБ замість 1.5 МБ.
+  // Клієнтську нормалізацію лишаємо — вона дешева й страхує старі рядкові дати.
   function _normD(v){ v=String(v||''); if(/^\d{4}-\d{2}-\d{2}/.test(v)) return v.slice(0,10); var dt=new Date(v); return isNaN(dt)?'':dt.getFullYear()+'-'+('0'+(dt.getMonth()+1)).slice(-2)+'-'+('0'+dt.getDate()).slice(-2); }
-  fetch(url+'?action=getAttendance&loc='+encodeURIComponent(loc),{redirect:'follow'})
+  fetch(url+'?action=getAttendance&loc='+encodeURIComponent(loc)
+            +'&from='+encodeURIComponent(from)+'&to='+encodeURIComponent(to),{redirect:'follow'})
     .then(function(r){return r.json();})
     .then(function(j){
       if(!j||!j.ok){ if(onDone)onDone('bad-response'); return; }
