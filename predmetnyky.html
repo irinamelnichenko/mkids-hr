@@ -2065,17 +2065,49 @@ function buildDays(year, month){
   return out;
 }
 
-function countLessonsInRow(loc, groupName, subject){
-  var n = 0;
+// v7.270: рядок групи рахував ДАТИ й нічого не знав про поділ, тоді як «Разом»
+// рахує СЕСІЇ (_predSessionStats). Через це в Манхетені «Дослідники 4-5» із
+// поділом 07.09 показували 3/15 при чотирьох оплачуваних заняттях, хоч підсумок
+// зверху був правильний — 12 (+1 поділено). Тепер обидва числа рахуються за
+// однією логікою: обʼєднання виграє над поділом (як у _predSessionStats і в
+// бекенді _dopCountSessions), а групи зводяться через _predMrgNorm — інакше
+// урок із назвою, що відрізняється лише регістром чи пробілом, потрапляв у
+// підсумок, але не в рядок.
+//
+// Ліміт норми лишається по ДАТАХ (countLessonDatesInRow): бекенд
+// savePredmetnykyLesson рахує саме дати, і якби ліміт поїхав на сесії, фронт
+// блокував би відмітку раніше, ніж це зробив би сервер.
+function _predRowLessons(loc, groupName, subject){
+  var nk = _predMrgNorm(groupName), out = [];
   for (var i = 0; i < S.lessons.length; i++){
     var L = S.lessons[i];
-    if (L.loc !== loc) continue;
-    if (L.group !== groupName) continue;
-    if (L.subject !== subject) continue;
+    if (L.loc !== loc || L.subject !== subject) continue;
+    if (_predMrgNorm(L.group) !== nk) continue;
     var ym = lessonYM(L.date);
     if (!ym || ym.y !== S.year || ym.m !== S.month) continue;
-    n++;
+    out.push(L);
   }
+  return out;
+}
+
+// Дати з уроками — те, що обмежує норма (дзеркало бекенду).
+function countLessonDatesInRow(loc, groupName, subject){
+  return _predRowLessons(loc, groupName, subject).length;
+}
+
+// Сесії — те, що показуємо в лічильнику й за що платимо.
+function countSessionsInRow(loc, groupName, subject){
+  var nk = _predMrgNorm(groupName), n = 0;
+  _predRowLessons(loc, groupName, subject).forEach(function(L){
+    var iso = _dmyToIso(L.date);
+    var mrg = _predMergeForDay(iso, subject);
+    var inMerge = !!(mrg && (mrg.groups || []).some(function(g){
+      return _predMrgNorm(g) === nk;
+    }));
+    if (inMerge){ n++; return; }                       // обʼєднання = одна сесія
+    var parts = Number(_predSplitsForDay(iso, subject)[nk]) || 0;
+    n += (parts > 1 ? parts : 1);
+  });
   return n;
 }
 function countTotalForPage(loc, subject){
@@ -2449,10 +2481,13 @@ function renderTable(loc, subject){
     var rowUnlimited = isUnlimited || (!gt && locN === null);
     var norm         = rowUnlimited ? 0 : getNormFor(loc, subject, gt, groupName);
     var isForbidden  = !rowUnlimited && norm <= 0;               // тип з нормою 0 у матриці
-    var count        = isForbidden ? 0 : countLessonsInRow(loc, groupName, subject);
-    var isMaxed      = !rowUnlimited && count >= norm;
+    // v7.270: показуємо сесії (з поділом), ліміт тримаємо по датах — див.
+    // countSessionsInRow / countLessonDatesInRow.
+    var dates        = isForbidden ? 0 : countLessonDatesInRow(loc, groupName, subject);
+    var count        = isForbidden ? 0 : countSessionsInRow(loc, groupName, subject);
+    var isMaxed      = !rowUnlimited && dates >= norm;
     return {gt:gt, groupName:groupName, norm:norm, isUnlimited:rowUnlimited,
-            isForbidden:isForbidden, count:count, isMaxed:isMaxed, hasRate:hasRate};
+            isForbidden:isForbidden, count:count, dates:dates, isMaxed:isMaxed, hasRate:hasRate};
   });
 
   var gridCols = '160px repeat(' + nDays + ', minmax(36px, 1fr)) 90px';
@@ -2461,7 +2496,7 @@ function renderTable(loc, subject){
   var canMerge = canEdit;   // canEditPred(loc)
   var mstatus = '<div class="pred-mstatus ' + (canMerge ? 'on' : 'off') + '">' +
     (canMerge
-      ? '🔗 Обʼєднання днів АКТИВНЕ (build v7.22 · лічильник враховує обʼєднання) — клікни число дня вгорі, щоб звести групи предметника в 1 заняття'
+      ? '🔗✂️ Обʼєднання і поділ днів АКТИВНІ (build v7.270 · лічильник рядка враховує і те, і те) — клікни число дня вгорі, щоб звести групи в 1 заняття або поділити групу на дві підгрупи'
       : '🔗 Обʼєднання недоступне: роль «' + escapeHtml(String((S.user && S.user.role) || '?')) + '» без прав на цю локацію') +
     '</div>';
 
@@ -2507,15 +2542,21 @@ function renderTable(loc, subject){
         html += renderDayCell(loc, R, subject, D, canEdit);
       });
       var counterCls = 'pred-counter-cell';
-      var counterTxt;
+      var counterTxt, counterHint = '';
       if (R.isUnlimited){
         counterCls += ' unlimited';
         counterTxt = R.count + ' (∞)';
       } else {
         if (R.isMaxed) counterCls += ' maxed';
         counterTxt = R.count + ' / ' + R.norm;
+        // v7.270: норма обмежує дати, а показуємо сесії — коли числа розходяться
+        // (є поділ), кажемо це в підказці, щоб «5 / 4» не читалось як помилка.
+        if (R.dates !== R.count) counterHint = R.dates + ' занять у сітці · ' +
+          R.count + ' оплачуваних сесій (поділ) · норма ' + R.norm + ' на дати';
       }
-      html += '<div class="' + counterCls + '">' + counterTxt + '</div>';
+      html += '<div class="' + counterCls + '"' +
+        (counterHint ? ' title="' + escapeHtml(counterHint) + '"' : '') +
+        '>' + counterTxt + '</div>';
     }
   });
 
