@@ -1750,9 +1750,12 @@ function applyRoleVisibility(){
     ' total=' + totalCount + ' hidden=' + hiddenCount);
 }
 
-// ── ВІКНО РЕДАГУВАННЯ (тижневе замикання) ───────────────
-// CFO (роль cfo або ID=1) — без обмежень. Інакше відкрито лише Пн-Пт ПОТОЧНОГО
-// тижня; із суботи цей тиждень замикається (Сб/Нд + усе минуле/майбутнє = locked).
+// ── ВІКНО РЕДАГУВАННЯ (замок місяця, v7.272) ───────────────
+// CFO (роль cfo або ID=1) — без обмежень. Інакше відкрито лише ПОТОЧНИЙ місяць:
+// від 1 числа до сьогодні включно (за годинником браузера). Наперед не можна.
+// З 1 числа наступного місяця попередній закривається — редагує лише CFO.
+// Те саме правило перевіряє бекенд (MONTH_LOCK), фронт лише не дає клікнути.
+// Назва функції історична (було тижневе вікно) — 10 місць виклику не чіпаємо.
 function isCFO(){
   return !!(S.user && (String(S.user.role || '').toLowerCase() === 'cfo' || Number(S.user.id) === 1));
 }
@@ -1763,11 +1766,9 @@ function isWeekLocked(dateISO){
   if (isCFO()) return false;
   if (!dateISO) return true;
   var now = new Date();
-  var dow = now.getDay();                            // 0=Нд, 1=Пн … 6=Сб
-  if (dow === 6 || dow === 0) return true;           // з суботи — увесь поточний тиждень замкнено
-  var mon = new Date(now); mon.setDate(now.getDate() + (1 - dow));
-  var fri = new Date(mon);  fri.setDate(mon.getDate() + 4);
-  return !(dateISO >= _editIsoOf(mon) && dateISO <= _editIsoOf(fri));
+  var first = _editIsoOf(new Date(now.getFullYear(), now.getMonth(), 1));
+  var today = _editIsoOf(now);
+  return !(dateISO >= first && dateISO <= today);   // поза [1 число .. сьогодні] → locked
 }
 
 function hasPerm(p){
@@ -1919,6 +1920,10 @@ function _authTok(){ try { return (JSON.parse(localStorage.getItem('mkids_sessio
 function _tokUrl(u){ var t=_authTok(); if(!t) return u; return /[?&]token=/.test(u) ? u : (u + (u.indexOf('?')>=0?'&':'?') + 'token=' + encodeURIComponent(t)); }
 function _tokBody(b){ try{ if(b && typeof b==='object' && b.token==null) b.token=_authTok(); }catch(e){} return b; }
 async function saveBackend(action, payload){
+  // v7.272: actorId у кожному записі — бекенд перевіряє замок місяця і пише журнал
+  // видалень; коли токена нема, роль резолвиться саме за actorId.
+  payload = payload || {};
+  if (payload.actorId == null && S && S.user && S.user.id) payload.actorId = S.user.id;
   return safePost(action, payload);
 }
 
@@ -3457,7 +3462,7 @@ function renderMonthGrid(){
       var cls = 'attg-cell' + (on ? ' on' : '') + (D.isToday ? ' today' : '') +
                 (canEdit ? '' : ' disabled') + (saving ? ' saving' : '') + (pending ? ' pending' : '');
       var glyph = on ? '✅' : (canEdit ? '' : '·');
-      var tip = escapeHtml(child) + ' · ' + D.dmy + (locked ? ' · 🔒 тиждень замкнено' : '');
+      var tip = escapeHtml(child) + ' · ' + D.dmy + (locked ? ' · 🔒 місяць закрито' : '');
       html += '<div class="' + cls + '"' +
         ((canEdit && !saving) ? (' data-child="' + escapeHtml(child) + '" data-iso="' + D.iso + '"') : '') +
         ' title="' + tip + '"><span class="attg-cb">' + glyph + '</span></div>';
@@ -3585,7 +3590,7 @@ async function _gqFlush(){
 
 async function onGridCellClick(child, iso){
   if (!hasPerm('attendance-edit')){ showToast('Немає прав на редагування відвідуваності', 'err'); return; }
-  if (isWeekLocked(iso)){ showToast('🔒 Тиждень замкнено — редагує лише CFO', 'err'); return; }
+  if (isWeekLocked(iso)){ showToast('🔒 Місяць закрито — редагує лише CFO', 'err'); return; }
   var acts = _activitiesForLoc(S.activeLoc), act = null;
   for (var i = 0; i < acts.length; i++){ if (acts[i].id === ATT.activity){ act = acts[i]; break; } }
   if (!act){ showToast('🚫 Оберіть заняття', 'err'); return; }
@@ -3932,7 +3937,7 @@ function renderAttList(){
   listEl.onclick = function(e){
     var row = e.target.closest && e.target.closest('.att-list-row');
     if (!row) return;
-    if (isWeekLocked(ATT.date)){ showToast('🔒 Тиждень замкнено — редагує лише CFO', 'err'); return; }
+    if (isWeekLocked(ATT.date)){ showToast('🔒 Місяць закрито — редагує лише CFO', 'err'); return; }
     var btn = row.querySelector('.att-cell');
     if (!btn || btn.disabled) return;
     toggleAttendance(btn);
@@ -3988,7 +3993,7 @@ async function bulkMarkAll(){
   if (ATT.bulkRunning) return;
   if (!ATT.activity){ showToast('Спочатку оберіть заняття', 'err'); return; }
   if (!hasPerm('attendance-edit')){ showToast('🚫 Немає прав', 'err'); return; }
-  if (isWeekLocked(ATT.date)){ showToast('🔒 Тиждень замкнено — редагує лише CFO', 'err'); return; }
+  if (isWeekLocked(ATT.date)){ showToast('🔒 Місяць закрито — редагує лише CFO', 'err'); return; }
   var unmarked = [];
   ATT.children.forEach(function(child){
     if (!_markFor(child, ATT.activity)) unmarked.push(child);
@@ -4002,7 +4007,7 @@ async function bulkClearAll(){
   if (ATT.bulkRunning) return;
   if (!ATT.activity){ showToast('Спочатку оберіть заняття', 'err'); return; }
   if (!hasPerm('attendance-edit')){ showToast('🚫 Немає прав', 'err'); return; }
-  if (isWeekLocked(ATT.date)){ showToast('🔒 Тиждень замкнено — редагує лише CFO', 'err'); return; }
+  if (isWeekLocked(ATT.date)){ showToast('🔒 Місяць закрито — редагує лише CFO', 'err'); return; }
   var marked = [];
   ATT.children.forEach(function(child){
     if (_markFor(child, ATT.activity)) marked.push(child);
@@ -4291,7 +4296,7 @@ async function toggleAttendance(btn){
     showToast('Немає прав на редагування відвідуваності', 'err');
     return;
   }
-  if (isWeekLocked(ATT.date)){ showToast('🔒 Тиждень замкнено — редагує лише CFO', 'err'); return; }
+  if (isWeekLocked(ATT.date)){ showToast('🔒 Місяць закрито — редагує лише CFO', 'err'); return; }
   var child = btn.dataset.child;
   var actId = Number(btn.dataset.actId);
   var actName = btn.dataset.actName;

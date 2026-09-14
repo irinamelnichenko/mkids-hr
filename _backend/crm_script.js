@@ -1,5 +1,14 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.271
+// m.kids CRM — Google Apps Script v7.272
+// v7.272: ЗАМОК МІСЯЦЯ для відміток + серверна перевірка + історія дій.
+//         Фронт (isWeekLocked в activities/predmetnyky): замість Пн–Пт поточного
+//         тижня — поточний місяць з 1 числа до сьогодні; наперед не можна; з 1
+//         числа наступного попередній редагує лише CFO. Бекенд уперше перевіряє
+//         дату сам (_marksDateLockError у bulkAttendanceMarks, bulkRemove/
+//         removeAttendanceMark, savePredmetnykyLesson, bulkPredmetnykyLessons,
+//         deletePredmetnykyLesson): CFO з токена/actorId — без обмежень, решта
+//         → MONTH_LOCK. Видалення додаткових тепер журналюються в HR_Audit
+//         (dop_delete_mark). + getMarksActivityReport (CFO, read-only).
 // v7.271: АВТОЗВІРКА ЗП — сума більше не може лягти в чужий рядок.
 //         Прив'язки «Звірка_Мапа» тримались на rowNum HR → rowNum Salary; блоки
 //         локацій у HR правлять руками, вставка рядка зсувала прив'язку на
@@ -5287,7 +5296,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.271', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.272', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -5369,6 +5378,7 @@ function doGet(e) {
     else if (action === 'diagPredSubjects')           result = diagPredSubjects(e.parameter || {});                     // v7.231 read-only: предмети кожної локації з каталогу
     else if (action === 'diagSalaryReconMap')         result = diagSalaryReconMap(e.parameter || {});                   // v7.271 read-only: прив'язки автозвірки ЗП (v2) + запобіжник
     else if (action === 'diagSalaryReconLog')         result = diagSalaryReconLog(e.parameter || {});                   // v7.271 read-only: аудит уже записаних сум автозвірки (чужі рядки)
+    else if (action === 'getMarksActivityReport')     result = getMarksActivityReport(e.parameter || {});               // v7.272 read-only (CFO): хто/коли/що робив у відмітках
     else if (action === 'purgeAutoDraftCards')        result = purgeAutoDraftCards({names:String((e.parameter&&e.parameter.names)||'').split('|').filter(String), loc:(e.parameter&&e.parameter.loc)||'', createdPrefix:(e.parameter&&e.parameter.createdPrefix)||'', dryRun:true});   // v7.209 GET = ЗАВЖДИ dryRun, видалення лише POST-ом
     else if (action === 'getPredmetnyCatalog')        result = getPredmetnyCatalog(e.parameter && e.parameter.loc || '');
     else if (action === 'getPredmetnyMarks')          result = getPredmetnyMarks(e.parameter || {});
@@ -5435,7 +5445,7 @@ function doPost(e) {
     else if (body.action === 'copyActivitiesFromLocation') result = copyActivitiesFromLocation(body.fromLoc || '', body.toLoc || '');
     else if (body.action === 'seedActivityTeachersInHR')   result = _seedActivityTeachersInHR(Number(body.actorId || 1));
     else if (body.action === 'addAttendanceMark')         result = addAttendanceMark(body.data || {});
-    else if (body.action === 'removeAttendanceMark')      result = removeAttendanceMark(body.id || 0);
+    else if (body.action === 'removeAttendanceMark')      result = removeAttendanceMark(body.id || 0, body || {});   // v7.272 + замок місяця, журнал
     else if (body.action === 'bulkAttendanceMarks')       result = bulkAttendanceMarks(body || {});
     else if (body.action === 'bulkRemoveAttendanceMarks') result = bulkRemoveAttendanceMarks(body || {});
     else if (body.action === 'exportAttendanceToPayments') result = exportAttendanceToPayments(body || {});
@@ -15404,15 +15414,81 @@ function addAttendanceMark(data){
   }
 }
 
-function removeAttendanceMark(id){
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.272: СЕРВЕРНИЙ ЗАМОК МІСЯЦЯ для відміток (додаткові + предметники).
+// Досі вікно редагування жило лише на фронті (isWeekLocked) — прямий POST
+// приймав будь-яку дату. Правило: дата відмітки в ПОТОЧНОМУ місяці за Києвом,
+// від 1 числа до сьогодні включно; наперед не можна; з 1 числа наступного
+// місяця попередній редагує лише CFO. CFO = роль cfo або користувач id=1 —
+// беремо з токена (_CURRENT_AUTH), інакше з actorId.
+// ═══════════════════════════════════════════════════════════════════════════
+var MARKS_LOCK_TZ = 'Europe/Kiev';
+function _marksActorIsCfo(actorId){
+  try {
+    if (_CURRENT_AUTH && _CURRENT_AUTH.id)
+      return String(_CURRENT_AUTH.role || '').toLowerCase() === 'cfo' || Number(_CURRENT_AUTH.id) === 1;
+    var id = Number(actorId) || 0;
+    if (id){ var u = _getActor(id); return String(u.role || '').toLowerCase() === 'cfo' || Number(u.id) === 1; }
+  } catch(e){}
+  return false;
+}
+// {id, name, role} для журналу дій. Токен (якщо увімкнено enforce) має пріоритет.
+function _marksActorInfo(actorId){
+  try {
+    var id = Number(actorId) || 0;
+    if (_CURRENT_AUTH && _CURRENT_AUTH.id && (_authEnforceOn() || !id)) id = Number(_CURRENT_AUTH.id);
+    if (id){ var u = _getActor(id); return {id:u.id, name:u.name || '', role:u.role || ''}; }
+  } catch(e){}
+  return {id:0, name:'', role:''};
+}
+// '' = дозволено; інакше текст відмови. dateInput — ISO, dd.mm.yyyy або Date.
+function _marksDateLockError(dateInput, isCfo){
+  if (isCfo) return '';
+  var iso = (dateInput instanceof Date)
+    ? Utilities.formatDate(dateInput, MARKS_LOCK_TZ, 'yyyy-MM-dd')
+    : _attDateIso(dateInput, MARKS_LOCK_TZ);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return 'Невірна дата: ' + dateInput;
+  var today = Utilities.formatDate(new Date(), MARKS_LOCK_TZ, 'yyyy-MM-dd');
+  if (iso > today) return 'MONTH_LOCK: ' + iso + ' — наперед відмічати не можна';
+  if (iso < today.slice(0, 8) + '01') return 'MONTH_LOCK: ' + iso + ' — місяць закрито, редагує лише CFO';
+  return '';
+}
+// Пакетний запис у HR_Audit (один setValues замість N appendRow).
+function _writeHrAuditRows(actor, action, items){
+  try {
+    if (!items || !items.length) return;
+    var sh = _getHrAuditSheet();
+    var now = new Date();
+    var rows = items.map(function(it){
+      return [now, actor ? (actor.id || 0) : 0, actor ? (actor.name || '') : '', action,
+              it.rowNum || 0, JSON.stringify(it.before || null), JSON.stringify(it.after || null)];
+    });
+    sh.getRange(sh.getLastRow() + 1, 1, rows.length, HR_AUDIT_HEADER.length).setValues(rows);
+  } catch(e){}
+}
+// Знімок рядка додаткових для журналу видалень.
+function _attRowSnapshot(row, tz){
+  return {date:_attDateIso(row[1], tz), loc:String(row[2] || ''), group:String(row[3] || ''),
+          child:String(row[4] || ''), activityId:Number(row[5]) || 0, activity:String(row[6] || ''),
+          price:Number(row[7]) || 0, markedBy:String(row[8] || ''),
+          markedAt:(row[9] instanceof Date) ? Utilities.formatDate(row[9], tz, "yyyy-MM-dd HH:mm") : String(row[9] || '')};
+}
+
+function removeAttendanceMark(id, body){
   try {
     var nid = Number(id);
     if (!nid) return {ok: false, error: 'Missing id'};
     var sh = _getAttendanceSheet(false);
     var data = sh.getDataRange().getValues();
+    var tz = sh.getParent().getSpreadsheetTimeZone() || MARKS_LOCK_TZ;
+    var isCfo = _marksActorIsCfo(body && body.actorId);
     for (var i = 1; i < data.length; i++){
       if (Number(data[i][0]) === nid){
+        var lockErr = _marksDateLockError(data[i][1], isCfo);                   // v7.272
+        if (lockErr) return {ok:false, code:'MONTH_LOCK', error:lockErr};
+        var snap = _attRowSnapshot(data[i], tz);
         sh.deleteRow(i + 1);
+        _writeHrAuditRows(_marksActorInfo(body && body.actorId), 'dop_delete_mark', [{rowNum:nid, before:snap}]);
         return {ok: true};
       }
     }
@@ -15443,6 +15519,7 @@ function bulkAttendanceMarks(body){
     for (var _e = 1; _e < _exVals.length; _e++){
       _seen[_attDupKey(_exVals[_e][1], _exVals[_e][4], _exVals[_e][5], _tz)] = true;
     }
+    var _isCfo = _marksActorIsCfo(body && body.actorId);   // v7.272 серверний замок місяця
     for (var i = 0; i < items.length; i++){
       var d = items[i] || {};
       var date  = String(d.date  || '').trim();
@@ -15452,6 +15529,8 @@ function bulkAttendanceMarks(body){
         results.push({ok: false, error: 'Поля Дата/Дитина/id_заняття обовʼязкові'});
         continue;
       }
+      var _lockErr = _marksDateLockError(date, _isCfo);
+      if (_lockErr){ results.push({ok:false, code:'MONTH_LOCK', error:_lockErr}); continue; }
       var _k = _attDupKey(date, child, actId, _tz);
       if (_seen[_k]){ results.push({ok: true, dup: true}); continue; }
       _seen[_k] = true;
@@ -15497,12 +15576,17 @@ function bulkRemoveAttendanceMarks(body){
     var sh = _getAttendanceSheet(false);
     var data = sh.getDataRange().getValues();
     var rowsToDelete = [];
-    var found = {};
+    var found = {}, locked = {}, snaps = [];
+    var _tz = sh.getParent().getSpreadsheetTimeZone() || MARKS_LOCK_TZ;
+    var _isCfo = _marksActorIsCfo(body && body.actorId);   // v7.272 серверний замок місяця
     for (var i = 1; i < data.length; i++){
       var rid = Number(data[i][0]) || 0;
       if (rid && idSet[rid]){
+        var _lockErr = _marksDateLockError(data[i][1], _isCfo);
+        if (_lockErr){ locked[rid] = _lockErr; continue; }
         rowsToDelete.push(i + 1);
         found[rid] = true;
+        snaps.push({rowNum:rid, before:_attRowSnapshot(data[i], _tz)});
       }
     }
     _guardMassDelete(sh, rowsToDelete.length, 'bulkRemoveMarks');   // v7.149 знімок перед видаленням
@@ -15510,18 +15594,151 @@ function bulkRemoveAttendanceMarks(body){
     for (var j = 0; j < rowsToDelete.length; j++){
       sh.deleteRow(rowsToDelete[j]);
     }
+    // v7.272: журнал видалень — хто, коли, що зняв (HR_Audit, action dop_delete_mark)
+    _writeHrAuditRows(_marksActorInfo(body && body.actorId), 'dop_delete_mark', snaps);
     var results = [];
     for (var m = 0; m < ids.length; m++){
       var nn = Number(ids[m]) || 0;
-      if (nn && found[nn]) results.push({ok: true, id: nn});
-      else                 results.push({ok: false, id: nn, error: 'Відмітку не знайдено'});
+      if (nn && found[nn])        results.push({ok: true, id: nn});
+      else if (nn && locked[nn])  results.push({ok: false, id: nn, code:'MONTH_LOCK', error: locked[nn]});
+      else                        results.push({ok: false, id: nn, error: 'Відмітку не знайдено'});
     }
-    return {ok: true, results: results, removed: rowsToDelete.length};
+    return {ok: true, results: results, removed: rowsToDelete.length,
+            lockedCount: Object.keys(locked).length};
   } catch(e){
     return {ok: false, error: String(e && e.message || e)};
   } finally {
     try { lock.releaseLock(); } catch(_){}
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.272 read-only: ІСТОРІЯ ДІЙ У ВІДМІТКАХ — для CFO.
+// GET ?action=getMarksActivityReport&actorId=…[&from=YYYY-MM-DD&to=YYYY-MM-DD][&loc=…]
+// Джерела (нічого нового не пишемо, читаємо те, що вже є):
+//   • Додаткові_Відвідуваність: Дата (за що), Час_відмітки (коли ставили), Відмітив (хто)
+//   • Predmetnyky_Lessons:      Date, CreatedAt, CreatedBy (id користувача)
+//   • HR_Audit: pred_delete_lesson (було й раніше), dop_delete_mark (з v7.272)
+// from/to — діапазон ДАТ ВІДМІТОК (за замовчуванням поточний місяць). «Заднім
+// числом» = день, коли ставили, пізніший за дату відмітки (lag у днях);
+// «наперед» = lag < 0. Видалення — ті, чия дата відмітки в діапазоні.
+function getMarksActivityReport(params){
+  try {
+    params = params || {};
+    if (!_marksActorIsCfo(params.actorId)) return {ok:false, code:'PERM_DENIED', error:'Звіт доступний лише CFO'};
+    var tz = MARKS_LOCK_TZ;
+    var today = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
+    var from = String(params.from || '').trim() || (today.slice(0, 8) + '01');
+    var to   = String(params.to   || '').trim() || today;
+    var only = String(params.loc  || '').trim();
+    function dayOf(v){ return (v instanceof Date) ? Utilities.formatDate(v, tz, 'yyyy-MM-dd') : _attDateIso(v, tz); }
+    function stampOf(v){ return (v instanceof Date) ? Utilities.formatDate(v, tz, 'yyyy-MM-dd HH:mm') : String(v || ''); }
+    function lagDays(markIso, atIso){
+      if (!markIso || !atIso) return null;
+      var a = new Date(markIso + 'T00:00:00Z').getTime(), b = new Date(atIso.slice(0, 10) + 'T00:00:00Z').getTime();
+      return Math.round((b - a) / 86400000);
+    }
+    // користувачі: id → ім'я (для CreatedBy предметників і actorId в HR_Audit)
+    var users = {};
+    try {
+      var uv = _getUsersSheet().getDataRange().getValues();
+      for (var ui = 1; ui < uv.length; ui++){ var u = _parseUserRow(uv[ui]); if (u.id) users[u.id] = u.name + (u.role ? ' (' + u.role + ')' : ''); }
+    } catch(_u){}
+    function whoName(v){ var n = Number(v); return (n && users[n]) ? users[n] : String(v || '—'); }
+
+    var agg = {};          // key kind|loc|who → лічильники
+    var backdated = [];    // деталі відміток заднім числом / наперед
+    function bump(kind, loc, who, markIso, atIso, extra){
+      var k = kind + '|' + loc + '|' + who;
+      var a = agg[k] = agg[k] || {kind:kind, loc:loc, who:who, marks:0, sameDay:0, backdated:0, backdated7:0, future:0,
+                                  maxLag:0, actionDays:{}, firstAt:'', lastAt:'', deleted:0};
+      a.marks++;
+      var lag = lagDays(markIso, atIso);
+      if (lag === null) {}
+      else if (lag === 0) a.sameDay++;
+      else if (lag > 0){ a.backdated++; if (lag >= 7) a.backdated7++; if (lag > a.maxLag) a.maxLag = lag; }
+      else a.future++;
+      if (atIso){
+        a.actionDays[atIso.slice(0, 10)] = true;
+        if (!a.firstAt || atIso < a.firstAt) a.firstAt = atIso;
+        if (!a.lastAt  || atIso > a.lastAt)  a.lastAt  = atIso;
+      }
+      if (lag !== null && lag !== 0) backdated.push(Object.assign({kind:kind, loc:loc, who:who, date:markIso, at:atIso, lag:lag}, extra || {}));
+    }
+
+    // 1) додаткові
+    var dopRows = 0;
+    try {
+      var ash = _getAttendanceSheet(false);
+      var av = ash.getDataRange().getValues();
+      for (var i = 1; i < av.length; i++){
+        var r = av[i];
+        var loc = String(r[2] || '').trim(); if (!loc || (only && loc !== only)) continue;
+        var mi = dayOf(r[1]); if (!mi || mi < from || mi > to) continue;
+        dopRows++;
+        bump('dop', loc, String(r[8] || '—').trim(), mi, stampOf(r[9]),
+             {child:String(r[4] || ''), what:String(r[6] || ''), group:String(r[3] || ''), id:Number(r[0]) || 0});
+      }
+    } catch(_a){}
+
+    // 2) предметники
+    var predRows = 0;
+    try {
+      var psh = _getPredLessonsSheet();
+      var pl = psh.getLastRow();
+      var pv = pl >= 2 ? psh.getRange(2, 1, pl - 1, PRED_LESSONS_HEADER.length).getValues() : [];
+      for (var j = 0; j < pv.length; j++){
+        var q = pv[j];
+        var ploc = String(q[2] || '').trim(); if (!ploc || (only && ploc !== only)) continue;
+        var pi = dayOf(q[5]); if (!pi || pi < from || pi > to) continue;
+        predRows++;
+        bump('pred', ploc, whoName(q[7]), pi, stampOf(q[6]),
+             {child:String(q[1] || ''), what:String(q[4] || ''), group:String(q[3] || ''), id:Number(q[0]) || 0});
+      }
+    } catch(_p){}
+
+    // 3) видалення з HR_Audit
+    var deletions = [];
+    try {
+      var hsh = _getHrAuditSheet();
+      var hl = hsh.getLastRow();
+      var hv = hl >= 2 ? hsh.getRange(2, 1, hl - 1, HR_AUDIT_HEADER.length).getValues() : [];
+      for (var h = 0; h < hv.length; h++){
+        var act = String(hv[h][3] || '');
+        if (act !== 'dop_delete_mark' && act !== 'pred_delete_lesson') continue;
+        var before = {}; try { before = JSON.parse(hv[h][5] || 'null') || {}; } catch(_j){}
+        var dloc = String(before.loc || before.location || '').trim(); if (only && dloc !== only) continue;
+        var di = _attDateIso(before.date, tz); if (!di || di < from || di > to) continue;
+        var kind = (act === 'dop_delete_mark') ? 'dop' : 'pred';
+        var who = String(hv[h][2] || '').trim() || whoName(hv[h][1]);
+        var k = kind + '|' + dloc + '|' + who;
+        var a = agg[k] = agg[k] || {kind:kind, loc:dloc, who:who, marks:0, sameDay:0, backdated:0, backdated7:0, future:0,
+                                    maxLag:0, actionDays:{}, firstAt:'', lastAt:'', deleted:0};
+        a.deleted++;
+        deletions.push({kind:kind, loc:dloc, who:who, at:stampOf(hv[h][0]), date:di,
+                        child:String(before.child || before.empKey || ''), what:String(before.activity || before.subject || ''),
+                        group:String(before.group || ''), markedBy:String(before.markedBy || ''), id:Number(hv[h][4]) || 0});
+      }
+    } catch(_h){}
+
+    var rows = Object.keys(agg).map(function(k){
+      var a = agg[k];
+      return {kind:a.kind, loc:a.loc, who:a.who, marks:a.marks, sameDay:a.sameDay, backdated:a.backdated,
+              backdated7:a.backdated7, future:a.future, maxLagDays:a.maxLag,
+              actionDays:Object.keys(a.actionDays).length, firstAt:a.firstAt, lastAt:a.lastAt, deleted:a.deleted};
+    }).sort(function(x, y){ return x.loc < y.loc ? -1 : x.loc > y.loc ? 1 : (y.marks - x.marks); });
+    var byLoc = {};
+    rows.forEach(function(x){
+      var b = byLoc[x.loc] = byLoc[x.loc] || {marks:0, backdated:0, future:0, deleted:0, people:0};
+      b.marks += x.marks; b.backdated += x.backdated; b.future += x.future; b.deleted += x.deleted; b.people++;
+    });
+    backdated.sort(function(x, y){ return Math.abs(y.lag) - Math.abs(x.lag); });
+    deletions.sort(function(x, y){ return x.at < y.at ? 1 : -1; });
+    return {ok:true, from:from, to:to, loc:only || 'усі', tz:tz,
+            source:{dopMarks:dopRows, predLessons:predRows, deletions:deletions.length,
+                    note:'видалення додаткових журналюються з v7.272; предметників — з HR_Audit (давно)'},
+            byLoc:byLoc, rows:rows, backdated:backdated.slice(0, 200), deletions:deletions.slice(0, 300)};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -28509,6 +28726,9 @@ function savePredmetnykyLesson(actorId, lesson){
       return {ok:false, code:'BAD_SUBJECT', error:'Unknown subject: ' + subject};
     var ym = _lessonYearMonth(dateStr);
     if (!ym) return {ok:false, error:'Bad date format: ' + dateStr};
+    // v7.272: серверний замок місяця
+    var _sLock = _marksDateLockError(dateStr, String(actor.role || '').toLowerCase() === 'cfo' || Number(actor.id) === 1);
+    if (_sLock) return {ok:false, code:'MONTH_LOCK', error:_sLock};
 
     // ── v7.231 валідація предмета ПО КАТАЛОГУ ЛОКАЦІЇ (lenient, як і групи) ──
     // Випадайка тепер будується з Предметники_Каталог, тож шкільний предмет у
@@ -28645,6 +28865,9 @@ function bulkPredmetnykyLessons(actorId, add, removeIds){
         return n;
       }
 
+      // v7.272: серверний замок місяця — CFO без обмежень, решта лише поточний місяць до сьогодні
+      var isCfo = String(actor.role || '').toLowerCase() === 'cfo' || Number(actor.id) === 1;
+
       // ── 1. ВИДАЛЕННЯ (спершу — звільняють місце під нормою) ──
       var removed = [], rowsToDelete = [];
       for (var r = 0; r < removeIds.length; r++){
@@ -28655,6 +28878,8 @@ function bulkPredmetnykyLessons(actorId, add, removeIds){
         if (found < 0){ removed.push({ok:false, code:'NOT_FOUND', error:'Lesson not found'}); continue; }
         var rloc = String(grid[found][2] || '').trim();
         if (!canEdit(rloc)){ removed.push({ok:false, code:'PERM_DENIED', error:'Permission denied'}); continue; }
+        var rLock = _marksDateLockError(_fmtLessonDate(grid[found][5]), isCfo);
+        if (rLock){ removed.push({ok:false, code:'MONTH_LOCK', error:rLock}); continue; }
         var rgrp = String(grid[found][3] || '').trim();
         var rsub = String(grid[found][4] || '').trim();
         var rym  = _lessonYearMonth(_fmtLessonDate(grid[found][5]));
@@ -28691,6 +28916,8 @@ function bulkPredmetnykyLessons(actorId, add, removeIds){
         }
         var ym = _lessonYearMonth(dateStr);
         if (!ym){ added.push({ok:false, error:'Bad date format: ' + dateStr}); continue; }
+        var aLock = _marksDateLockError(dateStr, isCfo);
+        if (aLock){ added.push({ok:false, code:'MONTH_LOCK', error:aLock}); continue; }
         var locSubjects = subjectsOf(location);
         if (locSubjects.length && locSubjects.indexOf(subject) === -1){
           added.push({ok:false, code:'BAD_SUBJECT_FOR_LOC',
@@ -28756,6 +28983,9 @@ function deletePredmetnykyLesson(actorId, lessonId){
         var location = String(data[i][2] || '').trim();
         if (!_canEditPredmetnyky(actor, location))
           return {ok:false, code:'PERM_DENIED', error:'Permission denied'};
+        // v7.272: серверний замок місяця
+        var _dLock = _marksDateLockError(_fmtLessonDate(data[i][5]), String(actor.role || '').toLowerCase() === 'cfo' || Number(actor.id) === 1);
+        if (_dLock) return {ok:false, code:'MONTH_LOCK', error:_dLock};
         var before = {
           empKey:   String(data[i][1] || '').trim(),
           location: location,
