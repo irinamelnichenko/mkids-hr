@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.276
+// m.kids CRM — Google Apps Script v7.278
+// v7.278: getLeads 20–34 с → _leadDayKey без Utilities.formatDate у циклі
+//         (історія лідів, бот, індекс карток — ~5 000 сервісних викликів на запит).
 // v7.276: «Номер договору» — текст. 187 номерів виду 05-03-35 Sheets колись
 //         прочитав як дати (US-локаль): restoreContractNumbers відновлює їх із
 //         дати (місяць=код локації, день, рік%100), переводить колонку T у
@@ -1157,8 +1159,14 @@ var LEADS_ROWS_CAP = 800;
 // 'dd.MM.yyyy HH:mm' -> 'yyyy-MM-dd'
 function _leadDayKey(s){
   if (s == null || s === '') return '';
+  // v7.278: Date → без Utilities.formatDate (сервісний виклик Apps Script).
+  // Той самий корінь, що й у getAttendanceMarks (v7.261): _leadDayKey кликалась
+  // на КОЖЕН рядок історії лідів (×3), бота (×4) і ВСІХ 1 245 карток у
+  // _leadClientIndex (×2) — ~5 000 сервісних викликів на один getLeads, 20–34 с.
+  // Локальні геттери дають ту саму дату: пояс скрипта = Europe/Kiev (перевірено
+  // у v7.261 на 275 рядках без розбіжностей). _attDateFast — спільний хелпер.
   if (Object.prototype.toString.call(s) === '[object Date]')
-    return Utilities.formatDate(s, 'Europe/Kiev', 'yyyy-MM-dd');
+    return _attDateFast(s);
   var m = String(s).match(/(\d{1,2})\.(\d{1,2})\.(\d{4})/);
   if (m) return m[3] + '-' + ('0'+m[2]).slice(-2) + '-' + ('0'+m[1]).slice(-2);
   m = String(s).match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
@@ -5307,7 +5315,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.276', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.278', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
