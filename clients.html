@@ -569,6 +569,10 @@ tbody tr.clickable:hover td{background:#f0f7ff}
            data-v="needsAttention" onclick="navNeedsAttention()">
         <span class="ni">✋</span> Потребують уваги
       </div>
+      <div class="nav-item" data-permission="cards_completion" data-parent="crm" data-perm-page="clients"
+           data-v="incomplete" onclick="navIncomplete()">
+        <span class="ni">🧩</span> Неповні картки
+      </div>
 
       <div class="nav-sec" data-section="hr">👤 HR</div>
       <div class="nav-item" data-permission="employees" data-parent="hr" data-perm-page="index"
@@ -2361,6 +2365,7 @@ const PERMISSIONS = {
     'dashboard',
     'clients_list','payments','attendance_kids','recalc',
     'needs_attention',   // v7.273: «Потребують уваги» — CFO усі локації, директорка своя
+    'cards_completion',  // v7.275: «Неповні картки» — CFO усі локації, директорка своя
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
     'analytics_clients','analytics_hr',
@@ -2477,6 +2482,7 @@ const PERMISSIONS = {
   director: [
     'clients_list','payments','attendance_kids',
     'needs_attention',   // v7.273: «Потребують уваги» — CFO усі локації, директорка своя
+    'cards_completion',  // v7.275: «Неповні картки» — CFO усі локації, директорка своя
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
     'opex','salary',   // v7.238: без categories і overview_analytics
@@ -2523,6 +2529,7 @@ const PERM_LOCAL_ACTION = {
   attendance_kids:   () => { S.mainTab='clients'; nav('attendance'); },
   recalc:            () => { S.mainTab='clients'; nav('absRequests'); },
   needs_attention:   () => { S.mainTab='clients'; nav('needsAttention'); },   // v7.273
+  cards_completion:  () => { S.mainTab='clients'; nav('incomplete'); },       // v7.275
   analytics_clients: () => switchMainTab('analytics'),
 };
 
@@ -2902,9 +2909,10 @@ function showSpinner(){ document.getElementById('main').innerHTML='<div class="l
 function toggleSidebar(){ document.getElementById('sidebar').classList.toggle('open'); }
 
 // ─── NAVIGATION ──────────────────────────────────────────────────────────────
-var TITLES={clients:'👶 Список дітей',debts:'💰 Борги та оплати',settings:'⚙️ Налаштування',absRequests:'💼 Перерахунки бюджету',attendance:'📋 Табель відвідування',archive:'📁 Архів клієнтів',needsAttention:'✋ Потребують уваги'};
+var TITLES={clients:'👶 Список дітей',debts:'💰 Борги та оплати',settings:'⚙️ Налаштування',absRequests:'💼 Перерахунки бюджету',attendance:'📋 Табель відвідування',archive:'📁 Архів клієнтів',needsAttention:'✋ Потребують уваги',incomplete:'🧩 Неповні картки'};
 function navArchive(){ nav('archive'); }
 function navNeedsAttention(){ nav('needsAttention'); }
+function navIncomplete(){ nav('incomplete'); }
 function nav(view){
   S.mainTab='clients'; // скидаємо аналітику при навігації
   S.view=view;
@@ -2921,6 +2929,7 @@ function renderView(){
   else if(S.view==='attendance') renderAttendance();
   else if(S.view==='archive') renderArchive();
   else if(S.view==='needsAttention') renderNeedsAttention();
+  else if(S.view==='incomplete') renderIncomplete();
   else renderSettings();
 }
 function switchMainTab(tab){
@@ -6884,6 +6893,93 @@ async function naMerge(id, name, match){
   if(typeof showFloatMsg==='function') showFloatMsg('Дубль «'+name+'» прибрано, лишилась «'+match+'»','ok');
   if(S.crm) delete S.crm[id];
   renderNeedsAttention();
+}
+// ═══ v7.275 «Неповні картки» — за зразком empCompletion у HR ═══════════════
+// Обов'язкові поля дитячої картки: сума договору, дата договору, № договору,
+// дата народження, телефон мами. Рахуємо по активних (і на адаптації) картках.
+// Директорка — своя локація, CFO/мережеві — усі. Сортування: спершу ті, де
+// бракує найбільше. Прогрес по локації: скільки карток повні.
+var _INC_FIELDS=[
+  {key:'monthlyFee',     label:'Сума договору'},
+  {key:'contractDate',   label:'Дата договору'},
+  {key:'contractNumber', label:'№ договору'},
+  {key:'bday',           label:'Дата народження'},
+  {key:'momPhone',       label:'Телефон мами'}
+];
+// № договору, що насправді дата (Sheets перетворив «12-01-08» на дату) — це не номер.
+function _incIsJunkNumber(v){ v=String(v||''); return /^\d{4}-\d{2}-\d{2}T/.test(v) || /GMT[+-]\d/.test(v); }
+function childCompletion(c){
+  var missing=[];
+  if(!(+c.monthlyFee>0))                       missing.push('Сума договору');
+  if(!String(c.contractDate||'').trim())       missing.push('Дата договору');
+  var cn=String(c.contractNumber||'').trim();
+  if(!cn)                                      missing.push('№ договору');
+  else if(_incIsJunkNumber(cn))                missing.push('№ договору (дата замість номера)');
+  if(!String(c.bday||'').trim())               missing.push('Дата народження');
+  if(!String(c.momPhone||'').trim())           missing.push(String(c.dadPhone||'').trim() ? 'Телефон мами (є лише тата)' : 'Телефон мами');
+  return {missing:missing, level: missing.length===0 ? 'green' : (missing.length>=3 ? 'red' : 'yellow')};
+}
+function _incCountable(c){ var st=String(c.status||'active').toLowerCase(); return st==='active'||st==='adaptation'; }
+function renderIncomplete(){
+  var main=document.getElementById('main');
+  var scopeNote = isHR() ? 'усі локації' : ('лише «'+esc((S.user&&S.user.loc)||'')+'»');
+  var all=[];
+  Object.keys(S.crm).forEach(function(id){
+    var c=S.crm[id]; if(!c||!c.name) return;
+    if(!_incCountable(c)) return;
+    if(!isHR() && c.loc!==S.user.loc) return;
+    if(S.incLoc && c.loc!==S.incLoc) return;
+    all.push({id:id, c:c, cmpl:childCompletion(c)});
+  });
+  // прогрес по локаціях (у межах видимого)
+  var byLoc={};
+  all.forEach(function(r){ var b=byLoc[r.c.loc]=byLoc[r.c.loc]||{total:0,full:0}; b.total++; if(!r.cmpl.missing.length) b.full++; });
+  var locs=Object.keys(byLoc).sort(function(a,b){ return (byLoc[a].full/byLoc[a].total)-(byLoc[b].full/byLoc[b].total) || a.localeCompare(b,'uk'); });
+  var totalAll=all.length, fullAll=all.filter(function(r){ return !r.cmpl.missing.length; }).length;
+  var rows=all.filter(function(r){ return r.cmpl.missing.length; })
+    .sort(function(a,b){ return (b.cmpl.missing.length-a.cmpl.missing.length) || String(a.c.loc).localeCompare(String(b.c.loc),'uk') || String(a.c.name).localeCompare(String(b.c.name),'uk'); });
+  var h='<div style="max-width:1000px"><div style="padding:4px 4px 0">';
+  h+='<p style="color:var(--gray);font-size:13.5px;max-width:80ch;margin:0 0 12px">Активні картки ('+scopeNote+'), у яких бракує обов\'язкових полів: сума договору, дата договору, № договору, дата народження, телефон мами. Спершу ті, де бракує найбільше. Клік по картці відкриває її для заповнення.</p>';
+  // фільтр локацій — лише для мережевих ролей
+  if(isHR()){
+    var locOpts='<option value="">Усі локації</option>'+visibleLocs().map(function(l){ return '<option value="'+esc(l.loc)+'"'+(S.incLoc===l.loc?' selected':'')+'>'+esc(l.loc)+'</option>'; }).join('');
+    h+='<div style="margin-bottom:12px"><select onchange="S.incLoc=this.value;renderIncomplete()" style="padding:6px 10px;border:1.5px solid var(--line,#e5ded7);border-radius:8px;background:var(--card,#fff)">'+locOpts+'</select></div>';
+  }
+  // зведення
+  var pct=totalAll?Math.round(fullAll*100/totalAll):0;
+  h+='<div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px">';
+  [['карток',totalAll,''],['повних',fullAll,'#27ae60'],['неповних',totalAll-fullAll,'#F2622E'],['заповнено',pct+'%','']].forEach(function(s){
+    h+='<div style="background:var(--card,#fff);border:1px solid var(--line,#e5ded7);border-radius:11px;padding:10px 15px;min-width:96px"><div style="font-size:24px;font-weight:750;line-height:1'+(s[2]?';color:'+s[2]:'')+'">'+s[1]+'</div><div style="font-size:11.5px;color:var(--gray)">'+s[0]+'</div></div>';
+  });
+  h+='</div>';
+  // прогрес по локаціях
+  if(locs.length>1 || isHR()){
+    h+='<div style="background:var(--card,#fff);border:1px solid var(--line,#e5ded7);border-radius:11px;padding:10px 14px;margin-bottom:18px">';
+    locs.forEach(function(loc){
+      var b=byLoc[loc], p=Math.round(b.full*100/b.total);
+      var col=p>=80?'#27ae60':(p>=40?'#C77A12':'#c0392b');
+      h+='<div style="display:grid;grid-template-columns:160px 1fr 90px;gap:10px;align-items:center;padding:4px 0;font-size:13px">'
+        +'<span style="font-weight:600">'+esc(loc)+'</span>'
+        +'<span style="height:8px;background:var(--line,#e5ded7);border-radius:4px;overflow:hidden;display:block"><span style="display:block;height:100%;width:'+p+'%;background:'+col+'"></span></span>'
+        +'<span style="text-align:right;color:var(--gray)"><b style="color:var(--ink,#2a2622)">'+b.full+'</b> / '+b.total+' · '+p+'%</span></div>';
+    });
+    h+='</div>';
+  }
+  h+='</div>';
+  if(!rows.length){ h+='<div style="padding:28px;color:var(--gray);font-size:15px">✅ Усі активні картки ('+scopeNote+') заповнені повністю.</div></div>'; main.innerHTML=h; return; }
+  var curLoc=null;
+  rows.forEach(function(r){
+    var c=r.c, idJ=escAttrJS(r.id), grpJ=escAttrJS(c.group||''), locJ=escAttrJS(c.loc), nmJ=escAttrJS(c.name);
+    var open='onclick="openChild('+idJ+','+grpJ+',\'\','+locJ+','+nmJ+')"';
+    var dot=r.cmpl.level==='red'?'🔴':'🟡';
+    var chips=r.cmpl.missing.map(function(m){ return '<span style="display:inline-block;font-size:11.5px;padding:2px 8px;border-radius:999px;background:#F9E4E1;color:#B3261E;margin:2px 4px 2px 0">'+esc(m)+'</span>'; }).join('');
+    h+='<div style="display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;justify-content:space-between;background:var(--card,#fff);border:1px solid var(--line,#e5ded7);border-radius:10px;padding:10px 14px;margin-bottom:8px;cursor:pointer" '+open+'>'
+      +'<div style="min-width:240px"><div style="font-weight:650;font-size:14.5px">'+dot+' '+esc(c.name)+' <span style="font-weight:400;color:var(--gray);font-size:12px">· '+esc(c.loc)+(c.group?' · '+esc(c.group):'')+'</span></div>'
+      +'<div style="margin-top:4px">'+chips+'</div></div>'
+      +'<div style="font-size:12px;color:var(--gray);white-space:nowrap">бракує <b style="color:var(--ink,#2a2622)">'+r.cmpl.missing.length+'</b> з 5 · <span style="color:var(--blue2,#2F6DB3)">відкрити →</span></div></div>';
+  });
+  h+='</div>';
+  main.innerHTML=h;
 }
 async function renderNeedsAttention(){
   var main=document.getElementById('main');
