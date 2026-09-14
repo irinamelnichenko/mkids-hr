@@ -1,5 +1,9 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.274
+// m.kids CRM — Google Apps Script v7.276
+// v7.276: «Номер договору» — текст. 187 номерів виду 05-03-35 Sheets колись
+//         прочитав як дати (US-локаль): restoreContractNumbers відновлює їх із
+//         дати (місяць=код локації, день, рік%100), переводить колонку T у
+//         Plain text; saveClient ставить '@' на клітинку перед записом.
 // v7.274: getLocations — CacheService 5 хв (було ~8 с на кожен виклик за 3 КБ;
 //         ?nocache=1 / _invalidateLocationsCache). setActivitiesActiveByLoc —
 //         чистка фантомної локації «Осокорки сад» у каталозі додаткових за
@@ -5303,7 +5307,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.274', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.276', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -5450,6 +5454,7 @@ function doPost(e) {
     else if (body.action === 'updateActivity')            result = updateActivity(body.id || 0, body.data || {});
     else if (body.action === 'deleteActivity')            result = deleteActivity(body.id || 0);
     else if (body.action === 'setActivitiesActiveByLoc')  result = setActivitiesActiveByLoc(body || {});   // v7.274 (де)активація каталогу за локацією
+    else if (body.action === 'restoreContractNumbers')    result = restoreContractNumbers(body || {});    // v7.276 відновлення № договорів із дат (dryRun за замовч.)
     else if (body.action === 'copyActivitiesFromLocation') result = copyActivitiesFromLocation(body.fromLoc || '', body.toLoc || '');
     else if (body.action === 'seedActivityTeachersInHR')   result = _seedActivityTeachersInHR(Number(body.actorId || 1));
     else if (body.action === 'addAttendanceMark')         result = addAttendanceMark(body.data || {});
@@ -7067,6 +7072,76 @@ function _normBdayYMD(v){
   return s;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.276: «Номер договору» — ТЕКСТ. Аркуш «Клієнти» колись працював у US-локалі,
+// і номери виду 05-03-35 Sheets читав як дати (3 травня 1935). Так зіпсовано 187
+// клітинок у Голосієві (08-…), Круглій (05-…), Броварах (01-…), Борщагівці
+// (01-…), Біговій (06-…) — рівно там, де код локації ≤ 12. Локації з кодами
+// 18/19/23–26/61/75 не постраждали. Дата зберігає всі три частини: місяць =
+// код локації, день = друга частина, рік%100 = третя (30–99 → 19xx, 00–29 →
+// 20xx; рік < 1000 = тризначний хвіст). Голосіївські номери ще й збігаються з
+// місяцем/днем договору — підтвердження порядку.
+var CLIENTS_CONTRACT_NO_COL = 20;   // T
+function _contractNumberAsText(sheet, rowNum){
+  try { sheet.getRange(rowNum, CLIENTS_CONTRACT_NO_COL).setNumberFormat('@'); } catch(e){}
+}
+function _contractNumberFromDate(d, tz){
+  var mm = Utilities.formatDate(d, tz, 'MM'), dd = Utilities.formatDate(d, tz, 'dd');
+  var y = Number(Utilities.formatDate(d, tz, 'yyyy'));
+  var tail = (y >= 1930) ? ('0' + (y % 100)).slice(-2) : String(y);
+  return mm + '-' + dd + '-' + tail;
+}
+// POST {action:'restoreContractNumbers', dryRun:true|false, actorId}
+// dryRun — список клітинок-дат і відновлених номерів, дублі всередині локації,
+// збіги з наявними; apply — формат колонки → текст, запис номерів, HR_Audit.
+function restoreContractNumbers(body){
+  body = body || {};
+  var dryRun = body.dryRun !== false;
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(60000); } catch(e){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+  try {
+    var ss = getCRMSpreadsheet();
+    var sh = ss.getSheetByName(SHEET_CLIENTS);
+    if (!sh) return {ok:false, error:'Лист Клієнти не знайдено'};
+    var tz = ss.getSpreadsheetTimeZone() || 'Europe/Kiev';
+    var v = sh.getDataRange().getValues();
+    var hd = v[0].map(String);
+    var cNo = hd.indexOf('Номер договору'), cName = hd.indexOf('ПІБ дитини'), cLoc = hd.indexOf('Локація'), cSt = hd.indexOf('Статус'), cId = hd.indexOf('ID');
+    if (cNo < 0) return {ok:false, error:'Колонку «Номер договору» не знайдено'};
+    if (cNo + 1 !== CLIENTS_CONTRACT_NO_COL) return {ok:false, error:'Колонка «Номер договору» не T(20), а ' + (cNo + 1) + ' — перевір константу'};
+    var plan = [], existing = {}, byLocNew = {};
+    for (var i = 1; i < v.length; i++){
+      var val = v[i][cNo], loc = String(v[i][cLoc] || '').trim();
+      if (val instanceof Date){
+        var nn = _contractNumberFromDate(val, tz);
+        plan.push({row:i + 1, id:String(v[i][cId] || ''), name:String(v[i][cName] || ''), loc:loc, status:String(v[i][cSt] || ''),
+                   before:Utilities.formatDate(val, tz, 'yyyy-MM-dd'), after:nn});
+        (byLocNew[loc + '|' + nn] = byLocNew[loc + '|' + nn] || []).push(String(v[i][cName] || ''));
+      } else if (String(val || '').trim()){
+        existing[loc + '|' + String(val).trim()] = String(v[i][cName] || '');
+      }
+    }
+    var dups = Object.keys(byLocNew).filter(function(k){ return byLocNew[k].length > 1; })
+                 .map(function(k){ return {loc:k.split('|')[0], number:k.split('|')[1], children:byLocNew[k]}; });
+    var clashes = plan.filter(function(p){ return existing[p.loc + '|' + p.after]; })
+                      .map(function(p){ return {loc:p.loc, number:p.after, child:p.name, alreadyOn:existing[p.loc + '|' + p.after]}; });
+    var byLoc = {};
+    plan.forEach(function(p){ byLoc[p.loc] = (byLoc[p.loc] || 0) + 1; });
+    var res = {ok:true, dryRun:dryRun, total:plan.length, byLoc:byLoc, duplicatesWithin:dups, clashesWithExisting:clashes, plan:plan};
+    if (dryRun) return res;
+    var lastRow = sh.getLastRow();
+    sh.getRange(1, CLIENTS_CONTRACT_NO_COL, Math.max(lastRow, 2), 1).setNumberFormat('@');   // увесь стовпець → текст
+    plan.forEach(function(p){ sh.getRange(p.row, CLIENTS_CONTRACT_NO_COL).setValue(p.after); });
+    SpreadsheetApp.flush();
+    _writeHrAuditRows(_marksActorInfo(body.actorId), 'contract_number_restore',
+      plan.map(function(p){ return {rowNum:p.row, before:{id:p.id, name:p.name, loc:p.loc, value:p.before}, after:{value:p.after}}; }));
+    res.written = plan.length;
+    res.columnFormat = 'text';
+    return res;
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { try { lock.releaseLock(); } catch(_){} }
+}
+
 function saveClient(data) {
   if (!data || !data.id) return {ok:false, error:'Missing id'};
   var ss = getCRMSpreadsheet();
@@ -7136,6 +7211,7 @@ function saveClient(data) {
     if (String(vals[r][0]) === String(data.id)) {
       row[29] = vals[r][29] || data.createdAt || now;
       var _oldGrpP = String(vals[r][3] || '');
+      _contractNumberAsText(sheet, r+1);                    // v7.276: № договору — текст, не дата
       sheet.getRange(r+1, 1, 1, row.length).setValues([row]);
       logGroupChange(data.id, data.name, data.loc, _oldGrpP, data.group, data.updatedBy || data.by || ''); // v7.47 ЕТАП 5
       return {ok:true, action:'updated'};
@@ -7168,11 +7244,13 @@ function saveClient(data) {
     row[16] = JSON.stringify(mergedAbs);
     row[29] = vals[cand][29] || data.createdAt || now;
     var _oldGrpM = String(vals[cand][3] || '');
+    _contractNumberAsText(sheet, cand + 1);                 // v7.276
     sheet.getRange(cand + 1, 1, 1, row.length).setValues([row]);
     logGroupChange(data.id, data.name, data.loc, _oldGrpM, data.group, data.updatedBy || data.by || ''); // v7.47 ЕТАП 5: перевід групи
     return {ok:true, action:'updated-moved', mergedAbsences: mergedAbs.length};
   }
   sheet.appendRow(row);
+  try { var _lr = sheet.getLastRow(); _contractNumberAsText(sheet, _lr); if (row[19]) sheet.getRange(_lr, 20).setValue(String(row[19])); } catch(_cn){}   // v7.276
   try { _linkCardToLead(data); } catch(_ll){}   // v7.169: підписаний лід чекав на цю картку
   logGroupChange(data.id, data.name, data.loc, '', data.group, data.updatedBy || data.by || ''); // v7.47 ЕТАП 5: відкриваємо історію (перше призначення групи)
   // v7.111 ФАЗА 1: авто-заведення НОВОЇ картки у Payment (рядок + бюджет + переагрегація локації).
