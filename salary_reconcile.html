@@ -723,8 +723,10 @@ function renderPreview(j){
       right = esc(r.emp.pos+' '+r.emp.last+' '+r.emp.first) + '<br><span style="color:var(--gray);font-size:11px">Salary: «'+esc(r.salaryRow.raw)+'»'+(r.mapped?' (запамʼятано)':'')+'</span>';
     } else if (r.emp && !r.salaryRow){
       // співробітник відомий, але Salary-рядка нема → 2-й дропдаун (запамʼятається)
-      right = '<span style="color:var(--gray);font-size:11px">'+esc(r.emp.pos+' '+r.emp.last+' '+r.emp.first)+' · ⚠ вкажи рядок один раз — запамʼятається:</span><br>'
-        + '<select data-i="'+i+'" data-emp="'+r.emp.rowNum+'" class="salSel">'+salaryRowOptions('')+'</select>';
+      // v7.271: r.note — чому авто не спрацювало (чужий рядок / кілька рядків / зникла прив'язка)
+      right = '<span style="color:var(--gray);font-size:11px">'+esc(r.emp.pos+' '+r.emp.last+' '+r.emp.first)+' · ⚠ вкажи рядок один раз — запамʼятається:</span>'
+        + (r.note ? '<br><span style="color:#b45309;font-size:11px">⛔ '+esc(r.note)+'</span>' : '')
+        + '<br><select data-i="'+i+'" data-emp="'+r.emp.rowNum+'" class="salSel">'+salaryRowOptions('')+'</select>';
     } else {
       // не знайдено → 1-й дропдаун: обрати СПІВРОБІТНИКА
       right = '<select data-i="'+i+'" class="empSel">'+rosterOptions('')+'</select>';
@@ -789,7 +791,7 @@ function renderApplyResult(j, isFollow){
   if (need.length){
     needHtml = '<div class="err" style="margin-top:8px">⚠ Треба вказати Salary-рядок (раз — і запамʼятається): <b>'+need.length+'</b>'
       + '<table style="margin-top:6px"><tbody>'
-      + need.map(function(n){ return '<tr><td>'+esc(n.r.name)+(n.r.emp?' → '+esc(n.r.emp):'')+'</td>'
+      + need.map(function(n){ return '<tr><td>'+esc(n.r.name)+(n.r.emp?' → '+esc(n.r.emp):'')+(n.r.note?'<br><span style="color:#b45309;font-size:11px">⛔ '+esc(n.r.note)+'</span>':'')+'</td>'
           + '<td><select data-i="'+n.idx+'" class="needSalSel">'+salaryRowOptions('')+'</select></td></tr>'; }).join('')
       + '</tbody></table>'
       + '<button class="btn green" style="margin-top:8px" onclick="doApplyNeeded()">💾 Дозаписати вказані (і запамʼятати)</button></div>';

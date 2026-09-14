@@ -1,5 +1,15 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.268
+// m.kids CRM — Google Apps Script v7.271
+// v7.271: АВТОЗВІРКА ЗП — сума більше не може лягти в чужий рядок.
+//         Прив'язки «Звірка_Мапа» тримались на rowNum HR → rowNum Salary; блоки
+//         локацій у HR правлять руками, вставка рядка зсувала прив'язку на
+//         сусіда (14.09: 33 з 34 вели в чужий рядок; Оранж — директор Цуркан у
+//         рядок медсестри). Тепер: ключ = UID (кол. AA) або норм-ПІБ, ціль =
+//         норм-назва Salary-рядка, новий аркуш «Звірка_Мапа_v2» (старий не
+//         читається — усі матчаться заново за ПІБ), і перед setValue на
+//         кожному шляху _salaryRowGuard: прізвище співробітника має бути в
+//         назві рядка, чужий рядок → need-salary-row. + diagSalaryReconMap,
+//         diagSalaryReconLog (аудит уже записаного за місяцями).
 // v7.268: кілька виконавців одного предмета в одній локації — точні назви в
 //         CATALOG_TO_NORM_MAP розводять позиції каталогу. Психолог Ірина /
 //         Маруфенко (Осокорки) і три англійські Школи 228. Досі один урок
@@ -5277,7 +5287,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.269', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.271', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations();
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -5357,6 +5367,8 @@ function doGet(e) {
     else if (action === 'diagPredLocNorms')           result = diagPredLocNorms(e.parameter || {});                     // v7.236 read-only: норми рівня локації
     else if (action === 'diagPayHeaderOverrides')     result = diagPayHeaderOverrides(e.parameter || {});               // v7.234 read-only: реєстр явних заголовків Payment
     else if (action === 'diagPredSubjects')           result = diagPredSubjects(e.parameter || {});                     // v7.231 read-only: предмети кожної локації з каталогу
+    else if (action === 'diagSalaryReconMap')         result = diagSalaryReconMap(e.parameter || {});                   // v7.271 read-only: прив'язки автозвірки ЗП (v2) + запобіжник
+    else if (action === 'diagSalaryReconLog')         result = diagSalaryReconLog(e.parameter || {});                   // v7.271 read-only: аудит уже записаних сум автозвірки (чужі рядки)
     else if (action === 'purgeAutoDraftCards')        result = purgeAutoDraftCards({names:String((e.parameter&&e.parameter.names)||'').split('|').filter(String), loc:(e.parameter&&e.parameter.loc)||'', createdPrefix:(e.parameter&&e.parameter.createdPrefix)||'', dryRun:true});   // v7.209 GET = ЗАВЖДИ dryRun, видалення лише POST-ом
     else if (action === 'getPredmetnyCatalog')        result = getPredmetnyCatalog(e.parameter && e.parameter.loc || '');
     else if (action === 'getPredmetnyMarks')          result = getPredmetnyMarks(e.parameter || {});
@@ -16786,15 +16798,19 @@ function _digitsOnly(s){ return String(s || '').replace(/\D/g, ''); }
 function _loadHrReconIndex(locFilter){
   var sh = SpreadsheetApp.openById(HR_SHEET_ID).getSheetByName(HR_TAB_NAME);
   var last = sh.getLastRow();
-  var byIpn = {}, byName = {}, bySurname = {}, all = [];
-  if (last < 2) return {byIpn:byIpn, byName:byName, bySurname:bySurname, all:all};
+  var byIpn = {}, byName = {}, bySurname = {}, all = [], allIncl = [];   // allIncl: v7.271 + звільнені (для запобіжника)
+  if (last < 2) return {byIpn:byIpn, byName:byName, bySurname:bySurname, all:all, allIncl:allIncl};
   var wantLoc = String(locFilter || '').trim();
-  var data = sh.getRange(2, 1, last - 1, HR_COLS).getValues();
+  // v7.271: читаємо до колонки UID (AA) включно — ключ прив'язки будується з нього.
+  var data = sh.getRange(2, 1, last - 1, Math.max(HR_COLS, HR_UID_COL)).getValues();
   for (var i = 0; i < data.length; i++){
     var e = _parseEmpRow(data[i], i + 2);
     if (!e.last && !e.first) continue;
-    if (e.archived) continue;
     if (wantLoc && e.loc !== wantLoc) continue;        // вузько: лише вибрана локація
+    e.uid = String(data[i][HR_UID_COL - 1] || '').trim();
+    e.key = _empReconKey(e);
+    allIncl.push(e);
+    if (e.archived) continue;
     all.push(e);
     var ik = _digitsOnly(e.ipn);
     if (ik) byIpn[ik] = e;
@@ -16803,7 +16819,7 @@ function _loadHrReconIndex(locFilter){
     var sk = _normEmpNm(e.last);
     if (sk) (bySurname[sk] = bySurname[sk] || []).push(e);
   }
-  return {byIpn:byIpn, byName:byName, bySurname:bySurname, all:all};
+  return {byIpn:byIpn, byName:byName, bySurname:bySurname, all:all, allIncl:allIncl};
 }
 
 // Індекс Salary-рядків по локаціях (кожен файл відкриваємо 1 раз; рядки з A4).
@@ -16856,6 +16872,86 @@ function _loadSalaryRowIndex(locs){
     } catch(e){ byLoc[loc] = []; }
   });
   return byLoc;
+}
+
+// v7.271: СТАБІЛЬНИЙ ключ співробітника для прив'язок автозвірки.
+// Досі ключем був rowNum HR-аркуша. Блоки локацій у HR правлять руками
+// (вставка рядка всередину блоку зсуває всіх нижче), і прив'язка мовчки
+// переїжджала на сусіда: заміряно 14.09 — 33 з 34 прив'язок вели в чужий
+// рядок (Оранж: директор Цуркан → рядок медсестри). UID (кол. AA, v7.200)
+// не міняється ніколи; якщо UID ще не виданий — нормалізоване ПІБ, яке
+// переживає вставку рядків і рветься лише при перейменуванні (тоді просто
+// need-salary-row, не чужа клітинка). ІПН ключем НЕ став: є в ~15% карток і
+// з'являється якраз під час звірки — ключ мінявся б на півдорозі.
+function _empReconKey(e){
+  var uid = String(e && e.uid || '').trim();
+  if (uid) return 'uid:' + uid;
+  return 'nm:' + _normEmpNm((e && e.last || '') + ' ' + (e && e.first || ''));
+}
+
+// v7.271: токени назви Salary-рядка (слова з літер) — для звірки прізвищ
+// ЦІЛИМ словом, не підрядком («Мала» не має ловитись у «Малахова»).
+function _salaryRowTokens(norm){
+  return String(norm || '').replace(/[^a-zа-яіїєґ0-9]+/gi, ' ').trim().split(/\s+/).filter(Boolean);
+}
+
+// v7.271: ЗАПОБІЖНИК перед записом — чи належить Salary-рядок саме цьому
+// співробітнику. Викликається на КОЖНОМУ шляху (мапа, ручний вибір, ПІБ),
+// щоб жоден із них не міг покласти суму в чужу клітинку.
+//   own      — назва рядка містить прізвище emp → ok
+//   foreign  — містить прізвище ІНШОГО активного співробітника локації → НІ
+//   anon     — рядок без прізвищ («Директор», «Помічник») → ok лише при
+//              allowAnon (явний вибір людиною або її ж збережена прив'язка)
+//   no-surname — прізвища emp нема, рядок не безіменний (чуже написання,
+//              звільнений) → НІ автоматично; людина може обрати вручну
+//   hrAll — усі співробітники локації ВКЛЮЧНО зі звільненими (hr.allIncl):
+//   рядок звільненої людини — теж чужий. Прізвища звіряються цілим словом,
+//   для слів від 5 літер — ще й з похибкою написання (и/і, подвоєння):
+//   «Любиченко» у Salary = «Любіченко» в HR. Однофамільці: якщо в рядку стоїть
+//   ім'я ІНШОГО носія цього прізвища, а імені emp нема → foreign.
+function _salaryRowGuard(row, emp, hrAll, allowAnon){
+  var norm = (row && row.norm) || _normEmpNm(row && row.raw);
+  var toks = _salaryRowTokens(norm);
+  function hasSurname(sn){
+    sn = _normEmpNm(sn);
+    if (!sn || sn.length < 3) return false;
+    for (var i = 0; i < toks.length; i++){
+      if (toks[i] === sn) return true;
+      if (sn.length >= 5 && toks[i].length >= 5 && _surnameSim(toks[i], sn) >= 0.85) return true;
+    }
+    return false;
+  }
+  var ownFirst = _normEmpNm(emp && emp.first).split(' ')[0];
+  var own = hasSurname(emp && emp.last);
+  var others = (hrAll || []).filter(function(o){
+    return o && o !== emp && !(emp && o.rowNum === emp.rowNum) && hasSurname(o.last);
+  });
+  if (own){
+    // однофамілець, чиє ім'я стоїть у рядку, а ім'я emp — ні
+    for (var k = 0; k < others.length; k++){
+      var of = _normEmpNm(others[k].first).split(' ')[0];
+      if (of && of.length >= 3 && toks.indexOf(of) >= 0 && !(ownFirst && toks.indexOf(ownFirst) >= 0))
+        return {ok:false, why:'foreign', owner:(others[k].last + ' ' + others[k].first).trim()};
+    }
+    return {ok:true, why:'own'};
+  }
+  if (others.length) return {ok:false, why:'foreign', owner:(others[0].last + ' ' + others[0].first).trim()};
+  if (allowAnon) return {ok:true, why:'anon'};
+  return {ok:false, why:'no-surname'};
+}
+function _salaryGuardNote(g, row){
+  if (!g || g.ok) return '';
+  if (g.why === 'foreign') return 'рядок «' + row.raw + '» належить ' + g.owner + ' — не записано, вкажи правильний рядок';
+  return 'у рядку «' + row.raw + '» нема прізвища співробітника — вкажи рядок вручну';
+}
+
+// v7.271: Salary-рядок за НОРМАЛІЗОВАНОЮ назвою (ціль прив'язки). Рівно один
+// збіг → рядок; 0 або кілька → null (прив'язка не застосовується).
+function _findSalRowByNorm(salaryRows, norm){
+  var want = String(norm || '').trim();
+  if (!want) return null;
+  var hits = (salaryRows || []).filter(function(r){ return r.norm === want; });
+  return hits.length === 1 ? hits[0] : null;
 }
 
 // Salary-рядок для співробітника: norm-назва рядка містить і прізвище, і ім'я.
@@ -16978,28 +17074,39 @@ function salaryReconcilePreview(body){
         return out;
       }
       if (!emp){ out.status = (p.via === 'ambiguous') ? 'ambiguous' : 'not-found'; return out; }
-      out.emp = {last: emp.last, first: emp.first, pos: emp.pos, loc: emp.loc, rowNum: emp.rowNum};
+      out.emp = {last: emp.last, first: emp.first, pos: emp.pos, loc: emp.loc, rowNum: emp.rowNum, key: emp.key};
       out.ipnInCard   = !!emp.ipn;
       out.ipnWillAdd  = !emp.ipn && !!p.ipn;
       // v7.70: similar-мітку + score виставляємо ОДРАЗУ (вище раннього виходу no-salary-row),
       // щоб fuzzy-кандидат не губився, коли Salary-рядок написаний іншим прізвищем.
       if (p.via === 'similar'){ out.score = p.score; out.autoApply = false; }
-      // 1) збережена прив'язка (Звірка_Мапа) → показуємо як зматчено (запамʼятано)
-      var mapped = reconMap[loc + '||' + emp.rowNum];
+      // 1) збережена прив'язка (Звірка_Мапа_v2: ключ emp.key → norm-назва рядка).
+      //    v7.271: рядок шукаємо за НАЗВОЮ, не за номером, і проганяємо через
+      //    запобіжник — прив'язка, що веде в чужий рядок, показується як
+      //    no-salary-row із поясненням, а не як «запамʼятано».
+      var mapped = reconMap[loc + '||' + emp.key];
       if (mapped){
-        var mrow = (salIdx[loc] || []).filter(function(r){ return r.rowNum === Number(mapped); })[0];
+        var mrow = _findSalRowByNorm(salIdx[loc], mapped.norm);
         if (mrow){
-          out.salaryRow = {rowNum: mrow.rowNum, raw: mrow.raw, ambiguous: false};
-          out.mapped = true;
-          out.status = _reconStatus(p);           // v7.69: similar не «залипає» як name-match
-          if (p.via === 'similar'){ out.score = p.score; out.autoApply = false; }
-          return out;
+          var mg = _salaryRowGuard(mrow, emp, hr.allIncl, true);
+          if (mg.ok){
+            out.salaryRow = {rowNum: mrow.rowNum, raw: mrow.raw, ambiguous: false};
+            out.mapped = true;
+            out.status = _reconStatus(p);         // v7.69: similar не «залипає» як name-match
+            if (p.via === 'similar'){ out.score = p.score; out.autoApply = false; }
+            return out;
+          }
+          out.status = 'no-salary-row'; out.note = 'прив\'язка: ' + _salaryGuardNote(mg, mrow); return out;
         }
+        out.mappedLost = mapped.raw;              // рядок перейменували/прибрали — матчимо за ПІБ
       }
-      // 2) матч за ПІБ
+      // 2) матч за ПІБ (+ запобіжник; кілька рядків із цим ПІБ → обрати вручну)
       var sr = _matchSalaryRow(salIdx[emp.loc] || [], emp);
       if (!sr){ out.status = 'no-salary-row'; return out; }
-      out.salaryRow = {rowNum: sr.row.rowNum, raw: sr.row.raw, ambiguous: sr.ambiguous};
+      if (sr.ambiguous){ out.status = 'no-salary-row'; out.note = 'кілька Salary-рядків із цим ПІБ — вкажи, в який писати'; return out; }
+      var ng = _salaryRowGuard(sr.row, emp, hr.allIncl, false);
+      if (!ng.ok){ out.status = 'no-salary-row'; out.note = _salaryGuardNote(ng, sr.row); return out; }
+      out.salaryRow = {rowNum: sr.row.rowNum, raw: sr.row.raw, ambiguous: false};
       out.status = _reconStatus(p);               // v7.69: 'similar' | 'ipn-match' | 'name-match'
       if (p.via === 'similar'){ out.score = p.score; out.autoApply = false; }
       return out;
@@ -17028,38 +17135,138 @@ function _getSalaryReconLogSheet(){
 
 // v7.34 Етап3: МАПА прив'язок співробітник→Salary-рядок. Раз вказавши рядок для
 // співробітника, наступного разу автозвірка матчить його авто (обхід _matchSalaryRow).
-var SALARY_RECON_MAP = 'Звірка_Мапа';
-var SALARY_RECON_MAP_HEADER = ['Локація','empRowNum','ПІБ','salaryRowNum','Коли','Ким'];
+// v7.271: НОВИЙ аркуш «Звірка_Мапа_v2». Ключ — emp.key (uid:… | nm:…), ціль —
+// нормалізована НАЗВА Salary-рядка (+ сира для людини). Стара «Звірка_Мапа»
+// (rowNum → rowNum) більше не читається: 33 з 34 її прив'язок з'їхали на
+// сусідні рядки, тож усі матчаться заново за ПІБ; аркуш лишено як архів.
+var SALARY_RECON_MAP = 'Звірка_Мапа_v2';
+var SALARY_RECON_MAP_OLD = 'Звірка_Мапа';
+var SALARY_RECON_MAP_HEADER = ['Локація','empKey','ПІБ','salaryRowNorm','salaryRowRaw','Коли','Ким'];
 function _getSalaryReconMapSheet(){
   var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
   var sh = ss.getSheetByName(SALARY_RECON_MAP);
   if (!sh){ sh = ss.insertSheet(SALARY_RECON_MAP); sh.getRange(1,1,1,SALARY_RECON_MAP_HEADER.length).setValues([SALARY_RECON_MAP_HEADER]); sh.setFrozenRows(1); }
   return sh;
 }
-// Мапа {"loc||empRowNum": salaryRowNum}. Остання прив'язка виграє.
+// Мапа {"loc||empKey": {norm, raw}}. Остання прив'язка виграє.
 function _loadSalaryReconMap(){
   var v = _getSalaryReconMapSheet().getDataRange().getValues();
   var map = {};
   for (var i = 1; i < v.length; i++){
     var loc = String(v[i][0] || '').trim();
-    var emp = Number(v[i][1]) || 0;
-    var sal = Number(v[i][3]) || 0;
-    if (!loc || !emp || !sal) continue;
-    map[loc + '||' + emp] = sal;
+    var key = String(v[i][1] || '').trim();
+    var norm = String(v[i][3] || '').trim();
+    if (!loc || !key || !norm) continue;
+    map[loc + '||' + key] = {norm: norm, raw: String(v[i][4] || '').trim()};
   }
   return map;
 }
-// Upsert прив'язки (loc, empRowNum → salaryRowNum) по ключу (loc,empRowNum).
-function _saveSalaryReconMap(loc, empRowNum, pib, salaryRowNum, by, now){
+// Upsert прив'язки (loc, empKey → norm-назва рядка) по ключу (loc, empKey).
+function _saveSalaryReconMap(loc, empKey, pib, rowNorm, rowRaw, by, now){
   var sh = _getSalaryReconMapSheet();
   var v = sh.getDataRange().getValues();
+  var rec = [loc, empKey, pib, rowNorm, rowRaw, now, by];
   for (var i = 1; i < v.length; i++){
-    if (String(v[i][0]||'').trim() === loc && (Number(v[i][1])||0) === Number(empRowNum)){
-      sh.getRange(i+1, 1, 1, SALARY_RECON_MAP_HEADER.length).setValues([[loc, Number(empRowNum), pib, Number(salaryRowNum), now, by]]);
+    if (String(v[i][0]||'').trim() === loc && String(v[i][1]||'').trim() === empKey){
+      sh.getRange(i+1, 1, 1, SALARY_RECON_MAP_HEADER.length).setValues([rec]);
       return;
     }
   }
-  sh.appendRow([loc, Number(empRowNum), pib, Number(salaryRowNum), now, by]);
+  sh.appendRow(rec);
+}
+
+// v7.271 read-only: стан прив'язок автозвірки. GET ?action=diagSalaryReconMap[&loc=…]
+// Для кожної прив'язки v2 — чи знаходиться рядок за назвою і чи проходить
+// запобіжник; окремо — скільки рядків лишилось у старій «Звірка_Мапа».
+function diagSalaryReconMap(params){
+  try {
+    params = params || {};
+    var only = String(params.loc || '').trim();
+    var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+    var oldSh = ss.getSheetByName(SALARY_RECON_MAP_OLD);
+    var oldRows = oldSh ? Math.max(0, oldSh.getLastRow() - 1) : 0;
+    var v = _getSalaryReconMapSheet().getDataRange().getValues();
+    var byLoc = {};
+    for (var i = 1; i < v.length; i++){
+      var loc = String(v[i][0] || '').trim(); if (!loc || (only && loc !== only)) continue;
+      (byLoc[loc] = byLoc[loc] || []).push({key:String(v[i][1]||''), pib:String(v[i][2]||''), norm:String(v[i][3]||''), raw:String(v[i][4]||''), at:String(v[i][5]||''), by:String(v[i][6]||'')});
+    }
+    var locs = Object.keys(byLoc);
+    var salIdx = _loadSalaryRowIndex(locs);
+    var out = [];
+    locs.forEach(function(loc){
+      var hr = _loadHrReconIndex(loc), byKey = {};
+      hr.all.forEach(function(e){ byKey[e.key] = e; });
+      byLoc[loc].forEach(function(b){
+        var emp = byKey[b.key], row = _findSalRowByNorm(salIdx[loc], b.norm);
+        var g = (emp && row) ? _salaryRowGuard(row, emp, hr.allIncl, true) : null;
+        out.push({loc:loc, key:b.key, pib:b.pib, salaryRow:b.raw, at:b.at, by:b.by,
+                  empFound:!!emp, rowFound:!!row, rowNum:(row ? row.rowNum : null),
+                  guard:(g ? g.why : (!emp ? 'emp-not-in-hr' : 'row-not-found')), ok:!!(g && g.ok)});
+      });
+    });
+    return {ok:true, sheet:SALARY_RECON_MAP, bindings:out.length, broken:out.filter(function(x){ return !x.ok; }).length,
+            oldSheet:SALARY_RECON_MAP_OLD, oldRowsIgnored:oldRows, items:out};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+// v7.271 read-only: АУДИТ УЖЕ ЗАПИСАНИХ сум. GET ?action=diagSalaryReconLog[&months=8,9][&year=2026][&loc=…]
+// Проходить «Звірка_ЗП_Лог» і по кожному запису проганяє _salaryRowGuard між
+// «Співробітник» (кого обрав матчер) і «Salary_рядок» (куди реально записано).
+// Рядки, зняті revert-ом, у лозі відсутні — тобто перевіряється лише те, що
+// й досі сидить у Salary. Розбіжність = сума пішла в чужий рядок: власнику
+// рядка — зайве, співробітнику — не долетіло.
+function diagSalaryReconLog(params){
+  try {
+    params = params || {};
+    var months = {};
+    String(params.months || '8,9').split(',').forEach(function(m){ m = Number(m); if (m >= 1 && m <= 12) months[m] = true; });
+    var year = Number(params.year) || new Date().getFullYear();
+    var only = String(params.loc || '').trim();
+    var tz = 'Europe/Kiev';
+    var v = _getSalaryReconLogSheet().getDataRange().getValues();
+    var rows = [];
+    for (var i = 1; i < v.length; i++){
+      var r = v[i];
+      var loc = String(r[2] || '').trim(); if (!loc || (only && loc !== only)) continue;
+      var mon = Number(r[9]) || 0; if (!months[mon]) continue;
+      var when = r[0];
+      var whenY = (when instanceof Date) ? Number(Utilities.formatDate(when, tz, 'yyyy')) : Number(String(when || '').slice(0, 4));
+      if (whenY && whenY !== year) continue;
+      rows.push({row:i + 1, when:(when instanceof Date) ? Utilities.formatDate(when, tz, 'dd.MM.yyyy HH:mm') : String(when || ''),
+                 by:String(r[1] || ''), loc:loc, vidNo:String(r[3] || ''), pdfName:String(r[4] || ''),
+                 emp:String(r[7] || '').trim(), salaryRow:String(r[8] || '').trim(), month:mon,
+                 prev:Number(r[10]) || 0, now:Number(r[11]) || 0, amount:Number(r[12]) || 0});
+    }
+    // HR по локаціях — один раз на локацію
+    var hrByLoc = {};
+    function hrFor(loc){ if (!hrByLoc[loc]) hrByLoc[loc] = _loadHrReconIndex(loc); return hrByLoc[loc]; }
+    var mismatches = [], anon = [], okCount = 0, byLoc = {};
+    rows.forEach(function(x){
+      var hr = hrFor(x.loc);
+      var emp = null;
+      if (x.emp){
+        var cands = hr.allIncl.filter(function(e){ return _normEmpNm(e.last + ' ' + e.first) === _normEmpNm(x.emp); });
+        emp = cands[0] || null;
+        if (!emp){ var parts = x.emp.split(/\s+/); emp = {last:parts[0] || '', first:parts.slice(1).join(' '), rowNum:-1}; }
+      }
+      var rec = {when:x.when, by:x.by, loc:x.loc, vidNo:x.vidNo, pdfName:x.pdfName, emp:x.emp, salaryRow:x.salaryRow,
+                 month:x.month, amount:x.amount, prev:x.prev, now:x.now, logRow:x.row};
+      if (!emp){ rec.why = 'no-emp'; rec.note = 'запис без співробітника — рядок обрано вручну, матчер нікого не обирав'; anon.push(rec); return; }
+      var g = _salaryRowGuard({raw:x.salaryRow, norm:_normEmpNm(x.salaryRow)}, emp, hr.allIncl, true);
+      byLoc[x.loc] = byLoc[x.loc] || {checked:0, mismatched:0, sum:0};
+      byLoc[x.loc].checked++;
+      if (g.ok && g.why === 'own'){ okCount++; return; }
+      rec.why = g.why; rec.owner = g.owner || '';
+      if (g.ok){ rec.note = 'безіменний рядок — перевір оком'; anon.push(rec); return; }
+      byLoc[x.loc].mismatched++; byLoc[x.loc].sum += x.amount;
+      mismatches.push(rec);
+    });
+    mismatches.sort(function(a, b){ return a.loc < b.loc ? -1 : a.loc > b.loc ? 1 : (a.month - b.month); });
+    return {ok:true, year:year, months:Object.keys(months).map(Number), checked:rows.length, matched:okCount,
+            mismatched:mismatches.length, mismatchedSum:mismatches.reduce(function(s, m){ return s + m.amount; }, 0),
+            byLoc:byLoc, mismatches:mismatches, review:anon};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 
 // body = {loc, vidNo, by, month?, year?, mode:'dryRun'|'apply'|'revert', items:[...]}
@@ -17158,47 +17365,74 @@ function salaryReconcileApply(body){
       }
       // ── Ціль запису у Salary (Етап3, пріоритети) ──
       // 1) ЯВНИЙ salaryRowNum у payload → пиши туди + ЗАПАМʼЯТАЙ прив'язку emp→рядок.
-      // 2) Збережена прив'язка (Звірка_Мапа) для (loc, empRowNum) → авто в той рядок.
+      // 2) Збережена прив'язка (Звірка_Мапа_v2) для (loc, emp.key) → авто в той рядок.
       // 3) _matchSalaryRow за ПІБ (як раніше).
       // 4) Нема — статус 'need-salary-row' (вкажи рядок один раз), без тихого пропуску.
+      // v7.271: без співробітника не пишемо взагалі (запобіжнику нема з чим звіряти),
+      // а КОЖЕН із трьох шляхів проходить _salaryRowGuard — чужий рядок → need-salary-row.
       var manualSalRowNum = Number(it.salaryRowNum) || 0;
-      var sr = null, writeVia = via, bindSaved = false;
+      var sr = null, writeVia = via, bindSaved = false, guardNote = '';
 
-      // 1) явний вибір рядка + збереження прив'язки
+      // 4) нема співробітника взагалі → not-found/ambiguous (обери у 1-му дропдауні)
+      if (!emp){ unmatched++; rep.status = (via === 'ambiguous') ? 'ambiguous' : 'not-found'; report.push(rep); return; }
+
+      // 1) явний вибір рядка (+ прив'язка збережеться нижче, лише якщо запобіжник пропустив)
       if (manualSalRowNum){
         var srow = _findSalRow(manualSalRowNum);
         if (srow){
-          sr = {row: srow, ambiguous: false}; writeVia = 'manual-row';
-          if (!dryRun && emp && it.empRowNum){
-            _saveSalaryReconMap(loc, emp.rowNum, emp.last + ' ' + emp.first, manualSalRowNum, by, now);
-            reconMap[loc + '||' + emp.rowNum] = manualSalRowNum;
-            bindSaved = true;
-            bindingsSaved.push({emp: emp.pos + ' ' + emp.last + ' ' + emp.first, salaryRow: srow.raw});
+          var g1 = _salaryRowGuard(srow, emp, hr.allIncl, true);
+          if (g1.ok){ sr = {row: srow, ambiguous: false}; writeVia = 'manual-row'; }
+          else guardNote = _salaryGuardNote(g1, srow);
+        }
+      }
+      // 2) збережена прив'язка emp.key → norm-назва рядка
+      if (!sr && !guardNote){
+        var mapped = reconMap[loc + '||' + emp.key];
+        if (mapped){
+          var mrow = _findSalRowByNorm(salIdx[loc], mapped.norm);
+          if (mrow){
+            var g2 = _salaryRowGuard(mrow, emp, hr.allIncl, true);
+            if (g2.ok){ sr = {row: mrow, ambiguous: false}; writeVia = 'mapped'; }
+            else guardNote = 'прив\'язка: ' + _salaryGuardNote(g2, mrow);
           }
         }
       }
-      // 2) збережена прив'язка emp→рядок
-      if (!sr && emp){
-        var mapped = reconMap[loc + '||' + emp.rowNum];
-        if (mapped){ var mrow = _findSalRow(mapped); if (mrow){ sr = {row: mrow, ambiguous: false}; writeVia = 'mapped'; } }
-      }
-      // 3) матч за ПІБ
-      if (!sr && emp){
+      // 3) матч за ПІБ (кілька рядків → не вгадуємо)
+      if (!sr && !guardNote){
         var m = _matchSalaryRow(salIdx[loc] || [], emp);
-        if (m){ sr = m; writeVia = via; }
+        if (m && m.ambiguous) guardNote = 'кілька Salary-рядків із цим ПІБ — вкажи, в який писати';
+        else if (m){
+          var g3 = _salaryRowGuard(m.row, emp, hr.allIncl, false);
+          if (g3.ok){ sr = m; writeVia = via; } else guardNote = _salaryGuardNote(g3, m.row);
+        }
       }
-      // 4) нема співробітника взагалі → not-found/ambiguous (обери у 1-му дропдауні)
-      if (!sr && !emp){ unmatched++; rep.status = (via === 'ambiguous') ? 'ambiguous' : 'not-found'; report.push(rep); return; }
-      // 5) співробітник є, але рядок не визначено → need-salary-row (2-й дропдаун)
+      // 5) співробітник є, але рядок не визначено/не пройшов запобіжник → need-salary-row
       if (!sr){
         needSalaryRow++;
         rep.status = 'need-salary-row';
         rep.via = via;
         rep.emp = emp.pos + ' ' + emp.last + ' ' + emp.first;
         rep.empRowNum = emp.rowNum;
-        rep.note = 'Вкажи Salary-рядок для цього співробітника один раз — далі запамʼятається (авто)';
+        rep.note = guardNote || 'Вкажи Salary-рядок для цього співробітника один раз — далі запамʼятається (авто)';
         report.push(rep);
         return;
+      }
+      // Останній рубіж перед setValue: що б не обрало вище — прізвище співробітника
+      // має бути в назві рядка, або рядок безіменний і його обрала людина/мапа.
+      var gFinal = _salaryRowGuard(sr.row, emp, hr.allIncl, writeVia === 'manual-row' || writeVia === 'mapped');
+      if (!gFinal.ok){
+        needSalaryRow++;
+        rep.status = 'need-salary-row'; rep.via = via; rep.emp = emp.pos + ' ' + emp.last + ' ' + emp.first;
+        rep.empRowNum = emp.rowNum; rep.note = _salaryGuardNote(gFinal, sr.row);
+        report.push(rep);
+        return;
+      }
+      // прив'язку зберігаємо ТІЛЬКИ для рядка, що пройшов запобіжник
+      if (writeVia === 'manual-row' && !dryRun){
+        _saveSalaryReconMap(loc, emp.key, emp.last + ' ' + emp.first, sr.row.norm, sr.row.raw, by, now);
+        reconMap[loc + '||' + emp.key] = {norm: sr.row.norm, raw: sr.row.raw};
+        bindSaved = true;
+        bindingsSaved.push({emp: emp.pos + ' ' + emp.last + ' ' + emp.first, salaryRow: sr.row.raw});
       }
 
       var salRow = sr.row.rowNum;
