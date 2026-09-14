@@ -1,5 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.278
+// m.kids CRM — Google Apps Script v7.279
+// v7.279: _leadClientIndex у CacheService 5 хв (gzip+base64, ≈25 КБ) — getLeads
+//         більше не читає 2,3 МБ «Клієнтів» на кожен запит; інвалідація при
+//         saveClient / patchClientCell / deleteClient / mergeClientDuplicate.
 // v7.278: getLeads 20–34 с → _leadDayKey без Utilities.formatDate у циклі
 //         (історія лідів, бот, індекс карток — ~5 000 сервісних викликів на запит).
 // v7.276: «Номер договору» — текст. 187 номерів виду 05-03-35 Sheets колись
@@ -1326,7 +1329,30 @@ function _leadsFromHistory(){
 
 // v7.169: картка дитини як джерело грошей і тривалості. Ключ — lead.client_id,
 // проставлений при натисканні «Договір» (або при створенні картки постфактум).
+// v7.279: індекс карток для лідів — у CacheService на 5 хв. Досі кожен getLeads
+// читав увесь аркуш «Клієнти» (2,3 МБ) заради чотирьох полів. 1 245 записів у
+// JSON ≈ 95 КБ — впритул до ліміту 100 КБ на ключ, тому кладемо gzip+base64
+// (≈25 КБ). Інвалідація — saveClient / patchClientCell / deleteClient / злиття.
+var _LEADCI_CACHE_KEY = 'lead_client_index_v1', _LEADCI_TTL = 300;
+function _invalidateLeadClientIndex(){ try { CacheService.getScriptCache().remove(_LEADCI_CACHE_KEY); } catch(e){} }
 function _leadClientIndex(){
+  try {
+    var hit = CacheService.getScriptCache().get(_LEADCI_CACHE_KEY);
+    if (hit){
+      var bytes = Utilities.base64Decode(hit);
+      var json = Utilities.ungzip(Utilities.newBlob(bytes, 'application/x-gzip')).getDataAsString();
+      return JSON.parse(json);
+    }
+  } catch(_c){}
+  var idx = _leadClientIndexBuild();
+  try {
+    var blob = Utilities.gzip(Utilities.newBlob(JSON.stringify(idx), 'application/json'));
+    var b64 = Utilities.base64Encode(blob.getBytes());
+    if (b64.length < 95000) CacheService.getScriptCache().put(_LEADCI_CACHE_KEY, b64, _LEADCI_TTL);
+  } catch(_p){}
+  return idx;
+}
+function _leadClientIndexBuild(){
   var idx={};
   try{
     var ss=getCRMSpreadsheet(), sh=ss.getSheetByName(SHEET_CLIENTS);
@@ -5315,7 +5341,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.278', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.279', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -7152,6 +7178,7 @@ function restoreContractNumbers(body){
 
 function saveClient(data) {
   if (!data || !data.id) return {ok:false, error:'Missing id'};
+  _invalidateLeadClientIndex();   // v7.279
   var ss = getCRMSpreadsheet();
   var sheet = ss.getSheetByName(SHEET_CLIENTS);
   if (!sheet) return {ok:false, error:'Sheet not found'};
@@ -7364,6 +7391,7 @@ function _mergeAbsencesUnion(a, b){
 // Універсально — для решти 43 пар (виклик по кожній parою targetId/sourceId).
 // ═══════════════════════════════════════════════════════════════════════════
 function mergeClientDuplicate(body){
+  _invalidateLeadClientIndex();   // v7.279
   var lock = LockService.getScriptLock();
   try { lock.waitLock(60000); } catch(e){ return {ok:false, error:'LOCK_TIMEOUT'}; }
   try {
@@ -7731,6 +7759,7 @@ function normalizeAttendanceIds(body){
 // зіпсований у date-клітинку). asText:true → формат '@' (текст), щоб число не стало датою.
 function patchClientCell(body){
   body = body || {};
+  _invalidateLeadClientIndex();   // v7.279
   var id  = String(body.id  || '').trim();
   var col = String(body.col || '').trim();
   if (!id || !col) return {ok:false, error:'id і col обовʼязкові'};
@@ -8051,6 +8080,7 @@ function patchClientAbsences(id, absences) {
 
 function deleteClient(id) {
   if (!id) return {ok:false, error:'Missing id'};
+  _invalidateLeadClientIndex();   // v7.279
   var ss = getCRMSpreadsheet();
   var sheet = ss.getSheetByName(SHEET_CLIENTS);
   if (!sheet) return {ok:false, error:'Sheet not found'};
