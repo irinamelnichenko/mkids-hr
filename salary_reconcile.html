@@ -11,6 +11,34 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="apple-touch-icon" href="icon-192.png">
 <meta name="apple-mobile-web-app-title" content="m.kids System">
+<script>
+/* v7.277: токен сесії в КОЖНОМУ виклику Apps Script з цієї сторінки — підготовка до
+   AUTH_ENFORCE. Обгортка над fetch: GET → ?token=…, POST із JSON-тілом → body.token.
+   Ставиться першим скриптом, тож покриває всі виклики нижче й ті, що додадуть потім.
+   Хелпери _authTok/_tokUrl/_tokBody — ті самі, що в index/clients/activities. */
+(function(){
+  function _authTok(){ try { return (JSON.parse(localStorage.getItem('mkids_session')||'null')||{}).token || ''; } catch(e){ return ''; } }
+  function _tokUrl(u){ var t=_authTok(); if(!t) return u; return /[?&]token=/.test(u) ? u : (u + (u.indexOf('?')>=0?'&':'?') + 'token=' + encodeURIComponent(t)); }
+  function _tokBody(b){ try{ if(b && typeof b==='object' && b.token==null) b.token=_authTok(); }catch(e){} return b; }
+  window._authTok=_authTok; window._tokUrl=_tokUrl; window._tokBody=_tokBody;
+  function _isGas(u){ return /script\.google(usercontent)?\.com\/macros\//.test(String(u||'')); }
+  var _f=window.fetch;
+  window.fetch=function(input, init){
+    try{
+      var u=(typeof input==='string')?input:((input&&input.url)||'');
+      if(_isGas(u) && _authTok()){
+        var m=(init&&init.method?String(init.method):'GET').toUpperCase();
+        if(m==='POST' && init && typeof init.body==='string' && init.body.charAt(0)==='{'){
+          try{ var o=JSON.parse(init.body); if(o && o.token==null){ o.token=_authTok(); init=Object.assign({},init,{body:JSON.stringify(o)}); } }catch(e){}
+        } else if(m==='GET' && typeof input==='string'){
+          input=_tokUrl(input);
+        }
+      }
+    }catch(e){}
+    return _f.call(this, input, init);
+  };
+})();
+</script>
 <script src="pdf.min.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}

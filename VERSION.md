@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| Версія у репозиторії | **v7.276** |
+| Версія у репозиторії | **v7.277** (фронт; бекенд v7.276) |
 | md5 | `9f87f6600317b05c1abab5eb89b8cde1` |
 | Розмір | 1837766 байт |
 | Зафіксовано | 2026-09-14 |
@@ -23,6 +23,22 @@
 ```
 curl -sL "https://script.google.com/macros/s/AKfycbyTSUVlaN4-PpXe47zCSmhVs0Qxy1FDXG_XsB4zcKNpqBxdhDtS9ibM4YFGkGjmPQDFWQ/exec?action=ping"
 ```
+
+## Токен на решті дев'яти сторінок (v7.277, фронт-онлі)
+
+analytics, categories, control, invoices, leads, opex, reconcile, salary,
+salary_reconcile не мали `_tokUrl/_tokBody`, і всі їхні виклики Apps Script
+ішли без токена. Замість правки кожного виклику — перший `<script>` на кожній
+сторінці: хелпери `_authTok/_tokUrl/_tokBody` (як в index/clients) + обгортка
+над `window.fetch`, що для URL Apps Script додає `?token=` у GET і `token` у
+JSON-тіло POST. Покриває 46 наявних викликів (getPayments, syncPayments,
+getGroupNorms, reconcilePreview/Apply, resolveIbanLoc, getOpexContractors,
+getSalaryFopMap, getSalaryExtrasRows, getOpexData/Overview, addSalaryRow,
+remindLead, getLeads, getInvoiceListData, generateInvoicePDF, getLocations,
+getEmployees, salaryReconcileRows/Preview/Apply, getDashboardNotifications…)
+і будь-які майбутні. Інші хости не чіпає; без сесії нічого не додає.
+Після цього в «Авторизація_Лог» мають лишитись лише `getUsers` (логін) і
+`authenticate`. cache v7.277.
 
 ## Номери договорів: відновлення з дат (v7.276)
 
