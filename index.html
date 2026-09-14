@@ -877,7 +877,7 @@ async function _doSyncToSheets(){
   try{
     updSheetsStatus('sync');
     // v7.94: спільний cloudFetch (таймаут 45с + 2 ретраї на мережевий збій). no-cors POST.
-    await cloudFetch(url,{ fetch:{ method:'POST', mode:'no-cors', headers:{'Content-Type':'text/plain'}, body:JSON.stringify({action:'save',data:S.recs}) } });
+    await cloudFetch(url,{ fetch:{ method:'POST', mode:'no-cors', headers:{'Content-Type':'text/plain'}, body:JSON.stringify(_tokBody({action:'save',data:S.recs})) } });   // v7.274: + токен
     updSheetsStatus('ok');
   }catch(e){updSheetsStatus('err');}
 }
@@ -5041,7 +5041,7 @@ async function testScriptUrl(){
   const el=document.getElementById('scriptTestResult');
   el.innerHTML='<div class="alert alert-info">⏳ Перевірка…</div>';
   try{
-    const r=await fetch(url+'?action=get',{redirect:'follow'});
+    const r=await fetch(_tokUrl(url+'?action=get'),{redirect:'follow'});   // v7.274: + токен
     const j=await r.json();
     if(j.ok){
       el.innerHTML=`<div class="alert alert-ok">✅ З'єднання успішне! Записів: ${Object.keys(j.data||{}).length}</div>`;
@@ -5385,7 +5385,7 @@ function pushTabelToCloud(loc,date,data){
       return {date:date,childId:'STAFF::'+k,childName:e?fullName(e):k,loc:loc,group:'',status:(data[k]&&data[k].status)||'',updatedBy:who};
     });
     if(!recs.length) return;
-    fetch(url,{method:'POST',mode:'no-cors',redirect:'follow',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'saveAttendance',records:recs})}).catch(function(){});
+    fetch(url,{method:'POST',mode:'no-cors',redirect:'follow',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(_tokBody({action:'saveAttendance',records:recs}))}).catch(function(){});   // v7.274: + токен
   }catch(e){ console.warn('pushTabelToCloud',e); }
 }
 // v6.62.1: queue+debounce timesheet cloud-save (mirror kids flushAttCloudSave).
@@ -5422,7 +5422,7 @@ function loadTabelFromCloud(loc,from,to,onDone){
   // потрібних рядків: та сама відповідь важить ~108 КБ замість 1.5 МБ.
   // Клієнтську нормалізацію лишаємо — вона дешева й страхує старі рядкові дати.
   function _normD(v){ v=String(v||''); if(/^\d{4}-\d{2}-\d{2}/.test(v)) return v.slice(0,10); var dt=new Date(v); return isNaN(dt)?'':dt.getFullYear()+'-'+('0'+(dt.getMonth()+1)).slice(-2)+'-'+('0'+dt.getDate()).slice(-2); }
-  fetch(url+'?action=getAttendance&loc='+encodeURIComponent(loc)
+  fetch(_tokUrl(url+'?action=getAttendance&loc='+encodeURIComponent(loc))
             +'&from='+encodeURIComponent(from)+'&to='+encodeURIComponent(to),{redirect:'follow'})
     .then(function(r){return r.json();})
     .then(function(j){
@@ -6018,7 +6018,7 @@ window.addEventListener('DOMContentLoaded',async()=>{
     var b=document.getElementById('tasksBadge'); if(!b) return;
     var s; try{ s=JSON.parse(localStorage.getItem('mkids_session')||'null'); }catch(e){ return; }
     if(!s||!s.user||!s.user.id) return;
-    fetch(U+'?action=getDashboardNotifications&userId='+encodeURIComponent(s.user.id)+'&role='+encodeURIComponent(s.user.role||''),{redirect:'follow'})
+    fetch(U+'?action=getDashboardNotifications&userId='+encodeURIComponent(s.user.id)+'&role='+encodeURIComponent(s.user.role||'')+'&token='+encodeURIComponent(s.token||''),{redirect:'follow'})
       .then(function(r){return r.json();})
       .then(function(res){
         if(!res||!res.ok) return;

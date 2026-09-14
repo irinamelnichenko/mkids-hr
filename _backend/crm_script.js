@@ -1,5 +1,12 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.272
+// m.kids CRM — Google Apps Script v7.274
+// v7.274: getLocations — CacheService 5 хв (було ~8 с на кожен виклик за 3 КБ;
+//         ?nocache=1 / _invalidateLocationsCache). setActivitiesActiveByLoc —
+//         чистка фантомної локації «Осокорки сад» у каталозі додаткових за
+//         колонкою «Локація», бо її id збігаються зі справжніми «Осокорки».
+//         Фронт (v7.273→7.274): токен у поллінгу сповіщень на 12 сторінках,
+//         у saveAttendance (табель дітей і співробітників), save/get/getAttendance
+//         index.html — підготовка до AUTH_ENFORCE.
 // v7.272: ЗАМОК МІСЯЦЯ для відміток + серверна перевірка + історія дій.
 //         Фронт (isWeekLocked в activities/predmetnyky): замість Пн–Пт поточного
 //         тижня — поточний місяць з 1 числа до сьогодні; наперед не можна; з 1
@@ -5296,8 +5303,8 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.272', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
-    else if (action === 'getLocations')       result = getLocations();
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.274', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
     else if (action === 'getPayments')        result = getPayments();
@@ -5442,6 +5449,7 @@ function doPost(e) {
     else if (body.action === 'addActivity')               result = addActivity(body.data || {});
     else if (body.action === 'updateActivity')            result = updateActivity(body.id || 0, body.data || {});
     else if (body.action === 'deleteActivity')            result = deleteActivity(body.id || 0);
+    else if (body.action === 'setActivitiesActiveByLoc')  result = setActivitiesActiveByLoc(body || {});   // v7.274 (де)активація каталогу за локацією
     else if (body.action === 'copyActivitiesFromLocation') result = copyActivitiesFromLocation(body.fromLoc || '', body.toLoc || '');
     else if (body.action === 'seedActivityTeachersInHR')   result = _seedActivityTeachersInHR(Number(body.actorId || 1));
     else if (body.action === 'addAttendanceMark')         result = addAttendanceMark(body.data || {});
@@ -5572,7 +5580,18 @@ function jsonOut(data) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-function getLocations() {
+// v7.274: CacheService на 5 хв. Реєстр локацій — 17 рядків, а кожен виклик
+// коштував ~8 с (openById + читання) і йшов майже з кожної сторінки та з
+// десятків внутрішніх місць (гарантії, синк, звіти). Реєстр правлять руками
+// раз на місяці, тож 5-хвилинний лаг безпечний; ?nocache=1 або
+// _invalidateLocationsCache() — коли треба одразу.
+var _LOC_CACHE_KEY = 'locations_v1', _LOC_CACHE_TTL = 300;
+function _invalidateLocationsCache(){ try { CacheService.getScriptCache().remove(_LOC_CACHE_KEY); } catch(e){} }
+function getLocations(opts) {
+  var noCache = !!(opts && opts.noCache);
+  if (!noCache){
+    try { var hit = CacheService.getScriptCache().get(_LOC_CACHE_KEY); if (hit){ var parsed = JSON.parse(hit); parsed.cached = true; return parsed; } } catch(e){}
+  }
   var configSS = SpreadsheetApp.openById(CONFIG_SHEET_ID);
   var configSheet = configSS.getSheets()[0];
   var data = configSheet.getDataRange().getValues();
@@ -5593,7 +5612,9 @@ function getLocations() {
     });
   }
   locs = sortByLocationOrder(locs, function(l){ return l.loc; });   // v6.50.4: єдиний зонний порядок
-  return {ok:true, data:locs};
+  var res = {ok:true, data:locs};
+  try { CacheService.getScriptCache().put(_LOC_CACHE_KEY, JSON.stringify(res), _LOC_CACHE_TTL); } catch(e){}
+  return res;
 }
 
 // ─── v6.45: КАРТКА ЛОКАЦІЇ (новий аркуш «Локації» у CONFIG-таблиці) ───────────
@@ -14038,6 +14059,33 @@ function _seedSh228(dryRun){
   }
   if (dryRun) Logger.log('Це DRY-RUN, у таблицю нічого не записано. Запис — SEED_SH228_ACTIVITIES_APPLY()');
   return res;
+}
+
+// v7.274: (де)активація ВСІХ позицій каталогу додаткових за локацією.
+// Привід: у каталозі є фантомна локація «Осокорки сад» — 10 позицій із тими
+// самими id (48–58), що й у справжніх «Осокорки», лише з іншими цінами.
+// updateActivity(id)/deleteActivity(id) беруть ПЕРШИЙ рядок з таким id, тож
+// чистити їх по id небезпечно — адресуємо за колонкою «Локація».
+// POST {action:'setActivitiesActiveByLoc', loc, active:false, dryRun:true}
+function setActivitiesActiveByLoc(body){
+  try {
+    body = body || {};
+    var loc = String(body.loc || '').trim();
+    var active = body.active !== false;
+    var dryRun = body.dryRun !== false;
+    if (!loc) return {ok:false, error:'loc обовʼязковий'};
+    var sh = _getActivitiesSheet(false);
+    var data = sh.getDataRange().getValues();
+    var rows = [];
+    for (var i = 1; i < data.length; i++){
+      if (String(data[i][1] || '').trim() !== loc) continue;
+      var rec = _parseActivityRow(data[i]);
+      if (rec.active === active) continue;
+      rows.push({row:i + 1, id:rec.id, name:rec.name, clientPrice:rec.clientPrice, teacherRate:rec.teacherRate, wasActive:rec.active});
+    }
+    if (!dryRun) rows.forEach(function(r){ sh.getRange(r.row, 8).setValue(active); });
+    return {ok:true, dryRun:dryRun, loc:loc, active:active, changed:rows.length, rows:rows};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 
 function deleteActivity(id){

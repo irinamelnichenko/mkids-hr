@@ -5153,7 +5153,7 @@ function flushAttCloudSave(){
   setSyncStatus('sync');
   var _u=getScriptUrl();
   if(!_u){ setSyncStatus('err'); return; }
-  fetch(_u,{method:'POST',mode:'no-cors',redirect:'follow',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'saveAttendance',records:records})})
+  fetch(_u,{method:'POST',mode:'no-cors',redirect:'follow',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(_tokBody({action:'saveAttendance',records:records}))})   // v7.274: + токен
     .then(function(){ setSyncStatus('ok'); showFloatMsg('☁️ Збережено в хмарі'); })
     .catch(function(e){ setSyncStatus('err'); S._attPendingChanges=changes.concat(S._attPendingChanges); showFloatMsg('☁️ Хмара недоступна — збережено локально','err'); console.warn('att save error:',e); });
 }
@@ -8338,7 +8338,7 @@ function renderPayMonths(){
     var b=document.getElementById('tasksBadge'); if(!b) return;
     var s; try{ s=JSON.parse(localStorage.getItem('mkids_session')||'null'); }catch(e){ return; }
     if(!s||!s.user||!s.user.id) return;
-    fetch(U+'?action=getDashboardNotifications&userId='+encodeURIComponent(s.user.id)+'&role='+encodeURIComponent(s.user.role||''),{redirect:'follow'})
+    fetch(U+'?action=getDashboardNotifications&userId='+encodeURIComponent(s.user.id)+'&role='+encodeURIComponent(s.user.role||'')+'&token='+encodeURIComponent(s.token||''),{redirect:'follow'})
       .then(function(r){return r.json();})
       .then(function(res){
         if(!res||!res.ok) return;

@@ -2467,7 +2467,7 @@ function bindEventListeners(){
     var b=document.getElementById('tasksBadge'); if(!b) return;
     var s; try{ s=JSON.parse(localStorage.getItem('mkids_session')||'null'); }catch(e){ return; }
     if(!s||!s.user||!s.user.id) return;
-    fetch(U+'?action=getDashboardNotifications&userId='+encodeURIComponent(s.user.id)+'&role='+encodeURIComponent(s.user.role||''),{redirect:'follow'})
+    fetch(U+'?action=getDashboardNotifications&userId='+encodeURIComponent(s.user.id)+'&role='+encodeURIComponent(s.user.role||'')+'&token='+encodeURIComponent(s.token||''),{redirect:'follow'})
       .then(function(r){return r.json();})
       .then(function(res){
         if(!res||!res.ok) return;
