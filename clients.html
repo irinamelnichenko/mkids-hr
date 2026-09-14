@@ -565,6 +565,10 @@ tbody tr.clickable:hover td{background:#f0f7ff}
            data-v="absRequests" id="navAbsReq" onclick="goPerm('recalc')">
         <span class="ni">💼</span> Перерахунки
       </div>
+      <div class="nav-item" data-permission="needs_attention" data-parent="crm" data-perm-page="clients"
+           data-v="needsAttention" onclick="navNeedsAttention()">
+        <span class="ni">✋</span> Потребують уваги
+      </div>
 
       <div class="nav-sec" data-section="hr">👤 HR</div>
       <div class="nav-item" data-permission="employees" data-parent="hr" data-perm-page="index"
@@ -643,10 +647,6 @@ tbody tr.clickable:hover td{background:#f0f7ff}
         <span class="ni">📁</span> Архів клієнтів
       </div>
 
-      <div class="nav-item" data-permission="clients_list" data-perm-page="clients"
-           data-v="needsAttention" onclick="navNeedsAttention()">
-        <span class="ni">✋</span> Потребують уваги
-      </div>
 
       <div class="nav-item" data-permission="settings" data-perm-page="index"
            onclick="goPerm('settings')">
@@ -2360,6 +2360,7 @@ const PERMISSIONS = {
   ceo: [
     'dashboard',
     'clients_list','payments','attendance_kids','recalc',
+    'needs_attention',   // v7.273: «Потребують уваги» — CFO усі локації, директорка своя
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
     'analytics_clients','analytics_hr',
@@ -2475,6 +2476,7 @@ const PERMISSIONS = {
   // доступною за прямим посиланням і через #hash.
   director: [
     'clients_list','payments','attendance_kids',
+    'needs_attention',   // v7.273: «Потребують уваги» — CFO усі локації, директорка своя
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
     'opex','salary',   // v7.238: без categories і overview_analytics
@@ -2520,6 +2522,7 @@ const PERM_LOCAL_ACTION = {
   payments:          () => nav('debts'),
   attendance_kids:   () => { S.mainTab='clients'; nav('attendance'); },
   recalc:            () => { S.mainTab='clients'; nav('absRequests'); },
+  needs_attention:   () => { S.mainTab='clients'; nav('needsAttention'); },   // v7.273
   analytics_clients: () => switchMainTab('analytics'),
 };
 
@@ -6785,19 +6788,24 @@ function _naFmtDate(s){
   m=/^(\d{1,2})\.(\d{1,2})\.(\d{4})/.exec(s); if(m) return ('0'+m[1]).slice(-2)+'.'+('0'+m[2]).slice(-2)+'.'+m[3];
   return s.slice(0,10);
 }
-var _NA_CATLABEL={decide:'на рішення','merge-card':'дублі','drift-pay':'імена',junk:'тест'};
+var _NA_CATLABEL={decide:'на рішення','merge-card':'дублі','drift-pay':'імена',junk:'тест',departed:'вибули'};
+// v7.273: екран відкрито директорці (право needs_attention) — бачить лише свою
+// локацію (фільтр у renderNeedsAttention), CFO/мережеві — усі. Категорія
+// 'departed' (v7.262) тепер малюється окремо, і в кожному рядку є прямі дії
+// «🎓 Випускник» / «🚪 Розірвати» — ті самі модалки з датою, що й у картці.
 function _naRenderHtml(items){
-  if(!items.length) return '<div style="padding:28px;color:var(--gray);font-size:15px">✅ Немає карток, що потребують уваги — усі active-картки мають рядок у Payment.</div>';
-  var byCat={decide:0,'merge-card':0,'drift-pay':0,junk:0};
+  var scopeNote = isHR() ? 'усі локації' : ('лише «'+esc((S.user&&S.user.loc)||'')+'»');
+  if(!items.length) return '<div style="padding:28px;color:var(--gray);font-size:15px">✅ Немає карток, що потребують уваги ('+scopeNote+') — усі активні картки мають рядок у Payment.</div>';
+  var byCat={decide:0,'merge-card':0,'drift-pay':0,junk:0,departed:0};
   items.forEach(function(x){ byCat[x.cat]=(byCat[x.cat]||0)+1; });
   var locs={}; items.forEach(function(x){ (locs[x.loc]=locs[x.loc]||[]).push(x); });
   var order=Object.keys(locs).sort(function(a,b){ return locs[b].length-locs[a].length || a.localeCompare(b,'uk'); });
-  var CO={decide:0,'merge-card':1,'drift-pay':2,junk:3};
+  var CO={departed:0,decide:1,'merge-card':2,'drift-pay':3,junk:4};
   var h='';
   h+='<div style="padding:4px 4px 0">';
-  h+='<p style="color:var(--gray);font-size:13.5px;max-width:80ch;margin:0 0 14px">Картки зі статусом <b>активна</b> без рядка в Payment за поточний місяць. Зникають зі списків і не потрапляють в архів. <b>Нічого не архівується автоматично</b> — рішення за вами.</p>';
+  h+='<p style="color:var(--gray);font-size:13.5px;max-width:80ch;margin:0 0 14px">Картки зі статусом <b>активна</b>, яких немає в Payment за поточний місяць ('+scopeNote+'). Вони зникають зі списків і не потрапляють в архів. <b>Нічого не архівується автоматично</b> — для кожної обери: 🎓 випустити, 🚪 розірвати договір (обидва з датою) або відкрити картку й виправити.</p>';
   h+='<div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px">';
-  [['всього',items.length,'#F2622E'],['на рішення',byCat.decide,''],['дублі',byCat['merge-card'],'#2F6DB3'],['імена',byCat['drift-pay'],'#C77A12'],['тест',byCat.junk,'#8A7E73']].forEach(function(s){
+  [['всього',items.length,'#F2622E'],['вибули з Payment',byCat.departed,'#7A3E9D'],['на рішення',byCat.decide,''],['дублі',byCat['merge-card'],'#2F6DB3'],['імена',byCat['drift-pay'],'#C77A12'],['тест',byCat.junk,'#8A7E73']].forEach(function(s){
     h+='<div style="background:var(--card,#fff);border:1px solid var(--line,#e5ded7);border-radius:11px;padding:10px 15px;min-width:96px">'
       +'<div style="font-size:24px;font-weight:750;line-height:1'+(s[2]?';color:'+s[2]:'')+'">'+s[1]+'</div>'
       +'<div style="font-size:11.5px;color:var(--gray)">'+s[0]+'</div></div>';
@@ -6816,13 +6824,22 @@ function _naRenderHtml(items){
   return '<div style="max-width:1000px">'+h+'</div>';
 }
 function _naRow(r){
-  var bg={'merge-card':'#EAF1F9','drift-pay':'#FBF1DF','junk':'#F0ECE7'}[r.cat]||'var(--card,#fff)';
-  var bd={'merge-card':'#9dc0e8','drift-pay':'#e6c68a','junk':'#ddd6cf'}[r.cat]||'var(--line,#e5ded7)';
+  var bg={'merge-card':'#EAF1F9','drift-pay':'#FBF1DF','junk':'#F0ECE7',departed:'#F3ECF8'}[r.cat]||'var(--card,#fff)';
+  var bd={'merge-card':'#9dc0e8','drift-pay':'#e6c68a','junk':'#ddd6cf',departed:'#c9a9dd'}[r.cat]||'var(--line,#e5ded7)';
   var meta='<div style="font-size:12px;color:var(--gray);margin-top:2px">Група: <b style="color:var(--ink,#2a2622)">'+esc(r.group||'—')+'</b> · Створена: <b style="color:var(--ink,#2a2622)">'+_naFmtDate(r.created)+'</b></div>';
   var idJ=escAttrJS(r.id), nmJ=escAttrJS(r.name), locJ=escAttrJS(r.loc), grpJ=escAttrJS(r.group||''), mJ=escAttrJS(r.match||'');
   var open='onclick="openChild('+idJ+','+grpJ+',\'\','+locJ+','+nmJ+')"';
+  // v7.273: прямі дії зі статусом (з датою) — доступні тим, хто може розірвати/випустити в цій локації
+  var canSt = (typeof canTerminate==='function') && canTerminate(r.loc);
+  var stBtns = canSt
+    ? '<button class="btn btn-xs" style="background:#27ae60;color:#fff;border-color:#27ae60" onclick="naGraduate('+idJ+')">🎓 Випускник</button>'
+     +'<button class="btn btn-xs" style="background:#c0392b;color:#fff;border-color:#c0392b" onclick="naTerminate('+idJ+')">🚪 Розірвати</button>'
+    : '';
   var badge='', acts='';
-  if(r.cat==='junk'){
+  if(r.cat==='departed'){
+    badge='<div style="font-size:11.5px;color:#7A3E9D;margin-top:5px">⇠ зникла з Payment '+_naFmtDate(r.departedAt)+(r.lastPaymentMonth?' · останній місяць у Payment: <b>'+esc(r.lastPaymentMonth)+'</b>':'')+(r.payGroup?' · група в Payment: '+esc(r.payGroup):'')+'</div>';
+    acts=stBtns+'<button class="btn btn-xs" '+open+'>Відкрити картку</button>';
+  } else if(r.cat==='junk'){
     badge='<div style="font-size:11.5px;color:#8A7E73;margin-top:5px">🧪 тестова / сміттєва картка</div>';
     acts='<button class="btn btn-xs btn-danger" onclick="naDelete('+idJ+','+nmJ+')">🗑 Видалити</button>';
   } else if(r.cat==='merge-card'){
@@ -6834,12 +6851,23 @@ function _naRow(r){
     acts='<button class="btn btn-xs" style="background:#C77A12;color:#fff;border-color:#C77A12" '+open+'>✎ Виправити (відкрити)</button>'
         +'<button class="btn btn-xs btn-danger" onclick="naDelete('+idJ+','+nmJ+')">🗑 Видалити</button>';
   } else {
-    acts='<button class="btn btn-xs btn-primary" '+open+'>Відкрити картку →</button>'
+    acts=stBtns+'<button class="btn btn-xs btn-primary" '+open+'>Відкрити картку →</button>'
         +'<button class="btn btn-xs btn-danger" onclick="naDelete('+idJ+','+nmJ+')">🗑 Видалити</button>';
   }
   return '<div style="display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;justify-content:space-between;background:'+bg+';border:1px solid '+bd+';border-radius:10px;padding:11px 14px;margin-bottom:8px">'
     +'<div style="min-width:220px"><div style="font-weight:650;font-size:14.5px">'+esc(r.name)+'</div>'+meta+badge+'</div>'
     +'<div style="display:flex;flex-wrap:wrap;gap:6px">'+acts+'</div></div>';
+}
+// v7.273: статус з екрана — ті самі модалки, що в картці (дата + причина/куди пішов).
+// S.editId — контекст модалок; після підтвердження вони кличуть renderView() →
+// renderNeedsAttention(), і рядок зникає зі списку.
+function naGraduate(id){
+  if(!S.crm||!S.crm[id]){ alert('Картку не знайдено в кеші — оновіть сторінку.'); return; }
+  S.editId=id; openGraduate();
+}
+function naTerminate(id){
+  if(!S.crm||!S.crm[id]){ alert('Картку не знайдено в кеші — оновіть сторінку.'); return; }
+  S.editId=id; openTerminate();
 }
 async function naDelete(id, name){
   if(!confirm('Видалити картку «'+name+'»?\n\nЦе прибере її зі списку клієнтів. Дію не можна скасувати.')) return;
@@ -6865,6 +6893,9 @@ async function renderNeedsAttention(){
   catch(e){ main.innerHTML='<div style="padding:24px;color:#c0392b">Помилка завантаження: '+esc(e.message||String(e))+'</div>'; return; }
   var items=(j.items||[]).slice();
   if(!isHR()){ var myloc=(S.user&&S.user.loc)||''; items=items.filter(function(x){ return x.loc===myloc; }); }
+  // v7.273: щойно випущені/розірвані з цього ж екрана — локальний статус уже не active,
+  // а бекенд міг ще не дописати рядок; не показуємо їх повторно.
+  items=items.filter(function(x){ var c=S.crm&&S.crm[x.id]; return !(c&&c.status&&c.status!=='active'); });
   main.innerHTML=_naRenderHtml(items);
 }
 function findPayChildById(id){

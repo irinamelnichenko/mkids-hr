@@ -169,6 +169,10 @@
            onclick="goPerm('recalc')">
         <span class="ni">💼</span> Перерахунки
       </div>
+      <div class="nav-item" data-permission="needs_attention" data-parent="crm" data-perm-page="clients"
+           onclick="goPerm('needs_attention')">
+        <span class="ni">✋</span> Потребують уваги
+      </div>
 
       <div class="nav-sec" data-section="hr">👤 HR</div>
       <div class="nav-item" data-permission="employees" data-parent="hr" data-perm-page="index"
@@ -346,6 +350,7 @@ var PERMISSIONS = {
   ceo: [
     'dashboard',
     'clients_list','payments','attendance_kids','recalc',
+    'needs_attention',   // v7.273: «Потребують уваги» — CFO усі локації, директорка своя
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
     'analytics_clients','analytics_hr',
@@ -454,6 +459,7 @@ var PERMISSIONS = {
   // доступною за прямим посиланням і через #hash.
   director: [
     'clients_list','payments','attendance_kids',
+    'needs_attention',   // v7.273: «Потребують уваги» — CFO усі локації, директорка своя
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
     'opex','salary',   // v7.238: без categories і overview_analytics

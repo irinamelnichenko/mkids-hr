@@ -161,6 +161,10 @@ td.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
            onclick="goPerm('recalc')">
         <span class="ni">💼</span> Перерахунки
       </div>
+      <div class="nav-item" data-permission="needs_attention" data-parent="crm" data-perm-page="clients"
+           onclick="goPerm('needs_attention')">
+        <span class="ni">✋</span> Потребують уваги
+      </div>
       <div class="nav-sec" data-section="hr">👤 HR</div>
       <div class="nav-item" data-permission="employees" data-parent="hr" data-perm-page="index"
            onclick="goPerm('employees')">
@@ -390,7 +394,7 @@ function readSession(){
 function doLogout(){ try{ localStorage.removeItem(SESSION_KEY); }catch(e){} window.location.href = 'index.html'; }
 var PERMISSIONS = {
   cfo:'all', hr:'all',
-  ceo:['dashboard','clients_list','payments','attendance_kids','recalc','employees','timesheet_staff','vacations','sick_leaves','calendar','vacation_schedule','analytics_clients','analytics_hr','opex','categories','salary','overview_analytics','activities','predmetnyky','settings'],
+  ceo:['dashboard','clients_list','needs_attention','payments','attendance_kids','recalc','employees','timesheet_staff','vacations','sick_leaves','calendar','vacation_schedule','analytics_clients','analytics_hr','opex','categories','salary','overview_analytics','activities','predmetnyky','settings'],
   cco:['dashboard','clients_list','payments','attendance_kids','recalc','employees','timesheet_staff','vacations','sick_leaves','calendar','vacation_schedule','analytics_clients','analytics_hr','opex','categories','salary','overview_analytics','activities','predmetnyky','settings'],
   coo:['dashboard','clients_list','payments','attendance_kids','recalc','employees','timesheet_staff','vacations','sick_leaves','calendar','vacation_schedule','analytics_clients','analytics_hr','opex','categories','salary','overview_analytics','activities','predmetnyky','settings'],
   rnd_director:['dashboard','opex','clients_list','attendance_kids','employees','timesheet_staff','vacations','sick_leaves','calendar','vacation_schedule','analytics_hr','activities','predmetnyky'],
