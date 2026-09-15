@@ -4,12 +4,12 @@
 
 | | |
 |---|---|
-| Версія у репозиторії | **v7.290** |
-| md5 | `dc475547941af5562dace4347d34f8e3` |
-| Розмір | 1849143 байт |
+| Версія у репозиторії | **v7.291** |
+| md5 | `460746c52f65b1269b08c7242914809b` |
+| Розмір | 1855709 байт |
 | Зафіксовано | 2026-09-15 |
-| Версія у проді | **v7.290** — задеплоєно 15.09.2026, ping підтверджено |
-| Перевірка | `action=ping` → `pong v7.290` після деплою |
+| Версія у проді | **v7.290** — задеплоєно 15.09.2026; v7.291 очікує деплою (ручна вставка) |
+| Перевірка | `action=ping` → `pong v7.291` після деплою |
 
 ## Як це працює
 
@@ -23,6 +23,48 @@
 ```
 curl -sL "https://script.google.com/macros/s/AKfycbyTSUVlaN4-PpXe47zCSmhVs0Qxy1FDXG_XsB4zcKNpqBxdhDtS9ibM4YFGkGjmPQDFWQ/exec?action=ping"
 ```
+
+## Замок місяця на даних і експортах (v7.291)
+
+Привід (аудит 15.09): «Закриті_Місяці» перевіряли лише 6 Payment-шляхів. Відмітки
+додаткових, уроки предметників, Табель, обʼєднання/поділи, харчування, «Чомусики»
+та експорти в Salary замок не читали; MONTH_LOCK (v7.272) стримував лише не-CFO і
+лише в межах поточного місяця. Тож CFO (або прямий POST) міг поставити відмітку
+15.07 і `exportToSalaryExtras({month:7})` переписував серпневу колонку Salary, яку
+вже виплатили.
+
+Семантика: закритий місяць = заморожено **і його дані, і його гроші**.
+- `_closedGuard(date | {year,month})` — жорстка відмова `{ok:false, closedMonth:true,
+  code:'CLOSED_MONTH'}` без винятку для CFO (вимикач — лист «Закриті_Місяці»).
+  `_closedMonthsSet` тепер memo на час виконання (bulk не читає лист на кожен рядок;
+  `closeMonth` скидає).
+- `_marksDateLockError` спершу перевіряє жорсткий замок, потім старий MONTH_LOCK —
+  тож `removeAttendanceMark`, `bulkAttendanceMarks`, `bulkRemoveAttendanceMarks`,
+  `savePredmetnykyLesson`, `bulkPredmetnykyLessons`, `deletePredmetnykyLesson`
+  отримали замок без змін у своєму коді (per-row skip, як і раніше).
+- Додано напряму: `addAttendanceMark`, `saveAttendance` (закриті записи
+  пропускаються, у відповіді `skippedClosed[]`, решта пишеться), `deleteAttendanceRecord`,
+  `saveDopMerge`/`deleteDopMerge`/`saveDopSplit`, `savePredMerge`/`deletePredMerge`/
+  `savePredSplit` (при видаленні за id — дата з рядка), `addMealMark` (per-mark skip),
+  `addChomusykyMark`/`removeChomusykyMark`, `importPredmetnykyLessons` (`skippedClosed`).
+- Експорти, лише при реальному записі (`dryRun` вільний): `_closedGuardExport(year,
+  month)` — відмова, якщо закритий джерельний місяць **або** цільовий (N+1):
+  `exportToSalaryExtras`, `exportPredmetnykyToSalary`, `exportPredmetnyToSalary`;
+  `exportAttendanceToPayments` і `exportMealToPayments` — відмова при закритому
+  `month`, а в повному прогоні пропускають ще й target-місяці, чиє джерело закрите
+  (інакше перерахунок обнулив би їх); `salaryAddExtrasPayments` — пропуск позицій
+  із закритим місяцем. Нічна гарантія й так пропускала закриті місяці — без змін.
+
+Фронт (`activities.html`, `predmetnyky.html`, `clients.html`, `index.html`):
+`_isClosedMonthISO` у `isWeekLocked` — дні закритих місяців сірі й для CFO; список
+із `getClosedMonths` у localStorage на 5 хв. Помилки бекенду по окремих відмітках
+уже показувались і відкочувались (v7.259/v7.272); додано те саме для зняття
+відміток у місячній сітці додаткових. `saveAttendance` з `no-cors` відповіді не
+читає — там захист лише через сіру клітинку + бекенд.
+
+Наслідок: дописати минулий закритий місяць тепер можна лише відкривши його в
+«Закриті_Місяці». Зараз закриті червень і липень; **серпень варто закрити** — ЗП
+виплачено, а замок його не тримає. cache v7.291.
 
 ## getAttendance: індекс дат, компактний формат, кеш для «всі» (v7.289)
 

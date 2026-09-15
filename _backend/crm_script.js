@@ -1,5 +1,12 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.290
+// m.kids CRM — Google Apps Script v7.291
+// v7.291: ЗАМОК МІСЯЦЯ на даних і експортах. «Закриті_Місяці» досі стримували лише Payment-
+//         колонки; відмітки, уроки, Табель, обʼєднання/поділи, харчування, «Чомусики» та
+//         експорти в Salary його не читали — липневу відмітку можна було поставити сьогодні
+//         й перезаписати виплачену серпневу ЗП. Тепер _closedGuard (жорстко, і для CFO) на
+//         всіх записах з датою; _closedGuardExport — джерельний АБО цільовий місяць закритий →
+//         відмова; Payment/meal-експорти пропускають target-місяці, чиє джерело закрите.
+//         bulk-маршрути й saveAttendance пропускають лише закриті рядки (skippedClosed).
 // v7.290: індекс дат getAttendance — gzip+base64 і злиття сегментів дня при розриві ≤ 300
 //         (на 70 тис. рядків сирий індекс не влазив у CacheService → build щоразу).
 // v7.289: getAttendance — індекс колонки «Дата» в CacheService (читаємо хвіст, а не 47 тис.
@@ -5349,7 +5356,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.290', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.291', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -7345,6 +7352,7 @@ function deleteAttendanceRecord(body){
   var cid  = String(body.childId || body.id || '').trim();
   var date = String(body.date || '').trim();
   if (!cid || !date) return {ok:false, error:'childId і date обовʼязкові'};
+  var _cg = _closedGuard(date); if (_cg) return _cg;   // v7.291
   try {
     var ss = getCRMSpreadsheet();
     var sh = ss.getSheetByName(SHEET_ATTENDANCE);
@@ -9993,11 +10001,13 @@ function saveAttendance(body) {
     }
   } catch(_ke){ knownIds = null; }   // не змогли прочитати — не блокуємо збереження
   var unknown = [];
+  var skippedClosed = [];   // v7.291: записи в закритий місяць пропускаємо, решту пишемо
 
   records.forEach(function(rec) {
     var date    = _attDateIso(rec.date, tz);              // нормалізуємо вхідну дату
     var childId = trim(String(rec.childId || ''));
     if (!date || !childId) return;
+    if (_closedGuard(date)){ skippedClosed.push({date: date, childId: childId}); return; }
     // v7.257: «STAFF::<empKey>» — НАВМИСНИЙ простір імен табеля співробітників
     // (v6.27.4), він і не має бути в реєстрі дітей. Перевірка knownIds (v7.162)
     // звіряє id з колонкою «ID» аркуша «Клієнти», тобто зі списком ДІТЕЙ, тож на
@@ -10048,7 +10058,10 @@ function saveAttendance(body) {
     _ac.put('attver_ALL', String(new Date().getTime()), 21600);   // v7.289: кеш «усі локації»
   } catch(_ie){}
 
-  return {ok:true, saved:saved};
+  var _out = {ok:true, saved:saved};
+  if (skippedClosed.length){ _out.skippedClosed = skippedClosed; _out.closedMonth = true;
+    _out.error = 'Закритий місяць: ' + skippedClosed.length + ' відміт. не записано (' + skippedClosed[0].date + '…)'; }
+  return _out;
 }
 
 // v6.30.2 editor-only: одноразова дедуплікація аркуша «Табель» — лишає
@@ -12126,6 +12139,11 @@ function salaryAddExtrasPayments(body){
       var out = {salaryRowNum: salRow, row: salRow, name: '', amount: amount, month: mon, loc: iloc,
                  before: null, after: null, skipped: false, reason: '', wasFormula: false};
 
+      // v7.291: закритий місяць — не пишемо (Salary-колонка вже виплачена)
+      if (!dryRun && mon && _isMonthClosed(Number(body.year) || new Date().getFullYear(), mon)){
+        out.skipped = true; out.reason = 'закритий місяць ' + mon; skipped++;
+        results.push(out); return;
+      }
       // рішення «не вносити» — у Salary не пишемо, лог зі статусом «пропущено»
       if (isSkip){
         out.skipped = true; out.reason = 'не вносити (рішення)'; skipped++;
@@ -14746,6 +14764,7 @@ function saveDopMerge(body){
     if (!loc || !actId || !date){
       return {ok: false, error: 'Поля loc / activityId / date обовʼязкові'};
     }
+    var _cg = _closedGuard(date); if (_cg) return _cg;   // v7.291
     // Унікальні групи (по нормалізованому ключу, зберігаємо перше сире написання).
     var seen = {};
     var groups = [];
@@ -14828,13 +14847,16 @@ function deleteDopMerge(body){
     if (!id && !(loc && actId && date)){
       return {ok: false, error: 'Треба id АБО (loc + activityId + date)'};
     }
+    if (date){ var _cg = _closedGuard(date); if (_cg) return _cg; }   // v7.291
     var sh;
     try { sh = _getDopMergesSheet(false); }
     catch(e){ return {ok: true, removed: false}; }
     var data = sh.getDataRange().getValues();
     if (id){
       for (var i = 1; i < data.length; i++){
-        if ((Number(data[i][0]) || 0) === id){ sh.deleteRow(i + 1); return {ok: true, removed: true, count: 1}; }
+        if ((Number(data[i][0]) || 0) === id){
+          var _cg2 = _closedGuard(data[i][4]); if (_cg2) return _cg2;   // v7.291 дата з рядка
+          sh.deleteRow(i + 1); return {ok: true, removed: true, count: 1}; }
       }
       return {ok: true, removed: false, count: 0};
     }
@@ -15079,6 +15101,7 @@ function saveDopSplit(body){
   var grp  = trim(String(body.group || ''));
   var parts = _splitPartsOf(body.parts === undefined ? 2 : body.parts);
   if (!loc || !act || !date || !grp) return {ok:false, error:'loc/activityId/date/group обовʼязкові'};
+  var _cg = _closedGuard(date); if (_cg) return _cg;   // v7.291
   var lock = LockService.getScriptLock();
   try { lock.waitLock(20000); } catch(e){ return {ok:false, error:'LOCK_TIMEOUT'}; }
   try {
@@ -15113,6 +15136,7 @@ function savePredSplit(body){
   var grp  = trim(String(body.group || ''));
   var parts = _splitPartsOf(body.parts === undefined ? 2 : body.parts);
   if (!loc || !subj || !date || !grp) return {ok:false, error:'loc/subject/date/group обовʼязкові'};
+  var _cg = _closedGuard(date); if (_cg) return _cg;   // v7.291
   var lock = LockService.getScriptLock();
   try { lock.waitLock(20000); } catch(e){ return {ok:false, error:'LOCK_TIMEOUT'}; }
   try {
@@ -15274,6 +15298,7 @@ function savePredMerge(body){
     if (!loc || !subj || !date){
       return {ok: false, error: 'Поля loc / subject / date обовʼязкові'};
     }
+    var _cg = _closedGuard(date); if (_cg) return _cg;   // v7.291
     var seen = {}, groups = [];
     (Array.isArray(body.groups) ? body.groups : []).forEach(function(g){
       var raw = String(g || '').trim();
@@ -15338,7 +15363,9 @@ function deletePredMerge(body){
     for (var i = 1; i < data.length; i++){
       var r = _parsePredMergeRow(data[i]);
       var hit = id ? (r.id === id) : (r.loc === loc && r.subject === subj && r.date === date);
-      if (hit){ sh.deleteRow(i + 1); return {ok: true, removed: true}; }
+      if (hit){
+        var _cg = _closedGuard(r.date); if (_cg) return _cg;   // v7.291
+        sh.deleteRow(i + 1); return {ok: true, removed: true}; }
     }
     return {ok: true, removed: false};
   } catch(e){
@@ -15500,6 +15527,7 @@ function addChomusykyMark(data){
   var loc   = String(data.loc || '').trim();
   var child = String(data.child || '').trim();
   if (!date || !loc || !child) return {ok: false, error: 'Поля date / loc / child обовʼязкові'};
+  var _cg = _closedGuard(date); if (_cg) return _cg;   // v7.291
   var lock = LockService.getScriptLock();
   try { lock.waitLock(30000); }
   catch(e){ return {ok: false, error: 'LOCK_TIMEOUT: ' + (e && e.message || e)}; }
@@ -15541,7 +15569,9 @@ function removeChomusykyMark(body){
     for (var i = 1; i < data.length; i++){
       var r = _parseChomusykyRow(data[i]);
       var hit = id ? (r.id === id) : (r.loc === loc && r.child === child && r.date === date);
-      if (hit){ sh.deleteRow(i + 1); return {ok: true, removed: true}; }
+      if (hit){
+        var _cg = _closedGuard(r.date); if (_cg) return _cg;   // v7.291
+        sh.deleteRow(i + 1); return {ok: true, removed: true}; }
     }
     return {ok: true, removed: false};
   } catch(e){
@@ -15678,6 +15708,7 @@ function addAttendanceMark(data){
   if (!date || !child || !actId){
     return {ok: false, error: 'Поля Дата / Дитина / id_заняття обовʼязкові'};
   }
+  var _cg = _closedGuard(date); if (_cg) return _cg;   // v7.291 закритий місяць
   // DEDUP-GUARD (дзеркало bulkAttendanceMarks): під LockService перевіряємо
   // _attDupKey (Дата + Дитина норм + id_заняття) проти існуючих рядків — якщо
   // такий запис уже є, НЕ дублюємо (повертаємо існуючий id, dup:true). Лок також
@@ -15744,6 +15775,9 @@ function _marksActorInfo(actorId){
 }
 // '' = дозволено; інакше текст відмови. dateInput — ISO, dd.mm.yyyy або Date.
 function _marksDateLockError(dateInput, isCfo){
+  // v7.291: спершу жорсткий замок «Закриті_Місяці» — він діє і на CFO.
+  var _cg = _closedGuard(dateInput);
+  if (_cg) return 'CLOSED_MONTH: ' + _cg.error;
   if (isCfo) return '';
   var iso = (dateInput instanceof Date)
     ? Utilities.formatDate(dateInput, MARKS_LOCK_TZ, 'yyyy-MM-dd')
@@ -16430,6 +16464,7 @@ function exportAttendanceToPayments(params){
     if (force && !srcMonthOne) return {ok:false, error:'force вимагає явний month (source-місяць)'};
     if (force && !dryRun && params.confirm !== 'YES_FORCE')
       return {ok:false, error:'force-запис вимагає confirm:"YES_FORCE"'};
+    if (srcMonthOne && !dryRun){ var _cg = _closedGuard({year: year, month: srcMonthOne}); if (_cg) return _cg; }   // v7.291 джерельний місяць
     Logger.log('[exportAttendanceToPayments] START loc="%s" year=%s srcMonthOne=%s', loc, year, srcMonthOne);
 
     // === 1. Відмітки → бакети (ПІБ × target-місяць). target = _nextMonth(місяць САМОЇ відмітки). ===
@@ -16493,10 +16528,12 @@ function exportAttendanceToPayments(params){
       _journalMonthsForPayment(loc, year).forEach(function(m){ monthsToProcess[m] = true; });
     }
     var monthList = Object.keys(monthsToProcess).map(Number).sort(function(a,b){ return a - b; });
-    // v7.91: закриті target-місяці НЕ чіпаємо
+    // v7.91: закриті target-місяці НЕ чіпаємо. v7.291: і target-місяці, чиє ДЖЕРЕЛО
+    // (попередній місяць відміток) закрите — інакше повний прогін перерахував би їх.
     var _closedSet = _closedMonthsSet();
-    var skippedClosed = monthList.filter(function(m){ return _closedSet[year + '-' + m]; });
-    monthList = monthList.filter(function(m){ return !_closedSet[year + '-' + m]; });
+    function _tgtLocked(m){ var sy = (m === 1) ? year - 1 : year, sm = (m === 1) ? 12 : m - 1; return !!(_closedSet[year + '-' + m] || _closedSet[sy + '-' + sm]); }
+    var skippedClosed = monthList.filter(_tgtLocked);
+    monthList = monthList.filter(function(m){ return !_tgtLocked(m); });
 
     // === 4. Пер-місячний запис через журнальну дельту (base + newSum) ===
     // baseValue = поточне − last_written(журнал(loc,'payment',ПІБ,target)); newCell = base + newSum.
@@ -16669,6 +16706,7 @@ function addMealMark(body){
       var child = String(mk.child||'').trim();
       var itemId = Number(mk.itemId)||0;
       if (!date || !child || !itemId){ errors.push('пропущено (date/child/itemId): '+JSON.stringify(mk)); return; }
+      var _cg = _closedGuard(date); if (_cg){ errors.push('закритий місяць: '+date+' '+child); skipped++; return; }   // v7.291
       var k = _mealDupKey(date, child, itemId, tz);
       if (mk.remove){ if (typeof existing[k]==='number'){ toDelete.push(existing[k]); delete existing[k]; removed++; } return; }
       if (existing.hasOwnProperty(k)){ skipped++; return; }
@@ -16722,6 +16760,7 @@ function exportMealToPayments(params){
     var year = Number(params.year) || new Date().getFullYear();
     var srcMonthOne = Number(params.month) || 0;
     var dryRun = (params.dryRun !== false);   // v7.104 default TRUE
+    if (srcMonthOne && !dryRun){ var _cg = _closedGuard({year: year, month: srcMonthOne}); if (_cg) return _cg; }   // v7.291
     var reg = _getLocationPaymentRegistry(loc);
     if (!reg || !reg.sheetId) return {ok:false, error:'Локацію "'+loc+'" не знайдено в CONFIG-реєстрі'};
     var _cpm = reg.colsPerMonth || 5, _LO = _paymentLayout(_cpm);
@@ -16772,9 +16811,10 @@ function exportMealToPayments(params){
     else { Object.keys(monthsTouched).forEach(function(m){ monthsToProcess[Number(m)]=true; });
            _journalMonthsForKind(loc, year, 'meal').forEach(function(m){ monthsToProcess[m]=true; }); }
     var monthList = Object.keys(monthsToProcess).map(Number).sort(function(a,b){ return a-b; });
-    var _closedSet = _closedMonthsSet();
-    var skippedClosed = monthList.filter(function(m){ return _closedSet[year+'-'+m]; });
-    monthList = monthList.filter(function(m){ return !_closedSet[year+'-'+m]; });
+    var _closedSet = _closedMonthsSet();   // v7.291: + target, чиє джерело закрите
+    function _tgtLocked(m){ var sy = (m === 1) ? year - 1 : year, sm = (m === 1) ? 12 : m - 1; return !!(_closedSet[year+'-'+m] || _closedSet[sy+'-'+sm]); }
+    var skippedClosed = monthList.filter(_tgtLocked);
+    monthList = monthList.filter(function(m){ return !_tgtLocked(m); });
 
     // 4. Пер-місячний запис у Бюджет-харчування через журнал (base + newSum)
     var updated=0, totalAmount=0, cellsWritten=0, formulaConverted=0, details=[], perMonth=[];
@@ -18192,7 +18232,11 @@ function _getClosedMonthsSheet(createIfMissing){
   return sh;
 }
 // Множина закритих місяців → { "2026-7": true, ... }. Один прохід для циклів.
+// v7.291: memo на час виконання — bulk-маршрути перевіряють замок на кожен рядок,
+// і без цього кожна перевірка читала б лист «Закриті_Місяці». closeMonth скидає.
+var _CLOSED_SET_MEMO = null;
 function _closedMonthsSet(){
+  if (_CLOSED_SET_MEMO) return _CLOSED_SET_MEMO;
   var set = {};
   try {
     var sh = _getClosedMonthsSheet(false); if (!sh) return set;
@@ -18202,7 +18246,34 @@ function _closedMonthsSet(){
       if (y && m >= 1 && m <= 12) set[y + '-' + m] = true;
     }
   } catch(_e){}
+  _CLOSED_SET_MEMO = set;
   return set;
+}
+// v7.291: ЖОРСТКИЙ замок закритого місяця для даних з датою (відмітки, уроки, Табель,
+// обʼєднання/поділи, харчування). Без винятку для CFO — вимикач і так у CFO (лист
+// «Закриті_Місяці»). dateInput: ISO / 'DD.MM.YYYY' / Date / {year,month}.
+// Повертає null або обʼєкт-відмову {ok:false, closedMonth:true, code:'CLOSED_MONTH', error}.
+function _closedGuard(dateInput){
+  var y = 0, m = 0;
+  if (dateInput && typeof dateInput === 'object' && !(dateInput instanceof Date)){
+    y = Number(dateInput.year) || 0; m = Number(dateInput.month) || 0;
+  } else {
+    var iso = (dateInput instanceof Date) ? _attDateFast(dateInput) : _attDateIso(dateInput, 'Europe/Kiev');
+    var mm = /^(\d{4})-(\d{2})/.exec(String(iso || ''));
+    if (!mm) return null;                     // нечитабельна дата — хай валідує сам маршрут
+    y = Number(mm[1]); m = Number(mm[2]);
+  }
+  if (!y || !m) return null;
+  return _isMonthClosed(y, m) ? _closedMonthError(y, m) : null;
+}
+// Експорт: блокуємо, якщо закритий ДЖЕРЕЛЬНИЙ місяць (відмітки) або ЦІЛЬОВИЙ (колонка
+// наступного місяця, де вже виплачено). Липневі відмітки → серпнева колонка: закритий
+// липень захищає їх навіть якщо серпень у листі ще не закрито.
+function _closedGuardExport(year, month){
+  var g = _closedGuard({year: year, month: month});
+  if (g) return g;
+  var t = _nextMonth(month, year);
+  return _closedGuard({year: t.year, month: t.month});
 }
 function _isMonthClosed(year, month){
   var y = Number(year) || 0, m = Number(month) || 0;
@@ -18211,8 +18282,8 @@ function _isMonthClosed(year, month){
 }
 // Стандартна відмова при спробі запису в закритий місяць.
 function _closedMonthError(year, month){
-  return {ok: false, closedMonth: true,
-          error: 'Місяць ' + month + '/' + year + ' ЗАКРИТИЙ — запис у Payment заблоковано. Відкрийте місяць у «Закриті_Місяці», щоб змінювати.'};
+  return {ok: false, closedMonth: true, code: 'CLOSED_MONTH',
+          error: 'Місяць ' + month + '/' + year + ' закритий CFO — запис заблоковано (відмітки, уроки, Табель, Payment, Salary). Щоб змінити, відкрийте місяць у «Закриті_Місяці».'};
 }
 // READ: перелік закритих місяців.
 function getClosedMonths(){
@@ -18240,6 +18311,7 @@ function closeMonth(body){
     var year = Number(body.year), month = Number(body.month);
     var by = String(body.by || body.markedBy || '').trim();
     if (!year || month < 1 || month > 12) return {ok: false, error: 'year/month(1-12) обовʼязкові'};
+    _CLOSED_SET_MEMO = null;   // v7.291
     var sh = _getClosedMonthsSheet(true);
     var data = sh.getDataRange().getValues();
     for (var i = 1; i < data.length; i++){
@@ -19845,6 +19917,7 @@ function exportToSalaryExtras(params){
     var dryRun = (params.dryRun === true); // v7.284: прев'ю без запису (як у exportAttendanceToPayments)
     if (!loc) return {ok: false, error: 'Параметр loc обовʼязковий'};
     if (!month || month < 1 || month > 12) return {ok: false, error: 'month має бути 1-12'};
+    if (!dryRun){ var _cg = _closedGuardExport(year, month); if (_cg) return _cg; }   // v7.291
 
     var monthName = MONTHS_CAL_UA[month - 1];
 
@@ -25544,6 +25617,7 @@ function exportPredmetnyToSalary(params){
     var year = Number(params.year) || new Date().getFullYear();
     if (!loc) return {ok: false, error: 'Параметр loc обовʼязковий'};
     if (!month || month < 1 || month > 12) return {ok: false, error: 'month має бути 1-12'};
+    { var _cg = _closedGuardExport(year, month); if (_cg) return _cg; }   // v7.291
     Logger.log('[exportPredmetnyToSalary] START loc="%s" month=%s year=%s', loc, month, year);
     var monthName = MONTHS_CAL_UA[month - 1];
 
@@ -29880,6 +29954,7 @@ function exportPredmetnykyToSalary(params){
     // (reexportAllSalaryJune, reexportLocationFull викликають без параметра і
     // мають далі писати). Вмикається лише явним dryRun:true.
     var dryRun  = (params.dryRun === true);
+    if (!dryRun && month >= 1 && month <= 12){ var _cg = _closedGuardExport(year, month); if (_cg) return _cg; }   // v7.291
     var force   = (params.force === true);   // v7.197: обхід guard'а нульових уроків
 
     if (!loc) return {ok:false, error:'loc обовʼязковий'};
@@ -31181,13 +31256,14 @@ function importPredmetnykyLessons(actorId, body){
         have[_predLessonDupKey(r[2], r[3], r[4], r[5])] = true;
       });
 
-      var toAppend = [], skippedDup = 0, skippedBad = 0, byMonth = {}, byLoc = {};
+      var toAppend = [], skippedDup = 0, skippedBad = 0, skippedClosed = 0, byMonth = {}, byLoc = {};
       var nextId = _nextPredLessonId(sh);
 
       incoming.forEach(function(x){
         if (!x.loc || !x.group || !x.subject || !x.date){ skippedBad++; return; }
         var ym = _lessonYearMonth(x.date);
         if (!ym){ skippedBad++; return; }
+        if (_isMonthClosed(ym.y, ym.m)){ skippedClosed++; return; }   // v7.291
         var key = _predLessonDupKey(x.loc, x.group, x.subject, x.date);
         if (have[key]){ skippedDup++; return; }
         have[key] = true;
@@ -31211,11 +31287,11 @@ function importPredmetnykyLessons(actorId, body){
 
       if (dryRun){
         return {ok:true, dryRun:true, wouldInsert:toAppend.length,
-                skippedDuplicates:skippedDup, skippedBad:skippedBad,
+                skippedDuplicates:skippedDup, skippedBad:skippedBad, skippedClosed:skippedClosed,
                 byMonth:byMonth, byLoc:byLoc};
       }
       if (!toAppend.length){
-        return {ok:true, inserted:0, skippedDuplicates:skippedDup, skippedBad:skippedBad,
+        return {ok:true, inserted:0, skippedDuplicates:skippedDup, skippedBad:skippedBad, skippedClosed:skippedClosed,
                 note:'усе вже є в аркуші'};
       }
 

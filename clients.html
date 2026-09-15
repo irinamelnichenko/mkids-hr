@@ -2616,7 +2616,31 @@ function isCFO(){
 function _editIsoOf(d){
   return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
 }
+// ── v7.291: ЗАКРИТІ МІСЯЦІ (лист «Закриті_Місяці», CFO) — жорсткий замок, діє і на CFO.
+// Список тягнемо з getClosedMonths раз на 5 хв (кеш у localStorage), перевірка синхронна.
+// Бекенд перевіряє те саме (CLOSED_MONTH) — фронт лише не дає клікнути.
+var _CLOSED_KEY = 'mkids_closed_months_v1';
+function _closedMonthsList(){
+  try { var c = JSON.parse(localStorage.getItem(_CLOSED_KEY) || 'null'); if (c && c.items && Date.now() - c.ts < 5 * 60 * 1000) return c.items; } catch(e){}
+  return null;
+}
+function _isClosedMonthISO(iso){
+  var list = _closedMonthsList(); if (!list || !iso) return false;
+  var m = /^(\d{4})-(\d{2})/.exec(String(iso)); if (!m) return false;
+  var y = Number(m[1]), mo = Number(m[2]);
+  for (var i = 0; i < list.length; i++) if (Number(list[i].year) === y && Number(list[i].month) === mo) return true;
+  return false;
+}
+(function _loadClosedMonths(){
+  if (_closedMonthsList()) return;
+  try {
+    fetch(CFG.SCRIPT_URL + '?action=getClosedMonths', {redirect:'follow'}).then(function(r){ return r.json(); }).then(function(j){
+      if (j && j.ok && Array.isArray(j.items)) try { localStorage.setItem(_CLOSED_KEY, JSON.stringify({ts: Date.now(), items: j.items})); } catch(e){}
+    }).catch(function(){});
+  } catch(e){}
+})();
 function isWeekLocked(dateISO){
+  if (_isClosedMonthISO(dateISO)) return true;   // v7.291 закритий місяць — і для CFO
   if (isCFO()) return false;
   if (!dateISO) return true;
   var now = new Date();
