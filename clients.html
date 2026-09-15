@@ -250,6 +250,7 @@ tbody tr.clickable:hover td{background:#f0f7ff}
 .att-mode-bar{display:flex;gap:8px;margin-bottom:14px;align-items:center;flex-wrap:wrap}
 .att-mode-btn{padding:7px 14px;border:2px solid #e8ecf0;border-radius:8px;background:#fff;font-size:13px;font-weight:600;cursor:pointer;color:var(--gray);transition:all .2s}
 .att-mode-btn.active{border-color:var(--green);background:var(--green);color:#fff}
+details.card>summary::-webkit-details-marker{display:none}details.card[open]>summary{border-bottom:1px solid var(--line,#e8ecf0)}
 .att-chip{padding:5px 12px;border:1.5px solid #e8ecf0;border-radius:20px;background:#fff;font-size:12px;font-weight:600;cursor:pointer;color:var(--gray);transition:all .2s}
 .att-chip-active{border-color:var(--blue2);background:var(--blue2);color:#fff}
 .att-loc-row td{background:#eef4ff;color:var(--dark);font-weight:700;font-size:12px;padding:6px 10px;border-top:2px solid var(--blue2)}
@@ -1988,6 +1989,22 @@ function sortGroupsCanonical(groups){
 function sortChildrenAlpha(children){
   return children.slice().sort(function(a,b){ return String(a.name||'').localeCompare(String(b.name||''),'uk'); });
 }
+// v7.281: у списку — лише діти з бюджетом або фактом за обраний місяць.
+// Рядок Payment із нулями за місяць = дитина пішла, а рядок у файлі лишили.
+function _hasMonthMoney(ch){ return (+(ch.budget||0))>0 || (+(ch.factTotal||0))>0; }
+// Останній місяць 2026 з фактом — з S.yearlyData (якщо вже завантажено), інакше «—».
+function _lastPaidMonthCell(ch){
+  try{
+    if(!S.yearlyData||!S.yearlyData.length) return '<span style="color:var(--gray2)">—</span>';
+    var nm=String(ch.name||'').trim().toLowerCase(), loc=String(ch.loc||'').trim(), row=null;
+    for(var i=0;i<S.yearlyData.length;i++){ var r=S.yearlyData[i]; if(String(r['Локація']||'').trim()===loc && String(r["Ім'я дитини"]||'').trim().toLowerCase()===nm){ row=r; break; } }
+    if(!row) return '<span style="color:var(--gray2)">—</span>';
+    var last='';
+    CFG.MONTHS_DISP.forEach(function(m){ var f=(+(row[m+'-Факт-навч']||0))+(+(row[m+'-Факт-доп']||0)); if(f>0) last=m; });
+    return last?('<span style="font-size:12px">'+esc(last)+'</span>'):'<span style="color:var(--gray2)">не платили в 2026</span>';
+  }catch(e){ return '—'; }
+}
+
 // Картка не в Payment — показувати як «нову» лише якщо вона жива.
 // Випускники/розірвані живуть в «Архіві», вибулі з Payment зі статусом active — у «Потребують уваги».
 var _NEW_CLIENT_STATUSES={active:1,adaptation:1,future:1,paused:1};
@@ -2985,6 +3002,7 @@ function calcStats(locsArr, groupFilter){
     if(groupFilter) groups=groups.filter(function(g){ return g.group===groupFilter; });
     groups.forEach(function(g){
       g.children.forEach(function(ch){
+        if(!_hasMonthMoney(ch)) return;   // v7.281: нульові рядки не рахуємо
         totalKids++;
         if(ch.status==='debt'||ch.status==='nopay'){
           debtors++;
@@ -3143,8 +3161,9 @@ function renderClients(){
       : groups;
     if(!filtGroups.length) return;
 
-    var locKids=0,locDebt=0,locDebtors=0;
+    var locKids=0,locDebt=0,locDebtors=0, zeroRows=[];
     filtGroups.forEach(function(g){ g.children.forEach(function(ch){
+      if(!_hasMonthMoney(ch)){ zeroRows.push({ch:ch, grp:g}); return; }   // v7.281: у згорнуту секцію
       locKids++;
       if(ch.status==='debt'||ch.status==='nopay'){
         locDebtors++;
@@ -3163,6 +3182,7 @@ function renderClients(){
 
     filtGroups.forEach(function(grp){
       var children=grp.children.filter(function(ch){
+        if(!_hasMonthMoney(ch)) return false;   // v7.281: без грошей за місяць — не в основній таблиці
         if(S.onlyDebtors && ch.status!=='debt' && ch.status!=='nopay') return false;
         if(S.selStatus){
           var chSt=(ch.status==='nopay'?'debt':ch.status);
@@ -3269,6 +3289,26 @@ function renderClients(){
       });
       html+='</tbody></table></div></div>';
     });
+    // v7.281: нульові рядки — згорнуто, з діями статусу, щоб вибулих було видно й можна було закрити
+    if(zeroRows.length && !S.onlyDebtors && !S.selStatus){
+      var zr=zeroRows.filter(function(z){ return !searching || z.ch.name.toLowerCase().indexOf(S.searchQ.trim().toLowerCase())>=0; });
+      if(zr.length){
+        zr.sort(function(a,b){ return String(a.grp.group).localeCompare(String(b.grp.group),'uk') || String(a.ch.name).localeCompare(String(b.ch.name),'uk'); });
+        html+='<details class="card" style="margin-bottom:16px"><summary style="cursor:pointer;padding:12px 16px;font-weight:650;list-style:none">⏸ Без бюджету за '+esc(mName)+' <span style="font-weight:400;color:var(--gray)">— '+zr.length+' '+(zr.length===1?'рядок':'рядків')+' у Payment із нулями за місяць: імовірно вибули, рядок у файлі лишили</span></summary>'
+          +'<div class="tbl-wrap"><table><thead><tr><th>Ім\'я дитини</th><th>Група</th><th>Статус картки</th><th>Остання оплата</th><th></th></tr></thead><tbody>';
+        var stLbl={active:'✅ активна',future:'📅 майбутній',adaptation:'🌱 адаптація',paused:'⏸ призупинено',terminated:'❌ розірвана',graduate:'🎓 випускник',graduated:'🎓 випускник'};
+        zr.forEach(function(z){
+          var ch=z.ch, card=S.crm[ch.id]||null, st=card?String(card.status||'active'):'';
+          var idJ=escAttrJS(ch.id||''), grpJ=escAttrJS(ch.group||''), locJ=escAttrJS(ch.loc||''), nmJ=escAttrJS(ch.name||'');
+          var canSt=card && typeof canTerminate==='function' && canTerminate(ch.loc) && (st==='active'||st==='adaptation'||st==='future'||st==='paused');
+          var acts=(canSt?'<button class="btn btn-xs" style="background:#27ae60;color:#fff;border-color:#27ae60" onclick="event.stopPropagation();naGraduate('+idJ+')">🎓 Випускник</button> '
+                       +'<button class="btn btn-xs" style="background:#c0392b;color:#fff;border-color:#c0392b" onclick="event.stopPropagation();naTerminate('+idJ+')">🚪 Розірвати</button> ':'')
+                   +(card?'<button class="btn btn-xs" onclick="event.stopPropagation();openChild('+idJ+','+grpJ+',\'\','+locJ+','+nmJ+')">Картка</button>':'<span style="color:var(--gray2);font-size:12px">картки немає</span>');
+          html+='<tr><td>'+esc(ch.name)+'</td><td>'+esc(z.grp.group)+'</td><td>'+(card?'<span class="badge bg">'+(stLbl[st]||st)+'</span>':'—')+'</td><td>'+_lastPaidMonthCell(ch)+'</td><td style="white-space:nowrap">'+acts+'</td></tr>';
+        });
+        html+='</tbody></table></div></details>';
+      }
+    }
     html+='</div>';
   });
 
@@ -3282,8 +3322,7 @@ function renderClients(){
     var statusLabel={active:'✅ Активний',future:'📅 Майбутній',adaptation:'🌱 Адаптація',paused:'⏸ Призупинено',terminated:'❌ Розірваний',graduate:'🎓 Випускник',graduated:'🎓 Випускник'};
     crmFiltered.sort(function(a,b){ var A=S.crm[a],B=S.crm[b]; return String(A.loc||'').localeCompare(String(B.loc||''),'uk') || String(A.name||'').localeCompare(String(B.name||''),'uk'); });
     html+='<div class="loc-section">'
-      +'<div class="loc-title">📋 Нові клієнти <span style="font-size:13px;font-weight:400;color:var(--gray)">картка є, у Payment ще немає — '+crmFiltered.length+' дітей</span></div>'
-      +'<div class="card" style="margin-bottom:16px">'
+      +'<details class="card" style="margin-bottom:16px"><summary style="cursor:pointer;padding:12px 16px;font-weight:650;list-style:none">📋 Нові клієнти <span style="font-weight:400;color:var(--gray)">— картка є, у Payment ще немає: '+crmFiltered.length+' '+(crmFiltered.length===1?'дитина':'дітей')+'</span></summary>'
       +'<div class="tbl-wrap"><table><thead><tr>'
       +'<th>Ім\'я дитини</th><th>Локація</th><th>Група</th><th>Статус клієнта</th><th>Телефон</th><th></th>'
       +'</tr></thead><tbody>';
@@ -3302,9 +3341,8 @@ function renderClients(){
         +'<td>'+(phone?'<a href="tel:'+esc(phone)+'" onclick="event.stopPropagation()" class="call-btn">📞 Дзвонити</a>':'')+'</td>'
         +'</tr>';
     });
-    html+='</tbody></table></div></div></div>';
+    html+='</tbody></table></div></details></div>';
   }
-
 
   // Якщо жодної групи не відрендерено — показуємо повідомлення
   if(totalGroupsRendered===0){
