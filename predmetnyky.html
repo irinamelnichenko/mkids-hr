@@ -438,6 +438,7 @@ select,input,textarea{font-family:inherit}
 .pred-card-contact{font-size:13px;color:var(--gray);gap:4px}
 .pred-card-total{margin-top:4px;padding-top:8px;border-top:1px dashed #eef1f4;
   font-size:14px}
+.pred-card-target{color:var(--gray,#6b7075);font-size:12px;white-space:nowrap}
 .pred-card-sum{color:#16a085;font-size:16px;font-weight:800}
 .pred-card-btn{background:transparent;border:none;cursor:pointer;
   font-size:12px;color:var(--blue);font-weight:600;padding:2px 6px;
@@ -2446,18 +2447,24 @@ function renderHeaderCard(loc, subject){
         '⚠️ Немає ставки в каталозі — додай у Предметники_Каталог</div>';
 
   // ── Total row ──
+  // v7.283: явно кажемо, у ЯКИЙ місяць Salary іде сума — експорт предметників
+  // пише її в наступний місяць (ЗП за вересень платиться в жовтні), і директорки
+  // шукали її у вересневій колонці.
+  var _tm = (Number(S.month) === 12) ? 1 : Number(S.month) + 1;
+  var _ty = (Number(S.month) === 12) ? Number(S.year) + 1 : Number(S.year);
+  var _targetNote = ' <span class="pred-card-target">→ у Salary за <strong>' + MONTHS[_tm - 1] + (_ty !== Number(S.year) ? ' ' + _ty : '') + '</strong></span>';
   var totalHtml;
   if (rate != null){
     totalHtml = '<div class="pred-card-row pred-card-total">' +
       '<span class="pred-card-lbl">Разом за місяць:</span> ' +
       '<strong>' + total + '</strong> ' + pluralUk(total, 'заняття', 'заняття', 'занять') + _mergeNote +
       ' × ' + fmtN(rate) + '₴ = ' +
-      '<strong class="pred-card-sum">' + fmtN(total * rate) + '₴</strong>' +
+      '<strong class="pred-card-sum">' + fmtN(total * rate) + '₴</strong>' + _targetNote +
     '</div>';
   } else {
     totalHtml = '<div class="pred-card-row pred-card-total">' +
       '<span class="pred-card-lbl">Разом за місяць:</span> ' +
-      '<strong>' + total + '</strong> ' + pluralUk(total, 'заняття', 'заняття', 'занять') + _mergeNote +
+      '<strong>' + total + '</strong> ' + pluralUk(total, 'заняття', 'заняття', 'занять') + _mergeNote + _targetNote +
     '</div>';
   }
 

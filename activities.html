@@ -3335,6 +3335,53 @@ async function _loadGridSplits(force){
   return ATT.gridSplits;
 }
 
+// ═══ v7.283: ПІДСУМОК ЗП ЗА МІСЯЦЬ ПІД ШАПКОЮ СІТКИ ═══════════════════════
+// Директорки шукали суму за вересень у вересневій колонці Salary, а експорт
+// пише її в НАСТУПНИЙ місяць (ЗП за вересень платиться в жовтні). Тому рядок
+// каже прямо: скільки одиниць × ставка = сума → у Salary за який місяць.
+// Рахунок — дзеркало бекенду (_dopCountSessions + поділи v7.265): по ВСІХ
+// групах локації для цього заняття за місяць сітки; обʼєднання схлопують,
+// поділ множить групу, якщо вона того дня не всередині обʼєднання.
+function _gridPayoutSummary(act){
+  try {
+    var aid = Number(act.id);
+    var marks = (ATT.gridMarks || []).filter(function(m){ return Number(m.activityId) === aid; });
+    var model = act.teacherModel || '', rate = Number(act.teacherRate) || 0;
+    var nextM = ATT.gridMonth === 12 ? 1 : ATT.gridMonth + 1;
+    var nextY = ATT.gridMonth === 12 ? ATT.gridYear + 1 : ATT.gridYear;
+    var target = ATT_MONTHS_UA[nextM - 1] + (nextY !== ATT.gridYear ? ' ' + nextY : '');
+    if (!marks.length) return '<div class="attg-mstatus off">Σ За ' + escapeHtml(ATT_MONTHS_UA[ATT.gridMonth - 1]) + ' відміток ще немає → у Salary за ' + escapeHtml(target) + ' піде 0</div>';
+    var units = 0, unitWord = '';
+    if (model === 'За дитину'){ units = marks.length; unitWord = 'відміт.'; }
+    else if (model === 'За захід'){ units = Object.keys(_anaGroupsByDate(marks)).length; unitWord = 'захід(ів)'; }
+    else {
+      var gbd = _anaGroupsByDate(marks);
+      var mergesForAct = {};
+      (ATT.gridMerges || []).forEach(function(m){
+        if (Number(m.activityId) !== aid) return;
+        var set = (m.groups || []).map(_mrgNormGroup).filter(Boolean); if (set.length < 2) return;
+        (mergesForAct[m.date] = mergesForAct[m.date] || []).push(set);
+      });
+      units = _anaCountSessions(gbd, mergesForAct);
+      // поділи: +parts-1 за групу з відмітками того дня, якщо вона не всередині обʼєднання
+      (ATT.gridSplits || []).forEach(function(x){
+        if (Number(x.activityId) !== aid || !(Number(x.parts) > 1)) return;
+        var day = gbd[x.date]; if (!day) return;
+        var ng = _mrgNormGroup(x.group); if (!day[ng]) return;
+        var inMerge = (mergesForAct[x.date] || []).some(function(set){ return set.indexOf(ng) >= 0; });
+        if (!inMerge) units += Number(x.parts) - 1;
+      });
+      unitWord = 'занять';
+    }
+    var sum = units * rate;
+    var txt = 'Σ Разом за ' + escapeHtml(ATT_MONTHS_UA[ATT.gridMonth - 1]) + ' (усі групи): <b>' + units + ' ' + unitWord + '</b>'
+      + (rate ? ' × ' + fmtUah(rate) + ' ₴ = <b>' + fmtUah(sum) + ' ₴</b>' : ' · <b>ставки в каталозі немає</b>')
+      + ' → <b>у Salary за ' + escapeHtml(target) + '</b>'
+      + '<span style="opacity:.75"> · модель «' + escapeHtml(model || '—') + '»; заняття цього місяця платяться в наступному</span>';
+    return '<div class="attg-mstatus ' + (rate ? 'on' : 'off') + '">' + txt + '</div>';
+  } catch(e){ return ''; }
+}
+
 // Поділи поточного заняття в цей день: {normGroup: parts}
 function _splitsForDay(iso){
   var out = {};
@@ -3426,6 +3473,7 @@ function renderMonthGrid(){
     '</div>';
 
   if (!act){ wrap.innerHTML = head + '<div class="attg-empty">Оберіть заняття зі списку.</div>'; return; }
+  head += _gridPayoutSummary(act);   // v7.283: «Разом за місяць: N × ставка = сума → у Salary за <наступний місяць>»
   if (!ATT.children.length){ wrap.innerHTML = head + '<div class="attg-empty">У групі «' + escapeHtml(ATT.group) + '» немає дітей.</div>'; return; }
 
   var days = _gridDaysOf(ATT.gridYear, ATT.gridMonth);
