@@ -1989,9 +1989,16 @@ function sortGroupsCanonical(groups){
 function sortChildrenAlpha(children){
   return children.slice().sort(function(a,b){ return String(a.name||'').localeCompare(String(b.name||''),'uk'); });
 }
-// v7.281: у списку — лише діти з бюджетом або фактом за обраний місяць.
-// Рядок Payment із нулями за місяць = дитина пішла, а рядок у файлі лишили.
-function _hasMonthMoney(ch){ return (+(ch.budget||0))>0 || (+(ch.factTotal||0))>0; }
+// v7.282: у списку — за СТАТУСОМ КАРТКИ, не за грошима (v7.281 скасовано: дитина
+// у відпустці чи та, що заплатила наперед, має бути в списку). active /
+// adaptation / future / paused → у групі; graduated / terminated і рядки Payment
+// без картки → згорнута секція «Без активної картки».
+function _listIsLive(ch){
+  var card=ch && ch.id ? S.crm[ch.id] : null;
+  if(!card) return false;
+  return _isLiveCardStatus(card.status);
+}
+function _hasMonthMoney(ch){ return (+(ch.budget||0))>0 || (+(ch.factTotal||0))>0; }   // лишено для підказок
 // Останній місяць 2026 з фактом — з S.yearlyData (якщо вже завантажено), інакше «—».
 function _lastPaidMonthCell(ch){
   try{
@@ -3002,7 +3009,7 @@ function calcStats(locsArr, groupFilter){
     if(groupFilter) groups=groups.filter(function(g){ return g.group===groupFilter; });
     groups.forEach(function(g){
       g.children.forEach(function(ch){
-        if(!_hasMonthMoney(ch)) return;   // v7.281: нульові рядки не рахуємо
+        if(!_listIsLive(ch)) return;   // v7.282: рахуємо лише дітей з живою карткою
         totalKids++;
         if(ch.status==='debt'||ch.status==='nopay'){
           debtors++;
@@ -3163,7 +3170,7 @@ function renderClients(){
 
     var locKids=0,locDebt=0,locDebtors=0, zeroRows=[];
     filtGroups.forEach(function(g){ g.children.forEach(function(ch){
-      if(!_hasMonthMoney(ch)){ zeroRows.push({ch:ch, grp:g}); return; }   // v7.281: у згорнуту секцію
+      if(!_listIsLive(ch)){ zeroRows.push({ch:ch, grp:g}); return; }   // v7.282: закрита картка / без картки → згорнута секція
       locKids++;
       if(ch.status==='debt'||ch.status==='nopay'){
         locDebtors++;
@@ -3182,7 +3189,7 @@ function renderClients(){
 
     filtGroups.forEach(function(grp){
       var children=grp.children.filter(function(ch){
-        if(!_hasMonthMoney(ch)) return false;   // v7.281: без грошей за місяць — не в основній таблиці
+        if(!_listIsLive(ch)) return false;   // v7.282: лише жива картка в основній таблиці
         if(S.onlyDebtors && ch.status!=='debt' && ch.status!=='nopay') return false;
         if(S.selStatus){
           var chSt=(ch.status==='nopay'?'debt':ch.status);
@@ -3289,13 +3296,13 @@ function renderClients(){
       });
       html+='</tbody></table></div></div>';
     });
-    // v7.281: нульові рядки — згорнуто, з діями статусу, щоб вибулих було видно й можна було закрити
+    // v7.282: рядки без живої картки — згорнуто: закриті картки (🎓/❌) і рядки без картки
     if(zeroRows.length && !S.onlyDebtors && !S.selStatus){
       var zr=zeroRows.filter(function(z){ return !searching || z.ch.name.toLowerCase().indexOf(S.searchQ.trim().toLowerCase())>=0; });
       if(zr.length){
         zr.sort(function(a,b){ return String(a.grp.group).localeCompare(String(b.grp.group),'uk') || String(a.ch.name).localeCompare(String(b.ch.name),'uk'); });
-        html+='<details class="card" style="margin-bottom:16px"><summary style="cursor:pointer;padding:12px 16px;font-weight:650;list-style:none">⏸ Без бюджету за '+esc(mName)+' <span style="font-weight:400;color:var(--gray)">— '+zr.length+' '+(zr.length===1?'рядок':'рядків')+' у Payment із нулями за місяць: імовірно вибули, рядок у файлі лишили</span></summary>'
-          +'<div class="tbl-wrap"><table><thead><tr><th>Ім\'я дитини</th><th>Група</th><th>Статус картки</th><th>Остання оплата</th><th></th></tr></thead><tbody>';
+        html+='<details class="card" style="margin-bottom:16px"><summary style="cursor:pointer;padding:12px 16px;font-weight:650;list-style:none">⏸ Без активної картки <span style="font-weight:400;color:var(--gray)">— '+zr.length+' '+(zr.length===1?'рядок':'рядків')+' у Payment: картка закрита (🎓/❌) або її немає — вибули або помилка</span></summary>'
+          +'<div class="tbl-wrap"><table><thead><tr><th>Ім\'я дитини</th><th>Група</th><th>Статус картки</th><th data-permission="finance">Бюджет '+esc(mName)+'</th><th>Остання оплата</th><th></th></tr></thead><tbody>';
         var stLbl={active:'✅ активна',future:'📅 майбутній',adaptation:'🌱 адаптація',paused:'⏸ призупинено',terminated:'❌ розірвана',graduate:'🎓 випускник',graduated:'🎓 випускник'};
         zr.forEach(function(z){
           var ch=z.ch, card=S.crm[ch.id]||null, st=card?String(card.status||'active'):'';
@@ -3304,7 +3311,7 @@ function renderClients(){
           var acts=(canSt?'<button class="btn btn-xs" style="background:#27ae60;color:#fff;border-color:#27ae60" onclick="event.stopPropagation();naGraduate('+idJ+')">🎓 Випускник</button> '
                        +'<button class="btn btn-xs" style="background:#c0392b;color:#fff;border-color:#c0392b" onclick="event.stopPropagation();naTerminate('+idJ+')">🚪 Розірвати</button> ':'')
                    +(card?'<button class="btn btn-xs" onclick="event.stopPropagation();openChild('+idJ+','+grpJ+',\'\','+locJ+','+nmJ+')">Картка</button>':'<span style="color:var(--gray2);font-size:12px">картки немає</span>');
-          html+='<tr><td>'+esc(ch.name)+'</td><td>'+esc(z.grp.group)+'</td><td>'+(card?'<span class="badge bg">'+(stLbl[st]||st)+'</span>':'—')+'</td><td>'+_lastPaidMonthCell(ch)+'</td><td style="white-space:nowrap">'+acts+'</td></tr>';
+          html+='<tr><td>'+esc(ch.name)+'</td><td>'+esc(z.grp.group)+'</td><td>'+(card?'<span class="badge bg">'+(stLbl[st]||st)+'</span>':'<span style="color:#B3261E;font-size:12px">картки немає</span>')+'</td><td data-permission="finance">'+((+(ch.budget||0))>0?fmtN(ch.budget):'<span style="color:var(--gray2)">0</span>')+'</td><td>'+_lastPaidMonthCell(ch)+'</td><td style="white-space:nowrap">'+acts+'</td></tr>';
         });
         html+='</tbody></table></div></details>';
       }
