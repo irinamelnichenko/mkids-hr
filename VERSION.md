@@ -8,7 +8,7 @@
 | md5 | `460746c52f65b1269b08c7242914809b` |
 | Розмір | 1855709 байт |
 | Зафіксовано | 2026-09-15 |
-| Версія у проді | **v7.290** — задеплоєно 15.09.2026; v7.291 очікує деплою (ручна вставка) |
+| Версія у проді | **v7.291** — задеплоєно 15.09.2026, ping підтверджено |
 | Перевірка | `action=ping` → `pong v7.291` після деплою |
 
 ## Як це працює
@@ -61,6 +61,14 @@ curl -sL "https://script.google.com/macros/s/AKfycbyTSUVlaN4-PpXe47zCSmhVs0Qxy1F
 уже показувались і відкочувались (v7.259/v7.272); додано те саме для зняття
 відміток у місячній сітці додаткових. `saveAttendance` з `no-cors` відповіді не
 читає — там захист лише через сіру клітинку + бекенд.
+
+Перевірка на проді після деплою (POST через curl, липень закритий; усі без запису):
+`addAttendanceMark` 15.07 → CLOSED_MONTH; `bulkAttendanceMarks` 10.07 → results[0]
+MONTH_LOCK/CLOSED_MONTH, count 0; `saveDopSplit` 15.07 → CLOSED_MONTH;
+`saveAttendance` з двома липневими записами → saved 0, skippedClosed 2;
+`savePredmetnykyLesson` 15.07 від CFO (actorId 1) → CLOSED_MONTH;
+`exportToSalaryExtras` month=7 dryRun → проходить (NO_MARKS), без dryRun → CLOSED_MONTH;
+`exportAttendanceToPayments` month=7 → CLOSED_MONTH; month=8 → без замка (NO_MARKS).
 
 Наслідок: дописати минулий закритий місяць тепер можна лише відкривши його в
 «Закриті_Місяці». Зараз закриті червень і липень; **серпень варто закрити** — ЗП
