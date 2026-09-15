@@ -1968,6 +1968,31 @@ function _schoolGroupFromCard(name, loc){
   return i.card ? String(i.card.group||'').trim() : '';
 }
 
+// ═══ v7.280 ПОРЯДОК У «СПИСКУ ДІТЕЙ» ═══════════════════════════════════════
+// Групи — за віком (miniBaby → Baby → Find → Study → Preschool → школа 1→4 клас),
+// усередині одного типу — за назвою; діти в групі — за алфавітом (uk).
+// Раніше і групи, і діти йшли в порядку рядків Payment-файлу.
+var GROUP_TYPE_RANK={'miniBaby-ki':1,'Baby-ki':2,'Find-iki':3,'Study-ki':4,'Preschool':5,'Чомусики':6,'Школа':7,'ГХЗД':9};
+function _groupRank(g){
+  var t=parseGroupField(g.group||'').groupType||'';
+  if(t==='Школа'){ var m=/^\s*(\d+)/.exec(g.group||''); return 7+(m?Math.min(+m[1],9)/10:0.9); }   // 1 клас → 7.1 … 4 клас → 7.4
+  return GROUP_TYPE_RANK[t]||8;
+}
+function sortGroupsCanonical(groups){
+  return groups.slice().sort(function(a,b){
+    var ra=_groupRank(a), rb=_groupRank(b);
+    if(ra!==rb) return ra-rb;
+    return String(a.group||'').localeCompare(String(b.group||''),'uk',{numeric:true});
+  });
+}
+function sortChildrenAlpha(children){
+  return children.slice().sort(function(a,b){ return String(a.name||'').localeCompare(String(b.name||''),'uk'); });
+}
+// Картка не в Payment — показувати як «нову» лише якщо вона жива.
+// Випускники/розірвані живуть в «Архіві», вибулі з Payment зі статусом active — у «Потребують уваги».
+var _NEW_CLIENT_STATUSES={active:1,adaptation:1,future:1,paused:1};
+function _isLiveCardStatus(st){ return !!_NEW_CLIENT_STATUSES[String(st||'active').toLowerCase()]; }
+
 function buildGroups(){
   S.groups={};
   var grpMap={};
@@ -3051,6 +3076,7 @@ function renderClients(){
     var c=S.crm[id];
     if(!c||!c.name) return false;
     if(payIds[id]) return false;
+    if(!_isLiveCardStatus(c.status)) return false;   // v7.280: випускники/розірвані — не «нові»
     if(!isHR()&&c.loc!==S.user.loc) return false;
     if(S.listLoc&&!searching&&c.loc!==S.listLoc) return false;
     if(S.listLocType&&!searching&&getLocTypeByLoc(c.loc)!==S.listLocType) return false;
@@ -3061,7 +3087,7 @@ function renderClients(){
 
   var displayKids = stats.totalKids + (S.listLoc||S.listLocType||!isHR()
     ? crmOnlyIds.length
-    : Object.keys(S.crm).filter(function(id){ var c=S.crm[id]; return c&&c.name&&!payIds[id]&&(isHR()||c.loc===S.user.loc); }).length);
+    : Object.keys(S.crm).filter(function(id){ var c=S.crm[id]; return c&&c.name&&!payIds[id]&&_isLiveCardStatus(c.status)&&(isHR()||c.loc===S.user.loc); }).length);
 
   var statLabel = S.listLoc ? S.listLoc
     : S.listLocType ? S.listLocType
@@ -3105,43 +3131,12 @@ function renderClients(){
     +'<div class="stat-card" data-permission="finance"><div class="stat-icon si-o">💸</div><div><div class="stat-val" style="color:var(--red2)">'+fmtN(Math.round(stats.totalDebt))+'</div><div class="stat-lbl">Борг · '+esc(mName)+' (грн)</div></div></div>'
     +'</div>';
 
-  // ── Нові CRM-клієнти ──────────────────────────────────────────────────────
   S._listExportRows=[];  // джерело для exportClientsXlsx — наповнюється нижче
-  var crmFiltered=crmOnlyIds.filter(function(id){
-    var c=S.crm[id];
-    if(searching&&c.name.toLowerCase().indexOf(S.searchQ.trim().toLowerCase())<0) return false;
-    return true;
-  });
-  if(crmFiltered.length){
-    var statusLabel={active:'✅ Активний',future:'📅 Майбутній',adaptation:'🌱 Адаптація',paused:'⏸ Призупинено',terminated:'❌ Розірваний',graduate:'🎓 Випускник',graduated:'🎓 Випускник'};
-    html+='<div class="loc-section">'
-      +'<div class="loc-title">📋 Нові клієнти <span style="font-size:13px;font-weight:400;color:var(--gray)">ще не в платіжній системі — '+crmFiltered.length+' дітей</span></div>'
-      +'<div class="card" style="margin-bottom:16px">'
-      +'<div class="tbl-wrap"><table><thead><tr>'
-      +'<th>Ім\'я дитини</th><th>Локація</th><th>Група</th><th>Статус клієнта</th><th>Телефон</th><th></th>'
-      +'</tr></thead><tbody>';
-    crmFiltered.forEach(function(id){
-      var c=S.crm[id];
-      var phone=String(c.momPhone||c.dadPhone||'');
-      S._listExportRows.push({name:c.name||'',loc:c.loc||'',group:c.group||'',teacher:c.teacher||'',
-        bday:c.bday||'',contractDate:c.contractDate||'',statusText:'Новий клієнт',
-        fact:'',budget:'',debt:'',phone:phone});
-      html+='<tr class="clickable" onclick="openChild('+escAttrJS(id)+','+escAttrJS(c.group||'')+','+escAttrJS(c.teacher||'')+','+escAttrJS(c.loc||'')+','+escAttrJS(c.name||'')+')">'
-        +'<td><span class="child-link">'+esc(c.name)+'</span></td>'
-        +'<td>'+esc(c.loc)+'</td>'
-        +'<td>'+esc(c.group)+'</td>'
-        +'<td><span class="badge bg">'+(statusLabel[c.status]||c.status)+'</span></td>'
-        +'<td>'+(phone?'<a href="tel:'+esc(phone)+'" onclick="event.stopPropagation()" style="color:var(--blue2)">'+esc(phone)+'</a>':'<span style="color:var(--gray2)">—</span>')+'</td>'
-        +'<td>'+(phone?'<a href="tel:'+esc(phone)+'" onclick="event.stopPropagation()" class="call-btn">📞 Дзвонити</a>':'')+'</td>'
-        +'</tr>';
-    });
-    html+='</tbody></table></div></div></div>';
-  }
 
   // ── Клієнти з платіжної системи ───────────────────────────────────────────
   var totalGroupsRendered=0;
   listActiveLocs.forEach(function(loc){
-    var groups=(S.groups[loc.loc]||[]);
+    var groups=sortGroupsCanonical(S.groups[loc.loc]||[]);   // v7.280: за віком, не за порядком файлу
     // При onlyDebtors — залишаємо тільки групи де є хоча б 1 боржник
     var filtGroups=S.onlyDebtors
       ? groups.filter(function(g){ return g.children.some(function(ch){ return ch.status==='debt'||ch.status==='nopay'; }); })
@@ -3176,6 +3171,7 @@ function renderClients(){
         if(searching&&ch.name.toLowerCase().indexOf(S.searchQ.trim().toLowerCase())<0) return false;
         return true;
       });
+      children=sortChildrenAlpha(children);   // v7.280: за алфавітом за замовчуванням
       if(S.sortAge){
         children=children.slice().sort(function(a,b){
           var ba=normalizeDateYMD(a.bday||(S.crm[a.id]||{}).bday||'');
@@ -3276,10 +3272,44 @@ function renderClients(){
     html+='</div>';
   });
 
+  // ── Нові CRM-клієнти (v7.280: ПІСЛЯ груп Payment, лише живі статуси) ─────
+  var crmFiltered=crmOnlyIds.filter(function(id){
+    var c=S.crm[id];
+    if(searching&&c.name.toLowerCase().indexOf(S.searchQ.trim().toLowerCase())<0) return false;
+    return true;
+  });
+  if(crmFiltered.length){
+    var statusLabel={active:'✅ Активний',future:'📅 Майбутній',adaptation:'🌱 Адаптація',paused:'⏸ Призупинено',terminated:'❌ Розірваний',graduate:'🎓 Випускник',graduated:'🎓 Випускник'};
+    crmFiltered.sort(function(a,b){ var A=S.crm[a],B=S.crm[b]; return String(A.loc||'').localeCompare(String(B.loc||''),'uk') || String(A.name||'').localeCompare(String(B.name||''),'uk'); });
+    html+='<div class="loc-section">'
+      +'<div class="loc-title">📋 Нові клієнти <span style="font-size:13px;font-weight:400;color:var(--gray)">картка є, у Payment ще немає — '+crmFiltered.length+' дітей</span></div>'
+      +'<div class="card" style="margin-bottom:16px">'
+      +'<div class="tbl-wrap"><table><thead><tr>'
+      +'<th>Ім\'я дитини</th><th>Локація</th><th>Група</th><th>Статус клієнта</th><th>Телефон</th><th></th>'
+      +'</tr></thead><tbody>';
+    crmFiltered.forEach(function(id){
+      var c=S.crm[id];
+      var phone=String(c.momPhone||c.dadPhone||'');
+      S._listExportRows.push({name:c.name||'',loc:c.loc||'',group:c.group||'',teacher:c.teacher||'',
+        bday:c.bday||'',contractDate:c.contractDate||'',statusText:'Новий клієнт',
+        fact:'',budget:'',debt:'',phone:phone});
+      html+='<tr class="clickable" onclick="openChild('+escAttrJS(id)+','+escAttrJS(c.group||'')+','+escAttrJS(c.teacher||'')+','+escAttrJS(c.loc||'')+','+escAttrJS(c.name||'')+')">'
+        +'<td><span class="child-link">'+esc(c.name)+'</span></td>'
+        +'<td>'+esc(c.loc)+'</td>'
+        +'<td>'+esc(c.group)+'</td>'
+        +'<td><span class="badge bg">'+(statusLabel[c.status]||c.status)+'</span></td>'
+        +'<td>'+(phone?'<a href="tel:'+esc(phone)+'" onclick="event.stopPropagation()" style="color:var(--blue2)">'+esc(phone)+'</a>':'<span style="color:var(--gray2)">—</span>')+'</td>'
+        +'<td>'+(phone?'<a href="tel:'+esc(phone)+'" onclick="event.stopPropagation()" class="call-btn">📞 Дзвонити</a>':'')+'</td>'
+        +'</tr>';
+    });
+    html+='</tbody></table></div></div></div>';
+  }
+
+
   // Якщо жодної групи не відрендерено — показуємо повідомлення
   if(totalGroupsRendered===0){
     html+='<div class="empty"><span class="ei">🎉</span>'
-      +'<h4>Немає боржників за вибраними фільтрами</h4>'
+      +'<h4>'+(S.onlyDebtors||S.selStatus?'Немає боржників за вибраними фільтрами':'Немає дітей у Payment за цей місяць')+'</h4>'
       +'<p style="color:var(--gray)">Усі групи сплатили поточний місяць</p>'
       +'</div>';
   }
