@@ -1,5 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.284
+// m.kids CRM — Google Apps Script v7.289
+// v7.289: getAttendance — індекс колонки «Дата» в CacheService (читаємо хвіст, а не 47 тис.
+//         рядків), format=compact {дата:{id:статус}}, kind=kids|staff, кеш gzip+base64
+//         і для «всі локації» (attver_ALL). У відповіді t (мс по фазах) та idx.
 // v7.284: exportToSalaryExtras({dryRun:true}) — прев'ю без запису в Salary і журнал
 //         (досі dryRun поважала лише Payment-частина exportAttendance; Salary писала
 //         насправді). У відповіді dryRun, cellsWritten, journalOps.
@@ -5344,7 +5347,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.284', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.289', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -9748,88 +9751,203 @@ function _attRowIso(cell, tz){
   return (cell instanceof Date) ? _attDateFast(cell) : _attDateIso(cell, tz);
 }
 
+// ═══ v7.289: getAttendance — індекс дат, компактний формат, кеш для «всі» ═══
+// Профіль до v7.289 (15.09.2026): будь-який запит 12–15 с, і час НЕ залежав від
+// діапазону — порожній тиждень коштував стільки ж, як місяць усіх локацій (2 МБ).
+// ~5 с — фіксована ціна виклику (ping), ще ~6–8 с — openById + getValues()
+// колонки «Дата» на всі ~47 тис. рядків (Date-клітинки дорогі) на КОЖЕН запит.
+// Що змінено:
+//   1. Індекс колонки «Дата» у CacheService (_attDateIndex): {день: [перший, останній
+//      рядок]} + lastRow + відбиток останнього рядка. На запит читаємо лише ХВІСТ
+//      (рядки після проіндексованого lastRow, зазвичай сотні) і дописуємо індекс.
+//      Повна побудова — при холодному кеші (TTL 6 год) або коли відбиток не збігся
+//      (дедуп/видалення рядків зсунули аркуш). Вікно min..max рядків — те саме,
+//      що з v7.269, тож коректність не змінилась.
+//   2. format=compact → data = {дата: {id: статус}} (обидва споживачі читають лише
+//      ці три поля; «Ім'я», «Локація», «Група» + ключі об'єктів були 65% байтів).
+//      kind=kids|staff — без рядків STAFF:: (табель дітей) або лише вони (табель
+//      співробітників). Без format — стара форма відповіді, як була.
+//   3. Кеш — і для loc='' (усі локації): значення gzip+base64 (як _leadClientIndex),
+//      тож 351 КБ тижня всіх локацій влазить у ліміт 100 КБ. Версія для «всі» —
+//      attver_ALL (bump у saveAttendance поруч із attver_<loc>).
+//   4. У відповіді t — мс по фазах, idx — hit|tail|build: для профілювання.
+var ATT_IDX_KEY = 'attidx_v1';
+var ATT_IDX_TTL = 21600;   // 6 год — максимум CacheService
+
+function _attIdxInvalidate(){ try { CacheService.getScriptCache().remove(ATT_IDX_KEY); } catch(_e){} }
+
+// Індекс: {lr: останній проіндексований рядок аркуша (1-based), fp: [iso, id] цього
+// рядка, days: {iso: [[loRow, hiRow], ...]}} — СЕГМЕНТИ підряд-рядків однієї дати.
+// Пізня відмітка за старий день (директорка дописує минулий тиждень) лягає в кінець
+// аркуша окремим сегментом, і вікно читає лише його, а не все між ним і основним
+// блоком дня. Повертає {idx, mode}. Читає лише хвіст, якщо індекс є і відбиток на
+// місці; інакше будує з нуля по колонках «Дата»+«ID» (2 колонки).
+function _attDateIndex(sheet, lastRow, iDate, iCid, tz, cache, t){
+  var idx = null, mode = 'build';
+  var canTail = (iDate <= 1 && iCid <= 1);           // стандартна шапка: Дата=A, ID=B
+  if (cache && canTail){
+    try { var raw = cache.get(ATT_IDX_KEY); if (raw) idx = JSON.parse(raw); } catch(_e){ idx = null; }
+  }
+  if (idx && idx.lr && idx.days && lastRow >= idx.lr){
+    // відбиток: (дата, id) останнього проіндексованого рядка мають стояти на місці
+    var fpRow = sheet.getRange(idx.lr, 1, 1, 2).getValues()[0];
+    var fpOk = (_attRowIso(fpRow[iDate], tz) === idx.fp[0]) && (trim(String(fpRow[iCid] || '')) === idx.fp[1]);
+    if (fpOk){
+      mode = 'hit';
+      if (lastRow > idx.lr){
+        var tail = sheet.getRange(idx.lr + 1, 1, lastRow - idx.lr, 2).getValues();
+        _attIdxAbsorb(idx, tail, idx.lr + 1, iDate, iCid, tz);
+        mode = 'tail';
+        t.tailRows = tail.length;
+      }
+    } else idx = null;
+  } else idx = null;
+  if (!idx){
+    var all = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
+    idx = {lr: 1, fp: ['', ''], days: {}};
+    _attIdxAbsorb(idx, all, 2, iDate, iCid, tz);
+    mode = 'build';
+    t.buildRows = all.length;
+  }
+  if (cache && canTail && mode !== 'hit'){
+    try { var js = JSON.stringify(idx); if (js.length < 95000) cache.put(ATT_IDX_KEY, js, ATT_IDX_TTL); } catch(_p){}
+  }
+  return {idx: idx, mode: mode};
+}
+function _attIdxAbsorb(idx, rows, firstRowNum, iDate, iCid, tz){
+  for (var i = 0; i < rows.length; i++){
+    var rn = firstRowNum + i;
+    var iso = _attRowIso(rows[i][iDate], tz);
+    if (iso){
+      var segs = idx.days[iso];
+      if (!segs) idx.days[iso] = [[rn, rn]];
+      else if (segs[segs.length - 1][1] === rn - 1) segs[segs.length - 1][1] = rn;   // продовження блоку
+      else segs.push([rn, rn]);
+    }
+    idx.lr = rn;
+    idx.fp = [iso, trim(String(rows[i][iCid] || ''))];
+  }
+}
+
 function getAttendance(e) {
+  var t0 = Date.now(), t = {};
   var params  = e ? (e.parameter || {}) : {};
   var loc     = trim(params.loc  || '');
   var from    = trim(params.from || '');
   var to      = trim(params.to   || '');
-  // v7.49 ШВИДКІСТЬ: CacheService (TTL 3хв, ключ loc+from+to). Перший запит читає лист,
-  // наступні того ж зрізу — миттєво. Кеш лише коли задано loc (щоб не кешувати гігантські
-  // повні відповіді >100КБ). Локальний optimistic-апдейт на фронті показує свіжу мітку одразу,
-  // тож 3хв-лаг стосується лише крос-девайс читань.
+  var compact = (String(params.format || '') === 'compact');
+  var kind    = String(params.kind || '');            // ''|kids|staff
+  if (kind !== 'kids' && kind !== 'staff') kind = '';
+  // v7.49 кеш (TTL 3хв) → v7.289: для будь-якого loc, значення gzip+base64.
   var cache = null, ckey = '';
-  if (loc){
-    try {
-      cache = CacheService.getScriptCache();
-      var ver = cache.get('attver_' + loc) || '0';                 // версія інвалідації (bump у saveAttendance)
-      ckey  = 'att3_' + loc + '_' + ver + '_' + from + '_' + to;
-      var hit = cache.get(ckey);
-      if (hit){ try { return {ok:true, data:JSON.parse(hit), cached:true}; } catch(_c){} }
-    } catch(_ce){ cache = null; }
-  }
+  try {
+    cache = CacheService.getScriptCache();
+    var ver = cache.get('attver_' + (loc || 'ALL')) || '0';   // bump у saveAttendance
+    ckey  = 'att4_' + loc + '_' + ver + '_' + from + '_' + to + '_' + (compact ? 'c' : 'f') + '_' + kind;
+    var hit = cache.get(ckey);
+    if (hit){
+      try {
+        var js = Utilities.ungzip(Utilities.newBlob(Utilities.base64Decode(hit), 'application/x-gzip')).getDataAsString();
+        var out = {ok:true, data:JSON.parse(js), cached:true, t:{total: Date.now() - t0}};
+        if (compact) out.format = 'compact';
+        return out;
+      } catch(_c){}
+    }
+  } catch(_ce){ cache = null; }
   var ss      = getCRMSpreadsheet();
   var tz      = ss.getSpreadsheetTimeZone() || 'Europe/Kiev';
   var sheet   = ss.getSheetByName(SHEET_ATTENDANCE);
-  if (!sheet) return {ok:true, data:[]};
+  if (!sheet) return {ok:true, data: compact ? {} : []};
   var lastRow = sheet.getLastRow();
-  if (lastRow < 2) return {ok:true, data:[]};
-  // v7.49: читаємо лише перші 6 колонок (Дата,ID дитини,Ім'я,Локація,Група,Статус) —
-  // Ким/Коли гріду не потрібні → менший payload/CPU (з дедупленим листом ~4× швидше).
-  // v7.269: заголовки окремим (дешевим) читанням — вони потрібні ДО основного, щоб
-  // знати колонку «Дата» для вікна рядків.
+  t.open = Date.now() - t0;
+  if (lastRow < 2) return {ok:true, data: compact ? {} : []};
   var hdrs = sheet.getRange(1, 1, 1, 6).getValues()[0].map(String);
   var iDate = hdrs.indexOf('Дата');     if (iDate < 0) iDate = 0;
   var iCid  = hdrs.indexOf('ID дитини'); if (iCid  < 0) iCid  = 1;
   var iLoc  = hdrs.indexOf('Локація');   if (iLoc  < 0) iLoc  = 3;
+  var iSt   = hdrs.indexOf('Статус');    if (iSt   < 0) iSt   = 5;
 
-  // ── v7.269 ВІКНО РЯДКІВ ЗА ДІАПАЗОНОМ ДАТ ────────────────────────────────
-  // Було: читали ВЕСЬ лист (lastRow × 6) і відсіювали в циклі. На 47 тис. рядків
-  // це 10.8 МБ і ~40 с, тоді як екран тижня потребує 4% рядків, а місяць однієї
-  // локації — 1%. Фільтр from/to працював, але вже ПІСЛЯ того, як усе прочитано,
-  // тож нічого не економив — саме тому фронт і не бачив сенсу його передавати.
-  // Тепер, коли задано from/to: спершу ОДНА колонка «Дата» (у 6 разів менше даних),
-  // потім лише блок від першого до останнього влучного рядка. Лист майже
-  // впорядкований за датою, тож блок вузький; беремо min..max індексів, тож жоден
-  // влучний рядок за межі блоку не випаде навіть при безладі в порядку рядків.
-  var vals;
+  // ── Вікно рядків: з індексу дат (v7.289), а не з повного читання колонки ──
+  var vals, idxMode = '';
   if (from || to){
-    var dcol = sheet.getRange(2, iDate + 1, lastRow - 1, 1).getValues();
-    var lo = -1, hi = -1;
-    for (var i = 0; i < dcol.length; i++){
-      var di = _attRowIso(dcol[i][0], tz);
-      if (!di) continue;
-      if (from && di < from) continue;
-      if (to   && di > to)   continue;
-      if (lo === -1) lo = i;
-      hi = i;
+    var t1 = Date.now();
+    var di = _attDateIndex(sheet, lastRow, iDate, iCid, tz, cache, t);
+    idxMode = di.mode;
+    t.index = Date.now() - t1;
+    // Сегменти всіх днів діапазону → сортуємо, зливаємо сусідні (розрив ≤ 300 рядків
+    // дешевше дочитати, ніж робити окремий виклик) → читаємо кожен блок окремо.
+    var segs = [], days = di.idx.days;
+    for (var dk in days){
+      if (from && dk < from) continue;
+      if (to   && dk > to)   continue;
+      for (var si = 0; si < days[dk].length; si++) segs.push(days[dk][si]);
     }
-    if (lo === -1){                                                 // у діапазоні нічого
-      if (cache && ckey){ try { cache.put(ckey, '[]', 180); } catch(_cp0){} }
-      return {ok:true, data:[]};
+    if (!segs.length){
+      _attCachePut(cache, ckey, compact ? {} : []);
+      return {ok:true, data: compact ? {} : [], idx: idxMode, t: t};
     }
-    vals = sheet.getRange(2 + lo, 1, hi - lo + 1, 6).getValues();
+    segs.sort(function(a, b){ return a[0] - b[0]; });
+    var blocks = [[segs[0][0], segs[0][1]]];
+    for (var bi = 1; bi < segs.length; bi++){
+      var last = blocks[blocks.length - 1];
+      if (segs[bi][0] - last[1] <= 300){ if (segs[bi][1] > last[1]) last[1] = segs[bi][1]; }
+      else blocks.push([segs[bi][0], segs[bi][1]]);
+    }
+    if (blocks.length > 20) blocks = [[blocks[0][0], blocks[blocks.length - 1][1]]];   // забагато шматків — один min..max
+    var t2 = Date.now();
+    vals = [];
+    for (var bk = 0; bk < blocks.length; bk++){
+      var part = sheet.getRange(blocks[bk][0], 1, blocks[bk][1] - blocks[bk][0] + 1, 6).getValues();
+      for (var pi = 0; pi < part.length; pi++) vals.push(part[pi]);
+    }
+    t.window = Date.now() - t2; t.windowRows = vals.length; t.blocks = blocks.length;
   } else {
     vals = sheet.getRange(2, 1, lastRow - 1, 6).getValues();
   }
 
   // dedupe: остання відмітка per (дата, дитина) — як і мерж на фронті.
-  var byKey = {}, order = [];
+  var t3 = Date.now();
+  var byKey = {}, order = [], grouped = {};
   for (var r = 0; r < vals.length; r++) {
     var iso = _attRowIso(vals[r][iDate], tz);
     if (!iso) continue;
     if (from && iso < from) continue;
     if (to   && iso > to)   continue;
     if (loc  && trim(String(vals[r][iLoc] || '')) !== loc) continue;
+    var cid = trim(String(vals[r][iCid] || ''));
+    if (kind){
+      var isStaff = (cid.indexOf(ATT_STAFF_PREFIX) === 0);
+      if (kind === 'staff' && !isStaff) continue;
+      if (kind === 'kids'  &&  isStaff) continue;
+    }
+    if (compact){
+      if (!cid) continue;
+      if (!grouped[iso]) grouped[iso] = {};
+      grouped[iso][cid] = String(vals[r][iSt] == null ? '' : vals[r][iSt]);   // last wins
+      continue;
+    }
     var obj = {};
     for (var c = 0; c < hdrs.length; c++) obj[hdrs[c]] = String(vals[r][c] == null ? '' : vals[r][c]);
     obj['Дата'] = iso;                                              // нормалізована ISO-дата
-    var key = iso + '|' + trim(String(vals[r][iCid] || ''));
+    var key = iso + '|' + cid;
     if (!(key in byKey)) order.push(key);
     byKey[key] = obj;                                              // last wins
   }
-  var rows = order.map(function(k){ return byKey[k]; });
-  if (cache && ckey){ try { cache.put(ckey, JSON.stringify(rows), 180); } catch(_cp){} }  // 3хв
-  return {ok:true, data:rows};
+  var data = compact ? grouped : order.map(function(k){ return byKey[k]; });
+  t.build = Date.now() - t3;
+  _attCachePut(cache, ckey, data);
+  t.total = Date.now() - t0;
+  var res = {ok:true, data:data, idx: idxMode, t: t};
+  if (compact) res.format = 'compact';
+  return res;
+}
+// gzip+base64 у CacheService (3 хв). Ліміт значення 100 КБ — стиснуто влазить і місяць усіх локацій.
+function _attCachePut(cache, ckey, data){
+  if (!cache || !ckey) return;
+  try {
+    var b64 = Utilities.base64Encode(Utilities.gzip(Utilities.newBlob(JSON.stringify(data), 'application/json')).getBytes());
+    if (b64.length < 95000) cache.put(ckey, b64, 180);
+  } catch(_cp){}
 }
 
 function saveAttendance(body) {
@@ -9914,6 +10032,7 @@ function saveAttendance(body) {
     var _ac = CacheService.getScriptCache(), _ls = {};
     records.forEach(function(rec){ if (rec.loc) _ls[rec.loc] = true; });
     Object.keys(_ls).forEach(function(l){ _ac.put('attver_' + l, String(new Date().getTime()), 21600); });
+    _ac.put('attver_ALL', String(new Date().getTime()), 21600);   // v7.289: кеш «усі локації»
   } catch(_ie){}
 
   return {ok:true, saved:saved};
@@ -9942,6 +10061,7 @@ function dedupAttendance() {
     byKey[key] = row;                                      // last wins
   }
   var out = order.map(function(k){ return byKey[k]; });
+  _attIdxInvalidate();   // v7.289: аркуш переписується — індекс дат недійсний
   sheet.clearContents();
   sheet.getRange(1, 1, 1, hdr.length).setValues([hdr]);
   if (out.length) {
@@ -10030,6 +10150,7 @@ function dedupAttendanceApi(body){
     // БЕКАП + перезапис
     var stamp = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd_HH-mm-ss');
     report.backup = sheet.copyTo(ss).setName(('Табель_DEDUPBKP_' + stamp).slice(0, 95)).getName();
+    _attIdxInvalidate();   // v7.289: аркуш переписується — індекс дат недійсний
     sheet.clearContents();
     sheet.getRange(1, 1, 1, hdr.length).setValues([hdr]);
     if (out.length){

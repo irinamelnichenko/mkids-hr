@@ -5449,17 +5449,28 @@ function loadTabelFromCloud(loc,from,to,onDone){
   // потрібних рядків: та сама відповідь важить ~108 КБ замість 1.5 МБ.
   // Клієнтську нормалізацію лишаємо — вона дешева й страхує старі рядкові дати.
   function _normD(v){ v=String(v||''); if(/^\d{4}-\d{2}-\d{2}/.test(v)) return v.slice(0,10); var dt=new Date(v); return isNaN(dt)?'':dt.getFullYear()+'-'+('0'+(dt.getMonth()+1)).slice(-2)+'-'+('0'+dt.getDate()).slice(-2); }
+  // v7.289: format=compact → {дата:{id:статус}}, kind=staff → лише рядки STAFF:: (~12% тижня).
   fetch(_tokUrl(url+'?action=getAttendance&loc='+encodeURIComponent(loc))
-            +'&from='+encodeURIComponent(from)+'&to='+encodeURIComponent(to),{redirect:'follow'})
+            +'&from='+encodeURIComponent(from)+'&to='+encodeURIComponent(to)+'&format=compact&kind=staff',{redirect:'follow'})
     .then(function(r){return r.json();})
     .then(function(j){
       if(!j||!j.ok){ if(onDone)onDone('bad-response'); return; }
-      var byDate={}, n=0;
-      (j.data||[]).forEach(function(row){
-        var cid=row['ID дитини']||''; if(cid.indexOf('STAFF::')!==0) return;
-        var d=_normD(row['Дата']); if(!d || d<from || d>to) return;
-        var k=cid.slice(7); (byDate[d]=byDate[d]||{})[k]=row['Статус']||''; n++;
-      });
+      var byDate={}, n=0, data=j.data||{};
+      if(Array.isArray(data)){                       // старий бекенд (до v7.289) — стара форма
+        data.forEach(function(row){
+          var cid=row['ID дитини']||''; if(cid.indexOf('STAFF::')!==0) return;
+          var d=_normD(row['Дата']); if(!d || d<from || d>to) return;
+          var k=cid.slice(7); (byDate[d]=byDate[d]||{})[k]=row['Статус']||''; n++;
+        });
+      } else {
+        Object.keys(data).forEach(function(rawD){
+          var d=_normD(rawD); if(!d || d<from || d>to) return;
+          Object.keys(data[rawD]||{}).forEach(function(cid){
+            if(cid.indexOf('STAFF::')!==0) return;
+            var k=cid.slice(7); (byDate[d]=byDate[d]||{})[k]=data[rawD][cid]||''; n++;
+          });
+        });
+      }
       Object.keys(byDate).forEach(function(d){
         var t=getTabel(loc,d);
         Object.keys(byDate[d]).forEach(function(k){ if(!t[k])t[k]={}; t[k].status=byDate[d][k]; });

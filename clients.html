@@ -5185,16 +5185,28 @@ function loadAttendanceCloudRange(loc, from, to, onDone){
   var BACKOFF=[1000,3000,5000]; // затримки перед 1-м, 2-м, 3-м ретраєм
   var attempt=0;
   function tryOnce(){
-    apiGetFull({action:'getAttendance',loc:loc,from:from,to:to})
+    // v7.289: format=compact → {дата:{id:статус}}, kind=kids → без рядків STAFF:: (їх тут викидали).
+    apiGetFull({action:'getAttendance',loc:loc,from:from,to:to,format:'compact',kind:'kids'})
       .then(function(j){
-        (j.data||[]).forEach(function(rec){
-          var d=String(rec['Дата']||'').trim();
-          var cId=String(rec['ID дитини']||'').trim();
-          var st=String(rec['Статус']||'').trim();
-          if(!d||!cId||!st) return;
-          if(!S.att[d]) S.att[d]={};
-          S.att[d][cId]=st;
-        });
+        var data=j.data||{};
+        if(Array.isArray(data)){                       // старий бекенд (до v7.289) — стара форма
+          data.forEach(function(rec){
+            var d=String(rec['Дата']||'').trim(), cId=String(rec['ID дитини']||'').trim(), st=String(rec['Статус']||'').trim();
+            if(!d||!cId||!st) return;
+            if(!S.att[d]) S.att[d]={};
+            S.att[d][cId]=st;
+          });
+        } else {
+          Object.keys(data).forEach(function(d){
+            var day=data[d]||{};
+            Object.keys(day).forEach(function(cId){
+              var st=String(day[cId]||'').trim();
+              if(!d||!cId||!st) return;
+              if(!S.att[d]) S.att[d]={};
+              S.att[d][cId]=st;
+            });
+          });
+        }
         saveAttendanceToStorage();
         if(onDone) onDone(null);
       })
@@ -5635,7 +5647,10 @@ function renderAttendance(){
   }
   // v7.54: cacheKey НЕ залежить від обраної локації — вантажимо ВСІ локації одним запитом,
   // тож кеш-стан спільний на тиждень. Перемикання локацій у межах тижня = той самий ключ = миттєво.
-  var cacheKey='ALL::'+from+'::'+to;
+  // v7.289: однолокаційні ролі (директор/медсестра/вихователька) просять СВОЮ локацію —
+  // 30 КБ замість 351 КБ і серверний кеш (3 хв) працює; мережеві ролі — усі локації.
+  var cloudLoc=isHR()?'':String((S.user&&S.user.loc)||'');
+  var cacheKey=(cloudLoc||'ALL')+'::'+from+'::'+to;
 
   // v6.49.2 — RENDER-FIRST + retry/backoff + cache-keep (ПОВНИЙ фікс «Помилка хмари»):
   //   Більше НЕ блокуємо рендер повноекранним спінером. Наявний кеш (ростер дітей +
@@ -5664,8 +5679,8 @@ function renderAttendance(){
   if(S.attMode!=='year' && (neverLoaded || cacheStale) && !S._attLoading && !recentlyFailed){
     S._attLoading=true;
     if(cacheStale) S._attLoadedAt[cacheKey]=Date.now(); // антидубль паралельних циклів
-    if(neverLoaded) showFloatMsg('☁️ Оновлюю табель (усі локації)…','info');
-    loadAttendanceCloudRange('', from, to, function(err){   // loc='' → ВСІ локації одним запитом
+    if(neverLoaded) showFloatMsg(cloudLoc?'☁️ Оновлюю табель…':'☁️ Оновлюю табель (усі локації)…','info');
+    loadAttendanceCloudRange(cloudLoc, from, to, function(err){   // v7.289: своя локація або '' = усі
       S._attLoading=false;
       if(!err){
         S._attCloudLoaded[cacheKey]=true; S._attLoadedAt[cacheKey]=Date.now();
