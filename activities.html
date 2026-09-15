@@ -5176,7 +5176,7 @@ function _renderAnaTeachers(marks, search, canSeeMoney){
     var bd = r.breakdown.map(function(b){
       var unitLbl = (b.model === 'За дитину') ? (b.units + ' діт.')
                   : (b.model === 'За захід')   ? (b.units + ' заход.')
-                  : (b.model === 'За заняття') ? (b.units + ' сес.')
+                  : (b.model === 'За заняття') ? (b.units + ' занять')
                   : '—';
       var money = canSeeMoney ? (' × ' + fmtUah(b.rate) + ' = <b>' + fmtUah(b.pay) + ' ₴</b>') : '';
       return '<div class="ana-tag" style="display:block;margin:2px 0">' + escapeHtml(b.act)
