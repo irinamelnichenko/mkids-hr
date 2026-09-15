@@ -4573,7 +4573,9 @@ var ANA = {
   marksLoc: '',
   marksLoadedAt: 0,
   merges: [],            // v-ana: обʼєднання груп (getDopMerges) для payout «за заняття»
-  mergesKey: ''
+  mergesKey: '',
+  splits: [],            // v7.285: поділи груп (getDopSplits) — множник сесій «за заняття»
+  splitsKey: ''
 };
 var ANA_MARKS_TTL = 60 * 1000;
 var ANA_MARKS_CACHE_KEY = 'activities_ana_marks_v1';
@@ -4797,6 +4799,40 @@ async function _loadAnaMerges(force){
   ANA.mergesKey = key;
   return ANA.merges;
 }
+// v7.285: довантажити поділи груп для аналітики (loc; getDopSplits не фільтрує
+// за періодом — ріжемо тут). Дзеркало серверного _loadDopSplitsMap.
+async function _loadAnaSplits(force){
+  var r = _periodRange();
+  var key = S.activeLoc + '|' + r[0] + '|' + r[1];
+  if (!force && ANA.splitsKey === key) return ANA.splits;
+  try {
+    var url = CFG.SCRIPT_URL + '?action=getDopSplits&loc=' + encodeURIComponent(S.activeLoc);
+    var resp = await _afTryFetch(url, {redirect:'follow'});
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    var json = await resp.json();
+    if (!json.ok) throw new Error(json.error || 'getDopSplits failed');
+    ANA.splits = (json.items || []).filter(function(x){
+      return x.date >= r[0] && x.date <= r[1] && Number(x.parts) > 1;
+    });
+  } catch(e){
+    console.warn('[ana splits] load fail:', e && e.message || e);
+    ANA.splits = [];
+  }
+  ANA.splitsKey = key;
+  return ANA.splits;
+}
+// splitsMap[actId][date] = { normGroup: parts } — лише parts ≥ 2.
+function _anaSplitsMap(){
+  var map = {};
+  (ANA.splits || []).forEach(function(x){
+    var aid = Number(x.activityId), ng = _mrgNormGroup(x.group);
+    if (!ng || !(Number(x.parts) > 1)) return;
+    if (!map[aid]) map[aid] = {};
+    if (!map[aid][x.date]) map[aid][x.date] = {};
+    map[aid][x.date][ng] = Number(x.parts);
+  });
+  return map;
+}
 // mergesMap[actId][date] = [ [normGroup,...], ... ] — лише набори з ≥2 груп.
 function _anaMergesMap(){
   var map = {};
@@ -4810,20 +4846,26 @@ function _anaMergesMap(){
   });
   return map;
 }
-// Дзеркало серверного _dopCountSessions: сесія = унікальна (група×дата);
-// обʼєднані одного дня групи схлопуються у 1 сесію.
-function _anaCountSessions(groupsByDate, mergesForAct){
+// Дзеркало серверного _dopCountUnits («За заняття»): сесія = унікальна (група×дата);
+// обʼєднані одного дня групи схлопуються у 1 сесію; поділ (v7.285) множить групу
+// на кількість підгруп, якщо вона того дня не всередині обʼєднання (обʼєднання виграє).
+// splitsForAct — опційно: { date: { normGroup: parts } }.
+function _anaCountSessions(groupsByDate, mergesForAct, splitsForAct){
   var total = 0;
   Object.keys(groupsByDate).forEach(function(date){
     var present = groupsByDate[date];                 // {normGroup:true}
     var mergeSets = (mergesForAct && mergesForAct[date]) || [];
+    var spl = (splitsForAct && splitsForAct[date]) || {};
     var covered = {}, sessions = 0;
     mergeSets.forEach(function(ms){
       var any = false;
       ms.forEach(function(g){ if (present[g]){ any = true; covered[g] = true; } });
       if (any) sessions++;
     });
-    Object.keys(present).forEach(function(g){ if (!covered[g]) sessions++; });
+    Object.keys(present).forEach(function(g){
+      if (covered[g]) return;
+      sessions += (Number(spl[g]) > 1 ? Number(spl[g]) : 1);
+    });
     total += sessions;
   });
   return total;
@@ -4838,9 +4880,11 @@ function _anaGroupsByDate(marks){
   });
   return g;
 }
-// Кількість сесій (груп×дата) для заняття — з урахуванням обʼєднань.
+// Кількість сесій (груп×дата) для заняття — з урахуванням обʼєднань і поділів.
 function _anaSessionsForActivity(actId, marks){
-  return _anaCountSessions(_anaGroupsByDate(marks), _anaMergesMap()[Number(actId)] || {});
+  return _anaCountSessions(_anaGroupsByDate(marks),
+                           _anaMergesMap()[Number(actId)] || {},
+                           _anaSplitsMap()[Number(actId)] || {});
 }
 
 // «За захід» — це ОДИН захід на день: вистава, майстер-клас, пінна вечірка.
@@ -4887,6 +4931,7 @@ async function renderAnalytics(){
     if (!S.items || !S.items.length) await loadCatalog(false);
     await _loadAnaMarks(false);
     await _loadAnaMerges(false);   // v-ana: обʼєднання груп для payout «за заняття»
+    await _loadAnaSplits(false);   // v7.285: поділи груп — множник сесій
   } catch(e){
     $('anaLoading').classList.add('hidden');
     showToast('❌ ' + (e && e.message || e), 'err');
