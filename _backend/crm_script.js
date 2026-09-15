@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.289
+// m.kids CRM — Google Apps Script v7.290
+// v7.290: індекс дат getAttendance — gzip+base64 і злиття сегментів дня при розриві ≤ 300
+//         (на 70 тис. рядків сирий індекс не влазив у CacheService → build щоразу).
 // v7.289: getAttendance — індекс колонки «Дата» в CacheService (читаємо хвіст, а не 47 тис.
 //         рядків), format=compact {дата:{id:статус}}, kind=kids|staff, кеш gzip+base64
 //         і для «всі локації» (attver_ALL). У відповіді t (мс по фазах) та idx.
@@ -5347,7 +5349,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.289', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.290', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -9786,7 +9788,10 @@ function _attDateIndex(sheet, lastRow, iDate, iCid, tz, cache, t){
   var idx = null, mode = 'build';
   var canTail = (iDate <= 1 && iCid <= 1);           // стандартна шапка: Дата=A, ID=B
   if (cache && canTail){
-    try { var raw = cache.get(ATT_IDX_KEY); if (raw) idx = JSON.parse(raw); } catch(_e){ idx = null; }
+    try {
+      var raw = cache.get(ATT_IDX_KEY);
+      if (raw) idx = JSON.parse(Utilities.ungzip(Utilities.newBlob(Utilities.base64Decode(raw), 'application/x-gzip')).getDataAsString());
+    } catch(_e){ idx = null; }
   }
   if (idx && idx.lr && idx.days && lastRow >= idx.lr){
     // відбиток: (дата, id) останнього проіндексованого рядка мають стояти на місці
@@ -9810,7 +9815,13 @@ function _attDateIndex(sheet, lastRow, iDate, iCid, tz, cache, t){
     t.buildRows = all.length;
   }
   if (cache && canTail && mode !== 'hit'){
-    try { var js = JSON.stringify(idx); if (js.length < 95000) cache.put(ATT_IDX_KEY, js, ATT_IDX_TTL); } catch(_p){}
+    // gzip+base64: на 70 тис. рядків сирий JSON індексу не влазив у 100 КБ (v7.289 перший
+    // прогін — build на кожен запит). Стиснуто — кілька КБ. t.idxBytes — для контролю.
+    try {
+      var b64 = Utilities.base64Encode(Utilities.gzip(Utilities.newBlob(JSON.stringify(idx), 'application/json')).getBytes());
+      t.idxBytes = b64.length;
+      if (b64.length < 95000) cache.put(ATT_IDX_KEY, b64, ATT_IDX_TTL); else t.idxTooBig = true;
+    } catch(_p){}
   }
   return {idx: idx, mode: mode};
 }
@@ -9820,8 +9831,10 @@ function _attIdxAbsorb(idx, rows, firstRowNum, iDate, iCid, tz){
     var iso = _attRowIso(rows[i][iDate], tz);
     if (iso){
       var segs = idx.days[iso];
+      // Розрив ≤ 300 рядків зливаємо вже тут (той самий поріг, що при читанні): 15 локацій
+      // пишуть упереміш, і без цього день розсипався на сотні сегментів, а індекс — на сотні КБ.
       if (!segs) idx.days[iso] = [[rn, rn]];
-      else if (segs[segs.length - 1][1] === rn - 1) segs[segs.length - 1][1] = rn;   // продовження блоку
+      else if (rn - segs[segs.length - 1][1] <= 300) segs[segs.length - 1][1] = rn;
       else segs.push([rn, rn]);
     }
     idx.lr = rn;
