@@ -773,10 +773,30 @@ var SESSION_TTL_MS = 7 * 24 * 3600 * 1000;
     } catch(_e){}
     return r;
   }
+  /* v7.288: порожній або прострочений токен у живій сесії → на логін одразу, а не
+     тихе опитування щохвилини без токена (бейдж задач). Сесії без user.id
+     (екран логіна, старі) не чіпаємо — їх ведуть readSession/_showStaleSession. */
+  function _tokExpired(t){
+    try {
+      var dot = t.indexOf('.'); if (dot <= 0) return true;
+      var p64 = t.slice(0, dot).replace(/-/g, '+').replace(/_/g, '/');
+      while (p64.length % 4) p64 += '=';
+      var pl = JSON.parse(decodeURIComponent(escape(atob(p64))));
+      return !pl || !pl.exp || Date.now() > Number(pl.exp);
+    } catch(_e){ return false; }   /* нечитабельний payload — хай вирішує бекенд */
+  }
+  function _checkTok(){
+    var s; try { s = JSON.parse(localStorage.getItem('mkids_session') || 'null'); } catch(_e){ return true; }
+    if (!s || !s.user || !(Number(s.user.id) > 0)) return true;
+    var t = String(s.token || '');
+    if (!t || _tokExpired(t)){ _kick(); return false; }
+    return true;
+  }
   window.fetch = function(input, init){
     var url = '';
     try { url = (typeof input === 'string') ? input : (input && input.url) || ''; } catch(_e){}
     if (url.indexOf('script.google.com') < 0) return _of(input, init);   // сторонні запити не чіпаємо
+    if (!_checkTok()) return new Promise(function(){});                    // v7.288: кинуто на логін — запит не шлемо
     try {
       var t = _tok();
       if (t){
@@ -791,6 +811,7 @@ var SESSION_TTL_MS = 7 * 24 * 3600 * 1000;
     } catch(_e){}
     return _of(input, init).then(_watch);
   };
+  _checkTok();   // v7.288: і одразу при завантаженні сторінки
 })();
 
 var NETWORK_ROLES = ['hr','cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo'];
