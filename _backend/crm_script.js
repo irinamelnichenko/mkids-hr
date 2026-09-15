@@ -1,5 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.279
+// m.kids CRM — Google Apps Script v7.284
+// v7.284: exportToSalaryExtras({dryRun:true}) — прев'ю без запису в Salary і журнал
+//         (досі dryRun поважала лише Payment-частина exportAttendance; Salary писала
+//         насправді). У відповіді dryRun, cellsWritten, journalOps.
 // v7.279: _leadClientIndex у CacheService 5 хв (gzip+base64, ≈25 КБ) — getLeads
 //         більше не читає 2,3 МБ «Клієнтів» на кожен запит; інвалідація при
 //         saveClient / patchClientCell / deleteClient / mergeClientDuplicate.
@@ -5341,7 +5344,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.279', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.284', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -19705,6 +19708,7 @@ function exportToSalaryExtras(params){
     var month = Number(params.month);
     var year = Number(params.year) || new Date().getFullYear();
     var force = (params.force === true);   // v7.197: обхід guard'а нульових відміток
+    var dryRun = (params.dryRun === true); // v7.284: прев'ю без запису (як у exportAttendanceToPayments)
     if (!loc) return {ok: false, error: 'Параметр loc обовʼязковий'};
     if (!month || month < 1 || month > 12) return {ok: false, error: 'month має бути 1-12'};
 
@@ -19727,7 +19731,7 @@ function exportToSalaryExtras(params){
     var nmm = nextM.month < 10 ? '0' + nextM.month : String(nextM.month);
     var dateTo = nextM.year + '-' + nmm + '-01';
 
-    Logger.log('[exportToSalaryExtras] START loc="%s" month=%s year=%s; фільтр [%s..%s)', loc, month, year, dateFrom, dateTo);
+    Logger.log('[exportToSalaryExtras] START loc="%s" month=%s year=%s%s; фільтр [%s..%s)', loc, month, year, (dryRun ? ' DRY-RUN' : ''), dateFrom, dateTo);
     Logger.log('[exportToSalaryExtras] каталог: allActive=%s, withRate=%s, skipped=%s', allActive.length, withRate.length, JSON.stringify(skipped));
 
     // v7.08: обʼєднання груп (session-key = група×дата). Мапа loc→act→date→[merge-набори].
@@ -19760,7 +19764,7 @@ function exportToSalaryExtras(params){
     if (_marksInPeriod === 0 && !force){
       Logger.log('[exportToSalaryExtras] ⛔ %s: нуль відміток за %s/%s — вихід без запису', loc, month, year);
       return {ok:false, code:'NO_MARKS', skipped:true, loc:loc, month:month, year:year,
-              marksInPeriod:0,
+              marksInPeriod:0, dryRun:dryRun,
               error:'У «' + loc + '» немає жодної відмітки додаткових за ' + monthName + ' ' + year +
                     '. Запис скасовано, щоб не обнулити наявні суми. Для свідомого обнулення — force:true.'};
     }
@@ -19919,8 +19923,8 @@ function exportToSalaryExtras(params){
 
       // Точковий запис лише змінених клітинок.
       if (newValue !== currentValue){
-        sheet.getRange(rowFound, budgetCol).setValue(newValue);
-        cellsWritten++;
+        if (!dryRun) sheet.getRange(rowFound, budgetCol).setValue(newValue);
+        cellsWritten++;   // при dryRun — скільки клітинок ЗМІНИЛОСЬ БИ
       }
 
       if (newFact !== lastWritten){
@@ -19949,15 +19953,18 @@ function exportToSalaryExtras(params){
       }
     });
 
-    Logger.log('[exportToSalaryExtras] точковий запис: %s клітинок змінено, %s формульних рядків пропущено', cellsWritten, formulaRowsSkipped);
+    Logger.log('[exportToSalaryExtras] точковий запис%s: %s клітинок змінено, %s формульних рядків пропущено', (dryRun ? ' (DRY-RUN, нічого не записано)' : ''), cellsWritten, formulaRowsSkipped);
 
-    _commitJournalUpdates(journal, journalOps);
-    Logger.log('[exportToSalaryExtras] journal upsert: %s op(s)', journalOps.length);
+    if (!dryRun) _commitJournalUpdates(journal, journalOps);
+    Logger.log('[exportToSalaryExtras] journal upsert%s: %s op(s)', (dryRun ? ' (DRY-RUN, пропущено)' : ''), journalOps.length);
 
-    Logger.log('[exportToSalaryExtras] DONE: updated=%s, totalFact=%s, notFound=%s', updated, totalFact, JSON.stringify(notFound));
+    Logger.log('[exportToSalaryExtras] DONE%s: updated=%s, totalFact=%s, notFound=%s', (dryRun ? ' DRY-RUN' : ''), updated, totalFact, JSON.stringify(notFound));
 
     return {
       ok: true,
+      dryRun:   dryRun,             // v7.284
+      cellsWritten: cellsWritten,   // при dryRun — скільки клітинок ЗМІНИЛОСЬ БИ
+      journalOps: journalOps.length,
       updated:  updated,
       totalFact: totalFact,
       notFound: notFound,
@@ -20509,11 +20516,13 @@ function diagSalaryExtrasSections(){
               total: reg.rows.length}};
 }
 
+// v7.284: dryRun:true проходить в ОБИДВІ частини — чисте читання без запису.
 function exportAttendance(params){
   var p = exportToPayments(params);
   var s = exportToSalaryExtras(params);
   return {
     ok: !!(p && p.ok && s && s.ok),
+    dryRun:   !!(params && params.dryRun === true),
     payments: p,
     salary:   s,
     loc:      params && params.loc || '',

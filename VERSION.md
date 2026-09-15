@@ -4,12 +4,12 @@
 
 | | |
 |---|---|
-| Версія у репозиторії | **v7.283** (фронт; бекенд v7.279) |
-| md5 | `c6767810c76f8a3b6d23fa7bd2ed1250` |
-| Розмір | 1840412 байт |
-| Зафіксовано | 2026-09-14 |
-| Версія у проді | **v7.278** — задеплоєно 14.09.2026; v7.279 очікує деплою (ручна вставка) |
-| Перевірка | `action=ping` → `pong v7.279` після деплою |
+| Версія у репозиторії | **v7.284** |
+| md5 | `d4dfa581dbc26c7593d2d44f750954d5` |
+| Розмір | 1841519 байт |
+| Зафіксовано | 2026-09-15 |
+| Версія у проді | **v7.279** — задеплоєно 15.09.2026; v7.284 очікує деплою (ручна вставка) |
+| Перевірка | `action=ping` → `pong v7.284` після деплою |
 
 ## Як це працює
 
@@ -23,6 +23,22 @@
 ```
 curl -sL "https://script.google.com/macros/s/AKfycbyTSUVlaN4-PpXe47zCSmhVs0Qxy1FDXG_XsB4zcKNpqBxdhDtS9ibM4YFGkGjmPQDFWQ/exec?action=ping"
 ```
+
+## exportToSalaryExtras поважає dryRun (v7.284)
+
+`exportAttendance({dryRun:true})` мав бути чистим читанням, але dryRun поважала
+лише Payment-частина (`exportAttendanceToPayments`, v7.93); `exportToSalaryExtras`
+ігнорувала параметр і писала в Salary та журнал (kind=salary) насправді.
+
+- `exportToSalaryExtras`: `dryRun === true` → усе рахується як завжди (каталог,
+  відмітки, обʼєднання/поділи, матч рядків, журнальна дельта), але `setValue`
+  у Salary і `_commitJournalUpdates` пропускаються. У відповіді `dryRun`,
+  `cellsWritten` (скільки клітинок змінилось би), `journalOps`. Guard NO_MARKS
+  також повертає `dryRun`.
+- `exportAttendance`: у відповіді `dryRun`; параметр і далі проходить в обидві
+  частини.
+- Поведінка без dryRun не змінилась.
+cache v7.284.
 
 ## Куди йде сума в Salary — підпис на екранах (v7.283, фронт-онлі)
 
