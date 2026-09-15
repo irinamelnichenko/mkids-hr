@@ -4779,8 +4779,9 @@ function _filteredMarks(){
 
 // v-ana: завантажити обʼєднання груп для аналітики (loc + період, усі заняття).
 // Дзеркало серверного _loadDopMergesMap: mergesMap[activityId][date] = [ [normGroup,...], ... ].
-async function _loadAnaMerges(force){
-  var r = _periodRange();
+// v7.286: range — опційно [fromISO, toISO] (inclusive); за замовч. період аналітики.
+async function _loadAnaMerges(force, range){
+  var r = range || _periodRange();
   var key = S.activeLoc + '|' + r[0] + '|' + r[1];
   if (!force && ANA.mergesKey === key) return ANA.merges;
   try {
@@ -4801,8 +4802,9 @@ async function _loadAnaMerges(force){
 }
 // v7.285: довантажити поділи груп для аналітики (loc; getDopSplits не фільтрує
 // за періодом — ріжемо тут). Дзеркало серверного _loadDopSplitsMap.
-async function _loadAnaSplits(force){
-  var r = _periodRange();
+// range — опційно [fromISO, toISO] (inclusive), як у _loadAnaMerges.
+async function _loadAnaSplits(force, range){
+  var r = range || _periodRange();
   var key = S.activeLoc + '|' + r[0] + '|' + r[1];
   if (!force && ANA.splitsKey === key) return ANA.splits;
   try {
@@ -5841,7 +5843,11 @@ async function renderExportPreview(){
   try {
     if (!S.items || !S.items.length) await loadCatalog(false);
     await _loadAnaMarks(false);
-    await _loadAnaMerges(false);   // v-ana: обʼєднання груп для payout «за заняття»
+    // v7.286: обʼєднання й поділи саме за місяць експорту (не за період аналітики)
+    var _expLast = new Date(EXP.year, EXP.month, 0);
+    var _expRange = [EXP.year + '-' + (EXP.month < 10 ? '0' : '') + EXP.month + '-01', _isoFromDate(_expLast)];
+    await _loadAnaMerges(false, _expRange);
+    await _loadAnaSplits(false, _expRange);
   } catch(e){
     var em = escapeHtml(e.message || e);
     $('expPreviewBody').innerHTML = '<tr><td colspan="4" class="muted" style="text-align:center;padding:20px">' + em + '</td></tr>';
@@ -5887,15 +5893,19 @@ async function renderExportPreview(){
   }
 
   // ── Превʼю до SALARY — fact по заняттю ──
+  // v7.286: одиниці через _anaUnitsForModel — те саме, що Аналітика і бекендний
+  // _dopCountUnits: «За дитину» = відмітки, «За захід» = дати, «За заняття» =
+  // сесії (група × дата) з обʼєднаннями й поділами. Досі «За заняття» рахувало
+  // дні × ставка (Кругла, Лего: 2 дні = 1 600 замість 8 сесій = 6 400).
   var byActId = {};
   monthMarks.forEach(function(m){
-    if (!byActId[m.activityId]) byActId[m.activityId] = {count: 0, dates: {}};
-    byActId[m.activityId].count++;
-    byActId[m.activityId].dates[m.date] = true;
+    if (!byActId[m.activityId]) byActId[m.activityId] = [];
+    byActId[m.activityId].push(m);
   });
   var activitiesInLoc = (S.items || []).filter(function(a){ return a.active && a.loc === S.activeLoc; });
   var sRows = activitiesInLoc.map(function(a){
-    var stat = byActId[a.id] || {count: 0, dates: {}};
+    var actMarks = byActId[a.id] || [];
+    var stat = {count: actMarks.length};
     var hasRate = a.teacherRate > 0 && !!a.teacherModel;
     var fact = 0;
     var qtyLabel;
@@ -5903,8 +5913,13 @@ async function renderExportPreview(){
       qtyLabel = stat.count + ' відмічень';
       fact = stat.count * a.teacherRate;
     } else if (a.teacherModel === 'За заняття'){
-      qtyLabel = Object.keys(stat.dates).length + ' днів';
-      fact = Object.keys(stat.dates).length * a.teacherRate;
+      var _sess = _anaUnitsForModel('За заняття', Number(a.id), actMarks);
+      qtyLabel = _sess + ' занять';
+      fact = _sess * a.teacherRate;
+    } else if (a.teacherModel === 'За захід'){
+      var _ev = _anaUnitsForModel('За захід', Number(a.id), actMarks);
+      qtyLabel = _ev + ' захід(ів)';
+      fact = _ev * a.teacherRate;
     } else {
       qtyLabel = stat.count + ' відмічень';
     }
