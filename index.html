@@ -970,10 +970,11 @@ async function ensureClientsLoaded(){
   } catch(e) {}
   try {
     // v7.109 БЕЗПЕКА: бекендний роут getClients замість прямого читання листа публічним ключем.
-    const r = await fetch(_tokUrl(authScriptUrl() + '?action=getClients'), {redirect:'follow'});
+    const r = await fetch(_tokUrl(authScriptUrl() + '?action=getClients&mode=list&format=compact'), {redirect:'follow'});   // v7.292 без полів картки, headers+rows
     if (!r.ok) throw new Error(r.status);
     const j = await r.json();
-    const rows = _normRows((j && j.data) || []);   // v7.110: типізовані значення → рядки
+    const _H = (j && j.headers) || null;
+    const rows = _normRows(_H ? (j.rows||[]).map(function(a){ var o={}; for (var i=0;i<_H.length;i++) o[_H[i]]=a[i]; return o; }) : ((j && j.data) || []));   // v7.110: типізовані значення → рядки
     const crm = {};
     for (let i=0; i<rows.length; i++) {
       const row = rows[i];

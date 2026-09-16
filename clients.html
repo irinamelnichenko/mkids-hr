@@ -1708,14 +1708,24 @@ async function loadPaymentsYearly(force){
   }
 }
 
+// v7.292: getClients&format=compact → {headers, rows}; розгортаємо в обʼєкти, як було.
+function _expandClientsResp(j){
+  if(j && Array.isArray(j.headers) && Array.isArray(j.rows)){
+    var H=j.headers; return j.rows.map(function(r){ var o={}; for(var i=0;i<H.length;i++) o[H[i]]=r[i]; return o; });
+  }
+  return (j && j.data) || [];
+}
 async function loadClients(force){
   console.log('[loadClients] fetching from Sheets...');
   var rows=[];
   try{
     // v7.109: лише бекендний роут getClients (прямий ключ прибрано). Повертає ті самі
     // обʼєкти-рядки, що й раніше rowsToObjects — mergeCRMFromCloud уже сумісний (був fallback).
-    var j=await _apiGetRetry('getClients', 3);   // 3 спроби (1с, 3с) перед offline
-    rows=_normRows((j&&j.data)||[]);             // v7.110: типізовані значення → рядки (як раніше)
+    // v7.292: mode=list — без полів, які читає лише картка (JSON здоровʼя/розвитку, нотатки,
+    // документи, РНОКПП, № дод. договору): 2,37 МБ → ~1,7 МБ; довантажуються при відкритті
+    // картки через getClientCard.
+    var j=await _apiGetRetry('getClients&mode=list&format=compact', 3);   // 3 спроби (1с, 3с) перед offline
+    rows=_normRows(_expandClientsResp(j));       // v7.110: типізовані значення → рядки (як раніше)
     if(!rows.length) throw new Error('empty response from Apps Script');
   }catch(e2){
     // Offline-картки беруться з S.crm (loadLocalCRM завантажив із SK до loadClients).
@@ -1777,6 +1787,12 @@ function mergeCRMFromCloud(rows){
     function safeJSON(v,def){
       try{ return JSON.parse(String(v||def)); }catch(e){ return JSON.parse(def); }
     }
+    // v7.292: у режимі списку колонок здоровʼя/розвитку немає — лишаємо те, що вже є в
+    // localStorage з попередніх завантажень; якщо нема нічого — картка «легка» (_lite),
+    // і openChild довантажить її через getClientCard перед показом.
+    var _hasHeavy = Object.prototype.hasOwnProperty.call(row,'Здоров\'я (JSON)');
+    var _prev = S.crm[id] || {};
+    function _hv(col, key, def){ return _hasHeavy ? (row[col]||def) : (_prev[key]!==undefined ? _prev[key] : def); }
     S.crm[id]={
       name:      row['ПІБ дитини']||'',
       loc:       row['Локація']||'',
@@ -1791,13 +1807,13 @@ function mergeCRMFromCloud(rows){
       dadEmail:  row['Email тата']||'',
       // v6.26 Етап 1A — поля для PDF-рахунків (signer + дод. договір).
       signerParent: row['Підписант договору']||'mom',
-      additionalContractNumber: row['Номер додаткового договору']||'',
+      additionalContractNumber: _hv('Номер додаткового договору','additionalContractNumber',''),
       contractDate: row['Дата договору']||'',
       contractType: row['Тип договору']||'standard',
       monthlyFee: +(row['Сума договору']||0),
       entryFee:   +(row['Вступний внесок']||0),
       status:    row['Статус']||'active',
-      notes:     row['Нотатки']||'',
+      notes:     _hv('Нотатки','notes',''),
       absences:          safeJSON(row['Відсутності (JSON)'],'[]'),
       entryFeeSchedule:  safeJSON(row['Графік внеску (JSON)'],'[]'),
       feeHistory:        safeJSON(row['Зміни суми (JSON)'],'[]'),
@@ -1805,19 +1821,39 @@ function mergeCRMFromCloud(rows){
       adaptDate:         row['Дата адаптації']||'',
       terminationDate:   row['Дата розірвання']||'',
       terminationReason: row['Причина розірвання']||'',
-      birthCert:         row['Свідоцтво про народження']||'',
-      childRegAddress:   row['Місце реєстрації дитини']||'',
-      momDoc:            row['Документ мами']||'',
-      momRnokpp:         row['РНОКПП мами']||'',
-      dadDoc:            row['Документ тата']||'',
-      dadRnokpp:         row['РНОКПП тата']||'',
+      birthCert:         _hv('Свідоцтво про народження','birthCert',''),
+      childRegAddress:   _hv('Місце реєстрації дитини','childRegAddress',''),
+      momDoc:            _hv('Документ мами','momDoc',''),
+      momRnokpp:         _hv('РНОКПП мами','momRnokpp',''),
+      dadDoc:            _hv('Документ тата','dadDoc',''),
+      dadRnokpp:         _hv('РНОКПП тата','dadRnokpp',''),
       createdAt: row['Створено']||'',
       updatedAt: row['Оновлено']||'',
-      health:    safeJSON(row['Здоров\'я (JSON)'],'{}'),  // v6.46
-      development: safeJSON(row['Розвиток (JSON)'],'{}')  // v6.47
+      health:      _hasHeavy ? safeJSON(row['Здоров\'я (JSON)'],'{}') : (_prev.health || {}),         // v6.46
+      development: _hasHeavy ? safeJSON(row['Розвиток (JSON)'],'{}') : (_prev.development || {}),  // v6.47
+      _lite:       _hasHeavy ? false : (_prev._lite !== false)   // true, поки картку не довантажили повністю
     };
   });
   saveLocalCRM();
+}
+
+// v7.292: повна картка з бекенду (getClientCard) — здоровʼя, розвиток і решта полів.
+// Повертає true, якщо довантажено. Мережевий збій → false (картка лишається як є).
+async function ensureFullCard(id){
+  var c=S.crm[id]; if(!c) return false;
+  try{
+    var j=await apiGet('getClientCard&id='+encodeURIComponent(id));
+    var row=_normRows([j.data||{}])[0]||{};
+    function safeJSON(v,def){ try{ return JSON.parse(String(v||def)); }catch(e){ return JSON.parse(def); } }
+    c.health=safeJSON(row['Здоров\'я (JSON)'],'{}');
+    c.development=safeJSON(row['Розвиток (JSON)'],'{}');
+    c.notes=row['Нотатки']||''; c.additionalContractNumber=row['Номер додаткового договору']||'';
+    c.birthCert=row['Свідоцтво про народження']||''; c.childRegAddress=row['Місце реєстрації дитини']||'';
+    c.momDoc=row['Документ мами']||''; c.momRnokpp=row['РНОКПП мами']||''; c.dadDoc=row['Документ тата']||''; c.dadRnokpp=row['РНОКПП тата']||'';
+    c._lite=false;
+    saveLocalCRM();
+    return true;
+  }catch(e){ console.warn('[ensureFullCard]', id, e&&e.message); return false; }
 }
 
 // ─── НОРМАЛІЗАЦІЯ ГРУПИ ──────────────────────────────────────────────────────
@@ -3783,11 +3819,21 @@ function openNewChild(){
   document.getElementById('mChild').classList.remove('hidden');
 }
 
-function openChild(id,group,teacher,loc,name){
+async function openChild(id,group,teacher,loc,name){
   S._absFormOpen=false;
   S.editId=id;
   S.isNew=false;
   var card=getCRMCard(id);
+  // v7.292: легка картка (зі списку без здоровʼя/розвитку) — довантажуємо ПЕРЕД показом,
+  // щоб збереження не затерло ці поля; повна — оновлюємо у фоні (правки з інших пристроїв).
+  if(card._lite){
+    showFloatMsg('⏳ Довантажую картку…','info');
+    var _ok=await ensureFullCard(id);
+    if(!_ok) showFloatMsg('⚠️ Здоровʼя/розвиток не довантажились — зміни в цих вкладках не зберігайте до появи мережі','err');
+    if(S.editId!==id) return;   // встигли відкрити іншу
+  } else {
+    ensureFullCard(id).then(function(ok){ if(ok && S.editId===id && S.curTab===7) renderHealthTab(); });
+  }
   if(!card.name) card.name=name;
   if(!card.group) card.group=group;
   if(!card.teacher) card.teacher=teacher;
@@ -6728,6 +6774,16 @@ function buildClientPayload(c, id){
     development: c.development||{}   // v6.47
   };
 }
+// v7.292: якщо картка досі «легка» (довантаження не вдалось) — НЕ шлемо health/development
+// взагалі: бекенд saveClient при відсутніх ключах лишає наявні клітинки.
+(function(){
+  var _build=buildClientPayload;
+  buildClientPayload=function(c,id){
+    var p=_build(c,id);
+    if(c && c._lite){ ['health','development','notes','birthCert','childRegAddress','momDoc','momRnokpp','dadDoc','dadRnokpp','additionalContractNumber'].forEach(function(k){ delete p[k]; }); }
+    return p;
+  };
+})();
 
 // v6.29.1 — категорії причин розірвання (емодзі+назва = stored value).
 var TERM_REASON_CATEGORIES = [

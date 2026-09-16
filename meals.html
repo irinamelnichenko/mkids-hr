@@ -778,7 +778,7 @@ async function loadAll(){
     var cat=await apiGet('getMealCatalog','loc='+enc(S.loc));
     S.cat=((cat&&cat.items)||[]).filter(function(x){return x.active;}).map(function(x,i){ x.label=shortLabel(x.name); x.color=TG_COLORS[i%TG_COLORS.length]; return x; });
     if(!S.cat.length){ document.getElementById('main').innerHTML='<div class="empty">Харчування не налаштоване для «'+esc(S.loc)+'».<br><span class="muted">Потрібні активні позиції в каталозі та 7-колонкова розкладка Payment.</span></div>'; return; }
-    if(!S.clients){ var cl=await apiGet('getClients'); S.clients=(cl&&cl.data)||(Array.isArray(cl)?cl:[])||[]; }
+    if(!S.clients){ var cl=await apiGet('getClients&mode=list&format=compact'); var _H=cl&&cl.headers; S.clients=_H?(cl.rows||[]).map(function(a){ var o={}; for(var i=0;i<_H.length;i++) o[_H[i]]=a[i]; return o; }):((cl&&cl.data)||(Array.isArray(cl)?cl:[])||[]); }   // v7.292
     S.kids=S.clients.filter(function(r){ return String(r['Локація']||'')===S.loc && String(r['Статус']||'').toLowerCase()==='active'; })
       .map(function(r){ return {name:String(r['ПІБ дитини']||'').trim(), group:String(r['Група']||'').trim()}; })
       .filter(function(k){return k.name;})

@@ -1,5 +1,9 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.291
+// m.kids CRM — Google Apps Script v7.292
+// v7.292: getClients&mode=list&format=compact — без полів, які читає лише картка, і без
+//         повторення назв колонок (2,37 МБ → ~0,8 МБ на кожне відкриття Клієнтів);
+//         getClientCard&id= — повна картка за ID; saveClient лишає важкі клітинки, якщо
+//         ключів у payload немає.
 // v7.291: ЗАМОК МІСЯЦЯ на даних і експортах. «Закриті_Місяці» досі стримували лише Payment-
 //         колонки; відмітки, уроки, Табель, обʼєднання/поділи, харчування, «Чомусики» та
 //         експорти в Salary його не читали — липневу відмітку можна було поставити сьогодні
@@ -5356,7 +5360,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.291', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.292', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -5364,7 +5368,8 @@ function doGet(e) {
     else if (action === 'getPaymentsYearly')  result = getPaymentsYearly();
     else if (action === 'getAllPayments')     result = getAllPayments({loc:(e.parameter&&e.parameter.loc)||'', name:(e.parameter&&e.parameter.name)||'', year:(e.parameter&&e.parameter.year)||''}); // v7.108 історія оплат дитини за рік з Payment-файлу
     else if (action === 'getReconcileLog')           result = getReconcileLog({child:e.parameter.child||'', loc:e.parameter.loc||'', from:e.parameter.from||'', to:e.parameter.to||''}); // v7.94
-    else if (action === 'getClients')         result = getClients();
+    else if (action === 'getClients')         result = getClients(e.parameter || {});   // v7.292 &mode=list без JSON здоровʼя/розвитку
+    else if (action === 'getClientCard')      result = getClientCard(e.parameter || {}); // v7.292 повна картка за id
     else if (action === 'runAggregate')       result = aggregatePayments();
     else if (action === 'dryRunSchoolRoster') result = dryRunSchoolRoster(e.parameter || {});   // v7.252 ростер шкіл за картками; v7.267 &simulateMove=1
     else if (action === 'dryRunPayerIndex')   result = dryRunPayerIndex(e.parameter || {});   // v7.253 ростер звірки платежів (read-only)
@@ -5813,23 +5818,77 @@ function getPayments() {
   return {ok:true, data:rows, updated:updated};
 }
 
-function getClients() {
+// v7.292: mode='list' — без колонок, які читає ЛИШЕ картка дитини (JSON здоровʼя й
+// розвитку, нотатки, документи, РНОКПП, № дод. договору). Список їх не показує;
+// повну картку віддає getClientCard(id). Профіль 15.09: повна відповідь 2,37 МБ на
+// кожне відкриття clients.html; самі здоровʼя+розвиток — лише 8%, з документами й
+// нотатками — ~29%. «Відсутності (JSON)» (19%) лишаються: їх читають списки й запити.
+// Ключ мапи — заголовок колонки, значення — ключ payload у saveClient: коли ключа в
+// payload НЕМАЄ (картка збережена зі списку без довантаження), клітинку лишаємо як є.
+var CLIENT_HEAVY_COLS = {
+  "Здоров'я (JSON)": 'health', 'Розвиток (JSON)': 'development', 'Нотатки': 'notes',
+  'Свідоцтво про народження': 'birthCert', 'Місце реєстрації дитини': 'childRegAddress',
+  'Документ мами': 'momDoc', 'РНОКПП мами': 'momRnokpp', 'Документ тата': 'dadDoc', 'РНОКПП тата': 'dadRnokpp',
+  'Номер додаткового договору': 'additionalContractNumber'
+};
+// saveClient: для важких колонок без ключа в payload — лишити наявне значення рядка.
+function _clientPreserveAbsent(row, oldRow, headers, data){
+  for (var c = 0; c < headers.length && c < row.length; c++){
+    var key = CLIENT_HEAVY_COLS[String(headers[c])];
+    if (key && data[key] === undefined) row[c] = (oldRow[c] === undefined ? row[c] : oldRow[c]);
+  }
+}
+// format='compact' → {headers:[...], rows:[[...]]} замість масиву обʼєктів: назви колонок
+// не повторюються 1 246 разів (ще −50% до розміру; фронт розгортає в обʼєкти сам).
+function getClients(params) {
+  params = params || {};
+  var lite = (String(params.mode || '') === 'list');
+  var compact = (String(params.format || '') === 'compact');
   var ss = getCRMSpreadsheet();
   var sheet = ss.getSheetByName(SHEET_CLIENTS);
   if (!sheet) return {ok:false, error:'Sheet not found'};
   var vals = sheet.getDataRange().getValues();
-  if (vals.length < 2) return {ok:true, data:[]};
-  var headers = vals[0];
+  if (vals.length < 2) return {ok:true, data:[], mode: lite ? 'list' : 'full'};
+  var headers = vals[0].map(String);
+  var skip = {};
+  if (lite) Object.keys(CLIENT_HEAVY_COLS).forEach(function(h){ skip[h] = true; });
+  var keepIdx = [];
+  for (var h = 0; h < headers.length; h++) if (!skip[headers[h]]) keepIdx.push(h);
   var rows = [];
   for (var r = 1; r < vals.length; r++) {
     if (!vals[r][0]) continue;
-    var obj = {};
-    for (var c = 0; c < headers.length; c++) {
-      obj[String(headers[c])] = vals[r][c];
+    if (compact){
+      var arr = new Array(keepIdx.length);
+      for (var k = 0; k < keepIdx.length; k++) arr[k] = vals[r][keepIdx[k]];
+      rows.push(arr);
+      continue;
     }
+    var obj = {};
+    for (var c = 0; c < keepIdx.length; c++) obj[headers[keepIdx[c]]] = vals[r][keepIdx[c]];
     rows.push(obj);
   }
-  return {ok:true, data:rows};
+  if (compact) return {ok:true, headers: keepIdx.map(function(i){ return headers[i]; }), rows: rows, mode: lite ? 'list' : 'full', format: 'compact'};
+  return {ok:true, data:rows, mode: lite ? 'list' : 'full'};
+}
+// v7.292: одна повна картка за ID (усі колонки, включно зі здоровʼям і розвитком).
+// Рядок шукаємо TextFinder-ом по колонці A, читаємо лише його.
+function getClientCard(params){
+  try {
+    var id = String((params || {}).id || '').trim();
+    if (!id) return {ok:false, error:'id обовʼязковий'};
+    var ss = getCRMSpreadsheet();
+    var sheet = ss.getSheetByName(SHEET_CLIENTS);
+    if (!sheet) return {ok:false, error:'Sheet not found'};
+    var lastRow = sheet.getLastRow(), lastCol = sheet.getLastColumn();
+    if (lastRow < 2) return {ok:false, code:'NOT_FOUND', error:'Картку не знайдено'};
+    var hit = sheet.getRange(2, 1, lastRow - 1, 1).createTextFinder(id).matchEntireCell(true).findNext();
+    if (!hit) return {ok:false, code:'NOT_FOUND', error:'Картку не знайдено: ' + id};
+    var headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(String);
+    var row = sheet.getRange(hit.getRow(), 1, 1, lastCol).getValues()[0];
+    var obj = {};
+    for (var c = 0; c < headers.length; c++) obj[headers[c]] = row[c];
+    return {ok:true, data:obj, row: hit.getRow()};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 
 // v7.109: getBdayStatus — читає лист bday_sync_status (CRM) і віддає рядками-обʼєктами.
@@ -7260,6 +7319,7 @@ function saveClient(data) {
   for (var r = 1; r < vals.length; r++) {
     if (String(vals[r][0]) === String(data.id)) {
       row[29] = vals[r][29] || data.createdAt || now;
+      _clientPreserveAbsent(row, vals[r], vals[0], data);   // v7.292: картка зі списку без важких полів
       var _oldGrpP = String(vals[r][3] || '');
       _contractNumberAsText(sheet, r+1);                    // v7.276: № договору — текст, не дата
       sheet.getRange(r+1, 1, 1, row.length).setValues([row]);
@@ -7293,6 +7353,7 @@ function saveClient(data) {
     var mergedAbs = _mergeAbsencesUnion(existAbs, data.absences || []);
     row[16] = JSON.stringify(mergedAbs);
     row[29] = vals[cand][29] || data.createdAt || now;
+    _clientPreserveAbsent(row, vals[cand], vals[0], data);   // v7.292
     var _oldGrpM = String(vals[cand][3] || '');
     _contractNumberAsText(sheet, cand + 1);                 // v7.276
     sheet.getRange(cand + 1, 1, 1, row.length).setValues([row]);
