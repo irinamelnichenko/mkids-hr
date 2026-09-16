@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.295
+// m.kids CRM — Google Apps Script v7.296
+// v7.296: стеля предметників — за блоком норм того місяця, що перевіряється (ymd у
+//         _predCeilingFor/_predNormLookup): діагностика, відмітка уроку, bulk, експорт.
 // v7.295: норми предметників — з 01.09.2026 діє блок C–G листа «Норми» (v7.230 вмикала I–M).
 //         Уроки й відмітки не чіпаються: норма — лише стеля експорту й підказка при відмітці.
 // v7.294: getErrLog&days=7 (CFO/HR) — TG_Err за N днів + стан нічної гарантії; збої маршрутів
@@ -5367,7 +5369,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.295', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.296', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -6571,7 +6573,7 @@ function diagPredNorms(params){
     Object.keys(byKey).forEach(function(k){
       var p = k.split('||'), loc = p[0], grp = p[1], subj = p[2];
       var n = Object.keys(byKey[k]).length;
-      var ceil = _predCeilingFor(loc, subj, grp);
+      var ceil = _predCeilingFor(loc, subj, grp, ymd);   // v7.296: стеля за блоком цього місяця
       if (ceil > 0 && n > ceil) over.push({loc:loc, group:grp, subject:subj, marked:n, ceiling:ceil, over:n - ceil});
     });
     return {ok:true, readOnly:true, forMonth:(month + '/' + year),
@@ -28453,10 +28455,12 @@ function _loadPredNorms(targetYmd){
 // усі перетворились би на ту саму стелю 15 і нічого не обмежували. Тому норма,
 // задана явно для локації, діє ЯК Є; підлога лишається тільки там, де вона й
 // була — у регіональній матриці (щоб не змінити поведінку 13 інших локацій).
-function _predCeilingFor(loc, subject, group){
+// v7.296: ymd (опційно) — місяць, за блоком норм якого рахувати стелю (C–G з 09.2026,
+// I–M раніше); без нього — сьогоднішня дата.
+function _predCeilingFor(loc, subject, group, ymd){
   if (subject === PRED_UNLIMITED_SUBJ) return 0;
   if (_predIsSchoolLoc(loc)) return 0;
-  var r = _predNormLookup(loc, subject, group);
+  var r = _predNormLookup(loc, subject, group, ymd);
   if (r.norm <= 0) return 0;
   // v7.260: ПІДЛОГУ 15 ЗНЯТО. Вона з'явилась у v6.57 як «мінімальний місячний
   // ліміт», але зрівнювала всі предмети: Психолог 2, Логопед 4, Музика 6 і
@@ -28568,7 +28572,7 @@ function _loadPredLocNorms(){
   return out;
 }
 // → {norm, src:'loc'|'region'|'none'}. Порядок: назва групи → тип → «*» → регіон.
-function _predNormLookup(loc, subject, group){
+function _predNormLookup(loc, subject, group, ymd){
   var L = _loadPredLocNorms()[String(loc || '').trim()];
   var S = L && L[subject];
   if (S){
@@ -28581,7 +28585,7 @@ function _predNormLookup(loc, subject, group){
   var gt = _normalizeGroupType(group);
   if (!gt) return {norm:0, src:'none'};            // нестандартна назва → без ліміту
   var region = _predLocToRegion(loc);
-  var norms = _loadPredNorms();
+  var norms = _loadPredNorms(ymd);   // v7.296: блок норм місяця, що перевіряється
   var n = (norms[region] && norms[region][subject] && norms[region][subject][gt]) || 0;
   return {norm:n, src:(n ? 'region' : 'none')};
 }
@@ -29308,7 +29312,7 @@ function savePredmetnykyLesson(actorId, lesson){
       // v7.236: рахунок стелі більше не дублюється тут — єдине джерело
       // _predCeilingFor (воно ж знає про підлогу 15 лише для регіональної матриці).
       var current = 0;
-      var norm = _predCeilingFor(location, subject, group);
+      var norm = _predCeilingFor(location, subject, group, ym.y + '-' + ('0' + ym.m).slice(-2) + '-01');   // v7.296
       if (norm > 0){
         var existing = _loadPredLessons(location);
         for (var i = 0; i < existing.length; i++){
@@ -29386,9 +29390,10 @@ function bulkPredmetnykyLessons(actorId, add, removeIds){
       function subjectsOf(loc){ if (!(loc in cSubj)) cSubj[loc] = _predSubjectsForLoc(loc) || []; return cSubj[loc]; }
       function groupsOf(loc){ if (!(loc in cGroups)) cGroups[loc] = (_loadRealGroups(loc)[loc]) || []; return cGroups[loc]; }
       function canEdit(loc){ if (!(loc in cPerm)) cPerm[loc] = !!_canEditPredmetnyky(actor, loc); return cPerm[loc]; }
-      function ceilOf(loc, subj, grp){
-        var k = loc + '|' + subj + '|' + grp;
-        if (!(k in cCeil)) cCeil[k] = _predCeilingFor(loc, subj, grp);
+      function ceilOf(loc, subj, grp, ym){
+        var ymd = ym ? (ym.y + '-' + ('0' + ym.m).slice(-2) + '-01') : '';
+        var k = loc + '|' + subj + '|' + grp + '|' + ymd;
+        if (!(k in cCeil)) cCeil[k] = _predCeilingFor(loc, subj, grp, ymd);   // v7.296
         return cCeil[k];
       }
       // Поточна кількість уроків (loc, ПОВНА група, subject, рік-місяць).
@@ -29475,7 +29480,7 @@ function bulkPredmetnykyLessons(actorId, add, removeIds){
         }
         if (!canEdit(location)){ added.push({ok:false, code:'PERM_DENIED', error:'Permission denied'}); continue; }
 
-        var norm = ceilOf(location, subject, group);
+        var norm = ceilOf(location, subject, group, ym);
         if (norm > 0){
           var cur = currentCount(location, group, subject, ym);
           if (cur >= norm){
@@ -30268,7 +30273,7 @@ function exportPredmetnykyToSalary(params){
       capDetail.forEach(function(g){ perGroup[g] = (perGroup[g] || 0) + 1; });
       var overGroups = [];
       Object.keys(perGroup).forEach(function(g){
-        var ceil = _predCeilingFor(loc, a.subject_norm, g);
+        var ceil = _predCeilingFor(loc, a.subject_norm, g, year + '-' + ('0' + month).slice(-2) + '-01');   // v7.296: блок місяця експорту
         if (ceil > 0 && perGroup[g] > ceil){
           capExcess += (perGroup[g] - ceil);
           overGroups.push({group:g, count:perGroup[g], ceiling:ceil, over:perGroup[g] - ceil});
