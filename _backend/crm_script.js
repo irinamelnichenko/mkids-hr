@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.293
+// m.kids CRM — Google Apps Script v7.294
+// v7.294: getErrLog&days=7 (CFO/HR) — TG_Err за N днів + стан нічної гарантії; збої маршрутів
+//         doGet/doPost і справжні помилки гарантії тепер пишуться в TG_Err.
 // v7.293: кеш 5 хв для getSalaryOverview (17 Salary-файлів, 68 с) і getFillStatus (62 с):
 //         gzip+base64 у CacheService, версії ver_salary / ver_fill bump-ають маршрути запису.
 //         getFillStatus читає Табель через індекс дат (сегменти днів), не 50 тис. рядків.
@@ -5363,7 +5365,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.293', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.294', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -5451,6 +5453,7 @@ function doGet(e) {
     else if (action === 'getPredmetnyCatalog')        result = getPredmetnyCatalog(e.parameter && e.parameter.loc || '');
     else if (action === 'getPredmetnyMarks')          result = getPredmetnyMarks(e.parameter || {});
     else if (action === 'getHrAudit')                  result = getHrAudit(e.parameter || {});                                          // v7.149 read-only аудит
+    else if (action === 'getErrLog')                   result = getErrLog(e.parameter || {});                                           // v7.294 CFO/HR: TG_Err за N днів + стан гарантії
     else if (action === 'repairPredmetnykyLessons')    result = repairPredmetnykyLessons(Number(e.parameter && e.parameter.actorId || 0), {dryRun:true}); // v7.149 GET = ЗАВЖДИ dryRun, запис лише POST-ом
     else if (action === 'getTasks')                   result = getTasks(e.parameter || {});
     else if (action === 'getTaskActivity')            result = getTaskActivity(e.parameter && e.parameter.taskId || 0);
@@ -5465,6 +5468,7 @@ function doGet(e) {
     else                                             result = {ok:false, error:'Unknown action: ' + action};
     return jsonOut(result);
   } catch(err) {
+    try { _tgErr('route:' + ((typeof action !== 'undefined' && action) || (typeof body !== 'undefined' && body && body.action) || '?'), err); } catch(_le){}   // v7.294: збої маршрутів — у TG_Err
     return jsonOut({ok:false, error:err.message || String(err)});
   }
 }
@@ -5620,6 +5624,7 @@ function doPost(e) {
     if (result && result.ok && _PRED_WRITE_ACTIONS[body.action]) _bumpPredVer();
     return jsonOut(result);
   } catch(err) {
+    try { _tgErr('route:' + ((typeof action !== 'undefined' && action) || (typeof body !== 'undefined' && body && body.action) || '?'), err); } catch(_le){}   // v7.294: збої маршрутів — у TG_Err
     return jsonOut({ok:false, error:err.message || String(err)});
   }
 }
@@ -9433,6 +9438,11 @@ function _expGuardRunBatch(){
         errs: st.errs.slice(0, 20)
       }));
     } catch(e){ Logger.log('[expGuard] не зміг зберегти підсумок: %s', e && e.message); }
+    // v7.294: справжні збої прогону — у TG_Err (NO_MARKS — штатний захист, не збій).
+    try {
+      var _real = (st.errs || []).filter(function(x){ return String(x).indexOf('немає жодної відмітки') < 0 && String(x).indexOf('NO_MARKS') < 0; });
+      if (_real.length) _tgErr('nightly-guard', _real.length + ' збоїв з ' + st.locs.length + ' локацій: ' + _real.join(' | '));
+    } catch(_ge){}
     props.deleteProperty(_EXP_GUARD_KEY);
     _expGuardDeleteContinuations();
   }
@@ -31255,6 +31265,61 @@ function _publishAggregate(ss, targetName, headerFn, rows, numCols, opts){
 // Аркуш HR_Audit лежить у CONFIG-таблиці. Колонки:
 //   ts | actorId | actorName | action | rowNum | before_json | after_json
 // ─────────────────────────────────────────────────────────────────────────
+// v7.294: журнал помилок бекенду (лист TG_Err) за N днів + стан нічної гарантії.
+// Лише CFO/HR (роль з токена або actorId). Досі лист не мав read-only маршруту —
+// коли гарантія падала кілька днів поспіль, ніхто цього не бачив.
+var ERRLOG_KINDS = {
+  'nightly-guard': 'system', 'mirror': 'system', 'mirror-newtab': 'system', 'migrate': 'system',
+  'webhook': 'bot', 'cb-err': 'bot', 'createLead': 'bot', 'link-lead-card': 'bot', 'link-card-lead': 'bot',
+  'attendance-orphan': 'data'
+};
+function _errLogActorOk(actorId){
+  try {
+    var role = '', id = 0;
+    if (_CURRENT_AUTH && _CURRENT_AUTH.id){ role = String(_CURRENT_AUTH.role || '').toLowerCase(); id = Number(_CURRENT_AUTH.id) || 0; }
+    else if (Number(actorId)){ var u = _getActor(Number(actorId)); role = String(u.role || '').toLowerCase(); id = Number(u.id) || 0; }
+    return id === 1 || role === 'cfo' || role === 'hr';
+  } catch(_e){ return false; }
+}
+function getErrLog(params){
+  try {
+    params = params || {};
+    if (!_errLogActorOk(params.actorId)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO/HR'};
+    var days = Math.max(1, Math.min(60, Number(params.days) || 7));
+    var since = Date.now() - days * 86400000;
+    var ss = getCRMSpreadsheet();
+    var sh = ss.getSheetByName('TG_Err');
+    var items = [], byWhere = {}, byKind = {}, byDay = {}, total = 0;
+    if (sh && sh.getLastRow() > 1){
+      var vals = sh.getRange(2, 1, sh.getLastRow() - 1, 3).getValues();
+      for (var i = vals.length - 1; i >= 0; i--){         // з кінця — новіші перші
+        var tsRaw = vals[i][0], ts = null;
+        if (tsRaw instanceof Date) ts = tsRaw;
+        else { var m = /^(\d{2})\.(\d{2})\.(\d{4})(?:\s+(\d{2}):(\d{2}))?/.exec(String(tsRaw || '')); if (m) ts = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]), Number(m[4] || 0), Number(m[5] || 0)); }
+        if (!ts || isNaN(ts.getTime())) continue;
+        if (ts.getTime() < since) break;                   // лист хронологічний — далі старіше
+        var where = String(vals[i][1] || ''), err = String(vals[i][2] || '');
+        var kind = ERRLOG_KINDS[where] || (where.indexOf('route:') === 0 ? 'system' : 'other');
+        var day = Utilities.formatDate(ts, 'Europe/Kiev', 'yyyy-MM-dd');
+        total++;
+        byWhere[where] = (byWhere[where] || 0) + 1;
+        byKind[kind] = (byKind[kind] || 0) + 1;
+        byDay[day] = (byDay[day] || 0) + 1;
+        if (items.length < 300) items.push({ts: Utilities.formatDate(ts, 'Europe/Kiev', 'dd.MM.yyyy HH:mm'), day: day, where: where, kind: kind, error: err.slice(0, 300)});
+      }
+    }
+    var guard = null; try { guard = getExportGuardStatus(); } catch(_g){ guard = {ok:false, error:String(_g && _g.message || _g)}; }
+    var guardAlert = '';
+    if (guard && guard.ok){
+      if (guard.running && guard.current && guard.current.stuck) guardAlert = 'Гарантія зависла: старт ' + guard.current.startedAt + ', ' + guard.current.minutesAgo + ' хв тому';
+      else if (guard.last && guard.last.hoursAgo != null && guard.last.hoursAgo > 30) guardAlert = 'Гарантія не завершувалась ' + Math.round(guard.last.hoursAgo) + ' год (останній фініш ' + guard.last.finishedAt + ')';
+      else if (!guard.last && !guard.running) guardAlert = guard.note || 'Гарантія ще жодного разу не завершилась';
+    }
+    return {ok:true, days: days, total: total, byWhere: byWhere, byKind: byKind, byDay: byDay,
+            items: items, guard: guard, guardAlert: guardAlert, sheetRows: sh ? Math.max(0, sh.getLastRow() - 1) : 0};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
 function getHrAudit(params){
   try {
     params = params || {};

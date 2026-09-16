@@ -175,6 +175,21 @@ select,input{font-family:inherit}
 .fc-chip{background:#fff;border-radius:12px;padding:10px 16px;box-shadow:0 1px 3px rgba(0,0,0,.05);font-size:13px;font-weight:700;display:flex;align-items:center;gap:8px;color:var(--dark2)}
 .fc-chip b{font-size:18px}
 .fc-banner{background:#fff7e6;border:1px solid #f5d99b;color:#9a6a00;padding:12px 16px;border-radius:10px;margin-bottom:14px;font-weight:600}
+/* v7.294: помилки бекенду (TG_Err) */
+.el-card{margin-top:18px}
+.el-hd{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.el-hd h2{font-size:16px;margin:0}
+.el-ok{background:#e8f6ec;border:1px solid #bfe3c8;color:#1f6b3a;padding:10px 14px;border-radius:10px;font-weight:600}
+.el-alert{background:#fde8e6;border:1px solid #f2b8b3;color:#9b2a22;padding:10px 14px;border-radius:10px;font-weight:600;margin-bottom:10px}
+.el-chips{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 12px}
+.el-chip{background:#f3f5f7;border-radius:999px;padding:4px 11px;font-size:12.5px;font-weight:600;color:#3b4652}
+.el-chip.sys{background:#fde8e6;color:#9b2a22}.el-chip.bot{background:#e6eefb;color:#2a4a8a}.el-chip.data{background:#fff3df;color:#8a5a00}
+.el-tbl{width:100%;border-collapse:collapse;font-size:12.5px}
+.el-tbl th,.el-tbl td{padding:6px 8px;border-bottom:1px solid #eef1f4;text-align:left;vertical-align:top}
+.el-tbl th{color:#6b7682;font-weight:600;white-space:nowrap}
+.el-tbl td.ts{white-space:nowrap;font-variant-numeric:tabular-nums;color:#6b7682}
+.el-tbl td.err{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;word-break:break-word}
+.el-more{font-size:12px;color:#6b7682;margin-top:6px}
 .fc-stat{display:inline-flex;align-items:center;gap:5px;font-weight:700;white-space:nowrap}
 .fc-stat.green{color:#1e8e4e}.fc-stat.yellow{color:#e67e22}.fc-stat.red{color:#c0392b}.fc-stat.gray{color:#7f8c8d}
 .fc-meta{color:var(--gray);font-size:12px;font-weight:500}
@@ -436,6 +451,11 @@ select,input{font-family:inherit}
     <div id="fcChips" class="fc-chips"></div>
     <div class="inv-card">
       <div id="fcWrap"><div class="inv-loading">⏳ Завантаження…</div></div>
+    </div>
+    <!-- v7.294: помилки бекенду за 7 днів (TG_Err + стан нічної гарантії), лише CFO/HR -->
+    <div class="inv-card el-card hidden" id="elCard">
+      <div class="el-hd"><h2>🛠 Помилки бекенду за 7 днів</h2><button class="btn btn-sm" onclick="loadErrLog()">🔄</button></div>
+      <div id="elBody"><div class="inv-loading">⏳ Завантаження…</div></div>
     </div>
   </div>
 
@@ -1161,8 +1181,46 @@ function renderFillRange(){
   $('meta').textContent = 'Дата: ' + FC.date;
   $('loadBox').classList.add('hidden');
   $('content').classList.remove('hidden');
+  if (_rl === 'hr' || _rl === 'cfo' || Number(S.user.id) === 1){ $('elCard').classList.remove('hidden'); loadErrLog(); }   // v7.294
   await loadFill();
 })();
+
+// ── v7.294: помилки бекенду (getErrLog, лише CFO/HR) ──────────────────────────
+async function loadErrLog(){
+  var box = $('elBody'); box.innerHTML = '<div class="inv-loading">⏳ Завантаження…</div>';
+  try {
+    var r = await fetch(CFG.SCRIPT_URL + '?action=getErrLog&days=7&actorId=' + encodeURIComponent(S.user.id || 0), {redirect:'follow'});
+    var j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'failed');
+    var html = '';
+    if (j.guardAlert) html += '<div class="el-alert">⛔ ' + escapeHtml(j.guardAlert) + '</div>';
+    var g = j.guard && j.guard.last;
+    if (g && g.finishedAt){
+      var realErrs = (g.errs || []).filter(function(x){ return String(x).indexOf('немає жодної відмітки') < 0; });
+      html += '<div class="el-chips">' +
+        '<span class="el-chip">🌙 Гарантія: фініш ' + escapeHtml(String(g.finishedAt).replace('T',' ').slice(0,16)) + ' UTC · ' + g.locsDone + '/' + g.locs + ' лок.</span>' +
+        '<span class="el-chip">Payment: ' + (g.pCells||0) + ' кліт.</span><span class="el-chip">Salary: ' + (g.sCells||0) + ' кліт.</span>' +
+        (realErrs.length ? '<span class="el-chip sys">збоїв у прогоні: ' + realErrs.length + '</span>' : '<span class="el-chip">без збоїв</span>') +
+        '</div>';
+    }
+    var sysN = (j.byKind && j.byKind.system) || 0, botN = (j.byKind && j.byKind.bot) || 0, dataN = (j.byKind && j.byKind.data) || 0, othN = (j.byKind && j.byKind.other) || 0;
+    if (!j.total && !j.guardAlert) html += '<div class="el-ok">✅ За 7 днів помилок не записано (усього в листі ' + (j.sheetRows||0) + ' рядків).</div>';
+    else {
+      html += '<div class="el-chips">' +
+        (sysN ? '<span class="el-chip sys">системні: ' + sysN + '</span>' : '') +
+        (botN ? '<span class="el-chip bot">бот/ліди: ' + botN + '</span>' : '') +
+        (dataN ? '<span class="el-chip data">дані (сироти відміток): ' + dataN + '</span>' : '') +
+        (othN ? '<span class="el-chip">інше: ' + othN + '</span>' : '') +
+        '<span class="el-chip">разом ' + j.total + '</span></div>';
+      var rows = (j.items || []).slice(0, 40);
+      html += '<div style="overflow-x:auto"><table class="el-tbl"><tr><th>Коли</th><th>Де</th><th>Помилка</th></tr>' +
+        rows.map(function(it){ return '<tr><td class="ts">' + escapeHtml(it.ts) + '</td><td><span class="el-chip ' + (it.kind==='system'?'sys':it.kind==='bot'?'bot':it.kind==='data'?'data':'') + '">' + escapeHtml(it.where) + '</span></td><td class="err">' + escapeHtml(it.error) + '</td></tr>'; }).join('') +
+        '</table></div>';
+      if (j.total > rows.length) html += '<div class="el-more">…ще ' + (j.total - rows.length) + ' за 7 днів. Повний список: getErrLog&days=7.</div>';
+    }
+    box.innerHTML = html;
+  } catch(e){ box.innerHTML = '<div class="inv-empty">⚠️ ' + escapeHtml(String(e && e.message || e)) + '</div>'; }
+}
 </script>
 <script>
 /* Задачник: бейдж непрочитаних у бічному меню (опитування кожні 60с). */
