@@ -4,12 +4,12 @@
 
 | | |
 |---|---|
-| Версія у репозиторії | **v7.292** |
-| md5 | `55293e008ed2dd3f26e7c6e0708eb747` |
-| Розмір | 1860750 байт |
+| Версія у репозиторії | **v7.293** |
+| md5 | `9252bc4cbbec721bfaa6abd363c661e8` |
+| Розмір | 1866874 байт |
 | Зафіксовано | 2026-09-15 |
-| Версія у проді | **v7.292** — задеплоєно 16.09.2026, ping підтверджено |
-| Перевірка | `action=ping` → `pong v7.292` після деплою |
+| Версія у проді | **v7.292** — задеплоєно 16.09.2026; v7.293 очікує деплою (ручна вставка) |
+| Перевірка | `action=ping` → `pong v7.293` після деплою |
 
 ## Як це працює
 
@@ -23,6 +23,30 @@
 ```
 curl -sL "https://script.google.com/macros/s/AKfycbyTSUVlaN4-PpXe47zCSmhVs0Qxy1FDXG_XsB4zcKNpqBxdhDtS9ibM4YFGkGjmPQDFWQ/exec?action=ping"
 ```
+
+## Кеш 5 хв для getSalaryOverview і getFillStatus (v7.293)
+
+Обидва були близько до ліміту 6 хв: `getSalaryOverview` відкриває 17 Salary-файлів
+підряд (45–68 с), `getFillStatus` читав 50 тис. рядків Табеля × 8 колонок (61–62 с).
+
+- `_cacheGzGet/_cacheGzPut` — відповідь у CacheService gzip+base64 на 300 с; ключ
+  включає версію групи `_cacheVer('salary'|'fill')`; `nocache=1` обходить.
+- **`ver_salary`** bump-ають: `exportToSalaryExtras` (реальний запис зі зміненими
+  клітинками), `exportPredmetnykyToSalary`, `exportPredmetnyToSalary`,
+  `salaryReconcileApply`, `salaryAddExtrasPayments`, `addSalaryRow`, `deleteSalaryRow`,
+  `cashPayoutSheet`. Ручні правки у файлах — покриває TTL.
+- **`ver_fill`** bump-ають: `saveAttendance`, `deleteAttendanceRecord`, `dedupAttendanceApi`,
+  `saveClient`, `deleteClient`, `patchClientCell`, `mergeClientDuplicate`,
+  `purgeAutoDraftCards`, `syncMissingClientsFromPayments`, `saveEmployee`, `deleteEmployee`.
+- `getSalaryOverview` кешується лише без `errors` (щоб тимчасовий збій відкриття файлу
+  не завис на 5 хв). У відповіді `cached`, `cachedAt`, `ms`.
+- Бонус для холодного шляху: `_fillReadAttendance` читає Табель через індекс дат
+  (v7.289–290) — лише сегменти потрібних днів, 8 колонок; будь-який збій → старий
+  шлях (50 тис. рядків).
+
+Заміри ДО (прод v7.292, 16.09): `getSalaryOverview&year=2026` 45,5 с (10 КБ);
+`getFillStatus` 1–15.09 — 62,5 с (36 КБ); день 15.09 — 60,9 с (19 КБ).
+Після деплою — нижче.
 
 ## getClients для списку: без полів картки і без повторення заголовків (v7.292)
 

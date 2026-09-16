@@ -1,5 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.292
+// m.kids CRM — Google Apps Script v7.293
+// v7.293: кеш 5 хв для getSalaryOverview (17 Salary-файлів, 68 с) і getFillStatus (62 с):
+//         gzip+base64 у CacheService, версії ver_salary / ver_fill bump-ають маршрути запису.
+//         getFillStatus читає Табель через індекс дат (сегменти днів), не 50 тис. рядків.
 // v7.292: getClients&mode=list&format=compact — без полів, які читає лише картка, і без
 //         повторення назв колонок (2,37 МБ → ~0,8 МБ на кожне відкриття Клієнтів);
 //         getClientCard&id= — повна картка за ID; saveClient лишає важкі клітинки, якщо
@@ -5360,7 +5363,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.292', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.293', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -5407,7 +5410,7 @@ function doGet(e) {
     else if (action === 'getCategoryAnalytics')      result = getCategoryAnalytics(e.parameter.year || '', e.parameter.month || '');
     else if (action === 'getSalaryData')             result = getSalaryData(e.parameter.loc || '', e.parameter.year || '');
     else if (action === 'salaryReconcileRows')       result = salaryReconcileRows(e.parameter.loc || '');
-    else if (action === 'getSalaryOverview')         result = getSalaryOverview(e.parameter.year || '');
+    else if (action === 'getSalaryOverview')         result = getSalaryOverview(e.parameter.year || '', String(e.parameter.nocache || '') === '1');   // v7.293 кеш 5 хв
     else if (action === 'getOverviewAnalytics')      result = getOverviewAnalytics(e.parameter.year || '', e.parameter.month || '');
     else if (action === 'getUsers')                  result = getUsers(Number(e.parameter && e.parameter.actorId || 0)); // v7.109 CFO-only, без пароля
     else if (action === 'getGroupNorms')             result = getGroupNorms();
@@ -5457,7 +5460,7 @@ function doGet(e) {
     else if (action === 'getInvoiceListData')          result = getInvoiceListData(e.parameter || {});
     else if (action === 'generateInvoicePDF')          result = generateInvoicePDF(e.parameter || {}); // v6.50
     else if (action === 'getInvoiceStatusReport')      result = getInvoiceStatusReport(e.parameter || {}); // v6.50.3
-    else if (action === 'getFillStatus')               result = getFillStatus(e.parameter || {});           // v6.51
+    else if (action === 'getFillStatus')               result = getFillStatus(e.parameter || {}, String(e.parameter.nocache || '') === '1');   // v6.51; v7.293 кеш 5 хв
     else if (action === 'get')                         result = getDashRecords();                            // v7.106 дашборд-записи (S.recs) — читання
     else                                             result = {ok:false, error:'Unknown action: ' + action};
     return jsonOut(result);
@@ -6141,6 +6144,7 @@ function dryRunBlankBlocks(params){
 // BKP_Клієнти_чернетки_<штамп>.
 // ═══════════════════════════════════════════════════════════════════════════
 function purgeAutoDraftCards(body){
+  _cacheBump('fill');   // v7.293 кеш getFillStatus
   body = body || {};
   var names  = body.names || [];
   var loc    = String(body.loc || '').trim();
@@ -7253,6 +7257,7 @@ function restoreContractNumbers(body){
 function saveClient(data) {
   if (!data || !data.id) return {ok:false, error:'Missing id'};
   _invalidateLeadClientIndex();   // v7.279
+  _cacheBump('fill');             // v7.293 кеш getFillStatus
   var ss = getCRMSpreadsheet();
   var sheet = ss.getSheetByName(SHEET_CLIENTS);
   if (!sheet) return {ok:false, error:'Sheet not found'};
@@ -7409,6 +7414,7 @@ function logGroupChange(id, name, loc, oldGrp, newGrp, actor){
 // прибирання аномальних Табель-рядків (напр. Чомусики-запис, що має жити в
 // Чомусики_Відвідуваність). Викликати через ?action=deleteAttendanceRecord.
 function deleteAttendanceRecord(body){
+  _cacheBump('fill');   // v7.293 кеш getFillStatus
   body = body || {};
   var cid  = String(body.childId || body.id || '').trim();
   var date = String(body.date || '').trim();
@@ -7468,6 +7474,7 @@ function _mergeAbsencesUnion(a, b){
 // Універсально — для решти 43 пар (виклик по кожній parою targetId/sourceId).
 // ═══════════════════════════════════════════════════════════════════════════
 function mergeClientDuplicate(body){
+  _cacheBump('fill');   // v7.293 кеш getFillStatus
   _invalidateLeadClientIndex();   // v7.279
   var lock = LockService.getScriptLock();
   try { lock.waitLock(60000); } catch(e){ return {ok:false, error:'LOCK_TIMEOUT'}; }
@@ -7835,6 +7842,7 @@ function normalizeAttendanceIds(body){
 // v7.44 — точкове виправлення однієї клітинки клієнта (напр. відновити № договору,
 // зіпсований у date-клітинку). asText:true → формат '@' (текст), щоб число не стало датою.
 function patchClientCell(body){
+  _cacheBump('fill');   // v7.293 кеш getFillStatus
   body = body || {};
   _invalidateLeadClientIndex();   // v7.279
   var id  = String(body.id  || '').trim();
@@ -8158,6 +8166,7 @@ function patchClientAbsences(id, absences) {
 function deleteClient(id) {
   if (!id) return {ok:false, error:'Missing id'};
   _invalidateLeadClientIndex();   // v7.279
+  _cacheBump('fill');             // v7.293
   var ss = getCRMSpreadsheet();
   var sheet = ss.getSheetByName(SHEET_CLIENTS);
   if (!sheet) return {ok:false, error:'Sheet not found'};
@@ -10117,6 +10126,7 @@ function saveAttendance(body) {
     records.forEach(function(rec){ if (rec.loc) _ls[rec.loc] = true; });
     Object.keys(_ls).forEach(function(l){ _ac.put('attver_' + l, String(new Date().getTime()), 21600); });
     _ac.put('attver_ALL', String(new Date().getTime()), 21600);   // v7.289: кеш «усі локації»
+    _ac.put('ver_fill', String(new Date().getTime()), 21600);      // v7.293: кеш getFillStatus
   } catch(_ie){}
 
   var _out = {ok:true, saved:saved};
@@ -10167,6 +10177,7 @@ function dedupAttendance() {
 // {dryRun:false, confirm:'YES_WRITE'}: спершу БЕКАП листа (copyTo), потім перезапис.
 // Викликати через ?action=dedupAttendance (POST).
 function dedupAttendanceApi(body){
+  _cacheBump('fill');   // v7.293 кеш getFillStatus
   body = body || {};
   var dryRun = (body.dryRun !== false);
   if (!dryRun && body.confirm !== 'YES_WRITE'){ dryRun = true; }
@@ -12136,6 +12147,7 @@ function getSalaryExtrasRows(body){
 // items:[{salaryRowNum, amount, month, loc, edrpou, ref, date, skip, note}]. dryRun=TRUE за замовч.
 // Дедуп — той самий OPEX_Витрати_Лог (референс+сума+місяць пер-локаційно), Категорія=«→Salary: <рядок>».
 function salaryAddExtrasPayments(body){
+  _cacheBump('salary');   // v7.293 кеш getSalaryOverview
   var lock = null;
   try {
     body = body || {};
@@ -12688,6 +12700,7 @@ function _renameShosokSalary(dryRun){
 }
 
 function addSalaryRow(body){
+  _cacheBump('salary');   // v7.293 кеш getSalaryOverview
   body = body || {};
   var lock = LockService.getScriptLock();
   try { lock.waitLock(30000); } catch(e){ return {ok:false, error:'LOCK_TIMEOUT'}; }
@@ -12750,6 +12763,7 @@ function addSalaryRow(body){
 // Видалення Salary-рядка (тест/відкат). Захист: видаляємо ЛИШЕ якщо всі суми = 0
 // (ніколи не втрачаємо оплачений рядок) і назва збігається з очікуваною (якщо задана).
 function deleteSalaryRow(body){
+  _cacheBump('salary');   // v7.293 кеш getSalaryOverview
   body = body || {};
   var lock = LockService.getScriptLock();
   try { lock.waitLock(30000); } catch(e){ return {ok:false, error:'LOCK_TIMEOUT'}; }
@@ -12776,7 +12790,36 @@ function deleteSalaryRow(body){
   finally { try { lock.releaseLock(); } catch(_){} }
 }
 
-function getSalaryOverview(year) {
+// ═══ v7.293: кеш важких read-only маршрутів (5 хв, gzip+base64, версія на групу) ═══
+// getSalaryOverview відкривав 17 Salary-файлів (68 с), getFillStatus читав 50 тис.
+// рядків Табеля (62 с) — обидва щоразу. Тепер: відповідь у CacheService на 5 хв;
+// ключ включає версію групи (ver_salary / ver_fill), яку bump-ають маршрути запису
+// у відповідні аркуші (експорти в Salary, звірка ЗП, рядки Salary; Табель, картки,
+// співробітники). Ручні правки у файлах — покриває TTL 5 хв.
+function _cacheGzGet(key){
+  try {
+    var v = CacheService.getScriptCache().get(key); if (!v) return null;
+    return JSON.parse(Utilities.ungzip(Utilities.newBlob(Utilities.base64Decode(v), 'application/x-gzip')).getDataAsString());
+  } catch(_e){ return null; }
+}
+function _cacheGzPut(key, obj, ttl){
+  try {
+    var b64 = Utilities.base64Encode(Utilities.gzip(Utilities.newBlob(JSON.stringify(obj), 'application/json')).getBytes());
+    if (b64.length < 95000) CacheService.getScriptCache().put(key, b64, ttl || 300);
+  } catch(_e){}
+}
+function _cacheVer(group){ try { return CacheService.getScriptCache().get('ver_' + group) || '0'; } catch(_e){ return '0'; } }
+function _cacheBump(group){ try { CacheService.getScriptCache().put('ver_' + group, String(Date.now()), 21600); } catch(_e){} }
+
+function getSalaryOverview(year, noCache){
+  var key = 'salover_' + _cacheVer('salary') + '_' + String(year || '');
+  if (!noCache){ var hit = _cacheGzGet(key); if (hit){ hit.cached = true; return hit; } }
+  var t0 = Date.now();
+  var res = _getSalaryOverviewRaw(year);
+  if (res && res.ok && !(res.errors || []).length){ res.ms = Date.now() - t0; res.cachedAt = new Date().toISOString(); _cacheGzPut(key, res, 300); }
+  return res;
+}
+function _getSalaryOverviewRaw(year) {
   var reg = _salaryGetRegistry();
   if (!reg.ok) return reg;
 
@@ -17893,6 +17936,7 @@ function diagSalaryReconLog(params){
 //   revert — відняти суми цього vidNo з Факту (за логом) + видалити рядки логу
 //            (дедуп знімається), АЛЕ ІПН/картку в HR ЛИШИТИ.
 function salaryReconcileApply(body){
+  _cacheBump('salary');   // v7.293 кеш getSalaryOverview
   body = body || {};
   var mode = String(body.mode || (body.dryRun ? 'dryRun' : 'dryRun')).trim();
   var dryRun = (mode !== 'apply' && mode !== 'revert');
@@ -20227,6 +20271,7 @@ function exportToSalaryExtras(params){
     Logger.log('[exportToSalaryExtras] journal upsert%s: %s op(s)', (dryRun ? ' (DRY-RUN, пропущено)' : ''), journalOps.length);
 
     Logger.log('[exportToSalaryExtras] DONE%s: updated=%s, totalFact=%s, notFound=%s', (dryRun ? ' DRY-RUN' : ''), updated, totalFact, JSON.stringify(notFound));
+    if (!dryRun && cellsWritten) _cacheBump('salary');   // v7.293
 
     return {
       ok: true,
@@ -22078,10 +22123,40 @@ function _fillNonWorking(dateISO){
 // expGroups[loc]={group->activeKids}; expKids[loc]=DISTINCT діти; expStaff[loc]=персонал(−предметники).
 // v6.64.2: швидке читання Табеля — лише останні ~50k рядків (cols A-H),
 // з відкатом на повне читання, якщо запит старший за вікно.
-function _fillReadAttendance(attSh, tz, neededFrom){
+function _fillReadAttendance(attSh, tz, neededFrom, neededTo){
   if (!attSh) return [];
   var lastRow = attSh.getLastRow();
   if (lastRow < 2) return [];
+  // v7.293: вікно рядків через індекс дат (_attDateIndex, v7.289–290) — читаємо лише
+  // сегменти потрібних днів (8 колонок), а не 50 тис. рядків. Будь-який збій → старий шлях.
+  if (neededFrom && /^\d{4}-\d{2}-\d{2}$/.test(neededFrom)){
+    try {
+      var _to = (neededTo && /^\d{4}-\d{2}-\d{2}$/.test(neededTo)) ? neededTo : neededFrom;
+      var _hd = attSh.getRange(1, 1, 1, 2).getValues()[0].map(String);
+      var _iD = _hd.indexOf('Дата'), _iC = _hd.indexOf('ID дитини');
+      if (_iD === 0 && _iC === 1){
+        var _cache = null; try { _cache = CacheService.getScriptCache(); } catch(_c){}
+        var _di = _attDateIndex(attSh, lastRow, 0, 1, tz, _cache, {});
+        var _segs = [], _days = _di.idx.days;
+        for (var _dk in _days){ if (_dk < neededFrom || _dk > _to) continue; for (var _si = 0; _si < _days[_dk].length; _si++) _segs.push(_days[_dk][_si]); }
+        if (!_segs.length) return [];
+        _segs.sort(function(a, b){ return a[0] - b[0]; });
+        var _blocks = [[_segs[0][0], _segs[0][1]]];
+        for (var _bi = 1; _bi < _segs.length; _bi++){
+          var _last = _blocks[_blocks.length - 1];
+          if (_segs[_bi][0] - _last[1] <= 300){ if (_segs[_bi][1] > _last[1]) _last[1] = _segs[_bi][1]; }
+          else _blocks.push([_segs[_bi][0], _segs[_bi][1]]);
+        }
+        if (_blocks.length > 20) _blocks = [[_blocks[0][0], _blocks[_blocks.length - 1][1]]];
+        var _out = [];
+        for (var _bk = 0; _bk < _blocks.length; _bk++){
+          var _part = attSh.getRange(_blocks[_bk][0], 1, _blocks[_bk][1] - _blocks[_bk][0] + 1, 8).getValues();
+          for (var _pi = 0; _pi < _part.length; _pi++) _out.push(_part[_pi]);
+        }
+        return _out;
+      }
+    } catch(_ie){ Logger.log('[_fillReadAttendance] index path failed, fallback: %s', _ie && _ie.message); }
+  }
   var cap = 50000;
   var startRow = Math.max(2, lastRow - cap + 1);
   var av = attSh.getRange(startRow, 1, lastRow - startRow + 1, 8).getValues();
@@ -22171,7 +22246,7 @@ function _getFillStatusRange(from, to){
   var byDate = {};
   var attSh = ss.getSheetByName(SHEET_ATTENDANCE);
   if (attSh){
-    var av = _fillReadAttendance(attSh, tz, from);
+    var av = _fillReadAttendance(attSh, tz, from, to);
     for (var r = 0; r < av.length; r++){
       var row = av[r];
       var d = _fillNormD(row[0], tz);
@@ -22240,7 +22315,16 @@ function _getFillStatusRange(from, to){
 }
 
 // params: {date:'YYYY-MM-DD'} (День) АБО {from, to} (Тиждень/Місяць → range-режим).
-function getFillStatus(params){
+function getFillStatus(params, noCache){
+  params = params || {};
+  var key = 'fill_' + _cacheVer('fill') + '_' + String(params.date || '') + '_' + String(params.from || '') + '_' + String(params.to || '');
+  if (!noCache){ var hit = _cacheGzGet(key); if (hit){ hit.cached = true; return hit; } }
+  var t0 = Date.now();
+  var res = _getFillStatusRaw(params);
+  if (res && res.ok){ res.ms = Date.now() - t0; res.cachedAt = new Date().toISOString(); _cacheGzPut(key, res, 300); }
+  return res;
+}
+function _getFillStatusRaw(params){
   try {
     params = params || {};
     var date = String(params.date || '').trim();
@@ -22268,7 +22352,7 @@ function getFillStatus(params){
     var kidWho = {};         // v6.51.4: loc -> {set:{}, cnt, bestKey, bestBy, bestAt} (хто+коли відмітив дітей)
     var staffMarked = {};    // loc -> {ids:{}, by, at}
     if (attSh){
-      var av = _fillReadAttendance(attSh, tz, date);
+      var av = _fillReadAttendance(attSh, tz, date, date);
       for (var r = 0; r < av.length; r++){
         var row = av[r];
         if (_fillNormD(row[0], tz) !== date) continue;
@@ -22698,6 +22782,7 @@ carryRow +
 }
 
 function cashPayoutSheet(body){
+  _cacheBump('salary');   // v7.293 кеш getSalaryOverview
   try {
     body = body || {};
     var loc   = String(body.loc || '').trim();
@@ -24075,6 +24160,7 @@ function getNeedsAttention(){
 }
 
 function syncMissingClientsFromPayments(opts){
+  _cacheBump('fill');   // v7.293 кеш getFillStatus (нові картки)
   opts = opts || {};
   // default dryRun=true: лише opts.dryRun === false вмикає реальний режим.
   var dryRun = (opts.dryRun !== false);
@@ -25672,6 +25758,7 @@ function _findPredmetnySalaryRow(salaryRows, subject, rate){
 }
 
 function exportPredmetnyToSalary(params){
+  _cacheBump('salary');   // v7.293 кеш getSalaryOverview
   try {
     var loc = String(params.loc || '').trim();
     var month = Number(params.month);
@@ -27439,6 +27526,7 @@ function getEmployees(actorId, locFilter){
 //   rowNum=null/0  → create (appendRow + copy P formula з row 2)
 //   rowNum>0       → update (setValues A:O і R; P/Q не чіпаємо)
 function saveEmployee(actorId, payload, rowNum){
+  _cacheBump('fill');   // v7.293 кеш getFillStatus
   try {
     var actor = _getActor(actorId);
 
@@ -27929,6 +28017,7 @@ function buildDevTemplatesJS(){
 // deleteEmployee(actorId, rowNum) — soft-delete (O = today, формула P
 // автоматично переробить "life-cycle" з активного на "X років Y місяців").
 function deleteEmployee(actorId, rowNum){
+  _cacheBump('fill');   // v7.293 кеш getFillStatus
   try {
     var actor = _getActor(actorId);
     if (!_canDeleteEmployee(actor))
@@ -29981,6 +30070,7 @@ function _clearAllPredmetnykyLessons(location, confirm){
 // Target month — наступний (зарплата за лекції місяця N виплачується N+1).
 // ═══════════════════════════════════════════════════════════════════
 function exportPredmetnykyToSalary(params){
+  if (params && params.dryRun !== true) _cacheBump('salary');   // v7.293 кеш getSalaryOverview
   params = params || {};
 
   // Batch mode: locations: [...] → виклик по кожній локації окремо.
