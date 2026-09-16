@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.294
+// m.kids CRM — Google Apps Script v7.295
+// v7.295: норми предметників — з 01.09.2026 діє блок C–G листа «Норми» (v7.230 вмикала I–M).
+//         Уроки й відмітки не чіпаються: норма — лише стеля експорту й підказка при відмітці.
 // v7.294: getErrLog&days=7 (CFO/HR) — TG_Err за N днів + стан нічної гарантії; збої маршрутів
 //         doGet/doPost і справжні помилки гарантії тепер пишуться в TG_Err.
 // v7.293: кеш 5 хв для getSalaryOverview (17 Salary-файлів, 68 с) і getFillStatus (62 с):
@@ -5365,7 +5367,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.294', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.295', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -6555,7 +6557,7 @@ function diagPredNorms(params){
         newB[TYPES[t]] = (r[8 + t] === '' || r[8 + t] == null) ? null : (Number(r[8 + t]) || 0);
       }
       var diff = TYPES.some(function(t){ return oldB[t] !== newB[t]; });
-      rows.push({region:region, subject:subject, old:oldB, neu:newB, differs:diff});
+      rows.push({region:region, subject:subject, cg:oldB, im:newB, old:oldB, neu:newB, differs:diff});   // v7.295: cg = C–G, im = I–M
     }
     // перевищення за ДІЮЧИМИ на вказаний місяць нормами
     var ymd = year + '-' + ('0' + month).slice(-2) + '-01';
@@ -6573,7 +6575,7 @@ function diagPredNorms(params){
       if (ceil > 0 && n > ceil) over.push({loc:loc, group:grp, subject:subj, marked:n, ceiling:ceil, over:n - ceil});
     });
     return {ok:true, readOnly:true, forMonth:(month + '/' + year),
-            usesOldBlock:_predNormsUseOld(ymd), combos:Object.keys(byKey).length,
+            activeBlock:(_predNormsUseCG(ymd) ? 'C-G' : 'I-M'), usesOldBlock:_predNormsUseOld(ymd), combos:Object.keys(byKey).length,
             overCount:over.length, over:over, rows:rows};
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
@@ -28396,25 +28398,27 @@ function MIGRATE_PRED_NORMS_APPLY(){  return migratePredNormsAddMissing(false); 
 // ── Loaders (Norms + Catalog) ────────────────────────────────────
 // Norms sheet → {'Київ': {'Англійська': {miniBaby:8,...}, ...}, 'Львів': {...}}
 // Норма — по group_TYPE (matriця не змінюється).
-function _predNormsUseOld(targetYmd){
+// v7.295 БЛОКИ НОРМ ПЕРЕВЕРНУТО. Лист «Норми»: блок C–G (кол. 2–6) і блок I–M (кол. 8–12).
+// З 01.09.2026 діє блок C–G; до того — I–M (якщо клітинка I–M порожня — C–G).
+// v7.230 робила навпаки (з вересня I–M), і в вересні Англійська рахувалась за
+// I–M (Find 12, Study 12, Preschool 12) замість C–G (Find 10, Study 15, Preschool 15).
+// Норма — лише стеля при експорті й підказка при відмітці; уроки не чіпаються.
+var PRED_NORMS_CG_FROM = '2026-09-01';
+function _predNormsUseCG(targetYmd){
   var d = targetYmd || Utilities.formatDate(new Date(), 'Europe/Kiev', 'yyyy-MM-dd');
-  return String(d) < '2026-09-01';
+  return String(d) >= PRED_NORMS_CG_FROM;
 }
-// v7.230 ФІКС ПЕРЕПЛУТАНИХ БЛОКІВ. Виклики передають (…, 8, 2): 8 = колонка I
-// (новий блок, норми з 1 вересня), 2 = колонка C (старий блок). А сигнатура
-// називала третій параметр oldIdx, четвертий newIdx — тобто рівно навпаки.
-// Через це для вересня читався СТАРИЙ блок C-G, а до вересня — новий I-M.
-// Порядок параметрів приведено до порядку викликів; логіка не змінена:
-//   з 01.09.2026 → I-M; до того → C-G, а якщо стара клітинка порожня — I-M.
-function _predPickNorm(row, useOld, newIdx, oldIdx){
-  if (!useOld) return Number(row[newIdx]) || 0;
-  var raw = row[oldIdx]; var v = Number(raw);
-  return (raw !== '' && raw !== null && isFinite(v)) ? v : (Number(row[newIdx]) || 0);
+function _predNormsUseOld(targetYmd){ return !_predNormsUseCG(targetYmd); }   // сумісність: «старий» = I–M
+// useCG → колонка C–G (cgIdx); інакше I–M (imIdx), а порожня клітинка I–M → C–G.
+function _predPickNorm(row, useCG, imIdx, cgIdx){
+  if (useCG) return Number(row[cgIdx]) || 0;
+  var raw = row[imIdx]; var v = Number(raw);
+  return (raw !== '' && raw !== null && isFinite(v)) ? v : (Number(row[cgIdx]) || 0);
 }
 function _loadPredNorms(targetYmd){
   var sh = _getPredNormsSheet(true);
   var data = sh.getDataRange().getValues();
-  var useOld = _predNormsUseOld(targetYmd);
+  var useCG = _predNormsUseCG(targetYmd);   // v7.295: з 01.09.2026 → C–G
   var out = {};
   for (var i = 1; i < data.length; i++){
     var row = data[i];
@@ -28423,11 +28427,11 @@ function _loadPredNorms(targetYmd){
     if (!region || !subject) continue;
     if (!out[region]) out[region] = {};
     out[region][subject] = {
-      miniBaby:  _predPickNorm(row, useOld, 8, 2),
-      Baby:      _predPickNorm(row, useOld, 9, 3),
-      Find:      _predPickNorm(row, useOld, 10, 4),
-      Study:     _predPickNorm(row, useOld, 11, 5),
-      Preschool: _predPickNorm(row, useOld, 12, 6)
+      miniBaby:  _predPickNorm(row, useCG, 8, 2),
+      Baby:      _predPickNorm(row, useCG, 9, 3),
+      Find:      _predPickNorm(row, useCG, 10, 4),
+      Study:     _predPickNorm(row, useCG, 11, 5),
+      Preschool: _predPickNorm(row, useCG, 12, 6)
     };
   }
   return out;
