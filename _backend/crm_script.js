@@ -31270,7 +31270,7 @@ function _publishAggregate(ss, targetName, headerFn, rows, numCols, opts){
 // коли гарантія падала кілька днів поспіль, ніхто цього не бачив.
 var ERRLOG_KINDS = {
   'nightly-guard': 'system', 'mirror': 'system', 'mirror-newtab': 'system', 'migrate': 'system',
-  'webhook': 'bot', 'cb-err': 'bot', 'createLead': 'bot', 'link-lead-card': 'bot', 'link-card-lead': 'bot',
+  'webhook': 'bot', 'cb': 'bot', 'cb-res': 'bot', 'cb-err': 'bot', 'createLead': 'bot', 'link-lead-card': 'bot', 'link-card-lead': 'bot',
   'attendance-orphan': 'data'
 };
 function _errLogActorOk(actorId){
