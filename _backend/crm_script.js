@@ -1,5 +1,10 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.298
+// m.kids CRM — Google Apps Script v7.299
+// v7.299: блоки «…вибули» — у гроші, не в ростер. parsePaymentSheet(…, keepDeparted) віддає
+//         службовий блок групою departed:true; річний агрегат пише його зі своїми сумами й
+//         колонкою «Вибув»='так' (Житомир «Preschool вибули»: 13 дітей, ~1,49 млн повертаються
+//         у CF/PL). Ростерні читачі Оплати-Рік (рахунки, автосинк карток, знімок ростера,
+//         syncGroups) і фронт (clients/index) такі рядки пропускають. Місячний «Оплати» — без змін.
 // v7.298: річний агрегат читає гроші з рядка, який віддав парсер (ch.row), а не «за ПІБ →
 //         останній рядок»: дві картки одного ПІБ у файлі більше не дублюють суми одна одної.
 // v7.297: undoPaymentMoveBlock / dryRunUndoMoveBlock — скасування переносів у блок «Вибули»:
@@ -5374,7 +5379,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.298', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.299', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -8713,7 +8718,11 @@ function _isGroupTypeToken(s){
   return false;
 }
 
-function parsePaymentSheet(data, monthCol, contractCol, cpm, loc, typ, closeOnBlank, disableFilters) {
+// v7.299: keepDeparted — службовий блок («…вибули»/«випускники») НЕ викидати, а віддати
+// групою з міткою departed:true (group = заголовок як у файлі). Потрібно річному
+// агрегату: гроші випускників за минулі місяці — реальний обіг для CF/PL, а ростер їх
+// бачити не має. Усі ростерні читачі лишають типове false — поведінка без змін.
+function parsePaymentSheet(data, monthCol, contractCol, cpm, loc, typ, closeOnBlank, disableFilters, keepDeparted) {
   var _keepSchool = _isSchoolLoc(typ, loc);   // v7.202
   var _defBlank = _keepSchool ? BLANK_CLOSES_BLOCK_SCHOOL : BLANK_CLOSES_BLOCK;
   var _minBlank = (closeOnBlank === undefined) ? _defBlank : closeOnBlank;
@@ -8739,6 +8748,12 @@ function parsePaymentSheet(data, monthCol, contractCol, cpm, loc, typ, closeOnBl
     if (isGroupHeaderRow(row, monthCol)) {
       // v7.246: «…вибули» — блок випускників, ігноруємо цілком.
       if (_filters && _isGraduatedHeader(nameCell)){
+        if (keepDeparted){                       // v7.299: у гроші — так, у ростер — ні
+          curGroup = {group: nameCell, teacher: '', rawGroup: nameCell, departed: true, children: []};
+          groups.push(curGroup);
+          _inServiceBlock = false;
+          continue;
+        }
         curGroup = null;
         _inServiceBlock = true;
         continue;
@@ -9894,7 +9909,7 @@ function writeYearlyHeader(sheet) {
   MONTHS_CAL.forEach(function(m) {
     hdr.push(m+'-Факт-навч', m+'-Факт-доп', m+'-Факт-вступ', m+'-Бюджет-навч', m+'-Бюджет-доп', m+'-Статус'); // v7.101 +Факт-вступ (окремо, не згорнуто)
   });
-  hdr.push('Факт-Рік','Бюджет-Рік','Борг-Рік','Зібрано-На-Сьогодні','Оновлено');
+  hdr.push('Факт-Рік','Бюджет-Рік','Борг-Рік','Зібрано-На-Сьогодні','Оновлено','Вибув');   // v7.299 «Вибув»='так' — рядок службового блоку
   sheet.appendRow(hdr);
   sheet.setFrozenRows(1);
 }
@@ -9928,7 +9943,9 @@ function aggregatePaymentsYearly() {
       var _LOy         = _paymentLayout(cpm);
       var curMonthCol  = detectCurrentMonthCol(data, curJSMonth, cpm);
       var contractCol  = detectContractDateCol(data);
-      var groups       = parsePaymentSheet(data, curMonthCol, contractCol, cpm, loc, typ);   // v7.202
+      // v7.299: keepDeparted=true — блоки «…вибули» йдуть у річний агрегат зі своїми
+      // сумами (колонка «Вибув»='так'); ростерні читачі Оплати-Рік такі рядки пропускають.
+      var groups       = parsePaymentSheet(data, curMonthCol, contractCol, cpm, loc, typ, undefined, undefined, true);   // v7.202, v7.299
       // v7.262 ВАРІАНТ B: у річному агрегаті діє ЛИШЕ правило під-локації.
       // Причина: «Школа Кар'єрна» вказує на той самий Payment-файл, що й садок,
       // тож без цього річний аркуш рахував усю Кар'єрну ДВІЧІ — 73 рядки під
@@ -9990,7 +10007,7 @@ function aggregatePaymentsYearly() {
             if (mi <= curJSMonth) factToday += totalNoEntry;
           }
           var debtYear = budYear > factYear ? budYear - factYear : 0;
-          rowOut.push(factYear, budYear, debtYear, factToday, updateStr);
+          rowOut.push(factYear, budYear, debtYear, factToday, updateStr, g.departed ? 'так' : '');   // v7.299 «Вибув»
           allRows.push(rowOut);
         });
       });
@@ -9999,7 +10016,7 @@ function aggregatePaymentsYearly() {
     }
   }
   // v7.149: staging + підміна лише при успіху (див. aggregatePayments).
-  var NUM_COLS = 6 + 12 * 6 + 5;   // v7.101: блок місяця 5→6 (додано Факт-вступ)
+  var NUM_COLS = 6 + 12 * 6 + 5 + 1;   // v7.101: блок місяця 5→6 (додано Факт-вступ); v7.299: +«Вибув»
   var pubY;
   try {
     pubY = _publishAggregate(crmSS, SHEET_YEARLY, writeYearlyHeader, allRows, NUM_COLS, {});
@@ -10041,6 +10058,10 @@ function refreshYearlyAggregate(){
   var res = aggregatePaymentsYearly();
   return {ok: !!(res && res.ok), rows: (res && res.rows) || 0, errors: (res && res.errors) || []};
 }
+
+// v7.299: рядок Оплати-Рік зі службового блоку («Вибув»='так'). Гроші — так, ростер — ні.
+function _yearlyDepartedIdx(headers){ return headers.map(String).indexOf('Вибув'); }
+function _isYearlyDeparted(row, idx){ return idx >= 0 && String(row[idx] || '').trim() === 'так'; }
 
 function getPaymentsYearly() {
   var ss    = getCRMSpreadsheet();
@@ -21558,6 +21579,7 @@ function getInvoiceListData(params){
         var locIdx  = phdrs.indexOf('Локація');
         var budIdx  = phdrs.indexOf(budNavchCol);
         var dopIdx  = phdrs.indexOf(budDopCol);
+        var depIdx  = _yearlyDepartedIdx(phdrs);   // v7.299
         if (nameIdx < 0 || locIdx < 0 || budIdx < 0){
           Logger.log('[getInvoiceListData] Оплати-Рік headers missing: name=%s loc=%s bud=%s (col="%s")',
             nameIdx, locIdx, budIdx, budNavchCol);
@@ -21565,6 +21587,7 @@ function getInvoiceListData(params){
           if (dopIdx < 0) Logger.log('[getInvoiceListData] ⚠ колонку "%s" не знайдено — extrasSum=0 для всіх', budDopCol);
           for (var pr = 1; pr < pvals.length; pr++){
             if (String(pvals[pr][locIdx]).trim() !== loc) continue;
+            if (_isYearlyDeparted(pvals[pr], depIdx)) continue;   // v7.299: вибулі — не для рахунків
             var pname = String(pvals[pr][nameIdx]).trim();
             if (!pname) continue;
             paymentByName[pname]   = Number(pvals[pr][budIdx]) || 0;
@@ -22799,9 +22822,11 @@ function _invoiceSumFromYearly(childName, loc, month, type){
     return 0;
   }
   var nn = String(childName).trim(), ll = String(loc).trim();
+  var depIdx = _yearlyDepartedIdx(h);   // v7.299
   for (var r = 1; r < vals.length; r++){
     if (String(vals[r][locIdx]).trim() !== ll) continue;
     if (String(vals[r][nameIdx]).trim() !== nn) continue;
+    if (_isYearlyDeparted(vals[r], depIdx)) continue;
     return Number(vals[r][budIdx]) || 0;
   }
   return 0;
@@ -24469,6 +24494,7 @@ function syncMissingClientsFromPayments(opts){
   // v6.26.1: річні підсумки для критерію «реальна дитина = має суму»
   var pBudRikIdx  = phdrs.indexOf('Бюджет-Рік');
   var pFaktRikIdx = phdrs.indexOf('Факт-Рік');
+  var pDepIdx     = _yearlyDepartedIdx(phdrs);   // v7.299
   if (pNameIdx < 0 || pLocIdx < 0){
     Logger.log('[syncMissing] ❌ Оплати-Рік: name/loc cols missing (name=%s loc=%s)', pNameIdx, pLocIdx);
     return {ok:false, error:'payment cols missing'};
@@ -24562,6 +24588,8 @@ function syncMissingClientsFromPayments(opts){
 
     // (1) службовий заголовок / групова назва
     if (isGroupHeaderRow(prow, 1)){ skip.header++; continue; }
+    // (1б) v7.299: рядок блоку «…вибули» — картку не створюємо
+    if (_isYearlyDeparted(prow, pDepIdx)){ skip.header++; continue; }
     // (2) суто числове ім'я — слоти "9","10"
     if (/^\d+$/.test(name)){ skip.numeric++; if (skipNumericSamples.length < 10) skipNumericSamples.push(name); continue; }
     // (3) тест / порожнє
@@ -24732,6 +24760,7 @@ function snapshotPaymentRosterAndLogDepartures(body){
     if (yv.length < 2) return {ok:false, error:'Оплати-Рік порожній'};
     var yh = yv[0].map(String);
     var iName=yh.indexOf("Ім'я дитини"), iLoc=yh.indexOf('Локація'), iGrp=yh.indexOf('Група');
+    var iDep=_yearlyDepartedIdx(yh);   // v7.299
     if (iName<0 || iLoc<0) return {ok:false, error:'Колонки Ім\'я/Локація не знайдено в Оплати-Рік'};
     var MONTHS=['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
     var mCols = MONTHS.map(function(m){ return [yh.indexOf(m+'-Факт-навч'),yh.indexOf(m+'-Факт-доп'),yh.indexOf(m+'-Факт-вступ'),yh.indexOf(m+'-Бюджет-навч'),yh.indexOf(m+'-Бюджет-доп')]; });
@@ -24746,6 +24775,7 @@ function snapshotPaymentRosterAndLogDepartures(body){
     var current={};
     for (var r=1;r<yv.length;r++){
       var nm=String(yv[r][iName]||'').trim(); if(!nm) continue;
+      if (_isYearlyDeparted(yv[r], iDep)) continue;   // v7.299: вибулі — не «поточний ростер»
       var loc=String(yv[r][iLoc]||'').trim();
       current[norm(nm)+'|'+norm(loc)] = {name:nm, loc:loc, group:(iGrp>=0?String(yv[r][iGrp]||''):''), lastMonth:lastMonth(yv[r])};
     }
@@ -24837,9 +24867,11 @@ function syncGroupsFromPayments(opts){
   var payGroup = {};      // key → група з Платежів (точна стрічка, перша непорожня)
   var paySeen  = {};      // key → true: дитина присутня в Платежах (навіть з порожньою групою)
   var payConflicts = {};  // key → [групи]: у Платежах кілька різних груп для одної дитини
+  var pDepIdx2 = _yearlyDepartedIdx(phdrs);   // v7.299
   for (var pr = 1; pr < pvals.length; pr++){
     var prow = pvals[pr];
     if (isGroupHeaderRow(prow, 1)) continue;
+    if (_isYearlyDeparted(prow, pDepIdx2)) continue;   // v7.299: «…вибули» — не джерело групи
     var pname = String(prow[pNameIdx] || '').trim();
     if (!pname || /^\d+$/.test(pname) || isServiceRow(pname)) continue;
     var ploc  = String(prow[pLocIdx] || '').trim();

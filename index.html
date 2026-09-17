@@ -3175,7 +3175,7 @@ function _renderDashNow(){
   let quartersHtml;
   if(!yearly){ quartersHtml='<div class="empty"><span class="ei">📊</span><p>Завантаження…</p></div>'; }
   else {
-    const rows=isHR?yearly:yearly.filter(r=>String(r['Локація']||'')===myLoc);
+    const rows=(isHR?yearly:yearly.filter(r=>String(r['Локація']||'')===myLoc)).filter(r=>String(r['Вибув']||'').trim()!=='так');   // v7.299: «дітей/міс» без вибулих
     const monthCnt=DASH_MONTHS.map(mn=>rows.filter(r=>(Number(r[mn+'-Бюджет-навч'])||0)>0||(Number(r[mn+'-Факт-навч'])||0)>0).length);
     function qAvg(qi){ const ms=monthCnt.slice(qi*3,qi*3+3).filter(x=>x>0); return ms.length?Math.round(ms.reduce((a,b)=>a+b,0)/ms.length):null; }
     const qs=[0,1,2,3].map(qAvg);

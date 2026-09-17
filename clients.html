@@ -8314,10 +8314,14 @@ function calcYearlyStats(rows){
 // Через це і випадайка «Всі групи», і колонка «Група» показували для шкіл
 // схлопнуті назви з Payment, а службові рядки файлу висіли як діти.
 // Ці два хелпери дають річній таблиці ту саму логіку, що вже має місячна.
+// v7.299: рядок службового блоку «…вибули» («Вибув»='так' в Оплати-Рік) — у грошах
+// (аналітика, monthlyTotals) лишається, у ростері/таблиці дітей його немає.
+function _yearlyDeparted(row){ return String(row&&row['Вибув']||'').trim()==='так'; }
 function _yearlyRowVisible(row){
   var name=String(row["Ім'я дитини"]||'').trim();
   var loc=String(row['Локація']||'').trim();
   if(!name||!loc) return false;
+  if(_yearlyDeparted(row)) return false;   // v7.299
   var sch=_schoolCardInfo(name, loc);
   return !(sch.isSchool && !sch.card);
 }
@@ -8345,6 +8349,7 @@ function buildGroupsFromYearly(monthIdx){
     var rawGrp=String(row['Група']||'').trim();
     var name=String(row["Ім'я дитини"]||'').trim();
     if(!loc||!name) return;
+    if(_yearlyDeparted(row)) return;   // v7.299: вибулі — не в ростер минулих місяців
     var parsed=parseGroupField(rawGrp);
     var grp=parsed.groupType||rawGrp;
     // v7.201: школа — клас із картки (див. коментар у buildGroups). Ця функція
