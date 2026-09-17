@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.297
+// m.kids CRM — Google Apps Script v7.298
+// v7.298: річний агрегат читає гроші з рядка, який віддав парсер (ch.row), а не «за ПІБ →
+//         останній рядок»: дві картки одного ПІБ у файлі більше не дублюють суми одна одної.
 // v7.297: undoPaymentMoveBlock / dryRunUndoMoveBlock — скасування переносів у блок «Вибули»:
 //         рядки повертаються на місця за найстарішим знімком *_moveblock (точковий moveRows,
 //         не повний відкат). Правило: Payment не чіпаємо, дитина йде з ростера статусом картки.
@@ -5372,7 +5374,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.297', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.298', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -8797,7 +8799,8 @@ function parsePaymentSheet(data, monthCol, contractCol, cpm, loc, typ, closeOnBl
         name: nameCell,
         factStudy: fs, factEntry: fv, factExtra: fe,
         budExtra: bd, budStudy: bs,
-        contractDate: cd
+        contractDate: cd,
+        row: r   // v7.298: індекс рядка у data — річний агрегат читає гроші саме звідси, а не «за ПІБ»
       });
     }
   }
@@ -9956,7 +9959,11 @@ function aggregatePaymentsYearly() {
       }
       groups.forEach(function(g) {
         g.children.forEach(function(ch) {
-          var rowIdx  = nameToRow[ch.name];
+          // v7.298: гроші беремо з РЯДКА, який парсер віддав для цієї дитини. Раніше —
+          // nameToRow[ПІБ] = ОСТАННІЙ рядок із таким ПІБ у файлі: при двох рядках однієї
+          // дитини (Драган Артем, Манхетен: «Мама+я» 11 065 і «Розумники» 135 245) обидва
+          // отримували суми останнього, а гроші іншого зникали з агрегату. nameToRow — фолбек.
+          var rowIdx  = (ch.row !== undefined) ? ch.row : nameToRow[ch.name];
           var rowData = (rowIdx !== undefined) ? data[rowIdx] : null;
           var rowOut  = [loc, dir, typ, g.group, g.teacher, ch.name];
           var factYear  = 0;
