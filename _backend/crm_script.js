@@ -1,5 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.296
+// m.kids CRM — Google Apps Script v7.297
+// v7.297: undoPaymentMoveBlock / dryRunUndoMoveBlock — скасування переносів у блок «Вибули»:
+//         рядки повертаються на місця за найстарішим знімком *_moveblock (точковий moveRows,
+//         не повний відкат). Правило: Payment не чіпаємо, дитина йде з ростера статусом картки.
 // v7.296: стеля предметників — за блоком норм того місяця, що перевіряється (ymd у
 //         _predCeilingFor/_predNormLookup): діагностика, відмітка уроку, bulk, експорт.
 // v7.295: норми предметників — з 01.09.2026 діє блок C–G листа «Норми» (v7.230 вмикала I–M).
@@ -5369,7 +5372,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.296', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.297', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -5443,6 +5446,7 @@ function doGet(e) {
     else if (action === 'getSchoolRoster')            result = getSchoolRoster(e.parameter && e.parameter.loc || '');   // v7.205 read-only: клас із картки для локацій типу «Школа»
     else if (action === 'dryRunBlankBlocks')          result = dryRunBlankBlocks(e.parameter || {});                    // v7.209 read-only: що змінить «порожній рядок закриває блок»
     else if (action === 'dryRunPayFilters')           result = dryRunPayFilters(e.parameter || {});                     // v7.217 read-only: що відсіють фільтри службових рядків
+    else if (action === 'dryRunUndoMoveBlock')        result = dryRunUndoMoveBlock(e.parameter || {});                  // v7.297 read-only: що повернеться з блоку «Вибули» і куди
     else if (action === 'dryRunNameFold')             result = dryRunNameFold(e.parameter || {});                       // v7.220 read-only: які картки склеїть зведення лапок
     else if (action === 'diagPayHeaders')             result = diagPayHeaders(e.parameter || {});                       // v7.221 read-only: СИРІ заголовки груп із Payment
     else if (action === 'dryRunRawGroups')            result = dryRunRawGroups(e.parameter || {});                      // v7.222 read-only: що змінить перехід синку на сиру назву
@@ -5610,6 +5614,7 @@ function doPost(e) {
     else if (body.action === 'savePayHeaderOverrides') result = savePayHeaderOverrides(body || {});   // v7.234 реєстр заголовків (dryRun за замовч.)
     else if (body.action === 'restorePaymentFromBackup') result = restorePaymentFromBackup(body || {});  // v7.251 відкат аркуша з бекап-вкладки
     else if (body.action === 'movePaymentRowsToBlock')  result = movePaymentRowsToBlock(body || {});   // v7.248 перенесення рядків у блок «Вибули»
+    else if (body.action === 'undoPaymentMoveBlock')    result = undoPaymentMoveBlock(body || {});     // v7.297 зворотний хід: рядки з «Вибули» на свої місця (dryRun за замовч.)
     else if (body.action === 'purgePaymentGhostRows')  result = purgePaymentGhostRows(body || {});   // v7.233 рядки-привиди в Payment (dryRun за замовч.)
     else if (body.action === 'renamePayGroupHeader')        result = renamePayGroupHeader(body || {}); // v7.227
     else if (body.action === 'generateInvoicePDF')          result = generateInvoicePDF(body || {});   // v6.50
@@ -6984,6 +6989,238 @@ function movePaymentRowsToBlock(body){
       SpreadsheetApp.flush();
       res.moved = moved;
       res.blockRow = findRow(title);
+    } finally { try { lock.releaseLock(); } catch(_lr){} }
+    return res;
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.297: СКАСУВАННЯ ПЕРЕНЕСЕННЯ В БЛОК «Вибули» — рядки повертаються на свої
+// місця. Правило відтепер: Payment не чіпаємо; дитина зникає з ростера через
+// статус картки (graduated/terminated), а її гроші лишаються у своєму блоці, щоб
+// CF і PL бачили весь обіг. Перенесення (v7.248) прибрало з «Оплати-Рік» 113
+// рядків і ~12,4 млн факту за січень–вересень.
+// movePaymentRowsToBlock журналу не вів — єдиний слід це знімок
+// BKP_Payment_<штамп>_moveblock у файлі локації. НАЙСТАРІШИЙ знімок = розкладка
+// до першого переносу; за ним визначаємо, де стояв кожен рядок.
+// Повний відкат аркуша з бекапу (restorePaymentFromBackup) тут не годиться: він
+// затер би оплати, внесені після 14–15.09. Тому — точковий зворотний хід:
+//  • кандидати — рядки, що ЗАРАЗ стоять під службовим заголовком
+//    (_isGraduatedHeader); з них лишаємо ті, що у знімку стояли в живому блоці
+//    (житомирський «Preschool вибули» існував до інструмента — його не рухаємо);
+//  • рядок звіряється зі знімком за ПІБ і вмістом (дублі ПІБ — за збігом клітинок);
+//  • місце повернення — одразу після найближчого сусіда згори у знімку, який
+//    зараз стоїть у живій частині аркуша (дитина або заголовок). Обробка у
+//    порядку знімка, тож сусідом може бути щойно повернутий рядок — порядок
+//    усередині блоку відновлюється;
+//  • рухаємо Sheet.moveRows — значення, формули й формати їдуть як є;
+//  • порожній заголовок, якого в знімку не було, прибираємо разом із порожнім
+//    рядком-роздільником над ним — аркуш повертається до розкладки знімку.
+// Перед записом — знімок поточного стану (_safeBackupSheet, тег 'undomove').
+// GET  ?action=dryRunUndoMoveBlock[&loc=…]  — read-only, по всіх файлах
+// POST {action:'undoPaymentMoveBlock', loc, dryRun, confirm:'YES_UNDO'}
+// ═══════════════════════════════════════════════════════════════════════════
+function _undoMoveBlockPlan(sh, ss, cpm){
+  var base = _SAFE_BACKUP_PREFIX + sh.getName() + '_';
+  var backups = ss.getSheets().map(function(s){ return s.getName(); })
+    .filter(function(n){ return n.indexOf(base) === 0 && /_moveblock$/.test(n); }).sort();
+  var out = {backups:backups, ref:null, plan:[], skipped:[], headersToRemove:[], graduatedRowsNow:0};
+  if (!backups.length) return out;
+  var ref = ss.getSheetByName(backups[0]);
+  out.ref = backups[0];
+  var cur = sh.getDataRange().getValues();
+  var bk  = ref.getDataRange().getValues();
+  var LO  = _paymentLayout(cpm || 5);
+
+  function nm(row){ return trim(String((row || [])[0] || '')); }
+  function mark(data){                       // під яким заголовком стоїть кожен рядок
+    var res = [], hdr = '', grad = false;
+    for (var r = 0; r < data.length; r++){
+      var n = nm(data[r]);
+      var h = (r >= 3 && !!n && isGroupHeaderRow(data[r], 1));
+      if (h){ hdr = n; grad = _isGraduatedHeader(n); }
+      res.push({name:n, hdr:hdr, grad:grad, isHdr:h});
+    }
+    return res;
+  }
+  function score(a, b){                      // скільки клітинок збігається
+    var s = 0, n = Math.max(a.length, b.length);
+    for (var i = 0; i < n; i++){
+      if (String(a[i] === undefined ? '' : a[i]) === String(b[i] === undefined ? '' : b[i])) s++;
+    }
+    return s;
+  }
+  function money(row){
+    var t = 0;
+    for (var m = 0; m < 12; m++){
+      var b0 = 1 + m * (cpm || 5);
+      t += toNum(row[b0 + LO.factNavch]) + toNum(row[b0 + LO.factDop]);
+    }
+    return Math.round(t);
+  }
+  var C = mark(cur), B = mark(bk);
+  var bkHdrNames = {};
+  B.forEach(function(x){ if (x.isHdr) bkHdrNames[x.name] = true; });
+
+  // 1) кандидати — рядки під службовими заголовками зараз; звірка зі знімком
+  var claimed = {}, plan = [];
+  for (var r = 3; r < C.length; r++){
+    if (C[r].isHdr){
+      if (C[r].grad && !bkHdrNames[C[r].name]) out.headersToRemove.push({row:r + 1, name:C[r].name});
+      continue;
+    }
+    if (!C[r].grad || !C[r].name) continue;
+    out.graduatedRowsNow++;
+    var cands = [];
+    for (var b = 3; b < B.length; b++){
+      if (!B[b].isHdr && B[b].name === C[r].name && !claimed[b]) cands.push(b);
+    }
+    if (!cands.length){
+      out.skipped.push({row:r + 1, name:C[r].name, block:C[r].hdr, money:money(cur[r]), why:'у знімку «' + backups[0] + '» такого ПІБ немає'});
+      continue;
+    }
+    var best = cands[0], bestS = -1;
+    cands.forEach(function(b){ var s = score(cur[r], bk[b]); if (s > bestS){ bestS = s; best = b; } });
+    if (B[best].grad){
+      out.skipped.push({row:r + 1, name:C[r].name, block:C[r].hdr, money:money(cur[r]),
+                        why:'і в знімку стояв у службовому блоці «' + B[best].hdr + '» — не переносився інструментом'});
+      continue;
+    }
+    claimed[best] = true;
+    plan.push({name:C[r].name, curRow:r + 1, curBlock:C[r].hdr, bkRow:best + 1, bkGroup:B[best].hdr,
+               money:money(cur[r]), match:bestS + '/' + cur[r].length, _item:null});
+  }
+
+  // 2) симуляція повернення у порядку знімка: сусід згори → moveRows
+  var model = C.map(function(x, i){ return {name:x.name, isHdr:x.isHdr, grad:x.grad, row:cur[i], pending:false}; });
+  plan.forEach(function(p){ p._item = model[p.curRow - 1]; p._item.pending = true; });
+  plan.sort(function(a, b){ return a.bkRow - b.bkRow; });
+  plan.forEach(function(p){
+    var anchorIdx = -1, anchorName = '';
+    for (var b = p.bkRow - 2; b >= 0; b--){         // рядок над ним у знімку і вище
+      var an = B[b].name;
+      if (!an) continue;
+      var cands = [];
+      for (var i = 0; i < model.length; i++){
+        if (model[i].pending || model[i].name !== an) continue;
+        if (model[i].grad && !model[i].isHdr) continue;   // живий сусід не може стояти у службовому блоці
+        cands.push(i);
+      }
+      if (!cands.length) continue;
+      var bi = cands[0], bs = -1;
+      cands.forEach(function(i){ var s = score(model[i].row, bk[b]); if (s > bs){ bs = s; bi = i; } });
+      anchorIdx = bi; anchorName = an; break;
+    }
+    if (anchorIdx < 0){ p.unresolved = 'не знайдено сусіда згори у живій частині аркуша'; return; }
+    var src = model.indexOf(p._item);                 // 0-based, поточна позиція
+    var dst = anchorIdx + 1;                          // 0-based: вставити ПЕРЕД цим індексом (координати до руху)
+    p.anchor = anchorName; p.anchorRow = anchorIdx + 1;
+    p.step = {src:src + 1, dst:dst + 1};
+    model.splice(src, 1);
+    model.splice(dst > src ? dst - 1 : dst, 0, p._item);
+    p._item.pending = false;
+    p._item.grad = false;                             // повернутий рядок — уже живий, може бути сусідом для наступних
+  });
+  plan.forEach(function(p){
+    p.targetRow = p.unresolved ? null : (model.indexOf(p._item) + 1);   // де опиниться після всіх кроків
+    delete p._item;
+  });
+  out.plan = plan;
+  return out;
+}
+
+function dryRunUndoMoveBlock(params){
+  params = params || {};
+  var only = String(params.loc || '').trim();
+  try {
+    var cfg = SpreadsheetApp.openById(CONFIG_SHEET_ID).getSheets()[0].getDataRange().getValues();
+    var seen = {}, rows = [], errors = [], tot = {rows:0, money:0, skipped:0, unresolved:0};
+    for (var r = 1; r < cfg.length; r++){
+      var loc = trim(cfg[r][2]), sheetId = trim(cfg[r][3]), sheetName = trim(cfg[r][4]) || 'Payment';
+      if (!loc || !sheetId) continue;
+      if (only && loc !== only) continue;
+      var key = sheetId + '|' + sheetName;
+      if (seen[key]){ rows.push({loc:loc, sameFileAs:seen[key]}); continue; }   // Школа Кар'єрна = файл Кар'єрної
+      seen[key] = loc;
+      try {
+        var ss = SpreadsheetApp.openById(sheetId);
+        var sh = ss.getSheetByName(sheetName) || ss.getSheets()[0];
+        var cpm = _paymentColsPerMonth(loc, cfg[r][5]);
+        var p = _undoMoveBlockPlan(sh, ss, cpm);
+        var money = 0, unres = 0;
+        p.plan.forEach(function(x){ money += x.money; if (x.unresolved) unres++; });
+        rows.push({loc:loc, sheetName:sh.getName(), backups:p.backups, ref:p.ref,
+                   graduatedRowsNow:p.graduatedRowsNow, willReturn:p.plan.length, money:money,
+                   unresolved:unres, plan:p.plan, skipped:p.skipped, headersToRemove:p.headersToRemove});
+        tot.rows += p.plan.length; tot.money += money; tot.skipped += p.skipped.length; tot.unresolved += unres;
+      } catch(e){ errors.push({loc:loc, error:String(e && e.message || e)}); }
+    }
+    return {ok:true, dryRun:true, totals:tot, rows:rows, errors:errors};
+  } catch(err){ return {ok:false, error:String(err && err.message || err)}; }
+}
+
+function undoPaymentMoveBlock(body){
+  body = body || {};
+  var loc    = String(body.loc || '').trim();
+  var dryRun = (body.dryRun !== false);
+  if (!loc) return {ok:false, error:'loc обовʼязковий'};
+  if (!dryRun && body.confirm !== 'YES_UNDO')
+    return {ok:false, error:'Повернення рядків вимагає confirm:"YES_UNDO"'};
+  try {
+    var reg = _getLocationPaymentRegistry(loc);
+    if (!reg || !reg.sheetId) return {ok:false, error:'Локацію "' + loc + '" не знайдено в реєстрі'};
+    var ss = SpreadsheetApp.openById(reg.sheetId);
+    var sh = (reg.sheetName && ss.getSheetByName(reg.sheetName)) || ss.getSheets()[0];
+    var cpm = reg.colsPerMonth || 5;
+    var p = _undoMoveBlockPlan(sh, ss, cpm);
+    var res = {ok:true, dryRun:dryRun, loc:loc, sheetName:sh.getName(), backups:p.backups, ref:p.ref,
+               graduatedRowsNow:p.graduatedRowsNow, willReturn:p.plan.length,
+               plan:p.plan, skipped:p.skipped, headersToRemove:p.headersToRemove};
+    if (!p.backups.length){ res.ok = false; res.error = 'У файлі немає знімка *_moveblock — нема за чим повертати'; return res; }
+    var steps = p.plan.filter(function(x){ return !x.unresolved; });
+    if (dryRun || !steps.length) return res;
+
+    var lock = LockService.getScriptLock();
+    try { lock.waitLock(60000); } catch(_le){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+    try {
+      res.snapshotBefore = _safeBackupSheet(sh, 'undomove');
+      // кроки вже у порядку знімка; кожен step — координати ДО свого руху (симуляція v. _undoMoveBlockPlan)
+      var moved = 0;
+      steps.forEach(function(x){
+        var actual = trim(String(sh.getRange(x.step.src, 1).getValue() || ''));
+        if (actual !== x.name){
+          x.error = 'у рядку ' + x.step.src + ' тепер «' + actual + '», очікували «' + x.name + '» — крок пропущено';
+          return;
+        }
+        sh.moveRows(sh.getRange(x.step.src, 1), x.step.dst);
+        moved++;
+      });
+      SpreadsheetApp.flush();
+      res.moved = moved;
+      // порожні службові заголовки, яких у знімку не було — знизу вгору
+      var colA = sh.getRange(1, 1, sh.getLastRow(), 1).getValues().map(function(v){ return trim(String(v[0] || '')); });
+      var removed = [];
+      p.headersToRemove.map(function(h){ return h.name; }).forEach(function(hn){
+        for (var i = colA.length - 1; i >= 3; i--){
+          if (colA[i] !== hn || !isGroupHeaderRow([hn], 1)) continue;
+          var empty = true;
+          for (var j = i + 1; j < colA.length; j++){
+            if (!colA[j]) continue;
+            if (isGroupHeaderRow([colA[j]], 1)) break;
+            empty = false; break;
+          }
+          if (!empty){ removed.push({row:i + 1, name:hn, kept:'під заголовком ще є рядки'}); continue; }
+          sh.deleteRow(i + 1);
+          var spacer = (i - 1 >= 3 && !colA[i - 1]);
+          if (spacer) sh.deleteRow(i);
+          removed.push({row:i + 1, name:hn, deleted:true, spacerDeleted:spacer});
+          colA.splice(spacer ? i - 1 : i, spacer ? 2 : 1);
+        }
+      });
+      SpreadsheetApp.flush();
+      res.headersRemoved = removed;
+      var after = _undoMoveBlockPlan(sh, ss, cpm);
+      res.after = {graduatedRowsNow:after.graduatedRowsNow, stillReturnable:after.plan.length, lastRow:sh.getLastRow()};
     } finally { try { lock.releaseLock(); } catch(_lr){} }
     return res;
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
