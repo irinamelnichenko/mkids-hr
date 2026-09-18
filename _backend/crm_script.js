@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.301
+// m.kids CRM — Google Apps Script v7.302
+// v7.302: dryRunNamelessRows — read-only: рядки Payment без ПІБ (і числові слоти) з грошима по всіх
+//         файлах; їх бачить CF (SUM блоку), але не «Оплати-Рік».
 // v7.301: setLocSheetFormulas на Payment — лише =SUM( підсумки заголовків блоків (їх звузив moveRows,
 //         їх читають CF/PL); 8 заголовків у 6 садках, 571 клітинка. Рядки дітей — відмова.
 // v7.300: getLocSheetFormulas / setLocSheetFormulas — формули вкладок CF/PL файлу локації: CF читає
@@ -5383,7 +5385,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.301', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.302', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -5459,6 +5461,7 @@ function doGet(e) {
     else if (action === 'dryRunPayFilters')           result = dryRunPayFilters(e.parameter || {});                     // v7.217 read-only: що відсіють фільтри службових рядків
     else if (action === 'dryRunUndoMoveBlock')        result = dryRunUndoMoveBlock(e.parameter || {});                  // v7.297 read-only: що повернеться з блоку «Вибули» і куди
     else if (action === 'getLocSheetFormulas')        result = getLocSheetFormulas(e.parameter || {});                  // v7.300 read-only: формули вкладки CF/PL файлу локації
+    else if (action === 'dryRunNamelessRows')         result = dryRunNamelessRows(e.parameter || {});                   // v7.302 read-only: безіменні рядки з грошима у Payment
     else if (action === 'dryRunNameFold')             result = dryRunNameFold(e.parameter || {});                       // v7.220 read-only: які картки склеїть зведення лапок
     else if (action === 'diagPayHeaders')             result = diagPayHeaders(e.parameter || {});                       // v7.221 read-only: СИРІ заголовки груп із Payment
     else if (action === 'dryRunRawGroups')            result = dryRunRawGroups(e.parameter || {});                      // v7.222 read-only: що змінить перехід синку на сиру назву
@@ -7343,6 +7346,59 @@ function setLocSheetFormulas(body){
     } finally { try { lock.releaseLock(); } catch(_lr){} }
     return res;
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.302: БЕЗІМЕННІ РЯДКИ З ГРОШИМА — read-only по всіх Payment-файлах.
+// CF/PL сумують блок цілком (SUM у заголовку) і бачать такі рядки; агрегат
+// «Оплати-Рік» рядки без ПІБ пропускає — звідси різниця CF ↔ агрегат (Бровари р.31:
+// 28 930 без імені). Повертає кожен рядок без ПІБ (або з суто числовим «ім'ям» —
+// слот), у якому є хоч одна ненульова сума у місячних колонках: блок, під яким
+// стоїть, і суми по місяцях (факт навч / вступ / доп, бюджет навч / доп).
+// GET ?action=dryRunNamelessRows[&loc=…]  — нічого не пише.
+// ═══════════════════════════════════════════════════════════════════════════
+function dryRunNamelessRows(params){
+  params = params || {};
+  var only = String(params.loc || '').trim();
+  try {
+    var cfg = SpreadsheetApp.openById(CONFIG_SHEET_ID).getSheets()[0].getDataRange().getValues();
+    var seen = {}, rows = [], errors = [], tot = {rows:0, fact:0};
+    for (var r = 1; r < cfg.length; r++){
+      var loc = trim(cfg[r][2]), sheetId = trim(cfg[r][3]), sheetName = trim(cfg[r][4]) || 'Payment';
+      if (!loc || !sheetId) continue;
+      if (only && loc !== only) continue;
+      var key = sheetId + '|' + sheetName;
+      if (seen[key]) continue;
+      seen[key] = loc;
+      try {
+        var ss = SpreadsheetApp.openById(sheetId);
+        var sh = ss.getSheetByName(sheetName) || ss.getSheets()[0];
+        var data = sh.getDataRange().getValues();
+        var cpm = _paymentColsPerMonth(loc, cfg[r][5]), LO = _paymentLayout(cpm);
+        var hdr = '';
+        for (var i = 3; i < data.length; i++){
+          var nm = trim(String(data[i][0] || ''));
+          if (nm && isGroupHeaderRow(data[i], 1)){ hdr = nm; continue; }
+          var numeric = nm && _isNumericName(nm);
+          if (nm && !numeric) continue;                 // звичайна дитина
+          var months = [], fact = 0, bud = 0;
+          for (var m = 0; m < 12; m++){
+            var b0 = 1 + m * cpm;
+            var fn = toNum(data[i][b0 + LO.factNavch]), fv = toNum(data[i][b0 + LO.factVstup]),
+                fd = toNum(data[i][b0 + LO.factDop]),   bd = toNum(data[i][b0 + LO.budDop]),
+                bn = toNum(data[i][b0 + LO.budNavch]);
+            if (fn || fv || fd || bd || bn) months.push({m:m + 1, factNavch:fn, factVstup:fv, factDop:fd, budNavch:bn, budDop:bd});
+            fact += fn + fd; bud += bn + bd;
+          }
+          if (!months.length) continue;
+          rows.push({loc:loc, row:i + 1, name:nm, kind:(numeric ? 'слот' : 'без імені'), block:hdr,
+                     factYear:Math.round(fact), budYear:Math.round(bud), months:months});
+          tot.rows++; tot.fact += fact;
+        }
+      } catch(e){ errors.push({loc:loc, error:String(e && e.message || e)}); }
+    }
+    return {ok:true, dryRun:true, totals:{rows:tot.rows, fact:Math.round(tot.fact)}, rows:rows, errors:errors};
+  } catch(err){ return {ok:false, error:String(err && err.message || err)}; }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
