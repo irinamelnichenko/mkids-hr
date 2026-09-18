@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.299
+// m.kids CRM — Google Apps Script v7.300
+// v7.300: getLocSheetFormulas / setLocSheetFormulas — формули вкладок CF/PL файлу локації: CF читає
+//         Payment фіксованими діапазонами, які moveRows звузив; читання (read-only) і точковий запис.
 // v7.299: блоки «…вибули» — у гроші, не в ростер. parsePaymentSheet(…, keepDeparted) віддає
 //         службовий блок групою departed:true; річний агрегат пише його зі своїми сумами й
 //         колонкою «Вибув»='так' (Житомир «Preschool вибули»: 13 дітей, ~1,49 млн повертаються
@@ -5379,7 +5381,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.299', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.300', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -5454,6 +5456,7 @@ function doGet(e) {
     else if (action === 'dryRunBlankBlocks')          result = dryRunBlankBlocks(e.parameter || {});                    // v7.209 read-only: що змінить «порожній рядок закриває блок»
     else if (action === 'dryRunPayFilters')           result = dryRunPayFilters(e.parameter || {});                     // v7.217 read-only: що відсіють фільтри службових рядків
     else if (action === 'dryRunUndoMoveBlock')        result = dryRunUndoMoveBlock(e.parameter || {});                  // v7.297 read-only: що повернеться з блоку «Вибули» і куди
+    else if (action === 'getLocSheetFormulas')        result = getLocSheetFormulas(e.parameter || {});                  // v7.300 read-only: формули вкладки CF/PL файлу локації
     else if (action === 'dryRunNameFold')             result = dryRunNameFold(e.parameter || {});                       // v7.220 read-only: які картки склеїть зведення лапок
     else if (action === 'diagPayHeaders')             result = diagPayHeaders(e.parameter || {});                       // v7.221 read-only: СИРІ заголовки груп із Payment
     else if (action === 'dryRunRawGroups')            result = dryRunRawGroups(e.parameter || {});                      // v7.222 read-only: що змінить перехід синку на сиру назву
@@ -5622,6 +5625,7 @@ function doPost(e) {
     else if (body.action === 'restorePaymentFromBackup') result = restorePaymentFromBackup(body || {});  // v7.251 відкат аркуша з бекап-вкладки
     else if (body.action === 'movePaymentRowsToBlock')  result = movePaymentRowsToBlock(body || {});   // v7.248 перенесення рядків у блок «Вибули»
     else if (body.action === 'undoPaymentMoveBlock')    result = undoPaymentMoveBlock(body || {});     // v7.297 зворотний хід: рядки з «Вибули» на свої місця (dryRun за замовч.)
+    else if (body.action === 'setLocSheetFormulas')     result = setLocSheetFormulas(body || {});      // v7.300 точковий запис формул CF/PL (dryRun за замовч.)
     else if (body.action === 'purgePaymentGhostRows')  result = purgePaymentGhostRows(body || {});   // v7.233 рядки-привиди в Payment (dryRun за замовч.)
     else if (body.action === 'renamePayGroupHeader')        result = renamePayGroupHeader(body || {}); // v7.227
     else if (body.action === 'generateInvoicePDF')          result = generateInvoicePDF(body || {});   // v6.50
@@ -7228,6 +7232,95 @@ function undoPaymentMoveBlock(body){
       res.headersRemoved = removed;
       var after = _undoMoveBlockPlan(sh, ss, cpm);
       res.after = {graduatedRowsNow:after.graduatedRowsNow, stillReturnable:after.plan.length, lastRow:sh.getLastRow()};
+    } finally { try { lock.releaseLock(); } catch(_lr){} }
+    return res;
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.300: ФОРМУЛИ ВКЛАДОК CF / PL ПЕР-ЛОКАЦІЙНОГО ФАЙЛУ — читання і точковий запис.
+// CF і PL живуть у тому самому файлі, що й Payment, і читають Payment напряму
+// фіксованими діапазонами рядків (SUM(Payment!B26:B35) тощо). Коли рядки
+// переїжджали в «Вибули» (moveRows), Sheets звужував ці діапазони слідом за
+// клітинками; повернення рядків (v7.297) діапазони назад не розширює — повернуті
+// діти стоять поза формулою, і CF їх не бачить, хоч у Payment і в «Оплати-Рік»
+// вони є (Бровари, «Preschool 2 Ольга»: випали рівно 5 повернутих).
+// getLocSheetFormulas — read-only: усі клітинки з формулами вкладки (A1, формула,
+// значення) + колонка A вкладки + колонка A Payment з номерами рядків (щоб
+// звірити діапазони з реальними блоками груп).
+// setLocSheetFormulas — запис названих формул у названі клітинки; dryRun за
+// замовчуванням, реальний запис вимагає confirm:'YES_SET_FORMULAS'; перед записом
+// знімок вкладки (_safeBackupSheet, тег 'cffix'). Payment не чіпає.
+// GET  ?action=getLocSheetFormulas&loc=…&tab=CF
+// POST {action:'setLocSheetFormulas', loc, tab, edits:[{a1, formula}], dryRun, confirm}
+// ═══════════════════════════════════════════════════════════════════════════
+function getLocSheetFormulas(params){
+  params = params || {};
+  var loc = String(params.loc || '').trim();
+  var tab = String(params.tab || 'CF').trim();
+  if (!loc) return {ok:false, error:'loc обовʼязковий'};
+  try {
+    var reg = _getLocationPaymentRegistry(loc);
+    if (!reg || !reg.sheetId) return {ok:false, error:'Локацію "' + loc + '" не знайдено в реєстрі'};
+    var ss = SpreadsheetApp.openById(reg.sheetId);
+    var sh = ss.getSheetByName(tab);
+    if (!sh) return {ok:false, error:'Вкладку «' + tab + '» не знайдено', sheets: ss.getSheets().map(function(s){ return s.getName(); })};
+    var lr = sh.getLastRow(), lc = sh.getLastColumn();
+    var rng = sh.getRange(1, 1, lr, lc);
+    var F = rng.getFormulas(), V = rng.getValues();
+    var cells = [];
+    for (var r = 0; r < F.length; r++){
+      for (var c = 0; c < F[r].length; c++){
+        if (F[r][c]) cells.push({a1: rng.getCell(r + 1, c + 1).getA1Notation(), row: r + 1, col: c + 1,
+                                 formula: F[r][c], value: V[r][c]});
+      }
+    }
+    var colA = [];
+    for (var i = 0; i < V.length; i++){ var a = trim(String(V[i][0] == null ? '' : V[i][0])); if (a) colA.push({row: i + 1, text: a}); }
+    var header = V.length ? V[0].map(function(x){ return String(x == null ? '' : x); }) : [];
+    var pay = ss.getSheetByName(reg.sheetName) || ss.getSheets()[0];
+    var pA = pay.getRange(1, 1, pay.getLastRow(), 1).getValues(), payA = [];
+    for (var j = 0; j < pA.length; j++){
+      var t = trim(String(pA[j][0] == null ? '' : pA[j][0]));
+      payA.push({row: j + 1, text: t, header: (j >= 3 && !!t && isGroupHeaderRow([t], 1))});
+    }
+    return {ok:true, loc:loc, tab:tab, lastRow:lr, lastCol:lc, header:header, formulas:cells, colA:colA,
+            paymentSheet: pay.getName(), paymentColA: payA};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+function setLocSheetFormulas(body){
+  body = body || {};
+  var loc = String(body.loc || '').trim();
+  var tab = String(body.tab || 'CF').trim();
+  var edits = (body.edits || []).map(function(x){ return {a1: String(x && x.a1 || '').trim(), formula: String(x && x.formula || '')}; })
+                                .filter(function(x){ return x.a1 && x.formula; });
+  var dryRun = (body.dryRun !== false);
+  if (!loc) return {ok:false, error:'loc обовʼязковий'};
+  if (!edits.length) return {ok:false, error:'edits[] обовʼязковий'};
+  if (!dryRun && body.confirm !== 'YES_SET_FORMULAS')
+    return {ok:false, error:'Запис формул вимагає confirm:"YES_SET_FORMULAS"'};
+  try {
+    var reg = _getLocationPaymentRegistry(loc);
+    if (!reg || !reg.sheetId) return {ok:false, error:'Локацію "' + loc + '" не знайдено в реєстрі'};
+    var ss = SpreadsheetApp.openById(reg.sheetId);
+    var sh = ss.getSheetByName(tab);
+    if (!sh) return {ok:false, error:'Вкладку «' + tab + '» не знайдено'};
+    if (sh.getName() === reg.sheetName) return {ok:false, error:'Payment не чіпаємо'};
+    var plan = edits.map(function(x){
+      var rg = sh.getRange(x.a1);
+      return {a1:x.a1, before:rg.getFormula() || rg.getValue(), beforeValue:rg.getValue(), after:x.formula};
+    });
+    var res = {ok:true, dryRun:dryRun, loc:loc, tab:tab, edits:plan};
+    if (dryRun) return res;
+    var lock = LockService.getScriptLock();
+    try { lock.waitLock(30000); } catch(_le){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+    try {
+      res.snapshotBefore = _safeBackupSheet(sh, 'cffix');
+      plan.forEach(function(p){ sh.getRange(p.a1).setFormula(p.after); });
+      SpreadsheetApp.flush();
+      plan.forEach(function(p){ p.afterValue = sh.getRange(p.a1).getValue(); });
+      res.written = plan.length;
     } finally { try { lock.releaseLock(); } catch(_lr){} }
     return res;
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
