@@ -1,5 +1,9 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.304
+// m.kids CRM — Google Apps Script v7.305
+// v7.305: Salary-рядки з каталогу автоматично: (1) exportToSalaryExtras створює відсутній рядок у
+//         секції «Додаткові заняття» (P7, перед останнім рядком секції — всередину SUM);
+//         (2) предметники: ставка змінилась → назву рядка переписано під нову ставку, суми лишаються;
+//         (3) Budget(N+2) = план з каталогу (одиниці N × ставка) лише в порожню клітинку; planNext:false вимикає.
 // v7.304: порожні заголовки блоків (=SUM( у колонці B, без назви) — не «безіменні діти»: річний
 //         агрегат і dryRunNamelessRows їх пропускають (Бровари р.67, Кругла р.103 подвоювали блок).
 // v7.303: безіменні рядки Payment з грошима → у річний агрегат як «(без імені, р.N)» з «Вибув»='так'
@@ -5389,7 +5393,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.304', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.305', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -20501,6 +20505,41 @@ function _salaryMatchRow(lname, actRowByLname, foldedRowMap){
   return -1;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.305: SALARY-РЯДКИ З КАТАЛОГУ — автоматично.
+//  (1) exportToSalaryExtras: заняття з відмітками, для якого рядка в секції
+//      «Додаткові заняття» немає → рядок створюється (P7, як у предметників).
+//      Місце: ПЕРЕД останнім рядком секції — щоб потрапити всередину SUM(...)
+//      підсумкового рядка секції (вставка після останнього рядка лишила б новий
+//      рядок поза формулою). Якщо секції немає — дописується в кінець аркуша
+//      разом із заголовком «Додаткові заняття».
+//  (2) exportPredmetnykyToSalary: рядок знайдено зі СТАРОЮ ставкою (P3/P5 — число
+//      в назві ≠ ставці каталогу; P6 — числа немає) → назву переписуємо під нову
+//      ставку («Логопед 250» → «Логопед 300»), решту назви й усі суми лишаємо.
+//  (3) Бюджет місяця N+2 (наступного після того, куди пише експорт) — план з
+//      каталогу: ті самі одиниці місяця N × поточна ставка. Пишеться ЛИШЕ в
+//      порожню клітинку без формули; наступний експорт перезапише її фактом.
+//      Вимикається planNext:false. Через межу року (N+2 у наступному році) — ні.
+// ═══════════════════════════════════════════════════════════════════════════
+// Колонка Budget місяця m (1..12) у Salary: 3 колонки на місяць, Budget = 3-тя.
+function _salaryBudgetCol(m){ return (m - 1) * 3 + 3; }
+// План у Budget(N+2): лише порожня клітинка без формули. Повертає статус для details.
+function _salaryPlanNextCell(sheet, row, planCol, value, dryRun){
+  if (!planCol || row <= 0) return 'no-col';
+  var rg = sheet.getRange(row, planCol);
+  if (rg.getFormula()) return 'formula';
+  var cur = Number(rg.getValue()) || 0;
+  if (cur !== 0) return 'has-value';
+  if (!(value > 0)) return 'zero';
+  if (!dryRun) rg.setValue(value);
+  return 'planned';
+}
+// Місяць N+2 у тому ж аркуші (Salary = один рік): null, якщо виходить за грудень.
+function _salaryPlanMonth(nextM){
+  var p = _nextMonth(nextM.month, nextM.year);
+  return (p.year === nextM.year) ? p : null;
+}
+
 function exportToSalaryExtras(params){
   try {
     var loc = String(params.loc || '').trim();
@@ -20508,6 +20547,7 @@ function exportToSalaryExtras(params){
     var year = Number(params.year) || new Date().getFullYear();
     var force = (params.force === true);   // v7.197: обхід guard'а нульових відміток
     var dryRun = (params.dryRun === true); // v7.284: прев'ю без запису (як у exportAttendanceToPayments)
+    var planNext = (params.planNext !== false);   // v7.305 (3): план у Budget(N+2)
     if (!loc) return {ok: false, error: 'Параметр loc обовʼязковий'};
     if (!month || month < 1 || month > 12) return {ok: false, error: 'month має бути 1-12'};
     if (!dryRun){ var _cg = _closedGuardExport(year, month); if (_cg) return _cg; }   // v7.291
@@ -20693,15 +20733,25 @@ function exportToSalaryExtras(params){
     //
     // Ідемо по всіх АКТИВНИХ заняттях каталогу (а не лише по withRate) —
     // інакше якщо викладача прибрали з активних, попередня сума не очиститься.
+    var p7queue = [];                                     // v7.305 (1)
+    var planM = planNext ? _salaryPlanMonth(nextM) : null;   // v7.305 (3)
+    var planCol = planM ? _salaryBudgetCol(planM.month) : 0;
+    var planned = 0;
     allActive.forEach(function(a){
       var lname = _journalNormName(a.name);
       var rowFound = _salaryMatchRow(lname, actRowByLname, _salaryFoldedRowMap);
       if (rowFound <= 0){
-        // Активність є у каталозі, але рядка у Salary-листі для неї нема.
-        // Записувати ні куди. Лиш діагностика.
+        // v7.305 (1): активність є у каталозі, рядка у Salary нема. Якщо за місяць є
+        // відмітки — рядок створюємо (P7). Без відміток — лише діагностика, щоб не
+        // плодити порожні рядки на кожну неактивну позицію.
         if (factByName.hasOwnProperty(lname)){
-          notFound.push(factByName[lname].name);
-          details.push({activity: factByName[lname].name, fact: factByName[lname].fact, status: 'not-in-salary'});
+          var infoNF = factByName[lname];
+          if (infoNF.hasMarks){
+            p7queue.push({name: infoNF.name, fact: infoNF.fact, nk: lname});
+          } else {
+            notFound.push(infoNF.name);
+            details.push({activity: infoNF.name, fact: infoNF.fact, status: 'not-in-salary'});
+          }
         }
         return;
       }
@@ -20734,13 +20784,15 @@ function exportToSalaryExtras(params){
         });
       }
 
+      var planSt = (info && planCol) ? _salaryPlanNextCell(sheet, rowFound, planCol, newFact, dryRun) : null;   // v7.305 (3)
+      if (planSt === 'planned') planned++;
       if (info){
         updated++;
         totalFact += newFact;
         details.push({
           activity: info.name, fact: newFact,
           currentBefore: currentValue, lastWritten: lastWritten,
-          newCell: newValue, row: rowFound, status: 'updated'
+          newCell: newValue, row: rowFound, status: 'updated', planNext: planSt
         });
         Logger.log('[exportToSalaryExtras] WRITE row=%s "%s" cur=%s last=%s newFact=%s → %s', rowFound, a.name, currentValue, lastWritten, newFact, newValue);
       } else if (lastWritten !== 0){
@@ -20753,7 +20805,43 @@ function exportToSalaryExtras(params){
       }
     });
 
-    Logger.log('[exportToSalaryExtras] точковий запис%s: %s клітинок змінено, %s формульних рядків пропущено', (dryRun ? ' (DRY-RUN, нічого не записано)' : ''), cellsWritten, formulaRowsSkipped);
+    // ── v7.305 (1): P7 — створення рядків у секції «Додаткові заняття» ──
+    var rowsAdded = 0, p7info = null;
+    if (p7queue.length){
+      var extrasHeader = 0, lastExtras = 0;
+      classifiedRows.forEach(function(cr){
+        if (cr._section !== 'extras') return;
+        if (cr._category === 'section_header'){ if (!extrasHeader) extrasHeader = cr.row; return; }
+        if (cr.row > lastExtras) lastExtras = cr.row;
+      });
+      var anchor, mode;
+      if (lastExtras > 0){ anchor = lastExtras; mode = 'before-last';      // всередину SUM секції
+      } else if (extrasHeader > 0){ anchor = extrasHeader + 1; mode = 'after-header';
+      } else { anchor = sheet.getLastRow() + 2; mode = 'append'; }
+      p7info = {mode: mode, anchor: anchor, header: extrasHeader, lastExtras: lastExtras};
+      if (mode === 'append' && !dryRun){
+        sheet.getRange(anchor - 1, 1).setValue('Додаткові заняття');
+      }
+      p7queue.forEach(function(p){
+        var newRow = anchor;
+        if (!dryRun){
+          if (mode === 'append') { /* порожній рядок у кінці — вставляти не треба */ }
+          else sheet.insertRowsBefore(anchor, 1);
+          sheet.getRange(newRow, 1).setValue(p.name);
+          sheet.getRange(newRow, budgetCol).setValue(p.fact);
+          if (planCol && p.fact > 0) sheet.getRange(newRow, planCol).setValue(p.fact);
+        }
+        anchor++;
+        cellsWritten++; rowsAdded++; updated++; totalFact += p.fact;
+        if (planCol && p.fact > 0) planned++;
+        journalOps.push({nk: p.nk, loc: loc, kind: 'salary', name: p.name,
+                         year: nextM.year, month: nextM.month, newSum: p.fact});
+        details.push({activity: p.name, fact: p.fact, row: newRow, newCell: p.fact, status: 'row-added',
+                      planNext: (planCol && p.fact > 0) ? 'planned' : null});
+        Logger.log('[exportToSalaryExtras] P7 row=%s "%s" fact=%s (%s)', newRow, p.name, p.fact, mode);
+      });
+    }
+    Logger.log('[exportToSalaryExtras] точковий запис%s: %s клітинок змінено, %s формульних рядків пропущено, рядків додано %s, план N+2: %s', (dryRun ? ' (DRY-RUN, нічого не записано)' : ''), cellsWritten, formulaRowsSkipped, rowsAdded, planned);
 
     if (!dryRun) _commitJournalUpdates(journal, journalOps);
     Logger.log('[exportToSalaryExtras] journal upsert%s: %s op(s)', (dryRun ? ' (DRY-RUN, пропущено)' : ''), journalOps.length);
@@ -20768,6 +20856,10 @@ function exportToSalaryExtras(params){
       journalOps: journalOps.length,
       updated:  updated,
       totalFact: totalFact,
+      rowsAdded: rowsAdded,         // v7.305 (1)
+      p7: p7info,
+      planMonth: planM ? MONTHS_CAL_UA[planM.month - 1] : null,   // v7.305 (3)
+      planned: planned,
       notFound: notFound,
       skipped:  skipped,
       details:  details,
@@ -26256,6 +26348,25 @@ function _findPredmetnySalaryRow(salaryRows, subject, rate){
   return null;   // P7 — рядка немає, треба додати
 }
 
+// v7.305 (2): нова назва рядка Salary під ставку каталогу. P3/P5 — у назві є число,
+// що НЕ дорівнює ставці: замінюємо його (перше число після предмета для P3;
+// для P5 — число, найближче до ставки). P6 — числа немає: дописуємо ставку.
+// P1/P2/P4 — ставка вже в назві, нічого не міняємо. Повертає '' якщо змін немає.
+function _predRenameForRate(raw, subject, rate, priority){
+  raw = String(raw || ''); var rs = String(rate);
+  if (priority === 'P6') return raw + ' ' + rs;
+  if (priority !== 'P3' && priority !== 'P5') return '';
+  var nums = raw.match(/[0-9]+/g);
+  if (!nums) return '';
+  if (nums.indexOf(rs) !== -1) return '';                       // ставка вже є
+  var best = nums[0], bd = Infinity;
+  if (priority === 'P5'){
+    nums.forEach(function(n){ var d = Math.abs(Number(n) - Number(rate)); if (d < bd){ bd = d; best = n; } });
+  }
+  var re = new RegExp('(^|[^0-9])' + best + '(?![0-9])');
+  return raw.replace(re, '$1' + rs);
+}
+
 function exportPredmetnyToSalary(params){
   _cacheBump('salary');   // v7.293 кеш getSalaryOverview
   try {
@@ -30611,6 +30722,7 @@ function exportPredmetnykyToSalary(params){
     var dryRun  = (params.dryRun === true);
     if (!dryRun && month >= 1 && month <= 12){ var _cg = _closedGuardExport(year, month); if (_cg) return _cg; }   // v7.291
     var force   = (params.force === true);   // v7.197: обхід guard'а нульових уроків
+    var planNext = (params.planNext !== false);   // v7.305 (3)
 
     if (!loc) return {ok:false, error:'loc обовʼязковий'};
     if (!month || month < 1 || month > 12) return {ok:false, error:'month має бути 1-12'};
@@ -30727,6 +30839,9 @@ function exportPredmetnykyToSalary(params){
     var updated = 0, totalFact = 0, cellsWritten = 0, formulaRowsSkipped = 0;
     var p7queue = [], maxMatchedRow = 0, details = [];
     var stats = {attempts:0, p1:0, p2:0, p3:0, p4:0, p5:0, p6:0, p7:0};
+    var renamed = [], planned = 0;                               // v7.305 (2),(3)
+    var planM = planNext ? _salaryPlanMonth(nextM) : null;
+    var planCol = planM ? _salaryBudgetCol(planM.month) : 0;
 
     // 4. Матчинг кожного catalog entry → Salary row.
     // OVERWRITE-логіка: клітинка "<Subject> <Rate>" у Salary належить
@@ -30786,6 +30901,21 @@ function exportPredmetnykyToSalary(params){
       stats['p' + found.priority.slice(1)]++;
       if (found.row > maxMatchedRow) maxMatchedRow = found.row;
 
+      // v7.305 (2): ставка в каталозі змінилась — рядок знайдено за старою ставкою
+      // (P3/P5: число в назві ≠ ставці; P6: числа немає). Переписуємо лише назву.
+      var renameTo = _predRenameForRate(found.matchedAs, a.subject_raw, a.rate, found.priority);
+      if (renameTo && renameTo !== found.matchedAs){
+        if (!dryRun) sheet.getRange(found.row, 1).setValue(renameTo);
+        for (var sr = 0; sr < salaryRows.length; sr++){
+          if (salaryRows[sr].row === found.row){
+            salaryRows[sr].raw = renameTo; salaryRows[sr].norm = _journalNormName(renameTo); salaryRows[sr].soft = _softNorm(renameTo);
+          }
+        }
+        renamed.push({row: found.row, from: found.matchedAs, to: renameTo, priority: found.priority});
+        cellsWritten++;
+        Logger.log('[%s] RENAME row=%s «%s» → «%s» (%s)', loc, found.row, found.matchedAs, renameTo, found.priority);
+      }
+
       var rowIdx0 = found.row - 1;
       if (budgetColFormulas[rowIdx0] && budgetColFormulas[rowIdx0][0]){
         formulaRowsSkipped++;
@@ -30805,10 +30935,13 @@ function exportPredmetnykyToSalary(params){
         journalOps.push({nk:nk, loc:loc, kind:'predmetnyky', name:catName,
           year:nextM.year, month:nextM.month, newSum:fact});
       }
+      var planSt = planCol ? _salaryPlanNextCell(sheet, found.row, planCol, fact, dryRun) : null;   // v7.305 (3)
+      if (planSt === 'planned') planned++;
       updated++;
       totalFact += fact;
       details.push({subject:catName, matchedAs:found.matchedAs, priority:found.priority,
-        fact:fact, lessons:uniq, row:found.row, oldValue:currentValue, newValue:newValue});
+        fact:fact, lessons:uniq, row:found.row, oldValue:currentValue, newValue:newValue,
+        renamedTo:(renameTo && renameTo !== found.matchedAs) ? renameTo : null, planNext:planSt});
       Logger.log('[%s] %s → %s | lessons=%s × %s = %s | Salary row=%s col=%s | %s → %s',
         loc, catName, found.priority, uniq, a.rate, fact,
         found.row, budgetCol, currentValue, newValue);
@@ -30827,7 +30960,9 @@ function exportPredmetnykyToSalary(params){
       if (!dryRun){
         sheet.getRange(newRow, 1).setValue(p.subject + ' ' + p.rate);
         sheet.getRange(newRow, budgetCol).setValue(p.fact);
+        if (planCol && p.fact > 0) sheet.getRange(newRow, planCol).setValue(p.fact);   // v7.305 (3)
       }
+      if (planCol && p.fact > 0) planned++;
       cellsWritten++;
       journalOps.push({nk:p.nk, loc:loc, kind:'predmetnyky', name:p.catName,
         year:nextM.year, month:nextM.month, newSum:p.fact});
@@ -30879,6 +31014,9 @@ function exportPredmetnykyToSalary(params){
       cellsWritten: cellsWritten,
       formulaRowsSkipped: formulaRowsSkipped,
       rowsAdded: stats.p7,
+      renamed: renamed,                                            // v7.305 (2)
+      planMonth: planM ? MONTHS_CAL_UA[planM.month - 1] : null,   // v7.305 (3)
+      planned: planned,
       matchStats: stats,
       details: details
     };
