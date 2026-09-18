@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.300
+// m.kids CRM — Google Apps Script v7.301
+// v7.301: setLocSheetFormulas на Payment — лише =SUM( підсумки заголовків блоків (їх звузив moveRows,
+//         їх читають CF/PL); 8 заголовків у 6 садках, 571 клітинка. Рядки дітей — відмова.
 // v7.300: getLocSheetFormulas / setLocSheetFormulas — формули вкладок CF/PL файлу локації: CF читає
 //         Payment фіксованими діапазонами, які moveRows звузив; читання (read-only) і точковий запис.
 // v7.299: блоки «…вибули» — у гроші, не в ростер. parsePaymentSheet(…, keepDeparted) віддає
@@ -5381,7 +5383,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.300', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.301', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -7250,7 +7252,9 @@ function undoPaymentMoveBlock(body){
 // звірити діапазони з реальними блоками груп).
 // setLocSheetFormulas — запис названих формул у названі клітинки; dryRun за
 // замовчуванням, реальний запис вимагає confirm:'YES_SET_FORMULAS'; перед записом
-// знімок вкладки (_safeBackupSheet, тег 'cffix'). Payment не чіпає.
+// знімок вкладки (_safeBackupSheet, тег 'cffix'/'sumfix'). На Payment (v7.301) —
+// лише =SUM( у заголовках блоків: саме ці підсумки читають CF і PL, і саме їх
+// звузив moveRows; рядки дітей — заборонені.
 // GET  ?action=getLocSheetFormulas&loc=…&tab=CF
 // POST {action:'setLocSheetFormulas', loc, tab, edits:[{a1, formula}], dryRun, confirm}
 // ═══════════════════════════════════════════════════════════════════════════
@@ -7306,17 +7310,32 @@ function setLocSheetFormulas(body){
     var ss = SpreadsheetApp.openById(reg.sheetId);
     var sh = ss.getSheetByName(tab);
     if (!sh) return {ok:false, error:'Вкладку «' + tab + '» не знайдено'};
-    if (sh.getName() === reg.sheetName) return {ok:false, error:'Payment не чіпаємо'};
+    // v7.301: на Payment дозволені ЛИШЕ підсумкові формули заголовків блоків: клітинка вже
+    // містить =SUM(…), колонка A рядка — заголовок групи або порожня (не дитина), і нова
+    // формула теж =SUM(…). Рядки дітей цей маршрут не чіпає ні за яких умов.
+    var isPay = (sh.getName() === reg.sheetName);
+    var refused = [];
     var plan = edits.map(function(x){
       var rg = sh.getRange(x.a1);
-      return {a1:x.a1, before:rg.getFormula() || rg.getValue(), beforeValue:rg.getValue(), after:x.formula};
+      var before = rg.getFormula() || rg.getValue();
+      var p = {a1:x.a1, before:before, beforeValue:rg.getValue(), after:x.formula};
+      if (isPay){
+        var aTxt = trim(String(sh.getRange(rg.getRow(), 1).getValue() || ''));
+        var why = [];
+        if (!/^=SUM\(/i.test(String(rg.getFormula() || ''))) why.push('клітинка не містить =SUM(');
+        if (!/^=SUM\(/i.test(x.formula)) why.push('нова формула не =SUM(');
+        if (aTxt && !isGroupHeaderRow([aTxt], 1)) why.push('рядок «' + aTxt + '» — дитина, не заголовок');
+        if (why.length){ p.refused = why.join('; '); refused.push(p); }
+      }
+      return p;
     });
-    var res = {ok:true, dryRun:dryRun, loc:loc, tab:tab, edits:plan};
+    var res = {ok:true, dryRun:dryRun, loc:loc, tab:tab, edits:plan, refused:refused.length};
+    if (refused.length){ res.ok = false; res.error = 'Payment: ' + refused.length + ' правок відхилено — ' + refused[0].a1 + ': ' + refused[0].refused; return res; }
     if (dryRun) return res;
     var lock = LockService.getScriptLock();
     try { lock.waitLock(30000); } catch(_le){ return {ok:false, error:'LOCK_TIMEOUT'}; }
     try {
-      res.snapshotBefore = _safeBackupSheet(sh, 'cffix');
+      res.snapshotBefore = _safeBackupSheet(sh, isPay ? 'sumfix' : 'cffix');
       plan.forEach(function(p){ sh.getRange(p.a1).setFormula(p.after); });
       SpreadsheetApp.flush();
       plan.forEach(function(p){ p.afterValue = sh.getRange(p.a1).getValue(); });
