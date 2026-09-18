@@ -788,8 +788,8 @@ details.card>summary::-webkit-details-marker{display:none}details.card[open]>sum
         </div>
         <div class="g2">
           <div class="fg"><label>Номер договору</label>
-            <input type="text" id="fContractNumber" placeholder="напр. 01-01-01"
-              maxlength="8" oninput="fmtContractNumber(this)">
+            <input type="text" id="fContractNumber" placeholder="напр. 01-01-01 або 18-25-264"
+              maxlength="9" oninput="fmtContractNumber(this)">
             <div id="contractNumberStatus" style="font-size:11px;margin-top:4px"></div>
           </div>
           <div class="fg"><label>Дата старту адаптації</label>
@@ -1318,14 +1318,41 @@ function phoneKeyDown(inp, e){
   }
 }
 
+// v7.308: третя група 2–3 цифри (XX-XX-XX або XX-XX-XXX). Тичини нумерують
+// договори наскрізно (18-25-264), і 6-цифрова маска зрізала їх до 18-25-26 —
+// звідси дублі й «новий формат» у картках. Бекенд зберігає номер як текст, ніде
+// його не парсить, тож довжина хвоста ні на що не впливає.
 function fmtContractNumber(inp){
-  var digits = inp.value.replace(/\D/g, '').slice(0, 6);
+  var digits = inp.value.replace(/\D/g, '').slice(0, 7);
   var parts = [];
   if(digits.length > 0) parts.push(digits.slice(0, 2));
   if(digits.length > 2) parts.push(digits.slice(2, 4));
-  if(digits.length > 4) parts.push(digits.slice(4, 6));
+  if(digits.length > 4) parts.push(digits.slice(4, 7));
   inp.value = parts.join('-');
   setTimeout(function(){ inp.setSelectionRange(inp.value.length, inp.value.length); }, 0);
+  contractNumberDupHint(inp.value);
+}
+// v7.308: підказка про дубль номера в межах локації (не блокує — близнюки
+// можуть мати один договір). Показує, у кого ще такий номер.
+function contractNumberDupsFor(num, loc, selfId){
+  var n=String(num||'').trim(); if(!n) return [];
+  var out=[];
+  Object.keys(S.crm||{}).forEach(function(id){
+    if(id===selfId) return;
+    var c=S.crm[id]; if(!c) return;
+    if(String(c.loc||'').trim()!==loc) return;
+    if(String(c.contractNumber||'').trim()===n) out.push(c.name||id);
+  });
+  return out;
+}
+function contractNumberDupHint(num){
+  var el=document.getElementById('contractNumberStatus'); if(!el) return;
+  var loc=S.isNew ? (document.getElementById('fLocSel')||{}).value : (document.getElementById('fLoc')||{}).value;
+  var dups=contractNumberDupsFor(num, String(loc||'').trim(), S.editId);
+  if(!dups.length){ if(el.dataset.dup){ el.innerHTML=''; el.style.color=''; delete el.dataset.dup; } return; }
+  el.dataset.dup='1';
+  el.innerHTML='⚠️ Такий номер уже є: '+esc(dups.join(', '));
+  el.style.color='var(--orange, #e67e22)';
 }
 
 function validateRnokpp(inp){
@@ -7460,6 +7487,11 @@ function saveChild(){
     var el=document.getElementById(elId);
     return el ? String(el.value||'') : '';
   }
+
+  // v7.308: дубль номера договору в межах локації — підтвердження, не блок
+  // (близнюки можуть мати один договір). Перевірка ДО будь-яких змін картки.
+  var _cnDups=contractNumberDupsFor(val('fContractNumber'), loc, id);
+  if(_cnDups.length && !confirm('Номер договору '+val('fContractNumber')+' уже є у: '+_cnDups.join(', ')+'.\nЗберегти все одно?')) return;
 
   c.name=name;
   c.loc=loc;
