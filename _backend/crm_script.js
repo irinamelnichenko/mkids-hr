@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.302
+// m.kids CRM — Google Apps Script v7.303
+// v7.303: безіменні рядки Payment з грошима → у річний агрегат як «(без імені, р.N)» з «Вибув»='так'
+//         (лише keepDeparted, тобто aggregatePaymentsYearly); ростер і місячний «Оплати» — без змін.
 // v7.302: dryRunNamelessRows — read-only: рядки Payment без ПІБ (і числові слоти) з грошима по всіх
 //         файлах; їх бачить CF (SUM блоку), але не «Оплати-Рік».
 // v7.301: setLocSheetFormulas на Payment — лише =SUM( підсумки заголовків блоків (їх звузив moveRows,
@@ -5385,7 +5387,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.302', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.303', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -8906,6 +8908,27 @@ function parsePaymentSheet(data, monthCol, contractCol, cpm, loc, typ, closeOnBl
     var row = data[r];
     var nameCell = trim(String(row[0] || ''));
     if (!nameCell){
+      // v7.303: безіменний рядок із грошима (стерте ПІБ вибулої дитини — 305 таких по
+      // мережі, 30,85 млн за січень–серпень). CF/PL його бачать через SUM блоку; для
+      // річного агрегату (keepDeparted) віддаємо як дитину «(без імені, р.N)» з міткою
+      // departed — гроші у звітах, у ростері нема. Ростерні виклики поведінку не міняють.
+      if (keepDeparted){
+        var _hasMoney = false;
+        for (var _m = 0; _m < 12 && !_hasMoney; _m++){
+          var _b0 = 1 + _m * _LO.cpm;
+          _hasMoney = !!(toNum(row[_b0 + _LO.factNavch]) || toNum(row[_b0 + _LO.factVstup]) || toNum(row[_b0 + _LO.factDop]) ||
+                         toNum(row[_b0 + _LO.budNavch])  || toNum(row[_b0 + _LO.budDop]));
+        }
+        if (_hasMoney){
+          _blankRun = 0;
+          if (!curGroup){ curGroup = {group:'(без групи)', teacher:'', rawGroup:'', children:[]}; groups.push(curGroup); }
+          curGroup.children.push({name:'(без імені, р.' + (r + 1) + ')', departed:true,
+            factStudy:toNum(row[monthCol]), factEntry:0, factExtra:toNum(row[monthCol + _LO.factDop]),
+            budExtra:toNum(row[monthCol + _LO.budDop]), budStudy:toNum(row[monthCol + _LO.budNavch]),
+            contractDate:'', row:r});
+          continue;
+        }
+      }
       _blankRun++;
       if (_minBlank && _blankRun >= _minBlank) curGroup = null;
       continue;
@@ -10175,7 +10198,7 @@ function aggregatePaymentsYearly() {
             if (mi <= curJSMonth) factToday += totalNoEntry;
           }
           var debtYear = budYear > factYear ? budYear - factYear : 0;
-          rowOut.push(factYear, budYear, debtYear, factToday, updateStr, g.departed ? 'так' : '');   // v7.299 «Вибув»
+          rowOut.push(factYear, budYear, debtYear, factToday, updateStr, (g.departed || ch.departed) ? 'так' : '');   // v7.299 «Вибув»; v7.303 і безіменні рядки
           allRows.push(rowOut);
         });
       });
