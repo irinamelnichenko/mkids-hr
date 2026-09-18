@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.306
+// m.kids CRM — Google Apps Script v7.307
+// v7.307: updateActivity/deleteActivity приймають onlyLoc (id + локація) — у Додаткові_Каталог id 48–58
+//         продубльовані фантомом «Осокорки сад»; purgeActivitiesByLoc — прибирання рядків фантомної локації.
 // v7.306: repriceAttendanceMarks — POST-маршрут + режим «весь місяць» (year+month замість date);
 //         ціна вморожена у відмітці, тож нова ціна каталогу застосовується до старих відміток лише так.
 // v7.305: Salary-рядки з каталогу автоматично: (1) exportToSalaryExtras створює відсутній рядок у
@@ -5395,7 +5397,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.306', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.307', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -5545,8 +5547,9 @@ function doPost(e) {
     else if (body.action === 'activateUser')              result = activateUser(body.userId || 0);
     else if (body.action === 'syncPayments')              result = syncPayments();
     else if (body.action === 'addActivity')               result = addActivity(body.data || {});
-    else if (body.action === 'updateActivity')            result = updateActivity(body.id || 0, body.data || {});
-    else if (body.action === 'deleteActivity')            result = deleteActivity(body.id || 0);
+    else if (body.action === 'updateActivity')            result = updateActivity(body.id || 0, body.data || {}, body.onlyLoc || '');   // v7.307 onlyLoc
+    else if (body.action === 'deleteActivity')            result = deleteActivity(body.id || 0, body.onlyLoc || '');
+    else if (body.action === 'purgeActivitiesByLoc')      result = purgeActivitiesByLoc(body || {});   // v7.307 фантомна локація каталогу (dryRun за замовч.)
     else if (body.action === 'setActivitiesActiveByLoc')  result = setActivitiesActiveByLoc(body || {});   // v7.274 (де)активація каталогу за локацією
     else if (body.action === 'restoreContractNumbers')    result = restoreContractNumbers(body || {});    // v7.276 відновлення № договорів із дат (dryRun за замовч.)
     else if (body.action === 'copyActivitiesFromLocation') result = copyActivitiesFromLocation(body.fromLoc || '', body.toLoc || '');
@@ -14719,14 +14722,19 @@ function addActivity(data){
   }
 }
 
-function updateActivity(id, data){
+// v7.307: onlyLoc — правити рядок лише цієї локації. Без нього береться ПЕРШИЙ рядок з
+// таким id, а в «Додаткові_Каталог» id 48–58 продубльовані фантомною локацією
+// «Осокорки сад» — правки Осокорків лягали у фантом, справжні рядки лишались старими.
+function updateActivity(id, data, onlyLoc){
   try {
     var nid = Number(id);
     if (!nid) return {ok: false, error: 'Missing id'};
+    var want = String(onlyLoc || '').trim();
     var sh = _getActivitiesSheet(false);
     var rows = sh.getDataRange().getValues();
     for (var i = 1; i < rows.length; i++){
       if (Number(rows[i][0]) !== nid) continue;
+      if (want && String(rows[i][1] || '').trim() !== want) continue;   // v7.307
       var r1 = i + 1;
       if ('loc'          in data) sh.getRange(r1, 2).setValue(String(data.loc  || '').trim());
       if ('name'         in data) sh.getRange(r1, 3).setValue(String(data.name || '').trim());
@@ -14736,9 +14744,9 @@ function updateActivity(id, data){
       if ('teacher'      in data) sh.getRange(r1, 7).setValue(String(data.teacher || '').trim());
       if ('active'       in data) sh.getRange(r1, 8).setValue(data.active !== false);
       if ('payType'      in data) sh.getRange(r1, 9).setValue(String(data.payType || '').trim());
-      return {ok: true};
+      return {ok: true, row: r1, loc: String(rows[i][1] || '').trim()};
     }
-    return {ok: false, error: 'Заняття не знайдено'};
+    return {ok: false, error: 'Заняття не знайдено' + (want ? ' у локації «' + want + '»' : '')};
   } catch(e){
     return {ok: false, error: String(e && e.message || e)};
   }
@@ -14958,8 +14966,44 @@ function setActivitiesActiveByLoc(body){
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 
-function deleteActivity(id){
-  return updateActivity(id, {active: false});
+function deleteActivity(id, onlyLoc){
+  return updateActivity(id, {active: false}, onlyLoc);
+}
+
+// v7.307: фізичне прибирання рядків ФАНТОМНОЇ локації з «Додаткові_Каталог».
+// Дозволено лише для локації, якої немає в реєстрі CONFIG (справжні локації не
+// чіпаємо ніколи). dryRun за замовчуванням; запис вимагає confirm:'YES_PURGE_LOC'.
+// Перед видаленням — знімок аркуша (_safeBackupSheet). Рядки йдуть знизу вгору.
+function purgeActivitiesByLoc(body){
+  body = body || {};
+  var loc = String(body.loc || '').trim();
+  var dryRun = (body.dryRun !== false);
+  if (!loc) return {ok:false, error:'loc обовʼязковий'};
+  if (_getLocationPaymentRegistry(loc)) return {ok:false, error:'«' + loc + '» — справжня локація з реєстру, її рядки не видаляються'};
+  if (!dryRun && body.confirm !== 'YES_PURGE_LOC') return {ok:false, error:'Видалення вимагає confirm:"YES_PURGE_LOC"'};
+  try {
+    var sh = _getActivitiesSheet(false);
+    var rows = sh.getDataRange().getValues();
+    var hits = [];
+    for (var i = 1; i < rows.length; i++){
+      if (String(rows[i][1] || '').trim() === loc) hits.push({row:i + 1, id:Number(rows[i][0]) || 0, name:String(rows[i][2] || '').trim(), active:rows[i][7]});
+    }
+    // відмітки на цю локацію — якщо є, відмова
+    var marks = 0;
+    try { marks = (getAttendanceMarks({loc:loc}).items || []).length; } catch(_e){}
+    var res = {ok:true, dryRun:dryRun, loc:loc, willDelete:hits.length, rows:hits, marksForLoc:marks};
+    if (marks){ res.ok = false; res.error = 'На «' + loc + '» є ' + marks + ' відміток — не видаляю'; return res; }
+    if (dryRun || !hits.length) return res;
+    var lock = LockService.getScriptLock();
+    try { lock.waitLock(30000); } catch(_le){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+    try {
+      res.backupSheet = _safeBackupSheet(sh, 'purgeloc');
+      hits.slice().sort(function(a, b){ return b.row - a.row; }).forEach(function(h){ sh.deleteRow(h.row); });
+      SpreadsheetApp.flush();
+      res.deleted = hits.length;
+    } finally { try { lock.releaseLock(); } catch(_lr){} }
+    return res;
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 
 // ───────────────────────────────────────────────────────────────────────────
