@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.303
+// m.kids CRM — Google Apps Script v7.304
+// v7.304: порожні заголовки блоків (=SUM( у колонці B, без назви) — не «безіменні діти»: річний
+//         агрегат і dryRunNamelessRows їх пропускають (Бровари р.67, Кругла р.103 подвоювали блок).
 // v7.303: безіменні рядки Payment з грошима → у річний агрегат як «(без імені, р.N)» з «Вибув»='так'
 //         (лише keepDeparted, тобто aggregatePaymentsYearly); ростер і місячний «Оплати» — без змін.
 // v7.302: dryRunNamelessRows — read-only: рядки Payment без ПІБ (і числові слоти) з грошима по всіх
@@ -5387,7 +5389,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.303', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.304', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -7377,10 +7379,12 @@ function dryRunNamelessRows(params){
         var sh = ss.getSheetByName(sheetName) || ss.getSheets()[0];
         var data = sh.getDataRange().getValues();
         var cpm = _paymentColsPerMonth(loc, cfg[r][5]), LO = _paymentLayout(cpm);
+        var sumHdr = _paymentSumHeaderRows(sh, data.length);   // v7.304
         var hdr = '';
         for (var i = 3; i < data.length; i++){
           var nm = trim(String(data[i][0] || ''));
           if (nm && isGroupHeaderRow(data[i], 1)){ hdr = nm; continue; }
+          if (!nm && sumHdr[i]){ hdr = '(порожній заголовок р.' + (i + 1) + ')'; continue; }   // v7.304
           var numeric = nm && _isNumericName(nm);
           if (nm && !numeric) continue;                 // звичайна дитина
           var months = [], fact = 0, bud = 0;
@@ -8892,7 +8896,20 @@ function _isGroupTypeToken(s){
 // групою з міткою departed:true (group = заголовок як у файлі). Потрібно річному
 // агрегату: гроші випускників за минулі місяці — реальний обіг для CF/PL, а ростер їх
 // бачити не має. Усі ростерні читачі лишають типове false — поведінка без змін.
-function parsePaymentSheet(data, monthCol, contractCol, cpm, loc, typ, closeOnBlank, disableFilters, keepDeparted) {
+// v7.304: рядки без назви, які насправді є ЗАГОЛОВКАМИ блоку — у колонці B стоїть =SUM(…)
+// по блоку (Бровари р.67, Кругла р.103). За значеннями їх не відрізнити від безіменної
+// дитини, тож дивимось формули однієї колонки. Повертає {rowIndex0: true}.
+function _paymentSumHeaderRows(sheet, nRows){
+  var out = {};
+  try {
+    if (!sheet || !nRows) return out;
+    var f = sheet.getRange(1, 2, nRows, 1).getFormulas();
+    for (var i = 0; i < f.length; i++){ if (/^=SUM\(/i.test(String(f[i][0] || ''))) out[i] = true; }
+  } catch(e){ Logger.log('[sumHeaderRows] %s', e && e.message); }
+  return out;
+}
+
+function parsePaymentSheet(data, monthCol, contractCol, cpm, loc, typ, closeOnBlank, disableFilters, keepDeparted, sumHeaderRows) {
   var _keepSchool = _isSchoolLoc(typ, loc);   // v7.202
   var _defBlank = _keepSchool ? BLANK_CLOSES_BLOCK_SCHOOL : BLANK_CLOSES_BLOCK;
   var _minBlank = (closeOnBlank === undefined) ? _defBlank : closeOnBlank;
@@ -8912,7 +8929,7 @@ function parsePaymentSheet(data, monthCol, contractCol, cpm, loc, typ, closeOnBl
       // мережі, 30,85 млн за січень–серпень). CF/PL його бачать через SUM блоку; для
       // річного агрегату (keepDeparted) віддаємо як дитину «(без імені, р.N)» з міткою
       // departed — гроші у звітах, у ростері нема. Ростерні виклики поведінку не міняють.
-      if (keepDeparted){
+      if (keepDeparted && !(sumHeaderRows && sumHeaderRows[r])){   // v7.304: порожній заголовок з =SUM( — не дитина
         var _hasMoney = false;
         for (var _m = 0; _m < 12 && !_hasMoney; _m++){
           var _b0 = 1 + _m * _LO.cpm;
@@ -10136,7 +10153,8 @@ function aggregatePaymentsYearly() {
       var contractCol  = detectContractDateCol(data);
       // v7.299: keepDeparted=true — блоки «…вибули» йдуть у річний агрегат зі своїми
       // сумами (колонка «Вибув»='так'); ростерні читачі Оплати-Рік такі рядки пропускають.
-      var groups       = parsePaymentSheet(data, curMonthCol, contractCol, cpm, loc, typ, undefined, undefined, true);   // v7.202, v7.299
+      var _sumHdr      = _paymentSumHeaderRows(paymentSheet, data.length);   // v7.304
+      var groups       = parsePaymentSheet(data, curMonthCol, contractCol, cpm, loc, typ, undefined, undefined, true, _sumHdr);   // v7.202, v7.299, v7.304
       // v7.262 ВАРІАНТ B: у річному агрегаті діє ЛИШЕ правило під-локації.
       // Причина: «Школа Кар'єрна» вказує на той самий Payment-файл, що й садок,
       // тож без цього річний аркуш рахував усю Кар'єрну ДВІЧІ — 73 рядки під
