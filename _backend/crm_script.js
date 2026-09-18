@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.305
+// m.kids CRM — Google Apps Script v7.306
+// v7.306: repriceAttendanceMarks — POST-маршрут + режим «весь місяць» (year+month замість date);
+//         ціна вморожена у відмітці, тож нова ціна каталогу застосовується до старих відміток лише так.
 // v7.305: Salary-рядки з каталогу автоматично: (1) exportToSalaryExtras створює відсутній рядок у
 //         секції «Додаткові заняття» (P7, перед останнім рядком секції — всередину SUM);
 //         (2) предметники: ставка змінилась → назву рядка переписано під нову ставку, суми лишаються;
@@ -5393,7 +5395,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.305', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.306', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -5639,6 +5641,7 @@ function doPost(e) {
     else if (body.action === 'movePaymentRowsToBlock')  result = movePaymentRowsToBlock(body || {});   // v7.248 перенесення рядків у блок «Вибули»
     else if (body.action === 'undoPaymentMoveBlock')    result = undoPaymentMoveBlock(body || {});     // v7.297 зворотний хід: рядки з «Вибули» на свої місця (dryRun за замовч.)
     else if (body.action === 'setLocSheetFormulas')     result = setLocSheetFormulas(body || {});      // v7.300 точковий запис формул CF/PL (dryRun за замовч.)
+    else if (body.action === 'repriceAttendanceMarks')  result = repriceAttendanceMarks(body || {});   // v7.306 переоцінка відміток (dryRun за замовч.; date або year+month)
     else if (body.action === 'purgePaymentGhostRows')  result = purgePaymentGhostRows(body || {});   // v7.233 рядки-привиди в Payment (dryRun за замовч.)
     else if (body.action === 'renamePayGroupHeader')        result = renamePayGroupHeader(body || {}); // v7.227
     else if (body.action === 'generateInvoicePDF')          result = generateInvoicePDF(body || {});   // v6.50
@@ -19816,9 +19819,18 @@ function repriceAttendanceMarks(body){
     var newPrice = Number(body.newPrice);
     var expected = (body.expected == null) ? null : Number(body.expected);
     var dryRun   = (body.dryRun !== false);                 // default TRUE
+    // v7.306: режим «весь місяць» — замість date задаються year+month; матч по
+    // всіх датах місяця. Решта guard-ів (стара ціна, expected) — ті самі.
+    var mYear = Number(body.year) || 0, mMonth = Number(body.month) || 0;
+    var dFrom = '', dTo = '';
+    if (!date && mYear && mMonth >= 1 && mMonth <= 12){
+      dFrom = mYear + '-' + ('0' + mMonth).slice(-2) + '-01';
+      var _nm = _nextMonth(mMonth, mYear);
+      dTo = _nm.year + '-' + ('0' + _nm.month).slice(-2) + '-01';
+    }
 
-    if (!loc || !actName || !date)          return {ok:false, error:'loc/activityName/date обовʼязкові'};
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date))  return {ok:false, error:'date має бути у форматі YYYY-MM-DD'};
+    if (!loc || !actName || (!date && !dFrom)) return {ok:false, error:'loc/activityName і date АБО year+month обовʼязкові'};
+    if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date))  return {ok:false, error:'date має бути у форматі YYYY-MM-DD'};
     if (!(oldPrice >= 0))                   return {ok:false, error:'oldPrice обовʼязковий (число)'};
     if (!(newPrice > 0))                    return {ok:false, error:'newPrice має бути > 0'};
     if (oldPrice === newPrice)              return {ok:false, error:'oldPrice дорівнює newPrice — нема що міняти'};
@@ -19834,12 +19846,15 @@ function repriceAttendanceMarks(body){
       var rec = _parseAttendanceRow(data[r]);
       if (rec.loc !== loc) continue;
       if (_journalNormName(rec.activityName) !== ak) continue;
-      if (rec.date !== date){  otherDates[rec.date]   = (otherDates[rec.date]   || 0) + 1; continue; }
+      var inRange = date ? (rec.date === date) : (rec.date >= dFrom && rec.date < dTo);   // v7.306
+      if (!inRange){  otherDates[rec.date]   = (otherDates[rec.date]   || 0) + 1; continue; }
       if (rec.price !== oldPrice){ otherPrices[rec.price] = (otherPrices[rec.price] || 0) + 1; continue; }
-      hits.push({row:r + 1, id:rec.id, child:rec.child, group:rec.group, price:rec.price});
+      hits.push({row:r + 1, id:rec.id, child:rec.child, group:rec.group, price:rec.price, date:rec.date});
     }
+    var byDate = {};
+    hits.forEach(function(h){ byDate[h.date] = (byDate[h.date] || 0) + 1; });
 
-    var report = {ok:true, dryRun:dryRun, loc:loc, activityName:actName, date:date,
+    var report = {ok:true, dryRun:dryRun, loc:loc, activityName:actName, date:(date || (dFrom + '..' + dTo)), byDate:byDate,
                   oldPrice:oldPrice, newPrice:newPrice, expected:expected,
                   matched:hits.length, rows:hits,
                   skippedOtherDates:otherDates, skippedOtherPrices:otherPrices,
