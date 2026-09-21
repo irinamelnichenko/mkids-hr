@@ -872,6 +872,8 @@ select,input,textarea{font-family:inherit}
   .attg-th.split{background:#fef3c7}
   .attg-th .spl{display:block;font-size:10px;line-height:1;margin-top:1px}
   .attg-name{position:sticky;left:0;z-index:1;background:#fff;font-size:13px;padding:5px 8px;white-space:nowrap;border-right:1px solid #eef2f7;display:flex;align-items:center;overflow:hidden;text-overflow:ellipsis;max-width:180px}
+.attg-sub{flex-shrink:0;margin-left:6px;font-size:11px;font-weight:700;color:#4a7c59;background:#e8f5ec;border-radius:10px;padding:1px 6px;vertical-align:middle}
+.attg-sub.full{color:#b3261e;background:#fde8e6}
   .attg-cell{display:flex;align-items:center;justify-content:center;min-width:34px;height:30px;border-radius:6px;background:#fff;border:1px solid #eef2f7;cursor:pointer;font-size:13px;user-select:none;color:#c3ccd6}
   .attg-cell:hover{background:#f0f7ff}
   .attg-cell.on{background:#e8f8f0;border-color:#bce8d3;color:#1e8449}
@@ -3092,6 +3094,37 @@ function _activitiesForLoc(loc){
   });
 }
 
+// ═══ v7.310: АБОНЕМЕНТНІ заняття («Чомусики», «Мама+я») ═══════════════════
+// Діти ходять в окрему групу з такою ж назвою і лише на це заняття. Конвенція:
+// назва групи = назва заняття (нормалізовано) → випадайка заняття фіксується.
+// Ліміт занять на дитину за місяць віддає каталог (subLimit); фолбек — локальна
+// мапа на випадок, якщо бекенд ще старий. Бекенд теж відмовляє (SUB_LIMIT).
+var SUB_LIMIT_FALLBACK = { 'чомусики': 8, 'мама+я': 8 };
+function _subNorm(s){ return String(s || '').replace(/[\s\u00A0]+/g, '').toLowerCase().replace(/[\u2019\u02BC`´]/g, "'"); }
+function _subLimitOf(act){
+  if (!act) return 0;
+  if (Number(act.subLimit) > 0) return Number(act.subLimit);
+  return SUB_LIMIT_FALLBACK[_subNorm(act.name)] || 0;
+}
+function _subActForGroup(acts, group){
+  var gk = _subNorm(group);
+  if (!gk) return null;
+  for (var i = 0; i < acts.length; i++){
+    if (_subNorm(acts[i].name) === gk && _subLimitOf(acts[i])) return acts[i];
+  }
+  return null;
+}
+// К-сть відміток дитини на заняття у місяці сітки (з уже завантажених gridMarks).
+function _subCountFor(child, actId){
+  var nk = _attNormChild(child), n = 0;
+  for (var i = 0; i < ATT.gridMarks.length; i++){
+    var m = ATT.gridMarks[i];
+    if (Number(m.activityId) !== Number(actId)) continue;
+    if (m.child === child || _attNormChild(m.child) === nk) n++;
+  }
+  return n;
+}
+
 // ── RENDER ──────────────────────────────────
 async function renderAttendanceBoard(){
   if (!hasPerm('attendance-view')){
@@ -3167,6 +3200,13 @@ async function renderAttendanceBoard(){
 
   // v6.20: populate activity dropdown
   populateAttActivitySel(acts);
+  // v7.310: абонементна група → заняття фіксоване, випадайка неактивна
+  var _subAct = _subActForGroup(acts, ATT.group), _aSel = $('attActivitySel');
+  if (_subAct){
+    ATT.activity = _subAct.id; _aSel.value = String(_subAct.id); _aSel.disabled = true;
+    _aSel.title = 'Група «' + ATT.group + '» — лише заняття «' + _subAct.name + '», ' + _subLimitOf(_subAct) + ' занять/міс';
+    try { safeSetItem(ATT_ACTIVITY_LS_KEY, String(ATT.activity)); } catch(e){}
+  } else { _aSel.disabled = false; _aSel.title = ''; }
 
   if (!acts.length){
     $('attLoading').classList.add('hidden');
@@ -3554,12 +3594,15 @@ function renderMonthGrid(){
   });
 
   // rows = діти
+  var subLim = _subLimitOf(act);   // v7.310: абонемент — лічильник X/N і замок після N
   ATT.children.forEach(function(child){
-    html += '<div class="attg-name" title="' + escapeHtml(child) + '">' + escapeHtml(child) + '</div>';
+    var subN = subLim ? _subCountFor(child, act.id) : 0, subFull = subLim && subN >= subLim;
+    html += '<div class="attg-name" title="' + escapeHtml(child) + (subLim ? ' · ' + subN + ' з ' + subLim + ' занять у місяці' : '') + '">' + escapeHtml(child) +
+      (subLim ? '<span class="attg-sub' + (subFull ? ' full' : '') + '">' + subN + '/' + subLim + '</span>' : '') + '</div>';
     days.forEach(function(D){
       var on      = !!_gridMarkFor(child, act.id, D.iso);
       var locked  = isWeekLocked(D.iso);
-      var canEdit = hasPerm('attendance-edit') && !locked;
+      var canEdit = hasPerm('attendance-edit') && !locked && !(subFull && !on);
       var lockKey = child + '|' + act.id + '|' + D.iso;
       var saving  = !!ATT.gridInFlight[lockKey];
       var _mk     = _gridMarkFor(child, act.id, D.iso);
@@ -3567,7 +3610,7 @@ function renderMonthGrid(){
       var cls = 'attg-cell' + (on ? ' on' : '') + (D.isToday ? ' today' : '') +
                 (canEdit ? '' : ' disabled') + (saving ? ' saving' : '') + (pending ? ' pending' : '');
       var glyph = on ? '✅' : (canEdit ? '' : '·');
-      var tip = escapeHtml(child) + ' · ' + D.dmy + (locked ? ' · 🔒 місяць закрито' : '');
+      var tip = escapeHtml(child) + ' · ' + D.dmy + (locked ? ' · 🔒 місяць закрито' : '') + ((subFull && !on) ? ' · ліміт ' + subLim + ' занять вичерпано' : '');
       html += '<div class="' + cls + '"' +
         ((canEdit && !saving) ? (' data-child="' + escapeHtml(child) + '" data-iso="' + D.iso + '"') : '') +
         ' title="' + tip + '"><span class="attg-cb">' + glyph + '</span></div>';
@@ -3709,6 +3752,10 @@ async function onGridCellClick(child, iso){
   if (!act){ showToast('🚫 Оберіть заняття', 'err'); return; }
 
   var existing = _gridMarkFor(child, act.id, iso);
+  if (!existing){                               // v7.310: ліміт абонемента
+    var _lim = _subLimitOf(act);
+    if (_lim && _subCountFor(child, act.id) >= _lim){ showToast('🚫 ' + child + ': вже ' + _lim + ' занять у цьому місяці', 'err', 4000); return; }
+  }
   if (existing){
     _gridDropById(existing.id);                 // знімаємо ОДРАЗУ
     renderMonthGrid();

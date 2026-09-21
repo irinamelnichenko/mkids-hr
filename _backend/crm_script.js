@@ -1,5 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.309
+// m.kids CRM — Google Apps Script v7.310
+// v7.310: абонементні заняття «Чомусики»/«Мама+я» (SUBSCRIPTION_ACTIVITIES): каталог віддає subLimit,
+//         addAttendanceMark/bulkAttendanceMarks відмовляють SUB_LIMIT при ≥8 відмітках дитини за місяць;
+//         POST-маршрут renameSalaryRow. Ціна клієнту 0 — абонемент лишається руками в «Бюджет навчання».
 // v7.309: addActivity — дубль за локацією + назвою, а не за «модель + ставка» (_attDupKey — ключ
 //         для відміток): «Вокал» 350/За заняття не створювався, бо збігався з «Англійська групові».
 //         renameActivity — перейменування заняття наскрізь: каталог + відмітки + обʼєднання + рядок
@@ -5401,7 +5404,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.309', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.310', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -5578,6 +5581,7 @@ function doPost(e) {
     else if (body.action === 'setLocPaymentName')        result = setLocPaymentName(body || {});   // v7.60 вирівняти імʼя Payment під картку
     else if (body.action === 'renameAttendanceChild')    result = renameAttendanceChild(body || {}); // v7.95
     else if (body.action === 'renameActivity')           result = renameActivity(body || {});        // v7.309 каталог+відмітки+обʼєднання+Salary (dryRun за замовч.)
+    else if (body.action === 'renameSalaryRow')          result = renameSalaryRow(body || {});       // v7.310 маршрут (функція v7.195; dryRun за замовч., guard expectName)
     else if (body.action === 'addPaymentRow')             result = addPaymentRow(body || {});         // v7.95
     else if (body.action === 'renameClientGroup')         result = renameClientGroup(body || {});     // v7.105 масове перейменування групи в картках
     else if (body.action === 'syncCardGroupsFromPayment') result = syncCardGroupsFromPayment(body || {}); // v7.107 картки ← Payment (dryRun за замовч.)
@@ -14468,18 +14472,55 @@ function _getActivitiesSheet(createIfMissing){
   return sh;
 }
 
+// v7.310: АБОНЕМЕНТНІ заняття — «Чомусики» (Бігова) і «Мама+я» (Благо). Діти ходять в окрему
+// групу з такою ж назвою і лише на це заняття; клієнт платить абонемент руками в «Бюджет
+// навчання» (ціна клієнту в каталозі = 0), викладач — «За заняття». Конвенція: назва ГРУПИ =
+// назва ЗАНЯТТЯ (нормалізовано) — фронт по ній блокує випадайку заняття. Ліміт — відміток на
+// дитину за календарний місяць; перевіряється на бекенді (addAttendanceMark/bulkAttendanceMarks).
+var SUBSCRIPTION_ACTIVITIES = { 'чомусики': 8, 'мама+я': 8 };   // норм-назва → занять/міс
+function _subLimitForName(name){
+  var k = _journalNormName(name);
+  return SUBSCRIPTION_ACTIVITIES.hasOwnProperty(k) ? SUBSCRIPTION_ACTIVITIES[k] : 0;
+}
+// id_заняття → ліміт (0 = звичайне заняття). Каталог читається один раз на виклик.
+function _subLimitByActId(){
+  var out = {};
+  try {
+    var data = _getActivitiesSheet(false).getDataRange().getValues();
+    for (var i = 1; i < data.length; i++){
+      var id = Number(data[i][0]) || 0, lim = _subLimitForName(data[i][2]);
+      if (id && lim && !out[id]) out[id] = lim;
+    }
+  } catch(_e){}
+  return out;
+}
+// Скільки відміток дитина вже має на це заняття у місяці дати (по існуючих рядках аркуша).
+function _subCountInMonth(exVals, child, actId, dateIso){
+  var ym = String(dateIso || '').slice(0, 7), ck = _journalNormName(child), n = 0;
+  if (!/^\d{4}-\d{2}$/.test(ym)) return 0;
+  for (var r = 1; r < exVals.length; r++){
+    if ((Number(exVals[r][5]) || 0) !== actId) continue;
+    if (_journalNormName(exVals[r][4]) !== ck) continue;
+    if (_attDateFast(exVals[r][1]).slice(0, 7) !== ym) continue;
+    n++;
+  }
+  return n;
+}
+
 function _parseActivityRow(row){
+  var name = String(row[2] || '').trim();
   return {
     id:           Number(row[0]) || 0,
     loc:          String(row[1] || '').trim(),
-    name:         String(row[2] || '').trim(),
+    name:         name,
     clientPrice:  Number(row[3]) || 0,
     teacherModel: String(row[4] || '').trim(),
     teacherRate:  Number(row[5]) || 0,
     teacher:      String(row[6] || '').trim(),
     active:       row[7] === true ||
                   /^(true|так|y|1|active|активне|✅)$/i.test(String(row[7] || '').trim()),
-    payType:      String(row[8] || '').trim()
+    payType:      String(row[8] || '').trim(),
+    subLimit:     _subLimitForName(name)          // v7.310: 0 = звичайне, N = абонемент N занять/міс
   };
 }
 
@@ -16379,6 +16420,12 @@ function addAttendanceMark(data){
         return {ok: true, dup: true, id: Number(_exVals[_e][0]) || 0};   // повтор — тихо ігноруємо
       }
     }
+    // v7.310: абонементне заняття — не більше N відміток на дитину за місяць
+    var _subLim = _subLimitByActId()[actId] || 0;
+    if (_subLim){
+      var _have = _subCountInMonth(_exVals, child, actId, _attDateISO(date, _tz));
+      if (_have >= _subLim) return {ok:false, code:'SUB_LIMIT', error:'SUB_LIMIT: ' + child + ' — вже ' + _have + ' з ' + _subLim + ' занять у цьому місяці', have:_have, limit:_subLim};
+    }
     var id = _nextAttendanceId(sh);
     var row = [
       id, date,
@@ -16508,6 +16555,7 @@ function bulkAttendanceMarks(body){
       _seen[_attDupKey(_exVals[_e][1], _exVals[_e][4], _exVals[_e][5], _tz)] = true;
     }
     var _isCfo = _marksActorIsCfo(body && body.actorId);   // v7.272 серверний замок місяця
+    var _subLims = _subLimitByActId(), _subHave = {};      // v7.310 ліміт абонемента (рахуємо і в межах пакета)
     for (var i = 0; i < items.length; i++){
       var d = items[i] || {};
       var date  = String(d.date  || '').trim();
@@ -16521,6 +16569,15 @@ function bulkAttendanceMarks(body){
       if (_lockErr){ results.push({ok:false, code:'MONTH_LOCK', error:_lockErr}); continue; }
       var _k = _attDupKey(date, child, actId, _tz);
       if (_seen[_k]){ results.push({ok: true, dup: true}); continue; }
+      if (_subLims[actId]){
+        var _sk = actId + '|' + _journalNormName(child) + '|' + _attDateISO(date, _tz).slice(0, 7);
+        if (!_subHave.hasOwnProperty(_sk)) _subHave[_sk] = _subCountInMonth(_exVals, child, actId, _attDateISO(date, _tz));
+        if (_subHave[_sk] >= _subLims[actId]){
+          results.push({ok:false, code:'SUB_LIMIT', error:'SUB_LIMIT: ' + child + ' — вже ' + _subHave[_sk] + ' з ' + _subLims[actId] + ' занять у цьому місяці', have:_subHave[_sk], limit:_subLims[actId]});
+          continue;
+        }
+        _subHave[_sk]++;
+      }
       _seen[_k] = true;
       var id = nextId++;
       rows.push([
