@@ -1,5 +1,9 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.307
+// m.kids CRM — Google Apps Script v7.309
+// v7.309: addActivity — дубль за локацією + назвою, а не за «модель + ставка» (_attDupKey — ключ
+//         для відміток): «Вокал» 350/За заняття не створювався, бо збігався з «Англійська групові».
+//         renameActivity — перейменування заняття наскрізь: каталог + відмітки + обʼєднання + рядок
+//         Salary (секція «Додаткові заняття»); dryRun за замовч. Кейс: Оранж «Гімнастика» → «Акробатика».
 // v7.307: updateActivity/deleteActivity приймають onlyLoc (id + локація) — у Додаткові_Каталог id 48–58
 //         продубльовані фантомом «Осокорки сад»; purgeActivitiesByLoc — прибирання рядків фантомної локації.
 // v7.306: repriceAttendanceMarks — POST-маршрут + режим «весь місяць» (year+month замість date);
@@ -5397,7 +5401,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.307', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.309', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -5573,6 +5577,7 @@ function doPost(e) {
     else if (body.action === 'addLocPaymentDop')         result = addLocPaymentDop(body || {}); // v7.87 +delta у «Бюджет доп»
     else if (body.action === 'setLocPaymentName')        result = setLocPaymentName(body || {});   // v7.60 вирівняти імʼя Payment під картку
     else if (body.action === 'renameAttendanceChild')    result = renameAttendanceChild(body || {}); // v7.95
+    else if (body.action === 'renameActivity')           result = renameActivity(body || {});        // v7.309 каталог+відмітки+обʼєднання+Salary (dryRun за замовч.)
     else if (body.action === 'addPaymentRow')             result = addPaymentRow(body || {});         // v7.95
     else if (body.action === 'renameClientGroup')         result = renameClientGroup(body || {});     // v7.105 масове перейменування групи в картках
     else if (body.action === 'syncCardGroupsFromPayment') result = syncCardGroupsFromPayment(body || {}); // v7.107 картки ← Payment (dryRun за замовч.)
@@ -14707,12 +14712,16 @@ function addActivity(data){
     ];
     if (!row[1]) return {ok: false, error: 'Поле "Локація" обовʼязкове'};
     if (!row[2]) return {ok: false, error: 'Поле "Назва заняття" обовʼязкове'};
-    var _tz = sh.getParent().getSpreadsheetTimeZone() || 'Europe/Kiev';
-    var _key = _attDupKey(row[1], row[4], row[5], _tz);
+    // v7.309: дубль = та сама ЛОКАЦІЯ + та сама НАЗВА (нормалізовано). Раніше ключ
+    // будувався через _attDupKey(loc, модель, ставка) — функцію для відміток, — і
+    // два різні гуртки з однаковою моделлю та ставкою вважались одним: «Вокал»
+    // 350/За заняття у Позняках тихо повертав id «Англійська групові» 350/За заняття
+    // з {ok:true, dup:true}, тобто виглядав як успіх.
+    var _nk = _journalNormName(row[2]);
     var _ex = sh.getDataRange().getValues();
     for (var _i = 1; _i < _ex.length; _i++){
-      if (_attDupKey(_ex[_i][1], _ex[_i][4], _ex[_i][5], _tz) === _key){
-        return {ok: true, id: _ex[_i][0], dup: true};
+      if (String(_ex[_i][1] || '').trim() === row[1] && _journalNormName(_ex[_i][2]) === _nk){
+        return {ok: true, id: _ex[_i][0], dup: true, name: String(_ex[_i][2] || '')};
       }
     }
     sh.appendRow(row);
@@ -14756,7 +14765,8 @@ function updateActivity(id, data, onlyLoc){
 // v7.190: НАПОВНЕННЯ КАТАЛОГУ «Додаткові_Каталог» пакетом позицій + прибирання
 // рядків за id. Разова утиліта під запуск ВРУЧНУ з редактора Apps Script.
 //
-// ⚠️ ЧОМУ НЕ ЧЕРЕЗ addActivity(): його dedup-guard викликає _attDupKey(loc,
+// ⚠️ ЧОМУ НЕ ЧЕРЕЗ addActivity() (історично; з v7.309 addActivity теж ловить дубль за
+// локація+назва): його dedup-guard викликав _attDupKey(loc,
 // teacherModel, teacherRate) — функцію, писану для ВІДМІТОК (date|child|actId).
 // Через це ключ дубля виходить «локація|модель|ставка», а НАЗВА заняття у нього
 // не входить взагалі. Два різні гуртки локації з однаковою моделлю і ставкою
@@ -19831,6 +19841,104 @@ function renameAttendanceChild(body){
     return {ok: true, dryRun: dryRun, loc: loc, oldName: oldName, newName: newName,
             matched: rows.length, distinctOld: Object.keys(distinct), rows: rows.slice(0, 50)};
   } catch(e){ return {ok: false, error: String(e && e.message || e)}; }
+  finally { if (lock){ try { lock.releaseLock(); } catch(_){} } }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.309: перейменування ЗАНЯТТЯ наскрізь у межах локації. Назва живе в чотирьох місцях:
+//   1) Додаткові_Каталог, кол. C — джерело для сітки й для exportToSalaryExtras (id → назва → рядок Salary);
+//   2) Додаткові_Відвідуваність, кол. G — знімок назви у відмітці (для звітів/попапів; ставка — за id);
+//   3) Додаткові_Обʼєднання, кол. D — знімок назви у злитті груп;
+//   4) Salary локації, кол. A рядка в секції «Додаткові заняття» — інакше експорт P7 створив би
+//      НОВИЙ рядок під новою назвою, а старий лишився б осторонь з історією сум.
+// Матч усюди нормалізований (_journalNormName). Salary пишеться через renameSalaryRow (guard
+// expectName + copyTo-бекап). GUARD: у каталозі локації вже є позиція з новою назвою → відмова
+// (це злиття двох занять, не перейменування). dryRun за замовчуванням TRUE.
+// POST {action:'renameActivity', loc, oldName, newName, dryRun}
+// ═══════════════════════════════════════════════════════════════════════════
+function renameActivity(body){
+  var lock = null;
+  try {
+    body = body || {};
+    var loc     = String(body.loc || '').trim();
+    var oldName = String(body.oldName || '').trim();
+    var newName = String(body.newName || '').trim();
+    var dryRun  = (body.dryRun !== false);   // default TRUE
+    if (!loc || !oldName || !newName) return {ok:false, error:'loc/oldName/newName обовʼязкові'};
+    var ok_ = _journalNormName(oldName), nk_ = _journalNormName(newName);
+    if (ok_ === nk_) return {ok:false, error:'oldName і newName однакові після нормалізації — нема що міняти'};
+
+    // 1) каталог
+    var catSh = _getActivitiesSheet(false);
+    var cat = catSh.getDataRange().getValues();
+    var catRows = [], clash = [];
+    for (var c = 1; c < cat.length; c++){
+      if (String(cat[c][1] || '').trim() !== loc) continue;
+      var cn = _journalNormName(cat[c][2]);
+      if (cn === ok_) catRows.push({row:c + 1, id:Number(cat[c][0]) || 0, name:String(cat[c][2] || ''), active:cat[c][7]});
+      else if (cn === nk_) clash.push({row:c + 1, id:Number(cat[c][0]) || 0, name:String(cat[c][2] || '')});
+    }
+    if (clash.length) return {ok:false, error:'У каталозі «' + loc + '» вже є «' + clash[0].name + '» (id ' + clash[0].id + ') — це злиття, не перейменування', clash:clash};
+    if (!catRows.length) return {ok:false, error:'У каталозі «' + loc + '» немає заняття «' + oldName + '»'};
+
+    // 2) відмітки (кол. G, 0-based 6)
+    var attSh = _getAttendanceSheet(false);
+    var att = attSh.getDataRange().getValues();
+    var attRows = [], attByMonth = {}, attIds = {};
+    for (var a = 1; a < att.length; a++){
+      if (String(att[a][2] || '').trim() !== loc) continue;
+      if (_journalNormName(att[a][6]) !== ok_) continue;
+      attRows.push(a + 1);
+      var ym = _attDateISO(att[a][1], attSh.getParent().getSpreadsheetTimeZone() || 'Europe/Kiev').slice(0, 7);
+      attByMonth[ym] = (attByMonth[ym] || 0) + 1;
+      attIds[Number(att[a][5]) || 0] = true;
+    }
+
+    // 3) обʼєднання (кол. D, 0-based 3)
+    var mrgSh = null, mrgRows = [];
+    try { mrgSh = _getDopMergesSheet(false); } catch(_nm){ mrgSh = null; }
+    if (mrgSh){
+      var mrg = mrgSh.getDataRange().getValues();
+      for (var g = 1; g < mrg.length; g++){
+        if (String(mrg[g][1] || '').trim() !== loc) continue;
+        if (_journalNormName(mrg[g][3]) !== ok_) continue;
+        mrgRows.push(g + 1);
+      }
+    }
+
+    // 4) Salary — рядки секції «Додаткові заняття» з такою назвою
+    var salPairs = [], salNote = '';
+    var sal = getSalaryExtrasRows({loc:loc});
+    if (!sal.ok) salNote = 'Salary: ' + (sal.error || 'не відкрився') + ' — рядок не перейменовується';
+    else (sal.rows || []).forEach(function(r){
+      if (_journalNormName(r.name) === ok_) salPairs.push({row:r.row, expectName:r.name, newName:newName});
+    });
+    if (sal.ok && !salPairs.length) salNote = 'Salary: рядка «' + oldName + '» у секції «Додаткові заняття» немає';
+    var salPlan = salPairs.length ? renameSalaryRow({loc:loc, pairs:salPairs, dryRun:true}) : null;
+    if (salPlan && !salPlan.ok) return {ok:false, error:'Salary: ' + ((salPlan.errors || []).join('; ') || salPlan.error), salary:salPlan};
+
+    var report = {ok:true, dryRun:dryRun, loc:loc, oldName:oldName, newName:newName,
+                  catalog:catRows, marks:attRows.length, marksByMonth:attByMonth, marksActivityIds:Object.keys(attIds).map(Number),
+                  merges:mrgRows.length, salary:salPairs, salaryNote:salNote};
+    Logger.log('[renameActivity] %s', JSON.stringify(report));
+    if (dryRun) return report;
+
+    lock = LockService.getScriptLock();
+    try { lock.waitLock(30000); } catch(_le){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+    catRows.forEach(function(x){ catSh.getRange(x.row, 3).setValue(newName); });
+    attRows.forEach(function(r){ var cell = attSh.getRange(r, 7); cell.setNumberFormat('@'); cell.setValue(newName); });
+    if (mrgSh) mrgRows.forEach(function(r){ mrgSh.getRange(r, 4).setValue(newName); });
+    if (salPairs.length){
+      var salRes = renameSalaryRow({loc:loc, pairs:salPairs, dryRun:false});
+      report.salaryResult = salRes;
+      if (!salRes.ok) report.salaryNote = 'Salary НЕ перейменовано: ' + ((salRes.errors || []).join('; ') || salRes.error);
+    }
+    SpreadsheetApp.flush();
+    try { _cacheBump('salary'); } catch(_cb){}
+    report.written = {catalog:catRows.length, marks:attRows.length, merges:mrgRows.length, salary:(report.salaryResult && report.salaryResult.renamed) || 0};
+    Logger.log('[renameActivity] ✅ %s', JSON.stringify(report.written));
+    return report;
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
   finally { if (lock){ try { lock.releaseLock(); } catch(_){} } }
 }
 
