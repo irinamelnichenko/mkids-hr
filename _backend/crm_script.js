@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.312
+// m.kids CRM — Google Apps Script v7.313
+// v7.313: tgInvoiceSetup спершу робить getMe — невірний токен більше не виглядає як
+//         «chat_id не знайдено»; у відповіді bot_id, довжина токена і прапорець пробілу.
 // v7.312: БОТ РАХУНКІВ (етапи 0–2) — окремий Telegram-бот (INVOICE_BOT_TOKEN/INVOICE_CHAT_ID/
 //         INVOICE_WEBHOOK_SECRET), лист «Рахунки_Бот» у CONFIG, тонкий вебхук tgInvoiceWebhook
 //         (фото/документ → заявка, свій дедуп update_id), розбір підпису «стаття / локація» за
@@ -2458,7 +2460,19 @@ function _invParseCaption(caption){
 function tgInvoiceSetup(body){
   body = body || {};
   try {
-    if(!_invTok()) return {ok:false, error:'нема INVOICE_BOT_TOKEN у Script Properties'};
+    var _tk = _invTok();
+    if(!_tk) return {ok:false, error:'нема INVOICE_BOT_TOKEN у Script Properties'};
+    // v7.313: спершу getMe. Без цього невірний токен виглядав як «chat_id не знайдено»
+    // (getUpdates теж падає з Unauthorized), і причина була не видна. bot_id — частина
+    // токена ДО двокрапки — не секрет, тож його можна показати для звірки з BotFather.
+    var me = _invApi('getMe', {});
+    if(!me || !me.ok){
+      return {ok:false, error:'Telegram не приймає INVOICE_BOT_TOKEN: ' + String((me&&me.description)||'немає відповіді'),
+              tokenBotId:String(_tk).split(':')[0] || '(без двокрапки)',
+              tokenLen:String(_tk).length,
+              tokenHasSpace:/\s/.test(String(_tk)),
+              hint:'BotFather → /mybots → бот → API Token; вставити в Script Properties без пробілів і лапок'};
+    }
     var props = PropertiesService.getScriptProperties();
     var chatId = trim(body.chatId) || _invChatId();
     var found = null;
@@ -2478,7 +2492,7 @@ function tgInvoiceSetup(body){
     var sh = _invSheet(true);
     var send = (body.silent === true) ? {ok:true, skipped:true}
       : _invSend(chatId, '🧾 <b>Бот рахунків на зв’язку.</b>\nКидайте рахунок фото або файлом, у підписі — <i>стаття / локація</i> (напр. «Кухня / Кругла»).');
-    return {ok:true, chatId:String(chatId), chatFound:found, secretSet:!!secret,
+    return {ok:true, bot:(me.result&&me.result.username)?('@'+me.result.username):'', chatId:String(chatId), chatFound:found, secretSet:!!secret,
             sheet:INV_SHEET_NAME, sheetRows:sh.getLastRow(), columns:INV_HEADER.length,
             sendOk:!!(send&&send.ok), sendErr:(send&&send.ok)?'':((send&&send.description)||'')};
   } catch(e){ return {ok:false, error:String(e&&e.message||e)}; }
@@ -5728,7 +5742,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.312', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.313', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
