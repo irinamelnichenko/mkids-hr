@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.317
+// m.kids CRM — Google Apps Script v7.318
+// v7.318: сміття з OCR більше не перекриває LLM — «Постачальник:» із шапки таблиці і номер «o»
+//         з «No Банк» відсіюються (_invSaneSupplier; номер мусить містити цифру).
 // v7.317: текст із Drive-конвертації беремо експортом Drive REST (text/plain) під токеном скрипта —
 //         DocumentApp.openById вимагав скоуп .../auth/documents, якого вебзастосунок не мав.
 // v7.316: РАХУНКИ ЕТАП 3 — черга розпізнавання: Telegram getFile → Drive-конвертація з OCR →
@@ -2776,6 +2778,18 @@ function _invNum(s){
   var n = parseFloat(t);
   return isNaN(n) ? 0 : n;
 }
+// Санітизація значень, знятих regex з OCR-тексту. У сканах рядок після «Постачальник:»
+// часто виявляється ШАПКОЮ ТАБЛИЦІ («код ЄДРПОУ Р/рахунок No Банк:»), а не назвою. Таке
+// значення гірше за порожнє: воно перекриває якісну відповідь LLM і йде в лист та в групу.
+var _INV_JUNK_WORDS = /(ЄДРПОУ|ЕДРПОУ|р\/рахунок|розрахунковий|банк|МФО|ІПН|РНОКПП|адреса|тел\.|платник|отримувач|призначення)/i;
+function _invSaneSupplier(v){
+  var x = trim(String(v||'')).replace(/\s{2,}/g,' ').replace(/[:;,\-]+$/,'');
+  if(x.length < 3 || x.length > 90) return '';
+  if(_INV_JUNK_WORDS.test(x)) return '';
+  if(!/[А-Яа-яІЇЄҐіїєґA-Za-z]{3}/.test(x)) return '';
+  return x;
+}
+
 function _invParseInvoiceText(txt){
   var t = String(txt||'').replace(/ /g,' ');
   var out = {supplier:'', edrpou:'', number:'', amount:0, date:'', confidence:'low', found:[]};
@@ -2784,8 +2798,13 @@ function _invParseInvoiceText(txt){
   var mE = t.match(/(?:ЄДРПОУ|ЕДРПОУ|Код\s+ЄДРПОУ|ІПН|РНОКПП)\D{0,12}(\d{8,10})/i);
   if(mE){ out.edrpou = mE[1]; out.found.push('ЄДРПОУ'); }
 
-  var mN = t.match(/(?:рахунок[-\s]*фактура|рахунок|invoice)\s*(?:№|Nº|N|#)\s*([A-Za-zА-Яа-яІЇЄҐіїєґ0-9\-\/\.]{1,24})/i);
-  if(mN){ out.number = mN[1].replace(/[.,;]+$/,''); out.found.push('номер'); }
+  // OCR часто читає «№» як «No», «N°» або «Nº» — приймаємо всі варіанти. Номер ЗОБОВ'ЯЗАНИЙ
+  // містити цифру, і перебираємо ВСІ входження: у шапці реквізитів трапляється
+  // «Р/рахунок No Банк», і перше (сміттєве) входження інакше блокувало справжнє «Рахунок No 236».
+  var reN = /(?:рахунок[-\s]*фактура|рахунок|invoice)\s*(?:№|Nº|N°|No|N|#)\s*[:\-]?\s*([A-Za-zА-Яа-яІЇЄҐіїєґ0-9\-\/\.]{1,24})/ig, mN;
+  while((mN = reN.exec(t)) !== null){
+    if(/\d/.test(mN[1])){ out.number = mN[1].replace(/[.,;]+$/,''); out.found.push('номер'); break; }
+  }
 
   var mD = t.match(/від\s*«?\s*(\d{1,2})\s*[.\/\-]\s*(\d{1,2})\s*[.\/\-]\s*(\d{2,4})/i)
         || t.match(/(\d{1,2})[.\/](\d{1,2})[.\/](\d{4})/);
@@ -2808,10 +2827,10 @@ function _invParseInvoiceText(txt){
   }
 
   var mS = t.match(/(?:Постачальник|Продавець|Виконавець)\s*[:\-]?\s*([^\n]{3,90})/i);
-  if(mS) out.supplier = trim(mS[1]).replace(/\s{2,}/g,' ');
+  if(mS) out.supplier = _invSaneSupplier(mS[1]);
   if(!out.supplier){
     var mS2 = t.match(/((?:ТОВ|ТзОВ|ПП|ФОП|ПрАТ|АТ|ДП)[\s«"'][^\n]{2,70})/i);
-    if(mS2) out.supplier = trim(mS2[1]).replace(/\s{2,}/g,' ');
+    if(mS2) out.supplier = _invSaneSupplier(mS2[1]);
   }
   if(out.supplier) out.found.push('постачальник');
 
@@ -2929,11 +2948,13 @@ function _invProcessRow(sh, H, row, rowNum, dryRun){
     if(l.ok){
       usedLlm = l;
       rep.source = d.ok ? 'drive+llm' : 'llm';
-      parsed.supplier = parsed.supplier || l.data.supplier;
-      parsed.edrpou   = parsed.edrpou   || l.data.edrpou;
-      parsed.number   = parsed.number   || l.data.number;
-      parsed.amount   = parsed.amount   || l.data.amount;
-      parsed.date     = parsed.date     || l.data.date;
+      // LLM бачить структуру документа, regex — лише рядки. Тому значення regex лишаємо
+      // тільки те, що пройшло перевірку осмисленості; решту беремо з LLM.
+      parsed.supplier = _invSaneSupplier(parsed.supplier) || l.data.supplier;
+      parsed.edrpou   = (/^\d{8,10}$/.test(parsed.edrpou) ? parsed.edrpou : '') || l.data.edrpou;
+      parsed.number   = (/\d/.test(parsed.number) ? parsed.number : '')         || l.data.number;
+      parsed.amount   = (Number(parsed.amount) > 0 ? parsed.amount : 0)          || l.data.amount;
+      parsed.date     = (/^\d{2}\.\d{2}\.\d{4}$/.test(parsed.date) ? parsed.date : '') || l.data.date;
       var core2 = (parsed.edrpou?1:0)+(parsed.amount?1:0)+(parsed.number?1:0);
       parsed.confidence = (core2>=3)?'high':(core2===2?'medium':'low');
     } else { rep.llmErr = l.error; }
@@ -6121,7 +6142,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.317', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.318', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
