@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.318
+// m.kids CRM — Google Apps Script v7.319
+// v7.319: бот рахунків МОВЧИТЬ — прибрано відповіді «Рахунок прийнято» і рядок розпізнавання,
+//         вітання setup лише за silent:false. Єдине майбутнє повідомлення — «✅ Оплачено ДД.ММ».
 // v7.318: сміття з OCR більше не перекриває LLM — «Постачальник:» із шапки таблиці і номер «o»
 //         з «No Банк» відсіюються (_invSaneSupplier; номер мусить містити цифру).
 // v7.317: текст із Drive-конвертації беремо експортом Drive REST (text/plain) під токеном скрипта —
@@ -2534,8 +2536,10 @@ function tgInvoiceSetup(body){
     var secret = _invProp('INVOICE_WEBHOOK_SECRET');
     if(!secret){ secret = 'inv_' + Utilities.getUuid().replace(/-/g,'').slice(0,24); props.setProperty('INVOICE_WEBHOOK_SECRET', secret); }
     var sh = _invSheet(true);
-    var send = (body.silent === true) ? {ok:true, skipped:true}
-      : _invSend(chatId, '🧾 <b>Бот рахунків на зв’язку.</b>\nКидайте рахунок фото або файлом, у підписі — <i>стаття / локація</i> (напр. «Кухня / Кругла»).');
+    // v7.319: мовчазний за замовчуванням — вітання лише за явним silent:false.
+    var send = (body.silent === false)
+      ? _invSend(chatId, '🧾 <b>Бот рахунків на зв’язку.</b>\nКидайте рахунок фото або файлом, у підписі — <i>стаття / локація</i> (напр. «Кухня / Кругла»).')
+      : {ok:true, skipped:true};
     return {ok:true, bot:(me.result&&me.result.username)?('@'+me.result.username):'', chatId:String(chatId), chatFound:found, secretSet:!!secret,
             sheet:INV_SHEET_NAME, sheetRows:sh.getLastRow(), columns:INV_HEADER.length,
             sendOk:!!(send&&send.ok), sendErr:(send&&send.ok)?'':((send&&send.description)||'')};
@@ -2633,16 +2637,11 @@ function tgInvoiceWebhook(e){
     for(var c=0;c<INV_HEADER.length;c++) if(row[c]===undefined) row[c]='';
     sh.appendRow(row);
 
-    // Коротка відповідь у тред. Чого бракує — кажемо одразу, щоб не з'ясовувати потім.
-    var miss = [];
-    if(!cap.loc) miss.push('локація');
-    if(!cap.category) miss.push('стаття');
-    var txt = '🧾 Рахунок №'+id+' прийнято'
-            + (cap.loc ? ' · '+cap.loc : '')
-            + (cap.category ? ' · '+cap.category : '')
-            + (miss.length ? '\n⚠️ не вказано: '+miss.join(', ')+' — допишіть у відповідь на це повідомлення' : '');
-    _invSend(chatId, txt, {reply_to_message_id: msg.message_id});
-    return {ok:true, kind:'invoice', id:id, loc:cap.loc, category:cap.category, file:kind};
+    // v7.319: БОТ МОВЧИТЬ. Жодних підтверджень і попереджень у групу — єдине, що він
+    // колись напише, це «✅ Оплачено ДД.ММ» після звірки з випискою (етап 6). Усе інше —
+    // прийнято / не розпізнано / чого бракує — видно в листі «Рахунки_Бот».
+    return {ok:true, kind:'invoice', id:id, loc:cap.loc, category:cap.category, file:kind,
+            missing:{loc:!cap.loc, category:!cap.category}};
   } catch(err){ _tgErr('inv:webhook', err); return {ok:false, error:String(err&&err.message||err)}; }
 }
 
@@ -2980,8 +2979,7 @@ function _invProcessRow(sh, H, row, rowNum, dryRun){
   set('спроб', tries+1);
   set('лог', 'розпізнано ' + (rep.source||'?') + ' · ' + formatDate(new Date())
              + (usedLlm && usedLlm.model ? ' · '+usedLlm.model : ''));
-  _invReplyParsed(row, H, parsed);
-  rep.ok = true;
+  rep.ok = true;   // v7.319: у групу нічого не пишемо — результат видно в листі
   return rep;
 }
 
@@ -2997,23 +2995,8 @@ function _invFail(sh, H, rowNum, tries, err, rep, dryRun){
   return rep;
 }
 
-// Відповідь у тред до того самого рахунку — доповнення до «прийнято».
-function _invReplyParsed(row, H, p){
-  try {
-    var chatId = String(row[H.indexOf('chat_id')]||'').trim();
-    var mid    = String(row[H.indexOf('message_id')]||'').trim();
-    if(!chatId || !mid) return;
-    var bits = [];
-    if(p.supplier) bits.push(p.supplier);
-    if(p.edrpou)   bits.push('ЄДРПОУ '+p.edrpou);
-    if(p.number)   bits.push('№ '+p.number);
-    if(p.date)     bits.push('від '+p.date);
-    if(p.amount)   bits.push('<b>'+_invMoney(p.amount)+' грн</b>');
-    var mark = (p.confidence==='high') ? '🔎' : (p.confidence==='medium' ? '🔎⚠️' : '⚠️');
-    var tail = (p.confidence==='high') ? '' : '\n(перевірте — розпізнано неповністю)';
-    _invSend(chatId, mark+' '+(bits.join(' · ')||'нічого не розпізнано')+tail, {reply_to_message_id: mid});
-  } catch(_e){}
-}
+// _invMoney лишається для ЄДИНОГО повідомлення, яке бот колись напише, — «✅ Оплачено»
+// після звірки з випискою (етап 6). Повідомлень про прийом і розпізнавання більше немає.
 function _invMoney(n){
   var s = (Math.round(Number(n)*100)/100).toFixed(2).replace('.', ',');
   return s.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
@@ -6142,7 +6125,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.318', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.319', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
