@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.313
+// m.kids CRM — Google Apps Script v7.314
+// v7.314: tgInvoiceSetWebhook дописує ?s=<секрет> до hookUrl, якщо його там немає —
+//         інакше релей форвардить без секрету і вебхук мовчки відкидає апдейти.
 // v7.313: tgInvoiceSetup спершу робить getMe — невірний токен більше не виглядає як
 //         «chat_id не знайдено»; у відповіді bot_id, довжина токена і прапорець пробілу.
 // v7.312: БОТ РАХУНКІВ (етапи 0–2) — окремий Telegram-бот (INVOICE_BOT_TOKEN/INVOICE_CHAT_ID/
@@ -2507,7 +2509,13 @@ function tgInvoiceSetWebhook(body){
     var secret = _invProp('INVOICE_WEBHOOK_SECRET');
     if(!secret) return {ok:false, error:'нема INVOICE_WEBHOOK_SECRET — спершу tgInvoiceSetup'};
     var hook;
-    if(trim(body.hookUrl)) hook = trim(body.hookUrl);
+    if(trim(body.hookUrl)){
+      hook = trim(body.hookUrl);
+      // v7.314: релей-URL без ?s= — типова пастка: Telegram доставляє успішно, воркер
+      // форвардить, а Apps Script відповідає «bad secret» і апдейт зникає без сліду
+      // (pending 0, last_error порожній, лист порожній). Дописуємо секрет самі.
+      if(hook.indexOf('s=') < 0) hook += (hook.indexOf('?')>=0?'&':'?') + 's=' + encodeURIComponent(secret);
+    }
     else {
       var base = trim(body.url) || ScriptApp.getService().getUrl();
       if(!base) return {ok:false, error:'нема exec-URL — передай url або hookUrl'};
@@ -5742,7 +5750,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.313', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.314', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();

@@ -47,7 +47,13 @@ export default {
 
     // Тіло читаємо ТУТ: після повернення відповіді стрім запиту вже недоступний.
     const body = await request.text();
-    const secret = url.searchParams.get('s') || '';
+    // Секрет: з query (?s=…) або із заголовка, який Telegram шле сам — ми передаємо
+    // його в setWebhook як secret_token. Заголовок рятує, коли вебхук зареєстрували
+    // без ?s= : Apps Script звіряє саме e.parameter.s і без нього відповідає
+    // «bad secret», мовчки відкидаючи апдейт (доставка при цьому виглядає успішною).
+    const secret = url.searchParams.get('s')
+      || request.headers.get('x-telegram-bot-api-secret-token')
+      || '';
     const target = `${env.EXEC_URL}?action=${action}&s=${encodeURIComponent(secret)}`;
 
     // Telegram отримує 200 негайно; Apps Script доопрацьовує у фоні.
