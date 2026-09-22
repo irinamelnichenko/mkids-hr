@@ -1,5 +1,9 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.310
+// m.kids CRM — Google Apps Script v7.311
+// v7.311: предметники — урок на (локація, група, предмет, дата) більше не дублюється
+//         (savePredmetnykyLesson / bulkPredmetnykyLessons віддають {ok:true, dup:true, id}),
+//         а місячна норма рахується за УНІКАЛЬНИМИ ДАТАМИ, не за рядками. Привід: Тичини
+//         Find-iki Англійська — 8 занять на екрані, лічильник 10/10 через два дублі.
 // v7.310: абонементні заняття «Чомусики»/«Мама+я» (SUBSCRIPTION_ACTIVITIES): каталог віддає subLimit,
 //         addAttendanceMark/bulkAttendanceMarks відмовляють SUB_LIMIT при ≥8 відмітках дитини за місяць;
 //         POST-маршрут renameSalaryRow. Ціна клієнту 0 — абонемент лишається руками в «Бюджет навчання».
@@ -5404,7 +5408,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.310', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.311', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -29707,6 +29711,13 @@ function _fmtLessonDate(d){
   return String(d || '').trim();
 }
 
+// v7.311: єдиний ключ дня для дедупу/ліміту — фронт шле 'dd.MM.yyyy', сторонній
+// виклик може прислати ISO; аркуш зберігає Date. Усе зводимо до 'dd.MM.yyyy'.
+function _predDayKey(v){
+  var d = (v instanceof Date) ? v : _parseDateInput(v);
+  return (d instanceof Date) ? _fmtLessonDate(d) : String(v || '').trim();
+}
+
 function _nextPredLessonId(sh){
   var lastRow = sh.getLastRow();
   if (lastRow < 2) return 1;
@@ -30131,22 +30142,29 @@ function savePredmetnykyLesson(actorId, lesson){
       // v7.231: у школах стелі немає — норми за матрицею стосуються лише садків.
       // v7.236: рахунок стелі більше не дублюється тут — єдине джерело
       // _predCeilingFor (воно ж знає про підлогу 15 лише для регіональної матриці).
+      // v7.311: ДЕДУП + ліміт за УНІКАЛЬНИМИ ДАТАМИ.
+      // Раніше ліміт рахував РЯДКИ і запису без перевірки існуючого: повторний клік після
+      // втраченої відповіді (Apps Script POST віддає HTML — фронт вважав це збоєм і відкочував
+      // галочку, хоч рядок уже записався) додавав другий урок на ту саму дату. Обидва рядки
+      // рахувались у нормі — звідси «8 занять на екрані, лічильник 10/10» (Тичини Find-iki).
       var current = 0;
+      var _dayLessons = _loadPredLessons(location);
+      var _daySet = {}, _dupId = 0;
+      for (var _i = 0; _i < _dayLessons.length; _i++){
+        var _L = _dayLessons[_i];
+        if (_L.group !== group || _L.subject !== subject) continue;   // ← ПОВНА назва групи
+        var _lym = _lessonYearMonth(_L.date);
+        if (!_lym || _lym.y !== ym.y || _lym.m !== ym.m) continue;
+        var _ld = _predDayKey(_L.date);
+        if (!_daySet[_ld]) _daySet[_ld] = true;
+        if (_ld === _predDayKey(dateStr) && !_dupId) _dupId = _L.id;
+      }
+      current = Object.keys(_daySet).length;                          // унікальні дати
+      if (_dupId) return {ok:true, dup:true, id:_dupId, current:current};   // ідемпотентно
       var norm = _predCeilingFor(location, subject, group, ym.y + '-' + ('0' + ym.m).slice(-2) + '-01');   // v7.296
-      if (norm > 0){
-        var existing = _loadPredLessons(location);
-        for (var i = 0; i < existing.length; i++){
-          var L = existing[i];
-          if (L.group   !== group)   continue;        // ← ПОВНА назва групи
-          if (L.subject !== subject) continue;
-          var lym = _lessonYearMonth(L.date);
-          if (!lym || lym.y !== ym.y || lym.m !== ym.m) continue;
-          current++;
-        }
-        if (current >= norm){
-          return {ok:false, code:'NORM_REACHED', error:'norm_reached',
-                  current:current, norm:norm, group:group, subject:subject};
-        }
+      if (norm > 0 && current >= norm){
+        return {ok:false, code:'NORM_REACHED', error:'norm_reached',
+                current:current, norm:norm, group:group, subject:subject};
       }
 
       // ── insert ──
@@ -30216,23 +30234,30 @@ function bulkPredmetnykyLessons(actorId, add, removeIds){
         if (!(k in cCeil)) cCeil[k] = _predCeilingFor(loc, subj, grp, ymd);   // v7.296
         return cCeil[k];
       }
-      // Поточна кількість уроків (loc, ПОВНА група, subject, рік-місяць).
+      // v7.311: ліміт рахується за УНІКАЛЬНИМИ ДАТАМИ, а не рядками, і поряд тримається
+      // набір уже зайнятих дат — він же служить дедупом (та сама дата вдруге = dup, не новий рядок).
       function countKey(loc, grp, subj, ym){ return loc + '|' + grp + '|' + subj + '|' + ym.y + '-' + ym.m; }
-      var counts = {};
-      function currentCount(loc, grp, subj, ym){
+      var counts = {}, daySets = {};
+      function daySetFor(loc, grp, subj, ym){
         var k = countKey(loc, grp, subj, ym);
-        if (k in counts) return counts[k];
+        if (k in daySets) return daySets[k];
         if (!(loc in cLessons)) cLessons[loc] = _loadPredLessons(loc) || [];
-        var n = 0, arr = cLessons[loc];
+        var set = {}, arr = cLessons[loc];
         for (var i = 0; i < arr.length; i++){
           var L = arr[i];
           if (L.group !== grp || L.subject !== subj) continue;
           var lym = _lessonYearMonth(L.date);
           if (!lym || lym.y !== ym.y || lym.m !== ym.m) continue;
-          n++;
+          set[_predDayKey(L.date)] = L.id;
         }
-        counts[k] = n;
-        return n;
+        daySets[k] = set;
+        return set;
+      }
+      function currentCount(loc, grp, subj, ym){
+        var k = countKey(loc, grp, subj, ym);
+        if (k in counts) return counts[k];
+        counts[k] = Object.keys(daySetFor(loc, grp, subj, ym)).length;
+        return counts[k];
       }
 
       // v7.272: серверний замок місяця — CFO без обмежень, решта лише поточний місяць до сьогодні
@@ -30255,7 +30280,10 @@ function bulkPredmetnykyLessons(actorId, add, removeIds){
         var rym  = _lessonYearMonth(_fmtLessonDate(grid[found][5]));
         if (rym){
           var ck = countKey(rloc, rgrp, rsub, rym);
-          if (ck in counts) counts[ck] = Math.max(0, counts[ck] - 1);
+          var rdate = _predDayKey(grid[found][5]);
+          var rset = daySetFor(rloc, rgrp, rsub, rym);
+          if (rset[rdate]) delete rset[rdate];            // v7.311: дата звільнилась — і для ліміту, і для дедупу
+          counts[ck] = Object.keys(rset).length;
         }
         _writeHrAudit(actor, 'pred_delete_lesson', rid, {
           empKey: String(grid[found][1] || '').trim(), location: rloc,
@@ -30300,6 +30328,13 @@ function bulkPredmetnykyLessons(actorId, add, removeIds){
         }
         if (!canEdit(location)){ added.push({ok:false, code:'PERM_DENIED', error:'Permission denied'}); continue; }
 
+        // v7.311: урок на цю (локація, група, предмет, дата) вже є → повертаємо його id,
+        // нового рядка не створюємо. Набір дат оновлюється тут же, тож повтор у межах
+        // ОДНОГО пакета теж не проходить.
+        var _dset = daySetFor(location, group, subject, ym);
+        var _dkey = _predDayKey(dateStr);
+        if (_dset[_dkey]){ added.push({ok:true, dup:true, id:_dset[_dkey]}); continue; }
+
         var norm = ceilOf(location, subject, group, ym);
         if (norm > 0){
           var cur = currentCount(location, group, subject, ym);
@@ -30307,10 +30342,11 @@ function bulkPredmetnykyLessons(actorId, add, removeIds){
             added.push({ok:false, code:'NORM_REACHED', error:'norm_reached',
                         current:cur, norm:norm, group:group, subject:subject}); continue;
           }
-          counts[countKey(location, group, subject, ym)] = cur + 1;   // наростаючий підсумок
         }
 
         var id = nextId++;
+        _dset[_dkey] = id;                                           // дата зайнята
+        counts[countKey(location, group, subject, ym)] = Object.keys(_dset).length;
         var dateVal = _parseDateInput(dateStr);
         rows.push([id, empKey, location, group, subject,
                    (dateVal instanceof Date ? dateVal : dateStr),

@@ -2149,8 +2149,16 @@ function _predRowLessons(loc, groupName, subject){
 }
 
 // Дати з уроками — те, що обмежує норма (дзеркало бекенду).
+// v7.311: рахуємо УНІКАЛЬНІ дати, а не рядки. Два рядки на ту саму дату (дубль від
+// повторного кліка після втраченої відповіді) з'їдали норму: Тичини Find-iki Англійська
+// показували 8 занять у сітці й лічильник 10/10, і решта днів була заблокована.
 function countLessonDatesInRow(loc, groupName, subject){
-  return _predRowLessons(loc, groupName, subject).length;
+  var seen = {}, n = 0;
+  _predRowLessons(loc, groupName, subject).forEach(function(L){
+    if (seen[L.date]) return;
+    seen[L.date] = true; n++;
+  });
+  return n;
 }
 
 // Сесії — те, що показуємо в лічильнику й за що платимо.
@@ -2767,7 +2775,17 @@ async function _pqFlush(){
   setSync('syncing', '💾 Зберігаю…');
   var adds = PQ.add.splice(0, PQ.add.length);
   var dels = PQ.del.splice(0, PQ.del.length);
+  // v7.311: страховка від однакових позицій в одному пакеті. Сам toggle їх не створює
+  // (перед додаванням дивиться lessonByCell), але черга переживає ре-рендери й повтори,
+  // а один зайвий рядок = зайвий день у нормі та в ЗП. Сервер теж віддає dup.
+  var _seenCell = {};
+  adds = adds.filter(function(a){
+    var k = [a.loc, a.group, a.subject, a.date].join('|');
+    if (_seenCell[k]){ _pqDropLesson(a.id); return false; }
+    _seenCell[k] = true; return true;
+  });
   var loc  = (adds[0] && adds[0].loc) || (dels[0] && dels[0].lesson && dels[0].lesson.loc) || S.loc;
+  if (!adds.length && !dels.length){ PQ.sending = false; setSync('ok'); renderApp(); return; }
   try {
     var res = await apiPost({
       action: 'bulkPredmetnykyLessons', actorId: S.user.id,
@@ -2780,7 +2798,7 @@ async function _pqFlush(){
       for (var i = 0; i < adds.length; i++){
         var rr = res.added[i], cur = _pqLessonById(adds[i].id);
         if (!cur) continue;                                  // встигли зняти вручну
-        if (rr && rr.ok){ if (rr.id) cur.id = rr.id; delete cur._pending; }
+        if (rr && rr.ok){ if (rr.id) cur.id = rr.id; delete cur._pending; }   // v7.311: dup:true теж ok — урок уже є, беремо його id
         else {
           _pqDropLesson(adds[i].id);
           var msg;
