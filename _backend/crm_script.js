@@ -1,5 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.315
+// m.kids CRM — Google Apps Script v7.316
+// v7.316: РАХУНКИ ЕТАП 3 — черга розпізнавання: Telegram getFile → Drive-конвертація з OCR →
+//         regex (ЄДРПОУ/№/сума/дата/постачальник), фолбек Claude API (vision) за ANTHROPIC_API_KEY;
+//         тригер invoiceQueueTick раз на 5 хв, лічильник «спроб», відповідь у тред рахунку.
 // v7.315: підпис рахунку без роздільника («Тичини вода») — локація шукається як
 //         послідовність слів усередині частини, решта слів іде в статтю.
 // v7.314: tgInvoiceSetWebhook дописує ?s=<секрет> до hookUrl, якщо його там немає —
@@ -2336,7 +2339,8 @@ function _authLogMissing(action, method){    // ЕТАП 1: бачимо, які
 var INV_SHEET_NAME = 'Рахунки_Бот';
 var INV_HEADER = ['invoice_id','created_at','chat_id','message_id','від кого','тип файлу','file_id',
   'file_name','підпис','локація','стаття (з підпису)','постачальник','ЄДРПОУ','№ рахунку','сума',
-  'дата рахунку','статус','довіра','matched_ref','дата оплати','лог'];
+  'дата рахунку','статус','довіра','matched_ref','дата оплати','лог',
+  'спроб'];   // v7.316: лічильник невдалих розпізнавань (INV_MAX_TRIES → статус «помилка»)
 // Статуси заявки. «новий» — файл ще не читали (етап 3 його підхопить).
 var INV_ST = {NEW:'новий', PARSED:'розпізнано', PAID:'оплачено', REJECTED:'відхилено', ERR:'помилка'};
 
@@ -2680,6 +2684,323 @@ function invoiceBotDryRun(params){
     routes:{webhook:'POST ?action=tgInvoiceWebhook&s=<secret>', setup:'POST {action:"tgInvoiceSetup"}',
             setWebhook:'POST {action:"tgInvoiceSetWebhook"}', read:'GET ?action=getInvoiceRequests'},
     locationsKnown:_invLocList().length, captionSamples:parsed};
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// РАХУНКИ · ЕТАП 3 (v7.316): РОЗПІЗНАВАННЯ ФАЙЛУ
+// Черга: заявки зі статусом «новий» → скачати файл із Telegram за file_id →
+// текст → постачальник / ЄДРПОУ / № рахунку / сума / дата → статус «розпізнано».
+//
+// ДВА ДЖЕРЕЛА ТЕКСТУ:
+//   1) Drive-конвертація у Google Doc з OCR (безкоштовно, всередині Google).
+//      Текстовий PDF з 1С/M.E.Doc дає чистий текст; фото — як вийде.
+//   2) Claude API (vision) — ФОЛБЕК, коли regex не знайшов ЄДРПОУ або суму.
+//      Вмикається лише за наявності ANTHROPIC_API_KEY у Script Properties.
+// Обидва шляхи пишуть, ЧИМ саме розпізнано (колонка «лог», поле source).
+//
+// ЧОМУ ЧЕРГА, А НЕ ВЕБХУК: скачування + OCR + LLM не влазять у вікно відповіді
+// Telegram, а Apps Script має 6 хв на виконання. Тригер раз на 5 хв бере до
+// INV_BATCH заявок, решта чекає наступного запуску.
+// ═══════════════════════════════════════════════════════════════════════════
+var INV_BATCH       = 5;                    // заявок за один прогін
+var INV_MAX_TRIES   = 3;                    // після цього статус «помилка», щоб не крутилось вічно
+var INV_LLM_MODEL   = 'claude-opus-5';      // override: Script Property INVOICE_LLM_MODEL
+var INV_LLM_MAX_MB  = 4;                    // більший файл у LLM не шлемо
+
+// Файл із Telegram: getFile → /file/bot<token>/<path>. Ліміт скачування ботом — 20 МБ.
+function _invFetchFile(fileId){
+  var tok = _invTok();
+  if(!tok) return {ok:false, error:'нема INVOICE_BOT_TOKEN'};
+  var f = _invApi('getFile', {file_id:fileId});
+  if(!f || !f.ok || !f.result || !f.result.file_path) return {ok:false, error:'getFile: '+String((f&&f.description)||'немає file_path')};
+  var path = f.result.file_path;
+  try {
+    var res = UrlFetchApp.fetch('https://api.telegram.org/file/bot'+tok+'/'+path, {muteHttpExceptions:true});
+    if(res.getResponseCode() !== 200) return {ok:false, error:'download HTTP '+res.getResponseCode()};
+    var blob = res.getBlob();
+    var nm = String(path).split('/').pop() || 'invoice';
+    blob.setName(nm);
+    return {ok:true, blob:blob, path:path, name:nm, size:blob.getBytes().length, mime:blob.getContentType()||''};
+  } catch(e){ return {ok:false, error:'download: '+String(e&&e.message||e)}; }
+}
+
+// Drive → Google Doc з OCR → текст → тимчасовий файл у кошик.
+// Advanced Drive Service буває v3 (Files.create) і v2 (Files.insert) — підтримуємо обидва,
+// бо вмикається він вручну і версія залежить від того, що обрали в редакторі.
+function _invTextFromDrive(blob, name){
+  var docId = null;
+  try {
+    if(typeof Drive === 'undefined' || !Drive.Files) return {ok:false, error:'Drive API не ввімкнено (Служби → Drive API)'};
+    var file;
+    if(Drive.Files.create){
+      file = Drive.Files.create({name:(name||'invoice'), mimeType:'application/vnd.google-apps.document'},
+                                blob, {ocrLanguage:'uk', supportsAllDrives:true});
+    } else {
+      file = Drive.Files.insert({title:(name||'invoice'), mimeType:'application/vnd.google-apps.document'},
+                                blob, {ocr:true, ocrLanguage:'uk', convert:true});
+    }
+    docId = file && (file.id || file.getId && file.getId());
+    if(!docId) return {ok:false, error:'Drive не повернув id'};
+    var txt = DocumentApp.openById(docId).getBody().getText();
+    return {ok:true, text:String(txt||''), chars:String(txt||'').length};
+  } catch(e){
+    return {ok:false, error:'Drive OCR: '+String(e&&e.message||e)};
+  } finally {
+    if(docId){ try { DriveApp.getFileById(docId).setTrashed(true); } catch(_t){} }
+  }
+}
+
+// ── Регекс-витяг із тексту рахунку ──────────────────────────────────────────
+// Українські рахунки: «Рахунок-фактура № СФ-0000123 від 20.09.2026», «ЄДРПОУ 12345678»,
+// «Всього до сплати: 2 450,00 грн». Суму беремо за ключовим словом; якщо його немає —
+// найбільше число у тексті (з позначкою low, щоб це не виглядало як факт).
+function _invNum(s){
+  var t = String(s||'').replace(/[ \u00A0\t]/g,'').replace(',', '.');
+  var n = parseFloat(t);
+  return isNaN(n) ? 0 : n;
+}
+function _invParseInvoiceText(txt){
+  var t = String(txt||'').replace(/ /g,' ');
+  var out = {supplier:'', edrpou:'', number:'', amount:0, date:'', confidence:'low', found:[]};
+  if(!t.trim()) return out;
+
+  var mE = t.match(/(?:ЄДРПОУ|ЕДРПОУ|Код\s+ЄДРПОУ|ІПН|РНОКПП)\D{0,12}(\d{8,10})/i);
+  if(mE){ out.edrpou = mE[1]; out.found.push('ЄДРПОУ'); }
+
+  var mN = t.match(/(?:рахунок[-\s]*фактура|рахунок|invoice)\s*(?:№|Nº|N|#)\s*([A-Za-zА-Яа-яІЇЄҐіїєґ0-9\-\/\.]{1,24})/i);
+  if(mN){ out.number = mN[1].replace(/[.,;]+$/,''); out.found.push('номер'); }
+
+  var mD = t.match(/від\s*«?\s*(\d{1,2})\s*[.\/\-]\s*(\d{1,2})\s*[.\/\-]\s*(\d{2,4})/i)
+        || t.match(/(\d{1,2})[.\/](\d{1,2})[.\/](\d{4})/);
+  if(mD){
+    var yy = mD[3].length===2 ? ('20'+mD[3]) : mD[3];
+    out.date = ('0'+mD[1]).slice(-2)+'.'+('0'+mD[2]).slice(-2)+'.'+yy;
+    out.found.push('дата');
+  }
+
+  // ⚠️ У числовому класі — ЛИШЕ пробіл і \u00A0, без \s: \s включає \n, і шаблон склеював
+  // два числа з сусідніх рядків («№ 5» + «1 200,50» → 51200.50). Після ключового слова
+  // дозволяємо максимум один перенос («Всього до сплати:\n2 450,00»).
+  var mA = t.match(/(?:усього\s+до\s+сплати|всього\s+до\s+сплати|до\s+сплати|разом\s+до\s+сплати|сума\s+до\s+оплати|всього|разом)[ \t]*[:\-–]?[ \t]*\n?[ \t]*([\d \u00A0]+[.,]\d{2}|\d[\d \u00A0]{2,})/i);
+  if(mA){ out.amount = _invNum(mA[1]); if(out.amount) out.found.push('сума'); }
+  if(!out.amount){
+    var nums = t.match(/\d[\d \u00A0]*[.,]\d{2}/g) || [];
+    var best = 0;
+    nums.forEach(function(x){ var v=_invNum(x); if(v>best) best=v; });
+    if(best){ out.amount = best; out.found.push('сума(макс.)'); }
+  }
+
+  var mS = t.match(/(?:Постачальник|Продавець|Виконавець)\s*[:\-]?\s*([^\n]{3,90})/i);
+  if(mS) out.supplier = trim(mS[1]).replace(/\s{2,}/g,' ');
+  if(!out.supplier){
+    var mS2 = t.match(/((?:ТОВ|ТзОВ|ПП|ФОП|ПрАТ|АТ|ДП)[\s«"'][^\n]{2,70})/i);
+    if(mS2) out.supplier = trim(mS2[1]).replace(/\s{2,}/g,' ');
+  }
+  if(out.supplier) out.found.push('постачальник');
+
+  var core = (out.edrpou?1:0) + (out.amount?1:0) + (out.number?1:0);
+  out.confidence = (core>=3) ? 'high' : (core===2 ? 'medium' : 'low');
+  return out;
+}
+
+// ── Claude API (vision) — фолбек ────────────────────────────────────────────
+// Ключ: Script Property ANTHROPIC_API_KEY. Без нього фолбек просто не вмикається.
+// Просимо чистий JSON і беремо ПЕРШИЙ {...} з відповіді — не залежимо від точної
+// форми structured-outputs API, яка змінюється швидше за цей файл.
+function _invLlmExtract(blob, mime, fileName){
+  var key = _invProp('ANTHROPIC_API_KEY');
+  if(!key) return {ok:false, error:'нема ANTHROPIC_API_KEY'};
+  var bytes = blob.getBytes();
+  if(bytes.length > INV_LLM_MB_LIMIT()) return {ok:false, error:'файл завеликий для LLM ('+Math.round(bytes.length/1048576)+' МБ)'};
+  var b64 = Utilities.base64Encode(bytes);
+  var isPdf = /pdf/i.test(String(mime||'')) || /\.pdf$/i.test(String(fileName||''));
+  var mediaType = isPdf ? 'application/pdf'
+                : (/png/i.test(mime) ? 'image/png' : (/webp/i.test(mime) ? 'image/webp' : 'image/jpeg'));
+  var src = isPdf ? {type:'document', source:{type:'base64', media_type:'application/pdf', data:b64}}
+                  : {type:'image',    source:{type:'base64', media_type:mediaType,        data:b64}};
+  var prompt = 'Це український рахунок на оплату. Витягни дані і поверни ЛИШЕ JSON без пояснень:\n'
+    + '{"supplier":"назва постачальника","edrpou":"код ЄДРПОУ або РНОКПП, лише цифри",'
+    + '"number":"номер рахунку","amount":число до сплати (крапка як роздільник, без пробілів),'
+    + '"date":"дата рахунку ДД.ММ.РРРР"}\n'
+    + 'Чого немає — став порожній рядок або 0. Сума — та, що «до сплати» разом з ПДВ.';
+  var payload = {
+    model: (_invProp('INVOICE_LLM_MODEL') || INV_LLM_MODEL),
+    max_tokens: 1024,
+    messages: [{role:'user', content:[src, {type:'text', text:prompt}]}]
+  };
+  try {
+    var res = UrlFetchApp.fetch('https://api.anthropic.com/v1/messages', {
+      method:'post', contentType:'application/json',
+      headers:{'x-api-key':key, 'anthropic-version':'2023-06-01'},
+      payload: JSON.stringify(payload), muteHttpExceptions:true
+    });
+    var code = res.getResponseCode(), body = res.getContentText();
+    if(code !== 200) return {ok:false, error:'LLM HTTP '+code+': '+body.slice(0,200)};
+    var j = JSON.parse(body);
+    var txt = '';
+    (j.content||[]).forEach(function(b){ if(b && b.type==='text') txt += b.text; });
+    var m = txt.match(/\{[\s\S]*\}/);
+    if(!m) return {ok:false, error:'LLM не повернув JSON'};
+    var d = JSON.parse(m[0]);
+    return {ok:true, data:{
+      supplier: trim(d.supplier), edrpou: String(d.edrpou||'').replace(/\D/g,''),
+      number: trim(d.number), amount: Number(d.amount)||0, date: trim(d.date)
+    }, usage:j.usage||null, model:payload.model};
+  } catch(e){ return {ok:false, error:'LLM: '+String(e&&e.message||e)}; }
+}
+function INV_LLM_MB_LIMIT(){ return INV_LLM_MAX_MB * 1048576; }
+
+// ── Черга ───────────────────────────────────────────────────────────────────
+// POST {action:'processInvoiceQueue', dryRun:true|false, limit?, id?}
+// dryRun: читає файл і показує, ЩО розпізналось, але в лист нічого не пише
+// і в групу не відповідає.
+function processInvoiceQueue(body){
+  body = body || {};
+  var dryRun = (body.dryRun === true);
+  var limit  = Number(body.limit) || INV_BATCH;
+  var onlyId = trim(body.id);
+  try {
+    var sh = _invSheet(false);
+    if(!sh) return {ok:true, processed:0, note:'листа «'+INV_SHEET_NAME+'» ще немає'};
+    var v = sh.getDataRange().getValues();
+    if(v.length < 2) return {ok:true, processed:0};
+    var H = v[0].map(String);
+    var cId = H.indexOf('invoice_id'), cSt = H.indexOf('статус'), cFile = H.indexOf('file_id');
+    var cName = H.indexOf('file_name'), cTries = H.indexOf('спроб');
+    if(cId<0 || cSt<0 || cFile<0) return {ok:false, error:'у листі немає колонок invoice_id/статус/file_id'};
+    var out = [], done = 0;
+    for(var r=1; r<v.length && done<limit; r++){
+      var id = String(v[r][cId]||'').trim();
+      if(!id) continue;
+      if(onlyId && id !== onlyId) continue;
+      var st = String(v[r][cSt]||'').trim();
+      if(!onlyId && st !== INV_ST.NEW) continue;
+      var tries = Number(v[r][cTries]) || 0;
+      if(!onlyId && tries >= INV_MAX_TRIES) continue;
+      done++;
+      var rec = _invProcessRow(sh, H, v[r], r+1, dryRun);
+      rec.id = id;
+      out.push(rec);
+    }
+    return {ok:true, dryRun:dryRun, processed:out.length, items:out};
+  } catch(e){ _tgErr('inv:queue', e); return {ok:false, error:String(e&&e.message||e)}; }
+}
+
+function _invProcessRow(sh, H, row, rowNum, dryRun){
+  var col = function(n){ return H.indexOf(n); };
+  var fileId = String(row[col('file_id')]||'').trim();
+  var fname  = String(row[col('file_name')]||'').trim();
+  var rep = {row:rowNum, file:fileId.slice(0,12)+'…', source:'', ok:false};
+  var tries = Number(row[col('спроб')]) || 0;
+
+  var f = _invFetchFile(fileId);
+  if(!f.ok){ return _invFail(sh, H, rowNum, tries, f.error, rep, dryRun); }
+  rep.sizeKB = Math.round(f.size/1024);
+  rep.mime = f.mime;
+
+  var d = _invTextFromDrive(f.blob, fname || f.name);
+  var parsed = d.ok ? _invParseInvoiceText(d.text) : _invParseInvoiceText('');
+  rep.driveOk = !!d.ok;
+  rep.driveChars = d.ok ? d.chars : 0;
+  if(!d.ok) rep.driveErr = d.error;
+  rep.source = d.ok ? 'drive-ocr' : '';
+
+  // Фолбек: немає ЄДРПОУ або суми — пробуємо LLM (якщо ключ заданий).
+  var usedLlm = null;
+  if(!parsed.edrpou || !parsed.amount){
+    var l = _invLlmExtract(f.blob, f.mime, fname || f.name);
+    if(l.ok){
+      usedLlm = l;
+      rep.source = d.ok ? 'drive+llm' : 'llm';
+      parsed.supplier = parsed.supplier || l.data.supplier;
+      parsed.edrpou   = parsed.edrpou   || l.data.edrpou;
+      parsed.number   = parsed.number   || l.data.number;
+      parsed.amount   = parsed.amount   || l.data.amount;
+      parsed.date     = parsed.date     || l.data.date;
+      var core2 = (parsed.edrpou?1:0)+(parsed.amount?1:0)+(parsed.number?1:0);
+      parsed.confidence = (core2>=3)?'high':(core2===2?'medium':'low');
+    } else { rep.llmErr = l.error; }
+  }
+  rep.parsed = {supplier:parsed.supplier, edrpou:parsed.edrpou, number:parsed.number,
+                amount:parsed.amount, date:parsed.date, confidence:parsed.confidence};
+
+  if(dryRun){ rep.ok = true; return rep; }
+
+  // Нічого змістовного — рахуємо спробу і лишаємо в черзі.
+  if(!parsed.edrpou && !parsed.amount){
+    return _invFail(sh, H, rowNum, tries, 'не розпізнано (' + (rep.driveErr || rep.llmErr || 'порожній текст') + ')', rep, false);
+  }
+
+  var set = function(name, val){ var c = col(name); if(c>=0) sh.getRange(rowNum, c+1).setValue(val); };
+  set('постачальник', parsed.supplier);
+  set('ЄДРПОУ', parsed.edrpou);
+  set('№ рахунку', parsed.number);
+  set('сума', parsed.amount);
+  set('дата рахунку', parsed.date);
+  set('статус', INV_ST.PARSED);
+  set('довіра', parsed.confidence);
+  set('спроб', tries+1);
+  set('лог', 'розпізнано ' + (rep.source||'?') + ' · ' + formatDate(new Date())
+             + (usedLlm && usedLlm.model ? ' · '+usedLlm.model : ''));
+  _invReplyParsed(row, H, parsed);
+  rep.ok = true;
+  return rep;
+}
+
+function _invFail(sh, H, rowNum, tries, err, rep, dryRun){
+  rep.error = err;
+  if(dryRun) return rep;
+  var cT = H.indexOf('спроб'), cL = H.indexOf('лог'), cS = H.indexOf('статус');
+  var n = tries + 1;
+  if(cT>=0) sh.getRange(rowNum, cT+1).setValue(n);
+  if(cL>=0) sh.getRange(rowNum, cL+1).setValue('спроба '+n+': '+String(err).slice(0,200));
+  if(cS>=0 && n >= INV_MAX_TRIES) sh.getRange(rowNum, cS+1).setValue(INV_ST.ERR);
+  _tgErr('inv:parse', 'рядок '+rowNum+': '+err);
+  return rep;
+}
+
+// Відповідь у тред до того самого рахунку — доповнення до «прийнято».
+function _invReplyParsed(row, H, p){
+  try {
+    var chatId = String(row[H.indexOf('chat_id')]||'').trim();
+    var mid    = String(row[H.indexOf('message_id')]||'').trim();
+    if(!chatId || !mid) return;
+    var bits = [];
+    if(p.supplier) bits.push(p.supplier);
+    if(p.edrpou)   bits.push('ЄДРПОУ '+p.edrpou);
+    if(p.number)   bits.push('№ '+p.number);
+    if(p.date)     bits.push('від '+p.date);
+    if(p.amount)   bits.push('<b>'+_invMoney(p.amount)+' грн</b>');
+    var mark = (p.confidence==='high') ? '🔎' : (p.confidence==='medium' ? '🔎⚠️' : '⚠️');
+    var tail = (p.confidence==='high') ? '' : '\n(перевірте — розпізнано неповністю)';
+    _invSend(chatId, mark+' '+(bits.join(' · ')||'нічого не розпізнано')+tail, {reply_to_message_id: mid});
+  } catch(_e){}
+}
+function _invMoney(n){
+  var s = (Math.round(Number(n)*100)/100).toFixed(2).replace('.', ',');
+  return s.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+}
+
+// Тригер раз на 5 хв. Ідемпотентно: повторний виклик не плодить копії.
+// POST {action:'ensureInvoiceTrigger'} ; {remove:true} — зняти.
+function ensureInvoiceTrigger(body){
+  body = body || {};
+  try {
+    var all = ScriptApp.getProjectTriggers(), existing = [];
+    all.forEach(function(t){ if(t.getHandlerFunction() === 'invoiceQueueTick') existing.push(t); });
+    if(body.remove === true){
+      existing.forEach(function(t){ ScriptApp.deleteTrigger(t); });
+      return {ok:true, removed:existing.length};
+    }
+    if(existing.length) return {ok:true, already:true, count:existing.length};
+    ScriptApp.newTrigger('invoiceQueueTick').timeBased().everyMinutes(5).create();
+    return {ok:true, created:true, everyMinutes:5};
+  } catch(e){ return {ok:false, error:String(e&&e.message||e)}; }
+}
+function invoiceQueueTick(){
+  try { processInvoiceQueue({dryRun:false}); }
+  catch(e){ _tgErr('inv:tick', e); }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -5784,7 +6105,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.315', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.316', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -5981,6 +6302,8 @@ function doPost(e) {
     else if (body.action === 'tgSetWebhook')              result = tgSetWebhook(body || {});   // ЕТАП 2 бот лідів: реєстрація вебхука
     else if (body.action === 'tgInvoiceSetup')            result = tgInvoiceSetup(body || {});      // v7.312 бот рахунків: chat_id+секрет+лист
     else if (body.action === 'tgInvoiceSetWebhook')       result = tgInvoiceSetWebhook(body || {});  // v7.312 бот рахунків: реєстрація вебхука
+    else if (body.action === 'processInvoiceQueue')       result = processInvoiceQueue(body || {});  // v7.316 розпізнавання рахунків (dryRun за замовч. false)
+    else if (body.action === 'ensureInvoiceTrigger')      result = ensureInvoiceTrigger(body || {}); // v7.316 тригер черги раз на 5 хв
     else if (body.action === 'tgSeedDirectors')           result = tgSeedDirectors(body || {});   // прив'язка директорів до локацій
     else if (body.action === 'cashPayoutSheet')          result = cashPayoutSheet(body || {});      // v7.64 відомість на видачу готівки (PDF)
     else if (body.action === 'cleanupBackupTabs')        result = cleanupBackupTabs(body || {});  // v7.45 чистка бекап-табів
