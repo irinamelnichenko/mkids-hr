@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.314
+// m.kids CRM — Google Apps Script v7.315
+// v7.315: підпис рахунку без роздільника («Тичини вода») — локація шукається як
+//         послідовність слів усередині частини, решта слів іде в статтю.
 // v7.314: tgInvoiceSetWebhook дописує ?s=<секрет> до hookUrl, якщо його там немає —
 //         інакше релей форвардить без секрету і вебхук мовчки відкидає апдейти.
 // v7.313: tgInvoiceSetup спершу робить getMe — невірний токен більше не виглядає як
@@ -2426,6 +2428,45 @@ function _invNormTight(s){
     .replace(/[\s ]+/g, '').toLowerCase();
   return t.replace(/[aceiopxykmtbh]/g, function(ch){ return _INV_HOMOGLYPH[ch] || ch; });
 }
+// Локація ВСЕРЕДИНІ частини підпису. Директорки пишуть і «Кухня / Кругла», і
+// «Тичини вода» — без роздільника. Тому шукаємо локацію як послідовність слів
+// (найдовшу, щоб «Манхетен (Благо)» не зрізався до «Манхетен»), а решту слів
+// віддаємо під статтю. Точний збіг має пріоритет; префіксний — лише якщо єдиний:
+// «Школа» однаково підходить і до «Школа 228», і до «Школа Осокорки», а рахунок
+// у чужій локації гірший за порожню клітинку, яку видно й легко дописати.
+function _invMatchLocInPart(part, locs){
+  var words = trim(part).split(/\s+/).filter(Boolean);
+  var out = {loc:'', rest:'', ambiguous:null};
+  if(!words.length) return out;
+  // ДВА ПРОХОДИ. Спершу точні збіги по всіх вікнах, і лише потім префіксні: інакше
+  // «Тичини вода» цілим вікном підходить під префікс «Тичини», локація вгадується,
+  // але слово «вода» зникає — стаття лишається порожньою. Точний збіг підслова
+  // «Тичини» лишає «вода» у залишку, як і має бути.
+  function scan(mode){
+    for(var len = words.length; len >= 1; len--){
+      for(var i = 0; i + len <= words.length; i++){
+        var pk = _invNormTight(words.slice(i, i+len).join(' ')), hits = [];
+        for(var k=0;k<locs.length;k++){
+          var lk = _invNormTight(locs[k]);
+          if(mode === 'exact'){ if(pk === lk) hits.push(locs[k]); }
+          else if(pk !== lk && pk.length>=4 && (lk.indexOf(pk)===0 || pk.indexOf(lk)===0)) hits.push(locs[k]);
+        }
+        if(hits.length === 1){
+          out.loc = hits[0];
+          out.rest = words.slice(0,i).concat(words.slice(i+len)).join(' ');
+          return true;
+        }
+        if(hits.length > 1 && !out.ambiguous) out.ambiguous = hits;
+      }
+    }
+    return false;
+  }
+  if(scan('exact')) return out;
+  out.ambiguous = null;          // неоднозначність точного проходу не переносимо у префіксний
+  scan('prefix');
+  return out;
+}
+
 function _invParseCaption(caption){
   var raw = trim(caption);
   var out = {caption:raw, loc:'', category:'', unmatched:'', ambiguous:null};
@@ -2434,20 +2475,13 @@ function _invParseCaption(caption){
   var locs = _invLocList(), rest = [];
   parts.forEach(function(p){
     if(out.loc){ rest.push(p); return; }
-    // Точний збіг має пріоритет. Префіксний — ЛИШЕ якщо єдиний: «Школа» однаково
-    // підходить і до «Школа 228», і до «Школа Осокорки», а рахунок не в ту локацію
-    // гірший за порожню клітинку, яку видно й легко дописати.
-    var pk = _invNormTight(p), exact = [], pref = [];
-    for(var i=0;i<locs.length;i++){
-      var lk = _invNormTight(locs[i]);
-      if(pk === lk) exact.push(locs[i]);
-      else if(pk.length>=4 && (lk.indexOf(pk)===0 || pk.indexOf(lk)===0)) pref.push(locs[i]);
-    }
-    var hit = (exact.length===1) ? exact[0] : ((!exact.length && pref.length===1) ? pref[0] : '');
-    if(hit) out.loc = hit;
-    else {
+    var m = _invMatchLocInPart(p, locs);
+    if(m.loc){
+      out.loc = m.loc;
+      if(m.rest) rest.push(m.rest);      // «Тичини вода» → локація + стаття «вода»
+    } else {
       rest.push(p);
-      if(pref.length>1) out.ambiguous = pref.slice(0,4);   // видно в логу заявки
+      if(m.ambiguous && m.ambiguous.length>1) out.ambiguous = m.ambiguous.slice(0,4);
     }
   });
   out.category = rest.shift() || '';
@@ -5750,7 +5784,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.314', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.315', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
