@@ -24,6 +24,24 @@
 curl -sL "https://script.google.com/macros/s/AKfycbyTSUVlaN4-PpXe47zCSmhVs0Qxy1FDXG_XsB4zcKNpqBxdhDtS9ibM4YFGkGjmPQDFWQ/exec?action=ping"
 ```
 
+## 🔴 Telegram не приймає вебхук просто на Apps Script (302) — потрібен релей
+
+Бот рахунків: `setWebhook` на `exec?action=tgInvoiceWebhook&s=…` пройшов (`Webhook was set`), але
+`getWebhookInfo` показав `last_error: "Wrong response from the webhook: 302 Found"`, `pending: 1`.
+Apps Script web app на POST завжди відповідає 302-редіректом на `script.googleusercontent.com`, а
+Telegram за редіректами не йде — вважає доставку невдалою і ретраїть. Це та сама природа, що й
+[[apps-script-post-returns-html]] з боку фронту, але наслідок гірший: апдейт не доходить зовсім.
+
+Рішення — Cloudflare Worker-релей: `_worker/tg-relay.js` (у git, деплоїться вручну в Cloudflare).
+Маршрути `/invoice` → `tgInvoiceWebhook`, `/leads` → `tgWebhook`; змінна `EXEC_URL`. Воркер віддає
+Telegram 200 одразу, а запит до `exec` доробляє у `waitUntil` (холодний Apps Script буває повільним).
+Далі `tgInvoiceSetWebhook {hookUrl:'https://<worker>/invoice?s=<секрет>'}` — параметр `hookUrl` у коді
+був саме під це.
+
+⚠️ Відкрите: як доставляються апдейти БОТА ЛІДІВ. Він працює, отже його вебхук майже напевно вже
+стоїть на якомусь релеї — URL у репозиторії не зафіксований. Перевірити в Cloudflare і записати сюди;
+до того часу вебхук лідів НЕ чіпати.
+
 ## v7.313: діагностика токена бота рахунків
 
 `tgInvoiceSetup` на продіv7.312 віддав «chat_id не знайдено», а справжня причина була в
