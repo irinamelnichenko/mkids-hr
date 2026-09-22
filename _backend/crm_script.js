@@ -1,5 +1,9 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.311
+// m.kids CRM — Google Apps Script v7.312
+// v7.312: БОТ РАХУНКІВ (етапи 0–2) — окремий Telegram-бот (INVOICE_BOT_TOKEN/INVOICE_CHAT_ID/
+//         INVOICE_WEBHOOK_SECRET), лист «Рахунки_Бот» у CONFIG, тонкий вебхук tgInvoiceWebhook
+//         (фото/документ → заявка, свій дедуп update_id), розбір підпису «стаття / локація» за
+//         реєстром локацій. Розпізнавання файлу (етап 3) і звірка з випискою (етап 5) — попереду.
 // v7.311: предметники — урок на (локація, група, предмет, дата) більше не дублюється
 //         (savePredmetnykyLesson / bulkPredmetnykyLessons віддають {ok:true, dup:true, id}),
 //         а місячна норма рахується за УНІКАЛЬНИМИ ДАТАМИ, не за рядками. Привід: Тичини
@@ -2306,6 +2310,322 @@ function _authLogMissing(action, method){    // ЕТАП 1: бачимо, які
     sh.appendRow([formatDate(new Date()), String(action || ''), String(method || '')]);
   } catch(_e){}
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// РАХУНКИ НА ОПЛАТУ · TELEGRAM-БОТ (v7.312) — ЕТАПИ 0–2
+// Директорки кидають у групу фото/PDF рахунку з підписом «Кухня / Кругла».
+// Бот тихо (без реплаїв на кожне повідомлення) зберігає ЗАЯВКУ у лист
+// «Рахунки_Бот» CONFIG-таблиці. Розпізнавання рахунку (постачальник, ЄДРПОУ,
+// сума, номер) — ЕТАП 3, тригером; звірка з випискою — ЕТАП 5 у reconcile.
+//
+// ЧОМУ ВЕБХУК «ТОНКИЙ»: Telegram ретраїть апдейт, якщо не отримав 200 швидко,
+// а скачування файлу + OCR у 30 с не влазять. Тому вебхук ЛИШЕ пише рядок
+// (file_id, підпис, хто, коли) і виходить. Файл живе в Telegram, його візьме
+// етап 3 за file_id.
+//
+// ОКРЕМИЙ БОТ, НЕ ЛІДИ: свій токен INVOICE_BOT_TOKEN, своя група
+// INVOICE_CHAT_ID, свій секрет INVOICE_WEBHOOK_SECRET, свій префікс дедупу.
+// Жодна функція бота лідів не чіпається.
+// ═══════════════════════════════════════════════════════════════════════════
+var INV_SHEET_NAME = 'Рахунки_Бот';
+var INV_HEADER = ['invoice_id','created_at','chat_id','message_id','від кого','тип файлу','file_id',
+  'file_name','підпис','локація','стаття (з підпису)','постачальник','ЄДРПОУ','№ рахунку','сума',
+  'дата рахунку','статус','довіра','matched_ref','дата оплати','лог'];
+// Статуси заявки. «новий» — файл ще не читали (етап 3 його підхопить).
+var INV_ST = {NEW:'новий', PARSED:'розпізнано', PAID:'оплачено', REJECTED:'відхилено', ERR:'помилка'};
+
+function _invProp(k){ return PropertiesService.getScriptProperties().getProperty(k) || ''; }
+function _invTok(){ return _invProp('INVOICE_BOT_TOKEN'); }
+function _invChatId(){ return _invProp('INVOICE_CHAT_ID'); }
+// Виклик Telegram API ТОКЕНОМ БОТА РАХУНКІВ (не плутати з _tgApi бота лідів).
+function _invApi(method, payload){
+  var tok = _invTok();
+  if(!tok) return {ok:false, description:'no INVOICE_BOT_TOKEN'};
+  try{
+    var res = UrlFetchApp.fetch('https://api.telegram.org/bot'+tok+'/'+method, {
+      method:'post', contentType:'application/json',
+      payload: JSON.stringify(payload||{}), muteHttpExceptions:true
+    });
+    return JSON.parse(res.getContentText());
+  } catch(e){ return {ok:false, description:String(e&&e.message||e)}; }
+}
+function _invSend(chatId, text, extra){
+  var p = {chat_id:chatId, text:String(text), parse_mode:'HTML', disable_web_page_preview:true};
+  if(extra) for(var k in extra) p[k]=extra[k];
+  return _invApi('sendMessage', p);
+}
+// Лист заявок у CONFIG-таблиці (поруч із OPEX_Контрагенти та журналами витрат).
+// Схема еволюціонує ДОПИСУВАННЯМ — порядок наявних колонок не зсуваємо.
+function _invSheet(createIfMissing){
+  var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  var sh = ss.getSheetByName(INV_SHEET_NAME);
+  if(!sh){
+    if(!createIfMissing) return null;
+    sh = ss.insertSheet(INV_SHEET_NAME);
+  }
+  var need = INV_HEADER.length;
+  if(sh.getMaxColumns() < need) sh.insertColumnsAfter(sh.getMaxColumns(), need - sh.getMaxColumns());
+  var lastCol = sh.getLastColumn();
+  var hdr = lastCol>0 ? sh.getRange(1,1,1,lastCol).getValues()[0].map(String) : [];
+  var changed = false;
+  for(var i=0;i<need;i++){ if(hdr[i]!==INV_HEADER[i]){ sh.getRange(1,i+1).setValue(INV_HEADER[i]); changed=true; } }
+  if(changed){
+    sh.setFrozenRows(1);
+    // file_id, ЄДРПОУ, № рахунку — ТЕКСТ: Sheets інакше зріже провідні нулі ЄДРПОУ
+    // і перетворить довгий file_id на число в експоненті.
+    ['file_id','ЄДРПОУ','№ рахунку'].forEach(function(c){
+      var ci = INV_HEADER.indexOf(c) + 1;
+      if(ci>0) sh.getRange(1, ci, sh.getMaxRows(), 1).setNumberFormat('@');
+    });
+  }
+  return sh;
+}
+function _invNextId(sh){
+  var last = sh.getLastRow();
+  if(last < 2) return 1;
+  var v = sh.getRange(2,1,last-1,1).getValues(), mx = 0;
+  for(var i=0;i<v.length;i++){ var n = Number(String(v[i][0]||'').replace(/\D/g,'')) || 0; if(n>mx) mx=n; }
+  return mx + 1;
+}
+// Дедуп апдейтів — дзеркало _tgSeen, але СВІЙ префікс ключа: інакше боти
+// ділили б простір update_id і глушили апдейти один одного.
+function _invSeen(updateId){
+  if(updateId==null) return false;
+  var cache = CacheService.getScriptCache(), key = 'invu_'+updateId;
+  var lock = LockService.getScriptLock(), locked = false;
+  try { locked = lock.waitLock(8000); } catch(_le){ locked = false; }
+  try {
+    if(cache.get(key)) return true;
+    cache.put(key, '1', 3600);
+    return false;
+  } finally { if(locked){ try{ lock.releaseLock(); }catch(_){} } }
+}
+
+// ── ЕТАП 2: розбір підпису «Кухня / Кругла» ─────────────────────────────────
+// Роздільник — «/», «\», «·», «—», «,» або перенос рядка. Порядок частин будь-який:
+// локацію впізнаємо за реєстром CONFIG (кеш 5 хв), решта = стаття.
+// Нічого не ВГАДУЄМО: не впізнали локацію — лишаємо порожньою, підпис зберігається
+// цілим у колонці «підпис», тож нічого не губиться.
+function _invLocList(){
+  try {
+    var out = [];
+    (getLocations().data || []).forEach(function(l){ var n = trim(l.loc); if(n) out.push(n); });
+    return out;
+  } catch(_e){ return []; }
+}
+// Гомогліфи: на українській розкладці легко лишити латинську літеру («Круглa»,
+// «Позняки» з латинською «o»). Зводимо обидва боки до кирилиці — різні локації
+// від цього не злипаються (вони відрізняються й іншими літерами).
+var _INV_HOMOGLYPH = {a:'а', c:'с', e:'е', i:'і', o:'о', p:'р', x:'х', y:'у', k:'к', m:'м', t:'т', b:'в', h:'н'};
+function _invNormTight(s){
+  var t = String(s==null?'':s).replace(/[’ʼ`´]/g, "'")
+    .replace(/[\s ]+/g, '').toLowerCase();
+  return t.replace(/[aceiopxykmtbh]/g, function(ch){ return _INV_HOMOGLYPH[ch] || ch; });
+}
+function _invParseCaption(caption){
+  var raw = trim(caption);
+  var out = {caption:raw, loc:'', category:'', unmatched:'', ambiguous:null};
+  if(!raw) return out;
+  var parts = raw.split(/[\/\\·—–\n,]+/).map(function(x){ return trim(x); }).filter(Boolean);
+  var locs = _invLocList(), rest = [];
+  parts.forEach(function(p){
+    if(out.loc){ rest.push(p); return; }
+    // Точний збіг має пріоритет. Префіксний — ЛИШЕ якщо єдиний: «Школа» однаково
+    // підходить і до «Школа 228», і до «Школа Осокорки», а рахунок не в ту локацію
+    // гірший за порожню клітинку, яку видно й легко дописати.
+    var pk = _invNormTight(p), exact = [], pref = [];
+    for(var i=0;i<locs.length;i++){
+      var lk = _invNormTight(locs[i]);
+      if(pk === lk) exact.push(locs[i]);
+      else if(pk.length>=4 && (lk.indexOf(pk)===0 || pk.indexOf(lk)===0)) pref.push(locs[i]);
+    }
+    var hit = (exact.length===1) ? exact[0] : ((!exact.length && pref.length===1) ? pref[0] : '');
+    if(hit) out.loc = hit;
+    else {
+      rest.push(p);
+      if(pref.length>1) out.ambiguous = pref.slice(0,4);   // видно в логу заявки
+    }
+  });
+  out.category = rest.shift() || '';
+  out.unmatched = rest.join(' · ');
+  return out;
+}
+
+// ── ЕТАП 0: налаштування (chat_id + секрет + лист) ──────────────────────────
+// chat_id беремо з body.chatId, з наявної property або з getUpdates (працює,
+// доки вебхук НЕ встановлено — саме тому порядок: setup → setWebhook).
+// POST {action:'tgInvoiceSetup', chatId?, silent?}
+function tgInvoiceSetup(body){
+  body = body || {};
+  try {
+    if(!_invTok()) return {ok:false, error:'нема INVOICE_BOT_TOKEN у Script Properties'};
+    var props = PropertiesService.getScriptProperties();
+    var chatId = trim(body.chatId) || _invChatId();
+    var found = null;
+    if(!chatId){
+      var up = _invApi('getUpdates', {limit:20, allowed_updates:['message','channel_post']});
+      var list = (up && up.result) || [];
+      for(var i=list.length-1;i>=0;i--){
+        var m = list[i].message || list[i].channel_post;
+        if(m && m.chat && m.chat.id){ chatId = String(m.chat.id); found = {title:m.chat.title||'', type:m.chat.type||''}; break; }
+      }
+      if(!chatId) return {ok:false, error:'chat_id не знайдено: напиши будь-що в групі і повтори (getUpdates порожній або вебхук уже стоїть)',
+                          telegram:(up&&up.description)||''};
+    }
+    props.setProperty('INVOICE_CHAT_ID', String(chatId));
+    var secret = _invProp('INVOICE_WEBHOOK_SECRET');
+    if(!secret){ secret = 'inv_' + Utilities.getUuid().replace(/-/g,'').slice(0,24); props.setProperty('INVOICE_WEBHOOK_SECRET', secret); }
+    var sh = _invSheet(true);
+    var send = (body.silent === true) ? {ok:true, skipped:true}
+      : _invSend(chatId, '🧾 <b>Бот рахунків на зв’язку.</b>\nКидайте рахунок фото або файлом, у підписі — <i>стаття / локація</i> (напр. «Кухня / Кругла»).');
+    return {ok:true, chatId:String(chatId), chatFound:found, secretSet:!!secret,
+            sheet:INV_SHEET_NAME, sheetRows:sh.getLastRow(), columns:INV_HEADER.length,
+            sendOk:!!(send&&send.ok), sendErr:(send&&send.ok)?'':((send&&send.description)||'')};
+  } catch(e){ return {ok:false, error:String(e&&e.message||e)}; }
+}
+
+// Реєстрація вебхука бота рахунків: <exec>?action=tgInvoiceWebhook&s=<secret>.
+// allowed_updates включає message — фото і документи приходять БЕЗ text, і без
+// цього поля частина апдейтів просто не доїхала б.
+function tgInvoiceSetWebhook(body){
+  body = body || {};
+  try {
+    var secret = _invProp('INVOICE_WEBHOOK_SECRET');
+    if(!secret) return {ok:false, error:'нема INVOICE_WEBHOOK_SECRET — спершу tgInvoiceSetup'};
+    var hook;
+    if(trim(body.hookUrl)) hook = trim(body.hookUrl);
+    else {
+      var base = trim(body.url) || ScriptApp.getService().getUrl();
+      if(!base) return {ok:false, error:'нема exec-URL — передай url або hookUrl'};
+      hook = base + (base.indexOf('?')>=0?'&':'?') + 'action=tgInvoiceWebhook&s=' + encodeURIComponent(secret);
+    }
+    var r = _invApi('setWebhook', {url:hook, allowed_updates:['message','edited_message'],
+                                   drop_pending_updates:false, secret_token:secret});
+    var info = _invApi('getWebhookInfo', {});
+    return {ok:!!(r&&r.ok), telegram:r, webhookUrlMasked:hook.replace(secret,'***'),
+            info:(info&&info.result)?{url:String(info.result.url||'').replace(secret,'***'),
+              pending:info.result.pending_update_count, last_error:info.result.last_error_message||''}:info};
+  } catch(e){ return {ok:false, error:String(e&&e.message||e)}; }
+}
+
+// ── ЕТАП 1: тихий прийом ────────────────────────────────────────────────────
+// Приймає ЛИШЕ свою групу. Фото/документ → заявка; звичайний текст і решта —
+// мовчки ігноруються (бот не коментує чат). Відповідь у тред — одна, коротка,
+// і лише на сам рахунок: директорка має бачити, що файл прийнято.
+function tgInvoiceWebhook(e){
+  try {
+    var secret = _invProp('INVOICE_WEBHOOK_SECRET');
+    if(!secret || !e || !e.parameter || String(e.parameter.s) !== secret) return {ok:false, error:'bad secret'};
+    var up = {};
+    try { up = JSON.parse(e.postData.contents); } catch(_p){ return {ok:true, note:'no body'}; }
+    if(_invSeen(up.update_id)) return {ok:true, dup:true, update_id:up.update_id};
+    var msg = up.message || up.edited_message || null;
+    if(!msg) return {ok:true, kind:'other'};
+    var allow = String(_invChatId()||'');
+    var chatId = String((msg.chat && msg.chat.id) || '');
+    if(msg.migrate_to_chat_id){
+      PropertiesService.getScriptProperties().setProperty('INVOICE_CHAT_ID', String(msg.migrate_to_chat_id));
+      _tgErr('inv:migrate', 'INVOICE_CHAT_ID '+allow+' → '+msg.migrate_to_chat_id);
+      return {ok:true, migrated:String(msg.migrate_to_chat_id)};
+    }
+    if(allow && chatId && chatId !== allow) return {ok:true, ignored:'chat', chat:chatId};
+
+    // ── файл? ──
+    var kind = '', fileId = '', fileName = '';
+    if(msg.document){
+      kind = 'document';
+      fileId = String(msg.document.file_id||'');
+      fileName = String(msg.document.file_name||'');
+    } else if(msg.photo && msg.photo.length){
+      // Telegram віддає масив розмірів за зростанням — беремо найбільший.
+      var ph = msg.photo[msg.photo.length-1];
+      kind = 'photo';
+      fileId = String(ph.file_id||'');
+      fileName = '';
+    }
+    if(!fileId) return {ok:true, kind:'ignored'};   // текст без файлу — не наша справа
+
+    var cap = _invParseCaption(msg.caption || '');
+    var who = (msg.from && (msg.from.username?('@'+msg.from.username):(msg.from.first_name||''))) || '';
+    var sh = _invSheet(true);
+    var id = _invNextId(sh);
+    var row = [];
+    row[INV_HEADER.indexOf('invoice_id')]        = id;
+    row[INV_HEADER.indexOf('created_at')]        = formatDate(new Date());
+    row[INV_HEADER.indexOf('chat_id')]           = chatId;
+    row[INV_HEADER.indexOf('message_id')]        = String(msg.message_id||'');
+    row[INV_HEADER.indexOf('від кого')]          = who;
+    row[INV_HEADER.indexOf('тип файлу')]         = kind;
+    row[INV_HEADER.indexOf('file_id')]           = fileId;
+    row[INV_HEADER.indexOf('file_name')]         = fileName;
+    row[INV_HEADER.indexOf('підпис')]            = cap.caption;
+    row[INV_HEADER.indexOf('локація')]           = cap.loc;
+    row[INV_HEADER.indexOf('стаття (з підпису)')]= cap.category;
+    row[INV_HEADER.indexOf('статус')]            = INV_ST.NEW;
+    var logParts = [];
+    if(cap.unmatched) logParts.push('решта підпису: '+cap.unmatched);
+    if(cap.ambiguous && cap.ambiguous.length) logParts.push('локація неоднозначна: '+cap.ambiguous.join(' / '));
+    row[INV_HEADER.indexOf('лог')]               = logParts.join(' · ');
+    for(var c=0;c<INV_HEADER.length;c++) if(row[c]===undefined) row[c]='';
+    sh.appendRow(row);
+
+    // Коротка відповідь у тред. Чого бракує — кажемо одразу, щоб не з'ясовувати потім.
+    var miss = [];
+    if(!cap.loc) miss.push('локація');
+    if(!cap.category) miss.push('стаття');
+    var txt = '🧾 Рахунок №'+id+' прийнято'
+            + (cap.loc ? ' · '+cap.loc : '')
+            + (cap.category ? ' · '+cap.category : '')
+            + (miss.length ? '\n⚠️ не вказано: '+miss.join(', ')+' — допишіть у відповідь на це повідомлення' : '');
+    _invSend(chatId, txt, {reply_to_message_id: msg.message_id});
+    return {ok:true, kind:'invoice', id:id, loc:cap.loc, category:cap.category, file:kind};
+  } catch(err){ _tgErr('inv:webhook', err); return {ok:false, error:String(err&&err.message||err)}; }
+}
+
+// Читання заявок (для перевірки й для звірки на етапі 5).
+// GET ?action=getInvoiceRequests[&status=…][&loc=…][&limit=…]
+function getInvoiceRequests(params){
+  try {
+    params = params || {};
+    var sh = _invSheet(false);
+    if(!sh) return {ok:true, items:[], note:'лист «'+INV_SHEET_NAME+'» ще не створено'};
+    var v = sh.getDataRange().getValues();
+    if(v.length < 2) return {ok:true, items:[]};
+    var hdr = v[0].map(String), items = [];
+    var fSt = trim(params.status), fLoc = trim(params.loc);
+    var lim = Number(params.limit) || 500;
+    for(var r=1;r<v.length;r++){
+      if(!v[r][0]) continue;
+      var o = {};
+      for(var c=0;c<hdr.length;c++) o[hdr[c]] = (v[r][c] instanceof Date) ? formatDate(v[r][c]) : String(v[r][c]==null?'':v[r][c]);
+      if(fSt && o['статус'] !== fSt) continue;
+      if(fLoc && o['локація'] !== fLoc) continue;
+      items.push(o);
+      if(items.length >= lim) break;
+    }
+    return {ok:true, items:items, count:items.length};
+  } catch(e){ return {ok:false, error:String(e&&e.message||e)}; }
+}
+
+// DRY-RUN етапів 0–2: що буде створено і як розбереться підпис. Нічого не пише.
+// GET ?action=invoiceBotDryRun[&caption=Кухня / Кругла]
+function invoiceBotDryRun(params){
+  params = params || {};
+  var sh = null; try { sh = _invSheet(false); } catch(_e){}
+  var samples = ['Кухня / Кругла','Оренда — Тичини','Позняки, канцтовари','КУХНЯ/Круглa','без підпису'];
+  if(trim(params.caption)) samples.unshift(trim(params.caption));
+  var parsed = samples.map(function(s){
+    var p = _invParseCaption(s);
+    return {caption:s, loc:p.loc||'(не впізнано)', category:p.category||'(порожньо)', rest:p.unmatched||''};
+  });
+  return {ok:true, dryRun:true,
+    sheet:{name:INV_SHEET_NAME, exists:!!sh, rows:sh?sh.getLastRow():0, columns:INV_HEADER},
+    props:{token:!!_invTok(), chatId:_invChatId()||'(не задано)', secret:_invProp('INVOICE_WEBHOOK_SECRET')?'є':'(не задано)'},
+    routes:{webhook:'POST ?action=tgInvoiceWebhook&s=<secret>', setup:'POST {action:"tgInvoiceSetup"}',
+            setWebhook:'POST {action:"tgInvoiceSetWebhook"}', read:'GET ?action=getInvoiceRequests'},
+    locationsKnown:_invLocList().length, captionSamples:parsed};
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // БОТ ЛІДІВ (Telegram) — ЕТАП 1: фундамент. Токен/чат/секрет — у Script Properties,
 // нічого не хардкодимо. Лист «Ліди_Бот» — сховище лідів.
@@ -5408,7 +5728,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.311', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.312', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -5477,6 +5797,8 @@ function doGet(e) {
     else if (action === 'backupClients')              result = backupClientsAbsences();
     else if (action === 'mergeSplitVacationRows')     result = mergeSplitVacationRows(!(e.parameter && (e.parameter.dryRun === '0' || e.parameter.dryRun === 'false')));
     else if (action === 'mergeOverlappingVacations')  result = mergeOverlappingVacations(!(e.parameter && (e.parameter.dryRun === '0' || e.parameter.dryRun === 'false')));
+    else if (action === 'getInvoiceRequests')         result = getInvoiceRequests(e.parameter || {});   // v7.312 заявки бота рахунків
+    else if (action === 'invoiceBotDryRun')           result = invoiceBotDryRun(e.parameter || {});     // v7.312 dry-run етапів 0–2
     else if (action === 'getChomusykyMarks')          result = getChomusykyMarks(e.parameter || {});
     else if (action === 'getChomusykyReport')         result = getChomusykyReport(e.parameter || {});
     else if (action === 'getSchoolRoster')            result = getSchoolRoster(e.parameter && e.parameter.loc || '');   // v7.205 read-only: клас із картки для локацій типу «Школа»
@@ -5524,6 +5846,8 @@ function doPost(e) {
     // Telegram-вебхук: тіло — update без поля action, ідентифікуємо по ?action=tgWebhook.
     // Оминає _authGate (перевірка — секрет у query), парсить update сам.
     if (e && e.parameter && e.parameter.action === 'tgWebhook') return jsonOut(tgWebhook(e));
+    // v7.312 бот рахунків: свій токен/група/секрет, теж повз _authGate (секрет у query).
+    if (e && e.parameter && e.parameter.action === 'tgInvoiceWebhook') return jsonOut(tgInvoiceWebhook(e));
     // v7.153 форма з сайту: власний секрет у query, тому теж повз _authGate.
     // Поки WEB_LEAD_SECRET не заданий — webLeadIntake сам відмовляє.
     if (e && e.parameter && e.parameter.action === 'webLead')   return jsonOut(webLeadIntake(e));
@@ -5599,6 +5923,8 @@ function doPost(e) {
     else if (body.action === 'snapshotPaymentRoster')     result = snapshotPaymentRosterAndLogDepartures(body || {});   // v7.116 знімок ростера + журнал вибуття
     else if (body.action === 'tgAdminSetup')              result = tgAdminSetup(body || {});   // ЕТАП 1 бот лідів: chat_id+секрет+лист
     else if (body.action === 'tgSetWebhook')              result = tgSetWebhook(body || {});   // ЕТАП 2 бот лідів: реєстрація вебхука
+    else if (body.action === 'tgInvoiceSetup')            result = tgInvoiceSetup(body || {});      // v7.312 бот рахунків: chat_id+секрет+лист
+    else if (body.action === 'tgInvoiceSetWebhook')       result = tgInvoiceSetWebhook(body || {});  // v7.312 бот рахунків: реєстрація вебхука
     else if (body.action === 'tgSeedDirectors')           result = tgSeedDirectors(body || {});   // прив'язка директорів до локацій
     else if (body.action === 'cashPayoutSheet')          result = cashPayoutSheet(body || {});      // v7.64 відомість на видачу готівки (PDF)
     else if (body.action === 'cleanupBackupTabs')        result = cleanupBackupTabs(body || {});  // v7.45 чистка бекап-табів
