@@ -1259,7 +1259,77 @@ async function rcOnFile(input){
   } finally { RC.busy=false; input.value=''; }   // value='' → повторний вибір тих самих файлів спрацює
 }
 // v7.86: повне скидання стану режиму «Витрати» (loc перевизначиться у rcExpLoad через resolveIbanLoc).
+// ═══ v7.320: ЗВІРКА З РАХУНКАМИ З TELEGRAM ════════════════════════════════
+// Заявки збирає бот у листі «Рахунки_Бот»; тут ми даємо бекенду видаткові рядки
+// поточної виписки і показуємо, які заявки закриваються. Виписка на сервер не
+// їде — лише {date, amount, edrpou, counterparty, purpose, ref}.
+var RCINV = {busy:false, res:null, applied:false, err:''};
+function _rcInvPayments(){
+  var out=[];
+  (RC.parsed||[]).forEach(function(pr){
+    (pr.expenses||[]).forEach(function(x){
+      out.push({date:x.date, amount:x.amount, edrpou:x.edrpou,
+                counterparty:x.counterparty, purpose:x.purpose, ref:x.ref});
+    });
+  });
+  return out;
+}
+async function rcInvMatch(apply){
+  if(RCINV.busy) return;
+  var pays=_rcInvPayments();
+  if(!pays.length){ showToast('У виписці немає видаткових операцій','error'); return; }
+  RCINV.busy=true; RCINV.err=''; rcRenderAll();
+  try{
+    var r=await fetch(CFG.SCRIPT_URL,{ method:'POST', redirect:'follow',
+      headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body:JSON.stringify({action:'matchInvoicesToPayments', payments:pays, dryRun:!apply, notify:true}) });
+    var j=await r.json();
+    if(!j.ok){ RCINV.err=j.error||'match failed'; }
+    else { RCINV.res=j; if(apply){ RCINV.applied=true; showToast('✅ Позначено оплаченими: '+(j.marked||0),'success'); } }
+  }catch(e){ RCINV.err=String(e&&e.message||e); }
+  finally{ RCINV.busy=false; rcRenderAll(); }
+}
+function rcRenderInvoices(){
+  var pays=_rcInvPayments();
+  var head='<div class="fc-banner" style="padding:12px 14px;border-radius:12px;background:#eef6ff;border:1px solid #cfe3fb;margin:14px 0 10px">'
+    +'<div><b>🧾 Рахунки з Telegram</b> — звірка заявок бота з цією випискою</div>';
+  if(!pays.length) return head+'<div style="margin-top:6px;color:#6b7a8c">Немає видаткових операцій у завантажених файлах.</div></div>';
+  head+='<div style="margin-top:6px">Видаткових платежів у виписці: <b>'+pays.length+'</b>'
+    +'<button class="btn btn-secondary btn-sm" style="float:right" '+(RCINV.busy?'disabled':'')+' onclick="rcInvMatch(false)">🔍 Звірити</button></div>';
+  if(RCINV.busy) return head+'<div style="margin-top:8px">⏳ Звіряю…</div></div>';
+  if(RCINV.err) return head+'<div style="margin-top:8px;color:var(--red)">❌ '+escapeHtml(RCINV.err)+'</div></div>';
+  var j=RCINV.res;
+  if(!j) return head+'<div style="margin-top:6px;color:#6b7a8c">Натисни «Звірити», щоб побачити, які рахунки закриває ця виписка.</div></div>';
+  var body='<div style="margin-top:8px">Відкритих заявок: <b>'+(j.openCount||0)+'</b> · знайдено оплат: <b>'+(j.willMark||0)+'</b>'
+    + ((j.ambiguousCount||0) ? ' · неоднозначних: <b style="color:#b9770a">'+j.ambiguousCount+'</b>' : '') + '</div>';
+  if((j.matched||[]).length){
+    body+='<table class="inv-table" style="margin-top:8px"><thead><tr><th>№</th><th>Постачальник</th><th>Локація</th>'
+      +'<th>Стаття</th><th class="num">Сума</th><th>Оплата</th><th>Збіг за</th></tr></thead><tbody>'
+      + j.matched.map(function(m){
+          return '<tr><td>'+escapeHtml(String(m.number||m.id))+'</td><td>'+escapeHtml(m.supplier||'—')+'</td>'
+            +'<td>'+escapeHtml(m.loc||'—')+'</td><td>'+escapeHtml(m.category||'—')+'</td>'
+            +'<td class="num">'+fmtUah(m.amount)+'</td><td>'+escapeHtml(m.payDate||'')+'</td>'
+            +'<td style="font-size:11px;color:#5b6b7c">'+escapeHtml(m.by||'')+'</td></tr>';
+        }).join('')
+      +'</tbody></table>';
+    if(!RCINV.applied && !j.marked){
+      body+='<div style="margin-top:8px"><button class="btn btn-primary btn-sm" onclick="rcInvMatch(true)">✅ Позначити оплаченими і повідомити в групу</button>'
+        +' <span style="font-size:12px;color:#6b7a8c">бот напише «✅ Оплачено ДД.ММ» у тред кожного рахунку</span></div>';
+    } else {
+      body+='<div style="margin-top:8px;color:var(--green);font-weight:700">✅ Записано: '+(j.marked||0)+' · повідомлень у групу: '+(j.notified||0)+'</div>';
+    }
+  }
+  if((j.ambiguous||[]).length){
+    body+='<div style="margin-top:10px;font-size:12px;color:#b9770a"><b>Не чіпаю (неоднозначно):</b><br>'
+      + j.ambiguous.map(function(a){
+          return '#'+escapeHtml(String(a.id))+' '+escapeHtml(a.supplier||'')+' '+fmtUah(a.amount)+' — '+escapeHtml(a.why);
+        }).join('<br>') + '</div>';
+  }
+  return head+body+'</div>';
+}
+
 function rcResetOpexState(){
+  RCINV.res=null; RCINV.applied=false; RCINV.err='';   // v7.320: нова виписка — нова звірка
   RC.opex.loaded=false; RC.opex.busy=false;
   RC.opex.loc=''; RC.opex.locAuto=false; RC.opex.locList=[];
   RC.opex.cats=null; RC.opex.sel={}; RC.opex.month=0;
@@ -1989,7 +2059,8 @@ function rcRenderAll(){
   if(RC.mode==='expenses'){
     $('rcSummary').innerHTML='';
     $('rcBanner').innerHTML='';
-    $('rcWrap').innerHTML=rcModeSwitchHtml()+rcRenderExpenses();
+    // v7.320: під таблицею витрат — блок звірки із заявками бота рахунків.
+    $('rcWrap').innerHTML=rcModeSwitchHtml()+rcRenderExpenses()+rcRenderInvoices();
     $('rcApplyBar').style.display='none';
     return;
   }

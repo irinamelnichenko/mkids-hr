@@ -1,5 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.319
+// m.kids CRM — Google Apps Script v7.320
+// v7.320: РАХУНКИ ЕТАПИ 5–6 — matchInvoicesToPayments: заявка ↔ платіж виписки за сумою + (ЄДРПОУ
+//         або № рахунку в призначенні), вікно дат −5/+90 днів, неоднозначність = відмова;
+//         при записі статус «оплачено» + єдине повідомлення бота «✅ Оплачено ДД.ММ» у тред.
 // v7.319: бот рахунків МОВЧИТЬ — прибрано відповіді «Рахунок прийнято» і рядок розпізнавання,
 //         вітання setup лише за silent:false. Єдине майбутнє повідомлення — «✅ Оплачено ДД.ММ».
 // v7.318: сміття з OCR більше не перекриває LLM — «Постачальник:» із шапки таблиці і номер «o»
@@ -3021,6 +3024,184 @@ function ensureInvoiceTrigger(body){
 function invoiceQueueTick(){
   try { processInvoiceQueue({dryRun:false}); }
   catch(e){ _tgErr('inv:tick', e); }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// РАХУНКИ · ЕТАПИ 5–6 (v7.320): ЗВІРКА З ВИПИСКОЮ + «✅ Оплачено»
+// Вхід — витрати з виписки, як їх уже парсить reconcile.html
+// ({date, amount, edrpou, counterparty, purpose, ref}). Виписку на бекенд не
+// вантажимо: вона читається локально в браузері, сюди їдуть лише рядки витрат.
+//
+// ПРАВИЛО МАТЧУ. Сума — обов'язкова умова (±1 копійка). Її САМОЇ замало:
+// два рахунки одного постачальника на однакову суму — звична річ, а помилковий
+// «оплачено» гірший за неоплачений. Тому потрібен ЩЕ ОДИН сигнал:
+//   • ЄДРПОУ заявки == ЄДРПОУ платежу, АБО
+//   • номер рахунку зустрічається у призначенні платежу («згідно рах. № 236»).
+// Вікно дат: платіж не раніше ніж за 5 днів до дати рахунку і не пізніше 90 днів
+// після (рахунок виставляють ДО оплати; 5 днів — запас на описки в даті).
+//
+// НЕОДНОЗНАЧНІСТЬ = ВІДМОВА. Якщо під один платіж підходить кілька заявок (або
+// навпаки) — не пишемо нічого і показуємо це у звіті: хай людина вибере.
+// ═══════════════════════════════════════════════════════════════════════════
+var INV_AMOUNT_EPS   = 0.011;      // копійка з запасом на float
+var INV_DAYS_BEFORE  = 5;          // платіж раніше за рахунок — максимум стільки днів
+var INV_DAYS_AFTER   = 90;
+
+function _invDateMs(v){
+  var s = String(v||'').trim();
+  if(!s) return 0;
+  var m = s.match(/^(\d{1,2})[.\/\-](\d{1,2})[.\/\-](\d{4})/);
+  if(m) return new Date(Number(m[3]), Number(m[2])-1, Number(m[1])).getTime();
+  var iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if(iso) return new Date(Number(iso[1]), Number(iso[2])-1, Number(iso[3])).getTime();
+  var d = new Date(s);
+  return isNaN(d.getTime()) ? 0 : d.getTime();
+}
+function _invDmy(v){
+  var ms = _invDateMs(v);
+  if(!ms) return '';
+  var d = new Date(ms);
+  return ('0'+d.getDate()).slice(-2)+'.'+('0'+(d.getMonth()+1)).slice(-2)+'.'+d.getFullYear();
+}
+// Номер рахунку в призначенні платежу. Порівнюємо «голі» номери: у рахунку
+// «СФ-0000123», у платіжці часто «СФ0000123» або просто «123».
+function _invNumKey(s){
+  return String(s||'').replace(/[^0-9A-Za-zА-Яа-яІЇЄҐіїєґ]/g,'').toLowerCase().replace(/^0+/,'');
+}
+function _invPurposeHasNumber(purpose, number){
+  var nk = _invNumKey(number);
+  if(!nk || nk.length < 2) return false;                    // «№ 5» у призначенні — надто слабкий сигнал
+  // Порівнюємо ЦІЛІ токени, а не підрядки: інакше номер 236 «знаходився» всередині
+  // 2360, і чужий платіж на ту саму суму міг закрити не ту заявку.
+  var toks = String(purpose||'').match(/[0-9A-Za-zА-Яа-яІЇЄҐіїєґ]+/g) || [];
+  var digits = String(number||'').replace(/\D/g,'').replace(/^0+/,'');
+  for(var i=0;i<toks.length;i++){
+    var t = _invNumKey(toks[i]);
+    if(t === nk) return true;                               // «СФ-0000123» → токен «сф0000123»
+    if(digits.length >= 3 && /^\d+$/.test(toks[i]) && t === digits) return true;   // «0000123» ↔ «123»
+  }
+  return false;
+}
+
+// POST {action:'matchInvoicesToPayments', payments:[…], dryRun:true|false, notify:true}
+function matchInvoicesToPayments(body){
+  body = body || {};
+  var dryRun  = (body.dryRun !== false);                    // ЗА ЗАМОВЧУВАННЯМ — тільки показати
+  var notify  = (body.notify !== false);                    // «✅ Оплачено» у тред (лише при записі)
+  var pays    = Array.isArray(body.payments) ? body.payments : [];
+  if(!pays.length) return {ok:false, error:'payments порожній'};
+  try {
+    var sh = _invSheet(false);
+    if(!sh) return {ok:true, matched:[], note:'листа «'+INV_SHEET_NAME+'» ще немає'};
+    var v = sh.getDataRange().getValues();
+    if(v.length < 2) return {ok:true, matched:[]};
+    var H = v[0].map(String);
+    var c = function(n){ return H.indexOf(n); };
+
+    // Відкриті заявки: не «оплачено», із сумою (без суми матчити нічим).
+    var open = [];
+    for(var r=1;r<v.length;r++){
+      if(!v[r][c('invoice_id')]) continue;
+      var st = String(v[r][c('статус')]||'').trim();
+      if(st === INV_ST.PAID) continue;
+      var amt = Number(v[r][c('сума')]) || 0;
+      if(!amt) continue;
+      open.push({
+        rowNum:r+1, id:String(v[r][c('invoice_id')]),
+        amount:amt,
+        edrpou:String(v[r][c('ЄДРПОУ')]||'').replace(/\D/g,''),
+        number:String(v[r][c('№ рахунку')]||'').trim(),
+        supplier:String(v[r][c('постачальник')]||'').trim(),
+        loc:String(v[r][c('локація')]||'').trim(),
+        category:String(v[r][c('стаття (з підпису)')]||'').trim(),
+        invDateMs:_invDateMs(v[r][c('дата рахунку')]),
+        chatId:String(v[r][c('chat_id')]||'').trim(),
+        messageId:String(v[r][c('message_id')]||'').trim()
+      });
+    }
+    if(!open.length) return {ok:true, dryRun:dryRun, matched:[], openCount:0, note:'немає відкритих заявок із сумою'};
+
+    // Кандидати: платіж × заявка.
+    var pairs = [];
+    pays.forEach(function(p, pi){
+      var pAmt = Math.abs(Number(p.amount) || 0);
+      if(!pAmt) return;
+      var pEd  = String(p.edrpou||'').replace(/\D/g,'');
+      var pMs  = _invDateMs(p.date);
+      open.forEach(function(inv){
+        if(Math.abs(inv.amount - pAmt) > INV_AMOUNT_EPS) return;         // сума — умова входу
+        if(inv.invDateMs && pMs){
+          var days = (pMs - inv.invDateMs) / 86400000;
+          if(days < -INV_DAYS_BEFORE || days > INV_DAYS_AFTER) return;
+        }
+        var byEdrpou = !!(pEd && inv.edrpou && pEd === inv.edrpou);
+        var byNumber = _invPurposeHasNumber(p.purpose, inv.number);
+        if(!byEdrpou && !byNumber) return;                                // сама сума — не підстава
+        pairs.push({payIdx:pi, inv:inv, pay:p, byEdrpou:byEdrpou, byNumber:byNumber,
+                    score:(byEdrpou?1:0)+(byNumber?1:0)});
+      });
+    });
+
+    // Неоднозначність в обидва боки → не чіпаємо.
+    var byInv = {}, byPay = {};
+    pairs.forEach(function(x){
+      (byInv[x.inv.id] = byInv[x.inv.id] || []).push(x);
+      (byPay[x.payIdx] = byPay[x.payIdx] || []).push(x);
+    });
+    var good = [], ambiguous = [];
+    pairs.forEach(function(x){
+      if(byInv[x.inv.id].length > 1 || byPay[x.payIdx].length > 1) ambiguous.push(x);
+      else good.push(x);
+    });
+
+    var report = {ok:true, dryRun:dryRun, openCount:open.length, paymentsIn:pays.length,
+      willMark: good.length, ambiguousCount: ambiguous.length,
+      matched: good.map(function(x){
+        return {id:x.inv.id, row:x.inv.rowNum, supplier:x.inv.supplier, loc:x.inv.loc,
+                category:x.inv.category, amount:x.inv.amount, number:x.inv.number,
+                edrpou:x.inv.edrpou, payDate:_invDmy(x.pay.date), ref:String(x.pay.ref||''),
+                counterparty:String(x.pay.counterparty||''),
+                by:(x.byEdrpou?'ЄДРПОУ':'') + (x.byEdrpou&&x.byNumber?'+':'') + (x.byNumber?'№ у призначенні':'')};
+      }),
+      ambiguous: ambiguous.map(function(x){
+        return {id:x.inv.id, amount:x.inv.amount, supplier:x.inv.supplier,
+                payDate:_invDmy(x.pay.date), ref:String(x.pay.ref||''),
+                why:(byInv[x.inv.id].length>1 ? 'кілька платежів на цю заявку' : 'кілька заявок на цей платіж')};
+      })};
+
+    Logger.log('[matchInvoices] %s', JSON.stringify({dry:dryRun, good:good.length, amb:ambiguous.length}));
+    if(dryRun) return report;
+
+    // ── ЗАПИС + «✅ Оплачено ДД.ММ» ──
+    var lock = LockService.getScriptLock();
+    try { lock.waitLock(30000); } catch(_le){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+    try {
+      var marked = 0, notified = 0;
+      good.forEach(function(x){
+        var d = _invDmy(x.pay.date);
+        sh.getRange(x.inv.rowNum, c('статус')+1).setValue(INV_ST.PAID);
+        sh.getRange(x.inv.rowNum, c('дата оплати')+1).setValue(d);
+        sh.getRange(x.inv.rowNum, c('matched_ref')+1).setValue(String(x.pay.ref||''));
+        var prev = String(sh.getRange(x.inv.rowNum, c('лог')+1).getValue()||'');
+        sh.getRange(x.inv.rowNum, c('лог')+1).setValue(
+          (prev ? prev+' · ' : '') + 'оплату знайдено ' + d + ' (' + (x.byEdrpou?'ЄДРПОУ':'') +
+          (x.byEdrpou&&x.byNumber?'+':'') + (x.byNumber?'№':'') + ')');
+        marked++;
+        // ЄДИНЕ повідомлення бота в групу — див. v7.319.
+        if(notify && x.inv.chatId && x.inv.messageId){
+          var res = _invSend(x.inv.chatId, '✅ Оплачено ' + d.slice(0,5),
+                             {reply_to_message_id: x.inv.messageId});
+          if(res && res.ok) notified++;
+          else _tgErr('inv:notify', 'заявка '+x.inv.id+': '+String((res&&res.description)||'no send'));
+        }
+      });
+      SpreadsheetApp.flush();
+      report.marked = marked;
+      report.notified = notified;
+      return report;
+    } finally { try { lock.releaseLock(); } catch(_){} }
+  } catch(e){ _tgErr('inv:match', e); return {ok:false, error:String(e&&e.message||e)}; }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -6125,7 +6306,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.319', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.320', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -6324,6 +6505,7 @@ function doPost(e) {
     else if (body.action === 'tgInvoiceSetWebhook')       result = tgInvoiceSetWebhook(body || {});  // v7.312 бот рахунків: реєстрація вебхука
     else if (body.action === 'processInvoiceQueue')       result = processInvoiceQueue(body || {});  // v7.316 розпізнавання рахунків (dryRun за замовч. false)
     else if (body.action === 'ensureInvoiceTrigger')      result = ensureInvoiceTrigger(body || {}); // v7.316 тригер черги раз на 5 хв
+    else if (body.action === 'matchInvoicesToPayments')   result = matchInvoicesToPayments(body || {}); // v7.320 звірка заявок із випискою (dryRun за замовч.)
     else if (body.action === 'tgSeedDirectors')           result = tgSeedDirectors(body || {});   // прив'язка директорів до локацій
     else if (body.action === 'cashPayoutSheet')          result = cashPayoutSheet(body || {});      // v7.64 відомість на видачу готівки (PDF)
     else if (body.action === 'cleanupBackupTabs')        result = cleanupBackupTabs(body || {});  // v7.45 чистка бекап-табів
