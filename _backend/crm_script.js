@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.316
+// m.kids CRM — Google Apps Script v7.317
+// v7.317: текст із Drive-конвертації беремо експортом Drive REST (text/plain) під токеном скрипта —
+//         DocumentApp.openById вимагав скоуп .../auth/documents, якого вебзастосунок не мав.
 // v7.316: РАХУНКИ ЕТАП 3 — черга розпізнавання: Telegram getFile → Drive-конвертація з OCR →
 //         regex (ЄДРПОУ/№/сума/дата/постачальник), фолбек Claude API (vision) за ANTHROPIC_API_KEY;
 //         тригер invoiceQueueTick раз на 5 хв, лічильник «спроб», відповідь у тред рахунку.
@@ -2742,7 +2744,21 @@ function _invTextFromDrive(blob, name){
     }
     docId = file && (file.id || file.getId && file.getId());
     if(!docId) return {ok:false, error:'Drive не повернув id'};
-    var txt = DocumentApp.openById(docId).getBody().getText();
+    // Текст беремо ЕКСПОРТОМ через Drive REST, а не DocumentApp.openById: останній
+    // вимагає окремий скоуп .../auth/documents, якого в уже авторизованому вебзастосунку
+    // немає — перший прогін упав саме на цьому. Експорт ходить під токеном скрипта і
+    // задовольняється drive-скоупом, який Advanced Drive Service уже дав.
+    var txt = '';
+    try {
+      var r = UrlFetchApp.fetch(
+        'https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(docId) + '/export?mimeType=text%2Fplain',
+        {headers:{Authorization:'Bearer ' + ScriptApp.getOAuthToken()}, muteHttpExceptions:true});
+      if(r.getResponseCode() === 200) txt = r.getContentText();
+      else return {ok:false, error:'Drive export HTTP ' + r.getResponseCode() + ': ' + r.getContentText().slice(0,160)};
+    } catch(_ex){
+      try { txt = DocumentApp.openById(docId).getBody().getText(); }          // резерв, якщо скоуп усе-таки є
+      catch(_de){ return {ok:false, error:'export+DocumentApp: ' + String(_ex && _ex.message || _ex)}; }
+    }
     return {ok:true, text:String(txt||''), chars:String(txt||'').length};
   } catch(e){
     return {ok:false, error:'Drive OCR: '+String(e&&e.message||e)};
@@ -6105,7 +6121,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.316', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.317', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
