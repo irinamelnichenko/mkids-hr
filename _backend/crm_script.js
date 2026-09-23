@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.320
+// m.kids CRM — Google Apps Script v7.321
+// v7.321: matchInvoicesToPayments віддає payEdrpou (ЄДРПОУ платежу) — reconcile за ним знаходить
+//         групу контрагента і підставляє локацію та статтю із заявки в рядок витрати.
 // v7.320: РАХУНКИ ЕТАПИ 5–6 — matchInvoicesToPayments: заявка ↔ платіж виписки за сумою + (ЄДРПОУ
 //         або № рахунку в призначенні), вікно дат −5/+90 днів, неоднозначність = відмова;
 //         при записі статус «оплачено» + єдине повідомлення бота «✅ Оплачено ДД.ММ» у тред.
@@ -3162,6 +3164,9 @@ function matchInvoicesToPayments(body){
                 category:x.inv.category, amount:x.inv.amount, number:x.inv.number,
                 edrpou:x.inv.edrpou, payDate:_invDmy(x.pay.date), ref:String(x.pay.ref||''),
                 counterparty:String(x.pay.counterparty||''),
+                // v7.321: ЄДРПОУ ПЛАТЕЖУ (не заявки) — reconcile будує з нього ключ групи
+                // контрагента, щоб підставити локацію і статтю в потрібний рядок витрат.
+                payEdrpou:String(x.pay.edrpou||'').replace(/\D/g,''),
                 by:(x.byEdrpou?'ЄДРПОУ':'') + (x.byEdrpou&&x.byNumber?'+':'') + (x.byNumber?'№ у призначенні':'')};
       }),
       ambiguous: ambiguous.map(function(x){
@@ -6306,7 +6311,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.320', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.321', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();

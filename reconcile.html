@@ -1263,7 +1263,46 @@ async function rcOnFile(input){
 // Заявки збирає бот у листі «Рахунки_Бот»; тут ми даємо бекенду видаткові рядки
 // поточної виписки і показуємо, які заявки закриваються. Виписка на сервер не
 // їде — лише {date, amount, edrpou, counterparty, purpose, ref}.
-var RCINV = {busy:false, res:null, applied:false, err:''};
+var RCINV = {busy:false, res:null, applied:false, err:'', hints:{}};
+// Стаття із підпису рахунку («вода», «Кухня») — вільний текст, а статті OPEX — фіксований
+// список файлу локації. Зіставляємо нормалізовано: точний збіг, далі однозначний префікс.
+// Неоднозначне або невідоме — НЕ підставляємо: хибна стаття гірша за порожню, бо її
+// не видно оком у списку з 24 позицій.
+function _rcInvNorm(x){ return String(x||'').replace(/[\s\u00A0]+/g,'').toLowerCase(); }
+function _rcInvCatMatch(txt){
+  var k=_rcInvNorm(txt); if(k.length<2) return '';
+  var cats=_rcCats(), exact=[], pref=[];
+  cats.forEach(function(c){
+    var ck=_rcInvNorm(c);
+    if(ck===k) exact.push(c);
+    else if(k.length>=3 && (ck.indexOf(k)===0 || k.indexOf(ck)===0)) pref.push(c);
+  });
+  if(exact.length===1) return exact[0];
+  if(!exact.length && pref.length===1) return pref[0];
+  return '';
+}
+// Підставляє локацію і статтю заявки у відповідний рядок витрат. Ключ групи —
+// rcContractorKey(ЄДРПОУ ПЛАТЕЖУ, назва платника), тому бекенд і віддає payEdrpou.
+function _rcInvApplyHints(j){
+  RCINV.hints={};
+  (j&&j.matched||[]).forEach(function(m){
+    var key=rcContractorKey(m.payEdrpou||m.edrpou, m.counterparty);
+    var cat=_rcInvCatMatch(m.category);
+    var h=RCINV.hints[key];
+    if(!h){ RCINV.hints[key]={loc:m.loc||'', category:cat, raw:m.category||'', ids:[m.id], conflict:false}; return; }
+    h.ids.push(m.id);
+    // Один контрагент — кілька рахунків у цій виписці з РІЗНИМИ локацією/статтею:
+    // рядок витрати один, тож автопідстановка тут була б вгадуванням.
+    if((h.category||'')!==(cat||'') || (h.loc||'')!==(m.loc||'')) h.conflict=true;
+  });
+  Object.keys(RCINV.hints).forEach(function(k){
+    var h=RCINV.hints[k];
+    if(h.conflict) return;
+    var sel=_rcSel(k);
+    if(h.loc) sel.loc=h.loc;                        // локація рядка — з картки рахунку
+    if(h.category && sel.category==null) sel.category=h.category;   // ручний вибір не перебиваємо
+  });
+}
 function _rcInvPayments(){
   var out=[];
   (RC.parsed||[]).forEach(function(pr){
@@ -1285,7 +1324,11 @@ async function rcInvMatch(apply){
       body:JSON.stringify({action:'matchInvoicesToPayments', payments:pays, dryRun:!apply, notify:true}) });
     var j=await r.json();
     if(!j.ok){ RCINV.err=j.error||'match failed'; }
-    else { RCINV.res=j; if(apply){ RCINV.applied=true; showToast('✅ Позначено оплаченими: '+(j.marked||0),'success'); } }
+    else {
+      RCINV.res=j;
+      _rcInvApplyHints(j);                                   // локація+стаття → у рядок витрати
+      if(apply){ RCINV.applied=true; showToast('✅ Позначено оплаченими: '+(j.marked||0),'success'); }
+    }
   }catch(e){ RCINV.err=String(e&&e.message||e); }
   finally{ RCINV.busy=false; rcRenderAll(); }
 }
@@ -1329,7 +1372,7 @@ function rcRenderInvoices(){
 }
 
 function rcResetOpexState(){
-  RCINV.res=null; RCINV.applied=false; RCINV.err='';   // v7.320: нова виписка — нова звірка
+  RCINV.res=null; RCINV.applied=false; RCINV.err=''; RCINV.hints={};   // v7.320: нова виписка — нова звірка
   RC.opex.loaded=false; RC.opex.busy=false;
   RC.opex.loc=''; RC.opex.locAuto=false; RC.opex.locList=[];
   RC.opex.cats=null; RC.opex.sel={}; RC.opex.month=0;
@@ -1767,6 +1810,13 @@ function rcRenderExpenses(){
     var mapBadge = (dest==='salary' && salBinds.length) ? ' <span style="font-size:10px;color:#0a8a5f">·з мапи ФОП ('+salBinds.length+')</span>'
                  : autoFromMap ? ' <span style="font-size:10px;color:#2980b9">·з мапи</span>'
                  : (alwaysManual ? ' <span style="font-size:10px;color:#b9770a">·завжди вручну</span>' : '');
+    // v7.321: звідки взялась стаття, якщо її підставив рахунок із Telegram
+    var invH = RCINV.hints[g.key];
+    if(invH){
+      if(invH.conflict) mapBadge += ' <span style="font-size:10px;color:#b9770a">·кілька рахунків, статтю не ставлю</span>';
+      else if(invH.category) mapBadge += ' <span style="font-size:10px;color:#6f42c1">·з рахунку</span>';
+      else if(invH.raw) mapBadge += ' <span style="font-size:10px;color:#b9770a">·у рахунку «'+escapeHtml(invH.raw)+'», такої статті немає</span>';
+    }
 
     // перемикач призначення
     var destSel='<select onchange="rcExpOnDest('+escAttr(g.key)+',this.value)" style="font-size:11px;margin-bottom:4px">'
