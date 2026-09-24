@@ -1,5 +1,11 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.322
+// m.kids CRM — Google Apps Script v7.323
+// v7.323: _aggregateOneLoc (перезбір локації після нової картки) переписано на спільний _aggLocRows —
+//         той самий код, що й повний прогін: хост віддає блок під-локації (школярі Кар'єрної більше
+//         не двоїлись), «Група» = назва з файлу, пишуться всі 18 колонок (кол. R не зсувається),
+//         хост і під-локації одного файлу перезбираються разом, запобіжник «підозріло мало рядків».
+//         getSchoolRoster: під-локація бере й картки хоста з групою блоку (як агрегат з v7.267).
+//         _VAC_EXCEPTIONS += 'трембачов герман' (Кар'єрна, відпустка 21–25.09 поза літом).
 // v7.322: getVyhovatelRatings — оцінка співробітника тепер ПОКВАРТАЛЬНА (ключ 'РРРР-Q1..Q4'),
 //         старі помісячні 'РРРР-ММ' лишаються історією. Проти подвійного рахунку: якщо за квартал є
 //         квартальна оцінка, місячні того ж кварталу в середнє НЕ йдуть. month=N → квартал місяця або сам місяць.
@@ -6314,7 +6320,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.322', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.323', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -9578,82 +9584,16 @@ function aggregatePayments() {
   var updateStr = formatDate(now);
   var allRows = [];
   var errors  = [];
-  var _cards  = null;   // v7.252: індекс активних карток, читається лише якщо є школа
 
+  var _cardsRef = {cards: null};   // v7.252: індекс активних карток, читається лише якщо є школа
   for (var r = 1; r < configData.length; r++) {
-    var cfgRow    = configData[r];
-    var dir       = trim(cfgRow[0]);
-    var typ       = trim(cfgRow[1]);
-    var loc       = trim(cfgRow[2]);
-    var sheetId   = trim(cfgRow[3]);
-    var sheetName = trim(cfgRow[4]) || 'Payment';
-    if (!loc || !sheetId) continue;
-
+    var cfgRow = configData[r];
+    if (!trim(cfgRow[2]) || !trim(cfgRow[3])) continue;
     try {
-      var ss = SpreadsheetApp.openById(sheetId);
-      var paymentSheet = ss.getSheetByName(sheetName);
-      if (!paymentSheet) paymentSheet = ss.getSheets()[0];
-      var data = paymentSheet.getDataRange().getValues();
-      var cpm         = _paymentColsPerMonth(loc, cfgRow[5]);          // v7.103
-      var monthCol    = detectCurrentMonthCol(data, curJSMonth, cpm);
-      var contractCol = detectContractDateCol(data);
-      Logger.log(loc + ': monthCol=' + monthCol + ', month=' + monthName + ', contractCol=' + contractCol);
-      var groups = parsePaymentSheet(data, monthCol, contractCol, cpm, loc, typ);   // v7.202
-      // v7.253: хост віддає блоки своїх під-локацій — інакше та сама дитина
-      // потрапила б в агрегат двічі (під садком і під школою).
-      var _taken = _subLocsOfHost(loc);
-      if (_taken.length) {
-        var _b4 = groups.length;
-        groups = _dropSubLocBlocks(groups, _taken);
-        Logger.log(loc + ': віддано блоків під-локаціям — ' + (_b4 - groups.length));
-      }
-      // v7.252: у школах ростер — за активними картками, група з картки, дублі
-      // схлопуються. Payment лишається джерелом ЛИШЕ грошей.
-      if (_isSchoolLoc(typ, loc)) {
-        if (_cards === null) _cards = _activeCardsByLoc();
-        var _st = {};
-        groups = _schoolRosterFromCards(groups, loc, _cards, _st);
-        if (_st.skipped) Logger.log(loc + ': ⚠ активних карток немає — ростер лишено за Payment');
-        else Logger.log(loc + ': ростер за картками — ' + _st.kept + ' дітей, ' +
-                        _st.dropped.length + ' без активної картки, ' + _st.merged.length + ' дублів схлопнуто');
-      }
-      Logger.log(loc + ': groups=' + groups.length);
-
-      groups.forEach(function(g) {
-        g.children.forEach(function(ch) {
-          var fs = ch.factStudy || 0;
-          var fv = ch.factEntry || 0;
-          var fe = ch.factExtra || 0;
-          var bd = ch.budExtra  || 0;
-          var bs = ch.budStudy  || 0;
-          var total = fs + fv + fe;
-          var br = bs + bd;
-          var totalNoEntry = fs + fe;
-          var status;
-          if (br === 0 && totalNoEntry === 0) status = 'unknown';
-          else if (totalNoEntry === 0 && br > 0) status = 'nopay';
-          else if (totalNoEntry > br)  status = 'over';
-          else if (totalNoEntry >= br) status = 'paid';
-          else                         status = 'debt';
-          // v7.245: у колонку «Група» пишемо НАЗВУ З ФАЙЛУ (rawGroup), а не
-          // нормалізований тип. Досі табель і додаткові показували «Study-ki
-          // 3-4 Ольга і Соломія», а предметники (беруть групи з карток) —
-          // «Пізнайки»: три екрани про ту саму групу називали її по-різному.
-          // Нормалізований ключ лишається в g.group і далі тримає внутрішню
-          // логіку; сира назва їде і в «Група», і в «Група як у файлі».
-          allRows.push([
-            loc, dir, typ,
-            (g.rawGroup || g.group), g.teacher, ch.name,
-            fs, fv, fe, total, bs, bd, br,
-            status, monthName, updateStr,
-            ch.contractDate || '',
-            g.rawGroup || ''            // v7.222
-          ]);
-        });
-      });
+      Array.prototype.push.apply(allRows, _aggLocRows(cfgRow, curJSMonth, monthName, updateStr, _cardsRef));
     } catch(e) {
-      errors.push(loc + ': ' + e.message);
-      Logger.log('ERROR ' + loc + ': ' + e.message);
+      errors.push(trim(cfgRow[2]) + ': ' + e.message);
+      Logger.log('ERROR ' + trim(cfgRow[2]) + ': ' + e.message);
     }
   }
 
@@ -9675,6 +9615,83 @@ function aggregatePayments() {
   Logger.log('Done: ' + allRows.length + ' rows, ' + errors.length + ' errors');
   return {ok:true, rows:allRows.length, errors:errors, month:monthName, updated:updateStr,
           prevRows:pub.prevRows, backupSheet:pub.backupSheet};
+}
+
+// v7.323: рядки агрегату «Оплати» (18 кол.) для ОДНІЄЇ локації реєстру. Спільне для
+// повного прогону (aggregatePayments) і точкового (_aggregateOneLoc) — досі точковий
+// жив окремою старою копією: не віддавав блок під-локації (школярі Кар'єрної двічі),
+// писав нормалізовану групу замість назви з файлу і лише 17 колонок (R зсувалась).
+// cardsRef = {cards:null} — індекс активних карток, вантажиться ліниво один раз.
+function _aggLocRows(cfgRow, curJSMonth, monthName, updateStr, cardsRef) {
+  var dir       = trim(cfgRow[0]);
+  var typ       = trim(cfgRow[1]);
+  var loc       = trim(cfgRow[2]);
+  var sheetId   = trim(cfgRow[3]);
+  var sheetName = trim(cfgRow[4]) || 'Payment';
+  var rows = [];
+  if (!loc || !sheetId) return rows;
+  var ss = SpreadsheetApp.openById(sheetId);
+  var paymentSheet = ss.getSheetByName(sheetName);
+  if (!paymentSheet) paymentSheet = ss.getSheets()[0];
+  var data = paymentSheet.getDataRange().getValues();
+  var cpm         = _paymentColsPerMonth(loc, cfgRow[5]);          // v7.103
+  var monthCol    = detectCurrentMonthCol(data, curJSMonth, cpm);
+  var contractCol = detectContractDateCol(data);
+  Logger.log(loc + ': monthCol=' + monthCol + ', month=' + monthName + ', contractCol=' + contractCol);
+  var groups = parsePaymentSheet(data, monthCol, contractCol, cpm, loc, typ);   // v7.202
+  // v7.253: хост віддає блоки своїх під-локацій — інакше та сама дитина
+  // потрапила б в агрегат двічі (під садком і під школою).
+  var _taken = _subLocsOfHost(loc);
+  if (_taken.length) {
+    var _b4 = groups.length;
+    groups = _dropSubLocBlocks(groups, _taken);
+    Logger.log(loc + ': віддано блоків під-локаціям — ' + (_b4 - groups.length));
+  }
+  // v7.252: у школах ростер — за активними картками, група з картки, дублі
+  // схлопуються. Payment лишається джерелом ЛИШЕ грошей.
+  if (_isSchoolLoc(typ, loc)) {
+    if (cardsRef.cards === null) cardsRef.cards = _activeCardsByLoc();
+    var _st = {};
+    groups = _schoolRosterFromCards(groups, loc, cardsRef.cards, _st);
+    if (_st.skipped) Logger.log(loc + ': ⚠ активних карток немає — ростер лишено за Payment');
+    else Logger.log(loc + ': ростер за картками — ' + _st.kept + ' дітей, ' +
+                    _st.dropped.length + ' без активної картки, ' + _st.merged.length + ' дублів схлопнуто');
+  }
+  Logger.log(loc + ': groups=' + groups.length);
+
+  groups.forEach(function(g) {
+    g.children.forEach(function(ch) {
+      var fs = ch.factStudy || 0;
+      var fv = ch.factEntry || 0;
+      var fe = ch.factExtra || 0;
+      var bd = ch.budExtra  || 0;
+      var bs = ch.budStudy  || 0;
+      var total = fs + fv + fe;
+      var br = bs + bd;
+      var totalNoEntry = fs + fe;
+      var status;
+      if (br === 0 && totalNoEntry === 0) status = 'unknown';
+      else if (totalNoEntry === 0 && br > 0) status = 'nopay';
+      else if (totalNoEntry > br)  status = 'over';
+      else if (totalNoEntry >= br) status = 'paid';
+      else                         status = 'debt';
+      // v7.245: у колонку «Група» пишемо НАЗВУ З ФАЙЛУ (rawGroup), а не
+      // нормалізований тип. Досі табель і додаткові показували «Study-ki
+      // 3-4 Ольга і Соломія», а предметники (беруть групи з карток) —
+      // «Пізнайки»: три екрани про ту саму групу називали її по-різному.
+      // Нормалізований ключ лишається в g.group і далі тримає внутрішню
+      // логіку; сира назва їде і в «Група», і в «Група як у файлі».
+      rows.push([
+        loc, dir, typ,
+        (g.rawGroup || g.group), g.teacher, ch.name,
+        fs, fv, fe, total, bs, bd, br,
+        status, monthName, updateStr,
+        ch.contractDate || '',
+        g.rawGroup || ''            // v7.222
+      ]);
+    });
+  });
+  return rows;
 }
 
 function detectContractDateCol(data) {
@@ -20110,6 +20127,8 @@ var _VAC_EXCEPTIONS = [
   // літом. Ключ = _normForMatch(ПІБ картки). Мельничук Дарина вже вище.
   'волощук олівія','нагачевська софія','якимець артур','димарчук аделіна','подоляк божена',
   'терешко макар','мельничук ксенія','шиш устим','черних поліна',
+  // v7.323 (24.09.2026): Кар'єрна, Preschool, договір до 01.10.2025 — відпустка 21–25.09 поза літом.
+  'трембачов герман',
 ];
 // preschool-відпустка зараховується як standard ЛИШЕ якщо весь період у літі
 // (місяці from і to в межах 06–08) — дзеркало saveAbsencePeriod у clients.html.
@@ -21127,44 +21146,58 @@ function _bustPayCache(){ try { var c = CacheService.getScriptCache(); if (c) c.
 
 // Переагрегація ЛИШЕ однієї локації в лист «Оплати»: інші локації лишаються як є,
 // рядки цієї локації перечитуються з живого Payment-файлу (поточний місяць).
+// v7.323: рядки будує той самий _aggLocRows, що й повний прогін (під-локації, школи
+// за картками, назва групи з файлу, 18 колонок). Хост і його під-локації ділять один
+// Payment-файл, тож перезбираються РАЗОМ. Нові рядки стають на місце старих (порядок
+// локацій не змінюється), усі 18 колонок пишуться цілим блоком — R більше не зсувається.
 function _aggregateOneLoc(loc){
   loc = String(loc || '').trim();
   if (!loc) return {ok:false, error:'loc обовʼязковий'};
+  var AGG_COLS = 18;
   try {
     var configSS = SpreadsheetApp.openById(CONFIG_SHEET_ID);
     var configData = configSS.getSheets()[0].getDataRange().getValues();
-    var cfg = null;
-    for (var r = 1; r < configData.length; r++){ if (trim(configData[r][2]) === loc){ cfg = configData[r]; break; } }
-    if (!cfg) return {ok:false, error:'Локацію "'+loc+'" не знайдено в реєстрі'};
-    var dir = trim(cfg[0]), typ = trim(cfg[1]), sheetId = trim(cfg[3]), sheetName = trim(cfg[4]) || 'Payment';
-    if (!sheetId) return {ok:false, error:'Немає sheetId для "'+loc+'"'};
+    // Сім'я локацій одного Payment-файлу: сама loc + хост + усі під-локації хоста.
+    var sub = _subLocOf(loc), host = sub ? sub.host : loc;
+    var family = {}; family[_nameFold(loc)] = true; family[_nameFold(host)] = true;
+    _subLocsOfHost(host).forEach(function(s){ family[_nameFold(s.loc)] = true; });
+    var cfgs = [];
+    for (var r = 1; r < configData.length; r++){ if (family[_nameFold(configData[r][2])]) cfgs.push(configData[r]); }
+    if (!cfgs.some(function(c){ return trim(c[2]) === loc; })) return {ok:false, error:'Локацію "'+loc+'" не знайдено в реєстрі'};
     var now = new Date(), curJSMonth = now.getMonth(), monthName = getMonthDisplayName(curJSMonth), updateStr = formatDate(now);
-    var pss = SpreadsheetApp.openById(sheetId), psh = pss.getSheetByName(sheetName) || pss.getSheets()[0];
-    var pdata = psh.getDataRange().getValues();
-    var cpm = _paymentColsPerMonth(loc, cfg[5]);
-    var monthCol = detectCurrentMonthCol(pdata, curJSMonth, cpm), contractCol = detectContractDateCol(pdata);
-    var groups = parsePaymentSheet(pdata, monthCol, contractCol, cpm, loc, typ), locRows = [];   // v7.202
-    groups.forEach(function(g){ g.children.forEach(function(ch){
-      var fs = ch.factStudy||0, fv = ch.factEntry||0, fe = ch.factExtra||0, bd = ch.budExtra||0, bs = ch.budStudy||0;
-      var total = fs+fv+fe, br = bs+bd, tne = fs+fe, status;
-      if (br===0 && tne===0) status='unknown'; else if (tne===0 && br>0) status='nopay';
-      else if (tne>br) status='over'; else if (tne>=br) status='paid'; else status='debt';
-      locRows.push([loc, dir, typ, g.group, g.teacher, ch.name, fs, fv, fe, total, bs, bd, br, status, monthName, updateStr, ch.contractDate||'']);
-    }); });
+    var cardsRef = {cards: null}, locRows = [];
+    cfgs.forEach(function(c){ Array.prototype.push.apply(locRows, _aggLocRows(c, curJSMonth, monthName, updateStr, cardsRef)); });
+
     var crmSS = getCRMSpreadsheet();
     var agg = crmSS.getSheetByName(SHEET_PAYMENTS);
     if (!agg){ agg = crmSS.insertSheet(SHEET_PAYMENTS, 0); writePaymentsHeader(agg); }
-    var av = agg.getDataRange().getValues(), other = [];
-    for (var i = 1; i < av.length; i++){ if (!av[i][0]) continue; if (trim(String(av[i][0])) !== loc) other.push(av[i].slice(0,17)); }
-    var out = other.concat(locRows);
     var lock = LockService.getScriptLock();
     try { lock.waitLock(30000); } catch(e){ return {ok:false, error:'LOCK_TIMEOUT'}; }
     try {
-      if (agg.getLastRow() > 1) agg.getRange(2, 1, agg.getLastRow()-1, 17).clearContent();
-      if (out.length) agg.getRange(2, 1, out.length, 17).setValues(out);
+      var lastRow = agg.getLastRow(), lastCol = Math.max(agg.getLastColumn(), AGG_COLS);
+      var av = lastRow > 1 ? agg.getRange(2, 1, lastRow - 1, lastCol).getValues() : [];
+      var out = [], inserted = false, oldCount = 0;
+      av.forEach(function(row){
+        if (!row[0]) return;                                   // порожні/осиротілі рядки не переносимо
+        if (family[_nameFold(row[0])]){
+          oldCount++;
+          if (!inserted){ Array.prototype.push.apply(out, locRows); inserted = true; }
+          return;
+        }
+        var rr = row.slice(0, AGG_COLS); while (rr.length < AGG_COLS) rr.push('');
+        out.push(rr);
+      });
+      if (!inserted) Array.prototype.push.apply(out, locRows);
+      // Запобіжник як у _publishAggregate: локація, що раптом «спорожніла», — це збій читання.
+      if (oldCount >= 5 && locRows.length < oldCount / 2)
+        return {ok:false, error:'Підозріло мало рядків: було ' + oldCount + ', стало ' + locRows.length + ' — агрегат не змінено'};
+      if (agg.getRange(1, AGG_COLS).getValue() === '') agg.getRange(1, AGG_COLS).setValue('Група як у файлі');
+      if (lastRow > 1) agg.getRange(2, 1, lastRow - 1, lastCol).clearContent();
+      if (out.length) agg.getRange(2, 1, out.length, AGG_COLS).setValues(out);
       _bustPayCache();
+      return {ok:true, loc:loc, locs:cfgs.map(function(c){ return trim(c[2]); }), locRows:locRows.length,
+              oldLocRows:oldCount, totalRows:out.length};
     } finally { try { lock.releaseLock(); } catch(_){} }
-    return {ok:true, loc:loc, locRows:locRows.length, totalRows:out.length};
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 
@@ -30434,8 +30467,14 @@ function getSchoolRoster(loc){
 
   var byName = {}, seenGrp = {}, groups = [], skippedNoGroup = 0, skippedStatus = 0;
   var inactive = [], seenInact = {};
+  // v7.323: під-локація («Школа Кар'єрна») бере й картки ХОСТА з групою свого блоку —
+  // як _schoolRosterFromCards (v7.267): школярі живуть під «Кар'єрна», група «Школа».
+  var _sub = _subLocOf(loc);
   for (var r = 0; r < data.length; r++){
-    if (_normForMatch(data[r][cLoc - lo]) !== _normForMatch(loc)) continue;
+    var _cl = _normForMatch(data[r][cLoc - lo]);
+    var _mine = (_cl === _normForMatch(loc)) ||
+      (_sub && _cl === _normForMatch(_sub.host) && _nameFold(data[r][cGrp - lo]) === _nameFold(_sub.group));
+    if (!_mine) continue;
     var nm = String(data[r][cName - lo] || '').trim();
     if (!nm) continue;
     var st = (cSt >= 0) ? String(data[r][cSt - lo] || '').trim() : 'active';
