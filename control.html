@@ -301,6 +301,22 @@ select,input{font-family:inherit}
            onclick="window.location.href='leads.html'">
         <span class="ni">🎯</span> Ліди
       </div>
+      <script>
+      /* v7.337: «Ліди» — reveal() одразу після самого пункту меню, а не в кінці сторінки. Досі на 12 сторінках
+         стартовий код (IIFE при розборі) кликав applyRoleVisibility ДО того, як кінцевий скрипт її обгортав,
+         і пункт показувався лише на load + 600 мс — «Ліди» зникали й поверталися при кожному переході.
+         Роль беремо з S.user, а поки стартовий код не спрацював — прямо із сесії в localStorage. */
+      window.NAV_LEADS_ALLOW = ['hr','cfo','cco','legal','cmo'];   // v7.237: без director; v7.326: без CEO/COO/HR/R&D
+      window._revealLeadsMenu = function(){
+        var el = document.getElementById('navLeads'); if (!el) return;
+        var u = null;
+        try { u = (typeof S !== 'undefined' && S && S.user) ? S.user : null; } catch(e){}
+        if (!u){ try { var s = JSON.parse(localStorage.getItem('mkids_session') || 'null'); u = (s && s.user) || null; } catch(e){} }
+        if (!u){ el.style.display = 'none'; return; }
+        el.style.display = window.NAV_LEADS_ALLOW.indexOf(String(u.role || '').toLowerCase().trim()) !== -1 ? '' : 'none';
+      };
+      window._revealLeadsMenu();
+      </script>
 
       <div class="nav-item active" id="navFillControl" style="display:none"
            onclick="window.location.href='control.html'">
@@ -1290,14 +1306,9 @@ setInterval(function(){ try{ if(document.visibilityState==='visible' && typeof l
 <script>
 /* v7.152: пункт «Ліди» — мережеві ролі + директорка; решті не показуємо. */
 (function(){
-  var ALLOW=['hr','cfo','cco','legal','cmo'];   // v7.237: без director; v7.326: без CEO/COO/HR/R&D
-  function reveal(){
-    var el=document.getElementById('navLeads'); if(!el) return;
-    var u=null; try{ u=(typeof S!=='undefined'&&S&&S.user)?S.user:null; }catch(e){}   // v7.242: див. canSeeMeals
-    if(!u){ el.style.display='none'; return; }
-    el.style.display = ALLOW.indexOf(String(u.role||'').toLowerCase().trim())!==-1 ? '' : 'none';
-  }
-  window._revealLeadsMenu=reveal;
+  // v7.337: reveal() визначено одразу після пункту «Ліди» в меню; тут — лише перезапуск після входу/зміни ролі.
+  var reveal = window._revealLeadsMenu;
+  if (typeof reveal !== 'function') return;
   if(typeof applyRoleVisibility==='function'){
     var _o=applyRoleVisibility;
     applyRoleVisibility=function(){ var r=_o.apply(this,arguments); try{reveal();}catch(e){} return r; };

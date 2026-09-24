@@ -24,6 +24,15 @@
 curl -sL "https://script.google.com/macros/s/AKfycbyTSUVlaN4-PpXe47zCSmhVs0Qxy1FDXG_XsB4zcKNpqBxdhDtS9ibM4YFGkGjmPQDFWQ/exec?action=ping"
 ```
 
+## v7.337 (лише фронт): «Ліди» з'являються одразу з рештою меню
+
+Для CFO «Ліди» видно на всіх 15 сторінках, але на 12 (analytics, categories, activities, control, invoices,
+clients, reconcile, predmetnyky, salary_reconcile; salary/opex/tasks — трохи раніше) лише на load + 600 мс:
+стартовий IIFE кликав applyRoleVisibility ДО того, як кінцевий скрипт її обгортав reveal() — пункт зникав і
+повертався при кожному переході. Тепер reveal() (window._revealLeadsMenu) і список ролей (NAV_LEADS_ALLOW)
+визначені одразу після пункту «Ліди» в меню й викликаються там же: роль із S.user, а до старту — із сесії в
+localStorage. Кінцевий блок лише перезапускає reveal() після входу/зміни ролі. sw v7.337.
+
 ## v7.336: getClients — кеш, легкий режим, картки одразу
 
 Заміри перед змінами: «1,7 МБ» — старий формат; сторінки вже беруть compact — 865 КБ, по мережі gzip ~100 КБ
