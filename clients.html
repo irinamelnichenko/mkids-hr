@@ -713,7 +713,7 @@ details.card>summary::-webkit-details-marker{display:none}details.card[open]>sum
         <div id="tpPayStatus" data-permission="card-child-payments" style="margin-bottom:14px"></div>
         <div class="section-hd">Основна інформація</div>
         <div class="g2">
-          <div class="fg"><label>ПІБ дитини</label><input type="text" id="fName" placeholder="Прізвище Ім'я По-батькові"></div>
+          <div class="fg"><label>Прізвище та ім'я</label><input type="text" id="fName" placeholder="Прізвище Ім'я"></div>
           <div class="fg"><label>Дата народження</label><input type="date" lang="uk" id="fBday"></div>
         </div>
         <div class="g2">
@@ -7390,7 +7390,7 @@ function renderArchive(){
   var dateArrow=(S.archSort==='date')?' ▼':'';
   var locArrow=(S.archSort==='loc')?' ▲':'';
   html+='<div class="card"><div class="tbl-wrap"><table><thead><tr>'
-    +'<th>ПІБ дитини</th>'
+    +'<th>Прізвище та ім\'я</th>'
     +'<th onclick="S.archSort=\'loc\';renderArchive()" style="cursor:pointer">Локація'+locArrow+'</th>'
     +'<th>Група</th>'
     +'<th onclick="S.archSort=\'date\';renderArchive()" style="cursor:pointer">Дата'+dateArrow+'</th>'
@@ -7449,7 +7449,7 @@ function deleteChild(){
 // ─── SAVE ─────────────────────────────────────────────────────────────────────
 function saveChild(){
   var name=document.getElementById('fName').value.trim();
-  if(!name){ alert('Вкажіть ПІБ дитини'); return; }
+  if(!name){ alert('Вкажіть прізвище та ім\'я дитини'); return; }
 
   var loc, group, teacher;
   if(S.isNew){
