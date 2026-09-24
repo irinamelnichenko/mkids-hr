@@ -1,5 +1,9 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.331
+// m.kids CRM — Google Apps Script v7.333
+// v7.333: «Авторизація_Лог» — лічильник у CacheService по годинах замість appendRow на кожен виклик без
+//         токена (було +1–2 с людині); зведення за минулі години дописується раз на годину (5 колонок,
+//         + причина: none / malformed / bad-sig / expired). Недійсний НАДІСЛАНИЙ токен → authStale першим
+//         полем відповіді (jsonOut) → сторінка один раз просить увійти знову. getAuthLog скидає кеш перед читанням.
 // v7.331: зведення ЗП — файли Salary читаються одним пакетом (UrlFetchApp.fetchAll → Sheets API,
 //         запасний шлях — SpreadsheetApp), кеш по кожній локації 30 хв, експорти скидають лише свою
 //         локацію (_salaryBump). diagSalaryOverviewCompare — звірка старого й нового способу поруч.
@@ -2289,6 +2293,7 @@ function webLeadIntake(e){
 //   ЕТАП 2 (прапорець AUTH_ENFORCE='1' у Script Properties): відмова без токена + роль/локація з токена.
 // ping і authenticate — завжди без токена.
 // ═══════════════════════════════════════════════════════════════════════════
+var _AUTH_STALE = '';                     // v7.333: причина відхилення НАДІСЛАНОГО токена ('' = не було/ок)
 var _CURRENT_AUTH = null;                 // виставляється гейтом на час ОДНОГО запиту
 var AUTH_LOG_SHEET = 'Авторизація_Лог';
 var AUTH_LOG_MAX   = 5000;   // стеля рядків логу
@@ -2348,17 +2353,70 @@ function _resolveActorId(actorId){
   if (_authEnforceOn() && _CURRENT_AUTH && _CURRENT_AUTH.id) return Number(_CURRENT_AUTH.id);
   return Number(actorId) || 0;
 }
-function _authLogMissing(action, method){    // ЕТАП 1: бачимо, які виклики прийшли без токена
+// v7.333: чому токен не прийнято: 'none' | 'malformed' | 'bad-sig' | 'expired'.
+function _tokenProblem(token){
+  token = String(token || ''); if (!token) return 'none';
+  var dot = token.indexOf('.'); if (dot <= 0) return 'malformed';
   try {
-    var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
-    var sh = ss.getSheetByName(AUTH_LOG_SHEET);
-    if (!sh){ sh = ss.insertSheet(AUTH_LOG_SHEET); sh.getRange(1,1,1,3).setValues([['Коли','action','method']]); sh.setFrozenRows(1); }
-    // v7.151: було `if (getLastRow() > 5000) return;` — лог МОВЧКИ вмирав назавжди
-    // і виглядав як «викликів без токена більше немає». Тепер ротація по колу.
-    var _lr = sh.getLastRow();
-    if (_lr > AUTH_LOG_MAX) sh.deleteRows(2, Math.min(AUTH_LOG_TRIM, _lr - 1));   // рядок 1 = заголовок
-    sh.appendRow([formatDate(new Date()), String(action || ''), String(method || '')]);
+    var pj = Utilities.newBlob(Utilities.base64DecodeWebSafe(token.slice(0, dot))).getDataAsString();
+    if (token.slice(dot + 1) !== _authHmac(pj)) return 'bad-sig';
+    var p = JSON.parse(pj);
+    if (!p || !p.exp || Date.now() > Number(p.exp)) return 'expired';
+    return 'ok';
+  } catch(_e){ return 'malformed'; }
+}
+// v7.333: ЛОГ ВИКЛИКІВ БЕЗ ТОКЕНА — через CacheService, а не appendRow на кожен виклик.
+//   Було: кожен виклик без токена відкривав CONFIG і дописував рядок (~1–2 с затримки ЛЮДИНІ).
+//   Стало: лічильник у кеші по годинах {action|method|причина: к-сть} (~мс); зведення за минулі години
+//   дописується в «Авторизація_Лог» одним appendRows першим викликом наступної години (раз на годину,
+//   лок tryLock(0) — без черг). Рядок: Коли (година) | action | method | причина | кількість.
+//   Лічильник може недорахувати одиничні збіги (дві паралельні правки ключа) — це діагностика, не облік.
+var AUTHLOG_TTL = 21600;
+function _authLogHour(){ return Utilities.formatDate(new Date(), 'Europe/Kiev', 'yyyy-MM-dd HH'); }
+function _authLogMissing(action, method, reason){    // ЕТАП 1: бачимо, які виклики прийшли без токена
+  try {
+    var c = CacheService.getScriptCache(), hour = _authLogHour(), key = 'authlog_' + hour;
+    var got = c.getAll([key, 'authlog_hours']);
+    var m = {}; try { m = JSON.parse(got[key] || '{}') || {}; } catch(_p){ m = {}; }
+    var hs = []; try { hs = JSON.parse(got['authlog_hours'] || '[]') || []; } catch(_h){ hs = []; }
+    var k = [String(action || ''), String(method || ''), String(reason || '')].join('|');
+    m[k] = (m[k] || 0) + 1;
+    var put = {}; put[key] = JSON.stringify(m);
+    if (hs.indexOf(hour) < 0){ hs.push(hour); put['authlog_hours'] = JSON.stringify(hs); }
+    c.putAll(put, AUTHLOG_TTL);
+    if (hs.some(function(h){ return h < hour; })) _authLogFlush(false);
   } catch(_e){}
+}
+// Дописує зведення з кешу в аркуш. all=false — лише завершені години; all=true — і поточну.
+function _authLogFlush(all){
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(0)) return {ok:true, skipped:'lock'};
+  try {
+    var c = CacheService.getScriptCache(), cur = _authLogHour();
+    var hs = []; try { hs = JSON.parse(c.get('authlog_hours') || '[]') || []; } catch(_h){ hs = []; }
+    var todo = hs.filter(function(h){ return all || h < cur; }).sort();
+    if (!todo.length) return {ok:true, rows:0};
+    var got = c.getAll(todo.map(function(h){ return 'authlog_' + h; }));
+    var rows = [];
+    todo.forEach(function(h){
+      var m = {}; try { m = JSON.parse(got['authlog_' + h] || '{}') || {}; } catch(_p){ m = {}; }
+      Object.keys(m).sort().forEach(function(k){ var p = k.split('|'); rows.push([h + ':00', p[0], p[1], p[2] || '', m[k]]); });
+    });
+    if (rows.length){
+      var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+      var sh = ss.getSheetByName(AUTH_LOG_SHEET);
+      if (!sh){ sh = ss.insertSheet(AUTH_LOG_SHEET); sh.setFrozenRows(1); }
+      sh.getRange(1, 1, 1, 5).setValues([['Коли', 'action', 'method', 'причина', 'кількість']]);
+      var _lr = sh.getLastRow();
+      if (_lr > AUTH_LOG_MAX) sh.deleteRows(2, Math.min(AUTH_LOG_TRIM, _lr - 1));   // рядок 1 = заголовок
+      sh.getRange(sh.getLastRow() + 1, 1, rows.length, 5).setValues(rows);
+    }
+    c.removeAll(todo.map(function(h){ return 'authlog_' + h; }));
+    var rest = hs.filter(function(h){ return todo.indexOf(h) < 0; });
+    c.put('authlog_hours', JSON.stringify(rest), AUTHLOG_TTL);
+    return {ok:true, rows:rows.length, hours:todo};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { try { lock.releaseLock(); } catch(_r){} }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -6374,6 +6432,7 @@ function tgGetUpdates(){
 }
 // v7.118: діагностика ЕТАПу 1 — читаємо «Авторизація_Лог» (хто приходив без токена).
 function getAuthLog(){
+  try { _authLogFlush(true); } catch(_f){}   // v7.333: у відповіді — і поточна година з кешу
   try {
     var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
     var sh = ss.getSheetByName(AUTH_LOG_SHEET);
@@ -6385,11 +6444,16 @@ function getAuthLog(){
 }
 // Гейт: null → пропускаємо; обʼєкт-відмова → блокуємо (лише коли AUTH_ENFORCE).
 function _authGate(action, token, method){
-  _CURRENT_AUTH = null;
+  _CURRENT_AUTH = null; _AUTH_STALE = '';
   if (action === 'ping' || action === 'authenticate') return null;       // завжди без токена
   var payload = _verifyToken(token);
   if (payload){ _CURRENT_AUTH = payload; return null; }                   // валідний токен
-  _authLogMissing(action, method);                                       // ЕТАП 1: лог
+  // v7.333: причина — «немає» чи токен є, але не прийнятий (чужий підпис / прострочено). В останньому
+  // разі відповідь несе authStale — сторінка один раз просить увійти знову (у режимі «лише записувати»
+  // відмови немає, тож без цього людина тижнями працювала з недійсним токеном і писала рядок на кожен запит).
+  var why = token ? _tokenProblem(token) : 'none';
+  if (token) _AUTH_STALE = why;
+  _authLogMissing(action, method, why);                                  // ЕТАП 1: лог (v7.333 — через кеш)
   if (_authEnforceOn()) return {ok:false, code:'AUTH', error:'Не авторизовано (потрібен токен)'};  // ЕТАП 2
   return null;                                                           // ЕТАП 1: пропускаємо
 }
@@ -6400,7 +6464,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.331', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.333', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -6696,6 +6760,10 @@ var _PRED_WRITE_ACTIONS = {
 };
 
 function jsonOut(data) {
+  // v7.333: authStale ПЕРШИМ полем — сторінка ловить його в першому ж шматку відповіді (_watch).
+  if (_AUTH_STALE && _AUTH_STALE !== 'none' && _AUTH_STALE !== 'ok' && data && typeof data === 'object' && !Array.isArray(data)){
+    var o = {authStale: _AUTH_STALE}; for (var k in data) if (data.hasOwnProperty(k)) o[k] = data[k]; data = o;
+  }
   return ContentService
     .createTextOutput(JSON.stringify(data))
     .setMimeType(ContentService.MimeType.JSON);

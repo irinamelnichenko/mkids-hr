@@ -1162,6 +1162,12 @@ var SESSION_TTL_MS = 7 * 24 * 3600 * 1000;
           if (res && res.value){
             var s = new TextDecoder('utf-8').decode(res.value);
             if (s.indexOf('"AUTH"') >= 0 && s.indexOf('Не авторизовано') >= 0) _kick();
+            /* v7.333: бекенд не прийняв ЦЕЙ токен (прострочений / чужий підпис) — один раз на перелогін.
+               Запам'ятовуємо токен, щоб не зациклитись, якщо й новий раптом не прийметься. */
+            else if (s.indexOf('"authStale"') >= 0){
+              var _st = _tok(), _lastSt = ''; try { _lastSt = localStorage.getItem('mk_stale_tok') || ''; } catch(_e){}
+              if (_st && _st !== _lastSt){ try { localStorage.setItem('mk_stale_tok', _st); } catch(_e){} _kick(); }
+            }
           }
         } catch(_e){}
         try { rd.cancel(); } catch(_e){}
@@ -1420,16 +1426,9 @@ async function loadUsersForDropdown(){
   if (!sel) return;
   // 1) МИТТЄВО — hardcoded список (гарантовано клікабельно, без очікування).
   _renderMgmtOptions(MGMT_FALLBACK);
-  // 2) У фоні — живий список з таймаутом 8с; оновлюємо лише при успіху.
-  try {
-    var timeout = new Promise(function(_, rej){ setTimeout(function(){ rej(new Error('timeout')); }, 8000); });
-    var json = await Promise.race([_fetchUsersOnce(), timeout]);
-    if (json && json.ok && Array.isArray(json.users) && json.users.length){
-      _renderMgmtOptions(json.users);
-    }
-  } catch(e){
-    console.warn('[loadUsersForDropdown] live refresh failed — using hardcoded fallback:', e);
-  }
+  // v7.333: живий getUsers з екрана входу ПРИБРАНО. З v7.109 getUsers віддає список лише CFO, а тут
+  // токена ще немає — виклик ЗАВЖДИ отримував PERM_DENIED (≈244 рядки/тиждень у «Авторизація_Лог»,
+  // +1–2 с на кожен), і екран однаково показував MGMT_FALLBACK. Діагностика — diagLoginTabs().
 }
 
 // Діагностика з консолі: diagLoginTabs() — показує що повертає getUsers і
@@ -1499,6 +1498,7 @@ async function doLoginMain(){
     S.f = {loc:'',pos:'',status:'працює',dir:'',typ:''};
     S.q = '';
     saveSession(S.user, json.token);   // v7.110 токен
+    try { _loadClosedMonths(); } catch(_cm){}   // v7.333: закриті місяці — вже з токеном
     document.getElementById('loginScreen').classList.add('hidden');
     document.getElementById('app').classList.remove('hidden');
     updUserUI(); await initApp();
@@ -1536,6 +1536,7 @@ async function doLoginLocation(role, locFieldId, pwFieldId){
     S.f = {loc:'',pos:'',status:'працює',dir:'',typ:''};
     S.q = '';
     saveSession(S.user, json.token);   // v7.110 токен
+    try { _loadClosedMonths(); } catch(_cm){}   // v7.333: закриті місяці — вже з токеном
     // Вихователь не має доступу до Дашборду — одразу на Додаткові заняття.
     if (S.user.role === 'vyhovatel'){ window.location.href = 'activities.html'; return; }
     document.getElementById('loginScreen').classList.add('hidden');
@@ -2200,14 +2201,18 @@ function _isClosedMonthISO(iso){
   for (var i = 0; i < list.length; i++) if (Number(list[i].year) === y && Number(list[i].month) === mo) return true;
   return false;
 }
-(function _loadClosedMonths(){
+// v7.333: без токена (екран входу, сторінка до редиректу) не питаємо — інакше рядок у лог «без токена»;
+// після входу index.html викликає _loadClosedMonths() сам.
+function _loadClosedMonths(){
   if (_closedMonthsList()) return;
+  try { if (!((JSON.parse(localStorage.getItem('mkids_session') || 'null') || {}).token)) return; } catch(_t){ return; }
   try {
     fetch(CFG.SCRIPT_URL + '?action=getClosedMonths', {redirect:'follow'}).then(function(r){ return r.json(); }).then(function(j){
       if (j && j.ok && Array.isArray(j.items)) try { localStorage.setItem(_CLOSED_KEY, JSON.stringify({ts: Date.now(), items: j.items})); } catch(e){}
     }).catch(function(){});
   } catch(e){}
-})();
+}
+_loadClosedMonths();
 function isWeekLocked(dateISO){
   if (_isClosedMonthISO(dateISO)) return true;   // v7.291 закритий місяць — і для CFO
   if (isCFO()) return false;

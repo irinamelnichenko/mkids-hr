@@ -1063,6 +1063,12 @@ var SESSION_TTL_MS = 7 * 24 * 3600 * 1000;
           if (res && res.value){
             var s = new TextDecoder('utf-8').decode(res.value);
             if (s.indexOf('"AUTH"') >= 0 && s.indexOf('Не авторизовано') >= 0) _kick();
+            /* v7.333: бекенд не прийняв ЦЕЙ токен (прострочений / чужий підпис) — один раз на перелогін.
+               Запам'ятовуємо токен, щоб не зациклитись, якщо й новий раптом не прийметься. */
+            else if (s.indexOf('"authStale"') >= 0){
+              var _st = _tok(), _lastSt = ''; try { _lastSt = localStorage.getItem('mk_stale_tok') || ''; } catch(_e){}
+              if (_st && _st !== _lastSt){ try { localStorage.setItem('mk_stale_tok', _st); } catch(_e){} _kick(); }
+            }
           }
         } catch(_e){}
         try { rd.cancel(); } catch(_e){}
@@ -1544,14 +1550,18 @@ function _isClosedMonthISO(iso){
   for (var i = 0; i < list.length; i++) if (Number(list[i].year) === y && Number(list[i].month) === mo) return true;
   return false;
 }
-(function _loadClosedMonths(){
+// v7.333: без токена (екран входу, сторінка до редиректу) не питаємо — інакше рядок у лог «без токена»;
+// після входу index.html викликає _loadClosedMonths() сам.
+function _loadClosedMonths(){
   if (_closedMonthsList()) return;
+  try { if (!((JSON.parse(localStorage.getItem('mkids_session') || 'null') || {}).token)) return; } catch(_t){ return; }
   try {
     fetch(CFG.SCRIPT_URL + '?action=getClosedMonths', {redirect:'follow'}).then(function(r){ return r.json(); }).then(function(j){
       if (j && j.ok && Array.isArray(j.items)) try { localStorage.setItem(_CLOSED_KEY, JSON.stringify({ts: Date.now(), items: j.items})); } catch(e){}
     }).catch(function(){});
   } catch(e){}
-})();
+}
+_loadClosedMonths();
 function isWeekLocked(dateISO){
   if (_isClosedMonthISO(dateISO)) return true;   // v7.291 закритий місяць — і для CFO
   if (isCFO()) return false;

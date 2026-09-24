@@ -705,6 +705,12 @@ function sortLocationsByZone(locs){ return sortByLocationOrder(locs); }
           if (res && res.value){
             var s = new TextDecoder('utf-8').decode(res.value);
             if (s.indexOf('"AUTH"') >= 0 && s.indexOf('Не авторизовано') >= 0) _kick();
+            /* v7.333: бекенд не прийняв ЦЕЙ токен (прострочений / чужий підпис) — один раз на перелогін.
+               Запам'ятовуємо токен, щоб не зациклитись, якщо й новий раптом не прийметься. */
+            else if (s.indexOf('"authStale"') >= 0){
+              var _st = _tok(), _lastSt = ''; try { _lastSt = localStorage.getItem('mk_stale_tok') || ''; } catch(_e){}
+              if (_st && _st !== _lastSt){ try { localStorage.setItem('mk_stale_tok', _st); } catch(_e){} _kick(); }
+            }
           }
         } catch(_e){}
         try { rd.cancel(); } catch(_e){}
