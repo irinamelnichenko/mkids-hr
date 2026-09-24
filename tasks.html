@@ -848,7 +848,6 @@ var CURRENT_PAGE = 'tasks';
 var PERMISSIONS = {
   cfo: 'all',
   ceo: [
-    'dashboard',
     'clients_list','payments','attendance_kids','recalc',
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
@@ -893,7 +892,6 @@ var PERMISSIONS = {
   rnd_director: [
     /*R&D-opex*/ 'opex',
     /*R&D+*/ 'card-child-development','card-child-health','activities-edit','attendance-edit',
-    'dashboard',
     'clients_list','attendance_kids',
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
@@ -908,7 +906,6 @@ var PERMISSIONS = {
     'loccard'   // v7.326: Картка локації (редагування)
   ],
   hr_trainer: [
-    'dashboard',
     'clients_list','attendance_kids',
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
@@ -951,7 +948,8 @@ var PERMISSIONS = {
     'card-child-vacations','card-child-payments','card-child-history',
     'card-child-notes','card-child-health',
     'finance','medical','hr-actions',
-    'invoices'
+    'invoices',
+    'loccard'   // v7.327: Картка локації на всіх сторінках
   ],
   nurse: [
     'dashboard',
@@ -968,7 +966,7 @@ var PERMISSIONS = {
 };
 // Задачник: tasks — менеджмент + director; tasks-create — лише менеджмент.
 (function(){
-  ['ceo','cco','rnd_director','hr_trainer','legal'].forEach(function(r){
+  ['cco','legal'].forEach   /* v7.327: без CEO/R&D/HR */(function(r){
     if (Array.isArray(PERMISSIONS[r])){ PERMISSIONS[r].push('tasks'); PERMISSIONS[r].push('tasks-create'); }
   });
   PERMISSIONS.cmo = ['dashboard','tasks','tasks-create'];

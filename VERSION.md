@@ -24,6 +24,15 @@
 curl -sL "https://script.google.com/macros/s/AKfycbyTSUVlaN4-PpXe47zCSmhVs0Qxy1FDXG_XsB4zcKNpqBxdhDtS9ibM4YFGkGjmPQDFWQ/exec?action=ping"
 ```
 
+## v7.327 (лише фронт): зайві Дашборд/Задачник і меню директорки
+
+Правило «Дашборд лише CFO/HR, Задачник лише CFO» (v6.43) живе тільки в index.html — на інших 14 сторінках
+CEO/HR/R&D бачили обидва пункти з матриці. Прибрано з самої матриці: 'dashboard' у ceo/hr_trainer/rnd_director,
+'tasks' додається лише cco/legal. Директорка: 'loccard' тепер у матриці на всіх сторінках (досі push лише в index),
+у salary_reconcile вирівняно needs_attention/cards_completion. Перевірено симуляцією сайдбару кожної сторінки:
+CEO 16, COO 4, HR 9, R&D 12, директор 17 (+Харчування у Школі 228) + «Архів клієнтів» на сторінці клієнтів.
+Бекенд не змінювався (v7.326). sw v7.327.
+
 ## v7.326: меню по ролях — CEO, COO, HR (L&D), R&D
 
 Матриця PERMISSIONS (15 сторінок, 4 варіанти копій — правлено точково по ролях):

@@ -1595,7 +1595,6 @@ const PERMISSIONS = {
   cfo: 'all',                                                  // ✓ ВСЕ + Users
 
   ceo: [                                                       // ✓ ВСЕ крім Settings
-    'dashboard',
     'clients_list','payments','attendance_kids','recalc',
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
@@ -1643,7 +1642,6 @@ const PERMISSIONS = {
   rnd_director: [                                              // R&D — без фінансів, ЗП, мед.
     /*R&D-opex*/ 'opex',
     /*R&D+*/ 'card-child-development','card-child-health','activities-edit','attendance-edit',
-    'dashboard',
     'clients_list','attendance_kids',                          // ✗ payments, ✗ recalc
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
@@ -1660,7 +1658,6 @@ const PERMISSIONS = {
   ],
 
   hr_trainer: [                                                // L&D — як R&D + 🟡 динаміка ЗП
-    'dashboard',
     'clients_list','attendance_kids',
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
@@ -1714,7 +1711,8 @@ const PERMISSIONS = {
     'card-child-vacations','card-child-payments','card-child-history',
     'card-child-notes','card-child-health',
     'finance','medical','hr-actions',
-    'invoices'
+    'invoices',
+    'loccard'   // v7.327: Картка локації на всіх сторінках
   ],
 
   nurse: [                                                          // v7.204: без dashboard
@@ -1731,7 +1729,7 @@ const PERMISSIONS = {
 };
 // Задачник: tasks — менеджмент + director; tasks-create — лише менеджмент.
 (function(){
-  ['ceo','cco','rnd_director','hr_trainer','legal'].forEach(function(r){
+  ['cco','legal'].forEach   /* v7.327: без CEO/R&D/HR */(function(r){
     if (Array.isArray(PERMISSIONS[r])){ PERMISSIONS[r].push('tasks'); PERMISSIONS[r].push('tasks-create'); }
   });
   if (Array.isArray(PERMISSIONS.director)) PERMISSIONS.director.push('loccard'); // v6.45: директор бачить картку своєї локації

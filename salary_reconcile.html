@@ -456,14 +456,14 @@ function readSession(){
 function doLogout(){ try{ localStorage.removeItem(SESSION_KEY); }catch(e){} window.location.href = 'index.html'; }
 var PERMISSIONS = {
   cfo:'all', hr:'all',
-  ceo:['dashboard','clients_list','payments','attendance_kids','recalc','employees','timesheet_staff','vacations','sick_leaves','calendar','vacation_schedule','loccard','opex','categories','salary','activities','predmetnyky'],   // v7.326
+  ceo:['clients_list','payments','attendance_kids','recalc','employees','timesheet_staff','vacations','sick_leaves','calendar','vacation_schedule','loccard','opex','categories','salary','activities','predmetnyky'],   // v7.326
   cco:['dashboard','clients_list','payments','attendance_kids','recalc','employees','timesheet_staff','vacations','sick_leaves','calendar','vacation_schedule','analytics_clients','analytics_hr','opex','categories','salary','overview_analytics','activities','predmetnyky','settings'],
   coo:['opex','salary','categories','loccard'],   // v7.326
-  rnd_director:['dashboard','opex','clients_list','attendance_kids','employees','timesheet_staff','vacations','sick_leaves','calendar','vacation_schedule','loccard','activities','predmetnyky'],   // v7.326
-  hr_trainer:['dashboard','clients_list','attendance_kids','employees','timesheet_staff','vacations','sick_leaves','calendar','vacation_schedule','loccard'],   // v7.326
+  rnd_director:['opex','clients_list','attendance_kids','employees','timesheet_staff','vacations','sick_leaves','calendar','vacation_schedule','loccard','activities','predmetnyky'],   // v7.326
+  hr_trainer:['clients_list','attendance_kids','employees','timesheet_staff','vacations','sick_leaves','calendar','vacation_schedule','loccard'],   // v7.326
   legal:['dashboard','clients_list','payments','attendance_kids','employees','timesheet_staff','calendar'],
   cmo:['dashboard','tasks','tasks-create'],
-  director:['clients_list','payments','attendance_kids','employees','timesheet_staff','vacations','sick_leaves','calendar','vacation_schedule','opex','salary','activities','predmetnyky','invoices'],
+  director:['clients_list','payments','attendance_kids','employees','timesheet_staff','vacations','sick_leaves','calendar','vacation_schedule','opex','salary','activities','predmetnyky','invoices','needs_attention','cards_completion','loccard'],   // v7.327
   nurse:['dashboard','clients_list','attendance_kids','employees','vacations','sick_leaves','calendar','vacation_schedule'],
   vyhovatel:['activities','clients_list']
 };
