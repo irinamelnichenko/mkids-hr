@@ -1,5 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.323
+// m.kids CRM — Google Apps Script v7.324
+// v7.324: Школа 228 — дві фізкультури з різними ставками (Лакіза 720 / Баранов 590) розведено іменними
+//         позиціями в CATALOG_TO_NORM_MAP + PRED_SUBJECTS (як психологи Осокорків v7.268), інакше урок
+//         оплачувався б двічі. _normalizeSubject знає «інформатик» → 'Інформатика' (досі null = не в Salary).
 // v7.323: _aggregateOneLoc (перезбір локації після нової картки) переписано на спільний _aggLocRows —
 //         той самий код, що й повний прогін: хост віддає блок під-локації (школярі Кар'єрної більше
 //         не двоїлись), «Група» = назва з файлу, пишуться всі 18 колонок (кол. R не зсувається),
@@ -6320,7 +6323,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.323', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.324', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -29879,7 +29882,9 @@ var PRED_SUBJECTS         = ['Англійська','Музика','Хореог
                              'Спорт','Польська',                      // v7.236: Благо (Нац.Гвардії, Манхетен)
                              // v7.268: іменні позиції — кілька виконавців одного предмета
                              'Англійська Кримська','Англійська Пахалюк','Англійська Маришина',
-                             'Психолог Ірина','Психолог Маруфенко'];
+                             'Психолог Ірина','Психолог Маруфенко',
+                             // v7.324: Школа 228 — дві фізкультури з різними ставками + інформатика
+                             'Фізкультура Лакіза','Фізкультура Баранов','Інформатика'];
 var PRED_UNLIMITED_SUBJ   = 'Чомусики';   // норму НЕ перевіряємо
 var PRED_GROUP_TYPES      = ['miniBaby','Baby','Find','Study','Preschool'];
 var PRED_LVIV_LOCATIONS   = ['Кругла','Бігова'];   // все інше → 'Київ'
@@ -29918,7 +29923,11 @@ var CATALOG_TO_NORM_MAP = {
   // числом. Інакше з першою ж проставленою ставкою почалося б потроєння.
   'Кримська Юлія англійська':    'Англійська Кримська',
   'Пахалюк Ксенія англійська':   'Англійська Пахалюк',
-  'Маришина Юлія англійська':    'Англійська Маришина'
+  'Маришина Юлія англійська':    'Англійська Маришина',
+  // v7.324: Школа 228, два вчителі фізкультури (720 і 590). Уроків фізкультури в
+  // локації ще нуль — розділяємо до першої ставки, як англійські вище.
+  'Лакіза Ірина фізкультура':    'Фізкультура Лакіза',
+  'Баранов Іван фізкультура':    'Фізкультура Баранов'
 };
 
 var PRED_EDIT_ROLES_ANY = ['cfo','ceo','coo','cco'];   // будь-яка локація
@@ -30018,6 +30027,10 @@ function _normalizeSubject(raw){
   if (low.indexOf('спорт')      !== -1) return 'Спорт';
   if (low.indexOf('польськ')    !== -1) return 'Польська';
   if (low.indexOf('польск')     !== -1) return 'Польська';
+  // v7.324: Школа 228. Без цього «Кастомаха інформатика» давала null і ніколи
+  // не доїхала б до Salary (фільтр a.subject_norm в exportPredmetnykyToSalary).
+  if (low.indexOf('інформат')   !== -1) return 'Інформатика';
+  if (low.indexOf('информат')   !== -1) return 'Інформатика';
   return null;
 }
 
