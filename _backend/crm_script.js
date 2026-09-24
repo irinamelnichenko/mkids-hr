@@ -1,5 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.333
+// m.kids CRM — Google Apps Script v7.334
+// v7.334: «Потребують уваги» — серверний кеш 10 хв (ключ: версії 'fill' + 'pay'; _bustPayCache тепер
+//         піднімає 'pay' при кожному перезборі агрегату) і вузьке читання «Клієнтів» (6 колонок замість
+//         усіх з JSON). diagNeedsAttentionCompare — звірка повного й вузького читання.
 // v7.333: «Авторизація_Лог» — лічильник у CacheService по годинах замість appendRow на кожен виклик без
 //         токена (було +1–2 с людині); зведення за минулі години дописується раз на годину (5 колонок,
 //         + причина: none / malformed / bad-sig / expired). Недійсний НАДІСЛАНИЙ токен → authStale першим
@@ -6464,7 +6467,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.333', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.334', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -6486,7 +6489,8 @@ function doGet(e) {
     else if (action === 'runAggregateYearly') result = aggregatePaymentsYearly();
     else if (action === 'runSyncBdayStatus')  result = syncBdayStatusSheet();
     else if (action === 'getRegistryUrls')    result = getRegistryUrls();
-    else if (action === 'getNeedsAttention') result = getNeedsAttention();   // v7.117 картки active без Payment
+    else if (action === 'getNeedsAttention') result = getNeedsAttention(String(e.parameter && e.parameter.nocache || '') === '1');   // v7.117; v7.334 кеш 10 хв
+    else if (action === 'diagNeedsAttentionCompare') result = diagNeedsAttentionCompare();   // v7.334 звірка повне/вузьке читання
     else if (action === 'getAuthLog')         result = getAuthLog();   // v7.118 діагностика Авторизація_Лог
     else if (action === 'tgGetUpdates')       result = tgGetUpdates();   // v7.122 діагностика Telegram-бота
     else if (action === 'getLeads')           result = getLeads(e.parameter || {});   // v7.152 екран лідів
@@ -21392,7 +21396,7 @@ function addPaymentRow(body){
 // ═══════════════════════════════════════════════════════════════════════════
 // v7.111 ФАЗА 1: авто-заведення нової картки у Payment.
 // _bustPayCache — скидає CacheService getPayments (щоб свіжий агрегат був видно одразу).
-function _bustPayCache(){ try { var c = CacheService.getScriptCache(); if (c) c.remove('pay_meta_' + _PAY_CACHE_VER); } catch(_e){} }
+function _bustPayCache(){ try { var c = CacheService.getScriptCache(); if (c) c.remove('pay_meta_' + _PAY_CACHE_VER); } catch(_e){} _cacheBump('pay'); }   // v7.334: + версія 'pay' (кеш «Потребують уваги»)
 
 // Переагрегація ЛИШЕ однієї локації в лист «Оплати»: інші локації лишаються як є,
 // рядки цієї локації перечитуються з живого Payment-файлу (поточний місяць).
@@ -26106,12 +26110,51 @@ function _naClassify(name, loc, cards, pays){
   }
   return {cat:'decide', match:''};
 }
-function getNeedsAttention(){
+// v7.334: «Потребують уваги» — кеш 10 хв (ключ з версією 'fill': її скидають saveClient, patchClientCell,
+// deleteClient, злиття, синк карток) + вузьке читання «Клієнтів» (лише 6 потрібних колонок, без важких
+// JSON здоров'я/розвитку/відсутностей). Логіка класифікації — та сама; diagNeedsAttentionCompare — звірка.
+function getNeedsAttention(noCache){
+  var key = 'na_' + _cacheVer('fill') + '_' + _cacheVer('pay');   // картки АБО перезбір агрегату «Оплати» → новий збір
+  if (!noCache){ var hit = _cacheGzGet(key); if (hit){ hit.cached = true; return hit; } }
+  var t0 = Date.now();
+  var res = _needsAttentionCompute('narrow');
+  if (res && res.ok){ res.ms = Date.now() - t0; res.cachedAt = new Date().toISOString(); _cacheGzPut(key, res, 600); }
+  return res;
+}
+// Старий спосіб читання для звірки: getDataRange «Клієнтів» цілком.
+function diagNeedsAttentionCompare(){
+  var t1 = Date.now(), a = _needsAttentionCompute('full'),   msOld = Date.now() - t1;
+  var t2 = Date.now(), b = _needsAttentionCompute('narrow'), msNew = Date.now() - t2;
+  if (!a.ok || !b.ok) return {ok:false, old:a, neu:b};
+  var sig = function(x){ return [x.id, x.name, x.loc, x.group, x.created, x.cat, x.match || '', x.departedAt || '', x.lastPaymentMonth || '', x.payGroup || ''].join('¦'); };
+  var A = a.items.map(sig).sort(), B = b.items.map(sig).sort();
+  var onlyOld = A.filter(function(s){ return B.indexOf(s) < 0; }), onlyNew = B.filter(function(s){ return A.indexOf(s) < 0; });
+  return {ok:true, identical: !onlyOld.length && !onlyNew.length && JSON.stringify(a.byCat) === JSON.stringify(b.byCat),
+          msOld:msOld, msNew:msNew, totalOld:a.total, totalNew:b.total, byCatOld:a.byCat, byCatNew:b.byCat,
+          onlyOld:onlyOld.slice(0, 20), onlyNew:onlyNew.slice(0, 20)};
+}
+function _needsAttentionCompute(readMode){
   try {
     var crm = getCRMSpreadsheet();
     var csh = crm.getSheetByName(SHEET_CLIENTS);
     if(!csh) return {ok:false, error:'Клієнти не знайдено'};
-    var cv = csh.getDataRange().getValues(); var CH=cv[0].map(String);
+    var cv, CH;
+    if (readMode === 'narrow'){
+      // Лише потрібні колонки: той самий getValues (типи, дати — як раніше), але без JSON-колонок.
+      var lastRow = csh.getLastRow(), lastCol = csh.getLastColumn();
+      CH = csh.getRange(1, 1, 1, lastCol).getValues()[0].map(String);
+      var need = ['ID','ПІБ дитини','Локація','Група','Статус','Створено'].map(function(h){ return CH.indexOf(h); });
+      var cols = {};
+      need.forEach(function(ci){ if (ci >= 0 && lastRow > 1) cols[ci] = csh.getRange(2, ci + 1, lastRow - 1, 1).getValues(); });
+      cv = [CH];
+      for (var rr = 0; rr < lastRow - 1; rr++){
+        var row = new Array(CH.length);
+        for (var ci2 in cols) row[ci2] = cols[ci2][rr][0];
+        cv.push(row);
+      }
+    } else {
+      cv = csh.getDataRange().getValues(); CH = cv[0].map(String);
+    }
     var iName=CH.indexOf('ПІБ дитини'), iLoc=CH.indexOf('Локація'), iGrp=CH.indexOf('Група'),
         iStat=CH.indexOf('Статус'), iCr=CH.indexOf('Створено'), iId=CH.indexOf('ID');
     // поточний ростер Payment («Оплати» — поточний місяць)

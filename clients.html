@@ -2949,7 +2949,7 @@ function fillLoginLocs(){
 async function initApp(){
   loadLocalCRM();
   loadAttendanceFromStorage();
-  showSpinner();
+  if(!S._naEarly) showSpinner();   // v7.334: збережений список «Потребують уваги» вже на екрані — не затираємо спінером
   setSyncStatus('sync');
   try{
     // v6.28: незалежні виклики — ПАРАЛЕЛЬНО (було 5 послідовних awaits ~16с → ~4-5с).
@@ -7197,18 +7197,41 @@ function renderIncomplete(){
   h+='</div>';
   main.innerHTML=h;
 }
-async function renderNeedsAttention(){
-  var main=document.getElementById('main');
-  main.innerHTML='<div style="padding:24px;color:var(--gray)">Завантаження…</div>';
-  var j;
-  try{ j=await apiGet('getNeedsAttention'); }
-  catch(e){ main.innerHTML='<div style="padding:24px;color:#c0392b">Помилка завантаження: '+esc(e.message||String(e))+'</div>'; return; }
-  var items=(j.items||[]).slice();
+// v7.334: «Потребують уваги» — збережений список (localStorage, до доби) показується ОДРАЗУ, свіжий
+// тягнеться у фоні. Відкриття clients.html#needs_attention стартує запит паралельно зі стартовими
+// завантаженнями сторінки (_naEarlyStart), а не після них — мінус ~6 с.
+var NA_CACHE_KEY='na_cache_v1';
+function _naCacheLoad(){ try{ var o=JSON.parse(localStorage.getItem(NA_CACHE_KEY)||'null'); if(o&&o.ts&&Array.isArray(o.items)&&Date.now()-o.ts<24*3600*1000) return o; }catch(e){} return null; }
+function _naCacheSave(items){ try{ safeSetItem(NA_CACHE_KEY, JSON.stringify({ts:Date.now(), items:items||[]})); }catch(e){} }
+function _naScope(all){
+  var items=(all||[]).slice();
   if(!isHR()){ var myloc=(S.user&&S.user.loc)||''; items=items.filter(function(x){ return x.loc===myloc; }); }
   // v7.273: щойно випущені/розірвані з цього ж екрана — локальний статус уже не active,
   // а бекенд міг ще не дописати рядок; не показуємо їх повторно.
   items=items.filter(function(x){ var c=S.crm&&S.crm[x.id]; return !(c&&c.status&&c.status!=='active'); });
-  main.innerHTML=_naRenderHtml(items);
+  return items;
+}
+function _naStaleNote(ts){ return '<div style="padding:6px 2px 10px;font-size:12px;color:var(--gray)">дані на '+esc(new Date(ts).toLocaleString('uk-UA'))+' · оновлюю…</div>'; }
+function _naEarlyStart(){
+  try{
+    S._naPromise=apiGet('getNeedsAttention'); S._naPromise.catch(function(){});
+    var c=_naCacheLoad(), main=document.getElementById('main');
+    if(c && main){ S.view='needsAttention'; S.mainTab='clients'; S._naEarly=true; main.innerHTML=_naStaleNote(c.ts)+_naRenderHtml(_naScope(c.items)); }
+  }catch(e){}
+}
+async function renderNeedsAttention(){
+  var main=document.getElementById('main');
+  // свіжий список, отриманий щойно (старт сторінки малює екран двічі) — без повторного запиту
+  if(S._naFresh && Date.now()-S._naFresh.ts<60000){ main.innerHTML=_naRenderHtml(_naScope(S._naFresh.items)); return; }
+  var c=_naCacheLoad();
+  main.innerHTML = c ? (_naStaleNote(c.ts)+_naRenderHtml(_naScope(c.items))) : '<div style="padding:24px;color:var(--gray)">Завантаження…</div>';
+  var j, p=S._naPromise||apiGet('getNeedsAttention'); S._naPromise=null;
+  try{ j=await p; }
+  catch(e){ if(!c) main.innerHTML='<div style="padding:24px;color:#c0392b">Помилка завантаження: '+esc(e.message||String(e))+'</div>'; return; }
+  if(!j||!j.ok){ if(!c) main.innerHTML='<div style="padding:24px;color:#c0392b">Помилка завантаження: '+esc((j&&j.error)||'')+'</div>'; return; }
+  _naCacheSave(j.items); S._naFresh={ts:Date.now(), items:j.items||[]};
+  if(S.view!=='needsAttention') return;   // людина вже пішла на інший екран — не перемальовуємо
+  main.innerHTML=_naRenderHtml(_naScope(j.items));
 }
 function findPayChildById(id){
   for(var loc in S.groups){
@@ -8639,6 +8662,7 @@ function renderPayMonths(){
     document.getElementById('loginScreen').classList.add('hidden');
     document.getElementById('app').classList.remove('hidden');
     updUserUI();
+    if ((location.hash||'') === '#needs_attention') _naEarlyStart();   // v7.334: запит паралельно зі стартом
     await initApp();
     dispatchHashView();
     return;
