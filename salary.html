@@ -1176,14 +1176,15 @@ async function fetchData(force){
   return json;
 }
 
-function loadOverviewCache(){
+function loadOverviewCache(allowStale){
   try {
     var raw = localStorage.getItem(CFG.OVERVIEW_CACHE_KEY);
     if (!raw) return null;
     var obj = JSON.parse(raw);
     if (!obj || !obj.ts || !obj.data) return null;
     if (obj.year !== CFG.YEAR) return null;
-    if (Date.now() - obj.ts > CFG.OVERVIEW_CACHE_TTL) return null;
+    // v7.331: allowStale — показати збережене зведення (до доби) одразу, свіже тягнеться у фоні.
+    if (Date.now() - obj.ts > (allowStale ? 24 * 3600 * 1000 : CFG.OVERVIEW_CACHE_TTL)) return null;
     return obj;
   } catch(e){ return null; }
 }
@@ -2336,6 +2337,20 @@ async function loadDetail(force){
 
 async function loadOverview(force){
   $('errBox').classList.add('hidden');
+  // v7.331: stale-while-revalidate — немає свіжого кешу, але є збережене зведення за останню добу:
+  // малюємо його одразу з позначкою «оновлюю…» і тягнемо свіже у фоні (force), без спінера на весь екран.
+  if (!force && !S.overviewData && !loadOverviewCache(false)){
+    var stale = loadOverviewCache(true);
+    if (stale){
+      S.overviewData = stale.data;
+      $('loadBox').classList.add('hidden');
+      $('content').classList.remove('hidden');
+      applyMode();
+      rerenderOverview();
+      $('meta').textContent = 'дані на ' + new Date(stale.ts).toLocaleString('uk-UA') + ' · оновлюю…';
+      force = true;
+    }
+  }
   $('refreshBtn').disabled = true;
   if (!S.overviewData){
     $('content').classList.add('hidden');

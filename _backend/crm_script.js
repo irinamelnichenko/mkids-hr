@@ -1,5 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.330
+// m.kids CRM — Google Apps Script v7.331
+// v7.331: зведення ЗП — файли Salary читаються одним пакетом (UrlFetchApp.fetchAll → Sheets API,
+//         запасний шлях — SpreadsheetApp), кеш по кожній локації 30 хв, експорти скидають лише свою
+//         локацію (_salaryBump). diagSalaryOverviewCompare — звірка старого й нового способу поруч.
 // v7.330: розбір рахунків — номер «Рахунок на оплату (товарів) №», дата словами «від 23 вересня 2026 р.»,
 //         постачальник лише як окреме слово (не «…постачальника, самовивозом»), назва = перша клітинка
 //         рядка з обрізаними реквізитами (ЄДРПОУ/ІПН/IBAN). dryRun розпізнавання повертає textPreview.
@@ -6397,7 +6400,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.330', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.331', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -6445,6 +6448,7 @@ function doGet(e) {
     else if (action === 'getSalaryData')             result = getSalaryData(e.parameter.loc || '', e.parameter.year || '');
     else if (action === 'salaryReconcileRows')       result = salaryReconcileRows(e.parameter.loc || '');
     else if (action === 'getSalaryOverview')         result = getSalaryOverview(e.parameter.year || '', String(e.parameter.nocache || '') === '1');   // v7.293 кеш 5 хв
+    else if (action === 'diagSalaryOverviewCompare') result = diagSalaryOverviewCompare(e.parameter.year || '');   // v7.331 звірка старий/новий
     else if (action === 'getOverviewAnalytics')      result = getOverviewAnalytics(e.parameter.year || '', e.parameter.month || '');
     else if (action === 'getUsers')                  result = getUsers(Number(e.parameter && e.parameter.actorId || 0)); // v7.109 CFO-only, без пароля
     else if (action === 'getGroupNorms')             result = getGroupNorms();
@@ -13674,7 +13678,7 @@ function getSalaryExtrasRows(body){
 // items:[{salaryRowNum, amount, month, loc, edrpou, ref, date, skip, note}]. dryRun=TRUE за замовч.
 // Дедуп — той самий OPEX_Витрати_Лог (референс+сума+місяць пер-локаційно), Категорія=«→Salary: <рядок>».
 function salaryAddExtrasPayments(body){
-  _cacheBump('salary');   // v7.293 кеш getSalaryOverview
+  _salaryBump(body && body.loc);   // v7.331 кеш лише цієї локації
   var lock = null;
   try {
     body = body || {};
@@ -14227,7 +14231,7 @@ function _renameShosokSalary(dryRun){
 }
 
 function addSalaryRow(body){
-  _cacheBump('salary');   // v7.293 кеш getSalaryOverview
+  _salaryBump(body && body.loc);   // v7.331
   body = body || {};
   var lock = LockService.getScriptLock();
   try { lock.waitLock(30000); } catch(e){ return {ok:false, error:'LOCK_TIMEOUT'}; }
@@ -14290,7 +14294,7 @@ function addSalaryRow(body){
 // Видалення Salary-рядка (тест/відкат). Захист: видаляємо ЛИШЕ якщо всі суми = 0
 // (ніколи не втрачаємо оплачений рядок) і назва збігається з очікуваною (якщо задана).
 function deleteSalaryRow(body){
-  _cacheBump('salary');   // v7.293 кеш getSalaryOverview
+  _salaryBump(body && body.loc);   // v7.331
   body = body || {};
   var lock = LockService.getScriptLock();
   try { lock.waitLock(30000); } catch(e){ return {ok:false, error:'LOCK_TIMEOUT'}; }
@@ -14338,104 +14342,198 @@ function _cacheGzPut(key, obj, ttl){
 function _cacheVer(group){ try { return CacheService.getScriptCache().get('ver_' + group) || '0'; } catch(_e){ return '0'; } }
 function _cacheBump(group){ try { CacheService.getScriptCache().put('ver_' + group, String(Date.now()), 21600); } catch(_e){} }
 
-function getSalaryOverview(year, noCache){
-  var key = 'salover_' + _cacheVer('salary') + '_' + String(year || '');
-  if (!noCache){ var hit = _cacheGzGet(key); if (hit){ hit.cached = true; return hit; } }
-  var t0 = Date.now();
-  var res = _getSalaryOverviewRaw(year);
-  if (res && res.ok && !(res.errors || []).length){ res.ms = Date.now() - t0; res.cachedAt = new Date().toISOString(); _cacheGzPut(key, res, 300); }
-  return res;
+// v7.331: ЗВЕДЕННЯ ЗП — кеш ПО ЛОКАЦІЯХ + паралельне читання файлів Salary.
+//   Було (v7.293): один кеш на все зведення 5 хв; будь-який експорт у Salary (урок предметника,
+//   відмітки додаткових) скидав його для ВСІХ 17 локацій → удень майже завжди холодний збір:
+//   17 файлів ПО ЧЕРЗІ через SpreadsheetApp ≈ 24 с + ~4 с старт = ~28 с.
+//   Стало: (1) файли читаються ОДНИМ пакетом UrlFetchApp.fetchAll → Sheets API values.get;
+//   файл, що не прочитався так, читається старим способом (запасний шлях);
+//   (2) кеш кожної локації окремо (30 хв); експорт скидає лише свою локацію (_salaryBump(loc)),
+//   запис без локації — усі (глобальна версія 'salary' теж у ключі).
+//   Підрахунок сум — ОДИН код для обох способів читання (_salaryOverviewLoc).
+//   diagSalaryOverviewCompare — старий і новий спосіб поруч, звірка сум.
+var SAL_OV_LOC_TTL = 1800;
+function _salaryBump(loc){
+  var l = trim(String(loc || ''));
+  if (l) _cacheBump('salary_' + _nameFold(l)); else _cacheBump('salary');
 }
-function _getSalaryOverviewRaw(year) {
+function getSalaryOverview(year, noCache){
+  var t0 = Date.now();
   var reg = _salaryGetRegistry();
   if (!reg.ok) return reg;
-
-  var locations = [];
-  var errors    = [];
-
-  reg.rows.forEach(function(entry) {
+  var entries = reg.rows, yr = String(year || '');
+  var cache = null; try { cache = CacheService.getScriptCache(); } catch(_c){ cache = null; }
+  // версії: глобальна + по кожній локації — одним getAll
+  var verKeys = ['ver_salary'].concat(entries.map(function(e){ return 'ver_salary_' + _nameFold(e.loc); }));
+  var vers = {}; try { vers = cache ? cache.getAll(verKeys) : {}; } catch(_v){ vers = {}; }
+  var gv = vers['ver_salary'] || '0';
+  var keyOf = function(e){ return 'saloc_' + gv + '_' + (vers['ver_salary_' + _nameFold(e.loc)] || '0') + '_' + yr + '_' + _nameFold(e.loc); };
+  var hits = {};
+  if (!noCache && cache){
     try {
-      var locSS = SpreadsheetApp.openById(entry.sheetId);
-      var sheet = locSS.getSheetByName(entry.listName);
-      if (!sheet) {
-        errors.push({loc: entry.loc, error: 'Salary sheet not found'});
-        return;
-      }
-
-      var lastRow = Math.max(sheet.getLastRow(), 80);
-      var lastCol = Math.max(sheet.getLastColumn(), 37);
-      var data    = sheet.getRange(1, 1, lastRow, lastCol).getValues();
-      var width   = lastCol;
-
-      var rowIdxs = [];
-      for (var rowNum = 4; rowNum <= data.length; rowNum++) {
-        var idx = rowNum - 1;
-        var rowArr = data[idx] || [];
-        var rawName = String(rowArr[0] || '').trim();
-        if (_salaryIsSkippedRow(rawName))  continue;
-        if (_salaryIsSubtotalRow(rawName)) continue;
-        rowIdxs.push(idx);
-      }
-
-      // v7.254: розріз блоку під-локації. Класифікуємо ПОВНИЙ список рядків —
-      // rowIdxs уже без subtotal-рядків, а саме вони перемикають state machine,
-      // тож на ньому прапорець блоку протік би в extras.
-      var _ctx = _salarySubContext(entry.loc);
-      if (_ctx){
-        var _rawAll = [];
-        for (var _rn = 4; _rn <= data.length; _rn++){
-          var _ra = data[_rn - 1] || [];
-          var _nm = String(_ra[0] || '').trim();
-          if (_salaryIsSkippedRow(_nm)) continue;
-          var _tf = 0, _tb = 0;
-          for (var _m = 1; _m <= 12; _m++){
-            var _fi = (_m - 1) * 3 + 1, _bi = (_m - 1) * 3 + 2;
-            if (_fi < width) _tf += _opexNum(_ra[_fi]);
-            if (_bi < width) _tb += _opexNum(_ra[_bi]);
-          }
-          _rawAll.push({row:_rn, name:_nm, fact:_tf, budget:_tb});
-        }
-        var _set = _salaryBlockRowSet(_classifyAllSalaryRows(_rawAll), _ctx.exclude);
-        rowIdxs = rowIdxs.filter(function(ix){ return _ctx.mine ? !!_set[ix + 1] : !_set[ix + 1]; });
-      }
-
-      var monthsTotals = [];
-      var yearFact = 0, yearBudget = 0;
-
-      for (var m = 1; m <= 12; m++) {
-        var fIdx = (m - 1) * 3 + 1;
-        var bIdx = (m - 1) * 3 + 2;
-        var monthFact = 0, monthBudget = 0;
-
-        for (var k = 0; k < rowIdxs.length; k++) {
-          var rowArr = data[rowIdxs[k]] || [];
-          monthFact   += fIdx < width ? _opexNum(rowArr[fIdx]) : 0;
-          monthBudget += bIdx < width ? _opexNum(rowArr[bIdx]) : 0;
-        }
-
-        monthsTotals.push({month: m, fact: monthFact, budget: monthBudget});
-        yearFact   += monthFact;
-        yearBudget += monthBudget;
-      }
-
-      locations.push({
-        loc:          entry.loc,
-        type:         entry.typ,
-        monthsTotals: monthsTotals,
-        yearFact:     yearFact,
-        yearBudget:   yearBudget
+      var got = cache.getAll(entries.map(keyOf));
+      entries.forEach(function(e){ var s = got[keyOf(e)]; if (s){ try { hits[e.loc] = JSON.parse(s); } catch(_p){} } });
+    } catch(_g){}
+  }
+  var miss = entries.filter(function(e){ return !hits[e.loc]; });
+  var built = miss.length ? _salaryOverviewBuild(miss, 'fast') : {locations:[], errors:[], via:{}};
+  var byLoc = {}; built.locations.forEach(function(l){ byLoc[l.loc] = l; });
+  if (cache){
+    var toPut = {};
+    miss.forEach(function(e){ if (byLoc[e.loc]) toPut[keyOf(e)] = JSON.stringify(byLoc[e.loc]); });
+    try { if (Object.keys(toPut).length) cache.putAll(toPut, SAL_OV_LOC_TTL); } catch(_w){}
+  }
+  var locations = [];
+  entries.forEach(function(e){ var l = hits[e.loc] || byLoc[e.loc]; if (l) locations.push(l); });
+  return {ok:true, year: year ? Number(year) || year : '', locations:locations, errors:built.errors,
+          cached: miss.length === 0, cachedLocs: entries.length - miss.length, rebuiltLocs: miss.length,
+          readVia: built.via, ms: Date.now() - t0, cachedAt: new Date().toISOString()};
+}
+// Старий шлях (як до v7.331) — для звірки й запасний. Повертає той самий формат.
+function _getSalaryOverviewRaw(year){
+  var reg = _salaryGetRegistry();
+  if (!reg.ok) return reg;
+  var b = _salaryOverviewBuild(reg.rows, 'old');
+  return {ok:true, year: year ? Number(year) || year : '', locations:b.locations, errors:b.errors};
+}
+// mode 'fast' — пакетне читання через Sheets API (+ запасний старий на збій); 'old' — лише SpreadsheetApp.
+function _salaryOverviewBuild(entries, mode){
+  var grids = {}, via = {};
+  if (mode === 'fast'){
+    try {
+      var tok = ScriptApp.getOAuthToken();
+      var reqs = entries.map(function(e){
+        var rng = "'" + String(e.listName).replace(/'/g, "''") + "'";
+        return {url:'https://sheets.googleapis.com/v4/spreadsheets/' + encodeURIComponent(e.sheetId) +
+                    '/values/' + encodeURIComponent(rng) + '?valueRenderOption=UNFORMATTED_VALUE&dateTimeRenderOption=SERIAL_NUMBER',
+                headers:{Authorization:'Bearer ' + tok}, muteHttpExceptions:true};
       });
+      var resps = UrlFetchApp.fetchAll(reqs);
+      resps.forEach(function(r, i){
+        if (r.getResponseCode() !== 200){ via[entries[i].loc] = 'api-' + r.getResponseCode(); return; }
+        try { var j = JSON.parse(r.getContentText()); grids[entries[i].loc] = j.values || []; via[entries[i].loc] = 'api'; } catch(_j){}
+      });
+    } catch(_f){ via._batchError = String(_f && _f.message || _f); }
+  }
+  var locations = [], errors = [];
+  entries.forEach(function(entry){
+    try {
+      var data, width;
+      if (grids[entry.loc]){
+        // Sheets API обрізає порожні хвости — доводимо до форми getValues: ≥80 рядків, ≥37 колонок, '' у порожніх.
+        var g = grids[entry.loc], w = 37;
+        g.forEach(function(row){ if (row.length > w) w = row.length; });
+        var h = Math.max(g.length, 80);
+        data = [];
+        for (var r = 0; r < h; r++){
+          var src = g[r] || [], row = new Array(w);
+          for (var c = 0; c < w; c++) row[c] = (c < src.length && src[c] != null) ? src[c] : '';
+          data.push(row);
+        }
+        width = w;
+      } else {
+        var locSS = SpreadsheetApp.openById(entry.sheetId);
+        var sheet = locSS.getSheetByName(entry.listName);
+        if (!sheet) { errors.push({loc: entry.loc, error: 'Salary sheet not found'}); return; }
+        var lastRow = Math.max(sheet.getLastRow(), 80);
+        var lastCol = Math.max(sheet.getLastColumn(), 37);
+        data  = sheet.getRange(1, 1, lastRow, lastCol).getValues();
+        width = lastCol;
+        via[entry.loc] = (mode === 'fast') ? ('fallback' + (via[entry.loc] ? ':' + via[entry.loc] : '')) : 'old';
+      }
+      locations.push(_salaryOverviewLoc(entry, data, width));
     } catch (e) {
       errors.push({loc: entry.loc, error: (e && e.message) ? e.message : String(e)});
     }
   });
+  return {locations:locations, errors:errors, via:via};
+}
+// Підрахунок однієї локації з уже прочитаної сітки (спільний для обох способів читання).
+function _salaryOverviewLoc(entry, data, width){
+  var rowIdxs = [];
+  for (var rowNum = 4; rowNum <= data.length; rowNum++) {
+    var idx = rowNum - 1;
+    var rowArr = data[idx] || [];
+    var rawName = String(rowArr[0] || '').trim();
+    if (_salaryIsSkippedRow(rawName))  continue;
+    if (_salaryIsSubtotalRow(rawName)) continue;
+    rowIdxs.push(idx);
+  }
+
+  // v7.254: розріз блоку під-локації. Класифікуємо ПОВНИЙ список рядків —
+  // rowIdxs уже без subtotal-рядків, а саме вони перемикають state machine,
+  // тож на ньому прапорець блоку протік би в extras.
+  var _ctx = _salarySubContext(entry.loc);
+  if (_ctx){
+    var _rawAll = [];
+    for (var _rn = 4; _rn <= data.length; _rn++){
+      var _ra = data[_rn - 1] || [];
+      var _nm = String(_ra[0] || '').trim();
+      if (_salaryIsSkippedRow(_nm)) continue;
+      var _tf = 0, _tb = 0;
+      for (var _m = 1; _m <= 12; _m++){
+        var _fi = (_m - 1) * 3 + 1, _bi = (_m - 1) * 3 + 2;
+        if (_fi < width) _tf += _opexNum(_ra[_fi]);
+        if (_bi < width) _tb += _opexNum(_ra[_bi]);
+      }
+      _rawAll.push({row:_rn, name:_nm, fact:_tf, budget:_tb});
+    }
+    var _set = _salaryBlockRowSet(_classifyAllSalaryRows(_rawAll), _ctx.exclude);
+    rowIdxs = rowIdxs.filter(function(ix){ return _ctx.mine ? !!_set[ix + 1] : !_set[ix + 1]; });
+  }
+
+  var monthsTotals = [];
+  var yearFact = 0, yearBudget = 0;
+
+  for (var m = 1; m <= 12; m++) {
+    var fIdx = (m - 1) * 3 + 1;
+    var bIdx = (m - 1) * 3 + 2;
+    var monthFact = 0, monthBudget = 0;
+
+    for (var k = 0; k < rowIdxs.length; k++) {
+      var rowArr = data[rowIdxs[k]] || [];
+      monthFact   += fIdx < width ? _opexNum(rowArr[fIdx]) : 0;
+      monthBudget += bIdx < width ? _opexNum(rowArr[bIdx]) : 0;
+    }
+
+    monthsTotals.push({month: m, fact: monthFact, budget: monthBudget});
+    yearFact   += monthFact;
+    yearBudget += monthBudget;
+  }
 
   return {
-    ok:        true,
-    year:      year ? Number(year) || year : '',
-    locations: locations,
-    errors:    errors
+    loc:          entry.loc,
+    type:         entry.typ,
+    monthsTotals: monthsTotals,
+    yearFact:     yearFact,
+    yearBudget:   yearBudget
   };
+}
+// Звірка: старий і новий спосіб читання поруч, без кешу. Нічого не пише.
+// GET ?action=diagSalaryOverviewCompare&year=2026
+function diagSalaryOverviewCompare(year){
+  var reg = _salaryGetRegistry();
+  if (!reg.ok) return reg;
+  var t1 = Date.now(), a = _salaryOverviewBuild(reg.rows, 'old'),  msOld = Date.now() - t1;
+  var t2 = Date.now(), b = _salaryOverviewBuild(reg.rows, 'fast'), msNew = Date.now() - t2;
+  var bi = {}; b.locations.forEach(function(l){ bi[l.loc] = l; });
+  var r2 = function(x){ return Math.round((Number(x) || 0) * 100) / 100; };
+  var diffs = [], rows = [];
+  a.locations.forEach(function(o){
+    var n = bi[o.loc];
+    if (!n){ diffs.push({loc:o.loc, what:'немає в новому'}); return; }
+    var dm = [];
+    for (var i = 0; i < 12; i++){
+      var om = o.monthsTotals[i], nm = n.monthsTotals[i];
+      if (r2(om.fact) !== r2(nm.fact) || r2(om.budget) !== r2(nm.budget))
+        dm.push({month:i + 1, oldFact:om.fact, newFact:nm.fact, oldBudget:om.budget, newBudget:nm.budget});
+    }
+    if (dm.length) diffs.push({loc:o.loc, months:dm});
+    rows.push({loc:o.loc, via:b.via[o.loc] || '?', yearFactOld:r2(o.yearFact), yearFactNew:r2(n.yearFact),
+               yearBudgetOld:r2(o.yearBudget), yearBudgetNew:r2(n.yearBudget), same:!dm.length});
+  });
+  return {ok:true, year:year, msOld:msOld, msNew:msNew, locations:rows.length, identical:!diffs.length,
+          diffs:diffs, rows:rows, errorsOld:a.errors, errorsNew:b.errors, batchError:b.via._batchError || ''};
 }
 
 // Чи починається rowNorm з назви каталогу (далі — пробіл/цифра/кінець).
@@ -19570,7 +19668,7 @@ function diagSalaryReconLog(params){
 //   revert — відняти суми цього vidNo з Факту (за логом) + видалити рядки логу
 //            (дедуп знімається), АЛЕ ІПН/картку в HR ЛИШИТИ.
 function salaryReconcileApply(body){
-  _cacheBump('salary');   // v7.293 кеш getSalaryOverview
+  _salaryBump(body && body.loc);   // v7.331
   body = body || {};
   var mode = String(body.mode || (body.dryRun ? 'dryRun' : 'dryRun')).trim();
   var dryRun = (mode !== 'apply' && mode !== 'revert');
@@ -21021,7 +21119,7 @@ function renameActivity(body){
       if (!salRes.ok) report.salaryNote = 'Salary НЕ перейменовано: ' + ((salRes.errors || []).join('; ') || salRes.error);
     }
     SpreadsheetApp.flush();
-    try { _cacheBump('salary'); } catch(_cb){}
+    try { _salaryBump(body && body.loc); } catch(_cb){}   // v7.331
     report.written = {catalog:catRows.length, marks:attRows.length, merges:mrgRows.length, salary:(report.salaryResult && report.salaryResult.renamed) || 0};
     Logger.log('[renameActivity] ✅ %s', JSON.stringify(report.written));
     return report;
@@ -22115,7 +22213,7 @@ function exportToSalaryExtras(params){
     Logger.log('[exportToSalaryExtras] journal upsert%s: %s op(s)', (dryRun ? ' (DRY-RUN, пропущено)' : ''), journalOps.length);
 
     Logger.log('[exportToSalaryExtras] DONE%s: updated=%s, totalFact=%s, notFound=%s', (dryRun ? ' DRY-RUN' : ''), updated, totalFact, JSON.stringify(notFound));
-    if (!dryRun && cellsWritten) _cacheBump('salary');   // v7.293
+    if (!dryRun && cellsWritten) _salaryBump(loc);   // v7.293; v7.331 лише ця локація
 
     return {
       ok: true,
@@ -24634,7 +24732,7 @@ carryRow +
 }
 
 function cashPayoutSheet(body){
-  _cacheBump('salary');   // v7.293 кеш getSalaryOverview
+  _salaryBump(body && body.loc);   // v7.331
   try {
     body = body || {};
     var loc   = String(body.loc || '').trim();
@@ -27659,7 +27757,7 @@ function _predRenameForRate(raw, subject, rate, priority){
 }
 
 function exportPredmetnyToSalary(params){
-  _cacheBump('salary');   // v7.293 кеш getSalaryOverview
+  _salaryBump(params && params.loc);   // v7.331
   try {
     var loc = String(params.loc || '').trim();
     var month = Number(params.month);
@@ -32027,7 +32125,7 @@ function _clearAllPredmetnykyLessons(location, confirm){
 // Target month — наступний (зарплата за лекції місяця N виплачується N+1).
 // ═══════════════════════════════════════════════════════════════════
 function exportPredmetnykyToSalary(params){
-  if (params && params.dryRun !== true) _cacheBump('salary');   // v7.293 кеш getSalaryOverview
+  if (params && params.dryRun !== true && !Array.isArray(params.locations)) _salaryBump(params.loc);   /* v7.331: пакет — кожна локація скине свою у під-виклику */   // v7.293 кеш getSalaryOverview
   params = params || {};
 
   // Batch mode: locations: [...] → виклик по кожній локації окремо.
