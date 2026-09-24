@@ -1,5 +1,9 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.326
+// m.kids CRM — Google Apps Script v7.329
+// v7.329: бот рахунків — таблиці (.xls/.xlsx/.ods/.csv; Telegram шле їх як octet-stream) імпортуються в Drive
+//         як Google Таблиця й експортуються text/csv (_invCsvToText: клітинки через таб, коми в лапках цілі);
+//         досі йшли в Google Документ → «Drive export HTTP 400: conversion is not supported» (30578.xls, 24.09).
+//         Ключ суми допускає «, грн» перед двокрапкою («Всього до сплати, грн: 2 450,00»).
 // v7.326: getOpexOverview(year, category) — необовʼязковий фільтр статті (фрагмент назви, без регістру);
 //         локація без такої статті → catFound:false. Для R&D: «Методична частина» по всіх локаціях.
 // v7.325: МОДЕЛЬ ОПЛАТИ предметників — кол. I «Модель» у Предметники_Каталог («За заняття»/«Місяць»).
@@ -2756,17 +2760,59 @@ function _invFetchFile(fileId){
 // Drive → Google Doc з OCR → текст → тимчасовий файл у кошик.
 // Advanced Drive Service буває v3 (Files.create) і v2 (Files.insert) — підтримуємо обидва,
 // бо вмикається він вручну і версія залежить від того, що обрали в редакторі.
+// v7.329: таблиці (.xls/.xlsx/.ods/.csv) Drive у Google Документ НЕ конвертує — лише в Google Таблицю,
+// а з Таблиці text/plain не експортується («The requested conversion is not supported», рахунок 30578.xls
+// 24.09). Telegram віддає такі файли як application/octet-stream, тож тип визначаємо за розширенням
+// і MIME: імпортуємо як Таблицю з правильним типом джерела і експортуємо text/csv (перший аркуш).
+var _INV_SHEET_MIME = {xls:'application/vnd.ms-excel',
+  xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  ods:'application/vnd.oasis.opendocument.spreadsheet', csv:'text/csv'};
+function _invSheetKind(blob, name){
+  var m = /\.([a-z0-9]+)\s*$/i.exec(String(name || '')), ext = m ? m[1].toLowerCase() : '';
+  if (_INV_SHEET_MIME[ext]) return ext;
+  var ct = String((blob && blob.getContentType && blob.getContentType()) || '').toLowerCase();
+  for (var k in _INV_SHEET_MIME) if (ct === _INV_SHEET_MIME[k]) return k;
+  return '';
+}
+// CSV → текст для регекс-витягу: клітинки рядка через табуляцію, порожні відкидаємо. Лапки й «""»
+// всередині клітинки обробляємо, тож «2 450,00» і «Всього до сплати, грн» лишаються цілими.
+function _invCsvToText(csv){
+  var s = String(csv || ''), out = [], row = [], cell = '', q = false;
+  for (var i = 0; i < s.length; i++){
+    var ch = s.charAt(i);
+    if (q){
+      if (ch === '"'){ if (s.charAt(i + 1) === '"'){ cell += '"'; i++; } else q = false; }
+      else cell += ch;
+    } else if (ch === '"') q = true;
+    else if (ch === ','){ row.push(cell); cell = ''; }
+    else if (ch === '\n' || ch === '\r'){
+      if (ch === '\r' && s.charAt(i + 1) === '\n') i++;
+      row.push(cell); cell = '';
+      var line = row.map(function(c){ return String(c).trim(); }).filter(Boolean).join('\t');   // таб: не зливає «10» і «2 450,00» в одне число
+      if (line) out.push(line);
+      row = [];
+    } else cell += ch;
+  }
+  row.push(cell);
+  var last = row.map(function(c){ return String(c).trim(); }).filter(Boolean).join('\t');
+  if (last) out.push(last);
+  return out.join('\n');
+}
 function _invTextFromDrive(blob, name){
   var docId = null;
   try {
     if(typeof Drive === 'undefined' || !Drive.Files) return {ok:false, error:'Drive API не ввімкнено (Служби → Drive API)'};
+    var sheetKind = _invSheetKind(blob, name);                                   // v7.329
+    if (sheetKind) blob.setContentType(_INV_SHEET_MIME[sheetKind]);
+    var targetMime = sheetKind ? 'application/vnd.google-apps.spreadsheet' : 'application/vnd.google-apps.document';
+    var exportMime = sheetKind ? 'text%2Fcsv' : 'text%2Fplain';
     var file;
     if(Drive.Files.create){
-      file = Drive.Files.create({name:(name||'invoice'), mimeType:'application/vnd.google-apps.document'},
-                                blob, {ocrLanguage:'uk', supportsAllDrives:true});
+      file = Drive.Files.create({name:(name||'invoice'), mimeType:targetMime},
+                                blob, sheetKind ? {supportsAllDrives:true} : {ocrLanguage:'uk', supportsAllDrives:true});
     } else {
-      file = Drive.Files.insert({title:(name||'invoice'), mimeType:'application/vnd.google-apps.document'},
-                                blob, {ocr:true, ocrLanguage:'uk', convert:true});
+      file = Drive.Files.insert({title:(name||'invoice'), mimeType:targetMime},
+                                blob, sheetKind ? {convert:true} : {ocr:true, ocrLanguage:'uk', convert:true});
     }
     docId = file && (file.id || file.getId && file.getId());
     if(!docId) return {ok:false, error:'Drive не повернув id'};
@@ -2777,7 +2823,7 @@ function _invTextFromDrive(blob, name){
     var txt = '';
     try {
       var r = UrlFetchApp.fetch(
-        'https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(docId) + '/export?mimeType=text%2Fplain',
+        'https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(docId) + '/export?mimeType=' + exportMime,
         {headers:{Authorization:'Bearer ' + ScriptApp.getOAuthToken()}, muteHttpExceptions:true});
       if(r.getResponseCode() === 200) txt = r.getContentText();
       else return {ok:false, error:'Drive export HTTP ' + r.getResponseCode() + ': ' + r.getContentText().slice(0,160)};
@@ -2785,7 +2831,8 @@ function _invTextFromDrive(blob, name){
       try { txt = DocumentApp.openById(docId).getBody().getText(); }          // резерв, якщо скоуп усе-таки є
       catch(_de){ return {ok:false, error:'export+DocumentApp: ' + String(_ex && _ex.message || _ex)}; }
     }
-    return {ok:true, text:String(txt||''), chars:String(txt||'').length};
+    if (sheetKind) txt = _invCsvToText(txt);   // v7.329: CSV → рядки, клітинки через пробіл (коми в лапках цілі)
+    return {ok:true, text:String(txt||''), chars:String(txt||'').length, kind:(sheetKind ? 'sheet:' + sheetKind : 'doc')};
   } catch(e){
     return {ok:false, error:'Drive OCR: '+String(e&&e.message||e)};
   } finally {
@@ -2841,7 +2888,8 @@ function _invParseInvoiceText(txt){
   // ⚠️ У числовому класі — ЛИШЕ пробіл і \u00A0, без \s: \s включає \n, і шаблон склеював
   // два числа з сусідніх рядків («№ 5» + «1 200,50» → 51200.50). Після ключового слова
   // дозволяємо максимум один перенос («Всього до сплати:\n2 450,00»).
-  var mA = t.match(/(?:усього\s+до\s+сплати|всього\s+до\s+сплати|до\s+сплати|разом\s+до\s+сплати|сума\s+до\s+оплати|всього|разом)[ \t]*[:\-–]?[ \t]*\n?[ \t]*([\d \u00A0]+[.,]\d{2}|\d[\d \u00A0]{2,})/i);
+  // v7.329: + «, грн» / «грн.» між ключовим словом і двокрапкою («Всього до сплати, грн: 2 450,00»).
+  var mA = t.match(/(?:усього\s+до\s+сплати|всього\s+до\s+сплати|до\s+сплати|разом\s+до\s+сплати|сума\s+до\s+оплати|всього|разом)(?:[ \t]*,?[ \t]*(?:грн|uah)\.?)?[ \t]*[:\-–]?[ \t]*\n?[ \t]*([\d \u00A0]+[.,]\d{2}|\d[\d \u00A0]{2,})/i);
   if(mA){ out.amount = _invNum(mA[1]); if(out.amount) out.found.push('сума'); }
   if(!out.amount){
     var nums = t.match(/\d[\d \u00A0]*[.,]\d{2}/g) || [];
@@ -6331,7 +6379,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.326', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.329', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
