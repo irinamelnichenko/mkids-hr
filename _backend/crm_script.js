@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.325
+// m.kids CRM — Google Apps Script v7.326
+// v7.326: getOpexOverview(year, category) — необовʼязковий фільтр статті (фрагмент назви, без регістру);
+//         локація без такої статті → catFound:false. Для R&D: «Методична частина» по всіх локаціях.
 // v7.325: МОДЕЛЬ ОПЛАТИ предметників — кол. I «Модель» у Предметники_Каталог («За заняття»/«Місяць»).
 //         «Місяць»: ставка = сума на місяць; exportPredmetnykyToSalary пише її як є, якщо за місяць є
 //         хоч одне заняття; нуль занять → клітинку Salary не чіпає (крім власного попереднього запису
@@ -6329,7 +6331,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.325', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.326', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -6366,7 +6368,7 @@ function doGet(e) {
     else if (action === 'dryRunImportAbsences')      result = dryRunImportAbsences(e.parameter.loc || '');
     else if (action === 'importAbsencesFromPayment') result = importAbsencesFromPayment(e.parameter.loc || '');
     else if (action === 'getOpexData')               result = getOpexData(e.parameter.loc || '', e.parameter.year || '');
-    else if (action === 'getOpexOverview')           result = getOpexOverview(e.parameter.year || '');
+    else if (action === 'getOpexOverview')           result = getOpexOverview(e.parameter.year || '', e.parameter.category || '');   // v7.326 +category
     else if (action === 'getClosedMonths')            result = getClosedMonths();                                 // v7.91
     else if (action === 'getOpexContractors')        result = getOpexContractors();                              // v7.84 мапа контрагентів
     else if (action === 'resolveIbanLoc')            result = resolveIbanLoc(e.parameter.iban || '');            // v7.84 IBAN→локація
@@ -13055,7 +13057,11 @@ function getOpexData(loc, year) {
   };
 }
 
-function getOpexOverview(year) {
+// v7.326: category (необовʼязково) — рахувати ЛИШЕ рядки статей, назва яких містить цей фрагмент
+// (без регістру). Для R&D: «Методична частина» по всіх локаціях. Локація без такої статті
+// повертається з catFound:false, щоб нуль не маскував відсутність рядка.
+function getOpexOverview(year, category) {
+  var _catNeedle = String(category || '').trim().toLowerCase();
   var configSS = SpreadsheetApp.openById(CONFIG_SHEET_ID);
   var regSheet = configSS.getSheetByName('OPEX');
   if (!regSheet) return {ok:false, error:'OPEX registry tab not found in CONFIG'};
@@ -13090,6 +13096,7 @@ function getOpexOverview(year) {
         if (idx >= data.length) break;
         var rawName = String((data[idx] || [])[0] || '').trim();
         if (_opexIsSkippedCategory(rawName)) continue;
+        if (_catNeedle && rawName.toLowerCase().indexOf(_catNeedle) === -1) continue;   // v7.326
         catIdxs.push(idx);
       }
 
@@ -13117,7 +13124,8 @@ function getOpexOverview(year) {
         type: typ,
         monthsTotals: monthsTotals,
         yearFact: yearFact,
-        yearBudget: yearBudget
+        yearBudget: yearBudget,
+        catFound: _catNeedle ? catIdxs.length > 0 : undefined   // v7.326
       });
     } catch (e) {
       errors.push({loc: loc, error: (e && e.message) ? e.message : String(e)});
@@ -13127,6 +13135,7 @@ function getOpexOverview(year) {
   return {
     ok: true,
     year: year ? Number(year) || year : '',
+    category: _catNeedle || '',   // v7.326
     locations: locations,
     errors: errors
   };

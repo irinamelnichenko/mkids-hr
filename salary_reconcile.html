@@ -222,6 +222,10 @@ td.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
            onclick="goPerm('vacation_schedule')">
         <span class="ni">🌴</span> Графік відпусток
       </div>
+      <div class="nav-item" data-permission="loccard" data-parent="hr" data-perm-page="index"
+           data-v="loccard" onclick="goPerm('loccard')">
+        <span class="ni">🏢</span> Картка локації
+      </div>
       <div class="nav-sec" data-section="analytics">📈 АНАЛІТИКА</div>
       <div class="nav-item" data-permission="analytics_clients" data-parent="analytics" data-perm-page="clients"
            onclick="goPerm('analytics_clients')">
@@ -432,6 +436,11 @@ var CURRENT_PAGE = 'salary_reconcile';
 var SESSION_TTL_MS = 7 * 24 * 3600 * 1000;
 var S = { user: null };
 var NETWORK_ROLES = ['hr','cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo'];
+// v7.326: верхні пункти «Ліди» / «Контроль заповнення» / «Звірка платежів» / «Звірка ЗП»
+// НЕ для цих мережевих ролей. Окремий список, бо NETWORK_ROLES ще й дає доступ до всіх локацій.
+var NAV_TOP_DENY = ['ceo','coo','hr_trainer','rnd_director'];
+function canSeeTopNet(role){ var r = String(role || '').toLowerCase().trim();
+  return NETWORK_ROLES.indexOf(r) !== -1 && NAV_TOP_DENY.indexOf(r) === -1; }
 function isNetworkRole(role){ return NETWORK_ROLES.indexOf(String(role||'').toLowerCase()) !== -1; }
 function readSession(){
   try {
@@ -447,11 +456,11 @@ function readSession(){
 function doLogout(){ try{ localStorage.removeItem(SESSION_KEY); }catch(e){} window.location.href = 'index.html'; }
 var PERMISSIONS = {
   cfo:'all', hr:'all',
-  ceo:['dashboard','clients_list','needs_attention','cards_completion','payments','attendance_kids','recalc','employees','timesheet_staff','vacations','sick_leaves','calendar','vacation_schedule','analytics_clients','analytics_hr','opex','categories','salary','overview_analytics','activities','predmetnyky','settings'],
+  ceo:['dashboard','clients_list','payments','attendance_kids','recalc','employees','timesheet_staff','vacations','sick_leaves','calendar','vacation_schedule','loccard','opex','categories','salary','activities','predmetnyky'],   // v7.326
   cco:['dashboard','clients_list','payments','attendance_kids','recalc','employees','timesheet_staff','vacations','sick_leaves','calendar','vacation_schedule','analytics_clients','analytics_hr','opex','categories','salary','overview_analytics','activities','predmetnyky','settings'],
-  coo:['dashboard','clients_list','payments','attendance_kids','recalc','employees','timesheet_staff','vacations','sick_leaves','calendar','vacation_schedule','analytics_clients','analytics_hr','opex','categories','salary','overview_analytics','activities','predmetnyky','settings'],
-  rnd_director:['dashboard','opex','clients_list','attendance_kids','employees','timesheet_staff','vacations','sick_leaves','calendar','vacation_schedule','analytics_hr','activities','predmetnyky'],
-  hr_trainer:['dashboard','clients_list','attendance_kids','employees','timesheet_staff','vacations','sick_leaves','calendar','vacation_schedule','analytics_hr','activities','predmetnyky'],
+  coo:['opex','salary','categories','loccard'],   // v7.326
+  rnd_director:['dashboard','opex','clients_list','attendance_kids','employees','timesheet_staff','vacations','sick_leaves','calendar','vacation_schedule','loccard','activities','predmetnyky'],   // v7.326
+  hr_trainer:['dashboard','clients_list','attendance_kids','employees','timesheet_staff','vacations','sick_leaves','calendar','vacation_schedule','loccard'],   // v7.326
   legal:['dashboard','clients_list','payments','attendance_kids','employees','timesheet_staff','calendar'],
   cmo:['dashboard','tasks','tasks-create'],
   director:['clients_list','payments','attendance_kids','employees','timesheet_staff','vacations','sick_leaves','calendar','vacation_schedule','opex','salary','activities','predmetnyky','invoices'],
@@ -535,7 +544,7 @@ function applyRoleVisibility(){
     var visible = (allowed === 'all') || (Array.isArray(allowed) && allowed.indexOf(perm) >= 0);
     el.style.display = visible ? '' : 'none';
   });
-  var net = isNetworkRole(role);
+  var net = canSeeTopNet(role);   // v7.326
   var fc = document.getElementById('navFillControl'); if (fc) fc.style.display = net ? '' : 'none';
   var rc = document.getElementById('navReconcile');   if (rc) rc.style.display = net ? '' : 'none';
   var sr = document.getElementById('navSalaryRecon'); if (sr) sr.style.display = net ? '' : 'none';
@@ -567,7 +576,7 @@ document.addEventListener('click', function(e){ if (e.target.closest && e.target
   S.user = readSession();
   if (!S.user){ window.location.href = 'index.html'; return; }
   updUserUI();
-  if (!isNetworkRole(S.user.role)){
+  if (!canSeeTopNet(S.user.role)){   // v7.326
     var w = document.querySelector('.wrap');
     if (w) w.innerHTML = '<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">'
       + '<button class="menu-toggle" onclick="toggleSidebar()">☰</button><h1 style="margin:0">💸 Автозвірка ЗП</h1></div>'
@@ -893,7 +902,7 @@ function doApplyNeeded(){
 <script>
 /* v7.152: пункт «Ліди» — мережеві ролі + директорка; решті не показуємо. */
 (function(){
-  var ALLOW=['hr','cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo'];   // v7.237: без director
+  var ALLOW=['hr','cfo','cco','legal','cmo'];   // v7.237: без director; v7.326: без CEO/COO/HR/R&D
   function reveal(){
     var el=document.getElementById('navLeads'); if(!el) return;
     var u=null; try{ u=(typeof S!=='undefined'&&S&&S.user)?S.user:null; }catch(e){}   // v7.242: див. canSeeMeals
