@@ -1,5 +1,11 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.324
+// m.kids CRM — Google Apps Script v7.325
+// v7.325: МОДЕЛЬ ОПЛАТИ предметників — кол. I «Модель» у Предметники_Каталог («За заняття»/«Місяць»).
+//         «Місяць»: ставка = сума на місяць; exportPredmetnykyToSalary пише її як є, якщо за місяць є
+//         хоч одне заняття; нуль занять → клітинку Salary не чіпає (крім власного попереднього запису
+//         за журналом). Стеля норм і перейменування рядка Salary для «Місяць» не застосовуються.
+//         Старий exportPredmetnyToSalary (v6.5) позиції «Місяць» пропускає. add/updatePredmetny
+//         приймають payModel; колонка I створюється сама.
 // v7.324: Школа 228 — дві фізкультури з різними ставками (Лакіза 720 / Баранов 590) розведено іменними
 //         позиціями в CATALOG_TO_NORM_MAP + PRED_SUBJECTS (як психологи Осокорків v7.268), інакше урок
 //         оплачувався б двічі. _normalizeSubject знає «інформатик» → 'Інформатика' (досі null = не в Salary).
@@ -6323,7 +6329,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.324', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.325', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -26707,6 +26713,20 @@ var PREDMETNY_ATT_SHEET      = 'Предметники_Відвідуваніс�
 // v7.199 (Б.2): + EmpKey — прив'язка позиції каталогу до конкретного виконавця.
 // Колонка G дописується в КІНЕЦЬ, наявні шість не зсуваються.
 var PREDMETNY_CATALOG_HEADER = ['id','Локація','Предмет','Ставка_за_заняття','Викладач','Активне','EmpKey','UID'];   // v7.200 (UID.3)
+// v7.325: МОДЕЛЬ ОПЛАТИ позиції — кол. I «Модель»: порожньо/«За заняття» = як досі (уроки × ставка),
+// «Місяць» = у «Ставка_за_заняття» лежить МІСЯЧНА сума, експорт пише її як є (без множення).
+// Окрема константа, а не +1 до PREDMETNY_CATALOG_HEADER: від довжини шапки залежать утиліти,
+// що перезаписують каталог рядками по 8 колонок, — розширення зламало б їх.
+var PRED_CATALOG_MODEL_COL  = 9;   // I
+var PRED_CATALOG_MODEL_HEAD = 'Модель';
+function _predPayModelOf(v){ return /міс|month/i.test(String(v == null ? '' : v)) ? 'month' : 'lesson'; }
+function _predPayModelCell(m){ return m === 'month' ? 'Місяць' : 'За заняття'; }
+function _predCatEnsureModelCol(sh){
+  if (sh.getMaxColumns() < PRED_CATALOG_MODEL_COL)
+    sh.insertColumnsAfter(sh.getMaxColumns(), PRED_CATALOG_MODEL_COL - sh.getMaxColumns());
+  var h = sh.getRange(1, PRED_CATALOG_MODEL_COL);
+  if (String(h.getValue() || '').trim() === '') h.setValue(PRED_CATALOG_MODEL_HEAD);
+}
 var PREDMETNY_ATT_HEADER     = ['id','Дата','Локація','Група','Дитина','id_предмета','Назва_предмета','Ставка','Відмітив','Час_відмітки'];
 
 function _getPredmetnyCatalogSheet(createIfMissing){
@@ -26743,7 +26763,8 @@ function _parsePredmetnyCatRow(row){
     active:  row[5] === true ||
              /^(true|так|y|1|active|активне|✅)$/i.test(String(row[5] || '').trim()),
     empKey:  String(row[6] || '').trim(),     // v7.199 (Б.2)
-    uid:     String(row[7] || '').trim()      // v7.200 (UID.4)
+    uid:     String(row[7] || '').trim(),     // v7.200 (UID.4)
+    payModel: _predPayModelOf(row[PRED_CATALOG_MODEL_COL - 1])   // v7.325: 'lesson' | 'month'
   };
 }
 
@@ -26892,6 +26913,10 @@ function addPredmetny(data){
     if (!row[1]) return {ok: false, error: 'Поле "Локація" обовʼязкове'};
     if (!row[2]) return {ok: false, error: 'Поле "Предмет" обовʼязкове'};
     sh.appendRow(row);
+    if ('payModel' in data){                                             // v7.325
+      _predCatEnsureModelCol(sh);
+      sh.getRange(sh.getLastRow(), PRED_CATALOG_MODEL_COL).setValue(_predPayModelCell(_predPayModelOf(data.payModel)));
+    }
     return {ok: true, id: id};
   } catch(e){
     return {ok: false, error: String(e && e.message || e)};
@@ -27193,6 +27218,10 @@ function updatePredmetny(id, data){
       if ('empKey'  in data){
         sh.getRange(r1, 7).setValue(String(data.empKey || '').trim());                          // v7.199
         sh.getRange(r1, PRED_CATALOG_UID_COL).setValue(_uidForEmpKey(data.empKey));             // v7.200 (UID.5)
+      }
+      if ('payModel' in data){                                                                   // v7.325
+        _predCatEnsureModelCol(sh);
+        sh.getRange(r1, PRED_CATALOG_MODEL_COL).setValue(_predPayModelCell(_predPayModelOf(data.payModel)));
       }
       return {ok: true};
     }
@@ -27569,7 +27598,8 @@ function exportPredmetnyToSalary(params){
     // 1. Каталог предметників локації.
     var catRes = getPredmetnyCatalog(loc);
     if (!catRes.ok) return catRes;
-    var withRate = (catRes.items || []).filter(function(a){ return a.active && a.rate > 0; });
+    // v7.325: позиції «Місяць» — лише новий експорт (exportPredmetnykyToSalary); тут вони множились би.
+    var withRate = (catRes.items || []).filter(function(a){ return a.active && a.rate > 0 && a.payModel !== 'month'; });
 
     // 2. Період + відвідуваність → унікальні (група+дата) на кожен предмет.
     var attSh = _getPredmetnyAttSheet(true);
@@ -30520,7 +30550,8 @@ function getSchoolRoster(loc){
 function _loadPredCatalog(locFilter){
   var sh = _getPredmetnyCatalogSheet(false);
   if (!sh || sh.getLastRow() < 2) return [];
-  var data = sh.getRange(2, 1, sh.getLastRow() - 1, PREDMETNY_CATALOG_HEADER.length).getValues();
+  var _w = Math.max(PREDMETNY_CATALOG_HEADER.length, Math.min(sh.getLastColumn(), PRED_CATALOG_MODEL_COL));   // v7.325
+  var data = sh.getRange(2, 1, sh.getLastRow() - 1, _w).getValues();
   var out = [];
   var filter = String(locFilter || '').trim();
   for (var i = 0; i < data.length; i++){
@@ -30535,7 +30566,8 @@ function _loadPredCatalog(locFilter){
       teacher:      rec.teacher,
       active:       rec.active,
       empKey:       rec.empKey,                       // v7.199 (Б.2)
-      uid:          rec.uid                           // v7.200 (UID.4)
+      uid:          rec.uid,                          // v7.200 (UID.4)
+      payModel:     rec.payModel                      // v7.325
     });
   }
   return out;
@@ -32098,8 +32130,9 @@ function exportPredmetnykyToSalary(params){
       // тож зрізаємо надлишок із сирих (до-мержевих) значень.
       // v7.265: perGroup рахує ДАТИ, а поділ дат не додає — тож норма лишається
       // «за одне заняття» і поділ на неї не впливає, як і домовлено.
+      var isMonth = (a.payModel === 'month');   // v7.325: «Місяць» — стеля норм не застосовується
       var capExcess = 0, capDetail = [];
-      Object.keys(gbd).forEach(function(dIso){
+      if (!isMonth) Object.keys(gbd).forEach(function(dIso){
         Object.keys(gbd[dIso] || {}).forEach(function(g){
           capDetail.push(g);
         });
@@ -32119,10 +32152,22 @@ function exportPredmetnykyToSalary(params){
         Logger.log('[%s] %s → СТЕЛЯ: знято %s занять понад норму %s',
           loc, a.subject_raw, capExcess, JSON.stringify(overGroups));
       }
-      var fact = uniq * a.rate;
+      // v7.325: «Місяць» — ставка = місячна сума. Є хоч одне заняття → пишемо суму як є.
+      // Нуль занять → клітинку НЕ чіпаємо (там може бути ручна сума), крім випадку, коли
+      // її писав саме цей експорт (журнал) — тоді обнуляємо своє, як і «За заняття».
+      var fact = isMonth ? (uniq > 0 ? a.rate : 0) : uniq * a.rate;
       var catName = a.subject_raw + ' ' + a.rate;
       var nk = _journalNormName(catName);
       stats.attempts++;
+      if (isMonth && uniq === 0){
+        var _jeM = journal.byNormName[nk];
+        if (!(_jeM && _jeM.sum)){
+          details.push({subject:catName, payModel:'month', fact:0, lessons:0, status:'month-no-lessons',
+                        note:'нуль занять — клітинку Salary не чіпаю'});
+          Logger.log('[%s] %s → «Місяць», нуль занять — клітинку не чіпаю', loc, catName);
+          return;
+        }
+      }
 
       var found = _findPredmetnySalaryRow(salaryRows, a.subject_raw, a.rate);
       if (!found){
@@ -32138,7 +32183,7 @@ function exportPredmetnykyToSalary(params){
 
       // v7.305 (2): ставка в каталозі змінилась — рядок знайдено за старою ставкою
       // (P3/P5: число в назві ≠ ставці; P6: числа немає). Переписуємо лише назву.
-      var renameTo = _predRenameForRate(found.matchedAs, a.subject_raw, a.rate, found.priority);
+      var renameTo = isMonth ? null : _predRenameForRate(found.matchedAs, a.subject_raw, a.rate, found.priority);   // v7.325: «Місяць» назву не чіпає
       if (renameTo && renameTo !== found.matchedAs){
         if (!dryRun) sheet.getRange(found.row, 1).setValue(renameTo);
         for (var sr = 0; sr < salaryRows.length; sr++){
@@ -32174,7 +32219,7 @@ function exportPredmetnykyToSalary(params){
       if (planSt === 'planned') planned++;
       updated++;
       totalFact += fact;
-      details.push({subject:catName, matchedAs:found.matchedAs, priority:found.priority,
+      details.push({subject:catName, matchedAs:found.matchedAs, priority:found.priority, payModel:a.payModel,
         fact:fact, lessons:uniq, row:found.row, oldValue:currentValue, newValue:newValue,
         renamedTo:(renameTo && renameTo !== found.matchedAs) ? renameTo : null, planNext:planSt});
       Logger.log('[%s] %s → %s | lessons=%s × %s = %s | Salary row=%s col=%s | %s → %s',

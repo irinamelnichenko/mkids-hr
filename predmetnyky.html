@@ -2061,6 +2061,15 @@ function getRateFor(loc, subj){
   }
   return null;
 }
+// v7.325: модель оплати позиції — 'lesson' (уроки × ставка) або 'month' (ставка = сума на місяць).
+function getPayModelFor(loc, subj){
+  for (var i = 0; i < S.catalog.length; i++){
+    var c = S.catalog[i];
+    if (!c.active || c.loc !== loc || c.subject_norm !== subj) continue;
+    return c.payModel === 'month' ? 'month' : 'lesson';
+  }
+  return 'lesson';
+}
 function escapeJs(s){
   return String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
@@ -2495,9 +2504,10 @@ function renderHeaderCard(loc, subject){
   }
 
   // ── Rate row ──
+  var _isMonth = (getPayModelFor(loc, subject) === 'month');   // v7.325
   var rateHtml = (rate != null)
     ? '<div class="pred-card-row"><span class="pred-card-lbl">Ставка:</span> ' +
-        '<strong>' + fmtN(rate) + '₴</strong> за заняття</div>'
+        '<strong>' + fmtN(rate) + '₴</strong> ' + (_isMonth ? 'на місяць (фіксовано)' : 'за заняття') + '</div>'
     : '<div class="pred-card-row pred-teacher-missing">' +
         '⚠️ Немає ставки в каталозі — додай у Предметники_Каталог</div>';
 
@@ -2509,7 +2519,15 @@ function renderHeaderCard(loc, subject){
   var _ty = (Number(S.month) === 12) ? Number(S.year) + 1 : Number(S.year);
   var _targetNote = ' <span class="pred-card-target">→ у Salary за <strong>' + MONTHS[_tm - 1] + (_ty !== Number(S.year) ? ' ' + _ty : '') + '</strong></span>';
   var totalHtml;
-  if (rate != null){
+  if (rate != null && _isMonth){
+    // v7.325: «Місяць» — сума не залежить від кількості занять; без жодного заняття в Salary не йде.
+    totalHtml = '<div class="pred-card-row pred-card-total">' +
+      '<span class="pred-card-lbl">Разом за місяць:</span> ' +
+      '<strong>' + total + '</strong> ' + pluralUk(total, 'заняття', 'заняття', 'занять') + _mergeNote + ' → ' +
+      '<strong class="pred-card-sum">' + fmtN(total > 0 ? rate : 0) + '₴</strong>' +
+      (total > 0 ? '' : ' <span class="pred-card-target">(жодного заняття — у Salary не йде)</span>') + _targetNote +
+    '</div>';
+  } else if (rate != null){
     totalHtml = '<div class="pred-card-row pred-card-total">' +
       '<span class="pred-card-lbl">Разом за місяць:</span> ' +
       '<strong>' + total + '</strong> ' + pluralUk(total, 'заняття', 'заняття', 'занять') + _mergeNote +
