@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.334
+// m.kids CRM — Google Apps Script v7.335
+// v7.335: getNeedsAttention — назад на повне читання «Клієнтів» (вузьке виявилось повільнішим у проді);
+//         кеш 10 хв лишається. Звірка v7.334: списки ідентичні (53, ті самі категорії).
 // v7.334: «Потребують уваги» — серверний кеш 10 хв (ключ: версії 'fill' + 'pay'; _bustPayCache тепер
 //         піднімає 'pay' при кожному перезборі агрегату) і вузьке читання «Клієнтів» (6 колонок замість
 //         усіх з JSON). diagNeedsAttentionCompare — звірка повного й вузького читання.
@@ -6467,7 +6469,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.334', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.335', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -26110,14 +26112,15 @@ function _naClassify(name, loc, cards, pays){
   }
   return {cat:'decide', match:''};
 }
-// v7.334: «Потребують уваги» — кеш 10 хв (ключ з версією 'fill': її скидають saveClient, patchClientCell,
-// deleteClient, злиття, синк карток) + вузьке читання «Клієнтів» (лише 6 потрібних колонок, без важких
-// JSON здоров'я/розвитку/відсутностей). Логіка класифікації — та сама; diagNeedsAttentionCompare — звірка.
+// v7.334: «Потребують уваги» — кеш 10 хв (ключ з версіями 'fill' + 'pay': картки, перезбір агрегату).
+// Логіка класифікації — та сама; diagNeedsAttentionCompare — звірка повного й вузького читання.
 function getNeedsAttention(noCache){
   var key = 'na_' + _cacheVer('fill') + '_' + _cacheVer('pay');   // картки АБО перезбір агрегату «Оплати» → новий збір
   if (!noCache){ var hit = _cacheGzGet(key); if (hit){ hit.cached = true; return hit; } }
   var t0 = Date.now();
-  var res = _needsAttentionCompute('narrow');
+  // v7.335: повне читання — заміри в проді: вузьке (6 окремих getRange) ПОВІЛЬНІШЕ, 2,7–3,2 с проти
+  // 1,5–2,1 с одного getDataRange; списки ідентичні (diagNeedsAttentionCompare). Вузький шлях лишено для звірки.
+  var res = _needsAttentionCompute('full');
   if (res && res.ok){ res.ms = Date.now() - t0; res.cachedAt = new Date().toISOString(); _cacheGzPut(key, res, 600); }
   return res;
 }
