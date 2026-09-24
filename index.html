@@ -957,7 +957,7 @@ function freezeEmps(){
   }
 }
 
-const CRM_BDAY_CACHE_KEY = 'crm_clients_bday_cache_v2';
+const CRM_BDAY_CACHE_KEY = 'crm_clients_bday_cache_v3';   // v7.336: +status (roster)
 const CRM_BDAY_TTL = 3600 * 1000; // 1 година
 async function ensureClientsLoaded(){
   if (S.crm && Object.keys(S.crm).length) return;
@@ -970,7 +970,7 @@ async function ensureClientsLoaded(){
   } catch(e) {}
   try {
     // v7.109 БЕЗПЕКА: бекендний роут getClients замість прямого читання листа публічним ключем.
-    const r = await fetch(_tokUrl(authScriptUrl() + '?action=getClients&mode=list&format=compact'), {redirect:'follow'});   // v7.292 без полів картки, headers+rows
+    const r = await fetch(_tokUrl(authScriptUrl() + '?action=getClients&mode=roster&format=compact'), {redirect:'follow'});   // v7.336 roster: 6 полів замість 28
     if (!r.ok) throw new Error(r.status);
     const j = await r.json();
     const _H = (j && j.headers) || null;
@@ -988,7 +988,8 @@ async function ensureClientsLoaded(){
         name: name,
         loc: loc,
         group: group,
-        bday: String(row['Дата народження'] || '')
+        bday: String(row['Дата народження'] || ''),
+        status: String(row['Статус'] || 'active')   // v7.336: без статусу _isCurrentKid рахував і випускників/розірваних
       };
     }
     S.crm = crm;

@@ -2949,7 +2949,20 @@ function fillLoginLocs(){
 async function initApp(){
   loadLocalCRM();
   loadAttendanceFromStorage();
-  if(!S._naEarly) showSpinner();   // v7.334: збережений список «Потребують уваги» вже на екрані — не затираємо спінером
+  // v7.336: stale-while-revalidate — картки (S.crm), оплати й локації вже є в браузері (навіть застарілі):
+  // малюємо екран ОДРАЗУ, свіжі дані перемалюють його після завантаження нижче. Медсестра відкривається
+  // на табелі, тож їй ранній показ списку не потрібен.
+  var _earlyShown=false;
+  if(!S._naEarly && !isNurse() && Object.keys(S.crm||{}).length){
+    try{
+      var _pc=JSON.parse(localStorage.getItem(CFG.PAY_CACHE)||'null'), _lc=JSON.parse(localStorage.getItem(CFG.LOC_CACHE)||'null');
+      if(_pc && Array.isArray(_pc.data) && _pc.data.length && _lc && Array.isArray(_lc.data) && _lc.data.length){
+        S.payments=_pc.data; S.payUpdated=_pc.updated||''; S.locs=_lc.data;
+        buildGroups(); renderView(); _earlyShown=true;
+      }
+    }catch(_se){ _earlyShown=false; }
+  }
+  if(!S._naEarly && !_earlyShown) showSpinner();   // v7.334: збережений список «Потребують уваги» вже на екрані — не затираємо спінером
   setSyncStatus('sync');
   try{
     // v6.28: незалежні виклики — ПАРАЛЕЛЬНО (було 5 послідовних awaits ~16с → ~4-5с).

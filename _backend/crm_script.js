@@ -1,5 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.335
+// m.kids CRM — Google Apps Script v7.336
+// v7.336: getClients — кеш list/roster (compact) у CacheService шматками 10 хв, версія 'clients' (6 мутаторів
+//         карток); mode=roster (ID, ПІБ, Локація, Група, Дата народження, Статус) + &loc= для index/meals.
+//         diagClientsCompare — звірка roster/list, фільтра локацій і кешу.
 // v7.335: getNeedsAttention — назад на повне читання «Клієнтів» (вузьке виявилось повільнішим у проді);
 //         кеш 10 хв лишається. Звірка v7.334: списки ідентичні (53, ті самі категорії).
 // v7.334: «Потребують уваги» — серверний кеш 10 хв (ключ: версії 'fill' + 'pay'; _bustPayCache тепер
@@ -6469,7 +6472,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.335', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.336', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -6477,7 +6480,8 @@ function doGet(e) {
     else if (action === 'getPaymentsYearly')  result = getPaymentsYearly();
     else if (action === 'getAllPayments')     result = getAllPayments({loc:(e.parameter&&e.parameter.loc)||'', name:(e.parameter&&e.parameter.name)||'', year:(e.parameter&&e.parameter.year)||''}); // v7.108 історія оплат дитини за рік з Payment-файлу
     else if (action === 'getReconcileLog')           result = getReconcileLog({child:e.parameter.child||'', loc:e.parameter.loc||'', from:e.parameter.from||'', to:e.parameter.to||''}); // v7.94
-    else if (action === 'getClients')         result = getClients(e.parameter || {});   // v7.292 &mode=list без JSON здоровʼя/розвитку
+    else if (action === 'getClients')         result = getClients(e.parameter || {});   // v7.292 &mode=list без JSON здоровʼя/розвитку; v7.336 кеш + mode=roster
+    else if (action === 'diagClientsCompare') result = diagClientsCompare();                // v7.336 звірка roster/list/кеш
     else if (action === 'getClientCard')      result = getClientCard(e.parameter || {}); // v7.292 повна картка за id
     else if (action === 'runAggregate')       result = aggregatePayments();
     else if (action === 'dryRunSchoolRoster') result = dryRunSchoolRoster(e.parameter || {});   // v7.252 ростер шкіл за картками; v7.267 &simulateMove=1
@@ -6976,9 +6980,56 @@ function _clientPreserveAbsent(row, oldRow, headers, data){
 }
 // format='compact' → {headers:[...], rows:[[...]]} замість масиву обʼєктів: назви колонок
 // не повторюються 1 246 разів (ще −50% до розміру; фронт розгортає в обʼєкти сам).
+// v7.336: кеш відповіді (list/roster + compact) у CacheService шматками (стиснена ~130 КБ > 100 КБ на ключ),
+// 10 хв; ключ з версією 'clients' (її піднімають saveClient, patchClientCell, deleteClient, mergeClientDuplicate,
+// purgeAutoDraftCards, syncMissingClientsFromPayments; рідкісні міграції — TTL).
+// mode='roster' — легкий список для index.html/meals.html: ID, ПІБ, Локація, Група, Дата народження, Статус;
+// &loc= — лише одна локація.
+var CLIENT_ROSTER_COLS = ['ID', 'ПІБ дитини', 'Локація', 'Група', 'Дата народження', 'Статус'];
 function getClients(params) {
   params = params || {};
+  var mode = String(params.mode || ''), fmt = String(params.format || ''), locF = trim(String(params.loc || ''));
+  var cacheable = (fmt === 'compact') && (mode === 'list' || mode === 'roster') && String(params.nocache || '') !== '1';
+  var ckey = 'cl_' + mode + '_' + _cacheVer('clients') + '_' + _nameFold(locF);
+  if (cacheable){ var hit = _cacheGzGetBig(ckey); if (hit){ hit.cached = true; return hit; } }
+  var res = _getClientsRaw(params);
+  if (cacheable && res && res.ok) _cacheGzPutBig(ckey, res, 600);
+  return res;
+}
+// Звірка v7.336: roster ⊂ list по кожному ID; сума &loc= = весь roster; кеш = прямий збір. Нічого не пише.
+function diagClientsCompare(){
+  var norm = function(x){ return JSON.parse(JSON.stringify(x)); };        // як піде в jsonOut
+  var t0 = Date.now(), L = norm(_getClientsRaw({mode:'list', format:'compact'})), msList = Date.now() - t0;
+  var t1 = Date.now(), R = norm(_getClientsRaw({mode:'roster', format:'compact'})), msRoster = Date.now() - t1;
+  var li = {}, lid = L.headers.indexOf('ID');
+  L.rows.forEach(function(r){ li[r[lid]] = r; });
+  var mism = [], rid = R.headers.indexOf('ID');
+  R.rows.forEach(function(r){
+    var l = li[r[rid]]; if (!l){ mism.push({id:r[rid], why:'немає в list'}); return; }
+    R.headers.forEach(function(h, k){ var lv = l[L.headers.indexOf(h)]; if (JSON.stringify(lv) !== JSON.stringify(r[k])) mism.push({id:r[rid], field:h, list:lv, roster:r[k]}); });
+  });
+  var locs = {}; var iL = R.headers.indexOf('Локація');
+  R.rows.forEach(function(r){ var k = String(r[iL] || '').trim(); if (k) locs[k] = 1; });
+  var sumLoc = 0, locDiff = [];
+  Object.keys(locs).forEach(function(lc){
+    var n = _getClientsRaw({mode:'roster', format:'compact', loc:lc}).rows.length;
+    var exp = R.rows.filter(function(r){ return String(r[iL] || '').trim() === lc; }).length;
+    sumLoc += n; if (n !== exp) locDiff.push({loc:lc, got:n, expected:exp});
+  });
+  var noLoc = R.rows.filter(function(r){ return !String(r[iL] || '').trim(); }).length;
+  var viaCache = getClients({mode:'list', format:'compact'});           // перший — збір і запис у кеш
+  var viaCache2 = getClients({mode:'list', format:'compact'});          // другий — з кешу
+  var c2 = norm(viaCache2); delete c2.cached;
+  return {ok:true, listRows:L.rows.length, listCols:L.headers.length, rosterRows:R.rows.length, rosterCols:R.headers,
+          msList:msList, msRoster:msRoster, rosterVsListMismatches:mism.length, sample:mism.slice(0, 10),
+          locations:Object.keys(locs).length, sumByLoc:sumLoc, rowsWithoutLoc:noLoc, locDiff:locDiff,
+          secondCallCached: !!viaCache2.cached, cacheEqualsRaw: JSON.stringify(c2) === JSON.stringify(L)};
+}
+function _getClientsRaw(params) {
+  params = params || {};
   var lite = (String(params.mode || '') === 'list');
+  var roster = (String(params.mode || '') === 'roster');
+  var locF = trim(String(params.loc || ''));
   var compact = (String(params.format || '') === 'compact');
   var ss = getCRMSpreadsheet();
   var sheet = ss.getSheetByName(SHEET_CLIENTS);
@@ -6989,10 +7040,13 @@ function getClients(params) {
   var skip = {};
   if (lite) Object.keys(CLIENT_HEAVY_COLS).forEach(function(h){ skip[h] = true; });
   var keepIdx = [];
-  for (var h = 0; h < headers.length; h++) if (!skip[headers[h]]) keepIdx.push(h);
+  if (roster){ CLIENT_ROSTER_COLS.forEach(function(hn){ var ix = headers.indexOf(hn); if (ix >= 0) keepIdx.push(ix); }); }
+  else for (var h = 0; h < headers.length; h++) if (!skip[headers[h]]) keepIdx.push(h);
+  var iLocF = locF ? headers.indexOf('Локація') : -1;
   var rows = [];
   for (var r = 1; r < vals.length; r++) {
     if (!vals[r][0]) continue;
+    if (iLocF >= 0 && String(vals[r][iLocF] || '').trim() !== locF) continue;   // v7.336 &loc=
     if (compact){
       var arr = new Array(keepIdx.length);
       for (var k = 0; k < keepIdx.length; k++) arr[k] = vals[r][keepIdx[k]];
@@ -7003,8 +7057,9 @@ function getClients(params) {
     for (var c = 0; c < keepIdx.length; c++) obj[headers[keepIdx[c]]] = vals[r][keepIdx[c]];
     rows.push(obj);
   }
-  if (compact) return {ok:true, headers: keepIdx.map(function(i){ return headers[i]; }), rows: rows, mode: lite ? 'list' : 'full', format: 'compact'};
-  return {ok:true, data:rows, mode: lite ? 'list' : 'full'};
+  var _mode = roster ? 'roster' : (lite ? 'list' : 'full');
+  if (compact) return {ok:true, headers: keepIdx.map(function(i){ return headers[i]; }), rows: rows, mode: _mode, format: 'compact'};
+  return {ok:true, data:rows, mode: _mode};
 }
 // v7.292: одна повна картка за ID (усі колонки, включно зі здоровʼям і розвитком).
 // Рядок шукаємо TextFinder-ом по колонці A, читаємо лише його.
@@ -7277,7 +7332,7 @@ function dryRunBlankBlocks(params){
 // BKP_Клієнти_чернетки_<штамп>.
 // ═══════════════════════════════════════════════════════════════════════════
 function purgeAutoDraftCards(body){
-  _cacheBump('fill');   // v7.293 кеш getFillStatus
+  _cacheBump('fill'); _cacheBump('clients');   /* v7.336 кеш getClients */   // v7.293 кеш getFillStatus
   body = body || {};
   var names  = body.names || [];
   var loc    = String(body.loc || '').trim();
@@ -8783,7 +8838,7 @@ function restoreContractNumbers(body){
 function saveClient(data) {
   if (!data || !data.id) return {ok:false, error:'Missing id'};
   _invalidateLeadClientIndex();   // v7.279
-  _cacheBump('fill');             // v7.293 кеш getFillStatus
+  _cacheBump('fill'); _cacheBump('clients');   /* v7.336 кеш getClients */             // v7.293 кеш getFillStatus
   var ss = getCRMSpreadsheet();
   var sheet = ss.getSheetByName(SHEET_CLIENTS);
   if (!sheet) return {ok:false, error:'Sheet not found'};
@@ -9000,7 +9055,7 @@ function _mergeAbsencesUnion(a, b){
 // Універсально — для решти 43 пар (виклик по кожній parою targetId/sourceId).
 // ═══════════════════════════════════════════════════════════════════════════
 function mergeClientDuplicate(body){
-  _cacheBump('fill');   // v7.293 кеш getFillStatus
+  _cacheBump('fill'); _cacheBump('clients');   /* v7.336 кеш getClients */   // v7.293 кеш getFillStatus
   _invalidateLeadClientIndex();   // v7.279
   var lock = LockService.getScriptLock();
   try { lock.waitLock(60000); } catch(e){ return {ok:false, error:'LOCK_TIMEOUT'}; }
@@ -9368,7 +9423,7 @@ function normalizeAttendanceIds(body){
 // v7.44 — точкове виправлення однієї клітинки клієнта (напр. відновити № договору,
 // зіпсований у date-клітинку). asText:true → формат '@' (текст), щоб число не стало датою.
 function patchClientCell(body){
-  _cacheBump('fill');   // v7.293 кеш getFillStatus
+  _cacheBump('fill'); _cacheBump('clients');   /* v7.336 кеш getClients */   // v7.293 кеш getFillStatus
   body = body || {};
   _invalidateLeadClientIndex();   // v7.279
   var id  = String(body.id  || '').trim();
@@ -9692,7 +9747,7 @@ function patchClientAbsences(id, absences) {
 function deleteClient(id) {
   if (!id) return {ok:false, error:'Missing id'};
   _invalidateLeadClientIndex();   // v7.279
-  _cacheBump('fill');             // v7.293
+  _cacheBump('fill'); _cacheBump('clients');   /* v7.336 кеш getClients */             // v7.293
   var ss = getCRMSpreadsheet();
   var sheet = ss.getSheetByName(SHEET_CLIENTS);
   if (!sheet) return {ok:false, error:'Sheet not found'};
@@ -14405,6 +14460,27 @@ function _cacheGzGet(key){
   try {
     var v = CacheService.getScriptCache().get(key); if (!v) return null;
     return JSON.parse(Utilities.ungzip(Utilities.newBlob(Utilities.base64Decode(v), 'application/x-gzip')).getDataAsString());
+  } catch(_e){ return null; }
+}
+// v7.336: великий обʼєкт — gzip+base64 шматками по 90 000 символів (ліміт значення ~100 КБ).
+function _cacheGzPutBig(key, obj, ttl){
+  try {
+    var b64 = Utilities.base64Encode(Utilities.gzip(Utilities.newBlob(JSON.stringify(obj), 'application/json')).getBytes());
+    var CH = 90000, n = Math.ceil(b64.length / CH);
+    if (n > 20) return;                                   // понад ~1,8 МБ — не кешуємо
+    var put = {}; for (var i = 0; i < n; i++) put[key + '_' + i] = b64.substr(i * CH, CH);
+    put[key + '_n'] = String(n);
+    CacheService.getScriptCache().putAll(put, ttl || 600);
+  } catch(_e){}
+}
+function _cacheGzGetBig(key){
+  try {
+    var c = CacheService.getScriptCache(), n = Number(c.get(key + '_n')) || 0;
+    if (!n) return null;
+    var ks = []; for (var i = 0; i < n; i++) ks.push(key + '_' + i);
+    var got = c.getAll(ks), s = '';
+    for (var j = 0; j < n; j++){ var part = got[ks[j]]; if (part == null) return null; s += part; }
+    return JSON.parse(Utilities.ungzip(Utilities.newBlob(Utilities.base64Decode(s), 'application/x-gzip')).getDataAsString());
   } catch(_e){ return null; }
 }
 function _cacheGzPut(key, obj, ttl){
@@ -26224,7 +26300,7 @@ function _needsAttentionCompute(readMode){
 }
 
 function syncMissingClientsFromPayments(opts){
-  _cacheBump('fill');   // v7.293 кеш getFillStatus (нові картки)
+  _cacheBump('fill'); _cacheBump('clients');   /* v7.336 кеш getClients */   // v7.293 кеш getFillStatus (нові картки)
   opts = opts || {};
   // default dryRun=true: лише opts.dryRun === false вмикає реальний режим.
   var dryRun = (opts.dryRun !== false);
