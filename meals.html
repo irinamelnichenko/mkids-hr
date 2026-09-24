@@ -1041,5 +1041,35 @@ else init();
   window.addEventListener('pagehide', _leave);
 })();
 </script>
+<script>
+/* v7.328: бокове меню не губить активний пункт при переході між сторінками.
+   Кожен перехід — нове завантаження сторінки, тож меню стартувало з верху; відколи в ньому
+   з'явилась «Картка локації» (v7.326/7.327), нижні пункти FINANCE опинились за краєм екрана.
+   Зберігаємо прокрутку меню перед переходом, відновлюємо після завантаження і, якщо активний
+   пункт усе одно поза видимою частиною, центруємо його. Другий прохід — після того, як
+   applyRoleVisibility сховає зайві пункти (висота меню змінюється). Ручну прокрутку не перебиваємо. */
+(function(){
+  var KEY = 'mk_sb_scroll', touched = false;
+  function sb(){ return document.getElementById('sidebar') || document.querySelector('.sidebar'); }
+  function save(){ var s = sb(); if (!s) return; try { sessionStorage.setItem(KEY, String(s.scrollTop)); } catch(e){} }
+  function restore(){
+    var s = sb(); if (!s || touched) return;
+    var v = null; try { v = sessionStorage.getItem(KEY); } catch(e){}
+    if (v != null) s.scrollTop = Number(v) || 0;
+    var a = s.querySelector('.nav-item.active');
+    if (a && a.offsetParent !== null){
+      var r = a.getBoundingClientRect(), R = s.getBoundingClientRect();
+      if (r.top < R.top || r.bottom > R.bottom) s.scrollTop += (r.top - R.top) - (R.height - r.height) / 2;
+    }
+  }
+  document.addEventListener('click', function(e){ if (e.target.closest && e.target.closest('.nav-item')) save(); }, true);
+  window.addEventListener('pagehide', save);
+  window.addEventListener('load', function(){
+    var s = sb();
+    if (s){ ['wheel','touchmove','keydown'].forEach(function(ev){ s.addEventListener(ev, function(){ touched = true; }, {passive:true}); }); }
+    restore(); setTimeout(restore, 700);
+  });
+})();
+</script>
 </body>
 </html>
