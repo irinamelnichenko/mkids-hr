@@ -1,5 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.329
+// m.kids CRM — Google Apps Script v7.330
+// v7.330: розбір рахунків — номер «Рахунок на оплату (товарів) №», дата словами «від 23 вересня 2026 р.»,
+//         постачальник лише як окреме слово (не «…постачальника, самовивозом»), назва = перша клітинка
+//         рядка з обрізаними реквізитами (ЄДРПОУ/ІПН/IBAN). dryRun розпізнавання повертає textPreview.
 // v7.329: бот рахунків — таблиці (.xls/.xlsx/.ods/.csv; Telegram шле їх як octet-stream) імпортуються в Drive
 //         як Google Таблиця й експортуються text/csv (_invCsvToText: клітинки через таб, коми в лапках цілі);
 //         досі йшли в Google Документ → «Drive export HTTP 400: conversion is not supported» (30578.xls, 24.09).
@@ -2854,13 +2857,24 @@ function _invNum(s){
 // значення гірше за порожнє: воно перекриває якісну відповідь LLM і йде в лист та в групу.
 var _INV_JUNK_WORDS = /(ЄДРПОУ|ЕДРПОУ|р\/рахунок|розрахунковий|банк|МФО|ІПН|РНОКПП|адреса|тел\.|платник|отримувач|призначення)/i;
 function _invSaneSupplier(v){
-  var x = trim(String(v||'')).replace(/\s{2,}/g,' ').replace(/[:;,\-]+$/,'');
+  // v7.329+: з таблиць рядок іде клітинками через таб — беремо першу непорожню; реквізити після назви
+  // («ТОВ «Бета» ЄДРПОУ 22223333») відрізаємо, а не відкидаємо весь рядок.
+  var x = String(v||'').split('\t').map(function(c){ return trim(c); }).filter(Boolean)[0] || '';
+  x = x.replace(/[\s,;]*(?:код\s+)?(?:ЄДРПОУ|ЕДРПОУ|ІПН|РНОКПП|IBAN|р\/рахунок)[\s\S]*$/i, '');
+  x = trim(x).replace(/\s{2,}/g,' ').replace(/[:;,\-]+$/,'');
   if(x.length < 3 || x.length > 90) return '';
   if(_INV_JUNK_WORDS.test(x)) return '';
   if(!/[А-Яа-яІЇЄҐіїєґA-Za-z]{3}/.test(x)) return '';
   return x;
 }
 
+// «від 23 вересня 2026 р.» → той самий формат збігу, що й числова дата: [_, д, м, рррр].
+var _INV_MONTHS_GEN = {'січня':1,'лютого':2,'березня':3,'квітня':4,'травня':5,'червня':6,'липня':7,
+  'серпня':8,'вересня':9,'жовтня':10,'листопада':11,'грудня':12};
+function _invWordDate(t){
+  var m = String(t||'').match(/від\s*«?\s*(\d{1,2})\s*»?\s*(січня|лютого|березня|квітня|травня|червня|липня|серпня|вересня|жовтня|листопада|грудня)\s+(\d{4})/i);
+  return m ? [m[0], m[1], String(_INV_MONTHS_GEN[m[2].toLowerCase()]), m[3]] : null;
+}
 function _invParseInvoiceText(txt){
   var t = String(txt||'').replace(/ /g,' ');
   var out = {supplier:'', edrpou:'', number:'', amount:0, date:'', confidence:'low', found:[]};
@@ -2872,12 +2886,14 @@ function _invParseInvoiceText(txt){
   // OCR часто читає «№» як «No», «N°» або «Nº» — приймаємо всі варіанти. Номер ЗОБОВ'ЯЗАНИЙ
   // містити цифру, і перебираємо ВСІ входження: у шапці реквізитів трапляється
   // «Р/рахунок No Банк», і перше (сміттєве) входження інакше блокувало справжнє «Рахунок No 236».
-  var reN = /(?:рахунок[-\s]*фактура|рахунок|invoice)\s*(?:№|Nº|N°|No|N|#)\s*[:\-]?\s*([A-Za-zА-Яа-яІЇЄҐіїєґ0-9\-\/\.]{1,24})/ig, mN;
+  // v7.329+: між «рахунок» і «№» допускаємо до 3 слів («Рахунок на оплату №», «Рахунок на оплату товарів №»).
+  var reN = /(?:рахунок[-\s]*фактура|рахунок(?:\s+(?:на|оплату|товарів|послуг|по|замовленню)){0,3}|invoice)\s*(?:№|Nº|N°|No|N|#)\s*[:\-]?\s*([A-Za-zА-Яа-яІЇЄҐіїєґ0-9\-\/\.]{1,24})/ig, mN;
   while((mN = reN.exec(t)) !== null){
     if(/\d/.test(mN[1])){ out.number = mN[1].replace(/[.,;]+$/,''); out.found.push('номер'); break; }
   }
 
   var mD = t.match(/від\s*«?\s*(\d{1,2})\s*[.\/\-]\s*(\d{1,2})\s*[.\/\-]\s*(\d{2,4})/i)
+        || _invWordDate(t)                                                        // v7.329+: «від 23 вересня 2026 р.»
         || t.match(/(\d{1,2})[.\/](\d{1,2})[.\/](\d{4})/);
   if(mD){
     var yy = mD[3].length===2 ? ('20'+mD[3]) : mD[3];
@@ -2898,7 +2914,8 @@ function _invParseInvoiceText(txt){
     if(best){ out.amount = best; out.found.push('сума(макс.)'); }
   }
 
-  var mS = t.match(/(?:Постачальник|Продавець|Виконавець)\s*[:\-]?\s*([^\n]{3,90})/i);
+  // v7.329+: лише ОКРЕМЕ слово — інакше «…постачальника, самовивозом…» давало «а, самовивозом…».
+  var mS = t.match(/(?:Постачальник|Продавець|Виконавець)(?![А-Яа-яІЇЄҐіїєґ])\s*[:\-]?\s*([^\n]{3,90})/i);
   if(mS) out.supplier = _invSaneSupplier(mS[1]);
   if(!out.supplier){
     var mS2 = t.match(/((?:ТОВ|ТзОВ|ПП|ФОП|ПрАТ|АТ|ДП)[\s«"'][^\n]{2,70})/i);
@@ -3010,6 +3027,7 @@ function _invProcessRow(sh, H, row, rowNum, dryRun){
   var parsed = d.ok ? _invParseInvoiceText(d.text) : _invParseInvoiceText('');
   rep.driveOk = !!d.ok;
   rep.driveChars = d.ok ? d.chars : 0;
+  if (dryRun && d.ok) { rep.textPreview = String(d.text || '').slice(0, 1500); rep.driveKind = d.kind || ''; }   // v7.329+: діагностика
   if(!d.ok) rep.driveErr = d.error;
   rep.source = d.ok ? 'drive-ocr' : '';
 
@@ -6379,7 +6397,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.329', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.330', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
