@@ -1,5 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.321
+// m.kids CRM — Google Apps Script v7.322
+// v7.322: getVyhovatelRatings — оцінка співробітника тепер ПОКВАРТАЛЬНА (ключ 'РРРР-Q1..Q4'),
+//         старі помісячні 'РРРР-ММ' лишаються історією. Проти подвійного рахунку: якщо за квартал є
+//         квартальна оцінка, місячні того ж кварталу в середнє НЕ йдуть. month=N → квартал місяця або сам місяць.
 // v7.321: matchInvoicesToPayments віддає payEdrpou (ЄДРПОУ платежу) — reconcile за ним знаходить
 //         групу контрагента і підставляє локацію та статтю із заявки в рядок витрати.
 // v7.320: РАХУНКИ ЕТАПИ 5–6 — matchInvoicesToPayments: заявка ↔ платіж виписки за сумою + (ЄДРПОУ
@@ -6311,7 +6314,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.321', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.322', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -15287,6 +15290,7 @@ function getVyhovatelRatings(params) {
     var vals = sh.getRange(2, 1, lastRow - 1, 23).getValues(); // A..W
     var prefix = year + '-';
     var monthKey = (month != null) ? (year + '-' + ('0' + month).slice(-2)) : null;
+    var qKeyOfMonth = (month != null) ? (year + '-Q' + Math.ceil(month / 3)) : null; // v7.322
 
     var teachers = [], ratedVals = [], unrated = 0, teacherCount = 0;
     for (var i = 0; i < vals.length; i++) {
@@ -15310,7 +15314,7 @@ function getVyhovatelRatings(params) {
           var byPeriod = assess[tpl];
           if (!byPeriod || typeof byPeriod !== 'object') continue;
           for (var per in byPeriod) {
-            if (monthKey) { if (per !== monthKey) continue; }
+            if (monthKey) { if (per !== monthKey && per !== qKeyOfMonth) continue; }
             else { if (String(per).indexOf(prefix) !== 0) continue; }
             var crit = (byPeriod[per] && byPeriod[per].criteria) || {};
             var sc = _vyhRatingPct(crit);
@@ -15318,6 +15322,13 @@ function getVyhovatelRatings(params) {
           }
         }
       }
+      // v7.322: є квартальна оцінка → місячні того ж кварталу не рахуємо (подвійний рахунок).
+      var qHave = {};
+      months.forEach(function(m){ if (/^\d{4}-Q[1-4]$/.test(m.period)) qHave[m.period] = true; });
+      months = months.filter(function(m){
+        var mm = /^(\d{4})-(\d{2})$/.exec(m.period);
+        return !(mm && qHave[mm[1] + '-Q' + Math.ceil(Number(mm[2]) / 3)]);
+      });
       months.sort(function(a, b){ return a.period < b.period ? -1 : 1; });
       var ratingPct = null;
       if (months.length) {
