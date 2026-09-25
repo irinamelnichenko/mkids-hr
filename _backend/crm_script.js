@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.338
+// m.kids CRM — Google Apps Script v7.339
+// v7.339: getOpexData — + extras (сирі рядки «Знижки», «Кількість дітей/груп/основного персоналу», за назвою);
+//         year ≠ поточний → NO_YEAR (досі ігнорувався і віддавав поточний рік під чужим підписом).
 // v7.338: нічний синк «Payment → картки» (nightlySyncMissingKindergartens) — scope 'kindergartens_mgmt':
 //         садочки + «Управління» (Нац.Гвардії, Манхетен, Житомир). Школи — як і раніше поза синком.
 // v7.336: getClients — кеш list/roster (compact) у CacheService шматками 10 хв, версія 'clients' (6 мутаторів
@@ -6474,7 +6476,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.338', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.339', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -13196,6 +13198,10 @@ function _opexNum(v) {
 function getOpexData(loc, year) {
   loc = String(loc || '').trim();
   if (!loc) return {ok:false, error:'Missing loc'};
+  // v7.339: у файлах локацій лише ПОТОЧНИЙ рік (аркуш OPEX без архіву). Досі year ігнорувався, і запит
+  // «2025» віддавав цифри 2026 під підписом 2025.
+  var _curY = new Date().getFullYear();
+  if (year && Number(year) && Number(year) !== _curY) return {ok:false, code:'NO_YEAR', error:'Даних OPEX за ' + year + ' рік у системі немає (є лише ' + _curY + ')'};
 
   var configSS = SpreadsheetApp.openById(CONFIG_SHEET_ID);
   var regSheet = configSS.getSheetByName('OPEX');
@@ -13250,11 +13256,26 @@ function getOpexData(loc, year) {
     });
   }
 
+  // v7.339: службові рядки під статтями — «Знижки» і кількості (діти / групи / персонал). Шукаємо ЗА НАЗВОЮ
+  // в колонці A (номер рядка у файлах може зсунутись). Віддаємо сирі значення рядка (37 колонок: A + 12 міс × 3),
+  // бо кількості в місяці живуть не завжди в колонці «Факт» — яку брати, вирішує сторінка за перевіреною схемою.
+  var EXTRA_NAMES = {'знижки':'discounts', 'кількість дітей':'kids', 'кількість груп':'groups', 'кількість основного персоналу':'staff'};
+  var extras = {};
+  for (var er = 30; er < data.length; er++){
+    var en = String((data[er] || [])[0] || '').trim().toLowerCase();
+    var ek = EXTRA_NAMES[en];
+    if (!ek || extras[ek]) continue;
+    var rawRow = [];
+    for (var ec = 0; ec < Math.min(width, 37); ec++){ var v = data[er][ec]; rawRow.push(v instanceof Date ? v.toISOString() : v); }
+    extras[ek] = {name: String(data[er][0]).trim(), row: er + 1, raw: rawRow};
+  }
+
   return {
     ok: true,
     loc: loc,
     year: year ? Number(year) || year : '',
-    categories: categories
+    categories: categories,
+    extras: extras
   };
 }
 
