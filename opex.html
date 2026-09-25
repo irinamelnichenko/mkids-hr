@@ -519,6 +519,8 @@ select{font-family:inherit}
       </div>
     </div>
 
+    <div id="extrasStrip" class="card hidden" style="margin-bottom:12px"></div>
+
     <div class="card">
       <div class="card-hd">
         <h3>📋 Витрати по категоріях <span id="tblMonth" style="font-weight:500;color:var(--gray)"></span></h3>
@@ -711,7 +713,7 @@ var CFG = {
   YEAR: new Date().getFullYear(),
   MONTHS_DISP: ['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'],
   MONTHS_SHORT:['Січ','Лют','Бер','Квіт','Тра','Чер','Лип','Сер','Вер','Жов','Лис','Гру'],
-  CACHE_KEY:  'opex_cache_v1',
+  CACHE_KEY:  'opex_cache_v2',   // v7.339: + extras (кількості/знижки)
   CACHE_TTL:  5 * 60 * 1000,
   OVERVIEW_CACHE_KEY: 'opex_overview_cache_v1',
   OVERVIEW_CACHE_TTL: 5 * 60 * 1000
@@ -1963,7 +1965,48 @@ function rerenderForPeriod(){
   else                     renderKpis(rows);
   toggleForecastCard(S.period === 'year');
   renderTable(rows);
+  renderExtras(months, rows);   // v7.339
   renderChart(S.data.categories, months);
+}
+
+// ── v7.339: «Знижки» і кількість дітей / груп / персоналу з файлу OPEX ──────
+// Рядки під статтями (шукає бекенд за назвою). Звірено з файлами 25.09.2026: у кожного місяця три колонки
+// (Факт | Бюджет | безіменна); КІЛЬКОСТІ живуть у колонці «Бюджет» (помісячні: Осокорки 81…85…63), третя —
+// незмінне базове число. «Знижки» — як стаття: Факт і Бюджет; зараз у файлах порожні — рядок ховаємо.
+function _exRaw(key, m, off){ var e = S.data && S.data.extras && S.data.extras[key]; if (!e || !e.raw) return 0; var v = Number(e.raw[(m - 1) * 3 + off]); return isFinite(v) ? v : 0; }
+function _exCount(key, m){ return _exRaw(key, m, 2); }
+function _exMonthsPast(months){
+  // для кварталу/року — лише місяці, що вже настали (далі у файлі протягнуте останнє значення)
+  var now = new Date(), curM = (CFG.YEAR === now.getFullYear()) ? now.getMonth() + 1 : 12;
+  var ms = months.filter(function(m){ return m <= curM; });
+  return ms.length ? ms : months;
+}
+function renderExtras(months, rows){
+  var box = $('extrasStrip'); if (!box) return;
+  var ex = S.data && S.data.extras;
+  var _isRnd = S.user && String(S.user.role || '').toLowerCase() === 'rnd_director';   // бачить лише «Методичну частину»
+  if (_isRnd || !ex || (!ex.kids && !ex.groups && !ex.staff && !ex.discounts)){ box.classList.add('hidden'); return; }
+  var ms = (months.length === 1) ? months : _exMonthsPast(months);
+  var avg = function(key){ var s = 0, n = 0; ms.forEach(function(m){ var v = _exCount(key, m); if (v > 0){ s += v; n++; } }); return n ? s / n : 0; };
+  var kids = avg('kids'), groups = avg('groups'), staff = avg('staff');
+  var multi = ms.length > 1, lbl = multi ? 'сер. за ' + ms.length + ' міс.' : '';
+  var fmt1 = function(v){ return v ? (multi ? (Math.round(v * 10) / 10).toLocaleString('uk-UA') : Math.round(v).toLocaleString('uk-UA')) : '—'; };
+  // на дитину — лише місяці, де кількість дітей указана (Школа 228: літо з 0 дітей інакше завищувало)
+  var factSum = 0, kidMonths = 0;
+  ms.forEach(function(m){ var k = _exCount('kids', m); if (k <= 0) return; kidMonths += k;
+    (S.data.categories || []).forEach(function(c){ factSum += getMonthValues(c, m).fact; }); });
+  var perKid = kidMonths ? factSum / kidMonths : 0;
+  var disF = 0, disB = 0; months.forEach(function(m){ disF += _exRaw('discounts', m, 1); disB += _exRaw('discounts', m, 2); });
+  var cell = function(v, t){ return '<div style="min-width:120px"><div style="font-size:22px;font-weight:800">' + v + '</div><div style="font-size:12px;color:var(--gray)">' + t + '</div></div>'; };
+  var h = '<div class="card-bd" style="display:flex;flex-wrap:wrap;gap:22px;align-items:flex-end">' +
+    cell(fmt1(kids), 'Дітей' + (lbl ? ' · ' + lbl : '')) +
+    cell(fmt1(groups), 'Груп') +
+    cell(fmt1(staff), 'Основного персоналу') +
+    cell(perKid ? fmtUah(perKid) + ' ₴' : '—', 'OPEX на дитину в місяць') +
+    ((disF || disB) ? cell(fmtUah(disF) + (disB ? ' <span style="font-size:13px;color:var(--gray)">/ бюдж. ' + fmtUah(disB) + '</span>' : ''), 'Знижки') : '') +
+    '<div style="font-size:11px;color:var(--gray);flex-basis:100%">З файлу OPEX локації (рядки «Кількість дітей / груп / основного персоналу»' + ((disF || disB) ? ', «Знижки»' : '') + ').</div>' +
+    '</div>';
+  box.innerHTML = h; box.classList.remove('hidden');
 }
 
 async function loadDetail(force){
