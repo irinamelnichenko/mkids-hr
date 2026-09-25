@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.336
+// m.kids CRM — Google Apps Script v7.338
+// v7.338: нічний синк «Payment → картки» (nightlySyncMissingKindergartens) — scope 'kindergartens_mgmt':
+//         садочки + «Управління» (Нац.Гвардії, Манхетен, Житомир). Школи — як і раніше поза синком.
 // v7.336: getClients — кеш list/roster (compact) у CacheService шматками 10 хв, версія 'clients' (6 мутаторів
 //         карток); mode=roster (ID, ПІБ, Локація, Група, Дата народження, Статус) + &loc= для index/meals.
 //         diagClientsCompare — звірка roster/list, фільтра локацій і кешу.
@@ -6472,7 +6474,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.336', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.338', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -26319,9 +26321,12 @@ function syncMissingClientsFromPayments(opts){
   // 'kindergartens' = лише Садочок (як було). Управління (Благо/Житомир) завжди поза скоупом.
   var scope = String(opts.locScope || '').trim();
   var kgSet = null;
-  if (scope === 'kindergartens' || scope === 'kids_schools'){
+  // v7.338: 'kindergartens_mgmt' = Садочок + Управління (Нац.Гвардії, Манхетен, Житомир) — для нічного синку.
+  //         Школи й далі поза скоупом (v7.209: блоки класів з безіменними хвостами давали чужі групи).
+  if (scope === 'kindergartens' || scope === 'kids_schools' || scope === 'kindergartens_mgmt'){
     kgSet = {};
-    var _okTypes = (scope === 'kids_schools') ? {'Садочок':1, 'Школа':1} : {'Садочок':1};
+    var _okTypes = (scope === 'kids_schools') ? {'Садочок':1, 'Школа':1}
+                 : (scope === 'kindergartens_mgmt') ? {'Садочок':1, 'Управління':1} : {'Садочок':1};
     try {
       (getLocations().data || []).forEach(function(l){
         if (_okTypes[String(l.typ || '').trim()]) kgSet[String(l.loc || '').trim()] = true;
@@ -26593,7 +26598,9 @@ function nightlySyncMissingKindergartens(){
   // (насправді — рядки 189-207, зовсім інша частина файлу). Школярів заводимо
   // руками або окремим прогоном renameSchoolChildrenClean/синку зі свідомим
   // locScope:'kids_schools'.
-  return syncMissingClientsFromPayments({dryRun: false, confirm: 'YES_WRITE', locScope: 'kindergartens'});
+  // v7.338: + «Управління» (Нац.Гвардії, Манхетен, Житомир) — нові діти там не отримували карток, і відмітки
+  // табеля йшли на неіснуючі ID (Драган/Франько, Манхетен, 24.09). Школи — ні (див. вище).
+  return syncMissingClientsFromPayments({dryRun: false, confirm: 'YES_WRITE', locScope: 'kindergartens_mgmt'});
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
