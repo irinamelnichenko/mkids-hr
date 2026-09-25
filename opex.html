@@ -524,6 +524,10 @@ select{font-family:inherit}
     <div class="card">
       <div class="card-hd">
         <h3>📋 Витрати по категоріях <span id="tblMonth" style="font-weight:500;color:var(--gray)"></span></h3>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button id="budgetEditBtn" class="btn btn-secondary hidden" type="button" onclick="openBudget()">✏️ Редагувати бюджет</button>
+          <button id="budgetLogBtn" class="btn btn-secondary hidden" type="button" onclick="openBudgetLog()">🕘 Історія правок</button>
+        </div>
       </div>
       <div class="card-bd">
         <div class="tbl-wrap">
@@ -560,6 +564,16 @@ select{font-family:inherit}
   </div>
 </div>
   </main>
+</div>
+
+<div id="budModal" class="modal-ovl hidden">
+  <div class="modal-card" style="max-width:1280px;width:97vw">
+    <div class="modal-hd">
+      <h2 id="budTitle">✏️ Бюджет</h2>
+      <button class="modal-x" type="button" onclick="closeBudget()" aria-label="Закрити">✕</button>
+    </div>
+    <div class="modal-bd" id="budBody"></div>
+  </div>
 </div>
 
 <div id="catModal" class="modal-ovl hidden">
@@ -1678,6 +1692,116 @@ function rerenderOverview(){
 }
 
 // ── CATEGORY MODAL ──────────────────────────
+// ── v7.342: РЕДАГУВАННЯ БЮДЖЕТІВ (лише CFO) ─────────────────────────────────
+// Бюджет статті на місяць і кількість дітей / груп / персоналу. Пишемо в ту саму клітинку файлу локації,
+// що й руками (бекенд opexSetBudget). Клітинки-формули позначені ƒ; перед записом — окреме підтвердження,
+// що формула стане числом. Кожна правка — у журнал «OPEX_Бюджет_Правки» («🕘 Історія правок»).
+function _canEditBudget(){ var r = String((S.user && S.user.role) || '').toLowerCase(); return r === 'cfo' || r === 'hr'; }
+function _budButtons(){
+  var on = _canEditBudget() && S.mode === 'detail';
+  ['budgetEditBtn','budgetLogBtn'].forEach(function(id){ var b = $(id); if (b) b.classList.toggle('hidden', !on); });
+}
+async function _budPost(body){
+  var r = await fetch(CFG.SCRIPT_URL, {method:'POST', redirect:'follow', headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify(body)});
+  var txt = await r.text();
+  try { return JSON.parse(txt); } catch(e){ var i = txt.indexOf('{'), j = txt.lastIndexOf('}'); if (i >= 0 && j > i){ try { return JSON.parse(txt.slice(i, j + 1)); } catch(_e){} } }
+  return {ok:false, error:'Відповідь сервера не прочиталась — перевірте «Історію правок», чи записалось'};
+}
+function _budFmt(v){ return (v === '' || v == null) ? '' : String(v); }
+function _budNum(s){ s = String(s == null ? '' : s).replace(/\s+/g, '').replace(',', '.'); return s === '' ? '' : Number(s); }
+function closeBudget(){ $('budModal').classList.add('hidden'); }
+async function openBudget(){
+  if (!_canEditBudget()) return;
+  S.bud = {loc: CFG.LOC, rows: [], edits: {}};
+  $('budTitle').textContent = '✏️ Бюджет — ' + CFG.LOC + ' ' + CFG.YEAR;
+  $('budBody').innerHTML = '<div class="muted">Читаю файл локації…</div>';
+  $('budModal').classList.remove('hidden');
+  try {
+    var r = await fetch(CFG.SCRIPT_URL + '?action=getOpexBudgetGrid&loc=' + encodeURIComponent(CFG.LOC), {redirect:'follow'});
+    var j = await r.json();
+    if (!j || !j.ok) throw new Error((j && j.error) || 'помилка');
+    S.bud.rows = j.rows || [];
+    _budRender();
+  } catch(e){ $('budBody').innerHTML = '<div style="color:#c0392b">Не вдалося прочитати бюджет: ' + escapeHtml(e.message || String(e)) + '</div>'; }
+}
+function _budRender(msg){
+  var b = S.bud, h = '';
+  h += '<div class="muted" style="font-size:12px;margin-bottom:8px">Колонка «Бюджет» кожного місяця. <b>ƒ</b> — у клітинці формула (наведіть, щоб побачити); якщо її змінити, формула стане числом, як при ручному записі у файл.</div>';
+  h += '<div class="tbl-wrap" style="max-height:62vh;overflow:auto"><table class="tbl" style="font-size:12.5px"><thead><tr><th style="position:sticky;left:0;background:#fff">Стаття / показник</th>' +
+       CFG.MONTHS_SHORT.map(function(m){ return '<th class="num">' + m + '</th>'; }).join('') + '</tr></thead><tbody>';
+  b.rows.forEach(function(r){
+    if (r.kind === 'count' && !b._cntHd){ /* роздільник */ }
+    h += '<tr' + (r.kind === 'count' ? ' style="background:#f7f9fc"' : '') + '><td style="position:sticky;left:0;background:inherit;white-space:nowrap;font-weight:600">' + escapeHtml(r.name) + '</td>';
+    r.months.forEach(function(c){
+      var k = r.row + '|' + c.month, ed = b.edits[k];
+      var val = ed ? ed.value : _budFmt(c.value);
+      h += '<td style="padding:2px;position:relative">' + (c.formula ? '<span title="' + escapeHtml(c.a1 + ': ' + c.formula) + '" style="position:absolute;left:3px;top:1px;font-size:10px;color:#8e44ad;cursor:help">ƒ</span>' : '') +
+           '<input data-k="' + k + '" value="' + escapeHtml(val) + '" inputmode="decimal" oninput="_budEdit(this)" style="width:84px;text-align:right;padding:4px 5px 4px 12px;border:1px solid ' + (ed ? '#e67e22' : 'var(--gray2,#dde3ea)') + ';border-radius:6px;background:' + (ed ? '#fff4e0' : '#fff') + '"></td>';
+    });
+    h += '</tr>';
+  });
+  h += '</tbody></table></div>';
+  var n = Object.keys(b.edits).length;
+  h += '<div id="budFoot" style="display:flex;gap:10px;align-items:center;margin-top:12px;flex-wrap:wrap">' +
+       '<button class="btn btn-primary" type="button" onclick="saveBudget()"' + (n ? '' : ' disabled') + '>💾 Зберегти (' + n + ')</button>' +
+       '<button class="btn btn-secondary" type="button" onclick="closeBudget()">Скасувати</button>' +
+       '<span id="budMsg" style="font-size:13px">' + (msg || '') + '</span></div>';
+  $('budBody').innerHTML = h;
+}
+function _budEdit(inp){
+  var k = inp.getAttribute('data-k'), p = k.split('|'), row = Number(p[0]), m = Number(p[1]);
+  var r = S.bud.rows.find(function(x){ return x.row === row; }), c = r.months[m - 1];
+  var orig = _budFmt(c.value), nv = inp.value.trim();
+  var same = (_budNum(nv) === '' && orig === '') || (_budNum(nv) !== '' && orig !== '' && Math.abs(_budNum(nv) - Number(orig)) < 0.005);
+  if (same) delete S.bud.edits[k]; else S.bud.edits[k] = {row: row, name: r.name, month: m, expected: c.value, value: nv, formula: c.formula, a1: c.a1};
+  inp.style.background = same ? '#fff' : '#fff4e0'; inp.style.borderColor = same ? 'var(--gray2,#dde3ea)' : '#e67e22';
+  var n = Object.keys(S.bud.edits).length, btn = $('budFoot') && $('budFoot').querySelector('.btn-primary');
+  if (btn){ btn.disabled = !n; btn.textContent = '💾 Зберегти (' + n + ')'; }
+}
+async function saveBudget(){
+  var ch = Object.keys(S.bud.edits).map(function(k){ var e = S.bud.edits[k]; return {row:e.row, name:e.name, month:e.month, expected:e.expected, value:e.value}; });
+  if (!ch.length) return;
+  for (var i = 0; i < ch.length; i++){ if (ch[i].value !== '' && !isFinite(_budNum(ch[i].value))){ $('budMsg').innerHTML = '<span style="color:#c0392b">«' + escapeHtml(ch[i].value) + '» — не число (' + escapeHtml(ch[i].name) + ', ' + CFG.MONTHS_SHORT[ch[i].month - 1] + ')</span>'; return; } }
+  $('budMsg').textContent = 'Перевіряю…';
+  var base = {action:'opexSetBudget', loc:S.bud.loc, actorId:(S.user && S.user.id), changes:ch};
+  var pre = await _budPost(Object.assign({dryRun:true}, base));
+  if (!pre || !pre.ok){
+    var cf = (pre && pre.conflicts) || [];
+    $('budMsg').innerHTML = '<span style="color:#c0392b">' + escapeHtml((pre && pre.error) || 'помилка') + '</span>' +
+      (cf.length ? '<br>' + cf.map(function(c){ return escapeHtml((c.name || ('рядок ' + c.row)) + ', ' + (CFG.MONTHS_SHORT[c.month - 1] || '') + ': ' + c.why); }).join('<br>') +
+       ' <button class="btn btn-secondary" type="button" onclick="openBudget()">Перечитати файл</button>' : '');
+    return;
+  }
+  var lines = pre.plan.map(function(x){ return '• ' + x.name + ', ' + CFG.MONTHS_SHORT[x.month - 1] + ': ' + (x.before === '' ? '—' : x.before) + ' → ' + (x.after === '' ? '—' : x.after); });
+  if (!confirm('Записати у файл «' + S.bud.loc + '» ' + pre.plan.length + ' змін?\n\n' + lines.slice(0, 30).join('\n') + (lines.length > 30 ? '\n… ще ' + (lines.length - 30) : ''))) { $('budMsg').textContent = 'Скасовано'; return; }
+  var fx = pre.plan.filter(function(x){ return x.formula; });
+  if (fx.length && !confirm('⚠️ ' + fx.length + ' клітинок — ФОРМУЛИ, вони стануть числами:\n\n' +
+      fx.slice(0, 25).map(function(x){ return '• ' + x.a1 + ' ' + x.formula + ' → ' + (x.after === '' ? '(порожньо)' : x.after) + '  (' + x.name + ', ' + CFG.MONTHS_SHORT[x.month - 1] + ')'; }).join('\n') +
+      (fx.length > 25 ? '\n… ще ' + (fx.length - 25) : '') + '\n\nЗалежні клітинки (наступні місяці) перерахуються самі. Продовжити?')) { $('budMsg').textContent = 'Скасовано'; return; }
+  $('budMsg').textContent = 'Записую…';
+  var res = await _budPost(Object.assign({dryRun:false}, base));
+  if (!res || !res.ok){ $('budMsg').innerHTML = '<span style="color:#c0392b">' + escapeHtml((res && res.error) || 'помилка') + '</span>'; return; }
+  closeBudget();
+  // перечитати дані напряму з файлу — залежні формули могли перерахуватись
+  localStorage.removeItem(CFG.CACHE_KEY); S._bypassServer = true;
+  try { await load(true); } finally { S._bypassServer = false; }
+  $('meta').textContent = '✅ Записано ' + res.written + ' змін у файл · ' + nowStr();
+}
+async function openBudgetLog(){
+  $('budTitle').textContent = '🕘 Історія правок бюджету — ' + CFG.LOC;
+  $('budBody').innerHTML = '<div class="muted">Завантаження…</div>';
+  $('budModal').classList.remove('hidden');
+  try {
+    var r = await fetch(CFG.SCRIPT_URL + '?action=getOpexBudgetLog&loc=' + encodeURIComponent(CFG.LOC) + '&limit=100', {redirect:'follow'});
+    var j = await r.json(); var it = (j && j.items) || [];
+    if (!it.length){ $('budBody').innerHTML = '<div class="muted">Правок бюджету ще не було.</div>'; return; }
+    $('budBody').innerHTML = '<div class="tbl-wrap" style="max-height:65vh;overflow:auto"><table class="tbl" style="font-size:12.5px"><thead><tr><th>Коли</th><th>Хто</th><th>Стаття / показник</th><th>Міс.</th><th>Клітинка</th><th class="num">Було</th><th class="num">Стало</th><th>Формула (була)</th></tr></thead><tbody>' +
+      it.map(function(x){ return '<tr><td>' + escapeHtml(x.when) + '</td><td>' + escapeHtml(x.who) + '</td><td>' + escapeHtml(x.name) + '</td><td>' + escapeHtml(CFG.MONTHS_SHORT[(Number(x.month) || 1) - 1]) +
+        '</td><td>' + escapeHtml(x.a1) + '</td><td class="num">' + escapeHtml(_budFmt(x.before) || '—') + '</td><td class="num">' + escapeHtml(_budFmt(x.after) || '—') + '</td><td style="color:#8e44ad">' + escapeHtml(x.formula) + '</td></tr>'; }).join('') +
+      '</tbody></table></div>';
+  } catch(e){ $('budBody').innerHTML = '<div style="color:#c0392b">Не вдалося завантажити: ' + escapeHtml(e.message || String(e)) + '</div>'; }
+}
+
 // ── v7.339: ПЛАТЕЖІ ПІД СТАТТЕЮ (журнал OPEX) ──────────────────────────────
 // Журнал «OPEX_Витрати_Лог» пише звірка виписки (reconcile.html) з серпня 2026. Показуємо лише «внесено»
 // (порожній статус = старі записи = внесено) і лише статті OPEX: «→Salary: …», «— не вносити —» та
@@ -1968,6 +2092,7 @@ function rerenderForPeriod(){
   toggleForecastCard(S.period === 'year');
   renderTable(rows);
   renderExtras(months, rows);   // v7.339
+  _budButtons();                // v7.342
   renderChart(S.data.categories, months);
 }
 

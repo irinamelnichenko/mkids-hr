@@ -1,5 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.341
+// m.kids CRM — Google Apps Script v7.342
+// v7.342: редагування бюджетів OPEX у системі (лише CFO): getOpexBudgetGrid (значення + формули колонки «Бюджет»),
+//         opexSetBudget (dryRun за замовч.; перевірка назви рядка й expected; формула → число; журнал
+//         «OPEX_Бюджет_Правки»; скидання кешу локації), getOpexBudgetLog.
 // v7.341: OPEX — паралельне читання файлів (fetchAll → Sheets API, запасний SpreadsheetApp), кеш по локаціях 15 хв
 //         (скидає opexAddExpenses; nocache=1 — напряму), спільний розбір _opexParseGrid для getOpexData й огляду.
 //         diagOpexCompare — звірка зі старими функціями (_getOpexDataOld/_getOpexOverviewOld).
@@ -6479,7 +6482,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.341', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.342', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -6519,6 +6522,8 @@ function doGet(e) {
     else if (action === 'importAbsencesFromPayment') result = importAbsencesFromPayment(e.parameter.loc || '');
     else if (action === 'getOpexData')               result = getOpexData(e.parameter.loc || '', e.parameter.year || '', String(e.parameter.nocache || '') === '1');   // v7.341 кеш
     else if (action === 'diagOpexCompare')           result = diagOpexCompare();   // v7.341 звірка старий/новий
+    else if (action === 'getOpexBudgetGrid')         result = getOpexBudgetGrid(e.parameter || {});   // v7.342 бюджети + формули для редагування
+    else if (action === 'getOpexBudgetLog')          result = getOpexBudgetLog(e.parameter || {});    // v7.342 журнал правок бюджету
     else if (action === 'getOpexOverview')           result = getOpexOverview(e.parameter.year || '', e.parameter.category || '', String(e.parameter.nocache || '') === '1');   // v7.326 +category; v7.341 кеш
     else if (action === 'getClosedMonths')            result = getClosedMonths();                                 // v7.91
     else if (action === 'getOpexContractors')        result = getOpexContractors();                              // v7.84 мапа контрагентів
@@ -6696,6 +6701,7 @@ function doPost(e) {
     else if (body.action === 'deleteDopMerge')            result = deleteDopMerge(body || {});
     else if (body.action === 'saveDopSplit')              result = saveDopSplit(body || {});
     else if (body.action === 'saveOpexContractor')        result = saveOpexContractor(body || {});   // v7.84 upsert контрагента
+    else if (body.action === 'opexSetBudget')             result = opexSetBudget(body || {});        // v7.342 правка бюджету OPEX (лише CFO, dryRun за замовч.)
     else if (body.action === 'opexAddExpenses')           result = opexAddExpenses(body || {});      // v7.84 запис витрат у OPEX (dryRun за замовч.)
     else if (body.action === 'saveSalaryFopBinding')      result = saveSalaryFopBinding(body || {});  // v7.85+ upsert зв'язку ФОП→Salary-рядок
     else if (body.action === 'salaryAddExtrasPayments')   result = salaryAddExtrasPayments(body || {}); // v7.85+ запис платежу ФОПу у ФАКТ Salary-рядка (dryRun за замовч.)
@@ -13462,6 +13468,112 @@ function getOpexOverview(year, category, noCache) {
   return {ok: true, year: year ? Number(year) || year : '', category: _catNeedle || '', locations: locations, errors: errors,
           cachedLocs: r.hits, rebuiltLocs: reg.length - r.hits, readVia: r.via};
 }
+// ═══ v7.342: РЕДАГУВАННЯ БЮДЖЕТІВ OPEX У СИСТЕМІ (лише CFO) ═══════════════════════════════
+// Пишемо в ТУ САМУ клітинку файлу локації, куди CFO вписала б руками: колонка «Бюджет» місяця
+// ((m-1)*3+3, 1-based: C, F, I, … AI) у рядку статті (3–30) або рядку кількості (36–38, за назвою).
+// Клітинка з формулою (=AA9*1.1, =I36+M41) стає числом — так само, як при ручному записі; сторінка
+// попереджає окремим підтвердженням, журнал зберігає формулу, яка була. Перед записом звіряємо назву
+// рядка й значення, яке бачив CFO (expected): файл змінили руками → відмова «оновіть сторінку».
+// Журнал: CONFIG «OPEX_Бюджет_Правки». dryRun за замовчуванням TRUE.
+var OPEX_BUDGET_LOG_SHEET  = 'OPEX_Бюджет_Правки';
+var OPEX_BUDGET_LOG_HEADER = ['Коли', 'Хто', 'Локація', 'Стаття/показник', 'Місяць', 'Клітинка', 'Було', 'Стало', 'Формула (була)'];
+var OPEX_COUNT_ROWS = {'кількість дітей':'Кількість дітей', 'кількість груп':'Кількість груп', 'кількість основного персоналу':'Кількість основного персоналу'};
+function _opexBudgetCol(m){ return (m - 1) * 3 + 3; }
+function _opexA1(row, col){ var s = '', c = col; while (c > 0){ var r = (c - 1) % 26; s = String.fromCharCode(65 + r) + s; c = Math.floor((c - 1) / 26); } return s + row; }
+function _opexEditableRows(vals){
+  var rows = [];
+  for (var rn = 3; rn <= 30 && rn - 1 < vals.length; rn++){
+    var raw = String(vals[rn - 1][0] || '').trim();
+    if (_opexIsSkippedCategory(raw)) continue;
+    rows.push({row: rn, name: _opexNormalizeCategoryName(raw), kind: 'budget'});
+  }
+  for (var er = 30; er < vals.length; er++){
+    var en = String(vals[er][0] || '').trim().toLowerCase();
+    if (OPEX_COUNT_ROWS[en] && !rows.some(function(x){ return x.kind === 'count' && x.name === OPEX_COUNT_ROWS[en]; }))
+      rows.push({row: er + 1, name: OPEX_COUNT_ROWS[en], kind: 'count'});
+  }
+  return rows;
+}
+function _opexCanEditBudget(actorId){
+  try {
+    var role = (_CURRENT_AUTH && _CURRENT_AUTH.role) ? _roleKey(_CURRENT_AUTH.role) : _roleKey(_getActor(actorId).role);   // токен, інакше actorId зі сторінки
+    return role === 'cfo' || role === 'hr';
+  } catch(_e){ return false; }
+}
+// Таблиця бюджетів для редагування: значення + формули колонки «Бюджет» кожного місяця. Напряму з файлу.
+function getOpexBudgetGrid(p){
+  p = p || {};
+  var loc = trim(String(p.loc || ''));
+  if (!loc) return {ok:false, error:'loc обовʼязковий'};
+  var ls = _opexLocSheet(loc); if (!ls) return {ok:false, error:'OPEX-файл локації не знайдено'};
+  var sh = ls.sheet, lastRow = Math.max(sh.getLastRow(), 40);
+  var rng = sh.getRange(1, 1, lastRow, 37), V = rng.getValues(), F = rng.getFormulas();
+  var rows = _opexEditableRows(V).map(function(r){
+    var months = [];
+    for (var m = 1; m <= 12; m++){ var c = _opexBudgetCol(m) - 1; var v = V[r.row - 1][c];
+      months.push({month: m, value: (v === '' || v == null) ? '' : v, formula: F[r.row - 1][c] || '', a1: _opexA1(r.row, c + 1)}); }
+    return {row: r.row, name: r.name, kind: r.kind, months: months};
+  });
+  return {ok:true, loc: loc, year: new Date().getFullYear(), rows: rows};
+}
+function opexSetBudget(body){
+  body = body || {};
+  var loc = trim(String(body.loc || '')), dryRun = (body.dryRun !== false);
+  var changes = Array.isArray(body.changes) ? body.changes : [];
+  if (!loc) return {ok:false, error:'loc обовʼязковий'};
+  if (!changes.length) return {ok:false, error:'немає змін'};
+  if (!_opexCanEditBudget(body.actorId)) return {ok:false, code:'PERM_DENIED', error:'Редагувати бюджет може лише CFO'};
+  var who = ''; try { who = _getActor((_CURRENT_AUTH && _CURRENT_AUTH.id) || body.actorId).name || ''; } catch(_w){}   // у токені імені немає
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(30000); } catch(_l){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+  try {
+    var ls = _opexLocSheet(loc); if (!ls) return {ok:false, error:'OPEX-файл локації не знайдено'};
+    var sh = ls.sheet, lastRow = Math.max(sh.getLastRow(), 40);
+    var rng = sh.getRange(1, 1, lastRow, 37), V = rng.getValues(), F = rng.getFormulas();
+    var allowed = {}; _opexEditableRows(V).forEach(function(r){ allowed[r.row] = r; });
+    var plan = [], conflicts = [];
+    changes.forEach(function(ch){
+      var row = Number(ch.row), m = Number(ch.month), r = allowed[row];
+      if (!r || !(m >= 1 && m <= 12)){ conflicts.push({row: row, month: m, why: 'рядок або місяць не редагується'}); return; }
+      if (ch.name && String(ch.name).trim() !== r.name){ conflicts.push({row: row, month: m, why: 'у файлі в цьому рядку тепер «' + r.name + '» — оновіть сторінку'}); return; }
+      var c = _opexBudgetCol(m), cur = V[row - 1][c - 1];
+      var curN = (cur === '' || cur == null) ? '' : _opexNum(cur), expN = (ch.expected === '' || ch.expected == null) ? '' : _opexNum(ch.expected);
+      if (String(curN) !== String(expN) && !(curN !== '' && expN !== '' && Math.abs(curN - expN) < 0.005)){
+        conflicts.push({row: row, month: m, name: r.name, a1: _opexA1(row, c), why: 'клітинку змінено у файлі (' + curN + ' замість ' + expN + ') — оновіть сторінку'}); return; }
+      var val = (ch.value === '' || ch.value == null) ? '' : _opexNum(ch.value);
+      if (ch.value !== '' && ch.value != null && !isFinite(val)){ conflicts.push({row: row, month: m, why: 'не число'}); return; }
+      plan.push({row: row, col: c, a1: _opexA1(row, c), name: r.name, kind: r.kind, month: m, before: curN, after: val, formula: F[row - 1][c - 1] || ''});
+    });
+    if (conflicts.length) return {ok:false, code:'CONFLICT', error:'Жодної зміни не записано: ' + conflicts.length + ' конфлікт(и)', conflicts: conflicts, plan: plan};
+    if (dryRun) return {ok:true, dryRun:true, loc: loc, plan: plan, formulasReplaced: plan.filter(function(x){ return x.formula; }).length};
+    var written = [], logSh = _opexEnsureCfgSheet(OPEX_BUDGET_LOG_SHEET, OPEX_BUDGET_LOG_HEADER, true), now = formatDate(new Date());
+    try {
+      plan.forEach(function(x){ sh.getRange(x.row, x.col).setValue(x.after); written.push(x); });
+    } finally {
+      if (written.length){
+        logSh.getRange(logSh.getLastRow() + 1, 1, written.length, OPEX_BUDGET_LOG_HEADER.length).setValues(written.map(function(x){
+          return [now, who, loc, x.name, x.month, x.a1, x.before, x.after, x.formula]; }));
+        _cacheBump('opex_' + _nameFold(loc));
+      }
+    }
+    return {ok:true, dryRun:false, loc: loc, written: written.length, plan: written};
+  } catch(e){ return {ok:false, error: String(e && e.message || e)}; }
+  finally { try { lock.releaseLock(); } catch(_r){} }
+}
+function getOpexBudgetLog(p){
+  p = p || {};
+  var loc = trim(String(p.loc || '')), limit = Math.min(Number(p.limit) || 50, 500);
+  var sh = _opexEnsureCfgSheet(OPEX_BUDGET_LOG_SHEET, OPEX_BUDGET_LOG_HEADER, false);
+  if (!sh || sh.getLastRow() < 2) return {ok:true, items: []};
+  var v = sh.getRange(2, 1, sh.getLastRow() - 1, OPEX_BUDGET_LOG_HEADER.length).getValues(), items = [];
+  for (var i = v.length - 1; i >= 0 && items.length < limit; i--){
+    if (loc && String(v[i][2]).trim() !== loc) continue;
+    items.push({when: String(v[i][0]), who: String(v[i][1]), loc: String(v[i][2]), name: String(v[i][3]), month: v[i][4],
+                a1: String(v[i][5]), before: v[i][6], after: v[i][7], formula: String(v[i][8] || '')});
+  }
+  return {ok:true, items: items};
+}
+
 // Звірка: старі функції (SpreadsheetApp, як до v7.341) проти нових (паралельне читання), без кешу. Нічого не пише.
 function diagOpexCompare(){
   var reg = _opexRegistry(); if (!reg) return {ok:false, error:'no registry'};
