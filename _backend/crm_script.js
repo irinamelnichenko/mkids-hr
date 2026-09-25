@@ -1,5 +1,9 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.342
+// m.kids CRM — Google Apps Script v7.343
+// v7.343: бот рахунків — підпис із трьох місць (caption / reply на файл / наступне повідомлення автора ≤10 хв;
+//   альбом ділить підпис), журнал «Рахунки_Повідомлення»; розбивка «Локація: Стаття сума, …» → «Рахунки_Розбивка»
+//   (стаття OPEX: точно/однозначний префікс); правка файлу більше не дублює заявку; invoiceSetCaption (dryRun);
+//   invoiceBotDryRun показує readsGroupText (getMe.can_read_all_group_messages).
 // v7.342: редагування бюджетів OPEX у системі (лише CFO): getOpexBudgetGrid (значення + формули колонки «Бюджет»),
 //         opexSetBudget (dryRun за замовч.; перевірка назви рядка й expected; формула → число; журнал
 //         «OPEX_Бюджет_Правки»; скидання кешу локації), getOpexBudgetLog.
@@ -2700,6 +2704,7 @@ function tgInvoiceWebhook(e){
     if(_invSeen(up.update_id)) return {ok:true, dup:true, update_id:up.update_id};
     var msg = up.message || up.edited_message || null;
     if(!msg) return {ok:true, kind:'other'};
+    var isEdit = !up.message && !!up.edited_message;
     var allow = String(_invChatId()||'');
     var chatId = String((msg.chat && msg.chat.id) || '');
     if(msg.migrate_to_chat_id){
@@ -2722,7 +2727,20 @@ function tgInvoiceWebhook(e){
       fileId = String(ph.file_id||'');
       fileName = '';
     }
-    if(!fileId) return {ok:true, kind:'ignored'};   // текст без файлу — не наша справа
+    // v7.343: текст групи — можливий підпис до файлу (наступне повідомлення / reply). Зберігаємо й прив'язуємо.
+    if(!fileId){
+      if(msg.text) return _invOnTextMessage(msg, chatId, isEdit);
+      return {ok:true, kind:'ignored'};
+    }
+    // v7.343: правка повідомлення з файлом — НЕ нова заявка (раніше дублювалась), а новий підпис наявної.
+    if(isEdit){
+      var shE = _invSheet(true), hdrE = shE.getRange(1,1,1,shE.getLastColumn()).getValues()[0].map(String);
+      var rowsE = _invRowsByMessageIds(shE, hdrE, [String(msg.message_id||'')]);
+      if(rowsE.length){
+        if(trim(msg.caption||'')) _invApplyCaption(shE, hdrE, rowsE[0], msg.caption, 'правка підпису', false);
+        return {ok:true, kind:'invoice-edit', rows:rowsE.length};
+      }
+    }
 
     var cap = _invParseCaption(msg.caption || '');
     var who = (msg.from && (msg.from.username?('@'+msg.from.username):(msg.from.first_name||''))) || '';
@@ -2747,6 +2765,15 @@ function tgInvoiceWebhook(e){
     row[INV_HEADER.indexOf('лог')]               = logParts.join(' · ');
     for(var c=0;c<INV_HEADER.length;c++) if(row[c]===undefined) row[c]='';
     sh.appendRow(row);
+    // v7.343: журнал повідомлень (для прив'язки наступного тексту / альбому) + розбивка з caption.
+    try {
+      if(cap.caption){
+        var hdrN = sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0].map(String);
+        var ap = _invApplyCaption(sh, hdrN, sh.getLastRow(), cap.caption, 'caption', false);
+        cap.loc = ap.loc || cap.loc; cap.category = ap.category || cap.category;
+      }
+      _invOnFileMessage(msg, chatId);
+    } catch(_ce){ _tgErr('inv:caption', _ce); }
 
     // v7.319: БОТ МОВЧИТЬ. Жодних підтверджень і попереджень у групу — єдине, що він
     // колись напише, це «✅ Оплачено ДД.ММ» після звірки з випискою (етап 6). Усе інше —
@@ -2754,6 +2781,179 @@ function tgInvoiceWebhook(e){
     return {ok:true, kind:'invoice', id:id, loc:cap.loc, category:cap.category, file:kind,
             missing:{loc:!cap.loc, category:!cap.category}};
   } catch(err){ _tgErr('inv:webhook', err); return {ok:false, error:String(err&&err.message||err)}; }
+}
+
+// ═══ v7.343: ПІДПИС ЗАЯВКИ З ТРЬОХ МІСЦЬ + РОЗБИВКА НА СТАТТІ ═══════════════════════════════
+// Директорки підписують рахунок по-різному: (а) caption самого файлу (альбом — спільний на всі файли);
+// (б) reply на повідомлення з файлом — точна прив'язка, має пріоритет; (в) наступне повідомлення того
+// самого автора протягом INV_CAPTION_WINDOW_S — до всіх його файлів без підпису після його попереднього
+// тексту. Текст групи зберігаємо в «Рахунки_Повідомлення» (для прив'язки й повторного розбору).
+// Розбивка «Школа Осокорки: Сніданки 8464, Госптовари 1570, Працівникам 1020» → «Рахунки_Розбивка»
+// (кожна стаття — рядок; стаття OPEX зіставляється з рядками файлу локації: точно або однозначним префіксом).
+// Бот і далі мовчить у групі.
+var INV_MSG_SHEET   = 'Рахунки_Повідомлення';
+var INV_MSG_HEADER  = ['chat_id','message_id','from_id','автор','tg_date','коли','тип','текст','reply_to','media_group_id','застосовано до'];
+var INV_SPLIT_SHEET = 'Рахунки_Розбивка';
+var INV_SPLIT_HEADER = ['invoice_id','стаття (у підписі)','сума','стаття OPEX','коли'];
+var INV_CAPTION_WINDOW_S = 600;   // 10 хв
+
+function _invCfgSheet(name, header, create){
+  var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID), sh = ss.getSheetByName(name);
+  if (!sh && create){ sh = ss.insertSheet(name); sh.getRange(1, 1, 1, header.length).setValues([header]); sh.setFrozenRows(1);
+    sh.getRange(1, 1, sh.getMaxRows(), header.length).setNumberFormat('@'); }
+  return sh;
+}
+function _invAuthor(msg){ return (msg.from && (msg.from.username ? ('@' + msg.from.username) : (msg.from.first_name || ''))) || ''; }
+function _invSplitNum(s){ var n = parseFloat(String(s == null ? '' : s).replace(/[\s ]/g, '').replace(',', '.')); return isFinite(n) ? n : 0; }
+
+// Розбір підпису з розбивкою. → {loc, items:[{name, amount}], base:<_invParseCaption>}
+function _invParseSplit(raw){
+  var text = trim(raw), base = _invParseCaption(text), locs = _invLocList(), loc = base.loc, body = text;
+  var ci = text.indexOf(':');
+  if (ci > 0){
+    var hm = _invMatchLocInPart(text.slice(0, ci), locs);
+    if (hm.loc && !trim(hm.rest)){ loc = loc || hm.loc; body = text.slice(ci + 1); }
+  }
+  var items = [], re = /^(.*[^\d\s.,:–-])\s*[:–-]?\s*(\d[\d\s ]*(?:[.,]\d{1,2})?)\s*(?:грн\.?|₴)?\s*$/i;
+  body.split(/[;\n]+|,(?!\d{1,2}(?!\d))/).map(function(x){ return trim(x); }).filter(Boolean).forEach(function(p){
+    var m = re.exec(p); if (!m) return;
+    var nm = trim(m[1]).replace(/[\s:–-]+$/, '');
+    var lm = _invMatchLocInPart(nm, locs);
+    if (lm.loc){ loc = loc || lm.loc; nm = trim(lm.rest); }
+    var amt = _invSplitNum(m[2]);
+    if (nm && amt > 0) items.push({name: nm, amount: amt});
+  });
+  return {loc: loc, items: items, base: base};
+}
+// Статті OPEX локації (рядки 3–30 файлу) — для зіставлення розбивки. Кеш на один виклик.
+var _INV_OPEX_CATS = {};
+function _invOpexCats(loc){
+  if (_INV_OPEX_CATS[loc]) return _INV_OPEX_CATS[loc];
+  var out = [];
+  try { var ls = _opexLocSheet(loc); if (ls){ var v = ls.sheet.getRange(3, 1, 28, 1).getValues();
+    v.forEach(function(r){ var n = trim(r[0]); if (n && !_opexIsSkippedCategory(n)) out.push(_opexNormalizeCategoryName(n)); }); } } catch(_e){}
+  return (_INV_OPEX_CATS[loc] = out);
+}
+function _invMapOpexCat(loc, name){
+  var cats = loc ? _invOpexCats(loc) : [];
+  var norm = function(x){ return String(x || '').toLowerCase().replace(/[^a-zа-яіїєґ0-9]/g, ''); };
+  var n = norm(_opexNormalizeCategoryName(name));        // «Госптовари» → ХОЗ.ТОВАРИ, «Сніданки» → СНІДАНКИ
+  if (!n || !cats.length) return '';
+  var ex = cats.filter(function(c){ return norm(c) === n; }); if (ex.length === 1) return ex[0];
+  var pf = cats.filter(function(c){ var k = norm(c); return n.length >= 4 && k.length >= 4 && (k.indexOf(n) === 0 || n.indexOf(k) === 0); });
+  return pf.length === 1 ? pf[0] : '';                   // не впізнали однозначно — порожньо, CFO допише
+}
+// Підпис → заявка (рядок rowNum листа «Рахунки_Бот»): підпис, локація, стаття, розбивка, лог. Оплачені не чіпаємо.
+function _invApplyCaption(sh, hdr, rowNum, caption, source, dryRun){
+  var col = function(n){ return hdr.indexOf(n) + 1; };
+  var id = String(sh.getRange(rowNum, col('invoice_id')).getValue());
+  var st = String(sh.getRange(rowNum, col('статус')).getValue());
+  if (st === INV_ST.PAID) return {id: id, skipped: 'оплачено'};
+  var sp = _invParseSplit(caption);
+  var loc = sp.loc || '';
+  var items = sp.items.map(function(it){ return {name: it.name, amount: it.amount, opex: _invMapOpexCat(loc, it.name)}; });
+  var category = items.length === 1 ? items[0].name : (items.length > 1 ? ('розбивка: ' + items.length + ' статті') : sp.base.category);
+  var res = {id: id, caption: trim(caption), loc: loc, category: category, items: items, source: source};
+  // Сума розбивки ≠ сумі рахунку — не блокуємо, лише позначаємо (видно в лозі й у відповіді).
+  var invAmt = _invSplitNum(sh.getRange(rowNum, col('сума')).getValue());
+  var splitSum = Math.round(items.reduce(function(a, it){ return a + it.amount; }, 0) * 100) / 100;
+  if (items.length > 1 && invAmt > 0 && Math.abs(splitSum - invAmt) > 0.011) res.sumMismatch = {split: splitSum, invoice: invAmt};
+  if (dryRun) return res;
+  sh.getRange(rowNum, col('підпис')).setValue(trim(caption));
+  sh.getRange(rowNum, col('локація')).setValue(loc);
+  sh.getRange(rowNum, col('стаття (з підпису)')).setValue(category);
+  var logC = col('лог'), prev = String(sh.getRange(rowNum, logC).getValue() || '');
+  sh.getRange(rowNum, logC).setValue((prev ? prev + ' · ' : '') + 'підпис: ' + source + ' ' + formatDate(new Date()) +
+    (res.sumMismatch ? ' · ⚠️ розбивка ' + res.sumMismatch.split + ' ≠ рахунок ' + res.sumMismatch.invoice : ''));
+  var ss = _invCfgSheet(INV_SPLIT_SHEET, INV_SPLIT_HEADER, true), lr = ss.getLastRow();
+  if (lr > 1){ var ids = ss.getRange(2, 1, lr - 1, 1).getValues();
+    for (var i = ids.length - 1; i >= 0; i--) if (String(ids[i][0]) === id) ss.deleteRow(i + 2); }
+  if (items.length){ var now = formatDate(new Date());
+    ss.getRange(ss.getLastRow() + 1, 1, items.length, INV_SPLIT_HEADER.length)
+      .setValues(items.map(function(it){ return [id, it.name, it.amount, it.opex, now]; })); }
+  return res;
+}
+function _invRowsByMessageIds(sh, hdr, mids){
+  var v = sh.getDataRange().getValues(), cM = hdr.indexOf('message_id'), out = [];
+  for (var r = 1; r < v.length; r++) if (mids.indexOf(String(v[r][cM])) >= 0) out.push(r + 1);
+  return out;
+}
+// Файлове повідомлення → журнал повідомлень; альбом: підпис одного файлу — на всі файли альбому.
+function _invOnFileMessage(msg, chatId){
+  var ms = _invCfgSheet(INV_MSG_SHEET, INV_MSG_HEADER, true);
+  var mg = String(msg.media_group_id || ''), cap = trim(msg.caption || '');
+  ms.appendRow([chatId, String(msg.message_id), String((msg.from && msg.from.id) || ''), _invAuthor(msg), String(msg.date || ''),
+                formatDate(new Date()), cap ? 'file+caption' : 'file', cap, '', mg, '']);
+  if (!mg) return;
+  var v = ms.getDataRange().getValues(), H = INV_MSG_HEADER, iG = H.indexOf('media_group_id'), iM = H.indexOf('message_id'), iT = H.indexOf('текст');
+  var group = [], gcap = '';
+  for (var r = 1; r < v.length; r++) if (String(v[r][iG]) === mg){ group.push(String(v[r][iM])); if (!gcap && trim(v[r][iT])) gcap = trim(v[r][iT]); }
+  if (!gcap) return;
+  var sh = _invSheet(true), hdr = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String), cP = hdr.indexOf('підпис') + 1;
+  _invRowsByMessageIds(sh, hdr, group).forEach(function(rn){ if (!trim(sh.getRange(rn, cP).getValue())) _invApplyCaption(sh, hdr, rn, gcap, 'альбом', false); });
+}
+// Текстове повідомлення групи: reply на файл → точно; інакше — файли того самого автора без підпису за вікно.
+function _invOnTextMessage(msg, chatId, isEdit){
+  var text = trim(msg.text || ''); if (!text) return {ok:true, kind:'empty'};
+  var ms = _invCfgSheet(INV_MSG_SHEET, INV_MSG_HEADER, true), H = INV_MSG_HEADER;
+  var v = ms.getDataRange().getValues();
+  var iM = H.indexOf('message_id'), iF = H.indexOf('from_id'), iD = H.indexOf('tg_date'), iTy = H.indexOf('тип'), iG = H.indexOf('media_group_id'), iA = H.indexOf('застосовано до'), iTx = H.indexOf('текст');
+  var mid = String(msg.message_id), fromId = String((msg.from && msg.from.id) || ''), tNow = Number(msg.date) || 0;
+  var sh = _invSheet(true), hdr = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String), cP = hdr.indexOf('підпис') + 1;
+  if (isEdit){                                   // правка тексту — перезастосувати до тих самих заявок
+    for (var e = 1; e < v.length; e++) if (String(v[e][iM]) === mid && String(v[e][iTy]) === 'text'){
+      ms.getRange(e + 1, iTx + 1).setValue(text);
+      var ids = String(v[e][iA] || '').split(',').filter(Boolean), v2 = sh.getDataRange().getValues(), cId = hdr.indexOf('invoice_id');
+      for (var q = 1; q < v2.length; q++) if (ids.indexOf(String(v2[q][cId])) >= 0) _invApplyCaption(sh, hdr, q + 1, text, 'правка повідомлення', false);
+      return {ok:true, kind:'text-edit', reapplied: ids.length};
+    }
+    return {ok:true, kind:'text-edit', reapplied: 0};
+  }
+  var targets = [], source = '';
+  var rep = msg.reply_to_message && msg.reply_to_message.message_id ? String(msg.reply_to_message.message_id) : '';
+  if (rep){
+    var mids = [rep], grp = '';
+    for (var r = 1; r < v.length; r++) if (String(v[r][iM]) === rep) grp = String(v[r][iG] || '');
+    if (grp) for (var r2 = 1; r2 < v.length; r2++) if (String(v[r2][iG]) === grp) mids.push(String(v[r2][iM]));
+    targets = _invRowsByMessageIds(sh, hdr, mids); source = 'відповідь на файл';
+  }
+  if (!targets.length && fromId){
+    var tPrev = 0;
+    for (var p = 1; p < v.length; p++) if (String(v[p][iF]) === fromId && String(v[p][iTy]) === 'text' && Number(v[p][iD]) < tNow) tPrev = Math.max(tPrev, Number(v[p][iD]));
+    var from = Math.max(tNow - INV_CAPTION_WINDOW_S, tPrev), fm = [];
+    for (var f = 1; f < v.length; f++){ var ty = String(v[f][iTy]);
+      if (String(v[f][iF]) === fromId && ty === 'file' && Number(v[f][iD]) >= from && Number(v[f][iD]) <= tNow) fm.push(String(v[f][iM])); }
+    targets = _invRowsByMessageIds(sh, hdr, fm).filter(function(rn){ return !trim(sh.getRange(rn, cP).getValue()); });
+    source = 'наступне повідомлення автора';
+  }
+  var applied = targets.map(function(rn){ return _invApplyCaption(sh, hdr, rn, text, source + (targets.length > 1 ? ' (на ' + targets.length + ' файли)' : ''), false); })
+                       .filter(function(x){ return !x.skipped; }).map(function(x){ return x.id; });
+  ms.appendRow([chatId, mid, fromId, _invAuthor(msg), String(msg.date || ''), formatDate(new Date()), 'text', text, rep, '', applied.join(',')]);
+  return {ok:true, kind:'text', applied: applied, source: source};
+}
+// Ручне встановлення підпису (задній рядок, експорт чату або диктування). dryRun за замовч.
+// POST {action:'invoiceSetCaption', items:[{id, caption}], dryRun}
+function invoiceSetCaption(body){
+  body = body || {};
+  var dryRun = (body.dryRun !== false), items = Array.isArray(body.items) ? body.items : (body.id ? [{id: body.id, caption: body.caption}] : []);
+  if (!items.length) return {ok:false, error:'items порожній'};
+  var sh = _invSheet(false); if (!sh) return {ok:false, error:'лист заявок не знайдено'};
+  var hdr = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String), cId = hdr.indexOf('invoice_id');
+  var v = sh.getDataRange().getValues(), rowOf = {};
+  for (var r = 1; r < v.length; r++) rowOf[String(v[r][cId])] = r + 1;
+  var out = items.map(function(it){ var rn = rowOf[String(it.id)];
+    if (!rn) return {id: String(it.id), error: 'заявку не знайдено'};
+    return _invApplyCaption(sh, hdr, rn, String(it.caption || ''), body.source || 'вручну', dryRun); });
+  return {ok:true, dryRun: dryRun, items: out};
+}
+function _invSplitsByInvoice(){
+  var ss = _invCfgSheet(INV_SPLIT_SHEET, INV_SPLIT_HEADER, false), out = {};
+  if (!ss || ss.getLastRow() < 2) return out;
+  ss.getRange(2, 1, ss.getLastRow() - 1, INV_SPLIT_HEADER.length).getValues().forEach(function(r){
+    var id = String(r[0]); if (!id) return;
+    (out[id] = out[id] || []).push({name: String(r[1]), amount: _invSplitNum(r[2]), opex: String(r[3] || '')});
+  });
+  return out;
 }
 
 // Читання заявок (для перевірки й для звірки на етапі 5).
@@ -2768,12 +2968,18 @@ function getInvoiceRequests(params){
     var hdr = v[0].map(String), items = [];
     var fSt = trim(params.status), fLoc = trim(params.loc);
     var lim = Number(params.limit) || 500;
+    var splits = _invSplitsByInvoice();   // v7.343: розбивка підпису на статті
     for(var r=1;r<v.length;r++){
       if(!v[r][0]) continue;
       var o = {};
       for(var c=0;c<hdr.length;c++) o[hdr[c]] = (v[r][c] instanceof Date) ? formatDate(v[r][c]) : String(v[r][c]==null?'':v[r][c]);
       if(fSt && o['статус'] !== fSt) continue;
       if(fLoc && o['локація'] !== fLoc) continue;
+      if(splits[o['invoice_id']]){
+        o.split = splits[o['invoice_id']];
+        var ssum = Math.round(o.split.reduce(function(a,x){ return a + x.amount; }, 0) * 100) / 100, iamt = _invSplitNum(o['сума']);
+        o.splitSum = ssum; o.splitMismatch = (o.split.length > 1 && iamt > 0 && Math.abs(ssum - iamt) > 0.011);
+      }
       items.push(o);
       if(items.length >= lim) break;
     }
@@ -2797,7 +3003,13 @@ function invoiceBotDryRun(params){
     props:{token:!!_invTok(), chatId:_invChatId()||'(не задано)', secret:_invProp('INVOICE_WEBHOOK_SECRET')?'є':'(не задано)'},
     routes:{webhook:'POST ?action=tgInvoiceWebhook&s=<secret>', setup:'POST {action:"tgInvoiceSetup"}',
             setWebhook:'POST {action:"tgInvoiceSetWebhook"}', read:'GET ?action=getInvoiceRequests'},
-    locationsKnown:_invLocList().length, captionSamples:parsed};
+    locationsKnown:_invLocList().length, captionSamples:parsed,
+    // v7.343: чи бачить бот звичайний текст групи (потрібно для підпису окремим повідомленням).
+    // false → BotFather /setprivacy → Disable (і перевидати бота в групу) або зробити бота адміном.
+    readsGroupText:(function(){ try { var me = _invApi('getMe', {}); return (me && me.ok) ? !!me.result.can_read_all_group_messages : ('getMe: ' + ((me && me.description) || 'немає відповіді')); } catch(_m){ return String(_m); } })(),
+    splitSamples:[trim(params.split) || 'Школа Осокорки: Сніданки 8464, Госптовари 1570, Працівникам 1020', 'Кухня / Кругла', 'Тичини вода 1 250,50']
+      .map(function(t){ var sp = _invParseSplit(t);
+        return {text:t, loc:sp.loc || '(не впізнано)', items:sp.items.map(function(it){ return {name:it.name, amount:it.amount, opex:_invMapOpexCat(sp.loc, it.name) || '(—)'}; })}; })};
 }
 
 
@@ -3322,11 +3534,13 @@ function matchInvoicesToPayments(body){
       else good.push(x);
     });
 
+    var _splitsM = {}; try { _splitsM = _invSplitsByInvoice(); } catch(_sm){}
     var report = {ok:true, dryRun:dryRun, openCount:open.length, paymentsIn:pays.length,
       willMark: good.length, ambiguousCount: ambiguous.length,
       matched: good.map(function(x){
         return {id:x.inv.id, row:x.inv.rowNum, supplier:x.inv.supplier, loc:x.inv.loc,
                 category:x.inv.category, amount:x.inv.amount, number:x.inv.number,
+                split:(_splitsM[String(x.inv.id)] || null),   // v7.343: кілька статей — reconcile ділить рядок витрат
                 edrpou:x.inv.edrpou, payDate:_invDmy(x.pay.date), ref:String(x.pay.ref||''),
                 counterparty:String(x.pay.counterparty||''),
                 // v7.321: ЄДРПОУ ПЛАТЕЖУ (не заявки) — reconcile будує з нього ключ групи
@@ -6482,7 +6696,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.342', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.343', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -6687,6 +6901,7 @@ function doPost(e) {
     else if (body.action === 'tgInvoiceSetWebhook')       result = tgInvoiceSetWebhook(body || {});  // v7.312 бот рахунків: реєстрація вебхука
     else if (body.action === 'processInvoiceQueue')       result = processInvoiceQueue(body || {});  // v7.316 розпізнавання рахунків (dryRun за замовч. false)
     else if (body.action === 'ensureInvoiceTrigger')      result = ensureInvoiceTrigger(body || {}); // v7.316 тригер черги раз на 5 хв
+    else if (body.action === 'invoiceSetCaption')         result = invoiceSetCaption(body || {});    // v7.343 підпис заявки вручну / з експорту чату (dryRun за замовч.)
     else if (body.action === 'matchInvoicesToPayments')   result = matchInvoicesToPayments(body || {}); // v7.320 звірка заявок із випискою (dryRun за замовч.)
     else if (body.action === 'tgSeedDirectors')           result = tgSeedDirectors(body || {});   // прив'язка директорів до локацій
     else if (body.action === 'cashPayoutSheet')          result = cashPayoutSheet(body || {});      // v7.64 відомість на видачу готівки (PDF)
