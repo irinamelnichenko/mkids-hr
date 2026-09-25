@@ -1,5 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.339
+// m.kids CRM — Google Apps Script v7.341
+// v7.341: OPEX — паралельне читання файлів (fetchAll → Sheets API, запасний SpreadsheetApp), кеш по локаціях 15 хв
+//         (скидає opexAddExpenses; nocache=1 — напряму), спільний розбір _opexParseGrid для getOpexData й огляду.
+//         diagOpexCompare — звірка зі старими функціями (_getOpexDataOld/_getOpexOverviewOld).
 // v7.339: getOpexData — + extras (сирі рядки «Знижки», «Кількість дітей/груп/основного персоналу», за назвою);
 //         year ≠ поточний → NO_YEAR (досі ігнорувався і віддавав поточний рік під чужим підписом).
 // v7.338: нічний синк «Payment → картки» (nightlySyncMissingKindergartens) — scope 'kindergartens_mgmt':
@@ -6476,7 +6479,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.339', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.341', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -6514,8 +6517,9 @@ function doGet(e) {
     else if (action === 'getHealthRecords')         result = getHealthRecords(e);
     else if (action === 'dryRunImportAbsences')      result = dryRunImportAbsences(e.parameter.loc || '');
     else if (action === 'importAbsencesFromPayment') result = importAbsencesFromPayment(e.parameter.loc || '');
-    else if (action === 'getOpexData')               result = getOpexData(e.parameter.loc || '', e.parameter.year || '');
-    else if (action === 'getOpexOverview')           result = getOpexOverview(e.parameter.year || '', e.parameter.category || '');   // v7.326 +category
+    else if (action === 'getOpexData')               result = getOpexData(e.parameter.loc || '', e.parameter.year || '', String(e.parameter.nocache || '') === '1');   // v7.341 кеш
+    else if (action === 'diagOpexCompare')           result = diagOpexCompare();   // v7.341 звірка старий/новий
+    else if (action === 'getOpexOverview')           result = getOpexOverview(e.parameter.year || '', e.parameter.category || '', String(e.parameter.nocache || '') === '1');   // v7.326 +category; v7.341 кеш
     else if (action === 'getClosedMonths')            result = getClosedMonths();                                 // v7.91
     else if (action === 'getOpexContractors')        result = getOpexContractors();                              // v7.84 мапа контрагентів
     else if (action === 'resolveIbanLoc')            result = resolveIbanLoc(e.parameter.iban || '');            // v7.84 IBAN→локація
@@ -13195,7 +13199,7 @@ function _opexNum(v) {
   return 0;
 }
 
-function getOpexData(loc, year) {
+function _getOpexDataOld(loc, year) {   // v7.341: старий шлях — лише для звірки
   loc = String(loc || '').trim();
   if (!loc) return {ok:false, error:'Missing loc'};
   // v7.339: у файлах локацій лише ПОТОЧНИЙ рік (аркуш OPEX без архіву). Досі year ігнорувався, і запит
@@ -13279,10 +13283,216 @@ function getOpexData(loc, year) {
   };
 }
 
-// v7.326: category (необовʼязково) — рахувати ЛИШЕ рядки статей, назва яких містить цей фрагмент
-// (без регістру). Для R&D: «Методична частина» по всіх локаціях. Локація без такої статті
-// повертається з catFound:false, щоб нуль не маскував відсутність рядка.
-function getOpexOverview(year, category) {
+// v7.341: OPEX — кеш ПО ЛОКАЦІЯХ (15 хв) + паралельне читання файлів (UrlFetchApp.fetchAll → Sheets API,
+// запасний шлях — SpreadsheetApp). Розбір аркуша — одна функція _opexParseGrid для getOpexData і огляду
+// (огляд = сума тих самих статей). Кеш локації скидає opexAddExpenses (_cacheBump('opex_<лок>'));
+// правки CFO руками у Google-таблиці — видно після TTL або кнопкою «Оновити» (nocache=1).
+// diagOpexCompare — старий і новий шлях поруч.
+var OPEX_LOC_TTL = 900;
+function _opexRegistry(){
+  var reg = SpreadsheetApp.openById(CONFIG_SHEET_ID).getSheetByName('OPEX');
+  if (!reg) return null;
+  var v = reg.getDataRange().getValues(), out = [];
+  for (var i = 1; i < v.length; i++){
+    var loc = String(v[i][2] || '').trim(), sid = String(v[i][3] || '').trim();
+    if (!loc || !sid) continue;
+    out.push({typ: String(v[i][1] || '').trim(), loc: loc, sheetId: sid, listName: String(v[i][4] || '').trim() || 'OPEX'});
+  }
+  return out;
+}
+function _opexParseGrid(data, width){
+  var categories = [];
+  for (var rowNum = 3; rowNum <= 30; rowNum++) {
+    var idx = rowNum - 1;
+    if (idx >= data.length) break;
+    var rowArr = data[idx] || [];
+    var rawName = String(rowArr[0] || '').trim();
+    if (_opexIsSkippedCategory(rawName)) continue;
+    var name = _opexNormalizeCategoryName(rawName);
+
+    var months = [];
+    var totalFact = 0, totalBudget = 0;
+    for (var m = 1; m <= 12; m++) {
+      var fIdx = (m - 1) * 3 + 1;
+      var bIdx = (m - 1) * 3 + 2;
+      var fact   = fIdx < width ? _opexNum(rowArr[fIdx]) : 0;
+      var budget = bIdx < width ? _opexNum(rowArr[bIdx]) : 0;
+      months.push({month: m, fact: fact, budget: budget});
+      totalFact   += fact;
+      totalBudget += budget;
+    }
+    categories.push({
+      name: name,
+      row: rowNum,
+      months: months,
+      totalFact: totalFact,
+      totalBudget: totalBudget
+    });
+  }
+
+  // v7.339: службові рядки під статтями — «Знижки» і кількості (діти / групи / персонал). Шукаємо ЗА НАЗВОЮ
+  // в колонці A (номер рядка у файлах може зсунутись). Віддаємо сирі значення рядка (37 колонок: A + 12 міс × 3),
+  // бо кількості в місяці живуть не завжди в колонці «Факт» — яку брати, вирішує сторінка за перевіреною схемою.
+  var EXTRA_NAMES = {'знижки':'discounts', 'кількість дітей':'kids', 'кількість груп':'groups', 'кількість основного персоналу':'staff'};
+  var extras = {};
+  for (var er = 30; er < data.length; er++){
+    var en = String((data[er] || [])[0] || '').trim().toLowerCase();
+    var ek = EXTRA_NAMES[en];
+    if (!ek || extras[ek]) continue;
+    var rawRow = [];
+    for (var ec = 0; ec < Math.min(width, 37); ec++){ var v = data[er][ec]; rawRow.push(v instanceof Date ? v.toISOString() : v); }
+    extras[ek] = {name: String(data[er][0]).trim(), row: er + 1, raw: rawRow};
+  }
+
+  // v7.339: службові рядки під статтями — «Знижки» і кількості (діти / групи / персонал). Шукаємо ЗА НАЗВОЮ
+  // в колонці A (номер рядка у файлах може зсунутись). Віддаємо сирі значення рядка (37 колонок: A + 12 міс × 3),
+  // бо кількості в місяці живуть не завжди в колонці «Факт» — яку брати, вирішує сторінка за перевіреною схемою.
+  var EXTRA_NAMES = {'знижки':'discounts', 'кількість дітей':'kids', 'кількість груп':'groups', 'кількість основного персоналу':'staff'};
+  var extras = {};
+  for (var er = 30; er < data.length; er++){
+    var en = String((data[er] || [])[0] || '').trim().toLowerCase();
+    var ek = EXTRA_NAMES[en];
+    if (!ek || extras[ek]) continue;
+    var rawRow = [];
+    for (var ec = 0; ec < Math.min(width, 37); ec++){ var v = data[er][ec]; rawRow.push(v instanceof Date ? v.toISOString() : v); }
+    extras[ek] = {name: String(data[er][0]).trim(), row: er + 1, raw: rawRow};
+  }
+  return {categories: categories, extras: extras};
+}
+// Сітки аркушів: 'fast' — один пакет Sheets API (+ SpreadsheetApp для тих, що не прочитались), 'old' — SpreadsheetApp.
+function _opexReadGrids(entries, mode){
+  var grids = {}, via = {};
+  if (mode === 'fast' && entries.length){
+    try {
+      var tok = ScriptApp.getOAuthToken();
+      var resps = UrlFetchApp.fetchAll(entries.map(function(e){
+        var rng = "'" + String(e.listName).replace(/'/g, "''") + "'";
+        return {url: 'https://sheets.googleapis.com/v4/spreadsheets/' + encodeURIComponent(e.sheetId) + '/values/' +
+                     encodeURIComponent(rng) + '?valueRenderOption=UNFORMATTED_VALUE&dateTimeRenderOption=SERIAL_NUMBER',
+                headers: {Authorization: 'Bearer ' + tok}, muteHttpExceptions: true};
+      }));
+      resps.forEach(function(r, i){
+        var e = entries[i];
+        if (r.getResponseCode() !== 200){ via[e.loc] = 'api-' + r.getResponseCode(); return; }
+        try {
+          var g = JSON.parse(r.getContentText()).values || [], w = 37;
+          g.forEach(function(row){ if (row.length > w) w = row.length; });
+          var h = Math.max(g.length, 30), data = [];
+          for (var rr = 0; rr < h; rr++){
+            var src = g[rr] || [], row = new Array(w);
+            for (var cc = 0; cc < w; cc++) row[cc] = (cc < src.length && src[cc] != null) ? src[cc] : '';
+            data.push(row);
+          }
+          grids[e.loc] = {data: data, width: w}; via[e.loc] = 'api';
+        } catch(_j){}
+      });
+    } catch(_f){ via._batchError = String(_f && _f.message || _f); }
+  }
+  entries.forEach(function(e){
+    if (grids[e.loc]) return;
+    try {
+      var sh = SpreadsheetApp.openById(e.sheetId).getSheetByName(e.listName);
+      if (!sh){ grids[e.loc] = {error: 'OPEX sheet not found'}; return; }
+      var lastRow = Math.max(sh.getLastRow(), 30), lastCol = Math.max(sh.getLastColumn(), 37);
+      grids[e.loc] = {data: sh.getRange(1, 1, lastRow, lastCol).getValues(), width: lastCol};
+      via[e.loc] = (mode === 'fast') ? ('fallback' + (via[e.loc] ? ':' + via[e.loc] : '')) : 'old';
+    } catch(err){ grids[e.loc] = {error: String(err && err.message || err)}; }
+  });
+  return {grids: grids, via: via};
+}
+// Розібрані дані по локаціях з кешем. → {byLoc:{loc:{categories,extras}|{error}}, hits, via}
+function _opexLocsParsed(entries, noCache){
+  var cache = null; try { cache = CacheService.getScriptCache(); } catch(_c){}
+  var vk = ['ver_opex'].concat(entries.map(function(e){ return 'ver_opex_' + _nameFold(e.loc); }));
+  var vers = {}; try { vers = cache ? cache.getAll(vk) : {}; } catch(_v){}
+  var keyOf = function(e){ return 'opexloc_' + (vers['ver_opex'] || '0') + '_' + (vers['ver_opex_' + _nameFold(e.loc)] || '0') + '_' + _nameFold(e.loc); };
+  var byLoc = {}, hits = 0;
+  if (!noCache && cache){
+    try { var got = cache.getAll(entries.map(keyOf));
+      entries.forEach(function(e){ var s = got[keyOf(e)]; if (s){ try { byLoc[e.loc] = JSON.parse(s); hits++; } catch(_p){} } }); } catch(_g){}
+  }
+  var miss = entries.filter(function(e){ return !byLoc[e.loc]; });
+  var rd = miss.length ? _opexReadGrids(miss, 'fast') : {grids:{}, via:{}};
+  var put = {};
+  miss.forEach(function(e){
+    var g = rd.grids[e.loc];
+    if (!g || g.error){ byLoc[e.loc] = {error: (g && g.error) || 'не прочитано'}; return; }
+    var p = _opexParseGrid(g.data, g.width);
+    byLoc[e.loc] = p;
+    var s = JSON.stringify(p); if (s.length < 95000) put[keyOf(e)] = s;
+  });
+  try { if (cache && Object.keys(put).length) cache.putAll(put, OPEX_LOC_TTL); } catch(_w){}
+  return {byLoc: byLoc, hits: hits, via: rd.via};
+}
+function getOpexData(loc, year, noCache) {
+  loc = String(loc || '').trim();
+  if (!loc) return {ok:false, error:'Missing loc'};
+  // v7.339: у файлах локацій лише ПОТОЧНИЙ рік — інший рік не підсовуємо під чужим підписом.
+  var _curY = new Date().getFullYear();
+  if (year && Number(year) && Number(year) !== _curY) return {ok:false, code:'NO_YEAR', error:'Даних OPEX за ' + year + ' рік у системі немає (є лише ' + _curY + ')'};
+  var reg = _opexRegistry();
+  if (!reg) return {ok:false, error:'OPEX registry tab not found in CONFIG'};
+  var entry = null; for (var i = 0; i < reg.length; i++) if (reg[i].loc === loc){ entry = reg[i]; break; }
+  if (!entry) return {ok:false, error:'Location not found'};
+  var r = _opexLocsParsed([entry], noCache), p = r.byLoc[loc];
+  if (!p || p.error) return {ok:false, error: (p && p.error === 'OPEX sheet not found') ? 'OPEX sheet not found in location file' : ((p && p.error) || 'Помилка читання')};
+  return {ok: true, loc: loc, year: year ? Number(year) || year : '', categories: p.categories, extras: p.extras,
+          cached: r.hits > 0, readVia: r.via[loc] || (r.hits ? 'cache' : '')};
+}
+// v7.326: category (необовʼязково) — рахувати ЛИШЕ статті, назва яких містить цей фрагмент (без регістру).
+function getOpexOverview(year, category, noCache) {
+  var _catNeedle = String(category || '').trim().toLowerCase();
+  var reg = _opexRegistry();
+  if (!reg) return {ok:false, error:'OPEX registry tab not found in CONFIG'};
+  var r = _opexLocsParsed(reg, noCache);
+  var locations = [], errors = [];
+  reg.forEach(function(e){
+    var p = r.byLoc[e.loc];
+    if (!p || p.error){ errors.push({loc: e.loc, error: (p && p.error) || 'не прочитано'}); return; }
+    var cats = p.categories.filter(function(c){ return !_catNeedle || String(c.name).toLowerCase().indexOf(_catNeedle) !== -1; });
+    var monthsTotals = [], yf = 0, yb = 0;
+    for (var m = 1; m <= 12; m++){
+      var mf = 0, mb = 0;
+      cats.forEach(function(c){ var mm = c.months[m - 1]; mf += mm.fact; mb += mm.budget; });
+      monthsTotals.push({month: m, fact: mf, budget: mb}); yf += mf; yb += mb;
+    }
+    locations.push({loc: e.loc, type: e.typ, monthsTotals: monthsTotals, yearFact: yf, yearBudget: yb,
+                    catFound: _catNeedle ? cats.length > 0 : undefined});
+  });
+  return {ok: true, year: year ? Number(year) || year : '', category: _catNeedle || '', locations: locations, errors: errors,
+          cachedLocs: r.hits, rebuiltLocs: reg.length - r.hits, readVia: r.via};
+}
+// Звірка: старі функції (SpreadsheetApp, як до v7.341) проти нових (паралельне читання), без кешу. Нічого не пише.
+function diagOpexCompare(){
+  var reg = _opexRegistry(); if (!reg) return {ok:false, error:'no registry'};
+  var yr = new Date().getFullYear();
+  var t1 = Date.now(), ovOld = _getOpexOverviewOld(yr, ''), msOld = Date.now() - t1;
+  var t2 = Date.now(), ovNew = getOpexOverview(yr, '', true), msNew = Date.now() - t2;
+  var r2 = function(x){ return Math.round((Number(x) || 0) * 100) / 100; };
+  var oi = {}; ovOld.locations.forEach(function(l){ oi[l.loc] = l; });
+  var ovDiff = [];
+  ovNew.locations.forEach(function(n){ var o = oi[n.loc]; if (!o){ ovDiff.push({loc:n.loc, why:'немає в старому'}); return; }
+    for (var m = 0; m < 12; m++) if (r2(o.monthsTotals[m].fact) !== r2(n.monthsTotals[m].fact) || r2(o.monthsTotals[m].budget) !== r2(n.monthsTotals[m].budget))
+      ovDiff.push({loc:n.loc, month:m + 1, oldF:o.monthsTotals[m].fact, newF:n.monthsTotals[m].fact, oldB:o.monthsTotals[m].budget, newB:n.monthsTotals[m].budget}); });
+  var rNew = _opexLocsParsed(reg, true), dataDiff = [], exDiff = [];
+  reg.forEach(function(e){
+    var o = _getOpexDataOld(e.loc, yr), n = rNew.byLoc[e.loc];
+    if (!o.ok || !n || n.error){ dataDiff.push({loc:e.loc, why:'помилка', old:o.error, neu:n && n.error}); return; }
+    if (o.categories.length !== n.categories.length) dataDiff.push({loc:e.loc, why:'к-сть статей', old:o.categories.length, neu:n.categories.length});
+    o.categories.forEach(function(c, i){ var nc = n.categories[i];
+      if (!nc || nc.name !== c.name){ dataDiff.push({loc:e.loc, why:'назва', old:c.name, neu:nc && nc.name}); return; }
+      for (var m = 0; m < 12; m++) if (r2(c.months[m].fact) !== r2(nc.months[m].fact) || r2(c.months[m].budget) !== r2(nc.months[m].budget))
+        dataDiff.push({loc:e.loc, cat:c.name, month:m + 1, old:[c.months[m].fact, c.months[m].budget], neu:[nc.months[m].fact, nc.months[m].budget]}); });
+    ['discounts','kids','groups','staff'].forEach(function(k){
+      var a = JSON.stringify(((o.extras || {})[k] || {}).raw || []).replace(/""/g, 'null'), b = JSON.stringify(((n.extras || {})[k] || {}).raw || []).replace(/""/g, 'null');
+      if (a !== b) exDiff.push({loc:e.loc, row:k, old:((o.extras || {})[k] || {}).raw, neu:((n.extras || {})[k] || {}).raw}); });
+  });
+  return {ok:true, locations: reg.length, msOverviewOld: msOld, msOverviewNew: msNew, readVia: rNew.via,
+          overviewIdentical: !ovDiff.length, dataIdentical: !dataDiff.length, extrasIdentical: !exDiff.length,
+          ovDiff: ovDiff.slice(0, 20), dataDiff: dataDiff.slice(0, 20), exDiff: exDiff.slice(0, 10)};
+}
+
+function _getOpexOverviewOld(year, category) {   // v7.341: старий шлях — лише для звірки
   var _catNeedle = String(category || '').trim().toLowerCase();
   var configSS = SpreadsheetApp.openById(CONFIG_SHEET_ID);
   var regSheet = configSS.getSheetByName('OPEX');
@@ -13582,7 +13792,7 @@ function opexAddExpenses(body){
     if (!items.length) return {ok: false, error: 'items порожні'};
 
     // v7.86: контекст OPEX-файлу кешується ПЕР-ЛОКАЦІЄЮ (рядки можуть іти в різні локації).
-    var ctxCache = {};
+    var ctxCache = {}, _opexTouched = {};   // v7.341
     function getCtx(l){
       l = String(l || '').trim();
       if (ctxCache[l]) return ctxCache[l];
@@ -13680,6 +13890,7 @@ function opexAddExpenses(body){
 
       if (!dryRun){
         cell.setValue(after);
+        _opexTouched[iloc] = true;   // v7.341: кеш цієї локації скинемо після запису
         if (wasFormula) formulaConverted++;
         logRows.push([iloc, iban, date, ref, edrpou, amount, cat, mon, now, by, 'внесено', '']);
         (seenWrite[iloc] = seenWrite[iloc] || {})[dedupKey] = true;   // дубль у ЦЬОМУ ж батчі теж відсіється
@@ -13691,6 +13902,7 @@ function opexAddExpenses(body){
     if (!dryRun && logRows.length && logSh){
       logSh.getRange(logSh.getLastRow() + 1, 1, logRows.length, OPEX_EXP_LOG_HEADER.length).setValues(logRows);
     }
+    Object.keys(_opexTouched).forEach(function(l){ _cacheBump('opex_' + _nameFold(l)); });   // v7.341 кеш OPEX
 
     // remember → мапа контрагентів (лише при реальному записі)
     var remembered = 0;

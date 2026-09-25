@@ -4,9 +4,9 @@
 
 | | |
 |---|---|
-| Версія у репозиторії | **v7.339** |
-| md5 | `e045afc2999cbc09f3b5b0fcdec180cb` |
-| Розмір | 2043612 байт |
+| Версія у репозиторії | **v7.341** |
+| md5 | `ebc4c36f8a4975dd348d3cff96951160` |
+| Розмір | 2057950 байт |
 | Зафіксовано | 2026-09-24 |
 | Версія у проді | **v7.339** — задеплоєно 25.09.2026; getOpexData: extras (знижки/кількості), year≠поточний → NO_YEAR |
 | Перевірка | `action=ping` → `pong v7.339` ✅ |
@@ -23,6 +23,18 @@
 ```
 curl -sL "https://script.google.com/macros/s/AKfycbyTSUVlaN4-PpXe47zCSmhVs0Qxy1FDXG_XsB4zcKNpqBxdhDtS9ibM4YFGkGjmPQDFWQ/exec?action=ping"
 ```
+
+## v7.341: OPEX — паралельне читання, кеш по локаціях, збережене одразу
+
+Заміри перед змінами: getOpexOverview 17–22 с (17 файлів по черзі, без серверного кешу), getOpexData 5,5–7,2 с,
+getOpexExpensesLog 5,1–5,7 с (підтягувався лише на першому кліку статті), getLocations ~4 с — у CFO ПЕРЕД оглядом;
+ping 3,7–4,1 с. Кеш у браузері — 5 хв, далі спінер.
+- бекенд: _opexRegistry + _opexReadGrids ('fast' = fetchAll → Sheets API, запасний SpreadsheetApp) + _opexParseGrid
+  (спільний для getOpexData й огляду: огляд = сума тих самих статей) + кеш по локації 15 хв (ver_opex_<лок>, скидає
+  opexAddExpenses); nocache=1 — напряму. Старі _getOpexDataOld/_getOpexOverviewOld — для diagOpexCompare.
+  ⚠ Правки CFO руками в Google-таблиці — видно після ≤15 хв або кнопкою «Оновити».
+- opex.html: збережене (до доби) одразу + свіже у фоні (деталь і огляд); CFO — огляд паралельно зі списком
+  локацій; журнал платежів у фоні одразу після даних; «Оновити» — nocache=1 і журнал заново. sw v7.341.
 
 ## v7.340 (лише фронт): OPEX — без попередження «у журналі більше, ніж факт»
 

@@ -1107,7 +1107,7 @@ function loadCache(){
     var obj = JSON.parse(raw);
     if (!obj || !obj.ts || !obj.data) return null;
     if (obj.loc !== CFG.LOC || obj.year !== CFG.YEAR) return null;
-    if (Date.now() - obj.ts > CFG.CACHE_TTL) return null;
+    if (Date.now() - obj.ts > (arguments[0] ? 24 * 3600 * 1000 : CFG.CACHE_TTL)) return null;   // v7.341 allowStale
     return obj;
   } catch(e){ return null; }
 }
@@ -1128,7 +1128,7 @@ async function fetchData(force){
     }
   }
   var url = CFG.SCRIPT_URL + '?action=getOpexData&loc=' + encodeURIComponent(CFG.LOC) +
-            '&year=' + encodeURIComponent(CFG.YEAR);
+            '&year=' + encodeURIComponent(CFG.YEAR) + (S._bypassServer ? '&nocache=1' : '');   // v7.341
   var r = await fetch(url, {redirect:'follow'});
   if (!r.ok) throw new Error('HTTP ' + r.status);
   var json = await r.json();
@@ -1150,7 +1150,7 @@ function loadOverviewCache(){
     if (!obj || !obj.ts || !obj.data) return null;
     if (obj.year !== CFG.YEAR) return null;
     if ((obj.category || '') !== _opexOverviewCategory()) return null;   // v7.326: кеш іншої ролі не годиться
-    if (Date.now() - obj.ts > CFG.OVERVIEW_CACHE_TTL) return null;
+    if (Date.now() - obj.ts > (arguments[0] ? 24 * 3600 * 1000 : CFG.OVERVIEW_CACHE_TTL)) return null;   // v7.341 allowStale
     return obj;
   } catch(e){ return null; }
 }
@@ -1169,7 +1169,8 @@ async function fetchOverviewData(force){
       return c.data;
     }
   }
-  var url = CFG.SCRIPT_URL + '?action=getOpexOverview&year=' + encodeURIComponent(CFG.YEAR);
+  if (!force && S._ovPrefetch){ var _p = S._ovPrefetch; S._ovPrefetch = null; return _p; }   // v7.341: уже летить (старт CFO)
+  var url = CFG.SCRIPT_URL + '?action=getOpexOverview&year=' + encodeURIComponent(CFG.YEAR) + (S._bypassServer ? '&nocache=1' : '');
   var _cat = _opexOverviewCategory();                                     // v7.326
   if (_cat) url += '&category=' + encodeURIComponent(_cat);
   var r = await fetch(url, {redirect:'follow'});
@@ -2010,8 +2011,25 @@ function renderExtras(months, rows){
   box.innerHTML = h; box.classList.remove('hidden');
 }
 
+function _applyRndFilter(data){
+  if (S.user && String(S.user.role).toLowerCase()==='rnd_director' && data && data.categories){
+    data.categories = data.categories.filter(function(c){ return String(c.name||'').toLowerCase().indexOf('методичн')>=0; });
+  }
+  return data;
+}
 async function loadDetail(force){
   $('errBox').classList.add('hidden');
+  // v7.341: немає свіжого кешу, але є збережене (до доби) — показуємо одразу, свіже тягнемо у фоні
+  if (!force && !S.data && !loadCache()){
+    var st = loadCache(true);
+    if (st){
+      S.data = _applyRndFilter(st.data);
+      $('loadBox').classList.add('hidden'); $('content').classList.remove('hidden');
+      applyMode(); rerenderForPeriod();
+      $('meta').textContent = 'дані на ' + new Date(st.ts).toLocaleString('uk-UA') + ' · оновлюю…';
+      force = true;
+    }
+  }
   $('refreshBtn').disabled = true;
   if (!S.data){
     $('content').classList.add('hidden');
@@ -2020,14 +2038,12 @@ async function loadDetail(force){
   }
   try {
     var data = await fetchData(force);
-    S.data = data; /*R&D-opex-filter*/
-    if (S.user && String(S.user.role).toLowerCase()==='rnd_director' && S.data && S.data.categories){
-      S.data.categories = S.data.categories.filter(function(c){ return String(c.name||'').toLowerCase().indexOf('методичн')>=0; });
-    }
+    S.data = _applyRndFilter(data); /*R&D-opex-filter*/
     $('loadBox').classList.add('hidden');
     $('content').classList.remove('hidden');
     applyMode();
     rerenderForPeriod();
+    try { loadExpLog(); } catch(_x){}   // v7.341: журнал платежів у фоні — перше вікно статті без очікування
   } catch(e){
     $('loadBox').classList.add('hidden');
     $('content').classList.add('hidden');
@@ -2047,6 +2063,17 @@ async function loadDetail(force){
 
 async function loadOverview(force){
   $('errBox').classList.add('hidden');
+  // v7.341: збережений огляд (до доби) — одразу, свіжий у фоні
+  if (!force && !S.overviewData && !loadOverviewCache()){
+    var st = loadOverviewCache(true);
+    if (st){
+      S.overviewData = st.data;
+      $('loadBox').classList.add('hidden'); $('content').classList.remove('hidden');
+      applyMode(); rerenderOverview();
+      $('meta').textContent = 'дані на ' + new Date(st.ts).toLocaleString('uk-UA') + ' · оновлюю…';
+      force = true;
+    }
+  }
   $('refreshBtn').disabled = true;
   if (!S.overviewData){
     $('content').classList.add('hidden');
@@ -2128,14 +2155,16 @@ function bindEventListeners(){
     localStorage.removeItem(CFG.CACHE_KEY);
     await load(true);
   });
-  $('refreshBtn').addEventListener('click', function(){
+  $('refreshBtn').addEventListener('click', async function(){
     if (S.mode === 'overview'){
       localStorage.removeItem(CFG.OVERVIEW_CACHE_KEY);
       S.overviewData = null;
     } else {
       localStorage.removeItem(CFG.CACHE_KEY);
     }
-    load(true);
+    S.expLog = null;              // v7.341: і журнал платежів — заново
+    S._bypassServer = true;       // v7.341: «Оновити» — напряму з файлів, повз серверний кеш
+    try { await load(true); } finally { S._bypassServer = false; }
   });
 
   $('mtOverview').addEventListener('click', function(){
@@ -2183,6 +2212,8 @@ function bindEventListeners(){
   updUserUI();
 
   if (isHR()){
+    // v7.341: огляд мережі не залежить від списку локацій — стартуємо паралельно (було по черзі, +~4 с)
+    if (!loadOverviewCache() && !loadOverviewCache(true)){ S._ovPrefetch = fetchOverviewData(true); S._ovPrefetch.catch(function(){}); }
     await loadLocationsForSelector();
     if (!S.locations.length){
       updUserUI();
