@@ -583,6 +583,7 @@ select{font-family:inherit}
       </table>
       </div>
       <div class="modal-sum" id="catSum"></div>
+      <div id="catPays" style="margin-top:14px"></div>
     </div>
   </div>
 </div>
@@ -1674,15 +1675,86 @@ function rerenderOverview(){
 }
 
 // ── CATEGORY MODAL ──────────────────────────
+// ── v7.339: ПЛАТЕЖІ ПІД СТАТТЕЮ (журнал OPEX) ──────────────────────────────
+// Журнал «OPEX_Витрати_Лог» пише звірка виписки (reconcile.html) з серпня 2026. Показуємо лише «внесено»
+// (порожній статус = старі записи = внесено) і лише статті OPEX: «→Salary: …», «— не вносити —» та
+// «пропущено» — ні. Під списком: факт статті мінус платежі = «без підтвердження платежем» (внесено руками).
+var EXPLOG_FROM = {y:2026, m:8};
+function loadExpLog(){
+  var key = CFG.LOC + '|' + CFG.YEAR;
+  if (S.expLog && S.expLog.key === key) return S.expLog.p;
+  var url = CFG.SCRIPT_URL + '?action=getOpexExpensesLog&loc=' + encodeURIComponent(CFG.LOC) + '&year=' + encodeURIComponent(CFG.YEAR);
+  var p = fetch(url, {redirect:'follow'}).then(function(r){ return r.json(); }).then(function(j){
+    return (j && j.ok && Array.isArray(j.items)) ? j.items : [];
+  }).catch(function(){ return null; });
+  S.expLog = {key:key, p:p};
+  return p;
+}
+function _expLogIsOpex(x){
+  var st = String(x.status || '').trim();
+  if (st && st !== 'внесено') return false;
+  var c = String(x.category || '').trim();
+  if (!c || c.charAt(0) === '→' || /не вносити/i.test(c)) return false;
+  return true;
+}
+function _expDate(s){ var d = new Date(s); return isNaN(d.getTime()) ? String(s || '') : d.toLocaleDateString('uk-UA'); }
+function renderCatPays(cat){
+  var box = $('catPays'); if (!box) return;
+  var m = S.catPayMonth;
+  var mName = CFG.MONTHS_DISP[m - 1] || '';
+  box.innerHTML = '<div class="muted" style="font-size:13px">Платежі за ' + escapeHtml(mName) + '… завантаження</div>';
+  loadExpLog().then(function(items){
+    if (S.catPayCat !== cat.name || S.catPayMonth !== m) return;   // уже інший місяць/стаття
+    var fact = getMonthValues(cat, m).fact;
+    var hd = '<h3 style="font-size:14px;margin:0 0 8px">🧾 Платежі за ' + escapeHtml(mName) + ' ' + CFG.YEAR + '</h3>';
+    if (items === null){ box.innerHTML = hd + '<div class="muted">Не вдалося завантажити журнал платежів.</div>'; return; }
+    if (CFG.YEAR < EXPLOG_FROM.y || (CFG.YEAR === EXPLOG_FROM.y && m < EXPLOG_FROM.m)){
+      box.innerHTML = hd + '<div class="muted" style="font-size:13px">Журнал платежів ведеться з серпня 2026 — за цей місяць платежів у системі немає.</div>';
+      return;
+    }
+    var nm = String(cat.name).trim().toLowerCase();
+    var rows = items.filter(function(x){ return Number(x.month) === m && _expLogIsOpex(x) && String(x.category).trim().toLowerCase() === nm; });
+    rows.sort(function(a, b){ return (new Date(a.date).getTime() || 0) - (new Date(b.date).getTime() || 0); });
+    var paid = 0; rows.forEach(function(x){ paid += Number(x.amount) || 0; });
+    var h = hd;
+    if (rows.length){
+      h += '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Дата</th><th>Контрагент</th><th class="num">Сума</th></tr></thead><tbody>' +
+        rows.map(function(x){
+          return '<tr><td>' + escapeHtml(_expDate(x.date)) + '</td><td>' + escapeHtml(x.counterparty || ('ЄДРПОУ ' + (x.edrpou || '—'))) +
+                 '</td><td class="num">' + fmtUah(Number(x.amount) || 0) + '</td></tr>';
+        }).join('') +
+        '<tr class="total"><td colspan="2">Разом платежами</td><td class="num">' + fmtUah(paid) + '</td></tr></tbody></table></div>';
+    } else {
+      h += '<div class="muted" style="font-size:13px">Платежів за цією статтею в журналі немає.</div>';
+    }
+    var rest = fact - paid;
+    if (rest > 0.5){
+      h += '<div style="margin-top:8px;font-size:13px">Без підтвердження платежем: <b>' + fmtUah(rest) + ' грн</b> <span class="muted">(внесено у файл вручну)</span></div>';
+    } else if (rest < -0.5){
+      h += '<div style="margin-top:8px;font-size:13px;color:#c0392b">⚠️ У журналі платежів на <b>' + fmtUah(-rest) + ' грн</b> більше, ніж факт у файлі — перевірте статтю в CFO.</div>';
+    } else if (rows.length){
+      h += '<div style="margin-top:8px;font-size:13px;color:#27ae60">✅ Факт повністю підтверджений платежами.</div>';
+    }
+    box.innerHTML = h;
+  });
+}
+function _catDefaultMonth(cat){
+  var ms = activePeriodMonths();
+  if (S.period === 'month') return S.month;
+  for (var i = ms.length - 1; i >= 0; i--){ if (getMonthValues(cat, ms[i]).fact) return ms[i]; }
+  return ms[ms.length - 1] || S.month || 1;
+}
 function openCategoryModal(name){
   if (!S.data) return;
   var cat = S.data.categories.find(function(c){ return c.name === name; });
   if (!cat) return;
   var loc = (S.data.loc) ? S.data.loc : CFG.LOC;
   $('catModalTitle').textContent = '💰 ' + name + ' — ' + loc + ' ' + CFG.YEAR;
+  S.catPayCat = cat.name; S.catPayMonth = _catDefaultMonth(cat);   // v7.339
   renderCategoryChart(cat);
   renderCategoryTable(cat);
   renderCategorySummary(cat);
+  renderCatPays(cat);
   $('catModal').classList.remove('hidden');
 }
 
@@ -1756,6 +1828,10 @@ function renderCategoryTable(cat){
 
     var tr = document.createElement('tr');
     if (p !== null && p > 100) tr.classList.add('row-over');
+    // v7.339: клік по місяцю — платежі цього місяця під таблицею
+    tr.classList.add('clickable');
+    if (m === S.catPayMonth) tr.style.outline = '2px solid var(--blue, #2F6DB3)';
+    (function(mm){ tr.addEventListener('click', function(){ S.catPayMonth = mm; renderCategoryTable(cat); renderCatPays(cat); }); })(m);
     tr.innerHTML =
       '<td class="cat-name">' + escapeHtml(CFG.MONTHS_DISP[m-1]) + '</td>' +
       '<td class="num">' + fmtUah(v.fact) + '</td>' +
