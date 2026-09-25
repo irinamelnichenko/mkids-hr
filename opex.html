@@ -1733,7 +1733,8 @@ function renderCatPays(cat){
     if (rest > 0.5){
       h += '<div style="margin-top:8px;font-size:13px">Без підтвердження платежем: <b>' + fmtUah(rest) + ' грн</b> <span class="muted">(внесено у файл вручну)</span></div>';
     } else if (rest < -0.5){
-      h += '<div style="margin-top:8px;font-size:13px;color:#c0392b">⚠️ У журналі платежів на <b>' + fmtUah(-rest) + ' грн</b> більше, ніж факт у файлі — перевірте статтю в CFO.</div>';
+      // v7.340: платежів більше за факт — нормально (Кругла: частина витрат іде на кухню в окремий файл поза
+      // системою). Попередження прибрано — показуємо лише список платежів, без порівняння з фактом.
     } else if (rows.length){
       h += '<div style="margin-top:8px;font-size:13px;color:#27ae60">✅ Факт повністю підтверджений платежами.</div>';
     }
