@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.348
+// m.kids CRM — Google Apps Script v7.349
+// v7.349: diagFinFolder — назви з суфіксом року «_26/_27» зіставляються.
 // v7.348: diagFinFolder — лише читання: файли папки 2027 ↔ файли реєстрів 2026, OPEX копій (факти, бюджети, формули, рядки 36–41, різниця з 2026).
 // v7.347: бюджети OPEX (opexSetBudget / opexSetBudgetMulti / довідник норм) — лише CFO; HR доступ прибрано.
 // v7.346: вкладка «Бюджети» (CFO) — getOpexBudgetMatrix (місяць × усі локації, значення+формули, один пакет),
@@ -6705,7 +6706,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.348', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.349', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -14044,7 +14045,8 @@ function getOpexStatsData(p){
 // (січень і грудень), зовнішні посилання, чи відрізняється від файлу 2026. НІЧОГО НЕ ПИШЕ.
 function _finNameKey(n){
   return String(n || '').toLowerCase().replace(/^(копія|копия|copy of)\s+/i, '').replace(/\b20\d\d\b/g, '')
-    .replace(/[’ʼ`´']/g, "'").replace(/[^a-zа-яіїєґ0-9']+/g, ' ').trim();
+    .replace(/[’ʼ`´']/g, "'").replace(/[^a-zа-яіїєґ0-9']+/g, ' ').trim()
+    .replace(/\s+(20)?\d\d$/, '').trim();   // суфікс року «_26» / «_27» / «_2027»
 }
 function diagFinFolder(p){
   p = p || {};
