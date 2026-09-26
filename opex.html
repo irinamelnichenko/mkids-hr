@@ -1749,7 +1749,7 @@ function rerenderOverview(){
 // Бюджет статті на місяць і кількість дітей / груп / персоналу. Пишемо в ту саму клітинку файлу локації,
 // що й руками (бекенд opexSetBudget). Клітинки-формули позначені ƒ; перед записом — окреме підтвердження,
 // що формула стане числом. Кожна правка — у журнал «OPEX_Бюджет_Правки» («🕘 Історія правок»).
-function _canEditBudget(){ var r = String((S.user && S.user.role) || '').toLowerCase(); return r === 'cfo' || r === 'hr'; }
+function _canEditBudget(){ var r = String((S.user && S.user.role) || '').toLowerCase(); return r === 'cfo'; }   // v7.347: лише CFO
 function _budButtons(){
   var on = _canEditBudget() && S.mode === 'detail';
   ['budgetEditBtn','budgetLogBtn'].forEach(function(id){ var b = $(id); if (b) b.classList.toggle('hidden', !on); });

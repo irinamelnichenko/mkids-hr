@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.346
+// m.kids CRM — Google Apps Script v7.347
+// v7.347: бюджети OPEX (opexSetBudget / opexSetBudgetMulti / довідник норм) — лише CFO; HR доступ прибрано.
 // v7.346: вкладка «Бюджети» (CFO) — getOpexBudgetMatrix (місяць × усі локації, значення+формули, один пакет),
 //   opexSetBudgetMulti (пробний прогін усіх локацій → запис через opexSetBudget), getOpexStatsData (факт/бюджет
 //   статей × 12 міс. + кількості всіх локацій з кешу; групи садки/школи/управління — з типу в реєстрі OPEX).
@@ -6703,7 +6704,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.346', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.347', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -13725,7 +13726,7 @@ function _opexEditableRows(vals){
 function _opexCanEditBudget(actorId){
   try {
     var role = (_CURRENT_AUTH && _CURRENT_AUTH.role) ? _roleKey(_CURRENT_AUTH.role) : _roleKey(_getActor(actorId).role);   // токен, інакше actorId зі сторінки
-    return role === 'cfo' || role === 'hr';
+    return role === 'cfo';   // v7.347: лише CFO (HR — ні через вкладку, ні через редактор локації)
   } catch(_e){ return false; }
 }
 // ═══ v7.345: ДОВІДНИК НОРМ OPEX («OPEX_Норми» у CONFIG) ════════════════════════════════════════
