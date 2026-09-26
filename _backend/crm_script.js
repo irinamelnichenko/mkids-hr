@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.347
+// m.kids CRM — Google Apps Script v7.348
+// v7.348: diagFinFolder — лише читання: файли папки 2027 ↔ файли реєстрів 2026, OPEX копій (факти, бюджети, формули, рядки 36–41, різниця з 2026).
 // v7.347: бюджети OPEX (opexSetBudget / opexSetBudgetMulti / довідник норм) — лише CFO; HR доступ прибрано.
 // v7.346: вкладка «Бюджети» (CFO) — getOpexBudgetMatrix (місяць × усі локації, значення+формули, один пакет),
 //   opexSetBudgetMulti (пробний прогін усіх локацій → запис через opexSetBudget), getOpexStatsData (факт/бюджет
@@ -6704,7 +6705,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.347', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.348', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -6748,6 +6749,7 @@ function doGet(e) {
     else if (action === 'opexNormsExtract')          result = opexNormsExtract(Object.assign({}, e.parameter || {}, {dryRun:true}));   // v7.345 що прочитано з формул (нічого не пише)
     else if (action === 'getOpexBudgetMatrix')       result = getOpexBudgetMatrix(e.parameter || {});  // v7.346 бюджети місяця всіх локацій (+ формули)
     else if (action === 'getOpexStatsData')          result = getOpexStatsData(e.parameter || {});     // v7.346 статистика по статтях (з кешу локацій)
+    else if (action === 'diagFinFolder')             result = diagFinFolder(e.parameter || {});        // v7.348 папка фін-файлів нового року (лише читання)
     else if (action === 'getOpexNorms')              result = getOpexNorms();                         // v7.345 довідник норм
     else if (action === 'getOpexBudgetLog')          result = getOpexBudgetLog(e.parameter || {});    // v7.342 журнал правок бюджету
     else if (action === 'getOpexOverview')           result = getOpexOverview(e.parameter.year || '', e.parameter.category || '', String(e.parameter.nocache || '') === '1');   // v7.326 +category; v7.341 кеш
@@ -14033,6 +14035,80 @@ function getOpexStatsData(p){
       kids:cnt(d.extras, 'kids'), groups:cnt(d.extras, 'groups'), staff:cnt(d.extras, 'staff')});
   });
   return {ok:true, year:new Date().getFullYear(), locations:out, errors:errors, cachedLocs:r.hits};
+}
+
+// ═══ v7.348: ДІАГНОСТИКА ПАПКИ ФІН-ФАЙЛІВ НОВОГО РОКУ (лише читання) ════════════════════════════
+// GET ?action=diagFinFolder&folder=<id або URL>
+// Зіставляє файли папки з файлами реєстрів 2026 (Payment-реєстр — перший лист CONFIG, OPEX, Salary) за назвою
+// (без «Копія»/«Copy of»/року) і показує по OPEX-листу копії: факти й бюджети по місяцях, формули, рядки 36–41
+// (січень і грудень), зовнішні посилання, чи відрізняється від файлу 2026. НІЧОГО НЕ ПИШЕ.
+function _finNameKey(n){
+  return String(n || '').toLowerCase().replace(/^(копія|копия|copy of)\s+/i, '').replace(/\b20\d\d\b/g, '')
+    .replace(/[’ʼ`´']/g, "'").replace(/[^a-zа-яіїєґ0-9']+/g, ' ').trim();
+}
+function diagFinFolder(p){
+  p = p || {};
+  var fid = String(p.folder || '').trim(), m = /folders\/([\w-]+)/.exec(fid); if (m) fid = m[1];
+  if (!fid) return {ok:false, error:'folder обовʼязковий'};
+  var t0 = Date.now(), folder;
+  try { folder = DriveApp.getFolderById(fid); } catch(e){ return {ok:false, error:'папку не відкрито: ' + String(e && e.message || e)}; }
+  var copies = [];
+  var scan = function(f, path, depth){
+    var it = f.getFilesByType(MimeType.GOOGLE_SHEETS);
+    while (it.hasNext()){ var x = it.next(); copies.push({id:x.getId(), name:x.getName(), path:path}); }
+    if (depth < 2){ var sub = f.getFolders(); while (sub.hasNext()){ var sf = sub.next(); scan(sf, path + sf.getName() + '/', depth + 1); } }
+  };
+  scan(folder, '', 0);
+  var other = []; var itA = folder.getFiles(); while (itA.hasNext()){ var y = itA.next(); if (y.getMimeType() !== MimeType.GOOGLE_SHEETS) other.push(y.getName() + ' (' + y.getMimeType() + ')'); }
+  // файли 2026 з реєстрів
+  var old = {}, add = function(id, loc, kind, list){ if (!id) return; var o = old[id] = old[id] || {id:id, locs:{}, kinds:{}}; o.locs[loc] = 1; o.kinds[kind + ':' + list] = 1; };
+  try { var pv = SpreadsheetApp.openById(CONFIG_SHEET_ID).getSheets()[0].getDataRange().getValues();
+    for (var r = 1; r < pv.length; r++){ var l = trim(pv[r][2]); if (l) add(trim(pv[r][3]), l, 'Payment', trim(pv[r][4]) || 'Payment'); } } catch(_p){}
+  var opexReg = _opexRegistry() || []; opexReg.forEach(function(e){ add(e.sheetId, e.loc, 'OPEX', e.listName); });
+  try { (_salaryGetRegistry().rows || []).forEach(function(e){ if (!e.virtual) add(e.sheetId, e.loc, 'Salary', e.listName); }); } catch(_s){}
+  Object.keys(old).forEach(function(id){ try { old[id].name = DriveApp.getFileById(id).getName(); } catch(_n){ old[id].name = '(немає доступу)'; } old[id].key = _finNameKey(old[id].name); });
+  var byKey = {}; Object.keys(old).forEach(function(id){ (byKey[old[id].key] = byKey[old[id].key] || []).push(old[id]); });
+  var pairs = [], usedOld = {};
+  copies.forEach(function(c){
+    c.key = _finNameKey(c.name);
+    var cand = byKey[c.key] || [];
+    var o = cand.length === 1 ? cand[0] : null;
+    if (o) usedOld[o.id] = 1;
+    pairs.push({copy:c, old:o, ambiguous:cand.length > 1 ? cand.map(function(x){ return x.name; }) : null});
+  });
+  // OPEX-листи копій: читаємо разом з оригіналами 2026 (значення + формули)
+  var entries = [];
+  pairs.forEach(function(pr){ if (!pr.old) return;
+    opexReg.forEach(function(e){ if (e.sheetId === pr.old.id){
+      entries.push({loc:e.loc, sheetId:pr.copy.id, listName:e.listName, which:'copy'});
+      entries.push({loc:e.loc + '§2026', sheetId:e.sheetId, listName:e.listName, which:'old'}); } }); });
+  var grids = _opexReadFormulaGrids(entries);
+  var ML = ['січ','лют','бер','кві','тра','чер','лип','сер','вер','жов','лис','гру'];
+  var opex = opexReg.map(function(e){
+    var g = grids[e.loc], g0 = grids[e.loc + '§2026'];
+    if (!g) return {loc:e.loc, error:'копію OPEX не знайдено'};
+    if (g.error) return {loc:e.loc, error:g.error};
+    var rows = _opexEditableRows(g.V), facts = [], buds = [], fCnt = 0, ext = [];
+    for (var mm = 1; mm <= 12; mm++){ var bc = _opexBudgetCol(mm) - 1, fs = 0, fn = 0, bs = 0, bf = 0;
+      rows.forEach(function(r){ if (r.kind !== 'budget') return; var fv = _opexNum(g.V[r.row - 1][bc - 1]), bv = _opexNum(g.V[r.row - 1][bc]);
+        if (fv){ fs += fv; fn++; } bs += bv; if (g.F[r.row - 1][bc]) bf++; });
+      facts.push({m:ML[mm - 1], sum:Math.round(fs), cells:fn}); buds.push({m:ML[mm - 1], sum:Math.round(bs), formulas:bf}); }
+    g.F.forEach(function(row, ri){ row.forEach(function(f, ci){ if (f){ fCnt++; if (/IMPORTRANGE|https?:|\[/i.test(f)) ext.push(_opexA1(ri + 1, ci + 1) + ' ' + f); } }); });
+    var cnt = [];
+    for (var rr = 34; rr <= 41; rr++){ var nm = String(g.V[rr - 1][0] || '').trim();
+      cnt.push({row:rr, name:nm, jan:g.V[rr - 1][2], janF:g.F[rr - 1][2], jan3:g.V[rr - 1][3], dec:g.V[rr - 1][35], decF:g.F[rr - 1][35], dec3:g.V[rr - 1][36]}); }
+    var diff = 0, diffs = [];
+    if (g0 && !g0.error){ for (var a = 0; a < 45; a++) for (var b = 0; b < 37; b++){
+      if (String(g.V[a][b]) !== String(g0.V[a][b]) || String(g.F[a][b]) !== String(g0.F[a][b])){ diff++; if (diffs.length < 8) diffs.push(_opexA1(a + 1, b + 1) + ': ' + String(g0.F[a][b] || g0.V[a][b]) + ' → ' + String(g.F[a][b] || g.V[a][b])); } } }
+    return {loc:e.loc, sheet:e.listName, copyVia:g.via, facts:facts, budgets:buds, formulas:fCnt, external:ext.slice(0, 10), counts:cnt,
+            diffVs2026:g0 && !g0.error ? diff : null, diffSample:diffs};
+  });
+  var sheetsOf = function(id){ try { return SpreadsheetApp.openById(id).getSheets().map(function(s){ return s.getName(); }); } catch(_e){ return ['(не відкрито)']; } };
+  return {ok:true, folder:folder.getName(), ms:Date.now() - t0, copies:copies.length, otherFiles:other,
+    pairs:pairs.map(function(pr){ return {copy:pr.copy.path + pr.copy.name, copyId:pr.copy.id, sheets:sheetsOf(pr.copy.id),
+      old2026:pr.old ? pr.old.name : null, locs:pr.old ? Object.keys(pr.old.locs) : [], kinds:pr.old ? Object.keys(pr.old.kinds) : [], ambiguous:pr.ambiguous}; }),
+    notCopied:Object.keys(old).filter(function(id){ return !usedOld[id]; }).map(function(id){ return {name:old[id].name, locs:Object.keys(old[id].locs), kinds:Object.keys(old[id].kinds)}; }),
+    opex:opex};
 }
 
 // GET ?action=getOpexNorms → вміст довідника.
