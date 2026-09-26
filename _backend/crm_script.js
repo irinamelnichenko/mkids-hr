@@ -1,5 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.345
+// m.kids CRM — Google Apps Script v7.346
+// v7.346: вкладка «Бюджети» (CFO) — getOpexBudgetMatrix (місяць × усі локації, значення+формули, один пакет),
+//   opexSetBudgetMulti (пробний прогін усіх локацій → запис через opexSetBudget), getOpexStatsData (факт/бюджет
+//   статей × 12 міс. + кількості всіх локацій з кешу; групи садки/школи/управління — з типу в реєстрі OPEX).
 // v7.345: довідник норм OPEX «OPEX_Норми» (CONFIG) — розбір формул колонки «Бюджет» усіх файлів: діти/групи/персонал ×
 //   ставка + надбавка, фіксовані суми, копії місяців, посилання на інші листи; мережа + винятки + аномалії
 //   (показник іншого місяця). opexNormsExtract (GET — лише читання; POST dryRun:false — запис довідника, CFO), getOpexNorms.
@@ -6700,7 +6703,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.345', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.346', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -6742,6 +6745,8 @@ function doGet(e) {
     else if (action === 'diagOpexCompare')           result = diagOpexCompare();   // v7.341 звірка старий/новий
     else if (action === 'getOpexBudgetGrid')         result = getOpexBudgetGrid(e.parameter || {});   // v7.342 бюджети + формули для редагування
     else if (action === 'opexNormsExtract')          result = opexNormsExtract(Object.assign({}, e.parameter || {}, {dryRun:true}));   // v7.345 що прочитано з формул (нічого не пише)
+    else if (action === 'getOpexBudgetMatrix')       result = getOpexBudgetMatrix(e.parameter || {});  // v7.346 бюджети місяця всіх локацій (+ формули)
+    else if (action === 'getOpexStatsData')          result = getOpexStatsData(e.parameter || {});     // v7.346 статистика по статтях (з кешу локацій)
     else if (action === 'getOpexNorms')              result = getOpexNorms();                         // v7.345 довідник норм
     else if (action === 'getOpexBudgetLog')          result = getOpexBudgetLog(e.parameter || {});    // v7.342 журнал правок бюджету
     else if (action === 'getOpexOverview')           result = getOpexOverview(e.parameter.year || '', e.parameter.category || '', String(e.parameter.nocache || '') === '1');   // v7.326 +category; v7.341 кеш
@@ -6907,6 +6912,7 @@ function doPost(e) {
     else if (body.action === 'tgInvoiceSetWebhook')       result = tgInvoiceSetWebhook(body || {});  // v7.312 бот рахунків: реєстрація вебхука
     else if (body.action === 'processInvoiceQueue')       result = processInvoiceQueue(body || {});  // v7.316 розпізнавання рахунків (dryRun за замовч. false)
     else if (body.action === 'ensureInvoiceTrigger')      result = ensureInvoiceTrigger(body || {}); // v7.316 тригер черги раз на 5 хв
+    else if (body.action === 'opexSetBudgetMulti')        result = opexSetBudgetMulti(body || {});   // v7.346 бюджети кількох локацій (dryRun за замовч.; конфлікт — нічого не пишемо)
     else if (body.action === 'opexNormsExtract')          result = opexNormsExtract(body || {});     // v7.345 довідник норм OPEX у CONFIG (dryRun за замовч., лише CFO); файли OPEX не чіпає
     else if (body.action === 'invoiceSetCaption')         result = invoiceSetCaption(body || {});    // v7.343 підпис заявки вручну / з експорту чату (dryRun за замовч.)
     else if (body.action === 'matchInvoicesToPayments')   result = matchInvoicesToPayments(body || {}); // v7.320 звірка заявок із випискою (dryRun за замовч.)
@@ -13952,6 +13958,82 @@ function opexNormsExtract(p){
   res.written = rows.length;
   return res;
 }
+// ═══ v7.346: ВКЛАДКА «БЮДЖЕТИ» (лише CFO) — редагування по всіх локаціях + статистика по статтях ═══════
+// getOpexBudgetMatrix — бюджети ОДНОГО місяця всіх локацій (значення + формули), одним пакетом Sheets API.
+// opexSetBudgetMulti — запис кількох локацій: спершу пробний прогін УСІХ (конфлікт хоч в одній — не пишемо
+//   нічого), потім запис по локаціях тим самим opexSetBudget (перевірка expected, журнал, скидання кешу).
+// getOpexStatsData — факт/бюджет усіх статей × 12 міс. + кількості по всіх локаціях з кешу (_opexLocsParsed);
+//   середні, мін/макс і «на дитину» рахує сторінка (перемикачі без повторних запитів).
+function _opexGroupOf(typ){
+  var t = String(typ || '').toLowerCase();
+  if (t.indexOf('школ') >= 0) return 'school';
+  if (t.indexOf('управл') >= 0) return 'mgmt';
+  return 'kg';
+}
+// GET ?action=getOpexBudgetMatrix&month=10
+function getOpexBudgetMatrix(p){
+  p = p || {};
+  var month = Number(p.month) || (new Date().getMonth() + 1);
+  if (!(month >= 1 && month <= 12)) return {ok:false, error:'month 1–12'};
+  var t0 = Date.now(), reg = (_opexRegistry() || []).filter(function(e){ return e && e.sheetId; });
+  var grids = _opexReadFormulaGrids(reg), c = _opexBudgetCol(month) - 1, fc = c - 1;
+  var locs = [], errors = [];
+  reg.forEach(function(e){
+    var g = grids[e.loc];
+    if (!g || g.error){ errors.push({loc:e.loc, error:(g && g.error) || 'не прочитано'}); return; }
+    var rows = _opexEditableRows(g.V).map(function(r){
+      var v = g.V[r.row - 1][c], f = g.F[r.row - 1][c] || '', fa = g.V[r.row - 1][fc];
+      return {row:r.row, name:r.name, kind:r.kind, value:(v === '' || v == null) ? '' : v, formula:f, a1:_opexA1(r.row, c + 1),
+              fact:(r.kind === 'budget' && fa !== '' && fa != null) ? _opexNum(fa) : ''};
+    });
+    locs.push({loc:e.loc, type:e.typ, group:_opexGroupOf(e.typ), rows:rows, via:g.via});
+  });
+  return {ok:true, month:month, year:new Date().getFullYear(), locations:locs, errors:errors, ms:Date.now() - t0};
+}
+// POST {action:'opexSetBudgetMulti', changes:[{loc,row,month,name,expected,value}], dryRun, actorId}
+function opexSetBudgetMulti(body){
+  body = body || {};
+  var dryRun = (body.dryRun !== false), changes = Array.isArray(body.changes) ? body.changes : [];
+  if (!changes.length) return {ok:false, error:'немає змін'};
+  if (!_opexCanEditBudget(body.actorId)) return {ok:false, code:'PERM_DENIED', error:'Редагувати бюджет може лише CFO'};
+  var byLoc = {}, order = [];
+  changes.forEach(function(ch){ var l = trim(String(ch.loc || '')); if (!l) return; if (!byLoc[l]){ byLoc[l] = []; order.push(l); } byLoc[l].push(ch); });
+  // 1) пробний прогін усіх локацій
+  var plans = [], conflicts = [];
+  order.forEach(function(l){
+    var r = opexSetBudget({loc:l, changes:byLoc[l], dryRun:true, actorId:body.actorId});
+    if (r && r.ok) (r.plan || []).forEach(function(x){ plans.push(Object.assign({loc:l}, x)); });
+    else if (r && r.code === 'CONFLICT') (r.conflicts || []).forEach(function(x){ conflicts.push(Object.assign({loc:l}, x)); });
+    else conflicts.push({loc:l, why:(r && r.error) || 'помилка'});
+  });
+  if (conflicts.length) return {ok:false, code:'CONFLICT', error:'Жодної зміни не записано: ' + conflicts.length + ' конфлікт(и)', conflicts:conflicts, plan:plans};
+  if (dryRun) return {ok:true, dryRun:true, plan:plans, locs:order.length, formulasReplaced:plans.filter(function(x){ return x.formula; }).length};
+  // 2) запис по локаціях
+  var written = [], failed = [];
+  order.forEach(function(l){
+    var r = opexSetBudget({loc:l, changes:byLoc[l], dryRun:false, actorId:body.actorId});
+    if (r && r.ok) (r.plan || []).forEach(function(x){ written.push(Object.assign({loc:l}, x)); });
+    else failed.push({loc:l, error:(r && r.error) || 'помилка', conflicts:(r && r.conflicts) || []});
+  });
+  return {ok:!failed.length, dryRun:false, written:written.length, plan:written, failed:failed,
+          error:failed.length ? ('Не записано в ' + failed.length + ' лок.: ' + failed.map(function(f){ return f.loc; }).join(', ')) : ''};
+}
+// GET ?action=getOpexStatsData[&noCache=1]
+function getOpexStatsData(p){
+  p = p || {};
+  var reg = (_opexRegistry() || []).filter(function(e){ return e && e.sheetId; });
+  var r = _opexLocsParsed(reg, p.noCache === '1' || p.noCache === true), out = [], errors = [];
+  var cnt = function(ex, key){ var e = ex && ex[key], a = []; for (var m = 1; m <= 12; m++){ var v = e && e.raw ? Number(e.raw[(m - 1) * 3 + 2]) : 0; a.push(isFinite(v) ? v : 0); } return a; };
+  reg.forEach(function(e){
+    var d = r.byLoc[e.loc];
+    if (!d || d.error){ errors.push({loc:e.loc, error:(d && d.error) || 'не прочитано'}); return; }
+    out.push({loc:e.loc, type:e.typ, group:_opexGroupOf(e.typ),
+      cats:(d.categories || []).map(function(c){ return {name:c.name, f:c.months.map(function(x){ return x.fact; }), b:c.months.map(function(x){ return x.budget; })}; }),
+      kids:cnt(d.extras, 'kids'), groups:cnt(d.extras, 'groups'), staff:cnt(d.extras, 'staff')});
+  });
+  return {ok:true, year:new Date().getFullYear(), locations:out, errors:errors, cachedLocs:r.hits};
+}
+
 // GET ?action=getOpexNorms → вміст довідника.
 function getOpexNorms(){
   var sh = SpreadsheetApp.openById(CONFIG_SHEET_ID).getSheetByName(OPEX_NORMS_SHEET);

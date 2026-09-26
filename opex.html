@@ -186,6 +186,43 @@ select{font-family:inherit}
 .sum-val{font-size:14px;font-weight:700;color:var(--dark);margin-top:5px;font-variant-numeric:tabular-nums}
 .sum-extra{font-size:12px;margin-top:3px;font-variant-numeric:tabular-nums}
 
+/* ── v7.346 БЮДЖЕТИ ─────────────────────────── */
+.bg-ctrl{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+.bg-seg{display:inline-flex;background:#f1f4f8;border-radius:8px;padding:3px;gap:2px}
+.bg-seg button{border:none;background:transparent;padding:7px 12px;border-radius:6px;font-weight:600;font-size:13px;color:var(--gray);cursor:pointer;font-family:inherit}
+.bg-seg button.active{background:#fff;color:var(--dark);box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.bg-wrap{overflow:auto;max-height:72vh;border:1px solid #edf1f5;border-radius:10px}
+.bg-tbl{border-collapse:separate;border-spacing:0;font-size:13px;min-width:100%}
+.bg-tbl th,.bg-tbl td{padding:6px 8px;border-bottom:1px solid #f0f4f8;white-space:nowrap}
+.bg-tbl thead th{position:sticky;top:0;background:#f7f9fb;z-index:2;font-size:11px;font-weight:700;color:var(--gray);text-transform:uppercase;letter-spacing:.3px}
+.bg-tbl thead tr:nth-child(2) th{top:29px}
+.bg-tbl .bg-sticky{position:sticky;left:0;background:#fff;z-index:1;font-weight:600;min-width:170px;max-width:220px;white-space:normal}
+.bg-tbl thead .bg-sticky{z-index:3;background:#f7f9fb}
+.bg-tbl .bg-gh{text-align:center;color:var(--dark);border-left:2px solid #dfe6ee}
+.bg-tbl .bg-lh{text-align:right;min-width:92px;white-space:normal;line-height:1.2}
+.bg-tbl .bg-gs{border-left:2px solid #dfe6ee}
+.bg-tbl td.num{text-align:right;font-variant-numeric:tabular-nums}
+.bg-c{position:relative;padding:3px 4px!important}
+.bg-c input{width:100%;min-width:80px;border:1px solid transparent;border-radius:6px;padding:5px 6px;text-align:right;font:inherit;font-variant-numeric:tabular-nums;background:transparent}
+.bg-c input:hover{border-color:#dfe6ee}
+.bg-c input:focus{outline:none;border-color:var(--green);background:#fff}
+.bg-c.bg-ch input{background:#fff7d6;border-color:#f0c94a;font-weight:700}
+.bg-c.bg-bad input{background:#fdecea;border-color:#e74c3c}
+.bg-f{position:absolute;left:6px;top:50%;transform:translateY(-50%);color:#8e44ad;font-weight:800;font-size:12px;pointer-events:none}
+.bg-na{background:repeating-linear-gradient(45deg,#f6f7f9,#f6f7f9 4px,#eef1f4 4px,#eef1f4 8px)}
+.bg-tbl tr.bg-total td{background:#f4f7fa;font-weight:800}
+.bg-tbl tr.bg-total td.bg-sticky{background:#f4f7fa}
+.bg-tbl tr.bg-cnt td.bg-sticky{color:var(--gray)}
+.bg-st td{padding:7px 10px}
+.bg-dev{font-size:11px;color:var(--gray);font-weight:500}
+.bg-hi{background:#fdecea}
+.bg-lo{background:#e8f6ee}
+.bg-sec{margin:18px 0 8px;font-size:15px}
+.bg-det td{background:#fafbfc}
+.bg-detbox{position:sticky;left:0;max-width:640px;padding:6px 4px}
+.bg-detrow{display:grid;grid-template-columns:1fr 130px 190px;gap:10px;padding:3px 6px;border-radius:6px}
+.bg-detrow .num{text-align:right;font-variant-numeric:tabular-nums}
+
 /* ── RESPONSIVE ───────────────────────────── */
 @media (max-width:640px){
   .wrap{padding:16px 12px 40px}
@@ -421,6 +458,7 @@ select{font-family:inherit}
   <div class="mode-tabs hidden" id="modeTabs">
     <button class="mt-btn active" id="mtOverview">🌐 Огляд мережі</button>
     <button class="mt-btn" id="mtDetail">📍 Деталь локації</button>
+    <button class="mt-btn hidden" id="mtBudgets">🧮 Бюджети</button>
   </div>
 
   <div class="hd">
@@ -556,6 +594,20 @@ select{font-family:inherit}
         <div class="chart-wrap"><canvas id="chart"></canvas></div>
       </div>
     </div>
+    </div>
+
+    <!-- v7.346: вкладка «Бюджети» (лише CFO) -->
+    <div id="budgetsMode" class="hidden">
+      <div class="card">
+        <div class="card-hd">
+          <h3>🧮 Бюджети мережі</h3>
+          <div class="bg-seg">
+            <button type="button" id="bgViewEdit" class="active" onclick="bgSetView('edit')">✏️ Редагування</button>
+            <button type="button" id="bgViewStats" onclick="bgSetView('stats')">📊 Статистика по статтях</button>
+          </div>
+        </div>
+        <div class="card-bd" id="bgBody"></div>
+      </div>
     </div>
   </div>
 
@@ -1805,6 +1857,252 @@ async function openBudgetLog(){
   } catch(e){ $('budBody').innerHTML = '<div style="color:#c0392b">Не вдалося завантажити: ' + escapeHtml(e.message || String(e)) + '</div>'; }
 }
 
+// ── v7.346: ВКЛАДКА «БЮДЖЕТИ» (лише CFO) ─────────────────────────────────────
+// ✏️ Редагування: рядки — статті, колонки — локації (Садки | Школи | Управління), один місяць. Пишемо в ті самі
+//   клітинки файлів, що й редактор локації (opexSetBudgetMulti → opexSetBudget): пробний прогін усіх локацій,
+//   окреме підтвердження для формул (ƒ), конфлікт хоч в одній клітинці — не пишемо нічого; журнал правок той самий.
+// 📊 Статистика: по статтях у межах групи — сума кожної локації, середнє групи (лише локації, де стаття ненульова),
+//   мін/макс, відхилення від середнього; у ₴ або на дитину (сума ÷ діти×місяці; місяці без дітей не беремо).
+var BG_GROUPS = [{k:'kg', t:'Садки'}, {k:'school', t:'Школи'}, {k:'mgmt', t:'Управління'}];
+function isCfoOnly(){ return String((S.user && S.user.role) || '').toLowerCase() === 'cfo'; }
+function _bgState(){
+  if (!S.bg) S.bg = {view:'edit', month:new Date().getMonth() + 1, group:'', matrix:null, edits:{}, stats:null,
+                     sp:'ytd', sm:new Date().getMonth() + 1, sq:Math.ceil((new Date().getMonth() + 1) / 3), basis:'fact', unit:'uah', open:{}};
+  return S.bg;
+}
+function _bgNameKey(n){ return String(n || '').toLowerCase().replace(/\s+/g, ' ').trim(); }
+function _bgNum(v){ var n = Number(String(v == null ? '' : v).replace(/\s+/g, '').replace(',', '.')); return isFinite(n) ? n : 0; }
+async function loadBudgets(force){
+  var st = _bgState();
+  $('loadBox').classList.add('hidden'); $('content').classList.remove('hidden');
+  _bgShell();
+  if (st.view === 'edit'){ if (!st.matrix || force) await _bgLoadMatrix(); else _bgRenderEdit(); }
+  else { if (!st.stats || force) await _bgLoadStats(force); else _bgRenderStats(); }
+}
+function _bgShell(){
+  var st = _bgState();
+  $('bgViewEdit').classList.toggle('active', st.view === 'edit');
+  $('bgViewStats').classList.toggle('active', st.view === 'stats');
+}
+function bgSetView(v){ var st = _bgState(); if (st.view === v) return; st.view = v; loadBudgets(false); }
+
+// ── ✏️ РЕДАГУВАННЯ ──
+async function _bgLoadMatrix(){
+  var st = _bgState();
+  if (Object.keys(st.edits).length && !confirm('Є незбережені зміни (' + Object.keys(st.edits).length + '). Перечитати й відкинути їх?')){ _bgRenderEdit(); return; }
+  st.edits = {};
+  $('bgBody').innerHTML = '<div class="muted">Читаю бюджети ' + CFG.MONTHS_DISP[st.month - 1].toLowerCase() + ' з файлів усіх локацій (до ~20 с)…</div>';
+  try {
+    var r = await fetch(CFG.SCRIPT_URL + '?action=getOpexBudgetMatrix&month=' + st.month, {redirect:'follow'});
+    var j = await r.json();
+    if (!j || !j.ok) throw new Error((j && j.error) || 'помилка читання');
+    st.matrix = j; _bgRenderEdit();
+  } catch(e){ $('bgBody').innerHTML = '<div style="color:#c0392b">Не вдалося прочитати: ' + escapeHtml(e.message || String(e)) + '</div>'; }
+}
+function bgSetMonth(m){ var st = _bgState(); var prev = st.month; st.month = Number(m);
+  if (Object.keys(st.edits).length && !confirm('Незбережені зміни за ' + CFG.MONTHS_DISP[prev - 1].toLowerCase() + ' буде відкинуто. Продовжити?')){ st.month = prev; _bgRenderEdit(); return; }
+  st.edits = {}; _bgLoadMatrix(); }
+function bgSetGroup(g){ _bgState().group = g; _bgRenderEdit(); }
+function _bgCols(){
+  var st = _bgState(), m = st.matrix, out = [];
+  BG_GROUPS.forEach(function(g){ if (st.group && st.group !== g.k) return;
+    var ls = m.locations.filter(function(l){ return l.group === g.k; }); if (ls.length) out.push({g:g, locs:ls}); });
+  return out;
+}
+function _bgRowsUnion(locs){
+  var seen = {}, budget = [], counts = [];
+  locs.forEach(function(l){ l.rows.forEach(function(r){ var k = r.kind + '|' + _bgNameKey(r.name); if (seen[k]) return; seen[k] = 1;
+    (r.kind === 'count' ? counts : budget).push({key:_bgNameKey(r.name), name:r.name, kind:r.kind}); }); });
+  return budget.concat(counts);
+}
+function _bgCellOf(l, key, kind){ for (var i = 0; i < l.rows.length; i++){ var r = l.rows[i]; if (r.kind === kind && _bgNameKey(r.name) === key) return r; } return null; }
+function _bgFmtIn(v){ return (v === '' || v == null) ? '' : String(Math.round(Number(v) * 100) / 100); }
+function _bgRenderEdit(){
+  var st = _bgState(), m = st.matrix; if (!m) return;
+  var cols = _bgCols(), allLocs = [].concat.apply([], cols.map(function(c){ return c.locs; }));
+  var rows = _bgRowsUnion(allLocs), nEd = Object.keys(st.edits).length;
+  var h = '<div class="bg-ctrl">' +
+    '<select class="month-sel" onchange="bgSetMonth(this.value)">' + CFG.MONTHS_DISP.map(function(t, i){ return '<option value="' + (i + 1) + '"' + (i + 1 === st.month ? ' selected' : '') + '>' + t + ' ' + m.year + '</option>'; }).join('') + '</select>' +
+    '<select class="month-sel" onchange="bgSetGroup(this.value)"><option value="">Усі групи</option>' + BG_GROUPS.map(function(g){ return '<option value="' + g.k + '"' + (st.group === g.k ? ' selected' : '') + '>' + g.t + '</option>'; }).join('') + '</select>' +
+    '<span class="muted" style="flex:1;min-width:200px;font-size:12px">ƒ — у клітинці формула (наведіть, щоб побачити); після запису вона стане числом. Сірі клітинки — статті немає у файлі локації.</span>' +
+    '<button class="btn btn-secondary" type="button" onclick="bgDiscard()"' + (nEd ? '' : ' disabled') + '>↺ Скасувати</button>' +
+    '<button class="btn btn-primary" type="button" onclick="bgSave()"' + (nEd ? '' : ' disabled') + '>💾 Зберегти' + (nEd ? ' (' + nEd + ')' : '') + '</button></div>';
+  if (m.errors && m.errors.length) h += '<div style="color:#c0392b;font-size:13px;margin-bottom:8px">Не прочитано: ' + m.errors.map(function(e){ return escapeHtml(e.loc + ' — ' + e.error); }).join('; ') + '</div>';
+  h += '<div class="bg-wrap"><table class="bg-tbl"><thead><tr><th class="bg-sticky" rowspan="2">Стаття</th>' +
+    cols.map(function(c){ return '<th class="bg-gh" colspan="' + c.locs.length + '">' + c.g.t + '</th>'; }).join('') + '</tr><tr>' +
+    cols.map(function(c){ return c.locs.map(function(l, i){ return '<th class="bg-lh' + (i === 0 ? ' bg-gs' : '') + '">' + escapeHtml(l.loc) + '</th>'; }).join(''); }).join('') + '</tr></thead><tbody>';
+  var totals = {};
+  rows.forEach(function(r, ri){
+    if (r.kind === 'count' && (ri === 0 || rows[ri - 1].kind !== 'count')){
+      h += '<tr class="bg-total"><td class="bg-sticky">Разом бюджет</td>' + cols.map(function(c){ return c.locs.map(function(l, i){ return '<td class="num' + (i === 0 ? ' bg-gs' : '') + '" id="bgTot_' + _bgId(l.loc) + '"></td>'; }).join(''); }).join('') + '</tr>';
+    }
+    h += '<tr' + (r.kind === 'count' ? ' class="bg-cnt"' : '') + '><td class="bg-sticky">' + escapeHtml(r.name) + '</td>';
+    cols.forEach(function(c){ c.locs.forEach(function(l, i){
+      var cell = _bgCellOf(l, r.key, r.kind), gs = i === 0 ? ' bg-gs' : '';
+      if (!cell){ h += '<td class="bg-na' + gs + '"></td>'; return; }
+      var ek = l.loc + '|' + cell.row, ed = st.edits[ek], val = ed ? ed.value : _bgFmtIn(cell.value);
+      h += '<td class="bg-c' + gs + (ed ? ' bg-ch' : '') + '"' + (cell.formula ? ' title="' + escapeHtml(cell.a1 + ': ' + cell.formula) + '"' : ' title="' + escapeHtml(cell.a1) + '"') + '>' +
+        (cell.formula ? '<span class="bg-f">ƒ</span>' : '') +
+        '<input inputmode="decimal" value="' + escapeHtml(val) + '" data-loc="' + escapeHtml(l.loc) + '" data-row="' + cell.row + '" oninput="bgEdit(this)"></td>';
+    }); });
+    h += '</tr>';
+  });
+  h += '</tbody></table></div>';
+  $('bgBody').innerHTML = h;
+  _bgTotals();
+}
+function _bgId(s){ return String(s).replace(/[^\wА-Яа-яІіЇїЄєҐґ]/g, '_'); }
+function _bgTotals(){
+  var st = _bgState(), m = st.matrix; if (!m) return;
+  m.locations.forEach(function(l){ var el = $('bgTot_' + _bgId(l.loc)); if (!el) return; var t = 0;
+    l.rows.forEach(function(r){ if (r.kind !== 'budget') return; var ed = st.edits[l.loc + '|' + r.row]; t += ed ? _bgNum(ed.value) : _bgNum(r.value); });
+    el.textContent = fmtUah(t); });
+}
+function bgEdit(inp){
+  var st = _bgState(), loc = inp.dataset.loc, row = Number(inp.dataset.row), l = null;
+  st.matrix.locations.forEach(function(x){ if (x.loc === loc) l = x; });
+  var cell = l && l.rows.filter(function(r){ return r.row === row; })[0]; if (!cell) return;
+  var k = loc + '|' + row, v = inp.value.trim(), orig = _bgFmtIn(cell.value);
+  var same = (v === orig) || (v !== '' && orig !== '' && Math.abs(_bgNum(v) - _bgNum(orig)) < 0.005);
+  if (same) delete st.edits[k]; else st.edits[k] = {loc:loc, row:row, name:cell.name, month:st.month, expected:cell.value, value:v, formula:cell.formula, a1:cell.a1};
+  inp.parentNode.classList.toggle('bg-ch', !same);
+  var bad = v !== '' && !isFinite(Number(v.replace(/\s+/g, '').replace(',', '.')));
+  inp.parentNode.classList.toggle('bg-bad', bad);
+  var n = Object.keys(st.edits).length, btns = document.querySelectorAll('#bgBody .bg-ctrl .btn');
+  if (btns.length === 2){ btns[0].disabled = !n; btns[1].disabled = !n; btns[1].textContent = '💾 Зберегти' + (n ? ' (' + n + ')' : ''); }
+  _bgTotals();
+}
+function bgDiscard(){ var st = _bgState(); if (!Object.keys(st.edits).length) return; if (!confirm('Відкинути ' + Object.keys(st.edits).length + ' змін?')) return; st.edits = {}; _bgRenderEdit(); }
+function _bgChanges(){
+  var st = _bgState();
+  return Object.keys(st.edits).map(function(k){ var e = st.edits[k];
+    return {loc:e.loc, row:e.row, month:e.month, name:e.name, expected:e.expected, value:e.value === '' ? '' : _bgNum(e.value)}; });
+}
+async function bgSave(){
+  var st = _bgState(), ch = _bgChanges(); if (!ch.length) return;
+  var bad = Object.keys(st.edits).filter(function(k){ var v = st.edits[k].value; return v !== '' && !isFinite(Number(String(v).replace(/\s+/g, '').replace(',', '.'))); });
+  if (bad.length){ alert('Не число в ' + bad.length + ' клітинках (підсвічені червоним).'); return; }
+  $('budTitle').textContent = '💾 Запис бюджетів — ' + CFG.MONTHS_DISP[st.month - 1] + ' ' + st.matrix.year;
+  $('budBody').innerHTML = '<div class="muted">Пробний прогін по ' + ch.length + ' клітинках…</div>';
+  $('budModal').classList.remove('hidden');
+  var pre = await _budPost({action:'opexSetBudgetMulti', dryRun:true, actorId:(S.user && S.user.id), changes:ch});
+  if (!pre || !pre.ok){ $('budBody').innerHTML = _bgConflictsHtml(pre); return; }
+  var nF = pre.formulasReplaced || 0;
+  $('budBody').innerHTML = '<div style="margin-bottom:10px">Буде записано <b>' + pre.plan.length + '</b> клітинок у <b>' + pre.locs + '</b> лок.' +
+    (nF ? ' <span style="color:#8e44ad;font-weight:700">· ' + nF + ' формул(и) стануть числами</span>' : '') + '</div>' + _bgPlanHtml(pre.plan) +
+    (nF ? '<label style="display:flex;gap:8px;align-items:center;margin:12px 0;font-weight:600"><input type="checkbox" id="bgFxOk"> Розумію: формули ƒ буде замінено числами</label>' : '') +
+    '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px"><button class="btn btn-secondary" type="button" onclick="closeBudget()">Скасувати</button>' +
+    '<button class="btn btn-primary" type="button" id="bgDoSave" onclick="bgSaveConfirm()">Записати</button></div>';
+}
+function _bgPlanHtml(plan){
+  return '<div class="tbl-wrap" style="max-height:50vh;overflow:auto"><table class="tbl" style="font-size:12.5px"><thead><tr><th>Локація</th><th>Стаття / показник</th><th>Клітинка</th><th class="num">Було</th><th class="num">Стане</th><th>Формула</th></tr></thead><tbody>' +
+    plan.map(function(x){ return '<tr><td>' + escapeHtml(x.loc) + '</td><td>' + escapeHtml(x.name) + '</td><td>' + escapeHtml(x.a1) + '</td><td class="num">' + escapeHtml(x.before === '' ? '—' : fmtUah(x.before)) +
+      '</td><td class="num"><b>' + escapeHtml(x.after === '' ? '—' : fmtUah(x.after)) + '</b></td><td style="color:#8e44ad">' + escapeHtml(x.formula || '') + '</td></tr>'; }).join('') + '</tbody></table></div>';
+}
+function _bgConflictsHtml(res){
+  var c = (res && res.conflicts) || [];
+  return '<div style="color:#c0392b;font-weight:700;margin-bottom:8px">' + escapeHtml((res && res.error) || 'Помилка') + '</div>' +
+    (c.length ? '<ul style="font-size:13px">' + c.map(function(x){ return '<li>' + escapeHtml((x.loc || '') + (x.name ? ' · ' + x.name : '') + (x.a1 ? ' (' + x.a1 + ')' : '') + ' — ' + (x.why || x.error || '')) + '</li>'; }).join('') + '</ul>' : '') +
+    '<div class="muted">Нічого не записано. Оновіть таблицю (🔄), перевірте клітинки й повторіть.</div>';
+}
+async function bgSaveConfirm(){
+  var st = _bgState(), fx = $('bgFxOk');
+  if (fx && !fx.checked){ alert('Поставте позначку, що формули стануть числами.'); return; }
+  var b = $('bgDoSave'); if (b){ b.disabled = true; b.textContent = 'Записую…'; }
+  var res = await _budPost({action:'opexSetBudgetMulti', dryRun:false, actorId:(S.user && S.user.id), changes:_bgChanges()});
+  if (!res || !res.ok){ $('budBody').innerHTML = (res && res.written ? '<div style="margin-bottom:8px">Записано ' + res.written + ' клітинок.</div>' : '') + _bgConflictsHtml(res); if (res && res.written){ st.edits = {}; st.matrix = null; } return; }
+  $('budBody').innerHTML = '<div style="font-weight:700;margin-bottom:10px">✅ Записано ' + res.written + ' клітинок у файли. Кожна правка — в «Історії правок».</div>' + _bgPlanHtml(res.plan);
+  try { localStorage.removeItem(CFG.CACHE_KEY); localStorage.removeItem(CFG.OVERVIEW_CACHE_KEY); } catch(_e){}
+  S.data = null; S.overviewData = null; st.stats = null; st.edits = {};
+  await _bgLoadMatrix();
+}
+
+// ── 📊 СТАТИСТИКА ──
+async function _bgLoadStats(force){
+  var st = _bgState();
+  $('bgBody').innerHTML = '<div class="muted">Завантаження даних усіх локацій…</div>';
+  try {
+    var r = await fetch(CFG.SCRIPT_URL + '?action=getOpexStatsData' + (force ? '&noCache=1' : ''), {redirect:'follow'});
+    var j = await r.json();
+    if (!j || !j.ok) throw new Error((j && j.error) || 'помилка читання');
+    st.stats = j; _bgRenderStats();
+  } catch(e){ $('bgBody').innerHTML = '<div style="color:#c0392b">Не вдалося завантажити: ' + escapeHtml(e.message || String(e)) + '</div>'; }
+}
+function _bgStatMonths(){
+  var st = _bgState(), now = new Date(), cur = (st.stats && st.stats.year === now.getFullYear()) ? now.getMonth() + 1 : 12;
+  if (st.sp === 'month') return [st.sm];
+  if (st.sp === 'quarter') return [1, 2, 3].map(function(i){ return (st.sq - 1) * 3 + i; });
+  var a = []; for (var m = 1; m <= cur; m++) a.push(m); return a;
+}
+function bgStat(k, v){ var st = _bgState(); st[k] = (k === 'sm' || k === 'sq') ? Number(v) : v; _bgRenderStats(); }
+function bgToggleArt(key){ var st = _bgState(); st.open[key] = !st.open[key]; _bgRenderStats(); }
+function _bgStatCalc(ls, months){
+  // → {arts:[{key,name}], val:{loc:{key:v|null}}, kids:{loc:kidMonths}}
+  var st = _bgState(), arr = st.basis === 'fact' ? 'f' : 'b', seen = {}, arts = [], val = {}, kids = {};
+  ls.forEach(function(l){
+    var km = 0; months.forEach(function(m){ var k = l.kids[m - 1]; if (k > 0) km += k; }); kids[l.loc] = km;
+    val[l.loc] = {};
+    var tot = 0, totK = 0;
+    l.cats.forEach(function(c){
+      var key = _bgNameKey(c.name); if (!seen[key]){ seen[key] = 1; arts.push({key:key, name:c.name}); }
+      var s = 0, sk = 0; months.forEach(function(m){ var v = Number(c[arr][m - 1]) || 0; s += v; if (l.kids[m - 1] > 0) sk += v; });
+      tot += s; totK += sk;
+      val[l.loc][key] = st.unit === 'kid' ? (km ? sk / km : null) : s;
+    });
+    val[l.loc].__total = st.unit === 'kid' ? (km ? totK / km : null) : tot;
+  });
+  return {arts:[{key:'__total', name:'Разом OPEX'}].concat(arts), val:val, kids:kids};
+}
+function _bgFmtV(v){ if (v == null) return '—'; var st = _bgState(); return fmtUah(v) + (st.unit === 'kid' ? '' : ''); }
+function _bgDevCls(d){ if (d == null) return ''; if (d > 0.15) return ' bg-hi'; if (d < -0.15) return ' bg-lo'; return ''; }
+function _bgRenderStats(){
+  var st = _bgState(), j = st.stats; if (!j) return;
+  var months = _bgStatMonths();
+  var h = '<div class="bg-ctrl">' +
+    '<select class="month-sel" onchange="bgStat(\'sp\',this.value)">' + [['month','Місяць'],['quarter','Квартал'],['ytd','Рік до поточного місяця']].map(function(o){ return '<option value="' + o[0] + '"' + (st.sp === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select>' +
+    (st.sp === 'month' ? '<select class="month-sel" onchange="bgStat(\'sm\',this.value)">' + CFG.MONTHS_DISP.map(function(t, i){ return '<option value="' + (i + 1) + '"' + (i + 1 === st.sm ? ' selected' : '') + '>' + t + '</option>'; }).join('') + '</select>' : '') +
+    (st.sp === 'quarter' ? '<select class="month-sel" onchange="bgStat(\'sq\',this.value)">' + [1,2,3,4].map(function(q){ return '<option value="' + q + '"' + (q === st.sq ? ' selected' : '') + '>' + q + ' квартал</option>'; }).join('') + '</select>' : '') +
+    '<div class="bg-seg">' + [['fact','Факт'],['budget','Бюджет']].map(function(o){ return '<button type="button" class="' + (st.basis === o[0] ? 'active' : '') + '" onclick="bgStat(\'basis\',\'' + o[0] + '\')">' + o[1] + '</button>'; }).join('') + '</div>' +
+    '<div class="bg-seg">' + [['uah','₴'],['kid','На дитину в міс.']].map(function(o){ return '<button type="button" class="' + (st.unit === o[0] ? 'active' : '') + '" onclick="bgStat(\'unit\',\'' + o[0] + '\')">' + o[1] + '</button>'; }).join('') + '</div>' +
+    '<span class="muted" style="font-size:12px;flex:1;min-width:220px">' + (st.sp === 'month' ? CFG.MONTHS_DISP[st.sm - 1] : CFG.MONTHS_SHORT[months[0] - 1] + '–' + CFG.MONTHS_SHORT[months[months.length - 1] - 1]) + ' ' + j.year +
+    '. Середнє — по локаціях групи, де стаття не нульова. Колір: вище середнього на 15%+ — червоний, нижче — зелений.</span></div>';
+  if (j.errors && j.errors.length) h += '<div style="color:#c0392b;font-size:13px;margin-bottom:8px">Не прочитано: ' + j.errors.map(function(e){ return escapeHtml(e.loc); }).join(', ') + '</div>';
+  BG_GROUPS.forEach(function(g){
+    var ls = j.locations.filter(function(l){ return l.group === g.k; }); if (!ls.length) return;
+    var C = _bgStatCalc(ls, months);
+    h += '<h3 class="bg-sec">' + g.t + ' <span class="muted" style="font-weight:500;font-size:13px">· ' + ls.length + ' лок.</span></h3>' +
+      '<div class="bg-wrap"><table class="bg-tbl bg-st"><thead><tr><th class="bg-sticky">Стаття</th>' +
+      ls.map(function(l){ return '<th class="bg-lh">' + escapeHtml(l.loc) + (st.unit === 'kid' ? '<div class="muted" style="font-weight:500;text-transform:none">' + (C.kids[l.loc] ? (Math.round(C.kids[l.loc] / months.length * 10) / 10) + ' діт.' : 'без дітей') + '</div>' : '') + '</th>'; }).join('') +
+      '<th class="bg-lh bg-gs">Середнє</th><th class="bg-lh">Мін.</th><th class="bg-lh">Макс.</th></tr></thead><tbody>';
+    C.arts.forEach(function(a){
+      var vals = ls.map(function(l){ var v = C.val[l.loc][a.key]; return (v === undefined) ? undefined : v; });
+      var pos = []; ls.forEach(function(l, i){ var v = vals[i]; if (v != null && v > 0) pos.push({loc:l.loc, v:v}); });
+      if (!pos.length && a.key !== '__total') return;
+      var avg = pos.length ? pos.reduce(function(s, x){ return s + x.v; }, 0) / pos.length : 0;
+      var mn = pos.slice().sort(function(x, y){ return x.v - y.v; })[0], mx = pos.slice().sort(function(x, y){ return y.v - x.v; })[0];
+      var okey = g.k + '|' + a.key;
+      h += '<tr class="clickable' + (a.key === '__total' ? ' bg-total' : '') + '" data-k="' + escapeHtml(okey) + '" onclick="bgToggleArt(this.dataset.k)"><td class="bg-sticky">' + (st.open[okey] ? '▾ ' : '▸ ') + escapeHtml(a.name) + '</td>' +
+        ls.map(function(l, i){ var v = vals[i];
+          if (v === undefined) return '<td class="bg-na"></td>';
+          var d = (v != null && v > 0 && avg) ? (v - avg) / avg : null;
+          return '<td class="num' + _bgDevCls(d) + '">' + _bgFmtV(v) + (d != null ? '<div class="bg-dev">' + (d > 0 ? '+' : '') + Math.round(d * 100) + '%</div>' : '') + '</td>'; }).join('') +
+        '<td class="num bg-gs"><b>' + (pos.length ? fmtUah(avg) : '—') + '</b><div class="bg-dev">' + pos.length + ' з ' + ls.length + '</div></td>' +
+        '<td class="num">' + (mn ? fmtUah(mn.v) + '<div class="bg-dev">' + escapeHtml(mn.loc) + '</div>' : '—') + '</td>' +
+        '<td class="num">' + (mx ? fmtUah(mx.v) + '<div class="bg-dev">' + escapeHtml(mx.loc) + '</div>' : '—') + '</td></tr>';
+      if (st.open[okey]){
+        var sorted = pos.slice().sort(function(x, y){ return y.v - x.v; });
+        h += '<tr class="bg-det"><td colspan="' + (ls.length + 4) + '"><div class="bg-detbox">' +
+          (sorted.length ? sorted.map(function(x, i){ var dv = x.v - avg, dp = avg ? dv / avg : 0;
+            return '<div class="bg-detrow"><span>' + (i + 1) + '. ' + escapeHtml(x.loc) + '</span><span class="num">' + fmtUah(x.v) + ' ₴</span><span class="num' + _bgDevCls(dp) + '">' + (dv > 0 ? '+' : '') + fmtUah(dv) + ' ₴ · ' + (dp > 0 ? '+' : '') + Math.round(dp * 100) + '%</span></div>'; }).join('') : '<span class="muted">Немає ненульових значень.</span>') +
+          (ls.length > sorted.length ? '<div class="muted" style="margin-top:4px;font-size:12px">Нуль / без статті: ' + ls.filter(function(l){ return !sorted.some(function(x){ return x.loc === l.loc; }); }).map(function(l){ return escapeHtml(l.loc); }).join(', ') + '</div>' : '') +
+          '</div></td></tr>';
+      }
+    });
+    h += '</tbody></table></div>';
+  });
+  $('bgBody').innerHTML = h;
+}
+
 // ── v7.345: ДОВІДНИК НОРМ (лише перегляд + збереження довідника) ─────────────
 // Бекенд читає формули колонки «Бюджет» у файлах усіх локацій і показує норму кожної статті: мережеву
 // (як у більшості локацій) і винятки. «Зберегти в довідник» пише лише лист «OPEX_Норми» у CONFIG — файли OPEX не змінюються.
@@ -2088,6 +2386,10 @@ function applyMode(){
   $('detailMode').classList.toggle('hidden',   S.mode !== 'detail');
   $('mtOverview').classList.toggle('active', S.mode === 'overview');
   $('mtDetail').classList.toggle('active',   S.mode === 'detail');
+  var _bm = $('budgetsMode'); if (_bm) _bm.classList.toggle('hidden', S.mode !== 'budgets');   // v7.346
+  $('mtBudgets').classList.toggle('active', S.mode === 'budgets');
+  $('mtBudgets').classList.toggle('hidden', !isCfoOnly());
+  ['periodSel','monthSel'].forEach(function(id){ var el = $(id); if (el) el.style.display = S.mode === 'budgets' ? 'none' : ''; });
   _budButtons();                // v7.345: «Норми» видно й в огляді
   if (isHR()){
     $('locSel').classList.toggle('hidden', S.mode !== 'detail');
@@ -2276,6 +2578,7 @@ async function loadOverview(force){
 }
 
 async function load(force){
+  if (S.mode === 'budgets') return loadBudgets(force);   // v7.346
   if (S.mode === 'overview') return loadOverview(force);
   return loadDetail(force);
 }
@@ -2309,6 +2612,7 @@ function showFatalError(msg){
 
 function bindEventListeners(){
   function rerenderCurrentMode(){
+    if (S.mode === 'budgets') return;
     if (S.mode === 'overview') rerenderOverview();
     else                       rerenderForPeriod();
   }
@@ -2331,6 +2635,7 @@ function bindEventListeners(){
     await load(true);
   });
   $('refreshBtn').addEventListener('click', async function(){
+    if (S.mode === 'budgets'){ await loadBudgets(true); return; }   // v7.346
     if (S.mode === 'overview'){
       localStorage.removeItem(CFG.OVERVIEW_CACHE_KEY);
       S.overviewData = null;
@@ -2348,6 +2653,12 @@ function bindEventListeners(){
     applyMode();
     if (S.overviewData){ rerenderOverview(); }
     else { load(false); }
+  });
+  $('mtBudgets').addEventListener('click', function(){   // v7.346
+    if (S.mode === 'budgets' || !isCfoOnly()) return;
+    S.mode = 'budgets';
+    applyMode();
+    loadBudgets(false);
   });
   $('mtDetail').addEventListener('click', function(){
     if (S.mode === 'detail') return;
