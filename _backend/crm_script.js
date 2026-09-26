@@ -1,5 +1,9 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.343
+// m.kids CRM — Google Apps Script v7.345
+// v7.345: довідник норм OPEX «OPEX_Норми» (CONFIG) — розбір формул колонки «Бюджет» усіх файлів: діти/групи/персонал ×
+//   ставка + надбавка, фіксовані суми, копії місяців, посилання на інші листи; мережа + винятки + аномалії
+//   (показник іншого місяця). opexNormsExtract (GET — лише читання; POST dryRun:false — запис довідника, CFO), getOpexNorms.
+//   У файли OPEX нічого не пише.
 // v7.343: бот рахунків — підпис із трьох місць (caption / reply на файл / наступне повідомлення автора ≤10 хв;
 //   альбом ділить підпис), журнал «Рахунки_Повідомлення»; розбивка «Локація: Стаття сума, …» → «Рахунки_Розбивка»
 //   (стаття OPEX: точно/однозначний префікс); правка файлу більше не дублює заявку; invoiceSetCaption (dryRun);
@@ -6696,7 +6700,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.343', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.345', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -6737,6 +6741,8 @@ function doGet(e) {
     else if (action === 'getOpexData')               result = getOpexData(e.parameter.loc || '', e.parameter.year || '', String(e.parameter.nocache || '') === '1');   // v7.341 кеш
     else if (action === 'diagOpexCompare')           result = diagOpexCompare();   // v7.341 звірка старий/новий
     else if (action === 'getOpexBudgetGrid')         result = getOpexBudgetGrid(e.parameter || {});   // v7.342 бюджети + формули для редагування
+    else if (action === 'opexNormsExtract')          result = opexNormsExtract(Object.assign({}, e.parameter || {}, {dryRun:true}));   // v7.345 що прочитано з формул (нічого не пише)
+    else if (action === 'getOpexNorms')              result = getOpexNorms();                         // v7.345 довідник норм
     else if (action === 'getOpexBudgetLog')          result = getOpexBudgetLog(e.parameter || {});    // v7.342 журнал правок бюджету
     else if (action === 'getOpexOverview')           result = getOpexOverview(e.parameter.year || '', e.parameter.category || '', String(e.parameter.nocache || '') === '1');   // v7.326 +category; v7.341 кеш
     else if (action === 'getClosedMonths')            result = getClosedMonths();                                 // v7.91
@@ -6901,6 +6907,7 @@ function doPost(e) {
     else if (body.action === 'tgInvoiceSetWebhook')       result = tgInvoiceSetWebhook(body || {});  // v7.312 бот рахунків: реєстрація вебхука
     else if (body.action === 'processInvoiceQueue')       result = processInvoiceQueue(body || {});  // v7.316 розпізнавання рахунків (dryRun за замовч. false)
     else if (body.action === 'ensureInvoiceTrigger')      result = ensureInvoiceTrigger(body || {}); // v7.316 тригер черги раз на 5 хв
+    else if (body.action === 'opexNormsExtract')          result = opexNormsExtract(body || {});     // v7.345 довідник норм OPEX у CONFIG (dryRun за замовч., лише CFO); файли OPEX не чіпає
     else if (body.action === 'invoiceSetCaption')         result = invoiceSetCaption(body || {});    // v7.343 підпис заявки вручну / з експорту чату (dryRun за замовч.)
     else if (body.action === 'matchInvoicesToPayments')   result = matchInvoicesToPayments(body || {}); // v7.320 звірка заявок із випискою (dryRun за замовч.)
     else if (body.action === 'tgSeedDirectors')           result = tgSeedDirectors(body || {});   // прив'язка директорів до локацій
@@ -13715,6 +13722,244 @@ function _opexCanEditBudget(actorId){
     return role === 'cfo' || role === 'hr';
   } catch(_e){ return false; }
 }
+// ═══ v7.345: ДОВІДНИК НОРМ OPEX («OPEX_Норми» у CONFIG) ════════════════════════════════════════
+// Читає формули колонки «Бюджет» у файлах OPEX усіх локацій і розкладає кожну на лінійну норму:
+//   бюджет = діти × a + групи × b + персонал × c + надбавка        (показники — рядки 36–38 ТОГО Ж місяця)
+// або інший тип: фіксована сума / як попередній місяць / копія іншого місяця (× коеф.) / від рядка CF / інше.
+// Норма статті по локації = правило ГРУДНЯ (останній запланований місяць; якщо там порожньо — найпізніший
+// непорожній). Норма мережі = найчастіше правило серед локацій; решта локацій — винятки.
+// У ФАЙЛИ OPEX НІЧОГО НЕ ПИШЕ. Пише лише довідник у CONFIG (opexNormsExtract dryRun:false, лише CFO).
+var OPEX_NORMS_SHEET  = 'OPEX_Норми';
+var OPEX_NORMS_HEADER = ['стаття','локація','тип','діти ×','групи ×','персонал ×','надбавка','коеф.','звідки','формула-зразок','місяці','оновлено'];
+var OPEX_NORM_TYPE_LBL = {driver:'від показників', fixed:'фіксована сума', prev:'як попередній місяць', copy:'копія місяця',
+                          cf:'з іншого листа', other:'інше', empty:'порожньо'};
+
+function _opexColNum(s){ var n = 0; for (var i = 0; i < s.length; i++) n = n * 26 + s.charCodeAt(i) - 64; return n; }
+// Формула → лінійна форма {const, vars:{ключ: коеф}} або null (нелінійне / не розібрали).
+function _opexLinParse(f){
+  var s = String(f).replace(/^=/, '').replace(/\s+/g, ''), i = 0;
+  var toks = [], re = /((?:'[^']+'|[A-Za-zА-Яа-яІіЇїЄєҐґ_][\wА-Яа-яІіЇїЄєҐґ.]*)!)?\$?([A-Z]{1,3})\$?(\d+)|(\d+(?:[.,]\d+)?)|([-+*\/()])/y;
+  while (i < s.length){
+    re.lastIndex = i; var m = re.exec(s); if (!m) return null; i = re.lastIndex;
+    if (m[3]) toks.push({t:'ref', sheet:(m[1] || '').replace(/!$/, '').replace(/^'|'$/g, ''), col:m[2], row:Number(m[3])});
+    else if (m[4]) toks.push({t:'num', v:Number(m[4].replace(',', '.'))});
+    else toks.push({t:'op', v:m[5]});
+  }
+  var p = 0;
+  function lin(c, vars){ return {c:c, v:vars || {}}; }
+  function add(a, b, sg){ var v = {}, k; for (k in a.v) v[k] = a.v[k]; for (k in b.v) v[k] = (v[k] || 0) + sg * b.v[k]; return lin(a.c + sg * b.c, v); }
+  function scale(a, k){ var v = {}; for (var x in a.v) v[x] = a.v[x] * k; return lin(a.c * k, v); }
+  function isConst(a){ return !Object.keys(a.v).length; }
+  function prim(){
+    var t = toks[p++]; if (!t) throw 'end';
+    if (t.t === 'num') return lin(t.v);
+    if (t.t === 'ref'){ var o = {}; o[(t.sheet ? t.sheet + '!' : '') + t.col + t.row] = 1; return lin(0, o); }
+    if (t.v === '('){ var e = expr(); if (!toks[p] || toks[p].v !== ')') throw 'paren'; p++; return e; }
+    if (t.v === '-') return scale(prim(), -1);
+    if (t.v === '+') return prim();
+    throw 'tok';
+  }
+  function term(){
+    var a = prim();
+    while (toks[p] && (toks[p].v === '*' || toks[p].v === '/')){
+      var op = toks[p++].v, b = prim();
+      if (op === '*'){ if (isConst(a)) a = scale(b, a.c); else if (isConst(b)) a = scale(a, b.c); else throw 'nonlin'; }
+      else { if (!isConst(b) || !b.c) throw 'nonlin'; a = scale(a, 1 / b.c); }
+    }
+    return a;
+  }
+  function expr(){ var a = term(); while (toks[p] && (toks[p].v === '+' || toks[p].v === '-')){ var op = toks[p++].v; a = add(a, term(), op === '+' ? 1 : -1); } return a; }
+  try { var r = expr(); if (p !== toks.length) return null; return r; } catch(_e){ return null; }
+}
+var _opexNR4 = function(x){ return Math.round(x * 10000) / 10000; };
+// Правило однієї клітинки бюджету. counts = {kids:36, groups:37, staff:38} (номери рядків у файлі).
+function _opexNormRule(formula, value, row, month, counts){
+  var bc = _opexBudgetCol(month), f = String(formula || '');
+  if (!f){
+    if (value === '' || value == null) return {type:'empty'};
+    var n = Number(value); return isFinite(n) ? {type:'fixed', add:_opexNR4(n), formula:String(value)} : {type:'other', formula:String(value)};
+  }
+  var L = _opexLinParse(f);
+  if (!L) return {type:'other', formula:f};
+  var drv = {kids:0, groups:0, staff:0}, other = [], copy = null, cf = [], wrong = 0;
+  Object.keys(L.v).forEach(function(k){
+    var coef = L.v[k], m = /^(?:(.+)!)?([A-Z]+)(\d+)$/.exec(k), sh = m[1] || '', col = _opexColNum(m[2]), rw = Number(m[3]);
+    if (!coef) return;
+    if (sh){ cf.push({ref:k, coef:_opexNR4(coef)}); return; }
+    if (col === bc && rw === counts.kids)   { drv.kids   += coef; return; }
+    if (col === bc && rw === counts.groups) { drv.groups += coef; return; }
+    if (col === bc && rw === counts.staff)  { drv.staff  += coef; return; }
+    if (rw === counts.kids || rw === counts.groups || rw === counts.staff){ other.push(k); wrong = (col - 3) / 3 + 1; return; }   // показник ІНШОГО місяця
+    if (rw === row && (col - 3) % 3 === 0 && col >= 3 && col <= 36 && !copy){ copy = {month:(col - 3) / 3 + 1, coef:_opexNR4(coef)}; return; }
+    other.push(k);
+  });
+  var hasDrv = drv.kids || drv.groups || drv.staff;
+  if (wrong) return {type:'other', formula:f, wrongMonth:wrong};
+  if (other.length || (hasDrv && (copy || cf.length)) || (copy && cf.length)) return {type:'other', formula:f};
+  if (hasDrv) return {type:'driver', kids:_opexNR4(drv.kids), groups:_opexNR4(drv.groups), staff:_opexNR4(drv.staff), add:_opexNR4(L.c), formula:f};
+  if (cf.length) return {type:'cf', refs:cf, add:_opexNR4(L.c), formula:f};
+  if (copy){
+    if (copy.month === month - 1 && copy.coef === 1 && !L.c) return {type:'prev', formula:f};
+    return {type:'copy', from:copy.month, coef:copy.coef, add:_opexNR4(L.c), formula:f};
+  }
+  return {type:'fixed', add:_opexNR4(L.c), formula:f};
+}
+// Ключ порівняння правил (для «однакова по локаціях?»). Для фіксованих сум і CF — лише тип.
+function _opexNormKey(r){
+  if (r.type === 'fixed')  return 'fixed|' + r.add;
+  if (r.type === 'cf')     return 'cf|' + r.formula;
+  if (r.type === 'driver') return 'driver|' + r.kids + '|' + r.groups + '|' + r.staff + '|' + r.add;
+  if (r.type === 'copy')   return 'copy|' + r.from + '|' + r.coef + '|' + r.add;
+  return r.type;
+}
+// Розбір однієї локації: сітка значень + формул → по статтях {rule (норма), months:[rule×12]}.
+function _opexNormsForLoc(V, F){
+  var rows = _opexEditableRows(V), counts = {};
+  rows.forEach(function(r){ if (r.kind === 'count') counts[{'Кількість дітей':'kids','Кількість груп':'groups','Кількість основного персоналу':'staff'}[r.name]] = r.row; });
+  var out = [];
+  rows.forEach(function(r){
+    if (r.kind !== 'budget') return;
+    var months = [];
+    for (var m = 1; m <= 12; m++){ var c = _opexBudgetCol(m) - 1;
+      var rule = _opexNormRule((F[r.row - 1] || [])[c], (V[r.row - 1] || [])[c], r.row, m, counts); rule.a1 = _opexA1(r.row, c + 1); months.push(rule); }
+    var pick = null;
+    for (var k = 11; k >= 0 && !pick; k--) if (months[k].type !== 'empty') pick = months[k];
+    // «як попередній місяць» / «копія» у грудні — шукаємо, на що спирається ланцюжок (найпізніше правило з показниками чи сумою)
+    if (pick && (pick.type === 'prev')){ for (var q = 11; q >= 0; q--) if (months[q].type !== 'prev' && months[q].type !== 'empty'){ pick = Object.assign({}, months[q], {viaPrev:true}); break; } }
+    var drvMonths = []; months.forEach(function(x, i){ if (pick && _opexNormKey(x) === _opexNormKey(pick) && x.type !== 'fixed') drvMonths.push(i + 1); });
+    out.push({row:r.row, name:r.name, rule:pick || {type:'empty'}, months:months, monthsSame:drvMonths});
+  });
+  return {counts:counts, articles:out};
+}
+function _opexMonthsLbl(ms){
+  if (!ms.length) return '';
+  var parts = [], s = ms[0], prev = ms[0];
+  for (var i = 1; i <= ms.length; i++){ var x = ms[i];
+    if (x === prev + 1){ prev = x; continue; }
+    parts.push(s === prev ? String(s) : s + '–' + prev); s = prev = x; }
+  return parts.join(', ');
+}
+// Зведення: мережева норма + винятки. byLoc = {loc: _opexNormsForLoc(...)}
+function _opexNormsSummary(byLoc){
+  var art = {}, order = [];
+  Object.keys(byLoc).forEach(function(loc){
+    var d = byLoc[loc]; if (!d || !d.articles) return;
+    d.articles.forEach(function(a){
+      if (!art[a.name]){ art[a.name] = {name:a.name, row:a.row, locs:{}}; order.push(a.name); }
+      art[a.name].locs[loc] = a;
+    });
+  });
+  // Мережева норма — найчастіше ТОЧНЕ правило, якщо воно в більшості локацій, де стаття непорожня.
+  // Інакше норми мережі немає («своя по локаціях»): кожна локація — окремим рядком (фіксовані суми, оренда тощо).
+  // Аномалії — формули, що беруть показник ІНШОГО місяця (напр. вересень × персонал жовтня).
+  return order.map(function(n){
+    var A = art[n], cnt = {}, sample = {}, filled = 0, anomalies = [];
+    Object.keys(A.locs).forEach(function(l){
+      A.locs[l].months.forEach(function(x, i){ if (x.wrongMonth) anomalies.push({loc:l, month:i + 1, a1:x.a1, formula:x.formula, refMonth:x.wrongMonth}); });
+      var r = A.locs[l].rule; if (r.type === 'empty') return; filled++;
+      var k = _opexNormKey(r); cnt[k] = (cnt[k] || 0) + 1; if (!sample[k]) sample[k] = {rule:r, loc:l}; });
+    var best = Object.keys(cnt).sort(function(a, b){ return cnt[b] - cnt[a]; })[0];
+    var network = (best && cnt[best] * 2 > filled && cnt[best] >= 2) ? sample[best] : null;
+    var exceptions = [];
+    Object.keys(A.locs).forEach(function(l){ var a = A.locs[l], r = a.rule;
+      if (r.type === 'empty' && network) { exceptions.push({loc:l, rule:r, months:[]}); return; }
+      if (r.type === 'empty') return;
+      if (!network || _opexNormKey(r) !== best) exceptions.push({loc:l, rule:r, months:a.monthsSame}); });
+    return {name:n, row:A.row, filled:filled, of:Object.keys(A.locs).length,
+            network:network ? {rule:network.rule, from:network.loc, count:cnt[best], of:filled} : null,
+            exceptions:exceptions, anomalies:anomalies};
+  });
+}
+function _opexNormLbl(r){
+  if (!r) return '—';
+  if (r.type === 'driver'){
+    var p = [];
+    if (r.kids)   p.push('діти × ' + r.kids);
+    if (r.groups) p.push('групи × ' + r.groups);
+    if (r.staff)  p.push('персонал × ' + r.staff);
+    if (r.add)    p.push((r.add > 0 ? '+ ' : '− ') + Math.abs(r.add));
+    return p.join(' ');
+  }
+  if (r.type === 'fixed') return 'фіксовано ' + r.add;
+  if (r.type === 'copy')  return 'місяць ' + r.from + (r.coef !== 1 ? ' × ' + r.coef : '') + (r.add ? ' + ' + r.add : '');
+  if (r.type === 'cf')    return 'з листа: ' + r.refs.map(function(x){ return x.ref + (x.coef !== 1 ? ' × ' + x.coef : ''); }).join(' + ') + (r.add ? ' + ' + r.add : '');
+  if (r.type === 'other') return 'інше: ' + r.formula;
+  return OPEX_NORM_TYPE_LBL[r.type] || r.type;
+}
+// Формули всіх файлів одним пакетом (Sheets API, valueRenderOption=FORMULA), запасний — SpreadsheetApp.
+function _opexReadFormulaGrids(entries){
+  var out = {};
+  try {
+    var tok = ScriptApp.getOAuthToken();
+    var reqs = [];
+    entries.forEach(function(e){ ['FORMULA', 'UNFORMATTED_VALUE'].forEach(function(mode){
+      var rng = "'" + String(e.listName).replace(/'/g, "''") + "'!A1:AK45";
+      reqs.push({url:'https://sheets.googleapis.com/v4/spreadsheets/' + encodeURIComponent(e.sheetId) + '/values/' + encodeURIComponent(rng) + '?valueRenderOption=' + mode,
+                 headers:{Authorization:'Bearer ' + tok}, muteHttpExceptions:true}); }); });
+    var rs = UrlFetchApp.fetchAll(reqs);
+    entries.forEach(function(e, i){
+      var rf = rs[i * 2], rv = rs[i * 2 + 1];
+      if (rf.getResponseCode() !== 200 || rv.getResponseCode() !== 200) return;
+      var pad = function(g){ var o = []; for (var r = 0; r < 45; r++){ var src = g[r] || [], row = []; for (var c = 0; c < 37; c++) row.push(c < src.length && src[c] != null ? src[c] : ''); o.push(row); } return o; };
+      var Fg = pad(JSON.parse(rf.getContentText()).values || []);
+      Fg = Fg.map(function(row){ return row.map(function(x){ return (typeof x === 'string' && x.charAt(0) === '=') ? x : ''; }); });
+      out[e.loc] = {V:pad(JSON.parse(rv.getContentText()).values || []), F:Fg, via:'api'};
+    });
+  } catch(_f){}
+  entries.forEach(function(e){
+    if (out[e.loc]) return;
+    try { var sh = SpreadsheetApp.openById(e.sheetId).getSheetByName(e.listName); if (!sh){ out[e.loc] = {error:'лист не знайдено'}; return; }
+      var rg = sh.getRange(1, 1, 45, 37); out[e.loc] = {V:rg.getValues(), F:rg.getFormulas(), via:'old'};
+    } catch(err){ out[e.loc] = {error:String(err && err.message || err)}; }
+  });
+  return out;
+}
+// GET ?action=opexNormsExtract  → що прочитали (нічого не пише).
+// POST {action:'opexNormsExtract', dryRun:false} → перезаписує довідник «OPEX_Норми» у CONFIG (лише CFO). Файли OPEX не чіпає.
+function opexNormsExtract(p){
+  p = p || {};
+  var dryRun = (p.dryRun !== false && p.dryRun !== 'false');
+  if (!dryRun && !_opexCanEditBudget(p.actorId)) return {ok:false, code:'PERM_DENIED', error:'Записати довідник може лише CFO'};
+  var t0 = Date.now(), reg = _opexRegistry();
+  var entries = (reg || []).filter(function(e){ return e && e.sheetId; });
+  var grids = _opexReadFormulaGrids(entries), byLoc = {}, errors = [];
+  entries.forEach(function(e){ var g = grids[e.loc];
+    if (!g || g.error){ errors.push({loc:e.loc, error:(g && g.error) || 'не прочитано'}); return; }
+    byLoc[e.loc] = _opexNormsForLoc(g.V, g.F); });
+  var summary = _opexNormsSummary(byLoc);
+  var rows = [], now = formatDate(new Date());
+  var toRow = function(name, loc, r, from, months){
+    return [name, loc, OPEX_NORM_TYPE_LBL[r.type] || r.type, r.type === 'driver' ? (r.kids || '') : '', r.type === 'driver' ? (r.groups || '') : '',
+            r.type === 'driver' ? (r.staff || '') : '', (r.add || r.add === 0) && r.type !== 'prev' && r.type !== 'other' && r.type !== 'empty' ? (r.add || '') : '',
+            r.type === 'copy' ? r.coef : '', r.type === 'copy' ? ('місяць ' + r.from) : (r.type === 'cf' ? r.refs.map(function(x){ return x.ref; }).join(', ') : ''),
+            "'" + (r.formula || ''), months || '', now];
+  };
+  summary.forEach(function(s){
+    if (s.network) rows.push(toRow(s.name, '* мережа (' + s.network.count + ' з ' + s.network.of + ')', s.network.rule, s.network.from, ''));
+    else rows.push([s.name, '* мережа', 'своя по локаціях', '', '', '', '', '', '', '', '', now]);
+    s.exceptions.forEach(function(x){ rows.push(toRow(s.name, x.loc, x.rule, x.loc, _opexMonthsLbl(x.months))); });
+  });
+  var res = {ok:true, dryRun:dryRun, ms:Date.now() - t0, locations:Object.keys(byLoc).length, errors:errors,
+             anomalies:[].concat.apply([], summary.map(function(s){ return s.anomalies.map(function(x){ return Object.assign({name:s.name}, x); }); })),
+             summary:summary.map(function(s){ return {name:s.name, filled:s.filled, of:s.of, network:s.network ? {label:_opexNormLbl(s.network.rule), type:s.network.rule.type, count:s.network.count, of:s.network.of, formula:s.network.rule.formula || '', from:s.network.from} : null,
+               exceptions:s.exceptions.map(function(x){ return {loc:x.loc, label:_opexNormLbl(x.rule), type:x.rule.type, formula:x.rule.formula || '', a1:x.rule.a1 || ''}; })}; }),
+             rowsToWrite:rows.length};
+  if (p.full) res.byLoc = byLoc;
+  if (dryRun) return res;
+  var sh = _opexEnsureCfgSheet(OPEX_NORMS_SHEET, OPEX_NORMS_HEADER, true);
+  if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, OPEX_NORMS_HEADER.length).clearContent();
+  if (rows.length) sh.getRange(2, 1, rows.length, OPEX_NORMS_HEADER.length).setValues(rows);
+  res.written = rows.length;
+  return res;
+}
+// GET ?action=getOpexNorms → вміст довідника.
+function getOpexNorms(){
+  var sh = SpreadsheetApp.openById(CONFIG_SHEET_ID).getSheetByName(OPEX_NORMS_SHEET);
+  if (!sh || sh.getLastRow() < 2) return {ok:true, rows:[], note:'довідник ще не заповнено'};
+  var v = sh.getRange(1, 1, sh.getLastRow(), OPEX_NORMS_HEADER.length).getDisplayValues(), H = v[0];
+  return {ok:true, rows:v.slice(1).filter(function(r){ return r[0]; }).map(function(r){ var o = {}; H.forEach(function(h, i){ o[h] = r[i]; }); return o; })};
+}
+
 // Таблиця бюджетів для редагування: значення + формули колонки «Бюджет» кожного місяця. Напряму з файлу.
 function getOpexBudgetGrid(p){
   p = p || {};

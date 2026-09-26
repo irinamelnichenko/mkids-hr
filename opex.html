@@ -433,6 +433,7 @@ select{font-family:inherit}
       <select id="locSel" class="month-sel hidden"></select>
       <select id="periodSel" class="month-sel"></select>
       <select id="monthSel" class="month-sel"></select>
+      <button id="normsBtn" class="btn btn-secondary hidden" type="button" onclick="openNorms()">📐 Норми</button>
       <button id="refreshBtn" class="btn btn-primary">🔄 Оновити</button>
     </div>
   </div>
@@ -1700,6 +1701,7 @@ function _canEditBudget(){ var r = String((S.user && S.user.role) || '').toLower
 function _budButtons(){
   var on = _canEditBudget() && S.mode === 'detail';
   ['budgetEditBtn','budgetLogBtn'].forEach(function(id){ var b = $(id); if (b) b.classList.toggle('hidden', !on); });
+  var nb = $('normsBtn'); if (nb) nb.classList.toggle('hidden', !_canEditBudget());   // v7.345: норми — у будь-якому режимі
 }
 async function _budPost(body){
   var r = await fetch(CFG.SCRIPT_URL, {method:'POST', redirect:'follow', headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify(body)});
@@ -1801,6 +1803,51 @@ async function openBudgetLog(){
         '</td><td>' + escapeHtml(x.a1) + '</td><td class="num">' + escapeHtml(_budFmt(x.before) || '—') + '</td><td class="num">' + escapeHtml(_budFmt(x.after) || '—') + '</td><td style="color:#8e44ad">' + escapeHtml(x.formula) + '</td></tr>'; }).join('') +
       '</tbody></table></div>';
   } catch(e){ $('budBody').innerHTML = '<div style="color:#c0392b">Не вдалося завантажити: ' + escapeHtml(e.message || String(e)) + '</div>'; }
+}
+
+// ── v7.345: ДОВІДНИК НОРМ (лише перегляд + збереження довідника) ─────────────
+// Бекенд читає формули колонки «Бюджет» у файлах усіх локацій і показує норму кожної статті: мережеву
+// (як у більшості локацій) і винятки. «Зберегти в довідник» пише лише лист «OPEX_Норми» у CONFIG — файли OPEX не змінюються.
+async function openNorms(){
+  if (!_canEditBudget()) return;
+  $('budTitle').textContent = '📐 Норми бюджету OPEX — з формул у файлах';
+  $('budBody').innerHTML = '<div class="muted">Читаю формули файлів усіх локацій (до ~30 с)…</div>';
+  $('budModal').classList.remove('hidden');
+  try {
+    var r = await fetch(CFG.SCRIPT_URL + '?action=opexNormsExtract', {redirect:'follow'});
+    var j = await r.json();
+    if (!j || !j.ok) throw new Error((j && j.error) || 'помилка читання');
+    S.norms = j; _normsRender();
+  } catch(e){ $('budBody').innerHTML = '<div style="color:#c0392b">Не вдалося прочитати: ' + escapeHtml(e.message || String(e)) + '</div>'; }
+}
+function _normsRender(note){
+  var j = S.norms, cur = S.mode === 'detail' ? CFG.LOC : '';
+  var tag = function(t){ var c = {driver:'#1e8449', fixed:'#7f8c8d', copy:'#8e44ad', prev:'#8e44ad', cf:'#2471a3', other:'#c0392b', empty:'#bbb'}[t] || '#555';
+    return 'color:' + c; };
+  var h = '<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:10px">' +
+    '<div class="muted" style="flex:1;min-width:240px">Прочитано локацій: <b>' + j.locations + '</b>' + (j.errors && j.errors.length ? ' · не прочитано: ' + j.errors.map(function(e){ return escapeHtml(e.loc); }).join(', ') : '') +
+    '. Норма статті в локації — правило грудня. «Мережа» — однакове правило в більшості локацій, решта — винятки. Файли не змінюються.</div>' +
+    '<button class="btn btn-primary" type="button" id="normsSaveBtn" onclick="saveNorms()">💾 Зберегти в довідник</button></div>' +
+    (note ? '<div style="margin-bottom:10px;font-weight:600">' + note + '</div>' : '');
+  if (j.anomalies && j.anomalies.length){
+    h += '<div style="background:#fff4e5;border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:13px"><b>⚠️ Формули, що беруть показник іншого місяця:</b><br>' +
+      j.anomalies.map(function(a){ return escapeHtml(a.loc) + ' · ' + escapeHtml(a.name) + ' · ' + CFG.MONTHS_SHORT[a.month - 1] + ' (' + escapeHtml(a.a1) + ' <span style="color:#8e44ad">' + escapeHtml(a.formula) + '</span>) — бере ' + CFG.MONTHS_SHORT[a.refMonth - 1]; }).join('<br>') + '</div>';
+  }
+  h += '<div class="tbl-wrap" style="max-height:62vh;overflow:auto"><table class="tbl" style="font-size:12.5px"><thead><tr><th>Стаття</th><th>Мережа</th><th>Винятки / власні правила локацій</th></tr></thead><tbody>' +
+    j.summary.map(function(s){
+      var net = s.network ? '<b style="' + tag(s.network.type) + '">' + escapeHtml(s.network.label) + '</b><div class="muted" style="font-size:11px">' + s.network.count + ' з ' + s.network.of + ' лок.</div>'
+                          : '<span class="muted">своя по локаціях</span><div class="muted" style="font-size:11px">заповнено ' + s.filled + ' з ' + s.of + '</div>';
+      var ex = s.exceptions.map(function(x){
+        return '<div' + (x.loc === cur ? ' style="background:#eaf2fb;border-radius:6px;padding:0 4px"' : '') + '>' + escapeHtml(x.loc) + ': <span style="' + tag(x.type) + '">' + escapeHtml(x.label) + '</span></div>'; }).join('');
+      return '<tr><td style="font-weight:600;white-space:nowrap">' + escapeHtml(s.name) + '</td><td style="min-width:170px">' + net + '</td><td>' + (ex || '<span class="muted">—</span>') + '</td></tr>';
+    }).join('') + '</tbody></table></div>';
+  $('budBody').innerHTML = h;
+}
+async function saveNorms(){
+  var b = $('normsSaveBtn'); if (b){ b.disabled = true; b.textContent = 'Записую…'; }
+  var res = await _budPost({action:'opexNormsExtract', dryRun:false, actorId:(S.user && S.user.id)});
+  if (res && res.ok && !res.dryRun){ S.norms = res; _normsRender('✅ Довідник «OPEX_Норми» оновлено: ' + res.written + ' рядків (CONFIG). Файли OPEX не змінювались.'); }
+  else { if (b){ b.disabled = false; b.textContent = '💾 Зберегти в довідник'; } alert('Не записано: ' + ((res && res.error) || 'невідома помилка')); }
 }
 
 // ── v7.339: ПЛАТЕЖІ ПІД СТАТТЕЮ (журнал OPEX) ──────────────────────────────
@@ -2041,6 +2088,7 @@ function applyMode(){
   $('detailMode').classList.toggle('hidden',   S.mode !== 'detail');
   $('mtOverview').classList.toggle('active', S.mode === 'overview');
   $('mtDetail').classList.toggle('active',   S.mode === 'detail');
+  _budButtons();                // v7.345: «Норми» видно й в огляді
   if (isHR()){
     $('locSel').classList.toggle('hidden', S.mode !== 'detail');
   }
