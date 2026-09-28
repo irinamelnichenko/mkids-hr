@@ -223,6 +223,16 @@ select{font-family:inherit}
 .bg-detrow{display:grid;grid-template-columns:1fr 130px 190px;gap:10px;padding:3px 6px;border-radius:6px}
 .bg-detrow .num{text-align:right;font-variant-numeric:tabular-nums}
 
+/* v7.350 норми 2027 */
+.n27c{cursor:pointer;min-width:110px;vertical-align:top}
+.n27c:hover{box-shadow:inset 0 0 0 2px var(--green)}
+.n27-own{font-weight:700;color:var(--dark)}
+.n27-inh{color:#9aa5b1}
+.n27-g{background:#f3faf6}
+.n27-note{color:#2471a3;font-weight:700}
+.n27-f{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--gray);font-weight:600}
+.n27-f input{padding:8px 10px;border:1px solid #dfe6ee;border-radius:8px;font:inherit;font-size:14px;color:var(--dark)}
+
 /* ── RESPONSIVE ───────────────────────────── */
 @media (max-width:640px){
   .wrap{padding:16px 12px 40px}
@@ -604,6 +614,7 @@ select{font-family:inherit}
           <div class="bg-seg">
             <button type="button" id="bgViewEdit" class="active" onclick="bgSetView('edit')">✏️ Редагування</button>
             <button type="button" id="bgViewStats" onclick="bgSetView('stats')">📊 Статистика по статтях</button>
+            <button type="button" id="bgViewN27" onclick="bgSetView('n27')">📐 Норми 2027</button>
           </div>
         </div>
         <div class="card-bd" id="bgBody"></div>
@@ -1876,6 +1887,7 @@ async function loadBudgets(force){
   var st = _bgState();
   $('loadBox').classList.add('hidden'); $('content').classList.remove('hidden');
   _bgShell();
+  if (st.view === 'n27'){ if (!_n27St().data || force) await _n27Load(); else _n27Render(); return; }   // v7.350
   if (st.view === 'edit'){ if (!st.matrix || force) await _bgLoadMatrix(); else _bgRenderEdit(); }
   else { if (!st.stats || force) await _bgLoadStats(force); else _bgRenderStats(); }
 }
@@ -1883,6 +1895,7 @@ function _bgShell(){
   var st = _bgState();
   $('bgViewEdit').classList.toggle('active', st.view === 'edit');
   $('bgViewStats').classList.toggle('active', st.view === 'stats');
+  $('bgViewN27').classList.toggle('active', st.view === 'n27');
 }
 function bgSetView(v){ var st = _bgState(); if (st.view === v) return; st.view = v; loadBudgets(false); }
 
@@ -2101,6 +2114,141 @@ function _bgRenderStats(){
     h += '</tbody></table></div>';
   });
   $('bgBody').innerHTML = h;
+}
+
+// ── v7.350: 📐 НОРМИ 2027 — редагований довідник (вкладка «Бюджети», лише CFO) ──
+// Колонка «* Садки / * Школи» — норма групи; клітинка локації — власне правило або «як у групі» (сіре).
+// Під правилом — прикидка бюджету місяця за поточними кількостями з файлів 2026. Файли OPEX не змінюються.
+function _n27St(){ var st = _bgState(); if (!st.n27) st.n27 = {data:null, group:''}; return st.n27; }
+async function _n27Load(){
+  var n = _n27St();
+  $('bgBody').innerHTML = '<div class="muted">Завантаження довідника норм 2027…</div>';
+  try {
+    var r = await fetch(CFG.SCRIPT_URL + '?action=getOpexNorms27', {redirect:'follow'});
+    var j = await r.json(); if (!j || !j.ok) throw new Error((j && j.error) || 'помилка');
+    n.data = j; _n27Render();
+  } catch(e){ $('bgBody').innerHTML = '<div style="color:#c0392b">Не вдалося завантажити: ' + escapeHtml(e.message || String(e)) + '</div>'; }
+}
+function _n27Row(article, loc){ var d = _n27St().data; for (var i = 0; i < d.rows.length; i++){ var x = d.rows[i]; if (x.article === article && x.loc === loc) return x; } return null; }
+function _n27Eff(article, l){   // → {rule, own, row}
+  var own = _n27Row(article, l.loc); if (own) return {rule:own.rule, own:true, row:own};
+  var g = _n27Row(article, _n27St().data.groups[l.group]); if (g) return {rule:g.rule, own:false, row:g};
+  return {rule:null, own:false, row:null};
+}
+function _n27Lbl(x){
+  if (!x) return '—';
+  if (x.empty) return 'порожньо';
+  var p = [];
+  if (x.kids)   p.push('д × ' + x.kids);
+  if (x.groups) p.push('гр × ' + x.groups);
+  if (x.staff)  p.push('перс × ' + x.staff);
+  if (x.add || !p.length) p.push((p.length ? (x.add < 0 ? '− ' : '+ ') : '') + fmtUah(p.length ? Math.abs(x.add) : x.add));
+  return p.join(' ');
+}
+function _n27Calc(x, c){ if (!x || x.empty || !c) return 0; return (x.kids || 0) * c.kids + (x.groups || 0) * c.groups + (x.staff || 0) * c.staff + (x.add || 0); }
+function n27SetGroup(g){ _n27St().group = g; _n27Render(); }
+function _n27Render(){
+  var n = _n27St(), d = n.data; if (!d) return;
+  var mName = CFG.MONTHS_DISP[(d.countsMonth || 1) - 1].toLowerCase();
+  var h = '<div class="bg-ctrl">' +
+    '<select class="month-sel" onchange="n27SetGroup(this.value)"><option value="">Садки й школи</option><option value="kg"' + (n.group === 'kg' ? ' selected' : '') + '>Садки</option><option value="school"' + (n.group === 'school' ? ' selected' : '') + '>Школи</option></select>' +
+    '<span class="muted" style="flex:1;min-width:240px;font-size:12px">Клік на клітинку — змінити правило. «* Садки / * Школи» — норма групи; сіре — локація бере норму групи. Під правилом — прикидка на місяць за кількостями ' + escapeHtml(mName) + ' 2026. Файли OPEX не змінюються.</span>' +
+    '<button class="btn btn-secondary" type="button" onclick="n27Log()">🕘 Журнал</button></div>';
+  if (!d.seeded){
+    h += '<div style="background:#fff4e5;border-radius:10px;padding:14px;margin-bottom:12px"><b>Довідник 2027 ще порожній.</b> Заповнити стартовими правилами з формул 2026? Статті з показниками → норма групи й винятки; інше (оренда від CF, копії місяців) → сума грудня 2026 з приміткою, звідки вона.' +
+      '<div style="margin-top:10px"><button class="btn btn-primary" type="button" id="n27SeedBtn" onclick="n27Seed()">Заповнити з формул 2026</button></div></div>';
+    $('bgBody').innerHTML = h; return;
+  }
+  var groups = [{k:'kg', t:'Садки'}, {k:'school', t:'Школи'}].filter(function(g){ return !n.group || n.group === g.k; });
+  var cols = groups.map(function(g){ return {g:g, locs:d.locations.filter(function(l){ return l.group === g.k && l.articles; })}; });
+  h += '<div class="bg-wrap"><table class="bg-tbl n27"><thead><tr><th class="bg-sticky" rowspan="2">Стаття</th>' +
+    cols.map(function(c){ return '<th class="bg-gh" colspan="' + (c.locs.length + 1) + '">' + c.g.t + '</th>'; }).join('') + '</tr><tr>' +
+    cols.map(function(c){ return '<th class="bg-lh bg-gs n27-g">Норма групи</th>' + c.locs.map(function(l){ var k = l.counts || {};
+      return '<th class="bg-lh">' + escapeHtml(l.loc) + '<div class="muted" style="font-weight:500;text-transform:none">' + (k.kids || 0) + ' д · ' + (k.groups || 0) + ' гр · ' + (k.staff || 0) + ' п</div></th>'; }).join(''); }).join('') + '</tr></thead><tbody>';
+  var tot = {}, dec = {};
+  d.articles.forEach(function(a){
+    var any = cols.some(function(c){ return c.locs.some(function(l){ return l.articles.some(function(x){ return x.name === a; }); }); });
+    if (!any) return;
+    h += '<tr><td class="bg-sticky">' + escapeHtml(a) + '</td>';
+    cols.forEach(function(c){
+      var gl = d.groups[c.g.k], gr = _n27Row(a, gl);
+      h += '<td class="n27c bg-gs n27-g" data-a="' + escapeHtml(a) + '" data-l="' + escapeHtml(gl) + '" onclick="n27Edit(this.dataset.a, this.dataset.l)">' +
+        (gr ? '<b>' + escapeHtml(_n27Lbl(gr.rule)) + '</b>' : '<span class="muted">—</span>') + '</td>';
+      c.locs.forEach(function(l){
+        var has = l.articles.filter(function(x){ return x.name === a; })[0];
+        if (!has){ h += '<td class="bg-na"></td>'; return; }
+        var e = _n27Eff(a, l), v = _n27Calc(e.rule, l.counts);
+        tot[l.loc] = (tot[l.loc] || 0) + v; dec[l.loc] = (dec[l.loc] || 0) + (Number(has.dec2026) || 0);
+        h += '<td class="n27c' + (e.own ? ' n27-own' : ' n27-inh') + '" data-a="' + escapeHtml(a) + '" data-l="' + escapeHtml(l.loc) + '" onclick="n27Edit(this.dataset.a, this.dataset.l)"' +
+          (e.row && e.row.rule.note ? ' title="' + escapeHtml(e.row.rule.note) + '"' : '') + '>' +
+          '<div>' + escapeHtml(e.rule ? _n27Lbl(e.rule) : '—') + (e.row && e.row.rule.note && e.own ? ' <span class="n27-note">ⓘ</span>' : '') + '</div>' +
+          '<div class="bg-dev">' + (e.rule && !e.rule.empty ? fmtUah(v) + ' ₴' : '') + '</div></td>';
+      });
+    });
+    h += '</tr>';
+  });
+  h += '<tr class="bg-total"><td class="bg-sticky">Разом прикидка / міс.</td>' + cols.map(function(c){ return '<td class="bg-gs"></td>' + c.locs.map(function(l){ return '<td class="num">' + fmtUah(tot[l.loc] || 0) + '</td>'; }).join(''); }).join('') + '</tr>';
+  h += '<tr class="bg-cnt"><td class="bg-sticky">Бюджет грудня 2026</td>' + cols.map(function(c){ return '<td class="bg-gs"></td>' + c.locs.map(function(l){ return '<td class="num muted">' + fmtUah(dec[l.loc] || 0) + '</td>'; }).join(''); }).join('') + '</tr>';
+  h += '</tbody></table></div>';
+  $('bgBody').innerHTML = h;
+}
+async function n27Seed(){
+  var b = $('n27SeedBtn'); if (b){ b.disabled = true; b.textContent = 'Читаю формули 2026…'; }
+  var pre = await _budPost({action:'opexNorms27Seed', dryRun:true, actorId:(S.user && S.user.id)});
+  if (!pre || !pre.ok){ alert('Не вдалося: ' + ((pre && pre.error) || 'помилка')); if (b){ b.disabled = false; b.textContent = 'Заповнити з формул 2026'; } return; }
+  if (!confirm('Буде записано ' + pre.rows + ' правил у довідник «OPEX_Норми_2027» (лише довідник, файли не змінюються). Записати?')){ if (b){ b.disabled = false; b.textContent = 'Заповнити з формул 2026'; } return; }
+  var res = await _budPost({action:'opexNorms27Seed', dryRun:false, actorId:(S.user && S.user.id)});
+  if (!res || !res.ok){ alert('Не записано: ' + ((res && res.error) || 'помилка')); return; }
+  await _n27Load();
+}
+function n27Edit(article, loc){
+  var d = _n27St().data, isGroup = loc.charAt(0) === '*';
+  var l = d.locations.filter(function(x){ return x.loc === loc; })[0];
+  var own = _n27Row(article, loc), eff = isGroup ? {rule:own ? own.rule : null} : _n27Eff(article, l);
+  var r = (own && own.rule) || eff.rule || {empty:false, kids:0, groups:0, staff:0, add:0, note:''};
+  var gName = isGroup ? '' : d.groups[l.group];
+  var fld = function(id, lbl, v){ return '<label class="n27-f"><span>' + lbl + '</span><input id="' + id + '" inputmode="decimal" value="' + escapeHtml(v ? String(v) : '') + '"></label>'; };
+  $('budTitle').textContent = '📐 ' + article + ' — ' + loc + ' (2027)';
+  $('budBody').innerHTML =
+    (isGroup ? '<div class="muted" style="margin-bottom:10px">Норма групи: діє для всіх локацій групи, де немає власного правила.</div>'
+             : '<div class="muted" style="margin-bottom:10px">' + (own ? 'Власне правило локації.' : 'Зараз бере норму групи «' + escapeHtml(gName) + '»: <b>' + escapeHtml(_n27Lbl(eff.rule)) + '</b>. Збереження створить власне правило.') + '</div>') +
+    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;max-width:720px">' +
+      fld('n27k', 'Діти ×', r.kids) + fld('n27g', 'Групи ×', r.groups) + fld('n27s', 'Персонал ×', r.staff) + fld('n27a', 'Надбавка / фіксована сума, ₴', r.add) + '</div>' +
+    '<label style="display:flex;gap:8px;align-items:center;margin:12px 0"><input type="checkbox" id="n27e"' + (r.empty ? ' checked' : '') + '> Порожньо — статті в бюджеті 2027 немає</label>' +
+    '<label class="n27-f" style="max-width:720px"><span>Примітка</span><input id="n27n" value="' + escapeHtml(r.note || '') + '"></label>' +
+    (l && l.counts ? '<div class="muted" style="margin-top:8px;font-size:12px">Прикидка за ' + l.counts.kids + ' д · ' + l.counts.groups + ' гр · ' + l.counts.staff + ' п: <b id="n27calc"></b></div>' : '') +
+    '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;flex-wrap:wrap">' +
+      (own ? '<button class="btn btn-secondary" type="button" onclick="n27Save(\'' + 'del' + '\')">' + (isGroup ? '🗑 Прибрати норму групи' : '↩ Як у групі') + '</button>' : '') +
+      '<button class="btn btn-secondary" type="button" onclick="closeBudget()">Скасувати</button>' +
+      '<button class="btn btn-primary" type="button" id="n27SaveBtn" onclick="n27Save()">Зберегти</button></div>';
+  _n27St().edit = {article:article, loc:loc, counts:l && l.counts};
+  var upd = function(){ var el = $('n27calc'); if (!el) return; el.textContent = fmtUah(_n27Calc(_n27Form(), _n27St().edit.counts)) + ' ₴'; };
+  ['n27k','n27g','n27s','n27a','n27e'].forEach(function(id){ $(id).addEventListener('input', upd); $(id).addEventListener('change', upd); });
+  upd();
+  $('budModal').classList.remove('hidden');
+}
+function _n27Form(){
+  var num = function(id){ var v = String($(id).value || '').replace(/\s+/g, '').replace(',', '.'); return v === '' ? 0 : Number(v); };
+  return {empty:$('n27e').checked, kids:num('n27k'), groups:num('n27g'), staff:num('n27s'), add:num('n27a'), note:$('n27n').value.trim()};
+}
+async function n27Save(mode){
+  var e = _n27St().edit, rule = null;
+  if (mode !== 'del'){ rule = _n27Form();
+    if ([rule.kids, rule.groups, rule.staff, rule.add].some(function(v){ return !isFinite(v); })){ alert('Не число в одному з полів.'); return; } }
+  var b = $('n27SaveBtn'); if (b){ b.disabled = true; b.textContent = 'Зберігаю…'; }
+  var res = await _budPost({action:'opexNorms27Save', actorId:(S.user && S.user.id), changes:[{article:e.article, loc:e.loc, rule:rule}]});
+  if (!res || !res.ok){ alert('Не збережено: ' + ((res && res.error) || 'помилка')); if (b){ b.disabled = false; b.textContent = 'Зберегти'; } return; }
+  closeBudget(); await _n27Load();
+}
+async function n27Log(){
+  $('budTitle').textContent = '🕘 Журнал правок норм 2027';
+  $('budBody').innerHTML = '<div class="muted">Завантаження…</div>'; $('budModal').classList.remove('hidden');
+  try {
+    var r = await fetch(CFG.SCRIPT_URL + '?action=getOpexNorms27Log', {redirect:'follow'}); var j = await r.json(); var it = (j && j.items) || [];
+    $('budBody').innerHTML = !it.length ? '<div class="muted">Правок ще не було.</div>' :
+      '<div class="tbl-wrap" style="max-height:65vh;overflow:auto"><table class="tbl" style="font-size:12.5px"><thead><tr><th>Коли</th><th>Хто</th><th>Стаття</th><th>Локація</th><th>Було</th><th>Стало</th></tr></thead><tbody>' +
+      it.map(function(x){ return '<tr><td>' + escapeHtml(x.when) + '</td><td>' + escapeHtml(x.who) + '</td><td>' + escapeHtml(x.article) + '</td><td>' + escapeHtml(x.loc) + '</td><td>' + escapeHtml(x.before) + '</td><td><b>' + escapeHtml(x.after) + '</b></td></tr>'; }).join('') + '</tbody></table></div>';
+  } catch(err){ $('budBody').innerHTML = '<div style="color:#c0392b">' + escapeHtml(err.message || String(err)) + '</div>'; }
 }
 
 // ── v7.345: ДОВІДНИК НОРМ (лише перегляд + збереження довідника) ─────────────

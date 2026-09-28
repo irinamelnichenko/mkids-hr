@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.349
+// m.kids CRM — Google Apps Script v7.350
+// v7.350: редагований довідник норм 2027 «OPEX_Норми_2027» (садки + школи): норма групи «* Садки / * Школи» + правила
+//   локацій; getOpexNorms27, opexNorms27Seed (старт з формул 2026, dryRun), opexNorms27Save (CFO, журнал правок). Файли не чіпає.
 // v7.349: diagFinFolder — назви з суфіксом року «_26/_27» зіставляються.
 // v7.348: diagFinFolder — лише читання: файли папки 2027 ↔ файли реєстрів 2026, OPEX копій (факти, бюджети, формули, рядки 36–41, різниця з 2026).
 // v7.347: бюджети OPEX (opexSetBudget / opexSetBudgetMulti / довідник норм) — лише CFO; HR доступ прибрано.
@@ -6706,7 +6708,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.349', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.350', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -6751,6 +6753,8 @@ function doGet(e) {
     else if (action === 'getOpexBudgetMatrix')       result = getOpexBudgetMatrix(e.parameter || {});  // v7.346 бюджети місяця всіх локацій (+ формули)
     else if (action === 'getOpexStatsData')          result = getOpexStatsData(e.parameter || {});     // v7.346 статистика по статтях (з кешу локацій)
     else if (action === 'diagFinFolder')             result = diagFinFolder(e.parameter || {});        // v7.348 папка фін-файлів нового року (лише читання)
+    else if (action === 'getOpexNorms27Log')         result = getOpexNorms27Log();                    // v7.350 журнал правок норм 2027
+    else if (action === 'getOpexNorms27')            result = getOpexNorms27();                       // v7.350 довідник норм 2027 (редагований)
     else if (action === 'getOpexNorms')              result = getOpexNorms();                         // v7.345 довідник норм
     else if (action === 'getOpexBudgetLog')          result = getOpexBudgetLog(e.parameter || {});    // v7.342 журнал правок бюджету
     else if (action === 'getOpexOverview')           result = getOpexOverview(e.parameter.year || '', e.parameter.category || '', String(e.parameter.nocache || '') === '1');   // v7.326 +category; v7.341 кеш
@@ -6917,6 +6921,8 @@ function doPost(e) {
     else if (body.action === 'processInvoiceQueue')       result = processInvoiceQueue(body || {});  // v7.316 розпізнавання рахунків (dryRun за замовч. false)
     else if (body.action === 'ensureInvoiceTrigger')      result = ensureInvoiceTrigger(body || {}); // v7.316 тригер черги раз на 5 хв
     else if (body.action === 'opexSetBudgetMulti')        result = opexSetBudgetMulti(body || {});   // v7.346 бюджети кількох локацій (dryRun за замовч.; конфлікт — нічого не пишемо)
+    else if (body.action === 'opexNorms27Seed')           result = opexNorms27Seed(body || {});      // v7.350 стартове заповнення довідника 2027 з формул 2026 (CFO, dryRun)
+    else if (body.action === 'opexNorms27Save')           result = opexNorms27Save(body || {});      // v7.350 правка норм 2027 (CFO) + журнал
     else if (body.action === 'opexNormsExtract')          result = opexNormsExtract(body || {});     // v7.345 довідник норм OPEX у CONFIG (dryRun за замовч., лише CFO); файли OPEX не чіпає
     else if (body.action === 'invoiceSetCaption')         result = invoiceSetCaption(body || {});    // v7.343 підпис заявки вручну / з експорту чату (dryRun за замовч.)
     else if (body.action === 'matchInvoicesToPayments')   result = matchInvoicesToPayments(body || {}); // v7.320 звірка заявок із випискою (dryRun за замовч.)
@@ -14111,6 +14117,149 @@ function diagFinFolder(p){
       old2026:pr.old ? pr.old.name : null, locs:pr.old ? Object.keys(pr.old.locs) : [], kinds:pr.old ? Object.keys(pr.old.kinds) : [], ambiguous:pr.ambiguous}; }),
     notCopied:Object.keys(old).filter(function(id){ return !usedOld[id]; }).map(function(id){ return {name:old[id].name, locs:Object.keys(old[id].locs), kinds:Object.keys(old[id].kinds)}; }),
     opex:opex};
+}
+
+// ═══ v7.350: РЕДАГОВАНИЙ ДОВІДНИК НОРМ 2027 («OPEX_Норми_2027» у CONFIG) ══════════════════════════
+// Модель норми: бюджет місяця = діти × a + групи × b + персонал × c + надбавка (показники того ж місяця);
+// фіксована сума — лише надбавка; «порожньо» — статті в бюджеті немає.
+// Рядки: «* Садки» / «* Школи» — норма групи; рядок локації — власне правило (перекриває групу).
+// Діюче правило (стаття, локація) = рядок локації → рядок групи → порожньо.
+// Лише садки й школи (Управління поки не беремо). Файли OPEX не чіпає — лише цей довідник.
+// Стартове заповнення (opexNorms27Seed) — з формул 2026: правило грудня кожної локації; норма групи —
+// правило з показниками, спільне для більшості локацій групи. Решта (копії місяців, лист CF, «інше») →
+// фіксована сума грудня 2026 з приміткою «у 2026: <формула>» — CFO вирішує.
+var OPEX_N27_SHEET  = 'OPEX_Норми_2027';
+var OPEX_N27_HEADER = ['стаття','локація','порожньо','діти ×','групи ×','персонал ×','надбавка','примітка','змінено','хто'];
+var OPEX_N27_LOG    = 'OPEX_Норми_2027_Правки';
+var OPEX_N27_LOG_HEADER = ['Коли','Хто','Стаття','Локація','Було','Стало'];
+var OPEX_N27_GROUPS = {kg:'* Садки', school:'* Школи'};
+function _n27Locs(){
+  return (_opexRegistry() || []).filter(function(e){ return e && e.sheetId && _opexGroupOf(e.typ) !== 'mgmt'; })
+    .map(function(e){ return {loc:e.loc, group:_opexGroupOf(e.typ), sheetId:e.sheetId, listName:e.listName}; });
+}
+function _n27Rule(r){   // рядок довідника → правило
+  var n = function(x){ var v = Number(String(x == null ? '' : x).replace(/\s+/g, '').replace(',', '.')); return isFinite(v) ? v : 0; };
+  var empty = r[2] === true || String(r[2]).toLowerCase() === 'true' || r[2] === 'так' || r[2] === 1;
+  return {empty:empty, kids:n(r[3]), groups:n(r[4]), staff:n(r[5]), add:n(r[6]), note:String(r[7] || '')};
+}
+function _n27Lbl(x){
+  if (!x) return '—';
+  if (x.empty) return 'порожньо';
+  var p = [];
+  if (x.kids)   p.push('діти × ' + x.kids);
+  if (x.groups) p.push('групи × ' + x.groups);
+  if (x.staff)  p.push('персонал × ' + x.staff);
+  if (x.add || !p.length) p.push((p.length ? (x.add < 0 ? '− ' : '+ ') : '') + (p.length ? Math.abs(x.add) : x.add));
+  return p.join(' ');
+}
+function _n27Read(){
+  var sh = SpreadsheetApp.openById(CONFIG_SHEET_ID).getSheetByName(OPEX_N27_SHEET);
+  if (!sh || sh.getLastRow() < 2) return {sh:sh, rows:[]};
+  var v = sh.getRange(2, 1, sh.getLastRow() - 1, OPEX_N27_HEADER.length).getValues(), rows = [];
+  v.forEach(function(r, i){ var a = trim(r[0]), l = trim(r[1]); if (!a || !l) return;
+    rows.push({article:a, loc:l, rule:_n27Rule(r), changed:r[8] instanceof Date ? formatDate(r[8]) : String(r[8] || ''), who:String(r[9] || ''), rowNum:i + 2}); });
+  return {sh:sh, rows:rows};
+}
+// GET ?action=getOpexNorms27 → довідник + локації з групами + порядок статей + показники поточного місяця (для прикидки).
+function getOpexNorms27(){
+  var locs = _n27Locs(), d = _n27Read();
+  var st = _opexLocsParsed(locs.map(function(l){ return {loc:l.loc, sheetId:l.sheetId, listName:l.listName}; }), false);
+  var mNow = new Date().getMonth() + 1, order = [], seen = {};
+  locs.forEach(function(l){ var p = st.byLoc[l.loc]; if (!p || p.error) return;
+    var ex = p.extras || {}, cnt = function(k){ var e = ex[k]; var v = e && e.raw ? Number(e.raw[(mNow - 1) * 3 + 2]) : 0; return isFinite(v) ? v : 0; };
+    l.counts = {kids:cnt('kids'), groups:cnt('groups'), staff:cnt('staff')};
+    l.articles = (p.categories || []).map(function(c){ if (!seen[c.name]){ seen[c.name] = 1; order.push(c.name); }
+      return {name:c.name, dec2026:(c.months[11] || {}).budget || 0}; });
+    delete l.sheetId; delete l.listName; });
+  return {ok:true, sheet:OPEX_N27_SHEET, seeded:d.rows.length > 0, countsMonth:mNow, groups:OPEX_N27_GROUPS, locations:locs, articles:order,
+    rows:d.rows.map(function(x){ return {article:x.article, loc:x.loc, rule:x.rule, label:_n27Lbl(x.rule), changed:x.changed, who:x.who}; })};
+}
+// POST {action:'opexNorms27Seed', dryRun, force, actorId} — стартове заповнення з формул 2026 (CFO).
+function opexNorms27Seed(body){
+  body = body || {};
+  var dryRun = (body.dryRun !== false);
+  if (!_opexCanEditBudget(body.actorId)) return {ok:false, code:'PERM_DENIED', error:'Довідник норм веде лише CFO'};
+  var d = _n27Read();
+  if (d.rows.length && !body.force) return {ok:false, code:'NOT_EMPTY', error:'Довідник 2027 уже заповнено (' + d.rows.length + ' рядків) — перезаписати можна лише з force'};
+  var locs = _n27Locs(), grids = _opexReadFormulaGrids(locs), byLoc = {}, errors = [];
+  locs.forEach(function(l){ var g = grids[l.loc]; if (!g || g.error){ errors.push({loc:l.loc, error:(g && g.error) || 'не прочитано'}); return; } byLoc[l.loc] = _opexNormsForLoc(g.V, g.F); });
+  var rows = [], now = formatDate(new Date());
+  var toRule = function(a, dec){   // правило 2026 → модель 2027
+    var r = a.rule;
+    if (r.type === 'empty') return {empty:true, kids:0, groups:0, staff:0, add:0, note:''};
+    if (r.type === 'driver') return {empty:false, kids:r.kids || 0, groups:r.groups || 0, staff:r.staff || 0, add:r.add || 0, note:''};
+    if (r.type === 'fixed')  return {empty:false, kids:0, groups:0, staff:0, add:r.add || 0, note:''};
+    return {empty:false, kids:0, groups:0, staff:0, add:Math.round(Number(dec) || 0), note:'у 2026 (' + (r.a1 || '') + '): ' + (r.formula || OPEX_NORM_TYPE_LBL[r.type] || r.type) + ' → сума грудня'};
+  };
+  var key = function(x){ return x.empty ? 'E' : [x.kids, x.groups, x.staff, x.add].join('|'); };
+  ['kg', 'school'].forEach(function(gk){
+    var gl = locs.filter(function(l){ return l.group === gk && byLoc[l.loc]; }), arts = {}, order = [];
+    gl.forEach(function(l){
+      var g = grids[l.loc];
+      byLoc[l.loc].articles.forEach(function(a){
+        var dec = g.V[a.row - 1][_opexBudgetCol(12) - 1];
+        if (!arts[a.name]){ arts[a.name] = {}; order.push(a.name); }
+        arts[a.name][l.loc] = toRule(a, dec);
+      });
+    });
+    order.forEach(function(an){
+      var per = arts[an], cnt = {}, smp = {}, n = 0;
+      Object.keys(per).forEach(function(l){ var x = per[l]; if (x.empty || x.note || !(x.kids || x.groups || x.staff)) return; var k = key(x); cnt[k] = (cnt[k] || 0) + 1; smp[k] = x; n++; });
+      var best = Object.keys(cnt).sort(function(a, b){ return cnt[b] - cnt[a]; })[0];
+      var net = (best && cnt[best] >= 2 && cnt[best] * 2 > Object.keys(per).length) ? smp[best] : null;
+      if (net) rows.push([an, OPEX_N27_GROUPS[gk], false, net.kids || '', net.groups || '', net.staff || '', net.add || '', 'з 2026: ' + cnt[best] + ' з ' + Object.keys(per).length + ' лок.', now, 'старт з 2026']);
+      Object.keys(per).forEach(function(l){ var x = per[l];
+        if (net && key(x) === best) return;
+        if (!net && x.empty) return;           // без норми групи порожнє правило = відсутність рядка
+        rows.push([an, l, !!x.empty, x.kids || '', x.groups || '', x.staff || '', x.add || '', x.note, now, 'старт з 2026']); });
+    });
+  });
+  var res = {ok:true, dryRun:dryRun, rows:rows.length, errors:errors,
+    sample:rows.slice(0, 40).map(function(r){ return {article:r[0], loc:r[1], label:_n27Lbl(_n27Rule(r)), note:r[7]}; })};
+  if (dryRun) return res;
+  var sh = _opexEnsureCfgSheet(OPEX_N27_SHEET, OPEX_N27_HEADER, true);
+  if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, OPEX_N27_HEADER.length).clearContent();
+  if (rows.length) sh.getRange(2, 1, rows.length, OPEX_N27_HEADER.length).setValues(rows);
+  res.written = rows.length;
+  return res;
+}
+// GET ?action=getOpexNorms27Log
+function getOpexNorms27Log(){
+  var sh = SpreadsheetApp.openById(CONFIG_SHEET_ID).getSheetByName(OPEX_N27_LOG);
+  if (!sh || sh.getLastRow() < 2) return {ok:true, items:[]};
+  var v = sh.getRange(2, 1, sh.getLastRow() - 1, OPEX_N27_LOG_HEADER.length).getDisplayValues(), out = [];
+  for (var i = v.length - 1; i >= 0 && out.length < 300; i--) out.push({when:v[i][0], who:v[i][1], article:v[i][2], loc:v[i][3], before:v[i][4], after:v[i][5]});
+  return {ok:true, items:out};
+}
+// POST {action:'opexNorms27Save', changes:[{article, loc, rule:{empty,kids,groups,staff,add,note} | null(=видалити рядок)}], actorId}
+// Рядок локації з rule:null — «як у групі». Кожна зміна — у журнал «OPEX_Норми_2027_Правки».
+function opexNorms27Save(body){
+  body = body || {};
+  if (!_opexCanEditBudget(body.actorId)) return {ok:false, code:'PERM_DENIED', error:'Довідник норм веде лише CFO'};
+  var ch = Array.isArray(body.changes) ? body.changes : [];
+  if (!ch.length) return {ok:false, error:'немає змін'};
+  var who = ''; try { who = _getActor((_CURRENT_AUTH && _CURRENT_AUTH.id) || body.actorId).name || ''; } catch(_w){}
+  var lock = LockService.getScriptLock(); try { lock.waitLock(20000); } catch(_l){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+  try {
+    var sh = _opexEnsureCfgSheet(OPEX_N27_SHEET, OPEX_N27_HEADER, true), d = _n27Read(), now = formatDate(new Date()), log = [], done = 0;
+    var num = function(x){ var v = Number(String(x == null ? '' : x).replace(/\s+/g, '').replace(',', '.')); return isFinite(v) ? v : NaN; };
+    var del = [];
+    ch.forEach(function(c){
+      var a = trim(c.article), l = trim(c.loc); if (!a || !l) return;
+      var ex = d.rows.filter(function(x){ return x.article === a && x.loc === l; })[0];
+      var before = ex ? _n27Lbl(ex.rule) : '(як у групі)';
+      if (!c.rule){ if (ex){ del.push(ex.rowNum); log.push([now, who, a, l, before, '(як у групі)']); done++; } return; }
+      var r = c.rule, vals = [num(r.kids || 0), num(r.groups || 0), num(r.staff || 0), num(r.add || 0)];
+      if (vals.some(function(v){ return isNaN(v); })) throw new Error('не число: ' + a + ' / ' + l);
+      var row = [a, l, !!r.empty, vals[0] || '', vals[1] || '', vals[2] || '', vals[3] || '', String(r.note || ''), now, who];
+      if (ex) sh.getRange(ex.rowNum, 1, 1, row.length).setValues([row]); else sh.appendRow(row);
+      log.push([now, who, a, l, before, _n27Lbl(_n27Rule(row))]); done++;
+    });
+    del.sort(function(x, y){ return y - x; }).forEach(function(rn){ sh.deleteRow(rn); });
+    if (log.length){ var lg = _opexEnsureCfgSheet(OPEX_N27_LOG, OPEX_N27_LOG_HEADER, true); lg.getRange(lg.getLastRow() + 1, 1, log.length, OPEX_N27_LOG_HEADER.length).setValues(log); }
+    return {ok:true, saved:done};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { try { lock.releaseLock(); } catch(_r){} }
 }
 
 // GET ?action=getOpexNorms → вміст довідника.
