@@ -778,7 +778,7 @@ var PERMISSIONS = {
     'card-child-banner','card-child-contract','card-child-vacations',
     'card-child-notes','card-child-health'
   ],
-  vyhovatel: ['activities','attendance-view','attendance-edit','clients_list','card-child-development']
+  vyhovatel: ['activities','predmetnyky','attendance-view','attendance-edit','clients_list','card-child-development']
 };
 // Задачник: tasks — менеджмент + director; tasks-create — лише менеджмент.
 (function(){
@@ -829,6 +829,7 @@ var PERMISSIONS_BUILD_VERSION = 'matrix-2026-05-04';
 // працює без окремих винятків у кожному місці.
 // Вихователі решти локацій нічого не отримують.
 var SCHOOL228_LOC = 'Школа 228';
+var SCHOOL_INV_LOCS = ['Школа 228', 'Школа Осокорки', "Школа Кар'єрна"];   // v7.351
 var _locPermsDone = false;
 function _applyLocScopedPerms(){
   if (_locPermsDone) return;
@@ -841,6 +842,11 @@ function _applyLocScopedPerms(){
     ['attendance_kids','meals'].forEach(function(p){
       if (PERMISSIONS.vyhovatel.indexOf(p) === -1) PERMISSIONS.vyhovatel.push(p);
     });
+  }
+  // v7.351: «Рахунки» — вихователям ШКІЛ (садки — ні). На сторінці рахунків вихователь бачить свою школу,
+  // без «Надіслати всім» і «Перерахувати локацію».
+  if (r === 'vyhovatel' && SCHOOL_INV_LOCS.indexOf(loc) !== -1 && Array.isArray(PERMISSIONS.vyhovatel)){
+    if (PERMISSIONS.vyhovatel.indexOf('invoices') === -1) PERMISSIONS.vyhovatel.push('invoices');
   }
   _locPermsDone = true;
 }
@@ -1168,6 +1174,7 @@ async function invApi(payload){
 // 🔄 Перерахувати локацію: повний перерахунок ВИБРАНОЇ локації (Платежі + ЗП +
 // агрегат Оплати-Рік) за вибраний місяць додаткових, потім перезавантаження таблиці.
 async function reexportCurrentLocation(){
+  if (String((S.user && S.user.role) || '').toLowerCase() === 'vyhovatel') return;   // v7.351
   var loc = CFG.LOC;
   if (!loc){ alert('Локацію не вибрано'); return; }
   var m = INV.extMonth, y = INV.extYear;
@@ -1524,6 +1531,7 @@ async function invPrewarmAll(){
 
 // 📬 — масова: послідовно по дітях з email і сумою > 0, з прогрес-тостом.
 async function invBulkSend(){
+  if (String((S.user && S.user.role) || '').toLowerCase() === 'vyhovatel') return;   // v7.351
   if (!INV.data || !INV.data.children){ showToast('Немає даних', 'err'); return; }
   var withSum = INV.data.children.filter(function(c){
     return ((c.paymentSum || 0) > 0) || ((c.extrasSum || 0) > 0);
@@ -1595,6 +1603,12 @@ function showFatalError(msg){
       return;
     }
     CFG.LOC = S.user.loc;
+  } else if (String(S.user.role || '').toLowerCase() === 'vyhovatel'){
+    // v7.351: вихователь ШКОЛИ (право дає _applyLocScopedPerms лише для SCHOOL_INV_LOCS) — своя школа,
+    // рахунки по одній дитині; розсилки всім і перерахунку локації немає.
+    CFG.LOC = String(S.user.origLoc || S.user.loc || '').trim();
+    if (SCHOOL_INV_LOCS.indexOf(CFG.LOC) === -1){ window.location.href = 'index.html'; return; }
+    ['reexportLocBtn','invBulkBtn','invPrewarmBtn'].forEach(function(id){ var b = $(id); if (b) b.style.display = 'none'; });
   } else {
     window.location.href = 'index.html';
     return;

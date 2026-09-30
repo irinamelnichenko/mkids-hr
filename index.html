@@ -1310,6 +1310,7 @@ const LOGIN_LOCATIONS = [
   // Школи (2)
   {group:'Школи', name:'Школа Осокорки'},
   {group:'Школи', name:'Школа 228'},
+  {group:'Школи', name:"Школа Кар'єрна", roles:['vyhovatel']},   // v7.351: окремий вихователь школи (директорка/медсестра — спільні з садком Кар'єрна)
   // Управління (3)
   {group:'Управління', name:'Житомир'},
   {group:'Управління', name:'Нац.Гвардії (Благо)'},
@@ -1346,7 +1347,7 @@ function showLoginError(msg){
 // згрупованим через <optgroup>. Якщо в DOM ще нема елементів — пропускаємо.
 // Будує <optgroup>-список локацій лише з дозволених груп (порядок — як
 // у LOGIN_LOCATIONS).
-function _buildLocOptions(allowedGroups, placeholder){
+function _buildLocOptions(allowedGroups, placeholder, role){
   var html = '<option value="">' + esc(placeholder) + '</option>';
   var order = [], seen = {};
   LOGIN_LOCATIONS.forEach(function(l){
@@ -1356,6 +1357,7 @@ function _buildLocOptions(allowedGroups, placeholder){
     if (allowedGroups.indexOf(g) === -1) return;
     html += '<optgroup label="' + esc(g) + '">';
     LOGIN_LOCATIONS.forEach(function(l){
+      if (l.roles && l.roles.indexOf(role) === -1) return;   // v7.351: локація лише для окремих ролей
       if (l.group === g)
         html += '<option value="' + esc(l.name) + '">' + esc(l.name) + '</option>';
     });
@@ -1380,7 +1382,7 @@ function populateLoginLocations(){
   var nurse = document.getElementById('loginLocationNurse');
   if (nurse) nurse.innerHTML = _buildLocOptions(['Садочки','Школи','Управління'], '— Оберіть локацію —');
   var vyh = document.getElementById('loginLocationVyhovatel');
-  if (vyh) vyh.innerHTML = _buildLocOptions(['Садочки','Школи','Управління'], '— Оберіть локацію —');
+  if (vyh) vyh.innerHTML = _buildLocOptions(['Садочки','Школи','Управління'], '— Оберіть локацію —', 'vyhovatel');
 }
 
 // Завантажуємо список користувачів для Менеджмент-dropdown.
@@ -2250,6 +2252,7 @@ function isWeekLocked(dateISO){
 // працює без окремих винятків у кожному місці.
 // Вихователі решти локацій нічого не отримують.
 var SCHOOL228_LOC = 'Школа 228';
+var SCHOOL_INV_LOCS = ['Школа 228', 'Школа Осокорки', "Школа Кар'єрна"];   // v7.351
 var _locPermsDone = false;
 function _applyLocScopedPerms(){
   if (_locPermsDone) return;
@@ -2262,6 +2265,11 @@ function _applyLocScopedPerms(){
     ['attendance_kids','meals'].forEach(function(p){
       if (PERMISSIONS.vyhovatel.indexOf(p) === -1) PERMISSIONS.vyhovatel.push(p);
     });
+  }
+  // v7.351: «Рахунки» — вихователям ШКІЛ (садки — ні). На сторінці рахунків вихователь бачить свою школу,
+  // без «Надіслати всім» і «Перерахувати локацію».
+  if (r === 'vyhovatel' && SCHOOL_INV_LOCS.indexOf(loc) !== -1 && Array.isArray(PERMISSIONS.vyhovatel)){
+    if (PERMISSIONS.vyhovatel.indexOf('invoices') === -1) PERMISSIONS.vyhovatel.push('invoices');
   }
   _locPermsDone = true;
 }

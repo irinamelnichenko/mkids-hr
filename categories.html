@@ -767,7 +767,7 @@ var PERMISSIONS = {
     'card-child-banner','card-child-contract','card-child-vacations',
     'card-child-notes','card-child-health'
   ],
-  vyhovatel: ['activities','attendance-view','attendance-edit','clients_list','card-child-development']
+  vyhovatel: ['activities','predmetnyky','attendance-view','attendance-edit','clients_list','card-child-development']
 };
 // Задачник: tasks — менеджмент + director; tasks-create — лише менеджмент.
 (function(){
@@ -818,6 +818,7 @@ console.log('[mkids] permissions build:', PERMISSIONS_BUILD_VERSION);
 // працює без окремих винятків у кожному місці.
 // Вихователі решти локацій нічого не отримують.
 var SCHOOL228_LOC = 'Школа 228';
+var SCHOOL_INV_LOCS = ['Школа 228', 'Школа Осокорки', "Школа Кар'єрна"];   // v7.351
 var _locPermsDone = false;
 function _applyLocScopedPerms(){
   if (_locPermsDone) return;
@@ -830,6 +831,11 @@ function _applyLocScopedPerms(){
     ['attendance_kids','meals'].forEach(function(p){
       if (PERMISSIONS.vyhovatel.indexOf(p) === -1) PERMISSIONS.vyhovatel.push(p);
     });
+  }
+  // v7.351: «Рахунки» — вихователям ШКІЛ (садки — ні). На сторінці рахунків вихователь бачить свою школу,
+  // без «Надіслати всім» і «Перерахувати локацію».
+  if (r === 'vyhovatel' && SCHOOL_INV_LOCS.indexOf(loc) !== -1 && Array.isArray(PERMISSIONS.vyhovatel)){
+    if (PERMISSIONS.vyhovatel.indexOf('invoices') === -1) PERMISSIONS.vyhovatel.push('invoices');
   }
   _locPermsDone = true;
 }

@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.350
+// m.kids CRM — Google Apps Script v7.351
+// v7.351: рахунки під-локації «Школа Кар'єрна» — діти з блоку «Школа» хоста (картки, відмітки) + Оплати-Рік школи; PDF знаходить картку в хоста.
 // v7.350: редагований довідник норм 2027 «OPEX_Норми_2027» (садки + школи): норма групи «* Садки / * Школи» + правила
 //   локацій; getOpexNorms27, opexNorms27Seed (старт з формул 2026, dryRun), opexNorms27Save (CFO, журнал правок). Файли не чіпає.
 // v7.349: diagFinFolder — назви з суфіксом року «_26/_27» зіставляються.
@@ -6708,7 +6709,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.350', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.351', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -6870,6 +6871,7 @@ function doPost(e) {
     else if (body.action === 'unconfirmBdayMatch')        result = unconfirmBdayMatch(body.childId || '');
     else if (body.action === 'authenticate')              result = authenticate(body.login || '', body.password || '');
     else if (body.action === 'updatePassword')            result = updatePassword(body.userId || 0, body.newPassword || '');
+    else if (body.action === 'addLocationUser')           result = addLocationUser(body || {});      // v7.351 один акаунт локації (CFO, dryRun)
     else if (body.action === 'addUser')                   result = addUser(body.data || {});
     else if (body.action === 'deactivateUser')            result = deactivateUser(body.userId || 0);
     else if (body.action === 'activateUser')              result = activateUser(body.userId || 0);
@@ -24487,8 +24489,13 @@ function getInvoiceListData(params){
     var crmRes = getClients();
     if (!crmRes.ok) return crmRes;
     var clientsAll = crmRes.data || [];
+    // v7.351: під-локація («Школа Кар'єрна»): картки школярів лежать у ХОСТА («Кар'єрна», група «Школа»),
+    // Оплати-Рік — під самою під-локацією, відмітки додаткових — під хостом. Беремо лише її блок.
+    var _invSub = _subLocOf(loc);
     var clients = clientsAll.filter(function(c){
-      if (String(c['Локація'] || '').trim() !== loc) return false;
+      var _cl = String(c['Локація'] || '').trim();
+      if (_invSub){ if (_cl !== loc && !(_cl === _invSub.host && _sameBlock({group:c['Група']}, _invSub.group))) return false; }
+      else if (_cl !== loc) return false;
       var st = String(c['Статус'] || '').trim();
       // Fix A: graduated теж кандидат — у циклі нижче лишаємо лише тих, хто має
       // додаткові за extMonth (extrasBreakdownSum > 0). "Голі" випускники відсіються.
@@ -24545,7 +24552,7 @@ function getInvoiceListData(params){
     var extrasByChild = {};
     for (var i = 1; i < attData.length; i++){
       var rec = _parseAttendanceRow(attData[i]);
-      if (rec.loc !== loc) continue;
+      if (rec.loc !== loc && !(_invSub && rec.loc === _invSub.host)) continue;   // v7.351: під-локація — і відмітки хоста (лише її діти нижче)
       if (rec.date < dateFrom || rec.date >= dateTo) continue;
       if (!extrasByChild[rec.child]){
         extrasByChild[rec.child] = {sum: 0, breakdown: {}};
@@ -25719,6 +25726,8 @@ function _invoiceClientData(childName, loc, type){
     if (snm){ picked = cc; break; }
   }
   var c = picked || firstMatch;
+  // v7.351: під-локація — картка лежить у хоста (блок «Школа»)
+  if (!c){ var _sb = _subLocOf(ll); if (_sb && _normForMatch(_sb.host) !== _normForMatch(ll)) return _invoiceClientData(childName, _sb.host, type); }
   if (!c) return res;
   res.found = true;
   var signer = String(c['Підписант договору'] || '').trim();
@@ -29863,6 +29872,30 @@ function migrateAllLocationUsers(roles){
   } catch(e){
     return {ok: false, error: String(e && e.message || e)};
   }
+}
+
+// v7.351: ОДИН локаційний акаунт (напр. окремий вихователь під-локації «Школа Кар'єрна»).
+// Лише CFO. Логін — як на фронті: <role>.<translit(loc)>; пароль — стандартний _locPassword (SHA-256).
+// Наявний логін не перезаписує. POST {action:'addLocationUser', loc, role:'vyhovatel', actorId, dryRun}
+function addLocationUser(body){
+  body = body || {};
+  var loc = trim(String(body.loc || '')), role = String(body.role || '').toLowerCase().trim();
+  var dryRun = (body.dryRun !== false);
+  if (['director','nurse','vyhovatel'].indexOf(role) === -1) return {ok:false, error:'role: director|nurse|vyhovatel'};
+  if (!loc) return {ok:false, error:'loc обовʼязковий'};
+  var actor = null; try { actor = _getActor((_CURRENT_AUTH && _CURRENT_AUTH.id) || body.actorId); } catch(_a){}
+  if (!actor || _roleKey(actor.role) !== 'cfo') return {ok:false, code:'PERM_DENIED', error:'Створювати акаунти локацій може лише CFO'};
+  var login = role + '.' + _translitUA(loc);
+  var sh = _getUsersSheet(), data = sh.getDataRange().getValues(), maxId = 0;
+  for (var i = 1; i < data.length; i++){
+    if (String(data[i][2] || '').trim().toLowerCase() === login) return {ok:false, code:'EXISTS', error:'Логін «' + login + '» уже існує', login:login};
+    var n = Number(data[i][0]) || 0; if (n > maxId) maxId = n;
+  }
+  var lbl = {director:'Директор', nurse:'Медсестра', vyhovatel:'Вихователь'}[role];
+  var row = [maxId + 1, lbl + ' ' + loc, login, _sha256(_locPassword(loc, role)), role, loc, '', true, ''];
+  if (dryRun) return {ok:true, dryRun:true, id:row[0], name:row[1], login:login, role:role, loc:loc};
+  sh.appendRow(row);
+  return {ok:true, dryRun:false, id:row[0], name:row[1], login:login, role:role, loc:loc};
 }
 
 // Разова утиліта — запустити ВРУЧНУ з Apps Script editor.
