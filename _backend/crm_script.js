@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.357
+// m.kids CRM — Google Apps Script v7.358
+// v7.358: getPaymentRowsWithoutCards — лише діти з бюджетом ПОТОЧНОГО місяця; школярі під-локації з карткою в хоста — не показуються.
 // v7.357: (1) харчування — окремими рядками в рахунку за додаткові (той самий ФОП), сума з «Бюджет-харчування»,
 //   борг/переплата харчування, застарілий експорт не «борг». (2) синк: спершу перевірка картки, потім «схоже на ПІБ»;
 //   notNameMissing; getPaymentRowsWithoutCards + createCardFromPayment для «Потребують уваги».
@@ -6721,7 +6722,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.357', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.358', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -24647,7 +24648,25 @@ function getPaymentRowsWithoutCards(p){
   (r.preview || r.missing || []).forEach(function(x){ if ((Number(x.budRik) || 0) > 0) items.push({kind:'regular', name:x.name, loc:x.loc, group:x.group, budRik:x.budRik, faktRik:x.faktRik}); });
   (r.notNameMissing || []).forEach(function(x){ if ((Number(x.budRik) || 0) > 0) items.push({kind:'notName', name:x.name, loc:x.loc, group:x.group, budRik:x.budRik, faktRik:x.faktRik}); });
   if (f) items = items.filter(function(x){ return _normForMatch(x.loc) === _normForMatch(f); });
-  return {ok:true, total:items.length, items:items};
+  // v7.358: (а) лише ПОТОЧНИЙ місяць — бюджет навч/доп поточного місяця > 0 (річний агрегат тримає й тих, хто
+  // вибув/перейшов: «Антонець Злата» в Школі Осокорки «(без групи)» — гроші за весну, зараз вона в Школі 228);
+  // (б) під-локація («Школа Кар'єрна»): картки школярів лежать у ХОСТА (група «Школа») — їх синк не бачить.
+  var mName = MONTHS_CAL[new Date().getMonth()], cur = {};
+  try {
+    var ysh = getCRMSpreadsheet().getSheetByName(SHEET_YEARLY), yv = ysh.getDataRange().getValues(), yh = yv[0].map(String);
+    var iL = yh.indexOf('Локація'), iN = yh.indexOf("Ім'я дитини"), iB = yh.indexOf(mName + '-Бюджет-навч'), iD = yh.indexOf(mName + '-Бюджет-доп');
+    for (var y = 1; y < yv.length; y++){ var k = _normForMatch(yv[y][iL]) + '|' + _nameFoldTight(yv[y][iN]);
+      cur[k] = (cur[k] || 0) + (iB >= 0 ? Number(yv[y][iB]) || 0 : 0) + (iD >= 0 ? Number(yv[y][iD]) || 0 : 0); }
+  } catch(_y){ cur = null; }
+  var hostCards = {};
+  try { (getClients().data || []).forEach(function(c){ hostCards[_normForMatch(c['Локація']) + '|' + _nameFoldTight(c['ПІБ дитини'])] = true; }); } catch(_c){}
+  items = items.filter(function(x){
+    var sub = _subLocOf(x.loc);
+    if (sub && hostCards[_normForMatch(sub.host) + '|' + _nameFoldTight(x.name)]) return false;
+    if (cur && !(cur[_normForMatch(x.loc) + '|' + _nameFoldTight(x.name)] > 0)) return false;
+    return true;
+  });
+  return {ok:true, total:items.length, month:mName, items:items};
 }
 // POST {action:'createCardFromPayment', loc, name, group, actorId} — картка з ПІБ ТОЧНО як у Payment (з номером).
 // Мережеві ролі — будь-яка локація; директорка — лише своя. Payment не змінюється (рядок уже є).
@@ -24660,8 +24679,9 @@ function createCardFromPayment(body){
   if (!actor || (role === 'director' ? _normForMatch(actor.loc) !== _normForMatch(loc) : ['nurse','vyhovatel',''].indexOf(role) !== -1))
     return {ok:false, code:'PERM_DENIED', error:'Немає права заводити картку в цій локації'};
   var gc = getClients(); var list = (gc && gc.data) || [];
+  var _cs = _subLocOf(loc), _locs = [_normForMatch(loc)]; if (_cs) _locs.push(_normForMatch(_cs.host));   // v7.358: під-локація — картки в хоста
   for (var i = 0; i < list.length; i++){
-    if (_normForMatch(list[i]['Локація']) === _normForMatch(loc) && _nameFoldTight(list[i]['ПІБ дитини']) === _nameFoldTight(name))
+    if (_locs.indexOf(_normForMatch(list[i]['Локація'])) !== -1 && _nameFoldTight(list[i]['ПІБ дитини']) === _nameFoldTight(name))
       return {ok:false, code:'EXISTS', error:'Картка вже є: «' + list[i]['ПІБ дитини'] + '»', id:list[i]['ID']};
   }
   var id = 'c_' + name.slice(0, 24) + '_' + loc.slice(0, 12);
