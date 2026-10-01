@@ -1341,7 +1341,7 @@ function _invViberText(c){
   var monthLabel = (INV_MONTHS[m-1] || '') + ' ' + y;
   var sum = (c.paymentSum || 0) + (c.extrasSum || 0);
   var L = [];
-  L.push('*m.kids ' + CFG.LOC + '* 📚');
+  L.push('*' + (CFG.LOC === 'Школа Осокорки' ? 'm.Primary Осокорки' : 'm.kids ' + CFG.LOC) + '* 📚');   // v7.360 (запасний текст; основний будує бекенд)
   L.push('');
   L.push('Рахунок за ' + monthLabel);
   L.push('Дитина: ' + c.name);

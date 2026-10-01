@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.359
+// m.kids CRM — Google Apps Script v7.360
+// v7.360: бренд у рахунках Школи Осокорки — «m.Primary Осокорки» (Viber, email: тема/текст/відправник, PDF-плашка); Viber-заголовок + «та харчування».
 // v7.359: заголовок рахунку за додаткові + «та харчування», якщо в ньому є харчування.
 // v7.358: getPaymentRowsWithoutCards — лише діти з бюджетом ПОТОЧНОГО місяця; школярі під-локації з карткою в хоста — не показуються.
 // v7.357: (1) харчування — окремими рядками в рахунку за додаткові (той самий ФОП), сума з «Бюджет-харчування»,
@@ -6723,7 +6724,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.359', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.360', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -24964,23 +24965,28 @@ function _fmtUahSrv(n){
   return (neg ? '-' : '') + o;
 }
 
-function _invoicePurposeTitle(type, childName, m, y){
+function _invoicePurposeTitle(type, childName, m, y, hasMeals){
   var mn = (m >= 1 && m <= 12) ? MONTHS_CAL[m-1].toLowerCase() : '';
   var base = (type === 'extras')
-    ? 'Оплата за організацію освітніх послуг та додаткових занять (гуртків) '
+    ? 'Оплата за організацію освітніх послуг та додаткових занять (гуртків)' + (hasMeals ? ' та харчування' : '') + ' '   // v7.360: як у PDF
     : 'Оплата за навчання ';
   return base + childName + ', ' + mn + ' ' + y;
 }
+
+// v7.360: БРЕНД у рахунках. Школа Осокорки — «m.Primary Осокорки» (рішення CFO 01.10.2026); решта — «m.kids <локація>».
+function _invIsMPrimary(loc){ return _normForMatch(loc) === _normForMatch('Школа Осокорки'); }
+function _invBrandName(loc){ return _invIsMPrimary(loc) ? 'm.Primary Осокорки' : ('m.kids ' + loc); }
+function _invBrandShort(loc){ return _invIsMPrimary(loc) ? 'm.Primary' : 'm.kids'; }
 
 function _firstName(full){
   var parts = String(full || '').trim().split(/\s+/);
   return parts.length >= 2 ? parts[1] : (parts[0] || '');
 }
 
-function _invoicePurposeTitle(type, childName, m, y){
+function _invoicePurposeTitle(type, childName, m, y, hasMeals){
   var mn = (m >= 1 && m <= 12) ? MONTHS_CAL[m-1].toLowerCase() : '';
   var base = (type === 'extras')
-    ? 'Оплата за організацію освітніх послуг та додаткових занять (гуртків) '
+    ? 'Оплата за організацію освітніх послуг та додаткових занять (гуртків)' + (hasMeals ? ' та харчування' : '') + ' '   // v7.360: як у PDF
     : 'Оплата за навчання ';
   return base + childName + ', ' + mn + ' ' + y;
 }
@@ -25015,9 +25021,9 @@ function invoiceViberMessage(opts){
     grand += Number(r.sum) || 0;
     var fn = _firstName(r.buyerName);
     var greet = fn ? ('Доброго дня, ' + _vocativeUa(fn) + '! 🌞') : 'Доброго дня! 🌞';
-    var title = _invoicePurposeTitle(ty.t, childName, ty.m, ty.y);
+    var title = _invoicePurposeTitle(ty.t, childName, ty.m, ty.y, (r.lines || []).some(function(x){ return /^Харчування/.test(String(x.name || '')) || /\(харчування\)/.test(String(x.name || '')); }));
     var L = [];
-    L.push('*m.kids ' + loc + '*');
+    L.push('*' + _invBrandName(loc) + '*');   // v7.360: Школа Осокорки — «m.Primary Осокорки»
     L.push('');
     L.push(greet);
     L.push('Надсилаємо рахунок для оплати.');
@@ -25310,7 +25316,7 @@ function _logInvoiceSend(row){
 function _invTypeUk(type){ return type === 'extras' ? 'Додаткові' : 'Навчання'; }
 
 // Короткий HTML-лист (перелік рахунків з ЮО/сумою/№).
-function _buildInvoiceEmailHtml(childName, monthLabel, invoices){
+function _buildInvoiceEmailHtml(childName, monthLabel, invoices, loc){
   var rows = invoices.map(function(inv){
     return '<li><b>' + inv.typeUk + '</b> — ' + _fmtUah(inv.sum) + ' грн' +
       ' <span style="color:#666">(' + inv.juName + ', ЄДРПОУ ' + inv.edrpou +
@@ -25319,10 +25325,10 @@ function _buildInvoiceEmailHtml(childName, monthLabel, invoices){
   return [
     '<div style="font-family:Arial,sans-serif;font-size:14px;color:#222;line-height:1.6">',
     '<p>Доброго дня!</p>',
-    '<p>Надсилаємо рахунки <b>m.kids</b> за <b>' + monthLabel + '</b> для <b>' + childName + '</b>:</p>',
+    '<p>Надсилаємо рахунки <b>' + (_invIsMPrimary(loc) ? _invBrandName(loc) : 'm.kids') + '</b> за <b>' + monthLabel + '</b> для <b>' + childName + '</b>:</p>',   // v7.360
     '<ul>' + rows + '</ul>',
     '<p>Деталі та банківські реквізити — у вкладених PDF-файлах.</p>',
-    '<p style="color:#888;font-size:12px">Лист сформовано автоматично системою m.kids.</p>',
+    '<p style="color:#888;font-size:12px">Лист сформовано автоматично' + (_invIsMPrimary(loc) ? '' : ' системою m.kids') + '.</p>',
     '</div>'
   ].join('');
 }
@@ -25380,13 +25386,14 @@ function sendInvoiceEmail(opts){
 
   var monthLabel = (payMonth >= 1 && payMonth <= 12) ? (MONTHS_CAL[payMonth-1] + ' ' + payYear)
                  : (extMonth >= 1 && extMonth <= 12) ? (MONTHS_CAL[extMonth-1] + ' ' + extYear) : '';
-  var subject = 'Рахунок m.kids — ' + monthLabel + ' — ' + childName;
-  var html    = _buildInvoiceEmailHtml(childName, monthLabel, invoices);
-  var plain   = 'Доброго дня! Надсилаємо рахунки m.kids за ' + monthLabel + ' для ' + childName +
+  var _br = _invIsMPrimary(loc) ? _invBrandName(loc) : 'm.kids';   // v7.360
+  var subject = 'Рахунок ' + _br + ' — ' + monthLabel + ' — ' + childName;
+  var html    = _buildInvoiceEmailHtml(childName, monthLabel, invoices, loc);
+  var plain   = 'Доброго дня! Надсилаємо рахунки ' + _br + ' за ' + monthLabel + ' для ' + childName +
                 '. Деталі — у вкладених PDF.';
 
   try {
-    MailApp.sendEmail(email, subject, plain, {htmlBody: html, attachments: attachments, name: 'm.kids'});
+    MailApp.sendEmail(email, subject, plain, {htmlBody: html, attachments: attachments, name: _br});
   } catch(e){
     var em = String(e && e.message || e);
     invoices.forEach(function(inv){
@@ -26200,7 +26207,7 @@ function _buildInvoiceHtml(d){
   var req = d.req;
   var logoHtml = req.logoUrl
     ? '<img src="' + req.logoUrl + '" style="height:48px"/>'
-    : '<div style="display:inline-block;background:#FF6A00;color:#fff;font-weight:700;font-size:22px;padding:8px 16px;border-radius:8px;letter-spacing:.5px;">m.kids</div>';
+    : '<div style="display:inline-block;background:#FF6A00;color:#fff;font-weight:700;font-size:22px;padding:8px 16px;border-radius:8px;letter-spacing:.5px;">' + _invBrandShort(req.loc) + '</div>';   // v7.360
   var taxLine = req.isFOP ? '' : '<div>Не є платником податку на прибуток на загальних підставах</div>';
   var contractLine = d.contractNumber ? '<div class="party"><b>Договір:</b> ' + d.contractNumber + '</div>' : '';
   var rowsHtml = (d.lines || []).map(function(ln, i){
