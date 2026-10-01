@@ -875,7 +875,18 @@ function wireGrid(){
     toggleMark(visKids()[+t.dataset.ci].name, t.dataset.d, +t.dataset.it); refresh();   // лише ця дитина, цей день, ця позиція
   };
 }
+// v7.355: вікно місяця, як у «Додаткових»: CFO — без обмежень; інші — [1 число .. сьогодні], а 1 числа ще й
+// попередній місяць. Бекенд перевіряє те саме (MONTH_LOCK) — тут лише не даємо клікнути.
+function _mealIsCfo(){ return !!(S.user && (String(S.user.role||'').toLowerCase()==='cfo' || Number(S.user.id)===1)); }
+function _mealIso(d){ return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2); }
+function _mealLocked(iso){
+  if (_mealIsCfo()) return false;
+  var now=new Date(), today=_mealIso(now);
+  var from=_mealIso(now.getDate()===1 ? new Date(now.getFullYear(), now.getMonth()-1, 1) : new Date(now.getFullYear(), now.getMonth(), 1));
+  return !(iso>=from && iso<=today);
+}
 function toggleMark(child,iso,id){ var k=markKey(child,iso,id);
+  if(_mealLocked(iso)){ toast('🔒 Місяць закрито — редагує лише CFO'); return; }   // v7.355
   if(S.marks[k]){ delete S.marks[k]; scheduleMealSync(); return; }   // v7.244                                   // активний → зняти
   S.marks[k]=true;
   if(isLunch(id)) lunchIds().forEach(function(oid){ if(oid!==id) delete S.marks[markKey(child,iso,oid)]; });   // ексклюзив обідів
@@ -946,7 +957,8 @@ async function saveMarks(silent){
   Object.keys(S.orig).forEach(function(k){ if(!S.marks[k]){ var p=k.split('||'); rems.push({date:p[1],child:p[0],itemId:+p[2],remove:true}); } });
   var marks=adds.concat(rems);
   if(!marks.length){ if(!silent) toast('Немає змін'); return true; }
-  var res=await apiPost({action:'addMealMark',loc:S.loc,markedBy:(S.user.role||'')+' '+(S.user.origLoc||S.user.loc||''),marks:marks});
+  var res=await apiPost({action:'addMealMark',loc:S.loc,actorId:S.user.id,markedBy:(S.user.role||'')+' '+(S.user.origLoc||S.user.loc||''),marks:marks});
+  if(res && res.ok && res.errors && res.errors.length){ toast('Не збережено '+res.errors.length+': '+res.errors[0]); }   // v7.355 відмова по окремих відмітках
   if(res && res.ok){
     S.orig=Object.assign({},S.marks); recalc();
     if(!silent) toast('Збережено: +'+(res.added||0)+' / −'+(res.removed||0));

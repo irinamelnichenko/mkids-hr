@@ -1843,9 +1843,10 @@ function isWeekLocked(dateISO){
   if (isCFO()) return false;
   if (!dateISO) return true;
   var now = new Date();
-  var first = _editIsoOf(new Date(now.getFullYear(), now.getMonth(), 1));
+  // v7.355: 1 числа відкрито ще й увесь попередній місяць (доправити пропущене); з 2 числа — ні
+  var first = _editIsoOf(now.getDate() === 1 ? new Date(now.getFullYear(), now.getMonth() - 1, 1) : new Date(now.getFullYear(), now.getMonth(), 1));
   var today = _editIsoOf(now);
-  return !(dateISO >= first && dateISO <= today);   // поза [1 число .. сьогодні] → locked
+  return !(dateISO >= first && dateISO <= today);   // поза [початок вікна .. сьогодні] → locked
 }
 
 function hasPerm(p){

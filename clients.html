@@ -1532,6 +1532,8 @@ function syncCRMCardToCloud(id){
   apiPost({action:'saveClient', data:payload}).then(function(res){
     // v7.111: для НОВОЇ картки бекенд повертає action:'created' + payment{status,...} — показуємо результат
     if(res && res.action==='created' && res.payment) _showPaymentResult(res.payment);
+    // v7.355: оновлення картки (дописали групу / змінили локацію / суму договору) — показуємо, якщо щось сталось
+    else if(res && res.payment && res.payment.status!=='exists') _showPaymentResult(res.payment);
   }).catch(function(e){
     console.warn('CRM sync failed for ' + id + ':', e);
   });
@@ -3841,6 +3843,7 @@ function _showPaymentResult(p){
   else if(p.status==='exists'){ msg='ℹ️ Дитина вже є в Payment'; type='info'; }
   else if(p.status==='no_group'){ msg='⚠️ Групи «'+(p.group||'')+'» немає в Payment — заведіть вручну'+((p.groups&&p.groups.length)?('. Наявні: '+p.groups.slice(0,8).join(', ')):''); type='err'; }
   else if(p.status==='skipped'){ return; }
+  else if(p.status==='budget'){ if(!(p.budgetMonths&&p.budgetMonths.length)) return; msg='✅ Бюджет навчання в Payment: '+p.budgetMonths.length+' міс'+((p.keptMonths&&p.keptMonths.length)?(' (не чіпали '+p.keptMonths.length+' міс, де вже є сума)'):''); type='ok'; }
   else { msg='⚠️ Payment: '+(p.error||'помилка'); type='err'; }
   try{ if(typeof showFloatMsg==='function') showFloatMsg(msg,type); else alert(msg); }catch(e){}
 }
@@ -4459,6 +4462,8 @@ var VAC_EXCEPTIONS=[
   'терешко макар','мельничук ксенія','шиш устим','черних поліна',
   // v7.323: Трембачов Герман (Кар'єрна) — дзеркало бекенду.
   'трембачов герман',
+  // v7.355: Борщагівка, Preschool ще на рік — дзеркало бекенду.
+  'іванченко маша','строй максим','ілай лихошенко','козеренко тимофій','ганна калашник','власюк соломія',
 ];
 
 // Тип договору з урахуванням локації (школи не ведуть облік відпусток)

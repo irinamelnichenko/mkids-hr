@@ -1,5 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.354
+// m.kids CRM — Google Apps Script v7.355
+// v7.355: (1) картка: дописана група / зміна локації → рядок у Payment (як для нової), дописана сума договору → бюджет навч
+//   у порожні місяці; статус у відповіді saveClient. (2) Вікно 1-го числа: 1 числа відкрито й попередній місяць
+//   (додаткові, предметники, харчування — харчування отримало замок місяця). (3) _VAC_EXCEPTIONS += 6 дітей Борщагівки.
 // v7.354: рахунок додаткових — застарілий експорт (відмітки змінили після експорту) більше не підписується «Борг
 //   попереднього періоду»: до сплати = відмітки + ручна правка (клітинка − записане експортом); extrasStale/extrasPayment у списку.
 // v7.353: рахунок — для ФОП підпис коду «РНОКПП», для юросіб «ЄДРПОУ».
@@ -6714,7 +6717,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.354', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.355', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -9171,7 +9174,8 @@ function saveClient(data) {
       _contractNumberAsText(sheet, r+1);                    // v7.276: № договору — текст, не дата
       sheet.getRange(r+1, 1, 1, row.length).setValues([row]);
       logGroupChange(data.id, data.name, data.loc, _oldGrpP, data.group, data.updatedBy || data.by || ''); // v7.47 ЕТАП 5
-      return {ok:true, action:'updated'};
+      var _payU = _paymentOnCardUpdate(data, vals[r]);   // v7.355
+      return _payU ? {ok:true, action:'updated', payment:_payU} : {ok:true, action:'updated'};
     }
   }
   // v7.24 АНТИ-ДУБЛЬ: id містить ГРУПУ (c_<ПІБ>_<група>_<локація>) → зміна групи
@@ -9205,7 +9209,8 @@ function saveClient(data) {
     _contractNumberAsText(sheet, cand + 1);                 // v7.276
     sheet.getRange(cand + 1, 1, 1, row.length).setValues([row]);
     logGroupChange(data.id, data.name, data.loc, _oldGrpM, data.group, data.updatedBy || data.by || ''); // v7.47 ЕТАП 5: перевід групи
-    return {ok:true, action:'updated-moved', mergedAbsences: mergedAbs.length};
+    var _payM = _paymentOnCardUpdate(data, vals[cand]);   // v7.355
+    return _payM ? {ok:true, action:'updated-moved', mergedAbsences: mergedAbs.length, payment:_payM} : {ok:true, action:'updated-moved', mergedAbsences: mergedAbs.length};
   }
   sheet.appendRow(row);
   try { var _lr = sheet.getLastRow(); _contractNumberAsText(sheet, _lr); if (row[19]) sheet.getRange(_lr, 20).setValue(String(row[19])); } catch(_cn){}   // v7.276
@@ -18887,8 +18892,16 @@ function _marksDateLockError(dateInput, isCfo){
   if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return 'Невірна дата: ' + dateInput;
   var today = Utilities.formatDate(new Date(), MARKS_LOCK_TZ, 'yyyy-MM-dd');
   if (iso > today) return 'MONTH_LOCK: ' + iso + ' — наперед відмічати не можна';
-  if (iso < today.slice(0, 8) + '01') return 'MONTH_LOCK: ' + iso + ' — місяць закрито, редагує лише CFO';
+  if (iso < _marksWindowFrom(today)) return 'MONTH_LOCK: ' + iso + ' — місяць закрито, редагує лише CFO';
   return '';
+}
+// v7.355: ВІКНО 1-го ЧИСЛА. Зазвичай відкрито [1 число поточного місяця .. сьогодні]. 1 числа —
+// ще й увесь попередній місяць (локації доправляють пропущене в день здачі). З 2 числа — ні.
+// Закриті CFO місяці («Закриті_Місяці») вікно не відкриває — їх ловить _closedGuard вище.
+function _marksWindowFrom(todayISO){
+  var y = Number(todayISO.slice(0, 4)), m = Number(todayISO.slice(5, 7)), d = Number(todayISO.slice(8, 10));
+  if (d === 1){ var pm = (m === 1) ? 12 : m - 1, py = (m === 1) ? y - 1 : y; return py + '-' + ('0' + pm).slice(-2) + '-01'; }
+  return todayISO.slice(0, 8) + '01';
 }
 // Пакетний запис у HR_Audit (один setValues замість N appendRow).
 function _writeHrAuditRows(actor, action, items){
@@ -19812,6 +19825,7 @@ function addMealMark(body){
     var existing = {};   // dupKey → rowNum(1-based)
     for (var e=1;e<vals.length;e++){ var k0=_mealDupKey(vals[e][1], vals[e][4], vals[e][5], tz); if (!existing.hasOwnProperty(k0)) existing[k0]=e+1; }
     var toAppend = [], toDelete = [], added=0, skipped=0, removed=0, errors=[];
+    var _mealActor = _marksActorInfo(body.actorId), _mealIsCfo = String(_mealActor.role || '').toLowerCase() === 'cfo' || Number(_mealActor.id) === 1;   // v7.355
     var nextId = _nextMealId(sh, vals);
     marks.forEach(function(mk){
       var date = String(mk.date||'').slice(0,10);
@@ -19819,6 +19833,7 @@ function addMealMark(body){
       var itemId = Number(mk.itemId)||0;
       if (!date || !child || !itemId){ errors.push('пропущено (date/child/itemId): '+JSON.stringify(mk)); return; }
       var _cg = _closedGuard(date); if (_cg){ errors.push('закритий місяць: '+date+' '+child); skipped++; return; }   // v7.291
+      var _ml = _marksDateLockError(date, _mealIsCfo); if (_ml){ errors.push(_ml + ' · ' + child); skipped++; return; }   // v7.355 вікно місяця (як додаткові)
       var k = _mealDupKey(date, child, itemId, tz);
       if (mk.remove){ if (typeof existing[k]==='number'){ toDelete.push(existing[k]); delete existing[k]; removed++; } return; }
       if (existing.hasOwnProperty(k)){ skipped++; return; }
@@ -21587,6 +21602,9 @@ var _VAC_EXCEPTIONS = [
   'терешко макар','мельничук ксенія','шиш устим','черних поліна',
   // v7.323 (24.09.2026): Кар'єрна, Preschool, договір до 01.10.2025 — відпустка 21–25.09 поза літом.
   'трембачов герман',
+  // v7.355 (01.10.2026): Борщагівка, Preschool ще на рік — право на відпустку зберігається.
+  // Ключі = ПІБ карток («Іванченко Маша», «Ганна Калашник» — так у картках). Використані відпустки не перераховуються.
+  'іванченко маша','строй максим','ілай лихошенко','козеренко тимофій','ганна калашник','власюк соломія',
 ];
 // preschool-відпустка зараховується як standard ЛИШЕ якщо весь період у літі
 // (місяці from і to в межах 06–08) — дзеркало saveAbsencePeriod у clients.html.
@@ -22684,6 +22702,45 @@ function _autoCreatePaymentForNewCard(data){
     // 3) переагрегувати ЛИШЕ цю локацію (не всю мережу)
     var ag = _aggregateOneLoc(loc);
     return {status:'created', row:ap.insertAtRow, group:group, budgetMonths:budgetMonths, aggregated:!!(ag && ag.ok)};
+  } catch(e){ return {status:'error', error:String(e && e.message || e)}; }
+}
+
+// v7.355: те саме для ОНОВЛЕННЯ картки. Дірка v7.111: картка зберігається автоматично через 1,5 с після
+// відкриття, перше збереження часто йде БЕЗ групи → авто-заведення тихо пропускалось, а дописана потім
+// група — це вже «оновлення», яке Payment не чіпало (прецедент: Прохоренко Олександра, Школа 228).
+// Тригери (лише для живої картки: active/adaptation/future):
+//   A) група була порожня і з'явилась, або змінилась локація → рядок у Payment (+бюджет, +агрегат);
+//   B) сума договору була 0 і з'явилась → бюджет навчання з поточного місяця до грудня, ЛИШЕ в
+//      клітинки, де зараз 0 (знижки/ручні бюджети не затираються).
+// Не валить збереження — повертає статус (UI показує його так само, як для нової картки).
+function _paymentOnCardUpdate(data, oldRow){
+  try {
+    if (!oldRow) return null;
+    var st = String(data.status || 'active').trim().toLowerCase();
+    if (['active','adaptation','future'].indexOf(st) === -1) return null;
+    var loc = String(data.loc || '').trim(), name = String(data.name || '').trim(), group = String(data.group || '').trim();
+    if (!loc || !name || !group) return null;
+    var oldGroup = String(oldRow[3] || '').trim(), oldLoc = String(oldRow[2] || '').trim();
+    var oldFee = Number(oldRow[12]) || 0, newFee = Number(data.monthlyFee) || 0;
+    var by = data.updatedBy || data.by || '';
+    if (!oldGroup || _nameFold(oldLoc) !== _nameFold(loc)){
+      var r = _autoCreatePaymentForNewCard(data);
+      if (r) r.trigger = !oldGroup ? 'group-added' : 'loc-changed';
+      return r;
+    }
+    if (oldFee <= 0 && newFee > 0){
+      var y = (new Date()).getFullYear(), m0 = (new Date()).getMonth() + 1, filled = [], kept = [];
+      for (var m = m0; m <= 12; m++){
+        var pre = setLocPaymentBudget({loc:loc, name:name, year:y, month:m, value:newFee, dryRun:true});
+        if (!pre || !pre.ok){ if (m === m0) return {status:'error', error:(pre && pre.error) || 'бюджет не записано', trigger:'fee-added'}; continue; }
+        if (Number(pre.before) !== 0){ kept.push(m); continue; }
+        var sb = setLocPaymentBudget({loc:loc, name:name, year:y, month:m, value:newFee, dryRun:false, by:by, reason:'авто-бюджет: сума договору дописана в картку'});
+        if (sb && sb.ok) filled.push(m);
+      }
+      if (filled.length) _aggregateOneLoc(loc);
+      return {status:'budget', budgetMonths:filled, keptMonths:kept, trigger:'fee-added'};
+    }
+    return null;
   } catch(e){ return {status:'error', error:String(e && e.message || e)}; }
 }
 
