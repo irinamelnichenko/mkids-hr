@@ -1,5 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.360
+// m.kids CRM — Google Apps Script v7.361
+// v7.361: рахунки — дублі рядків «Оплати-Рік» складаються (Школа Осокорки: нульові «(без групи)» обнуляли суми);
+//   «пані/пане» у Viber і листі Школи Осокорки; експорт ЗП додаткових знаходить рядок з цифрами в назві (кінець дублям «Арт450»);
+//   renameDopActivity, cleanupSalaryDupRows.
 // v7.360: бренд у рахунках Школи Осокорки — «m.Primary Осокорки» (Viber, email: тема/текст/відправник, PDF-плашка); Viber-заголовок + «та харчування».
 // v7.359: заголовок рахунку за додаткові + «та харчування», якщо в ньому є харчування.
 // v7.358: getPaymentRowsWithoutCards — лише діти з бюджетом ПОТОЧНОГО місяця; школярі під-локації з карткою в хоста — не показуються.
@@ -6724,7 +6727,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.360', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.361', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -6888,6 +6891,8 @@ function doPost(e) {
     else if (body.action === 'unconfirmBdayMatch')        result = unconfirmBdayMatch(body.childId || '');
     else if (body.action === 'authenticate')              result = authenticate(body.login || '', body.password || '');
     else if (body.action === 'updatePassword')            result = updatePassword(body.userId || 0, body.newPassword || '');
+    else if (body.action === 'renameDopActivity')         result = renameDopActivity(body || {});       // v7.361 перейменування заняття: каталог + відмітки + Salary + журнал (CFO, dryRun)
+    else if (body.action === 'cleanupSalaryDupRows')      result = cleanupSalaryDupRows(body || {});    // v7.361 видалення дубль-рядків Salary без факту (CFO, dryRun, YES_DELETE)
     else if (body.action === 'createCardFromPayment')     result = createCardFromPayment(body || {});   // v7.357 картка з рядка Payment (ПІБ як у Payment)
     else if (body.action === 'setLocRequisite')           result = setLocRequisite(body || {});      // v7.352 правка реквізитів (CFO, dryRun, архів старого IBAN, журнал)
     else if (body.action === 'addLocationUser')           result = addLocationUser(body || {});      // v7.351 один акаунт локації (CFO, dryRun)
@@ -23504,6 +23509,18 @@ function exportToSalaryExtras(params){
         actRowByLname[rname] = cr.row;
       }
     });
+    // v7.361: рядок, чия назва закінчується цифрами («Арт450»), класифікатор вважає рядком предметника — у
+    // extras-карті його немає, тож експорт на КОЖНОМУ запуску додавав новий (Борщагівка 30.09: 57 рядків).
+    // Другий шанс: точний збіг назви серед будь-яких рядків НИЖЧЕ заголовка «Додаткові заняття».
+    var _extrasHdr = 0;
+    classifiedRows.forEach(function(cr){ if (!_extrasHdr && cr._section === 'extras' && cr._category === 'section_header') _extrasHdr = cr.row; });
+    if (_extrasHdr){
+      classifiedRows.forEach(function(cr){
+        if (cr.row <= _extrasHdr || cr._category === 'section_header' || cr._category === 'group_header') return;
+        var rn2 = _journalNormName(cr.name);
+        if (rn2 && !actRowByLname.hasOwnProperty(rn2)) actRowByLname[rn2] = cr.row;
+      });
+    }
     Logger.log('[exportToSalaryExtras] actRowByLname (тільки extras-секція): %s', JSON.stringify(actRowByLname));
     var _salaryFoldedRowMap = {};
     Object.keys(actRowByLname).forEach(function(k){
@@ -24693,6 +24710,92 @@ function createCardFromPayment(body){
   return res;
 }
 
+// ═══ v7.361: ПЕРЕЙМЕНУВАННЯ ЗАНЯТТЯ ДОДАТКОВИХ скрізь + ПРИБИРАННЯ ДУБЛЬ-РЯДКІВ SALARY ════════════
+// renameDopActivity — одна назва в каталозі, відмітках, рядку Salary і журналі експорту ЗП. Інакше після
+// перейменування в каталозі експорт ЗП не знаходить рядок і плодить новий (див. «Арт450», Борщагівка).
+// POST {action:'renameDopActivity', loc, activityId, newName, fromName?, catalog:true, marks:true, salary:true, dryRun, actorId}
+//   fromName — стара назва у відмітках/Salary (за замовч. — поточна назва в каталозі).
+function renameDopActivity(body){
+  body = body || {};
+  var dryRun = (body.dryRun !== false), loc = trim(String(body.loc || '')), aid = Number(body.activityId) || 0, nn = trim(String(body.newName || ''));
+  var actor = null; try { actor = _getActor((_CURRENT_AUTH && _CURRENT_AUTH.id) || body.actorId); } catch(_a){}
+  if (!actor || _roleKey(actor.role) !== 'cfo') return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  if (!loc || !aid || !nn) return {ok:false, error:'loc, activityId, newName обовʼязкові'};
+  var res = {ok:true, dryRun:dryRun, loc:loc, activityId:aid, newName:nn};
+  var lock = LockService.getScriptLock(); try { lock.waitLock(30000); } catch(_l){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+  try {
+    // каталог
+    var csh = _getActivitiesSheet(false), cv = csh.getDataRange().getValues(), cRow = -1, oldName = '';
+    for (var i = 1; i < cv.length; i++) if (Number(cv[i][0]) === aid && trim(String(cv[i][1] || '')) === loc){ cRow = i + 1; oldName = trim(String(cv[i][2] || '')); break; }
+    if (cRow < 0) return {ok:false, error:'Заняття id ' + aid + ' у «' + loc + '» не знайдено'};
+    var from = trim(String(body.fromName || oldName)), fk = _journalNormName(from);
+    res.catalogFrom = oldName; res.fromName = from;
+    res.catalog = (body.catalog !== false && oldName !== nn) ? {row:cRow, before:oldName, after:nn} : null;
+    // відмітки (усі дати)
+    var ash = _getAttendanceSheet(false), av = ash.getDataRange().getValues(), mRows = [];
+    for (var r = 1; r < av.length; r++){
+      if (trim(String(av[r][2] || '')) !== loc || Number(av[r][5]) !== aid) continue;
+      if (_journalNormName(av[r][6]) !== fk || trim(String(av[r][6] || '')) === nn) continue;
+      mRows.push(r + 1);
+    }
+    res.marks = (body.marks !== false) ? mRows.length : 0;
+    // Salary: рядки з назвою from (будь-яка секція нижче заголовка «Додаткові заняття» або в ній)
+    var sRows = [], sEntry = null;
+    if (body.salary !== false){
+      var reg = _salaryGetRegistry(); (reg.rows || []).forEach(function(e){ if (e.loc === loc && !e.virtual) sEntry = e; });
+      if (sEntry){
+        var ssh = SpreadsheetApp.openById(sEntry.sheetId).getSheetByName(sEntry.listName), sA = ssh.getRange(1, 1, ssh.getLastRow(), 1).getValues();
+        for (var q = 3; q < sA.length; q++) if (_journalNormName(sA[q][0]) === fk) sRows.push(q + 1);
+        res.salaryRows = sRows; res.salarySheet = sEntry.listName;
+      } else res.salaryRows = [];
+    }
+    // журнал експорту ЗП
+    var jsh = _getExportJournalSheet(), jv = jsh.getDataRange().getValues(), jRows = [];
+    if (body.salary !== false) for (var j = 1; j < jv.length; j++) if (trim(String(jv[j][0])) === loc && trim(String(jv[j][1])) === 'salary' && _journalNormName(jv[j][2]) === fk) jRows.push(j + 1);
+    res.journalRows = jRows.length;
+    if (dryRun) return res;
+    if (res.catalog) csh.getRange(cRow, 3).setValue(nn);
+    if (body.marks !== false) mRows.forEach(function(rr){ ash.getRange(rr, 7).setValue(nn); });
+    if (sRows.length){ var ssh2 = SpreadsheetApp.openById(sEntry.sheetId).getSheetByName(sEntry.listName); sRows.forEach(function(rr){ ssh2.getRange(rr, 1).setValue(nn); }); _salaryBump(loc); }
+    jRows.forEach(function(rr){ jsh.getRange(rr, 3).setValue(nn); });
+    try { _writeHrAuditRows(_marksActorInfo(body.actorId), 'rename_activity', [{loc:loc, id:aid, from:from, to:nn, marks:mRows.length, salary:sRows.length}]); } catch(_w){}
+    res.written = true;
+    return res;
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { try { lock.releaseLock(); } catch(_r){} }
+}
+// POST {action:'cleanupSalaryDupRows', loc, name, dryRun, confirm:'YES_DELETE'} — видаляє рядки Salary з ТОЧНО такою
+// назвою, у яких ФАКТ за всі місяці = 0 (бюджет-план можна). Знімок аркуша перед видаленням, знизу вгору.
+function cleanupSalaryDupRows(body){
+  body = body || {};
+  var dryRun = (body.dryRun !== false), loc = trim(String(body.loc || '')), name = trim(String(body.name || ''));
+  var actor = null; try { actor = _getActor((_CURRENT_AUTH && _CURRENT_AUTH.id) || body.actorId); } catch(_a){}
+  if (!actor || _roleKey(actor.role) !== 'cfo') return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  if (!loc || !name) return {ok:false, error:'loc і name обовʼязкові'};
+  if (!dryRun && body.confirm !== 'YES_DELETE') return {ok:false, error:'Видалення вимагає confirm:"YES_DELETE"'};
+  var reg = _salaryGetRegistry(), entry = null; (reg.rows || []).forEach(function(e){ if (e.loc === loc && !e.virtual) entry = e; });
+  if (!entry) return {ok:false, error:'Salary для «' + loc + '» не знайдено'};
+  var ss = SpreadsheetApp.openById(entry.sheetId), sh = ss.getSheetByName(entry.listName);
+  var lc = Math.max(sh.getLastColumn(), 37), v = sh.getRange(1, 1, sh.getLastRow(), lc).getValues(), nk = _journalNormName(name);
+  var del = [], kept = [], budget = 0;
+  for (var r = 3; r < v.length; r++){
+    if (_journalNormName(v[r][0]) !== nk) continue;
+    var fact = 0, bud = 0; for (var m = 1; m <= 12; m++){ fact += _opexNum(v[r][(m - 1) * 3 + 1]); bud += _opexNum(v[r][(m - 1) * 3 + 2]); }
+    if (fact !== 0) kept.push({row:r + 1, fact:fact}); else { del.push(r + 1); budget += bud; }
+  }
+  var res = {ok:true, dryRun:dryRun, loc:loc, name:name, willDelete:del.length, rows:del, budgetRemoved:budget, keptWithFact:kept};
+  if (dryRun || !del.length) return res;
+  var lock = LockService.getScriptLock(); try { lock.waitLock(30000); } catch(_l){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+  try {
+    res.backupSheet = _salaryBackupSheet(ss, sh, entry.listName);
+    del.slice().sort(function(a, b){ return b - a; }).forEach(function(rr){ sh.deleteRow(rr); });
+    _salaryBump(loc);
+    res.deleted = del.length;
+    return res;
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { try { lock.releaseLock(); } catch(_r){} }
+}
+
 // v7.357: дані харчування для рахунків. Кеш на одне виконання (масова розсилка кличе getInvoiceListData на кожну дитину).
 var _INV_MEAL_MEMO = {};
 function _invMealData(loc, payMonth, payYear, extMonth, extYear){
@@ -24797,8 +24900,10 @@ function getInvoiceListData(params){
             if (_isYearlyDeparted(pvals[pr], depIdx)) continue;   // v7.299: вибулі — не для рахунків
             var pname = String(pvals[pr][nameIdx]).trim();
             if (!pname) continue;
-            paymentByName[pname]   = Number(pvals[pr][budIdx]) || 0;
-            extrasByPayment[pname] = dopIdx >= 0 ? (Number(pvals[pr][dopIdx]) || 0) : 0;
+            // v7.361: та сама дитина двічі в Payment (Школа Осокорки: рядок у класі + старий рядок «(без групи)»
+            // з нулями) — СКЛАДАЄМО. Раніше останній рядок перезаписував перший, і рахунок показував 0.
+            paymentByName[pname]   = (paymentByName[pname]   || 0) + (Number(pvals[pr][budIdx]) || 0);
+            extrasByPayment[pname] = (extrasByPayment[pname] || 0) + (dopIdx >= 0 ? (Number(pvals[pr][dopIdx]) || 0) : 0);
           }
         }
       }
@@ -24977,6 +25082,8 @@ function _invoicePurposeTitle(type, childName, m, y, hasMeals){
 function _invIsMPrimary(loc){ return _normForMatch(loc) === _normForMatch('Школа Осокорки'); }
 function _invBrandName(loc){ return _invIsMPrimary(loc) ? 'm.Primary Осокорки' : ('m.kids ' + loc); }
 function _invBrandShort(loc){ return _invIsMPrimary(loc) ? 'm.Primary' : 'm.kids'; }
+// v7.361: звертання «пані»/«пане» (кличний) перед іменем батьків — так прийнято в Школі Осокорки. Решта — як було.
+function _invHonorific(loc, signerParent){ if (!_invIsMPrimary(loc)) return ''; return signerParent === 'dad' ? 'пане ' : 'пані '; }
 
 function _firstName(full){
   var parts = String(full || '').trim().split(/\s+/);
@@ -25020,7 +25127,7 @@ function invoiceViberMessage(opts){
     if (!r || !r.ok){ errs.push((ty.t === 'extras' ? 'Додаткові' : 'Навчання') + ': ' + ((r && r.error) || '?')); continue; }
     grand += Number(r.sum) || 0;
     var fn = _firstName(r.buyerName);
-    var greet = fn ? ('Доброго дня, ' + _vocativeUa(fn) + '! 🌞') : 'Доброго дня! 🌞';
+    var greet = fn ? ('Доброго дня, ' + _invHonorific(loc, r.signerParent) + _vocativeUa(fn) + '! 🌞') : 'Доброго дня! 🌞';   // v7.361 «пані/пане» (Школа Осокорки)
     var title = _invoicePurposeTitle(ty.t, childName, ty.m, ty.y, (r.lines || []).some(function(x){ return /^Харчування/.test(String(x.name || '')) || /\(харчування\)/.test(String(x.name || '')); }));
     var L = [];
     L.push('*' + _invBrandName(loc) + '*');   // v7.360: Школа Осокорки — «m.Primary Осокорки»
@@ -25215,7 +25322,7 @@ function generateInvoicePDF(opts){
   // (_getNextInvoiceNumber інкрементує лічильник) та БЕЗ важкої побудови PDF (HTML→PDF).
   if (opts.dataOnly){
     Logger.log('[TIMING] ВСЬОГО dataOnly (від _getInvoiceRequisites): %s ms', Date.now()-_ts);
-    return {ok:true, sum:total, juName:req.name, edrpou:req.edrpou, iban:req.iban,
+    return {ok:true, sum:total, signerParent:client.signerParent, juName:req.name, edrpou:req.edrpou, iban:req.iban,   // v7.361 signerParent → звертання
             bank:req.bank, payLink:req.payLink, lines:lines, buyerName:buyerDisplay,
             needsContract:_needsContract, sumWords:_numberToUkrainianWords(total)};
   }
@@ -25316,7 +25423,7 @@ function _logInvoiceSend(row){
 function _invTypeUk(type){ return type === 'extras' ? 'Додаткові' : 'Навчання'; }
 
 // Короткий HTML-лист (перелік рахунків з ЮО/сумою/№).
-function _buildInvoiceEmailHtml(childName, monthLabel, invoices, loc){
+function _buildInvoiceEmailHtml(childName, monthLabel, invoices, loc, greetName){
   var rows = invoices.map(function(inv){
     return '<li><b>' + inv.typeUk + '</b> — ' + _fmtUah(inv.sum) + ' грн' +
       ' <span style="color:#666">(' + inv.juName + ', ЄДРПОУ ' + inv.edrpou +
@@ -25324,7 +25431,7 @@ function _buildInvoiceEmailHtml(childName, monthLabel, invoices, loc){
   }).join('');
   return [
     '<div style="font-family:Arial,sans-serif;font-size:14px;color:#222;line-height:1.6">',
-    '<p>Доброго дня!</p>',
+    '<p>Доброго дня' + (greetName ? ', ' + greetName : '') + '!</p>',   // v7.361
     '<p>Надсилаємо рахунки <b>' + (_invIsMPrimary(loc) ? _invBrandName(loc) : 'm.kids') + '</b> за <b>' + monthLabel + '</b> для <b>' + childName + '</b>:</p>',   // v7.360
     '<ul>' + rows + '</ul>',
     '<p>Деталі та банківські реквізити — у вкладених PDF-файлах.</p>',
@@ -25388,7 +25495,8 @@ function sendInvoiceEmail(opts){
                  : (extMonth >= 1 && extMonth <= 12) ? (MONTHS_CAL[extMonth-1] + ' ' + extYear) : '';
   var _br = _invIsMPrimary(loc) ? _invBrandName(loc) : 'm.kids';   // v7.360
   var subject = 'Рахунок ' + _br + ' — ' + monthLabel + ' — ' + childName;
-  var html    = _buildInvoiceEmailHtml(childName, monthLabel, invoices, loc);
+  var _gfn = _firstName(cd.signerName);   // v7.361: Школа Осокорки — «пані/пане Ім'я»
+  var html    = _buildInvoiceEmailHtml(childName, monthLabel, invoices, loc, (_invIsMPrimary(loc) && _gfn) ? (_invHonorific(loc, cd.signerParent) + _vocativeUa(_gfn)) : '');
   var plain   = 'Доброго дня! Надсилаємо рахунки ' + _br + ' за ' + monthLabel + ' для ' + childName +
                 '. Деталі — у вкладених PDF.';
 
@@ -26137,15 +26245,15 @@ function _invoiceSumFromYearly(childName, loc, month, type){
       nameIdx, locIdx, budIdx, MONTHS_CAL[month - 1] + col);
     return 0;
   }
-  var nn = String(childName).trim(), ll = String(loc).trim();
+  var nn = String(childName).trim(), ll = String(loc).trim(), _sumY = 0;
   var depIdx = _yearlyDepartedIdx(h);   // v7.299
   for (var r = 1; r < vals.length; r++){
     if (String(vals[r][locIdx]).trim() !== ll) continue;
     if (String(vals[r][nameIdx]).trim() !== nn) continue;
     if (_isYearlyDeparted(vals[r], depIdx)) continue;
-    return Number(vals[r][budIdx]) || 0;
+    _sumY += Number(vals[r][budIdx]) || 0;   // v7.361: дублі рядків — складаємо (як у списку рахунків)
   }
-  return 0;
+  return _sumY;
 }
 
 // Атомарний наступний номер per ЄДРПОУ з аркуша "Лічильники_Рахунків". З 1.
