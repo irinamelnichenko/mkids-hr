@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.352
+// m.kids CRM — Google Apps Script v7.353
+// v7.353: рахунок — для ФОП підпис коду «РНОКПП», для юросіб «ЄДРПОУ».
 // v7.352: реквізити локацій — getLocRequisites, setLocRequisite (CFO, dryRun, старий IBAN → архівний рядок для звірки, журнал «Реквізити_Правки»);
 //   generateInvoicePDF preview=1 — рахунок-зразок без номера з лічильника.
 // v7.351: рахунки під-локації «Школа Кар'єрна» — діти з блоку «Школа» хоста (картки, відмітки) + Оплати-Рік школи; PDF знаходить картку в хоста.
@@ -6711,7 +6712,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.352', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.353', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -25931,7 +25932,7 @@ function _buildInvoiceHtml(d){
 '  <h1>' + d.title + '</h1>',
 '  <div class="party">',
 '    <div><b>Постачальник:</b> ' + req.name + '</div>',
-'    <div>ЄДРПОУ: ' + req.edrpou + '</div>',
+'    <div>' + ((req.isFOP || /^\d{10}$/.test(String(req.edrpou || '').trim())) ? 'РНОКПП' : 'ЄДРПОУ') + ': ' + req.edrpou + '</div>',   // v7.353: ФОП — РНОКПП, юрособа — ЄДРПОУ
 '    <div>IBAN: ' + req.iban + '</div>',
 '    <div>Банк: ' + req.bank + '</div>',
 '    ' + taxLine,
