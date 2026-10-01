@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.362
+// m.kids CRM — Google Apps Script v7.363
+// v7.363: «Хіміків (Благо)» у LOCATION_USER_LOCS і LOCATION_ORDER.
+// v7.363: «Хіміків (Благо)» у списках (замість «Хіміків»).
 // v7.362: нова локація — diagSpreadsheet (перевірка файлу, лише читання), registerLocation (реєстри CONFIG за зразком, CFO, dryRun);
 //   «Хіміків» (Управління) у LOCATION_USER_LOCS і LOCATION_ORDER.
 // v7.361: рахунки — дублі рядків «Оплати-Рік» складаються (Школа Осокорки: нульові «(без групи)» обнуляли суми);
@@ -915,7 +917,7 @@ var LOCATION_ORDER = [
   'Осокорки','Позняки','Тичини',"Кар'єрна",'Голосієво','Пуща',
   'Оранж','Борщагівка','Бровари','Кругла','Бігова',
   'Школа Осокорки','Школа 228','Житомир',
-  'Нац.Гвардії (Благо)','Манхетен (Благо)','Хіміків',
+  'Нац.Гвардії (Благо)','Манхетен (Благо)','Хіміків (Благо)',
   'Онлайн школа','Кухня Київ','Кухня Львів','Іва-Франківськ кухня'
 ];
 function locationRank(name){
@@ -6729,7 +6731,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.362', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.363', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -30403,7 +30405,7 @@ var LOCATION_USER_LOCS = [
   'Осокорки','Позняки','Тичини',"Кар'єрна",'Голосієво','Пуща','Оранж',
   'Борщагівка','Бровари','Кругла','Бігова',
   'Школа Осокорки','Школа 228',
-  'Житомир','Нац.Гвардії (Благо)','Манхетен (Благо)','Хіміків',
+  'Житомир','Нац.Гвардії (Благо)','Манхетен (Благо)','Хіміків (Благо)',
   'Кухня Київ','Кухня Львів','Іва-Франківськ кухня'
 ];
 
