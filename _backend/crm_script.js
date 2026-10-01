@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.351
+// m.kids CRM — Google Apps Script v7.352
+// v7.352: реквізити локацій — getLocRequisites, setLocRequisite (CFO, dryRun, старий IBAN → архівний рядок для звірки, журнал «Реквізити_Правки»);
+//   generateInvoicePDF preview=1 — рахунок-зразок без номера з лічильника.
 // v7.351: рахунки під-локації «Школа Кар'єрна» — діти з блоку «Школа» хоста (картки, відмітки) + Оплати-Рік школи; PDF знаходить картку в хоста.
 // v7.350: редагований довідник норм 2027 «OPEX_Норми_2027» (садки + школи): норма групи «* Садки / * Школи» + правила
 //   локацій; getOpexNorms27, opexNorms27Seed (старт з формул 2026, dryRun), opexNorms27Save (CFO, журнал правок). Файли не чіпає.
@@ -6709,7 +6711,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.351', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.352', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -6823,6 +6825,7 @@ function doGet(e) {
     else if (action === 'getEmployees')               result = getEmployees(Number(e.parameter && e.parameter.actorId || 0), e.parameter && e.parameter.loc || '');
     else if (action === 'getPredmetnyky')              result = getPredmetnyky(Number(e.parameter && e.parameter.actorId || 0), Number(e.parameter && e.parameter.year || 0), Number(e.parameter && e.parameter.month || 0)); // v7.80: місячний зріз
     else if (action === 'getInvoiceListData')          result = getInvoiceListData(e.parameter || {});
+    else if (action === 'getLocRequisites')            result = getLocRequisites(e.parameter || {});   // v7.352 реквізити локацій (читання)
     else if (action === 'generateInvoicePDF')          result = generateInvoicePDF(e.parameter || {}); // v6.50
     else if (action === 'getInvoiceStatusReport')      result = getInvoiceStatusReport(e.parameter || {}); // v6.50.3
     else if (action === 'getFillStatus')               result = getFillStatus(e.parameter || {}, String(e.parameter.nocache || '') === '1');   // v6.51; v7.293 кеш 5 хв
@@ -6871,6 +6874,7 @@ function doPost(e) {
     else if (body.action === 'unconfirmBdayMatch')        result = unconfirmBdayMatch(body.childId || '');
     else if (body.action === 'authenticate')              result = authenticate(body.login || '', body.password || '');
     else if (body.action === 'updatePassword')            result = updatePassword(body.userId || 0, body.newPassword || '');
+    else if (body.action === 'setLocRequisite')           result = setLocRequisite(body || {});      // v7.352 правка реквізитів (CFO, dryRun, архів старого IBAN, журнал)
     else if (body.action === 'addLocationUser')           result = addLocationUser(body || {});      // v7.351 один акаунт локації (CFO, dryRun)
     else if (body.action === 'addUser')                   result = addUser(body.data || {});
     else if (body.action === 'deactivateUser')            result = deactivateUser(body.userId || 0);
@@ -24912,7 +24916,8 @@ function generateInvoicePDF(opts){
             needsContract:_needsContract, sumWords:_numberToUkrainianWords(total)};
   }
 
-  var invoiceNumber = _getNextInvoiceNumber(req.edrpou, req.name);
+  // v7.352: preview — рахунок-зразок для перевірки реквізитів, БЕЗ витрати номера з лічильника ЮО
+  var invoiceNumber = (opts.preview === true || opts.preview === '1' || opts.preview === 'true') ? 'ЗРАЗОК' : _getNextInvoiceNumber(req.edrpou, req.name);
 
   var _mLabel = (MONTHS_CAL[month - 1] || '').toLowerCase() + ' ' + year;
   var _title = (type === 'extras')
@@ -25703,6 +25708,69 @@ function _getInvoiceRequisites(loc, type){
     };
   }
   return {ok:false, error:'Не знайдено реквізити для loc="' + loc + '" тип="' + typeUk + '"'};
+}
+
+// ═══ v7.352: РЕКВІЗИТИ ЛОКАЦІЙ — перегляд і правка з системи (лише CFO) ═══════════════════════════
+// Лист CONFIG «Реквізити_Локацій»: A Локація | B Тип | C Назва ЮО | D ЄДРПОУ | E IBAN | F Банк | G Посилання_на_оплату | H Лого.
+// Рахунок бере ПЕРШИЙ рядок локації з типом (_getInvoiceRequisites); звірка виписки шукає ЛОКАЦІЮ за IBAN
+// (_resolveAccountByIban). Тому при зміні IBAN старий рахунок лишаємо окремим рядком-«архівом»: платежі,
+// що ще прийдуть на старий IBAN, звірка впізнає, а в нові рахунки архівний рядок не потрапляє
+// (тип «Додаткові (архів …)» не проходить фільтр рахунків, але містить «додатков» для звірки).
+var REQ_LOG_SHEET  = 'Реквізити_Правки';
+var REQ_LOG_HEADER = ['Коли','Хто','Локація','Тип','Поле','Було','Стало'];
+// GET ?action=getLocRequisites[&loc=…]
+function getLocRequisites(p){
+  p = p || {};
+  var sh = SpreadsheetApp.openById(CONFIG_SHEET_ID).getSheetByName('Реквізити_Локацій');
+  if (!sh) return {ok:false, error:'немає листа Реквізити_Локацій'};
+  var v = sh.getDataRange().getDisplayValues(), f = trim(String(p.loc || '')), out = [];
+  for (var r = 1; r < v.length; r++){ if (!trim(v[r][0])) continue; if (f && _normForMatch(v[r][0]) !== _normForMatch(f)) continue;
+    out.push({row:r + 1, loc:v[r][0], type:v[r][1], name:v[r][2], edrpou:v[r][3], iban:v[r][4], bank:v[r][5], payLink:v[r][6], logo:v[r][7]}); }
+  var used = {}; if (f){ ['studies','extras'].forEach(function(t){ var q = _getInvoiceRequisites(f, t); used[t] = q.ok ? q : {error:q.error}; }); }
+  return {ok:true, header:v[0], rows:out, usedForInvoices:used};
+}
+// POST {action:'setLocRequisite', loc, type:'extras'|'studies', name, edrpou, iban, bank, payLink?, archiveOld:true, dryRun, actorId}
+function setLocRequisite(body){
+  body = body || {};
+  var dryRun = (body.dryRun !== false), loc = trim(String(body.loc || '')), type = body.type === 'extras' ? 'extras' : 'studies';
+  var actor = null; try { actor = _getActor((_CURRENT_AUTH && _CURRENT_AUTH.id) || body.actorId); } catch(_a){}
+  if (!actor || _roleKey(actor.role) !== 'cfo') return {ok:false, code:'PERM_DENIED', error:'Реквізити змінює лише CFO'};
+  var nv = {name:trim(body.name), edrpou:String(body.edrpou || '').replace(/\D/g, ''), iban:String(body.iban || '').replace(/\s+/g, '').toUpperCase(), bank:trim(body.bank)};
+  if (!nv.name || !nv.edrpou || !nv.iban || !nv.bank) return {ok:false, error:'потрібні name, edrpou, iban, bank'};
+  if (!/^UA\d{27}$/.test(nv.iban)) return {ok:false, error:'IBAN має бути UA + 27 цифр'};
+  if (!/^(\d{8}|\d{10})$/.test(nv.edrpou)) return {ok:false, error:'Код: 8 (ЄДРПОУ) або 10 (РНОКПП) цифр'};
+  var lock = LockService.getScriptLock(); try { lock.waitLock(20000); } catch(_l){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+  try {
+    var sh = SpreadsheetApp.openById(CONFIG_SHEET_ID).getSheetByName('Реквізити_Локацій');
+    var v = sh.getDataRange().getValues(), row = -1;
+    for (var r = 1; r < v.length; r++){
+      if (_normForMatch(v[r][0]) !== _normForMatch(loc)) continue;
+      var tv = String(v[r][1] || '').trim().toLowerCase();
+      var isEx = tv.indexOf('гуртк') >= 0 || tv.indexOf('додаткових занять') >= 0 || tv === 'додаткові заняття';
+      var isSt = !isEx && tv.indexOf('навчання') >= 0;
+      if (type === 'extras' ? isEx : isSt){ row = r; break; }      // той самий рядок, що бере рахунок
+    }
+    if (row < 0) return {ok:false, error:'рядок «' + loc + ' / ' + (type === 'extras' ? 'додаткові' : 'навчання') + '» не знайдено'};
+    var old = {name:String(v[row][2] || '').trim(), edrpou:String(v[row][3] || '').trim(), iban:String(v[row][4] || '').replace(/\s+/g, '').toUpperCase(), bank:String(v[row][5] || '').trim(), payLink:String(v[row][6] || '').trim()};
+    var cols = {name:3, edrpou:4, iban:5, bank:6}, changes = [];
+    Object.keys(cols).forEach(function(k){ if (String(old[k]) !== String(nv[k])) changes.push({field:k, before:old[k], after:nv[k]}); });
+    if (body.payLink !== undefined && String(body.payLink || '').trim() !== old.payLink) changes.push({field:'payLink', before:old.payLink, after:String(body.payLink || '').trim()});
+    var dup = null; for (var q = 1; q < v.length; q++){ if (q !== row && String(v[q][4] || '').replace(/\s+/g, '').toUpperCase() === nv.iban) dup = {row:q + 1, loc:v[q][0], type:v[q][1]}; }
+    var archive = (body.archiveOld !== false) && old.iban && old.iban !== nv.iban;
+    var archRow = archive ? [v[row][0], (type === 'extras' ? 'Додаткові (архів, до ' : 'Архів навч. рахунку (до ') + formatDate(new Date()).slice(0, 10) + ')', old.name, old.edrpou, old.iban, old.bank, '', ''] : null;
+    var res = {ok:true, dryRun:dryRun, row:row + 1, loc:v[row][0], type:v[row][1], before:old, after:nv, changes:changes, archiveRow:archRow, ibanUsedElsewhere:dup,
+               warnPayLink:(old.payLink && archive && body.payLink === undefined) ? 'Посилання на оплату лишається старе: ' + old.payLink : ''};
+    if (dryRun || !changes.length) return res;
+    if (cols && true){ sh.getRange(row + 1, 3, 1, 4).setNumberFormat('@').setValues([[nv.name, nv.edrpou, nv.iban, nv.bank]]); }
+    if (body.payLink !== undefined) sh.getRange(row + 1, 7).setValue(String(body.payLink || '').trim());
+    if (archRow){ var lr = sh.getLastRow() + 1; sh.getRange(lr, 1, 1, archRow.length).setNumberFormat('@').setValues([archRow]); res.archivedAtRow = lr; }
+    var lg = _opexEnsureCfgSheet(REQ_LOG_SHEET, REQ_LOG_HEADER, true), now = formatDate(new Date());
+    lg.getRange(lg.getLastRow() + 1, 1, changes.length, REQ_LOG_HEADER.length).setValues(changes.map(function(c){ return [now, actor.name || '', String(v[row][0]), String(v[row][1]), c.field, c.before, c.after]; }));
+    try { _cacheBump('clients'); } catch(_c){}
+    res.written = changes.length;
+    return res;
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { try { lock.releaseLock(); } catch(_r){} }
 }
 
 // Підписант (mom/dad → ПІБ) + номер договору з картки Клієнти.
