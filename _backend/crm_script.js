@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.358
+// m.kids CRM — Google Apps Script v7.359
+// v7.359: заголовок рахунку за додаткові + «та харчування», якщо в ньому є харчування.
 // v7.358: getPaymentRowsWithoutCards — лише діти з бюджетом ПОТОЧНОГО місяця; школярі під-локації з карткою в хоста — не показуються.
 // v7.357: (1) харчування — окремими рядками в рахунку за додаткові (той самий ФОП), сума з «Бюджет-харчування»,
 //   борг/переплата харчування, застарілий експорт не «борг». (2) синк: спершу перевірка картки, потім «схоже на ПІБ»;
@@ -6722,7 +6723,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.358', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.359', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -25133,6 +25134,7 @@ function generateInvoicePDF(opts){
 
   // v6.11.24: позиції таблиці (lines) + загальна сума (total).
   var lines = [], total = 0;
+  var _hasMeals = false;   // v7.359: у рахунку за додаткові є харчування → «… (гуртків) та харчування»
   var _needsContract = false;   // v7.63 картка без «Сума договору» → рахунок як є + прапорець для UI
   if (type === 'extras'){
     // ФІКС асиметрії місяця (таблиця↔Viber/PDF/email): extras-сума (extrasSum) має читатись
@@ -25161,8 +25163,8 @@ function generateInvoicePDF(opts){
     if (adj > 0)      lines.push({name: LABEL_DEBT,    qty: 1, price: adj, sum: adj});
     else if (adj < 0) lines.push({name: LABEL_OVERPAY, qty: 1, price: adj, sum: adj});
     // v7.357: харчування — окремими рядками в тому самому рахунку (той самий одержувач)
-    (ch.mealsBreakdown || []).forEach(function(b){ lines.push({name: 'Харчування: ' + b.name, qty: b.count, price: b.price, sum: b.total}); });
-    var madj = Number(ch.mealsAdjustment) || 0;
+    (ch.mealsBreakdown || []).forEach(function(b){ lines.push({name: 'Харчування: ' + b.name, qty: b.count, price: b.price, sum: b.total}); _hasMeals = true; });
+    var madj = Number(ch.mealsAdjustment) || 0; if (madj) _hasMeals = true;
     if (madj > 0)      lines.push({name: LABEL_DEBT + ' (харчування)',    qty: 1, price: madj, sum: madj});
     else if (madj < 0) lines.push({name: LABEL_OVERPAY + ' (харчування)', qty: 1, price: madj, sum: madj});
     total = Number(ch.extrasSum) || 0;
@@ -25217,7 +25219,7 @@ function generateInvoicePDF(opts){
 
   var _mLabel = (MONTHS_CAL[month - 1] || '').toLowerCase() + ' ' + year;
   var _title = (type === 'extras')
-    ? ('Оплата за організацію освітніх послуг та додаткових занять (гуртків) ' + childName + ', ' + _mLabel)
+    ? ('Оплата за організацію освітніх послуг та додаткових занять (гуртків)' + (_hasMeals ? ' та харчування' : '') + ' ' + childName + ', ' + _mLabel)
     : ('Оплата за навчання ' + childName + ', ' + _mLabel);
   var _dueText = String(opts.dueText || '').trim() || 'Оплата до 5 числа поточного місяця';
 
