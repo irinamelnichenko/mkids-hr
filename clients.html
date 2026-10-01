@@ -7262,7 +7262,7 @@ function _naEarlyStart(){
 async function renderNeedsAttention(){
   var main=document.getElementById('main');
   // свіжий список, отриманий щойно (старт сторінки малює екран двічі) — без повторного запиту
-  if(S._naFresh && Date.now()-S._naFresh.ts<60000){ main.innerHTML=_naRenderHtml(_naScope(S._naFresh.items)); return; }
+  if(S._naFresh && Date.now()-S._naFresh.ts<60000){ main.innerHTML=_naRenderHtml(_naScope(S._naFresh.items)); _naNoCardLoad(); return; }   // v7.357
   var c=_naCacheLoad();
   main.innerHTML = c ? (_naStaleNote(c.ts)+_naRenderHtml(_naScope(c.items))) : '<div style="padding:24px;color:var(--gray)">Завантаження…</div>';
   var j, p=S._naPromise||apiGet('getNeedsAttention'); S._naPromise=null;
@@ -7272,6 +7272,35 @@ async function renderNeedsAttention(){
   _naCacheSave(j.items); S._naFresh={ts:Date.now(), items:j.items||[]};
   if(S.view!=='needsAttention') return;   // людина вже пішла на інший екран — не перемальовуємо
   main.innerHTML=_naRenderHtml(_naScope(j.items));
+  _naNoCardLoad();   // v7.357
+}
+// v7.357: РЯДКИ PAYMENT БЕЗ КАРТКИ — діти з бюджетом у Payment, для яких немає картки (зокрема імена з номерами,
+// які нічний синк сам не заводить). Кнопка «Завести картку» створює картку з ПІБ точно як у Payment.
+async function _naNoCardLoad(){
+  var main=document.getElementById('main'); if(!main) return;
+  var box=document.getElementById('naNoCard');
+  if(!box){ box=document.createElement('div'); box.id='naNoCard'; box.style.cssText='max-width:1000px;margin-top:26px'; main.appendChild(box); }
+  box.innerHTML='<div style="color:var(--gray);font-size:13px">💳 Перевіряю рядки Payment без картки…</div>';
+  var j; try{ j=await apiGetFull({action:'getPaymentRowsWithoutCards'}); }catch(e){ box.innerHTML=''; return; }
+  if(S.view!=='needsAttention') return;
+  var items=(j.items||[]).filter(function(x){ return isHR() || x.loc===((S.user&&S.user.loc)||''); });
+  if(!items.length){ box.innerHTML='<div style="color:var(--gray);font-size:13px">💳 Рядків Payment без картки немає.</div>'; return; }
+  var h='<div style="font-size:16px;font-weight:700;margin-bottom:6px">💳 Рядки Payment без картки · '+items.length+'</div>'
+    +'<p style="color:var(--gray);font-size:13px;margin:0 0 10px;max-width:80ch">У Payment є бюджет, а картки дитини немає — її не видно в рахунках і списках. Імена з номерами чи дужками синк сам не заводить. «Завести картку» створює картку з ім\'ям точно як у Payment; Payment не змінюється.</p>';
+  items.forEach(function(x,i){
+    h+='<div id="naNC_'+i+'" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--card,#fff);border:1px solid var(--line,#e5ded7);border-radius:10px;padding:9px 12px;margin-bottom:7px">'
+      +'<div style="flex:1;min-width:220px"><b>'+esc(x.name)+'</b>'+(x.kind==='notName'?' <span style="font-size:11px;color:#C77A12">ім\'я з номером/дужками</span>':'')
+      +'<div style="font-size:12px;color:var(--gray)">'+esc(x.loc)+' · група в Payment: '+esc(x.group||'—')+' · бюджет за рік '+Math.round(x.budRik||0).toLocaleString('uk-UA')+' ₴</div></div>'
+      +'<button class="btn btn-xs" onclick="naCreateFromPayment('+i+')">➕ Завести картку</button></div>';
+  });
+  box.innerHTML=h; S._naNoCard=items;
+}
+async function naCreateFromPayment(i){
+  var x=(S._naNoCard||[])[i]; if(!x) return;
+  if(!confirm('Завести картку «'+x.name+'» ('+x.loc+', група '+(x.group||'—')+')? Потім допишіть підписанта, батьків і суму договору.')) return;
+  var r; try{ r=await apiPost({action:'createCardFromPayment', loc:x.loc, name:x.name, group:x.group||'', actorId:(S.user&&S.user.id)}); }catch(e){ r={ok:false,error:e.message}; }
+  if(r&&r.ok){ showFloatMsg('✅ Картку заведено: '+x.name,'ok'); var el=document.getElementById('naNC_'+i); if(el) el.remove(); }
+  else showFloatMsg('⚠️ '+((r&&(r.error||r.message))||'не вдалося'),'err');
 }
 function findPayChildById(id){
   for(var loc in S.groups){

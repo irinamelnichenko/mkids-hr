@@ -1107,6 +1107,8 @@ function renderInvoiceList(){
       var eCell = c.extrasSum > 0
         ? '<span class="inv-sum">' + fmtUah(c.extrasSum) + ' ₴</span>'
         : '<span class="inv-sum zero">—</span>';
+      // v7.357: харчування входить у рахунок за додаткові (той самий ФОП) — показуємо частку окремо
+      if (c.mealsSum) eCell += '<div style="font-size:11.5px;color:var(--gray)">у т.ч. 🍽 харчування ' + fmtUah(c.mealsSum) + ' ₴</div>';
       // v7.354: відмітки змінили після експорту — у Payment ще стара сума; рахунок бере відмітки (+ ручну правку).
       if (c.extrasStale) eCell += ' <span class="inv-badge b-yellow" title="У Payment зараз ' + fmtUah(c.extrasPayment || 0) +
         ' ₴ — відмітки змінились після експорту. Рахунок сформується за відмітками; оновіть експорт додаткових.">⚠️ Payment</span>';

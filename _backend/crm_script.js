@@ -1,5 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.356
+// m.kids CRM — Google Apps Script v7.357
+// v7.357: (1) харчування — окремими рядками в рахунку за додаткові (той самий ФОП), сума з «Бюджет-харчування»,
+//   борг/переплата харчування, застарілий експорт не «борг». (2) синк: спершу перевірка картки, потім «схоже на ПІБ»;
+//   notNameMissing; getPaymentRowsWithoutCards + createCardFromPayment для «Потребують уваги».
 // v7.356: movePaymentRowsToGroup — рядки дитини в блок іншої групи Payment (у середину блоку, перевірка SUM заголовків до/після, знімок).
 // v7.355: (1) картка: дописана група / зміна локації → рядок у Payment (як для нової), дописана сума договору → бюджет навч
 //   у порожні місяці; статус у відповіді saveClient. (2) Вікно 1-го числа: 1 числа відкрито й попередній місяць
@@ -6718,7 +6721,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.356', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.357', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -6832,6 +6835,7 @@ function doGet(e) {
     else if (action === 'getEmployees')               result = getEmployees(Number(e.parameter && e.parameter.actorId || 0), e.parameter && e.parameter.loc || '');
     else if (action === 'getPredmetnyky')              result = getPredmetnyky(Number(e.parameter && e.parameter.actorId || 0), Number(e.parameter && e.parameter.year || 0), Number(e.parameter && e.parameter.month || 0)); // v7.80: місячний зріз
     else if (action === 'getInvoiceListData')          result = getInvoiceListData(e.parameter || {});
+    else if (action === 'getPaymentRowsWithoutCards') result = getPaymentRowsWithoutCards(e.parameter || {});   // v7.357 рядки Payment без картки
     else if (action === 'getLocRequisites')            result = getLocRequisites(e.parameter || {});   // v7.352 реквізити локацій (читання)
     else if (action === 'generateInvoicePDF')          result = generateInvoicePDF(e.parameter || {}); // v6.50
     else if (action === 'getInvoiceStatusReport')      result = getInvoiceStatusReport(e.parameter || {}); // v6.50.3
@@ -6881,6 +6885,7 @@ function doPost(e) {
     else if (body.action === 'unconfirmBdayMatch')        result = unconfirmBdayMatch(body.childId || '');
     else if (body.action === 'authenticate')              result = authenticate(body.login || '', body.password || '');
     else if (body.action === 'updatePassword')            result = updatePassword(body.userId || 0, body.newPassword || '');
+    else if (body.action === 'createCardFromPayment')     result = createCardFromPayment(body || {});   // v7.357 картка з рядка Payment (ПІБ як у Payment)
     else if (body.action === 'setLocRequisite')           result = setLocRequisite(body || {});      // v7.352 правка реквізитів (CFO, dryRun, архів старого IBAN, журнал)
     else if (body.action === 'addLocationUser')           result = addLocationUser(body || {});      // v7.351 один акаунт локації (CFO, dryRun)
     else if (body.action === 'addUser')                   result = addUser(body.data || {});
@@ -24627,6 +24632,92 @@ function diagDuplicateClients(){
   return { ok: true, groups: groups.length };
 }
 
+// ═══ v7.357: РЯДКИ PAYMENT БЕЗ КАРТКИ («Потребують уваги») ═══════════════════════════════════════
+// Те саме, що бачить синк (пробний прогін по ВСІХ локаціях, нічого не пише): діти з грошима в «Оплати-Рік»,
+// для яких немає картки. Лише рядки з Бюджетом-Рік > 0 (рядок лише з фактом — пробне/разове, напр. «Набока»).
+//   regular — звичайні ПІБ (садки/управління нічний синк заведе сам; школи — ні, їх синк не чіпає);
+//   notName — імена з цифрами/дужками («Кондрат Марта 704»): автоматично не заводяться.
+// GET ?action=getPaymentRowsWithoutCards[&loc=…]
+function getPaymentRowsWithoutCards(p){
+  p = p || {};
+  var f = trim(String(p.loc || ''));
+  var r = syncMissingClientsFromPayments({dryRun:true});
+  if (!r || !r.ok) return r || {ok:false, error:'синк не відповів'};
+  var items = [];
+  (r.preview || r.missing || []).forEach(function(x){ if ((Number(x.budRik) || 0) > 0) items.push({kind:'regular', name:x.name, loc:x.loc, group:x.group, budRik:x.budRik, faktRik:x.faktRik}); });
+  (r.notNameMissing || []).forEach(function(x){ if ((Number(x.budRik) || 0) > 0) items.push({kind:'notName', name:x.name, loc:x.loc, group:x.group, budRik:x.budRik, faktRik:x.faktRik}); });
+  if (f) items = items.filter(function(x){ return _normForMatch(x.loc) === _normForMatch(f); });
+  return {ok:true, total:items.length, items:items};
+}
+// POST {action:'createCardFromPayment', loc, name, group, actorId} — картка з ПІБ ТОЧНО як у Payment (з номером).
+// Мережеві ролі — будь-яка локація; директорка — лише своя. Payment не змінюється (рядок уже є).
+function createCardFromPayment(body){
+  body = body || {};
+  var loc = trim(String(body.loc || '')), name = trim(String(body.name || '')), group = trim(String(body.group || ''));
+  if (!loc || !name) return {ok:false, error:'loc і name обовʼязкові'};
+  var actor = null; try { actor = _getActor((_CURRENT_AUTH && _CURRENT_AUTH.id) || body.actorId); } catch(_a){}
+  var role = actor ? _roleKey(actor.role) : '';
+  if (!actor || (role === 'director' ? _normForMatch(actor.loc) !== _normForMatch(loc) : ['nurse','vyhovatel',''].indexOf(role) !== -1))
+    return {ok:false, code:'PERM_DENIED', error:'Немає права заводити картку в цій локації'};
+  var gc = getClients(); var list = (gc && gc.data) || [];
+  for (var i = 0; i < list.length; i++){
+    if (_normForMatch(list[i]['Локація']) === _normForMatch(loc) && _nameFoldTight(list[i]['ПІБ дитини']) === _nameFoldTight(name))
+      return {ok:false, code:'EXISTS', error:'Картка вже є: «' + list[i]['ПІБ дитини'] + '»', id:list[i]['ID']};
+  }
+  var id = 'c_' + name.slice(0, 24) + '_' + loc.slice(0, 12);
+  var res = saveClient({id:id, name:name, loc:loc, group:group, status:'active', contractType:'standard',
+    notes:'Заведено ' + formatDate(new Date()).slice(0, 10) + ' з Payment (ім\'я як у Payment) — допишіть підписанта, батьків і суму договору',
+    updatedBy:(actor && actor.name) || ''});
+  return res;
+}
+
+// v7.357: дані харчування для рахунків. Кеш на одне виконання (масова розсилка кличе getInvoiceListData на кожну дитину).
+var _INV_MEAL_MEMO = {};
+function _invMealData(loc, payMonth, payYear, extMonth, extYear){
+  var key = loc + '|' + payMonth + '|' + payYear + '|' + extMonth + '|' + extYear;
+  if (_INV_MEAL_MEMO.hasOwnProperty(key)) return _INV_MEAL_MEMO[key];
+  var out = null;
+  try {
+    var reg = _getLocationPaymentRegistry(loc);
+    var cpm = reg ? (reg.colsPerMonth || 5) : 5, LO = _paymentLayout(cpm);
+    if (reg && reg.sheetId && cpm === 7 && LO.budHarch != null){
+      var ss = SpreadsheetApp.openById(reg.sheetId), sh = ss.getSheetByName(reg.sheetName) || ss.getSheets()[0];
+      var data = sh.getDataRange().getValues(), col = 1 + (payMonth - 1) * cpm + LO.budHarch, pay = {};
+      for (var r = 3; r < data.length; r++){
+        var nm = trim(String(data[r][0] || '')); if (!nm || isGroupHeaderRow(data[r], 1)) continue;
+        var k = _nameFoldTight(nm); if (!pay.hasOwnProperty(k)) pay[k] = Number(data[r][col]) || 0;
+      }
+      var marks = {}, msh = _mealAttSheet(false);
+      if (msh){
+        var mv = msh.getDataRange().getValues(), pre = extYear + '-' + ('0' + extMonth).slice(-2);
+        for (var i = 1; i < mv.length; i++){
+          if (trim(String(mv[i][2] || '')) !== loc) continue;
+          var d = mv[i][1], ds = (d instanceof Date) ? Utilities.formatDate(d, 'Europe/Kiev', 'yyyy-MM-dd') : String(d || '').slice(0, 10);
+          if (ds.slice(0, 7) !== pre) continue;
+          var ck = _nameFoldTight(mv[i][4]), it = trim(String(mv[i][6] || '')), pr = Number(mv[i][7]) || 0;
+          var m = marks[ck] = marks[ck] || {sum:0, n:0, items:{}};
+          m.sum += pr; m.n++;
+          var ik = it + '|' + pr; (m.items[ik] = m.items[ik] || {name:it, count:0, price:pr, total:0}); m.items[ik].count++; m.items[ik].total += pr;
+        }
+      }
+      var jn = _nextMonth(extMonth, extYear), journal = null;
+      if (jn.month === payMonth && jn.year === payYear){ try { journal = _readJournalForTarget(loc, 'meal', payYear, payMonth).byNormName; } catch(_j){} }
+      out = {pay:pay, marks:marks, journal:journal};
+    }
+  } catch(e){ Logger.log('[invMeal] %s', e); out = null; }
+  _INV_MEAL_MEMO[key] = out;
+  return out;
+}
+function _invMealForChild(meal, name){
+  var k = _nameFoldTight(name), pay = meal.pay[k] || 0, mk = meal.marks[k] || {sum:0, n:0, items:{}};
+  var bd = Object.keys(mk.items).map(function(x){ return mk.items[x]; }).sort(function(a, b){ return a.name.localeCompare(b.name, 'uk'); });
+  var adj = pay - mk.sum, stale = 0, sum = pay;
+  var je = meal.journal ? meal.journal[_journalNormName(name)] : null;
+  if (je){ stale = (Number(je.sum) || 0) - mk.sum; if (stale !== 0){ adj = pay - (Number(je.sum) || 0); sum = mk.sum + adj; } }
+  if (!pay && !mk.n) return null;
+  return {sum:sum, breakdown:bd, adj:adj, stale:stale, marks:mk.n};
+}
+
 function getInvoiceListData(params){
   try {
     var loc      = String(params.loc      || '').trim();
@@ -24719,6 +24810,12 @@ function getInvoiceListData(params){
       b.breakdown[rec.activityName].total += (rec.price || 0);
     }
 
+    // v7.357: ХАРЧУВАННЯ — окремими рядками в рахунку за ДОДАТКОВІ (рішення CFO 01.10.2026: той самий одержувач,
+    // що й додаткові). Лише локації з колонкою харчування (colsPerMonth=7, зараз Школа 228). До сплати —
+    // «Бюджет-харчування» місяця рахунку з Payment; рядки — з відміток харчування місяця додаткових; різниця —
+    // «Борг/Переплата (харчування)», застарілий експорт (журнал kind='meal') боргом не показуємо, як і для додаткових.
+    var _meal = _invMealData(_invSub ? _invSub.host : loc, payMonth, payYear, extMonth, extYear);
+
     // v7.354: журнал експорту (що експорт востаннє записав у «Бюджет доп» місяця рахунку). Потрібен, щоб
     // відрізнити РУЧНУ правку (клітинка − записане експортом → «Борг/Переплата») від ЗАСТАРІЛОГО експорту
     // (записане − поточні відмітки: відмітки змінили після експорту). Застарілий експорт НЕ показуємо боргом —
@@ -24745,6 +24842,7 @@ function getInvoiceListData(params){
       var extrasSum = extrasByPayment[name] || 0;             // v6.11.16: до сплати = "<Місяць>-Бюджет-доп"
       var extrasAdjustment = extrasSum - extrasBreakdownSum;  // борг(+) / переплата(-) / 0
       var extrasStale = 0, extrasPayment = extrasSum;          // v7.354
+      var _ml = _meal ? _invMealForChild(_meal, name) : null;  // v7.357
       var _je = _jByName ? _jByName[_journalNormName(name)] : null;
       if (_je){
         var _lw = Number(_je.sum) || 0;
@@ -24758,7 +24856,7 @@ function getInvoiceListData(params){
       // "голі" випускники без занять — не показуємо (рахунок тільки на гуртки).
       if (String(c['Статус'] || '').trim() === 'graduated' && extrasBreakdownSum <= 0) return;
       // фільтр НЕ змінено: показуємо matched у Платежах АБО з реальними відмічаннями
-      if (!inPayments && extrasBreakdownSum <= 0) return;
+      if (!inPayments && extrasBreakdownSum <= 0 && !(_ml && _ml.marks > 0)) return;
 
       var breakdownArr = Object.keys(extras.breakdown).map(function(k){
         return extras.breakdown[k];
@@ -24775,11 +24873,13 @@ function getInvoiceListData(params){
         group: String(c['Група'] || '').trim(),
         status: String(c['Статус'] || '').trim(),
         paymentSum: paymentSum,
-        extrasSum: extrasSum,
+        extrasSum: extrasSum + (_ml ? _ml.sum : 0),   // v7.357: до сплати ФОП додаткових = додаткові + харчування
         extrasBreakdown: breakdownArr,
         extrasBreakdownSum: extrasBreakdownSum,
         extrasAdjustment: extrasAdjustment,
         extrasStale: extrasStale,       // v7.354: різниця «записано експортом − відмітки» (0 = експорт актуальний)
+        extrasOnlySum: extrasSum,       // v7.357: лише додаткові (extrasSum нижче = додаткові + харчування)
+        mealsSum: _ml ? _ml.sum : 0, mealsBreakdown: _ml ? _ml.breakdown : [], mealsAdjustment: _ml ? _ml.adj : 0, mealsStale: _ml ? _ml.stale : 0,
         extrasPayment: extrasPayment,   // v7.354: що зараз стоїть у Payment (Оплати-Рік)
         // v7.63: сума договору з картки + прапорець «нема договору» (є Бюджет, а monthlyFee=0)
         // — щоб invoices.html підсвітив ⚠️ директору «заповніть суму договору».
@@ -25030,7 +25130,7 @@ function generateInvoicePDF(opts){
     if (!inv.ok) return {ok:false, error: inv.error};
     var ch = null;
     (inv.children || []).forEach(function(c){ if (String(c.name).trim() === childName) ch = c; });
-    if (!ch || (Number(ch.extrasSum) || 0) === 0 || !ch.extrasBreakdown || !ch.extrasBreakdown.length){
+    if (!ch || (Number(ch.extrasSum) || 0) === 0 || ((!ch.extrasBreakdown || !ch.extrasBreakdown.length) && !(ch.mealsBreakdown || []).length)){   // v7.357: або лише харчування
       return {ok:false, error:'У дитини "' + childName + '" немає додаткових занять за ' + MONTHS_CAL[month - 1] + ' ' + year + '. Рахунок не формується.'};
     }
     ch.extrasBreakdown.forEach(function(b){
@@ -25040,6 +25140,11 @@ function generateInvoicePDF(opts){
     var adj = Number(ch.extrasAdjustment) || 0;
     if (adj > 0)      lines.push({name: LABEL_DEBT,    qty: 1, price: adj, sum: adj});
     else if (adj < 0) lines.push({name: LABEL_OVERPAY, qty: 1, price: adj, sum: adj});
+    // v7.357: харчування — окремими рядками в тому самому рахунку (той самий одержувач)
+    (ch.mealsBreakdown || []).forEach(function(b){ lines.push({name: 'Харчування: ' + b.name, qty: b.count, price: b.price, sum: b.total}); });
+    var madj = Number(ch.mealsAdjustment) || 0;
+    if (madj > 0)      lines.push({name: LABEL_DEBT + ' (харчування)',    qty: 1, price: madj, sum: madj});
+    else if (madj < 0) lines.push({name: LABEL_OVERPAY + ' (харчування)', qty: 1, price: madj, sum: madj});
     total = Number(ch.extrasSum) || 0;
   } else {
     var sum = _invoiceSumFromYearly(childName, loc, month, type);
@@ -27802,6 +27907,7 @@ function syncMissingClientsFromPayments(opts){
   var idTakenSamples = [];   // v7.256
   var skipNumericSamples = [];
   var skipNotNameSamples = [];   // v7.209
+  var notNameMissing = [];       // v7.357: повний список «не схоже на ПІБ» БЕЗ картки
   for (var pr = 1; pr < pvals.length; pr++){
     var prow    = pvals[pr];
     var name    = String(prow[pNameIdx] || '').trim();
@@ -27830,8 +27936,13 @@ function syncMissingClientsFromPayments(opts){
     if (budRik <= 0 && faktRik <= 0){ skip.zeroSum++; continue; }
 
     var cname = _cleanChildName(name);                  // v7.113: чисте ПІБ (без префікса/коду, з виправленнями)
-    // v7.209: не схоже на ПІБ → не заводимо картку
-    if (!_looksLikeChildName(cname)){ skip.notName++; if (skipNotNameSamples.length < 20) skipNotNameSamples.push(cname); continue; }
+    // v7.357: СПЕРШУ — чи є вже картка. Раніше перевірка «схоже на ПІБ» йшла першою, і лічильник notName
+    // рахував і дітей із картками (76 «пропущених», з них 71 мали картку) — звіт брехав.
+    if (existing[normKey(cname, loc)]){ skip.existing++; continue; }
+    // v7.209: не схоже на ПІБ → не заводимо картку автоматично (може бути службовий рядок), але віддаємо
+    // список (notNameMissing) — «Потребують уваги» показує його з кнопкою «Завести картку».
+    if (!_looksLikeChildName(cname)){ skip.notName++; if (skipNotNameSamples.length < 20) skipNotNameSamples.push(cname);
+      notNameMissing.push({name:name, loc:loc, group:group, budRik:budRik, faktRik:faktRik}); continue; }
     // v7.113: неповне ПІБ (лише ім'я, напр. «Лев» без прізвища) — НЕ створюємо картку,
     // пропускаємо. Директор допише прізвище — синк підхопить наступного разу.
     if (cname.split(/\s+/).filter(function(x){ return x; }).length < 2){ skip.incomplete++; continue; }
@@ -27893,7 +28004,8 @@ function syncMissingClientsFromPayments(opts){
     Logger.log('[syncMissing] ═══════════════════════════════════════');
     return {ok:true, dryRun:true, scope:(scope||'ALL'), missingCount:missing.length, byLoc:byLoc, skip:skip,
       notNameSamples: skipNotNameSamples,
-      preview: missing.map(function(m){ return {name:m.name, loc:m.loc, budRik:m.budRik, faktRik:m.faktRik}; })};
+      notNameMissing: notNameMissing,   // v7.357
+      preview: missing.map(function(m){ return {name:m.name, loc:m.loc, group:m.group, budRik:m.budRik, faktRik:m.faktRik}; })};   // v7.357: + group
   }
 
   if (!missing.length){
