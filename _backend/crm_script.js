@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.361
+// m.kids CRM — Google Apps Script v7.362
+// v7.362: нова локація — diagSpreadsheet (перевірка файлу, лише читання), registerLocation (реєстри CONFIG за зразком, CFO, dryRun);
+//   «Хіміків» (Управління) у LOCATION_USER_LOCS і LOCATION_ORDER.
 // v7.361: рахунки — дублі рядків «Оплати-Рік» складаються (Школа Осокорки: нульові «(без групи)» обнуляли суми);
 //   «пані/пане» у Viber і листі Школи Осокорки; експорт ЗП додаткових знаходить рядок з цифрами в назві (кінець дублям «Арт450»);
 //   renameDopActivity, cleanupSalaryDupRows.
@@ -913,7 +915,7 @@ var LOCATION_ORDER = [
   'Осокорки','Позняки','Тичини',"Кар'єрна",'Голосієво','Пуща',
   'Оранж','Борщагівка','Бровари','Кругла','Бігова',
   'Школа Осокорки','Школа 228','Житомир',
-  'Нац.Гвардії (Благо)','Манхетен (Благо)',
+  'Нац.Гвардії (Благо)','Манхетен (Благо)','Хіміків',
   'Онлайн школа','Кухня Київ','Кухня Львів','Іва-Франківськ кухня'
 ];
 function locationRank(name){
@@ -6727,7 +6729,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.361', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.362', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -6841,6 +6843,7 @@ function doGet(e) {
     else if (action === 'getEmployees')               result = getEmployees(Number(e.parameter && e.parameter.actorId || 0), e.parameter && e.parameter.loc || '');
     else if (action === 'getPredmetnyky')              result = getPredmetnyky(Number(e.parameter && e.parameter.actorId || 0), Number(e.parameter && e.parameter.year || 0), Number(e.parameter && e.parameter.month || 0)); // v7.80: місячний зріз
     else if (action === 'getInvoiceListData')          result = getInvoiceListData(e.parameter || {});
+    else if (action === 'diagSpreadsheet')            result = diagSpreadsheet(e.parameter || {});      // v7.362 перевірка файлу нової локації (лише читання)
     else if (action === 'getPaymentRowsWithoutCards') result = getPaymentRowsWithoutCards(e.parameter || {});   // v7.357 рядки Payment без картки
     else if (action === 'getLocRequisites')            result = getLocRequisites(e.parameter || {});   // v7.352 реквізити локацій (читання)
     else if (action === 'generateInvoicePDF')          result = generateInvoicePDF(e.parameter || {}); // v6.50
@@ -6891,6 +6894,7 @@ function doPost(e) {
     else if (body.action === 'unconfirmBdayMatch')        result = unconfirmBdayMatch(body.childId || '');
     else if (body.action === 'authenticate')              result = authenticate(body.login || '', body.password || '');
     else if (body.action === 'updatePassword')            result = updatePassword(body.userId || 0, body.newPassword || '');
+    else if (body.action === 'registerLocation')          result = registerLocation(body || {});        // v7.362 нова локація в реєстрах CONFIG (CFO, dryRun, YES_REGISTER)
     else if (body.action === 'renameDopActivity')         result = renameDopActivity(body || {});       // v7.361 перейменування заняття: каталог + відмітки + Salary + журнал (CFO, dryRun)
     else if (body.action === 'cleanupSalaryDupRows')      result = cleanupSalaryDupRows(body || {});    // v7.361 видалення дубль-рядків Salary без факту (CFO, dryRun, YES_DELETE)
     else if (body.action === 'createCardFromPayment')     result = createCardFromPayment(body || {});   // v7.357 картка з рядка Payment (ПІБ як у Payment)
@@ -24796,6 +24800,91 @@ function cleanupSalaryDupRows(body){
   finally { try { lock.releaseLock(); } catch(_r){} }
 }
 
+// ═══ v7.362: НОВА ЛОКАЦІЯ — перевірка файлу + реєстрація в реєстрах CONFIG ══════════════════════
+// GET ?action=diagSpreadsheet&id=<sheetId>[&ref=<loc-зразок>] — лише читання: вкладки, шапки Payment, статті
+// й кількості OPEX, розділи Salary; поруч — те саме для файлу локації-зразка.
+function _diagOneFile(id){
+  var ss = SpreadsheetApp.openById(id), out = {name:ss.getName(), sheets:ss.getSheets().map(function(x){ return x.getName(); })};
+  var pay = ss.getSheetByName('Payment');
+  if (pay){
+    var pv = pay.getRange(1, 1, Math.min(6, pay.getLastRow()), Math.min(pay.getLastColumn(), 20)).getDisplayValues();
+    var pa = pay.getRange(1, 1, pay.getLastRow(), 1).getValues().map(function(r){ return trim(String(r[0] || '')); });
+    out.payment = {lastRow:pay.getLastRow(), lastCol:pay.getLastColumn(), head:pv.slice(0, 3),
+      groupHeaders:pa.map(function(t, i){ return (i >= 3 && t && isGroupHeaderRow([t], 1)) ? (i + 1) + ':' + t : null; }).filter(Boolean),
+      children:pa.filter(function(t, i){ return i >= 3 && t && !isGroupHeaderRow([t], 1); }).length};
+    // колонок на місяць: відстань між першими двома заголовками місяців у рядках 1–2
+    var hdr = pv[0].concat(pv[1] || []), pos = [];
+    pv.slice(0, 2).forEach(function(row){ row.forEach(function(c, ci){ if (/січ|лют|берез|квіт|трав|черв|лип|серп|верес|жовт|листоп|груд/i.test(c)) pos.push(ci); }); });
+    pos = pos.filter(function(v, i, a){ return a.indexOf(v) === i; }).sort(function(a, b){ return a - b; });
+    out.payment.monthCols = pos.slice(0, 4); out.payment.colsPerMonthGuess = pos.length >= 2 ? pos[1] - pos[0] : null;
+  }
+  var op = ss.getSheetByName('OPEX');
+  if (op){
+    var ov = op.getRange(1, 1, Math.min(45, op.getLastRow()), 1).getValues().map(function(r){ return trim(String(r[0] || '')); });
+    out.opex = {lastRow:op.getLastRow(), lastCol:op.getLastColumn(), articles:ov.slice(2, 30).filter(String), rows36_41:ov.slice(35, 41)};
+  }
+  var sa = ss.getSheetByName('Salary');
+  if (sa){
+    var sv = sa.getRange(1, 1, sa.getLastRow(), 1).getValues().map(function(r){ return trim(String(r[0] || '')); });
+    out.salary = {lastRow:sa.getLastRow(), lastCol:sa.getLastColumn(), first:sv.slice(0, 60).filter(String)};
+  }
+  return out;
+}
+function diagSpreadsheet(p){
+  p = p || {};
+  var id = trim(String(p.id || '')), m = /\/d\/([\w-]+)/.exec(id); if (m) id = m[1];
+  if (!id) return {ok:false, error:'id обовʼязковий'};
+  var res = {ok:true};
+  try { res.file = _diagOneFile(id); } catch(e){ return {ok:false, error:'файл не відкрито: ' + String(e && e.message || e)}; }
+  var ref = trim(String(p.ref || 'Житомир'));
+  try { var rg = _getLocationPaymentRegistry(ref); if (rg && rg.sheetId){ res.ref = _diagOneFile(rg.sheetId); res.refLoc = ref; } } catch(_r){}
+  // рядки реєстрів зразка — як записані
+  var cfg = SpreadsheetApp.openById(CONFIG_SHEET_ID), regs = {};
+  [['Payment', cfg.getSheets()[0]], ['OPEX', cfg.getSheetByName('OPEX')], ['Salary', cfg.getSheetByName('Salary')]].forEach(function(x){
+    if (!x[1]) return; var v = x[1].getDataRange().getValues();
+    regs[x[0]] = {header:v[0].map(String), rows:v.filter(function(r){ var l = trim(String(r[2] || '')); return l === ref || _normForMatch(l) === _normForMatch(p.loc || '__none__'); }).map(function(r){ return r.map(String); })};
+  });
+  res.registries = regs;
+  return res;
+}
+// POST {action:'registerLocation', loc, sheetId, ref:'Житомир', cols?, dryRun, actorId, confirm:'YES_REGISTER'}
+// Дописує рядок у три реєстри CONFIG (Payment = перший лист, OPEX, Salary) — КОПІЯ рядка локації-зразка
+// з новими назвою й ID. Наявний рядок цієї локації не перезаписує (відмова). Лише CFO.
+function registerLocation(body){
+  body = body || {};
+  var dryRun = (body.dryRun !== false), loc = trim(String(body.loc || '')), id = trim(String(body.sheetId || '')), ref = trim(String(body.ref || 'Житомир'));
+  var m = /\/d\/([\w-]+)/.exec(id); if (m) id = m[1];
+  var actor = null; try { actor = _getActor((_CURRENT_AUTH && _CURRENT_AUTH.id) || body.actorId); } catch(_a){}
+  if (!actor || _roleKey(actor.role) !== 'cfo') return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  if (!loc || !id) return {ok:false, error:'loc і sheetId обовʼязкові'};
+  if (!dryRun && body.confirm !== 'YES_REGISTER') return {ok:false, error:'Запис вимагає confirm:"YES_REGISTER"'};
+  try { SpreadsheetApp.openById(id); } catch(e){ return {ok:false, error:'файл не відкривається: ' + String(e && e.message || e)}; }
+  var cfg = SpreadsheetApp.openById(CONFIG_SHEET_ID), plan = [], problems = [];
+  [['Payment', cfg.getSheets()[0]], ['OPEX', cfg.getSheetByName('OPEX')], ['Salary', cfg.getSheetByName('Salary')]].forEach(function(x){
+    var sh = x[1]; if (!sh){ problems.push('немає реєстру ' + x[0]); return; }
+    var v = sh.getDataRange().getValues(), refRow = null;
+    for (var r = 1; r < v.length; r++){
+      var l = trim(String(v[r][2] || ''));
+      if (_normForMatch(l) === _normForMatch(loc)){ problems.push(x[0] + ': «' + loc + '» уже є (рядок ' + (r + 1) + ')'); return; }
+      if (l === ref && !refRow) refRow = v[r];
+    }
+    if (!refRow){ problems.push(x[0] + ': зразка «' + ref + '» немає'); return; }
+    var row = refRow.map(function(c){ return c; }); row[2] = loc; row[3] = id;
+    if (x[0] === 'Payment' && body.cols) row[5] = Number(body.cols);
+    plan.push({registry:x[0], sheet:sh.getName(), row:row.map(String), after:sh.getLastRow()});
+  });
+  var res = {ok:!problems.length, dryRun:dryRun, loc:loc, sheetId:id, ref:ref, plan:plan, problems:problems};
+  if (problems.length || dryRun) return res;
+  plan.forEach(function(p){
+    var sh = p.registry === 'Payment' ? cfg.getSheets()[0] : cfg.getSheetByName(p.registry);
+    sh.getRange(sh.getLastRow() + 1, 1, 1, p.row.length).setValues([p.row]);
+  });
+  try { CacheService.getScriptCache().remove(_LOC_CACHE_KEY); } catch(_c){}   // список локацій — одразу свіжий
+  _VAC_SCHOOL_SET_CACHE = null;
+  res.written = plan.length;
+  return res;
+}
+
 // v7.357: дані харчування для рахунків. Кеш на одне виконання (масова розсилка кличе getInvoiceListData на кожну дитину).
 var _INV_MEAL_MEMO = {};
 function _invMealData(loc, payMonth, payYear, extMonth, extYear){
@@ -30314,7 +30403,7 @@ var LOCATION_USER_LOCS = [
   'Осокорки','Позняки','Тичини',"Кар'єрна",'Голосієво','Пуща','Оранж',
   'Борщагівка','Бровари','Кругла','Бігова',
   'Школа Осокорки','Школа 228',
-  'Житомир','Нац.Гвардії (Благо)','Манхетен (Благо)',
+  'Житомир','Нац.Гвардії (Благо)','Манхетен (Благо)','Хіміків',
   'Кухня Київ','Кухня Львів','Іва-Франківськ кухня'
 ];
 
