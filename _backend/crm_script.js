@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.355
+// m.kids CRM — Google Apps Script v7.356
+// v7.356: movePaymentRowsToGroup — рядки дитини в блок іншої групи Payment (у середину блоку, перевірка SUM заголовків до/після, знімок).
 // v7.355: (1) картка: дописана група / зміна локації → рядок у Payment (як для нової), дописана сума договору → бюджет навч
 //   у порожні місяці; статус у відповіді saveClient. (2) Вікно 1-го числа: 1 числа відкрито й попередній місяць
 //   (додаткові, предметники, харчування — харчування отримало замок місяця). (3) _VAC_EXCEPTIONS += 6 дітей Борщагівки.
@@ -6717,7 +6718,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.355', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.356', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -6994,6 +6995,7 @@ function doPost(e) {
     else if (body.action === 'seedPredCatalog')        result = seedPredCatalog(body || {});          // v7.236 сівба каталогу предметників (dryRun за замовч.)
     else if (body.action === 'savePayHeaderOverrides') result = savePayHeaderOverrides(body || {});   // v7.234 реєстр заголовків (dryRun за замовч.)
     else if (body.action === 'restorePaymentFromBackup') result = restorePaymentFromBackup(body || {});  // v7.251 відкат аркуша з бекап-вкладки
+    else if (body.action === 'movePaymentRowsToGroup')  result = movePaymentRowsToGroup(body || {});   // v7.356 перенесення рядків у блок іншої групи (dryRun, перевірка SUM заголовків)
     else if (body.action === 'movePaymentRowsToBlock')  result = movePaymentRowsToBlock(body || {});   // v7.248 перенесення рядків у блок «Вибули»
     else if (body.action === 'undoPaymentMoveBlock')    result = undoPaymentMoveBlock(body || {});     // v7.297 зворотний хід: рядки з «Вибули» на свої місця (dryRun за замовч.)
     else if (body.action === 'setLocSheetFormulas')     result = setLocSheetFormulas(body || {});      // v7.300 точковий запис формул CF/PL (dryRun за замовч.)
@@ -8311,6 +8313,93 @@ function restorePaymentFromBackup(body){
     } finally { try { lock.releaseLock(); } catch(_lr){} }
     return res;
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.356: ПЕРЕНЕСЕННЯ РЯДКІВ У ІНШУ ГРУПУ Payment (дитина перейшла з групи в групу).
+// Рядки рухаємо Sheet.moveRows (значення, формули, формати — як є) у СЕРЕДИНУ блоку цільової
+// групи: одразу після її останньої дитини, але ДО наступного заголовка. Тоді SUM у заголовку
+// цільового блоку розширюється, а джерельного — звужується (саме так і треба). Вставка на межу
+// блоку (перший рядок / рядок заголовка) звузила б SUM — тому без вільного рядка в блоці відмова.
+// До і після — перевірка формул заголовків: кожен =SUM(…) має покривати [заголовок+1 .. наступний−1].
+// Знімок аркуша перед записом (_safeBackupSheet). dryRun за замовч.; запис — confirm:'YES_MOVE'.
+// POST {action:'movePaymentRowsToGroup', loc, toGroup, rows:[{row,name}], dryRun, confirm}
+// ═══════════════════════════════════════════════════════════════════════════
+function _payHeaderSumCheck(sh){
+  var lr = sh.getLastRow(), lc = Math.min(sh.getLastColumn(), 120);
+  var A = sh.getRange(1, 1, lr, 1).getValues(), F = sh.getRange(1, 1, lr, lc).getFormulas();
+  var hdrs = [];
+  for (var i = 3; i < lr; i++){ var t = trim(String(A[i][0] || '')); if (t && isGroupHeaderRow([t], 1)) hdrs.push(i + 1); }
+  var out = [];
+  hdrs.forEach(function(h, k){
+    var next = (k + 1 < hdrs.length) ? hdrs[k + 1] : lr + 1, bad = [], n = 0, sample = '';
+    for (var c = 1; c < lc; c++){
+      var f = F[h - 1][c]; var m = /^=SUM\(([A-Z]+)(\d+):([A-Z]+)(\d+)\)$/i.exec(String(f || '').replace(/\s+/g, ''));
+      if (!m) continue; n++; if (!sample) sample = f;
+      var a = Number(m[2]), b = Number(m[4]);
+      if (a !== h + 1 || b < next - 1) bad.push(_opexA1(h, c + 1) + ' ' + f);
+    }
+    out.push({row:h, title:trim(String(A[h - 1][0] || '')), nextHeader:next, sumCells:n, sample:sample, bad:bad.slice(0, 5), badCount:bad.length});
+  });
+  return out;
+}
+function movePaymentRowsToGroup(body){
+  body = body || {};
+  var loc = trim(String(body.loc || '')), toGroup = trim(String(body.toGroup || ''));
+  var pairs = (body.rows || []).map(function(x){ return {row:Number(x && x.row) || 0, name:trim(String((x && x.name) || ''))}; }).filter(function(x){ return x.row > 0 && x.name; });
+  var dryRun = (body.dryRun !== false);
+  if (!loc || !toGroup || !pairs.length) return {ok:false, error:'loc, toGroup і rows[{row,name}] обовʼязкові'};
+  if (!dryRun && body.confirm !== 'YES_MOVE') return {ok:false, error:'Реальне перенесення вимагає confirm:"YES_MOVE"'};
+  var reg = _getLocationPaymentRegistry(loc);
+  if (!reg || !reg.sheetId) return {ok:false, error:'Локацію "' + loc + '" не знайдено в реєстрі'};
+  var ss = SpreadsheetApp.openById(reg.sheetId), sh = (reg.sheetName && ss.getSheetByName(reg.sheetName)) || ss.getSheets()[0];
+  function colA(){ var lr = sh.getLastRow(); return sh.getRange(1, 1, lr, 1).getValues().map(function(r){ return trim(String(r[0] || '')); }); }
+  function plan(A){
+    var gk = _journalNormName(toGroup), hdr = -1, next = A.length + 1;
+    for (var i = 3; i < A.length; i++){
+      if (!A[i] || !isGroupHeaderRow([A[i]], 1)) continue;
+      if (hdr > 0){ next = i + 1; break; }
+      if (_journalNormName(A[i]) === gk) hdr = i + 1;
+    }
+    if (hdr < 0) return {error:'Групу «' + toGroup + '» не знайдено у файлі'};
+    var last = hdr; for (var r = hdr + 1; r < next; r++) if (A[r - 1]) last = r;
+    return {hdr:hdr, next:next, lastName:last, dest:last + 1};
+  }
+  var A = colA(), p0 = plan(A);
+  if (p0.error) return {ok:false, error:p0.error};
+  var problems = [];
+  pairs.forEach(function(x){
+    var act = A[x.row - 1] || '';
+    if (act !== x.name) problems.push('рядок ' + x.row + ': очікували «' + x.name + '», а там «' + act + '»');
+    else if (isGroupHeaderRow([act], 1)) problems.push('рядок ' + x.row + ' — заголовок');
+    else if (x.row > p0.hdr && x.row < p0.next) problems.push('«' + x.name + '» уже в блоці «' + toGroup + '»');
+  });
+  if (p0.dest >= p0.next) problems.push('у блоці «' + toGroup + '» немає вільного рядка після останньої дитини — вставка на межу звузила б SUM');
+  var res = {ok:!problems.length, dryRun:dryRun, loc:loc, toGroup:toGroup, targetHeader:p0.hdr, targetNextHeader:p0.next,
+             insertAfterRow:p0.lastName, rows:pairs, problems:problems, headersBefore:_payHeaderSumCheck(sh)};
+  if (problems.length){ res.error = problems.join('; '); return res; }
+  if (dryRun) return res;
+  var lock = LockService.getScriptLock(); try { lock.waitLock(30000); } catch(_l){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+  try {
+    res.backupSheet = _safeBackupSheet(sh, 'movegroup');
+    var moved = [];
+    pairs.slice().sort(function(a, b){ return a.row - b.row; }).forEach(function(x){   // зверху вниз — порядок дітей зберігається; позицію щоразу шукаємо заново за ПІБ
+      var AA = colA(), r = -1;
+      for (var i = 3; i < AA.length; i++) if (AA[i] === x.name){ r = i + 1; break; }
+      var pp = plan(AA);
+      if (r < 0 || pp.error || pp.dest >= pp.next){ moved.push({name:x.name, ok:false}); return; }
+      sh.moveRows(sh.getRange(r, 1), pp.dest);
+      SpreadsheetApp.flush();
+      moved.push({name:x.name, ok:true, from:r});
+    });
+    res.moved = moved;
+    res.headersAfter = _payHeaderSumCheck(sh);
+    var AF = colA(); res.rowsAfter = pairs.map(function(x){ for (var i = 3; i < AF.length; i++) if (AF[i] === x.name) return {name:x.name, row:i + 1}; return {name:x.name, row:null}; });
+    _moneyJournalLog(pairs.map(function(x){ return {by:body.by, route:'movePaymentRowsToGroup', loc:loc, name:x.name, year:'', month:'',
+      col:'рядок → група ' + toGroup, before:'рядок ' + x.row, after:'блок ' + toGroup, reason:body.reason}; }));
+    return res;
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { try { lock.releaseLock(); } catch(_r){} }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
