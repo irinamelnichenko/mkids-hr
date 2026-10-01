@@ -994,6 +994,8 @@ function initFilters(){
 }
 
 async function loadInvoiceData(){
+  // v7.361: «Надіслати всім» — це email-розсилка; у Viber-локаціях її немає
+  try { var _bb = $('invBulkBtn'); if (_bb && String((S.user && S.user.role) || '').toLowerCase() !== 'vyhovatel') _bb.style.display = _invNoEmail() ? 'none' : ''; } catch(_e){}
   if (INV.loading) return;
   if (!CFG.LOC){
     $('invListWrap').innerHTML = '<div class="inv-empty">⚠️ Локацію не визначено</div>';
@@ -1136,11 +1138,11 @@ function renderInvoiceList(){
         '<td data-label="Додаткові">' + eCell + '</td>' +
         '<td data-label="Підписант">' + sName +
           ' <span class="inv-signer-role">' + sRole + '</span></td>' +
-        '<td data-label="Контакти"><span class="inv-contact-ind">' + pIcon + eIcon + '</span></td>' +
+        '<td data-label="Контакти"><span class="inv-contact-ind">' + pIcon + (_invNoEmail() ? '' : eIcon) + '</span></td>' +
         '<td data-label="Статус">' + _invBadge(c) + '</td>' +
         '<td data-label="Дії"><div class="inv-actions">' +
           '<button class="inv-act-btn inv-act" title="Завантажити PDF" data-act="pdf" data-id="' + idEsc + '"' + (hasAnySum ? '' : ' disabled') + '>📄</button>' +
-          '<button class="inv-act-btn inv-act" title="Надіслати Email" data-act="email" data-id="' + idEsc + '"' + (canEmail ? '' : ' disabled') + '>📧</button>' +
+          (_invNoEmail() ? '' : '<button class="inv-act-btn inv-act" title="Надіслати Email" data-act="email" data-id="' + idEsc + '"' + (canEmail ? '' : ' disabled') + '>📧</button>') +
           '<button class="inv-act-btn inv-act" title="Надіслати Viber" data-act="viber" data-id="' + idEsc + '"' + (canViber ? '' : ' disabled') + '>💬</button>' +
         '</div></td>' +
       '</tr>';
@@ -1235,6 +1237,9 @@ function _invTypesFor(c){
 }
 function _invActor(){ return (S.user && S.user.name) || roleLabel(S.user && S.user.role) || 'system'; }
 
+// v7.361: локації, де рахунки надсилають ЛИШЕ через Viber — без email (позначка, іконка, кнопка, «Надіслати всім»).
+var INV_NO_EMAIL_LOCS = ['Школа Осокорки'];
+function _invNoEmail(){ return INV_NO_EMAIL_LOCS.indexOf(String(CFG.LOC || '').trim()) !== -1; }
 // v6.50.3: бейджі статусу (📧 email + 💬 viber). hover → дата/час.
 function _invBadge(c){
   var st = (INV.sendStatus && INV.sendStatus.byChild && INV.sendStatus.byChild[c.name]) || {};
@@ -1247,7 +1252,7 @@ function _invBadge(c){
   if (st.viber){ vCls = 'b-green'; vTxt = 'надіслано'; vTitle = st.viber.ts || ''; }
   else { vCls = 'b-gray'; vTxt = 'не надіслано'; }
   return '<span class="inv-badges">' +
-    '<span class="inv-badge ' + eCls + '"' + (eTitle ? (' title="Email: ' + escapeHtml(eTitle) + '"') : '') + '>📧 ' + eTxt + '</span>' +
+    (_invNoEmail() ? '' : '<span class="inv-badge ' + eCls + '"' + (eTitle ? (' title="Email: ' + escapeHtml(eTitle) + '"') : '') + '>📧 ' + eTxt + '</span>') +
     '<span class="inv-badge ' + vCls + '"' + (vTitle ? (' title="Viber: ' + escapeHtml(vTitle) + '"') : '') + '>💬 ' + vTxt + '</span>' +
   '</span>';
 }
