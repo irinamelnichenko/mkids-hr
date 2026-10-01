@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.353
+// m.kids CRM — Google Apps Script v7.354
+// v7.354: рахунок додаткових — застарілий експорт (відмітки змінили після експорту) більше не підписується «Борг
+//   попереднього періоду»: до сплати = відмітки + ручна правка (клітинка − записане експортом); extrasStale/extrasPayment у списку.
 // v7.353: рахунок — для ФОП підпис коду «РНОКПП», для юросіб «ЄДРПОУ».
 // v7.352: реквізити локацій — getLocRequisites, setLocRequisite (CFO, dryRun, старий IBAN → архівний рядок для звірки, журнал «Реквізити_Правки»);
 //   generateInvoicePDF preview=1 — рахунок-зразок без номера з лічильника.
@@ -6712,7 +6714,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.353', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.354', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -24571,6 +24573,16 @@ function getInvoiceListData(params){
       b.breakdown[rec.activityName].total += (rec.price || 0);
     }
 
+    // v7.354: журнал експорту (що експорт востаннє записав у «Бюджет доп» місяця рахунку). Потрібен, щоб
+    // відрізнити РУЧНУ правку (клітинка − записане експортом → «Борг/Переплата») від ЗАСТАРІЛОГО експорту
+    // (записане − поточні відмітки: відмітки змінили після експорту). Застарілий експорт НЕ показуємо боргом —
+    // до сплати = відмітки + ручна правка (те саме, що запише наступний експорт). Лише коли місяць рахунку =
+    // місяць відміток + 1 (звичайний режим) і в журналі є запис дитини; інакше — як раніше.
+    var _jNext = _nextMonth(extMonth, extYear), _jByName = null;
+    if (_jNext.month === payMonth && _jNext.year === payYear){
+      try { _jByName = _readJournalForTarget(_invSub ? _invSub.host : loc, 'payment', payYear, payMonth).byNormName; } catch(_je){ _jByName = null; }
+    }
+
     // === 4. Збираємо response — фільтр paymentSum > 0 OR extrasSum > 0 ===
     var children = [];
     clients.forEach(function(c){
@@ -24586,6 +24598,16 @@ function getInvoiceListData(params){
       var extrasBreakdownSum = extras.sum;                    // сума занять з відмічань (розписка)
       var extrasSum = extrasByPayment[name] || 0;             // v6.11.16: до сплати = "<Місяць>-Бюджет-доп"
       var extrasAdjustment = extrasSum - extrasBreakdownSum;  // борг(+) / переплата(-) / 0
+      var extrasStale = 0, extrasPayment = extrasSum;          // v7.354
+      var _je = _jByName ? _jByName[_journalNormName(name)] : null;
+      if (_je){
+        var _lw = Number(_je.sum) || 0;
+        extrasStale = _lw - extrasBreakdownSum;                 // ≠0 → відмітки змінили після експорту
+        if (extrasStale !== 0){
+          extrasAdjustment = extrasSum - _lw;                   // лише ручна правка
+          extrasSum = extrasBreakdownSum + extrasAdjustment;    // до сплати = відмітки + ручна правка
+        }
+      }
       // Fix A: graduated (випускник) показуємо ЛИШЕ якщо є додаткові за extMonth;
       // "голі" випускники без занять — не показуємо (рахунок тільки на гуртки).
       if (String(c['Статус'] || '').trim() === 'graduated' && extrasBreakdownSum <= 0) return;
@@ -24611,6 +24633,8 @@ function getInvoiceListData(params){
         extrasBreakdown: breakdownArr,
         extrasBreakdownSum: extrasBreakdownSum,
         extrasAdjustment: extrasAdjustment,
+        extrasStale: extrasStale,       // v7.354: різниця «записано експортом − відмітки» (0 = експорт актуальний)
+        extrasPayment: extrasPayment,   // v7.354: що зараз стоїть у Payment (Оплати-Рік)
         // v7.63: сума договору з картки + прапорець «нема договору» (є Бюджет, а monthlyFee=0)
         // — щоб invoices.html підсвітив ⚠️ директору «заповніть суму договору».
         monthlyFee: (Number(c['Сума договору']) || 0),

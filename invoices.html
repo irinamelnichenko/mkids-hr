@@ -1107,6 +1107,9 @@ function renderInvoiceList(){
       var eCell = c.extrasSum > 0
         ? '<span class="inv-sum">' + fmtUah(c.extrasSum) + ' ₴</span>'
         : '<span class="inv-sum zero">—</span>';
+      // v7.354: відмітки змінили після експорту — у Payment ще стара сума; рахунок бере відмітки (+ ручну правку).
+      if (c.extrasStale) eCell += ' <span class="inv-badge b-yellow" title="У Payment зараз ' + fmtUah(c.extrasPayment || 0) +
+        ' ₴ — відмітки змінились після експорту. Рахунок сформується за відмітками; оновіть експорт додаткових.">⚠️ Payment</span>';
       // v6.26.1 FIX: розділяємо escape HTML-заглушки — щоб не екранувати теги.
       var sName = c.signerName
         ? escapeHtml(c.signerName)
