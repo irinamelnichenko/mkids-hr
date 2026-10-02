@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.364
+// m.kids CRM — Google Apps Script v7.365
+// v7.365: норма предметників — ПІДКАЗКА, не блок: savePredmetnykyLesson / bulk пишуть урок понад норму (overNorm:true),
+//   exportPredmetnykyToSalary більше не зрізає заняття понад норму (лише лог). Усі локації й предмети.
 // v7.364: _VAC_EXCEPTIONS += Нечета Михайло, Міша Крюков (Кар'єрна), Кротов Леон (Борщагівка).
 // v7.363: «Хіміків (Благо)» у LOCATION_USER_LOCS і LOCATION_ORDER.
 // v7.363: «Хіміків (Благо)» у списках (замість «Хіміків»).
@@ -6732,7 +6734,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.364', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.365', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -33271,10 +33273,8 @@ function savePredmetnykyLesson(actorId, lesson){
       current = Object.keys(_daySet).length;                          // унікальні дати
       if (_dupId) return {ok:true, dup:true, id:_dupId, current:current};   // ідемпотентно
       var norm = _predCeilingFor(location, subject, group, ym.y + '-' + ('0' + ym.m).slice(-2) + '-01');   // v7.296
-      if (norm > 0 && current >= norm){
-        return {ok:false, code:'NORM_REACHED', error:'norm_reached',
-                current:current, norm:norm, group:group, subject:subject};
-      }
+      // v7.365: норма — ПІДКАЗКА, не блок. Урок понад норму записується, у відповіді overNorm.
+      var overNorm = (norm > 0 && current >= norm);
 
       // ── insert ──
       var sh = _getPredLessonsSheet();
@@ -33293,7 +33293,7 @@ function savePredmetnykyLesson(actorId, lesson){
       ]);
       _writeHrAudit(actor, 'pred_save_lesson', id, null,
                     {empKey:empKey, location:location, group:group, subject:subject, date:dateStr});
-      return {ok:true, id:id, current: current + 1, norm: norm};
+      return {ok:true, id:id, current: current + 1, norm: norm, overNorm: overNorm};
     } finally {
       lock.releaseLock();
     }
@@ -33445,13 +33445,8 @@ function bulkPredmetnykyLessons(actorId, add, removeIds){
         if (_dset[_dkey]){ added.push({ok:true, dup:true, id:_dset[_dkey]}); continue; }
 
         var norm = ceilOf(location, subject, group, ym);
-        if (norm > 0){
-          var cur = currentCount(location, group, subject, ym);
-          if (cur >= norm){
-            added.push({ok:false, code:'NORM_REACHED', error:'norm_reached',
-                        current:cur, norm:norm, group:group, subject:subject}); continue;
-          }
-        }
+        // v7.365: норма — підказка. Понад норму урок записується, у відповіді overNorm.
+        var _over = (norm > 0 && currentCount(location, group, subject, ym) >= norm);
 
         var id = nextId++;
         _dset[_dkey] = id;                                           // дата зайнята
@@ -33462,7 +33457,7 @@ function bulkPredmetnykyLessons(actorId, add, removeIds){
                    new Date(), actor.id, _uidForEmpKey(empKey)]);
         _writeHrAudit(actor, 'pred_save_lesson', id, null,
                       {empKey:empKey, location:location, group:group, subject:subject, date:dateStr});
-        added.push({ok:true, id:id, norm:norm});
+        added.push({ok:true, id:id, norm:norm, overNorm:_over});
       }
       if (rows.length){
         sh.getRange(sh.getLastRow() + 1, 1, rows.length, PRED_LESSONS_HEADER.length).setValues(rows);
@@ -34249,9 +34244,10 @@ function exportPredmetnykyToSalary(params){
           overGroups.push({group:g, count:perGroup[g], ceiling:ceil, over:perGroup[g] - ceil});
         }
       });
+      // v7.365: норма — підказка. Понад норму оплачується повністю (директор ставить свідомо);
+      // перевищення лише логуємо для звірки.
       if (capExcess > 0){
-        uniq = Math.max(0, uniq - capExcess);
-        Logger.log('[%s] %s → СТЕЛЯ: знято %s занять понад норму %s',
+        Logger.log('[%s] %s → понад норму %s занять (оплачено) %s',
           loc, a.subject_raw, capExcess, JSON.stringify(overGroups));
       }
       // v7.325: «Місяць» — ставка = місячна сума. Є хоч одне заняття → пишемо суму як є.
@@ -34508,11 +34504,12 @@ function _testPredmetnykyBackend(){
     ok('3. filled to norm (' + createdIds.length + '/' + best.norm + ')',
        createdIds.length === best.norm, 'created=' + createdIds.length);
 
-    // ── 4. overflow → NORM_REACHED ──
+    // ── 4. overflow → записується з overNorm (v7.365: норма — підказка) ──
     var r4 = savePredmetnykyLesson(actorId, L);
-    ok('4. overflow → NORM_REACHED',
-       r4 && r4.ok === false && r4.code === 'NORM_REACHED',
-       r4 && (r4.code + ' current=' + r4.current + ' norm=' + r4.norm));
+    if (r4 && r4.ok && r4.id && !r4.dup) createdIds.push(r4.id);
+    ok('4. overflow → ok + overNorm',
+       r4 && r4.ok === true && (r4.overNorm === true || r4.dup === true),
+       r4 && ('ok=' + r4.ok + ' overNorm=' + r4.overNorm + ' current=' + r4.current + ' norm=' + r4.norm));
 
     // ── 5. ІНША реальна група того ж типу веде СВОЮ норму (не аґреговано) ──
     var other = null;

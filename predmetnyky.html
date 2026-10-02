@@ -501,7 +501,8 @@ select,input,textarea{font-family:inherit}
   display:flex;align-items:center;justify-content:center;
   font-size:13px;font-weight:700;color:var(--dark2);
   font-variant-numeric:tabular-nums;background:#fcfdfe}
-.pred-counter-cell.maxed{background:#fdecea;color:var(--red)}
+.pred-counter-cell.maxed{background:#e8f8f0;color:#1e8449}
+.pred-counter-cell.over{background:#fff4e0;color:#b45309}   /* v7.365: понад норму — підказка, не блок */
 .pred-counter-cell.unlimited{background:#e0f2fe;color:#0369a1}
 .pred-counter-cell.forbidden{color:var(--gray);font-style:italic;font-size:11px}
 
@@ -2658,11 +2659,15 @@ function renderTable(loc, subject){
         counterCls += ' unlimited';
         counterTxt = R.count + ' (∞)';
       } else {
-        if (R.isMaxed) counterCls += ' maxed';
-        counterTxt = R.count + ' / ' + R.norm;
+        // v7.365: норма — підказка. Досягнуто → зелений, понад норму → жовтий «+N».
+        if (R.dates > R.norm){
+          counterCls += ' over';
+          counterHint = 'Понад норму на ' + (R.dates - R.norm) + ' (норма ' + R.norm + ')';
+        } else if (R.isMaxed) counterCls += ' maxed';
+        counterTxt = R.count + ' / ' + R.norm + (R.dates > R.norm ? ' (+' + (R.dates - R.norm) + ')' : '');
         // v7.270: норма обмежує дати, а показуємо сесії — коли числа розходяться
         // (є поділ), кажемо це в підказці, щоб «5 / 4» не читалось як помилка.
-        if (R.dates !== R.count) counterHint = R.dates + ' занять у сітці · ' +
+        if (R.dates !== R.count) counterHint = (counterHint ? counterHint + ' · ' : '') + R.dates + ' занять у сітці · ' +
           R.count + ' оплачуваних сесій (поділ) · норма ' + R.norm + ' на дати';
       }
       html += '<div class="' + counterCls + '"' +
@@ -2687,11 +2692,11 @@ function renderDayCell(loc, R, subject, D, canEdit){
   // Disabled:
   //   • view-only або saving — disabled visually
   //   • !hasRate (ставка не в каталозі) — disabled
-  //   • maxed + не checked — disabled (можна uncheck існуючі)
+  //   • v7.365: норма більше НЕ блокує — maxed лише підказка в title/лічильнику
   //   • locked — дата поза поточним тижнем (тижневе замикання; CFO не блокується)
   //   • assignment не обов'язковий (empKey fallback всередині toggle handler)
   var locked   = isWeekLocked(_dmyToIso(D.dmy));
-  var disabled = !canEdit || !R.hasRate || (R.isMaxed && !checked) || locked;
+  var disabled = !canEdit || !R.hasRate || locked;
 
   var cls = 'pred-cell-day' + (pending ? ' pending' : '');
   if (D.isToday)   cls += ' today';
@@ -2706,8 +2711,10 @@ function renderDayCell(loc, R, subject, D, canEdit){
   var title = locked
     ? '🔒 Місяць закрито — редагує лише CFO'
     : (disabled
-        ? (R.isMaxed && !checked ? 'Норму досягнуто' : '')
-        : (checked ? 'Натисни щоб видалити заняття' : 'Натисни щоб провести заняття'));
+        ? ''
+        : (checked ? 'Натисни щоб видалити заняття'
+                   : (R.isMaxed ? 'Норму досягнуто (' + R.dates + '/' + R.norm + ') — можна поставити понад норму'
+                                : 'Натисни щоб провести заняття')));
 
   return '<div class="' + cls + '"' + handler +
     (title ? ' title="' + escapeHtml(title) + '"' : '') + '>' +
@@ -2759,8 +2766,8 @@ function refreshAll(){
 // Було: один POST на клік, і урок з'являвся в S.lessons лише у .then — тобто
 // вихователька чекала повний оберт (~5–7 с). Стало: стан міняється синхронно,
 // а зміни накопичуються 1,5 с і йдуть одним bulkPredmetnykyLessons.
-// ВАЖЛИВО: тут сервер може ЗАКОННО відмовити — норму досягнуто (NORM_REACHED),
-// чужа група, немає прав. Тоді галочку прибираємо назад і кажемо причину.
+// ВАЖЛИВО: тут сервер може ЗАКОННО відмовити — чужа група, немає прав
+// (v7.365: NORM_REACHED більше не повертається — норма лише підказка; гілку лишено для старого бекенду). Тоді галочку прибираємо назад і кажемо причину.
 // Це відрізняє екран від «Додаткових», де відмова буває лише на дублі.
 var PRED_QUEUE_DELAY_MS = 1500;
 var PQ = { add: [], del: [], delWaiting: [], timer: null, sending: false };
