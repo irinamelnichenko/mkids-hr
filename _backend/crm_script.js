@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.363
+// m.kids CRM — Google Apps Script v7.364
+// v7.364: _VAC_EXCEPTIONS += Нечета Михайло, Міша Крюков (Кар'єрна), Кротов Леон (Борщагівка).
 // v7.363: «Хіміків (Благо)» у LOCATION_USER_LOCS і LOCATION_ORDER.
 // v7.363: «Хіміків (Благо)» у списках (замість «Хіміків»).
 // v7.362: нова локація — diagSpreadsheet (перевірка файлу, лише читання), registerLocation (реєстри CONFIG за зразком, CFO, dryRun);
@@ -6731,7 +6732,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.363', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.364', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -21713,6 +21714,10 @@ var _VAC_EXCEPTIONS = [
   // v7.355 (01.10.2026): Борщагівка, Preschool ще на рік — право на відпустку зберігається.
   // Ключі = ПІБ карток («Іванченко Маша», «Ганна Калашник» — так у картках). Використані відпустки не перераховуються.
   'іванченко маша','строй максим','ілай лихошенко','козеренко тимофій','ганна калашник','власюк соломія',
+  // v7.364 (02.10.2026): Preschool ще на рік — право на відпустку зберігається.
+  // Кар'єрна: Нечета Михайло, Крюков Михайло (у картці «Міша Крюков» — ключ за карткою + повна форма);
+  // Скоріна Аліса й Трембачов Герман уже вище. Борщагівка: Кротов Леон.
+  'нечета михайло','міша крюков','крюков михайло','кротов леон',
 ];
 // preschool-відпустка зараховується як standard ЛИШЕ якщо весь період у літі
 // (місяці from і to в межах 06–08) — дзеркало saveAbsencePeriod у clients.html.
