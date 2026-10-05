@@ -5,7 +5,7 @@
 //   • GET до /macros/ (Apps Script) → network-only, fallback на cache
 //   • GET до інших static URLs → cache-first з фоновим оновленням
 
-var CACHE = 'mkids-cache-v7.367';
+var CACHE = 'mkids-cache-v7.368';
 var SHELL = [
   './',
   'activities.html',
@@ -51,6 +51,7 @@ self.addEventListener('fetch', function(ev){
   if (req.method !== 'GET') return;        // POST/PUT/DELETE — pass-through
 
   var url = new URL(req.url);
+  if (url.hostname === 'api.geoapify.com') return;   // v7.368: підказки адрес — завжди мережа, без кешу
   var isApi = url.hostname === 'script.google.com' ||
               url.hostname === 'script.googleusercontent.com';
 

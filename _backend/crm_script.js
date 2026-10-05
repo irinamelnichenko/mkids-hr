@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.367
+// m.kids CRM — Google Apps Script v7.368
+// v7.368: адреса зі списку — geoSearch (GET, «🔍 Знайти»: Google → Nominatim, ≤5 варіантів у межах 60 км від міста);
+//   saveClient приймає homeGeo {lat,lng} → «Гео: статус» = picked (без повторного геокодування).
 // v7.367: координати адреси (етап 2 карти): колонки «Гео: lat/lng/статус/запит»; геокодер Google при збереженні картки,
 //   geocodeClients (CFO, dryRun; нічний 04:00 через setupGeoNightly — запустити раз вручну), setClientGeo (точка вручну).
 // v7.366: картка дитини — колонка «Адреса проживання» (після lead_id; saveClient пише її за назвою, лише якщо ключ
@@ -6738,7 +6740,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.367', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.368', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -6748,6 +6750,7 @@ function doGet(e) {
     else if (action === 'getReconcileLog')           result = getReconcileLog({child:e.parameter.child||'', loc:e.parameter.loc||'', from:e.parameter.from||'', to:e.parameter.to||''}); // v7.94
     else if (action === 'getClients')         result = getClients(e.parameter || {});   // v7.292 &mode=list без JSON здоровʼя/розвитку; v7.336 кеш + mode=roster
     else if (action === 'diagClientsCompare') result = diagClientsCompare();                // v7.336 звірка roster/list/кеш
+    else if (action === 'geoSearch')          result = geoSearch(e.parameter || {});     // v7.368 «🔍 Знайти» адресу
     else if (action === 'getClientCard')      result = getClientCard(e.parameter || {}); // v7.292 повна картка за id
     else if (action === 'runAggregate')       result = aggregatePayments();
     else if (action === 'dryRunSchoolRoster') result = dryRunSchoolRoster(e.parameter || {});   // v7.252 ростер шкіл за картками; v7.267 &simulateMove=1
@@ -9229,6 +9232,13 @@ function _clientWriteHomeAddress(sheet, rowNum, data){
   var c = hd.indexOf('Адреса проживання');
   if (c < 0) return;
   sheet.getRange(rowNum, c + 1).setValue(String(data.homeAddress).trim());
+  // v7.368: адресу обрали зі списку підказок / «Знайти» → координати вже точні, пишемо як є (status 'picked')
+  var hg = data.homeGeo, ix = _geoColIdx(hd);
+  if (hg && ix.ok && Number(hg.lat) > 44 && Number(hg.lat) < 53 && Number(hg.lng) > 22 && Number(hg.lng) < 41){
+    sheet.getRange(rowNum, ix['Гео: lat'] + 1, 1, 4).setValues([[Math.round(Number(hg.lat) * 1e6) / 1e6, Math.round(Number(hg.lng) * 1e6) / 1e6,
+      'picked', _geoQueryFor(String(data.homeAddress).trim(), String(data.loc || ''))]]);
+    return;
+  }
   // v7.367: одразу шукаємо координати (збій/ліміт геокодера не валить збереження — добере ніч)
   try { _clientGeocodeRow(sheet, rowNum, hd, String(data.homeAddress).trim(), String(data.loc || ''), false); } catch(_g){ Logger.log('[geo] ' + _g); }
 }
@@ -9239,6 +9249,7 @@ function _clientWriteHomeAddress(sheet, rowNum, data){
 // якщо в адресі його немає. Статуси «Гео: статус»:
 //   ok       — знайдено будинок;   approx — лише вулиця/район (точка приблизна);
 //   not_found — нічого;           manual — точку поставили вручну (setClientGeo), ніч не перезаписує;
+//   picked   — адресу обрали зі списку (підказки Geoapify / «Знайти»), координати точні (v7.368);
 //   far      — знайдено далі ніж 60 км від міста локації (найімовірніше, інше місто — перевірити).
 // «Гео: запит» — рядок, за яким шукали: зміна адреси → новий запит → перерахунок.
 var GEO_CITY_BY_LOC = {
@@ -9354,6 +9365,45 @@ function geocodeClients(body){
   _cacheBump('clients');
   res.processed = done; res.result = got; res.stopped = stopped || null; res.left = todo.length - done;
   return res;
+}
+// GET ?action=geoSearch&q=&loc= — кнопка «🔍 Знайти» в картці: до 5 варіантів адреси.
+// Спершу геокодер Google (Apps Script, без ключа); порожньо → Nominatim (OSM; разовий пошук дозволений
+// правилами, 1 запит/с). Варіанти далі 60 км від міста локації відкидаються.
+function _geoNiceLabel(s){
+  return String(s || '').replace(/,\s*Україна\b/g, '').replace(/,\s*\d{5}\b/g, '').replace(/\s+,/g, ',').trim();
+}
+function geoSearch(params){
+  params = params || {};
+  var raw = String(params.q || '').trim(), loc = String(params.loc || '').trim();
+  if (raw.length < 3) return {ok:true, items:[]};
+  var q = _geoQueryFor(raw, loc), center = GEO_CITY_CENTER[_geoCityForLoc(loc)] || GEO_CITY_CENTER['Київ'];
+  var items = [], seen = {}, src = 'google';
+  function push(label, lat, lng, exact){
+    label = _geoNiceLabel(label);
+    if (!label || seen[label] || _geoDistKm(center, [lat, lng]) > 60) return;
+    seen[label] = 1; items.push({label:label, lat:Math.round(lat * 1e6) / 1e6, lng:Math.round(lng * 1e6) / 1e6, exact:!!exact});
+  }
+  try {
+    var r = Maps.newGeocoder().setRegion('ua').setLanguage('uk')
+      .setBounds(center[0] - 0.35, center[1] - 0.5, center[0] + 0.35, center[1] + 0.5).geocode(q);
+    (r && r.results || []).slice(0, 8).forEach(function(x){
+      var t = x.types || [];
+      push(x.formatted_address, x.geometry.location.lat, x.geometry.location.lng,
+           (t.indexOf('street_address') !== -1 || t.indexOf('premise') !== -1 || x.geometry.location_type === 'ROOFTOP') && !x.partial_match);
+    });
+  } catch(e){ Logger.log('[geoSearch] google: ' + e); }
+  if (!items.length){
+    src = 'osm';
+    try {
+      var url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&countrycodes=ua&accept-language=uk&q=' + encodeURIComponent(q) +
+        '&viewbox=' + (center[1] - 0.5) + ',' + (center[0] + 0.35) + ',' + (center[1] + 0.5) + ',' + (center[0] - 0.35);
+      var resp = UrlFetchApp.fetch(url, {muteHttpExceptions:true, headers:{'User-Agent':'mkids-hr-crm/1.0'}});
+      if (resp.getResponseCode() === 200) JSON.parse(resp.getContentText()).forEach(function(x){
+        push(x.display_name, Number(x.lat), Number(x.lon), /building|house|residential|apartments/.test(String(x.addresstype || x.type)));
+      });
+    } catch(e2){ Logger.log('[geoSearch] osm: ' + e2); }
+  }
+  return {ok:true, query:q, source:src, items:items.slice(0, 5)};
 }
 function nightlyGeocodeClients(){ return geocodeClients({_system:true, dryRun:false, limit:800}); }
 // Запустити ОДИН РАЗ вручну з редактора: дає дозвіл на сервіс Карт + ставить нічний тригер (04:00).

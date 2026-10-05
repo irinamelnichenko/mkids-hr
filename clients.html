@@ -771,8 +771,13 @@ details.card>summary::-webkit-details-marker{display:none}details.card[open]>sum
         </div>
         <!-- v7.366: адреса проживання — для карти клієнтів; обов'язкова для НОВОЇ картки -->
         <div class="fg"><label>📍 Адреса проживання <span id="fHomeAddressReq" style="color:var(--red);font-weight:400">*</span></label>
-          <input type="text" id="fHomeAddress" placeholder="вул. Березнева 12, кв. 189 (місто — якщо інше, ніж у локації)">
-          <div style="font-size:11px;color:var(--gray);margin-top:3px">Де дитина живе фактично (не реєстрація). Потрібна для карти клієнтів.</div>
+          <div style="position:relative;display:flex;gap:6px">
+            <input type="text" id="fHomeAddress" autocomplete="off" style="flex:1" placeholder="Почніть вводити: Березнева 12…"
+              oninput="onHomeAddrInput()" onkeydown="onHomeAddrKey(event)" onblur="setTimeout(hideHomeAddrSug,200)">
+            <button type="button" class="btn btn-secondary btn-sm" onclick="homeAddrFind()" title="Знайти адресу через Google">🔍 Знайти</button>
+            <div id="fHomeAddrSug" class="hidden" style="position:absolute;left:0;right:0;top:100%;z-index:50;margin-top:2px;background:#fff;border:1.5px solid var(--gray2);border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.12);max-height:260px;overflow:auto"></div>
+          </div>
+          <div style="font-size:11px;color:var(--gray);margin-top:3px">Де дитина живе фактично (не реєстрація). Оберіть адресу зі списку підказок; номер квартири можна дописати після вибору.</div>
           <div id="fHomeAddressGeo" style="font-size:12px;margin-top:3px"></div></div>
         <div class="section-hd">Контакт мами</div>
         <div class="g2">
@@ -3865,11 +3870,108 @@ function _renderHomeGeo(c){
   var el=document.getElementById('fHomeAddressGeo'); if(!el) return;
   var addr=c?String(c.homeAddress||'').trim():'', st=c?String(c.geoStatus||''):'';
   var M={ok:['📍 Знайдено на карті','var(--green)'], manual:['📍 Точку поставлено вручну','var(--green)'],
+         picked:['📍 Обрано зі списку — координати точні','var(--green)'],
          approx:['≈ Знайдено приблизно (вулиця/район) — уточніть номер будинку','var(--orange)'],
          far:['⚠️ Знайдено в іншому місті — перевірте адресу','var(--red)'],
          not_found:['⚠️ Адресу не знайдено на карті — уточніть','var(--red)']};
   var m=addr?(M[st]||['⏳ Координати зʼявляться після збереження / вночі','var(--gray)']):null;
   el.innerHTML=m?'<span style="color:'+m[1]+'">'+m[0]+'</span>':'';
+}
+
+// ── v7.368: ПІДКАЗКИ АДРЕС ───────────────────────────────────────────────────
+// Живі підказки — Geoapify autocomplete (безкоштовний ключ, обмежений доменом у кабінеті Geoapify),
+// у колі 40 км від міста локації. «🔍 Знайти» — бекенд geoSearch (геокодер Google → OSM).
+// Обрана адреса → S._homePick {text,lat,lng} → saveClient homeGeo (статус picked, без повторного пошуку).
+var GEOAPIFY_KEY='d202fb1e9d3f401aaa6441d4cfc3e715';
+var GEO_CITY_BY_LOC_FE={'Кругла':'Львів','Бігова':'Львів','Бровари':'Бровари','Житомир':'Житомир',
+  'Хіміків (Благо)':'Івано-Франківськ','Манхетен (Благо)':'Івано-Франківськ','Нац.Гвардії (Благо)':'Івано-Франківськ'};   // дзеркало бекенду GEO_CITY_BY_LOC
+var GEO_CITY_CENTER_FE={'Київ':[50.4501,30.5234],'Львів':[49.8397,24.0297],'Бровари':[50.5110,30.7909],
+  'Житомир':[50.2547,28.6587],'Івано-Франківськ':[48.9226,24.7111]};
+var _homeSug={items:[],idx:-1,timer:null,seq:0};
+function _homeLoc(){
+  var sel=document.getElementById('fLocSel'), inp=document.getElementById('fLoc');
+  return (S.isNew ? (sel&&sel.value)||(S.user&&S.user.loc)||'' : (inp&&inp.value)||'');
+}
+function _homeCenter(){ return GEO_CITY_CENTER_FE[GEO_CITY_BY_LOC_FE[_homeLoc()]||'Київ']||GEO_CITY_CENTER_FE['Київ']; }
+function hideHomeAddrSug(){ var b=document.getElementById('fHomeAddrSug'); if(b){ b.classList.add('hidden'); b.innerHTML=''; } _homeSug.items=[]; _homeSug.idx=-1; }
+function _showHomeAddrSug(items, note){
+  var b=document.getElementById('fHomeAddrSug'); if(!b) return;
+  _homeSug.items=items; _homeSug.idx=-1;
+  var h=items.map(function(it,i){
+    return '<div class="hsug" data-i="'+i+'" onmousedown="event.preventDefault();pickHomeAddr('+i+')" style="padding:8px 10px;cursor:pointer;border-bottom:1px solid #f0f4f8">'
+      +'<div style="font-size:14px">'+esc(it.label)+'</div>'
+      +(it.sub?'<div style="font-size:11px;color:var(--gray)">'+esc(it.sub)+'</div>':'')+'</div>';
+  }).join('');
+  if(note) h+='<div style="padding:8px 10px;font-size:12px;color:var(--gray)">'+note+'</div>';
+  b.innerHTML=h; b.classList.toggle('hidden', !h);
+}
+function _hlHomeSug(){
+  document.querySelectorAll('#fHomeAddrSug .hsug').forEach(function(el,i){ el.style.background=(i===_homeSug.idx?'#eef5ff':''); });
+}
+function onHomeAddrInput(){
+  var v=document.getElementById('fHomeAddress').value;
+  if(S._homePick && v.indexOf(S._homePick.text)!==0) S._homePick=null;   // змінили саму адресу → координати вже не ті
+  var el=document.getElementById('fHomeAddressGeo'); if(el && !S._homePick) el.innerHTML='';
+  clearTimeout(_homeSug.timer);
+  var q=v.trim();
+  if(q.length<3 || (S._homePick && v.indexOf(S._homePick.text)===0)){ hideHomeAddrSug(); return; }
+  _homeSug.timer=setTimeout(function(){ _homeAutocomplete(q); }, 350);
+}
+function _homeAutocomplete(q){
+  var c=_homeCenter(), my=++_homeSug.seq;
+  var url='https://api.geoapify.com/v1/geocode/autocomplete?lang=uk&limit=6'
+    +'&filter=circle:'+c[1]+','+c[0]+',40000&bias=proximity:'+c[1]+','+c[0]
+    +'&text='+encodeURIComponent(q)+'&apiKey='+GEOAPIFY_KEY;
+  fetch(url).then(function(r){ return r.json(); }).then(function(d){
+    if(my!==_homeSug.seq) return;                                   // уже ввели далі
+    var seen={}, items=[];
+    (d.features||[]).forEach(function(f){
+      var p=f.properties||{};
+      var street=p.street?(p.street+(p.housenumber?', '+p.housenumber:'')):(p.address_line1||p.name||'');
+      var city=p.city||p.town||p.village||p.county||'';
+      var label=street+(city&&street.indexOf(city)===-1?', '+city:'');
+      // райони/міста — не адреса; латиниця — дубль-переклад тієї ж точки
+      if(/^(suburb|district|city|county|state|postcode|country)$/.test(p.result_type||'') || !/[а-яіїєґ]/i.test(label)) return;
+      var area=p.district||p.suburb||'', key=label+'|'+area;   // дві «Березнева 12» у різних масивах Києва — різні
+      if(!street || seen[key]) return; seen[key]=1;
+      items.push({label:label, sub:[area, p.housenumber?'':'вулиця — допишіть номер будинку'].filter(Boolean).join(' · '),
+                  lat:p.lat, lng:p.lon, exact:!!p.housenumber});
+    });
+    if(document.activeElement!==document.getElementById('fHomeAddress')) return;
+    _showHomeAddrSug(items, items.length?'':'Немає підказок — натисніть «🔍 Знайти»');
+  }).catch(function(){ /* мережа / ліміт Geoapify — лишається кнопка «Знайти» */ });
+}
+function onHomeAddrKey(e){
+  var n=_homeSug.items.length;
+  if(e.key==='Escape'){ hideHomeAddrSug(); return; }
+  if(e.key==='Enter'){ e.preventDefault(); if(n) pickHomeAddr(_homeSug.idx>=0?_homeSug.idx:0); else homeAddrFind(); return; }
+  if(!n) return;
+  if(e.key==='ArrowDown'){ e.preventDefault(); _homeSug.idx=(_homeSug.idx+1)%n; _hlHomeSug(); }
+  else if(e.key==='ArrowUp'){ e.preventDefault(); _homeSug.idx=(_homeSug.idx-1+n)%n; _hlHomeSug(); }
+}
+function pickHomeAddr(i){
+  var it=_homeSug.items[i]; if(!it) return;
+  var inp=document.getElementById('fHomeAddress');
+  inp.value=it.label;
+  S._homePick={text:it.label, lat:it.lat, lng:it.lng};
+  hideHomeAddrSug();
+  var el=document.getElementById('fHomeAddressGeo');
+  if(el) el.innerHTML=it.exact
+    ? '<span style="color:var(--green)">📍 Обрано зі списку — координати точні</span>'
+    : '<span style="color:var(--orange)">≈ Обрано вулицю без номера будинку — точка приблизна</span>';
+  inp.focus();
+}
+async function homeAddrFind(){
+  var q=document.getElementById('fHomeAddress').value.trim();
+  if(q.length<3){ alert('Введіть хоча б вулицю й номер будинку'); return; }
+  var el=document.getElementById('fHomeAddressGeo'); if(el) el.innerHTML='<span style="color:var(--gray)">⏳ Шукаю…</span>';
+  try{
+    var r=await apiGetFull({action:'geoSearch', q:q, loc:_homeLoc()});
+    var items=(r.items||[]).map(function(x){ return {label:x.label, sub:(r.source==='osm'?'OpenStreetMap':'Google')+(x.exact?'':' · приблизно'), lat:x.lat, lng:x.lng, exact:x.exact}; });
+    if(el) el.innerHTML='';
+    document.getElementById('fHomeAddress').focus();
+    _showHomeAddrSug(items, items.length?'':'⚠️ Нічого не знайдено поблизу локації — перевірте назву вулиці');
+  }catch(e){ if(el) el.innerHTML='<span style="color:var(--red)">Пошук не вдався: '+esc(e.message||e)+'</span>'; }
 }
 
 function openNewChild(){
@@ -3888,6 +3990,7 @@ function openNewChild(){
   });
   document.getElementById('fHomeAddressReq').style.display='';   // v7.366: нова картка — адреса обов'язкова
   _renderHomeGeo(null);   // v7.367
+  S._homePick=null; hideHomeAddrSug();   // v7.368
   // v6.26 Етап 1A — reset radio "Підписант договору" до Мами за замовчуванням.
   var spMom = document.querySelector('input[name="signerParent"][value="mom"]');
   if (spMom) spMom.checked = true;
@@ -4099,6 +4202,7 @@ function populateForm(id){
   document.getElementById('fHomeAddress').value=c.homeAddress||'';   // v7.366
   document.getElementById('fHomeAddressReq').style.display='none';   // наявна картка — не обов'язково
   _renderHomeGeo(c);   // v7.367
+  S._homePick=null; hideHomeAddrSug();   // v7.368
   document.getElementById('fMomDoc').value=c.momDoc||'';
   document.getElementById('fMomRnokpp').value=c.momRnokpp||'';
   document.getElementById('fDadDoc').value=c.dadDoc||'';
@@ -7665,6 +7769,9 @@ function saveChild(){
   c.birthCert=val('fBirthCert');
   c.childRegAddress=val('fChildRegAddress');
   c.homeAddress=val('fHomeAddress');   // v7.366
+  // v7.368: адресу обрано зі списку (і дописано хіба квартиру) → точні координати разом із карткою
+  var _homeGeo=(S._homePick && c.homeAddress.indexOf(S._homePick.text)===0) ? {lat:S._homePick.lat, lng:S._homePick.lng} : undefined;
+  if(_homeGeo){ c.geoStatus='picked'; c.geoLat=_homeGeo.lat; c.geoLng=_homeGeo.lng; }
   c.momDoc=val('fMomDoc');
   c.momRnokpp=val('fMomRnokpp');
   c.dadDoc=val('fDadDoc');
@@ -7693,6 +7800,7 @@ function saveChild(){
     birthCert: c.birthCert,
     childRegAddress: c.childRegAddress,
     homeAddress: c.homeAddress,   // v7.366
+    homeGeo: _homeGeo,            // v7.368
     momDoc: c.momDoc, momRnokpp: c.momRnokpp,
     dadDoc: c.dadDoc, dadRnokpp: c.dadRnokpp,
     createdAt: c.createdAt, updatedAt: c.updatedAt
