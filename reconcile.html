@@ -519,6 +519,7 @@ select,input{font-family:inherit}
         <span>—</span>
         <input type="date" id="rcBankTo" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:8px">
         <button class="btn btn-primary" id="rcBankBtn" onclick="rcFromBank()">🏦 З банку</button>
+        <button class="btn" onclick="rcBankTokensOpen()" title="Токени банку: додати / переглянути / прибрати">⚙️ Банки</button>
       </span>
     </div>
   </div>
@@ -1362,6 +1363,73 @@ async function rcFromBank(){
   } catch(e){
     $('rcWrap').innerHTML = '<div class="err">❌ ' + String(e && e.message || e) + '</div>';
   } finally { RC.busy = false; btn.disabled = false; btn.textContent = '🏦 З банку'; }
+}
+
+// v7.377: ТОКЕНИ БАНКУ — CFO додає сама. Токен іде лише на сервер (bankTokenSet перевіряє його запитом до банку),
+// назад повертається тільки маска. Поле — type=password, без автозаповнення; після відправки очищається.
+function _rcBankModal(html){
+  var m = document.getElementById('rcBankModal');
+  if (!m){
+    m = document.createElement('div'); m.id = 'rcBankModal';
+    m.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:300;display:flex;align-items:center;justify-content:center;padding:16px';
+    m.addEventListener('click', function(e){ if (e.target === m) m.remove(); });
+    document.body.appendChild(m);
+  }
+  m.innerHTML = '<div style="background:#fff;border-radius:14px;max-width:640px;width:100%;max-height:88vh;overflow:auto;padding:18px">' + html + '</div>';
+}
+async function rcBankTokensOpen(){
+  _rcBankModal('<div class="inv-loading">⏳ Завантаження…</div>');
+  var j = null;
+  try { j = await (await fetch(CFG.SCRIPT_URL + '?action=bankStatus&actorId=' + encodeURIComponent((S.user && S.user.id) || ''), {redirect:'follow'})).json(); } catch(e){ j = {ok:false, error:String(e.message || e)}; }
+  var list = (j && j.ok && j.tokens) || [];
+  var h = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><h3 style="margin:0;flex:1">🏦 Токени банку (ПриватБанк)</h3>'
+    + '<button class="btn" onclick="document.getElementById(\'rcBankModal\').remove()">✕</button></div>';
+  if (j && !j.ok) h += '<div class="err">❌ ' + escapeHtml(j.error || 'помилка') + '</div>';
+  h += list.length ? list.map(function(t){
+      return '<div style="border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;margin-bottom:8px">'
+        + '<div style="display:flex;align-items:center;gap:8px"><b style="flex:1">' + escapeHtml(t.label) + '</b>'
+        + '<code style="color:#64748b">' + escapeHtml(t.masked) + '</code>'
+        + '<button class="btn" style="padding:4px 8px" onclick="rcBankTokenRemove(\'' + escapeHtml(t.key) + '\',\'' + escapeHtml(t.label).replace(/'/g, '') + '\')">🗑</button></div>'
+        + '<div style="font-size:12px;color:#64748b;margin-top:6px">' + (t.accounts || []).map(function(a){
+            return escapeHtml(a.iban) + ' · ' + escapeHtml(a.name || '') + (a.lastCovered ? ' · виписка до ' + escapeHtml(a.lastCovered) : ''); }).join('<br>') + '</div></div>';
+    }).join('') : '<div style="color:#64748b;margin-bottom:10px">Ще немає жодного токена.</div>';
+  h += '<div style="border-top:1px solid #e2e8f0;margin-top:12px;padding-top:12px"><b>➕ Додати токен</b>'
+    + '<div style="font-size:12px;color:#64748b;margin:4px 0 8px">Приват24 для бізнесу → «Інтеграція (Автоклієнт)» → «Підключити API» → вкладка «ID і Token». Окремий токен на кожен ФОП / ТОВ.</div>'
+    + '<input id="rcTokLabel" placeholder="Назва, напр. «ФОП Кабанець І.М.»" autocomplete="off" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;margin-bottom:8px">'
+    + '<input id="rcTokVal" type="password" placeholder="Токен" autocomplete="new-password" spellcheck="false" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;margin-bottom:8px;font-family:monospace">'
+    + '<div style="display:flex;gap:8px;align-items:center"><button class="btn btn-primary" id="rcTokBtn" onclick="rcBankTokenAdd()">Перевірити й зберегти</button><span id="rcTokMsg" style="font-size:13px"></span></div>'
+    + '<div style="font-size:11px;color:#94a3b8;margin-top:8px">Токен зберігається лише на сервері; у системі видно тільки маску. Нікому не пересилайте токен у месенджерах.</div></div>';
+  _rcBankModal(h);
+}
+async function rcBankTokenAdd(){
+  var label = document.getElementById('rcTokLabel').value.trim(), tokEl = document.getElementById('rcTokVal'), tok = tokEl.value.trim();
+  var msg = document.getElementById('rcTokMsg'), btn = document.getElementById('rcTokBtn');
+  if (!label || tok.length < 40){ msg.innerHTML = '<span style="color:#dc2626">Вкажіть назву і повний токен</span>'; return; }
+  btn.disabled = true; msg.innerHTML = '⏳ Перевіряю в банку…';
+  var before = {};
+  try { var s0 = await (await fetch(CFG.SCRIPT_URL + '?action=bankStatus&actorId=' + encodeURIComponent(S.user.id), {redirect:'follow'})).json(); (s0.tokens || []).forEach(function(t){ before[t.key] = 1; }); } catch(_){}
+  var r = null;
+  try {
+    var resp = await fetch(CFG.SCRIPT_URL, {method:'POST', redirect:'follow', headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body:JSON.stringify({action:'bankTokenSet', actorId:S.user.id, label:label, token:tok})});
+    var txt = await resp.text(); try { r = JSON.parse(txt); } catch(_){ r = null; }   // POST з Apps Script інколи віддає HTML
+  } catch(e){ r = {ok:false, error:String(e.message || e)}; }
+  tokEl.value = '';   // токен не лишаємо в полі
+  if (r && r.ok === false){ btn.disabled = false; msg.innerHTML = '<span style="color:#dc2626">❌ ' + escapeHtml(r.error || 'банк не прийняв токен') + '</span>'; return; }
+  // перевіряємо за списком (відповідь POST могла не дійти)
+  var s1 = null; try { s1 = await (await fetch(CFG.SCRIPT_URL + '?action=bankStatus&actorId=' + encodeURIComponent(S.user.id), {redirect:'follow'})).json(); } catch(_){}
+  var added = ((s1 && s1.tokens) || []).filter(function(t){ return !before[t.key] || (r && r.key === t.key); });
+  if (!added.length && !(r && r.ok)){ btn.disabled = false; msg.innerHTML = '<span style="color:#dc2626">❌ Токен не збережено — перевірте, що скопійовано повністю</span>'; return; }
+  showToast('✅ Токен «' + label + '» додано' + (r && r.accounts ? ' · рахунків: ' + Object.keys(r.accounts).length : ''), 'success');
+  rcBankTokensOpen();
+}
+async function rcBankTokenRemove(key, label){
+  if (!confirm('Прибрати токен «' + label + '»? Виписки з цих рахунків більше не завантажуватимуться.')) return;
+  try {
+    await fetch(CFG.SCRIPT_URL, {method:'POST', redirect:'follow', headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body:JSON.stringify({action:'bankTokenSet', actorId:S.user.id, key:key, remove:true})});
+  } catch(_){}
+  rcBankTokensOpen();
 }
 
 async function rcOnFile(input){
