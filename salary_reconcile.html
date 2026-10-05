@@ -211,6 +211,29 @@ td.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
       });
       window.addEventListener('load', function(){ setTimeout(window._revealHistMenu, 600); });
       </script>
+      <div class="nav-item" id="navCash" style="display:none"
+           onclick="window.location.href='cash.html'">
+        <span class="ni">💵</span> Готівка
+      </div>
+      <script>
+      /* v7.373: «Готівка» (внесення готівкових витрат/ЗП) — лише CFO. */
+      window._revealCashMenu = function(){
+        var el = document.getElementById('navCash'); if (!el) return;
+        var u = null;
+        try { u = (typeof S !== 'undefined' && S && S.user) ? S.user : null; } catch(e){}
+        if (!u){ try { var s = JSON.parse(localStorage.getItem('mkids_session') || 'null'); u = (s && s.user) || null; } catch(e){} }
+        el.style.display = (u && String(u.role || '').toLowerCase().trim() === 'cfo') ? '' : 'none';
+      };
+      window._revealCashMenu();
+      document.addEventListener('DOMContentLoaded', function(){
+        if (typeof applyRoleVisibility === 'function' && !applyRoleVisibility.__cash){
+          var _o = applyRoleVisibility;
+          applyRoleVisibility = function(){ var r = _o.apply(this, arguments); try { window._revealCashMenu(); } catch(e){} return r; };
+          applyRoleVisibility.__cash = true;
+        }
+      });
+      window.addEventListener('load', function(){ setTimeout(window._revealCashMenu, 600); });
+      </script>
       <div class="nav-sec" data-section="crm">👶 КЛІЄНТИ CRM</div>
       <div class="nav-item" data-permission="clients_list" data-parent="crm" data-perm-page="clients"
            onclick="goPerm('clients_list')">

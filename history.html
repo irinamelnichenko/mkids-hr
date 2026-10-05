@@ -211,6 +211,29 @@ table.hist .muted{font-size:11.5px}
       });
       window.addEventListener('load', function(){ setTimeout(window._revealHistMenu, 600); });
       </script>
+      <div class="nav-item" id="navCash" style="display:none"
+           onclick="window.location.href='cash.html'">
+        <span class="ni">💵</span> Готівка
+      </div>
+      <script>
+      /* v7.373: «Готівка» (внесення готівкових витрат/ЗП) — лише CFO. */
+      window._revealCashMenu = function(){
+        var el = document.getElementById('navCash'); if (!el) return;
+        var u = null;
+        try { u = (typeof S !== 'undefined' && S && S.user) ? S.user : null; } catch(e){}
+        if (!u){ try { var s = JSON.parse(localStorage.getItem('mkids_session') || 'null'); u = (s && s.user) || null; } catch(e){} }
+        el.style.display = (u && String(u.role || '').toLowerCase().trim() === 'cfo') ? '' : 'none';
+      };
+      window._revealCashMenu();
+      document.addEventListener('DOMContentLoaded', function(){
+        if (typeof applyRoleVisibility === 'function' && !applyRoleVisibility.__cash){
+          var _o = applyRoleVisibility;
+          applyRoleVisibility = function(){ var r = _o.apply(this, arguments); try { window._revealCashMenu(); } catch(e){} return r; };
+          applyRoleVisibility.__cash = true;
+        }
+      });
+      window.addEventListener('load', function(){ setTimeout(window._revealCashMenu, 600); });
+      </script>
       <div class="nav-sec" data-section="crm">👶 КЛІЄНТИ CRM</div>
       <div class="nav-item" data-permission="clients_list" data-parent="crm" data-perm-page="clients"
            onclick="goPerm('clients_list')">
@@ -360,6 +383,10 @@ table.hist .muted{font-size:11.5px}
   <select id="kindF" class="flt" title="Тип">
     <option value="">Усі типи</option><option value="income">💚 Доходи</option><option value="expense">🧾 Витрати</option>
     <option value="salary">💼 ЗП (відомість)</option><option value="salary_fop">🎨 ЗП ФОП</option><option value="manual">✍️ Ручні правки</option>
+  </select>
+  <select id="srcF" class="flt" title="Звідки">
+    <option value="">Усі джерела</option><option value="statement">🏦 виписка</option><option value="payroll">📄 відомість</option>
+    <option value="cash">💵 готівка</option><option value="manual">✍️ вручну</option>
   </select>
   <select id="locF" class="flt" title="Локація"></select>
   <select id="byF" class="flt" title="Хто вніс"></select>
@@ -808,8 +835,8 @@ var KIND = {
   salary_fop: {t:'ЗП ФОП',       i:'🎨', c:'#9333ea'},
   manual:     {t:'Ручна правка', i:'✍️', c:'#ea580c'}
 };
-var SRC = {statement:'🏦 виписка', payroll:'📄 відомість', manual:'✍️ вручну'};
-var H = { y:0, m:0, basis:'entered', items:[], kind:'', loc:'', by:'', q:'', showSkipped:false, loading:false };
+var SRC = {statement:'🏦 виписка', payroll:'📄 відомість', manual:'✍️ вручну', cash:'💵 готівка'};   // v7.373 cash
+var H = { y:0, m:0, basis:'entered', items:[], kind:'', src:'', loc:'', by:'', q:'', showSkipped:false, loading:false };
 
 function histGate(){
   if (S.user && String(S.user.role || '').toLowerCase() === 'cfo') return true;
@@ -847,6 +874,7 @@ function filtered(){
   var q = H.q.toLowerCase();
   return H.items.filter(function(x){
     if (H.kind && x.kind !== H.kind) return false;
+    if (H.src && x.source !== H.src) return false;
     if (H.loc && x.loc !== H.loc) return false;
     if (H.by && (x.by || '—') !== H.by) return false;
     if (!H.showSkipped && x.status === 'пропущено') return false;
@@ -862,7 +890,7 @@ function renderHist(){
   var rows = filtered();
   // підсумки — з урахуванням фільтрів локації/автора/пошуку, але по всіх типах (картки = перемикач типу)
   var base = H.items.filter(function(x){
-    return (!H.loc || x.loc === H.loc) && (!H.by || (x.by || '—') === H.by) && x.status !== 'пропущено';
+    return (!H.loc || x.loc === H.loc) && (!H.by || (x.by || '—') === H.by) && (!H.src || x.source === H.src) && x.status !== 'пропущено';
   });
   var sum = {}, cnt = {};
   base.forEach(function(x){ sum[x.kind] = (sum[x.kind] || 0) + (Number(x.amount) || 0); cnt[x.kind] = (cnt[x.kind] || 0) + 1; });
@@ -880,7 +908,7 @@ function renderHist(){
        (skipped ? '<label class="chk"><input type="checkbox" ' + (H.showSkipped ? 'checked' : '') + ' onchange="H.showSkipped=this.checked;renderHist()"> показати пропущені (' + skipped + ')</label>' : '') +
        '<button class="btn sec" style="padding:5px 10px;font-size:12px" onclick="exportXlsx()">⬇️ Excel</button></div>';
   if (!rows.length){
-    h += '<div class="empty">За цей місяць нічого не знайдено' + (H.kind || H.loc || H.by || H.q ? ' з такими фільтрами' : '') + '.</div></div>';
+    h += '<div class="empty">За цей місяць нічого не знайдено' + (H.kind || H.src || H.loc || H.by || H.q ? ' з такими фільтрами' : '') + '.</div></div>';
     main.innerHTML = h; return;
   }
   h += '<div class="tblwrap"><table class="hist"><thead><tr><th>Коли</th><th>Хто</th><th>Локація</th><th>Тип</th><th>Що саме</th>' +
@@ -891,13 +919,14 @@ function renderHist(){
     var amt = x.kind === 'manual' && x.before !== '' && x.before != null
       ? '<span class="muted">' + fmtMoney(x.before) + ' → </span>' + fmtMoney(x.after)
       : fmtMoney(x.amount);
-    h += '<tr class="' + (x.status === 'пропущено' ? 'skip' : '') + '">' +
+    h += '<tr class="' + (x.status === 'пропущено' || x.status === 'скасовано' ? 'skip' : '') + '">' +
       '<td class="nw">' + fmtWhen(x.when) + '</td>' +
       '<td>' + (x.by ? esc(x.by) : '<span class="muted">невідомо</span>') + '</td>' +
       '<td>' + esc(x.loc || '—') + '</td>' +
       '<td class="nw"><span class="kb" style="--c:' + K.c + '">' + K.i + ' ' + K.t + '</span></td>' +
       '<td><b>' + esc(x.what || '—') + '</b><div class="muted">' + esc(x.detail || '') +
-        (x.status === 'пропущено' ? ' · <b>пропущено</b>' + (x.reason ? ': ' + esc(x.reason) : '') : '') + '</div></td>' +
+        (x.status === 'пропущено' ? ' · <b>пропущено</b>' + (x.reason ? ': ' + esc(x.reason) : '') : '') +
+        (x.status === 'скасовано' ? ' · <b>скасовано</b>' : '') + (x.status === 'скасування' ? ' · <b>скасування</b>' : '') + '</div></td>' +
       '<td class="r nw">' + amt + '</td>' +
       '<td class="nw">' + (x.month ? MONTHS[x.month - 1] : '—') + '</td>' +
       '<td><div>' + (SRC[x.source] || esc(x.source)) + '</div><div class="muted">' + esc(x.sourceInfo || '') + '</div></td></tr>';
@@ -929,6 +958,7 @@ function wireHist(){
   document.getElementById('basisSel').addEventListener('change', function(){ H.basis = this.value; loadHist(); });
   document.getElementById('kindF').addEventListener('change', function(){ H.kind = this.value; renderHist(); });
   document.getElementById('locF').addEventListener('change', function(){ H.loc = this.value; renderHist(); });
+  document.getElementById('srcF').addEventListener('change', function(){ H.src = this.value; renderHist(); });
   document.getElementById('byF').addEventListener('change', function(){ H.by = this.value; renderHist(); });
   var t = null;
   document.getElementById('qF').addEventListener('input', function(){ var v = this.value; clearTimeout(t); t = setTimeout(function(){ H.q = v.trim(); renderHist(); }, 250); });

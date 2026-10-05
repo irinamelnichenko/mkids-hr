@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.372
+// m.kids CRM — Google Apps Script v7.373
+// v7.373: готівка через систему (CFO) — cashOptions/cashAdd/cashCancel/cashList; факт місяця OPEX/Salary, сума дописується
+//   «+сума» в кінець формули; журнал «Готівка_Лог»; готівка в «Історії внесень» (джерело cash).
 // v7.372: історія внесень — getEntryHistory (CFO; доходи/витрати/ЗП ФОП/ЗП відомість/ручні правки, фільтр місяця внесення
 //   або зарахування); автор у журналах = людина з токена (_entryAuthor), а не роль.
 // v7.371: карта клієнтів — getClientMap (GET; лише ПІБ/група/локація/статус/координати, без адрес і телефонів; директор —
@@ -6746,7 +6748,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.372', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.373', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -6759,6 +6761,9 @@ function doGet(e) {
     else if (action === 'geoSearch')          result = geoSearch(e.parameter || {});     // v7.368 «🔍 Знайти» адресу
     else if (action === 'getClientMap')       result = getClientMap(e.parameter || {});  // v7.371 карта клієнтів
     else if (action === 'getEntryHistory')    result = getEntryHistory(e.parameter || {}); // v7.372 історія внесень (CFO)
+    else if (action === 'cashOptions')        result = cashOptions(e.parameter || {});     // v7.373 готівка: статті/рядки
+    else if (action === 'cashList')           result = cashList(e.parameter || {});        // v7.373 готівка: журнал місяця
+    else if (action === 'cashPreview')        result = cashAdd(Object.assign({}, e.parameter || {}, {dryRun:true}));   // v7.373 перевірка (лише читання)
     else if (action === 'getClientCard')      result = getClientCard(e.parameter || {}); // v7.292 повна картка за id
     else if (action === 'runAggregate')       result = aggregatePayments();
     else if (action === 'dryRunSchoolRoster') result = dryRunSchoolRoster(e.parameter || {});   // v7.252 ростер шкіл за картками; v7.267 &simulateMove=1
@@ -6920,6 +6925,8 @@ function doPost(e) {
     else if (body.action === 'geocodeClients')            result = geocodeClients(body);        // v7.367 CFO, dryRun за замовчуванням
     else if (body.action === 'setClientGeo')              result = setClientGeo(body);          // v7.367 точка вручну
     else if (body.action === 'setLocGeo')                 result = setLocGeo(body);             // v7.371 точка локації
+    else if (body.action === 'cashAdd')                   result = cashAdd(body);               // v7.373 готівка (CFO, dryRun)
+    else if (body.action === 'cashCancel')                result = cashCancel(body);            // v7.373 скасування готівки
     else if (body.action === 'createCardFromPayment')     result = createCardFromPayment(body || {});   // v7.357 картка з рядка Payment (ПІБ як у Payment)
     else if (body.action === 'setLocRequisite')           result = setLocRequisite(body || {});      // v7.352 правка реквізитів (CFO, dryRun, архів старого IBAN, журнал)
     else if (body.action === 'addLocationUser')           result = addLocationUser(body || {});      // v7.351 один акаунт локації (CFO, dryRun)
@@ -15054,6 +15061,162 @@ function _opexDateNum(s){
   return NaN;
 }
 
+// ═══ v7.373: ГОТІВКА — внесення готівкових витрат і ЗП через систему (лише CFO) ═══════════════
+// Пише в ТІ САМІ клітинки, що й руками: колонка «Факт» місяця (1-based (month-1)*3+2) рядка статті OPEX
+// (рядки 3–30 файлу локації) або рядка Salary. Сума ДОПИСУЄТЬСЯ в кінець формули («=1200+300» → «=1200+300+450»;
+// число 1200 → «=1200+450»; порожньо → «=450»), щоб у клітинці було видно склад. Скасування — «…+450-450».
+// Журнал «Готівка_Лог» (CONFIG); ключ ідемпотентності з фронту — повторне натискання не дублює.
+var CASH_LOG_SHEET  = 'Готівка_Лог';
+var CASH_LOG_HEADER = ['Коли','Ким','Тип','Локація','Рядок','Назва','Рік','Місяць','Сума','Було','Стало','Коментар','Ключ','Статус','Скасування'];
+function _cashActorOk(id){
+  var a = null; try { a = _getActor((_CURRENT_AUTH && _CURRENT_AUTH.id) || id); } catch(_a){}
+  return !!(a && _roleKey(a.role) === 'cfo');
+}
+function _cashLogSheet(create){ return _opexEnsureCfgSheet(CASH_LOG_SHEET, CASH_LOG_HEADER, create); }
+// Аркуш + рядки для типу. expense → OPEX-файл локації; salary → Salary-файл локації.
+function _cashTarget(kind, loc){
+  if (kind === 'expense'){
+    var ls = _opexLocSheet(loc); if (!ls) return {error:'OPEX-файл для «' + loc + '» не знайдено в реєстрі'};
+    return {sheet:ls.sheet};
+  }
+  if (kind === 'salary'){
+    var e = null; (_salaryGetRegistry().rows || []).forEach(function(x){ if (x.loc === loc && !x.virtual) e = x; });
+    if (!e) return {error:'Salary-файл для «' + loc + '» не знайдено в реєстрі'};
+    var sh = SpreadsheetApp.openById(e.sheetId).getSheetByName(e.listName);
+    return sh ? {sheet:sh} : {error:'Аркуш «' + e.listName + '» не знайдено'};
+  }
+  return {error:'kind має бути expense або salary'};
+}
+function _cashFactCol(month){ return (Number(month) - 1) * 3 + 2; }
+function _cashNum(n){ var t = (Math.round(Math.abs(n) * 100) / 100).toString(); return t; }   // формули — en-US: крапка
+// Нова формула клітинки після додавання amount (може бути відʼємним — скасування).
+function _cashFormula(cell, amount){
+  var f = '', v;
+  try { f = String(cell.getFormula() || ''); } catch(_f){}
+  var op = (amount < 0 ? '-' : '+') + _cashNum(amount);
+  if (f) return f + op;
+  v = cell.getValue();
+  if (v === '' || v === null) return '=' + (amount < 0 ? '-' : '') + _cashNum(amount);
+  if (typeof v !== 'number' && isNaN(Number(String(v).replace(/\s/g, '').replace(',', '.')))) return null;   // текст — не чіпаємо
+  var base = typeof v === 'number' ? v : Number(String(v).replace(/\s/g, '').replace(',', '.'));
+  return '=' + (Math.round(base * 100) / 100) + op;
+}
+// GET ?action=cashOptions&loc=&year=&month=&actorId= — статті OPEX і рядки Salary з поточним фактом місяця.
+function cashOptions(params){
+  params = params || {};
+  if (!_cashActorOk(params.actorId)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var loc = String(params.loc || '').trim(), month = Number(params.month) || (new Date().getMonth() + 1);
+  if (!loc) return {ok:false, error:'loc обовʼязковий'};
+  var fc = _cashFactCol(month), res = {ok:true, loc:loc, month:month, expense:[], salary:[], errors:{}};
+  var te = _cashTarget('expense', loc);
+  if (te.error) res.errors.expense = te.error;
+  else {
+    var ev = te.sheet.getRange(1, 1, 30, Math.max(fc, 2)).getValues(), seen = {};
+    for (var r = 3; r <= 30; r++){
+      var raw = String(ev[r - 1][0] || '').trim();
+      if (!raw || _opexIsSkippedCategory(raw)) continue;
+      var nm = _opexNormalizeCategoryName(raw), k = nm.trim().toLowerCase();
+      if (seen[k]) continue; seen[k] = 1;
+      res.expense.push({row:r, name:nm, raw:raw, fact:_opexNum(ev[r - 1][fc - 1])});
+    }
+  }
+  var ts = _cashTarget('salary', loc);
+  if (ts.error) res.errors.salary = ts.error;
+  else {
+    var lr = ts.sheet.getLastRow(), sv = lr >= 4 ? ts.sheet.getRange(4, 1, lr - 3, Math.max(fc, 2)).getValues() : [];
+    sv.forEach(function(row, i){
+      var nm = String(row[0] || '').trim(); if (!nm) return;
+      res.salary.push({row:i + 4, name:nm, fact:_opexNum(row[fc - 1])});
+    });
+  }
+  return res;
+}
+// POST {action:'cashAdd', actorId, kind, loc, year, month, row, name, amount, comment, key, dryRun(default true)}
+function cashAdd(body){
+  body = body || {};
+  if (!_cashActorOk(body.actorId)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var kind = String(body.kind || ''), loc = String(body.loc || '').trim(), row = Number(body.row) || 0;
+  var year = Number(body.year) || new Date().getFullYear(), month = Number(body.month) || 0;
+  var amount = Math.round(Number(String(body.amount).replace(',', '.')) * 100) / 100;
+  var comment = String(body.comment || '').trim(), key = String(body.key || '').trim(), dryRun = (body.dryRun !== false);
+  if (!loc || !row || !(month >= 1 && month <= 12)) return {ok:false, error:'loc, row, month обовʼязкові'};
+  if (!(amount > 0)) return {ok:false, error:'Сума має бути більша за 0'};
+  if (!comment) return {ok:false, error:'Коментар обовʼязковий'};
+  if (year !== new Date().getFullYear()) return {ok:false, error:'Лише поточний рік (' + new Date().getFullYear() + ')'};
+  if (_isMonthClosed(year, month)) return {ok:false, code:'CLOSED_MONTH', error:'Місяць ' + month + '.' + year + ' закрито'};
+  if (kind === 'expense' && (row < 3 || row > 30)) return {ok:false, error:'Рядок статті OPEX має бути 3–30'};
+  var t = _cashTarget(kind, loc); if (t.error) return {ok:false, error:t.error};
+  var lock = null;
+  if (!dryRun){ lock = LockService.getScriptLock(); try { lock.waitLock(30000); } catch(_l){ return {ok:false, error:'LOCK_TIMEOUT'}; } }
+  try {
+    var name = String(t.sheet.getRange(row, 1).getValue() || '').trim();
+    if (body.name && _nameFold(name) !== _nameFold(body.name)) return {ok:false, error:'Рядок ' + row + ' тепер «' + name + '», а не «' + body.name + '» — оновіть список'};
+    var cell = t.sheet.getRange(row, _cashFactCol(month)), before = _opexNum(cell.getValue()), f = _cashFormula(cell, amount);
+    if (!f) return {ok:false, error:'У клітинці текст, а не число — внесіть вручну'};
+    var res = {ok:true, dryRun:dryRun, kind:kind, loc:loc, row:row, name:name, month:month, year:year, amount:amount,
+               before:before, after:Math.round((before + amount) * 100) / 100, formula:f};
+    if (dryRun) return res;
+    var lsh = _cashLogSheet(true), lv = lsh.getDataRange().getValues();
+    if (key) for (var i = 1; i < lv.length; i++) if (String(lv[i][12]) === key) return {ok:true, dup:true, key:key};
+    var origF = '', origV = cell.getValue(); try { origF = String(cell.getFormula() || ''); } catch(_o){}
+    cell.setFormula(f);
+    SpreadsheetApp.flush();
+    var after = _opexNum(cell.getValue());
+    if (Math.abs(after - (before + amount)) > 0.01){
+      try { if (origF) cell.setFormula(origF); else cell.setValue(origV); } catch(_r){}   // точно як було
+      return {ok:false, error:'Перевірка не зійшлась (було ' + before + ', стало ' + after + ') — запис відкочено'};
+    }
+    var by = _entryAuthor(body.by);
+    lsh.appendRow([new Date(), by, kind, loc, row, name, year, month, amount, before, after, comment, key || Utilities.getUuid(), 'внесено', '']);
+    if (kind === 'salary') _salaryBump(loc); else _cacheBump('opex_' + _nameFold(loc));
+    res.after = after; res.by = by; res.written = true;
+    return res;
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { if (lock) try { lock.releaseLock(); } catch(_r){} }
+}
+// POST {action:'cashCancel', actorId, key} — віднімає ту саму суму («…-450»), оригінал → «скасовано», новий рядок журналу.
+function cashCancel(body){
+  body = body || {};
+  if (!_cashActorOk(body.actorId)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var key = String(body.key || '').trim(); if (!key) return {ok:false, error:'key обовʼязковий'};
+  var lock = LockService.getScriptLock(); try { lock.waitLock(30000); } catch(_l){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+  try {
+    var lsh = _cashLogSheet(false); if (!lsh) return {ok:false, error:'Журнал готівки порожній'};
+    var lv = lsh.getDataRange().getValues(), ri = -1;
+    for (var i = 1; i < lv.length; i++) if (String(lv[i][12]) === key){ ri = i; break; }
+    if (ri < 0) return {ok:false, error:'Запис не знайдено'};
+    var r = lv[ri];
+    if (String(r[13]) !== 'внесено') return {ok:false, error:'Запис уже ' + r[13]};
+    var kind = String(r[2]), loc = String(r[3]), row = Number(r[4]), year = Number(r[6]), month = Number(r[7]), amount = _opexNum(r[8]);
+    if (_isMonthClosed(year, month)) return {ok:false, code:'CLOSED_MONTH', error:'Місяць ' + month + '.' + year + ' закрито'};
+    var t = _cashTarget(kind, loc); if (t.error) return {ok:false, error:t.error};
+    var name = String(t.sheet.getRange(row, 1).getValue() || '').trim();
+    if (_nameFold(name) !== _nameFold(r[5])) return {ok:false, error:'Рядок ' + row + ' тепер «' + name + '» — скасуйте вручну'};
+    var cell = t.sheet.getRange(row, _cashFactCol(month)), before = _opexNum(cell.getValue()), f = _cashFormula(cell, -amount);
+    if (!f) return {ok:false, error:'У клітинці текст — скасуйте вручну'};
+    cell.setFormula(f); SpreadsheetApp.flush();
+    var after = _opexNum(cell.getValue()), by = _entryAuthor(body.by), now = new Date();
+    lsh.getRange(ri + 1, 14, 1, 2).setValues([['скасовано', Utilities.formatDate(now, 'Europe/Kiev', 'dd.MM.yyyy HH:mm') + ' · ' + by]]);
+    lsh.appendRow([now, by, kind, loc, row, name, year, month, -amount, before, after, 'Скасування: ' + String(r[11] || ''), 'CANCEL:' + key, 'скасування', '']);
+    if (kind === 'salary') _salaryBump(loc); else _cacheBump('opex_' + _nameFold(loc));
+    return {ok:true, key:key, before:before, after:after};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { try { lock.releaseLock(); } catch(_r){} }
+}
+// GET ?action=cashList&year=&month=&actorId= — готівкові внесення за місяць (за місяцем зарахування).
+function cashList(params){
+  params = params || {};
+  if (!_cashActorOk(params.actorId)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var Y = Number(params.year) || new Date().getFullYear(), M = Number(params.month) || (new Date().getMonth() + 1);
+  var lsh = _cashLogSheet(false); if (!lsh) return {ok:true, items:[]};
+  var items = lsh.getDataRange().getValues().slice(1).filter(function(r){ return Number(r[6]) === Y && Number(r[7]) === M; })
+    .map(function(r){ return {when:_histIso(_histDate(r[0])), by:String(r[1] || ''), kind:String(r[2]), loc:String(r[3]), row:Number(r[4]),
+      name:String(r[5]), month:Number(r[7]), amount:_opexNum(r[8]), before:_opexNum(r[9]), after:_opexNum(r[10]), comment:String(r[11] || ''),
+      key:String(r[12]), status:String(r[13] || ''), cancelInfo:String(r[14] || '')}; });
+  items.sort(function(a, b){ return a.when < b.when ? 1 : -1; });
+  return {ok:true, year:Y, month:M, items:items};
+}
+
 // ═══ v7.372: ІСТОРІЯ ВНЕСЕНЬ ═════════════════════════════════════════════════
 // Автор запису — ЛЮДИНА з токена входу («Ім'я (РОЛЬ)»), а не роль із фронту. Без токена (нічні тригери,
 // ручний запуск) — те, що передав виклик. Кеш на одне виконання.
@@ -15138,6 +15301,15 @@ function getEntryHistory(params){
       what:String(r[4] || ''), detail:String(r[7] || '') + (num ? '' : ': «' + b + '» → «' + a + '»'),
       amount:num ? (_opexNum(a) - _opexNum(b)) : 0, before:num ? _opexNum(b) : '', after:num ? _opexNum(a) : '',
       month:Number(r[6]) || '', source:'manual', sourceInfo:String(r[2] || '') + (r[10] ? ' · ' + r[10] : ''), status:'внесено'});
+  });
+  // 5) v7.373: готівка, внесена через систему (Готівка_Лог)
+  rows(CASH_LOG_SHEET).forEach(function(r){
+    var when = _histDate(r[0]); if (!hit(when, r[7])) return;
+    var st = String(r[13] || 'внесено');
+    out.push({when:_histIso(when), by:String(r[1] || ''), loc:String(r[3] || ''), kind:String(r[2]) === 'salary' ? 'salary' : 'expense',
+      what:String(r[5] || ''), detail:(String(r[2]) === 'salary' ? 'Salary' : 'OPEX') + ' · рядок ' + r[4] + (r[14] ? ' · скасовано ' + r[14] : ''),
+      amount:_opexNum(r[8]), before:_opexNum(r[9]), after:_opexNum(r[10]), month:Number(r[7]) || '', source:'cash',
+      sourceInfo:String(r[11] || ''), status:st});
   });
   out.sort(function(x, y){ return x.when < y.when ? 1 : x.when > y.when ? -1 : 0; });
   return {ok:true, year:Y, month:Mo, basis:basis, count:out.length, items:out, sheets:seenSheets};
