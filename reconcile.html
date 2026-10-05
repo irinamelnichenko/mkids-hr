@@ -513,6 +513,13 @@ select,input{font-family:inherit}
     <div class="hd-ctrl">
       <input type="file" id="rcFile" accept=".xls,.xlsx,.csv" multiple style="display:none" onchange="rcOnFile(this)">
       <button class="btn btn-primary" onclick="document.getElementById('rcFile').click()">📂 Обрати виписки</button>
+      <!-- v7.375: виписка напряму з банку (ПриватБанк API) — лише CFO -->
+      <span id="rcBankBox" style="display:none;align-items:center;gap:6px;flex-wrap:wrap">
+        <input type="date" id="rcBankFrom" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:8px">
+        <span>—</span>
+        <input type="date" id="rcBankTo" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:8px">
+        <button class="btn btn-primary" id="rcBankBtn" onclick="rcFromBank()">🏦 З банку</button>
+      </span>
     </div>
   </div>
 
@@ -1317,6 +1324,44 @@ function rcParseFile(f){
     reader.onerror=function(){ reject('не вдалося прочитати файл'); };
     reader.readAsArrayBuffer(f);
   });
+}
+
+// v7.375: транзакції з банку (bankFetch) у тому самому форматі, що й розпарсений файл → звичайний шлях перевірки.
+function _rcIsoDay(d){ return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); }
+function rcBankInit(){
+  var box = document.getElementById('rcBankBox'); if (!box) return;
+  var cfo = S.user && String(S.user.role || '').toLowerCase() === 'cfo';
+  box.style.display = cfo ? 'inline-flex' : 'none';
+  if (!cfo) return;
+  var y = new Date(); y.setDate(y.getDate() - 1);
+  var f = document.getElementById('rcBankFrom'), t = document.getElementById('rcBankTo');
+  if (!f.value) f.value = _rcIsoDay(y);
+  if (!t.value) t.value = _rcIsoDay(new Date());
+}
+async function rcFromBank(){
+  if (RC.busy) return;
+  var from = document.getElementById('rcBankFrom').value, to = document.getElementById('rcBankTo').value;
+  if (!from || !to || from > to){ showToast('Оберіть період «з — по»', 'error'); return; }
+  RC.busy = true; var btn = document.getElementById('rcBankBtn'); btn.disabled = true; btn.textContent = '⏳ Банк…';
+  $('content').classList.remove('hidden');
+  $('meta').textContent = 'ПриватБанк · ' + from + ' — ' + to;
+  $('rcBanner').innerHTML = ''; $('rcSummary').innerHTML = ''; $('rcApplyBar').style.display = 'none';
+  $('rcWrap').innerHTML = '<div class="inv-loading">⏳ Завантаження виписки з банку (1 запит/с — може тривати до хвилини)…</div>';
+  RC.parsed = []; RC.groups = [];
+  rcResetOpexState(); rcResetLogState();
+  try {
+    var r = await fetch(CFG.SCRIPT_URL + '?action=bankFetch&from=' + from + '&to=' + to + '&actorId=' + encodeURIComponent((S.user && S.user.id) || ''), {redirect:'follow'});
+    var j = await r.json();
+    if (!j.ok && !(j.groups || []).length) throw new Error(j.error || (j.errors || []).join('; ') || 'банк не відповів');
+    (j.errors || []).forEach(function(e){ RC.groups.push({fileName:'🏦 ПриватБанк', ok:false, error:e}); });
+    RC.parsed = (j.groups || []).filter(function(g){ return (g.payments || []).length || (g.expenses || []).length; });
+    if (!RC.parsed.length){ $('rcWrap').innerHTML = '<div class="inv-loading">За цей період операцій у банку немає.</div>'; return; }
+    await rcPreviewAll();
+    if (RC.mode === 'expenses') await rcExpLoad();
+    else if (RC.mode === 'log') await rcLogLoad();
+  } catch(e){
+    $('rcWrap').innerHTML = '<div class="err">❌ ' + String(e && e.message || e) + '</div>';
+  } finally { RC.busy = false; btn.disabled = false; btn.textContent = '🏦 З банку'; }
 }
 
 async function rcOnFile(input){
@@ -2317,6 +2362,7 @@ async function rcApply(){
 
   $('loadBox').classList.add('hidden');
   $('content').classList.remove('hidden');
+  try { rcBankInit(); } catch(_b){}   // v7.375
 })();
 </script>
 <script>
