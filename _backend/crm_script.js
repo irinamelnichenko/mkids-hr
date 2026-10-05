@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.366
+// m.kids CRM — Google Apps Script v7.367
+// v7.367: координати адреси (етап 2 карти): колонки «Гео: lat/lng/статус/запит»; геокодер Google при збереженні картки,
+//   geocodeClients (CFO, dryRun; нічний 04:00 через setupGeoNightly — запустити раз вручну), setClientGeo (точка вручну).
 // v7.366: картка дитини — колонка «Адреса проживання» (після lead_id; saveClient пише її за назвою, лише якщо ключ
 //   homeAddress є в payload). Перший етап карти клієнтів.
 // v7.365: норма предметників — ПІДКАЗКА, не блок: savePredmetnykyLesson / bulk пишуть урок понад норму (overNorm:true),
@@ -6736,7 +6738,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.366', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.367', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -6904,6 +6906,8 @@ function doPost(e) {
     else if (body.action === 'registerLocation')          result = registerLocation(body || {});        // v7.362 нова локація в реєстрах CONFIG (CFO, dryRun, YES_REGISTER)
     else if (body.action === 'renameDopActivity')         result = renameDopActivity(body || {});       // v7.361 перейменування заняття: каталог + відмітки + Salary + журнал (CFO, dryRun)
     else if (body.action === 'cleanupSalaryDupRows')      result = cleanupSalaryDupRows(body || {});    // v7.361 видалення дубль-рядків Salary без факту (CFO, dryRun, YES_DELETE)
+    else if (body.action === 'geocodeClients')            result = geocodeClients(body);        // v7.367 CFO, dryRun за замовчуванням
+    else if (body.action === 'setClientGeo')              result = setClientGeo(body);          // v7.367 точка вручну
     else if (body.action === 'createCardFromPayment')     result = createCardFromPayment(body || {});   // v7.357 картка з рядка Payment (ПІБ як у Payment)
     else if (body.action === 'setLocRequisite')           result = setLocRequisite(body || {});      // v7.352 правка реквізитів (CFO, dryRun, архів старого IBAN, журнал)
     else if (body.action === 'addLocationUser')           result = addLocationUser(body || {});      // v7.351 один акаунт локації (CFO, dryRun)
@@ -9090,7 +9094,9 @@ function ensureClientsHeader(sheet) {
     'lead_id',
     // v7.366 — адреса проживання (для карти клієнтів). Пишеться окремо за назвою колонки
     // (_clientWriteHomeAddress), бо масив row у saveClient закінчується на «Розвиток (JSON)».
-    'Адреса проживання'
+    'Адреса проживання',
+    // v7.367 — координати адреси (геокодер Google): широта, довгота, статус, запит, за яким шукали.
+    'Гео: lat','Гео: lng','Гео: статус','Гео: запит'
   ];
   var lastCol = sheet.getLastColumn();
   var width = Math.max(lastCol, EXPECTED.length);
@@ -9223,6 +9229,172 @@ function _clientWriteHomeAddress(sheet, rowNum, data){
   var c = hd.indexOf('Адреса проживання');
   if (c < 0) return;
   sheet.getRange(rowNum, c + 1).setValue(String(data.homeAddress).trim());
+  // v7.367: одразу шукаємо координати (збій/ліміт геокодера не валить збереження — добере ніч)
+  try { _clientGeocodeRow(sheet, rowNum, hd, String(data.homeAddress).trim(), String(data.loc || ''), false); } catch(_g){ Logger.log('[geo] ' + _g); }
+}
+
+// ═══ v7.367: КООРДИНАТИ АДРЕСИ (етап 2 карти клієнтів) ═══════════════════════
+// Геокодер — вбудований Maps.newGeocoder (без ключа; ліміт ~1000 запитів/добу на акаунт).
+// Квартира/під'їзд/поверх відрізаються (точність — будинок). Місто дописується за локацією,
+// якщо в адресі його немає. Статуси «Гео: статус»:
+//   ok       — знайдено будинок;   approx — лише вулиця/район (точка приблизна);
+//   not_found — нічого;           manual — точку поставили вручну (setClientGeo), ніч не перезаписує;
+//   far      — знайдено далі ніж 60 км від міста локації (найімовірніше, інше місто — перевірити).
+// «Гео: запит» — рядок, за яким шукали: зміна адреси → новий запит → перерахунок.
+var GEO_CITY_BY_LOC = {
+  'Кругла':'Львів', 'Бігова':'Львів',
+  'Бровари':'Бровари', 'Житомир':'Житомир',
+  // Благо — Івано-Франківськ (Хіміків підтверджено; Манхетен і Нац.Гвардії — припущення v7.367)
+  'Хіміків (Благо)':'Івано-Франківськ', 'Манхетен (Благо)':'Івано-Франківськ', 'Нац.Гвардії (Благо)':'Івано-Франківськ'
+};                                                   // решта → Київ
+var GEO_CITY_CENTER = {
+  'Київ':[50.4501, 30.5234], 'Львів':[49.8397, 24.0297], 'Бровари':[50.5110, 30.7909],
+  'Житомир':[50.2547, 28.6587], 'Івано-Франківськ':[48.9226, 24.7111]
+};
+var GEO_COLS = ['Гео: lat','Гео: lng','Гео: статус','Гео: запит'];
+function _geoCityForLoc(loc){ return GEO_CITY_BY_LOC[String(loc || '').trim()] || 'Київ'; }
+function _geoQueryFor(address, loc){
+  var a = String(address || '').replace(/\s+/g, ' ').trim();
+  if (!a) return '';
+  // квартира / під'їзд / поверх / офіс — геть (кома або кінець рядка обмежують фрагмент)
+  a = a.replace(/[,;]?\s*(кв\.?|квартира|к-ра|під['’ʼ]?їзд|під\.|поверх|пов\.|офіс|оф\.)\s*[№#]?\s*[0-9][^,;]*/gi, '');
+  a = a.replace(/\s*,\s*,/g, ',').replace(/[,;\s]+$/, '').trim();
+  var city = _geoCityForLoc(loc);
+  var hasCity = /(^|[\s,])(м\.|місто|смт|с\.|село|селище)\s*\S/i.test(a) ||
+    /(київ|львів|бровари|житомир|івано[-\s]?франківськ|ірпінь|буча|вишневе|бориспіль|петропавлівська|софіївська|гатне|крюківщина|ходосівка|княжичі|погреби|велика димерка|винники|сокільники|брюховичі|зимна вода)(?![а-яіїєґʼ'’-])/i.test(a);   // окреме слово: «вул. Київська» ≠ місто Київ
+  return (hasCity ? a : a + ', ' + city) + ', Україна';
+}
+function _geoDistKm(a, b){
+  var R = 6371, dLat = (b[0] - a[0]) * Math.PI / 180, dLng = (b[1] - a[1]) * Math.PI / 180;
+  var x = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(a[0] * Math.PI / 180) * Math.cos(b[0] * Math.PI / 180) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  return 2 * R * Math.asin(Math.sqrt(x));
+}
+// → {lat, lng, status, formatted}. Кидає виняток на вичерпаному ліміті (батч зупиняється).
+function _geoLookup(query, loc){
+  var cache = null; try { cache = CacheService.getScriptCache(); } catch(_c){}
+  var ck = 'geo_' + Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, query, Utilities.Charset.UTF_8));
+  if (cache){ var hit = cache.get(ck); if (hit) { try { return JSON.parse(hit); } catch(_p){} } }
+  var center = GEO_CITY_CENTER[_geoCityForLoc(loc)] || GEO_CITY_CENTER['Київ'];
+  var g = Maps.newGeocoder().setRegion('ua').setLanguage('uk')
+    .setBounds(center[0] - 0.35, center[1] - 0.5, center[0] + 0.35, center[1] + 0.5);   // підказка, не жорсткий фільтр
+  var r = g.geocode(query);
+  var out;
+  if (!r || r.status !== 'OK' || !r.results || !r.results.length){
+    if (r && r.status === 'OVER_QUERY_LIMIT') throw new Error('GEO_QUOTA');
+    out = {lat:'', lng:'', status:'not_found', formatted:''};
+  } else {
+    var best = r.results[0], loc0 = best.geometry.location, types = best.types || [];
+    var exact = types.indexOf('street_address') !== -1 || types.indexOf('premise') !== -1 || types.indexOf('subpremise') !== -1 ||
+                (best.geometry.location_type === 'ROOFTOP');
+    var st = (exact && !best.partial_match) ? 'ok' : 'approx';
+    if (_geoDistKm(center, [loc0.lat, loc0.lng]) > 60) st = 'far';
+    out = {lat:Math.round(loc0.lat * 1e6) / 1e6, lng:Math.round(loc0.lng * 1e6) / 1e6, status:st, formatted:best.formatted_address || ''};
+  }
+  if (cache) try { cache.put(ck, JSON.stringify(out), 21600); } catch(_w){}
+  return out;
+}
+// Колонки гео, яких бракує в заголовку, — ensureClientsHeader їх уже додав; тут лише індекси.
+function _geoColIdx(hd){
+  var ix = {}; GEO_COLS.forEach(function(n){ ix[n] = hd.indexOf(n); });
+  ix.addr = hd.indexOf('Адреса проживання'); ix.loc = hd.indexOf('Локація'); ix.id = hd.indexOf('ID');
+  ix.ok = ix.addr >= 0 && GEO_COLS.every(function(n){ return ix[n] >= 0; });
+  return ix;
+}
+// Рядок картки: перерахувати координати, якщо адреса змінилась (або force). Повертає статус / 'skip'.
+function _clientGeocodeRow(sheet, rowNum, hd, address, loc, force){
+  var ix = _geoColIdx(hd); if (!ix.ok) return 'no_cols';
+  var c0 = ix['Гео: lat'] + 1;   // 4 гео-колонки йдуть підряд
+  var q = _geoQueryFor(address, loc);
+  if (!q){ sheet.getRange(rowNum, c0, 1, 4).setValues([['', '', '', '']]); return 'cleared'; }
+  if (!force){
+    var cur = sheet.getRange(rowNum, c0, 1, 4).getValues()[0];
+    if (String(cur[3]) === q && String(cur[2]) && String(cur[2]) !== 'error') return 'skip';   // той самий запит уже оброблено (у т.ч. manual)
+  }
+  var g = _geoLookup(q, loc);
+  sheet.getRange(rowNum, c0, 1, 4).setValues([[g.lat, g.lng, g.status, q]]);
+  return g.status;
+}
+// POST {action:'geocodeClients', actorId, dryRun(default true), limit(300), loc?} — CFO / нічний тригер.
+// Добирає картки з адресою, де координат ще немає або адреса змінилась. Зупиняється на ліміті геокодера чи ~5 хв.
+function geocodeClients(body){
+  body = body || {};
+  var dryRun = (body.dryRun !== false), limit = Math.max(1, Number(body.limit) || 300), onlyLoc = String(body.loc || '').trim();
+  if (!body._system){
+    var actor = null; try { actor = _getActor((_CURRENT_AUTH && _CURRENT_AUTH.id) || body.actorId); } catch(_a){}
+    if (!actor || _roleKey(actor.role) !== 'cfo') return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  }
+  var sh = getCRMSpreadsheet().getSheetByName(SHEET_CLIENTS);
+  ensureClientsHeader(sh);
+  var v = sh.getDataRange().getValues(), hd = v[0].map(String), ix = _geoColIdx(hd);
+  if (!ix.ok) return {ok:false, error:'Немає колонок адреси/гео'};
+  var todo = [], withAddr = 0, byStatus = {};
+  for (var r = 1; r < v.length; r++){
+    var addr = String(v[r][ix.addr] || '').trim(), loc = String(v[r][ix.loc] || '').trim();
+    if (onlyLoc && loc !== onlyLoc) continue;
+    if (!addr) continue;
+    withAddr++;
+    var st = String(v[r][ix['Гео: статус']] || ''), q = _geoQueryFor(addr, loc);
+    if (st) byStatus[st] = (byStatus[st] || 0) + 1;
+    if (String(v[r][ix['Гео: запит']]) === q && st && st !== 'error') continue;
+    todo.push({row:r + 1, id:String(v[r][ix.id]), loc:loc, address:addr, query:q});
+  }
+  var res = {ok:true, dryRun:dryRun, withAddress:withAddr, pending:todo.length, byStatus:byStatus,
+             sample:todo.slice(0, 15).map(function(t){ return {id:t.id, loc:t.loc, query:t.query}; })};
+  if (dryRun) return res;
+  var t0 = Date.now(), done = 0, got = {}, stopped = '';
+  for (var i = 0; i < todo.length && done < limit; i++){
+    if (Date.now() - t0 > 5 * 60 * 1000){ stopped = 'time'; break; }
+    var g;
+    try { g = _geoLookup(todo[i].query, todo[i].loc); }
+    catch(e){ if (/GEO_QUOTA|too many times/i.test(String(e))){ stopped = 'quota'; break; } g = {lat:'', lng:'', status:'error'}; }
+    sh.getRange(todo[i].row, ix['Гео: lat'] + 1, 1, 4).setValues([[g.lat, g.lng, g.status, todo[i].query]]);
+    got[g.status] = (got[g.status] || 0) + 1; done++;
+    Utilities.sleep(120);
+  }
+  _cacheBump('clients');
+  res.processed = done; res.result = got; res.stopped = stopped || null; res.left = todo.length - done;
+  return res;
+}
+function nightlyGeocodeClients(){ return geocodeClients({_system:true, dryRun:false, limit:800}); }
+// Запустити ОДИН РАЗ вручну з редактора: дає дозвіл на сервіс Карт + ставить нічний тригер (04:00).
+function setupGeoNightly(){
+  ScriptApp.getProjectTriggers().forEach(function(t){ if (t.getHandlerFunction() === 'nightlyGeocodeClients') ScriptApp.deleteTrigger(t); });
+  ScriptApp.newTrigger('nightlyGeocodeClients').timeBased().atHour(4).nearMinute(0).everyDays(1).create();
+  var probe = _geoLookup(_geoQueryFor('вул. Хрещатик 1', 'Осокорки'), 'Осокорки');
+  Logger.log('[geo] тригер встановлено; пробний запит: ' + JSON.stringify(probe));
+  return probe;
+}
+// POST {action:'setClientGeo', actorId, id, lat, lng} — точка вручну (перетягнули маркер на карті).
+// CFO/керівництво — будь-яка картка; директор — лише своєї локації. Статус 'manual': ніч не перезаписує,
+// доки адреса не зміниться. lat/lng порожні → скинути на автопошук.
+function setClientGeo(body){
+  body = body || {};
+  var actor = null; try { actor = _getActor((_CURRENT_AUTH && _CURRENT_AUTH.id) || body.actorId); } catch(_a){}
+  if (!actor) return {ok:false, code:'PERM_DENIED', error:'Немає користувача'};
+  var sh = getCRMSpreadsheet().getSheetByName(SHEET_CLIENTS);
+  ensureClientsHeader(sh);
+  var v = sh.getDataRange().getValues(), hd = v[0].map(String), ix = _geoColIdx(hd), id = String(body.id || '').trim();
+  if (!ix.ok || !id) return {ok:false, error:'id обовʼязковий'};
+  for (var r = 1; r < v.length; r++){
+    if (String(v[r][ix.id]) !== id) continue;
+    var loc = String(v[r][ix.loc] || '').trim();
+    var mgmt = _empHasMgmtRole(actor.role) || _roleKey(actor.role) === 'cfo';
+    if (!mgmt && !(_empHasDirRole(actor.role) && String(actor.loc || '').trim() === loc))
+      return {ok:false, code:'PERM_DENIED', error:'Лише своя локація'};
+    var q = _geoQueryFor(v[r][ix.addr], loc), c0 = ix['Гео: lat'] + 1;
+    if (body.lat === '' || body.lat == null){
+      sh.getRange(r + 1, c0, 1, 4).setValues([['', '', '', '']]);
+      _cacheBump('clients');
+      return {ok:true, id:id, reset:true};
+    }
+    var lat = Number(body.lat), lng = Number(body.lng);
+    if (!(lat > 44 && lat < 53 && lng > 22 && lng < 41)) return {ok:false, error:'Координати поза Україною'};
+    sh.getRange(r + 1, c0, 1, 4).setValues([[Math.round(lat * 1e6) / 1e6, Math.round(lng * 1e6) / 1e6, 'manual', q]]);
+    _cacheBump('clients');
+    try { _writeHrAuditRows(_marksActorInfo(body.actorId), 'client_geo_manual', [{id:id, loc:loc, lat:lat, lng:lng}]); } catch(_w){}
+    return {ok:true, id:id, lat:lat, lng:lng, status:'manual'};
+  }
+  return {ok:false, error:'Картку не знайдено: ' + id};
 }
 
 function saveClient(data) {

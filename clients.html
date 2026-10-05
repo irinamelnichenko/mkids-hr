@@ -772,7 +772,8 @@ details.card>summary::-webkit-details-marker{display:none}details.card[open]>sum
         <!-- v7.366: адреса проживання — для карти клієнтів; обов'язкова для НОВОЇ картки -->
         <div class="fg"><label>📍 Адреса проживання <span id="fHomeAddressReq" style="color:var(--red);font-weight:400">*</span></label>
           <input type="text" id="fHomeAddress" placeholder="вул. Березнева 12, кв. 189 (місто — якщо інше, ніж у локації)">
-          <div style="font-size:11px;color:var(--gray);margin-top:3px">Де дитина живе фактично (не реєстрація). Потрібна для карти клієнтів.</div></div>
+          <div style="font-size:11px;color:var(--gray);margin-top:3px">Де дитина живе фактично (не реєстрація). Потрібна для карти клієнтів.</div>
+          <div id="fHomeAddressGeo" style="font-size:12px;margin-top:3px"></div></div>
         <div class="section-hd">Контакт мами</div>
         <div class="g2">
           <div class="fg"><label>ПІБ мами</label><input type="text" id="fMomName" placeholder="Прізвище Ім'я По-батькові"></div>
@@ -1877,6 +1878,8 @@ function mergeCRMFromCloud(rows){
       birthCert:         _hv('Свідоцтво про народження','birthCert',''),
       childRegAddress:   _hv('Місце реєстрації дитини','childRegAddress',''),
       homeAddress:       row['Адреса проживання']||'',   // v7.366: не «важка» — потрібна списку (позначка «без адреси»)
+      geoStatus:         row['Гео: статус']||'',         // v7.367: ok/approx/far/not_found/manual
+      geoLat:            row['Гео: lat']||'', geoLng: row['Гео: lng']||'',
       momDoc:            _hv('Документ мами','momDoc',''),
       momRnokpp:         _hv('РНОКПП мами','momRnokpp',''),
       dadDoc:            _hv('Документ тата','dadDoc',''),
@@ -3857,6 +3860,18 @@ function _showPaymentResult(p){
   else { msg='⚠️ Payment: '+(p.error||'помилка'); type='err'; }
   try{ if(typeof showFloatMsg==='function') showFloatMsg(msg,type); else alert(msg); }catch(e){}
 }
+// v7.367: статус координат під полем адреси (геокодер бекенду; оновлюється після збереження)
+function _renderHomeGeo(c){
+  var el=document.getElementById('fHomeAddressGeo'); if(!el) return;
+  var addr=c?String(c.homeAddress||'').trim():'', st=c?String(c.geoStatus||''):'';
+  var M={ok:['📍 Знайдено на карті','var(--green)'], manual:['📍 Точку поставлено вручну','var(--green)'],
+         approx:['≈ Знайдено приблизно (вулиця/район) — уточніть номер будинку','var(--orange)'],
+         far:['⚠️ Знайдено в іншому місті — перевірте адресу','var(--red)'],
+         not_found:['⚠️ Адресу не знайдено на карті — уточніть','var(--red)']};
+  var m=addr?(M[st]||['⏳ Координати зʼявляться після збереження / вночі','var(--gray)']):null;
+  el.innerHTML=m?'<span style="color:'+m[1]+'">'+m[0]+'</span>':'';
+}
+
 function openNewChild(){
   S.editId=null;
   S.isNew=true;
@@ -3872,6 +3887,7 @@ function openNewChild(){
     document.getElementById(id).value='';
   });
   document.getElementById('fHomeAddressReq').style.display='';   // v7.366: нова картка — адреса обов'язкова
+  _renderHomeGeo(null);   // v7.367
   // v6.26 Етап 1A — reset radio "Підписант договору" до Мами за замовчуванням.
   var spMom = document.querySelector('input[name="signerParent"][value="mom"]');
   if (spMom) spMom.checked = true;
@@ -4082,6 +4098,7 @@ function populateForm(id){
   document.getElementById('fChildRegAddress').value=c.childRegAddress||'';
   document.getElementById('fHomeAddress').value=c.homeAddress||'';   // v7.366
   document.getElementById('fHomeAddressReq').style.display='none';   // наявна картка — не обов'язково
+  _renderHomeGeo(c);   // v7.367
   document.getElementById('fMomDoc').value=c.momDoc||'';
   document.getElementById('fMomRnokpp').value=c.momRnokpp||'';
   document.getElementById('fDadDoc').value=c.dadDoc||'';
