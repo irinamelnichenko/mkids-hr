@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.371
+// m.kids CRM — Google Apps Script v7.372
+// v7.372: історія внесень — getEntryHistory (CFO; доходи/витрати/ЗП ФОП/ЗП відомість/ручні правки, фільтр місяця внесення
+//   або зарахування); автор у журналах = людина з токена (_entryAuthor), а не роль.
 // v7.371: карта клієнтів — getClientMap (GET; лише ПІБ/група/локація/статус/координати, без адрес і телефонів; директор —
 //   своя локація на сервері), setLocGeo (точка садочка, властивість LOC_GEO).
 // v7.370: картка — колонка «Квартира» (після «Гео: запит»; saveClient пише homeApt, текстом).
@@ -6724,7 +6726,7 @@ function getAuthLog(){
 }
 // Гейт: null → пропускаємо; обʼєкт-відмова → блокуємо (лише коли AUTH_ENFORCE).
 function _authGate(action, token, method){
-  _CURRENT_AUTH = null; _AUTH_STALE = '';
+  _CURRENT_AUTH = null; _AUTH_STALE = ''; _ENTRY_AUTHOR_CACHE = null;   // v7.372: автор — на кожен запит заново
   if (action === 'ping' || action === 'authenticate') return null;       // завжди без токена
   var payload = _verifyToken(token);
   if (payload){ _CURRENT_AUTH = payload; return null; }                   // валідний токен
@@ -6744,7 +6746,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.371', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.372', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -6756,6 +6758,7 @@ function doGet(e) {
     else if (action === 'diagClientsCompare') result = diagClientsCompare();                // v7.336 звірка roster/list/кеш
     else if (action === 'geoSearch')          result = geoSearch(e.parameter || {});     // v7.368 «🔍 Знайти» адресу
     else if (action === 'getClientMap')       result = getClientMap(e.parameter || {});  // v7.371 карта клієнтів
+    else if (action === 'getEntryHistory')    result = getEntryHistory(e.parameter || {}); // v7.372 історія внесень (CFO)
     else if (action === 'getClientCard')      result = getClientCard(e.parameter || {}); // v7.292 повна картка за id
     else if (action === 'runAggregate')       result = aggregatePayments();
     else if (action === 'dryRunSchoolRoster') result = dryRunSchoolRoster(e.parameter || {});   // v7.252 ростер шкіл за картками; v7.267 &simulateMove=1
@@ -15051,6 +15054,95 @@ function _opexDateNum(s){
   return NaN;
 }
 
+// ═══ v7.372: ІСТОРІЯ ВНЕСЕНЬ ═════════════════════════════════════════════════
+// Автор запису — ЛЮДИНА з токена входу («Ім'я (РОЛЬ)»), а не роль із фронту. Без токена (нічні тригери,
+// ручний запуск) — те, що передав виклик. Кеш на одне виконання.
+var _ENTRY_AUTHOR_CACHE = null;
+function _entryAuthor(fallback){
+  if (_ENTRY_AUTHOR_CACHE === null){
+    _ENTRY_AUTHOR_CACHE = '';
+    try {
+      if (_CURRENT_AUTH && _CURRENT_AUTH.id){
+        var u = _getActor(Number(_CURRENT_AUTH.id));
+        if (u && u.name) _ENTRY_AUTHOR_CACHE = u.name + (u.role ? ' (' + String(u.role).toUpperCase() + ')' : '');
+      }
+    } catch(e){}
+  }
+  return _ENTRY_AUTHOR_CACHE || String(fallback == null ? '' : fallback).trim();
+}
+// Дата з клітинки журналу: Date | ISO | «dd.MM.yyyy[ HH:mm[:ss]]» → Date або null.
+function _histDate(v){
+  if (v instanceof Date) return isNaN(v.getTime()) ? null : v;
+  var t = String(v || '').trim(); if (!t) return null;
+  var m = /^(\d{1,2})\.(\d{1,2})\.(\d{4})(?:[ T,]+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/.exec(t);
+  if (m) return new Date(+m[3], +m[2] - 1, +m[1], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0));
+  var d = new Date(t); return isNaN(d.getTime()) ? null : d;
+}
+function _histIso(d){ return d ? Utilities.formatDate(d, 'Europe/Kiev', "yyyy-MM-dd'T'HH:mm") : ''; }
+function _histDay(v){ var d = _histDate(v); return d ? Utilities.formatDate(d, 'Europe/Kiev', 'dd.MM.yyyy') : String(v || ''); }
+// GET ?action=getEntryHistory&year=&month=&basis=entered|booked&actorId= — лише CFO.
+// Збирає журнали: Звірки_Платежів (доходи), OPEX_Витрати_Лог (витрати + ЗП ФОП «→Salary»), Звірка_ЗП_Лог (ЗП за
+// відомістю), Грошові_Правки_Лог (ручні правки в системі). basis=entered — місяць ВНЕСЕННЯ (колонка «Коли»),
+// booked — місяць, ЗА ЯКИЙ зараховано (рік — з дати внесення). Повертає уніфіковані рядки.
+function getEntryHistory(params){
+  params = params || {};
+  var actor = null; try { actor = _getActor((_CURRENT_AUTH && _CURRENT_AUTH.id) || params.actorId); } catch(_a){}
+  if (!actor || _roleKey(actor.role) !== 'cfo') return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var Y = Number(params.year) || new Date().getFullYear(), Mo = Number(params.month) || (new Date().getMonth() + 1);
+  var basis = params.basis === 'booked' ? 'booked' : 'entered';
+  var cfg = SpreadsheetApp.openById(CONFIG_SHEET_ID), out = [], seenSheets = {};
+  function hit(when, bookedMonth){
+    if (!when) return false;
+    if (when.getFullYear() !== Y && !(basis === 'booked' && Math.abs(when.getFullYear() - Y) === 1)) return false;
+    if (basis === 'entered') return when.getFullYear() === Y && (when.getMonth() + 1) === Mo;
+    // booked: місяць зарахування = Mo; рік — з дати внесення (січневі внесення за грудень → попередній рік)
+    var bm = Number(bookedMonth) || 0; if (!bm) return false;
+    var by = when.getFullYear(); if (bm === 12 && when.getMonth() === 0) by -= 1; else if (bm === 1 && when.getMonth() === 11) by += 1;
+    return by === Y && bm === Mo;
+  }
+  function rows(name){
+    var sh = cfg.getSheetByName(name); seenSheets[name] = !!sh;
+    return sh ? sh.getDataRange().getValues().slice(1) : [];
+  }
+  // 1) Доходи — оплати батьків із виписки → Payment
+  rows(RECONCILE_LOG_SHEET).forEach(function(r){
+    var when = _histDate(r[0]); if (!hit(when, r[9])) return;
+    var amt = _opexNum(r[11]); if (!amt && !String(r[7] || '').trim()) return;
+    out.push({when:_histIso(when), by:String(r[1] || ''), loc:String(r[2] || ''), kind:'income',
+      what:String(r[7] || ''), detail:String(r[6] || ''), amount:amt, month:Number(r[9]) || '',
+      source:'statement', sourceInfo:'виписка ' + _histDay(r[4]) + (r[5] ? ' · ' + r[5] : ''), status:'внесено'});
+  });
+  // 2) Витрати + ЗП ФОП (→Salary) із виписки
+  var cmap = {}; try { cmap = (getOpexContractors().map) || {}; } catch(_c){}
+  rows(OPEX_EXP_LOG_SHEET).forEach(function(r){
+    var when = _histDate(r[8]); if (!hit(when, r[7])) return;
+    var cat = String(r[6] || ''), sal = cat.indexOf('→Salary') === 0;
+    var c = cmap[_opexContractorKey(r[4], '')] || {};
+    out.push({when:_histIso(when), by:String(r[9] || ''), loc:String(r[0] || ''), kind:sal ? 'salary_fop' : 'expense',
+      what:c.name || ('ЄДРПОУ ' + String(r[4] || '—')), detail:sal ? cat.replace(/^→Salary:\s*/, 'Salary: ') : cat,
+      amount:_opexNum(r[5]), month:Number(r[7]) || '', source:'statement',
+      sourceInfo:'виписка ' + _histDay(r[2]) + (r[3] ? ' · ' + r[3] : ''), status:String(r[10] || 'внесено'), reason:String(r[11] || '')});
+  });
+  // 3) ЗП співробітникам за відомістю → Salary
+  rows(SALARY_RECON_LOG).forEach(function(r){
+    var when = _histDate(r[0]); if (!hit(when, r[9])) return;
+    out.push({when:_histIso(when), by:String(r[1] || ''), loc:String(r[2] || ''), kind:'salary',
+      what:String(r[7] || r[4] || ''), detail:'Salary: ' + String(r[8] || ''), amount:_opexNum(r[12]), month:Number(r[9]) || '',
+      source:'payroll', sourceInfo:'відомість №' + String(r[3] || '—'), status:'внесено'});
+  });
+  // 4) Ручні правки через систему (бюджети, додаткові, рядки Payment)
+  rows(MONEY_JOURNAL_SHEET).forEach(function(r){
+    var when = _histDate(r[0]); if (!hit(when, r[6])) return;
+    var b = r[8], a = r[9], num = (b === '' || !isNaN(Number(b))) && (a === '' || !isNaN(Number(a)));
+    out.push({when:_histIso(when), by:String(r[1] || ''), loc:String(r[3] || ''), kind:'manual',
+      what:String(r[4] || ''), detail:String(r[7] || '') + (num ? '' : ': «' + b + '» → «' + a + '»'),
+      amount:num ? (_opexNum(a) - _opexNum(b)) : 0, before:num ? _opexNum(b) : '', after:num ? _opexNum(a) : '',
+      month:Number(r[6]) || '', source:'manual', sourceInfo:String(r[2] || '') + (r[10] ? ' · ' + r[10] : ''), status:'внесено'});
+  });
+  out.sort(function(x, y){ return x.when < y.when ? 1 : x.when > y.when ? -1 : 0; });
+  return {ok:true, year:Y, month:Mo, basis:basis, count:out.length, items:out, sheets:seenSheets};
+}
+
 // v7.85 READ: OPEX_Витрати_Лог → рядки витрат. Фільтри loc(обов.)/year/month?/category?.
 // Сорт за датою платежу спадаюче. Контрагент — з мапи OPEX_Контрагенти за ЄДРПОУ.
 function getOpexExpensesLog(body){
@@ -15119,7 +15211,7 @@ function opexAddExpenses(body){
     var defMon = Number(body.month) || 0;
     var dryRun = (body.dryRun !== false);   // ⬅️ default TRUE (реальний запис лише dryRun:false)
     var items  = Array.isArray(body.items) ? body.items : [];
-    var by     = String(body.by || body.markedBy || '').trim();
+    var by     = _entryAuthor(body.by || body.markedBy);   // v7.372: людина з токена, не роль
     if (!loc) return {ok: false, error: 'loc обовʼязковий'};
     if (!items.length) return {ok: false, error: 'items порожні'};
 
@@ -15383,7 +15475,7 @@ function salaryAddExtrasPayments(body){
     var defMon = Number(body.month) || 0;
     var dryRun = (body.dryRun !== false);   // default TRUE
     var items  = Array.isArray(body.items) ? body.items : [];
-    var by     = String(body.by || body.markedBy || '').trim();
+    var by     = _entryAuthor(body.by || body.markedBy);   // v7.372
     if (!loc) return {ok: false, error: 'loc обовʼязковий'};
     if (!items.length) return {ok: false, error: 'items порожні'};
 
@@ -20837,7 +20929,7 @@ function reconcileApply(body){
   try {
     body = body || {};
     var iban = trim(body.iban);
-    var by   = trim(body.by) || '?';
+    var by   = _entryAuthor(body.by) || '?';   // v7.372
     var items = body.items || [];
     var bodyMonth = Number(body.month) || 0;   // v7.85: глобальний місяць-оверрайд (1-12), опційно
     var _rcYear = Number(body.year) || new Date().getFullYear();   // v7.91
@@ -21407,7 +21499,7 @@ function salaryReconcileApply(body){
     if (!loc) return {ok:false, error:'loc обовʼязковий'};
     var vidNo = String(body.vidNo || '').trim();
     if (!vidNo) return {ok:false, error:'№ відомості обовʼязковий (потрібен для дедупу)'};
-    var by = String(body.by || '?').trim();
+    var by = _entryAuthor(body.by) || '?';   // v7.372
     var items = body.items || [];
     var now = new Date();
     var month = Number(body.month) || (now.getMonth() + 1);
@@ -22485,7 +22577,7 @@ function _moneyJournalLog(entries){
   try {
     var sh = _moneyJournalSheet(true);
     var stamp = formatDate(new Date());
-    var rows = entries.map(function(e){ return [stamp, String(e.by||''), String(e.route||''), String(e.loc||''),
+    var rows = entries.map(function(e){ return [stamp, _entryAuthor(e.by),   /* v7.372 */ String(e.route||''), String(e.loc||''),
       String(e.name||''), (e.year!=null?e.year:''), (e.month!=null?e.month:''), String(e.col||''),
       (e.before!=null?e.before:''), (e.after!=null?e.after:''), String(e.reason||'')]; });
     sh.getRange(sh.getLastRow()+1, 1, rows.length, MONEY_JOURNAL_HEADER.length).setValues(rows);

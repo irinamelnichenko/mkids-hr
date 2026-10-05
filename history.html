@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
-<title>m.kids System — Карта клієнтів</title>
+<title>m.kids System — Історія внесень</title>
 <meta name="theme-color" content="#FF6B35">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
@@ -108,42 +108,26 @@
 
 /* v7.240: власна шапка meals лишається, але їде всередині .main і дістає гамбургер */
 .top .menu-toggle{margin-right:4px}
-/* ── v7.371 КАРТА КЛІЄНТІВ ───── */
-.mapwrap{display:grid;grid-template-columns:1fr 330px;gap:12px;padding:12px;flex:1;min-height:0}
-#map{height:calc(100vh - 90px);min-height:420px;border-radius:12px;border:1px solid var(--line);z-index:1}
-#map.picking{cursor:crosshair}
-#panel{height:calc(100vh - 90px);overflow:auto}
-.pcard{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:10px}
-.pcard h4{margin:0 0 8px;font-size:14px}
-.pcard.warn{background:#fff7ed;border-color:#fdba74}
-.pcard .big{font-size:26px;font-weight:800}
-.pcard .big span{font-size:13px;font-weight:600;color:var(--gray)}
-.pcard summary{cursor:pointer}
-.bar{height:8px;background:#eef2f7;border-radius:6px;overflow:hidden;margin:6px 0}
-.bar i{display:block;height:100%;background:var(--g)}
-table.dist,table.locs{width:100%;border-collapse:collapse;font-size:13px}
-table.dist td,table.locs td{padding:4px 2px;border-bottom:1px solid #f1f5f9}
-td.n{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
-td.pb{width:45%}
-td.pb i{display:block;height:8px;border-radius:4px;background:var(--b)}
-table.locs label{display:flex;align-items:center;gap:6px;cursor:pointer}
-.sw{display:inline-block;width:12px;height:12px;border-radius:50%;flex:0 0 12px}
-ul.miss{margin:8px 0;padding-left:18px;max-height:260px;overflow:auto;font-size:13px}
-ul.miss li{margin:2px 0}
-.kid-dot span{display:block;width:14px;height:14px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 2px rgba(0,0,0,.5)}
-.loc-pin span{display:flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:50%;background:#fff;border:3px solid #1e293b;font-size:17px;box-shadow:0 2px 6px rgba(0,0,0,.35)}
-.kid-cluster span{display:flex;align-items:center;justify-content:center;border-radius:50%;color:#fff;font-weight:800;font-size:13px;text-shadow:0 0 2px rgba(0,0,0,.4)}
-.ring-lbl{font-size:11px;font-weight:700;color:#475569;text-shadow:0 0 3px #fff,0 0 3px #fff}
+/* ── v7.372 ІСТОРІЯ ВНЕСЕНЬ ───── */
+.tiles{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-bottom:12px}
+.tile{background:#fff;border:1px solid var(--line);border-left:4px solid var(--c);border-radius:12px;padding:10px 12px;cursor:pointer}
+.tile.on{box-shadow:0 0 0 2px var(--c) inset}
+.tile .tt{font-size:12px;color:var(--gray);font-weight:700}
+.tile .tv{font-size:19px;font-weight:800;margin-top:2px;font-variant-numeric:tabular-nums}
+.tile .ts{font-size:11px;color:var(--mut)}
+table.hist{width:100%;border-collapse:collapse;font-size:13px}
+table.hist th{position:sticky;top:0;background:#f8fafc;text-align:left;padding:8px;font-size:12px;color:var(--gray);border-bottom:1px solid var(--line);z-index:2}
+table.hist td{padding:7px 8px;border-bottom:1px solid #f1f5f9;vertical-align:top}
+table.hist tr.skip td{opacity:.55}
+table.hist .r{text-align:right}
+table.hist .nw{white-space:nowrap}
+table.hist .muted{font-size:11.5px}
+.kb{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:700;color:var(--c);background:color-mix(in srgb,var(--c) 12%,#fff)}
 .chk{display:flex;align-items:center;gap:5px;font-size:13px;color:var(--dark)}
-@media(max-width:900px){
-  .mapwrap{grid-template-columns:1fr}
-  #map{height:62vh}
-  #panel{height:auto}
-}
+.top input.flt{min-width:170px}
+.tblwrap{max-height:calc(100vh - 290px)}
+@media(max-width:900px){ .tiles{grid-template-columns:repeat(2,minmax(0,1fr))} .tblwrap{max-height:none} }
 </style>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.css">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.Default.css">
 </style>
 </head>
 <body>
@@ -366,28 +350,29 @@ ul.miss li{margin:2px 0}
 
 <div class="top">
   <button class="menu-toggle" onclick="toggleSidebar()" aria-label="Меню">☰</button>
-  <h1>🗺️ Карта клієнтів</h1>
+  <h1>📜 Історія внесень</h1>
   <span id="syncStatus" style="font-size:12px"></span>
-  <select id="locSel" class="flt" title="Локація"></select>
-  <select id="grpSel" class="flt" title="Група" style="display:none"></select>
-  <select id="stSel" class="flt" title="Статус">
-    <option value="live">Активні й адаптація</option>
-    <option value="all">+ майбутні й призупинені</option>
+  <div class="mnav"><button class="btn sec" id="mPrev" title="Попередній місяць">◀</button><b id="mLbl">—</b><button class="btn sec" id="mNext" title="Наступний місяць">▶</button></div>
+  <select id="basisSel" class="flt" title="Як рахувати місяць">
+    <option value="entered">коли внесено</option>
+    <option value="booked">за який місяць зараховано</option>
   </select>
-  <label class="chk"><input type="checkbox" id="clusterChk" checked> Групувати точки</label>
+  <select id="kindF" class="flt" title="Тип">
+    <option value="">Усі типи</option><option value="income">💚 Доходи</option><option value="expense">🧾 Витрати</option>
+    <option value="salary">💼 ЗП (відомість)</option><option value="salary_fop">🎨 ЗП ФОП</option><option value="manual">✍️ Ручні правки</option>
+  </select>
+  <select id="locF" class="flt" title="Локація"></select>
+  <select id="byF" class="flt" title="Хто вніс"></select>
+  <input id="qF" class="flt" type="search" placeholder="🔎 дитина, контрагент, референс…">
   <span class="sp"></span>
   <button class="btn sec" id="refreshBtn" title="Оновити">🔄</button>
 </div>
-<div class="mapwrap">
-  <div id="map"></div>
-  <div id="panel"><div class="empty">Завантаження…</div></div>
-</div>
+<div class="wrap" id="main"><div class="empty">Завантаження…</div></div>
 <div class="toast" id="toast"></div>
 
   </main>
 </div>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/leaflet.markercluster.js"></script>
+<script src="xlsx.full.min.js"></script>
 <script>
 var CFG = { SCRIPT_URL: 'https://script.google.com/macros/s/AKfycbyTSUVlaN4-PpXe47zCSmhVs0Qxy1FDXG_XsB4zcKNpqBxdhDtS9ibM4YFGkGjmPQDFWQ/exec' };
 var MONTHS = ['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
@@ -487,7 +472,7 @@ function canSeeTopNet(role){ var r = String(role || '').toLowerCase().trim();
   return NETWORK_ROLES.indexOf(r) !== -1 && NAV_TOP_DENY.indexOf(r) === -1; }
 
 // ── v7.240 СПІЛЬНИЙ ШЕЛЛ: матриця прав, сайдбар, шапка ──────────────────
-var CURRENT_PAGE = 'map';
+var CURRENT_PAGE = 'history';
 function $(id){ return document.getElementById(id); }
 function isNetworkRole(role){ return NETWORK_ROLES.indexOf(String(role||'').toLowerCase()) !== -1; }
 var PERMISSIONS = {
@@ -767,7 +752,7 @@ function toggleSidebar(){ var s=$('sidebar'); if(s) s.classList.toggle('open'); 
 // Підсвітка поточного пункту меню.
 function markActiveNav(){
   document.querySelectorAll('.nav-item').forEach(function(el){ el.classList.remove('active'); });
-  var el = document.getElementById('navClientMap');
+  var el = document.getElementById('navEntryHistory');
   if (el) el.classList.add('active');
 }
 
@@ -807,275 +792,156 @@ async function apiPost(body){ var r=await _fetch(CFG.SCRIPT_URL,{method:'POST',h
   var txt=await r.text(); try{ return JSON.parse(txt); }catch(_){ return {ok:true,_assumed:true}; } }
 function enc(s){ return encodeURIComponent(s); }
 
-function toast(msg){ var t=document.getElementById('toast'); if(!t){ console.warn('[map] toast:',msg); return; } t.textContent=msg; t.classList.add('show'); setTimeout(function(){t.classList.remove('show');},2600); }
+function toast(msg){ var t=document.getElementById('toast'); if(!t){ console.warn('[history] toast:',msg); return; } t.textContent=msg; t.classList.add('show'); setTimeout(function(){t.classList.remove('show');},2600); }
 function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); }
 function fmtG(n){ return (Number(n)||0).toLocaleString('uk-UA')+' ₴'; }
 function shortLabel(name){ var w=String(name||'').trim().split(/\s+/); return (w.map(function(x){return (x[0]||'').toUpperCase();}).join('').slice(0,3))||'?'; }
 function markKey(child,date,itemId){ return child+'||'+date+'||'+itemId; }
 
-// ═══ v7.371 КАРТА КЛІЄНТІВ ═══════════════════════════════════════════════════
-// Дані — getClientMap (лише ПІБ/група/локація/статус/координати; директорці бекенд віддає тільки її локацію).
-// Точка садочка — setLocGeo (ставиться кліком по карті), точку дитини можна пересунути — setClientGeo.
-var MAP_ROLES = ['cfo','ceo','coo','director'];
-var LOC_COLORS = ['#e6194b','#3cb44b','#4363d8','#f58231','#911eb4','#0ea5b7','#f032e6','#9a6324','#469990','#800000',
-                  '#808000','#000075','#d69e00','#2f855a','#b83280','#2b6cb0','#c05621','#553c9a','#718096','#d53f8c'];
-var GEO_LABEL = {ok:'знайдено', picked:'обрано зі списку', manual:'поставлено вручну', approx:'приблизно (вулиця)',
-                 far:'⚠️ інше місто', not_found:'⚠️ адресу не знайдено', pending:'⏳ координати ще шукаються',
-                 error:'⚠️ помилка пошуку', no_address:'немає адреси'};
-var M = { map:null, data:null, kidsLayer:null, locLayer:null, sel:'', status:'live', group:'', cluster:true,
-          hidden:{}, colors:{}, pickLoc:false, markers:{} };
+// ═══ v7.372 ІСТОРІЯ ВНЕСЕНЬ ══════════════════════════════════════════════════
+// Дані — getEntryHistory (лише CFO): доходи (виписка → Payment), витрати (виписка → OPEX), ЗП ФОП (виписка → Salary),
+// ЗП за відомістю (→ Salary), ручні правки в системі. Фільтр місяця: коли внесли / за який місяць зараховано.
+var KIND = {
+  income:     {t:'Доходи',       i:'💚', c:'#16a34a'},
+  expense:    {t:'Витрати',      i:'🧾', c:'#dc2626'},
+  salary:     {t:'ЗП',           i:'💼', c:'#7c3aed'},
+  salary_fop: {t:'ЗП ФОП',       i:'🎨', c:'#9333ea'},
+  manual:     {t:'Ручна правка', i:'✍️', c:'#ea580c'}
+};
+var SRC = {statement:'🏦 виписка', payroll:'📄 відомість', manual:'✍️ вручну'};
+var H = { y:0, m:0, basis:'entered', items:[], kind:'', loc:'', by:'', q:'', showSkipped:false, loading:false };
 
-function canMap(){ return !!(S.user && MAP_ROLES.indexOf(String(S.user.role || '').toLowerCase()) !== -1); }
-function mapGate(){ if (canMap()) return true; location.replace('clients.html'); return false; }
-function myLoc(){ return String((S.user && (S.user.origLoc || S.user.loc)) || '').trim(); }
-function canEditLoc(loc){ return !!M.data && (!M.data.scope || M.data.scope === loc); }
-
-function distKm(a, b){
-  var R = 6371, dLat = (b[0] - a[0]) * Math.PI / 180, dLng = (b[1] - a[1]) * Math.PI / 180;
-  var x = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(a[0] * Math.PI / 180) * Math.cos(b[0] * Math.PI / 180) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
-  return 2 * R * Math.asin(Math.sqrt(x));
+function histGate(){
+  if (S.user && String(S.user.role || '').toLowerCase() === 'cfo') return true;
+  location.replace('clients.html'); return false;
 }
-function fmtKm(d){ return d < 1 ? Math.round(d * 1000) + ' м' : (Math.round(d * 10) / 10).toString().replace('.', ',') + ' км'; }
-function median(a){ if (!a.length) return null; var s = a.slice().sort(function(x, y){ return x - y; }), h = Math.floor(s.length / 2); return s.length % 2 ? s[h] : (s[h - 1] + s[h]) / 2; }
+function plural(n, one, few, many){ var a = Math.abs(n) % 100, b = a % 10; return (a > 10 && a < 20) ? many : b === 1 ? one : (b > 1 && b < 5) ? few : many; }
+function fmtMoney(n){ n = Number(n) || 0; return (n < 0 ? '−' : '') + Math.abs(Math.round(n * 100) / 100).toLocaleString('uk-UA', {maximumFractionDigits:2}) + ' ₴'; }
+function fmtWhen(iso){ if (!iso) return '—'; var d = iso.slice(0, 10).split('-'); return d[2] + '.' + d[1] + ' ' + iso.slice(11, 16); }
 
-function dotIcon(color, ring){
-  return L.divIcon({className:'kid-dot', iconSize:[14,14], iconAnchor:[7,7],
-    html:'<span style="background:' + color + ';' + (ring ? 'box-shadow:0 0 0 3px ' + ring + ';' : '') + '"></span>'});
-}
-function locIcon(color){
-  return L.divIcon({className:'loc-pin', iconSize:[34,34], iconAnchor:[17,17],
-    html:'<span style="border-color:' + color + '">🏫</span>'});
-}
-
-function initMap(){
-  M.map = L.map('map', {zoomControl:true, preferCanvas:false}).setView([50.45, 30.52], 11);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19,
-    attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'}).addTo(M.map);
-  M.locLayer = L.layerGroup().addTo(M.map);
-  M.map.on('click', function(e){
-    if (!M.pickLoc) return;
-    var loc = M.sel;
-    M.pickLoc = false; document.getElementById('map').classList.remove('picking');
-    if (!confirm('Поставити точку «' + loc + '» тут?')) return;
-    saveLocPoint(loc, e.latlng.lat, e.latlng.lng);
-  });
-}
-
-async function load(){
+async function loadHist(){
+  H.loading = true; renderHist();
+  document.getElementById('mLbl').textContent = MONTHS[H.m - 1] + ' ' + H.y;
   setCloudStatus('sync');
-  var j;
-  try { j = await apiGet('getClientMap', 'actorId=' + enc(S.user.id)); }
-  catch(e){ setCloudStatus('err', e.message || e); showPanelMsg('Не вдалося завантажити дані: ' + esc(e.message || e)); return; }
-  if (!j || !j.ok){ setCloudStatus('err', j && j.error); showPanelMsg(esc((j && j.error) || 'Помилка сервера')); return; }
-  setCloudStatus('ok');
-  M.data = j;
-  var locs = Object.keys(j.counts || {}).sort(function(a, b){ return a.localeCompare(b, 'uk'); });
-  M.colors = {}; locs.forEach(function(l, i){ M.colors[l] = LOC_COLORS[i % LOC_COLORS.length]; });
-  var sel = document.getElementById('locSel');
-  if (j.scope){
-    M.sel = j.scope;
-    sel.innerHTML = '<option>' + esc(j.scope) + '</option>'; sel.disabled = true;
-  } else {
-    if (M.sel && locs.indexOf(M.sel) === -1) M.sel = '';
-    sel.innerHTML = '<option value="">Усі локації</option>' + locs.map(function(l){
-      return '<option' + (l === M.sel ? ' selected' : '') + '>' + esc(l) + '</option>'; }).join('');
-    sel.disabled = false;
-  }
-  fillGroups();
-  render(true);
+  try {
+    var j = await apiGet('getEntryHistory', 'year=' + H.y + '&month=' + H.m + '&basis=' + H.basis + '&actorId=' + enc(S.user.id));
+    if (!j || !j.ok) throw new Error((j && j.error) || 'Помилка сервера');
+    H.items = j.items || [];
+    setCloudStatus('ok');
+  } catch(e){ H.items = []; setCloudStatus('err', e.message || e); H.err = String(e.message || e); }
+  H.loading = false;
+  fillFilters(); renderHist();
 }
 
-function fillGroups(){
-  var g = document.getElementById('grpSel');
-  if (!M.sel){ g.style.display = 'none'; M.group = ''; return; }
-  var set = {};
-  (M.data.kids || []).forEach(function(k){ if (k.loc === M.sel && k.group) set[k.group] = 1; });
-  var groups = Object.keys(set).sort(function(a, b){ return a.localeCompare(b, 'uk'); });
-  if (M.group && !set[M.group]) M.group = '';
-  g.innerHTML = '<option value="">Усі групи</option>' + groups.map(function(x){
-    return '<option' + (x === M.group ? ' selected' : '') + '>' + esc(x) + '</option>'; }).join('');
-  g.style.display = groups.length ? '' : 'none';
+function fillFilters(){
+  var locs = {}, bys = {};
+  H.items.forEach(function(x){ if (x.loc) locs[x.loc] = 1; bys[x.by || '—'] = 1; });
+  var ls = document.getElementById('locF'), bs = document.getElementById('byF');
+  ls.innerHTML = '<option value="">Усі локації</option>' + Object.keys(locs).sort(function(a, b){ return a.localeCompare(b, 'uk'); })
+    .map(function(l){ return '<option' + (l === H.loc ? ' selected' : '') + '>' + esc(l) + '</option>'; }).join('');
+  bs.innerHTML = '<option value="">Усі автори</option>' + Object.keys(bys).sort()
+    .map(function(b){ return '<option value="' + esc(b) + '"' + (b === H.by ? ' selected' : '') + '>' + esc(b === '—' ? 'невідомо (старі записи)' : b) + '</option>'; }).join('');
 }
 
-function visibleKids(){
-  return (M.data.kids || []).filter(function(k){
-    if (M.sel && k.loc !== M.sel) return false;
-    if (!M.sel && M.hidden[k.loc]) return false;
-    if (M.group && k.group !== M.group) return false;
-    if (M.status === 'live' && !(k.status === 'active' || k.status === 'adaptation')) return false;
+function filtered(){
+  var q = H.q.toLowerCase();
+  return H.items.filter(function(x){
+    if (H.kind && x.kind !== H.kind) return false;
+    if (H.loc && x.loc !== H.loc) return false;
+    if (H.by && (x.by || '—') !== H.by) return false;
+    if (!H.showSkipped && x.status === 'пропущено') return false;
+    if (q && (x.what + ' ' + x.detail + ' ' + x.sourceInfo + ' ' + x.loc).toLowerCase().indexOf(q) === -1) return false;
     return true;
   });
 }
 
-function render(fit){
-  if (!M.data) return;
-  var kids = visibleKids(), locGeo = M.data.locGeo || {};
-  if (M.kidsLayer) M.map.removeLayer(M.kidsLayer);
-  M.kidsLayer = M.cluster ? L.markerClusterGroup({showCoverageOnHover:false, maxClusterRadius:40, spiderfyOnMaxZoom:true,
-                              iconCreateFunction:clusterIcon})
-                          : L.layerGroup();
-  M.markers = {};
-  var bounds = [];
-  kids.forEach(function(k){
-    if (k.lat == null || k.lng == null) return;
-    var color = M.colors[k.loc] || '#2563eb';
-    var ring = (k.geo === 'approx' || k.geo === 'far') ? 'rgba(234,88,12,.45)' : '';
-    var m = L.marker([k.lat, k.lng], {icon:dotIcon(color, ring), title:k.name, locName:k.loc});
-    m.bindPopup(function(){ return kidPopup(k); });
-    m.on('dragend', function(){ var p = m.getLatLng(); m.dragging.disable(); saveKidPoint(k, p.lat, p.lng); });
-    M.markers[k.id] = m;
-    M.kidsLayer.addLayer(m);
-    bounds.push([k.lat, k.lng]);
+function renderHist(){
+  var main = document.getElementById('main');
+  if (H.loading){ main.innerHTML = '<div class="empty">Завантаження…</div>'; return; }
+  if (H.err && !H.items.length){ main.innerHTML = '<div class="empty">Не вдалося завантажити: ' + esc(H.err) + '</div>'; H.err = ''; return; }
+  var rows = filtered();
+  // підсумки — з урахуванням фільтрів локації/автора/пошуку, але по всіх типах (картки = перемикач типу)
+  var base = H.items.filter(function(x){
+    return (!H.loc || x.loc === H.loc) && (!H.by || (x.by || '—') === H.by) && x.status !== 'пропущено';
   });
-  M.kidsLayer.addTo(M.map);
-
-  M.locLayer.clearLayers();
-  Object.keys(locGeo).forEach(function(loc){
-    if (M.sel && loc !== M.sel) return;
-    if (!M.sel && M.hidden[loc]) return;
-    var p = locGeo[loc], color = M.colors[loc] || '#1e293b';
-    L.marker(p, {icon:locIcon(color), zIndexOffset:1000, title:loc}).bindPopup('<b>' + esc(loc) + '</b>').addTo(M.locLayer);
-    if (M.sel) [1, 3, 5].forEach(function(r){
-      L.circle(p, {radius:r * 1000, color:color, weight:1.5, opacity:.6, fill:false, dashArray:'4 6', interactive:false}).addTo(M.locLayer);
-      L.marker([p[0] + r / 111.2, p[1]], {interactive:false, icon:L.divIcon({className:'ring-lbl', html:r + ' км', iconSize:[40,14], iconAnchor:[20,7]})}).addTo(M.locLayer);
-    });
-    bounds.push(p);
+  var sum = {}, cnt = {};
+  base.forEach(function(x){ sum[x.kind] = (sum[x.kind] || 0) + (Number(x.amount) || 0); cnt[x.kind] = (cnt[x.kind] || 0) + 1; });
+  var skipped = H.items.filter(function(x){ return x.status === 'пропущено'; }).length;
+  var h = '<div class="tiles">' + ['income','expense','salary','salary_fop','manual'].map(function(k){
+    var K = KIND[k];
+    return '<div class="tile' + (H.kind === k ? ' on' : '') + '" onclick="setKind(\'' + k + '\')" style="--c:' + K.c + '">' +
+      '<div class="tt">' + K.i + ' ' + K.t + '</div><div class="tv">' + (k === 'manual' ? (cnt[k] || 0) + ' ' + plural(cnt[k] || 0, 'правка', 'правки', 'правок') : fmtMoney(sum[k] || 0)) + '</div>' +
+      '<div class="ts">' + (cnt[k] || 0) + ' ' + plural(cnt[k] || 0, 'запис', 'записи', 'записів') + '</div></div>';
+  }).join('') + '</div>';
+  h += '<div class="card"><div class="hd"><h3>' + (H.kind ? KIND[H.kind].i + ' ' + KIND[H.kind].t : 'Усі внесення') + '</h3>' +
+       '<span class="muted">' + rows.length + ' записів · ' + (H.basis === 'entered' ? 'внесено в ' : 'зараховано за ') + MONTHS[H.m - 1].toLowerCase() + ' ' + H.y + '</span>' +
+       (H.kind ? '<button class="btn sec" style="padding:4px 10px;font-size:12px" onclick="setKind(\'\')">✕ усі типи</button>' : '') +
+       '<span class="sp"></span>' +
+       (skipped ? '<label class="chk"><input type="checkbox" ' + (H.showSkipped ? 'checked' : '') + ' onchange="H.showSkipped=this.checked;renderHist()"> показати пропущені (' + skipped + ')</label>' : '') +
+       '<button class="btn sec" style="padding:5px 10px;font-size:12px" onclick="exportXlsx()">⬇️ Excel</button></div>';
+  if (!rows.length){
+    h += '<div class="empty">За цей місяць нічого не знайдено' + (H.kind || H.loc || H.by || H.q ? ' з такими фільтрами' : '') + '.</div></div>';
+    main.innerHTML = h; return;
+  }
+  h += '<div class="tblwrap"><table class="hist"><thead><tr><th>Коли</th><th>Хто</th><th>Локація</th><th>Тип</th><th>Що саме</th>' +
+       '<th class="r">Сума</th><th>За місяць</th><th>Звідки</th></tr></thead><tbody>';
+  var LIM = 1500;
+  rows.slice(0, LIM).forEach(function(x){
+    var K = KIND[x.kind] || {t:x.kind, i:'', c:'#64748b'};
+    var amt = x.kind === 'manual' && x.before !== '' && x.before != null
+      ? '<span class="muted">' + fmtMoney(x.before) + ' → </span>' + fmtMoney(x.after)
+      : fmtMoney(x.amount);
+    h += '<tr class="' + (x.status === 'пропущено' ? 'skip' : '') + '">' +
+      '<td class="nw">' + fmtWhen(x.when) + '</td>' +
+      '<td>' + (x.by ? esc(x.by) : '<span class="muted">невідомо</span>') + '</td>' +
+      '<td>' + esc(x.loc || '—') + '</td>' +
+      '<td class="nw"><span class="kb" style="--c:' + K.c + '">' + K.i + ' ' + K.t + '</span></td>' +
+      '<td><b>' + esc(x.what || '—') + '</b><div class="muted">' + esc(x.detail || '') +
+        (x.status === 'пропущено' ? ' · <b>пропущено</b>' + (x.reason ? ': ' + esc(x.reason) : '') : '') + '</div></td>' +
+      '<td class="r nw">' + amt + '</td>' +
+      '<td class="nw">' + (x.month ? MONTHS[x.month - 1] : '—') + '</td>' +
+      '<td><div>' + (SRC[x.source] || esc(x.source)) + '</div><div class="muted">' + esc(x.sourceInfo || '') + '</div></td></tr>';
   });
-
-  if (fit){
-    if (bounds.length) M.map.fitBounds(bounds, {padding:[30, 30], maxZoom:15});
-    else {
-      var c = (M.data.cityCenter || {})[(M.data.cityByLoc || {})[M.sel] || 'Київ'] || [50.45, 30.52];
-      M.map.setView(c, 11);
-    }
-  }
-  renderPanel(kids);
+  h += '</tbody></table></div>' + (rows.length > LIM ? '<div class="muted" style="padding:8px 14px">Показано перші ' + LIM + ' з ' + rows.length + ' — уточніть фільтр або вивантажте в Excel.</div>' : '') + '</div>';
+  main.innerHTML = h;
 }
 
-// Кластер — у колір локації, якої в ньому найбільше; кілька локацій → сіре кільце-підказка.
-function clusterIcon(cl){
-  var by = {}, n = cl.getChildCount();
-  cl.getAllChildMarkers().forEach(function(m){ var l = m.options.locName; by[l] = (by[l] || 0) + 1; });
-  var top = Object.keys(by).sort(function(a, b){ return by[b] - by[a]; })[0], mixed = Object.keys(by).length > 1;
-  var size = n < 10 ? 30 : n < 50 ? 36 : 44;
-  return L.divIcon({className:'kid-cluster', iconSize:[size, size],
-    html:'<span style="background:' + (M.colors[top] || '#2563eb') + ';width:' + size + 'px;height:' + size + 'px;' +
-         (mixed ? 'box-shadow:0 0 0 4px rgba(100,116,139,.45)' : 'box-shadow:0 0 0 4px rgba(255,255,255,.7)') + '">' + n + '</span>'});
+function setKind(k){ H.kind = (H.kind === k ? '' : k); var s = document.getElementById('kindF'); if (s) s.value = H.kind; renderHist(); }
+
+function exportXlsx(){
+  var rows = filtered();
+  if (typeof XLSX === 'undefined'){ alert('Бібліотека Excel не завантажилась'); return; }
+  var data = [['Коли','Хто','Локація','Тип','Що саме','Деталі','Сума','Було','Стало','За місяць','Звідки','Джерело (деталі)','Статус','Причина']];
+  rows.forEach(function(x){
+    data.push([fmtWhen(x.when), x.by || 'невідомо', x.loc, (KIND[x.kind] || {}).t || x.kind, x.what, x.detail,
+      Number(x.amount) || 0, x.before === undefined ? '' : x.before, x.after === undefined ? '' : x.after,
+      x.month ? MONTHS[x.month - 1] : '', (SRC[x.source] || x.source).replace(/^\S+\s/, ''), x.sourceInfo, x.status || '', x.reason || '']);
+  });
+  var ws = XLSX.utils.aoa_to_sheet(data), wb = XLSX.utils.book_new();
+  ws['!cols'] = [{wch:12},{wch:26},{wch:16},{wch:12},{wch:30},{wch:30},{wch:12},{wch:10},{wch:10},{wch:10},{wch:10},{wch:34},{wch:10},{wch:20}];
+  XLSX.utils.book_append_sheet(wb, ws, 'Історія');
+  XLSX.writeFile(wb, 'Історія_внесень_' + H.y + '-' + ('0' + H.m).slice(-2) + (H.basis === 'booked' ? '_зараховано' : '') + '.xlsx');
 }
 
-function kidPopup(k){
-  var lp = (M.data.locGeo || {})[k.loc];
-  var h = '<div style="min-width:180px"><b>' + esc(k.name) + '</b><br>' +
-    '<span style="color:#64748b">' + esc(k.group || '—') + ' · ' + esc(k.loc) + '</span>';
-  if (lp && k.lat != null) h += '<br>🏫 до садочка: <b>' + fmtKm(distKm(lp, [k.lat, k.lng])) + '</b>';
-  h += '<br><span style="font-size:11px;color:#64748b">Точка: ' + esc(GEO_LABEL[k.geo] || k.geo) + '</span>';
-  if (canEditLoc(k.loc)) h += '<br><button class="btn sec" style="margin-top:6px;padding:4px 8px;font-size:12px" onclick="startDrag(\'' + esc(k.id).replace(/'/g, "\\'") + '\')">✋ Пересунути точку</button>';
-  return h + '</div>';
-}
-
-function startDrag(id){
-  var m = M.markers[id]; if (!m) return;
-  M.map.closePopup();
-  if (M.cluster && M.kidsLayer.zoomToShowLayer){
-    M.kidsLayer.zoomToShowLayer(m, function(){ m.dragging.enable(); toast('Перетягніть точку на правильне місце'); });
-  } else { m.dragging.enable(); toast('Перетягніть точку на правильне місце'); }
-}
-
-async function saveKidPoint(k, lat, lng){
-  if (!confirm('Зберегти нову точку для «' + k.name + '»?')){ render(false); return; }
-  setCloudStatus('sync');
-  var r = await apiPost({action:'setClientGeo', actorId:S.user.id, id:k.id, lat:lat, lng:lng});
-  if (r && r.ok === false){ setCloudStatus('err', r.error); alert('Не збережено: ' + (r.error || '')); render(false); return; }
-  k.lat = Math.round(lat * 1e4) / 1e4; k.lng = Math.round(lng * 1e4) / 1e4; k.geo = 'manual';
-  setCloudStatus('ok'); toast('Точку збережено'); render(false);
-}
-
-async function saveLocPoint(loc, lat, lng){
-  setCloudStatus('sync');
-  var r = await apiPost({action:'setLocGeo', actorId:S.user.id, loc:loc, lat:lat, lng:lng});
-  if (r && r.ok === false){ setCloudStatus('err', r.error); alert('Не збережено: ' + (r.error || '')); return; }
-  M.data.locGeo = M.data.locGeo || {};
-  M.data.locGeo[loc] = [Math.round(lat * 1e5) / 1e5, Math.round(lng * 1e5) / 1e5];
-  setCloudStatus('ok'); toast('Точку локації збережено'); render(false);
-}
-
-function startPickLoc(){
-  if (!M.sel){ alert('Спершу оберіть локацію'); return; }
-  M.pickLoc = true;
-  document.getElementById('map').classList.add('picking');
-  toast('Клікніть на карті, де знаходиться «' + M.sel + '»');
-}
-
-function showPanelMsg(html){ document.getElementById('panel').innerHTML = '<div class="empty">' + html + '</div>'; }
-
-function renderPanel(kids){
-  var onMap = kids.filter(function(k){ return k.lat != null; });
-  var noAddr = kids.filter(function(k){ return k.geo === 'no_address'; });
-  var noPoint = kids.filter(function(k){ return k.geo !== 'no_address' && k.lat == null; });
-  var h = '';
-  h += '<div class="pcard"><div class="big">' + onMap.length + ' <span>з ' + kids.length + ' дітей на карті</span></div>' +
-       '<div class="bar"><i style="width:' + (kids.length ? Math.round(onMap.length / kids.length * 100) : 0) + '%"></i></div>' +
-       '<div class="muted">без адреси: <b>' + noAddr.length + '</b> · адресу не знайдено / шукається: <b>' + noPoint.length + '</b></div></div>';
-
-  if (M.sel){
-    var lp = (M.data.locGeo || {})[M.sel];
-    if (!lp){
-      h += '<div class="pcard warn">🏫 Точку садочка ще не поставлено — без неї не рахуються відстані й кола 1/3/5 км.' +
-        (canEditLoc(M.sel) ? '<br><button class="btn" style="margin-top:8px" onclick="startPickLoc()">📍 Позначити садочок на карті</button>' : '') + '</div>';
-    } else {
-      var d = onMap.map(function(k){ return distKm(lp, [k.lat, k.lng]); });
-      var b1 = d.filter(function(x){ return x <= 1; }).length, b3 = d.filter(function(x){ return x > 1 && x <= 3; }).length,
-          b5 = d.filter(function(x){ return x > 3 && x <= 5; }).length, bf = d.filter(function(x){ return x > 5; }).length;
-      var row = function(lbl, n){ var p = d.length ? Math.round(n / d.length * 100) : 0;
-        return '<tr><td>' + lbl + '</td><td class="n">' + n + '</td><td class="pb"><i style="width:' + p + '%"></i></td><td class="n">' + p + '%</td></tr>'; };
-      h += '<div class="pcard"><h4>Відстань до садочка</h4>' +
-        (d.length ? '<table class="dist">' + row('до 1 км', b1) + row('1–3 км', b3) + row('3–5 км', b5) + row('понад 5 км', bf) + '</table>' +
-          '<div class="muted">медіана: <b>' + fmtKm(median(d)) + '</b> · середня: <b>' + fmtKm(d.reduce(function(a, x){ return a + x; }, 0) / d.length) + '</b></div>'
-          : '<div class="muted">Ще немає дітей із точкою на карті.</div>') +
-        (canEditLoc(M.sel) ? '<button class="btn sec" style="margin-top:8px;font-size:12px" onclick="startPickLoc()">📍 Перемістити точку садочка</button>' : '') + '</div>';
-    }
-  } else {
-    var counts = M.data.counts || {}, locGeo = M.data.locGeo || {};
-    var locs = Object.keys(counts).sort(function(a, b){ return a.localeCompare(b, 'uk'); });
-    h += '<div class="pcard"><h4>Локації</h4><table class="locs">' + locs.map(function(l){
-      var c = counts[l], mine = (M.data.kids || []).filter(function(k){ return k.loc === l && k.lat != null; }), lp = locGeo[l];
-      var md = lp ? median(mine.map(function(k){ return distKm(lp, [k.lat, k.lng]); })) : null;
-      return '<tr><td><label><input type="checkbox" ' + (M.hidden[l] ? '' : 'checked') + ' onchange="toggleLoc(this,\'' + esc(l).replace(/'/g, "\\'") + '\')">' +
-        '<span class="sw" style="background:' + M.colors[l] + '"></span>' + esc(l) + '</label></td>' +
-        '<td class="n" title="на карті / дітей">' + c.onMap + '/' + c.kids + '</td>' +
-        '<td class="n muted" title="медіана відстані до садочка">' + (md != null ? fmtKm(md) : (lp ? '—' : '🏫?')) + '</td></tr>';
-    }).join('') + '</table><div class="muted" style="margin-top:6px">на карті / усього дітей · медіана відстані до садочка (🏫? — точку садочка не поставлено)</div></div>';
-  }
-
-  var miss = noAddr.concat(noPoint);
-  if (miss.length){
-    h += '<details class="pcard"><summary><b>Без точки на карті: ' + miss.length + '</b></summary><ul class="miss">' +
-      miss.slice(0, 300).map(function(k){
-        return '<li>' + esc(k.name) + ' <span class="muted">' + esc(M.sel ? (k.group || '') : k.loc) + ' · ' + esc(GEO_LABEL[k.geo] || k.geo) + '</span></li>';
-      }).join('') + '</ul><div class="muted">Адресу вносять у картці дитини (вкладка «Основне»).</div></details>';
-  }
-  document.getElementById('panel').innerHTML = h;
-}
-
-function toggleLoc(cb, loc){ if (cb.checked) delete M.hidden[loc]; else M.hidden[loc] = 1; render(false); }
-
-function wire(){
-  document.getElementById('locSel').addEventListener('change', function(){ M.sel = this.value; M.pickLoc = false; fillGroups(); render(true); });
-  document.getElementById('grpSel').addEventListener('change', function(){ M.group = this.value; render(true); });
-  document.getElementById('stSel').addEventListener('change', function(){ M.status = this.value; render(false); });
-  document.getElementById('clusterChk').addEventListener('change', function(){ M.cluster = this.checked; render(false); });
-  document.getElementById('refreshBtn').addEventListener('click', function(){ load(); });
+function wireHist(){
+  document.getElementById('mPrev').addEventListener('click', function(){ if (--H.m < 1){ H.m = 12; H.y--; } loadHist(); });
+  document.getElementById('mNext').addEventListener('click', function(){ if (++H.m > 12){ H.m = 1; H.y++; } loadHist(); });
+  document.getElementById('basisSel').addEventListener('change', function(){ H.basis = this.value; loadHist(); });
+  document.getElementById('kindF').addEventListener('change', function(){ H.kind = this.value; renderHist(); });
+  document.getElementById('locF').addEventListener('change', function(){ H.loc = this.value; renderHist(); });
+  document.getElementById('byF').addEventListener('change', function(){ H.by = this.value; renderHist(); });
+  var t = null;
+  document.getElementById('qF').addEventListener('input', function(){ var v = this.value; clearTimeout(t); t = setTimeout(function(){ H.q = v.trim(); renderHist(); }, 250); });
+  document.getElementById('refreshBtn').addEventListener('click', function(){ loadHist(); });
 }
 
 async function init(){
   S.user = readSession(); if (!S.user){ goLogin(); return; }
-  if (!mapGate()) return;
-  try { updUserUI(); markActiveNav(); } catch(e){ console.warn('[map] шелл:', e && e.message); }
-  if (typeof L === 'undefined'){ showPanelMsg('Не завантажилась бібліотека карти — перевірте інтернет і оновіть сторінку.'); return; }
-  wire();
-  initMap();
-  setTimeout(function(){ try { M.map.invalidateSize(); } catch(_){} }, 300);
-  await load();
+  if (!histGate()) return;
+  try { updUserUI(); markActiveNav(); } catch(e){ console.warn('[history] шелл:', e && e.message); }
+  var now = new Date(); H.y = now.getFullYear(); H.m = now.getMonth() + 1;
+  wireHist();
+  await loadHist();
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
 else init();
