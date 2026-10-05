@@ -769,6 +769,10 @@ details.card>summary::-webkit-details-marker{display:none}details.card[open]>sum
             <textarea id="gradStatusNext" rows="2" placeholder="Напр.: школа m.kids / інша школа / інше"
               style="width:100%;padding:10px;border:1.5px solid var(--gray2);border-radius:8px;font-size:14px;font-family:inherit;resize:vertical"></textarea></div>
         </div>
+        <!-- v7.366: адреса проживання — для карти клієнтів; обов'язкова для НОВОЇ картки -->
+        <div class="fg"><label>📍 Адреса проживання <span id="fHomeAddressReq" style="color:var(--red);font-weight:400">*</span></label>
+          <input type="text" id="fHomeAddress" placeholder="вул. Березнева 12, кв. 189 (місто — якщо інше, ніж у локації)">
+          <div style="font-size:11px;color:var(--gray);margin-top:3px">Де дитина живе фактично (не реєстрація). Потрібна для карти клієнтів.</div></div>
         <div class="section-hd">Контакт мами</div>
         <div class="g2">
           <div class="fg"><label>ПІБ мами</label><input type="text" id="fMomName" placeholder="Прізвище Ім'я По-батькові"></div>
@@ -1872,6 +1876,7 @@ function mergeCRMFromCloud(rows){
       terminationReason: row['Причина розірвання']||'',
       birthCert:         _hv('Свідоцтво про народження','birthCert',''),
       childRegAddress:   _hv('Місце реєстрації дитини','childRegAddress',''),
+      homeAddress:       row['Адреса проживання']||'',   // v7.366: не «важка» — потрібна списку (позначка «без адреси»)
       momDoc:            _hv('Документ мами','momDoc',''),
       momRnokpp:         _hv('РНОКПП мами','momRnokpp',''),
       dadDoc:            _hv('Документ тата','dadDoc',''),
@@ -1898,6 +1903,7 @@ async function ensureFullCard(id){
     c.development=safeJSON(row['Розвиток (JSON)'],'{}');
     c.notes=row['Нотатки']||''; c.additionalContractNumber=row['Номер додаткового договору']||'';
     c.birthCert=row['Свідоцтво про народження']||''; c.childRegAddress=row['Місце реєстрації дитини']||'';
+    if(row['Адреса проживання']!==undefined) c.homeAddress=row['Адреса проживання']||'';   // v7.366
     c.momDoc=row['Документ мами']||''; c.momRnokpp=row['РНОКПП мами']||''; c.dadDoc=row['Документ тата']||''; c.dadRnokpp=row['РНОКПП тата']||'';
     c._lite=false;
     saveLocalCRM();
@@ -3310,10 +3316,11 @@ function renderClients(){
       : groups;
     if(!filtGroups.length) return;
 
-    var locKids=0,locDebt=0,locDebtors=0, zeroRows=[];
+    var locKids=0,locDebt=0,locDebtors=0, zeroRows=[], locAddr=0, locCards=0;
     filtGroups.forEach(function(g){ g.children.forEach(function(ch){
       if(!_listIsLive(ch)){ zeroRows.push({ch:ch, grp:g}); return; }   // v7.282: закрита картка / без картки → згорнута секція
       locKids++;
+      var _cc=S.crm[ch.id]; if(_cc){ locCards++; if(String(_cc.homeAddress||'').trim()) locAddr++; }   // v7.366
       if(ch.status==='debt'||ch.status==='nopay'){
         locDebtors++;
         locDebt+=(ch.status==='nopay'?ch.budget:(ch.debt||0));
@@ -3323,6 +3330,7 @@ function renderClients(){
     html+='<div class="loc-section"><div class="loc-title">🏫 '+esc(loc.loc)
       +'<span style="font-size:13px;font-weight:400;color:var(--gray)">'
       +locKids+' дітей'
+      +(locCards?' &nbsp;|&nbsp; <span title="Скільки карток мають адресу проживання (для карти клієнтів)" style="color:'+(locAddr===locCards?'var(--green)':'var(--orange)')+'">📍 адреси: '+locAddr+' / '+locCards+'</span>':'')
       +'<span data-permission="finance">'
       +' &nbsp;|&nbsp; '+locDebtors+' боржників &nbsp;|&nbsp; борг: '+fmtN(Math.round(locDebt))+' грн'
       +'</span>'
@@ -3426,7 +3434,8 @@ function renderClients(){
             +'<div style="font-size:11px;color:var(--green)">сплачено</div>';
         }
         html+='<tr class="clickable" onclick="openChild('+escAttrJS(ch.id||'')+','+escAttrJS(ch.group||'')+','+escAttrJS(ch.teacher||grp.teacher||'')+','+escAttrJS(ch.loc||'')+','+escAttrJS(ch.name||'')+')">'
-          +'<td><span class="child-link">'+esc(ch.name)+'</span>'+getAbsBadge(ch.id)+'</td>'
+          +'<td><span class="child-link">'+esc(ch.name)+'</span>'+getAbsBadge(ch.id)
+          +(S.crm[ch.id] && !String(card.homeAddress||'').trim()?' <span title="Немає адреси проживання — заповніть у картці" style="font-size:11px;color:var(--orange);white-space:nowrap">📍 без адреси</span>':'')+'</td>'
           +'<td>'+_ageCell(ch.bday||card.bday||'')+'</td>'
           +'<td data-permission="finance">'+payBadge(ch.status,debtAmt,over)+'</td>'
           +'<td data-permission="finance" style="font-weight:600">'+(factTotal?fmtN(factTotal):'—')+'</td>'
@@ -3859,9 +3868,10 @@ function openNewChild(){
   ['fName','fBday','fTeacher','fMomName','fMomPhone','fMomEmail','fDadName','fDadPhone','fDadEmail',
    'fContractDate','fMonthlyFee','fEntryFee','fNotes',
    'fContractNumber','fAdditionalContractNumber','fAdaptDate','fTerminationDate','fTerminationReason',
-   'fBirthCert','fChildRegAddress','fMomDoc','fMomRnokpp','fDadDoc','fDadRnokpp'].forEach(function(id){
+   'fBirthCert','fChildRegAddress','fMomDoc','fMomRnokpp','fDadDoc','fDadRnokpp','fHomeAddress'].forEach(function(id){
     document.getElementById(id).value='';
   });
+  document.getElementById('fHomeAddressReq').style.display='';   // v7.366: нова картка — адреса обов'язкова
   // v6.26 Етап 1A — reset radio "Підписант договору" до Мами за замовчуванням.
   var spMom = document.querySelector('input[name="signerParent"][value="mom"]');
   if (spMom) spMom.checked = true;
@@ -4070,6 +4080,8 @@ function populateForm(id){
   document.getElementById('fTerminationReason').value=c.terminationReason||'';
   document.getElementById('fBirthCert').value=c.birthCert||'';
   document.getElementById('fChildRegAddress').value=c.childRegAddress||'';
+  document.getElementById('fHomeAddress').value=c.homeAddress||'';   // v7.366
+  document.getElementById('fHomeAddressReq').style.display='none';   // наявна картка — не обов'язково
   document.getElementById('fMomDoc').value=c.momDoc||'';
   document.getElementById('fMomRnokpp').value=c.momRnokpp||'';
   document.getElementById('fDadDoc').value=c.dadDoc||'';
@@ -6835,6 +6847,7 @@ function buildClientPayload(c, id){
     adaptDate: c.adaptDate||'',
     terminationDate: c.terminationDate||'', terminationReason: c.terminationReason||'',
     birthCert: c.birthCert||'', childRegAddress: c.childRegAddress||'',
+    homeAddress: (c.homeAddress===undefined ? undefined : c.homeAddress),   // v7.366: невідома → бекенд не чіпає клітинку
     momDoc: c.momDoc||'', momRnokpp: c.momRnokpp||'',
     dadDoc: c.dadDoc||'', dadRnokpp: c.dadRnokpp||'',
     createdAt: c.createdAt||today(), updatedAt: today(),
@@ -7560,6 +7573,13 @@ function saveChild(){
   if(S.isNew){
     loc=document.getElementById('fLocSel').value;
     if(!loc){ alert('Оберіть локацію'); return; }
+    // v7.366: нова картка без адреси проживання не зберігається (потрібна для карти клієнтів)
+    if(!document.getElementById('fHomeAddress').value.trim()){
+      alert('Вкажіть адресу проживання дитини (вкладка «Основне»)');
+      if(typeof switchTab==='function') switchTab(0);
+      document.getElementById('fHomeAddress').focus();
+      return;
+    }
     group=document.getElementById('fGroup').value.trim();
     teacher=document.getElementById('fTeacher').value.trim();
     S.editId=childId(name, group, loc);
@@ -7627,6 +7647,7 @@ function saveChild(){
   }
   c.birthCert=val('fBirthCert');
   c.childRegAddress=val('fChildRegAddress');
+  c.homeAddress=val('fHomeAddress');   // v7.366
   c.momDoc=val('fMomDoc');
   c.momRnokpp=val('fMomRnokpp');
   c.dadDoc=val('fDadDoc');
@@ -7654,6 +7675,7 @@ function saveChild(){
     terminationReason: c.terminationReason,
     birthCert: c.birthCert,
     childRegAddress: c.childRegAddress,
+    homeAddress: c.homeAddress,   // v7.366
     momDoc: c.momDoc, momRnokpp: c.momRnokpp,
     dadDoc: c.dadDoc, dadRnokpp: c.dadRnokpp,
     createdAt: c.createdAt, updatedAt: c.updatedAt

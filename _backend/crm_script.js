@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.365
+// m.kids CRM — Google Apps Script v7.366
+// v7.366: картка дитини — колонка «Адреса проживання» (після lead_id; saveClient пише її за назвою, лише якщо ключ
+//   homeAddress є в payload). Перший етап карти клієнтів.
 // v7.365: норма предметників — ПІДКАЗКА, не блок: savePredmetnykyLesson / bulk пишуть урок понад норму (overNorm:true),
 //   exportPredmetnykyToSalary більше не зрізає заняття понад норму (лише лог). Усі локації й предмети.
 // v7.364: _VAC_EXCEPTIONS += Нечета Михайло, Міша Крюков (Кар'єрна), Кротов Леон (Борщагівка).
@@ -6734,7 +6736,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.365', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.366', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -9085,7 +9087,10 @@ function ensureClientsHeader(sheet) {
     // v6.47 — особистісно-соціальний розвиток (JSON): 46 критеріїв × 3 точки навч.року.
     'Розвиток (JSON)',
     // v7.169 — звʼязок із лідом: наскрізний шлях лід → договір → оплати → вихід.
-    'lead_id'
+    'lead_id',
+    // v7.366 — адреса проживання (для карти клієнтів). Пишеться окремо за назвою колонки
+    // (_clientWriteHomeAddress), бо масив row у saveClient закінчується на «Розвиток (JSON)».
+    'Адреса проживання'
   ];
   var lastCol = sheet.getLastColumn();
   var width = Math.max(lastCol, EXPECTED.length);
@@ -9210,6 +9215,16 @@ function restoreContractNumbers(body){
   finally { try { lock.releaseLock(); } catch(_){} }
 }
 
+// v7.366: «Адреса проживання» — поза масивом row; пишемо лише коли ключ є в payload
+// (немає ключа → клітинку не чіпаємо, як важкі колонки).
+function _clientWriteHomeAddress(sheet, rowNum, data){
+  if (!data || data.homeAddress === undefined || data.homeAddress === null) return;
+  var hd = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String);
+  var c = hd.indexOf('Адреса проживання');
+  if (c < 0) return;
+  sheet.getRange(rowNum, c + 1).setValue(String(data.homeAddress).trim());
+}
+
 function saveClient(data) {
   if (!data || !data.id) return {ok:false, error:'Missing id'};
   _invalidateLeadClientIndex();   // v7.279
@@ -9284,6 +9299,7 @@ function saveClient(data) {
       var _oldGrpP = String(vals[r][3] || '');
       _contractNumberAsText(sheet, r+1);                    // v7.276: № договору — текст, не дата
       sheet.getRange(r+1, 1, 1, row.length).setValues([row]);
+      _clientWriteHomeAddress(sheet, r + 1, data);   // v7.366
       logGroupChange(data.id, data.name, data.loc, _oldGrpP, data.group, data.updatedBy || data.by || ''); // v7.47 ЕТАП 5
       var _payU = _paymentOnCardUpdate(data, vals[r]);   // v7.355
       return _payU ? {ok:true, action:'updated', payment:_payU} : {ok:true, action:'updated'};
@@ -9319,12 +9335,14 @@ function saveClient(data) {
     var _oldGrpM = String(vals[cand][3] || '');
     _contractNumberAsText(sheet, cand + 1);                 // v7.276
     sheet.getRange(cand + 1, 1, 1, row.length).setValues([row]);
+    _clientWriteHomeAddress(sheet, cand + 1, data);   // v7.366
     logGroupChange(data.id, data.name, data.loc, _oldGrpM, data.group, data.updatedBy || data.by || ''); // v7.47 ЕТАП 5: перевід групи
     var _payM = _paymentOnCardUpdate(data, vals[cand]);   // v7.355
     return _payM ? {ok:true, action:'updated-moved', mergedAbsences: mergedAbs.length, payment:_payM} : {ok:true, action:'updated-moved', mergedAbsences: mergedAbs.length};
   }
   sheet.appendRow(row);
   try { var _lr = sheet.getLastRow(); _contractNumberAsText(sheet, _lr); if (row[19]) sheet.getRange(_lr, 20).setValue(String(row[19])); } catch(_cn){}   // v7.276
+  try { _clientWriteHomeAddress(sheet, sheet.getLastRow(), data); } catch(_ha){}   // v7.366
   try { _linkCardToLead(data); } catch(_ll){}   // v7.169: підписаний лід чекав на цю картку
   logGroupChange(data.id, data.name, data.loc, '', data.group, data.updatedBy || data.by || ''); // v7.47 ЕТАП 5: відкриваємо історію (перше призначення групи)
   // v7.111 ФАЗА 1: авто-заведення НОВОЇ картки у Payment (рядок + бюджет + переагрегація локації).
