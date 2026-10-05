@@ -1578,14 +1578,16 @@ function rcRowsHtml(p, g){
     var st=_RC_STAT[x.status]||_RC_STAT.none;
     var isUO=(String(x.payerSurname||'').toLowerCase()==='уо')||/^\s*УО\b/.test(x.payerRaw||'');
     var hasCand=(x.candidates && x.candidates.length && x.candidates[0].row>=0);
-    var canManual=!isUO && !hasCand && x.status!=='auto' && x.status!=='multi' && (p.roster && p.roster.length);
-    var writable=(x.status==='auto' && x.candidates && x.candidates.length && x.candidates[0].row>=0) || (x.status==='multi') || isUO || canManual;
+    var canManual=!isUO && !hasCand && x.status!=='auto' && x.status!=='multi' && x.status!=='dup' && (p.roster && p.roster.length);   // v7.376: дубль не пишемо
+    var writable=x.status!=='dup' && ((x.status==='auto' && x.candidates && x.candidates.length && x.candidates[0].row>=0) || (x.status==='multi') || isUO || canManual);
     var chkDisabled=(x.status!=='auto' && !isUO);   // УО — увімкнено й позначено за умовч.
     var chk = writable
       ? '<input type="checkbox" class="rc-chk" data-g="'+g+'" data-i="'+x.i+'"'+(chkDisabled?' disabled':'')+(isUO?' checked':'')+'>'
       : '';
     var child='';
-    if(x.status==='multi'){
+    if(x.status==='dup'){
+      child='<span style="color:var(--gray)">✓ вже внесено'+(x.candidates&&x.candidates.length===1?' — '+escapeHtml(x.candidates[0].childName):'')+'</span>';
+    } else if(x.status==='multi'){
       child='<select class="rc-sel" data-g="'+g+'" data-i="'+x.i+'" onchange="rcChkToggle(this)"><option value="">— оберіть —</option>'
         +x.candidates.map(function(c,ci){ return '<option value="'+ci+'"'+(c.row<0?' disabled':'')+'>'+escapeHtml(c.childName)+(c.group?' ('+escapeHtml(c.group)+')':'')+(c.row<0?' — нема рядка':'')+'</option>'; }).join('')
         +'</select>';
@@ -2252,11 +2254,11 @@ function rcRenderAll(){
     $('rcApplyBar').style.display='none';
     return;
   }
-  var total={auto:0,multi:0,none:0};
+  var total={auto:0,multi:0,none:0,dup:0};
   var okGroups=RC.groups.filter(function(g){return g.ok;});
   okGroups.forEach(function(g){ g.preview.rows.forEach(function(x){ if(total[x.status]!=null) total[x.status]++; }); });
 
-  $('rcSummary').innerHTML=['auto','multi','none'].map(function(s){
+  $('rcSummary').innerHTML=['auto','multi','none','dup'].filter(function(s){ return s!=='dup' || total.dup; }).map(function(s){
     return '<span class="fc-stat '+_RC_STAT[s].cls+'">'+_RC_STAT[s].icon+' '+_RC_STAT[s].txt+': '+(total[s]||0)+'</span>';
   }).join('');
 

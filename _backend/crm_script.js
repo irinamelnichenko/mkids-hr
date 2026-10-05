@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.375
+// m.kids CRM — Google Apps Script v7.376
+// v7.376: reconcilePreview — рядок з уже внесеним Референсом одразу статус 'dup' (банк + файл не задвоюються й не плутають).
 // v7.375: виписки з банку — ПриватБанк API: bankTokenSet (токени лише в ScriptProperties), bankStatus, bankFetch (формат
 //   розпарсеного файлу для reconcile.html), bankCoverage + «Банк_Покриття», нічний bankNightly (setupBankNightly).
 // v7.374: salaryReconMoveMonth — відомість, зараховану не в той місяць, переносить (факт −/+ у тому ж рядку Salary,
@@ -6752,7 +6753,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.375', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.376', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -21132,11 +21133,12 @@ function reconcilePreview(body){
     var idx = built.index;
 
     // Дати, що вже звірялися (для цього loc+iban) — м'яке попередження «день уже оброблено».
-    var processed = {};
+    var processed = {}, appliedRefs = {};   // v7.376: референси, уже внесені (ключ дедупу «REF|…», як у reconcileApply)
     var ibanN = iban.replace(/\s+/g, '').toUpperCase();
     var logSh0 = _getReconcileLogSheet();
     var lv0 = logSh0.getDataRange().getValues();
     for (var lr = 1; lr < lv0.length; lr++){
+      var _k = trim(lv0[lr][14]); if (_k) appliedRefs[_k] = true;
       if (trim(lv0[lr][2]) === loc && String(lv0[lr][3] || '').replace(/\s+/g, '').toUpperCase() === ibanN){
         var dd = trim(lv0[lr][4]); if (dd) processed[dd] = true;
       }
@@ -21169,6 +21171,7 @@ function reconcilePreview(body){
         existing = Number(toNum((data[uniq[0].row] || [])[factCol0])) || 0;
       }
       var status = uniq.length === 0 ? 'none' : (uniq.length === 1 ? 'auto' : 'multi');
+      if (rec.ref && appliedRefs['REF|' + trim(rec.ref)]) status = 'dup';   // v7.376: уже внесено (напр. з файлу) — apply однаково пропустить
 
       return {
         i: i, date: String(rec.date || ''), amount: Number(rec.amount) || 0, ref: String(rec.ref || ''),
