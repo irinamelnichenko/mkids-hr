@@ -213,6 +213,31 @@ td.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
            onclick="goPerm('cards_completion')">
         <span class="ni">🧩</span> Неповні картки
       </div>
+      <div class="nav-item" id="navClientMap" style="display:none"
+           onclick="window.location.href='map.html'">
+        <span class="ni">🗺️</span> Карта клієнтів
+      </div>
+      <script>
+      /* v7.371: «Карта клієнтів» — CFO/CEO/COO (усі локації) і директорка (своя). Окремо від матриці PERMISSIONS,
+         як «Ліди»: показ одразу після пункту, повтор після applyRoleVisibility (вхід/зміна ролі). */
+      window.NAV_MAP_ROLES = ['cfo','ceo','coo','director'];
+      window._revealMapMenu = function(){
+        var el = document.getElementById('navClientMap'); if (!el) return;
+        var u = null;
+        try { u = (typeof S !== 'undefined' && S && S.user) ? S.user : null; } catch(e){}
+        if (!u){ try { var s = JSON.parse(localStorage.getItem('mkids_session') || 'null'); u = (s && s.user) || null; } catch(e){} }
+        el.style.display = (u && window.NAV_MAP_ROLES.indexOf(String(u.role || '').toLowerCase().trim()) !== -1) ? '' : 'none';
+      };
+      window._revealMapMenu();
+      document.addEventListener('DOMContentLoaded', function(){
+        if (typeof applyRoleVisibility === 'function' && !applyRoleVisibility.__map){
+          var _o = applyRoleVisibility;
+          applyRoleVisibility = function(){ var r = _o.apply(this, arguments); try { window._revealMapMenu(); } catch(e){} return r; };
+          applyRoleVisibility.__map = true;
+        }
+      });
+      window.addEventListener('load', function(){ setTimeout(window._revealMapMenu, 600); });
+      </script>
       <div class="nav-sec" data-section="hr">👤 HR</div>
       <div class="nav-item" data-permission="employees" data-parent="hr" data-perm-page="index"
            onclick="goPerm('employees')">

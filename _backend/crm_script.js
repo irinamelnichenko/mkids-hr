@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.370
+// m.kids CRM — Google Apps Script v7.371
+// v7.371: карта клієнтів — getClientMap (GET; лише ПІБ/група/локація/статус/координати, без адрес і телефонів; директор —
+//   своя локація на сервері), setLocGeo (точка садочка, властивість LOC_GEO).
 // v7.370: картка — колонка «Квартира» (після «Гео: запит»; saveClient пише homeApt, текстом).
 // v7.369: geoSearch — підпис без «, Україна», «… область», індексу (\b не працював на кирилиці).
 // v7.368: адреса зі списку — geoSearch (GET, «🔍 Знайти»: Google → Nominatim, ≤5 варіантів у межах 60 км від міста);
@@ -6742,7 +6744,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.370', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.371', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -6753,6 +6755,7 @@ function doGet(e) {
     else if (action === 'getClients')         result = getClients(e.parameter || {});   // v7.292 &mode=list без JSON здоровʼя/розвитку; v7.336 кеш + mode=roster
     else if (action === 'diagClientsCompare') result = diagClientsCompare();                // v7.336 звірка roster/list/кеш
     else if (action === 'geoSearch')          result = geoSearch(e.parameter || {});     // v7.368 «🔍 Знайти» адресу
+    else if (action === 'getClientMap')       result = getClientMap(e.parameter || {});  // v7.371 карта клієнтів
     else if (action === 'getClientCard')      result = getClientCard(e.parameter || {}); // v7.292 повна картка за id
     else if (action === 'runAggregate')       result = aggregatePayments();
     else if (action === 'dryRunSchoolRoster') result = dryRunSchoolRoster(e.parameter || {});   // v7.252 ростер шкіл за картками; v7.267 &simulateMove=1
@@ -6913,6 +6916,7 @@ function doPost(e) {
     else if (body.action === 'cleanupSalaryDupRows')      result = cleanupSalaryDupRows(body || {});    // v7.361 видалення дубль-рядків Salary без факту (CFO, dryRun, YES_DELETE)
     else if (body.action === 'geocodeClients')            result = geocodeClients(body);        // v7.367 CFO, dryRun за замовчуванням
     else if (body.action === 'setClientGeo')              result = setClientGeo(body);          // v7.367 точка вручну
+    else if (body.action === 'setLocGeo')                 result = setLocGeo(body);             // v7.371 точка локації
     else if (body.action === 'createCardFromPayment')     result = createCardFromPayment(body || {});   // v7.357 картка з рядка Payment (ПІБ як у Payment)
     else if (body.action === 'setLocRequisite')           result = setLocRequisite(body || {});      // v7.352 правка реквізитів (CFO, dryRun, архів старого IBAN, журнал)
     else if (body.action === 'addLocationUser')           result = addLocationUser(body || {});      // v7.351 один акаунт локації (CFO, dryRun)
@@ -9415,6 +9419,76 @@ function geoSearch(params){
     } catch(e2){ Logger.log('[geoSearch] osm: ' + e2); }
   }
   return {ok:true, query:q, source:src, items:items.slice(0, 5)};
+}
+// ═══ v7.371: КАРТА КЛІЄНТІВ (етап 3) ═════════════════════════════════════════
+// GET ?action=getClientMap&actorId= — лише те, що треба карті: ID, ПІБ, група, локація, статус, координати
+// (4 знаки ≈ 10 м), гео-статус. БЕЗ адрес і телефонів. Директор — лише своя локація (фільтр тут, на сервері);
+// керівництво (EMP_MGMT_ROLES) — усі. Плюс точки самих локацій (LOC_GEO у властивостях скрипта).
+function _locGeoAll(){
+  try { return JSON.parse(PropertiesService.getScriptProperties().getProperty('LOC_GEO') || '{}') || {}; } catch(e){ return {}; }
+}
+function _clientMapActor(id){
+  var actor = null; try { actor = _getActor((_CURRENT_AUTH && _CURRENT_AUTH.id) || id); } catch(_a){}
+  if (!actor) return {err:'Немає користувача'};
+  var role = _roleKey(actor.role);
+  if (role === 'cfo' || _empHasMgmtRole(actor.role)) return {actor:actor, scope:null};
+  if (_empHasDirRole(actor.role)){
+    var l = String(actor.loc || '').trim();
+    return l ? {actor:actor, scope:l} : {err:'Локацію директора не визначено'};
+  }
+  return {err:'Немає доступу до карти'};
+}
+function getClientMap(params){
+  params = params || {};
+  var a = _clientMapActor(params.actorId);
+  if (a.err) return {ok:false, code:'PERM_DENIED', error:a.err};
+  var sh = getCRMSpreadsheet().getSheetByName(SHEET_CLIENTS);
+  var v = sh.getDataRange().getValues(), hd = v[0].map(String), ix = _geoColIdx(hd);
+  var cN = hd.indexOf('ПІБ дитини'), cG = hd.indexOf('Група'), cS = hd.indexOf('Статус');
+  var LIVE = {active:1, adaptation:1, future:1, paused:1};
+  var kids = [], counts = {};
+  for (var r = 1; r < v.length; r++){
+    var loc = String(v[r][ix.loc] || '').trim(), st = String(v[r][cS] || '').trim() || 'active';
+    if (!loc || !LIVE[st]) continue;
+    if (a.scope && loc !== a.scope) continue;
+    var c = counts[loc] || (counts[loc] = {kids:0, withAddress:0, onMap:0});
+    c.kids++;
+    var hasAddr = ix.addr >= 0 && String(v[r][ix.addr] || '').trim() !== '';
+    if (hasAddr) c.withAddress++;
+    var lat = ix.ok ? Number(v[r][ix['Гео: lat']]) : 0, lng = ix.ok ? Number(v[r][ix['Гео: lng']]) : 0;
+    var gs = ix.ok ? String(v[r][ix['Гео: статус']] || '') : '';
+    var on = hasAddr && lat && lng;
+    if (on) c.onMap++;
+    kids.push({id:String(v[r][ix.id]), name:String(v[r][cN] || ''), group:String(v[r][cG] || ''), loc:loc, status:st,
+               lat:on ? Math.round(lat * 1e4) / 1e4 : null, lng:on ? Math.round(lng * 1e4) / 1e4 : null,
+               geo:hasAddr ? (gs || 'pending') : 'no_address'});
+  }
+  var lg = _locGeoAll(), locs = {};
+  Object.keys(lg).forEach(function(l){ if (!a.scope || l === a.scope) locs[l] = lg[l]; });
+  return {ok:true, scope:a.scope, kids:kids, counts:counts, locGeo:locs, cityByLoc:GEO_CITY_BY_LOC, cityCenter:GEO_CITY_CENTER};
+}
+// POST {action:'setLocGeo', actorId, loc, lat, lng} — точка садочка/школи на карті (керівництво — будь-яка,
+// директор — своя). lat порожній → прибрати.
+function setLocGeo(body){
+  body = body || {};
+  var a = _clientMapActor(body.actorId);
+  if (a.err) return {ok:false, code:'PERM_DENIED', error:a.err};
+  var loc = String(body.loc || '').trim();
+  if (!loc) return {ok:false, error:'loc обовʼязковий'};
+  if (a.scope && a.scope !== loc) return {ok:false, code:'PERM_DENIED', error:'Лише своя локація'};
+  var lock = LockService.getScriptLock(); try { lock.waitLock(15000); } catch(_l){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+  try {
+    var all = _locGeoAll();
+    if (body.lat === '' || body.lat == null) delete all[loc];
+    else {
+      var lat = Number(body.lat), lng = Number(body.lng);
+      if (!(lat > 44 && lat < 53 && lng > 22 && lng < 41)) return {ok:false, error:'Координати поза Україною'};
+      all[loc] = [Math.round(lat * 1e5) / 1e5, Math.round(lng * 1e5) / 1e5];
+    }
+    PropertiesService.getScriptProperties().setProperty('LOC_GEO', JSON.stringify(all));
+    try { _writeHrAuditRows(_marksActorInfo(body.actorId), 'loc_geo', [{loc:loc, point:all[loc] || null}]); } catch(_w){}
+    return {ok:true, loc:loc, point:all[loc] || null};
+  } finally { try { lock.releaseLock(); } catch(_r){} }
 }
 function nightlyGeocodeClients(){ return geocodeClients({_system:true, dryRun:false, limit:800}); }
 // Запустити ОДИН РАЗ вручну з редактора: дає дозвіл на сервіс Карт + ставить нічний тригер (04:00).
