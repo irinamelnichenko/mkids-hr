@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.368
+// m.kids CRM — Google Apps Script v7.369
+// v7.369: geoSearch — підпис без «, Україна», «… область», індексу (\b не працював на кирилиці).
 // v7.368: адреса зі списку — geoSearch (GET, «🔍 Знайти»: Google → Nominatim, ≤5 варіантів у межах 60 км від міста);
 //   saveClient приймає homeGeo {lat,lng} → «Гео: статус» = picked (без повторного геокодування).
 // v7.367: координати адреси (етап 2 карти): колонки «Гео: lat/lng/статус/запит»; геокодер Google при збереженні картки,
@@ -6740,7 +6741,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.368', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.369', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -9370,7 +9371,8 @@ function geocodeClients(body){
 // Спершу геокодер Google (Apps Script, без ключа); порожньо → Nominatim (OSM; разовий пошук дозволений
 // правилами, 1 запит/с). Варіанти далі 60 км від міста локації відкидаються.
 function _geoNiceLabel(s){
-  return String(s || '').replace(/,\s*Україна\b/g, '').replace(/,\s*\d{5}\b/g, '').replace(/\s+,/g, ',').trim();
+  // (?=,|$) замість \b — \b у JS не бачить меж кириличних слів
+  return String(s || '').replace(/,\s*Україна(?=,|$)/g, '').replace(/,\s*[^,]*област[ьі](?=,|$)/g, '').replace(/,\s*\d{5}(?=,|$)/g, '').replace(/\s+,/g, ',').trim();
 }
 function geoSearch(params){
   params = params || {};

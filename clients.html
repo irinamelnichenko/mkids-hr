@@ -3967,7 +3967,9 @@ async function homeAddrFind(){
   var el=document.getElementById('fHomeAddressGeo'); if(el) el.innerHTML='<span style="color:var(--gray)">⏳ Шукаю…</span>';
   try{
     var r=await apiGetFull({action:'geoSearch', q:q, loc:_homeLoc()});
-    var items=(r.items||[]).map(function(x){ return {label:x.label, sub:(r.source==='osm'?'OpenStreetMap':'Google')+(x.exact?'':' · приблизно'), lat:x.lat, lng:x.lng, exact:x.exact}; });
+    // v7.368: прибрати «, Україна», «, … область», індекс — у полі адреси вони зайві
+    var _nice=function(t){ return String(t||'').replace(/,\s*Україна(?=,|$)/g,'').replace(/,\s*[^,]*област[ьі](?=,|$)/g,'').replace(/,\s*\d{5}(?=,|$)/g,'').trim(); };
+    var items=(r.items||[]).map(function(x){ return {label:_nice(x.label), sub:(r.source==='osm'?'OpenStreetMap':'Google')+(x.exact?'':' · приблизно'), lat:x.lat, lng:x.lng, exact:x.exact}; });
     if(el) el.innerHTML='';
     document.getElementById('fHomeAddress').focus();
     _showHomeAddrSug(items, items.length?'':'⚠️ Нічого не знайдено поблизу локації — перевірте назву вулиці');
