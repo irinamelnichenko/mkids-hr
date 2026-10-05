@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.373
+// m.kids CRM — Google Apps Script v7.374
+// v7.374: salaryReconMoveMonth — відомість, зараховану не в той місяць, переносить (факт −/+ у тому ж рядку Salary,
+//   місяць у Звірка_ЗП_Лог, запис у Грошові_Правки_Лог). CFO, dryRun за замовчуванням.
 // v7.373: готівка через систему (CFO) — cashOptions/cashAdd/cashCancel/cashList; факт місяця OPEX/Salary, сума дописується
 //   «+сума» в кінець формули; журнал «Готівка_Лог»; готівка в «Історії внесень» (джерело cash).
 // v7.372: історія внесень — getEntryHistory (CFO; доходи/витрати/ЗП ФОП/ЗП відомість/ручні правки, фільтр місяця внесення
@@ -6748,7 +6750,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.373', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.374', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -6927,6 +6929,7 @@ function doPost(e) {
     else if (body.action === 'setLocGeo')                 result = setLocGeo(body);             // v7.371 точка локації
     else if (body.action === 'cashAdd')                   result = cashAdd(body);               // v7.373 готівка (CFO, dryRun)
     else if (body.action === 'cashCancel')                result = cashCancel(body);            // v7.373 скасування готівки
+    else if (body.action === 'salaryReconMoveMonth')      result = salaryReconMoveMonth(body);  // v7.374 перенос відомості в інший місяць (CFO, dryRun)
     else if (body.action === 'createCardFromPayment')     result = createCardFromPayment(body || {});   // v7.357 картка з рядка Payment (ПІБ як у Payment)
     else if (body.action === 'setLocRequisite')           result = setLocRequisite(body || {});      // v7.352 правка реквізитів (CFO, dryRun, архів старого IBAN, журнал)
     else if (body.action === 'addLocationUser')           result = addLocationUser(body || {});      // v7.351 один акаунт локації (CFO, dryRun)
@@ -21516,6 +21519,68 @@ function _getSalaryReconLogSheet(){
   var sh = ss.getSheetByName(SALARY_RECON_LOG);
   if (!sh){ sh = ss.insertSheet(SALARY_RECON_LOG); sh.getRange(1,1,1,SALARY_RECON_LOG_HEADER.length).setValues([SALARY_RECON_LOG_HEADER]); sh.setFrozenRows(1); }
   return sh;
+}
+
+// v7.374: ПЕРЕНОС ВІДОМОСТІ В ІНШИЙ МІСЯЦЬ. Відомість внесли із запізненням і її зараховано не в той місяць
+// (прецедент: Оранж, відомість 22.09 внесена 05.10 у жовтень). POST {action:'salaryReconMoveMonth', actorId, loc, vidNo,
+// fromMonth, toMonth, dryRun(default true)} — лише CFO. Для кожного рядка Звірка_ЗП_Лог (loc+№+fromMonth):
+// факт fromMonth −сума, факт toMonth +сума в ТОМУ Ж рядку Salary (число лишається числом; формула — дописуємо ±сума),
+// у журналі звірки Місяць → toMonth, у Грошові_Правки_Лог — два записи з причиною.
+function _cellAddKeep(cell, delta){
+  var f = ''; try { f = String(cell.getFormula() || ''); } catch(_f){}
+  if (f){ cell.setFormula(f + (delta < 0 ? '-' : '+') + (Math.round(Math.abs(delta) * 100) / 100)); return; }
+  cell.setValue(Math.round((_opexNum(cell.getValue()) + delta) * 100) / 100);
+}
+function salaryReconMoveMonth(body){
+  body = body || {};
+  var actor = null; try { actor = _getActor((_CURRENT_AUTH && _CURRENT_AUTH.id) || body.actorId); } catch(_a){}
+  if (!actor || _roleKey(actor.role) !== 'cfo') return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var loc = String(body.loc || '').trim(), vid = String(body.vidNo || '').trim();
+  var from = Number(body.fromMonth) || 0, to = Number(body.toMonth) || 0, year = Number(body.year) || new Date().getFullYear();
+  var dryRun = (body.dryRun !== false);
+  if (!loc || !vid || !(from >= 1 && from <= 12) || !(to >= 1 && to <= 12) || from === to) return {ok:false, error:'loc, vidNo, fromMonth≠toMonth обовʼязкові'};
+  if (_isMonthClosed(year, from) || _isMonthClosed(year, to)) return {ok:false, code:'CLOSED_MONTH', error:'Один із місяців закрито'};
+  var lsh = _getSalaryReconLogSheet(), lv = lsh.getDataRange().getValues(), hits = [];
+  for (var i = 1; i < lv.length; i++){
+    if (String(lv[i][2]).trim() === loc && String(lv[i][3]).trim() === vid && Number(lv[i][9]) === from) hits.push(i);
+  }
+  if (!hits.length) return {ok:false, error:'У журналі немає записів ' + loc + ' / №' + vid + ' за місяць ' + from};
+  var e = null; (_salaryGetRegistry().rows || []).forEach(function(x){ if (x.loc === loc && !x.virtual) e = x; });
+  if (!e) return {ok:false, error:'Salary для «' + loc + '» не знайдено'};
+  var sh = SpreadsheetApp.openById(e.sheetId).getSheetByName(e.listName);
+  var names = sh.getRange(1, 1, sh.getLastRow(), 1).getValues().map(function(r){ return String(r[0] || '').trim(); });
+  var fc = function(m){ return (m - 1) * 3 + 2; }, plan = [], problems = [];
+  hits.forEach(function(i){
+    var raw = String(lv[i][8] || '').trim(), amt = _opexNum(lv[i][12]);
+    var rows = []; names.forEach(function(n, k){ if (k >= 3 && n === raw) rows.push(k + 1); });
+    if (rows.length !== 1){ problems.push(raw + ': рядків у Salary ' + rows.length); return; }
+    var r = rows[0], cf = sh.getRange(r, fc(from)), ct = sh.getRange(r, fc(to));
+    var bf = _opexNum(cf.getValue()), bt = _opexNum(ct.getValue());
+    if (bf + 0.01 < amt) problems.push(raw + ': у факті місяця ' + from + ' лише ' + bf + ' < ' + amt);
+    plan.push({logRow:i + 1, name:String(lv[i][7] || lv[i][4] || ''), salaryRow:r, salaryName:raw, amount:amt,
+               from:{month:from, before:bf, after:Math.round((bf - amt) * 100) / 100}, to:{month:to, before:bt, after:Math.round((bt + amt) * 100) / 100}});
+  });
+  var res = {ok:!problems.length, dryRun:dryRun, loc:loc, vidNo:vid, fromMonth:from, toMonth:to, count:plan.length,
+             total:plan.reduce(function(a, p){ return a + p.amount; }, 0), plan:plan, problems:problems};
+  if (problems.length){ res.error = 'Не переношу: ' + problems.join('; '); return res; }
+  if (dryRun) return res;
+  var lock = LockService.getScriptLock(); try { lock.waitLock(30000); } catch(_l){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+  try {
+    var by = _entryAuthor(body.by), why = 'відомість №' + vid + ' перенесено з місяця ' + from + ' у ' + to, mj = [];
+    plan.forEach(function(p){
+      _cellAddKeep(sh.getRange(p.salaryRow, fc(from)), -p.amount);
+      _cellAddKeep(sh.getRange(p.salaryRow, fc(to)), p.amount);
+      lsh.getRange(p.logRow, 10).setValue(to);
+      mj.push({by:by, route:'salaryReconMoveMonth', loc:loc, name:p.salaryName, year:year, month:from, col:'Salary факт', before:p.from.before, after:p.from.after, reason:why});
+      mj.push({by:by, route:'salaryReconMoveMonth', loc:loc, name:p.salaryName, year:year, month:to,   col:'Salary факт', before:p.to.before,   after:p.to.after,   reason:why});
+    });
+    SpreadsheetApp.flush();
+    _moneyJournalLog(mj);
+    _salaryBump(loc);
+    res.written = true;
+    return res;
+  } catch(err){ return {ok:false, error:String(err && err.message || err)}; }
+  finally { try { lock.releaseLock(); } catch(_r){} }
 }
 
 // v7.34 Етап3: МАПА прив'язок співробітник→Salary-рядок. Раз вказавши рядок для
