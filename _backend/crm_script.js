@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.369
+// m.kids CRM — Google Apps Script v7.370
+// v7.370: картка — колонка «Квартира» (після «Гео: запит»; saveClient пише homeApt, текстом).
 // v7.369: geoSearch — підпис без «, Україна», «… область», індексу (\b не працював на кирилиці).
 // v7.368: адреса зі списку — geoSearch (GET, «🔍 Знайти»: Google → Nominatim, ≤5 варіантів у межах 60 км від міста);
 //   saveClient приймає homeGeo {lat,lng} → «Гео: статус» = picked (без повторного геокодування).
@@ -6741,7 +6742,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.369', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.370', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -9100,7 +9101,9 @@ function ensureClientsHeader(sheet) {
     // (_clientWriteHomeAddress), бо масив row у saveClient закінчується на «Розвиток (JSON)».
     'Адреса проживання',
     // v7.367 — координати адреси (геокодер Google): широта, довгота, статус, запит, за яким шукали.
-    'Гео: lat','Гео: lng','Гео: статус','Гео: запит'
+    'Гео: lat','Гео: lng','Гео: статус','Гео: запит',
+    // v7.370 — квартира окремо від адреси (не заважає пошуку координат).
+    'Квартира'
   ];
   var lastCol = sheet.getLastColumn();
   var width = Math.max(lastCol, EXPECTED.length);
@@ -9228,8 +9231,14 @@ function restoreContractNumbers(body){
 // v7.366: «Адреса проживання» — поза масивом row; пишемо лише коли ключ є в payload
 // (немає ключа → клітинку не чіпаємо, як важкі колонки).
 function _clientWriteHomeAddress(sheet, rowNum, data){
-  if (!data || data.homeAddress === undefined || data.homeAddress === null) return;
+  if (!data) return;
   var hd = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String);
+  // v7.370: квартира — окрема колонка, пишемо лише коли ключ є в payload
+  if (data.homeApt !== undefined && data.homeApt !== null){
+    var ca = hd.indexOf('Квартира');
+    if (ca >= 0){ var apt = sheet.getRange(rowNum, ca + 1); apt.setNumberFormat('@'); apt.setValue(String(data.homeApt).trim()); }   // «12» не стане числом, «12а» — як є
+  }
+  if (data.homeAddress === undefined || data.homeAddress === null) return;
   var c = hd.indexOf('Адреса проживання');
   if (c < 0) return;
   sheet.getRange(rowNum, c + 1).setValue(String(data.homeAddress).trim());
