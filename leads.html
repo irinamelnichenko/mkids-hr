@@ -388,7 +388,7 @@ table.ld td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:n
    лишалась доступною за посиланням — тепер роль без права одразу вилітає на
    «Список дітей». Виконується ДО рендеру, щоб контент не блимав. */
 (function(){
-  var DENY = ['director','nurse','vyhovatel'];
+  var DENY = ['director','nurse','vyhovatel','legal'];   // v7.393: +legal
   try {
     var s = JSON.parse(localStorage.getItem('mkids_session') || 'null');
     var r = String((s && s.user && s.user.role) || '').toLowerCase().trim();
@@ -431,7 +431,7 @@ table.ld td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:n
          стартовий код (IIFE при розборі) кликав applyRoleVisibility ДО того, як кінцевий скрипт її обгортав,
          і пункт показувався лише на load + 600 мс — «Ліди» зникали й поверталися при кожному переході.
          Роль беремо з S.user, а поки стартовий код не спрацював — прямо із сесії в localStorage. */
-      window.NAV_LEADS_ALLOW = ['hr','cfo','cco','legal','cmo'];   // v7.237: без director; v7.326: без CEO/COO/HR/R&D
+      window.NAV_LEADS_ALLOW = ['hr','cfo','cco','cmo'];   // v7.237: без director; v7.326: без CEO/COO/HR/R&D; v7.393: без Legal
       window._revealLeadsMenu = function(){
         var el = document.getElementById('navLeads'); if (!el) return;
         var u = null;
@@ -1125,7 +1125,7 @@ var PERMISSIONS = {
   ],
 
   legal: [
-    'clients_list','payments','attendance_kids',
+    'clients_list',
     'employees',
     'client_birthdays',
     'card-employee-info',

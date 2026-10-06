@@ -164,7 +164,7 @@ table.hist .muted{font-size:11.5px}
          стартовий код (IIFE при розборі) кликав applyRoleVisibility ДО того, як кінцевий скрипт її обгортав,
          і пункт показувався лише на load + 600 мс — «Ліди» зникали й поверталися при кожному переході.
          Роль беремо з S.user, а поки стартовий код не спрацював — прямо із сесії в localStorage. */
-      window.NAV_LEADS_ALLOW = ['hr','cfo','cco','legal','cmo'];   // v7.237: без director; v7.326: без CEO/COO/HR/R&D
+      window.NAV_LEADS_ALLOW = ['hr','cfo','cco','cmo'];   // v7.237: без director; v7.326: без CEO/COO/HR/R&D; v7.393: без Legal
       window._revealLeadsMenu = function(){
         var el = document.getElementById('navLeads'); if (!el) return;
         var u = null;
@@ -606,7 +606,7 @@ var PERMISSIONS = {
     'loccard'   // v7.326: Картка локації (редагування)
   ],
   legal: [
-    'clients_list','payments','attendance_kids',
+    'clients_list',
     'employees',
     'client_birthdays',
     'card-employee-info',
