@@ -2,7 +2,7 @@
 // m.kids CRM — Google Apps Script v7.385
 // v7.385: LOCATION_ORDER += «Школа Кар'єрна» (після Школи 228).
 // v7.384: відомість на готівку — за попередній місяць: бюджет − картка ЗА цей місяць (за датою відомості: з 15 числа —
-//   аванс за наступний), мінус готівка, вже записана у «Факт» місяця виплати; без хвостів січня…
+//   аванс за наступний), мінус готівка, вже записана у «Факт» місяця розрахунку; без хвостів січня…
 // v7.383: звірка — рахунок додаткових садка Кар'єрна шукає дітей і «Школи Кар'єрної» (PAY_SUBLOCATIONS.shareHostAccounts).
 // v7.382: patchEmployee — точкова правка картки співробітника (локація/ПІБ/дата звільнення), табель переноситься на новий
 //   ключ, відмова, якщо під старим ключем є уроки предметників. CFO, dryRun.
@@ -27498,7 +27498,7 @@ function cashPayoutSheet(body){
     var sd = getSalaryData(loc, accY);
     if (!sd.ok) return sd;
     var SKIP = {section_header:true, group_header:true, subtotal:true};
-    var cardByRow = {}, cardRefs = {}, bookedInM = {};   // bookedInM — картки, зараховані у «Факт» місяця ВИПЛАТИ
+    var cardByRow = {}, cardRefs = {}, bookedInA = {};   // bookedInA — картки, зараховані у «Факт» місяця РОЗРАХУНКУ
     try {
       var lv = _getSalaryReconLogSheet().getDataRange().getValues();
       for (var li = 1; li < lv.length; li++){
@@ -27511,17 +27511,14 @@ function cashPayoutSheet(body){
           else { am = vm - 1; ay = vy; if (am < 1){ am = 12; ay--; } }
         } else continue;                                          // без дати у № — не знаємо, за який місяць
         var rk = _nameFold(lv[li][8]);
-        if (Number(lv[li][9]) === month && Number(mm[1]) + 2000 === year) bookedInM[rk] = (bookedInM[rk] || 0) + (_opexNum(lv[li][12]) || 0);
+        if (Number(lv[li][9]) === accM && Number(mm[1]) + 2000 === accY) bookedInA[rk] = (bookedInA[rk] || 0) + (_opexNum(lv[li][12]) || 0);
         if (am !== accM || ay !== accY) continue;
         cardByRow[rk] = (cardByRow[rk] || 0) + (_opexNum(lv[li][12]) || 0);
         (cardRefs[rk] = cardRefs[rk] || []).push(vno.slice(4, 6) + '.' + vno.slice(2, 4));
       }
     } catch(_lg){}
-    // v7.384: готівку CFO записує у «Факт» місяця ВИДАЧІ (= місяць виплати M). Уже видана за A готівка =
-    // факт M − картки, зараховані в M. Після видачі й запису відомість показує 0 (без подвійної видачі).
-    var sdM = (accY === year) ? sd : getSalaryData(loc, year);
-    var factM = {};
-    ((sdM && sdM.ok && sdM.rows) || []).forEach(function(r){ factM[_nameFold(r.name)] = Number(((r.months || [])[month - 1] || {}).fact) || 0; });
+    // v7.384: готівку за місяць CFO видає в ТОМУ Ж місяці й записує в його «Факт». Уже видана за A готівка =
+    // факт A − картки, зараховані в A. Факт = бюджету → усе видано → у відомості 0 (без подвійної видачі).
     var out = [];
     (sd.rows || []).forEach(function(r){
       if (r._section !== 'main') return;                        // лише основний штат
@@ -27529,7 +27526,8 @@ function cashPayoutSheet(body){
       var bud = Number(((r.months || [])[accM - 1] || {}).budget) || 0;
       var rk0 = _nameFold(r.name);
       var card = Math.round(cardByRow[rk0] || 0);
-      var paidCash = Math.max(0, Math.round((factM[rk0] || 0) - (bookedInM[rk0] || 0)));
+      var factA = Number(((r.months || [])[accM - 1] || {}).fact) || 0;
+      var paidCash = Math.max(0, Math.round(factA - (bookedInA[rk0] || 0)));
       var cash = Math.round(bud - card - paidCash);
       if (cash <= 0) return;                                     // виплачено повністю (або переплата) → не в листок
       out.push({name:r.name, category:r._category, posada:_cashPosadaLabel(r._category), pib:_cashStripPosada(r.name),
