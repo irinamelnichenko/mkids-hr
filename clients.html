@@ -3292,7 +3292,81 @@ async function syncMissingClients(){
   }catch(e){ showFloatMsg('❌ '+(e&&e.message||e)); }
 }
 
+// ── v7.390: ГЛОБАЛЬНИЙ ПОШУК КЛІЄНТІВ ─────────────────────────────────────────
+// Від 2 символів: по ВСІХ картках у межах доступу (мережа — усі локації, директор — своя), незалежно від
+// фільтрів списку. Поля: ПІБ дитини / мами / тата (підписант позначається), телефони в будь-якому форматі,
+// № договору й дод. угоди. Слова — в будь-якому порядку, апостроф/регістр/ё не важать.
+function _gsNorm(t){ return String(t||'').toLowerCase().replace(/[’ʼ`´']/g,"'").replace(/ё/g,'е').replace(/\s+/g,' ').trim(); }
+function _gsDigits(t){ return String(t||'').replace(/\D/g,''); }
+function _gsPhoneHit(phone, qd){
+  var pd=_gsDigits(phone); if(!pd || qd.length<4) return false;
+  if(qd.length>=9) return pd.slice(-9)===qd.slice(-9);        // 0671234567 / +380671234567 / 671234567
+  return pd.indexOf(qd)>=0;                                     // частина номера
+}
+function _gsFmtPhone(p){ var d=_gsDigits(p).slice(-9); return d.length===9?('0'+d.slice(0,2)+' '+d.slice(2,5)+' '+d.slice(5,7)+' '+d.slice(7)):String(p||''); }
+function clientGlobalSearch(q){
+  var qn=_gsNorm(q), toks=qn.split(' ').filter(Boolean), qd=_gsDigits(q), qc=qn.replace(/\s/g,'');
+  var isPhoneQ = qd.length>=4 && qd.length>=qn.replace(/[^0-9a-zа-яіїєґ]/g,'').length-1;   // запит — переважно цифри
+  var myLoc = isHR() ? '' : String((S.user&&S.user.loc)||'').trim();
+  var nameHit=function(v){ var n=_gsNorm(v); return !!n && toks.every(function(t){ return n.indexOf(t)>=0; }); };
+  var res=[];
+  Object.keys(S.crm||{}).forEach(function(id){
+    var c=S.crm[id]; if(!c || !c.name) return;
+    if(myLoc && String(c.loc||'').trim()!==myLoc) return;
+    var hits=[], signer=(c.signerParent==='dad')?'dad':'mom';
+    if(!isPhoneQ && nameHit(c.name)) hits.push({k:'child'});
+    [['mom','мама',c.momName,c.momPhone],['dad','тато',c.dadName,c.dadPhone]].forEach(function(p){
+      var byName=!isPhoneQ && nameHit(p[2]), byPhone=_gsPhoneHit(p[3],qd);
+      if(byName||byPhone) hits.push({k:p[0], txt:p[1]+': '+(p[2]||'—')+(p[3]?' · '+_gsFmtPhone(p[3]):'')+(signer===p[0]?' · підписант':''), phone:byPhone});
+    });
+    [['contract','договір №',c.contractNumber],['addContract','дод. угода №',c.additionalContractNumber]].forEach(function(x){
+      var v=_gsNorm(x[2]).replace(/\s/g,''); if(v && qc.length>=2 && /\d/.test(qc) && v.indexOf(qc)>=0) hits.push({k:x[0], txt:x[1]+x[2]});
+    });
+    if(hits.length) res.push({id:id, c:c, hits:hits});
+  });
+  var ACT={active:0,adaptation:1,future:2,paused:3};
+  res.sort(function(a,b){ var sa=ACT.hasOwnProperty(a.c.status)?ACT[a.c.status]:9, sb=ACT.hasOwnProperty(b.c.status)?ACT[b.c.status]:9;
+    return sa-sb || (locationRank(a.c.loc)-locationRank(b.c.loc)) || String(a.c.name).localeCompare(String(b.c.name),'uk'); });
+  return res;
+}
+function renderGlobalSearchHtml(q){
+  var res=clientGlobalSearch(q), LIM=100;
+  var SL={active:'✅ Активний',future:'📅 Майбутній',adaptation:'🌱 Адаптація',paused:'⏸ Призупинено',terminated:'❌ Розірваний',graduate:'🎓 Випускник',graduated:'🎓 Випускник'};
+  var h='<div class="card"><div class="card-hd"><h3>🔎 Знайдено по всій мережі: '+res.length+'</h3>'
+    +'<span style="font-size:12px;color:var(--gray)">ПІБ дитини, батьків, телефон, № договору · фільтри списку не діють</span></div>';
+  if(!res.length) return h+'<div class="empty" style="padding:24px"><p>Нічого не знайдено за «'+esc(q)+'»</p></div></div>';
+  h+='<div class="tbl-wrap"><table><thead><tr><th>Дитина</th><th>Локація</th><th>Група</th><th>Статус</th><th>Що знайдено</th></tr></thead><tbody>';
+  res.slice(0,LIM).forEach(function(r){
+    var c=r.c, found=r.hits.filter(function(x){ return x.k!=='child'; }).map(function(x){ return (x.phone?'📞 ':'')+esc(x.txt); });
+    if(r.hits.some(function(x){ return x.k==='child'; })) found.unshift('👶 дитина');
+    h+='<tr class="clickable" onclick="openChild('+escAttrJS(r.id)+','+escAttrJS(c.group||'')+','+escAttrJS(c.teacher||'')+','+escAttrJS(c.loc||'')+','+escAttrJS(c.name||'')+')">'
+      +'<td><span class="child-link">'+esc(c.name)+'</span></td><td>'+esc(c.loc||'—')+'</td><td>'+esc(c.group||'—')+'</td>'
+      +'<td><span class="badge bg">'+(SL[c.status]||esc(c.status||'—'))+'</span></td>'
+      +'<td style="font-size:12px">'+found.join('<br>')+'</td></tr>';
+  });
+  h+='</tbody></table></div>'+(res.length>LIM?'<div style="padding:8px 14px;font-size:12px;color:var(--gray)">Показано '+LIM+' з '+res.length+' — уточніть запит.</div>':'')+'</div>';
+  return h;
+}
+function renderGlobalSearchPage(){
+  var html='<div class="card" style="margin-bottom:12px"><div style="padding:10px 14px"><div class="filters" style="margin:0;padding:0;border:none;background:none;gap:8px">'
+    +'<input class="search-inp" placeholder="🔍 Дитина, мама, тато, телефон, № договору…" value="'+esc(S.searchQ)+'" oninput="S.searchQ=this.value;renderClients()">'
+    +'<button type="button" class="btn btn-secondary btn-sm" onclick="S.searchQ=\'\';renderClients()">✕ Очистити</button>'
+    +'</div></div></div>'+renderGlobalSearchHtml(S.searchQ.trim());
+  var _si=document.querySelector('.search-inp'), _sf=_si&&document.activeElement===_si, _ss=_sf?_si.selectionStart:0, _se=_sf?_si.selectionEnd:0;
+  document.getElementById('main').innerHTML=html;
+  if(_sf){ var _ni=document.querySelector('.search-inp'); if(_ni){ _ni.focus(); try{_ni.setSelectionRange(_ss,_se);}catch(e){} } }
+  applyRoleVisibility();
+}
+// «/» — фокус у пошук списку дітей (поза полями вводу)
+document.addEventListener('keydown', function(e){
+  if(e.key!=='/' || e.ctrlKey || e.metaKey) return;
+  var t=e.target, tag=(t&&t.tagName||'').toLowerCase(); if(tag==='input'||tag==='textarea'||tag==='select'||(t&&t.isContentEditable)) return;
+  var si=document.querySelector('.search-inp'); if(si){ e.preventDefault(); si.focus(); si.select(); }
+});
+
 function renderClients(){
+  // v7.390: від 2 символів — глобальний пошук по картках замість списку груп (і в місячному, і в річному режимі)
+  if(S.searchQ && S.searchQ.trim().length>=2 && S.crm && Object.keys(S.crm).length){ renderGlobalSearchPage(); return; }
   var monthStripHtml=buildMonthStrip();
   var locs=visibleLocs();
   if(!locs.length){
@@ -3370,7 +3444,7 @@ function renderClients(){
     +'<div class="card" style="margin-bottom:12px"><div style="padding:10px 14px">'
     +listChipsHtml
     +'<div class="filters" style="margin:0;padding:0;border:none;background:none;gap:8px">'
-    +'<input class="search-inp" placeholder="🔍 Пошук по імені…" value="'+esc(S.searchQ)+'" oninput="S.searchQ=this.value;renderClients()">'
+    +'<input class="search-inp" placeholder="🔍 Дитина, мама, тато, телефон, № договору…" value="'+esc(S.searchQ)+'" oninput="S.searchQ=this.value;renderClients()">'
     +(isHR()?'<select class="flt-sel" onchange="S.listLoc=this.value;renderClients()">'+listLocOpts+'</select>':'')
     +'<select class="flt-sel" data-permission="finance" onchange="S.selStatus=this.value;renderClients()"><option value="">Всі статуси</option><option value="paid"'+(S.selStatus==='paid'?' selected':'')+'>✅ Оплачено</option><option value="debt"'+(S.selStatus==='debt'?' selected':'')+'>❌ Борг</option><option value="over"'+(S.selStatus==='over'?' selected':'')+'>💰 Переплата</option></select>'
     +'<button type="button" data-permission="finance" class="att-chip'+(S.onlyDebtors?' att-chip-active':'')+'" style="'+(S.onlyDebtors?'background:var(--red2);border-color:var(--red2)':'')+'" onclick="toggleOnlyDebtors()">👁 Тільки боржники</button>'
@@ -8872,7 +8946,7 @@ function renderClientsYearly(monthStripHtml){
   allGroups.sort(function(a,b){ return String(a).localeCompare(String(b),'uk'); });
 
   html+='<div class="filters">'
-    +'<input class="search-inp" placeholder="🔍 Пошук по імені…" value="'+esc(S.searchQ)+'" oninput="S.searchQ=this.value;renderClients()">'
+    +'<input class="search-inp" placeholder="🔍 Дитина, мама, тато, телефон, № договору…" value="'+esc(S.searchQ)+'" oninput="S.searchQ=this.value;renderClients()">'
     +(isHR()?'<select class="flt-sel" onchange="S.selLoc=this.value;S.selGroup=\'\';renderClients()"><option value="">Всі локації</option>'+locs.map(function(l){ return '<option value="'+esc(l.loc)+'"'+(S.selLoc===l.loc?' selected':'')+'>'+esc(l.loc)+'</option>'; }).join('')+'</select>':'')
     +'<select class="flt-sel" onchange="S.selGroup=this.value;renderClients()"><option value="">Всі групи</option>'+allGroups.map(function(g){ return '<option value="'+esc(g)+'"'+(S.selGroup===g?' selected':'')+'>'+esc(g)+'</option>'; }).join('')+'</select>'
     +'<select class="flt-sel" onchange="S.selStatus=this.value;renderClients()"><option value="">Всі статуси</option><option value="debtors"'+(S.selStatus==='debtors'?' selected':'')+'>❌ Тільки боржники</option></select>'
