@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.389
+// m.kids CRM — Google Apps Script v7.391
+// v7.391: розрахунковий листок — «Виплачено на картку (аванс + ЗП)», «Коригування за минулі місяці».
 // v7.389: картка дитини — колонка «Документи (JSON)» (посилання на договір і підписані документи; лише http/https).
 // v7.387: відомість на готівку = логіка колонки залишку Salary: бюджет M − факт M + залишок M−1 (готове значення 3-ї колонки).
 // v7.386: відомість на готівку — за ОБРАНИЙ місяць: бюджет − факт місяця (картка+готівка) − переплата попереднього.
@@ -6767,7 +6768,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.389', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.391', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -27467,7 +27468,7 @@ function _buildCashPayoutSlips(d){
     // v7.72: назва рядка «враховано з минулих» — за знаком, сума завжди додатна; 0 → не показувати.
     var carry = Number(r.carried) || 0, carryRow = '';
     if (carry > 0){
-      carryRow = '      <tr><td class="lbl">Недовидано за минулі місяці</td><td class="val">' + _fmtUah(carry) + ' грн</td></tr>\n';
+      carryRow = '      <tr><td class="lbl">Коригування за минулі місяці</td><td class="val">' + _fmtUah(carry) + ' грн</td></tr>\n';
     } else if (carry < 0){
       carryRow = '      <tr><td class="lbl">Утримано: переплата / аванс минулих місяців</td><td class="val">' + _fmtUah(-carry) + ' грн</td></tr>\n';
     }
@@ -27481,7 +27482,7 @@ function _buildCashPayoutSlips(d){
 '    <div class="pos">' + _cashEsc(r.posada) + '</div>',
 '    <table>',
 '      <tr><td class="lbl">Нараховано</td><td class="val">' + _fmtUah(r.accrued) + ' грн</td></tr>',
-'      <tr><td class="lbl">Уже виплачено цього місяця (картка + готівка)</td><td class="val">' + _fmtUah(r.card) + ' грн</td></tr>',
+'      <tr><td class="lbl">Виплачено на картку (аванс + ЗП)</td><td class="val">' + _fmtUah(r.card) + ' грн</td></tr>',
 carryRow +
 '      <tr class="out"><td class="lbl">До видачі готівкою</td><td class="val">' + _fmtUah(r.cash) + ' грн</td></tr>',
 '    </table>',
