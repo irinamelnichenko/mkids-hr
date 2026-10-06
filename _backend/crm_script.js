@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.381
+// m.kids CRM — Google Apps Script v7.382
+// v7.382: patchEmployee — точкова правка картки співробітника (локація/ПІБ/дата звільнення), табель переноситься на новий
+//   ключ, відмова, якщо під старим ключем є уроки предметників. CFO, dryRun.
 // v7.381: банк — тип рахунку office | service (службовий, напр. зарплатний: у звірці не показується); bankAccountMark{kind}.
 // v7.380: банк — рядок internal:true, якщо ЄДРПОУ контрагента = ЄДРПОУ рахунку (переказ між власними рахунками).
 // v7.379: Банк_Покриття не пише сьогоднішній (незавершений) день.
@@ -6758,7 +6760,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.381', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.382', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -7040,6 +7042,7 @@ function doPost(e) {
     else if (body.action === 'deleteTask')                result = deleteTask(body.taskId || 0, body.actorId || 0);
     else if (body.action === 'setUserPassword')           result = setUserPassword(body.username || '', body.newPassword || '', body.actorId || 0);
     else if (body.action === 'resetAllLocationPasswords') result = resetAllLocationPasswords(body.actorId || 0);
+    else if (body.action === 'patchEmployee')             result = patchEmployee(body);                       // v7.382 точкова правка картки (CFO, dryRun)
     else if (body.action === 'saveEmployee')              result = saveEmployee(Number(body.actorId || 0), body.payload || {}, body.rowNum || null);
     else if (body.action === 'saveLocationCard')          result = saveLocationCard(Number(body.actorId || 0), body.payload || {});
     else if (body.action === 'deleteEmployee')            result = deleteEmployee(Number(body.actorId || 0), body.rowNum || 0);
@@ -32414,6 +32417,52 @@ function saveEmployee(actorId, payload, rowNum){
   } catch(e){
     return {ok:false, error: e.message || String(e)};
   }
+}
+
+// v7.382: ТОЧКОВА ПРАВКА КАРТКИ СПІВРОБІТНИКА (лише CFO). POST {action:'patchEmployee', actorId, rowNum,
+// expect:{last, first}, set:{loc?, last?, first?, fired?}, dryRun(default true)}.
+// Пише ЛИШЕ потрібні клітинки (C локація, E прізвище, F ім'я, O дата звільнення; '' знімає архів) — решта картки
+// (паспорт, ставка, дати) не перезаписується. expect — запобіжник «у рядку та сама людина».
+// Зміна ПІБ змінює ключ e5_… → табель співробітника (STAFF::ключ) переноситься на новий ключ (remapAttendanceId);
+// якщо під старим ключем є уроки/призначення предметників — відмова (вони б відірвались від вчителя).
+function patchEmployee(body){
+  body = body || {};
+  var actor = null; try { actor = _getActor((_CURRENT_AUTH && _CURRENT_AUTH.id) || body.actorId); } catch(_a){}
+  if (!actor || _roleKey(actor.role) !== 'cfo') return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var rowNum = Number(body.rowNum) || 0, ex = body.expect || {}, set = body.set || {}, dryRun = (body.dryRun !== false);
+  if (rowNum < 2) return {ok:false, error:'rowNum обовʼязковий'};
+  var sh = _getHrSheet(), row = sh.getRange(rowNum, 1, 1, HR_COLS).getValues()[0];
+  var cur = {loc:String(row[2] || '').trim(), last:String(row[4] || '').trim(), first:String(row[5] || '').trim(), fired:_fmtDateDmy(row[14])};
+  if (_nameFold(cur.last) !== _nameFold(ex.last) || _nameFold(cur.first) !== _nameFold(ex.first))
+    return {ok:false, error:'У рядку ' + rowNum + ' «' + cur.last + ' ' + cur.first + '», а очікували «' + ex.last + ' ' + ex.first + '»'};
+  var nw = {loc:set.loc != null ? String(set.loc).trim() : cur.loc, last:set.last != null ? String(set.last).trim() : cur.last,
+            first:set.first != null ? String(set.first).trim() : cur.first, fired:set.fired != null ? String(set.fired).trim() : cur.fired};
+  if (!nw.loc || !nw.last || !nw.first) return {ok:false, error:'Локація/прізвище/імʼя не можуть бути порожні'};
+  var res = {ok:true, dryRun:dryRun, rowNum:rowNum, before:cur, after:nw};
+  var tail = _fmtDateDmy(row[12]) || _fmtDateDmy(row[13]);   // як фронт mkKey: wday || hired
+  var oldKey = _mkEmpKey(cur.last, cur.first, tail), newKey = _mkEmpKey(nw.last, nw.first, tail);
+  if (oldKey !== newKey){
+    res.keyFrom = oldKey; res.keyTo = newKey;
+    var predHits = 0;
+    try { var lv = _getPredLessonsSheet().getDataRange().getValues(); for (var i = 1; i < lv.length; i++) if (String(lv[i][1]) === oldKey) predHits++; } catch(_l){}
+    try { var av = _getPredAssignSheet().getDataRange().getValues(); for (var j = 1; j < av.length; j++) if (String(av[j][3]) === oldKey) predHits++; } catch(_s){}
+    if (predHits) return {ok:false, error:'Під ключем ' + oldKey + ' є уроки/призначення предметників (' + predHits + ') — перейменування відірвало б їх', predHits:predHits};
+    var rm = remapAttendanceId({fromId:ATT_STAFF_PREFIX + oldKey, toId:ATT_STAFF_PREFIX + newKey, newName:nw.last + ' ' + nw.first, dryRun:true});
+    res.staffTimesheetRows = rm.ok ? rm.matched : ('помилка: ' + rm.error);
+  }
+  if (dryRun) return res;
+  if (nw.loc !== cur.loc) sh.getRange(rowNum, 3).setValue(nw.loc);
+  if (nw.last !== cur.last) sh.getRange(rowNum, 5).setValue(nw.last);
+  if (nw.first !== cur.first) sh.getRange(rowNum, 6).setValue(nw.first);
+  if (nw.fired !== cur.fired) sh.getRange(rowNum, 15).setValue(nw.fired ? _parseDateInput(nw.fired) : '');
+  if (oldKey !== newKey && Number(res.staffTimesheetRows) > 0){
+    var rm2 = remapAttendanceId({fromId:ATT_STAFF_PREFIX + oldKey, toId:ATT_STAFF_PREFIX + newKey, newName:nw.last + ' ' + nw.first, dryRun:false});
+    res.staffTimesheetMoved = rm2.ok ? rm2.matched : ('помилка: ' + rm2.error);
+  }
+  _cacheBump('fill');
+  try { _writeHrAudit(actor, 'patch', rowNum, cur, nw); } catch(_w){}
+  res.written = true;
+  return res;
 }
 
 // v6.44 — one-shot міграція: підписує заголовки нових колонок S:V у HR-аркуші.
