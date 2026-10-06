@@ -991,6 +991,11 @@ details.card>summary::-webkit-details-marker{display:none}details.card[open]>sum
       <!-- Документи — DOM-індекс 9 = switchTab(9) -->
       <!-- Tab 8: Документи -->
       <div class="tab-pane" id="tp8" data-permission="card-child-banner">
+        <!-- v7.389: посилання на документи (Google Drive) -->
+        <div class="section-hd">📎 ДОКУМЕНТИ (посилання на Google Drive)</div>
+        <div id="cDocsBox"></div>
+        <div style="margin:4px 0 14px"><button type="button" class="btn btn-secondary btn-sm" onclick="addChildDoc()">＋ Документ</button>
+          <span style="font-size:11px;color:var(--gray);margin-left:6px">напр. «Додаткова угода», «Згода на фото», «Медична довідка»</span></div>
         <div class="section-hd">👶 ДИТИНА</div>
         <div class="fg"><label>Свідоцтво про народження</label>
           <input type="text" id="fBirthCert" placeholder="напр. ВЕ 123456 або 1234-567890"></div>
@@ -1985,6 +1990,7 @@ async function ensureFullCard(id){
     c.notes=row['Нотатки']||''; c.additionalContractNumber=row['Номер додаткового договору']||'';
     c.birthCert=row['Свідоцтво про народження']||''; c.childRegAddress=row['Місце реєстрації дитини']||'';
     if(row['Адреса проживання']!==undefined) c.homeAddress=row['Адреса проживання']||'';   // v7.366
+    c.docs=safeJSON(row['Документи (JSON)'],'{}');   // v7.389
     c.momDoc=row['Документ мами']||''; c.momRnokpp=row['РНОКПП мами']||''; c.dadDoc=row['Документ тата']||''; c.dadRnokpp=row['РНОКПП тата']||'';
     c._lite=false;
     saveLocalCRM();
@@ -3951,6 +3957,50 @@ function _renderHomeGeo(c){
   el.innerHTML=m?'<span style="color:'+m[1]+'">'+m[0]+'</span>':'';
 }
 
+// ── v7.389: ДОКУМЕНТИ ДИТИНИ (посилання) ──────────────────────────────────────
+// Формат як у картці локації: {contract:{url,note,by,at}, custom:[{name,url,note,by,at}]}. Лише http(s).
+function _safeUrl(u){ u=String(u||'').trim(); return /^https?:\/\//i.test(u)?u:''; }
+function _childDocRowHtml(id, name, d, fixed){
+  d=d||{}; var url=_safeUrl(d.url);
+  return '<div class="cdoc" data-cdoc="'+id+'" style="border:1px solid var(--gray2);border-radius:10px;padding:8px 10px;margin-bottom:8px">'
+    +'<div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">'
+    +(fixed?'<b style="flex:1">📄 '+esc(name)+'</b>':'<input class="cdoc-name" placeholder="Назва документа" value="'+esc(name||'')+'" style="flex:1;font-weight:700">')
+    +(url?'<a href="'+esc(url)+'" target="_blank" rel="noopener" class="btn btn-secondary btn-sm" style="text-decoration:none">↗ Відкрити</a>':'')
+    +((d.by||d.at)?'<span style="font-size:11px;color:var(--gray)">'+esc(d.by||'')+(d.at?' · '+esc(d.at):'')+'</span>':'')
+    +(fixed?'':'<button type="button" class="btn btn-danger btn-sm" title="Прибрати" onclick="this.closest(\'[data-cdoc]\').remove()">✕</button>')
+    +'</div>'
+    +'<input class="cdoc-url" placeholder="📎 Посилання на Google Drive (https://…)" value="'+esc(d.url||'')+'" style="width:100%;margin-bottom:6px">'
+    +'<input class="cdoc-note" placeholder="📝 Нотатка" value="'+esc(d.note||'')+'" style="width:100%">'
+    +'</div>';
+}
+function _renderChildDocs(docs){
+  var box=document.getElementById('cDocsBox'); if(!box) return;
+  docs=docs||{}; var custom=Array.isArray(docs.custom)?docs.custom:[];
+  box.innerHTML=_childDocRowHtml('contract','Договір',docs.contract,true)
+    + custom.map(function(d,i){ return _childDocRowHtml('c'+i,d.name,d,false); }).join('');
+}
+var _cdocSeq=0;
+function addChildDoc(){ var box=document.getElementById('cDocsBox'); if(!box) return;
+  box.insertAdjacentHTML('beforeend', _childDocRowHtml('n'+(_cdocSeq++),'',{},false));
+  var ins=box.querySelectorAll('.cdoc-name'); if(ins.length) ins[ins.length-1].focus();
+}
+function _collectChildDocs(prev){
+  prev=prev||{}; var prevCustom=Array.isArray(prev.custom)?prev.custom:[];
+  var who=(S.user&&(typeof roleLabel==='function'?roleLabel(S.user.role):S.user.role))||'';
+  var at=new Date().toISOString().slice(0,10), out={contract:{}, custom:[]};
+  document.querySelectorAll('#cDocsBox [data-cdoc]').forEach(function(el){
+    var id=el.getAttribute('data-cdoc'), nmEl=el.querySelector('.cdoc-name');
+    var url=String(el.querySelector('.cdoc-url').value||'').trim(), note=String(el.querySelector('.cdoc-note').value||'').trim();
+    if(url && !_safeUrl(url)){ url=''; if(typeof showFloatMsg==='function') showFloatMsg('⚠️ Посилання має починатися з https:// — пропущено','err'); }
+    var name=nmEl?String(nmEl.value||'').trim():'';
+    var old=id==='contract'?(prev.contract||{}):(prevCustom[Number(String(id).slice(1))]||{});
+    var o={url:url, note:note};
+    if(url||note){ var same=(old.url===url && old.note===note); o.by=same?(old.by||who):who; o.at=same?(old.at||at):at; }
+    if(id==='contract') out.contract=o; else if(name||url||note){ o.name=name||'Документ'; out.custom.push(o); }
+  });
+  return out;
+}
+
 // ── v7.368: ПІДКАЗКИ АДРЕС ───────────────────────────────────────────────────
 // Живі підказки — Geoapify autocomplete (безкоштовний ключ, обмежений доменом у кабінеті Geoapify),
 // у колі 40 км від міста локації. «🔍 Знайти» — бекенд geoSearch (геокодер Google → OSM).
@@ -4090,6 +4140,7 @@ function openNewChild(){
   document.getElementById('fHomeAddressReq').style.display='';   // v7.366: нова картка — адреса обов'язкова
   _renderHomeGeo(null);   // v7.367
   S._homePick=null; S._homeStreet=null; hideHomeAddrSug();   // v7.368/v7.370
+  _renderChildDocs({});   // v7.389
   // v6.26 Етап 1A — reset radio "Підписант договору" до Мами за замовчуванням.
   var spMom = document.querySelector('input[name="signerParent"][value="mom"]');
   if (spMom) spMom.checked = true;
@@ -4122,7 +4173,11 @@ async function openChild(id,group,teacher,loc,name){
     if(!_ok) showFloatMsg('⚠️ Здоровʼя/розвиток не довантажились — зміни в цих вкладках не зберігайте до появи мережі','err');
     if(S.editId!==id) return;   // встигли відкрити іншу
   } else {
-    ensureFullCard(id).then(function(ok){ if(ok && S.editId===id && S.curTab===7) renderHealthTab(); });
+    ensureFullCard(id).then(function(ok){
+      if(ok && S.editId===id && S.curTab===7) renderHealthTab();
+      var _db=document.getElementById('cDocsBox');   // v7.389: свіжі документи, якщо зараз їх не редагують
+      if(ok && S.editId===id && _db && !_db.contains(document.activeElement)) _renderChildDocs((S.crm[id]||{}).docs||{});
+    });
   }
   if(!card.name) card.name=name;
   if(!card.group) card.group=group;
@@ -4300,6 +4355,7 @@ function populateForm(id){
   document.getElementById('fChildRegAddress').value=c.childRegAddress||'';
   document.getElementById('fHomeAddress').value=c.homeAddress||'';   // v7.366
   document.getElementById('fHomeApt').value=c.homeApt||'';            // v7.370
+  _renderChildDocs(c.docs||{});                                         // v7.389
   document.getElementById('fHomeAddressReq').style.display='none';   // наявна картка — не обов'язково
   _renderHomeGeo(c);   // v7.367
   S._homePick=null; S._homeStreet=null; hideHomeAddrSug();   // v7.368/v7.370
@@ -7870,6 +7926,9 @@ function saveChild(){
   c.childRegAddress=val('fChildRegAddress');
   c.homeAddress=val('fHomeAddress');   // v7.366
   c.homeApt=val('fHomeApt');           // v7.370
+  // v7.389: документи — лише з повністю завантаженої картки (легка не має їх — не затираємо)
+  var _docsOut=(S.isNew || !c._lite) ? _collectChildDocs(c.docs) : undefined;
+  if(_docsOut) c.docs=_docsOut;
   // v7.370: «кв. 12» вписали в адресу → переносимо в поле «Квартира» (адреса лишається чистою для пошуку)
   var _aptM=c.homeAddress.match(/[,\s]*(?:кв\.?|квартира)\s*№?\s*([0-9]+[а-яієїa-z]?)\s*$/i);
   if(_aptM){ c.homeAddress=c.homeAddress.slice(0,_aptM.index).replace(/[,\s]+$/,''); if(!c.homeApt) c.homeApt=_aptM[1]; }
@@ -7906,6 +7965,7 @@ function saveChild(){
     homeAddress: c.homeAddress,   // v7.366
     homeGeo: _homeGeo,            // v7.368
     homeApt: c.homeApt,           // v7.370
+    docs: _docsOut,               // v7.389 (undefined → бекенд не чіпає клітинку)
     momDoc: c.momDoc, momRnokpp: c.momRnokpp,
     dadDoc: c.dadDoc, dadRnokpp: c.dadRnokpp,
     createdAt: c.createdAt, updatedAt: c.updatedAt

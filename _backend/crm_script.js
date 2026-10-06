@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.387
+// m.kids CRM — Google Apps Script v7.389
+// v7.389: картка дитини — колонка «Документи (JSON)» (посилання на договір і підписані документи; лише http/https).
 // v7.387: відомість на готівку = логіка колонки залишку Salary: бюджет M − факт M + залишок M−1 (готове значення 3-ї колонки).
 // v7.386: відомість на готівку — за ОБРАНИЙ місяць: бюджет − факт місяця (картка+готівка) − переплата попереднього.
 // v7.385: LOCATION_ORDER += «Школа Кар'єрна» (після Школи 228).
@@ -6766,7 +6767,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.387', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.389', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -7307,7 +7308,8 @@ var CLIENT_HEAVY_COLS = {
   "Здоров'я (JSON)": 'health', 'Розвиток (JSON)': 'development', 'Нотатки': 'notes',
   'Свідоцтво про народження': 'birthCert', 'Місце реєстрації дитини': 'childRegAddress',
   'Документ мами': 'momDoc', 'РНОКПП мами': 'momRnokpp', 'Документ тата': 'dadDoc', 'РНОКПП тата': 'dadRnokpp',
-  'Номер додаткового договору': 'additionalContractNumber'
+  'Номер додаткового договору': 'additionalContractNumber',
+  'Документи (JSON)': 'docs'   // v7.389: лише картка, не список
 };
 // saveClient: для важких колонок без ключа в payload — лишити наявне значення рядка.
 function _clientPreserveAbsent(row, oldRow, headers, data){
@@ -9142,7 +9144,9 @@ function ensureClientsHeader(sheet) {
     // v7.367 — координати адреси (геокодер Google): широта, довгота, статус, запит, за яким шукали.
     'Гео: lat','Гео: lng','Гео: статус','Гео: запит',
     // v7.370 — квартира окремо від адреси (не заважає пошуку координат).
-    'Квартира'
+    'Квартира',
+    // v7.389 — посилання на документи дитини (договір, підписані документи) — JSON {contract:{url,note,by,at}, custom:[…]}.
+    'Документи (JSON)'
   ];
   var lastCol = sheet.getLastColumn();
   var width = Math.max(lastCol, EXPECTED.length);
@@ -9272,6 +9276,15 @@ function restoreContractNumbers(body){
 function _clientWriteHomeAddress(sheet, rowNum, data){
   if (!data) return;
   var hd = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String);
+  // v7.389: документи — окрема колонка, пишемо лише коли ключ є в payload (лише http/https посилання)
+  if (data.docs !== undefined && data.docs !== null){
+    var cdo = hd.indexOf('Документи (JSON)');
+    if (cdo >= 0){
+      var dj = data.docs; if (typeof dj !== 'string'){ try { dj = JSON.stringify(dj); } catch(_j){ dj = ''; } }
+      if (/"url"\s*:\s*"(?!https?:\/\/)[^"]+"/i.test(dj)) dj = dj.replace(/"url"\s*:\s*"(?!https?:\/\/)[^"]*"/gi, '"url":""');   // не http(s) — відкидаємо
+      sheet.getRange(rowNum, cdo + 1).setValue(dj);
+    }
+  }
   // v7.370: квартира — окрема колонка, пишемо лише коли ключ є в payload
   if (data.homeApt !== undefined && data.homeApt !== null){
     var ca = hd.indexOf('Квартира');
