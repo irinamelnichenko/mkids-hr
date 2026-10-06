@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.378
+// m.kids CRM — Google Apps Script v7.379
+// v7.379: Банк_Покриття не пише сьогоднішній (незавершений) день.
 // v7.378: банк — офісні рахунки (bankAccountMark, BANK_OFFICE_ACCS; група office:true без пошуку локації), операції
 //   відсортовані за датою й часом (як у виписці), bankFetch віддає bankTotal/notReal для звірки кількості.
 // v7.376: reconcilePreview — рядок з уже внесеним Референсом одразу статус 'dup' (банк + файл не задвоюються й не плутають).
@@ -6755,7 +6756,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.378', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.379', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -15201,9 +15202,12 @@ function _bankFetchCore(from, to){
       var c = (byAccDay[acc] = byAccDay[acc] || {})[dd] || (byAccDay[acc][dd] = {n:0, inc:0, exp:0});
       c.n++; if (String(x.TRANTYPE) === 'C') c.inc++; else c.exp++;
     });
-    // покриття: КОЖЕН день періоду по кожному рахунку токена (0 операцій — теж «виписку отримано»)
+    // покриття: КОЖЕН день періоду по кожному рахунку токена (0 операцій — теж «виписку отримано»).
+    // v7.379: сьогодні — ні (день не завершено; інакше неповний день рахувався б «завантаженим»).
+    var todayIso = Utilities.formatDate(new Date(), 'Europe/Kiev', 'yyyy-MM-dd');
     for (var d = new Date(from + 'T12:00:00'); Utilities.formatDate(d, 'Europe/Kiev', 'yyyy-MM-dd') <= to; d.setDate(d.getDate() + 1)){
       var iso = Utilities.formatDate(d, 'Europe/Kiev', 'yyyy-MM-dd');
+      if (iso >= todayIso) break;
       Object.keys(byAccDay).forEach(function(acc){ var c = byAccDay[acc][iso] || {n:0, inc:0, exp:0};
         cover.push([acc, iso, c.n, c.inc, c.exp, 'ПриватБанк API · ' + t.label, now]); });
     }
