@@ -494,6 +494,38 @@ function canSeeTopNet(role){ var r = String(role || '').toLowerCase().trim();
   return NETWORK_ROLES.indexOf(r) !== -1 && NAV_TOP_DENY.indexOf(r) === -1; }
 
 // ── v7.240 СПІЛЬНИЙ ШЕЛЛ: матриця прав, сайдбар, шапка ──────────────────
+// v7.385: порядок локацій (садочки → школи → управління) — дзеркало LOCATION_ORDER
+var LOCATION_ORDER = [
+  'Осокорки','Позняки','Тичини','Кар\'єрна','Голосієво','Пуща',
+  'Оранж','Борщагівка','Бровари','Кругла','Бігова',
+  'Школа Осокорки','Школа 228',"Школа Кар'єрна",'Житомир',
+  'Нац.Гвардії (Благо)','Манхетен (Благо)','Хіміків (Благо)',
+  'Онлайн школа','Кухня Київ','Кухня Львів','Іва-Франківськ кухня'
+];
+// v7.52 QUOTA-SAFE localStorage wrapper (спільний патерн): setItem без крашу.
+function safeSetItem(key, value){
+  try { localStorage.setItem(key, value); return true; }
+  catch(e){
+    var quota = e && (e.name==='QuotaExceededError' || e.code===22 || e.code===1014 || /quota/i.test(String(e.message||'')));
+    if(!quota){ console.warn('[safeSetItem] '+key+':', e && e.message); return false; }
+    ['crm_att_v1','crm_year_v1','crm_pay_v3','crm_cli_v3','crm_locs_v3'].forEach(function(k){ if(k && k!==key){ try{ localStorage.removeItem(k); }catch(_){} } });
+    try { localStorage.setItem(key, value); return true; }
+    catch(e2){ console.warn('[safeSetItem] quota — "'+key+'" пропущено'); return false; }
+  }
+}
+function locationRank(name){
+  var i = LOCATION_ORDER.indexOf(String(name == null ? '' : name).trim());
+  return i === -1 ? 999 : i;
+}
+function sortByLocationOrder(arr, getName){
+  return (arr || []).slice().sort(function(a, b){
+    var na = getName ? getName(a) : a, nb = getName ? getName(b) : b;
+    var ra = locationRank(na), rb = locationRank(nb);
+    return ra - rb || String(na == null ? '' : na).localeCompare(String(nb == null ? '' : nb), 'uk');
+  });
+}
+function sortLocationsByZone(locs){ return sortByLocationOrder(locs); }
+
 var CURRENT_PAGE = 'cash';
 function $(id){ return document.getElementById(id); }
 function isNetworkRole(role){ return NETWORK_ROLES.indexOf(String(role||'').toLowerCase()) !== -1; }
@@ -838,7 +870,7 @@ async function loadLocs(){
     var j = await apiGet('getLocations');
     var arr = (j && j.data) || [];
     C.locs = arr.map(function(l){ return String(l.loc || '').trim(); }).filter(Boolean);
-    C.locs.sort(function(a, b){ return a.localeCompare(b, 'uk'); });
+    C.locs = sortByLocationOrder(C.locs);   // v7.385: мій порядок
   } catch(e){ C.locs = []; }
 }
 

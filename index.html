@@ -1897,7 +1897,7 @@ var EMP_DEL_ROLES_FE = ['cfo','ceo','coo','hr','hr_trainer'];
 function _empAllLocs(){
   var locs = {};
   (S.emps || []).forEach(function(e){ if (e.loc) locs[e.loc] = 1; });
-  return Object.keys(locs).sort(function(a,b){ return a.localeCompare(b, 'uk'); });
+  return sortByLocationOrder(Object.keys(locs));   // v7.385: мій порядок локацій
 }
 
 function canEmpAdd(){
@@ -2687,7 +2687,7 @@ function uniq(arr,key){return [...new Set(arr.map(e=>e[key]).filter(Boolean))].s
 var LOCATION_ORDER = [
   'Осокорки','Позняки','Тичини','Кар\'єрна','Голосієво','Пуща',
   'Оранж','Борщагівка','Бровари','Кругла','Бігова',
-  'Школа Осокорки','Школа 228','Житомир',
+  'Школа Осокорки','Школа 228',"Школа Кар'єрна",'Житомир',
   'Нац.Гвардії (Благо)','Манхетен (Благо)','Хіміків (Благо)',
   'Онлайн школа','Кухня Київ','Кухня Львів','Іва-Франківськ кухня'
 ];

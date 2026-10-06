@@ -737,7 +737,7 @@ select{font-family:inherit}
 var LOCATION_ORDER = [
   'Осокорки','Позняки','Тичини','Кар\'єрна','Голосієво','Пуща',
   'Оранж','Борщагівка','Бровари','Кругла','Бігова',
-  'Школа Осокорки','Школа 228','Житомир',
+  'Школа Осокорки','Школа 228',"Школа Кар'єрна",'Житомир',
   'Нац.Гвардії (Благо)','Манхетен (Благо)','Хіміків (Благо)',
   'Онлайн школа','Кухня Київ','Кухня Львів','Іва-Франківськ кухня'
 ];
@@ -2051,7 +2051,7 @@ function _sortFillRows(rows){
     // Усередині — за |diff| descending. Для exact (diff=0) — за loc/group/teacher.
     var ad = Math.abs(a.diff), bd = Math.abs(b.diff);
     if (ad !== bd) return bd - ad;
-    if (a.loc !== b.loc) return a.loc.localeCompare(b.loc, 'uk');
+    if (a.loc !== b.loc) return (locationRank(a.loc) - locationRank(b.loc)) || a.loc.localeCompare(b.loc, 'uk');   // v7.385: мій порядок локацій
     if (a.group !== b.group) return a.group.localeCompare(b.group, 'uk');
     return (a.teacher || '').localeCompare(b.teacher || '', 'uk');
   });

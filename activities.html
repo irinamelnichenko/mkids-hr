@@ -1399,7 +1399,7 @@ select,input,textarea{font-family:inherit}
 var LOCATION_ORDER = [
   'Осокорки','Позняки','Тичини','Кар\'єрна','Голосієво','Пуща',
   'Оранж','Борщагівка','Бровари','Кругла','Бігова',
-  'Школа Осокорки','Школа 228','Житомир',
+  'Школа Осокорки','Школа 228',"Школа Кар'єрна",'Житомир',
   'Нац.Гвардії (Благо)','Манхетен (Благо)','Хіміків (Благо)',
   'Онлайн школа','Кухня Київ','Кухня Львів','Іва-Франківськ кухня'
 ];
@@ -2647,7 +2647,7 @@ function openCopyModal(){
   (S.items || []).forEach(function(a){
     if (a.active && a.loc && a.loc !== S.activeLoc) withItems[a.loc] = true;
   });
-  var sources = Object.keys(withItems).sort(function(a,b){ return a.localeCompare(b,'uk'); });
+  var sources = sortByLocationOrder(Object.keys(withItems));   // v7.385: мій порядок локацій
   var sel = $('copyFromSel');
   sel.innerHTML = '';
   if (!sources.length){

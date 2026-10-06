@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.384
+// m.kids CRM — Google Apps Script v7.385
+// v7.385: LOCATION_ORDER += «Школа Кар'єрна» (після Школи 228).
 // v7.384: відомість на готівку — за попередній місяць: бюджет − картка ЗА цей місяць (за датою відомості: з 15 числа —
 //   аванс за наступний), мінус готівка, вже записана у «Факт» місяця виплати; без хвостів січня…
 // v7.383: звірка — рахунок додаткових садка Кар'єрна шукає дітей і «Школи Кар'єрної» (PAY_SUBLOCATIONS.shareHostAccounts).
@@ -948,7 +949,7 @@ var MONTHS_CAL = ['Січень','Лютий','Березень','Квітень
 var LOCATION_ORDER = [
   'Осокорки','Позняки','Тичини',"Кар'єрна",'Голосієво','Пуща',
   'Оранж','Борщагівка','Бровари','Кругла','Бігова',
-  'Школа Осокорки','Школа 228','Житомир',
+  'Школа Осокорки','Школа 228',"Школа Кар'єрна",'Житомир',
   'Нац.Гвардії (Благо)','Манхетен (Благо)','Хіміків (Благо)',
   'Онлайн школа','Кухня Київ','Кухня Львів','Іва-Франківськ кухня'
 ];
@@ -6763,7 +6764,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.384', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.385', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
