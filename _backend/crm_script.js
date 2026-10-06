@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.383
+// m.kids CRM — Google Apps Script v7.384
+// v7.384: відомість на готівку — за попередній місяць: бюджет − картка ЗА цей місяць (за датою відомості: з 15 числа —
+//   аванс за наступний), мінус готівка, вже записана у «Факт» місяця виплати; без хвостів січня…
 // v7.383: звірка — рахунок додаткових садка Кар'єрна шукає дітей і «Школи Кар'єрної» (PAY_SUBLOCATIONS.shareHostAccounts).
 // v7.382: patchEmployee — точкова правка картки співробітника (локація/ПІБ/дата звільнення), табель переноситься на новий
 //   ключ, відмова, якщо під старим ключем є уроки предметників. CFO, dryRun.
@@ -6761,7 +6763,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.383', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.384', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -27435,7 +27437,7 @@ rowsHtml,
 }
 
 // v7.71 РОЗРАХУНКОВІ ЛИСТКИ. Кожен — з нової сторінки (page-break-before). Модель B:
-//   Нараховано = Бюджет за обраний місяць; Виплата на карту = Факт за обраний місяць;
+//   v7.384: Нараховано = Бюджет ПОПЕРЕДНЬОГО місяця; Виплата на карту = картка ЗА цей місяць (за датою відомості);
 //   Враховано з минулих = Σ(Бюджет−Факт) січень→місяць−1; До видачі = Враховано + (Нараховано−Виплата).
 // Порядок листків = порядок зведеної. Усі дані через _cashEsc.
 function _buildCashPayoutSlips(d){
@@ -27448,6 +27450,7 @@ function _buildCashPayoutSlips(d){
       ? '\n  <div class="slip-scissors">- - - - - - - - - - ✂ - - - - - - - - - -</div>' : '';
     // v7.72: назва рядка «враховано з минулих» — за знаком, сума завжди додатна; 0 → не показувати.
     var carry = Number(r.carried) || 0, carryRow = '';
+    if (Number(r.paidCash) > 0) carryRow += '      <tr><td class="lbl">Уже видано готівкою</td><td class="val">' + _fmtUah(r.paidCash) + ' грн</td></tr>\n';   // v7.384
     if (carry > 0){
       carryRow = '      <tr><td class="lbl">Недовидано за минулі місяці</td><td class="val">' + _fmtUah(carry) + ' грн</td></tr>\n';
     } else if (carry < 0){
@@ -27474,6 +27477,7 @@ carryRow +
   }).join('\n');
 }
 
+var CASH_ADVANCE_FROM_DAY = 15;   // v7.384: відомість з цього числа — аванс за наступний місяць
 function cashPayoutSheet(body){
   _salaryBump(body && body.loc);   // v7.331
   try {
@@ -27485,26 +27489,50 @@ function cashPayoutSheet(body){
     if (['both','sheet','slips'].indexOf(parts) === -1) parts = 'both';
     if (!loc) return {ok:false, error:'loc обовʼязковий'};
     if (!month || month < 1 || month > 12) return {ok:false, error:'month має бути 1-12'};
-    var sd = getSalaryData(loc, year);
+    // v7.384: відомість — за ПОПЕРЕДНІЙ місяць (A = month−1) без хвостів січня…: готівка = бюджет A − усе, що
+    // виплачено ЗА A на картку. «За який місяць» картка — з дати відомості (Звірка_ЗП_Лог, №YYMMDD…):
+    // з 15 числа — аванс за НАСТУПНИЙ місяць (22.09 → жовтень), до 15 — розрахунок за ПОПЕРЕДНІЙ (02.10 → вересень).
+    // «Факт» Salary тут не беремо: у ньому і картка, і готівка, і зсув місяців.
+    var accM = (month === 1) ? 12 : month - 1, accY = (month === 1) ? year - 1 : year;
+    var sd = getSalaryData(loc, accY);
     if (!sd.ok) return sd;
     var SKIP = {section_header:true, group_header:true, subtotal:true};
+    var cardByRow = {}, cardRefs = {}, bookedInM = {};   // bookedInM — картки, зараховані у «Факт» місяця ВИПЛАТИ
+    try {
+      var lv = _getSalaryReconLogSheet().getDataRange().getValues();
+      for (var li = 1; li < lv.length; li++){
+        if (String(lv[li][2] || '').trim() !== loc) continue;
+        var vno = String(lv[li][3] || ''), mm = /^(\d{2})(\d{2})(\d{2})/.exec(vno);
+        var am, ay;
+        if (mm){
+          var vy = 2000 + Number(mm[1]), vm = Number(mm[2]), vd = Number(mm[3]);
+          if (vd >= CASH_ADVANCE_FROM_DAY){ am = vm + 1; ay = vy; if (am > 12){ am = 1; ay++; } }
+          else { am = vm - 1; ay = vy; if (am < 1){ am = 12; ay--; } }
+        } else continue;                                          // без дати у № — не знаємо, за який місяць
+        var rk = _nameFold(lv[li][8]);
+        if (Number(lv[li][9]) === month && Number(mm[1]) + 2000 === year) bookedInM[rk] = (bookedInM[rk] || 0) + (_opexNum(lv[li][12]) || 0);
+        if (am !== accM || ay !== accY) continue;
+        cardByRow[rk] = (cardByRow[rk] || 0) + (_opexNum(lv[li][12]) || 0);
+        (cardRefs[rk] = cardRefs[rk] || []).push(vno.slice(4, 6) + '.' + vno.slice(2, 4));
+      }
+    } catch(_lg){}
+    // v7.384: готівку CFO записує у «Факт» місяця ВИДАЧІ (= місяць виплати M). Уже видана за A готівка =
+    // факт M − картки, зараховані в M. Після видачі й запису відомість показує 0 (без подвійної видачі).
+    var sdM = (accY === year) ? sd : getSalaryData(loc, year);
+    var factM = {};
+    ((sdM && sdM.ok && sdM.rows) || []).forEach(function(r){ factM[_nameFold(r.name)] = Number(((r.months || [])[month - 1] || {}).fact) || 0; });
     var out = [];
     (sd.rows || []).forEach(function(r){
       if (r._section !== 'main') return;                        // лише основний штат
       if (!r._category || SKIP[r._category]) return;             // не заголовки/підсумки
-      var months = r.months || [];
-      // v7.71 модель B для листка: розкладаємо на минуле + поточний місяць.
-      var cumB = 0, cumF = 0, prevB = 0, prevF = 0, curB = 0, curF = 0;
-      for (var m = 0; m < month && m < months.length; m++){
-        var b = Number(months[m].budget) || 0, f = Number(months[m].fact) || 0;
-        cumB += b; cumF += f;
-        if (m < month - 1){ prevB += b; prevF += f; }           // січень → місяць−1
-        else { curB = b; curF = f; }                            // обраний місяць
-      }
-      var cash = cumB - cumF;                                    // = зведена; = carried + (curB − curF)
-      if (cash <= 0) return;                                     // переплата/погашено → не в листок
+      var bud = Number(((r.months || [])[accM - 1] || {}).budget) || 0;
+      var rk0 = _nameFold(r.name);
+      var card = Math.round(cardByRow[rk0] || 0);
+      var paidCash = Math.max(0, Math.round((factM[rk0] || 0) - (bookedInM[rk0] || 0)));
+      var cash = Math.round(bud - card - paidCash);
+      if (cash <= 0) return;                                     // виплачено повністю (або переплата) → не в листок
       out.push({name:r.name, category:r._category, posada:_cashPosadaLabel(r._category), pib:_cashStripPosada(r.name),
-                cash:Math.round(cash), accrued:Math.round(curB), card:Math.round(curF), carried:Math.round(prevB - prevF)});
+                cash:cash, accrued:Math.round(bud), card:card, carried:0, paidCash:paidCash, cardDates:(cardRefs[_nameFold(r.name)] || []).join(', ')});
     });
     var CATORD = {director:0, teacher:1, assistant:2, nurse:3, guard:4, cleaner:5, duty:6};
     out.sort(function(a, b){
@@ -27513,7 +27541,7 @@ function cashPayoutSheet(body){
       return ca - cb || a.pib.localeCompare(b.pib, 'uk');
     });
     var rows = out.map(function(x, i){ return {n:i + 1, pib:x.pib, posada:x.posada, cash:x.cash,
-                                               accrued:x.accrued, card:x.card, carried:x.carried}; });
+                                               accrued:x.accrued, card:x.card, carried:x.carried, paidCash:x.paidCash, cardDates:x.cardDates}; });
     var total = rows.reduce(function(s, x){ return s + x.cash; }, 0);
     // v7.73: розрахунок за ПОПЕРЕДНІЙ місяць, виплата — за обраний. Січень → грудень минулого року.
     var prevM = (month === 1) ? 12 : month - 1;
