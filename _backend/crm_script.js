@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.379
+// m.kids CRM — Google Apps Script v7.380
+// v7.380: банк — рядок internal:true, якщо ЄДРПОУ контрагента = ЄДРПОУ рахунку (переказ між власними рахунками).
 // v7.379: Банк_Покриття не пише сьогоднішній (незавершений) день.
 // v7.378: банк — офісні рахунки (bankAccountMark, BANK_OFFICE_ACCS; група office:true без пошуку локації), операції
 //   відсортовані за датою й часом (як у виписці), bankFetch віддає bankTotal/notReal для звірки кількості.
@@ -6756,7 +6757,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.379', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.380', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -15169,7 +15170,9 @@ function _pbRow(t){
   return {date:String(t.DAT_OD || dt.slice(0, 10)), time:m ? m[1] + ':' + m[2] : '', amount:Math.abs(Number(t.SUM) || 0),
           currency:String(t.CCY || 'UAH'), purpose:String(t.OSND || '').trim(), edrpou:String(t.AUT_CNTR_CRF || '').trim(),
           counterparty:String(t.AUT_CNTR_NAM || '').trim(), account:String(t.AUT_CNTR_ACC || '').trim(),
-          mfo:String(t.AUT_CNTR_MFO || '').trim(), ref:String(t.REF || '') + (t.REFN ? '.' + t.REFN : ''), bankId:String(t.ID || '')};
+          mfo:String(t.AUT_CNTR_MFO || '').trim(), ref:String(t.REF || '') + (t.REFN ? '.' + t.REFN : ''), bankId:String(t.ID || ''),
+          // v7.380: внутрішній переказ — той самий власник (ЄДРПОУ контрагента = ЄДРПОУ рахунку)
+          internal:!!(String(t.AUT_CNTR_CRF || '').trim() && String(t.AUT_CNTR_CRF).trim() === String(t.AUT_MY_CRF || '').trim())};
 }
 function _bankCoverWrite(rows){
   if (!rows.length) return;

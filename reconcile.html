@@ -1356,6 +1356,8 @@ async function rcFromBank(){
     if (!j.ok && !(j.groups || []).length) throw new Error(j.error || (j.errors || []).join('; ') || 'банк не відповів');
     (j.errors || []).forEach(function(e){ RC.groups.push({fileName:'🏦 ПриватБанк', ok:false, error:e}); });
     RC.bankStats = {from:from, to:to, bankTotal:j.bankTotal != null ? j.bankTotal : j.count, notReal:j.notReal || 0};   // v7.378
+    try { var _bs = await (await fetch(CFG.SCRIPT_URL + '?action=bankStatus&actorId=' + encodeURIComponent(S.user.id), {redirect:'follow'})).json();
+          RC.ownAccounts = []; (_bs.tokens || []).forEach(function(t){ (t.accounts || []).forEach(function(a){ RC.ownAccounts.push(a.iban); }); }); } catch(_o){}   // v7.380
     RC.parsed = (j.groups || []).filter(function(g){ return (g.payments || []).length || (g.expenses || []).length; });
     if (!RC.parsed.length){ $('rcWrap').innerHTML = '<div class="inv-loading">За цей період операцій у банку немає.</div>'; return; }
     await rcPreviewAll();
@@ -1444,20 +1446,23 @@ async function rcBankTokenRemove(key, label){
 // v7.378: звірка кількості — скільки операцій у банку за період і скільки показано в системі.
 function rcCountCheckHtml(){
   var st=RC.bankStats; if(!st) return '';
-  var payAll=0, expAll=0, payLoc=0, payOffice=0, payNoReq=0, payErr=0;
-  RC.parsed.forEach(function(p){ payAll+=(p.payments||[]).length; expAll+=(p.expenses||[]).length; });
+  var payAll=0, expAll=0, payLoc=0, payOffice=0, payNoReq=0, payErr=0, intAll=0, trN=0, trSum=0, slN=0, slSum=0;
+  RC.parsed.forEach(function(p){ payAll+=(p.payments||[]).length; expAll+=(p.expenses||[]).length;
+    (p.internal||[]).forEach(function(x){ intAll++; if(x._int==='salary'){ slN++; slSum+=Number(x.amount)||0; } else { trN++; trSum+=Number(x.amount)||0; } }); });
   RC.groups.forEach(function(g){
     if(g.ok) payLoc+=(g.preview.rows||[]).length;
     else if(g.office) payOffice+=g.nPay||0;
     else if(g.ibanErr) payNoReq+=g.nPay||0;
     else payErr+=g.nPay||0;
   });
-  var shown=payLoc+payOffice+payNoReq+payErr+expAll, bankTotal=st.bankTotal||0, notReal=st.notReal||0;
+  var shown=payLoc+payOffice+payNoReq+payErr+expAll+intAll, bankTotal=st.bankTotal||0, notReal=st.notReal||0;
   var ok=(shown+notReal===bankTotal);
   return '<div style="margin-bottom:12px;padding:10px 14px;border-radius:12px;border:1px solid '+(ok?'#bbf7d0':'#fecaca')+';background:'+(ok?'#f0fdf4':'#fef2f2')+';font-size:13px">'
     +(ok?'✅':'⚠️')+' <b>Звірка кількості</b> · '+escapeHtml(st.from)+(st.to!==st.from?' — '+escapeHtml(st.to):'')+'<br>'
     +'У банку: <b>'+bankTotal+'</b> операцій'+(notReal?' (з них не проведені: '+notReal+')':'')
     +' · у системі: <b>'+shown+'</b> = надходжень '+(payAll)+' (по локаціях '+payLoc+(payOffice?', офісні '+payOffice:'')+(payNoReq?', без реквізитів '+payNoReq:'')+(payErr?', з помилкою '+payErr:'')+') + витрат '+expAll+' (режим «Витрати»)'
+    +(trN?'<br>↔️ перекази між власними рахунками: <b>'+trN+'</b> на '+fmtUah(trSum)+' ₴ (кожен — двічі: списання й зарахування) — не дохід і не витрата, не показуються':'')
+    +(slN?'<br>💼 поповнення зарплатного рахунку: <b>'+slN+'</b> на '+fmtUah(slSum)+' ₴ — ЗП вноситься через «Звірку ЗП» за відомістю, тут не показується':'')
     +(ok?'':'<br><b>Розбіжність: '+(bankTotal-notReal-shown)+'</b> — оновіть виписку або напишіть мені.')+'</div>';
 }
 async function rcMarkOffice(iban){
@@ -1612,6 +1617,7 @@ function rcResetOpexState(){
   RC.opex.loc=''; RC.opex.locAuto=false; RC.opex.locList=[];
   RC.opex.cats=null; RC.opex.sel={}; RC.opex.month=0;
   RC.opex.applied=false; RC.opex.preview=null;
+  RC.opex.acc=''; RC.opex.accs=[]; RC.opex.locByIban={}; RC.opex.appliedAcc={};   // v7.380: витрати по рахунках
   RC.opex.salRowsByLoc={}; RC.opex.fopMap=null; RC.opex.salPreview=null;   // v7.86: Salary-стан теж скидаємо
   // contractors/fopMap/salRows перечитаються у rcExpLoad
 }
@@ -1633,6 +1639,24 @@ function _rcRowKey(x){
   } else if((m=/^(\d{4})-(\d{2})-(\d{2})/.exec(d))) d=m[1]+m[2]+m[3];
   return d+(t||'00:00');
 }
+// v7.380: внутрішній переказ — банк позначив (той самий ЄДРПОУ), або рахунок контрагента — один із завантажених
+// рахунків, або призначення «переказ між рахунками / власних коштів». Відсікаємо, кількість лишаємо для звірки.
+var _RC_INTERNAL_RE=/переказ\s+(між\s+(власними\s+)?рахунками|власних\s+коштів|коштів\s+між\s+рахунками)|між\s+власними\s+рахунками/i;
+function _rcIsInternal(x, own){
+  if(x.internal) return true;
+  var acc=String(x.account||'').replace(/\s+/g,'').toUpperCase();
+  if(acc && own[acc]) return true;
+  return _RC_INTERNAL_RE.test(String(x.purpose||''));
+}
+function _rcCutInternal(pr){
+  var own={}; RC.parsed.forEach(function(p){ if(p.iban) own[String(p.iban).toUpperCase()]=true; });
+  (RC.ownAccounts||[]).forEach(function(a){ own[String(a).toUpperCase()]=true; });
+  var cut=[];
+  var tag=function(x){ x._int=/заробітн|зарплат/i.test(String(x.purpose||''))?'salary':'transfer'; cut.push(x); };   // ЗП-поповнення — окремо
+  pr.payments=(pr.payments||[]).filter(function(x){ if(_rcIsInternal(x,own)){ tag(x); return false; } return true; });
+  pr.expenses=(pr.expenses||[]).filter(function(x){ if(_rcIsInternal(x,own)){ tag(x); return false; } return true; });
+  pr.internal=(pr.internal||[]).concat(cut);
+}
 function _rcSortRows(arr){
   return (arr||[]).map(function(x,i){ return {x:x,i:i,k:_rcRowKey(x)}; })
     .sort(function(a,b){ return a.k<b.k?-1:a.k>b.k?1:a.i-b.i; }).map(function(o){ return o.x; });
@@ -1644,6 +1668,8 @@ async function rcPreviewAll(){
   for (var i=0;i<RC.parsed.length;i++){
     var pr=RC.parsed[i];
     pr.payments=_rcSortRows(pr.payments); pr.expenses=_rcSortRows(pr.expenses);   // v7.378
+    _rcCutInternal(pr);   // v7.380: перекази між власними рахунками — не дохід і не витрата
+    if (!(pr.payments||[]).length) continue;   // надходжень не лишилось — перевіряти нічого (витрати — у режимі «Витрати»)
     if (pr.office){   // v7.378: офісний рахунок — не належить локації, надходження не звіряємо
       RC.groups.push({fileName:pr.fileName, ok:false, office:true, iban:pr.iban, nPay:(pr.payments||[]).length, nExp:(pr.expenses||[]).length});
       continue;
@@ -1779,6 +1805,7 @@ function _rcMonthOptions(sel){
 function rcExpenseGroups(){
   var map={};
   RC.parsed.forEach(function(p){
+    if(RC.opex.acc && p.iban!==RC.opex.acc) return;   // v7.380: лише обраний рахунок
     (p.expenses||[]).forEach(function(x){
       var edr=String(x.edrpou||'').trim();
       var nm=String(x.counterparty||'').trim();
@@ -1805,12 +1832,17 @@ async function rcExpLoad(){
   for (var ib in ibans){
     try{
       var r=await fetch(CFG.SCRIPT_URL+'?action=resolveIbanLoc&iban='+encodeURIComponent(ib),{redirect:'follow'});
-      var j=await r.json(); if(j&&j.ok&&j.loc) locs[j.loc]=true;
+      var j=await r.json(); if(j&&j.ok&&j.loc){ locs[j.loc]=true; RC.opex.locByIban[ib]=j.loc; }
     }catch(e){}
   }
-  var locKeys=Object.keys(locs);
-  RC.opex.loc = (locKeys.length===1)?locKeys[0]:'';
-  RC.opex.locAuto = (locKeys.length===1);
+  // v7.380: рахунки з витратами — окремо; локація — за рахунком (офісний / невідомий → вручну)
+  RC.opex.accs = RC.parsed.filter(function(p){ return (p.expenses||[]).length; })
+    .map(function(p){ return {iban:p.iban, office:!!p.office, n:p.expenses.length, loc:p.office?'':(RC.opex.locByIban[p.iban]||'')}; });
+  if(!RC.opex.acc || !RC.opex.accs.some(function(a){ return a.iban===RC.opex.acc; })) RC.opex.acc = (RC.opex.accs[0]||{}).iban || '';
+  var _cur = RC.opex.accs.filter(function(a){ return a.iban===RC.opex.acc; })[0] || {};
+  RC.opex.loc = _cur.loc || '';
+  RC.opex.locAuto = !!_cur.loc;
+  RC.opex.applied = !!RC.opex.appliedAcc[RC.opex.acc];
   // 2) мапа контрагентів
   try{ var rc=await fetch(CFG.SCRIPT_URL+'?action=getOpexContractors',{redirect:'follow'}); var jc=await rc.json(); RC.opex.contractors=(jc&&jc.map)||{}; }catch(e){ RC.opex.contractors={}; }
   // 3) повний список локацій — потрібен і для ручного вибору локації виписки, і для пер-платіжної
@@ -2044,7 +2076,13 @@ function rcRenderExpenses(){
   var monHtml = 'Місяць: <select onchange="rcExpSetMonth(this.value)">'
       + MONTHS_UA_FULL.map(function(nm,i){return '<option value="'+(i+1)+'"'+((i+1)===RC.opex.month?' selected':'')+'>'+nm+'</option>';}).join('')+'</select>';
   var disabled = (!RC.opex.loc || RC.opex.applied) ? ' disabled' : '';
-  var head='<div class="fc-banner" style="padding:12px 14px;border-radius:12px;background:#fdf0ef;border:1px solid #f6c9c4;margin-bottom:10px">'
+  // v7.380: вкладки рахунків — витрати кожного рахунку окремо
+  var accTabs = (RC.opex.accs||[]).length > 1 ? '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">' + RC.opex.accs.map(function(a){
+      var on = a.iban===RC.opex.acc;
+      return '<button class="btn '+(on?'btn-primary':'btn-secondary')+' btn-sm" onclick="rcExpSetAcc(\''+escapeHtml(a.iban)+'\')">'
+        + (a.office?'🏢 ':'') + '…' + escapeHtml(a.iban.slice(-4)) + ' · ' + escapeHtml(a.office?'офісний':(a.loc||'локація?')) + ' · ' + a.n + ' вит.'
+        + (RC.opex.appliedAcc[a.iban]?' ✅':'') + '</button>'; }).join('') + '</div>' : '';
+  var head=accTabs+'<div class="fc-banner" style="padding:12px 14px;border-radius:12px;background:#fdf0ef;border:1px solid #f6c9c4;margin-bottom:10px">'
     +'<div>'+locHtml+' &nbsp;·&nbsp; '+monHtml+'</div>'
     +'<div style="margin-top:6px"><b>Витрати:</b> контрагентів '+groups.length+' · платежів '+totalCnt+' · сума <b>'+fmtUah(totalSum)+' ₴</b>'
     +' <button class="btn btn-secondary btn-sm" style="float:right;margin-left:6px" onclick="rcExportExpenses()">📤 Excel</button>'
@@ -2179,6 +2217,15 @@ function rcRenderExpenses(){
 }
 
 // ── handlers ──
+async function rcExpSetAcc(iban){   // v7.380: перемикач рахунку у «Витратах»
+  RC.opex.acc=iban; RC.opex.preview=null; RC.opex.salPreview=null;
+  var a=(RC.opex.accs||[]).filter(function(x){ return x.iban===iban; })[0]||{};
+  RC.opex.loc=a.loc||''; RC.opex.locAuto=!!a.loc; RC.opex.applied=!!RC.opex.appliedAcc[iban];
+  RC.opex.month = rcExpGuessMonth() || RC.opex.month;
+  RC.opex.cats=await rcFetchCats(RC.opex.loc);
+  if(RC.opex.loc) await rcFetchSalRows(RC.opex.loc);
+  rcRenderAll();
+}
 async function rcExpSetLoc(v){ RC.opex.loc=v; RC.opex.preview=null; RC.opex.cats=await rcFetchCats(v); rcRenderAll(); }
 function rcExpSetMonth(v){ RC.opex.month=Number(v)||RC.opex.month; RC.opex.preview=null; rcRenderAll(); }
 function rcExpOnMonth(key,v){ _rcSel(key).month=Number(v)||0; RC.opex.preview=null; RC.opex.salPreview=null; }   // v7.86: пер-контрагентний місяць
@@ -2331,7 +2378,7 @@ async function rcExpApply(){
   if(b.items.length) parts.push(b.items.length+' у OPEX');
   if(b.salItems.length) parts.push(b.salItems.length+' у Salary (Факт)');
   if(!confirm('Записати '+parts.join(' + ')+' (локація «'+RC.opex.loc+'»)?')) return;
-  RC.opex.applied=true; rcRenderAll();   // блокуємо повторне натискання одразу
+  RC.opex.applied=true; RC.opex.appliedAcc[RC.opex.acc]=true; rcRenderAll();   // блокуємо повторне натискання одразу (v7.380: для цього рахунку)
   var yr=new Date().getFullYear(), msgs=[], anyErr=false;
   try{
     if(b.items.length){
@@ -2391,7 +2438,7 @@ function rcRenderAll(){
   html+=rcCountCheckHtml();   // v7.378: у банку N — у системі M
   RC.groups.filter(function(g){return !g.ok;}).forEach(function(g){
     if(g.office){
-      html+='<div class="inv-empty" style="text-align:left;margin-bottom:10px;background:#f8fafc;color:#475569">🏢 <b>'+escapeHtml(g.fileName)+'</b> — офісний рахунок, локацію не шукаємо. '
+      html+='<div class="inv-empty" style="text-align:left;margin-bottom:10px;background:#f8fafc;color:#475569">'+(/^🏢/.test(g.fileName)?'':'🏢 ')+'<b>'+escapeHtml(g.fileName)+'</b> — офісний рахунок, локацію не шукаємо. '
         +'Надходжень: <b>'+g.nPay+'</b>, витрат: <b>'+g.nExp+'</b>'+(g.nExp?' — їх можна рознести по локаціях у режимі «Витрати».':'.')+'</div>';
       return;
     }
