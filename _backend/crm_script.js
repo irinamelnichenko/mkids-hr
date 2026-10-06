@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.386
+// m.kids CRM — Google Apps Script v7.387
+// v7.387: відомість на готівку = логіка колонки залишку Salary: бюджет M − факт M + залишок M−1 (готове значення 3-ї колонки).
 // v7.386: відомість на готівку — за ОБРАНИЙ місяць: бюджет − факт місяця (картка+готівка) − переплата попереднього.
 // v7.385: LOCATION_ORDER += «Школа Кар'єрна» (після Школи 228).
 // v7.384: відомість на готівку — за попередній місяць: бюджет − картка ЗА цей місяць (за датою відомості: з 15 числа —
@@ -6765,7 +6766,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.386', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.387', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -27439,7 +27440,7 @@ rowsHtml,
 }
 
 // v7.71 РОЗРАХУНКОВІ ЛИСТКИ. Кожен — з нової сторінки (page-break-before). Модель B:
-//   v7.386: Нараховано = Бюджет обраного місяця; Уже виплачено = Факт обраного; Утримано = переплата попереднього;
+//   v7.387: Нараховано = Бюджет обраного; Уже виплачено = Факт обраного; ± залишок попереднього (3-тя колонка місяця Salary);
 //   Враховано з минулих = Σ(Бюджет−Факт) січень→місяць−1; До видачі = Враховано + (Нараховано−Виплата).
 // Порядок листків = порядок зведеної. Усі дані через _cashEsc.
 function _buildCashPayoutSlips(d){
@@ -27455,7 +27456,7 @@ function _buildCashPayoutSlips(d){
     if (carry > 0){
       carryRow = '      <tr><td class="lbl">Недовидано за минулі місяці</td><td class="val">' + _fmtUah(carry) + ' грн</td></tr>\n';
     } else if (carry < 0){
-      carryRow = '      <tr><td class="lbl">Утримано: переплата / аванс минулого місяця</td><td class="val">' + _fmtUah(-carry) + ' грн</td></tr>\n';
+      carryRow = '      <tr><td class="lbl">Утримано: переплата / аванс минулих місяців</td><td class="val">' + _fmtUah(-carry) + ' грн</td></tr>\n';
     }
     return [
 '  <div class="slip' + (isCut ? ' slip-cut3' : '') + '">',
@@ -27489,27 +27490,44 @@ function cashPayoutSheet(body){
     if (['both','sheet','slips'].indexOf(parts) === -1) parts = 'both';
     if (!loc) return {ok:false, error:'loc обовʼязковий'};
     if (!month || month < 1 || month > 12) return {ok:false, error:'month має бути 1-12'};
-    // v7.386: відомість за ОБРАНИЙ місяць M (бюджет M = ЗП за відпрацьований попередній місяць, виплата до 10-го):
-    //   до видачі = бюджет M − уже виплачене в M (увесь «Факт» M: картка + готівка)
-    //               − переплата M−1 (факт M−1 > бюджет M−1; так аванс ~22-го попереднього місяця йде в наступну виплату).
-    // Без хвостів раніших місяців.
+    // v7.387: логіка колонки «залишок» Salary (3-тя колонка місяця, напр. AE = AD + AB − AC), яку CFO прибирає:
+    //   до видачі за M = бюджет M − факт M + залишок M−1.
+    // Залишок M−1 береться ГОТОВИМ значенням з 3-ї колонки попереднього місяця (там ланцюжок із лютого й ручні
+    // обнулення CFO). Якщо клітинка порожня / не число — залишок рахується Σ(бюджет − факт) з лютого по M−1.
     var sd = getSalaryData(loc, year);
     if (!sd.ok) return sd;
-    var prevSd = (month === 1) ? getSalaryData(loc, year - 1) : sd, prevIdx = (month === 1) ? 11 : month - 2;
-    var prevByName = {};
-    ((prevSd && prevSd.ok && prevSd.rows) || []).forEach(function(r){ prevByName[_nameFold(r.name)] = (r.months || [])[prevIdx] || {}; });
+    // Залишки всіх місяців 1..M−1 (3-тя колонка кожного місяця) — щоб докотити ланцюжок, якщо колонку M−1 прибрано.
+    var balGrid = {};   // balGrid[row][m] = число
+    if (month >= 2){
+      try {
+        var se = null; (_salaryGetRegistry().rows || []).forEach(function(x){ if (x.loc === loc && !x.virtual) se = x; });
+        var ssh = se ? SpreadsheetApp.openById(se.sheetId).getSheetByName(se.listName) : null;
+        if (ssh){
+          var gv = ssh.getRange(1, 1, ssh.getLastRow(), Math.min(ssh.getLastColumn(), (month - 1) * 3 + 1)).getValues();
+          for (var gi = 0; gi < gv.length; gi++) for (var gm = 1; gm < month; gm++){
+            var v0 = gv[gi][(gm - 1) * 3 + 3];
+            if (v0 !== '' && v0 !== null && v0 !== undefined && !isNaN(Number(v0))) (balGrid[gi + 1] = balGrid[gi + 1] || {})[gm] = Number(v0);
+          }
+        }
+      } catch(_b){}
+    }
     var SKIP = {section_header:true, group_header:true, subtotal:true};
     var out = [];
     (sd.rows || []).forEach(function(r){
       if (r._section !== 'main') return;                        // лише основний штат
       if (!r._category || SKIP[r._category]) return;             // не заголовки/підсумки
-      var cur = (r.months || [])[month - 1] || {}, prv = prevByName[_nameFold(r.name)] || {};
+      var ms = r.months || [], cur = ms[month - 1] || {};
       var bud = Math.round(Number(cur.budget) || 0), paid = Math.round(Number(cur.fact) || 0);
-      var over = Math.max(0, Math.round((Number(prv.fact) || 0) - (Number(prv.budget) || 0)));
-      var cash = bud - paid - over;
+      // залишок M−1: останній місяць ≤ M−1 із числом у колонці залишку, далі докочуємо бюджет − факт
+      var g = balGrid[r.row] || {}, from = 0, prevBal = 0;
+      for (var bm = month - 1; bm >= 1; bm--) if (g.hasOwnProperty(bm)){ from = bm; prevBal = g[bm]; break; }
+      if (!from) from = 1;                                       // ланцюжок із лютого: січень не входить
+      for (var fm = from + 1; fm <= month - 1; fm++) prevBal += (Number((ms[fm - 1] || {}).budget) || 0) - (Number((ms[fm - 1] || {}).fact) || 0);
+      prevBal = Math.round(prevBal);
+      var cash = bud - paid + prevBal;
       if (cash <= 0) return;                                     // усе виплачено (або переплата) → не в листок
       out.push({name:r.name, category:r._category, posada:_cashPosadaLabel(r._category), pib:_cashStripPosada(r.name),
-                cash:cash, accrued:bud, card:paid, carried:-over});
+                cash:cash, accrued:bud, card:paid, carried:prevBal});
     });
     var CATORD = {director:0, teacher:1, assistant:2, nurse:3, guard:4, cleaner:5, duty:6};
     out.sort(function(a, b){
