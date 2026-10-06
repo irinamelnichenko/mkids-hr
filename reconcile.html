@@ -2475,7 +2475,7 @@ function rcRenderAll(){
     if(hasToday) warn+='<div style="margin-top:6px;padding:6px 10px;border-radius:8px;background:#fff8e1;border:1px solid #ffe6a0;font-size:12px">⏳ виписка включає <b>сьогодні ('+escapeHtml(today)+')</b> — день незавершений, можливі донарахування</div>';
     html+='<div style="margin-bottom:18px" data-grp="'+gi+'">'
       +'<div class="fc-banner" style="padding:12px 14px;border-radius:12px;background:#eef6ff;border:1px solid #cfe3fb;margin-bottom:8px">'
-      +'<b>'+escapeHtml(p.loc)+'</b> · '+escapeHtml(p.typeLabel||(p.type==='extras'?'Додаткові':'Навчання'))
+      +'<b>'+escapeHtml(p.loc)+'</b>'+((p.sharedWith||[]).length?' <span style="color:#7c3aed">+ '+p.sharedWith.map(escapeHtml).join(', ')+' (діти обох локацій)</span>':'')+' · '+escapeHtml(p.typeLabel||(p.type==='extras'?'Додаткові':'Навчання'))
       +' <span style="color:var(--gray)">('+escapeHtml(p.orgName||'')+')</span><br>'
       +'<span style="font-size:12px;color:var(--gray)">📄 '+escapeHtml(p.fileName||'')+' · рахунок '+escapeHtml(p.iban)+' · платежів: '+p.count+'</span><br>'
       +'<span style="font-size:11px;color:var(--gray)">'+escapeHtml(diagTxt)+'</span>'

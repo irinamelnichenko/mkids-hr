@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.382
+// m.kids CRM — Google Apps Script v7.383
+// v7.383: звірка — рахунок додаткових садка Кар'єрна шукає дітей і «Школи Кар'єрної» (PAY_SUBLOCATIONS.shareHostAccounts).
 // v7.382: patchEmployee — точкова правка картки співробітника (локація/ПІБ/дата звільнення), табель переноситься на новий
 //   ключ, відмова, якщо під старим ключем є уроки предметників. CFO, dryRun.
 // v7.381: банк — тип рахунку office | service (службовий, напр. зарплатний: у звірці не показується); bankAccountMark{kind}.
@@ -6760,7 +6761,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.382', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.383', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -10970,7 +10971,10 @@ function _disambiguateGroupKeys(groups){
 var PAY_SUBLOCATIONS = {
   "Школа Кар'єрна": {
     host: "Кар'єрна", group: "Школа",
-    salaryExclude: [/медсестр/i, /охран|охорон/i]
+    salaryExclude: [/медсестр/i, /охран|охорон/i],
+    // v7.383: батьки платять за додаткові школи на рахунок додаткових садка (той самий файл Payment) —
+    // звірка такого рахунку шукає дітей і хоста, і цього блоку.
+    shareHostAccounts: ['extras']
   }
 };
 // Контекст розрізу Salary: mine=true — локація Є блоком (бере лише його);
@@ -21173,6 +21177,27 @@ function reconcilePreview(body){
     var data = paySh.getDataRange().getValues();
     var built = _buildPayerIndex(loc);
     var idx = built.index;
+    // v7.383: рахунок хоста, яким користується й під-локація (PAY_SUBLOCATIONS.shareHostAccounts) — додаємо її дітей.
+    // Під-локація лежить у ТОМУ Ж файлі Payment, тож номери рядків її дітей — з цього ж аркуша.
+    var sharedWith = [];
+    _subLocsOfHost(loc).forEach(function(sl){
+      var cfg = PAY_SUBLOCATIONS[sl.loc] || {};
+      if ((cfg.shareHostAccounts || []).indexOf(type) === -1) return;
+      var sreg = _getLocationPaymentRegistry(sl.loc);
+      if (!sreg || sreg.sheetId !== reg.sheetId) return;          // запобіжник: лише той самий файл
+      var b2 = _buildPayerIndex(sl.loc);
+      Object.keys(b2.index || {}).forEach(function(k){
+        var list = idx[k] || (idx[k] = []);
+        (b2.index[k] || []).forEach(function(c){
+          if (list.some(function(x){ return x.row === c.row; })) return;
+          var cc = {}; for (var f in c) cc[f] = c[f];
+          cc.group = (c.group ? c.group + ' · ' : '') + sl.loc;   // у прев'ю видно, що це школа
+          list.push(cc);
+        });
+      });
+      built.roster = (built.roster || []).concat((b2.roster || []).map(function(r){ var rr = {}; for (var f in r) rr[f] = r[f]; rr.group = (r.group ? r.group + ' · ' : '') + sl.loc; return rr; }));
+      sharedWith.push(sl.loc);
+    });
 
     // Дати, що вже звірялися (для цього loc+iban) — м'яке попередження «день уже оброблено».
     var processed = {}, appliedRefs = {};   // v7.376: референси, уже внесені (ключ дедупу «REF|…», як у reconcileApply)
@@ -21223,7 +21248,7 @@ function reconcilePreview(body){
       };
     });
 
-    return {ok:true, loc:loc, type:type, typeLabel:acct.typeLabel, orgName:acct.orgName,
+    return {ok:true, loc:loc, type:type, typeLabel:acct.typeLabel, orgName:acct.orgName, sharedWith:sharedWith,
             iban:iban, count:rows.length, rows:rows, diag:built.diag,
             roster:(built.roster||[]),
             processedDates:Object.keys(processed)};
