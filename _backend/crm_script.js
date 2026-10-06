@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.376
+// m.kids CRM — Google Apps Script v7.378
+// v7.378: банк — офісні рахунки (bankAccountMark, BANK_OFFICE_ACCS; група office:true без пошуку локації), операції
+//   відсортовані за датою й часом (як у виписці), bankFetch віддає bankTotal/notReal для звірки кількості.
 // v7.376: reconcilePreview — рядок з уже внесеним Референсом одразу статус 'dup' (банк + файл не задвоюються й не плутають).
 // v7.375: виписки з банку — ПриватБанк API: bankTokenSet (токени лише в ScriptProperties), bankStatus, bankFetch (формат
 //   розпарсеного файлу для reconcile.html), bankCoverage + «Банк_Покриття», нічний bankNightly (setupBankNightly).
@@ -6753,7 +6755,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.376', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.378', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -6936,6 +6938,7 @@ function doPost(e) {
     else if (body.action === 'cashAdd')                   result = cashAdd(body);               // v7.373 готівка (CFO, dryRun)
     else if (body.action === 'cashCancel')                result = cashCancel(body);            // v7.373 скасування готівки
     else if (body.action === 'bankTokenSet')              result = bankTokenSet(body);          // v7.375 банк: токен (CFO; перевірка з Google)
+    else if (body.action === 'bankAccountMark')           result = bankAccountMark(body);       // v7.378 офісний рахунок
     else if (body.action === 'salaryReconMoveMonth')      result = salaryReconMoveMonth(body);  // v7.374 перенос відомості в інший місяць (CFO, dryRun)
     else if (body.action === 'createCardFromPayment')     result = createCardFromPayment(body || {});   // v7.357 картка з рядка Payment (ПІБ як у Payment)
     else if (body.action === 'setLocRequisite')           result = setLocRequisite(body || {});      // v7.352 правка реквізитів (CFO, dryRun, архів старого IBAN, журнал)
@@ -15082,6 +15085,19 @@ var BANK_COVER_SHEET = 'Банк_Покриття';
 var BANK_COVER_HEADER = ['Рахунок','Дата','Операцій','Надходжень','Витрат','Джерело','Завантажено'];
 function _pbTokens(){ try { return JSON.parse(PropertiesService.getScriptProperties().getProperty('PB_TOKENS') || '{}') || {}; } catch(e){ return {}; } }
 function _pbSaveTokens(t){ PropertiesService.getScriptProperties().setProperty('PB_TOKENS', JSON.stringify(t)); }
+// v7.378: офісні рахунки (не належать жодній локації) — ScriptProperties 'BANK_OFFICE_ACCS' {iban: true}.
+function _bankOffice(){ try { return JSON.parse(PropertiesService.getScriptProperties().getProperty('BANK_OFFICE_ACCS') || '{}') || {}; } catch(e){ return {}; } }
+// POST {action:'bankAccountMark', actorId, iban, office:true|false} — позначити рахунок офісним (звірка не шукає локацію).
+function bankAccountMark(body){
+  body = body || {};
+  if (!_bankCfo(body.actorId)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var iban = String(body.iban || '').replace(/\s+/g, '').toUpperCase();
+  if (!/^UA\d{27}$/.test(iban)) return {ok:false, error:'IBAN у форматі UA + 27 цифр'};
+  var o = _bankOffice();
+  if (body.office === false) delete o[iban]; else o[iban] = true;
+  PropertiesService.getScriptProperties().setProperty('BANK_OFFICE_ACCS', JSON.stringify(o));
+  return {ok:true, iban:iban, office:!!o[iban]};
+}
 function _pbMask(t){ t = String(t || ''); return t.length > 12 ? t.slice(0, 6) + '…' + t.slice(-4) : '***'; }
 function _bankCfo(id){
   var a = null; try { a = _getActor((_CURRENT_AUTH && _CURRENT_AUTH.id) || id); } catch(_a){}
@@ -15128,12 +15144,12 @@ function bankTokenSet(body){
 function bankStatus(params){
   params = params || {};
   if (!_bankCfo(params.actorId)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
-  var all = _pbTokens(), last = {};
+  var all = _pbTokens(), last = {}, office = _bankOffice();
   var sh = _opexEnsureCfgSheet(BANK_COVER_SHEET, BANK_COVER_HEADER, false);
   if (sh) sh.getDataRange().getValues().slice(1).forEach(function(r){ var a = String(r[0]), d = _histIso(_histDate(r[1])).slice(0, 10); if (!last[a] || d > last[a]) last[a] = d; });
   return {ok:true, tokens:Object.keys(all).map(function(k){ var t = all[k];
     return {key:k, label:t.label, masked:_pbMask(t.token), added:t.added, accounts:Object.keys(t.accounts || {}).map(function(a){
-      return {iban:a, name:t.accounts[a], lastCovered:last[a] || ''}; })}; })};
+      return {iban:a, name:t.accounts[a], lastCovered:last[a] || '', office:!!office[a]}; })}; })};
 }
 // Транзакції одного токена за період (ISO from..to) з пагінацією.
 function _pbTransactions(token, from, to){
@@ -15167,16 +15183,18 @@ function _bankCoverWrite(rows){
 }
 // Завантажити з банку за період → групи «як файл» + покриття. Ядро для bankFetch і нічного прогону.
 function _bankFetchCore(from, to){
-  var all = _pbTokens(), groups = {}, errors = [], cover = [], now = new Date();
+  var all = _pbTokens(), groups = {}, errors = [], cover = [], now = new Date(), office = _bankOffice(), notReal = 0, total = 0;
   Object.keys(all).forEach(function(k){
     var t = all[k], r = _pbTransactions(t.token, from, to);
     if (!r.ok){ errors.push(t.label + ': ' + r.error); return; }
     var byAccDay = {};
     Object.keys(t.accounts || {}).forEach(function(a){ byAccDay[a] = {}; });
     r.items.forEach(function(x){
-      if (String(x.PR_PR || 'r') !== 'r' && String(x.FL_REAL || 'r') !== 'r') return;   // лише проведені
+      total++;
+      if (String(x.PR_PR || 'r') !== 'r' && String(x.FL_REAL || 'r') !== 'r'){ notReal++; return; }   // лише проведені
       var acc = String(x.AUT_MY_ACC || '').trim(); if (!acc) return;
-      var g = groups[acc] || (groups[acc] = {fileName:'🏦 ПриватБанк · ' + t.label + ' · ' + acc.slice(-4), iban:acc, payments:[], expenses:[], source:'bank'});
+      var g = groups[acc] || (groups[acc] = {fileName:(office[acc] ? '🏢 Офісний рахунок · ' : '🏦 ПриватБанк · ') + t.label + ' · ' + acc.slice(-4),
+                                             iban:acc, payments:[], expenses:[], source:'bank', office:!!office[acc]});
       var row = _pbRow(x);
       if (String(x.TRANTYPE) === 'C') g.payments.push(row); else g.expenses.push(row);
       var dd = row.date.split('.').reverse().join('-');
@@ -15191,7 +15209,12 @@ function _bankFetchCore(from, to){
     }
   });
   try { _bankCoverWrite(cover); } catch(e){ errors.push('покриття: ' + e); }
-  return {groups:Object.keys(groups).map(function(a){ return groups[a]; }), errors:errors, covered:cover.length};
+  // v7.378: як у банківській виписці — за датою й часом операції (рівні — у порядку банку)
+  var key = function(x){ var d = x.date.split('.'); return d[2] + d[1] + d[0] + (x.time || '00:00'); };
+  var srt = function(arr){ return arr.map(function(x, i){ return {x:x, i:i, k:key(x)}; })
+    .sort(function(a, b){ return a.k < b.k ? -1 : a.k > b.k ? 1 : a.i - b.i; }).map(function(o){ return o.x; }); };
+  Object.keys(groups).forEach(function(a){ groups[a].payments = srt(groups[a].payments); groups[a].expenses = srt(groups[a].expenses); });
+  return {groups:Object.keys(groups).map(function(a){ return groups[a]; }), errors:errors, covered:cover.length, total:total, notReal:notReal};
 }
 // GET ?action=bankFetch&from=YYYY-MM-DD&to=YYYY-MM-DD&actorId= — лише CFO, лише читання банку (у таблиці — лише покриття).
 function bankFetch(params){
@@ -15202,7 +15225,8 @@ function bankFetch(params){
   if (!Object.keys(_pbTokens()).length) return {ok:false, error:'Немає жодного токена банку'};
   var r = _bankFetchCore(from, to);
   return {ok:!r.errors.length || r.groups.length > 0, from:from, to:to, groups:r.groups, errors:r.errors,
-          count:r.groups.reduce(function(a, g){ return a + g.payments.length + g.expenses.length; }, 0)};
+          count:r.groups.reduce(function(a, g){ return a + g.payments.length + g.expenses.length; }, 0),
+          bankTotal:r.total, notReal:r.notReal};   // v7.378: для звірки «у банку N — показано M»
 }
 // Нічний прогін: забирає «вчора» по всіх токенах лише для реєстру покриття (внесення — після перегляду CFO).
 function bankNightly(){
