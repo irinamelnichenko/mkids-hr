@@ -127,6 +127,7 @@ td.n{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
 td.pb{width:45%}
 td.pb i{display:block;height:8px;border-radius:4px;background:var(--b)}
 table.locs label{display:flex;align-items:center;gap:6px;cursor:pointer}
+table.locs tr.grp td{padding-top:10px;border-bottom:1px solid #e2e8f0}
 .sw{display:inline-block;width:12px;height:12px;border-radius:50%;flex:0 0 12px}
 ul.miss{margin:8px 0;padding-left:18px;max-height:260px;overflow:auto;font-size:13px}
 ul.miss li{margin:2px 0}
@@ -877,7 +878,10 @@ var LOC_COLORS = ['#e6194b','#3cb44b','#4363d8','#f58231','#911eb4','#0ea5b7','#
 var GEO_LABEL = {ok:'знайдено', picked:'обрано зі списку', manual:'поставлено вручну', approx:'приблизно (вулиця)',
                  far:'⚠️ інше місто', not_found:'⚠️ адресу не знайдено', pending:'⏳ координати ще шукаються',
                  error:'⚠️ помилка пошуку', no_address:'немає адреси'};
-var M = { map:null, data:null, kidsLayer:null, locLayer:null, sel:'', status:'live', group:'', cluster:true,
+// v7.388: групи локацій (тип із реєстру): садочки → школи → управління
+var LOC_GROUPS = [{k:'Садочок', t:'🏠 Садочки'}, {k:'Школа', t:'🏫 Школи'}, {k:'Управління', t:'🏢 Управління'}];
+function locGroupOf(l){ var t = (M.typByLoc || {})[l] || ''; return LOC_GROUPS.some(function(g){ return g.k === t; }) ? t : 'Управління'; }
+var M = { typByLoc:{}, map:null, data:null, kidsLayer:null, locLayer:null, sel:'', status:'live', group:'', cluster:true,
           hidden:{}, colors:{}, pickLoc:false, markers:{} };
 
 function canMap(){ return !!(S.user && MAP_ROLES.indexOf(String(S.user.role || '').toLowerCase()) !== -1); }
@@ -924,6 +928,7 @@ async function load(){
   if (!j || !j.ok){ setCloudStatus('err', j && j.error); showPanelMsg(esc((j && j.error) || 'Помилка сервера')); return; }
   setCloudStatus('ok');
   M.data = j;
+  try { var jl = await apiGet('getLocations'); ((jl && jl.data) || []).forEach(function(l){ M.typByLoc[String(l.loc || '').trim()] = String(l.typ || '').trim(); }); } catch(_t){}   // v7.388
   var locs = sortByLocationOrder(Object.keys(j.counts || {}));   // v7.385
   M.colors = {}; locs.forEach(function(l, i){ M.colors[l] = LOC_COLORS[i % LOC_COLORS.length]; });
   var sel = document.getElementById('locSel');
@@ -932,8 +937,10 @@ async function load(){
     sel.innerHTML = '<option>' + esc(j.scope) + '</option>'; sel.disabled = true;
   } else {
     if (M.sel && locs.indexOf(M.sel) === -1) M.sel = '';
-    sel.innerHTML = '<option value="">Усі локації</option>' + locs.map(function(l){
-      return '<option' + (l === M.sel ? ' selected' : '') + '>' + esc(l) + '</option>'; }).join('');
+    sel.innerHTML = '<option value="">Усі локації</option>' + LOC_GROUPS.map(function(g){   // v7.388: групи
+      var ls = locs.filter(function(l){ return locGroupOf(l) === g.k; }); if (!ls.length) return '';
+      return '<optgroup label="' + esc(g.t) + '">' + ls.map(function(l){
+        return '<option' + (l === M.sel ? ' selected' : '') + '>' + esc(l) + '</option>'; }).join('') + '</optgroup>'; }).join('');
     sel.disabled = false;
   }
   fillGroups();
@@ -1092,13 +1099,21 @@ function renderPanel(kids){
   } else {
     var counts = M.data.counts || {}, locGeo = M.data.locGeo || {};
     var locs = sortByLocationOrder(Object.keys(counts));   // v7.385
-    h += '<div class="pcard"><h4>Локації</h4><table class="locs">' + locs.map(function(l){
+    var locRow = function(l){
       var c = counts[l], mine = (M.data.kids || []).filter(function(k){ return k.loc === l && k.lat != null; }), lp = locGeo[l];
       var md = lp ? median(mine.map(function(k){ return distKm(lp, [k.lat, k.lng]); })) : null;
-      return '<tr><td><label><input type="checkbox" ' + (M.hidden[l] ? '' : 'checked') + ' onchange="toggleLoc(this,\'' + esc(l).replace(/'/g, "\\'") + '\')">' +
+      return '<tr><td><label style="padding-left:14px"><input type="checkbox" ' + (M.hidden[l] ? '' : 'checked') + ' onchange="toggleLoc(this,\'' + esc(l).replace(/'/g, "\\'") + '\')">' +
         '<span class="sw" style="background:' + M.colors[l] + '"></span>' + esc(l) + '</label></td>' +
         '<td class="n" title="на карті / дітей">' + c.onMap + '/' + c.kids + '</td>' +
         '<td class="n muted" title="медіана відстані до садочка">' + (md != null ? fmtKm(md) : (lp ? '—' : '🏫?')) + '</td></tr>';
+    };
+    // v7.388: групи із заголовком-перемикачем (вся група одним кліком) і підсумком групи
+    h += '<div class="pcard"><h4>Локації</h4><table class="locs">' + LOC_GROUPS.map(function(g){
+      var ls = locs.filter(function(l){ return locGroupOf(l) === g.k; }); if (!ls.length) return '';
+      var on = ls.filter(function(l){ return !M.hidden[l]; }).length;
+      var sOn = ls.reduce(function(a, l){ return a + counts[l].onMap; }, 0), sK = ls.reduce(function(a, l){ return a + counts[l].kids; }, 0);
+      return '<tr class="grp"><td><label><input type="checkbox" ' + (on ? 'checked' : '') + ' data-partial="' + (on && on < ls.length ? 1 : 0) + '" onchange="toggleGroup(\'' + g.k + '\',this.checked)"><b>' + g.t + '</b></label></td>' +
+        '<td class="n"><b>' + sOn + '/' + sK + '</b></td><td></td></tr>' + ls.map(locRow).join('');
     }).join('') + '</table><div class="muted" style="margin-top:6px">на карті / усього дітей · медіана відстані до садочка (🏫? — точку садочка не поставлено)</div></div>';
   }
 
@@ -1110,9 +1125,14 @@ function renderPanel(kids){
       }).join('') + '</ul><div class="muted">Адресу вносять у картці дитини (вкладка «Основне»).</div></details>';
   }
   document.getElementById('panel').innerHTML = h;
+  document.querySelectorAll('#panel input[data-partial="1"]').forEach(function(cb){ cb.indeterminate = true; });   // v7.388: частково
 }
 
 function toggleLoc(cb, loc){ if (cb.checked) delete M.hidden[loc]; else M.hidden[loc] = 1; render(false); }
+function toggleGroup(gk, on){   // v7.388: уся група одним кліком
+  Object.keys((M.data && M.data.counts) || {}).forEach(function(l){ if (locGroupOf(l) !== gk) return; if (on) delete M.hidden[l]; else M.hidden[l] = 1; });
+  render(false);
+}
 
 function wire(){
   document.getElementById('locSel').addEventListener('change', function(){ M.sel = this.value; M.pickLoc = false; fillGroups(); render(true); });
