@@ -1394,10 +1394,13 @@ async function rcBankTokensOpen(){
         + '<code style="color:#64748b">' + escapeHtml(t.masked) + '</code>'
         + '<button class="btn" style="padding:4px 8px" onclick="rcBankTokenRemove(\'' + escapeHtml(t.key) + '\',\'' + escapeHtml(t.label).replace(/'/g, '') + '\')">🗑</button></div>'
         + '<div style="font-size:12px;color:#64748b;margin-top:6px">' + (t.accounts || []).map(function(a){
-            return '<label style="display:flex;gap:6px;align-items:center;margin:2px 0"><input type="checkbox" title="Офісний рахунок — не належить локації"'
-              + (a.office ? ' checked' : '') + ' onchange="rcBankOfficeToggle(\'' + escapeHtml(a.iban) + '\',this.checked)">'
-              + '<span>🏢</span><span>' + escapeHtml(a.iban) + ' · ' + escapeHtml(a.name || '') + (a.lastCovered ? ' · виписка до ' + escapeHtml(a.lastCovered) : '') + '</span></label>'; }).join('')
-        + '<div style="font-size:11px;color:#94a3b8">🏢 — офісний рахунок: звірка не шукає для нього локацію.</div></div></div>';
+            var k = a.kind || (a.office ? 'office' : '');
+            return '<div style="display:flex;gap:6px;align-items:center;margin:3px 0"><select style="font-size:12px" onchange="rcBankKind(\'' + escapeHtml(a.iban) + '\',this.value)">'
+              + '<option value=""' + (k === '' ? ' selected' : '') + '>📍 локація</option>'
+              + '<option value="office"' + (k === 'office' ? ' selected' : '') + '>🏢 офісний</option>'
+              + '<option value="service"' + (k === 'service' ? ' selected' : '') + '>🗂 службовий</option></select>'
+              + '<span>' + escapeHtml(a.iban) + ' · ' + escapeHtml(a.name || '') + (a.lastCovered ? ' · виписка до ' + escapeHtml(a.lastCovered) : '') + '</span></div>'; }).join('')
+        + '<div style="font-size:11px;color:#94a3b8">📍 локація — за реквізитами · 🏢 офісний — витрати розносите вручну · 🗂 службовий (напр. зарплатний) — у звірці не показується.</div></div></div>';
     }).join('') : '<div style="color:#64748b;margin-bottom:10px">Ще немає жодного токена.</div>';
   h += '<div style="border-top:1px solid #e2e8f0;margin-top:12px;padding-top:12px"><b>➕ Додати токен</b>'
     + '<div style="font-size:12px;color:#64748b;margin:4px 0 8px">Приват24 для бізнесу → «Інтеграція (Автоклієнт)» → «Підключити API» → вкладка «ID і Token». Окремий токен на кожен ФОП / ТОВ.</div>'
@@ -1429,10 +1432,10 @@ async function rcBankTokenAdd(){
   showToast('✅ Токен «' + label + '» додано' + (r && r.accounts ? ' · рахунків: ' + Object.keys(r.accounts).length : ''), 'success');
   rcBankTokensOpen();
 }
-async function rcBankOfficeToggle(iban, on){
+async function rcBankKind(iban, kind){   // v7.381: '' | office | service
   try{ await fetch(CFG.SCRIPT_URL,{method:'POST',redirect:'follow',headers:{'Content-Type':'text/plain;charset=utf-8'},
-    body:JSON.stringify({action:'bankAccountMark',actorId:S.user.id,iban:iban,office:!!on})}); }catch(_){}
-  showToast(on?'🏢 Позначено офісним':'Позначку знято','success');
+    body:JSON.stringify({action:'bankAccountMark',actorId:S.user.id,iban:iban,kind:kind})}); }catch(_){}
+  showToast(kind==='office'?'🏢 Позначено офісним':kind==='service'?'🗂 Позначено службовим':'Позначку знято','success');
 }
 async function rcBankTokenRemove(key, label){
   if (!confirm('Прибрати токен «' + label + '»? Виписки з цих рахунків більше не завантажуватимуться.')) return;
@@ -1447,7 +1450,8 @@ async function rcBankTokenRemove(key, label){
 function rcCountCheckHtml(){
   var st=RC.bankStats; if(!st) return '';
   var payAll=0, expAll=0, payLoc=0, payOffice=0, payNoReq=0, payErr=0, intAll=0, trN=0, trSum=0, slN=0, slSum=0;
-  RC.parsed.forEach(function(p){ payAll+=(p.payments||[]).length; expAll+=(p.expenses||[]).length;
+  var svcN=0;
+  RC.parsed.forEach(function(p){ if(p.service){ svcN+=(p.payments||[]).length+(p.expenses||[]).length; } else { payAll+=(p.payments||[]).length; expAll+=(p.expenses||[]).length; }
     (p.internal||[]).forEach(function(x){ intAll++; if(x._int==='salary'){ slN++; slSum+=Number(x.amount)||0; } else { trN++; trSum+=Number(x.amount)||0; } }); });
   RC.groups.forEach(function(g){
     if(g.ok) payLoc+=(g.preview.rows||[]).length;
@@ -1455,13 +1459,14 @@ function rcCountCheckHtml(){
     else if(g.ibanErr) payNoReq+=g.nPay||0;
     else payErr+=g.nPay||0;
   });
-  var shown=payLoc+payOffice+payNoReq+payErr+expAll+intAll, bankTotal=st.bankTotal||0, notReal=st.notReal||0;
+  var shown=payLoc+payOffice+payNoReq+payErr+expAll+intAll+svcN, bankTotal=st.bankTotal||0, notReal=st.notReal||0;
   var ok=(shown+notReal===bankTotal);
   return '<div style="margin-bottom:12px;padding:10px 14px;border-radius:12px;border:1px solid '+(ok?'#bbf7d0':'#fecaca')+';background:'+(ok?'#f0fdf4':'#fef2f2')+';font-size:13px">'
     +(ok?'✅':'⚠️')+' <b>Звірка кількості</b> · '+escapeHtml(st.from)+(st.to!==st.from?' — '+escapeHtml(st.to):'')+'<br>'
     +'У банку: <b>'+bankTotal+'</b> операцій'+(notReal?' (з них не проведені: '+notReal+')':'')
     +' · у системі: <b>'+shown+'</b> = надходжень '+(payAll)+' (по локаціях '+payLoc+(payOffice?', офісні '+payOffice:'')+(payNoReq?', без реквізитів '+payNoReq:'')+(payErr?', з помилкою '+payErr:'')+') + витрат '+expAll+' (режим «Витрати»)'
     +(trN?'<br>↔️ перекази між власними рахунками: <b>'+trN+'</b> на '+fmtUah(trSum)+' ₴ (кожен — двічі: списання й зарахування) — не дохід і не витрата, не показуються':'')
+    +(svcN?'<br>🗂 службові рахунки: <b>'+svcN+'</b> операцій — не показуються':'')
     +(slN?'<br>💼 поповнення зарплатного рахунку: <b>'+slN+'</b> на '+fmtUah(slSum)+' ₴ — ЗП вноситься через «Звірку ЗП» за відомістю, тут не показується':'')
     +(ok?'':'<br><b>Розбіжність: '+(bankTotal-notReal-shown)+'</b> — оновіть виписку або напишіть мені.')+'</div>';
 }
@@ -1664,16 +1669,20 @@ function _rcSortRows(arr){
 async function rcPreviewAll(){
   $('rcWrap').innerHTML='<div class="inv-loading">⏳ Зіставлення платників з дітьми…</div>';
   // лишаємо лише parse-error плашки, ok-групи й офісні перебудовуємо
-  RC.groups=RC.groups.filter(function(g){return !g.ok && !g.office && !g.ibanErr;});
+  RC.groups=RC.groups.filter(function(g){return !g.ok && !g.office && !g.service && !g.ibanErr;});
   for (var i=0;i<RC.parsed.length;i++){
     var pr=RC.parsed[i];
     pr.payments=_rcSortRows(pr.payments); pr.expenses=_rcSortRows(pr.expenses);   // v7.378
     _rcCutInternal(pr);   // v7.380: перекази між власними рахунками — не дохід і не витрата
-    if (!(pr.payments||[]).length) continue;   // надходжень не лишилось — перевіряти нічого (витрати — у режимі «Витрати»)
+    if (pr.service){  // v7.381: службовий (напр. зарплатний) — не звіряємо й не показуємо у «Витратах»
+      RC.groups.push({fileName:pr.fileName, ok:false, service:true, iban:pr.iban, nPay:(pr.payments||[]).length, nExp:(pr.expenses||[]).length});
+      continue;
+    }
     if (pr.office){   // v7.378: офісний рахунок — не належить локації, надходження не звіряємо
       RC.groups.push({fileName:pr.fileName, ok:false, office:true, iban:pr.iban, nPay:(pr.payments||[]).length, nExp:(pr.expenses||[]).length});
       continue;
     }
+    if (!(pr.payments||[]).length) continue;   // надходжень не лишилось — перевіряти нічого (витрати — у режимі «Витрати»)
     try{
       var r=await fetch(CFG.SCRIPT_URL,{ method:'POST', redirect:'follow',
         headers:{'Content-Type':'text/plain;charset=utf-8'},
@@ -1805,6 +1814,7 @@ function _rcMonthOptions(sel){
 function rcExpenseGroups(){
   var map={};
   RC.parsed.forEach(function(p){
+    if(p.service) return;                              // v7.381: службовий рахунок — не у «Витратах»
     if(RC.opex.acc && p.iban!==RC.opex.acc) return;   // v7.380: лише обраний рахунок
     (p.expenses||[]).forEach(function(x){
       var edr=String(x.edrpou||'').trim();
@@ -1836,7 +1846,7 @@ async function rcExpLoad(){
     }catch(e){}
   }
   // v7.380: рахунки з витратами — окремо; локація — за рахунком (офісний / невідомий → вручну)
-  RC.opex.accs = RC.parsed.filter(function(p){ return (p.expenses||[]).length; })
+  RC.opex.accs = RC.parsed.filter(function(p){ return (p.expenses||[]).length && !p.service; })
     .map(function(p){ return {iban:p.iban, office:!!p.office, n:p.expenses.length, loc:p.office?'':(RC.opex.locByIban[p.iban]||'')}; });
   if(!RC.opex.acc || !RC.opex.accs.some(function(a){ return a.iban===RC.opex.acc; })) RC.opex.acc = (RC.opex.accs[0]||{}).iban || '';
   var _cur = RC.opex.accs.filter(function(a){ return a.iban===RC.opex.acc; })[0] || {};
@@ -2437,6 +2447,10 @@ function rcRenderAll(){
   var html='';
   html+=rcCountCheckHtml();   // v7.378: у банку N — у системі M
   RC.groups.filter(function(g){return !g.ok;}).forEach(function(g){
+    if(g.service){
+      html+='<div class="inv-empty" style="text-align:left;margin-bottom:10px;background:#f8fafc;color:#64748b">'+(/^🗂/.test(g.fileName)?'':'🗂 ')+'<b>'+escapeHtml(g.fileName)+'</b> — службовий рахунок, у звірці не показується (операцій: '+((g.nPay||0)+(g.nExp||0))+'). ЗП — через «Звірку ЗП».</div>';
+      return;
+    }
     if(g.office){
       html+='<div class="inv-empty" style="text-align:left;margin-bottom:10px;background:#f8fafc;color:#475569">'+(/^🏢/.test(g.fileName)?'':'🏢 ')+'<b>'+escapeHtml(g.fileName)+'</b> — офісний рахунок, локацію не шукаємо. '
         +'Надходжень: <b>'+g.nPay+'</b>, витрат: <b>'+g.nExp+'</b>'+(g.nExp?' — їх можна рознести по локаціях у режимі «Витрати».':'.')+'</div>';

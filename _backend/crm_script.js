@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.380
+// m.kids CRM — Google Apps Script v7.381
+// v7.381: банк — тип рахунку office | service (службовий, напр. зарплатний: у звірці не показується); bankAccountMark{kind}.
 // v7.380: банк — рядок internal:true, якщо ЄДРПОУ контрагента = ЄДРПОУ рахунку (переказ між власними рахунками).
 // v7.379: Банк_Покриття не пише сьогоднішній (незавершений) день.
 // v7.378: банк — офісні рахунки (bankAccountMark, BANK_OFFICE_ACCS; група office:true без пошуку локації), операції
@@ -6757,7 +6758,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.380', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.381', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -15089,16 +15090,21 @@ function _pbTokens(){ try { return JSON.parse(PropertiesService.getScriptPropert
 function _pbSaveTokens(t){ PropertiesService.getScriptProperties().setProperty('PB_TOKENS', JSON.stringify(t)); }
 // v7.378: офісні рахунки (не належать жодній локації) — ScriptProperties 'BANK_OFFICE_ACCS' {iban: true}.
 function _bankOffice(){ try { return JSON.parse(PropertiesService.getScriptProperties().getProperty('BANK_OFFICE_ACCS') || '{}') || {}; } catch(e){ return {}; } }
-// POST {action:'bankAccountMark', actorId, iban, office:true|false} — позначити рахунок офісним (звірка не шукає локацію).
+// v7.381: тип рахунку — 'office' (офісний: витрати розносяться вручну) | 'service' (службовий, напр. зарплатний:
+// у звірці не показується, ЗП — через «Звірку ЗП»). Старе значення true = 'office'.
+function _bankKind(o, iban){ var v = o[iban]; return v === true ? 'office' : (v || ''); }
+// POST {action:'bankAccountMark', actorId, iban, kind:'office'|'service'|''} (сумісно: office:true|false).
 function bankAccountMark(body){
   body = body || {};
   if (!_bankCfo(body.actorId)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
   var iban = String(body.iban || '').replace(/\s+/g, '').toUpperCase();
   if (!/^UA\d{27}$/.test(iban)) return {ok:false, error:'IBAN у форматі UA + 27 цифр'};
+  var kind = body.kind != null ? String(body.kind) : (body.office === false ? '' : 'office');
+  if (['office', 'service', ''].indexOf(kind) === -1) return {ok:false, error:'kind: office | service | порожньо'};
   var o = _bankOffice();
-  if (body.office === false) delete o[iban]; else o[iban] = true;
+  if (kind) o[iban] = kind; else delete o[iban];
   PropertiesService.getScriptProperties().setProperty('BANK_OFFICE_ACCS', JSON.stringify(o));
-  return {ok:true, iban:iban, office:!!o[iban]};
+  return {ok:true, iban:iban, kind:kind, office:kind === 'office'};
 }
 function _pbMask(t){ t = String(t || ''); return t.length > 12 ? t.slice(0, 6) + '…' + t.slice(-4) : '***'; }
 function _bankCfo(id){
@@ -15151,7 +15157,8 @@ function bankStatus(params){
   if (sh) sh.getDataRange().getValues().slice(1).forEach(function(r){ var a = String(r[0]), d = _histIso(_histDate(r[1])).slice(0, 10); if (!last[a] || d > last[a]) last[a] = d; });
   return {ok:true, tokens:Object.keys(all).map(function(k){ var t = all[k];
     return {key:k, label:t.label, masked:_pbMask(t.token), added:t.added, accounts:Object.keys(t.accounts || {}).map(function(a){
-      return {iban:a, name:t.accounts[a], lastCovered:last[a] || '', office:!!office[a]}; })}; })};
+      var k = _bankKind(office, a);
+      return {iban:a, name:t.accounts[a], lastCovered:last[a] || '', kind:k, office:k === 'office', service:k === 'service'}; })}; })};
 }
 // Транзакції одного токена за період (ISO from..to) з пагінацією.
 function _pbTransactions(token, from, to){
@@ -15197,8 +15204,9 @@ function _bankFetchCore(from, to){
       total++;
       if (String(x.PR_PR || 'r') !== 'r' && String(x.FL_REAL || 'r') !== 'r'){ notReal++; return; }   // лише проведені
       var acc = String(x.AUT_MY_ACC || '').trim(); if (!acc) return;
-      var g = groups[acc] || (groups[acc] = {fileName:(office[acc] ? '🏢 Офісний рахунок · ' : '🏦 ПриватБанк · ') + t.label + ' · ' + acc.slice(-4),
-                                             iban:acc, payments:[], expenses:[], source:'bank', office:!!office[acc]});
+      var kd = _bankKind(office, acc);
+      var g = groups[acc] || (groups[acc] = {fileName:(kd === 'office' ? '🏢 Офісний рахунок · ' : kd === 'service' ? '🗂 Службовий рахунок · ' : '🏦 ПриватБанк · ') + t.label + ' · ' + acc.slice(-4),
+                                             iban:acc, payments:[], expenses:[], source:'bank', office:kd === 'office', service:kd === 'service'});
       var row = _pbRow(x);
       if (String(x.TRANTYPE) === 'C') g.payments.push(row); else g.expenses.push(row);
       var dd = row.date.split('.').reverse().join('-');
