@@ -550,7 +550,6 @@ var PERMISSIONS = {
     'loccard'   // v7.326: Картка локації (редагування)
   ],
   cco: [
-    'dashboard',
     'clients_list','payments','attendance_kids','recalc',
     'employees','timesheet_staff','vacations','sick_leaves',
     'calendar','vacation_schedule',
@@ -602,16 +601,15 @@ var PERMISSIONS = {
     'loccard'   // v7.326: Картка локації (редагування)
   ],
   legal: [
-    'dashboard',
     'clients_list','payments','attendance_kids',
-    'employees','timesheet_staff',
-    'calendar',
+    'employees',
     'client_birthdays',
     'card-employee-info',
     'card-child-banner','card-child-contract',
     'card-child-vacations','card-child-payments','card-child-history',
     'card-child-notes',
-    'finance'
+    'finance',
+    'loccard'   // v7.392: Картка локації (ліцензії, оренда)
   ],
   hr: 'all',
   // v7.237: меню директора починається зі «Списку дітей». Прибрано з САМОЇ
@@ -653,10 +651,10 @@ var PERMISSIONS = {
   vyhovatel: ['activities','predmetnyky','attendance-view','attendance-edit','clients_list','card-child-development']   // v7.214: +predmetnyky (шкільна вихователька веде свій клас)
 };
 (function(){
-  ['cco','legal'].forEach   /* v7.327: без CEO/R&D/HR */(function(r){
+  ['cco'].forEach   /* v7.327: без CEO/R&D/HR */(function(r){
     if (Array.isArray(PERMISSIONS[r])){ PERMISSIONS[r].push('tasks'); PERMISSIONS[r].push('tasks-create'); }
   });
-  PERMISSIONS.cmo = ['dashboard','tasks','tasks-create'];
+  PERMISSIONS.cmo = ['tasks','tasks-create'];   // v7.392: дашборд — лише CFO
 })();
 
 
