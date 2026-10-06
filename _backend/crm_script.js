@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.385
+// m.kids CRM — Google Apps Script v7.386
+// v7.386: відомість на готівку — за ОБРАНИЙ місяць: бюджет − факт місяця (картка+готівка) − переплата попереднього.
 // v7.385: LOCATION_ORDER += «Школа Кар'єрна» (після Школи 228).
 // v7.384: відомість на готівку — за попередній місяць: бюджет − картка ЗА цей місяць (за датою відомості: з 15 числа —
 //   аванс за наступний), мінус готівка, вже записана у «Факт» місяця розрахунку; без хвостів січня…
@@ -6764,7 +6765,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.385', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.386', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -27438,7 +27439,7 @@ rowsHtml,
 }
 
 // v7.71 РОЗРАХУНКОВІ ЛИСТКИ. Кожен — з нової сторінки (page-break-before). Модель B:
-//   v7.384: Нараховано = Бюджет ПОПЕРЕДНЬОГО місяця; Виплата на карту = картка ЗА цей місяць (за датою відомості);
+//   v7.386: Нараховано = Бюджет обраного місяця; Уже виплачено = Факт обраного; Утримано = переплата попереднього;
 //   Враховано з минулих = Σ(Бюджет−Факт) січень→місяць−1; До видачі = Враховано + (Нараховано−Виплата).
 // Порядок листків = порядок зведеної. Усі дані через _cashEsc.
 function _buildCashPayoutSlips(d){
@@ -27451,11 +27452,10 @@ function _buildCashPayoutSlips(d){
       ? '\n  <div class="slip-scissors">- - - - - - - - - - ✂ - - - - - - - - - -</div>' : '';
     // v7.72: назва рядка «враховано з минулих» — за знаком, сума завжди додатна; 0 → не показувати.
     var carry = Number(r.carried) || 0, carryRow = '';
-    if (Number(r.paidCash) > 0) carryRow += '      <tr><td class="lbl">Уже видано готівкою</td><td class="val">' + _fmtUah(r.paidCash) + ' грн</td></tr>\n';   // v7.384
     if (carry > 0){
       carryRow = '      <tr><td class="lbl">Недовидано за минулі місяці</td><td class="val">' + _fmtUah(carry) + ' грн</td></tr>\n';
     } else if (carry < 0){
-      carryRow = '      <tr><td class="lbl">Утримано за переплату минулих місяців</td><td class="val">' + _fmtUah(-carry) + ' грн</td></tr>\n';
+      carryRow = '      <tr><td class="lbl">Утримано: переплата / аванс минулого місяця</td><td class="val">' + _fmtUah(-carry) + ' грн</td></tr>\n';
     }
     return [
 '  <div class="slip' + (isCut ? ' slip-cut3' : '') + '">',
@@ -27467,7 +27467,7 @@ function _buildCashPayoutSlips(d){
 '    <div class="pos">' + _cashEsc(r.posada) + '</div>',
 '    <table>',
 '      <tr><td class="lbl">Нараховано</td><td class="val">' + _fmtUah(r.accrued) + ' грн</td></tr>',
-'      <tr><td class="lbl">Виплата на карту</td><td class="val">' + _fmtUah(r.card) + ' грн</td></tr>',
+'      <tr><td class="lbl">Уже виплачено цього місяця (картка + готівка)</td><td class="val">' + _fmtUah(r.card) + ' грн</td></tr>',
 carryRow +
 '      <tr class="out"><td class="lbl">До видачі готівкою</td><td class="val">' + _fmtUah(r.cash) + ' грн</td></tr>',
 '    </table>',
@@ -27478,7 +27478,6 @@ carryRow +
   }).join('\n');
 }
 
-var CASH_ADVANCE_FROM_DAY = 15;   // v7.384: відомість з цього числа — аванс за наступний місяць
 function cashPayoutSheet(body){
   _salaryBump(body && body.loc);   // v7.331
   try {
@@ -27490,48 +27489,27 @@ function cashPayoutSheet(body){
     if (['both','sheet','slips'].indexOf(parts) === -1) parts = 'both';
     if (!loc) return {ok:false, error:'loc обовʼязковий'};
     if (!month || month < 1 || month > 12) return {ok:false, error:'month має бути 1-12'};
-    // v7.384: відомість — за ПОПЕРЕДНІЙ місяць (A = month−1) без хвостів січня…: готівка = бюджет A − усе, що
-    // виплачено ЗА A на картку. «За який місяць» картка — з дати відомості (Звірка_ЗП_Лог, №YYMMDD…):
-    // з 15 числа — аванс за НАСТУПНИЙ місяць (22.09 → жовтень), до 15 — розрахунок за ПОПЕРЕДНІЙ (02.10 → вересень).
-    // «Факт» Salary тут не беремо: у ньому і картка, і готівка, і зсув місяців.
-    var accM = (month === 1) ? 12 : month - 1, accY = (month === 1) ? year - 1 : year;
-    var sd = getSalaryData(loc, accY);
+    // v7.386: відомість за ОБРАНИЙ місяць M (бюджет M = ЗП за відпрацьований попередній місяць, виплата до 10-го):
+    //   до видачі = бюджет M − уже виплачене в M (увесь «Факт» M: картка + готівка)
+    //               − переплата M−1 (факт M−1 > бюджет M−1; так аванс ~22-го попереднього місяця йде в наступну виплату).
+    // Без хвостів раніших місяців.
+    var sd = getSalaryData(loc, year);
     if (!sd.ok) return sd;
+    var prevSd = (month === 1) ? getSalaryData(loc, year - 1) : sd, prevIdx = (month === 1) ? 11 : month - 2;
+    var prevByName = {};
+    ((prevSd && prevSd.ok && prevSd.rows) || []).forEach(function(r){ prevByName[_nameFold(r.name)] = (r.months || [])[prevIdx] || {}; });
     var SKIP = {section_header:true, group_header:true, subtotal:true};
-    var cardByRow = {}, cardRefs = {}, bookedInA = {};   // bookedInA — картки, зараховані у «Факт» місяця РОЗРАХУНКУ
-    try {
-      var lv = _getSalaryReconLogSheet().getDataRange().getValues();
-      for (var li = 1; li < lv.length; li++){
-        if (String(lv[li][2] || '').trim() !== loc) continue;
-        var vno = String(lv[li][3] || ''), mm = /^(\d{2})(\d{2})(\d{2})/.exec(vno);
-        var am, ay;
-        if (mm){
-          var vy = 2000 + Number(mm[1]), vm = Number(mm[2]), vd = Number(mm[3]);
-          if (vd >= CASH_ADVANCE_FROM_DAY){ am = vm + 1; ay = vy; if (am > 12){ am = 1; ay++; } }
-          else { am = vm - 1; ay = vy; if (am < 1){ am = 12; ay--; } }
-        } else continue;                                          // без дати у № — не знаємо, за який місяць
-        var rk = _nameFold(lv[li][8]);
-        if (Number(lv[li][9]) === accM && Number(mm[1]) + 2000 === accY) bookedInA[rk] = (bookedInA[rk] || 0) + (_opexNum(lv[li][12]) || 0);
-        if (am !== accM || ay !== accY) continue;
-        cardByRow[rk] = (cardByRow[rk] || 0) + (_opexNum(lv[li][12]) || 0);
-        (cardRefs[rk] = cardRefs[rk] || []).push(vno.slice(4, 6) + '.' + vno.slice(2, 4));
-      }
-    } catch(_lg){}
-    // v7.384: готівку за місяць CFO видає в ТОМУ Ж місяці й записує в його «Факт». Уже видана за A готівка =
-    // факт A − картки, зараховані в A. Факт = бюджету → усе видано → у відомості 0 (без подвійної видачі).
     var out = [];
     (sd.rows || []).forEach(function(r){
       if (r._section !== 'main') return;                        // лише основний штат
       if (!r._category || SKIP[r._category]) return;             // не заголовки/підсумки
-      var bud = Number(((r.months || [])[accM - 1] || {}).budget) || 0;
-      var rk0 = _nameFold(r.name);
-      var card = Math.round(cardByRow[rk0] || 0);
-      var factA = Number(((r.months || [])[accM - 1] || {}).fact) || 0;
-      var paidCash = Math.max(0, Math.round(factA - (bookedInA[rk0] || 0)));
-      var cash = Math.round(bud - card - paidCash);
-      if (cash <= 0) return;                                     // виплачено повністю (або переплата) → не в листок
+      var cur = (r.months || [])[month - 1] || {}, prv = prevByName[_nameFold(r.name)] || {};
+      var bud = Math.round(Number(cur.budget) || 0), paid = Math.round(Number(cur.fact) || 0);
+      var over = Math.max(0, Math.round((Number(prv.fact) || 0) - (Number(prv.budget) || 0)));
+      var cash = bud - paid - over;
+      if (cash <= 0) return;                                     // усе виплачено (або переплата) → не в листок
       out.push({name:r.name, category:r._category, posada:_cashPosadaLabel(r._category), pib:_cashStripPosada(r.name),
-                cash:cash, accrued:Math.round(bud), card:card, carried:0, paidCash:paidCash, cardDates:(cardRefs[_nameFold(r.name)] || []).join(', ')});
+                cash:cash, accrued:bud, card:paid, carried:-over});
     });
     var CATORD = {director:0, teacher:1, assistant:2, nurse:3, guard:4, cleaner:5, duty:6};
     out.sort(function(a, b){
@@ -27540,13 +27518,12 @@ function cashPayoutSheet(body){
       return ca - cb || a.pib.localeCompare(b.pib, 'uk');
     });
     var rows = out.map(function(x, i){ return {n:i + 1, pib:x.pib, posada:x.posada, cash:x.cash,
-                                               accrued:x.accrued, card:x.card, carried:x.carried, paidCash:x.paidCash, cardDates:x.cardDates}; });
+                                               accrued:x.accrued, card:x.card, carried:x.carried}; });
     var total = rows.reduce(function(s, x){ return s + x.cash; }, 0);
-    // v7.73: розрахунок за ПОПЕРЕДНІЙ місяць, виплата — за обраний. Січень → грудень минулого року.
+    // v7.386: бюджет обраного місяця = ЗП за відпрацьований попередній; виплата — до 10-го обраного.
     var prevM = (month === 1) ? 12 : month - 1;
-    var prevY = (month === 1) ? year - 1 : year;
-    var accrualLabel = (MONTHS_CAL[prevM - 1] || ('міс ' + prevM)) + ' ' + prevY;   // «Розрахунок за»
-    var payoutLabel  = (MONTHS_CAL[month - 1] || ('міс ' + month)) + ' ' + year;    // «Виплата»
+    var accrualLabel = (MONTHS_CAL[month - 1] || ('міс ' + month)) + ' ' + year + ' (за відпрацьований ' + String(MONTHS_CAL[prevM - 1] || '').toLowerCase() + ')';
+    var payoutLabel  = 'до 10.' + ('0' + month).slice(-2) + '.' + year;
     var dateStr = Utilities.formatDate(new Date(), 'Europe/Kiev', 'dd.MM.yyyy');
     var html = _buildCashPayoutHtml({loc:loc, accrualLabel:accrualLabel, payoutLabel:payoutLabel, rows:rows, total:total,
                                      totalWords:_numberToUkrainianWords(total), dateStr:dateStr, parts:parts});
