@@ -2401,7 +2401,7 @@ var SESSION_TTL_MS = 7 * 24 * 3600 * 1000;
     if (!_roUser() || document.getElementById('mkRoBadge')) return;
     try { var b = document.createElement('div'); b.id = 'mkRoBadge';
       b.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:99998;background:#f3e8ff;color:#6d28d9;border:1px solid #d8b4fe;padding:3px 12px;border-radius:12px;font:12px/1.4 system-ui,sans-serif;font-weight:700;pointer-events:none';
-      b.textContent = '👑 Власник · лише перегляд';
+      b.textContent = 'Founder · лише перегляд';
       (document.body || document.documentElement).appendChild(b); } catch(_e){}
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _roBadge); else _roBadge();
@@ -2521,11 +2521,11 @@ function _showStaleSession(){
 // ── НОВИЙ ЛОГІН: 3 вкладки (Менеджмент / Директор / Медсестра) ────────────
 const ROLE_EMOJI_NEW = {
   cfo:'💰', ceo:'🏢', cco:'📈', coo:'⚙️',
-  rnd_director:'🎓', hr_trainer:'📚', legal:'⚖️', cmo:'📣', founder:'👑'
+  rnd_director:'🎓', hr_trainer:'📚', legal:'⚖️', cmo:'📣', founder:''
 };
 const ROLE_SHORT_NEW = {
   cfo:'CFO', ceo:'CEO', cco:'CCO', coo:'COO',
-  rnd_director:'R&D', hr_trainer:'L&D', legal:'Legal', cmo:'CMO', founder:'Власник'
+  rnd_director:'R&D', hr_trainer:'L&D', legal:'Legal', cmo:'CMO', founder:'Founder'
 };
 const ROLE_ORDER_NEW = ['cfo','founder','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo'];
 
@@ -2620,9 +2620,9 @@ async function loadUsersForDropdown(){
     });
     var html = '<option value="">— Виберіть користувача —</option>';
     actives.forEach(function(u){
-      var em  = ROLE_EMOJI_NEW[u.role] || '👤';
+      var em  = (u.role in ROLE_EMOJI_NEW) ? ROLE_EMOJI_NEW[u.role] : '👤';   // v7.404: founder — без значка
       var lbl = ROLE_SHORT_NEW[u.role] || u.role.toUpperCase();
-      html += '<option value="' + esc(u.login) + '">' + em + ' ' + lbl + ' — ' + esc(u.name) + '</option>';
+      html += '<option value="' + esc(u.login) + '">' + (em ? em + ' ' : '') + lbl + ' — ' + esc(u.name) + '</option>';
     });
     sel.innerHTML = html;
   } catch(e){

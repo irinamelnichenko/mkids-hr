@@ -496,7 +496,7 @@ var SESSION_KEY='mkids_session', SESSION_TTL_MS = 7 * 24 * 3600 * 1000;
     if (!_roUser() || document.getElementById('mkRoBadge')) return;
     try { var b = document.createElement('div'); b.id = 'mkRoBadge';
       b.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:99998;background:#f3e8ff;color:#6d28d9;border:1px solid #d8b4fe;padding:3px 12px;border-radius:12px;font:12px/1.4 system-ui,sans-serif;font-weight:700;pointer-events:none';
-      b.textContent = '👑 Власник · лише перегляд';
+      b.textContent = 'Founder · лише перегляд';
       (document.body || document.documentElement).appendChild(b); } catch(_e){}
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _roBadge); else _roBadge();
