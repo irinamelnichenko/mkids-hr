@@ -1600,6 +1600,9 @@ function saveLocalCRM(){ safeSetItem(CFG.SK, JSON.stringify(S.crm)); }
 
 var _crmSyncTimers   = {};
 var _lastSaveTs      = 0;
+// v7.401: пошук — перемальовуємо через 220 мс після останньої літери, а не на кожну (повний #main)
+var _searchTmr=0;
+function _searchInput(v){ S.searchQ=v; clearTimeout(_searchTmr); _searchTmr=setTimeout(renderClients, 220); }
 var _autoRefreshLastTs = Date.now();
 // v7.401: версія карток на бекенді (ver_clients). true = змінилась із минулої перевірки (або бекенд
 // ще без getCacheVer — тоді поводимось як раніше й оновлюємо).
@@ -3372,7 +3375,7 @@ function renderGlobalSearchHtml(q){
 }
 function renderGlobalSearchPage(){
   var html='<div class="card" style="margin-bottom:12px"><div style="padding:10px 14px"><div class="filters" style="margin:0;padding:0;border:none;background:none;gap:8px">'
-    +'<input class="search-inp" placeholder="🔍 Дитина, мама, тато, телефон, № договору…" value="'+esc(S.searchQ)+'" oninput="S.searchQ=this.value;renderClients()">'
+    +'<input class="search-inp" placeholder="🔍 Дитина, мама, тато, телефон, № договору…" value="'+esc(S.searchQ)+'" oninput="_searchInput(this.value)">'
     +'<button type="button" class="btn btn-secondary btn-sm" onclick="S.searchQ=\'\';renderClients()">✕ Очистити</button>'
     +'</div></div></div>'+renderGlobalSearchHtml(S.searchQ.trim());
   var _si=document.querySelector('.search-inp'), _sf=_si&&document.activeElement===_si, _ss=_sf?_si.selectionStart:0, _se=_sf?_si.selectionEnd:0;
@@ -3467,7 +3470,7 @@ function renderClients(){
     +'<div class="card" style="margin-bottom:12px"><div style="padding:10px 14px">'
     +listChipsHtml
     +'<div class="filters" style="margin:0;padding:0;border:none;background:none;gap:8px">'
-    +'<input class="search-inp" placeholder="🔍 Дитина, мама, тато, телефон, № договору…" value="'+esc(S.searchQ)+'" oninput="S.searchQ=this.value;renderClients()">'
+    +'<input class="search-inp" placeholder="🔍 Дитина, мама, тато, телефон, № договору…" value="'+esc(S.searchQ)+'" oninput="_searchInput(this.value)">'
     +(isHR()?'<select class="flt-sel" onchange="S.listLoc=this.value;renderClients()">'+listLocOpts+'</select>':'')
     +'<select class="flt-sel" data-permission="finance" onchange="S.selStatus=this.value;renderClients()"><option value="">Всі статуси</option><option value="paid"'+(S.selStatus==='paid'?' selected':'')+'>✅ Оплачено</option><option value="debt"'+(S.selStatus==='debt'?' selected':'')+'>❌ Борг</option><option value="over"'+(S.selStatus==='over'?' selected':'')+'>💰 Переплата</option></select>'
     +'<button type="button" data-permission="finance" class="att-chip'+(S.onlyDebtors?' att-chip-active':'')+'" style="'+(S.onlyDebtors?'background:var(--red2);border-color:var(--red2)':'')+'" onclick="toggleOnlyDebtors()">👁 Тільки боржники</button>'
@@ -8969,7 +8972,7 @@ function renderClientsYearly(monthStripHtml){
   allGroups.sort(function(a,b){ return String(a).localeCompare(String(b),'uk'); });
 
   html+='<div class="filters">'
-    +'<input class="search-inp" placeholder="🔍 Дитина, мама, тато, телефон, № договору…" value="'+esc(S.searchQ)+'" oninput="S.searchQ=this.value;renderClients()">'
+    +'<input class="search-inp" placeholder="🔍 Дитина, мама, тато, телефон, № договору…" value="'+esc(S.searchQ)+'" oninput="_searchInput(this.value)">'
     +(isHR()?'<select class="flt-sel" onchange="S.selLoc=this.value;S.selGroup=\'\';renderClients()"><option value="">Всі локації</option>'+locs.map(function(l){ return '<option value="'+esc(l.loc)+'"'+(S.selLoc===l.loc?' selected':'')+'>'+esc(l.loc)+'</option>'; }).join('')+'</select>':'')
     +'<select class="flt-sel" onchange="S.selGroup=this.value;renderClients()"><option value="">Всі групи</option>'+allGroups.map(function(g){ return '<option value="'+esc(g)+'"'+(S.selGroup===g?' selected':'')+'>'+esc(g)+'</option>'; }).join('')+'</select>'
     +'<select class="flt-sel" onchange="S.selStatus=this.value;renderClients()"><option value="">Всі статуси</option><option value="debtors"'+(S.selStatus==='debtors'?' selected':'')+'>❌ Тільки боржники</option></select>'
