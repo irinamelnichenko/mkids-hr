@@ -496,6 +496,49 @@ td.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
     if (!t || _tokExpired(t)){ _kick(); return false; }
     return true;
   }
+  // ── v7.403: stale-while-revalidate — дії, які можна віддавати з кешу (лише читання, важкі) ──
+  var SWR_ACTIONS = {getPaymentsYearly:1, getPayments:1, getEmployees:1, getKomplektaciyaData:1, getGroupNorms:1,
+    getLocationCapacity:1, getLocationCards:1, getSalaryOverview:1, getOpexOverview:1, getOverviewAnalytics:1,
+    getVyhovatelRatings:1, getPredmetnyky:1, getPredSplits:1, getActivitiesCatalog:1, getAttendanceMarks:1,
+    getDopMerges:1, getDopSplits:1, getSchoolRoster:1, getSalaryData:1, getOpexData:1, getCategoryAnalytics:1,
+    getLeads:1, getEntryHistory:1, getInvoiceListData:1, getFillStatus:1, getClientMap:1, getUsers:1, getTasks:1,
+    getMealCatalog:1, getMealMarks:1, cashList:1, getErrLog:1, getSalaryExtrasRows:1, getOpexContractors:1,
+    getSalaryFopMap:1, getBdayStatus:1};
+  function _swrKey(u){
+    try { var s = JSON.parse(localStorage.getItem('mkids_session') || 'null'); var uid = s && s.user && s.user.id;
+      if (!uid) return ''; return uid + '|' + u.replace(/([?&])token=[^&]*&?/, '$1').replace(/[?&]$/, ''); } catch(_e){ return ''; }
+  }
+  var _swrDbP = null;
+  function _swrDb(){
+    if (_swrDbP) return _swrDbP;
+    _swrDbP = new Promise(function(res){
+      try { var rq = indexedDB.open('mkids_swr', 1);
+        rq.onupgradeneeded = function(){ try { rq.result.createObjectStore('r'); } catch(_e){} };
+        rq.onsuccess = function(){ res(rq.result); }; rq.onerror = function(){ res(null); }; rq.onblocked = function(){ res(null); };
+      } catch(_e){ res(null); }
+    });
+    return _swrDbP;
+  }
+  function _swrGet(k){ return _swrDb().then(function(db){ if (!db) return null; return new Promise(function(res){
+    try { var q = db.transaction('r').objectStore('r').get(k); q.onsuccess = function(){ res(q.result || null); }; q.onerror = function(){ res(null); }; }
+    catch(_e){ res(null); } }); }); }
+  function _swrPut(k, v){ _swrDb().then(function(db){ if (!db) return; try { db.transaction('r', 'readwrite').objectStore('r').put(v, k); } catch(_e){} }); }
+  var _swrFreshActs = {}, _swrFreshTmr = 0;
+  function _swrFresh(act){
+    _swrFreshActs[act] = 1; clearTimeout(_swrFreshTmr);
+    _swrFreshTmr = setTimeout(function(){
+      var acts = Object.keys(_swrFreshActs); _swrFreshActs = {};
+      var ev; try { ev = new CustomEvent('mkids:fresh', {detail: {actions: acts}, cancelable: true}); } catch(_e){ return; }
+      if (window.dispatchEvent(ev) === false) return;          // сторінка оновилась сама
+      if (document.getElementById('mkSwrToast')) return;
+      var d = document.createElement('div'); d.id = 'mkSwrToast';
+      d.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:99999;background:#1f2d3d;color:#fff;padding:10px 14px;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.25);font:13px/1.3 system-ui,sans-serif;display:flex;gap:10px;align-items:center';
+      d.innerHTML = '🔄 Є свіжіші дані <button style="background:#27ae60;color:#fff;border:0;border-radius:7px;padding:5px 10px;cursor:pointer;font-weight:700">Оновити</button><span style="cursor:pointer;opacity:.7;padding:0 4px">✕</span>';
+      d.querySelector('button').onclick = function(){ location.reload(); };
+      d.querySelector('span').onclick = function(){ d.remove(); };
+      (document.body || document.documentElement).appendChild(d);
+    }, 800);
+  }
   window.fetch = function(input, init){
     var url = '';
     try { url = (typeof input === 'string') ? input : (input && input.url) || ''; } catch(_e){}
@@ -513,6 +556,34 @@ td.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
         }
       }
     } catch(_e){}
+    // v7.403 МИТТЄВЕ ВІДКРИТТЯ (stale-while-revalidate): важкі запити на читання відповідають одразу з кешу
+    //   браузера (IndexedDB, окремо для кожного користувача, до доби), а свіжа відповідь тягнеться у фоні.
+    //   Змінилась — подія 'mkids:fresh' (дашборд перемальовується сам, на інших сторінках — кнопка «Оновити»).
+    //   Після будь-якого запису (POST) 90 с кеш не віддається — щоб після збереження не блимали старі дані.
+    var _swrM = ((init && init.method) || 'GET').toUpperCase();
+    if (_swrM === 'POST'){ try { localStorage.setItem('mkids_swr_dirty', String(Date.now() + 90000)); } catch(_e){} }
+    var _swrAct = (typeof input === 'string') ? ((/[?&]action=([^&]+)/.exec(input) || [])[1] || '') : '';
+    if (_swrM === 'GET' && SWR_ACTIONS[_swrAct] && !/[?&]nocache=1/.test(input) && window.indexedDB){
+      var _swrK = _swrKey(input);
+      if (_swrK){
+        var _in = input, _it = init;
+        return _swrGet(_swrK).then(function(c){
+          var dirty = false; try { dirty = Date.now() < Number(localStorage.getItem('mkids_swr_dirty') || 0); } catch(_e){}
+          var net = function(served){
+            return _of(_in, _it).then(_watch).then(function(r){
+              try { r.clone().text().then(function(t){ try { var j = JSON.parse(t);
+                if (j && j.ok !== false){ _swrPut(_swrK, {body: t, ts: Date.now()}); if (served && c && c.body !== t) _swrFresh(_swrAct); }
+              } catch(_e){} }); } catch(_e){}
+              return r; });
+          };
+          if (c && c.body && !dirty && Date.now() - c.ts < 86400000){
+            if (Date.now() - c.ts > 15000) net(true).catch(function(){});
+            return new Response(c.body, {status: 200, headers: {'Content-Type': 'application/json'}});
+          }
+          return net(false);
+        });
+      }
+    }
     // v7.401: getLocations — спільний кеш у браузері на 30 хв для всіх сторінок (було ~8 с на кожному старті)
     if (typeof input === 'string' && /[?&]action=getLocations(&|$)/.test(input) && !/[?&]nocache=1/.test(input)
         && ((init && init.method) || 'GET').toUpperCase() === 'GET'){
