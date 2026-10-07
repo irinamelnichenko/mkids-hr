@@ -1504,15 +1504,15 @@ async function rcOnFile(input){
 // Заявки збирає бот у листі «Рахунки_Бот»; тут ми даємо бекенду видаткові рядки
 // поточної виписки і показуємо, які заявки закриваються. Виписка на сервер не
 // їде — лише {date, amount, edrpou, counterparty, purpose, ref}.
-var RCINV = {busy:false, res:null, applied:false, err:'', hints:{}};
+var RCINV = {busy:false, res:null, applied:false, err:'', hints:{}, byRef:{}};   // v7.398: byRef — заявка на конкретний платіж
 // Стаття із підпису рахунку («вода», «Кухня») — вільний текст, а статті OPEX — фіксований
 // список файлу локації. Зіставляємо нормалізовано: точний збіг, далі однозначний префікс.
 // Неоднозначне або невідоме — НЕ підставляємо: хибна стаття гірша за порожню, бо її
 // не видно оком у списку з 24 позицій.
 function _rcInvNorm(x){ return String(x||'').replace(/[\s\u00A0]+/g,'').toLowerCase(); }
-function _rcInvCatMatch(txt){
+function _rcInvCatMatch(txt, loc){
   var k=_rcInvNorm(txt); if(k.length<2) return '';
-  var cats=_rcCats(), exact=[], pref=[];
+  var cats=_rcCatsFor(loc), exact=[], pref=[];
   cats.forEach(function(c){
     var ck=_rcInvNorm(c);
     if(ck===k) exact.push(c);
@@ -1520,28 +1520,51 @@ function _rcInvCatMatch(txt){
   });
   if(exact.length===1) return exact[0];
   if(!exact.length && pref.length===1) return pref[0];
+  // v7.398: підпис директорки — вільний текст («Господ.товари», «Аптечка для укриття», «Прання білизни»).
+  // Правила зібрані з того, як CFO розносила оплачені заявки (жовтень 2026). Підставляємо, лише якщо
+  // така стаття є у файлі локації; інакше — порожньо (далі спрацює мапа контрагентів).
+  var t=String(txt||'').toLowerCase();
+  for(var i=0;i<RC_INV_CAT_RULES.length;i++){
+    if(!RC_INV_CAT_RULES[i][0].test(t)) continue;
+    var want=_rcInvNorm(RC_INV_CAT_RULES[i][1]);
+    for(var c=0;c<cats.length;c++) if(_rcInvNorm(cats[c])===want) return cats[c];
+    return '';
+  }
   return '';
 }
-// Підставляє локацію і статтю заявки у відповідний рядок витрат. Ключ групи —
-// rcContractorKey(ЄДРПОУ ПЛАТЕЖУ, назва платника), тому бекенд і віддає payEdrpou.
-function _rcInvApplyHints(j){
-  RCINV.hints={};
-  (j&&j.matched||[]).forEach(function(m){
-    var key=rcContractorKey(m.payEdrpou||m.edrpou, m.counterparty);
-    var cat=_rcInvCatMatch(m.category);
-    var h=RCINV.hints[key];
-    if(!h){ RCINV.hints[key]={loc:m.loc||'', category:cat, raw:m.category||'', ids:[m.id], conflict:false}; return; }
-    h.ids.push(m.id);
-    // Один контрагент — кілька рахунків у цій виписці з РІЗНИМИ локацією/статтею:
-    // рядок витрати один, тож автопідстановка тут була б вгадуванням.
-    if((h.category||'')!==(cat||'') || (h.loc||'')!==(m.loc||'')) h.conflict=true;
-  });
-  Object.keys(RCINV.hints).forEach(function(k){
-    var h=RCINV.hints[k];
-    if(h.conflict) return;
-    var sel=_rcSel(k);
-    if(h.loc) sel.loc=h.loc;                        // локація рядка — з картки рахунку
-    if(h.category && sel.category==null) sel.category=h.category;   // ручний вибір не перебиваємо
+var RC_INV_CAT_RULES=[
+  [/аптеч|бейдж|бейж|непередбач|турнікет/, 'НЕЗАПЛАНОВАНІ ВИТРАТИ'],
+  [/госп|хоз|хімі|миюч|прибиран/,           'ХОЗ.ТОВАРИ'],
+  [/канц|фарб|картридж|папір|принтер/,      'КАНЦТОВАРИ'],
+  [/сніданк/,                               'СНІДАНКИ'],
+  [/прання|пральн/,                         'ПРАЛЬНЯ'],
+  [/комунал|охорон|електронн\S* журнал/,    'КОМУНАЛЬНІ ПОСЛУГИ'],
+  [/персонал/,                              'Персонал'],
+  [/^\s*вод[аип]?\s*$/,                     'Вода']
+];
+// v7.398: заявка → КОНКРЕТНИЙ платіж (ref), як у надходженнях. Кожен такий платіж — окремий рядок
+// «Витрат» (ключ 'inv:'+ref) з локацією і статтею (або розбивкою) із заявки. Раніше підказка лягала на
+// контрагента під ключем 'e:ЄДРПОУ', а рядок шукав просто 'ЄДРПОУ' — підстановка не доходила ніколи;
+// а коли в контрагента кілька рахунків різним локаціям («Пожежна безпека» × 6), вимикалась зовсім.
+async function _rcInvApplyHints(j){
+  RCINV.hints={}; RCINV.byRef={};
+  var ms=(j&&j.matched||[]).filter(function(m){ return m.ref; });
+  var locs={}; ms.forEach(function(m){ if(m.loc) locs[m.loc]=1; });
+  for(var l in locs) await _rcEnsureCats(l);           // статті — з OPEX-файлу локації заявки
+  ms.forEach(function(m){
+    var h={id:m.id, number:m.number||'', loc:m.loc||'', raw:m.category||'', category:_rcInvCatMatch(m.category, m.loc), splits:null, badSplit:''};
+    if(m.split && m.split.length > 1){
+      var sp=m.split.map(function(x){ return {category:_rcInvCatMatch(x.opex||x.name, m.loc), amount:Number(x.amount)||0, raw:x.name}; });
+      var miss=sp.filter(function(x){ return !x.category; });
+      if(miss.length) h.badSplit=miss.map(function(x){ return x.raw; }).join(', ');
+      h.splits=sp.map(function(x){ return {category:x.category, amount:x.amount}; });
+    }
+    RCINV.byRef[m.ref]=h;
+    var sel=_rcSel('inv:'+m.ref);
+    if(sel._touched) return;                           // ручний вибір не перебиваємо
+    sel.loc=h.loc; sel.remember=false;                 // стаття з рахунку — не правило для контрагента
+    if(h.splits) sel.splits=h.splits.map(function(x){ return {category:x.category, amount:x.amount}; });
+    else if(h.category) sel.category=h.category;
   });
 }
 function _rcInvPayments(){
@@ -1568,7 +1591,7 @@ async function rcInvMatch(apply){
     if(!j.ok){ RCINV.err=j.error||'match failed'; }
     else {
       RCINV.res=j;
-      _rcInvApplyHints(j);                                   // локація+стаття → у рядок витрати
+      await _rcInvApplyHints(j);                             // локація+стаття → у рядок витрати
       if(apply){ RCINV.applied=true; showToast('✅ Позначено оплаченими: '+(j.marked||0),'success'); }
     }
   }catch(e){ RCINV.err=String(e&&e.message||e); }
@@ -1614,7 +1637,8 @@ function rcRenderInvoices(){
 }
 
 function rcResetOpexState(){
-  RCINV.res=null; RCINV.applied=false; RCINV.err=''; RCINV.hints={};   // v7.320: нова виписка — нова звірка
+  RCINV.res=null; RCINV.applied=false; RCINV.err=''; RCINV.hints={}; RCINV.byRef={};   // v7.320: нова виписка — нова звірка
+  RC.opex.catsByLoc={};   // v7.398: статті OPEX по локаціях (рядок заявки може бути іншої локації, ніж рахунок)
   RC.opex.loaded=false; RC.opex.busy=false;
   RC.opex.loc=''; RC.opex.locAuto=false; RC.opex.locList=[];
   RC.opex.cats=null; RC.opex.sel={}; RC.opex.month=0;
@@ -1817,7 +1841,9 @@ function rcExpenseGroups(){
       var edr=String(x.edrpou||'').trim();
       var nm=String(x.counterparty||'').trim();
       var key=edr || nm.toLowerCase().replace(/\s+/g,' ') || '—';
-      if(!map[key]) map[key]={key:key, name:nm||'—', edrpou:edr, count:0, sum:0, purposes:[], pays:[]};
+      var inv=RCINV.byRef[String(x.ref||'').trim()];   // v7.398: платіж із заявкою — окремий рядок
+      if(inv) key='inv:'+String(x.ref||'').trim();
+      if(!map[key]) map[key]={key:key, name:nm||'—', edrpou:edr, count:0, sum:0, purposes:[], pays:[], inv:inv||null};
       var g=map[key];
       g.count++; g.sum+=Number(x.amount)||0;
       g.pays.push({amount:Number(x.amount)||0, ref:String(x.ref||'').trim(), date:String(x.date||'').trim(), edrpou:edr});
@@ -1863,7 +1889,18 @@ async function rcExpLoad(){
   // 4) місяць за замовч. — з дат виписки або поточний
   RC.opex.month = rcExpGuessMonth() || (new Date().getMonth()+1);
   RC.opex.loaded=true; RC.opex.busy=false;
+  if(RC.opex.loc) RC.opex.catsByLoc[RC.opex.loc]=RC.opex.cats;
   rcRenderAll();
+  // v7.398: звірка з заявками бота — сама, без кнопки: рядки отримують локацію і статтю з рахунку.
+  if(!RCINV.res && !RCINV.busy && _rcInvPayments().length) rcInvMatch(false);
+}
+// v7.398: статті OPEX конкретної локації (кеш). Без локації — статті локації рахунку.
+function _rcCatsFor(loc){ return (loc && RC.opex.catsByLoc && RC.opex.catsByLoc[loc]) || _rcCats(); }
+async function _rcEnsureCats(loc){
+  if(!loc) return;
+  RC.opex.catsByLoc = RC.opex.catsByLoc || {};
+  if(RC.opex.catsByLoc.hasOwnProperty(loc)) return;
+  RC.opex.catsByLoc[loc] = await rcFetchCats(loc);
 }
 // v7.86: рядки Salary-секції extras локації (getSalaryExtrasRows), з кешем. → [{row,name,months}].
 async function rcFetchSalRows(loc){
@@ -2027,10 +2064,10 @@ function rcExpCatFor(g){
   return '';
 }
 function _rcCats(){ return (RC.opex.cats && RC.opex.cats.length) ? RC.opex.cats : _OPEX_CATS; }   // v7.86: з OPEX-файлу локації, фолбек — статичний
-function _rcCatOptions(selected, includeSkip){
+function _rcCatOptions(selected, includeSkip, loc){
   var head='<option value="">— оберіть статтю —</option>';
   if(includeSkip) head+='<option value="'+RC_SKIP_VAL+'"'+(selected===RC_SKIP_VAL?' selected':'')+'>— не вносити —</option>';
-  return head+_rcCats().map(function(c){
+  return head+_rcCatsFor(loc).map(function(c){
     return '<option value="'+escapeHtml(c)+'"'+(c===selected?' selected':'')+'>'+escapeHtml(c)+'</option>';
   }).join('');
 }
@@ -2082,7 +2119,7 @@ function rcRenderExpenses(){
       + RC.opex.locList.map(function(l){return '<option'+(l===RC.opex.loc?' selected':'')+'>'+escapeHtml(l)+'</option>';}).join('')+'</select>';
   var monHtml = 'Місяць: <select onchange="rcExpSetMonth(this.value)">'
       + MONTHS_UA_FULL.map(function(nm,i){return '<option value="'+(i+1)+'"'+((i+1)===RC.opex.month?' selected':'')+'>'+nm+'</option>';}).join('')+'</select>';
-  var disabled = (!RC.opex.loc || RC.opex.applied) ? ' disabled' : '';
+  var disabled = RC.opex.applied ? ' disabled' : '';   // v7.398: локація може бути в кожному рядку (заявки бота)
   // v7.380: вкладки рахунків — витрати кожного рахунку окремо
   var accTabs = (RC.opex.accs||[]).length > 1 ? '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">' + RC.opex.accs.map(function(a){
       var on = a.iban===RC.opex.acc;
@@ -2095,6 +2132,10 @@ function rcRenderExpenses(){
     +' <button class="btn btn-secondary btn-sm" style="float:right;margin-left:6px" onclick="rcExportExpenses()">📤 Excel</button>'
     +'<button class="btn btn-primary btn-sm" style="float:right"'+disabled+' onclick="rcExpPreview()">👁 Переглянути</button></div>'
     +(RC.opex.applied?'<div style="margin-top:6px;color:var(--green);font-weight:700">✅ Застосовано — повторний запис заблоковано.</div>':'')
+    +(RCINV.busy?'<div style="margin-top:6px;color:#6f42c1">🧾 Шукаю заявки бота для цих платежів…</div>'
+      : RCINV.err?'<div style="margin-top:6px;color:var(--red2)">🧾 Заявки бота: '+escapeHtml(RCINV.err)+'</div>'
+      : RCINV.res?'<div style="margin-top:6px;color:#6f42c1">🧾 Заявок бота знайдено для '+groups.filter(function(g){ return g.inv; }).length
+          +' платеж. цього рахунку — локація і стаття вже з рахунку, перевірте й натисніть «Переглянути».</div>':'')
     +'</div>';
 
   var rows=groups.map(function(g){
@@ -2111,12 +2152,15 @@ function rcRenderExpenses(){
     var mapBadge = (dest==='salary' && salBinds.length) ? ' <span style="font-size:10px;color:#0a8a5f">·з мапи ФОП ('+salBinds.length+')</span>'
                  : autoFromMap ? ' <span style="font-size:10px;color:#2980b9">·з мапи</span>'
                  : (alwaysManual ? ' <span style="font-size:10px;color:#b9770a">·завжди вручну</span>' : '');
-    // v7.321: звідки взялась стаття, якщо її підставив рахунок із Telegram
-    var invH = RCINV.hints[g.key];
+    // v7.398: рядок під заявку бота — локація і стаття з рахунку
+    var invH = g.inv;
     if(invH){
-      if(invH.conflict) mapBadge += ' <span style="font-size:10px;color:#b9770a">·кілька рахунків, статтю не ставлю</span>';
-      else if(invH.category) mapBadge += ' <span style="font-size:10px;color:#6f42c1">·з рахунку</span>';
-      else if(invH.raw) mapBadge += ' <span style="font-size:10px;color:#b9770a">·у рахунку «'+escapeHtml(invH.raw)+'», такої статті немає</span>';
+      mapBadge = ' <span style="font-size:10px;color:#6f42c1;font-weight:700">🧾 рахунок #'+escapeHtml(String(invH.id))
+        + (invH.number?' (№ '+escapeHtml(invH.number)+')':'') + '</span>';
+      if(!invH.loc) mapBadge += ' <span style="font-size:10px;color:#b9770a">·у заявці немає локації — оберіть</span>';
+      if(invH.badSplit) mapBadge += ' <span style="font-size:10px;color:#b9770a">·у рахунку «'+escapeHtml(invH.badSplit)+'», такої статті немає</span>';
+      else if(!invH.splits && !invH.category && invH.raw) mapBadge += ' <span style="font-size:10px;color:#b9770a">·у рахунку «'+escapeHtml(invH.raw)+'», такої статті немає</span>';
+      else if(!invH.splits && !invH.category) mapBadge += ' <span style="font-size:10px;color:#b9770a">·у заявці немає статті — оберіть</span>';
     }
 
     // перемикач призначення
@@ -2141,7 +2185,7 @@ function rcRenderExpenses(){
         splitBtn='<button class="btn btn-secondary btn-xs" onclick="rcSalSplit('+escAttr(g.key)+')">✂ розбити</button>';
       }
     } else {
-      targetCell=destSel+'<select onchange="rcExpOnCat('+escAttr(g.key)+',this.value)"'+(sel.splits?' disabled':'')+'>'+_rcCatOptions(cat, true)+'</select>'
+      targetCell=destSel+'<select onchange="rcExpOnCat('+escAttr(g.key)+',this.value)"'+(sel.splits?' disabled':'')+'>'+_rcCatOptions(cat, true, iloc)+'</select>'
         +'<label style="display:block;font-size:11px;margin-top:3px"><input type="checkbox" onchange="rcExpOnRemember('+escAttr(g.key)+',this.checked)"'+(remember?' checked':'')+(sel.splits?' disabled':'')+'> запам\'ятати для контрагента</label>';
       splitBtn=sel.splits?'':'<button class="btn btn-secondary btn-xs" onclick="rcExpSplit('+escAttr(g.key)+')">✂ розбити</button>';
     }
@@ -2163,7 +2207,7 @@ function rcRenderExpenses(){
       var okSum=Math.abs(stotal-g.sum)<0.005;
       main+=sel.splits.map(function(sp,si){
         return '<tr style="background:#fbfdff"><td colspan="6" style="text-align:right;font-size:12px;color:var(--gray)">↳ частина '+(si+1)+'</td>'
-          +'<td><select onchange="rcExpSplitCat('+escAttr(g.key)+','+si+',this.value)">'+_rcCatOptions(sp.category)+'</select></td>'
+          +'<td><select onchange="rcExpSplitCat('+escAttr(g.key)+','+si+',this.value)">'+_rcCatOptions(sp.category, false, iloc)+'</select></td>'
           +'<td><input type="number" step="0.01" value="'+(sp.amount||'')+'" style="width:90px" onchange="rcExpSplitAmt('+escAttr(g.key)+','+si+',this.value)">'
           +' <button class="btn btn-secondary btn-xs" onclick="rcExpSplitDel('+escAttr(g.key)+','+si+')">✕</button></td></tr>';
       }).join('')
@@ -2237,7 +2281,12 @@ async function rcExpSetLoc(v){ RC.opex.loc=v; RC.opex.preview=null; RC.opex.cats
 function rcExpSetMonth(v){ RC.opex.month=Number(v)||RC.opex.month; RC.opex.preview=null; rcRenderAll(); }
 function rcExpOnMonth(key,v){ _rcSel(key).month=Number(v)||0; RC.opex.preview=null; RC.opex.salPreview=null; }   // v7.86: пер-контрагентний місяць
 async function rcExpOnLoc(key,v){                                                          // v7.86: пер-контрагентна локація файлу
-  var s=_rcSel(key); s.loc=String(v||''); RC.opex.preview=null; RC.opex.salPreview=null;
+  var s=_rcSel(key); s.loc=String(v||''); s._touched=true; RC.opex.preview=null; RC.opex.salPreview=null;
+  await _rcEnsureCats(s.loc||RC.opex.loc);   // v7.398: статті — з файлу обраної локації
+  // v7.398: рядок заявки без локації — після вибору локації стаття з рахунку підтягується сама
+  var _ih = key.indexOf('inv:')===0 ? RCINV.byRef[key.slice(4)] : null;
+  if(_ih && s.category==null && !s.splits){ var _c=_rcInvCatMatch(_ih.raw, s.loc||RC.opex.loc); if(_c) s.category=_c; }
+  if(s.dest!=='salary') rcRenderAll();
   if(s.dest==='salary'){
     var loc=s.loc||RC.opex.loc;
     s.salRow=0; s.salSplits=null; s._salPrefilled=false;   // рядки іншої локації → ціль скидаємо
@@ -2276,7 +2325,7 @@ function _rcLocOptions(sel){
   if(sel && list.indexOf(sel)<0) list.unshift(sel);
   return list.map(function(l){return '<option'+(l===sel?' selected':'')+'>'+escapeHtml(l)+'</option>';}).join('');
 }
-function rcExpOnCat(key,v){ var s=_rcSel(key); s.category=v; RC.opex.preview=null; rcRenderAll(); }
+function rcExpOnCat(key,v){ var s=_rcSel(key); s.category=v; s._touched=true; RC.opex.preview=null; rcRenderAll(); }
 function rcExpOnRemember(key,v){ _rcSel(key).remember=v; }
 function rcExpSplit(key){ var g=rcExpenseGroups().filter(function(x){return x.key===key;})[0]; if(!g)return; _rcSel(key).splits=[{category:rcExpCatFor(g),amount:g.sum}]; RC.opex.preview=null; rcRenderAll(); }
 function rcExpSplitCancel(key){ _rcSel(key).splits=null; RC.opex.preview=null; rcRenderAll(); }
@@ -2328,14 +2377,16 @@ function rcExpBuildItems(){
     if(sel.splits){
       var stotal=sel.splits.reduce(function(s,x){return s+(Number(x.amount)||0);},0);
       if(Math.abs(stotal-g.sum)>=0.005){ errors.push('«'+g.name+'»: сума частин '+fmtUah(stotal)+' ≠ '+fmtUah(g.sum)); return; }
+      if(!iloc){ errors.push('«'+g.name+'»: не обрано локацію'); return; }   // v7.398
       sel.splits.forEach(function(sp,si){
         if(!sp.category){ errors.push('«'+g.name+'»: частина '+(si+1)+' без статті'); return; }
         items.push({category:sp.category, amount:Number(sp.amount)||0, month:mon, loc:iloc, edrpou:g.edrpou,
-          ref:(g.edrpou||g.key)+'-split-'+si, note:g.name});
+          ref:(g.inv&&g.pays[0]?g.pays[0].ref:(g.edrpou||g.key))+'-split-'+si, date:(g.pays[0]||{}).date, note:g.name});
       });
       return;
     }
     if(!cat){ return; }   // без статті — пропускаємо (не помилка, рішення ще не прийняте)
+    if(!iloc){ errors.push('«'+g.name+'»: не обрано локацію'); return; }   // v7.398: рахунок без локації
     // пер-платіжно: справжній ref кожного платежу
     g.pays.forEach(function(pp){
       items.push({category:cat, amount:pp.amount, month:mon, loc:iloc, edrpou:g.edrpou, ref:pp.ref, date:pp.date, note:g.name});
@@ -2352,9 +2403,17 @@ async function _rcPost(body){
     headers:{'Content-Type':'text/plain;charset=utf-8'}, body:JSON.stringify(body) });
   return await r.json();
 }
+// v7.398: «загальна» локація запиту — локація рахунку, а для рахунку без неї — локація першого рядка
+// (бекенд пише кожен рядок у його власну локацію; загальна — лише фолбек).
+function _rcTopLoc(b){
+  if(RC.opex.loc) return RC.opex.loc;
+  var all=(b.items||[]).concat(b.salItems||[]);
+  for(var i=0;i<all.length;i++) if(all[i].loc) return all[i].loc;
+  return '';
+}
 async function rcExpPreview(){
-  if(!RC.opex.loc){ showToast('Спершу оберіть локацію','error'); return; }
   var b=rcExpBuildItems();
+  if(!_rcTopLoc(b) && (b.items.length || b.salItems.length)){ showToast('Спершу оберіть локацію','error'); return; }
   if(b.errors.length){ showToast('⚠️ '+b.errors[0], 'error', 4000); return; }
   if(!b.items.length && !b.salItems.length){ showToast('Немає рядків для запису — оберіть статті/рядки','info'); return; }
   RC.opex.busy=true; showToast('Рахую прев\'ю…','info',1500);
@@ -2362,12 +2421,12 @@ async function rcExpPreview(){
   RC.opex.preview=null; RC.opex.salPreview=null;
   try{
     if(b.items.length){
-      var j=await _rcPost({action:'opexAddExpenses', loc:RC.opex.loc, year:yr, month:RC.opex.month, dryRun:true, items:b.items});
+      var j=await _rcPost({action:'opexAddExpenses', loc:_rcTopLoc(b), year:yr, month:RC.opex.month, dryRun:true, items:b.items});
       if(!j.ok){ RC.opex.busy=false; showToast('❌ OPEX: '+(j.error||'помилка'),'error',4000); return; }
       RC.opex.preview=j;
     }
     if(b.salItems.length){
-      var js=await _rcPost({action:'salaryAddExtrasPayments', loc:RC.opex.loc, year:yr, month:RC.opex.month, dryRun:true, items:b.salItems});
+      var js=await _rcPost({action:'salaryAddExtrasPayments', loc:_rcTopLoc(b), year:yr, month:RC.opex.month, dryRun:true, items:b.salItems});
       if(!js.ok){ RC.opex.busy=false; showToast('❌ Salary: '+(js.error||'помилка'),'error',4000); rcRenderAll(); return; }
       RC.opex.salPreview=js;
     }
@@ -2377,28 +2436,40 @@ async function rcExpPreview(){
 
 async function rcExpApply(){
   if(RC.opex.applied){ return; }
-  if(!RC.opex.loc){ showToast('Спершу оберіть локацію','error'); return; }
   var b=rcExpBuildItems();
+  if(!_rcTopLoc(b) && (b.items.length || b.salItems.length)){ showToast('Спершу оберіть локацію','error'); return; }
   if(b.errors.length){ showToast('⚠️ '+b.errors[0], 'error', 4000); return; }
   if(!b.items.length && !b.salItems.length){ showToast('Немає рядків для запису','info'); return; }
   var parts=[];
   if(b.items.length) parts.push(b.items.length+' у OPEX');
   if(b.salItems.length) parts.push(b.salItems.length+' у Salary (Факт)');
-  if(!confirm('Записати '+parts.join(' + ')+' (локація «'+RC.opex.loc+'»)?')) return;
+  var _locs={}; b.items.concat(b.salItems).forEach(function(x){ if(x.loc) _locs[x.loc]=1; });
+  if(!confirm('Записати '+parts.join(' + ')+' (локації: '+Object.keys(_locs).join(', ')+')?')) return;
   RC.opex.applied=true; RC.opex.appliedAcc[RC.opex.acc]=true; rcRenderAll();   // блокуємо повторне натискання одразу (v7.380: для цього рахунку)
   var yr=new Date().getFullYear(), msgs=[], anyErr=false;
   try{
     if(b.items.length){
-      var j=await _rcPost({action:'opexAddExpenses', loc:RC.opex.loc, year:yr, month:RC.opex.month, dryRun:false, items:b.items, remember:b.remember});
+      var j=await _rcPost({action:'opexAddExpenses', loc:_rcTopLoc(b), year:yr, month:RC.opex.month, dryRun:false, items:b.items, remember:b.remember});
       if(!j.ok){ anyErr=true; msgs.push('OPEX: '+(j.error||'помилка')); }
       else { RC.opex.preview=j; msgs.push('OPEX: записано '+j.written+' · пропущено '+j.skipped+(j.remembered?(' · мапа '+j.remembered):'')); }
     }
     if(b.salItems.length){
-      var js=await _rcPost({action:'salaryAddExtrasPayments', loc:RC.opex.loc, year:yr, month:RC.opex.month, dryRun:false, items:b.salItems, remember:b.salRemember});
+      var js=await _rcPost({action:'salaryAddExtrasPayments', loc:_rcTopLoc(b), year:yr, month:RC.opex.month, dryRun:false, items:b.salItems, remember:b.salRemember});
       if(!js.ok){ anyErr=true; msgs.push('Salary: '+(js.error||'помилка')); }
       else { RC.opex.salPreview=js; msgs.push('Salary: записано '+js.written+' · пропущено '+js.skipped+(js.remembered?(' · мапа '+js.remembered):'')); }
     }
     if(anyErr) RC.opex.applied=false;
+    // v7.398: витрату внесено → заявки бота цих платежів «оплачено» + «✅ Оплачено» у тред (лише цей рахунок)
+    if(!anyErr){
+      var invRefs={}; rcExpenseGroups().forEach(function(g){ if(g.inv) g.pays.forEach(function(pp){ invRefs[pp.ref]=1; }); });
+      var invPays=_rcInvPayments().filter(function(p){ return invRefs[p.ref]; });
+      if(invPays.length){
+        try{
+          var ji=await _rcPost({action:'matchInvoicesToPayments', payments:invPays, dryRun:false, notify:true});
+          msgs.push(ji&&ji.ok ? ('рахунків бота закрито: '+(ji.marked||0)) : ('рахунки бота: '+((ji&&ji.error)||'помилка')));
+        }catch(_ie){ msgs.push('рахунки бота: мережа'); }
+      }
+    }
     showToast((anyErr?'⚠️ ':'✅ ')+msgs.join(' | '), anyErr?'error':'ok', 7000);
     rcRenderAll();
   }catch(e){ RC.opex.applied=false; showToast('❌ мережа: '+(e&&e.message||e),'error',5000); rcRenderAll(); }
