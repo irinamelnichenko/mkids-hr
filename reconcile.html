@@ -39,7 +39,7 @@
   };
 })();
 </script>
-<script src="xlsx.full.min.js"></script>
+<script defer src="xlsx.full.min.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -651,6 +651,17 @@ function sortLocationsByZone(locs){ return sortByLocationOrder(locs); }
         }
       }
     } catch(_e){}
+    // v7.401: getLocations — спільний кеш у браузері на 30 хв для всіх сторінок (було ~8 с на кожному старті)
+    if (typeof input === 'string' && /[?&]action=getLocations(&|$)/.test(input) && !/[?&]nocache=1/.test(input)
+        && ((init && init.method) || 'GET').toUpperCase() === 'GET'){
+      try { var _lc = JSON.parse(localStorage.getItem('mkids_locs_cache') || 'null');
+        if (_lc && _lc.body && Date.now() - _lc.ts < 1800000)
+          return Promise.resolve(new Response(_lc.body, {status: 200, headers: {'Content-Type': 'application/json'}})); } catch(_e){}
+      return _of(input, init).then(_watch).then(function(r){
+        try { r.clone().text().then(function(t){ try { var j = JSON.parse(t);
+          if (j && j.ok !== false) localStorage.setItem('mkids_locs_cache', JSON.stringify({ts: Date.now(), body: t})); } catch(_e){} }); } catch(_e){}
+        return r; });
+    }
     return _of(input, init).then(_watch);
   };
   _checkTok();   // v7.288: і одразу при завантаженні сторінки
@@ -1861,13 +1872,29 @@ async function rcExpLoad(){
   $('rcWrap').innerHTML=rcModeSwitchHtml()+'<div class="inv-empty">Завантаження статей та контрагентів…</div>';
   // 1) локація за IBAN (усі distinct ibans виписок)
   var ibans={}; RC.parsed.forEach(function(p){ if(p.iban) ibans[p.iban]=true; });
-  var locs={};
-  for (var ib in ibans){
-    try{
-      var r=await fetch(CFG.SCRIPT_URL+'?action=resolveIbanLoc&iban='+encodeURIComponent(ib),{redirect:'follow'});
-      var j=await r.json(); if(j&&j.ok&&j.loc){ locs[j.loc]=true; RC.opex.locByIban[ib]=j.loc; }
-    }catch(e){}
-  }
+  // v7.401: локації всіх рахунків ОДНИМ запитом + контрагенти, локації OPEX і мапа ФОП — паралельно.
+  //   Було: окремий запит на кожен рахунок і ще 4 запити — усе по черзі (з банку 35+ рахунків → хвилини).
+  var _ibList=Object.keys(ibans);
+  var _par=await Promise.all([
+    (async function(){
+      try{
+        var r=await fetch(CFG.SCRIPT_URL+'?action=resolveIbanLocs&ibans='+encodeURIComponent(_ibList.join(',')),{redirect:'follow'});
+        var j=await r.json();
+        if(j&&j.ok&&j.map){ _ibList.forEach(function(ib){ var l=j.map[String(ib).replace(/\s+/g,'').toUpperCase()]; if(l) RC.opex.locByIban[ib]=l; }); return; }
+      }catch(e){}
+      // фолбек (бекенд ще без resolveIbanLocs): по одному, але паралельно
+      await Promise.all(_ibList.map(async function(ib){
+        try{ var r2=await fetch(CFG.SCRIPT_URL+'?action=resolveIbanLoc&iban='+encodeURIComponent(ib),{redirect:'follow'});
+          var j2=await r2.json(); if(j2&&j2.ok&&j2.loc) RC.opex.locByIban[ib]=j2.loc; }catch(e){}
+      }));
+    })(),
+    fetch(CFG.SCRIPT_URL+'?action=getOpexContractors',{redirect:'follow'}).then(function(r){ return r.json(); }).catch(function(){ return null; }),
+    rcFetchOpexLocations(),
+    fetch(CFG.SCRIPT_URL+'?action=getSalaryFopMap',{redirect:'follow'}).then(function(r){ return r.json(); }).catch(function(){ return null; })
+  ]);
+  RC.opex.contractors=(_par[1]&&_par[1].map)||{};
+  RC.opex.locList=_par[2]||[];
+  RC.opex.fopMap=(_par[3]&&_par[3].map)||{};
   // v7.380: рахунки з витратами — окремо; локація — за рахунком (офісний / невідомий → вручну)
   RC.opex.accs = RC.parsed.filter(function(p){ return (p.expenses||[]).length && !p.service; })
     .map(function(p){ return {iban:p.iban, office:!!p.office, n:p.expenses.length, loc:p.office?'':(RC.opex.locByIban[p.iban]||'')}; });
@@ -1876,16 +1903,9 @@ async function rcExpLoad(){
   RC.opex.loc = _cur.loc || '';
   RC.opex.locAuto = !!_cur.loc;
   RC.opex.applied = !!RC.opex.appliedAcc[RC.opex.acc];
-  // 2) мапа контрагентів
-  try{ var rc=await fetch(CFG.SCRIPT_URL+'?action=getOpexContractors',{redirect:'follow'}); var jc=await rc.json(); RC.opex.contractors=(jc&&jc.map)||{}; }catch(e){ RC.opex.contractors={}; }
-  // 3) повний список локацій — потрібен і для ручного вибору локації виписки, і для пер-платіжної
-  //    випадайки локації. v7.87: джерело — OPEX-реєстр (включає шкільні OPEX-локації), а не Payment.
-  RC.opex.locList = await rcFetchOpexLocations();
-  // 3.5) реальні категорії OPEX-файлу локації (фолбек — статичний _OPEX_CATS)
-  RC.opex.cats = await rcFetchCats(RC.opex.loc);
-  // 3.6) v7.86 Salary-призначення: мапа ФОП→рядки (мережева) + рядки extras для локації виписки
-  try{ var rf=await fetch(CFG.SCRIPT_URL+'?action=getSalaryFopMap',{redirect:'follow'}); var jf=await rf.json(); RC.opex.fopMap=(jf&&jf.map)||{}; }catch(e){ RC.opex.fopMap={}; }
-  if(RC.opex.loc) await rcFetchSalRows(RC.opex.loc);
+  // 3.5) статті OPEX-файлу локації + 3.6) рядки Salary extras — паралельно (обидва залежать від локації рахунку)
+  var _p2=await Promise.all([rcFetchCats(RC.opex.loc), RC.opex.loc ? rcFetchSalRows(RC.opex.loc) : null]);
+  RC.opex.cats=_p2[0];
   // 4) місяць за замовч. — з дат виписки або поточний
   RC.opex.month = rcExpGuessMonth() || (new Date().getMonth()+1);
   RC.opex.loaded=true; RC.opex.busy=false;
@@ -2273,8 +2293,9 @@ async function rcExpSetAcc(iban){   // v7.380: перемикач рахунку
   var a=(RC.opex.accs||[]).filter(function(x){ return x.iban===iban; })[0]||{};
   RC.opex.loc=a.loc||''; RC.opex.locAuto=!!a.loc; RC.opex.applied=!!RC.opex.appliedAcc[iban];
   RC.opex.month = rcExpGuessMonth() || RC.opex.month;
-  RC.opex.cats=await rcFetchCats(RC.opex.loc);
-  if(RC.opex.loc) await rcFetchSalRows(RC.opex.loc);
+  // v7.401: статті — з кешу локацій (не перечитувати при кожному перемиканні), рядки Salary — паралельно
+  await Promise.all([_rcEnsureCats(RC.opex.loc), RC.opex.loc ? rcFetchSalRows(RC.opex.loc) : null]);
+  RC.opex.cats=(RC.opex.catsByLoc||{})[RC.opex.loc]||null;
   rcRenderAll();
 }
 async function rcExpSetLoc(v){ RC.opex.loc=v; RC.opex.preview=null; RC.opex.cats=await rcFetchCats(v); rcRenderAll(); }
@@ -2634,19 +2655,29 @@ async function rcApply(){
   st.textContent='.nav-badge{margin-left:auto;background:#e74c3c;color:#fff;font-size:11px;font-weight:800;min-width:18px;height:18px;border-radius:9px;display:inline-flex;align-items:center;justify-content:center;padding:0 5px}.nav-badge.hidden{display:none!important}';
   document.head.appendChild(st);
   var U='https://script.google.com/macros/s/AKfycbyTSUVlaN4-PpXe47zCSmhVs0Qxy1FDXG_XsB4zcKNpqBxdhDtS9ibM4YFGkGjmPQDFWQ/exec';
+  // v7.401: лише видима вкладка, раз на 3 хв + при поверненні на вкладку; відповідь — у спільному кеші
+  // на 2 хв (перехід між сторінками не шле новий запит). Було: кожні 60 с з кожної вкладки, навіть фонової.
+  var BK='mkids_badge_cache', BTTL=120000, busy=false;
+  function show(n){ var b=document.getElementById('tasksBadge'); if(!b) return;
+    if(n>0){ b.textContent=n; b.classList.remove('hidden'); } else b.classList.add('hidden'); }
   function poll(){
     var b=document.getElementById('tasksBadge'); if(!b) return;
+    if(document.visibilityState==='hidden' || busy) return;
     var s; try{ s=JSON.parse(localStorage.getItem('mkids_session')||'null'); }catch(e){ return; }
     if(!s||!s.user||!s.user.id) return;
+    try{ var c=JSON.parse(localStorage.getItem(BK)||'null');
+      if(c && c.uid===s.user.id && Date.now()-c.ts<BTTL){ show(c.n); return; } }catch(e){}
+    busy=true;
     fetch(U+'?action=getDashboardNotifications&userId='+encodeURIComponent(s.user.id)+'&role='+encodeURIComponent(s.user.role||'')+'&token='+encodeURIComponent(s.token||''),{redirect:'follow'})
       .then(function(r){return r.json();})
       .then(function(res){
         if(!res||!res.ok) return;
-        if(res.badge>0){ b.textContent=res.badge; b.classList.remove('hidden'); }
-        else b.classList.add('hidden');
-      }).catch(function(){});
+        var n=Number(res.badge)||0; show(n);
+        try{ localStorage.setItem(BK, JSON.stringify({uid:s.user.id, n:n, ts:Date.now()})); }catch(e){}
+      }).catch(function(){}).then(function(){ busy=false; });
   }
-  setTimeout(poll,1500); setInterval(poll,60000);
+  setTimeout(poll,1500); setInterval(poll,180000);
+  document.addEventListener('visibilitychange', function(){ if(document.visibilityState==='visible') poll(); });
 })();
 </script>
 <script>

@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.397
+// m.kids CRM — Google Apps Script v7.401
+// v7.401: швидкодія — getCacheVer (версія кешу групи, напр. clients: сторінка тягне картки лише якщо змінились);
+//   формат колонок задач ставиться лише при зростанні листа, а не на кожне опитування бейджа (було — запис щохвилини).
 // v7.397: бот рахунків — invoicePatch (правка ЄДРПОУ/дати/№/суми, «відхилено» для дублів; CFO, dryRun) і
 //   invoiceResendPaid (повтор «✅ Оплачено», якщо Telegram відмовив); звірка: «відхилено» не матчиться,
 //   кілька кандидатів → перевага № рахунку в призначенні, далі — локація рахунку платника (Реквізити_Локацій);
@@ -6869,8 +6871,9 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.397', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.401', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
+    else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
     else if (action === 'getPayments')        result = getPayments();
@@ -6931,6 +6934,7 @@ function doGet(e) {
     else if (action === 'getClosedMonths')            result = getClosedMonths();                                 // v7.91
     else if (action === 'getOpexContractors')        result = getOpexContractors();                              // v7.84 мапа контрагентів
     else if (action === 'resolveIbanLoc')            result = resolveIbanLoc(e.parameter.iban || '');            // v7.84 IBAN→локація
+    else if (action === 'resolveIbanLocs')           result = resolveIbanLocs(e.parameter.ibans || '');          // v7.401 пакетом (кома)
     else if (action === 'getOpexExpensesLog')        result = getOpexExpensesLog({loc:e.parameter.loc||'', year:e.parameter.year||'', month:e.parameter.month||'', category:e.parameter.category||''}); // v7.85 читання логу витрат
     else if (action === 'getSalaryFopMap')           result = getSalaryFopMap({loc:e.parameter.loc||''});         // v7.85+ мапа ФОП→Salary-рядки
     else if (action === 'getSalaryExtrasRows')       result = getSalaryExtrasRows({loc:e.parameter.loc||''});     // v7.85+ рядки Salary extras для випадайки
@@ -15177,6 +15181,22 @@ function resolveIbanLoc(iban){
   var acct = _resolveAccountByIban(iban);
   if (!acct || !acct.loc) return {ok: false, error: 'IBAN "' + String(iban || '').trim() + '" не знайдено в Реквізити_Локацій'};
   return {ok: true, loc: acct.loc, type: acct.type, typeLabel: acct.typeLabel, orgName: acct.orgName};
+}
+
+// v7.401: усі IBAN виписки ОДНИМ запитом (Реквізити_Локацій читається раз) → {ok, map:{iban: loc}}.
+// Було: окремий resolveIbanLoc на кожен рахунок по черзі (з банку їх 35+).
+function resolveIbanLocs(list){
+  var want = String(list || '').split(',').map(function(x){ return x.replace(/\s+/g, '').toUpperCase(); }).filter(Boolean);
+  var map = {};
+  if (!want.length) return {ok:true, map:map};
+  var sh = SpreadsheetApp.openById(CONFIG_SHEET_ID).getSheetByName('Реквізити_Локацій');
+  if (!sh) return {ok:true, map:map};
+  var set = {}; want.forEach(function(w){ set[w] = 1; });
+  sh.getDataRange().getValues().slice(1).forEach(function(r){
+    var ib = String(r[4] || '').replace(/\s+/g, '').toUpperCase();
+    if (ib && set[ib] && !map[ib]) map[ib] = trim(r[0]);
+  });
+  return {ok:true, map:map};
 }
 
 // Пер-лок OPEX-файл+лист із реєстру CONFIG 'OPEX'. → {sheet, listName} або null.
@@ -30909,9 +30929,18 @@ function _getTasksSheet(create){
   }
   if (!sh) throw new Error('Лист "'+TASKS_SHEET_NAME+'" не знайдено.');
   // created_at(2) / deadline(8) — текстові, щоб дати не плавали по TZ.
-  sh.getRange(1,2,sh.getMaxRows(),1).setNumberFormat('@');
-  sh.getRange(1,8,sh.getMaxRows(),1).setNumberFormat('@');
+  // v7.401: формат — лише коли в листі побільшало рядків (позначка в кеші). Раніше ставився на КОЖЕН
+  // виклик, зокрема на щохвилинне опитування бейджа з кожної вкладки → запис і блокування таблиці.
+  if (_taskFmtNeeded('tasks', sh)){
+    sh.getRange(1,2,sh.getMaxRows(),1).setNumberFormat('@');
+    sh.getRange(1,8,sh.getMaxRows(),1).setNumberFormat('@');
+  }
   return sh;
+}
+function _taskFmtNeeded(kind, sh){
+  var key = 'taskfmt_' + kind + '_' + sh.getMaxRows();
+  try { var c = CacheService.getScriptCache(); if (c.get(key)) return false; c.put(key, '1', 21600); } catch(_e){}
+  return true;
 }
 function _getTaskActSheet(create){
   var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
@@ -30922,7 +30951,7 @@ function _getTaskActSheet(create){
     sh.setFrozenRows(1);
   }
   if (!sh) throw new Error('Лист "'+TASKS_ACT_SHEET_NAME+'" не знайдено.');
-  sh.getRange(1,7,sh.getMaxRows(),1).setNumberFormat('@');
+  if (_taskFmtNeeded('act', sh)) sh.getRange(1,7,sh.getMaxRows(),1).setNumberFormat('@');   // v7.401
   return sh;
 }
 

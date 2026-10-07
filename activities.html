@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="mobile-web-app-capable" content="yes">
-<script src="xlsx.full.min.js"></script>
+<script defer src="xlsx.full.min.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -1589,6 +1589,17 @@ var SESSION_TTL_MS = 7 * 24 * 3600 * 1000;
         }
       }
     } catch(_e){}
+    // v7.401: getLocations — спільний кеш у браузері на 30 хв для всіх сторінок (було ~8 с на кожному старті)
+    if (typeof input === 'string' && /[?&]action=getLocations(&|$)/.test(input) && !/[?&]nocache=1/.test(input)
+        && ((init && init.method) || 'GET').toUpperCase() === 'GET'){
+      try { var _lc = JSON.parse(localStorage.getItem('mkids_locs_cache') || 'null');
+        if (_lc && _lc.body && Date.now() - _lc.ts < 1800000)
+          return Promise.resolve(new Response(_lc.body, {status: 200, headers: {'Content-Type': 'application/json'}})); } catch(_e){}
+      return _of(input, init).then(_watch).then(function(r){
+        try { r.clone().text().then(function(t){ try { var j = JSON.parse(t);
+          if (j && j.ok !== false) localStorage.setItem('mkids_locs_cache', JSON.stringify({ts: Date.now(), body: t})); } catch(_e){} }); } catch(_e){}
+        return r; });
+    }
     return _of(input, init).then(_watch);
   };
   _checkTok();   // v7.288: і одразу при завантаженні сторінки
@@ -2851,7 +2862,7 @@ var ATT = {
 var ATT_MONTHS_UA = ['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
 var ATT_WD_UA = ['Нд','Пн','Вт','Ср','Чт','Пт','Сб'];
 var ATT_ACTIVITY_LS_KEY = 'mkids_att_activity';
-var ATT_CHILDREN_TTL = 60 * 1000;
+var ATT_CHILDREN_TTL = 15 * 60 * 1000;   // v7.401: було 60 с — Payment (674 КБ) майже на кожне відкриття
 var ATT_MARKS_TTL    = 60 * 1000;
 var ATT_PAYMENTS_CACHE_KEY = 'activities_payments_v1';
 var ATT_MARKS_CACHE_KEY    = 'activities_marks_v1';
@@ -3048,6 +3059,15 @@ async function _loadPayments(){
 // Запобіжник: якщо перетин порожній — лишаємо старий ростер як є.
 var ATT_SCHOOL_ROSTER = {};   // {loc: {isSchool, byName, groups}}
 
+// v7.401: запит ростера окремо — щоб іти паралельно з getPayments; _applySchoolRoster бере з кешу.
+async function _fetchSchoolRoster(loc){
+  if (!loc || ATT_SCHOOL_ROSTER[loc]) return;
+  try {
+    var r = await _afTryFetch(CFG.SCRIPT_URL + '?action=getSchoolRoster&loc=' + encodeURIComponent(loc), {redirect: 'follow'});
+    var j = await r.json();
+    ATT_SCHOOL_ROSTER[loc] = (j && j.ok) ? j : {isSchool: false, byName: {}};
+  } catch(e){ ATT_SCHOOL_ROSTER[loc] = {isSchool: false, byName: {}}; }
+}
 async function _applySchoolRoster(loc){
   if (!loc || !ATT.childrenByLoc) return;
   if (!ATT_SCHOOL_ROSTER[loc]){
@@ -3236,9 +3256,14 @@ async function renderAttendanceBoard(){
 
   // Children загрузка (якщо ще не завантажено каталог — теж дочекатись)
   try {
-    if (!S.items || !S.items.length) await loadCatalog(false);
-    await _loadPayments();
-    await _applySchoolRoster(S.activeLoc);   // v7.205: школи — класи з карток
+    // v7.401: каталог, діти (Payment), класи шкіл і відмітки місяця — ПАРАЛЕЛЬНО (було строго по черзі).
+    var _gridMarksP = (ATT.viewMode === 'grid') ? _loadGridMarks(false) : null;
+    await Promise.all([
+      (!S.items || !S.items.length) ? loadCatalog(false) : null,
+      _loadPayments(),
+      _fetchSchoolRoster(S.activeLoc)
+    ]);
+    await _applySchoolRoster(S.activeLoc);   // v7.205: школи — класи з карток (ростер уже в кеші)
   } catch(e){
     $('attLoading').classList.add('hidden');
     $('attHint').textContent = '❌ ' + (e && e.message || e);
@@ -3310,9 +3335,7 @@ async function renderAttendanceBoard(){
     $('attTeacherBox').classList.add('hidden');
     $('attSummary').classList.add('hidden');
     var _bulk = $('attBulkActions'); if (_bulk) _bulk.classList.add('hidden');
-    await _loadGridMarks(false);
-    await _loadGridMerges(false);
-    await _loadGridSplits(false);
+    await Promise.all([_gridMarksP || _loadGridMarks(false), _loadGridMerges(false), _loadGridSplits(false)]);   // v7.401 паралельно
     renderMonthGrid();
     $('attMonthGrid').classList.remove('hidden');
     $('attLoading').classList.add('hidden');
@@ -6275,19 +6298,29 @@ function exportPreviewCSV(){
   st.textContent='.nav-badge{margin-left:auto;background:#e74c3c;color:#fff;font-size:11px;font-weight:800;min-width:18px;height:18px;border-radius:9px;display:inline-flex;align-items:center;justify-content:center;padding:0 5px}.nav-badge.hidden{display:none!important}';
   document.head.appendChild(st);
   var U='https://script.google.com/macros/s/AKfycbyTSUVlaN4-PpXe47zCSmhVs0Qxy1FDXG_XsB4zcKNpqBxdhDtS9ibM4YFGkGjmPQDFWQ/exec';
+  // v7.401: лише видима вкладка, раз на 3 хв + при поверненні на вкладку; відповідь — у спільному кеші
+  // на 2 хв (перехід між сторінками не шле новий запит). Було: кожні 60 с з кожної вкладки, навіть фонової.
+  var BK='mkids_badge_cache', BTTL=120000, busy=false;
+  function show(n){ var b=document.getElementById('tasksBadge'); if(!b) return;
+    if(n>0){ b.textContent=n; b.classList.remove('hidden'); } else b.classList.add('hidden'); }
   function poll(){
     var b=document.getElementById('tasksBadge'); if(!b) return;
+    if(document.visibilityState==='hidden' || busy) return;
     var s; try{ s=JSON.parse(localStorage.getItem('mkids_session')||'null'); }catch(e){ return; }
     if(!s||!s.user||!s.user.id) return;
+    try{ var c=JSON.parse(localStorage.getItem(BK)||'null');
+      if(c && c.uid===s.user.id && Date.now()-c.ts<BTTL){ show(c.n); return; } }catch(e){}
+    busy=true;
     fetch(U+'?action=getDashboardNotifications&userId='+encodeURIComponent(s.user.id)+'&role='+encodeURIComponent(s.user.role||'')+'&token='+encodeURIComponent(s.token||''),{redirect:'follow'})
       .then(function(r){return r.json();})
       .then(function(res){
         if(!res||!res.ok) return;
-        if(res.badge>0){ b.textContent=res.badge; b.classList.remove('hidden'); }
-        else b.classList.add('hidden');
-      }).catch(function(){});
+        var n=Number(res.badge)||0; show(n);
+        try{ localStorage.setItem(BK, JSON.stringify({uid:s.user.id, n:n, ts:Date.now()})); }catch(e){}
+      }).catch(function(){}).then(function(){ busy=false; });
   }
-  setTimeout(poll,1500); setInterval(poll,60000);
+  setTimeout(poll,1500); setInterval(poll,180000);
+  document.addEventListener('visibilitychange', function(){ if(document.visibilityState==='visible') poll(); });
 })();
 </script>
 

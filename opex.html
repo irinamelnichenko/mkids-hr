@@ -852,6 +852,17 @@ function sortLocationsByZone(locs){ return sortByLocationOrder(locs); }
         }
       }
     } catch(_e){}
+    // v7.401: getLocations — спільний кеш у браузері на 30 хв для всіх сторінок (було ~8 с на кожному старті)
+    if (typeof input === 'string' && /[?&]action=getLocations(&|$)/.test(input) && !/[?&]nocache=1/.test(input)
+        && ((init && init.method) || 'GET').toUpperCase() === 'GET'){
+      try { var _lc = JSON.parse(localStorage.getItem('mkids_locs_cache') || 'null');
+        if (_lc && _lc.body && Date.now() - _lc.ts < 1800000)
+          return Promise.resolve(new Response(_lc.body, {status: 200, headers: {'Content-Type': 'application/json'}})); } catch(_e){}
+      return _of(input, init).then(_watch).then(function(r){
+        try { r.clone().text().then(function(t){ try { var j = JSON.parse(t);
+          if (j && j.ok !== false) localStorage.setItem('mkids_locs_cache', JSON.stringify({ts: Date.now(), body: t})); } catch(_e){} }); } catch(_e){}
+        return r; });
+    }
     return _of(input, init).then(_watch);
   };
   _checkTok();   // v7.288: і одразу при завантаженні сторінки
@@ -2962,19 +2973,29 @@ function bindEventListeners(){
   st.textContent='.nav-badge{margin-left:auto;background:#e74c3c;color:#fff;font-size:11px;font-weight:800;min-width:18px;height:18px;border-radius:9px;display:inline-flex;align-items:center;justify-content:center;padding:0 5px}.nav-badge.hidden{display:none!important}';
   document.head.appendChild(st);
   var U='https://script.google.com/macros/s/AKfycbyTSUVlaN4-PpXe47zCSmhVs0Qxy1FDXG_XsB4zcKNpqBxdhDtS9ibM4YFGkGjmPQDFWQ/exec';
+  // v7.401: лише видима вкладка, раз на 3 хв + при поверненні на вкладку; відповідь — у спільному кеші
+  // на 2 хв (перехід між сторінками не шле новий запит). Було: кожні 60 с з кожної вкладки, навіть фонової.
+  var BK='mkids_badge_cache', BTTL=120000, busy=false;
+  function show(n){ var b=document.getElementById('tasksBadge'); if(!b) return;
+    if(n>0){ b.textContent=n; b.classList.remove('hidden'); } else b.classList.add('hidden'); }
   function poll(){
     var b=document.getElementById('tasksBadge'); if(!b) return;
+    if(document.visibilityState==='hidden' || busy) return;
     var s; try{ s=JSON.parse(localStorage.getItem('mkids_session')||'null'); }catch(e){ return; }
     if(!s||!s.user||!s.user.id) return;
+    try{ var c=JSON.parse(localStorage.getItem(BK)||'null');
+      if(c && c.uid===s.user.id && Date.now()-c.ts<BTTL){ show(c.n); return; } }catch(e){}
+    busy=true;
     fetch(U+'?action=getDashboardNotifications&userId='+encodeURIComponent(s.user.id)+'&role='+encodeURIComponent(s.user.role||'')+'&token='+encodeURIComponent(s.token||''),{redirect:'follow'})
       .then(function(r){return r.json();})
       .then(function(res){
         if(!res||!res.ok) return;
-        if(res.badge>0){ b.textContent=res.badge; b.classList.remove('hidden'); }
-        else b.classList.add('hidden');
-      }).catch(function(){});
+        var n=Number(res.badge)||0; show(n);
+        try{ localStorage.setItem(BK, JSON.stringify({uid:s.user.id, n:n, ts:Date.now()})); }catch(e){}
+      }).catch(function(){}).then(function(){ busy=false; });
   }
-  setTimeout(poll,1500); setInterval(poll,60000);
+  setTimeout(poll,1500); setInterval(poll,180000);
+  document.addEventListener('visibilitychange', function(){ if(document.visibilityState==='visible') poll(); });
 })();
 </script>
 <script>

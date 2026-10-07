@@ -399,7 +399,7 @@ table.hist .muted{font-size:11.5px}
 
   </main>
 </div>
-<script src="xlsx.full.min.js"></script>
+<script defer src="xlsx.full.min.js"></script>
 <script>
 var CFG = { SCRIPT_URL: 'https://script.google.com/macros/s/AKfycbyTSUVlaN4-PpXe47zCSmhVs0Qxy1FDXG_XsB4zcKNpqBxdhDtS9ibM4YFGkGjmPQDFWQ/exec' };
 var MONTHS = ['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
@@ -486,6 +486,17 @@ var SESSION_KEY='mkids_session', SESSION_TTL_MS = 7 * 24 * 3600 * 1000;
         }
       }
     } catch(_e){}
+    // v7.401: getLocations — спільний кеш у браузері на 30 хв для всіх сторінок (було ~8 с на кожному старті)
+    if (typeof input === 'string' && /[?&]action=getLocations(&|$)/.test(input) && !/[?&]nocache=1/.test(input)
+        && ((init && init.method) || 'GET').toUpperCase() === 'GET'){
+      try { var _lc = JSON.parse(localStorage.getItem('mkids_locs_cache') || 'null');
+        if (_lc && _lc.body && Date.now() - _lc.ts < 1800000)
+          return Promise.resolve(new Response(_lc.body, {status: 200, headers: {'Content-Type': 'application/json'}})); } catch(_e){}
+      return _of(input, init).then(_watch).then(function(r){
+        try { r.clone().text().then(function(t){ try { var j = JSON.parse(t);
+          if (j && j.ok !== false) localStorage.setItem('mkids_locs_cache', JSON.stringify({ts: Date.now(), body: t})); } catch(_e){} }); } catch(_e){}
+        return r; });
+    }
     return _of(input, init).then(_watch);
   };
   _checkTok();   // v7.288: і одразу при завантаженні сторінки
