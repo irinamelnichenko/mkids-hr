@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.402
+// m.kids CRM — Google Apps Script v7.404
+// v7.404: роль founder (власник): читає як CFO (_founderAsCfo у токені й _getActor), будь-який запис відхиляється
+//   до маршрутизації (POST лише get*/authenticate/dryRun:true; GET run/sync/import/merge/purge/refresh/send — ні).
 // v7.402: швидкодія, етап 2 — кеш повільних GET (GET_CACHE_SPEC: аналітика, категорії, Payment-рік, ліди, історія,
 //   відмітки додаткових, дані рахунків); версії груп att/leads/money/payyear скидає кожен POST (_gcBumpFor) і агрегат;
 //   getPredmetnyky — кеш 900 с замість 180.
@@ -6888,11 +6890,31 @@ function _gcBumpFor(action){
   GC_BUMP_RULES.forEach(function(r){ if (r[1].test(a)) _cacheBump(r[0]); });
 }
 
+// ═══ v7.404: РОЛЬ «founder» (власник) — бачить усе, що CFO, але НІЧОГО не змінює ═══════════════
+// Для читання власник = CFO (усі перевірки прав бачать role 'cfo'), справжня роль — у полі founder.
+// Будь-який запис відхиляється ще до маршрутизації: POST дозволено лише для get*/authenticate і
+// прев'ю з явним dryRun:true; службові запуски через GET (run/sync/import/merge/purge/refresh) — теж ні.
+function _founderAsCfo(u){
+  if (u && String(u.role || '').toLowerCase().trim() === 'founder'){ u.founder = true; u.role = 'cfo'; }
+  return u;
+}
+var FOUNDER_READONLY = {ok:false, code:'READONLY', error:'Режим перегляду: власник не вносить змін'};
+function _founderPostAllowed(body){
+  var a = String((body && body.action) || '');
+  return /^get/i.test(a) || a === 'authenticate' || (body && body.dryRun === true);
+}
+function _isFounderReq(body){
+  if (_CURRENT_AUTH) return !!_CURRENT_AUTH.founder;
+  var id = body && (body.actorId || body.userId);                       // запит без токена — дивимось на актора
+  if (!id) return false;
+  try { return !!_getActor(id).founder; } catch(_e){ return false; }
+}
+
 function _authGate(action, token, method){
   _CURRENT_AUTH = null; _AUTH_STALE = ''; _ENTRY_AUTHOR_CACHE = null;   // v7.372: автор — на кожен запит заново
   if (action === 'ping' || action === 'authenticate') return null;       // завжди без токена
   var payload = _verifyToken(token);
-  if (payload){ _CURRENT_AUTH = payload; return null; }                   // валідний токен
+  if (payload){ _CURRENT_AUTH = _founderAsCfo(payload); return null; }    // валідний токен
   // v7.333: причина — «немає» чи токен є, але не прийнятий (чужий підпис / прострочено). В останньому
   // разі відповідь несе authStale — сторінка один раз просить увійти знову (у режимі «лише записувати»
   // відмови немає, тож без цього людина тижнями працювала з недійсним токеном і писала рядок на кожен запит).
@@ -6910,14 +6932,17 @@ function doGet(e) {
     if (_g) return jsonOut(_g);
     var result;
     // v7.402: службові запуски через GET (агрегати, імпорт, злиття) — скидаємо всі групи кешу
-    if (/^(run|sync|import|merge|purge|refresh)/.test(action)) ['att','leads','money','payyear'].forEach(_cacheBump);
+    if (/^(run|sync|import|merge|purge|refresh|send|tgGet)/.test(action)){
+      if (_CURRENT_AUTH && _CURRENT_AUTH.founder) return jsonOut(FOUNDER_READONLY);   // v7.404 власник — лише перегляд
+      ['att','leads','money','payyear'].forEach(_cacheBump);
+    }
     // v7.402: кеш повільних GET
     var _gcs = GET_CACHE_SPEC[action], _gck = '';
     if (_gcs && String((e.parameter && e.parameter.nocache) || '') !== '1'){
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.402', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.404', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -7071,6 +7096,7 @@ function doPost(e) {
     var body = JSON.parse(e.postData.contents);
     var _g = _authGate(body.action, body.token || '', 'POST');   // v7.110
     if (_g) return jsonOut(_g);
+    if (!_founderPostAllowed(body) && _isFounderReq(body)) return jsonOut(FOUNDER_READONLY);   // v7.404
     _gcBumpFor(body.action);   // v7.402: запис → відповідні кеші GET застаріли
     var result;
     if      (body.action === 'remindLead')       result = remindLead(body || {});   // v7.169
@@ -17340,7 +17366,7 @@ function getOverviewAnalytics(year, month) {
 }
 
 var USERS_SHEET_NAME = 'Користувачі';
-var VALID_USER_ROLES = ['cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo'];
+var VALID_USER_ROLES = ['cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo','founder'];   // v7.404: founder — власник, лише перегляд
 
 function _getUsersSheet() {
   var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
@@ -32341,7 +32367,7 @@ function _getActor(actorId){
     if (Number(data[i][0]) === Number(actorId)){
       var u = _parseUserRow(data[i]);
       if (!u.active) throw new Error('Actor user is inactive');
-      return u;
+      return _founderAsCfo(u);   // v7.404: власник читає як CFO
     }
   }
   throw new Error('Actor not found (id=' + actorId + ')');

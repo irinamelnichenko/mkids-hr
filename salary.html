@@ -853,11 +853,40 @@ function sortLocationsByZone(locs){ return sortByLocationOrder(locs); }
       (document.body || document.documentElement).appendChild(d);
     }, 800);
   }
+  // ── v7.404: режим перегляду для власника ──
+  function _roUser(){ try { var s = JSON.parse(localStorage.getItem('mkids_session') || 'null'); return !!(s && s.user && s.user.readOnly); } catch(_e){ return false; } }
+  var _roToastTs = 0;
+  function _roToast(){
+    if (Date.now() - _roToastTs < 4000) return; _roToastTs = Date.now();
+    try { var d = document.createElement('div');
+      d.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:18px;z-index:99999;background:#7c3aed;color:#fff;padding:10px 16px;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.25);font:13px/1.3 system-ui,sans-serif';
+      d.textContent = '👁 Режим перегляду — зміни не зберігаються';
+      (document.body || document.documentElement).appendChild(d); setTimeout(function(){ d.remove(); }, 3500); } catch(_e){}
+  }
+  function _roBadge(){
+    if (!_roUser() || document.getElementById('mkRoBadge')) return;
+    try { var b = document.createElement('div'); b.id = 'mkRoBadge';
+      b.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:99998;background:#f3e8ff;color:#6d28d9;border:1px solid #d8b4fe;padding:3px 12px;border-radius:12px;font:12px/1.4 system-ui,sans-serif;font-weight:700;pointer-events:none';
+      b.textContent = '👑 Власник · лише перегляд';
+      (document.body || document.documentElement).appendChild(b); } catch(_e){}
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _roBadge); else _roBadge();
+  window.addEventListener('storage', _roBadge);
   window.fetch = function(input, init){
     var url = '';
     try { url = (typeof input === 'string') ? input : (input && input.url) || ''; } catch(_e){}
     if (url.indexOf('script.google.com') < 0) return _of(input, init);   // сторонні запити не чіпаємо
     if (!_checkTok()) return new Promise(function(){});                    // v7.288: кинуто на логін — запит не шлемо
+    // v7.404: власник (founder) — лише перегляд. Будь-яку зміну не відправляємо зовсім (бекенд теж відхиляє).
+    if (_roUser() && ((init && init.method) || 'GET').toUpperCase() === 'POST'){
+      var _rb = null; try { _rb = JSON.parse((init && init.body) || 'null'); } catch(_e){}
+      var _ra = String((_rb && _rb.action) || '');
+      if (!(/^get/i.test(_ra) || _ra === 'authenticate' || (_rb && _rb.dryRun === true))){
+        _roToast();
+        return Promise.resolve(new Response(JSON.stringify({ok:false, code:'READONLY', error:'Режим перегляду: власник не вносить змін'}),
+          {status: 200, headers: {'Content-Type': 'application/json'}}));
+      }
+    }
     try {
       var t = _tok();
       if (t){
