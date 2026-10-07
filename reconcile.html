@@ -1549,7 +1549,8 @@ function _rcInvPayments(){
   (RC.parsed||[]).forEach(function(pr){
     (pr.expenses||[]).forEach(function(x){
       out.push({date:x.date, amount:x.amount, edrpou:x.edrpou,
-                counterparty:x.counterparty, purpose:x.purpose, ref:x.ref});
+                counterparty:x.counterparty, purpose:x.purpose, ref:x.ref,
+                iban:pr.iban||''});   // v7.397: рахунок платника — бекенд розрізняє локації (кілька однакових рахунків)
     });
   });
   return out;

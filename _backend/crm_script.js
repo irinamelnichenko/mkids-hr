@@ -1,5 +1,9 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.391
+// m.kids CRM — Google Apps Script v7.397
+// v7.397: бот рахунків — invoicePatch (правка ЄДРПОУ/дати/№/суми, «відхилено» для дублів; CFO, dryRun) і
+//   invoiceResendPaid (повтор «✅ Оплачено», якщо Telegram відмовив); звірка: «відхилено» не матчиться,
+//   кілька кандидатів → перевага № рахунку в призначенні, далі — локація рахунку платника (Реквізити_Локацій);
+//   пауза 3,1 с між повідомленнями (ліміт Telegram ~20/хв у групу — інакше Too Many Requests).
 // v7.391: розрахунковий листок — «Виплачено на картку (аванс + ЗП)», «Коригування за минулі місяці».
 // v7.389: картка дитини — колонка «Документи (JSON)» (посилання на договір і підписані документи; лише http/https).
 // v7.387: відомість на готівку = логіка колонки залишку Salary: бюджет M − факт M + залишок M−1 (готове значення 3-ї колонки).
@@ -3555,7 +3559,7 @@ function matchInvoicesToPayments(body){
     for(var r=1;r<v.length;r++){
       if(!v[r][c('invoice_id')]) continue;
       var st = String(v[r][c('статус')]||'').trim();
-      if(st === INV_ST.PAID) continue;
+      if(st === INV_ST.PAID || st === INV_ST.REJECTED) continue;   // v7.397: дублі/відхилені не матчимо
       var amt = Number(v[r][c('сума')]) || 0;
       if(!amt) continue;
       open.push({
@@ -3573,6 +3577,15 @@ function matchInvoicesToPayments(body){
     }
     if(!open.length) return {ok:true, dryRun:dryRun, matched:[], openCount:0, note:'немає відкритих заявок із сумою'};
 
+    // v7.397: рахунок платника → локації (Реквізити_Локацій). Лише для вибору між кількома кандидатами.
+    var _payerLocs = {};
+    try {
+      var _rq = SpreadsheetApp.openById(CONFIG_SHEET_ID).getSheetByName('Реквізити_Локацій');
+      if(_rq) _rq.getDataRange().getValues().slice(1).forEach(function(rw){
+        var ib = String(rw[4]||'').replace(/\s+/g,'').toUpperCase(), lc = trim(rw[0]);
+        if(ib && lc) (_payerLocs[ib] = _payerLocs[ib] || {})[lc] = 1;
+      });
+    } catch(_rqe){}
     // Кандидати: платіж × заявка.
     var pairs = [];
     pays.forEach(function(p, pi){
@@ -3589,11 +3602,24 @@ function matchInvoicesToPayments(body){
         var byEdrpou = !!(pEd && inv.edrpou && pEd === inv.edrpou);
         var byNumber = _invPurposeHasNumber(p.purpose, inv.number);
         if(!byEdrpou && !byNumber) return;                                // сама сума — не підстава
-        pairs.push({payIdx:pi, inv:inv, pay:p, byEdrpou:byEdrpou, byNumber:byNumber,
-                    score:(byEdrpou?1:0)+(byNumber?1:0)});
+        var pl = _payerLocs[String(p.iban||'').replace(/\s+/g,'').toUpperCase()];
+        var byLoc = !!(pl && inv.loc && pl[inv.loc]);
+        pairs.push({payIdx:pi, inv:inv, pay:p, byEdrpou:byEdrpou, byNumber:byNumber, byLoc:byLoc,
+                    score:(byEdrpou?1:0)+(byNumber?1:0),
+                    rank:(byNumber?2:0)+(byLoc?1:0)});
       });
     });
 
+    // v7.397: кілька кандидатів → лишаємо найсильніші: № рахунку в призначенні (2), рахунок платника
+    // належить локації заявки (1). Кейс: «Пожежна безпека» — 6 рахунків по 3 078 ₴ різним локаціям, кожен
+    // оплачено зі свого рахунку з № у призначенні; без цього всі 36 пар були «неоднозначні».
+    var _keepTop = function(list, keyOf){
+      var best = {};
+      list.forEach(function(x){ var k = keyOf(x); if(best[k] == null || x.rank > best[k]) best[k] = x.rank; });
+      return list.filter(function(x){ return x.rank === best[keyOf(x)]; });
+    };
+    pairs = _keepTop(pairs, function(x){ return 'p' + x.payIdx; });
+    pairs = _keepTop(pairs, function(x){ return 'i' + x.inv.id; });
     // Неоднозначність в обидва боки → не чіпаємо.
     var byInv = {}, byPay = {};
     pairs.forEach(function(x){
@@ -3618,7 +3644,8 @@ function matchInvoicesToPayments(body){
                 // v7.321: ЄДРПОУ ПЛАТЕЖУ (не заявки) — reconcile будує з нього ключ групи
                 // контрагента, щоб підставити локацію і статтю в потрібний рядок витрат.
                 payEdrpou:String(x.pay.edrpou||'').replace(/\D/g,''),
-                by:(x.byEdrpou?'ЄДРПОУ':'') + (x.byEdrpou&&x.byNumber?'+':'') + (x.byNumber?'№ у призначенні':'')};
+                by:(x.byEdrpou?'ЄДРПОУ':'') + (x.byEdrpou&&x.byNumber?'+':'') + (x.byNumber?'№ у призначенні':'') +
+                   (x.byLoc?' + рахунок локації':'')};
       }),
       ambiguous: ambiguous.map(function(x){
         return {id:x.inv.id, amount:x.inv.amount, supplier:x.inv.supplier,
@@ -3646,6 +3673,7 @@ function matchInvoicesToPayments(body){
         marked++;
         // ЄДИНЕ повідомлення бота в групу — див. v7.319.
         if(notify && x.inv.chatId && x.inv.messageId){
+          if(marked > 1) Utilities.sleep(3100);   // v7.397: ліміт Telegram у групу ~20/хв
           var res = _invSend(x.inv.chatId, '✅ Оплачено ' + d.slice(0,5),
                              {reply_to_message_id: x.inv.messageId});
           if(res && res.ok) notified++;
@@ -3658,6 +3686,79 @@ function matchInvoicesToPayments(body){
       return report;
     } finally { try { lock.releaseLock(); } catch(_){} }
   } catch(e){ _tgErr('inv:match', e); return {ok:false, error:String(e&&e.message||e)}; }
+}
+
+// v7.397: POST {action:'invoicePatch', actorId, id, set:{ЄДРПОУ?, 'дата рахунку'?, '№ рахунку'?, сума?, статус?},
+//   reason?, dryRun} — точкова правка заявки (OCR помилився) або «відхилено» для дубля. Лише CFO; dryRun за замовч.
+//   Оплачену не чіпаємо. Стара → нова вартість дописується в «лог».
+var INV_PATCH_FIELDS = ['ЄДРПОУ','дата рахунку','№ рахунку','сума','статус'];
+function invoicePatch(body){
+  body = body || {};
+  if(!_bankCfo(body.actorId)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var dryRun = (body.dryRun !== false);
+  var id = String(body.id||'').trim(), set = body.set || {};
+  if(!id) return {ok:false, error:'id обовʼязковий'};
+  var keys = Object.keys(set);
+  if(!keys.length) return {ok:false, error:'set порожній'};
+  for(var i=0;i<keys.length;i++) if(INV_PATCH_FIELDS.indexOf(keys[i]) === -1) return {ok:false, error:'поле «'+keys[i]+'» не правиться'};
+  if(set['статус'] != null && [INV_ST.REJECTED, INV_ST.PARSED].indexOf(String(set['статус'])) === -1)
+    return {ok:false, error:'статус лише «'+INV_ST.REJECTED+'» або «'+INV_ST.PARSED+'»'};
+  if(set['ЄДРПОУ'] != null && !/^\d{8,10}$/.test(String(set['ЄДРПОУ']))) return {ok:false, error:'ЄДРПОУ — 8–10 цифр'};
+  if(set['дата рахунку'] != null){
+    var dm = String(set['дата рахунку']).match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+    if(!dm || +dm[2] < 1 || +dm[2] > 12 || +dm[1] < 1 || +dm[1] > 31) return {ok:false, error:'дата — ДД.ММ.РРРР'};
+  }
+  if(set['сума'] != null && !(Number(set['сума']) > 0)) return {ok:false, error:'сума > 0'};
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(30000); } catch(_le){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+  try {
+    var sh = _invSheet(false); if(!sh) return {ok:false, error:'листа «'+INV_SHEET_NAME+'» немає'};
+    var v = sh.getDataRange().getValues(), H = v[0].map(String);
+    var row = -1;
+    for(var r=1;r<v.length;r++) if(String(v[r][H.indexOf('invoice_id')]) === id){ row = r; break; }
+    if(row < 0) return {ok:false, error:'заявку #'+id+' не знайдено'};
+    if(String(v[row][H.indexOf('статус')]).trim() === INV_ST.PAID) return {ok:false, error:'#'+id+' уже оплачена — не чіпаю'};
+    var changes = keys.map(function(k){
+      var old = v[row][H.indexOf(k)];
+      return {field:k, from:(old instanceof Date ? _invDmy(old) : String(old)), to:String(set[k])};
+    });
+    var out = {ok:true, dryRun:dryRun, id:id, row:row+1, changes:changes};
+    if(dryRun) return out;
+    changes.forEach(function(ch){
+      var cell = sh.getRange(row+1, H.indexOf(ch.field)+1);
+      if(ch.field === 'сума') cell.setValue(Number(ch.to));
+      else if(ch.field === 'дата рахунку' || ch.field === 'ЄДРПОУ' || ch.field === '№ рахунку') cell.setNumberFormat('@').setValue(ch.to);
+      else cell.setValue(ch.to);
+    });
+    var lc = H.indexOf('лог')+1, prev = String(sh.getRange(row+1, lc).getValue()||'');
+    sh.getRange(row+1, lc).setValue((prev ? prev+' · ' : '') + 'правка CFO ' + _invDmy(new Date()) + ': ' +
+      changes.map(function(ch){ return ch.field+' '+ch.from+'→'+ch.to; }).join(', ') + (body.reason ? ' ('+String(body.reason)+')' : ''));
+    SpreadsheetApp.flush();
+    return out;
+  } finally { try { lock.releaseLock(); } catch(_){} }
+}
+// v7.397: POST {action:'invoiceResendPaid', actorId, ids:[…]} — «✅ Оплачено ДД.ММ» у тред для ОПЛАЧЕНИХ заявок,
+//   коли Telegram відмовив (Too Many Requests). Дата — з «дата оплати». Пауза 3,1 с між повідомленнями.
+function invoiceResendPaid(body){
+  body = body || {};
+  if(!_bankCfo(body.actorId)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var ids = (Array.isArray(body.ids) ? body.ids : []).map(String);
+  if(!ids.length) return {ok:false, error:'ids порожній'};
+  var sh = _invSheet(false); if(!sh) return {ok:false, error:'листа «'+INV_SHEET_NAME+'» немає'};
+  var v = sh.getDataRange().getValues(), H = v[0].map(String), res = [], n = 0;
+  for(var r=1;r<v.length;r++){
+    var id = String(v[r][H.indexOf('invoice_id')]);
+    if(ids.indexOf(id) === -1) continue;
+    if(String(v[r][H.indexOf('статус')]).trim() !== INV_ST.PAID){ res.push({id:id, ok:false, error:'не оплачена'}); continue; }
+    var chat = String(v[r][H.indexOf('chat_id')]||'').trim(), msg = String(v[r][H.indexOf('message_id')]||'').trim();
+    if(!chat || !msg){ res.push({id:id, ok:false, error:'немає треду'}); continue; }
+    if(n++) Utilities.sleep(3100);
+    var d = _invDmy(v[r][H.indexOf('дата оплати')]);
+    var s = _invSend(chat, '✅ Оплачено ' + d.slice(0,5), {reply_to_message_id: msg});
+    if(!(s && s.ok)) _tgErr('inv:notify', 'заявка '+id+' (повтор): '+String((s&&s.description)||'no send'));
+    res.push({id:id, ok:!!(s && s.ok), error:(s && s.ok) ? '' : String((s&&s.description)||'no send')});
+  }
+  return {ok:true, sent:res.filter(function(x){ return x.ok; }).length, items:res};
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -6768,7 +6869,7 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.391', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.397', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
@@ -7012,6 +7113,8 @@ function doPost(e) {
     else if (body.action === 'opexNormsExtract')          result = opexNormsExtract(body || {});     // v7.345 довідник норм OPEX у CONFIG (dryRun за замовч., лише CFO); файли OPEX не чіпає
     else if (body.action === 'invoiceSetCaption')         result = invoiceSetCaption(body || {});    // v7.343 підпис заявки вручну / з експорту чату (dryRun за замовч.)
     else if (body.action === 'matchInvoicesToPayments')   result = matchInvoicesToPayments(body || {}); // v7.320 звірка заявок із випискою (dryRun за замовч.)
+    else if (body.action === 'invoicePatch')              result = invoicePatch(body || {});         // v7.397 правка полів заявки / «відхилено» (CFO, dryRun за замовч.)
+    else if (body.action === 'invoiceResendPaid')         result = invoiceResendPaid(body || {});    // v7.397 повтор «✅ Оплачено» (CFO)
     else if (body.action === 'tgSeedDirectors')           result = tgSeedDirectors(body || {});   // прив'язка директорів до локацій
     else if (body.action === 'cashPayoutSheet')          result = cashPayoutSheet(body || {});      // v7.64 відомість на видачу готівки (PDF)
     else if (body.action === 'cleanupBackupTabs')        result = cleanupBackupTabs(body || {});  // v7.45 чистка бекап-табів
