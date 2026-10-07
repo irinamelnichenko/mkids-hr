@@ -1,5 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.401
+// m.kids CRM — Google Apps Script v7.402
+// v7.402: швидкодія, етап 2 — кеш повільних GET (GET_CACHE_SPEC: аналітика, категорії, Payment-рік, ліди, історія,
+//   відмітки додаткових, дані рахунків); версії груп att/leads/money/payyear скидає кожен POST (_gcBumpFor) і агрегат;
+//   getPredmetnyky — кеш 900 с замість 180.
 // v7.401: швидкодія — getCacheVer (версія кешу групи, напр. clients: сторінка тягне картки лише якщо змінились);
 //   формат колонок задач ставиться лише при зростанні листа, а не на кожне опитування бейджа (було — запис щохвилини).
 // v7.397: бот рахунків — invoicePatch (правка ЄДРПОУ/дати/№/суми, «відхилено» для дублів; CFO, dryRun) і
@@ -6850,6 +6853,41 @@ function getAuthLog(){
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 // Гейт: null → пропускаємо; обʼєкт-відмова → блокуємо (лише коли AUTH_ENFORCE).
+// ═══ v7.402: КЕШ ПОВІЛЬНИХ GET (етап 2 швидкодії) ═══════════════════════════════════════════════
+// Ключ = дія + параметри + користувач + ВЕРСІЇ груп даних. Кожен POST скидає версію своєї групи
+// (_gcBumpFor), тож після запису через систему відповідь одразу свіжа; ручні правки в таблицях
+// підхоплюються після TTL. ?nocache=1 — повз кеш. Помилки (ok:false) не кешуються.
+var GET_CACHE_SPEC = {
+  getOverviewAnalytics: {ttl: 900,  ver: ['money', 'payyear']},   // ~29 с: ~30 файлів OPEX/Salary
+  getCategoryAnalytics: {ttl: 900,  ver: ['money']},              // openById на кожну локацію
+  getPaymentsYearly:    {ttl: 1800, ver: ['payyear']},            // 4,5 МБ; міняється лише агрегатом
+  getLeads:             {ttl: 120,  ver: ['leads']},              // 13 с; тригер нагадувань пише щохвилини
+  getEntryHistory:      {ttl: 300,  ver: ['money']},              // 5 журналів повністю
+  getAttendanceMarks:   {ttl: 600,  ver: ['att']},                // весь аркуш відміток
+  getInvoiceListData:   {ttl: 600,  ver: ['clients', 'payyear', 'att', 'money']}
+};
+var GC_SKIP_PARAMS = {token:1, nocache:1, action:1, _:1, t:1, ts:1, cb:1};
+function _gcKey(action, p, spec){
+  try {
+    var who = (_CURRENT_AUTH && _CURRENT_AUTH.id) || p.actorId || p.userId || '';
+    var parts = Object.keys(p || {}).filter(function(k){ return !GC_SKIP_PARAMS[k]; }).sort()
+      .map(function(k){ return k + '=' + p[k]; });
+    var raw = action + '|' + spec.ver.map(_cacheVer).join(',') + '|' + who + '|' + parts.join('&');
+    var dg = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, raw, Utilities.Charset.UTF_8);
+    return 'gc_' + action.slice(0, 24) + '_' + dg.map(function(b){ return ('0' + (b & 0xff).toString(16)).slice(-2); }).join('');
+  } catch(_e){ return ''; }
+}
+// POST-дія → які групи кешу застаріли.
+var GC_BUMP_RULES = [
+  ['att',   /attendance|mark|dopmerge|dopsplit|activit|reprice|meal/i],
+  ['leads', /lead|^tg/i],
+  ['money', /opex|salary|sal[A-Z_]|cash|reconcile|payment|budget|vacation|invoice|expense|bank|journal|categor|discount|aggregat/i]
+];
+function _gcBumpFor(action){
+  var a = String(action || ''); if (!a) return;
+  GC_BUMP_RULES.forEach(function(r){ if (r[1].test(a)) _cacheBump(r[0]); });
+}
+
 function _authGate(action, token, method){
   _CURRENT_AUTH = null; _AUTH_STALE = ''; _ENTRY_AUTHOR_CACHE = null;   // v7.372: автор — на кожен запит заново
   if (action === 'ping' || action === 'authenticate') return null;       // завжди без токена
@@ -6871,7 +6909,15 @@ function doGet(e) {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
     var result;
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.401', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    // v7.402: службові запуски через GET (агрегати, імпорт, злиття) — скидаємо всі групи кешу
+    if (/^(run|sync|import|merge|purge|refresh)/.test(action)) ['att','leads','money','payyear'].forEach(_cacheBump);
+    // v7.402: кеш повільних GET
+    var _gcs = GET_CACHE_SPEC[action], _gck = '';
+    if (_gcs && String((e.parameter && e.parameter.nocache) || '') !== '1'){
+      _gck = _gcKey(action, e.parameter || {}, _gcs);
+      if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
+    }
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.402', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -7004,6 +7050,7 @@ function doGet(e) {
     else if (action === 'getFillStatus')               result = getFillStatus(e.parameter || {}, String(e.parameter.nocache || '') === '1');   // v6.51; v7.293 кеш 5 хв
     else if (action === 'get')                         result = getDashRecords();                            // v7.106 дашборд-записи (S.recs) — читання
     else                                             result = {ok:false, error:'Unknown action: ' + action};
+    if (_gck && result && result.ok !== false) _cacheGzPutBig(_gck, result, _gcs.ttl);   // v7.402
     return jsonOut(result);
   } catch(err) {
     try { _tgErr('route:' + ((typeof action !== 'undefined' && action) || (typeof body !== 'undefined' && body && body.action) || '?'), err); } catch(_le){}   // v7.294: збої маршрутів — у TG_Err
@@ -7015,15 +7062,16 @@ function doPost(e) {
   try {
     // Telegram-вебхук: тіло — update без поля action, ідентифікуємо по ?action=tgWebhook.
     // Оминає _authGate (перевірка — секрет у query), парсить update сам.
-    if (e && e.parameter && e.parameter.action === 'tgWebhook') return jsonOut(tgWebhook(e));
+    if (e && e.parameter && e.parameter.action === 'tgWebhook'){ _cacheBump('leads'); return jsonOut(tgWebhook(e)); }   // v7.402: ліди змінились
     // v7.312 бот рахунків: свій токен/група/секрет, теж повз _authGate (секрет у query).
     if (e && e.parameter && e.parameter.action === 'tgInvoiceWebhook') return jsonOut(tgInvoiceWebhook(e));
     // v7.153 форма з сайту: власний секрет у query, тому теж повз _authGate.
     // Поки WEB_LEAD_SECRET не заданий — webLeadIntake сам відмовляє.
-    if (e && e.parameter && e.parameter.action === 'webLead')   return jsonOut(webLeadIntake(e));
+    if (e && e.parameter && e.parameter.action === 'webLead'){ _cacheBump('leads'); return jsonOut(webLeadIntake(e)); }
     var body = JSON.parse(e.postData.contents);
     var _g = _authGate(body.action, body.token || '', 'POST');   // v7.110
     if (_g) return jsonOut(_g);
+    _gcBumpFor(body.action);   // v7.402: запис → відповідні кеші GET застаріли
     var result;
     if      (body.action === 'remindLead')       result = remindLead(body || {});   // v7.169
     else if (body.action === 'saveClient'){
@@ -12148,7 +12196,11 @@ function writeYearlyHeader(sheet) {
   sheet.setFrozenRows(1);
 }
 
+// v7.402: після кожного перезбору «Оплати-Рік» — скидаємо кеш getPaymentsYearly / getOverviewAnalytics / рахунків.
 function aggregatePaymentsYearly() {
+  try { return _aggregatePaymentsYearlyImpl(); } finally { _cacheBump('payyear'); }
+}
+function _aggregatePaymentsYearlyImpl() {
   var configSS    = SpreadsheetApp.openById(CONFIG_SHEET_ID);
   var configSheet = configSS.getSheets()[0];
   var configData  = configSheet.getDataRange().getValues();
@@ -34096,7 +34148,7 @@ function getPredmetnyky(actorId, year, month){
       scope:        scope || 'all',
       slice:        (yN > 0 && mN > 0) ? {year: yN, month: mN} : 'all'  // v7.80 діагностика
     };
-    if (cache && base){ try { _predCachePut(cache, base, resp, 180); } catch(_cw){} }
+    if (cache && base){ try { _predCachePut(cache, base, resp, 900); } catch(_cw){} }   // v7.402: 180 → 900 с (запис і так скидає predver)
     return resp;
   } catch(e){
     return {ok:false, error: e.message || String(e)};
