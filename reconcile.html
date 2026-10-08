@@ -518,6 +518,7 @@ select,input{font-family:inherit}
         <input type="date" id="rcBankFrom" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:8px">
         <span>—</span>
         <input type="date" id="rcBankTo" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:8px">
+        <select id="rcBankLoc" title="Лише юрособи цієї локації — у рази швидше" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:8px"><option value="">Усі локації</option></select>
         <button class="btn btn-primary" id="rcBankBtn" onclick="rcFromBank()">🏦 З банку</button>
         <button class="btn" onclick="rcBankTokensOpen()" title="Токени банку: додати / переглянути / прибрати">⚙️ Банки</button>
       </span>
@@ -1445,20 +1446,31 @@ function rcBankInit(){
   var f = document.getElementById('rcBankFrom'), t = document.getElementById('rcBankTo');
   if (!f.value) f.value = _rcIsoDay(y);
   if (!t.value) t.value = _rcIsoDay(new Date());
+  // v7.405: вибір локації — банк опитується лише по юрособах цієї локації
+  fetch(CFG.SCRIPT_URL + '?action=getLocations', {redirect:'follow'}).then(function(r){ return r.json(); }).then(function(j){
+    var sel = document.getElementById('rcBankLoc'); if (!sel || sel.options.length > 1) return;
+    var locs = ((j && j.data) || []).map(function(l){ return String(l.loc || '').trim(); }).filter(Boolean);
+    if (typeof sortByLocationOrder === 'function') locs = sortByLocationOrder(locs);
+    var last = ''; try { last = localStorage.getItem('rc_bank_loc') || ''; } catch(_e){}
+    sel.innerHTML = '<option value="">Усі локації</option>' + locs.map(function(l){ return '<option' + (l === last ? ' selected' : '') + '>' + escapeHtml(l) + '</option>'; }).join('');
+  }).catch(function(){});
 }
 async function rcFromBank(){
   if (RC.busy) return;
   var from = document.getElementById('rcBankFrom').value, to = document.getElementById('rcBankTo').value;
   if (!from || !to || from > to){ showToast('Оберіть період «з — по»', 'error'); return; }
+  var _bl = (document.getElementById('rcBankLoc') || {}).value || '';   // v7.405
+  try { localStorage.setItem('rc_bank_loc', _bl); } catch(_e){}
+  RC.bankLoc = _bl;
   RC.busy = true; var btn = document.getElementById('rcBankBtn'); btn.disabled = true; btn.textContent = '⏳ Банк…';
   $('content').classList.remove('hidden');
-  $('meta').textContent = 'ПриватБанк · ' + from + ' — ' + to;
+  $('meta').textContent = 'ПриватБанк · ' + from + ' — ' + to + (_bl ? ' · ' + _bl : '');
   $('rcBanner').innerHTML = ''; $('rcSummary').innerHTML = ''; $('rcApplyBar').style.display = 'none';
-  $('rcWrap').innerHTML = '<div class="inv-loading">⏳ Завантаження виписки з банку (1 запит/с — може тривати до хвилини)…</div>';
+  $('rcWrap').innerHTML = '<div class="inv-loading">⏳ Завантаження виписки з банку' + (_bl ? ' · ' + escapeHtml(_bl) : ' · усі юрособи') + ' (1 запит/с — до хвилини)…</div>';
   RC.parsed = []; RC.groups = [];
   rcResetOpexState(); rcResetLogState();
   try {
-    var r = await fetch(CFG.SCRIPT_URL + '?action=bankFetch&from=' + from + '&to=' + to + '&actorId=' + encodeURIComponent((S.user && S.user.id) || ''), {redirect:'follow'});
+    var r = await fetch(CFG.SCRIPT_URL + '?action=bankFetch&from=' + from + '&to=' + to + (_bl ? '&loc=' + encodeURIComponent(_bl) : '') + '&actorId=' + encodeURIComponent((S.user && S.user.id) || ''), {redirect:'follow'});
     var j = await r.json();
     if (!j.ok && !(j.groups || []).length) throw new Error(j.error || (j.errors || []).join('; ') || 'банк не відповів');
     (j.errors || []).forEach(function(e){ RC.groups.push({fileName:'🏦 ПриватБанк', ok:false, error:e}); });
@@ -1590,6 +1602,7 @@ async function rcOnFile(input){
   var files=input.files; if(!files||!files.length) return;
   if (typeof XLSX==='undefined'){ showToast('❌ Бібліотека XLSX не завантажена','error'); return; }
   if(RC.busy) return; RC.busy=true;
+  RC.bankLoc='';   // v7.405: фільтр локації — лише для «З банку», файли звіряються повністю
   $('meta').textContent=files.length+' файл(ів)';
   $('rcBanner').innerHTML=''; $('rcSummary').innerHTML=''; $('rcApplyBar').style.display='none';
   $('rcWrap').innerHTML='<div class="inv-loading">⏳ Парсинг…</div>';
@@ -1802,29 +1815,56 @@ async function rcPreviewAll(){
   $('rcWrap').innerHTML='<div class="inv-loading">⏳ Зіставлення платників з дітьми…</div>';
   // лишаємо лише parse-error плашки, ok-групи й офісні перебудовуємо
   RC.groups=RC.groups.filter(function(g){return !g.ok && !g.office && !g.service && !g.ibanErr;});
+  // v7.405: ШВИДКО. (1) локації всіх рахунків — ОДНИМ запитом; рахунок поза «Реквізити_Локацій» на прев'ю
+  //   не шлемо (сервер однаково відмовляв, але кожна відмова коштувала ~9 с). (2) Прев'ю решти — по 6 паралельно.
+  //   (3) Обрано локацію — звіряємо лише її рахунки. Було: 63 рахунки × ~9 с ПО ЧЕРЗІ = ~10 хв на день виписки.
+  var ibList=[]; RC.parsed.forEach(function(pr){ if(pr.iban && !pr.service && !pr.office && (pr.payments||[]).length) ibList.push(pr.iban); });
+  var locOf=null;
+  if(ibList.length){
+    try{ var rl=await fetch(CFG.SCRIPT_URL+'?action=resolveIbanLocs&ibans='+encodeURIComponent(ibList.join(',')),{redirect:'follow'});
+      var jl=await rl.json(); if(jl&&jl.ok&&jl.map) locOf=jl.map; }catch(_e){}
+  }
+  var _k=function(ib){ return String(ib||'').replace(/\s+/g,'').toUpperCase(); };
+  var slots=new Array(RC.parsed.length), jobs=[];
   for (var i=0;i<RC.parsed.length;i++){
     var pr=RC.parsed[i];
     pr.payments=_rcSortRows(pr.payments); pr.expenses=_rcSortRows(pr.expenses);   // v7.378
     _rcCutInternal(pr);   // v7.380: перекази між власними рахунками — не дохід і не витрата
     if (pr.service){  // v7.381: службовий (напр. зарплатний) — не звіряємо й не показуємо у «Витратах»
-      RC.groups.push({fileName:pr.fileName, ok:false, service:true, iban:pr.iban, nPay:(pr.payments||[]).length, nExp:(pr.expenses||[]).length});
+      slots[i]={fileName:pr.fileName, ok:false, service:true, iban:pr.iban, nPay:(pr.payments||[]).length, nExp:(pr.expenses||[]).length};
       continue;
     }
     if (pr.office){   // v7.378: офісний рахунок — не належить локації, надходження не звіряємо
-      RC.groups.push({fileName:pr.fileName, ok:false, office:true, iban:pr.iban, nPay:(pr.payments||[]).length, nExp:(pr.expenses||[]).length});
+      slots[i]={fileName:pr.fileName, ok:false, office:true, iban:pr.iban, nPay:(pr.payments||[]).length, nExp:(pr.expenses||[]).length};
       continue;
     }
     if (!(pr.payments||[]).length) continue;   // надходжень не лишилось — перевіряти нічого (витрати — у режимі «Витрати»)
+    if (locOf && !locOf[_k(pr.iban)]){
+      slots[i]={fileName:pr.fileName, ok:false, error:'Рахунок "'+pr.iban+'" не знайдено в Реквізити_Локацій', iban:pr.iban,
+                ibanErr:true, nPay:(pr.payments||[]).length, nExp:(pr.expenses||[]).length};
+      continue;
+    }
+    if (RC.bankLoc && locOf && locOf[_k(pr.iban)]!==RC.bankLoc) continue;   // рахунок іншої локації тієї ж юрособи
+    jobs.push(i);
+  }
+  var done=0;
+  var runOne=async function(i){
+    var pr=RC.parsed[i];
     try{
       var r=await fetch(CFG.SCRIPT_URL,{ method:'POST', redirect:'follow',
         headers:{'Content-Type':'text/plain;charset=utf-8'},
         body:JSON.stringify({action:'reconcilePreview', iban:pr.iban, payments:pr.payments}) });
       var j=await r.json();
-      if(!j.ok) RC.groups.push({fileName:pr.fileName, ok:false, error:j.error||'preview failed', iban:pr.iban,
-                                ibanErr:/Реквізити_Локацій/.test(String(j.error||'')), nPay:(pr.payments||[]).length, nExp:(pr.expenses||[]).length});
-      else { j.fileName=pr.fileName; RC.groups.push({fileName:pr.fileName, ok:true, preview:j, parsedIdx:i}); }
-    }catch(e2){ RC.groups.push({fileName:pr.fileName, ok:false, error:String(e2&&e2.message||e2)}); }
-  }
+      if(!j.ok) slots[i]={fileName:pr.fileName, ok:false, error:j.error||'preview failed', iban:pr.iban,
+                          ibanErr:/Реквізити_Локацій/.test(String(j.error||'')), nPay:(pr.payments||[]).length, nExp:(pr.expenses||[]).length};
+      else { j.fileName=pr.fileName; slots[i]={fileName:pr.fileName, ok:true, preview:j, parsedIdx:i}; }
+    }catch(e2){ slots[i]={fileName:pr.fileName, ok:false, error:String(e2&&e2.message||e2)}; }
+    done++; $('rcWrap').innerHTML='<div class="inv-loading">⏳ Зіставлення платників з дітьми… '+done+' / '+jobs.length+' рахунків</div>';
+  };
+  var q=jobs.slice(), workers=[];
+  for (var w=0; w<Math.min(6,q.length); w++) workers.push((async function(){ while(q.length){ await runOne(q.shift()); } })());
+  await Promise.all(workers);
+  slots.forEach(function(g){ if(g) RC.groups.push(g); });   // порядок — як у виписці
   rcRenderAll();
 }
 

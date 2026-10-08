@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.404
+// m.kids CRM — Google Apps Script v7.405
+// v7.405: банк — bankFetch ?loc= (лише токени юросіб цієї локації); нічне завантаження о 05:00 (bankNightlySetup / setupBankNightly).
 // v7.404: роль founder (власник): читає як CFO (_founderAsCfo у токені й _getActor), будь-який запис відхиляється
 //   до маршрутизації (POST лише get*/authenticate/dryRun:true; GET run/sync/import/merge/purge/refresh/send — ні).
 // v7.402: швидкодія, етап 2 — кеш повільних GET (GET_CACHE_SPEC: аналітика, категорії, Payment-рік, ліди, історія,
@@ -6942,7 +6943,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.404', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.405', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -7131,6 +7132,7 @@ function doPost(e) {
     else if (body.action === 'cashCancel')                result = cashCancel(body);            // v7.373 скасування готівки
     else if (body.action === 'bankTokenSet')              result = bankTokenSet(body);          // v7.375 банк: токен (CFO; перевірка з Google)
     else if (body.action === 'bankAccountMark')           result = bankAccountMark(body);       // v7.378 офісний рахунок
+    else if (body.action === 'bankNightlySetup')          result = bankNightlySetup(body);      // v7.405 нічне завантаження банку о 05:00
     else if (body.action === 'salaryReconMoveMonth')      result = salaryReconMoveMonth(body);  // v7.374 перенос відомості в інший місяць (CFO, dryRun)
     else if (body.action === 'createCardFromPayment')     result = createCardFromPayment(body || {});   // v7.357 картка з рядка Payment (ПІБ як у Payment)
     else if (body.action === 'setLocRequisite')           result = setLocRequisite(body || {});      // v7.352 правка реквізитів (CFO, dryRun, архів старого IBAN, журнал)
@@ -15420,9 +15422,11 @@ function _bankCoverWrite(rows){
   if (add.length) sh.getRange(sh.getLastRow() + 1, 1, add.length, BANK_COVER_HEADER.length).setValues(add);
 }
 // Завантажити з банку за період → групи «як файл» + покриття. Ядро для bankFetch і нічного прогону.
-function _bankFetchCore(from, to){
+// v7.405: tokFilter — лише ці ключі токенів (вибір локації на сторінці звірки); без нього — усі.
+function _bankFetchCore(from, to, tokFilter){
   var all = _pbTokens(), groups = {}, errors = [], cover = [], now = new Date(), office = _bankOffice(), notReal = 0, total = 0;
   Object.keys(all).forEach(function(k){
+    if (tokFilter && !tokFilter[k]) return;
     var t = all[k], r = _pbTransactions(t.token, from, to);
     if (!r.ok){ errors.push(t.label + ': ' + r.error); return; }
     var byAccDay = {};
@@ -15465,10 +15469,23 @@ function bankFetch(params){
   var from = String(params.from || ''), to = String(params.to || from);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) return {ok:false, error:'from/to у форматі YYYY-MM-DD'};
   if (!Object.keys(_pbTokens()).length) return {ok:false, error:'Немає жодного токена банку'};
-  var r = _bankFetchCore(from, to);
+  // v7.405: ?loc= — опитуємо лише юрособи (токени), у яких є рахунок цієї локації з «Реквізити_Локацій».
+  //   Було: завжди всі 14 юросіб, навіть коли потрібна одна локація.
+  var tokFilter = null, loc = String(params.loc || '').trim();
+  if (loc){
+    var ibs = {};
+    try { var _rq = SpreadsheetApp.openById(CONFIG_SHEET_ID).getSheetByName('Реквізити_Локацій');
+      if (_rq) _rq.getDataRange().getValues().slice(1).forEach(function(rw){
+        if (trim(rw[0]) === loc){ var ib = String(rw[4] || '').replace(/\s+/g, '').toUpperCase(); if (ib) ibs[ib] = 1; } }); } catch(_e){}
+    var all = _pbTokens(); tokFilter = {};
+    Object.keys(all).forEach(function(k){ Object.keys(all[k].accounts || {}).forEach(function(a){
+      if (ibs[String(a).replace(/\s+/g, '').toUpperCase()]) tokFilter[k] = 1; }); });
+    if (!Object.keys(tokFilter).length) return {ok:false, error:'Для локації «' + loc + '» немає рахунків під токенами банку (перевір «Реквізити_Локацій»)'};
+  }
+  var r = _bankFetchCore(from, to, tokFilter);
   return {ok:!r.errors.length || r.groups.length > 0, from:from, to:to, groups:r.groups, errors:r.errors,
           count:r.groups.reduce(function(a, g){ return a + g.payments.length + g.expenses.length; }, 0),
-          bankTotal:r.total, notReal:r.notReal};   // v7.378: для звірки «у банку N — показано M»
+          bankTotal:r.total, notReal:r.notReal, loc:loc || ''};   // v7.378: для звірки «у банку N — показано M»
 }
 // Нічний прогін: забирає «вчора» по всіх токенах лише для реєстру покриття (внесення — після перегляду CFO).
 function bankNightly(){
@@ -15478,11 +15495,18 @@ function bankNightly(){
   Logger.log('[bankNightly] %s groups=%s covered=%s errors=%s', iso, r.groups.length, r.covered, JSON.stringify(r.errors));
   return r;
 }
-// Запустити ОДИН РАЗ вручну з редактора: нічний прогін о 06:30.
+// Запустити ОДИН РАЗ (з редактора або POST bankNightlySetup): нічний прогін о 05:00 (v7.405; було 06:30).
 function setupBankNightly(){
   ScriptApp.getProjectTriggers().forEach(function(t){ if (t.getHandlerFunction() === 'bankNightly') ScriptApp.deleteTrigger(t); });
-  ScriptApp.newTrigger('bankNightly').timeBased().atHour(6).nearMinute(30).everyDays(1).create();
+  ScriptApp.newTrigger('bankNightly').timeBased().atHour(5).nearMinute(0).everyDays(1).inTimezone('Europe/Kiev').create();
   return 'ok';
+}
+// v7.405: POST {action:'bankNightlySetup', actorId} — перевстановити нічний тригер (лише CFO); віддає, що стоїть.
+function bankNightlySetup(body){
+  if (!_bankCfo((body || {}).actorId)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  setupBankNightly();
+  var list = ScriptApp.getProjectTriggers().filter(function(t){ return t.getHandlerFunction() === 'bankNightly'; }).length;
+  return {ok:true, triggers:list, at:'05:00 Europe/Kiev'};
 }
 // GET ?action=bankCoverage&from=&to=&actorId= — календар покриття рахунок × дата (для пропусків).
 function bankCoverage(params){
