@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.405
+// m.kids CRM — Google Apps Script v7.406
+// v7.406: бот рахунків — «✅ Оплачено» до 09:00 (Київ) притримується в черзі й іде о 09:00 (invFlushPaidQueue); після 09:00 — одразу.
 // v7.405: банк — bankFetch ?loc= (лише токени юросіб цієї локації); нічне завантаження о 05:00 (bankNightlySetup / setupBankNightly).
 // v7.404: роль founder (власник): читає як CFO (_founderAsCfo у токені й _getActor), будь-який запис відхиляється
 //   до маршрутизації (POST лише get*/authenticate/dryRun:true; GET run/sync/import/merge/purge/refresh/send — ні).
@@ -3668,7 +3669,7 @@ function matchInvoicesToPayments(body){
     var lock = LockService.getScriptLock();
     try { lock.waitLock(30000); } catch(_le){ return {ok:false, error:'LOCK_TIMEOUT'}; }
     try {
-      var marked = 0, notified = 0;
+      var marked = 0, notified = 0, queued = 0;
       good.forEach(function(x){
         var d = _invDmy(x.pay.date);
         sh.getRange(x.inv.rowNum, c('статус')+1).setValue(INV_ST.PAID);
@@ -3681,7 +3682,9 @@ function matchInvoicesToPayments(body){
         marked++;
         // ЄДИНЕ повідомлення бота в групу — див. v7.319.
         if(notify && x.inv.chatId && x.inv.messageId){
-          if(marked > 1) Utilities.sleep(3100);   // v7.397: ліміт Telegram у групу ~20/хв
+          // v7.406: до 09:00 (Київ) — не будимо групу: у чергу, розсилка о 09:00.
+          if(_invQuietHours()){ _invQueuePaid(x.inv.chatId, x.inv.messageId, '✅ Оплачено ' + d.slice(0,5), x.inv.id); queued++; return; }
+          if(notified) Utilities.sleep(3100);   // v7.397: ліміт Telegram у групу ~20/хв
           var res = _invSend(x.inv.chatId, '✅ Оплачено ' + d.slice(0,5),
                              {reply_to_message_id: x.inv.messageId});
           if(res && res.ok) notified++;
@@ -3691,9 +3694,51 @@ function matchInvoicesToPayments(body){
       SpreadsheetApp.flush();
       report.marked = marked;
       report.notified = notified;
+      report.queued = queued;   // v7.406: притримано до 09:00
       return report;
     } finally { try { lock.releaseLock(); } catch(_){} }
   } catch(e){ _tgErr('inv:match', e); return {ok:false, error:String(e&&e.message||e)}; }
+}
+
+// ═══ v7.406: «✅ Оплачено» не раніше 09:00 (Київ). Внесли витрату о 6–7 ранку — повідомлення стає в чергу
+// (ScriptProperties INV_PAID_QUEUE) і тригер invFlushPaidQueue розсилає його о 09:00. Після 09:00 — одразу.
+var INV_QUIET_UNTIL_HOUR = 9;
+function _invQuietHours(){ return Number(Utilities.formatDate(new Date(), 'Europe/Kiev', 'H')) < INV_QUIET_UNTIL_HOUR; }
+function _invQueueRead(p){ try { return JSON.parse(p.getProperty('INV_PAID_QUEUE') || '[]'); } catch(_e){ return []; } }
+function _invQueuePaid(chatId, messageId, text, id){
+  var p = PropertiesService.getScriptProperties(), q = _invQueueRead(p);
+  if (!q.some(function(x){ return String(x.m) === String(messageId) && String(x.c) === String(chatId); }))
+    q.push({c:String(chatId), m:String(messageId), t:String(text), id:String(id || '')});
+  p.setProperty('INV_PAID_QUEUE', JSON.stringify(q));
+  _invScheduleFlush(false);
+}
+// Тригер на сьогоднішні 09:00 (Київ); retry=true — через 5 хв (Telegram відмовив частині).
+function _invScheduleFlush(retry){
+  var has = ScriptApp.getProjectTriggers().some(function(t){ return t.getHandlerFunction() === 'invFlushPaidQueue'; });
+  if (has && !retry) return;
+  var at;
+  if (retry) at = new Date(Date.now() + 5 * 60 * 1000);
+  else {
+    var day = Utilities.formatDate(new Date(), 'Europe/Kiev', 'yyyy-MM-dd');
+    at = Utilities.parseDate(day + ' 0' + INV_QUIET_UNTIL_HOUR + ':00', 'Europe/Kiev', 'yyyy-MM-dd HH:mm');
+    if (at.getTime() <= Date.now()) at = new Date(Date.now() + 60 * 1000);
+  }
+  ScriptApp.newTrigger('invFlushPaidQueue').timeBased().at(at).create();
+}
+function invFlushPaidQueue(){
+  ScriptApp.getProjectTriggers().forEach(function(t){ if (t.getHandlerFunction() === 'invFlushPaidQueue') ScriptApp.deleteTrigger(t); });
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(30000); } catch(_le){ _invScheduleFlush(true); return; }
+  try {
+    var p = PropertiesService.getScriptProperties(), q = _invQueueRead(p), left = [], n = 0;
+    q.forEach(function(x){
+      if (n++) Utilities.sleep(3100);
+      var res = _invSend(x.c, x.t, {reply_to_message_id: x.m});
+      if (!(res && res.ok)){ left.push(x); _tgErr('inv:notify', 'заявка ' + x.id + ' (09:00): ' + String((res && res.description) || 'no send')); }
+    });
+    if (left.length){ p.setProperty('INV_PAID_QUEUE', JSON.stringify(left)); _invScheduleFlush(true); }
+    else p.deleteProperty('INV_PAID_QUEUE');
+  } finally { try { lock.releaseLock(); } catch(_){} }
 }
 
 // v7.397: POST {action:'invoicePatch', actorId, id, set:{ЄДРПОУ?, 'дата рахунку'?, '№ рахунку'?, сума?, статус?},
@@ -6943,7 +6988,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.405', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.406', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
