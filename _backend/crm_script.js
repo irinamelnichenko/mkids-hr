@@ -1,5 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.406
+// m.kids CRM — Google Apps Script v7.407
+// v7.407: предметники — модель оплати «Група/міс» (кол. «Модель» каталогу): ставка × кількість груп, де за місяць
+//   було хоч одне заняття (Благо: Англійська/Польська/Спорт/Музика). deleteSalaryRow allowBudget:true (лише CFO) —
+//   видаляє рядок без факту навіть із бюджетом (ручні дублі), dryRun:true — прев'ю.
 // v7.406: бот рахунків — «✅ Оплачено» до 09:00 (Київ) притримується в черзі й іде о 09:00 (invFlushPaidQueue); після 09:00 — одразу.
 // v7.405: банк — bankFetch ?loc= (лише токени юросіб цієї локації); нічне завантаження о 05:00 (bankNightlySetup / setupBankNightly).
 // v7.404: роль founder (власник): читає як CFO (_founderAsCfo у токені й _getActor), будь-який запис відхиляється
@@ -6988,7 +6991,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.406', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.407', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -16773,9 +16776,17 @@ function deleteSalaryRow(body){
     var rname = String(rowArr[0] || '').trim();
     if (expectName && _journalNormName(rname) !== _journalNormName(expectName))
       return {ok:false, error:'Назва рядка ("' + rname + '") ≠ очікуваної ("' + expectName + '") — не видаляю'};
-    var sum = 0;
-    for (var c = 1; c < lastCol; c++){ sum += Math.abs(_opexNum(rowArr[c])); }
-    if (sum !== 0) return {ok:false, error:'Рядок "' + rname + '" має ненульові суми — видалення заблоковано (щоб не втратити ЗП)'};
+    // v7.407: allowBudget (лише CFO) — рядок без жодного ФАКТУ можна видалити й з бюджетом
+    // (ручний дубль, який система не веде). Факт (виплачене) як і раніше блокує.
+    var budgetOnly = (body.allowBudget === true) && _marksActorIsCfo(body.actorId);
+    var sum = 0, budgetSum = 0;
+    for (var c = 1; c < lastCol; c++){
+      var _v = Math.abs(_opexNum(rowArr[c]));
+      if (budgetOnly && c <= 36 && (c % 3) === 2){ budgetSum += _v; continue; }   // кол. бюджету місяця: (m-1)*3+2
+      sum += _v;
+    }
+    if (sum !== 0) return {ok:false, error:'Рядок "' + rname + '" має ненульові суми' + (budgetOnly ? ' у факті' : '') + ' — видалення заблоковано (щоб не втратити ЗП)'};
+    if (body.dryRun === true) return {ok:true, dryRun:true, loc:loc, row:row, name:rname, budgetRemoved:budgetSum};
     var bkpName = _salaryBackupSheet(ss, sheet, op.entry.listName);
     sheet.deleteRow(row);
     Logger.log('[deleteSalaryRow] loc=%s row=%s name="%s" backup=%s', loc, row, rname, bkpName);
@@ -29993,8 +30004,9 @@ var PREDMETNY_CATALOG_HEADER = ['id','Локація','Предмет','Став
 // що перезаписують каталог рядками по 8 колонок, — розширення зламало б їх.
 var PRED_CATALOG_MODEL_COL  = 9;   // I
 var PRED_CATALOG_MODEL_HEAD = 'Модель';
-function _predPayModelOf(v){ return /міс|month/i.test(String(v == null ? '' : v)) ? 'month' : 'lesson'; }
-function _predPayModelCell(m){ return m === 'month' ? 'Місяць' : 'За заняття'; }
+// v7.407: + 'group' («Група/міс») — ставка за КОЖНУ групу, де за місяць було хоч одне заняття.
+function _predPayModelOf(v){ var s = String(v == null ? '' : v); return /груп|group/i.test(s) ? 'group' : (/міс|month/i.test(s) ? 'month' : 'lesson'); }
+function _predPayModelCell(m){ return m === 'group' ? 'Група/міс' : (m === 'month' ? 'Місяць' : 'За заняття'); }
 function _predCatEnsureModelCol(sh){
   if (sh.getMaxColumns() < PRED_CATALOG_MODEL_COL)
     sh.insertColumnsAfter(sh.getMaxColumns(), PRED_CATALOG_MODEL_COL - sh.getMaxColumns());
@@ -30873,7 +30885,7 @@ function exportPredmetnyToSalary(params){
     var catRes = getPredmetnyCatalog(loc);
     if (!catRes.ok) return catRes;
     // v7.325: позиції «Місяць» — лише новий експорт (exportPredmetnykyToSalary); тут вони множились би.
-    var withRate = (catRes.items || []).filter(function(a){ return a.active && a.rate > 0 && a.payModel !== 'month'; });
+    var withRate = (catRes.items || []).filter(function(a){ return a.active && a.rate > 0 && a.payModel !== 'month' && a.payModel !== 'group'; });
 
     // 2. Період + відвідуваність → унікальні (група+дата) на кожен предмет.
     var attSh = _getPredmetnyAttSheet(true);
@@ -35476,7 +35488,16 @@ function exportPredmetnykyToSalary(params){
       // тож зрізаємо надлишок із сирих (до-мержевих) значень.
       // v7.265: perGroup рахує ДАТИ, а поділ дат не додає — тож норма лишається
       // «за одне заняття» і поділ на неї не впливає, як і домовлено.
-      var isMonth = (a.payModel === 'month');   // v7.325: «Місяць» — стеля норм не застосовується
+      // v7.407: «Група/міс» поводиться як «Місяць» (без стелі, без перейменування, нуль занять — не чіпаю),
+      // але ставка множиться на кількість груп, де за місяць було хоч одне заняття.
+      var isGroupM = (a.payModel === 'group');
+      var isMonth = (a.payModel === 'month') || isGroupM;   // v7.325: «Місяць» — стеля норм не застосовується
+      var groupsInMonth = 0;
+      if (isGroupM){
+        var _gSeen = {};
+        Object.keys(gbd).forEach(function(dIso){ Object.keys(gbd[dIso] || {}).forEach(function(g){ _gSeen[g] = true; }); });
+        groupsInMonth = Object.keys(_gSeen).length;
+      }
       var capExcess = 0, capDetail = [];
       if (!isMonth) Object.keys(gbd).forEach(function(dIso){
         Object.keys(gbd[dIso] || {}).forEach(function(g){
@@ -35502,7 +35523,7 @@ function exportPredmetnykyToSalary(params){
       // v7.325: «Місяць» — ставка = місячна сума. Є хоч одне заняття → пишемо суму як є.
       // Нуль занять → клітинку НЕ чіпаємо (там може бути ручна сума), крім випадку, коли
       // її писав саме цей експорт (журнал) — тоді обнуляємо своє, як і «За заняття».
-      var fact = isMonth ? (uniq > 0 ? a.rate : 0) : uniq * a.rate;
+      var fact = isGroupM ? groupsInMonth * a.rate : (isMonth ? (uniq > 0 ? a.rate : 0) : uniq * a.rate);
       var catName = a.subject_raw + ' ' + a.rate;
       var nk = _journalNormName(catName);
       stats.attempts++;
@@ -35567,7 +35588,7 @@ function exportPredmetnykyToSalary(params){
       updated++;
       totalFact += fact;
       details.push({subject:catName, matchedAs:found.matchedAs, priority:found.priority, payModel:a.payModel,
-        fact:fact, lessons:uniq, row:found.row, oldValue:currentValue, newValue:newValue,
+        fact:fact, lessons:uniq, groups:(isGroupM ? groupsInMonth : undefined), row:found.row, oldValue:currentValue, newValue:newValue,
         renamedTo:(renameTo && renameTo !== found.matchedAs) ? renameTo : null, planNext:planSt});
       Logger.log('[%s] %s → %s | lessons=%s × %s = %s | Salary row=%s col=%s | %s → %s',
         loc, catName, found.priority, uniq, a.rate, fact,

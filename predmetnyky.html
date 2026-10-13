@@ -2218,11 +2218,12 @@ function getRateFor(loc, subj){
   return null;
 }
 // v7.325: модель оплати позиції — 'lesson' (уроки × ставка) або 'month' (ставка = сума на місяць).
+// v7.407: + 'group' (ставка × кількість груп, де за місяць було хоч одне заняття).
 function getPayModelFor(loc, subj){
   for (var i = 0; i < S.catalog.length; i++){
     var c = S.catalog[i];
     if (!c.active || c.loc !== loc || c.subject_norm !== subj) continue;
-    return c.payModel === 'month' ? 'month' : 'lesson';
+    return (c.payModel === 'month' || c.payModel === 'group') ? c.payModel : 'lesson';
   }
   return 'lesson';
 }
@@ -2465,7 +2466,9 @@ function _predSessionStats(loc, subject){
     });
     return total;
   }
-  return { raw: cnt(false, false), merged: cnt(true, false), final: cnt(true, true) };
+  var _grp = {};   // v7.407: групи з хоч одним заняттям (модель «Група/міс»)
+  Object.keys(gbd).forEach(function(date){ Object.keys(gbd[date]).forEach(function(g){ _grp[g] = true; }); });
+  return { raw: cnt(false, false), merged: cnt(true, false), final: cnt(true, true), groups: Object.keys(_grp).length };
 }
 
 function renderHeaderCard(loc, subject){
@@ -2525,10 +2528,12 @@ function renderHeaderCard(loc, subject){
   }
 
   // ── Rate row ──
-  var _isMonth = (getPayModelFor(loc, subject) === 'month');   // v7.325
+  var _pm = getPayModelFor(loc, subject);
+  var _isMonth = (_pm === 'month');   // v7.325
+  var _isGroup = (_pm === 'group');   // v7.407
   var rateHtml = (rate != null)
     ? '<div class="pred-card-row"><span class="pred-card-lbl">Ставка:</span> ' +
-        '<strong>' + fmtN(rate) + '₴</strong> ' + (_isMonth ? 'на місяць (фіксовано)' : 'за заняття') + '</div>'
+        '<strong>' + fmtN(rate) + '₴</strong> ' + (_isGroup ? 'за групу на місяць' : (_isMonth ? 'на місяць (фіксовано)' : 'за заняття')) + '</div>'
     : '<div class="pred-card-row pred-teacher-missing">' +
         '⚠️ Немає ставки в каталозі — додай у Предметники_Каталог</div>';
 
@@ -2540,7 +2545,16 @@ function renderHeaderCard(loc, subject){
   var _ty = (Number(S.month) === 12) ? Number(S.year) + 1 : Number(S.year);
   var _targetNote = ' <span class="pred-card-target">→ у Salary за <strong>' + MONTHS[_tm - 1] + (_ty !== Number(S.year) ? ' ' + _ty : '') + '</strong></span>';
   var totalHtml;
-  if (rate != null && _isMonth){
+  if (rate != null && _isGroup){
+    // v7.407: «Група/міс» — ставка за кожну групу, де було хоч одне заняття; кількість занять на суму не впливає.
+    var _g = _sess.groups || 0;
+    totalHtml = '<div class="pred-card-row pred-card-total">' +
+      '<span class="pred-card-lbl">Разом за місяць:</span> ' +
+      '<strong>' + total + '</strong> ' + pluralUk(total, 'заняття', 'заняття', 'занять') + ' у ' +
+      '<strong>' + _g + '</strong> ' + pluralUk(_g, 'групі', 'групах', 'групах') + ' → ' + _g + ' × ' + fmtN(rate) + '₴ = ' +
+      '<strong class="pred-card-sum">' + fmtN(_g * rate) + '₴</strong>' + _targetNote +
+    '</div>';
+  } else if (rate != null && _isMonth){
     // v7.325: «Місяць» — сума не залежить від кількості занять; без жодного заняття в Salary не йде.
     totalHtml = '<div class="pred-card-row pred-card-total">' +
       '<span class="pred-card-lbl">Разом за місяць:</span> ' +
