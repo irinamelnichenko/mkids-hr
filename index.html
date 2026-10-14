@@ -3012,8 +3012,23 @@ function _kompTokens(s){ return _kompNorm(s).replace(/['’ʼ`.,()]/g,' ').split
 var KOMP_UPRAVL=['Житомир','Нац.Гвардії (Благо)','Манхетен (Благо)','Хіміків (Благо)','Чернігів'];
 function _isKompUpravl(name){ var rt=_kompTokens(name); if(!rt.length)return false;
   return KOMP_UPRAVL.some(function(u){ var ut=_kompTokens(u); return ut.length&&ut.every(function(t){return rt.indexOf(t)>=0;}); }); }
-// Реальна МЕРЕЖЕВА локація = у реєстрі й НЕ «Управління».
-function _isKompNetwork(name){ return _isKompLocation(name) && !_isKompUpravl(name); }
+// v7.408: ПЕРЕМИКАЧ ОХОПЛЕННЯ дашборда — 'net' «Садки + Школи» (як було), 'upr' «Управління», 'all' «Усі».
+// Діє на всі показники дашборда (плитки, таблиці, верхні лічильники). Директор бачить лише свою локацію — без перемикача.
+var DASH_SCOPES=[['net','Садки + Школи'],['upr','Управління'],['all','Усі']];
+function _dashScope(){
+  if(!S.dashScope){ var v=null; try{ v=localStorage.getItem('mkids_dash_scope'); }catch(e){}
+    S.dashScope=(v==='upr'||v==='all')?v:'net'; }
+  return S.dashScope;
+}
+function dashSetScope(v){ S.dashScope=v; try{ localStorage.setItem('mkids_dash_scope',v); }catch(e){} _renderDashNow(); }
+// Локація в поточному охопленні дашборда (раніше — завжди «у реєстрі й НЕ Управління»).
+function _isKompNetwork(name){
+  var up=_isKompUpravl(name);
+  if(!up && !_isKompLocation(name)) return false;
+  if(S && S.user && !isNetworkRole(S.user.role)) return true;   // директор: фільтр «своя локація» робиться окремо
+  var sc=_dashScope();
+  return sc==='all' ? true : (sc==='upr' ? up : !up);
+}
 // Лише садки: мережева локація, але НЕ школа і не онлайн (для KPI договорів).
 function _isKompSadok(name){ if(!_isKompNetwork(name))return false; var n=_kompNorm(name); return n.indexOf('школ')<0 && n.indexOf('онлайн')<0; }
 // Ранг у LOCATION_ORDER за ТОКЕННОЮ відповідністю (як _isKompLocation): «Львів Кругла», «228 школа»,
@@ -3068,6 +3083,11 @@ function _dashGroupType(g){
   var s=String(g||'').trim(), low=s.toLowerCase();
   for(var i=0;i<5;i++){ if(low.indexOf(DASH_GROUP_TYPES[i].toLowerCase())===0) return DASH_GROUP_TYPES[i]; }
   if(/^\d/.test(s) || low.indexOf('клас')>=0 || low==='школа') return 'клас';
+  // v7.408: українські назви груп (Благо: «Карапузи 2-3», «Мандрівники», …) — інакше Управління без груп
+  if(/малюк|карапуз/.test(low)) return 'Baby-ki';
+  if(/бешкетн/.test(low)) return 'Find-iki';
+  if(/пізнайк|мандрівн|дослідн/.test(low)) return 'Study-ki';
+  if(/розумник/.test(low)) return 'Preschool';
   return null;
 }
 function _dashNorm(loc,type){
@@ -3420,13 +3440,15 @@ function _renderDashNow(){
   if(S.view!=='dashboard') return;
   const isHR=isNetworkRole(S.user.role);
   const myLoc=S.user.loc||'';
+  const _sc=_dashScope();   // v7.408 охоплення: net | upr | all
   // ── діти + групи (S.crm) ──
   // v7.208: дашборд відповідає на питання «скільки дітей У НАС ЗАРАЗ», тож
   // випускники й розірвані в лічильник не йдуть. До цієї правки Object.values(S.crm)
   // брав усі картки поспіль — 44 graduated + 80 terminated завищували цифру по
   // мережі, а в «Групах» висіли класи на кшталт «Школа клас 2025».
   const kids=(S.crm?Object.values(S.crm):[]).filter(_isCurrentKid);
-  const scopedKids=isHR?kids:kids.filter(c=>c.loc===myLoc);
+  // v7.408: мережева роль — лише локації обраного охоплення (раніше Управління домішувалось до «Дітей»)
+  const scopedKids=isHR?kids.filter(c=>c.loc&&_isKompNetwork(c.loc)):kids.filter(c=>c.loc===myLoc);
   const caps=S._locCaps||{};
   const locAgg={};
   scopedKids.forEach(c=>{ if(!c.loc)return; if(!locAgg[c.loc])locAgg[c.loc]={kids:0,groups:new Set()}; locAgg[c.loc].kids++; if(c.group)locAgg[c.loc].groups.add(c.group); });
@@ -3436,7 +3458,7 @@ function _renderDashNow(){
   const totalGroups=_lv ? Object.keys(_lv.locs).filter(l=>isHR||l===myLoc).reduce((s,l)=>s+_lv.locs[l].groups.length,0)
                         : locList.reduce((s,l)=>s+locAgg[l].groups.size,0);
   // ── плинність (S.emps) ──
-  const emps=(visible()||[]);
+  const emps=(visible()||[]).filter(e=>!isHR||_sc==='all'||_isKompNetwork(normEmpLoc(e)));   // v7.408: охоплення («Усі» — і офіс/поза реєстром)
   const period=S.dashTurnPeriod||'year';
   const now=new Date(), Y=now.getFullYear(), MM=now.getMonth();
   function inPeriod(iso){ var d=pd(iso); if(!d)return false;
@@ -3453,7 +3475,7 @@ function _renderDashNow(){
   let quartersHtml;
   if(!yearly){ quartersHtml='<div class="empty"><span class="ei">📊</span><p>Завантаження…</p></div>'; }
   else {
-    const rows=(isHR?yearly:yearly.filter(r=>String(r['Локація']||'')===myLoc)).filter(r=>String(r['Вибув']||'').trim()!=='так');   // v7.299: «дітей/міс» без вибулих
+    const rows=(isHR?yearly.filter(r=>_isKompNetwork(String(r['Локація']||'').trim())):yearly.filter(r=>String(r['Локація']||'')===myLoc)).filter(r=>String(r['Вибув']||'').trim()!=='так');   // v7.299: «дітей/міс» без вибулих; v7.408: охоплення
     const monthCnt=DASH_MONTHS.map(mn=>rows.filter(r=>(Number(r[mn+'-Бюджет-навч'])||0)>0||(Number(r[mn+'-Факт-навч'])||0)>0).length);
     function qAvg(qi){ const ms=monthCnt.slice(qi*3,qi*3+3).filter(x=>x>0); return ms.length?Math.round(ms.reduce((a,b)=>a+b,0)/ms.length):null; }
     const qs=[0,1,2,3].map(qAvg);
@@ -3465,7 +3487,13 @@ function _renderDashNow(){
         <tr style="color:var(--gray)"><td>${Y-1}</td><td colspan="4" style="font-size:12px">Дані за ${Y-1} у поточному реєстрі відсутні</td></tr>
       </tbody></table></div>`;
   }
+  const scopeBar=isHR?`<div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-bottom:12px">
+      <span style="font-size:12px;color:var(--gray);margin-right:4px">Показувати:</span>
+      ${DASH_SCOPES.map(([k,l])=>`<button class="btn btn-${_sc===k?'primary':'secondary'} btn-sm" onclick="dashSetScope('${k}')">${l}</button>`).join('')}
+      ${_sc!=='net'?`<span style="font-size:11px;color:var(--gray);margin-left:6px">Управління немає у файлі «Комплектація» — KPI договорів і причини розірвання по ньому порожні</span>`:''}
+    </div>`:'';
   set('main',`
+    ${scopeBar}
     <div class="stats-grid">
       <div class="stat-card"><div class="stat-icon si-g">👶</div><div><div class="stat-val">${totalKids}</div><div class="stat-lbl">Дітей${isHR?'':' — '+myLoc}</div></div></div>
       <div class="stat-card"><div class="stat-icon si-b">📚</div><div><div class="stat-val">${totalGroups}</div><div class="stat-lbl">Груп</div></div></div>
