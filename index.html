@@ -3012,22 +3012,31 @@ function _kompTokens(s){ return _kompNorm(s).replace(/['’ʼ`.,()]/g,' ').split
 var KOMP_UPRAVL=['Житомир','Нац.Гвардії (Благо)','Манхетен (Благо)','Хіміків (Благо)','Чернігів'];
 function _isKompUpravl(name){ var rt=_kompTokens(name); if(!rt.length)return false;
   return KOMP_UPRAVL.some(function(u){ var ut=_kompTokens(u); return ut.length&&ut.every(function(t){return rt.indexOf(t)>=0;}); }); }
-// v7.408: ПЕРЕМИКАЧ ОХОПЛЕННЯ дашборда — 'net' «Садки + Школи» (як було), 'upr' «Управління», 'all' «Усі».
-// Діє на всі показники дашборда (плитки, таблиці, верхні лічильники). Директор бачить лише свою локацію — без перемикача.
-var DASH_SCOPES=[['net','Садки + Школи'],['upr','Управління'],['all','Усі']];
-function _dashScope(){
-  if(!S.dashScope){ var v=null; try{ v=localStorage.getItem('mkids_dash_scope'); }catch(e){}
-    S.dashScope=(v==='upr'||v==='all')?v:'net'; }
-  return S.dashScope;
+// v7.408→v7.409: ОХОПЛЕННЯ дашборда — галочки «Садки» / «Школи» / «Управління», будь-яка комбінація
+// (за замовч. садки + школи, як було). Діє на всі показники дашборда. Директор бачить лише свою локацію — без галочок.
+var DASH_TYPES=[['sad','Садки'],['sch','Школи'],['upr','Управління']];
+function _dashTypes(){
+  if(!S.dashTypes){ var v=null; try{ v=JSON.parse(localStorage.getItem('mkids_dash_types')||'null'); }catch(e){}
+    S.dashTypes=(v&&typeof v==='object'&&(v.sad||v.sch||v.upr))?{sad:!!v.sad,sch:!!v.sch,upr:!!v.upr}:{sad:true,sch:true,upr:false}; }
+  return S.dashTypes;
 }
-function dashSetScope(v){ S.dashScope=v; try{ localStorage.setItem('mkids_dash_scope',v); }catch(e){} _renderDashNow(); }
+function dashToggleType(k){
+  var t=Object.assign({},_dashTypes()); t[k]=!t[k];
+  if(!t.sad&&!t.sch&&!t.upr) return _renderDashNow();   // хоч одна галочка має лишатись
+  S.dashTypes=t; try{ localStorage.setItem('mkids_dash_types',JSON.stringify(t)); }catch(e){} _renderDashNow();
+}
+function _dashAllTypes(){ var t=_dashTypes(); return t.sad&&t.sch&&t.upr; }
+// Тип локації: Управління / школа (школи й онлайн) / садок (решта реєстру, зокрема кухні).
+function _dashLocType(name){
+  if(_isKompUpravl(name)) return 'upr';
+  if(!_isKompLocation(name)) return null;
+  var n=_kompNorm(name); return (n.indexOf('школ')>=0||n.indexOf('онлайн')>=0)?'sch':'sad';
+}
 // Локація в поточному охопленні дашборда (раніше — завжди «у реєстрі й НЕ Управління»).
 function _isKompNetwork(name){
-  var up=_isKompUpravl(name);
-  if(!up && !_isKompLocation(name)) return false;
+  var t=_dashLocType(name); if(!t) return false;
   if(S && S.user && !isNetworkRole(S.user.role)) return true;   // директор: фільтр «своя локація» робиться окремо
-  var sc=_dashScope();
-  return sc==='all' ? true : (sc==='upr' ? up : !up);
+  return !!_dashTypes()[t];
 }
 // Лише садки: мережева локація, але НЕ школа і не онлайн (для KPI договорів).
 function _isKompSadok(name){ if(!_isKompNetwork(name))return false; var n=_kompNorm(name); return n.indexOf('школ')<0 && n.indexOf('онлайн')<0; }
@@ -3440,7 +3449,7 @@ function _renderDashNow(){
   if(S.view!=='dashboard') return;
   const isHR=isNetworkRole(S.user.role);
   const myLoc=S.user.loc||'';
-  const _sc=_dashScope();   // v7.408 охоплення: net | upr | all
+  const _sc=_dashTypes();   // v7.409 охоплення: {sad, sch, upr}
   // ── діти + групи (S.crm) ──
   // v7.208: дашборд відповідає на питання «скільки дітей У НАС ЗАРАЗ», тож
   // випускники й розірвані в лічильник не йдуть. До цієї правки Object.values(S.crm)
@@ -3458,7 +3467,7 @@ function _renderDashNow(){
   const totalGroups=_lv ? Object.keys(_lv.locs).filter(l=>isHR||l===myLoc).reduce((s,l)=>s+_lv.locs[l].groups.length,0)
                         : locList.reduce((s,l)=>s+locAgg[l].groups.size,0);
   // ── плинність (S.emps) ──
-  const emps=(visible()||[]).filter(e=>!isHR||_sc==='all'||_isKompNetwork(normEmpLoc(e)));   // v7.408: охоплення («Усі» — і офіс/поза реєстром)
+  const emps=(visible()||[]).filter(e=>!isHR||_dashAllTypes()||_isKompNetwork(normEmpLoc(e)));   // v7.408: охоплення (усі галочки — і офіс/поза реєстром)
   const period=S.dashTurnPeriod||'year';
   const now=new Date(), Y=now.getFullYear(), MM=now.getMonth();
   function inPeriod(iso){ var d=pd(iso); if(!d)return false;
@@ -3487,10 +3496,10 @@ function _renderDashNow(){
         <tr style="color:var(--gray)"><td>${Y-1}</td><td colspan="4" style="font-size:12px">Дані за ${Y-1} у поточному реєстрі відсутні</td></tr>
       </tbody></table></div>`;
   }
-  const scopeBar=isHR?`<div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-bottom:12px">
-      <span style="font-size:12px;color:var(--gray);margin-right:4px">Показувати:</span>
-      ${DASH_SCOPES.map(([k,l])=>`<button class="btn btn-${_sc===k?'primary':'secondary'} btn-sm" onclick="dashSetScope('${k}')">${l}</button>`).join('')}
-      ${_sc!=='net'?`<span style="font-size:11px;color:var(--gray);margin-left:6px">Управління немає у файлі «Комплектація» — KPI договорів і причини розірвання по ньому порожні</span>`:''}
+  const scopeBar=isHR?`<div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px 16px;margin-bottom:12px">
+      <span style="font-size:12px;color:var(--gray)">Показувати:</span>
+      ${DASH_TYPES.map(([k,l])=>`<label style="display:inline-flex;align-items:center;gap:6px;font-size:14px;cursor:pointer;user-select:none"><input type="checkbox" id="dashType_${k}" ${_sc[k]?'checked':''} onchange="dashToggleType('${k}')" style="width:16px;height:16px;cursor:pointer">${l}</label>`).join('')}
+      ${_sc.upr?`<span style="font-size:11px;color:var(--gray)">Управління немає у файлі «Комплектація» — KPI договорів і причини розірвання по ньому порожні</span>`:''}
     </div>`:'';
   set('main',`
     ${scopeBar}
