@@ -1672,7 +1672,8 @@ var RC_INV_CAT_RULES=[
 // а коли в контрагента кілька рахунків різним локаціям («Пожежна безпека» × 6), вимикалась зовсім.
 async function _rcInvApplyHints(j){
   RCINV.hints={}; RCINV.byRef={};
-  var ms=(j&&j.matched||[]).filter(function(m){ return m.ref; });
+  // v7.411: + заявки, які ці платежі вже закрили (автозвірка 05:00 / раніше) — локація й стаття для рядка витрати не губляться
+  var ms=((j&&j.matched)||[]).concat((j&&j.alreadyPaid)||[]).filter(function(m){ return m.ref; });
   var locs={}; ms.forEach(function(m){ if(m.loc) locs[m.loc]=1; });
   for(var l in locs) await _rcEnsureCats(l);           // статті — з OPEX-файлу локації заявки
   ms.forEach(function(m){
@@ -1733,7 +1734,18 @@ function rcRenderInvoices(){
   var j=RCINV.res;
   if(!j) return head+'<div style="margin-top:6px;color:#6b7a8c">Натисни «Звірити», щоб побачити, які рахунки закриває ця виписка.</div></div>';
   var body='<div style="margin-top:8px">Відкритих заявок: <b>'+(j.openCount||0)+'</b> · знайдено оплат: <b>'+(j.willMark||0)+'</b>'
-    + ((j.ambiguousCount||0) ? ' · неоднозначних: <b style="color:#b9770a">'+j.ambiguousCount+'</b>' : '') + '</div>';
+    + ((j.ambiguousCount||0) ? ' · неоднозначних: <b style="color:#b9770a">'+j.ambiguousCount+'</b>' : '')
+    + ((j.alreadyPaidCount||0) ? ' · уже закрито: <b style="color:var(--green)">'+j.alreadyPaidCount+'</b>' : '') + '</div>';
+  // v7.411: заявки, які платежі цієї виписки вже закрили (автозвірка 05:00 або раніше у звірці) — лише для інформації
+  if((j.alreadyPaid||[]).length){
+    body+='<details style="margin-top:8px"><summary style="cursor:pointer;font-size:13px">🤖 Уже закрито: <b>'+j.alreadyPaid.length+'</b> — повторно не позначаються й у групу не пишуть</summary>'
+      +'<table class="inv-table" style="margin-top:6px"><thead><tr><th>№</th><th>Постачальник</th><th>Локація</th><th>Стаття</th><th class="num">Сума</th><th>Оплата</th><th>Хто закрив</th></tr></thead><tbody>'
+      + j.alreadyPaid.map(function(m){
+          return '<tr><td>'+escapeHtml(String(m.number||m.id))+'</td><td>'+escapeHtml(m.supplier||'—')+'</td><td>'+escapeHtml(m.loc||'—')+'</td>'
+            +'<td>'+escapeHtml(m.category||'—')+'</td><td class="num">'+fmtUah(m.amount)+'</td><td>'+escapeHtml(m.payDate||'')+'</td>'
+            +'<td style="font-size:11px;color:#5b6b7c">'+escapeHtml(m.closedBy||'—')+'</td></tr>';
+        }).join('')+'</tbody></table></details>';
+  }
   if((j.matched||[]).length){
     body+='<table class="inv-table" style="margin-top:8px"><thead><tr><th>№</th><th>Постачальник</th><th>Локація</th>'
       +'<th>Стаття</th><th class="num">Сума</th><th>Оплата</th><th>Збіг за</th></tr></thead><tbody>'

@@ -1,5 +1,12 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.407
+// m.kids CRM — Google Apps Script v7.411
+// v7.411: бот рахунків — АВТОЗВІРКА з випискою: bankNightly (05:00) одразу проганяє видаткові операції всіх рахунків, крім
+//   службових, через matchInvoicesToPayments (ті самі правила; неоднозначне не чіпає) → «оплачено» + «✅ Оплачено» о 09:00.
+//   OPEX не пише. Захист від подвоєння: платіж, що вже закрив заявку (matched_ref), більше не матчиться. Нові колонки
+//   заявки: «закрито» (авто · виписка 05:00 | звірка · ПІБ), «рахунок оплати», «bot_msg_id». Відповідь звірки — alreadyPaid
+//   (закриті цими платежами: локація/стаття для рядка витрати). Нові дії: invoiceAutoMatchRange (догон за період, CFO,
+//   dryRun), invoiceAutoStatus / invoiceAutoSet (вимикач INV_AUTO_MATCH), invoiceReopen (відкат, CFO, dryRun).
+//   Вікно дат: хибна дата рахунку (OCR узяв дату договору; >±60 днів від дня заявки) або її немає → вікно від дня заявки −30…+60.
 // v7.407: предметники — модель оплати «Група/міс» (кол. «Модель» каталогу): ставка × кількість груп, де за місяць
 //   було хоч одне заняття (Благо: Англійська/Польська/Спорт/Музика). deleteSalaryRow allowBudget:true (лише CFO) —
 //   видаляє рядок без факту навіть із бюджетом (ручні дублі), dryRun:true — прев'ю.
@@ -2549,7 +2556,8 @@ var INV_SHEET_NAME = 'Рахунки_Бот';
 var INV_HEADER = ['invoice_id','created_at','chat_id','message_id','від кого','тип файлу','file_id',
   'file_name','підпис','локація','стаття (з підпису)','постачальник','ЄДРПОУ','№ рахунку','сума',
   'дата рахунку','статус','довіра','matched_ref','дата оплати','лог',
-  'спроб'];   // v7.316: лічильник невдалих розпізнавань (INV_MAX_TRIES → статус «помилка»)
+  'спроб',    // v7.316: лічильник невдалих розпізнавань (INV_MAX_TRIES → статус «помилка»)
+  'закрито','рахунок оплати','bot_msg_id'];   // v7.411: хто/як закрив · IBAN платника · id «✅ Оплачено» (для відкату)
 // Статуси заявки. «новий» — файл ще не читали (етап 3 його підхопить).
 var INV_ST = {NEW:'новий', PARSED:'розпізнано', PAID:'оплачено', REJECTED:'відхилено', ERR:'помилка'};
 
@@ -3514,6 +3522,9 @@ function invoiceQueueTick(){
 var INV_AMOUNT_EPS   = 0.011;      // копійка з запасом на float
 var INV_DAYS_BEFORE  = 5;          // платіж раніше за рахунок — максимум стільки днів
 var INV_DAYS_AFTER   = 90;
+var INV_DATE_PLAUSIBLE = 60;       // v7.411: дата рахунку далі ніж ±60 днів від дня заявки — хибна (OCR), беремо день заявки
+var INV_CREATED_BEFORE = 30;       // v7.411: вікно від дня заявки: платіж до 30 днів раніше (заявку здали після оплати)…
+var INV_CREATED_AFTER  = 60;       //   …і до 60 днів пізніше
 
 function _invDateMs(v){
   var s = String(v||'').trim();
@@ -3551,7 +3562,17 @@ function _invPurposeHasNumber(purpose, number){
   return false;
 }
 
-// POST {action:'matchInvoicesToPayments', payments:[…], dryRun:true|false, notify:true}
+// POST {action:'matchInvoicesToPayments', payments:[…], dryRun:true|false, notify:true, source?:'reconcile'|'auto'}
+// v7.411: (1) платіж, який уже закрив якусь заявку (його ref у matched_ref), більше не матчиться — інакше
+//   дві однакові заявки одного постачальника закривались би одним платежем; (2) колонка «закрито» — хто/як
+//   закрив («авто · виписка 05:00» | «звірка · <ПІБ>»); (3) у відповіді alreadyPaid — заявки, вже закриті
+//   платежами з цього набору (звірка бере з них локацію/статтю для рядка витрати й показує «закрито автоматично»).
+function _invClosedByLabel(body){
+  if(body && body.closedBy) return String(body.closedBy);
+  if(body && body.source === 'auto') return 'авто · виписка 05:00';
+  var nm = ''; try { var a = _getActor((_CURRENT_AUTH && _CURRENT_AUTH.id) || (body && body.actorId)); nm = a && a.name || ''; } catch(_a){}
+  return 'звірка' + (nm ? ' · ' + nm : '');
+}
 function matchInvoicesToPayments(body){
   body = body || {};
   var dryRun  = (body.dryRun !== false);                    // ЗА ЗАМОВЧУВАННЯМ — тільки показати
@@ -3561,10 +3582,39 @@ function matchInvoicesToPayments(body){
   try {
     var sh = _invSheet(false);
     if(!sh) return {ok:true, matched:[], note:'листа «'+INV_SHEET_NAME+'» ще немає'};
+    if(sh.getLastColumn() < INV_HEADER.length) sh = _invSheet(true);   // v7.411: дописати нові колонки
     var v = sh.getDataRange().getValues();
     if(v.length < 2) return {ok:true, matched:[]};
     var H = v[0].map(String);
     var c = function(n){ return H.indexOf(n); };
+    var _splitsM = {}; try { _splitsM = _invSplitsByInvoice(); } catch(_sm){}
+
+    // v7.411: платежі, що вже закрили заявку → не матчимо вдруге; для звірки — що саме вони закрили.
+    var usedRef = {};
+    for(var u=1;u<v.length;u++){
+      var mr = String(v[u][c('matched_ref')]||'').trim();
+      if(!mr || String(v[u][c('статус')]||'').trim() !== INV_ST.PAID) continue;
+      usedRef[mr] = {id:String(v[u][c('invoice_id')]), row:u+1, amount:Number(v[u][c('сума')])||0,
+        supplier:String(v[u][c('постачальник')]||'').trim(), loc:String(v[u][c('локація')]||'').trim(),
+        category:String(v[u][c('стаття (з підпису)')]||'').trim(), number:String(v[u][c('№ рахунку')]||'').trim(),
+        edrpou:String(v[u][c('ЄДРПОУ')]||'').replace(/\D/g,''), payDate:_invDmy(v[u][c('дата оплати')]) || String(v[u][c('дата оплати')]||''),
+        closedBy:c('закрито')>=0 ? String(v[u][c('закрито')]||'') : ''};
+    }
+    var alreadyPaid = [], seenRef = {}, fresh = [];
+    pays.forEach(function(p){
+      var ref = String(p.ref||'').trim();
+      if(ref && usedRef[ref]){
+        var x = usedRef[ref];
+        alreadyPaid.push({id:x.id, row:x.row, supplier:x.supplier, loc:x.loc, category:x.category, amount:x.amount,
+          number:x.number, edrpou:x.edrpou, split:(_splitsM[x.id] || null), ref:ref, payDate:x.payDate || _invDmy(p.date),
+          payEdrpou:String(p.edrpou||'').replace(/\D/g,''), counterparty:String(p.counterparty||''), closedBy:x.closedBy});
+        return;
+      }
+      if(ref && seenRef[ref]) return;                         // той самий платіж двічі в наборі
+      if(ref) seenRef[ref] = 1;
+      fresh.push(p);
+    });
+    pays = fresh;
 
     // Відкриті заявки: не «оплачено», із сумою (без суми матчити нічим).
     var open = [];
@@ -3583,11 +3633,13 @@ function matchInvoicesToPayments(body){
         loc:String(v[r][c('локація')]||'').trim(),
         category:String(v[r][c('стаття (з підпису)')]||'').trim(),
         invDateMs:_invDateMs(v[r][c('дата рахунку')]),
+        createdMs:_invDateMs(v[r][c('created_at')]),                     // v7.411: фолбек, коли OCR дав хибну дату
         chatId:String(v[r][c('chat_id')]||'').trim(),
         messageId:String(v[r][c('message_id')]||'').trim()
       });
     }
-    if(!open.length) return {ok:true, dryRun:dryRun, matched:[], openCount:0, note:'немає відкритих заявок із сумою'};
+    if(!open.length || !pays.length) return {ok:true, dryRun:dryRun, matched:[], ambiguous:[], openCount:open.length, willMark:0,
+      alreadyPaid:alreadyPaid, alreadyPaidCount:alreadyPaid.length, note:(!open.length ? 'немає відкритих заявок із сумою' : 'нових платежів немає')};
 
     // v7.397: рахунок платника → локації (Реквізити_Локацій). Лише для вибору між кількома кандидатами.
     var _payerLocs = {};
@@ -3607,9 +3659,15 @@ function matchInvoicesToPayments(body){
       var pMs  = _invDateMs(p.date);
       open.forEach(function(inv){
         if(Math.abs(inv.amount - pAmt) > INV_AMOUNT_EPS) return;         // сума — умова входу
-        if(inv.invDateMs && pMs){
-          var days = (pMs - inv.invDateMs) / 86400000;
-          if(days < -INV_DAYS_BEFORE || days > INV_DAYS_AFTER) return;
+        // v7.411: дата рахунку правдоподібна (±60 днів від дня, коли заявку надіслали боту) → вікно від неї, як було.
+        //   Інакше (OCR узяв дату договору: 19.03.2025, 2023, 2005…) або дати немає → вікно від дня заявки:
+        //   −30 днів (рахунки здають пачкою вже після оплати) … +60.
+        var _plaus = inv.invDateMs && inv.createdMs && Math.abs(inv.invDateMs - inv.createdMs) <= INV_DATE_PLAUSIBLE * 86400000;
+        var _base = _plaus ? inv.invDateMs : (inv.createdMs || inv.invDateMs);
+        var _lo = _plaus ? INV_DAYS_BEFORE : INV_CREATED_BEFORE, _hi = _plaus ? INV_DAYS_AFTER : INV_CREATED_AFTER;
+        if(_base && pMs){
+          var days = (pMs - _base) / 86400000;
+          if(days < -_lo || days > _hi) return;
         }
         var byEdrpou = !!(pEd && inv.edrpou && pEd === inv.edrpou);
         var byNumber = _invPurposeHasNumber(p.purpose, inv.number);
@@ -3644,9 +3702,10 @@ function matchInvoicesToPayments(body){
       else good.push(x);
     });
 
-    var _splitsM = {}; try { _splitsM = _invSplitsByInvoice(); } catch(_sm){}
+    var closedBy = _invClosedByLabel(body);
     var report = {ok:true, dryRun:dryRun, openCount:open.length, paymentsIn:pays.length,
-      willMark: good.length, ambiguousCount: ambiguous.length,
+      willMark: good.length, ambiguousCount: ambiguous.length, closedBy: closedBy,
+      alreadyPaid: alreadyPaid, alreadyPaidCount: alreadyPaid.length,   // v7.411
       matched: good.map(function(x){
         return {id:x.inv.id, row:x.inv.rowNum, supplier:x.inv.supplier, loc:x.inv.loc,
                 category:x.inv.category, amount:x.inv.amount, number:x.inv.number,
@@ -3678,10 +3737,12 @@ function matchInvoicesToPayments(body){
         sh.getRange(x.inv.rowNum, c('статус')+1).setValue(INV_ST.PAID);
         sh.getRange(x.inv.rowNum, c('дата оплати')+1).setValue(d);
         sh.getRange(x.inv.rowNum, c('matched_ref')+1).setValue(String(x.pay.ref||''));
+        if(c('закрито') >= 0) sh.getRange(x.inv.rowNum, c('закрито')+1).setValue(closedBy);                       // v7.411
+        if(c('рахунок оплати') >= 0) sh.getRange(x.inv.rowNum, c('рахунок оплати')+1).setValue(String(x.pay.iban||''));
         var prev = String(sh.getRange(x.inv.rowNum, c('лог')+1).getValue()||'');
         sh.getRange(x.inv.rowNum, c('лог')+1).setValue(
           (prev ? prev+' · ' : '') + 'оплату знайдено ' + d + ' (' + (x.byEdrpou?'ЄДРПОУ':'') +
-          (x.byEdrpou&&x.byNumber?'+':'') + (x.byNumber?'№':'') + ')');
+          (x.byEdrpou&&x.byNumber?'+':'') + (x.byNumber?'№':'') + ') — ' + closedBy);
         marked++;
         // ЄДИНЕ повідомлення бота в групу — див. v7.319.
         if(notify && x.inv.chatId && x.inv.messageId){
@@ -3690,7 +3751,7 @@ function matchInvoicesToPayments(body){
           if(notified) Utilities.sleep(3100);   // v7.397: ліміт Telegram у групу ~20/хв
           var res = _invSend(x.inv.chatId, '✅ Оплачено ' + d.slice(0,5),
                              {reply_to_message_id: x.inv.messageId});
-          if(res && res.ok) notified++;
+          if(res && res.ok){ notified++; _invSaveBotMsg(sh, c, x.inv.rowNum, res); }
           else _tgErr('inv:notify', 'заявка '+x.inv.id+': '+String((res&&res.description)||'no send'));
         }
       });
@@ -3734,13 +3795,118 @@ function invFlushPaidQueue(){
   try { lock.waitLock(30000); } catch(_le){ _invScheduleFlush(true); return; }
   try {
     var p = PropertiesService.getScriptProperties(), q = _invQueueRead(p), left = [], n = 0;
+    var _sh = null, _c = null, _rowOf = {};   // v7.411: id відправленого «✅ Оплачено» — у заявку (для відкату)
+    try { _sh = _invSheet(false); var _v = _sh.getDataRange().getValues(), _H = _v[0].map(String); _c = function(n){ return _H.indexOf(n); };
+      for (var i = 1; i < _v.length; i++) _rowOf[String(_v[i][_c('invoice_id')])] = i + 1; } catch(_s){ _sh = null; }
     q.forEach(function(x){
       if (n++) Utilities.sleep(3100);
       var res = _invSend(x.c, x.t, {reply_to_message_id: x.m});
       if (!(res && res.ok)){ left.push(x); _tgErr('inv:notify', 'заявка ' + x.id + ' (09:00): ' + String((res && res.description) || 'no send')); }
+      else if (_sh && _rowOf[x.id]) _invSaveBotMsg(_sh, _c, _rowOf[x.id], res);
     });
     if (left.length){ p.setProperty('INV_PAID_QUEUE', JSON.stringify(left)); _invScheduleFlush(true); }
     else p.deleteProperty('INV_PAID_QUEUE');
+  } finally { try { lock.releaseLock(); } catch(_){} }
+}
+
+function _invSaveBotMsg(sh, c, rowNum, res){
+  try { var id = res && res.result && res.result.message_id; if (id && c('bot_msg_id') >= 0) sh.getRange(rowNum, c('bot_msg_id') + 1).setValue(String(id)); } catch(_e){}
+}
+
+// ═══ v7.411: АВТОЗВІРКА ЗАЯВОК З ВИПИСКОЮ ═══════════════════════════════════════════════════════════════
+// Після нічного завантаження (bankNightly, 05:00) видаткові операції ВСІХ рахунків, крім службових (зарплатних),
+// проганяються через matchInvoicesToPayments з тими самими правилами (сума + ЄДРПОУ/№ у призначенні + вікно дат,
+// неоднозначне — не чіпаємо). Пише ЛИШЕ заявку («оплачено», «закрито: авто · виписка 05:00») і «✅ Оплачено» (до
+// 09:00 — у чергу). OPEX НЕ чіпає — витрату вносять, як і раніше, руками або через звірку.
+// Вимикач: ScriptProperties INV_AUTO_MATCH = 'off'. Підсумок останнього прогону — INV_AUTO_LAST.
+function _invAutoOn(){ return String(PropertiesService.getScriptProperties().getProperty('INV_AUTO_MATCH') || 'on') !== 'off'; }
+function _invPaysFromGroups(groups){
+  var out = [];
+  (groups || []).forEach(function(g){
+    if (g.service) return;                                     // службовий (зарплатний) — поза звіркою, як у reconcile
+    (g.expenses || []).forEach(function(x){
+      if (x.internal) return;                                  // переказ між своїми рахунками
+      out.push({date:x.date, amount:x.amount, edrpou:x.edrpou, counterparty:x.counterparty, purpose:x.purpose, ref:x.ref, iban:g.iban || ''});
+    });
+  });
+  return out;
+}
+function _invAutoMatch(groups, opts){
+  opts = opts || {};
+  var pays = _invPaysFromGroups(groups);
+  if (!pays.length) return {ok:true, paymentsIn:0, marked:0, note:'видаткових операцій немає'};
+  var r = matchInvoicesToPayments({payments:pays, dryRun:!!opts.dryRun, notify:opts.notify !== false, source:'auto',
+                                   closedBy:opts.closedBy || 'авто · виписка 05:00'});
+  var sum = {at:new Date().toISOString(), period:opts.period || '', dryRun:!!opts.dryRun, ok:!!(r && r.ok), paymentsIn:pays.length,
+             openCount:r && r.openCount, willMark:r && r.willMark, marked:r && r.marked || 0, queued:r && r.queued || 0,
+             notified:r && r.notified || 0, ambiguous:r && r.ambiguousCount || 0, alreadyPaid:r && r.alreadyPaidCount || 0,
+             error:r && r.error || ''};
+  if (!opts.dryRun) try { PropertiesService.getScriptProperties().setProperty('INV_AUTO_LAST', JSON.stringify(sum)); } catch(_p){}
+  Logger.log('[invAutoMatch] %s', JSON.stringify(sum));
+  return r;
+}
+// POST {action:'invoiceAutoMatchRange', actorId, from:'YYYY-MM-DD', to:'YYYY-MM-DD', dryRun} — догнати минулі дні
+// (лише CFO; dryRun за замовч.; період ≤ 62 дні). Тягне виписку з банку за період і звіряє, як нічний прогін.
+function invoiceAutoMatchRange(body){
+  body = body || {};
+  if (!_bankCfo(body.actorId)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var from = String(body.from || ''), to = String(body.to || from), dryRun = (body.dryRun !== false);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) return {ok:false, error:'from/to у форматі YYYY-MM-DD'};
+  if ((new Date(to) - new Date(from)) / 86400000 > 62) return {ok:false, error:'період до 62 днів'};
+  var f = _bankFetchCore(from, to);
+  var r = _invAutoMatch(f.groups, {dryRun:dryRun, notify:body.notify !== false, period:from + '…' + to,
+                                   closedBy:'авто · виписка ' + _pbDmy(from).replace(/-/g, '.') + '–' + _pbDmy(to).replace(/-/g, '.')});
+  if (r) { r.bankErrors = f.errors; r.from = from; r.to = to; }
+  return r;
+}
+// GET ?action=invoiceAutoStatus&actorId= — чи ввімкнено й підсумок останнього нічного прогону.
+function invoiceAutoStatus(params){
+  if (!_bankCfo((params || {}).actorId)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var p = PropertiesService.getScriptProperties(), last = null;
+  try { last = JSON.parse(p.getProperty('INV_AUTO_LAST') || 'null'); } catch(_e){}
+  return {ok:true, on:_invAutoOn(), last:last};
+}
+// POST {action:'invoiceAutoSet', actorId, on:true|false} — вимикач автозвірки (лише CFO).
+function invoiceAutoSet(body){
+  body = body || {};
+  if (!_bankCfo(body.actorId)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  PropertiesService.getScriptProperties().setProperty('INV_AUTO_MATCH', body.on === false ? 'off' : 'on');
+  return {ok:true, on:body.on !== false};
+}
+// POST {action:'invoiceReopen', actorId, id, reason?, dryRun} — відкат помилкового «оплачено» (лише CFO; dryRun за замовч.).
+// Заявка → «розпізнано», дата оплати / matched_ref / закрито / рахунок оплати — порожні; «✅ Оплачено» прибирається з
+// черги до 09:00 або видаляється з групи (якщо бот запам'ятав id свого повідомлення). Причина — у «лог».
+function invoiceReopen(body){
+  body = body || {};
+  if (!_bankCfo(body.actorId)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var dryRun = (body.dryRun !== false), id = String(body.id || '').trim();
+  if (!id) return {ok:false, error:'id обовʼязковий'};
+  var sh = _invSheet(false); if (!sh) return {ok:false, error:'немає листа заявок'};
+  var v = sh.getDataRange().getValues(), H = v[0].map(String), c = function(n){ return H.indexOf(n); }, row = 0;
+  for (var i = 1; i < v.length; i++) if (String(v[i][c('invoice_id')]) === id){ row = i + 1; break; }
+  if (!row) return {ok:false, error:'заявку ' + id + ' не знайдено'};
+  var R = v[row - 1];
+  if (String(R[c('статус')] || '').trim() !== INV_ST.PAID) return {ok:false, error:'заявка не «оплачено» — відкочувати нічого'};
+  var botMsg = c('bot_msg_id') >= 0 ? String(R[c('bot_msg_id')] || '') : '', chat = String(R[c('chat_id')] || ''), msg = String(R[c('message_id')] || '');
+  var p = PropertiesService.getScriptProperties(), q = _invQueueRead(p);
+  var inQueue = q.some(function(x){ return String(x.id) === id || (String(x.m) === msg && String(x.c) === chat); });
+  var plan = {id:id, row:row, ref:String(R[c('matched_ref')] || ''), closedBy:c('закрито') >= 0 ? String(R[c('закрито')] || '') : '',
+              unqueue:inQueue, deleteMessage:!!(botMsg && chat), note:(!inQueue && !botMsg) ? 'повідомлення в групі (якщо було) видалити не можу — id не збережено' : ''};
+  if (dryRun) return {ok:true, dryRun:true, plan:plan};
+  var who = ''; try { var a = _getActor((_CURRENT_AUTH && _CURRENT_AUTH.id) || body.actorId); who = a && a.name || ''; } catch(_a){}
+  var lock = LockService.getScriptLock(); try { lock.waitLock(30000); } catch(_le){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+  try {
+    sh.getRange(row, c('статус') + 1).setValue(INV_ST.PARSED);
+    ['дата оплати', 'matched_ref', 'закрито', 'рахунок оплати', 'bot_msg_id'].forEach(function(n){ if (c(n) >= 0) sh.getRange(row, c(n) + 1).setValue(''); });
+    var prev = String(R[c('лог')] || '');
+    sh.getRange(row, c('лог') + 1).setValue((prev ? prev + ' · ' : '') + 'відкат «оплачено» (' + (plan.ref || '—') + ', ' + (plan.closedBy || '—') + ')' +
+      (who ? ' — ' + who : '') + (body.reason ? ': ' + String(body.reason) : ''));
+    if (inQueue){ var left = q.filter(function(x){ return !(String(x.id) === id || (String(x.m) === msg && String(x.c) === chat)); });
+      if (left.length) p.setProperty('INV_PAID_QUEUE', JSON.stringify(left)); else p.deleteProperty('INV_PAID_QUEUE'); }
+    var del = null; if (botMsg && chat) del = _invApi('deleteMessage', {chat_id:chat, message_id:Number(botMsg)});
+    SpreadsheetApp.flush();
+    plan.deleted = !!(del && del.ok); if (del && !del.ok) plan.deleteError = String(del.description || '');
+    return {ok:true, dryRun:false, plan:plan};
   } finally { try { lock.releaseLock(); } catch(_){} }
 }
 
@@ -6991,7 +7157,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.407', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.411', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -7009,6 +7175,7 @@ function doGet(e) {
     else if (action === 'cashList')           result = cashList(e.parameter || {});        // v7.373 готівка: журнал місяця
     else if (action === 'bankStatus')         result = bankStatus(e.parameter || {});      // v7.375 банк: токени (маска) + рахунки
     else if (action === 'bankFetch')          result = bankFetch(e.parameter || {});       // v7.375 банк: транзакції за період (формат виписки)
+    else if (action === 'invoiceAutoStatus')  result = invoiceAutoStatus(e.parameter || {}); // v7.411 автозвірка заявок: увімкнено? останній прогін
     else if (action === 'bankCoverage')       result = bankCoverage(e.parameter || {});    // v7.375 банк: покриття рахунок×дата
     else if (action === 'cashPreview')        result = cashAdd(Object.assign({}, e.parameter || {}, {dryRun:true}));   // v7.373 перевірка (лише читання)
     else if (action === 'getClientCard')      result = getClientCard(e.parameter || {}); // v7.292 повна картка за id
@@ -7181,6 +7348,9 @@ function doPost(e) {
     else if (body.action === 'bankTokenSet')              result = bankTokenSet(body);          // v7.375 банк: токен (CFO; перевірка з Google)
     else if (body.action === 'bankAccountMark')           result = bankAccountMark(body);       // v7.378 офісний рахунок
     else if (body.action === 'bankNightlySetup')          result = bankNightlySetup(body);      // v7.405 нічне завантаження банку о 05:00
+    else if (body.action === 'invoiceAutoMatchRange')     result = invoiceAutoMatchRange(body); // v7.411 автозвірка заявок за період (CFO, dryRun за замовч.)
+    else if (body.action === 'invoiceAutoSet')            result = invoiceAutoSet(body);        // v7.411 вимикач автозвірки (CFO)
+    else if (body.action === 'invoiceReopen')             result = invoiceReopen(body);         // v7.411 відкат «оплачено» (CFO, dryRun за замовч.)
     else if (body.action === 'salaryReconMoveMonth')      result = salaryReconMoveMonth(body);  // v7.374 перенос відомості в інший місяць (CFO, dryRun)
     else if (body.action === 'createCardFromPayment')     result = createCardFromPayment(body || {});   // v7.357 картка з рядка Payment (ПІБ як у Payment)
     else if (body.action === 'setLocRequisite')           result = setLocRequisite(body || {});      // v7.352 правка реквізитів (CFO, dryRun, архів старого IBAN, журнал)
@@ -15541,6 +15711,8 @@ function bankNightly(){
   var iso = Utilities.formatDate(y, 'Europe/Kiev', 'yyyy-MM-dd');
   var r = _bankFetchCore(iso, iso);
   Logger.log('[bankNightly] %s groups=%s covered=%s errors=%s', iso, r.groups.length, r.covered, JSON.stringify(r.errors));
+  // v7.411: одразу звіряємо заявки бота з цими операціями (вимикач INV_AUTO_MATCH=off)
+  if (_invAutoOn()) { try { r.invoices = _invAutoMatch(r.groups, {period:iso}); } catch(e){ _tgErr('inv:auto', e); } }
   return r;
 }
 // Запустити ОДИН РАЗ (з редактора або POST bankNightlySetup): нічний прогін о 05:00 (v7.405; було 06:30).
