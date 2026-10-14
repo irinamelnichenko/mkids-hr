@@ -3445,6 +3445,99 @@ function _isCurrentKid(c){
   const st=String(c.status||'active').trim();
   return st!=='graduated' && st!=='graduate' && st!=='terminated';
 }
+// ─── v7.410: РОЗКРИТТЯ ВЕРХНІХ ПЛИТОК (Локацій / Груп / Дітей) углиб до конкретних дітей ───
+// Одне дерево для всіх трьох цифр, тож сума на кожному рівні = цифра на плитці.
+//   Діти — активні картки в охопленні (як плитка «Дітей»). Група — з Payment поточного місяця
+//   (як «Наповнюваність»); абонемент («Мама+я», «Чомусики») — окремо, у «Груп» не рахується;
+//   картки без рядка в Payment — у «Без групи в Payment» (з групою з картки).
+function _dashIsSubGroup(g){ return DASH_SUB_GROUPS.indexOf(String(g||'').trim().toLowerCase())>=0; }
+function _dashTree(isHR, myLoc){
+  var byLoc={}, pay=Array.isArray(S._payFull)?S._payFull:[];
+  (S.crm?Object.values(S.crm):[]).forEach(function(c){
+    if(!_isCurrentKid(c)||!c.loc) return;
+    if(isHR ? !_isKompNetwork(c.loc) : c.loc!==myLoc) return;
+    (byLoc[c.loc]=byLoc[c.loc]||{})[_dashNm(c.name)]={c:c, g:null, sub:false};
+  });
+  pay.forEach(function(r){
+    var L=String(r['Локація']||'').trim(), k=byLoc[L]&&byLoc[L][_dashNm(r["Ім'я дитини"])]; if(!k) return;
+    var g=String(r['Група']||'').trim(); if(!g||g==='(без групи)') return;
+    var sub=_dashIsSubGroup(g);
+    if(!k.g || (k.sub && !sub)){ k.g=g; k.sub=sub; }          // звичайна група важливіша за абонемент
+  });
+  var NOPAY='Без групи в Payment', out={locs:{}, nLocs:0, nGroups:0, nKids:0};
+  Object.keys(byLoc).forEach(function(L){
+    var gs={};
+    Object.keys(byLoc[L]).forEach(function(nk){ var k=byLoc[L][nk], gn=k.g||NOPAY;
+      var G=gs[gn]||(gs[gn]={name:gn, sub:k.sub, nopay:!k.g, kids:[]});
+      G.kids.push({id:k.c.id||'', name:k.c.name, cardGroup:String(k.c.group||'').trim(), status:String(k.c.status||'active')}); });
+    var groups=Object.keys(gs).map(function(n){ var G=gs[n]; G.kids.sort(function(a,b){ return a.name.localeCompare(b.name,'uk'); }); return G; })
+      .sort(function(a,b){ return (a.nopay-b.nopay)||(a.sub-b.sub)||a.name.localeCompare(b.name,'uk',{numeric:true}); });
+    var kids=groups.reduce(function(s,G){ return s+G.kids.length; },0);
+    var real=groups.filter(function(G){ return !G.sub&&!G.nopay; }).length;
+    out.locs[L]={name:L, groups:groups, kids:kids, realGroups:real};
+    out.nLocs++; out.nGroups+=real; out.nKids+=kids;
+  });
+  out.order=sortLocationsByZone(Object.keys(out.locs));
+  return out;
+}
+function dashDrill(tile, loc, group){
+  var d=S.dashDrill||{};
+  if(tile && !loc && !group && d.tile===tile && !d.loc) { S.dashDrill=null; }   // повторний клік по плитці — згорнути
+  else S.dashDrill={tile:tile||d.tile, loc:loc||null, group:group||null};
+  _renderDashNow();
+  var p=document.getElementById('dashDrillPanel'); if(p && S.dashDrill) p.scrollIntoView({block:'nearest',behavior:'smooth'});
+}
+function _dashDrillAttr(tile,loc,group){ // безпечний onclick: аргументи через JSON → HTML-атрибут
+  return 'onclick="dashDrill('+esc(JSON.stringify(tile))+','+esc(JSON.stringify(loc||null))+','+esc(JSON.stringify(group||null))+')"';
+}
+function _dashKidLink(k){
+  var extra=[];
+  if(k.cardGroup) extra.push('у картці: '+esc(k.cardGroup));
+  if(k.status && k.status!=='active') extra.push(esc(k.status));
+  return '<a href="clients.html#open-'+encodeURIComponent(k.id)+'" style="color:var(--dark2);text-decoration:none;font-weight:600">'+esc(k.name)+'</a>'
+    +(extra.length?' <span style="font-size:11px;color:var(--gray)">'+extra.join(' · ')+'</span>':'');
+}
+function _dashGroupBadge(G){
+  return G.sub?' <span class="badge" style="background:#8e44ad1a;color:#8e44ad;font-size:10px">абонемент</span>'
+       :(G.nopay?' <span class="badge" style="background:#e67e221a;color:#e67e22;font-size:10px">немає в Payment</span>':'');
+}
+function _renderDashDrill(tree){
+  var d=S.dashDrill; if(!d) return '';
+  var TT={locs:'🏫 Локації',groups:'📚 Групи',kids:'👶 Діти'};
+  var crumbs=['<a href="#" onclick="event.preventDefault();dashDrill(\''+d.tile+'\')" style="color:#2980b9;text-decoration:none">'+TT[d.tile]+'</a>'];
+  if(d.loc) crumbs.push(d.group?'<a href="#" onclick="event.preventDefault();dashDrill(\''+d.tile+'\','+esc(JSON.stringify(d.loc))+')" style="color:#2980b9;text-decoration:none">'+esc(d.loc)+'</a>':'<b>'+esc(d.loc)+'</b>');
+  if(d.group) crumbs.push('<b>'+esc(d.group)+'</b>');
+  var body='', row='cursor:pointer';
+  var L=d.loc?tree.locs[d.loc]:null, G=(L&&d.group)?L.groups.filter(function(g){ return g.name===d.group; })[0]:null;
+  if(d.loc && !L) body='<div class="empty"><p>Локація поза обраним охопленням</p></div>';
+  else if(G){                                                   // рівень 3: діти групи
+    body='<div class="tbl-wrap"><table><thead><tr><th>#</th><th>Дитина</th></tr></thead><tbody>'
+      +G.kids.map(function(k,i){ return '<tr><td style="width:36px;color:var(--gray)">'+(i+1)+'</td><td>'+_dashKidLink(k)+'</td></tr>'; }).join('')
+      +'</tbody></table></div>';
+  } else if(L){                                                 // рівень 2: групи локації
+    body='<div class="tbl-wrap"><table><thead><tr><th>Група</th><th>Дітей</th></tr></thead><tbody>'
+      +L.groups.map(function(g){ return '<tr style="'+row+'" '+_dashDrillAttr(d.tile,L.name,g.name)+'><td><strong>'+esc(g.name)+'</strong>'+_dashGroupBadge(g)+'</td><td><b>'+g.kids.length+'</b> ▸</td></tr>'; }).join('')
+      +'<tr style="border-top:2px solid var(--gray2)"><td><strong>Разом</strong> <span style="font-size:11px;color:var(--gray)">груп: '+L.realGroups+'</span></td><td><strong>'+L.kids+'</strong></td></tr></tbody></table></div>';
+  } else if(d.tile==='locs'){                                   // рівень 1: локації
+    body='<div class="tbl-wrap"><table><thead><tr><th>Локація</th><th>Груп</th><th>Дітей</th></tr></thead><tbody>'
+      +tree.order.map(function(n){ var x=tree.locs[n]; return '<tr style="'+row+'" '+_dashDrillAttr('locs',n)+'><td><strong>'+esc(n)+'</strong></td><td>'+x.realGroups+'</td><td><b>'+x.kids+'</b> ▸</td></tr>'; }).join('')
+      +'<tr style="border-top:2px solid var(--gray2)"><td><strong>Разом</strong></td><td><strong>'+tree.nGroups+'</strong></td><td><strong>'+tree.nKids+'</strong></td></tr></tbody></table></div>';
+  } else if(d.tile==='groups'){                                 // групи по локаціях
+    body='<div class="tbl-wrap"><table><thead><tr><th>Локація</th><th>Група</th><th>Дітей</th></tr></thead><tbody>'
+      +tree.order.map(function(n){ var x=tree.locs[n];
+        return x.groups.map(function(g,i){ return '<tr style="'+row+'" '+_dashDrillAttr('groups',n,g.name)+'>'
+          +'<td>'+(i===0?'<strong>'+esc(n)+'</strong>':'')+'</td><td>'+esc(g.name)+_dashGroupBadge(g)+'</td><td><b>'+g.kids.length+'</b> ▸</td></tr>'; }).join(''); }).join('')
+      +'<tr style="border-top:2px solid var(--gray2)"><td><strong>Разом</strong></td><td><strong>'+tree.nGroups+'</strong> <span style="font-size:11px;color:var(--gray)">без абонементу й «немає в Payment»</span></td><td><strong>'+tree.nKids+'</strong></td></tr></tbody></table></div>';
+  } else {                                                      // діти по локаціях і групах
+    body='<div style="padding:4px 14px 12px">'+tree.order.map(function(n){ var x=tree.locs[n];
+      return '<details style="border-bottom:1px solid #f0f4f8;padding:8px 0"><summary style="cursor:pointer;font-weight:700">'+esc(n)+' <span style="font-weight:400;color:var(--gray)">· '+x.kids+' дітей</span></summary>'
+        +x.groups.map(function(g){ return '<div style="margin:8px 0 0 14px"><div style="font-size:13px;font-weight:700;cursor:pointer" '+_dashDrillAttr('kids',n,g.name)+'>'+esc(g.name)+_dashGroupBadge(g)+' <span style="font-weight:400;color:var(--gray)">· '+g.kids.length+'</span></div>'
+          +'<div style="font-size:13px;line-height:1.7;margin-left:10px">'+g.kids.map(_dashKidLink).join('<br>')+'</div></div>'; }).join('')+'</details>'; }).join('')+'</div>';
+  }
+  return '<div class="card" id="dashDrillPanel" style="margin:14px 0 0"><div class="card-hd" style="flex-wrap:wrap;gap:6px"><h3 style="font-size:15px">'+crumbs.join(' <span style="color:var(--gray)">›</span> ')+'</h3>'
+    +'<button class="btn btn-secondary btn-sm" onclick="S.dashDrill=null;_renderDashNow()">✕ Згорнути</button></div>'+body
+    +'<div style="font-size:11px;color:var(--gray);padding:6px 14px 10px">Діти — активні картки; група — з Payment поточного місяця. Клік на дитину відкриває її картку.</div></div>';
+}
 function _renderDashNow(){
   if(S.view!=='dashboard') return;
   const isHR=isNetworkRole(S.user.role);
@@ -3463,9 +3556,13 @@ function _renderDashNow(){
   scopedKids.forEach(c=>{ if(!c.loc)return; if(!locAgg[c.loc])locAgg[c.loc]={kids:0,groups:new Set()}; locAgg[c.loc].kids++; if(c.group)locAgg[c.loc].groups.add(c.group); });
   const locList=sortLocationsByZone(Object.keys(locAgg));  // v6.49.1: зонний порядок (було за к-стю дітей)
   const totalKids=scopedKids.length, totalLocs=locList.length;
-  const _lv=_dashLive();   // v7.399: групи — з Payment (відкриті групи з активними дітьми), фолбек — назви з карток
-  const totalGroups=_lv ? Object.keys(_lv.locs).filter(l=>isHR||l===myLoc).reduce((s,l)=>s+_lv.locs[l].groups.length,0)
-                        : locList.reduce((s,l)=>s+locAgg[l].groups.size,0);
+  // v7.410: «Груп» — з того самого дерева, що й розкриття (групи Payment з активними дітьми, без абонементу);
+  // поки Payment не завантажився — назви груп із карток.
+  const _tree=_dashTree(isHR, myLoc), _payReady=Array.isArray(S._payFull);
+  const totalGroups=_payReady ? _tree.nGroups : locList.reduce((s,l)=>s+locAgg[l].groups.size,0);
+  if(!_payReady && S.dashDrill) S.dashDrill=null;
+  const _tileClick=(k)=>_payReady?` onclick="dashDrill('${k}')" style="cursor:pointer;${S.dashDrill&&S.dashDrill.tile===k?'outline:2px solid #2980b9;outline-offset:-2px;':''}" title="Клік — розкрити"`:'';
+  const _arrow=(k)=>_payReady?(S.dashDrill&&S.dashDrill.tile===k?' ▾':' ▸'):'';
   // ── плинність (S.emps) ──
   const emps=(visible()||[]).filter(e=>!isHR||_dashAllTypes()||_isKompNetwork(normEmpLoc(e)));   // v7.408: охоплення (усі галочки — і офіс/поза реєстром)
   const period=S.dashTurnPeriod||'year';
@@ -3504,13 +3601,14 @@ function _renderDashNow(){
   set('main',`
     ${scopeBar}
     <div class="stats-grid">
-      <div class="stat-card"><div class="stat-icon si-g">👶</div><div><div class="stat-val">${totalKids}</div><div class="stat-lbl">Дітей${isHR?'':' — '+myLoc}</div></div></div>
-      <div class="stat-card"><div class="stat-icon si-b">📚</div><div><div class="stat-val">${totalGroups}</div><div class="stat-lbl">Груп</div></div></div>
-      ${isHR?`<div class="stat-card"><div class="stat-icon si-p">🏫</div><div><div class="stat-val">${totalLocs}</div><div class="stat-lbl">Локацій</div></div></div>`:''}
+      <div class="stat-card"${_tileClick('kids')}><div class="stat-icon si-g">👶</div><div><div class="stat-val">${totalKids}</div><div class="stat-lbl">Дітей${isHR?'':' — '+myLoc}${_arrow('kids')}</div></div></div>
+      <div class="stat-card"${_tileClick('groups')}><div class="stat-icon si-b">📚</div><div><div class="stat-val">${totalGroups}</div><div class="stat-lbl">Груп${_arrow('groups')}</div></div></div>
+      ${isHR?`<div class="stat-card"${_tileClick('locs')}><div class="stat-icon si-p">🏫</div><div><div class="stat-val">${totalLocs}</div><div class="stat-lbl">Локацій${_arrow('locs')}</div></div></div>`:''}
       <div class="stat-card"><div class="stat-icon si-y">🆕</div><div><div class="stat-val">${hired.length}</div><div class="stat-lbl">Прийнято (${perLbl})</div></div></div>
       <div class="stat-card"><div class="stat-icon si-r">🚪</div><div><div class="stat-val">${fired.length}</div><div class="stat-lbl">Звільнено (${perLbl})</div></div></div>
     </div>
-
+    ${_payReady?_renderDashDrill(_tree):''}
+    <div style="height:16px"></div>
     ${_renderKompBlock()}
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
