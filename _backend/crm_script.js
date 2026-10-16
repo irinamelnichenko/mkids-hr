@@ -7157,7 +7157,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.416', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.417', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -7295,6 +7295,7 @@ function doGet(e) {
     else if (action === 'getPromoAttention')           result = getPromoAttention(e.parameter || {});      // v7.414 передоплати-здогадки + пропозиції
     else if (action === 'getPromoCardIndex')           result = getPromoCardIndex();                       // v7.414 картки мережі для вибору рекомендувача/брата
     else if (action === 'getPrepaymentRefund')         result = getPrepaymentRefund(e.parameter || {});    // v7.414 перерахунок передоплати при розірванні (показ)
+    else if (action === 'previewFeeChange')            result = previewFeeChange(e.parameter || {});       // v7.417 прев'ю зміни суми (нічого не пише)
     else if (action === 'getCoverage')                 result = getCoverage(e.parameter || {});            // v7.415 покриття передоплатою
     else if (action === 'previewPrepayment')           result = confirmPrepayment(_promoDry(e.parameter));  // v7.414 пробний прогін підтвердження (нічого не пише)
     else if (action === 'previewDiscounts')            result = recalcDiscounts(_promoDry(e.parameter));    // v7.414 що зміниться в реєстрі за місяць
@@ -10081,9 +10082,12 @@ function saveClient(data) {
       sheet.getRange(r+1, 1, 1, row.length).setValues([row]);
       _clientWriteHomeAddress(sheet, r + 1, data);   // v7.366
       try { _clientWritePromoFields(sheet, r + 1, data); } catch(_pf){ Logger.log('[saveClient] promo fields: %s', _pf && _pf.message); }   // v7.414
+      var _feeU = null; try { _feeU = _feeChangeOnCardUpdate(data, vals[r], sheet, r + 1); } catch(_fe){ Logger.log('[saveClient] fee: %s', _fe && _fe.message); }   // v7.417
       logGroupChange(data.id, data.name, data.loc, _oldGrpP, data.group, data.updatedBy || data.by || ''); // v7.47 ЕТАП 5
       var _payU = _paymentOnCardUpdate(data, vals[r]);   // v7.355
-      return _payU ? {ok:true, action:'updated', payment:_payU} : {ok:true, action:'updated'};
+      var _resU = _payU ? {ok:true, action:'updated', payment:_payU} : {ok:true, action:'updated'};
+      if (_feeU) _resU.fee = _feeU;   // v7.417
+      return _resU;
     }
   }
   // v7.24 АНТИ-ДУБЛЬ: id містить ГРУПУ (c_<ПІБ>_<група>_<локація>) → зміна групи
@@ -10118,6 +10122,7 @@ function saveClient(data) {
     sheet.getRange(cand + 1, 1, 1, row.length).setValues([row]);
     _clientWriteHomeAddress(sheet, cand + 1, data);   // v7.366
     try { _clientWritePromoFields(sheet, cand + 1, data); } catch(_pf2){ Logger.log('[saveClient] promo fields: %s', _pf2 && _pf2.message); }   // v7.414
+    try { _feeChangeOnCardUpdate(data, vals[cand], sheet, cand + 1); } catch(_fe2){ Logger.log('[saveClient] fee: %s', _fe2 && _fe2.message); }   // v7.417
     logGroupChange(data.id, data.name, data.loc, _oldGrpM, data.group, data.updatedBy || data.by || ''); // v7.47 ЕТАП 5: перевід групи
     var _payM = _paymentOnCardUpdate(data, vals[cand]);   // v7.355
     return _payM ? {ok:true, action:'updated-moved', mergedAbsences: mergedAbs.length, payment:_payM} : {ok:true, action:'updated-moved', mergedAbsences: mergedAbs.length};
@@ -26786,7 +26791,16 @@ function generateInvoicePDF(opts){
       } catch(_jj){}
     }
     var _dSum = _discL.reduce(function(a, d){ return a + (Number(d.amount) || 0); }, 0);
-    if (_mf > 0){
+    // v7.417: ціна місяця з урахуванням «Змін суми»; місяць переходу — частинами за робочими днями
+    var _fs = null; try { _fs = _feeSegments({fee:_mf, feeHist:client.feeHist || []}, _ymI); } catch(_fsE){}
+    if (_fs && _fs.base > 0) _mf = _fs.base;
+    if (_mf > 0 && _fs && _fs.prorated){
+      _fs.segs.forEach(function(sg){ lines.push({name: 'Оплата за навчання ' + _feeSegText(sg) + ' (' + sg.price + ' грн/міс, ' + sg.days + ' з ' + _fs.days + ' роб. дн.)', qty: 1, price: sg.sum, sum: sg.sum}); });
+      _discL.forEach(function(d){ lines.push({name: d.name, qty: 1, price: -d.amount, sum: -d.amount}); });
+      var _netP = _mf - _dSum, _adjP = Math.round((sum - _netP) * 100) / 100;
+      if (_adjP > 0)      lines.push({name: LABEL_DEBT,    qty: 1, price: _adjP, sum: _adjP});
+      else if (_adjP < 0) lines.push({name: LABEL_OVERPAY, qty: 1, price: _adjP, sum: _adjP});
+    } else if (_mf > 0){
       lines.push({name: 'Оплата за навчання', qty: 1, price: _mf, sum: _mf});
       _discL.forEach(function(d){ lines.push({name: d.name, qty: 1, price: -d.amount, sum: -d.amount}); });
       var _net = _mf - _dSum, _adjS = Math.round((sum - _net) * 100) / 100;
@@ -27762,6 +27776,7 @@ function _invoiceClientData(childName, loc, type){
   catch(e){ res.entryFeeSchedule = []; }
   res.monthlyFee = Number(c['Сума договору']) || 0;   // v7.63 для розбивки навч-рахунку (борг = Бюджет − договір)
   res.id = String(c['ID'] || '').trim();              // v7.414 знижки з реєстру — за ID картки
+  res.feeHist = _promoJSON(c['Зміни суми (JSON)'], []);  // v7.417 перехід з середини місяця
   return res;
 }
 
@@ -37416,15 +37431,9 @@ function _promoCards(){
   });
   return {byId:byId, list:list, data:(gc.data || [])};
 }
-// Щомісячна оплата дитини в місяці ym: остання «Зміна суми» з датою ≤ кінця місяця, інакше «Сума договору».
-function _promoFeeFor(c, ym){
-  var fee = c.fee, best = '', last = _ymLast(ym);
-  (Array.isArray(c.feeHist) ? c.feeHist : []).forEach(function(h){
-    var d = _promoISO(h && h.date), amt = _promoNum(h && h.amount);
-    if (d && amt > 0 && d <= last && d >= best){ best = d; fee = amt; }
-  });
-  return fee;
-}
+// Щомісячна оплата дитини в місяці ym. v7.417: з урахуванням переходу з середини місяця — пропорційно за робочими днями
+// (_feeSegments); старі записи «Змін суми» — як раніше (нова сума на весь місяць запису).
+function _promoFeeFor(c, ym){ return _feeSegments(c, ym).base; }
 // Чи навчається дитина в місяці ym (вибуття/випуск у місяці M — M ще рахується).
 function _promoActiveIn(c, ym){
   if (!c) return false;
@@ -38361,4 +38370,195 @@ function _clientWritePromoFields(sheet, rowNum, data){
     res.siblings = want;
   }
   return res;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.417 ЗМІНА СУМИ З СЕРЕДИНИ МІСЯЦЯ — пропорційна база
+//   Запис «Зміни суми (JSON)»: {date (з якої діє), amount (нова), oldAmount (стара), note, createdAt, by, eff}.
+//   Місяць переходу: база = Σ ціна × робочі дні частини / робочі дні місяця (пн–пт без держсвят, _fillNonWorking).
+//   Перехід 1-го — без пропорції. Пропорція — лише для записів з датою ≥ FEE_PRORATE_FROM і з oldAmount;
+//   старі записи — як раніше (нова сума на весь місяць).
+//   ЗАМОК: минулі й закриті місяці не перераховуються. Запис заднім числом діє з 1-го числа місяця внесення;
+//   якщо цей місяць закритий — з 1-го наступного незакритого. Ефективна дата фіксується в записі (eff) при збереженні.
+// ═══════════════════════════════════════════════════════════════════════════
+var FEE_PRORATE_FROM = '2026-11-01';
+
+function _feeWorkDays(fromISO, toISO){
+  if (!fromISO || !toISO || toISO < fromISO) return 0;
+  var p = fromISO.split('-'), d = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2])), n = 0;
+  var q = toISO.split('-'), end = new Date(Number(q[0]), Number(q[1]) - 1, Number(q[2]));
+  while (d <= end){
+    var iso = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+    if (!_fillNonWorking(iso).nonWorking) n++;
+    d.setDate(d.getDate() + 1);
+  }
+  return n;
+}
+function _isoAddDays(iso, n){
+  var p = iso.split('-'), d = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]) + n);
+  return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+}
+// Ефективна дата нового запису: не раніше місяця внесення і не в закритому місяці.
+function _feeEffDate(dateISO, createdISO){
+  var eff = dateISO;
+  if (createdISO && eff.slice(0, 7) < createdISO.slice(0, 7)) eff = createdISO.slice(0, 7) + '-01';
+  for (var g = 0; g < 24 && _isMonthClosed(Number(eff.slice(0, 4)), Number(eff.slice(5, 7))); g++) eff = _ymAdd(eff.slice(0, 7), 1) + '-01';
+  return eff;
+}
+// Нормалізовані записи картки, відсортовані за ефективною датою.
+function _feeEntries(c){
+  var raw = Array.isArray(c && c.feeHist) ? c.feeHist : _promoJSON(c && c.feeHist, []);
+  return (raw || []).map(function(h, i){
+    var d = _promoISO(h && h.date), amt = _promoNum(h && h.amount);
+    if (!d || !(amt > 0)) return null;
+    var hasOld = h.oldAmount != null && h.oldAmount !== '' && _promoNum(h.oldAmount) > 0;
+    var prorate = hasOld && d >= FEE_PRORATE_FROM;
+    var eff = prorate ? (_promoISO(h.eff) || _feeEffDate(d, _promoISO(h.createdAt))) : d.slice(0, 7) + '-01';   // старі записи — з 1-го (як було)
+    return {i:i, date:d, eff:eff, amount:amt, old:hasOld ? _promoNum(h.oldAmount) : null, prorate:prorate, note:String(h.note || '')};
+  }).filter(Boolean).sort(function(a, b){ return a.eff < b.eff ? -1 : a.eff > b.eff ? 1 : a.i - b.i; });
+}
+function _feePriceAt(c, list, iso){
+  var p = null;
+  list.forEach(function(e){ if (e.eff <= iso) p = e.amount; });
+  if (p != null) return p;
+  return (list.length && list[0].old != null) ? list[0].old : (Number(c && c.fee) || 0);
+}
+// База місяця + частини (для рахунку): {base, segs:[{from,to,price,days,sum}], days, prorated}
+function _feeSegments(c, ym){
+  var list = _feeEntries(c), f = _ymFirst(ym), l = _ymLast(ym);
+  var p0 = _feePriceAt(c, list, f);
+  var cuts = list.filter(function(e){ return e.prorate && e.eff > f && e.eff <= l; }).map(function(e){ return e.eff; });
+  if (!cuts.length) return {base:p0, segs:[{from:f, to:l, price:p0, days:0, sum:p0}], days:0, prorated:false};
+  var bounds = [f].concat(cuts.filter(function(x, i, a){ return a.indexOf(x) === i; })), total = _feeWorkDays(f, l), segs = [];
+  for (var i = 0; i < bounds.length; i++){
+    var from = bounds[i], to = (i + 1 < bounds.length) ? _isoAddDays(bounds[i + 1], -1) : l;
+    var price = _feePriceAt(c, list, from), days = _feeWorkDays(from, to);
+    segs.push({from:from, to:to, price:price, days:days, sum:total ? price * days / total : 0});
+  }
+  if (!total) return {base:segs[segs.length - 1].price, segs:[segs[segs.length - 1]], days:0, prorated:false};
+  var base = Math.round(segs.reduce(function(s, x){ return s + x.sum; }, 0));
+  var acc = 0;
+  segs.forEach(function(x, i){ x.sum = (i === segs.length - 1) ? base - acc : Math.round(x.sum); acc += x.sum; });
+  return {base:base, segs:segs, days:total, prorated:true};
+}
+function _feeSegText(s){ return s.from.slice(8, 10) + '.' + s.from.slice(5, 7) + '–' + s.to.slice(8, 10) + '.' + s.to.slice(5, 7); }
+
+// Місяці, де змінюється база (від мін. ефективної дати змін до кінця року файлу), лише поточний і майбутні.
+function _feeAffectedMonths(cOld, cNew, fileYear){
+  var a = _feeEntries(cOld), b = _feeEntries(cNew), key = function(e){ return e.eff + '|' + e.amount + '|' + e.old; };
+  var ka = a.map(key), kb = b.map(key), effs = [];
+  b.forEach(function(e){ if (ka.indexOf(key(e)) === -1) effs.push(e.eff); });
+  a.forEach(function(e){ if (kb.indexOf(key(e)) === -1) effs.push(e.eff); });
+  if (!effs.length) return [];
+  var from = effs.sort()[0].slice(0, 7), now = _ymNow(), out = [];
+  if (from < now) from = now;
+  if (from < PROMO_START_YM) from = PROMO_START_YM;
+  for (var ym = from, g = 0; ym <= fileYear + '-12' && g < 14; g++, ym = _ymAdd(ym, 1)){
+    if (_isMonthClosed(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)))) continue;
+    if (_feeSegments(cOld, ym).base !== _feeSegments(cNew, ym).base) out.push(ym);
+  }
+  return out;
+}
+// Поточна база клітинки «Бюджет навч» (наша формула → база, інакше значення) і рядок.
+function _feeReadCell(loc, name, ym){
+  var reg = _getLocationPaymentRegistry(loc);
+  if (!reg || !reg.sheetId) return {error:'Локацію «' + loc + '» не знайдено в реєстрі'};
+  var ss = SpreadsheetApp.openById(reg.sheetId), sh = ss.getSheetByName(reg.sheetName) || ss.getSheets()[0];
+  var data = sh.getDataRange().getValues(), nk = _normNameVac(name), row = -1;
+  for (var r = 3; r < data.length; r++){ var nm = trim(String(data[r][0] || '')); if (nm && !isGroupHeaderRow(data[r], 1) && _normNameVac(nm) === nk){ row = r; break; } }
+  if (row < 0) return {error:'Рядок «' + name + '» не знайдено в Payment ' + loc};
+  var LO = _paymentLayout(reg.colsPerMonth || 5), col1 = 1 + (Number(ym.slice(5, 7)) - 1) * (reg.colsPerMonth || 5) + LO.budNavch + 1;
+  var cell = sh.getRange(row + 1, col1), f = String(cell.getFormula() || ''), m = PROMO_FORMULA_RE.exec(f);
+  return {row:row + 1, a1:_colLetter(col1 - 1) + (row + 1), base:m ? _promoNum(m[1]) : _promoNum(cell.getValue()), ours:!!m, fileYear:_promoFileYear(ss)};
+}
+// Знижки реєстру картки за місяць, перераховані від іншої бази (послідовно, як двигун).
+function _feeRestack(cardId, ym, base){
+  var rows = _promoRead(DISC_TAB, DISC_HEADER).rows.filter(function(r){
+    return String(r['ID картки']) === cardId && _promoYM(r['Місяць']) === ym && String(r['Статус']) === 'діє';
+  }).map(function(r){
+    var pct = _promoNum(r['%']);
+    return {key:String(r['Ключ'] || r['ID запису']), promoId:String(r['ID акції']), order:_promoOrderOf(r['ID акції']), pct:pct,
+            fixed:pct > 0 ? 0 : _promoNum(r['Сума, грн']), status:'діє', amount0:_promoNum(r['Сума, грн'])};
+  });
+  _promoStack(rows, base);
+  return rows;
+}
+
+// GET previewFeeChange&cardId=&date=yyyy-MM-dd&amount=&removeIndex=
+//   Що зміниться: по місяцях — база стара → нова (і значення в Payment з урахуванням ручних коригувань бази),
+//   знижки за правилами стара → нова. НІЧОГО НЕ ПИШЕ.
+function previewFeeChange(params){
+  try {
+    params = params || {};
+    var cards = _promoCards(), c = cards.byId[String(params.cardId || '').trim()];
+    if (!c) return {ok:false, error:'Картку не знайдено (збережіть картку перед зміною суми)'};
+    var oldHist = Array.isArray(c.feeHist) ? c.feeHist.slice() : [], newHist = oldHist.slice(), entry = null;
+    var today = Utilities.formatDate(new Date(), 'Europe/Kiev', 'yyyy-MM-dd');
+    if (params.removeIndex != null && params.removeIndex !== ''){
+      newHist.splice(Number(params.removeIndex), 1);
+    } else {
+      var d = _promoISO(params.date), amt = _promoNum(params.amount);
+      if (!d || !(amt > 0)) return {ok:false, error:'Вкажіть дату й нову суму'};
+      var oldAmt = _feePriceAt(c, _feeEntries(c), d);
+      entry = {date:d, amount:amt, oldAmount:oldAmt, createdAt:today};
+      entry.eff = d >= FEE_PRORATE_FROM ? _feeEffDate(d, today) : d.slice(0, 7) + '-01';
+      newHist.push(entry);
+    }
+    var cOld = {fee:c.fee, feeHist:oldHist}, cNew = {fee:entry ? entry.amount : c.fee, feeHist:newHist};
+    var fileYear = new Date().getFullYear(), months = _feeAffectedMonths(cOld, cNew, fileYear), PA = {};
+    try { _promoList().forEach(function(p){ PA[p.id] = p.name; }); } catch(_n){}
+    var rows = months.map(function(ym){
+      var so = _feeSegments(cOld, ym), sn = _feeSegments(cNew, ym), cell = _feeReadCell(c.loc, c.name, ym);
+      var adj = (cell.error || !cell.ours) ? 0 : Math.round((cell.base - so.base) * 100) / 100;   // не на формулі — переведеться при збереженні
+      var dOld = _feeRestack(c.id, ym, so.base), dNew = _feeRestack(c.id, ym, sn.base);
+      return {ym:ym, oldBase:so.base, newBase:sn.base, prorated:sn.prorated,
+        segs:sn.segs.map(function(s){ return {period:_feeSegText(s), price:s.price, days:s.days, sum:s.sum}; }), days:sn.days,
+        cell:cell.error ? null : cell.a1, cellBase:cell.error ? null : cell.base, cellOurs:!!cell.ours, adj:adj, newCellBase:sn.base + adj, cellError:cell.error || '',
+        discounts:dNew.map(function(x, i){ return {promoId:x.promoId, name:x.promoId === 'VAC' ? 'відпустка' : (PA[x.promoId] || x.promoId), pct:x.pct, old:dOld[i] ? dOld[i].amount : 0, new:x.amount}; })};
+    });
+    var shifted = entry && entry.eff !== entry.date && entry.date >= FEE_PRORATE_FROM;
+    return {ok:true, child:c.name, loc:c.loc, entry:entry, shifted:shifted,
+      note:!entry ? 'Видалення запису' : (entry.date < FEE_PRORATE_FROM ? 'Дата до ' + FEE_PRORATE_FROM + ' — без пропорції (як раніше)'
+        : shifted ? 'Заднім числом: минулі/закриті місяці не перераховуються — нова сума діє з ' + entry.eff : (entry.eff.slice(8) === '01' ? 'З 1-го числа — без пропорції' : 'Перехід з ' + entry.eff + ' — місяць переходу пропорційно за робочими днями')),
+      months:rows};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+// Хук saveClient: змінились «Зміни суми» → фіксуємо eff/createdAt/oldAmount у нових записах, переписуємо базу
+// «Бюджет навч» поточного й майбутніх (незакритих) місяців з ручними коригуваннями бази, перераховуємо знижки.
+function _feeChangeOnCardUpdate(data, oldRow, sheet, rowNum){
+  try {
+    var oldHist = _promoJSON(oldRow && oldRow[18], []), newHist = Array.isArray(data.feeHistory) ? data.feeHistory : [];
+    if (JSON.stringify(oldHist) === JSON.stringify(newHist)) return null;
+    var today = Utilities.formatDate(new Date(), 'Europe/Kiev', 'yyyy-MM-dd'), cOld0 = {fee:Number(oldRow[12]) || 0, feeHist:oldHist};
+    var oldKeys = oldHist.map(function(h){ return _promoISO(h && h.date) + '|' + _promoNum(h && h.amount); }), stamped = false;
+    newHist.forEach(function(h){
+      var d = _promoISO(h && h.date), at = d ? oldKeys.indexOf(d + '|' + _promoNum(h.amount)) : -1;
+      if (at !== -1){   // наявний запис: фронт міг надіслати його без службових полів — переносимо зі старої версії
+        ['oldAmount','createdAt','eff','by'].forEach(function(k){ var ov = oldHist[at] && oldHist[at][k]; if ((h[k] == null || h[k] === '') && ov != null && ov !== ''){ h[k] = ov; stamped = true; } });
+        return;
+      }
+      if (!d) return;
+      if (!h.createdAt){ h.createdAt = today; stamped = true; }
+      if ((h.oldAmount == null || h.oldAmount === '') && d >= FEE_PRORATE_FROM){ h.oldAmount = _feePriceAt(cOld0, _feeEntries(cOld0), d); stamped = true; }
+      if (!h.eff && d >= FEE_PRORATE_FROM){ h.eff = _feeEffDate(d, _promoISO(h.createdAt)); stamped = true; }
+    });
+    if (stamped) sheet.getRange(rowNum, 19).setValue(JSON.stringify(newHist));
+    var loc = String(data.loc || '').trim(), name = String(data.name || '').trim();
+    var cOld = cOld0, cNew = {fee:Number(data.monthlyFee) || 0, feeHist:newHist};
+    var months = _feeAffectedMonths(cOld, cNew, new Date().getFullYear()), done = [];
+    // клітинки ще не на формулі реєстру → спершу переводимо (інакше знижки, що вже в числі, віднялись би двічі)
+    if (months.length && months.some(function(ym){ var c0 = _feeReadCell(loc, name, ym); return !c0.error && !c0.ours; }))
+      syncDiscountsToPayment({ym:months[0], loc:loc, dryRun:false, _internal:true});
+    months.forEach(function(ym){
+      var so = _feeSegments(cOld, ym), sn = _feeSegments(cNew, ym), cell = _feeReadCell(loc, name, ym);
+      if (cell.error || Number(ym.slice(0, 4)) !== cell.fileYear){ done.push({ym:ym, skipped:cell.error || 'інший рік файлу'}); return; }
+      var adj = Math.round((cell.base - so.base) * 100) / 100, val = sn.base + adj;
+      var r = setLocPaymentBudget({loc:loc, name:name, year:Number(ym.slice(0, 4)), month:Number(ym.slice(5, 7)), value:val, dryRun:false,
+        by:data.updatedBy || data.by || '', reason:'зміна суми: база ' + so.base + ' → ' + sn.base + (sn.prorated ? ' (пропорційно)' : '') + (adj ? '; коригування ' + adj : '')});
+      done.push({ym:ym, ok:r && r.ok, base:val, error:r && r.error});
+    });
+    var rc = months.length ? _promoRecalcRange(months[0], months[months.length - 1], loc, data.updatedBy || data.by || 'зміна суми') : null;
+    return {status:'fee', months:done, recalc:rc && rc.runs};
+  } catch(e){ return {status:'error', error:String(e && e.message || e)}; }
 }

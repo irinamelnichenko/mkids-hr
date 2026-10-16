@@ -963,9 +963,10 @@ details.card>summary::-webkit-details-marker{display:none}details.card[open]>sum
         <div id="discountBlock" style="margin-top:12px"></div>
         <div class="section-hd">Зміни суми договору</div>
         <div id="feeHistoryList"></div>
+        <div id="feePreview"></div>
         <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
           <input type="date" lang="uk" id="fHDate" style="flex:1;min-width:120px;padding:8px;border:1.5px solid var(--gray2);border-radius:8px;font-size:13px">
-          <input type="number" id="fHAmt" placeholder="Сума грн" style="flex:1;min-width:80px;padding:8px;border:1.5px solid var(--gray2);border-radius:8px;font-size:13px">
+          <input type="number" id="fHAmt" placeholder="Нова сума грн" title="Нова щомісячна сума; дата — з якої вона діє" style="flex:1;min-width:80px;padding:8px;border:1.5px solid var(--gray2);border-radius:8px;font-size:13px">
           <input type="text" id="fHNote" placeholder="Причина" style="flex:2;min-width:120px;padding:8px;border:1.5px solid var(--gray2);border-radius:8px;font-size:13px">
           <button class="btn btn-secondary btn-sm" onclick="addFeeHistory()">+ Додати</button>
         </div>
@@ -4390,7 +4391,7 @@ function openNewChild(){
   syncStatusField({status:'active'});   // v6.29.3: знімає lock/temp-опцію
   document.getElementById('tpPayStatus').innerHTML='';
   document.getElementById('payMonthsContent').innerHTML='';
-  document.getElementById('feeHistoryList').innerHTML='';
+  document.getElementById('feeHistoryList').innerHTML=''; var _fpv=document.getElementById('feePreview'); if(_fpv) _fpv.innerHTML='';   // v7.417
   document.getElementById('entryFeeList').innerHTML='';
   document.getElementById('entryFeeSummary').innerHTML='';
   document.getElementById('tp3').innerHTML='';
@@ -4432,7 +4433,7 @@ async function openChild(id,group,teacher,loc,name){
   document.querySelectorAll('#mChildTabs .tab').forEach(function(t,i){ t.classList.toggle('active',i===0); });
   document.querySelectorAll('.tab-pane').forEach(function(p,i){ p.classList.toggle('active',i===0); });
   document.getElementById('payMonthsContent').innerHTML='';
-  document.getElementById('feeHistoryList').innerHTML='';
+  document.getElementById('feeHistoryList').innerHTML=''; var _fpv=document.getElementById('feePreview'); if(_fpv) _fpv.innerHTML='';   // v7.417
   document.getElementById('entryFeeList').innerHTML='';
   document.getElementById('entryFeeSummary').innerHTML='';
   document.getElementById('tp3').innerHTML='';
@@ -4838,6 +4839,16 @@ function renderFeeHistory(){
         deltaHtml='0 грн';
       }
     }
+    if(h.oldAmount!=null && h.oldAmount!==''){   // v7.417 перехід: дата, стара → нова
+      var mid=String(h.eff||h.date||'').slice(8,10)!=='01';
+      return '<div class="fee-row" style="background:#e8f2fb">'
+        +'<span style="flex:1;font-size:13px"><b>Перехід з '+fmtD(h.eff||h.date)+'</b>: '+fmtN(h.oldAmount)+' → <b>'+fmtN(h.amount)+' грн</b>'
+        +(mid?' <span class="badge bb">місяць переходу — пропорційно за робочими днями</span>':'')
+        +(h.eff&&h.eff!==h.date?' <span class="badge bo" title="Внесено заднім числом: минулі/закриті місяці не перераховуються">дата в записі '+fmtD(h.date)+'</span>':'')
+        +(h.note?'<span class="fr-note" style="display:block">'+esc(h.note)+'</span>':'')+'</span>'
+        +'<button class="del-btn" onclick="delFeeHistory('+i+')">✕</button>'
+        +'</div>';
+    }
     return '<div class="fee-row">'
       +'<span class="fr-date">'+fmtD(h.date)+'</span>'
       +'<span class="fr-amt">'+fmtN(h.amount)+' грн</span>'
@@ -4847,15 +4858,50 @@ function renderFeeHistory(){
       +'</div>';
   }).join('');
 }
+// v7.417: зміна суми — спершу прев'ю (що зміниться в базі й знижках по місяцях), потім запис у картку.
+// У Payment і реєстр знижок зміна йде після «Зберегти» картки (бекенд: _feeChangeOnCardUpdate).
 function addFeeHistory(){
   var id=S.editId; if(!id) return;
   var d=document.getElementById('fHDate').value, a=parseFloat(document.getElementById('fHAmt').value), n=document.getElementById('fHNote').value;
-  if(!d||!a) return;
-  getCRMCard(id).feeHistory.push({date:d,amount:a,note:n});
-  document.getElementById('fHDate').value=''; document.getElementById('fHAmt').value=''; document.getElementById('fHNote').value='';
-  renderFeeHistory();
+  if(!d||!a){ alert('Вкажіть дату, з якої діє нова сума, і нову суму'); return; }
+  if(S.isNew){ getCRMCard(id).feeHistory.push({date:d,amount:a,note:n}); _feeClearInputs(); renderFeeHistory(); return; }
+  _feeShowPreview({action:'previewFeeChange', cardId:id, date:d, amount:a}, function(pv){
+    var c=getCRMCard(id);
+    c.feeHistory.push({date:d, amount:a, oldAmount:(pv.entry&&pv.entry.oldAmount!=null?pv.entry.oldAmount:''), note:n,
+      createdAt:new Date().toISOString().slice(0,10), by:(S.user&&(S.user.name||S.user.role))||'', eff:(pv.entry&&pv.entry.eff)||''});
+    var mf=document.getElementById('fMonthlyFee'); if(mf) mf.value=a;   // «Щомісячна сума» — нова (до дати переходу база йде за старою)
+    _feeClearInputs(); renderFeeHistory();
+  });
 }
-function delFeeHistory(i){ getCRMCard(S.editId).feeHistory.splice(i,1); renderFeeHistory(); }
+function _feeClearInputs(){ ['fHDate','fHAmt','fHNote'].forEach(function(x){ var e=document.getElementById(x); if(e) e.value=''; }); }
+function delFeeHistory(i){
+  var id=S.editId; if(!id) return;
+  if(S.isNew){ getCRMCard(id).feeHistory.splice(i,1); renderFeeHistory(); return; }
+  _feeShowPreview({action:'previewFeeChange', cardId:id, removeIndex:i}, function(){ getCRMCard(id).feeHistory.splice(i,1); renderFeeHistory(); });
+}
+async function _feeShowPreview(params, onOk){
+  var box=document.getElementById('feePreview'); if(!box) return;
+  box.innerHTML='<div class="alert alert-info"><div>⏳ Рахую, що зміниться…</div></div>';
+  var pv; try{ pv=await apiGetFull(params); }catch(e){ box.innerHTML='<div class="alert alert-danger"><div>Прев\'ю не вдалось: '+esc(e.message||e)+'</div></div>'; return; }
+  var mN=function(ym){ return (CFG.MONTHS_DISP[+ym.slice(5,7)-1]||ym)+' '+ym.slice(0,4); };
+  var h='<div class="alert alert-warn" style="display:block"><div style="font-weight:700;margin-bottom:6px">Що зміниться · '+esc(pv.child)+'</div>'
+    +'<div style="font-size:12.5px;margin-bottom:6px">'+esc(pv.note||'')+'</div>';
+  if(!pv.months.length) h+='<div style="font-size:13px">У поточному й майбутніх місяцях база не змінюється (минулі й закриті місяці не перераховуються).</div>';
+  pv.months.forEach(function(m){
+    h+='<div style="font-size:13px;margin:4px 0"><b>'+esc(mN(m.ym))+'</b>: база '+fmtN(m.oldBase)+' → <b>'+fmtN(m.newBase)+'</b>'
+      +(m.prorated?' ('+m.segs.map(function(sg){ return sg.period+': '+fmtN(sg.price)+' × '+sg.days+'/'+m.days+' дн. = '+fmtN(sg.sum); }).join(' + ')+')':'');
+    var ch=(m.discounts||[]).filter(function(x){ return x.old!==x.new; });
+    if(ch.length) h+='<br><span style="color:var(--gray)">знижки: '+ch.map(function(x){ return esc(x.name)+' '+fmtN(x.old)+' → '+fmtN(x.new); }).join('; ')+'</span>';
+    if(m.cell) h+='<br><span style="color:var(--gray)">Payment '+esc(m.cell)+': база '+fmtN(m.cellBase)+' → '+fmtN(m.newCellBase)+(m.adj?' (ручне коригування бази '+(m.adj>0?'+':'')+fmtN(m.adj)+' збережено)':'')+(m.cellOurs?'':' · клітинка ще не на формулі — переведеться при збереженні')+'</span>';
+    else if(m.cellError) h+='<br><span style="color:var(--red2)">'+esc(m.cellError)+'</span>';
+    h+='</div>';
+  });
+  h+='<div style="display:flex;gap:8px;margin-top:8px"><button class="btn btn-primary btn-sm" id="feeOk">✅ '+(params.removeIndex!=null?'Видалити запис':'Додати зміну')+'</button>'
+    +'<button class="btn btn-secondary btn-sm" onclick="document.getElementById(\'feePreview\').innerHTML=\'\'">Скасувати</button></div>'
+    +'<div style="font-size:11.5px;color:var(--gray);margin-top:6px">У Payment і рахунок піде після «Зберегти» картки.</div></div>';
+  box.innerHTML=h;
+  document.getElementById('feeOk').onclick=function(){ box.innerHTML=''; onOk(pv); };
+}
 
 // Entry fee
 function renderEntryFee(){
