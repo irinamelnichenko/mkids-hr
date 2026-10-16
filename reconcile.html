@@ -339,6 +339,23 @@ select,input{font-family:inherit}
       });
       window.addEventListener('load', function(){ setTimeout(window._revealHistMenu, 600); });
       </script>
+      <div class="nav-item" id="navPromos" style="display:none"
+           onclick="window.location.href='promos.html'">
+        <span class="ni">🎁</span> Акції та знижки
+      </div>
+      <script>
+      /* v7.414: «Акції та знижки» — CFO/CEO/COO/HR (керують) і директор (пропонує, бачить свою локацію). */
+      window._revealPromosMenu = function(){
+        var el = document.getElementById('navPromos'); if (!el) return;
+        var u = null;
+        try { u = (typeof S !== 'undefined' && S && S.user) ? S.user : null; } catch(e){}
+        if (!u){ try { var s = JSON.parse(localStorage.getItem('mkids_session') || 'null'); u = (s && s.user) || null; } catch(e){} }
+        var r = u ? String(u.role || '').toLowerCase().trim() : '';
+        el.style.display = (['cfo','ceo','coo','hr','director'].indexOf(r) !== -1) ? '' : 'none';
+      };
+      window._revealPromosMenu();
+      window.addEventListener('load', function(){ setTimeout(window._revealPromosMenu, 600); });
+      </script>
       <div class="nav-item" id="navCash" style="display:none"
            onclick="window.location.href='cash.html'">
         <span class="ni">💵</span> Готівка
@@ -1955,7 +1972,7 @@ function rcRowsHtml(p, g){
     h+='<tr>'
       +'<td>'+chk+'</td>'
       +'<td data-label="Дата">'+dateCell+'</td>'
-      +'<td data-label="Сума" style="text-align:right;white-space:nowrap"><b>'+fmtUah(x.amount)+'</b></td>'
+      +'<td data-label="Сума" style="text-align:right;white-space:nowrap"><b>'+fmtUah(x.amount)+'</b>'+(x.prepayHint?'<div style="font-size:11px;color:#C77A12;white-space:normal" title="Після внесення з\'явиться в «Потребують уваги» на підтвердження">💳 '+escapeHtml(x.prepayHint)+'</div>':'')+'</td>'   // v7.414
       +'<td data-label="Платник">'+escapeHtml(x.payerRaw)+(x.payerVia&&x.payerVia!=='individual'?' <span style="color:var(--gray);font-size:11px">['+escapeHtml(x.payerVia)+']</span>':'')+'</td>'
       +'<td data-label="Прізв."><span style="color:var(--gray);font-size:12px">'+escapeHtml(x.payerSurname||'')+'</span></td>'
       +'<td data-label="Статус"><span class="fc-stat '+st.cls+'">'+st.icon+' '+st.txt+'</span></td>'

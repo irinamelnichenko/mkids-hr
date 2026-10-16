@@ -211,6 +211,23 @@ td.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
       });
       window.addEventListener('load', function(){ setTimeout(window._revealHistMenu, 600); });
       </script>
+      <div class="nav-item" id="navPromos" style="display:none"
+           onclick="window.location.href='promos.html'">
+        <span class="ni">🎁</span> Акції та знижки
+      </div>
+      <script>
+      /* v7.414: «Акції та знижки» — CFO/CEO/COO/HR (керують) і директор (пропонує, бачить свою локацію). */
+      window._revealPromosMenu = function(){
+        var el = document.getElementById('navPromos'); if (!el) return;
+        var u = null;
+        try { u = (typeof S !== 'undefined' && S && S.user) ? S.user : null; } catch(e){}
+        if (!u){ try { var s = JSON.parse(localStorage.getItem('mkids_session') || 'null'); u = (s && s.user) || null; } catch(e){} }
+        var r = u ? String(u.role || '').toLowerCase().trim() : '';
+        el.style.display = (['cfo','ceo','coo','hr','director'].indexOf(r) !== -1) ? '' : 'none';
+      };
+      window._revealPromosMenu();
+      window.addEventListener('load', function(){ setTimeout(window._revealPromosMenu, 600); });
+      </script>
       <div class="nav-item" id="navCash" style="display:none"
            onclick="window.location.href='cash.html'">
         <span class="ni">💵</span> Готівка

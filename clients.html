@@ -588,6 +588,23 @@ details.card>summary::-webkit-details-marker{display:none}details.card[open]>sum
       });
       window.addEventListener('load', function(){ setTimeout(window._revealHistMenu, 600); });
       </script>
+      <div class="nav-item" id="navPromos" style="display:none"
+           onclick="window.location.href='promos.html'">
+        <span class="ni">🎁</span> Акції та знижки
+      </div>
+      <script>
+      /* v7.414: «Акції та знижки» — CFO/CEO/COO/HR (керують) і директор (пропонує, бачить свою локацію). */
+      window._revealPromosMenu = function(){
+        var el = document.getElementById('navPromos'); if (!el) return;
+        var u = null;
+        try { u = (typeof S !== 'undefined' && S && S.user) ? S.user : null; } catch(e){}
+        if (!u){ try { var s = JSON.parse(localStorage.getItem('mkids_session') || 'null'); u = (s && s.user) || null; } catch(e){} }
+        var r = u ? String(u.role || '').toLowerCase().trim() : '';
+        el.style.display = (['cfo','ceo','coo','hr','director'].indexOf(r) !== -1) ? '' : 'none';
+      };
+      window._revealPromosMenu();
+      window.addEventListener('load', function(){ setTimeout(window._revealPromosMenu, 600); });
+      </script>
       <div class="nav-item" id="navCash" style="display:none"
            onclick="window.location.href='cash.html'">
         <span class="ni">💵</span> Готівка
@@ -925,6 +942,25 @@ details.card>summary::-webkit-details-marker{display:none}details.card[open]>sum
         <div id="contractInfo" class="alert alert-info"></div>
         <div id="statusWarnings"></div>
         <div id="discountBlock" style="margin-top:12px"></div>
+        <!-- v7.414 АКЦІЇ: рекомендувач (будь-яка локація), брат/сестра (зв'язок в обидва боки), акція договору -->
+        <div class="section-hd">🎁 Акції</div>
+        <div id="promoCardBox" style="font-size:13px;color:var(--gray)">Завантаження…</div>
+        <div class="g2" id="promoCardFields" style="display:none">
+          <div class="fg"><label>Хто порекомендував (будь-яка локація мережі)</label>
+            <input type="text" id="fReferrer" list="dlPromoCards" placeholder="Почніть вводити ПІБ…" autocomplete="off" oninput="promoRefHint()">
+            <div id="fReferrerHint" style="font-size:11px;margin-top:4px;color:var(--gray)"></div></div>
+          <div class="fg"><label>Акція, за якою підписано договір</label>
+            <select id="fPromo"><option value="">— без акції —</option></select></div>
+        </div>
+        <div class="fg" id="promoSibWrap" style="display:none"><label>Брат / сестра (картки інших дітей сімʼї)</label>
+          <div id="fSiblingsList" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px"></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <input type="text" id="fSiblingAdd" list="dlPromoCards" placeholder="Додати брата / сестру…" autocomplete="off" style="flex:1;min-width:200px">
+            <button class="btn btn-secondary btn-sm" type="button" onclick="promoAddSibling()">+ Додати</button>
+          </div>
+          <div style="font-size:11px;color:var(--gray);margin-top:4px">Зв'язок ставиться в обидві картки. Порядок у сімʼї — за датою договору: перша дитина без знижки, друга й наступні −8%, поки навчаються одночасно.</div>
+        </div>
+        <datalist id="dlPromoCards"></datalist>
         <div class="section-hd">Зміни суми договору</div>
         <div id="feeHistoryList"></div>
         <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
@@ -1042,7 +1078,7 @@ details.card>summary::-webkit-details-marker{display:none}details.card[open]>sum
     <div class="modal-bd">
       <p id="termClientName" style="font-weight:600;margin:0 0 12px 0"></p>
       <div class="fg"><label>Дата розірвання</label>
-        <input type="date" lang="uk" id="termDate"></div>
+        <input type="date" lang="uk" id="termDate" onchange="promoShowRefund(S.editId)"></div>
       <div class="fg" style="margin-top:10px"><label>Причина розірвання</label>
         <select id="termCategory">
           <option value="🏠 Переїзд">🏠 Переїзд</option>
@@ -1056,6 +1092,7 @@ details.card>summary::-webkit-details-marker{display:none}details.card[open]>sum
       <div class="fg" style="margin-top:10px"><label>Деталі (опційно)</label>
         <textarea id="termDetails" rows="2" placeholder="Напр.: батьки переходять у приватну школу"
           style="width:100%;padding:10px;border:1.5px solid var(--gray2);border-radius:8px;font-size:14px;font-family:inherit;resize:vertical"></textarea></div>
+      <div id="termPrepay"></div>
       <div class="alert alert-warn" style="margin-top:12px;font-size:13px">
         ⚠️ Платежі НЕ чіпаються — рядок у платіжній системі лишається (борги треба ще зібрати).
         Клієнт переходить у розділ «📋 Розірвані договори».</div>
@@ -4341,6 +4378,7 @@ function openNewChild(){
     document.getElementById(id).value='';
   });
   document.getElementById('fHomeAddressReq').style.display='';   // v7.366: нова картка — адреса обов'язкова
+  promoFillCard(null);   // v7.414
   _renderHomeGeo(null);   // v7.367
   S._homePick=null; S._homeStreet=null; hideHomeAddrSug();   // v7.368/v7.370
   _renderChildDocs({});   // v7.389
@@ -4558,6 +4596,7 @@ function populateForm(id){
   document.getElementById('fChildRegAddress').value=c.childRegAddress||'';
   document.getElementById('fHomeAddress').value=c.homeAddress||'';   // v7.366
   document.getElementById('fHomeApt').value=c.homeApt||'';            // v7.370
+  promoFillCard(id);   // v7.414 акції — свіжі значення з мережевого індексу
   _renderChildDocs(c.docs||{});                                         // v7.389
   document.getElementById('fHomeAddressReq').style.display='none';   // наявна картка — не обов'язково
   _renderHomeGeo(c);   // v7.367
@@ -7387,6 +7426,7 @@ function openTerminate(){
   document.getElementById('termCategory').value = parsed.category || TERM_REASON_CATEGORIES[0];
   document.getElementById('termDetails').value = parsed.details || '';
   document.getElementById('mTerminate').classList.remove('hidden');
+  promoShowRefund(id);   // v7.414 передоплата → перерахунок за фактичним періодом (лише показ)
 }
 
 function confirmTerminate(){
@@ -7769,6 +7809,71 @@ async function renderNeedsAttention(){
   if(S.view!=='needsAttention') return;   // людина вже пішла на інший екран — не перемальовуємо
   main.innerHTML=_naRenderHtml(_naScope(j.items));
   _naNoCardLoad();   // v7.357
+  _naPromoLoad();    // v7.414
+}
+// v7.414: «Потребують уваги» → передоплати-здогадки з виписки + пропозиції акцій від директорів.
+async function _naPromoLoad(){
+  var main=document.getElementById('main'); if(!main) return;
+  var box=document.getElementById('naPromo');
+  if(!box){ box=document.createElement('div'); box.id='naPromo'; box.style.cssText='max-width:1000px;margin:0 0 22px'; main.insertBefore(box, main.firstChild); }
+  var j; try{ j=await apiGetFull({action:'getPromoAttention', actorId:(S.user&&S.user.id)||''}); }catch(e){ box.innerHTML=''; return; }
+  if(S.view!=='needsAttention') return;
+  var pp=j.prepay||[], pr=j.proposals||[];
+  if(!pp.length && !pr.length){ box.innerHTML=''; return; }
+  var can=!!j.canDecide, fm=function(n){ return Math.round(Number(n)||0).toLocaleString('uk-UA')+' ₴'; };
+  var h='<div style="font-size:16px;font-weight:700;margin-bottom:6px">🎁 Акції та передоплати · '+(pp.length+pr.length)+'</div>';
+  if(pp.length){
+    h+='<p style="color:var(--gray);font-size:13px;margin:0 0 8px;max-width:80ch">Платіж схожий на передоплату за 3 / 6 / 12 місяців. Без підтвердження знижка не нараховується і платіж лишається звичайною оплатою. «Підтвердити» знімає суму з місяця надходження і розносить її рівними частинами у «Факт навч» кожного місяця.</p>';
+    pp.forEach(function(p){
+      h+='<div id="naPP_'+esc(p.id)+'" style="background:#FBF1DF;border:1px solid #e6c68a;border-radius:10px;padding:10px 12px;margin-bottom:7px">'
+        +'<div><b>'+esc(p.name)+'</b> · '+esc(p.loc)+' · '+esc(p.date)+' · <b>'+fm(p.amount)+'</b></div>'
+        +'<div style="font-size:12.5px;margin-top:3px">Здогадка: <b>'+p.months+' міс −'+p.pct+'%</b> ('+p.months+' × '+fm(p.price)+' − '+p.pct+'%). '+esc(p.note||'')+'</div>'
+        +(can?'<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:7px">Перший місяць: <input type="month" id="naPPm_'+esc(p.id)+'" value="'+esc(p.firstYM||p.payYM)+'" style="padding:5px 8px;border:1px solid var(--line,#e5ded7);border-radius:7px">'
+          +'<button class="btn btn-xs" style="background:#27ae60;color:#fff;border-color:#27ae60" onclick="naPrepay(\''+esc(p.id)+'\',true)">✅ Підтвердити</button>'
+          +'<button class="btn btn-xs" onclick="naPrepay(\''+esc(p.id)+'\',false)">✖ Це звичайна оплата</button></div>':'<div style="font-size:12px;color:var(--gray);margin-top:5px">Підтверджує CFO / офіс.</div>')
+        +'</div>';
+    });
+  }
+  if(pr.length){
+    h+='<div style="font-weight:700;margin:12px 0 6px">Пропозиції акцій від директорів</div>';
+    pr.forEach(function(p){
+      h+='<div id="naPR_'+esc(p.id)+'" style="background:#EAF1F9;border:1px solid #9dc0e8;border-radius:10px;padding:10px 12px;margin-bottom:7px">'
+        +'<div><b>'+esc(p.name)+'</b> · '+esc(p.locs)+' · '+esc(p.start||'—')+' → '+esc(p.end||'—')+' · правило: <code>'+esc(p.rule)+'</code> · на: '+esc(p.appliesTo)+'</div>'
+        +'<div style="font-size:12.5px;margin-top:3px">'+esc(p.conditions)+'</div><div style="font-size:12px;color:var(--gray)">Запропонував(-ла): '+esc(p.createdBy)+', '+esc(p.createdAt)+'</div>'
+        +(can?'<div style="display:flex;gap:8px;margin-top:7px"><button class="btn btn-xs" style="background:#27ae60;color:#fff;border-color:#27ae60" onclick="naPromoDecide(\''+esc(p.id)+'\',\'approve\')">✅ Підтвердити</button><button class="btn btn-xs" onclick="naPromoDecide(\''+esc(p.id)+'\',\'reject\')">✖ Відхилити</button></div>':'')
+        +'</div>';
+    });
+  }
+  box.innerHTML=h;
+}
+async function naPrepay(id, ok){
+  var uid=(S.user&&S.user.id)||'';
+  if(!ok){
+    if(!confirm('Позначити як звичайну оплату? Знижка за передоплату не нараховуватиметься.')) return;
+    var r0; try{ r0=await apiPost({action:'rejectPrepayment', id:id, actorId:uid}); }catch(e){ r0={ok:false,error:e.message}; }
+    if(r0&&r0.ok===false){ alert('Не вдалось: '+(r0.error||'')); return; }
+    var el0=document.getElementById('naPP_'+id); if(el0) el0.remove(); return;
+  }
+  var m=String((document.getElementById('naPPm_'+id)||{}).value||'');
+  var pv; try{ pv=await apiGetFull({action:'previewPrepayment', id:id, firstMonth:m, actorId:uid}); }catch(e){ pv={ok:false,error:e.message}; }
+  if(!pv||pv.ok===false){ alert('Перевірка не вдалась: '+((pv&&pv.error)||'немає відповіді')); return; }
+  var txt='Передоплата: '+pv.child+' ('+pv.loc+'), '+pv.months+' міс −'+pv.pct+'%, з '+pv.first+'.\n\nКлітинки «Факт навч»:\n'
+    +pv.changes.map(function(c){ return '  '+c.cell+' ('+c.month+'): '+c.before+' → '+c.after; }).join('\n')
+    +(pv.carry&&pv.carry.length?('\n\nНа наступний рік (файл 2027): '+pv.carry.length+' міс, '+pv.carrySum+' ₴ — рознести, коли файли 2027 стануть робочими.'):'')
+    +'\n\nВнести?';
+  if(!confirm(txt)) return;
+  var r; try{ r=await apiPost({action:'confirmPrepayment', id:id, firstMonth:m, dryRun:false, actorId:uid}); }catch(e){ r={ok:false,error:e.message}; }
+  if(r&&r.ok===false){ alert('Не вдалось: '+(r.error||'')); return; }
+  showFloatMsg('✅ Передоплату підтверджено й рознесено','ok');
+  var el=document.getElementById('naPP_'+id); if(el) el.remove();
+}
+async function naPromoDecide(id, dec){
+  var cm=prompt(dec==='approve'?'Коментар (необовʼязково):':'Причина відхилення:','');
+  if(cm===null) return;
+  var r; try{ r=await apiPost({action:'decidePromo', id:id, decision:dec, comment:cm, actorId:(S.user&&S.user.id)||''}); }catch(e){ r={ok:false,error:e.message}; }
+  if(r&&r.ok===false){ alert('Не вдалось: '+(r.error||'')); return; }
+  var el=document.getElementById('naPR_'+id); if(el) el.remove();
+  PROMO_UI.promos=null;
 }
 // v7.357: РЯДКИ PAYMENT БЕЗ КАРТКИ — діти з бюджетом у Payment, для яких немає картки (зокрема імена з номерами,
 // які нічний синк сам не заводить). Кнопка «Завести картку» створює картку з ПІБ точно як у Payment.
@@ -8174,12 +8279,106 @@ function saveChild(){
     createdAt: c.createdAt, updatedAt: c.updatedAt
   };
 
+  // v7.414 акції: лише якщо поля акцій у формі завантажились (інакше ключі не шлемо — бекенд не чіпає клітинки)
+  var _pf=promoCollect(S.isNew ? 'new' : id);
+  if(_pf){ payload.referrerId=_pf.referrerId; payload.siblingIds=_pf.siblingIds; payload.promoId=_pf.promoId;
+    c.referrerId=_pf.referrerId; c.siblingIds=_pf.siblingIds; c.promoId=_pf.promoId; PROMO_UI.idxAt=0; }
+
   saveLocalCRM();
   apiPost({action:'saveClient', data: payload});
   localStorage.removeItem(CFG.CLI_CACHE);
   closeModal('mChild');
   S.isNew=false;
   renderView();
+}
+
+// ═══ v7.414 АКЦІЇ В КАРТЦІ ═══════════════════════════════════════════════════
+// Значення беремо з мережевого індексу (getPromoCardIndex), а не з локального кешу: зв'язок брат/сестра
+// бекенд ставить в обидві картки, тож локальна копія іншої картки могла застаріти.
+var PROMO_UI={idx:null, idxAt:0, promos:null, byLabel:{}, byId:{}, sib:[], form:null};
+function _promoLbl(x){ return x.name+' · '+x.loc+(x.group?' · '+x.group:''); }
+async function promoLoadIndex(){
+  if(PROMO_UI.idx && Date.now()-PROMO_UI.idxAt<60000) return PROMO_UI.idx;
+  var j=await apiGetFull({action:'getPromoCardIndex'});
+  PROMO_UI.idx=j.cards||[]; PROMO_UI.idxAt=Date.now(); PROMO_UI.byLabel={}; PROMO_UI.byId={};
+  var dl=document.getElementById('dlPromoCards'), h='';
+  PROMO_UI.idx.forEach(function(x){ var l=_promoLbl(x); PROMO_UI.byLabel[l]=x; PROMO_UI.byId[x.id]=x; h+='<option value="'+esc(l)+'">'; });
+  if(dl) dl.innerHTML=h;
+  return PROMO_UI.idx;
+}
+async function promoLoadPromos(){
+  if(PROMO_UI.promos) return PROMO_UI.promos;
+  var j=await apiGetFull({action:'getPromos'}); PROMO_UI.promos=j.promos||[]; return PROMO_UI.promos;
+}
+async function promoFillCard(id){
+  PROMO_UI.form=null; PROMO_UI.sib=[];
+  var box=document.getElementById('promoCardBox'), f1=document.getElementById('promoCardFields'), f2=document.getElementById('promoSibWrap');
+  if(!box) return;
+  box.style.display=''; box.textContent='Завантаження…'; f1.style.display='none'; f2.style.display='none';
+  try{ await Promise.all([promoLoadIndex(), promoLoadPromos()]); }
+  catch(e){ box.textContent='⚠️ Акції не завантажились: '+(e.message||e)+' — поля акцій цього разу не зберігаються.'; return; }
+  if(S.isNew ? id!==null : S.editId!==id) return;   // встигли відкрити іншу картку
+  var me=id ? (PROMO_UI.byId[id]||{}) : {};
+  var c=id ? (S.crm[id]||{}) : {};
+  var loc=id ? (c.loc||me.loc||'') : '';
+  var ref=me.referrer||'', rx=PROMO_UI.byId[ref];
+  document.getElementById('fReferrer').value=rx?_promoLbl(rx):(ref||'');
+  var sel=document.getElementById('fPromo'), cur=me.promo||'';
+  var opts='<option value="">— без акції —</option>';
+  (PROMO_UI.promos||[]).forEach(function(p){
+    var okLoc=!loc || /^вс[іi]$/i.test(String(p.locs||'').trim()) || String(p.locs||'').split(/[,;]/).map(function(x){return x.trim();}).indexOf(loc)!==-1;
+    if((p.status==='діє' && okLoc) || p.id===cur) opts+='<option value="'+esc(p.id)+'"'+(p.id===cur?' selected':'')+'>'+esc(p.id+' · '+p.name+(p.status!=='діє'?' ('+p.status+')':''))+'</option>';
+  });
+  sel.innerHTML=opts;
+  PROMO_UI.sib=(me.siblings||[]).slice();
+  promoRenderSiblings(); promoRefHint();
+  box.style.display='none'; f1.style.display=''; f2.style.display='';
+  PROMO_UI.form=id ? id : 'new';
+}
+function promoRenderSiblings(){
+  var el=document.getElementById('fSiblingsList'); if(!el) return;
+  el.innerHTML=PROMO_UI.sib.length ? PROMO_UI.sib.map(function(sid,i){
+    var x=PROMO_UI.byId[sid];
+    return '<span style="display:inline-flex;align-items:center;gap:6px;background:#eef2f7;border-radius:14px;padding:4px 10px;font-size:13px">'
+      +esc(x?_promoLbl(x):sid)+' <a href="#" onclick="promoDelSibling('+i+');return false" style="color:#c0392b;text-decoration:none;font-weight:700">×</a></span>';
+  }).join('') : '<span style="font-size:12px;color:var(--gray)">не вказано</span>';
+}
+function promoAddSibling(){
+  var inp=document.getElementById('fSiblingAdd'), x=PROMO_UI.byLabel[String(inp.value||'').trim()];
+  if(!x){ alert('Оберіть дитину зі списку підказок'); return; }
+  if(x.id===S.editId){ alert('Це та сама картка'); return; }
+  if(PROMO_UI.sib.indexOf(x.id)===-1) PROMO_UI.sib.push(x.id);
+  inp.value=''; promoRenderSiblings();
+}
+function promoDelSibling(i){ PROMO_UI.sib.splice(i,1); promoRenderSiblings(); }
+function promoRefHint(){
+  var v=String((document.getElementById('fReferrer')||{}).value||'').trim(), h=document.getElementById('fReferrerHint'); if(!h) return;
+  if(!v){ h.textContent=''; return; }
+  var x=PROMO_UI.byLabel[v];
+  h.innerHTML=x ? ('✅ '+esc(x.loc)+(x.status&&x.status!=='active'&&x.status!=='adaptation'?' · <span style="color:#C77A12">статус: '+esc(x.status)+' — знижка «Приведи друга» згорить, якщо не навчатиметься</span>':''))
+               : (PROMO_UI.byId[v] ? '' : '<span style="color:#c0392b">Оберіть дитину зі списку підказок</span>');
+}
+// Повертає {referrerId, siblingIds, promoId} або null (форма акцій не готова → ключі не шлемо).
+function promoCollect(formKey){
+  if(!PROMO_UI.form || PROMO_UI.form!==formKey) return null;
+  var v=String(document.getElementById('fReferrer').value||'').trim();
+  var rx=PROMO_UI.byLabel[v] || PROMO_UI.byId[v];
+  if(v && !rx){ alert('«Хто порекомендував»: оберіть дитину зі списку підказок. Поле не збережено.'); }
+  return {referrerId: rx ? rx.id : '', siblingIds: PROMO_UI.sib.slice(), promoId: String(document.getElementById('fPromo').value||'')};
+}
+// Розірвання: перерахунок передоплати за фактичним періодом (лише показ; повернення проводиться вручну).
+async function promoShowRefund(id){
+  var box=document.getElementById('termPrepay'); if(!box||!id) return;
+  box.innerHTML='';
+  var d=String((document.getElementById('termDate')||{}).value||'');
+  try{
+    var j=await apiGetFull({action:'getPrepaymentRefund', childId:id, date:d});
+    if(!j.items||!j.items.length) return;
+    box.innerHTML='<div class="alert alert-info" style="margin-top:12px;font-size:13px"><b>💳 Передоплата — перерахунок</b>'
+      +j.items.map(function(x){ return '<div style="margin-top:6px">'+esc(x.text)
+        +(x.futureFact>0?'<div style="color:var(--gray);font-size:12px">У Payment у місяцях після розірвання лежить '+Math.round(x.futureFact).toLocaleString('uk-UA')+' ₴ рознесеної передоплати — зніміть їх при поверненні.</div>':'')+'</div>'; }).join('')
+      +'<div style="font-size:12px;color:var(--gray);margin-top:6px">Повернення система не проводить — лише рахує.</div></div>';
+  }catch(e){ box.innerHTML='<div style="color:#c0392b;font-size:12px;margin-top:8px">Перерахунок передоплати не завантажився: '+esc(e.message||e)+'</div>'; }
 }
 
 // ─── YEARLY LOAD HELPER (надійний wrapper для кнопок) ────────────────────────

@@ -1,0 +1,1334 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>m.kids System — Акції та знижки</title>
+<meta name="theme-color" content="#FF6B35">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-title" content="m.kids System">
+<link rel="manifest" href="manifest.json">
+<style>
+
+  /* v7.240: спільний шелл (сайдбар/шапка) — змінні під ті самі імена, що в решті сторінок */
+  :root{--sw:230px;--sidebar:#1e293b;--green:#16a34a;--green2:#4ade80;--gray2:#e2e8f0;--dark2:#1e293b}
+  :root{--b:#2563eb;--g:#16a34a;--r:#dc2626;--o:#ea580c;--mut:#94a3b8;--bg:#f1f5f9;--line:#e2e8f0;--dark:#1e293b;--gray:#64748b}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--dark);font-size:14px}
+  .top{position:sticky;top:0;z-index:30;background:#fff;border-bottom:1px solid var(--line);padding:10px 14px;display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+  .top h1{font-size:18px;margin:0;font-weight:800}
+  .sp{flex:1}
+  select,input,button{font:inherit}
+  .btn{border:0;border-radius:9px;padding:8px 12px;font-weight:700;cursor:pointer;color:#fff;background:var(--b)}
+  .btn.g{background:var(--g)} .btn.sec{background:#fff;color:var(--dark);border:1px solid var(--line)} .btn:disabled{opacity:.5;cursor:default}
+  .flt{padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:#fff}
+  .mnav{display:flex;align-items:center;gap:6px}
+  .mnav b{min-width:130px;text-align:center}
+  .wrap{padding:12px}
+  .card{background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-bottom:14px}
+  .card .hd{padding:10px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .card .hd h3{margin:0;font-size:15px}
+  .muted{color:var(--gray);font-size:12px}
+  .tblwrap{overflow:auto;max-height:72vh}
+  table.grid{border-collapse:separate;border-spacing:0;font-size:12px}
+  table.grid th,table.grid td{border-right:1px solid var(--line);border-bottom:1px solid var(--line);padding:0}
+  table.grid thead th{position:sticky;top:0;z-index:6;background:#f8fafc;text-align:center;padding:4px 3px;font-weight:700;white-space:nowrap}
+  table.grid thead th.we{background:#eef1f5;color:var(--mut)}
+  table.grid td.kid,table.grid th.kidh{position:sticky;left:0;z-index:5;background:#fff;text-align:left;padding:4px 8px;min-width:180px;max-width:180px;border-right:2px solid var(--line)}
+  table.grid thead th.kidh{z-index:8;background:#f8fafc}
+  table.grid td.kid small{color:var(--gray);display:block;font-size:10px}
+  td.tot,th.toth{position:sticky;right:0;z-index:5;background:#fff;text-align:right;padding:4px 8px;min-width:80px;font-weight:800;border-left:2px solid var(--line)}
+  thead th.toth{z-index:8;background:#f8fafc}
+  td.cell{padding:2px;text-align:center;min-width:74px}
+  td.cell.we{background:#f6f8fa}
+  .tg{display:inline-block;min-width:20px;padding:2px 4px;margin:1px;border:1px solid var(--line);border-radius:6px;font-size:10px;font-weight:800;color:var(--gray);cursor:pointer;user-select:none;line-height:1.2}
+  .tg.on{color:#fff;border-color:transparent}
+  .we .tg{opacity:.3;pointer-events:none}
+  tbody tr:nth-child(even) td.kid{background:#fbfcfe}
+  .prices{padding:12px 14px;display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end}
+  .prices .pit{display:flex;flex-direction:column;gap:3px}
+  .prices label{font-size:12px;color:var(--gray)}
+  .prices input{width:110px;padding:7px 9px;border:1px solid var(--line);border-radius:8px}
+  .foot{padding:9px 14px;font-weight:800;border-top:1px solid var(--line);display:flex;gap:20px;flex-wrap:wrap}
+  .modal{position:fixed;inset:0;background:rgba(15,23,42,.45);display:none;align-items:center;justify-content:center;z-index:100;padding:16px}
+  .modal.show{display:flex}
+  .mcard{background:#fff;border-radius:14px;max-width:560px;width:100%;max-height:85vh;overflow:auto;padding:18px}
+  .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#111827;color:#fff;padding:10px 16px;border-radius:10px;z-index:200;opacity:0;transition:.2s;pointer-events:none;font-weight:600}
+  .toast.show{opacity:1}
+  .empty{padding:40px;text-align:center;color:var(--gray)}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--dark)}
+  .legend b{display:inline-block;padding:1px 6px;border-radius:6px;margin-right:3px}
+  table.grid td.kid{white-space:nowrap}
+  table.grid td.kid small{color:var(--gray);font-size:10px}
+  table.grid td.cell{padding:2px 3px;text-align:center;white-space:nowrap}
+  th.dcol small{color:var(--mut);font-weight:600}
+  .tgb{display:flex;flex-direction:column;align-items:center;gap:2px}
+  .tgr{display:flex;justify-content:center;gap:3px}
+  .tg{display:inline-block;font-size:19px;line-height:28px;height:28px;min-width:28px;text-align:center;vertical-align:middle;padding:0 1px;margin:1px;border:1px solid transparent;border-radius:7px;cursor:pointer;opacity:.28;filter:grayscale(1)}
+  .tg:hover{opacity:.6}
+  .tg.on{opacity:1;filter:none}
+/* ── SIDEBAR (shared shell з salary.html) ───── */
+#app{display:flex;min-height:100vh}
+.sidebar{width:var(--sw);background:var(--sidebar);display:flex;flex-direction:column;
+  position:fixed;top:0;left:0;height:100vh;z-index:100;overflow-y:auto}
+.sb-brand{padding:20px;border-bottom:1px solid rgba(255,255,255,.1)}
+.sb-brand h2{color:#fff;font-size:16px;font-weight:800}
+.sb-brand p{color:rgba(255,255,255,.45);font-size:11px;margin-top:2px}
+.sb-user{padding:14px 20px;display:flex;align-items:center;gap:10px;border-bottom:1px solid rgba(255,255,255,.1)}
+.avatar{width:36px;height:36px;background:var(--green);border-radius:50%;
+  display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:13px;flex-shrink:0}
+.sb-user-info p{color:#fff;font-size:13px;font-weight:600}
+.sb-user-info span{color:rgba(255,255,255,.45);font-size:11px}
+.sb-nav{flex:1;padding:10px 0}
+.nav-sec{padding:4px 18px;font-size:10px;text-transform:uppercase;letter-spacing:1px;
+  color:rgba(255,255,255,.28);margin:14px 0 4px}
+.nav-item{display:flex;align-items:center;gap:10px;padding:10px 20px;
+  color:rgba(255,255,255,.6);cursor:pointer;transition:all .2s;font-size:13.5px;
+  border-left:3px solid transparent;user-select:none}
+.nav-item:hover{background:rgba(255,255,255,.06);color:#fff}
+.nav-item.active{background:rgba(39,174,96,.18);color:var(--green2);border-left-color:var(--green)}
+.nav-item .ni{width:20px;text-align:center;font-size:15px}
+.sb-footer{padding:14px 20px;border-top:1px solid rgba(255,255,255,.1)}
+.sb-footer .btn{width:100%;background:rgba(255,255,255,.07);color:rgba(255,255,255,.65);
+  border:none;justify-content:center;font-size:13px}
+.sb-footer .btn:hover{background:rgba(255,255,255,.15);color:#fff}
+.main{margin-left:var(--sw);flex:1;display:flex;flex-direction:column;min-height:100vh}
+.menu-toggle{display:none;padding:8px 10px;background:#fff;
+  border:1.5px solid var(--gray2);border-radius:8px;font-size:18px;color:var(--dark2);cursor:pointer}
+.menu-toggle:hover{background:#f4f7fa}
+@media(max-width:768px){
+  .sidebar{transform:translateX(-100%);transition:transform .3s}
+  .sidebar.open{transform:translateX(0)}
+  .main{margin-left:0}
+  .menu-toggle{display:inline-flex;align-items:center}
+}
+
+/* v7.240: власна шапка meals лишається, але їде всередині .main і дістає гамбургер */
+.top .menu-toggle{margin-right:4px}
+/* ── v7.414 АКЦІЇ ТА ЗНИЖКИ ───── */
+.ptabs{display:flex;gap:6px;padding:10px 12px 0;flex-wrap:wrap}
+.ptab{border:1px solid var(--line);background:#fff;border-radius:9px;padding:8px 14px;font-weight:700;cursor:pointer;color:var(--gray)}
+.ptab.on{background:var(--b);color:#fff;border-color:var(--b)}
+.card{background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-bottom:14px}
+.card .hd{padding:10px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.card .hd h3{margin:0;font-size:15px}
+.frm{padding:14px;display:flex;flex-direction:column;gap:12px}
+.frm label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--gray);font-weight:700}
+.frm select,.frm input,.frm textarea{padding:9px 10px;border:1px solid var(--line);border-radius:9px;font-size:14px;color:var(--dark);background:#fff;font-weight:400;font-family:inherit}
+.frm .two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.frm .three{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+.err{background:#fef2f2;color:var(--r);padding:9px 11px;border-radius:9px;font-size:13px}
+.note{background:#f8fafc;border:1px solid var(--line);border-radius:9px;padding:9px 11px;font-size:12.5px;color:var(--gray)}
+table.hist{width:100%;border-collapse:collapse;font-size:13px}
+table.hist th{position:sticky;top:0;background:#f8fafc;text-align:left;padding:8px;font-size:12px;color:var(--gray);border-bottom:1px solid var(--line);white-space:nowrap}
+table.hist td{padding:7px 8px;border-bottom:1px solid #f1f5f9;vertical-align:top}
+table.hist tr.skip td{opacity:.5}
+table.hist .r{text-align:right} table.hist .nw{white-space:nowrap}
+table.hist tfoot td{font-weight:800;background:#f8fafc}
+.btn.sm{padding:4px 8px;font-size:12px}
+.tblwrap{overflow:auto;max-height:calc(100vh - 230px)}
+.pill{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11.5px;font-weight:700;background:#eef2f7;color:var(--dark)}
+.pill.ok{background:#dcfce7;color:#166534} .pill.wait{background:#fef3c7;color:#92400e} .pill.off{background:#f1f5f9;color:var(--mut)} .pill.burn{background:#fee2e2;color:#991b1b}
+.bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px 14px;border-bottom:1px solid var(--line)}
+.bar input,.bar select{padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:#fff;font:inherit}
+.diff{padding:10px 14px;font-size:13px}
+.diff h4{margin:8px 0 4px;font-size:13px}
+.diff ul{margin:0;padding-left:18px}
+@media(max-width:700px){ .frm .two,.frm .three{grid-template-columns:1fr} .tblwrap{max-height:none} }
+</style>
+</style>
+</head>
+<body>
+<div id="app">
+  <nav class="sidebar" id="sidebar">
+    <div class="sb-brand">
+      <h2>🍊 m.kids</h2>
+      <p>m.kids System</p>
+    </div>
+    <div class="sb-user">
+      <div class="avatar" id="uAvatar">…</div>
+      <div class="sb-user-info">
+        <p id="uName">…</p>
+        <span id="uLoc">…</span>
+      </div>
+    </div>
+    <nav class="sb-nav">
+      <div class="nav-item" data-permission="dashboard" data-perm-page="index"
+           onclick="goPerm('dashboard')">
+        <span class="ni">📊</span> Дашборд
+      </div>
+
+      <div class="nav-item" data-permission="tasks" data-perm-page="tasks"
+           onclick="window.location.href='tasks.html'">
+        <span class="ni">📋</span> Задачник
+        <span class="nav-badge hidden" id="tasksBadge">0</span>
+      </div>
+      <div class="nav-item" id="navLeads" style="display:none"
+           onclick="window.location.href='leads.html'">
+        <span class="ni">🎯</span> Ліди
+      </div>
+      <script>
+      /* v7.337: «Ліди» — reveal() одразу після самого пункту меню, а не в кінці сторінки. Досі на 12 сторінках
+         стартовий код (IIFE при розборі) кликав applyRoleVisibility ДО того, як кінцевий скрипт її обгортав,
+         і пункт показувався лише на load + 600 мс — «Ліди» зникали й поверталися при кожному переході.
+         Роль беремо з S.user, а поки стартовий код не спрацював — прямо із сесії в localStorage. */
+      window.NAV_LEADS_ALLOW = ['hr','cfo','cco','cmo'];   // v7.237: без director; v7.326: без CEO/COO/HR/R&D; v7.393: без Legal
+      window._revealLeadsMenu = function(){
+        var el = document.getElementById('navLeads'); if (!el) return;
+        var u = null;
+        try { u = (typeof S !== 'undefined' && S && S.user) ? S.user : null; } catch(e){}
+        if (!u){ try { var s = JSON.parse(localStorage.getItem('mkids_session') || 'null'); u = (s && s.user) || null; } catch(e){} }
+        if (!u){ el.style.display = 'none'; return; }
+        el.style.display = window.NAV_LEADS_ALLOW.indexOf(String(u.role || '').toLowerCase().trim()) !== -1 ? '' : 'none';
+      };
+      window._revealLeadsMenu();
+      </script>
+
+      <div class="nav-item" id="navFillControl" style="display:none"
+           onclick="window.location.href='control.html'">
+        <span class="ni">📋</span> Контроль заповнення
+      </div>
+      <div class="nav-item" id="navReconcile" style="display:none"
+           onclick="window.location.href='reconcile.html'">
+        <span class="ni">💳</span> Звірка платежів
+      </div>
+      <div class="nav-item" id="navSalaryRecon" style="display:none"
+           onclick="window.location.href='salary_reconcile.html'">
+        <span class="ni">💰</span> Звірка ЗП
+      </div>
+      <div class="nav-item" id="navEntryHistory" style="display:none"
+           onclick="window.location.href='history.html'">
+        <span class="ni">📜</span> Історія внесень
+      </div>
+      <script>
+      /* v7.372: «Історія внесень» — лише CFO. Показ одразу, повтор після applyRoleVisibility (вхід/зміна ролі). */
+      window._revealHistMenu = function(){
+        var el = document.getElementById('navEntryHistory'); if (!el) return;
+        var u = null;
+        try { u = (typeof S !== 'undefined' && S && S.user) ? S.user : null; } catch(e){}
+        if (!u){ try { var s = JSON.parse(localStorage.getItem('mkids_session') || 'null'); u = (s && s.user) || null; } catch(e){} }
+        el.style.display = (u && String(u.role || '').toLowerCase().trim() === 'cfo') ? '' : 'none';
+      };
+      window._revealHistMenu();
+      document.addEventListener('DOMContentLoaded', function(){
+        if (typeof applyRoleVisibility === 'function' && !applyRoleVisibility.__hist){
+          var _o = applyRoleVisibility;
+          applyRoleVisibility = function(){ var r = _o.apply(this, arguments); try { window._revealHistMenu(); } catch(e){} return r; };
+          applyRoleVisibility.__hist = true;
+        }
+      });
+      window.addEventListener('load', function(){ setTimeout(window._revealHistMenu, 600); });
+      </script>
+      <div class="nav-item" id="navPromos" style="display:none"
+           onclick="window.location.href='promos.html'">
+        <span class="ni">🎁</span> Акції та знижки
+      </div>
+      <script>
+      /* v7.414: «Акції та знижки» — CFO/CEO/COO/HR (керують) і директор (пропонує, бачить свою локацію). */
+      window._revealPromosMenu = function(){
+        var el = document.getElementById('navPromos'); if (!el) return;
+        var u = null;
+        try { u = (typeof S !== 'undefined' && S && S.user) ? S.user : null; } catch(e){}
+        if (!u){ try { var s = JSON.parse(localStorage.getItem('mkids_session') || 'null'); u = (s && s.user) || null; } catch(e){} }
+        var r = u ? String(u.role || '').toLowerCase().trim() : '';
+        el.style.display = (['cfo','ceo','coo','hr','director'].indexOf(r) !== -1) ? '' : 'none';
+      };
+      window._revealPromosMenu();
+      window.addEventListener('load', function(){ setTimeout(window._revealPromosMenu, 600); });
+      </script>
+      <div class="nav-item" id="navCash" style="display:none"
+           onclick="window.location.href='cash.html'">
+        <span class="ni">💵</span> Готівка
+      </div>
+      <script>
+      /* v7.373: «Готівка» (внесення готівкових витрат/ЗП) — лише CFO. */
+      window._revealCashMenu = function(){
+        var el = document.getElementById('navCash'); if (!el) return;
+        var u = null;
+        try { u = (typeof S !== 'undefined' && S && S.user) ? S.user : null; } catch(e){}
+        if (!u){ try { var s = JSON.parse(localStorage.getItem('mkids_session') || 'null'); u = (s && s.user) || null; } catch(e){} }
+        el.style.display = (u && String(u.role || '').toLowerCase().trim() === 'cfo') ? '' : 'none';
+      };
+      window._revealCashMenu();
+      document.addEventListener('DOMContentLoaded', function(){
+        if (typeof applyRoleVisibility === 'function' && !applyRoleVisibility.__cash){
+          var _o = applyRoleVisibility;
+          applyRoleVisibility = function(){ var r = _o.apply(this, arguments); try { window._revealCashMenu(); } catch(e){} return r; };
+          applyRoleVisibility.__cash = true;
+        }
+      });
+      window.addEventListener('load', function(){ setTimeout(window._revealCashMenu, 600); });
+      </script>
+      <div class="nav-sec" data-section="crm">👶 КЛІЄНТИ CRM</div>
+      <div class="nav-item" data-permission="clients_list" data-parent="crm" data-perm-page="clients"
+           onclick="goPerm('clients_list')">
+        <span class="ni">👶</span> Список дітей
+      </div>
+      <div class="nav-item" data-permission="payments" data-parent="crm" data-perm-page="clients"
+           onclick="goPerm('payments')">
+        <span class="ni">💰</span> Борги та оплати
+      </div>
+      <div class="nav-item" data-permission="attendance_kids" data-parent="crm" data-perm-page="clients"
+           onclick="goPerm('attendance_kids')">
+        <span class="ni">📋</span> Табель відвідуваності
+      </div>
+      <div class="nav-item" data-permission="recalc" data-parent="crm" data-perm-page="clients"
+           onclick="goPerm('recalc')">
+        <span class="ni">💼</span> Перерахунки
+      </div>
+      <div class="nav-item" data-permission="needs_attention" data-parent="crm" data-perm-page="clients"
+           onclick="goPerm('needs_attention')">
+        <span class="ni">✋</span> Потребують уваги
+      </div>
+      <div class="nav-item" data-permission="cards_completion" data-parent="crm" data-perm-page="clients"
+           onclick="goPerm('cards_completion')">
+        <span class="ni">🧩</span> Неповні картки
+      </div>
+      <div class="nav-item" id="navClientMap" style="display:none"
+           onclick="window.location.href='map.html'">
+        <span class="ni">🗺️</span> Карта клієнтів
+      </div>
+      <script>
+      /* v7.371: «Карта клієнтів» — CFO/CEO/COO (усі локації) і директорка (своя). Окремо від матриці PERMISSIONS,
+         як «Ліди»: показ одразу після пункту, повтор після applyRoleVisibility (вхід/зміна ролі). */
+      window.NAV_MAP_ROLES = ['cfo','ceo','coo','director'];
+      window._revealMapMenu = function(){
+        var el = document.getElementById('navClientMap'); if (!el) return;
+        var u = null;
+        try { u = (typeof S !== 'undefined' && S && S.user) ? S.user : null; } catch(e){}
+        if (!u){ try { var s = JSON.parse(localStorage.getItem('mkids_session') || 'null'); u = (s && s.user) || null; } catch(e){} }
+        el.style.display = (u && window.NAV_MAP_ROLES.indexOf(String(u.role || '').toLowerCase().trim()) !== -1) ? '' : 'none';
+      };
+      window._revealMapMenu();
+      document.addEventListener('DOMContentLoaded', function(){
+        if (typeof applyRoleVisibility === 'function' && !applyRoleVisibility.__map){
+          var _o = applyRoleVisibility;
+          applyRoleVisibility = function(){ var r = _o.apply(this, arguments); try { window._revealMapMenu(); } catch(e){} return r; };
+          applyRoleVisibility.__map = true;
+        }
+      });
+      window.addEventListener('load', function(){ setTimeout(window._revealMapMenu, 600); });
+      </script>
+
+      <div class="nav-sec" data-section="hr">👤 HR</div>
+      <div class="nav-item" data-permission="employees" data-parent="hr" data-perm-page="index"
+           onclick="goPerm('employees')">
+        <span class="ni">👥</span> Співробітники
+      </div>
+      <div class="nav-item" data-permission="timesheet_staff" data-parent="hr" data-perm-page="index"
+           onclick="goPerm('timesheet_staff')">
+        <span class="ni">📋</span> Табель співробітників
+      </div>
+      <div class="nav-item" data-permission="vacations" data-parent="hr" data-perm-page="index"
+           onclick="goPerm('vacations')">
+        <span class="ni">🏖️</span> Відпустки
+      </div>
+      <div class="nav-item" data-permission="sick_leaves" data-parent="hr" data-perm-page="index"
+           onclick="goPerm('sick_leaves')">
+        <span class="ni">🏥</span> Лікарняні
+      </div>
+      <div class="nav-item" data-permission="calendar" data-parent="hr" data-perm-page="index"
+           onclick="goPerm('calendar')">
+        <span class="ni">🗓️</span> Календар подій
+      </div>
+      <div class="nav-item" data-permission="vacation_schedule" data-parent="hr" data-perm-page="index"
+           onclick="goPerm('vacation_schedule')">
+        <span class="ni">🌴</span> Графік відпусток
+      </div>
+      <div class="nav-item" data-permission="loccard" data-parent="hr" data-perm-page="index"
+           data-v="loccard" onclick="goPerm('loccard')">
+        <span class="ni">🏢</span> Картка локації
+      </div>
+
+      <div class="nav-sec" data-section="analytics">📈 АНАЛІТИКА</div>
+      <div class="nav-item" data-permission="analytics_clients" data-parent="analytics" data-perm-page="clients"
+           onclick="goPerm('analytics_clients')">
+        <span class="ni">📊</span> Аналітика по клієнтам
+      </div>
+      <div class="nav-item" data-permission="analytics_hr" data-parent="analytics" data-perm-page="index"
+           onclick="goPerm('analytics_hr')">
+        <span class="ni">📈</span> Аналітика по HR
+      </div>
+
+      <div class="nav-sec" data-section="finance">📊 FINANCE</div>
+      <div class="nav-item" data-permission="opex" data-parent="finance" data-perm-page="opex"
+           onclick="goPerm('opex')">
+        <span class="ni">💰</span> Opex
+      </div>
+      <div class="nav-item" data-permission="salary" data-parent="finance" data-perm-page="salary"
+           onclick="goPerm('salary')">
+        <span class="ni">💼</span> Salary
+      </div>
+      <div class="nav-item" data-permission="activities" data-parent="finance" data-perm-page="activities"
+           onclick="goPerm('activities')">
+        <span class="ni">🏃</span> Додаткові заняття
+      </div>
+      <div class="nav-item" data-permission="predmetnyky" data-parent="finance" data-perm-page="predmetnyky"
+           onclick="window.location.href='predmetnyky.html'">
+        <span class="ni">🏫</span> Вчителі-предметники
+      </div>
+      <div class="nav-item" data-permission="meals" data-parent="finance" data-perm-page="meals"
+           onclick="window.location.href='meals.html'">
+        <span class="ni">🍽</span> Харчування
+      </div>
+      <div class="nav-item" data-permission="invoices" data-parent="finance" data-perm-page="invoices"
+           onclick="window.location.href='invoices.html'">
+        <span class="ni">📧</span> Рахунки
+      </div>
+      <div class="nav-item" data-permission="categories" data-parent="finance" data-perm-page="categories"
+           onclick="goPerm('categories')">
+        <span class="ni">📊</span> Категорії
+      </div>
+      <div class="nav-item" data-permission="overview_analytics" data-parent="finance" data-perm-page="analytics"
+           onclick="goPerm('overview_analytics')">
+        <span class="ni">📊</span> Зведена аналітика
+      </div>
+
+      <div class="nav-item" data-permission="settings" data-perm-page="index"
+           onclick="goPerm('settings')">
+        <span class="ni">⚙️</span> Налаштування
+      </div>
+    </nav>
+    <div class="sb-footer">
+      <button class="btn" onclick="doLogout()">🚪 Вийти</button>
+    </div>
+  </nav>
+
+  <main class="main">
+
+<div class="top">
+  <button class="menu-toggle" onclick="toggleSidebar()" aria-label="Меню">☰</button>
+  <h1>🎁 Акції та знижки</h1>
+  <span id="syncStatus" style="font-size:12px"></span>
+  <span class="sp"></span>
+  <button class="btn sec" id="refreshBtn" title="Оновити">🔄</button>
+</div>
+<div class="ptabs" id="ptabs">
+  <button class="ptab on" data-t="promos">📋 Акції</button>
+  <button class="ptab" data-t="register">🧾 Реєстр знижок</button>
+  <button class="ptab" data-t="report">📊 Звіт</button>
+</div>
+<div class="wrap" id="pbody"><div class="empty">Завантаження…</div></div>
+<div class="toast" id="toast"></div>
+
+  </main>
+</div>
+<script>
+var CFG = { SCRIPT_URL: 'https://script.google.com/macros/s/AKfycbyTSUVlaN4-PpXe47zCSmhVs0Qxy1FDXG_XsB4zcKNpqBxdhDtS9ibM4YFGkGjmPQDFWQ/exec' };
+var MONTHS = ['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
+var WD = ['Нд','Пн','Вт','Ср','Чт','Пт','Сб'];
+var TG_COLORS = ['#2563eb','#ea580c','#16a34a','#7c3aed','#db2777'];
+var S = { user:null };
+
+// ── AUTH (shared session) ──
+var SESSION_KEY='mkids_session', SESSION_TTL_MS = 7 * 24 * 3600 * 1000;
+
+/* v7.151 токен-авторизація: ЄДИНИЙ перехоплювач fetch — додає токен у КОЖЕН запит до бекенду
+   (GET -> &token=, POST -> у тіло) і ловить відмову code:'AUTH' (сесія протухла) -> логін.
+   Ідемпотентний: повторне підключення нічого не робить. Усі опції захищені від undefined. */
+(function(){
+  if (window.__mkFetchTokenPatched) return; window.__mkFetchTokenPatched = true;
+  var _of = window.fetch.bind(window);
+  function _tok(){ try { return (JSON.parse(localStorage.getItem('mkids_session')||'null')||{}).token || ''; } catch(e){ return ''; } }
+  /* Сесія протухла -> чистимо і кидаємо на логін. Спрацьовує рівно один раз.
+     Відмову «Доступ лише до своєї локації» НЕ чіпаємо — то не протухла сесія, а брак прав. */
+  function _kick(){
+    if (window.__mkAuthKicked) return; window.__mkAuthKicked = true;
+    try { localStorage.removeItem('mkids_session'); } catch(_e){}
+    try { alert('Сесія закінчилась, увійдіть знову'); } catch(_e){}
+    try { window.location.href = 'index.html'; } catch(_e){}
+  }
+  /* Відповідь Apps Script приходить БЕЗ Content-Length (chunked), тож розмір наперед невідомий:
+     читаємо лише ПЕРШИЙ чанк клона. Оригінал не чіпаємо, виклик не блокуємо. */
+  function _watch(r){
+    try {
+      var c = r.clone();
+      if (!c.body || !c.body.getReader) return r;
+      var rd = c.body.getReader();
+      rd.read().then(function(res){
+        try {
+          if (res && res.value){
+            var s = new TextDecoder('utf-8').decode(res.value);
+            if (s.indexOf('"AUTH"') >= 0 && s.indexOf('Не авторизовано') >= 0) _kick();
+            /* v7.333: бекенд не прийняв ЦЕЙ токен (прострочений / чужий підпис) — один раз на перелогін.
+               Запам'ятовуємо токен, щоб не зациклитись, якщо й новий раптом не прийметься. */
+            else if (s.indexOf('"authStale"') >= 0){
+              var _st = _tok(), _lastSt = ''; try { _lastSt = localStorage.getItem('mk_stale_tok') || ''; } catch(_e){}
+              if (_st && _st !== _lastSt){ try { localStorage.setItem('mk_stale_tok', _st); } catch(_e){} _kick(); }
+            }
+          }
+        } catch(_e){}
+        try { rd.cancel(); } catch(_e){}
+      }, function(){ try { rd.cancel(); } catch(_e){} });
+    } catch(_e){}
+    return r;
+  }
+  /* v7.288: порожній або прострочений токен у живій сесії → на логін одразу, а не
+     тихе опитування щохвилини без токена (бейдж задач). Сесії без user.id
+     (екран логіна, старі) не чіпаємо — їх ведуть readSession/_showStaleSession. */
+  function _tokExpired(t){
+    try {
+      var dot = t.indexOf('.'); if (dot <= 0) return true;
+      var p64 = t.slice(0, dot).replace(/-/g, '+').replace(/_/g, '/');
+      while (p64.length % 4) p64 += '=';
+      var pl = JSON.parse(decodeURIComponent(escape(atob(p64))));
+      return !pl || !pl.exp || Date.now() > Number(pl.exp);
+    } catch(_e){ return false; }   /* нечитабельний payload — хай вирішує бекенд */
+  }
+  function _checkTok(){
+    var s; try { s = JSON.parse(localStorage.getItem('mkids_session') || 'null'); } catch(_e){ return true; }
+    if (!s || !s.user || !(Number(s.user.id) > 0)) return true;
+    var t = String(s.token || '');
+    if (!t || _tokExpired(t)){ _kick(); return false; }
+    return true;
+  }
+  // ── v7.403: stale-while-revalidate — дії, які можна віддавати з кешу (лише читання, важкі) ──
+  var SWR_ACTIONS = {getPaymentsYearly:1, getPayments:1, getEmployees:1, getKomplektaciyaData:1, getGroupNorms:1,
+    getLocationCapacity:1, getLocationCards:1, getSalaryOverview:1, getOpexOverview:1, getOverviewAnalytics:1,
+    getVyhovatelRatings:1, getPredmetnyky:1, getPredSplits:1, getActivitiesCatalog:1, getAttendanceMarks:1,
+    getDopMerges:1, getDopSplits:1, getSchoolRoster:1, getSalaryData:1, getOpexData:1, getCategoryAnalytics:1,
+    getLeads:1, getEntryHistory:1, getInvoiceListData:1, getFillStatus:1, getClientMap:1, getUsers:1, getTasks:1,
+    getMealCatalog:1, getMealMarks:1, cashList:1, getErrLog:1, getSalaryExtrasRows:1, getOpexContractors:1,
+    getSalaryFopMap:1, getBdayStatus:1};
+  function _swrKey(u){
+    try { var s = JSON.parse(localStorage.getItem('mkids_session') || 'null'); var uid = s && s.user && s.user.id;
+      if (!uid) return ''; return uid + '|' + u.replace(/([?&])token=[^&]*&?/, '$1').replace(/[?&]$/, ''); } catch(_e){ return ''; }
+  }
+  var _swrDbP = null;
+  function _swrDb(){
+    if (_swrDbP) return _swrDbP;
+    _swrDbP = new Promise(function(res){
+      try { var rq = indexedDB.open('mkids_swr', 1);
+        rq.onupgradeneeded = function(){ try { rq.result.createObjectStore('r'); } catch(_e){} };
+        rq.onsuccess = function(){ res(rq.result); }; rq.onerror = function(){ res(null); }; rq.onblocked = function(){ res(null); };
+      } catch(_e){ res(null); }
+    });
+    return _swrDbP;
+  }
+  function _swrGet(k){ return _swrDb().then(function(db){ if (!db) return null; return new Promise(function(res){
+    try { var q = db.transaction('r').objectStore('r').get(k); q.onsuccess = function(){ res(q.result || null); }; q.onerror = function(){ res(null); }; }
+    catch(_e){ res(null); } }); }); }
+  function _swrPut(k, v){ _swrDb().then(function(db){ if (!db) return; try { db.transaction('r', 'readwrite').objectStore('r').put(v, k); } catch(_e){} }); }
+  var _swrFreshActs = {}, _swrFreshTmr = 0;
+  function _swrFresh(act){
+    _swrFreshActs[act] = 1; clearTimeout(_swrFreshTmr);
+    _swrFreshTmr = setTimeout(function(){
+      var acts = Object.keys(_swrFreshActs); _swrFreshActs = {};
+      var ev; try { ev = new CustomEvent('mkids:fresh', {detail: {actions: acts}, cancelable: true}); } catch(_e){ return; }
+      if (window.dispatchEvent(ev) === false) return;          // сторінка оновилась сама
+      if (document.getElementById('mkSwrToast')) return;
+      var d = document.createElement('div'); d.id = 'mkSwrToast';
+      d.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:99999;background:#1f2d3d;color:#fff;padding:10px 14px;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.25);font:13px/1.3 system-ui,sans-serif;display:flex;gap:10px;align-items:center';
+      d.innerHTML = '🔄 Є свіжіші дані <button style="background:#27ae60;color:#fff;border:0;border-radius:7px;padding:5px 10px;cursor:pointer;font-weight:700">Оновити</button><span style="cursor:pointer;opacity:.7;padding:0 4px">✕</span>';
+      d.querySelector('button').onclick = function(){ location.reload(); };
+      d.querySelector('span').onclick = function(){ d.remove(); };
+      (document.body || document.documentElement).appendChild(d);
+    }, 800);
+  }
+  // ── v7.404: режим перегляду для власника ──
+  function _roUser(){ try { var s = JSON.parse(localStorage.getItem('mkids_session') || 'null'); return !!(s && s.user && s.user.readOnly); } catch(_e){ return false; } }
+  var _roToastTs = 0;
+  function _roToast(){
+    if (Date.now() - _roToastTs < 4000) return; _roToastTs = Date.now();
+    try { var d = document.createElement('div');
+      d.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:18px;z-index:99999;background:#7c3aed;color:#fff;padding:10px 16px;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.25);font:13px/1.3 system-ui,sans-serif';
+      d.textContent = '👁 Режим перегляду — зміни не зберігаються';
+      (document.body || document.documentElement).appendChild(d); setTimeout(function(){ d.remove(); }, 3500); } catch(_e){}
+  }
+  function _roBadge(){
+    if (!_roUser() || document.getElementById('mkRoBadge')) return;
+    try { var b = document.createElement('div'); b.id = 'mkRoBadge';
+      b.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:99998;background:#f3e8ff;color:#6d28d9;border:1px solid #d8b4fe;padding:3px 12px;border-radius:12px;font:12px/1.4 system-ui,sans-serif;font-weight:700;pointer-events:none';
+      b.textContent = 'Founder · лише перегляд';
+      (document.body || document.documentElement).appendChild(b); } catch(_e){}
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _roBadge); else _roBadge();
+  window.addEventListener('storage', _roBadge);
+  window.fetch = function(input, init){
+    var url = '';
+    try { url = (typeof input === 'string') ? input : (input && input.url) || ''; } catch(_e){}
+    if (url.indexOf('script.google.com') < 0) return _of(input, init);   // сторонні запити не чіпаємо
+    if (!_checkTok()) return new Promise(function(){});                    // v7.288: кинуто на логін — запит не шлемо
+    // v7.404: власник (founder) — лише перегляд. Будь-яку зміну не відправляємо зовсім (бекенд теж відхиляє).
+    if (_roUser() && ((init && init.method) || 'GET').toUpperCase() === 'POST'){
+      var _rb = null; try { _rb = JSON.parse((init && init.body) || 'null'); } catch(_e){}
+      var _ra = String((_rb && _rb.action) || '');
+      if (!(/^get/i.test(_ra) || _ra === 'authenticate' || (_rb && _rb.dryRun === true))){
+        _roToast();
+        return Promise.resolve(new Response(JSON.stringify({ok:false, code:'READONLY', error:'Режим перегляду: власник не вносить змін'}),
+          {status: 200, headers: {'Content-Type': 'application/json'}}));
+      }
+    }
+    try {
+      var t = _tok();
+      if (t){
+        init = init || {};
+        var m = ((init && init.method) || 'GET').toUpperCase();
+        if (m === 'POST'){
+          if (typeof init.body === 'string'){ try { var b = JSON.parse(init.body); if (b && b.token == null){ b.token = t; init.body = JSON.stringify(b); } } catch(_e){} }
+        } else if (typeof input === 'string' && !/[?&]token=/.test(input)){
+          input = input + (input.indexOf('?') >= 0 ? '&' : '?') + 'token=' + encodeURIComponent(t);
+        }
+      }
+    } catch(_e){}
+    // v7.403 МИТТЄВЕ ВІДКРИТТЯ (stale-while-revalidate): важкі запити на читання відповідають одразу з кешу
+    //   браузера (IndexedDB, окремо для кожного користувача, до доби), а свіжа відповідь тягнеться у фоні.
+    //   Змінилась — подія 'mkids:fresh' (дашборд перемальовується сам, на інших сторінках — кнопка «Оновити»).
+    //   Після будь-якого запису (POST) 90 с кеш не віддається — щоб після збереження не блимали старі дані.
+    var _swrM = ((init && init.method) || 'GET').toUpperCase();
+    if (_swrM === 'POST'){ try { localStorage.setItem('mkids_swr_dirty', String(Date.now() + 90000)); } catch(_e){} }
+    var _swrAct = (typeof input === 'string') ? ((/[?&]action=([^&]+)/.exec(input) || [])[1] || '') : '';
+    if (_swrM === 'GET' && SWR_ACTIONS[_swrAct] && !/[?&]nocache=1/.test(input) && window.indexedDB){
+      var _swrK = _swrKey(input);
+      if (_swrK){
+        var _in = input, _it = init;
+        return _swrGet(_swrK).then(function(c){
+          var dirty = false; try { dirty = Date.now() < Number(localStorage.getItem('mkids_swr_dirty') || 0); } catch(_e){}
+          var net = function(served){
+            return _of(_in, _it).then(_watch).then(function(r){
+              try { r.clone().text().then(function(t){ try { var j = JSON.parse(t);
+                if (j && j.ok !== false){ _swrPut(_swrK, {body: t, ts: Date.now()}); if (served && c && c.body !== t) _swrFresh(_swrAct); }
+              } catch(_e){} }); } catch(_e){}
+              return r; });
+          };
+          if (c && c.body && !dirty && Date.now() - c.ts < 86400000){
+            if (Date.now() - c.ts > 15000) net(true).catch(function(){});
+            return new Response(c.body, {status: 200, headers: {'Content-Type': 'application/json'}});
+          }
+          return net(false);
+        });
+      }
+    }
+    // v7.401: getLocations — спільний кеш у браузері на 30 хв для всіх сторінок (було ~8 с на кожному старті)
+    if (typeof input === 'string' && /[?&]action=getLocations(&|$)/.test(input) && !/[?&]nocache=1/.test(input)
+        && ((init && init.method) || 'GET').toUpperCase() === 'GET'){
+      try { var _lc = JSON.parse(localStorage.getItem('mkids_locs_cache') || 'null');
+        if (_lc && _lc.body && Date.now() - _lc.ts < 1800000)
+          return Promise.resolve(new Response(_lc.body, {status: 200, headers: {'Content-Type': 'application/json'}})); } catch(_e){}
+      return _of(input, init).then(_watch).then(function(r){
+        try { r.clone().text().then(function(t){ try { var j = JSON.parse(t);
+          if (j && j.ok !== false) localStorage.setItem('mkids_locs_cache', JSON.stringify({ts: Date.now(), body: t})); } catch(_e){} }); } catch(_e){}
+        return r; });
+    }
+    return _of(input, init).then(_watch);
+  };
+  _checkTok();   // v7.288: і одразу при завантаженні сторінки
+})();
+
+var NETWORK_ROLES=['hr','cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo'];
+// v7.326: верхні пункти «Ліди» / «Контроль заповнення» / «Звірка платежів» / «Звірка ЗП»
+// НЕ для цих мережевих ролей. Окремий список, бо NETWORK_ROLES ще й дає доступ до всіх локацій.
+var NAV_TOP_DENY = ['ceo','coo','hr_trainer','rnd_director'];
+function canSeeTopNet(role){ var r = String(role || '').toLowerCase().trim();
+  return NETWORK_ROLES.indexOf(r) !== -1 && NAV_TOP_DENY.indexOf(r) === -1; }
+
+// ── v7.240 СПІЛЬНИЙ ШЕЛЛ: матриця прав, сайдбар, шапка ──────────────────
+// v7.385: порядок локацій (садочки → школи → управління) — дзеркало LOCATION_ORDER
+var LOCATION_ORDER = [
+  'Осокорки','Позняки','Тичини','Кар\'єрна','Голосієво','Пуща',
+  'Оранж','Борщагівка','Бровари','Кругла','Бігова',
+  'Школа Осокорки','Школа 228',"Школа Кар'єрна",'Житомир',
+  'Нац.Гвардії (Благо)','Манхетен (Благо)','Хіміків (Благо)',
+  'Онлайн школа','Кухня Київ','Кухня Львів','Іва-Франківськ кухня'
+];
+// v7.52 QUOTA-SAFE localStorage wrapper (спільний патерн): setItem без крашу.
+function safeSetItem(key, value){
+  try { localStorage.setItem(key, value); return true; }
+  catch(e){
+    var quota = e && (e.name==='QuotaExceededError' || e.code===22 || e.code===1014 || /quota/i.test(String(e.message||'')));
+    if(!quota){ console.warn('[safeSetItem] '+key+':', e && e.message); return false; }
+    ['crm_att_v1','crm_year_v1','crm_pay_v3','crm_cli_v3','crm_locs_v3'].forEach(function(k){ if(k && k!==key){ try{ localStorage.removeItem(k); }catch(_){} } });
+    try { localStorage.setItem(key, value); return true; }
+    catch(e2){ console.warn('[safeSetItem] quota — "'+key+'" пропущено'); return false; }
+  }
+}
+function locationRank(name){
+  var i = LOCATION_ORDER.indexOf(String(name == null ? '' : name).trim());
+  return i === -1 ? 999 : i;
+}
+function sortByLocationOrder(arr, getName){
+  return (arr || []).slice().sort(function(a, b){
+    var na = getName ? getName(a) : a, nb = getName ? getName(b) : b;
+    var ra = locationRank(na), rb = locationRank(nb);
+    return ra - rb || String(na == null ? '' : na).localeCompare(String(nb == null ? '' : nb), 'uk');
+  });
+}
+function sortLocationsByZone(locs){ return sortByLocationOrder(locs); }
+
+var CURRENT_PAGE = 'promos';
+function $(id){ return document.getElementById(id); }
+function isNetworkRole(role){ return NETWORK_ROLES.indexOf(String(role||'').toLowerCase()) !== -1; }
+var PERMISSIONS = {
+  cfo: 'all',
+  ceo: [
+    'clients_list','payments','attendance_kids','recalc',
+    'employees','timesheet_staff','vacations','sick_leaves',
+    'calendar','vacation_schedule',
+    'opex','categories','salary','activities','activities-view','activities-edit',
+    'predmetnyky',
+    'attendance-view','attendance-edit',
+    'export-payments',
+    'client_birthdays',
+    'card-employee-info',
+    'card-employee-salary-button','card-employee-vacation-button','card-employee-sick-button',
+    'card-employee-salary-tab','card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract','card-child-fees',
+    'card-child-vacations','card-child-payments','card-child-history',
+    'card-child-notes','card-child-health',
+    'finance','medical','salary-mgmt','hr-actions',
+    'loccard'   // v7.326: Картка локації (редагування)
+  ],
+  cco: [
+    'clients_list','payments','attendance_kids','recalc',
+    'employees','timesheet_staff','vacations','sick_leaves',
+    'calendar','vacation_schedule',
+    'analytics_clients','analytics_hr',
+    'opex','categories','salary','overview_analytics',
+    'activities','activities-view','activities-edit',
+    'predmetnyky',
+    'attendance-view','attendance-edit',
+    'export-payments',
+    'client_birthdays',
+    'card-employee-info',
+    'card-employee-salary-button','card-employee-vacation-button','card-employee-sick-button',
+    'card-employee-salary-tab','card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract','card-child-fees',
+    'card-child-vacations','card-child-payments','card-child-history',
+    'card-child-notes','card-child-health',
+    'finance','medical','salary-mgmt','hr-actions'
+  ],
+  coo: [
+    // v7.326: COO — лише фінансові пункти + Картка локації (решту прибрано за запитом)
+    'opex','salary','categories','loccard','finance'
+  ],
+  rnd_director: [
+    /*R&D-opex*/ 'opex',
+    /*R&D+*/ 'card-child-development','card-child-health','activities-edit','attendance-edit',
+    'clients_list','attendance_kids',
+    'employees','timesheet_staff','vacations','sick_leaves',
+    'calendar','vacation_schedule',
+    'activities','activities-view',
+    'predmetnyky',
+    'attendance-view',
+    'client_birthdays',
+    'card-employee-info',
+    'card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract',
+    'card-child-vacations','card-child-notes',
+    'loccard'   // v7.326: Картка локації (редагування)
+  ],
+  hr_trainer: [
+    'clients_list','attendance_kids',
+    'employees','timesheet_staff','vacations','sick_leaves',
+    'calendar','vacation_schedule',
+    'attendance-view',
+    'client_birthdays',
+    'card-employee-info',
+    'card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract',
+    'card-child-vacations','card-child-notes',
+    'loccard'   // v7.326: Картка локації (редагування)
+  ],
+  legal: [
+    'clients_list',
+    'employees',
+    'client_birthdays',
+    'card-employee-info',
+    'card-child-banner','card-child-contract',
+    // v7.394: ✗ card-child-payments, ✗ card-child-history, ✗ finance — фінанси юристу не показуємо; v7.395: ✗ card-child-vacations (суми знижок)
+    'card-child-notes',
+    'loccard'   // v7.392: Картка локації (ліцензії, оренда)
+  ],
+  hr: 'all',
+  // v7.237: меню директора починається зі «Списку дітей». Прибрано з САМОЇ
+  // матриці (а не лише з видимості): dashboard, tasks, analytics_clients,
+  // analytics_hr — інакше пункт зникав із сайдбару, але сторінка лишалась
+  // доступною за прямим посиланням і через #hash.
+  director: [
+    'clients_list','payments','attendance_kids',
+    'needs_attention',   // v7.273: «Потребують уваги» — CFO усі локації, директорка своя
+    'cards_completion',  // v7.275: «Неповні картки» — CFO усі локації, директорка своя
+    'employees','timesheet_staff','vacations','sick_leaves',
+    'calendar','vacation_schedule',
+    'opex','salary',   // v7.238: без categories і overview_analytics
+    'activities','activities-view','activities-edit',
+    'predmetnyky',
+    'attendance-view','attendance-edit',
+    'export-payments',
+    'client_birthdays',
+    'card-employee-info',
+    'card-employee-salary-button','card-employee-vacation-button','card-employee-sick-button',
+    'card-employee-salary-tab','card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract','card-child-fees',
+    'card-child-vacations','card-child-payments','card-child-history',
+    'card-child-notes','card-child-health',
+    'finance','medical','hr-actions',
+    'invoices',
+    'loccard'   // v7.327: Картка локації на всіх сторінках
+  ],
+  nurse: [                                                          // v7.215: без dashboard (доробка v7.204)
+    'clients_list','attendance_kids',
+    'employees','vacations','sick_leaves',
+    'calendar','vacation_schedule',
+    'medical',
+    'card-employee-info',
+    'card-employee-vacations-tab','card-employee-sickleave-tab',
+    'card-child-banner','card-child-contract','card-child-vacations',
+    'card-child-notes','card-child-health'
+  ],
+  vyhovatel: ['activities','predmetnyky','attendance-view','attendance-edit','clients_list','card-child-development']   // v7.214: +predmetnyky (шкільна вихователька веде свій клас)
+};
+(function(){
+  ['cco'].forEach   /* v7.327: без CEO/R&D/HR */(function(r){
+    if (Array.isArray(PERMISSIONS[r])){ PERMISSIONS[r].push('tasks'); PERMISSIONS[r].push('tasks-create'); }
+  });
+  PERMISSIONS.cmo = ['tasks','tasks-create'];   // v7.392: дашборд — лише CFO
+})();
+
+
+// v7.247 ПРАВА, ПРИВ'ЯЗАНІ ДО ЛОКАЦІЇ. Матриця зіставляє роль із правом і умову
+// «тільки в цій локації» виразити не може. Тому для вихователя Школи 228 права
+// додаються в рантаймі — один раз, коли вже відома сесія. Далі все інше
+// (hasPerm, goPerm, #hash-роутинг, applyRoleVisibility, гейти сторінок)
+// працює без окремих винятків у кожному місці.
+// Вихователі решти локацій нічого не отримують.
+var SCHOOL228_LOC = 'Школа 228';
+var SCHOOL_INV_LOCS = ['Школа 228', 'Школа Осокорки', "Школа Кар'єрна"];   // v7.351
+var _locPermsDone = false;
+function _applyLocScopedPerms(){
+  if (_locPermsDone) return;
+  var u = null;
+  try { u = (typeof S !== 'undefined' && S && S.user) ? S.user : null; } catch(e){}
+  if (!u || !u.role) return;                       // сесії ще немає — спробуємо пізніше
+  var r   = String(u.role || '').toLowerCase().trim();
+  var loc = String(u.origLoc || u.loc || '').trim();
+  if (r === 'vyhovatel' && loc === SCHOOL228_LOC && Array.isArray(PERMISSIONS.vyhovatel)){
+    ['attendance_kids','meals'].forEach(function(p){
+      if (PERMISSIONS.vyhovatel.indexOf(p) === -1) PERMISSIONS.vyhovatel.push(p);
+    });
+  }
+  // v7.351: «Рахунки» — вихователям ШКІЛ (садки — ні). На сторінці рахунків вихователь бачить свою школу,
+  // без «Надіслати всім» і «Перерахувати локацію».
+  if (r === 'vyhovatel' && SCHOOL_INV_LOCS.indexOf(loc) !== -1 && Array.isArray(PERMISSIONS.vyhovatel)){
+    if (PERMISSIONS.vyhovatel.indexOf('invoices') === -1) PERMISSIONS.vyhovatel.push('invoices');
+  }
+  _locPermsDone = true;
+}
+
+// v7.241 ХАРЧУВАННЯ — доступ: CFO (усі локації) + директорка Школи 228. Більше ніхто.
+// Право 'meals' у матриці не роздається нікому: cfo проходить як 'all', а для
+// director вирішує локація, чого матриця роль-до-права виразити не може.
+// Замінює сніпет v7.105, який показував пункт усім мережевим ролям і будь-якій
+// директорці з каталогом харчування (асинхронний fetch на кожній сторінці).
+var MEALS_LOC = 'Школа 228';
+function canSeeMeals(){
+  // v7.242: НЕ через window.S — в index.html стан оголошено як `const S`, а
+  // const/let не чіпляються до window, тож window.S там undefined і пункт
+  // ховався від усіх, зокрема від CFO. Пряме звертання до S бачить і const,
+  // і var (script-level lexical scope спільний для всіх <script> сторінки).
+  var u = null;
+  try { u = (typeof S !== 'undefined' && S && S.user) ? S.user : null; } catch(e){ u = null; }
+  if (!u) return false;
+  var r = String(u.role || '').toLowerCase().trim();
+  if (r === 'cfo') return true;                       // hr теж 'all', але харчування не бачить
+  if (r === 'director')  return String(u.origLoc || u.loc || '').trim() === MEALS_LOC;
+  if (r === 'vyhovatel') return String(u.origLoc || u.loc || '').trim() === MEALS_LOC;   // v7.247
+  return false;
+}
+function applyMealsVisibility(){
+  document.querySelectorAll('[data-permission="meals"]').forEach(function(el){
+    el.style.display = canSeeMeals() ? '' : 'none';
+  });
+}
+
+function applyRoleVisibility(){
+  _applyLocScopedPerms();   // v7.247
+  if (!S || !S.user || !S.user.role) return;
+  var role = String(S.user.role || '').toLowerCase().trim();
+  var allowed = PERMISSIONS[role];
+  document.querySelectorAll('[data-permission]').forEach(function(el){
+    var perm = el.dataset.permission;
+    var visible = (allowed === 'all') || (Array.isArray(allowed) && allowed.indexOf(perm) !== -1);
+    el.style.display = visible ? '' : 'none';
+  });
+  var _isNetFCRC = canSeeTopNet(role);   // v7.326
+  var _fcEl = document.getElementById('navFillControl'); if (_fcEl) _fcEl.style.display = _isNetFCRC ? '' : 'none';
+  var _rcEl = document.getElementById('navReconcile');   if (_rcEl) _rcEl.style.display = _isNetFCRC ? '' : 'none';
+  var _srEl = document.getElementById('navSalaryRecon'); if (_srEl) _srEl.style.display = _isNetFCRC ? '' : 'none';
+  // v7.239: блок v6.99 прибрано. Він ховав у director dashboard/tasks/analytics_*/
+  // categories/overview_analytics, яких із v7.237–v7.238 немає в самій матриці.
+  // Подвійна логіка (матриця + окремий список приховувань) і була причиною того,
+  // що пункт зникав із меню, а сторінка лишалась доступною за посиланням.
+  // Єдине джерело прав — PERMISSIONS.
+  applyMealsVisibility();   // v7.241: харчування — CFO + директорка Школи 228
+
+  document.querySelectorAll('[data-section]').forEach(function(section){
+    var name = section.dataset.section;
+    var items = document.querySelectorAll('[data-permission][data-parent="' + name + '"]');
+    var any = false;
+    items.forEach(function(it){ if (it.style.display !== 'none') any = true; });
+    section.style.display = any ? '' : 'none';
+  });
+}
+
+function hasPerm(p){
+  _applyLocScopedPerms();   // v7.247
+  if (!S || !S.user || !S.user.role) return false;
+  var r = String(S.user.role || '').toLowerCase().trim();
+  var allowed = PERMISSIONS[r];
+  if (allowed === 'all') return true;
+  return Array.isArray(allowed) && allowed.indexOf(p) !== -1;
+}
+
+function goPerm(perm){
+  // v7.237: перехід тільки з правом (див. index.html).
+  if (typeof hasPerm === 'function' && !hasPerm(perm)) return;
+  var items = document.querySelectorAll('[data-permission="' + perm + '"]');
+  var target = items[0] && items[0].dataset.permPage;
+  if (target === CURRENT_PAGE) return;
+  var targetFile = target === 'clients'    ? 'clients.html'
+                 : target === 'opex'       ? 'opex.html'
+                 : target === 'categories' ? 'categories.html'
+                 : target === 'salary'     ? 'salary.html'
+                 : target === 'activities' ? 'activities.html'
+                 : target === 'predmetnyky'? 'predmetnyky.html'
+                 : target === 'analytics'  ? 'analytics.html'
+                 : 'index.html';
+  location.href = targetFile + '#' + perm;
+}
+
+function roleLabel(role){
+  return ({
+    hr:'CFO', cfo:'CFO', ceo:'CEO', cco:'CCO', coo:'COO',
+    rnd_director:'R&D Director', hr_trainer:'L&D', legal:'Legal', cmo:'CMO',
+    director:'Директор', nurse:'Медсестра'
+  })[String(role||'').toLowerCase()] || role;
+}
+
+function avatarText(role){
+  return ({
+    hr:'CFO', cfo:'CFO', ceo:'CEO', cco:'CCO', coo:'COO',
+    rnd_director:'R&D', hr_trainer:'L&D', legal:'Lg', cmo:'CMO',
+    director:'Д', nurse:'М'
+  })[String(role||'').toLowerCase()] || '?';
+}
+
+function locLabel(){
+  if (!S.user) return '';
+  if (isNetworkRole(S.user.role)) return 'Всі локації';
+  return S.user.loc || '';
+}
+
+function updUserUI(){
+  if (!S.user) return;
+  var r = S.user.role;
+  $('uName').textContent   = roleLabel(r);
+  $('uLoc').textContent    = locLabel();
+  $('uAvatar').textContent = avatarText(r);
+  applyRoleVisibility();
+}
+
+function toggleSidebar(){ var s=$('sidebar'); if(s) s.classList.toggle('open'); }
+// Підсвітка поточного пункту меню.
+function markActiveNav(){
+  document.querySelectorAll('.nav-item').forEach(function(el){ el.classList.remove('active'); });
+  var el = document.getElementById('navPromos');
+  if (el) el.classList.add('active');
+}
+
+function readSession(){ try{ var s=JSON.parse(localStorage.getItem(SESSION_KEY)||'null');
+  if(!s||!s.user||!s.t) return null; if(typeof s.user.role!=='string') return null; if(Date.now()-s.t>SESSION_TTL_MS) return null;
+  s.user.role=String(s.user.role||'').toLowerCase().trim();
+  if(NETWORK_ROLES.indexOf(s.user.role)!==-1 && s.user.loc!==''){ s.user.origLoc=s.user.loc; s.user.loc=''; }
+  return s.user; }catch(e){ return null; } }
+function isHR(){ return S.user && NETWORK_ROLES.indexOf(S.user.role)!==-1; }
+function goLogin(){ document.body.innerHTML='<div style="padding:60px;text-align:center;font-family:system-ui"><div style="font-size:44px">🔒</div><h2>Потрібно увійти</h2><p style="color:#64748b">Відкрийте головний застосунок і увійдіть.</p><a href="index.html" style="display:inline-block;margin-top:10px;padding:12px 20px;background:#2563eb;color:#fff;border-radius:10px;text-decoration:none;font-weight:700">Увійти →</a></div>'; }
+
+// ── API ──
+async function _fetch(url,opts){ var c=new AbortController(); var t=setTimeout(function(){c.abort();},45000);
+  try{ var o=Object.assign({redirect:'follow'},opts||{}); o.signal=c.signal; var r=await fetch(url,o); clearTimeout(t); return r; }
+  catch(e){ clearTimeout(t); throw e; } }
+// v7.105: cloudFetch — таймаут 45с + 2 повтори (1с,3с) лише на мережевий збій. ТІЛЬКИ для читань (GET); записи (apiPost) не ретраїмо.
+var _CF_RETRIES=[1000,3000]; function _cfSleep(ms){return new Promise(function(r){setTimeout(r,ms);});}
+/* v7.110 токен-авторизація: токен у localStorage['mkids_session'].token; додаємо в КОЖЕН запит (GET-param / POST-body). */
+function _authTok(){ try { return (JSON.parse(localStorage.getItem('mkids_session')||'null')||{}).token || ''; } catch(e){ return ''; } }
+function _tokUrl(u){ var t=_authTok(); if(!t) return u; return /[?&]token=/.test(u) ? u : (u + (u.indexOf('?')>=0?'&':'?') + 'token=' + encodeURIComponent(t)); }
+function _tokBody(b){ try{ if(b && typeof b==='object' && b.token==null) b.token=_authTok(); }catch(e){} return b; }
+async function cloudFetch(url,opts){ opts=opts||{}; url=_tokUrl(url); var tmo=opts.timeoutMs||45000, del=opts.retries||_CF_RETRIES;
+  var init=Object.assign({redirect:'follow'},opts.fetch||{}), n=del.length+1, last;
+  for(var i=0;i<n;i++){ var c=new AbortController(); var t=setTimeout(function(){try{c.abort();}catch(_){}},tmo);
+    try{ var r=await fetch(url,Object.assign({},init,{signal:c.signal})); clearTimeout(t);
+      if(r&&r.status>=500&&i<n-1){ await _cfSleep(del[i]); continue; } // 5xx/SW-офлайн(503) → повтор
+      return r; }
+    catch(e){ clearTimeout(t); last=e; if(i<n-1){ await _cfSleep(del[i]); continue; } throw last; } } throw last; }
+var _CLAB={ sync:{t:'☁️ Синхронізація…',c:'#e67e22'}, ok:{t:'☁️ Синхронізовано',c:'#16a34a'}, err:{t:'⚠️ Помилка хмари',c:'#dc2626'}, none:{t:'',c:'#94a3b8'} };
+function setCloudStatus(state,reason){ var el=document.getElementById('syncStatus'); if(!el)return; var s=_CLAB[state]||_CLAB.none;
+  // v7.244: причину показуємо і для 'sync' — інакше відлік «збереження через 5с»
+  // не було видно, а індикатор лишився єдиним джерелом стану.
+  el.textContent=((state==='err'||state==='sync')&&reason)?(s.t+' · '+reason):s.t;
+  el.style.color=s.c; el.title=(state==='err'&&reason)?('Не завантажилось: '+reason):''; }
+async function apiGet(action,qs){ var r=await cloudFetch(CFG.SCRIPT_URL+'?action='+action+(qs?'&'+qs:'')); return r.json(); }
+async function apiPost(body){ var r=await _fetch(CFG.SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(_tokBody(body))});
+  var txt=await r.text(); try{ return JSON.parse(txt); }catch(_){ return {ok:true,_assumed:true}; } }
+function enc(s){ return encodeURIComponent(s); }
+
+function toast(msg){ var t=document.getElementById('toast'); if(!t){ console.warn('[cash] toast:',msg); return; } t.textContent=msg; t.classList.add('show'); setTimeout(function(){t.classList.remove('show');},2600); }
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); }
+function fmtG(n){ return (Number(n)||0).toLocaleString('uk-UA')+' ₴'; }
+function shortLabel(name){ var w=String(name||'').trim().split(/\s+/); return (w.map(function(x){return (x[0]||'').toUpperCase();}).join('').slice(0,3))||'?'; }
+function markKey(child,date,itemId){ return child+'||'+date+'||'+itemId; }
+
+// ═══ v7.414 АКЦІЇ ТА ЗНИЖКИ ══════════════════════════════════════════════════
+// Довідник «Акції» (CFO/офіс створює; директор пропонує → «Потребують уваги»), реєстр «Знижки»
+// (1 запис = дитина × місяць × акція; «Бюджет навч» у Payment = база − SUMIFS(реєстр) з грудня 2026)
+// і звіт по акціях. Пробні прогони — GET (preview*), записи — POST, після запису перечитуємо через GET.
+var OFFICE = ['cfo','ceo','coo','hr'];
+var P = { tab:'promos', promos:[], start:'2026-12', locs:[], cards:null, byLabel:{},
+          ym:'', regLoc:'', regRows:[], preview:null, syncPreview:null,
+          rFrom:'', rTo:'', rLoc:'', report:null, edit:null, busy:false };
+
+function isOffice(){ return OFFICE.indexOf(String(S.user && S.user.role || '').toLowerCase()) !== -1; }
+function isCfo(){ return String(S.user && S.user.role || '').toLowerCase() === 'cfo'; }
+function isDir(){ return String(S.user && S.user.role || '').toLowerCase() === 'director'; }
+function myLoc(){ return String(S.user && (S.user.origLoc || S.user.loc) || '').trim(); }
+function promosGate(){
+  if (isOffice() || isDir()) return true;
+  location.replace('clients.html'); return false;
+}
+function money(n){ n = Number(n) || 0; return (n < 0 ? '−' : '') + Math.abs(Math.round(n)).toLocaleString('uk-UA') + ' ₴'; }
+function ymNow(){ var d = new Date(); return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2); }
+function ymAdd(ym, n){ var y = +ym.slice(0, 4), m = +ym.slice(5, 7) - 1 + n; y += Math.floor(m / 12); m = ((m % 12) + 12) % 12; return y + '-' + ('0' + (m + 1)).slice(-2); }
+function ymLabel(ym){ return MONTHS[+ym.slice(5, 7) - 1] + ' ' + ym.slice(0, 4); }
+function lastDay(ym){ var y = +ym.slice(0, 4), m = +ym.slice(5, 7); return ym + '-' + ('0' + new Date(y, m, 0).getDate()).slice(-2); }
+function stPill(st){
+  var c = {'діє':'ok','на підтвердженні':'wait','згоріла':'burn','скасована':'off','відхилена':'off','завершена':'off','чернетка':'off'}[st] || '';
+  return '<span class="pill ' + c + '">' + esc(st || '—') + '</span>';
+}
+function qs(o){ return Object.keys(o).filter(function(k){ return o[k] !== '' && o[k] != null; }).map(function(k){ return enc(k) + '=' + enc(o[k]); }).join('&'); }
+async function get(action, o){ var j = await apiGet(action, qs(Object.assign({actorId:S.user.id}, o || {}))); if (!j || j.ok === false) throw new Error((j && j.error) || 'Помилка'); return j; }
+async function post(body){ body.actorId = S.user.id; setCloudStatus('sync'); var r = await apiPost(body); if (r && r.ok === false){ setCloudStatus('err', r.error); throw new Error(r.error || 'Помилка'); } setCloudStatus('ok'); return r || {}; }
+
+async function loadPromos(){ var j = await get('getPromos'); P.promos = j.promos || []; P.start = j.start || P.start; }
+async function loadLocs(){
+  try { var j = await apiGet('getLocations'); P.locs = sortByLocationOrder(((j && j.data) || []).map(function(l){ return String(l.loc || '').trim(); }).filter(Boolean)); }
+  catch(e){ P.locs = []; }
+}
+async function loadCards(){
+  if (P.cards) return;
+  var j = await get('getPromoCardIndex'); P.cards = j.cards || []; P.byLabel = {};
+  P.cards.forEach(function(c){ P.byLabel[c.name + ' · ' + c.loc + (c.group ? ' · ' + c.group : '')] = c; });
+}
+function locOptions(sel, withAll){
+  var h = withAll ? '<option value="">усі локації</option>' : '';
+  P.locs.forEach(function(l){ h += '<option' + (l === sel ? ' selected' : '') + '>' + esc(l) + '</option>'; });
+  return h;
+}
+
+// ── РЕНДЕР ────────────────────────────────────────────────────────────────────
+function render(){
+  document.querySelectorAll('.ptab').forEach(function(b){ b.classList.toggle('on', b.getAttribute('data-t') === P.tab); });
+  if (P.tab === 'promos') renderPromos();
+  else if (P.tab === 'register') renderRegister();
+  else renderReport();
+}
+
+// ── 1. АКЦІЇ ──
+function renderPromos(){
+  var el = document.getElementById('pbody'), off = isOffice();
+  var list = P.promos.filter(function(p){ return off || isDir() && (/^вс[іi]$/i.test(String(p.locs).trim()) || String(p.locs).split(/[,;]/).map(function(x){ return x.trim(); }).indexOf(myLoc()) !== -1); });
+  var h = '<div class="card"><div class="hd"><h3>Довідник акцій</h3><span class="muted">з ' + esc(ymLabel(P.start)) + ' «Бюджет навч» = база − знижки реєстру</span><span class="sp" style="flex:1"></span>'
+    + '<button class="btn g" onclick="openPromoForm()">' + (off ? '➕ Нова тимчасова акція' : '💡 Запропонувати акцію') + '</button></div>';
+  h += '<div class="tblwrap"><table class="hist"><thead><tr><th>ID</th><th>Назва</th><th>Тип</th><th>На що діє</th><th>Умови</th><th>Правило</th><th>Період</th><th>Локації</th><th>Статус</th><th>Хто</th><th></th></tr></thead><tbody>';
+  list.forEach(function(p){
+    h += '<tr class="' + (['відхилена','завершена'].indexOf(p.status) !== -1 ? 'skip' : '') + '"><td class="nw"><b>' + esc(p.id) + '</b></td><td>' + esc(p.name) + '</td><td>' + esc(p.type) + '</td><td>' + esc(p.appliesTo)
+      + (p.appliesTo !== 'навчання' ? '<div class="muted">вступний — поки не нараховується</div>' : '') + '</td>'
+      + '<td style="max-width:360px">' + esc(p.conditions) + '</td><td class="nw"><code>' + esc(p.rule) + '</code></td>'
+      + '<td class="nw">' + (p.start || p.end ? esc((p.start || '…') + ' → ' + (p.end || '…')) : 'постійно') + '</td><td>' + esc(p.locs) + '</td>'
+      + '<td>' + stPill(p.status) + '</td><td class="muted">' + esc(p.createdBy) + (p.decidedBy ? '<br>✔ ' + esc(p.decidedBy) : '') + (p.comment ? '<br>💬 ' + esc(p.comment) : '') + '</td>'
+      + '<td class="nw">' + (off ? '<button class="btn sec sm" onclick="openPromoForm(\'' + esc(p.id) + '\')">✏️</button>'
+          + (p.status === 'на підтвердженні' ? ' <button class="btn g sm" onclick="decide(\'' + esc(p.id) + '\',\'approve\')">✅</button> <button class="btn sec sm" onclick="decide(\'' + esc(p.id) + '\',\'reject\')">✖</button>' : '')
+          + (p.type === 'тимчасова' && p.status === 'діє' ? ' <button class="btn sec sm" onclick="finishPromo(\'' + esc(p.id) + '\')">⏹ Завершити</button>' : '') : '') + '</td></tr>';
+  });
+  h += '</tbody></table></div></div>';
+  h += '<div id="promoForm"></div>';
+  h += '<div class="note">Накладання — послідовно, кожна знижка від поточної ціни: <b>сім\'я → передоплата → друг → тимчасові → відпустка</b>. Приклад: 20 000 − 8% = 18 400 − 10% = 16 560.<br>'
+    + 'Тимчасова акція діє на договори, підписані в її період, з картки «Акція» = ID акції. Правило: <code>pct=10; months=3</code> (10% на 3 місяці від місяця договору) або <code>sum=1000; months=1</code>.</div>';
+  el.innerHTML = h;
+  if (P.edit !== null) renderPromoForm();
+}
+function openPromoForm(id){ P.edit = id || ''; renderPromoForm(); var f = document.getElementById('promoForm'); if (f) f.scrollIntoView({behavior:'smooth'}); }
+function renderPromoForm(){
+  var box = document.getElementById('promoForm'); if (!box) return;
+  var p = P.edit ? (P.promos.filter(function(x){ return x.id === P.edit; })[0] || {}) : {};
+  var r = {}; String(p.rule || '').split(';').forEach(function(x){ var m = /^\s*(\w+)\s*=\s*([\d.,]+)/.exec(x); if (m) r[m[1]] = m[2]; });
+  var perm = p.type === 'постійна', off = isOffice();
+  var locSel = off ? ('<label>Локації<select id="pfLocMode" onchange="document.getElementById(\'pfLocList\').style.display=this.value===\'list\'?\'\':\'none\'"><option value="all"' + (!p.locs || /^вс/i.test(p.locs) ? ' selected' : '') + '>усі</option><option value="list"' + (p.locs && !/^вс/i.test(p.locs) ? ' selected' : '') + '>перелік</option></select>'
+      + '<div id="pfLocList" style="' + (p.locs && !/^вс/i.test(p.locs) ? '' : 'display:none;') + 'display:flex;flex-wrap:wrap;gap:6px 12px;font-weight:400;color:var(--dark);margin-top:6px">'
+      + P.locs.map(function(l){ var on = String(p.locs || '').split(/[,;]/).map(function(x){ return x.trim(); }).indexOf(l) !== -1; return '<span style="white-space:nowrap"><input type="checkbox" class="pfLoc" value="' + esc(l) + '"' + (on ? ' checked' : '') + '> ' + esc(l) + '</span>'; }).join('') + '</div></label>')
+    : '<div class="note">Локація: <b>' + esc(myLoc()) + '</b>. Пропозиція піде на підтвердження CFO / офісу і не діє, доки її не підтвердять.</div>';
+  box.innerHTML = '<div class="card"><div class="hd"><h3>' + (P.edit ? 'Редагування ' + esc(P.edit) : (off ? 'Нова тимчасова акція' : 'Пропозиція акції')) + '</h3><span class="sp" style="flex:1"></span><button class="btn sec sm" onclick="P.edit=null;document.getElementById(\'promoForm\').innerHTML=\'\'">✕</button></div>'
+    + '<div class="frm">'
+    + '<div class="two"><label>Назва<input id="pfName" value="' + esc(p.name || '') + '" placeholder="напр. Жовтнева акція"></label>'
+    + '<label>На що діє<select id="pfApplies">' + ['навчання','вступний внесок','обидва'].map(function(x){ return '<option' + (x === (p.appliesTo || 'навчання') ? ' selected' : '') + '>' + x + '</option>'; }).join('') + '</select></label></div>'
+    + '<label>Умови (для людей)<textarea id="pfCond" rows="3">' + esc(p.conditions || '') + '</textarea></label>'
+    + (perm ? '<label>Правило (для бота)<input id="pfRule" value="' + esc(p.rule || '') + '"></label>'
+       : '<div class="three"><label>Знижка, %<input id="pfPct" type="number" min="0" max="100" step="0.5" value="' + esc(r.pct || '') + '"></label>'
+       + '<label>або сума, ₴<input id="pfSum" type="number" min="0" value="' + esc(r.sum || '') + '"></label>'
+       + '<label>Скільки місяців від договору<input id="pfMonths" type="number" min="1" value="' + esc(r.months || '1') + '"></label></div>'
+       + '<div class="two"><label>Дата початку<input id="pfStart" type="date" value="' + esc(p.start || '') + '"></label><label>Дата кінця<input id="pfEnd" type="date" value="' + esc(p.end || '') + '"></label></div>')
+    + locSel
+    + (off && P.edit ? '<label>Статус<select id="pfStatus">' + ['діє','на підтвердженні','завершена','відхилена','чернетка'].map(function(x){ return '<option' + (x === p.status ? ' selected' : '') + '>' + x + '</option>'; }).join('') + '</select></label>' : '')
+    + '<div id="pfErr"></div><div><button class="btn g" id="pfGo" onclick="savePromoForm()">' + (off ? '💾 Зберегти' : '📨 Надіслати на підтвердження') + '</button></div>'
+    + '</div></div>';
+}
+async function savePromoForm(){
+  var v = function(id){ var e = document.getElementById(id); return e ? String(e.value || '').trim() : ''; };
+  var p = P.edit ? (P.promos.filter(function(x){ return x.id === P.edit; })[0] || {}) : {};
+  var rule;
+  if (p.type === 'постійна') rule = v('pfRule');
+  else {
+    var pct = v('pfPct'), sum = v('pfSum'), mo = v('pfMonths') || '1';
+    if (!pct && !sum){ document.getElementById('pfErr').innerHTML = '<div class="err">Вкажіть % або суму знижки</div>'; return; }
+    rule = (pct ? 'pct=' + pct : 'sum=' + sum) + '; months=' + mo;
+  }
+  var locs = 'всі';
+  if (isOffice() && v('pfLocMode') === 'list'){
+    locs = Array.prototype.map.call(document.querySelectorAll('.pfLoc:checked'), function(x){ return x.value; }).join(', ');
+    if (!locs){ document.getElementById('pfErr').innerHTML = '<div class="err">Оберіть хоча б одну локацію</div>'; return; }
+  }
+  var promo = {id:P.edit || '', name:v('pfName'), appliesTo:v('pfApplies'), conditions:v('pfCond'), rule:rule,
+    start:v('pfStart') || p.start || '', end:v('pfEnd') || p.end || '', locs:locs, status:v('pfStatus') || undefined};
+  if (!promo.name){ document.getElementById('pfErr').innerHTML = '<div class="err">Назва обовʼязкова</div>'; return; }
+  var b = document.getElementById('pfGo'); b.disabled = true; b.textContent = '⏳ Зберігаю…';
+  try { await post({action:'savePromo', promo:promo}); toast(isOffice() ? 'Збережено' : 'Надіслано на підтвердження'); P.edit = null; }
+  catch(e){ document.getElementById('pfErr').innerHTML = '<div class="err">' + esc(e.message) + '</div>'; b.disabled = false; b.textContent = '💾 Зберегти'; return; }
+  await loadPromos(); render();
+}
+async function decide(id, dec){
+  var cm = prompt(dec === 'approve' ? 'Коментар (необовʼязково):' : 'Причина відхилення:', ''); if (cm === null) return;
+  try { await post({action:'decidePromo', id:id, decision:dec, comment:cm}); toast(dec === 'approve' ? 'Підтверджено' : 'Відхилено'); }
+  catch(e){ alert(e.message); }
+  await loadPromos(); render();
+}
+async function finishPromo(id){
+  var p = P.promos.filter(function(x){ return x.id === id; })[0]; if (!p) return;
+  if (!confirm('Завершити «' + p.name + '»? Нові договори за нею не прийматимуться; знижки вже підписаним — до кінця строку.')) return;
+  try { await post({action:'savePromo', promo:{id:id, name:p.name, appliesTo:p.appliesTo, conditions:p.conditions, rule:p.rule, start:p.start, end:p.end || new Date().toISOString().slice(0, 10), locs:p.locs, status:'завершена'}}); }
+  catch(e){ alert(e.message); }
+  await loadPromos(); render();
+}
+
+// ── 2. РЕЄСТР ──
+async function loadRegister(){
+  P.regRows = null; renderRegister();
+  try { var j = await get('getDiscounts', {ym:P.ym, loc:P.regLoc}); P.regRows = j.rows || []; }
+  catch(e){ P.regRows = []; toast('Реєстр не завантажився: ' + e.message); }
+  renderRegister();
+}
+function renderRegister(){
+  var el = document.getElementById('pbody'), off = isOffice();
+  var h = '<div class="card"><div class="bar">'
+    + '<button class="btn sec sm" onclick="P.ym=ymAdd(P.ym,-1);P.preview=null;P.syncPreview=null;loadRegister()">◀</button><b style="min-width:120px;text-align:center">' + esc(ymLabel(P.ym)) + '</b>'
+    + '<button class="btn sec sm" onclick="P.ym=ymAdd(P.ym,1);P.preview=null;P.syncPreview=null;loadRegister()">▶</button>'
+    + (isDir() ? '<b>' + esc(myLoc()) + '</b>' : '<select onchange="P.regLoc=this.value;P.preview=null;P.syncPreview=null;loadRegister()">' + locOptions(P.regLoc, true) + '</select>')
+    + '<span style="flex:1"></span>'
+    + (off ? '<button class="btn sec sm" onclick="previewRecalc()">🔍 Перевірити перерахунок</button> <button class="btn sec sm" onclick="previewSync()">🔍 Перевірити Payment</button>' : '')
+    + (isCfo() ? ' <button class="btn sec sm" onclick="setupNightly()" title="Щодня о 08:30: поточний і наступний місяць">⏰ Нічний прогін</button>' : '')
+    + '</div>';
+  if (P.ym < P.start) h += '<div class="diff note" style="margin:10px 14px">До ' + esc(ymLabel(P.start)) + ' реєстр не впливає на Payment: «Бюджет навч» за ці місяці лишається як був (листопадові рахунки не чіпаємо).</div>';
+  if (P.preview) h += renderPreview();
+  if (P.syncPreview) h += renderSyncPreview();
+  if (P.regRows === null){ el.innerHTML = h + '<div class="empty">Завантаження…</div></div>'; return; }
+  var rows = P.regRows.slice().sort(function(a, b){ return a.loc.localeCompare(b.loc, 'uk') || a.name.localeCompare(b.name, 'uk') || a.order.localeCompare(b.order); });
+  var act = rows.filter(function(r){ return r.status === 'діє'; }), sum = act.reduce(function(s, r){ return s + r.amount; }, 0);
+  h += '<div class="tblwrap"><table class="hist"><thead><tr><th>Дитина</th><th>Локація</th><th>Акція</th><th>Черга</th><th class="r">База</th><th class="r">%</th><th class="r">Сума</th><th>Підстава</th><th>Статус</th><th>Джерело</th><th></th></tr></thead><tbody>';
+  if (!rows.length) h += '<tr><td colspan="11" class="empty">За ' + esc(ymLabel(P.ym)) + ' записів немає.</td></tr>';
+  rows.forEach(function(r){
+    h += '<tr class="' + (r.status === 'діє' ? '' : 'skip') + '"><td><b>' + esc(r.name) + '</b></td><td>' + esc(r.loc) + '</td><td class="nw">' + esc(r.promoId) + '</td><td class="nw muted">' + esc(r.order) + '</td>'
+      + '<td class="r nw">' + money(r.base) + '</td><td class="r">' + (r.pct ? esc(r.pct) + '%' : '') + '</td><td class="r nw"><b>' + money(r.amount) + '</b></td>'
+      + '<td style="max-width:380px" class="muted">' + esc(r.basis) + '</td><td>' + stPill(r.status) + '</td><td class="muted">' + esc(r.source) + '<br>' + esc(r.by) + '</td>'
+      + '<td>' + (off && r.source === 'ручна' && r.status === 'діє' ? '<button class="btn sec sm" onclick="cancelManual(\'' + esc(r.id) + '\')">↩️</button>' : '') + '</td></tr>';
+  });
+  h += '</tbody><tfoot><tr><td colspan="6">Діючих: ' + act.length + '</td><td class="r nw">' + money(sum) + '</td><td colspan="4"></td></tr></tfoot></table></div></div>';
+  if (off) h += '<div class="card"><div class="hd"><h3>➕ Ручний запис (нестандартна передоплата тощо)</h3></div><div class="frm">'
+    + '<div class="two"><label>Дитина<input id="mdCard" list="dlCards" placeholder="Почніть вводити ПІБ…" autocomplete="off"></label>'
+    + '<label>Акція<select id="mdPromo">' + P.promos.filter(function(p){ return p.status === 'діє'; }).map(function(p){ return '<option value="' + esc(p.id) + '">' + esc(p.id + ' · ' + p.name) + '</option>'; }).join('') + '</select></label></div>'
+    + '<div class="three"><label>Місяць<input id="mdYm" type="month" value="' + esc(P.ym) + '"></label><label>Знижка, %<input id="mdPct" type="number" min="0" max="100" step="0.5"></label><label>або сума, ₴<input id="mdSum" type="number" min="0"></label></div>'
+    + '<label>Підстава<input id="mdBasis" placeholder="напр. передоплата 4 міс за рішенням CFO"></label>'
+    + '<div id="mdErr"></div><div><button class="btn g" onclick="addManual()">Додати в реєстр</button></div></div></div><datalist id="dlCards"></datalist>';
+  el.innerHTML = h;
+  if (off) loadCards().then(function(){ var dl = document.getElementById('dlCards'); if (dl) dl.innerHTML = Object.keys(P.byLabel).map(function(l){ return '<option value="' + esc(l) + '">'; }).join(''); }).catch(function(){});
+}
+function renderPreview(){
+  var p = P.preview, li = function(a, f){ return a.length ? '<ul>' + a.slice(0, 200).map(f).join('') + '</ul>' + (a.length > 200 ? '<div class="muted">… ще ' + (a.length - 200) + '</div>' : '') : '<div class="muted">—</div>'; };
+  var one = function(x){ return '<li>' + esc(x.name) + ' (' + esc(x.loc) + ') · ' + esc(x.promoId) + ' · ' + (x.before != null ? money(x.before) + ' → ' : '') + '<b>' + money(x.amount) + '</b> ' + stPill(x.status) + ' <span class="muted">' + esc(x.basis) + '</span></li>'; };
+  return '<div class="diff" style="border-bottom:1px solid var(--line)"><b>Перерахунок за ' + esc(ymLabel(p.ym)) + ' (' + esc(p.loc) + ')</b>'
+    + '<h4>Нові: ' + p.added.length + '</h4>' + li(p.added, one)
+    + '<h4>Зміняться: ' + p.updated.length + '</h4>' + li(p.updated, one)
+    + '<h4>Скасуються: ' + p.cancelled.length + '</h4>' + li(p.cancelled, function(x){ return '<li>' + esc(x.name) + ' (' + esc(x.loc) + ') · ' + esc(x.promoId) + ' · було ' + money(x.before) + '</li>'; })
+    + (p.warnings && p.warnings.length ? '<h4>⚠️ Попередження: ' + p.warnings.length + '</h4>' + li(p.warnings, function(w){ return '<li>' + esc(w) + '</li>'; }) : '')
+    + '<div style="margin-top:10px;display:flex;gap:8px"><button class="btn g" onclick="applyRecalc()"' + (p.added.length + p.updated.length + p.cancelled.length ? '' : ' disabled') + '>✅ Застосувати' + (p.ym >= P.start ? ' і оновити Payment' : '') + '</button><button class="btn sec" onclick="P.preview=null;renderRegister()">Закрити</button></div></div>';
+}
+function renderSyncPreview(){
+  var s = P.syncPreview;
+  var h = '<div class="diff" style="border-bottom:1px solid var(--line)"><b>Payment за ' + esc(ymLabel(P.ym)) + ': клітинок до переходу на формулу — ' + s.cells + '</b>'
+    + '<div class="muted">«Бюджет навч» стане <code>=база − SUMIFS(Знижки)</code>. База = нинішнє значення + знижка відпустки, яку раніше вписав експорт. Уже переведені клітинки не чіпаються.</div>';
+  (s.files || []).forEach(function(f){
+    h += '<h4>' + esc((f.locs || []).join(' / ')) + (f.error ? ' — ❌ ' + esc(f.error) : ': ' + f.convert + ' клітинок, рядків дзеркала ' + f.mirrorRows) + '</h4>';
+    if (f.sample && f.sample.length) h += '<ul>' + f.sample.map(function(x){ return '<li>' + esc(x.cell) + ' ' + esc(x.child) + ': ' + money(x.before) + ' → база ' + money(x.base) + ' <span class="muted">(було ' + esc(x.was) + ')</span></li>'; }).join('') + (f.convert > f.sample.length ? '<li class="muted">… ще ' + (f.convert - f.sample.length) + '</li>' : '') + '</ul>';
+    if (f.notFound && f.notFound.length) h += '<div class="err" style="margin:4px 0">Немає рядка в Payment: ' + esc(f.notFound.join('; ')) + '</div>';
+    if (f.duplicates && f.duplicates.length) h += '<div class="note" style="margin:4px 0">Дублі рядків: ' + esc(f.duplicates.join('; ')) + '</div>';
+  });
+  if (s.warnings && s.warnings.length) h += '<div class="note">' + esc(s.warnings.join('; ')) + '</div>';
+  h += '<div style="margin-top:10px;display:flex;gap:8px"><button class="btn g" onclick="applySync()"' + (s.cells || (s.files || []).some(function(f){ return f.mirrorRows; }) ? '' : ' disabled') + '>✅ Записати в Payment</button><button class="btn sec" onclick="P.syncPreview=null;renderRegister()">Закрити</button></div></div>';
+  return h;
+}
+async function previewRecalc(){
+  toast('Рахую…');
+  try { P.preview = await get('previewDiscounts', {ym:P.ym, loc:P.regLoc}); } catch(e){ alert(e.message); return; }
+  renderRegister();
+}
+async function applyRecalc(){
+  if (!confirm('Застосувати перерахунок за ' + ymLabel(P.ym) + (P.ym >= P.start ? ' і оновити «Бюджет навч» у Payment?' : '?'))) return;
+  try { await post({action:'recalcDiscounts', ym:P.ym, loc:P.regLoc, dryRun:false, sync:true}); toast('Застосовано'); }
+  catch(e){ alert(e.message); return; }
+  P.preview = null; await loadRegister();
+}
+async function previewSync(){
+  if (P.ym < P.start){ alert('Payment переходить на реєстр з ' + ymLabel(P.start)); return; }
+  toast('Перевіряю Payment…');
+  try { P.syncPreview = await get('previewDiscountSync', {ym:P.ym, loc:P.regLoc}); } catch(e){ alert(e.message); return; }
+  renderRegister();
+}
+async function applySync(){
+  if (!confirm('Записати дзеркало знижок і формули «Бюджет навч» за ' + ymLabel(P.ym) + (P.regLoc ? ' (' + P.regLoc + ')' : ' (усі локації)') + '?')) return;
+  try { await post({action:'syncDiscountsToPayment', ym:P.ym, loc:P.regLoc, dryRun:false}); toast('Записано'); }
+  catch(e){ alert(e.message); return; }
+  P.syncPreview = null; await loadRegister();
+}
+async function addManual(){
+  var v = function(id){ return String((document.getElementById(id) || {}).value || '').trim(); };
+  var c = P.byLabel[v('mdCard')], err = function(t){ document.getElementById('mdErr').innerHTML = '<div class="err">' + esc(t) + '</div>'; };
+  if (!c) return err('Оберіть дитину зі списку підказок');
+  if (!v('mdPct') && !v('mdSum')) return err('Вкажіть % або суму');
+  if (!v('mdBasis')) return err('Підстава обовʼязкова');
+  try { await post({action:'addManualDiscount', cardId:c.id, ym:v('mdYm'), promoId:v('mdPromo'), pct:v('mdPct'), amount:v('mdSum'), basis:v('mdBasis')}); toast('Додано'); }
+  catch(e){ return err(e.message); }
+  await loadRegister();
+}
+async function cancelManual(id){
+  var why = prompt('Причина скасування:', ''); if (why === null) return;
+  try { await post({action:'cancelDiscount', id:id, reason:why}); toast('Скасовано'); } catch(e){ alert(e.message); }
+  await loadRegister();
+}
+async function setupNightly(){
+  if (!confirm('Поставити щоденний перерахунок знижок о 08:30 (поточний і наступний місяць, з оновленням Payment)?')) return;
+  try { await post({action:'promoNightlySetup'}); toast('Нічний прогін — 08:30'); } catch(e){ alert(e.message); }
+}
+
+// ── 3. ЗВІТ ──
+async function loadReport(){
+  P.report = null; renderReport();
+  try { P.report = await get('getPromoReport', {from:P.rFrom, to:P.rTo, loc:isDir() ? myLoc() : P.rLoc}); }
+  catch(e){ P.report = {ok:false, error:e.message}; }
+  renderReport();
+}
+function renderReport(){
+  var el = document.getElementById('pbody');
+  var h = '<div class="card"><div class="bar">З <input type="date" id="rFrom" value="' + esc(P.rFrom) + '"> по <input type="date" id="rTo" value="' + esc(P.rTo) + '">'
+    + (isDir() ? '<b>' + esc(myLoc()) + '</b>' : '<select id="rLoc">' + locOptions(P.rLoc, true) + '</select>')
+    + '<button class="btn sm" onclick="P.rFrom=document.getElementById(\'rFrom\').value;P.rTo=document.getElementById(\'rTo\').value;var l=document.getElementById(\'rLoc\');P.rLoc=l?l.value:\'\';loadReport()">Показати</button></div>';
+  var r = P.report;
+  if (!r){ el.innerHTML = h + '<div class="empty">Завантаження…</div></div>'; return; }
+  if (r.ok === false){ el.innerHTML = h + '<div class="err" style="margin:12px">' + esc(r.error) + '</div></div>'; return; }
+  h += '<div class="tblwrap"><table class="hist"><thead><tr><th>Акція</th><th>Статус</th><th class="r">Договорів</th><th class="r">Навчання / міс</th><th class="r">Знижок</th><th class="r">Сума знижок</th><th class="r">Згоріло</th></tr></thead><tbody>';
+  var T = {c:0, cs:0, d:0, ds:0, b:0};
+  r.rows.forEach(function(x, i){
+    T.c += x.contracts; T.cs += x.contractsSum; T.d += x.discounts; T.ds += x.discountsSum; T.b += x.burned;
+    h += '<tr><td><b>' + esc(x.id) + '</b> · ' + esc(x.name) + '</td><td>' + stPill(x.status) + '</td>'
+      + '<td class="r">' + (x.contracts ? '<a href="#" onclick="var e=document.getElementById(\'rc' + i + '\');e.style.display=e.style.display?\'\':\'none\';return false">' + x.contracts + '</a>' : '0') + '</td>'
+      + '<td class="r nw">' + money(x.contractsSum) + '</td><td class="r">' + x.discounts + '</td><td class="r nw">' + money(x.discountsSum) + '</td><td class="r">' + (x.burned || '') + '</td></tr>'
+      + '<tr id="rc' + i + '" style="display:none"><td colspan="7" class="muted">' + x.contractList.map(function(c){ return esc(c.name) + ' (' + esc(c.loc) + ', ' + esc(c.date) + ', ' + money(c.fee) + ')'; }).join('; ') + '</td></tr>';
+  });
+  h += '<tr class="skip"><td>Відпустка / хвороба</td><td></td><td></td><td></td><td class="r">' + r.vacation.discounts + '</td><td class="r nw">' + money(r.vacation.discountsSum) + '</td><td></td></tr>';
+  h += '</tbody><tfoot><tr><td colspan="2">Разом по акціях</td><td class="r">' + T.c + '</td><td class="r nw">' + money(T.cs) + '</td><td class="r">' + T.d + '</td><td class="r nw">' + money(T.ds) + '</td><td class="r">' + (T.b || '') + '</td></tr></tfoot></table></div>';
+  h += '<div class="note" style="margin:10px 14px">Договори — картки з полем «Акція» = ця акція й датою договору в періоді (для «Приведи друга» — також усі картки з рекомендувачем). Знижки — записи реєстру за місяці періоду.</div></div>';
+  el.innerHTML = h;
+}
+
+function wirePromos(){
+  document.querySelectorAll('.ptab').forEach(function(b){ b.addEventListener('click', function(){
+    P.tab = b.getAttribute('data-t'); render();
+    if (P.tab === 'register' && !P.regRows) loadRegister();
+    if (P.tab === 'report' && !P.report) loadReport();
+  }); });
+  document.getElementById('refreshBtn').addEventListener('click', async function(){
+    await loadPromos(); P.regRows = null; P.report = null; render();
+    if (P.tab === 'register') loadRegister(); if (P.tab === 'report') loadReport();
+  });
+}
+
+async function init(){
+  S.user = readSession(); if (!S.user){ goLogin(); return; }
+  if (!promosGate()) return;
+  try { updUserUI(); markActiveNav(); } catch(e){ console.warn('[promos] шелл:', e && e.message); }
+  P.ym = ymNow() < P.start ? P.start : ymNow();
+  P.rFrom = ymNow() + '-01'; P.rTo = lastDay(ymNow());
+  if (isDir()) P.regLoc = myLoc();
+  wirePromos();
+  var _l = loadLocs();
+  try { await loadPromos(); } catch(e){ document.getElementById('pbody').innerHTML = '<div class="err">' + esc(e.message) + '</div>'; return; }
+  await _l;
+  render();
+}
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+else init();
+</script>
+<script>
+/* v7.152: пункт «Ліди» — мережеві ролі + директорка; решті не показуємо. */
+(function(){
+  // v7.337: reveal() визначено одразу після пункту «Ліди» в меню; тут — лише перезапуск після входу/зміни ролі.
+  var reveal = window._revealLeadsMenu;
+  if (typeof reveal !== 'function') return;
+  if(typeof applyRoleVisibility==='function'){
+    var _o=applyRoleVisibility;
+    applyRoleVisibility=function(){ var r=_o.apply(this,arguments); try{reveal();}catch(e){} return r; };
+  }
+  window.addEventListener('load', function(){ setTimeout(reveal, 600); });
+})();
+</script>
+<script>
+/* v7.328: бокове меню не губить активний пункт при переході між сторінками.
+   Кожен перехід — нове завантаження сторінки, тож меню стартувало з верху; відколи в ньому
+   з'явилась «Картка локації» (v7.326/7.327), нижні пункти FINANCE опинились за краєм екрана.
+   Зберігаємо прокрутку меню перед переходом, відновлюємо після завантаження і, якщо активний
+   пункт усе одно поза видимою частиною, центруємо його. Другий прохід — після того, як
+   applyRoleVisibility сховає зайві пункти (висота меню змінюється). Ручну прокрутку не перебиваємо. */
+(function(){
+  var KEY = 'mk_sb_scroll', touched = false;
+  function sb(){ return document.getElementById('sidebar') || document.querySelector('.sidebar'); }
+  function save(){ var s = sb(); if (!s) return; try { sessionStorage.setItem(KEY, String(s.scrollTop)); } catch(e){} }
+  function restore(){
+    var s = sb(); if (!s || touched) return;
+    var v = null; try { v = sessionStorage.getItem(KEY); } catch(e){}
+    if (v != null) s.scrollTop = Number(v) || 0;
+    var a = s.querySelector('.nav-item.active');
+    if (a && a.offsetParent !== null){
+      var r = a.getBoundingClientRect(), R = s.getBoundingClientRect();
+      if (r.top < R.top || r.bottom > R.bottom) s.scrollTop += (r.top - R.top) - (R.height - r.height) / 2;
+    }
+  }
+  document.addEventListener('click', function(e){ if (e.target.closest && e.target.closest('.nav-item')) save(); }, true);
+  window.addEventListener('pagehide', save);
+  window.addEventListener('load', function(){
+    var s = sb();
+    if (s){ ['wheel','touchmove','keydown'].forEach(function(ev){ s.addEventListener(ev, function(){ touched = true; }, {passive:true}); }); }
+    restore(); setTimeout(restore, 700);
+  });
+})();
+</script>
+</body>
+</html>
