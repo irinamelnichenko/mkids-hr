@@ -7157,7 +7157,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.411', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.413', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -7287,7 +7287,8 @@ function doGet(e) {
     else if (action === 'getPaymentRowsWithoutCards') result = getPaymentRowsWithoutCards(e.parameter || {});   // v7.357 рядки Payment без картки
     else if (action === 'getLocRequisites')            result = getLocRequisites(e.parameter || {});   // v7.352 реквізити локацій (читання)
     else if (action === 'generateInvoicePDF')          result = generateInvoicePDF(e.parameter || {}); // v6.50
-    else if (action === 'getInvoiceStatusReport')      result = getInvoiceStatusReport(e.parameter || {}); // v6.50.3
+    else if (action === 'getInvoiceStatusReport')      result = getInvoiceStatusReport(e.parameter || {}); // v6.50.3; v7.413 фікс дати
+    else if (action === 'getInvoiceSendLog')           result = getInvoiceSendLog(e.parameter || {});      // v7.413 журнали розсилок (читання)
     else if (action === 'getFillStatus')               result = getFillStatus(e.parameter || {}, String(e.parameter.nocache || '') === '1');   // v6.51; v7.293 кеш 5 хв
     else if (action === 'get')                         result = getDashRecords();                            // v7.106 дашборд-записи (S.recs) — читання
     else                                             result = {ok:false, error:'Unknown action: ' + action};
@@ -27066,6 +27067,47 @@ function logViberSent(opts){
   }
 }
 
+// v7.413: час у журналах пишеться рядком 'dd.MM.yyyy HH:mm:ss', але Sheets сам перетворює
+// його на дату → getValues() віддає Date, і String(Date) = 'Fri Oct 16 2026 …' не проходив
+// фільтр місяця (звіт за будь-який місяць був нульовий). Нормалізуємо обидва варіанти.
+function _invLogTs(v){
+  if (v instanceof Date) return Utilities.formatDate(v, 'Europe/Kiev', 'dd.MM.yyyy HH:mm:ss');
+  return String(v || '').trim();
+}
+
+// v7.413 читання: обидва журнали розсилок (email + Viber) з нормалізованим часом, без email/телефонів.
+// opts: {from?, to?: 'yyyy-MM-dd' включно, loc?}
+function getInvoiceSendLog(opts){
+  try {
+    opts = opts || {};
+    var from = String(opts.from || ''), to = String(opts.to || ''), locF = String(opts.loc || '').trim();
+    function iso(ts){ var m = /^(\d{2})\.(\d{2})\.(\d{4})/.exec(ts); return m ? (m[3] + '-' + m[2] + '-' + m[1]) : ''; }
+    function keep(ts, loc){
+      var d = iso(ts); if (!d) return false;
+      if (from && d < from) return false;
+      if (to && d > to) return false;
+      return !locF || loc === locF;
+    }
+    var email = [], viber = [];
+    var ve = _getInvoiceLogSheet().getDataRange().getValues();
+    for (var r = 1; r < ve.length; r++){
+      var ts = _invLogTs(ve[r][0]), loc = String(ve[r][2] || '').trim();
+      if (!keep(ts, loc)) continue;
+      email.push({ts:ts, child:String(ve[r][1] || '').trim(), loc:loc, type:String(ve[r][3] || ''), ju:String(ve[r][4] || ''),
+        number:String(ve[r][5] || ''), sum:Number(ve[r][7]) || 0, status:String(ve[r][8] || ''), by:String(ve[r][9] || ''), error:String(ve[r][10] || '')});
+    }
+    var vv = _getViberLogSheet().getDataRange().getValues();
+    for (var r2 = 1; r2 < vv.length; r2++){
+      var ts2 = _invLogTs(vv[r2][0]), loc2 = String(vv[r2][2] || '').trim();
+      if (!keep(ts2, loc2)) continue;
+      viber.push({ts:ts2, child:String(vv[r2][1] || '').trim(), loc:loc2, by:String(vv[r2][4] || '')});
+    }
+    return {ok:true, email:email, viber:viber, emailRows:ve.length - 1, viberRows:vv.length - 1};
+  } catch(e){
+    return {ok:false, error:String(e && e.message || e)};
+  }
+}
+
 // Статуси + агрегат. opts: {loc?, month?(1-12), year?} — month/year фільтрують по ДАТІ надсилання.
 function getInvoiceStatusReport(opts){
   try {
@@ -27088,7 +27130,7 @@ function getInvoiceStatusReport(opts){
     var errorsByLoc = {};
     var ve = _getInvoiceLogSheet().getDataRange().getValues();
     for (var r = 1; r < ve.length; r++){
-      var ts = String(ve[r][0] || ''), child = String(ve[r][1] || '').trim();
+      var ts = _invLogTs(ve[r][0]), child = String(ve[r][1] || '').trim();
       var loc = String(ve[r][2] || '').trim(), status = String(ve[r][8] || '').trim();
       if (!child || !inPeriod(ts)) continue;
       var key = child + '||' + loc;
@@ -27104,7 +27146,7 @@ function getInvoiceStatusReport(opts){
     var viberByKey = {};
     var vv = _getViberLogSheet().getDataRange().getValues();
     for (var r2 = 1; r2 < vv.length; r2++){
-      var ts2 = String(vv[r2][0] || ''), child2 = String(vv[r2][1] || '').trim();
+      var ts2 = _invLogTs(vv[r2][0]), child2 = String(vv[r2][1] || '').trim();
       var loc2 = String(vv[r2][2] || '').trim();
       if (!child2 || !inPeriod(ts2)) continue;
       viberByKey[child2 + '||' + loc2] = {ts:ts2};
