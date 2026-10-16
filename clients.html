@@ -4892,7 +4892,7 @@ async function _feeShowPreview(params, onOk){
       +(m.prorated?' ('+m.segs.map(function(sg){ return sg.period+': '+fmtN(sg.price)+' × '+sg.days+'/'+m.days+' дн. = '+fmtN(sg.sum); }).join(' + ')+')':'');
     var ch=(m.discounts||[]).filter(function(x){ return x.old!==x.new; });
     if(ch.length) h+='<br><span style="color:var(--gray)">знижки: '+ch.map(function(x){ return esc(x.name)+' '+fmtN(x.old)+' → '+fmtN(x.new); }).join('; ')+'</span>';
-    if(m.cell) h+='<br><span style="color:var(--gray)">Payment '+esc(m.cell)+': база '+fmtN(m.cellBase)+' → '+fmtN(m.newCellBase)+(m.adj?' (ручне коригування бази '+(m.adj>0?'+':'')+fmtN(m.adj)+' збережено)':'')+(m.cellOurs?'':' · клітинка ще не на формулі — переведеться при збереженні')+'</span>';
+    if(m.cell) h+='<br><span style="color:var(--gray)">Payment '+esc(m.cell)+': база '+fmtN(m.cellBase)+' → '+fmtN(m.newCellBase)+(m.adj?' (ручне коригування бази '+(m.adj>0?'+':'')+fmtN(m.adj)+' збережено)':'')+(m.cellOurs?'':' · клітинка ручна — буде записано число (на формулу не переводиться)')+'</span>';
     else if(m.cellError) h+='<br><span style="color:var(--red2)">'+esc(m.cellError)+'</span>';
     h+='</div>';
   });
@@ -7867,10 +7867,18 @@ async function _naPromoLoad(){
   if(!box){ box=document.createElement('div'); box.id='naPromo'; box.style.cssText='max-width:1000px;margin:0 0 22px'; main.insertBefore(box, main.firstChild); }
   var j; try{ j=await apiGetFull({action:'getPromoAttention', actorId:(S.user&&S.user.id)||''}); }catch(e){ box.innerHTML=''; return; }
   if(S.view!=='needsAttention') return;
-  var pp=j.prepay||[], pr=j.proposals||[];
-  if(!pp.length && !pr.length){ box.innerHTML=''; return; }
+  var pp=j.prepay||[], pr=j.proposals||[], mn=j.manual||[];
+  if(!pp.length && !pr.length && !mn.length){ box.innerHTML=''; return; }
   var can=!!j.canDecide, fm=function(n){ return Math.round(Number(n)||0).toLocaleString('uk-UA')+' ₴'; };
-  var h='<div style="font-size:16px;font-weight:700;margin-bottom:6px">🎁 Акції та передоплати · '+(pp.length+pr.length)+'</div>';
+  var h='<div style="font-size:16px;font-weight:700;margin-bottom:6px">🎁 Акції та передоплати · '+(pp.length+pr.length+mn.length)+'</div>';
+  if(mn.length){   // v7.418: знижка за правилом, а клітинка «Бюджет навч» ручна — нарахувати вручну
+    h+='<p style="color:var(--gray);font-size:13px;margin:0 0 8px;max-width:80ch">Знижка належить за правилом, але клітинка «Бюджет навч» цієї дитини ручна (вона не на реєстрі знижок) — внесіть знижку в Payment вручну.</p>';
+    mn.forEach(function(x){
+      h+='<div style="background:#FBF1DF;border:1px solid #e6c68a;border-radius:10px;padding:10px 12px;margin-bottom:7px">'
+        +'<div><b>'+esc(x.name)+'</b> · '+esc(x.loc)+' · '+esc(x.ym)+' · '+esc(x.promoId)+' −'+x.pct+'% = <b>'+fm(x.amount)+'</b></div>'
+        +'<div style="font-size:12.5px;margin-top:3px;color:var(--gray)">'+esc(x.basis)+'</div></div>';
+    });
+  }
   if(pp.length){
     h+='<p style="color:var(--gray);font-size:13px;margin:0 0 8px;max-width:80ch">Платіж схожий на передоплату за 3 / 6 / 12 місяців. Без підтвердження знижка не нараховується. «Підтвердити» НЕ переносить гроші: платіж лишається у «Факт навч» місяця надходження однією сумою, а місяці передоплати отримують покриття — рахунок за навчання за них не формується і борг не рахується.</p>';
     pp.forEach(function(p){

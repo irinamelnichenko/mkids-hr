@@ -1445,19 +1445,19 @@ function monthStrip(){
   }
   return h + '<button class="ms-btn" onclick="P.ym=ymAdd(P.ym,12);regReload()">' + (+y + 1) + ' ›</button></div>';
 }
-function regReload(){ P.preview = null; P.syncPreview = null; loadRegister(); }
+function regReload(){ P.preview = null; loadRegister(); }
 function renderRegister(){
   var el = document.getElementById('pbody'), off = isOffice();
   var h = monthStrip();
   h += '<div class="filters">'
     + (isDir() ? '<b>📍 ' + esc(myLoc()) + '</b>' : '<select class="flt-sel" onchange="P.regLoc=this.value;regReload()">' + locOptions(P.regLoc, true) + '</select>')
     + '<span style="flex:1"></span>'
-    + (off ? '<button class="btn btn-secondary btn-sm" onclick="previewRecalc()">🔍 Перевірити перерахунок</button><button class="btn btn-secondary btn-sm" onclick="previewSync()">🔍 Перевірити Payment</button>' : '')
+    + (off ? '<button class="btn btn-secondary btn-sm" onclick="previewRecalc()" title="Лише діти на реєстрі знижок (нові картки); ручні клітинки не змінюються">🔍 Перевірити перерахунок</button>' : '')
     + (isCfo() ? '<button class="btn btn-secondary btn-sm" onclick="setupNightly()" title="Щодня о 08:30: поточний місяць і до грудня">⏰ Нічний прогін</button>' : '')
     + '</div>';
   if (P.ym < P.start) h += '<div class="alert alert-warn"><div>До ' + esc(ymLabel(P.start)) + ' реєстр не впливає на Payment: «Бюджет навч» за ці місяці лишається як був.</div></div>';
+  h += '<div class="alert alert-info"><div>Реєстр працює лише для <b>нових дітей</b>: їхня клітинка «Бюджет навч» створюється формулою з реєстру при заведенні картки. Наявні діти лишаються з ручними клітинками — для них знижки вносяться в Payment як раніше.</div></div>';
   if (P.preview) h += renderPreview();
-  if (P.syncPreview) h += renderSyncPreview();
   if (P.regRows === null){ el.innerHTML = h + '<div class="card">' + loading() + '</div>'; return; }
   var rows = P.regRows.slice().sort(function(a, b){ return a.loc.localeCompare(b.loc, 'uk') || a.name.localeCompare(b.name, 'uk') || a.order.localeCompare(b.order); });
   var act = rows.filter(function(r){ return r.status === 'діє'; }), sum = act.reduce(function(s, r){ return s + r.amount; }, 0);
@@ -1509,25 +1509,7 @@ function renderPreview(){
     + '<h4>Скасуються: ' + p.cancelled.length + '</h4>' + li(p.cancelled, function(x){ return '<li><b>' + esc(x.name) + '</b> (' + esc(x.loc) + ') · ' + esc(x.promoId) + ' · було ' + money(x.before) + '</li>'; })
     + (p.warnings && p.warnings.length ? '<div class="alert alert-warn" style="margin-top:12px"><div><b>⚠️ Попередження: ' + p.warnings.length + '</b>' + li(p.warnings, function(w){ return '<li>' + esc(w) + '</li>'; }) + '</div></div>' : '')
     + '</div><div class="modal-ft" style="position:static"><button class="btn btn-secondary" onclick="P.preview=null;renderRegister()">Закрити</button>'
-    + '<button class="btn btn-primary" onclick="applyRecalc()"' + (n ? '' : ' disabled') + '>✅ Застосувати' + (p.ym >= P.start ? ' і оновити Payment' : '') + '</button></div></div>';
-}
-function renderSyncPreview(){
-  var s = P.syncPreview;
-  var h = '<div class="card"><div class="card-hd"><h3>🔍 Payment: клітинок до переходу на формулу — ' + s.cells + '</h3><button class="modal-close" onclick="P.syncPreview=null;renderRegister()">✕</button></div><div class="card-bd diff">'
-    + '<div class="alert alert-info"><div>«Бюджет навч» стане <code>=база − SUMIFS(Знижки)</code> — від ' + esc(ymLabel(P.start)) + ' до грудня. Число в клітинці після переходу не зміниться: знижку, вписану руками (<code>=20000-1904</code> або число менше за «Суму договору»), переноситься в реєстр записом <b>R</b>; знижка відпустки, вписана експортом, повертається через реєстр (VAC). Уже переведені клітинки не чіпаються.</div></div>';
-  (s.files || []).forEach(function(f){
-    h += '<h4>' + esc((f.locs || []).join(' / ')) + (f.error ? ' — ❌ ' + esc(f.error) : ': ' + f.convert + ' клітинок, рядків дзеркала ' + f.mirrorRows) + '</h4>';
-    if (f.sample && f.sample.length) h += '<ul>' + f.sample.map(function(x){ return '<li>' + esc(x.cell) + ' <b>' + esc(x.child) + '</b>: ' + money(x.before) + ' → база ' + money(x.base) + ' <span class="muted">(було ' + esc(x.was) + ')</span></li>'; }).join('') + (f.convert > f.sample.length ? '<li class="muted">… ще ' + (f.convert - f.sample.length) + '</li>' : '') + '</ul>';
-    if (f.migrate && f.migrate.length) h += '<div class="alert alert-warn" style="margin-top:8px"><div><b>Перенесення ручних знижок у реєстр (R): ' + f.migrate.length + '</b> — перевірте, чи це справді знижки, а не стара ціна в картці:<ul>'
-      + f.migrate.map(function(x){ return '<li><b>' + esc(x.child) + '</b> · ' + esc(x.ym) + ' · <b>' + money(x.amount) + '</b>' + (x.noCard ? ' <span class="badge br">без картки</span>' : '') + ' <span class="muted">' + esc(x.basis) + '</span></li>'; }).join('') + '</ul></div></div>';
-    if (f.notFound && f.notFound.length) h += '<div class="alert alert-danger" style="margin-top:8px"><div>Немає рядка в Payment: ' + esc(f.notFound.join('; ')) + '</div></div>';
-    if (f.duplicates && f.duplicates.length) h += '<div class="alert alert-info" style="margin-top:8px"><div>Дублі рядків: ' + esc(f.duplicates.join('; ')) + '</div></div>';
-  });
-  if (s.warnings && s.warnings.length) h += '<div class="alert alert-warn" style="margin-top:8px"><div>' + esc(s.warnings.join('; ')) + '</div></div>';
-  var can = s.cells || (s.files || []).some(function(f){ return f.mirrorRows; });
-  h += '</div><div class="modal-ft" style="position:static"><button class="btn btn-secondary" onclick="P.syncPreview=null;renderRegister()">Закрити</button>'
-    + '<button class="btn btn-primary" onclick="applySync()"' + (can ? '' : ' disabled') + '>✅ Записати в Payment</button></div></div>';
-  return h;
+    + '<button class="btn btn-primary" onclick="applyRecalc()"' + (n ? '' : ' disabled') + '>✅ Застосувати (лише клієнти на реєстрі)</button></div></div>';
 }
 async function previewRecalc(){
   toast('Рахую…');
@@ -1535,22 +1517,10 @@ async function previewRecalc(){
   renderRegister();
 }
 async function applyRecalc(){
-  if (!confirm('Застосувати перерахунок за ' + ymLabel(P.ym) + (P.ym >= P.start ? ' (і наступні місяці до грудня) та оновити «Бюджет навч» у Payment?' : '?'))) return;
+  if (!confirm('Застосувати перерахунок за ' + ymLabel(P.ym) + ' (і наступні місяці до грудня) для дітей на реєстрі знижок? Ручні клітинки наявних дітей не змінюються.')) return;
   try { await post({action:'recalcDiscounts', ym:P.ym, loc:P.regLoc, dryRun:false, sync:true, through:P.ym.slice(0, 4) + '-12'}); toast('Застосовано'); }
   catch(e){ alert(e.message); return; }
   P.preview = null; await loadRegister();
-}
-async function previewSync(){
-  if (P.ym < P.start){ alert('Payment переходить на реєстр з ' + ymLabel(P.start)); return; }
-  toast('Перевіряю Payment…');
-  try { P.syncPreview = await get('previewDiscountSync', {ym:P.ym, loc:P.regLoc}); } catch(e){ alert(e.message); return; }
-  renderRegister();
-}
-async function applySync(){
-  if (!confirm('Записати дзеркало знижок і формули «Бюджет навч»' + (P.regLoc ? ' (' + P.regLoc + ')' : ' (усі локації)') + '?')) return;
-  try { await post({action:'syncDiscountsToPayment', ym:P.ym, loc:P.regLoc, dryRun:false}); toast('Записано'); }
-  catch(e){ alert(e.message); return; }
-  P.syncPreview = null; await loadRegister();
 }
 async function addManual(){
   var v = function(id){ return String((document.getElementById(id) || {}).value || '').trim(); };
