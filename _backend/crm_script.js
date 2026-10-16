@@ -7157,7 +7157,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.415', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.416', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -37275,6 +37275,8 @@ function _promoRead(name, header){
 }
 function _promoRowArr(o, header){ return header.map(function(h){ return (o[h] == null) ? '' : o[h]; }); }
 function _promoStamp(){ return Utilities.formatDate(new Date(), 'Europe/Kiev', 'dd.MM.yyyy HH:mm'); }
+// v7.416: Sheets сам перетворює «dd.MM.yyyy HH:mm» на дату → при читанні повертаємо той самий текстовий вигляд.
+function _promoStampOut(v){ return (v instanceof Date && !isNaN(v.getTime())) ? Utilities.formatDate(v, 'Europe/Kiev', 'dd.MM.yyyy HH:mm') : String(v == null ? '' : v); }
 function _promoNewId(prefix){ return prefix + Utilities.formatDate(new Date(), 'Europe/Kiev', 'yyMMddHHmmss') + Math.floor(Math.random() * 900 + 100); }
 
 // Текстові колонки (дати/місяці), щоб Sheets не перетворював '2026-12' на дату.
@@ -37304,8 +37306,8 @@ function _promoList(){
     return {row:r._row, id:String(r['ID']).trim(), name:String(r['Назва'] || ''), type:String(r['Тип'] || ''),
       appliesTo:String(r['На що діє'] || 'навчання'), conditions:String(r['Умови'] || ''), rule:String(r['Правило'] || ''),
       start:_promoISO(r['Початок']), end:_promoISO(r['Кінець']), locs:String(r['Локації'] || 'всі'),
-      createdBy:String(r['Хто створив'] || ''), createdAt:String(r['Створено'] || ''), status:String(r['Статус'] || ''),
-      decidedBy:String(r['Хто підтвердив'] || ''), decidedAt:String(r['Підтверджено'] || ''), comment:String(r['Коментар'] || '')};
+      createdBy:String(r['Хто створив'] || ''), createdAt:_promoStampOut(r['Створено']), status:String(r['Статус'] || ''),
+      decidedBy:String(r['Хто підтвердив'] || ''), decidedAt:_promoStampOut(r['Підтверджено']), comment:String(r['Коментар'] || '')};
   }).filter(function(p){ return p.id; });
   return _PROMO_LIST_MEMO;
 }
@@ -37541,11 +37543,11 @@ function _prepayList(){
   var t = _promoRead(PREPAY_TAB, PREPAY_HEADER);
   return t.rows.map(function(r){
     return {row:r._row, id:String(r['ID'] || '').trim(), cardId:String(r['ID картки'] || '').trim(), name:String(r['ПІБ'] || ''),
-      loc:String(r['Локація'] || ''), date:String(r['Дата платежу'] || ''), ref:String(r['Референс'] || ''), amount:_promoNum(r['Сума']),
+      loc:String(r['Локація'] || ''), date:(r['Дата платежу'] instanceof Date ? Utilities.formatDate(r['Дата платежу'], 'Europe/Kiev', 'dd.MM.yyyy') : String(r['Дата платежу'] || '')), ref:String(r['Референс'] || ''), amount:_promoNum(r['Сума']),
       months:_promoNum(r['Місяців']), pct:_promoNum(r['%']), price:_promoNum(r['Ціна/міс']), payYM:_promoYM(r['Місяць платежу']),
       payCol:String(r['Колонка платежу'] || ''), firstYM:_promoYM(r['Перший місяць']), status:String(r['Статус'] || ''),
       spread:String(r['Рознесено'] || ''), carry:String(r['На наступний рік'] || ''), by:String(r['Хто вирішив'] || ''),
-      at:String(r['Коли'] || ''), note:String(r['Примітка'] || '')};
+      at:_promoStampOut(r['Коли']), note:String(r['Примітка'] || '')};
   }).filter(function(p){ return p.id; });
 }
 // Сума платежу ≈ k × ціна × (1 − p) для k ∈ {3, 6, 12}? Ціна — повна або вже з сімейною знижкою.
@@ -37627,7 +37629,7 @@ function _coverList(){
         out.push({row:o.row, id:String(o['ID'] || '').trim(), cardId:String(o['ID картки'] || '').trim(), name:String(o['ПІБ'] || ''),
           loc:String(o['Локація'] || ''), from:_promoYM(o['Місяць з']), to:_promoYM(o['Місяць по']), amount:_promoNum(o['Сума платежу']),
           promoId:String(o['ID акції'] || ''), prepayId:String(o['ID передоплати'] || ''), status:String(o['Статус'] || ''),
-          by:String(o['Хто'] || ''), at:String(o['Коли'] || ''), note:String(o['Примітка'] || '')});
+          by:String(o['Хто'] || ''), at:_promoStampOut(o['Коли']), note:String(o['Примітка'] || '')});
       });
     }
   } catch(e){ Logger.log('[cover] %s', e && e.message); }
@@ -38029,7 +38031,7 @@ function getDiscounts(params){
       return {id:String(r['ID запису']), cardId:String(r['ID картки']), name:String(r['ПІБ']), loc:String(r['Локація']), ym:_promoYM(r['Місяць']),
         promoId:String(r['ID акції']), order:String(r['Порядок']), base:_promoNum(r['База']), pct:_promoNum(r['%']), amount:_promoNum(r['Сума, грн']),
         basis:String(r['Підстава']), status:String(r['Статус']), source:String(r['Джерело']), by:String(r['Хто створив']),
-        created:String(r['Створено']), updated:String(r['Оновлено'])};
+        created:_promoStampOut(r['Створено']), updated:_promoStampOut(r['Оновлено'])};
     }).filter(function(r){
       if (ym && r.ym !== ym) return false;
       if (from && r.ym < from) return false;
