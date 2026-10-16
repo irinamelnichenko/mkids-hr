@@ -7859,6 +7859,46 @@ async function renderNeedsAttention(){
   main.innerHTML=_naRenderHtml(_naScope(j.items));
   _naNoCardLoad();   // v7.357
   _naPromoLoad();    // v7.414
+  _naClassLoad();    // v7.420
+}
+// v7.420: переведення класів з 1 вересня — у червні–серпні директор школи / офіс підтверджує список. Без підтвердження нічого не міняється.
+async function _naClassLoad(){
+  var mo=new Date().getMonth()+1; if(mo<6||mo>8) return;
+  var main=document.getElementById('main'); if(!main) return;
+  var box=document.getElementById('naClass');
+  if(!box){ box=document.createElement('div'); box.id='naClass'; box.style.cssText='max-width:1000px;margin:0 0 22px'; var pb=document.getElementById('naPromo'); main.insertBefore(box, pb?pb.nextSibling:main.firstChild); }
+  var j; try{ j=await apiGetFull({action:'getClassPromotion', actorId:(S.user&&S.user.id)||''}); }catch(e){ box.innerHTML=''; return; }
+  if(S.view!=='needsAttention') return;
+  var locs=(j.locs||[]).filter(function(l){ return l.items&&l.items.length; });
+  if(!locs.length){ box.innerHTML=''; return; }
+  S._naClass=j;
+  var h='<div style="font-size:16px;font-weight:700;margin-bottom:6px">🎓 Переведення класів з '+esc(j.effective.split('-').reverse().join('.'))+'</div>'
+    +'<p style="color:var(--gray);font-size:13px;margin:0 0 8px;max-width:80ch">Система пропонує 1→2→3→4, 4-й клас — випуск. Позначте, хто лишається на другий рік чи йде зі школи, і натисніть «Підтвердити список». <b>Без підтвердження нічого не зміниться.</b> 1 вересня підтверджені переведення потраплять у картку й Payment.</p>';
+  locs.forEach(function(l,li){
+    var pend=l.items.filter(function(x){ return !x.decision; }).length;
+    h+='<div class="card" style="margin-bottom:12px"><div class="card-hd"><h3>'+esc(l.loc)+'</h3><span style="font-size:12px;color:'+(pend?'#C77A12':'var(--green)')+'">'+(pend?('не підтверджено: '+pend):'усі підтверджено ✅')+'</span></div><div class="tbl-wrap"><table><thead><tr><th>Дитина</th><th>Клас зараз</th><th>Рішення</th><th>Новий клас</th><th>Статус</th></tr></thead><tbody>';
+    l.items.forEach(function(x,i){
+      var dec=x.decision||(x.graduate?'вибуває':(x.unknown?'лишається':'перевести')), to=x.to||(x.graduate?'':x.proposal);
+      var dis=(!l.canDecide||x.applied)?' disabled':'';
+      h+='<tr><td style="font-weight:600">'+esc(x.name)+'</td><td>'+esc(x.from||'—')+'</td>'
+        +'<td><select id="clD_'+li+'_'+i+'" class="flt-sel" style="min-width:150px"'+dis+' onchange="var t=document.getElementById(\'clT_'+li+'_'+i+'\');t.disabled=this.value!==\'перевести\'">'
+        +['перевести','лишається','вибуває'].map(function(o){ return '<option'+(o===dec?' selected':'')+'>'+o+'</option>'; }).join('')+'</select></td>'
+        +'<td><input id="clT_'+li+'_'+i+'" class="flt-sel" style="min-width:90px;width:100px" value="'+esc(to)+'"'+(dis||dec!=='перевести'?' disabled':'')+' placeholder="'+esc(x.proposal)+'"></td>'
+        +'<td style="font-size:12px">'+(x.applied?'✅ застосовано '+esc(x.applied):(x.decision?'✔ '+esc(x.by)+' · '+esc(x.at):'<span style="color:#C77A12">очікує</span>'))+(x.graduate&&!x.decision?' <span class="badge bo">випуск</span>':'')+'</td></tr>';
+    });
+    h+='</tbody></table></div>'+(l.canDecide?'<div class="modal-ft" style="position:static"><button class="btn btn-primary btn-sm" onclick="naClassSave('+li+')">✅ Підтвердити список</button></div>':'')+'</div>';
+  });
+  box.innerHTML=h;
+}
+async function naClassSave(li){
+  var j=S._naClass, l=j&&j.locs.filter(function(x){ return x.items&&x.items.length; })[li]; if(!l) return;
+  var items=l.items.filter(function(x){ return !x.applied; }).map(function(x){ var i=l.items.indexOf(x);
+    return {cardId:x.cardId, decision:document.getElementById('clD_'+li+'_'+i).value, to:document.getElementById('clT_'+li+'_'+i).value}; });
+  var nv=items.filter(function(x){ return x.decision!=='перевести'; }).length;
+  if(!confirm('Підтвердити переведення для «'+l.loc+'»: '+(items.length-nv)+' перевести, '+nv+' лишаються / вибувають? Застосується '+j.effective.split('-').reverse().join('.')+'.')) return;
+  var r; try{ r=await apiPost({action:'saveClassPromotion', loc:l.loc, year:j.year, items:items, actorId:(S.user&&S.user.id)||''}); }catch(e){ r={ok:false,error:e.message}; }
+  if(r&&r.ok===false){ alert('Не вдалось: '+(r.error||(r.errors||[]).join('; '))); return; }
+  showFloatMsg('✅ Список підтверджено','ok'); _naClassLoad();
 }
 // v7.414: «Потребують уваги» → передоплати-здогадки з виписки + пропозиції акцій від директорів.
 async function _naPromoLoad(){

@@ -7157,7 +7157,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.419', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.420', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -7295,6 +7295,7 @@ function doGet(e) {
     else if (action === 'getPromoAttention')           result = getPromoAttention(e.parameter || {});      // v7.414 передоплати-здогадки + пропозиції
     else if (action === 'getPromoCardIndex')           result = getPromoCardIndex();                       // v7.414 картки мережі для вибору рекомендувача/брата
     else if (action === 'getPrepaymentRefund')         result = getPrepaymentRefund(e.parameter || {});    // v7.414 перерахунок передоплати при розірванні (показ)
+    else if (action === 'getClassPromotion')           result = getClassPromotion(e.parameter || {});      // v7.420 переведення класів (список + рішення)
     else if (action === 'previewPilot2027')            result = previewPilot2027(e.parameter || {});       // v7.419 пілот Payment 2027 — пробний прогін
     else if (action === 'previewFeeChange')            result = previewFeeChange(e.parameter || {});       // v7.417 прев'ю зміни суми (нічого не пише)
     else if (action === 'getCoverage')                 result = getCoverage(e.parameter || {});            // v7.415 покриття передоплатою
@@ -7372,6 +7373,8 @@ function doPost(e) {
     else if (body.action === 'cancelDiscount')            result = cancelDiscount(body);        // v7.414 скасування ручного запису (офіс)
     else if (body.action === 'confirmPrepayment')         result = confirmPrepayment(body);     // v7.414 підтвердження передоплати + рознесення факту (офіс, dryRun)
     else if (body.action === 'rejectPrepayment')          result = rejectPrepayment(body);      // v7.414 відхилити здогадку (офіс)
+    else if (body.action === 'saveClassPromotion')        result = saveClassPromotion(body);    // v7.420 підтвердження переведення класів (директор/офіс)
+    else if (body.action === 'applyClassPromotions')      result = applyClassPromotions(body);  // v7.420 застосувати з 1 вересня (офіс; dryRun:true — перегляд)
     else if (body.action === 'pilot2027Payment')          result = pilot2027Payment(body);      // v7.419 пілот Payment 2027 (CFO; нові вкладки, старі не чіпає)
     else if (body.action === 'promoNightlySetup')         result = promoNightlySetup(body);     // v7.414 тригер 08:30 (CFO)
     else if (body.action === 'salaryReconMoveMonth')      result = salaryReconMoveMonth(body);  // v7.374 перенос відомості в інший місяць (CFO, dryRun)
@@ -38324,6 +38327,7 @@ function _promoRecalcRange(from, to, loc, who){
 function promoNightly(){
   var now = _ymNow(), dec = now.slice(0, 4) + '-12', to = _ymAdd(now, 1) > dec ? _ymAdd(now, 1) : dec;
   var r = _promoRecalcRange(now, to, '', 'нічний прогін');
+  try { r.classes = applyClassPromotions({_internal:true}); } catch(_cl){ r.classes = {ok:false, error:String(_cl && _cl.message || _cl)}; }   // v7.420 з 1 вересня
   Logger.log('[promoNightly] %s', JSON.stringify(r));
   return {ok:true, runs:r.runs, sync:r.sync};
 }
@@ -38669,7 +38673,8 @@ function _p27Build(loc){
   if (!old) throw new Error('У файлі ' + cfg.file + ' немає вкладки Payment');
   var W = P27_COL.act + 12;                                 // A … DF
   var hdr = old.getRange(1, 1, 3, Math.min(old.getLastColumn(), 81)).getValues();
-  var kids = _p27Kids(loc), L = _colLetter, rows = [], warn = [];
+  var kids = _p27Kids(loc), L = _colLetter, rows = [], warn = [], promoted = {};
+  try { _classRows().rows.forEach(function(r){ if (r.year === P27_YEAR && r.decision === 'перевести' && r.to) promoted[r.cardId] = r.to; }); } catch(_cr){}   // v7.420
   var Y = function(m){ return P27_YEAR + '-' + ('0' + m).slice(-2); };
   kids.forEach(function(c, i){
     var r = P27_FIRST + i, row = new Array(W); for (var k = 0; k < W; k++) row[k] = '';
@@ -38691,7 +38696,7 @@ function _p27Build(loc){
     row[P27_COL.end] = c.end ? _p27Date(c.end) : '';
     row[P27_COL.status] = '=IF($' + L(P27_COL.end) + r + '="","діє","розірвано")';
     for (var g = 0; g < 12; g++){
-      row[P27_COL.gm + g] = c.group;
+      row[P27_COL.gm + g] = (g >= 8 && promoted[c.id]) ? promoted[c.id] : c.group;   // v7.420: підтверджене переведення — з вересня
       var d1 = 'DATE(' + P27_YEAR + ',' + (g + 1) + ',1)';
       row[P27_COL.act + g] = '=IF(AND(OR($BK' + r + '="",$BK' + r + '<=EOMONTH(' + d1 + ',0)),OR($' + L(P27_COL.end) + r + '="",$' + L(P27_COL.end) + r + '>=' + d1 + ')),1,0)';
     }
@@ -38848,4 +38853,130 @@ function pilot2027Payment(body){
     return {ok:true, loc:loc, file:b.cfg.file, kids:n, groups:b.groups, controlOk:bad.length === 0, controlDiffs:bad,
       kidsByMonth:kidsRow, budgetByMonth:budRow, cf:remaps[0], pl:remaps[1], warnings:b.warnings};
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.420 ПЕРЕВЕДЕННЯ КЛАСІВ З 1 ВЕРЕСНЯ (школи)
+//   Система пропонує 1→2→3→4 (буква/слово класу зберігається: «2D» → «3D», «3 клас» → «4 клас»); 4-й клас → випуск.
+//   Директор (своя локація) або CFO/CEO/COO/HR у червні–серпні бачить список і підтверджує по кожній дитині:
+//   «перевести» (можна змінити клас) / «лишається» (другий рік) / «вибуває». БЕЗ ПІДТВЕРДЖЕННЯ НІЧОГО НЕ МІНЯЄТЬСЯ.
+//   1 вересня (нічний прогін або кнопка) підтверджені «перевести» → «Група» в картці + журнал зміни групи +
+//   Payment_27: CE/CF і група по місяцях з вересня. «Вибуває» — лише нагадування оформити випуск/розірвання.
+// ═══════════════════════════════════════════════════════════════════════════
+var CLASS_TAB    = 'Переведення_класів';
+var CLASS_HEADER = ['Рік','Локація','ID картки','ПІБ','Клас зараз','Пропозиція','Рішення','Новий клас','Хто','Коли','Застосовано'];
+var CLASS_DECISIONS = ['перевести','лишається','вибуває'];
+
+function _classNext(g){
+  var m = /^\s*(\d+)\s*(.*)$/.exec(String(g || ''));
+  if (!m) return {to:'', graduate:false, unknown:true};
+  var n = Number(m[1]); if (n >= 4) return {to:'', graduate:true};
+  var rest = m[2], sep = /^[A-Za-zА-Яа-яІіЇїЄєҐґ]$/.test(rest) ? '' : (rest ? ' ' : '');
+  return {to:(n + 1) + sep + rest, graduate:false};
+}
+function _classYear(params){
+  var y = Number(params && params.year);
+  if (y) return y;
+  var now = new Date(); return now.getMonth() + 1 >= 9 ? now.getFullYear() + 1 : now.getFullYear();
+}
+function _classRows(){
+  var t = _promoRead(CLASS_TAB, CLASS_HEADER);
+  return {sh:t.sh, rows:t.rows.map(function(r){
+    return {row:r._row, year:Number(r['Рік']) || 0, loc:String(r['Локація'] || ''), cardId:String(r['ID картки'] || ''), name:String(r['ПІБ'] || ''),
+      from:String(r['Клас зараз'] || ''), proposal:String(r['Пропозиція'] || ''), decision:String(r['Рішення'] || ''), to:String(r['Новий клас'] || ''),
+      by:String(r['Хто'] || ''), at:_promoStampOut(r['Коли']), applied:_promoStampOut(r['Застосовано'])};
+  })};
+}
+function _classCanDecide(a, loc){ return _promoIsOffice(a) || (_promoIsDirector(a) && _nameFold(a.loc) === _nameFold(loc)); }
+
+// GET getClassPromotion&loc=&year= — список дітей школи з пропозицією і збереженим рішенням (нічого не пише)
+function getClassPromotion(params){
+  try {
+    params = params || {};
+    var a = _promoActor(params), year = _classYear(params);
+    var locs = String(params.loc || '').trim() ? [String(params.loc).trim()] : _promoPayLocs().filter(function(pl){ return _isSchoolLoc(pl.typ, pl.loc); }).map(function(pl){ return pl.loc; });
+    if (a && _promoIsDirector(a)) locs = locs.filter(function(l){ return _nameFold(l) === _nameFold(a.loc); });
+    var saved = {}; _classRows().rows.forEach(function(r){ if (r.year === year) saved[r.cardId] = r; });
+    var out = locs.map(function(loc){
+      var kids = _promoCards().list.filter(function(c){
+        return _nameFold(c.loc) === _nameFold(loc) && ['active','adaptation','future','paused'].indexOf(c.status) !== -1;
+      }).sort(function(x, y){ return x.group.localeCompare(y.group, 'uk') || x.name.localeCompare(y.name, 'uk'); });
+      return {loc:loc, canDecide:_classCanDecide(a, loc), items:kids.map(function(c){
+        var nx = _classNext(c.group), sv = saved[c.id];
+        return {cardId:c.id, name:c.name, from:c.group, proposal:nx.graduate ? 'випуск' : (nx.to || '—'), graduate:nx.graduate, unknown:!!nx.unknown,
+          decision:sv ? sv.decision : '', to:sv ? sv.to : '', by:sv ? sv.by : '', at:sv ? sv.at : '', applied:sv ? sv.applied : ''};
+      })};
+    });
+    return {ok:true, year:year, effective:year + '-09-01', locs:out};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+// POST saveClassPromotion {loc, year, items:[{cardId, decision, to?}]} — директор своєї школи або офіс
+function saveClassPromotion(body){
+  try {
+    body = body || {};
+    var a = _promoActor(body), loc = String(body.loc || '').trim(), year = _classYear(body);
+    if (!loc) return {ok:false, error:'loc обовʼязковий'};
+    if (!_classCanDecide(a, loc)) return {ok:false, code:'PERM_DENIED', error:'Підтверджує директор цієї школи або CFO / офіс'};
+    var cards = _promoCards(), t = _classRows(), byCard = {}, now = _promoStamp(), who = _promoWho(a), add = [], upd = 0, errs = [];
+    t.rows.forEach(function(r){ if (r.year === year) byCard[r.cardId] = r; });
+    (body.items || []).forEach(function(it){
+      var c = cards.byId[String(it.cardId || '')], dec = String(it.decision || '').trim();
+      if (!c || _nameFold(c.loc) !== _nameFold(loc)){ errs.push(String(it.cardId) + ': картку не знайдено в «' + loc + '»'); return; }
+      if (CLASS_DECISIONS.indexOf(dec) === -1){ errs.push(c.name + ': рішення ' + dec + ' — невідоме'); return; }
+      var ex = byCard[c.id];
+      if (ex && ex.applied){ errs.push(c.name + ': уже застосовано ' + ex.applied); return; }
+      var nx = _classNext(c.group);
+      var to = dec === 'перевести' ? (String(it.to || '').trim() || nx.to) : (dec === 'лишається' ? c.group : '');
+      if (dec === 'перевести' && !to){ errs.push(c.name + ': для «перевести» потрібен новий клас'); return; }
+      var row = [year, loc, c.id, c.name, c.group, nx.graduate ? 'випуск' : nx.to, dec, to, who, now, ''];
+      if (ex){ t.sh.getRange(ex.row, 1, 1, CLASS_HEADER.length).setValues([row]); upd++; }
+      else add.push(row);
+    });
+    if (add.length){ _promoTextCols(t.sh, CLASS_HEADER, ['ID картки','Клас зараз','Пропозиція','Новий клас']); t.sh.getRange(t.sh.getLastRow() + 1, 1, add.length, CLASS_HEADER.length).setValues(add); }
+    return {ok:errs.length === 0, saved:add.length + upd, errors:errs};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+// Застосування з 1 вересня: лише підтверджені «перевести». Викликається з promoNightly (і POST applyClassPromotions, офіс).
+function applyClassPromotions(body){
+  try {
+    body = body || {};
+    if (!body._internal && !_promoIsOffice(_promoActor(body))) return PROMO_DENIED;
+    var today = Utilities.formatDate(new Date(), 'Europe/Kiev', 'yyyy-MM-dd'), dryRun = (body.dryRun === true);
+    var t = _classRows(), due = t.rows.filter(function(r){ return r.decision === 'перевести' && !r.applied && r.to && today >= r.year + '-09-01'; });
+    if (!due.length) return {ok:true, applied:0};
+    var sh = getCRMSpreadsheet().getSheetByName(SHEET_CLIENTS), v = sh.getDataRange().getValues(), hd = v[0].map(String);
+    var cId = hd.indexOf('ID'), cG = hd.indexOf('Група'), done = [], stamp = _promoStamp();
+    due.forEach(function(r){
+      for (var i = 1; i < v.length; i++){
+        if (String(v[i][cId]).trim() !== r.cardId) continue;
+        var oldG = String(v[i][cG] || '');
+        if (!dryRun){
+          sh.getRange(i + 1, cG + 1).setValue(r.to);
+          try { logGroupChange(r.cardId, r.name, r.loc, oldG, r.to, 'переведення класів'); } catch(_l){}
+          try { _p27SetGroupFrom(r.loc, r.cardId, r.year + '-09', r.to); } catch(_p){}
+          t.sh.getRange(r.row, CLASS_HEADER.indexOf('Застосовано') + 1).setValue(stamp);
+        }
+        done.push({name:r.name, from:oldG, to:r.to});
+        break;
+      }
+    });
+    if (!dryRun){ try { _cacheBump('clients'); } catch(_c){} }
+    return {ok:true, dryRun:dryRun, applied:done.length, items:done};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+// Payment_27 (пілот): CE = новий клас, CF = 1-ше число місяця, група по місяцях — з цього місяця до грудня.
+function _p27SetGroupFrom(loc, cardId, fromYm, group){
+  var cfg = PILOT_2027[loc]; if (!cfg) return;
+  var sh = SpreadsheetApp.openById(cfg.fileId).getSheetByName(P27_TAB); if (!sh || Number(fromYm.slice(0, 4)) !== P27_YEAR) return;
+  var ids = sh.getRange(P27_FIRST, P27_COL.id + 1, Math.max(1, sh.getLastRow() - P27_FIRST + 1), 1).getValues();
+  for (var i = 0; i < ids.length; i++){
+    if (String(ids[i][0]).trim() !== cardId) continue;
+    var r = P27_FIRST + i, m0 = Number(fromYm.slice(5, 7));
+    sh.getRange(r, P27_COL.group + 1, 1, 2).setValues([[group, _p27Date(fromYm + '-01')]]);
+    var arr = []; for (var m = m0; m <= 12; m++) arr.push(group);
+    sh.getRange(r, P27_COL.gm + m0, 1, arr.length).setValues([arr]);
+    return;
+  }
 }
