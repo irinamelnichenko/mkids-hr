@@ -12,65 +12,64 @@
 <meta name="apple-mobile-web-app-title" content="m.kids System">
 <link rel="manifest" href="manifest.json">
 <style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --green:#27ae60;--green2:#2ecc71;--blue:#2980b9;--blue2:#3498db;
+  --red:#c0392b;--red2:#e74c3c;--orange:#e67e22;--yellow:#f1c40f;
+  --dark:#1a2332;--dark2:#2c3e50;--gray:#7f8c8d;--gray2:#bdc3c7;
+  --bg:#f0f4f8;--white:#fff;--sidebar:#1e2d3d;
+  --sw:250px;--hh:60px;--r:10px;--sh:0 2px 12px rgba(0,0,0,.08)
+}
+body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--dark2);font-size:14px;line-height:1.5}
+.hidden{display:none!important}
+button{font-family:inherit;cursor:pointer}
+input,select,textarea{font-family:inherit}
 
-  /* v7.240: спільний шелл (сайдбар/шапка) — змінні під ті самі імена, що в решті сторінок */
-  :root{--sw:230px;--sidebar:#1e293b;--green:#16a34a;--green2:#4ade80;--gray2:#e2e8f0;--dark2:#1e293b}
-  :root{--b:#2563eb;--g:#16a34a;--r:#dc2626;--o:#ea580c;--mut:#94a3b8;--bg:#f1f5f9;--line:#e2e8f0;--dark:#1e293b;--gray:#64748b}
-  *{box-sizing:border-box}
-  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--dark);font-size:14px}
-  .top{position:sticky;top:0;z-index:30;background:#fff;border-bottom:1px solid var(--line);padding:10px 14px;display:flex;flex-wrap:wrap;gap:10px;align-items:center}
-  .top h1{font-size:18px;margin:0;font-weight:800}
-  .sp{flex:1}
-  select,input,button{font:inherit}
-  .btn{border:0;border-radius:9px;padding:8px 12px;font-weight:700;cursor:pointer;color:#fff;background:var(--b)}
-  .btn.g{background:var(--g)} .btn.sec{background:#fff;color:var(--dark);border:1px solid var(--line)} .btn:disabled{opacity:.5;cursor:default}
-  .flt{padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:#fff}
-  .mnav{display:flex;align-items:center;gap:6px}
-  .mnav b{min-width:130px;text-align:center}
-  .wrap{padding:12px}
-  .card{background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-bottom:14px}
-  .card .hd{padding:10px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-  .card .hd h3{margin:0;font-size:15px}
-  .muted{color:var(--gray);font-size:12px}
-  .tblwrap{overflow:auto;max-height:72vh}
-  table.grid{border-collapse:separate;border-spacing:0;font-size:12px}
-  table.grid th,table.grid td{border-right:1px solid var(--line);border-bottom:1px solid var(--line);padding:0}
-  table.grid thead th{position:sticky;top:0;z-index:6;background:#f8fafc;text-align:center;padding:4px 3px;font-weight:700;white-space:nowrap}
-  table.grid thead th.we{background:#eef1f5;color:var(--mut)}
-  table.grid td.kid,table.grid th.kidh{position:sticky;left:0;z-index:5;background:#fff;text-align:left;padding:4px 8px;min-width:180px;max-width:180px;border-right:2px solid var(--line)}
-  table.grid thead th.kidh{z-index:8;background:#f8fafc}
-  table.grid td.kid small{color:var(--gray);display:block;font-size:10px}
-  td.tot,th.toth{position:sticky;right:0;z-index:5;background:#fff;text-align:right;padding:4px 8px;min-width:80px;font-weight:800;border-left:2px solid var(--line)}
-  thead th.toth{z-index:8;background:#f8fafc}
-  td.cell{padding:2px;text-align:center;min-width:74px}
-  td.cell.we{background:#f6f8fa}
-  .tg{display:inline-block;min-width:20px;padding:2px 4px;margin:1px;border:1px solid var(--line);border-radius:6px;font-size:10px;font-weight:800;color:var(--gray);cursor:pointer;user-select:none;line-height:1.2}
-  .tg.on{color:#fff;border-color:transparent}
-  .we .tg{opacity:.3;pointer-events:none}
-  tbody tr:nth-child(even) td.kid{background:#fbfcfe}
-  .prices{padding:12px 14px;display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end}
-  .prices .pit{display:flex;flex-direction:column;gap:3px}
-  .prices label{font-size:12px;color:var(--gray)}
-  .prices input{width:110px;padding:7px 9px;border:1px solid var(--line);border-radius:8px}
-  .foot{padding:9px 14px;font-weight:800;border-top:1px solid var(--line);display:flex;gap:20px;flex-wrap:wrap}
-  .modal{position:fixed;inset:0;background:rgba(15,23,42,.45);display:none;align-items:center;justify-content:center;z-index:100;padding:16px}
-  .modal.show{display:flex}
-  .mcard{background:#fff;border-radius:14px;max-width:560px;width:100%;max-height:85vh;overflow:auto;padding:18px}
-  .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#111827;color:#fff;padding:10px 16px;border-radius:10px;z-index:200;opacity:0;transition:.2s;pointer-events:none;font-weight:600}
-  .toast.show{opacity:1}
-  .empty{padding:40px;text-align:center;color:var(--gray)}
-  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--dark)}
-  .legend b{display:inline-block;padding:1px 6px;border-radius:6px;margin-right:3px}
-  table.grid td.kid{white-space:nowrap}
-  table.grid td.kid small{color:var(--gray);font-size:10px}
-  table.grid td.cell{padding:2px 3px;text-align:center;white-space:nowrap}
-  th.dcol small{color:var(--mut);font-weight:600}
-  .tgb{display:flex;flex-direction:column;align-items:center;gap:2px}
-  .tgr{display:flex;justify-content:center;gap:3px}
-  .tg{display:inline-block;font-size:19px;line-height:28px;height:28px;min-width:28px;text-align:center;vertical-align:middle;padding:0 1px;margin:1px;border:1px solid transparent;border-radius:7px;cursor:pointer;opacity:.28;filter:grayscale(1)}
-  .tg:hover{opacity:.6}
-  .tg.on{opacity:1;filter:none}
-/* ── SIDEBAR (shared shell з salary.html) ───── */
+/* SETUP / LOGIN */
+.auth-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(135deg,#1e3c72 0%,#2a5298 60%,#27ae60 100%);
+  position:relative;overflow:hidden;flex-direction:column;gap:16px}
+.auth-screen::before{content:'';position:absolute;width:700px;height:700px;
+  background:rgba(255,255,255,.03);border-radius:50%;top:-250px;right:-150px}
+.auth-card{background:#fff;border-radius:20px;padding:48px;width:460px;
+  box-shadow:0 24px 64px rgba(0,0,0,.35);position:relative;z-index:1}
+.auth-logo{text-align:center;margin-bottom:28px}
+.auth-logo .em{font-size:52px;display:block;margin-bottom:10px}
+.auth-logo h1{font-size:23px;font-weight:800;color:var(--dark)}
+.auth-logo p{color:var(--gray);font-size:13px;margin-top:4px}
+.role-tabs{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:24px}
+.rtab{padding:13px;border:2px solid var(--gray2);border-radius:var(--r);background:transparent;
+  font-size:14px;font-weight:600;color:var(--gray);transition:all .2s}
+.rtab:hover{border-color:var(--green);color:var(--green)}
+.rtab.active{border-color:var(--green);background:var(--green);color:#fff}
+.fg{margin-bottom:16px}
+.fg label{display:block;font-size:11px;font-weight:700;color:var(--gray);
+  text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px}
+.fg input,.fg select,.fg textarea{width:100%;padding:12px 14px;
+  border:2px solid var(--gray2);border-radius:var(--r);font-size:14px;
+  transition:border-color .2s;background:#fff;color:var(--dark2);outline:none}
+.fg input:focus,.fg select:focus,.fg textarea:focus{border-color:var(--green)}
+.auth-error{background:#fdf2f2;border:1px solid #fca5a5;color:var(--red);
+  padding:10px 14px;border-radius:8px;font-size:13px;margin-bottom:16px}
+.auth-hint{text-align:center;margin-top:12px;font-size:12px;color:#aaa}
+
+/* BUTTONS */
+.btn{padding:10px 18px;border:none;border-radius:var(--r);cursor:pointer;
+  font-size:13px;font-weight:600;transition:all .2s;display:inline-flex;
+  align-items:center;gap:6px;font-family:inherit}
+.btn-primary{background:var(--green);color:#fff;justify-content:center}
+.btn-primary:hover{background:#229954;transform:translateY(-1px)}
+.btn-primary.full{width:100%;font-size:15px;padding:14px}
+.btn-secondary{background:var(--bg);color:var(--dark2);border:1px solid var(--gray2)}
+.btn-secondary:hover{background:#e0e7ef}
+.btn-danger{background:var(--red2);color:#fff}
+.btn-danger:hover{background:var(--red)}
+.btn-sm{padding:6px 12px;font-size:12px}
+.btn-xs{padding:4px 8px;font-size:11px;border-radius:6px}
+.btn-icon{padding:7px;border-radius:8px;background:transparent;border:1px solid var(--gray2);font-size:16px}
+.btn-icon:hover{background:var(--bg)}
+
+/* LAYOUT */
 #app{display:flex;min-height:100vh}
 .sidebar{width:var(--sw);background:var(--sidebar);display:flex;flex-direction:column;
   position:fixed;top:0;left:0;height:100vh;z-index:100;overflow-y:auto}
@@ -96,49 +95,337 @@
   border:none;justify-content:center;font-size:13px}
 .sb-footer .btn:hover{background:rgba(255,255,255,.15);color:#fff}
 .main{margin-left:var(--sw);flex:1;display:flex;flex-direction:column;min-height:100vh}
-.menu-toggle{display:none;padding:8px 10px;background:#fff;
-  border:1.5px solid var(--gray2);border-radius:8px;font-size:18px;color:var(--dark2);cursor:pointer}
-.menu-toggle:hover{background:#f4f7fa}
+.topbar{height:var(--hh);background:#fff;border-bottom:1px solid #e4e9ef;
+  display:flex;align-items:center;justify-content:space-between;padding:0 28px;
+  position:sticky;top:0;z-index:50}
+.topbar h2{font-size:18px;font-weight:800;color:var(--dark)}
+.topbar-r{display:flex;gap:10px;align-items:center}
+#syncStatus{font-size:12px;color:var(--gray)}
+.content{padding:24px 28px;flex:1}
+
+/* CARDS / TABLES / BADGES / etc */
+.card{background:#fff;border-radius:var(--r);box-shadow:var(--sh);overflow:hidden}
+.card-hd{padding:16px 20px;border-bottom:1px solid #f0f4f8;display:flex;align-items:center;justify-content:space-between}
+.card-hd h3{font-size:14px;font-weight:700;color:var(--dark)}
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:16px;margin-bottom:22px}
+.stat-card{background:#fff;border-radius:var(--r);padding:18px;box-shadow:var(--sh);display:flex;align-items:center;gap:14px;transition:transform .2s}
+.stat-card:hover{transform:translateY(-2px)}
+.stat-icon{width:50px;height:50px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0}
+.si-g{background:#e8f8f0}.si-b{background:#e8f2fb}.si-o{background:#fef4e9}.si-r{background:#fdf0f0}.si-p{background:#f0eafb}
+.stat-val{font-size:28px;font-weight:900;line-height:1;color:var(--dark);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
+.stat-lbl{font-size:11px;color:var(--gray);margin-top:3px}
+.tbl-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+table{width:100%;border-collapse:collapse}
+thead th{padding:10px 14px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--gray);background:#f8fafc;border-bottom:2px solid #e8ecf0}
+tbody td{padding:11px 14px;border-bottom:1px solid #f0f4f8;font-size:13px}
+tbody tr:hover{background:#f8faff}
+tbody tr:last-child td{border-bottom:none}
+tbody tr.clickable{cursor:pointer}
+tbody tr.clickable:hover td{background:#f0f7ff}
+.badge{display:inline-flex;align-items:center;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:600}
+.bg{background:#e8f8f0;color:#1e8449}.bb{background:#e8f2fb;color:#2471a3}
+.bo{background:#fef4e9;color:#e67e22}.br{background:#fdf0f0;color:#c0392b}
+.bgr{background:#f0f4f8;color:#7f8c8d}.by{background:#fefce8;color:#856404}
+.filters{background:#fff;border-radius:var(--r);padding:12px 16px;box-shadow:var(--sh);
+  display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;align-items:center}
+.search-inp{flex:1;min-width:200px;padding:8px 13px;border:1.5px solid var(--gray2);
+  border-radius:8px;font-size:14px;outline:none;font-family:inherit}
+.search-inp:focus{border-color:var(--green)}
+.flt-sel{padding:8px 12px;border:1.5px solid var(--gray2);border-radius:8px;
+  font-size:13px;background:#fff;cursor:pointer;outline:none;min-width:130px;font-family:inherit}
+.flt-sel:focus{border-color:var(--green)}
+.tabs{display:flex;border-bottom:2px solid #e8ecf0;padding:0 20px;background:#fff;overflow-x:auto}
+.tab{padding:13px 16px;cursor:pointer;font-size:13px;font-weight:600;color:var(--gray);
+  border-bottom:2px solid transparent;margin-bottom:-2px;white-space:nowrap;transition:all .2s}
+.tab:hover{color:var(--dark2)}
+.tab.active{color:var(--green);border-bottom-color:var(--green)}
+.tab-pane{display:none;padding:20px}
+.tab-pane.active{display:block}
+.info-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:14px}
+.ii label{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--gray);font-weight:700;display:block;margin-bottom:3px}
+.ii .iv{font-size:14px;font-weight:600;color:var(--dark2)}
+.modal-ov{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;
+  display:flex;align-items:center;justify-content:center;padding:20px}
+.modal{background:#fff;border-radius:16px;width:100%;max-width:640px;
+  box-shadow:0 20px 60px rgba(0,0,0,.3);max-height:90vh;overflow-y:auto}
+.modal-lg{max-width:780px}
+.modal-hd{padding:20px 24px 14px;border-bottom:1px solid #f0f4f8;
+  display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;background:#fff;z-index:2}
+.modal-hd h3{font-size:16px;font-weight:800}
+.modal-close{background:none;border:none;font-size:18px;cursor:pointer;color:var(--gray);
+  width:30px;height:30px;display:flex;align-items:center;justify-content:center;border-radius:6px}
+.modal-close:hover{background:#f0f4f8}
+.modal-bd{padding:18px 24px}
+.modal-ft{padding:14px 24px;border-top:1px solid #f0f4f8;display:flex;gap:10px;justify-content:flex-end;
+  position:sticky;bottom:0;background:#fff}
+.alert{padding:10px 14px;border-radius:8px;font-size:13px;margin-bottom:12px;display:flex;gap:8px;align-items:flex-start}
+.alert-warn{background:#fef9e7;border:1px solid #f9ca24;color:#856404}
+.alert-danger{background:#fdf2f2;border:1px solid #fca5a5;color:#721c24}
+.alert-info{background:#e8f4fd;border:1px solid #90cdf4;color:#1e5579}
+.alert-ok{background:#e8f8f0;border:1px solid #9ae6b4;color:#1e5c3a}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+.loading{display:flex;align-items:center;justify-content:center;padding:60px;flex-direction:column;gap:14px;color:var(--gray)}
+.spinner{width:34px;height:34px;border:3px solid #e8ecf0;border-top-color:var(--green);border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.empty{text-align:center;padding:40px 20px;color:var(--gray)}
+.empty .ei{font-size:44px;display:block;margin-bottom:10px}
+.empty h4{font-size:15px;font-weight:700;color:var(--dark2);margin-bottom:4px}
+.empty p{font-size:13px}
+.section-hd{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;
+  color:var(--gray);margin:18px 0 8px;padding-bottom:6px;border-bottom:1px solid #f0f4f8}
+.loc-section{margin-bottom:32px}
+.loc-title{font-size:16px;font-weight:800;color:var(--dark);margin-bottom:14px;
+  padding-bottom:8px;border-bottom:2px solid var(--green);display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.child-link{color:var(--blue2);cursor:pointer;font-weight:600}
+.child-link:hover{color:var(--blue);text-decoration:underline}
+.call-btn{background:#e8f8f0;color:var(--green);border:1px solid #9ae6b4;
+  padding:4px 10px;border-radius:20px;font-size:12px;font-weight:600;cursor:pointer;
+  display:inline-flex;align-items:center;gap:4px;white-space:nowrap;text-decoration:none}
+.call-btn:hover{background:var(--green);color:#fff}
+.vac-box{background:#f8fafc;border-radius:8px;padding:12px;display:flex;align-items:center;gap:12px}
+.vac-num{font-size:28px;font-weight:900;color:var(--dark)}
+.vac-lbl{font-size:12px;color:var(--gray)}
+.pay-status-big{font-size:18px;font-weight:700;display:flex;align-items:center;gap:8px}
+.absence-row,.fee-row{display:flex;align-items:center;gap:10px;padding:8px;background:#f8fafc;border-radius:8px;margin-bottom:6px;font-size:13px}
+.ar-type{font-weight:600;min-width:90px}
+.ar-dates{color:var(--gray);flex:1}
+.ar-days{font-weight:700;color:var(--dark)}
+.fr-date{color:var(--gray);min-width:90px}
+.fr-amt{font-weight:700;color:var(--dark);min-width:80px}
+.fr-note{color:var(--gray);flex:1}
+.del-btn{margin-left:auto;background:none;border:none;cursor:pointer;color:var(--gray);font-size:16px;padding:2px 6px}
+.del-btn:hover{color:var(--red2)}
+
+/* ABSENCE MODULE */
+.abs-info-block{background:#e8f2fb;border:1px solid #90cdf4;border-radius:10px;padding:12px 16px;margin-bottom:12px;font-size:13px}
+.abs-counters{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px}
+.abs-cnt{border:2px solid #e8ecf0;border-radius:10px;padding:14px 16px}
+.abs-cnt.disabled{background:#f8fafc;opacity:.6}
+.abs-cnt-lbl{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--gray);margin-bottom:4px}
+.abs-cnt-val{font-size:22px;font-weight:900;color:var(--dark);line-height:1.2}
+.abs-cnt-sub{font-size:12px;color:var(--gray);margin-top:2px}
+.abs-pbar{height:5px;background:#e8ecf0;border-radius:3px;margin-top:8px;overflow:hidden}
+.abs-pbar-fill{height:100%;border-radius:3px;background:var(--green);transition:width .3s}
+.abs-pbar-fill.over{background:var(--red2)}
+.abs-entry{background:#f8fafc;border:1px solid #e8ecf0;border-radius:10px;padding:12px 14px;margin-bottom:8px}
+.abs-entry-hd{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:5px}
+.abs-entry-type{font-weight:700;font-size:13px}
+.abs-entry-info{font-size:13px;color:var(--gray);margin-bottom:3px}
+.abs-entry-calc{font-size:13px;color:var(--dark2);margin-bottom:3px}
+.abs-entry-reject{font-size:12px;color:var(--red2);margin-top:4px;padding:4px 8px;background:#fdf0f0;border-radius:6px}
+.ab-st{display:inline-flex;align-items:center;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700;white-space:nowrap}
+.ab-pending{background:#fef9e7;color:#856404}
+.ab-processing{background:#e8f2fb;color:#2471a3}
+.ab-done{background:#e8f8f0;color:#1e8449}
+.ab-rejected{background:#fdf0f0;color:#c0392b}
+.ab-legacy{background:#f0f4f8;color:#7f8c8d}
+.ab-cancelled{background:#e5e7eb!important;color:#6b7280}
+.abs-entry-cancelled{opacity:0.5}
+.abs-add-form{background:#f0f7ff;border:1px solid #90cdf4;border-radius:10px;padding:14px;margin:10px 0}
+.abs-preview-block{background:#fff3cd;border:1px solid #f0c040;border-radius:8px;padding:10px 14px;font-size:13px;margin-top:10px;line-height:1.7}
+.abs-preview-block.warn{background:#fdf2f2;border-color:#fca5a5;color:#721c24}
+.req-hdr-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px}
+.req-stat{background:#fff;border-radius:var(--r);padding:14px 16px;box-shadow:var(--sh);text-align:center}
+.req-stat-n{font-size:28px;font-weight:900;color:var(--dark);line-height:1}
+.req-stat-l{font-size:12px;color:var(--gray);margin-top:3px}
+
+/* ATTENDANCE MODULE */
+.att-wrap{overflow-x:auto}
+.att-table{border-collapse:collapse;width:100%;font-size:13px;min-width:480px}
+.att-table th{padding:8px 10px;background:#f8fafc;border:1px solid #e8ecf0;font-weight:700;font-size:11px;text-transform:uppercase;color:var(--gray);white-space:nowrap;position:sticky;top:0;z-index:10}
+.att-table th.nc{left:0;z-index:11;background:#f8fafc;min-width:150px}
+.att-table td{padding:6px 8px;border:1px solid #e8ecf0;vertical-align:middle;text-align:center}
+.att-table td.nc{left:0;position:sticky;background:#fff;font-weight:600;text-align:left;z-index:5;padding-left:10px}
+.att-table tr:hover td.nc{background:#f8faff}
+.att-table tr.grp-row td{background:#f0f4f8;font-weight:700;font-size:12px;color:var(--dark);text-align:left;padding:6px 10px}
+.att-btn{background:none;border:2px solid #e8ecf0;border-radius:8px;width:36px;height:36px;font-size:17px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:all .15s;user-select:none}
+.att-btn:hover{background:#f0f4f8}
+.att-s-present{background:#e8f8f0!important;border-color:#9ae6b4!important}
+.att-s-sick{background:#fef9e7!important;border-color:#f9ca24!important}
+.att-s-vacation{background:#e8f2fb!important;border-color:#90cdf4!important}
+.att-s-absent{background:#fdf0f0!important;border-color:#fca5a5!important}
+.att-mode-bar{display:flex;gap:8px;margin-bottom:14px;align-items:center;flex-wrap:wrap}
+.att-mode-btn{padding:7px 14px;border:2px solid #e8ecf0;border-radius:8px;background:#fff;font-size:13px;font-weight:600;cursor:pointer;color:var(--gray);transition:all .2s}
+.att-mode-btn.active{border-color:var(--green);background:var(--green);color:#fff}
+details.card>summary::-webkit-details-marker{display:none}details.card[open]>summary{border-bottom:1px solid var(--line,#e8ecf0)}
+.att-chip{padding:5px 12px;border:1.5px solid #e8ecf0;border-radius:20px;background:#fff;font-size:12px;font-weight:600;cursor:pointer;color:var(--gray);transition:all .2s}
+.att-chip-active{border-color:var(--blue2);background:var(--blue2);color:#fff}
+.att-loc-row td{background:#eef4ff;color:var(--dark);font-weight:700;font-size:12px;padding:6px 10px;border-top:2px solid var(--blue2)}
+.att-stats{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;padding:10px 14px;background:#fff;border-radius:10px;box-shadow:var(--sh);align-items:center}
+.att-stat{text-align:center;min-width:64px}
+.att-stat-n{font-size:19px;font-weight:800;color:var(--dark);line-height:1}
+.att-stat-l{font-size:11px;color:var(--gray);margin-top:1px}
+.att-day-row{display:flex;align-items:center;gap:8px;padding:9px 10px;border-bottom:1px solid #f0f4f8;flex-wrap:wrap}
+.att-day-row:last-child{border-bottom:none}
+.att-day-name{flex:1;min-width:130px;font-weight:600;font-size:13px;cursor:pointer;color:var(--blue2)}
+.att-day-btns{display:flex;gap:5px}
+.att-day-btn{border:2px solid #e8ecf0;border-radius:8px;padding:5px 9px;font-size:16px;cursor:pointer;background:#fff;transition:all .15s;line-height:1}
+.att-streak{display:inline-block;font-size:10px;background:#fef4e9;color:#e67e22;font-weight:700;border-radius:4px;padding:1px 5px;margin-left:4px;vertical-align:middle}
+/* Health tab */
+.health-record{padding:10px 14px;background:#f8fafc;border:1px solid #e8ecf0;border-radius:9px;margin-bottom:8px}
+.health-record-hd{display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap}
+.hrt{display:inline-flex;align-items:center;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700}
+.hrt-sickness{background:#fef9e7;color:#856404}
+.hrt-injury{background:#fdf0f0;color:#c0392b}
+.hrt-temp{background:#e8f2fb;color:#2471a3}
+.hrt-note{background:#f0f4f8;color:#7f8c8d}
+/* Sick suggest banner */
+.sick-suggest{background:#fef4e9;border:2px solid #f9ca24;border-radius:10px;padding:12px 16px;margin-bottom:12px}
+/* Login 3-tab */
+.role-tabs-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:24px}
+
+/* PAY HISTORY TABLE */
+.pay-hist-table{width:100%;border-collapse:collapse;font-size:13px}
+.pay-hist-table th{padding:8px 12px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--gray);background:#f8fafc;border-bottom:2px solid #e8ecf0}
+.pay-hist-table td{padding:9px 12px;border-bottom:1px solid #f0f4f8}
+.pay-hist-table tr:last-child td{border-bottom:none}
+.pay-hist-table tr:hover td{background:#f8faff}
+.pay-hist-month{font-weight:700;color:var(--dark2)}
+.pay-hist-paid{color:var(--green);font-weight:600}
+.pay-hist-debt{color:var(--red2);font-weight:600}
+.pay-hist-over{color:var(--orange);font-weight:600}
+
+/* MONTH STRIP */
+.month-strip{display:flex;align-items:center;gap:6px;background:#fff;border-radius:var(--r);
+  padding:10px 14px;box-shadow:var(--sh);margin-bottom:14px;overflow-x:auto;flex-wrap:nowrap}
+.month-strip::-webkit-scrollbar{height:3px}
+.ms-btn{padding:6px 11px;border:1.5px solid var(--gray2);border-radius:20px;
+  background:transparent;font-size:12px;font-weight:600;color:var(--gray);
+  cursor:pointer;white-space:nowrap;transition:all .15s;font-family:inherit}
+.ms-btn:hover{border-color:var(--blue2);color:var(--blue2)}
+.ms-btn.ms-year{padding:6px 14px;border-color:var(--dark2);color:var(--dark2)}
+.ms-btn.ms-year:hover,.ms-btn.ms-year.ms-active{background:var(--dark2);color:#fff;border-color:var(--dark2)}
+.ms-btn.ms-curr{border-color:var(--blue2);color:var(--blue2);background:#e8f2fb}
+.ms-btn.ms-active{background:var(--green);color:#fff;border-color:var(--green)}
+.ms-btn.ms-curr.ms-active{background:var(--green);color:#fff;border-color:var(--green)}
+
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#dde3ea;border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:#b8c1cc}
+
+
+/* ANALYTICS TYPE CHIPS */
+.ana-type-bar{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.ana-type-chip{padding:5px 12px;border:1.5px solid var(--gray2);border-radius:20px;
+  background:#fff;font-size:12px;font-weight:600;color:var(--gray);cursor:pointer;
+  transition:all .15s;display:inline-flex;align-items:center;gap:5px;font-family:inherit;white-space:nowrap}
+.ana-type-chip:hover{border-color:var(--blue2);color:var(--blue2)}
+.ana-type-chip.active{background:var(--blue2);border-color:var(--blue2);color:#fff}
+.ana-type-cnt{font-size:10px;opacity:.75}
+
+/* ANALYTICS EXTRAS */
+.stat-card.clickable-card{cursor:pointer;border:2px solid transparent;transition:transform .2s,border-color .2s,box-shadow .2s}
+.stat-card.clickable-card:hover{transform:translateY(-3px);border-color:var(--green2);box-shadow:0 6px 20px rgba(39,174,96,.15)}
+.stat-card.clickable-card.active-card{border-color:var(--green);box-shadow:0 4px 16px rgba(39,174,96,.2)}
+.detail-panel{background:#fff;border-radius:var(--r);padding:18px 20px;box-shadow:var(--sh);margin-bottom:16px;border-left:4px solid var(--green)}
+.detail-panel h4{font-size:13px;font-weight:700;color:var(--dark);margin-bottom:12px}
+.detail-scroll{max-height:300px;overflow-y:auto;border:1px solid #f0f4f8;border-radius:8px}
+.detail-row{display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid #f8fafc;font-size:13px}
+.detail-row:last-child{border-bottom:none}
+.detail-row:hover{background:#f8faff}
+.compare-block{background:#fff;border-radius:var(--r);padding:18px 20px;box-shadow:var(--sh);margin-bottom:16px}
+.compare-block h4{font-size:13px;font-weight:700;color:var(--dark);margin-bottom:14px}
+.cmp-row{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #f8fafc;font-size:13px}
+.cmp-row:last-child{border-bottom:none}
+.cmp-label{width:180px;color:var(--gray);flex-shrink:0;font-size:12px}
+.cmp-vals{display:flex;flex-wrap:wrap;gap:12px;flex:1}
+.cmp-val{font-weight:700;color:var(--dark)}
+.cmp-val.highlight{color:var(--green);background:#e8f8f0;padding:2px 8px;border-radius:12px}
+.cmp-val.warn{color:var(--red2);background:#fdf0f0;padding:2px 8px;border-radius:12px}
+.heat-wrap{overflow-x:auto;margin-bottom:22px}
+.heat-table{border-collapse:collapse;font-size:11px;min-width:700px}
+.heat-table th{padding:5px 8px;background:#f8fafc;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--gray);border:1px solid #e8ecf0;white-space:nowrap}
+.heat-table th.loc-col{text-align:left;min-width:130px;position:sticky;left:0;background:#f8fafc;z-index:1}
+.heat-table td{padding:6px 8px;border:1px solid #e8ecf0;text-align:center;font-weight:600;cursor:default;white-space:nowrap}
+.heat-table td.loc-name{text-align:left;font-weight:700;color:var(--dark2);position:sticky;left:0;background:#fff;z-index:1}
+.hc-g{background:#d4edda;color:#155724}.hc-y{background:#fff3cd;color:#856404}
+.hc-o{background:#ffe0b2;color:#e65100}.hc-r{background:#f8d7da;color:#721c24}
+.hc-gray{background:#f8fafc;color:#bdc3c7}
+.fin-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:16px}
+.fin-card{background:#fff;border-radius:var(--r);padding:14px 16px;box-shadow:var(--sh)}
+.fin-card h4{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--gray);margin-bottom:10px}
+.fin-item{display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:1px solid #f8fafc;font-size:12px}
+.fin-item:last-child{border-bottom:none}
+.fin-item .fi-val{font-weight:700;color:var(--dark)}
+.fi-good{color:var(--green)!important}.fi-bad{color:var(--red2)!important}
+.discipline-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:16px}
+.disc-card{border-radius:var(--r);padding:16px;text-align:center}
+.disc-card.always{background:#e8f8f0;border:1px solid #9ae6b4}
+.disc-card.sometimes{background:#fef9e7;border:1px solid #f9ca24}
+.disc-card.chronic{background:#fdf2f2;border:1px solid #fca5a5}
+.disc-num{font-size:36px;font-weight:900;line-height:1}
+.disc-lbl{font-size:11px;font-weight:700;margin-top:4px;text-transform:uppercase;letter-spacing:.5px}
+
+/* ANALYTICS CHARTS */
+.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:22px}
+.chart-card{background:#fff;border-radius:var(--r);padding:20px;box-shadow:var(--sh)}
+.chart-card h3{font-size:13px;font-weight:700;color:var(--dark);margin-bottom:16px}
+.chart-wrap{position:relative;width:100%;height:260px}
+.chart-wrap canvas{width:100%!important;height:100%!important}
+.chart-full{grid-column:1/-1}
+.hbar-row{display:flex;align-items:center;gap:10px;margin-bottom:10px;font-size:13px}
+.hbar-label{width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600;color:var(--dark2);flex-shrink:0}
+.hbar-track{flex:1;background:#f0f4f8;border-radius:20px;height:18px;overflow:hidden}
+.hbar-fill{height:100%;border-radius:20px;background:var(--green);transition:width .5s}
+.hbar-val{width:90px;text-align:right;color:var(--dark);font-weight:700;flex-shrink:0}
+.prog-bar-wrap{background:#f0f4f8;border-radius:20px;height:14px;overflow:hidden;margin:8px 0}
+.prog-bar{height:100%;border-radius:20px;transition:width .5s;background:var(--green)}
+.prog-bar.danger{background:var(--red2)}.prog-bar.warn{background:var(--orange)}
+.forecast-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-top:16px}
+.fc-item label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--gray);display:block;margin-bottom:3px}
+.fc-item .fc-val{font-size:20px;font-weight:800;color:var(--dark)}
+
 @media(max-width:768px){
   .sidebar{transform:translateX(-100%);transition:transform .3s}
   .sidebar.open{transform:translateX(0)}
   .main{margin-left:0}
-  .menu-toggle{display:inline-flex;align-items:center}
+  .g2,.g3{grid-template-columns:1fr}
+  .chart-grid{grid-template-columns:1fr}
 }
-
-/* v7.240: власна шапка meals лишається, але їде всередині .main і дістає гамбургер */
-.top .menu-toggle{margin-right:4px}
-/* ── v7.414 АКЦІЇ ТА ЗНИЖКИ ───── */
-.ptabs{display:flex;gap:6px;padding:10px 12px 0;flex-wrap:wrap}
-.ptab{border:1px solid var(--line);background:#fff;border-radius:9px;padding:8px 14px;font-weight:700;cursor:pointer;color:var(--gray)}
-.ptab.on{background:var(--b);color:#fff;border-color:var(--b)}
-.card{background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-bottom:14px}
-.card .hd{padding:10px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.card .hd h3{margin:0;font-size:15px}
-.frm{padding:14px;display:flex;flex-direction:column;gap:12px}
-.frm label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--gray);font-weight:700}
-.frm select,.frm input,.frm textarea{padding:9px 10px;border:1px solid var(--line);border-radius:9px;font-size:14px;color:var(--dark);background:#fff;font-weight:400;font-family:inherit}
-.frm .two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.frm .three{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
-.err{background:#fef2f2;color:var(--r);padding:9px 11px;border-radius:9px;font-size:13px}
-.note{background:#f8fafc;border:1px solid var(--line);border-radius:9px;padding:9px 11px;font-size:12.5px;color:var(--gray)}
-table.hist{width:100%;border-collapse:collapse;font-size:13px}
-table.hist th{position:sticky;top:0;background:#f8fafc;text-align:left;padding:8px;font-size:12px;color:var(--gray);border-bottom:1px solid var(--line);white-space:nowrap}
-table.hist td{padding:7px 8px;border-bottom:1px solid #f1f5f9;vertical-align:top}
-table.hist tr.skip td{opacity:.5}
-table.hist .r{text-align:right} table.hist .nw{white-space:nowrap}
-table.hist tfoot td{font-weight:800;background:#f8fafc}
-.btn.sm{padding:4px 8px;font-size:12px}
-.tblwrap{overflow:auto;max-height:calc(100vh - 230px)}
-.pill{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11.5px;font-weight:700;background:#eef2f7;color:var(--dark)}
-.pill.ok{background:#dcfce7;color:#166534} .pill.wait{background:#fef3c7;color:#92400e} .pill.off{background:#f1f5f9;color:var(--mut)} .pill.burn{background:#fee2e2;color:#991b1b}
-.bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px 14px;border-bottom:1px solid var(--line)}
-.bar input,.bar select{padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:#fff;font:inherit}
-.diff{padding:10px 14px;font-size:13px}
-.diff h4{margin:8px 0 4px;font-size:13px}
-.diff ul{margin:0;padding-left:18px}
-@media(max-width:700px){ .frm .two,.frm .three{grid-template-columns:1fr} .tblwrap{max-height:none} }
+@media(max-width:640px){
+  .content{padding:14px 16px}
+  .topbar{flex-wrap:wrap;height:auto;gap:8px;padding:10px 14px}
+  .topbar h2{font-size:16px}
+  .stat-val{font-size:22px}
+  .auth-card h1,.auth-logo h1{font-size:20px}
+}
 </style>
+<style>
+/* v6.27 M3: тач-таргети >=44px на мобільних */
+@media (max-width: 768px) {
+  .btn, .del-btn, .call-btn, .pred-card-btn, .btn-xs, button {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+</style>
+<style>
+/* v7.416 «Акції та знижки» — поверх стилю «Списку дітей» (clients.html) */
+.nav-badge{margin-left:auto;background:#e74c3c;color:#fff;font-size:11px;font-weight:800;min-width:18px;height:18px;border-radius:9px;display:inline-flex;align-items:center;justify-content:center;padding:0 5px}.nav-badge.hidden{display:none!important}
+.content>.card,.content .card{margin-bottom:16px}
+.card-bd{padding:16px 20px}
+.muted{color:var(--gray);font-size:12px}
+.r{text-align:right}.nw{white-space:nowrap}
+tbody tr.skip td{opacity:.5}
+tfoot td{padding:11px 14px;font-weight:800;background:#f8fafc;border-top:2px solid #e8ecf0;font-size:13px;color:var(--dark)}
+.tbl-wrap.scroll{max-height:calc(100vh - 300px);overflow:auto}
+.tbl-wrap.scroll thead th{position:sticky;top:0;z-index:2}
+code{background:#f0f4f8;padding:1px 6px;border-radius:5px;font-size:12px;color:var(--dark2)}
+.diff h4{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--gray);margin:14px 0 6px}
+.diff h4:first-child{margin-top:0}
+.diff ul{margin:0 0 0 18px;font-size:13px}
+.diff li{margin:2px 0}
+.alert>div{flex:1}
+.alert ul{margin:6px 0 0 18px}
+.month-strip{margin-bottom:14px}
+.req-stat-n{white-space:nowrap}
+.badge{white-space:nowrap}
+.clamp3{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;max-width:380px;color:var(--gray);font-size:12.5px}
+.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--dark);color:#fff;padding:10px 18px;border-radius:var(--r);z-index:2000;opacity:0;transition:opacity .2s;pointer-events:none;font-weight:600;font-size:13px;box-shadow:var(--sh)}
+.toast.show{opacity:1}
+@media(max-width:768px){ .req-hdr-grid{grid-template-columns:1fr} }
 </style>
 </head>
 <body>
@@ -222,23 +509,6 @@ table.hist tfoot td{font-weight:800;background:#f8fafc}
       });
       window.addEventListener('load', function(){ setTimeout(window._revealHistMenu, 600); });
       </script>
-      <div class="nav-item" id="navPromos" style="display:none"
-           onclick="window.location.href='promos.html'">
-        <span class="ni">🎁</span> Акції та знижки
-      </div>
-      <script>
-      /* v7.414: «Акції та знижки» — CFO/CEO/COO/HR (керують) і директор (пропонує, бачить свою локацію). */
-      window._revealPromosMenu = function(){
-        var el = document.getElementById('navPromos'); if (!el) return;
-        var u = null;
-        try { u = (typeof S !== 'undefined' && S && S.user) ? S.user : null; } catch(e){}
-        if (!u){ try { var s = JSON.parse(localStorage.getItem('mkids_session') || 'null'); u = (s && s.user) || null; } catch(e){} }
-        var r = u ? String(u.role || '').toLowerCase().trim() : '';
-        el.style.display = (['cfo','ceo','coo','hr','director'].indexOf(r) !== -1) ? '' : 'none';
-      };
-      window._revealPromosMenu();
-      window.addEventListener('load', function(){ setTimeout(window._revealPromosMenu, 600); });
-      </script>
       <div class="nav-item" id="navCash" style="display:none"
            onclick="window.location.href='cash.html'">
         <span class="ni">💵</span> Готівка
@@ -261,6 +531,23 @@ table.hist tfoot td{font-weight:800;background:#f8fafc}
         }
       });
       window.addEventListener('load', function(){ setTimeout(window._revealCashMenu, 600); });
+      </script>
+      <div class="nav-item" id="navPromos" style="display:none"
+           onclick="window.location.href='promos.html'">
+        <span class="ni">🎁</span> Акції та знижки
+      </div>
+      <script>
+      /* v7.414: «Акції та знижки» — CFO/CEO/COO/HR (керують) і директор (пропонує, бачить свою локацію). */
+      window._revealPromosMenu = function(){
+        var el = document.getElementById('navPromos'); if (!el) return;
+        var u = null;
+        try { u = (typeof S !== 'undefined' && S && S.user) ? S.user : null; } catch(e){}
+        if (!u){ try { var s = JSON.parse(localStorage.getItem('mkids_session') || 'null'); u = (s && s.user) || null; } catch(e){} }
+        var r = u ? String(u.role || '').toLowerCase().trim() : '';
+        el.style.display = (['cfo','ceo','coo','hr','director'].indexOf(r) !== -1) ? '' : 'none';
+      };
+      window._revealPromosMenu();
+      window.addEventListener('load', function(){ setTimeout(window._revealPromosMenu, 600); });
       </script>
       <div class="nav-sec" data-section="crm">👶 КЛІЄНТИ CRM</div>
       <div class="nav-item" data-permission="clients_list" data-parent="crm" data-perm-page="clients"
@@ -398,22 +685,25 @@ table.hist tfoot td{font-weight:800;background:#f8fafc}
   </nav>
 
   <main class="main">
-
-<div class="top">
-  <button class="menu-toggle" onclick="toggleSidebar()" aria-label="Меню">☰</button>
-  <h1>🎁 Акції та знижки</h1>
-  <span id="syncStatus" style="font-size:12px"></span>
-  <span class="sp"></span>
-  <button class="btn sec" id="refreshBtn" title="Оновити">🔄</button>
-</div>
-<div class="ptabs" id="ptabs">
-  <button class="ptab on" data-t="promos">📋 Акції</button>
-  <button class="ptab" data-t="register">🧾 Реєстр знижок</button>
-  <button class="ptab" data-t="report">📊 Звіт</button>
-</div>
-<div class="wrap" id="pbody"><div class="empty">Завантаження…</div></div>
-<div class="toast" id="toast"></div>
-
+    <div class="topbar">
+      <div style="display:flex;align-items:center;gap:10px">
+        <button class="btn btn-icon" onclick="toggleSidebar()">☰</button>
+        <h2>🎁 Акції та знижки</h2>
+      </div>
+      <div class="topbar-r">
+        <span id="syncStatus"></span>
+        <button class="btn btn-secondary btn-sm" onclick="refreshAll()">🔄 Оновити</button>
+      </div>
+    </div>
+    <div class="content">
+      <div class="att-mode-bar" id="ptabs">
+        <button class="att-mode-btn active" data-t="promos">📋 Акції</button>
+        <button class="att-mode-btn" data-t="register">🧾 Реєстр знижок</button>
+        <button class="att-mode-btn" data-t="report">📊 Звіт</button>
+      </div>
+      <div id="pbody"></div>
+    </div>
+    <div class="toast" id="toast"></div>
   </main>
 </div>
 <script>
@@ -983,12 +1273,13 @@ function markKey(child,date,itemId){ return child+'||'+date+'||'+itemId; }
 
 // ═══ v7.414 АКЦІЇ ТА ЗНИЖКИ ══════════════════════════════════════════════════
 // Довідник «Акції» (CFO/офіс створює; директор пропонує → «Потребують уваги»), реєстр «Знижки»
-// (1 запис = дитина × місяць × акція; «Бюджет навч» у Payment = база − SUMIFS(реєстр) з грудня 2026)
-// і звіт по акціях. Пробні прогони — GET (preview*), записи — POST, після запису перечитуємо через GET.
+// (1 запис = дитина × місяць × акція; «Бюджет навч» у Payment = база − SUMIFS(реєстр) з листопада 2026),
+// покриття передоплатою і звіт по акціях. Пробні прогони — GET (preview*), записи — POST, після запису перечитуємо.
+// v7.416: візуал — як «Список дітей» / «Перерахунки» (clients.html): topbar, card/card-hd, filters, badge, btn-*.
 var OFFICE = ['cfo','ceo','coo','hr'];
 var P = { tab:'promos', promos:[], start:'2026-11', locs:[], cards:null, byLabel:{},
-          ym:'', regLoc:'', regRows:[], preview:null, syncPreview:null,
-          rFrom:'', rTo:'', rLoc:'', report:null, edit:null, busy:false };
+          ym:'', regLoc:'', regRows:null, preview:null, syncPreview:null,
+          rFrom:'', rTo:'', rLoc:'', report:null, edit:null };
 
 function isOffice(){ return OFFICE.indexOf(String(S.user && S.user.role || '').toLowerCase()) !== -1; }
 function isCfo(){ return String(S.user && S.user.role || '').toLowerCase() === 'cfo'; }
@@ -998,18 +1289,21 @@ function promosGate(){
   if (isOffice() || isDir()) return true;
   location.replace('clients.html'); return false;
 }
-function money(n){ n = Number(n) || 0; return (n < 0 ? '−' : '') + Math.abs(Math.round(n)).toLocaleString('uk-UA') + ' ₴'; }
+function money(n){ n = Number(n) || 0; return (n < 0 ? '−' : '') + Math.abs(Math.round(n)).toLocaleString('uk-UA') + ' грн'; }
 function ymNow(){ var d = new Date(); return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2); }
 function ymAdd(ym, n){ var y = +ym.slice(0, 4), m = +ym.slice(5, 7) - 1 + n; y += Math.floor(m / 12); m = ((m % 12) + 12) % 12; return y + '-' + ('0' + (m + 1)).slice(-2); }
 function ymLabel(ym){ return MONTHS[+ym.slice(5, 7) - 1] + ' ' + ym.slice(0, 4); }
 function lastDay(ym){ var y = +ym.slice(0, 4), m = +ym.slice(5, 7); return ym + '-' + ('0' + new Date(y, m, 0).getDate()).slice(-2); }
-function stPill(st){
-  var c = {'діє':'ok','на підтвердженні':'wait','згоріла':'burn','скасована':'off','відхилена':'off','завершена':'off','чернетка':'off'}[st] || '';
-  return '<span class="pill ' + c + '">' + esc(st || '—') + '</span>';
+function stBadge(st){
+  var c = {'діє':'bg','на підтвердженні':'bo','згоріла':'br','скасована':'bgr','відхилена':'bgr','завершена':'bgr','чернетка':'bgr'}[st] || 'bb';
+  var ic = {'діє':'✅ ','на підтвердженні':'⏳ ','згоріла':'🔥 ','скасована':'↩️ ','відхилена':'❌ ','завершена':'⏹ '}[st] || '';
+  return '<span class="badge ' + c + '">' + ic + esc(st || '—') + '</span>';
 }
 function qs(o){ return Object.keys(o).filter(function(k){ return o[k] !== '' && o[k] != null; }).map(function(k){ return enc(k) + '=' + enc(o[k]); }).join('&'); }
 async function get(action, o){ var j = await apiGet(action, qs(Object.assign({actorId:S.user.id}, o || {}))); if (!j || j.ok === false) throw new Error((j && j.error) || 'Помилка'); return j; }
 async function post(body){ body.actorId = S.user.id; setCloudStatus('sync'); var r = await apiPost(body); if (r && r.ok === false){ setCloudStatus('err', r.error); throw new Error(r.error || 'Помилка'); } setCloudStatus('ok'); return r || {}; }
+function loading(t){ return '<div class="loading"><div class="spinner"></div><p>' + esc(t || 'Завантаження…') + '</p></div>'; }
+function emptyBox(icon, title, text){ return '<div class="empty"><span class="ei">' + icon + '</span><h4>' + esc(title) + '</h4>' + (text ? '<p>' + text + '</p>' : '') + '</div>'; }
 
 async function loadPromos(){ var j = await get('getPromos'); P.promos = j.promos || []; P.start = j.start || P.start; }
 async function loadLocs(){
@@ -1022,14 +1316,14 @@ async function loadCards(){
   P.cards.forEach(function(c){ P.byLabel[c.name + ' · ' + c.loc + (c.group ? ' · ' + c.group : '')] = c; });
 }
 function locOptions(sel, withAll){
-  var h = withAll ? '<option value="">усі локації</option>' : '';
+  var h = withAll ? '<option value="">Усі локації</option>' : '';
   P.locs.forEach(function(l){ h += '<option' + (l === sel ? ' selected' : '') + '>' + esc(l) + '</option>'; });
   return h;
 }
 
 // ── РЕНДЕР ────────────────────────────────────────────────────────────────────
 function render(){
-  document.querySelectorAll('.ptab').forEach(function(b){ b.classList.toggle('on', b.getAttribute('data-t') === P.tab); });
+  document.querySelectorAll('#ptabs .att-mode-btn').forEach(function(b){ b.classList.toggle('active', b.getAttribute('data-t') === P.tab); });
   if (P.tab === 'promos') renderPromos();
   else if (P.tab === 'register') renderRegister();
   else renderReport();
@@ -1039,23 +1333,31 @@ function render(){
 function renderPromos(){
   var el = document.getElementById('pbody'), off = isOffice();
   var list = P.promos.filter(function(p){ return off || isDir() && (/^вс[іi]$/i.test(String(p.locs).trim()) || String(p.locs).split(/[,;]/).map(function(x){ return x.trim(); }).indexOf(myLoc()) !== -1); });
-  var h = '<div class="card"><div class="hd"><h3>Довідник акцій</h3><span class="muted">з ' + esc(ymLabel(P.start)) + ' «Бюджет навч» = база − знижки реєстру</span><span class="sp" style="flex:1"></span>'
-    + '<button class="btn g" onclick="openPromoForm()">' + (off ? '➕ Нова тимчасова акція' : '💡 Запропонувати акцію') + '</button></div>';
-  h += '<div class="tblwrap"><table class="hist"><thead><tr><th>ID</th><th>Назва</th><th>Тип</th><th>На що діє</th><th>Умови</th><th>Правило</th><th>Період</th><th>Локації</th><th>Статус</th><th>Хто</th><th></th></tr></thead><tbody>';
+  var act = list.filter(function(p){ return p.status === 'діє'; }).length, wait = list.filter(function(p){ return p.status === 'на підтвердженні'; }).length;
+  var h = '<div class="req-hdr-grid">'
+    + '<div class="req-stat"><div class="req-stat-n" style="color:var(--green)">' + act + '</div><div class="req-stat-l">✅ Діючих акцій</div></div>'
+    + '<div class="req-stat"><div class="req-stat-n" style="color:var(--orange)">' + wait + '</div><div class="req-stat-l">⏳ На підтвердженні</div></div>'
+    + '<div class="req-stat"><div class="req-stat-n" style="color:var(--blue)">' + esc(ymLabel(P.start)) + '</div><div class="req-stat-l">📅 Реєстр діє з</div></div>'
+    + '</div>';
+  h += '<div class="card"><div class="card-hd"><h3>📋 Довідник акцій</h3>'
+    + '<button class="btn btn-primary btn-sm" onclick="openPromoForm()">' + (off ? '➕ Нова тимчасова акція' : '💡 Запропонувати акцію') + '</button></div>';
+  h += '<div class="tbl-wrap"><table><thead><tr><th>ID</th><th>Назва</th><th>Тип</th><th>На що діє</th><th>Умови</th><th>Правило</th><th>Період</th><th>Локації</th><th>Статус</th><th>Хто</th><th></th></tr></thead><tbody>';
+  if (!list.length) h += '<tr><td colspan="11">' + emptyBox('🎁', 'Акцій немає', '') + '</td></tr>';
   list.forEach(function(p){
-    h += '<tr class="' + (['відхилена','завершена'].indexOf(p.status) !== -1 ? 'skip' : '') + '"><td class="nw"><b>' + esc(p.id) + '</b></td><td>' + esc(p.name) + '</td><td>' + esc(p.type) + '</td><td>' + esc(p.appliesTo)
+    h += '<tr class="' + (['відхилена','завершена'].indexOf(p.status) !== -1 ? 'skip' : '') + '"><td class="nw"><b>' + esc(p.id) + '</b></td><td style="font-weight:600">' + esc(p.name) + '</td>'
+      + '<td><span class="badge ' + (p.type === 'постійна' ? 'bb' : p.type === 'службова' ? 'bgr' : 'by') + '">' + esc(p.type) + '</span></td><td>' + esc(p.appliesTo)
       + (p.appliesTo !== 'навчання' ? '<div class="muted">вступний — поки не нараховується</div>' : '') + '</td>'
-      + '<td style="max-width:360px">' + esc(p.conditions) + '</td><td class="nw"><code>' + esc(p.rule) + '</code></td>'
-      + '<td class="nw">' + (p.start || p.end ? esc((p.start || '…') + ' → ' + (p.end || '…')) : 'постійно') + '</td><td>' + esc(p.locs) + '</td>'
-      + '<td>' + stPill(p.status) + '</td><td class="muted">' + esc(p.createdBy) + (p.decidedBy ? '<br>✔ ' + esc(p.decidedBy) : '') + (p.comment ? '<br>💬 ' + esc(p.comment) : '') + '</td>'
-      + '<td class="nw">' + (off ? '<button class="btn sec sm" onclick="openPromoForm(\'' + esc(p.id) + '\')">✏️</button>'
-          + (p.status === 'на підтвердженні' ? ' <button class="btn g sm" onclick="decide(\'' + esc(p.id) + '\',\'approve\')">✅</button> <button class="btn sec sm" onclick="decide(\'' + esc(p.id) + '\',\'reject\')">✖</button>' : '')
-          + (p.type === 'тимчасова' && p.status === 'діє' ? ' <button class="btn sec sm" onclick="finishPromo(\'' + esc(p.id) + '\')">⏹ Завершити</button>' : '') : '') + '</td></tr>';
+      + '<td><div class="clamp3" title="' + esc(p.conditions) + '">' + esc(p.conditions) + '</div></td><td class="nw">' + (p.rule ? '<code>' + esc(p.rule) + '</code>' : '—') + '</td>'
+      + '<td class="nw">' + (p.start || p.end ? esc((p.start || '…') + ' → ' + (p.end || '…')) : '<span class="muted">постійно</span>') + '</td><td>' + esc(p.locs) + '</td>'
+      + '<td>' + stBadge(p.status) + '</td><td class="muted">' + esc(p.createdBy) + (p.decidedBy ? '<br>✔ ' + esc(p.decidedBy) : '') + (p.comment ? '<br>💬 ' + esc(p.comment) : '') + '</td>'
+      + '<td class="nw">' + (off ? '<button class="btn btn-secondary btn-xs" title="Редагувати" onclick="openPromoForm(\'' + esc(p.id) + '\')">✏️</button>'
+          + (p.status === 'на підтвердженні' ? ' <button class="btn btn-primary btn-xs" onclick="decide(\'' + esc(p.id) + '\',\'approve\')">✅ Підтвердити</button> <button class="btn btn-secondary btn-xs" onclick="decide(\'' + esc(p.id) + '\',\'reject\')">✖</button>' : '')
+          + (p.type === 'тимчасова' && p.status === 'діє' ? ' <button class="btn btn-secondary btn-xs" onclick="finishPromo(\'' + esc(p.id) + '\')">⏹ Завершити</button>' : '') : '') + '</td></tr>';
   });
   h += '</tbody></table></div></div>';
   h += '<div id="promoForm"></div>';
-  h += '<div class="note">Накладання — послідовно, кожна знижка від поточної ціни: <b>сім\'я → передоплата → друг → тимчасові → відпустка</b>. Приклад: 20 000 − 8% = 18 400 − 10% = 16 560.<br>'
-    + 'Тимчасова акція діє на договори, підписані в її період, з картки «Акція» = ID акції. Правило: <code>pct=10; months=3</code> (10% на 3 місяці від місяця договору) або <code>sum=1000; months=1</code>.</div>';
+  h += '<div class="alert alert-info"><div>Накладання — послідовно, кожна знижка від поточної ціни: <b>сімʼя → передоплата → друг → тимчасові → відпустка</b>. Приклад: 20 000 − 8% = 18 400 − 10% = 16 560.<br>'
+    + 'Тимчасова акція діє на договори, підписані в її період, з полем картки «Акція» = ID акції. Правило: <code>pct=10; months=3</code> (10% на 3 місяці від місяця договору) або <code>sum=1000; months=1</code>.</div></div>';
   el.innerHTML = h;
   if (P.edit !== null) renderPromoForm();
 }
@@ -1064,47 +1366,53 @@ function renderPromoForm(){
   var box = document.getElementById('promoForm'); if (!box) return;
   var p = P.edit ? (P.promos.filter(function(x){ return x.id === P.edit; })[0] || {}) : {};
   var r = {}; String(p.rule || '').split(';').forEach(function(x){ var m = /^\s*(\w+)\s*=\s*([\d.,]+)/.exec(x); if (m) r[m[1]] = m[2]; });
-  var perm = p.type === 'постійна', off = isOffice();
-  var locSel = off ? ('<label>Локації<select id="pfLocMode" onchange="document.getElementById(\'pfLocList\').style.display=this.value===\'list\'?\'\':\'none\'"><option value="all"' + (!p.locs || /^вс/i.test(p.locs) ? ' selected' : '') + '>усі</option><option value="list"' + (p.locs && !/^вс/i.test(p.locs) ? ' selected' : '') + '>перелік</option></select>'
-      + '<div id="pfLocList" style="' + (p.locs && !/^вс/i.test(p.locs) ? '' : 'display:none;') + 'display:flex;flex-wrap:wrap;gap:6px 12px;font-weight:400;color:var(--dark);margin-top:6px">'
-      + P.locs.map(function(l){ var on = String(p.locs || '').split(/[,;]/).map(function(x){ return x.trim(); }).indexOf(l) !== -1; return '<span style="white-space:nowrap"><input type="checkbox" class="pfLoc" value="' + esc(l) + '"' + (on ? ' checked' : '') + '> ' + esc(l) + '</span>'; }).join('') + '</div></label>')
-    : '<div class="note">Локація: <b>' + esc(myLoc()) + '</b>. Пропозиція піде на підтвердження CFO / офісу і не діє, доки її не підтвердять.</div>';
-  box.innerHTML = '<div class="card"><div class="hd"><h3>' + (P.edit ? 'Редагування ' + esc(P.edit) : (off ? 'Нова тимчасова акція' : 'Пропозиція акції')) + '</h3><span class="sp" style="flex:1"></span><button class="btn sec sm" onclick="P.edit=null;document.getElementById(\'promoForm\').innerHTML=\'\'">✕</button></div>'
-    + '<div class="frm">'
-    + '<div class="two"><label>Назва<input id="pfName" value="' + esc(p.name || '') + '" placeholder="напр. Жовтнева акція"></label>'
-    + '<label>На що діє<select id="pfApplies">' + ['навчання','вступний внесок','обидва'].map(function(x){ return '<option' + (x === (p.appliesTo || 'навчання') ? ' selected' : '') + '>' + x + '</option>'; }).join('') + '</select></label></div>'
-    + '<label>Умови (для людей)<textarea id="pfCond" rows="3">' + esc(p.conditions || '') + '</textarea></label>'
-    + (perm ? '<label>Правило (для бота)<input id="pfRule" value="' + esc(p.rule || '') + '"></label>'
-       : '<div class="three"><label>Знижка, %<input id="pfPct" type="number" min="0" max="100" step="0.5" value="' + esc(r.pct || '') + '"></label>'
-       + '<label>або сума, ₴<input id="pfSum" type="number" min="0" value="' + esc(r.sum || '') + '"></label>'
-       + '<label>Скільки місяців від договору<input id="pfMonths" type="number" min="1" value="' + esc(r.months || '1') + '"></label></div>'
-       + '<div class="two"><label>Дата початку<input id="pfStart" type="date" value="' + esc(p.start || '') + '"></label><label>Дата кінця<input id="pfEnd" type="date" value="' + esc(p.end || '') + '"></label></div>')
+  var fixed = p.type === 'постійна' || p.type === 'службова', off = isOffice();
+  var listMode = p.locs && !/^вс/i.test(p.locs);
+  var locSel = off ? ('<div class="fg"><label>Локації</label><select id="pfLocMode" onchange="document.getElementById(\'pfLocList\').style.display=this.value===\'list\'?\'flex\':\'none\'">'
+      + '<option value="all"' + (!listMode ? ' selected' : '') + '>Усі локації</option><option value="list"' + (listMode ? ' selected' : '') + '>Перелік</option></select>'
+      + '<div id="pfLocList" style="display:' + (listMode ? 'flex' : 'none') + ';flex-wrap:wrap;gap:6px;margin-top:8px">'
+      + P.locs.map(function(l){ var on = String(p.locs || '').split(/[,;]/).map(function(x){ return x.trim(); }).indexOf(l) !== -1;
+          return '<label class="att-chip" style="display:inline-flex;align-items:center;gap:5px;text-transform:none;letter-spacing:0;font-size:12px;margin:0"><input type="checkbox" class="pfLoc" value="' + esc(l) + '"' + (on ? ' checked' : '') + ' style="width:auto"> ' + esc(l) + '</label>'; }).join('')
+      + '</div></div>')
+    : '<div class="alert alert-info"><div>Локація: <b>' + esc(myLoc()) + '</b>. Пропозиція піде на підтвердження CFO / офісу і не діє, доки її не підтвердять.</div></div>';
+  box.innerHTML = '<div class="card"><div class="card-hd"><h3>' + (P.edit ? '✏️ Редагування ' + esc(P.edit) : (off ? '➕ Нова тимчасова акція' : '💡 Пропозиція акції')) + '</h3>'
+    + '<button class="modal-close" onclick="P.edit=null;document.getElementById(\'promoForm\').innerHTML=\'\'">✕</button></div><div class="card-bd">'
+    + '<div class="g2"><div class="fg"><label>Назва</label><input id="pfName" value="' + esc(p.name || '') + '" placeholder="напр. Жовтнева акція"></div>'
+    + '<div class="fg"><label>На що діє</label><select id="pfApplies">' + ['навчання','вступний внесок','обидва'].map(function(x){ return '<option' + (x === (p.appliesTo || 'навчання') ? ' selected' : '') + '>' + x + '</option>'; }).join('') + '</select></div></div>'
+    + '<div class="fg"><label>Умови (для людей)</label><textarea id="pfCond" rows="3">' + esc(p.conditions || '') + '</textarea></div>'
+    + (fixed ? '<div class="fg"><label>Правило (для бота)</label><input id="pfRule" value="' + esc(p.rule || '') + '"></div>'
+       : '<div class="g3"><div class="fg"><label>Знижка, %</label><input id="pfPct" type="number" min="0" max="100" step="0.5" value="' + esc(r.pct || '') + '"></div>'
+       + '<div class="fg"><label>або сума, грн</label><input id="pfSum" type="number" min="0" value="' + esc(r.sum || '') + '"></div>'
+       + '<div class="fg"><label>Місяців від договору</label><input id="pfMonths" type="number" min="1" value="' + esc(r.months || '1') + '"></div></div>'
+       + '<div class="g2"><div class="fg"><label>Дата початку</label><input id="pfStart" type="date" lang="uk" value="' + esc(p.start || '') + '"></div><div class="fg"><label>Дата кінця</label><input id="pfEnd" type="date" lang="uk" value="' + esc(p.end || '') + '"></div></div>')
     + locSel
-    + (off && P.edit ? '<label>Статус<select id="pfStatus">' + ['діє','на підтвердженні','завершена','відхилена','чернетка'].map(function(x){ return '<option' + (x === p.status ? ' selected' : '') + '>' + x + '</option>'; }).join('') + '</select></label>' : '')
-    + '<div id="pfErr"></div><div><button class="btn g" id="pfGo" onclick="savePromoForm()">' + (off ? '💾 Зберегти' : '📨 Надіслати на підтвердження') + '</button></div>'
-    + '</div></div>';
+    + (off && P.edit ? '<div class="fg"><label>Статус</label><select id="pfStatus">' + ['діє','на підтвердженні','завершена','відхилена','чернетка'].map(function(x){ return '<option' + (x === p.status ? ' selected' : '') + '>' + x + '</option>'; }).join('') + '</select></div>' : '')
+    + '<div id="pfErr"></div></div>'
+    + '<div class="modal-ft" style="position:static"><button class="btn btn-secondary" onclick="P.edit=null;document.getElementById(\'promoForm\').innerHTML=\'\'">Скасувати</button>'
+    + '<button class="btn btn-primary" id="pfGo" onclick="savePromoForm()">' + (off ? '💾 Зберегти' : '📨 Надіслати на підтвердження') + '</button></div></div>';
 }
+function formErr(id, t){ document.getElementById(id).innerHTML = '<div class="alert alert-danger"><div>' + esc(t) + '</div></div>'; }
 async function savePromoForm(){
   var v = function(id){ var e = document.getElementById(id); return e ? String(e.value || '').trim() : ''; };
   var p = P.edit ? (P.promos.filter(function(x){ return x.id === P.edit; })[0] || {}) : {};
   var rule;
-  if (p.type === 'постійна') rule = v('pfRule');
+  if (p.type === 'постійна' || p.type === 'службова') rule = v('pfRule');
   else {
     var pct = v('pfPct'), sum = v('pfSum'), mo = v('pfMonths') || '1';
-    if (!pct && !sum){ document.getElementById('pfErr').innerHTML = '<div class="err">Вкажіть % або суму знижки</div>'; return; }
+    if (!pct && !sum) return formErr('pfErr', 'Вкажіть % або суму знижки');
     rule = (pct ? 'pct=' + pct : 'sum=' + sum) + '; months=' + mo;
   }
   var locs = 'всі';
   if (isOffice() && v('pfLocMode') === 'list'){
     locs = Array.prototype.map.call(document.querySelectorAll('.pfLoc:checked'), function(x){ return x.value; }).join(', ');
-    if (!locs){ document.getElementById('pfErr').innerHTML = '<div class="err">Оберіть хоча б одну локацію</div>'; return; }
+    if (!locs) return formErr('pfErr', 'Оберіть хоча б одну локацію');
   }
   var promo = {id:P.edit || '', name:v('pfName'), appliesTo:v('pfApplies'), conditions:v('pfCond'), rule:rule,
     start:v('pfStart') || p.start || '', end:v('pfEnd') || p.end || '', locs:locs, status:v('pfStatus') || undefined};
-  if (!promo.name){ document.getElementById('pfErr').innerHTML = '<div class="err">Назва обовʼязкова</div>'; return; }
+  if (!promo.name) return formErr('pfErr', 'Назва обовʼязкова');
   var b = document.getElementById('pfGo'); b.disabled = true; b.textContent = '⏳ Зберігаю…';
   try { await post({action:'savePromo', promo:promo}); toast(isOffice() ? 'Збережено' : 'Надіслано на підтвердження'); P.edit = null; }
-  catch(e){ document.getElementById('pfErr').innerHTML = '<div class="err">' + esc(e.message) + '</div>'; b.disabled = false; b.textContent = '💾 Зберегти'; return; }
+  catch(e){ formErr('pfErr', e.message); b.disabled = false; b.textContent = '💾 Зберегти'; return; }
   await loadPromos(); render();
 }
 async function decide(id, dec){
@@ -1128,75 +1436,98 @@ async function loadRegister(){
   catch(e){ P.regRows = []; toast('Реєстр не завантажився: ' + e.message); }
   renderRegister();
 }
+function monthStrip(){
+  var y = P.ym.slice(0, 4), h = '<div class="month-strip">'
+    + '<button class="ms-btn" onclick="P.ym=ymAdd(P.ym,-12);regReload()">‹ ' + (+y - 1) + '</button>';
+  for (var m = 1; m <= 12; m++){
+    var ym = y + '-' + ('0' + m).slice(-2);
+    h += '<button class="ms-btn' + (ym === ymNow() ? ' ms-curr' : '') + (ym === P.ym ? ' ms-active' : '') + '" onclick="P.ym=\'' + ym + '\';regReload()">' + MONTHS[m - 1] + '</button>';
+  }
+  return h + '<button class="ms-btn" onclick="P.ym=ymAdd(P.ym,12);regReload()">' + (+y + 1) + ' ›</button></div>';
+}
+function regReload(){ P.preview = null; P.syncPreview = null; loadRegister(); }
 function renderRegister(){
   var el = document.getElementById('pbody'), off = isOffice();
-  var h = '<div class="card"><div class="bar">'
-    + '<button class="btn sec sm" onclick="P.ym=ymAdd(P.ym,-1);P.preview=null;P.syncPreview=null;loadRegister()">◀</button><b style="min-width:120px;text-align:center">' + esc(ymLabel(P.ym)) + '</b>'
-    + '<button class="btn sec sm" onclick="P.ym=ymAdd(P.ym,1);P.preview=null;P.syncPreview=null;loadRegister()">▶</button>'
-    + (isDir() ? '<b>' + esc(myLoc()) + '</b>' : '<select onchange="P.regLoc=this.value;P.preview=null;P.syncPreview=null;loadRegister()">' + locOptions(P.regLoc, true) + '</select>')
+  var h = monthStrip();
+  h += '<div class="filters">'
+    + (isDir() ? '<b>📍 ' + esc(myLoc()) + '</b>' : '<select class="flt-sel" onchange="P.regLoc=this.value;regReload()">' + locOptions(P.regLoc, true) + '</select>')
     + '<span style="flex:1"></span>'
-    + (off ? '<button class="btn sec sm" onclick="previewRecalc()">🔍 Перевірити перерахунок</button> <button class="btn sec sm" onclick="previewSync()">🔍 Перевірити Payment</button>' : '')
-    + (isCfo() ? ' <button class="btn sec sm" onclick="setupNightly()" title="Щодня о 08:30: поточний і наступний місяць">⏰ Нічний прогін</button>' : '')
+    + (off ? '<button class="btn btn-secondary btn-sm" onclick="previewRecalc()">🔍 Перевірити перерахунок</button><button class="btn btn-secondary btn-sm" onclick="previewSync()">🔍 Перевірити Payment</button>' : '')
+    + (isCfo() ? '<button class="btn btn-secondary btn-sm" onclick="setupNightly()" title="Щодня о 08:30: поточний місяць і до грудня">⏰ Нічний прогін</button>' : '')
     + '</div>';
-  if (P.ym < P.start) h += '<div class="diff note" style="margin:10px 14px">До ' + esc(ymLabel(P.start)) + ' реєстр не впливає на Payment: «Бюджет навч» за ці місяці лишається як був.</div>';
+  if (P.ym < P.start) h += '<div class="alert alert-warn"><div>До ' + esc(ymLabel(P.start)) + ' реєстр не впливає на Payment: «Бюджет навч» за ці місяці лишається як був.</div></div>';
   if (P.preview) h += renderPreview();
   if (P.syncPreview) h += renderSyncPreview();
-  if (P.regRows === null){ el.innerHTML = h + '<div class="empty">Завантаження…</div></div>'; return; }
+  if (P.regRows === null){ el.innerHTML = h + '<div class="card">' + loading() + '</div>'; return; }
   var rows = P.regRows.slice().sort(function(a, b){ return a.loc.localeCompare(b.loc, 'uk') || a.name.localeCompare(b.name, 'uk') || a.order.localeCompare(b.order); });
   var act = rows.filter(function(r){ return r.status === 'діє'; }), sum = act.reduce(function(s, r){ return s + r.amount; }, 0);
-  h += '<div class="tblwrap"><table class="hist"><thead><tr><th>Дитина</th><th>Локація</th><th>Акція</th><th>Черга</th><th class="r">База</th><th class="r">%</th><th class="r">Сума</th><th>Підстава</th><th>Статус</th><th>Джерело</th><th></th></tr></thead><tbody>';
-  if (!rows.length) h += '<tr><td colspan="11" class="empty">За ' + esc(ymLabel(P.ym)) + ' записів немає.</td></tr>';
-  rows.forEach(function(r){
-    h += '<tr class="' + (r.status === 'діє' ? '' : 'skip') + '"><td><b>' + esc(r.name) + '</b></td><td>' + esc(r.loc) + '</td><td class="nw">' + esc(r.promoId) + '</td><td class="nw muted">' + esc(r.order) + '</td>'
-      + '<td class="r nw">' + money(r.base) + '</td><td class="r">' + (r.pct ? esc(r.pct) + '%' : '') + '</td><td class="r nw"><b>' + money(r.amount) + '</b></td>'
-      + '<td style="max-width:380px" class="muted">' + esc(r.basis) + '</td><td>' + stPill(r.status) + '</td><td class="muted">' + esc(r.source) + '<br>' + esc(r.by) + '</td>'
-      + '<td>' + (off && r.source === 'ручна' && r.status === 'діє' ? '<button class="btn sec sm" onclick="cancelManual(\'' + esc(r.id) + '\')">↩️</button>' : '') + '</td></tr>';
-  });
-  h += '</tbody><tfoot><tr><td colspan="6">Діючих: ' + act.length + '</td><td class="r nw">' + money(sum) + '</td><td colspan="4"></td></tr></tfoot></table></div></div>';
-  if (off) h += '<div class="card"><div class="hd"><h3>➕ Ручний запис (нестандартна передоплата тощо)</h3></div><div class="frm">'
-    + '<div class="two"><label>Дитина<input id="mdCard" list="dlCards" placeholder="Почніть вводити ПІБ…" autocomplete="off"></label>'
-    + '<label>Акція<select id="mdPromo">' + P.promos.filter(function(p){ return p.status === 'діє'; }).map(function(p){ return '<option value="' + esc(p.id) + '">' + esc(p.id + ' · ' + p.name) + '</option>'; }).join('') + '</select></label></div>'
-    + '<div class="three"><label>Місяць<input id="mdYm" type="month" value="' + esc(P.ym) + '"></label><label>Знижка, %<input id="mdPct" type="number" min="0" max="100" step="0.5"></label><label>або сума, ₴<input id="mdSum" type="number" min="0"></label></div>'
-    + '<label>Підстава<input id="mdBasis" placeholder="напр. передоплата 4 міс за рішенням CFO"></label>'
-    + '<div id="mdErr"></div><div><button class="btn g" onclick="addManual()">Додати в реєстр</button></div></div></div><datalist id="dlCards"></datalist>';
-  h += '<div class="card" id="covBox"><div class="hd"><h3>💳 Покриття передоплатою</h3><span class="muted">платіж лишається в місяці надходження; за місяці покриття рахунок за навчання не формується, борг не рахується</span></div><div class="diff muted">Завантаження…</div></div>';
+  var kids = {}; act.forEach(function(r){ kids[r.cardId || r.name] = 1; });
+  h += '<div class="req-hdr-grid">'
+    + '<div class="req-stat"><div class="req-stat-n" style="color:var(--green)">' + act.length + '</div><div class="req-stat-l">✅ Діючих знижок</div></div>'
+    + '<div class="req-stat"><div class="req-stat-n" style="color:var(--blue)">' + Object.keys(kids).length + '</div><div class="req-stat-l">👶 Дітей зі знижкою</div></div>'
+    + '<div class="req-stat"><div class="req-stat-n" style="color:var(--red2)">' + money(sum) + '</div><div class="req-stat-l">💸 Сума знижок · ' + esc(ymLabel(P.ym)) + '</div></div>'
+    + '</div>';
+  h += '<div class="card"><div class="card-hd"><h3>🧾 Реєстр знижок · ' + esc(ymLabel(P.ym)) + '</h3><span class="muted">' + rows.length + ' записів</span></div>';
+  if (!rows.length) h += emptyBox('🧾', 'Записів немає', 'За ' + esc(ymLabel(P.ym)) + ' знижок у реєстрі немає.');
+  else {
+    h += '<div class="tbl-wrap scroll"><table><thead><tr><th>Дитина</th><th>Локація</th><th>Акція</th><th>Черга</th><th class="r">База</th><th class="r">%</th><th class="r">Сума</th><th>Підстава</th><th>Статус</th><th>Джерело</th><th></th></tr></thead><tbody>';
+    rows.forEach(function(r){
+      h += '<tr class="' + (r.status === 'діє' ? '' : 'skip') + '"><td style="font-weight:600">' + esc(r.name) + '</td><td>' + esc(r.loc) + '</td><td class="nw"><span class="badge bb">' + esc(r.promoId) + '</span></td><td class="nw muted">' + esc(r.order) + '</td>'
+        + '<td class="r nw">' + (r.base ? money(r.base) : '—') + '</td><td class="r">' + (r.pct ? esc(r.pct) + '%' : '') + '</td><td class="r nw" style="font-weight:700;color:var(--red2)">−' + money(r.amount) + '</td>'
+        + '<td style="max-width:380px;color:var(--gray);font-size:12.5px">' + esc(r.basis) + '</td><td>' + stBadge(r.status) + '</td><td class="muted">' + esc(r.source) + '<br>' + esc(r.by) + '</td>'
+        + '<td>' + (off && r.source === 'ручна' && r.status === 'діє' ? '<button class="btn btn-secondary btn-xs" title="Скасувати ручний запис" onclick="cancelManual(\'' + esc(r.id) + '\')">↩️</button>' : '') + '</td></tr>';
+    });
+    h += '</tbody><tfoot><tr><td colspan="6">Діючих: ' + act.length + '</td><td class="r nw" style="color:var(--red2)">−' + money(sum) + '</td><td colspan="4"></td></tr></tfoot></table></div>';
+  }
+  h += '</div>';
+  h += '<div class="card" id="covBox"><div class="card-hd"><h3>💳 Покриття передоплатою</h3><span class="muted">платіж лишається в місяці надходження; за місяці покриття рахунок за навчання не формується, борг не рахується</span></div><div>' + loading() + '</div></div>';
+  if (off) h += '<div class="card"><div class="card-hd"><h3>➕ Ручний запис</h3><span class="muted">нестандартна передоплата тощо</span></div><div class="card-bd">'
+    + '<div class="g2"><div class="fg"><label>Дитина</label><input id="mdCard" list="dlCards" placeholder="Почніть вводити ПІБ…" autocomplete="off"></div>'
+    + '<div class="fg"><label>Акція</label><select id="mdPromo">' + P.promos.filter(function(p){ return p.status === 'діє'; }).map(function(p){ return '<option value="' + esc(p.id) + '">' + esc(p.id + ' · ' + p.name) + '</option>'; }).join('') + '</select></div></div>'
+    + '<div class="g3"><div class="fg"><label>Місяць</label><input id="mdYm" type="month" value="' + esc(P.ym) + '"></div><div class="fg"><label>Знижка, %</label><input id="mdPct" type="number" min="0" max="100" step="0.5"></div><div class="fg"><label>або сума, грн</label><input id="mdSum" type="number" min="0"></div></div>'
+    + '<div class="fg"><label>Підстава</label><input id="mdBasis" placeholder="напр. передоплата 4 міс за рішенням CFO"></div>'
+    + '<div id="mdErr"></div><button class="btn btn-primary" onclick="addManual()">➕ Додати в реєстр</button></div></div><datalist id="dlCards"></datalist>';
   el.innerHTML = h;
   loadCoverage();
   if (off) loadCards().then(function(){ var dl = document.getElementById('dlCards'); if (dl) dl.innerHTML = Object.keys(P.byLabel).map(function(l){ return '<option value="' + esc(l) + '">'; }).join(''); }).catch(function(){});
 }
+async function loadCoverage(){
+  var box = document.getElementById('covBox'); if (!box) return;
+  var j; try { j = await get('getCoverage', {loc:P.regLoc}); } catch(e){ box.lastChild.innerHTML = '<div class="alert alert-danger" style="margin:14px"><div>' + esc(e.message) + '</div></div>'; return; }
+  var rows = (j.rows || []).filter(function(c){ return c.status === 'діє'; });
+  box.lastChild.outerHTML = rows.length ? '<div class="tbl-wrap"><table><thead><tr><th>Дитина</th><th>Локація</th><th>З</th><th>По</th><th class="r">Платіж</th><th>Акція</th><th>Примітка</th><th>Хто</th></tr></thead><tbody>'
+    + rows.map(function(c){ return '<tr><td style="font-weight:600">' + esc(c.name) + '</td><td>' + esc(c.loc) + '</td><td class="nw">' + esc(c.from) + '</td><td class="nw">' + esc(c.to) + '</td><td class="r nw" style="font-weight:700">' + money(c.amount) + '</td><td><span class="badge bb">' + esc(c.promoId) + '</span></td><td class="muted">' + esc(c.note) + '</td><td class="muted">' + esc(c.by) + '<br>' + esc(c.at) + '</td></tr>'; }).join('')
+    + '</tbody></table></div>' : emptyBox('💳', 'Покриттів немає', 'Зʼявляються після підтвердження передоплати в «Потребують уваги».');
+}
 function renderPreview(){
   var p = P.preview, li = function(a, f){ return a.length ? '<ul>' + a.slice(0, 200).map(f).join('') + '</ul>' + (a.length > 200 ? '<div class="muted">… ще ' + (a.length - 200) + '</div>' : '') : '<div class="muted">—</div>'; };
-  var one = function(x){ return '<li>' + esc(x.name) + ' (' + esc(x.loc) + ') · ' + esc(x.promoId) + ' · ' + (x.before != null ? money(x.before) + ' → ' : '') + '<b>' + money(x.amount) + '</b> ' + stPill(x.status) + ' <span class="muted">' + esc(x.basis) + '</span></li>'; };
-  return '<div class="diff" style="border-bottom:1px solid var(--line)"><b>Перерахунок за ' + esc(ymLabel(p.ym)) + ' (' + esc(p.loc) + ')</b>'
+  var one = function(x){ return '<li><b>' + esc(x.name) + '</b> (' + esc(x.loc) + ') · ' + esc(x.promoId) + ' · ' + (x.before != null ? money(x.before) + ' → ' : '') + '<b>' + money(x.amount) + '</b> ' + stBadge(x.status) + ' <span class="muted">' + esc(x.basis) + '</span></li>'; };
+  var n = p.added.length + p.updated.length + p.cancelled.length;
+  return '<div class="card"><div class="card-hd"><h3>🔍 Перерахунок за ' + esc(ymLabel(p.ym)) + ' · ' + esc(p.loc) + '</h3><button class="modal-close" onclick="P.preview=null;renderRegister()">✕</button></div><div class="card-bd diff">'
     + '<h4>Нові: ' + p.added.length + '</h4>' + li(p.added, one)
     + '<h4>Зміняться: ' + p.updated.length + '</h4>' + li(p.updated, one)
-    + '<h4>Скасуються: ' + p.cancelled.length + '</h4>' + li(p.cancelled, function(x){ return '<li>' + esc(x.name) + ' (' + esc(x.loc) + ') · ' + esc(x.promoId) + ' · було ' + money(x.before) + '</li>'; })
-    + (p.warnings && p.warnings.length ? '<h4>⚠️ Попередження: ' + p.warnings.length + '</h4>' + li(p.warnings, function(w){ return '<li>' + esc(w) + '</li>'; }) : '')
-    + '<div style="margin-top:10px;display:flex;gap:8px"><button class="btn g" onclick="applyRecalc()"' + (p.added.length + p.updated.length + p.cancelled.length ? '' : ' disabled') + '>✅ Застосувати' + (p.ym >= P.start ? ' і оновити Payment' : '') + '</button><button class="btn sec" onclick="P.preview=null;renderRegister()">Закрити</button></div></div>';
+    + '<h4>Скасуються: ' + p.cancelled.length + '</h4>' + li(p.cancelled, function(x){ return '<li><b>' + esc(x.name) + '</b> (' + esc(x.loc) + ') · ' + esc(x.promoId) + ' · було ' + money(x.before) + '</li>'; })
+    + (p.warnings && p.warnings.length ? '<div class="alert alert-warn" style="margin-top:12px"><div><b>⚠️ Попередження: ' + p.warnings.length + '</b>' + li(p.warnings, function(w){ return '<li>' + esc(w) + '</li>'; }) + '</div></div>' : '')
+    + '</div><div class="modal-ft" style="position:static"><button class="btn btn-secondary" onclick="P.preview=null;renderRegister()">Закрити</button>'
+    + '<button class="btn btn-primary" onclick="applyRecalc()"' + (n ? '' : ' disabled') + '>✅ Застосувати' + (p.ym >= P.start ? ' і оновити Payment' : '') + '</button></div></div>';
 }
 function renderSyncPreview(){
   var s = P.syncPreview;
-  var h = '<div class="diff" style="border-bottom:1px solid var(--line)"><b>Payment за ' + esc(ymLabel(P.ym)) + ': клітинок до переходу на формулу — ' + s.cells + '</b>'
-    + '<div class="muted">«Бюджет навч» стане <code>=база − SUMIFS(Знижки)</code> — від цього місяця до грудня. Число в клітинці після переходу не зміниться: знижку, вписану руками (<code>=20000-1904</code> або число менше за «Суму договору»), переноситься в реєстр записом <b>R</b>; знижка відпустки, вписана експортом, повертається через реєстр (VAC). Уже переведені клітинки не чіпаються.</div>';
+  var h = '<div class="card"><div class="card-hd"><h3>🔍 Payment: клітинок до переходу на формулу — ' + s.cells + '</h3><button class="modal-close" onclick="P.syncPreview=null;renderRegister()">✕</button></div><div class="card-bd diff">'
+    + '<div class="alert alert-info"><div>«Бюджет навч» стане <code>=база − SUMIFS(Знижки)</code> — від ' + esc(ymLabel(P.start)) + ' до грудня. Число в клітинці після переходу не зміниться: знижку, вписану руками (<code>=20000-1904</code> або число менше за «Суму договору»), переноситься в реєстр записом <b>R</b>; знижка відпустки, вписана експортом, повертається через реєстр (VAC). Уже переведені клітинки не чіпаються.</div></div>';
   (s.files || []).forEach(function(f){
     h += '<h4>' + esc((f.locs || []).join(' / ')) + (f.error ? ' — ❌ ' + esc(f.error) : ': ' + f.convert + ' клітинок, рядків дзеркала ' + f.mirrorRows) + '</h4>';
-    if (f.sample && f.sample.length) h += '<ul>' + f.sample.map(function(x){ return '<li>' + esc(x.cell) + ' ' + esc(x.child) + ': ' + money(x.before) + ' → база ' + money(x.base) + ' <span class="muted">(було ' + esc(x.was) + ')</span></li>'; }).join('') + (f.convert > f.sample.length ? '<li class="muted">… ще ' + (f.convert - f.sample.length) + '</li>' : '') + '</ul>';
-    if (f.migrate && f.migrate.length) h += '<div style="margin:6px 0"><b>Перенесення ручних знижок у реєстр (R): ' + f.migrate.length + '</b> — перевірте, чи це справді знижки, а не стара ціна в картці:<ul>'
-      + f.migrate.map(function(x){ return '<li>' + esc(x.child) + ' · ' + esc(x.ym) + ' · <b>' + money(x.amount) + '</b>' + (x.noCard ? ' <span class="pill burn">без картки</span>' : '') + ' <span class="muted">' + esc(x.basis) + '</span></li>'; }).join('') + '</ul></div>';
-    if (f.notFound && f.notFound.length) h += '<div class="err" style="margin:4px 0">Немає рядка в Payment: ' + esc(f.notFound.join('; ')) + '</div>';
-    if (f.duplicates && f.duplicates.length) h += '<div class="note" style="margin:4px 0">Дублі рядків: ' + esc(f.duplicates.join('; ')) + '</div>';
+    if (f.sample && f.sample.length) h += '<ul>' + f.sample.map(function(x){ return '<li>' + esc(x.cell) + ' <b>' + esc(x.child) + '</b>: ' + money(x.before) + ' → база ' + money(x.base) + ' <span class="muted">(було ' + esc(x.was) + ')</span></li>'; }).join('') + (f.convert > f.sample.length ? '<li class="muted">… ще ' + (f.convert - f.sample.length) + '</li>' : '') + '</ul>';
+    if (f.migrate && f.migrate.length) h += '<div class="alert alert-warn" style="margin-top:8px"><div><b>Перенесення ручних знижок у реєстр (R): ' + f.migrate.length + '</b> — перевірте, чи це справді знижки, а не стара ціна в картці:<ul>'
+      + f.migrate.map(function(x){ return '<li><b>' + esc(x.child) + '</b> · ' + esc(x.ym) + ' · <b>' + money(x.amount) + '</b>' + (x.noCard ? ' <span class="badge br">без картки</span>' : '') + ' <span class="muted">' + esc(x.basis) + '</span></li>'; }).join('') + '</ul></div></div>';
+    if (f.notFound && f.notFound.length) h += '<div class="alert alert-danger" style="margin-top:8px"><div>Немає рядка в Payment: ' + esc(f.notFound.join('; ')) + '</div></div>';
+    if (f.duplicates && f.duplicates.length) h += '<div class="alert alert-info" style="margin-top:8px"><div>Дублі рядків: ' + esc(f.duplicates.join('; ')) + '</div></div>';
   });
-  if (s.warnings && s.warnings.length) h += '<div class="note">' + esc(s.warnings.join('; ')) + '</div>';
-  h += '<div style="margin-top:10px;display:flex;gap:8px"><button class="btn g" onclick="applySync()"' + (s.cells || (s.files || []).some(function(f){ return f.mirrorRows; }) ? '' : ' disabled') + '>✅ Записати в Payment</button><button class="btn sec" onclick="P.syncPreview=null;renderRegister()">Закрити</button></div></div>';
+  if (s.warnings && s.warnings.length) h += '<div class="alert alert-warn" style="margin-top:8px"><div>' + esc(s.warnings.join('; ')) + '</div></div>';
+  var can = s.cells || (s.files || []).some(function(f){ return f.mirrorRows; });
+  h += '</div><div class="modal-ft" style="position:static"><button class="btn btn-secondary" onclick="P.syncPreview=null;renderRegister()">Закрити</button>'
+    + '<button class="btn btn-primary" onclick="applySync()"' + (can ? '' : ' disabled') + '>✅ Записати в Payment</button></div></div>';
   return h;
-}
-async function loadCoverage(){
-  var box = document.getElementById('covBox'); if (!box) return;
-  var j; try { j = await get('getCoverage', {loc:P.regLoc}); } catch(e){ box.lastChild.innerHTML = esc(e.message); return; }
-  var rows = (j.rows || []).filter(function(c){ return c.status === 'діє'; });
-  box.lastChild.outerHTML = rows.length ? '<div class="tblwrap"><table class="hist"><thead><tr><th>Дитина</th><th>Локація</th><th>З</th><th>По</th><th class="r">Платіж</th><th>Акція</th><th>Примітка</th><th>Хто</th></tr></thead><tbody>'
-    + rows.map(function(c){ return '<tr><td><b>' + esc(c.name) + '</b></td><td>' + esc(c.loc) + '</td><td class="nw">' + esc(c.from) + '</td><td class="nw">' + esc(c.to) + '</td><td class="r nw">' + money(c.amount) + '</td><td>' + esc(c.promoId) + '</td><td class="muted">' + esc(c.note) + '</td><td class="muted">' + esc(c.by) + '<br>' + esc(c.at) + '</td></tr>'; }).join('')
-    + '</tbody></table></div>' : '<div class="diff muted">Покриттів немає.</div>';
 }
 async function previewRecalc(){
   toast('Рахую…');
@@ -1216,19 +1547,19 @@ async function previewSync(){
   renderRegister();
 }
 async function applySync(){
-  if (!confirm('Записати дзеркало знижок і формули «Бюджет навч» за ' + ymLabel(P.ym) + (P.regLoc ? ' (' + P.regLoc + ')' : ' (усі локації)') + '?')) return;
+  if (!confirm('Записати дзеркало знижок і формули «Бюджет навч»' + (P.regLoc ? ' (' + P.regLoc + ')' : ' (усі локації)') + '?')) return;
   try { await post({action:'syncDiscountsToPayment', ym:P.ym, loc:P.regLoc, dryRun:false}); toast('Записано'); }
   catch(e){ alert(e.message); return; }
   P.syncPreview = null; await loadRegister();
 }
 async function addManual(){
   var v = function(id){ return String((document.getElementById(id) || {}).value || '').trim(); };
-  var c = P.byLabel[v('mdCard')], err = function(t){ document.getElementById('mdErr').innerHTML = '<div class="err">' + esc(t) + '</div>'; };
-  if (!c) return err('Оберіть дитину зі списку підказок');
-  if (!v('mdPct') && !v('mdSum')) return err('Вкажіть % або суму');
-  if (!v('mdBasis')) return err('Підстава обовʼязкова');
+  var c = P.byLabel[v('mdCard')];
+  if (!c) return formErr('mdErr', 'Оберіть дитину зі списку підказок');
+  if (!v('mdPct') && !v('mdSum')) return formErr('mdErr', 'Вкажіть % або суму');
+  if (!v('mdBasis')) return formErr('mdErr', 'Підстава обовʼязкова');
   try { await post({action:'addManualDiscount', cardId:c.id, ym:v('mdYm'), promoId:v('mdPromo'), pct:v('mdPct'), amount:v('mdSum'), basis:v('mdBasis')}); toast('Додано'); }
-  catch(e){ return err(e.message); }
+  catch(e){ return formErr('mdErr', e.message); }
   await loadRegister();
 }
 async function cancelManual(id){
@@ -1237,7 +1568,7 @@ async function cancelManual(id){
   await loadRegister();
 }
 async function setupNightly(){
-  if (!confirm('Поставити щоденний перерахунок знижок о 08:30 (поточний і наступний місяць, з оновленням Payment)?')) return;
+  if (!confirm('Поставити щоденний перерахунок знижок о 08:30 (поточний місяць і до грудня, з оновленням Payment)?')) return;
   try { await post({action:'promoNightlySetup'}); toast('Нічний прогін — 08:30'); } catch(e){ alert(e.message); }
 }
 
@@ -1250,37 +1581,44 @@ async function loadReport(){
 }
 function renderReport(){
   var el = document.getElementById('pbody');
-  var h = '<div class="card"><div class="bar">З <input type="date" id="rFrom" value="' + esc(P.rFrom) + '"> по <input type="date" id="rTo" value="' + esc(P.rTo) + '">'
-    + (isDir() ? '<b>' + esc(myLoc()) + '</b>' : '<select id="rLoc">' + locOptions(P.rLoc, true) + '</select>')
-    + '<button class="btn sm" onclick="P.rFrom=document.getElementById(\'rFrom\').value;P.rTo=document.getElementById(\'rTo\').value;var l=document.getElementById(\'rLoc\');P.rLoc=l?l.value:\'\';loadReport()">Показати</button></div>';
+  var h = '<div class="filters"><span class="muted" style="font-weight:700">Період</span><input class="flt-sel" type="date" lang="uk" id="rFrom" value="' + esc(P.rFrom) + '"><span class="muted">—</span><input class="flt-sel" type="date" lang="uk" id="rTo" value="' + esc(P.rTo) + '">'
+    + (isDir() ? '<b>📍 ' + esc(myLoc()) + '</b>' : '<select class="flt-sel" id="rLoc">' + locOptions(P.rLoc, true) + '</select>')
+    + '<button class="btn btn-primary btn-sm" onclick="P.rFrom=document.getElementById(\'rFrom\').value;P.rTo=document.getElementById(\'rTo\').value;var l=document.getElementById(\'rLoc\');P.rLoc=l?l.value:\'\';loadReport()">Показати</button></div>';
   var r = P.report;
-  if (!r){ el.innerHTML = h + '<div class="empty">Завантаження…</div></div>'; return; }
-  if (r.ok === false){ el.innerHTML = h + '<div class="err" style="margin:12px">' + esc(r.error) + '</div></div>'; return; }
-  h += '<div class="tblwrap"><table class="hist"><thead><tr><th>Акція</th><th>Статус</th><th class="r">Договорів</th><th class="r">Навчання / міс</th><th class="r">Знижок</th><th class="r">Сума знижок</th><th class="r">Згоріло</th></tr></thead><tbody>';
+  if (!r){ el.innerHTML = h + '<div class="card">' + loading() + '</div>'; return; }
+  if (r.ok === false){ el.innerHTML = h + '<div class="alert alert-danger"><div>' + esc(r.error) + '</div></div>'; return; }
   var T = {c:0, cs:0, d:0, ds:0, b:0};
+  r.rows.forEach(function(x){ T.c += x.contracts; T.cs += x.contractsSum; T.d += x.discounts; T.ds += x.discountsSum; T.b += x.burned; });
+  h += '<div class="stats-grid">'
+    + '<div class="stat-card"><div class="stat-icon si-g">📝</div><div><div class="stat-val">' + T.c + '</div><div class="stat-lbl">Договорів за акціями</div></div></div>'
+    + '<div class="stat-card"><div class="stat-icon si-b">💰</div><div><div class="stat-val" style="font-size:22px">' + money(T.cs) + '</div><div class="stat-lbl">Навчання за ними / міс</div></div></div>'
+    + '<div class="stat-card"><div class="stat-icon si-o">🎁</div><div><div class="stat-val">' + T.d + '</div><div class="stat-lbl">Знижок надано</div></div></div>'
+    + '<div class="stat-card"><div class="stat-icon si-r">💸</div><div><div class="stat-val" style="font-size:22px">' + money(T.ds) + '</div><div class="stat-lbl">Сума знижок</div></div></div>'
+    + '</div>';
+  h += '<div class="card"><div class="card-hd"><h3>📊 Звіт по акціях · ' + esc(r.from) + ' — ' + esc(r.to) + '</h3><span class="muted">' + esc(r.loc) + '</span></div>'
+    + '<div class="tbl-wrap"><table><thead><tr><th>Акція</th><th>Статус</th><th class="r">Договорів</th><th class="r">Навчання / міс</th><th class="r">Знижок</th><th class="r">Сума знижок</th><th class="r">Згоріло</th></tr></thead><tbody>';
   r.rows.forEach(function(x, i){
-    T.c += x.contracts; T.cs += x.contractsSum; T.d += x.discounts; T.ds += x.discountsSum; T.b += x.burned;
-    h += '<tr><td><b>' + esc(x.id) + '</b> · ' + esc(x.name) + '</td><td>' + stPill(x.status) + '</td>'
-      + '<td class="r">' + (x.contracts ? '<a href="#" onclick="var e=document.getElementById(\'rc' + i + '\');e.style.display=e.style.display?\'\':\'none\';return false">' + x.contracts + '</a>' : '0') + '</td>'
-      + '<td class="r nw">' + money(x.contractsSum) + '</td><td class="r">' + x.discounts + '</td><td class="r nw">' + money(x.discountsSum) + '</td><td class="r">' + (x.burned || '') + '</td></tr>'
-      + '<tr id="rc' + i + '" style="display:none"><td colspan="7" class="muted">' + x.contractList.map(function(c){ return esc(c.name) + ' (' + esc(c.loc) + ', ' + esc(c.date) + ', ' + money(c.fee) + ')'; }).join('; ') + '</td></tr>';
+    h += '<tr' + (x.contracts ? ' class="clickable" onclick="var e=document.getElementById(\'rc' + i + '\');e.style.display=e.style.display?\'\':\'none\'"' : '') + '><td><span class="badge bb">' + esc(x.id) + '</span> <b>' + esc(x.name) + '</b></td><td>' + stBadge(x.status) + '</td>'
+      + '<td class="r" style="font-weight:700">' + (x.contracts ? '<span class="child-link">' + x.contracts + '</span>' : '0') + '</td>'
+      + '<td class="r nw">' + money(x.contractsSum) + '</td><td class="r">' + x.discounts + '</td><td class="r nw" style="font-weight:700">' + money(x.discountsSum) + '</td><td class="r">' + (x.burned || '') + '</td></tr>'
+      + '<tr id="rc' + i + '" style="display:none"><td colspan="7" style="background:#f8fafc;color:var(--gray);font-size:12.5px">' + x.contractList.map(function(c){ return esc(c.name) + ' (' + esc(c.loc) + ', ' + esc(c.date) + ', ' + money(c.fee) + ')'; }).join('; ') + '</td></tr>';
   });
-  h += '<tr class="skip"><td>Відпустка / хвороба</td><td></td><td></td><td></td><td class="r">' + r.vacation.discounts + '</td><td class="r nw">' + money(r.vacation.discountsSum) + '</td><td></td></tr>';
-  h += '</tbody><tfoot><tr><td colspan="2">Разом по акціях</td><td class="r">' + T.c + '</td><td class="r nw">' + money(T.cs) + '</td><td class="r">' + T.d + '</td><td class="r nw">' + money(T.ds) + '</td><td class="r">' + (T.b || '') + '</td></tr></tfoot></table></div>';
-  h += '<div class="note" style="margin:10px 14px">Договори — картки з полем «Акція» = ця акція й датою договору в періоді (для «Приведи друга» — також усі картки з рекомендувачем). Знижки — записи реєстру за місяці періоду.</div></div>';
+  h += '<tr class="skip"><td>🏖 Відпустка / хвороба</td><td></td><td></td><td></td><td class="r">' + r.vacation.discounts + '</td><td class="r nw">' + money(r.vacation.discountsSum) + '</td><td></td></tr>';
+  h += '</tbody><tfoot><tr><td colspan="2">Разом по акціях</td><td class="r">' + T.c + '</td><td class="r nw">' + money(T.cs) + '</td><td class="r">' + T.d + '</td><td class="r nw">' + money(T.ds) + '</td><td class="r">' + (T.b || '') + '</td></tr></tfoot></table></div></div>';
+  h += '<div class="alert alert-info"><div>Договори — картки з полем «Акція» = ця акція й датою договору в періоді (для «Приведи друга» — також усі картки з рекомендувачем). Знижки — записи реєстру за місяці періоду. Клік на рядок — список договорів.</div></div>';
   el.innerHTML = h;
 }
 
 function wirePromos(){
-  document.querySelectorAll('.ptab').forEach(function(b){ b.addEventListener('click', function(){
+  document.querySelectorAll('#ptabs .att-mode-btn').forEach(function(b){ b.addEventListener('click', function(){
     P.tab = b.getAttribute('data-t'); render();
     if (P.tab === 'register' && !P.regRows) loadRegister();
     if (P.tab === 'report' && !P.report) loadReport();
   }); });
-  document.getElementById('refreshBtn').addEventListener('click', async function(){
-    await loadPromos(); P.regRows = null; P.report = null; render();
-    if (P.tab === 'register') loadRegister(); if (P.tab === 'report') loadReport();
-  });
+}
+async function refreshAll(){
+  await loadPromos(); P.regRows = null; P.report = null; render();
+  if (P.tab === 'register') loadRegister(); if (P.tab === 'report') loadReport();
 }
 
 async function init(){
@@ -1291,8 +1629,9 @@ async function init(){
   P.rFrom = ymNow() + '-01'; P.rTo = lastDay(ymNow());
   if (isDir()) P.regLoc = myLoc();
   wirePromos();
+  document.getElementById('pbody').innerHTML = '<div class="card">' + loading() + '</div>';
   var _l = loadLocs();
-  try { await loadPromos(); } catch(e){ document.getElementById('pbody').innerHTML = '<div class="err">' + esc(e.message) + '</div>'; return; }
+  try { await loadPromos(); } catch(e){ document.getElementById('pbody').innerHTML = '<div class="alert alert-danger"><div>' + esc(e.message) + '</div></div>'; return; }
   await _l;
   render();
 }

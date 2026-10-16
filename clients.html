@@ -588,23 +588,6 @@ details.card>summary::-webkit-details-marker{display:none}details.card[open]>sum
       });
       window.addEventListener('load', function(){ setTimeout(window._revealHistMenu, 600); });
       </script>
-      <div class="nav-item" id="navPromos" style="display:none"
-           onclick="window.location.href='promos.html'">
-        <span class="ni">🎁</span> Акції та знижки
-      </div>
-      <script>
-      /* v7.414: «Акції та знижки» — CFO/CEO/COO/HR (керують) і директор (пропонує, бачить свою локацію). */
-      window._revealPromosMenu = function(){
-        var el = document.getElementById('navPromos'); if (!el) return;
-        var u = null;
-        try { u = (typeof S !== 'undefined' && S && S.user) ? S.user : null; } catch(e){}
-        if (!u){ try { var s = JSON.parse(localStorage.getItem('mkids_session') || 'null'); u = (s && s.user) || null; } catch(e){} }
-        var r = u ? String(u.role || '').toLowerCase().trim() : '';
-        el.style.display = (['cfo','ceo','coo','hr','director'].indexOf(r) !== -1) ? '' : 'none';
-      };
-      window._revealPromosMenu();
-      window.addEventListener('load', function(){ setTimeout(window._revealPromosMenu, 600); });
-      </script>
       <div class="nav-item" id="navCash" style="display:none"
            onclick="window.location.href='cash.html'">
         <span class="ni">💵</span> Готівка
@@ -627,6 +610,23 @@ details.card>summary::-webkit-details-marker{display:none}details.card[open]>sum
         }
       });
       window.addEventListener('load', function(){ setTimeout(window._revealCashMenu, 600); });
+      </script>
+      <div class="nav-item" id="navPromos" style="display:none"
+           onclick="window.location.href='promos.html'">
+        <span class="ni">🎁</span> Акції та знижки
+      </div>
+      <script>
+      /* v7.414: «Акції та знижки» — CFO/CEO/COO/HR (керують) і директор (пропонує, бачить свою локацію). */
+      window._revealPromosMenu = function(){
+        var el = document.getElementById('navPromos'); if (!el) return;
+        var u = null;
+        try { u = (typeof S !== 'undefined' && S && S.user) ? S.user : null; } catch(e){}
+        if (!u){ try { var s = JSON.parse(localStorage.getItem('mkids_session') || 'null'); u = (s && s.user) || null; } catch(e){} }
+        var r = u ? String(u.role || '').toLowerCase().trim() : '';
+        el.style.display = (['cfo','ceo','coo','hr','director'].indexOf(r) !== -1) ? '' : 'none';
+      };
+      window._revealPromosMenu();
+      window.addEventListener('load', function(){ setTimeout(window._revealPromosMenu, 600); });
       </script>
       <div class="nav-sec" data-section="crm">👶 КЛІЄНТИ CRM</div>
       <div class="nav-item active" data-permission="clients_list" data-parent="crm" data-perm-page="clients"
@@ -939,10 +939,7 @@ details.card>summary::-webkit-details-marker{display:none}details.card[open]>sum
         </div>
         <div class="fg"><label>Щомісячна сума (грн)</label>
           <input type="number" id="fMonthlyFee" placeholder="0" oninput="recalcDiscount()"></div>
-        <div id="contractInfo" class="alert alert-info"></div>
-        <div id="statusWarnings"></div>
-        <div id="discountBlock" style="margin-top:12px"></div>
-        <!-- v7.414 АКЦІЇ: рекомендувач (будь-яка локація), брат/сестра (зв'язок в обидва боки), акція договору -->
+        <!-- v7.414 АКЦІЇ (v7.416 — одразу після «Щомісячна сума»): рекомендувач (будь-яка локація), брат/сестра (зв'язок в обидва боки), акція договору -->
         <div class="section-hd">🎁 Акції</div>
         <div id="promoCardBox" style="font-size:13px;color:var(--gray)">Завантаження…</div>
         <div class="g2" id="promoCardFields" style="display:none">
@@ -961,6 +958,9 @@ details.card>summary::-webkit-details-marker{display:none}details.card[open]>sum
           <div style="font-size:11px;color:var(--gray);margin-top:4px">Зв'язок ставиться в обидві картки. Порядок у сімʼї — за датою договору: перша дитина без знижки, друга й наступні −8%, поки навчаються одночасно.</div>
         </div>
         <datalist id="dlPromoCards"></datalist>
+        <div id="contractInfo" class="alert alert-info"></div>
+        <div id="statusWarnings"></div>
+        <div id="discountBlock" style="margin-top:12px"></div>
         <div class="section-hd">Зміни суми договору</div>
         <div id="feeHistoryList"></div>
         <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
@@ -8327,7 +8327,8 @@ async function promoFillCard(id){
   var opts='<option value="">— без акції —</option>';
   (PROMO_UI.promos||[]).forEach(function(p){
     var okLoc=!loc || /^вс[іi]$/i.test(String(p.locs||'').trim()) || String(p.locs||'').split(/[,;]/).map(function(x){return x.trim();}).indexOf(loc)!==-1;
-    if((p.status==='діє' && okLoc) || p.id===cur) opts+='<option value="'+esc(p.id)+'"'+(p.id===cur?' selected':'')+'>'+esc(p.id+' · '+p.name+(p.status!=='діє'?' ('+p.status+')':''))+'</option>';
+    if(p.type==='службова' && p.id!==cur) return;   // v7.416: службову «R · Ручна знижка» у виборі не показуємо
+    if((p.status==='діє' && okLoc) || p.id===cur) opts+='<option value="'+esc(p.id)+'"'+(p.id===cur?' selected':'')+'>'+esc(p.name+(p.status!=='діє'?' ('+p.status+')':''))+'</option>';   // v7.416: лише назва, без коду
   });
   sel.innerHTML=opts;
   PROMO_UI.sib=(me.siblings||[]).slice();
