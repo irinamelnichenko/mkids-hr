@@ -7157,7 +7157,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.414', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.415', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -7295,6 +7295,7 @@ function doGet(e) {
     else if (action === 'getPromoAttention')           result = getPromoAttention(e.parameter || {});      // v7.414 передоплати-здогадки + пропозиції
     else if (action === 'getPromoCardIndex')           result = getPromoCardIndex();                       // v7.414 картки мережі для вибору рекомендувача/брата
     else if (action === 'getPrepaymentRefund')         result = getPrepaymentRefund(e.parameter || {});    // v7.414 перерахунок передоплати при розірванні (показ)
+    else if (action === 'getCoverage')                 result = getCoverage(e.parameter || {});            // v7.415 покриття передоплатою
     else if (action === 'previewPrepayment')           result = confirmPrepayment(_promoDry(e.parameter));  // v7.414 пробний прогін підтвердження (нічого не пише)
     else if (action === 'previewDiscounts')            result = recalcDiscounts(_promoDry(e.parameter));    // v7.414 що зміниться в реєстрі за місяць
     else if (action === 'previewDiscountSync')         result = syncDiscountsToPayment(_promoDry(e.parameter)); // v7.414 які клітинки Payment перейдуть на формулу
@@ -11056,12 +11057,8 @@ function _aggLocRows(cfgRow, curJSMonth, monthName, updateStr, cardsRef) {
       var total = fs + fv + fe;
       var br = bs + bd;
       var totalNoEntry = fs + fe;
-      var status;
-      if (br === 0 && totalNoEntry === 0) status = 'unknown';
-      else if (totalNoEntry === 0 && br > 0) status = 'nopay';
-      else if (totalNoEntry > br)  status = 'over';
-      else if (totalNoEntry >= br) status = 'paid';
-      else                         status = 'debt';
+      var status = _payStatus(fs, fe, bs, bd,   // v7.415: місяць, покритий передоплатою, — без навчання
+        !!_coverFor(new Date().getFullYear() + '-' + ('0' + (curJSMonth + 1)).slice(-2), '', ch.name, loc));
       // v7.245: у колонку «Група» пишемо НАЗВУ З ФАЙЛУ (rawGroup), а не
       // нормалізований тип. Досі табель і додаткові показували «Study-ki
       // 3-4 Ольга і Соломія», а предметники (беруть групи з карток) —
@@ -11999,17 +11996,14 @@ function getAllPayments(params){
       var fHar = hasHarch ? toNum(foundRow[bs0 + LO.factHarch]) : 0;
       var bHar = hasHarch ? toNum(foundRow[bs0 + LO.budHarch])  : 0;
       // Статус — як в aggregatePayments: по навчання+доп, без вступного й без харчування.
-      var totalNoEntry = fNav + fDop, br = bNav + bDop, status;
-      if (br === 0 && totalNoEntry === 0) status = 'unknown';
-      else if (totalNoEntry === 0 && br > 0) status = 'nopay';
-      else if (totalNoEntry >  br) status = 'over';
-      else if (totalNoEntry >= br) status = 'paid';
-      else                         status = 'debt';
+      var _cv = _coverFor(year + '-' + ('0' + m).slice(-2), '', foundName, loc);   // v7.415 покриття передоплатою
+      var status = _payStatus(fNav, fDop, bNav, bDop, !!_cv);
+      if (_cv){ T.covBud = (T.covBud || 0) + bNav + bDop; T.covFact = (T.covFact || 0) + fNav + fDop; }
       months.push({month:m, factStudy:fNav, budStudy:bNav, factExtra:fDop, budExtra:bDop, entry:fVst,
-                   factHarch:(hasHarch?fHar:null), budHarch:(hasHarch?bHar:null), status:status});
+                   factHarch:(hasHarch?fHar:null), budHarch:(hasHarch?bHar:null), status:status, covered:_cv ? _coverText(_cv) : ''});
       T.factStudy+=fNav; T.budStudy+=bNav; T.factExtra+=fDop; T.budExtra+=bDop; T.entry+=fVst; T.factHarch+=fHar; T.budHarch+=bHar;
     }
-    var debtY = (T.budStudy + T.budExtra) - (T.factStudy + T.factExtra);
+    var debtY = (T.budStudy + T.budExtra - (T.covBud || 0)) - (T.factStudy + T.factExtra - (T.covFact || 0));   // v7.415 без покритих місяців
     return {ok:true, found:true, loc:loc, name:foundName, group:foundGroup, year:year,
             colsPerMonth:cpm, hasHarch:hasHarch, months:months,
             totals:{factStudy:T.factStudy, budStudy:T.budStudy, factExtra:T.factExtra, budExtra:T.budExtra,
@@ -12544,6 +12538,7 @@ function _aggregatePaymentsYearlyImpl() {
           var factYear  = 0;
           var budYear   = 0;
           var factToday = 0;
+          var factDebt = 0, budDebt = 0, _yY = now.getFullYear();   // v7.415: борг без місяців, покритих передоплатою
           for (var mi = 0; mi < 12; mi++) {
             var col = 1 + mi * _LOy.cpm;                  // v7.103: старт блоку за cpm локації
             var fs  = rowData ? toNum(rowData[col + _LOy.factNavch]) : 0;  // Факт навч
@@ -12553,18 +12548,15 @@ function _aggregatePaymentsYearlyImpl() {
             var bs  = rowData ? toNum(rowData[col + _LOy.budNavch])  : 0;  // Бюджет навч
             var totalNoEntry = fs + fe;
             var budget       = bs + be;
-            var mStatus;
-            if (budget === 0 && totalNoEntry === 0)     mStatus = 'unknown';
-            else if (totalNoEntry === 0 && budget > 0)  mStatus = 'nopay';
-            else if (totalNoEntry > budget)             mStatus = 'over';
-            else if (totalNoEntry >= budget)            mStatus = 'paid';
-            else                                        mStatus = 'debt';
+            var _cov = _coverFor(_yY + '-' + ('0' + (mi + 1)).slice(-2), '', ch.name, loc);   // v7.415 покриття передоплатою
+            var mStatus = _payStatus(fs, fe, bs, be, !!_cov);
+            if (!_cov){ factDebt += totalNoEntry; budDebt += budget; }
             rowOut.push(fs, fe, fv, bs, be, mStatus);     // v7.101 порядок = заголовок (навч,доп,вступ,бюдж-навч,бюдж-доп,статус)
             factYear  += totalNoEntry;                    // Факт-Рік лишаємо навч+доп (вступ окремо, не сюди)
             budYear   += budget;
             if (mi <= curJSMonth) factToday += totalNoEntry;
           }
-          var debtYear = budYear > factYear ? budYear - factYear : 0;
+          var debtYear = budDebt > factDebt ? budDebt - factDebt : 0;   // v7.415: покриті місяці (навчання) не рахуються
           rowOut.push(factYear, budYear, debtYear, factToday, updateStr, (g.departed || ch.departed) ? 'так' : '');   // v7.299 «Вибув»; v7.303 і безіменні рядки
           allRows.push(rowOut);
         });
@@ -26479,9 +26471,12 @@ function getInvoiceListData(params){
       var signerPhone = signer === 'dad' ? String(c['Телефон тата']|| '') : String(c['Телефон мами']|| '');
       var signerEmail = signer === 'dad' ? String(c['Email тата']  || '') : String(c['Email мами']  || '');
 
+      var _covL = _coverFor(payYear + '-' + ('0' + payMonth).slice(-2), String(c['ID'] || ''), name, loc);   // v7.415
+      if (_covL) paymentSum = 0;   // навчання за місяць покрито передоплатою — рахунок за навчання не формуємо
       children.push({
         id: String(c['ID'] || ''),
         name: name,
+        prepayCovered: _covL ? _coverText(_covL) : '',
         group: String(c['Група'] || '').trim(),
         status: String(c['Статус'] || '').trim(),
         paymentSum: paymentSum,
@@ -26767,6 +26762,9 @@ function generateInvoicePDF(opts){
     else if (madj < 0) lines.push({name: LABEL_OVERPAY + ' (харчування)', qty: 1, price: madj, sum: madj});
     total = Number(ch.extrasSum) || 0;
   } else {
+    // v7.415: місяць покрито передоплатою → рахунок за навчання не формується
+    var _covI = _coverFor(year + '-' + ('0' + month).slice(-2), client.id, childName, loc);
+    if (_covI) return {ok:false, covered:true, error:'Навчання ' + childName + ' за ' + MONTHS_CAL[month - 1] + ' ' + year + ' ' + _coverText(_covI) + ' — рахунок не формується.'};
     var sum = _invoiceSumFromYearly(childName, loc, month, type);
     if(opts.dataOnly){ Logger.log('[TIMING] _invoiceSumFromYearly: %s ms', Date.now()-_tp); _tp=Date.now(); }
     // v7.63 РОЗБИВКА: якщо Бюджет місяця > «Сума договору» з картки → різниця = «Борг
@@ -37159,7 +37157,7 @@ function _repairPredLessons(apply){
 //     = база − SUMIFS(дзеркало; ПІБ рядка; місяць). Руками в клітинку більше ніхто не пише.
 //   Накладання — послідовно від поточної ціни: сім'я → передоплата → друг → тимчасові → відпустка.
 // ═══════════════════════════════════════════════════════════════════════════
-var PROMO_START_YM     = '2026-12';
+var PROMO_START_YM     = '2026-11';   // v7.415: з листопада (листопадові рахунки ~30.10)
 var PROMO_TAB          = 'Акції';
 var PROMO_HEADER       = ['ID','Назва','Тип','На що діє','Умови','Правило','Початок','Кінець','Локації',
                           'Хто створив','Створено','Статус','Хто підтвердив','Підтверджено','Коментар'];
@@ -37170,14 +37168,17 @@ var PREPAY_TAB         = 'Передоплати';
 var PREPAY_HEADER      = ['ID','ID картки','ПІБ','Локація','Дата платежу','Референс','Сума','Місяців','%',
                           'Ціна/міс','Місяць платежу','Колонка платежу','Перший місяць','Статус','Рознесено',
                           'На наступний рік','Хто вирішив','Коли','Примітка'];
+var COVER_TAB          = 'Покриття';   // v7.415: передоплата покриває місяці — рахунок не формується, борг не рахується
+var COVER_HEADER       = ['ID','ID картки','ПІБ','Локація','Місяць з','Місяць по','Сума платежу','ID акції','ID передоплати',
+                          'Статус','Хто','Коли','Примітка'];
 var DISC_MIRROR_TAB    = 'Знижки';
 var DISC_MIRROR_HEADER = ['ПІБ (як у Payment)','Місяць','Сума, грн','ID акції','ID запису','ID картки'];
 var CARD_COL_REFERRER  = 'Рекомендувач (ID)';
 var CARD_COL_SIBLINGS  = 'Брат / сестра (ID)';
 var CARD_COL_PROMO     = 'Акція (ID)';
 var PROMO_OFFICE_ROLES = ['cfo','ceo','coo','hr'];
-var PROMO_ORDER        = {A2:1, A3:2, A1:3, T:4, VAC:5};
-var PROMO_ORDER_NAME   = {1:'сім\'я', 2:'передоплата', 3:'друг', 4:'тимчасова', 5:'відпустка'};
+var PROMO_ORDER        = {R:0, A2:1, A3:2, A1:3, T:4, VAC:5};
+var PROMO_ORDER_NAME   = {0:'перенесено', 1:'сім\'я', 2:'передоплата', 3:'друг', 4:'тимчасова', 5:'відпустка'};
 var PROMO_APPLIES      = ['навчання','вступний внесок','обидва'];
 var PROMO_PREPAY_TIERS_DEF = [[3,2],[6,5],[12,10]];
 var PROMO_SEED = [
@@ -37189,7 +37190,12 @@ var PROMO_SEED = [
    'pct=8'],
   ['A3','Передоплата','постійна','навчання',
    'Передоплата: 3 міс −2%, 6 міс −5%, рік −10%. Розпізнається з виписки лише для 3, 6 і 12 місяців; без підтвердження не нараховується. Розірвання — перерахунок за фактичним періодом.',
-   '3=2; 6=5; 12=10']
+   '3=2; 6=5; 12=10'],
+  // v7.415 службова: знижки, які до старту реєстру стояли в «Бюджет навч» руками (=20000-1904 тощо) — перенесені
+  // в реєстр при переході клітинки на формулу, щоб не подвоїлись. Двигун їх не породжує, лише зберігає.
+  ['R','Ручна знижка (перенесено з Payment)','службова','навчання',
+   'Знижка, що до переходу на реєстр стояла в клітинці «Бюджет навч» вручну. Перенесена як є при переході на формулу. Якщо її тепер дає правило (сімʼя, друг) — скасуйте цей запис у реєстрі.',
+   '']
 ];
 
 // ── дрібні помічники ──
@@ -37224,7 +37230,7 @@ function _promoIdList(v){
 }
 function _promoNum(v){ var n = Number(String(v == null ? '' : v).replace(/\s/g, '').replace(',', '.')); return isFinite(n) ? n : 0; }
 function _promoColIdx(letter){ var s = String(letter || '').toUpperCase().replace(/[^A-Z]/g, ''), n = 0; for (var i = 0; i < s.length; i++) n = n * 26 + (s.charCodeAt(i) - 64); return n - 1; }
-function _promoOrderOf(promoId){ var p = String(promoId || ''); if (PROMO_ORDER[p]) return PROMO_ORDER[p]; if (/^T/i.test(p)) return PROMO_ORDER.T; if (/^VAC/i.test(p)) return PROMO_ORDER.VAC; return PROMO_ORDER.T; }
+function _promoOrderOf(promoId){ var p = String(promoId || ''); if (PROMO_ORDER.hasOwnProperty(p)) return PROMO_ORDER[p]; if (/^T/i.test(p)) return PROMO_ORDER.T; if (/^VAC/i.test(p)) return PROMO_ORDER.VAC; return PROMO_ORDER.T; }
 function _promoParseRule(s){
   var o = {};
   String(s || '').split(/[;\n]/).forEach(function(p){
@@ -37605,10 +37611,71 @@ function _prepayGuessAfterApply(loc, written){
   } catch(e){ Logger.log('[prepayGuess] %s', e && e.message); return 0; }
 }
 
+// ── v7.415 ПОКРИТТЯ ──
+// Платіж передоплати лишається однією сумою у «Факт навч» місяця надходження (CF ведеться вручну за датою
+// надходження). Замість розкладки — запис «Покриття»: дитина · локація · місяць з · місяць по · сума · ID акції.
+// Рахунок за навчання й борг за місяці в межах покриття не формуються.
+var _COVER_MEMO = null;
+function _coverList(){
+  if (_COVER_MEMO) return _COVER_MEMO;
+  var out = [];
+  try {
+    var sh = SpreadsheetApp.openById(CONFIG_SHEET_ID).getSheetByName(COVER_TAB);
+    if (sh && sh.getLastRow() > 1){
+      sh.getRange(2, 1, sh.getLastRow() - 1, COVER_HEADER.length).getValues().forEach(function(r, i){
+        var o = {row:i + 2}; COVER_HEADER.forEach(function(h, j){ o[h] = r[j]; });
+        out.push({row:o.row, id:String(o['ID'] || '').trim(), cardId:String(o['ID картки'] || '').trim(), name:String(o['ПІБ'] || ''),
+          loc:String(o['Локація'] || ''), from:_promoYM(o['Місяць з']), to:_promoYM(o['Місяць по']), amount:_promoNum(o['Сума платежу']),
+          promoId:String(o['ID акції'] || ''), prepayId:String(o['ID передоплати'] || ''), status:String(o['Статус'] || ''),
+          by:String(o['Хто'] || ''), at:String(o['Коли'] || ''), note:String(o['Примітка'] || '')});
+      });
+    }
+  } catch(e){ Logger.log('[cover] %s', e && e.message); }
+  _COVER_MEMO = out.filter(function(c){ return c.id; });
+  return _COVER_MEMO;
+}
+function _coverLocMatch(a, b){
+  if (_nameFold(a) === _nameFold(b)) return true;
+  try {
+    var sa = _subLocOf(a), sb = _subLocOf(b);
+    if (sa && _nameFold(sa.host) === _nameFold(b)) return true;
+    if (sb && _nameFold(sb.host) === _nameFold(a)) return true;
+  } catch(_e){}
+  return false;
+}
+// Запис покриття, що містить місяць ym: за ID картки (рахунки) або за ПІБ+локацією (агрегати Payment).
+function _coverFor(ym, cardId, name, loc){
+  if (!ym) return null;
+  var nk = name ? _normNameVac(name) : '';
+  return _coverList().filter(function(c){
+    if (c.status !== 'діє' || !c.from || !c.to || ym < c.from || ym > c.to) return false;
+    if (cardId && c.cardId === cardId) return true;
+    return !!nk && _normNameVac(c.name) === nk && (!loc || _coverLocMatch(loc, c.loc));
+  })[0] || null;
+}
+function _coverText(c){ return 'покрито передоплатою ' + c.from + '…' + c.to + ' (' + Math.round(c.amount) + ' грн, ' + c.promoId + ')'; }
+// Статус місяця. Місяць у межах покриття передоплатою — 'covered': борг за нього не рахується і не доганяється.
+function _payStatus(fs, fe, bs, be, covered){
+  if (covered) return 'covered';
+  var t = fs + fe, b = bs + be;
+  if (b === 0 && t === 0) return 'unknown';
+  if (t === 0 && b > 0) return 'nopay';
+  if (t > b) return 'over';
+  if (t >= b) return 'paid';
+  return 'debt';
+}
+// GET getCoverage[&loc=&cardId=]
+function getCoverage(params){
+  try {
+    params = params || {};
+    var loc = String(params.loc || '').trim(), cid = String(params.cardId || '').trim();
+    return {ok:true, rows:_coverList().filter(function(c){ return (!loc || _coverLocMatch(loc, c.loc)) && (!cid || c.cardId === cid); })};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
 // POST confirmPrepayment {id, firstMonth:'yyyy-MM', dryRun?} — лише офіс.
-//   1) знімає платіж із клітинки «Факт навч» місяця надходження;
-//   2) розносить по Сума/k у «Факт навч» кожного з k місяців (у файлі цього року; решта → «На наступний рік»);
-//   3) статус «підтверджено» → двигун нараховує A3 на ці місяці (і переписує Payment ≥ PROMO_START_YM).
+//   v7.415: Payment НЕ чіпаємо — платіж лишається у «Факт навч» місяця надходження однією сумою.
+//   Створюємо запис «Покриття» (з … по …), статус передоплати → «підтверджено», двигун нараховує A3 на ці місяці.
 function confirmPrepayment(body){
   var lock = null;
   try {
@@ -37623,67 +37690,33 @@ function confirmPrepayment(body){
     if ([3, 6, 12].indexOf(k) === -1) return {ok:false, error:'Розпізнаються лише 3, 6 і 12 місяців'};
     var first = _promoYM(body.firstMonth) || p.firstYM || p.payYM;
     if (!first) return {ok:false, error:'Не вказано перший місяць'};
-    var reg = _getLocationPaymentRegistry(p.loc);
-    if (!reg || !reg.sheetId) return {ok:false, error:'Локацію ' + p.loc + ' не знайдено в реєстрі'};
-    var ss = SpreadsheetApp.openById(reg.sheetId), paySh = ss.getSheetByName(reg.sheetName) || ss.getSheets()[0];
-    var data = paySh.getDataRange().getValues();
-    var fileYear = _promoFileYear(ss);
-    if (Number(p.payYM.slice(0, 4)) !== fileYear) return {ok:false, error:'Платіж ' + p.payYM + ' не з року файлу Payment (' + fileYear + ')'};
-    var cpm = reg.colsPerMonth || 5, LO = _paymentLayout(cpm);
-    // рядок дитини
-    var rowIdx = -1, nk = _normNameVac(p.name), card = _promoCards().byId[p.cardId];
-    var nk2 = card ? _normNameVac(card.name) : nk;
-    for (var r = 3; r < data.length; r++){
-      var nm = trim(String(data[r][0] || '')); if (!nm || isGroupHeaderRow(data[r], 1)) continue;
-      var n0 = _normNameVac(nm); if (n0 === nk || n0 === nk2){ rowIdx = r; break; }
-    }
-    if (rowIdx < 0) return {ok:false, error:'Рядок «' + p.name + '» не знайдено в Payment ' + p.loc};
-    var payCol0 = _promoColIdx(p.payCol);
-    if (payCol0 < 1) payCol0 = 1 + (Number(p.payYM.slice(5, 7)) - 1) * cpm + LO.factNavch;
-    var per = Math.floor(p.amount / k), lastPer = p.amount - per * (k - 1);
-    var plan = [], carry = [];
-    for (var i = 0; i < k; i++){
-      var ym = _ymAdd(first, i), amt = (i === k - 1) ? lastPer : per;
-      if (Number(ym.slice(0, 4)) !== fileYear){ carry.push({ym:ym, amount:amt}); continue; }
-      var mo = Number(ym.slice(5, 7));
-      if (_isMonthClosed(fileYear, mo)) return {ok:false, error:'Місяць ' + ym + ' закритий — рознесення неможливе'};
-      plan.push({ym:ym, col0:1 + (mo - 1) * cpm + LO.factNavch, amount:amt});
-    }
-    if (_isMonthClosed(fileYear, Number(p.payYM.slice(5, 7)))) return {ok:false, error:'Місяць платежу ' + p.payYM + ' закритий'};
-    var payCell = paySh.getRange(rowIdx + 1, payCol0 + 1), payBefore = _promoNum(payCell.getValue());
-    if (payBefore + 0.5 < p.amount) return {ok:false, error:'У клітинці факту ' + _colLetter(payCol0) + (rowIdx + 1) + ' лише ' + payBefore + ' — менше за платіж ' + p.amount + '. Можливо, вже переносили вручну.'};
-    var changes = [{a1:_colLetter(payCol0) + (rowIdx + 1), ym:p.payYM, before:payBefore, delta:-p.amount}];
-    plan.forEach(function(x){
-      var same = changes.filter(function(c){ return c.a1 === _colLetter(x.col0) + (rowIdx + 1); })[0];
-      if (same){ same.delta += x.amount; return; }
-      changes.push({a1:_colLetter(x.col0) + (rowIdx + 1), ym:x.ym, before:_promoNum(paySh.getRange(rowIdx + 1, x.col0 + 1).getValue()), delta:x.amount});
-    });
-    var res = {ok:true, dryRun:dryRun, id:p.id, child:p.name, loc:p.loc, months:k, pct:p.pct, first:first,
-      perMonth:per, changes:changes.map(function(c){ return {cell:c.a1, month:c.ym, before:c.before, after:c.before + c.delta}; }),
-      carry:carry, carrySum:carry.reduce(function(s, x){ return s + x.amount; }, 0)};
+    var last = _ymAdd(first, k - 1);
+    var clash = _coverList().filter(function(c){ return c.status === 'діє' && c.cardId === p.cardId && !(last < c.from || first > c.to); })[0];
+    if (clash) return {ok:false, error:'Місяці перетинаються з уже наявним покриттям ' + clash.from + '…' + clash.to + ' (' + clash.id + ')'};
+    var res = {ok:true, dryRun:dryRun, id:p.id, child:p.name, loc:p.loc, months:k, pct:p.pct, first:first, last:last, amount:p.amount,
+      payMonth:p.payYM, note:'Платіж ' + p.amount + ' лишається у «Факт навч» ' + p.payYM + '. Рахунок за навчання і борг за ' + first + '…' + last + ' не формуються.'};
     if (dryRun) return res;
     lock = LockService.getScriptLock(); lock.waitLock(30000);
-    var who = _promoWho(a), journal = [];
-    changes.forEach(function(c){
-      var cell = paySh.getRange(c.a1);
-      var cur = _promoNum(cell.getValue());
-      cell.setValue(cur + c.delta);
-      journal.push({by:who, route:'confirmPrepayment', loc:p.loc, name:trim(String(data[rowIdx][0])), year:fileYear,
-        month:Number(c.ym.slice(5, 7)), col:'Факт-навч', before:cur, after:cur + c.delta, reason:'передоплата ' + k + ' міс (' + p.id + ')'});
-    });
-    _moneyJournalLog(journal);
+    var who = _promoWho(a), now = _promoStamp(), cid = _promoNewId('C');
+    var csh = _promoSheet(COVER_TAB, COVER_HEADER);
+    _promoTextCols(csh, COVER_HEADER, ['ID','ID картки','Місяць з','Місяць по','ID передоплати']);
+    csh.getRange(csh.getLastRow() + 1, 1, 1, COVER_HEADER.length).setValues([_promoRowArr({'ID':cid, 'ID картки':p.cardId, 'ПІБ':p.name,
+      'Локація':p.loc, 'Місяць з':first, 'Місяць по':last, 'Сума платежу':p.amount, 'ID акції':'A3', 'ID передоплати':p.id,
+      'Статус':'діє', 'Хто':who, 'Коли':now, 'Примітка':'передоплата ' + k + ' міс −' + p.pct + '%, платіж ' + p.date + (p.ref ? ' (реф. ' + p.ref + ')' : '')}, COVER_HEADER)]);
+    _COVER_MEMO = null;
     var sh = _promoSheet(PREPAY_TAB, PREPAY_HEADER), col = function(h){ return PREPAY_HEADER.indexOf(h) + 1; };
     sh.getRange(p.row, col('Перший місяць')).setNumberFormat('@').setValue(first);
     sh.getRange(p.row, col('Статус')).setValue('підтверджено');
-    sh.getRange(p.row, col('Рознесено')).setValue(plan.length + ' міс × ' + per + ' (' + (plan.length ? plan[0].ym + '…' + plan[plan.length - 1].ym : '—') + ')');
-    sh.getRange(p.row, col('На наступний рік')).setValue(carry.length ? (carry.length + ' міс, ' + res.carrySum + ' грн (' + carry[0].ym + '…' + carry[carry.length - 1].ym + ')') : '');
+    sh.getRange(p.row, col('Рознесено')).setValue('не розноситься — покриття ' + cid + ' (' + first + '…' + last + ')');
     sh.getRange(p.row, col('Хто вирішив')).setValue(who);
-    sh.getRange(p.row, col('Коли')).setValue(_promoStamp());
+    sh.getRange(p.row, col('Коли')).setValue(now);
     try { lock.releaseLock(); lock = null; } catch(_l){}
-    // A3 на місяці ≥ старту реєстру в межах цього року
-    var recs = [];
-    plan.forEach(function(x){ if (x.ym >= PROMO_START_YM) recs.push(recalcDiscounts({ym:x.ym, dryRun:false, sync:true, _internal:true, _who:who})); });
-    res.recalc = recs.map(function(r){ return {ym:r.ym, ok:r.ok, added:(r.added || []).length, updated:(r.updated || []).length, error:r.error}; });
+    res.coverId = cid;
+    // A3 — на місяці покриття від старту реєстру до наступного місяця (далі — нічний прогін, коли місяць настане)
+    // реєстр — від першого місяця до грудня того ж року (синк переводить до грудня); наступний рік — нічний прогін, коли настане
+    var lim = _ymAdd(_ymNow(), 1), to = first.slice(0, 4) + '-12';
+    if (lim > to && last >= lim) to = lim;
+    res.recalc = (first <= to) ? _promoRecalcRange(first, to, p.loc, who) : null;
     return res;
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
   finally { if (lock){ try { lock.releaseLock(); } catch(_l2){} } }
@@ -37706,8 +37739,8 @@ function rejectPrepayment(body){
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 // GET getPrepaymentRefund&childId=&date=yyyy-MM-dd — перерахунок при розірванні (лише показ, нічого не пише).
-//   Належало = відходжені місяці × ціна × (1 − знижка стандартного строку, не довшого за відходжений:
-//   3 міс → 2%, 6 → 5%, 12 → 10%; менше 3 — без знижки). До повернення = сплачено − належало.
+//   v7.415: знижка — ЛИШЕ якщо відходжено рівно 3, 6 або 12 місяців (як у політиці); інший строк — без знижки.
+//   Належало = відходжені місяці × ціна × (1 − знижка). До повернення = сплачено − належало.
 function getPrepaymentRefund(params){
   try {
     params = params || {};
@@ -37718,14 +37751,12 @@ function getPrepaymentRefund(params){
     var endYM = date.slice(0, 7), tiers = _prepayTiers();
     var items = _prepayList().filter(function(p){ return p.cardId === id && p.status === 'підтверджено'; }).map(function(p){
       var k = Math.round(p.months), used = Math.max(0, Math.min(k, _ymDiff(p.firstYM, endYM) + 1));
-      var tierPct = 0; tiers.forEach(function(t){ if (used >= t[0]) tierPct = t[1]; });
+      var tierPct = 0; tiers.forEach(function(t){ if (used === t[0]) tierPct = t[1]; });
       var due = used * Math.round(p.price * (1 - tierPct / 100));
-      var per = Math.floor(p.amount / k);
-      var future = 0; for (var i = used; i < k; i++) future += (i === k - 1) ? (p.amount - per * (k - 1)) : per;
       return {id:p.id, paid:p.amount, months:k, pct:p.pct, price:p.price, first:p.firstYM, used:used, tierPct:tierPct, due:due,
-        refund:Math.max(0, p.amount - due), futureFact:future,
+        refund:Math.max(0, p.amount - due),
         text:'Сплачено ' + p.amount + ' за ' + k + ' міс. Відходив ' + used + ' міс → належало ' + used + ' × ' + p.price +
-             (tierPct ? (' − ' + tierPct + '%') : ' (без знижки)') + ' = ' + due + '. До повернення: ' + Math.max(0, p.amount - due) + '.'};
+             (tierPct ? (' − ' + tierPct + '%') : ' (без знижки: строк не 3 / 6 / 12 міс)') + ' = ' + due + '. До повернення: ' + Math.max(0, p.amount - due) + '.'};
     });
     return {ok:true, childId:id, date:date, items:items};
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
@@ -37837,6 +37868,9 @@ function recalcDiscounts(body){
     var dryRun = (body.dryRun !== false), onlyLoc = String(body.loc || '').trim();
     if (!dryRun && !body._internal && !_promoIsOffice(_promoActor(body))) return PROMO_DENIED;
     var who = body._who || (body._internal ? 'система' : _promoWho(_promoActor(body)));
+    // v7.415: спершу переносимо ручні знижки з ще не переведених клітинок (R) — щоб правила накладались уже з ними
+    if (!dryRun && !body._noMigrate && ym >= PROMO_START_YM && body.sync !== false)
+      syncDiscountsToPayment({ym:ym, loc:onlyLoc, dryRun:false, migrateOnly:true, _internal:true});
     var ctx = {cards:_promoCards(), promos:_promoList(), prepays:_prepayList(), payLocs:_promoPayLocs()};
     ctx.factYear = new Date().getFullYear();
     ctx.facts = _promoYearlyFacts();
@@ -37847,7 +37881,7 @@ function recalcDiscounts(body){
     var exByKey = {}; existing.forEach(function(r){ var k = String(r['Ключ'] || ''); if (k) exByKey[k] = r; });
     // ручні записи цього місяця — у накладання
     var manual = existing.filter(function(r){ return String(r['Джерело']) === 'ручна' && String(r['Статус']) === 'діє'; }).map(function(r){
-      var c = ctx.cards.byId[String(r['ID картки'])] || {id:String(r['ID картки']), name:String(r['ПІБ']), loc:String(r['Локація'])};
+      var c = ctx.cards.byId[String(r['ID картки'])] || {id:String(r['ID картки']) || ('NAME:' + _normNameVac(r['ПІБ']) + '|' + _nameFold(r['Локація'])), name:String(r['ПІБ']), loc:String(r['Локація'])};
       return {key:String(r['Ключ'] || ('M|' + r['ID запису'])), cardId:c.id, name:c.name, loc:c.loc, ym:ym, promoId:String(r['ID акції']),
         order:_promoOrderOf(r['ID акції']), pct:_promoNum(r['%']), fixed:_promoNum(r['%']) > 0 ? 0 : _promoNum(r['Сума, грн']),
         status:'діє', basis:String(r['Підстава'] || ''), manual:true, _row:r._row};
@@ -37855,9 +37889,26 @@ function recalcDiscounts(body){
     var byCard = {};
     des.entries.concat(manual).forEach(function(e){ (byCard[e.cardId] = byCard[e.cardId] || []).push(e); });
     Object.keys(byCard).forEach(function(id){
-      var c = ctx.cards.byId[id], fee = c ? _promoFeeFor(c, ym) : 0;
-      if (!(fee > 0)){ byCard[id].forEach(function(e){ if (!e.manual){ e.status = 'без бази'; e.basis += ' | у картці немає «Суми договору» — знижку не пораховано'; } }); }
-      _promoStack(byCard[id], fee);
+      var c = ctx.cards.byId[id], fee = c ? _promoFeeFor(c, ym) : 0, list = byCard[id];
+      // перенесена ручна знижка (R), яку тепер дає правило з тією самою сумою, — скасовуємо (інакше подвоєння)
+      if (fee > 0) list.filter(function(e){ return e.manual && e.promoId === 'R'; }).forEach(function(rr){
+        var same = list.filter(function(e){ return !e.manual && e.status === 'діє' && e.promoId !== 'VAC'; }).filter(function(e){
+          var alone = e.pct > 0 ? Math.round(fee * e.pct / 100) : Math.round(e.fixed || 0);
+          return Math.abs(alone - Math.round(rr.fixed || 0)) <= 2;
+        })[0];
+        if (same){ rr.status = 'скасована'; rr.basis += ' | замінено правилом ' + same.promoId + ' (та сама сума)'; }
+      });
+      if (!(fee > 0)){
+        // без «Суми договору»: авто-знижку не рахуємо; ручна фіксована сума лишається як є (її ставила людина)
+        list.forEach(function(e){
+          if (e.manual){ e.base = 0; e.amount = e.pct > 0 ? 0 : Math.round(e.fixed || 0); }
+          else { e.status = 'без бази'; e.basis += ' | у картці немає «Суми договору» — знижку не пораховано'; e.amount = 0; }
+        });
+      } else _promoStack(list, fee);
+      var hasR = list.some(function(e){ return e.manual && e.promoId === 'R' && e.status === 'діє'; });
+      var auto = list.filter(function(e){ return !e.manual && e.status === 'діє' && e.promoId !== 'VAC'; });
+      if (hasR && auto.length) des.warnings.push((list[0].name || id) + ' (' + (list[0].loc || '') + '), ' + ym + ': є і перенесена ручна знижка (R), і знижка за правилом (' +
+        auto.map(function(e){ return e.promoId; }).join(', ') + ') — перевірте, чи не подвоєно; зайву R скасуйте');
     });
     var all = des.entries.concat(manual);
     var inScope = function(loc){ return !onlyLoc || _nameFold(loc) === _nameFold(onlyLoc); };
@@ -37870,7 +37921,7 @@ function recalcDiscounts(body){
       seen[e.key] = true;
       var r = exByKey[e.key];
       var st = e.status === 'без бази' ? 'скасована' : e.status;
-      var rowO = {'ID запису': r ? r['ID запису'] : _promoNewId('D'), 'ID картки':e.cardId, 'ПІБ':e.name, 'Локація':e.loc, 'Місяць':ym,
+      var rowO = {'ID запису': r ? r['ID запису'] : _promoNewId('D'), 'ID картки':/^NAME:/.test(e.cardId) ? '' : e.cardId, 'ПІБ':e.name, 'Локація':e.loc, 'Місяць':ym,
         'ID акції':e.promoId, 'Порядок':e.order + ' ' + (PROMO_ORDER_NAME[e.order] || ''), 'База':e.base, '%':e.pct || '',
         'Сума, грн':e.amount || 0, 'Підстава':e.basis, 'Статус':st, 'Джерело': e.manual ? 'ручна' : 'авто', 'Ключ':e.key,
         'Хто створив': r ? r['Хто створив'] : who, 'Створено': r ? r['Створено'] : now, 'Оновлено':now};
@@ -37900,6 +37951,13 @@ function recalcDiscounts(body){
     cancelled.concat(moved).forEach(function(o){ t.sh.getRange(o._row, cSt).setValue('скасована'); t.sh.getRange(o._row, cSum).setValue(0); t.sh.getRange(o._row, cUpd).setValue(now); });
     if (added.length) t.sh.getRange(t.sh.getLastRow() + 1, 1, added.length, DISC_HEADER.length).setValues(added.map(function(o){ return _promoRowArr(o, DISC_HEADER); }));
     try { lock.releaseLock(); lock = null; } catch(_l){}
+    if (body.sync !== false && ym >= PROMO_START_YM && body.through){
+      // v7.415: із UI — разом із пізнішими місяцями року (їх реєстр потрібен до синку ланцюжків)
+      var rest = _ymAdd(ym, 1) <= _promoYM(body.through) ? _promoRecalcRange(_ymAdd(ym, 1), _promoYM(body.through), onlyLoc, who) : null;
+      res.later = rest && rest.runs;
+      res.sync = syncDiscountsToPayment({ym:ym, loc:onlyLoc, dryRun:false, _internal:true});
+      return res;
+    }
     if (body.sync !== false && ym >= PROMO_START_YM){
       var locsTouched = {};
       added.concat(updated).forEach(function(o){ locsTouched[o['Локація']] = true; });
@@ -38021,7 +38079,7 @@ function syncDiscountsToPayment(body){
       return String(r['Статус']) === 'діє' && _promoNum(r['Сума, грн']) > 0 && _promoYM(r['Місяць']) >= PROMO_START_YM;
     });
     var cards = _promoCards();
-    var out = {ok:true, dryRun:dryRun, files:[], cells:0, warnings:[]};
+    var out = {ok:true, dryRun:dryRun, files:[], cells:0, warnings:[], migrateOnly:!!body.migrateOnly};
     Object.keys(files).forEach(function(fid){
       try { out.files.push(_promoSyncFile(files[fid], yms, disc, cards, dryRun, out)); }
       catch(e){ out.files.push({locs:files[fid].locs, error:String(e && e.message || e)}); out.ok = false; }
@@ -38049,57 +38107,116 @@ function _promoSyncFile(f, yms, disc, cards, dryRun, out){
     var nk = _normNameVac(nm); dupCount[nk] = (dupCount[nk] || 0) + 1;
     if (!firstRow.hasOwnProperty(nk)) firstRow[nk] = r;
   }
-  // дзеркало
-  var mirror = [], namesWithDisc = {}, notFound = [];
+  function cardOf(rawName){
+    for (var i = 0; i < f.locs.length; i++){ var c = _promoCardByPayName(cards, rawName, f.locs[i]); if (c) return c; }
+    return null;
+  }
+  // знижки реєстру по рядках
+  var mirror = [], namesWithDisc = {}, notFound = [], regSum = {};
   disc.forEach(function(d){
     if (locFold.indexOf(_nameFold(d['Локація'])) === -1) return;
     var ym = _promoYM(d['Місяць']); if (Number(ym.slice(0, 4)) !== fileYear) return;
     var c = cards.byId[String(d['ID картки'])], nk = _normNameVac(c ? c.name : d['ПІБ']);
     if (!firstRow.hasOwnProperty(nk)) nk = _normNameVac(d['ПІБ']);
     if (!firstRow.hasOwnProperty(nk)){ notFound.push(String(d['ПІБ']) + ' (' + d['Локація'] + ', ' + ym + ')'); return; }
-    var raw = String(data[firstRow[nk]][0]);
-    mirror.push([raw, ym, _promoNum(d['Сума, грн']), String(d['ID акції']), String(d['ID запису']), String(d['ID картки'])]);
+    mirror.push([String(data[firstRow[nk]][0]), ym, _promoNum(d['Сума, грн']), String(d['ID акції']), String(d['ID запису']), String(d['ID картки'])]);
     namesWithDisc[nk + '|' + ym] = true;
+    regSum[nk + '|' + ym] = (regSum[nk + '|' + ym] || 0) + _promoNum(d['Сума, грн']);
   });
-  // місяці, де переводимо клітинки
-  var months = (yms.length ? yms : []).filter(function(ym){ return ym >= PROMO_START_YM && Number(ym.slice(0, 4)) === fileYear; });
-  if (!yms.length){ for (var mm = 1; mm <= 12; mm++){ var y0 = fileYear + '-' + ('0' + mm).slice(-2); if (y0 >= PROMO_START_YM) months.push(y0); } }
-  var plan = [], skippedDup = [];
+  // місяці, де переводимо клітинки (по зростанню: ланцюжок «=попередній місяць» бере базу попереднього)
+  // УСІ місяці від старту реєстру до грудня, незалежно від запитаного: ланцюжок «=попередній» бере базу попереднього
+  // місяця, тож попередній має бути в тому самому плані. Уже переведені клітинки пропускаються — це дешево.
+  var months = [];
+  for (var mm = 1; mm <= 12; mm++){ var y0 = fileYear + '-' + ('0' + mm).slice(-2); if (y0 >= PROMO_START_YM) months.push(y0); }
+  var NUMSUB = /^=\s*(\d+(?:[.,]\d+)?)((?:\s*-\s*\d+(?:[.,]\d+)?)+)\s*$/;   // =20000-1904[-…] — знижка вписана руками
+  var plan = [], skippedDup = [], migrate = [], baseBy = {};
   months.forEach(function(ym){
     var mo = Number(ym.slice(5, 7));
     if (_isMonthClosed(fileYear, mo)){ out.warnings.push(f.locs.join('/') + ' ' + ym + ': місяць закритий — не чіпаю'); return; }
     var col1 = 1 + (mo - 1) * f.cpm + LO.budNavch + 1;
     var F = paySh.getRange(1, col1, lastRow, 1).getFormulas(), V = paySh.getRange(1, col1, lastRow, 1).getValues();
     var journals = f.locs.map(function(l){ return {loc:l, j:_readJournalForTarget(l, 'vacation', fileYear, mo)}; });
-    // клітинка-ланцюжок «=попередній місяць» успадковує знижку, вписану експортом у попередній місяць → її теж додаємо до бази
-    var prevLetter = mo > 1 ? _colLetter(col1 - 1 - f.cpm) : '';
+    var prevYM = _ymAdd(ym, -1), prevLetter = mo > 1 ? _colLetter(col1 - 1 - f.cpm) : '';
     var prevJ = mo > 1 ? f.locs.map(function(l){ return _readJournalForTarget(l, 'vacation', fileYear, mo - 1); }) : [];
+    var prevF = mo > 1 ? paySh.getRange(1, col1 - f.cpm, lastRow, 1).getFormulas() : [];
+    baseBy[ym] = {};
     Object.keys(firstRow).forEach(function(nk){
-      var r0 = firstRow[nk], f0 = String(F[r0][0] || ''), v0 = _promoNum(V[r0][0]);
+      var r0 = firstRow[nk], f0 = String(F[r0][0] || ''), v0 = _promoNum(V[r0][0]), raw = trim(String(data[r0][0]));
       var has = !!namesWithDisc[nk + '|' + ym];
       var m = PROMO_FORMULA_RE.exec(f0);
-      if (m) return;                                             // уже наша формула; SUMIFS підхопить зміни сам
+      if (m){ baseBy[ym][r0] = _promoNum(m[1]); return; }       // уже наша формула; SUMIFS підхопить зміни сам
       var lw = 0, jRef = null;
       journals.forEach(function(x){ var e = x.j.byNormName[nk]; if (e && e.sum){ lw = e.sum; jRef = x; } });
-      var lwPrev = 0;
-      if (prevLetter && new RegExp('^=\\s*\\$?' + prevLetter + '\\$?' + (r0 + 1) + '\\s*$', 'i').test(f0))
-        prevJ.forEach(function(j){ var e = j.byNormName[nk]; if (e && e.sum) lwPrev = e.sum; });
-      var base = Math.round((v0 - lw - lwPrev) * 100) / 100;      // lw/lwPrev — від'ємні знижки, вписані експортом
+      var restored = Math.round((v0 - lw) * 100) / 100;          // lw — від'ємна знижка відпустки, вписана експортом (повернеться через VAC)
+      var base, why = '', isChain = !!prevLetter && new RegExp('^=\\s*\\$?' + prevLetter + '\\$?' + (r0 + 1) + '\\s*$', 'i').test(f0);
+      if (isChain){
+        var lwPrev = 0; prevJ.forEach(function(j){ var e = j.byNormName[nk]; if (e && e.sum) lwPrev = e.sum; });
+        var pb = baseBy[prevYM] && baseBy[prevYM].hasOwnProperty(r0) ? baseBy[prevYM][r0] : null;
+        var inherited = 0;
+        if (pb == null && prevF.length){
+          var pm = PROMO_FORMULA_RE.exec(String(prevF[r0][0] || ''));
+          // попередній місяць уже на формулі реєстру → його знижки (відпустка, сімʼя…) успадковано ланцюжком, у цей місяць не переносимо
+          if (pm){ pb = _promoNum(pm[1]); inherited = regSum[nk + '|' + prevYM] || 0; }
+        }
+        restored = Math.round((v0 - lw - lwPrev + inherited) * 100) / 100;
+        base = pb != null ? pb : restored;
+        why = 'ланцюжок =' + prevLetter + (r0 + 1) + (pb != null ? ' (база попереднього місяця ' + pb + ')' : '');
+      } else if (NUMSUB.test(f0)){
+        base = _promoNum(NUMSUB.exec(f0)[1]); why = 'формула ' + f0;
+      } else if (!f0){
+        var c = cardOf(raw), fee = c ? _promoFeeFor(c, ym) : 0;
+        if (fee > 0 && restored > 0 && restored < fee){ base = fee; why = 'число ' + v0 + ' менше за «Суму договору» ' + fee; }
+        else base = restored;
+      } else { base = restored; }                                   // інші формули (IMPORTRANGE тощо) — база = значення
+      base = Math.round(base * 100) / 100;
       if (!(base > 0)){                                          // порожній/нульовий бюджет — не чіпаємо
-        if (has) out.warnings.push(trim(String(data[r0][0])) + ' (' + f.locs.join('/') + ', ' + ym + '): «Бюджет навч» = ' + v0 + ' — знижку з реєстру не застосовано, поставте бюджет');
+        if (has) out.warnings.push(raw + ' (' + f.locs.join('/') + ', ' + ym + '): «Бюджет навч» = ' + v0 + ' — знижку з реєстру не застосовано, поставте бюджет');
         return;
       }
-      if (dupCount[nk] > 1) skippedDup.push(trim(String(data[r0][0])) + ' (' + ym + ', рядків: ' + dupCount[nk] + ' — формула лише в першому)');
+      baseBy[ym][r0] = base;
+      if (dupCount[nk] > 1) skippedDup.push(raw + ' (' + ym + ', рядків: ' + dupCount[nk] + ' — формула лише в першому)');
+      var d = Math.round((base - restored) * 100) / 100;          // знижка, що стояла в клітинці руками → у реєстр (R)
+      var mig = null;
+      if (d >= 1){
+        var cc = cardOf(raw);
+        mig = {cardId:cc ? cc.id : '', name:cc ? cc.name : raw, loc:cc ? cc.loc : f.locs[0], ym:ym, amount:d, raw:raw,
+          basis:'перенесено з Payment ' + _colLetter(col1 - 1) + (r0 + 1) + ': ' + (f0 || ('число ' + v0)) + ' → база ' + base + (why ? '; ' + why : '')};
+        migrate.push(mig);
+      } else if (d <= -1){
+        out.warnings.push(raw + ' (' + ym + '): значення ' + restored + ' більше за базу ' + base + ' — перевірте вручну');
+      }
       var a1 = _colLetter(col1 - 1) + (r0 + 1);
-      plan.push({row:r0 + 1, col1:col1, a1:a1, ym:ym, name:trim(String(data[r0][0])), before:v0, base:base, oldFormula:f0, journal:jRef, nk:nk,
+      plan.push({row:r0 + 1, col1:col1, a1:a1, ym:ym, name:raw, before:v0, base:base, oldFormula:f0, journal:jRef, nk:nk, mig:mig,
         formula:'=' + base + "-SUMIFS('" + DISC_MIRROR_TAB + "'!$C:$C,'" + DISC_MIRROR_TAB + "'!$A:$A,$A" + (r0 + 1) + ",'" + DISC_MIRROR_TAB + "'!$B:$B,\"" + ym + '")'});
     });
   });
-  var res = {locs:f.locs, months:months, mirrorRows:mirror.length, convert:plan.length,
+  var res = {locs:f.locs, months:months, mirrorRows:mirror.length + migrate.length, convert:plan.length,
     sample:plan.slice(0, 15).map(function(p){ return {cell:p.a1, child:p.name, before:p.before, base:p.base, was:p.oldFormula || '(число)'}; }),
+    migrate:migrate.map(function(x){ return {child:x.name, loc:x.loc, ym:x.ym, amount:x.amount, basis:x.basis, noCard:!x.cardId}; }),
     notFound:notFound, duplicates:skippedDup};
   out.cells += plan.length;
   if (dryRun) return res;
+  // 0) перенесені ручні знижки → реєстр (R), щоб після формули не подвоїлись
+  //    (recalcDiscounts викликає це ПЕРЕД перерахунком — migrateOnly — щоб правила (A2…) накладались уже з R)
+  if (migrate.length){
+    var t = _promoRead(DISC_TAB, DISC_HEADER), now = _promoStamp(), have = {};
+    t.rows.forEach(function(r){ have[String(r['Ключ'] || '')] = true; });
+    var add = [];
+    migrate.forEach(function(x){
+      var key = 'MIG|' + (x.cardId || _normNameVac(x.name) + '@' + _nameFold(x.loc)) + '|' + x.ym;
+      if (have[key]) return;
+      var id = _promoNewId('D');
+      add.push(_promoRowArr({'ID запису':id, 'ID картки':x.cardId, 'ПІБ':x.name, 'Локація':x.loc, 'Місяць':x.ym, 'ID акції':'R',
+        'Порядок':'0 перенесено', 'База':'', '%':'', 'Сума, грн':x.amount, 'Підстава':x.basis, 'Статус':'діє', 'Джерело':'ручна',
+        'Ключ':key, 'Хто створив':'перехід на реєстр', 'Створено':now, 'Оновлено':now}, DISC_HEADER));
+      mirror.push([x.raw, x.ym, x.amount, 'R', id, x.cardId]);
+    });
+    if (add.length){
+      _promoTextCols(t.sh, DISC_HEADER, ['Місяць','ID картки','ID запису']);
+      t.sh.getRange(t.sh.getLastRow() + 1, 1, add.length, DISC_HEADER.length).setValues(add);
+    }
+  }
+  if (out.migrateOnly){ res.migrated = migrate.length; return res; }
   // 1) дзеркало (текстові колонки, попередження при ручній правці)
   var mh = ss.getSheetByName(DISC_MIRROR_TAB);
   if (!mh){ mh = ss.insertSheet(DISC_MIRROR_TAB); }
@@ -38113,9 +38230,8 @@ function _promoSyncFile(f, yms, disc, cards, dryRun, out){
     var prot = mh.getProtections(SpreadsheetApp.ProtectionType.SHEET);
     if (!prot.length){ var pr = mh.protect(); pr.setDescription('Пише лише бот m.kids (реєстр «Знижки» у CONFIG)'); pr.setWarningOnly(true); }
   } catch(_p){}
-  // 2) формули
+  // 2) формули — блоками сусідніх рядків однієї колонки (менше викликів → не впираємось у 6 хв на першому прогоні)
   var jOps = {}, mj = [];
-  // формули — блоками сусідніх рядків однієї колонки (менше викликів → не впираємось у 6 хв на першому прогоні)
   plan.slice().sort(function(a, b){ return (a.col1 - b.col1) || (a.row - b.row); }).reduce(function(runs, p){
     var last = runs[runs.length - 1];
     if (last && last.col1 === p.col1 && last.row + last.f.length === p.row) last.f.push([p.formula]);
@@ -38124,7 +38240,7 @@ function _promoSyncFile(f, yms, disc, cards, dryRun, out){
   }, []).forEach(function(run){ paySh.getRange(run.row, run.col1, run.f.length, 1).setFormulas(run.f); });
   plan.forEach(function(p){
     mj.push({by:'система', route:'syncDiscountsToPayment', loc:f.locs[0], name:p.name, year:fileYear, month:Number(p.ym.slice(5, 7)),
-      col:'Бюджет-навч', before:p.before, after:p.formula, reason:'перехід на реєстр знижок: база ' + p.base});
+      col:'Бюджет-навч', before:p.before, after:p.formula, reason:'перехід на реєстр знижок: база ' + p.base + (p.mig ? '; перенесено знижку ' + p.mig.amount + ' (R)' : '')});
     if (p.journal){ var k = p.journal.loc + '|' + p.ym; (jOps[k] = jOps[k] || {j:p.journal.j, ops:[]}).ops.push({nk:p.nk, loc:p.journal.loc, kind:'vacation', name:p.name, year:fileYear, month:Number(p.ym.slice(5, 7)), newSum:0}); }
   });
   Object.keys(jOps).forEach(function(k){ _commitJournalUpdates(jOps[k].j, jOps[k].ops); });
@@ -38133,15 +38249,23 @@ function _promoSyncFile(f, yms, disc, cards, dryRun, out){
 }
 
 // ═══ НІЧНИЙ ПРОГІН (08:30, після гарантії відпусток 08:00 і до «Оплати-Рік» 09:00) ═══
-function promoNightly(){
-  var now = _ymNow(), out = [];
-  [now, _ymAdd(now, 1)].forEach(function(ym){
-    if (ym < PROMO_START_YM) return;
-    var r = recalcDiscounts({ym:ym, dryRun:false, sync:true, _internal:true, _who:'нічний прогін'});
+// Перерахунок реєстру за кілька місяців (без синку кожного) + ОДИН синк Payment від першого місяця до грудня.
+// Синк переводить на формулу всі місяці від першого до кінця року, тож реєстр цих місяців має бути готовий раніше.
+function _promoRecalcRange(from, to, loc, who){
+  var out = [], ym = from < PROMO_START_YM ? PROMO_START_YM : from;
+  if (ym <= to) syncDiscountsToPayment({ym:ym, loc:loc || '', dryRun:false, migrateOnly:true, _internal:true});   // R — до перерахунку
+  for (var guard = 0; ym <= to && guard < 14; guard++, ym = _ymAdd(ym, 1)){
+    var r = recalcDiscounts({ym:ym, loc:loc || '', dryRun:false, sync:false, _internal:true, _who:who});
     out.push({ym:ym, ok:r.ok, added:(r.added || []).length, updated:(r.updated || []).length, cancelled:(r.cancelled || []).length, error:r.error});
-  });
-  Logger.log('[promoNightly] %s', JSON.stringify(out));
-  return {ok:true, runs:out};
+  }
+  var sy = (from <= to) ? syncDiscountsToPayment({ym:(from < PROMO_START_YM ? PROMO_START_YM : from), loc:loc || '', dryRun:false, _internal:true}) : null;
+  return {runs:out, sync:sy && {ok:sy.ok, cells:sy.cells, warnings:(sy.warnings || []).length}};
+}
+function promoNightly(){
+  var now = _ymNow(), dec = now.slice(0, 4) + '-12', to = _ymAdd(now, 1) > dec ? _ymAdd(now, 1) : dec;
+  var r = _promoRecalcRange(now, to, '', 'нічний прогін');
+  Logger.log('[promoNightly] %s', JSON.stringify(r));
+  return {ok:true, runs:r.runs, sync:r.sync};
 }
 // POST promoNightlySetup — лише CFO. Ставить тригер promoNightly на 08:30 Kyiv.
 function promoNightlySetup(body){

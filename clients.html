@@ -3851,6 +3851,7 @@ function payBadge(status,debt,over){
   if(status==='paid')  return '<span class="badge bg">✅ Оплачено</span>';
   if(status==='nopay') return '<span class="badge br">❌ Борг '+(debt?fmtN(Math.round(debt))+' грн':'')+'</span>';
   if(status==='over')  return '<span class="badge bg">✅ Оплачено</span>';
+  if(status==='covered') return '<span class="badge bg" title="Місяць покрито передоплатою — рахунок не формується, борг не рахується">💳 Передоплата</span>';   // v7.415
   if(status==='debt')  return '<span class="badge br">❌ Борг '+(debt?fmtN(Math.round(debt))+' грн':'')+'</span>';
   return '<span class="badge bgr">— Немає даних</span>';
 }
@@ -4627,6 +4628,7 @@ function renderPayStatus(id){
 
   var type,txt;
   if(ch.status==='paid'||ch.status==='over'){ type='ok'; txt='✅ Оплачено'; }
+  else if(ch.status==='covered'){ type='ok'; txt='💳 Покрито передоплатою'; }   // v7.415
   else if(ch.status==='nopay'){ type='danger'; txt='⛔ Не платив взагалі'; }
   else if(ch.status==='debt'){ type='danger'; txt='❌ Борг '+fmtN(Math.round(totalDebt))+' грн'; }
   else{ type='warn'; txt='— Немає даних'; }
@@ -4688,9 +4690,10 @@ async function renderPayHistory(){
   (j.months||[]).forEach(function(m){
     var mi=m.month-1, isCur=mi===cur, isFut=mi>cur;
     var badge;
-    if(isFut) badge='<span style="color:var(--gray2);font-size:12px">— майбутній</span>';
+    if(isFut && m.status!=='covered') badge='<span style="color:var(--gray2);font-size:12px">— майбутній</span>';
     else if(m.status==='paid') badge='<span class="badge bg">✅ Оплачено</span>';
     else if(m.status==='over') badge='<span class="badge by">💰 Переплата</span>';
+    else if(m.status==='covered') badge='<span class="badge bg" title="'+esc(m.covered||'')+'">💳 Передоплата</span>';   // v7.415
     else if(m.status==='debt'){ var d=(m.budStudy+m.budExtra)-(m.factStudy+m.factExtra); badge='<span class="badge br">❌ Борг '+fmtN(Math.round(d>0?d:0))+'</span>'; }
     else if(m.status==='nopay') badge='<span class="badge br">⛔ Не платив</span>';
     else badge='<span class="badge bgr">—</span>';
@@ -5993,7 +5996,7 @@ function mkXlsxName(loc,kind){
 }
 // Текстовий статус оплати дитини.
 function _payStatusText(st){
-  return {paid:'Оплачено',debt:'Борг',nopay:'Не оплачено',over:'Переплата',unknown:'—'}[st]||(st||'—');
+  return {paid:'Оплачено',debt:'Борг',nopay:'Не оплачено',over:'Переплата',covered:'Покрито передоплатою',unknown:'—'}[st]||(st||'—');   // v7.415 covered
 }
 
 // Експорт списку дітей у XLSX — бере рядки, зібрані renderClients (S._listExportRows).
@@ -7823,7 +7826,7 @@ async function _naPromoLoad(){
   var can=!!j.canDecide, fm=function(n){ return Math.round(Number(n)||0).toLocaleString('uk-UA')+' ₴'; };
   var h='<div style="font-size:16px;font-weight:700;margin-bottom:6px">🎁 Акції та передоплати · '+(pp.length+pr.length)+'</div>';
   if(pp.length){
-    h+='<p style="color:var(--gray);font-size:13px;margin:0 0 8px;max-width:80ch">Платіж схожий на передоплату за 3 / 6 / 12 місяців. Без підтвердження знижка не нараховується і платіж лишається звичайною оплатою. «Підтвердити» знімає суму з місяця надходження і розносить її рівними частинами у «Факт навч» кожного місяця.</p>';
+    h+='<p style="color:var(--gray);font-size:13px;margin:0 0 8px;max-width:80ch">Платіж схожий на передоплату за 3 / 6 / 12 місяців. Без підтвердження знижка не нараховується. «Підтвердити» НЕ переносить гроші: платіж лишається у «Факт навч» місяця надходження однією сумою, а місяці передоплати отримують покриття — рахунок за навчання за них не формується і борг не рахується.</p>';
     pp.forEach(function(p){
       h+='<div id="naPP_'+esc(p.id)+'" style="background:#FBF1DF;border:1px solid #e6c68a;border-radius:10px;padding:10px 12px;margin-bottom:7px">'
         +'<div><b>'+esc(p.name)+'</b> · '+esc(p.loc)+' · '+esc(p.date)+' · <b>'+fm(p.amount)+'</b></div>'
@@ -7857,14 +7860,11 @@ async function naPrepay(id, ok){
   var m=String((document.getElementById('naPPm_'+id)||{}).value||'');
   var pv; try{ pv=await apiGetFull({action:'previewPrepayment', id:id, firstMonth:m, actorId:uid}); }catch(e){ pv={ok:false,error:e.message}; }
   if(!pv||pv.ok===false){ alert('Перевірка не вдалась: '+((pv&&pv.error)||'немає відповіді')); return; }
-  var txt='Передоплата: '+pv.child+' ('+pv.loc+'), '+pv.months+' міс −'+pv.pct+'%, з '+pv.first+'.\n\nКлітинки «Факт навч»:\n'
-    +pv.changes.map(function(c){ return '  '+c.cell+' ('+c.month+'): '+c.before+' → '+c.after; }).join('\n')
-    +(pv.carry&&pv.carry.length?('\n\nНа наступний рік (файл 2027): '+pv.carry.length+' міс, '+pv.carrySum+' ₴ — рознести, коли файли 2027 стануть робочими.'):'')
-    +'\n\nВнести?';
+  var txt='Передоплата: '+pv.child+' ('+pv.loc+'), '+pv.months+' міс −'+pv.pct+'%.\nПокриття: '+pv.first+' … '+pv.last+'.\n\n'+pv.note+'\n\nПідтвердити?';
   if(!confirm(txt)) return;
   var r; try{ r=await apiPost({action:'confirmPrepayment', id:id, firstMonth:m, dryRun:false, actorId:uid}); }catch(e){ r={ok:false,error:e.message}; }
   if(r&&r.ok===false){ alert('Не вдалось: '+(r.error||'')); return; }
-  showFloatMsg('✅ Передоплату підтверджено й рознесено','ok');
+  showFloatMsg('✅ Передоплату підтверджено — покриття '+pv.first+'…'+pv.last,'ok');
   var el=document.getElementById('naPP_'+id); if(el) el.remove();
 }
 async function naPromoDecide(id, dec){
@@ -8376,7 +8376,7 @@ async function promoShowRefund(id){
     if(!j.items||!j.items.length) return;
     box.innerHTML='<div class="alert alert-info" style="margin-top:12px;font-size:13px"><b>💳 Передоплата — перерахунок</b>'
       +j.items.map(function(x){ return '<div style="margin-top:6px">'+esc(x.text)
-        +(x.futureFact>0?'<div style="color:var(--gray);font-size:12px">У Payment у місяцях після розірвання лежить '+Math.round(x.futureFact).toLocaleString('uk-UA')+' ₴ рознесеної передоплати — зніміть їх при поверненні.</div>':'')+'</div>'; }).join('')
++'</div>'; }).join('')
       +'<div style="font-size:12px;color:var(--gray);margin-top:6px">Повернення система не проводить — лише рахує.</div></div>';
   }catch(e){ box.innerHTML='<div style="color:#c0392b;font-size:12px;margin-top:8px">Перерахунок передоплати не завантажився: '+esc(e.message||e)+'</div>'; }
 }
@@ -9406,7 +9406,9 @@ function renderPayMonths(){
     var rowStyle=isCur?'background:#e8f8f0;font-weight:600':'';
     var nameStyle=isFut?'color:var(--gray2)':'';
     var statusBadge;
-    if(isFut){
+    if(status==='covered'){
+      statusBadge='<span class="badge bg" title="Місяць покрито передоплатою — рахунок не формується, борг не рахується">💳 Передоплата</span>';   // v7.415
+    } else if(isFut){
       statusBadge='<span style="color:var(--gray2);font-size:12px">— майбутній</span>';
     } else if(status==='paid'||status==='over'){
       statusBadge='<span class="badge bg">✅ Оплачено</span>';

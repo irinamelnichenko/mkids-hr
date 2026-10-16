@@ -1300,7 +1300,8 @@ function renderInvoiceList(){
     groupKids.forEach(function(c){
       var pCell = c.paymentSum > 0
         ? '<span class="inv-sum">' + fmtUah(c.paymentSum) + ' ₴</span>'
-        : '<span class="inv-sum zero">—</span>';
+        : (c.prepayCovered ? '<span class="inv-sum zero" title="' + String(c.prepayCovered).replace(/"/g, '&quot;') + '">💳 передоплата</span>'   // v7.415 місяць покрито — рахунок не формується
+                           : '<span class="inv-sum zero">—</span>');
       var eCell = c.extrasSum > 0
         ? '<span class="inv-sum">' + fmtUah(c.extrasSum) + ' ₴</span>'
         : '<span class="inv-sum zero">—</span>';

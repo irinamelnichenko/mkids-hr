@@ -986,7 +986,7 @@ function markKey(child,date,itemId){ return child+'||'+date+'||'+itemId; }
 // (1 запис = дитина × місяць × акція; «Бюджет навч» у Payment = база − SUMIFS(реєстр) з грудня 2026)
 // і звіт по акціях. Пробні прогони — GET (preview*), записи — POST, після запису перечитуємо через GET.
 var OFFICE = ['cfo','ceo','coo','hr'];
-var P = { tab:'promos', promos:[], start:'2026-12', locs:[], cards:null, byLabel:{},
+var P = { tab:'promos', promos:[], start:'2026-11', locs:[], cards:null, byLabel:{},
           ym:'', regLoc:'', regRows:[], preview:null, syncPreview:null,
           rFrom:'', rTo:'', rLoc:'', report:null, edit:null, busy:false };
 
@@ -1138,7 +1138,7 @@ function renderRegister(){
     + (off ? '<button class="btn sec sm" onclick="previewRecalc()">🔍 Перевірити перерахунок</button> <button class="btn sec sm" onclick="previewSync()">🔍 Перевірити Payment</button>' : '')
     + (isCfo() ? ' <button class="btn sec sm" onclick="setupNightly()" title="Щодня о 08:30: поточний і наступний місяць">⏰ Нічний прогін</button>' : '')
     + '</div>';
-  if (P.ym < P.start) h += '<div class="diff note" style="margin:10px 14px">До ' + esc(ymLabel(P.start)) + ' реєстр не впливає на Payment: «Бюджет навч» за ці місяці лишається як був (листопадові рахунки не чіпаємо).</div>';
+  if (P.ym < P.start) h += '<div class="diff note" style="margin:10px 14px">До ' + esc(ymLabel(P.start)) + ' реєстр не впливає на Payment: «Бюджет навч» за ці місяці лишається як був.</div>';
   if (P.preview) h += renderPreview();
   if (P.syncPreview) h += renderSyncPreview();
   if (P.regRows === null){ el.innerHTML = h + '<div class="empty">Завантаження…</div></div>'; return; }
@@ -1159,7 +1159,9 @@ function renderRegister(){
     + '<div class="three"><label>Місяць<input id="mdYm" type="month" value="' + esc(P.ym) + '"></label><label>Знижка, %<input id="mdPct" type="number" min="0" max="100" step="0.5"></label><label>або сума, ₴<input id="mdSum" type="number" min="0"></label></div>'
     + '<label>Підстава<input id="mdBasis" placeholder="напр. передоплата 4 міс за рішенням CFO"></label>'
     + '<div id="mdErr"></div><div><button class="btn g" onclick="addManual()">Додати в реєстр</button></div></div></div><datalist id="dlCards"></datalist>';
+  h += '<div class="card" id="covBox"><div class="hd"><h3>💳 Покриття передоплатою</h3><span class="muted">платіж лишається в місяці надходження; за місяці покриття рахунок за навчання не формується, борг не рахується</span></div><div class="diff muted">Завантаження…</div></div>';
   el.innerHTML = h;
+  loadCoverage();
   if (off) loadCards().then(function(){ var dl = document.getElementById('dlCards'); if (dl) dl.innerHTML = Object.keys(P.byLabel).map(function(l){ return '<option value="' + esc(l) + '">'; }).join(''); }).catch(function(){});
 }
 function renderPreview(){
@@ -1175,10 +1177,12 @@ function renderPreview(){
 function renderSyncPreview(){
   var s = P.syncPreview;
   var h = '<div class="diff" style="border-bottom:1px solid var(--line)"><b>Payment за ' + esc(ymLabel(P.ym)) + ': клітинок до переходу на формулу — ' + s.cells + '</b>'
-    + '<div class="muted">«Бюджет навч» стане <code>=база − SUMIFS(Знижки)</code>. База = нинішнє значення + знижка відпустки, яку раніше вписав експорт. Уже переведені клітинки не чіпаються.</div>';
+    + '<div class="muted">«Бюджет навч» стане <code>=база − SUMIFS(Знижки)</code> — від цього місяця до грудня. Число в клітинці після переходу не зміниться: знижку, вписану руками (<code>=20000-1904</code> або число менше за «Суму договору»), переноситься в реєстр записом <b>R</b>; знижка відпустки, вписана експортом, повертається через реєстр (VAC). Уже переведені клітинки не чіпаються.</div>';
   (s.files || []).forEach(function(f){
     h += '<h4>' + esc((f.locs || []).join(' / ')) + (f.error ? ' — ❌ ' + esc(f.error) : ': ' + f.convert + ' клітинок, рядків дзеркала ' + f.mirrorRows) + '</h4>';
     if (f.sample && f.sample.length) h += '<ul>' + f.sample.map(function(x){ return '<li>' + esc(x.cell) + ' ' + esc(x.child) + ': ' + money(x.before) + ' → база ' + money(x.base) + ' <span class="muted">(було ' + esc(x.was) + ')</span></li>'; }).join('') + (f.convert > f.sample.length ? '<li class="muted">… ще ' + (f.convert - f.sample.length) + '</li>' : '') + '</ul>';
+    if (f.migrate && f.migrate.length) h += '<div style="margin:6px 0"><b>Перенесення ручних знижок у реєстр (R): ' + f.migrate.length + '</b> — перевірте, чи це справді знижки, а не стара ціна в картці:<ul>'
+      + f.migrate.map(function(x){ return '<li>' + esc(x.child) + ' · ' + esc(x.ym) + ' · <b>' + money(x.amount) + '</b>' + (x.noCard ? ' <span class="pill burn">без картки</span>' : '') + ' <span class="muted">' + esc(x.basis) + '</span></li>'; }).join('') + '</ul></div>';
     if (f.notFound && f.notFound.length) h += '<div class="err" style="margin:4px 0">Немає рядка в Payment: ' + esc(f.notFound.join('; ')) + '</div>';
     if (f.duplicates && f.duplicates.length) h += '<div class="note" style="margin:4px 0">Дублі рядків: ' + esc(f.duplicates.join('; ')) + '</div>';
   });
@@ -1186,14 +1190,22 @@ function renderSyncPreview(){
   h += '<div style="margin-top:10px;display:flex;gap:8px"><button class="btn g" onclick="applySync()"' + (s.cells || (s.files || []).some(function(f){ return f.mirrorRows; }) ? '' : ' disabled') + '>✅ Записати в Payment</button><button class="btn sec" onclick="P.syncPreview=null;renderRegister()">Закрити</button></div></div>';
   return h;
 }
+async function loadCoverage(){
+  var box = document.getElementById('covBox'); if (!box) return;
+  var j; try { j = await get('getCoverage', {loc:P.regLoc}); } catch(e){ box.lastChild.innerHTML = esc(e.message); return; }
+  var rows = (j.rows || []).filter(function(c){ return c.status === 'діє'; });
+  box.lastChild.outerHTML = rows.length ? '<div class="tblwrap"><table class="hist"><thead><tr><th>Дитина</th><th>Локація</th><th>З</th><th>По</th><th class="r">Платіж</th><th>Акція</th><th>Примітка</th><th>Хто</th></tr></thead><tbody>'
+    + rows.map(function(c){ return '<tr><td><b>' + esc(c.name) + '</b></td><td>' + esc(c.loc) + '</td><td class="nw">' + esc(c.from) + '</td><td class="nw">' + esc(c.to) + '</td><td class="r nw">' + money(c.amount) + '</td><td>' + esc(c.promoId) + '</td><td class="muted">' + esc(c.note) + '</td><td class="muted">' + esc(c.by) + '<br>' + esc(c.at) + '</td></tr>'; }).join('')
+    + '</tbody></table></div>' : '<div class="diff muted">Покриттів немає.</div>';
+}
 async function previewRecalc(){
   toast('Рахую…');
   try { P.preview = await get('previewDiscounts', {ym:P.ym, loc:P.regLoc}); } catch(e){ alert(e.message); return; }
   renderRegister();
 }
 async function applyRecalc(){
-  if (!confirm('Застосувати перерахунок за ' + ymLabel(P.ym) + (P.ym >= P.start ? ' і оновити «Бюджет навч» у Payment?' : '?'))) return;
-  try { await post({action:'recalcDiscounts', ym:P.ym, loc:P.regLoc, dryRun:false, sync:true}); toast('Застосовано'); }
+  if (!confirm('Застосувати перерахунок за ' + ymLabel(P.ym) + (P.ym >= P.start ? ' (і наступні місяці до грудня) та оновити «Бюджет навч» у Payment?' : '?'))) return;
+  try { await post({action:'recalcDiscounts', ym:P.ym, loc:P.regLoc, dryRun:false, sync:true, through:P.ym.slice(0, 4) + '-12'}); toast('Застосовано'); }
   catch(e){ alert(e.message); return; }
   P.preview = null; await loadRegister();
 }
