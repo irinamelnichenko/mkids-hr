@@ -7157,7 +7157,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.418', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.419', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -7295,6 +7295,7 @@ function doGet(e) {
     else if (action === 'getPromoAttention')           result = getPromoAttention(e.parameter || {});      // v7.414 передоплати-здогадки + пропозиції
     else if (action === 'getPromoCardIndex')           result = getPromoCardIndex();                       // v7.414 картки мережі для вибору рекомендувача/брата
     else if (action === 'getPrepaymentRefund')         result = getPrepaymentRefund(e.parameter || {});    // v7.414 перерахунок передоплати при розірванні (показ)
+    else if (action === 'previewPilot2027')            result = previewPilot2027(e.parameter || {});       // v7.419 пілот Payment 2027 — пробний прогін
     else if (action === 'previewFeeChange')            result = previewFeeChange(e.parameter || {});       // v7.417 прев'ю зміни суми (нічого не пише)
     else if (action === 'getCoverage')                 result = getCoverage(e.parameter || {});            // v7.415 покриття передоплатою
     else if (action === 'previewPrepayment')           result = confirmPrepayment(_promoDry(e.parameter));  // v7.414 пробний прогін підтвердження (нічого не пише)
@@ -7371,6 +7372,7 @@ function doPost(e) {
     else if (body.action === 'cancelDiscount')            result = cancelDiscount(body);        // v7.414 скасування ручного запису (офіс)
     else if (body.action === 'confirmPrepayment')         result = confirmPrepayment(body);     // v7.414 підтвердження передоплати + рознесення факту (офіс, dryRun)
     else if (body.action === 'rejectPrepayment')          result = rejectPrepayment(body);      // v7.414 відхилити здогадку (офіс)
+    else if (body.action === 'pilot2027Payment')          result = pilot2027Payment(body);      // v7.419 пілот Payment 2027 (CFO; нові вкладки, старі не чіпає)
     else if (body.action === 'promoNightlySetup')         result = promoNightlySetup(body);     // v7.414 тригер 08:30 (CFO)
     else if (body.action === 'salaryReconMoveMonth')      result = salaryReconMoveMonth(body);  // v7.374 перенос відомості в інший місяць (CFO, dryRun)
     else if (body.action === 'createCardFromPayment')     result = createCardFromPayment(body || {});   // v7.357 картка з рядка Payment (ПІБ як у Payment)
@@ -38617,4 +38619,233 @@ function _feeChangeOnCardUpdate(data, oldRow, sheet, rowNum){
     var rc = (months.length && _cardReg) ? _promoRecalcRange(months[0], months[months.length - 1], loc, data.updatedBy || data.by || 'зміна суми') : null;   // знижки — лише дітям на реєстрі
     return {status:'fee', months:done, recalc:rc && rc.runs};
   } catch(e){ return {status:'error', error:String(e && e.message || e)}; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.419 PAYMENT 2027 — ПІЛОТ (Тичини_27, Осокорки школа_27). Клітинка Payment — результат, не місце вводу.
+//   Нові вкладки поруч зі старими (старі Payment/CF/PL не чіпаємо):
+//     «Payment_27» — 1 рядок = 1 дитина на рік (ніколи не рухається). A–CC як у Payment; праворуч:
+//        CD ID картки · CE група · CF група з · CG дата розірвання · CH статус (формула) ·
+//        CI–CT група по місяцях · CU–DF активний у місяці (1/0, формула).
+//        «Бюджет навч» = база місяця × активний − SUMIFS(«Знижки» за ID картки і місяцем).
+//        База — з картки: «Сума договору» + «Зміни суми» (пропорція v7.417) + місяць розірвання пропорційно.
+//     «Групи» — SUMIFS по колонці «група місяця»: суми за кожен місяць (ті самі літери колонок, що в Payment),
+//        кількість дітей по місяцях; «Разом», «Payment» (рядок 4), «Контроль» = Разом − Payment (має бути 0).
+//     «CF_27» / «PL_27» — копії CF/PL, де посилання на заголовки груп Payment переведено на «Групи».
+//   GET previewPilot2027&loc= — пробний прогін; POST pilot2027Payment {loc, dryRun:false, replace?} — запис (лише CFO).
+// ═══════════════════════════════════════════════════════════════════════════
+var PILOT_2027 = {
+  'Тичини':         {fileId:'1qFrzJARzzlnTMgAW1Yj88ZsMlt-BTBrYqq80OGoduGU', file:'Тичини_27'},
+  'Школа Осокорки': {fileId:'1fzBOVCir1gASG9kZGyUauHyTLSMTWMOG_e-37Bevb8o', file:'Осокорки школа_27'}
+};
+var P27_YEAR = 2027, P27_TAB = 'Payment_27', P27_GROUPS = 'Групи', P27_FIRST = 5;   // рядок 4 — РАЗОМ, діти з 5-го
+var P27_COL = {id:82, group:83, groupFrom:84, end:85, status:86, gm:87, act:99};   // 0-based: CD=82 … CI=87, CU=99
+var P27_ML = ['січ','лют','бер','кві','тра','чер','лип','сер','вер','жов','лис','гру'];
+
+function _p27Date(iso){ if (!iso) return ''; var p = iso.split('-'); return new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2])); }
+// База місяця 2027: «Сума договору» + «Зміни суми» (пропорційно), місяць розірвання — до дати розірвання за робочими днями.
+function _p27Base(c, ym){
+  var b = _feeSegments(c, ym).base;
+  if (c.end && c.end.slice(0, 7) === ym){
+    var f = _ymFirst(ym), l = _ymLast(ym), all = _feeWorkDays(f, l), part = _feeWorkDays(f, c.end);
+    if (all) b = Math.round(b * part / all);
+  }
+  return b;
+}
+function _p27Kids(loc){
+  var y0 = P27_YEAR + '-01-01';
+  return _promoCards().list.filter(function(c){
+    if (_nameFold(c.loc) !== _nameFold(loc)) return false;
+    if (['active','adaptation','future','paused'].indexOf(c.status) !== -1) return !c.end || c.end >= y0;
+    if (c.status === 'terminated' || c.status === 'graduated') return !!c.end && c.end >= y0;
+    return false;
+  }).sort(function(a, b){ return a.group.localeCompare(b.group, 'uk') || a.name.localeCompare(b.name, 'uk'); });
+}
+function _p27Build(loc){
+  var cfg = PILOT_2027[loc]; if (!cfg) throw new Error('Пілот 2027 — лише ' + Object.keys(PILOT_2027).join(' і '));
+  var reg = _getLocationPaymentRegistry(loc), cpm = (reg && reg.colsPerMonth) || 5, LO = _paymentLayout(cpm);
+  if (cpm !== 5) throw new Error('Пілот розрахований на 5 колонок на місяць (у «' + loc + '» — ' + cpm + ')');
+  var ss = SpreadsheetApp.openById(cfg.fileId), old = ss.getSheetByName('Payment');
+  if (!old) throw new Error('У файлі ' + cfg.file + ' немає вкладки Payment');
+  var W = P27_COL.act + 12;                                 // A … DF
+  var hdr = old.getRange(1, 1, 3, Math.min(old.getLastColumn(), 81)).getValues();
+  var kids = _p27Kids(loc), L = _colLetter, rows = [], warn = [];
+  var Y = function(m){ return P27_YEAR + '-' + ('0' + m).slice(-2); };
+  kids.forEach(function(c, i){
+    var r = P27_FIRST + i, row = new Array(W); for (var k = 0; k < W; k++) row[k] = '';
+    var o = c.raw || {}, sg = String(o['Підписант договору'] || '').trim();
+    row[0] = c.name;
+    var bases = [];
+    for (var m = 1; m <= 12; m++){
+      var s0 = 1 + (m - 1) * cpm, base = _p27Base(c, Y(m)); bases.push(base);
+      row[s0 + LO.budNavch] = '=' + base + '*$' + L(P27_COL.act + m - 1) + r + "-SUMIFS('" + DISC_MIRROR_TAB + "'!$C:$C,'" + DISC_MIRROR_TAB + "'!$F:$F,$" + L(P27_COL.id) + r + ",'" + DISC_MIRROR_TAB + "'!$B:$B,\"" + Y(m) + '")';
+      row[67 + m] = '=' + L(s0 + LO.budNavch) + r;            // BQ…CB — бюджет навчання місяця (як у 2026)
+    }
+    if (!(c.fee > 0)) warn.push(c.name + ': у картці немає «Суми договору» — бюджет 0');
+    row[61] = sg === 'dad' ? String(o['ПІБ тата'] || '') : String(o['ПІБ мами'] || '');
+    row[62] = _p27Date(c.contract);
+    row[P27_COL.id] = c.id;
+    row[P27_COL.group] = c.group;
+    var gFrom = (c.contract && c.contract > P27_YEAR + '-01-01') ? c.contract : P27_YEAR + '-01-01';
+    row[P27_COL.groupFrom] = _p27Date(gFrom);
+    row[P27_COL.end] = c.end ? _p27Date(c.end) : '';
+    row[P27_COL.status] = '=IF($' + L(P27_COL.end) + r + '="","діє","розірвано")';
+    for (var g = 0; g < 12; g++){
+      row[P27_COL.gm + g] = c.group;
+      var d1 = 'DATE(' + P27_YEAR + ',' + (g + 1) + ',1)';
+      row[P27_COL.act + g] = '=IF(AND(OR($BK' + r + '="",$BK' + r + '<=EOMONTH(' + d1 + ',0)),OR($' + L(P27_COL.end) + r + '="",$' + L(P27_COL.end) + r + '>=' + d1 + ')),1,0)';
+    }
+    if (!c.group) warn.push(c.name + ': у картці не вказано групу — потрапить у «Без групи»');
+    rows.push({c:c, row:row, bases:bases});
+  });
+  // шапка Payment_27
+  var H = [0, 1, 2].map(function(i){ var a = new Array(W); for (var k = 0; k < W; k++) a[k] = (hdr[i] && k < hdr[i].length) ? hdr[i][k] : ''; return a; });
+  H[2][0] = 'Оплата за навчання 2027';
+  ['ID картки','Група','Група з','Дата розірвання','Статус'].forEach(function(t, k){ H[2][P27_COL.id + k] = t; });
+  for (var g2 = 0; g2 < 12; g2++){ H[1][P27_COL.gm + g2] = P27_ML[g2]; H[2][P27_COL.gm + g2] = 'група'; H[1][P27_COL.act + g2] = P27_ML[g2]; H[2][P27_COL.act + g2] = 'активний'; }
+  H[0][P27_COL.id] = 'Картка'; H[0][P27_COL.gm] = 'Група по місяцях'; H[0][P27_COL.act] = 'Активний у місяці';
+  var tot = new Array(W); for (var k2 = 0; k2 < W; k2++) tot[k2] = '';
+  tot[0] = 'РАЗОМ';
+  var sumCols = []; for (var c1 = 1; c1 <= 60; c1++) sumCols.push(c1); for (var c2 = 68; c2 <= 79; c2++) sumCols.push(c2); for (var c3 = 0; c3 < 12; c3++) sumCols.push(P27_COL.act + c3);
+  sumCols.forEach(function(ci){ tot[ci] = '=SUM(' + L(ci) + P27_FIRST + ':' + L(ci) + ')'; });
+  // групи (порядок першої появи, далі «Без групи»)
+  var groups = []; rows.forEach(function(x){ x.row.slice(P27_COL.gm, P27_COL.gm + 12).forEach(function(gn){ if (gn && groups.indexOf(gn) === -1) groups.push(gn); }); });
+  return {cfg:cfg, ss:ss, old:old, cpm:cpm, W:W, header:H, total:tot, rows:rows, groups:groups, warnings:warn, kids:kids};
+}
+// «Групи»: ті самі літери колонок (B…BI, BQ…CB), кількість дітей — CD…CO.
+function _p27GroupsGrid(b){
+  var L = _colLetter, T = "'" + P27_TAB + "'!", out = [], W = 82 + 12;
+  var head = [new Array(W), new Array(W), new Array(W)]; head.forEach(function(a){ for (var k = 0; k < W; k++) a[k] = ''; });
+  for (var k = 0; k <= 79; k++){ head[0][k] = b.header[0][k]; head[1][k] = b.header[1][k]; head[2][k] = b.header[2][k]; }
+  for (var k3 = 61; k3 <= 67; k3++){ head[0][k3] = ''; head[1][k3] = ''; head[2][k3] = ''; }
+  head[2][0] = 'Група'; head[0][82] = 'Дітей у групі';
+  for (var m = 0; m < 12; m++){ head[1][82 + m] = P27_ML[m]; head[2][82 + m] = 'дітей'; }
+  var names = b.groups.concat(['Без групи']), first = 5;
+  names.forEach(function(gn, i){
+    var r = first + i, row = new Array(W); for (var k4 = 0; k4 < W; k4++) row[k4] = '';
+    row[0] = gn;
+    var crit = gn === 'Без групи' ? '""' : '$A' + r;
+    for (var m2 = 1; m2 <= 12; m2++){
+      var gcol = L(P27_COL.gm + m2 - 1), acol = L(P27_COL.act + m2 - 1);
+      for (var o = 0; o < 5; o++){ var ci = 1 + (m2 - 1) * 5 + o; row[ci] = '=SUMIFS(' + T + L(ci) + '$' + P27_FIRST + ':' + L(ci) + ',' + T + gcol + '$' + P27_FIRST + ':' + gcol + ',' + crit + ')'; }
+      var an = 67 + m2; row[an] = '=SUMIFS(' + T + L(an) + '$' + P27_FIRST + ':' + L(an) + ',' + T + gcol + '$' + P27_FIRST + ':' + gcol + ',' + crit + ')';
+      row[82 + m2 - 1] = gn === 'Без групи'
+        ? '=COUNTIFS(' + T + gcol + '$' + P27_FIRST + ':' + gcol + ',"",' + T + acol + '$' + P27_FIRST + ':' + acol + ',1)'
+        : '=COUNTIFS(' + T + gcol + '$' + P27_FIRST + ':' + gcol + ',$A' + r + ',' + T + acol + '$' + P27_FIRST + ':' + acol + ',1)';
+    }
+    out.push(row);
+  });
+  var rT = first + names.length, rP = rT + 1, rC = rT + 2;
+  var tRow = new Array(W), pRow = new Array(W), cRow = new Array(W);
+  for (var k5 = 0; k5 < W; k5++){ tRow[k5] = ''; pRow[k5] = ''; cRow[k5] = ''; }
+  tRow[0] = 'Разом'; pRow[0] = 'Payment (рядок РАЗОМ)'; cRow[0] = 'Контроль (має бути 0)';
+  var cols = []; for (var a1 = 1; a1 <= 60; a1++) cols.push(a1); for (var a2 = 68; a2 <= 79; a2++) cols.push(a2);
+  cols.forEach(function(ci){
+    tRow[ci] = '=SUM(' + L(ci) + first + ':' + L(ci) + (rT - 1) + ')';
+    pRow[ci] = '=' + T + L(ci) + '4';
+    cRow[ci] = '=ROUND(' + L(ci) + rT + '-' + L(ci) + rP + ',2)';
+  });
+  for (var m3 = 0; m3 < 12; m3++){
+    tRow[82 + m3] = '=SUM(' + L(82 + m3) + first + ':' + L(82 + m3) + (rT - 1) + ')';
+    pRow[82 + m3] = '=' + T + L(P27_COL.act + m3) + '4';
+    cRow[82 + m3] = '=' + L(82 + m3) + rT + '-' + L(82 + m3) + rP;
+  }
+  return {head:head, rows:out, total:tRow, pay:pRow, ctrl:cRow, rowOf:function(gn){ var i = names.indexOf(gn); return i < 0 ? -1 : first + i; }, totalRow:rT, ctrlRow:rC, W:W};
+}
+// Перенаправлення посилань CF/PL: Payment!<кол><рядок-заголовок групи> → Групи!<кол><рядок групи>; рядок 3 → «Разом».
+function _p27Remap(b, gg, sheetName){
+  var src = b.ss.getSheetByName(sheetName); if (!src) return {sheet:sheetName, missing:true};
+  var oldV = b.old.getRange(1, 1, b.old.getLastRow(), 1).getValues(), isSch = /школ/i.test(b.cfg.file), map = {}, info = {};
+  var norm = function(x){ try { return _nameFold(normalizeGroupName(String(x || ''), isSch)); } catch(e){ return _nameFold(x); } };
+  var gIdx = {}; b.groups.forEach(function(gn){ gIdx[norm(gn)] = gn; });
+  for (var r = 3; r < oldV.length; r++){
+    var t = trim(String(oldV[r][0] || '')); if (!t) continue;
+    if (isGroupHeaderRow([t], 1)){ var gn = gIdx[norm(t)]; info[r + 1] = t; if (gn) map[r + 1] = gg.rowOf(gn); }
+  }
+  map[3] = gg.totalRow; info[3] = 'Оплата за навчання (разом)';
+  var rng = src.getDataRange(), F = rng.getFormulas(), changed = 0, unmapped = {}, out = [];
+  var re = /(?:'Payment'|Payment)!\$?([A-Z]{1,2})\$?(\d+)/g;
+  for (var i = 0; i < F.length; i++) for (var j = 0; j < F[i].length; j++){
+    var f = F[i][j]; if (!f || f.indexOf('Payment') < 0) continue;
+    var nf = f.replace(re, function(all, col, row){
+      var nr = map[Number(row)];
+      if (!nr || nr < 0){ unmapped[row + ' ' + (info[row] || '(не заголовок групи)')] = (unmapped[row + ' ' + (info[row] || '(не заголовок групи)')] || 0) + 1; return all; }
+      changed++; return "'" + P27_GROUPS + "'!" + col + nr;
+    });
+    if (nf !== f) out.push({r:i + 1, c:j + 1, f:nf});
+  }
+  return {sheet:sheetName, src:src, edits:out, changed:changed, unmapped:unmapped};
+}
+
+// GET previewPilot2027&loc= — нічого не пише
+function previewPilot2027(params){
+  try {
+    var loc = String((params || {}).loc || '').trim(), b = _p27Build(loc), gg = _p27GroupsGrid(b);
+    var perGroup = {}; b.groups.concat(['Без групи']).forEach(function(gn){ perGroup[gn] = {kids:[0,0,0,0,0,0,0,0,0,0,0,0], budget:[0,0,0,0,0,0,0,0,0,0,0,0]}; });
+    var totalBud = [0,0,0,0,0,0,0,0,0,0,0,0];
+    b.rows.forEach(function(x){
+      for (var m = 0; m < 12; m++){
+        var ym = P27_YEAR + '-' + ('0' + (m + 1)).slice(-2), gn = x.row[P27_COL.gm + m] || 'Без групи', c = x.c;
+        var act = (!c.contract || c.contract <= _ymLast(ym)) && (!c.end || c.end >= _ymFirst(ym)) ? 1 : 0;
+        perGroup[gn].kids[m] += act; perGroup[gn].budget[m] += act * x.bases[m]; totalBud[m] += act * x.bases[m];
+      }
+    });
+    var cf = _p27Remap(b, gg, 'CF'), pl = _p27Remap(b, gg, 'PL');
+    var strip = function(x){ return x.missing ? {sheet:x.sheet, missing:true} : {sheet:x.sheet, changed:x.changed, unmapped:x.unmapped}; };
+    return {ok:true, loc:loc, file:b.cfg.file, kids:b.rows.length, groups:b.groups, perGroup:perGroup, totalBudget:totalBud,
+      sample:b.rows.slice(0, 5).map(function(x){ return {name:x.c.name, id:x.c.id, group:x.c.group, contract:x.c.contract, end:x.c.end, bases:x.bases}; }),
+      warnings:b.warnings, cf:strip(cf), pl:strip(pl), tabsExist:[P27_TAB, P27_GROUPS, 'CF_27', 'PL_27'].filter(function(t){ return !!b.ss.getSheetByName(t); })};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+// POST pilot2027Payment {loc, dryRun:false, replace?} — лише CFO. Створює НОВІ вкладки; старі Payment/CF/PL не змінює.
+function pilot2027Payment(body){
+  try {
+    body = body || {};
+    var a = _promoActor(body);
+    if (!(a && _roleKey(a.role) === 'cfo')) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+    if (body.dryRun !== false) return previewPilot2027(body);
+    var loc = String(body.loc || '').trim(), b = _p27Build(loc), gg = _p27GroupsGrid(b), ss = b.ss;
+    var exist = [P27_TAB, P27_GROUPS, 'CF_27', 'PL_27'].filter(function(t){ return !!ss.getSheetByName(t); });
+    if (exist.length && body.replace !== true) return {ok:false, error:'Уже є вкладки: ' + exist.join(', ') + ' — щоб перебудувати, передайте replace:true'};
+    exist.forEach(function(t){ ss.deleteSheet(ss.getSheetByName(t)); });
+    // Payment_27
+    var sh = ss.insertSheet(P27_TAB), W = b.W, n = b.rows.length;
+    sh.getRange(1, 1, 3, W).setValues(b.header);
+    sh.getRange(4, 1, 1, W).setFormulas([b.total.map(function(x){ return String(x || ''); })]);
+    sh.getRange(4, 1).setValue('РАЗОМ');
+    if (n){
+      var vals = b.rows.map(function(x){ return x.row; });
+      sh.getRange(P27_FIRST, P27_COL.id + 1, n, 1).setNumberFormat('@');
+      sh.getRange(P27_FIRST, 63, n, 1).setNumberFormat('dd.mm.yyyy');
+      sh.getRange(P27_FIRST, P27_COL.groupFrom + 1, n, 2).setNumberFormat('dd.mm.yyyy');
+      // значення й формули — однією матрицею: setValues приймає рядки «=…» як формули
+      sh.getRange(P27_FIRST, 1, n, W).setValues(vals);
+    }
+    sh.setFrozenRows(4); sh.setFrozenColumns(1);
+    // дзеркало знижок (ключ — ID картки, колонка F)
+    _promoEnsureMirror(ss);
+    // Групи
+    var gs = ss.insertSheet(P27_GROUPS), GW = gg.W;
+    gs.getRange(1, 1, 3, GW).setValues(gg.head);
+    var body2 = gg.rows.concat([gg.total, gg.pay, gg.ctrl]);
+    gs.getRange(5, 1, body2.length, GW).setValues(body2);
+    gs.setFrozenRows(4); gs.setFrozenColumns(1);
+    SpreadsheetApp.flush();
+    // CF_27 / PL_27 — копії з перенаправленими посиланнями
+    var remaps = ['CF', 'PL'].map(function(nm){
+      var rm = _p27Remap(b, gg, nm); if (rm.missing) return {sheet:nm, missing:true};
+      var cp = rm.src.copyTo(ss); cp.setName(nm + '_27');
+      rm.edits.forEach(function(e){ cp.getRange(e.r, e.c).setFormula(e.f); });
+      return {sheet:nm + '_27', changed:rm.changed, unmapped:rm.unmapped};
+    });
+    SpreadsheetApp.flush();
+    // контроль
+    var ctrlVals = gs.getRange(gg.ctrlRow, 1, 1, GW).getValues()[0], bad = [];
+    ctrlVals.forEach(function(v, i){ if (i > 0 && v !== '' && Math.abs(Number(v) || 0) > 0.005) bad.push(_colLetter(i) + ': ' + v); });
+    var kidsRow = gs.getRange(gg.totalRow, 83, 1, 12).getValues()[0];
+    var budRow = []; for (var m = 1; m <= 12; m++) budRow.push(gs.getRange(gg.totalRow, 1 + (m - 1) * 5 + 4 + 1).getValue());
+    return {ok:true, loc:loc, file:b.cfg.file, kids:n, groups:b.groups, controlOk:bad.length === 0, controlDiffs:bad,
+      kidsByMonth:kidsRow, budgetByMonth:budRow, cf:remaps[0], pl:remaps[1], warnings:b.warnings};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
