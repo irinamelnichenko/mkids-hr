@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.430
+// m.kids CRM — Google Apps Script v7.431
+// v7.431: формули пілоту 2027 і реєстру знижок — під локаль файлу (_fxSep пробою + _fxLoc: «;» і десяткова кома).
 // v7.430: пілот 2027 — формули пишуться setFormulas (setValues розбирав їх за укр. локаллю → #ERROR!).
 // v7.429: getPilot2027Groups (read-only «Групи» + помилки формул); контроль пілоту не вважає #ERROR! нулем.
 // v7.428: Payment_27 — місяці, покриті передоплатою (реєстр «Покриття»), мають базу 0; прев'ю показує covered.
@@ -7169,7 +7170,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.430', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.431', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -23761,7 +23762,7 @@ function setLocPaymentBudget(body){
       var _fx = '=' + _base + "-SUMIFS('" + DISC_MIRROR_TAB + "'!$C:$C,'" + DISC_MIRROR_TAB + "'!$A:$A,$A" + (rowIdx+1) + ",'" + DISC_MIRROR_TAB + "'!$B:$B,\"" + _ymB + '")';
       if(!dryRun){
         _promoEnsureMirror(ss);   // v7.418: лише порожня вкладка, ЖОДНОГО переведення інших клітинок
-        paySh.getRange(rowIdx+1,budgetNavchCol1).setFormula(_fx);
+        paySh.getRange(rowIdx+1,budgetNavchCol1).setFormula(_fxLoc(_fx, _fxSep(ss)));   // v7.431 локаль файлу
         _moneyJournalLog([{by:body.by, route:'setLocPaymentBudget', loc:loc, name:trim(String(data[rowIdx][0])),
           year:year, month:month, col:'Бюджет-навч', before:before, after:_fx, reason:body.reason}]);
       }
@@ -38228,7 +38229,7 @@ function _promoInvoiceDiscounts(cardId, ym){
 //   Для кожного файлу локації: перезбирає вкладку «Знижки» (усі діючі записи реєстру цього файлу ≥ старту
 //   в межах року файлу) і переводить «Бюджет навч» місяця ym у =база−SUMIFS(…). База — нинішнє значення
 //   клітинки + знижка відпустки, яку раніше вписав експорт (журнал kind=vacation); формула вже наша — база з неї.
-var PROMO_FORMULA_RE = /^=\s*(-?\d+(?:\.\d+)?)\s*-\s*SUMIFS\(\s*'?Знижки'?!/i;
+var PROMO_FORMULA_RE = /^=\s*(-?\d+(?:[.,]\d+)?)\s*-\s*SUMIFS\(\s*'?Знижки'?!/i;   // v7.431: база може бути з комою (укр. локаль)
 function syncDiscountsToPayment(body){
   try {
     body = body || {};
@@ -38411,7 +38412,7 @@ function _promoSyncFile(f, yms, disc, cards, dryRun, out){
     if (last && last.col1 === p.col1 && last.row + last.f.length === p.row) last.f.push([p.formula]);
     else runs.push({col1:p.col1, row:p.row, f:[[p.formula]]});
     return runs;
-  }, []).forEach(function(run){ paySh.getRange(run.row, run.col1, run.f.length, 1).setFormulas(run.f); });
+  }, []).forEach(function(run){ var sp = _fxSep(ss); paySh.getRange(run.row, run.col1, run.f.length, 1).setFormulas(run.f.map(function(x){ return [_fxLoc(x[0], sp)]; })); });   // v7.431 локаль
   plan.forEach(function(p){
     mj.push({by:'система', route:'syncDiscountsToPayment', loc:f.locs[0], name:p.name, year:fileYear, month:Number(p.ym.slice(5, 7)),
       col:'Бюджет-навч', before:p.before, after:p.formula, reason:'перехід на реєстр знижок: база ' + p.base + (p.mig ? '; перенесено знижку ' + p.mig.amount + ' (R)' : '')});
@@ -38423,6 +38424,39 @@ function _promoSyncFile(f, yms, disc, cards, dryRun, out){
 }
 
 // v7.418: порожня вкладка-дзеркало у файлі локації (без переведення жодної клітинки)
+// v7.431 ФОРМУЛИ ПІД ЛОКАЛЬ ТАБЛИЦІ. У локалях із десятковою комою (uk_UA…) Sheets не розбирає «,» між аргументами
+//   навіть у setFormula(s) — клітинка #ERROR! (як дашборд лідів до v7.179, див. _anSep). Роздільник визначаємо пробною
+//   формулою у службовій вкладці «Знижки» цього ж файлу (Payment не чіпаємо), кешуємо за ID файлу.
+var _FX_SEP = {};
+function _fxSep(ss){
+  var id = ss.getId(); if (_FX_SEP[id]) return _FX_SEP[id];
+  var sep = ',';
+  try {
+    var mh = _promoEnsureMirror(ss), probe = mh.getRange(1, mh.getMaxColumns());
+    probe.setFormula('=SUM(1,2)'); SpreadsheetApp.flush();
+    sep = (Number(probe.getValue()) === 3) ? ',' : ';';
+    probe.clearContent();
+  } catch(e){ sep = /^en/i.test(String(ss.getSpreadsheetLocale() || '')) ? ',' : ';'; }
+  return (_FX_SEP[id] = sep);
+}
+// Переклад англ. формули: «,» між аргументами → «;», десяткова крапка в числах → «,». Рядки в "…" і назви аркушів у '…' — без змін.
+function _fxLoc(f, sep){
+  f = String(f || '');
+  if (sep !== ';' || f.charAt(0) !== '=') return f;
+  var out = '', dq = false, sq = false, depth = 0;
+  for (var i = 0; i < f.length; i++){
+    var c = f.charAt(i);
+    if (dq){ out += c; if (c === '"'){ if (f.charAt(i + 1) === '"'){ out += '"'; i++; } else dq = false; } continue; }
+    if (sq){ out += c; if (c === "'") sq = false; continue; }
+    if (c === '"'){ dq = true; out += c; continue; }
+    if (c === "'"){ sq = true; out += c; continue; }
+    if (c === '{') depth++; else if (c === '}') depth--;
+    if (c === ','){ out += depth > 0 ? '\\' : ';'; continue; }
+    if (c === '.' && /\d/.test(f.charAt(i - 1)) && /\d/.test(f.charAt(i + 1))){ out += ','; continue; }
+    out += c;
+  }
+  return out;
+}
 function _promoEnsureMirror(ss){
   var mh = ss.getSheetByName(DISC_MIRROR_TAB);
   if (mh) return mh;
@@ -39008,8 +39042,9 @@ function previewPilot2027(params){
 // v7.430 Запис матриці «значення + формули». setValues розбирає «=…» за ЛОКАЛЛЮ таблиці (укр.: роздільник «;»),
 //   тож SUMIFS(…,…) ставав #ERROR!. Тепер: значення — setValues (формули порожні), формули — setFormulas
 //   (завжди англ. синтаксис). Стовпці, де є лише формули й порожні клітинки, — блоками; змішані — по клітинці.
-function _p27PutMatrix(sh, r0, c0, m){
+function _p27PutMatrix(sh, r0, c0, m, sep){
   if (!m.length) return;
+  if (sep === ';') m = m.map(function(row){ return row.map(function(x){ return (typeof x === 'string' && x.charAt(0) === '=') ? _fxLoc(x, ';') : x; }); });   // v7.431
   var H = m.length, W = m[0].length, isF = function(x){ return typeof x === 'string' && x.charAt(0) === '='; };
   sh.getRange(r0, c0, H, W).setValues(m.map(function(row){ return row.map(function(x){ return isF(x) ? '' : x; }); }));
   var kind = [];   // 0 — без формул; 1 — лише формули/порожні; 2 — змішаний
@@ -39041,16 +39076,16 @@ function pilot2027Payment(body){
     if (exist.length && body.replace !== true) return {ok:false, error:'Уже є вкладки: ' + exist.join(', ') + ' — щоб перебудувати, передайте replace:true'};
     exist.forEach(function(t){ ss.deleteSheet(ss.getSheetByName(t)); });
     // Payment_27
-    var sh = ss.insertSheet(P27_TAB), W = b.W, n = b.rows.length;
+    var sh = ss.insertSheet(P27_TAB), W = b.W, n = b.rows.length, sep = _fxSep(ss);   // v7.431 роздільник формул цього файлу
     sh.getRange(1, 1, 3, W).setValues(b.header);
-    sh.getRange(4, 1, 1, W).setFormulas([b.total.map(function(x){ return String(x || ''); })]);
+    sh.getRange(4, 1, 1, W).setFormulas([b.total.map(function(x){ return _fxLoc(String(x || ''), sep); })]);
     sh.getRange(4, 1).setValue('РАЗОМ');
     if (n){
       var vals = b.rows.map(function(x){ return x.row; });
       sh.getRange(P27_FIRST, P27_COL.id + 1, n, 1).setNumberFormat('@');
       sh.getRange(P27_FIRST, 63, n, 1).setNumberFormat('dd.mm.yyyy');
       sh.getRange(P27_FIRST, P27_COL.groupFrom + 1, n, 2).setNumberFormat('dd.mm.yyyy');
-      _p27PutMatrix(sh, P27_FIRST, 1, vals);   // v7.430: формули — setFormulas (англ. синтаксис), не setValues
+      _p27PutMatrix(sh, P27_FIRST, 1, vals, sep);   // v7.430: формули — setFormulas (англ. синтаксис), не setValues
     }
     sh.setFrozenRows(4); sh.setFrozenColumns(1);
     // дзеркало знижок (ключ — ID картки, колонка F)
@@ -39059,14 +39094,14 @@ function pilot2027Payment(body){
     var gs = ss.insertSheet(P27_GROUPS), GW = gg.W;
     gs.getRange(1, 1, 3, GW).setValues(gg.head);
     var body2 = gg.rows.concat([gg.total, gg.pay, gg.ctrl]);
-    _p27PutMatrix(gs, 5, 1, body2);   // v7.430
+    _p27PutMatrix(gs, 5, 1, body2, sep);   // v7.430 / v7.431 локаль
     gs.setFrozenRows(4); gs.setFrozenColumns(1);
     SpreadsheetApp.flush();
     // CF_27 / PL_27 — копії з перенаправленими посиланнями
     var remaps = ['CF', 'PL'].map(function(nm){
       var rm = _p27Remap(b, gg, nm); if (rm.missing) return {sheet:nm, missing:true};
       var cp = rm.src.copyTo(ss); cp.setName(nm + '_27');
-      rm.edits.forEach(function(e){ cp.getRange(e.r, e.c).setFormula(e.f); });
+      rm.edits.forEach(function(e){ cp.getRange(e.r, e.c).setFormula(e.f.indexOf(';') === -1 ? _fxLoc(e.f, sep) : e.f); });   // v7.431: англ. формулу — під локаль
       return {sheet:nm + '_27', changed:rm.changed, unmapped:rm.unmapped, zeroed:rm.zeroed};
     });
     SpreadsheetApp.flush();
