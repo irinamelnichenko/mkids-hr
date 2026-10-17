@@ -983,7 +983,7 @@ var CFG = {
   GROUP_NORMS_CACHE_KEY: 'analytics_group_norms_v1',
   GROUP_NORMS_CACHE_TTL: 60 * 60 * 1000,  // 1 година
   DEFAULT_GROUP_NORM: 14,
-  PAYMENTS_CACHE_KEY: 'analytics_payments_v1',
+  PAYMENTS_CACHE_KEY: 'analytics_payments_v2',   // v7.423: без «Лише додаткові»
   PAYMENTS_CACHE_TTL: 5 * 60 * 1000        // 5 хв (як основні дані)
 };
 
@@ -1421,7 +1421,23 @@ function _savePaymentsCache(byLoc){
 // формується так само як у clients.html buildGroups (line 1448-1450):
 //   normalize(group) + (' ' + teacher) — щоб різні вихователі лишалися
 //   окремими ключами навіть якщо у Sheets базова назва однакова.
-function _buildPaymentsByLocGroup(payments){
+// v7.423 «Лише додаткові»: множина «локація|ім'я» з ростера карток; помилка → порожня (рахуємо як раніше)
+function _dopNm(s){ return String(s||'').toLowerCase().replace(/[’ʼ`]/g,"'").replace(/\s+/g,' ').trim(); }
+async function _loadDopOnlySet(){
+  var set = {};
+  try {
+    var r = await fetch(CFG.SCRIPT_URL + '?action=getClients&mode=roster&format=compact', {redirect:'follow'});
+    var j = await r.json(), H = (j && j.headers) || null;
+    var rows = H ? (j.rows || []).map(function(a){ var o = {}; for (var i = 0; i < H.length; i++) o[H[i]] = a[i]; return o; }) : ((j && j.data) || []);
+    rows.forEach(function(o){
+      var st = String(o['Статус'] || 'active');
+      if (st === 'terminated' || st === 'graduated' || st === 'graduate') return;
+      if (/^(так|true|1|yes|✓|x)$/i.test(String(o['Лише додаткові'] || '').trim())) set[_dopNm(o['Локація']) + '|' + _dopNm(o['ПІБ дитини'])] = 1;
+    });
+  } catch(e){ console.warn('[dopOnly] roster:', e && e.message || e); }
+  return set;
+}
+function _buildPaymentsByLocGroup(payments, dop){
   var byLoc = {};
   for (var i = 0; i < payments.length; i++){
     var row = payments[i];
@@ -1431,6 +1447,7 @@ function _buildPaymentsByLocGroup(payments){
     if (!rawGrp) continue;
     var name = String(row["Ім'я дитини"] || '').trim();
     if (!name) continue;   // header / порожній рядок
+    if (dop && dop[_dopNm(loc) + '|' + _dopNm(name)]) continue;   // v7.423 «Лише додаткові» — окремо від наповнюваності
     var base = normalizeGroupName(rawGrp);
     var teacherInName = String(rawGrp).substring(base.length).trim();
     var teacherCol    = String(row['Вихователь'] || '').trim();
@@ -1561,7 +1578,8 @@ async function loadPayments(force){
     if (!r.ok) throw new Error('HTTP ' + r.status);
     var json = await r.json();
     if (!json.ok) throw new Error(json.error || 'Unknown error');
-    var byLoc = _buildPaymentsByLocGroup(json.data || []);
+    var dop = await _loadDopOnlySet();   // v7.423 «Лише додаткові» — не рахуються в наповнюваності
+    var byLoc = _buildPaymentsByLocGroup(json.data || [], dop);
     S.paymentsByLocGroup = byLoc;
     _savePaymentsCache(byLoc);
     return byLoc;

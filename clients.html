@@ -939,6 +939,9 @@ details.card>summary::-webkit-details-marker{display:none}details.card[open]>sum
         </div>
         <div class="fg"><label>Щомісячна сума (грн)</label>
           <input type="number" id="fMonthlyFee" placeholder="0" oninput="recalcDiscount()"></div>
+        <!-- v7.423 «Лише додаткові»: дитина не ходить на навчання — без суми договору, у Payment лише «Бюджет доп», рахунок лише за додаткові -->
+        <div class="fg"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="fDopOnly" style="width:auto" onchange="dopOnlyToggle()"> Лише додаткові заняття (без навчання)</label>
+          <div id="dopOnlyHint" style="display:none;font-size:12px;color:var(--gray)">Сума договору не потрібна: у Payment «Бюджет навч» = 0, рахунок — лише за додаткові, у наповнюваності рахується окремо.</div></div>
         <!-- v7.414 АКЦІЇ (v7.416 — одразу після «Щомісячна сума»): рекомендувач (будь-яка локація), брат/сестра (зв'язок в обидва боки), акція договору -->
         <div class="section-hd">🎁 Акції</div>
         <div id="promoCardBox" style="font-size:13px;color:var(--gray)">Завантаження…</div>
@@ -1998,6 +2001,7 @@ function mergeCRMFromCloud(rows){
       contractDate: row['Дата договору']||'',
       contractType: row['Тип договору']||'standard',
       monthlyFee: +(row['Сума договору']||0),
+      dopOnly: (row['Лише додаткові']===undefined ? undefined : _isDopOnly(row['Лише додаткові'])),   // v7.423
       entryFee:   +(row['Вступний внесок']||0),
       status:    row['Статус']||'active',
       notes:     _hv('Нотатки','notes',''),
@@ -4379,6 +4383,7 @@ function openNewChild(){
    'fBirthCert','fChildRegAddress','fMomDoc','fMomRnokpp','fDadDoc','fDadRnokpp','fHomeAddress','fHomeApt'].forEach(function(id){
     document.getElementById(id).value='';
   });
+  var _dO0=document.getElementById('fDopOnly'); if(_dO0){ _dO0.checked=false; dopOnlyToggle(); }   // v7.423
   document.getElementById('fHomeAddressReq').style.display='';   // v7.366: нова картка — адреса обов'язкова
   promoFillCard(null);   // v7.414
   _renderHomeGeo(null);   // v7.367
@@ -4554,6 +4559,7 @@ function populateForm(id){
   document.getElementById('fAdditionalContractNumber').value=c.additionalContractNumber||'';
   document.getElementById('fContractDate').value=c.contractDate||'';
   document.getElementById('fMonthlyFee').value=c.monthlyFee||'';
+  var _dO=document.getElementById('fDopOnly'); if(_dO){ _dO.checked=!!c.dopOnly; dopOnlyToggle(); }   // v7.423
   document.getElementById('fEntryFee').value=c.entryFee||'';
   document.getElementById('fNotes').value=c.notes||'';
   document.getElementById('fContractNumber').value=c.contractNumber||'';
@@ -7409,6 +7415,7 @@ function buildClientPayload(c, id){
     signerParent: c.signerParent||'mom', additionalContractNumber: c.additionalContractNumber||'',
     contractDate: c.contractDate||'', contractType: c.contractType||'standard',
     monthlyFee: c.monthlyFee||0, entryFee: c.entryFee||0,
+    dopOnly: (c.dopOnly===undefined ? undefined : !!c.dopOnly),   // v7.423: невідомо → бекенд не чіпає клітинку
     notes: c.notes||'',
     absences: c.absences||[], entryFeeSchedule: c.entryFeeSchedule||[], feeHistory: c.feeHistory||[],
     contractNumber: c.contractNumber||'',
@@ -7749,9 +7756,15 @@ var _INC_FIELDS=[
 ];
 // № договору, що насправді дата (Sheets перетворив «12-01-08» на дату) — це не номер.
 function _incIsJunkNumber(v){ v=String(v||''); return /^\d{4}-\d{2}-\d{2}T/.test(v) || /GMT[+-]\d/.test(v); }
+// v7.423 «Лише додаткові»: так / true / 1 / ✓ у клітинці картки
+function _isDopOnly(v){ return v===true || /^(так|true|1|yes|✓|x)$/i.test(String(v==null?'':v).trim()); }
+function dopOnlyToggle(){
+  var cb=document.getElementById('fDopOnly'), h=document.getElementById('dopOnlyHint'); if(!cb) return;
+  if(h) h.style.display=cb.checked?'block':'none';
+}
 function childCompletion(c){
   var missing=[];
-  if(!(+c.monthlyFee>0))                       missing.push('Сума договору');
+  if(!(+c.monthlyFee>0) && !c.dopOnly)         missing.push('Сума договору');   // v7.423: «Лише додаткові» — без суми, це не помилка
   if(!String(c.contractDate||'').trim())       missing.push('Дата договору');
   var cn=String(c.contractNumber||'').trim();
   if(!cn)                                      missing.push('№ договору');
@@ -8308,6 +8321,7 @@ function saveChild(){
   c.contractDate=val('fContractDate');
   c.contractType=val('fContractType');
   c.monthlyFee=parseFloat(val('fMonthlyFee'))||0;
+  var _dO=document.getElementById('fDopOnly'); if(_dO) c.dopOnly=!!_dO.checked;   // v7.423
   c.entryFee=parseFloat(val('fEntryFee'))||0;
   c.notes=val('fNotes');
 
@@ -8354,6 +8368,7 @@ function saveChild(){
     signerParent: c.signerParent, additionalContractNumber: c.additionalContractNumber,
     contractDate: c.contractDate, contractType: c.contractType,
     monthlyFee: c.monthlyFee, entryFee: c.entryFee,
+    dopOnly: (c.dopOnly===undefined ? undefined : !!c.dopOnly),   // v7.423
     notes: c.notes,
     absences: c.absences || [],
     entryFeeSchedule: c.entryFeeSchedule || [],
