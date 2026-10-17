@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.428
+// m.kids CRM — Google Apps Script v7.429
+// v7.429: getPilot2027Groups (read-only «Групи» + помилки формул); контроль пілоту не вважає #ERROR! нулем.
 // v7.428: Payment_27 — місяці, покриті передоплатою (реєстр «Покриття»), мають базу 0; прев'ю показує covered.
 // v7.427: addManualCoverage / previewManualCoverage — покриття для передоплати, внесеної в Payment вручну до реєстру.
 // v7.426: звірка карток з Payment не показує групи-абонементи («Чомусики», «Мама+я»).
@@ -7167,7 +7168,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.428', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.429', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -7310,6 +7311,7 @@ function doGet(e) {
     else if (action === 'previewPilot2027')            result = previewPilot2027(e.parameter || {});       // v7.419 пілот Payment 2027 — пробний прогін
     else if (action === 'previewFeeChange')            result = previewFeeChange(e.parameter || {});       // v7.417 прев'ю зміни суми (нічого не пише)
     else if (action === 'getCoverage')                 result = getCoverage(e.parameter || {});            // v7.415 покриття передоплатою
+    else if (action === 'getPilot2027Groups')          result = getPilot2027Groups(e.parameter || {});     // v7.429 read-only: «Групи» пілоту 2027 + помилки формул
     else if (action === 'previewManualCoverage')       result = addManualCoverage(_promoDry(e.parameter || {}));   // v7.427 прев'ю (нічого не пише)
     else if (action === 'previewPrepayment')           result = confirmPrepayment(_promoDry(e.parameter));  // v7.414 пробний прогін підтвердження (нічого не пише)
     else if (action === 'previewDiscounts')            result = recalcDiscounts(_promoDry(e.parameter));    // v7.414 що зміниться в реєстрі за місяць
@@ -38962,6 +38964,24 @@ function _p27Remap(b, gg, sheetName){
   return {sheet:sheetName, src:src, edits:out, changed:changed, unmapped:unmapped, zeroed:zeroed};
 }
 
+// v7.429 GET getPilot2027Groups&loc= — read-only: «Групи» (видимі значення) + перші клітинки з помилками у «Групи» / Payment_27 з формулами
+function getPilot2027Groups(params){
+  try {
+    var loc = String((params || {}).loc || '').trim(), cfg = PILOT_2027[loc];
+    if (!cfg) return {ok:false, error:'Пілот 2027 — лише ' + Object.keys(PILOT_2027).join(' і ')};
+    var ss = SpreadsheetApp.openById(cfg.fileId), out = {ok:true, loc:loc, file:cfg.file, tabs:ss.getSheets().map(function(x){ return x.getName(); })};
+    var errs = function(sh, lim){
+      var r = sh.getDataRange(), d = r.getDisplayValues(), f = r.getFormulas(), o = [];
+      for (var i = 0; i < d.length && o.length < lim; i++) for (var j = 0; j < d[i].length && o.length < lim; j++)
+        if (/^#/.test(d[i][j])) o.push({a1:_colLetter(j) + (i + 1), shown:d[i][j], formula:f[i][j]});
+      return o;
+    };
+    var g = ss.getSheetByName(P27_GROUPS), p = ss.getSheetByName(P27_TAB);
+    if (g){ out.groups = g.getRange(1, 1, g.getLastRow(), Math.min(g.getLastColumn(), 94)).getDisplayValues(); out.groupErrors = errs(g, 15); }
+    if (p){ out.paymentErrors = errs(p, 15); out.paymentRows = p.getLastRow(); out.paymentRow5 = p.getRange(5, 1, 1, Math.min(p.getLastColumn(), 110)).getFormulas()[0].slice(0, 12); }
+    return out;
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
 // GET previewPilot2027&loc= — нічого не пише
 function previewPilot2027(params){
   try {
@@ -39028,7 +39048,7 @@ function pilot2027Payment(body){
     SpreadsheetApp.flush();
     // контроль
     var ctrlVals = gs.getRange(gg.ctrlRow, 1, 1, GW).getValues()[0], bad = [];
-    ctrlVals.forEach(function(v, i){ if (i > 0 && v !== '' && Math.abs(Number(v) || 0) > 0.005) bad.push(_colLetter(i) + ': ' + v); });
+    ctrlVals.forEach(function(v, i){ if (i > 0 && v !== '' && (typeof v === 'string' && /^#/.test(v) || Math.abs(Number(v) || 0) > 0.005)) bad.push(_colLetter(i) + ': ' + v); });   // v7.429: #ERROR! — теж не «ок»
     var kidsRow = gs.getRange(gg.totalRow, 83, 1, 12).getValues()[0];
     var budRow = []; for (var m = 1; m <= 12; m++) budRow.push(gs.getRange(gg.totalRow, 1 + (m - 1) * 5 + 4 + 1).getValue());
     return {ok:true, loc:loc, file:b.cfg.file, kids:n, groups:b.groups, controlOk:bad.length === 0, controlDiffs:bad,
