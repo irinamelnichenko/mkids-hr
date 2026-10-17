@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.429
+// m.kids CRM — Google Apps Script v7.430
+// v7.430: пілот 2027 — формули пишуться setFormulas (setValues розбирав їх за укр. локаллю → #ERROR!).
 // v7.429: getPilot2027Groups (read-only «Групи» + помилки формул); контроль пілоту не вважає #ERROR! нулем.
 // v7.428: Payment_27 — місяці, покриті передоплатою (реєстр «Покриття»), мають базу 0; прев'ю показує covered.
 // v7.427: addManualCoverage / previewManualCoverage — покриття для передоплати, внесеної в Payment вручну до реєстру.
@@ -7168,7 +7169,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.429', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.430', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -38850,11 +38851,11 @@ function _p27Build(loc){
     var gFrom = (c.contract && c.contract > P27_YEAR + '-01-01') ? c.contract : P27_YEAR + '-01-01';
     row[P27_COL.groupFrom] = _p27Date(gFrom);
     row[P27_COL.end] = c.end ? _p27Date(c.end) : '';
-    row[P27_COL.status] = c.dopOnly ? 'лише додаткові' : '=IF($' + L(P27_COL.end) + r + '="","діє","розірвано")';   // v7.423
+    row[P27_COL.status] = c.dopOnly ? '="лише додаткові"' : '=IF($' + L(P27_COL.end) + r + '="","діє","розірвано")';   // v7.423
     for (var g = 0; g < 12; g++){
       row[P27_COL.gm + g] = (g >= 8 && promoted[c.id]) ? promoted[c.id] : c.group;   // v7.420: підтверджене переведення — з вересня
       var d1 = 'DATE(' + P27_YEAR + ',' + (g + 1) + ',1)';
-      row[P27_COL.act + g] = c.dopOnly ? 0 : '=IF(AND(OR($BK' + r + '="",$BK' + r + '<=EOMONTH(' + d1 + ',0)),OR($' + L(P27_COL.end) + r + '="",$' + L(P27_COL.end) + r + '>=' + d1 + ')),1,0)';
+      row[P27_COL.act + g] = c.dopOnly ? '=0' : '=IF(AND(OR($BK' + r + '="",$BK' + r + '<=EOMONTH(' + d1 + ',0)),OR($' + L(P27_COL.end) + r + '="",$' + L(P27_COL.end) + r + '>=' + d1 + ')),1,0)';
     }
     if (!c.group) warn.push(c.name + ': у картці не вказано групу — потрапить у «Без групи»');
     if (covM.length) covered.push({name:c.name, id:c.id, months:covM, cover:Object.keys(covIds), monthFee:_p27Base(c, Y(covM[0]))});   // v7.428
@@ -39004,6 +39005,30 @@ function previewPilot2027(params){
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 
+// v7.430 Запис матриці «значення + формули». setValues розбирає «=…» за ЛОКАЛЛЮ таблиці (укр.: роздільник «;»),
+//   тож SUMIFS(…,…) ставав #ERROR!. Тепер: значення — setValues (формули порожні), формули — setFormulas
+//   (завжди англ. синтаксис). Стовпці, де є лише формули й порожні клітинки, — блоками; змішані — по клітинці.
+function _p27PutMatrix(sh, r0, c0, m){
+  if (!m.length) return;
+  var H = m.length, W = m[0].length, isF = function(x){ return typeof x === 'string' && x.charAt(0) === '='; };
+  sh.getRange(r0, c0, H, W).setValues(m.map(function(row){ return row.map(function(x){ return isF(x) ? '' : x; }); }));
+  var kind = [];   // 0 — без формул; 1 — лише формули/порожні; 2 — змішаний
+  for (var j = 0; j < W; j++){
+    var hasF = false, hasV = false;
+    for (var i = 0; i < H; i++){ var x = m[i][j]; if (isF(x)) hasF = true; else if (x !== '' && x !== null && x !== undefined) hasV = true; }
+    kind.push(!hasF ? 0 : (hasV ? 2 : 1));
+  }
+  for (var j2 = 0; j2 < W; ){
+    if (kind[j2] === 1){
+      var e = j2; while (e + 1 < W && kind[e + 1] === 1) e++;
+      sh.getRange(r0, c0 + j2, H, e - j2 + 1).setFormulas(m.map(function(row){ return row.slice(j2, e + 1).map(function(x){ return isF(x) ? x : ''; }); }));
+      j2 = e + 1;
+    } else {
+      if (kind[j2] === 2) for (var i2 = 0; i2 < H; i2++) if (isF(m[i2][j2])) sh.getRange(r0 + i2, c0 + j2).setFormula(m[i2][j2]);
+      j2++;
+    }
+  }
+}
 // POST pilot2027Payment {loc, dryRun:false, replace?} — лише CFO. Створює НОВІ вкладки; старі Payment/CF/PL не змінює.
 function pilot2027Payment(body){
   try {
@@ -39025,8 +39050,7 @@ function pilot2027Payment(body){
       sh.getRange(P27_FIRST, P27_COL.id + 1, n, 1).setNumberFormat('@');
       sh.getRange(P27_FIRST, 63, n, 1).setNumberFormat('dd.mm.yyyy');
       sh.getRange(P27_FIRST, P27_COL.groupFrom + 1, n, 2).setNumberFormat('dd.mm.yyyy');
-      // значення й формули — однією матрицею: setValues приймає рядки «=…» як формули
-      sh.getRange(P27_FIRST, 1, n, W).setValues(vals);
+      _p27PutMatrix(sh, P27_FIRST, 1, vals);   // v7.430: формули — setFormulas (англ. синтаксис), не setValues
     }
     sh.setFrozenRows(4); sh.setFrozenColumns(1);
     // дзеркало знижок (ключ — ID картки, колонка F)
@@ -39035,7 +39059,7 @@ function pilot2027Payment(body){
     var gs = ss.insertSheet(P27_GROUPS), GW = gg.W;
     gs.getRange(1, 1, 3, GW).setValues(gg.head);
     var body2 = gg.rows.concat([gg.total, gg.pay, gg.ctrl]);
-    gs.getRange(5, 1, body2.length, GW).setValues(body2);
+    _p27PutMatrix(gs, 5, 1, body2);   // v7.430
     gs.setFrozenRows(4); gs.setFrozenColumns(1);
     SpreadsheetApp.flush();
     // CF_27 / PL_27 — копії з перенаправленими посиланнями
