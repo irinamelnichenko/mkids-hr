@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.425
+// m.kids CRM — Google Apps Script v7.426
+// v7.426: звірка карток з Payment не показує групи-абонементи («Чомусики», «Мама+я»).
 // v7.425: «Безкоштовно» в картці; звірка карток з Payment — без Управління, під-локація Школа Кар'єрна лише свій блок.
 // v7.424: фільтр локацій пігулками — getDiscounts / getCoverage / getPromoReport приймають locs (група локацій).
 // v7.423: «Лише додаткові» в картці; getCardPaymentDiff (звірка карток з Payment); відпустка (VAC) і хвороба (SICK) окремо.
@@ -7164,7 +7165,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.425', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.426', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -23545,7 +23546,10 @@ function getCardPaymentDiff(params){
       if (!d || !d.ok){ out.push({loc:loc, error:(d && d.error) || 'не прочитано'}); return; }
       // v7.425 під-локація (Школа Кар'єрна) ділить файл із хостом: вона бере лише свій блок, хост цей блок віддає
       var sub = _subLocOf(loc), subs = _subLocsOfHost(loc), gF = function(g){ return _nameFold(String(g || '')); };
+      // v7.426 групи-абонементи («Чомусики», «Мама+я») — не звіряємо: абонемент живе в «Бюджет навч», а в картці його немає
+      var isSubscr = function(g){ return /^(чомусики|мама\s*\+\s*я)(?![а-яіїєґa-z])/i.test(trim(String(g || ''))); };
       var rowsL = d.rows.filter(function(r){
+        if (isSubscr(r.group)) return false;
         if (sub) return gF(r.group) === gF(sub.group);
         return !subs.some(function(x){ return gF(r.group) === gF(x.group); });
       });
@@ -23556,7 +23560,7 @@ function getCardPaymentDiff(params){
         var mine = _nameFold(c.loc) === _nameFold(loc)
           ? !subs.some(function(x){ return gF(c.group) === gF(x.group); })
           : !!(sub && _nameFold(c.loc) === _nameFold(sub.host) && gF(c.group) === gF(sub.group));
-        if (!mine) return;
+        if (!mine || isSubscr(c.group)) return;   // v7.426 абонемент
         if (['active','adaptation','future','paused','terminated','graduated'].indexOf(c.status) === -1) return;
         if (c.contract && c.contract > l) return;
         if (c.end && c.end < f) return;
