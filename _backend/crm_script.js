@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.426
+// m.kids CRM — Google Apps Script v7.427
+// v7.427: addManualCoverage / previewManualCoverage — покриття для передоплати, внесеної в Payment вручну до реєстру.
 // v7.426: звірка карток з Payment не показує групи-абонементи («Чомусики», «Мама+я»).
 // v7.425: «Безкоштовно» в картці; звірка карток з Payment — без Управління, під-локація Школа Кар'єрна лише свій блок.
 // v7.424: фільтр локацій пігулками — getDiscounts / getCoverage / getPromoReport приймають locs (група локацій).
@@ -7165,7 +7166,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.426', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.427', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -7308,6 +7309,7 @@ function doGet(e) {
     else if (action === 'previewPilot2027')            result = previewPilot2027(e.parameter || {});       // v7.419 пілот Payment 2027 — пробний прогін
     else if (action === 'previewFeeChange')            result = previewFeeChange(e.parameter || {});       // v7.417 прев'ю зміни суми (нічого не пише)
     else if (action === 'getCoverage')                 result = getCoverage(e.parameter || {});            // v7.415 покриття передоплатою
+    else if (action === 'previewManualCoverage')       result = addManualCoverage(_promoDry(e.parameter || {}));   // v7.427 прев'ю (нічого не пише)
     else if (action === 'previewPrepayment')           result = confirmPrepayment(_promoDry(e.parameter));  // v7.414 пробний прогін підтвердження (нічого не пише)
     else if (action === 'previewDiscounts')            result = recalcDiscounts(_promoDry(e.parameter));    // v7.414 що зміниться в реєстрі за місяць
     else if (action === 'previewDiscountSync')         result = syncDiscountsToPayment(_promoDry(e.parameter)); // v7.414 які клітинки Payment перейдуть на формулу
@@ -7382,6 +7384,7 @@ function doPost(e) {
     else if (body.action === 'cancelDiscount')            result = cancelDiscount(body);        // v7.414 скасування ручного запису (офіс)
     else if (body.action === 'confirmPrepayment')         result = confirmPrepayment(body);     // v7.414 підтвердження передоплати + рознесення факту (офіс, dryRun)
     else if (body.action === 'rejectPrepayment')          result = rejectPrepayment(body);      // v7.414 відхилити здогадку (офіс)
+    else if (body.action === 'addManualCoverage')         result = addManualCoverage(body);     // v7.427 покриття для ручної передоплати (офіс, dryRun)
     else if (body.action === 'saveClassPromotion')        result = saveClassPromotion(body);    // v7.420 підтвердження переведення класів (директор/офіс)
     else if (body.action === 'applyClassPromotions')      result = applyClassPromotions(body);  // v7.420 застосувати з 1 вересня (офіс; dryRun:true — перегляд)
     else if (body.action === 'pilot2027Payment')          result = pilot2027Payment(body);      // v7.419 пілот Payment 2027 (CFO; нові вкладки, старі не чіпає)
@@ -37840,6 +37843,40 @@ function confirmPrepayment(body){
     return res;
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
   finally { if (lock){ try { lock.releaseLock(); } catch(_l2){} } }
+}
+// v7.427 POST addManualCoverage {cardId, from:'yyyy-MM', to:'yyyy-MM', amount, promoId?:'A3', note?, dryRun} — лише офіс.
+//   Покриття для передоплати, внесеної в Payment вручну до реєстру (без запису «Передоплати»). Нічого в Payment не пише
+//   і реєстр знижок не перераховує: лише рядок «Покриття» → місяці covered, рахунок за навчання не формується, борг не рахується.
+function addManualCoverage(body){
+  var lock = null;
+  try {
+    body = body || {};
+    var a = _promoActor(body);
+    if (!_promoIsOffice(a)) return PROMO_DENIED;
+    var dryRun = (body.dryRun !== false);
+    var c = _promoCards().byId[String(body.cardId || '').trim()];
+    if (!c) return {ok:false, error:'Картку не знайдено: ' + body.cardId};
+    var from = _promoYM(body.from), to = _promoYM(body.to), amount = _promoNum(body.amount), pid = String(body.promoId || 'A3').trim();
+    if (!from || !to || to < from) return {ok:false, error:'Невірний період ' + body.from + '…' + body.to};
+    if (!(amount > 0)) return {ok:false, error:'Сума платежу обовʼязкова'};
+    var months = _ymDiff(from, to) + 1;
+    var clash = _coverList().filter(function(x){ return x.status === 'діє' && x.cardId === c.id && !(to < x.from || from > x.to); })[0];
+    if (clash) return {ok:false, error:'Місяці перетинаються з наявним покриттям ' + clash.from + '…' + clash.to + ' (' + clash.id + ')'};
+    var note = 'внесено вручну: передоплата ' + months + ' міс, платіж у Payment до реєстру' + (body.note ? ' | ' + String(body.note) : '');
+    var res = {ok:true, dryRun:dryRun, child:c.name, loc:c.loc, cardId:c.id, from:from, to:to, months:months, amount:amount, promoId:pid,
+      perMonth:Math.round(amount / months), cardFee:c.fee, note:note};
+    if (dryRun) return res;
+    lock = LockService.getScriptLock(); lock.waitLock(30000);
+    var cid = _promoNewId('C'), csh = _promoSheet(COVER_TAB, COVER_HEADER);
+    _promoTextCols(csh, COVER_HEADER, ['ID','ID картки','Місяць з','Місяць по','ID передоплати']);
+    csh.getRange(csh.getLastRow() + 1, 1, 1, COVER_HEADER.length).setValues([_promoRowArr({'ID':cid, 'ID картки':c.id, 'ПІБ':c.name,
+      'Локація':c.loc, 'Місяць з':from, 'Місяць по':to, 'Сума платежу':amount, 'ID акції':pid, 'ID передоплати':'',
+      'Статус':'діє', 'Хто':_promoWho(a), 'Коли':_promoStamp(), 'Примітка':note}, COVER_HEADER)]);
+    _COVER_MEMO = null;
+    res.coverId = cid;
+    return res;
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { if (lock){ try { lock.releaseLock(); } catch(_l){} } }
 }
 // POST rejectPrepayment {id, note} — лише офіс. Платіж лишається звичайною оплатою.
 function rejectPrepayment(body){
