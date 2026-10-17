@@ -7157,7 +7157,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.421', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.422', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -38760,7 +38760,7 @@ function _p27GroupsGrid(b){
 // Перенаправлення посилань CF/PL: Payment!<кол><рядок-заголовок групи> → Групи!<кол><рядок групи>; рядок 3 → «Разом».
 function _p27Remap(b, gg, sheetName){
   var src = b.ss.getSheetByName(sheetName); if (!src) return {sheet:sheetName, missing:true};
-  var oldV = b.old.getRange(1, 1, b.old.getLastRow(), 1).getValues(), isSch = /школ/i.test(b.cfg.file), map = {}, info = {};
+  var oldV = b.old.getRange(1, 1, b.old.getLastRow(), 61).getValues(), isSch = /школ/i.test(b.cfg.file), map = {}, info = {};
   var norm = function(x){ try { return _nameFold(normalizeGroupName(String(x || ''), isSch)); } catch(e){ return _nameFold(x); } };
   var gIdx = {}; b.groups.forEach(function(gn){ gIdx[norm(gn)] = gn; });
   for (var r = 3; r < oldV.length; r++){
@@ -38778,24 +38778,33 @@ function _p27Remap(b, gg, sheetName){
       var g0 = byName[_nameFold(nm)]; if (!g0) continue;
       cnt[g0] = (cnt[g0] || 0) + 1; n++; if (!best || cnt[g0] > cnt[best]) best = g0;
     }
-    if (!best){ info[r1] = '(без назви, дітей з карток під ним немає)'; return null; }
+    // v7.422: блок без назви й без жодної дитини з карток — у 2027 він порожній; у копії файлу там лишились суми 2026 → у CF_27 / PL_27 нуль
+    if (!best){ info[r1] = '(без назви, дітей з карток немає → 0)'; return 'ZERO'; }
     info[r1] = '(без назви → ' + best + ', дітей ' + cnt[best] + ' з ' + n + ')';
     return gg.rowOf(best);
   };
   map[3] = gg.totalRow; info[3] = 'Оплата за навчання (разом)';
-  var rng = src.getDataRange(), F = rng.getFormulas(), changed = 0, unmapped = {}, out = [];
+  var rng = src.getDataRange(), F = rng.getFormulas(), changed = 0, unmapped = {}, zeroed = {}, out = [];
   var re = /(?:'Payment'|Payment)!\$?([A-Z]{1,2})\$?(\d+)/g;
+  // v7.422: у звіті — текст колонки A і бюджет навчання за рік, який цей рядок старого Payment приносить у CF
+  var note = function(bag, row){
+    var k = String(row);
+    if (!bag[k]){ var rv = oldV[row - 1] || [], y = 0; for (var m = 1; m <= 12; m++) y += Number(rv[(m - 1) * 5 + 5]) || 0;
+      bag[k] = {text:trim(String(rv[0] || '')) || (info[row] || '(порожньо)'), why:info[row] || '(не заголовок групи)', oldBudgetYear:Math.round(y), refs:0}; }
+    bag[k].refs++;
+  };
   for (var i = 0; i < F.length; i++) for (var j = 0; j < F[i].length; j++){
     var f = F[i][j]; if (!f || f.indexOf('Payment') < 0) continue;
     var nf = f.replace(re, function(all, col, row){
       if (!(Number(row) in map)) map[Number(row)] = inferBlank(Number(row));
       var nr = map[Number(row)];
-      if (!nr || nr < 0){ unmapped[row + ' ' + (info[row] || '(не заголовок групи)')] = (unmapped[row + ' ' + (info[row] || '(не заголовок групи)')] || 0) + 1; return all; }
+      if (nr === 'ZERO'){ note(zeroed, Number(row)); changed++; return col === 'A' ? '""' : '0'; }
+      if (!nr || nr < 0){ note(unmapped, Number(row)); return all; }
       changed++; return "'" + P27_GROUPS + "'!" + col + nr;
     });
     if (nf !== f) out.push({r:i + 1, c:j + 1, f:nf});
   }
-  return {sheet:sheetName, src:src, edits:out, changed:changed, unmapped:unmapped};
+  return {sheet:sheetName, src:src, edits:out, changed:changed, unmapped:unmapped, zeroed:zeroed};
 }
 
 // GET previewPilot2027&loc= — нічого не пише
@@ -38812,7 +38821,7 @@ function previewPilot2027(params){
       }
     });
     var cf = _p27Remap(b, gg, 'CF'), pl = _p27Remap(b, gg, 'PL');
-    var strip = function(x){ return x.missing ? {sheet:x.sheet, missing:true} : {sheet:x.sheet, changed:x.changed, unmapped:x.unmapped}; };
+    var strip = function(x){ return x.missing ? {sheet:x.sheet, missing:true} : {sheet:x.sheet, changed:x.changed, unmapped:x.unmapped, zeroed:x.zeroed}; };
     return {ok:true, loc:loc, file:b.cfg.file, kids:b.rows.length, groups:b.groups, perGroup:perGroup, totalBudget:totalBud,
       sample:b.rows.slice(0, 5).map(function(x){ return {name:x.c.name, id:x.c.id, group:x.c.group, contract:x.c.contract, end:x.c.end, bases:x.bases}; }),
       warnings:b.warnings, cf:strip(cf), pl:strip(pl), tabsExist:[P27_TAB, P27_GROUPS, 'CF_27', 'PL_27'].filter(function(t){ return !!b.ss.getSheetByName(t); })};
@@ -38858,7 +38867,7 @@ function pilot2027Payment(body){
       var rm = _p27Remap(b, gg, nm); if (rm.missing) return {sheet:nm, missing:true};
       var cp = rm.src.copyTo(ss); cp.setName(nm + '_27');
       rm.edits.forEach(function(e){ cp.getRange(e.r, e.c).setFormula(e.f); });
-      return {sheet:nm + '_27', changed:rm.changed, unmapped:rm.unmapped};
+      return {sheet:nm + '_27', changed:rm.changed, unmapped:rm.unmapped, zeroed:rm.zeroed};
     });
     SpreadsheetApp.flush();
     // контроль
