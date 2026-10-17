@@ -7157,7 +7157,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.423', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.424', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -37261,6 +37261,13 @@ var CARD_COL_REGFROM   = 'Реєстр знижок з';   // v7.418: лише �
 var PROMO_OFFICE_ROLES = ['cfo','ceo','coo','hr'];
 var PROMO_ORDER        = {R:0, A2:1, A3:2, A1:3, T:4, VAC:5, SICK:6};   // v7.423 хвороба — окремо від відпустки
 var PROMO_ORDER_NAME   = {0:'перенесено', 1:'сім\'я', 2:'передоплата', 3:'друг', 4:'тимчасова', 5:'відпустка', 6:'хвороба'};
+// v7.424 фільтр локацій: loc (одна) або locs (через кому — група «Садочок / Школа / Управління»); порожньо — усі
+function _locFilterFn(params){
+  var one = String((params || {}).loc || '').trim(), many = String((params || {}).locs || '').split(',').map(function(x){ return _nameFold(trim(x)); }).filter(Boolean);
+  if (one) return function(l){ return _nameFold(l) === _nameFold(one); };
+  if (many.length) return function(l){ return many.indexOf(_nameFold(l)) !== -1; };
+  return function(){ return true; };
+}
 function _promoIsAbsence(pid){ return pid === 'VAC' || pid === 'SICK'; }   // v7.423 відпустка / хвороба — не акції
 var PROMO_APPLIES      = ['навчання','вступний внесок','обидва'];
 var PROMO_PREPAY_TIERS_DEF = [[3,2],[6,5],[12,10]];
@@ -37749,7 +37756,8 @@ function getCoverage(params){
   try {
     params = params || {};
     var loc = String(params.loc || '').trim(), cid = String(params.cardId || '').trim();
-    return {ok:true, rows:_coverList().filter(function(c){ return (!loc || _coverLocMatch(loc, c.loc)) && (!cid || c.cardId === cid); })};
+    var _lf = _locFilterFn({locs:params.locs});   // v7.424 група локацій
+    return {ok:true, rows:_coverList().filter(function(c){ return (!loc || _coverLocMatch(loc, c.loc)) && (loc || _lf(c.loc)) && (!cid || c.cardId === cid); })};
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 
@@ -38113,7 +38121,7 @@ function cancelDiscount(body){
 function getDiscounts(params){
   try {
     params = params || {};
-    var ym = _promoYM(params.ym), loc = String(params.loc || '').trim(), cid = String(params.cardId || '').trim();
+    var ym = _promoYM(params.ym), loc = String(params.loc || '').trim(), cid = String(params.cardId || '').trim(), _lf = _locFilterFn(params);
     var from = _promoYM(params.from), to = _promoYM(params.to);
     var rows = _promoRead(DISC_TAB, DISC_HEADER).rows.map(function(r){
       return {id:String(r['ID запису']), cardId:String(r['ID картки']), name:String(r['ПІБ']), loc:String(r['Локація']), ym:_promoYM(r['Місяць']),
@@ -38124,7 +38132,7 @@ function getDiscounts(params){
       if (ym && r.ym !== ym) return false;
       if (from && r.ym < from) return false;
       if (to && r.ym > to) return false;
-      if (loc && _nameFold(r.loc) !== _nameFold(loc)) return false;
+      if (!_lf(r.loc)) return false;   // v7.424 loc або locs
       if (cid && r.cardId !== cid) return false;
       return true;
     });
@@ -38434,12 +38442,12 @@ function getPromoReport(params){
   try {
     params = params || {};
     var from = _promoISO(params.from) || (_ymNow() + '-01'), to = _promoISO(params.to) || _ymLast(_ymNow());
-    var loc = String(params.loc || '').trim();
+    var loc = String(params.loc || '').trim(), _lf = _locFilterFn(params);   // v7.424 loc або locs (група)
     var promos = _promoList(), cards = _promoCards();
-    var disc = getDiscounts({from:from.slice(0, 7), to:to.slice(0, 7), loc:loc}).rows || [];
+    var disc = getDiscounts({from:from.slice(0, 7), to:to.slice(0, 7), loc:loc, locs:params.locs}).rows || [];
     var rows = promos.map(function(p){
       var contracts = cards.list.filter(function(c){
-        if (loc && _nameFold(c.loc) !== _nameFold(loc)) return false;
+        if (!_lf(c.loc)) return false;
         if (!c.contract || c.contract < from || c.contract > to) return false;
         return c.promo === p.id || (p.id === 'A1' && !!c.referrer);
       });
@@ -38454,7 +38462,7 @@ function getPromoReport(params){
     // v7.423: відпустка й хвороба — окремими рядками
     var vac = disc.filter(function(d){ return d.promoId === 'VAC' && d.status === 'діє'; }), sick = disc.filter(function(d){ return d.promoId === 'SICK' && d.status === 'діє'; });
     var sumOf = function(a){ return a.reduce(function(s, d){ return s + d.amount; }, 0); };
-    return {ok:true, from:from, to:to, loc:loc || 'всі', rows:rows,
+    return {ok:true, from:from, to:to, loc:loc || (params.locs ? String(params.locs) : 'всі'), rows:rows,
       vacation:{discounts:vac.length, discountsSum:sumOf(vac)}, sick:{discounts:sick.length, discountsSum:sumOf(sick)}};
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }

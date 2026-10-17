@@ -1307,8 +1307,35 @@ function emptyBox(icon, title, text){ return '<div class="empty"><span class="ei
 
 async function loadPromos(){ var j = await get('getPromos'); P.promos = j.promos || []; P.start = j.start || P.start; }
 async function loadLocs(){
-  try { var j = await apiGet('getLocations'); P.locs = sortByLocationOrder(((j && j.data) || []).map(function(l){ return String(l.loc || '').trim(); }).filter(Boolean)); }
-  catch(e){ P.locs = []; }
+  try { var j = await apiGet('getLocations'), d = (j && j.data) || []; P.locTyp = {};
+    d.forEach(function(l){ var n = String(l.loc || '').trim(); if (n) P.locTyp[n] = String(l.typ || '').trim(); });
+    P.locs = sortByLocationOrder(d.map(function(l){ return String(l.loc || '').trim(); }).filter(Boolean)); }
+  catch(e){ P.locs = []; P.locTyp = {}; }
+}
+// ── v7.424 ФІЛЬТР ЛОКАЦІЙ: пігулки 📋 Всі · 🌱 Садочок · 🏫 Школа · 🏢 Управління + вибір локації в групі; запамʼятовується ──
+var LF_TYPES = [['', '📋 Всі'], ['Садочок', '🌱 Садочок'], ['Школа', '🏫 Школа'], ['Управління', '🏢 Управління']], LF_KEY = 'mkids_promos_locf';
+function lfGet(){
+  if (!P.lf){ var v = null; try { v = JSON.parse(localStorage.getItem(LF_KEY) || 'null'); } catch(e){}
+    P.lf = (v && typeof v === 'object') ? {type:String(v.type || ''), loc:String(v.loc || '')} : {type:'', loc:''}; }
+  return P.lf;
+}
+function lfSet(type, loc){ P.lf = {type:type || '', loc:loc || ''}; try { localStorage.setItem(LF_KEY, JSON.stringify(P.lf)); } catch(e){} }
+function lfLocs(){ var t = lfGet().type; return P.locs.filter(function(l){ return !t || (P.locTyp || {})[l] === t; }); }
+// Параметри запиту: директор — своя локація; обрана локація — loc; лише група — locs (через кому); «Всі» — без фільтра.
+function lfParams(){
+  if (isDir()) return {loc:myLoc()};
+  var f = lfGet();
+  if (f.loc) return {loc:f.loc};
+  if (f.type) return {locs:lfLocs().join(',')};
+  return {};
+}
+function lfBar(after){
+  if (isDir()) return '<b>📍 ' + esc(myLoc()) + '</b>';
+  var f = lfGet(), go = function(t, l){ return 'lfSet(' + esc(JSON.stringify(t)) + ',' + esc(JSON.stringify(l)) + ');' + after; };
+  return '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">'
+    + LF_TYPES.map(function(c){ return '<button type="button" class="att-chip' + (f.type === c[0] ? ' att-chip-active' : '') + '" onclick="' + go(c[0], '') + '">' + c[1] + '</button>'; }).join('')
+    + '<select class="flt-sel" onchange="lfSet(' + esc(JSON.stringify(f.type)) + ',this.value);' + after + '"><option value="">Усі локації' + (f.type ? ' (' + esc(f.type) + ')' : '') + '</option>'
+    + lfLocs().map(function(l){ return '<option' + (l === f.loc ? ' selected' : '') + '>' + esc(l) + '</option>'; }).join('') + '</select></div>';
 }
 async function loadCards(){
   if (P.cards) return;
@@ -1432,7 +1459,7 @@ async function finishPromo(id){
 // ── 2. РЕЄСТР ──
 async function loadRegister(){
   P.regRows = null; renderRegister();
-  try { var j = await get('getDiscounts', {ym:P.ym, loc:P.regLoc}); P.regRows = j.rows || []; }
+  try { var j = await get('getDiscounts', Object.assign({ym:P.ym}, lfParams())); P.regRows = j.rows || []; }
   catch(e){ P.regRows = []; toast('Реєстр не завантажився: ' + e.message); }
   renderRegister();
 }
@@ -1450,7 +1477,7 @@ function renderRegister(){
   var el = document.getElementById('pbody'), off = isOffice();
   var h = monthStrip();
   h += '<div class="filters">'
-    + (isDir() ? '<b>📍 ' + esc(myLoc()) + '</b>' : '<select class="flt-sel" onchange="P.regLoc=this.value;regReload()">' + locOptions(P.regLoc, true) + '</select>')
+    + lfBar('regReload()')
     + '<span style="flex:1"></span>'
     + (off ? '<button class="btn btn-secondary btn-sm" onclick="previewRecalc()" title="Лише діти на реєстрі знижок (нові картки); ручні клітинки не змінюються">🔍 Перевірити перерахунок</button>' : '')
     + (isCfo() ? '<button class="btn btn-secondary btn-sm" onclick="setupNightly()" title="Щодня о 08:30: поточний місяць і до грудня">⏰ Нічний прогін</button>' : '')
@@ -1493,7 +1520,7 @@ function renderRegister(){
 }
 async function loadCoverage(){
   var box = document.getElementById('covBox'); if (!box) return;
-  var j; try { j = await get('getCoverage', {loc:P.regLoc}); } catch(e){ box.lastChild.innerHTML = '<div class="alert alert-danger" style="margin:14px"><div>' + esc(e.message) + '</div></div>'; return; }
+  var j; try { j = await get('getCoverage', lfParams()); } catch(e){ box.lastChild.innerHTML = '<div class="alert alert-danger" style="margin:14px"><div>' + esc(e.message) + '</div></div>'; return; }
   var rows = (j.rows || []).filter(function(c){ return c.status === 'діє'; });
   box.lastChild.outerHTML = rows.length ? '<div class="tbl-wrap"><table><thead><tr><th>Дитина</th><th>Локація</th><th>З</th><th>По</th><th class="r">Платіж</th><th>Акція</th><th>Примітка</th><th>Хто</th></tr></thead><tbody>'
     + rows.map(function(c){ return '<tr><td style="font-weight:600">' + esc(c.name) + '</td><td>' + esc(c.loc) + '</td><td class="nw">' + esc(c.from) + '</td><td class="nw">' + esc(c.to) + '</td><td class="r nw" style="font-weight:700">' + money(c.amount) + '</td><td><span class="badge bb">' + esc(c.promoId) + '</span></td><td class="muted">' + esc(c.note) + '</td><td class="muted">' + esc(c.by) + '<br>' + esc(c.at) + '</td></tr>'; }).join('')
@@ -1511,14 +1538,18 @@ function renderPreview(){
     + '</div><div class="modal-ft" style="position:static"><button class="btn btn-secondary" onclick="P.preview=null;renderRegister()">Закрити</button>'
     + '<button class="btn btn-primary" onclick="applyRecalc()"' + (n ? '' : ' disabled') + '>✅ Застосувати (лише клієнти на реєстрі)</button></div></div>';
 }
+// Перерахунок — на одну локацію або на всю мережу; група без конкретної локації — попросити обрати
+function recalcLoc(){ var p = lfParams(); if (p.locs){ alert('Перерахунок робиться на одну локацію або на всі: оберіть локацію у списку або «📋 Всі».'); return null; } return p.loc || ''; }
 async function previewRecalc(){
+  var _rl = recalcLoc(); if (_rl === null) return;
   toast('Рахую…');
-  try { P.preview = await get('previewDiscounts', {ym:P.ym, loc:P.regLoc}); } catch(e){ alert(e.message); return; }
+  try { P.preview = await get('previewDiscounts', {ym:P.ym, loc:_rl}); } catch(e){ alert(e.message); return; }
   renderRegister();
 }
 async function applyRecalc(){
   if (!confirm('Застосувати перерахунок за ' + ymLabel(P.ym) + ' (і наступні місяці до грудня) для дітей на реєстрі знижок? Ручні клітинки наявних дітей не змінюються.')) return;
-  try { await post({action:'recalcDiscounts', ym:P.ym, loc:P.regLoc, dryRun:false, sync:true, through:P.ym.slice(0, 4) + '-12'}); toast('Застосовано'); }
+  var _rl = recalcLoc(); if (_rl === null) return;
+  try { await post({action:'recalcDiscounts', ym:P.ym, loc:_rl, dryRun:false, sync:true, through:P.ym.slice(0, 4) + '-12'}); toast('Застосовано'); }
   catch(e){ alert(e.message); return; }
   P.preview = null; await loadRegister();
 }
@@ -1543,17 +1574,18 @@ async function setupNightly(){
 }
 
 // ── 3. ЗВІТ ──
+function reportGo(){ var a = document.getElementById('rFrom'), b = document.getElementById('rTo'); if (a) P.rFrom = a.value; if (b) P.rTo = b.value; loadReport(); }
 async function loadReport(){
   P.report = null; renderReport();
-  try { P.report = await get('getPromoReport', {from:P.rFrom, to:P.rTo, loc:isDir() ? myLoc() : P.rLoc}); }
+  try { P.report = await get('getPromoReport', Object.assign({from:P.rFrom, to:P.rTo}, lfParams())); }
   catch(e){ P.report = {ok:false, error:e.message}; }
   renderReport();
 }
 function renderReport(){
   var el = document.getElementById('pbody');
   var h = '<div class="filters"><span class="muted" style="font-weight:700">Період</span><input class="flt-sel" type="date" lang="uk" id="rFrom" value="' + esc(P.rFrom) + '"><span class="muted">—</span><input class="flt-sel" type="date" lang="uk" id="rTo" value="' + esc(P.rTo) + '">'
-    + (isDir() ? '<b>📍 ' + esc(myLoc()) + '</b>' : '<select class="flt-sel" id="rLoc">' + locOptions(P.rLoc, true) + '</select>')
-    + '<button class="btn btn-primary btn-sm" onclick="P.rFrom=document.getElementById(\'rFrom\').value;P.rTo=document.getElementById(\'rTo\').value;var l=document.getElementById(\'rLoc\');P.rLoc=l?l.value:\'\';loadReport()">Показати</button></div>';
+    + '<button class="btn btn-primary btn-sm" onclick="reportGo()">Показати</button></div>'
+    + '<div class="filters">' + lfBar('reportGo()') + '</div>';
   var r = P.report;
   if (!r){ el.innerHTML = h + '<div class="card">' + loading() + '</div>'; return; }
   if (r.ok === false){ el.innerHTML = h + '<div class="alert alert-danger"><div>' + esc(r.error) + '</div></div>'; return; }
