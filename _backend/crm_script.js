@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.424
+// m.kids CRM — Google Apps Script v7.425
+// v7.425: «Безкоштовно» в картці; звірка карток з Payment — без Управління, під-локація Школа Кар'єрна лише свій блок.
 // v7.424: фільтр локацій пігулками — getDiscounts / getCoverage / getPromoReport приймають locs (група локацій).
 // v7.423: «Лише додаткові» в картці; getCardPaymentDiff (звірка карток з Payment); відпустка (VAC) і хвороба (SICK) окремо.
 // v7.422: Payment 2027 — порожні блоки без назви в CF_27/PL_27 = 0; докладний звіт незіставлених рядків.
@@ -7163,7 +7164,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.424', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.425', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -9588,7 +9589,9 @@ function ensureClientsHeader(sheet) {
     // v7.418 — з якого місяця «Бюджет навч» дитини — формула реєстру знижок (ставить бекенд лише для НОВИХ дітей).
     'Реєстр знижок з',
     // v7.423 — «Лише додаткові» (так / порожньо): дитина не ходить на навчання, лише на додаткові заняття.
-    'Лише додаткові'
+    'Лише додаткові',
+    // v7.425 — «Безкоштовно» (так / порожньо): навчання без оплати; сума договору 0 — не помилка.
+    'Безкоштовно'
   ];
   var lastCol = sheet.getLastColumn();
   var width = Math.max(lastCol, EXPECTED.length);
@@ -23504,15 +23507,16 @@ function diagLocPayment(e){
     var factHarchV = hasHarch ? paySh.getRange(1, factHarchCol1, lastRow, 1).getValues() : [];
     var budHarchV  = hasHarch ? paySh.getRange(1, budHarchCol1,  lastRow, 1).getValues() : [];
     var jV = _readJournalForTarget(loc, 'vacation', year, month);
-    var DATA_START = 3, out = [];
+    var DATA_START = 3, out = [], grp = '';
     for (var r = DATA_START; r < data.length; r++){
       var nm = trim(String(data[r][0] || ''));
-      if (!nm || isGroupHeaderRow(data[r], 1)) continue;
+      if (nm && isGroupHeaderRow(data[r], 1)){ grp = nm; continue; }   // v7.425 заголовок блоку — група рядків нижче
+      if (!nm) continue;
       var nk = _normNameVac(nm);
       var je = jV.byNormName[nk];
       var lw = je ? je.sum : 0;
       var cur = Number(colV[r][0]) || 0;
-      out.push({name:nm, row:r+1, budget:cur, next:(nextV.length?(Number(nextV[r][0])||0):null),
+      out.push({name:nm, row:r+1, group:grp, budget:cur, next:(nextV.length?(Number(nextV[r][0])||0):null),
                 factHarch:(hasHarch?(Number(factHarchV[r][0])||0):null),
                 budHarch:(hasHarch?(Number(budHarchV[r][0])||0):null),
                 lastWritten:lw, base:(cur - lw)});
@@ -23533,22 +23537,36 @@ function getCardPaymentDiff(params){
     var now = new Date(), month = Number(params.month) || (now.getMonth() + 1), year = Number(params.year) || now.getFullYear();
     var ym = year + '-' + ('0' + month).slice(-2), f = _ymFirst(ym), l = _ymLast(ym), only = trim(String(params.loc || ''));
     var cards = _promoCards().list, seenLoc = {}, locs = [];
-    _promoPayLocs().forEach(function(pl){ var k = _nameFold(pl.loc); if (seenLoc[k] || (only && k !== _nameFold(only))) return; seenLoc[k] = 1; locs.push(pl.loc); });
+    // v7.425: локації Управління не звіряємо (рішення CFO 17.10.2026)
+    _promoPayLocs().forEach(function(pl){ var k = _nameFold(pl.loc); if (/управл/i.test(pl.typ) || seenLoc[k] || (only && k !== _nameFold(only))) return; seenLoc[k] = 1; locs.push(pl.loc); });
     var out = [], tot = {kids:0, diff:0, items:0, dopOnly:0};
     locs.forEach(function(loc){
       var d = diagLocPayment({parameter:{loc:loc, month:month, year:year}});
       if (!d || !d.ok){ out.push({loc:loc, error:(d && d.error) || 'не прочитано'}); return; }
+      // v7.425 під-локація (Школа Кар'єрна) ділить файл із хостом: вона бере лише свій блок, хост цей блок віддає
+      var sub = _subLocOf(loc), subs = _subLocsOfHost(loc), gF = function(g){ return _nameFold(String(g || '')); };
+      var rowsL = d.rows.filter(function(r){
+        if (sub) return gF(r.group) === gF(sub.group);
+        return !subs.some(function(x){ return gF(r.group) === gF(x.group); });
+      });
       var pay = {};
-      d.rows.forEach(function(r){ var k = _normNameVac(r.name), p = pay[k] || (pay[k] = {base:0, rows:[], used:false, name:r.name}); p.base += Number(r.base) || 0; p.rows.push(r.row); });
+      rowsL.forEach(function(r){ var k = _normNameVac(r.name), p = pay[k] || (pay[k] = {base:0, rows:[], used:false, name:r.name}); p.base += Number(r.base) || 0; p.rows.push(r.row); });
       var items = [], dopN = 0;
       cards.forEach(function(c){
-        if (_nameFold(c.loc) !== _nameFold(loc)) return;
+        var mine = _nameFold(c.loc) === _nameFold(loc)
+          ? !subs.some(function(x){ return gF(c.group) === gF(x.group); })
+          : !!(sub && _nameFold(c.loc) === _nameFold(sub.host) && gF(c.group) === gF(sub.group));
+        if (!mine) return;
         if (['active','adaptation','future','paused','terminated','graduated'].indexOf(c.status) === -1) return;
         if (c.contract && c.contract > l) return;
         if (c.end && c.end < f) return;
         if ((c.status === 'terminated' || c.status === 'graduated') && !c.end) return;
         var p = pay[_normNameVac(c.name)]; if (p) p.used = true;
         var pv = p ? Math.round(p.base) : null;
+        if (c.free){   // v7.425 «Безкоштовно»: 0 — норма; розбіжність лише якщо в Payment є «Бюджет навч»
+          if (pv) items.push({name:c.name, id:c.id, group:c.group, kind:'безкоштовно, але є «Бюджет навч»', card:0, payment:pv, diff:-pv, rows:p.rows});
+          return;
+        }
         if (c.dopOnly){
           dopN++;
           if (pv) items.push({name:c.name, id:c.id, group:c.group, kind:'лише додаткові, але є «Бюджет навч»', card:0, payment:pv, diff:-pv, rows:p.rows});
@@ -26842,6 +26860,7 @@ function generateInvoicePDF(opts){
     if(opts.dataOnly){ Logger.log('[TIMING] _invoiceSumFromYearly: %s ms', Date.now()-_tp); _tp=Date.now(); }
     // v7.423 «Лише додаткові»: навчання немає — рахунок лише за додаткові (type=extras); тут — відмова, якщо «Бюджет навч» 0
     if (client.dopOnly && !(Number(sum) > 0)) return {ok:false, dopOnly:true, error:childName + ' — «Лише додаткові»: рахунок за навчання не формується, лише за додаткові заняття.'};
+    if (client.free && !(Number(sum) > 0)) return {ok:false, free:true, error:childName + ' — «Безкоштовно»: рахунок за навчання не формується (за додаткові — так).'};   // v7.425
     // v7.63 РОЗБИВКА: якщо Бюджет місяця > «Сума договору» з картки → різниця = «Борг
     // попереднього періоду» (директор підняв бюджет, щоб зібрати недоплату). Total НЕ
     // змінюється (= sum), затверджений текст/заголовок недоторкані — лише розбивка рядка.
@@ -27849,6 +27868,7 @@ function _invoiceClientData(childName, loc, type){
   res.feeHist = _promoJSON(c['Зміни суми (JSON)'], []);  // v7.417 перехід з середини місяця
   res.regFrom = _promoYM(c[CARD_COL_REGFROM]);            // v7.418 на реєстрі знижок з
   res.dopOnly = _isDopOnly(c[CARD_COL_DOPONLY]);          // v7.423 лише додаткові — рахунку за навчання немає
+  res.free = _isDopOnly(c[CARD_COL_FREE]);                 // v7.425 безкоштовно — рахунку за навчання немає, за додаткові є
   return res;
 }
 
@@ -37507,7 +37527,7 @@ function _promoCards(){
       status:String(o['Статус'] || '').trim().toLowerCase(), contract:_promoISO(o['Дата договору']), adapt:_promoISO(o['Дата адаптації']),
       end:_promoISO(o['Дата розірвання']), fee:_promoNum(o['Сума договору']), entryFee:_promoNum(o['Вступний внесок']),
       feeHist:_promoJSON(o['Зміни суми (JSON)'], []), referrer:String(o[CARD_COL_REFERRER] || '').trim(),
-      siblings:_promoIdList(o[CARD_COL_SIBLINGS]), promo:String(o[CARD_COL_PROMO] || '').trim(), regFrom:_promoYM(o[CARD_COL_REGFROM]), dopOnly:_isDopOnly(o[CARD_COL_DOPONLY]), raw:o};
+      siblings:_promoIdList(o[CARD_COL_SIBLINGS]), promo:String(o[CARD_COL_PROMO] || '').trim(), regFrom:_promoYM(o[CARD_COL_REGFROM]), dopOnly:_isDopOnly(o[CARD_COL_DOPONLY]), free:_isDopOnly(o[CARD_COL_FREE]), raw:o};
     byId[id] = c; list.push(c);
   });
   return {byId:byId, list:list, data:(gc.data || [])};
@@ -38476,12 +38496,17 @@ function getPromoReport(params){
 // ═══ КАРТКА: «Хто порекомендував» / «Брат / сестра» / «Акція» ═══
 // Пишемо лише ключі, які є в payload. Брат/сестра — зв'язок в обидва боки (додаємо/прибираємо в інших картках).
 // v7.423 «Лише додаткові»: так / порожньо. data.dopOnly === undefined → клітинку не чіпаємо (старий фронт / кеш).
-var CARD_COL_DOPONLY = 'Лише додаткові';
+var CARD_COL_DOPONLY = 'Лише додаткові', CARD_COL_FREE = 'Безкоштовно';   // v7.425 +Безкоштовно
 function _isDopOnly(v){ return v === true || /^(так|true|1|yes|✓|x)$/i.test(String(v == null ? '' : v).trim()); }
 function _clientWriteDopOnly(sheet, rowNum, data){
-  if (!data || data.dopOnly === undefined || data.dopOnly === null) return;
-  var hd = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String), c = hd.indexOf(CARD_COL_DOPONLY);
-  if (c >= 0) sheet.getRange(rowNum, c + 1).setValue(_isDopOnly(data.dopOnly) ? 'так' : '');
+  if (!data) return;
+  var hd = null, put = function(col, v){
+    if (v === undefined || v === null) return;
+    hd = hd || sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String);
+    var c = hd.indexOf(col); if (c >= 0) sheet.getRange(rowNum, c + 1).setValue(_isDopOnly(v) ? 'так' : '');
+  };
+  put(CARD_COL_DOPONLY, data.dopOnly);
+  put(CARD_COL_FREE, data.free);   // v7.425
 }
 function _clientWritePromoFields(sheet, rowNum, data){
   if (!data) return null;
@@ -38732,7 +38757,7 @@ var P27_ML = ['січ','лют','бер','кві','тра','чер','лип','с
 function _p27Date(iso){ if (!iso) return ''; var p = iso.split('-'); return new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2])); }
 // База місяця 2027: «Сума договору» + «Зміни суми» (пропорційно), місяць розірвання — до дати розірвання за робочими днями.
 function _p27Base(c, ym){
-  if (c.dopOnly) return 0;                                  // v7.423 «Лише додаткові» — навчання немає
+  if (c.dopOnly || c.free) return 0;                        // v7.423 «Лише додаткові» / v7.425 «Безкоштовно»
   var b = _feeSegments(c, ym).base;
   if (c.end && c.end.slice(0, 7) === ym){
     var f = _ymFirst(ym), l = _ymLast(ym), all = _feeWorkDays(f, l), part = _feeWorkDays(f, c.end);
@@ -38770,7 +38795,7 @@ function _p27Build(loc){
       row[s0 + LO.budNavch] = '=' + base + '*$' + L(P27_COL.act + m - 1) + r + "-SUMIFS('" + DISC_MIRROR_TAB + "'!$C:$C,'" + DISC_MIRROR_TAB + "'!$F:$F,$" + L(P27_COL.id) + r + ",'" + DISC_MIRROR_TAB + "'!$B:$B,\"" + Y(m) + '")';
       row[67 + m] = '=' + L(s0 + LO.budNavch) + r;            // BQ…CB — бюджет навчання місяця (як у 2026)
     }
-    if (!(c.fee > 0) && !c.dopOnly) warn.push(c.name + ': у картці немає «Суми договору» — бюджет 0');   // v7.423: «Лише додаткові» — не помилка
+    if (!(c.fee > 0) && !c.dopOnly && !c.free) warn.push(c.name + ': у картці немає «Суми договору» — бюджет 0');   // v7.423: «Лише додаткові» — не помилка
     row[61] = sg === 'dad' ? String(o['ПІБ тата'] || '') : String(o['ПІБ мами'] || '');
     row[62] = _p27Date(c.contract);
     row[P27_COL.id] = c.id;
