@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.427
+// m.kids CRM — Google Apps Script v7.428
+// v7.428: Payment_27 — місяці, покриті передоплатою (реєстр «Покриття»), мають базу 0; прев'ю показує covered.
 // v7.427: addManualCoverage / previewManualCoverage — покриття для передоплати, внесеної в Payment вручну до реєстру.
 // v7.426: звірка карток з Payment не показує групи-абонементи («Чомусики», «Мама+я»).
 // v7.425: «Безкоштовно» в картці; звірка карток з Payment — без Управління, під-локація Школа Кар'єрна лише свій блок.
@@ -7166,7 +7167,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.427', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.428', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -38823,16 +38824,19 @@ function _p27Build(loc){
   if (!old) throw new Error('У файлі ' + cfg.file + ' немає вкладки Payment');
   var W = P27_COL.act + 12;                                 // A … DF
   var hdr = old.getRange(1, 1, 3, Math.min(old.getLastColumn(), 81)).getValues();
-  var kids = _p27Kids(loc), L = _colLetter, rows = [], warn = [], promoted = {};
+  var kids = _p27Kids(loc), L = _colLetter, rows = [], warn = [], promoted = {}, covered = [];
   try { _classRows().rows.forEach(function(r){ if (r.year === P27_YEAR && r.decision === 'перевести' && r.to) promoted[r.cardId] = r.to; }); } catch(_cr){}   // v7.420
   var Y = function(m){ return P27_YEAR + '-' + ('0' + m).slice(-2); };
   kids.forEach(function(c, i){
     var r = P27_FIRST + i, row = new Array(W); for (var k = 0; k < W; k++) row[k] = '';
     var o = c.raw || {}, sg = String(o['Підписант договору'] || '').trim();
     row[0] = c.name;
-    var bases = [];
+    var bases = [], covM = [], covIds = {};
     for (var m = 1; m <= 12; m++){
-      var s0 = 1 + (m - 1) * cpm, base = _p27Base(c, Y(m)); bases.push(base);
+      // v7.428 місяць покрито передоплатою (реєстр «Покриття») → база 0: гроші вже отримано платежем передоплати
+      var cov = null; try { cov = _coverFor(Y(m), c.id, c.name, loc); } catch(_cv){}
+      var s0 = 1 + (m - 1) * cpm, base = cov ? 0 : _p27Base(c, Y(m)); bases.push(base);
+      if (cov){ covM.push(m); covIds[cov.id] = 1; }
       row[s0 + LO.budNavch] = '=' + base + '*$' + L(P27_COL.act + m - 1) + r + "-SUMIFS('" + DISC_MIRROR_TAB + "'!$C:$C,'" + DISC_MIRROR_TAB + "'!$F:$F,$" + L(P27_COL.id) + r + ",'" + DISC_MIRROR_TAB + "'!$B:$B,\"" + Y(m) + '")';
       row[67 + m] = '=' + L(s0 + LO.budNavch) + r;            // BQ…CB — бюджет навчання місяця (як у 2026)
     }
@@ -38851,6 +38855,7 @@ function _p27Build(loc){
       row[P27_COL.act + g] = c.dopOnly ? 0 : '=IF(AND(OR($BK' + r + '="",$BK' + r + '<=EOMONTH(' + d1 + ',0)),OR($' + L(P27_COL.end) + r + '="",$' + L(P27_COL.end) + r + '>=' + d1 + ')),1,0)';
     }
     if (!c.group) warn.push(c.name + ': у картці не вказано групу — потрапить у «Без групи»');
+    if (covM.length) covered.push({name:c.name, id:c.id, months:covM, cover:Object.keys(covIds), monthFee:_p27Base(c, Y(covM[0]))});   // v7.428
     rows.push({c:c, row:row, bases:bases});
   });
   // шапка Payment_27
@@ -38865,7 +38870,7 @@ function _p27Build(loc){
   sumCols.forEach(function(ci){ tot[ci] = '=SUM(' + L(ci) + P27_FIRST + ':' + L(ci) + ')'; });
   // групи (порядок першої появи, далі «Без групи»)
   var groups = []; rows.forEach(function(x){ x.row.slice(P27_COL.gm, P27_COL.gm + 12).forEach(function(gn){ if (gn && groups.indexOf(gn) === -1) groups.push(gn); }); });
-  return {cfg:cfg, ss:ss, old:old, cpm:cpm, W:W, header:H, total:tot, rows:rows, groups:groups, warnings:warn, kids:kids};
+  return {cfg:cfg, ss:ss, old:old, cpm:cpm, W:W, header:H, total:tot, rows:rows, groups:groups, warnings:warn, kids:kids, covered:covered};
 }
 // «Групи»: ті самі літери колонок (B…BI, BQ…CB), кількість дітей — CD…CO.
 function _p27GroupsGrid(b){
@@ -38974,7 +38979,7 @@ function previewPilot2027(params){
     var strip = function(x){ return x.missing ? {sheet:x.sheet, missing:true} : {sheet:x.sheet, changed:x.changed, unmapped:x.unmapped, zeroed:x.zeroed}; };
     return {ok:true, loc:loc, file:b.cfg.file, kids:b.rows.length, groups:b.groups, perGroup:perGroup, totalBudget:totalBud,
       sample:b.rows.slice(0, 5).map(function(x){ return {name:x.c.name, id:x.c.id, group:x.c.group, contract:x.c.contract, end:x.c.end, bases:x.bases}; }),
-      warnings:b.warnings, dopOnly:b.rows.filter(function(x){ return x.c.dopOnly; }).map(function(x){ return x.c.name + ' (' + x.c.group + ')'; }),
+      warnings:b.warnings, covered:b.covered, dopOnly:b.rows.filter(function(x){ return x.c.dopOnly; }).map(function(x){ return x.c.name + ' (' + x.c.group + ')'; }),
       cf:strip(cf), pl:strip(pl), tabsExist:[P27_TAB, P27_GROUPS, 'CF_27', 'PL_27'].filter(function(t){ return !!b.ss.getSheetByName(t); })};
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
@@ -39027,7 +39032,7 @@ function pilot2027Payment(body){
     var kidsRow = gs.getRange(gg.totalRow, 83, 1, 12).getValues()[0];
     var budRow = []; for (var m = 1; m <= 12; m++) budRow.push(gs.getRange(gg.totalRow, 1 + (m - 1) * 5 + 4 + 1).getValue());
     return {ok:true, loc:loc, file:b.cfg.file, kids:n, groups:b.groups, controlOk:bad.length === 0, controlDiffs:bad,
-      kidsByMonth:kidsRow, budgetByMonth:budRow, cf:remaps[0], pl:remaps[1], warnings:b.warnings};
+      kidsByMonth:kidsRow, budgetByMonth:budRow, cf:remaps[0], pl:remaps[1], warnings:b.warnings, covered:b.covered};
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 
