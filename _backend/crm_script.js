@@ -7157,7 +7157,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.420', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.421', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -38767,12 +38767,28 @@ function _p27Remap(b, gg, sheetName){
     var t = trim(String(oldV[r][0] || '')); if (!t) continue;
     if (isGroupHeaderRow([t], 1)){ var gn = gIdx[norm(t)]; info[r + 1] = t; if (gn) map[r + 1] = gg.rowOf(gn); }
   }
+  // v7.421: заголовок блоку без назви (A порожня, у B — SUM блоку) — групу визначаємо за дітьми під ним (більшість за карткою).
+  //         Блоки з назвою, що не є групою («Табір»), не чіпаємо — вони лишаються на старому Payment.
+  var byName = {}; b.rows.forEach(function(x){ byName[_nameFold(x.c.name)] = x.row[P27_COL.gm]; });
+  var inferBlank = function(r1){
+    if (trim(String((oldV[r1 - 1] || [''])[0] || ''))) return null;
+    var cnt = {}, best = '', n = 0;
+    for (var q = r1; q < oldV.length; q++){
+      var nm = trim(String(oldV[q][0] || '')); if (!nm || isGroupHeaderRow([nm], 1)) break;
+      var g0 = byName[_nameFold(nm)]; if (!g0) continue;
+      cnt[g0] = (cnt[g0] || 0) + 1; n++; if (!best || cnt[g0] > cnt[best]) best = g0;
+    }
+    if (!best){ info[r1] = '(без назви, дітей з карток під ним немає)'; return null; }
+    info[r1] = '(без назви → ' + best + ', дітей ' + cnt[best] + ' з ' + n + ')';
+    return gg.rowOf(best);
+  };
   map[3] = gg.totalRow; info[3] = 'Оплата за навчання (разом)';
   var rng = src.getDataRange(), F = rng.getFormulas(), changed = 0, unmapped = {}, out = [];
   var re = /(?:'Payment'|Payment)!\$?([A-Z]{1,2})\$?(\d+)/g;
   for (var i = 0; i < F.length; i++) for (var j = 0; j < F[i].length; j++){
     var f = F[i][j]; if (!f || f.indexOf('Payment') < 0) continue;
     var nf = f.replace(re, function(all, col, row){
+      if (!(Number(row) in map)) map[Number(row)] = inferBlank(Number(row));
       var nr = map[Number(row)];
       if (!nr || nr < 0){ unmapped[row + ' ' + (info[row] || '(не заголовок групи)')] = (unmapped[row + ' ' + (info[row] || '(не заголовок групи)')] || 0) + 1; return all; }
       changed++; return "'" + P27_GROUPS + "'!" + col + nr;
