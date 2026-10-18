@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.436
+// m.kids CRM — Google Apps Script v7.437
+// v7.437: чистка 2027 — SUM за межами аркуша (Школа 228), дубль картки з тим самим ПІБ — один рядок.
 // v7.436: pay27Clean — чистка Payment 2027: лише чинні групи й діти жовтня 2026, блоки підряд, бюджет із картки, CF/PL/OPEX на нові заголовки.
 // v7.435: стандарт назв груп (Findi-Ki канонічна); payFileRows (read-only); groupRenameApply — заголовки Payment, картки, записи.
 // v7.434: готівка з копійками — число у формулі під локаль файлу; зіставлення групи «Find-iki» ↔ «Findi-Ki»; проба роздільника без службових вкладок.
@@ -7175,7 +7176,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.436', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.437', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -9432,7 +9433,9 @@ function _pay27Plan(loc){
   var hdr3 = V[2].map(function(x){ return _nameFold(String(x || '')); });
   var colSide = hdr3.indexOf(_nameFold('сторона договору')) + 1, colDate = hdr3.indexOf(_nameFold('дата договору')) + 1;
   // діти й групи
-  var kids = _pay27Kids(loc), byGroup = {}, order = [];
+  var kids = [], seenK = {}, dupKids = [];   // v7.437: дві картки з тим самим ПІБ (дубль) — у Payment один рядок
+  _pay27Kids(loc).forEach(function(k){ var nk = _nameFoldTight(k.name); if (seenK[nk]){ dupKids.push(k.name + ' (' + k.id + ')'); return; } seenK[nk] = 1; kids.push(k); });
+  var byGroup = {}, order = [];
   heads.forEach(function(h){ if (h.title && order.indexOf(h.title) === -1) order.push(h.title); });
   kids.forEach(function(k){ var g = k.group || '(без групи)'; (byGroup[g] = byGroup[g] || []).push(k); });
   // назва блоку = група з картки; наявний заголовок — лише за точним збігом (літери й цифри), без «схожих» (Preschool ≠ Preschool Юля)
@@ -9442,7 +9445,7 @@ function _pay27Plan(loc){
   groups.sort(function(a, b){ var ia = order.indexOf(a.title), ib = order.indexOf(b.title); return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib) || a.title.localeCompare(b.title, 'uk'); });
   // поточні рядки дітей у файлі (для порядку й «прибираємо»)
   var rowOf = {}, present = [];
-  for (var r2 = 3; r2 < regionEnd; r2++){
+  for (var r2 = 3; r2 < Math.min(regionEnd, lr); r2++){   // v7.437: SUM останнього блоку може виходити за останній рядок
     var nm = trim(String(V[r2][0] || '')); if (!nm || heads.some(function(h){ return h.row === r2 + 1; })) continue;
     present.push({row:r2 + 1, name:nm}); if (!rowOf[_nameFoldTight(nm)]) rowOf[_nameFoldTight(nm)] = r2 + 1;
   }
@@ -9452,7 +9455,7 @@ function _pay27Plan(loc){
   var added = kids.filter(function(k){ return !rowOf[_nameFoldTight(k.name)]; }).map(function(k){ return k.name + ' (' + (k.group || 'без групи') + ')'; });
   var closed = heads.filter(function(h){ return !groups.some(function(g){ return g.title === h.title; }); }).map(function(h){ return h.title || '(без назви, рядок ' + h.row + ')'; });
   return {f:f, sh:sh, V:V, F:F, lr:lr, lc:lc, heads:heads, regionEnd:regionEnd, sumCols:sumCols, summary:summary, budCol:budCol,
-    colSide:colSide, colDate:colDate, groups:groups, removed:removed, added:added, closed:closed, monthsEnd:monthsEnd};
+    colSide:colSide, colDate:colDate, groups:groups, removed:removed, added:added, closed:closed, monthsEnd:monthsEnd, dupKids:dupKids};
 }
 function pay27Clean(body){
   var lock = null;
@@ -9462,7 +9465,7 @@ function pay27Clean(body){
     if (!dryRun){ var a = _promoActor(body); if (!(a && _roleKey(a.role) === 'cfo')) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'}; }
     var P = _pay27Plan(loc); if (P.error) return {ok:false, error:P.error};
     var res = {ok:true, dryRun:dryRun, loc:loc, file:P.f.file, groups:P.groups.map(function(g){ return {title:g.title, kids:g.kids.length}; }),
-      kids:P.groups.reduce(function(s, g){ return s + g.kids.length; }, 0), removed:P.removed, added:P.added, closedBlocks:P.closed,
+      kids:P.groups.reduce(function(s, g){ return s + g.kids.length; }, 0), removed:P.removed, added:P.added, closedBlocks:P.closed, dupCards:P.dupKids,
       regionOld:'4–' + P.regionEnd};
     // нова область
     var rows = [], heads2 = [], r0 = 4;
