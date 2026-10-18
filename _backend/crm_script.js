@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.433
+// m.kids CRM — Google Apps Script v7.434
+// v7.434: готівка з копійками — число у формулі під локаль файлу; зіставлення групи «Find-iki» ↔ «Findi-Ki»; проба роздільника без службових вкладок.
 // v7.433: Payment — три дії: новий договір (рядок у блоці групи), розірвання (0 після місяця), перехід (новий рядок у новій групі з місяця переходу).
 // v7.432: pilot2027Remove / previewPilot2027Remove — прибрати вкладки пілоту з файлів _27 (Payment/CF/PL 2026-копії не чіпає).
 // v7.431: формули пілоту 2027 і реєстру знижок — під локаль файлу (_fxSep пробою + _fxLoc: «;» і десяткова кома).
@@ -7172,7 +7173,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.433', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.434', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -8988,9 +8989,22 @@ function _payBlocks(data){
   h.forEach(function(b, k){ b.next = k + 1 < h.length ? h[k + 1].hdr : data.length + 1; });
   return h;
 }
+// Назва групи в картці ↔ заголовок блоку: «Find-iki» ↔ «Findi-Ki» (лише літери й цифри), далі — початок назви.
+function _payTight(x){ return String(x || '').toLowerCase().replace(/[^a-zа-яіїєґ0-9]/g, ''); }
 function _payGroupMatch(title, group){
-  var hn = _journalNormName(title), gk = _journalNormName(group);
-  return !!gk && (hn === gk || hn.indexOf(gk) === 0 || gk.indexOf(hn) === 0);
+  var hn = _journalNormName(title), gk = _journalNormName(group), ht = _payTight(title), gt = _payTight(group);
+  if (!gk) return false;
+  return hn === gk || (!!gt && ht === gt) || hn.indexOf(gk) === 0 || gk.indexOf(hn) === 0 || (!!gt && (ht.indexOf(gt) === 0 || gt.indexOf(ht) === 0));
+}
+// Блок групи: точний збіг → «тісний» збіг → за типом групи (normalizeGroupName), лише якщо такий блок один.
+function _payFindBlock(blocks, group){
+  var gk = _journalNormName(group), gt = _payTight(group);
+  var b = blocks.filter(function(x){ return _journalNormName(x.title) === gk; })[0] || blocks.filter(function(x){ return gt && _payTight(x.title) === gt; })[0];
+  if (b) return b;
+  var pre = blocks.filter(function(x){ return _payGroupMatch(x.title, group); });
+  if (pre.length === 1) return pre[0];
+  var ng = _payTight(normalizeGroupName(group)), byType = blocks.filter(function(x){ return _payTight(normalizeGroupName(x.title)) === ng; });
+  return byType.length === 1 ? byType[0] : null;
 }
 function _payBlockOf(blocks, row1){ for (var k = blocks.length - 1; k >= 0; k--) if (blocks[k].hdr < row1) return blocks[k]; return null; }
 // Рядки дитини (1-based) за ПІБ: усі збіги, не лише перший.
@@ -9010,7 +9024,7 @@ function _payInsertPlan(data, block){
 // Після вставки / перенесення: прості =SUM(Xa:Xb) у рядку заголовка блоку мають охоплювати [заголовок+1 .. наступний−1].
 // Інші формули заголовка не чіпаємо. Повертає скільки клітинок виправлено.
 function _payFixBlockSum(sh, title){
-  var data = sh.getDataRange().getValues(), b = _payBlocks(data).filter(function(x){ return _payGroupMatch(x.title, title); })[0];
+  var data = sh.getDataRange().getValues(), b = _payFindBlock(_payBlocks(data), title);
   if (!b) return 0;
   var lc = Math.min(sh.getLastColumn(), 120), F = sh.getRange(b.hdr, 1, 1, lc).getFormulas()[0], fixed = 0;
   for (var c = 1; c < lc; c++){
@@ -9076,7 +9090,7 @@ function payNewContract(body){
       var f = _payFileFor(c.loc, y); if (!f){ out.push({year:y, status:'немає файлу'}); return; }
       var data = f.sh.getDataRange().getValues(), have = _payRowsOf(data, c.name);
       if (have.length){ out.push({year:y, file:f.file, status:'рядок уже є', rows:have}); return; }
-      var blocks = _payBlocks(data), blk = blocks.filter(function(b){ return _payGroupMatch(b.title, c.group); })[0];
+      var blocks = _payBlocks(data), blk = _payFindBlock(blocks, c.group);
       if (!blk){ out.push({year:y, file:f.file, status:'групу «' + c.group + '» не знайдено', groups:blocks.map(function(b){ return b.title; })}); return; }
       var plan = _payInsertPlan(data, blk); if (plan.error){ out.push({year:y, file:f.file, status:plan.error}); return; }
       var m0 = Number(start.slice(0, 4)) === y ? Number(start.slice(5, 7)) : 1;
@@ -9153,11 +9167,15 @@ function payGroupTransfer(body){
       var f = _payFileFor(c.loc, y); if (!f){ out.push({year:y, status:'немає файлу'}); return; }
       var data = f.sh.getDataRange().getValues(), blocks = _payBlocks(data), rows = _payRowsOf(data, c.name);
       var M = y === ty ? tm : 1;
-      var tgt = blocks.filter(function(b){ return _payGroupMatch(b.title, toG); })[0];
+      var tgt = _payFindBlock(blocks, toG), frm = fromG ? _payFindBlock(blocks, fromG) : null;
       if (!tgt){ out.push({year:y, file:f.file, status:'групу «' + toG + '» не знайдено', groups:blocks.map(function(b){ return b.title; })}); return; }
       // джерельний рядок: у блоці старої групи (якщо вказана), інакше — будь-який рядок дитини не в новій групі
-      var src = rows.filter(function(r1){ var b = _payBlockOf(blocks, r1); return b && !_payGroupMatch(b.title, toG) && (!fromG || _payGroupMatch(b.title, fromG)); });
-      if (!src.length){ out.push({year:y, file:f.file, status:rows.length ? 'дитина вже в блоці «' + toG + '»' : 'рядка немає'}); return; }
+      var src = rows.filter(function(r1){ var b = _payBlockOf(blocks, r1); return b && b.hdr !== tgt.hdr && (!frm || b.hdr === frm.hdr); });
+      if (!src.length){
+        var inT = rows.some(function(r1){ var b = _payBlockOf(blocks, r1); return b && b.hdr === tgt.hdr; });
+        out.push({year:y, file:f.file, status:!rows.length ? 'рядка немає' : (inT && !rows.some(function(r1){ var b = _payBlockOf(blocks, r1); return b && b.hdr !== tgt.hdr; }) ? 'дитина вже в блоці «' + tgt.title + '»' : 'у блоці «' + (frm ? frm.title : fromG) + '» рядка дитини немає')});
+        return;
+      }
       var s1 = src[src.length - 1], sb = _payBlockOf(blocks, s1);
       var plan = _payInsertPlan(data, tgt); if (plan.error){ out.push({year:y, file:f.file, status:plan.error}); return; }
       var monthsCols = 12 * f.cpm, W = f.sh.getLastColumn();
@@ -16131,18 +16149,19 @@ function _cashTarget(kind, loc){
   return {error:'kind має бути expense або salary'};
 }
 function _cashFactCol(month){ return (Number(month) - 1) * 3 + 2; }
-function _cashNum(n){ var t = (Math.round(Math.abs(n) * 100) / 100).toString(); return t; }   // формули — en-US: крапка
+// v7.434: десятковий роздільник — під локаль файлу (укр.: кома; «150.5» у формулі там = #ERROR!)
+function _cashNum(n, sep){ var t = (Math.round(Math.abs(n) * 100) / 100).toString(); return sep === ';' ? t.replace('.', ',') : t; }
 // Нова формула клітинки після додавання amount (може бути відʼємним — скасування).
-function _cashFormula(cell, amount){
+function _cashFormula(cell, amount, sep){
   var f = '', v;
   try { f = String(cell.getFormula() || ''); } catch(_f){}
-  var op = (amount < 0 ? '-' : '+') + _cashNum(amount);
+  var op = (amount < 0 ? '-' : '+') + _cashNum(amount, sep);
   if (f) return f + op;
   v = cell.getValue();
-  if (v === '' || v === null) return '=' + (amount < 0 ? '-' : '') + _cashNum(amount);
+  if (v === '' || v === null) return '=' + (amount < 0 ? '-' : '') + _cashNum(amount, sep);
   if (typeof v !== 'number' && isNaN(Number(String(v).replace(/\s/g, '').replace(',', '.')))) return null;   // текст — не чіпаємо
   var base = typeof v === 'number' ? v : Number(String(v).replace(/\s/g, '').replace(',', '.'));
-  return '=' + (Math.round(base * 100) / 100) + op;
+  return '=' + _cashNum(base, sep).replace(/^/, base < 0 ? '-' : '') + op;
 }
 // GET ?action=cashOptions&loc=&year=&month=&actorId= — статті OPEX і рядки Salary з поточним фактом місяця.
 function cashOptions(params){
@@ -16195,7 +16214,7 @@ function cashAdd(body){
     var name = String(t.sheet.getRange(row, 1).getValue() || '').trim();
     if (body.name && _nameFold(name) !== _nameFold(body.name)) return {ok:false, error:'Рядок ' + row + ' тепер «' + name + '», а не «' + body.name + '» — оновіть список'};
     if (kind !== 'expense'){ try { var _cd = t.sheet.getDataRange().getValues(); row = _payRedirect(_cd, row - 1, month, loc, year) + 1; } catch(_rd){} }   // v7.433 перехід між групами
-    var cell = t.sheet.getRange(row, _cashFactCol(month)), before = _opexNum(cell.getValue()), f = _cashFormula(cell, amount);
+    var cell = t.sheet.getRange(row, _cashFactCol(month)), before = _opexNum(cell.getValue()), f = _cashFormula(cell, amount, _fxSep(t.sheet.getParent()));   // v7.434 локаль файлу
     if (!f) return {ok:false, error:'У клітинці текст, а не число — внесіть вручну'};
     var res = {ok:true, dryRun:dryRun, kind:kind, loc:loc, row:row, name:name, month:month, year:year, amount:amount,
                before:before, after:Math.round((before + amount) * 100) / 100, formula:f};
@@ -16236,7 +16255,7 @@ function cashCancel(body){
     var t = _cashTarget(kind, loc); if (t.error) return {ok:false, error:t.error};
     var name = String(t.sheet.getRange(row, 1).getValue() || '').trim();
     if (_nameFold(name) !== _nameFold(r[5])) return {ok:false, error:'Рядок ' + row + ' тепер «' + name + '» — скасуйте вручну'};
-    var cell = t.sheet.getRange(row, _cashFactCol(month)), before = _opexNum(cell.getValue()), f = _cashFormula(cell, -amount);
+    var cell = t.sheet.getRange(row, _cashFactCol(month)), before = _opexNum(cell.getValue()), f = _cashFormula(cell, -amount, _fxSep(t.sheet.getParent()));   // v7.434
     if (!f) return {ok:false, error:'У клітинці текст — скасуйте вручну'};
     cell.setFormula(f); SpreadsheetApp.flush();
     var after = _opexNum(cell.getValue()), by = _entryAuthor(body.by), now = new Date();
@@ -38751,13 +38770,18 @@ function _promoSyncFile(f, yms, disc, cards, dryRun, out){
 var _FX_SEP = {};
 function _fxSep(ss){
   var id = ss.getId(); if (_FX_SEP[id]) return _FX_SEP[id];
-  var sep = ',';
+  var props = null, key = 'fxsep_' + id, sep = '';
+  try { props = PropertiesService.getScriptProperties(); sep = props.getProperty(key) || ''; } catch(_p){}
+  if (sep === ',' || sep === ';') return (_FX_SEP[id] = sep);
+  // v7.434: проба в тимчасовій вкладці (створюється й одразу видаляється) — без службових вкладок у фін-файлах
+  var tmp = null;
   try {
-    var mh = _promoEnsureMirror(ss), probe = mh.getRange(1, mh.getMaxColumns());
-    probe.setFormula('=SUM(1,2)'); SpreadsheetApp.flush();
-    sep = (Number(probe.getValue()) === 3) ? ',' : ';';
-    probe.clearContent();
+    tmp = ss.insertSheet('_fx_' + Date.now());
+    tmp.getRange(1, 1).setFormula('=SUM(1,2)'); SpreadsheetApp.flush();
+    sep = (Number(tmp.getRange(1, 1).getValue()) === 3) ? ',' : ';';
   } catch(e){ sep = /^en/i.test(String(ss.getSpreadsheetLocale() || '')) ? ',' : ';'; }
+  finally { if (tmp){ try { ss.deleteSheet(tmp); } catch(_d){} } }
+  try { if (props) props.setProperty(key, sep); } catch(_s){}
   return (_FX_SEP[id] = sep);
 }
 // Переклад англ. формули: «,» між аргументами → «;», десяткова крапка в числах → «,». Рядки в "…" і назви аркушів у '…' — без змін.
