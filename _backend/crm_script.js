@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.435
+// m.kids CRM — Google Apps Script v7.436
+// v7.436: pay27Clean — чистка Payment 2027: лише чинні групи й діти жовтня 2026, блоки підряд, бюджет із картки, CF/PL/OPEX на нові заголовки.
 // v7.435: стандарт назв груп (Findi-Ki канонічна); payFileRows (read-only); groupRenameApply — заголовки Payment, картки, записи.
 // v7.434: готівка з копійками — число у формулі під локаль файлу; зіставлення групи «Find-iki» ↔ «Findi-Ki»; проба роздільника без службових вкладок.
 // v7.433: Payment — три дії: новий договір (рядок у блоці групи), розірвання (0 після місяця), перехід (новий рядок у новій групі з місяця переходу).
@@ -7174,7 +7175,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.435', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.436', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -7320,6 +7321,7 @@ function doGet(e) {
     else if (action === 'previewPayNewContract')       result = payNewContract({cardId:(e.parameter || {}).cardId, dryRun:true});   // v7.433 прев'ю дії 1
     else if (action === 'previewPayTermination')       result = payTermination({cardId:(e.parameter || {}).cardId, date:(e.parameter || {}).date, dryRun:true});   // v7.433 дія 2
     else if (action === 'previewPayTransfer')          result = payGroupTransfer({cardId:(e.parameter || {}).cardId, toGroup:(e.parameter || {}).toGroup, fromGroup:(e.parameter || {}).fromGroup, fromMonth:(e.parameter || {}).fromMonth, dryRun:true});   // v7.433 дія 3
+    else if (action === 'previewPay27Clean')           result = pay27Clean({loc:(e.parameter || {}).loc, dryRun:true});   // v7.436 прев'ю чистки Payment 2027
     else if (action === 'payFileRows')                 result = payFileRows(e.parameter || {});   // v7.435 read-only: блоки й рядки Payment року
     else if (action === 'getPayAuto')                  result = {ok:true, payAuto:_payAutoOn()};
     else if (action === 'previewPilot2027Remove')      result = pilot2027Remove({loc:(e.parameter || {}).loc, dryRun:true});   // v7.432 прев'ю відкату пілоту
@@ -7402,6 +7404,7 @@ function doPost(e) {
     else if (body.action === 'payNewContract')            result = payActionPost(payNewContract, body);     // v7.433 (CFO; dryRun)
     else if (body.action === 'payTermination')            result = payActionPost(payTermination, body);     // v7.433
     else if (body.action === 'payGroupTransfer')          result = payActionPost(payGroupTransfer, body);   // v7.433
+    else if (body.action === 'pay27Clean')                result = pay27Clean(body);                        // v7.436 чистка Payment 2027 (CFO; dryRun)
     else if (body.action === 'groupRenameApply')          result = groupRenameApply(body);                  // v7.435 стандарт назв груп (CFO; dryRun)
     else if (body.action === 'setPayAuto')                result = setPayAuto(body);                        // v7.433 вимикач автозапуску (CFO)
     else if (body.action === 'pilot2027Remove')           result = pilot2027Remove(body);       // v7.432 відкат пілоту 2027 (CFO, dryRun)
@@ -9372,6 +9375,192 @@ function groupRenameApply(body){
     });
     if (!dryRun){ try { _cacheBump('clients'); _cacheBump('fill'); _cacheBump('pay'); } catch(_c){} }
     return {ok:true, dryRun:dryRun, files:out, names:recs};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { if (lock){ try { lock.releaseLock(); } catch(_l){} } }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.436 ЧИСТКА PAYMENT 2027 (рішення CFO 18.10.2026). Файли 2026 не чіпає.
+//   Лишаються: чинні групи й діти з активним договором на жовтень 2026 (картки локації файлу; у файлі Кар'єрної — і «Школа Кар'єрна»).
+//   Прибирається: випускники, розірвані, закриті групи, порожні блоки, заглушки. Блоки йдуть підряд від рядка 4, у кожному
+//   — діти + PAY27_FREE вільних рядків у межах SUM заголовка.
+//   Клітинки дитини: «Бюджет навч» = сума договору на 12 місяців (місяці покриття передоплатою — 0; «Лише додаткові» /
+//   «Безкоштовно» — 0); усі інші клітинки місяців порожні (факти, бюджет доп / харч, IMPORTRANGE). «Сторона договору»,
+//   «Дата договору» — з картки; зведення місяців (BQ…) — =«Бюджет навч» місяця, як було.
+//   Область блоків = від рядка 4 до кінця SUM останнього заголовка; рядки нижче (план з OPEX, ГХЗД…) лишаються, зсуваються.
+//   Посилання інших вкладок на заголовки → нові рядки (закриті / порожні → 0); рядок 3 — сума нових заголовків + ті самі рядки хвоста.
+//   GET previewPay27Clean&loc= ; POST pay27Clean {loc, dryRun:false} (CFO).
+// ═══════════════════════════════════════════════════════════════════════════
+var PAY27_FREE = 3, PAY27_YM_OCT = '2026-10';
+function _pay27Kids(loc){
+  var locs = [loc].concat(_subLocsOfHost(loc).map(function(s){ return s.loc; }));
+  var f = _ymFirst(PAY27_YM_OCT), l = _ymLast(PAY27_YM_OCT);
+  return _promoCards().list.filter(function(c){
+    if (!locs.some(function(x){ return _nameFold(x) === _nameFold(c.loc); })) return false;
+    if (['active','adaptation','paused'].indexOf(c.status) === -1) return false;
+    if (c.contract && c.contract > l) return false;
+    if (c.end && c.end < f) return false;
+    return true;
+  });
+}
+function _pay27Plan(loc){
+  var reg = _getLocationPaymentRegistry(loc);
+  if (!reg || /управл/i.test(reg.typ || '') || _subLocOf(loc)) return {error:'Лише садки й школи (для «Школи Кар\'єрної» — файл Кар\'єрної)'};
+  var f = _payFileFor(loc, 2027); if (!f) return {error:'Файлу 2027 немає'};
+  var sh = f.sh, lr = sh.getLastRow(), lc = sh.getLastColumn();
+  var V = sh.getRange(1, 1, lr, lc).getValues(), F = sh.getRange(1, 1, lr, lc).getFormulas();
+  var monthsEnd = 1 + 12 * f.cpm;   // остання колонка місяців (1-based)
+  // заголовки = рядки з =SUM(Xa:Xb) у колонці B (з назвою чи без); область — до кінця SUM останнього
+  var heads = [];
+  for (var r = 3; r < lr; r++){
+    var m = /^=SUM\(([A-Z]+)(\d+):([A-Z]+)(\d+)\)$/i.exec(String(F[r][1] || '').replace(/\s+/g, ''));
+    if (m) heads.push({row:r + 1, title:trim(String(V[r][0] || '')), a:Number(m[2]), b:Number(m[4])});
+  }
+  if (!heads.length) return {error:'Заголовків блоків не знайдено'};
+  var regionEnd = Math.max.apply(null, heads.map(function(h){ return h.b; }));
+  // колонки з SUM у заголовку (як у першому названому заголовку) і колонки зведення (=«Бюджет навч» місяця)
+  var h0 = heads.filter(function(h){ return h.title; })[0] || heads[0], sumCols = [];
+  for (var c = 1; c < lc; c++) if (/^=SUM\(/i.test(String(F[h0.row - 1][c] || ''))) sumCols.push(c + 1);
+  var budCol = function(mo){ return 1 + (mo - 1) * f.cpm + f.LO.budNavch + 1; }, summary = {};
+  for (var rr = h0.row; rr < Math.min(regionEnd, lr); rr++){
+    for (var c2 = monthsEnd; c2 < lc; c2++){
+      var mm = /^=([A-Z]+)(\d+)$/.exec(String(F[rr][c2] || '')); if (!mm || Number(mm[2]) !== rr + 1) continue;
+      for (var mo = 1; mo <= 12; mo++) if (_colLetter(budCol(mo) - 1) === mm[1]) summary[c2 + 1] = mo;
+    }
+    if (Object.keys(summary).length >= 12) break;
+  }
+  var hdr3 = V[2].map(function(x){ return _nameFold(String(x || '')); });
+  var colSide = hdr3.indexOf(_nameFold('сторона договору')) + 1, colDate = hdr3.indexOf(_nameFold('дата договору')) + 1;
+  // діти й групи
+  var kids = _pay27Kids(loc), byGroup = {}, order = [];
+  heads.forEach(function(h){ if (h.title && order.indexOf(h.title) === -1) order.push(h.title); });
+  kids.forEach(function(k){ var g = k.group || '(без групи)'; (byGroup[g] = byGroup[g] || []).push(k); });
+  // назва блоку = група з картки; наявний заголовок — лише за точним збігом (літери й цифри), без «схожих» (Preschool ≠ Preschool Юля)
+  var titleFor = function(g){ var t = heads.filter(function(h){ return h.title && _payTight(h.title) === _payTight(g); })[0]; return t ? t.title : g; };
+  var groups = [];   // [{title, kids}] у порядку блоків файлу; нові групи — у кінці
+  Object.keys(byGroup).forEach(function(g){ var t = titleFor(g), x = groups.filter(function(q){ return q.title === t; })[0]; if (!x){ x = {title:t, kids:[]}; groups.push(x); } x.kids = x.kids.concat(byGroup[g]); });
+  groups.sort(function(a, b){ var ia = order.indexOf(a.title), ib = order.indexOf(b.title); return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib) || a.title.localeCompare(b.title, 'uk'); });
+  // поточні рядки дітей у файлі (для порядку й «прибираємо»)
+  var rowOf = {}, present = [];
+  for (var r2 = 3; r2 < regionEnd; r2++){
+    var nm = trim(String(V[r2][0] || '')); if (!nm || heads.some(function(h){ return h.row === r2 + 1; })) continue;
+    present.push({row:r2 + 1, name:nm}); if (!rowOf[_nameFoldTight(nm)]) rowOf[_nameFoldTight(nm)] = r2 + 1;
+  }
+  groups.forEach(function(g){ g.kids.sort(function(a, b){ var ra = rowOf[_nameFoldTight(a.name)] || 1e9, rb = rowOf[_nameFoldTight(b.name)] || 1e9; return (ra - rb) || a.name.localeCompare(b.name, 'uk'); }); });
+  var keepNk = {}; kids.forEach(function(k){ keepNk[_nameFoldTight(k.name)] = 1; });
+  var removed = present.filter(function(p){ return !keepNk[_nameFoldTight(p.name)]; }).map(function(p){ return p.name; });
+  var added = kids.filter(function(k){ return !rowOf[_nameFoldTight(k.name)]; }).map(function(k){ return k.name + ' (' + (k.group || 'без групи') + ')'; });
+  var closed = heads.filter(function(h){ return !groups.some(function(g){ return g.title === h.title; }); }).map(function(h){ return h.title || '(без назви, рядок ' + h.row + ')'; });
+  return {f:f, sh:sh, V:V, F:F, lr:lr, lc:lc, heads:heads, regionEnd:regionEnd, sumCols:sumCols, summary:summary, budCol:budCol,
+    colSide:colSide, colDate:colDate, groups:groups, removed:removed, added:added, closed:closed, monthsEnd:monthsEnd};
+}
+function pay27Clean(body){
+  var lock = null;
+  try {
+    body = body || {};
+    var dryRun = (body.dryRun !== false), loc = String(body.loc || '').trim();
+    if (!dryRun){ var a = _promoActor(body); if (!(a && _roleKey(a.role) === 'cfo')) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'}; }
+    var P = _pay27Plan(loc); if (P.error) return {ok:false, error:P.error};
+    var res = {ok:true, dryRun:dryRun, loc:loc, file:P.f.file, groups:P.groups.map(function(g){ return {title:g.title, kids:g.kids.length}; }),
+      kids:P.groups.reduce(function(s, g){ return s + g.kids.length; }, 0), removed:P.removed, added:P.added, closedBlocks:P.closed,
+      regionOld:'4–' + P.regionEnd};
+    // нова область
+    var rows = [], heads2 = [], r0 = 4;
+    P.groups.forEach(function(g){
+      var h = r0 + rows.length, n = g.kids.length + PAY27_FREE;
+      heads2.push({title:g.title, row:h});
+      var hr = {type:'h', title:g.title, a:h + 1, b:h + n}; rows.push(hr);
+      g.kids.forEach(function(k){ rows.push({type:'k', kid:k}); });
+      for (var i = 0; i < PAY27_FREE; i++) rows.push({type:'free'});
+    });
+    var newLen = rows.length, oldLen = P.regionEnd - 3, delta = newLen - oldLen;
+    res.regionNew = '4–' + (3 + newLen); res.rowsDelta = delta;
+    // відповідність старих заголовків новим (за назвою; закриті / без назви → 0)
+    var mapHead = {};
+    P.heads.forEach(function(h){ var t = heads2.filter(function(x){ return h.title && x.title === h.title; })[0]; mapHead[h.row] = t ? t.row : 0; });
+    // рядки нижче області (хвіст) таблиця зсуває сама при вставці / видаленні — їх не переписуємо
+    var mapRow = function(r){ if (r < 4 || r > P.regionEnd) return r; return mapHead.hasOwnProperty(r) ? mapHead[r] : 0; };
+    // посилання інших вкладок (читаються заново в момент запису — після вставки рядків таблиця вже зсунула хвіст)
+    var scanRefs = function(){
+    var refsPlan = [], manual = [];
+    P.f.ss.getSheets().forEach(function(s){
+      var nm = s.getName(); if (nm === 'Payment' || /^BKP_|_BKP|MRGBKP/i.test(nm) || s.getLastRow() < 1 || s.getLastColumn() < 1) return;
+      var rg = s.getRange(1, 1, s.getLastRow(), s.getLastColumn()), FF = rg.getFormulas();
+      for (var i = 0; i < FF.length; i++) for (var j = 0; j < FF[i].length; j++){
+        var fx = FF[i][j]; if (!fx || fx.indexOf('Payment') < 0) continue;
+        var bad = false;
+        var nf = fx.replace(/((?:'Payment'|Payment)!)\$?([A-Z]{1,3})\$?(\d+)(?!\d|:)/g, function(all, pre, col, row){
+          var nr = mapRow(Number(row)); if (nr === Number(row)) return all;
+          if (!nr) return col === 'A' ? '""' : '0';
+          return pre + col + nr;
+        });
+        if (/(?:'Payment'|Payment)!\$?[A-Z]{1,3}\$?\d+:/.test(fx)) bad = true;   // діапазони — вручну
+        if (nf === fx) continue;
+        if (bad || /[,;]/.test(nf)){ manual.push(nm + '!' + _colLetter(j) + (i + 1) + ' ' + fx); continue; }
+        refsPlan.push({sh:s, r:i + 1, c:j + 1, f:nf, was:fx});
+      }
+    });
+    return {plan:refsPlan, manual:manual};
+    };
+    var RF = scanRefs(), refsPlan = RF.plan, manual = RF.manual;
+    res.refs = refsPlan.length; res.refsManual = manual; res.refsSample = refsPlan.slice(0, 6).map(function(x){ return x.sh.getName() + '!' + _colLetter(x.c - 1) + x.r + ': ' + x.was + ' → ' + x.f; });
+    // рядок 3: заголовки → нові, хвіст → зі зсувом, решта області → прибрати
+    var r3 = [];
+    for (var c3 = 0; c3 < P.lc; c3++){
+      var f3 = String(P.F[2][c3] || ''); if (!/^=/.test(f3) || f3.indexOf('!') !== -1) continue;
+      var terms = f3.slice(1).split('+'), ok = terms.every(function(t){ return /^\$?[A-Z]{1,3}\$?\d+$/.test(trim(t)); });
+      if (!ok) continue;
+      var col = /^\$?([A-Z]+)/.exec(trim(terms[0]))[1], tail = [];
+      terms.forEach(function(t){ var rn = Number(/(\d+)$/.exec(trim(t))[1]); if (rn > P.regionEnd) tail.push(col + (rn + delta)); });
+      r3.push({c:c3 + 1, f:'=' + heads2.map(function(h){ return col + h.row; }).concat(tail).join('+')});
+    }
+    res.row3 = r3.length;
+    if (dryRun) return res;
+    lock = LockService.getScriptLock(); lock.waitLock(30000);
+    var sh = P.sh, bkp = _safeBackupSheet(sh, 'clean27'); res.backup = bkp;
+    var src = P.f.ss.getSheetByName(bkp) || null;
+    // 1–2) розмір області змінюємо в її кінці; посилання на заголовки переписуємо так, щоб зміна розміру їх не зсунула:
+    //   менше рядків — спершу посилання (усі цілі вище точки видалення), потім видалення; більше — спершу вставка, потім посилання
+    var applyRefs = function(){ var x2 = scanRefs(); x2.plan.forEach(function(x){ x.sh.getRange(x.r, x.c).setFormula(x.f); }); res.refsWritten = x2.plan.length; };
+    if (delta < 0){ applyRefs(); sh.deleteRows(3 + newLen + 1, -delta); }
+    else { if (delta > 0) sh.insertRowsAfter(P.regionEnd, delta); applyRefs(); }
+    // 3) вміст області
+    var W = P.lc, vals = [], fml = [];
+    var hdrFmtRow = P.heads.filter(function(h){ return h.title; })[0].row, kidFmtRow = hdrFmtRow + 1;
+    rows.forEach(function(x, i){
+      var r = 4 + i, v = new Array(W), fm = new Array(W);
+      for (var k = 0; k < W; k++){ v[k] = ''; fm[k] = ''; }
+      if (x.type === 'h'){
+        v[0] = x.title;
+        P.sumCols.forEach(function(c){ var L = _colLetter(c - 1); fm[c - 1] = '=SUM(' + L + x.a + ':' + L + x.b + ')'; });
+      } else if (x.type === 'k'){
+        var k2 = x.kid, o = k2.raw || {}, fee = (k2.dopOnly || k2.free) ? 0 : (k2.fee || 0);
+        v[0] = k2.name;
+        for (var mo = 1; mo <= 12; mo++){
+          var ym = '2027-' + ('0' + mo).slice(-2), cov = null; try { cov = _coverFor(ym, k2.id, k2.name, k2.loc); } catch(_c){}
+          v[P.budCol(mo) - 1] = cov ? 0 : fee;
+        }
+        Object.keys(P.summary).forEach(function(c){ fm[Number(c) - 1] = '=' + _colLetter(P.budCol(P.summary[c]) - 1) + r; });
+        if (P.colSide) v[P.colSide - 1] = String(o['Підписант договору'] || '') === 'dad' ? String(o['ПІБ тата'] || '') : String(o['ПІБ мами'] || '');
+        if (P.colDate && k2.contract) v[P.colDate - 1] = _p27Date(k2.contract);
+      }
+      vals.push(v); fml.push(fm);
+    });
+    var rgn = sh.getRange(4, 1, newLen, W);
+    rgn.clearContent();
+    if (src){   // формати: заголовки — як заголовок, решта — як рядок дитини
+      rows.forEach(function(x, i){ src.getRange(x.type === 'h' ? hdrFmtRow : kidFmtRow, 1, 1, W).copyTo(sh.getRange(4 + i, 1, 1, W), SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false); });
+    }
+    // значення й формули — одна матриця: _p27PutMatrix пише значення setValues, формули — setFormulas
+    _p27PutMatrix(sh, 4, 1, vals.map(function(row, i){ return row.map(function(x, j){ return fml[i][j] ? fml[i][j] : x; }); }), _fxSep(P.f.ss));
+    if (P.colDate) sh.getRange(4, P.colDate, newLen, 1).setNumberFormat('dd.mm.yyyy');
+    // 4) рядок 3
+    r3.forEach(function(x){ sh.getRange(3, x.c).setFormula(x.f); });
+    SpreadsheetApp.flush();
+    res.sumCheck = _payHeaderSumCheck(sh).filter(function(h){ return h.badCount && h.row <= 3 + newLen; }).map(function(h){ return h.title; });
+    try { _moneyJournalLog([{by:body.by || 'система', route:'pay27Clean', loc:loc, name:'', year:2027, month:'', col:'Payment 2027 — чистка',
+      before:'рядки 4–' + P.regionEnd, after:'рядки 4–' + (3 + newLen) + ', груп ' + P.groups.length + ', дітей ' + res.kids, reason:'файл 2027 = чинні групи й діти жовтня 2026'}]); } catch(_j){}
+    return res;
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
   finally { if (lock){ try { lock.releaseLock(); } catch(_l){} } }
 }
