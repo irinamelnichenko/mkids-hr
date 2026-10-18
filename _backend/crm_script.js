@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.431
+// m.kids CRM — Google Apps Script v7.432
+// v7.432: pilot2027Remove / previewPilot2027Remove — прибрати вкладки пілоту з файлів _27 (Payment/CF/PL 2026-копії не чіпає).
 // v7.431: формули пілоту 2027 і реєстру знижок — під локаль файлу (_fxSep пробою + _fxLoc: «;» і десяткова кома).
 // v7.430: пілот 2027 — формули пишуться setFormulas (setValues розбирав їх за укр. локаллю → #ERROR!).
 // v7.429: getPilot2027Groups (read-only «Групи» + помилки формул); контроль пілоту не вважає #ERROR! нулем.
@@ -7170,7 +7171,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.431', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.432', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -7313,6 +7314,7 @@ function doGet(e) {
     else if (action === 'previewPilot2027')            result = previewPilot2027(e.parameter || {});       // v7.419 пілот Payment 2027 — пробний прогін
     else if (action === 'previewFeeChange')            result = previewFeeChange(e.parameter || {});       // v7.417 прев'ю зміни суми (нічого не пише)
     else if (action === 'getCoverage')                 result = getCoverage(e.parameter || {});            // v7.415 покриття передоплатою
+    else if (action === 'previewPilot2027Remove')      result = pilot2027Remove({loc:(e.parameter || {}).loc, dryRun:true});   // v7.432 прев'ю відкату пілоту
     else if (action === 'getPilot2027Groups')          result = getPilot2027Groups(e.parameter || {});     // v7.429 read-only: «Групи» пілоту 2027 + помилки формул
     else if (action === 'previewManualCoverage')       result = addManualCoverage(_promoDry(e.parameter || {}));   // v7.427 прев'ю (нічого не пише)
     else if (action === 'previewPrepayment')           result = confirmPrepayment(_promoDry(e.parameter));  // v7.414 пробний прогін підтвердження (нічого не пише)
@@ -7389,6 +7391,7 @@ function doPost(e) {
     else if (body.action === 'cancelDiscount')            result = cancelDiscount(body);        // v7.414 скасування ручного запису (офіс)
     else if (body.action === 'confirmPrepayment')         result = confirmPrepayment(body);     // v7.414 підтвердження передоплати + рознесення факту (офіс, dryRun)
     else if (body.action === 'rejectPrepayment')          result = rejectPrepayment(body);      // v7.414 відхилити здогадку (офіс)
+    else if (body.action === 'pilot2027Remove')           result = pilot2027Remove(body);       // v7.432 відкат пілоту 2027 (CFO, dryRun)
     else if (body.action === 'addManualCoverage')         result = addManualCoverage(body);     // v7.427 покриття для ручної передоплати (офіс, dryRun)
     else if (body.action === 'saveClassPromotion')        result = saveClassPromotion(body);    // v7.420 підтвердження переведення класів (директор/офіс)
     else if (body.action === 'applyClassPromotions')      result = applyClassPromotions(body);  // v7.420 застосувати з 1 вересня (офіс; dryRun:true — перегляд)
@@ -38999,6 +39002,22 @@ function _p27Remap(b, gg, sheetName){
   return {sheet:sheetName, src:src, edits:out, changed:changed, unmapped:unmapped, zeroed:zeroed};
 }
 
+// v7.432 ВІДКАТ ПІЛОТУ 2027: прибрати з файлу _27 усе, що додав пілот (Payment_27, «Групи», CF_27, PL_27 і службову «Знижки»).
+//   Старі Payment / CF / PL і решту вкладок не чіпає. POST pilot2027Remove {loc, dryRun} — лише CFO; GET previewPilot2027Remove&loc=.
+var P27_ADDED_TABS = ['Payment_27', 'Групи', 'CF_27', 'PL_27', 'Знижки'];
+function pilot2027Remove(body){
+  try {
+    body = body || {};
+    var dryRun = (body.dryRun !== false), loc = String(body.loc || '').trim(), cfg = PILOT_2027[loc];
+    if (!cfg) return {ok:false, error:'Пілот 2027 — лише ' + Object.keys(PILOT_2027).join(' і ')};
+    if (!dryRun){ var a = _promoActor(body); if (!(a && _roleKey(a.role) === 'cfo')) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'}; }
+    var ss = SpreadsheetApp.openById(cfg.fileId), before = ss.getSheets().map(function(x){ return x.getName(); });
+    var del = P27_ADDED_TABS.filter(function(t){ return before.indexOf(t) !== -1; });
+    if (!dryRun) del.forEach(function(t){ ss.deleteSheet(ss.getSheetByName(t)); });
+    return {ok:true, dryRun:dryRun, loc:loc, file:cfg.file, delete:del, tabsBefore:before,
+      tabsAfter:dryRun ? before.filter(function(t){ return del.indexOf(t) === -1; }) : ss.getSheets().map(function(x){ return x.getName(); })};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
 // v7.429 GET getPilot2027Groups&loc= — read-only: «Групи» (видимі значення) + перші клітинки з помилками у «Групи» / Payment_27 з формулами
 function getPilot2027Groups(params){
   try {
@@ -39071,6 +39090,7 @@ function pilot2027Payment(body){
     var a = _promoActor(body);
     if (!(a && _roleKey(a.role) === 'cfo')) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
     if (body.dryRun !== false) return previewPilot2027(body);
+    return {ok:false, error:'Пілот Payment_27 скасовано (рішення CFO 18.10.2026): файли 2027 — звичайні копії 2026, запис вкладок пілоту вимкнено'};   // v7.432
     var loc = String(body.loc || '').trim(), b = _p27Build(loc), gg = _p27GroupsGrid(b), ss = b.ss;
     var exist = [P27_TAB, P27_GROUPS, 'CF_27', 'PL_27'].filter(function(t){ return !!ss.getSheetByName(t); });
     if (exist.length && body.replace !== true) return {ok:false, error:'Уже є вкладки: ' + exist.join(', ') + ' — щоб перебудувати, передайте replace:true'};
