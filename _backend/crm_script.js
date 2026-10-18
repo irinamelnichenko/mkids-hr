@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.434
+// m.kids CRM — Google Apps Script v7.435
+// v7.435: стандарт назв груп (Findi-Ki канонічна); payFileRows (read-only); groupRenameApply — заголовки Payment, картки, записи.
 // v7.434: готівка з копійками — число у формулі під локаль файлу; зіставлення групи «Find-iki» ↔ «Findi-Ki»; проба роздільника без службових вкладок.
 // v7.433: Payment — три дії: новий договір (рядок у блоці групи), розірвання (0 після місяця), перехід (новий рядок у новій групі з місяця переходу).
 // v7.432: pilot2027Remove / previewPilot2027Remove — прибрати вкладки пілоту з файлів _27 (Payment/CF/PL 2026-копії не чіпає).
@@ -1042,7 +1043,7 @@ function normalizeGroupName(raw, keepSchoolAsIs) {
   if (keepSchoolAsIs) return s;
   if (/mini.?baby/i.test(s))  return 'miniBaby-ki';
   if (/^baby/i.test(s))       return 'Baby-ki';
-  if (/find/i.test(s))        return 'Find-iki';
+  if (/find/i.test(s))        return 'Findi-Ki';   // v7.435 стандарт назв груп (CFO 18.10.2026)
   if (/study/i.test(s))       return 'Study-ki';
   if (/preschool/i.test(s))   return 'Preschool';
   if (/чомус/i.test(s))       return 'Чомусики';
@@ -1051,7 +1052,7 @@ function normalizeGroupName(raw, keepSchoolAsIs) {
   if (/малюк/i.test(s))         return 'Baby-ki';
   if (/карапуз/i.test(s))       return 'Baby-ki';
   if (/пізнайк/i.test(s))       return 'Study-ki';
-  if (/бешкетн/i.test(s))       return 'Find-iki';
+  if (/бешкетн/i.test(s))       return 'Findi-Ki';
   if (/мандрівн/i.test(s))      return 'Study-ki';
   if (/дослідн/i.test(s))       return 'Study-ki';
   if (/розумник/i.test(s))      return 'Preschool';
@@ -7173,7 +7174,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.434', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.435', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -7319,6 +7320,7 @@ function doGet(e) {
     else if (action === 'previewPayNewContract')       result = payNewContract({cardId:(e.parameter || {}).cardId, dryRun:true});   // v7.433 прев'ю дії 1
     else if (action === 'previewPayTermination')       result = payTermination({cardId:(e.parameter || {}).cardId, date:(e.parameter || {}).date, dryRun:true});   // v7.433 дія 2
     else if (action === 'previewPayTransfer')          result = payGroupTransfer({cardId:(e.parameter || {}).cardId, toGroup:(e.parameter || {}).toGroup, fromGroup:(e.parameter || {}).fromGroup, fromMonth:(e.parameter || {}).fromMonth, dryRun:true});   // v7.433 дія 3
+    else if (action === 'payFileRows')                 result = payFileRows(e.parameter || {});   // v7.435 read-only: блоки й рядки Payment року
     else if (action === 'getPayAuto')                  result = {ok:true, payAuto:_payAutoOn()};
     else if (action === 'previewPilot2027Remove')      result = pilot2027Remove({loc:(e.parameter || {}).loc, dryRun:true});   // v7.432 прев'ю відкату пілоту
     else if (action === 'getPilot2027Groups')          result = getPilot2027Groups(e.parameter || {});     // v7.429 read-only: «Групи» пілоту 2027 + помилки формул
@@ -7400,6 +7402,7 @@ function doPost(e) {
     else if (body.action === 'payNewContract')            result = payActionPost(payNewContract, body);     // v7.433 (CFO; dryRun)
     else if (body.action === 'payTermination')            result = payActionPost(payTermination, body);     // v7.433
     else if (body.action === 'payGroupTransfer')          result = payActionPost(payGroupTransfer, body);   // v7.433
+    else if (body.action === 'groupRenameApply')          result = groupRenameApply(body);                  // v7.435 стандарт назв груп (CFO; dryRun)
     else if (body.action === 'setPayAuto')                result = setPayAuto(body);                        // v7.433 вимикач автозапуску (CFO)
     else if (body.action === 'pilot2027Remove')           result = pilot2027Remove(body);       // v7.432 відкат пілоту 2027 (CFO, dryRun)
     else if (body.action === 'addManualCoverage')         result = addManualCoverage(body);     // v7.427 покриття для ручної передоплати (офіс, dryRun)
@@ -9207,6 +9210,168 @@ function payGroupTransfer(body){
       out.push(rec);
     });
     return {ok:true, dryRun:dryRun, child:c.name, loc:c.loc, toGroup:toG, fromMonth:ym, files:out};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { if (lock){ try { lock.releaseLock(); } catch(_l){} } }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.435 СТАНДАРТ НАЗВ ГРУП САДКІВ (рішення CFO 18.10.2026): miniBaby-ki · Baby-ki · Findi-Ki · Preschool · Study-ki,
+//   цифра — лише коли в локації дві чинні групи одного рівня. Нічого не вигадує: виконує явний план.
+//   GET payFileRows&loc=&year= — read-only: блоки й рядки Payment файлу року (для плану).
+//   POST groupRenameApply {items, dryRun} (CFO):
+//     {kind:'header', loc, year, row, old, op:'rename', new}  — заголовок блоку → нова назва
+//     {kind:'header', loc, year, row, old, op:'delete'}       — прибрати блок цілком (заголовок + рядки); посилання інших
+//                                                              вкладок файлу на ці рядки → 0 (лише прості, без аргументів)
+//     {kind:'header', loc, year, row, old, op:'merge', into}  — прибрати заголовок, рядки дістаються блоку вище (SUM розширюється)
+//     {kind:'name', loc, old, new}  — назва групи в картках (без дій Payment) і в записах: Табель, Додаткові
+//                                     (відвідуваність, поділ, обʼєднання), предметники (заняття, поділ, обʼєднання, норми локації)
+// ═══════════════════════════════════════════════════════════════════════════
+function payFileRows(params){
+  try {
+    params = params || {};
+    var f = _payFileFor(String(params.loc || '').trim(), Number(params.year) || PAY_BASE_YEAR);
+    if (!f) return {ok:false, error:'Файл не знайдено'};
+    var data = f.sh.getDataRange().getValues(), blocks = _payBlocks(data), A = f.sh.getRange(1, 1, f.sh.getLastRow(), 1).getValues();
+    // заголовки без назви: рядок з =SUM у колонці B і порожньою A (як у Броварах)
+    var F = f.sh.getRange(1, 2, f.sh.getLastRow(), 1).getFormulas(), blank = [];
+    for (var r = 3; r < A.length; r++) if (!trim(String(A[r][0] || '')) && /^=SUM\(/i.test(String(F[r][0] || ''))) blank.push(r + 1);
+    var rows = [];
+    for (var i = 3; i < data.length; i++){
+      var nm = trim(String(data[i][0] || '')); if (!nm || isGroupHeaderRow(data[i], 1)) continue;
+      var b = _payBlockOf(blocks, i + 1), bud = [];
+      for (var m = 1; m <= 12; m++) bud.push(Number(data[i][(m - 1) * f.cpm + f.LO.budNavch + 1]) || 0);
+      rows.push({row:i + 1, name:nm, block:b ? b.title : '', blockRow:b ? b.hdr : 0, bud:bud});
+    }
+    return {ok:true, loc:params.loc, year:f.year, file:f.file, blocks:blocks, blankHeaders:blank, rows:rows};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+// Посилання інших вкладок файлу на рядки [a..b] Payment → 0 / "" (лише прості формули без аргументів функцій).
+function _payZeroRefs(ss, a, b){
+  var re = /(?:'Payment'|Payment)!\$?([A-Z]{1,3})\$?(\d+)(?!\d|:)/g, fixed = 0, manual = [];
+  ss.getSheets().forEach(function(sh){
+    if (sh.getName() === 'Payment' || sh.getLastRow() < 1 || sh.getLastColumn() < 1) return;
+    var rng = sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn()), F = rng.getFormulas();
+    for (var i = 0; i < F.length; i++) for (var j = 0; j < F[i].length; j++){
+      var f = F[i][j]; if (!f || f.indexOf('Payment') < 0) continue;
+      var hit = false, nf = f.replace(re, function(all, col, row){ var r = Number(row); if (r < a || r > b) return all; hit = true; return col === 'A' ? '""' : '0'; });
+      if (!hit) continue;
+      if (/[,;]/.test(nf)){ manual.push(sh.getName() + '!' + _colLetter(j) + (i + 1) + ' ' + f); continue; }
+      sh.getRange(i + 1, j + 1).setFormula(nf); fixed++;
+    }
+  });
+  return {fixed:fixed, manual:manual};
+}
+
+// Заміна назви групи в колонці таблиці для локації: exact (після trim) old → new; JSON-колонка — у масиві назв.
+function _grpRenameColumn(sh, locCol, grpCol, loc, map, isJson){
+  if (!sh || sh.getLastRow() < 2) return 0;
+  var hd = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(function(x){ return trim(String(x)); });
+  var cL = hd.indexOf(locCol), cG = hd.indexOf(grpCol); if (cL < 0 || cG < 0) return 0;
+  var n = sh.getLastRow() - 1, L = sh.getRange(2, cL + 1, n, 1).getValues(), G = sh.getRange(2, cG + 1, n, 1).getValues(), ch = 0;
+  for (var i = 0; i < n; i++){
+    if (_nameFold(L[i][0]) !== _nameFold(loc)) continue;
+    var v = G[i][0];
+    if (isJson){
+      var arr = null; try { arr = JSON.parse(String(v || '[]')); } catch(_j){}
+      if (!Array.isArray(arr)) continue;
+      var any = false; arr = arr.map(function(x){ var t = trim(String(x)); if (map.hasOwnProperty(t)){ any = true; return map[t]; } return x; });
+      if (any){ G[i][0] = JSON.stringify(arr); ch++; }
+    } else {
+      var t = trim(String(v || '')); if (map.hasOwnProperty(t)){ G[i][0] = map[t]; ch++; }
+    }
+  }
+  if (ch) sh.getRange(2, cG + 1, n, 1).setValues(G);
+  return ch;
+}
+
+function groupRenameApply(body){
+  var lock = null;
+  try {
+    body = body || {};
+    var dryRun = (body.dryRun !== false), items = body.items || [];
+    if (!dryRun){ var a = _promoActor(body); if (!(a && _roleKey(a.role) === 'cfo')) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'}; }
+    var out = [], problems = [];
+    // 1) перевірка заголовків: у вказаному рядку має бути саме old
+    var byFile = {};
+    items.filter(function(x){ return x.kind === 'header'; }).forEach(function(x){
+      var k = x.loc + '|' + x.year; (byFile[k] = byFile[k] || {loc:x.loc, year:Number(x.year), ops:[]}).ops.push(x);
+    });
+    Object.keys(byFile).forEach(function(k){
+      var g = byFile[k], f = _payFileFor(g.loc, g.year);
+      if (!f){ problems.push(k + ': файл не знайдено'); return; }
+      g.f = f; var A = f.sh.getRange(1, 1, f.sh.getLastRow(), 1).getValues();
+      g.ops.forEach(function(o){ var t = trim(String((A[Number(o.row) - 1] || [''])[0] || '')); if (t !== trim(String(o.old || ''))) problems.push(f.file + ' рядок ' + o.row + ': очікували «' + o.old + '», а там «' + t + '»'); });
+      // злиття: рядки дістаються блоку ОДРАЗУ ВИЩЕ — він має бути саме «into» і сам не прибиратися
+      var blocks0 = _payBlocks(f.sh.getDataRange().getValues());
+      g.ops.filter(function(o){ return o.op === 'merge'; }).forEach(function(o){
+        var k0 = -1; blocks0.forEach(function(b, i){ if (b.hdr === Number(o.row)) k0 = i; });
+        var above = k0 > 0 ? blocks0[k0 - 1] : null;
+        if (!above || !_payGroupMatch(above.title, o.into)) problems.push(f.file + ' рядок ' + o.row + ': над «' + o.old + '» стоїть «' + (above ? above.title : '—') + '», а не «' + o.into + '» — злиття не зробить те, що треба');
+        else if (g.ops.some(function(x){ return x.op === 'delete' && Number(x.row) === above.hdr; })) problems.push(f.file + ': блок «' + above.title + '», у який зливаємо «' + o.old + '», сам прибирається');
+      });
+    });
+    if (problems.length) return {ok:false, dryRun:dryRun, problems:problems};
+    if (!dryRun){ lock = LockService.getScriptLock(); lock.waitLock(30000); }
+    // 2) файли: знизу вгору, щоб номери рядків не зсувались
+    Object.keys(byFile).forEach(function(k){
+      var g = byFile[k], f = g.f, res = {file:f.file, year:g.year, done:[]};
+      if (!dryRun) res.backup = _safeBackupSheet(f.sh, 'grpstd');
+      g.ops.slice().sort(function(x, y){ return Number(y.row) - Number(x.row); }).forEach(function(o){
+        var data = f.sh.getDataRange().getValues(), blocks = _payBlocks(data);
+        var blk = blocks.filter(function(b){ return b.hdr === Number(o.row); })[0];
+        var next = blk ? blk.next : (function(){ for (var r = Number(o.row) + 1; r <= data.length; r++) if (isGroupHeaderRow(data[r - 1], 1)) return r; return data.length + 1; })();
+        var rec = {row:Number(o.row), op:o.op, old:o.old};
+        if (o.op === 'rename'){
+          rec.new = o.new;
+          if (!dryRun) f.sh.getRange(Number(o.row), 1).setValue(o.new);
+        } else if (o.op === 'delete'){
+          var kids = data.slice(Number(o.row), next - 1).map(function(r){ return trim(String(r[0] || '')); }).filter(String);
+          rec.rows = next - Number(o.row); rec.kids = kids;
+          if (!dryRun){ rec.refs = _payZeroRefs(f.ss, Number(o.row), next - 1); f.sh.deleteRows(Number(o.row), next - Number(o.row)); }
+        } else if (o.op === 'merge'){
+          rec.into = o.into;
+          if (!dryRun){ rec.refs = _payZeroRefs(f.ss, Number(o.row), Number(o.row)); f.sh.deleteRow(Number(o.row)); rec.sumFixed = _payFixBlockSum(f.sh, o.into); }
+        }
+        res.done.push(rec);
+      });
+      if (!dryRun){ SpreadsheetApp.flush(); res.sumCheck = _payHeaderSumCheck(f.sh).filter(function(h){ return h.badCount; }).map(function(h){ return h.title + ': ' + h.bad.join('; '); }); }
+      out.push(res);
+    });
+    // 3) назви в картках і записах
+    var names = items.filter(function(x){ return x.kind === 'name'; }), byLoc = {};
+    names.forEach(function(x){ (byLoc[x.loc] = byLoc[x.loc] || {})[trim(String(x.old))] = trim(String(x.new)); });
+    var crm = getCRMSpreadsheet(), cfg = SpreadsheetApp.openById(CONFIG_SHEET_ID), recs = [];
+    var tables = [
+      [crm, SHEET_CLIENTS, 'Локація', 'Група', false],
+      [crm, SHEET_ATTENDANCE, 'Локація', 'Група', false],
+      [crm, PRED_LESSONS_TAB, 'Location', 'Group', false],
+      [crm, PRED_NORMS_LOC_TAB, 'Локація', 'Група', false],
+      [cfg, ATTENDANCE_SHEET_NAME, 'Локація', 'Група', false],
+      [cfg, DOP_SPLITS_SHEET_NAME, 'Локація', 'Група', false],
+      [cfg, PRED_SPLITS_SHEET_NAME, 'Локація', 'Група', false],
+      [cfg, DOP_MERGES_SHEET_NAME, 'Локація', 'Групи(JSON)', true],
+      [cfg, PRED_MERGES_SHEET_NAME, 'Локація', 'Групи(JSON)', true]
+    ];
+    Object.keys(byLoc).forEach(function(loc){
+      var map = byLoc[loc], r = {loc:loc, map:map, changed:{}};
+      tables.forEach(function(t){
+        var sh = t[0].getSheetByName(t[1]); if (!sh) return;
+        if (dryRun){
+          var hd = sh.getLastRow() > 1 ? sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(function(x){ return trim(String(x)); }) : [];
+          var cL = hd.indexOf(t[2]), cG = hd.indexOf(t[3]); if (cL < 0 || cG < 0) return;
+          var n = sh.getLastRow() - 1, Lv = sh.getRange(2, cL + 1, n, 1).getValues(), Gv = sh.getRange(2, cG + 1, n, 1).getValues(), c = 0;
+          for (var i = 0; i < n; i++){ if (_nameFold(Lv[i][0]) !== _nameFold(loc)) continue; var v = String(Gv[i][0] || '');
+            if (t[4]){ if (Object.keys(map).some(function(o){ return v.indexOf('"' + o + '"') !== -1; })) c++; } else if (map.hasOwnProperty(trim(v))) c++; }
+          if (c) r.changed[t[1]] = c;
+        } else {
+          var c2 = _grpRenameColumn(sh, t[2], t[3], loc, map, t[4]); if (c2) r.changed[t[1]] = c2;
+        }
+      });
+      recs.push(r);
+    });
+    if (!dryRun){ try { _cacheBump('clients'); _cacheBump('fill'); _cacheBump('pay'); } catch(_c){} }
+    return {ok:true, dryRun:dryRun, files:out, names:recs};
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
   finally { if (lock){ try { lock.releaseLock(); } catch(_l){} } }
 }
@@ -11496,7 +11661,7 @@ function detectCurrentMonthCol(rows, curJSMonth, cpm) {
 var _RAW_CANON = [
   ['minibabyki', 'miniBaby-ki'],
   ['babyki',     'Baby-ki'],
-  ['findiki',    'Find-iki'],
+  ['findiki',    'Findi-Ki'],   // v7.435
   ['studyki',    'Study-ki'],
   ['preschool',  'Preschool']
 ];
@@ -18201,6 +18366,7 @@ function getGroupNorms() {
       var n = Number(raw);
       if (!isFinite(n) || n <= 0) continue;
       norms[name] = n;
+      if (name === 'Find-iki' && !norms['Findi-Ki']) norms['Findi-Ki'] = n;   // v7.435: стара назва ключа → і нова
       list.push({group: name, norm: n});
     }
     return {ok: true, norms: norms, list: list};
@@ -35496,7 +35662,7 @@ var PRED_ASSIGN_TAB    = 'Predmetnyky_Assignments';        // CRM_SHEET
 var PRED_ASSIGN_HEADER = ['ID','Location','Subject','EmpKey','CreatedAt','CreatedBy','UID'];   // v7.200 (UID.3)
 
 var PRED_GROUP_NAME_BY_TYPE = {
-  miniBaby:'miniBaby-ki', Baby:'Baby-ki', Find:'Find-iki',
+  miniBaby:'miniBaby-ki', Baby:'Baby-ki', Find:'Findi-Ki',   // v7.435
   Study:'Study-ki', Preschool:'Preschool'
 };
 

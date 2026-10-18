@@ -3112,7 +3112,7 @@ async function _ensurePayments(){ if(S._payFull!==undefined)return; S._payFull=n
 //   Активна дитина — стоїть у групі в Payment І має активну картку на цій локації.
 //   Місця в групі — «Норми груп» (CONFIG); вільні = норма − активні. Наповнюваність % = активні / місткість
 //   з картки локації. Не рахуємо: «(без групи)», абонементні «Чомусики»/«Мама+я», групи без жодної активної дитини.
-var DASH_GROUP_TYPES=['miniBaby-ki','Baby-ki','Find-iki','Study-ki','Preschool','клас'];
+var DASH_GROUP_TYPES=['miniBaby-ki','Baby-ki','Findi-Ki','Study-ki','Preschool','клас'];   // v7.435 стандарт назв: Findi-Ki
 var DASH_SUB_GROUPS=['чомусики','мама+я'];
 // Норма для конкретної локації, якщо там групи інші, ніж за загальною нормою (рішення CFO 07.10.2026).
 var DASH_NORM_OVERRIDE={'Школа 228':{'клас':27}};
@@ -3121,11 +3121,13 @@ async function _ensureGroupNorms(){ if(S._grpNorms!==undefined)return; S._grpNor
   catch(e){ S._grpNorms={}; } }
 function _dashGroupType(g){
   var s=String(g||'').trim(), low=s.toLowerCase();
-  for(var i=0;i<5;i++){ if(low.indexOf(DASH_GROUP_TYPES[i].toLowerCase())===0) return DASH_GROUP_TYPES[i]; }
+  // v7.435: порівнюємо лише літери й цифри — «Findi-Ki», «Find-iki», «findiki 2» — один тип (раніше «Findi-Ki» не розпізнавався)
+  var tl=low.replace(/[^a-zа-яіїєґ0-9]/g,'');
+  for(var i=0;i<5;i++){ if(tl.indexOf(DASH_GROUP_TYPES[i].toLowerCase().replace(/[^a-zа-яіїєґ0-9]/g,''))===0) return DASH_GROUP_TYPES[i]; }
   if(/^\d/.test(s) || low.indexOf('клас')>=0 || low==='школа') return 'клас';
   // v7.408: українські назви груп (Благо: «Карапузи 2-3», «Мандрівники», …) — інакше Управління без груп
   if(/малюк|карапуз/.test(low)) return 'Baby-ki';
-  if(/бешкетн/.test(low)) return 'Find-iki';
+  if(/бешкетн/.test(low)) return 'Findi-Ki';
   if(/пізнайк|мандрівн|дослідн/.test(low)) return 'Study-ki';
   if(/розумник/.test(low)) return 'Preschool';
   return null;
@@ -3134,7 +3136,7 @@ function _dashNorm(loc,type){
   var o=DASH_NORM_OVERRIDE[loc]; if(o && o[type]) return o[type];
   var n=S._grpNorms||{};
   if(type==='клас') return Number(n['1 клас'])||16;
-  return Number(n[type])||0;
+  return Number(n[type])||(type==='Findi-Ki'?Number(n['Find-iki'])||0:0);   // v7.435: стара назва ключа норми
 }
 function _dashNm(s){ return String(s||'').toLowerCase().replace(/[’ʼ`]/g,"'").replace(/\s+/g,' ').trim(); }
 // → null (дані ще вантажаться) або {locs:{loc:{groups:[{name,type,norm,kids}], kids, cap, free, noPay, cards}}}

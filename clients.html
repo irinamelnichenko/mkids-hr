@@ -831,7 +831,7 @@ details.card>summary::-webkit-details-marker{display:none}details.card[open]>sum
               <option value="">— Оберіть групу —</option>
               <option value="miniBaby-ki">miniBaby-ki</option>
               <option value="Baby-ki">Baby-ki</option>
-              <option value="Find-iki">Find-iki</option>
+              <option value="Findi-Ki">Findi-Ki</option>
               <option value="Study-ki">Study-ki</option>
               <option value="Preschool">Preschool</option>
               <option value="Чомусики">Чомусики</option>
@@ -2063,7 +2063,7 @@ var GROUP_PATTERNS=[
   // Стандартні англійські назви
   {re:/mini.?baby/i,  name:'miniBaby-ki'},
   {re:/^baby/i,       name:'Baby-ki'},
-  {re:/find/i,        name:'Find-iki'},
+  {re:/find/i,        name:'Findi-Ki'},   // v7.435 стандарт назв груп
   {re:/study/i,       name:'Study-ki'},
   {re:/preschool/i,   name:'Preschool'},
   {re:/чомус/i,       name:'Чомусики'},
@@ -2073,7 +2073,7 @@ var GROUP_PATTERNS=[
   {re:/малюк/i,        name:'Baby-ki'},       // Малюки
   {re:/карапуз/i,      name:'Baby-ki'},       // Карапузи
   {re:/пізнайк/i,      name:'Study-ki'},      // Пізнайки
-  {re:/бешкетн/i,      name:'Find-iki'},      // Бешкетники
+  {re:/бешкетн/i,      name:'Findi-Ki'},      // Бешкетники
   {re:/мандрівн/i,     name:'Study-ki'},      // Мандрівники
   {re:/дослідн/i,      name:'Study-ki'},      // Дослідники
   {re:/розумник/i,     name:'Preschool'},     // Розумники → тільки лікарняний
@@ -2210,7 +2210,7 @@ function _schoolGroupFromCard(name, loc){
 // Групи — за віком (miniBaby → Baby → Find → Study → Preschool → школа 1→4 клас),
 // усередині одного типу — за назвою; діти в групі — за алфавітом (uk).
 // Раніше і групи, і діти йшли в порядку рядків Payment-файлу.
-var GROUP_TYPE_RANK={'miniBaby-ki':1,'Baby-ki':2,'Find-iki':3,'Study-ki':4,'Preschool':5,'Чомусики':6,'Школа':7,'ГХЗД':9};
+var GROUP_TYPE_RANK={'miniBaby-ki':1,'Baby-ki':2,'Findi-Ki':3,'Find-iki':3,'Study-ki':4,'Preschool':5,'Чомусики':6,'Школа':7,'ГХЗД':9};
 function _groupRank(g){
   var t=parseGroupField(g.group||'').groupType||'';
   if(t==='Школа'){ var m=/^\s*(\d+)/.exec(g.group||''); return 7+(m?Math.min(+m[1],9)/10:0.9); }   // 1 клас → 7.1 … 4 клас → 7.4
