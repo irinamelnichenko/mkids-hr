@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.432
+// m.kids CRM — Google Apps Script v7.433
+// v7.433: Payment — три дії: новий договір (рядок у блоці групи), розірвання (0 після місяця), перехід (новий рядок у новій групі з місяця переходу).
 // v7.432: pilot2027Remove / previewPilot2027Remove — прибрати вкладки пілоту з файлів _27 (Payment/CF/PL 2026-копії не чіпає).
 // v7.431: формули пілоту 2027 і реєстру знижок — під локаль файлу (_fxSep пробою + _fxLoc: «;» і десяткова кома).
 // v7.430: пілот 2027 — формули пишуться setFormulas (setValues розбирав їх за укр. локаллю → #ERROR!).
@@ -7171,7 +7172,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.432', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.433', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -7314,6 +7315,10 @@ function doGet(e) {
     else if (action === 'previewPilot2027')            result = previewPilot2027(e.parameter || {});       // v7.419 пілот Payment 2027 — пробний прогін
     else if (action === 'previewFeeChange')            result = previewFeeChange(e.parameter || {});       // v7.417 прев'ю зміни суми (нічого не пише)
     else if (action === 'getCoverage')                 result = getCoverage(e.parameter || {});            // v7.415 покриття передоплатою
+    else if (action === 'previewPayNewContract')       result = payNewContract({cardId:(e.parameter || {}).cardId, dryRun:true});   // v7.433 прев'ю дії 1
+    else if (action === 'previewPayTermination')       result = payTermination({cardId:(e.parameter || {}).cardId, date:(e.parameter || {}).date, dryRun:true});   // v7.433 дія 2
+    else if (action === 'previewPayTransfer')          result = payGroupTransfer({cardId:(e.parameter || {}).cardId, toGroup:(e.parameter || {}).toGroup, fromGroup:(e.parameter || {}).fromGroup, fromMonth:(e.parameter || {}).fromMonth, dryRun:true});   // v7.433 дія 3
+    else if (action === 'getPayAuto')                  result = {ok:true, payAuto:_payAutoOn()};
     else if (action === 'previewPilot2027Remove')      result = pilot2027Remove({loc:(e.parameter || {}).loc, dryRun:true});   // v7.432 прев'ю відкату пілоту
     else if (action === 'getPilot2027Groups')          result = getPilot2027Groups(e.parameter || {});     // v7.429 read-only: «Групи» пілоту 2027 + помилки формул
     else if (action === 'previewManualCoverage')       result = addManualCoverage(_promoDry(e.parameter || {}));   // v7.427 прев'ю (нічого не пише)
@@ -7391,6 +7396,10 @@ function doPost(e) {
     else if (body.action === 'cancelDiscount')            result = cancelDiscount(body);        // v7.414 скасування ручного запису (офіс)
     else if (body.action === 'confirmPrepayment')         result = confirmPrepayment(body);     // v7.414 підтвердження передоплати + рознесення факту (офіс, dryRun)
     else if (body.action === 'rejectPrepayment')          result = rejectPrepayment(body);      // v7.414 відхилити здогадку (офіс)
+    else if (body.action === 'payNewContract')            result = payActionPost(payNewContract, body);     // v7.433 (CFO; dryRun)
+    else if (body.action === 'payTermination')            result = payActionPost(payTermination, body);     // v7.433
+    else if (body.action === 'payGroupTransfer')          result = payActionPost(payGroupTransfer, body);   // v7.433
+    else if (body.action === 'setPayAuto')                result = setPayAuto(body);                        // v7.433 вимикач автозапуску (CFO)
     else if (body.action === 'pilot2027Remove')           result = pilot2027Remove(body);       // v7.432 відкат пілоту 2027 (CFO, dryRun)
     else if (body.action === 'addManualCoverage')         result = addManualCoverage(body);     // v7.427 покриття для ручної передоплати (офіс, dryRun)
     else if (body.action === 'saveClassPromotion')        result = saveClassPromotion(body);    // v7.420 підтвердження переведення класів (директор/офіс)
@@ -8925,6 +8934,304 @@ function movePaymentRowsToGroup(body){
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// v7.433 PAYMENT: ТРИ ДІЇ НАД РЯДКАМИ ДИТИНИ (рішення CFO 18.10.2026). Файли 2027 — звичайні копії 2026:
+//   блоки груп, заголовок = SUM рядків під ним. Система робить лише:
+//   1) новий договір → рядок у блоці групи (у файлі кожного року, де договір діє);
+//   2) розірвання → «Бюджет навч» місяців ПІСЛЯ місяця розірвання = 0, рядок лишається;
+//   3) перехід між групами → старий рядок лишається в старій групі з місяцями ДО переходу,
+//      у блоці нової групи — новий рядок із місяцями ВІД переходу (підсумок кожної групи за кожен місяць правильний).
+//      Перехід із січня (або в наступному році цілком) — рядок переноситься цілим (moveRows), минулих місяців немає.
+//   Після 3) у файлі два рядки з тим самим ПІБ — усі записи в Payment обирають рядок за місяцем (_payPickRow) за журналом
+//   «Переходи_Payment» (CONFIG). Автоматичний запуск зі збереження картки — лише коли увімкнено PAY_AUTO (властивість скрипта).
+//   Локації Управління не чіпаємо.
+// ═══════════════════════════════════════════════════════════════════════════
+var PAY_FILES_BY_YEAR = {
+  2027: {
+    'Осокорки':       '1g6YbCN0LWXnYgIeClcqZE3OJKRVsygDTadVt8ybSTbo',
+    'Позняки':        '1V7RqV5L0FE30ame8Xe_tew8X5YZKYOpKUYA31Bj29_s',
+    'Тичини':         '1qFrzJARzzlnTMgAW1Yj88ZsMlt-BTBrYqq80OGoduGU',
+    "Кар'єрна":       '1XkrBpF1q-GuRCcqdpOl5V-gZ6s5NKjLs7AB_i74DvKQ',
+    'Голосієво':      '1yp3hCjebrKXPDsIUzUabwz8XayMU9oeNjAuarBtd97g',
+    'Пуща':           '1CyvAhVlBQyl3Bi1W0S4JxYDASwlC-C7W3P37_InsWEU',
+    'Оранж':          '1ipEWRFc-3hXr5pVRaW1IFei59RWhRzO5NvEljhvK4M4',
+    'Борщагівка':     '15b0cGnjvJ8_1hErTE54fTf_qG14F66Pg_ahGt3Q4Egs',
+    'Бровари':        '1YauDPNMCrQqMT925DSpWEyNF6jj923hvOYKfNCKmsuE',
+    'Кругла':         '1hp95tLpuEdEmyGY9vm4xbxZpU-XTOV5wpPu0LjrBRQY',
+    'Бігова':         '1X6z2ApswXQ5ircEVSdFkRzq1wFIGNWU0erJH9nDsWTc',
+    'Школа Осокорки': '1fzBOVCir1gASG9kZGyUauHyTLSMTWMOG_e-37Bevb8o',
+    'Школа 228':      '14nGMKZtjpa0Ba4VRu6qcVb0uG9PreYPcvwXKzyNiMZY'
+  }
+};
+var PAY_BASE_YEAR = 2026;   // рік файлів реєстру CONFIG
+var PAY_SPLIT_TAB = 'Переходи_Payment';
+var PAY_SPLIT_HEADER = ['Локація','Рік','ПІБ','ID картки','З групи','У групу','З місяця','Хто','Коли'];
+
+function _payAutoOn(){ try { return PropertiesService.getScriptProperties().getProperty('PAY_AUTO') === '1'; } catch(e){ return false; } }
+
+// Файл Payment локації за роком: {ss, sh, cpm, LO, year, file, group?} або null. Під-локація (Школа Кар'єрна) — файл хоста.
+function _payFileFor(loc, year){
+  var reg = _getLocationPaymentRegistry(loc);
+  if (!reg || !reg.sheetId || /управл/i.test(reg.typ || '')) return null;
+  var cpm = reg.colsPerMonth || 5, y = Number(year) || PAY_BASE_YEAR, id = reg.sheetId, name = reg.sheetName || 'Payment';
+  if (y !== PAY_BASE_YEAR){
+    var sub = _subLocOf(loc), host = sub ? sub.host : loc, map = PAY_FILES_BY_YEAR[y];
+    id = map && map[host]; name = 'Payment';
+    if (!id) return null;
+  }
+  var ss = SpreadsheetApp.openById(id), sh = ss.getSheetByName(name) || ss.getSheets()[0];
+  return {ss:ss, sh:sh, cpm:cpm, LO:_paymentLayout(cpm), year:y, file:ss.getName()};
+}
+// Блоки груп: [{hdr:1-based, next:1-based, title}] — заголовки, як їх бачить решта системи (isGroupHeaderRow).
+function _payBlocks(data){
+  var h = [];
+  for (var i = 3; i < data.length; i++){ var t = trim(String(data[i][0] || '')); if (t && isGroupHeaderRow(data[i], 1)) h.push({hdr:i + 1, title:t}); }
+  h.forEach(function(b, k){ b.next = k + 1 < h.length ? h[k + 1].hdr : data.length + 1; });
+  return h;
+}
+function _payGroupMatch(title, group){
+  var hn = _journalNormName(title), gk = _journalNormName(group);
+  return !!gk && (hn === gk || hn.indexOf(gk) === 0 || gk.indexOf(hn) === 0);
+}
+function _payBlockOf(blocks, row1){ for (var k = blocks.length - 1; k >= 0; k--) if (blocks[k].hdr < row1) return blocks[k]; return null; }
+// Рядки дитини (1-based) за ПІБ: усі збіги, не лише перший.
+function _payRowsOf(data, name){
+  var nk = _nameFoldTight(name), out = [];
+  for (var r = 3; r < data.length; r++){ var nm = trim(String(data[r][0] || '')); if (nm && !isGroupHeaderRow(data[r], 1) && _nameFoldTight(nm) === nk) out.push(r + 1); }
+  return out;
+}
+// Місце для нового рядка в блоці так, щоб SUM заголовка його охопив: після останньої дитини, якщо під нею ще є рядок блоку;
+// інакше — ПЕРЕД останньою дитиною (вставка на межу блоку звузила б SUM). Порожній блок — відмова.
+function _payInsertPlan(data, block){
+  var last = -1;
+  for (var r = block.hdr + 1; r < block.next; r++) if (trim(String((data[r - 1] || [])[0] || ''))) last = r;
+  if (last < 0) return {after:block.hdr};   // порожній блок: рядок одразу під заголовком, SUM виправить _payFixBlockSum
+  return last < block.next - 1 ? {after:last} : {before:last};
+}
+// Після вставки / перенесення: прості =SUM(Xa:Xb) у рядку заголовка блоку мають охоплювати [заголовок+1 .. наступний−1].
+// Інші формули заголовка не чіпаємо. Повертає скільки клітинок виправлено.
+function _payFixBlockSum(sh, title){
+  var data = sh.getDataRange().getValues(), b = _payBlocks(data).filter(function(x){ return _payGroupMatch(x.title, title); })[0];
+  if (!b) return 0;
+  var lc = Math.min(sh.getLastColumn(), 120), F = sh.getRange(b.hdr, 1, 1, lc).getFormulas()[0], fixed = 0;
+  for (var c = 1; c < lc; c++){
+    var m = /^=SUM\(\$?([A-Z]+)\$?(\d+):\$?([A-Z]+)\$?(\d+)\)$/i.exec(String(F[c] || '').replace(/\s+/g, ''));
+    if (!m || m[1] !== m[3]) continue;
+    if (Number(m[2]) !== b.hdr + 1 || Number(m[4]) < b.next - 1){ sh.getRange(b.hdr, c + 1).setFormula('=SUM(' + m[1] + (b.hdr + 1) + ':' + m[1] + (b.next - 1) + ')'); fixed++; }
+  }
+  return fixed;
+}
+function _payInsertRow(sh, plan){
+  if (plan.after){ sh.insertRowsAfter(plan.after, 1); return plan.after + 1; }
+  sh.insertRowsBefore(plan.before, 1); return plan.before;
+}
+
+// ── журнал переходів ──
+var _PAY_SPLIT_MEMO = null;
+function _paySplits(){
+  if (_PAY_SPLIT_MEMO) return _PAY_SPLIT_MEMO;
+  var t = _promoRead(PAY_SPLIT_TAB, PAY_SPLIT_HEADER);
+  _PAY_SPLIT_MEMO = t.rows.map(function(r){ return {loc:String(r['Локація'] || ''), year:Number(r['Рік']) || 0, name:String(r['ПІБ'] || ''),
+    cardId:String(r['ID картки'] || ''), from:String(r['З групи'] || ''), to:String(r['У групу'] || ''), month:Number(r['З місяця']) || 0}; });
+  return _PAY_SPLIT_MEMO;
+}
+// Група дитини в місяці за журналом переходів цього файлу; null — переходів не було.
+function _payGroupFor(loc, year, name, month){
+  var sub = _subLocOf(loc), host = _nameFold(sub ? sub.host : loc), nk = _nameFoldTight(name);
+  var s = _paySplits().filter(function(x){ var xs = _subLocOf(x.loc); return x.year === Number(year) && _nameFold(xs ? xs.host : x.loc) === host && _nameFoldTight(x.name) === nk; })
+    .sort(function(a, b){ return a.month - b.month; });
+  if (!s.length) return null;
+  var g = s[0].from; s.forEach(function(x){ if (x.month <= month) g = x.to; });
+  return g;
+}
+// Вибір рядка серед кількох з тим самим ПІБ (0-based індекси) для місяця: рядок у блоці групи цього місяця.
+function _payPickRow(rows0, data, month, loc, year){
+  if (!rows0 || !rows0.length) return undefined;
+  if (rows0.length === 1) return rows0[0];
+  var g = null; try { g = _payGroupFor(loc, year, data[rows0[0]][0], month); } catch(_g){}
+  if (!g) return rows0[0];
+  var blocks = _payBlocks(data);
+  for (var i = 0; i < rows0.length; i++){ var b = _payBlockOf(blocks, rows0[i] + 1); if (b && _payGroupMatch(b.title, g)) return rows0[i]; }
+  return rows0[0];
+}
+// Переадресація рядка (0-based), який знайшли за ПІБ: якщо в цьому місяці дитина в іншому рядку — повертає його.
+function _payRedirect(data, row0, month, loc, year){
+  var nm = trim(String((data[row0] || [])[0] || '')); if (!nm) return row0;
+  var all = _payRowsOf(data, nm).map(function(r){ return r - 1; });
+  return all.length > 1 ? _payPickRow(all, data, month, loc, year) : row0;
+}
+
+// ── ДІЯ 1: новий договір ──
+// Рядок у блоці групи в кожному файлі року, де договір діє (від року договору до останнього наявного року).
+// Рік бази (2026) — як і раніше (_autoCreatePaymentForNewCard: рядок + бюджет з поточного місяця). Наступні роки —
+// рядок + «Бюджет навч» = сума договору з місяця початку (або січня) до грудня / місяця розірвання.
+function payNewContract(body){
+  try {
+    body = body || {};
+    var dryRun = (body.dryRun !== false), c = body.card || _promoCards().byId[String(body.cardId || '').trim()];
+    if (!c) return {ok:false, error:'Картку не знайдено: ' + body.cardId};
+    if (!c.group) return {ok:false, error:'У картці не вказано групу'};
+    var start = c.contract || _ymNow() + '-01', out = [];
+    Object.keys(PAY_FILES_BY_YEAR).map(Number).concat([PAY_BASE_YEAR]).sort().forEach(function(y){
+      if (y < Number(start.slice(0, 4)) || (c.end && Number(c.end.slice(0, 4)) < y)) return;
+      var f = _payFileFor(c.loc, y); if (!f){ out.push({year:y, status:'немає файлу'}); return; }
+      var data = f.sh.getDataRange().getValues(), have = _payRowsOf(data, c.name);
+      if (have.length){ out.push({year:y, file:f.file, status:'рядок уже є', rows:have}); return; }
+      var blocks = _payBlocks(data), blk = blocks.filter(function(b){ return _payGroupMatch(b.title, c.group); })[0];
+      if (!blk){ out.push({year:y, file:f.file, status:'групу «' + c.group + '» не знайдено', groups:blocks.map(function(b){ return b.title; })}); return; }
+      var plan = _payInsertPlan(data, blk); if (plan.error){ out.push({year:y, file:f.file, status:plan.error}); return; }
+      var m0 = Number(start.slice(0, 4)) === y ? Number(start.slice(5, 7)) : 1;
+      var m1 = (c.end && Number(c.end.slice(0, 4)) === y) ? Number(c.end.slice(5, 7)) : 12;
+      var fee = y === PAY_BASE_YEAR ? 0 : (c.dopOnly || c.free ? 0 : (c.fee || 0));
+      var rec = {year:y, file:f.file, status:dryRun ? 'буде вставлено' : 'вставлено', group:blk.title, header:blk.hdr,
+        at:plan.after ? 'після рядка ' + plan.after : 'перед рядком ' + plan.before, budget:fee ? {from:m0, to:m1, value:fee} : null};
+      if (!dryRun){
+        var r1 = _payInsertRow(f.sh, plan);
+        f.sh.getRange(r1, 1).setNumberFormat('@').setValue(c.name);
+        if (fee) for (var m = m0; m <= m1; m++) f.sh.getRange(r1, 1 + (m - 1) * f.cpm + f.LO.budNavch + 1).setValue(fee);
+        rec.sumFixed = _payFixBlockSum(f.sh, blk.title);
+        SpreadsheetApp.flush();
+        rec.row = r1; rec.sumCheck = _payHeaderSumCheck(f.sh).filter(function(h){ return h.row === blk.hdr || (plan.before && h.row === blk.hdr); })[0] || null;
+        _moneyJournalLog([{by:body.by || 'система', route:'payNewContract', loc:c.loc, name:c.name, year:y, month:'',
+          col:'новий рядок, група ' + blk.title, before:'', after:c.name + (fee ? ', бюджет ' + fee + ' з ' + m0 + ' по ' + m1 : ''), reason:body.reason || 'новий договір'}]);
+      }
+      out.push(rec);
+    });
+    return {ok:true, dryRun:dryRun, child:c.name, loc:c.loc, group:c.group, contract:c.contract, end:c.end, fee:c.fee, files:out};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+// ── ДІЯ 2: розірвання ──
+// «Бюджет навч» усіх місяців ПІСЛЯ місяця розірвання = 0 (у файлі року розірвання і наступних), у всіх рядках дитини.
+// Місяць розірвання, «Факт» і рядки не чіпаємо.
+function payTermination(body){
+  try {
+    body = body || {};
+    var dryRun = (body.dryRun !== false), c = body.card || _promoCards().byId[String(body.cardId || '').trim()];
+    if (!c) return {ok:false, error:'Картку не знайдено: ' + body.cardId};
+    var end = _promoISO(body.date) || c.end;
+    if (!end) return {ok:false, error:'Немає дати розірвання'};
+    var ey = Number(end.slice(0, 4)), em = Number(end.slice(5, 7)), out = [], journal = [];
+    Object.keys(PAY_FILES_BY_YEAR).map(Number).concat([PAY_BASE_YEAR]).sort().forEach(function(y){
+      if (y < ey) return;
+      var f = _payFileFor(c.loc, y); if (!f){ out.push({year:y, status:'немає файлу'}); return; }
+      var data = f.sh.getDataRange().getValues(), rows = _payRowsOf(data, c.name);
+      if (!rows.length){ out.push({year:y, file:f.file, status:'рядка немає'}); return; }
+      var cells = [];
+      rows.forEach(function(r1){
+        for (var m = (y === ey ? em + 1 : 1); m <= 12; m++){
+          var col1 = 1 + (m - 1) * f.cpm + f.LO.budNavch + 1, v = Number(data[r1 - 1][col1 - 1]) || 0;
+          if (v !== 0) cells.push({row:r1, month:m, col1:col1, before:v});
+        }
+      });
+      if (!dryRun) cells.forEach(function(x){
+        f.sh.getRange(x.row, x.col1).setValue(0);
+        journal.push({by:body.by || 'система', route:'payTermination', loc:c.loc, name:c.name, year:y, month:x.month, col:'Бюджет-навч', before:x.before, after:0, reason:'розірвання ' + end});
+      });
+      out.push({year:y, file:f.file, status:cells.length ? (dryRun ? 'буде обнулено' : 'обнулено') : 'нічого обнуляти', rows:rows,
+        months:cells.map(function(x){ return x.month + ': ' + x.before; })});
+    });
+    if (journal.length) _moneyJournalLog(journal);
+    return {ok:true, dryRun:dryRun, child:c.name, loc:c.loc, end:end, files:out};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+// ── ДІЯ 3: перехід між групами ──
+// З місяця M: у блоці нової групи — новий рядок (ПІБ, сторона/дата договору, хвіст колонок) з місяцями M..12, у старому
+// рядку ці місяці очищаються. M = 1 (або наступний рік) — старий рядок переноситься цілим (moveRows). Запис у журнал переходів.
+function payGroupTransfer(body){
+  var lock = null;
+  try {
+    body = body || {};
+    var dryRun = (body.dryRun !== false), c = body.card || _promoCards().byId[String(body.cardId || '').trim()];
+    if (!c) return {ok:false, error:'Картку не знайдено: ' + body.cardId};
+    var toG = trim(String(body.toGroup || c.group || '')), fromG = trim(String(body.fromGroup || ''));
+    var ym = _promoYM(body.fromMonth) || _ymNow(), ty = Number(ym.slice(0, 4)), tm = Number(ym.slice(5, 7)), out = [];
+    if (!toG) return {ok:false, error:'Не вказано нову групу'};
+    if (!dryRun){ lock = LockService.getScriptLock(); lock.waitLock(30000); }
+    Object.keys(PAY_FILES_BY_YEAR).map(Number).concat([PAY_BASE_YEAR]).sort().forEach(function(y){
+      if (y < ty) return;
+      var f = _payFileFor(c.loc, y); if (!f){ out.push({year:y, status:'немає файлу'}); return; }
+      var data = f.sh.getDataRange().getValues(), blocks = _payBlocks(data), rows = _payRowsOf(data, c.name);
+      var M = y === ty ? tm : 1;
+      var tgt = blocks.filter(function(b){ return _payGroupMatch(b.title, toG); })[0];
+      if (!tgt){ out.push({year:y, file:f.file, status:'групу «' + toG + '» не знайдено', groups:blocks.map(function(b){ return b.title; })}); return; }
+      // джерельний рядок: у блоці старої групи (якщо вказана), інакше — будь-який рядок дитини не в новій групі
+      var src = rows.filter(function(r1){ var b = _payBlockOf(blocks, r1); return b && !_payGroupMatch(b.title, toG) && (!fromG || _payGroupMatch(b.title, fromG)); });
+      if (!src.length){ out.push({year:y, file:f.file, status:rows.length ? 'дитина вже в блоці «' + toG + '»' : 'рядка немає'}); return; }
+      var s1 = src[src.length - 1], sb = _payBlockOf(blocks, s1);
+      var plan = _payInsertPlan(data, tgt); if (plan.error){ out.push({year:y, file:f.file, status:plan.error}); return; }
+      var monthsCols = 12 * f.cpm, W = f.sh.getLastColumn();
+      var rec = {year:y, file:f.file, from:sb.title, to:tgt.title, sourceRow:s1, mode:M === 1 ? 'перенести рядок цілим' : 'розділити з місяця ' + M,
+        at:plan.after ? 'після рядка ' + plan.after : 'перед рядком ' + plan.before,
+        moved:M === 1 ? 'усі місяці' : (M + '–12: ' + (function(){ var s = 0; for (var m = M; m <= 12; m++) for (var k = 0; k < f.cpm; k++) s += Number(data[s1 - 1][1 + (m - 1) * f.cpm + k]) || 0; return s; })() + ' грн у клітинках місяців')};
+      if (!dryRun){
+        if (M === 1){
+          var dest = plan.after ? plan.after + 1 : plan.before;
+          f.sh.moveRows(f.sh.getRange(s1, 1), dest);
+          rec.sumFixed = _payFixBlockSum(f.sh, tgt.title) + _payFixBlockSum(f.sh, sb.title);
+        } else {
+          var r1 = _payInsertRow(f.sh, plan), sRow = s1 >= r1 ? s1 + 1 : s1;   // вставка вище зсуває джерело
+          f.sh.getRange(r1, 1).setNumberFormat('@').setValue(c.name);
+          var c0 = 1 + (M - 1) * f.cpm + 1, n = (13 - M) * f.cpm;   // перша колонка місяця M (1-based) і скільки колонок
+          f.sh.getRange(sRow, c0, 1, n).copyTo(f.sh.getRange(r1, c0, 1, n));
+          f.sh.getRange(sRow, c0, 1, n).clearContent();
+          if (W > monthsCols + 1) f.sh.getRange(sRow, monthsCols + 2, 1, W - monthsCols - 1).copyTo(f.sh.getRange(r1, monthsCols + 2, 1, W - monthsCols - 1));   // сторона/дата договору, тижні, підсумки
+          var sp = _promoSheet(PAY_SPLIT_TAB, PAY_SPLIT_HEADER);
+          sp.getRange(sp.getLastRow() + 1, 1, 1, PAY_SPLIT_HEADER.length).setValues([[c.loc, y, c.name, c.id, sb.title, tgt.title, M, body.by || 'система', _promoStamp()]]);
+          _PAY_SPLIT_MEMO = null;
+          rec.newRow = r1; rec.sourceRowNow = sRow; rec.sumFixed = _payFixBlockSum(f.sh, tgt.title);
+        }
+        SpreadsheetApp.flush();
+        rec.sumCheck = _payHeaderSumCheck(f.sh).filter(function(h){ return h.badCount; });
+        _moneyJournalLog([{by:body.by || 'система', route:'payGroupTransfer', loc:c.loc, name:c.name, year:y, month:M,
+          col:'рядок ' + sb.title + ' → ' + tgt.title, before:'рядок ' + s1, after:rec.mode, reason:body.reason || 'перехід між групами'}]);
+      }
+      out.push(rec);
+    });
+    return {ok:true, dryRun:dryRun, child:c.name, loc:c.loc, toGroup:toG, fromMonth:ym, files:out};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { if (lock){ try { lock.releaseLock(); } catch(_l){} } }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// POST-обгортки (запис — лише CFO) і вимикач автозапуску.
+function _payCfoOnly(body){ var a = _promoActor(body); return !!(a && _roleKey(a.role) === 'cfo'); }
+function payActionPost(fn, body){
+  body = body || {};
+  if (body.dryRun === false && !_payCfoOnly(body)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  delete body.card;   // картку з запиту не приймаємо — лише з таблиці
+  return fn(body);
+}
+function setPayAuto(body){
+  body = body || {};
+  if (!_payCfoOnly(body)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  PropertiesService.getScriptProperties().setProperty('PAY_AUTO', body.on ? '1' : '0');
+  return {ok:true, payAuto:_payAutoOn()};
+}
+// Картка з даних saveClient (свіжа, без кешу карток).
+function _payCardFromData(d){
+  var iso = function(v){ try { return _promoISO(v); } catch(e){ return ''; } };
+  return {id:String(d.id || ''), name:String(d.name || '').trim(), loc:String(d.loc || '').trim(), group:String(d.group || '').trim(),
+    status:String(d.status || 'active').trim().toLowerCase(), contract:iso(d.contractDate), end:iso(d.terminationDate),
+    fee:Number(d.monthlyFee) || 0, dopOnly:_isDopOnly(d.dopOnly), free:_isDopOnly(d.free)};
+}
+// Хук saveClient (лише при PAY_AUTO): розірвання → payTermination; зміна групи живої картки → payGroupTransfer.
+// Новий договір — у _autoCreatePaymentForNewCard. Не валить збереження.
+function _payOnCardUpdate(data, oldRow){
+  try {
+    if (!oldRow || !_payAutoOn()) return null;
+    var c = _payCardFromData(data), by = data.updatedBy || data.by || 'система';
+    var oldSt = String(oldRow[14] || '').trim().toLowerCase(), oldEnd = '';
+    try { oldEnd = _promoISO(oldRow[21]); } catch(_e){}
+    if (c.status === 'terminated' && c.end && (oldSt !== 'terminated' || oldEnd !== c.end))
+      return {action:'termination', res:payTermination({card:c, date:c.end, dryRun:false, by:by})};
+    var oldGroup = String(oldRow[3] || '').trim(), oldLoc = String(oldRow[2] || '').trim();
+    if (['active','adaptation','future','paused'].indexOf(c.status) !== -1 && oldGroup && c.group && _nameFold(oldGroup) !== _nameFold(c.group) && _nameFold(oldLoc) === _nameFold(c.loc))
+      return {action:'transfer', res:payGroupTransfer({card:c, fromGroup:oldGroup, toGroup:c.group, fromMonth:_ymNow(), dryRun:false, by:by})};
+    return null;
+  } catch(e){ return {action:'error', error:String(e && e.message || e)}; }
+}
+
 // v7.248: ПЕРЕНЕСЕННЯ РЯДКІВ У СЛУЖБОВИЙ БЛОК (за замовчуванням «Вибули»).
 // Навіщо: дитина більше не ходить, але за нею є оплати цього року. Видалити
 // рядок — стерти гроші; лишити на місці — вона рахується живою в ростері.
@@ -10119,6 +10426,7 @@ function saveClient(data) {
       var _payU = _paymentOnCardUpdate(data, vals[r]);   // v7.355
       var _resU = _payU ? {ok:true, action:'updated', payment:_payU} : {ok:true, action:'updated'};
       if (_feeU) _resU.fee = _feeU;   // v7.417
+      var _pa = _payOnCardUpdate(data, vals[r]); if (_pa) _resU.paymentRows = _pa;   // v7.433 розірвання / перехід (лише PAY_AUTO)
       return _resU;
     }
   }
@@ -10158,6 +10466,7 @@ function saveClient(data) {
     try { _feeChangeOnCardUpdate(data, vals[cand], sheet, cand + 1); } catch(_fe2){ Logger.log('[saveClient] fee: %s', _fe2 && _fe2.message); }   // v7.417
     logGroupChange(data.id, data.name, data.loc, _oldGrpM, data.group, data.updatedBy || data.by || ''); // v7.47 ЕТАП 5: перевід групи
     var _payM = _paymentOnCardUpdate(data, vals[cand]);   // v7.355
+    try { _payOnCardUpdate(data, vals[cand]); } catch(_pa2){}   // v7.433 (лише PAY_AUTO)
     return _payM ? {ok:true, action:'updated-moved', mergedAbsences: mergedAbs.length, payment:_payM} : {ok:true, action:'updated-moved', mergedAbsences: mergedAbs.length};
   }
   sheet.appendRow(row);
@@ -15885,6 +16194,7 @@ function cashAdd(body){
   try {
     var name = String(t.sheet.getRange(row, 1).getValue() || '').trim();
     if (body.name && _nameFold(name) !== _nameFold(body.name)) return {ok:false, error:'Рядок ' + row + ' тепер «' + name + '», а не «' + body.name + '» — оновіть список'};
+    if (kind !== 'expense'){ try { var _cd = t.sheet.getDataRange().getValues(); row = _payRedirect(_cd, row - 1, month, loc, year) + 1; } catch(_rd){} }   // v7.433 перехід між групами
     var cell = t.sheet.getRange(row, _cashFactCol(month)), before = _opexNum(cell.getValue()), f = _cashFormula(cell, amount);
     if (!f) return {ok:false, error:'У клітинці текст, а не число — внесіть вручну'};
     var res = {ok:true, dryRun:dryRun, kind:kind, loc:loc, row:row, name:name, month:month, year:year, amount:amount,
@@ -21066,12 +21376,13 @@ function exportAttendanceToPayments(params){
     var formulas = paySh.getDataRange().getFormulas();   // один зайвий read замість 12 пер-місячних
     function _normName(s){ return _nameFoldTight(s); }   // v7.220
     var DATA_START = 3;
-    var paymentByNorm = {};   // normName → rowIdx0 (перше співпадіння)
+    var paymentByNorm = {}, paymentRowsByNorm = {};   // normName → rowIdx0 (перше співпадіння); v7.433 усі рядки ПІБ
     for (var r = DATA_START; r < data.length; r++){
       var nameCell = trim(String(data[r][0] || ''));
       if (!nameCell || isGroupHeaderRow(data[r], 1)) continue;
       var nk0 = _normName(nameCell);
       if (!paymentByNorm.hasOwnProperty(nk0)) paymentByNorm[nk0] = r;
+      (paymentRowsByNorm[nk0] = paymentRowsByNorm[nk0] || []).push(r);
     }
 
     // buckets(childName) → sumByNormTarget(normName) : { names, m:{targetM:sum} }
@@ -21114,7 +21425,7 @@ function exportAttendanceToPayments(params){
       var journal = _readJournalForTarget(loc, 'payment', year, m);
       var journalOps = [], mUpd = 0, mSum = 0;
       Object.keys(paymentByNorm).forEach(function(nk){
-        var rowIdx0      = paymentByNorm[nk];
+        var rowIdx0      = _payPickRow(paymentRowsByNorm[nk], data, m, loc, year);   // v7.433 перехід між групами — рядок місяця
         var wasFormula   = !!(formulas[rowIdx0] && formulas[rowIdx0][col0]);
         var paymentName  = trim(String(data[rowIdx0][0] || ''));
         var currentValue = Number(data[rowIdx0][col0]) || 0;   // getValues → обчислене значення формули
@@ -21360,11 +21671,12 @@ function exportMealToPayments(params){
     var data = paySh.getDataRange().getValues();
     var formulas = paySh.getDataRange().getFormulas();
     function _normName(s){ return _nameFoldTight(s); }   // v7.220
-    var DATA_START = 3, paymentByNorm = {};
+    var DATA_START = 3, paymentByNorm = {}, paymentRowsByNorm = {};
     for (var r=DATA_START;r<data.length;r++){
       var nameCell = trim(String(data[r][0]||''));
       if (!nameCell || isGroupHeaderRow(data[r], 1)) continue;
       var nk0 = _normName(nameCell); if (!paymentByNorm.hasOwnProperty(nk0)) paymentByNorm[nk0] = r;
+      (paymentRowsByNorm[nk0] = paymentRowsByNorm[nk0] || []).push(r);   // v7.433
     }
     var sumByNormTarget = {};
     Object.keys(buckets).forEach(function(childName){
@@ -21393,7 +21705,7 @@ function exportMealToPayments(params){
       var journal = _readJournalForTarget(loc, 'meal', year, m);
       var journalOps=[], mUpd=0, mSum=0;
       Object.keys(paymentByNorm).forEach(function(nk){
-        var rowIdx0 = paymentByNorm[nk];
+        var rowIdx0 = _payPickRow(paymentRowsByNorm[nk], data, m, loc, year);   // v7.433
         var wasFormula = !!(formulas[rowIdx0] && formulas[rowIdx0][col0]);
         var paymentName = trim(String(data[rowIdx0][0]||''));
         var currentValue = Number(data[rowIdx0][col0]) || 0;
@@ -21923,6 +22235,7 @@ function reconcileApply(body){
       var monthCol0 = _detectMonthColByHeader(data, jsMonth);
       if (monthCol0 < 0){ errors++; details.push({childName:childName, status:'error', msg:'місяць (' + (jsMonth + 1) + ') не знайдено в шапці — НЕ записано'}); return; }
       var factCol0 = _factColForType(monthCol0, it.type || type);
+      childRow = _payRedirect(data, childRow, jsMonth + 1, loc, _rcYear);   // v7.433 перехід між групами — рядок місяця
 
       var cell = paySh.getRange(childRow + 1, factCol0 + 1);
       var okey = childRow + ',' + factCol0;
@@ -23277,12 +23590,13 @@ function exportVacationDiscountToPayments(params){
     var nextFormulas = canProtectNext ? paySh.getRange(1, nextNavchCol1, lastRow, 1).getFormulas() : [];
     var journal      = _readJournalForTarget(loc, 'vacation', year, month);
 
-    var DATA_START = 3, rowByNorm = {};
+    var DATA_START = 3, rowByNorm = {}, rowsByNorm = {};
     for (var r = DATA_START; r < data.length; r++){
       var nm = trim(String(data[r][0] || ''));
       if (!nm || isGroupHeaderRow(data[r], 1)) continue;          // п.12 group-header
       var nk0 = _normNameVac(nm);
       if (!rowByNorm.hasOwnProperty(nk0)) rowByNorm[nk0] = r;
+      (rowsByNorm[nk0] = rowsByNorm[nk0] || []).push(r);          // v7.433
     }
 
     // === 5. Точковий запис через журнал (знижка = ВІД'ЄМНИЙ доданок) ===
@@ -23290,7 +23604,7 @@ function exportVacationDiscountToPayments(params){
     var cellsWritten = 0, formulaConverted = 0, nextProtected = 0, updated = 0, totalDisc = 0;
 
     Object.keys(rowByNorm).forEach(function(nk){
-      var rowIdx0 = rowByNorm[nk];
+      var rowIdx0 = _payPickRow(rowsByNorm[nk], data, month, loc, year);   // v7.433 перехід між групами — рядок місяця
       if (_regNk[nk] || PROMO_FORMULA_RE.test(String((colFormulas[rowIdx0] || [''])[0] || ''))) return;   // v7.418: клітинка реєстру — не чіпаємо
       // v6.41: формульні рядки БІЛЬШЕ НЕ пропускаємо. getValues() дає обчислене
       // значення формули (напр. 21000), яке стає базою; setValue замінює формулу числом.
@@ -23753,6 +24067,7 @@ function setLocPaymentBudget(body){
       if(_normNameVac(nm)===nk){ rowIdx=r; break; }
     }
     if(rowIdx<0) return {ok:false,error:'Рядок "'+name+'" не знайдено у файлі '+loc};
+    rowIdx=_payRedirect(data,rowIdx,month,loc,year);   // v7.433 перехід між групами — рядок місяця
     var before=Number(paySh.getRange(rowIdx+1,budgetNavchCol1).getValue())||0;
     // v7.414: з PROMO_START_YM клітинка = база − SUMIFS(реєстр «Знижки»). value — нова БАЗА (без знижок; disc ігноруємо:
     // знижки живуть у реєстрі), записуємо формулою, щоб реєстр і далі віднімався сам.
@@ -23808,14 +24123,16 @@ function addLocPaymentDop(body){
     var _cpm = reg.colsPerMonth || 5, _LO = _paymentLayout(_cpm);
     var budgetDopCol1 = 1 + (month - 1) * _cpm + _LO.budDop + 1;
     var nk = _normNameVac(name);
-    var DATA_START = 3, rowIdx = -1, matches = 0;
+    var DATA_START = 3, rowIdx = -1, matches = 0, _all = [];
     for (var r = DATA_START; r < data.length; r++){
       var nm = trim(String(data[r][0] || ''));
       if (!nm || isGroupHeaderRow(data[r], 1)) continue;
-      if (_normNameVac(nm) === nk){ rowIdx = r; matches++; }
+      if (_normNameVac(nm) === nk){ rowIdx = r; matches++; _all.push(r); }
     }
     if (matches === 0) return {ok:false, error:'Рядок "' + name + '" не знайдено у файлі ' + loc};
-    if (matches > 1)  return {ok:false, error:'Кілька рядків "' + name + '" у файлі ' + loc + ' — не чіпаю', matches:matches};
+    // v7.433: два рядки після переходу між групами — беремо рядок місяця; інші дублі — як і раніше, не чіпаємо
+    if (matches > 1 && _payGroupFor(loc, Number(body.year) || 2026, name, month)) rowIdx = _payPickRow(_all, data, month, loc, Number(body.year) || 2026);
+    else if (matches > 1)  return {ok:false, error:'Кілька рядків "' + name + '" у файлі ' + loc + ' — не чіпаю', matches:matches};
     var cell = paySh.getRange(rowIdx + 1, budgetDopCol1);
     var wasFormula = false;
     try { wasFormula = String(cell.getFormula() || '') !== ''; } catch(_f){}
@@ -24189,17 +24506,16 @@ function addPaymentRow(body){
       if (hn === gk || hn.indexOf(gk) === 0 || gk.indexOf(hn) === 0){ headerRow = h; break; }
     }
     if (headerRow < 0) return {ok: false, error: 'Групу «' + group + '» не знайдено у файлі ' + loc, groupHeaders: headers};
-    // 3) останній member групи (до наступного header/кінця) → вставляємо після нього
-    var insertAfter = headerRow;   // 0-based
-    for (var m = headerRow + 1; m < data.length; m++){
-      if (isGroupHeaderRow(data[m], 1)) break;
-      if (trim(String(data[m][0] || ''))) insertAfter = m;
-    }
-    var insertAfter1 = insertAfter + 1;   // 1-based рядок, ПІСЛЯ якого вставляємо
+    // 3) v7.433: місце всередині SUM заголовка — після останньої дитини, якщо під нею ще є рядок блоку, інакше перед нею
+    var _blk = _payBlocks(data).filter(function(b){ return b.hdr === headerRow + 1; })[0];
+    var _plan = _blk ? _payInsertPlan(data, _blk) : {error:'блок не знайдено'};
+    if (_plan.error) return {ok: false, error: 'Групу «' + group + '» знайдено, але: ' + _plan.error, groupHeaders: headers};
+    var insertAfter1 = _plan.after ? _plan.after : _plan.before - 1;   // 1-based: новий рядок стане insertAfter1+1
     if (!dryRun){
       lock = LockService.getScriptLock();
       try { lock.waitLock(30000); } catch(_le){ return {ok: false, error: 'LOCK_TIMEOUT'}; }
-      paySh.insertRowsAfter(insertAfter1, 1);
+      _payInsertRow(paySh, _plan);
+      try { _payFixBlockSum(paySh, _blk.title); } catch(_fx){}   // v7.433
       var cell = paySh.getRange(insertAfter1 + 1, 1);
       cell.setNumberFormat('@');
       cell.setValue(name);   // фінансові колонки лишаємо порожніми
@@ -24300,7 +24616,9 @@ function _autoCreatePaymentForNewCard(data){
     }
     // 3) переагрегувати ЛИШЕ цю локацію (не всю мережу)
     var ag = _aggregateOneLoc(loc);
-    return {status:'created', row:ap.insertAtRow, group:group, budgetMonths:budgetMonths, aggregated:!!(ag && ag.ok)};
+    // 4) v7.433 (PAY_AUTO): рядок і в файлах наступних років, де договір діє
+    var nx = null; if (_payAutoOn()){ try { nx = payNewContract({card:_payCardFromData(data), dryRun:false, by:by}); } catch(_nx){ nx = {ok:false, error:String(_nx)}; } }
+    return {status:'created', row:ap.insertAtRow, group:group, budgetMonths:budgetMonths, aggregated:!!(ag && ag.ok), nextYears:nx};
   } catch(e){ return {status:'error', error:String(e && e.message || e)}; }
 }
 
@@ -39235,7 +39553,7 @@ function applyClassPromotions(body){
         if (!dryRun){
           sh.getRange(i + 1, cG + 1).setValue(r.to);
           try { logGroupChange(r.cardId, r.name, r.loc, oldG, r.to, 'переведення класів'); } catch(_l){}
-          try { _p27SetGroupFrom(r.loc, r.cardId, r.year + '-09', r.to); } catch(_p){}
+          if (_payAutoOn()){ try { payGroupTransfer({cardId:r.cardId, fromGroup:oldG, toGroup:r.to, fromMonth:r.year + '-09', dryRun:false, by:'переведення класів'}); } catch(_p){} }   // v7.433 (замість пілоту)
           t.sh.getRange(r.row, CLASS_HEADER.indexOf('Застосовано') + 1).setValue(stamp);
         }
         done.push({name:r.name, from:oldG, to:r.to});
