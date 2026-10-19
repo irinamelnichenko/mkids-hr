@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.440
+// m.kids CRM — Google Apps Script v7.441
+// v7.441: pay27Budget — «Бюджет навч» 2027 садочків із картки (покриття / лише додаткові / безкоштовно — 0), лише клітинки бюджету.
 // v7.440: роль COO прибрано — немає в жодному списку прав; вхід, токен і записи цієї ролі відхиляються.
 // v7.439: м'яке видалення карток (кошик «Клієнти_Видалені», прізвище для підтвердження, відновлення); пошук слідів і відновлення картки з версії файлу.
 // v7.437: чистка 2027 — SUM за межами аркуша (Школа 228), дубль картки з тим самим ПІБ — один рядок.
@@ -7179,7 +7180,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.440', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.441', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -7326,6 +7327,7 @@ function doGet(e) {
     else if (action === 'previewPayTermination')       result = payTermination({cardId:(e.parameter || {}).cardId, date:(e.parameter || {}).date, dryRun:true});   // v7.433 дія 2
     else if (action === 'previewPayTransfer')          result = payGroupTransfer({cardId:(e.parameter || {}).cardId, toGroup:(e.parameter || {}).toGroup, fromGroup:(e.parameter || {}).fromGroup, fromMonth:(e.parameter || {}).fromMonth, dryRun:true});   // v7.433 дія 3
     else if (action === 'previewPay27Clean')           result = pay27Clean({loc:(e.parameter || {}).loc, dryRun:true});   // v7.436 прев'ю чистки Payment 2027
+    else if (action === 'previewPay27Budget')          result = pay27Budget({loc:(e.parameter || {}).loc, dryRun:true});   // v7.441 прев'ю бюджету 2027 садочків
     else if (action === 'payFileRows')                 result = payFileRows(e.parameter || {});   // v7.435 read-only: блоки й рядки Payment року
     else if (action === 'clientTrace')                 result = clientTrace(e.parameter || {});         // v7.439 read-only: сліди картки в CRM і CONFIG
     else if (action === 'clientRevisions')             result = clientRevisions();                      // v7.439 read-only: версії файлу CRM
@@ -7415,6 +7417,7 @@ function doPost(e) {
     else if (body.action === 'payTermination')            result = payActionPost(payTermination, body);     // v7.433
     else if (body.action === 'payGroupTransfer')          result = payActionPost(payGroupTransfer, body);   // v7.433
     else if (body.action === 'pay27Clean')                result = pay27Clean(body);                        // v7.436 чистка Payment 2027 (CFO; dryRun)
+    else if (body.action === 'pay27Budget')               result = pay27Budget(body);                       // v7.441 бюджет навч 2027 садочків (CFO; dryRun)
     else if (body.action === 'groupRenameApply')          result = groupRenameApply(body);                  // v7.435 стандарт назв груп (CFO; dryRun)
     else if (body.action === 'setPayAuto')                result = setPayAuto(body);                        // v7.433 вимикач автозапуску (CFO)
     else if (body.action === 'pilot2027Remove')           result = pilot2027Remove(body);       // v7.432 відкат пілоту 2027 (CFO, dryRun)
@@ -9575,6 +9578,80 @@ function pay27Clean(body){
     return res;
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
   finally { if (lock){ try { lock.releaseLock(); } catch(_l){} } }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.441 БЮДЖЕТ НАВЧ 2027 — ЛИШЕ САДОЧКИ (рішення CFO 19.10.2026; файли Іра вже впорядкувала вручну).
+//   Структуру не чіпає: ні рядків, ні блоків, ні інших колонок — пише тільки клітинки «Бюджет навч» 12 місяців
+//   у рядках дітей, які вже є у файлі. Значення = сума договору з картки; місяці покриття передоплатою — 0;
+//   «Лише додаткові» / «Безкоштовно» — 0; договір з 2027 — 0 до місяця початку; розірвання — 0 після місяця розірвання.
+//   Не пише: рядок без картки, картка без суми, два рядки з тим самим ПІБ. Блок «Школа» у файлі Кар'єрної — пропускає.
+//   GET previewPay27Budget&loc= ; POST pay27Budget {loc, dryRun:false} (CFO).
+// ═══════════════════════════════════════════════════════════════════════════
+function _pay27KgLocs(){
+  return Object.keys(PAY_FILES_BY_YEAR[2027]).filter(function(l){
+    var reg = _getLocationPaymentRegistry(l);
+    return reg && !/управл|школ/i.test(String(reg.typ || '')) && !/^школа/i.test(l);
+  });
+}
+function pay27Budget(body){
+  try {
+    body = body || {};
+    var dryRun = (body.dryRun !== false), loc = String(body.loc || '').trim();
+    if (_pay27KgLocs().indexOf(loc) === -1) return {ok:false, error:'Лише садочки: ' + _pay27KgLocs().join(', ')};
+    if (!dryRun && !_payCfoOnly(body)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+    var f = _payFileFor(loc, 2027); if (!f) return {ok:false, error:'Файлу 2027 немає'};
+    var sh = f.sh, lr = sh.getLastRow(), lc = Math.min(sh.getLastColumn(), 1 + 12 * f.cpm);
+    var V = sh.getRange(1, 1, lr, lc).getValues(), F = sh.getRange(1, 1, lr, lc).getFormulas(), blocks = _payBlocks(V);
+    var subBlocks = _subLocsOfHost(loc).map(function(s){ return _nameFold(s.group || ''); });
+    var cards = _promoCards().list.filter(function(c){ return _nameFold(c.loc) === _nameFold(loc); });
+    var LIVE = ['active','adaptation','paused','future'];
+    var byName = {}; cards.forEach(function(c){ (byName[_nameFoldTight(c.name)] = byName[_nameFoldTight(c.name)] || []).push(c); });
+    var cnt = {}; for (var r = 3; r < lr; r++){ var n0 = trim(String(V[r][0] || '')); if (n0 && !isGroupHeaderRow(V[r], 1)) cnt[_nameFoldTight(n0)] = (cnt[_nameFoldTight(n0)] || 0) + 1; }
+    var bud = function(m){ return 1 + (m - 1) * f.cpm + f.LO.budNavch; };   // 0-based колонка «Бюджет навч» місяця m
+    var res = {ok:true, dryRun:dryRun, loc:loc, file:f.file, kids:0, withFee:[], zeroFlag:[], partial:[], noFee:[], noCard:[], dupRows:[], skippedSchool:0,
+      cells:0, changed:0, formulasReplaced:0, coverMonths:0}, byVal = {};
+    for (var i = 3; i < lr; i++){
+      var nm = trim(String(V[i][0] || '')); if (!nm || isGroupHeaderRow(V[i], 1)) continue;
+      var b = _payBlockOf(blocks, i + 1);
+      if (b && subBlocks.some(function(sb){ return sb && _nameFold(b.title).indexOf(sb) === 0; })){ res.skippedSchool++; continue; }
+      res.kids++;
+      var nk = _nameFoldTight(nm), grp = b ? b.title : '';
+      if (cnt[nk] > 1){ res.dupRows.push(nm + ' (рядок ' + (i + 1) + ', ' + grp + ')'); continue; }
+      var cs = byName[nk] || [];
+      if (!cs.length){ res.noCard.push(nm + ' (' + grp + ')'); continue; }
+      var c = cs.filter(function(x){ return LIVE.indexOf(x.status) !== -1; })[0] || cs[cs.length - 1];
+      var flag = c.dopOnly || c.free;
+      if (!flag && !(c.fee > 0)){ res.noFee.push(nm + ' (' + grp + ', статус ' + (c.status || '—') + ')'); continue; }
+      var fee = flag ? 0 : c.fee, why = [], vals = [];
+      for (var m = 1; m <= 12; m++){
+        var ym = '2027-' + ('0' + m).slice(-2), v = fee;
+        if (v && c.contract && c.contract.slice(0, 7) > ym){ v = 0; if (why.indexOf('договір з ' + c.contract) < 0) why.push('договір з ' + c.contract); }
+        if (v && c.end && c.end.slice(0, 7) < ym){ v = 0; if (why.indexOf('розірвано ' + c.end) < 0) why.push('розірвано ' + c.end); }
+        if (v){ var cov = null; try { cov = _coverFor(ym, c.id, c.name, c.loc); } catch(_c){} if (cov){ v = 0; res.coverMonths++; if (why.indexOf('покриття') < 0) why.push('покриття'); } }
+        vals.push(v);
+        var col = bud(m), was = V[i][col], wasF = String(F[i][col] || '');
+        res.cells++;
+        if (wasF || Number(was) !== v || was === ''){ res.changed++; if (wasF) res.formulasReplaced++;
+          var a1 = _colLetter(col) + (i + 1); (byVal[v] = byVal[v] || []).push(a1); }
+      }
+      if (flag) res.zeroFlag.push(nm + ' (' + (c.free ? 'Безкоштовно' : 'Лише додаткові') + ')');
+      else res.withFee.push({name:nm, group:grp, fee:fee, months:vals.filter(function(x){ return x; }).length});
+      if (!flag && why.length) res.partial.push(nm + ': ' + vals.map(function(x, k){ return x ? '' : (k + 1); }).filter(String).join(',') + ' = 0 (' + why.join('; ') + ')');
+    }
+    res.withFeeCount = res.withFee.length;
+    if (dryRun) return res;
+    var lock = LockService.getScriptLock(); lock.waitLock(30000);
+    try {
+      res.backup = _safeBackupSheet(sh, 'bud27');
+      Object.keys(byVal).forEach(function(v){ var L = byVal[v]; for (var k = 0; k < L.length; k += 400) sh.getRangeList(L.slice(k, k + 400)).setValue(Number(v)); });
+      SpreadsheetApp.flush();
+    } finally { try { lock.releaseLock(); } catch(_l){} }
+    try { _moneyJournalLog([{by:body.by || 'система', route:'pay27Budget', loc:loc, name:'', year:2027, month:'', col:'Бюджет-навч 2027',
+      before:'', after:res.withFeeCount + ' дітей, клітинок змінено ' + res.changed, reason:'бюджет 2027 = сума договору з картки'}]); } catch(_j){}
+    try { _cacheBump('pay'); } catch(_cb){}
+    return res;
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
