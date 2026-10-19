@@ -616,14 +616,14 @@ details.card>summary::-webkit-details-marker{display:none}details.card[open]>sum
         <span class="ni">🎁</span> Акції та знижки
       </div>
       <script>
-      /* v7.414: «Акції та знижки» — CFO/CEO/COO/HR (керують) і директор (пропонує, бачить свою локацію). */
+      /* v7.414: «Акції та знижки» — CFO/CEO/HR (керують) і директор (пропонує, бачить свою локацію). */
       window._revealPromosMenu = function(){
         var el = document.getElementById('navPromos'); if (!el) return;
         var u = null;
         try { u = (typeof S !== 'undefined' && S && S.user) ? S.user : null; } catch(e){}
         if (!u){ try { var s = JSON.parse(localStorage.getItem('mkids_session') || 'null'); u = (s && s.user) || null; } catch(e){} }
         var r = u ? String(u.role || '').toLowerCase().trim() : '';
-        el.style.display = (['cfo','ceo','coo','hr','director'].indexOf(r) !== -1) ? '' : 'none';
+        el.style.display = (['cfo','ceo','hr','director'].indexOf(r) !== -1) ? '' : 'none';
       };
       window._revealPromosMenu();
       window.addEventListener('load', function(){ setTimeout(window._revealPromosMenu, 600); });
@@ -658,9 +658,9 @@ details.card>summary::-webkit-details-marker{display:none}details.card[open]>sum
         <span class="ni">🗺️</span> Карта клієнтів
       </div>
       <script>
-      /* v7.371: «Карта клієнтів» — CFO/CEO/COO (усі локації) і директорка (своя). Окремо від матриці PERMISSIONS,
+      /* v7.371: «Карта клієнтів» — CFO/CEO (усі локації) і директорка (своя). Окремо від матриці PERMISSIONS,
          як «Ліди»: показ одразу після пункту, повтор після applyRoleVisibility (вхід/зміна ролі). */
-      window.NAV_MAP_ROLES = ['cfo','ceo','coo','director'];
+      window.NAV_MAP_ROLES = ['cfo','ceo','director'];
       window._revealMapMenu = function(){
         var el = document.getElementById('navClientMap'); if (!el) return;
         var u = null;
@@ -2544,7 +2544,7 @@ function readSession(){
     if (Date.now() - s.t > SESSION_TTL_MS) return null;
     // Self-heal stale sessions: normalize role to lowercase + blank loc for
     // network roles (бо у листі вони мають loc='Менеджмент' що ламає фільтри).
-    var NET = ['hr','cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo'];
+    var NET = ['hr','cfo','ceo','cco','rnd_director','hr_trainer','legal','cmo'];
     s.user.role = String(s.user.role || '').toLowerCase().trim();
     if (NET.indexOf(s.user.role) !== -1 && s.user.loc !== ''){
       s.user.origLoc = s.user.loc;
@@ -2575,14 +2575,14 @@ function _showStaleSession(){
 
 // ── НОВИЙ ЛОГІН: 3 вкладки (Менеджмент / Директор / Медсестра) ────────────
 const ROLE_EMOJI_NEW = {
-  cfo:'💰', ceo:'🏢', cco:'📈', coo:'⚙️',
+  cfo:'💰', ceo:'🏢', cco:'📈',
   rnd_director:'🎓', hr_trainer:'📚', legal:'⚖️', cmo:'📣', founder:''
 };
 const ROLE_SHORT_NEW = {
-  cfo:'CFO', ceo:'CEO', cco:'CCO', coo:'COO',
+  cfo:'CFO', ceo:'CEO', cco:'CCO',
   rnd_director:'R&D', hr_trainer:'L&D', legal:'Legal', cmo:'CMO', founder:'Founder'
 };
-const ROLE_ORDER_NEW = ['cfo','founder','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo'];
+const ROLE_ORDER_NEW = ['cfo','founder','ceo','cco','rnd_director','hr_trainer','legal','cmo'];
 
 // Hardcoded список локацій для логіна (садочки → школи → управління).
 const LOGIN_LOCATIONS = [
@@ -2837,11 +2837,6 @@ const PERMISSIONS = {
     'finance','medical','salary-mgmt','hr-actions'
   ],
 
-  coo: [
-    // v7.326: COO — лише фінансові пункти + Картка локації (решту прибрано за запитом)
-    'opex','salary','categories','loccard','finance'
-  ],
-
   rnd_director: [
     /*R&D-opex*/ 'opex',
     /*R&D+*/ 'card-child-development','card-child-health','activities-edit','attendance-edit',
@@ -2945,10 +2940,10 @@ const PERM_LOCAL_ACTION = {
 };
 
 // Ролі мережевого рівня — бачать всі локації (на відміну від director/nurse).
-const NETWORK_ROLES = ['hr','cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo'];
+const NETWORK_ROLES = ['hr','cfo','ceo','cco','rnd_director','hr_trainer','legal','cmo'];
 // v7.326: верхні пункти «Ліди» / «Контроль заповнення» / «Звірка платежів» / «Звірка ЗП»
 // НЕ для цих мережевих ролей. Окремий список, бо NETWORK_ROLES ще й дає доступ до всіх локацій.
-var NAV_TOP_DENY = ['ceo','coo','hr_trainer','rnd_director'];
+var NAV_TOP_DENY = ['ceo','hr_trainer','rnd_director'];
 function canSeeTopNet(role){ var r = String(role || '').toLowerCase().trim();
   return NETWORK_ROLES.indexOf(r) !== -1 && NAV_TOP_DENY.indexOf(r) === -1; }
 function isNetworkRole(role){ return NETWORK_ROLES.indexOf(String(role || '').toLowerCase()) !== -1; }
@@ -3020,7 +3015,7 @@ function isAbsenceDateAllowed(dateISO, type, toISO){
 
 function roleLabel(role){
   return ({
-    hr:'CFO', cfo:'CFO', ceo:'CEO', cco:'CCO', coo:'COO',
+    hr:'CFO', cfo:'CFO', ceo:'CEO', cco:'CCO',
     rnd_director:'R&D Director', hr_trainer:'L&D', legal:'Legal', cmo:'CMO',
     director:'Директор', nurse:'Медсестра'
   })[role] || role;
@@ -3032,7 +3027,7 @@ function locLabel(){
 }
 function avatarText(role){
   return ({
-    hr:'CFO', cfo:'CFO', ceo:'CEO', cco:'CCO', coo:'COO',
+    hr:'CFO', cfo:'CFO', ceo:'CEO', cco:'CCO',
     rnd_director:'R&D', hr_trainer:'L&D', legal:'Lg', cmo:'CMO',
     director:'Д', nurse:'М'
   })[role] || '?';

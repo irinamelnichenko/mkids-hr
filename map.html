@@ -256,14 +256,14 @@ ul.miss li{margin:2px 0}
         <span class="ni">🎁</span> Акції та знижки
       </div>
       <script>
-      /* v7.414: «Акції та знижки» — CFO/CEO/COO/HR (керують) і директор (пропонує, бачить свою локацію). */
+      /* v7.414: «Акції та знижки» — CFO/CEO/HR (керують) і директор (пропонує, бачить свою локацію). */
       window._revealPromosMenu = function(){
         var el = document.getElementById('navPromos'); if (!el) return;
         var u = null;
         try { u = (typeof S !== 'undefined' && S && S.user) ? S.user : null; } catch(e){}
         if (!u){ try { var s = JSON.parse(localStorage.getItem('mkids_session') || 'null'); u = (s && s.user) || null; } catch(e){} }
         var r = u ? String(u.role || '').toLowerCase().trim() : '';
-        el.style.display = (['cfo','ceo','coo','hr','director'].indexOf(r) !== -1) ? '' : 'none';
+        el.style.display = (['cfo','ceo','hr','director'].indexOf(r) !== -1) ? '' : 'none';
       };
       window._revealPromosMenu();
       window.addEventListener('load', function(){ setTimeout(window._revealPromosMenu, 600); });
@@ -298,9 +298,9 @@ ul.miss li{margin:2px 0}
         <span class="ni">🗺️</span> Карта клієнтів
       </div>
       <script>
-      /* v7.371: «Карта клієнтів» — CFO/CEO/COO (усі локації) і директорка (своя). Окремо від матриці PERMISSIONS,
+      /* v7.371: «Карта клієнтів» — CFO/CEO (усі локації) і директорка (своя). Окремо від матриці PERMISSIONS,
          як «Ліди»: показ одразу після пункту, повтор після applyRoleVisibility (вхід/зміна ролі). */
-      window.NAV_MAP_ROLES = ['cfo','ceo','coo','director'];
+      window.NAV_MAP_ROLES = ['cfo','ceo','director'];
       window._revealMapMenu = function(){
         var el = document.getElementById('navClientMap'); if (!el) return;
         var u = null;
@@ -631,10 +631,10 @@ var SESSION_KEY='mkids_session', SESSION_TTL_MS = 7 * 24 * 3600 * 1000;
   _checkTok();   // v7.288: і одразу при завантаженні сторінки
 })();
 
-var NETWORK_ROLES=['hr','cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo'];
+var NETWORK_ROLES=['hr','cfo','ceo','cco','rnd_director','hr_trainer','legal','cmo'];
 // v7.326: верхні пункти «Ліди» / «Контроль заповнення» / «Звірка платежів» / «Звірка ЗП»
 // НЕ для цих мережевих ролей. Окремий список, бо NETWORK_ROLES ще й дає доступ до всіх локацій.
-var NAV_TOP_DENY = ['ceo','coo','hr_trainer','rnd_director'];
+var NAV_TOP_DENY = ['ceo','hr_trainer','rnd_director'];
 function canSeeTopNet(role){ var r = String(role || '').toLowerCase().trim();
   return NETWORK_ROLES.indexOf(r) !== -1 && NAV_TOP_DENY.indexOf(r) === -1; }
 
@@ -712,10 +712,6 @@ var PERMISSIONS = {
     'card-child-vacations','card-child-payments','card-child-history',
     'card-child-notes','card-child-health',
     'finance','medical','salary-mgmt','hr-actions'
-  ],
-  coo: [
-    // v7.326: COO — лише фінансові пункти + Картка локації (решту прибрано за запитом)
-    'opex','salary','categories','loccard','finance'
   ],
   rnd_director: [
     /*R&D-opex*/ 'opex',
@@ -915,7 +911,7 @@ function goPerm(perm){
 
 function roleLabel(role){
   return ({
-    hr:'CFO', cfo:'CFO', ceo:'CEO', cco:'CCO', coo:'COO',
+    hr:'CFO', cfo:'CFO', ceo:'CEO', cco:'CCO',
     rnd_director:'R&D Director', hr_trainer:'L&D', legal:'Legal', cmo:'CMO',
     director:'Директор', nurse:'Медсестра'
   })[String(role||'').toLowerCase()] || role;
@@ -923,7 +919,7 @@ function roleLabel(role){
 
 function avatarText(role){
   return ({
-    hr:'CFO', cfo:'CFO', ceo:'CEO', cco:'CCO', coo:'COO',
+    hr:'CFO', cfo:'CFO', ceo:'CEO', cco:'CCO',
     rnd_director:'R&D', hr_trainer:'L&D', legal:'Lg', cmo:'CMO',
     director:'Д', nurse:'М'
   })[String(role||'').toLowerCase()] || '?';
@@ -997,7 +993,7 @@ function markKey(child,date,itemId){ return child+'||'+date+'||'+itemId; }
 // ═══ v7.371 КАРТА КЛІЄНТІВ ═══════════════════════════════════════════════════
 // Дані — getClientMap (лише ПІБ/група/локація/статус/координати; директорці бекенд віддає тільки її локацію).
 // Точка садочка — setLocGeo (ставиться кліком по карті), точку дитини можна пересунути — setClientGeo.
-var MAP_ROLES = ['cfo','ceo','coo','director'];
+var MAP_ROLES = ['cfo','ceo','director'];
 var LOC_COLORS = ['#e6194b','#3cb44b','#4363d8','#f58231','#911eb4','#0ea5b7','#f032e6','#9a6324','#469990','#800000',
                   '#808000','#000075','#d69e00','#2f855a','#b83280','#2b6cb0','#c05621','#553c9a','#718096','#d53f8c'];
 var GEO_LABEL = {ok:'знайдено', picked:'обрано зі списку', manual:'поставлено вручну', approx:'приблизно (вулиця)',

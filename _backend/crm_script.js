@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.439
+// m.kids CRM — Google Apps Script v7.440
+// v7.440: роль COO прибрано — немає в жодному списку прав; вхід, токен і записи цієї ролі відхиляються.
 // v7.439: м'яке видалення карток (кошик «Клієнти_Видалені», прізвище для підтвердження, відновлення); пошук слідів і відновлення картки з версії файлу.
 // v7.437: чистка 2027 — SUM за межами аркуша (Школа 228), дубль картки з тим самим ПІБ — один рядок.
 // v7.436: pay27Clean — чистка Payment 2027: лише чинні групи й діти жовтня 2026, блоки підряд, бюджет із картки, CF/PL/OPEX на нові заголовки.
@@ -979,10 +980,10 @@ var HR_AUDIT_HEADER   = ['ts','actorId','actorName','action','rowNum','before_js
 // Усе lowercase: helper-функції нижче порівнюють case-insensitive
 // (бо у Користувачі ролі написані змішано: 'CFO', 'CEO', 'RnD_director',
 // 'HR_trainer', 'Legal', а director / nurse / vyhovatel — lowercase).
-var EMP_MGMT_ROLES    = ['cfo','ceo','cco','coo','cmo','hr','hr_trainer','rnd_director','legal'];
+var EMP_MGMT_ROLES    = ['cfo','ceo','cco','cmo','hr','hr_trainer','rnd_director','legal'];
 var EMP_DIR_ROLES     = ['director'];
 var EMP_VIEW_ROLES    = ['nurse','vyhovatel'];
-var EMP_DELETE_ROLES  = ['cfo','ceo','coo','hr','hr_trainer'];
+var EMP_DELETE_ROLES  = ['cfo','ceo','hr','hr_trainer'];
 
 var MONTHS_UA      = ['вересень','жовтень','листопад','грудень','січень','лютий','березень','квітень','травень','червень','липень','серпень'];
 var MONTHS_JS      = [8,9,10,11,0,1,2,3,4,5,6,7];
@@ -7149,6 +7150,7 @@ function _authGate(action, token, method){
   _CURRENT_AUTH = null; _AUTH_STALE = ''; _ENTRY_AUTHOR_CACHE = null;   // v7.372: автор — на кожен запит заново
   if (action === 'ping' || action === 'authenticate') return null;       // завжди без токена
   var payload = _verifyToken(token);
+  if (payload && _roleRetired(payload.role)) payload = null;              // v7.440: токен скасованої ролі (COO) — як без токена
   if (payload){ _CURRENT_AUTH = _founderAsCfo(payload); return null; }    // валідний токен
   // v7.333: причина — «немає» чи токен є, але не прийнятий (чужий підпис / прострочено). В останньому
   // разі відповідь несе authStale — сторінка один раз просить увійти знову (у режимі «лише записувати»
@@ -7177,7 +7179,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.439', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.440', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -18524,7 +18526,7 @@ function getOverviewAnalytics(year, month) {
 }
 
 var USERS_SHEET_NAME = 'Користувачі';
-var VALID_USER_ROLES = ['cfo','ceo','cco','coo','rnd_director','hr_trainer','legal','cmo','founder'];   // v7.404: founder — власник, лише перегляд
+var VALID_USER_ROLES = ['cfo','ceo','cco','rnd_director','hr_trainer','legal','cmo','founder'];   // v7.404: founder — власник, лише перегляд
 
 function _getUsersSheet() {
   var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
@@ -18609,7 +18611,7 @@ function authenticate(login, password) {
     // v7.79: CFO (id=1) не блокується НІКОЛИ. Для решти — якщо заблоковано, реджект до перевірки пароля.
     if (isLocked && Number(u.id) !== 1)
       return {ok: false, error: 'too_many_attempts', message: 'Забагато спроб. Спробуйте через 15 хвилин.'};
-    if (!u.active) return {ok: false, error: 'Користувача деактивовано'};
+    if (!u.active || _roleRetired(u.role)) return {ok: false, error: 'Користувача деактивовано'};   // v7.440: роль COO скасовано
     // v6.7: паролі — SHA-256. Plaintext-гілка лишена як страховка на
     // час міграції (після addAllDirectorsAndNurses() всі рядки хешовані).
     var stored = String(u.password == null ? '' : u.password);
@@ -32307,7 +32309,7 @@ var TASKS_HEADER = ['id','created_at','author','assignee','title','description',
 var TASKS_ACT_HEADER = ['id','task_id','author','type','content','file_url','created_at'];
 
 // Ролі-менеджмент: ставлять задачі (tasks-create). director — лише отримує.
-var TASK_MGMT_ROLES = ['cfo','ceo','cco','coo','hr','cmo','rnd_director','hr_trainer','legal'];
+var TASK_MGMT_ROLES = ['cfo','ceo','cco','hr','cmo','rnd_director','hr_trainer','legal'];
 
 function _getTasksSheet(create){
   var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
@@ -32962,7 +32964,7 @@ function addAllVyhovateli(){
 // ── Керування паролями локаційних користувачів (v6.7) ──────────────────────
 // Пише реальні SHA-256 паролі у лист "Користувачі". Раніше сторінка
 // налаштувань редагувала лише localStorage — пароль входу не змінювався.
-var PW_ADMIN_ROLES = ['cfo','hr','ceo','cco','coo'];
+var PW_ADMIN_ROLES = ['cfo','hr','ceo','cco'];
 
 // Перевірка ролі через session: actorId — id поточного користувача;
 // роль перечитується з листа "Користувачі" (не довіряємо клієнту).
@@ -32998,7 +33000,7 @@ function fixPolyakova(){
 function setUserPassword(username, newPassword, actorId){
   try {
     if (!_isPasswordAdmin(actorId))
-      return {ok:false, error:'Лише CFO/CEO/CCO/COO можуть міняти паролі'};
+      return {ok:false, error:'Лише CFO/CEO/CCO можуть міняти паролі'};
     username    = String(username || '').trim();
     newPassword = String(newPassword == null ? '' : newPassword);
     if (!username)    return {ok:false, error:'Не вказано логін'};
@@ -33047,7 +33049,7 @@ function _reseedAllLocationPasswords(){
 function resetAllLocationPasswords(actorId){
   try {
     if (!_isPasswordAdmin(actorId))
-      return {ok:false, error:'Лише CFO/CEO/CCO/COO можуть міняти паролі'};
+      return {ok:false, error:'Лише CFO/CEO/CCO можуть міняти паролі'};
     var r = _reseedAllLocationPasswords();
     Logger.log('[resetAllLocationPasswords] оновлено %s, відсутні: %s',
       r.updated, JSON.stringify(r.missing));
@@ -33548,7 +33550,7 @@ function _runClassifyDiagnostic(locFilter){
 // Backend для додавання/редагування/soft-delete співробітника.
 // Permission-модель:
 //   director (own loc) | mgmt (any loc): CRUD; nurse/vyhovatel (own loc): read-only
-//   delete (soft, fired=today): тільки cfo/ceo/hr/coo
+//   delete (soft, fired=today): тільки cfo/ceo/hr
 // Audit log: CONFIG.HR_Audit [ts, actorId, actorName, action, rowNum, before, after]
 // Колонки P (formula) і Q (reserved) не чіпаються при update.
 
@@ -33678,7 +33680,7 @@ function _getActor(actorId){
   for (var i = 1; i < data.length; i++){
     if (Number(data[i][0]) === Number(actorId)){
       var u = _parseUserRow(data[i]);
-      if (!u.active) throw new Error('Actor user is inactive');
+      if (!u.active || _roleRetired(u.role)) throw new Error('Actor user is inactive');
       return _founderAsCfo(u);   // v7.404: власник читає як CFO
     }
   }
@@ -33688,6 +33690,9 @@ function _getActor(actorId){
 // Case-insensitive порівняння ролі — бо в Користувачі є 'CFO'/'CEO'/'Legal',
 // а наші константи lowercase.
 function _roleKey(r){ return String(r == null ? '' : r).trim().toLowerCase(); }
+// v7.440: скасовані ролі — вхід, токен і записи відхиляються (операційного директора більше немає).
+var RETIRED_ROLES = ['coo'];
+function _roleRetired(r){ return RETIRED_ROLES.indexOf(_roleKey(r)) !== -1; }
 
 function _empHasMgmtRole(role){ return EMP_MGMT_ROLES.indexOf(_roleKey(role)) !== -1; }
 function _empHasDirRole(role){  return EMP_DIR_ROLES.indexOf(_roleKey(role))  !== -1; }
@@ -34491,7 +34496,7 @@ function deleteEmployee(actorId, rowNum){
 //
 // Permission-модель:
 //   view :  mgmt (всі ролі) | director/nurse/vyhovatel (own loc)
-//   edit :  cfo/ceo/coo/cco (any loc) | director (own loc)
+//   edit :  cfo/ceo/cco (any loc) | director (own loc)
 //   read-only mgmt :  cmo, hr, hr_trainer, rnd_director, legal
 // Audit реюзає HR_Audit (action: 'pred_save_lesson' / 'pred_delete_lesson').
 
@@ -34556,7 +34561,7 @@ var CATALOG_TO_NORM_MAP = {
   'Баранов Іван фізкультура':    'Фізкультура Баранов'
 };
 
-var PRED_EDIT_ROLES_ANY = ['cfo','ceo','coo','cco'];   // будь-яка локація
+var PRED_EDIT_ROLES_ANY = ['cfo','ceo','cco'];   // будь-яка локація
 // director (EMP_DIR_ROLES) — тільки своя локація
 
 // Seed для Predmetnyky_Norms (12 рядків — 2 регіони × 6 предметів).
@@ -36449,7 +36454,7 @@ function deletePredmetnykyAssignment(actorId, id){
 // POST {action:'clearAllPredmetnykyLessons', actorId, location}
 // DESTRUCTIVE: видаляє ВСІ заняття для конкретної локації (по всіх
 // місяцях/групах/предметах). Корисно для тестових скидань.
-// Permission: cfo/ceo/coo/cco або director у власній локації.
+// Permission: cfo/ceo/cco або director у власній локації.
 function clearAllPredmetnykyLessons(actorId, location, opts){
   try {
     opts = opts || {};
@@ -38158,7 +38163,7 @@ var CARD_COL_REFERRER  = 'Рекомендувач (ID)';
 var CARD_COL_SIBLINGS  = 'Брат / сестра (ID)';
 var CARD_COL_PROMO     = 'Акція (ID)';
 var CARD_COL_REGFROM   = 'Реєстр знижок з';   // v7.418: лише такі картки працюють через реєстр; решта — ручні клітинки як було
-var PROMO_OFFICE_ROLES = ['cfo','ceo','coo','hr'];
+var PROMO_OFFICE_ROLES = ['cfo','ceo','hr'];
 var PROMO_ORDER        = {R:0, A2:1, A3:2, A1:3, T:4, VAC:5, SICK:6};   // v7.423 хвороба — окремо від відпустки
 var PROMO_ORDER_NAME   = {0:'перенесено', 1:'сім\'я', 2:'передоплата', 3:'друг', 4:'тимчасова', 5:'відпустка', 6:'хвороба'};
 // v7.424 фільтр локацій: loc (одна) або locs (через кому — група «Садочок / Школа / Управління»); порожньо — усі
@@ -38239,7 +38244,7 @@ function _promoActor(body){
 function _promoIsOffice(a){ return !!(a && PROMO_OFFICE_ROLES.indexOf(_roleKey(a.role)) !== -1); }
 function _promoIsDirector(a){ return !!(a && _roleKey(a.role) === 'director'); }
 function _promoWho(a, fb){ return _entryAuthor(a && a.name ? (a.name + ' (' + String(a.role || '').toUpperCase() + ')') : (fb || '')); }
-var PROMO_DENIED = {ok:false, code:'PERM_DENIED', error:'Лише CFO / CEO / COO / HR'};
+var PROMO_DENIED = {ok:false, code:'PERM_DENIED', error:'Лише CFO / CEO / HR'};
 // GET-прев'ю: копія параметрів із примусовим dryRun (POST-відповіді Apps Script у браузері часто приходять як HTML).
 function _promoDry(p){ var o = {}; Object.keys(p || {}).forEach(function(k){ o[k] = p[k]; }); o.dryRun = true; delete o._internal; return o; }
 
@@ -38323,7 +38328,7 @@ function getPromos(params){
 }
 
 // POST savePromo {promo:{id?, name, type, appliesTo, conditions, rule, start, end, locs, status?}}
-//   CFO/CEO/COO/HR — створює/редагує, статус «діє» (або переданий). Директор — лише НОВА тимчасова
+//   CFO/CEO/HR — створює/редагує, статус «діє» (або переданий). Директор — лише НОВА тимчасова
 //   пропозиція своєї локації зі статусом «на підтвердженні»; ні на що не впливає до підтвердження.
 function savePromo(body){
   try {
@@ -40002,7 +40007,7 @@ function pilot2027Payment(body){
 // ═══════════════════════════════════════════════════════════════════════════
 // v7.420 ПЕРЕВЕДЕННЯ КЛАСІВ З 1 ВЕРЕСНЯ (школи)
 //   Система пропонує 1→2→3→4 (буква/слово класу зберігається: «2D» → «3D», «3 клас» → «4 клас»); 4-й клас → випуск.
-//   Директор (своя локація) або CFO/CEO/COO/HR у червні–серпні бачить список і підтверджує по кожній дитині:
+//   Директор (своя локація) або CFO/CEO/HR у червні–серпні бачить список і підтверджує по кожній дитині:
 //   «перевести» (можна змінити клас) / «лишається» (другий рік) / «вибуває». БЕЗ ПІДТВЕРДЖЕННЯ НІЧОГО НЕ МІНЯЄТЬСЯ.
 //   1 вересня (нічний прогін або кнопка) підтверджені «перевести» → «Група» в картці + журнал зміни групи +
 //   Payment_27: CE/CF і група по місяцях з вересня. «Вибуває» — лише нагадування оформити випуск/розірвання.
