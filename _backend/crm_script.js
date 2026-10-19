@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.441
+// m.kids CRM — Google Apps Script v7.442
+// v7.442: реєстр 2027 — 11 садочків на файли з папки «Ukraine 27» (школи без змін).
 // v7.441: pay27Budget — «Бюджет навч» 2027 садочків із картки (покриття / лише додаткові / безкоштовно — 0), лише клітинки бюджету.
 // v7.440: роль COO прибрано — немає в жодному списку прав; вхід, токен і записи цієї ролі відхиляються.
 // v7.439: м'яке видалення карток (кошик «Клієнти_Видалені», прізвище для підтвердження, відновлення); пошук слідів і відновлення картки з версії файлу.
@@ -7180,7 +7181,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.441', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.442', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -8965,19 +8966,20 @@ function movePaymentRowsToGroup(body){
 //   «Переходи_Payment» (CONFIG). Автоматичний запуск зі збереження картки — лише коли увімкнено PAY_AUTO (властивість скрипта).
 //   Локації Управління не чіпаємо.
 // ═══════════════════════════════════════════════════════════════════════════
+// v7.442: садочки — файли, які CFO оновила вручну в папці «Ukraine 27» (19.10.2026); школи — старі ID.
 var PAY_FILES_BY_YEAR = {
   2027: {
-    'Осокорки':       '1g6YbCN0LWXnYgIeClcqZE3OJKRVsygDTadVt8ybSTbo',
-    'Позняки':        '1V7RqV5L0FE30ame8Xe_tew8X5YZKYOpKUYA31Bj29_s',
-    'Тичини':         '1qFrzJARzzlnTMgAW1Yj88ZsMlt-BTBrYqq80OGoduGU',
-    "Кар'єрна":       '1XkrBpF1q-GuRCcqdpOl5V-gZ6s5NKjLs7AB_i74DvKQ',
-    'Голосієво':      '1yp3hCjebrKXPDsIUzUabwz8XayMU9oeNjAuarBtd97g',
-    'Пуща':           '1CyvAhVlBQyl3Bi1W0S4JxYDASwlC-C7W3P37_InsWEU',
-    'Оранж':          '1ipEWRFc-3hXr5pVRaW1IFei59RWhRzO5NvEljhvK4M4',
-    'Борщагівка':     '15b0cGnjvJ8_1hErTE54fTf_qG14F66Pg_ahGt3Q4Egs',
-    'Бровари':        '1YauDPNMCrQqMT925DSpWEyNF6jj923hvOYKfNCKmsuE',
-    'Кругла':         '1hp95tLpuEdEmyGY9vm4xbxZpU-XTOV5wpPu0LjrBRQY',
-    'Бігова':         '1X6z2ApswXQ5ircEVSdFkRzq1wFIGNWU0erJH9nDsWTc',
+    'Осокорки':       '1LvSpKnMii9l5h-O_CA6ZABh2CmR0n_ZdFJG7uyZfNbw',
+    'Позняки':        '1UXaWYvESUBmV5sQcRC5EZMEAptaJwT5OsbySfZBr7Pc',
+    'Тичини':         '15Cnppz0QZcdFjJxxgfTcvziopKWsmaMxXcp2BMPsWDE',
+    "Кар'єрна":       '1JtlSZTRM3LkJXZl9x0A8TNP0VVrfS4JCjkbf6qCZQKQ',
+    'Голосієво':      '18Y12bru2I46POjG0i2tdF5FRjwl0V2zF4XfU3PW_SiU',
+    'Пуща':           '1wB5B4y6M4xg1xmLVhdWvvvNN9ki4KqF3EITHFDv5sCM',
+    'Оранж':          '1_mvhVRd3Vst3wNdzYnwlXKvpv22cDo4tI12xVnKRhos',
+    'Борщагівка':     '177NbKwgOHkpr9j1-KpdaNaG8iSJu1JCNqIpI284JVHk',
+    'Бровари':        '1uITJD2i6efLqa3gS_sXykgWys75bHP7w2V_kGkr7-Ec',
+    'Кругла':         '1-5j7y6Wyx-0hjoSofWWRaiCJ2mOWP_HIgYZR9JCy9WU',
+    'Бігова':         '1aFav6DhwJUrWUhjssYH1JstPJTxfZUoH_GC9SoCYt5I',
     'Школа Осокорки': '1fzBOVCir1gASG9kZGyUauHyTLSMTWMOG_e-37Bevb8o',
     'Школа 228':      '14nGMKZtjpa0Ba4VRu6qcVb0uG9PreYPcvwXKzyNiMZY'
   }
@@ -39775,7 +39777,7 @@ function _feeChangeOnCardUpdate(data, oldRow, sheet, rowNum){
 //   GET previewPilot2027&loc= — пробний прогін; POST pilot2027Payment {loc, dryRun:false, replace?} — запис (лише CFO).
 // ═══════════════════════════════════════════════════════════════════════════
 var PILOT_2027 = {
-  'Тичини':         {fileId:'1qFrzJARzzlnTMgAW1Yj88ZsMlt-BTBrYqq80OGoduGU', file:'Тичини_27'},
+  'Тичини':         {fileId:'1qFrzJARzzlnTMgAW1Yj88ZsMlt-BTBrYqq80OGoduGU', file:'Тичини_27'},   // старий файл (не реєстр 2027)
   'Школа Осокорки': {fileId:'1fzBOVCir1gASG9kZGyUauHyTLSMTWMOG_e-37Bevb8o', file:'Осокорки школа_27'}
 };
 var P27_YEAR = 2027, P27_TAB = 'Payment_27', P27_GROUPS = 'Групи', P27_FIRST = 5;   // рядок 4 — РАЗОМ, діти з 5-го
