@@ -6556,6 +6556,22 @@ function renderAttendance(){
   main.innerHTML=migBanner+typeChips+infoLine+modeBar+stats+content;
 }
 
+// v7.438: підсумок ПО КОЖНОМУ ДНЮ під сіткою (Тиждень / Місяць): присутні, хворі, відпустка, інше (відсутні).
+//   ids — діти, що показані в сітці; tail — скільки підсумкових колонок праворуч (у «Місяці» — 4: ✅ 🤒 🏖 🚫).
+function attDayFoot(days, ids, tail){
+  var ROWS=[['present','✅ Присутні','var(--green)'],['sick','🤒 Хворі','var(--orange)'],['vacation','🏖 Відпустка','var(--blue2)'],['absent','🚫 Інше','var(--red2)']];
+  return '<tfoot>'+ROWS.map(function(r, ri){
+    var tot=0, bt=(ri===0?';border-top:2px solid var(--gray2)':'');
+    var cells=days.map(function(d){
+      var att=S.att[d]||{}, n=0; ids.forEach(function(id){ if((att[id]||'')===r[0]) n++; }); tot+=n;
+      return '<td style="text-align:center;font-size:11px;font-weight:700;color:'+r[2]+';background:#f8fafc'+bt+'">'+(n||'')+'</td>';
+    }).join('');
+    var tailHtml='';
+    for(var k=0;k<tail;k++) tailHtml+='<td style="text-align:center;font-size:11px;font-weight:700;color:'+r[2]+';background:#f8fafc'+bt+'">'+(k===ri?tot:'')+'</td>';
+    return '<tr><td class="nc" style="position:sticky;left:0;z-index:1;background:#f8fafc;font-size:11px;font-weight:600;color:var(--gray)'+bt+'">'+r[1]+'</td>'+cells+tailHtml+'</tr>';
+  }).join('')+'</tfoot>';
+}
+
 function renderAttendanceWeek(locs,group){
   var days=attWeekDays(S.attWeek);
   var prevWeek=attAddDays(S.attWeek,-7), nextWeek=attAddDays(S.attWeek,7);
@@ -6575,7 +6591,7 @@ function renderAttendanceWeek(locs,group){
     +days.map(function(d){ var dow=pd(d).getDay(); return '<th style="min-width:70px;'+(d===todayStr?'background:#e8f8f0;color:var(--green)':'')+'">'+DAY_UA[dow]+'<br><span style="font-weight:400;font-size:10px">'+fmtD(d)+'</span></th>'; }).join('')
     +'</tr>';
 
-  var rows='';
+  var rows='', shownIds=[];   // v7.438 діти в сітці — для підсумку по днях
   locs.forEach(function(loc){
     var locGroups=attGroups(loc);
     if(!locGroups.length) return;
@@ -6586,6 +6602,7 @@ function renderAttendanceWeek(locs,group){
       g.children.forEach(function(ch){
         var streak=getSickStreak(ch.id,todayStr);
         var streakHtml=streak>=3?'<span class="att-streak">'+streak+'д🤒</span>':'';
+        shownIds.push(ch.id);
         rows+='<tr><td class="nc" title="'+esc(ch.name)+'">'+esc(ch.name.split(' ').slice(0,2).join(' '))+streakHtml+'</td>';
         days.forEach(function(d){
           var st=(S.att[d]||{})[ch.id]||'';
@@ -6600,7 +6617,7 @@ function renderAttendanceWeek(locs,group){
 
   if(!rows) return '<div class="empty"><span class="ei">👶</span><h4>Немає дітей для цієї локації</h4><p>Завантажте дані оплат</p></div>';
 
-  return nav+'<div class="att-wrap"><table class="att-table"><thead>'+thead+'</thead><tbody>'+rows+'</tbody></table></div>'
+  return nav+'<div class="att-wrap"><table class="att-table"><thead>'+thead+'</thead><tbody>'+rows+'</tbody>'+attDayFoot(days,shownIds,0)+'</table></div>'
     +'<p style="font-size:11px;color:var(--gray);margin-top:8px">Клікайте по кнопці щоб змінити статус: — → ✅ → 🤒 → 🏖 → 🚫 → —</p>';
 }
 
@@ -6689,7 +6706,7 @@ function renderAttendanceMonth(locs,group){
     +'</tr></thead>';
 
   var tbody='<tbody>';
-  var anyRows=false;
+  var anyRows=false, shownIds=[];   // v7.438
   locs.forEach(function(loc){
     var locGroups=attGroups(loc);
     if(!locGroups.length) return;
@@ -6699,6 +6716,7 @@ function renderAttendanceMonth(locs,group){
       anyRows=true;
       tbody+='<tr class="grp-row"><td colspan="'+(days.length+5)+'">📚 '+esc(g.group)+(_grpTail(g.group,g.teacher)?' · '+esc(_grpTail(g.group,g.teacher)):'')+'</td></tr>';
       g.children.forEach(function(ch){
+        shownIds.push(ch.id);
         var cp=0,cs=0,cv=0,ca=0;
         var cells=days.map(function(d){
           var st=(S.att[d]||{})[ch.id]||'';
@@ -6727,7 +6745,7 @@ function renderAttendanceMonth(locs,group){
 
   return nav
     +'<div class="att-wrap" style="overflow-x:auto;max-width:100%">'
-    +'<table class="att-table" style="border-collapse:collapse">'+thead+tbody+'</table></div>'
+    +'<table class="att-table" style="border-collapse:collapse">'+thead+tbody+attDayFoot(days,shownIds,4)+'</table></div>'
     +'<p style="font-size:11px;color:var(--gray);margin-top:8px">Клікайте по клітинці щоб змінити статус</p>';
 }
 

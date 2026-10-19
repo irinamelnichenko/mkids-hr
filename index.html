@@ -184,6 +184,9 @@ table.tg .tg-today{background:#e8f8f0}
 table.tg td.tg-c{width:30px;font-size:14px;cursor:pointer}
 table.tg td.tg-c:hover{outline:2px solid var(--blue,#3498db);outline-offset:-2px}
 table.tg .tg-t{background:#f8fafc;font-weight:700;min-width:34px}
+table.tg tfoot td{background:#f8fafc;font-size:11px;font-weight:700;border-top:1px solid #e8ecf0}
+table.tg tfoot tr:first-child td{border-top:2px solid var(--gray2)}
+table.tg tfoot .tg-nm{font-weight:600;color:var(--gray)}
 table.tg tbody tr:hover .tg-nm{background:#f7fbff}
 
 /* TABLE */
@@ -6215,6 +6218,22 @@ function renderTabel(){
     return c;
   }
 
+  // v7.438: підсумок ПО КОЖНОМУ ДНЮ під сіткою «По днях» — присутні (зі спізненнями), хворі, відпустка, інше
+  //   (відсутні й не заповнено). Вихідні — порожньо. Праві колонки — ті самі суми за період (лише робочі дні).
+  function tabDayFoot(){
+    const ROWS=[['✅ Присутні','#27ae60',st=>st==='present'||st==='late'],['🏥 Хворі','#9b59b6',st=>st==='sick'],
+      ['🏖️ Відпустка','#3498db',st=>st==='vacation'],['📝 Інше','#7f8c8d',st=>st==='absent'||!st]];
+    return '<tfoot>'+ROWS.map(([lbl,col,fn])=>{
+      let tot=0;
+      const cells=tabDays.map(d=>{
+        if(d.weekend) return '<td class="wknd"></td>';
+        const n=emps.filter(e=>fn(((tabByDay[d.iso]||{})[e.key]||{}).status||'')).length; tot+=n;
+        return '<td class="'+(d.today?'tg-today':'')+'" style="color:'+col+'">'+(n||'')+'</td>';
+      }).join('');
+      return '<tr><td class="tg-nm">'+lbl+'</td>'+cells+'<td class="tg-t" colspan="'+TABEL_ORDER.length+'" style="color:'+col+'">'+tot+'</td></tr>';
+    }).join('')+'</tfoot>';
+  }
+
   // Підсумок для одного дня
   let summary='';
   if(isDayView){
@@ -6304,6 +6323,7 @@ function renderTabel(){
             <td class="tg-t" style="color:#bdc3c7">${cnt.notset}</td>
           </tr>`;}).join('')}
         </tbody>
+        ${emps.length?tabDayFoot():''}
       </table></div>
       <div style="padding:8px 14px;font-size:11px;color:var(--gray)">Клік по клітинці відкриває той день у вигляді «Дата» — там статус можна змінити.</div>
     </div>`;
