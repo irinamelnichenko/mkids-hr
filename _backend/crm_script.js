@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.437
+// m.kids CRM — Google Apps Script v7.439
+// v7.439: м'яке видалення карток (кошик «Клієнти_Видалені», прізвище для підтвердження, відновлення); пошук слідів і відновлення картки з версії файлу.
 // v7.437: чистка 2027 — SUM за межами аркуша (Школа 228), дубль картки з тим самим ПІБ — один рядок.
 // v7.436: pay27Clean — чистка Payment 2027: лише чинні групи й діти жовтня 2026, блоки підряд, бюджет із картки, CF/PL/OPEX на нові заголовки.
 // v7.435: стандарт назв груп (Findi-Ki канонічна); payFileRows (read-only); groupRenameApply — заголовки Payment, картки, записи.
@@ -7176,7 +7177,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.437', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.439', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -7324,6 +7325,10 @@ function doGet(e) {
     else if (action === 'previewPayTransfer')          result = payGroupTransfer({cardId:(e.parameter || {}).cardId, toGroup:(e.parameter || {}).toGroup, fromGroup:(e.parameter || {}).fromGroup, fromMonth:(e.parameter || {}).fromMonth, dryRun:true});   // v7.433 дія 3
     else if (action === 'previewPay27Clean')           result = pay27Clean({loc:(e.parameter || {}).loc, dryRun:true});   // v7.436 прев'ю чистки Payment 2027
     else if (action === 'payFileRows')                 result = payFileRows(e.parameter || {});   // v7.435 read-only: блоки й рядки Payment року
+    else if (action === 'clientTrace')                 result = clientTrace(e.parameter || {});         // v7.439 read-only: сліди картки в CRM і CONFIG
+    else if (action === 'clientRevisions')             result = clientRevisions();                      // v7.439 read-only: версії файлу CRM
+    else if (action === 'clientFromRevision')          result = clientFromRevision(e.parameter || {});  // v7.439 read-only: картка з версії файлу
+    else if (action === 'getDeletedClients')           result = getDeletedClients(e.parameter || {});   // v7.439 кошик видалених карток
     else if (action === 'getPayAuto')                  result = {ok:true, payAuto:_payAutoOn()};
     else if (action === 'previewPilot2027Remove')      result = pilot2027Remove({loc:(e.parameter || {}).loc, dryRun:true});   // v7.432 прев'ю відкату пілоту
     else if (action === 'getPilot2027Groups')          result = getPilot2027Groups(e.parameter || {});     // v7.429 read-only: «Групи» пілоту 2027 + помилки формул
@@ -7368,7 +7373,9 @@ function doPost(e) {
       if (_fev < CLIENT_MIN_FE_VER) result = {ok:false, error:'STALE_FE', message:'Стара версія сторінки. Оновіть: Ctrl+Shift+R (або закрийте і відкрийте застосунок).'};
       else                          result = saveClient(body.data);
     }
-    else if (body.action === 'deleteClient')     result = deleteClient(body.id);
+    else if (body.action === 'deleteClient')     result = deleteClient(body.id, body);   // v7.439 м'яке видалення + прізвище
+    else if (body.action === 'restoreDeletedClient')      result = restoreDeletedClient(body);        // v7.439
+    else if (body.action === 'restoreClientFromRevision') result = restoreClientFromRevision(body);   // v7.439
     else if (body.action === 'saveAttendance')   result = saveAttendance(body);
     else if (body.action === 'saveHealthRecord') result = saveHealthRecord(body);
     else if (body.action === 'deleteHealthRecord')    result = deleteHealthRecord(body);
@@ -11645,21 +11652,178 @@ function patchClientAbsences(id, absences) {
   return {ok:false, error:'Client ID not found: ' + id};
 }
 
-function deleteClient(id) {
+// v7.439 М'ЯКЕ ВИДАЛЕННЯ: перед видаленням рядок картки повністю копіюється в «Клієнти_Видалені»
+// (хто, коли, усі колонки як JSON заголовок→значення). Відновлення — restoreDeletedClient (CFO / директор своєї локації).
+// Підтвердження: body.confirmName = прізвище з картки (перше слово ПІБ), інакше відмова — стара вкладка без поля не видалить.
+var CLIENTS_DELETED_SHEET  = 'Клієнти_Видалені';
+var CLIENTS_DELETED_HEADER = ['Коли', 'Хто', 'Роль', 'ID', 'ПІБ', 'Локація', 'Група', 'Дані(JSON)', 'Відновлено'];
+function _clientsDeletedSheet(ss){
+  var sh = ss.getSheetByName(CLIENTS_DELETED_SHEET);
+  if (!sh){
+    sh = ss.insertSheet(CLIENTS_DELETED_SHEET);
+    sh.getRange(1, 1, 1, CLIENTS_DELETED_HEADER.length).setValues([CLIENTS_DELETED_HEADER]);
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+function _clientSurname(name){ return _nameFold(String(name || '').trim().split(/\s+/)[0] || ''); }
+
+function deleteClient(id, body) {
   if (!id) return {ok:false, error:'Missing id'};
-  _invalidateLeadClientIndex();   // v7.279
-  _cacheBump('fill'); _cacheBump('clients');   /* v7.336 кеш getClients */             // v7.293
+  body = body || {};
   var ss = getCRMSpreadsheet();
   var sheet = ss.getSheetByName(SHEET_CLIENTS);
   if (!sheet) return {ok:false, error:'Sheet not found'};
-  var vals = sheet.getDataRange().getValues();
+  var vals = sheet.getDataRange().getValues(), hd = vals[0].map(function(h){ return trim(String(h)); });
+  var iName = hd.indexOf('ПІБ дитини'); if (iName < 0) iName = hd.indexOf("Ім'я дитини"); if (iName < 0) iName = 1;
+  var iLoc = hd.indexOf('Локація'), iGrp = hd.indexOf('Група');
   for (var r = vals.length-1; r >= 1; r--) {
-    if (String(vals[r][0]) === String(id)) {
-      sheet.deleteRow(r+1);
-      return {ok:true};
-    }
+    if (String(vals[r][0]) !== String(id)) continue;
+    var row = vals[r], name = String(row[iName] || '');
+    if (!body.confirmName || _clientSurname(body.confirmName) !== _clientSurname(name))
+      return {ok:false, code:'CONFIRM_NAME', error:'Для видалення введіть прізвище дитини: «' + String(name).split(/\s+/)[0] + '». Якщо вікно не питало — оновіть сторінку (Ctrl+Shift+R).'};
+    var a = _promoActor(body), data = {};
+    hd.forEach(function(h, k){ if (h) data[h] = (row[k] instanceof Date) ? formatDate(row[k]) : row[k]; });
+    _clientsDeletedSheet(ss).appendRow([formatDate(new Date()) + ' ' + Utilities.formatDate(new Date(), 'GMT+3', 'HH:mm'),
+      (a && a.name) || '', (a && a.role) || '', String(id), name, iLoc >= 0 ? String(row[iLoc] || '') : '', iGrp >= 0 ? String(row[iGrp] || '') : '',
+      JSON.stringify(data), '']);
+    sheet.deleteRow(r+1);
+    _invalidateLeadClientIndex();   // v7.279
+    _cacheBump('fill'); _cacheBump('clients');   /* v7.336 кеш getClients */             // v7.293
+    return {ok:true, softDeleted:true};
   }
   return {ok:false, error:'Not found'};
+}
+
+// GET getDeletedClients&loc= — кошик видалених карток (директор бачить свою локацію — фільтр на фронті за loc).
+function getDeletedClients(p){
+  try {
+    p = p || {};
+    var sh = getCRMSpreadsheet().getSheetByName(CLIENTS_DELETED_SHEET);
+    if (!sh || sh.getLastRow() < 2) return {ok:true, items:[]};
+    var v = sh.getRange(2, 1, sh.getLastRow() - 1, CLIENTS_DELETED_HEADER.length).getValues(), loc = trim(String(p.loc || '')), out = [];
+    for (var i = 0; i < v.length; i++){
+      if (loc && _nameFold(v[i][5]) !== _nameFold(loc)) continue;
+      out.push({row:i + 2, when:String(v[i][0]), who:String(v[i][1]), role:String(v[i][2]), id:String(v[i][3]), name:String(v[i][4]),
+        loc:String(v[i][5]), group:String(v[i][6]), restored:String(v[i][8] || '')});
+    }
+    return {ok:true, items:out.reverse()};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+// Рядок картки за мапою заголовок→значення в поточний порядок колонок «Клієнти». ID має бути вільний.
+function _clientRowFromMap(sheet, data){
+  var hd = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(function(h){ return trim(String(h)); });
+  var row = hd.map(function(h){ return data.hasOwnProperty(h) ? data[h] : ''; });
+  var lost = Object.keys(data).filter(function(k){ return hd.indexOf(k) < 0 && String(data[k] || '') !== ''; });
+  return {hd:hd, row:row, lost:lost};
+}
+function _clientIdTaken(sheet, id){
+  var ids = sheet.getRange(2, 1, Math.max(1, sheet.getLastRow() - 1), 1).getValues();
+  return ids.some(function(x){ return String(x[0]) === String(id); });
+}
+
+// POST restoreDeletedClient {row, dryRun} — повертає картку з кошика (CFO або директор локації картки).
+function restoreDeletedClient(body){
+  try {
+    body = body || {};
+    var dryRun = (body.dryRun !== false), a = _promoActor(body);
+    var ss = getCRMSpreadsheet(), del = ss.getSheetByName(CLIENTS_DELETED_SHEET), sheet = ss.getSheetByName(SHEET_CLIENTS);
+    var r = Number(body.row); if (!del || !(r >= 2) || r > del.getLastRow()) return {ok:false, error:'Запис кошика не знайдено'};
+    var v = del.getRange(r, 1, 1, CLIENTS_DELETED_HEADER.length).getValues()[0];
+    if (!a) return {ok:false, code:'PERM_DENIED', error:'Потрібен вхід'};
+    var rk = _roleKey(a.role);
+    if (!(rk === 'cfo' || (rk === 'director' && _nameFold(a.location || a.loc || '') === _nameFold(v[5]))))
+      return {ok:false, code:'PERM_DENIED', error:'Лише CFO або директор локації картки'};
+    if (v[8]) return {ok:false, error:'Уже відновлено: ' + v[8]};
+    var m = _clientRowFromMap(sheet, JSON.parse(String(v[7] || '{}')));
+    if (_clientIdTaken(sheet, v[3])) return {ok:false, error:'Картка з ID «' + v[3] + '» уже є в «Клієнтах»'};
+    if (dryRun) return {ok:true, dryRun:true, id:String(v[3]), name:String(v[4]), fields:m.hd.map(function(h, k){ return [h, m.row[k]]; }).filter(function(x){ return String(x[1]) !== ''; }), lost:m.lost};
+    sheet.appendRow(m.row);
+    del.getRange(r, 9).setValue(formatDate(new Date()) + ' ' + (a.name || ''));
+    _invalidateLeadClientIndex(); _cacheBump('fill'); _cacheBump('clients');
+    return {ok:true, restored:String(v[3]), name:String(v[4]), lost:m.lost};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+// ── v7.439 Пошук слідів картки, якої вже немає (read-only) ─────────────────────────────────────
+// GET clientTrace&q=Кротов Леон — усі рядки CRM і CONFIG, де є q (TextFinder по всіх вкладках), із заголовком вкладки.
+function clientTrace(p){
+  try {
+    var q = trim(String((p || {}).q || '')); if (q.length < 4) return {ok:false, error:'q ≥ 4 символи'};
+    var out = [];
+    [['CRM', getCRMSpreadsheet()], ['CONFIG', SpreadsheetApp.openById(CONFIG_SHEET_ID)]].forEach(function(x){
+      var seen = {};
+      x[1].createTextFinder(q).matchCase(false).findAll().forEach(function(c){
+        var sh = c.getSheet(), key = sh.getName() + '|' + c.getRow(); if (seen[key] || out.length >= 400) return; seen[key] = 1;
+        var w = sh.getLastColumn();
+        var hd = sh.getRange(1, 1, 1, w).getDisplayValues()[0], row = sh.getRange(c.getRow(), 1, 1, w).getDisplayValues()[0];
+        var o = {}; hd.forEach(function(h, k){ if (String(row[k]) !== '') o[h || ('#' + (k + 1))] = String(row[k]).slice(0, 300); });
+        out.push({file:x[0], sheet:sh.getName(), row:c.getRow(), data:o});
+      });
+    });
+    return {ok:true, q:q, count:out.length, hits:out};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+// GET clientRevisions — версії файлу CRM у Drive (id, час, хто). Для відновлення з історії.
+function clientRevisions(){
+  try {
+    var id = getCRMSpreadsheet().getId(), tok = ScriptApp.getOAuthToken(), out = [], pt = '';
+    do {
+      var r = UrlFetchApp.fetch('https://www.googleapis.com/drive/v3/files/' + id + '/revisions?pageSize=200&fields=nextPageToken,revisions(id,modifiedTime,lastModifyingUser(displayName,emailAddress))' + (pt ? '&pageToken=' + encodeURIComponent(pt) : ''),
+        {headers:{Authorization:'Bearer ' + tok}, muteHttpExceptions:true});
+      if (r.getResponseCode() !== 200) return {ok:false, error:'Drive HTTP ' + r.getResponseCode() + ': ' + r.getContentText().slice(0, 200)};
+      var j = JSON.parse(r.getContentText()); pt = j.nextPageToken || '';
+      (j.revisions || []).forEach(function(x){ out.push({id:x.id, time:x.modifiedTime, who:(x.lastModifyingUser || {}).displayName || ''}); });
+    } while (pt);
+    return {ok:true, count:out.length, revisions:out};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+// Рядки «Клієнти» з версії файлу rev, де є q: CSV-експорт вкладки (gid) цієї версії.
+function _clientRowsAtRevision(rev, q){
+  var ss = getCRMSpreadsheet(), sh = ss.getSheetByName(SHEET_CLIENTS), tok = ScriptApp.getOAuthToken();
+  var url = 'https://docs.google.com/spreadsheets/d/' + ss.getId() + '/export?format=csv&gid=' + sh.getSheetId() + '&revision=' + encodeURIComponent(rev);
+  var r = UrlFetchApp.fetch(url, {headers:{Authorization:'Bearer ' + tok}, muteHttpExceptions:true});
+  if (r.getResponseCode() !== 200) throw new Error('export HTTP ' + r.getResponseCode());
+  var csv = Utilities.parseCsv(r.getContentText()), hd = (csv[0] || []).map(function(h){ return trim(String(h)); }), qf = _nameFold(q), rows = [];
+  for (var i = 1; i < csv.length; i++) if (csv[i].some(function(c){ return _nameFold(c).indexOf(qf) !== -1; })) rows.push(csv[i]);
+  return {hd:hd, total:csv.length - 1, rows:rows};
+}
+// GET clientFromRevision&q=&rev= — картка з версії (rev порожній → перебір версій від нової до старої, перша, де знайшлась).
+function clientFromRevision(p){
+  try {
+    p = p || {};
+    var q = trim(String(p.q || '')); if (q.length < 4) return {ok:false, error:'q ≥ 4 символи'};
+    var revs = p.rev ? [{id:String(p.rev)}] : (clientRevisions().revisions || []).slice().reverse(), tried = [], t0 = Date.now();
+    for (var i = 0; i < revs.length && Date.now() - t0 < 240000; i++){
+      var x = _clientRowsAtRevision(revs[i].id, q); tried.push({id:revs[i].id, time:revs[i].time, total:x.total, hits:x.rows.length});
+      if (x.rows.length) return {ok:true, rev:revs[i], header:x.hd, rows:x.rows, total:x.total, tried:tried};
+    }
+    return {ok:true, rows:[], tried:tried};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+// POST restoreClientFromRevision {q, rev, id, dryRun} (CFO) — повертає рядок картки з версії rev (ID = id) у «Клієнти».
+function restoreClientFromRevision(body){
+  try {
+    body = body || {};
+    var dryRun = (body.dryRun !== false);
+    if (!dryRun){ var a = _promoActor(body); if (!(a && _roleKey(a.role) === 'cfo')) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'}; }
+    var x = _clientRowsAtRevision(String(body.rev || ''), String(body.q || '')), iId = x.hd.indexOf('ID');
+    var src = x.rows.filter(function(r){ return String(r[iId < 0 ? 0 : iId]) === String(body.id); })[0];
+    if (!src) return {ok:false, error:'У версії ' + body.rev + ' немає картки з ID «' + body.id + '»', found:x.rows.map(function(r){ return r[iId < 0 ? 0 : iId]; })};
+    var data = {}; x.hd.forEach(function(h, k){ if (h) data[h] = src[k]; });
+    var sheet = getCRMSpreadsheet().getSheetByName(SHEET_CLIENTS);
+    if (_clientIdTaken(sheet, body.id)) return {ok:false, error:'Картка з ID «' + body.id + '» уже є в «Клієнтах»'};
+    var m = _clientRowFromMap(sheet, data);
+    if (dryRun) return {ok:true, dryRun:true, fields:m.hd.map(function(h, k){ return [h, m.row[k]]; }).filter(function(f){ return String(f[1]) !== ''; }), lost:m.lost};
+    // CSV віддає текст: JSON-колонки й дати лишаються рядками, як їх і читає getClients; '=…' не має бути формулою
+    sheet.getRange(sheet.getLastRow() + 1, 1, 1, m.row.length).setNumberFormat('@').setValues([m.row.map(function(c){ return String(c); })]);
+    _invalidateLeadClientIndex(); _cacheBump('fill'); _cacheBump('clients');
+    return {ok:true, restored:String(body.id), lost:m.lost};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 
 // ═══ v7.103: КОЛОНОК НА МІСЯЦЬ per-локація (Школа 228 = 7: додано «харчування»). ═══

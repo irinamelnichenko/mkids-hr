@@ -1076,6 +1076,15 @@ details.card>summary::-webkit-details-marker{display:none}details.card[open]>sum
 </div>
 
 <!-- v6.29: модалка розірвання договору ─────────────────────────────── -->
+<div class="modal-ov hidden" id="mDeleted">
+  <div class="modal modal-lg">
+    <div class="modal-hd">
+      <h3>🗑 Видалені картки</h3>
+      <button class="modal-close" onclick="closeModal('mDeleted')">✕</button>
+    </div>
+    <div class="modal-bd" id="mDeletedBody"></div>
+  </div>
+</div>
 <div class="modal-ov hidden" id="mTerminate">
   <div class="modal">
     <div class="modal-hd">
@@ -7752,17 +7761,19 @@ function naTerminate(id){
   S.editId=id; openTerminate();
 }
 async function naDelete(id, name){
-  if(!confirm('Видалити картку «'+name+'»?\n\nЦе прибере її зі списку клієнтів. Дію не можна скасувати.')) return;
-  try{ await apiPost({action:'deleteClient', id:id}); }
+  var sur=askDeleteSurname(name); if(!sur) return;
+  var res; try{ res=await apiPost({action:'deleteClient', id:id, confirmName:sur}); }
   catch(e){ if(typeof showFloatMsg==='function') showFloatMsg('Помилка видалення: '+(e.message||e),'err'); return; }
+  if(res && res.ok===false){ alert(res.error||'Не видалено'); return; }
   if(typeof showFloatMsg==='function') showFloatMsg('Картку «'+name+'» видалено','ok');
   if(S.crm) delete S.crm[id];
   renderNeedsAttention();
 }
 async function naMerge(id, name, match){
   if(!confirm('Об\'єднати: «'+name+'» — це та сама дитина, що картка «'+match+'».\n\nБуде ВИДАЛЕНО дубль «'+name+'», лишиться «'+match+'» (яка в Payment).\nПродовжити?')) return;
-  try{ await apiPost({action:'deleteClient', id:id}); }
+  var res; try{ res=await apiPost({action:'deleteClient', id:id, confirmName:name}); }
   catch(e){ if(typeof showFloatMsg==='function') showFloatMsg('Помилка: '+(e.message||e),'err'); return; }
+  if(res && res.ok===false){ alert(res.error||'Не видалено'); return; }
   if(typeof showFloatMsg==='function') showFloatMsg('Дубль «'+name+'» прибрано, лишилась «'+match+'»','ok');
   if(S.crm) delete S.crm[id];
   renderNeedsAttention();
@@ -8144,7 +8155,7 @@ function renderArchive(){
     return '<button class="att-chip'+(act?' att-chip-active':'')+'" onclick="S.archiveTab=\''+key+'\';S.termCategory=\'\';renderArchive()">'+label+' ('+n+')</button>';
   }
   var tabsHtml='<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">'
-    +tab('all','Всі',cntAll)+tab('terminated','🚪 Розірвані',cntTerm)+tab('graduated','🎓 Випускники',cntGrad)+'</div>';
+    +tab('all','Всі',cntAll)+tab('terminated','🚪 Розірвані',cntTerm)+tab('graduated','🎓 Випускники',cntGrad)+'<button class="att-chip" onclick="openDeletedBin()" title="Видалені картки — можна відновити">🗑 Видалені</button></div>';
 
   // 7. фільтр-бар
   var locOpts='<option value="">Усі локації</option>'+visibleLocs().map(function(l){
@@ -8261,7 +8272,35 @@ function renderArchive(){
 }
 
 // ─── DELETE ───────────────────────────────────────────────────────────────────
-function deleteChild(){
+// v7.439 Підтвердження видалення прізвищем + кошик «🗑 Видалені» (відновлення: CFO або директор локації).
+function askDeleteSurname(name){
+  var sur=String(name||'').trim().split(/\s+/)[0]||'';
+  var v=prompt('Видалити картку «'+name+'»?\n\nКартка піде в кошик «🗑 Видалені» (Архів), звідти її можна відновити.\n\nДля підтвердження введіть прізвище: '+sur);
+  if(v==null) return null;
+  if(String(v).trim().toLowerCase().replace(/[’ʼ`]/g,"'")!==sur.toLowerCase().replace(/[’ʼ`]/g,"'")){ alert('Прізвище не збігається — картку НЕ видалено.'); return null; }
+  return v.trim();
+}
+async function openDeletedBin(){
+  var el=document.getElementById('mDeletedBody'); el.innerHTML='<div class="loading"><div class="spinner"></div><p>Завантаження…</p></div>';
+  document.getElementById('mDeleted').classList.remove('hidden');
+  var j; try{ j=await apiGetFull({action:'getDeletedClients'}); }catch(e){ el.innerHTML='<p style="color:#c0392b">'+esc(e.message||e)+'</p>'; return; }
+  var locs=visibleLocs(), items=(j.items||[]).filter(function(x){ return locs.indexOf(x.loc)!==-1; });
+  if(!items.length){ el.innerHTML='<p style="color:#888">Кошик порожній.</p>'; return; }
+  el.innerHTML='<table class="tbl" style="width:100%;font-size:13px"><thead><tr><th>Коли</th><th>Дитина</th><th>Локація / група</th><th>Хто видалив</th><th></th></tr></thead><tbody>'
+    +items.map(function(x){ return '<tr><td>'+esc(x.when)+'</td><td>'+esc(x.name)+'</td><td>'+esc(x.loc)+(x.group?' · '+esc(x.group):'')+'</td><td>'+esc(x.who)+'</td><td>'
+      +(x.restored?'<span style="color:#27ae60">✅ відновлено</span>':'<button class="btn btn-xs" onclick="restoreDeleted('+x.row+')">↩️ Відновити</button>')+'</td></tr>'; }).join('')+'</tbody></table>';
+}
+async function restoreDeleted(row){
+  var pv=await apiPost({action:'restoreDeletedClient', row:row, dryRun:true});
+  if(!pv || pv.ok===false){ alert((pv&&pv.error)||'Не вдалося'); return; }
+  if(!confirm('Відновити картку «'+pv.name+'»?'+(pv.lost&&pv.lost.length?'\n\nПоля, яких уже немає в таблиці: '+pv.lost.join(', '):''))) return;
+  var r=await apiPost({action:'restoreDeletedClient', row:row, dryRun:false});
+  if(!r || r.ok===false){ alert((r&&r.error)||'Не вдалося'); return; }
+  localStorage.removeItem(CFG.CLI_CACHE);
+  if(typeof showFloatMsg==='function') showFloatMsg('Картку «'+r.name+'» відновлено — оновіть список','ok');
+  openDeletedBin();
+}
+async function deleteChild(){
   var id=S.editId; if(!id) return;
   var card=S.crm[id]||{};
   var name=card.name||id;
@@ -8271,12 +8310,12 @@ function deleteChild(){
   } else if(isGraduatedStatus(card.status)){
     if(!confirm('⚠️ Ви видаляєте ВИПУСКНИКА «'+name+'».\n\nІсторія випуску буде ВТРАЧЕНА, і він зникне з розділу «Випускники».\n\nЗазвичай випускника НЕ треба видаляти — він має лишатись в архіві.\n\nВидалити все одно?')) return;
   }
-  if(!confirm('Видалити "'+name+'" з CRM?\n\nУвага: клієнт буде видалений тільки з CRM-картки. Дані в Payment Sheet залишаться.')) return;
-  // Видаляємо локально
+  var sur=askDeleteSurname(name); if(!sur) return;
+  // v7.439: спершу хмара (м'яке видалення в кошик), локально — лише коли сервер не відмовив
+  var res=await apiPost({action:'deleteClient', id:id, confirmName:sur});
+  if(res && res.ok===false){ alert(res.error||'Не видалено'); return; }
   delete S.crm[id];
   saveLocalCRM();
-  // Видаляємо в хмарі
-  apiPost({action:'deleteClient', id:id});
   localStorage.removeItem(CFG.CLI_CACHE);
   closeModal('mChild');
   renderView();
