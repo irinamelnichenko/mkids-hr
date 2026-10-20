@@ -3090,9 +3090,48 @@ function _kompSortByLoc(arr,getName){
 }
 function _kompYear(){ return new Date().getFullYear(); }
 function _kompMonth(){ return S.dashKompMonth || (new Date().getMonth()+1); }
-async function _ensureKomp(y){ if(!S._komp)S._komp={}; if(S._komp[y]!==undefined)return; S._komp[y]=null;
-  try{ var r=await cloudFetch(authScriptUrl()+'?action=getKomplektaciyaData&year='+y,{redirect:'follow'}); var j=await r.json(); S._komp[y]=(j&&j.ok)?j:{locations:[]}; }
-  catch(e){ S._komp[y]={locations:[]}; } }
+// v7.465: «Комплектація» наживо — повз кеш браузера (nocache=1), перечитуємо, якщо старше 5 хв; force — одразу.
+//   Поки вкладка вантажиться вперше, S._komp[y]===null (екрани показують «Завантаження…»); при оновленні старі дані лишаються на екрані.
+function _ensureKomp(y,force){ if(!S._komp)S._komp={}; S._kompAt=S._kompAt||{}; S._kompLd=S._kompLd||{};
+  if(S._kompLd[y]) return S._kompLd[y];
+  var have=!!S._komp[y];
+  if(have && !force && Date.now()-(S._kompAt[y]||0)<5*60*1000) return Promise.resolve();
+  if(!have) S._komp[y]=null;
+  S._kompLd[y]=(async function(){
+    try{ var r=await cloudFetch(authScriptUrl()+'?action=getKomplektaciyaData&year='+y+'&nocache=1',{redirect:'follow'}); var j=await r.json();
+      S._komp[y]=(j&&j.ok)?j:(have?S._komp[y]:{locations:[]}); S._kompAt[y]=Date.now(); }
+    catch(e){ if(!have) S._komp[y]={locations:[]}; }
+    S._kompLd[y]=null;
+  })();
+  return S._kompLd[y]; }
+// v7.465: «Комплектація за квартали» — те саме джерело, що й «Договори по кварталах» (файл «Комплектація», усі роки з 2019).
+var KQ_SLICES=[['net','🌐 Мережа без управління'],['sad','🌱 Садки'],['sch','🏫 Школи'],['upr','🏢 Управління']];
+function kqSetSlice(t){ S.kqSlice=t; try{ localStorage.setItem('mkids_kq_slice',t); }catch(e){} _renderDashNow(); }
+function kqRefresh(){ if(S._kqBusy) return; S._kqBusy=true; _renderDashNow(); var cy=new Date().getFullYear(), ps=[];
+  for(var y=CONTR_FIRST_YEAR;y<=cy;y++) ps.push(_ensureKomp(y,true));
+  Promise.all(ps).then(function(){ S._kqBusy=false; _renderDashNow(); }, function(){ S._kqBusy=false; _renderDashNow(); }); }
+function _renderKompQuarters(isHR,myLoc){
+  var cy=new Date().getFullYear(), cm=new Date().getMonth()+1, yrs=[], loading=false, at=0;
+  var sl=S.kqSlice||(function(){ try{ return localStorage.getItem('mkids_kq_slice')||'net'; }catch(e){ return 'net'; } })();
+  for(var y=CONTR_FIRST_YEAR;y<=cy;y++){ yrs.push(y); var _pk=_ensureKomp(y); if(S._kompLd&&S._kompLd[y]) _pk.then(_dashSoftRerender);   // перемальовуємо лише після справжнього запиту
+    if(!S._komp||!S._komp[y]) loading=true; else at=Math.max(at,(S._kompAt||{})[y]||0); }
+  var inS=function(loc){ var t=_dashLocType(loc); if(!t) return false; if(!isHR) return _kompNorm(loc)===_kompNorm(myLoc); return sl==='net'?(t==='sad'||t==='sch'):t===sl; };
+  var chips=isHR?'<div style="display:flex;flex-wrap:wrap;gap:6px;padding:10px 14px 0">'+KQ_SLICES.map(function(o){ return '<button type="button" class="att-chip'+(sl===o[0]?' att-chip-active':'')+'" onclick="kqSetSlice(\''+o[0]+'\')">'+o[1]+'</button>'; }).join('')+'</div>':'';
+  var qLbl=['Q1 (січ–бер)','Q2 (кві–чер)','Q3 (лип–вер)','Q4 (жов–гру)'];
+  var rows=yrs.slice().reverse().map(function(y){ var kd=S._komp&&S._komp[y]; if(!kd) return '<tr><td><strong>'+y+'</strong></td><td colspan="4" style="color:var(--gray2)">завантаження…</td></tr>';
+    var mSum=[], mHas=[]; for(var m=0;m<12;m++){ mSum[m]=0; mHas[m]=false; }
+    _kompFirstRows(kd.locations).forEach(function(l){ var loc=_contrLoc(l.loc); if(!loc||!inS(loc)) return;
+      (l.months||[]).forEach(function(mo){ var v=Number(mo&&mo.contracts); if(!mo||!isFinite(v)||mo.contracts===null||mo.contracts==='') return; mSum[mo.month-1]+=v; mHas[mo.month-1]=true; }); });
+    return '<tr><td><strong>'+y+'</strong></td>'+[0,1,2,3].map(function(q){ var vals=[]; for(var k=q*3;k<q*3+3;k++) if(mHas[k]) vals.push(mSum[k]);
+      var part=y===cy && cm<=q*3+3 && cm>q*3;   // поточний квартал — неповний
+      return '<td>'+(vals.length?'<strong>'+Math.round(vals.reduce(function(a,b){ return a+b; },0)/vals.length)+'</strong>'+(part?' <span style="font-size:10px;color:#e67e22" title="квартал ще триває — середнє за '+vals.length+' міс.">неповн.</span>':''):'<span style="color:var(--gray2)">—</span>')+'</td>'; }).join('')+'</tr>'; }).join('');
+  var d=at?new Date(at):null, hm=d?('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2):'—';
+  return chips+'<div class="tbl-wrap"><table><thead><tr><th>Рік</th>'+qLbl.map(function(l){ return '<th>'+l+'</th>'; }).join('')+'</tr></thead><tbody>'+rows+'</tbody></table></div>'
+    +'<div style="font-size:11px;color:var(--gray);padding:6px 14px;line-height:1.5">Цифра — середня за квартал кількість чинних договорів на кінець місяця (колонка «договорів» файлу «Комплектація»), сума по локаціях зрізу; середнє — лише за місяці, де є дані. '
+    +'«Мережа без управління» = садки + школи (Школа 228, Школа Осокорки, Школа Кар\'єрна). Управління у файлі «Комплектація» немає — зріз «Управління» порожній. Те саме джерело, що й «Договори по кварталах».</div>'
+    +'<div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:4px 14px 12px;font-size:12px;color:var(--gray)">'+(S._kqBusy?'оновлюю…':(loading?'завантаження…':'оновлено о <b>'+hm+'</b>'))
+    +'<button type="button" class="btn btn-secondary btn-sm" onclick="kqRefresh()"'+(S._kqBusy?' disabled':'')+'>🔄 оновити</button></div>';
+}
 async function _ensureRatingsYear(y){ if(!S._ratingsY)S._ratingsY={}; if(S._ratingsY[y]!==undefined)return; S._ratingsY[y]=null;
   try{ var r=await cloudFetch(authScriptUrl()+'?action=getVyhovatelRatings&year='+y,{redirect:'follow'}); var j=await r.json(); S._ratingsY[y]=(j&&j.ok)?j:{teachers:[]}; }
   catch(e){ S._ratingsY[y]={teachers:[]}; } }
@@ -3357,17 +3396,21 @@ function _renderKompBlock(){
     var locNames=scopeLocs(_kompFirstRows(kd.locations)).filter(function(l){return _isKompSadok(l.loc);}).map(function(x){return x.loc;}); // лише САДИ (без шкіл/онлайн); v7.399: без блоку «ПЛАН»
     if(kpiInProgress){
       // Незавершений квартал: набрано (минулі місяці y) проти ЦІЛІ = ПОВНИЙ квартал y-1. Залишилось = ціль − набрано + 1.
-      var rows2=locNames.map(function(ln){ var got=sumSign(kd,ln,kpiMonths), target=sumSign(kdPrev,ln,qAll); return {loc:ln,got:got,target:target}; })
-        .filter(function(r){ return (r.got||0)!==0||(r.target||0)!==0; });
+      // v7.465: поточний місяць — окремо «у процесі» (у підсумок кварталу не йде)
+      var curIn=(y===curY)?[curM]:[];
+      var rows2=locNames.map(function(ln){ var got=sumSign(kd,ln,kpiMonths), target=sumSign(kdPrev,ln,qAll), cur=curIn.length?sumSign(kd,ln,curIn):null; return {loc:ln,got:got,target:target,cur:cur}; })
+        .filter(function(r){ return (r.got||0)!==0||(r.target||0)!==0||(r.cur||0)!==0; });
       rows2=_kompSortByLoc(rows2,function(r){return r.loc;}); // порядок LOCATION_ORDER (токенний)
-      var tGot=0,tTgt=0; rows2.forEach(function(r){ tGot+=r.got||0; tTgt+=r.target||0; });
+      var tGot=0,tTgt=0,tCur=0; rows2.forEach(function(r){ tGot+=r.got||0; tTgt+=r.target||0; tCur+=r.cur||0; });
       _kpiGot=tGot; _kpiTgt=tTgt;
-      kpiHtml=rows2.length?'<div class="tbl-wrap"><table><thead><tr><th>Локація</th><th>'+y+' (набрано)</th><th>'+(y-1)+' (ціль)</th><th title="ціль − набрано + 1">Залишилось</th></tr></thead><tbody>'+
+      var curTh=curIn.length?'<th title="підписано від початку місяця за «Комплектацією»; у підсумок кварталу не йде, поки місяць не завершиться" style="color:#2980b9">у процесі · '+KOMP_MONTHS[curM-1].toLowerCase()+'</th>':'';
+      var curTd=function(v,b){ return curIn.length?'<td style="color:#2980b9'+(b?';font-weight:800':'')+'">'+(v?'+'+v:'<span style="color:var(--gray2)">0</span>')+'</td>':''; };
+      kpiHtml=rows2.length?'<div class="tbl-wrap"><table><thead><tr><th>Локація</th><th>'+y+' (набрано)</th>'+curTh+'<th>'+(y-1)+' (ціль)</th><th title="ціль − набрано + 1">Залишилось</th></tr></thead><tbody>'+
         rows2.map(function(r){ var rem=(r.target||0)-(r.got||0)+1; var done=rem<=0; var col=done?'#27ae60':'#e67e22';
-          return '<tr><td><strong>'+esc(r.loc)+'</strong></td><td><b>'+(r.got==null?0:r.got)+'</b></td><td style="color:var(--gray)">'+(r.target==null?'—':r.target)+'</td><td style="color:'+col+';font-weight:700">'+(done?'✓':rem)+'</td></tr>';
+          return '<tr><td><strong>'+esc(r.loc)+'</strong></td><td><b>'+(r.got==null?0:r.got)+'</b></td>'+curTd(r.cur)+'<td style="color:var(--gray)">'+(r.target==null?'—':r.target)+'</td><td style="color:'+col+';font-weight:700">'+(done?'✓':rem)+'</td></tr>';
         }).join('')+
-        '<tr style="border-top:2px solid var(--gray2)"><td><strong>Разом</strong></td><td><strong>'+tGot+'</strong></td><td style="color:var(--gray)">'+tTgt+'</td><td style="font-weight:800;color:'+((tTgt-tGot+1)<=0?'#27ae60':'#e67e22')+'">'+((tTgt-tGot+1)<=0?'✓':(tTgt-tGot+1))+'</td></tr>'+
-        '</tbody></table></div>':'<div class="empty"><p>Немає даних</p></div>';
+        '<tr style="border-top:2px solid var(--gray2)"><td><strong>Разом</strong></td><td><strong>'+tGot+'</strong></td>'+curTd(tCur,true)+'<td style="color:var(--gray)">'+tTgt+'</td><td style="font-weight:800;color:'+((tTgt-tGot+1)<=0?'#27ae60':'#e67e22')+'">'+((tTgt-tGot+1)<=0?'✓':(tTgt-tGot+1))+'</td></tr>'+
+        '</tbody></table></div>'+(curIn.length?'<div style="font-size:11px;color:var(--gray);padding:6px 14px">«У процесі» — підписано з 1-го числа поточного місяця за «Комплектацією». У «набрано» й «залишилось» не входить, поки місяць не завершиться.</div>':''):'<div class="empty"><p>Немає даних</p></div>';
     } else {
       // Завершений квартал: повне проти повного, Δ надлишок (база бонусу)
       var kpiRows=locNames.map(function(ln){ var cur=sumSign(kd,ln,qAll),prev=sumSign(kdPrev,ln,qAll); var diff=(cur==null&&prev==null)?null:((cur||0)-(prev||0)); return {loc:ln,cur:cur,prev:prev,diff:diff}; })
@@ -3742,11 +3785,15 @@ function _renderContrBlock(){
     return '<tr style="'+(on?'background:#2980b90d':'')+'"><td><strong>'+y+'</strong>'+(on?' ✓':'')+(d.decAnnual&&qi===3?' <span title="у колонці грудня — річний підсумок, грудень не враховано" style="font-size:10px;color:#e67e22">груд.?</span>':'')+'</td>'
       +row3(d.net[qi], d.qOk[qi])+'</tr>'; }).join('');
   var netTbl='<div class="tbl-wrap"><table><thead><tr><th>Рік · Q'+fc.q+'</th>'+th3+'</tr></thead><tbody>'+netRows+'</tbody></table></div>';
-  var locSet={}; sel.forEach(function(y){ if(data[y]) Object.keys(data[y].byLoc).forEach(function(l){ locSet[l]=1; }); });
-  var locData=Object.keys(locSet).map(function(L){ return {L:L, a:avgQ(function(d){ return d.byLoc[L]?d.byLoc[L].q[qi]:null; })}; });
+  var locSet={}; sel.concat([cy]).forEach(function(y){ if(data[y]) Object.keys(data[y].byLoc).forEach(function(l){ locSet[l]=1; }); });
+  var dCy=data[cy];   // v7.465: факт поточного року в цьому кварталі — поруч із середнім
+  var locData=Object.keys(locSet).map(function(L){ return {L:L, a:avgQ(function(d){ return d.byLoc[L]?d.byLoc[L].q[qi]:null; }), f:(dCy&&dCy.byLoc[L])?dCy.byLoc[L].q[qi]:null}; });
   locData.sort(function(x,y){ var nx=x.a?x.a.s-x.a.t:-1e9, ny=y.a?y.a.s-y.a.t:-1e9; return ny-nx || String(x.L).localeCompare(String(y.L),'uk'); });
-  var locTbl=sl.type==='loc'?'':'<div class="tbl-wrap"><table><thead><tr><th>Локація · середнє Q'+fc.q+'</th>'+th3+'</tr></thead><tbody>'
-    +locData.map(function(r){ return '<tr><td style="white-space:nowrap"><strong>'+esc(r.L)+'</strong></td>'+row3(r.a,true)+'</tr>'; }).join('')+'</tbody></table></div>';
+  var fOk=dCy&&dCy.qOk[qi], fTh='<th style="color:#2980b9" title="реально підписано й розірвано в Q'+fc.q+' '+cy+(fOk?'':' (квартал ще триває або не почався)')+'">факт '+cy+(fOk?'':' *')+'</th>';
+  var fCell=function(o){ if(!o||(!o.s&&!o.t)) return '<td style="color:var(--gray2)">—</td>'; return '<td style="white-space:nowrap;color:#2980b9"><b>+'+o.s+'</b> / <b>−'+o.t+'</b> · '+sgn(o.s-o.t)+'</td>'; };
+  var locTbl=sl.type==='loc'?'':'<div class="tbl-wrap"><table><thead><tr><th>Локація · середнє Q'+fc.q+'</th>'+th3+fTh+'</tr></thead><tbody>'
+    +locData.map(function(r){ return '<tr><td style="white-space:nowrap"><strong>'+esc(r.L)+'</strong></td>'+row3(r.a,true)+fCell(r.f)+'</tr>'; }).join('')+'</tbody></table></div>'
+    +'<div style="font-size:11px;color:var(--gray);padding:4px 14px 0">«Факт '+cy+'» — підписано / розірвано · нетто в Q'+fc.q+' '+cy+' за «Комплектацією»'+(fOk?'':'; * квартал ще триває або не почався — цифри неповні')+'.</div>';
   var note='<div style="font-size:11px;color:var(--gray);padding:6px 14px 12px">Нетто = підписано («підписані» + «підписані на майбутній період») − розірвано. На графіку — лише повні квартали обраних років, заповнені точки — квартал прогнозу; прогноз = середнє цього кварталу за обрані роки. '
     +'«груд.?» — у колонці грудня стоїть річний підсумок, такий грудень не рахуємо. Польова (до 2024) рахується як Кар\'єрна, «Львів» — як Кругла.'+(sl.type==='upr'?' Управління у файлі «Комплектація» може не бути — тоді тут порожньо.':'')+'</div>';
   var nums='<details style="border-top:1px solid #f0f4f8"'+(S.contrNums?' open':'')+' ontoggle="S.contrNums=this.open"><summary style="cursor:pointer;padding:10px 14px;font-size:13px;font-weight:700">показати цифри</summary>'
@@ -4325,23 +4372,8 @@ function _renderDashNow(){
   const activeCnt=emps.filter(isActive).length;
   const turnPct=activeCnt?Math.round(fired.length/activeCnt*100):0;
   const perLbl=period==='month'?'місяць':period==='quarter'?'квартал':'рік';
-  // ── квартали (S._dashYearly) ──
-  const yearly=S._dashYearly;
-  let quartersHtml;
-  if(!yearly){ quartersHtml='<div class="empty"><span class="ei">📊</span><p>Завантаження…</p></div>'; }
-  else {
-    const rows=(isHR?yearly.filter(r=>_isKompNetwork(String(r['Локація']||'').trim())):yearly.filter(r=>String(r['Локація']||'')===myLoc)).filter(r=>String(r['Вибув']||'').trim()!=='так');   // v7.299: «дітей/міс» без вибулих; v7.408: охоплення
-    const monthCnt=DASH_MONTHS.map(mn=>rows.filter(r=>(Number(r[mn+'-Бюджет-навч'])||0)>0||(Number(r[mn+'-Факт-навч'])||0)>0).length);
-    function qAvg(qi){ const ms=monthCnt.slice(qi*3,qi*3+3).filter(x=>x>0); return ms.length?Math.round(ms.reduce((a,b)=>a+b,0)/ms.length):null; }
-    const qs=[0,1,2,3].map(qAvg);
-    const qLbl=['Q1 (січ–бер)','Q2 (кві–чер)','Q3 (лип–вер)','Q4 (жов–гру)'];
-    quartersHtml=`<div class="tbl-wrap"><table>
-      <thead><tr><th>Рік</th>${qLbl.map(l=>`<th>${l}</th>`).join('')}</tr></thead>
-      <tbody>
-        <tr><td><strong>${Y}</strong></td>${qs.map(v=>`<td>${v==null?'<span style=color:var(--gray2)>—</span>':'<strong>'+v+'</strong> <span style=font-size:11px;color:var(--gray)>дітей/міс</span>'}</td>`).join('')}</tr>
-        <tr style="color:var(--gray)"><td>${Y-1}</td><td colspan="4" style="font-size:12px">Дані за ${Y-1} у поточному реєстрі відсутні</td></tr>
-      </tbody></table></div>`;
-  }
+  // ── квартали — файл «Комплектація» (v7.465) ──
+  const quartersHtml=_renderKompQuarters(isHR,myLoc);
   const scopeBar=isHR?`<div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px 16px;margin-bottom:12px">
       ${DASH_LF.map(([k,l])=>`<button type="button" class="att-chip${_lf.type===k?' att-chip-active':''}" onclick="dashSetLF('${k}','')">${l}</button>`).join('')}
       <select class="flt-sel" onchange="dashSetLF('${_lf.type}',this.value)"><option value="">Усі локації${_lf.type?' ('+(DASH_LF.filter(x=>x[0]===_lf.type)[0]||['',''])[1].replace(/^\S+\s/,'')+')':''}</option>${_dashLFLocs().map(L=>`<option${L===_lf.loc?' selected':''}>${esc(L)}</option>`).join('')}</select>
