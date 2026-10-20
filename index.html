@@ -3727,6 +3727,10 @@ function _dopCalc(an,p,inSlice){
   return res;
 }
 function _dopGap(res,txt,loc){ var g=res.gapIx[txt]; if(!g){ g=res.gapIx[txt]={txt:txt,locs:[]}; res.gaps.push(g); } g.locs.push(loc); }
+// v7.460: скорочена сума для плиток — 1,10 млн ₴ / 624 тис. ₴; повне число — у підказці.
+function _dopShort(n){ if(n==null||!isFinite(n)) return '—'; var a=Math.abs(n), sg=n<0?'−':'', t;
+  if(a>=1e6) t=sg+(a/1e6).toFixed(2).replace('.',',')+' млн ₴'; else if(a>=1e4) t=sg+Math.round(a/1e3).toLocaleString('uk-UA')+' тис. ₴'; else return _dopMoney(n);
+  return '<span title="'+_dopMoney(n)+'" style="cursor:help">'+t+'</span>'; }
 function _dopMoney(n){ return n==null||!isFinite(n)?'—':Math.round(n).toLocaleString('uk-UA')+' ₴'; }
 function _dopPct(a,b){ return b?Math.round(a/b*100):null; }
 function _dopMargin(o){ return o.rk>0?Math.round((o.rk-o.ck)/o.rk*100):null; }
@@ -3783,7 +3787,7 @@ var DOP_TYPE_IN={sad:'у садках',sch:'у школах',upr:'в управ�
 function _dopFillTxt(f){ return f==null?'—':(Math.round(f*10)/10).toLocaleString('uk-UA'); }
 // v7.458: охоплення заняття = діти на занятті / діти локацій, де воно йде; зміна — останній місяць періоду до попереднього.
 function _dopCovPair(an,ms,filter){ var mL=ms[ms.length-1], mP=mL-1; if(!mL||mP<1) return null;
-  return {mL:mL, mP:mP, cur:_dopCalc(an,{ms:[mL]},filter), prev:_dopCalc(an,{ms:[mP]},filter)}; }
+  return {mL:mL, mP:mP, multi:ms.length>1, cur:_dopCalc(an,{ms:[mL]},filter), prev:_dopCalc(an,{ms:[mP]},filter)}; }
 function _dopActCov(Xm,key,onlyL){
   if(onlyL){ var R=Xm.locs[onlyL]; if(!R||!R.kids) return null; var o=R.acts[key]; return (o?o.kids:0)/R.kids*100; }
   var k=0,n=0; Object.keys(Xm.locs).forEach(function(L){ var o=Xm.locs[L].acts[key]; if(!o||!o.kids) return; k+=o.kids; n+=Xm.locs[L].kids; }); return n?k/n*100:null; }
@@ -3795,7 +3799,10 @@ function _dopCovCell(cov,cp,key,onlyL,y){
   var a=_dopActCov(cp.prev,key,onlyL), b=_dopActCov(cp.cur,key,onlyL); if(a==null||b==null) return v;
   var d=Math.round(b)-Math.round(a), cur=_dopCurM(y,cp.mL);
   var tip=_dopMnL(cp.mP)+' '+Math.round(a)+'% → '+_dopMnL(cp.mL)+' '+Math.round(b)+'%'+(cur?' (місяць ще триває — неповні дані)':'');
-  return v+' <span title="'+esc(tip)+'" style="white-space:nowrap;font-size:10px;cursor:help;color:'+(d<=-15?'#e74c3c':d<0?'#e67e22':d>0?'#27ae60':'var(--gray)')+'">'+(d<0?'▼ '+(-d):d>0?'▲ '+d:'= 0')+' п.п.'+(cur?' <i>неповн.</i>':'')+'</span>';
+  // v7.460: «▼ 45% → 33%» — стрілка й колір замість різниці; для кількох місяців спершу охоплення періоду
+  var col=d<=-15?'#e74c3c':d<0?'#e67e22':d>0?'#27ae60':'var(--gray)', arr=d<0?'▼':d>0?'▲':'=';
+  var ch='<span title="'+esc(tip)+'" style="white-space:nowrap;cursor:help;color:'+col+'">'+arr+' '+Math.round(a)+'% → '+Math.round(b)+'%'+(cur?' <i style="font-size:10px">неповн.</i>':'')+'</span>';
+  return (cp.multi?v+' <span style="font-size:10px;color:var(--gray)">·</span> ':'')+ch;
 }
 // v7.457: сортування кліком по заголовку (спадання → зростання) і памʼять розгорнутих розділів.
 function _dopSortSt(id,def){ var st=(S.dopSortT||{})[id]; return st||def; }
@@ -3844,14 +3851,14 @@ function _renderDopBlock(){
   var calcAll=0; Object.keys(X.acts).forEach(function(k){ calcAll+=X.acts[k].t.calcC; });
   var na='<span style="color:var(--gray2)">—</span>', op=S.dopTile||'';
   var tl=function(id,ic,cls,val,lbl,sub){ var on=op===id;
-    return '<div class="stat-card" onclick="dopTile(\''+id+'\')" style="cursor:pointer;'+(on?'outline:2px solid #2980b9;outline-offset:-2px;':'')+'"><div class="stat-icon '+cls+'">'+ic+'</div><div style="min-width:0"><div class="stat-val" style="font-size:clamp(18px,2.1vw,24px);white-space:nowrap">'+val+'</div><div class="stat-lbl">'+lbl+' '+(on?'▾':'▸')+'</div>'+(sub?'<div style="font-size:10px;color:var(--gray);margin-top:2px">'+sub+'</div>':'')+'</div></div>'; };
-  var tiles='<div class="stats-grid" style="padding:14px 14px 0;margin-bottom:10px">'
-    +tl('r','💰','si-b',_dopMoney(T.r),'Оборот','Payment доп (міс.+1): нараховано '+_dopMoney(X.payB)+', оплачено '+_dopMoney(X.payF))
-    +tl('c','👩‍🏫','si-o',_dopMoney(T.c),'Собівартість (викладачі)',(calcAll?'з них за каталогом: '+_dopMoney(calcAll)+' *':'усе з Salary'))
-    +tl('p','📈','si-g','<span style="color:'+(prof>=0?'#27ae60':'#e74c3c')+'">'+_dopMoney(prof)+'</span>'+star,'Прибуток',nm>1?'≈ '+_dopMoney(prof/nm)+' / міс':'')
+    return '<div class="stat-card" onclick="dopTile(\''+id+'\')" style="cursor:pointer;min-width:0;height:100%;box-sizing:border-box;padding:14px;gap:10px;align-items:flex-start;'+(on?'outline:2px solid #2980b9;outline-offset:-2px;':'')+'"><div class="stat-icon '+cls+'" style="width:40px;height:40px;font-size:18px;border-radius:10px">'+ic+'</div><div style="min-width:0;flex:1"><div class="stat-val" style="font-size:clamp(15px,1.25vw,19px);white-space:nowrap;line-height:1.15">'+val+'</div><div class="stat-lbl">'+lbl+' '+(on?'▾':'▸')+'</div>'+(sub?'<div style="font-size:10px;color:var(--gray);margin-top:2px">'+sub+'</div>':'')+'</div></div>'; };
+  var tiles='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;align-items:stretch;padding:14px 14px 0;margin-bottom:10px">'
+    +tl('r','💰','si-b',_dopShort(T.r),'Оборот','Payment доп (міс.+1): нараховано '+_dopShort(X.payB)+', оплачено '+_dopShort(X.payF))
+    +tl('c','👩‍🏫','si-o',_dopShort(T.c),'Собівартість (викладачі)',(calcAll?'з них за каталогом: '+_dopShort(calcAll)+' *':'усе з Salary'))
+    +tl('p','📈','si-g','<span style="color:'+(prof>=0?'#27ae60':'#e74c3c')+'">'+_dopShort(prof)+'</span>'+star,'Прибуток',nm>1?'≈ '+_dopShort(prof/nm)+' / міс':'')
     +tl('m','％','si-p','<span style="color:'+_dopMCol(mg)+'">'+(mg==null?'—':mg+'%')+'</span>'+star,'Маржа','')
-    +tl('k','👶','si-y',T.covIn+' <span style="font-size:14px;color:var(--gray)">('+(_dopPct(T.covIn,T.kids)==null?'—':_dopPct(T.covIn,T.kids)+'%')+')</span>','Дітей охоплено','з '+T.kids+' дітей (Payment)'+(T.cov>T.covIn?' · ще '+(T.cov-T.covIn)+' без рядка Payment':''))
-    +tl('pk','🧒','si-b',T.kids?_dopMoney(T.r/T.kids):'—','Оборот доп на 1 дитину локації',nm>1&&T.kids?'≈ '+_dopMoney(T.r/T.kids/nm)+' / міс':'за період')
+    +tl('k','👶','si-y',T.covIn+' <span style="font-size:0.7em;color:var(--gray)">('+(_dopPct(T.covIn,T.kids)==null?'—':_dopPct(T.covIn,T.kids)+'%')+')</span>','Дітей охоплено','з '+T.kids+' дітей (Payment)'+(T.cov>T.covIn?' · ще '+(T.cov-T.covIn)+' без рядка Payment':''))
+    +tl('pk','🧒','si-b',T.kids?_dopShort(T.r/T.kids):'—','Оборот доп на 1 дитину локації',nm>1&&T.kids?'≈ '+_dopShort(T.r/T.kids/nm)+' / міс':'за період')
     +tl('nk','🔁','si-g',T.cov?(Math.round(T.n/T.cov*10)/10).toLocaleString('uk-UA'):'—','Занять на дитину','відміток на охоплену дитину')
     +'</div><div style="font-size:11px;color:var(--gray);padding:0 14px 8px">Період: <b>'+esc(_dopPerLbl(p))+'</b> · місяці з табелем: '+monthsLbl+(_dopCurM(p.y,used[used.length-1])?' · поточний місяць ще триває':'')+'</div>';
   var cpS=_dopCovPair(an,used,function(L){ return _dopIn(L,sl); });
