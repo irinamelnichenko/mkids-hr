@@ -4178,6 +4178,17 @@ function _populateGroupDropdown(loc, selected){
     var g=String(row['Група']||'').trim();
     if(g && !seen[g]){ seen[g]=1; groups.push(g); }
   });
+  // v7.443: групи-абонементи («Чомусики», «Мама+я») — з каталогу занять локації, навіть поки в блоці Payment немає дітей
+  if(S.subGroups===undefined){
+    S.subGroups=null;
+    apiGetFull({action:'getActivitiesCatalog'}).then(function(j){
+      var m={}; (j.items||[]).forEach(function(x){ if(x.active!==false && Number(x.subLimit)>0){ var l=String(x.loc||'').trim(); (m[l]=m[l]||[]).push(String(x.name||'').trim()); } });
+      S.subGroups=m;
+      var sel2=document.getElementById('fGroup'); if(sel2 && sel2._loc!=null) _populateGroupDropdown(sel2._loc, sel2.value||sel2._sel||'');
+    }).catch(function(){ S.subGroups={}; });
+  }
+  ((S.subGroups||{})[loc]||[]).forEach(function(g){ if(g && !seen[g]){ seen[g]=1; groups.push(g); } });
+  sel._loc=loc; sel._sel=selected;
   groups.sort(function(a,b){ return a.localeCompare(b,'uk'); });
   var html='<option value="">— Оберіть групу —</option>';
   groups.forEach(function(g){ html+='<option value="'+esc(g)+'">'+esc(g)+'</option>'; });

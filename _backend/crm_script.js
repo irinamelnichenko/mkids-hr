@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.442
+// m.kids CRM — Google Apps Script v7.443
+// v7.443: блок Payment закінчується й на резервному заголовку без назви (вставка в Чомусики не розтягує SUM); cf27Remap — CF 2027 на справжні заголовки.
 // v7.442: реєстр 2027 — 11 садочків на файли з папки «Ukraine 27» (школи без змін).
 // v7.441: pay27Budget — «Бюджет навч» 2027 садочків із картки (покриття / лише додаткові / безкоштовно — 0), лише клітинки бюджету.
 // v7.440: роль COO прибрано — немає в жодному списку прав; вхід, токен і записи цієї ролі відхиляються.
@@ -7181,7 +7182,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.442', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.443', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -7328,6 +7329,7 @@ function doGet(e) {
     else if (action === 'previewPayTermination')       result = payTermination({cardId:(e.parameter || {}).cardId, date:(e.parameter || {}).date, dryRun:true});   // v7.433 дія 2
     else if (action === 'previewPayTransfer')          result = payGroupTransfer({cardId:(e.parameter || {}).cardId, toGroup:(e.parameter || {}).toGroup, fromGroup:(e.parameter || {}).fromGroup, fromMonth:(e.parameter || {}).fromMonth, dryRun:true});   // v7.433 дія 3
     else if (action === 'previewPay27Clean')           result = pay27Clean({loc:(e.parameter || {}).loc, dryRun:true});   // v7.436 прев'ю чистки Payment 2027
+    else if (action === 'previewCf27Remap')            result = cf27Remap({loc:(e.parameter || {}).loc, dryRun:true});   // v7.443 прев'ю CF 2027
     else if (action === 'previewPay27Budget')          result = pay27Budget({loc:(e.parameter || {}).loc, dryRun:true});   // v7.441 прев'ю бюджету 2027 садочків
     else if (action === 'payFileRows')                 result = payFileRows(e.parameter || {});   // v7.435 read-only: блоки й рядки Payment року
     else if (action === 'clientTrace')                 result = clientTrace(e.parameter || {});         // v7.439 read-only: сліди картки в CRM і CONFIG
@@ -7419,6 +7421,7 @@ function doPost(e) {
     else if (body.action === 'payGroupTransfer')          result = payActionPost(payGroupTransfer, body);   // v7.433
     else if (body.action === 'pay27Clean')                result = pay27Clean(body);                        // v7.436 чистка Payment 2027 (CFO; dryRun)
     else if (body.action === 'pay27Budget')               result = pay27Budget(body);                       // v7.441 бюджет навч 2027 садочків (CFO; dryRun)
+    else if (body.action === 'cf27Remap')                 result = cf27Remap(body);                         // v7.443 CF 2027 → справжні заголовки (CFO; dryRun)
     else if (body.action === 'groupRenameApply')          result = groupRenameApply(body);                  // v7.435 стандарт назв груп (CFO; dryRun)
     else if (body.action === 'setPayAuto')                result = setPayAuto(body);                        // v7.433 вимикач автозапуску (CFO)
     else if (body.action === 'pilot2027Remove')           result = pilot2027Remove(body);       // v7.432 відкат пілоту 2027 (CFO, dryRun)
@@ -9004,10 +9007,20 @@ function _payFileFor(loc, year){
   return {ss:ss, sh:sh, cpm:cpm, LO:_paymentLayout(cpm), year:y, file:ss.getName()};
 }
 // Блоки груп: [{hdr:1-based, next:1-based, title}] — заголовки, як їх бачить решта системи (isGroupHeaderRow).
-function _payBlocks(data){
+// v7.443: sh переданий — блок закінчується й на РЕЗЕРВНОМУ заголовку без назви (=SUM у колонці B, порожня A),
+//   інакше вставка в останній названий блок (Чомусики на Біговій / Круглій) розтягувала SUM на резервні блоки під ним.
+function _payBlocks(data, sh){
   var h = [];
   for (var i = 3; i < data.length; i++){ var t = trim(String(data[i][0] || '')); if (t && isGroupHeaderRow(data[i], 1)) h.push({hdr:i + 1, title:t}); }
   h.forEach(function(b, k){ b.next = k + 1 < h.length ? h[k + 1].hdr : data.length + 1; });
+  if (sh && h.length && data.length > 3){
+    var FB = sh.getRange(1, 2, data.length, 1).getFormulas();
+    h.forEach(function(b){
+      for (var r = b.hdr + 1; r < b.next; r++){
+        if (!trim(String((data[r - 1] || [])[0] || '')) && /^=SUM\(/i.test(String(FB[r - 1][0] || ''))){ b.next = r; break; }
+      }
+    });
+  }
   return h;
 }
 // Назва групи в картці ↔ заголовок блоку: «Find-iki» ↔ «Findi-Ki» (лише літери й цифри), далі — початок назви.
@@ -9045,7 +9058,7 @@ function _payInsertPlan(data, block){
 // Після вставки / перенесення: прості =SUM(Xa:Xb) у рядку заголовка блоку мають охоплювати [заголовок+1 .. наступний−1].
 // Інші формули заголовка не чіпаємо. Повертає скільки клітинок виправлено.
 function _payFixBlockSum(sh, title){
-  var data = sh.getDataRange().getValues(), b = _payFindBlock(_payBlocks(data), title);
+  var data = sh.getDataRange().getValues(), b = _payFindBlock(_payBlocks(data, sh), title);
   if (!b) return 0;
   var lc = Math.min(sh.getLastColumn(), 120), F = sh.getRange(b.hdr, 1, 1, lc).getFormulas()[0], fixed = 0;
   for (var c = 1; c < lc; c++){
@@ -9111,7 +9124,7 @@ function payNewContract(body){
       var f = _payFileFor(c.loc, y); if (!f){ out.push({year:y, status:'немає файлу'}); return; }
       var data = f.sh.getDataRange().getValues(), have = _payRowsOf(data, c.name);
       if (have.length){ out.push({year:y, file:f.file, status:'рядок уже є', rows:have}); return; }
-      var blocks = _payBlocks(data), blk = _payFindBlock(blocks, c.group);
+      var blocks = _payBlocks(data, f.sh), blk = _payFindBlock(blocks, c.group);
       if (!blk){ out.push({year:y, file:f.file, status:'групу «' + c.group + '» не знайдено', groups:blocks.map(function(b){ return b.title; })}); return; }
       var plan = _payInsertPlan(data, blk); if (plan.error){ out.push({year:y, file:f.file, status:plan.error}); return; }
       var m0 = Number(start.slice(0, 4)) === y ? Number(start.slice(5, 7)) : 1;
@@ -9186,7 +9199,7 @@ function payGroupTransfer(body){
     Object.keys(PAY_FILES_BY_YEAR).map(Number).concat([PAY_BASE_YEAR]).sort().forEach(function(y){
       if (y < ty) return;
       var f = _payFileFor(c.loc, y); if (!f){ out.push({year:y, status:'немає файлу'}); return; }
-      var data = f.sh.getDataRange().getValues(), blocks = _payBlocks(data), rows = _payRowsOf(data, c.name);
+      var data = f.sh.getDataRange().getValues(), blocks = _payBlocks(data, f.sh), rows = _payRowsOf(data, c.name);
       var M = y === ty ? tm : 1;
       var tgt = _payFindBlock(blocks, toG), frm = fromG ? _payFindBlock(blocks, fromG) : null;
       if (!tgt){ out.push({year:y, file:f.file, status:'групу «' + toG + '» не знайдено', groups:blocks.map(function(b){ return b.title; })}); return; }
@@ -9652,6 +9665,66 @@ function pay27Budget(body){
     try { _moneyJournalLog([{by:body.by || 'система', route:'pay27Budget', loc:loc, name:'', year:2027, month:'', col:'Бюджет-навч 2027',
       before:'', after:res.withFeeCount + ' дітей, клітинок змінено ' + res.changed, reason:'бюджет 2027 = сума договору з картки'}]); } catch(_j){}
     try { _cacheBump('pay'); } catch(_cb){}
+    return res;
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.443 CF 2027 → справжні заголовки Payment (файли садочків, які CFO перебудувала вручну 19.10.2026).
+//   Заголовки = рядки Payment з =SUM у колонці B (з назвою чи резервні без назви). Розділи CF — діапазони
+//   =SUM(Cx:Cy) у колонці C (навчання / вступні / додаткові). Рядок CF, що посилається на НЕ заголовок, отримує
+//   заголовок за позицією в першому розділі: правильні посилання лишаються, решта рядків першого розділу — по черзі
+//   вільні заголовки; інші розділи — так само за тією ж позицією. Змінюється лише номер рядка в посиланнях Payment!.
+//   GET previewCf27Remap&loc= ; POST cf27Remap {loc, dryRun:false} (CFO).
+// ═══════════════════════════════════════════════════════════════════════════
+function cf27Remap(body){
+  try {
+    body = body || {};
+    var dryRun = (body.dryRun !== false), loc = String(body.loc || '').trim();
+    if (_pay27KgLocs().indexOf(loc) === -1) return {ok:false, error:'Лише садочки: ' + _pay27KgLocs().join(', ')};
+    if (!dryRun && !_payCfoOnly(body)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+    var f = _payFileFor(loc, 2027); if (!f) return {ok:false, error:'Файлу 2027 немає'};
+    var cf = f.ss.getSheetByName('CF'); if (!cf) return {ok:false, error:'Вкладки CF немає'};
+    var lr = f.sh.getLastRow(), A = f.sh.getRange(1, 1, lr, 1).getValues(), FB = f.sh.getRange(1, 2, lr, 1).getFormulas();
+    var heads = [];
+    for (var r = 4; r <= lr; r++) if (/^=SUM\(/i.test(String(FB[r - 1][0] || ''))) heads.push({row:r, title:trim(String(A[r - 1][0] || ''))});
+    var isHead = {}; heads.forEach(function(h){ isHead[h.row] = h.title || '(резерв)'; });
+    var clr = cf.getLastRow(), clc = cf.getLastColumn(), CF = cf.getRange(1, 1, clr, clc).getFormulas();
+    var RE = /((?:'Payment'|Payment)!\$?[A-Z]{1,3}\$?)(\d+)(?![\d:])/g;
+    var refRow = function(i){ var set = {}; CF[i].forEach(function(fx){ var m; RE.lastIndex = 0; while ((m = RE.exec(String(fx || '')))) set[m[2]] = 1; }); var k = Object.keys(set); return k.length === 1 ? Number(k[0]) : (k.length ? -1 : 0); };
+    var secs = [];
+    for (var i = 0; i < clr; i++){ var m = /^=SUM\(C(\d+):C(\d+)\)$/i.exec(String(CF[i][2] || '').replace(/\s+/g, '')); if (m) secs.push({a:Number(m[1]), b:Number(m[2])}); }
+    secs = secs.filter(function(s){ for (var x = s.a; x <= s.b; x++) if (refRow(x - 1) > 0) return true; return false; });
+    if (!secs.length) return {ok:false, error:'Розділів CF з посиланнями на Payment не знайдено'};
+    // перший розділ: правильні лишаються, неправильні — вільні заголовки по черзі
+    var s0 = secs[0], used = {}, posMap = {}, res = {ok:true, dryRun:dryRun, loc:loc, file:f.file, headers:heads.map(function(h){ return h.row + ':' + (h.title || '—'); }), changes:[], unchanged:0, skipped:[]};
+    for (var x = s0.a; x <= s0.b; x++){ var n = refRow(x - 1); if (n > 0 && isHead[n]) used[n] = 1; }
+    var free = heads.filter(function(h){ return !used[h.row]; }).map(function(h){ return h.row; });
+    for (var y = s0.a; y <= s0.b; y++){
+      var n0 = refRow(y - 1); if (n0 <= 0) continue;
+      posMap[y - s0.a] = isHead[n0] ? n0 : (free.length ? free.shift() : 0);
+    }
+    res.notInCf = free.map(function(r2){ return r2 + ':' + (isHead[r2]); });
+    var plan = [];
+    secs.forEach(function(s){
+      for (var z = s.a; z <= s.b; z++){
+        var n1 = refRow(z - 1); if (n1 === 0) continue;
+        if (n1 < 0){ res.skipped.push('CF рядок ' + z + ': посилання на кілька рядків Payment'); continue; }
+        var to = posMap.hasOwnProperty(z - s.a) ? posMap[z - s.a] : (isHead[n1] ? n1 : 0);
+        if (!to){ res.skipped.push('CF рядок ' + z + ' → Payment ' + n1 + ': немає відповідника'); continue; }
+        if (to === n1){ res.unchanged++; continue; }
+        res.changes.push('CF ' + z + ': Payment ' + n1 + ' → ' + to + ' (' + isHead[to] + ')');
+        for (var c = 0; c < clc; c++){ var fx = String(CF[z - 1][c] || ''); if (fx.indexOf('Payment') < 0) continue;
+          plan.push({r:z, c:c + 1, f:fx.replace(RE, function(all, pre, rn){ return Number(rn) === n1 ? pre + to : all; })}); }
+      }
+    });
+    res.cells = plan.length;
+    if (dryRun) return res;
+    res.backup = _safeBackupSheet(cf, 'cf27');
+    plan.forEach(function(p){ cf.getRange(p.r, p.c).setFormula(p.f); });
+    SpreadsheetApp.flush();
+    try { _moneyJournalLog([{by:body.by || 'система', route:'cf27Remap', loc:loc, name:'', year:2027, month:'', col:'CF → заголовки Payment',
+      before:'', after:res.changes.length + ' рядків CF, клітинок ' + plan.length, reason:'CF на справжні заголовки груп'}]); } catch(_j){}
     return res;
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
@@ -25129,7 +25202,7 @@ function addPaymentRow(body){
     }
     if (headerRow < 0) return {ok: false, error: 'Групу «' + group + '» не знайдено у файлі ' + loc, groupHeaders: headers};
     // 3) v7.433: місце всередині SUM заголовка — після останньої дитини, якщо під нею ще є рядок блоку, інакше перед нею
-    var _blk = _payBlocks(data).filter(function(b){ return b.hdr === headerRow + 1; })[0];
+    var _blk = _payBlocks(data, paySh).filter(function(b){ return b.hdr === headerRow + 1; })[0];
     var _plan = _blk ? _payInsertPlan(data, _blk) : {error:'блок не знайдено'};
     if (_plan.error) return {ok: false, error: 'Групу «' + group + '» знайдено, але: ' + _plan.error, groupHeaders: headers};
     var insertAfter1 = _plan.after ? _plan.after : _plan.before - 1;   // 1-based: новий рядок стане insertAfter1+1
