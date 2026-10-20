@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.451
+// m.kids CRM — Google Apps Script v7.453
+// v7.453: зіставлення занять Salary ↔ каталог — очевидні варіанти написання (_actFold, скорочення з крапкою) самі; смислові пари — реєстр «Заняття_Мапа» (actMapSetup, CFO).
 // v7.451: getDopAnalytics — аналітика додаткових (каталог + табель + Оплати-Рік + Salary EXTRAS), лише читання; _salaryReadGrids/_salaryRowsFromData спільні.
 // v7.450: «Групи_Мапа» — сід усіх пар Управління (Манхетен, Нац.Гвардії, Хіміків); groupMapSetup дописує відсутні.
 // v7.449: «Групи_Мапа» — автосинк чернеток бере канонічну назву групи з реєстру або чинних карток; інакше «назва не зіставлена», групу не заводить.
@@ -7189,7 +7190,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.451', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.453', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -7225,6 +7226,7 @@ function doGet(e) {
     else if (action === 'getRegistryUrls')    result = getRegistryUrls();
     else if (action === 'getGroupMap')       result = getGroupMap();   // v7.449 реєстр «Групи_Мапа» + незіставлені чернетки
     else if (action === 'getDopAnalytics')   result = getDopAnalytics(e.parameter || {});   // v7.451 аналітика додаткових (лише читання)
+    else if (action === 'getActMap')         result = getActMap();   // v7.453 реєстр «Заняття_Мапа»
     else if (action === 'getNeedsAttention') result = getNeedsAttention(String(e.parameter && e.parameter.nocache || '') === '1');   // v7.117; v7.334 кеш 10 хв
     else if (action === 'diagNeedsAttentionCompare') result = diagNeedsAttentionCompare();   // v7.334 звірка повне/вузьке читання
     else if (action === 'getAuthLog')         result = getAuthLog();   // v7.118 діагностика Авторизація_Лог
@@ -7437,6 +7439,7 @@ function doPost(e) {
     else if (body.action === 'opex27Setup')               result = opex27Setup(body);                       // v7.444 вкладки норм і драйверів 2027 + тригер (CFO; dryRun)
     else if (body.action === 'opex27Recalc')              result = opex27Recalc(body);                      // v7.444 OPEX 2027 локації за нормами (CFO; dryRun)
     else if (body.action === 'groupMapSetup')             result = groupMapSetup(body);                     // v7.449 вкладка «Групи_Мапа» (CFO, dryRun)
+    else if (body.action === 'actMapSetup')               result = actMapSetup(body);                       // v7.453 вкладка «Заняття_Мапа» — підтверджені пари (CFO, dryRun)
     else if (body.action === 'opex27SetAuto')             result = opex27SetAuto(body);                     // v7.445 вмикач автоперерахунку OPEX 2027 (CFO)
     else if (body.action === 'opex27RecalcAll')           result = opex27RecalcAll(body);                   // v7.444 «Перерахувати всі сади» (CFO; dryRun)
     else if (body.action === 'groupRenameApply')          result = groupRenameApply(body);                  // v7.435 стандарт назв груп (CFO; dryRun)
@@ -40711,8 +40714,98 @@ function _p27SetGroupFrom(loc, cardId, fromYm, group){
 // Абонемент (SUBSCRIPTION_ACTIVITIES): оборот = «Бюджет навч» блоку абонемента в Payment, не відмітки × ціна.
 // ═══════════════════════════════════════════════════════════════════════════
 var DOP_AN_MIN_MARKS = 10;
-var DOP_AN_ALIAS = {'м.денс':'m.dance'};   // одна назва заняття, написана кирилицею й латиницею
-function _dopAnKey(name){ var k = _journalNormName(name); return DOP_AN_ALIAS[k] || k; }
+// v7.453: ЗІСТАВЛЕННЯ ЗАНЯТЬ — лише очевидні варіанти написання зводяться самі (_actFold):
+//   регістр, лапки, крапки, дефіси, слеші, пробіли; латинські літери-двійники кирилиці (K→К);
+//   російське написання українського слова (и/ы/ї→і, э/є/ё→е, ъ) — «робототехника» = «Робототехніка»;
+//   скорочення з крапкою, якщо кандидат у каталозі локації один — «худ.студія» = «Художня студія».
+// Смислові пари («логопед» ↔ «Індивідуальні з логопедом») — ЛИШЕ з реєстру «Заняття_Мапа» (CRM),
+// куди їх заносить CFO після підтвердження (actMapSetup).
+var ACT_LAT2CYR = {a:'а', b:'в', c:'с', e:'е', h:'н', i:'і', k:'к', m:'м', o:'о', p:'р', t:'т', x:'х', y:'у'};
+function _actFold(s){
+  return String(s || '').toLowerCase()
+    .replace(/[«»"'`ʼ’‘“”„.\-–—_\/\\,:;()!?+\s]+/g, '')
+    .replace(/[abcehikmoptxy]/g, function(ch){ return ACT_LAT2CYR[ch]; })
+    .replace(/[иыї]/g, 'і').replace(/[єэё]/g, 'е').replace(/ъ/g, '');
+}
+// Одна назва заняття, написана латиною й кирилицею (не двійники літер, а транслітерація).
+var DOP_AN_ALIAS_SRC = [['М.Денс', 'm.Dance']], DOP_AN_ALIAS = null;
+function _dopAnKey(name){
+  if (!DOP_AN_ALIAS){ DOP_AN_ALIAS = {}; DOP_AN_ALIAS_SRC.forEach(function(p){ DOP_AN_ALIAS[_actFold(p[0])] = _actFold(p[1]); }); }
+  var k = _actFold(name); return DOP_AN_ALIAS[k] || k;
+}
+// Скорочення: «худ.студія» → «Художня студія». Слова рядка Salary — початки слів каталогу (≥3 літери),
+// стільки ж слів, і в назві є крапка. → назва заняття каталогу, якщо кандидат рівно один.
+function _actAbbrevMatch(salName, catNames){
+  var raw = String(salName || '');
+  if (raw.indexOf('.') < 0) return '';
+  var words = function(x){ return String(x).toLowerCase().split(/[\s.\-–—\/]+/).map(_actFold).filter(Boolean); };
+  var sw = words(raw); if (sw.length < 2) return '';
+  var hits = catNames.filter(function(n){
+    var cw = words(n); if (cw.length !== sw.length) return false;
+    for (var i = 0; i < sw.length; i++){
+      if (cw[i] === sw[i]) continue;
+      if (sw[i].length < 3 || cw[i].indexOf(sw[i]) !== 0) return false;
+    }
+    return true;
+  });
+  return hits.length === 1 ? hits[0] : '';
+}
+var ACT_MAP_TAB = 'Заняття_Мапа';
+var ACT_MAP_HEADER = ['Локація', 'Назва рядка в Salary', 'Заняття каталогу'];
+function _loadActMap(){
+  var out = {};
+  try {
+    var sh = getCRMSpreadsheet().getSheetByName(ACT_MAP_TAB);
+    if (!sh || sh.getLastRow() < 2) return out;
+    sh.getRange(2, 1, sh.getLastRow() - 1, 3).getValues().forEach(function(r){
+      var loc = String(r[0] || '').trim(), sal = String(r[1] || '').trim(), cat = String(r[2] || '').trim();
+      if (loc && sal && cat) (out[loc] = out[loc] || {})[_actFold(sal)] = cat;
+    });
+  } catch(e){ Logger.log('[actMap] ⚠️ %s', e && e.message); }
+  return out;
+}
+// GET ?action=getActMap — пари реєстру.
+function getActMap(){
+  try {
+    var sh = getCRMSpreadsheet().getSheetByName(ACT_MAP_TAB), rows = [];
+    if (sh && sh.getLastRow() > 1)
+      rows = sh.getRange(2, 1, sh.getLastRow() - 1, 3).getValues()
+        .filter(function(r){ return String(r[0] || '').trim(); })
+        .map(function(r){ return {loc:String(r[0]).trim(), salary:String(r[1] || '').trim(), activity:String(r[2] || '').trim()}; });
+    return {ok:true, tab:ACT_MAP_TAB, exists:!!sh, rows:rows};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+// POST {action:'actMapSetup', pairs:[[локація, рядок Salary, заняття каталогу]], dryRun, actorId} (CFO) —
+// створює вкладку й дописує підтверджені пари. Заняття має бути в каталозі цієї локації.
+function actMapSetup(body){
+  body = body || {};
+  if (!_payCfoOnly(body)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var dryRun = (body.dryRun !== false);
+  var catByLoc = {};
+  _getActivitiesSheet(false).getDataRange().getValues().slice(1).forEach(function(r){
+    var loc = String(r[1] || '').trim(), n = String(r[2] || '').trim();
+    if (loc && n) (catByLoc[loc] = catByLoc[loc] || {})[_actFold(n)] = n;
+  });
+  var have = _loadActMap(), add = [], bad = [];
+  (body.pairs || []).forEach(function(p){
+    var loc = String(p[0] || '').trim(), sal = String(p[1] || '').trim(), cat = String(p[2] || '').trim();
+    var real = catByLoc[loc] && catByLoc[loc][_actFold(cat)];
+    if (!loc || !sal || !real){ bad.push({pair:p, why:'заняття немає в каталозі локації'}); return; }
+    if (have[loc] && have[loc][_actFold(sal)]) return;
+    add.push([loc, sal, real]);
+    (have[loc] = have[loc] || {})[_actFold(sal)] = real;
+  });
+  var ss = getCRMSpreadsheet(), sh = ss.getSheetByName(ACT_MAP_TAB);
+  if (dryRun) return {ok:true, dryRun:true, tabExists:!!sh, willAdd:add, rejected:bad};
+  if (!sh){
+    sh = ss.insertSheet(ACT_MAP_TAB);
+    sh.getRange(1, 1, 1, ACT_MAP_HEADER.length).setValues([ACT_MAP_HEADER]).setFontWeight('bold');
+    sh.setFrozenRows(1);
+  }
+  if (add.length) sh.getRange(sh.getLastRow() + 1, 1, add.length, 3).setValues(add);
+  try { CacheService.getScriptCache().remove('dopan2_' + new Date().getFullYear() + '_n'); } catch(_c){}
+  return {ok:true, dryRun:false, added:add, rejected:bad, total:sh.getLastRow() - 1};
+}
 function _dopAnKid(name){ return _journalNormName(String(name || '').replace(/\s+\d+\s*$/, '')); }
 function getDopAnalytics(params){
   params = params || {};
@@ -40722,12 +40815,12 @@ function getDopAnalytics(params){
     if (EMP_MGMT_ROLES.indexOf(_r) === -1 && _r !== 'founder') return {ok:false, code:'AUTH', error:'Аналітика додаткових — лише для мережевих ролей'};
   }
   var year = Number(params.year) || new Date().getFullYear();
-  var ckey = 'dopan1_' + year;
+  var ckey = 'dopan2_' + year;
   if (String(params.nocache || '') !== '1'){ var hit = _cacheGzGetBig(ckey); if (hit){ hit.cached = true; return hit; } }
   try {
     var yp = String(year) + '-', L = {}, missing = [];
     var locOf = function(loc){
-      return L[loc] || (L[loc] = {acts:{}, kidIx:{}, kidN:0, kids:{}, marksM:{}, payDop:{}, salNoMarks:{}, salUnmatched:[]});
+      return L[loc] || (L[loc] = {acts:{}, kidIx:{}, kidN:0, kids:{}, marksM:{}, payDop:{}, salNoMarks:{}, salUnmatched:[], salAuto:[]});
     };
     var kidIdx = function(o, name){ var k = _dopAnKid(name); if (!k) return -1;
       if (!o.kidIx.hasOwnProperty(k)) o.kidIx[k] = o.kidN++; return o.kidIx[k]; };
@@ -40807,21 +40900,23 @@ function getDopAnalytics(params){
     }
 
     // 5) Salary EXTRAS
+    var actMap = _loadActMap();
     var reg = _salaryGetRegistry(), entries = reg.ok ? reg.rows.filter(function(e){ return L[e.loc] && Object.keys(L[e.loc].acts).length; }) : [];
     var rd = entries.length ? _salaryReadGrids(entries, 'fast') : {grids:{}, errors:[]};
     var sal = {};   // loc → key → [{f,b}×12]
     entries.forEach(function(e){
       var g = rd.grids[e.loc]; if (!g) return;
       var o3 = L[e.loc], keys = Object.keys(o3.acts).sort(function(a, b){ return b.length - a.length; });
+      var catNames = keys.map(function(k){ return o3.acts[k].name; }), am = actMap[e.loc] || {};
       _salaryRowsFromData(e.loc, g.data, g.width).forEach(function(row){
         if (row._section !== 'extras' || row._category !== 'extras') return;
-        var rn = _dopAnKey(row.name), hitK = '';
-        for (var q = 0; q < keys.length; q++) if (_startsWithCatalogName(rn, keys[q])){ hitK = keys[q]; break; }
-        if (!hitK && rn){   // «Англійська» у Salary ↔ «Англійська групові» в каталозі — лише коли кандидат один
-          var pre = keys.filter(function(k){ return k.indexOf(rn) === 0; });
-          if (pre.length === 1) hitK = pre[0];
-        }
+        var rn = _dopAnKey(row.name), hitK = '', how = '';
+        if (am[_actFold(row.name)]){ var mk = _dopAnKey(am[_actFold(row.name)]); if (o3.acts[mk]){ hitK = mk; how = 'map'; } }   // підтверджена пара
+        if (!hitK && o3.acts[rn]){ hitK = rn; how = _journalNormName(row.name) === _journalNormName(o3.acts[rn].name) ? '' : 'fold'; }
+        if (!hitK) for (var q = 0; q < keys.length; q++) if (_startsWithCatalogName(rn, keys[q])){ hitK = keys[q]; break; }   // «Лего 2» → «Лего»
+        if (!hitK){ var ab = _actAbbrevMatch(row.name, catNames); if (ab){ hitK = _dopAnKey(ab); how = 'abbr'; } }
         if (!hitK){ if (row.totalFact || row.totalBudget) o3.salUnmatched.push({name:row.name, fact:row.totalFact, budget:row.totalBudget}); return; }
+        if (how === 'fold' || how === 'abbr') o3.salAuto.push({salary:row.name, activity:o3.acts[hitK].name, how:how});
         var arr = (sal[e.loc] = sal[e.loc] || {})[hitK] || (sal[e.loc][hitK] = row.months.map(function(){ return {f:0, b:0}; }));
         row.months.forEach(function(x, ix){ arr[ix].f += x.fact; arr[ix].b += x.budget; });
       });
@@ -40863,7 +40958,7 @@ function getDopAnalytics(params){
         if (wm >= 1 && !o.marksM[wm] && x.f) sNo[wm] = (sNo[wm] || 0) + x.f; }); });
       var kids = {}; Object.keys(o.kids).forEach(function(m){ kids[m] = Object.keys(o.kids[m]).map(Number); });
       out[loc] = {acts:acts, kids:kids, marksMonths:Object.keys(o.marksM).map(Number).sort(function(a, b){ return a - b; }),
-                  payDop:o.payDop, salUnmatched:o.salUnmatched, salNoMarks:sNo, salaryFile:!!rd.grids[loc]};
+                  payDop:o.payDop, salUnmatched:o.salUnmatched, salAuto:o.salAuto, salNoMarks:sNo, salaryFile:!!rd.grids[loc]};
     });
     var res = {ok:true, year:year, locs:out, missing:missing, ms:Date.now() - t0, builtAt:new Date().toISOString()};
     _cacheGzPutBig(ckey, res, 600);

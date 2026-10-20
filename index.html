@@ -3698,10 +3698,11 @@ function _dopAdd(t,o){ ['n','r','z','s','kids','payers','pkm','c','rk','ck','fix
   t.cUnk=t.cUnk||o.cUnk; t.revUnk=t.revUnk||o.revUnk; return t; }
 // → {locs:{L:{kids,cov,r,c,cUnk,n,acts:{key:agg}}}, acts:{key:{name,sub,t:agg,byLoc}}, months, payF, gaps}
 function _dopCalc(an,p,inSlice){
-  var ms=_dopPerMonths(p), res={locs:{},acts:{},monthsUsed:{},payF:0,payB:0,payN:0,gaps:[],gapIx:{},salUnm:[],salNoMarks:{}};
+  var ms=_dopPerMonths(p), res={locs:{},acts:{},monthsUsed:{},payF:0,payB:0,payN:0,gaps:[],gapIx:{},salUnm:[],salAuto:[],salNoMarks:{}};
   Object.keys(an.locs||{}).forEach(function(L){ if(!inSlice(L)) return;
     var lo=an.locs[L], lm=ms.filter(function(m){ return (lo.marksMonths||[]).indexOf(m)>=0; });
     (lo.salUnmatched||[]).forEach(function(u){ res.salUnm.push({loc:L,name:u.name,fact:u.fact}); });
+    (lo.salAuto||[]).forEach(function(u){ res.salAuto.push({loc:L,salary:u.salary,activity:u.activity}); });   // v7.453 зведено за написанням
     ms.forEach(function(m){ var v=(lo.salNoMarks||{})[m]; if(v) res.salNoMarks[L]=(res.salNoMarks[L]||0)+v; });
     if(!lm.length) return;
     // доп відміток місяця M іде в «Бюджет доп» Payment місяця M+1 (exportAttendanceToPayments)
@@ -3872,11 +3873,13 @@ function _dopGapsHtml(X,p){
   var un=X.salUnm.filter(function(u){ return u.fact; });
   var unHtml=un.length?'<details style="margin-top:6px"><summary style="cursor:pointer">Рядки Salary EXTRAS без заняття в каталозі ('+un.length+') — у собівартість занять не йдуть</summary><div style="margin-top:4px">'
     +un.map(function(u){ return esc(u.loc)+' · «'+esc(u.name)+'» — '+_dopMoney(u.fact)+' за рік'; }).join('<br>')+'</div></details>':'';
+  var au=X.salAuto, auHtml=au.length?'<details style="margin-top:6px"><summary style="cursor:pointer">Рядки Salary, зведені з каталогом за написанням ('+au.length+')</summary><div style="margin-top:4px">'
+    +au.map(function(u){ return esc(u.loc)+' · «'+esc(u.salary)+'» → «'+esc(u.activity)+'»'; }).join('<br>')+'</div></details>':'';
   return '<div style="font-size:11px;color:var(--gray);padding:12px 14px 14px;line-height:1.5">'
     +'<b>Як рахується.</b> Оборот — відмітки табеля × ціна на день відмітки (те, що йде в «Бюджет доп»); абонемент («Чомусики», «Мама+я») — «Бюджет навч» його блоку в Payment, дітей-платників рахуємо окремо. '
     +'Собівартість — Salary EXTRAS (робота місяця M = колонка M+1); якщо факту ще немає — ставка каталогу × відмітки/заняття (≈). Проведено занять — група × дата з обʼєднаннями й поділами (захід — дата). '
     +'Точка беззбитковості — скільки дітей на занятті треба при цій ціні й ставці (абонемент — абонентів на місяць); червоним — фактична наповнюваність нижча. Місяць локації рахується, лише якщо в ній є табель додаткових (≥10 відміток).'
-    +(g.length?'<div style="margin-top:8px;color:#e67e22"><b>Чого бракує:</b><br>'+g.join('<br>')+'</div>':'')+nmHtml+unHtml+'</div>';
+    +(g.length?'<div style="margin-top:8px;color:#e67e22"><b>Чого бракує:</b><br>'+g.join('<br>')+'</div>':'')+nmHtml+unHtml+auHtml+'</div>';
 }
 // ─── v7.410: РОЗКРИТТЯ ВЕРХНІХ ПЛИТОК (Локацій / Груп / Дітей) углиб до конкретних дітей ───
 // Одне дерево для всіх трьох цифр, тож сума на кожному рівні = цифра на плитці.
