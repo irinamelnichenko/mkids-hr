@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.459
+// m.kids CRM — Google Apps Script v7.462
+// v7.462: getPaymentsLive — «Оплати» поточного місяця зібрані з файлів Payment зараз (без запису), кеш 5 хв — наповнюваність і вільні місця на дашборді наживо.
 // v7.459: getDopAnalytics віддає імена дітей локації (names) — розкриття плитки «Дітей охоплено».
 // v7.455: наповнюваність — очікувані групи з карток теж за «Групи_Мапа» (_fillExpected пропущено у v7.454).
 // v7.454: назва групи на виході — за «Групи_Мапа» (_groupCanon): getClients, getClientCard, getPayments, getPaymentsYearly, групи предметників, наповнюваність; дані не перейменовуються.
@@ -7193,13 +7194,14 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.459', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.462', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
     else if (action === 'getPayments')        result = _groupCanonRows(getPayments(), true);          // v7.454 канонічна назва групи на виході
     else if (action === 'getPaymentsYearly')  result = _groupCanonRows(getPaymentsYearly(), true);
+    else if (action === 'getPaymentsLive')    result = _groupCanonRows(getPaymentsLive(e.parameter || {}), true);   // v7.462 «Оплати» наживо для дашборда (5 хв, нічого не пише)
     else if (action === 'getAllPayments')     result = getAllPayments({loc:(e.parameter&&e.parameter.loc)||'', name:(e.parameter&&e.parameter.name)||'', year:(e.parameter&&e.parameter.year)||''}); // v7.108 історія оплат дитини за рік з Payment-файлу
     else if (action === 'getReconcileLog')           result = getReconcileLog({child:e.parameter.child||'', loc:e.parameter.loc||'', from:e.parameter.from||'', to:e.parameter.to||''}); // v7.94
     else if (action === 'getClients')         result = _groupCanonRows(getClients(e.parameter || {}));   // v7.292 &mode=list без JSON здоровʼя/розвитку; v7.336 кеш + mode=roster
@@ -41002,4 +41004,36 @@ function getDopAnalytics(params){
   } catch(e){
     return {ok:false, error:String(e && e.message || e)};
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.462 · «ОПЛАТИ» НАЖИВО для дашборда (наповнюваність, вільні місця, дерево груп).
+// GET ?action=getPaymentsLive[&nocache=1] — ті самі 18 колонок, що й лист «Оплати» (поточний місяць),
+// але зібрані з файлів Payment зараз тим самим _aggLocRows, що й нічний aggregatePayments.
+// НІЧОГО не пише (лист «Оплати» не чіпає). Кеш 5 хв; nocache=1 — зібрати заново.
+// ═══════════════════════════════════════════════════════════════════════════
+var PAY_LIVE_HEADER = ['Локація','Напрямок','Тип','Група','Вихователь',"Ім'я дитини",
+  'Факт навчання','Факт вступний','Факт доп.','Факт разом','Бюджет навчання','Бюджет доп.','Бюджет разом',
+  'Статус','Місяць','Оновлено','Дата договору','Група як у файлі'];
+var PAY_LIVE_TTL = 300;
+function getPaymentsLive(params){
+  params = params || {};
+  var key = 'paylive1';
+  if (String(params.nocache || '') !== '1'){ var hit = _cacheGzGetBig(key); if (hit){ hit.cached = true; return hit; } }
+  try {
+    var t0 = Date.now();
+    var configData = SpreadsheetApp.openById(CONFIG_SHEET_ID).getSheets()[0].getDataRange().getValues();
+    var now = new Date(), curJSMonth = now.getMonth(), monthName = getMonthDisplayName(curJSMonth), updateStr = formatDate(now);
+    var rows = [], errors = [], cardsRef = {cards:null};
+    for (var r = 1; r < configData.length; r++){
+      var cfgRow = configData[r];
+      if (!trim(cfgRow[2]) || !trim(cfgRow[3])) continue;
+      try { Array.prototype.push.apply(rows, _aggLocRows(cfgRow, curJSMonth, monthName, updateStr, cardsRef)); }
+      catch(e){ errors.push(trim(cfgRow[2]) + ': ' + (e && e.message)); }
+    }
+    var data = rows.map(function(a){ var o = {}; for (var i = 0; i < PAY_LIVE_HEADER.length; i++) o[PAY_LIVE_HEADER[i]] = (a[i] === undefined ? '' : a[i]); return o; });
+    var res = {ok:true, live:true, data:data, errors:errors, month:monthName, builtAt:now.toISOString(), ms:Date.now() - t0};
+    if (!errors.length || data.length) _cacheGzPutBig(key, res, PAY_LIVE_TTL);
+    return res;
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
