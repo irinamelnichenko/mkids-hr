@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.455
+// m.kids CRM — Google Apps Script v7.459
+// v7.459: getDopAnalytics віддає імена дітей локації (names) — розкриття плитки «Дітей охоплено».
 // v7.455: наповнюваність — очікувані групи з карток теж за «Групи_Мапа» (_fillExpected пропущено у v7.454).
 // v7.454: назва групи на виході — за «Групи_Мапа» (_groupCanon): getClients, getClientCard, getPayments, getPaymentsYearly, групи предметників, наповнюваність; дані не перейменовуються.
 // v7.453: зіставлення занять Salary ↔ каталог — очевидні варіанти написання (_actFold, скорочення з крапкою) самі; смислові пари — реєстр «Заняття_Мапа» (actMapSetup, CFO).
@@ -7192,7 +7193,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.455', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.459', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -40837,7 +40838,7 @@ function actMapSetup(body){
     sh.setFrozenRows(1);
   }
   if (add.length) sh.getRange(sh.getLastRow() + 1, 1, add.length, 3).setValues(add);
-  try { CacheService.getScriptCache().remove('dopan2_' + new Date().getFullYear() + '_n'); } catch(_c){}
+  try { CacheService.getScriptCache().remove('dopan3_' + new Date().getFullYear() + '_n'); } catch(_c){}
   return {ok:true, dryRun:false, added:add, rejected:bad, total:sh.getLastRow() - 1};
 }
 function _dopAnKid(name){ return _journalNormName(String(name || '').replace(/\s+\d+\s*$/, '')); }
@@ -40849,15 +40850,16 @@ function getDopAnalytics(params){
     if (EMP_MGMT_ROLES.indexOf(_r) === -1 && _r !== 'founder') return {ok:false, code:'AUTH', error:'Аналітика додаткових — лише для мережевих ролей'};
   }
   var year = Number(params.year) || new Date().getFullYear();
-  var ckey = 'dopan2_' + year;
+  var ckey = 'dopan3_' + year;
   if (String(params.nocache || '') !== '1'){ var hit = _cacheGzGetBig(ckey); if (hit){ hit.cached = true; return hit; } }
   try {
     var yp = String(year) + '-', L = {}, missing = [];
     var locOf = function(loc){
-      return L[loc] || (L[loc] = {acts:{}, kidIx:{}, kidN:0, kids:{}, marksM:{}, payDop:{}, salNoMarks:{}, salUnmatched:[], salAuto:[]});
+      return L[loc] || (L[loc] = {acts:{}, kidIx:{}, kidN:0, kidNames:[], kids:{}, marksM:{}, payDop:{}, salNoMarks:{}, salUnmatched:[], salAuto:[]});
     };
     var kidIdx = function(o, name){ var k = _dopAnKid(name); if (!k) return -1;
-      if (!o.kidIx.hasOwnProperty(k)) o.kidIx[k] = o.kidN++; return o.kidIx[k]; };
+      if (!o.kidIx.hasOwnProperty(k)){ o.kidIx[k] = o.kidN++; o.kidNames.push(String(name || '').trim()); }   // v7.459 імена для розкриття плитки
+      return o.kidIx[k]; };
 
     // 1) Каталог
     var byId = {};
@@ -40992,7 +40994,7 @@ function getDopAnalytics(params){
         if (wm >= 1 && !o.marksM[wm] && x.f) sNo[wm] = (sNo[wm] || 0) + x.f; }); });
       var kids = {}; Object.keys(o.kids).forEach(function(m){ kids[m] = Object.keys(o.kids[m]).map(Number); });
       out[loc] = {acts:acts, kids:kids, marksMonths:Object.keys(o.marksM).map(Number).sort(function(a, b){ return a - b; }),
-                  payDop:o.payDop, salUnmatched:o.salUnmatched, salAuto:o.salAuto, salNoMarks:sNo, salaryFile:!!rd.grids[loc]};
+                  payDop:o.payDop, salUnmatched:o.salUnmatched, salAuto:o.salAuto, salNoMarks:sNo, names:o.kidNames, salaryFile:!!rd.grids[loc]};
     });
     var res = {ok:true, year:year, locs:out, missing:missing, ms:Date.now() - t0, builtAt:new Date().toISOString()};
     _cacheGzPutBig(ckey, res, 600);
