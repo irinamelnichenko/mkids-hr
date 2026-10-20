@@ -3787,7 +3787,8 @@ function _renderDopBlock(){
     +'<b>'+esc(slLbl)+' · '+esc(_dopPerLbl(p))+':</b> оборот допів <b>'+_dopMoney(T.r)+'</b>, прибуток <b style="color:'+(prof>=0?'#27ae60':'#e74c3c')+'">'+_dopMoney(prof)+'</b>'+star
     +' — маржа <b style="color:'+_dopMCol(mg)+'">'+(mg==null?'—':mg+'%')+'</b>. '
     +'Ходить <b>'+T.covIn+'</b> '+kidW(T.covIn)+' з '+T.kids+(covPct==null?'':' ('+covPct+'%)')+', у середньому одна дитина платить <b>'+_dopMoney(perKidM)+'</b> на місяць.'
-    +(T.cov>T.covIn?'<div style="font-size:11px;color:var(--gray)">Ще '+T.cov+'−'+T.covIn+' = '+(T.cov-T.covIn)+' дит. з табеля без рядка в Payment — у «ходить» не враховано, у середній чек враховано.</div>':'')
+    +(T.cov>T.covIn?'<div style="font-size:11px;color:var(--gray)">Ще '+(T.cov-T.covIn)+' дит. ходять на допи, але їх немає в Payment локації — у «ходить» не враховано, у середньому чеку враховано.</div>':'')
+    +(p.y===new Date().getFullYear()&&used.indexOf(new Date().getMonth()+1)>=0?'<div style="font-size:11px;color:var(--gray)">Поточний місяць ще триває — цифри неповні.</div>':'')
     +(used.length<_dopPerMonths(p).length?'<div style="font-size:11px;color:var(--gray)">Місяці з табелем: '+monthsLbl+'.</div>':'')+'</div>';
   var tiles='<details style="padding:0 14px 8px"><summary style="cursor:pointer;font-size:12px;color:var(--blue2,#2980b9)">показати деталі</summary><div class="stats-grid" style="padding:10px 0 0;margin-bottom:6px">'
     +_dopTile('💰','si-b',_dopMoney(T.r),'Оборот','Payment доп (міс.+1): нараховано '+_dopMoney(X.payB)+', оплачено '+_dopMoney(X.payF)+(X.payN?' · грудень — у файлі наступного року':''))
