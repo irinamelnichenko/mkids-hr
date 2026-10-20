@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.443
+// m.kids CRM — Google Apps Script v7.444
+// v7.444: OPEX 2027 садочків за нормами — «Норми_OPEX» і «Драйвери_27» у CRM, «OPEX_Норма» (норма + коригування) у файлі 2027, onEdit-тригер, «Перерахувати всі сади».
 // v7.443: блок Payment закінчується й на резервному заголовку без назви (вставка в Чомусики не розтягує SUM); cf27Remap — CF 2027 на справжні заголовки.
 // v7.442: реєстр 2027 — 11 садочків на файли з папки «Ukraine 27» (школи без змін).
 // v7.441: pay27Budget — «Бюджет навч» 2027 садочків із картки (покриття / лише додаткові / безкоштовно — 0), лише клітинки бюджету.
@@ -7182,7 +7183,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.443', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.444', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -7329,6 +7330,8 @@ function doGet(e) {
     else if (action === 'previewPayTermination')       result = payTermination({cardId:(e.parameter || {}).cardId, date:(e.parameter || {}).date, dryRun:true});   // v7.433 дія 2
     else if (action === 'previewPayTransfer')          result = payGroupTransfer({cardId:(e.parameter || {}).cardId, toGroup:(e.parameter || {}).toGroup, fromGroup:(e.parameter || {}).fromGroup, fromMonth:(e.parameter || {}).fromMonth, dryRun:true});   // v7.433 дія 3
     else if (action === 'previewPay27Clean')           result = pay27Clean({loc:(e.parameter || {}).loc, dryRun:true});   // v7.436 прев'ю чистки Payment 2027
+    else if (action === 'previewOpex27')               result = opex27Recalc({loc:(e.parameter || {}).loc, dryRun:true});   // v7.444 прев'ю OPEX 2027 локації
+    else if (action === 'previewOpex27Setup')          result = opex27Setup({dryRun:true});                                // v7.444 стартові норми з формул 2026
     else if (action === 'previewCf27Remap')            result = cf27Remap({loc:(e.parameter || {}).loc, dryRun:true});   // v7.443 прев'ю CF 2027
     else if (action === 'previewPay27Budget')          result = pay27Budget({loc:(e.parameter || {}).loc, dryRun:true});   // v7.441 прев'ю бюджету 2027 садочків
     else if (action === 'payFileRows')                 result = payFileRows(e.parameter || {});   // v7.435 read-only: блоки й рядки Payment року
@@ -7422,6 +7425,9 @@ function doPost(e) {
     else if (body.action === 'pay27Clean')                result = pay27Clean(body);                        // v7.436 чистка Payment 2027 (CFO; dryRun)
     else if (body.action === 'pay27Budget')               result = pay27Budget(body);                       // v7.441 бюджет навч 2027 садочків (CFO; dryRun)
     else if (body.action === 'cf27Remap')                 result = cf27Remap(body);                         // v7.443 CF 2027 → справжні заголовки (CFO; dryRun)
+    else if (body.action === 'opex27Setup')               result = opex27Setup(body);                       // v7.444 вкладки норм і драйверів 2027 + тригер (CFO; dryRun)
+    else if (body.action === 'opex27Recalc')              result = opex27Recalc(body);                      // v7.444 OPEX 2027 локації за нормами (CFO; dryRun)
+    else if (body.action === 'opex27RecalcAll')           result = opex27RecalcAll(body);                   // v7.444 «Перерахувати всі сади» (CFO; dryRun)
     else if (body.action === 'groupRenameApply')          result = groupRenameApply(body);                  // v7.435 стандарт назв груп (CFO; dryRun)
     else if (body.action === 'setPayAuto')                result = setPayAuto(body);                        // v7.433 вимикач автозапуску (CFO)
     else if (body.action === 'pilot2027Remove')           result = pilot2027Remove(body);       // v7.432 відкат пілоту 2027 (CFO, dryRun)
@@ -9726,6 +9732,204 @@ function cf27Remap(body){
     try { _moneyJournalLog([{by:body.by || 'система', route:'cf27Remap', loc:loc, name:'', year:2027, month:'', col:'CF → заголовки Payment',
       before:'', after:res.changes.length + ' рядків CF, клітинок ' + plan.length, reason:'CF на справжні заголовки груп'}]); } catch(_j){}
     return res;
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.444 OPEX 2027 ЗА НОРМАМИ — лише садочки (рішення CFO 20.10.2026).
+//   CRM «Норми_OPEX»: Стаття | Локація (порожньо = усі садочки) | База | Норма грн | Діє з місяця | Коментар.
+//     Бази: на групу / на дитину / на співробітника / фіксовано на локацію / % від надходжень.
+//     Норма статті для локації = рядки з цією локацією, якщо такі є; інакше рядки з порожньою локацією. Кілька рядків
+//     однієї статті додаються (групи × 2200 + 5000). Для бази рядок, що діє в місяці, — з найпізнішим «Діє з» ≤ місяця.
+//     Стартові рядки — з формул OPEX 2026 садочків (opexNormsExtract): показники → бази; CF × коеф. → % від надходжень;
+//     фіксовані суми → фіксовано; копії / інше → сума грудня 2026 з приміткою, звідки.
+//   CRM «Драйвери_27»: Локація | К-ть груп | План дітей | персонал по посадах | Персонал разом (=SUM).
+//   Перерахунок локації: у файлі 2027 вкладка «OPEX_Норма» (рядки = рядки статей OPEX; на місяць «Норма» і «Коригування»);
+//     «Норма» пише скрипт (числа; % від надходжень — формула від Payment рядка 3 місяця), «Коригування» — директор.
+//     Клітинка «Бюджет» OPEX = IF(коригування<>""; коригування; норма). Інші клітинки OPEX і Payment не чіпає.
+//   Автоматично: installable onEdit на CRM (вкладка «Драйвери_27») → перерахунок цієї локації. Кнопка — opex27RecalcAll.
+// ═══════════════════════════════════════════════════════════════════════════
+var OPEX27_NORMS_TAB = 'Норми_OPEX', OPEX27_NORMS_HEADER = ['Стаття', 'Локація', 'База нарахування', 'Норма грн', 'Діє з місяця', 'Коментар'];
+var OPEX27_DRV_TAB = 'Драйвери_27';
+var OPEX27_DRV_HEADER = ['Локація', 'К-ть груп', 'План дітей', 'Директор', 'Вихователі', 'Помічники вихователів', 'Медсестра', 'Кухня', 'Прибирання', 'Інші', 'Персонал разом'];
+var OPEX27_TAB = 'OPEX_Норма';
+var OPEX27_BASES = {kids:'на дитину', groups:'на групу', staff:'на співробітника', fixed:'фіксовано на локацію', pct:'% від надходжень'};
+var OPEX27_MONTHS = ['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
+
+function _opex27BaseKey(s){ var t = String(s || '').trim().toLowerCase(); for (var k in OPEX27_BASES) if (OPEX27_BASES[k] === t) return k; return ''; }
+// Стартові норми з формул OPEX 2026 садочків
+function _opex27SeedRows(){
+  var kg = _pay27KgLocs(), entries = (_opexRegistry() || []).filter(function(e){ return e && e.sheetId && kg.indexOf(e.loc) !== -1; });
+  var grids = _opexReadFormulaGrids(entries), byLoc = {}, dec = {};
+  entries.forEach(function(e){ var g = grids[e.loc]; if (!g || g.error) return;
+    byLoc[e.loc] = _opexNormsForLoc(g.V, g.F); dec[e.loc] = {};
+    byLoc[e.loc].articles.forEach(function(a){ dec[e.loc][a.name] = Number(g.V[a.row - 1][_opexBudgetCol(12) - 1]) || 0; }); });
+  var rows = [];
+  var add = function(art, loc, rule, dv){
+    var src = 'з формули 2026: ' + (rule.formula || '—'), t = rule.type;
+    if (t === 'driver'){
+      if (rule.kids)   rows.push([art, loc, OPEX27_BASES.kids,   rule.kids,   '2027-01', src]);
+      if (rule.groups) rows.push([art, loc, OPEX27_BASES.groups, rule.groups, '2027-01', src]);
+      if (rule.staff)  rows.push([art, loc, OPEX27_BASES.staff,  rule.staff,  '2027-01', src]);
+      if (rule.add)    rows.push([art, loc, OPEX27_BASES.fixed,  rule.add,    '2027-01', src]);
+    } else if (t === 'fixed') rows.push([art, loc, OPEX27_BASES.fixed, rule.add || 0, '2027-01', src]);
+    else if (t === 'cf'){
+      rows.push([art, loc, OPEX27_BASES.pct, _opexNR4((rule.refs[0] || {}).coef * 100), '2027-01', src + ' (база — «Бюджет навч» місяця з Payment, рядок 3)']);
+      if (rule.add) rows.push([art, loc, OPEX27_BASES.fixed, rule.add, '2027-01', src]);
+    } else if (t === 'empty') rows.push([art, loc, OPEX27_BASES.fixed, 0, '2027-01', 'у файлі 2026 порожньо']);
+    else rows.push([art, loc, OPEX27_BASES.fixed, Math.round(dv || 0), '2027-01', 'сума грудня 2026; у файлі: ' + (rule.formula || '—')]);
+  };
+  _opexNormsSummary(byLoc).forEach(function(s){
+    if (s.network) add(s.name, '', s.network.rule, 0);
+    s.exceptions.forEach(function(x){ add(s.name, x.loc, x.rule, (dec[x.loc] || {})[s.name]); });
+  });
+  return rows;
+}
+function _opex27Tab(ss, name, header){
+  var sh = ss.getSheetByName(name), created = false;
+  if (!sh){ sh = ss.insertSheet(name); sh.getRange(1, 1, 1, header.length).setValues([header]).setFontWeight('bold'); sh.setFrozenRows(1); created = true; }
+  return {sh:sh, created:created};
+}
+// POST opex27Setup {dryRun} (CFO): вкладки в CRM + стартові норми (лише в порожню вкладку) + рядки садочків + тригер.
+function opex27Setup(body){
+  try {
+    body = body || {};
+    var dryRun = (body.dryRun !== false);
+    if (!dryRun && !_payCfoOnly(body)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+    var seed = _opex27SeedRows(), kg = _pay27KgLocs(), res = {ok:true, dryRun:dryRun, normRows:seed.length, locations:kg, norms:seed};
+    if (dryRun) return res;
+    var crm = getCRMSpreadsheet();
+    var N = _opex27Tab(crm, OPEX27_NORMS_TAB, OPEX27_NORMS_HEADER);
+    if (N.sh.getLastRow() < 2){ N.sh.getRange(2, 1, seed.length, OPEX27_NORMS_HEADER.length).setValues(seed); N.sh.getRange(2, 5, seed.length, 1).setNumberFormat('@').setValues(seed.map(function(r){ return [r[4]]; })); res.normsWritten = seed.length; }
+    else res.normsWritten = 0;
+    var D = _opex27Tab(crm, OPEX27_DRV_TAB, OPEX27_DRV_HEADER), have = {};
+    if (D.sh.getLastRow() > 1) D.sh.getRange(2, 1, D.sh.getLastRow() - 1, 1).getValues().forEach(function(r){ have[trim(String(r[0]))] = 1; });
+    var sep = _fxSep(crm), added = 0;
+    kg.forEach(function(l){ if (have[l]) return; var r = D.sh.getLastRow() + 1;
+      D.sh.getRange(r, 1).setValue(l); D.sh.getRange(r, 11).setFormula(_fxLoc('=IF(COUNT(D' + r + ':J' + r + ')=0,"",SUM(D' + r + ':J' + r + '))', sep)); added++; });
+    res.driverRows = added;
+    res.trigger = _opex27EnsureTrigger();
+    return res;
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+function _opex27EnsureTrigger(){
+  var has = ScriptApp.getProjectTriggers().some(function(t){ return t.getHandlerFunction() === 'opex27OnEdit'; });
+  if (has) return 'вже є';
+  ScriptApp.newTrigger('opex27OnEdit').forSpreadsheet(getCRMSpreadsheet()).onEdit().create();
+  return 'створено';
+}
+// Тригер: правка у «Драйвери_27» → перерахунок OPEX змінених локацій.
+function opex27OnEdit(e){
+  try {
+    var sh = e && e.range && e.range.getSheet(); if (!sh || sh.getName() !== OPEX27_DRV_TAB) return;
+    var r0 = Math.max(2, e.range.getRow()), n = e.range.getLastRow() - r0 + 1; if (n < 1) return;
+    sh.getRange(r0, 1, n, 1).getValues().forEach(function(x){ var l = trim(String(x[0] || '')); if (l) _opex27Recalc(l, false, 'Драйвери_27 (onEdit)'); });
+  } catch(err){ Logger.log('[opex27OnEdit] ' + (err && err.message)); }
+}
+function _opex27Norms(){
+  var sh = getCRMSpreadsheet().getSheetByName(OPEX27_NORMS_TAB); if (!sh || sh.getLastRow() < 2) return [];
+  return sh.getRange(2, 1, sh.getLastRow() - 1, OPEX27_NORMS_HEADER.length).getValues().map(function(r){
+    var from = r[4] instanceof Date ? Utilities.formatDate(r[4], 'GMT+3', 'yyyy-MM') : String(r[4] || '').trim().slice(0, 7);
+    return {art:_opexNormalizeCategoryName(String(r[0] || '').trim()), loc:String(r[1] || '').trim(), base:_opex27BaseKey(r[2]), n:Number(r[3]) || 0, from:from || '2027-01'};
+  }).filter(function(x){ return x.art && x.base; });
+}
+function _opex27Drivers(loc){
+  var sh = getCRMSpreadsheet().getSheetByName(OPEX27_DRV_TAB); if (!sh || sh.getLastRow() < 2) return null;
+  var v = sh.getRange(2, 1, sh.getLastRow() - 1, OPEX27_DRV_HEADER.length).getValues();
+  for (var i = 0; i < v.length; i++) if (_nameFold(v[i][0]) === _nameFold(loc)){
+    var num = function(x){ return (x === '' || x == null) ? null : Number(x); };
+    return {groups:num(v[i][1]), kids:num(v[i][2]), staff:num(v[i][10])};
+  }
+  return null;
+}
+// Колонки Payment рядка 3 із сумою «Бюджет навч» по місяцях (BQ…CB у файлах садочків): 12 формул після блоків місяців.
+function _opex27PayCols(f){
+  var lc = f.sh.getLastColumn(), start = 1 + 12 * f.cpm + 1; if (lc < start) return null;
+  var F = f.sh.getRange(3, start, 1, lc - start + 1).getFormulas()[0], out = [];
+  for (var i = 0; i < F.length && out.length < 12; i++) if (String(F[i] || '').charAt(0) === '=') out.push(_colLetter(start + i - 1)); else if (out.length) break;
+  return out.length === 12 ? out : null;
+}
+function _opex27Recalc(loc, dryRun, by){
+  var f = _payFileFor(loc, 2027); if (!f) return {loc:loc, ok:false, error:'Файлу 2027 немає'};
+  var op = f.ss.getSheetByName('OPEX'); if (!op) return {loc:loc, ok:false, error:'Вкладки OPEX немає'};
+  var drv = _opex27Drivers(loc) || {}, norms = _opex27Norms(), V = op.getRange(1, 1, 45, 37).getValues();
+  var arts = _opexEditableRows(V).filter(function(r){ return r.kind === 'budget'; });
+  var payCols = null, res = {loc:loc, ok:true, dryRun:dryRun, file:f.file, drivers:drv, articles:[], noNorm:[], missing:{}, total:[0,0,0,0,0,0,0,0,0,0,0,0]};
+  var cells = {};   // row → [12] (число або формула)
+  arts.forEach(function(a){
+    var own = norms.filter(function(x){ return x.art === a.name && _nameFold(x.loc) === _nameFold(loc); });
+    var rows = own.length ? own : norms.filter(function(x){ return x.art === a.name && !x.loc; });
+    if (!rows.length){ res.noNorm.push(a.name); return; }
+    var vals = [], bad = '';
+    for (var m = 1; m <= 12 && !bad; m++){
+      var ym = '2027-' + ('0' + m).slice(-2), pick = {};
+      rows.forEach(function(x){ if (x.from <= ym && (!pick[x.base] || pick[x.base].from <= x.from)) pick[x.base] = x; });
+      var num = 0, pct = 0;
+      Object.keys(pick).forEach(function(b){ var x = pick[b];
+        if (b === 'fixed') num += x.n;
+        else if (b === 'pct') pct += x.n;
+        else { var d = drv[b]; if (d == null || isNaN(d)){ bad = b; return; } num += x.n * d; } });
+      if (bad) break;
+      if (pct){
+        if (!payCols) payCols = _opex27PayCols(f);
+        if (!payCols){ bad = 'надходження (Payment рядок 3)'; break; }
+        vals.push('=Payment!' + payCols[m - 1] + '3*' + _opexNR4(pct) + '/100' + (num ? '+' + _opexNR4(num) : ''));
+      } else { vals.push(Math.round(num * 100) / 100); res.total[m - 1] += num; }
+    }
+    if (bad){ var lbl = {kids:'план дітей', groups:'к-ть груп', staff:'персонал'}[bad] || bad; (res.missing[lbl] = res.missing[lbl] || []).push(a.name); return; }
+    cells[a.row] = vals;
+    res.articles.push({row:a.row, name:a.name, jan:vals[0]});
+  });
+  if (dryRun || !Object.keys(cells).length) return res;
+  var sep = _fxSep(f.ss), T = _opex27Tab(f.ss, OPEX27_TAB, ['Стаття']).sh;
+  if (T.getLastColumn() < 25 || String(T.getRange(2, 2).getValue()) !== 'Норма'){
+    var h1 = ['Стаття'], h2 = ['']; OPEX27_MONTHS.forEach(function(mn){ h1.push(mn, ''); h2.push('Норма', 'Коригування'); });
+    T.getRange(1, 1, 2, 25).setValues([h1, h2]).setFontWeight('bold'); T.setFrozenRows(2); T.setFrozenColumns(1);
+  }
+  T.getRange(3, 1, 28, 1).setValues(V.slice(2, 30).map(function(r){ return [r[0]]; }));   // назви = рядки 3–30 OPEX
+  for (var mm = 1; mm <= 12; mm++){
+    var col = 2 + (mm - 1) * 2, colVals = [];
+    for (var rr = 3; rr <= 30; rr++){
+      if (cells[rr]){ var x = cells[rr][mm - 1]; colVals.push([typeof x === 'string' ? _fxLoc(x, sep) : x]); }
+      else colVals.push(['']);   // колонка «Норма» — лише скрипта
+    }
+    T.getRange(3, col, 28, 1).setValues(colVals);
+    // «Бюджет» OPEX: суцільні відрізки рядків із нормою — одним setFormulas
+    var bc = _opexBudgetCol(mm), OF = op.getRange(3, bc, 28, 1).getFormulas(), run = [], run0 = 0;
+    var flush = function(){ if (run.length){ op.getRange(run0, bc, run.length, 1).setFormulas(run); res.budgetCells = (res.budgetCells || 0) + run.length; } run = []; };
+    for (var r2 = 3; r2 <= 30; r2++){
+      var nL = _colLetter(col - 1), cL = _colLetter(col);
+      var want = cells[r2] ? _fxLoc("=IF('" + OPEX27_TAB + "'!" + cL + r2 + "<>\"\",'" + OPEX27_TAB + "'!" + cL + r2 + ",'" + OPEX27_TAB + "'!" + nL + r2 + ")", sep) : null;
+      if (want && String(OF[r2 - 3][0]).replace(/[\s;]/g, ',').replace(/,+/g, ',') !== want.replace(/[\s;]/g, ',').replace(/,+/g, ',')){ if (!run.length) run0 = r2; run.push([want]); }
+      else flush();
+    }
+    flush();
+  }
+  SpreadsheetApp.flush();
+  try { _moneyJournalLog([{by:by || 'система', route:'opex27Recalc', loc:loc, name:'', year:2027, month:'', col:'OPEX 2027 за нормами',
+    before:'', after:res.articles.length + ' статей' + (res.budgetCells ? ', формул «Бюджет» ' + res.budgetCells : ''), reason:'норма × драйвер'}]); } catch(_j){}
+  return res;
+}
+// POST opex27Recalc {loc, dryRun} / opex27RecalcAll {dryRun} (CFO); GET previewOpex27&loc=
+function opex27Recalc(body){
+  try {
+    body = body || {};
+    var dryRun = (body.dryRun !== false), loc = String(body.loc || '').trim();
+    if (_pay27KgLocs().indexOf(loc) === -1) return {ok:false, error:'Лише садочки: ' + _pay27KgLocs().join(', ')};
+    if (!dryRun && !_payCfoOnly(body)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+    return _opex27Recalc(loc, dryRun, body.by);
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+function opex27RecalcAll(body){
+  try {
+    body = body || {};
+    var dryRun = (body.dryRun !== false);
+    if (!dryRun && !_payCfoOnly(body)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+    var out = [];
+    _pay27KgLocs().forEach(function(l){ try { var r = _opex27Recalc(l, dryRun, body.by || 'кнопка «Перерахувати всі сади»');
+      out.push({loc:l, ok:r.ok, error:r.error, articles:(r.articles || []).length, missing:r.missing, noNorm:r.noNorm, budgetCells:r.budgetCells || 0}); }
+      catch(err){ out.push({loc:l, ok:false, error:String(err && err.message || err)}); } });
+    return {ok:true, dryRun:dryRun, locations:out};
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 

@@ -2349,7 +2349,8 @@ function _n27Render(){
   var h = '<div class="bg-ctrl">' +
     '<select class="month-sel" onchange="n27SetGroup(this.value)"><option value="">Садки й школи</option><option value="kg"' + (n.group === 'kg' ? ' selected' : '') + '>Садки</option><option value="school"' + (n.group === 'school' ? ' selected' : '') + '>Школи</option></select>' +
     '<span class="muted" style="flex:1;min-width:240px;font-size:12px">Клік на клітинку — змінити правило. «* Садки / * Школи» — норма групи; сіре — локація бере норму групи. Під правилом — прикидка на місяць за кількостями ' + escapeHtml(mName) + ' 2026. Файли OPEX не змінюються.</span>' +
-    '<button class="btn btn-secondary" type="button" onclick="n27Log()">🕘 Журнал</button></div>';
+    '<button class="btn btn-secondary" type="button" onclick="n27Log()">🕘 Журнал</button>' +
+    '<button class="btn btn-primary" type="button" id="opex27AllBtn" onclick="opex27RecalcAll()" title="Норми_OPEX × Драйвери_27 → OPEX файлів 2027 усіх садочків">🔁 Перерахувати всі сади 2027</button></div>';
   if (!d.seeded){
     h += '<div style="background:#fff4e5;border-radius:10px;padding:14px;margin-bottom:12px"><b>Довідник 2027 ще порожній.</b> Заповнити стартовими правилами з формул 2026? Статті з показниками → норма групи й винятки; інше (оренда від CF, копії місяців) → сума грудня 2026 з приміткою, звідки вона.' +
       '<div style="margin-top:10px"><button class="btn btn-primary" type="button" id="n27SeedBtn" onclick="n27Seed()">Заповнити з формул 2026</button></div></div>';
@@ -2387,6 +2388,18 @@ function _n27Render(){
   h += '<tr class="bg-cnt"><td class="bg-sticky">Бюджет грудня 2026</td>' + cols.map(function(c){ return '<td class="bg-gs"></td>' + c.locs.map(function(l){ return '<td class="num muted">' + fmtUah(dec[l.loc] || 0) + '</td>'; }).join(''); }).join('') + '</tr>';
   h += '</tbody></table></div>';
   $('bgBody').innerHTML = h;
+}
+// v7.444: OPEX 2027 садочків за нормами (CRM «Норми_OPEX» × «Драйвери_27») → «OPEX_Норма» і «Бюджет» у файлах 2027.
+async function opex27RecalcAll(){
+  if (!confirm('Перерахувати OPEX 2027 усіх садочків за «Норми_OPEX» × «Драйвери_27»?\n\nСкрипт пише лише колонки «Норма» у вкладці «OPEX_Норма» та формули «Бюджет» у OPEX. «Коригування» директорів не чіпає.')) return;
+  var b = $('opex27AllBtn'); if (b){ b.disabled = true; b.textContent = 'Перераховую (до ~5 хв)…'; }
+  var res = await _budPost({action:'opex27RecalcAll', dryRun:false, actorId:(S.user && S.user.id)});
+  if (b){ b.disabled = false; b.textContent = '🔁 Перерахувати всі сади 2027'; }
+  if (!res || !res.ok){ alert('Не вдалося: ' + ((res && res.error) || 'помилка')); return; }
+  alert(res.locations.map(function(x){
+    var miss = Object.keys(x.missing || {}).map(function(k){ return k + ' (' + x.missing[k].length + ' ст.)'; });
+    return (x.ok ? '✅ ' : '⚠️ ') + x.loc + ': ' + (x.ok ? x.articles + ' статей' + (miss.length ? '; бракує драйвера: ' + miss.join(', ') : '') : x.error);
+  }).join('\n'));
 }
 async function n27Seed(){
   var b = $('n27SeedBtn'); if (b){ b.disabled = true; b.textContent = 'Читаю формули 2026…'; }
