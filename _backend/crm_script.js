@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.446
+// m.kids CRM — Google Apps Script v7.447
+// v7.447: групи-абонементи (заняття каталогу з лімітом абонемента: Чомусики, Мама+я) прибрано з груп предметників (_loadRealGroups).
 // v7.446: тип групи предметників за змістом назви (_canonGroupType) — «Findi-Ki» знову знаходить норму; норми локації за ключем _predGroupKey.
 // v7.445: запобіжник OPEX27_AUTO — onEdit «Драйвери_27» нічого не пише, доки CFO не ввімкне (opex27SetAuto).
 // v7.444: OPEX 2027 садочків за нормами — «Норми_OPEX» і «Драйвери_27» у CRM, «OPEX_Норма» (норма + коригування) у файлі 2027, onEdit-тригер, «Перерахувати всі сади».
@@ -7185,7 +7186,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.446', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.447', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -35445,6 +35446,7 @@ function _loadRealGroups(locFilter){
   var stData = (colSt >= 0) ? sh.getRange(2, colSt + 1, lastRow - 1, 1).getValues() : null;
   var filter = String(locFilter || '').trim();
   var seen = {};                                   // "loc|group" → true
+  var subKeys = _subGroupKeysByLoc();                // v7.447: абонементи не показуємо
   for (var i = 0; i < data.length; i++){
     var loc = String(data[i][iLoc] || '').trim();
     var grp = String(data[i][iGrp] || '').trim();
@@ -35457,11 +35459,36 @@ function _loadRealGroups(locFilter){
     var k = loc + '|' + grp;
     if (seen[k]) continue;
     seen[k] = true;
+    if (_isSubGroup(subKeys, loc, grp)) continue;   // v7.447: абонемент — не вікова група
     if (!out[loc]) out[loc] = [];
     out[loc].push(grp);
   }
   Object.keys(out).forEach(function(l){ out[l].sort(); });
   return out;
+}
+// v7.447: групи-абонементи локації («Чомусики», «Мама+я») — заняття каталогу
+// «Додаткові», позначені як абонемент (_subLimitForName > 0). Це гурток, а не
+// вікова група: дитина вже стоїть у своїй віковій групі, тож у сітці
+// предметників такий рядок її дублював і показував ∞. → {loc: [ключі літер]}
+function _subGroupKeysByLoc(){
+  var out = {};
+  try {
+    var data = _getActivitiesSheet(false).getDataRange().getValues();
+    for (var i = 1; i < data.length; i++){
+      var loc = String(data[i][1] || '').trim(), name = String(data[i][2] || '').trim();
+      if (!loc || !name || !_subLimitForName(name)) continue;
+      var key = _groupLetters(name, false);
+      if (key) (out[loc] = out[loc] || []).push(key);
+    }
+  } catch(e){ Logger.log('[subGroupKeys] ⚠️ %s', e && e.message); }
+  return out;
+}
+// Назва групи починається з назви заняття-абонемента («Чомусики», «Чомусики 2 Олена»).
+function _isSubGroup(subKeys, loc, grp){
+  var keys = subKeys[loc]; if (!keys) return false;
+  var g = _groupLetters(grp, false);
+  for (var i = 0; i < keys.length; i++) if (g.indexOf(keys[i]) === 0) return true;
+  return false;
 }
 
 // ─── v7.205: РОСТЕР ШКОЛИ З КАРТОК (read-only) ───────────────────────────────
