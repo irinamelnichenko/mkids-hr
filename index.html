@@ -3799,6 +3799,16 @@ function _dopInsightsHtml(an,p,inSlice,sl){
   items.filter(function(x){ return x.mg<30; }).sort(function(a,b){ return a.profM-b.profM; }).slice(0,2).forEach(function(x){ used[key(x)]=1;
     lines.push('<span style="color:'+(x.profM<0?'#e74c3c':'#e67e22')+'">'+(x.profM<0?'🔴':'🟠')+'</span> '+nm(x)+' — маржа <b style="color:'+_dopMCol(x.mg)+'">'+x.mg+'%</b>: '
       +(x.profM<0?'втрачаємо <b style="color:#e74c3c">'+_dopMoney(-x.profM)+'</b>/міс':'заробляємо лише <b>'+_dopMoney(x.profM)+'</b>/міс')+'. Причина — '+_dopWhy(x)+'.'); });
+  // 📉 охоплення впало > 15 п.п.: останній повний місяць до попереднього (оборот не залежить від точності собівартості)
+  var cpI=_dopCovPair(an,im.ms,inSlice), drops=[], pp=(cpI&&cpI.mP>1)?_dopCalc(an,{ms:[cpI.mP-1]},inSlice):null;   // регулярне = йшло й за місяць до попереднього
+  if(cpI) Object.keys(cpI.prev.locs).forEach(function(L){ var Rp=cpI.prev.locs[L], Rc=cpI.cur.locs[L]; if(!Rc||Rc.kids<10||!Rp.kids) return;
+    Object.keys(Rp.acts).forEach(function(k){ var op=Rp.acts[k], oc=Rc.acts[k]||{kids:0,r:0}; if(op.kids<3 || op.model==='За захід') return;   // захід разовий — його відсутність не відтік
+      var o2=pp&&pp.locs[L]&&pp.locs[L].acts[k]; if(!o2||!o2.kids) return;   // літні / разові (лише в одному місяці) — не відтік
+      var a=op.kids/Rp.kids*100, b=oc.kids/Rc.kids*100; if(a-b<=15) return;
+      drops.push({L:L, k:k, name:op.name, a:a, b:b, rp:op.r, rc:oc.r||0}); }); });
+  drops.sort(function(x,y){ return (y.rp-y.rc)-(x.rp-x.rc); }).slice(0,2).forEach(function(d){ used[d.L+'|'+d.k]=1;
+    lines.push('📉 Охоплення впало: «'+esc(d.name)+'» · '+esc(d.L)+' — '+_dopMnL(cpI.mP)+' '+Math.round(d.a)+'% → '+_dopMnL(cpI.mL)+' '+Math.round(d.b)+'% (−'+(Math.round(d.a)-Math.round(d.b))+' п.п.), оборот '+_dopMoney(d.rp)+' → '+_dopMoney(d.rc)+'/міс'
+      +(d.rp>d.rc?' (<b style="color:#e74c3c">−'+_dopMoney(d.rp-d.rc)+'</b>)':'')+'.'); });
   items.filter(function(x){ return !used[key(x)] && x.A && x.A.rows.length>=3 && x.A.med!=null && x.mg<x.A.med-15; })
     .map(function(x){ x.gap=(x.A.med-x.mg)/100*x.o.rk/x.mN; return x; }).sort(function(a,b){ return b.gap-a.gap; }).slice(0,2).forEach(function(x){ used[key(x)]=1;
       var b=x.be||{};
@@ -3815,8 +3825,24 @@ function _dopInsightsHtml(an,p,inSlice,sl){
   var mLbl=im.ms.map(function(m){ return DOP_MN[m-1]; }).join(', ');
   return '<div style="padding:4px 16px 10px"><div style="font-size:13px;font-weight:700;margin-bottom:6px">На що дивитись <span style="font-weight:400;font-size:11px;color:var(--gray)">· '+mLbl+(im.fallback?' (поточний місяць ще триває — висновки за попередній)':'')+'</span></div>'
     +(lines.length?'<div style="display:flex;flex-direction:column;gap:6px;font-size:13px;line-height:1.45">'+lines.map(function(l){ return '<div>'+l+'</div>'; }).join('')+'</div>'
-      :'<div style="font-size:13px;color:var(--gray)">Нічого тривожного: немає занять з маржею нижче 30%, з ціною нижче медіани свого типу чи з наповнюваністю нижче окупності.</div>')
+      :'<div style="font-size:13px;color:var(--gray)">Нічого тривожного: немає занять з маржею нижче 30%, з падінням охоплення понад 15 п.п., з ціною нижче медіани свого типу чи з наповнюваністю нижче окупності.</div>')
     +'<div style="font-size:11px;color:var(--gray);margin-top:6px">Порівняння — лише в межах свого типу (садки з садками, школи зі школами, управління з управлінням). Рядки з приблизною собівартістю (*) і пари з оборотом менше '+_dopMoney(DOP_MIN_REV_M)+'/міс у висновки не беруться.</div></div>';
+}
+// v7.458: охоплення заняття = діти на занятті / діти локацій, де воно йде; зміна — останній місяць періоду до попереднього.
+function _dopCovPair(an,ms,filter){ var mL=ms[ms.length-1], mP=mL-1; if(!mL||mP<1) return null;
+  return {mL:mL, mP:mP, cur:_dopCalc(an,{ms:[mL]},filter), prev:_dopCalc(an,{ms:[mP]},filter)}; }
+function _dopActCov(Xm,key,onlyL){
+  if(onlyL){ var R=Xm.locs[onlyL]; if(!R||!R.kids) return null; var o=R.acts[key]; return (o?o.kids:0)/R.kids*100; }
+  var k=0,n=0; Object.keys(Xm.locs).forEach(function(L){ var o=Xm.locs[L].acts[key]; if(!o||!o.kids) return; k+=o.kids; n+=Xm.locs[L].kids; }); return n?k/n*100:null; }
+function _dopCurM(y,m){ var d=new Date(); return y===d.getFullYear() && m===d.getMonth()+1; }
+function _dopMnL(m){ return KOMP_MONTHS[m-1].toLowerCase(); }
+function _dopCovCell(cov,cp,key,onlyL,y){
+  var v=cov==null?'<span style="color:var(--gray2)">—</span>':Math.round(cov)+'%';
+  if(!cp) return v;
+  var a=_dopActCov(cp.prev,key,onlyL), b=_dopActCov(cp.cur,key,onlyL); if(a==null||b==null) return v;
+  var d=Math.round(b)-Math.round(a), cur=_dopCurM(y,cp.mL);
+  var tip=_dopMnL(cp.mP)+' '+Math.round(a)+'% → '+_dopMnL(cp.mL)+' '+Math.round(b)+'%'+(cur?' (місяць ще триває — неповні дані)':'');
+  return v+' <span title="'+esc(tip)+'" style="white-space:nowrap;font-size:10px;cursor:help;color:'+(d<=-15?'#e74c3c':d<0?'#e67e22':d>0?'#27ae60':'var(--gray)')+'">'+(d<0?'▼ '+(-d):d>0?'▲ '+d:'= 0')+' п.п.'+(cur?' <i>неповн.</i>':'')+'</span>';
 }
 // v7.457: сортування кліком по заголовку (спадання → зростання) і памʼять розгорнутих розділів.
 function _dopSortSt(id,def){ var st=(S.dopSortT||{})[id]; return st||def; }
@@ -3884,12 +3910,14 @@ function _renderDopBlock(){
   // 2) Таблиця по заняттях — сортування кліком по заголовку
   var na='<span style="color:var(--gray2)">—</span>';
   var acts=Object.keys(X.acts).map(function(k){ return X.acts[k]; });
+  var cpS=_dopCovPair(an,used,function(L){ return _dopIn(L,sl); });
   var actRowsArr=acts.map(function(A){ var t=A.t, be=_dopBE(Object.assign({sub:A.sub},t)), perKid=A.sub?(t.payers?t.r/t.payers:null):(t.kids?t.r/t.kids:null);
     var fill=t.s?t.n/t.s:null, prof=_dopProfit(t), mg=_dopMargin(t), unk=prof==null;
-    return {v:[A.name, t.locs, t.kids, t.s, (t.revUnk&&!t.r)?null:t.r, (t.cUnk&&!t.c)?null:t.c, prof, mg, (perKid==null||(t.revUnk&&!t.r))?null:perKid, fill, be.be!=null?be.be:(be.loss?1e9:null)],
+    var lk=0; Object.keys(A.byLoc).forEach(function(L){ lk+=(X.locs[L]||{}).kids||0; }); var cov=lk?t.kids/lk*100:null;
+    return {v:[A.name, t.locs, t.kids, cov, t.s, (t.revUnk&&!t.r)?null:t.r, (t.cUnk&&!t.c)?null:t.c, prof, mg, (perKid==null||(t.revUnk&&!t.r))?null:perKid, fill, be.be!=null?be.be:(be.loss?1e9:null)],
       html:'<tr style="cursor:pointer" onclick="dopSetCmp('+esc(JSON.stringify(A.key))+')" title="Порівняти по локаціях">'
       +'<td style="white-space:nowrap"><strong>'+esc(A.name)+'</strong>'+(A.sub?' <span class="badge" style="background:#8e44ad1a;color:#8e44ad;font-size:10px">абонемент</span>':'')+'</td>'
-      +'<td>'+t.locs+'</td><td>'+t.kids+(A.sub&&t.payers?' <span style="font-size:10px;color:var(--gray)">/ '+t.payers+' плат.</span>':'')+'</td><td>'+t.s+'</td>'
+      +'<td>'+t.locs+'</td><td>'+t.kids+(A.sub&&t.payers?' <span style="font-size:10px;color:var(--gray)">/ '+t.payers+' плат.</span>':'')+'</td><td style="white-space:nowrap">'+_dopCovCell(cov,cpS,A.key,null,p.y)+'</td><td>'+t.s+'</td>'
       +'<td style="white-space:nowrap">'+(t.revUnk&&!t.r?na:_dopMoney(t.r))+'</td>'
       +'<td style="white-space:nowrap">'+(t.cUnk&&!t.c?na:_dopMoney(t.c))+'</td>'
       +'<td style="white-space:nowrap"><b style="color:'+(unk?'var(--gray2)':prof>=0?'#27ae60':'#e74c3c')+'">'+(unk?'—':_dopMoney(prof))+'</b>'+(unk?'':_dopStar(t))+'</td>'
@@ -3897,10 +3925,10 @@ function _renderDopBlock(){
       +'<td style="white-space:nowrap">'+(perKid==null||(t.revUnk&&!t.r)?na:_dopMoney(perKid))+'</td>'
       +'<td>'+(fill==null?na:_dopFillTxt(fill))+'</td>'
       +'<td style="white-space:nowrap'+(be.ok===false?';color:#e74c3c':'')+'"'+(be.tip?' title="'+esc(be.tip)+'"':'')+'>'+be.t+'</td></tr>'}; });
-  var stA=_dopSortSt('acts',{c:6,d:-1});
+  var stA=_dopSortSt('acts',{c:7,d:-1});
   var actTbl='<details style="border-top:1px solid #f0f4f8"'+_dopDet('acts')+' ontoggle="dopDetToggle(\'acts\',this)"><summary style="cursor:pointer;padding:10px 14px;font-size:13px;font-weight:700">показати всі заняття ('+acts.length+') <span style="font-size:11px;font-weight:400;color:var(--gray)">клік по заголовку — сортування</span></summary>'
-    +'<div class="tbl-wrap"><table>'+_dopThead('acts',['Заняття','Локацій','Дітей','Проведено занять','Оборот','Собівартість','Прибуток','Маржа %','₴ на дитину','Сер. наповнюваність','Точка беззбитковості'],stA)+'<tbody>'
-    +(_dopSortRows(actRowsArr,stA).map(function(r){ return r.html; }).join('')||'<tr><td colspan="11" style="color:var(--gray)">Немає занять з відмітками</td></tr>')+'</tbody></table></div></details>';
+    +'<div class="tbl-wrap"><table>'+_dopThead('acts',['Заняття','Локацій','Дітей','Охоплення %','Проведено занять','Оборот','Собівартість','Прибуток','Маржа %','₴ на дитину','Сер. наповнюваність','Точка беззбитковості'],stA)+'<tbody>'
+    +(_dopSortRows(actRowsArr,stA).map(function(r){ return r.html; }).join('')||'<tr><td colspan="12" style="color:var(--gray)">Немає занять з відмітками</td></tr>')+'</tbody></table></div></details>';
   // 3) Таблиця по локаціях
   var locTbl='';
   if(sl.type!=='loc'){
@@ -3938,22 +3966,23 @@ function _renderDopBlock(){
   var cmp='<details id="dopCmp" style="border-top:1px solid #f0f4f8"'+((S.dopCmp||(S.dopDet&&S.dopDet.cmp))?' open':'')+' ontoggle="dopDetToggle(\'cmp\',this)"><summary style="cursor:pointer;padding:10px 14px;font-size:13px;font-weight:700">⚖️ Порівняння заняття по локаціях</summary>'
     +'<div style="padding:0 14px 6px"><select class="flt-sel" onchange="dopSetCmp(this.value)">'+keys.map(function(k){ return '<option value="'+esc(k)+'"'+(k===ck?' selected':'')+'>'+esc(NA.acts[k].name)+' · '+Object.keys(NA.acts[k].byLoc).filter(inTypes).length+' лок.</option>'; }).join('')+'</select></div>';
   if(CA){
-    var stC=_dopSortSt('cmp',{c:8,d:-1}), body='';
+    var stC=_dopSortSt('cmp',{c:9,d:-1}), body='', cpN=_dopCovPair(an,Object.keys(NA.monthsUsed).map(Number).sort(function(a,b){ return a-b; }),function(L){ return !!_dashLocType(L); });
     cmpTypes.forEach(function(t){
       var cl=Object.keys(CA.byLoc).filter(function(L){ return _dashLocType(L)===t; }); if(!cl.length) return;
       var med=_dopMedian(cl.filter(function(L){ return _dopExact(CA.byLoc[L]); }).map(function(L){ return _dopMargin(CA.byLoc[L]); }));
       var rr=cl.map(function(L){ var o=CA.byLoc[L], mg=_dopMargin(o), paid=o.n-o.z, avgP=paid>0?Math.round(o.r/paid):null, pr=o.sub?(o.payers?o.r/Math.max(1,o.pkm):null):(o.price||null), fill=o.s?o.n/o.s:null;
-        return {v:[L, pr, o.rate||null, o.kids, o.s, fill, (o.revUnk&&!o.r)?null:o.r, (o.cUnk&&!o.c)?null:o.c, mg],
+        var covL=(NA.locs[L]&&NA.locs[L].kids)?o.kids/NA.locs[L].kids*100:null;
+        return {v:[L, pr, o.rate||null, o.kids, covL, o.s, fill, (o.revUnk&&!o.r)?null:o.r, (o.cUnk&&!o.c)?null:o.c, mg],
           html:'<tr><td style="white-space:nowrap"><strong>'+esc(L)+'</strong></td>'
           +'<td style="white-space:nowrap">'+(o.sub?(o.payers?_dopMoney(pr)+' <span style="font-size:10px;color:var(--gray)">абон./міс</span>':na):(o.price?_dopMoney(o.price):na)+(avgP&&avgP!==o.price?' <span title="середня ціна у відмітках" style="font-size:10px;color:var(--gray)">факт '+_dopMoney(avgP)+'</span>':''))+'</td>'
           +'<td style="white-space:nowrap">'+(o.rate?_dopMoney(o.rate)+' <span style="font-size:10px;color:var(--gray)">'+esc(String(o.model||'').toLowerCase())+'</span>':na)+'</td>'
-          +'<td>'+o.kids+'</td><td>'+o.s+'</td><td>'+(fill==null?na:_dopFillTxt(fill))+'</td>'
+          +'<td>'+o.kids+'</td><td style="white-space:nowrap">'+_dopCovCell(covL,cpN,ck,L,p.y)+'</td><td>'+o.s+'</td><td>'+(fill==null?na:_dopFillTxt(fill))+'</td>'
           +'<td style="white-space:nowrap">'+(o.revUnk&&!o.r?na:_dopMoney(o.r))+'</td><td style="white-space:nowrap">'+(o.cUnk&&!o.c?na:_dopMoney(o.c))+'</td>'
           +'<td><b style="color:'+_dopMCol(mg)+'">'+(mg==null?'—':mg+'%')+'</b>'+_dopStar(o)+'</td></tr>'}; });
-      body+='<tr><td colspan="9" style="background:#f8fafc;font-size:11px;font-weight:700;color:var(--gray);text-transform:uppercase">'+({sad:'Садки',sch:'Школи',upr:'Управління'})[t]+(med!=null?' · медіана маржі '+Math.round(med)+'%':'')+'</td></tr>'
+      body+='<tr><td colspan="10" style="background:#f8fafc;font-size:11px;font-weight:700;color:var(--gray);text-transform:uppercase">'+({sad:'Садки',sch:'Школи',upr:'Управління'})[t]+(med!=null?' · медіана маржі '+Math.round(med)+'%':'')+'</td></tr>'
         +_dopSortRows(rr,stC).map(function(r){ return r.html; }).join('');
     });
-    cmp+='<div class="tbl-wrap"><table>'+_dopThead('cmp',['Локація','Ціна батькам','Ставка викладача','Дітей','Занять','Наповнюваність','Оборот','Собівартість','Маржа %'],stC)+'<tbody>'+body+'</tbody></table></div>';
+    cmp+='<div class="tbl-wrap"><table>'+_dopThead('cmp',['Локація','Ціна батькам','Ставка викладача','Дітей','Охоплення %','Занять','Наповнюваність','Оборот','Собівартість','Маржа %'],stC)+'<tbody>'+body+'</tbody></table></div>';
   }
   cmp+='</details>';
   var insights=_dopInsightsHtml(an,p,function(L){ return _dopIn(L,sl); },sl);
