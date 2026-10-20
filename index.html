@@ -3513,7 +3513,7 @@ function _isCurrentKid(c){
 }
 // ─── v7.412: АНАЛІТИКА ДОГОВОРІВ ПО КВАРТАЛАХ (файл «Комплектація», вкладки 19–26) ───
 // Підписано = «підписані» + «підписані на майбутній період» (як у KPI договорів); розірвано — модуль «розірвані».
-// Роки — галочками (за замовч. минулий рік). Прогноз поточного й наступного кварталу = середнє обраних років
+// Роки — галочками (за замовч. минулий рік). Прогноз обраного кварталу (v7.448: селектор, 2027+) = середнє обраних років
 // за цей квартал (лише повні квартали). Грудень, у якому стоїть річний підсумок (= сума січ–лис), — не рахуємо.
 var CONTR_FIRST_YEAR=2019;
 var CONTR_ALIAS={'осокорки сад':'Осокорки','польова':"Кар'єрна",'боровари':'Бровари','львів':'Кругла','львів кругла':'Кругла',
@@ -3530,76 +3530,115 @@ function _contrYears(){
 function contrToggleYear(y){ var a=_contrYears().slice(), i=a.indexOf(y); if(i>=0){ if(a.length>1) a.splice(i,1); } else a.push(y);
   a.sort(); S.contrYears=a; try{ localStorage.setItem('mkids_contr_years',JSON.stringify(a)); }catch(e){} _renderDashNow(); }
 function contrOpen(){ S.contrOpen=!S.contrOpen; if(S.contrOpen){ var cy=new Date().getFullYear(); for(var y=CONTR_FIRST_YEAR;y<=cy;y++) _ensureKomp(y).then(_dashSoftRerender); } _renderDashNow(); }
-// → {byLoc:{loc:{q:[{s,t}×4]}}, net:[{s,t}×4], qOk:[bool×4], decAnnual:n} або null (ще вантажиться)
+// v7.448: свій зріз блоку (не залежить від галочок охоплення дашборда) і квартал прогнозу.
+//   Зріз: net — мережа без управління (садки + школи), sad / sch / upr, loc — одна локація.
+var CONTR_SLICES=[['net','🌐 Мережа без управління'],['sad','🌱 Садки'],['sch','🏫 Школи'],['upr','🏢 Управління'],['loc','📍 Локація']];
+var CONTR_FC_FIRST=2027;
+function _contrLS(k,def){ try{ var v=JSON.parse(localStorage.getItem(k)||'null'); return v==null?def:v; }catch(e){ return def; } }
+function _contrSlice(){ if(!S.contrSlice){ var v=_contrLS('mkids_contr_slice',null);
+    S.contrSlice=(v&&typeof v==='object'&&v.type)?{type:String(v.type),loc:String(v.loc||'')}:{type:'net',loc:''}; } return S.contrSlice; }
+function contrSetSlice(type,loc){ S.contrSlice={type:type,loc:type==='loc'?String(loc||''):((S.contrSlice&&S.contrSlice.loc)||'')};   // локацію пам'ятаємо між зрізами
+  try{ localStorage.setItem('mkids_contr_slice',JSON.stringify(S.contrSlice)); }catch(e){} _renderDashNow(); }
+// Квартал прогнозу: {y, q} — будь-який з 2027 і далі (типово Q1 2027).
+function _contrFc(){ if(!S.contrFc){ var v=_contrLS('mkids_contr_fc',null);
+    S.contrFc=(v&&Number(v.y)>=CONTR_FC_FIRST&&Number(v.q)>=1&&Number(v.q)<=4)?{y:Number(v.y),q:Number(v.q)}:{y:CONTR_FC_FIRST,q:1}; } return S.contrFc; }
+function contrSetFc(val){ var p=String(val).split('-'); S.contrFc={y:Number(p[0]),q:Number(p[1])};
+  try{ localStorage.setItem('mkids_contr_fc',JSON.stringify(S.contrFc)); }catch(e){} _renderDashNow(); }
+function _contrIn(loc){ var sl=_contrSlice(), t=_dashLocType(loc); if(!t) return false;
+  if(sl.type==='net') return t==='sad'||t==='sch';
+  if(sl.type==='loc') return !!sl.loc && _kompNorm(loc)===_kompNorm(sl.loc);
+  return t===sl.type; }
+// → {byLoc:{loc:{q:[{s,t}×4], mh:{міс:1}, dec:n}}} або null (ще вантажиться). Усі локації реєстру — зріз накладає _contrAgg.
 function _contrYear(y){
   var kd=S._komp&&S._komp[y]; if(!kd) return null;
   var now=new Date(), cy=now.getFullYear(), cm=now.getMonth()+1, lastM=(y<cy)?12:(y===cy?cm:0);
-  var byLoc={}, net=[0,1,2,3].map(function(){ return {s:0,t:0}; }), monthHas={}, decAnnual=0;
+  var byLoc={};
   _kompFirstRows(kd.locations).forEach(function(l){
-    var loc=_contrLoc(l.loc); if(!loc || !_isKompNetwork(loc)) return;
+    var loc=_contrLoc(l.loc); if(!loc || !_dashLocType(loc)) return;
     var M={}; (l.months||[]).forEach(function(m){ M[m.month]=m; });
     function val(m,k){ var x=Number((M[m]||{})[k]); return isFinite(x)?x:null; }
     // Грудень: у колонці часто річний підсумок (Кар'єрна 2025 «34», Бігова «21»). Справжній грудень не більший за
     // 1,5 × найбільший місяць січ–лис + 2 — перевірено проти рядка «всього сад» (2020, 2024, 2025 — збіг точний).
     var maxM=function(k){ var mx=0; for(var m=1;m<=11;m++) mx=Math.max(mx,Math.abs(val(m,k)||0)); return mx; };
     var decOk=function(k){ var x=Math.abs(val(12,k)||0); return x<=maxM(k)*1.5+2; };
-    var d=byLoc[loc]||(byLoc[loc]={q:[0,1,2,3].map(function(){ return {s:0,t:0}; })});
+    var d=byLoc[loc]||(byLoc[loc]={q:[0,1,2,3].map(function(){ return {s:0,t:0}; }), mh:{}, dec:0});
     for(var mm=1;mm<=lastM;mm++){
       var s=Math.abs(val(mm,'signed')||0), f=Math.abs(val(mm,'signedFuture')||0), t=Math.abs(val(mm,'terminated')||0);
       if(mm===12){                                         // річний підсумок у колонці грудня — не грудень
-        if(s && !decOk('signed')){ s=0; decAnnual++; }
+        if(s && !decOk('signed')){ s=0; d.dec++; }
         if(f && !decOk('signedFuture')){ f=0; }
-        if(t && !decOk('terminated')){ t=0; decAnnual++; }
+        if(t && !decOk('terminated')){ t=0; d.dec++; }
       }
-      if(val(mm,'signed')||val(mm,'terminated')||val(mm,'contracts')) monthHas[mm]=1;
-      var qi=Math.floor((mm-1)/3); d.q[qi].s+=s+f; d.q[qi].t+=t; net[qi].s+=s+f; net[qi].t+=t;
+      if(val(mm,'signed')||val(mm,'terminated')||val(mm,'contracts')) d.mh[mm]=1;
+      var qi=Math.floor((mm-1)/3); d.q[qi].s+=s+f; d.q[qi].t+=t;
     }
   });
-  var qOk=[0,1,2,3].map(function(qi){ var a=qi*3+1; return (y<cy||(y===cy&&cm>a+2)) && monthHas[a] && monthHas[a+1] && monthHas[a+2]; });
-  return {byLoc:byLoc, net:net, qOk:qOk, decAnnual:decAnnual};
+  return {y:y, byLoc:byLoc};
+}
+// Зріз року: {net:[{s,t}×4], qOk:[bool×4], decAnnual:n, byLoc:{…лише локації зрізу}}
+function _contrAgg(d){
+  var cy=new Date().getFullYear(), cm=new Date().getMonth()+1, y=d.y;
+  var net=[0,1,2,3].map(function(){ return {s:0,t:0}; }), monthHas={}, decAnnual=0, byLoc={};
+  Object.keys(d.byLoc).forEach(function(L){ if(!_contrIn(L)) return; var x=d.byLoc[L]; byLoc[L]=x; decAnnual+=x.dec;
+    Object.keys(x.mh).forEach(function(m){ monthHas[m]=1; });
+    for(var qi=0;qi<4;qi++){ net[qi].s+=x.q[qi].s; net[qi].t+=x.q[qi].t; } });
+  var qOk=[0,1,2,3].map(function(qi){ var a=qi*3+1; return !!((y<cy||(y===cy&&cm>a+2)) && monthHas[a] && monthHas[a+1] && monthHas[a+2]); });
+  return {net:net, qOk:qOk, decAnnual:decAnnual, byLoc:byLoc};
 }
 function _renderContrBlock(){
-  var cy=new Date().getFullYear(), cm=new Date().getMonth()+1, cq=Math.ceil(cm/3), nq=cq%4+1, nqY=cq===4?cy+1:cy;
+  var cy=new Date().getFullYear();
   var hd='<div class="card" style="margin-top:16px"><div class="card-hd" style="flex-wrap:wrap;gap:6px;cursor:pointer" onclick="contrOpen()"><h3>📈 Договори по кварталах · прогноз '+(S.contrOpen?'▾':'▸')+'</h3>'
     +'<span style="font-size:12px;color:var(--gray)">файл «Комплектація» · '+CONTR_FIRST_YEAR+'–'+cy+'</span></div>';
   if(!S.contrOpen) return hd+'</div>';
   var yrs=[]; for(var y=CONTR_FIRST_YEAR;y<=cy;y++) yrs.push(y);
-  var sel=_contrYears();
+  var sel=_contrYears(), sl=_contrSlice(), fc=_contrFc(), qi=fc.q-1;
+  var data={}, raw={}, loading=false; yrs.forEach(function(y){ var d=_contrYear(y); if(d){ raw[y]=d; data[y]=_contrAgg(d); } else loading=true; });
+  // ── керування: квартал прогнозу · зріз · роки бази ──
+  var fcOpts=''; for(var fy=CONTR_FC_FIRST; fy<=Math.max(CONTR_FC_FIRST,cy+1)+2; fy++) for(var fq=1;fq<=4;fq++)
+    fcOpts+='<option value="'+fy+'-'+fq+'"'+(fy===fc.y&&fq===fc.q?' selected':'')+'>Q'+fq+' '+fy+'</option>';
+  var locList={}; Object.keys(raw).forEach(function(y){ Object.keys(raw[y].byLoc).forEach(function(L){ locList[L]=1; }); });
+  var locOpts=sortByLocationOrder(Object.keys(locList)).map(function(L){ return '<option'+(L===sl.loc?' selected':'')+'>'+esc(L)+'</option>'; }).join('');
+  var ctl='<div style="display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;padding:10px 14px;border-bottom:1px solid #f0f4f8">'
+    +'<label style="display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600">Прогноз на: <select class="flt-sel" onchange="contrSetFc(this.value)">'+fcOpts+'</select></label>'
+    +'<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">'+CONTR_SLICES.map(function(o){ return '<button type="button" class="att-chip'+(sl.type===o[0]?' att-chip-active':'')+'" onclick="contrSetSlice(\''+o[0]+'\',(S.contrSlice||{}).loc)">'+o[1]+'</button>'; }).join('')
+    +(sl.type==='loc'?'<select class="flt-sel" onchange="contrSetSlice(\'loc\',this.value)"><option value="">— оберіть локацію —</option>'+locOpts+'</select>':'')+'</div></div>';
   var ybar='<div style="display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;padding:10px 14px;border-bottom:1px solid #f0f4f8"><span style="font-size:12px;color:var(--gray)">Роки для прогнозу:</span>'
     +yrs.map(function(y){ return '<label style="display:inline-flex;align-items:center;gap:5px;font-size:14px;cursor:pointer"><input type="checkbox" id="contrY_'+y+'" '+(sel.indexOf(y)>=0?'checked':'')+' onchange="contrToggleYear('+y+')" style="width:15px;height:15px">'+y+'</label>'; }).join('')+'</div>';
-  var data={}, loading=false; yrs.forEach(function(y){ var d=_contrYear(y); if(d) data[y]=d; else loading=true; });
-  if(loading) return hd+ybar+'<div class="empty"><p>Завантаження вкладок «Комплектації»…</p></div></div>';
-  var Q=['Q1','Q2','Q3','Q4'];
-  var cell=function(o,ok){ if(!o) return '<td style="color:var(--gray2)">—</td>';
-    return '<td style="white-space:nowrap'+(ok?'':';color:var(--gray2)')+'" title="'+(ok?'':'квартал неповний — у прогноз не йде')+'"><b style="color:#27ae60">+'+o.s+'</b> / <b style="color:#e74c3c">−'+o.t+'</b></td>'; };
+  if(loading) return hd+ctl+ybar+'<div class="empty"><p>Завантаження вкладок «Комплектації»…</p></div></div>';
+  if(sl.type==='loc' && !sl.loc) return hd+ctl+ybar+'<div class="empty"><p>Оберіть локацію</p></div></div>';
+  var sgn=function(n){ return (n>0?'+':n<0?'−':'')+Math.abs(n); };
+  var netCol=function(n){ return n>0?'#27ae60':n<0?'#e74c3c':'var(--gray)'; };
+  var row3=function(o,ok){ if(!o) return '<td style="color:var(--gray2)">—</td><td style="color:var(--gray2)">—</td><td style="color:var(--gray2)">—</td>';
+    var g=ok?'':';color:var(--gray2)', tt=ok?'':' title="квартал неповний — у прогноз не йде"';
+    return '<td'+tt+' style="white-space:nowrap'+g+'"><b style="color:'+(ok?'#27ae60':'inherit')+'">+'+o.s+'</b></td><td'+tt+' style="white-space:nowrap'+g+'"><b style="color:'+(ok?'#e74c3c':'inherit')+'">−'+o.t+'</b></td>'
+      +'<td'+tt+' style="white-space:nowrap'+g+'"><b style="color:'+(ok?netCol(o.s-o.t):'inherit')+'">'+sgn(o.s-o.t)+'</b></td>'; };
   // середнє обраних років за квартал (лише повні квартали)
-  function avgQ(get, qi){ var n=0,s=0,t=0; sel.forEach(function(y){ var d=data[y]; if(!d||!d.qOk[qi]) return; var o=get(d); if(!o) return; n++; s+=o.s; t+=o.t; });
+  function avgQ(get){ var n=0,s=0,t=0; sel.forEach(function(y){ var d=data[y]; if(!d||!d.qOk[qi]) return; var o=get(d); if(!o) return; n++; s+=o.s; t+=o.t; });
     return n?{s:Math.round(s/n),t:Math.round(t/n),n:n}:null; }
-  // 1) Мережа: рядок на рік
+  // 1) Підсумок — прогноз обраного кварталу
+  var f=avgQ(function(d){ return d.net[qi]; });
+  var used=sel.filter(function(y){ return data[y]&&data[y].qOk[qi]; });
+  var slLbl=sl.type==='loc'?sl.loc:(CONTR_SLICES.filter(function(o){ return o[0]===sl.type; })[0]||['',''])[1].replace(/^\S+\s/,'');
+  var fcHtml='<div style="padding:12px 14px"><div style="padding:12px 14px;border:1px solid #e3e9ef;border-radius:10px">'
+    +'<div style="font-size:12px;color:var(--gray)">Прогноз Q'+fc.q+' '+fc.y+' · '+esc(slLbl)+'</div>'
+    +(f?'<div style="font-size:22px;font-weight:800;margin-top:4px"><span style="color:#27ae60">+'+f.s+'</span> <span style="color:var(--gray2);font-weight:400">/</span> <span style="color:#e74c3c">−'+f.t+'</span> <span style="font-size:13px;color:var(--gray);font-weight:600">· нетто <span style="color:'+netCol(f.s-f.t)+'">'+sgn(f.s-f.t)+'</span></span></div>'
+       +'<div style="font-size:11px;color:var(--gray)">середнє Q'+fc.q+' за '+f.n+' р.: '+used.join(', ')+'</div>'
+      :'<div style="color:var(--gray2);margin-top:6px">немає повних даних Q'+fc.q+' за обрані роки</div>')+'</div></div>';
+  // 2) Роки — лише обраний квартал
   var netRows=yrs.slice().reverse().map(function(y){ var d=data[y], on=sel.indexOf(y)>=0;
-    return '<tr style="'+(on?'background:#2980b90d':'')+'"><td><strong>'+y+'</strong>'+(on?' ✓':'')+(d.decAnnual?' <span title="у колонці грудня — річний підсумок, грудень не враховано" style="font-size:10px;color:#e67e22">груд.?</span>':'')+'</td>'
-      +Q.map(function(_,qi){ return cell(d.net[qi], d.qOk[qi]); }).join('')+'</tr>'; }).join('');
-  var avgRow='<tr style="border-top:2px solid var(--gray2)"><td><strong>Середнє обраних</strong></td>'+Q.map(function(_,qi){ var a=avgQ(function(d){ return d.net[qi]; },qi); return a?cell(a,true):'<td style="color:var(--gray2)">—</td>'; }).join('')+'</tr>';
-  var netTbl='<div class="tbl-wrap"><table><thead><tr><th>Мережа</th>'+Q.map(function(q){ return '<th>'+q+' <span style="font-weight:400;text-transform:none">підп. / розір.</span></th>'; }).join('')+'</tr></thead><tbody>'+netRows+avgRow+'</tbody></table></div>';
-  // 2) Прогноз поточного й наступного кварталу
-  var fCur=avgQ(function(d){ return d.net[cq-1]; },cq-1), fNext=avgQ(function(d){ return d.net[nq-1]; },nq-1), now=data[cy]&&data[cy].net[cq-1];
-  var fcBox=function(lbl,f,extra){ return '<div style="flex:1;min-width:220px;padding:12px 14px;border:1px solid #e3e9ef;border-radius:10px"><div style="font-size:12px;color:var(--gray)">'+lbl+'</div>'
-      +(f?'<div style="font-size:22px;font-weight:800;margin-top:4px"><span style="color:#27ae60">+'+f.s+'</span> <span style="color:var(--gray2);font-weight:400">/</span> <span style="color:#e74c3c">−'+f.t+'</span> <span style="font-size:13px;color:var(--gray);font-weight:600">· нетто '+(f.s-f.t>=0?'+':'')+(f.s-f.t)+'</span></div>'
-         +'<div style="font-size:11px;color:var(--gray)">середнє за '+f.n+' р.</div>':'<div style="color:var(--gray2);margin-top:6px">немає повних даних за обрані роки</div>')+(extra||'')+'</div>'; };
-  var fcHtml='<div style="display:flex;flex-wrap:wrap;gap:10px;padding:12px 14px">'
-    +fcBox('Прогноз Q'+cq+' '+cy+' (поточний)',fCur, now?('<div style="font-size:12px;margin-top:6px">Факт поки: <b style="color:#27ae60">+'+now.s+'</b> / <b style="color:#e74c3c">−'+now.t+'</b> <span style="color:var(--gray)">(минуло '+(cm-(cq-1)*3)+' з 3 міс.)</span></div>'):'')
-    +fcBox('Прогноз Q'+nq+' '+nqY+' (наступний)',fNext,'')+'</div>';
-  // 3) По локаціях: середнє обраних за кожен квартал + прогноз
-  var locSet={}; sel.forEach(function(y){ if(data[y]) Object.keys(data[y].byLoc).forEach(function(l){ locSet[l]=1; }); }); if(data[cy]) Object.keys(data[cy].byLoc).forEach(function(l){ locSet[l]=1; });
-  var locs=sortByLocationOrder(Object.keys(locSet));
-  var locRows=locs.map(function(L){ var g=function(qi){ return function(d){ return d.byLoc[L]?d.byLoc[L].q[qi]:null; }; };
-    var cur=data[cy]&&data[cy].byLoc[L]?data[cy].byLoc[L].q[cq-1]:null;
-    return '<tr><td style="white-space:nowrap"><strong>'+esc(L)+'</strong></td>'+Q.map(function(_,qi){ var a=avgQ(g(qi),qi); return a?cell(a,true):'<td style="color:var(--gray2)">—</td>'; }).join('')
-      +'<td style="border-left:2px solid var(--gray2)">'+(cur?'+'+cur.s+' / −'+cur.t:'—')+'</td></tr>'; }).join('');
-  var locTbl='<div class="tbl-wrap"><table><thead><tr><th>Локація · середнє обраних</th>'+Q.map(function(q,qi){ return '<th>'+q+(qi===cq-1?' ⟵ зараз':(qi===nq-1?' ⟵ далі':''))+'</th>'; }).join('')+'<th style="border-left:2px solid var(--gray2)">Факт Q'+cq+' '+cy+' поки</th></tr></thead><tbody>'+locRows+'</tbody></table></div>';
-  var note='<div style="font-size:11px;color:var(--gray);padding:6px 14px 12px">Підписано = «підписані» + «підписані на майбутній період»; розірвано — «розірвані». У прогноз ідуть лише повні квартали (сірі — неповні: 2019 почався з червня, поточний квартал ще триває). '
-    +'«груд.?» — у колонці грудня стоїть річний підсумок, такий грудень не рахуємо. Польова (до 2024) рахується як Кар\'єрна, «Львів» — як Кругла. Охоплення — за галочками Садки / Школи / Управління.</div>';
-  return hd+ybar+fcHtml+netTbl+'<div style="height:10px"></div>'+locTbl+note+'</div>';
+    return '<tr style="'+(on?'background:#2980b90d':'')+'"><td><strong>'+y+'</strong>'+(on?' ✓':'')+(d.decAnnual&&qi===3?' <span title="у колонці грудня — річний підсумок, грудень не враховано" style="font-size:10px;color:#e67e22">груд.?</span>':'')+'</td>'
+      +row3(d.net[qi], d.qOk[qi])+'</tr>'; }).join('');
+  var th3='<th>Підписано</th><th>Розірвано</th><th>Нетто</th>';
+  var netTbl='<div class="tbl-wrap"><table><thead><tr><th>Рік · Q'+fc.q+'</th>'+th3+'</tr></thead><tbody>'+netRows+'</tbody></table></div>';
+  // 3) Локації — середнє обраних за обраний квартал, за нетто
+  var locSet={}; sel.forEach(function(y){ if(data[y]) Object.keys(data[y].byLoc).forEach(function(l){ locSet[l]=1; }); });
+  var locData=Object.keys(locSet).map(function(L){ return {L:L, a:avgQ(function(d){ return d.byLoc[L]?d.byLoc[L].q[qi]:null; })}; });
+  locData.sort(function(x,y){ var nx=x.a?x.a.s-x.a.t:-1e9, ny=y.a?y.a.s-y.a.t:-1e9; return ny-nx || String(x.L).localeCompare(String(y.L),'uk'); });
+  var locTbl=sl.type==='loc'?'':'<div class="tbl-wrap"><table><thead><tr><th>Локація · середнє Q'+fc.q+'</th>'+th3+'</tr></thead><tbody>'
+    +locData.map(function(r){ return '<tr><td style="white-space:nowrap"><strong>'+esc(r.L)+'</strong></td>'+row3(r.a,true)+'</tr>'; }).join('')+'</tbody></table></div>';
+  var note='<div style="font-size:11px;color:var(--gray);padding:6px 14px 12px">Прогноз = середнє Q'+fc.q+' за обрані роки. Підписано = «підписані» + «підписані на майбутній період»; розірвано — «розірвані». У прогноз ідуть лише повні квартали (сірі — неповні: 2019 почався з червня, поточний квартал ще триває). '
+    +'«груд.?» — у колонці грудня стоїть річний підсумок, такий грудень не рахуємо. Польова (до 2024) рахується як Кар\'єрна, «Львів» — як Кругла.'+(sl.type==='upr'?' Управління у файлі «Комплектація» може не бути — тоді тут порожньо.':'')+'</div>';
+  return hd+ctl+ybar+fcHtml+netTbl+(locTbl?'<div style="height:10px"></div>'+locTbl:'')+note+'</div>';
 }
 // ─── v7.410: РОЗКРИТТЯ ВЕРХНІХ ПЛИТОК (Локацій / Груп / Дітей) углиб до конкретних дітей ───
 // Одне дерево для всіх трьох цифр, тож сума на кожному рівні = цифра на плитці.
