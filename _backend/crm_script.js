@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.462
+// m.kids CRM — Google Apps Script v7.463
+// v7.463: getDebtsLive — накопичений борг на сьогодні по всій мережі наживо (перенос переплат, оплата до 5-го, за днями при новому договорі/розірванні, «вступний» як оплата місяця); _aggYearLocRows спільний з «Оплати-Рік».
 // v7.462: getPaymentsLive — «Оплати» поточного місяця зібрані з файлів Payment зараз (без запису), кеш 5 хв — наповнюваність і вільні місця на дашборді наживо.
 // v7.459: getDopAnalytics віддає імена дітей локації (names) — розкриття плитки «Дітей охоплено».
 // v7.455: наповнюваність — очікувані групи з карток теж за «Групи_Мапа» (_fillExpected пропущено у v7.454).
@@ -7194,14 +7195,15 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.462', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.463', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
     else if (action === 'getPayments')        result = _groupCanonRows(getPayments(), true);          // v7.454 канонічна назва групи на виході
     else if (action === 'getPaymentsYearly')  result = _groupCanonRows(getPaymentsYearly(), true);
-    else if (action === 'getPaymentsLive')    result = _groupCanonRows(getPaymentsLive(e.parameter || {}), true);   // v7.462 «Оплати» наживо для дашборда (5 хв, нічого не пише)
+    else if (action === 'getPaymentsLive')    result = _groupCanonRows(getPaymentsLive(e.parameter || {}), true);
+    else if (action === 'getDebtsLive')       result = getDebtsLive(e.parameter || {});   // v7.463 накопичений борг на сьогодні по мережі (лише читання)   // v7.462 «Оплати» наживо для дашборда (5 хв, нічого не пише)
     else if (action === 'getAllPayments')     result = getAllPayments({loc:(e.parameter&&e.parameter.loc)||'', name:(e.parameter&&e.parameter.name)||'', year:(e.parameter&&e.parameter.year)||''}); // v7.108 історія оплат дитини за рік з Payment-файлу
     else if (action === 'getReconcileLog')           result = getReconcileLog({child:e.parameter.child||'', loc:e.parameter.loc||'', from:e.parameter.from||'', to:e.parameter.to||''}); // v7.94
     else if (action === 'getClients')         result = _groupCanonRows(getClients(e.parameter || {}));   // v7.292 &mode=list без JSON здоровʼя/розвитку; v7.336 кеш + mode=roster
@@ -13735,6 +13737,94 @@ function writeYearlyHeader(sheet) {
 }
 
 // v7.402: після кожного перезбору «Оплати-Рік» — скидаємо кеш getPaymentsYearly / getOverviewAnalytics / рахунків.
+// v7.463: рядки «Оплати-Рік» ОДНІЄЇ локації (спільне для нічного aggregatePaymentsYearly і живого getDebtsLive).
+function _aggYearLocRows(cfgRow, now, updateStr){
+  var out = [];
+  var curJSMonth = now.getMonth();
+  var dir       = trim(cfgRow[0]);
+  var typ       = trim(cfgRow[1]);
+  var loc       = trim(cfgRow[2]);
+  var sheetId   = trim(cfgRow[3]);
+  var sheetName = trim(cfgRow[4]) || 'Payment';
+  if (!loc || !sheetId) return out;
+  var ss           = SpreadsheetApp.openById(sheetId);
+  var paymentSheet = ss.getSheetByName(sheetName);
+  if (!paymentSheet) paymentSheet = ss.getSheets()[0];
+  var data = paymentSheet.getDataRange().getValues();
+  var cpm          = _paymentColsPerMonth(loc, cfgRow[5]);         // v7.103
+  var _LOy         = _paymentLayout(cpm);
+  var curMonthCol  = detectCurrentMonthCol(data, curJSMonth, cpm);
+  var contractCol  = detectContractDateCol(data);
+  // v7.299: keepDeparted=true — блоки «…вибули» йдуть у річний агрегат зі своїми
+  // сумами (колонка «Вибув»='так'); ростерні читачі Оплати-Рік такі рядки пропускають.
+  var _sumHdr      = _paymentSumHeaderRows(paymentSheet, data.length);   // v7.304
+  var groups       = parsePaymentSheet(data, curMonthCol, contractCol, cpm, loc, typ, undefined, undefined, true, _sumHdr);   // v7.202, v7.299, v7.304
+  // v7.262 ВАРІАНТ B: у річному агрегаті діє ЛИШЕ правило під-локації.
+  // Причина: «Школа Кар'єрна» вказує на той самий Payment-файл, що й садок,
+  // тож без цього річний аркуш рахував усю Кар'єрну ДВІЧІ — 73 рядки під
+  // садком і ті самі 73 під школою (1125 рядків замість 965).
+  // Правило КАРТКИ (v7.252) сюди свідомо НЕ переносимо: у місячному агрегаті
+  // це знімок одного місяця, а річний читають, щоб бачити гроші за ВЕСЬ рік —
+  // випускник із оплатою за березень має там лишитись зі своїми сумами.
+  // Тому Школа 228 і Школа Осокорки в річному й далі ширші за місячний.
+  var _ySub = _subLocOf(loc);
+  if (_ySub){
+    var _yb = groups.length;
+    groups = groups.filter(function(g){ return _sameBlock(g, _ySub.group); });
+    Logger.log(loc + ' [рік]: під-локація — лишено блок «' + _ySub.group + '», груп ' + _yb + ' → ' + groups.length);
+  } else {
+    var _yTaken = _subLocsOfHost(loc);
+    if (_yTaken.length){
+      var _yb2 = groups.length;
+      groups = _dropSubLocBlocks(groups, _yTaken);
+      Logger.log(loc + ' [рік]: віддано блоків під-локаціям — ' + (_yb2 - groups.length));
+    }
+  }
+  var nameToRow = {};
+  for (var ri = 3; ri < data.length; ri++) {
+    var nc = trim(String(data[ri][0] || ''));
+    if (nc && !isGroupHeaderRow(data[ri], 1)) {
+      nameToRow[nc] = ri;
+    }
+  }
+  groups.forEach(function(g) {
+    g.children.forEach(function(ch) {
+      // v7.298: гроші беремо з РЯДКА, який парсер віддав для цієї дитини. Раніше —
+      // nameToRow[ПІБ] = ОСТАННІЙ рядок із таким ПІБ у файлі: при двох рядках однієї
+      // дитини (Драган Артем, Манхетен: «Мама+я» 11 065 і «Розумники» 135 245) обидва
+      // отримували суми останнього, а гроші іншого зникали з агрегату. nameToRow — фолбек.
+      var rowIdx  = (ch.row !== undefined) ? ch.row : nameToRow[ch.name];
+      var rowData = (rowIdx !== undefined) ? data[rowIdx] : null;
+      var rowOut  = [loc, dir, typ, g.group, g.teacher, ch.name];
+      var factYear  = 0;
+      var budYear   = 0;
+      var factToday = 0;
+      var factDebt = 0, budDebt = 0, _yY = now.getFullYear();   // v7.415: борг без місяців, покритих передоплатою
+      for (var mi = 0; mi < 12; mi++) {
+        var col = 1 + mi * _LOy.cpm;                  // v7.103: старт блоку за cpm локації
+        var fs  = rowData ? toNum(rowData[col + _LOy.factNavch]) : 0;  // Факт навч
+        var fv  = rowData ? toNum(rowData[col + _LOy.factVstup]) : 0;  // Факт вступ
+        var fe  = rowData ? toNum(rowData[col + _LOy.factDop])   : 0;  // Факт доп
+        var be  = rowData ? toNum(rowData[col + _LOy.budDop])    : 0;  // Бюджет доп
+        var bs  = rowData ? toNum(rowData[col + _LOy.budNavch])  : 0;  // Бюджет навч
+        var totalNoEntry = fs + fe;
+        var budget       = bs + be;
+        var _cov = _coverFor(_yY + '-' + ('0' + (mi + 1)).slice(-2), '', ch.name, loc);   // v7.415 покриття передоплатою
+        var mStatus = _payStatus(fs, fe, bs, be, !!_cov);
+        if (!_cov){ factDebt += totalNoEntry; budDebt += budget; }
+        rowOut.push(fs, fe, fv, bs, be, mStatus);     // v7.101 порядок = заголовок (навч,доп,вступ,бюдж-навч,бюдж-доп,статус)
+        factYear  += totalNoEntry;                    // Факт-Рік лишаємо навч+доп (вступ окремо, не сюди)
+        budYear   += budget;
+        if (mi <= curJSMonth) factToday += totalNoEntry;
+      }
+      var debtYear = budDebt > factDebt ? budDebt - factDebt : 0;   // v7.415: покриті місяці (навчання) не рахуються
+      rowOut.push(factYear, budYear, debtYear, factToday, updateStr, (g.departed || ch.departed) ? 'так' : '');   // v7.299 «Вибув»; v7.303 і безіменні рядки
+      out.push(rowOut);
+    });
+  });
+  return out;
+}
+
 function aggregatePaymentsYearly() {
   try { return _aggregatePaymentsYearlyImpl(); } finally { _cacheBump('payyear'); }
 }
@@ -13751,91 +13841,12 @@ function _aggregatePaymentsYearlyImpl() {
   var allRows     = [];
   var errors      = [];
   for (var r = 1; r < configData.length; r++) {
-    var cfgRow    = configData[r];
-    var dir       = trim(cfgRow[0]);
-    var typ       = trim(cfgRow[1]);
-    var loc       = trim(cfgRow[2]);
-    var sheetId   = trim(cfgRow[3]);
-    var sheetName = trim(cfgRow[4]) || 'Payment';
-    if (!loc || !sheetId) continue;
+    var cfgRow = configData[r];
+    if (!trim(cfgRow[2]) || !trim(cfgRow[3])) continue;
     try {
-      var ss           = SpreadsheetApp.openById(sheetId);
-      var paymentSheet = ss.getSheetByName(sheetName);
-      if (!paymentSheet) paymentSheet = ss.getSheets()[0];
-      var data = paymentSheet.getDataRange().getValues();
-      var cpm          = _paymentColsPerMonth(loc, cfgRow[5]);         // v7.103
-      var _LOy         = _paymentLayout(cpm);
-      var curMonthCol  = detectCurrentMonthCol(data, curJSMonth, cpm);
-      var contractCol  = detectContractDateCol(data);
-      // v7.299: keepDeparted=true — блоки «…вибули» йдуть у річний агрегат зі своїми
-      // сумами (колонка «Вибув»='так'); ростерні читачі Оплати-Рік такі рядки пропускають.
-      var _sumHdr      = _paymentSumHeaderRows(paymentSheet, data.length);   // v7.304
-      var groups       = parsePaymentSheet(data, curMonthCol, contractCol, cpm, loc, typ, undefined, undefined, true, _sumHdr);   // v7.202, v7.299, v7.304
-      // v7.262 ВАРІАНТ B: у річному агрегаті діє ЛИШЕ правило під-локації.
-      // Причина: «Школа Кар'єрна» вказує на той самий Payment-файл, що й садок,
-      // тож без цього річний аркуш рахував усю Кар'єрну ДВІЧІ — 73 рядки під
-      // садком і ті самі 73 під школою (1125 рядків замість 965).
-      // Правило КАРТКИ (v7.252) сюди свідомо НЕ переносимо: у місячному агрегаті
-      // це знімок одного місяця, а річний читають, щоб бачити гроші за ВЕСЬ рік —
-      // випускник із оплатою за березень має там лишитись зі своїми сумами.
-      // Тому Школа 228 і Школа Осокорки в річному й далі ширші за місячний.
-      var _ySub = _subLocOf(loc);
-      if (_ySub){
-        var _yb = groups.length;
-        groups = groups.filter(function(g){ return _sameBlock(g, _ySub.group); });
-        Logger.log(loc + ' [рік]: під-локація — лишено блок «' + _ySub.group + '», груп ' + _yb + ' → ' + groups.length);
-      } else {
-        var _yTaken = _subLocsOfHost(loc);
-        if (_yTaken.length){
-          var _yb2 = groups.length;
-          groups = _dropSubLocBlocks(groups, _yTaken);
-          Logger.log(loc + ' [рік]: віддано блоків під-локаціям — ' + (_yb2 - groups.length));
-        }
-      }
-      var nameToRow = {};
-      for (var ri = 3; ri < data.length; ri++) {
-        var nc = trim(String(data[ri][0] || ''));
-        if (nc && !isGroupHeaderRow(data[ri], 1)) {
-          nameToRow[nc] = ri;
-        }
-      }
-      groups.forEach(function(g) {
-        g.children.forEach(function(ch) {
-          // v7.298: гроші беремо з РЯДКА, який парсер віддав для цієї дитини. Раніше —
-          // nameToRow[ПІБ] = ОСТАННІЙ рядок із таким ПІБ у файлі: при двох рядках однієї
-          // дитини (Драган Артем, Манхетен: «Мама+я» 11 065 і «Розумники» 135 245) обидва
-          // отримували суми останнього, а гроші іншого зникали з агрегату. nameToRow — фолбек.
-          var rowIdx  = (ch.row !== undefined) ? ch.row : nameToRow[ch.name];
-          var rowData = (rowIdx !== undefined) ? data[rowIdx] : null;
-          var rowOut  = [loc, dir, typ, g.group, g.teacher, ch.name];
-          var factYear  = 0;
-          var budYear   = 0;
-          var factToday = 0;
-          var factDebt = 0, budDebt = 0, _yY = now.getFullYear();   // v7.415: борг без місяців, покритих передоплатою
-          for (var mi = 0; mi < 12; mi++) {
-            var col = 1 + mi * _LOy.cpm;                  // v7.103: старт блоку за cpm локації
-            var fs  = rowData ? toNum(rowData[col + _LOy.factNavch]) : 0;  // Факт навч
-            var fv  = rowData ? toNum(rowData[col + _LOy.factVstup]) : 0;  // Факт вступ
-            var fe  = rowData ? toNum(rowData[col + _LOy.factDop])   : 0;  // Факт доп
-            var be  = rowData ? toNum(rowData[col + _LOy.budDop])    : 0;  // Бюджет доп
-            var bs  = rowData ? toNum(rowData[col + _LOy.budNavch])  : 0;  // Бюджет навч
-            var totalNoEntry = fs + fe;
-            var budget       = bs + be;
-            var _cov = _coverFor(_yY + '-' + ('0' + (mi + 1)).slice(-2), '', ch.name, loc);   // v7.415 покриття передоплатою
-            var mStatus = _payStatus(fs, fe, bs, be, !!_cov);
-            if (!_cov){ factDebt += totalNoEntry; budDebt += budget; }
-            rowOut.push(fs, fe, fv, bs, be, mStatus);     // v7.101 порядок = заголовок (навч,доп,вступ,бюдж-навч,бюдж-доп,статус)
-            factYear  += totalNoEntry;                    // Факт-Рік лишаємо навч+доп (вступ окремо, не сюди)
-            budYear   += budget;
-            if (mi <= curJSMonth) factToday += totalNoEntry;
-          }
-          var debtYear = budDebt > factDebt ? budDebt - factDebt : 0;   // v7.415: покриті місяці (навчання) не рахуються
-          rowOut.push(factYear, budYear, debtYear, factToday, updateStr, (g.departed || ch.departed) ? 'так' : '');   // v7.299 «Вибув»; v7.303 і безіменні рядки
-          allRows.push(rowOut);
-        });
-      });
+      Array.prototype.push.apply(allRows, _aggYearLocRows(cfgRow, now, updateStr));
     } catch(e) {
-      errors.push(loc + ': ' + e.message);
+      errors.push(trim(cfgRow[2]) + ': ' + e.message);
     }
   }
   // v7.149: staging + підміна лише при успіху (див. aggregatePayments).
@@ -41034,6 +41045,116 @@ function getPaymentsLive(params){
     var data = rows.map(function(a){ var o = {}; for (var i = 0; i < PAY_LIVE_HEADER.length; i++) o[PAY_LIVE_HEADER[i]] = (a[i] === undefined ? '' : a[i]); return o; });
     var res = {ok:true, live:true, data:data, errors:errors, month:monthName, builtAt:now.toISOString(), ms:Date.now() - t0};
     if (!errors.length || data.length) _cacheGzPutBig(key, res, PAY_LIVE_TTL);
+    return res;
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.463 · БОРГИ НАЖИВО — накопичений борг на сьогодні по всій мережі (лише читання; Payment не чіпає).
+// GET ?action=getDebtsLive[&nocache=1]
+//   Джерело — файли Payment зараз (той самий _aggYearLocRows, що й «Оплати-Рік»), картки — дати й статус.
+//   Борг дитини = Σ (нараховано − оплачено) по місяцях року до сьогодні, з переносом: переплата місяця гасить наступні.
+//   • поточний місяць нараховується лише з 6-го числа (оплата — до 5-го);
+//   • новий договір / розірвання всередині місяця — навчання за робочими днями (якщо в Payment стоїть повний місяць);
+//     після місяця розірвання навчання не нараховується (допи й перенесений борг лишаються);
+//   • «Бюджет навч» понад суму договору, коли в попередніх місяцях уже є борг, — це перенесений борг, не дублюємо;
+//   • місяці, покриті передоплатою (covered), пропускаються, як і в «Оплати-Рік»;
+//   • «Факт вступний» ≈ несплаченому навчанню місяця (договір старший за 2 місяці) вважаємо оплатою і показуємо окремо (misfiled).
+//   «Було» (old) — як рахувала плитка досі: статус поточного місяця debt/nopay.
+// ═══════════════════════════════════════════════════════════════════════════
+var DEBT_DUE_DAY = 5;
+function _debtYmd(v){
+  if (v instanceof Date && !isNaN(v)) return Utilities.formatDate(v, 'Europe/Kiev', 'yyyy-MM-dd');
+  var s = String(v || '').trim(), m;
+  if ((m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s))) return m[1] + '-' + m[2] + '-' + m[3];
+  if ((m = /^(\d{1,2})\.(\d{1,2})\.(\d{4})/.exec(s))) return m[3] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[1]).slice(-2);
+  return '';
+}
+function _debtWd(y, m, d1, d2){ var n = 0; for (var d = d1; d <= d2; d++){ var w = new Date(y, m - 1, d).getDay(); if (w !== 0 && w !== 6) n++; } return n; }
+function getDebtsLive(params){
+  params = params || {};
+  var key = 'debtlive1';
+  if (String(params.nocache || '') !== '1'){ var hit = _cacheGzGetBig(key); if (hit){ hit.cached = true; return hit; } }
+  try {
+    var t0 = Date.now(), now = new Date(), tz = 'Europe/Kiev';
+    var Y = Number(Utilities.formatDate(now, tz, 'yyyy')), curM = Number(Utilities.formatDate(now, tz, 'M')), day = Number(Utilities.formatDate(now, tz, 'd'));
+    var updateStr = formatDate(now);
+    // картки: локація|ключ ПІБ → {status, start, term, sum, group}
+    var cs = getCRMSpreadsheet().getSheetByName(SHEET_CLIENTS), cv = cs.getDataRange().getValues(), h = cv[0].map(String);
+    var ix = function(n){ return h.indexOf(n); };
+    var iN = ix('ПІБ дитини'), iL = ix('Локація'), iG = ix('Група'), iS = ix('Статус'), iD = ix('Дата договору'), iT = ix('Дата розірвання'), iSum = ix('Сума договору');
+    var cards = {};
+    for (var r = 1; r < cv.length; r++){
+      var nm = String(cv[r][iN] || '').trim(), lc = String(cv[r][iL] || '').trim(); if (!nm || !lc) continue;
+      var k = lc + '|' + _dopAnKid(nm), st = String(cv[r][iS] || '').trim();
+      var c = {status:st, start:_debtYmd(cv[r][iD]), term:_debtYmd(iT >= 0 ? cv[r][iT] : ''), sum:Number(cv[r][iSum]) || 0, group:String(cv[r][iG] || '').trim()};
+      if (!cards[k] || (st === 'active' && cards[k].status !== 'active')) cards[k] = c;   // активна картка важливіша
+    }
+    var configData = SpreadsheetApp.openById(CONFIG_SHEET_ID).getSheets()[0].getDataRange().getValues();
+    var locs = {}, old = {}, misfiled = [], errors = [];
+    for (var ci = 1; ci < configData.length; ci++){
+      var cfg = configData[ci]; if (!trim(cfg[2]) || !trim(cfg[3])) continue;
+      var rows;
+      try { rows = _aggYearLocRows(cfg, now, updateStr); } catch(e){ errors.push(trim(cfg[2]) + ': ' + (e && e.message)); continue; }
+      rows.forEach(function(row){
+        var loc = row[0], name = String(row[5] || '').trim();
+        if (!name || /^\(без імені/i.test(name)) return;
+        var card = cards[loc + '|' + _dopAnKid(name)] || null;
+        var L = locs[loc] || (locs[loc] = {n:0, sum:0, kids:[]}), O = old[loc] || (old[loc] = {n:0, sum:0});
+        // «було»: статус поточного місяця
+        var b0 = 6 + (curM - 1) * 6, ost = String(row[b0 + 5] || '');
+        if (ost === 'debt' || ost === 'nopay'){ var ob = toNum(row[b0 + 3]) + toNum(row[b0 + 4]), of = toNum(row[b0]) + toNum(row[b0 + 1]);
+          O.n++; O.sum += ost === 'nopay' ? ob : Math.max(0, ob - of); }
+        var running = 0, months = [];
+        var st = card ? card.start : '', te = card ? card.term : '', sum = card ? card.sum : 0;
+        for (var m = 1; m <= curM; m++){
+          var b = 6 + (m - 1) * 6, fs = toNum(row[b]), fe = toNum(row[b + 1]), fv = toNum(row[b + 2]), bs = toNum(row[b + 3]), be = toNum(row[b + 4]), mst = String(row[b + 5] || '');
+          if (mst === 'covered') continue;
+          var due = m < curM || day > DEBT_DUE_DAY, notes = [];
+          var fact = fs + fe, ym = Y + '-' + ('0' + m).slice(-2);
+          // «вступний» замість «навчання»: договір старший за 2 місяці, навчання місяця майже не сплачене,
+          // а «вступний» ≈ несплаченому навчанню (розстрочку вступного внеску поруч зі сплаченим навчанням не чіпаємо).
+          var gapN = bs - fs;
+          if (fv > 0 && gapN > 0 && fs < bs * 0.5 && Math.abs(fv - gapN) <= Math.max(300, gapN * 0.1)
+              && st && st.slice(0, 7) < (m > 2 ? Y + '-' + ('0' + (m - 2)).slice(-2) : (Y - 1) + '-' + ('0' + (m + 10)).slice(-2))){
+            fact += fv; notes.push('«вступний» ' + fv + ' вважаємо оплатою');
+            misfiled.push({loc:loc, name:name, month:m, amount:fv, start:st, group:row[3]});
+          }
+          var bsEff = 0;
+          if (due && bs > 0){
+            var contractPart = sum > 0 ? Math.min(bs, sum) : bs, extra = bs - contractPart;
+            var last = new Date(Y, m, 0).getDate(), d1 = 1, d2 = last, full = _debtWd(Y, m, 1, last);
+            if (te && te.slice(0, 7) < ym){ d2 = 0; }
+            else {
+              if (st && st.slice(0, 7) === ym) d1 = Number(st.slice(8, 10));
+              if (te && te.slice(0, 7) === ym) d2 = Number(te.slice(8, 10));
+            }
+            if ((d1 > 1 || d2 < last) && (!sum || contractPart >= sum * 0.95)){
+              var wd = d2 >= d1 ? _debtWd(Y, m, d1, d2) : 0, pr = full ? Math.round(contractPart * wd / full) : contractPart;
+              pr = Math.max(pr, Math.min(contractPart, fs));   // оплатили більше, ніж за днями, — фіктивної переплати не створюємо
+              notes.push(d2 < d1 ? 'після розірвання навчання не нараховується' : 'за днями ' + wd + '/' + full + (d1 > 1 ? ' (договір з ' + d1 + '.' + ('0' + m).slice(-2) + ')' : '') + (d2 < last ? ' (розірвано ' + d2 + '.' + ('0' + m).slice(-2) + ')' : ''));
+              contractPart = pr;
+            }
+            var carriedIn = (sum > 0 && extra > 0) ? Math.min(extra, Math.max(0, running)) : 0;
+            if (carriedIn > 0) notes.push('перенесений борг ' + carriedIn + ' не дублюємо');
+            bsEff = contractPart + extra - carriedIn;
+          }
+          var beEff = due ? be : 0;
+          if (!due && (bs || be)) notes.push('строк оплати до ' + DEBT_DUE_DAY + '-го ще не настав');
+          running += bsEff + beEff - fact;
+          if (bsEff || beEff || fact || notes.length) months.push({m:m, b:bsEff + beEff, f:fact, run:running, note:notes.join('; ')});
+        }
+        var debt = Math.round(running);
+        if (debt > 0){
+          L.n++; L.sum += debt;
+          L.kids.push({name:name, group:row[3], status:card ? card.status : '', start:st, term:te, debt:debt, departed:row[row.length - 1] === 'так', months:months});
+        }
+      });
+    }
+    Object.keys(locs).forEach(function(l){ locs[l].kids.sort(function(a, b){ return b.debt - a.debt; }); });
+    var res = {ok:true, asOf:Utilities.formatDate(now, tz, 'yyyy-MM-dd HH:mm'), builtAt:now.toISOString(), dueDay:DEBT_DUE_DAY,
+               locs:locs, old:old, misfiled:misfiled, errors:errors, ms:Date.now() - t0};
+    _cacheGzPutBig(key, res, PAY_LIVE_TTL);
     return res;
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
