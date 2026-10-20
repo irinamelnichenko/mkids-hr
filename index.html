@@ -2997,9 +2997,10 @@ var DASH_MONTHS=['Січень','Лютий','Березень','Квітень'
 var _dashRaf=0;
 function _dashSoftRerender(){ if(S.view!=='dashboard' || _dashRaf) return;
   _dashRaf=(window.requestAnimationFrame||function(f){ return setTimeout(f,16); })(function(){ _dashRaf=0; if(S.view==='dashboard') _renderDashNow(); }); }
-async function _ensureLocCaps(){
-  if(S._locCaps) return S._locCaps;
-  try{ var r=await cloudFetch(authScriptUrl()+'?action=getLocationCapacity',{redirect:'follow'}); var j=await r.json(); S._locCaps=(j&&j.data)||{}; }
+// v7.464: місткість — поле «Місткість» картки локації (getLocationCapacity), не старша за 5 хв; force — повз кеш.
+async function _ensureLocCaps(force){
+  if(S._locCaps && !force && Date.now()-(S._capsAt||0)<5*60*1000) return S._locCaps;
+  try{ var r=await cloudFetch(authScriptUrl()+'?action=getLocationCapacity&nocache=1',{redirect:'follow'}); var j=await r.json(); S._locCaps=(j&&j.data)||{}; S._capsAt=Date.now(); }
   catch(e){ S._locCaps=S._locCaps||{}; }
   return S._locCaps;
 }
@@ -3146,7 +3147,7 @@ function _dashLiveFoot(){
     +'<button type="button" class="btn btn-secondary btn-sm" onclick="event.stopPropagation();dashLiveRefresh()"'+(S._liveBusy?' disabled':'')+'>🔄 оновити</button></div>';
 }
 function dashLiveRefresh(){ if(S._liveBusy) return; S._liveBusy=true; _renderDashNow();
-  Promise.all([ensureClientsLoaded(1), _ensurePayments(true)]).then(function(){ S._liveBusy=false; _renderDashNow(); }, function(){ S._liveBusy=false; _renderDashNow(); }); }
+  Promise.all([ensureClientsLoaded(1), _ensurePayments(true), _ensureLocCaps(true)]).then(function(){ S._liveBusy=false; _renderDashNow(); }, function(){ S._liveBusy=false; _renderDashNow(); }); }
 // ─── v7.399: НАПОВНЮВАНІСТЬ І ВІЛЬНІ МІСЦЯ НАЖИВО (замість файлу «Комплектація» і знімка 25.06) ───
 //   Групи — з Payment поточного місяця (тип за назвою: «Preschool Юля» → Preschool, «1D» → клас).
 //   Активна дитина — стоїть у групі в Payment І має активну картку на цій локації.
@@ -3235,10 +3236,13 @@ function _dashLive(){
     d.groups=Object.keys(d.byG).map(function(k){ return d.byG[k]; }).filter(function(g){ return g.kids>0; });
     d.kids=d.groups.reduce(function(a,g){ return a+g.kids; },0);
     d.places=d.groups.reduce(function(a,g){ return a+g.norm; },0);
-    d.free=d.places-d.kids;
+    d.free=d.places-d.kids;   // перераховується нижче від місткості, якщо вона є
     d.cards=Object.keys(act[L]||{}).length;
     d.noPay=Object.keys(act[L]||{}).filter(function(n){ return !(inPay[L]&&inPay[L][n]); }).length;
     var cp=Number((S._locCaps||{})[L]); d.cap=(isFinite(cp)&&cp>0)?cp:null;
+    // v7.464: вільні = місткість локації − діти (одна база з наповнюваністю); без місткості — сума норм груп − діти.
+    d.outside=d.cap?d.cap-d.places:0;   // місця поза наявними групами («можна відкрити ще»; від'ємне — норми груп понад місткість)
+    if(d.cap) d.free=d.cap-d.kids;
     d.dopOnly=dopN[L]||0;
   });
   return {locs:locs};
@@ -3283,19 +3287,28 @@ function _renderKompBlock(){
       +'<div style="font-size:11px;color:var(--gray);padding:6px 14px">Наживо: групи й діти — Payment поточного місяця + активні картки; місця в групах — «Норми груп»; заповнення — від місткості з картки локації.</div>'
       :'<div class="empty"><p>Немає даних</p></div>';
     // Матриця вільних місць: локація × тип групи (норма − активні)
-    var colTot={}; DASH_GROUP_TYPES.forEach(function(t){ colTot[t]=0; }); var grand=0;
-    var brows=lnames.map(function(L){ var d=live.locs[L], by={}, sum=0;
-      d.groups.forEach(function(g){ var fr=g.norm-g.kids; by[g.type]=(by[g.type]||0)+fr; sum+=fr; colTot[g.type]+=fr; grand+=fr; });
-      if(!d.groups.length) return '';
+    // v7.464: «Разом» = місткість локації − діти (та сама база, що й наповнюваність). По групах — норма групи − діти;
+    //   «Можна відкрити ще» = місткість − сума норм наявних груп, тож рядок сходиться з «Разом».
+    var colTot={}; DASH_GROUP_TYPES.forEach(function(t){ colTot[t]=0; }); var grand=0, outTot=0, capTot=0, kidsTot=0;
+    var grpCell=function(n){ return n<0?'<span title="перевищення норми групи: дітей на '+(-n)+' більше, ніж норма" style="cursor:help;color:#e67e22;font-weight:700;white-space:nowrap">+'+(-n)+' <span style="font-size:10px;font-weight:400">понад норму</span></span>':frCell(n); };
+    var brows=lnames.map(function(L){ var d=live.locs[L], by={};
+      d.groups.forEach(function(g){ var fr=g.norm-g.kids; by[g.type]=(by[g.type]||0)+fr; colTot[g.type]+=fr; });
+      if(!d.groups.length && !d.cap) return '';
+      grand+=d.free; outTot+=d.outside; if(d.cap){ capTot+=d.cap; kidsTot+=d.kids; }
       return '<tr><td style="white-space:nowrap"><strong>'+esc(L)+'</strong></td>'
-        +DASH_GROUP_TYPES.map(function(t){ return '<td style="text-align:center">'+(by[t]==null?'':frCell(by[t]))+'</td>'; }).join('')
-        +'<td style="text-align:center">'+frCell(sum)+'</td></tr>'; }).join('');
+        +'<td style="text-align:center">'+(d.cap||'<span style="color:var(--gray2)" title="у картці локації не вказано місткість — «Разом» = сума норм груп − діти">—</span>')+'</td><td style="text-align:center">'+d.kids+'</td>'
+        +DASH_GROUP_TYPES.map(function(t){ return '<td style="text-align:center">'+(by[t]==null?'':grpCell(by[t]))+'</td>'; }).join('')
+        +'<td style="text-align:center">'+(!d.cap?'':d.outside>=0?frCell(d.outside):'<span title="сума норм наявних груп більша за місткість локації на '+(-d.outside)+'" style="cursor:help;color:#e74c3c">'+d.outside+'</span>')+'</td>'
+        +'<td style="text-align:center">'+frCell(d.free)+'</td></tr>'; }).join('');
     _freeTot=grand;
     var usedT=DASH_GROUP_TYPES;
-    freeHtml='<div class="tbl-wrap"><table><thead><tr><th>Локація</th>'+usedT.map(function(t){ return '<th style="text-align:center;text-transform:none;white-space:nowrap">'+esc(t)+'</th>'; }).join('')+'<th style="text-align:center">Разом</th></tr></thead><tbody>'
-      +brows+'<tr style="border-top:2px solid var(--gray2)"><td><strong>Разом</strong></td>'+usedT.map(function(t){ return '<td style="text-align:center">'+frCell(colTot[t])+'</td>'; }).join('')
-      +'<td style="text-align:center;font-weight:800">'+frCell(grand)+'</td></tr></tbody></table></div>'
-      +'<div style="font-size:11px;color:var(--gray);padding:6px 14px">Вільні = норма групи − активні діти, лише відкриті групи. Від\'ємне — у групі більше дітей, ніж за нормою.</div>';
+    freeHtml='<div class="tbl-wrap"><table><thead><tr><th>Локація</th><th style="text-align:center">Місткість</th><th style="text-align:center">Дітей</th>'+usedT.map(function(t){ return '<th style="text-align:center;text-transform:none;white-space:nowrap">'+esc(t)+'</th>'; }).join('')+'<th style="text-align:center;white-space:nowrap">Можна відкрити ще</th><th style="text-align:center">Разом вільних</th></tr></thead><tbody>'
+      +brows+'<tr style="border-top:2px solid var(--gray2)"><td><strong>Разом</strong></td><td style="text-align:center"><strong>'+capTot+'</strong></td><td style="text-align:center"><strong>'+T.kids+'</strong></td>'+usedT.map(function(t){ return '<td style="text-align:center">'+grpCell(colTot[t])+'</td>'; }).join('')
+      +'<td style="text-align:center">'+frCell(outTot)+'</td><td style="text-align:center;font-weight:800">'+frCell(grand)+'</td></tr></tbody></table></div>'
+      +'<div style="font-size:11px;color:var(--gray);padding:6px 14px;line-height:1.5"><b>Місткість</b> — поле «Місткість» у картці локації (розділ «Локації»), та сама, від якої рахується наповнюваність. '
+      +'<b>Разом вільних</b> = місткість − діти (активна картка + група в Payment поточного місяця). По групах — норма групи («Норми груп») − діти; '
+      +'<b>«+N понад норму»</b> — у групі на N дітей більше за норму групи (це не помилка). <b>Можна відкрити ще</b> — місткість мінус сума норм наявних груп: місця поза відкритими групами (червоне — норми груп більші за місткість). '
+      +'Група + «можна відкрити ще» = «Разом вільних». Якщо місткість не вказана — «Разом» = сума норм груп − діти.</div>';
   }
 
   // Картка 3 — Оцінка вихователя: СЕРЕДНЄ ЗА РІК (не за обраний місяць), «оцінок: N» + «Не оцінено»
@@ -3376,7 +3389,7 @@ function _renderKompBlock(){
   var open=S.dashKompOpen||null;
   var tileDefs={
     fill:{ic:'🏫',cls:'si-b',lbl:'Наповнюваність',val:(_fillPct!=null?_fillPct+'%':'—'),sub:'від місткості локацій · наживо'},
-    free:{ic:'🪑',cls:'si-g',lbl:'Вільні місця',val:(_freeTot!=null?_freeTot:'—'),sub:'у відкритих групах · наживо'},
+    free:{ic:'🪑',cls:'si-g',lbl:'Вільні місця',val:(_freeTot!=null?_freeTot:'—'),sub:'місткість − діти · наживо'},
     rate:{ic:'👨‍🏫',cls:'si-p',lbl:'Оцінка вихователя',val:(_rateAvg!=null?_rateAvg+'%':'—'),sub:'не оцінено '+_rateUnrated+' з '+_rateActive},
     kpi:{ic:'📝',cls:'si-y',lbl:'KPI договорів',val:((_kpiGot==null?0:_kpiGot)+' / '+(_kpiTgt==null?0:_kpiTgt)),sub:Q_LBL[selQ-1]}
   };
@@ -3388,7 +3401,7 @@ function _renderKompBlock(){
   }
   var _panels={
     fill:'<div class="card-hd" style="flex-wrap:wrap;gap:6px"><h3>🏫 Наповнюваність</h3><span style="font-size:12px;color:var(--gray)">зараз · '+KOMP_MONTHS[new Date().getMonth()]+' '+y+'</span></div>'+fillHtml+_dashLiveFoot(),
-    free:'<div class="card-hd"><h3>🪑 Вільні місця</h3><span style="font-size:12px;color:var(--gray)">зараз · за нормами груп</span></div>'+freeHtml+_dashLiveFoot(),
+    free:'<div class="card-hd"><h3>🪑 Вільні місця</h3><span style="font-size:12px;color:var(--gray)">зараз · місткість локації − діти</span></div>'+freeHtml+_dashLiveFoot(),
     kpi:'<div class="card-hd" style="flex-wrap:wrap;gap:6px"><h3>📝 KPI договорів</h3><div style="display:flex;align-items:center;gap:8px"><span style="font-size:12px;color:var(--gray)">'+kpiSub+'</span>'+qSel+'</div></div>'+kpiHtml,
     rate:'<div class="card-hd"><h3>👨‍🏫 Оцінка вихователя</h3><span style="font-size:12px;color:var(--gray)">середнє за рік '+y+netAvg+'</span></div>'+rateHtml
   };
