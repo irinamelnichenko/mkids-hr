@@ -3708,7 +3708,9 @@ function _dopCalc(an,p,inSlice){
     // доп відміток місяця M іде в «Бюджет доп» Payment місяця M+1 (exportAttendanceToPayments)
     lm.forEach(function(m){ res.monthsUsed[m]=1; var pd=m<12?(lo.payDop||{})[m+1]:null; if(pd){ res.payF+=Number(pd.f)||0; res.payB+=Number(pd.b)||0; } else res.payN++; });
     var kids={}; lm.forEach(function(m){ _dopUnion(kids,(lo.kids||{})[m]); });
-    var cov={}, R={kids:Object.keys(kids).length, r:0, c:0, rk:0, ck:0, cUnk:false, revUnk:false, n:0, acts:{}, months:lm};
+    var cov={}, R={kids:Object.keys(kids).length, r:0, c:0, rk:0, ck:0, cUnk:false, revUnk:false, n:0, acts:{}, months:lm, kidMonths:0};
+    lm.forEach(function(m){ var km={}; (lo.acts||[]).forEach(function(a){ var x=a.m[m]; if(!x||DOP_GOODS.test(a.name)) return; _dopUnion(km,x.k); _dopUnion(km,x.pk); });
+      R.kidMonths+=Object.keys(km).length; });   // дитино-місяці: дитина з допами в цьому місяці
     (lo.acts||[]).forEach(function(a){ if(DOP_GOODS.test(a.name)) return;
       var o=_dopActAgg(a,lm); if(!o.n && !o.r && !o.c) return;
       _dopUnion(cov,Object.keys(o.k)); _dopUnion(cov,Object.keys(o.pk));
@@ -3772,12 +3774,22 @@ function _renderDopBlock(){
   var used=Object.keys(X.monthsUsed).map(Number).sort(function(a,b){ return a-b; });
   if(!used.length) return hd+ctl+'<div class="empty"><p>За '+esc(_dopPerLbl(p))+' у зрізі немає табеля додаткових (табель ведеться з червня 2026).</p></div>'+_dopGapsHtml(X,p)+'</div>';
   // 1) Плитки
-  var T={r:0,c:0,rk:0,ck:0,cUnk:false,revUnk:false,n:0,kids:0,cov:0,covIn:0};
-  Object.keys(X.locs).forEach(function(L){ var R=X.locs[L]; T.r+=R.r; T.c+=R.c; T.rk+=R.rk; T.ck+=R.ck; T.n+=R.n; T.kids+=R.kids; T.cov+=R.cov; T.covIn+=R.covIn; T.cUnk=T.cUnk||R.cUnk; T.revUnk=T.revUnk||R.revUnk; });
+  var T={r:0,c:0,rk:0,ck:0,cUnk:false,revUnk:false,n:0,kids:0,cov:0,covIn:0,kidMonths:0};
+  Object.keys(X.locs).forEach(function(L){ var R=X.locs[L]; T.r+=R.r; T.c+=R.c; T.rk+=R.rk; T.ck+=R.ck; T.n+=R.n; T.kids+=R.kids; T.cov+=R.cov; T.covIn+=R.covIn; T.kidMonths+=R.kidMonths; T.cUnk=T.cUnk||R.cUnk; T.revUnk=T.revUnk||R.revUnk; });
   var prof=T.rk-T.ck, mg=_dopMargin(T), nm=used.length, star=_dopStar(T);
   var monthsLbl=used.map(function(m){ return DOP_MN[m-1]; }).join(', ');
   var calcAll=0; Object.keys(X.acts).forEach(function(k){ calcAll+=X.acts[k].t.calcC; });
-  var tiles='<div class="stats-grid" style="padding:14px 14px 0;margin-bottom:12px">'
+  // v7.454: зверху — одне речення людською мовою; плитки — під «показати деталі».
+  var slLbl=sl.type==='loc'?sl.loc:(DOP_SLICES.filter(function(o){ return o[0]===sl.type; })[0]||['',''])[1].replace(/^\S+\s/,'');
+  var kidW=function(n){ var a=Math.abs(n)%100, b=a%10; return (a>10&&a<20)?'дітей':b===1?'дитина':(b>=2&&b<=4)?'дитини':'дітей'; };
+  var perKidM=T.kidMonths?T.r/T.kidMonths:null, covPct=_dopPct(T.covIn,T.kids);
+  var summary='<div style="padding:14px 16px 6px;font-size:15px;line-height:1.55">'
+    +'<b>'+esc(slLbl)+' · '+esc(_dopPerLbl(p))+':</b> оборот допів <b>'+_dopMoney(T.r)+'</b>, прибуток <b style="color:'+(prof>=0?'#27ae60':'#e74c3c')+'">'+_dopMoney(prof)+'</b>'+star
+    +' — маржа <b style="color:'+_dopMCol(mg)+'">'+(mg==null?'—':mg+'%')+'</b>. '
+    +'Ходить <b>'+T.covIn+'</b> '+kidW(T.covIn)+' з '+T.kids+(covPct==null?'':' ('+covPct+'%)')+', у середньому одна дитина платить <b>'+_dopMoney(perKidM)+'</b> на місяць.'
+    +(T.cov>T.covIn?'<div style="font-size:11px;color:var(--gray)">Ще '+T.cov+'−'+T.covIn+' = '+(T.cov-T.covIn)+' дит. з табеля без рядка в Payment — у «ходить» не враховано, у середній чек враховано.</div>':'')
+    +(used.length<_dopPerMonths(p).length?'<div style="font-size:11px;color:var(--gray)">Місяці з табелем: '+monthsLbl+'.</div>':'')+'</div>';
+  var tiles='<details style="padding:0 14px 8px"><summary style="cursor:pointer;font-size:12px;color:var(--blue2,#2980b9)">показати деталі</summary><div class="stats-grid" style="padding:10px 0 0;margin-bottom:6px">'
     +_dopTile('💰','si-b',_dopMoney(T.r),'Оборот','Payment доп (міс.+1): нараховано '+_dopMoney(X.payB)+', оплачено '+_dopMoney(X.payF)+(X.payN?' · грудень — у файлі наступного року':''))
     +_dopTile('👩‍🏫','si-o',_dopMoney(T.c),'Собівартість (викладачі)',(calcAll?'з них за каталогом (≈): '+_dopMoney(calcAll):'усе з Salary')+(T.cUnk?' · є невідомі':''))
     +_dopTile('📈','si-g','<span style="color:'+(prof>=0?'#27ae60':'#e74c3c')+'">'+_dopMoney(prof)+'</span>'+star,'Прибуток',nm>1?'≈ '+_dopMoney(prof/nm)+' / міс':'')
@@ -3785,7 +3797,7 @@ function _renderDopBlock(){
     +_dopTile('👶','si-y',T.cov+' <span style="font-size:14px;color:var(--gray)">('+(_dopPct(T.covIn,T.kids)==null?'—':_dopPct(T.covIn,T.kids)+'%')+')</span>','Дітей охоплено',T.covIn+' з '+T.kids+' дітей зрізу (Payment)'+(T.cov>T.covIn?' · ще '+(T.cov-T.covIn)+' без рядка Payment':''))
     +_dopTile('🧒','si-b',T.kids?_dopMoney(T.r/T.kids):'—','Оборот доп на 1 дитину локації',nm>1&&T.kids?'≈ '+_dopMoney(T.r/T.kids/nm)+' / міс':'за період')
     +_dopTile('🔁','si-g',T.cov?(Math.round(T.n/T.cov*10)/10).toLocaleString('uk-UA'):'—','Занять на дитину (середнє)','відміток табеля на охоплену дитину')
-    +'</div><div style="font-size:11px;color:var(--gray);padding:0 14px 8px">Період: <b>'+esc(_dopPerLbl(p))+'</b> · місяці з табелем: '+monthsLbl+'</div>';
+    +'</div><div style="font-size:11px;color:var(--gray)">Період: <b>'+esc(_dopPerLbl(p))+'</b> · місяці з табелем: '+monthsLbl+'</div></details>';
   // 2) Таблиця по заняттях
   var sortBy=S.dopSort||'profit';
   var acts=Object.keys(X.acts).map(function(k){ return X.acts[k]; });
@@ -3861,7 +3873,7 @@ function _renderDopBlock(){
           +'<td style="white-space:nowrap">'+(o.revUnk&&!o.r?na:_dopMoney(o.r))+'</td><td style="white-space:nowrap">'+(o.cUnk&&!o.c?na:_dopMoney(o.c))+'</td>'
           +'<td><b style="color:'+_dopMCol(x.mg)+'">'+(x.mg==null?'—':x.mg+'%')+'</b>'+_dopStar(o)+'</td></tr>'; }).join('')+'</tbody></table></div>';
   }
-  return hd+ctl+tiles+actTbl+locTbl+launch+cmp+_dopGapsHtml(X,p)+'</div>';
+  return hd+ctl+summary+tiles+actTbl+locTbl+launch+cmp+_dopGapsHtml(X,p)+'</div>';
 }
 // Чого бракує в даних — щоб прочерки не були загадкою.
 function _dopGapsHtml(X,p){

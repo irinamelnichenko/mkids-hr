@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.453
+// m.kids CRM — Google Apps Script v7.454
+// v7.454: назва групи на виході — за «Групи_Мапа» (_groupCanon): getClients, getClientCard, getPayments, getPaymentsYearly, групи предметників, наповнюваність; дані не перейменовуються.
 // v7.453: зіставлення занять Salary ↔ каталог — очевидні варіанти написання (_actFold, скорочення з крапкою) самі; смислові пари — реєстр «Заняття_Мапа» (actMapSetup, CFO).
 // v7.451: getDopAnalytics — аналітика додаткових (каталог + табель + Оплати-Рік + Salary EXTRAS), лише читання; _salaryReadGrids/_salaryRowsFromData спільні.
 // v7.450: «Групи_Мапа» — сід усіх пар Управління (Манхетен, Нац.Гвардії, Хіміків); groupMapSetup дописує відсутні.
@@ -7190,16 +7191,16 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.453', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.454', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
     else if (action === 'getLocationCapacity') result = getLocationCapacity();
-    else if (action === 'getPayments')        result = getPayments();
-    else if (action === 'getPaymentsYearly')  result = getPaymentsYearly();
+    else if (action === 'getPayments')        result = _groupCanonRows(getPayments(), true);          // v7.454 канонічна назва групи на виході
+    else if (action === 'getPaymentsYearly')  result = _groupCanonRows(getPaymentsYearly(), true);
     else if (action === 'getAllPayments')     result = getAllPayments({loc:(e.parameter&&e.parameter.loc)||'', name:(e.parameter&&e.parameter.name)||'', year:(e.parameter&&e.parameter.year)||''}); // v7.108 історія оплат дитини за рік з Payment-файлу
     else if (action === 'getReconcileLog')           result = getReconcileLog({child:e.parameter.child||'', loc:e.parameter.loc||'', from:e.parameter.from||'', to:e.parameter.to||''}); // v7.94
-    else if (action === 'getClients')         result = getClients(e.parameter || {});   // v7.292 &mode=list без JSON здоровʼя/розвитку; v7.336 кеш + mode=roster
+    else if (action === 'getClients')         result = _groupCanonRows(getClients(e.parameter || {}));   // v7.292 &mode=list без JSON здоровʼя/розвитку; v7.336 кеш + mode=roster
     else if (action === 'diagClientsCompare') result = diagClientsCompare();                // v7.336 звірка roster/list/кеш
     else if (action === 'geoSearch')          result = geoSearch(e.parameter || {});     // v7.368 «🔍 Знайти» адресу
     else if (action === 'getClientMap')       result = getClientMap(e.parameter || {});  // v7.371 карта клієнтів
@@ -7211,7 +7212,7 @@ function doGet(e) {
     else if (action === 'invoiceAutoStatus')  result = invoiceAutoStatus(e.parameter || {}); // v7.411 автозвірка заявок: увімкнено? останній прогін
     else if (action === 'bankCoverage')       result = bankCoverage(e.parameter || {});    // v7.375 банк: покриття рахунок×дата
     else if (action === 'cashPreview')        result = cashAdd(Object.assign({}, e.parameter || {}, {dryRun:true}));   // v7.373 перевірка (лише читання)
-    else if (action === 'getClientCard')      result = getClientCard(e.parameter || {}); // v7.292 повна картка за id
+    else if (action === 'getClientCard')      result = _groupCanonRows(getClientCard(e.parameter || {})); // v7.292 повна картка за id
     else if (action === 'runAggregate')       result = aggregatePayments();
     else if (action === 'dryRunSchoolRoster') result = dryRunSchoolRoster(e.parameter || {});   // v7.252 ростер шкіл за картками; v7.267 &simulateMove=1
     else if (action === 'dryRunPayerIndex')   result = dryRunPayerIndex(e.parameter || {});   // v7.253 ростер звірки платежів (read-only)
@@ -28908,7 +28909,7 @@ function _getFillStatusRaw(params){
           var so = (staffMarked[loc] = staffMarked[loc] || {ids:{}, by:'', at:''});
           so.ids[id] = true; if (by) so.by = by; if (at) so.at = at;
         } else {
-          var g = String(row[4] || '').trim() || '—';
+          var g = String(_groupCanon(loc, String(row[4] || '').trim()) || '').trim() || '—';   // v7.454
           var kl = (kidMarked[loc] = kidMarked[loc] || {});
           var kg = (kl[g] = kl[g] || {ids:{}, by:'', at:''});
           kg.ids[id] = true; if (by) kg.by = by; if (at) kg.at = at;
@@ -30871,6 +30872,35 @@ function _loadGroupMap(){
   } catch(e){ Logger.log('[groupMap] ⚠️ %s', e && e.message); }
   return out;
 }
+// v7.454: ОДНЕ МІСЦЕ ВИВЕДЕННЯ НАЗВИ ГРУПИ. Картки, створені до v7.449, і «Оплати-Рік» несуть назву
+// блоку Payment («Study-ki 4-5»), а поруч живе канонічна («Дослідники 4-5») — у сітках виходили двійники.
+// Дані НЕ перейменовуємо: назву перекладаємо за «Групи_Мапа» лише на виході — маршрути getClients,
+// getClientCard, getPayments, getPaymentsYearly, групи предметників і табель-наповнюваність.
+// Внутрішні записи (Payment, експорти) читають сирі назви, як і раніше.
+var _GROUP_CANON_MAP = null;
+function _groupCanon(loc, grp){
+  var g = String(grp == null ? '' : grp).trim(); if (!g) return grp;
+  if (_GROUP_CANON_MAP === null) _GROUP_CANON_MAP = _loadGroupMap();
+  var m = _GROUP_CANON_MAP[String(loc || '').trim()];
+  return (m && m[_predGroupKey(g)]) || grp;
+}
+// Масив обʼєктів або compact {headers, rows} — колонка «Група» за «Локація». Сира назва лишається
+// в «Група як у файлі» (у «Оплати-Рік» її немає — для Payment-маршрутів додаємо, коли назву переклали; картці не додаємо).
+function _groupCanonRows(res, keepRaw){
+  if (!res || !res.ok) return res;
+  if (res.headers && res.rows){
+    var iL = res.headers.indexOf('Локація'), iG = res.headers.indexOf('Група');
+    if (iL >= 0 && iG >= 0) res.rows.forEach(function(r){ r[iG] = _groupCanon(r[iL], r[iG]); });
+    return res;
+  }
+  var list = Array.isArray(res.data) ? res.data : (res.data ? [res.data] : []);
+  list.forEach(function(o){
+    if (!o || !o.hasOwnProperty('Група')) return;
+    var c = _groupCanon(o['Локація'], o['Група']);
+    if (c !== o['Група']){ if (keepRaw && !o.hasOwnProperty('Група як у файлі')) o['Група як у файлі'] = o['Група']; o['Група'] = c; }
+  });
+  return res;
+}
 // Назва блоку Payment → {group: канонічна | '', unmatched: bool}.
 function _groupMapResolve(gMap, cardGroups, loc, payGroup){
   var g = String(payGroup || '').trim();
@@ -30925,6 +30955,7 @@ function groupMapSetup(body){
     sh.setFrozenRows(1);
   }
   if (add.length) sh.getRange(sh.getLastRow() + 1, 1, add.length, 3).setValues(add);
+  if (add.length) _cacheBump('clients');   // v7.454 картки віддаються з канонічною назвою групи
   return {ok:true, dryRun:false, added:add, total:sh.getLastRow() - 1};
 }
 
@@ -35587,7 +35618,7 @@ function _loadRealGroups(locFilter){
   var subKeys = _subGroupKeysByLoc();                // v7.447: абонементи не показуємо
   for (var i = 0; i < data.length; i++){
     var loc = String(data[i][iLoc] || '').trim();
-    var grp = String(data[i][iGrp] || '').trim();
+    var grp = String(_groupCanon(loc, String(data[i][iGrp] || '').trim()) || '').trim();   // v7.454
     if (!loc || !grp) continue;
     if (filter && loc !== filter) continue;
     if (stData){
