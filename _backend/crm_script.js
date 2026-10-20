@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.454
+// m.kids CRM — Google Apps Script v7.455
+// v7.455: наповнюваність — очікувані групи з карток теж за «Групи_Мапа» (_fillExpected пропущено у v7.454).
 // v7.454: назва групи на виході — за «Групи_Мапа» (_groupCanon): getClients, getClientCard, getPayments, getPaymentsYearly, групи предметників, наповнюваність; дані не перейменовуються.
 // v7.453: зіставлення занять Salary ↔ каталог — очевидні варіанти написання (_actFold, скорочення з крапкою) самі; смислові пари — реєстр «Заняття_Мапа» (actMapSetup, CFO).
 // v7.451: getDopAnalytics — аналітика додаткових (каталог + табель + Оплати-Рік + Salary EXTRAS), лише читання; _salaryReadGrids/_salaryRowsFromData спільні.
@@ -7191,7 +7192,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.454', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.455', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -28718,7 +28719,7 @@ function _fillReadAttendance(attSh, tz, neededFrom, neededTo){
 }
 
 function _fillExpected(){
-  var expGroups = {}, expKids = {}, expStaff = {};
+  var expGroups = {}, expKids = {}, expStaff = {}, kidGroup = {};   // v7.455 kidGroup: ID дитини → група з картки
 // v6.64.1: читаємо лише потрібні колонки клієнтів (без JSON Розвиток/Здоров'я) — інакше getFillStatus читає мегабайти JSON і тормозить.
   var _cs = getCRMSpreadsheet().getSheetByName(SHEET_CLIENTS);
   if (_cs && _cs.getLastRow() >= 2){
@@ -28734,9 +28735,10 @@ function _fillExpected(){
         if (st !== 'active' && st !== 'adaptation') continue;
         var loc = String(_cv[_r][_iLoc] || '').trim();
         if (!loc) continue;
-        var grp = (_iGr >= 0 ? String(_cv[_r][_iGr] || '').trim() : '') || '—';
+        var grp = (_iGr >= 0 ? String(_groupCanon(loc, String(_cv[_r][_iGr] || '').trim()) || '').trim() : '') || '—';   // v7.455 канонічна назва
         (expGroups[loc] = expGroups[loc] || {});
         expGroups[loc][grp] = (expGroups[loc][grp] || 0) + 1;
+        if (_iId >= 0) kidGroup[String(_cv[_r][_iId]).trim()] = grp;
         expKids[loc] = (expKids[loc] || 0) + 1;
       }
     }
@@ -28752,7 +28754,7 @@ function _fillExpected(){
       if (e.loc) expStaff[e.loc] = (expStaff[e.loc] || 0) + 1;
     }
   }
-  return {expGroups:expGroups, expKids:expKids, expStaff:expStaff};
+  return {expGroups:expGroups, expKids:expKids, expStaff:expStaff, kidGroup:kidGroup};
 }
 
 // «Коли» формату 'dd.MM.yyyy HH:mm' → сортувальний ключ 'yyyyMMddHHmm' (для «найпізніший час»).
@@ -28909,7 +28911,8 @@ function _getFillStatusRaw(params){
           var so = (staffMarked[loc] = staffMarked[loc] || {ids:{}, by:'', at:''});
           so.ids[id] = true; if (by) so.by = by; if (at) so.at = at;
         } else {
-          var g = String(_groupCanon(loc, String(row[4] || '').trim()) || '').trim() || '—';   // v7.454
+          // v7.455: група — з картки дитини (табель Управління пише тип «Study-ki»/«Baby-ki», а груп цього типу кілька)
+          var g = (_exp.kidGroup && _exp.kidGroup[id]) || String(_groupCanon(loc, String(row[4] || '').trim()) || '').trim() || '—';
           var kl = (kidMarked[loc] = kidMarked[loc] || {});
           var kg = (kl[g] = kl[g] || {ids:{}, by:'', at:''});
           kg.ids[id] = true; if (by) kg.by = by; if (at) kg.at = at;
