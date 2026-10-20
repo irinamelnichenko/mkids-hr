@@ -1078,16 +1078,49 @@ function predLocToRegion(loc){
 // тож норма ставала ∞, а рядок падав у кінець сортування.
 // Набір фрагментів дзеркалить normalizeGroupName у бекенді — одне джерело правди
 // щодо того, який тип відповідає українській назві.
+// v7.446: тип групи — за ЗМІСТОМ назви. Назву зводимо до латинських літер
+// (регістр, дефіси, пробіли, цифри геть; кирилиця — транслітом), тож «Findi-Ki»,
+// «Find-iki», «Findi Ki», «Фінді-кі», «Baby-ki 2» знаходять ту саму норму.
+// Було: /find[\-\s]?iki/ не впізнавав стандартну з v7.435 «Findi-Ki» → ∞.
+// Дзеркало _canonGroupType/_predGroupKey у бекенді — міняти обидва разом.
+var GT_TRANSLIT = {'а':'a','б':'b','в':'v','г':'h','ґ':'g','д':'d','е':'e','є':'ye','ж':'zh','з':'z',
+  'и':'y','і':'i','ї':'i','й':'y','к':'k','л':'l','м':'m','н':'n','о':'o','п':'p','р':'r','с':'s',
+  'т':'t','у':'u','ф':'f','х':'kh','ц':'ts','ч':'ch','ш':'sh','щ':'sch','ь':'','ю':'yu','я':'ya',
+  'ы':'y','э':'e','ё':'e','ъ':''};
+function groupLetters(s, keepDigits){
+  var low = String(s == null ? '' : s).toLowerCase(), out = '';
+  for (var i = 0; i < low.length; i++){
+    var ch = low.charAt(i);
+    if (ch >= 'a' && ch <= 'z') out += ch;
+    else if (keepDigits && ch >= '0' && ch <= '9') out += ch;
+    else if (GT_TRANSLIT.hasOwnProperty(ch)) out += GT_TRANSLIT[ch];
+  }
+  return out;
+}
+function groupKey(s){ return groupLetters(s, true); }   // повна назва: літери + цифри
+var GT_BABY = /^b(a|e|ei|ey|ej)?[iy]?b[iye]/;
+function canonGroupType(grp){
+  var L = groupLetters(grp, false);
+  if (!L) return null;
+  if (/^mini/.test(L) && GT_BABY.test(L.slice(4))) return 'miniBaby';
+  if (GT_BABY.test(L))                return 'Baby';
+  if (/^f[iy]nd/.test(L))             return 'Find';
+  if (/^st[au]d[iy]/.test(L))         return 'Study';
+  if (/^pr[ei]s(ch|kh|k)/.test(L))    return 'Preschool';
+  if (/minibabyki/.test(L)) return 'miniBaby';
+  if (/findiki|findki/.test(L)) return 'Find';
+  if (/studyki/.test(L))    return 'Study';
+  if (/preschool/.test(L))  return 'Preschool';
+  return null;
+}
 function normalizeGroupType(grp){
   var s = String(grp || '').trim();
   if (!s) return null;
-  if (/mini[\s\-]?baby/i.test(s))             return 'miniBaby';
+  var c = canonGroupType(s);
+  if (c) return c;
   if (/мама[\s\+]*я/i.test(s))                return 'miniBaby';
-  if (/^baby[\-\s]?ki|^baby$/i.test(s))       return 'Baby';
   if (/малюк|карапуз/i.test(s))               return 'Baby';
-  if (/find[\-\s]?iki/i.test(s))              return 'Find';
   if (/бешкетн/i.test(s))                     return 'Find';
-  if (/study[\-\s]?ki/i.test(s))              return 'Study';
   if (/пізнайк|мандрівн|дослідн/i.test(s))    return 'Study';
   if (/preschool|шкільн|підготов/i.test(s))   return 'Preschool';
   if (/розумник/i.test(s))                    return 'Preschool';
@@ -2181,8 +2214,9 @@ function subjectsFor(loc){
 function locNormFor(loc, subj, groupName, groupType){
   var m = (S.locNorms && S.locNorms[loc] && S.locNorms[loc][subj]) || null;
   if (!m) return null;
-  var k = String(groupName || '').trim().toLowerCase().replace(/\s+/g,' ');
-  if (m.byName && m.byName[k] !== undefined) return m.byName[k];
+  // v7.446: повна назва — за ключем змісту (регістр/дефіси/кирилиця не важать)
+  var k = groupKey(groupName);
+  if (m.byName && k) for (var nk in m.byName){ if (groupKey(nk) === k) return m.byName[nk]; }
   if (groupType && m.byType && m.byType[groupType] !== undefined) return m.byType[groupType];
   if (m.any !== null && m.any !== undefined) return m.any;
   return null;

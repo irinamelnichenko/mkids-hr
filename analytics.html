@@ -1705,6 +1705,38 @@ function _normLookupCI(map, key){
 function _stripDigitSuffix(key){
   return String(key).replace(/\s+\d+$/, '');
 }
+// v7.446: тип групи за ЗМІСТОМ назви (дзеркало canonGroupType у predmetnyky.html і
+// _canonGroupType у бекенді): регістр, дефіси, пробіли, цифри не важать, кирилиця — транслітом.
+var GT_TRANSLIT = {'а':'a','б':'b','в':'v','г':'h','ґ':'g','д':'d','е':'e','є':'ye','ж':'zh','з':'z',
+  'и':'y','і':'i','ї':'i','й':'y','к':'k','л':'l','м':'m','н':'n','о':'o','п':'p','р':'r','с':'s',
+  'т':'t','у':'u','ф':'f','х':'kh','ц':'ts','ч':'ch','ш':'sh','щ':'sch','ь':'','ю':'yu','я':'ya',
+  'ы':'y','э':'e','ё':'e','ъ':''};
+var GT_BABY = /^b(a|e|ei|ey|ej)?[iy]?b[iye]/;
+var GT_NAME = {miniBaby:'miniBaby-ki', Baby:'Baby-ki', Find:'Findi-Ki', Study:'Study-ki', Preschool:'Preschool'};
+function canonGroupType(grp){
+  var low = String(grp == null ? '' : grp).toLowerCase(), L = '';
+  for (var i = 0; i < low.length; i++){
+    var ch = low.charAt(i);
+    if (ch >= 'a' && ch <= 'z') L += ch; else if (GT_TRANSLIT.hasOwnProperty(ch)) L += GT_TRANSLIT[ch];
+  }
+  if (!L) return null;
+  if (/^mini/.test(L) && GT_BABY.test(L.slice(4))) return 'miniBaby';
+  if (GT_BABY.test(L))             return 'Baby';
+  if (/^f[iy]nd/.test(L))          return 'Find';
+  if (/^st[au]d[iy]/.test(L))      return 'Study';
+  if (/^pr[ei]s(ch|kh|k)/.test(L)) return 'Preschool';
+  if (/minibabyki/.test(L)) return 'miniBaby';
+  if (/findiki|findki/.test(L)) return 'Find';
+  if (/studyki/.test(L))    return 'Study';
+  if (/preschool/.test(L))  return 'Preschool';
+  return null;
+}
+// Норма з мапи «назва → норма» для канонічного типу: ключ без цифри (базова група).
+function normByCanon(map, ct){
+  if (!ct || !map) return undefined;
+  for (var k in map){ if (!/\d/.test(k) && canonGroupType(k) === ct) return map[k]; }
+  return undefined;
+}
 function getNormForGroup(group){
   var key = normalizeGroupName(group);
   // 1) Норма для конкретної паралельної групи якщо є в мапі.
@@ -1720,6 +1752,12 @@ function getNormForGroup(group){
     var fromHardBase = _normLookupCI(HARDCODED_NORMS, stripped);
     if (fromHardBase !== undefined) return fromHardBase;
   }
+  // 3) v7.446: та сама група з іншим написанням («Фінді-кі», «Findi Ki 2») — норма її типу.
+  var ct = canonGroupType(group);
+  var fromBackendCanon = normByCanon(S.groupNorms || {}, ct);
+  if (fromBackendCanon !== undefined) return fromBackendCanon;
+  var fromHardCanon = normByCanon(HARDCODED_NORMS, ct);
+  if (fromHardCanon !== undefined) return fromHardCanon;
   // Додаткові заняття: тиша (computeGroupFill вже фільтрує, але якщо
   // якийсь сторонній шлях викличе getNormForGroup — не сипати warning).
   if (isExtraActivity(group) || isExtraActivity(key)){

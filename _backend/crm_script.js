@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.445
+// m.kids CRM — Google Apps Script v7.446
+// v7.446: тип групи предметників за змістом назви (_canonGroupType) — «Findi-Ki» знову знаходить норму; норми локації за ключем _predGroupKey.
 // v7.445: запобіжник OPEX27_AUTO — onEdit «Драйвери_27» нічого не пише, доки CFO не ввімкне (opex27SetAuto).
 // v7.444: OPEX 2027 садочків за нормами — «Норми_OPEX» і «Драйвери_27» у CRM, «OPEX_Норма» (норма + коригування) у файлі 2027, onEdit-тригер, «Перерахувати всі сади».
 // v7.443: блок Payment закінчується й на резервному заголовку без назви (вставка в Чомусики не розтягує SUM); cf27Remap — CF 2027 на справжні заголовки.
@@ -7184,7 +7185,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.445', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.446', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -34967,13 +34968,49 @@ var PRED_NORMS_SEED = [
 // HR.D (назва групи) → один з PRED_GROUP_TYPES або null.
 // Regexes case-insensitive і толерантні до "-ki"/" ki"/empty suffix —
 // HR-дані бувають з різними написаннями.
+// v7.446: тип групи — за ЗМІСТОМ назви, а не за написанням. Назву зводимо до
+// латинських літер (регістр, дефіси, пробіли, цифри геть; кирилиця —
+// транслітом, тож «Фінді-кі», «Findi Ki», «Find-iki», «Findi-Ki 2» → findi…).
+// Було: /find[\-\s]?iki/ не впізнавав стандартну з v7.435 назву «Findi-Ki» —
+// тип null, норма не знаходилась, лічильник показував ∞.
+// Дзеркало groupTypeKey/normalizeGroupType у predmetnyky.html.
+var _GT_TRANSLIT = {'а':'a','б':'b','в':'v','г':'h','ґ':'g','д':'d','е':'e','є':'ye','ж':'zh','з':'z',
+  'и':'y','і':'i','ї':'i','й':'y','к':'k','л':'l','м':'m','н':'n','о':'o','п':'p','р':'r','с':'s',
+  'т':'t','у':'u','ф':'f','х':'kh','ц':'ts','ч':'ch','ш':'sh','щ':'sch','ь':'','ю':'yu','я':'ya',
+  'ы':'y','э':'e','ё':'e','ъ':''};
+function _groupLetters(s, keepDigits){
+  var low = String(s == null ? '' : s).toLowerCase(), out = '';
+  for (var i = 0; i < low.length; i++){
+    var ch = low.charAt(i);
+    if (ch >= 'a' && ch <= 'z') out += ch;
+    else if (keepDigits && ch >= '0' && ch <= '9') out += ch;
+    else if (_GT_TRANSLIT.hasOwnProperty(ch)) out += _GT_TRANSLIT[ch];
+  }
+  return out;
+}
+// Ключ для порівняння ПОВНОЇ назви групи (норми рівня локації): літери + цифри.
+function _predGroupKey(s){ return _groupLetters(s, true); }
+var _GT_BABY = /^b(a|e|ei|ey|ej)?[iy]?b[iye]/;
+function _canonGroupType(grp){
+  var L = _groupLetters(grp, false);
+  if (!L) return null;
+  if (/^mini/.test(L) && _GT_BABY.test(L.slice(4))) return 'miniBaby';
+  if (_GT_BABY.test(L))                return 'Baby';
+  if (/^f[iy]nd/.test(L))              return 'Find';
+  if (/^st[au]d[iy]/.test(L))          return 'Study';
+  if (/^pr[ei]s(ch|kh|k)/.test(L))     return 'Preschool';
+  // тип не на початку («Група Findi-Ki»): лише цілі канонічні токени
+  if (/minibabyki/.test(L)) return 'miniBaby';
+  if (/findiki|findki/.test(L)) return 'Find';
+  if (/studyki/.test(L))    return 'Study';
+  if (/preschool/.test(L))  return 'Preschool';
+  return null;
+}
 function _normalizeGroupType(grp){
   var s = String(grp || '').trim();
   if (!s) return null;
-  if (/mini[\s\-]?baby/i.test(s))             return 'miniBaby';
-  if (/^baby[\-\s]?ki|^baby$/i.test(s))       return 'Baby';
-  if (/find[\-\s]?iki/i.test(s))              return 'Find';
-  if (/study[\-\s]?ki/i.test(s))              return 'Study';
+  var c = _canonGroupType(s);
+  if (c) return c;
   if (/preschool|шкільн|підготов/i.test(s))   return 'Preschool';
   // v7.245: українські назви груп — дзеркало normalizeGroupName. Потрібно, бо
   // після чистки назв («Пізнайки 3-4 Ольга і Соломія» → «Пізнайки») латинського
@@ -35356,7 +35393,7 @@ function _loadPredLocNorms(){
         var S = L[subj] = L[subj] || {byName:{}, byType:{}, any:null};
         if (grp === '*') S.any = n;
         else if (PRED_GROUP_TYPES.indexOf(grp) !== -1) S.byType[grp] = n;
-        else S.byName[_nameFold(grp)] = n;
+        else S.byName[_predGroupKey(grp)] = n;   // v7.446: ключ за змістом (регістр/дефіси/кирилиця)
       }
     }
   } catch(e){ Logger.log('[predLocNorms] ⚠️ %s', e && e.message); }
@@ -35368,7 +35405,7 @@ function _predNormLookup(loc, subject, group, ymd){
   var L = _loadPredLocNorms()[String(loc || '').trim()];
   var S = L && L[subject];
   if (S){
-    var byName = S.byName[_nameFold(group)];
+    var byName = S.byName[_predGroupKey(group)];
     if (byName !== undefined) return {norm:byName, src:'loc'};
     var gt0 = _normalizeGroupType(group);
     if (gt0 && S.byType[gt0] !== undefined) return {norm:S.byType[gt0], src:'loc'};
