@@ -3219,6 +3219,22 @@ async function _applySchoolRoster(loc){
         if (outK[grp].indexOf(nm) === -1){ outK[grp].push(nm); cntK++; }
       });
     });
+    // v7.466: групи-абонементи («Чомусики», «Мама+я») — завжди у випадайці, навіть коли блок
+    // Payment порожній (Кругла); діти з активною карткою в такій групі — одразу, не чекаючи
+    // перезбору «Оплат». Ховаються абонементи лише в сітці предметників.
+    var _subActs = _activitiesForLoc(loc).filter(function(a){ return _subLimitOf(a); });
+    if (_subActs.length){
+      Object.keys(rs.byName || {}).forEach(function(nm){
+        var grp = rs.byName[nm];
+        if (dead[nm] || !_subActForGroup(_subActs, grp)) return;
+        if (!outK[grp]) outK[grp] = [];
+        if (outK[grp].indexOf(nm) === -1){ outK[grp].push(nm); cntK++; }
+      });
+      _subActs.forEach(function(a){
+        var has = Object.keys(outK).some(function(g){ return _subNorm(g) === _subNorm(a.name); });
+        if (!has) outK[a.name] = [];
+      });
+    }
     if (!cntK) return;                             // нічого не лишилось — краще старий список
     Object.keys(outK).forEach(function(g){
       outK[g].sort(function(a, b){ return a.localeCompare(b, 'uk'); });
@@ -3414,6 +3430,13 @@ async function renderAttendanceBoard(){
   }
 
   ATT.children = groups[ATT.group] || [];
+  if (!ATT.children.length){                     // v7.466: порожня група-абонемент
+    $('attLoading').classList.add('hidden');
+    $('attHint').textContent = '👶 У групі «' + ATT.group + '» ще немає дітей. Заведіть картку дитини з групою «' +
+      ATT.group + '» (галочка «Лише додаткові заняття», якщо інших занять немає) — дитина з’явиться тут і в блоці «' + ATT.group + '» у Payment.';
+    $('attHint').classList.remove('hidden');
+    return;
+  }
   // ФІКС A: у grid-режимі _loadMarks (за датою) не потрібен — сітка вантажить свій місяць
   // окремим _loadGridMarks. Це вдвічі менше важких читань аркуша в grid-режимі.
   if (ATT.viewMode !== 'grid') await _loadMarks(false);

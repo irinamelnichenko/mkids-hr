@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.463
+// m.kids CRM — Google Apps Script v7.466
+// v7.466: mergeEmployeeDuplicate — злиття дубля картки співробітника (CFO, пробний прогін, бекап HR_MRGBKP, UID предметників, табель); subPayCopyTest — вставка рядка в блок Payment на копії файлу з перевіркою SUM.
 // v7.463: getDebtsLive — накопичений борг на сьогодні по всій мережі наживо (перенос переплат, оплата до 5-го, за днями при новому договорі/розірванні, «вступний» як оплата місяця); _aggYearLocRows спільний з «Оплати-Рік».
 // v7.462: getPaymentsLive — «Оплати» поточного місяця зібрані з файлів Payment зараз (без запису), кеш 5 хв — наповнюваність і вільні місця на дашборді наживо.
 // v7.459: getDopAnalytics віддає імена дітей локації (names) — розкриття плитки «Дітей охоплено».
@@ -7195,7 +7196,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.463', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.466', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -7558,6 +7559,8 @@ function doPost(e) {
     else if (body.action === 'setUserPassword')           result = setUserPassword(body.username || '', body.newPassword || '', body.actorId || 0);
     else if (body.action === 'resetAllLocationPasswords') result = resetAllLocationPasswords(body.actorId || 0);
     else if (body.action === 'patchEmployee')             result = patchEmployee(body);                       // v7.382 точкова правка картки (CFO, dryRun)
+    else if (body.action === 'mergeEmployeeDuplicate')    result = mergeEmployeeDuplicate(body);              // v7.466 злиття дубля картки співробітника (CFO, dryRun)
+    else if (body.action === 'subPayCopyTest')            result = subPayCopyTest(body);                      // v7.466 вставка в блок Payment на копії файлу (CFO)
     else if (body.action === 'saveEmployee')              result = saveEmployee(Number(body.actorId || 0), body.payload || {}, body.rowNum || null);
     else if (body.action === 'saveLocationCard')          result = saveLocationCard(Number(body.actorId || 0), body.payload || {});
     else if (body.action === 'deleteEmployee')            result = deleteEmployee(Number(body.actorId || 0), body.rowNum || 0);
@@ -34607,6 +34610,158 @@ function patchEmployee(body){
   try { _writeHrAudit(actor, 'patch', rowNum, cur, nw); } catch(_w){}
   res.written = true;
   return res;
+}
+
+// v7.466: ЗЛИТТЯ ДУБЛЯ КАРТКИ СПІВРОБІТНИКА (лише CFO). POST {action:'mergeEmployeeDuplicate', targetRow, sourceRow,
+// expect:{last, first}, dryRun(default true)}. Обидва рядки — та сама людина в тій самій локації. Ціль отримує порожні
+// поля з дубля; посилання на UID дубля в предметниках (уроки/призначення/каталог) переходять на UID цілі; табель
+// (STAFF::ключ) — якщо ключі різні, переноситься, а на однакових датах — відмова зі списком колізій. Обидва рядки
+// перед записом — у CONFIG «HR_MRGBKP» (JSON), у HR_Audit — merge_dup. Дубль: останній рядок аркуша видаляється,
+// інакше очищується (номери рядків інших карток не зсуваються).
+function mergeEmployeeDuplicate(body){
+  body = body || {};
+  var actor = null; try { actor = _getActor((_CURRENT_AUTH && _CURRENT_AUTH.id) || body.actorId); } catch(_a){}
+  if (!actor || _roleKey(actor.role) !== 'cfo') return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var tR = Number(body.targetRow) || 0, sR = Number(body.sourceRow) || 0, ex = body.expect || {}, dryRun = (body.dryRun !== false);
+  if (tR < 2 || sR < 2 || tR === sR) return {ok:false, error:'targetRow і sourceRow обовʼязкові й різні'};
+  var lock = LockService.getDocumentLock();
+  if (!lock.tryLock(20000)) return {ok:false, code:'LOCK_TIMEOUT', error:'Could not acquire lock'};
+  try {
+    var sh = _getHrSheet(), W = Math.max(HR_COLS, HR_UID_COL);
+    var tv = sh.getRange(tR, 1, 1, W).getValues()[0], sv = sh.getRange(sR, 1, 1, W).getValues()[0];
+    var t = _parseEmpRow(tv, tR), s = _parseEmpRow(sv, sR);
+    if (_nameFold(t.last) !== _nameFold(ex.last) || _nameFold(t.first) !== _nameFold(ex.first) ||
+        _nameFold(s.last) !== _nameFold(ex.last) || _nameFold(s.first) !== _nameFold(ex.first))
+      return {ok:false, error:'Рядки ' + tR + '/' + sR + ': «' + t.last + ' ' + t.first + '» / «' + s.last + ' ' + s.first + '», а очікували «' + ex.last + ' ' + ex.first + '»'};
+    if (_nameFold(t.loc) !== _nameFold(s.loc)) return {ok:false, error:'Різні локації: ' + t.loc + ' / ' + s.loc};
+    var tUid = String(tv[HR_UID_COL - 1] || '').trim(), sUid = String(sv[HR_UID_COL - 1] || '').trim();
+    var tKey = _mkEmpKey(t.last, t.first, t.wday || t.hired), sKey = _mkEmpKey(s.last, s.first, s.wday || s.hired);
+    var res = {ok:true, dryRun:dryRun, target:t, source:s, targetUid:tUid, sourceUid:sUid, targetKey:tKey, sourceKey:sKey};
+
+    // 1) поля: порожнє в цілі ← значення дубля (P — формула, Q — резерв, не чіпаємо)
+    var fill = [];
+    for (var c = 0; c < HR_COLS; c++){
+      if (c === 15 || c === 16) continue;
+      var a = String(tv[c] == null ? '' : tv[c]).trim(), b = String(sv[c] == null ? '' : sv[c]).trim();
+      if (!a && b) fill.push({col:c + 1, val:sv[c], show:(sv[c] instanceof Date) ? _fmtDateDmy(sv[c]) : b});
+    }
+    res.filled = fill.map(function(f){ return {col:f.col, val:f.show}; });
+
+    // 2) табель співробітника
+    var tab = {sameKey: tKey === sKey, target:0, source:0, collisions:[]};
+    var ash = getCRMSpreadsheet().getSheetByName(SHEET_ATTENDANCE);
+    if (ash){
+      var av = ash.getDataRange().getValues(), ah = av[0].map(String), iId = ah.indexOf('ID дитини'), iD = ah.indexOf('Дата');
+      var tz = ash.getParent().getSpreadsheetTimeZone() || 'Europe/Kiev', td = {}, sd = {};
+      function _d(x){ return (x instanceof Date) ? Utilities.formatDate(x, tz, 'yyyy-MM-dd') : String(x || '').trim(); }
+      for (var r = 1; r < av.length; r++){
+        var id = String(av[r][iId] || '').trim();
+        if (id === ATT_STAFF_PREFIX + tKey){ tab.target++; td[_d(av[r][iD])] = (td[_d(av[r][iD])] || 0) + 1; }
+        else if (id === ATT_STAFF_PREFIX + sKey){ tab.source++; sd[_d(av[r][iD])] = 1; }
+      }
+      Object.keys(td).forEach(function(d){ if (td[d] > 1) tab.collisions.push(d + ' ×' + td[d]); });
+      if (!tab.sameKey) Object.keys(sd).forEach(function(d){ if (td[d]) tab.collisions.push(d); });
+      tab.dates = Object.keys(td).length;
+    }
+    res.timesheet = tab;
+    if (tab.collisions.length) return {ok:false, error:'Колізії табеля на однакових датах — вирішіть вручну', timesheet:tab, target:t, source:s};
+
+    // 3) посилання на UID дубля в предметниках
+    var refs = [];
+    if (sUid && sUid !== tUid){
+      [{sh:_getPredLessonsSheet(), col:PRED_LESSONS_UID_COL, label:'Predmetnyky_Lessons'},
+       {sh:_getPredAssignSheet(), col:PRED_ASSIGN_UID_COL, label:'Predmetnyky_Assignments'},
+       {sh:_getPredmetnyCatalogSheet(false), col:PRED_CATALOG_UID_COL, label:'Предметники_Каталог'}].forEach(function(x){
+        if (!x.sh || x.sh.getLastRow() < 2) return;
+        var v = x.sh.getRange(2, x.col, x.sh.getLastRow() - 1, 1).getValues(), rows = [];
+        for (var i = 0; i < v.length; i++) if (String(v[i][0] || '').trim() === sUid) rows.push(i + 2);
+        if (rows.length) refs.push({label:x.label, sh:x.sh, col:x.col, rows:rows});
+      });
+    }
+    res.uidRefs = refs.map(function(x){ return x.label + ': ' + x.rows.length; });
+    res.sourceIsLastRow = (sR === sh.getLastRow());
+    if (dryRun) return res;
+
+    // бекап обох рядків
+    var css = SpreadsheetApp.openById(CONFIG_SHEET_ID), bk = css.getSheetByName('HR_MRGBKP');
+    if (!bk){ bk = css.insertSheet('HR_MRGBKP'); bk.getRange(1, 1, 1, 6).setValues([['Час', 'Хто', 'Роль', 'Рядок', 'UID', 'Рядок (JSON)']]); bk.setFrozenRows(1); }
+    var now = new Date();
+    bk.getRange(bk.getLastRow() + 1, 1, 2, 6).setValues([
+      [now, actor.name || '', 'ціль', tR, tUid, JSON.stringify(tv)],
+      [now, actor.name || '', 'дубль', sR, sUid, JSON.stringify(sv)]]);
+
+    fill.forEach(function(f){
+      var cell = sh.getRange(tR, f.col);
+      try { cell.setNumberFormat(sh.getRange(sR, f.col).getNumberFormat()); } catch(_nf){}
+      cell.setValue(f.val);
+    });
+    refs.forEach(function(x){ x.rows.forEach(function(rn){ x.sh.getRange(rn, x.col).setValue(tUid); }); });
+    if (!tab.sameKey && tab.source){
+      var rm = remapAttendanceId({fromId:ATT_STAFF_PREFIX + sKey, toId:ATT_STAFF_PREFIX + tKey, newName:t.last + ' ' + t.first, dryRun:false});
+      res.timesheetRemap = rm.ok ? rm.matched : ('помилка: ' + rm.error);
+    }
+    if (res.sourceIsLastRow) sh.deleteRow(sR);
+    else sh.getRange(sR, 1, 1, W).clearContent();
+    var after = _parseEmpRow(sh.getRange(tR, 1, 1, W).getValues()[0], tR);
+    _writeHrAudit(actor, 'merge_dup', tR, {target:t, source:s, sourceUid:sUid}, after);
+    res.after = after;
+    _cacheBump('fill');
+    return res;
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { try { lock.releaseLock(); } catch(_){} }
+}
+
+// v7.466: ПЕРЕВІРКА ВСТАВКИ В БЛОК Payment НА КОПІЇ (лише CFO, у живий файл нічого не пише). POST {action:'subPayCopyTest',
+// loc, group, name}. Копіює файл Payment локації, на копії ставить рядок дитини в блок групи тим самим шляхом, що й
+// addPaymentRow (_payInsertPlan → _payInsertRow → _payFixBlockSum), звіряє SUM у рядках-заголовках усіх блоків
+// (до / після / після скасування), видаляє тестовий рядок і відправляє копію в кошик.
+function subPayCopyTest(body){
+  body = body || {};
+  var actor = null; try { actor = _getActor((_CURRENT_AUTH && _CURRENT_AUTH.id) || body.actorId); } catch(_a){}
+  if (!actor || _roleKey(actor.role) !== 'cfo') return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var loc = String(body.loc || '').trim(), group = String(body.group || '').trim(), name = String(body.name || 'ТЕСТ ' + group).trim();
+  if (!loc || !group) return {ok:false, error:'loc і group обовʼязкові'};
+  var reg = _getLocationPaymentRegistry(loc);
+  if (!reg || !reg.sheetId) return {ok:false, error:'Локацію «' + loc + '» не знайдено в реєстрі Payment'};
+  var copyId = '';
+  try {
+    var stamp = Utilities.formatDate(new Date(), 'Europe/Kiev', 'yyyyMMdd_HHmmss');
+    copyId = DriveApp.getFileById(reg.sheetId).makeCopy('TEST_COPY ' + loc + ' ' + stamp + ' (видалити)').getId();
+    var sh = SpreadsheetApp.openById(copyId).getSheetByName(reg.sheetName);
+    if (!sh) return {ok:false, error:'На копії немає аркуша ' + reg.sheetName};
+    function snap(){
+      var data = sh.getDataRange().getValues(), bl = _payBlocks(data, sh), lc = Math.min(sh.getLastColumn(), 120);
+      return bl.map(function(b){
+        var F = sh.getRange(b.hdr, 1, 1, lc).getFormulas()[0], rng = {}, bad = 0;
+        for (var c = 1; c < lc; c++){
+          var m = /^=SUM\(\$?([A-Z]+)\$?(\d+):\$?([A-Z]+)\$?(\d+)\)$/i.exec(String(F[c] || '').replace(/\s+/g, ''));
+          if (!m || m[1] !== m[3]) continue;
+          var k = m[2] + ':' + m[4]; rng[k] = (rng[k] || 0) + 1;
+          if (Number(m[2]) < b.hdr + 1 || Number(m[4]) > b.next - 1) bad++;   // вилазить за межі свого блоку
+        }
+        return {title:b.title, hdr:b.hdr, next:b.next, sums:rng, outside:bad};
+      });
+    }
+    var before = snap();
+    var data = sh.getDataRange().getValues(), blocks = _payBlocks(data, sh), blk = _payFindBlock(blocks, group);
+    if (!blk) return {ok:false, error:'Блок «' + group + '» не знайдено', blocks:before.map(function(b){ return b.title; })};
+    var plan = _payInsertPlan(data, blk);
+    var row = _payInsertRow(sh, plan);
+    var fixed = _payFixBlockSum(sh, blk.title);
+    sh.getRange(row, 1).setNumberFormat('@').setValue(name);
+    var after = snap();
+    var tb = after.filter(function(b){ return b.title === blk.title && b.hdr === blk.hdr; })[0] || null;
+    var covers = !!(tb && Object.keys(tb.sums).length && Object.keys(tb.sums).every(function(k){ var p = k.split(':'); return Number(p[0]) <= row && Number(p[1]) >= row; }));
+    sh.deleteRow(row);
+    var cancelled = snap();
+    function _sig(a){ return JSON.stringify(a.map(function(b){ return [b.title, b.hdr, b.sums]; })); }
+    return {ok:true, loc:loc, group:group, testRow:row, plan:plan, sumFixed:fixed, block:{before:before.filter(function(b){ return b.hdr === blk.hdr; })[0], after:tb},
+            coversTestRow:covers, outsideAfter:after.reduce(function(s, b){ return s + b.outside; }, 0),
+            outsideBefore:before.reduce(function(s, b){ return s + b.outside; }, 0),
+            otherBlocksIntact:_sig(before.filter(function(b){ return b.hdr < blk.hdr; })) === _sig(after.filter(function(b){ return b.hdr < blk.hdr; })),
+            restoredAfterCancel:_sig(before) === _sig(cancelled), blocksAfter:after};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { if (copyId){ try { DriveApp.getFileById(copyId).setTrashed(true); } catch(_t){} } }
 }
 
 // v6.44 — one-shot міграція: підписує заголовки нових колонок S:V у HR-аркуші.
