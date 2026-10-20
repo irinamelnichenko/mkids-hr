@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.450
+// m.kids CRM — Google Apps Script v7.451
+// v7.451: getDopAnalytics — аналітика додаткових (каталог + табель + Оплати-Рік + Salary EXTRAS), лише читання; _salaryReadGrids/_salaryRowsFromData спільні.
 // v7.450: «Групи_Мапа» — сід усіх пар Управління (Манхетен, Нац.Гвардії, Хіміків); groupMapSetup дописує відсутні.
 // v7.449: «Групи_Мапа» — автосинк чернеток бере канонічну назву групи з реєстру або чинних карток; інакше «назва не зіставлена», групу не заводить.
 // v7.447: групи-абонементи (заняття каталогу з лімітом абонемента: Чомусики, Мама+я) прибрано з груп предметників (_loadRealGroups).
@@ -7188,7 +7189,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.450', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.451', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -7223,6 +7224,7 @@ function doGet(e) {
     else if (action === 'runSyncBdayStatus')  result = syncBdayStatusSheet();
     else if (action === 'getRegistryUrls')    result = getRegistryUrls();
     else if (action === 'getGroupMap')       result = getGroupMap();   // v7.449 реєстр «Групи_Мапа» + незіставлені чернетки
+    else if (action === 'getDopAnalytics')   result = getDopAnalytics(e.parameter || {});   // v7.451 аналітика додаткових (лише читання)
     else if (action === 'getNeedsAttention') result = getNeedsAttention(String(e.parameter && e.parameter.nocache || '') === '1');   // v7.117; v7.334 кеш 10 хв
     else if (action === 'diagNeedsAttentionCompare') result = diagNeedsAttentionCompare();   // v7.334 звірка повне/вузьке читання
     else if (action === 'getAuthLog')         result = getAuthLog();   // v7.118 діагностика Авторизація_Лог
@@ -17944,8 +17946,16 @@ function getSalaryData(loc, year) {
   var lastRow = Math.max(sheet.getLastRow(), 80);
   var lastCol = Math.max(sheet.getLastColumn(), 37);
   var data    = sheet.getRange(1, 1, lastRow, lastCol).getValues();
-  var width   = lastCol;
 
+  return {
+    ok:   true,
+    loc:  loc,
+    year: year ? Number(year) || year : '',
+    rows: _salaryRowsFromData(loc, data, lastCol)
+  };
+}
+// v7.451: рядки Salary з уже прочитаної сітки (getSalaryData і getDopAnalytics).
+function _salaryRowsFromData(loc, data, width){
   // ── SECTION-BASED класифікація (v6.8) ─────────────────────
   // Збираємо raw-рядки у source-order, ВКЛЮЧАЮЧИ subtotal-рядки
   // ("Додаткові заняття" / "День народження"), бо вони перемикають
@@ -17998,14 +18008,7 @@ function getSalaryData(loc, year) {
 
   // Section-header-рядки — мета, у відповідь не йдуть. Group-header лишається
   // (фронт їх відрисує як підзаголовки груп всередині 'main').
-  var rows = classified.filter(function(r){ return r._category !== 'section_header'; });
-
-  return {
-    ok:   true,
-    loc:  loc,
-    year: year ? Number(year) || year : '',
-    rows: rows
-  };
+  return classified.filter(function(r){ return r._category !== 'section_header'; });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -18347,7 +18350,17 @@ function _getSalaryOverviewRaw(year){
 }
 // mode 'fast' — пакетне читання через Sheets API (+ запасний старий на збій); 'old' — лише SpreadsheetApp.
 function _salaryOverviewBuild(entries, mode){
-  var grids = {}, via = {};
+  var rd = _salaryReadGrids(entries, mode), locations = [], errors = rd.errors.slice();
+  entries.forEach(function(entry){
+    var g = rd.grids[entry.loc]; if (!g) return;
+    try { locations.push(_salaryOverviewLoc(entry, g.data, g.width)); }
+    catch (e) { errors.push({loc: entry.loc, error: (e && e.message) ? e.message : String(e)}); }
+  });
+  return {locations:locations, errors:errors, via:rd.via};
+}
+// v7.451: читання аркушів Salary (спільне для огляду ЗП і аналітики додаткових) → {grids:{loc:{data,width}}, errors, via}.
+function _salaryReadGrids(entries, mode){
+  var grids = {}, via = {}, out = {}, errors = [];
   if (mode === 'fast'){
     try {
       var tok = ScriptApp.getOAuthToken();
@@ -18364,7 +18377,6 @@ function _salaryOverviewBuild(entries, mode){
       });
     } catch(_f){ via._batchError = String(_f && _f.message || _f); }
   }
-  var locations = [], errors = [];
   entries.forEach(function(entry){
     try {
       var data, width;
@@ -18390,12 +18402,12 @@ function _salaryOverviewBuild(entries, mode){
         width = lastCol;
         via[entry.loc] = (mode === 'fast') ? ('fallback' + (via[entry.loc] ? ':' + via[entry.loc] : '')) : 'old';
       }
-      locations.push(_salaryOverviewLoc(entry, data, width));
+      out[entry.loc] = {data:data, width:width};
     } catch (e) {
       errors.push({loc: entry.loc, error: (e && e.message) ? e.message : String(e)});
     }
   });
-  return {locations:locations, errors:errors, via:via};
+  return {grids:out, errors:errors, via:via};
 }
 // Підрахунок однієї локації з уже прочитаної сітки (спільний для обох способів читання).
 function _salaryOverviewLoc(entry, data, width){
@@ -40682,5 +40694,181 @@ function _p27SetGroupFrom(loc, cardId, fromYm, group){
     var arr = []; for (var m = m0; m <= 12; m++) arr.push(group);
     sh.getRange(r, P27_COL.gm + m0, 1, arr.length).setValues([arr]);
     return;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.451 · АНАЛІТИКА ДОДАТКОВИХ — прибутковість занять (лише читання).
+// GET ?action=getDopAnalytics&year=2026[&nocache=1]
+// Джерела (нічого нового):
+//   • каталог «Додаткові_Каталог» — ціна батькам, модель і ставка викладача;
+//   • табель додаткових — відмітки (ціна на день відмітки), сесії група×дата з обʼєднаннями й поділами;
+//   • «Оплати-Рік» — діти локації (є сума навч або доп у місяці), абонементи (Бюджет навч блоку групи-абонемента),
+//     Факт/Бюджет доп локації;
+//   • Salary, секція EXTRAS — ЗП викладача: робота місяця M = колонка місяця M+1 (так пише exportToSalaryExtras).
+// Місяць локації рахується, лише якщо в ній ≥ DOP_AN_MIN_MARKS відміток табеля (травень 2026 — 3 тестові відмітки).
+// Собівартість заняття за місяць: факт Salary > розрахунок за каталогом (відмітки/сесії × ставка) > бюджет Salary.
+// Абонемент (SUBSCRIPTION_ACTIVITIES): оборот = «Бюджет навч» блоку абонемента в Payment, не відмітки × ціна.
+// ═══════════════════════════════════════════════════════════════════════════
+var DOP_AN_MIN_MARKS = 10;
+var DOP_AN_ALIAS = {'м.денс':'m.dance'};   // одна назва заняття, написана кирилицею й латиницею
+function _dopAnKey(name){ var k = _journalNormName(name); return DOP_AN_ALIAS[k] || k; }
+function _dopAnKid(name){ return _journalNormName(String(name || '').replace(/\s+\d+\s*$/, '')); }
+function getDopAnalytics(params){
+  params = params || {};
+  var t0 = Date.now();
+  if (_authEnforceOn() && _CURRENT_AUTH){
+    var _r = String(_CURRENT_AUTH.role || '').toLowerCase().trim();
+    if (EMP_MGMT_ROLES.indexOf(_r) === -1 && _r !== 'founder') return {ok:false, code:'AUTH', error:'Аналітика додаткових — лише для мережевих ролей'};
+  }
+  var year = Number(params.year) || new Date().getFullYear();
+  var ckey = 'dopan1_' + year;
+  if (String(params.nocache || '') !== '1'){ var hit = _cacheGzGetBig(ckey); if (hit){ hit.cached = true; return hit; } }
+  try {
+    var yp = String(year) + '-', L = {}, missing = [];
+    var locOf = function(loc){
+      return L[loc] || (L[loc] = {acts:{}, kidIx:{}, kidN:0, kids:{}, marksM:{}, payDop:{}, salNoMarks:{}, salUnmatched:[]});
+    };
+    var kidIdx = function(o, name){ var k = _dopAnKid(name); if (!k) return -1;
+      if (!o.kidIx.hasOwnProperty(k)) o.kidIx[k] = o.kidN++; return o.kidIx[k]; };
+
+    // 1) Каталог
+    var byId = {};
+    _getActivitiesSheet(false).getDataRange().getValues().slice(1).forEach(function(row){
+      if (!row[2]) return;
+      var a = _parseActivityRow(row); if (!a.loc) return;
+      var o = locOf(a.loc), key = _dopAnKey(a.name);
+      var A = o.acts[key];
+      if (!A) A = o.acts[key] = {key:key, name:a.name, model:a.teacherModel, rate:a.teacherRate, price:a.clientPrice,
+                                sub:a.subLimit, active:a.active, ids:[], m:{}};
+      else if (a.active && !A.active){ A.name = a.name; A.model = a.teacherModel; A.rate = a.teacherRate; A.price = a.clientPrice; A.active = true; }
+      A.ids.push(a.id);
+      byId[a.id] = {loc:a.loc, key:key};
+    });
+
+    // 2) Табель: відмітки, ціна, діти, групи по датах (для сесій)
+    var cell = function(A, m){ return A.m[m] || (A.m[m] = {n:0, r:0, z:0, k:{}, gd:{}, pk:{}}); };
+    var att = _getAttendanceSheet(false).getDataRange().getValues();
+    for (var i = 1; i < att.length; i++){
+      var d = _attDateFast(att[i][1]); if (d.indexOf(yp) !== 0) continue;
+      var aid = Number(att[i][5]) || 0, ref = byId[aid]; if (!ref) continue;
+      var o = L[ref.loc], A = o.acts[ref.key], m = Number(d.slice(5, 7));
+      var c = cell(A, m), price = Number(att[i][7]) || 0;
+      o.marksM[m] = (o.marksM[m] || 0) + 1;
+      c.n++; c.r += price; if (!price) c.z++;
+      var ki = kidIdx(o, att[i][4]); if (ki >= 0) c.k[ki] = 1;
+      var gd = c.gd[aid] || (c.gd[aid] = {});
+      (gd[d] = gd[d] || {})[_dopNormGroup(att[i][3])] = true;
+    }
+
+    // 3) Обʼєднання й поділи — один прохід по аркушах
+    var merges = {}, splits = {};
+    try { _getDopMergesSheet(false).getDataRange().getValues().slice(1).forEach(function(r){
+      if (!r[1]) return; var mg = _parseDopMergeRow(r); if (mg.date.indexOf(yp) !== 0) return;
+      var set = mg.groups.map(_dopNormGroup).filter(Boolean); if (set.length < 2) return;
+      var a = merges[mg.activityId] || (merges[mg.activityId] = {});
+      (a[mg.date] = a[mg.date] || []).push(set);
+    }); } catch(_m){}
+    try { _getSplitsSheet(DOP_SPLITS_SHEET_NAME, DOP_SPLITS_HEADER, false).getDataRange().getValues().forEach(function(r){
+      if (!_splitRowId(r) || !r[1]) return; var date = _dopDateISO(r[4]); if (date.indexOf(yp) !== 0) return;
+      var parts = _splitPartsOf(r[6]), act = Number(r[2]) || 0, g = _dopNormGroup(r[5]);
+      if (parts < 2 || !act || !g) return;
+      var a = splits[act] || (splits[act] = {});
+      (a[date] = a[date] || {})[g] = parts;
+    }); } catch(_s){}
+
+    // 4) Оплати-Рік: діти локації, абонементи, доп
+    var MN = MONTHS_CAL_UA, gMap = _loadGroupMap(), num = function(v){ return Number(v) || 0; };
+    var subActs = {};   // loc → [{A, letters}]
+    Object.keys(L).forEach(function(loc){ Object.keys(L[loc].acts).forEach(function(k){
+      var A = L[loc].acts[k]; if (A.sub) (subActs[loc] = subActs[loc] || []).push({A:A, letters:_groupLetters(A.name, false)}); }); });
+    var ySh = getCRMSpreadsheet().getSheetByName(SHEET_YEARLY);
+    var yv = ySh ? ySh.getDataRange().getValues() : [];
+    var yh = (yv[0] || []).map(String), col = function(n){ return yh.indexOf(n); };
+    var iL = col('Локація'), iG = col('Група'), iN = col("Ім'я дитини");
+    for (var r = 1; r < yv.length; r++){
+      var loc = String(yv[r][iL] || '').trim(); if (!loc) continue;
+      var o2 = locOf(loc), nm = String(yv[r][iN] || '').trim(), named = nm && !/^\(без імені/i.test(nm);
+      var grp = String(yv[r][iG] || '').trim(), canon = (gMap[loc] && gMap[loc][_predGroupKey(grp)]) || grp;
+      var gl = _groupLetters(canon, false), subA = null;
+      (subActs[loc] || []).forEach(function(s){ if (s.letters && gl.indexOf(s.letters) === 0) subA = s.A; });
+      for (var mm = 1; mm <= 12; mm++){
+        var bn = num(yv[r][col(MN[mm - 1] + '-Бюджет-навч')]), fn = num(yv[r][col(MN[mm - 1] + '-Факт-навч')]);
+        var fd = num(yv[r][col(MN[mm - 1] + '-Факт-доп')]), bd = num(yv[r][col(MN[mm - 1] + '-Бюджет-доп')]);
+        var pd = o2.payDop[mm] || (o2.payDop[mm] = {f:0, b:0});
+        pd.f += fd; pd.b += bd;
+        if (!named) continue;
+        if (subA){
+          if (bn > 0){ var sc = cell(subA, mm); sc.r += bn; var pi = kidIdx(o2, nm); if (pi >= 0) sc.pk[pi] = 1; }
+        } else if (bn > 0 || fn > 0 || bd > 0 || fd > 0){   // дитина в Payment цього місяця (і «лише додаткові»)
+          var ki2 = kidIdx(o2, nm); if (ki2 >= 0) (o2.kids[mm] = o2.kids[mm] || {})[ki2] = 1;
+        }
+      }
+    }
+
+    // 5) Salary EXTRAS
+    var reg = _salaryGetRegistry(), entries = reg.ok ? reg.rows.filter(function(e){ return L[e.loc] && Object.keys(L[e.loc].acts).length; }) : [];
+    var rd = entries.length ? _salaryReadGrids(entries, 'fast') : {grids:{}, errors:[]};
+    var sal = {};   // loc → key → [{f,b}×12]
+    entries.forEach(function(e){
+      var g = rd.grids[e.loc]; if (!g) return;
+      var o3 = L[e.loc], keys = Object.keys(o3.acts).sort(function(a, b){ return b.length - a.length; });
+      _salaryRowsFromData(e.loc, g.data, g.width).forEach(function(row){
+        if (row._section !== 'extras' || row._category !== 'extras') return;
+        var rn = _dopAnKey(row.name), hitK = '';
+        for (var q = 0; q < keys.length; q++) if (_startsWithCatalogName(rn, keys[q])){ hitK = keys[q]; break; }
+        if (!hitK && rn){   // «Англійська» у Salary ↔ «Англійська групові» в каталозі — лише коли кандидат один
+          var pre = keys.filter(function(k){ return k.indexOf(rn) === 0; });
+          if (pre.length === 1) hitK = pre[0];
+        }
+        if (!hitK){ if (row.totalFact || row.totalBudget) o3.salUnmatched.push({name:row.name, fact:row.totalFact, budget:row.totalBudget}); return; }
+        var arr = (sal[e.loc] = sal[e.loc] || {})[hitK] || (sal[e.loc][hitK] = row.months.map(function(){ return {f:0, b:0}; }));
+        row.months.forEach(function(x, ix){ arr[ix].f += x.fact; arr[ix].b += x.budget; });
+      });
+    });
+    rd.errors.forEach(function(er){ missing.push('Salary «' + er.loc + '»: ' + er.error); });
+
+    // 6) Збірка
+    Object.keys(L).forEach(function(loc){ var mk = L[loc].marksM;
+      Object.keys(mk).forEach(function(m){ if (mk[m] < DOP_AN_MIN_MARKS) delete mk[m]; }); });
+    var out = {};
+    Object.keys(L).forEach(function(loc){
+      var o = L[loc], acts = [];
+      Object.keys(o.acts).forEach(function(k){
+        var A = o.acts[k], S = (sal[loc] || {})[k], ms = {};
+        Object.keys(o.marksM).forEach(function(ks){
+          var m = Number(ks), c = A.m[m] || {n:0, r:0, z:0, k:{}, gd:{}, pk:{}};
+          var sess = 0, units = 0;
+          Object.keys(c.gd).forEach(function(aid){
+            sess += _dopCountUnits(A.model === 'За захід' ? 'За захід' : 'За заняття', c.gd[aid], merges[aid] || {}, splits[aid] || {});
+          });
+          units = A.model === 'За дитину' ? c.n : sess;
+          var calc = (A.rate > 0 && A.model) ? units * A.rate : null;
+          var sf = (S && m < 12) ? S[m].f : 0, sb = (S && m < 12) ? S[m].b : 0;   // S[m] = колонка місяця m+1
+          var cost = null, cs = '';
+          if (sf > 0){ cost = sf; cs = 'f'; }
+          else if (calc != null && c.n > 0){ cost = calc; cs = 'calc'; }
+          else if (sb > 0){ cost = sb; cs = 'b'; }
+          else if (c.n > 0 && calc == null){ cost = null; cs = ''; }
+          else cost = 0;
+          if (!c.n && !c.r && !cost) return;
+          ms[m] = {n:c.n, r:c.r, z:c.z, s:sess, k:Object.keys(c.k).map(Number), pk:Object.keys(c.pk).map(Number),
+                   c:cost, cs:cs, calc:calc, sf:sf, sb:sb};
+        });
+        if (!Object.keys(ms).length && !A.active) return;
+        acts.push({key:k, name:A.name, model:A.model, rate:A.rate, price:A.price, sub:A.sub, active:A.active, m:ms, sal:!!S});
+      });
+      var sNo = {};
+      Object.keys(sal[loc] || {}).forEach(function(k){ sal[loc][k].forEach(function(x, ix){ var wm = ix;   // колонка ix+1 = робота місяця ix
+        if (wm >= 1 && !o.marksM[wm] && x.f) sNo[wm] = (sNo[wm] || 0) + x.f; }); });
+      var kids = {}; Object.keys(o.kids).forEach(function(m){ kids[m] = Object.keys(o.kids[m]).map(Number); });
+      out[loc] = {acts:acts, kids:kids, marksMonths:Object.keys(o.marksM).map(Number).sort(function(a, b){ return a - b; }),
+                  payDop:o.payDop, salUnmatched:o.salUnmatched, salNoMarks:sNo, salaryFile:!!rd.grids[loc]};
+    });
+    var res = {ok:true, year:year, locs:out, missing:missing, ms:Date.now() - t0, builtAt:new Date().toISOString()};
+    _cacheGzPutBig(ckey, res, 600);
+    return res;
+  } catch(e){
+    return {ok:false, error:String(e && e.message || e)};
   }
 }

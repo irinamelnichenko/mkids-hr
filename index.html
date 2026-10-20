@@ -3640,6 +3640,239 @@ function _renderContrBlock(){
     +'«груд.?» — у колонці грудня стоїть річний підсумок, такий грудень не рахуємо. Польова (до 2024) рахується як Кар\'єрна, «Львів» — як Кругла.'+(sl.type==='upr'?' Управління у файлі «Комплектація» може не бути — тоді тут порожньо.':'')+'</div>';
   return hd+ctl+ybar+fcHtml+netTbl+(locTbl?'<div style="height:10px"></div>'+locTbl:'')+note+'</div>';
 }
+// ─── v7.451: АНАЛІТИКА ДОДАТКОВИХ — які заняття прибуткові (getDopAnalytics, лише читання) ───
+//   Оборот — відмітки табеля × ціна на день відмітки; абонемент — «Бюджет навч» його блоку в Payment.
+//   Собівартість — Salary EXTRAS (факт; для місяців без факту — розрахунок за каталогом).
+//   Місяць локації — лише якщо в ній є табель додаткових цього місяця.
+var DOP_SLICES=[['all','🌐 Вся мережа'],['sad','🌱 Садки'],['sch','🏫 Школи'],['upr','🏢 Управління'],['loc','📍 Локація']];
+var DOP_FIRST_YEAR=2026;
+var DOP_MN=['січ','лют','бер','кві','тра','чер','лип','сер','вер','жов','лис','гру'];
+async function _ensureDopAn(y){ if(!S._dopAn)S._dopAn={}; if(S._dopAn[y]!==undefined)return; S._dopAn[y]=null;
+  try{ var r=await cloudFetch(authScriptUrl()+'?action=getDopAnalytics&year='+y,{redirect:'follow'}); var j=await r.json(); S._dopAn[y]=(j&&j.ok)?j:{ok:false,error:(j&&j.error)||'немає відповіді'}; }
+  catch(e){ S._dopAn[y]={ok:false,error:String(e&&e.message||e)}; } }
+function _dopSlice(){ if(!S.dopSlice){ var v=_contrLS('mkids_dop_slice',null);
+    S.dopSlice=(v&&typeof v==='object'&&v.type)?{type:String(v.type),loc:String(v.loc||'')}:{type:'all',loc:''}; } return S.dopSlice; }
+function dopSetSlice(type,loc){ S.dopSlice={type:type,loc:type==='loc'?String(loc||''):((S.dopSlice&&S.dopSlice.loc)||'')};
+  try{ localStorage.setItem('mkids_dop_slice',JSON.stringify(S.dopSlice)); }catch(e){} _renderDashNow(); }
+// Період: {k:'month'|'quarter'|'year', y, v} — v = місяць 1–12 або квартал 1–4.
+function _dopPer(){ if(!S.dopPer){ var v=_contrLS('mkids_dop_per',null), now=new Date();
+    S.dopPer=(v&&v.k&&Number(v.y)>=DOP_FIRST_YEAR)?{k:String(v.k),y:Number(v.y),v:Number(v.v)||1}
+      :{k:'month',y:Math.max(DOP_FIRST_YEAR,now.getMonth()?now.getFullYear():now.getFullYear()-1),v:now.getMonth()||12}; } return S.dopPer; }
+function dopSetPer(k,val){ var p=_dopPer(), y=p.y, v=p.v;
+  if(val){ var a=String(val).split('-'); y=Number(a[0]); v=Number(a[1])||1; }
+  else if(k==='quarter') v=Math.ceil((p.k==='month'?p.v:p.k==='quarter'?p.v*3:12)/3);
+  else if(k==='month') v=p.k==='quarter'?p.v*3:p.k==='month'?p.v:12;
+  S.dopPer={k:k,y:y,v:v}; try{ localStorage.setItem('mkids_dop_per',JSON.stringify(S.dopPer)); }catch(e){}
+  _ensureDopAn(y).then(_dashSoftRerender); _renderDashNow(); }
+function _dopPerMonths(p){ return p.k==='year'?[1,2,3,4,5,6,7,8,9,10,11,12]:p.k==='quarter'?[p.v*3-2,p.v*3-1,p.v*3]:[p.v]; }
+function _dopPerLbl(p){ return p.k==='year'?String(p.y):p.k==='quarter'?'Q'+p.v+' '+p.y:KOMP_MONTHS[p.v-1]+' '+p.y; }
+function dopOpen(){ S.dopOpen=!S.dopOpen; if(S.dopOpen) _ensureDopAn(_dopPer().y).then(_dashSoftRerender); _renderDashNow(); }
+function dopSetSort(s){ S.dopSort=s; _renderDashNow(); }
+function dopSetCmp(k){ S.dopCmp=k; _renderDashNow(); var el=document.getElementById('dopCmp'); if(el) el.scrollIntoView({block:'nearest',behavior:'smooth'}); }
+function _dopIn(loc,sl){ var t=_dashLocType(loc); if(!t) return false;
+  if(sl.type==='all') return true;
+  if(sl.type==='loc') return !!sl.loc && _kompNorm(loc)===_kompNorm(sl.loc);
+  return t===sl.type; }
+function _dopUnion(dst,arr){ (arr||[]).forEach(function(i){ dst[i]=1; }); return dst; }
+// Зведення одного заняття локації за місяці періоду (лише місяці з табелем локації).
+function _dopActAgg(a,ms){
+  // rk/ck — оборот і собівартість лише тих місяців, де відомі обидва: з них прибуток і маржа
+  var o={n:0,r:0,z:0,s:0,k:{},pk:{},pkm:0,c:0,rk:0,ck:0,cUnk:false,revUnk:false,fix:0,vari:0,calcC:0,mths:0,salB:0};
+  ms.forEach(function(m){ var x=a.m[m]; if(!x) return; o.mths++;
+    o.n+=x.n; o.r+=x.r; o.z+=x.z; o.s+=x.s; _dopUnion(o.k,x.k); _dopUnion(o.pk,x.pk); o.pkm+=(x.pk||[]).length;
+    var cu=(x.c==null && x.n>0), ru=!!(a.sub && x.n && !x.r);   // абонемент з відмітками, але без «Бюджет навч» у Payment
+    if(cu) o.cUnk=true; if(ru) o.revUnk=true;
+    if(x.c!=null){ o.c+=x.c; if(x.cs==='calc') o.calcC+=x.c; if(x.cs==='b') o.salB+=x.c; }
+    if(cu||ru) return;
+    o.rk+=x.r; o.ck+=x.c||0;
+    if(a.model==='За дитину') o.vari+=x.c||0; else o.fix+=x.c||0; });
+  o.kids=Object.keys(o.k).length; o.payers=Object.keys(o.pk).length;
+  return o;
+}
+function _dopEmpty(){ return {n:0,r:0,z:0,s:0,kids:0,payers:0,pkm:0,c:0,rk:0,ck:0,cUnk:false,revUnk:false,fix:0,vari:0,calcC:0,salB:0,locs:0,mths:0}; }
+function _dopAdd(t,o){ ['n','r','z','s','kids','payers','pkm','c','rk','ck','fix','vari','calcC','salB','mths'].forEach(function(f){ t[f]+=o[f]||0; });
+  t.cUnk=t.cUnk||o.cUnk; t.revUnk=t.revUnk||o.revUnk; return t; }
+// → {locs:{L:{kids,cov,r,c,cUnk,n,acts:{key:agg}}}, acts:{key:{name,sub,t:agg,byLoc}}, months, payF, gaps}
+function _dopCalc(an,p,inSlice){
+  var ms=_dopPerMonths(p), res={locs:{},acts:{},monthsUsed:{},payF:0,payB:0,payN:0,gaps:[],gapIx:{},salUnm:[],salNoMarks:{}};
+  Object.keys(an.locs||{}).forEach(function(L){ if(!inSlice(L)) return;
+    var lo=an.locs[L], lm=ms.filter(function(m){ return (lo.marksMonths||[]).indexOf(m)>=0; });
+    (lo.salUnmatched||[]).forEach(function(u){ res.salUnm.push({loc:L,name:u.name,fact:u.fact}); });
+    ms.forEach(function(m){ var v=(lo.salNoMarks||{})[m]; if(v) res.salNoMarks[L]=(res.salNoMarks[L]||0)+v; });
+    if(!lm.length) return;
+    // доп відміток місяця M іде в «Бюджет доп» Payment місяця M+1 (exportAttendanceToPayments)
+    lm.forEach(function(m){ res.monthsUsed[m]=1; var pd=m<12?(lo.payDop||{})[m+1]:null; if(pd){ res.payF+=Number(pd.f)||0; res.payB+=Number(pd.b)||0; } else res.payN++; });
+    var kids={}; lm.forEach(function(m){ _dopUnion(kids,(lo.kids||{})[m]); });
+    var cov={}, R={kids:Object.keys(kids).length, r:0, c:0, rk:0, ck:0, cUnk:false, revUnk:false, n:0, acts:{}, months:lm};
+    (lo.acts||[]).forEach(function(a){ var o=_dopActAgg(a,lm); if(!o.n && !o.r && !o.c) return;
+      _dopUnion(cov,Object.keys(o.k)); _dopUnion(cov,Object.keys(o.pk));
+      o.name=a.name; o.model=a.model; o.rate=a.rate; o.price=a.price; o.sub=a.sub; o.active=a.active;
+      R.acts[a.key]=o; R.r+=o.r; R.c+=o.c; R.rk+=o.rk; R.ck+=o.ck; R.n+=o.n; R.cUnk=R.cUnk||o.cUnk; R.revUnk=R.revUnk||o.revUnk;
+      var A=res.acts[a.key]||(res.acts[a.key]={key:a.key,name:a.name,sub:a.sub,t:_dopEmpty(),byLoc:{}});
+      _dopAdd(A.t,o); A.t.locs++; A.byLoc[L]=o;
+      if(o.cUnk) _dopGap(res,'«'+a.name+'» — немає ставки в каталозі й рядка в Salary EXTRAS, собівартість невідома',L);
+      if(o.revUnk) _dopGap(res,'«'+a.name+'» (абонемент) — є відмітки, але в Payment немає «Бюджет навч» блоку абонемента',L);
+      if(o.z && !a.sub) _dopGap(res,'«'+a.name+'» — відмітки з ціною 0',L+' ('+o.z+')'); });
+    R.cov=Object.keys(cov).length; R.covIn=Object.keys(cov).filter(function(i){ return kids[i]; }).length;   // охоплення — лише серед дітей Payment
+    if(R.cov>R.covIn) _dopGap(res,'діти з табеля додаткових, яких немає в Payment локації за ПІБ — в охоплення % не йдуть',L+' ('+(R.cov-R.covIn)+')');
+    res.locs[L]=R; });
+  return res;
+}
+function _dopGap(res,txt,loc){ var g=res.gapIx[txt]; if(!g){ g=res.gapIx[txt]={txt:txt,locs:[]}; res.gaps.push(g); } g.locs.push(loc); }
+function _dopMoney(n){ return n==null||!isFinite(n)?'—':Math.round(n).toLocaleString('uk-UA')+' ₴'; }
+function _dopPct(a,b){ return b?Math.round(a/b*100):null; }
+function _dopMargin(o){ return o.rk>0?Math.round((o.rk-o.ck)/o.rk*100):null; }
+function _dopProfit(o){ return (o.rk||o.ck)?o.rk-o.ck:null; }
+var DOP_STAR_TIP='без місяців, де невідома собівартість (немає ставки й рядка Salary) або оборот абонемента (немає в Payment)';
+function _dopStar(o){ return (o.cUnk||o.revUnk)?' <span title="'+DOP_STAR_TIP+'" style="color:#e67e22;cursor:help">*</span>':''; }
+function _dopMCol(m){ return m==null?'var(--gray2)':m>=40?'#27ae60':m>=15?'#e67e22':'#e74c3c'; }
+// Точка беззбитковості: дітей на заняття = фікс. витрати на заняття / (ціна − ставка за дитину).
+// Абонемент — абонентів на місяць = витрати місяця / середній абонемент.
+function _dopBE(o){
+  if(!o.n||!o.rk) return {t:'—'};
+  if(o.sub){ if(!o.pkm) return {t:'—'}; var avg=o.rk/o.pkm, mc=o.ck/Math.max(1,o.mths); if(!mc) return {t:'з 1-го',ok:true};
+    var be=Math.ceil(mc/avg); return {t:be+' абон./міс', ok:o.pkm/Math.max(1,o.mths)>=be}; }
+  var paid=o.n-o.z, P=paid>0?o.rk/paid:0, V=o.n?o.vari/o.n:0, F=o.s?o.fix/o.s:0, fill=o.s?o.n/o.s:0;
+  if(P<=V) return {t:'збиток', ok:false, tip:'ціна ≤ ставки за дитину'};
+  if(!F) return {t:'з 1-ї дитини', ok:true};
+  var b=Math.ceil(F/(P-V)); return {t:b+' дит./заняття', ok:fill>=b};
+}
+function _dopTile(ic,cls,val,lbl,sub){ return '<div class="stat-card"><div class="stat-icon '+cls+'">'+ic+'</div><div style="min-width:0"><div class="stat-val" style="font-size:clamp(18px,2.1vw,24px);white-space:nowrap">'+val+'</div><div class="stat-lbl">'+lbl+'</div>'+(sub?'<div style="font-size:10px;color:var(--gray);margin-top:2px">'+sub+'</div>':'')+'</div></div>'; }
+function _renderDopBlock(){
+  var p=_dopPer(), sl=_dopSlice(), cy=new Date().getFullYear();
+  var hd='<div class="card" style="margin-top:16px"><div class="card-hd" style="flex-wrap:wrap;gap:6px;cursor:pointer" onclick="dopOpen()"><h3>🎨 Додаткові заняття · прибутковість '+(S.dopOpen?'▾':'▸')+'</h3>'
+    +'<span style="font-size:12px;color:var(--gray)">каталог · табель · Payment · Salary EXTRAS</span></div>';
+  if(!S.dopOpen) return hd+'</div>';
+  var an=S._dopAn&&S._dopAn[p.y];
+  if(an===undefined){ _ensureDopAn(p.y).then(_dashSoftRerender); an=null; }
+  // ── керування ──
+  var vOpts='';
+  for(var yy=DOP_FIRST_YEAR; yy<=cy; yy++){
+    if(p.k==='month') for(var mm=1;mm<=12;mm++){ if(yy===cy&&mm>new Date().getMonth()+1) break; vOpts+='<option value="'+yy+'-'+mm+'"'+(yy===p.y&&mm===p.v?' selected':'')+'>'+KOMP_MONTHS[mm-1]+' '+yy+'</option>'; }
+    else if(p.k==='quarter') for(var qq=1;qq<=4;qq++){ if(yy===cy&&qq*3-2>new Date().getMonth()+1) break; vOpts+='<option value="'+yy+'-'+qq+'"'+(yy===p.y&&qq===p.v?' selected':'')+'>Q'+qq+' '+yy+'</option>'; }
+    else vOpts+='<option value="'+yy+'-1"'+(yy===p.y?' selected':'')+'>'+yy+'</option>';
+  }
+  var locList={}; if(an&&an.locs) Object.keys(an.locs).forEach(function(L){ if(_dashLocType(L)) locList[L]=1; });
+  var locOpts=sortByLocationOrder(Object.keys(locList)).map(function(L){ return '<option'+(L===sl.loc?' selected':'')+'>'+esc(L)+'</option>'; }).join('');
+  var ctl='<div style="display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;padding:10px 14px;border-bottom:1px solid #f0f4f8">'
+    +'<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">'+[['month','Місяць'],['quarter','Квартал'],['year','Рік']].map(function(o){ return '<button type="button" class="att-chip'+(p.k===o[0]?' att-chip-active':'')+'" onclick="dopSetPer(\''+o[0]+'\')">'+o[1]+'</button>'; }).join('')
+    +'<select class="flt-sel" onchange="dopSetPer(\''+p.k+'\',this.value)">'+vOpts+'</select></div>'
+    +'<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">'+DOP_SLICES.map(function(o){ return '<button type="button" class="att-chip'+(sl.type===o[0]?' att-chip-active':'')+'" onclick="dopSetSlice(\''+o[0]+'\',(S.dopSlice||{}).loc)">'+o[1]+'</button>'; }).join('')
+    +(sl.type==='loc'?'<select class="flt-sel" onchange="dopSetSlice(\'loc\',this.value)"><option value="">— оберіть локацію —</option>'+locOpts+'</select>':'')+'</div></div>';
+  if(!an) return hd+ctl+'<div class="empty"><p>Завантаження аналітики додаткових…</p></div></div>';
+  if(!an.ok) return hd+ctl+'<div class="empty"><p>Не вдалося завантажити: '+esc(an.error||'')+'</p></div></div>';
+  if(sl.type==='loc' && !sl.loc) return hd+ctl+'<div class="empty"><p>Оберіть локацію</p></div></div>';
+  var X=_dopCalc(an,p,function(L){ return _dopIn(L,sl); });
+  var used=Object.keys(X.monthsUsed).map(Number).sort(function(a,b){ return a-b; });
+  if(!used.length) return hd+ctl+'<div class="empty"><p>За '+esc(_dopPerLbl(p))+' у зрізі немає табеля додаткових (табель ведеться з червня 2026).</p></div>'+_dopGapsHtml(X,p)+'</div>';
+  // 1) Плитки
+  var T={r:0,c:0,rk:0,ck:0,cUnk:false,revUnk:false,n:0,kids:0,cov:0,covIn:0};
+  Object.keys(X.locs).forEach(function(L){ var R=X.locs[L]; T.r+=R.r; T.c+=R.c; T.rk+=R.rk; T.ck+=R.ck; T.n+=R.n; T.kids+=R.kids; T.cov+=R.cov; T.covIn+=R.covIn; T.cUnk=T.cUnk||R.cUnk; T.revUnk=T.revUnk||R.revUnk; });
+  var prof=T.rk-T.ck, mg=_dopMargin(T), nm=used.length, star=_dopStar(T);
+  var monthsLbl=used.map(function(m){ return DOP_MN[m-1]; }).join(', ');
+  var calcAll=0; Object.keys(X.acts).forEach(function(k){ calcAll+=X.acts[k].t.calcC; });
+  var tiles='<div class="stats-grid" style="padding:14px 14px 0;margin-bottom:12px">'
+    +_dopTile('💰','si-b',_dopMoney(T.r),'Оборот','Payment доп (міс.+1): нараховано '+_dopMoney(X.payB)+', оплачено '+_dopMoney(X.payF)+(X.payN?' · грудень — у файлі наступного року':''))
+    +_dopTile('👩‍🏫','si-o',_dopMoney(T.c),'Собівартість (викладачі)',(calcAll?'з них за каталогом (≈): '+_dopMoney(calcAll):'усе з Salary')+(T.cUnk?' · є невідомі':''))
+    +_dopTile('📈','si-g','<span style="color:'+(prof>=0?'#27ae60':'#e74c3c')+'">'+_dopMoney(prof)+'</span>'+star,'Прибуток',nm>1?'≈ '+_dopMoney(prof/nm)+' / міс':'')
+    +_dopTile('％','si-p','<span style="color:'+_dopMCol(mg)+'">'+(mg==null?'—':mg+'%')+'</span>'+star,'Маржа','')
+    +_dopTile('👶','si-y',T.cov+' <span style="font-size:14px;color:var(--gray)">('+(_dopPct(T.covIn,T.kids)==null?'—':_dopPct(T.covIn,T.kids)+'%')+')</span>','Дітей охоплено',T.covIn+' з '+T.kids+' дітей зрізу (Payment)'+(T.cov>T.covIn?' · ще '+(T.cov-T.covIn)+' без рядка Payment':''))
+    +_dopTile('🧒','si-b',T.kids?_dopMoney(T.r/T.kids):'—','Оборот доп на 1 дитину локації',nm>1&&T.kids?'≈ '+_dopMoney(T.r/T.kids/nm)+' / міс':'за період')
+    +_dopTile('🔁','si-g',T.cov?(Math.round(T.n/T.cov*10)/10).toLocaleString('uk-UA'):'—','Занять на дитину (середнє)','відміток табеля на охоплену дитину')
+    +'</div><div style="font-size:11px;color:var(--gray);padding:0 14px 8px">Період: <b>'+esc(_dopPerLbl(p))+'</b> · місяці з табелем: '+monthsLbl+'</div>';
+  // 2) Таблиця по заняттях
+  var sortBy=S.dopSort||'profit';
+  var acts=Object.keys(X.acts).map(function(k){ return X.acts[k]; });
+  acts.forEach(function(A){ A.prof=_dopProfit(A.t); A.mg=_dopMargin(A.t); });
+  acts.sort(function(a,b){ if(sortBy==='margin'){ var x=a.mg==null?-1e9:a.mg, y=b.mg==null?-1e9:b.mg; if(y!==x) return y-x; } return (b.prof==null?-1e12:b.prof)-(a.prof==null?-1e12:a.prof); });
+  var sortCh='<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span style="font-size:12px;color:var(--gray)">Сортування:</span>'
+    +[['profit','за прибутком'],['margin','за маржею %']].map(function(o){ return '<button type="button" class="att-chip'+(sortBy===o[0]?' att-chip-active':'')+'" onclick="dopSetSort(\''+o[0]+'\')">'+o[1]+'</button>'; }).join('')+'</div>';
+  var na='<span style="color:var(--gray2)">—</span>';
+  var actRows=acts.map(function(A){ var t=A.t, be=_dopBE(Object.assign({sub:A.sub},t)), perKid=A.sub?(t.payers?t.r/t.payers:null):(t.kids?t.r/t.kids:null);
+    var fill=t.s?Math.round(t.n/t.s*10)/10:null, unk=A.prof==null;
+    return '<tr style="cursor:pointer" onclick="dopSetCmp('+esc(JSON.stringify(A.key))+')" title="Порівняти по локаціях">'
+      +'<td style="white-space:nowrap"><strong>'+esc(A.name)+'</strong>'+(A.sub?' <span class="badge" style="background:#8e44ad1a;color:#8e44ad;font-size:10px">абонемент</span>':'')+'</td>'
+      +'<td>'+t.locs+'</td><td>'+t.kids+(A.sub&&t.payers?' <span style="font-size:10px;color:var(--gray)">/ '+t.payers+' плат.</span>':'')+'</td><td>'+t.s+'</td>'
+      +'<td style="white-space:nowrap">'+(t.revUnk&&!t.r?na:_dopMoney(t.r))+'</td>'
+      +'<td style="white-space:nowrap">'+(t.cUnk&&!t.c?na:_dopMoney(t.c))+(t.calcC?' <span title="частина — розрахунок за каталогом (факту в Salary ще немає): '+_dopMoney(t.calcC)+'" style="font-size:10px;color:#e67e22">≈</span>':'')+'</td>'
+      +'<td style="white-space:nowrap"><b style="color:'+(unk?'var(--gray2)':A.prof>=0?'#27ae60':'#e74c3c')+'">'+(unk?'—':_dopMoney(A.prof))+'</b>'+(unk?'':_dopStar(t))+'</td>'
+      +'<td><b style="color:'+_dopMCol(A.mg)+'">'+(A.mg==null?'—':A.mg+'%')+'</b></td>'
+      +'<td style="white-space:nowrap">'+(perKid==null||(t.revUnk&&!t.r)?na:_dopMoney(perKid))+'</td>'
+      +'<td>'+(fill==null?na:fill.toLocaleString('uk-UA'))+'</td>'
+      +'<td style="white-space:nowrap'+(be.ok===false?';color:#e74c3c':'')+'"'+(be.tip?' title="'+esc(be.tip)+'"':'')+'>'+be.t+'</td></tr>'; }).join('');
+  var actTbl='<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 14px 6px"><b style="font-size:13px">Заняття</b>'+sortCh+'</div>'
+    +'<div class="tbl-wrap"><table><thead><tr><th>Заняття</th><th>Локацій</th><th>Дітей</th><th>Проведено занять</th><th>Оборот</th><th>Собівартість</th><th>Прибуток</th><th>Маржа %</th><th>₴ на дитину</th><th>Сер. наповнюваність</th><th>Точка беззбитковості</th></tr></thead><tbody>'
+    +(actRows||'<tr><td colspan="11" style="color:var(--gray)">Немає занять з відмітками</td></tr>')+'</tbody></table></div>';
+  // 3) Таблиця по локаціях
+  var locTbl='';
+  if(sl.type!=='loc'){
+    var lr=sortByLocationOrder(Object.keys(X.locs)).map(function(L){ var R=X.locs[L]; return {L:L,R:R,prof:R.rk-R.ck,mg:_dopMargin(R)}; });
+    lr.sort(function(a,b){ return b.prof-a.prof; });
+    locTbl='<div style="padding:14px 14px 6px"><b style="font-size:13px">Локації</b> <span style="font-size:11px;color:var(--gray)">клік — відкрити локацію</span></div><div class="tbl-wrap"><table><thead><tr><th>Локація</th><th>Оборот</th><th>Прибуток</th><th>Маржа %</th><th>Охоплення %</th><th>₴ на дитину</th></tr></thead><tbody>'
+      +lr.map(function(x){ var cp=_dopPct(x.R.covIn,x.R.kids);
+        return '<tr style="cursor:pointer" onclick="dopSetSlice(\'loc\','+esc(JSON.stringify(x.L))+')"><td style="white-space:nowrap"><strong>'+esc(x.L)+'</strong>'+(x.R.months.length<used.length?' <span style="font-size:10px;color:var(--gray)">('+x.R.months.map(function(m){ return DOP_MN[m-1]; }).join(', ')+')</span>':'')+'</td>'
+          +'<td style="white-space:nowrap">'+_dopMoney(x.R.r)+'</td><td style="white-space:nowrap"><b style="color:'+(x.prof>=0?'#27ae60':'#e74c3c')+'">'+_dopMoney(x.prof)+'</b>'+_dopStar(x.R)+'</td>'
+          +'<td><b style="color:'+_dopMCol(x.mg)+'">'+(x.mg==null?'—':x.mg+'%')+'</b>'+_dopStar(x.R)+'</td><td>'+(cp==null?na:cp+'%')+' <span style="font-size:10px;color:var(--gray)">'+x.R.covIn+'/'+x.R.kids+'</span></td>'
+          +'<td style="white-space:nowrap">'+(x.R.kids?_dopMoney(x.R.r/x.R.kids):na)+'</td></tr>'; }).join('')+'</tbody></table></div>';
+  }
+  // 4) Що запустити (обрана локація) — мережа за той самий період
+  var launch='';
+  if(sl.type==='loc'){
+    var N=_dopCalc(an,p,function(L){ return !!_dashLocType(L); }), me=X.locs[Object.keys(X.locs)[0]];
+    var nActs=Object.keys(N.acts).map(function(k){ var A=N.acts[k]; return {A:A, mg:_dopMargin(A.t)}; }).filter(function(x){ return x.mg!=null; });
+    var mgs=nActs.map(function(x){ return x.mg; }).sort(function(a,b){ return a-b; });
+    var med=mgs.length?(mgs.length%2?mgs[(mgs.length-1)/2]:(mgs[mgs.length/2-1]+mgs[mgs.length/2])/2):null;
+    var lo=(an.locs||{})[Object.keys(X.locs)[0]]||{}, inCat={}; (lo.acts||[]).forEach(function(a){ if(a.active) inCat[a.key]=a.name; });
+    var cand=me?nActs.filter(function(x){ var o=me.acts[x.A.key]; return x.mg>med && !(o&&(o.n||o.r)); }).map(function(x){
+      var A=x.A, runK=0; Object.keys(A.byLoc).forEach(function(L){ runK+=(N.locs[L]||{}).kids||0; });
+      var pen=runK?(A.sub?A.t.payers:A.t.kids)/runK:0, eKids=Math.round(me.kids*pen);
+      var perKid=(A.sub?A.t.payers:A.t.kids)?(A.t.rk-A.t.ck)/(A.sub?A.t.payers:A.t.kids):0;
+      var mN=Math.max(1,me.months.length);
+      return {A:A, mg:x.mg, pen:pen, eKids:eKids, eProf:eKids*perKid/mN, inCat:inCat[A.key]}; }).sort(function(a,b){ return b.eProf-a.eProf; }):[];
+    launch='<div style="padding:14px 14px 6px"><b style="font-size:13px">🚀 Що запустити в «'+esc(sl.loc)+'»</b> <span style="font-size:11px;color:var(--gray)">маржа в мережі вище медіани ('+(med==null?'—':Math.round(med)+'%')+'), а тут занять немає</span></div>'
+      +(!me?'<div class="empty"><p>У локації немає табеля за період</p></div>':cand.length?'<div class="tbl-wrap"><table><thead><tr><th>Заняття</th><th>Маржа в мережі</th><th>Локацій</th><th>Охоплення в мережі</th><th>Очікувано дітей</th><th>Очікуваний прибуток / міс</th></tr></thead><tbody>'
+        +cand.map(function(c){ return '<tr style="cursor:pointer" onclick="dopSetCmp('+esc(JSON.stringify(c.A.key))+')"><td style="white-space:nowrap"><strong>'+esc(c.A.name)+'</strong>'+(c.inCat?' <span class="badge" style="background:#e67e221a;color:#e67e22;font-size:10px">є в каталозі, без відміток</span>':'')+'</td>'
+          +'<td><b style="color:'+_dopMCol(c.mg)+'">'+c.mg+'%</b></td><td>'+c.A.t.locs+'</td><td>'+Math.round(c.pen*100)+'%</td><td>≈ '+c.eKids+'</td>'
+          +'<td style="white-space:nowrap"><b style="color:#27ae60">≈ '+_dopMoney(c.eProf)+'</b></td></tr>'; }).join('')+'</tbody></table></div>'
+        :'<div class="empty"><p>Усі заняття з маржею вище медіани вже йдуть у цій локації</p></div>')
+      +'<div style="font-size:11px;color:var(--gray);padding:4px 14px 0">Очікувано дітей = діти локації ('+(me?me.kids:0)+') × частка дітей на занятті там, де воно йде. Прибуток = очікувані діти × прибуток мережі на дитину, за місяць.</div>';
+  }
+  // 5) Порівняння заняття по локаціях — уся мережа
+  var NA=_dopCalc(an,p,function(L){ return !!_dashLocType(L); });
+  var keys=Object.keys(NA.acts).sort(function(a,b){ return (NA.acts[b].t.rk-NA.acts[b].t.ck)-(NA.acts[a].t.rk-NA.acts[a].t.ck); });
+  var ck=(S.dopCmp&&NA.acts[S.dopCmp])?S.dopCmp:keys[0], CA=NA.acts[ck];
+  var cmp='<div id="dopCmp" style="padding:14px 14px 6px;display:flex;flex-wrap:wrap;gap:8px;align-items:center"><b style="font-size:13px">⚖️ Порівняння по локаціях</b>'
+    +'<select class="flt-sel" onchange="dopSetCmp(this.value)">'+keys.map(function(k){ return '<option value="'+esc(k)+'"'+(k===ck?' selected':'')+'>'+esc(NA.acts[k].name)+' · '+NA.acts[k].t.locs+' лок.</option>'; }).join('')+'</select></div>';
+  if(CA){
+    var cl=sortByLocationOrder(Object.keys(CA.byLoc)).map(function(L){ return {L:L,o:CA.byLoc[L],mg:_dopMargin(CA.byLoc[L])}; });
+    cl.sort(function(a,b){ return (b.mg==null?-1e9:b.mg)-(a.mg==null?-1e9:a.mg); });
+    cmp+='<div class="tbl-wrap"><table><thead><tr><th>Локація</th><th>Ціна батькам</th><th>Ставка викладача</th><th>Дітей</th><th>Занять</th><th>Наповнюваність</th><th>Оборот</th><th>Собівартість</th><th>Маржа %</th></tr></thead><tbody>'
+      +cl.map(function(x){ var o=x.o, paid=o.n-o.z, avgP=paid>0?Math.round(o.r/paid):null;
+        return '<tr><td style="white-space:nowrap"><strong>'+esc(x.L)+'</strong></td>'
+          +'<td style="white-space:nowrap">'+(o.sub?(o.payers?_dopMoney(o.r/Math.max(1,o.pkm))+' <span style="font-size:10px;color:var(--gray)">абон./міс</span>':na):(o.price?_dopMoney(o.price):na)+(avgP&&avgP!==o.price?' <span title="середня ціна у відмітках" style="font-size:10px;color:var(--gray)">факт '+_dopMoney(avgP)+'</span>':''))+'</td>'
+          +'<td style="white-space:nowrap">'+(o.rate?_dopMoney(o.rate)+' <span style="font-size:10px;color:var(--gray)">'+esc(String(o.model||'').toLowerCase())+'</span>':na)+'</td>'
+          +'<td>'+o.kids+'</td><td>'+o.s+'</td><td>'+(o.s?(Math.round(o.n/o.s*10)/10).toLocaleString('uk-UA'):na)+'</td>'
+          +'<td style="white-space:nowrap">'+(o.revUnk&&!o.r?na:_dopMoney(o.r))+'</td><td style="white-space:nowrap">'+(o.cUnk&&!o.c?na:_dopMoney(o.c))+'</td>'
+          +'<td><b style="color:'+_dopMCol(x.mg)+'">'+(x.mg==null?'—':x.mg+'%')+'</b>'+_dopStar(o)+'</td></tr>'; }).join('')+'</tbody></table></div>';
+  }
+  return hd+ctl+tiles+actTbl+locTbl+launch+cmp+_dopGapsHtml(X,p)+'</div>';
+}
+// Чого бракує в даних — щоб прочерки не були загадкою.
+function _dopGapsHtml(X,p){
+  var g=X.gaps.map(function(x){ return esc(x.txt)+': '+x.locs.map(esc).join(', '); });
+  if(X.monthsUsed[12]) g.push('грудень — ЗП за нього платиться в січні наступного року (інший файл Salary), тому собівартість грудня — за розрахунком каталогу');
+  var nmL=Object.keys(X.salNoMarks), nmSum=nmL.reduce(function(a,L){ return a+X.salNoMarks[L]; },0);
+  var nmHtml=nmL.length?'<details style="margin-top:6px"><summary style="cursor:pointer">Salary EXTRAS за місяці періоду без табеля додаткових — не враховано ('+nmL.length+' лок., '+_dopMoney(nmSum)+')</summary><div style="margin-top:4px">'
+    +nmL.map(function(L){ return esc(L)+' — '+_dopMoney(X.salNoMarks[L]); }).join('<br>')+'</div></details>':'';
+  var un=X.salUnm.filter(function(u){ return u.fact; });
+  var unHtml=un.length?'<details style="margin-top:6px"><summary style="cursor:pointer">Рядки Salary EXTRAS без заняття в каталозі ('+un.length+') — у собівартість занять не йдуть</summary><div style="margin-top:4px">'
+    +un.map(function(u){ return esc(u.loc)+' · «'+esc(u.name)+'» — '+_dopMoney(u.fact)+' за рік'; }).join('<br>')+'</div></details>':'';
+  return '<div style="font-size:11px;color:var(--gray);padding:12px 14px 14px;line-height:1.5">'
+    +'<b>Як рахується.</b> Оборот — відмітки табеля × ціна на день відмітки (те, що йде в «Бюджет доп»); абонемент («Чомусики», «Мама+я») — «Бюджет навч» його блоку в Payment, дітей-платників рахуємо окремо. '
+    +'Собівартість — Salary EXTRAS (робота місяця M = колонка M+1); якщо факту ще немає — ставка каталогу × відмітки/заняття (≈). Проведено занять — група × дата з обʼєднаннями й поділами (захід — дата). '
+    +'Точка беззбитковості — скільки дітей на занятті треба при цій ціні й ставці (абонемент — абонентів на місяць); червоним — фактична наповнюваність нижча. Місяць локації рахується, лише якщо в ній є табель додаткових (≥10 відміток).'
+    +(g.length?'<div style="margin-top:8px;color:#e67e22"><b>Чого бракує:</b><br>'+g.join('<br>')+'</div>':'')+nmHtml+unHtml+'</div>';
+}
 // ─── v7.410: РОЗКРИТТЯ ВЕРХНІХ ПЛИТОК (Локацій / Груп / Дітей) углиб до конкретних дітей ───
 // Одне дерево для всіх трьох цифр, тож сума на кожному рівні = цифра на плитці.
 //   Діти — активні картки в охопленні (як плитка «Дітей»). Група — з Payment поточного місяця
@@ -3808,6 +4041,7 @@ function _renderDashNow(){
     <div style="height:16px"></div>
     ${_renderKompBlock()}
     ${isHR?_renderContrBlock():''}
+    ${isHR?_renderDopBlock():''}
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
       <div class="card">
