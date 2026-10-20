@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.467
+// m.kids CRM — Google Apps Script v7.468
+// v7.468: постійне обʼєднання груп заняття — каталог «Разом_групи» (кол. J, updateActivity jointGroups); Salary, аналітика й звіти рахують такі групи одним заняттям щодня без 🔗 (явне обʼєднання дня має пріоритет).
 // v7.467: mergeEmployeeDuplicate — повтори дат під одним ключем табеля (історія збережень) більше не блокують злиття; колізії — лише між різними ключами.
 // v7.466: mergeEmployeeDuplicate — злиття дубля картки співробітника (CFO, пробний прогін, бекап HR_MRGBKP, UID предметників, табель); subPayCopyTest — вставка рядка в блок Payment на копії файлу з перевіркою SUM.
 // v7.463: getDebtsLive — накопичений борг на сьогодні по всій мережі наживо (перенос переплат, оплата до 5-го, за днями при новому договорі/розірванні, «вступний» як оплата місяця); _aggYearLocRows спільний з «Оплати-Рік».
@@ -7197,7 +7198,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.467', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.468', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -19568,8 +19569,39 @@ function syncPayments() {
 var ACTIVITIES_SHEET_NAME = 'Додаткові_Каталог';
 var ACTIVITIES_HEADER = [
   'id','Локація','Заняття','Ціна_клієнту','Модель_ЗП_викладача',
-  'Ставка_викладача','Викладач','Активне','Розрахунок'
+  'Ставка_викладача','Викладач','Активне','Розрахунок','Разом_групи'
 ];
+// v7.468: «Разом_групи» (кол. J) — ПОСТІЙНЕ обʼєднання груп на рівні заняття локації: JSON
+// [["Baby-ki 1","Preschool"], …]. Групи набору щодня ведуться ОДНИМ заняттям — викладачу «За заняття»
+// це 1 сесія, без щоденного 🔗 у сітці. Явне обʼєднання дня має пріоритет: постійний набір того дня
+// не діє, якщо хоч одна його група вже в явному наборі. Дитині нічого не змінюється (її сума — з відміток).
+function _parseJointGroups(cell){
+  var raw = String(cell || '').trim(); if (!raw) return [];
+  var arr = []; try { arr = JSON.parse(raw); } catch(_e){ arr = raw.split(';').map(function(x){ return x.split('+'); }); }
+  if (!Array.isArray(arr)) return [];
+  return arr.map(function(set){
+    return (Array.isArray(set) ? set : []).map(function(g){ return String(g || '').trim(); }).filter(Boolean);
+  }).filter(function(set){ return set.length >= 2; });
+}
+// {id_заняття: [[normGroup…], …]} для локації (порожній loc — усі). Ключ '*' у мапі обʼєднань = постійні набори.
+function _dopJointByActId(loc){
+  var out = {};
+  try {
+    var data = _getActivitiesSheet(false).getDataRange().getValues();
+    for (var i = 1; i < data.length; i++){
+      if (loc && String(data[i][1] || '').trim() !== loc) continue;
+      var id = Number(data[i][0]) || 0, sets = _parseJointGroups(data[i][9]);
+      if (!id || !sets.length) continue;
+      sets.forEach(function(set){ (out[id] = out[id] || []).push(set.map(_dopNormGroup)); });
+    }
+  } catch(_e){}
+  return out;
+}
+function _dopAttachJoint(map, loc){
+  var j = _dopJointByActId(loc);
+  Object.keys(j).forEach(function(id){ (map[id] = map[id] || {})['*'] = j[id]; });
+  return map;
+}
 
 function _getActivitiesSheet(createIfMissing){
   var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
@@ -19631,7 +19663,8 @@ function _parseActivityRow(row){
     active:       row[7] === true ||
                   /^(true|так|y|1|active|активне|✅)$/i.test(String(row[7] || '').trim()),
     payType:      String(row[8] || '').trim(),
-    subLimit:     _subLimitForName(name)          // v7.310: 0 = звичайне, N = абонемент N занять/міс
+    subLimit:     _subLimitForName(name),         // v7.310: 0 = звичайне, N = абонемент N занять/міс
+    jointGroups:  _parseJointGroups(row[9])       // v7.468: постійні набори груп «разом»
   };
 }
 
@@ -19905,6 +19938,11 @@ function updateActivity(id, data, onlyLoc){
       if ('teacher'      in data) sh.getRange(r1, 7).setValue(String(data.teacher || '').trim());
       if ('active'       in data) sh.getRange(r1, 8).setValue(data.active !== false);
       if ('payType'      in data) sh.getRange(r1, 9).setValue(String(data.payType || '').trim());
+      if ('jointGroups'  in data){                                                   // v7.468
+        if (String(sh.getRange(1, 10).getValue() || '').trim() === '') sh.getRange(1, 10).setValue('Разом_групи');
+        var _js = _parseJointGroups(JSON.stringify(data.jointGroups || []));
+        sh.getRange(r1, 10).setNumberFormat('@').setValue(_js.length ? JSON.stringify(_js) : '');
+      }
       return {ok: true, row: r1, loc: String(rows[i][1] || '').trim()};
     }
     return {ok: false, error: 'Заняття не знайдено' + (want ? ' у локації «' + want + '»' : '')};
@@ -20700,7 +20738,7 @@ function _loadDopMergesMap(loc, dateFrom, dateTo){
     if (!map[m.activityId][m.date]) map[m.activityId][m.date] = [];
     map[m.activityId][m.date].push(normSet);
   }
-  return map;
+  return _dopAttachJoint(map, loc);   // v7.468 постійні набори з каталогу
 }
 
 // Рахує кількість СЕСІЙ (session-key = група×дата) з урахуванням обʼєднань.
@@ -20727,6 +20765,12 @@ function _dopCountSessions(groupsByDate, mergesForAct, splitsForAct){
   Object.keys(groupsByDate).forEach(function(date){
     var present = groupsByDate[date];            // {normGroup:true}
     var mergeSets = (mergesForAct && mergesForAct[date]) || [];
+    // v7.468: постійні набори заняття ('*') — щодня, крім груп, уже взятих у явний набір цього дня
+    var joint = (mergesForAct && mergesForAct['*']) || [];
+    if (joint.length){
+      var inExplicit = {}; mergeSets.forEach(function(ms){ ms.forEach(function(g){ inExplicit[g] = true; }); });
+      mergeSets = mergeSets.concat(joint.filter(function(js){ return !js.some(function(g){ return inExplicit[g]; }); }));
+    }
     var splits    = (splitsForAct && splitsForAct[date]) || {};
     var covered = {};
     var sessions = 0;
@@ -41068,6 +41112,7 @@ function getDopAnalytics(params){
       var a = merges[mg.activityId] || (merges[mg.activityId] = {});
       (a[mg.date] = a[mg.date] || []).push(set);
     }); } catch(_m){}
+    _dopAttachJoint(merges, '');   // v7.468 постійні набори з каталогу
     try { _getSplitsSheet(DOP_SPLITS_SHEET_NAME, DOP_SPLITS_HEADER, false).getDataRange().getValues().forEach(function(r){
       if (!_splitRowId(r) || !r[1]) return; var date = _dopDateISO(r[4]); if (date.indexOf(yp) !== 0) return;
       var parts = _splitPartsOf(r[6]), act = Number(r[2]) || 0, g = _dopNormGroup(r[5]);
