@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.447
+// m.kids CRM — Google Apps Script v7.449
+// v7.449: «Групи_Мапа» — автосинк чернеток бере канонічну назву групи з реєстру або чинних карток; інакше «назва не зіставлена», групу не заводить.
 // v7.447: групи-абонементи (заняття каталогу з лімітом абонемента: Чомусики, Мама+я) прибрано з груп предметників (_loadRealGroups).
 // v7.446: тип групи предметників за змістом назви (_canonGroupType) — «Findi-Ki» знову знаходить норму; норми локації за ключем _predGroupKey.
 // v7.445: запобіжник OPEX27_AUTO — onEdit «Драйвери_27» нічого не пише, доки CFO не ввімкне (opex27SetAuto).
@@ -7186,7 +7187,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.447', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.449', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -7220,6 +7221,7 @@ function doGet(e) {
     else if (action === 'runAggregateYearly') result = aggregatePaymentsYearly();
     else if (action === 'runSyncBdayStatus')  result = syncBdayStatusSheet();
     else if (action === 'getRegistryUrls')    result = getRegistryUrls();
+    else if (action === 'getGroupMap')       result = getGroupMap();   // v7.449 реєстр «Групи_Мапа» + незіставлені чернетки
     else if (action === 'getNeedsAttention') result = getNeedsAttention(String(e.parameter && e.parameter.nocache || '') === '1');   // v7.117; v7.334 кеш 10 хв
     else if (action === 'diagNeedsAttentionCompare') result = diagNeedsAttentionCompare();   // v7.334 звірка повне/вузьке читання
     else if (action === 'getAuthLog')         result = getAuthLog();   // v7.118 діагностика Авторизація_Лог
@@ -7431,6 +7433,7 @@ function doPost(e) {
     else if (body.action === 'cf27Remap')                 result = cf27Remap(body);                         // v7.443 CF 2027 → справжні заголовки (CFO; dryRun)
     else if (body.action === 'opex27Setup')               result = opex27Setup(body);                       // v7.444 вкладки норм і драйверів 2027 + тригер (CFO; dryRun)
     else if (body.action === 'opex27Recalc')              result = opex27Recalc(body);                      // v7.444 OPEX 2027 локації за нормами (CFO; dryRun)
+    else if (body.action === 'groupMapSetup')             result = groupMapSetup(body);                     // v7.449 вкладка «Групи_Мапа» (CFO, dryRun)
     else if (body.action === 'opex27SetAuto')             result = opex27SetAuto(body);                     // v7.445 вмикач автоперерахунку OPEX 2027 (CFO)
     else if (body.action === 'opex27RecalcAll')           result = opex27RecalcAll(body);                   // v7.444 «Перерахувати всі сади» (CFO; dryRun)
     else if (body.action === 'groupRenameApply')          result = groupRenameApply(body);                  // v7.435 стандарт назв груп (CFO; dryRun)
@@ -30812,6 +30815,88 @@ function _needsAttentionCompute(readMode){
   } catch(e){ return {ok:false, error:String(e&&e.message||e)}; }
 }
 
+// ═══ v7.449: РЕЄСТР ВІДПОВІДНОСТІ ГРУП «Групи_Мапа» (CRM) ═══
+// Локація | Назва блоку в Payment | Канонічна назва групи. Автосинк (syncMissingClientsFromPayments) бере
+// назву групи для чернетки картки ЛИШЕ звідси або з чинних груп карток локації — сам назв не вигадує.
+// Було: Манхетен — блок «Study-ki 3-4 (Пізнайки)» ставав новою групою поруч із «Пізнайки 3-4».
+var GROUP_MAP_TAB = 'Групи_Мапа';
+var GROUP_MAP_HEADER = ['Локація', 'Назва блоку в Payment', 'Канонічна назва групи'];
+var GROUP_MAP_UNMATCHED = 'назва не зіставлена';
+var GROUP_MAP_SEED = [   // пари, підтверджені звіркою Payment ↔ картки (20.10.2026)
+  ['Манхетен (Благо)', 'Study-ki 3-4 (Пізнайки)',    'Пізнайки 3-4'],
+  ['Манхетен (Благо)', 'Study-ki 4-5',               'Дослідники 4-5'],
+  ['Манхетен (Благо)', 'Study-ki 3-4 (Мандрівники)', 'Мандрівники 3-4']
+];
+// → {loc: {ключ назви блоку: канонічна}}
+function _loadGroupMap(){
+  var out = {};
+  try {
+    var sh = getCRMSpreadsheet().getSheetByName(GROUP_MAP_TAB);
+    if (!sh || sh.getLastRow() < 2) return out;
+    sh.getRange(2, 1, sh.getLastRow() - 1, 3).getValues().forEach(function(r){
+      var loc = String(r[0] || '').trim(), pay = String(r[1] || '').trim(), can = String(r[2] || '').trim();
+      if (loc && pay && can) (out[loc] = out[loc] || {})[_predGroupKey(pay)] = can;
+    });
+  } catch(e){ Logger.log('[groupMap] ⚠️ %s', e && e.message); }
+  return out;
+}
+// Назва блоку Payment → {group: канонічна | '', unmatched: bool}.
+function _groupMapResolve(gMap, cardGroups, loc, payGroup){
+  var g = String(payGroup || '').trim();
+  if (!g || /^\(без групи\)$/i.test(g)) return {group:'', unmatched:false};
+  var k = _predGroupKey(g);
+  var m = gMap[loc] && gMap[loc][k];
+  if (m) return {group:m, unmatched:false};
+  var c = cardGroups[loc] && cardGroups[loc][k];
+  if (c) return {group:c, unmatched:false};
+  return {group:'', unmatched:true};
+}
+function _groupMapUnmatchedOf(list){
+  return (list || []).filter(function(m){ return m.unmatched; })
+    .map(function(m){ return {name:m.name, loc:m.loc, payGroup:m.payGroup}; });
+}
+// GET ?action=getGroupMap — реєстр + чернетки карток із позначкою «назва не зіставлена».
+function getGroupMap(){
+  try {
+    var ss = getCRMSpreadsheet(), sh = ss.getSheetByName(GROUP_MAP_TAB), rows = [];
+    if (sh && sh.getLastRow() > 1)
+      rows = sh.getRange(2, 1, sh.getLastRow() - 1, 3).getValues()
+        .filter(function(r){ return String(r[0] || '').trim(); })
+        .map(function(r){ return {loc:String(r[0]).trim(), payGroup:String(r[1] || '').trim(), group:String(r[2] || '').trim()}; });
+    var unmatched = [];
+    var cs = ss.getSheetByName(SHEET_CLIENTS), cv = cs.getDataRange().getValues(), h = cv[0].map(String);
+    var iId = h.indexOf('ID'), iN = h.indexOf('ПІБ дитини'), iL = h.indexOf('Локація'), iG = h.indexOf('Група'),
+        iNt = h.indexOf('Нотатки'), iSt = h.indexOf('Статус'), iCr = h.indexOf('Створено');
+    for (var r = 1; r < cv.length; r++){
+      var nt = String(cv[r][iNt] || '');
+      if (nt.indexOf(GROUP_MAP_UNMATCHED) === -1) continue;
+      var pm = /назва не зіставлена: «([^»]*)»/.exec(nt);
+      unmatched.push({id:String(cv[r][iId] || ''), name:String(cv[r][iN] || ''), loc:String(cv[r][iL] || ''),
+        group:String(cv[r][iG] || ''), payGroup:pm ? pm[1] : '', status:String(cv[r][iSt] || ''),
+        created:String(iCr >= 0 ? cv[r][iCr] || '' : '')});
+    }
+    return {ok:true, tab:GROUP_MAP_TAB, exists:!!sh, rows:rows, unmatched:unmatched};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+// POST {action:'groupMapSetup', dryRun, actorId} (CFO) — створює вкладку й дописує пари GROUP_MAP_SEED,
+// яких у ній ще немає. Наявні рядки не чіпає.
+function groupMapSetup(body){
+  body = body || {};
+  if (!_payCfoOnly(body)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var dryRun = (body.dryRun !== false);
+  var ss = getCRMSpreadsheet(), sh = ss.getSheetByName(GROUP_MAP_TAB);
+  var have = _loadGroupMap();
+  var add = GROUP_MAP_SEED.filter(function(r){ return !(have[r[0]] && have[r[0]][_predGroupKey(r[1])]); });
+  if (dryRun) return {ok:true, dryRun:true, tabExists:!!sh, willAdd:add};
+  if (!sh){
+    sh = ss.insertSheet(GROUP_MAP_TAB);
+    sh.getRange(1, 1, 1, GROUP_MAP_HEADER.length).setValues([GROUP_MAP_HEADER]).setFontWeight('bold');
+    sh.setFrozenRows(1);
+  }
+  if (add.length) sh.getRange(sh.getLastRow() + 1, 1, add.length, 3).setValues(add);
+  return {ok:true, dryRun:false, added:add, total:sh.getLastRow() - 1};
+}
+
 function syncMissingClientsFromPayments(opts){
   _cacheBump('fill'); _cacheBump('clients');   /* v7.336 кеш getClients */   // v7.293 кеш getFillStatus (нові картки)
   opts = opts || {};
@@ -30937,6 +31022,19 @@ function syncMissingClientsFromPayments(opts){
   }
   Logger.log('[syncMissing] Клієнти: %s рядків даних, %s унікальних name+loc ключів',
     cvals.length - 1, Object.keys(existing).length);
+  // v7.449: назва групи для чернетки — ЛИШЕ чинна. Блок Payment зводимо до канонічної назви
+  // через реєстр «Групи_Мапа»; якщо назва блоку й так збігається з групою в картках локації —
+  // беремо її. Інакше групу НЕ заводимо: чернетка без групи з позначкою «назва не зіставлена».
+  var _gMap = _loadGroupMap();
+  var _cardGroups = {};                               // loc → {ключ назви: назва як у картках}
+  var cGrpIdx = chdrs.indexOf('Група'), cStIdx = chdrs.indexOf('Статус');
+  for (var cg = 1; cg < cvals.length; cg++){
+    var _g = String(cGrpIdx >= 0 ? cvals[cg][cGrpIdx] || '' : '').trim(); if (!_g) continue;
+    var _st = String(cStIdx >= 0 ? cvals[cg][cStIdx] || '' : '').trim();
+    if (_st === 'graduated' || _st === 'graduate' || _st === 'terminated') continue;
+    var _l = String(cvals[cg][cLocIdx] || '').trim();
+    (_cardGroups[_l] = _cardGroups[_l] || {})[_predGroupKey(_g)] = _g;
+  }
 
   // === 3. Знайти missing — фільтр як у робочих модулях + критерій «має суму» ===
   // Реальна дитина проходить ВСІ умови:
@@ -31005,7 +31103,11 @@ function syncMissingClientsFromPayments(opts){
       continue;
     }
     seenNew[key] = true;
-    missing.push({name:cname, loc:loc, group:group, teacher:teacher,
+    var _res = _groupMapResolve(_gMap, _cardGroups, loc, group);
+    // «Вихователь» в Оплати-Рік буває датою (Манхетен: дата біля назви блоку) — таке не пишемо.
+    var _tch = (Object.prototype.toString.call(prow[pTeachIdx]) === '[object Date]' ||
+                /GMT|^\d{4}-\d\d-\d\d|^\d{1,2}\.\d{1,2}\.\d{2,4}$/.test(teacher)) ? '' : teacher;
+    missing.push({name:cname, loc:loc, group:_res.group, payGroup:group, unmatched:_res.unmatched, teacher:_tch,
       budRik:budRik, faktRik:faktRik, id:_newId});
   }
 
@@ -31048,7 +31150,8 @@ function syncMissingClientsFromPayments(opts){
     return {ok:true, dryRun:true, scope:(scope||'ALL'), missingCount:missing.length, byLoc:byLoc, skip:skip,
       notNameSamples: skipNotNameSamples,
       notNameMissing: notNameMissing,   // v7.357
-      preview: missing.map(function(m){ return {name:m.name, loc:m.loc, group:m.group, budRik:m.budRik, faktRik:m.faktRik}; })};   // v7.357: + group
+      preview: missing.map(function(m){ return {name:m.name, loc:m.loc, group:m.group, payGroup:m.payGroup, unmatched:!!m.unmatched, budRik:m.budRik, faktRik:m.faktRik}; }),   // v7.357: + group
+      unmatched: _groupMapUnmatchedOf(missing)};   // v7.449
   }
 
   if (!missing.length){
@@ -31066,7 +31169,8 @@ function syncMissingClientsFromPayments(opts){
       '', '', '', '',              // ПІБ/Тел мами, ПІБ/Тел тата
       '', 'standard', 0, 0,        // Дата договору, Тип, Сума, Вступний
       'active',                    // Статус
-      'Чернетка — автосинхронізація з Оплати-Рік ' + now,  // Нотатки
+      'Чернетка — автосинхронізація з Оплати-Рік ' + now +   // Нотатки
+        (m.unmatched ? ' · ' + GROUP_MAP_UNMATCHED + ': «' + m.payGroup + '»' : ''),   // v7.449
       '[]', '[]', '[]',            // Відсутності/Графік/Зміни JSON
       '', '', '', '',              // Номер договору, Дата адапт, Розірв, Причина
       '', '',                      // Свідоцтво, Місце реєстрації
@@ -31080,8 +31184,11 @@ function syncMissingClientsFromPayments(opts){
   cSheet.getRange(startRow, 1, newRows.length, newRows[0].length).setValues(newRows);
   Logger.log('[syncMissing] ✅ СТВОРЕНО %s рядків у Клієнти (від row %s)', newRows.length, startRow);
   Logger.log('[syncMissing] ═══════════════════════════════════════');
+  var _um = _groupMapUnmatchedOf(missing);
+  if (_um.length) Logger.log('[syncMissing] ⚠ %s: %s', GROUP_MAP_UNMATCHED, JSON.stringify(_um));
   return {ok:true, dryRun:false, scope:(scope||'ALL'), created:newRows.length, byLoc:byLoc,
-    createdList: missing.map(function(m){ return {name:m.name, loc:m.loc}; })};
+    createdList: missing.map(function(m){ return {name:m.name, loc:m.loc, group:m.group}; }),
+    unmatched: _um};   // v7.449
 
   } finally { try { _lock.releaseLock(); } catch(_re){} }
 }

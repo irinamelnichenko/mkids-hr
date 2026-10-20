@@ -3461,13 +3461,30 @@ async function syncMissingClients(){
     if(!n){ showFloatMsg('✅ Усі садочкові діти вже мають картки'); return; }
     var byLoc=dry.byLoc||{};
     var lines=Object.keys(byLoc).sort().map(function(l){ return '• '+l+': '+byLoc[l]; }).join('\n');
-    if(!confirm('У Payment (садочки) знайдено '+n+' дітей без карток:\n\n'+lines+'\n\nСтворити '+n+' чернеток карток у CRM?')) return;
+    var um=dry.unmatched||[];   // v7.449: блок Payment без пари в «Групи_Мапа» → чернетка без групи
+    var umTxt=um.length?'\n\n⚠️ Назва групи не зіставлена ('+um.length+') — картка буде без групи:\n'+um.map(function(x){ return '• '+x.name+' ('+x.loc+') — блок «'+x.payGroup+'»'; }).join('\n'):'';
+    if(!confirm('У Payment (садочки) знайдено '+n+' дітей без карток:\n\n'+lines+umTxt+'\n\nСтворити '+n+' чернеток карток у CRM?')) return;
     showFloatMsg('🔄 Створюю картки…');
     var res=await apiPost({action:'syncMissingClients', locScope:'kindergartens'});
     if(!res||!res.ok){ showFloatMsg('❌ '+((res&&res.error)||'помилка запису')); return; }
-    showFloatMsg('✅ Створено чернеток карток: '+(res.created||0));
+    showFloatMsg('✅ Створено чернеток карток: '+(res.created||0)+((res.unmatched||[]).length?' · без зіставленої групи: '+res.unmatched.length:''));
     try{ localStorage.removeItem(CFG.SK); }catch(e){}
     setTimeout(function(){ location.reload(); }, 1400);
+  }catch(e){ showFloatMsg('❌ '+(e&&e.message||e)); }
+}
+
+// v7.449: чернетки карток, для яких автосинк не знайшов канонічної назви групи (реєстр «Групи_Мапа» у CRM).
+async function showUnmatchedGroups(){
+  try{
+    showFloatMsg('🔄 Завантажую…');
+    var j=await apiGetFull({action:'getGroupMap'});
+    if(!j||!j.ok){ showFloatMsg('❌ '+((j&&j.error)||'помилка')); return; }
+    var um=j.unmatched||[], rows=j.rows||[];
+    alert('🧩 Назва групи не зіставлена: '+um.length+'\n'
+      +(um.length?um.map(function(x){ return '• '+x.name+' ('+x.loc+') — блок Payment «'+x.payGroup+'»'+(x.group?' · зараз у картці: '+x.group:''); }).join('\n'):'— немає')
+      +'\n\nРеєстр «Групи_Мапа» ('+rows.length+'):\n'
+      +(rows.length?rows.map(function(r){ return '• '+r.loc+': «'+r.payGroup+'» → '+r.group; }).join('\n'):(j.exists?'— порожній':'— вкладку ще не створено'))
+      +'\n\nДодай пару у вкладку «Групи_Мапа» (CRM) — наступні чернетки візьмуть канонічну назву.');
   }catch(e){ showFloatMsg('❌ '+(e&&e.message||e)); }
 }
 
@@ -3633,7 +3650,8 @@ function renderClients(){
           ? '<span style="font-size:11px;color:var(--gray);align-self:center">Останнє: '+esc(S.bdayStatusUpdatedAt)+'</span>'
           : '')
       : '')
-    +(isHR()?'<button class="btn btn-secondary btn-sm" onclick="syncMissingClients()" style="margin-left:auto;white-space:nowrap" title="Створити картки для дітей, що є в Payment (садочки), але нема в CRM">🔄 Синхронізувати відсутніх</button>':'')
+    +(isHR()?'<button class="btn btn-secondary btn-sm" onclick="syncMissingClients()" style="margin-left:auto;white-space:nowrap" title="Створити картки для дітей, що є в Payment (садочки), але нема в CRM">🔄 Синхронізувати відсутніх</button>'
+      +'<button class="btn btn-secondary btn-sm" onclick="showUnmatchedGroups()" style="white-space:nowrap" title="Чернетки з Payment, чию групу не вдалось зіставити з реєстром «Групи_Мапа»">🧩 Групи Payment</button>':'')
     +'<button class="btn btn-secondary btn-sm" onclick="exportClientsXlsx()" style="'+(isHR()?'':'margin-left:auto;')+'white-space:nowrap">📥 Excel</button>'
     +'<button class="btn btn-primary btn-sm" onclick="openNewChild()" style="white-space:nowrap">➕ Додати дитину</button>'
     +'</div></div></div>'
