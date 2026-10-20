@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.466
+// m.kids CRM — Google Apps Script v7.467
+// v7.467: mergeEmployeeDuplicate — повтори дат під одним ключем табеля (історія збережень) більше не блокують злиття; колізії — лише між різними ключами.
 // v7.466: mergeEmployeeDuplicate — злиття дубля картки співробітника (CFO, пробний прогін, бекап HR_MRGBKP, UID предметників, табель); subPayCopyTest — вставка рядка в блок Payment на копії файлу з перевіркою SUM.
 // v7.463: getDebtsLive — накопичений борг на сьогодні по всій мережі наживо (перенос переплат, оплата до 5-го, за днями при новому договорі/розірванні, «вступний» як оплата місяця); _aggYearLocRows спільний з «Оплати-Рік».
 // v7.462: getPaymentsLive — «Оплати» поточного місяця зібрані з файлів Payment зараз (без запису), кеш 5 хв — наповнюваність і вільні місця на дашборді наживо.
@@ -7196,7 +7197,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.466', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.467', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -34659,7 +34660,8 @@ function mergeEmployeeDuplicate(body){
         if (id === ATT_STAFF_PREFIX + tKey){ tab.target++; td[_d(av[r][iD])] = (td[_d(av[r][iD])] || 0) + 1; }
         else if (id === ATT_STAFF_PREFIX + sKey){ tab.source++; sd[_d(av[r][iD])] = 1; }
       }
-      Object.keys(td).forEach(function(d){ if (td[d] > 1) tab.collisions.push(d + ' ×' + td[d]); });
+      // повтори дати під ОДНИМ ключем — історія збережень табеля (читання бере найсвіжіший), не колізія карток
+      tab.history = Object.keys(td).filter(function(d){ return td[d] > 1; }).length;
       if (!tab.sameKey) Object.keys(sd).forEach(function(d){ if (td[d]) tab.collisions.push(d); });
       tab.dates = Object.keys(td).length;
     }
