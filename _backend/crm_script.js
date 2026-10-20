@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.444
+// m.kids CRM — Google Apps Script v7.445
+// v7.445: запобіжник OPEX27_AUTO — onEdit «Драйвери_27» нічого не пише, доки CFO не ввімкне (opex27SetAuto).
 // v7.444: OPEX 2027 садочків за нормами — «Норми_OPEX» і «Драйвери_27» у CRM, «OPEX_Норма» (норма + коригування) у файлі 2027, onEdit-тригер, «Перерахувати всі сади».
 // v7.443: блок Payment закінчується й на резервному заголовку без назви (вставка в Чомусики не розтягує SUM); cf27Remap — CF 2027 на справжні заголовки.
 // v7.442: реєстр 2027 — 11 садочків на файли з папки «Ukraine 27» (школи без змін).
@@ -7183,7 +7184,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.444', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.445', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -7331,6 +7332,7 @@ function doGet(e) {
     else if (action === 'previewPayTransfer')          result = payGroupTransfer({cardId:(e.parameter || {}).cardId, toGroup:(e.parameter || {}).toGroup, fromGroup:(e.parameter || {}).fromGroup, fromMonth:(e.parameter || {}).fromMonth, dryRun:true});   // v7.433 дія 3
     else if (action === 'previewPay27Clean')           result = pay27Clean({loc:(e.parameter || {}).loc, dryRun:true});   // v7.436 прев'ю чистки Payment 2027
     else if (action === 'previewOpex27')               result = opex27Recalc({loc:(e.parameter || {}).loc, dryRun:true});   // v7.444 прев'ю OPEX 2027 локації
+    else if (action === 'getOpex27Auto')               result = {ok:true, auto:_opex27AutoOn()};
     else if (action === 'previewOpex27Setup')          result = opex27Setup({dryRun:true});                                // v7.444 стартові норми з формул 2026
     else if (action === 'previewCf27Remap')            result = cf27Remap({loc:(e.parameter || {}).loc, dryRun:true});   // v7.443 прев'ю CF 2027
     else if (action === 'previewPay27Budget')          result = pay27Budget({loc:(e.parameter || {}).loc, dryRun:true});   // v7.441 прев'ю бюджету 2027 садочків
@@ -7427,6 +7429,7 @@ function doPost(e) {
     else if (body.action === 'cf27Remap')                 result = cf27Remap(body);                         // v7.443 CF 2027 → справжні заголовки (CFO; dryRun)
     else if (body.action === 'opex27Setup')               result = opex27Setup(body);                       // v7.444 вкладки норм і драйверів 2027 + тригер (CFO; dryRun)
     else if (body.action === 'opex27Recalc')              result = opex27Recalc(body);                      // v7.444 OPEX 2027 локації за нормами (CFO; dryRun)
+    else if (body.action === 'opex27SetAuto')             result = opex27SetAuto(body);                     // v7.445 вмикач автоперерахунку OPEX 2027 (CFO)
     else if (body.action === 'opex27RecalcAll')           result = opex27RecalcAll(body);                   // v7.444 «Перерахувати всі сади» (CFO; dryRun)
     else if (body.action === 'groupRenameApply')          result = groupRenameApply(body);                  // v7.435 стандарт назв груп (CFO; dryRun)
     else if (body.action === 'setPayAuto')                result = setPayAuto(body);                        // v7.433 вимикач автозапуску (CFO)
@@ -9812,6 +9815,14 @@ function opex27Setup(body){
     return res;
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
+// v7.445 запобіжник автоперерахунку (властивість скрипта OPEX27_AUTO): за замовчуванням вимкнено.
+function _opex27AutoOn(){ try { return PropertiesService.getScriptProperties().getProperty('OPEX27_AUTO') === '1'; } catch(e){ return false; } }
+function opex27SetAuto(body){
+  body = body || {};
+  if (!_payCfoOnly(body)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  PropertiesService.getScriptProperties().setProperty('OPEX27_AUTO', body.on ? '1' : '0');
+  return {ok:true, auto:_opex27AutoOn()};
+}
 function _opex27EnsureTrigger(){
   var has = ScriptApp.getProjectTriggers().some(function(t){ return t.getHandlerFunction() === 'opex27OnEdit'; });
   if (has) return 'вже є';
@@ -9822,6 +9833,7 @@ function _opex27EnsureTrigger(){
 function opex27OnEdit(e){
   try {
     var sh = e && e.range && e.range.getSheet(); if (!sh || sh.getName() !== OPEX27_DRV_TAB) return;
+    if (!_opex27AutoOn()) return;   // v7.445: до «норми ок» CFO тригер нічого не пише
     var r0 = Math.max(2, e.range.getRow()), n = e.range.getLastRow() - r0 + 1; if (n < 1) return;
     sh.getRange(r0, 1, n, 1).getValues().forEach(function(x){ var l = trim(String(x[0] || '')); if (l) _opex27Recalc(l, false, 'Драйвери_27 (onEdit)'); });
   } catch(err){ Logger.log('[opex27OnEdit] ' + (err && err.message)); }
