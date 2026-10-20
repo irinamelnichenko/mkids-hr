@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.449
+// m.kids CRM — Google Apps Script v7.450
+// v7.450: «Групи_Мапа» — сід усіх пар Управління (Манхетен, Нац.Гвардії, Хіміків); groupMapSetup дописує відсутні.
 // v7.449: «Групи_Мапа» — автосинк чернеток бере канонічну назву групи з реєстру або чинних карток; інакше «назва не зіставлена», групу не заводить.
 // v7.447: групи-абонементи (заняття каталогу з лімітом абонемента: Чомусики, Мама+я) прибрано з груп предметників (_loadRealGroups).
 // v7.446: тип групи предметників за змістом назви (_canonGroupType) — «Findi-Ki» знову знаходить норму; норми локації за ключем _predGroupKey.
@@ -7187,7 +7188,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.449', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.450', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -30825,7 +30826,22 @@ var GROUP_MAP_UNMATCHED = 'назва не зіставлена';
 var GROUP_MAP_SEED = [   // пари, підтверджені звіркою Payment ↔ картки (20.10.2026)
   ['Манхетен (Благо)', 'Study-ki 3-4 (Пізнайки)',    'Пізнайки 3-4'],
   ['Манхетен (Благо)', 'Study-ki 4-5',               'Дослідники 4-5'],
-  ['Манхетен (Благо)', 'Study-ki 3-4 (Мандрівники)', 'Мандрівники 3-4']
+  ['Манхетен (Благо)', 'Study-ki 3-4 (Мандрівники)', 'Мандрівники 3-4'],
+  // v7.450: Управління — штатний стан: Payment з латинськими типами (норми, аналітика),
+  // картки з брендовими назвами; реєстр їх зв'язує (рішення CFO 20.10.2026).
+  ['Манхетен (Благо)',    'Baby-ki',                'МАЛЮКИ'],
+  ['Манхетен (Благо)',    'Baby-ki 2-3',            'Карапузи 2-3'],
+  ['Манхетен (Благо)',    'Preschool',              'Розумники'],
+  ['Манхетен (Благо)',    'miniBaby-ki',            'Мама+я'],
+  ['Нац.Гвардії (Благо)', 'Findi-Ki',               'Бешкетники'],
+  ['Нац.Гвардії (Благо)', 'Study-ki (Дослідники)',  'Дослідники'],
+  ['Нац.Гвардії (Благо)', 'Study-ki (Мандрівники)', 'Мандрівники'],
+  ['Нац.Гвардії (Благо)', 'Study-ki (Пізнайки)',    'Пізнайки'],
+  ['Нац.Гвардії (Благо)', 'miniBaby-ki',            'мама+я'],
+  ['Хіміків (Благо)',     'Baby-ki (Карапузи)',     'Карапузи'],
+  ['Хіміків (Благо)',     'Baby-ki (Малюки)',       'Малюки'],
+  ['Хіміків (Благо)',     'Preschool',              'Розумники'],
+  ['Хіміків (Благо)',     'miniBaby-ki',            'Мама+я']
 ];
 // → {loc: {ключ назви блоку: канонічна}}
 function _loadGroupMap(){
