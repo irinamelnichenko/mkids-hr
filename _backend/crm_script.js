@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.468
+// m.kids CRM — Google Apps Script v7.469
+// v7.469: файли Payment 2027 — лише читання (PAY_READONLY_YEARS): нова картка / розірвання / перехід пишуть тільки 2026; чистка, бюджет, CF, OPEX (і onEdit), назви груп, пілот 2027 — відмова READ_ONLY.
 // v7.468: постійне обʼєднання груп заняття — каталог «Разом_групи» (кол. J, updateActivity jointGroups); Salary, аналітика й звіти рахують такі групи одним заняттям щодня без 🔗 (явне обʼєднання дня має пріоритет).
 // v7.467: mergeEmployeeDuplicate — повтори дат під одним ключем табеля (історія збережень) більше не блокують злиття; колізії — лише між різними ключами.
 // v7.466: mergeEmployeeDuplicate — злиття дубля картки співробітника (CFO, пробний прогін, бекап HR_MRGBKP, UID предметників, табель); subPayCopyTest — вставка рядка в блок Payment на копії файлу з перевіркою SUM.
@@ -7198,7 +7199,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.468', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.469', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -9020,6 +9021,11 @@ var PAY_FILES_BY_YEAR = {
   }
 };
 var PAY_BASE_YEAR = 2026;   // рік файлів реєстру CONFIG
+// v7.469 (рішення CFO 21.10.2026): файли цих років — ЛИШЕ ЧИТАННЯ. Жодна дія системи в них не пише (новий договір,
+//   розірвання, перехід, чистка, бюджет, CF, OPEX, назви груп, пілот); прев'ю показують «лише читання». Зняти — прибрати рік звідси.
+var PAY_READONLY_YEARS = {2027: true};
+function _payYearRO(y){ return !!PAY_READONLY_YEARS[Number(y)]; }
+function _payRO(y){ return {ok:false, code:'READ_ONLY', error:'Файли ' + y + ' — лише для читання (рішення CFO 21.10.2026)'}; }
 var PAY_SPLIT_TAB = 'Переходи_Payment';
 var PAY_SPLIT_HEADER = ['Локація','Рік','ПІБ','ID картки','З групи','У групу','З місяця','Хто','Коли'];
 
@@ -9153,6 +9159,7 @@ function payNewContract(body){
     var start = c.contract || _ymNow() + '-01', out = [];
     Object.keys(PAY_FILES_BY_YEAR).map(Number).concat([PAY_BASE_YEAR]).sort().forEach(function(y){
       if (y < Number(start.slice(0, 4)) || (c.end && Number(c.end.slice(0, 4)) < y)) return;
+      if (_payYearRO(y)){ out.push({year:y, status:'пропущено: файл ' + y + ' лише для читання'}); return; }
       var f = _payFileFor(c.loc, y); if (!f){ out.push({year:y, status:'немає файлу'}); return; }
       var data = f.sh.getDataRange().getValues(), have = _payRowsOf(data, c.name);
       if (have.length){ out.push({year:y, file:f.file, status:'рядок уже є', rows:have}); return; }
@@ -9193,6 +9200,7 @@ function payTermination(body){
     var ey = Number(end.slice(0, 4)), em = Number(end.slice(5, 7)), out = [], journal = [];
     Object.keys(PAY_FILES_BY_YEAR).map(Number).concat([PAY_BASE_YEAR]).sort().forEach(function(y){
       if (y < ey) return;
+      if (_payYearRO(y)){ out.push({year:y, status:'пропущено: файл ' + y + ' лише для читання'}); return; }
       var f = _payFileFor(c.loc, y); if (!f){ out.push({year:y, status:'немає файлу'}); return; }
       var data = f.sh.getDataRange().getValues(), rows = _payRowsOf(data, c.name);
       if (!rows.length){ out.push({year:y, file:f.file, status:'рядка немає'}); return; }
@@ -9230,6 +9238,7 @@ function payGroupTransfer(body){
     if (!dryRun){ lock = LockService.getScriptLock(); lock.waitLock(30000); }
     Object.keys(PAY_FILES_BY_YEAR).map(Number).concat([PAY_BASE_YEAR]).sort().forEach(function(y){
       if (y < ty) return;
+      if (_payYearRO(y)){ out.push({year:y, status:'пропущено: файл ' + y + ' лише для читання'}); return; }
       var f = _payFileFor(c.loc, y); if (!f){ out.push({year:y, status:'немає файлу'}); return; }
       var data = f.sh.getDataRange().getValues(), blocks = _payBlocks(data, f.sh), rows = _payRowsOf(data, c.name);
       var M = y === ty ? tm : 1;
@@ -9361,7 +9370,9 @@ function groupRenameApply(body){
       var k = x.loc + '|' + x.year; (byFile[k] = byFile[k] || {loc:x.loc, year:Number(x.year), ops:[]}).ops.push(x);
     });
     Object.keys(byFile).forEach(function(k){
-      var g = byFile[k], f = _payFileFor(g.loc, g.year);
+      var g = byFile[k];
+      if (_payYearRO(g.year)){ problems.push(k + ': файл ' + g.year + ' лише для читання'); return; }
+      var f = _payFileFor(g.loc, g.year);
       if (!f){ problems.push(k + ': файл не знайдено'); return; }
       g.f = f; var A = f.sh.getRange(1, 1, f.sh.getLastRow(), 1).getValues();
       g.ops.forEach(function(o){ var t = trim(String((A[Number(o.row) - 1] || [''])[0] || '')); if (t !== trim(String(o.old || ''))) problems.push(f.file + ' рядок ' + o.row + ': очікували «' + o.old + '», а там «' + t + '»'); });
@@ -9522,6 +9533,7 @@ function pay27Clean(body){
     body = body || {};
     var dryRun = (body.dryRun !== false), loc = String(body.loc || '').trim();
     if (!dryRun){ var a = _promoActor(body); if (!(a && _roleKey(a.role) === 'cfo')) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'}; }
+    if (!dryRun && _payYearRO(2027)) return _payRO(2027);
     var P = _pay27Plan(loc); if (P.error) return {ok:false, error:P.error};
     var res = {ok:true, dryRun:dryRun, loc:loc, file:P.f.file, groups:P.groups.map(function(g){ return {title:g.title, kids:g.kids.length}; }),
       kids:P.groups.reduce(function(s, g){ return s + g.kids.length; }, 0), removed:P.removed, added:P.added, closedBlocks:P.closed, dupCards:P.dupKids,
@@ -9647,6 +9659,7 @@ function pay27Budget(body){
     var dryRun = (body.dryRun !== false), loc = String(body.loc || '').trim();
     if (_pay27KgLocs().indexOf(loc) === -1) return {ok:false, error:'Лише садочки: ' + _pay27KgLocs().join(', ')};
     if (!dryRun && !_payCfoOnly(body)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+    if (!dryRun && _payYearRO(2027)) return _payRO(2027);
     var f = _payFileFor(loc, 2027); if (!f) return {ok:false, error:'Файлу 2027 немає'};
     var sh = f.sh, lr = sh.getLastRow(), lc = Math.min(sh.getLastColumn(), 1 + 12 * f.cpm);
     var V = sh.getRange(1, 1, lr, lc).getValues(), F = sh.getRange(1, 1, lr, lc).getFormulas(), blocks = _payBlocks(V);
@@ -9715,6 +9728,7 @@ function cf27Remap(body){
     var dryRun = (body.dryRun !== false), loc = String(body.loc || '').trim();
     if (_pay27KgLocs().indexOf(loc) === -1) return {ok:false, error:'Лише садочки: ' + _pay27KgLocs().join(', ')};
     if (!dryRun && !_payCfoOnly(body)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+    if (!dryRun && _payYearRO(2027)) return _payRO(2027);
     var f = _payFileFor(loc, 2027); if (!f) return {ok:false, error:'Файлу 2027 немає'};
     var cf = f.ss.getSheetByName('CF'); if (!cf) return {ok:false, error:'Вкладки CF немає'};
     var lr = f.sh.getLastRow(), A = f.sh.getRange(1, 1, lr, 1).getValues(), FB = f.sh.getRange(1, 2, lr, 1).getFormulas();
@@ -9885,6 +9899,7 @@ function _opex27PayCols(f){
   return out.length === 12 ? out : null;
 }
 function _opex27Recalc(loc, dryRun, by){
+  if (!dryRun && _payYearRO(2027)){ var ro = _payRO(2027); ro.loc = loc; return ro; }   // v7.469 і для onEdit-тригера
   var f = _payFileFor(loc, 2027); if (!f) return {loc:loc, ok:false, error:'Файлу 2027 немає'};
   var op = f.ss.getSheetByName('OPEX'); if (!op) return {loc:loc, ok:false, error:'Вкладки OPEX немає'};
   var drv = _opex27Drivers(loc) || {}, norms = _opex27Norms(), V = op.getRange(1, 1, 45, 37).getValues();
@@ -40699,6 +40714,7 @@ function pilot2027Remove(body){
     var dryRun = (body.dryRun !== false), loc = String(body.loc || '').trim(), cfg = PILOT_2027[loc];
     if (!cfg) return {ok:false, error:'Пілот 2027 — лише ' + Object.keys(PILOT_2027).join(' і ')};
     if (!dryRun){ var a = _promoActor(body); if (!(a && _roleKey(a.role) === 'cfo')) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'}; }
+    if (!dryRun && _payYearRO(P27_YEAR)) return _payRO(P27_YEAR);
     var ss = SpreadsheetApp.openById(cfg.fileId), before = ss.getSheets().map(function(x){ return x.getName(); });
     var del = P27_ADDED_TABS.filter(function(t){ return before.indexOf(t) !== -1; });
     if (!dryRun) del.forEach(function(t){ ss.deleteSheet(ss.getSheetByName(t)); });
