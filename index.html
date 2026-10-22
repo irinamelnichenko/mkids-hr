@@ -170,6 +170,7 @@ input,select,textarea{font-family:inherit}
 
 /* TABEL: сітка «По днях» — липка перша колонка, вихідні сірим */
 .tg-wrap{overflow-x:auto;max-height:70vh}
+table.att-dash-t th,table.att-dash-t td{padding:6px 8px;border-bottom:1px solid #eef1f4}table.att-dash-t th{background:#f8fafc;font-size:12px;color:var(--gray)}table.att-dash-t tbody tr:hover{background:#f8fafc}
 table.tg{width:auto;min-width:100%;border-collapse:separate;border-spacing:0;font-size:12px}
 table.tg th,table.tg td{border-bottom:1px solid #eef1f4;padding:4px 2px;text-align:center;white-space:nowrap}
 table.tg thead th{position:sticky;top:0;z-index:2;background:#f8fafc;padding:6px 2px;
@@ -3599,6 +3600,7 @@ function renderDash(){
   _ensureKomp(_kompYear()-1).then(_dashSoftRerender);    // v7.99 минулий рік (для KPI договорів)
   if(S.contrOpen) for(var _cy=CONTR_FIRST_YEAR;_cy<_kompYear()-1;_cy++) _ensureKomp(_cy).then(_dashSoftRerender);   // v7.412 аналітика договорів
   _ensurePayments().then(_dashSoftRerender);             // v7.399 групи й діти — з Payment наживо
+  _ensureAttDash().then(_dashSoftRerender);              // v7.474 відвідування (табель дітей, поточний місяць)
   _ensureGroupNorms().then(_dashSoftRerender);           // v7.399 місця в групах — «Норми груп»
   _ensureRatingsYear(_kompYear()).then(_dashSoftRerender); // v7.100 оцінки вихователів — середнє за рік
   if(_kompIsCFO()){ _ensureDebtsLive().then(_dashSoftRerender);   // v7.463 борги наживо
@@ -3799,6 +3801,68 @@ function _renderContrBlock(){
   var nums='<details style="border-top:1px solid #f0f4f8"'+(S.contrNums?' open':'')+' ontoggle="S.contrNums=this.open"><summary style="cursor:pointer;padding:10px 14px;font-size:13px;font-weight:700">показати цифри</summary>'
     +netTbl+(locTbl?'<div style="height:10px"></div>'+locTbl:'')+note+'</details>';
   return hd+ctl+chart+line+nums+'</div>';
+}
+// ─── v7.474: ВІДВІДУВАННЯ — сьогодні й середнє за поточний місяць (табель дітей, лише читання) ───
+//   Активні діти — поточні картки (без випускників, розірваних і «лише додаткових») локацій охоплення дашборда.
+//   Робочі дні — пн–пт від 1-го числа до сьогодні (майбутні не рахуємо).
+//   % відвідуваності = присутні ÷ (діти × роб. дні); % відміченості = усі позначки ÷ (діти × роб. дні).
+var ATT_DASH_TTL=10*60*1000;
+function _attDashRange(){ var t=new Date(); return {from:tabelIso(new Date(t.getFullYear(),t.getMonth(),1)), to:tabelIso(t)}; }
+async function _ensureAttDash(){
+  var rg=_attDashRange(), isHR=isNetworkRole(S.user.role), loc=isHR?'':String(S.user.loc||'');
+  var a=S._attDash;
+  if(a && a.from===rg.from && a.to===rg.to && a.loc===loc && (a.loading || Date.now()-a.at<ATT_DASH_TTL)) return;
+  S._attDash={from:rg.from,to:rg.to,loc:loc,at:Date.now(),loading:true,data:a&&a.loc===loc?a.data:null};
+  try{
+    var r=await fetch(_tokUrl(authScriptUrl()+'?action=getAttendance&format=compact&kind=kids&from='+rg.from+'&to='+rg.to+(loc?'&loc='+encodeURIComponent(loc):'')),{redirect:'follow'});
+    var j=await r.json();
+    if(!j||!j.ok||Array.isArray(j.data)) throw new Error((j&&j.error)||'немає відповіді');
+    S._attDash={from:rg.from,to:rg.to,loc:loc,at:Date.now(),data:j.data||{}};
+  }catch(e){ S._attDash={from:rg.from,to:rg.to,loc:loc,at:Date.now(),data:(S._attDash&&S._attDash.data)||null,error:String(e&&e.message||e)}; }
+}
+function attDashSetLoc(v){ S.attDashLoc=v||''; _renderDashNow(); }
+function _renderAttDashBlock(isHR,myLoc){
+  var a=S._attDash, data=a&&a.data, rg=_attDashRange();
+  var hd='<div class="card" style="margin-bottom:16px"><div class="card-hd" style="flex-wrap:wrap;gap:6px"><h3>📋 Відвідування</h3>';
+  var kids=(S.crm?Object.values(S.crm):[]).filter(function(c){ return _isCurrentKid(c)&&!c.dopOnly&&c.loc&&(isHR?_isKompNetwork(c.loc):c.loc===myLoc); });
+  var locs=sortLocationsByZone(Array.from(new Set(kids.map(function(c){ return c.loc; }))));
+  if(S.attDashLoc && locs.indexOf(S.attDashLoc)<0) S.attDashLoc='';
+  if(isHR && locs.length>1) hd+='<select class="flt-sel" onchange="attDashSetLoc(this.value)"><option value="">Усі локації</option>'
+    +locs.map(function(L){ return '<option'+(L===S.attDashLoc?' selected':'')+'>'+esc(L)+'</option>'; }).join('')+'</select>';
+  hd+='</div>';
+  if(!data) return hd+'<div style="padding:16px;color:var(--gray);font-size:13px">'+(a&&a.error?'⚠️ Табель не завантажився: '+esc(a.error):'⏳ Завантажую табель…')+'</div></div>';
+  // робочі дні місяця до сьогодні
+  var wd=[], d=new Date(rg.from+'T00:00:00');
+  while(tabelIso(d)<=rg.to){ var w=d.getDay(); if(w!==0&&w!==6) wd.push(tabelIso(d)); d.setDate(d.getDate()+1); }
+  var todayWork=wd.indexOf(rg.to)>=0;
+  var per={};
+  kids.forEach(function(c){ var p=per[c.loc]||(per[c.loc]={kids:0,today:0,pres:0,marks:0});
+    p.kids++;
+    if(todayWork && ((data[rg.to]||{})[c.id]||'')==='present') p.today++;
+    wd.forEach(function(x){ var st=(data[x]||{})[c.id]||''; if(!st) return; p.marks++; if(st==='present') p.pres++; }); });
+  var sel=S.attDashLoc?[S.attDashLoc]:locs, T={kids:0,today:0,pres:0,marks:0};
+  sel.forEach(function(L){ var p=per[L]; if(!p) return; T.kids+=p.kids; T.today+=p.today; T.pres+=p.pres; T.marks+=p.marks; });
+  var n=wd.length;
+  function pc(x,base){ return base?Math.round(x/base*1000)/10+'%':'—'; }
+  function num(v,lbl,sub,col){ return '<div><div style="font-size:28px;font-weight:900;color:'+(col||'var(--dark)')+'">'+v+'</div><div style="font-size:12px;color:var(--gray)">'+lbl+'</div>'+(sub?'<div style="font-size:11px;color:var(--gray)">'+sub+'</div>':'')+'</div>'; }
+  var body='<div style="padding:18px;display:flex;gap:28px;flex-wrap:wrap">'
+    +(todayWork?num(T.today+' / '+T.kids,'Сьогодні присутні / активні діти',pc(T.today,T.kids)+' відвідуваності','#27ae60')
+               :num('—','Сьогодні вихідний','активних дітей: '+T.kids))
+    +num(n?String(Math.round(T.pres/n*10)/10):'—','Середнє присутніх за день ('+KOMP_MONTHS[new Date().getMonth()]+')','робочих днів: '+n+' (пн–пт до сьогодні)','#27ae60')
+    +num(pc(T.pres,T.kids*n),'% відвідуваності за місяць','','#2980b9')
+    +num(pc(T.marks,T.kids*n),'% відміченості за місяць','позначок: '+T.marks,'#7f8c8d')
+    +'</div>';
+  var tbl='';
+  if(isHR && !S.attDashLoc && locs.length>1){
+    var rows=locs.map(function(L){ var p=per[L]; return {L:L,k:p.kids,v:p.kids*n?p.pres/(p.kids*n):0,m:p.kids*n?p.marks/(p.kids*n):0}; })
+      .sort(function(x,y){ return x.v-y.v||x.m-y.m; });
+    tbl='<div style="padding:0 18px 18px;overflow-x:auto"><table class="att-dash-t" style="width:100%;font-size:13px;border-collapse:collapse"><thead><tr><th style="text-align:left">Локація</th><th>Дітей</th><th>% відвідуваності</th><th>% відміченості</th></tr></thead><tbody>'
+      +rows.map(function(r){ return '<tr style="cursor:pointer" data-loc="'+esc(r.L)+'" onclick="attDashSetLoc(this.dataset.loc)"><td>'+esc(r.L)+'</td><td style="text-align:center">'+r.k+'</td>'
+        +'<td style="text-align:center;font-weight:700">'+(n?Math.round(r.v*1000)/10+'%':'—')+'</td>'
+        +'<td style="text-align:center;color:'+(r.m<0.9?'#e67e22':'var(--gray)')+'">'+(n?Math.round(r.m*1000)/10+'%':'—')+'</td></tr>'; }).join('')
+      +'</tbody></table><div style="font-size:11px;color:var(--gray);margin-top:6px">Від найменшої відвідуваності · клік по рядку — лише ця локація · помаранчевим — відмічено менше 90%</div></div>';
+  }
+  return hd+body+tbl+'</div>';
 }
 // ─── v7.451: АНАЛІТИКА ДОДАТКОВИХ — які заняття прибуткові (getDopAnalytics, лише читання) ───
 //   Оборот — відмітки табеля × ціна на день відмітки; абонемент — «Бюджет навч» його блоку в Payment.
@@ -4393,6 +4457,7 @@ function _renderDashNow(){
     ${_renderKompBlock()}
     ${isHR?_renderContrBlock():''}
     ${isHR?_renderDopBlock():''}
+    ${_renderAttDashBlock(isHR,myLoc)}
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
       <div class="card">

@@ -6316,6 +6316,43 @@ function attGetMonthWorkdays(ym){
   return days;
 }
 
+// v7.474: робочі дні для середніх — лише пн–пт, що вже настали (сьогодні рахуємо, майбутні — ні).
+function attPastWorkdays(days){
+  var t=today();
+  return days.filter(function(d){ var w=(pd(d)||new Date(d)).getDay(); return w!==0&&w!==6&&d<=t; });
+}
+// v7.474: підсумок табеля за період — середні за робочий день замість суми позначок.
+//   Активні діти — ростер табеля (attGroups: без випускників і розірваних) обраних локацій/групи.
+function attPeriodStats(locs, group, days){
+  var wd=attPastWorkdays(days), c={present:0,sick:0,vacation:0,absent:0}, marks=0, kids=0;
+  locs.forEach(function(loc){
+    attGroups(loc).forEach(function(g){
+      if(group&&g.group!==group) return;
+      g.children.forEach(function(ch){
+        kids++;
+        wd.forEach(function(d){ var st=(S.att[d]||{})[ch.id]||''; if(c[st]!==undefined){ c[st]++; marks++; } });
+      });
+    });
+  });
+  return {kids:kids, wd:wd.length, marks:marks, c:c};
+}
+function attStatsHtml(st, note){
+  var n=st.wd, slots=st.kids*n;
+  function avg(x){ if(!n) return '—'; var v=x/n; return String(Math.round(v*10)/10); }
+  function pct(x){ return slots?Math.round(x/slots*1000)/10+'%':'—'; }
+  function card(val,lbl,col){ return '<div class="att-stat"><div class="att-stat-n"'+(col?' style="color:'+col+'"':'')+'>'+val+'</div><div class="att-stat-l">'+lbl+'</div></div>'; }
+  return '<div class="att-stats">'
+    +card(avg(st.c.present),'✅ Присутніх за день','var(--green)')
+    +card(pct(st.c.present),'% відвідуваності','var(--green)')
+    +card(avg(st.c.sick),'🤒 Хворих за день','var(--orange)')
+    +card(avg(st.c.vacation),'🏖 Відпустка за день','var(--blue2)')
+    +card(avg(st.c.absent),'🚫 Інше за день','var(--red2)')
+    +card(pct(st.marks),'📝 % відміченості')
+    +'</div>'
+    +'<div style="font-size:11px;color:var(--gray);margin:-4px 0 10px">Активних дітей: '+st.kids+' · робочих днів: '+n+' (пн–пт, без майбутніх)'
+    +' · позначок: '+st.marks+' (✅ '+st.c.present+' · 🤒 '+st.c.sick+' · 🏖 '+st.c.vacation+' · 🚫 '+st.c.absent+')'+(note?' · '+note:'')+'</div>';
+}
+
 // Перший/останній день місяця ym='YYYY-MM'
 function attMonthRange(ym){
   var parts=ym.split('-');
@@ -6413,6 +6450,12 @@ function renderAttendance(){
   // v7.289: однолокаційні ролі (директор/медсестра/вихователька) просять СВОЮ локацію —
   // 30 КБ замість 351 КБ і серверний кеш (3 хв) працює; мережеві ролі — усі локації.
   var cloudLoc=isHR()?'':String((S.user&&S.user.loc)||'');
+  // v7.474: рік вантажимо лише для однієї локації (середні за рік). Усі локації за рік — ~10 МБ, не тягнемо.
+  if(S.attMode==='year'){
+    if(!cloudLoc && activeLocs.length===1) cloudLoc=activeLocs[0];
+    var _ty=curToday.slice(0,4); if(S.attYear===_ty) to=curToday; else if(S.attYear>_ty) to=from;
+  }
+  var yearLoad=(S.attMode!=='year' || !!cloudLoc);
   var cacheKey=(cloudLoc||'ALL')+'::'+from+'::'+to;
 
   // v6.49.2 — RENDER-FIRST + retry/backoff + cache-keep (ПОВНИЙ фікс «Помилка хмари»):
@@ -6439,7 +6482,7 @@ function renderAttendance(){
   // незалежно від loc → усі локації коштують стільки ж, як одна (~7с). Заповнює S.att для
   // ВСІХ → перемикання локацій миттєве, CFO «Всі» працює. Замінює 14-послідовний-цикл
   // (98с→таймаут) і тимчасовий single-loc guard. Render-first: кеш показуємо одразу нижче.
-  if(S.attMode!=='year' && (neverLoaded || cacheStale) && !S._attLoading && !recentlyFailed){
+  if(yearLoad && (neverLoaded || cacheStale) && !S._attLoading && !recentlyFailed){
     S._attLoading=true;
     if(cacheStale) S._attLoadedAt[cacheKey]=Date.now(); // антидубль паралельних циклів
     if(neverLoaded) showFloatMsg(cloudLoc?'☁️ Оновлюю табель…':'☁️ Оновлюю табель (усі локації)…','info');
@@ -6522,15 +6565,15 @@ function renderAttendance(){
   else                         content=renderAttendanceDay(activeLocs,activeGroup);
 
   // ── Статистика ────────────────────────────────────────────────────────────
-  var nPresent=0,nSick=0,nVac=0,nAbsent=0,nTotal=0;
+  // v7.474: великі цифри — середні за робочий день і відсотки (attPeriodStats); суму позначок — дрібним підписом.
   var statDays;
   if(S.attMode==='week')       statDays=attWeekDays(S.attWeek);
   else if(S.attMode==='month') statDays=attGetMonthWorkdays(S.attMonth);
   else if(S.attMode==='year'){
-    var stats='<div class="att-stats">'
-      +'<div class="att-stat"><div class="att-stat-n">'+childCount+'</div><div class="att-stat-l">дітей</div></div>'
-      +'<div class="att-stat"><div class="att-stat-n" style="color:var(--green)">'+S.attYear+'</div><div class="att-stat-l">📊 Рік</div></div>'
-      +'</div>';
+    var yDays=[];
+    for(var ym=1;ym<=12;ym++) yDays=yDays.concat(attGetMonthWorkdays(S.attYear+'-'+(ym<10?'0'+ym:''+ym)));
+    var stats=attStatsHtml(attPeriodStats(activeLocs,activeGroup,yDays),
+      yearLoad?'':'⚠️ рік по всіх локаціях повністю не завантажується — для точних цифр оберіть локацію');
     // Збір для XLSX — по дитині 12 місяців к-сті присутніх днів.
     S._attExport={mode:'year',year:S.attYear,loc:locLabel,rows:[]};
     activeLocs.forEach(function(loc){
@@ -6566,25 +6609,14 @@ function renderAttendance(){
         statDays.forEach(function(sd){
           var st=(S.att[sd]||{})[ch.id]||'';
           row.byDay[sd]=st;
-          if(st) nTotal++;
-          if(st==='present'){ nPresent++; row.cnt.present++; }
-          else if(st==='sick'){ nSick++; row.cnt.sick++; }
-          else if(st==='vacation'){ nVac++; row.cnt.vacation++; }
-          else if(st==='absent'){ nAbsent++; row.cnt.absent++; }
+          if(row.cnt[st]!==undefined) row.cnt[st]++;
         });
         S._attExport.rows.push(row);
       });
     });
   });
 
-  var statsLbl=S.attMode==='week'?'позначок за тиждень':S.attMode==='month'?'позначок за місяць':'дітей';
-  var stats='<div class="att-stats">'
-    +'<div class="att-stat"><div class="att-stat-n">'+nTotal+'</div><div class="att-stat-l">'+statsLbl+'</div></div>'
-    +'<div class="att-stat"><div class="att-stat-n" style="color:var(--green)">'+nPresent+'</div><div class="att-stat-l">✅ Присутні</div></div>'
-    +'<div class="att-stat"><div class="att-stat-n" style="color:var(--orange)">'+nSick+'</div><div class="att-stat-l">🤒 Хворі</div></div>'
-    +'<div class="att-stat"><div class="att-stat-n" style="color:var(--blue2)">'+nVac+'</div><div class="att-stat-l">🏖 Відпустка</div></div>'
-    +'<div class="att-stat"><div class="att-stat-n" style="color:var(--red2)">'+nAbsent+'</div><div class="att-stat-l">🚫 Інше</div></div>'
-    +'</div>';
+  var stats=attStatsHtml(attPeriodStats(activeLocs,activeGroup,statDays));
 
   main.innerHTML=migBanner+typeChips+infoLine+modeBar+stats+content;
 }
