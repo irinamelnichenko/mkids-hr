@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.486
+// m.kids CRM — Google Apps Script v7.489
+// v7.489: токен — UTF-8 (кирилиця в loc губилась у «??????»; старі токени приймаються); директор — локація з «Користувачів» за id,
+//   зіставлення з реєстром локацій; ТИМЧАСОВО devDirToken (CFO) для перевірки дашборда директора — прибрати в v7.490.
 // v7.486: директор (токен role=director) — лише своя локація: чужий loc — відмова; мережеві відповіді дашборда обрізаються (_dirScope*).
 // v7.485: getDataQuality — «🧹 Якість даних» (лише читання): картки ↔ Payment наживо (_yearlyLive), дублі, суми, наступні місяці, порожні поля.
 // v7.483: getUnderpaid — «сплачено наперед» (Бюджет 0, а раніше у 2026 одна сума на кілька місяців) поза недоотриманим;
@@ -2498,19 +2500,26 @@ function _authEnforceOn(){                    // ЕТАП 2 вмикається
 function _b64u(str){ return Utilities.base64EncodeWebSafe(str).replace(/=+$/, ''); }
 function _b64uBytes(bytes){ return Utilities.base64EncodeWebSafe(bytes).replace(/=+$/, ''); }
 function _authHmac(msg){ return _b64uBytes(Utilities.computeHmacSha256Signature(msg, _authSecret())); }
+// v7.489: UTF-8 явно. Без кодування Apps Script перетворював кирилицю на «?» (loc «Бігова» → «??????») і в base64, і в підписі.
+function _b64uUtf8(str){ return Utilities.base64EncodeWebSafe(str, Utilities.Charset.UTF_8).replace(/=+$/, ''); }
+function _authHmacUtf8(msg){ return _b64uBytes(Utilities.computeHmacSha256Signature(msg, _authSecret(), Utilities.Charset.UTF_8)); }
 function _issueToken(u){
   var payload = { id: Number(u.id) || 0, role: String(u.role || '').toLowerCase().trim(),
                   loc: String(u.loc || ''), exp: Date.now() + 7 * 24 * 3600 * 1000 };   // v7.151: 7 діб (було 12 год)
   var pj = JSON.stringify(payload);
-  return _b64u(pj) + '.' + _authHmac(pj);
+  return _b64uUtf8(pj) + '.' + _authHmacUtf8(pj);   // v7.489 UTF-8
 }
 function _verifyToken(token){
   try {
     token = String(token || ''); var dot = token.indexOf('.');
     if (dot <= 0) return null;
     var p64 = token.slice(0, dot), sig = token.slice(dot + 1);
-    var pj = Utilities.newBlob(Utilities.base64DecodeWebSafe(p64)).getDataAsString();
-    if (sig !== _authHmac(pj)) return null;                              // підпис не збігся
+    var raw = Utilities.base64DecodeWebSafe(p64);
+    var pj = Utilities.newBlob(raw).getDataAsString('UTF-8');
+    if (sig !== _authHmacUtf8(pj)){                                      // v7.489: новий формат (UTF-8)
+      pj = Utilities.newBlob(raw).getDataAsString();                     // старі токени (до v7.489) — як були
+      if (sig !== _authHmac(pj)) return null;                            // підпис не збігся
+    }
     var payload = JSON.parse(pj);
     if (!payload || !payload.exp || Date.now() > Number(payload.exp)) return null;  // прострочено
     return payload;
@@ -7198,7 +7207,31 @@ function _authGate(action, token, method){
 //   2) CFO-звіти (DIR_DENY) — відмова; 3) мережеві відповіді (DIR_FILTER) — лише рядки його локації.
 var DIR_DENY   = {getUnderpaid:1, getEntryHistory:1, getMoneyJournal:1};
 var DIR_FILTER = {getClients:1, getPayments:1, getPaymentsYearly:1, getPaymentsLive:1, getDebtsLive:1, getDataQuality:1};
-function _dirAuth(){ var a = _CURRENT_AUTH; return (a && String(a.role || '').toLowerCase() === 'director' && a.loc) ? {loc:String(a.loc)} : null; }
+// v7.489: локація директора — з «Користувачів» за id (у старих токенах кирилиця зіпсована: «??????»), зведена до назви реєстру.
+function _dirUserLoc(id){
+  var ck = 'dirloc2_' + id, c = CacheService.getScriptCache();
+  try { var hit = c.get(ck); if (hit != null) return hit; } catch(_c){}
+  var loc = '';
+  try { var v = _getUsersSheet().getDataRange().getValues();
+    for (var i = 1; i < v.length; i++){ var u = _parseUserRow(v[i]); if (u.id === Number(id)){ loc = String(u.loc || ''); break; } } } catch(_u){}
+  try { c.put(ck, loc, 600); } catch(_p){}
+  return loc;
+}
+function _dirCanonLoc(loc){
+  loc = trim(loc); if (!loc) return '';
+  var names = []; try { names = ((getLocations({}) || {}).data || []).map(function(l){ return String(l.loc || ''); }); } catch(_l){}
+  var f = _nameFold(loc), tok = function(x){ return _nameFold(x).replace(/['’ʼ`.,()]/g, ' ').split(/\s+/).filter(Boolean); }, ut = tok(loc), best = '', bn = 0;
+  for (var i = 0; i < names.length; i++){ if (_nameFold(names[i]) === f) return names[i]; }
+  names.forEach(function(n){ var nt = tok(n); if (nt.length > bn && nt.every(function(t){ return ut.indexOf(t) >= 0; })){ best = n; bn = nt.length; } });
+  return best || loc;
+}
+function _dirAuth(){
+  var a = _CURRENT_AUTH; if (!a || String(a.role || '').toLowerCase() !== 'director') return null;
+  var loc = a.id ? _dirUserLoc(a.id) : '';
+  if (!loc && a.loc && String(a.loc).indexOf('?') < 0) loc = String(a.loc);
+  loc = _dirCanonLoc(loc);
+  return loc ? {loc:loc} : {loc:'—', none:true};   // локацію не знайдено — нічого не віддаємо
+}
 function _dirSameLoc(a, b){ return _nameFold(trim(a)) === _nameFold(trim(b)); }
 function _dirPre(action, prm, dir){
   if (DIR_DENY[action]) return {ok:false, code:'FORBIDDEN', error:'Недоступно для директора'};
@@ -7221,6 +7254,24 @@ function _dirFilter(action, res, dir){
   return out;
 }
 
+// ТИМЧАСОВО (v7.489, прибрати в v7.490): тестовий токен директора локації — лише CFO, живе 30 хв.
+function devDirToken(params){
+  var cfo = false;
+  try { cfo = !!(_CURRENT_AUTH && String(_CURRENT_AUTH.role).toLowerCase() === 'cfo') || String(_getActor(Number(params.actorId) || 0).role).toLowerCase() === 'cfo'; } catch(_a){}
+  if (!cfo) return {ok:false, code:'FORBIDDEN', error:'Лише CFO'};
+  var want = _nameFold(trim(params.loc || '')), v = _getUsersSheet().getDataRange().getValues();
+  for (var i = 1; i < v.length; i++){
+    var u = _parseUserRow(v[i]);
+    if (String(u.role).toLowerCase() === 'director' && u.active !== false && _nameFold(u.loc) === want){
+      var t = _issueToken(u), p = JSON.parse(Utilities.newBlob(Utilities.base64DecodeWebSafe(t.split('.')[0])).getDataAsString('UTF-8'));
+      p.exp = Date.now() + 30 * 60 * 1000;
+      var pj = JSON.stringify(p);
+      return {ok:true, id:u.id, loc:u.loc, token:_b64uUtf8(pj) + '.' + _authHmacUtf8(pj)};
+    }
+  }
+  return {ok:false, error:'Директора локації не знайдено'};
+}
+
 function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
@@ -7240,7 +7291,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.486', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.489', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -7382,6 +7433,7 @@ function doGet(e) {
     else if (action === 'getDiscounts')                result = getDiscounts(e.parameter || {});           // v7.414 реєстр знижок
     else if (action === 'getPromoReport')              result = getPromoReport(e.parameter || {});         // v7.414 звіт по акціях
     else if (action === 'getPromoAttention')           result = getPromoAttention(e.parameter || {});      // v7.414 передоплати-здогадки + пропозиції
+    else if (action === 'devDirToken')               result = devDirToken(e.parameter || {});            // ТИМЧАСОВО v7.489 — прибрати в v7.490
     else if (action === 'getDataQuality')             result = getDataQuality(e.parameter || {});         // v7.485 якість даних (лише читання)
     else if (action === 'getUnderpaid')                result = getUnderpaid(e.parameter || {});           // v7.482 знижки та недоотримане (лише читання)
     else if (action === 'getPromoCardIndex')           result = getPromoCardIndex();                       // v7.414 картки мережі для вибору рекомендувача/брата

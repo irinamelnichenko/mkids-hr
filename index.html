@@ -3885,10 +3885,10 @@ function _attPc(x,base){ return base?Math.round(x/base*100)+'%':'—'; }
 function _renderAttDashTile(){
   var r=_attDashCalc(_attDashYm(),'',''), T=r.T;   // плитка — мережа (садки й школи)
   var big=!r.data?'…':(r.todayOn?String(T.tPres):'—');
-  var sub=!r.data?(r.a&&r.a.error?'табель не завантажився':'завантажую табель…')
+  var sub=!r.data?(r.a&&r.a.error?'⚠️ табель не завантажився':'завантажую табель…')
     :(r.n?_attPc(T.present,T.kids*r.n)+' відвідуваності за місяць':'місяць щойно почався');
   return '<div class="stat-card" onclick="attDashOpen()" style="cursor:pointer" title="Клік — деталі відвідування"><div class="stat-icon si-g">📋</div><div>'
-    +'<div class="stat-val">'+big+'</div><div class="stat-lbl">Відвідування · присутні '+(r.todayOn?'сьогодні':'(вихідний)')+' ▸</div>'
+    +'<div class="stat-val">'+big+'</div><div class="stat-lbl">Відвідування · присутні '+((!r.data||r.todayOn)?'сьогодні':'(вихідний)')+' ▸</div>'   // v7.489: «вихідний» — лише коли дані є і сьогодні справді не робочий день
     +'<div style="font-size:11px;color:var(--gray);margin-top:2px">'+sub+'</div></div></div>';
 }
 function attDashOpen(){
