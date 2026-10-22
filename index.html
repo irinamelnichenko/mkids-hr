@@ -3051,8 +3051,8 @@ function dashSetLF(type, loc){ S.dashLF={type:type||'', loc:loc||''}; try{ local
 function _dashTypes(){ var t=_dashLF().type; return t?{sad:t==='sad',sch:t==='sch',upr:t==='upr'}:{sad:true,sch:true,upr:true}; }
 function _dashAllTypes(){ var f=_dashLF(); return !f.type&&!f.loc; }
 // Локації для списку в групі: усі відомі дашборду (картки + Payment), що належать до обраної групи.
-function _dashLFLocs(){
-  var t=_dashLF().type, set={};
+function _dashLFLocs(type){   // v7.477: type — явна група (вікно «Відвідування»); без нього — пігулка дашборда
+  var t=(type===undefined?_dashLF().type:type), set={};
   (S.crm?Object.values(S.crm):[]).forEach(function(c){ if(c&&c.loc) set[c.loc]=1; });
   (Array.isArray(S._payFull)?S._payFull:[]).forEach(function(r){ var L=String(r['Локація']||'').trim(); if(L) set[L]=1; });
   return sortLocationsByZone(Object.keys(set).filter(function(L){ var lt=_dashLocType(L); return lt && (!t || lt===t); }));
@@ -3828,30 +3828,47 @@ async function _ensureAttDash(ym){
     S._attDashM[ym]={to:rg.to,loc:loc,at:Date.now(),data:j.data||{}};
   }catch(e){ S._attDashM[ym]={to:rg.to,loc:loc,at:Date.now(),data:(S._attDashM[ym]&&S._attDashM[ym].data)||null,error:String(e&&e.message||e)}; }
 }
-function _attDashKid(c,isHR,myLoc){
-  if(!c||String(c.status||'').trim()!=='active'||c.dopOnly||!c.loc) return false;
-  var t=_dashLocType(c.loc); if(t!=='sad'&&t!=='sch') return false;
-  return isHR?true:c.loc===myLoc;
+// v7.477: учасники бази за групою локацій. Садки й школи — картки (як табель, attActiveKid);
+//   Управління — рядки табеля (карток там немає): рядки Payment поточного місяця без випускників/розірваних,
+//   ID — картки з тим самим ПІБ у локації, інакше табельний c_ПІБ_локація. Позначка upr — «поза мережевою базою».
+function _attDashMembers(){
+  var out=[], seen={};
+  (S.crm?Object.values(S.crm):[]).forEach(function(c){
+    if(!c||String(c.status||'').trim()!=='active'||c.dopOnly||!c.loc) return;
+    var t=_dashLocType(c.loc); if(t!=='sad'&&t!=='sch') return;
+    out.push({id:String(c.id).trim(), loc:c.loc, upr:false}); });
+  var byName={};
+  (S.crm?Object.values(S.crm):[]).forEach(function(c){ if(c&&c.loc&&_dashLocType(c.loc)==='upr') byName[c.loc+'|'+_kompNorm(c.name)]=c; });
+  (Array.isArray(S._payFull)?S._payFull:[]).forEach(function(r){
+    var L=String(r['Локація']||'').trim(), n=String(r["Ім'я дитини"]||'').trim();
+    if(!L||!n||_dashLocType(L)!=='upr') return;
+    var c=byName[L+'|'+_kompNorm(n)];
+    if(c && !_isCurrentKid(c)) return;
+    var id=String(c?c.id:_childId(n,'',L)).trim(); if(seen[id]) return; seen[id]=1;   // табель зберігає ID без пробілу в кінці («…_Нац.Гвардії »)
+    out.push({id:id, loc:L, upr:true}); });
+  return out;
 }
-// Підрахунок за місяць ym по базі; loc — фільтр ('' = усі).
-function _attDashCalc(ym, loc){
+// Підрахунок за місяць ym: type — пігулка ('' | sad | sch | upr), loc — локація ('' = усі в групі).
+//   Підсумок: садки й школи; Управління — лише коли обране саме воно (пігулкою чи локацією), інакше окремими рядками.
+function _attDashCalc(ym, type, loc){
   var isHR=isNetworkRole(S.user.role), myLoc=S.user.loc||'';
   var a=S._attDashM&&S._attDashM[ym], data=a&&a.data, rg=_attDashRange(ym), td=tabelIso(new Date());
-  var kids=(S.crm?Object.values(S.crm):[]).filter(function(c){ return _attDashKid(c,isHR,myLoc); });
-  var locs=sortLocationsByZone(Array.from(new Set(kids.map(function(c){ return c.loc; }))));
-  var res={a:a, data:data, locs:locs, kidsN:kids.length};
+  var locs=isHR?_dashLFLocs(type||''):[myLoc];
+  var mem=_attDashMembers().filter(function(m){ return locs.indexOf(m.loc)>=0; });
+  var uprSel=isHR?(type==='upr'||(!!loc&&_dashLocType(loc)==='upr')):_dashLocType(myLoc)==='upr';
+  var res={a:a, data:data, locs:locs, uprSel:uprSel};
   if(!data) return res;
   var wd=[], d=new Date(rg.from+'T00:00:00');
   while(tabelIso(d)<=rg.to){ var w=d.getDay(), iso=tabelIso(d); if(w!==0&&w!==6&&iso<td) wd.push(iso); d.setDate(d.getDate()+1); }
   var tw=new Date().getDay(), todayOn=rg.to===td&&tw!==0&&tw!==6;
-  var Z=function(){ return {kids:0,present:0,sick:0,vacation:0,absent:0,marks:0,tPres:0,tMarks:0,any:false}; };
+  var Z=function(){ return {kids:0,present:0,sick:0,vacation:0,absent:0,marks:0,tPres:0,tMarks:0,any:false,upr:false}; };
   var per={};
-  kids.forEach(function(c){ var p=per[c.loc]||(per[c.loc]=Z()); p.kids++;
-    var s0=(data[td]||{})[c.id]||'';
+  mem.forEach(function(m){ var p=per[m.loc]||(per[m.loc]=Z()); p.kids++; p.upr=m.upr;
+    var s0=(data[td]||{})[m.id]||'';
     if(s0){ p.any=true; if(todayOn){ p.tMarks++; if(s0==='present') p.tPres++; } }
-    wd.forEach(function(x){ var st=(data[x]||{})[c.id]||''; if(!st) return; p.any=true; p.marks++; if(p[st]!==undefined) p[st]++; }); });
+    wd.forEach(function(x){ var st=(data[x]||{})[m.id]||''; if(!st) return; p.any=true; p.marks++; if(p[st]!==undefined) p[st]++; }); });
   var T=Z(); T.all=0;
-  (loc?[loc]:locs).forEach(function(L){ var p=per[L]; if(!p) return; T.all+=p.kids; if(!p.any) return;
+  (loc?[loc]:locs).forEach(function(L){ var p=per[L]; if(!p || (p.upr&&!uprSel)) return; T.all+=p.kids; if(!p.any) return;
     ['kids','present','sick','vacation','absent','marks','tPres','tMarks'].forEach(function(k){ T[k]+=p[k]; }); });
   res.wd=wd; res.n=wd.length; res.per=per; res.T=T; res.todayOn=todayOn;
   return res;
@@ -3859,7 +3876,7 @@ function _attDashCalc(ym, loc){
 function _attPc(x,base){ return base?Math.round(x/base*100)+'%':'—'; }
 // Плитка в ряду stat-card: присутні сьогодні + % відвідуваності за поточний місяць.
 function _renderAttDashTile(){
-  var r=_attDashCalc(_attDashYm(),''), T=r.T;
+  var r=_attDashCalc(_attDashYm(),'',''), T=r.T;   // плитка — мережа (садки й школи)
   var big=!r.data?'…':(r.todayOn?String(T.tPres):'—');
   var sub=!r.data?(r.a&&r.a.error?'табель не завантажився':'завантажую табель…')
     :(r.n?_attPc(T.present,T.kids*r.n)+' відвідуваності за місяць':'місяць щойно почався');
@@ -3869,6 +3886,7 @@ function _renderAttDashTile(){
 }
 function attDashOpen(){
   if(!S.attDashYm) S.attDashYm=_attDashYm();
+  var _lf=_dashLF(); S.attDashType=_lf.type||''; S.attDashLoc=_lf.loc||'';   // v7.477: за замовчуванням — фільтр дашборда
   var m=document.getElementById('mAttDash');
   if(!m){ m=document.createElement('div'); m.id='mAttDash'; m.className='modal-ov hidden';
     m.onclick=function(e){ if(e.target===m) closeModal('mAttDash'); };
@@ -3879,25 +3897,29 @@ function attDashOpen(){
   _ensureAttDash(_attDashYm()).then(_attDashModalRender);
   _ensureAttDash(S.attDashYm).then(_attDashModalRender);
 }
-function attDashSet(k,v){ if(k==='loc') S.attDashLoc=v||''; else S.attDashYm=v||_attDashYm();
+function attDashSet(k,v){ if(k==='type'){ S.attDashType=v||''; S.attDashLoc=''; } else if(k==='loc') S.attDashLoc=v||''; else S.attDashYm=v||_attDashYm();
   _attDashModalRender(); _ensureAttDash(S.attDashYm).then(_attDashModalRender); }
 function attDashGoTabel(loc){ location.href='clients.html#att-'+encodeURIComponent((loc||'')+'~'+(S.attDashYm||_attDashYm())); }
 function _attDashModalRender(){
   var bd=document.getElementById('mAttDashBd'); if(!bd) return;
   var m=document.getElementById('mAttDash'); if(m&&m.classList.contains('hidden')) return;
   var ym=S.attDashYm||_attDashYm(), isHR=isNetworkRole(S.user.role);
-  var r=_attDashCalc(ym, S.attDashLoc||'');
-  if(S.attDashLoc && r.locs.indexOf(S.attDashLoc)<0){ S.attDashLoc=''; r=_attDashCalc(ym,''); }
-  var cur=_attDashCalc(_attDashYm(), S.attDashLoc||'');
+  var ty=isHR?(S.attDashType||''):'';
+  var r=_attDashCalc(ym, ty, S.attDashLoc||'');
+  if(S.attDashLoc && r.locs.indexOf(S.attDashLoc)<0){ S.attDashLoc=''; r=_attDashCalc(ym,ty,''); }
+  var cur=_attDashCalc(_attDashYm(), ty, S.attDashLoc||'');
   // керування: локація + місяць (з січня минулого року до поточного)
   var now=new Date(), mo='';
   for(var y=now.getFullYear()-1;y<=now.getFullYear();y++) for(var mm=1;mm<=12;mm++){
     if(y===now.getFullYear()&&mm>now.getMonth()+1) break;
     var v=y+'-'+('0'+mm).slice(-2); mo='<option value="'+v+'"'+(v===ym?' selected':'')+'>'+KOMP_MONTHS[mm-1]+' '+y+'</option>'+mo; }
   var ctl='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">'
-    +(isHR&&r.locs.length>1?'<select class="flt-sel" onchange="attDashSet(\'loc\',this.value)"><option value="">Усі локації (садки й школи)</option>'
+    // v7.477: пігулки й список локацій — ті самі, що у фільтрі дашборда (DASH_LF, _dashLFLocs)
+    +(isHR?DASH_LF.map(function(x){ return '<button type="button" class="att-chip'+(ty===x[0]?' att-chip-active':'')+'" onclick="attDashSet(\'type\',\''+x[0]+'\')">'+x[1]+'</button>'; }).join(''):'')
+    +(isHR?'<select class="flt-sel" onchange="attDashSet(\'loc\',this.value)"><option value="">Усі локації'+(ty?' ('+(DASH_LF.filter(function(x){ return x[0]===ty; })[0]||['',''])[1].replace(/^\S+\s/,'')+')':'')+'</option>'
       +r.locs.map(function(L){ return '<option'+(L===S.attDashLoc?' selected':'')+'>'+esc(L)+'</option>'; }).join('')+'</select>':'')
     +'<select class="flt-sel" onchange="attDashSet(\'ym\',this.value)">'+mo+'</select></div>';
+  var uprNote=r.uprSel?' · Управління — рядки табеля, поза мережевою базою':(isHR&&!ty&&!S.attDashLoc?' · без Управління (поза мережевою базою)':'');
   if(!r.data){ bd.innerHTML=ctl+'<div style="color:var(--gray);font-size:13px">'+(r.a&&r.a.error?'⚠️ Табель не завантажився: '+esc(r.a.error):'⏳ Завантажую табель…')+'</div>'; return; }
   var T=r.T, n=r.n, slots=T.kids*n;
   var ROWS=[['present','✅ Присутні','#27ae60'],['sick','🤒 Хворі','#8e44ad'],['vacation','🏖 Відпустка','#2980b9'],['absent','🚫 Інше','#c0392b']];
@@ -3905,7 +3927,7 @@ function _attDashModalRender(){
     +ROWS.map(function(x){ return '<div style="background:#f8fafc;border-radius:10px;padding:10px 12px"><div style="font-size:26px;font-weight:900;color:'+x[2]+'">'+(n?Math.round(T[x[0]]/n):'—')+'</div>'
       +'<div style="font-size:13px;font-weight:700;color:'+x[2]+'">'+_attPc(T[x[0]],slots)+'</div><div style="font-size:12px;color:var(--gray)">'+x[1]+'</div></div>'; }).join('')+'</div>'
     +'<div style="font-size:11px;color:var(--gray);margin-bottom:14px">Середнє за день · '+KOMP_MONTHS[+ym.slice(5)-1]+' '+ym.slice(0,4)+' · робочих днів: '+n+' (пн–пт, без сьогодні) · активних дітей '+T.all
-    +(T.all!==T.kids?' (у розрахунку '+T.kids+')':'')+' · відмічено '+_attPc(T.marks,slots)+'</div>';
+    +(T.all!==T.kids?' (у розрахунку '+T.kids+')':'')+' · відмічено '+_attPc(T.marks,slots)+uprNote+'</div>';
   var ct=cur.T;
   var todayHtml=cur.data?(cur.todayOn
       ?'<div style="display:flex;gap:24px;align-items:baseline;flex-wrap:wrap;background:#e8f8f0;border-radius:10px;padding:10px 14px;margin-bottom:14px"><b style="font-size:13px">Сьогодні</b>'
@@ -3914,13 +3936,18 @@ function _attDashModalRender(){
       :'<div style="font-size:12px;color:var(--gray);margin-bottom:14px">Сьогодні вихідний.</div>'):'';
   var tbl='';
   if(isHR && !S.attDashLoc && r.locs.length>1){
-    var tab=r.locs.filter(function(L){ return r.per[L]&&r.per[L].any; }), noTab=r.locs.filter(function(L){ return !(r.per[L]&&r.per[L].any); });
+    // v7.477: Управління в «Всіх» — окремими рядками внизу (поза мережевою базою), у підсумок не входить
+    var isU=function(L){ return !r.uprSel && r.per[L] && r.per[L].upr; };
+    var tab=r.locs.filter(function(L){ return r.per[L]&&r.per[L].any&&!isU(L); }), noTab=r.locs.filter(function(L){ return !(r.per[L]&&r.per[L].any)&&!isU(L); });
+    var uRows=r.locs.filter(isU);
     var rows=tab.map(function(L){ var p=r.per[L], sl=p.kids*n; return {L:L,k:p.kids,v:sl?p.present/sl:0,m:sl?p.marks/sl:0}; })
       .sort(function(x,y){ return x.v-y.v||x.m-y.m; });
     tbl='<div style="overflow-x:auto"><table class="att-dash-t" style="width:100%;font-size:13px;border-collapse:collapse"><thead><tr><th style="text-align:left">Локація</th><th>Дітей</th><th>% відвідуваності</th><th>% відміченості</th></tr></thead><tbody>'
       +rows.map(function(x){ return '<tr style="cursor:pointer" data-loc="'+esc(x.L)+'" onclick="attDashGoTabel(this.dataset.loc)" title="Відкрити табель локації"><td>'+esc(x.L)+'</td><td style="text-align:center">'+x.k+'</td>'
         +'<td style="text-align:center;font-weight:700">'+(n?Math.round(x.v*100)+'%':'—')+'</td>'
         +'<td style="text-align:center;font-weight:'+(x.m<0.9?'700':'400')+';color:'+(x.m<0.9?'#e67e22':'var(--gray)')+'">'+(n?Math.round(x.m*100)+'%':'—')+'</td></tr>'; }).join('')
+      +uRows.map(function(L){ var p=r.per[L], sl=p.kids*n; return '<tr style="cursor:pointer;color:var(--gray)" data-loc="'+esc(L)+'" onclick="attDashGoTabel(this.dataset.loc)" title="Відкрити табель локації"><td>'+esc(L)+' <span style="font-size:10px">· поза мережевою базою</span></td><td style="text-align:center">'+p.kids+'</td>'
+        +'<td style="text-align:center">'+(p.any&&sl?Math.round(p.present/sl*100)+'%':'—')+'</td><td style="text-align:center">'+(p.any&&sl?Math.round(p.marks/sl*100)+'%':'табель не ведеться')+'</td></tr>'; }).join('')
       +noTab.map(function(L){ return '<tr style="color:var(--gray)"><td>'+esc(L)+'</td><td style="text-align:center">'+((r.per[L]||{}).kids||0)+'</td><td colspan="2" style="text-align:center;font-style:italic">табель не ведеться</td></tr>'; }).join('')
       +'</tbody></table><div style="font-size:11px;color:var(--gray);margin-top:6px">Від найменшої відвідуваності · помаранчевим — відмічено менше 90% · клік по рядку — табель локації · «табель не ведеться» — у відсотки не входить</div></div>';
   } else if(S.attDashLoc || !isHR){
