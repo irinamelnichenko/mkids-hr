@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.469
+// m.kids CRM — Google Apps Script v7.470
+// v7.470: scenarios27Create — разовий НОВИЙ аркуш «Scenarios» у «Осокорки сад_27» (дозвіл CFO 22.10.2026); інші аркуші й PAY_READONLY_YEARS без змін.
 // v7.469: файли Payment 2027 — лише читання (PAY_READONLY_YEARS): нова картка / розірвання / перехід пишуть тільки 2026; чистка, бюджет, CF, OPEX (і onEdit), назви груп, пілот 2027 — відмова READ_ONLY.
 // v7.468: постійне обʼєднання груп заняття — каталог «Разом_групи» (кол. J, updateActivity jointGroups); Salary, аналітика й звіти рахують такі групи одним заняттям щодня без 🔗 (явне обʼєднання дня має пріоритет).
 // v7.467: mergeEmployeeDuplicate — повтори дат під одним ключем табеля (історія збережень) більше не блокують злиття; колізії — лише між різними ключами.
@@ -7199,7 +7200,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.469', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.470', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -7350,6 +7351,7 @@ function doGet(e) {
     else if (action === 'previewPayNewContract')       result = payNewContract({cardId:(e.parameter || {}).cardId, dryRun:true});   // v7.433 прев'ю дії 1
     else if (action === 'previewPayTermination')       result = payTermination({cardId:(e.parameter || {}).cardId, date:(e.parameter || {}).date, dryRun:true});   // v7.433 дія 2
     else if (action === 'previewPayTransfer')          result = payGroupTransfer({cardId:(e.parameter || {}).cardId, toGroup:(e.parameter || {}).toGroup, fromGroup:(e.parameter || {}).fromGroup, fromMonth:(e.parameter || {}).fromMonth, dryRun:true});   // v7.433 дія 3
+    else if (action === 'getScenarios27')              result = getScenarios27();                        // v7.470 read-only: аркуш Scenarios Осокорки сад_27
     else if (action === 'previewPay27Clean')           result = pay27Clean({loc:(e.parameter || {}).loc, dryRun:true});   // v7.436 прев'ю чистки Payment 2027
     else if (action === 'previewOpex27')               result = opex27Recalc({loc:(e.parameter || {}).loc, dryRun:true});   // v7.444 прев'ю OPEX 2027 локації
     else if (action === 'getOpex27Auto')               result = {ok:true, auto:_opex27AutoOn()};
@@ -7444,6 +7446,7 @@ function doPost(e) {
     else if (body.action === 'payNewContract')            result = payActionPost(payNewContract, body);     // v7.433 (CFO; dryRun)
     else if (body.action === 'payTermination')            result = payActionPost(payTermination, body);     // v7.433
     else if (body.action === 'payGroupTransfer')          result = payActionPost(payGroupTransfer, body);   // v7.433
+    else if (body.action === 'scenarios27Create')         result = scenarios27Create(body);                 // v7.470 новий аркуш Scenarios у Осокорки сад_27 (CFO; dryRun)
     else if (body.action === 'pay27Clean')                result = pay27Clean(body);                        // v7.436 чистка Payment 2027 (CFO; dryRun)
     else if (body.action === 'pay27Budget')               result = pay27Budget(body);                       // v7.441 бюджет навч 2027 садочків (CFO; dryRun)
     else if (body.action === 'cf27Remap')                 result = cf27Remap(body);                         // v7.443 CF 2027 → справжні заголовки (CFO; dryRun)
@@ -9026,6 +9029,62 @@ var PAY_BASE_YEAR = 2026;   // рік файлів реєстру CONFIG
 var PAY_READONLY_YEARS = {2027: true};
 function _payYearRO(y){ return !!PAY_READONLY_YEARS[Number(y)]; }
 function _payRO(y){ return {ok:false, code:'READ_ONLY', error:'Файли ' + y + ' — лише для читання (рішення CFO 21.10.2026)'}; }
+
+// v7.470 (дозвіл CFO 22.10.2026 — одна дія): НОВИЙ аркуш «Scenarios» у «Осокорки сад_27». Лише вставляє новий аркуш і пише
+//   в нього; інші аркуші файлу не чіпає (без _payFileFor, без проби локалі тимчасовою вкладкою). Аркуш уже є — відмова.
+//   PAY_READONLY_YEARS лишається. POST scenarios27Create {rows:[[назва, 12 чисел]×3], check, dryRun} (CFO); GET getScenarios27.
+var SCEN27_FILE = '1LvSpKnMii9l5h-O_CA6ZABh2CmR0n_ZdFJG7uyZfNbw', SCEN27_TAB = 'Scenarios';
+var SCEN27_LABELS = ['Osokorky Conservative', 'Osokorky Base', 'Osokorky Optimistic'];
+function scenarios27Create(body){
+  try {
+    body = body || {};
+    var dryRun = (body.dryRun !== false);
+    if (!dryRun && !_payCfoOnly(body)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+    var rows = body.rows || [], check = Number(body.check);
+    if (rows.length !== 3 || rows.some(function(r, i){ return !r || r.length !== 13 || r[0] !== SCEN27_LABELS[i] || r.slice(1).some(function(x){ return typeof x !== 'number' || isNaN(x); }); }))
+      return {ok:false, error:'rows: 3 рядки [' + SCEN27_LABELS.join(' / ') + ', 12 чисел]'};
+    if (!(check > 0)) return {ok:false, error:'check — середній чек, число'};
+    var ss = SpreadsheetApp.openById(SCEN27_FILE);
+    if (ss.getSheetByName(SCEN27_TAB)) return {ok:false, error:'Аркуш «' + SCEN27_TAB + '» уже є — нічого не змінено'};
+    var res = {ok:true, dryRun:dryRun, file:ss.getName(), fileId:SCEN27_FILE, tabsBefore:ss.getSheets().map(function(x){ return x.getName(); })};
+    if (dryRun) return res;
+    var sh = ss.insertSheet(SCEN27_TAB, ss.getSheets().length);
+    sh.getRange('A1:A2').setValues([['Scenario'], ['Avg check']]);
+    sh.getRange('B1').setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(['Conservative', 'Base', 'Optimistic'], true).setAllowInvalid(false).build()).setValue('Base');
+    sh.getRange('B2').setValue(check);
+    sh.getRange('B3:M3').setValues([['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']]);
+    sh.getRange('A4:M6').setValues(rows);
+    sh.getRange('A8:A9').setValues([['New per month'], ['New total']]);
+    var put = function(sep){
+      var f8 = [], f9 = [];
+      for (var c = 2; c <= 13; c++){
+        var L = _colLetter(c - 1), P = _colLetter(c - 2);   // _colLetter — 0-based
+        f8.push('=INDEX(' + L + '$4:' + L + '$6' + sep + 'MATCH("Osokorky "&$B$1' + sep + '$A$4:$A$6' + sep + '0))');
+        f9.push(c === 2 ? '=B8' : '=' + P + '9+' + L + '8');
+      }
+      sh.getRange('B8:M9').setFormulas([f8, f9]);
+      SpreadsheetApp.flush();
+      return sh.getRange('B8:M8').getDisplayValues()[0].every(function(v){ return v !== '' && !/^#/.test(v); });
+    };
+    var sep = ';';
+    if (!put(sep)){ sep = ','; if (!put(sep)) res.formulaWarning = 'формули рядка 8 дають помилку з обома роздільниками'; }
+    res.sep = sep;
+    res.tabsAfter = ss.getSheets().map(function(x){ return x.getName(); });
+    res.sheet = getScenarios27().sheet;
+    try { _moneyJournalLog([{by:body.by || 'система', route:'scenarios27Create', loc:'Осокорки', name:'', year:2027, month:'', col:'новий аркуш Scenarios',
+      before:'', after:'A1:M9', reason:'дозвіл CFO 22.10.2026 на одну дію у файлі 2027'}]); } catch(_j){}
+    return res;
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+function getScenarios27(){
+  try {
+    var ss = SpreadsheetApp.openById(SCEN27_FILE), sh = ss.getSheetByName(SCEN27_TAB);
+    if (!sh) return {ok:true, file:ss.getName(), exists:false};
+    var R = sh.getRange('A1:M9'), dv = sh.getRange('B1').getDataValidation();
+    return {ok:true, file:ss.getName(), fileId:SCEN27_FILE, exists:true, tabs:ss.getSheets().map(function(x){ return x.getName(); }),
+      sheet:{values:R.getDisplayValues(), formulas:R.getFormulas(), b1List:dv ? dv.getCriteriaValues()[0] : null}};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
 var PAY_SPLIT_TAB = 'Переходи_Payment';
 var PAY_SPLIT_HEADER = ['Локація','Рік','ПІБ','ID картки','З групи','У групу','З місяця','Хто','Коли'];
 
