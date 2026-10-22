@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.491
+// m.kids CRM — Google Apps Script v7.492
+// v7.492: ping — діагностика CLI_TOKEN без розкриття значення (задано / довжина / перші 8 символів SHA-256).
 // v7.491: підготовка до AUTH_ENFORCE — CLI_TOKEN (службовий токен терміналу, права CFO, з властивостей скрипта);
 //   getLoginUsers — публічний список для екрана входу (ім'я, логін, роль, локація; лише керівники, без email і дат).
 // v7.490: тимчасову devDirToken прибрано (перевірку дашборда директора Бігової пройдено 22.10.2026).
@@ -7189,6 +7190,13 @@ function _isFounderReq(body){
   try { return !!_getActor(id).founder; } catch(_e){ return false; }
 }
 
+function _cliInfo(){   // v7.492: лише ознаки, не значення
+  try { var raw = PropertiesService.getScriptProperties().getProperty('CLI_TOKEN'), t = String(raw == null ? '' : raw);
+    var keys = PropertiesService.getScriptProperties().getKeys().filter(function(k){ return /cli/i.test(k); });
+    var h = t ? Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, t.trim(), Utilities.Charset.UTF_8).map(function(b){ return ('0' + ((b + 256) % 256).toString(16)).slice(-2); }).join('').slice(0, 8) : '';
+    return {set:raw != null, len:t.length, trimmedLen:t.trim().length, h8:h, keys:keys};
+  } catch(e){ return {error:String(e && e.message || e)}; }
+}
 function _cliToken(){
   try { var t = String(PropertiesService.getScriptProperties().getProperty('CLI_TOKEN') || '').trim(); return t.length >= 32 ? t : ''; } catch(_e){ return ''; }
 }
@@ -7296,7 +7304,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.491', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.492', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
