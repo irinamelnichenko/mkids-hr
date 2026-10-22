@@ -157,7 +157,13 @@ input,select,textarea{font-family:inherit}
 .card-hd h3{font-size:14px;font-weight:700;color:var(--dark)}
 
 /* STATS */
-.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:16px;margin-bottom:22px}
+.stats-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:16px;margin-bottom:22px}
+/* v7.493: стабільна сітка — завжди 5 у рядку на широкому екрані (раніше auto-fit: поява смуги прокрутки ламала рядок 5→4) */
+html{scrollbar-gutter:stable}
+@media(max-width:1100px){.stats-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:760px){.stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:420px){.stats-grid{grid-template-columns:minmax(0,1fr)}}
+.stat-card>div:last-child{min-width:0}
 .stat-card{background:#fff;border-radius:var(--r);padding:18px;box-shadow:var(--sh);
   display:flex;align-items:center;gap:14px;transition:transform .2s}
 .stat-card:hover{transform:translateY(-2px)}
@@ -3295,7 +3301,24 @@ function _dashLive(){
 function _kompFirstRows(list){ var seen={}; return (list||[]).filter(function(l){ var k=_kompNorm(l.loc); if(seen[k]) return false; seen[k]=1; return true; }); }
 function dashKompSetMonth(m){ S.dashKompMonth=+m; _renderDashNow(); } // оцінки — за рік, місяць їх не змінює
 function dashKpiSetQuarter(q){ S.dashKpiQuarter=+q; _renderDashNow(); }
-function dashKompToggle(k){ S.dashKompOpen=(S.dashKompOpen===k)?null:k; _renderDashNow(); } // розгортання плиток (одна за раз)
+function dashKompToggle(k){ S.dashKompOpen=(S.dashKompOpen===k)?null:k; _renderDashNow(); } // v7.493: деталі — у вікні (одна за раз)
+function dashKompClose(){ S.dashKompOpen=null; _dashPop('mKompP',''); _renderDashNow(); }
+function dashDrillClose(){ S.dashDrill=null; _dashPop('mDrillP',''); _renderDashNow(); }
+// v7.493: значення плитки — повністю, без «…»: довше значення → менший шрифт.
+function _dashValStyle(v){ var n=String(v==null?'':v).replace(/<[^>]*>/g,'').length;
+  return 'white-space:nowrap;font-size:'+(n<=7?'clamp(18px,2.1vw,26px)':n<=11?'clamp(15px,1.5vw,20px)':'clamp(13px,1.2vw,16px)'); }
+// v7.493: деталі плиток — у вікні поверх сторінки (сітка не перебудовується). html '' — закрити.
+function _dashPop(id, html, closer){
+  var m=document.getElementById(id);
+  if(!html){ if(m) m.classList.add('hidden'); return; }
+  if(!m){ m=document.createElement('div'); m.id=id; m.className='modal-ov hidden';
+    m.innerHTML='<div class="modal" style="max-width:1050px;position:relative"><button class="modal-close" style="position:absolute;top:10px;right:12px;z-index:2" onclick="'+closer+'()">✕</button><div id="'+id+'Bd"></div></div>';
+    m.onclick=function(e){ if(e.target===m) window[closer](); };
+    document.body.appendChild(m); }
+  var bd=document.getElementById(id+'Bd'), st=bd.parentNode.scrollTop;
+  bd.innerHTML=html; bd.parentNode.scrollTop=st;
+  m.classList.remove('hidden');
+}
 function dashCfoSetMonth(v){ S.dashCfoMonth=Number(v); _renderDashNow(); } // CFO: 1..12 місяць, 0 = за рік
 
 function _renderKompBlock(){
@@ -3442,7 +3465,7 @@ function _renderKompBlock(){
   };
   function _tile(k){ var t=tileDefs[k]; var op=(open===k);
     return '<div class="stat-card" onclick="dashKompToggle(\''+k+'\')" style="cursor:pointer;'+(op?'outline:2px solid #2980b9;outline-offset:-2px;':'')+'">'+
-      '<div class="stat-icon '+t.cls+'">'+t.ic+'</div><div style="min-width:0;flex:1"><div class="stat-val" style="font-size:clamp(18px,2.1vw,26px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="'+esc(String(t.full||t.val))+'">'+t.val+'</div>'+
+      '<div class="stat-icon '+t.cls+'">'+t.ic+'</div><div style="min-width:0;flex:1"><div class="stat-val" style="'+_dashValStyle(t.val)+'" title="'+esc(String(t.full||t.val))+'">'+t.val+'</div>'+
       '<div class="stat-lbl">'+t.lbl+' '+(op?'▾':'▸')+'</div>'+
       '<div style="font-size:11px;color:var(--gray)">'+t.sub+'</div></div></div>';
   }
@@ -3461,7 +3484,7 @@ function _renderKompBlock(){
     // v7.400: суми — без копійок; у плитках — коротко (млн/тис), повне значення — у підказці
     var fmtG=function(n){ return n==null?'—':Math.round(Number(n)||0).toLocaleString('uk-UA')+' ₴'; };
     var fmtShort=function(n){ var v=Number(n)||0, a=Math.abs(v);
-      if(a>=1e6) return (v/1e6).toFixed(2).replace('.',',')+' млн ₴';
+      if(a>=1e6) return (v/1e6).toFixed(1).replace('.',',')+' млн ₴';   // v7.493: «1,2 млн ₴»
       if(a>=1e4) return Math.round(v/1e3).toLocaleString('uk-UA')+' тис ₴';
       return fmtG(v); };
     var cm=(S.dashCfoMonth==null)?(new Date().getMonth()+1):Number(S.dashCfoMonth); // 0 = за рік
@@ -3577,10 +3600,10 @@ function _renderKompBlock(){
     _panels.term=_cfoHd('🚪 Причини розірвання',perLbl+' '+y)+termTbl;
     _panels.p2r=_cfoHd('⚖️ Фонд ЗП до обороту',perLbl+' '+y+' · фонд/оборот')+p2rTbl;
   }
+  S._kompPanels=_panels;   // v7.493: для вікна деталей
   var _allTiles=_tile('fill')+_tile('free')+_tile('kpi')+_tile('rate')+(cfoOn?(_tile('debt')+_tile('salpay')+_tile('margin')+_tile('p2r')+_tile('term')):dirOn?_tile('debt'):'');
   return `
-    <div class="stats-grid" style="margin-bottom:16px">${_allTiles}</div>
-    ${_panelFor(['fill','free','kpi','rate','debt','salpay','margin','p2r','term'])}`;
+    <div class="stats-grid" style="margin-bottom:16px">${_allTiles}</div>`;   // v7.493: деталі — у вікні (_dashPop), не в сітці
 }
 
 // v7.403: миттєве відкриття — дашборд показав дані з кешу браузера; прийшли свіжіші → тихо перечитуємо
@@ -4833,7 +4856,6 @@ function dashDrill(tile, loc, group){
   if(tile && !loc && !group && d.tile===tile && !d.loc) { S.dashDrill=null; }   // повторний клік по плитці — згорнути
   else S.dashDrill={tile:tile||d.tile, loc:loc||null, group:group||null};
   _renderDashNow();
-  var p=document.getElementById('dashDrillPanel'); if(p && S.dashDrill) p.scrollIntoView({block:'nearest',behavior:'smooth'});
 }
 function _dashDrillAttr(tile,loc,group){ // безпечний onclick: аргументи через JSON → HTML-атрибут
   return 'onclick="dashDrill('+esc(JSON.stringify(tile))+','+esc(JSON.stringify(loc||null))+','+esc(JSON.stringify(group||null))+')"';
@@ -4884,7 +4906,7 @@ function _renderDashDrill(tree){
           +'<div style="font-size:13px;line-height:1.7;margin-left:10px">'+g.kids.map(_dashKidLink).join('<br>')+'</div></div>'; }).join('')+'</details>'; }).join('')+'</div>';
   }
   return '<div class="card" id="dashDrillPanel" style="margin:14px 0 0"><div class="card-hd" style="flex-wrap:wrap;gap:6px"><h3 style="font-size:15px">'+crumbs.join(' <span style="color:var(--gray)">›</span> ')+'</h3>'
-    +'<button class="btn btn-secondary btn-sm" onclick="S.dashDrill=null;_renderDashNow()">✕ Згорнути</button></div>'+body
+    +'</div>'+body
     +'<div style="font-size:11px;color:var(--gray);padding:6px 14px 10px">Діти — активні картки; група — з Payment поточного місяця. Клік на дитину відкриває її картку.</div></div>';
 }
 function _renderDashNow(){
@@ -4945,7 +4967,6 @@ function _renderDashNow(){
       <div class="stat-card"><div class="stat-icon si-y">🆕</div><div><div class="stat-val">${hired.length}</div><div class="stat-lbl">Прийнято (${perLbl})</div></div></div>
       <div class="stat-card"><div class="stat-icon si-r">🚪</div><div><div class="stat-val">${fired.length}</div><div class="stat-lbl">Звільнено (${perLbl})</div></div></div>
     </div>
-    ${_payReady?_renderDashDrill(_tree):''}
     <div style="height:16px"></div>
     ${_renderKompBlock()}
     ${isHR&&!_dashLite()?_renderContrBlock():''}
@@ -4973,6 +4994,10 @@ function _renderDashNow(){
       <div class="card"><div class="card-hd"><h3>⭐ NPS (клієнти)</h3></div><div class="empty"><span class="ei">📭</span><h4>Дані не завантажено</h4><p>Чекаємо таблицю</p></div></div>
     </div>`:''}
   `);
+  // v7.493: деталі плиток — у вікні; оновлюються разом із даними дашборда
+  _dashPop('mDrillP', (S.dashDrill&&_payReady)?_renderDashDrill(_tree):'', 'dashDrillClose');
+  var _kp=S.dashKompOpen&&S._kompPanels&&S._kompPanels[S.dashKompOpen];
+  _dashPop('mKompP', _kp?'<div class="card" style="box-shadow:none;margin:0">'+_kp+'</div>':'', 'dashKompClose');
 }
 
 // ─── v6.45: КАРТКА ЛОКАЦІЇ ───────────────────────────────────────────────────
