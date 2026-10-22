@@ -3163,6 +3163,14 @@ function dispatchHashView(){
     return;
   }
   _applyLocScopedPerms();   // v7.247: права локації — до перевірки #hash
+  // v7.476: deep-link з дашборда на табель локації: #att-<локація>[~YYYY-MM] → місяць цієї локації
+  if (h.indexOf('att-') === 0) {
+    var _ap = decodeURIComponent(h.slice(4)).split('~');
+    if (_ap[0]) { S.attLoc = _ap[0]; S.attLocType = ''; S.attGroup = ''; }
+    S.attMode = 'month'; if (/^\d{4}-\d{2}$/.test(_ap[1] || '')) S.attMonth = _ap[1];
+    S._attCloudLoaded = {};
+    h = 'attendance_kids';
+  }
   var allowed = PERMISSIONS[S.user && S.user.role];
   var hasPerm = (allowed === 'all') || (Array.isArray(allowed) && allowed.indexOf(h) >= 0);
   if (!hasPerm) {
@@ -6332,11 +6340,12 @@ function attLocHasTabel(loc, ids){
   var t=today(), set={}; ids.forEach(function(id){ set[id]=1; });
   return Object.keys(S.att).some(function(d){ if(d>t) return false; var a=S.att[d]||{}; for(var id in a){ if(set[id]) return true; } return false; });
 }
-// v7.474/7.475: підсумок табеля за період — середні за робочий день замість суми позначок.
-//   База — attActiveKid обраних локацій (з групою — лише діти цієї групи сітки). Локації без табеля — окремо,
-//   у відсотки не йдуть. Лише Управління обране — база з ростера табеля (у мережеву базу воно не входить).
-function attPeriodStats(locs, group, days){
-  var wd=attPastWorkdays(days), t=today(), tw=(pd(t)||new Date()).getDay();
+// v7.474–7.476: підсумок табеля за період. База — attActiveKid обраних локацій (з групою — лише діти цієї групи
+//   сітки). Локації без табеля — окремо, у відсотки не йдуть. Лише Управління обране — база з ростера табеля.
+//   День — обраний день як є (сьогодні теж); Тиждень/Місяць/Рік — середнє за минулі робочі дні (без сьогодні).
+function attPeriodStats(locs, group, days, isDay){
+  var t=today();
+  var wd=isDay?days.filter(function(d){ var w=(pd(d)||new Date(d)).getDay(); return w!==0&&w!==6&&d<=t; }):attPastWorkdays(days);
   var c={present:0,sick:0,vacation:0,absent:0}, marks=0;
   var gIds=null;
   if(group){ gIds={}; locs.forEach(function(loc){ attGroups(loc).forEach(function(g){ if(g.group===group) g.children.forEach(function(ch){ gIds[ch.id]=1; }); }); }); }
@@ -6353,35 +6362,55 @@ function attPeriodStats(locs, group, days){
     if(!attLocHasTabel(loc,a)){ noTab.push([loc,a.length]); return; }
     base+=a.length; Array.prototype.push.apply(ids,a); });
   ids.forEach(function(id){ wd.forEach(function(d){ var st=(S.att[d]||{})[id]||''; if(c[st]!==undefined){ c[st]++; marks++; } }); });
-  var td={on:days.indexOf(t)>=0 && tw!==0 && tw!==6, present:0, marks:0};
-  if(td.on) ids.forEach(function(id){ var st=(S.att[t]||{})[id]||''; if(!st) return; td.marks++; if(st==='present') td.present++; });
-  return {kids:kids, base:base, noTab:noTab, uprOnly:uprOnly, wd:wd.length, marks:marks, c:c, today:td};
+  return {kids:kids, base:base, ids:ids, noTab:noTab, uprOnly:uprOnly, isDay:!!isDay, wdList:wd, wd:wd.length, marks:marks, c:c};
 }
+var ATT_SUM_ROWS=[['present','✅ Присутні','var(--green)'],['sick','🤒 Хворі','var(--orange)'],['vacation','🏖 Відпустка','var(--blue2)'],['absent','🚫 Інше','var(--red2)']];
+// v7.476: ОДИН блок — 4 картки (ціле число + % від активних дітей) і під ними дрібно «Активних дітей N · відмічено X%».
 function attStatsHtml(st, note){
   var n=st.wd, slots=st.base*n;
-  function avg(x){ if(!n) return '—'; var v=x/n; return String(Math.round(v*10)/10); }
-  function pct(x,b){ return b?Math.round(x/b*1000)/10+'%':'—'; }
-  function card(val,lbl,col){ return '<div class="att-stat"><div class="att-stat-n"'+(col?' style="color:'+col+'"':'')+'>'+val+'</div><div class="att-stat-l">'+lbl+'</div></div>'; }
-  var todayHtml=st.today.on
-    ? '<div class="att-stats" style="background:#e8f8f0"><div style="font-size:12px;font-weight:700;color:var(--dark);margin-right:6px">Сьогодні</div>'
-      +card(st.today.present+' / '+st.base,'✅ присутні / активні','var(--green)')
-      +card(pct(st.today.present,st.base),'% відвідуваності','var(--green)')
-      +card(pct(st.today.marks,st.base),'📝 % відміченості')
-      +'<div style="font-size:11px;color:var(--gray)">табель ще заповнюють — у середні нижче сьогодні не йде</div></div>'
-    : '';
-  var noTab=st.noTab.length?' · <b>табель не ведеться:</b> '+st.noTab.map(function(x){ return esc(x[0])+' ('+x[1]+')'; }).join(', ')+' — у відсотки не входить':'';
-  return todayHtml+(n||!st.today.on?'<div class="att-stats">'
-    +card(avg(st.c.present),'✅ Присутніх за день','var(--green)')
-    +card(pct(st.c.present,slots),'% відвідуваності','var(--green)')
-    +card(avg(st.c.sick),'🤒 Хворих за день','var(--orange)')
-    +card(avg(st.c.vacation),'🏖 Відпустка за день','var(--blue2)')
-    +card(avg(st.c.absent),'🚫 Інше за день','var(--red2)')
-    +card(pct(st.marks,slots),'📝 % відміченості')
-    +'</div>':'')
-    +'<div style="font-size:11px;color:var(--gray);margin:-4px 0 10px">Активних дітей: '+st.kids+(st.base!==st.kids?' (у розрахунку '+st.base+')':'')
-    +(st.uprOnly?' — Управління: з ростера табеля, поза мережевою базою':'')
-    +' · робочих днів: '+n+' (пн–пт, без сьогодні й майбутніх)'
-    +' · позначок: '+st.marks+' (✅ '+st.c.present+' · 🤒 '+st.c.sick+' · 🏖 '+st.c.vacation+' · 🚫 '+st.c.absent+')'+noTab+(note?' · '+note:'')+'</div>';
+  function val(x){ return n?String(Math.round(x/n)):'—'; }
+  function pct(x){ return slots?Math.round(x/slots*100)+'%':'—'; }
+  var cards=ATT_SUM_ROWS.map(function(r){
+    return '<div class="att-stat" style="min-width:96px"><div class="att-stat-n" style="color:'+r[2]+';font-size:24px">'+val(st.c[r[0]])+'</div>'
+      +'<div style="font-size:12px;font-weight:700;color:'+r[2]+'">'+pct(st.c[r[0]])+'</div><div class="att-stat-l">'+r[1]+'</div></div>';
+  }).join('');
+  var per=st.isDay?(n?'за день':'день ще не настав або вихідний'):'середнє за день · робочих днів: '+n+' (пн–пт, без сьогодні)';
+  var noTab=st.noTab.length?' · табель не ведеться: '+st.noTab.map(function(x){ return esc(x[0])+' ('+x[1]+')'; }).join(', '):'';
+  return '<div class="att-stats">'+cards+'</div>'
+    +'<div style="font-size:11px;color:var(--gray);margin:-6px 0 10px">Активних дітей '+st.kids+(st.base!==st.kids?' (у розрахунку '+st.base+')':'')
+    +' · відмічено '+pct(st.marks)+' · '+per
+    +(st.uprOnly?' · Управління — з ростера табеля, поза мережевою базою':'')+noTab+(note?' · '+note:'')+'</div>';
+}
+// v7.476: підсумок по днях (рядки Присутні / Хворі / Відпустка / Інше) — одразу під картками, по базі активних дітей.
+//   Останній стовпець — середнє за день (ціле) по минулих робочих днях. Рік — по місяцях (середнє за день місяця).
+function attSummaryTable(st, cols){
+  if(!cols.length || !st.ids.length) return '';
+  function cnt(days, key){ var n=0; days.forEach(function(d){ var a=S.att[d]||{}; st.ids.forEach(function(id){ if((a[id]||'')===key) n++; }); }); return n; }
+  var th='<th class="nc" style="position:sticky;left:0;z-index:1;background:#f8fafc"></th>'+cols.map(function(c){
+    return '<th style="font-size:10px;font-weight:600;min-width:30px;'+(c.today?'background:#e8f8f0;color:var(--green)':'')+'">'+c.lbl+'</th>'; }).join('')
+    +'<th style="font-size:10px;min-width:56px;background:#eef6ff">Середнє<br>за день</th>';
+  var body=ATT_SUM_ROWS.map(function(r){
+    var cells=cols.map(function(c){
+      if(c.off) return '<td style="background:#f1f3f5"></td>';
+      var v=c.month ? (c.wd.length?Math.round(cnt(c.wd,r[0])/c.wd.length):'') : cnt([c.d],r[0]);
+      return '<td style="text-align:center;font-size:11px;font-weight:700;color:'+r[2]+'">'+(c.month?v:(v||''))+'</td>';
+    }).join('');
+    var avg=st.wd?Math.round(cnt(st.wdList,r[0])/st.wd):'—';
+    return '<tr><td class="nc" style="position:sticky;left:0;z-index:1;background:#fff;font-size:11px;font-weight:600;color:var(--gray);white-space:nowrap">'+r[1]+'</td>'+cells
+      +'<td style="text-align:center;font-size:12px;font-weight:800;color:'+r[2]+';background:#eef6ff">'+avg+'</td></tr>';
+  }).join('');
+  return '<div class="att-wrap" style="margin-bottom:12px"><table class="att-table" style="border-collapse:collapse"><thead><tr>'+th+'</tr></thead><tbody>'+body+'</tbody></table></div>';
+}
+function attSummaryCols(mode, days){
+  var td=today();
+  if(mode==='year'){
+    return CFG.MONTHS_SHORT.map(function(m,i){
+      var md=attPastWorkdays(attGetMonthWorkdays(S.attYear+'-'+String(i+1).padStart(2,'0')));
+      return {lbl:m, month:true, wd:md, off:!md.length};
+    });
+  }
+  return days.map(function(d){ var w=(pd(d)||new Date(d)).getDay();
+    return {d:d, lbl:(mode==='week'?DAY_UA[w]+' ':'')+(+d.slice(8)), today:d===td, off:w===0||w===6||d>td}; });
 }
 
 // Перший/останній день місяця ym='YYYY-MM'
@@ -6612,8 +6641,9 @@ function renderAttendance(){
   else if(S.attMode==='year'){
     var yDays=[];
     for(var ym=1;ym<=12;ym++) yDays=yDays.concat(attGetMonthWorkdays(S.attYear+'-'+(ym<10?'0'+ym:''+ym)));
-    var stats=attStatsHtml(attPeriodStats(activeLocs,activeGroup,yDays),
-      yearLoad?'':'⚠️ рік по всіх локаціях повністю не завантажується — для точних цифр оберіть локацію');
+    var _yst=attPeriodStats(activeLocs,activeGroup,yDays,false);
+    var stats=attStatsHtml(_yst, yearLoad?'':'⚠️ рік по всіх локаціях повністю не завантажується — для точних цифр оберіть локацію')
+      +attSummaryTable(_yst, attSummaryCols('year'));
     // Збір для XLSX — по дитині 12 місяців к-сті присутніх днів.
     S._attExport={mode:'year',year:S.attYear,loc:locLabel,rows:[]};
     activeLocs.forEach(function(loc){
@@ -6656,25 +6686,10 @@ function renderAttendance(){
     });
   });
 
-  var stats=attStatsHtml(attPeriodStats(activeLocs,activeGroup,statDays));
+  var _st=attPeriodStats(activeLocs,activeGroup,statDays,S.attMode==='day');
+  var stats=attStatsHtml(_st)+(S.attMode==='day'?'':attSummaryTable(_st, attSummaryCols(S.attMode,statDays)));
 
   main.innerHTML=migBanner+typeChips+infoLine+modeBar+stats+content;
-}
-
-// v7.438: підсумок ПО КОЖНОМУ ДНЮ під сіткою (Тиждень / Місяць): присутні, хворі, відпустка, інше (відсутні).
-//   ids — діти, що показані в сітці; tail — скільки підсумкових колонок праворуч (у «Місяці» — 4: ✅ 🤒 🏖 🚫).
-function attDayFoot(days, ids, tail){
-  var ROWS=[['present','✅ Присутні','var(--green)'],['sick','🤒 Хворі','var(--orange)'],['vacation','🏖 Відпустка','var(--blue2)'],['absent','🚫 Інше','var(--red2)']];
-  return '<tfoot>'+ROWS.map(function(r, ri){
-    var tot=0, bt=(ri===0?';border-top:2px solid var(--gray2)':'');
-    var cells=days.map(function(d){
-      var att=S.att[d]||{}, n=0; ids.forEach(function(id){ if((att[id]||'')===r[0]) n++; }); tot+=n;
-      return '<td style="text-align:center;font-size:11px;font-weight:700;color:'+r[2]+';background:#f8fafc'+bt+'">'+(n||'')+'</td>';
-    }).join('');
-    var tailHtml='';
-    for(var k=0;k<tail;k++) tailHtml+='<td style="text-align:center;font-size:11px;font-weight:700;color:'+r[2]+';background:#f8fafc'+bt+'">'+(k===ri?tot:'')+'</td>';
-    return '<tr><td class="nc" style="position:sticky;left:0;z-index:1;background:#f8fafc;font-size:11px;font-weight:600;color:var(--gray)'+bt+'">'+r[1]+'</td>'+cells+tailHtml+'</tr>';
-  }).join('')+'</tfoot>';
 }
 
 function renderAttendanceWeek(locs,group){
@@ -6696,7 +6711,7 @@ function renderAttendanceWeek(locs,group){
     +days.map(function(d){ var dow=pd(d).getDay(); return '<th style="min-width:70px;'+(d===todayStr?'background:#e8f8f0;color:var(--green)':'')+'">'+DAY_UA[dow]+'<br><span style="font-weight:400;font-size:10px">'+fmtD(d)+'</span></th>'; }).join('')
     +'</tr>';
 
-  var rows='', shownIds=[];   // v7.438 діти в сітці — для підсумку по днях
+  var rows='';
   locs.forEach(function(loc){
     var locGroups=attGroups(loc);
     if(!locGroups.length) return;
@@ -6707,7 +6722,6 @@ function renderAttendanceWeek(locs,group){
       g.children.forEach(function(ch){
         var streak=getSickStreak(ch.id,todayStr);
         var streakHtml=streak>=3?'<span class="att-streak">'+streak+'д🤒</span>':'';
-        shownIds.push(ch.id);
         rows+='<tr><td class="nc" title="'+esc(ch.name)+'">'+esc(ch.name.split(' ').slice(0,2).join(' '))+streakHtml+'</td>';
         days.forEach(function(d){
           var st=(S.att[d]||{})[ch.id]||'';
@@ -6722,7 +6736,7 @@ function renderAttendanceWeek(locs,group){
 
   if(!rows) return '<div class="empty"><span class="ei">👶</span><h4>Немає дітей для цієї локації</h4><p>Завантажте дані оплат</p></div>';
 
-  return nav+'<div class="att-wrap"><table class="att-table"><thead>'+thead+'</thead><tbody>'+rows+'</tbody>'+attDayFoot(days,shownIds,0)+'</table></div>'
+  return nav+'<div class="att-wrap"><table class="att-table"><thead>'+thead+'</thead><tbody>'+rows+'</tbody></table></div>'
     +'<p style="font-size:11px;color:var(--gray);margin-top:8px">Клікайте по кнопці щоб змінити статус: — → ✅ → 🤒 → 🏖 → 🚫 → —</p>';
 }
 
@@ -6811,7 +6825,7 @@ function renderAttendanceMonth(locs,group){
     +'</tr></thead>';
 
   var tbody='<tbody>';
-  var anyRows=false, shownIds=[];   // v7.438
+  var anyRows=false;
   locs.forEach(function(loc){
     var locGroups=attGroups(loc);
     if(!locGroups.length) return;
@@ -6821,7 +6835,6 @@ function renderAttendanceMonth(locs,group){
       anyRows=true;
       tbody+='<tr class="grp-row"><td colspan="'+(days.length+5)+'">📚 '+esc(g.group)+(_grpTail(g.group,g.teacher)?' · '+esc(_grpTail(g.group,g.teacher)):'')+'</td></tr>';
       g.children.forEach(function(ch){
-        shownIds.push(ch.id);
         var cp=0,cs=0,cv=0,ca=0;
         var cells=days.map(function(d){
           var st=(S.att[d]||{})[ch.id]||'';
@@ -6850,7 +6863,7 @@ function renderAttendanceMonth(locs,group){
 
   return nav
     +'<div class="att-wrap" style="overflow-x:auto;max-width:100%">'
-    +'<table class="att-table" style="border-collapse:collapse">'+thead+tbody+attDayFoot(days,shownIds,4)+'</table></div>'
+    +'<table class="att-table" style="border-collapse:collapse">'+thead+tbody+'</table></div>'
     +'<p style="font-size:11px;color:var(--gray);margin-top:8px">Клікайте по клітинці щоб змінити статус</p>';
 }
 
