@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.490
+// m.kids CRM — Google Apps Script v7.491
+// v7.491: підготовка до AUTH_ENFORCE — CLI_TOKEN (службовий токен терміналу, права CFO, з властивостей скрипта);
+//   getLoginUsers — публічний список для екрана входу (ім'я, логін, роль, локація; лише керівники, без email і дат).
 // v7.490: тимчасову devDirToken прибрано (перевірку дашборда директора Бігової пройдено 22.10.2026).
 // v7.489: токен — UTF-8 (кирилиця в loc губилась у «??????»; старі токени приймаються); директор — локація з «Користувачів» за id,
 //   зіставлення з реєстром локацій.
@@ -7187,9 +7189,29 @@ function _isFounderReq(body){
   try { return !!_getActor(id).founder; } catch(_e){ return false; }
 }
 
+function _cliToken(){
+  try { var t = String(PropertiesService.getScriptProperties().getProperty('CLI_TOKEN') || '').trim(); return t.length >= 32 ? t : ''; } catch(_e){ return ''; }
+}
+// v7.491: список для екрана входу — БЕЗ токена. Лише активні керівники (ролі локацій входять через вкладки локацій),
+//   лише ім'я / логін / роль / локація — без email, дат входу й паролів.
+function getLoginUsers(){
+  try {
+    var v = _getUsersSheet().getDataRange().getValues(), LOCR = {director:1, nurse:1, vyhovatel:1}, out = [];
+    for (var i = 1; i < v.length; i++){
+      if (!v[i][0]) continue;
+      var u = _parseUserRow(v[i]), r = String(u.role || '').toLowerCase().trim();
+      if (!u.active || LOCR[r] || _roleRetired(r)) continue;
+      out.push({name:u.name, login:u.login, role:r, loc:u.loc, active:true});
+    }
+    return {ok:true, users:out};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
 function _authGate(action, token, method){
   _CURRENT_AUTH = null; _AUTH_STALE = ''; _ENTRY_AUTHOR_CACHE = null;   // v7.372: автор — на кожен запит заново
-  if (action === 'ping' || action === 'authenticate') return null;       // завжди без токена
+  if (action === 'ping' || action === 'authenticate' || action === 'getLoginUsers') return null;   // завжди без токена (v7.491 + список для входу)
+  // v7.491: службовий токен терміналу (властивість CLI_TOKEN, ≥ 32 символи) — права CFO (id 1). Без властивості не діє.
+  var _cli = _cliToken();
+  if (_cli && token && String(token) === _cli){ _CURRENT_AUTH = {id:1, role:'cfo', loc:'', cli:true}; return null; }
   var payload = _verifyToken(token);
   if (payload && _roleRetired(payload.role)) payload = null;              // v7.440: токен скасованої ролі (COO) — як без токена
   if (payload){ _CURRENT_AUTH = _founderAsCfo(payload); return null; }    // валідний токен
@@ -7274,7 +7296,8 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.490', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.491', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();

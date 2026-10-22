@@ -476,11 +476,13 @@ var SESSION_KEY='mkids_session', SESSION_TTL_MS = 7 * 24 * 3600 * 1000;
   }
   function _checkTok(){
     var s; try { s = JSON.parse(localStorage.getItem('mkids_session') || 'null'); } catch(_e){ return true; }
-    if (!s || !s.user || !(Number(s.user.id) > 0)) return true;
+    if (!s || !s.user) return true;
+    if (!(Number(s.user.id) > 0)){ _kick(); return false; }   /* v7.491: сесія без id (старий вхід за паролем сторінки) — недійсна */
     var t = String(s.token || '');
     if (!t || _tokExpired(t)){ _kick(); return false; }
     return true;
   }
+  try { _checkTok(); } catch(_e){}   /* v7.491: перевірка сесії одразу при завантаженні, а не лише при першому запиті */
   // ── v7.403: stale-while-revalidate — дії, які можна віддавати з кешу (лише читання, важкі) ──
   var SWR_ACTIONS = {getPaymentsYearly:1, getPayments:1, getEmployees:1, getKomplektaciyaData:1, getGroupNorms:1,
     getLocationCapacity:1, getLocationCards:1, getSalaryOverview:1, getOpexOverview:1, getOverviewAnalytics:1,

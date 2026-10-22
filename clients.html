@@ -1178,7 +1178,6 @@ var CFG = {
   LOC_CACHE:     'crm_locs_v3',
   PAY_CACHE:     'crm_pay_v3',
   CLI_CACHE:     'crm_cli_v3',
-  PW_HR:         'hr2024',
   TTL:           15 * 60 * 1000,
   // v7.109 БЕЗПЕКА: прямий API_KEY і CRM_SHEET_ID прибрано — усі читання через бекендні роути.
   MONTHS_UA:    ['січень','лютий','березень','квітень','травень','червень','липень','серпень','вересень','жовтень','листопад','грудень'],
@@ -1445,14 +1444,6 @@ function translitUA(str){
     'і':'i','ї':'i','й':'y','к':'k','л':'l','м':'m','н':'n','о':'o','п':'p','р':'r','с':'s',
     'т':'t','у':'u','ф':'f','х':'kh','ц':'ts','ч':'ch','ш':'sh','щ':'shch','ь':'','ю':'yu','я':'ya'};
   return str.toLowerCase().split('').map(function(c){ return T[c]!==undefined?T[c]:(/[a-z0-9]/.test(c)?c:''); }).join('');
-}
-function genDirPw(loc){
-  try{ var m=JSON.parse(localStorage.getItem('hr_dir_pw')||'{}'); return m[loc]||translitUA(loc)+'2025'; }
-  catch(e){ return translitUA(loc)+'2025'; }
-}
-function genNursePw(loc){
-  try{ var m=JSON.parse(localStorage.getItem('hr_nurse_pw')||'{}'); return m[loc]||translitUA(loc)+'med'; }
-  catch(e){ return translitUA(loc)+'med'; }
 }
 
 // ─── PHONE FORMAT ─────────────────────────────────────────────────────────────
@@ -2394,11 +2385,13 @@ var SESSION_TTL_MS = 7 * 24 * 3600 * 1000;
   }
   function _checkTok(){
     var s; try { s = JSON.parse(localStorage.getItem('mkids_session') || 'null'); } catch(_e){ return true; }
-    if (!s || !s.user || !(Number(s.user.id) > 0)) return true;
+    if (!s || !s.user) return true;
+    if (!(Number(s.user.id) > 0)){ _kick(); return false; }   /* v7.491: сесія без id (старий вхід за паролем сторінки) — недійсна */
     var t = String(s.token || '');
     if (!t || _tokExpired(t)){ _kick(); return false; }
     return true;
   }
+  try { _checkTok(); } catch(_e){}   /* v7.491: перевірка сесії одразу при завантаженні, а не лише при першому запиті */
   // ── v7.403: stale-while-revalidate — дії, які можна віддавати з кешу (лише читання, важкі) ──
   var SWR_ACTIONS = {getPaymentsYearly:1, getPayments:1, getEmployees:1, getKomplektaciyaData:1, getGroupNorms:1,
     getLocationCapacity:1, getLocationCards:1, getSalaryOverview:1, getOpexOverview:1, getOverviewAnalytics:1,
@@ -2659,7 +2652,7 @@ async function loadUsersForDropdown(){
   }, 10000);
 
   try {
-    var r = await fetch(_tokUrl(CFG.SCRIPT_URL + '?action=getUsers'), {redirect:'follow'});   // v7.288 токен
+    var r = await fetch(CFG.SCRIPT_URL + '?action=getLoginUsers', {redirect:'follow'});   // v7.491: публічний список для входу (до входу токена ще немає; getUsers — лише CFO)
     var json = await r.json();
     loaded = true;
     if (!json.ok || !Array.isArray(json.users) || !json.users.length){
@@ -2723,64 +2716,34 @@ async function doLoginMain(){
   }
 }
 
-async function doLoginDir(){
-  var loc = document.getElementById('loginLocationDir').value;
-  var pw  = document.getElementById('loginPwDir').value;
+// v7.491: вхід директора / медсестри — через бекенд (authenticate → токен), як на головній.
+//   Старий вхід за паролем, який перевіряла сама сторінка (genDirPw / genNursePw), створював сесію без id і токена.
+async function _doLoginLocBackend(role, locFieldId, pwFieldId){
+  var loc = document.getElementById(locFieldId).value;
+  var pw  = document.getElementById(pwFieldId).value;
   document.getElementById('loginError').classList.add('hidden');
   if (!loc){ showLoginError('Оберіть локацію'); return; }
   if (!pw) { showLoginError('Введіть пароль');  return; }
-  if (pw !== genDirPw(loc)){ showLoginError('Невірний пароль для цієї локації'); return; }
-  S.user = {role:'director', loc:loc};
-  saveSession(S.user);
-  document.getElementById('loginScreen').classList.add('hidden');
-  document.getElementById('app').classList.remove('hidden');
-  updUserUI();
-  await initApp();
-  dispatchHashView();
+  try {
+    var r = await fetch(CFG.SCRIPT_URL, {method:'POST', redirect:'follow', headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body: JSON.stringify({action:'authenticate', login: role + '.' + translitUA(loc), password: pw})});
+    var json = await r.json();
+    if (!json.ok){ showLoginError(json.error === 'Користувача не знайдено' ? 'Логін для цієї локації ще не створено' : (json.error || 'Невірний пароль для цієї локації')); return; }
+    S.user = json.user;
+    S.user.role = String(S.user.role || '').toLowerCase().trim();
+    saveSession(S.user, json.token);
+    document.getElementById('loginScreen').classList.add('hidden');
+    document.getElementById('app').classList.remove('hidden');
+    updUserUI();
+    await initApp();
+    dispatchHashView();
+  } catch(e){ showLoginError('Помилка зʼєднання: ' + (e && e.message ? e.message : e)); }
 }
+async function doLoginDir(){   await _doLoginLocBackend('director', 'loginLocationDir',   'loginPwDir'); }
 
-async function doLoginNurse(){
-  var loc = document.getElementById('loginLocationNurse').value;
-  var pw  = document.getElementById('loginPwNurse').value;
-  document.getElementById('loginError').classList.add('hidden');
-  if (!loc){ showLoginError('Оберіть локацію'); return; }
-  if (!pw) { showLoginError('Введіть пароль');  return; }
-  if (pw !== genNursePw(loc)){ showLoginError('Невірний пароль для цієї локації'); return; }
-  S.user = {role:'nurse', loc:loc};
-  saveSession(S.user);
-  document.getElementById('loginScreen').classList.add('hidden');
-  document.getElementById('app').classList.remove('hidden');
-  updUserUI();
-  await initApp();
-  dispatchHashView();
-}
+async function doLoginNurse(){ await _doLoginLocBackend('nurse',    'loginLocationNurse', 'loginPwNurse'); }
 
-async function doLogin(){
-  var pw=document.getElementById('loginPw').value;
-  var errEl=document.getElementById('loginError');
-  errEl.classList.add('hidden');
-  if(!pw){ showLoginErr('Введіть пароль'); return; }
-  if(_role==='hr'){
-    if(pw!==CFG.PW_HR){ showLoginErr('Невірний пароль'); return; }
-    S.user={role:'hr',loc:null};
-  } else if(_role==='nurse'){
-    var loc=document.getElementById('loginLocation').value;
-    if(!loc){ showLoginErr('Оберіть локацію'); return; }
-    if(pw!==genNursePw(loc)){ showLoginErr('Невірний пароль для цієї локації'); return; }
-    S.user={role:'nurse',loc:loc};
-  } else {
-    var loc=document.getElementById('loginLocation').value;
-    if(!loc){ showLoginErr('Оберіть локацію'); return; }
-    if(pw!==genDirPw(loc)){ showLoginErr('Невірний пароль для цієї локації'); return; }
-    S.user={role:'director',loc:loc};
-  }
-  saveSession(S.user);
-  document.getElementById('loginScreen').classList.add('hidden');
-  document.getElementById('app').classList.remove('hidden');
-  updUserUI();
-  await initApp();
-  dispatchHashView();
-}
+// v7.491: старий doLogin (HR hr2024 / паролі локацій на сторінці) прибрано — лише вхід через бекенд.
 function showLoginErr(m){ var e=document.getElementById('loginError'); e.textContent='⚠️ '+m; e.classList.remove('hidden'); }
 
 function doLogout(){
@@ -6017,6 +5980,35 @@ function queueAttCloudSave(dateStr, cId, status){
   S._attSaveTimer=setTimeout(function(){ flushAttCloudSave(); }, 1500);
 }
 
+// ─── v7.491: ЗАПИСИ «БЕЗ ВІДПОВІДІ» (save, табель) — перевірка токена + локальна черга ───
+//   Раніше no-cors POST: відповіді не видно, тож відмову бекенду (AUTH) не помітити — запис губився б тихо.
+//   Тепер: токен перевіряється перед відправкою; звичайний POST (відповідь читаємо: HTML = успіх, як у apiPost);
+//   немає токена / AUTH / мережа → у чергу localStorage «mkids_post_queue», повтор із першим дійсним токеном.
+var POSTQ_KEY='mkids_post_queue';
+function _pqTokFresh(){ try{ var s=JSON.parse(localStorage.getItem('mkids_session')||'null'); if(!s||!s.user||!(Number(s.user.id)>0)||!s.token) return false;
+  var p=String(s.token).split('.')[0].replace(/-/g,'+').replace(/_/g,'/'); while(p.length%4) p+='=';
+  var pl=JSON.parse(decodeURIComponent(escape(atob(p)))); return !!(pl&&pl.exp&&Date.now()<Number(pl.exp)); }catch(e){ return false; } }
+function _pqLoad(){ try{ return JSON.parse(localStorage.getItem(POSTQ_KEY)||'[]')||[]; }catch(e){ return []; } }
+function _pqSave(q){ try{ localStorage.setItem(POSTQ_KEY, JSON.stringify(q.slice(-200))); }catch(e){} }
+function _pqPush(body){ var q=_pqLoad(); if(body&&body.action==='save') q=q.filter(function(x){ return x.action!=='save'; }); q.push(body); _pqSave(q); }   // «save» — лише останній знімок
+// body — БЕЗ токена (додається в момент відправки). → Promise<{ok:true} | {queued:true, reason}>
+function _postSafe(url, body){
+  if(!url) return Promise.resolve({queued:false, reason:'nourl'});
+  if(!_pqTokFresh()){ _pqPush(body); return Promise.resolve({queued:true, reason:'token'}); }
+  var payload=JSON.stringify(_tokBody(Object.assign({},body)));   // копія: у черзі лишається запис без токена
+  return fetch(url,{method:'POST', redirect:'follow', keepalive:payload.length<60000, headers:{'Content-Type':'text/plain;charset=utf-8'}, body:payload})
+    .then(function(r){ return r.text(); })
+    .then(function(t){ var j=null; try{ j=JSON.parse(t); }catch(_){}
+      if(j && (j.code==='AUTH' || j.authStale)){ _pqPush(body); return {queued:true, reason:'auth'}; }
+      return {ok:true}; })
+    .catch(function(){ _pqPush(body); return {queued:true, reason:'net'}; });
+}
+function _pqFlush(url){
+  if(!_pqTokFresh()) return; var q=_pqLoad(); if(!q.length) return; _pqSave([]);
+  q.reduce(function(p,b){ return p.then(function(){ return _postSafe(url,b); }); }, Promise.resolve());
+}
+setTimeout(function(){ try{ _pqFlush(getScriptUrl()); }catch(e){} },4000);
+window.addEventListener('online', function(){ try{ _pqFlush(getScriptUrl()); }catch(e){} });
 // Відправляє накопичені зміни в хмару
 function flushAttCloudSave(){
   if(!S._attPendingChanges.length) return;
@@ -6041,9 +6033,12 @@ function flushAttCloudSave(){
   setSyncStatus('sync');
   var _u=getScriptUrl();
   if(!_u){ setSyncStatus('err'); return; }
-  fetch(_u,{method:'POST',mode:'no-cors',redirect:'follow',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(_tokBody({action:'saveAttendance',records:records}))})   // v7.274: + токен
-    .then(function(){ setSyncStatus('ok'); showFloatMsg('☁️ Збережено в хмарі'); })
-    .catch(function(e){ setSyncStatus('err'); S._attPendingChanges=changes.concat(S._attPendingChanges); showFloatMsg('☁️ Хмара недоступна — збережено локально','err'); console.warn('att save error:',e); });
+  _postSafe(_u,{action:'saveAttendance',records:records})   // v7.491: перевірка токена + черга (було no-cors)
+    .then(function(res){
+      if(res.ok){ setSyncStatus('ok'); showFloatMsg('☁️ Збережено в хмарі'); return; }
+      setSyncStatus('err');
+      showFloatMsg(res.reason==='net'?'☁️ Хмара недоступна — збережено локально, надішлю пізніше':'☁️ Сесія недійсна — відмітки збережено локально, надішлю після входу','err');
+    });
 }
 
 // v6.30.2: примусовий flush черги при згортанні/закритті PWA — щоб відмітки
