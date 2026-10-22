@@ -3899,6 +3899,7 @@ function attDashOpen(){
 }
 function attDashSet(k,v){ if(k==='type'){ S.attDashType=v||''; S.attDashLoc=''; } else if(k==='loc') S.attDashLoc=v||''; else S.attDashYm=v||_attDashYm();
   _attDashModalRender(); _ensureAttDash(S.attDashYm).then(_attDashModalRender); }
+function attDashSort(k){ var so=S.attDashSort; S.attDashSort=!so||so.k!==k?{k:k,dir:1}:(so.dir>0?{k:k,dir:-1}:null); _attDashModalRender(); }   // v7.478: ▲ → ▼ → порядок мережі
 function attDashGoTabel(loc){ location.href='clients.html#att-'+encodeURIComponent((loc||'')+'~'+(S.attDashYm||_attDashYm())); }
 function _attDashModalRender(){
   var bd=document.getElementById('mAttDashBd'); if(!bd) return;
@@ -3936,20 +3937,23 @@ function _attDashModalRender(){
       :'<div style="font-size:12px;color:var(--gray);margin-bottom:14px">Сьогодні вихідний.</div>'):'';
   var tbl='';
   if(isHR && !S.attDashLoc && r.locs.length>1){
-    // v7.477: Управління в «Всіх» — окремими рядками внизу (поза мережевою базою), у підсумок не входить
-    var isU=function(L){ return !r.uprSel && r.per[L] && r.per[L].upr; };
-    var tab=r.locs.filter(function(L){ return r.per[L]&&r.per[L].any&&!isU(L); }), noTab=r.locs.filter(function(L){ return !(r.per[L]&&r.per[L].any)&&!isU(L); });
-    var uRows=r.locs.filter(isU);
-    var rows=tab.map(function(L){ var p=r.per[L], sl=p.kids*n; return {L:L,k:p.kids,v:sl?p.present/sl:0,m:sl?p.marks/sl:0}; })
-      .sort(function(x,y){ return x.v-y.v||x.m-y.m; });
-    tbl='<div style="overflow-x:auto"><table class="att-dash-t" style="width:100%;font-size:13px;border-collapse:collapse"><thead><tr><th style="text-align:left">Локація</th><th>Дітей</th><th>% відвідуваності</th><th>% відміченості</th></tr></thead><tbody>'
-      +rows.map(function(x){ return '<tr style="cursor:pointer" data-loc="'+esc(x.L)+'" onclick="attDashGoTabel(this.dataset.loc)" title="Відкрити табель локації"><td>'+esc(x.L)+'</td><td style="text-align:center">'+x.k+'</td>'
-        +'<td style="text-align:center;font-weight:700">'+(n?Math.round(x.v*100)+'%':'—')+'</td>'
-        +'<td style="text-align:center;font-weight:'+(x.m<0.9?'700':'400')+';color:'+(x.m<0.9?'#e67e22':'var(--gray)')+'">'+(n?Math.round(x.m*100)+'%':'—')+'</td></tr>'; }).join('')
-      +uRows.map(function(L){ var p=r.per[L], sl=p.kids*n; return '<tr style="cursor:pointer;color:var(--gray)" data-loc="'+esc(L)+'" onclick="attDashGoTabel(this.dataset.loc)" title="Відкрити табель локації"><td>'+esc(L)+' <span style="font-size:10px">· поза мережевою базою</span></td><td style="text-align:center">'+p.kids+'</td>'
-        +'<td style="text-align:center">'+(p.any&&sl?Math.round(p.present/sl*100)+'%':'—')+'</td><td style="text-align:center">'+(p.any&&sl?Math.round(p.marks/sl*100)+'%':'табель не ведеться')+'</td></tr>'; }).join('')
-      +noTab.map(function(L){ return '<tr style="color:var(--gray)"><td>'+esc(L)+'</td><td style="text-align:center">'+((r.per[L]||{}).kids||0)+'</td><td colspan="2" style="text-align:center;font-style:italic">табель не ведеться</td></tr>'; }).join('')
-      +'</tbody></table><div style="font-size:11px;color:var(--gray);margin-top:6px">Від найменшої відвідуваності · помаранчевим — відмічено менше 90% · клік по рядку — табель локації · «табель не ведеться» — у відсотки не входить</div></div>';
+    // v7.478: рядки — у стандартному порядку мережі (r.locs = _dashLFLocs, порядок реєстру), як у списку й фільтрі
+    //   дашборда. Сортування за % — лише кліком по заголовку (S.attDashSort = {k:'v'|'m', dir:1|-1}; ще клік — назад).
+    //   Управління в «Всіх» — на своєму місці з позначкою «поза мережевою базою», у підсумок не входить.
+    var rows=r.locs.filter(function(L){ return r.per[L]; }).map(function(L, i){ var p=r.per[L], sl=p.kids*n;
+      return {L:L, i:i, k:p.kids, any:p.any&&sl>0, u:!r.uprSel&&p.upr, v:sl?p.present/sl:0, m:sl?p.marks/sl:0}; });
+    var so=S.attDashSort;
+    if(so) rows.sort(function(x,y){ if(x.any!==y.any) return x.any?-1:1; return (x[so.k]-y[so.k])*so.dir||x.i-y.i; });
+    var th=function(k,lbl){ var on=so&&so.k===k;
+      return '<th style="cursor:pointer;user-select:none" onclick="attDashSort(\''+k+'\')" title="Клік — сортувати">'+lbl+(on?(so.dir>0?' ▲':' ▼'):' ⇅')+'</th>'; };
+    tbl='<div style="overflow-x:auto"><table class="att-dash-t" style="width:100%;font-size:13px;border-collapse:collapse"><thead><tr><th style="text-align:left">Локація</th><th>Дітей</th>'+th('v','% відвідуваності')+th('m','% відміченості')+'</tr></thead><tbody>'
+      +rows.map(function(x){
+        var nm=esc(x.L)+(x.u?' <span style="font-size:10px">· поза мережевою базою</span>':'');
+        if(!x.any) return '<tr style="color:var(--gray)'+(x.u?';cursor:pointer" data-loc="'+esc(x.L)+'" onclick="attDashGoTabel(this.dataset.loc)':'')+'"><td>'+nm+'</td><td style="text-align:center">'+x.k+'</td><td colspan="2" style="text-align:center;font-style:italic">табель не ведеться</td></tr>';
+        return '<tr style="cursor:pointer'+(x.u?';color:var(--gray)':'')+'" data-loc="'+esc(x.L)+'" onclick="attDashGoTabel(this.dataset.loc)" title="Відкрити табель локації"><td>'+nm+'</td><td style="text-align:center">'+x.k+'</td>'
+          +'<td style="text-align:center;font-weight:'+(x.u?'400':'700')+'">'+(n?Math.round(x.v*100)+'%':'—')+'</td>'
+          +'<td style="text-align:center;font-weight:'+(x.m<0.9&&!x.u?'700':'400')+';color:'+(x.m<0.9&&!x.u?'#e67e22':'var(--gray)')+'">'+(n?Math.round(x.m*100)+'%':'—')+'</td></tr>'; }).join('')
+      +'</tbody></table><div style="font-size:11px;color:var(--gray);margin-top:6px">Порядок мережі · клік по заголовку % — сортування · помаранчевим — відмічено менше 90% · клік по рядку — табель локації · «табель не ведеться» — у відсотки не входить</div></div>';
   } else if(S.attDashLoc || !isHR){
     var L0=S.attDashLoc||(r.locs[0]||'');
     tbl='<button class="btn btn-secondary btn-sm" data-loc="'+esc(L0)+'" onclick="attDashGoTabel(this.dataset.loc)">📋 Відкрити табель '+esc(L0)+'</button>';
