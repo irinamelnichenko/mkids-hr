@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.483
+// m.kids CRM — Google Apps Script v7.485
+// v7.485: getDataQuality — «🧹 Якість даних» (лише читання): картки ↔ Payment наживо (_yearlyLive), дублі, суми, наступні місяці, порожні поля.
 // v7.483: getUnderpaid — «сплачено наперед» (Бюджет 0, а раніше у 2026 одна сума на кілька місяців) поза недоотриманим;
 //   feeMismatch (у Payment стабільно інша сума, ніж у картці); fill — схожі на сім'ю / «Приведи друга» без полів у картці.
 // v7.482: getUnderpaid — «Знижки та недоотримане»: сума договору − «Бюджет навч» Payment за місяць, розклад за причинами (лише читання).
@@ -7208,7 +7209,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.483', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.485', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -7350,6 +7351,7 @@ function doGet(e) {
     else if (action === 'getDiscounts')                result = getDiscounts(e.parameter || {});           // v7.414 реєстр знижок
     else if (action === 'getPromoReport')              result = getPromoReport(e.parameter || {});         // v7.414 звіт по акціях
     else if (action === 'getPromoAttention')           result = getPromoAttention(e.parameter || {});      // v7.414 передоплати-здогадки + пропозиції
+    else if (action === 'getDataQuality')             result = getDataQuality(e.parameter || {});         // v7.485 якість даних (лише читання)
     else if (action === 'getUnderpaid')                result = getUnderpaid(e.parameter || {});           // v7.482 знижки та недоотримане (лише читання)
     else if (action === 'getPromoCardIndex')           result = getPromoCardIndex();                       // v7.414 картки мережі для вибору рекомендувача/брата
     else if (action === 'getPrepaymentRefund')         result = getPrepaymentRefund(e.parameter || {});    // v7.414 перерахунок передоплати при розірванні (показ)
@@ -11505,11 +11507,11 @@ function getUnderpaid(params){
     params = params || {};
     var ym = _promoYM(params.ym) || Utilities.formatDate(new Date(), 'Europe/Kiev', 'yyyy-MM');
     var y = Number(ym.slice(0, 4)), mo = Number(ym.slice(5, 7)), mName = MONTHS_CAL[mo - 1];
-    var cards = _promoCards();
-    // «Бюджет навч» місяця з «Оплати-Рік»
-    var sh = getCRMSpreadsheet().getSheetByName(SHEET_YEARLY);
-    if (!sh) return {ok:false, error:'Оплати-Рік не знайдено'};
-    var v = sh.getDataRange().getValues(), h = v[0].map(String);
+    var cards = params._cards || _promoCards();
+    // «Бюджет навч» місяця з «Оплати-Рік» (v7.485: або наживо з файлів Payment — params._v від getDataQuality)
+    var v = params._v;
+    if (!v){ var sh = getCRMSpreadsheet().getSheetByName(SHEET_YEARLY); if (!sh) return {ok:false, error:'Оплати-Рік не знайдено'}; v = sh.getDataRange().getValues(); }
+    var h = v[0].map(String);
     var iN = h.indexOf("Ім'я дитини"), iL = h.indexOf('Локація'), iB = h.indexOf(mName + '-Бюджет-навч');
     var iP = mo > 1 ? h.indexOf(MONTHS_CAL[mo - 2] + '-Бюджет-навч') : -1, payPrev = {};
     // v7.483: факт / бюджет навчання по всіх місяцях року — для «сплачено наперед»
@@ -11653,6 +11655,114 @@ function getUnderpaid(params){
     rows.forEach(function(x){ tot.fee += x.fee; tot.budget += x.budget; if (x.ahead) tot.ahead += x.ahead; else if (x.diff > 0) tot.under += x.diff; if (x.over) tot.over += x.over;
       Object.keys(x.parts).forEach(function(k){ tot[k] += x.parts[k]; }); });
     return {ok:true, ym:ym, rows:rows, noPay:noPay, totals:tot, reasons:UNDERPAID_REASONS};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.485 «🧹 ЯКІСТЬ ДАНИХ» — GET ?action=getDataQuality (лише читання: нічого не пише в картки, Payment чи табель).
+//   Payment — НАЖИВО з файлів локацій (_yearlyLive: ті самі рядки, що «Оплати-Рік», кеш 5 хв), тож виправлене зникає саме.
+//   Перевірки (t): 1 картка активна — рядка в Payment немає; 2 рядок у Payment (бюджет місяця > 0) — активної картки немає;
+//   3 дублі карток (ПІБ у локації); 4 сума в картці (на дату, «Зміни суми») ≠ «Бюджет навч» місяця без причини
+//   (відпустка / хвороба / неповний місяць / передоплата / знижки пояснюють — getUnderpaid); 5 сума в картці 0, а в Payment > 0,
+//   або в картці > 0, а «Бюджет навч» місяця 0 (і не «сплачено наперед»); 6 наступні місяці року: бюджет 0 або ≠ сумі на ту дату;
+//   9 не заповнено: дата народження, телефон батьків, № / дата договору, група. Табель (7, 8) — на фронті з даних табеля.
+// ═══════════════════════════════════════════════════════════════════════════
+function _yearlyLive(nocache){
+  var key = 'yearlive1';
+  if (!nocache){ var hit = _cacheGzGetBig(key); if (hit && hit.v) return hit.v; }
+  var now = new Date(), upd = formatDate(now), hdr = ['Локація','Напрямок','Тип','Група','Вихователь',"Ім'я дитини"];
+  MONTHS_CAL.forEach(function(m){ hdr.push(m+'-Факт-навч', m+'-Факт-доп', m+'-Факт-вступ', m+'-Бюджет-навч', m+'-Бюджет-доп', m+'-Статус'); });
+  hdr.push('Факт-Рік','Бюджет-Рік','Борг-Рік','Зібрано-На-Сьогодні','Оновлено','Вибув');
+  var v = [hdr], cfg = SpreadsheetApp.openById(CONFIG_SHEET_ID).getSheets()[0].getDataRange().getValues();
+  for (var i = 1; i < cfg.length; i++){
+    if (!trim(cfg[i][2]) || !trim(cfg[i][3])) continue;
+    try { Array.prototype.push.apply(v, _aggYearLocRows(cfg[i], now, upd)); } catch(e){ Logger.log('[_yearlyLive] %s: %s', cfg[i][2], e && e.message); }
+  }
+  try { _cacheGzPutBig(key, {v:v}, 300); } catch(_c){}
+  return v;
+}
+function getDataQuality(params){
+  try {
+    params = params || {};
+    var t0 = Date.now(), tz = 'Europe/Kiev', now = new Date();
+    var ym = Utilities.formatDate(now, tz, 'yyyy-MM'), mo = Number(ym.slice(5, 7)), Y = Number(ym.slice(0, 4));
+    var v = _yearlyLive(String(params.nocache || '') === '1'), h = v[0].map(String), cards = _promoCards();
+    var iN = h.indexOf("Ім'я дитини"), iL = h.indexOf('Локація'), iG = h.indexOf('Група'), iV = h.indexOf('Вибув');
+    var iB = MONTHS_CAL.map(function(m){ return h.indexOf(m + '-Бюджет-навч'); });
+    // Payment: локація → нормоване ПІБ → {b:[12], g, vybuv}
+    var pay = {};
+    for (var r = 1; r < v.length; r++){
+      var L = trim(String(v[r][iL] || '')), N = trim(String(v[r][iN] || '')); if (!L || !N || /^\(без імені/i.test(N)) continue;
+      var lk = _nameFold(L), nk = _normNameVac(N), P = (pay[lk] = pay[lk] || {}), o = P[nk] = P[nk] || {name:N, loc:L, b:[0,0,0,0,0,0,0,0,0,0,0,0], g:'', vy:true};
+      for (var m = 0; m < 12; m++) if (iB[m] >= 0) o.b[m] += _promoNum(v[r][iB[m]]);
+      if (!o.g) o.g = trim(String(v[r][iG] || ''));
+      if (!(iV >= 0 && String(v[r][iV] || '').trim())) o.vy = false;            // хоч один «живий» рядок
+    }
+    function payOf(c){
+      var P = pay[_nameFold(c.loc)] || {}, nk = _normNameVac(c.name);
+      if (P[nk]) return P[nk];
+      var cand = Object.keys(P).filter(function(p){ return nk.indexOf(p + ' ') === 0 || p.indexOf(nk + ' ') === 0; });
+      return cand.length === 1 ? P[cand[0]] : null;
+    }
+    var issues = [];
+    function add(t, c, what, todo){ issues.push({t:t, cid:c.id || '', name:c.name, loc:c.loc, group:c.group || '', what:what, todo:todo}); }
+    var act = cards.list.filter(function(c){ return c.status === 'active' && c.loc; });
+    // 3 дублі
+    var byNm = {};
+    act.forEach(function(c){ var k = _nameFold(c.loc) + '|' + _normNameVac(c.name); (byNm[k] = byNm[k] || []).push(c); });
+    Object.keys(byNm).forEach(function(k){ var g = byNm[k]; if (g.length > 1) add(3, g[0], g.length + ' активних карток одного ПІБ: ' + g.map(function(x){ return x.id; }).join(', '), 'злити дублі (залишити картку, за якою ведеться табель)'); });
+    // 1 / 5 / 6 / 9 по картках
+    var used = {}, fmt = function(n){ return Math.round(n).toLocaleString('uk-UA'); };
+    act.forEach(function(c){
+      var p = payOf(c);
+      // 9 порожні поля
+      var miss = [];
+      if (!_promoISO(c.raw['Дата народження'])) miss.push('дата народження');
+      if (!String(c.raw['Телефон мами'] || '').replace(/\D/g, '') && !String(c.raw['Телефон тата'] || '').replace(/\D/g, '')) miss.push('телефон батьків');
+      if (!c.dopOnly && !String(c.raw['Номер договору'] || '').trim()) miss.push('№ договору');   // «лише додаткові» — без договору навчання
+      if (!c.dopOnly && !c.contract) miss.push('дата договору');
+      if (!c.group) miss.push('група');
+      if (miss.length) add(9, c, 'не заповнено: ' + miss.join(', '), 'дозаповнити картку');
+      if (!p){ add(1, c, 'у Payment ' + MONTHS_CAL[mo - 1].toLowerCase() + ' рядка немає', 'додати рядок у Payment або оформити розірвання / випуск'); return; }
+      used[_nameFold(p.loc) + '|' + _normNameVac(p.name)] = 1;
+      if (c.dopOnly || c.free) return;
+      var feeNow = Math.round(_promoFeeFor(c, ym)), bNow = Math.round(p.b[mo - 1]);
+      if (!(feeNow > 0) && bNow > 0) add(5, c, 'у картці сума договору 0, у Payment ' + fmt(bNow), 'вписати суму договору в картку');
+      // 6 наступні місяці року
+      if (feeNow > 0){
+        var bad = [];
+        // сплачено наперед: місяць року з бюджетом ≥ 1,5 ціни покриває round(сума / ціна / 0,95) місяців
+        var regB = p.b.filter(function(x){ return x >= feeNow * 0.5 && x <= feeNow * 1.05; }).sort(function(a, b){ return a - b; });
+        var price = regB.length ? regB[Math.floor(regB.length / 2)] : feeNow;
+        var covered = function(mi){ for (var m0 = mi - 1; m0 >= 0; m0--){ var A = p.b[m0]; if (!(A >= price * 1.5)) continue;
+          var n = Math.round(A / price / 0.95); if (n >= 2 && mi - m0 < n + 2) return true; } return false; };
+        for (var m2 = mo; m2 < 12; m2++){
+          if (covered(m2)) continue;
+          var ym2 = Y + '-' + ('0' + (m2 + 1)).slice(-2);
+          if (c.end && c.end < _ymFirst(ym2)) break;                              // вибуває — далі нуль очікуваний
+          var f2 = Math.round(_promoFeeFor(c, ym2)), b2 = Math.round(p.b[m2]);
+          if (b2 <= 0) bad.push(MONTHS_CAL[m2] + ' 0');
+          else if (Math.abs(b2 - f2) > Math.max(10, f2 * 0.005) && b2 < f2) bad.push(MONTHS_CAL[m2] + ' ' + fmt(b2) + ' (у картці ' + fmt(f2) + ')');
+        }
+        if (bad.length) add(6, c, 'Payment наступних місяців: ' + bad.join('; '), bad.some(function(x){ return / 0$/.test(x); }) ? 'якщо вибуває — оформити розірвання; інакше заповнити бюджет Payment' : 'звірити бюджет Payment із сумою в картці');
+      }
+    });
+    // 2 рядки Payment без активної картки
+    Object.keys(pay).forEach(function(lk){ Object.keys(pay[lk]).forEach(function(nk){
+      var o = pay[lk][nk]; if (o.vy || used[lk + '|' + nk]) return;
+      var bNow = Math.round(o.b[mo - 1]); if (!(bNow > 0)) return;
+      var any = cards.list.filter(function(c){ return _nameFold(c.loc) === lk && (_normNameVac(c.name) === nk || _normNameVac(c.name).indexOf(nk + ' ') === 0); });
+      var st = any.length ? any.map(function(c){ return c.status; }).join(', ') : '';
+      issues.push({t:2, cid:any.length ? any[0].id : '', name:o.name, loc:o.loc, group:o.g, what:'у Payment бюджет ' + fmt(bNow) + ', ' + (st ? 'картка: ' + st : 'картки немає'), todo:st ? 'перевірити статус картки або прибрати бюджет у Payment' : 'завести картку дитини'});
+    }); });
+    // 4 / 5 — сума ≠ бюджет поточного місяця без причини (getUnderpaid на живих даних)
+    var up = getUnderpaid({ym:ym, _v:v, _cards:cards});
+    if (up && up.ok) up.rows.forEach(function(x){
+      var c = cards.byId[x.cid] || {id:x.cid, name:x.name, loc:x.loc, group:x.group};
+      if (x.parts.none) add(5, c, 'у картці ' + fmt(x.fee) + ', у Payment ' + MONTHS_CAL[mo - 1].toLowerCase() + ' 0', 'нарахувати місяць у Payment або оформити розірвання');
+      else if (x.parts.unrec) add(4, c, 'у картці ' + fmt(x.fee) + ', у Payment ' + fmt(x.budget) + ' — різниця ' + fmt(x.parts.unrec) + ' без причини' + (x.notes.length ? ' (' + x.notes.join('; ') + ')' : ''), x.feeMismatch ? 'виправити суму в картці або Payment («Зміни суми» з дати)' : 'внести причину (відпустка / знижка) або виправити Payment');
+    });
+    return {ok:true, ym:ym, issues:issues, ms:Date.now() - t0};
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 

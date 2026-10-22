@@ -3602,7 +3602,8 @@ function renderDash(){
   _ensurePayments().then(_dashSoftRerender);             // v7.399 групи й діти — з Payment наживо
   _ensureAttDash().then(_dashSoftRerender);              // v7.474 відвідування (табель дітей, поточний місяць)
   _ensureRisk().then(_dashSoftRerender);                 // v7.479 ризик розірвання (+ попередній місяць табеля)
-  if(UP_TILE_ON && _riskCanMoney()) _ensureUp().then(_dashSoftRerender);   // v7.482 знижки та недоотримане (CFO); v7.484 сховано
+  if(UP_TILE_ON && _riskCanMoney()) _ensureUp().then(_dashSoftRerender);
+  if(_dqCan()) _ensureDq().then(function(){ _dashSoftRerender(); if(typeof _dqModalRender==='function') _dqModalRender(); });   // v7.485 якість даних   // v7.482 знижки та недоотримане (CFO); v7.484 сховано
   _ensureGroupNorms().then(_dashSoftRerender);           // v7.399 місця в групах — «Норми груп»
   _ensureRatingsYear(_kompYear()).then(_dashSoftRerender); // v7.100 оцінки вихователів — середнє за рік
   if(_kompIsCFO()){ _ensureDebtsLive().then(_dashSoftRerender);   // v7.463 борги наживо
@@ -3847,7 +3848,7 @@ function _attDashMembers(){
     var c=byName[L+'|'+_kompNorm(n)];
     if(c && !_isCurrentKid(c)) return;
     var id=String(c?c.id:_childId(n,'',L)).trim(); if(seen[id]) return; seen[id]=1;   // табель зберігає ID без пробілу в кінці («…_Нац.Гвардії »)
-    out.push({id:id, loc:L, upr:true}); });
+    out.push({id:id, cid:c?c.id:'', name:n, group:String(r['Група']||''), loc:L, upr:true}); });
   return out;
 }
 // Підрахунок за місяць ym: type — пігулка ('' | sad | sch | upr), loc — локація ('' = усі в групі).
@@ -4231,6 +4232,118 @@ function _upModalRender(){
       +' · договір '+x.fee.toLocaleString('uk-UA')+', Бюджет '+x.budget.toLocaleString('uk-UA'); })+'</div>':'';
   bd.innerHTML=ctl+head+reasons+lt+lst+mmB+flB+ahB+np
     +'<div style="font-size:11px;color:var(--gray);margin-top:8px">Недоотримано = сума договору за місяць (з урахуванням зміни суми з середини місяця) − «Бюджет навч» Payment. Відпустка й хвороба — той самий розрахунок, що йде в Payment; сім\'я / друг / передоплата — за полями карток, записами передоплат і сумою; «нерозпізнане» — різниця без причини в системі (підказка під причиною).</div>';
+}
+// ─── v7.485: «🧹 ЯКІСТЬ ДАНИХ» (CFO / власник — уся мережа; директор — своя локація; лише читання) ───
+//   1–6, 9 — бекенд getDataQuality (картки ↔ Payment наживо); 7–8 — табель поточного місяця (ті самі дані, що «Відвідування»).
+//   Проблема зникає сама, щойно дані виправлені (нічого не позначаємо вручну). Пігулка «Всі» — садки й школи; Управління — окремо.
+var DQ_TYPES=[[1,'📄 Картка без рядка в Payment'],[2,'💰 Payment без картки'],[3,'👥 Дублі карток'],[4,'≠ Сума ≠ бюджет'],[5,'0️⃣ Сума 0 / бюджет 0'],
+  [6,'📅 Наступні місяці'],[7,'📋 Без позначок у табелі'],[8,'📊 Табель локації'],[9,'✏️ Порожні поля']];
+function _dqCan(){ var r=String((S.user&&S.user.role)||'').toLowerCase(); return isCFO()||r==='founder'||r==='director'; }
+async function _ensureDq(force){
+  var a=S._dq; if(!force && a && (a.loading||(a.data&&Date.now()-a.at<5*60*1000))) return;
+  S._dq={loading:true,at:Date.now(),data:a&&a.data};
+  try{ var r=await fetch(_tokUrl(authScriptUrl()+'?action=getDataQuality'+(force?'&nocache=1':'')),{redirect:'follow'}); var j=await r.json();
+    if(!j||!j.ok) throw new Error((j&&j.error)||'немає відповіді'); S._dq={at:Date.now(),data:j}; }
+  catch(e){ S._dq={at:Date.now(),data:a&&a.data,error:String(e&&e.message||e)}; }
+}
+// Табель (7, 8) за поточний місяць до вчора, по базі «Відвідування» (_attDashMembers).
+function _dqTabel(){
+  var ym=_attDashYm(), a=S._attDashM&&S._attDashM[ym], data=a&&a.data; if(!data) return null;
+  var td=tabelIso(new Date()), days=Object.keys(data).filter(function(d){ var w=new Date(d+'T00:00:00').getDay(); return d<td&&w!==0&&w!==6; }).sort();
+  var mem=_attDashMembers(), byLoc={}, out=[];
+  mem.forEach(function(m){ (byLoc[m.loc]=byLoc[m.loc]||[]).push(m); });
+  var grp={}; (S.crm?Object.values(S.crm):[]).forEach(function(c){ if(c) grp[String(c.id).trim()]=c.group||''; });
+  Object.keys(byLoc).forEach(function(L){
+    var ms=byLoc[L], marks=0, abs=0, any=false, perKid={};
+    ms.forEach(function(m){ var n=0; days.forEach(function(d){ var st=(data[d]||{})[m.id]; if(st){ n++; marks++; if(st!=='present') abs++; } }); perKid[m.id]=n; if(n) any=true; });
+    var slots=ms.length*days.length;
+    if(!days.length) return;
+    if(!any){ out.push({t:8,cid:'',name:'(локація)',loc:L,group:'',what:'табель не ведеться — жодної позначки за місяць',todo:'почати вести табель'}); return; }
+    var pct=slots?marks/slots:0;
+    if(pct<0.9) out.push({t:8,cid:'',name:'(локація)',loc:L,group:'',what:'відмічено '+Math.round(pct*100)+'% (позначок '+marks+' з '+slots+')',todo:'відмічати всіх дітей щодня'});
+    if(!abs) out.push({t:8,cid:'',name:'(локація)',loc:L,group:'',what:'за місяць лише «присутній» — жодної відсутності, хвороби чи відпустки',todo:'відмічати й відсутніх'});
+    ms.forEach(function(m){ if(!perKid[m.id]) out.push({t:7,cid:m.cid||'',name:m.name||m.id.replace(/^c_/,'').replace(/_[^_]*$/,''),loc:L,group:m.group||grp[m.id]||'',what:'жодної позначки в табелі за місяць',todo:'відмітити в табелі або перевірити, чи дитина ходить'}); });
+  });
+  return out;
+}
+function _dqAll(){
+  var d=S._dq&&S._dq.data, tb=_dqTabel();
+  if(!d) return null;
+  var all=d.issues.concat(tb||[]), isHR=isNetworkRole(S.user.role), my=S.user.loc||'';
+  return isHR?all:all.filter(function(x){ return x.loc===my; });
+}
+function _dqScope(type){ var isHR=isNetworkRole(S.user.role); if(!isHR) return [S.user.loc||''];
+  var L=_dashLFLocs(type||''); return type?L:L.filter(function(x){ return _dashLocType(x)!=='upr'; }); }
+function _renderDqTile(){
+  if(!_dqCan()) return '';
+  var all=_dqAll(), locs=_dqScope(''), is=all?all.filter(function(x){ return locs.indexOf(x.loc)>=0; }):null;
+  var nL=is?Object.keys(is.reduce(function(o,x){ o[x.loc]=1; return o; },{})).length:0;
+  var sub=!is?(S._dq&&S._dq.error?'перевірка не завантажилась':'перевіряю…'):(nL+' '+(nL===1?'локація':'локацій')+' з проблемами');
+  return '<div class="stat-card" onclick="dqOpen()" style="cursor:pointer" title="Клік — що виправити"><div class="stat-icon si-p">🧹</div><div>'
+    +'<div class="stat-val">'+(is?is.length:'…')+'</div><div class="stat-lbl">Якість даних ▸</div>'
+    +'<div style="font-size:11px;color:var(--gray);margin-top:2px">'+sub+'</div></div></div>';
+}
+function dqOpen(){
+  var _lf=_dashLF(); S.dqType=_lf.type||''; S.dqLoc=_lf.loc||''; S.dqT=0;
+  var m=document.getElementById('mDq');
+  if(!m){ m=document.createElement('div'); m.id='mDq'; m.className='modal-ov hidden';
+    m.onclick=function(e){ if(e.target===m) closeModal('mDq'); };
+    m.innerHTML='<div class="modal" style="max-width:1050px"><div class="modal-hd"><h3>🧹 Якість даних</h3><button class="modal-close" onclick="closeModal(\'mDq\')">✕</button></div><div class="modal-bd" id="mDqBd"></div></div>';
+    document.body.appendChild(m); }
+  m.classList.remove('hidden'); _dqModalRender();
+  Promise.all([_ensureDq(), _ensureAttDash()]).then(_dqModalRender);
+}
+function dqSet(k,v){ if(k==='type'){ S.dqType=v||''; S.dqLoc=''; } else if(k==='loc') S.dqLoc=v||''; else if(k==='t') S.dqT=(S.dqT===v?0:v); _dqModalRender(); }
+function dqRefresh(){ _ensureDq(true).then(_dqModalRender); _dqModalRender(); }
+function _dqTxt(L, list){
+  var nm={}; DQ_TYPES.forEach(function(x){ nm[x[0]]=x[1].replace(/^\S+\s/,''); });
+  return 'Якість даних — '+L+' ('+new Date().toLocaleDateString('uk-UA')+')\n'
+    +list.map(function(x,i){ return (i+1)+'. '+x.name+(x.group?' ('+x.group+')':'')+' — '+nm[x.t]+': '+x.what+' → '+x.todo; }).join('\n');
+}
+function dqCopy(L){
+  var all=_dqAll()||[], list=all.filter(function(x){ return x.loc===L && (!S.dqT||x.t===S.dqT); }).sort(function(a,b){ return a.t-b.t||String(a.name).localeCompare(String(b.name),'uk'); });
+  var txt=_dqTxt(L,list);
+  (navigator.clipboard?navigator.clipboard.writeText(txt):Promise.reject()).then(function(){ toast('📋 Скопійовано: '+L+' ('+list.length+')'); })
+    .catch(function(){ window.prompt('Скопіюйте список:',txt); });
+}
+function _dqModalRender(){
+  var bd=document.getElementById('mDqBd'); if(!bd) return;
+  var m=document.getElementById('mDq'); if(m&&m.classList.contains('hidden')) return;
+  var isHR=isNetworkRole(S.user.role), ty=isHR?(S.dqType||''):'', locs=_dqScope(ty);
+  if(S.dqLoc && locs.indexOf(S.dqLoc)<0) S.dqLoc='';
+  var ctl=isHR?'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">'
+    +DASH_LF.map(function(x){ return '<button type="button" class="att-chip'+(ty===x[0]?' att-chip-active':'')+'" onclick="dqSet(\'type\',\''+x[0]+'\')">'+x[1]+'</button>'; }).join('')
+    +'<select class="flt-sel" onchange="dqSet(\'loc\',this.value)"><option value="">Усі локації'+(ty?' ('+(DASH_LF.filter(function(x){ return x[0]===ty; })[0]||['',''])[1].replace(/^\S+\s/,'')+')':' (садки й школи)')+'</option>'
+    +locs.map(function(L){ return '<option'+(L===S.dqLoc?' selected':'')+'>'+esc(L)+'</option>'; }).join('')+'</select>'
+    +'<button type="button" class="btn btn-secondary btn-sm" onclick="dqRefresh()" title="Перевірити наново (повз кеш)">🔄</button></div>':'';
+  var all=_dqAll();
+  if(!all){ bd.innerHTML=ctl+'<div style="color:var(--gray);font-size:13px">'+(S._dq&&S._dq.error?'⚠️ '+esc(S._dq.error):'⏳ Перевіряю картки, Payment і табель…')+'</div>'; return; }
+  var sel=S.dqLoc?[S.dqLoc]:locs, is=all.filter(function(x){ return sel.indexOf(x.loc)>=0; });
+  var cnt={}; is.forEach(function(x){ cnt[x.t]=(cnt[x.t]||0)+1; });
+  var sum='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:12px">'
+    +DQ_TYPES.map(function(x){ var on=S.dqT===x[0], n=cnt[x[0]]||0;
+      return '<div onclick="dqSet(\'t\','+x[0]+')" style="cursor:pointer;background:'+(on?'#eef6ff':'#f8fafc')+';border-radius:10px;padding:8px 10px;'+(on?'outline:2px solid #2980b9':'')+'" title="Клік — лише ця перевірка">'
+        +'<div style="font-size:12px;color:var(--gray)">'+x[1]+'</div><div style="font-size:20px;font-weight:800;color:'+(n?'#c0392b':'#27ae60')+'">'+n+'</div></div>'; }).join('')+'</div>';
+  var lt='';
+  if(!S.dqLoc && locs.length>1){
+    lt='<div style="overflow-x:auto;margin-bottom:12px"><table class="att-dash-t" style="width:100%;font-size:12px;border-collapse:collapse"><thead><tr><th style="text-align:left">Локація</th><th>Усього</th>'
+      +DQ_TYPES.map(function(x){ return '<th title="'+esc(x[1])+'">'+x[1].split(' ')[0]+'</th>'; }).join('')+'<th></th></tr></thead><tbody>'
+      +locs.map(function(L){ var li=is.filter(function(x){ return x.loc===L; }); var c={}; li.forEach(function(x){ c[x.t]=(c[x.t]||0)+1; });
+        return '<tr><td style="cursor:pointer" data-loc="'+esc(L)+'" onclick="dqSet(\'loc\',this.dataset.loc)">'+esc(L)+'</td><td style="text-align:center;font-weight:700;color:'+(li.length?'#c0392b':'#27ae60')+'">'+(li.length||'✓')+'</td>'
+          +DQ_TYPES.map(function(x){ return '<td style="text-align:center;color:'+(c[x[0]]?'var(--dark)':'#ccc')+'">'+(c[x[0]]||'·')+'</td>'; }).join('')
+          +'<td>'+(li.length?'<button type="button" class="btn btn-secondary btn-sm" data-loc="'+esc(L)+'" onclick="dqCopy(this.dataset.loc)" title="Скопіювати список текстом для директора">📋</button>':'')+'</td></tr>'; }).join('')
+      +'</tbody></table><div style="font-size:11px;color:var(--gray);margin-top:4px">Порядок мережі · клік по назві — лише ця локація · 📋 — список текстом для директора</div></div>';
+  }
+  var nm={}; DQ_TYPES.forEach(function(x){ nm[x[0]]=x[1]; });
+  var list=is.filter(function(x){ return !S.dqT||x.t===S.dqT; }).sort(function(a,b){ return locationRank(a.loc)-locationRank(b.loc)||a.t-b.t||String(a.name).localeCompare(String(b.name),'uk'); });
+  var copyBtn=S.dqLoc&&list.length?' <button type="button" class="btn btn-secondary btn-sm" data-loc="'+esc(S.dqLoc)+'" onclick="dqCopy(this.dataset.loc)">📋 Скопіювати список</button>':'';
+  var lst='<div style="font-size:13px;font-weight:700;margin:6px 0">'+(S.dqT?nm[S.dqT]+' — ':'Поіменно — ')+list.length+copyBtn+'</div>'
+    +(list.length?'<div style="overflow-x:auto"><table class="att-dash-t" style="width:100%;font-size:12px;border-collapse:collapse"><thead><tr><th style="text-align:left">Дитина</th><th style="text-align:left">Локація</th><th style="text-align:left">Група</th><th style="text-align:left">Що не так</th><th style="text-align:left">Що зробити</th></tr></thead><tbody>'
+    +list.map(function(x){ var nmH=x.cid?'<a href="clients.html#open-'+encodeURIComponent(x.cid)+'" style="color:inherit;font-weight:600;text-decoration:none">'+esc(x.name)+'</a>':'<b>'+esc(x.name)+'</b>';
+      return '<tr><td>'+nmH+'<div style="font-size:10px;color:var(--gray)">'+nm[x.t]+'</div></td><td>'+esc(x.loc)+'</td><td>'+esc(x.group)+'</td><td>'+esc(x.what)+'</td><td style="color:#2980b9">'+esc(x.todo)+'</td></tr>'; }).join('')
+    +'</tbody></table></div>':'<div style="color:#27ae60;font-size:13px">✓ Проблем немає</div>');
+  bd.innerHTML=ctl+sum+lt+lst
+    +'<div style="font-size:11px;color:var(--gray);margin-top:8px">Payment — наживо з файлів локацій (оновлення до 5 хв, 🔄 — одразу); табель — поточний місяць до вчора. Проблема зникає сама, щойно дані виправлені.</div>';
 }
 // ─── v7.451: АНАЛІТИКА ДОДАТКОВИХ — які заняття прибуткові (getDopAnalytics, лише читання) ───
 //   Оборот — відмітки табеля × ціна на день відмітки; абонемент — «Бюджет навч» його блоку в Payment.
@@ -4820,6 +4933,7 @@ function _renderDashNow(){
       ${_renderAttDashTile()}
       ${_renderRiskTile()}
       ${_renderUpTile()}
+      ${_renderDqTile()}
       <div class="stat-card"><div class="stat-icon si-y">🆕</div><div><div class="stat-val">${hired.length}</div><div class="stat-lbl">Прийнято (${perLbl})</div></div></div>
       <div class="stat-card"><div class="stat-icon si-r">🚪</div><div><div class="stat-val">${fired.length}</div><div class="stat-lbl">Звільнено (${perLbl})</div></div></div>
     </div>
