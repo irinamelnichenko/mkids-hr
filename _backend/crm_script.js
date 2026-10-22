@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.482
+// m.kids CRM — Google Apps Script v7.483
+// v7.483: getUnderpaid — «сплачено наперед» (Бюджет 0, а раніше у 2026 одна сума на кілька місяців) поза недоотриманим;
+//   feeMismatch (у Payment стабільно інша сума, ніж у картці); fill — схожі на сім'ю / «Приведи друга» без полів у картці.
 // v7.482: getUnderpaid — «Знижки та недоотримане»: сума договору − «Бюджет навч» Payment за місяць, розклад за причинами (лише читання).
 // v7.481: saveClient — правка дати народження ТІЄЇ Ж дитини більше не створює нову картку «тезки» (_sameChildRow: № договору /
 //   телефон мами чи тата / ПІБ мами); автор у «Історія_Груп» — з токена. Причина дублів Мартинюк / Єрмолаєва / Юдін (22.10.2026).
@@ -7206,7 +7208,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.482', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.483', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -11510,6 +11512,9 @@ function getUnderpaid(params){
     var v = sh.getDataRange().getValues(), h = v[0].map(String);
     var iN = h.indexOf("Ім'я дитини"), iL = h.indexOf('Локація'), iB = h.indexOf(mName + '-Бюджет-навч');
     var iP = mo > 1 ? h.indexOf(MONTHS_CAL[mo - 2] + '-Бюджет-навч') : -1, payPrev = {};
+    // v7.483: факт / бюджет навчання по всіх місяцях року — для «сплачено наперед»
+    var iFA = [], iBA = [], yr = {};
+    for (var q = 0; q < 12; q++){ iFA.push(h.indexOf(MONTHS_CAL[q] + '-Факт-навч')); iBA.push(h.indexOf(MONTHS_CAL[q] + '-Бюджет-навч')); }
     if (iB < 0) return {ok:false, error:'Немає колонки ' + mName + '-Бюджет-навч'};
     var pay = {}, payByLoc = {};
     for (var r = 1; r < v.length; r++){
@@ -11517,6 +11522,8 @@ function getUnderpaid(params){
       var k = _nameFold(L) + '||' + _normNameVac(N);
       pay[k] = (pay[k] || 0) + _promoNum(v[r][iB]);
       if (iP >= 0) payPrev[k] = (payPrev[k] || 0) + _promoNum(v[r][iP]);
+      var yk = yr[k] = yr[k] || {f:[0,0,0,0,0,0,0,0,0,0,0,0], b:[0,0,0,0,0,0,0,0,0,0,0,0]};
+      for (var q2 = 0; q2 < 12; q2++){ if (iFA[q2] >= 0) yk.f[q2] += _promoNum(v[r][iFA[q2]]); if (iBA[q2] >= 0) yk.b[q2] += _promoNum(v[r][iBA[q2]]); }
       (payByLoc[_nameFold(L)] = payByLoc[_nameFold(L)] || {})[_normNameVac(N)] = 1;
     }
     function payKey(c){   // точний ПІБ, інакше єдиний префікс за межею слова (ПІБ у Payment коротший / довший)
@@ -11568,6 +11575,20 @@ function getUnderpaid(params){
       try { var vd = _vacDiscForTarget(cards.data, c.loc, y, mo).discByNorm;
         Object.keys(vd).forEach(function(nk){ vac[_nameFold(c.loc) + '||' + nk] = vd[nk]; }); } catch(_v){} });
     var wdMonth = _upWorkdays(_ymFirst(ym), _ymLast(ym));
+    // «Сплачено наперед»: раніше в цьому році один місяць із сумою ≥ 1,5 місячної ціни, що покриває цей місяць.
+    //   Місяців = round(сума / ціна / 0,95) (ціна — звичайний місячний бюджет дитини, інакше сума договору);
+    //   покриває, якщо 0 < (цей місяць − місяць платежу) < місяців + 2 (літо між платежем і навчальним роком).
+    function paidAhead(pk, fee){
+      var yk = yr[pk]; if (!yk) return null;
+      var reg = yk.b.filter(function(x){ return x >= fee * 0.5 && x <= fee * 1.05; }).sort(function(a, b){ return a - b; });   // дрібні доплати — не ціна
+      var price = reg.length ? reg[Math.floor(reg.length / 2)] : fee;
+      for (var m0 = mo - 2; m0 >= 0; m0--){
+        var A = Math.max(yk.f[m0], yk.b[m0]); if (!(A >= price * 1.5)) continue;
+        var n = Math.round(A / price / 0.95), gap = (mo - 1) - m0;
+        if (n >= 2 && gap > 0 && gap < n + 2) return {month:MONTHS_CAL[m0], sum:Math.round(A), months:n};
+      }
+      return null;
+    }
     var rows = [], noPay = [], seenKey = {};
     active.forEach(function(c){
       if (c.dopOnly || c.free || c.status === 'future') return;
@@ -11593,9 +11614,19 @@ function getUnderpaid(params){
       if (c.end && c.end >= _ymFirst(ym) && c.end < to){ to = c.end; part += (part ? ', ' : '') + 'вибув ' + c.end.slice(8, 10) + '.' + c.end.slice(5, 7); }
       if (part && wdMonth) take('partial', budget > 0 ? fee - fee * _upWorkdays(from, to) / wdMonth : rest, part);   // Бюджет 0 + вибув/прийшов — увесь місяць
       if (part){ if (rest > 0) row.parts.unrec = (row.parts.unrec || 0) + rest; rest = 0; }                   // після неповного місяця не вгадуємо
-      if (rest > 0 && budget <= 0 && !Object.keys(row.parts).length){ take('none', rest, 'Бюджет навч 0 — перевірити Payment'); }
+      if (rest > 0 && budget <= 0 && !Object.keys(row.parts).length){
+        var pa = paidAhead(pk, fee);
+        if (pa){ row.ahead = rest; row.notes.push('сплачено наперед: ' + pa.month + ' ' + pa.sum + ' грн (≈ ' + pa.months + ' міс)'); rows.push(row); return; }   // не недоотримане
+        take('none', rest, 'Бюджет навч 0 — перевірити Payment');
+      }
       var near = function(pct){ return Math.abs(rest - fee * pct / 100) <= tol; };
-      if (rest > tol && !regHas.family && notFirstInFamily(c) && rest >= fee * 0.08 - tol) take('family', fee * 0.08, 'сім\'я: не перша дитина');
+      // v7.483: сім'я / друг / передоплата / тимчасова «за сумою» — лише якщо пояснюють різницю ПОВНІСТЮ;
+      //   інакше відкат (різниця з іншої причини, напр. у картці інша сума, ніж у Payment).
+      var snap = {parts:JSON.parse(JSON.stringify(row.parts)), notes:row.notes.slice(), rest:rest, fill:row.fill};
+      if (rest > tol && !regHas.family && notFirstInFamily(c) && rest >= fee * 0.08 - tol){
+        take('family', fee * 0.08, 'сім\'я: не перша дитина');
+        if (!(c.siblings && c.siblings.length)) row.fill = 'siblings';   // знайдено за телефоном мами — поле в картці порожнє
+      }
       if (rest > tol && !regHas.friend && referrers[c.id] && rest >= fee * 0.5 - tol) take('friend', fee * 0.5, 'рекомендувач (' + referrers[c.id] + ')');
       if (rest > tol && !regHas.prepay){
         var pp = prepay[c.id];
@@ -11606,16 +11637,20 @@ function getUnderpaid(params){
         var pr = _promoParseRule(promos[c.promo].rule);
         take('temp', pr.sum || fee * (pr.pct || 0) / 100, promos[c.promo].name);
       }
+      if (rest > tol && rest !== snap.rest){ row.parts = snap.parts; row.notes = snap.notes; rest = snap.rest; row.fill = snap.fill; }
       if (rest > tol){
         var dayFee = wdMonth ? fee / wdMonth : 0, nd = dayFee ? Math.round(rest / dayFee) : 0;
         var hint = near(8) ? 'схоже на 8% (сім\'я / передоплата за рік)' : near(50) ? 'схоже на 50% («Приведи друга»)' : (nd >= 1 && nd <= 10 && Math.abs(rest - nd * dayFee) <= tol) ? '≈ ' + nd + ' роб. дн. (' + Math.round(dayFee) + ' грн/день)'
           : (Math.round(payPrev[pk] || 0) === budget && budget > 0 && rest === diff) ? 'у Payment і минулого місяця ' + budget + ' — у картці інша сума' : '';
+        if (Math.round(payPrev[pk] || 0) === budget && budget > 0 && rest === diff) row.feeMismatch = budget;
+        if (near(8) && !(c.siblings && c.siblings.length)) row.fill = 'siblings';
+        else if (near(50) && !referrers[c.id]) row.fill = 'referrer';
         row.parts.unrec = (row.parts.unrec || 0) + rest; if (hint) row.notes.push(hint); rest = 0;
       } else if (rest > 0){ var big = Object.keys(row.parts).sort(function(a, b){ return row.parts[b] - row.parts[a]; })[0] || 'unrec'; row.parts[big] = (row.parts[big] || 0) + rest; }
       rows.push(row);
     });
-    var tot = {fee:0, budget:0, under:0, over:0}; UNDERPAID_REASONS.forEach(function(k){ tot[k] = 0; });
-    rows.forEach(function(x){ tot.fee += x.fee; tot.budget += x.budget; if (x.diff > 0) tot.under += x.diff; if (x.over) tot.over += x.over;
+    var tot = {fee:0, budget:0, under:0, over:0, ahead:0}; UNDERPAID_REASONS.forEach(function(k){ tot[k] = 0; });
+    rows.forEach(function(x){ tot.fee += x.fee; tot.budget += x.budget; if (x.ahead) tot.ahead += x.ahead; else if (x.diff > 0) tot.under += x.diff; if (x.over) tot.over += x.over;
       Object.keys(x.parts).forEach(function(k){ tot[k] += x.parts[k]; }); });
     return {ok:true, ym:ym, rows:rows, noPay:noPay, totals:tot, reasons:UNDERPAID_REASONS};
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }

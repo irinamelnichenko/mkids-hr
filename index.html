@@ -4133,11 +4133,11 @@ function _upCalc(ym,type,loc){
   var a=S._upM&&S._upM[ym], d=a&&a.data, locs=_dashLFLocs(type||'');
   var res={a:a,d:d,locs:locs}; if(!d) return res;
   var rows=d.rows.filter(function(x){ return locs.indexOf(x.loc)>=0 && (!loc||x.loc===loc); });
-  var T={fee:0,budget:0,under:0,over:0,n:0}; UP_REASONS.forEach(function(r){ T[r[0]]=0; });
+  var T={fee:0,budget:0,under:0,over:0,ahead:0,n:0}; UP_REASONS.forEach(function(r){ T[r[0]]=0; });
   var per={};
   rows.forEach(function(x){ var p=per[x.loc]||(per[x.loc]={fee:0,under:0,n:0,u:0});
     T.fee+=x.fee; T.budget+=x.budget; T.n++; p.fee+=x.fee; p.n++;
-    if(x.diff>0){ T.under+=x.diff; p.under+=x.diff; p.u++; } if(x.over) T.over+=x.over;
+    if(x.ahead) T.ahead+=x.ahead; else if(x.diff>0){ T.under+=x.diff; p.under+=x.diff; p.u++; } if(x.over) T.over+=x.over;   // v7.483 сплачено наперед — не недоотримане
     Object.keys(x.parts).forEach(function(k){ T[k]+=x.parts[k]; p[k]=(p[k]||0)+x.parts[k]; }); });
   res.rows=rows; res.T=T; res.per=per;
   res.noPay=d.noPay.filter(function(x){ return locs.indexOf(x.loc)>=0 && (!loc||x.loc===loc); });
@@ -4180,6 +4180,7 @@ function _upModalRender(){
   var T=r.T;
   var head='<div style="display:flex;gap:24px;flex-wrap:wrap;margin-bottom:10px">'
     +'<div><div style="font-size:24px;font-weight:900">'+_upMoney(T.under)+'</div><div style="font-size:12px;color:var(--gray)">недоотримано · '+_upPct(T.under,T.fee)+' від суми договорів '+_upMoney(T.fee)+'</div></div>'
+    +'<div><div style="font-size:24px;font-weight:900;color:#27ae60">'+_upMoney(T.ahead)+'</div><div style="font-size:12px;color:var(--gray)">💰 сплачено наперед (Бюджет 0, раніше оплачено за кілька місяців) — не недоотримане</div></div>'
     +'<div><div style="font-size:24px;font-weight:900;color:var(--gray)">'+_upMoney(T.over)+'</div><div style="font-size:12px;color:var(--gray)">Бюджет понад договір (борги / перенесене) — не враховано</div></div></div>';
   var reasons='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;margin-bottom:14px">'
     +UP_REASONS.map(function(x){ var on=S.upReason===x[0];
@@ -4197,7 +4198,7 @@ function _upModalRender(){
       +'</tbody></table><div style="font-size:11px;color:var(--gray);margin-top:4px">Порядок мережі · клік по рядку — лише ця локація</div></div>';
   }
   var names={}; UP_REASONS.forEach(function(x){ names[x[0]]=x[1]; });
-  var list=r.rows.filter(function(x){ return x.diff>0 && (!S.upReason || x.parts[S.upReason]); })
+  var list=r.rows.filter(function(x){ return x.diff>0 && !x.ahead && (!S.upReason || x.parts[S.upReason]); })
     .sort(function(a,b){ return (S.upReason?(b.parts[S.upReason]-a.parts[S.upReason]):(b.diff-a.diff)); });
   var lst='<div style="font-size:13px;font-weight:700;margin:6px 0">'+(S.upReason?names[S.upReason]+' — ':'Поіменно — ')+list.length+' дітей</div>'
     +'<div style="overflow-x:auto"><table class="att-dash-t" style="width:100%;font-size:12px;border-collapse:collapse"><thead><tr><th style="text-align:left">Дитина</th><th style="text-align:left">Група</th><th style="text-align:left">Локація</th><th>Договір</th><th>Бюджет навч</th><th>Недоотримано</th><th style="text-align:left">Причина</th></tr></thead><tbody>'
@@ -4210,7 +4211,23 @@ function _upModalRender(){
     +'</tbody></table></div>';
   var np=r.noPay.length?'<details style="margin-top:12px"><summary style="cursor:pointer;font-size:12px;color:var(--gray)">Картка активна, у Payment немає — '+r.noPay.length+' (у суми не входять)</summary><div style="font-size:12px;margin-top:6px">'
     +r.noPay.map(function(x){ return '<a href="clients.html#open-'+encodeURIComponent(x.cid)+'" style="color:inherit">'+esc(x.name)+'</a> · '+esc(x.loc)+' · договір '+x.fee.toLocaleString('uk-UA'); }).join('<br>')+'</div></details>':'';
-  bd.innerHTML=ctl+head+reasons+lt+lst+np
+  // v7.483: списки для директорів — по локаціях у порядку мережі
+  var byLocList=function(arr, fn){ return r.locs.map(function(L){ var a=arr.filter(function(x){ return x.loc===L; }); if(!a.length) return '';
+      return '<div style="margin-top:6px"><b>'+esc(L)+'</b> ('+a.length+')<br>'+a.map(fn).join('<br>')+'</div>'; }).join(''); };
+  var lnk=function(x){ return '<a href="clients.html#open-'+encodeURIComponent(x.cid)+'" style="color:inherit;font-weight:600">'+esc(x.name)+'</a>'; };
+  var ah=r.rows.filter(function(x){ return x.ahead; });
+  var ahB=ah.length?'<details style="margin-top:12px"><summary style="cursor:pointer;font-size:12px"><b>💰 Сплачено наперед — '+ah.length+' дітей, '+_upMoney(T.ahead)+'</b> (у недоотримане не входить)</summary><div style="font-size:12px">'
+    +byLocList(ah,function(x){ return lnk(x)+' · '+esc(x.notes.join('; ')); })+'</div></details>':'';
+  var mm=r.rows.filter(function(x){ return x.feeMismatch; });
+  var mmB=mm.length?'<div style="margin-top:12px;padding:10px 12px;background:#fff8e1;border-radius:10px;font-size:12px"><b>✏️ Сума в картці ≠ Payment — '+mm.length+' дітей</b>'
+    +'<div style="color:var(--gray)">У Payment ціна та сама, що й минулого місяця; у картці інша сума — виправити картку (або Payment).</div>'
+    +byLocList(mm,function(x){ return lnk(x)+' · у картці <b>'+x.fee.toLocaleString('uk-UA')+'</b> · у Payment <b>'+x.feeMismatch.toLocaleString('uk-UA')+'</b>'; })+'</div>':'';
+  var fl=r.rows.filter(function(x){ return x.fill; });
+  var flB=fl.length?'<div style="margin-top:12px;padding:10px 12px;background:#eef6ff;border-radius:10px;font-size:12px"><b>📝 Дозаповнити в картці — '+fl.length+' дітей</b>'
+    +'<div style="color:var(--gray)">Схоже на сімейну знижку чи «Приведи друга», а поле в картці порожнє. «Рекомендувач» заповнюють у картці ПРИВЕДЕНОЇ дитини.</div>'
+    +byLocList(fl,function(x){ return lnk(x)+' · '+(x.fill==='siblings'?'«Брат / сестра» (сімейна 8%)':'«Приведи друга» 50% — у картці приведеного вказати рекомендувачем цю дитину')
+      +' · договір '+x.fee.toLocaleString('uk-UA')+', Бюджет '+x.budget.toLocaleString('uk-UA'); })+'</div>':'';
+  bd.innerHTML=ctl+head+reasons+lt+lst+mmB+flB+ahB+np
     +'<div style="font-size:11px;color:var(--gray);margin-top:8px">Недоотримано = сума договору за місяць (з урахуванням зміни суми з середини місяця) − «Бюджет навч» Payment. Відпустка й хвороба — той самий розрахунок, що йде в Payment; сім\'я / друг / передоплата — за полями карток, записами передоплат і сумою; «нерозпізнане» — різниця без причини в системі (підказка під причиною).</div>';
 }
 // ─── v7.451: АНАЛІТИКА ДОДАТКОВИХ — які заняття прибуткові (getDopAnalytics, лише читання) ───
