@@ -1867,7 +1867,7 @@ const PERMISSIONS = {
 
   rnd_director: [                                              // R&D — без фінансів, ЗП, мед.
     /*R&D-opex*/ 'opex',
-    'dashboard',   // v7.487: дашборд на всю мережу — операційні плитки + «Додаткові заняття» (без ЗП / маржі / знижок)
+    'dashboard',   // v7.487: дашборд на всю мережу — операційні плитки + «Додаткові заняття» (без ЗП / маржі / знижок; v7.488 без боргів)
     /*R&D+*/ 'card-child-development','card-child-health','activities-edit','attendance-edit',
     'clients_list','attendance_kids',                          // ✗ payments, ✗ recalc
     'employees','timesheet_staff','vacations','sick_leaves',
@@ -3455,7 +3455,7 @@ function _renderKompBlock(){
 
   // ── Хвиля 1: CFO-показники за ОБРАНИЙ МІСЯЦЬ (0 = «За рік») ──
   var cfoOn=_kompIsCFO();
-  var dirOn=!cfoOn && _dashLite();   // v7.486: директору — лише «Борги» своєї локації; v7.487 + R&D — борги мережі
+  var dirOn=!cfoOn && _dashRole()==='director';   // v7.486: директору — лише «Борги» своєї локації; v7.488 R&D боргів не бачить
   if(cfoOn||dirOn){
     // v7.400: суми — без копійок; у плитках — коротко (млн/тис), повне значення — у підказці
     var fmtG=function(n){ return n==null?'—':Math.round(Number(n)||0).toLocaleString('uk-UA')+' ₴'; };
@@ -3609,7 +3609,7 @@ function renderDash(){
   if(_dqCan()) _ensureDq().then(function(){ _dashSoftRerender(); if(typeof _dqModalRender==='function') _dqModalRender(); });   // v7.485 якість даних   // v7.482 знижки та недоотримане (CFO); v7.484 сховано
   _ensureGroupNorms().then(_dashSoftRerender);           // v7.399 місця в групах — «Норми груп»
   _ensureRatingsYear(_kompYear()).then(_dashSoftRerender); // v7.100 оцінки вихователів — середнє за рік
-  if(!_kompIsCFO() && _dashLite()) _ensureDebtsLive().then(_dashSoftRerender);   // v7.486 директор — борги своєї локації (бекенд обрізає)
+  if(!_kompIsCFO() && _dashRole()==='director') _ensureDebtsLive().then(_dashSoftRerender);   // v7.488 R&D — без боргів, запит не йде   // v7.486 директор — борги своєї локації (бекенд обрізає)
   if(_kompIsCFO()){ _ensureDebtsLive().then(_dashSoftRerender);   // v7.463 борги наживо
     _ensureSalOv(_kompYear()).then(_dashSoftRerender); _ensureSalOv(_kompYear()-1).then(_dashSoftRerender); _ensureOpexOv(_kompYear()).then(_dashSoftRerender); _ensurePayments().then(_dashSoftRerender); } // v7.112/116 CFO
   _renderDashNow();
