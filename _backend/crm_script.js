@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.471
+// m.kids CRM — Google Apps Script v7.472
+// v7.472: scenarios27Row17 — пише ЛИШЕ B17:M17 («Випускників за місяць») аркуша Scenarios у файлах _27; PAY_READONLY_YEARS без змін.
 // v7.471: scenarios27Bulk — НОВИЙ аркуш «Scenarios» (шаблон Осокорків A1:M20) у файлах _27 інших садків і шкіл; є — пропуск; PAY_READONLY_YEARS без змін.
 // v7.470: scenarios27Create — разовий НОВИЙ аркуш «Scenarios» у «Осокорки сад_27» (дозвіл CFO 22.10.2026); інші аркуші й PAY_READONLY_YEARS без змін.
 // v7.469: файли Payment 2027 — лише читання (PAY_READONLY_YEARS): нова картка / розірвання / перехід пишуть тільки 2026; чистка, бюджет, CF, OPEX (і onEdit), назви груп, пілот 2027 — відмова READ_ONLY.
@@ -7201,7 +7202,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.471', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.472', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -7447,6 +7448,7 @@ function doPost(e) {
     else if (body.action === 'payNewContract')            result = payActionPost(payNewContract, body);     // v7.433 (CFO; dryRun)
     else if (body.action === 'payTermination')            result = payActionPost(payTermination, body);     // v7.433
     else if (body.action === 'payGroupTransfer')          result = payActionPost(payGroupTransfer, body);   // v7.433
+    else if (body.action === 'scenarios27Row17')          result = scenarios27Row17(body);                  // v7.472 лише B17:M17 аркуша Scenarios у файлах _27 (CFO; dryRun)
     else if (body.action === 'scenarios27Bulk')           result = scenarios27Bulk(body);                   // v7.471 Scenarios у файлах _27 садків і шкіл (CFO; dryRun)
     else if (body.action === 'scenarios27Create')         result = scenarios27Create(body);                 // v7.470 новий аркуш Scenarios у Осокорки сад_27 (CFO; dryRun)
     else if (body.action === 'pay27Clean')                result = pay27Clean(body);                        // v7.436 чистка Payment 2027 (CFO; dryRun)
@@ -9148,6 +9150,38 @@ function scenarios27Bulk(body){
         rec.status = 'створено'; rec.B14 = w.B14; rec.B16 = w.B16; rec.M19base = w.M19base; rec.sep = w.sep; rec.formulaOk = w.formulaOk;
         _moneyJournalLog([{by:body.by || 'система', route:'scenarios27Bulk', loc:it.loc, name:'', year:2027, month:'', col:'новий аркуш Scenarios',
           before:'', after:'A1:M20', reason:'дозвіл CFO 22.10.2026: лише новий аркуш'}]);
+      } catch(e){ rec.status = 'помилка: ' + String(e && e.message || e); }
+      out.push(rec);
+    });
+    return {ok:true, dryRun:dryRun, items:out};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+// v7.472 (дозвіл CFO 22.10.2026): лише рядок 17 (B17:M17, «Випускників за місяць») аркуша «Scenarios» у файлах _27.
+//   Нічого іншого не пише; аркуша немає — пропуск. PAY_READONLY_YEARS лишається.
+//   POST scenarios27Row17 {items:[{loc, gr:[12]}], dryRun} (CFO): gr — цілі ≥ 0, ненульові лише червень–серпень.
+function scenarios27Row17(body){
+  try {
+    body = body || {};
+    var dryRun = (body.dryRun !== false), out = [], map = PAY_FILES_BY_YEAR[2027] || {};
+    if (!dryRun && !_payCfoOnly(body)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+    (body.items || []).forEach(function(it){
+      var rec = {loc:it.loc};
+      try {
+        var g = it.gr, id = map[it.loc];
+        if (!id){ rec.status = 'пропущено: немає файлу 2027'; out.push(rec); return; }
+        if (!g || g.length !== 12 || g.some(function(x, i){ return typeof x !== 'number' || x < 0 || x !== Math.floor(x) || ((i < 5 || i > 7) && x !== 0); })){
+          rec.status = 'помилка: gr — 12 цілих ≥ 0, ненульові лише червень–серпень'; out.push(rec); return; }
+        var ss = SpreadsheetApp.openById(id), sh = ss.getSheetByName(SCEN27_TAB); rec.fileId = id; rec.file = ss.getName();
+        if (!sh){ rec.status = 'пропущено: аркуша Scenarios немає'; out.push(rec); return; }
+        var lbl = String(sh.getRange('A17').getValue() || '');
+        if (lbl !== 'Випускників за місяць'){ rec.status = 'пропущено: A17 = «' + lbl + '», а не «Випускників за місяць»'; out.push(rec); return; }
+        var R = sh.getRange('B17:M17');
+        rec.before = R.getValues()[0]; rec.after = g;
+        if (dryRun){ rec.status = 'буде записано'; rec.M19base = sh.getRange('M19').getDisplayValue(); out.push(rec); return; }
+        R.setValues([g]); SpreadsheetApp.flush();
+        rec.status = 'записано'; rec.M19base = sh.getRange('M19').getDisplayValue(); rec.B1 = sh.getRange('B1').getDisplayValue();
+        _moneyJournalLog([{by:body.by || 'система', route:'scenarios27Row17', loc:it.loc, name:'', year:2027, month:'', col:'Scenarios B17:M17 (випускники)',
+          before:rec.before.join(','), after:g.join(','), reason:'випускники з Payment_27 (дозвіл CFO 22.10.2026)'}]);
       } catch(e){ rec.status = 'помилка: ' + String(e && e.message || e); }
       out.push(rec);
     });
