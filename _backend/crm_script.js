@@ -1,7 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.489
+// m.kids CRM — Google Apps Script v7.490
+// v7.490: тимчасову devDirToken прибрано (перевірку дашборда директора Бігової пройдено 22.10.2026).
 // v7.489: токен — UTF-8 (кирилиця в loc губилась у «??????»; старі токени приймаються); директор — локація з «Користувачів» за id,
-//   зіставлення з реєстром локацій; ТИМЧАСОВО devDirToken (CFO) для перевірки дашборда директора — прибрати в v7.490.
+//   зіставлення з реєстром локацій.
 // v7.486: директор (токен role=director) — лише своя локація: чужий loc — відмова; мережеві відповіді дашборда обрізаються (_dirScope*).
 // v7.485: getDataQuality — «🧹 Якість даних» (лише читання): картки ↔ Payment наживо (_yearlyLive), дублі, суми, наступні місяці, порожні поля.
 // v7.483: getUnderpaid — «сплачено наперед» (Бюджет 0, а раніше у 2026 одна сума на кілька місяців) поза недоотриманим;
@@ -7254,24 +7255,6 @@ function _dirFilter(action, res, dir){
   return out;
 }
 
-// ТИМЧАСОВО (v7.489, прибрати в v7.490): тестовий токен директора локації — лише CFO, живе 30 хв.
-function devDirToken(params){
-  var cfo = false;
-  try { cfo = !!(_CURRENT_AUTH && String(_CURRENT_AUTH.role).toLowerCase() === 'cfo') || String(_getActor(Number(params.actorId) || 0).role).toLowerCase() === 'cfo'; } catch(_a){}
-  if (!cfo) return {ok:false, code:'FORBIDDEN', error:'Лише CFO'};
-  var want = _nameFold(trim(params.loc || '')), v = _getUsersSheet().getDataRange().getValues();
-  for (var i = 1; i < v.length; i++){
-    var u = _parseUserRow(v[i]);
-    if (String(u.role).toLowerCase() === 'director' && u.active !== false && _nameFold(u.loc) === want){
-      var t = _issueToken(u), p = JSON.parse(Utilities.newBlob(Utilities.base64DecodeWebSafe(t.split('.')[0])).getDataAsString('UTF-8'));
-      p.exp = Date.now() + 30 * 60 * 1000;
-      var pj = JSON.stringify(p);
-      return {ok:true, id:u.id, loc:u.loc, token:_b64uUtf8(pj) + '.' + _authHmacUtf8(pj)};
-    }
-  }
-  return {ok:false, error:'Директора локації не знайдено'};
-}
-
 function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
@@ -7291,7 +7274,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.489', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.490', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -7433,7 +7416,6 @@ function doGet(e) {
     else if (action === 'getDiscounts')                result = getDiscounts(e.parameter || {});           // v7.414 реєстр знижок
     else if (action === 'getPromoReport')              result = getPromoReport(e.parameter || {});         // v7.414 звіт по акціях
     else if (action === 'getPromoAttention')           result = getPromoAttention(e.parameter || {});      // v7.414 передоплати-здогадки + пропозиції
-    else if (action === 'devDirToken')               result = devDirToken(e.parameter || {});            // ТИМЧАСОВО v7.489 — прибрати в v7.490
     else if (action === 'getDataQuality')             result = getDataQuality(e.parameter || {});         // v7.485 якість даних (лише читання)
     else if (action === 'getUnderpaid')                result = getUnderpaid(e.parameter || {});           // v7.482 знижки та недоотримане (лише читання)
     else if (action === 'getPromoCardIndex')           result = getPromoCardIndex();                       // v7.414 картки мережі для вибору рекомендувача/брата
