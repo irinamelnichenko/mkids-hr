@@ -3602,7 +3602,7 @@ function renderDash(){
   _ensurePayments().then(_dashSoftRerender);             // v7.399 групи й діти — з Payment наживо
   _ensureAttDash().then(_dashSoftRerender);              // v7.474 відвідування (табель дітей, поточний місяць)
   _ensureRisk().then(_dashSoftRerender);                 // v7.479 ризик розірвання (+ попередній місяць табеля)
-  if(_riskCanMoney()) _ensureUp().then(_dashSoftRerender);   // v7.482 знижки та недоотримане (CFO)
+  if(UP_TILE_ON && _riskCanMoney()) _ensureUp().then(_dashSoftRerender);   // v7.482 знижки та недоотримане (CFO); v7.484 сховано
   _ensureGroupNorms().then(_dashSoftRerender);           // v7.399 місця в групах — «Норми груп»
   _ensureRatingsYear(_kompYear()).then(_dashSoftRerender); // v7.100 оцінки вихователів — середнє за рік
   if(_kompIsCFO()){ _ensureDebtsLive().then(_dashSoftRerender);   // v7.463 борги наживо
@@ -4143,8 +4143,10 @@ function _upCalc(ym,type,loc){
   res.noPay=d.noPay.filter(function(x){ return locs.indexOf(x.loc)>=0 && (!loc||x.loc===loc); });
   return res;
 }
+// v7.484: плитку сховано для всіх, поки не вивіримо цифри (код і бекенд getUnderpaid лишаються). Увімкнути — true.
+var UP_TILE_ON=false;
 function _renderUpTile(){
-  if(!_riskCanMoney()) return '';
+  if(!UP_TILE_ON || !_riskCanMoney()) return '';
   var r=_upCalc(_upYm(),'',''), T=r.T;
   var big=r.d?_upMoney(T.under):'…';
   var sub=!r.d?(r.a&&r.a.error?'звіт не завантажився':'рахую…'):(_upPct(T.under,T.fee)+' від договорів · нерозпізнане '+_upMoney(T.unrec+T.none));
