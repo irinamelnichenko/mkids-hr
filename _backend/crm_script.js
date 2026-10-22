@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.472
+// m.kids CRM — Google Apps Script v7.473
+// v7.473: реєстр 2027 — школи (Осокорки школа_27, 228_27) на файли CFO з папки «Ukraine 27»; PAY_READONLY_YEARS без змін.
 // v7.472: scenarios27Row17 — пише ЛИШЕ B17:M17 («Випускників за місяць») аркуша Scenarios у файлах _27; PAY_READONLY_YEARS без змін.
 // v7.471: scenarios27Bulk — НОВИЙ аркуш «Scenarios» (шаблон Осокорків A1:M20) у файлах _27 інших садків і шкіл; є — пропуск; PAY_READONLY_YEARS без змін.
 // v7.470: scenarios27Create — разовий НОВИЙ аркуш «Scenarios» у «Осокорки сад_27» (дозвіл CFO 22.10.2026); інші аркуші й PAY_READONLY_YEARS без змін.
@@ -7202,7 +7203,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.472', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.473', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -9009,7 +9010,7 @@ function movePaymentRowsToGroup(body){
 //   «Переходи_Payment» (CONFIG). Автоматичний запуск зі збереження картки — лише коли увімкнено PAY_AUTO (властивість скрипта).
 //   Локації Управління не чіпаємо.
 // ═══════════════════════════════════════════════════════════════════════════
-// v7.442: садочки — файли, які CFO оновила вручну в папці «Ukraine 27» (19.10.2026); школи — старі ID.
+// v7.442: садочки — файли, які CFO оновила вручну в папці «Ukraine 27» (19.10.2026). v7.473: школи — теж файли CFO з цієї папки (22.10.2026).
 var PAY_FILES_BY_YEAR = {
   2027: {
     'Осокорки':       '1LvSpKnMii9l5h-O_CA6ZABh2CmR0n_ZdFJG7uyZfNbw',
@@ -9023,8 +9024,8 @@ var PAY_FILES_BY_YEAR = {
     'Бровари':        '1uITJD2i6efLqa3gS_sXykgWys75bHP7w2V_kGkr7-Ec',
     'Кругла':         '1-5j7y6Wyx-0hjoSofWWRaiCJ2mOWP_HIgYZR9JCy9WU',
     'Бігова':         '1aFav6DhwJUrWUhjssYH1JstPJTxfZUoH_GC9SoCYt5I',
-    'Школа Осокорки': '1fzBOVCir1gASG9kZGyUauHyTLSMTWMOG_e-37Bevb8o',
-    'Школа 228':      '14nGMKZtjpa0Ba4VRu6qcVb0uG9PreYPcvwXKzyNiMZY'
+    'Школа Осокорки': '1cAOGTgVF2kFmR9QOTEwPrasbJYdDIkWUiJQzofasf7U',   // v7.473: файли CFO (раніше 1fzBOVCi… — стара копія з BKP-вкладками)
+    'Школа 228':      '1kM6BC7gSpS7WMhRcjUJNGqMeAALaK5G9Z9v9WJyWVZU'    // v7.473 (раніше 14nGMKZt…)
   }
 };
 var PAY_BASE_YEAR = 2026;   // рік файлів реєстру CONFIG
