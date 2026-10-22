@@ -157,13 +157,9 @@ input,select,textarea{font-family:inherit}
 .card-hd h3{font-size:14px;font-weight:700;color:var(--dark)}
 
 /* STATS */
-.stats-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:16px;margin-bottom:22px}
-/* v7.493: стабільна сітка — завжди 5 у рядку на широкому екрані (раніше auto-fit: поява смуги прокрутки ламала рядок 5→4) */
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:16px;margin-bottom:22px}
+/* v7.495: сітка як до v7.493; щоб кількість плиток у рядку не стрибала від смуги прокрутки (відкриття деталей) — місце під неї зарезервоване */
 html{scrollbar-gutter:stable}
-@media(max-width:1100px){.stats-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
-@media(max-width:760px){.stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:420px){.stats-grid{grid-template-columns:minmax(0,1fr)}}
-.stat-card>div:last-child{min-width:0}
 .stat-card{background:#fff;border-radius:var(--r);padding:18px;box-shadow:var(--sh);
   display:flex;align-items:center;gap:14px;transition:transform .2s}
 .stat-card:hover{transform:translateY(-2px)}
