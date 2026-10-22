@@ -1917,6 +1917,7 @@ const PERMISSIONS = {
   // analytics_hr — інакше пункт зникав із сайдбару, але сторінка лишалась
   // доступною за прямим посиланням і через #hash.
   director: [
+    'dashboard',         // v7.486: дашборд — лише своя локація (бекенд обрізає дані за токеном)
     'clients_list','payments','attendance_kids',
     'needs_attention',   // v7.273: «Потребують уваги» — CFO усі локації, директорка своя
     'cards_completion',  // v7.275: «Неповні картки» — CFO усі локації, директорка своя
@@ -2523,7 +2524,7 @@ function applyRoleVisibility(){
   //   URL/deep-link і hasPerm НЕ чіпаємо: сторінки доступні тим, хто знає адресу.
   //   Щоб повернути — видалити цей блок.
   (function(){
-    var DASH_ALLOWED  = ['cfo','hr'];   // v6.43: hidden, restore later
+    var DASH_ALLOWED  = ['cfo','hr','director'];   // v6.43: hidden, restore later; v7.486 + директор (своя локація)
     var TASKS_ALLOWED = ['cfo'];        // v6.43: hidden, restore later
     if (DASH_ALLOWED.indexOf(role) === -1)
       document.querySelectorAll('[data-permission="dashboard"]').forEach(el => { el.style.display='none'; });
@@ -3453,7 +3454,8 @@ function _renderKompBlock(){
 
   // ── Хвиля 1: CFO-показники за ОБРАНИЙ МІСЯЦЬ (0 = «За рік») ──
   var cfoOn=_kompIsCFO();
-  if(cfoOn){
+  var dirOn=!isHR && String((S.user&&S.user.role)||'').toLowerCase()==='director';   // v7.486: директору — лише «Борги» своєї локації
+  if(cfoOn||dirOn){
     // v7.400: суми — без копійок; у плитках — коротко (млн/тис), повне значення — у підказці
     var fmtG=function(n){ return n==null?'—':Math.round(Number(n)||0).toLocaleString('uk-UA')+' ₴'; };
     var fmtShort=function(n){ var v=Number(n)||0, a=Math.abs(v);
@@ -3470,7 +3472,7 @@ function _renderKompBlock(){
 
     // #1 Борги (v7.463) — НАЖИВО: накопичений борг на сьогодні по всій мережі (getDebtsLive), не статус одного місяця.
     var DL=S._debtsLive, dbtLoad=!!(DL&&DL.ok), dbtN=0, dbtSum=0, _dbtRows=[];
-    if(dbtLoad){ Object.keys(DL.locs||{}).forEach(function(l){ if(!_isKompNetwork(l)) return; var x=DL.locs[l], o=(DL.old||{})[l]||{n:0,sum:0};
+    if(dbtLoad){ Object.keys(DL.locs||{}).forEach(function(l){ if(!_isKompNetwork(l) || (!isHR && l!==myLoc)) return; var x=DL.locs[l], o=(DL.old||{})[l]||{n:0,sum:0};
         dbtN+=x.n; dbtSum+=x.sum; if(x.n||o.n) _dbtRows.push({loc:l,n:x.n,sum:x.sum,kids:x.kids,oldN:o.n,oldSum:o.sum}); });
       _dbtRows=_kompSortByLoc(_dbtRows,function(r){ return r.loc; }); }
     var debtTbl=!dbtLoad?'<div class="empty"><p>'+(DL&&!DL.ok?'Не вдалося порахувати: '+esc(DL.error||''):'Рахую борги по всіх файлах Payment…')+'</p></div>':(_dbtRows.length?'<div class="tbl-wrap"><table><thead><tr><th>Локація</th><th>Боржників</th><th>Сума боргу</th></tr></thead><tbody>'+
@@ -3567,13 +3569,13 @@ function _renderKompBlock(){
     tileDefs.term={ic:'🚪',cls:'si-p',lbl:'Причини розірвання',val:(termLoad?termTotal:'—'),sub:'розірвань · '+perLbl};
     tileDefs.p2r={ic:'⚖️',cls:'si-b',lbl:'Фонд ЗП / оборот',val:(p2rLoad&&pPct!=null?pPct+'%':'—'),sub:'фонд/оборот · '+perLbl};
     var _cfoHd=function(h3,note){ return '<div class="card-hd" style="flex-wrap:wrap;gap:6px"><h3>'+h3+'</h3><div style="display:flex;align-items:center;gap:8px"><span style="font-size:12px;color:var(--gray)">'+note+'</span>'+cfoSel+'</div></div>'; };
-    _panels.debt=_cfoHd('💳 Борги','на сьогодні · наживо з Payment')+debtTbl;
+    _panels.debt=(dirOn?'<div class="card-hd"><h3>💳 Борги</h3><span style="font-size:12px;color:var(--gray)">на сьогодні · наживо з Payment · '+esc(myLoc)+'</span></div>':_cfoHd('💳 Борги','на сьогодні · наживо з Payment'))+debtTbl;
     _panels.salpay=_cfoHd('💸 Виплата ЗП',perLbl+' '+y)+salTbl;
     _panels.margin=_cfoHd('📈 Маржа по локації',perLbl+' '+y+' · дохід(факт) − ЗП − OPEX')+mgTbl;
     _panels.term=_cfoHd('🚪 Причини розірвання',perLbl+' '+y)+termTbl;
     _panels.p2r=_cfoHd('⚖️ Фонд ЗП до обороту',perLbl+' '+y+' · фонд/оборот')+p2rTbl;
   }
-  var _allTiles=_tile('fill')+_tile('free')+_tile('kpi')+_tile('rate')+(cfoOn?(_tile('debt')+_tile('salpay')+_tile('margin')+_tile('p2r')+_tile('term')):'');
+  var _allTiles=_tile('fill')+_tile('free')+_tile('kpi')+_tile('rate')+(cfoOn?(_tile('debt')+_tile('salpay')+_tile('margin')+_tile('p2r')+_tile('term')):dirOn?_tile('debt'):'');
   return `
     <div class="stats-grid" style="margin-bottom:16px">${_allTiles}</div>
     ${_panelFor(['fill','free','kpi','rate','debt','salpay','margin','p2r','term'])}`;
@@ -3606,6 +3608,7 @@ function renderDash(){
   if(_dqCan()) _ensureDq().then(function(){ _dashSoftRerender(); if(typeof _dqModalRender==='function') _dqModalRender(); });   // v7.485 якість даних   // v7.482 знижки та недоотримане (CFO); v7.484 сховано
   _ensureGroupNorms().then(_dashSoftRerender);           // v7.399 місця в групах — «Норми груп»
   _ensureRatingsYear(_kompYear()).then(_dashSoftRerender); // v7.100 оцінки вихователів — середнє за рік
+  if(!_kompIsCFO() && String((S.user&&S.user.role)||'').toLowerCase()==='director') _ensureDebtsLive().then(_dashSoftRerender);   // v7.486 директор — борги своєї локації (бекенд обрізає)
   if(_kompIsCFO()){ _ensureDebtsLive().then(_dashSoftRerender);   // v7.463 борги наживо
     _ensureSalOv(_kompYear()).then(_dashSoftRerender); _ensureSalOv(_kompYear()-1).then(_dashSoftRerender); _ensureOpexOv(_kompYear()).then(_dashSoftRerender); _ensurePayments().then(_dashSoftRerender); } // v7.112/116 CFO
   _renderDashNow();
@@ -4943,7 +4946,7 @@ function _renderDashNow(){
     ${isHR?_renderContrBlock():''}
     ${isHR?_renderDopBlock():''}
 
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+    ${isHR?`<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
       <div class="card">
         <div class="card-hd"><h3>📉 Плинність кадрів ${Y}</h3>
           <div style="display:flex;gap:4px">${[['month','Міс'],['quarter','Квартал'],['year','Рік']].map(([k,l])=>`<button class="btn btn-${period===k?'primary':'secondary'} btn-sm" onclick="S.dashTurnPeriod='${k}';_renderDashNow()">${l}</button>`).join('')}</div>
@@ -4963,7 +4966,7 @@ function _renderDashNow(){
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px">
       <div class="card"><div class="card-hd"><h3>😊 eNPS (співробітники)</h3></div><div class="empty"><span class="ei">📭</span><h4>Дані не завантажено</h4><p>Чекаємо таблицю</p></div></div>
       <div class="card"><div class="card-hd"><h3>⭐ NPS (клієнти)</h3></div><div class="empty"><span class="ei">📭</span><h4>Дані не завантажено</h4><p>Чекаємо таблицю</p></div></div>
-    </div>
+    </div>`:''}
   `);
 }
 

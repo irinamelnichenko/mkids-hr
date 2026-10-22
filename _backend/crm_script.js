@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.485
+// m.kids CRM — Google Apps Script v7.486
+// v7.486: директор (токен role=director) — лише своя локація: чужий loc — відмова; мережеві відповіді дашборда обрізаються (_dirScope*).
 // v7.485: getDataQuality — «🧹 Якість даних» (лише читання): картки ↔ Payment наживо (_yearlyLive), дублі, суми, наступні місяці, порожні поля.
 // v7.483: getUnderpaid — «сплачено наперед» (Бюджет 0, а раніше у 2026 одна сума на кілька місяців) поза недоотриманим;
 //   feeMismatch (у Payment стабільно інша сума, ніж у картці); fill — схожі на сім'ю / «Приведи друга» без полів у картці.
@@ -7192,11 +7193,41 @@ function _authGate(action, token, method){
   return null;                                                           // ЕТАП 1: пропускаємо
 }
 
+// ═══ v7.486 ДИРЕКТОР — ЛИШЕ СВОЯ ЛОКАЦІЯ (за токеном; без токена, поки AUTH_ENFORCE вимкнено, не діє) ═══
+//   1) параметр loc / locs з чужою локацією — відмова FORBIDDEN_LOC; getAttendance без loc — примусово своя;
+//   2) CFO-звіти (DIR_DENY) — відмова; 3) мережеві відповіді (DIR_FILTER) — лише рядки його локації.
+var DIR_DENY   = {getUnderpaid:1, getEntryHistory:1, getMoneyJournal:1};
+var DIR_FILTER = {getClients:1, getPayments:1, getPaymentsYearly:1, getPaymentsLive:1, getDebtsLive:1, getDataQuality:1};
+function _dirAuth(){ var a = _CURRENT_AUTH; return (a && String(a.role || '').toLowerCase() === 'director' && a.loc) ? {loc:String(a.loc)} : null; }
+function _dirSameLoc(a, b){ return _nameFold(trim(a)) === _nameFold(trim(b)); }
+function _dirPre(action, prm, dir){
+  if (DIR_DENY[action]) return {ok:false, code:'FORBIDDEN', error:'Недоступно для директора'};
+  var bad = function(v){ return v != null && String(v).trim() !== '' && !_dirSameLoc(v, dir.loc); };
+  if (prm && bad(prm.loc)) return {ok:false, code:'FORBIDDEN_LOC', error:'Директор бачить лише свою локацію (' + dir.loc + ')'};
+  if (prm && prm.locs && String(prm.locs).split(',').some(function(x){ return bad(x); })) return {ok:false, code:'FORBIDDEN_LOC', error:'Директор бачить лише свою локацію (' + dir.loc + ')'};
+  if (prm && action === 'getAttendance' && !String(prm.loc || '').trim()) prm.loc = dir.loc;
+  return null;
+}
+function _dirFilter(action, res, dir){
+  if (!DIR_FILTER[action] || !res || res.ok === false) return res;
+  var mine = function(L){ return _dirSameLoc(L, dir.loc); }, out = {};
+  Object.keys(res).forEach(function(k){ out[k] = res[k]; });   // копія — кешований об'єкт не чіпаємо
+  if (Array.isArray(out.headers) && Array.isArray(out.rows)){ var iL = out.headers.indexOf('Локація'); if (iL >= 0) out.rows = out.rows.filter(function(r){ return mine(r[iL]); }); }
+  if (Array.isArray(out.data)) out.data = out.data.filter(function(o){ return o && mine(o['Локація'] != null ? o['Локація'] : o.loc); });
+  if (Array.isArray(out.issues)) out.issues = out.issues.filter(function(o){ return mine(o.loc); });
+  ['locs','old'].forEach(function(k){ if (out[k] && !Array.isArray(out[k]) && typeof out[k] === 'object'){ var o = {}; Object.keys(out[k]).forEach(function(L){ if (mine(L)) o[L] = out[k][L]; }); out[k] = o; } });
+  if (Array.isArray(out.misfiled)) out.misfiled = out.misfiled.filter(function(o){ return mine(o && (o.loc || o['Локація'])); });
+  out.scopedTo = dir.loc;
+  return out;
+}
+
 function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
+    var _dir = _dirAuth();                                                                   // v7.486 директор — своя локація
+    if (_dir){ var _dp = _dirPre(action, e.parameter || {}, _dir); if (_dp) return jsonOut(_dp); }
     var result;
     // v7.402: службові запуски через GET (агрегати, імпорт, злиття) — скидаємо всі групи кешу
     if (/^(run|sync|import|merge|purge|refresh|send|tgGet)/.test(action)){
@@ -7207,9 +7238,9 @@ function doGet(e) {
     var _gcs = GET_CACHE_SPEC[action], _gck = '';
     if (_gcs && String((e.parameter && e.parameter.nocache) || '') !== '1'){
       _gck = _gcKey(action, e.parameter || {}, _gcs);
-      if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
+      if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.485', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.486', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -7385,7 +7416,7 @@ function doGet(e) {
     else if (action === 'get')                         result = getDashRecords();                            // v7.106 дашборд-записи (S.recs) — читання
     else                                             result = {ok:false, error:'Unknown action: ' + action};
     if (_gck && result && result.ok !== false) _cacheGzPutBig(_gck, result, _gcs.ttl);   // v7.402
-    return jsonOut(result);
+    return jsonOut(_dir ? _dirFilter(action, result, _dir) : result);
   } catch(err) {
     try { _tgErr('route:' + ((typeof action !== 'undefined' && action) || (typeof body !== 'undefined' && body && body.action) || '?'), err); } catch(_le){}   // v7.294: збої маршрутів — у TG_Err
     return jsonOut({ok:false, error:err.message || String(err)});
