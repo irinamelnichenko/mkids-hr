@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.473
+// m.kids CRM — Google Apps Script v7.481
+// v7.481: saveClient — правка дати народження ТІЄЇ Ж дитини більше не створює нову картку «тезки» (_sameChildRow: № договору /
+//   телефон мами чи тата / ПІБ мами); автор у «Історія_Груп» — з токена. Причина дублів Мартинюк / Єрмолаєва / Юдін (22.10.2026).
 // v7.473: реєстр 2027 — школи (Осокорки школа_27, 228_27) на файли CFO з папки «Ukraine 27»; PAY_READONLY_YEARS без змін.
 // v7.472: scenarios27Row17 — пише ЛИШЕ B17:M17 («Випускників за місяць») аркуша Scenarios у файлах _27; PAY_READONLY_YEARS без змін.
 // v7.471: scenarios27Bulk — НОВИЙ аркуш «Scenarios» (шаблон Осокорків A1:M20) у файлах _27 інших садків і шкіл; є — пропуск; PAY_READONLY_YEARS без змін.
@@ -7203,7 +7205,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.473', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.481', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -11306,8 +11308,23 @@ function setClientGeo(body){
   return {ok:false, error:'Картку не знайдено: ' + id};
 }
 
+// v7.481: та сама дитина, а не тезка, якщо збігається хоч одне: № договору, телефон мами/тата (останні 9 цифр,
+//   перехресно), ПІБ мами. Тезки — різні діти з одним ПІБ у локації, у них інші батьки й договір.
+//   rowVals — рядок «Клієнти»: 6 ПІБ мами, 7 телефон мами, 9 телефон тата, 19 № договору.
+function _sameChildRow(data, rowVals){
+  var d9 = function(v){ var x = String(v == null ? '' : v).replace(/\D/g, ''); return x.length >= 9 ? x.slice(-9) : ''; };
+  var nn = function(v){ return String(v == null ? '' : v).trim().toLowerCase().replace(/\s+/g, ' '); };
+  var cn = nn(data.contractNumber), rcn = nn(rowVals[19]);
+  if (cn && rcn && cn === rcn) return true;
+  var mp = d9(data.momPhone), dp = d9(data.dadPhone), rmp = d9(rowVals[7]), rdp = d9(rowVals[9]);
+  if ((mp && (mp === rmp || mp === rdp)) || (dp && (dp === rdp || dp === rmp))) return true;
+  var mn = nn(data.momName);
+  return !!(mn && mn === nn(rowVals[6]));
+}
 function saveClient(data) {
   if (!data || !data.id) return {ok:false, error:'Missing id'};
+  // v7.481: автор правки — з токена (фронт його не передає), щоб «Історія_Груп» мала, хто створив картку
+  if (!data.updatedBy && !data.by){ try { var _sa = _getActor(_CURRENT_AUTH && _CURRENT_AUTH.id); if (_sa && _sa.name) data.updatedBy = _sa.name; } catch(_sa0){} }
   _invalidateLeadClientIndex();   // v7.279
   _cacheBump('fill'); _cacheBump('clients');   /* v7.336 кеш getClients */             // v7.293 кеш getFillStatus
   var ss = getCRMSpreadsheet();
@@ -11363,6 +11380,12 @@ function saveClient(data) {
     for (var rc = 1; rc < vals.length; rc++) {
       if (String(vals[rc][0]) !== String(data.id)) continue;
       var rcBday = _normBdayYMD(vals[rc][5]);
+      // v7.481: інша дата, але ті самі батьки / договір — це ПРАВКА дати народження, а не тезка → оновлюємо цей рядок.
+      //   Раніше кожна правка дати дописувала нову картку c_<ПІБ>_<локація>_<РРРРММДД> (Мартинюк Давід — 8 карток).
+      if (rcBday && rcBday !== wantBday0 && _sameChildRow(data, vals[rc])) {
+        Logger.log('[saveClient] правка дати народження "%s": %s → %s (той самий рядок)', data.id, rcBday, wantBday0);
+        break;
+      }
       if (rcBday && rcBday !== wantBday0) {
         var _sfx = wantBday0.replace(/[^0-9]/g, '').slice(0, 8);
         data.id = String(data.id) + '_' + (_sfx || 'b');
@@ -11407,7 +11430,7 @@ function saveClient(data) {
     if (_nn(vals[r2][1]) !== wantName) continue;
     if (_nn(vals[r2][2]) !== wantLoc)  continue;
     var rowBday = _normBdayYMD(vals[r2][5]);
-    if (wantBday && rowBday && wantBday !== rowBday) continue;   // різні дати народження = тезки, не чіпаємо
+    if (wantBday && rowBday && wantBday !== rowBday && !_sameChildRow(data, vals[r2])) continue;   // різні дати народження = тезки, не чіпаємо (v7.481: якщо не ті самі батьки / договір)
     candCount++;
     if (cand < 0) cand = r2;
   }
