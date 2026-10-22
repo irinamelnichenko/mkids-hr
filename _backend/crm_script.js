@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.470
+// m.kids CRM — Google Apps Script v7.471
+// v7.471: scenarios27Bulk — НОВИЙ аркуш «Scenarios» (шаблон Осокорків A1:M20) у файлах _27 інших садків і шкіл; є — пропуск; PAY_READONLY_YEARS без змін.
 // v7.470: scenarios27Create — разовий НОВИЙ аркуш «Scenarios» у «Осокорки сад_27» (дозвіл CFO 22.10.2026); інші аркуші й PAY_READONLY_YEARS без змін.
 // v7.469: файли Payment 2027 — лише читання (PAY_READONLY_YEARS): нова картка / розірвання / перехід пишуть тільки 2026; чистка, бюджет, CF, OPEX (і onEdit), назви груп, пілот 2027 — відмова READ_ONLY.
 // v7.468: постійне обʼєднання груп заняття — каталог «Разом_групи» (кол. J, updateActivity jointGroups); Salary, аналітика й звіти рахують такі групи одним заняттям щодня без 🔗 (явне обʼєднання дня має пріоритет).
@@ -7200,7 +7201,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.470', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.471', ts: new Date().toISOString(), authEnforce: _authEnforceOn()};
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
     else if (action === 'getLocationCards')    result = getLocationCards();
@@ -7446,6 +7447,7 @@ function doPost(e) {
     else if (body.action === 'payNewContract')            result = payActionPost(payNewContract, body);     // v7.433 (CFO; dryRun)
     else if (body.action === 'payTermination')            result = payActionPost(payTermination, body);     // v7.433
     else if (body.action === 'payGroupTransfer')          result = payActionPost(payGroupTransfer, body);   // v7.433
+    else if (body.action === 'scenarios27Bulk')           result = scenarios27Bulk(body);                   // v7.471 Scenarios у файлах _27 садків і шкіл (CFO; dryRun)
     else if (body.action === 'scenarios27Create')         result = scenarios27Create(body);                 // v7.470 новий аркуш Scenarios у Осокорки сад_27 (CFO; dryRun)
     else if (body.action === 'pay27Clean')                result = pay27Clean(body);                        // v7.436 чистка Payment 2027 (CFO; dryRun)
     else if (body.action === 'pay27Budget')               result = pay27Budget(body);                       // v7.441 бюджет навч 2027 садочків (CFO; dryRun)
@@ -9074,6 +9076,82 @@ function scenarios27Create(body){
     try { _moneyJournalLog([{by:body.by || 'система', route:'scenarios27Create', loc:'Осокорки', name:'', year:2027, month:'', col:'новий аркуш Scenarios',
       before:'', after:'A1:M9', reason:'дозвіл CFO 22.10.2026 на одну дію у файлі 2027'}]); } catch(_j){}
     return res;
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+// v7.471 (дозвіл CFO 22.10.2026 — лише НОВИЙ аркуш): «Scenarios» у файлах _27 інших садків і шкіл — копія шаблону Осокорків
+//   (A1:M20, ті самі формули), префікс — латинська назва локації. Аркуш уже є — пропуск. Інші аркуші не чіпає, PAY_READONLY_YEARS лишається.
+//   POST scenarios27Bulk {items:[{loc, latin, sig:[[12]×3: Conservative, Base, Aggressive], ter:[12], gr:[12], start, check}], dryRun} (CFO).
+var SCEN27_SKIP = /управл/i, SCEN27_NOT = ['Борщагівка'];
+function _scen27Write(ss, it){
+  var sh = ss.insertSheet(SCEN27_TAB, ss.getSheets().length), P = it.latin, M = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var V = [];
+  for (var r = 0; r < 20; r++){ V.push(new Array(13).fill('')); }
+  V[0][0] = 'Scenario'; V[0][1] = 'Base'; V[1][0] = 'New price';
+  M.forEach(function(m, i){ V[2][i + 1] = m; });
+  ['Conservative', 'Base', 'Aggressive'].forEach(function(n, k){ V[3 + k][0] = P + ' ' + n; it.sig[k].forEach(function(x, i){ V[3 + k][i + 1] = x; }); });
+  V[7][0] = 'New per month'; V[8][0] = 'New total';
+  V[10][0] = 'Розірвань за місяць'; it.ter.forEach(function(x, i){ V[10][i + 1] = x; });
+  V[11][0] = 'Розірвань усього';
+  V[13][0] = 'Стара ціна'; V[13][1] = it.check;
+  V[14][0] = 'Вступний внесок';
+  V[15][0] = 'Дітей на старті (гру 2026)'; V[15][1] = it.start;
+  V[16][0] = 'Випускників за місяць'; it.gr.forEach(function(x, i){ V[16][i + 1] = x; });
+  V[17][0] = 'Випускників усього'; V[18][0] = 'Дітей на кінець місяця'; V[19][0] = 'Вступні внески, грн';
+  sh.getRange(1, 1, 20, 13).setValues(V);
+  sh.getRange('B1').setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(['Conservative', 'Base', 'Aggressive'], true).setAllowInvalid(false).build());
+  sh.getRange('B2').setBackground('#ffff00'); sh.getRange('B15').setBackground('#ffff00');
+  sh.setColumnWidth(1, 180);
+  var put = function(sep){
+    var f = {8:[], 9:[], 12:[], 18:[], 19:[], 20:[]};
+    for (var c = 2; c <= 13; c++){
+      var L = _colLetter(c - 1), Q = _colLetter(c - 2);   // _colLetter — 0-based
+      f[8].push('=INDEX(' + L + '$4:' + L + '$6' + sep + 'MATCH("' + P + ' "&$B$1' + sep + '$A$4:$A$6' + sep + '0))');
+      f[9].push(c === 2 ? '=B8' : '=' + Q + '9+' + L + '8');
+      f[12].push(c === 2 ? '=B11' : '=' + Q + '12+' + L + '11');
+      f[18].push(c === 2 ? '=B17' : '=' + Q + '18+' + L + '17');
+      f[19].push('=$B$16+' + L + '9-' + L + '12-' + L + '18');
+      f[20].push('=' + L + '8*$B$15');
+    }
+    sh.getRange('B8:M9').setFormulas([f[8], f[9]]);
+    sh.getRange('B12:M12').setFormulas([f[12]]);
+    sh.getRange('B18:M20').setFormulas([f[18], f[19], f[20]]);
+    SpreadsheetApp.flush();
+    return sh.getRange('B8:M8').getDisplayValues()[0].every(function(v){ return v !== '' && !/^#/.test(v); });
+  };
+  var sep = ';'; if (!put(sep)){ sep = ','; put(sep); }
+  var D = sh.getRange('A1:M20').getDisplayValues();
+  return {sep:sep, B14:D[13][1], B16:D[15][1], M19base:D[18][12], formulaOk:D[7].slice(1).every(function(v){ return v !== '' && !/^#/.test(v); })};
+}
+function scenarios27Bulk(body){
+  try {
+    body = body || {};
+    var dryRun = (body.dryRun !== false), items = body.items || [], out = [];
+    if (!dryRun && !_payCfoOnly(body)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+    var map = PAY_FILES_BY_YEAR[2027] || {}, seen = {};
+    items.forEach(function(it){
+      var rec = {loc:it.loc, latin:it.latin};
+      try {
+        var reg = _getLocationPaymentRegistry(it.loc);
+        if (!reg || SCEN27_SKIP.test(reg.typ || '') || SCEN27_NOT.indexOf(it.loc) !== -1){ rec.status = 'пропущено: не садок/школа або виключена'; out.push(rec); return; }
+        var id = map[it.loc];
+        if (!id){ rec.status = 'пропущено: немає власного файлу 2027'; out.push(rec); return; }
+        rec.fileId = id;
+        var bad = !/^[A-Za-z0-9 ]+$/.test(String(it.latin || '')) || !it.sig || it.sig.length !== 3 || [it.sig[0], it.sig[1], it.sig[2], it.ter, it.gr].some(function(a){ return !a || a.length !== 12 || a.some(function(x){ return typeof x !== 'number' || isNaN(x); }); })
+          || typeof it.start !== 'number' || typeof it.check !== 'number';
+        if (bad){ rec.status = 'помилка: неповні дані'; out.push(rec); return; }
+        if (seen[id]){ rec.status = 'пропущено: файл уже в цьому запиті (' + seen[id] + ')'; out.push(rec); return; }
+        seen[id] = it.loc;
+        var ss = SpreadsheetApp.openById(id); rec.file = ss.getName();
+        if (ss.getSheetByName(SCEN27_TAB)){ rec.status = 'пропущено: аркуш уже є'; out.push(rec); return; }
+        if (dryRun){ rec.status = 'буде створено'; rec.tabs = ss.getSheets().length; out.push(rec); return; }
+        var w = _scen27Write(ss, it);
+        rec.status = 'створено'; rec.B14 = w.B14; rec.B16 = w.B16; rec.M19base = w.M19base; rec.sep = w.sep; rec.formulaOk = w.formulaOk;
+        _moneyJournalLog([{by:body.by || 'система', route:'scenarios27Bulk', loc:it.loc, name:'', year:2027, month:'', col:'новий аркуш Scenarios',
+          before:'', after:'A1:M20', reason:'дозвіл CFO 22.10.2026: лише новий аркуш'}]);
+      } catch(e){ rec.status = 'помилка: ' + String(e && e.message || e); }
+      out.push(rec);
+    });
+    return {ok:true, dryRun:dryRun, items:out};
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 function getScenarios27(){
