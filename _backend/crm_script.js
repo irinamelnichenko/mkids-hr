@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.492
+// m.kids CRM — Google Apps Script v7.496
+// v7.496: «Акції та знижки» — запис довідника / реєстру знижок / передоплат / покриття лише CFO (id 1); читання довідника для картки — як було.
 // v7.492: ping — діагностика CLI_TOKEN без розкриття значення (задано / довжина / перші 8 символів SHA-256).
 // v7.491: підготовка до AUTH_ENFORCE — CLI_TOKEN (службовий токен терміналу, права CFO, з властивостей скрипта);
 //   getLoginUsers — публічний список для екрана входу (ім'я, логін, роль, локація; лише керівники, без email і дат).
@@ -7304,7 +7305,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.492', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.496', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -7502,6 +7503,7 @@ function doPost(e) {
     var _g = _authGate(body.action, body.token || '', 'POST');   // v7.110
     if (_g) return jsonOut(_g);
     if (!_founderPostAllowed(body) && _isFounderReq(body)) return jsonOut(FOUNDER_READONLY);   // v7.404
+    if (PROMO_CFO_ONLY[body.action] && !_promoIsCfo(_promoActor(body))) return jsonOut({ok:false, code:'PERM_DENIED', error:'Акції та знижки — лише CFO'});   // v7.496
     _gcBumpFor(body.action);   // v7.402: запис → відповідні кеші GET застаріли
     var result;
     if      (body.action === 'remindLead')       result = remindLead(body || {});   // v7.169
@@ -39668,6 +39670,11 @@ function _promoIsOffice(a){ return !!(a && PROMO_OFFICE_ROLES.indexOf(_roleKey(a
 function _promoIsDirector(a){ return !!(a && _roleKey(a.role) === 'director'); }
 function _promoWho(a, fb){ return _entryAuthor(a && a.name ? (a.name + ' (' + String(a.role || '').toUpperCase() + ')') : (fb || '')); }
 var PROMO_DENIED = {ok:false, code:'PERM_DENIED', error:'Лише CFO / CEO / HR'};
+// v7.496: запис у довідник акцій, реєстр знижок, передоплати й покриття — лише CFO (id 1). Поля картки (Акція, Рекомендувач,
+//   Брат / сестра) пишуться через saveClient і сюди не входять; читання (getPromos, getPromoCardIndex…) — без змін.
+var PROMO_CFO_ONLY = {savePromo:1, decidePromo:1, recalcDiscounts:1, syncDiscountsToPayment:1, addManualDiscount:1, cancelDiscount:1,
+  confirmPrepayment:1, rejectPrepayment:1, addManualCoverage:1};
+function _promoIsCfo(a){ return !!(a && (_roleKey(a.role) === 'cfo' || Number(a.id) === 1)); }
 // GET-прев'ю: копія параметрів із примусовим dryRun (POST-відповіді Apps Script у браузері часто приходять як HTML).
 function _promoDry(p){ var o = {}; Object.keys(p || {}).forEach(function(k){ o[k] = p[k]; }); o.dryRun = true; delete o._internal; return o; }
 

@@ -226,7 +226,7 @@
         try { u = (typeof S !== 'undefined' && S && S.user) ? S.user : null; } catch(e){}
         if (!u){ try { var s = JSON.parse(localStorage.getItem('mkids_session') || 'null'); u = (s && s.user) || null; } catch(e){} }
         var r = u ? String(u.role || '').toLowerCase().trim() : '';
-        el.style.display = (['cfo','ceo','hr','director'].indexOf(r) !== -1) ? '' : 'none';
+        el.style.display = (r === 'cfo' || r === 'founder' || !!(u && (u.founder || Number(u.id) === 1))) ? '' : 'none';   /* v7.496: лише CFO і власник */
       };
       window._revealPromosMenu();
       window.addEventListener('load', function(){ setTimeout(window._revealPromosMenu, 600); });

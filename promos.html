@@ -544,7 +544,7 @@ code{background:#f0f4f8;padding:1px 6px;border-radius:5px;font-size:12px;color:v
         try { u = (typeof S !== 'undefined' && S && S.user) ? S.user : null; } catch(e){}
         if (!u){ try { var s = JSON.parse(localStorage.getItem('mkids_session') || 'null'); u = (s && s.user) || null; } catch(e){} }
         var r = u ? String(u.role || '').toLowerCase().trim() : '';
-        el.style.display = (['cfo','ceo','hr','director'].indexOf(r) !== -1) ? '' : 'none';
+        el.style.display = (r === 'cfo' || r === 'founder' || !!(u && (u.founder || Number(u.id) === 1))) ? '' : 'none';   /* v7.496: лише CFO і власник */
       };
       window._revealPromosMenu();
       window.addEventListener('load', function(){ setTimeout(window._revealPromosMenu, 600); });
@@ -1628,6 +1628,9 @@ async function refreshAll(){
 
 async function init(){
   S.user = readSession(); if (!S.user){ goLogin(); return; }
+  // v7.496: сторінка «Акції та знижки» — лише CFO і власник; решта (директор, медсестра, R&D…) → на дашборд.
+  var _pr = String(S.user.role || '').toLowerCase().trim();
+  if (!(_pr === 'cfo' || _pr === 'founder' || S.user.founder || Number(S.user.id) === 1)){ window.location.replace('index.html#dashboard'); return; }
   if (!promosGate()) return;
   try { updUserUI(); markActiveNav(); } catch(e){ console.warn('[promos] шелл:', e && e.message); }
   P.ym = ymNow() < P.start ? P.start : ymNow();
