@@ -3601,6 +3601,7 @@ function renderDash(){
   if(S.contrOpen) for(var _cy=CONTR_FIRST_YEAR;_cy<_kompYear()-1;_cy++) _ensureKomp(_cy).then(_dashSoftRerender);   // v7.412 аналітика договорів
   _ensurePayments().then(_dashSoftRerender);             // v7.399 групи й діти — з Payment наживо
   _ensureAttDash().then(_dashSoftRerender);              // v7.474 відвідування (табель дітей, поточний місяць)
+  _ensureRisk().then(_dashSoftRerender);                 // v7.479 ризик розірвання (+ попередній місяць табеля)
   _ensureGroupNorms().then(_dashSoftRerender);           // v7.399 місця в групах — «Норми груп»
   _ensureRatingsYear(_kompYear()).then(_dashSoftRerender); // v7.100 оцінки вихователів — середнє за рік
   if(_kompIsCFO()){ _ensureDebtsLive().then(_dashSoftRerender);   // v7.463 борги наживо
@@ -3836,7 +3837,7 @@ function _attDashMembers(){
   (S.crm?Object.values(S.crm):[]).forEach(function(c){
     if(!c||String(c.status||'').trim()!=='active'||c.dopOnly||!c.loc) return;
     var t=_dashLocType(c.loc); if(t!=='sad'&&t!=='sch') return;
-    out.push({id:String(c.id).trim(), loc:c.loc, upr:false}); });
+    out.push({id:String(c.id).trim(), cid:c.id, name:c.name, group:c.group||'', loc:c.loc, upr:false}); });
   var byName={};
   (S.crm?Object.values(S.crm):[]).forEach(function(c){ if(c&&c.loc&&_dashLocType(c.loc)==='upr') byName[c.loc+'|'+_kompNorm(c.name)]=c; });
   (Array.isArray(S._payFull)?S._payFull:[]).forEach(function(r){
@@ -3959,6 +3960,129 @@ function _attDashModalRender(){
     tbl='<button class="btn btn-secondary btn-sm" data-loc="'+esc(L0)+'" onclick="attDashGoTabel(this.dataset.loc)">📋 Відкрити табель '+esc(L0)+'</button>';
   }
   bd.innerHTML=ctl+four+todayHtml+tbl;
+}
+// ─── v7.479: РИЗИК РОЗІРВАННЯ — хто перестав ходити (табель дітей + Payment, лише читання) ───
+//   База — та сама, що у «Відвідуванні» (_attDashMembers без Управління: активні картки садків і шкіл).
+//   Робочі дні — для КОЖНОЇ локації окремо: пн–пт, коли в локації є хоч одна позначка (локація працювала й вела табель);
+//   липень–серпень не рахуємо. Сьогодні — лише якщо дитину вже відмітили «присутній» (тоді серії немає).
+//   🔴 — 10+ робочих днів поспіль без «присутній» (невідмічений день у робочий день локації теж рахується);
+//   🟠 — відвідуваність за поточний місяць < 50% (якщо в місяці вже ≥ 5 робочих днів локації);
+//   🟡 — серія лише з «Хворий» / «Відпустка»: показуємо окремо, у плитку (кількість і суму) не входить.
+//   Без жодної позначки за вікно (поточний + попередній місяць) — «немає даних», не ризик.
+//   Оплата — «Бюджет навчання» поточного місяця з Payment (усі рядки дитини в локації); суми бачить лише CFO / власник.
+var RISK_RED_DAYS=10, RISK_ORANGE_PCT=0.5, RISK_MIN_MONTH_DAYS=5;
+function _riskCanMoney(){ return isCFO() || String((S.user&&S.user.role)||'').toLowerCase()==='founder'; }
+function _riskPrevYm(){ var t=new Date(), d=new Date(t.getFullYear(), t.getMonth()-1, 1); return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2); }
+function _ensureRisk(){ return Promise.all([_ensureAttDash(_attDashYm()), _ensureAttDash(_riskPrevYm())]); }
+function _riskSummer(iso){ var m=iso.slice(5,7); return m==='07'||m==='08'; }
+// → {ready, rows:[...], noData:[...], locs} за пігулкою type і локацією loc ('' = усі в групі)
+function _riskCalc(type, loc){
+  var isHR=isNetworkRole(S.user.role), myLoc=S.user.loc||'';
+  var A=S._attDashM||{}, cur=A[_attDashYm()], prev=A[_riskPrevYm()];
+  var locs=isHR?_dashLFLocs(type||''):[myLoc];
+  var res={ready:!!(cur&&cur.data), err:(cur&&cur.error)||'', locs:locs, rows:[], noData:[]};
+  if(!res.ready) return res;
+  var data={}; [prev&&prev.data, cur.data].forEach(function(dd){ if(dd) Object.keys(dd).forEach(function(d){ data[d]=dd[d]; }); });
+  var td=tabelIso(new Date()), ym=_attDashYm();
+  var mem=_attDashMembers().filter(function(m){ return !m.upr && locs.indexOf(m.loc)>=0 && (!loc||m.loc===loc); });
+  // робочі дні кожної локації (за позначками всієї бази локації), без сьогодні, без літа
+  var idLoc={}; _attDashMembers().forEach(function(m){ if(!m.upr) idLoc[m.id]=m.loc; });
+  var days=Object.keys(data).filter(function(d){ var w=new Date(d+'T00:00:00').getDay(); return d<td && w!==0 && w!==6 && !_riskSummer(d); }).sort();
+  var locDays={};
+  days.forEach(function(d){ var seen={}; Object.keys(data[d]||{}).forEach(function(id){ var L=idLoc[id]; if(L && !seen[L]){ seen[L]=1; (locDays[L]=locDays[L]||[]).push(d); } }); });
+  // оплата за місяць: Payment поточного місяця, рядки дитини в локації
+  var pay={}, grp={};
+  (Array.isArray(S._payFull)?S._payFull:[]).forEach(function(r){
+    var k=String(r['Локація']||'').trim()+'|'+_dashNm(r["Ім'я дитини"]);
+    pay[k]=(pay[k]||0)+(Number(r['Бюджет навчання'])||0);
+    var g=String(r['Група']||'').trim(); if(g && g!=='(без групи)' && (!grp[k] || _dashIsSubGroup(grp[k]))) grp[k]=g; });
+  mem.forEach(function(m){
+    var ld=locDays[m.loc]||[], k=m.loc+'|'+_dashNm(m.name);
+    var base={m:m, group:grp[k]||m.group||'', pay:pay[k]!==undefined?pay[k]:null};
+    var any=ld.some(function(d){ return !!(data[d]||{})[m.id]; }) || !!(data[td]||{})[m.id];
+    if(!any){ res.noData.push(Object.assign(base,{why:ld.length?'не відмічали':'табель не ведеться'})); return; }
+    // серія від найсвіжішого робочого дня назад
+    var presToday=((data[td]||{})[m.id]||'')==='present';
+    var streak=0, cnt={sick:0,vacation:0,absent:0,none:0}, last='', full=true;
+    if(!presToday){
+      for(var i=ld.length-1;i>=0;i--){ var st=(data[ld[i]]||{})[m.id]||'';
+        if(st==='present'){ last=ld[i]; full=false; break; }
+        streak++; cnt[cnt[st]!==undefined?st:'none']++; }
+    } else { last=td; full=false; }
+    if(!last) for(var j=ld.length-1;j>=0;j--) if(((data[ld[j]]||{})[m.id]||'')==='present'){ last=ld[j]; break; }
+    // відвідуваність за поточний місяць
+    var md=ld.filter(function(d){ return d.slice(0,7)===ym; }), mp=0;
+    md.forEach(function(d){ if(((data[d]||{})[m.id]||'')==='present') mp++; });
+    var pct=md.length?mp/md.length:null;
+    var red=streak>=RISK_RED_DAYS, orange=!red && !_riskSummer(ym+'-01') && md.length>=RISK_MIN_MONTH_DAYS && pct<RISK_ORANGE_PCT;
+    if(!red && !orange) return;
+    var soft=streak>0 && cnt.absent===0 && cnt.none===0;   // серія лише «Хворий» / «Відпустка»
+    var why=!streak?'—':(soft?(cnt.sick&&cnt.vacation?'хворий / відпустка':cnt.sick?'хворий':'відпустка')
+      :(cnt.absent>=cnt.none?'інше (відсутній)':'не відмічено'));
+    res.rows.push(Object.assign(base,{lvl:red?'red':'orange', soft:soft, streak:streak, more:full&&red, pct:pct, last:last, why:why}));
+  });
+  res.rows.sort(function(a,b){ if(a.lvl!==b.lvl) return a.lvl==='red'?-1:1; if(a.soft!==b.soft) return a.soft?1:-1;
+    return b.streak-a.streak || (a.pct||0)-(b.pct||0) || locationRank(a.m.loc)-locationRank(b.m.loc); });
+  return res;
+}
+function _riskFmtMoney(v){ return v==null?'—':Math.round(v).toLocaleString('uk-UA')+' грн'; }
+function _riskHard(rows){ return rows.filter(function(x){ return !x.soft; }); }
+function _renderRiskTile(){
+  var r=_riskCalc('',''), money=_riskCanMoney();
+  var hard=_riskHard(r.rows), sum=hard.reduce(function(s,x){ return s+(x.pay||0); },0), soft=r.rows.length-hard.length;
+  var sub=!r.ready?(r.err?'табель не завантажився':'завантажую…')
+    :((money?'під ризиком '+_riskFmtMoney(sum)+'/міс':'дітей, що перестали ходити')+(soft?' · ще '+soft+' хворіють / відпустка':''));
+  return '<div class="stat-card" onclick="riskOpen()" style="cursor:pointer" title="Клік — хто в ризику"><div class="stat-icon si-r">⚠️</div><div>'
+    +'<div class="stat-val">'+(r.ready?hard.length:'…')+'</div><div class="stat-lbl">Ризик розірвання ▸</div>'
+    +'<div style="font-size:11px;color:var(--gray);margin-top:2px">'+sub+'</div></div></div>';
+}
+function riskOpen(){
+  var _lf=_dashLF(); S.riskType=_lf.type==='upr'?'':(_lf.type||''); S.riskLoc=_lf.type==='upr'?'':(_lf.loc||'');
+  var m=document.getElementById('mRisk');
+  if(!m){ m=document.createElement('div'); m.id='mRisk'; m.className='modal-ov hidden';
+    m.onclick=function(e){ if(e.target===m) closeModal('mRisk'); };
+    m.innerHTML='<div class="modal" style="max-width:1000px"><div class="modal-hd"><h3>⚠️ Ризик розірвання</h3><button class="modal-close" onclick="closeModal(\'mRisk\')">✕</button></div><div class="modal-bd" id="mRiskBd"></div></div>';
+    document.body.appendChild(m); }
+  m.classList.remove('hidden');
+  _riskModalRender(); _ensureRisk().then(_riskModalRender);
+}
+function riskSet(k,v){ if(k==='type'){ S.riskType=v||''; S.riskLoc=''; } else S.riskLoc=v||''; _riskModalRender(); }
+function _riskModalRender(){
+  var bd=document.getElementById('mRiskBd'); if(!bd) return;
+  var m=document.getElementById('mRisk'); if(m&&m.classList.contains('hidden')) return;
+  var isHR=isNetworkRole(S.user.role), ty=isHR?(S.riskType||''):'', money=_riskCanMoney();
+  var r=_riskCalc(ty, S.riskLoc||'');
+  if(S.riskLoc && r.locs.indexOf(S.riskLoc)<0){ S.riskLoc=''; r=_riskCalc(ty,''); }
+  var ctl=isHR?'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">'
+    +DASH_LF.map(function(x){ return '<button type="button" class="att-chip'+(ty===x[0]?' att-chip-active':'')+'" onclick="riskSet(\'type\',\''+x[0]+'\')">'+x[1]+'</button>'; }).join('')
+    +'<select class="flt-sel" onchange="riskSet(\'loc\',this.value)"><option value="">Усі локації'+(ty?' ('+(DASH_LF.filter(function(x){ return x[0]===ty; })[0]||['',''])[1].replace(/^\S+\s/,'')+')':'')+'</option>'
+    +r.locs.map(function(L){ return '<option'+(L===S.riskLoc?' selected':'')+'>'+esc(L)+'</option>'; }).join('')+'</select></div>':'';
+  if(ty==='upr'){ bd.innerHTML=ctl+'<div style="color:var(--gray);font-size:13px">Управління поза базою ризику: карток там немає, база — лише садки й школи.</div>'; return; }
+  if(!r.ready){ bd.innerHTML=ctl+'<div style="color:var(--gray);font-size:13px">'+(r.err?'⚠️ Табель не завантажився: '+esc(r.err):'⏳ Завантажую табель…')+'</div>'; return; }
+  var hard=_riskHard(r.rows), red=hard.filter(function(x){ return x.lvl==='red'; }).length, soft=r.rows.length-hard.length;
+  var sum=hard.reduce(function(s,x){ return s+(x.pay||0); },0);
+  var head='<div style="display:flex;gap:24px;flex-wrap:wrap;margin-bottom:10px">'
+    +'<div><span style="font-size:24px;font-weight:900;color:#e74c3c">'+red+'</span> <span style="font-size:12px;color:var(--gray)">🔴 10+ днів поспіль без відвідування</span></div>'
+    +'<div><span style="font-size:24px;font-weight:900;color:#e67e22">'+(hard.length-red)+'</span> <span style="font-size:12px;color:var(--gray)">🟠 відвідуваність за місяць < 50%</span></div>'
+    +'<div><span style="font-size:24px;font-weight:900;color:#b7950b">'+soft+'</span> <span style="font-size:12px;color:var(--gray)">🟡 хворіє / відпустка (менший ризик)</span></div>'
+    +(money?'<div><span style="font-size:24px;font-weight:900;color:var(--dark)">'+_riskFmtMoney(sum)+'</span> <span style="font-size:12px;color:var(--gray)">під ризиком на місяць (🔴 + 🟠)</span></div>':'')
+    +'</div>';
+  var fd=function(iso){ return iso?iso.slice(8,10)+'.'+iso.slice(5,7):'—'; };
+  var tbl=!r.rows.length?'<div style="color:var(--gray);font-size:13px;margin:10px 0">Дітей у ризику немає.</div>'
+    :'<div style="overflow-x:auto"><table class="att-dash-t" style="width:100%;font-size:12px;border-collapse:collapse"><thead><tr><th style="text-align:left">Дитина</th><th style="text-align:left">Група</th><th style="text-align:left">Локація</th><th>Рівень</th><th>Днів поспіль</th><th>% за місяць</th><th>Остання присутність</th><th style="text-align:left">Причина з табеля</th>'+(money?'<th>Оплата/міс</th>':'')+'</tr></thead><tbody>'
+    +r.rows.map(function(x){
+      var lv=x.soft?'🟡':(x.lvl==='red'?'🔴':'🟠');
+      return '<tr'+(x.soft?' style="color:var(--gray)"':'')+'><td><a href="clients.html#open-'+encodeURIComponent(x.m.cid)+'" style="color:inherit;font-weight:600;text-decoration:none">'+esc(x.m.name)+'</a></td>'
+        +'<td>'+esc(x.group)+'</td><td>'+esc(x.m.loc)+'</td><td style="text-align:center">'+lv+'</td>'
+        +'<td style="text-align:center;font-weight:700">'+(x.streak||'—')+(x.more?'+':'')+'</td>'
+        +'<td style="text-align:center">'+(x.pct==null?'—':Math.round(x.pct*100)+'%')+'</td>'
+        +'<td style="text-align:center">'+(x.last?fd(x.last):(x.more?'давніше':'—'))+'</td><td>'+esc(x.why)+'</td>'
+        +(money?'<td style="text-align:right;white-space:nowrap">'+_riskFmtMoney(x.pay)+'</td>':'')+'</tr>'; }).join('')
+    +'</tbody></table></div>';
+  var nd=r.noData.length?'<details style="margin-top:12px"><summary style="cursor:pointer;font-size:12px;color:var(--gray)">Немає даних — '+r.noData.length+' дітей без жодної позначки (не ризик)</summary><div style="font-size:12px;color:var(--gray);margin-top:6px">'
+    +r.noData.map(function(x){ return '<a href="clients.html#open-'+encodeURIComponent(x.m.cid)+'" style="color:inherit">'+esc(x.m.name)+'</a> · '+esc(x.m.loc)+' ('+x.why+')'; }).join('<br>')+'</div></details>':'';
+  bd.innerHTML=ctl+head+tbl+nd
+    +'<div style="font-size:11px;color:var(--gray);margin-top:8px">Робочі дні — пн–пт, коли локація вела табель; липень–серпень і сьогодні не рахуються · «+» — серія довша за поточний і попередній місяць · клік по імені — картка дитини</div>';
 }
 // ─── v7.451: АНАЛІТИКА ДОДАТКОВИХ — які заняття прибуткові (getDopAnalytics, лише читання) ───
 //   Оборот — відмітки табеля × ціна на день відмітки; абонемент — «Бюджет навч» його блоку в Payment.
@@ -4546,6 +4670,7 @@ function _renderDashNow(){
       <div class="stat-card"${_tileClick('groups')}><div class="stat-icon si-b">📚</div><div><div class="stat-val">${totalGroups}</div><div class="stat-lbl">Груп${_arrow('groups')}</div></div></div>
       ${isHR?`<div class="stat-card"${_tileClick('locs')}><div class="stat-icon si-p">🏫</div><div><div class="stat-val">${totalLocs}</div><div class="stat-lbl">Локацій${_arrow('locs')}</div></div></div>`:''}
       ${_renderAttDashTile()}
+      ${_renderRiskTile()}
       <div class="stat-card"><div class="stat-icon si-y">🆕</div><div><div class="stat-val">${hired.length}</div><div class="stat-lbl">Прийнято (${perLbl})</div></div></div>
       <div class="stat-card"><div class="stat-icon si-r">🚪</div><div><div class="stat-val">${fired.length}</div><div class="stat-lbl">Звільнено (${perLbl})</div></div></div>
     </div>
