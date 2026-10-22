@@ -3602,6 +3602,7 @@ function renderDash(){
   _ensurePayments().then(_dashSoftRerender);             // v7.399 групи й діти — з Payment наживо
   _ensureAttDash().then(_dashSoftRerender);              // v7.474 відвідування (табель дітей, поточний місяць)
   _ensureRisk().then(_dashSoftRerender);                 // v7.479 ризик розірвання (+ попередній місяць табеля)
+  if(_riskCanMoney()) _ensureUp().then(_dashSoftRerender);   // v7.482 знижки та недоотримане (CFO)
   _ensureGroupNorms().then(_dashSoftRerender);           // v7.399 місця в групах — «Норми груп»
   _ensureRatingsYear(_kompYear()).then(_dashSoftRerender); // v7.100 оцінки вихователів — середнє за рік
   if(_kompIsCFO()){ _ensureDebtsLive().then(_dashSoftRerender);   // v7.463 борги наживо
@@ -4108,6 +4109,109 @@ function _riskModalRender(){
     +r.dups.map(function(x){ return lnk(x)+' · '+esc(x.m.loc)+' — '+x.n+' активних карток'; }).join('<br>')+'</div>':'';
   bd.innerHTML=ctl+head+tbl+np+dp+nd
     +'<div style="font-size:11px;color:var(--gray);margin-top:8px">Лише відмічені дні дитини — невідмічений день не відсутність; липень–серпень і сьогодні не рахуються · 🟡 — серія з хворобою / відпусткою · «+» — серія довша за поточний і попередній місяць · клік по імені — картка дитини</div>';
+}
+// ─── v7.482: «💸 ЗНИЖКИ ТА НЕДООТРИМАНЕ» (лише CFO / власник; getUnderpaid, лише читання) ───
+//   По кожній дитині за місяць: сума договору − «Бюджет навч» Payment = недоотримано, розклад за причинами
+//   (реєстр знижок, відпустка / хвороба з того самого розрахунку, що йде в Payment, неповний місяць, сім'я / друг /
+//   передоплата за даними карток і сумою, «не нараховано» — Бюджет 0, решта — «нерозпізнане» з підказкою).
+//   Акції та знижки (довідник, реєстр з 2026-11) — сторінка promos.html; тут — усе, що недоотримуємо, разом.
+var UP_REASONS=[['family',"👨‍👩‍👧 Сімейна 8%",'#16a085'],['friend','🤝 «Приведи друга» 50%','#2980b9'],['prepay','💳 Передоплата','#8e44ad'],
+  ['temp','🏷 Тимчасові акції','#d35400'],['vacation','🏖 Відпустка','#3498db'],['sick','🤒 Хвороба','#9b59b6'],
+  ['partial','📅 Неповний місяць','#7f8c8d'],['none','⛔ Не нараховано (Бюджет 0)','#c0392b'],['unrec','❓ Нерозпізнане','#e67e22']];
+function _upYm(){ return _attDashYm(); }
+async function _ensureUp(ym){
+  ym=ym||_upYm(); if(!S._upM) S._upM={};
+  var a=S._upM[ym]; if(a&&(a.loading||(a.data&&Date.now()-a.at<10*60*1000))) return;
+  S._upM[ym]={loading:true,at:Date.now(),data:a&&a.data};
+  try{ var r=await fetch(_tokUrl(authScriptUrl()+'?action=getUnderpaid&ym='+ym),{redirect:'follow'}); var j=await r.json();
+    if(!j||!j.ok) throw new Error((j&&j.error)||'немає відповіді'); S._upM[ym]={at:Date.now(),data:j}; }
+  catch(e){ S._upM[ym]={at:Date.now(),data:a&&a.data,error:String(e&&e.message||e)}; }
+}
+function _upMoney(v){ return Math.round(v||0).toLocaleString('uk-UA')+' грн'; }
+function _upPct(x,b){ return b?(Math.round(x/b*1000)/10)+'%':'—'; }
+function _upCalc(ym,type,loc){
+  var a=S._upM&&S._upM[ym], d=a&&a.data, locs=_dashLFLocs(type||'');
+  var res={a:a,d:d,locs:locs}; if(!d) return res;
+  var rows=d.rows.filter(function(x){ return locs.indexOf(x.loc)>=0 && (!loc||x.loc===loc); });
+  var T={fee:0,budget:0,under:0,over:0,n:0}; UP_REASONS.forEach(function(r){ T[r[0]]=0; });
+  var per={};
+  rows.forEach(function(x){ var p=per[x.loc]||(per[x.loc]={fee:0,under:0,n:0,u:0});
+    T.fee+=x.fee; T.budget+=x.budget; T.n++; p.fee+=x.fee; p.n++;
+    if(x.diff>0){ T.under+=x.diff; p.under+=x.diff; p.u++; } if(x.over) T.over+=x.over;
+    Object.keys(x.parts).forEach(function(k){ T[k]+=x.parts[k]; p[k]=(p[k]||0)+x.parts[k]; }); });
+  res.rows=rows; res.T=T; res.per=per;
+  res.noPay=d.noPay.filter(function(x){ return locs.indexOf(x.loc)>=0 && (!loc||x.loc===loc); });
+  return res;
+}
+function _renderUpTile(){
+  if(!_riskCanMoney()) return '';
+  var r=_upCalc(_upYm(),'',''), T=r.T;
+  var big=r.d?_upMoney(T.under):'…';
+  var sub=!r.d?(r.a&&r.a.error?'звіт не завантажився':'рахую…'):(_upPct(T.under,T.fee)+' від договорів · нерозпізнане '+_upMoney(T.unrec+T.none));
+  return '<div class="stat-card" onclick="upOpen()" style="cursor:pointer" title="Клік — розклад за причинами"><div class="stat-icon si-y">💸</div><div>'
+    +'<div class="stat-val" style="font-size:20px">'+big+'</div><div class="stat-lbl">Знижки та недоотримане ▸</div>'
+    +'<div style="font-size:11px;color:var(--gray);margin-top:2px">'+sub+'</div></div></div>';
+}
+function upOpen(){
+  var _lf=_dashLF(); S.upType=_lf.type||''; S.upLoc=_lf.loc||''; if(!S.upYm) S.upYm=_upYm(); S.upReason='';
+  var m=document.getElementById('mUp');
+  if(!m){ m=document.createElement('div'); m.id='mUp'; m.className='modal-ov hidden';
+    m.onclick=function(e){ if(e.target===m) closeModal('mUp'); };
+    m.innerHTML='<div class="modal" style="max-width:1050px"><div class="modal-hd"><h3>💸 Знижки та недоотримане</h3><button class="modal-close" onclick="closeModal(\'mUp\')">✕</button></div><div class="modal-bd" id="mUpBd"></div></div>';
+    document.body.appendChild(m); }
+  m.classList.remove('hidden'); _upModalRender(); _ensureUp(S.upYm).then(_upModalRender);
+}
+function upSet(k,v){ if(k==='type'){ S.upType=v||''; S.upLoc=''; } else if(k==='loc') S.upLoc=v||''; else if(k==='reason') S.upReason=(S.upReason===v?'':v); else S.upYm=v||_upYm();
+  _upModalRender(); _ensureUp(S.upYm).then(_upModalRender); }
+function _upModalRender(){
+  var bd=document.getElementById('mUpBd'); if(!bd) return;
+  var m=document.getElementById('mUp'); if(m&&m.classList.contains('hidden')) return;
+  var ty=S.upType||'', ym=S.upYm||_upYm(), r=_upCalc(ym,ty,S.upLoc||'');
+  if(S.upLoc && r.locs.indexOf(S.upLoc)<0){ S.upLoc=''; r=_upCalc(ym,ty,''); }
+  var now=new Date(), mo='';
+  for(var mm=1;mm<=now.getMonth()+1;mm++){ var v=now.getFullYear()+'-'+('0'+mm).slice(-2); mo='<option value="'+v+'"'+(v===ym?' selected':'')+'>'+KOMP_MONTHS[mm-1]+' '+now.getFullYear()+'</option>'+mo; }
+  var ctl='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">'
+    +DASH_LF.map(function(x){ return '<button type="button" class="att-chip'+(ty===x[0]?' att-chip-active':'')+'" onclick="upSet(\'type\',\''+x[0]+'\')">'+x[1]+'</button>'; }).join('')
+    +'<select class="flt-sel" onchange="upSet(\'loc\',this.value)"><option value="">Усі локації'+(ty?' ('+(DASH_LF.filter(function(x){ return x[0]===ty; })[0]||['',''])[1].replace(/^\S+\s/,'')+')':'')+'</option>'
+    +r.locs.map(function(L){ return '<option'+(L===S.upLoc?' selected':'')+'>'+esc(L)+'</option>'; }).join('')+'</select>'
+    +'<select class="flt-sel" onchange="upSet(\'ym\',this.value)">'+mo+'</select>'
+    +'<a href="promos.html" style="font-size:12px;align-self:center;margin-left:auto">Довідник акцій і реєстр знижок →</a></div>';
+  if(!r.d){ bd.innerHTML=ctl+'<div style="color:var(--gray);font-size:13px">'+(r.a&&r.a.error?'⚠️ '+esc(r.a.error):'⏳ Рахую звіт (картки + Payment + відпустки)…')+'</div>'; return; }
+  var T=r.T;
+  var head='<div style="display:flex;gap:24px;flex-wrap:wrap;margin-bottom:10px">'
+    +'<div><div style="font-size:24px;font-weight:900">'+_upMoney(T.under)+'</div><div style="font-size:12px;color:var(--gray)">недоотримано · '+_upPct(T.under,T.fee)+' від суми договорів '+_upMoney(T.fee)+'</div></div>'
+    +'<div><div style="font-size:24px;font-weight:900;color:var(--gray)">'+_upMoney(T.over)+'</div><div style="font-size:12px;color:var(--gray)">Бюджет понад договір (борги / перенесене) — не враховано</div></div></div>';
+  var reasons='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;margin-bottom:14px">'
+    +UP_REASONS.map(function(x){ var on=S.upReason===x[0];
+      return '<div onclick="upSet(\'reason\',\''+x[0]+'\')" style="cursor:pointer;background:'+(on?'#eef6ff':'#f8fafc')+';border-radius:10px;padding:8px 10px;'+(on?'outline:2px solid #2980b9':'')+'" title="Клік — лише ці діти">'
+        +'<div style="font-size:12px;color:var(--gray)">'+x[1]+'</div><div style="font-size:17px;font-weight:800;color:'+x[2]+'">'+_upMoney(T[x[0]])+'</div>'
+        +'<div style="font-size:11px;color:var(--gray)">'+_upPct(T[x[0]],T.fee)+' від договорів</div></div>'; }).join('')+'</div>';
+  var lt='';
+  if(!S.upLoc && r.locs.length>1){
+    lt='<div style="overflow-x:auto;margin-bottom:14px"><table class="att-dash-t" style="width:100%;font-size:12px;border-collapse:collapse"><thead><tr><th style="text-align:left">Локація</th><th>Дітей</th><th>Договори</th><th>Недоотримано</th><th>%</th>'
+      +UP_REASONS.map(function(x){ return '<th title="'+esc(x[1])+'">'+x[1].split(' ')[0]+'</th>'; }).join('')+'</tr></thead><tbody>'
+      +r.locs.filter(function(L){ return r.per[L]; }).map(function(L){ var p=r.per[L];
+        return '<tr style="cursor:pointer" data-loc="'+esc(L)+'" onclick="upSet(\'loc\',this.dataset.loc)"><td>'+esc(L)+'</td><td style="text-align:center">'+p.n+'</td><td style="text-align:right">'+Math.round(p.fee).toLocaleString('uk-UA')+'</td>'
+          +'<td style="text-align:right;font-weight:700">'+Math.round(p.under).toLocaleString('uk-UA')+'</td><td style="text-align:center">'+_upPct(p.under,p.fee)+'</td>'
+          +UP_REASONS.map(function(x){ var v=p[x[0]]||0; return '<td style="text-align:right;color:'+(v?x[2]:'#ccc')+'">'+(v?Math.round(v).toLocaleString('uk-UA'):'·')+'</td>'; }).join('')+'</tr>'; }).join('')
+      +'</tbody></table><div style="font-size:11px;color:var(--gray);margin-top:4px">Порядок мережі · клік по рядку — лише ця локація</div></div>';
+  }
+  var names={}; UP_REASONS.forEach(function(x){ names[x[0]]=x[1]; });
+  var list=r.rows.filter(function(x){ return x.diff>0 && (!S.upReason || x.parts[S.upReason]); })
+    .sort(function(a,b){ return (S.upReason?(b.parts[S.upReason]-a.parts[S.upReason]):(b.diff-a.diff)); });
+  var lst='<div style="font-size:13px;font-weight:700;margin:6px 0">'+(S.upReason?names[S.upReason]+' — ':'Поіменно — ')+list.length+' дітей</div>'
+    +'<div style="overflow-x:auto"><table class="att-dash-t" style="width:100%;font-size:12px;border-collapse:collapse"><thead><tr><th style="text-align:left">Дитина</th><th style="text-align:left">Група</th><th style="text-align:left">Локація</th><th>Договір</th><th>Бюджет навч</th><th>Недоотримано</th><th style="text-align:left">Причина</th></tr></thead><tbody>'
+    +list.map(function(x){
+      var why=Object.keys(x.parts).sort(function(a,b){ return x.parts[b]-x.parts[a]; }).map(function(k){ return names[k]+' '+Math.round(x.parts[k]).toLocaleString('uk-UA'); }).join(' · ')
+        +(x.notes.length?'<div style="font-size:10px;color:var(--gray)">'+esc(x.notes.join('; '))+'</div>':'');
+      return '<tr><td><a href="clients.html#open-'+encodeURIComponent(x.cid)+'" style="color:inherit;font-weight:600;text-decoration:none">'+esc(x.name)+'</a></td><td>'+esc(x.group)+'</td><td>'+esc(x.loc)+'</td>'
+        +'<td style="text-align:right">'+x.fee.toLocaleString('uk-UA')+'</td><td style="text-align:right">'+x.budget.toLocaleString('uk-UA')+'</td>'
+        +'<td style="text-align:right;font-weight:700">'+x.diff.toLocaleString('uk-UA')+'</td><td>'+why+'</td></tr>'; }).join('')
+    +'</tbody></table></div>';
+  var np=r.noPay.length?'<details style="margin-top:12px"><summary style="cursor:pointer;font-size:12px;color:var(--gray)">Картка активна, у Payment немає — '+r.noPay.length+' (у суми не входять)</summary><div style="font-size:12px;margin-top:6px">'
+    +r.noPay.map(function(x){ return '<a href="clients.html#open-'+encodeURIComponent(x.cid)+'" style="color:inherit">'+esc(x.name)+'</a> · '+esc(x.loc)+' · договір '+x.fee.toLocaleString('uk-UA'); }).join('<br>')+'</div></details>':'';
+  bd.innerHTML=ctl+head+reasons+lt+lst+np
+    +'<div style="font-size:11px;color:var(--gray);margin-top:8px">Недоотримано = сума договору за місяць (з урахуванням зміни суми з середини місяця) − «Бюджет навч» Payment. Відпустка й хвороба — той самий розрахунок, що йде в Payment; сім\'я / друг / передоплата — за полями карток, записами передоплат і сумою; «нерозпізнане» — різниця без причини в системі (підказка під причиною).</div>';
 }
 // ─── v7.451: АНАЛІТИКА ДОДАТКОВИХ — які заняття прибуткові (getDopAnalytics, лише читання) ───
 //   Оборот — відмітки табеля × ціна на день відмітки; абонемент — «Бюджет навч» його блоку в Payment.
@@ -4696,6 +4800,7 @@ function _renderDashNow(){
       ${isHR?`<div class="stat-card"${_tileClick('locs')}><div class="stat-icon si-p">🏫</div><div><div class="stat-val">${totalLocs}</div><div class="stat-lbl">Локацій${_arrow('locs')}</div></div></div>`:''}
       ${_renderAttDashTile()}
       ${_renderRiskTile()}
+      ${_renderUpTile()}
       <div class="stat-card"><div class="stat-icon si-y">🆕</div><div><div class="stat-val">${hired.length}</div><div class="stat-lbl">Прийнято (${perLbl})</div></div></div>
       <div class="stat-card"><div class="stat-icon si-r">🚪</div><div><div class="stat-val">${fired.length}</div><div class="stat-lbl">Звільнено (${perLbl})</div></div></div>
     </div>
