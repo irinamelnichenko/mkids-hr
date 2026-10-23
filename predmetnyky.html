@@ -2,6 +2,7 @@
 <html lang="uk">
 <head>
 <meta charset="UTF-8">
+<script src="locswitch.js?v=7.516"></script>   <!-- v7.516 кілька локацій користувача: активна + перемикач -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>m.kids System — Предметники</title>
 <link rel="manifest" href="manifest.json">
@@ -2714,7 +2715,9 @@ function renderTable(loc, subject){
   var nDays = days.length;
   var isUnlimited = (subject === PRED_UNLIMITED_SUBJ);
   var rate = getRateFor(loc, subject);
-  var hasRate = (rate != null);
+  // v7.516: у школі ставка необовʼязкова — заняття фіксуються, ЗП школи (блок «Школа» в Salary хоста) ведеться окремо;
+  //   експорт у Salary позицію без ставки пропускає (нічого не записує).
+  var hasRate = (rate != null) || isSchoolLoc(loc);
 
   // Per-group metadata — РЕАЛЬНІ групи локації (повні назви). Норма по ТИПУ
   // застосовується до КОЖНОЇ групи окремо; лічильник — по повній назві.
@@ -3036,7 +3039,7 @@ async function _pqFlush(){
 function onCheckboxToggle(loc, groupName, subj, dateDmy){
   if (!canEditPred(loc)){ showToast('🚫 Немає дозволу', 'err'); return; }
   if (isWeekLocked(_dmyToIso(dateDmy))){ showToast('🔒 Місяць закрито — редагує лише CFO', 'err'); return; }
-  if (getRateFor(loc, subj) == null){
+  if (getRateFor(loc, subj) == null && !isSchoolLoc(loc)){   // v7.516: школа — без ставки можна
     showToast('🚫 Немає ставки в каталозі. Додай у Предметники_Каталог', 'err');
     return;
   }

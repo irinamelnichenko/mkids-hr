@@ -2,6 +2,7 @@
 <html lang="uk">
 <head>
 <meta charset="UTF-8">
+<script src="locswitch.js?v=7.516"></script>   <!-- v7.516 кілька локацій користувача: активна + перемикач -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>m.kids System</title>
 <link rel="manifest" href="manifest.json">
@@ -1819,6 +1820,7 @@ async function doLoginLocation(role, locFieldId, pwFieldId){
     S.f = {loc:'',pos:'',status:'працює',dir:'',typ:''};
     S.q = '';
     saveSession(S.user, json.token);   // v7.110 токен
+    try { if(window.mkidsLocSwitchUi) window.mkidsLocSwitchUi(); } catch(_ls){}   // v7.516 перемикач локацій
     try { _loadClosedMonths(); } catch(_cm){}   // v7.333: закриті місяці — вже з токеном
     // Вихователь не має доступу до Дашборду — одразу на Додаткові заняття.
     if (S.user.role === 'vyhovatel'){ window.location.href = 'activities.html'; return; }
@@ -2684,7 +2686,9 @@ async function initApp(){
 // входу однаково приземлялась би на дашборд, попри прибраний дозвіл.
 // v7.511: «Користувачі» → «Локація» може містити кілька локацій через кому (напр. медсестра «Кар'єрна, Школа Кар'єрна»).
 //   Основна (S.user.loc) — перша, повний список — S.user.locs (табель дітей дає вибір лише між ними).
-function _normUserLocs(u){ if(!u) return; var a=String(u.loc||'').split(/\s*[,;]\s*/).map(function(x){ return x.trim(); }).filter(Boolean);
+//   v7.516: основна = АКТИВНА (обрана перемикачем у шапці, locswitch.js), інакше перша.
+function _normUserLocs(u){ if(!u) return; if(window.mkidsNormUserLocs){ window.mkidsNormUserLocs(u); return; }
+  var a=String(u.loc||'').split(/\s*[,;]\s*/).map(function(x){ return x.trim(); }).filter(Boolean);
   if(a.length>1){ u.locs=a; u.loc=a[0]; } }
 function _homeView(){
   if (hasPerm('dashboard')) return 'dashboard';
@@ -3731,7 +3735,7 @@ async function _ensureDashSnap(force){
   if(S._dsLoading) return S._dsLoading;
   if(!force && S._ds && S._ds.ok && Date.now()-(S._dsAt||0)<DASH_LIVE_TTL) return;
   S._dsLoading=(async function(){
-    try{ var r=await fetch(_tokUrl(authScriptUrl()+'?action=getDashboard'+(force?'&force=1':'')),{redirect:'follow'}); var j=await r.json();
+    try{ var r=await fetch(_tokUrl(authScriptUrl()+'?action=getDashboard'+(force?'&force=1':'')+(!isNetworkRole(S.user.role)&&S.user.loc?'&loc='+encodeURIComponent(S.user.loc):'')),{redirect:'follow'}); var j=await r.json();
       if(j&&j.ok&&j.parts){ _dsApply(j); S._ds={ok:true,builtAt:j.builtAt,ms:j.ms}; } else S._ds={ok:false,error:(j&&j.error)||'немає відповіді'}; }
     catch(e){ S._ds={ok:false,error:String(e&&e.message||e)}; }
     S._dsAt=Date.now(); S._dsLoading=null;

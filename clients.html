@@ -2,6 +2,7 @@
 <html lang="uk">
 <head>
 <meta charset="UTF-8">
+<script src="locswitch.js?v=7.516"></script>   <!-- v7.516 кілька локацій користувача: активна + перемикач -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>m.kids System — Клієнти</title>
 <link rel="manifest" href="manifest.json">
@@ -5901,6 +5902,7 @@ function _postSafe(url, body){
     .then(function(r){ return r.text(); })
     .then(function(t){ var j=null; try{ j=JSON.parse(t); }catch(_){}
       if(j && (j.code==='AUTH' || j.authStale)){ _pqPush(body); return {queued:true, reason:'auth'}; }
+      if(j && j.ok===false && j.code) return {ok:false, refused:true, error:j.error||j.code};   // v7.516: відмова бекенду (напр. FORBIDDEN_LOC) — не «збережено»
       return {ok:true}; })
     .catch(function(){ _pqPush(body); return {queued:true, reason:'net'}; });
 }
@@ -5938,6 +5940,7 @@ function flushAttCloudSave(){
     .then(function(res){
       if(res.ok){ setSyncStatus('ok'); showFloatMsg('☁️ Збережено в хмарі'); return; }
       setSyncStatus('err');
+      if(res.refused){ showFloatMsg('⛔ Не збережено: '+res.error,'err'); return; }   // v7.516
       showFloatMsg(res.reason==='net'?'☁️ Хмара недоступна — збережено локально, надішлю пізніше':'☁️ Сесія недійсна — відмітки збережено локально, надішлю після входу','err');
     });
 }
@@ -6368,7 +6371,7 @@ function renderAttendance(){
     // v7.511: локацій користувача може бути кілька («Користувачі» → «Локація» через кому, напр. медсестра
     //   «Кар'єрна, Школа Кар'єрна») — вибір лише між ними; одна — як раніше.
     allAvailLocs=_userLocs();
-    if(allAvailLocs.indexOf(S.attLoc)<0) S.attLoc=allAvailLocs[0];
+    if(allAvailLocs.indexOf(S.attLoc)<0) S.attLoc=allAvailLocs.indexOf(S.user.loc)>=0?S.user.loc:allAvailLocs[0];   // v7.516: за замовч. — активна локація (перемикач у шапці)
   } else {
     allAvailLocs=S.locs.map(function(l){ return l.loc; }).filter(function(l){ return S.groups[l]||Object.keys(S.att).some(function(d){ return Object.keys(S.att[d]).some(function(id){ var c=S.crm[id]; return c&&c.loc===l; }); }); });
     if(!allAvailLocs.length) allAvailLocs=S.locs.map(function(l){ return l.loc; });

@@ -1,5 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.515
+// m.kids CRM — Google Apps Script v7.516
+// v7.516: директор кількох локацій («Користувачі» → «Локація» через кому, Кар'єрна + Школа Кар'єрна): _dirAuth — усі його локації,
+//   &loc з його списку звужує відповідь до неї; запис (POST) — лише в його локації (FORBIDDEN_LOC); права предметників, співробітників,
+//   карти, відновлення картки, нової картки — за _actorHasLoc; getPredmetnyky віддає лише його локації (_predOnlyLocs).
 // v7.515: з 01.10.2026 норма предметників — СТЕЛЯ: savePredmetnykyLesson / bulk — NORM_REACHED; exportPredmetnykyToSalary з жовтня
 //   не оплачує понаднормові (найпізніші дати групи понад норму). Раніші місяці — як було; школи й «Чомусики» — без стелі.
 // v7.514: groupRecordsCanon — нова назва з «Групи_Мапа» (там лише Благо) АБО з чинних груп локації за картками; кілька кандидатів — не чіпає.
@@ -7276,32 +7279,46 @@ function _dirCanonLoc(loc){
   names.forEach(function(n){ var nt = tok(n); if (nt.length > bn && nt.every(function(t){ return ut.indexOf(t) >= 0; })){ best = n; bn = nt.length; } });
   return best || loc;
 }
-function _dirAuth(){
+// v7.516: директор кількох локацій («Кар'єрна, Школа Кар'єрна»): all — усі його локації; locs — область цього запиту
+//   (параметр loc з його списку звужує до неї, без параметра — усі); loc — основна для запитів, що потребують однієї.
+function _dirAuth(prm){
   var a = _CURRENT_AUTH; if (!a || String(a.role || '').toLowerCase() !== 'director') return null;
-  var loc = a.id ? _dirUserLoc(a.id) : '';
-  if (!loc && a.loc && String(a.loc).indexOf('?') < 0) loc = String(a.loc);
-  loc = _dirCanonLoc(String(loc).split(/\s*[,;]\s*/)[0] || '');   // v7.511: список локацій — директору основна (перша)
-  return loc ? {loc:loc} : {loc:'—', none:true};   // локацію не знайдено — нічого не віддаємо
+  var raw = a.id ? _dirUserLoc(a.id) : '';
+  if (!raw && a.loc && String(a.loc).indexOf('?') < 0) raw = String(a.loc);
+  var all = _userLocList(raw);
+  if (!all.length) return {loc:'—', locs:['—'], all:['—'], none:true};   // локацію не знайдено — нічого не віддаємо
+  var want = prm && trim(prm.loc || ''), pick = '';
+  if (want) all.forEach(function(l){ if (!pick && _dirSameLoc(l, want)) pick = l; });
+  return {loc:pick || all[0], locs:pick ? [pick] : all, all:all};
 }
 function _dirSameLoc(a, b){ return _nameFold(trim(a)) === _nameFold(trim(b)); }
+function _dirHas(dir, v){ return dir.all.some(function(l){ return _dirSameLoc(l, v); }); }
 function _dirPre(action, prm, dir){
   if (DIR_DENY[action]) return {ok:false, code:'FORBIDDEN', error:'Недоступно для директора'};
-  var bad = function(v){ return v != null && String(v).trim() !== '' && !_dirSameLoc(v, dir.loc); };
-  if (prm && bad(prm.loc)) return {ok:false, code:'FORBIDDEN_LOC', error:'Директор бачить лише свою локацію (' + dir.loc + ')'};
-  if (prm && prm.locs && String(prm.locs).split(',').some(function(x){ return bad(x); })) return {ok:false, code:'FORBIDDEN_LOC', error:'Директор бачить лише свою локацію (' + dir.loc + ')'};
-  if (prm && DIR_FORCE_LOC[action] && !String(prm.loc || '').trim()) prm.loc = dir.loc;   // v7.497: читати лише файл його локації
+  var bad = function(v){ return v != null && String(v).trim() !== '' && !_dirHas(dir, v); };
+  var msg = 'Директор бачить лише свої локації (' + dir.all.join(', ') + ')';
+  if (prm && bad(prm.loc)) return {ok:false, code:'FORBIDDEN_LOC', error:msg};
+  if (prm && prm.locs && String(prm.locs).split(',').some(function(x){ return bad(x); })) return {ok:false, code:'FORBIDDEN_LOC', error:msg};
+  // v7.497: читати лише файл його локації; v7.516: кількох — табель основної, решта читає всі й фільтрує _dirFilter
+  if (prm && DIR_FORCE_LOC[action] && !String(prm.loc || '').trim() && (dir.all.length === 1 || action === 'getAttendance')) prm.loc = dir.loc;
   return null;
+}
+// v7.516: запис директора — лише в його локації (loc / location у тілі, у записах і заняттях)
+function _dirPostBad(body, dir){
+  var vals = [body.loc, body.location, body.data && body.data.loc, body.lesson && body.lesson.location];
+  ['records','add','lessons'].forEach(function(k){ (Array.isArray(body[k]) ? body[k] : []).forEach(function(r){ if (r) vals.push(r.loc, r.location); }); });
+  return vals.filter(function(v){ return v != null && trim(String(v)) !== '' && !_dirHas(dir, v); });
 }
 function _dirFilter(action, res, dir){
   if (!DIR_FILTER[action] || !res || res.ok === false) return res;
-  var mine = function(L){ return _dirSameLoc(L, dir.loc); }, out = {};
+  var mine = function(L){ return dir.locs.some(function(l){ return _dirSameLoc(L, l); }); }, out = {};
   Object.keys(res).forEach(function(k){ out[k] = res[k]; });   // копія — кешований об'єкт не чіпаємо
   if (Array.isArray(out.headers) && Array.isArray(out.rows)){ var iL = out.headers.indexOf('Локація'); if (iL >= 0) out.rows = out.rows.filter(function(r){ return mine(r[iL]); }); }
   if (Array.isArray(out.data)) out.data = out.data.filter(function(o){ return o && mine(o['Локація'] != null ? o['Локація'] : o.loc); });
   if (Array.isArray(out.issues)) out.issues = out.issues.filter(function(o){ return mine(o.loc); });
   ['locs','old'].forEach(function(k){ if (out[k] && !Array.isArray(out[k]) && typeof out[k] === 'object'){ var o = {}; Object.keys(out[k]).forEach(function(L){ if (mine(L)) o[L] = out[k][L]; }); out[k] = o; } });
   if (Array.isArray(out.misfiled)) out.misfiled = out.misfiled.filter(function(o){ return mine(o && (o.loc || o['Локація'])); });
-  out.scopedTo = dir.loc;
+  out.scopedTo = dir.locs.join(', ');
   return out;
 }
 
@@ -7312,6 +7329,9 @@ function _nurseAuth(){
   var locs = _userLocList(_dirUserLoc(a.id)); return {locs:locs.length ? locs : ['—']};
 }
 function _nurseLocOk(nu, loc){ return nu.locs.some(function(l){ return _dirSameLoc(l, loc); }); }
+// v7.516: локації користувача з «Користувачі» → «Локація» (кілька через кому) — для перевірок прав за actor.loc
+function _actorLocList(actor){ return String((actor && actor.loc) || '').split(/\s*[,;]\s*/).map(function(x){ return trim(x); }).filter(Boolean); }
+function _actorHasLoc(actor, loc){ var f = _nameFold(trim(loc || '')); return !!f && _actorLocList(actor).some(function(l){ return _nameFold(l) === f; }); }
 // CFO: записати список локацій користувачу (через кому). POST setUserLocs {userId, locs:[…], dryRun(за замовч. true)}
 function setUserLocs(body){
   body = body || {};
@@ -7338,7 +7358,7 @@ function doGet(e) {
   try {
     var _g = _authGate(action, (e && e.parameter && e.parameter.token) || '', 'GET');   // v7.110
     if (_g) return jsonOut(_g);
-    var _dir = _dirAuth();                                                                   // v7.486 директор — своя локація
+    var _dir = _dirAuth(e.parameter || {});                                                  // v7.486 директор — своя локація (v7.516: свої)
     if (_dir){ var _dp = _dirPre(action, e.parameter || {}, _dir); if (_dp) return jsonOut(_dp); }
     if (action === 'getAttendance'){ var _nu = _nurseAuth(); if (_nu){                       // v7.511: медсестра — лише свої локації
       var _np = e.parameter || {}, _nl = trim(_np.loc || '');
@@ -7356,7 +7376,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.515', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.516', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -7557,6 +7577,9 @@ function doPost(e) {
     var _g = _authGate(body.action, body.token || '', 'POST');   // v7.110
     if (_g) return jsonOut(_g);
     if (!_founderPostAllowed(body) && _isFounderReq(body)) return jsonOut(FOUNDER_READONLY);   // v7.404
+    var _dirP = _dirAuth();                                                                   // v7.516: директор пише лише у свої локації
+    if (_dirP && body.action !== 'authenticate'){ var _dpb = _dirPostBad(body, _dirP);
+      if (_dpb.length) return jsonOut({ok:false, code:'FORBIDDEN_LOC', error:'Лише ваші локації: ' + _dirP.all.join(', ') + ' (не ' + _dpb[0] + ')'}); }
     if (PROMO_CFO_ONLY[body.action] && !_promoIsCfo(_promoActor(body))) return jsonOut({ok:false, code:'PERM_DENIED', error:'Акції та знижки — лише CFO'});   // v7.496
     _gcBumpFor(body.action);   // v7.402: запис → відповідні кеші GET застаріли
     var result;
@@ -11457,8 +11480,8 @@ function _clientMapActor(id){
   var role = _roleKey(actor.role);
   if (role === 'cfo' || _empHasMgmtRole(actor.role)) return {actor:actor, scope:null};
   if (_empHasDirRole(actor.role)){
-    var l = String(actor.loc || '').trim();
-    return l ? {actor:actor, scope:l} : {err:'Локацію директора не визначено'};
+    var l = _actorLocList(actor);   // v7.516: кілька локацій
+    return l.length ? {actor:actor, scope:l} : {err:'Локацію директора не визначено'};
   }
   return {err:'Немає доступу до карти'};
 }
@@ -11474,7 +11497,7 @@ function getClientMap(params){
   for (var r = 1; r < v.length; r++){
     var loc = String(v[r][ix.loc] || '').trim(), st = String(v[r][cS] || '').trim() || 'active';
     if (!loc || !LIVE[st]) continue;
-    if (a.scope && loc !== a.scope) continue;
+    if (a.scope && a.scope.indexOf(loc) < 0) continue;
     var c = counts[loc] || (counts[loc] = {kids:0, withAddress:0, onMap:0});
     c.kids++;
     var hasAddr = ix.addr >= 0 && String(v[r][ix.addr] || '').trim() !== '';
@@ -11488,8 +11511,8 @@ function getClientMap(params){
                geo:hasAddr ? (gs || 'pending') : 'no_address'});
   }
   var lg = _locGeoAll(), locs = {};
-  Object.keys(lg).forEach(function(l){ if (!a.scope || l === a.scope) locs[l] = lg[l]; });
-  return {ok:true, scope:a.scope, kids:kids, counts:counts, locGeo:locs, cityByLoc:GEO_CITY_BY_LOC, cityCenter:GEO_CITY_CENTER};
+  Object.keys(lg).forEach(function(l){ if (!a.scope || a.scope.indexOf(l) >= 0) locs[l] = lg[l]; });
+  return {ok:true, scope:a.scope ? a.scope.join(', ') : a.scope, kids:kids, counts:counts, locGeo:locs, cityByLoc:GEO_CITY_BY_LOC, cityCenter:GEO_CITY_CENTER};
 }
 // POST {action:'setLocGeo', actorId, loc, lat, lng} — точка садочка/школи на карті (керівництво — будь-яка,
 // директор — своя). lat порожній → прибрати.
@@ -11499,7 +11522,7 @@ function setLocGeo(body){
   if (a.err) return {ok:false, code:'PERM_DENIED', error:a.err};
   var loc = String(body.loc || '').trim();
   if (!loc) return {ok:false, error:'loc обовʼязковий'};
-  if (a.scope && a.scope !== loc) return {ok:false, code:'PERM_DENIED', error:'Лише своя локація'};
+  if (a.scope && a.scope.indexOf(loc) < 0) return {ok:false, code:'PERM_DENIED', error:'Лише своя локація'};
   var lock = LockService.getScriptLock(); try { lock.waitLock(15000); } catch(_l){ return {ok:false, error:'LOCK_TIMEOUT'}; }
   try {
     var all = _locGeoAll();
@@ -11538,7 +11561,7 @@ function setClientGeo(body){
     if (String(v[r][ix.id]) !== id) continue;
     var loc = String(v[r][ix.loc] || '').trim();
     var mgmt = _empHasMgmtRole(actor.role) || _roleKey(actor.role) === 'cfo';
-    if (!mgmt && !(_empHasDirRole(actor.role) && String(actor.loc || '').trim() === loc))
+    if (!mgmt && !(_empHasDirRole(actor.role) && _actorHasLoc(actor, loc)))
       return {ok:false, code:'PERM_DENIED', error:'Лише своя локація'};
     var q = _geoQueryFor(v[r][ix.addr], loc), c0 = ix['Гео: lat'] + 1;
     if (body.lat === '' || body.lat == null){
@@ -12079,7 +12102,7 @@ function getDashboard(params){
     params = params || {};
     var t0 = Date.now(), force = String(params.force || '') === '1', au = _CURRENT_AUTH, a = null;
     if (au) a = au; else { try { a = _getActor(Number(params.actorId) || 0); } catch(_a){} }
-    var role = a ? _roleKey(a.role) : '', cfo = role === 'cfo' || !!(a && Number(a.id) === 1), dir = _dirAuth();
+    var role = a ? _roleKey(a.role) : '', cfo = role === 'cfo' || !!(a && Number(a.id) === 1), dir = _dirAuth(params);   // v7.516: &loc — обрана з локацій директора
     var parts = ['roster','caps','komp','kompPrev','norms','ratings','attCur','attPrev','payLive','dq'];
     if (role !== 'rnd_director') parts.push('payments');
     if (cfo) parts.push('salOv','salOvPrev','opexOv');
@@ -12087,7 +12110,7 @@ function getDashboard(params){
     parts.forEach(function(k){
       try {
         var snap = null;
-        if (force && dir && /^(payLive|dq|attCur|attPrev)$/.test(k)){            // директор: наживо лише його файл
+        if (force && dir && dir.locs.length === 1 && /^(payLive|dq|attCur|attPrev)$/.test(k)){   // директор: наживо лише його файл (v7.516: одна обрана локація)
           var v = k === 'payLive' ? _groupCanonRows(getPaymentsLive({nocache:'1', loc:dir.loc}), true)
                 : k === 'dq' ? getDataQuality({nocache:'1', loc:dir.loc})
                 : _dsAtt(_dsYm(k === 'attCur' ? 0 : -1), dir.loc);
@@ -12109,7 +12132,7 @@ function getDashboard(params){
         var c = {}; Object.keys(A).forEach(function(x){ c[x] = A[x]; }); c.data = d2; out[k] = c; });
     }
     ats.sort();
-    return {ok:true, builtAt:ats[0] || new Date().toISOString(), parts:out, role:role, scopedTo:dir ? dir.loc : '', ms:Date.now() - t0};
+    return {ok:true, builtAt:ats[0] || new Date().toISOString(), parts:out, role:role, scopedTo:dir ? dir.locs.join(', ') : '', ms:Date.now() - t0};
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 
@@ -13058,7 +13081,7 @@ function restoreDeletedClient(body){
     var v = del.getRange(r, 1, 1, CLIENTS_DELETED_HEADER.length).getValues()[0];
     if (!a) return {ok:false, code:'PERM_DENIED', error:'Потрібен вхід'};
     var rk = _roleKey(a.role);
-    if (!(rk === 'cfo' || (rk === 'director' && _nameFold(a.location || a.loc || '') === _nameFold(v[5]))))
+    if (!(rk === 'cfo' || (rk === 'director' && (_actorHasLoc(a, v[5]) || _nameFold(a.location || '') === _nameFold(v[5])))))
       return {ok:false, code:'PERM_DENIED', error:'Лише CFO або директор локації картки'};
     if (v[8]) return {ok:false, error:'Уже відновлено: ' + v[8]};
     var m = _clientRowFromMap(sheet, JSON.parse(String(v[7] || '{}')));
@@ -18882,7 +18905,7 @@ function getSalaryData(loc, year) {
   // v7.110 ЕТАП-2 (за прапорцем): локацію беремо з ТОКЕНА — не-менеджмент лише свою.
   if (_authEnforceOn() && _CURRENT_AUTH){
     var _r = String(_CURRENT_AUTH.role || '').toLowerCase().trim();
-    if (EMP_MGMT_ROLES.indexOf(_r) === -1 && String(_CURRENT_AUTH.loc || '').trim() !== loc)
+    if (EMP_MGMT_ROLES.indexOf(_r) === -1 && !_actorHasLoc({loc:(_CURRENT_AUTH.id ? _dirUserLoc(_CURRENT_AUTH.id) : '') || _CURRENT_AUTH.loc}, loc))   // v7.516: кілька локацій
       return {ok:false, code:'AUTH', error:'Доступ лише до своєї локації'};
   }
 
@@ -28439,7 +28462,7 @@ function createCardFromPayment(body){
   if (!loc || !name) return {ok:false, error:'loc і name обовʼязкові'};
   var actor = null; try { actor = _getActor((_CURRENT_AUTH && _CURRENT_AUTH.id) || body.actorId); } catch(_a){}
   var role = actor ? _roleKey(actor.role) : '';
-  if (!actor || (role === 'director' ? _normForMatch(actor.loc) !== _normForMatch(loc) : ['nurse','vyhovatel',''].indexOf(role) !== -1))
+  if (!actor || (role === 'director' ? !_actorHasLoc(actor, loc) : ['nurse','vyhovatel',''].indexOf(role) !== -1))
     return {ok:false, code:'PERM_DENIED', error:'Немає права заводити картку в цій локації'};
   var gc = getClients(); var list = (gc && gc.data) || [];
   var _cs = _subLocOf(loc), _locs = [_normForMatch(loc)]; if (_cs) _locs.push(_normForMatch(_cs.host));   // v7.358: під-локація — картки в хоста
@@ -35242,7 +35265,7 @@ function _canEditEmployee(actor, targetLoc){
   if (_empHasMgmtRole(actor.role)) return true;
   if (_empHasDirRole(actor.role)){
     if (!targetLoc) return false;
-    return String(actor.loc || '').trim() === String(targetLoc).trim();
+    return _actorHasLoc(actor, targetLoc);   // v7.516: кілька локацій директора
   }
   return false;
 }
@@ -35414,7 +35437,9 @@ function getEmployees(actorId, locFilter){
       return {ok:false, error:'Permission denied', code:'PERM_DENIED'};
 
     var scope  = _empLocScope(actor);
-    var filter = scope || (String(locFilter || '').trim() || null);
+    // v7.516: кілька локацій — обрана (locFilter) з його списку, інакше всі його
+    var _lf = String(locFilter || '').trim(), _own = scope ? _actorLocList(actor) : null;
+    var filter = _own ? (_lf && _actorHasLoc(actor, _lf) ? _lf : (_own.length === 1 ? _own[0] : null)) : (_lf || null);
 
     var sh = _getHrSheet();
     var lastRow = sh.getLastRow();
@@ -35432,6 +35457,7 @@ function getEmployees(actorId, locFilter){
       var emp = _parseEmpRow(row, i + 2);
       if (!emp.last && !emp.first) continue;
       if (filter && emp.loc !== filter) continue;
+      if (!filter && _own && _own.indexOf(emp.loc) < 0) continue;
       items.push(emp);
     }
     return {ok:true, items:items, totalCount:items.length, scope: filter || 'all'};
@@ -37100,12 +37126,22 @@ function _canEditPredmetnyky(actor, targetLoc){
   if (PRED_EDIT_ROLES_ANY.indexOf(_roleKey(actor.role)) !== -1) return true;
   if (_empHasDirRole(actor.role)){
     if (!targetLoc) return false;
-    return String(actor.loc || '').trim() === String(targetLoc).trim();
+    return _actorHasLoc(actor, targetLoc);   // v7.516: кілька локацій директора
   }
   return false;
 }
 
 // view scope: mgmt → null (всі), director/nurse/vyhovatel → own loc, інші → throw
+// v7.516: відповідь getPredmetnyky лише для переліку локацій (директор кількох локацій)
+function _predOnlyLocs(resp, locs){
+  var own = function(l){ return locs.indexOf(String(l || '').trim()) >= 0; }, g = {};
+  Object.keys(resp.groups || {}).forEach(function(l){ if (own(l)) g[l] = resp.groups[l]; });
+  resp.groups = g;
+  ['catalog','lessons','assignments','predMerges'].forEach(function(k){ resp[k] = (resp[k] || []).filter(function(x){ return x && own(x.loc); }); });
+  resp.teachers = (resp.teachers || []).filter(function(t){ return (t.locations || []).some(own); });
+  resp.scope = locs.join(', ');
+  return resp;
+}
 function _predViewScope(actor){
   if (_empHasMgmtRole(actor.role)) return null;
   if (_empHasDirRole(actor.role) || _empHasViewRole(actor.role))
@@ -37218,6 +37254,8 @@ function getPredmetnyky(actorId, year, month){
     var scope;
     try { scope = _predViewScope(actor); }
     catch(e){ return {ok:false, error:'Permission denied', code:'PERM_DENIED'}; }
+    var _multi = scope ? _actorLocList(actor) : [];                      // v7.516: кілька локацій — читаємо всі, віддаємо свої
+    if (_multi.length > 1) scope = null; else _multi = null;
 
     var yN = Number(year) || 0, mN = Number(month) || 0;
     // --- спроба з кешу ---
@@ -37226,7 +37264,7 @@ function getPredmetnyky(actorId, year, month){
     if (cache){
       try {
         var ver = cache.get('predver') || '0';
-        base = 'pred_' + (scope || 'all') + '_' + ver + '_' + yN + '_' + mN;
+        base = 'pred_' + (_multi ? _multi.join('|') : (scope || 'all')) + '_' + ver + '_' + yN + '_' + mN;
         var hit = _predCacheGet(cache, base);
         if (hit){ hit.cached = true; return hit; }
       } catch(_cr){ cache = null; }
@@ -37247,6 +37285,7 @@ function getPredmetnyky(actorId, year, month){
       scope:        scope || 'all',
       slice:        (yN > 0 && mN > 0) ? {year: yN, month: mN} : 'all'  // v7.80 діагностика
     };
+    if (_multi) resp = _predOnlyLocs(resp, _multi);
     if (cache && base){ try { _predCachePut(cache, base, resp, 900); } catch(_cw){} }   // v7.402: 180 → 900 с (запис і так скидає predver)
     return resp;
   } catch(e){
