@@ -5804,6 +5804,16 @@ function saveAttendanceToStorage(){
 // v6.49.2: РЕТРАЙ З BACKOFF — на нестабільному інтернеті повільний fetch (4-7с) часто
 //   обривається. Робимо до 3 повторів із затримкою 1с/3с/5с перш ніж віддати помилку.
 //   Кеш (S.att) НІКОЛИ не чистимо — при повному збої лишається останній добрий стан.
+// v7.509: ID дітей Нац.Гвардії закінчуються пробілом («…_Нац.Гвардії »: 12 перших символів назви локації), а бекенд віддає
+//   відмітки з обрізаним ID — відмітки з хмари не збігались із рядками табеля (видно було лише локальну копію; після
+//   очищення кешу v7.501 табель «спорожнів»). Тепер відмітку кладемо і під точний ID картки / рядка табеля.
+function _attIdAliases(){
+  var m={};
+  function add(id){ id=String(id||''); var t=id.trim(); if(t && t!==id){ (m[t]=m[t]||[]); if(m[t].indexOf(id)<0) m[t].push(id); } }
+  Object.keys(S.crm||{}).forEach(add);
+  Object.keys(S.groups||{}).forEach(function(l){ (S.groups[l]||[]).forEach(function(g){ (g.children||[]).forEach(function(ch){ add(ch.id); }); }); });
+  return m;
+}
 function loadAttendanceCloudRange(loc, from, to, onDone){
   var BACKOFF=[1000,3000,5000]; // затримки перед 1-м, 2-м, 3-м ретраєм
   var attempt=0;
@@ -5811,13 +5821,13 @@ function loadAttendanceCloudRange(loc, from, to, onDone){
     // v7.289: format=compact → {дата:{id:статус}}, kind=kids → без рядків STAFF:: (їх тут викидали).
     apiGetFull({action:'getAttendance',loc:loc,from:from,to:to,format:'compact',kind:'kids'})
       .then(function(j){
-        var data=j.data||{};
+        var data=j.data||{}, _al=_attIdAliases();   // v7.509
+        function _put(d,cId,st){ if(!S.att[d]) S.att[d]={}; S.att[d][cId]=st; (_al[String(cId).trim()]||[]).forEach(function(a){ S.att[d][a]=st; }); }
         if(Array.isArray(data)){                       // старий бекенд (до v7.289) — стара форма
           data.forEach(function(rec){
             var d=String(rec['Дата']||'').trim(), cId=String(rec['ID дитини']||'').trim(), st=String(rec['Статус']||'').trim();
             if(!d||!cId||!st) return;
-            if(!S.att[d]) S.att[d]={};
-            S.att[d][cId]=st;
+            _put(d,cId,st);
           });
         } else {
           Object.keys(data).forEach(function(d){
@@ -5825,8 +5835,7 @@ function loadAttendanceCloudRange(loc, from, to, onDone){
             Object.keys(day).forEach(function(cId){
               var st=String(day[cId]||'').trim();
               if(!d||!cId||!st) return;
-              if(!S.att[d]) S.att[d]={};
-              S.att[d][cId]=st;
+              _put(d,cId,st);
             });
           });
         }
