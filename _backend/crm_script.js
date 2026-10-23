@@ -1,5 +1,9 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.511
+// m.kids CRM — Google Apps Script v7.513
+// v7.513: groupRecordsCanon — старі назви груп у відмітках предметників і додаткових → назва з «Групи_Мапа» (лише однозначний
+//   збіг; без дублів клітинок; копія аркуша перед записом; CFO, dryRun за замовч.).
+// v7.512: exportPredmetnykyToSalary — заняття під старою назвою групи (Житомир «Find-iki») і під чинною («Findi-Ki») — одна
+//   група за _predGroupKey: Англійська, внесена вдруге під новою назвою, більше не рахується двічі.
 // v7.511: кілька локацій користувача («Користувачі» → «Локація» через кому); медсестра — табель лише своїх локацій
 //   (getAttendance / saveAttendance); setUserLocs (CFO) — записати список локацій користувачу з перевіркою за реєстром.
 // v7.508: getPlan2027 — план набору 2027 з аркушів Scenarios файлів _27 (ЛИШЕ ЧИТАННЯ; CFO і власник).
@@ -7349,7 +7353,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.511', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.513', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -7620,6 +7624,7 @@ function doPost(e) {
     else if (body.action === 'opex27SetAuto')             result = opex27SetAuto(body);                     // v7.445 вмикач автоперерахунку OPEX 2027 (CFO)
     else if (body.action === 'opex27RecalcAll')           result = opex27RecalcAll(body);                   // v7.444 «Перерахувати всі сади» (CFO; dryRun)
     else if (body.action === 'groupRenameApply')          result = groupRenameApply(body);                  // v7.435 стандарт назв груп (CFO; dryRun)
+    else if (body.action === 'groupRecordsCanon')         result = groupRecordsCanon(body);                 // v7.513 старі назви груп у відмітках → «Групи_Мапа» (CFO; dryRun)
     else if (body.action === 'setPayAuto')                result = setPayAuto(body);                        // v7.433 вимикач автозапуску (CFO)
     else if (body.action === 'pilot2027Remove')           result = pilot2027Remove(body);       // v7.432 відкат пілоту 2027 (CFO, dryRun)
     else if (body.action === 'addManualCoverage')         result = addManualCoverage(body);     // v7.427 покриття для ручної передоплати (офіс, dryRun)
@@ -9776,6 +9781,83 @@ function groupRenameApply(body){
     });
     if (!dryRun){ try { _cacheBump('clients'); _cacheBump('fill'); _cacheBump('pay'); } catch(_c){} }
     return {ok:true, dryRun:dryRun, files:out, names:recs};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { if (lock){ try { lock.releaseLock(); } catch(_l){} } }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.513 СТАРІ НАЗВИ ГРУП У ВІДМІТКАХ → НАЗВА З «Групи_Мапа» (доручення CFO 23.10.2026).
+//   Лише дві таблиці: Predmetnyky_Lessons (CRM) і Додаткові_Відвідуваність (CONFIG). Картки, Табель, Payment,
+//   норми, поділи й обʼєднання НЕ чіпає.
+//   Збіг однозначний: ключ назви (_predGroupKey — літери + цифри, «Find-iki» = «Findi-Ki», «Findi-Ki 2» ≠ «Findi-Ki»)
+//   збігається з назвою блоку або канонічною назвою рядків реєстру цієї локації, і всі такі рядки дають ОДНУ
+//   канонічну назву. Кілька кандидатів — ambiguous, не чіпаємо.
+//   Якщо після перейменування запис повторить наявний (та сама клітинка) — не чіпаємо, показуємо в collisions.
+//   POST groupRecordsCanon {dryRun} (запис — лише CFO; перед записом копія аркуша, без копії запису немає).
+// ═══════════════════════════════════════════════════════════════════════════
+function groupRecordsCanon(body){
+  var lock = null;
+  try {
+    body = body || {};
+    var dryRun = (body.dryRun !== false);
+    if (!dryRun){ var a = _promoActor(body); if (!(a && _roleKey(a.role) === 'cfo')) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'}; }
+    // реєстр: loc(fold) → {ключ: {канонічні назви}}
+    var reg = {}, regLoc = {};
+    var gsh = getCRMSpreadsheet().getSheetByName(GROUP_MAP_TAB);
+    if (!gsh || gsh.getLastRow() < 2) return {ok:false, error:'Реєстр «' + GROUP_MAP_TAB + '» порожній'};
+    gsh.getRange(2, 1, gsh.getLastRow() - 1, 3).getValues().forEach(function(r){
+      var loc = trim(String(r[0] || '')), pay = trim(String(r[1] || '')), can = trim(String(r[2] || ''));
+      if (!loc || !can) return;
+      var lf = _nameFold(loc); regLoc[lf] = loc; var m = reg[lf] = reg[lf] || {};
+      [pay, can].forEach(function(x){ if (!x) return; var k = _predGroupKey(x); if (!k) return; (m[k] = m[k] || {})[can] = true; });
+    });
+    function canonOf(loc, grp){
+      var m = reg[_nameFold(loc)]; if (!m) return {st:'noloc'};
+      var k = _predGroupKey(grp); if (!k || !m[k]) return {st:'nomatch'};
+      var c = Object.keys(m[k]); if (c.length !== 1) return {st:'ambiguous', cand:c};
+      return {st:'ok', can:c[0]};
+    }
+    var tables = [
+      {name:PRED_LESSONS_TAB, sh:getCRMSpreadsheet().getSheetByName(PRED_LESSONS_TAB), loc:'Location', grp:'Group', key:['Subject', 'Date']},
+      {name:ATTENDANCE_SHEET_NAME, sh:SpreadsheetApp.openById(CONFIG_SHEET_ID).getSheetByName(ATTENDANCE_SHEET_NAME), loc:'Локація', grp:'Група', key:['Дата', 'Дитина', 'id_заняття']}
+    ];
+    if (!dryRun){ lock = LockService.getScriptLock(); lock.waitLock(30000); }
+    var out = [];
+    tables.forEach(function(t){
+      var res = {table:t.name, rows:0, plan:{}, ambiguous:{}, collisions:[], changed:0};
+      out.push(res);
+      if (!t.sh || t.sh.getLastRow() < 2){ res.error = 'аркуш порожній або відсутній'; return; }
+      var data = t.sh.getRange(1, 1, t.sh.getLastRow(), t.sh.getLastColumn()).getValues();
+      var hd = data[0].map(function(x){ return trim(String(x)); });
+      var cL = hd.indexOf(t.loc), cG = hd.indexOf(t.grp), cK = t.key.map(function(h){ return hd.indexOf(h); });
+      if (cL < 0 || cG < 0 || cK.some(function(c){ return c < 0; })){ res.error = 'немає колонок ' + [t.loc, t.grp].concat(t.key).join(', '); return; }
+      res.rows = data.length - 1;
+      function cellKey(r, g){ return [_nameFold(r[cL]), trim(String(g))].concat(cK.map(function(c){ var v = r[c]; return v instanceof Date ? v.getTime() : trim(String(v)); })).join('|'); }
+      var taken = {};
+      for (var i = 1; i < data.length; i++) taken[cellKey(data[i], data[i][cG])] = (taken[cellKey(data[i], data[i][cG])] || 0) + 1;
+      var G = data.slice(1).map(function(r){ return [r[cG]]; }), changes = [];
+      for (var j = 1; j < data.length; j++){
+        var r = data[j], loc = trim(String(r[cL] || '')), raw = String(r[cG] == null ? '' : r[cG]);
+        if (!loc || !trim(raw)) continue;
+        var c = canonOf(loc, raw);
+        if (c.st === 'ambiguous'){ var ak = loc + ' | ' + raw; (res.ambiguous[ak] = res.ambiguous[ak] || {cand:c.cand, n:0}).n++; continue; }
+        if (c.st !== 'ok' || c.can === raw) continue;
+        var nk = cellKey(r, c.can);
+        if (taken[nk] > (trim(raw) === c.can ? 1 : 0)){ res.collisions.push({row:j + 1, loc:loc, old:raw, new:c.can, key:t.key.map(function(h, x){ var v = r[cK[x]]; return v instanceof Date ? Utilities.formatDate(v, 'Europe/Kiev', 'dd.MM.yyyy') : String(v); }).join(' · ')}); continue; }
+        taken[nk] = 1;
+        var pk = loc + ' | ' + raw + ' → ' + c.can; res.plan[pk] = (res.plan[pk] || 0) + 1;
+        G[j - 1][0] = c.can; changes.push({row:j + 1, old:raw});
+      }
+      res.toChange = changes.length;
+      if (!dryRun && changes.length){
+        res.backup = _safeBackupSheet(t.sh, 'grpcanon');
+        if (!res.backup){ res.error = 'копію аркуша не створено — запис скасовано'; return; }
+        t.sh.getRange(2, cG + 1, G.length, 1).setValues(G);
+        res.changed = changes.length; res.undo = changes;
+      }
+    });
+    if (!dryRun){ try { _bumpPredVer(); } catch(_b){} }
+    return {ok:true, dryRun:dryRun, tables:out};
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
   finally { if (lock){ try { lock.releaseLock(); } catch(_l){} } }
 }
@@ -38281,13 +38363,18 @@ function exportPredmetnykyToSalary(params){
     var gbdByTeacher = {};
     var _emptyEmpKey = 0;
     var _lessonsInPeriod = 0;   // v7.197: лічильник для guard
+    // v7.512: заняття під старою назвою групи («Find-iki») і під чинною («Findi-Ki») — одна група.
+    //   Без цього Житомир (жовтень 2026) рахував Англійську двічі за 8 днів: відмітку внесли вдруге,
+    //   бо стара з v7.454 зникла з сітки. Ключ — чинна назва з груп локації за _predGroupKey.
+    var _grpByKey = {};
+    try { ((_loadRealGroups(loc) || {})[loc] || []).forEach(function(g){ _grpByKey[_predGroupKey(g)] = g; }); } catch(_rg){}
     for (var i = 0; i < lessons.length; i++){
       var L = lessons[i];
       var ym = _lessonYearMonth(L.date);
       if (!ym || ym.y !== year || ym.m !== month) continue;
       var sk   = _dopNormGroup(L.subject);
       var dIso = _predDateToISO(L.date);
-      var ng   = _dopNormGroup(L.group);
+      var ng   = _dopNormGroup(_grpByKey[_predGroupKey(L.group)] || L.group);   // v7.512
       if (!gbdBySubj[sk]) gbdBySubj[sk] = {};
       if (!gbdBySubj[sk][dIso]) gbdBySubj[sk][dIso] = {};
       gbdBySubj[sk][dIso][ng] = true;
