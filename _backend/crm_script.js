@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.508
+// m.kids CRM — Google Apps Script v7.511
+// v7.511: кілька локацій користувача («Користувачі» → «Локація» через кому); медсестра — табель лише своїх локацій
+//   (getAttendance / saveAttendance); setUserLocs (CFO) — записати список локацій користувачу з перевіркою за реєстром.
 // v7.508: getPlan2027 — план набору 2027 з аркушів Scenarios файлів _27 (ЛИШЕ ЧИТАННЯ; CFO і власник).
 // v7.507: тимчасову cleanupDeadTriggers прибрано (23.10.2026 видалено тригери keepAlive / keepWarm / runSyncBdayStatus; tgSlaCheck — кожні 5 хв).
 // v7.506: tgSlaCheck — кожні 5 хв (було щохвилини; квота тригерів).
@@ -7271,7 +7273,7 @@ function _dirAuth(){
   var a = _CURRENT_AUTH; if (!a || String(a.role || '').toLowerCase() !== 'director') return null;
   var loc = a.id ? _dirUserLoc(a.id) : '';
   if (!loc && a.loc && String(a.loc).indexOf('?') < 0) loc = String(a.loc);
-  loc = _dirCanonLoc(loc);
+  loc = _dirCanonLoc(String(loc).split(/\s*[,;]\s*/)[0] || '');   // v7.511: список локацій — директору основна (перша)
   return loc ? {loc:loc} : {loc:'—', none:true};   // локацію не знайдено — нічого не віддаємо
 }
 function _dirSameLoc(a, b){ return _nameFold(trim(a)) === _nameFold(trim(b)); }
@@ -7296,6 +7298,34 @@ function _dirFilter(action, res, dir){
   return out;
 }
 
+// ═══ v7.511 МЕДСЕСТРА — ТАБЕЛЬ ЛИШЕ СВОЇХ ЛОКАЦІЙ (за токеном; локації — «Користувачі» → «Локація», можна кілька через кому) ═══
+function _userLocList(raw){ return String(raw || '').split(/\s*[,;]\s*/).map(function(x){ return _dirCanonLoc(trim(x)); }).filter(Boolean); }
+function _nurseAuth(){
+  var a = _CURRENT_AUTH; if (!a || String(a.role || '').toLowerCase() !== 'nurse' || !a.id) return null;
+  var locs = _userLocList(_dirUserLoc(a.id)); return {locs:locs.length ? locs : ['—']};
+}
+function _nurseLocOk(nu, loc){ return nu.locs.some(function(l){ return _dirSameLoc(l, loc); }); }
+// CFO: записати список локацій користувачу (через кому). POST setUserLocs {userId, locs:[…], dryRun(за замовч. true)}
+function setUserLocs(body){
+  body = body || {};
+  var a = null; try { a = _getActor((_CURRENT_AUTH && _CURRENT_AUTH.id) || body.actorId); } catch(_a){}
+  if (!(a && (_roleKey(a.role) === 'cfo' || Number(a.id) === 1))) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  if (a.founder) return FOUNDER_READONLY;
+  var names = ((getLocations({}) || {}).data || []).map(function(l){ return String(l.loc || ''); });
+  var want = (body.locs || []).map(function(x){ return trim(x); }).filter(Boolean);
+  var bad = want.filter(function(x){ return names.indexOf(x) < 0; });
+  if (!want.length || bad.length) return {ok:false, error:'Невідомі локації: ' + (bad.join(', ') || '(порожньо)'), known:names};
+  var sh = _getUsersSheet(), v = sh.getDataRange().getValues();
+  for (var i = 1; i < v.length; i++){
+    var u = _parseUserRow(v[i]); if (u.id !== Number(body.userId)) continue;
+    var val = want.join(', '), res = {ok:true, dryRun:body.dryRun !== false, userId:u.id, name:u.name, role:u.role, before:u.loc, after:val};
+    if (res.dryRun) return res;
+    sh.getRange(i + 1, 6).setValue(val);                                   // колонка F — «Локація»
+    try { CacheService.getScriptCache().remove('dirloc2_' + u.id); } catch(_c){}
+    return res;
+  }
+  return {ok:false, error:'Користувача не знайдено: ' + body.userId};
+}
 function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) ? e.parameter.action : '';
   try {
@@ -7303,6 +7333,10 @@ function doGet(e) {
     if (_g) return jsonOut(_g);
     var _dir = _dirAuth();                                                                   // v7.486 директор — своя локація
     if (_dir){ var _dp = _dirPre(action, e.parameter || {}, _dir); if (_dp) return jsonOut(_dp); }
+    if (action === 'getAttendance'){ var _nu = _nurseAuth(); if (_nu){                       // v7.511: медсестра — лише свої локації
+      var _np = e.parameter || {}, _nl = trim(_np.loc || '');
+      if (!_nl) _np.loc = _nu.locs[0];
+      else if (!_nurseLocOk(_nu, _nl)) return jsonOut({ok:false, code:'FORBIDDEN_LOC', error:'Табель лише ваших локацій: ' + _nu.locs.join(', ')}); } }
     var result;
     // v7.402: службові запуски через GET (агрегати, імпорт, злиття) — скидаємо всі групи кешу
     if (/^(run|sync|import|merge|purge|refresh|send|tgGet)/.test(action)){
@@ -7315,7 +7349,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.508', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.511', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -7532,7 +7566,10 @@ function doPost(e) {
     else if (body.action === 'deleteClient')     result = deleteClient(body.id, body);   // v7.439 м'яке видалення + прізвище
     else if (body.action === 'restoreDeletedClient')      result = restoreDeletedClient(body);        // v7.439
     else if (body.action === 'restoreClientFromRevision') result = restoreClientFromRevision(body);   // v7.439
-    else if (body.action === 'saveAttendance')   result = saveAttendance(body);
+    else if (body.action === 'saveAttendance'){                                               // v7.511: медсестра — лише свої локації
+      var _nu2 = _nurseAuth(), _badL = _nu2 ? (body.records || []).filter(function(r){ return r && trim(r.loc || '') && !_nurseLocOk(_nu2, r.loc); }) : [];
+      result = _badL.length ? {ok:false, code:'FORBIDDEN_LOC', error:'Табель лише ваших локацій: ' + _nu2.locs.join(', ') + ' (відхилено ' + _badL.length + ')'} : saveAttendance(body);
+    }
     else if (body.action === 'saveHealthRecord') result = saveHealthRecord(body);
     else if (body.action === 'deleteHealthRecord')    result = deleteHealthRecord(body);
     else if (body.action === 'writeAbsenceToPayment')    result = writeAbsenceToPayment(body);
@@ -7557,6 +7594,7 @@ function doPost(e) {
     else if (body.action === 'invoiceAutoMatchRange')     result = invoiceAutoMatchRange(body); // v7.411 автозвірка заявок за період (CFO, dryRun за замовч.)
     else if (body.action === 'invoiceAutoSet')            result = invoiceAutoSet(body);        // v7.411 вимикач автозвірки (CFO)
     else if (body.action === 'invoiceReopen')             result = invoiceReopen(body);         // v7.411 відкат «оплачено» (CFO, dryRun за замовч.)
+    else if (body.action === 'setUserLocs')               result = setUserLocs(body);              // v7.511 кілька локацій користувачу (CFO, dryRun)
     else if (body.action === 'setupDashSnapshotTrigger')  result = setupDashSnapshotTrigger(body);   // v7.503 тригер знімків дашборда (CFO)
     else if (body.action === 'savePromo')                 result = savePromo(body);             // v7.414 акція: офіс — створює; директор — пропозиція
     else if (body.action === 'decidePromo')               result = decidePromo(body);           // v7.414 підтвердити/відхилити пропозицію (офіс)

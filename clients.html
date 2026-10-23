@@ -3003,6 +3003,9 @@ function updUserUI(){
 // isHR() семантично = "має мережевий доступ" (всі топ-менеджмент ролі + legacy hr).
 function isHR(){ return S.user && isNetworkRole(S.user.role); }
 function isNurse(){ return S.user&&S.user.role==='nurse'; }
+// v7.511: локації користувача — «Користувачі» → «Локація» може містити кілька через кому (S.user.locs з входу).
+function _userLocs(){ var u=S.user||{}; var a=Array.isArray(u.locs)&&u.locs.length?u.locs:String(u.loc||'').split(/\s*[,;]\s*/);
+  a=a.map(function(x){ return String(x||'').trim(); }).filter(Boolean); return a.length?a:[String(u.loc||'')]; }
 function isDirector(){ return S.user&&S.user.role==='director'; }
 function canEditHealth(childLoc){
   if(isHR()||isNurse()) return true;
@@ -6361,12 +6364,11 @@ function renderAttendance(){
 
   // Повний список локацій
   var allAvailLocs;
-  if(isNurse()){
-    allAvailLocs=[S.user.loc];
-    S.attLoc=S.user.loc;
-  } else if(!isHR()){
-    allAvailLocs=[S.user.loc];
-    S.attLoc=S.user.loc;
+  if(!isHR()){
+    // v7.511: локацій користувача може бути кілька («Користувачі» → «Локація» через кому, напр. медсестра
+    //   «Кар'єрна, Школа Кар'єрна») — вибір лише між ними; одна — як раніше.
+    allAvailLocs=_userLocs();
+    if(allAvailLocs.indexOf(S.attLoc)<0) S.attLoc=allAvailLocs[0];
   } else {
     allAvailLocs=S.locs.map(function(l){ return l.loc; }).filter(function(l){ return S.groups[l]||Object.keys(S.att).some(function(d){ return Object.keys(S.att[d]).some(function(id){ var c=S.crm[id]; return c&&c.loc===l; }); }); });
     if(!allAvailLocs.length) allAvailLocs=S.locs.map(function(l){ return l.loc; });
@@ -6402,7 +6404,7 @@ function renderAttendance(){
   // тож кеш-стан спільний на тиждень. Перемикання локацій у межах тижня = той самий ключ = миттєво.
   // v7.289: однолокаційні ролі (директор/медсестра/вихователька) просять СВОЮ локацію —
   // 30 КБ замість 351 КБ і серверний кеш (3 хв) працює; мережеві ролі — усі локації.
-  var cloudLoc=isHR()?'':String((S.user&&S.user.loc)||'');
+  var cloudLoc=isHR()?'':String(S.attLoc||(S.user&&S.user.loc)||'');   // v7.511: обрана з локацій користувача
   // v7.474: рік вантажимо лише для однієї локації (середні за рік). Усі локації за рік — ~10 МБ, не тягнемо.
   if(S.attMode==='year'){
     if(!cloudLoc && activeLocs.length===1) cloudLoc=activeLocs[0];
@@ -6477,7 +6479,9 @@ function renderAttendance(){
   // ── Дропдаун локацій ───────────────────────────────────────────────────────
   var typeNames={'Садочок':'садочки','Школа':'школи','Управління':'управління'};
   var allLocsLabel=S.attLocType?'Всі локації ('+typeNames[S.attLocType]+')':'Всі локації';
-  var locSel=(!isHR())?''
+  var _myLocs=_userLocs();
+  var locSel=(!isHR())?(_myLocs.length>1?'<select onchange="S.attLoc=this.value;S.attGroup=\'\';S._attCloudLoaded={};renderAttendance()" style="padding:7px 10px;border:1.5px solid var(--gray2);border-radius:8px;font-size:13px;font-family:inherit">'
+      +_myLocs.map(function(l){ return '<option value="'+esc(l)+'"'+(l===S.attLoc?' selected':'')+'>'+esc(l)+'</option>'; }).join('')+'</select>':'')
     :'<select onchange="S.attLoc=this.value;S.attGroup=\'\';S._attCloudLoaded={};renderAttendance()" style="padding:7px 10px;border:1.5px solid var(--gray2);border-radius:8px;font-size:13px;font-family:inherit">'
     +'<option value=""'+(S.attLoc===''?' selected':'')+'>'+esc(allLocsLabel)+'</option>'
     +availLocs.map(function(l){ return '<option value="'+esc(l)+'"'+(l===S.attLoc?' selected':'')+'>'+esc(l)+'</option>'; }).join('')+'</select>';
