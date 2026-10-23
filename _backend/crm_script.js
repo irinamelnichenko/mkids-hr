@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.504
+// m.kids CRM — Google Apps Script v7.505
+// v7.505: облік часу — і nightlyExportGuarantee.
 // v7.504: квота тригерів (Gmail — 90 хв/добу) — знімки дашборда кожні 30 хв (було 15); облік часу кожного тригера (getTriggerStats).
 // v7.503: дашборд одним запитом — знімки (dashSnapshotBuild, тригер кожні 15 хв 7–21 за Києвом) + getDashboard (з урахуванням ролі).
 // v7.498: getDataQuality — кеш готового результату на локацію / мережу (5 хв), повторне відкриття без перерахунку.
@@ -7311,7 +7312,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.504', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.505', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -12020,6 +12021,7 @@ function weeklyOwnerReport(e){ var _t = Date.now(); try { return _weeklyOwnerRep
 function invFlushPaidQueue(e){ var _t = Date.now(); try { return _invFlushPaidQueue__impl(e); } finally { _trigAcc('invFlushPaidQueue', _t); } }
 function _vacExportGuardBatch(e){ var _t = Date.now(); try { return __vacExportGuardBatch__impl(e); } finally { _trigAcc('_vacExportGuardBatch', _t); } }
 function onMirrorOpen(e){ var _t = Date.now(); try { return _onMirrorOpen__impl(e); } finally { _trigAcc('onMirrorOpen', _t); } }
+function nightlyExportGuarantee(e){ var _t = Date.now(); try { return _nightlyExportGuarantee__impl(e); } finally { _trigAcc('nightlyExportGuarantee', _t); } }
 function opex27OnEdit(e){ var _t = Date.now(); try { return _opex27OnEdit__impl(e); } finally { _trigAcc('opex27OnEdit', _t); } }
 
 // v7.47 ЕТАП 5: історія переходів груп. Замість тихого перезапису «Група» — ведемо
@@ -14196,7 +14198,7 @@ var _EXP_GUARD_BATCH = 3;    // локацій за прогін (× 2 міся�
 var _EXP_GUARD_KEY   = 'expguard_state';
 var _EXP_GUARD_LAST_KEY = 'expguard_last';   // v7.266: підсумок останнього прогону
 
-function nightlyExportGuarantee(){
+function _nightlyExportGuarantee__impl(){
   _expGuardDeleteContinuations();          // прибрати спент-тригери з минулого разу
   var props = PropertiesService.getScriptProperties();
   // v7.263: БЕЗ фільтра типу — беремо ВСІ локації реєстру.
