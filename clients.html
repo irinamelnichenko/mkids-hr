@@ -3867,6 +3867,7 @@ function payBadge(status,debt,over){
 //   Σ (Бюджет навч + доп − Факт навч + доп) за місяці ДО поточного, мінус переплата поточного місяця (вона гасить старий борг).
 //   Службові рядки «(без імені …)» пропускаємо; keepRow(ПІБ, локація) — правило сторінки (у школі — рядок лише з карткою).
 //   Місяці боргу — ті, де бюджет більший за оплачене. → {локація: {n, sum, kids:[{name, group, debt, months:[…]}]}}
+var PAST_DEBT_MIN=10;   // v7.500: менші суми не показуємо (залишки округлення)
 var PAST_DEBT_MN=['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
 function _pastDebtsCalc(rows, cur, keepRow){
   var acc={}, num=function(v){ var x=Number(v); return isFinite(x)?x:0; };
@@ -3882,7 +3883,7 @@ function _pastDebtsCalc(rows, cur, keepRow){
   var locs={};
   Object.keys(acc).forEach(function(k){ var a=acc[k], bal=0, months=[];
     for(var m=0;m<cur;m++){ bal+=a.b[m]-a.f[m]; if(a.b[m]-a.f[m]>0.5) months.push(PAST_DEBT_MN[m]); }
-    var debt=Math.round(bal-Math.max(0,a.f[cur]-a.b[cur])); if(debt<1) return;
+    var debt=Math.round(bal-Math.max(0,a.f[cur]-a.b[cur])); if(debt<PAST_DEBT_MIN) return;   // v7.500: < 10 ₴ — залишки округлення
     var L=locs[a.loc]||(locs[a.loc]={n:0,sum:0,kids:[]}); L.n++; L.sum+=debt;
     L.kids.push({name:a.name, group:a.group, debt:debt, months:months}); });
   Object.keys(locs).forEach(function(l){ locs[l].kids.sort(function(x,y){ return y.debt-x.debt; }); });
