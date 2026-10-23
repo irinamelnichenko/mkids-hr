@@ -482,6 +482,25 @@ var SESSION_KEY='mkids_session', SESSION_TTL_MS = 7 * 24 * 3600 * 1000;
     if (!t || _tokExpired(t)){ _kick(); return false; }
     return true;
   }
+  /* v7.501: кеші даних у браузері — ЧИЇ. Інший користувач (вийшов директор — зайшов CFO) → кеші попереднього видаляємо,
+     інакше картки / Payment / табель з обрізаного директорського набору показувались CFO. Повертає true, якщо очистили. */
+  var MK_DATA_CACHES = ['crm_clients_bday_cache_v4','crm_cli_v3','crm_locs_v3','crm_pay_v3','crm_att_v1','crm_att_v2','crm_year_v1','na_cache_v1',
+    'hr_mkids_cache_v6','hr_mkids_cache_v7','opex_cache_v2','salary_detail_cache_v1','activities_catalog_v2','activities_marks_v1',
+    'activities_ana_marks_v1','activities_payments_v1','analytics_cache_v1','analytics_group_norms_v1','analytics_overview_cache_v1',
+    'analytics_payments_v2','opex_overview_cache_v1','salary_overview_cache_v1','mkids_locs_cache'];
+  window._mkCacheGuard = function(){
+    try {
+      var s = JSON.parse(localStorage.getItem('mkids_session') || 'null'), uid = s && s.user && s.user.id ? String(s.user.id) : '';
+      if (!uid) return false;
+      var own = localStorage.getItem('mkids_cache_owner');
+      if (own === uid) return false;
+      MK_DATA_CACHES.forEach(function(k){ try { localStorage.removeItem(k); } catch(_r){} });
+      for (var i = localStorage.length - 1; i >= 0; i--){ var k = localStorage.key(i); if (k && k.indexOf('crm_health_') === 0) try { localStorage.removeItem(k); } catch(_h){} }
+      localStorage.setItem('mkids_cache_owner', uid);
+      return own != null;                                  // перший запис власника (без попереднього) — перезавантаження не потрібне
+    } catch(_e){ return false; }
+  };
+  try { window._mkCacheGuard(); } catch(_g){}
   try { _checkTok(); } catch(_e){}   /* v7.491: перевірка сесії одразу при завантаженні, а не лише при першому запиті */
   // ── v7.403: stale-while-revalidate — дії, які можна віддавати з кешу (лише читання, важкі) ──
   var SWR_ACTIONS = {getPaymentsYearly:1, getPayments:1, getEmployees:1, getKomplektaciyaData:1, getGroupNorms:1,
