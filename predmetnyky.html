@@ -1859,10 +1859,43 @@ function loadPredmetnyky(force){
     S.locNorms    = res.locNorms    || {};      // v7.236: норми рівня локації
     S.assignments = res.assignments || [];
     S.merges      = res.predMerges  || [];
+    S.lessons     = _predCanonLessons(S.lessons, S.groups);   // v7.512
     _pmCache[key] = {lessons: S.lessons, merges: S.merges};   // v7.80: у кеш
     // v7.265: поділи локації — окремий легкий запит, не блокує рендер
     _refreshPredSplits().then(function(ok){ if (ok) renderApp(); });
   });
+}
+
+// v7.512: заняття під старою назвою групи — у рядок чинної. З v7.454 рядки сітки йдуть за
+// реєстром «Групи_Мапа» (Житомир «Find-iki» → «Findi-Ki»), а заняття лишились під старою назвою
+// і зникли з екрана (жовтень: 21 заняття). Зводимо за groupKey (літери + цифри: «Findi-Ki 2» ≠ «Findi-Ki»).
+// Дві відмітки однієї клітинки (повторно внесли під новою назвою) — показуємо одну, другу id
+// тримаємо в dupIds: зняття галочки прибирає обидві. Дані на бекенді не перейменовуються.
+function _predCanonLessons(lessons, groups){
+  var byCell = {}, out = [];
+  (lessons || []).forEach(function(L){
+    var gs = (groups && groups[L.loc]) || [], g = String(L.group == null ? '' : L.group);
+    if (gs.indexOf(g) < 0){
+      var t = g.trim(), k = groupKey(t), hit = null;
+      for (var i = 0; i < gs.length; i++){ if (gs[i] === t || (k && groupKey(gs[i]) === k)){ hit = gs[i]; break; } }
+      if (hit !== null && hit !== g){ L.rawGroup = g; L.group = hit; }
+    }
+    var ck = [L.loc, L.group, L.subject, L.date].join('|');
+    var keep = byCell[ck];
+    if (keep){ (keep.dupIds = keep.dupIds || []).push(L.id); return; }
+    byCell[ck] = L; out.push(L);
+  });
+  return out;
+}
+// Групи з відмітками за місяць, яких немає серед груп локації (стара назва без пари в реєстрі) —
+// окремими рядками, щоб відмітки не ховались.
+function _predOrphanGroups(loc, known){
+  var seen = {}, out = [];
+  (S.lessons || []).forEach(function(L){
+    if (L.loc !== loc || !L.group || known.indexOf(L.group) >= 0 || seen[L.group]) return;
+    seen[L.group] = true; out.push(L.group);
+  });
+  return out;
 }
 
 // ═══ ОБʼЄДНАННЯ ГРУП ПРЕДМЕТНИКІВ (v7.20) ═══════════════════════════════════
@@ -2269,6 +2302,7 @@ function realGroupsFor(loc){
   if (!raw.length){
     raw = PRED_GROUP_TYPES.map(function(gt){ return GROUP_NAME_BY_TYPE[gt]; });
   }
+  raw = raw.concat(_predOrphanGroups(loc, raw));   // v7.512
   raw.sort(function(a, b){
     var ta = PRED_GROUP_TYPES.indexOf(normalizeGroupType(a)); if (ta === -1) ta = 99;
     var tb = PRED_GROUP_TYPES.indexOf(normalizeGroupType(b)); if (tb === -1) tb = 99;
@@ -2884,6 +2918,7 @@ function _pqQueueRemove(existing, loc, grp, subj, dmy){
     return;
   }
   PQ.del.push({id: existing.id, lesson: existing});
+  (existing.dupIds || []).forEach(function(d){ PQ.del.push({id: d, lesson: existing}); });   // v7.512
   _pqSchedule();
 }
 function _pqPromoteWaiting(){
@@ -2895,6 +2930,7 @@ function _pqPromoteWaiting(){
     if (String(L.id).indexOf('local-') === 0){ still.push(w); return; }
     _pqDropLesson(L.id);
     PQ.del.push({id: L.id, lesson: L});
+    (L.dupIds || []).forEach(function(d){ PQ.del.push({id: d, lesson: L}); });   // v7.512
   });
   PQ.delWaiting = still;
   if (PQ.del.length) _pqSchedule();
@@ -2951,13 +2987,13 @@ async function _pqFlush(){
       setSync('ok');
     } else {
       adds.forEach(function(a){ _pqDropLesson(a.id); });
-      dels.forEach(function(d){ if (!_pqLessonById(d.id)) S.lessons.push(d.lesson); });
+      dels.forEach(function(d){ if (!_pqLessonById(d.id) && S.lessons.indexOf(d.lesson) < 0) S.lessons.push(d.lesson); });
       setSync('err', 'Не вдалось зберегти');
       showToast('❌ ' + ((res && res.error) || 'Не вдалось зберегти'), 'err', 5000);
     }
   } catch(e){
     adds.forEach(function(a){ _pqDropLesson(a.id); });
-    dels.forEach(function(d){ if (!_pqLessonById(d.id)) S.lessons.push(d.lesson); });
+    dels.forEach(function(d){ if (!_pqLessonById(d.id) && S.lessons.indexOf(d.lesson) < 0) S.lessons.push(d.lesson); });
     setSync('err', 'Помилка мережі');
     showToast('❌ ' + (e && e.message || e), 'err', 5000);
   }
