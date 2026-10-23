@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.496
+// m.kids CRM — Google Apps Script v7.497
+// v7.497: швидкість — getDataQuality / getPaymentsLive з &loc= читають ЛИШЕ файл цієї локації (кеш 5 хв на локацію);
+//   директору loc підставляється автоматично.
 // v7.496: «Акції та знижки» — запис довідника / реєстру знижок / передоплат / покриття лише CFO (id 1); читання довідника для картки — як було.
 // v7.492: ping — діагностика CLI_TOKEN без розкриття значення (задано / довжина / перші 8 символів SHA-256).
 // v7.491: підготовка до AUTH_ENFORCE — CLI_TOKEN (службовий токен терміналу, права CFO, з властивостей скрипта);
@@ -7238,6 +7240,7 @@ function _authGate(action, token, method){
 //   1) параметр loc / locs з чужою локацією — відмова FORBIDDEN_LOC; getAttendance без loc — примусово своя;
 //   2) CFO-звіти (DIR_DENY) — відмова; 3) мережеві відповіді (DIR_FILTER) — лише рядки його локації.
 var DIR_DENY   = {getUnderpaid:1, getEntryHistory:1, getMoneyJournal:1};
+var DIR_FORCE_LOC = {getAttendance:1, getPaymentsLive:1, getDataQuality:1};
 var DIR_FILTER = {getClients:1, getPayments:1, getPaymentsYearly:1, getPaymentsLive:1, getDebtsLive:1, getDataQuality:1};
 // v7.489: локація директора — з «Користувачів» за id (у старих токенах кирилиця зіпсована: «??????»), зведена до назви реєстру.
 function _dirUserLoc(id){
@@ -7270,7 +7273,7 @@ function _dirPre(action, prm, dir){
   var bad = function(v){ return v != null && String(v).trim() !== '' && !_dirSameLoc(v, dir.loc); };
   if (prm && bad(prm.loc)) return {ok:false, code:'FORBIDDEN_LOC', error:'Директор бачить лише свою локацію (' + dir.loc + ')'};
   if (prm && prm.locs && String(prm.locs).split(',').some(function(x){ return bad(x); })) return {ok:false, code:'FORBIDDEN_LOC', error:'Директор бачить лише свою локацію (' + dir.loc + ')'};
-  if (prm && action === 'getAttendance' && !String(prm.loc || '').trim()) prm.loc = dir.loc;
+  if (prm && DIR_FORCE_LOC[action] && !String(prm.loc || '').trim()) prm.loc = dir.loc;   // v7.497: читати лише файл його локації
   return null;
 }
 function _dirFilter(action, res, dir){
@@ -7305,7 +7308,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.496', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.497', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -11765,8 +11768,9 @@ function getUnderpaid(params){
 //   або в картці > 0, а «Бюджет навч» місяця 0 (і не «сплачено наперед»); 6 наступні місяці року: бюджет 0 або ≠ сумі на ту дату;
 //   9 не заповнено: дата народження, телефон батьків, № / дата договору, група. Табель (7, 8) — на фронті з даних табеля.
 // ═══════════════════════════════════════════════════════════════════════════
-function _yearlyLive(nocache){
-  var key = 'yearlive1';
+function _yearlyLive(nocache, loc){
+  loc = trim(loc || '');
+  var key = 'yearlive1' + (loc ? '_' + _nameFold(loc) : '');   // v7.497: окремий кеш на локацію
   if (!nocache){ var hit = _cacheGzGetBig(key); if (hit && hit.v) return hit.v; }
   var now = new Date(), upd = formatDate(now), hdr = ['Локація','Напрямок','Тип','Група','Вихователь',"Ім'я дитини"];
   MONTHS_CAL.forEach(function(m){ hdr.push(m+'-Факт-навч', m+'-Факт-доп', m+'-Факт-вступ', m+'-Бюджет-навч', m+'-Бюджет-доп', m+'-Статус'); });
@@ -11774,6 +11778,7 @@ function _yearlyLive(nocache){
   var v = [hdr], cfg = SpreadsheetApp.openById(CONFIG_SHEET_ID).getSheets()[0].getDataRange().getValues();
   for (var i = 1; i < cfg.length; i++){
     if (!trim(cfg[i][2]) || !trim(cfg[i][3])) continue;
+    if (loc && _nameFold(trim(cfg[i][2])) !== _nameFold(loc)) continue;   // v7.497: лише файл обраної локації
     try { Array.prototype.push.apply(v, _aggYearLocRows(cfg[i], now, upd)); } catch(e){ Logger.log('[_yearlyLive] %s: %s', cfg[i][2], e && e.message); }
   }
   try { _cacheGzPutBig(key, {v:v}, 300); } catch(_c){}
@@ -11784,7 +11789,11 @@ function getDataQuality(params){
     params = params || {};
     var t0 = Date.now(), tz = 'Europe/Kiev', now = new Date();
     var ym = Utilities.formatDate(now, tz, 'yyyy-MM'), mo = Number(ym.slice(5, 7)), Y = Number(ym.slice(0, 4));
-    var v = _yearlyLive(String(params.nocache || '') === '1'), h = v[0].map(String), cards = _promoCards();
+    var qLoc = trim(params.loc || '');                                        // v7.497: одна локація — лише її файл
+    var v = _yearlyLive(String(params.nocache || '') === '1', qLoc), h = v[0].map(String), cards = _promoCards();
+    if (qLoc){ var _cl = cards.list.filter(function(c){ return _nameFold(c.loc) === _nameFold(qLoc); }), _cb = {};
+      _cl.forEach(function(c){ _cb[c.id] = c; });
+      cards = {byId:_cb, list:_cl, data:cards.data.filter(function(o){ return _nameFold(String(o['Локація'] || '')) === _nameFold(qLoc); })}; }
     var iN = h.indexOf("Ім'я дитини"), iL = h.indexOf('Локація'), iG = h.indexOf('Група'), iV = h.indexOf('Вибув');
     var iB = MONTHS_CAL.map(function(m){ return h.indexOf(m + '-Бюджет-навч'); });
     // Payment: локація → нормоване ПІБ → {b:[12], g, vybuv}
@@ -11860,7 +11869,7 @@ function getDataQuality(params){
       if (x.parts.none) add(5, c, 'у картці ' + fmt(x.fee) + ', у Payment ' + MONTHS_CAL[mo - 1].toLowerCase() + ' 0', 'нарахувати місяць у Payment або оформити розірвання');
       else if (x.parts.unrec) add(4, c, 'у картці ' + fmt(x.fee) + ', у Payment ' + fmt(x.budget) + ' — різниця ' + fmt(x.parts.unrec) + ' без причини' + (x.notes.length ? ' (' + x.notes.join('; ') + ')' : ''), x.feeMismatch ? 'виправити суму в картці або Payment («Зміни суми» з дати)' : 'внести причину (відпустка / знижка) або виправити Payment');
     });
-    return {ok:true, ym:ym, issues:issues, ms:Date.now() - t0};
+    return {ok:true, ym:ym, loc:qLoc, issues:issues, ms:Date.now() - t0};
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 
@@ -41843,7 +41852,8 @@ var PAY_LIVE_HEADER = ['Локація','Напрямок','Тип','Група'
 var PAY_LIVE_TTL = 300;
 function getPaymentsLive(params){
   params = params || {};
-  var key = 'paylive1';
+  var oneLoc = trim(params.loc || '');                                       // v7.497: одна локація — лише її файл
+  var key = 'paylive1' + (oneLoc ? '_' + _nameFold(oneLoc) : '');
   if (String(params.nocache || '') !== '1'){ var hit = _cacheGzGetBig(key); if (hit){ hit.cached = true; return hit; } }
   try {
     var t0 = Date.now();
@@ -41853,6 +41863,7 @@ function getPaymentsLive(params){
     for (var r = 1; r < configData.length; r++){
       var cfgRow = configData[r];
       if (!trim(cfgRow[2]) || !trim(cfgRow[3])) continue;
+      if (oneLoc && _nameFold(trim(cfgRow[2])) !== _nameFold(oneLoc)) continue;
       try { Array.prototype.push.apply(rows, _aggLocRows(cfgRow, curJSMonth, monthName, updateStr, cardsRef)); }
       catch(e){ errors.push(trim(cfgRow[2]) + ': ' + (e && e.message)); }
     }

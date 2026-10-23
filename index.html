@@ -3180,10 +3180,45 @@ function _ensureDebtsLive(force){
   return S._debtLoading;
 }
 function dashDebtToggle(L){ S.debtOpen=S.debtOpen||{}; S.debtOpen[L]=!S.debtOpen[L]; _renderDashNow(); }
-function _dashDebtFoot(){ var D=S._debtsLive, t=D&&D.builtAt?new Date(D.builtAt):null, hm=t?('0'+t.getHours()).slice(-2)+':'+('0'+t.getMinutes()).slice(-2):'—';
-  return '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 14px 12px;font-size:12px;color:var(--gray)">'+(S._debtBusy?'рахую…':'оновлено о <b>'+hm+'</b>')
+// v7.497: «Борги» — з «Оплати» (getPayments), як екран «Борги та оплати»: поточний місяць, правило clients.html buildGroups / renderDebts.
+function _ensurePayMonth(force){
+  if(S._payMonLoading) return S._payMonLoading;
+  if(!force && S._payMon && S._payMon.ok && Date.now()-(S._payMonAt||0)<DASH_LIVE_TTL) return Promise.resolve();
+  S._payMonLoading=(async function(){
+    try{ var r=await cloudFetch(authScriptUrl()+'?action=getPayments'+(force?'&nocache=1':''),{redirect:'follow'}); var j=await r.json();
+      S._payMon=(j&&Array.isArray(j.data))?{ok:true,data:j.data,updated:j.updated||'',month:j.month||''}:{ok:false,error:(j&&j.error)||'немає відповіді'}; }
+    catch(e){ S._payMon={ok:false,error:String(e&&e.message||e)}; }
+    S._payMonAt=Date.now(); S._payMonLoading=null;
+  })();
+  return S._payMonLoading;
+}
+// Школа: рядок без однозначної картки в цій локації — службовий, не дитина (як _schoolCardInfo у clients.html).
+function _dashSchoolHasCard(name, loc){
+  var n=_dashNm(name), l=_kompNorm(loc), ex=0, pr=0;
+  (S.crm?Object.values(S.crm):[]).forEach(function(c){ if(!c||_kompNorm(c.loc)!==l) return; var cn=_dashNm(c.name);
+    if(cn===n) ex++; else if(cn.indexOf(n+' ')===0||n.indexOf(cn+' ')===0) pr++; });
+  return ex===1 || (ex===0 && pr===1);
+}
+function _dashDebtsMonth(){
+  var P=S._payMon; if(!P) return null; if(!P.ok) return {ok:false,error:P.error};
+  var locs={}, month='';
+  P.data.forEach(function(row){
+    var loc=String(row['Локація']||'').trim(), name=String(row["Ім'я дитини"]||'').trim(); if(!loc||!name) return;
+    if(!month) month=String(row['Місяць']||'').trim();
+    if(_dashLocType(loc)==='sch' && !_dashSchoolHasCard(name,loc)) return;
+    var st=String(row['Статус']||''); if(st!=='debt'&&st!=='nopay') return;
+    var fs=+(row['Факт навчання']||0), fe=+(row['Факт доп.']||0), bs=+(row['Бюджет навчання']||0), be=+(row['Бюджет доп.']||0);
+    var bud=+(row['Бюджет разом']||0)||(bs+be)||+(row['Бюджет']||0), base=bs+be||bud, debt=st==='nopay'?bud:(base>fs+fe?base-(fs+fe):0);
+    var L=locs[loc]||(locs[loc]={n:0,sum:0,kids:[]}); L.n++; L.sum+=debt;
+    L.kids.push({name:name, group:String(row['Група']||''), status:st, debt:debt, b:(st==='nopay'?bud:base), f:fs+fe});
+  });
+  Object.keys(locs).forEach(function(l){ locs[l].kids.sort(function(a,b){ return b.debt-a.debt; }); });
+  return {ok:true, locs:locs, month:month||P.month||'', updated:P.updated};
+}
+function _dashDebtFoot(){ var D=S._payMon, hm=(D&&D.updated)||'—';
+  return '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 14px 12px;font-size:12px;color:var(--gray)">'+(S._debtBusy?'завантажую…':'«Оплати» оновлено <b>'+esc(hm)+'</b>')
     +'<button type="button" class="btn btn-secondary btn-sm" onclick="event.stopPropagation();dashDebtRefresh()"'+(S._debtBusy?' disabled':'')+'>🔄 оновити</button></div>'; }
-function dashDebtRefresh(){ if(S._debtBusy) return; S._debtBusy=true; _renderDashNow(); _ensureDebtsLive(true).then(function(){ S._debtBusy=false; _renderDashNow(); }); }
+function dashDebtRefresh(){ if(S._debtBusy) return; S._debtBusy=true; _renderDashNow(); _ensurePayMonth(true).then(function(){ S._debtBusy=false; _renderDashNow(); }); }
 // Підпис «оновлено о HH:MM» і кнопка «оновити» під наповнюваністю й вільними місцями.
 function _dashLiveFoot(){
   var t=Math.min(S._payAt||Date.now(), S._crmAt||Date.now()), d=new Date(t), hm=('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2);
@@ -3492,18 +3527,20 @@ function _renderKompBlock(){
     function _pctCol(p){ return p==null?'var(--gray2)':p>=99?'#27ae60':p>=80?'#e67e22':'#e74c3c'; }
 
     // #1 Борги (v7.463) — НАЖИВО: накопичений борг на сьогодні по всій мережі (getDebtsLive), не статус одного місяця.
-    var DL=S._debtsLive, dbtLoad=!!(DL&&DL.ok), dbtN=0, dbtSum=0, _dbtRows=[];
-    if(dbtLoad){ Object.keys(DL.locs||{}).forEach(function(l){ if(!_isKompNetwork(l) || (!isHR && l!==myLoc)) return; var x=DL.locs[l], o=(DL.old||{})[l]||{n:0,sum:0};
-        dbtN+=x.n; dbtSum+=x.sum; if(x.n||o.n) _dbtRows.push({loc:l,n:x.n,sum:x.sum,kids:x.kids,oldN:o.n,oldSum:o.sum}); });
+    // v7.497: «Борги» — ТЕ САМЕ правило й джерело, що екран «Борги та оплати» (clients.html renderDebts): поточний місяць,
+    //   «Оплати» (getPayments), статус Payment «борг / не платив»; борг = (Бюджет навч + доп) − (Факт навч + доп), «не платив» — увесь бюджет.
+    var DL=_dashDebtsMonth(), dbtLoad=!!(DL&&DL.ok), dbtN=0, dbtSum=0, _dbtRows=[];
+    if(dbtLoad){ Object.keys(DL.locs||{}).forEach(function(l){ if(!_isKompNetwork(l) || (!isHR && l!==myLoc)) return; var x=DL.locs[l];
+        dbtN+=x.n; dbtSum+=x.sum; if(x.n) _dbtRows.push({loc:l,n:x.n,sum:x.sum,kids:x.kids}); });
       _dbtRows=_kompSortByLoc(_dbtRows,function(r){ return r.loc; }); }
-    var debtTbl=!dbtLoad?'<div class="empty"><p>'+(DL&&!DL.ok?'Не вдалося порахувати: '+esc(DL.error||''):'Рахую борги по всіх файлах Payment…')+'</p></div>':(_dbtRows.length?'<div class="tbl-wrap"><table><thead><tr><th>Локація</th><th>Боржників</th><th>Сума боргу</th></tr></thead><tbody>'+
+    var debtTbl=!dbtLoad?'<div class="empty"><p>'+(DL&&DL.error?'Не вдалося завантажити: '+esc(DL.error):'Завантажую «Оплати»…')+'</p></div>':(_dbtRows.length?'<div class="tbl-wrap"><table><thead><tr><th>Локація</th><th>Боржників</th><th>Сума боргу</th></tr></thead><tbody>'+
       _dbtRows.map(function(r){ var on=!!(S.debtOpen&&S.debtOpen[r.loc]);
         var sub=on?'<tr><td colspan="3" style="padding:0 0 8px 18px;background:#fbfcfe">'+(r.kids||[]).map(function(k){
-            var mt=k.months.filter(function(m){ return m.b!==m.f||m.note; }).map(function(m){ return '<span style="white-space:nowrap">'+DOP_MN[m.m-1]+': '+fmtG(m.b)+' / '+fmtG(m.f)+(m.note?' <i style="color:var(--gray)">('+esc(m.note)+')</i>':'')+'</span>'; }).join(' · ');
-            return '<div style="padding:6px 0;border-bottom:1px solid #f0f4f8;font-size:12px"><b>'+esc(k.name)+'</b> <span style="color:var(--gray)">'+esc(k.group||'')+(k.status&&k.status!=='active'?' · '+esc(k.status):'')+'</span> — <b style="color:#e74c3c">'+fmtG(k.debt)+'</b><div style="color:var(--gray2)">нараховано / оплачено: '+mt+'</div></div>'; }).join('')+'</td></tr>':'';
+            return '<div style="padding:6px 0;border-bottom:1px solid #f0f4f8;font-size:12px"><b>'+esc(k.name)+'</b> <span style="color:var(--gray)">'+esc(k.group||'')+' · '+(k.status==='nopay'?'не платив':'борг')+'</span> — <b style="color:#e74c3c">'+fmtG(k.debt)+'</b>'
+              +'<div style="color:var(--gray2)">бюджет '+fmtG(k.b)+' · оплачено '+fmtG(k.f)+'</div></div>'; }).join('')+'</td></tr>':'';
         return '<tr style="cursor:pointer" onclick="dashDebtToggle('+esc(JSON.stringify(r.loc))+')"><td><strong>'+(on?'▾ ':'▸ ')+esc(r.loc)+'</strong></td><td>'+r.n+'</td><td style="color:#e74c3c;font-weight:700">'+fmtG(r.sum)+'</td></tr>'+sub; }).join('')+
       '<tr style="border-top:2px solid var(--gray2)"><td><strong>Разом</strong></td><td><strong>'+dbtN+'</strong></td><td style="font-weight:800;color:#e74c3c">'+fmtG(dbtSum)+'</td></tr></tbody></table></div>':'<div class="empty"><p>Немає боргів</p></div>')
-      +'<div style="font-size:11px;color:var(--gray);padding:6px 14px">Борг на сьогодні = усі місяці року до сьогодні: нараховано − оплачено, переплата гасить наступні місяці; поточний місяць — лише після '+((DL&&DL.dueDay)||5)+'-го; при новому договорі чи розірванні всередині місяця навчання — за робочими днями; перенесений борг у «Бюджет навч» не дублюється. Клік по локації — діти й місяці.</div>'
+      +'<div style="font-size:11px;color:var(--gray);padding:6px 14px">Як на екрані «Борги та оплати»: поточний місяць ('+esc(DL&&DL.month||'')+'), дані «Оплати»; борг = бюджет (навчання + додаткові) − оплачено (навчання + додаткові) по дітях зі статусом «борг» / «не платив» (не платив — увесь бюджет); вступні не враховуються. Клік по локації — діти.</div>'
       +_dashDebtFoot();
 
     // #2 Виплата ЗП — за обраний місяць / рік
@@ -3584,7 +3621,7 @@ function _renderKompBlock(){
       '<div style="font-size:11px;color:var(--gray2);padding:2px 4px">«Оборот '+(y-1)+'» і «приріст обороту» — н/д: потрібен бекенд-роут за минулий рік. Правило «червоне, якщо приріст фонду > приросту обороту» ввімкнеться після цього.</div>'
       :'<div class="empty"><p>Немає даних</p></div>');
 
-    tileDefs.debt={ic:'💳',cls:'si-r',lbl:'Борги',val:(dbtLoad?fmtShort(dbtSum):'—'),full:(dbtLoad?fmtG(dbtSum):''),sub:(dbtLoad?dbtN+' боржників · на сьогодні':'рахую…')};
+    tileDefs.debt={ic:'💳',cls:'si-r',lbl:'Борги',val:(dbtLoad?fmtShort(dbtSum):'—'),full:(dbtLoad?fmtG(dbtSum):''),sub:(dbtLoad?dbtN+' боржників · '+(DL.month||'місяць').toLowerCase():'завантажую…')};
     tileDefs.salpay={ic:'💸',cls:'si-y',lbl:'Виплата ЗП',val:(salLoad&&salPct!=null?salPct+'%':'—'),sub:(salLoad?'залишок '+fmtShort(salRem)+' · '+perLbl:'…')};
     tileDefs.margin={ic:'📈',cls:'si-g',lbl:'Маржа',val:(mgLoad?fmtShort(mMar):'—'),full:(mgLoad?fmtG(mMar)+' · '+_mPct(mMar,mRev):''),sub:(_mOpen?'⚠️ місяць не закрито · ':'')+'дохід − ЗП − OPEX · '+perLbl};
     tileDefs.term={ic:'🚪',cls:'si-p',lbl:'Причини розірвання',val:(termLoad?termTotal:'—'),sub:'розірвань · '+perLbl};
@@ -3629,8 +3666,8 @@ function renderDash(){
   if(_dqCan()) _ensureDq().then(function(){ _dashSoftRerender(); if(typeof _dqModalRender==='function') _dqModalRender(); });   // v7.485 якість даних   // v7.482 знижки та недоотримане (CFO); v7.484 сховано
   _ensureGroupNorms().then(_dashSoftRerender);           // v7.399 місця в групах — «Норми груп»
   _ensureRatingsYear(_kompYear()).then(_dashSoftRerender); // v7.100 оцінки вихователів — середнє за рік
-  if(!_kompIsCFO() && _dashRole()==='director') _ensureDebtsLive().then(_dashSoftRerender);   // v7.488 R&D — без боргів, запит не йде   // v7.486 директор — борги своєї локації (бекенд обрізає)
-  if(_kompIsCFO()){ _ensureDebtsLive().then(_dashSoftRerender);   // v7.463 борги наживо
+  if(!_kompIsCFO() && _dashRole()==='director') _ensurePayMonth().then(_dashSoftRerender);   // v7.488 R&D — без боргів, запит не йде   // v7.486 директор — борги своєї локації (бекенд обрізає)
+  if(_kompIsCFO()){ _ensurePayMonth().then(_dashSoftRerender);   // v7.497 борги — як «Борги та оплати» (v7.463 був накопичений борг наживо)
     _ensureSalOv(_kompYear()).then(_dashSoftRerender); _ensureSalOv(_kompYear()-1).then(_dashSoftRerender); _ensureOpexOv(_kompYear()).then(_dashSoftRerender); _ensurePayments().then(_dashSoftRerender); } // v7.112/116 CFO
   _renderDashNow();
 }
@@ -4293,8 +4330,17 @@ function _dqTabel(){
   });
   return out;
 }
+// v7.497: одна локація — окремий запит (бекенд читає лише її файл); «усі» — повний.
+async function _ensureDqLoc(loc, force){
+  if(!S._dqL) S._dqL={}; var a=S._dqL[loc]; if(!force && a && (a.loading||(a.data&&Date.now()-a.at<5*60*1000))) return;
+  S._dqL[loc]={loading:true,at:Date.now(),data:a&&a.data};
+  try{ var r=await fetch(_tokUrl(authScriptUrl()+'?action=getDataQuality&loc='+encodeURIComponent(loc)+(force?'&nocache=1':'')),{redirect:'follow'}); var j=await r.json();
+    if(!j||!j.ok) throw new Error((j&&j.error)||'немає відповіді'); S._dqL[loc]={at:Date.now(),data:j}; }
+  catch(e){ S._dqL[loc]={at:Date.now(),data:a&&a.data,error:String(e&&e.message||e)}; }
+}
 function _dqAll(){
-  var d=S._dq&&S._dq.data, tb=_dqTabel();
+  var _one=S.dqLoc&&S._dqL&&S._dqL[S.dqLoc]&&S._dqL[S.dqLoc].data;
+  var d=_one||(S._dq&&S._dq.data), tb=_dqTabel();
   if(!d) return null;
   var all=d.issues.concat(tb||[]), isHR=isNetworkRole(S.user.role), my=S.user.loc||'';
   return isHR?all:all.filter(function(x){ return x.loc===my; });
@@ -4318,10 +4364,11 @@ function dqOpen(){
     m.innerHTML='<div class="modal" style="max-width:1050px"><div class="modal-hd"><h3>🧹 Якість даних</h3><button class="modal-close" onclick="closeModal(\'mDq\')">✕</button></div><div class="modal-bd" id="mDqBd"></div></div>';
     document.body.appendChild(m); }
   m.classList.remove('hidden'); _dqModalRender();
-  Promise.all([_ensureDq(), _ensureAttDash()]).then(_dqModalRender);
+  Promise.all([(S.dqLoc&&isNetworkRole(S.user.role))?_ensureDqLoc(S.dqLoc):_ensureDq(), _ensureAttDash()]).then(_dqModalRender);   // v7.497
 }
-function dqSet(k,v){ if(k==='type'){ S.dqType=v||''; S.dqLoc=''; } else if(k==='loc') S.dqLoc=v||''; else if(k==='t') S.dqT=(S.dqT===v?0:v); _dqModalRender(); }
-function dqRefresh(){ _ensureDq(true).then(_dqModalRender); _dqModalRender(); }
+function dqSet(k,v){ if(k==='type'){ S.dqType=v||''; S.dqLoc=''; } else if(k==='loc') S.dqLoc=v||''; else if(k==='t') S.dqT=(S.dqT===v?0:v); _dqModalRender();
+  if(k==='loc' && S.dqLoc && isNetworkRole(S.user.role)) _ensureDqLoc(S.dqLoc).then(_dqModalRender); }   // v7.497: лише файл цієї локації
+function dqRefresh(){ (S.dqLoc&&isNetworkRole(S.user.role)?_ensureDqLoc(S.dqLoc,true):_ensureDq(true)).then(_dqModalRender); _dqModalRender(); }
 function _dqTxt(L, list){
   var nm={}; DQ_TYPES.forEach(function(x){ nm[x[0]]=x[1].replace(/^\S+\s/,''); });
   return 'Якість даних — '+L+' ('+new Date().toLocaleDateString('uk-UA')+')\n'
