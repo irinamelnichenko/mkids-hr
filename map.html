@@ -977,6 +977,8 @@ function readSession(){ try{ var s=JSON.parse(localStorage.getItem(SESSION_KEY)|
   if(NETWORK_ROLES.indexOf(s.user.role)!==-1 && s.user.loc!==''){ s.user.origLoc=s.user.loc; s.user.loc=''; }
   return s.user; }catch(e){ return null; } }
 function isHR(){ return S.user && NETWORK_ROLES.indexOf(S.user.role)!==-1; }
+// v7.502: «🚪 Вийти» — сесія геть і на головний вхід (функції doLogout на цій сторінці не було — кнопка не працювала)
+function doLogout(){ try { localStorage.removeItem('mkids_session'); } catch(e){} window.location.href = 'index.html'; }
 function goLogin(){ document.body.innerHTML='<div style="padding:60px;text-align:center;font-family:system-ui"><div style="font-size:44px">🔒</div><h2>Потрібно увійти</h2><p style="color:#64748b">Відкрийте головний застосунок і увійдіть.</p><a href="index.html" style="display:inline-block;margin-top:10px;padding:12px 20px;background:#2563eb;color:#fff;border-radius:10px;text-decoration:none;font-weight:700">Увійти →</a></div>'; }
 
 // ── API ──

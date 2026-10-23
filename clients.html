@@ -441,73 +441,7 @@ details.card>summary::-webkit-details-marker{display:none}details.card[open]>sum
   </div>
 </div>
 
-<!-- LOGIN SCREEN -->
-<div id="loginScreen" class="auth-screen hidden">
-  <div class="auth-card">
-    <div class="auth-logo">
-      <span class="em">🍊</span>
-      <h1>m.kids System</h1>
-    </div>
-    <!-- ВКЛАДКИ ТИПУ ВХОДУ -->
-    <div class="role-tabs-3">
-      <button class="rtab active" id="tabMgmt"  onclick="selectAuthTab('mgmt')">💼 Менеджмент</button>
-      <button class="rtab"        id="tabDir"   onclick="selectAuthTab('director')">🏫 Директор</button>
-      <button class="rtab"        id="tabNurse" onclick="selectAuthTab('nurse')">🩺 Медсестра</button>
-    </div>
-
-    <div id="loginError" class="auth-error hidden"></div>
-
-    <!-- TAB 1: Менеджмент (default) -->
-    <div id="paneMgmt">
-      <div class="fg">
-        <label>Виберіть себе</label>
-        <select id="userSel">
-          <option value="">Завантаження…</option>
-        </select>
-      </div>
-      <div class="fg">
-        <label>Пароль</label>
-        <input type="password" id="loginPwMain" placeholder="Введіть пароль"
-          onkeydown="if(event.key==='Enter')doLoginMain()">
-      </div>
-      <button class="btn btn-primary full" onclick="doLoginMain()">Увійти →</button>
-    </div>
-
-    <!-- TAB 2: Директор -->
-    <div id="paneDir" class="hidden">
-      <div class="fg">
-        <label>Локація</label>
-        <select id="loginLocationDir"></select>
-      </div>
-      <div class="fg">
-        <label>Пароль</label>
-        <input type="password" id="loginPwDir" placeholder="Введіть пароль"
-          onkeydown="if(event.key==='Enter')doLoginDir()">
-      </div>
-      <button class="btn btn-primary full" onclick="doLoginDir()">Увійти →</button>
-    </div>
-
-    <!-- TAB 3: Медсестра -->
-    <div id="paneNurse" class="hidden">
-      <div class="fg">
-        <label>Локація</label>
-        <select id="loginLocationNurse"></select>
-      </div>
-      <div class="fg">
-        <label>Пароль</label>
-        <input type="password" id="loginPwNurse" placeholder="Введіть пароль"
-          onkeydown="if(event.key==='Enter')doLoginNurse()">
-      </div>
-      <button class="btn btn-primary full" onclick="doLoginNurse()">Увійти →</button>
-    </div>
-
-    <p style="text-align:center;margin-top:14px;font-size:11px">
-      <a href="#" onclick="clearSetupUrl();return false" style="color:var(--gray)">Змінити Apps Script URL</a>
-    </p>
-  </div>
-</div>
-
-<!-- MAIN APP -->
+<!-- v7.502: власний екран входу прибрано — вхід лише на index.html -->
 <div id="app" class="hidden">
   <nav class="sidebar" id="sidebar">
     <div class="sb-brand">
@@ -2319,13 +2253,6 @@ function buildGroups(){
 
 // ─── AUTH ─────────────────────────────────────────────────────────────────────
 var _role='hr';
-function selRole(r){
-  _role=r;
-  document.getElementById('tabHR').classList.toggle('active',r==='hr');
-  document.getElementById('tabDir').classList.toggle('active',r==='director');
-  document.getElementById('tabNurse').classList.toggle('active',r==='nurse');
-  document.getElementById('fldLocation').classList.toggle('hidden',r==='hr');
-}
 
 // ── SHARED SESSION (між index.html і clients.html) ────────────────────────
 var SESSION_KEY = 'mkids_session';
@@ -2659,121 +2586,16 @@ function populateLoginLocations(){
 // Завантажуємо список користувачів для Менеджмент-dropdown.
 // При помилці — показуємо повідомлення в самому dropdown (вкладки Director/
 // Nurse працюють незалежно).
-async function loadUsersForDropdown(){
-  var sel = document.getElementById('userSel');
-  if (!sel) return;
-  var loaded = false;
-  var ERR_MSG = '⚠️ Помилка завантаження. Зайдіть через вкладку Директор/Медсестра';
-  setTimeout(function(){
-    if (!loaded){
-      sel.innerHTML = '<option value="">' + ERR_MSG + '</option>';
-    }
-  }, 10000);
 
-  try {
-    var r = await fetch(CFG.SCRIPT_URL + '?action=getLoginUsers', {redirect:'follow'});   // v7.491: публічний список для входу (до входу токена ще немає; getUsers — лише CFO)
-    var json = await r.json();
-    loaded = true;
-    if (!json.ok || !Array.isArray(json.users) || !json.users.length){
-      sel.innerHTML = '<option value="">⚠️ Список порожній</option>';
-      return;
-    }
-    var actives = json.users.filter(function(u){ return u.active; });
-    actives.sort(function(a, b){
-      var ai = ROLE_ORDER_NEW.indexOf(a.role); if (ai === -1) ai = 999;
-      var bi = ROLE_ORDER_NEW.indexOf(b.role); if (bi === -1) bi = 999;
-      if (ai !== bi) return ai - bi;
-      return (a.name||'').localeCompare(b.name||'', 'uk');
-    });
-    var html = '<option value="">— Виберіть користувача —</option>';
-    actives.forEach(function(u){
-      var em  = (u.role in ROLE_EMOJI_NEW) ? ROLE_EMOJI_NEW[u.role] : '👤';   // v7.404: founder — без значка
-      var lbl = ROLE_SHORT_NEW[u.role] || u.role.toUpperCase();
-      html += '<option value="' + esc(u.login) + '">' + (em ? em + ' ' : '') + lbl + ' — ' + esc(u.name) + '</option>';
-    });
-    sel.innerHTML = html;
-  } catch(e){
-    loaded = true;
-    sel.innerHTML = '<option value="">' + ERR_MSG + '</option>';
-  }
-}
-
-async function doLoginMain(){
-  var login = document.getElementById('userSel').value;
-  var pw    = document.getElementById('loginPwMain').value;
-  document.getElementById('loginError').classList.add('hidden');
-  if (!login){ showLoginError('Виберіть користувача'); return; }
-  if (!pw)   { showLoginError('Введіть пароль');       return; }
-  try {
-    var r = await fetch(CFG.SCRIPT_URL, {
-      method: 'POST',
-      redirect: 'follow',
-      headers: {'Content-Type': 'text/plain;charset=utf-8'},
-      body: JSON.stringify({action:'authenticate', login: login, password: pw})
-    });
-    var json = await r.json();
-    if (!json.ok){ showLoginError(json.error || 'Помилка автентифікації'); return; }
-    S.user = json.user;
-    // Нормалізуємо role до lowercase — захист від різного регістру в Sheets.
-    S.user.role = String(S.user.role || '').toLowerCase().trim();
-    // v7.404: власник (founder) — бачить усе як CFO, але лише перегляд (бекенд відхиляє будь-який запис)
-    if (S.user.role === 'founder'){ S.user.founder = true; S.user.readOnly = true; S.user.role = 'cfo'; }
-    // Мережеві ролі мають loc='Менеджмент' у листі — очищаємо для фільтрів.
-    if (isNetworkRole(S.user.role)){
-      S.user.origLoc = S.user.loc;
-      S.user.loc = '';
-    }
-    saveSession(S.user, json.token);   // v7.288: токен (досі сесія з цього екрана була без токена)
-    if (window._mkCacheGuard && window._mkCacheGuard()){ location.reload(); return; }   // v7.501: інший користувач — кеші попереднього очищено, чиста пам'ять сторінки
-    try { window.dispatchEvent(new Event('storage')); } catch(_rb){}   // v7.404: плашка «лише перегляд» одразу після входу
-    document.getElementById('loginScreen').classList.add('hidden');
-    document.getElementById('app').classList.remove('hidden');
-    updUserUI();
-    await initApp();
-    dispatchHashView();
-  } catch(e){
-    showLoginError('Помилка зʼєднання: ' + (e && e.message ? e.message : e));
-  }
-}
 
 // v7.491: вхід директора / медсестри — через бекенд (authenticate → токен), як на головній.
 //   Старий вхід за паролем, який перевіряла сама сторінка (genDirPw / genNursePw), створював сесію без id і токена.
-async function _doLoginLocBackend(role, locFieldId, pwFieldId){
-  var loc = document.getElementById(locFieldId).value;
-  var pw  = document.getElementById(pwFieldId).value;
-  document.getElementById('loginError').classList.add('hidden');
-  if (!loc){ showLoginError('Оберіть локацію'); return; }
-  if (!pw) { showLoginError('Введіть пароль');  return; }
-  try {
-    var r = await fetch(CFG.SCRIPT_URL, {method:'POST', redirect:'follow', headers:{'Content-Type':'text/plain;charset=utf-8'},
-      body: JSON.stringify({action:'authenticate', login: role + '.' + translitUA(loc), password: pw})});
-    var json = await r.json();
-    if (!json.ok){ showLoginError(json.error === 'Користувача не знайдено' ? 'Логін для цієї локації ще не створено' : (json.error || 'Невірний пароль для цієї локації')); return; }
-    S.user = json.user;
-    S.user.role = String(S.user.role || '').toLowerCase().trim();
-    saveSession(S.user, json.token);
-    if (window._mkCacheGuard && window._mkCacheGuard()){ location.reload(); return; }   // v7.501: інший користувач — кеші попереднього очищено, чиста пам'ять сторінки
-    document.getElementById('loginScreen').classList.add('hidden');
-    document.getElementById('app').classList.remove('hidden');
-    updUserUI();
-    await initApp();
-    dispatchHashView();
-  } catch(e){ showLoginError('Помилка зʼєднання: ' + (e && e.message ? e.message : e)); }
-}
-async function doLoginDir(){   await _doLoginLocBackend('director', 'loginLocationDir',   'loginPwDir'); }
 
-async function doLoginNurse(){ await _doLoginLocBackend('nurse',    'loginLocationNurse', 'loginPwNurse'); }
 
 // v7.491: старий doLogin (HR hr2024 / паролі локацій на сторінці) прибрано — лише вхід через бекенд.
 function showLoginErr(m){ var e=document.getElementById('loginError'); e.textContent='⚠️ '+m; e.classList.remove('hidden'); }
 
-function doLogout(){
-  clearSession();
-  S.user=null;
-  document.getElementById('app').classList.add('hidden');
-  document.getElementById('loginScreen').classList.remove('hidden');
-  document.getElementById('loginPw').value='';
-}
+function doLogout(){ clearSession(); window.location.href = 'index.html'; }   // v7.502: вихід — на головний вхід (старий екран входу цієї сторінки прибрано)
 
 // ── UNIFIED SIDEBAR — permissions, role-visibility, cross-page nav ────────
 const CURRENT_PAGE = 'clients';
@@ -3209,8 +3031,7 @@ async function saveSetupAndProceed(){
   try{
     var j=await apiGet('ping');
     document.getElementById('setupScreen').classList.add('hidden');
-    document.getElementById('loginScreen').classList.remove('hidden');
-    await preloadLocations();
+    window.location.replace('index.html');   // v7.502: вхід — на головній
   }catch(e){
     errEl.textContent='⚠️ Не вдалось підключитись: '+esc(e.message)+'. Перевірте URL та налаштування деплойменту.';
     errEl.classList.remove('hidden');
@@ -9793,10 +9614,9 @@ function renderPayMonths(){
   checkAndClearCache();
 
   var sessUser = readSession();
-  if (sessUser && !_validSessId(sessUser)){ _showStaleSession(); return; }   // застаріла сесія без id → перелогін
+  if (sessUser && !_validSessId(sessUser)){ clearSession(); window.location.replace('index.html'); return; }   // v7.502: застаріла сесія без id → головний вхід
   if (sessUser) {
     S.user = sessUser;
-    document.getElementById('loginScreen').classList.add('hidden');
     document.getElementById('app').classList.remove('hidden');
     updUserUI();
     if ((location.hash||'') === '#needs_attention') _naEarlyStart();   // v7.334: запит паралельно зі стартом
@@ -9805,9 +9625,7 @@ function renderPayMonths(){
     return;
   }
 
-  document.getElementById('loginScreen').classList.remove('hidden');
-  loadUsersForDropdown();
-  populateLoginLocations();
+  window.location.replace('index.html');   // v7.502: немає сесії — на головний вхід (власного екрана входу тут більше немає)
 })();
 </script>
 <script>
