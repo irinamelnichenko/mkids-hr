@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.507
+// m.kids CRM — Google Apps Script v7.508
+// v7.508: getPlan2027 — план набору 2027 з аркушів Scenarios файлів _27 (ЛИШЕ ЧИТАННЯ; CFO і власник).
 // v7.507: тимчасову cleanupDeadTriggers прибрано (23.10.2026 видалено тригери keepAlive / keepWarm / runSyncBdayStatus; tgSlaCheck — кожні 5 хв).
 // v7.506: tgSlaCheck — кожні 5 хв (було щохвилини; квота тригерів).
 // v7.505: облік часу — і nightlyExportGuarantee.
@@ -7245,7 +7246,7 @@ function _authGate(action, token, method){
 // ═══ v7.486 ДИРЕКТОР — ЛИШЕ СВОЯ ЛОКАЦІЯ (за токеном; без токена, поки AUTH_ENFORCE вимкнено, не діє) ═══
 //   1) параметр loc / locs з чужою локацією — відмова FORBIDDEN_LOC; getAttendance без loc — примусово своя;
 //   2) CFO-звіти (DIR_DENY) — відмова; 3) мережеві відповіді (DIR_FILTER) — лише рядки його локації.
-var DIR_DENY   = {getUnderpaid:1, getEntryHistory:1, getMoneyJournal:1};
+var DIR_DENY   = {getUnderpaid:1, getEntryHistory:1, getMoneyJournal:1, getPlan2027:1};
 var DIR_FORCE_LOC = {getAttendance:1, getPaymentsLive:1, getDataQuality:1};
 var DIR_FILTER = {getClients:1, getPayments:1, getPaymentsYearly:1, getPaymentsLive:1, getDebtsLive:1, getDataQuality:1};
 // v7.489: локація директора — з «Користувачів» за id (у старих токенах кирилиця зіпсована: «??????»), зведена до назви реєстру.
@@ -7314,7 +7315,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.507', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.508', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -7457,6 +7458,7 @@ function doGet(e) {
     else if (action === 'getDiscounts')                result = getDiscounts(e.parameter || {});           // v7.414 реєстр знижок
     else if (action === 'getPromoReport')              result = getPromoReport(e.parameter || {});         // v7.414 звіт по акціях
     else if (action === 'getPromoAttention')           result = getPromoAttention(e.parameter || {});      // v7.414 передоплати-здогадки + пропозиції
+    else if (action === 'getPlan2027')                result = getPlan2027(e.parameter || {});            // v7.508 план набору 2027 (лише читання, CFO / власник)
     else if (action === 'getTriggerStats')            result = getTriggerStats(e.parameter || {});        // v7.504 час роботи тригерів по днях (квота)
     else if (action === 'getDashboard')               result = getDashboard(e.parameter || {});           // v7.503 дашборд одним запитом зі знімків
     else if (action === 'getDataQuality')             result = getDataQuality(e.parameter || {});         // v7.485 якість даних (лише читання)
@@ -12025,6 +12027,38 @@ function _vacExportGuardBatch(e){ var _t = Date.now(); try { return __vacExportG
 function onMirrorOpen(e){ var _t = Date.now(); try { return _onMirrorOpen__impl(e); } finally { _trigAcc('onMirrorOpen', _t); } }
 function nightlyExportGuarantee(e){ var _t = Date.now(); try { return _nightlyExportGuarantee__impl(e); } finally { _trigAcc('nightlyExportGuarantee', _t); } }
 function opex27OnEdit(e){ var _t = Date.now(); try { return _opex27OnEdit__impl(e); } finally { _trigAcc('opex27OnEdit', _t); } }
+
+// ═══ v7.508 ПЛАН НАБОРУ 2027 — ЛИШЕ ЧИТАННЯ ═══
+//   Аркуш «Scenarios» у кожному файлі _27 (PAY_FILES_BY_YEAR[2027]): A4:M6 — «<лат.> Conservative / Base / Aggressive»,
+//   B…M — нові договори по місяцях; B1 — сценарій, обраний у файлі. Файли лише відкриваються й читаються (жодного запису).
+//   Доступ: CFO (id 1) і власник (у токені власник = cfo); директор / R&D — відмова. Кеш 30 хв (&nocache=1 — повз).
+function getPlan2027(params){
+  try {
+    params = params || {};
+    var a = _CURRENT_AUTH; if (!a){ try { a = _getActor(Number(params.actorId) || 0); } catch(_a){} }
+    if (!(a && (_roleKey(a.role) === 'cfo' || Number(a.id) === 1))) return {ok:false, code:'PERM_DENIED', error:'План набору — лише CFO і власник'};
+    var key = 'plan27v1';
+    if (String(params.nocache || '') !== '1'){ var hit = _cacheGzGetBig(key); if (hit){ hit.cached = true; return hit; } }
+    var files = PAY_FILES_BY_YEAR[2027] || {}, out = [], SC = ['Conservative','Base','Aggressive'];
+    Object.keys(files).forEach(function(loc){
+      var r = {loc:loc, fileId:files[loc], exists:false, selected:'', rows:{}};
+      try {
+        var ss = SpreadsheetApp.openById(files[loc]), sh = ss.getSheetByName('Scenarios'); r.file = ss.getName();
+        if (sh){
+          var v = sh.getRange('A1:M6').getValues(); r.exists = true; r.selected = String(v[0][1] || '').trim();
+          for (var i = 3; i <= 5; i++){
+            var lab = String(v[i][0] || ''), sc = SC.filter(function(x){ return new RegExp('\\b' + x + '$', 'i').test(lab.trim()); })[0];
+            if (sc) r.rows[sc] = v[i].slice(1, 13).map(function(x){ var n = Number(x); return isFinite(n) ? n : 0; });
+          }
+        }
+      } catch(e){ r.error = String(e && e.message || e); }
+      out.push(r);
+    });
+    var res = {ok:true, year:2027, locs:out, builtAt:new Date().toISOString()};
+    _cacheGzPutBig(key, res, 1800);
+    return res;
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
 
 // v7.47 ЕТАП 5: історія переходів груп. Замість тихого перезапису «Група» — ведемо
 // таймлайн у листі «Історія_Груп». При зміні: закриваємо попередній відкритий запис
