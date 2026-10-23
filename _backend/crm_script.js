@@ -1,6 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.506
-// v7.506: tgSlaCheck — кожні 5 хв (було щохвилини; квота тригерів); ТИМЧАСОВО cleanupDeadTriggers (CFO) — прибрати в v7.507.
+// m.kids CRM — Google Apps Script v7.507
+// v7.507: тимчасову cleanupDeadTriggers прибрано (23.10.2026 видалено тригери keepAlive / keepWarm / runSyncBdayStatus; tgSlaCheck — кожні 5 хв).
+// v7.506: tgSlaCheck — кожні 5 хв (було щохвилини; квота тригерів).
 // v7.505: облік часу — і nightlyExportGuarantee.
 // v7.504: квота тригерів (Gmail — 90 хв/добу) — знімки дашборда кожні 30 хв (було 15); облік часу кожного тригера (getTriggerStats).
 // v7.503: дашборд одним запитом — знімки (dashSnapshotBuild, тригер кожні 15 хв 7–21 за Києвом) + getDashboard (з урахуванням ролі).
@@ -7313,7 +7314,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.506', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.507', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -7554,7 +7555,6 @@ function doPost(e) {
     else if (body.action === 'invoiceAutoMatchRange')     result = invoiceAutoMatchRange(body); // v7.411 автозвірка заявок за період (CFO, dryRun за замовч.)
     else if (body.action === 'invoiceAutoSet')            result = invoiceAutoSet(body);        // v7.411 вимикач автозвірки (CFO)
     else if (body.action === 'invoiceReopen')             result = invoiceReopen(body);         // v7.411 відкат «оплачено» (CFO, dryRun за замовч.)
-    else if (body.action === 'cleanupDeadTriggers')       result = cleanupDeadTriggers(body);        // ТИМЧАСОВО v7.506 — прибрати в v7.507
     else if (body.action === 'setupDashSnapshotTrigger')  result = setupDashSnapshotTrigger(body);   // v7.503 тригер знімків дашборда (CFO)
     else if (body.action === 'savePromo')                 result = savePromo(body);             // v7.414 акція: офіс — створює; директор — пропозиція
     else if (body.action === 'decidePromo')               result = decidePromo(body);           // v7.414 підтвердити/відхилити пропозицію (офіс)
@@ -12025,21 +12025,6 @@ function _vacExportGuardBatch(e){ var _t = Date.now(); try { return __vacExportG
 function onMirrorOpen(e){ var _t = Date.now(); try { return _onMirrorOpen__impl(e); } finally { _trigAcc('onMirrorOpen', _t); } }
 function nightlyExportGuarantee(e){ var _t = Date.now(); try { return _nightlyExportGuarantee__impl(e); } finally { _trigAcc('nightlyExportGuarantee', _t); } }
 function opex27OnEdit(e){ var _t = Date.now(); try { return _opex27OnEdit__impl(e); } finally { _trigAcc('opex27OnEdit', _t); } }
-
-// ТИМЧАСОВО (v7.506, прибрати в v7.507): лише CFO. Видаляє тригери ЛИШЕ трьох мертвих обробників (функцій у коді немає)
-//   і переводить tgSlaCheck на кожні 5 хв. dryRun:true — лише показати.
-function cleanupDeadTriggers(body){
-  var a = null; try { a = _getActor((_CURRENT_AUTH && _CURRENT_AUTH.id) || (body && body.actorId)); } catch(_a){}
-  if (!(a && (_roleKey(a.role) === 'cfo' || Number(a.id) === 1))) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
-  var DEAD = ['keepAlive', 'keepWarm', 'runSyncBdayStatus'], dry = !!(body && body.dryRun), g = this, removed = [], sla = 0;
-  ScriptApp.getProjectTriggers().forEach(function(t){
-    var h = t.getHandlerFunction();
-    if (DEAD.indexOf(h) >= 0 && typeof g[h] !== 'function'){ removed.push(h); if (!dry) ScriptApp.deleteTrigger(t); }
-    if (h === 'tgSlaCheck'){ sla++; if (!dry) ScriptApp.deleteTrigger(t); }
-  });
-  if (!dry) ScriptApp.newTrigger('tgSlaCheck').timeBased().everyMinutes(5).create();
-  return {ok:true, dryRun:dry, removed:removed, tgSlaReplaced:sla, after:ScriptApp.getProjectTriggers().map(function(t){ return t.getHandlerFunction(); }).sort()};
-}
 
 // v7.47 ЕТАП 5: історія переходів груп. Замість тихого перезапису «Група» — ведемо
 // таймлайн у листі «Історія_Груп». При зміні: закриваємо попередній відкритий запис
