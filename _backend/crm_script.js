@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.513
+// m.kids CRM — Google Apps Script v7.514
+// v7.514: groupRecordsCanon — нова назва з «Групи_Мапа» (там лише Благо) АБО з чинних груп локації за картками; кілька кандидатів — не чіпає.
 // v7.513: groupRecordsCanon — старі назви груп у відмітках предметників і додаткових → назва з «Групи_Мапа» (лише однозначний
 //   збіг; без дублів клітинок; копія аркуша перед записом; CFO, dryRun за замовч.).
 // v7.512: exportPredmetnykyToSalary — заняття під старою назвою групи (Житомир «Find-iki») і під чинною («Findi-Ki») — одна
@@ -7353,7 +7354,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.513', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.514', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -9810,6 +9811,13 @@ function groupRecordsCanon(body){
       if (!loc || !can) return;
       var lf = _nameFold(loc); regLoc[lf] = loc; var m = reg[lf] = reg[lf] || {};
       [pay, can].forEach(function(x){ if (!x) return; var k = _predGroupKey(x); if (!k) return; (m[k] = m[k] || {})[can] = true; });
+    });
+    // v7.514: реєстр містить лише Благо — для решти локацій нова назва = чинна група локації за картками
+    //   (той самий список, що й рядки сітки предметників; уже переведений через реєстр).
+    var real = {}; try { real = _loadRealGroups('') || {}; } catch(_rg){ real = {}; }
+    Object.keys(real).forEach(function(loc){
+      var lf = _nameFold(loc); regLoc[lf] = regLoc[lf] || loc; var m = reg[lf] = reg[lf] || {};
+      (real[loc] || []).forEach(function(g){ g = trim(String(g || '')); var k = _predGroupKey(g); if (g && k) (m[k] = m[k] || {})[g] = true; });
     });
     function canonOf(loc, grp){
       var m = reg[_nameFold(loc)]; if (!m) return {st:'noloc'};
