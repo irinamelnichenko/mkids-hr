@@ -454,6 +454,9 @@ select,input,textarea{font-family:inherit}
 .pred-cell-day.checked{background:#e8f8f0}
 .pred-cell-day.checked:hover:not(.disabled){background:#d1f1de}
 .pred-cell-day.disabled{cursor:not-allowed;opacity:.5}
+.pred-cell-day.capped{background:repeating-linear-gradient(135deg,#f4f6f8 0 4px,#fff 4px 8px)}   /* v7.515: норму вичерпано */
+.pred-cell-day.unpaid,.pred-cell-day.unpaid.checked{background:#fdecec}                           /* v7.515: понад норму — не оплачується */
+.pred-cell-day.unpaid .pred-cb{background:#d64545;border-color:#d64545}
 .pred-cell-day.saving{opacity:.6;cursor:wait}
 /* v7.259: урок поставлено, але ще не підтверджено сервером */
 .pred-cell-day.pending{border-style:dashed}
@@ -2424,6 +2427,18 @@ function _predRowLessons(loc, groupName, subject){
 // v7.311: рахуємо УНІКАЛЬНІ дати, а не рядки. Два рядки на ту саму дату (дубль від
 // повторного кліка після втраченої відповіді) з'їдали норму: Тичини Find-iki Англійська
 // показували 8 занять у сітці й лічильник 10/10, і решта днів була заблокована.
+// v7.515: з 01.10.2026 норма — СТЕЛЯ (рішення CFO 23.10.2026). Дзеркало бекенду _predCapOn / PRED_CAP_FROM_YM.
+// Понад норму відмітити не можна; понаднормові, внесені раніше, — найпізніші дати рядка: видно, але не оплачуються.
+var PRED_CAP_FROM_YM = 202610;
+function predCapOn(){ return (Number(S.year) * 100 + Number(S.month)) >= PRED_CAP_FROM_YM; }
+function predUnpaidDates(loc, groupName, subject, norm){
+  var out = {};
+  if (!predCapOn() || !(norm > 0)) return out;
+  var ds = {};
+  _predRowLessons(loc, groupName, subject).forEach(function(L){ ds[_dmyToIso(L.date)] = L.date; });
+  Object.keys(ds).sort().slice(norm).forEach(function(iso){ out[ds[iso]] = true; });
+  return out;
+}
 function countLessonDatesInRow(loc, groupName, subject){
   var seen = {}, n = 0;
   _predRowLessons(loc, groupName, subject).forEach(function(L){
@@ -2717,8 +2732,11 @@ function renderTable(loc, subject){
     var dates        = isForbidden ? 0 : countLessonDatesInRow(loc, groupName, subject);
     var count        = isForbidden ? 0 : countSessionsInRow(loc, groupName, subject);
     var isMaxed      = !rowUnlimited && dates >= norm;
+    var capped       = !rowUnlimited && !isForbidden && norm > 0 && predCapOn();   // v7.515 стеля
+    var unpaid       = capped ? predUnpaidDates(loc, groupName, subject, norm) : {};
     return {gt:gt, groupName:groupName, norm:norm, isUnlimited:rowUnlimited,
-            isForbidden:isForbidden, count:count, dates:dates, isMaxed:isMaxed, hasRate:hasRate};
+            isForbidden:isForbidden, count:count, dates:dates, isMaxed:isMaxed, hasRate:hasRate,
+            capped:capped, unpaid:unpaid, unpaidN:Object.keys(unpaid).length};
   });
 
   var gridCols = '160px repeat(' + nDays + ', minmax(36px, 1fr)) 90px';
@@ -2779,11 +2797,14 @@ function renderTable(loc, subject){
         counterTxt = R.count + ' (∞)';
       } else {
         // v7.365: норма — підказка. Досягнуто → зелений, понад норму → жовтий «+N».
+        // v7.515: з 01.10.2026 — стеля: понад норму не оплачується.
         if (R.dates > R.norm){
           counterCls += ' over';
-          counterHint = 'Понад норму на ' + (R.dates - R.norm) + ' (норма ' + R.norm + ')';
+          counterHint = R.capped
+            ? 'Понад норму на ' + (R.dates - R.norm) + ' (норма ' + R.norm + ') — не оплачується (червоні клітинки)'
+            : 'Понад норму на ' + (R.dates - R.norm) + ' (норма ' + R.norm + ')';
         } else if (R.isMaxed) counterCls += ' maxed';
-        counterTxt = R.count + ' / ' + R.norm + (R.dates > R.norm ? ' (+' + (R.dates - R.norm) + ')' : '');
+        counterTxt = R.count + ' / ' + R.norm + (R.dates > R.norm ? ' (+' + (R.dates - R.norm) + (R.capped ? ' не опл.' : '') + ')' : '');
         // v7.270: норма обмежує дати, а показуємо сесії — коли числа розходяться
         // (є поділ), кажемо це в підказці, щоб «5 / 4» не читалось як помилка.
         if (R.dates !== R.count) counterHint = (counterHint ? counterHint + ' · ' : '') + R.dates + ' занять у сітці · ' +
@@ -2815,9 +2836,13 @@ function renderDayCell(loc, R, subject, D, canEdit){
   //   • locked — дата поза поточним тижнем (тижневе замикання; CFO не блокується)
   //   • assignment не обов'язковий (empKey fallback всередині toggle handler)
   var locked   = isWeekLocked(_dmyToIso(D.dmy));
-  var disabled = !canEdit || !R.hasRate || locked;
+  var capFull  = !!(R.capped && R.isMaxed && !checked);              // v7.515: норму вичерпано — нову не поставити
+  var unpaid   = !!(checked && R.unpaid && R.unpaid[D.dmy]);         // v7.515: понад норму — не оплачується
+  var disabled = !canEdit || !R.hasRate || locked || capFull;
 
   var cls = 'pred-cell-day' + (pending ? ' pending' : '');
+  if (capFull)     cls += ' capped';
+  if (unpaid)      cls += ' unpaid';
   if (D.isToday)   cls += ' today';
   if (checked)     cls += ' checked';
   if (disabled)    cls += ' disabled';
@@ -2829,6 +2854,8 @@ function renderDayCell(loc, R, subject, D, canEdit){
     : '';
   var title = locked
     ? '🔒 Місяць закрито — редагує лише CFO'
+    : capFull ? 'Норму вичерпано (' + R.dates + '/' + R.norm + ')'
+    : unpaid ? 'Понад норму — не оплачується' + (canEdit ? ' · натисни, щоб видалити' : '')
     : (disabled
         ? ''
         : (checked ? 'Натисни щоб видалити заняття'
@@ -2969,7 +2996,7 @@ async function _pqFlush(){
         else {
           _pqDropLesson(adds[i].id);
           var msg;
-          if      (rr && rr.code === 'NORM_REACHED') msg = '⚠️ Норму досягнуто (' + rr.current + '/' + rr.norm + ') — ' + adds[i].group;
+          if      (rr && rr.code === 'NORM_REACHED') msg = '⛔ Норму вичерпано (' + rr.current + '/' + rr.norm + ') — ' + adds[i].group;
           else if (rr && rr.code === 'BAD_GROUP')    msg = '🚫 ' + (rr.error || 'Заборонена комбінація');
           else if (rr && rr.code === 'PERM_DENIED')  msg = '🚫 Немає дозволу';
           else                                       msg = (rr && rr.error) || 'Не збереглось';
@@ -3024,6 +3051,15 @@ function onCheckboxToggle(loc, groupName, subj, dateDmy){
   }
 
   var existing = lessonByCell(loc, groupName, subj, dateDmy);
+  if (!existing && predCapOn()){                      // v7.515: стеля — понад норму не ставимо
+    var _gt = normalizeGroupType(groupName), _ln = locNormFor(loc, subj, groupName, _gt);
+    var _unl = (subj === PRED_UNLIMITED_SUBJ) || (!_gt && _ln === null);
+    var _n = _unl ? 0 : getNormFor(loc, subj, _gt, groupName);
+    if (_n > 0 && countLessonDatesInRow(loc, groupName, subj) >= _n){
+      showToast('⛔ Норму вичерпано (' + countLessonDatesInRow(loc, groupName, subj) + '/' + _n + ') — ' + groupName, 'err');
+      return;
+    }
+  }
   if (existing){
     _pqDropLesson(existing.id);                       // знімаємо ОДРАЗУ
     renderApp();

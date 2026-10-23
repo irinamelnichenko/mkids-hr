@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.514
+// m.kids CRM — Google Apps Script v7.515
+// v7.515: з 01.10.2026 норма предметників — СТЕЛЯ: savePredmetnykyLesson / bulk — NORM_REACHED; exportPredmetnykyToSalary з жовтня
+//   не оплачує понаднормові (найпізніші дати групи понад норму). Раніші місяці — як було; школи й «Чомусики» — без стелі.
 // v7.514: groupRecordsCanon — нова назва з «Групи_Мапа» (там лише Благо) АБО з чинних груп локації за картками; кілька кандидатів — не чіпає.
 // v7.513: groupRecordsCanon — старі назви груп у відмітках предметників і додаткових → назва з «Групи_Мапа» (лише однозначний
 //   збіг; без дублів клітинок; копія аркуша перед записом; CFO, dryRun за замовч.).
@@ -7354,7 +7356,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.514', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.515', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -36604,6 +36606,11 @@ function _loadPredNorms(targetYmd){
 // була — у регіональній матриці (щоб не змінити поведінку 13 інших локацій).
 // v7.296: ymd (опційно) — місяць, за блоком норм якого рахувати стелю (C–G з 09.2026,
 // I–M раніше); без нього — сьогоднішня дата.
+// v7.515: з 01.10.2026 норма предметників — СТЕЛЯ (рішення CFO 23.10.2026): понад норму відмітити не можна,
+//   понаднормові (внесені до повернення стелі) в Salary не оплачуються. Раніші місяці — як було (v7.365, підказка).
+//   Школи й «Чомусики» — без стелі (_predCeilingFor → 0).
+var PRED_CAP_FROM_YM = 202610;
+function _predCapOn(ym){ return !!(ym && (Number(ym.y) * 100 + Number(ym.m)) >= PRED_CAP_FROM_YM); }
 function _predCeilingFor(loc, subject, group, ymd){
   if (subject === PRED_UNLIMITED_SUBJ) return 0;
   if (_predIsSchoolLoc(loc)) return 0;
@@ -37509,7 +37516,7 @@ function savePredmetnykyLesson(actorId, lesson){
       var _daySet = {}, _dupId = 0;
       for (var _i = 0; _i < _dayLessons.length; _i++){
         var _L = _dayLessons[_i];
-        if (_L.group !== group || _L.subject !== subject) continue;   // ← ПОВНА назва групи
+        if (_predGroupKey(_L.group) !== _predGroupKey(group) || _L.subject !== subject) continue;   // ← ПОВНА назва групи (v7.515: за ключем — «Find-iki» = «Findi-Ki»)
         var _lym = _lessonYearMonth(_L.date);
         if (!_lym || _lym.y !== ym.y || _lym.m !== ym.m) continue;
         var _ld = _predDayKey(_L.date);
@@ -37521,6 +37528,11 @@ function savePredmetnykyLesson(actorId, lesson){
       var norm = _predCeilingFor(location, subject, group, ym.y + '-' + ('0' + ym.m).slice(-2) + '-01');   // v7.296
       // v7.365: норма — ПІДКАЗКА, не блок. Урок понад норму записується, у відповіді overNorm.
       var overNorm = (norm > 0 && current >= norm);
+      // v7.515: з жовтня 2026 — стеля: відмова.
+      if (overNorm && _predCapOn(ym)){
+        return {ok:false, code:'NORM_REACHED', error:'Норму вичерпано (' + current + '/' + norm + ')',
+                current:current, norm:norm, group:group, subject:subject};
+      }
 
       // ── insert ──
       var sh = _getPredLessonsSheet();
@@ -37600,7 +37612,7 @@ function bulkPredmetnykyLessons(actorId, add, removeIds){
         var set = {}, arr = cLessons[loc];
         for (var i = 0; i < arr.length; i++){
           var L = arr[i];
-          if (L.group !== grp || L.subject !== subj) continue;
+          if (_predGroupKey(L.group) !== _predGroupKey(grp) || L.subject !== subj) continue;   // v7.515: за ключем назви
           var lym = _lessonYearMonth(L.date);
           if (!lym || lym.y !== ym.y || lym.m !== ym.m) continue;
           set[_predDayKey(L.date)] = L.id;
@@ -37693,6 +37705,10 @@ function bulkPredmetnykyLessons(actorId, add, removeIds){
         var norm = ceilOf(location, subject, group, ym);
         // v7.365: норма — підказка. Понад норму урок записується, у відповіді overNorm.
         var _over = (norm > 0 && currentCount(location, group, subject, ym) >= norm);
+        if (_over && _predCapOn(ym)){                                 // v7.515: з жовтня 2026 — стеля
+          added.push({ok:false, code:'NORM_REACHED', error:'Норму вичерпано (' + currentCount(location, group, subject, ym) + '/' + norm + ')',
+                      current:currentCount(location, group, subject, ym), norm:norm, group:group, subject:subject}); continue;
+        }
 
         var id = nextId++;
         _dset[_dkey] = id;                                           // дата зайнята
@@ -38506,7 +38522,22 @@ function exportPredmetnykyToSalary(params){
       });
       // v7.365: норма — підказка. Понад норму оплачується повністю (директор ставить свідомо);
       // перевищення лише логуємо для звірки.
-      if (capExcess > 0){
+      // v7.515: з жовтня 2026 — СТЕЛЯ: у групі понад норму не оплачуються найпізніші дати (перші N у межах норми —
+      //   ті самі, що сітка показує звичайними). Зрізаємо з group×date до підрахунку сесій, тож обʼєднання й поділи
+      //   рахуються по оплачуваних датах.
+      var capCut = 0;
+      if (capExcess > 0 && _predCapOn({y:year, m:month})){
+        var gbdCut = {};
+        Object.keys(gbd).forEach(function(dIso){ gbdCut[dIso] = {}; Object.keys(gbd[dIso] || {}).forEach(function(g){ gbdCut[dIso][g] = gbd[dIso][g]; }); });
+        overGroups.forEach(function(o){
+          var ds = Object.keys(gbd).filter(function(dIso){ return gbd[dIso] && gbd[dIso][o.group]; }).sort();
+          ds.slice(o.ceiling).forEach(function(dIso){ delete gbdCut[dIso][o.group]; capCut++; });
+          o.unpaidDates = ds.slice(o.ceiling);
+        });
+        uniq = _dopCountSessions(gbdCut, predMergesMap[sk] || {}, predSplitsMap[sk] || {});
+        Logger.log('[%s] %s → СТЕЛЯ: не оплачено %s занять понад норму %s',
+          loc, a.subject_raw, capCut, JSON.stringify(overGroups));
+      } else if (capExcess > 0){
         Logger.log('[%s] %s → понад норму %s занять (оплачено) %s',
           loc, a.subject_raw, capExcess, JSON.stringify(overGroups));
       }
@@ -38579,6 +38610,7 @@ function exportPredmetnykyToSalary(params){
       totalFact += fact;
       details.push({subject:catName, matchedAs:found.matchedAs, priority:found.priority, payModel:a.payModel,
         fact:fact, lessons:uniq, groups:(isGroupM ? groupsInMonth : undefined), row:found.row, oldValue:currentValue, newValue:newValue,
+        overNormUnpaid:(capCut ? overGroups : undefined),   // v7.515
         renamedTo:(renameTo && renameTo !== found.matchedAs) ? renameTo : null, planNext:planSt});
       Logger.log('[%s] %s → %s | lessons=%s × %s = %s | Salary row=%s col=%s | %s → %s',
         loc, catName, found.priority, uniq, a.rate, fact,
