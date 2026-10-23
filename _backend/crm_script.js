@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.503
+// m.kids CRM — Google Apps Script v7.504
+// v7.504: квота тригерів (Gmail — 90 хв/добу) — знімки дашборда кожні 30 хв (було 15); облік часу кожного тригера (getTriggerStats).
 // v7.503: дашборд одним запитом — знімки (dashSnapshotBuild, тригер кожні 15 хв 7–21 за Києвом) + getDashboard (з урахуванням ролі).
 // v7.498: getDataQuality — кеш готового результату на локацію / мережу (5 хв), повторне відкриття без перерахунку.
 // v7.497: швидкість — getDataQuality / getPaymentsLive з &loc= читають ЛИШЕ файл цієї локації (кеш 5 хв на локацію);
@@ -2282,7 +2283,7 @@ function installOwnerReportTrigger(){
   Logger.log('Тригер weeklyOwnerReport встановлено: щопонеділка о 9:00.');
 }
 // Тригер шле ЗАВЖДИ завершений тиждень; ручний запуск без параметра — поточний.
-function weeklyOwnerReport(){ var r=sendOwnerReport({week:1}); Logger.log(JSON.stringify(r)); return r; }
+function _weeklyOwnerReport__impl(){ var r=sendOwnerReport({week:1}); Logger.log(JSON.stringify(r)); return r; }
 
 // ── Разове наповнення аркуша отримувачів ──
 function SEED_REPORT_RECIPIENTS(){
@@ -2328,7 +2329,7 @@ function installLeadsDigestTrigger(){
   Logger.log('Тригер tgDailyDigest встановлено на 9:00 щодня.');
 }
 
-function tgDailyDigest(){
+function _tgDailyDigest__impl(){
   var sh = _leadsBotSheet();
   var v  = sh.getDataRange().getValues();
   var today = _tgDayObj(0).dm, tomorrow = _tgDayObj(1).dm, yest = _tgDayObj(-1).dm;
@@ -3566,7 +3567,7 @@ function ensureInvoiceTrigger(body){
     return {ok:true, created:true, everyMinutes:5};
   } catch(e){ return {ok:false, error:String(e&&e.message||e)}; }
 }
-function invoiceQueueTick(){
+function _invoiceQueueTick__impl(){
   try { processInvoiceQueue({dryRun:false}); }
   catch(e){ _tgErr('inv:tick', e); }
 }
@@ -3859,7 +3860,7 @@ function _invScheduleFlush(retry){
   }
   ScriptApp.newTrigger('invFlushPaidQueue').timeBased().at(at).create();
 }
-function invFlushPaidQueue(){
+function _invFlushPaidQueue__impl(){
   ScriptApp.getProjectTriggers().forEach(function(t){ if (t.getHandlerFunction() === 'invFlushPaidQueue') ScriptApp.deleteTrigger(t); });
   var lock = LockService.getScriptLock();
   try { lock.waitLock(30000); } catch(_le){ _invScheduleFlush(true); return; }
@@ -5825,7 +5826,7 @@ function _anValidDate(v){
   return /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(s) ? s : '';
 }
 
-function refreshLeadsAnalytics(){
+function _refreshLeadsAnalytics__impl(){
   AN_STEPS = [];
   var ss;
   try { ss = SpreadsheetApp.openById(_mirrorFileId()); }
@@ -6355,7 +6356,7 @@ function SETUP_LEADS_ANALYTICS(){
 }
 
 // Меню в самій таблиці: кнопку-малюнок скриптом не створити, а пункт меню — можна.
-function onMirrorOpen(){
+function _onMirrorOpen__impl(){
   try{
     SpreadsheetApp.openById(_mirrorFileId())
       .addMenu('m.kids', [{name:'Перерахувати аналітику',       functionName:'refreshLeadsAnalytics'},
@@ -6913,7 +6914,7 @@ function _tgHandlePending(leadId, kind, text, who, promptMid, userMsgId){
 
 // ── ЕТАП 5: SLA 15 хв. Тайм-тригер щохвилини. Лід у статусі 'new' без першої реакції:
 // >15 хв → нагадування в тред; >30 хв → ескалація. Прапорці r1/r2 у колонці reminders.
-function tgSlaCheck(){
+function _tgSlaCheck__impl(){
   try{
     var sh=_leadsBotSheet(); var v=sh.getDataRange().getValues(); var chat=_leadsChatId();
     var now=formatDate(new Date());          // «зараз» у Києві, тим самим форматом, що created_at
@@ -7310,7 +7311,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.503', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.504', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -7453,6 +7454,7 @@ function doGet(e) {
     else if (action === 'getDiscounts')                result = getDiscounts(e.parameter || {});           // v7.414 реєстр знижок
     else if (action === 'getPromoReport')              result = getPromoReport(e.parameter || {});         // v7.414 звіт по акціях
     else if (action === 'getPromoAttention')           result = getPromoAttention(e.parameter || {});      // v7.414 передоплати-здогадки + пропозиції
+    else if (action === 'getTriggerStats')            result = getTriggerStats(e.parameter || {});        // v7.504 час роботи тригерів по днях (квота)
     else if (action === 'getDashboard')               result = getDashboard(e.parameter || {});           // v7.503 дашборд одним запитом зі знімків
     else if (action === 'getDataQuality')             result = getDataQuality(e.parameter || {});         // v7.485 якість даних (лише читання)
     else if (action === 'getUnderpaid')                result = getUnderpaid(e.parameter || {});           // v7.482 знижки та недоотримане (лише читання)
@@ -10152,7 +10154,7 @@ function _opex27EnsureTrigger(){
   return 'створено';
 }
 // Тригер: правка у «Драйвери_27» → перерахунок OPEX змінених локацій.
-function opex27OnEdit(e){
+function _opex27OnEdit__impl(e){
   try {
     var sh = e && e.range && e.range.getSheet(); if (!sh || sh.getName() !== OPEX27_DRV_TAB) return;
     if (!_opex27AutoOn()) return;   // v7.445: до «норми ок» CFO тригер нічого не пише
@@ -11377,7 +11379,7 @@ function setLocGeo(body){
     return {ok:true, loc:loc, point:all[loc] || null};
   } finally { try { lock.releaseLock(); } catch(_r){} }
 }
-function nightlyGeocodeClients(){ return geocodeClients({_system:true, dryRun:false, limit:800}); }
+function _nightlyGeocodeClients__impl(){ return geocodeClients({_system:true, dryRun:false, limit:800}); }
 // Запустити ОДИН РАЗ вручну з редактора: дає дозвіл на сервіс Карт + ставить нічний тригер (04:00).
 function setupGeoNightly(){
   ScriptApp.getProjectTriggers().forEach(function(t){ if (t.getHandlerFunction() === 'nightlyGeocodeClients') ScriptApp.deleteTrigger(t); });
@@ -11884,7 +11886,7 @@ function getDataQuality(params){
 // ═══════════════════════════════════════════════════════════════════════════
 // v7.503 ДАШБОРД ОДНИМ ЗАПИТОМ — ЗНІМКИ
 //   dashSnapshotBuild() рахує частини дашборда для всієї мережі й кладе готові результати в CacheService
-//   (ключ dsnap1_<частина>, {at, v}, 6 год). Тригер dashSnapshotTick — кожні 15 хв, працює 7:00–21:00 за Києвом.
+//   (ключ dsnap1_<частина>, {at, v}, 6 год). Тригер dashSnapshotTick — кожні 30 хв (v7.504; було 15), працює 7:00–21:00 за Києвом.
 //   getDashboard — одна відповідь з усіма частинами зі знімків (немає знімка — рахує й кладе). Роль:
 //   директор — лише своя локація (картки / Payment / «Оплати» / якість даних / табель обрізаються; &force=1 — наживо по його файлу);
 //   R&D — без «Оплат» (боргів); CFO — ще ЗП й OPEX. Лише читання: нічого не пише в таблиці, лише кеш.
@@ -11923,7 +11925,7 @@ function dashSnapshotBuild(parts){
   Logger.log('[dashSnapshotBuild] %s мс %s', Date.now() - t0, JSON.stringify(done));
   return {ok:true, ms:Date.now() - t0, parts:done};
 }
-function dashSnapshotTick(){
+function _dashSnapshotTick__impl(){
   var h = Number(Utilities.formatDate(new Date(), 'Europe/Kiev', 'H'));
   if (h < 7 || h >= 21) return;
   var lock = LockService.getScriptLock(); if (!lock.tryLock(1000)) return;   // попередній прогін ще йде
@@ -11934,8 +11936,8 @@ function setupDashSnapshotTrigger(body){
   if (!(a && (_roleKey(a.role) === 'cfo' || Number(a.id) === 1))) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
   var had = 0;
   ScriptApp.getProjectTriggers().forEach(function(t){ if (t.getHandlerFunction() === 'dashSnapshotTick'){ ScriptApp.deleteTrigger(t); had++; } });
-  ScriptApp.newTrigger('dashSnapshotTick').timeBased().everyMinutes(15).create();
-  return {ok:true, replaced:had, note:'dashSnapshotTick кожні 15 хв (працює 7:00–21:00 за Києвом)'};
+  ScriptApp.newTrigger('dashSnapshotTick').timeBased().everyMinutes(30).create();   // v7.504: 30 хв — квота Gmail 90 хв/добу
+  return {ok:true, replaced:had, note:'dashSnapshotTick кожні 30 хв (працює 7:00–21:00 за Києвом)'};
 }
 function getDashboard(params){
   try {
@@ -11975,6 +11977,50 @@ function getDashboard(params){
     return {ok:true, builtAt:ats[0] || new Date().toISOString(), parts:out, role:role, scopedTo:dir ? dir.loc : '', ms:Date.now() - t0};
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
+
+// ═══ v7.504 ОБЛІК ЧАСУ ТРИГЕРІВ (квота Gmail — 90 хв роботи тригерів на добу) ═══
+//   Кожен обробник тригера обгорнуто: тривалість запуску додається до добового лічильника (властивість trigstat_<дата>,
+//   {назва:{n, ms}}). Рахуються й ручні запуски тих самих функцій. Читання — GET getTriggerStats&days=N (лише читання).
+function _trigAcc(name, t0){
+  try {
+    var ms = Date.now() - t0, day = Utilities.formatDate(new Date(), 'Europe/Kiev', 'yyyy-MM-dd'), P = PropertiesService.getScriptProperties(), k = 'trigstat_' + day;
+    var o = {}; try { o = JSON.parse(P.getProperty(k) || '{}') || {}; } catch(_j){ o = {}; }
+    var x = o[name] || (o[name] = {n:0, ms:0}); x.n++; x.ms += ms;
+    P.setProperty(k, JSON.stringify(o));
+  } catch(_e){}
+}
+function getTriggerStats(params){
+  try {
+    var P = PropertiesService.getScriptProperties(), days = Math.min(14, Number((params || {}).days) || 3), out = [];
+    var trig = ScriptApp.getProjectTriggers().map(function(t){ return t.getHandlerFunction(); });
+    for (var i = 0; i < days; i++){
+      var d = Utilities.formatDate(new Date(Date.now() - i * 86400000), 'Europe/Kiev', 'yyyy-MM-dd'), o = {};
+      try { o = JSON.parse(P.getProperty('trigstat_' + d) || '{}') || {}; } catch(_j){}
+      var tot = 0; Object.keys(o).forEach(function(k){ tot += o[k].ms; });
+      out.push({day:d, totalMin:Math.round(tot / 600) / 100, quotaPct:Math.round(tot / (90 * 60000) * 100), byTrigger:o});
+    }
+    return {ok:true, quotaMin:90, triggers:trig, days:out};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+function tgSlaCheck(e){ var _t = Date.now(); try { return _tgSlaCheck__impl(e); } finally { _trigAcc('tgSlaCheck', _t); } }
+function invoiceQueueTick(e){ var _t = Date.now(); try { return _invoiceQueueTick__impl(e); } finally { _trigAcc('invoiceQueueTick', _t); } }
+function dashSnapshotTick(e){ var _t = Date.now(); try { return _dashSnapshotTick__impl(e); } finally { _trigAcc('dashSnapshotTick', _t); } }
+function bankNightly(e){ var _t = Date.now(); try { return _bankNightly__impl(e); } finally { _trigAcc('bankNightly', _t); } }
+function promoNightly(e){ var _t = Date.now(); try { return _promoNightly__impl(e); } finally { _trigAcc('promoNightly', _t); } }
+function aggregatePayments(e){ var _t = Date.now(); try { return _aggregatePayments__impl(e); } finally { _trigAcc('aggregatePayments', _t); } }
+function aggregatePaymentsYearly(e){ var _t = Date.now(); try { return _aggregatePaymentsYearly__impl(e); } finally { _trigAcc('aggregatePaymentsYearly', _t); } }
+function nightlySyncMissingKindergartens(e){ var _t = Date.now(); try { return _nightlySyncMissingKindergartens__impl(e); } finally { _trigAcc('nightlySyncMissingKindergartens', _t); } }
+function nightlyVacExportGuarantee(e){ var _t = Date.now(); try { return _nightlyVacExportGuarantee__impl(e); } finally { _trigAcc('nightlyVacExportGuarantee', _t); } }
+function nightlyDepartureSnapshot(e){ var _t = Date.now(); try { return _nightlyDepartureSnapshot__impl(e); } finally { _trigAcc('nightlyDepartureSnapshot', _t); } }
+function nightlyGeocodeClients(e){ var _t = Date.now(); try { return _nightlyGeocodeClients__impl(e); } finally { _trigAcc('nightlyGeocodeClients', _t); } }
+function refreshLeadsAnalytics(e){ var _t = Date.now(); try { return _refreshLeadsAnalytics__impl(e); } finally { _trigAcc('refreshLeadsAnalytics', _t); } }
+function tgDailyDigest(e){ var _t = Date.now(); try { return _tgDailyDigest__impl(e); } finally { _trigAcc('tgDailyDigest', _t); } }
+function dailyTaskReminders(e){ var _t = Date.now(); try { return _dailyTaskReminders__impl(e); } finally { _trigAcc('dailyTaskReminders', _t); } }
+function weeklyOwnerReport(e){ var _t = Date.now(); try { return _weeklyOwnerReport__impl(e); } finally { _trigAcc('weeklyOwnerReport', _t); } }
+function invFlushPaidQueue(e){ var _t = Date.now(); try { return _invFlushPaidQueue__impl(e); } finally { _trigAcc('invFlushPaidQueue', _t); } }
+function _vacExportGuardBatch(e){ var _t = Date.now(); try { return __vacExportGuardBatch__impl(e); } finally { _trigAcc('_vacExportGuardBatch', _t); } }
+function onMirrorOpen(e){ var _t = Date.now(); try { return _onMirrorOpen__impl(e); } finally { _trigAcc('onMirrorOpen', _t); } }
+function opex27OnEdit(e){ var _t = Date.now(); try { return _opex27OnEdit__impl(e); } finally { _trigAcc('opex27OnEdit', _t); } }
 
 // v7.47 ЕТАП 5: історія переходів груп. Замість тихого перезапису «Група» — ведемо
 // таймлайн у листі «Історія_Груп». При зміні: закриваємо попередній відкритий запис
@@ -12955,7 +13001,7 @@ function _paymentLayout(cpm){
   return {cpm:5, factNavch:0, factVstup:1, factDop:2, budDop:3, budNavch:4};
 }
 
-function aggregatePayments() {
+function _aggregatePayments__impl() {
   var configSS = SpreadsheetApp.openById(CONFIG_SHEET_ID);
   var configSheet = configSS.getSheets()[0];
   var configData = configSheet.getDataRange().getValues();
@@ -14074,7 +14120,7 @@ function installNightlyYearlyAggregateTrigger(){
 var _VAC_GUARD_BATCH = 4;   // локацій за один запуск (× 2 місяці = 8 експортів)
 var _VAC_GUARD_KEY   = 'vacguard_state';
 
-function nightlyVacExportGuarantee(){
+function _nightlyVacExportGuarantee__impl(){
   _vacGuardDeleteContinuations();   // прибрати відпрацьовані continuation-тригери з минулого разу
   var props = PropertiesService.getScriptProperties();
   var locs = [];
@@ -14097,7 +14143,7 @@ function nightlyVacExportGuarantee(){
 }
 
 // Continuation-handler (окремий, щоб безпечно видаляти спент one-off тригери).
-function _vacExportGuardBatch(){ _vacGuardRunBatch(); }
+function __vacExportGuardBatch__impl(){ _vacGuardRunBatch(); }
 
 function _vacGuardRunBatch(){
   var props = PropertiesService.getScriptProperties();
@@ -14548,7 +14594,7 @@ function _aggYearLocRows(cfgRow, now, updateStr){
   return out;
 }
 
-function aggregatePaymentsYearly() {
+function _aggregatePaymentsYearly__impl() {
   try { return _aggregatePaymentsYearlyImpl(); } finally { _cacheBump('payyear'); }
 }
 function _aggregatePaymentsYearlyImpl() {
@@ -17730,7 +17776,7 @@ function bankFetch(params){
           bankTotal:r.total, notReal:r.notReal, loc:loc || ''};   // v7.378: для звірки «у банку N — показано M»
 }
 // Нічний прогін: забирає «вчора» по всіх токенах лише для реєстру покриття (внесення — після перегляду CFO).
-function bankNightly(){
+function _bankNightly__impl(){
   var y = new Date(); y.setDate(y.getDate() - 1);
   var iso = Utilities.formatDate(y, 'Europe/Kiev', 'yyyy-MM-dd');
   var r = _bankFetchCore(iso, iso);
@@ -32060,7 +32106,7 @@ function runSyncMissingREAL_792(){
 // v7.60 НІЧНИЙ ТРИГЕР (7:30, після aggregatePaymentsYearly о 7:00): авто-створення
 // чернеток карток ЛИШЕ по САДОЧКАХ (locScope='kindergartens'). Ідемпотентно (дедуп
 // existing/seenNew) + LockService всередині. Реєструється у createDailyTrigger.
-function nightlySyncMissingKindergartens(){
+function _nightlySyncMissingKindergartens__impl(){
   // v7.209: ПОВЕРНУТО до 'kindergartens' — школи зі скоупу прибрано.
   // Причина: у шкільних Payment-файлах блоки класів розділені порожніми рядками
   // й безіменними хвостами, тож синк заводив чернетки з чужою групою. 31.08.2026
@@ -32148,7 +32194,7 @@ function snapshotPaymentRosterAndLogDepartures(body){
   } catch(e){ return {ok:false, error:String(e&&e.message||e)}; }
 }
 // Нічна обгортка (тригер викликає без аргументів → треба dryRun:false явно).
-function nightlyDepartureSnapshot(){ return snapshotPaymentRosterAndLogDepartures({dryRun:false}); }
+function _nightlyDepartureSnapshot__impl(){ return snapshotPaymentRosterAndLogDepartures({dryRun:false}); }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // v6.11.12: syncGroupsFromPayments — Платежі (Оплати-Рік) = ДЖЕРЕЛО ПРАВДИ для
@@ -34081,7 +34127,7 @@ function setupTaskReminders(){
   Logger.log('[setupTaskReminders] daily 09:00 trigger створено');
   return {ok:true};
 }
-function dailyTaskReminders(){
+function _dailyTaskReminders__impl(){
   var sh = _getTasksSheet(true);
   var data = sh.getDataRange().getValues();
   var users = _taskUserMap();
@@ -40910,7 +40956,7 @@ function _promoRecalcRange(from, to, loc, who){
   var sy = (from <= to) ? syncDiscountsToPayment({ym:(from < PROMO_START_YM ? PROMO_START_YM : from), loc:loc || '', dryRun:false, _internal:true}) : null;
   return {runs:out, sync:sy && {ok:sy.ok, cells:sy.cells, warnings:(sy.warnings || []).length}};
 }
-function promoNightly(){
+function _promoNightly__impl(){
   var now = _ymNow(), dec = now.slice(0, 4) + '-12', to = _ymAdd(now, 1) > dec ? _ymAdd(now, 1) : dec;
   var r = _promoRecalcRange(now, to, '', 'нічний прогін');
   try { r.classes = applyClassPromotions({_internal:true}); } catch(_cl){ r.classes = {ok:false, error:String(_cl && _cl.message || _cl)}; }   // v7.420 з 1 вересня
