@@ -3180,6 +3180,32 @@ function _ensureDebtsLive(force){
   return S._debtLoading;
 }
 function dashDebtToggle(L){ S.debtOpen=S.debtOpen||{}; S.debtOpen[L]=!S.debtOpen[L]; _renderDashNow(); }
+// ─── v7.499: БОРГИ МИНУЛИХ МІСЯЦІВ — ОДНАКОВО на дашборді (index.html) і в «Борги та оплати» (clients.html) ───
+//   Джерело — «Оплати-Рік». По дитині (локація + ПІБ, усі її рядки, включно з розірваними й «вибулими»):
+//   Σ (Бюджет навч + доп − Факт навч + доп) за місяці ДО поточного, мінус переплата поточного місяця (вона гасить старий борг).
+//   Службові рядки «(без імені …)» пропускаємо; keepRow(ПІБ, локація) — правило сторінки (у школі — рядок лише з карткою).
+//   Місяці боргу — ті, де бюджет більший за оплачене. → {локація: {n, sum, kids:[{name, group, debt, months:[…]}]}}
+var PAST_DEBT_MN=['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
+function _pastDebtsCalc(rows, cur, keepRow){
+  var acc={}, num=function(v){ var x=Number(v); return isFinite(x)?x:0; };
+  (rows||[]).forEach(function(r){
+    var L=String(r['Локація']||'').trim(), n=String(r["Ім'я дитини"]||'').trim();
+    if(!L||!n||/^\(без імені/i.test(n)) return;
+    if(keepRow && !keepRow(n,L)) return;
+    var k=L+'|'+n.toLowerCase().replace(/\s+/g,' '), a=acc[k]||(acc[k]={loc:L,name:n,group:'',b:[0,0,0,0,0,0,0,0,0,0,0,0],f:[0,0,0,0,0,0,0,0,0,0,0,0]});
+    if(!a.group) a.group=String(r['Група']||'');
+    for(var m=0;m<12;m++){ var M=PAST_DEBT_MN[m];
+      a.b[m]+=num(r[M+'-Бюджет-навч'])+num(r[M+'-Бюджет-доп']); a.f[m]+=num(r[M+'-Факт-навч'])+num(r[M+'-Факт-доп']); }
+  });
+  var locs={};
+  Object.keys(acc).forEach(function(k){ var a=acc[k], bal=0, months=[];
+    for(var m=0;m<cur;m++){ bal+=a.b[m]-a.f[m]; if(a.b[m]-a.f[m]>0.5) months.push(PAST_DEBT_MN[m]); }
+    var debt=Math.round(bal-Math.max(0,a.f[cur]-a.b[cur])); if(debt<1) return;
+    var L=locs[a.loc]||(locs[a.loc]={n:0,sum:0,kids:[]}); L.n++; L.sum+=debt;
+    L.kids.push({name:a.name, group:a.group, debt:debt, months:months}); });
+  Object.keys(locs).forEach(function(l){ locs[l].kids.sort(function(x,y){ return y.debt-x.debt; }); });
+  return locs;
+}
 // v7.497: «Борги» — з «Оплати» (getPayments), як екран «Борги та оплати»: поточний місяць, правило clients.html buildGroups / renderDebts.
 function _ensurePayMonth(force){
   if(S._payMonLoading) return S._payMonLoading;
@@ -3533,6 +3559,17 @@ function _renderKompBlock(){
     if(dbtLoad){ Object.keys(DL.locs||{}).forEach(function(l){ if(!_isKompNetwork(l) || (!isHR && l!==myLoc)) return; var x=DL.locs[l];
         dbtN+=x.n; dbtSum+=x.sum; if(x.n) _dbtRows.push({loc:l,n:x.n,sum:x.sum,kids:x.kids}); });
       _dbtRows=_kompSortByLoc(_dbtRows,function(r){ return r.loc; }); }
+    // v7.499: + борги минулих місяців (як у «Борги та оплати»)
+    var PD=Array.isArray(S._dashYearly)?_pastDebtsCalc(S._dashYearly,new Date().getMonth(),function(n,L){ return _dashLocType(L)!=='sch'||_dashSchoolHasCard(n,L); }):null;
+    var pdN=0, pdSum=0, _pdRows=[];
+    if(PD){ Object.keys(PD).forEach(function(l){ if(!_isKompNetwork(l) || (!isHR && l!==myLoc)) return; var x=PD[l]; pdN+=x.n; pdSum+=x.sum; _pdRows.push({loc:l,n:x.n,sum:x.sum,kids:x.kids}); });
+      _pdRows=_kompSortByLoc(_pdRows,function(r){ return r.loc; }); }
+    var pastTbl=!PD?'<div style="font-size:12px;color:var(--gray);padding:8px 14px">Борги минулих місяців: завантажую «Оплати-Рік»…</div>'
+      :'<div style="padding:10px 14px 0"><div style="font-size:13px;font-weight:700;margin-bottom:6px">+ Борги минулих місяців: '+pdN+' дітей · '+fmtG(pdSum)+'</div>'
+      +(_pdRows.length?'<div class="tbl-wrap"><table><thead><tr><th>Дитина</th><th>Локація</th><th>Група</th><th>Місяць боргу</th><th>Сума</th></tr></thead><tbody>'
+        +_pdRows.map(function(r){ return r.kids.map(function(k){ return '<tr><td><b>'+esc(k.name)+'</b></td><td>'+esc(r.loc)+'</td><td style="color:var(--gray)">'+esc(k.group)+'</td><td>'+esc(k.months.join(', ').toLowerCase()||'—')+'</td><td style="color:#e74c3c;font-weight:700;white-space:nowrap">'+fmtG(k.debt)+'</td></tr>'; }).join(''); }).join('')
+        +'</tbody></table></div>':'<div style="font-size:12px;color:var(--gray)">Немає</div>')
+      +'<div style="font-size:11px;color:var(--gray);padding:6px 0 4px">Накопичене за рік до поточного місяця («Оплати-Рік»), включно з розірваними; переплата поточного місяця гасить старий борг. Так само в «Борги та оплати».</div></div>';
     var debtTbl=!dbtLoad?'<div class="empty"><p>'+(DL&&DL.error?'Не вдалося завантажити: '+esc(DL.error):'Завантажую «Оплати»…')+'</p></div>':(_dbtRows.length?'<div class="tbl-wrap"><table><thead><tr><th>Локація</th><th>Боржників</th><th>Сума боргу</th></tr></thead><tbody>'+
       _dbtRows.map(function(r){ var on=!!(S.debtOpen&&S.debtOpen[r.loc]);
         var sub=on?'<tr><td colspan="3" style="padding:0 0 8px 18px;background:#fbfcfe">'+(r.kids||[]).map(function(k){
@@ -3540,7 +3577,8 @@ function _renderKompBlock(){
               +'<div style="color:var(--gray2)">бюджет '+fmtG(k.b)+' · оплачено '+fmtG(k.f)+'</div></div>'; }).join('')+'</td></tr>':'';
         return '<tr style="cursor:pointer" onclick="dashDebtToggle('+esc(JSON.stringify(r.loc))+')"><td><strong>'+(on?'▾ ':'▸ ')+esc(r.loc)+'</strong></td><td>'+r.n+'</td><td style="color:#e74c3c;font-weight:700">'+fmtG(r.sum)+'</td></tr>'+sub; }).join('')+
       '<tr style="border-top:2px solid var(--gray2)"><td><strong>Разом</strong></td><td><strong>'+dbtN+'</strong></td><td style="font-weight:800;color:#e74c3c">'+fmtG(dbtSum)+'</td></tr></tbody></table></div>':'<div class="empty"><p>Немає боргів</p></div>')
-      +'<div style="font-size:11px;color:var(--gray);padding:6px 14px">Як на екрані «Борги та оплати»: поточний місяць ('+esc(DL&&DL.month||'')+'), дані «Оплати»; борг = бюджет (навчання + додаткові) − оплачено (навчання + додаткові) по дітях зі статусом «борг» / «не платив» (не платив — увесь бюджет); вступні не враховуються. Клік по локації — діти.</div>'
+      +pastTbl
+      +'<div style="font-size:11px;color:var(--gray);padding:6px 14px">Основна цифра — як на екрані «Борги та оплати»: поточний місяць ('+esc(DL&&DL.month||'')+'), дані «Оплати»; борг = бюджет (навчання + додаткові) − оплачено (навчання + додаткові) по дітях зі статусом «борг» / «не платив» (не платив — увесь бюджет); вступні не враховуються. Клік по локації — діти.</div>'
       +_dashDebtFoot();
 
     // #2 Виплата ЗП — за обраний місяць / рік
@@ -3621,7 +3659,7 @@ function _renderKompBlock(){
       '<div style="font-size:11px;color:var(--gray2);padding:2px 4px">«Оборот '+(y-1)+'» і «приріст обороту» — н/д: потрібен бекенд-роут за минулий рік. Правило «червоне, якщо приріст фонду > приросту обороту» ввімкнеться після цього.</div>'
       :'<div class="empty"><p>Немає даних</p></div>');
 
-    tileDefs.debt={ic:'💳',cls:'si-r',lbl:'Борги',val:(dbtLoad?fmtShort(dbtSum):'—'),full:(dbtLoad?fmtG(dbtSum):''),sub:(dbtLoad?dbtN+' боржників · '+(DL.month||'місяць').toLowerCase():'завантажую…')};
+    tileDefs.debt={ic:'💳',cls:'si-r',lbl:'Борги',val:(dbtLoad?fmtShort(dbtSum):'—'),full:(dbtLoad?fmtG(dbtSum):''),sub:(dbtLoad?dbtN+' боржників · '+(DL.month||'місяць').toLowerCase():'завантажую…')+(PD&&pdN?'<br>+ минулі місяці: '+pdN+' · '+fmtShort(pdSum):'')};
     tileDefs.salpay={ic:'💸',cls:'si-y',lbl:'Виплата ЗП',val:(salLoad&&salPct!=null?salPct+'%':'—'),sub:(salLoad?'залишок '+fmtShort(salRem)+' · '+perLbl:'…')};
     tileDefs.margin={ic:'📈',cls:'si-g',lbl:'Маржа',val:(mgLoad?fmtShort(mMar):'—'),full:(mgLoad?fmtG(mMar)+' · '+_mPct(mMar,mRev):''),sub:(_mOpen?'⚠️ місяць не закрито · ':'')+'дохід − ЗП − OPEX · '+perLbl};
     tileDefs.term={ic:'🚪',cls:'si-p',lbl:'Причини розірвання',val:(termLoad?termTotal:'—'),sub:'розірвань · '+perLbl};

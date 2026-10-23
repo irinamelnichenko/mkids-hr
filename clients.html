@@ -3862,6 +3862,32 @@ function payBadge(status,debt,over){
 }
 
 // ─── RENDER DEBTS ─────────────────────────────────────────────────────────────
+// ─── v7.499: БОРГИ МИНУЛИХ МІСЯЦІВ — ОДНАКОВО на дашборді (index.html) і в «Борги та оплати» (clients.html) ───
+//   Джерело — «Оплати-Рік». По дитині (локація + ПІБ, усі її рядки, включно з розірваними й «вибулими»):
+//   Σ (Бюджет навч + доп − Факт навч + доп) за місяці ДО поточного, мінус переплата поточного місяця (вона гасить старий борг).
+//   Службові рядки «(без імені …)» пропускаємо; keepRow(ПІБ, локація) — правило сторінки (у школі — рядок лише з карткою).
+//   Місяці боргу — ті, де бюджет більший за оплачене. → {локація: {n, sum, kids:[{name, group, debt, months:[…]}]}}
+var PAST_DEBT_MN=['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
+function _pastDebtsCalc(rows, cur, keepRow){
+  var acc={}, num=function(v){ var x=Number(v); return isFinite(x)?x:0; };
+  (rows||[]).forEach(function(r){
+    var L=String(r['Локація']||'').trim(), n=String(r["Ім'я дитини"]||'').trim();
+    if(!L||!n||/^\(без імені/i.test(n)) return;
+    if(keepRow && !keepRow(n,L)) return;
+    var k=L+'|'+n.toLowerCase().replace(/\s+/g,' '), a=acc[k]||(acc[k]={loc:L,name:n,group:'',b:[0,0,0,0,0,0,0,0,0,0,0,0],f:[0,0,0,0,0,0,0,0,0,0,0,0]});
+    if(!a.group) a.group=String(r['Група']||'');
+    for(var m=0;m<12;m++){ var M=PAST_DEBT_MN[m];
+      a.b[m]+=num(r[M+'-Бюджет-навч'])+num(r[M+'-Бюджет-доп']); a.f[m]+=num(r[M+'-Факт-навч'])+num(r[M+'-Факт-доп']); }
+  });
+  var locs={};
+  Object.keys(acc).forEach(function(k){ var a=acc[k], bal=0, months=[];
+    for(var m=0;m<cur;m++){ bal+=a.b[m]-a.f[m]; if(a.b[m]-a.f[m]>0.5) months.push(PAST_DEBT_MN[m]); }
+    var debt=Math.round(bal-Math.max(0,a.f[cur]-a.b[cur])); if(debt<1) return;
+    var L=locs[a.loc]||(locs[a.loc]={n:0,sum:0,kids:[]}); L.n++; L.sum+=debt;
+    L.kids.push({name:a.name, group:a.group, debt:debt, months:months}); });
+  Object.keys(locs).forEach(function(l){ locs[l].kids.sort(function(x,y){ return y.debt-x.debt; }); });
+  return locs;
+}
 function renderDebts(){
   // v6.27.1: картка боргів завжди стартує з поточного місяця (не запам'ятовуємо старий)
   if(!S._debtsMonthInit){ S._debtsMonthInit=true; S.selMonth=new Date().getMonth(); }
@@ -3906,6 +3932,12 @@ function renderDebts(){
     }
   });
   var pctPlan=totalPlan>0?Math.round(totalCollected/totalPlan*100):0;
+  // v7.499: + борги минулих місяців (накопичене до обраного місяця; те саме правило, що на дашборді)
+  var _actSet={}; activeLocs.forEach(function(l){ _actSet[l.loc]=1; });
+  var PD=(S.yearlyData&&S.yearlyData.length)?_pastDebtsCalc(S.yearlyData,S.selMonth,function(n,L){ var si=_schoolCardInfo(n,L); return !(si.isSchool&&!si.card); }):null;
+  var pdN=0, pdSum=0, _pdRows=[];
+  if(PD) Object.keys(PD).forEach(function(l){ if(!_actSet[l]) return; var x=PD[l]; pdN+=x.n; pdSum+=x.sum; x.kids.forEach(function(k){ _pdRows.push(Object.assign({loc:l},k)); }); });
+  _pdRows.sort(function(a,b){ return b.debt-a.debt; });
 
   // ── фільтруємо за статусом для таблиці (не зачіпає картки) ───────────────
   // '' = Всі, 'debt' = Борг (debt + nopay), 'paid' = Сплачено, 'over' = Переплата
@@ -3965,6 +3997,7 @@ function renderDebts(){
     +'<div class="stat-card"><div class="stat-icon si-r">💸</div><div>'
       +'<div class="stat-val" style="color:var(--red2);font-size:22px">'+fmtN(Math.round(totalDebt))+'</div>'
       +'<div class="stat-lbl">Борг (грн) · '+debtorCount+' дітей · <b>'+filterLabel+'</b></div>'
+      +'<div style="font-size:11px;color:var(--gray);margin-top:3px">'+(PD?'+ борги минулих місяців: '+pdN+' дітей · '+fmtN(Math.round(pdSum))+' ₴':'+ борги минулих місяців: завантажую…')+'</div>'
     +'</div></div>'
     +'<div class="stat-card"><div class="stat-icon si-g">💵</div><div>'
       +'<div class="stat-val" style="color:var(--green);font-size:22px">'+fmtN(Math.round(totalCollected))+'</div>'
@@ -4018,6 +4051,16 @@ function renderDebts(){
     });
   }
   html+='</tbody></table></div></div>';
+  // v7.499: окремий блок — борги минулих місяців поіменно, з місяцем боргу
+  html+='<div class="card" style="margin-top:14px"><div class="card-hd"><h3>+ Борги минулих місяців'+(PD?': '+pdN+' дітей · '+fmtN(Math.round(pdSum))+' ₴':'')+'</h3>'
+    +'<span style="font-size:12px;color:var(--gray)">до '+esc(mName.toLowerCase())+' · включно з розірваними · <b>'+filterLabel+'</b></span></div>'
+    +(!PD?'<div style="padding:14px;color:var(--gray);font-size:13px">Завантажую «Оплати-Рік»…</div>'
+      :(_pdRows.length?'<div class="tbl-wrap"><table><thead><tr><th>Дитина</th><th>Локація</th><th>Група</th><th>Місяць боргу</th><th>Сума</th></tr></thead><tbody>'
+        +_pdRows.map(function(k){ var cid=resolveCardId(k.name,k.loc), c=S.crm[cid];
+          return '<tr><td>'+(c?'<b style="cursor:pointer;color:var(--blue2)" onclick="openChildByName('+escAttrJS(k.name)+','+escAttrJS(k.loc)+')">'+esc(k.name)+'</b>':'<b>'+esc(k.name)+'</b>')+(c&&c.status&&c.status!=='active'?' <span style="font-size:11px;color:var(--gray)">('+esc(c.status)+')</span>':'')+'</td>'
+            +'<td>'+esc(k.loc)+'</td><td style="color:var(--gray)">'+esc(k.group)+'</td><td>'+esc(k.months.join(', ').toLowerCase()||'—')+'</td><td><b style="color:var(--red2)">'+fmtN(k.debt)+'</b></td></tr>'; }).join('')
+        +'</tbody></table></div>':'<div style="padding:14px;color:var(--gray);font-size:13px">Немає</div>'))
+    +'<div style="font-size:11px;color:var(--gray);padding:8px 14px">Накопичене за рік до обраного місяця («Оплати-Рік»): бюджет − оплачено (навчання + додаткові), переплата обраного місяця гасить старий борг. Так само на дашборді.</div></div>';
   document.getElementById('main').innerHTML=html;
 }
 
