@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.497
+// m.kids CRM — Google Apps Script v7.498
+// v7.498: getDataQuality — кеш готового результату на локацію / мережу (5 хв), повторне відкриття без перерахунку.
 // v7.497: швидкість — getDataQuality / getPaymentsLive з &loc= читають ЛИШЕ файл цієї локації (кеш 5 хв на локацію);
 //   директору loc підставляється автоматично.
 // v7.496: «Акції та знижки» — запис довідника / реєстру знижок / передоплат / покриття лише CFO (id 1); читання довідника для картки — як було.
@@ -7308,7 +7309,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.497', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.498', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -11790,6 +11791,8 @@ function getDataQuality(params){
     var t0 = Date.now(), tz = 'Europe/Kiev', now = new Date();
     var ym = Utilities.formatDate(now, tz, 'yyyy-MM'), mo = Number(ym.slice(5, 7)), Y = Number(ym.slice(0, 4));
     var qLoc = trim(params.loc || '');                                        // v7.497: одна локація — лише її файл
+    var _dqKey = 'dq1_' + (qLoc ? _nameFold(qLoc) : 'all'), _dqNc = String(params.nocache || '') === '1';   // v7.498 кеш результату
+    if (!_dqNc){ var _dqHit = _cacheGzGetBig(_dqKey); if (_dqHit){ _dqHit.cached = true; return _dqHit; } }
     var v = _yearlyLive(String(params.nocache || '') === '1', qLoc), h = v[0].map(String), cards = _promoCards();
     if (qLoc){ var _cl = cards.list.filter(function(c){ return _nameFold(c.loc) === _nameFold(qLoc); }), _cb = {};
       _cl.forEach(function(c){ _cb[c.id] = c; });
@@ -11869,7 +11872,9 @@ function getDataQuality(params){
       if (x.parts.none) add(5, c, 'у картці ' + fmt(x.fee) + ', у Payment ' + MONTHS_CAL[mo - 1].toLowerCase() + ' 0', 'нарахувати місяць у Payment або оформити розірвання');
       else if (x.parts.unrec) add(4, c, 'у картці ' + fmt(x.fee) + ', у Payment ' + fmt(x.budget) + ' — різниця ' + fmt(x.parts.unrec) + ' без причини' + (x.notes.length ? ' (' + x.notes.join('; ') + ')' : ''), x.feeMismatch ? 'виправити суму в картці або Payment («Зміни суми» з дати)' : 'внести причину (відпустка / знижка) або виправити Payment');
     });
-    return {ok:true, ym:ym, loc:qLoc, issues:issues, ms:Date.now() - t0};
+    var _dqRes = {ok:true, ym:ym, loc:qLoc, issues:issues, ms:Date.now() - t0};
+    try { _cacheGzPutBig(_dqKey, _dqRes, 300); } catch(_dc){}
+    return _dqRes;
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 
