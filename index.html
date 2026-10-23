@@ -3698,7 +3698,7 @@ function _renderKompBlock(){
     _panels.p2r=_cfoHd('⚖️ Фонд ЗП до обороту',perLbl+' '+y+' · фонд/оборот')+p2rTbl;
   }
   S._kompPanels=_panels;   // v7.493: для вікна деталей
-  var _allTiles=_tile('fill')+_tile('free')+_tile('kpi')+_tile('rate')+(cfoOn?(_tile('debt')+_tile('salpay')+_tile('margin')+_tile('p2r')+_tile('term')):dirOn?_tile('debt'):'');
+  var _allTiles=_tile('fill')+_tile('free')+_tile('kpi')+_tile('rate')+(cfoOn?(_tile('debt')+_tile('salpay')+_tile('margin')+_tile('p2r')+_tile('term')+_renderPlan27Tile()):dirOn?_tile('debt'):'');   // v7.510: «План набору 2027» — одразу після «Причини розірвання»
   return `
     <div class="stats-grid" style="margin-bottom:16px">${_allTiles}</div>`;   // v7.493: деталі — у вікні (_dashPop), не в сітці
 }
@@ -5194,7 +5194,6 @@ function _renderDashNow(){
       ${_renderRiskTile()}
       ${_renderUpTile()}
       ${_renderDqTile()}
-      ${_renderPlan27Tile()}
       <div class="stat-card"><div class="stat-icon si-y">🆕</div><div><div class="stat-val">${hired.length}</div><div class="stat-lbl">Прийнято (${perLbl})</div></div></div>
       <div class="stat-card"><div class="stat-icon si-r">🚪</div><div><div class="stat-val">${fired.length}</div><div class="stat-lbl">Звільнено (${perLbl})</div></div></div>
     </div>
