@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.498
+// m.kids CRM — Google Apps Script v7.503
+// v7.503: дашборд одним запитом — знімки (dashSnapshotBuild, тригер кожні 15 хв 7–21 за Києвом) + getDashboard (з урахуванням ролі).
 // v7.498: getDataQuality — кеш готового результату на локацію / мережу (5 хв), повторне відкриття без перерахунку.
 // v7.497: швидкість — getDataQuality / getPaymentsLive з &loc= читають ЛИШЕ файл цієї локації (кеш 5 хв на локацію);
 //   директору loc підставляється автоматично.
@@ -7309,7 +7310,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.498', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.503', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -7452,6 +7453,7 @@ function doGet(e) {
     else if (action === 'getDiscounts')                result = getDiscounts(e.parameter || {});           // v7.414 реєстр знижок
     else if (action === 'getPromoReport')              result = getPromoReport(e.parameter || {});         // v7.414 звіт по акціях
     else if (action === 'getPromoAttention')           result = getPromoAttention(e.parameter || {});      // v7.414 передоплати-здогадки + пропозиції
+    else if (action === 'getDashboard')               result = getDashboard(e.parameter || {});           // v7.503 дашборд одним запитом зі знімків
     else if (action === 'getDataQuality')             result = getDataQuality(e.parameter || {});         // v7.485 якість даних (лише читання)
     else if (action === 'getUnderpaid')                result = getUnderpaid(e.parameter || {});           // v7.482 знижки та недоотримане (лише читання)
     else if (action === 'getPromoCardIndex')           result = getPromoCardIndex();                       // v7.414 картки мережі для вибору рекомендувача/брата
@@ -7548,6 +7550,7 @@ function doPost(e) {
     else if (body.action === 'invoiceAutoMatchRange')     result = invoiceAutoMatchRange(body); // v7.411 автозвірка заявок за період (CFO, dryRun за замовч.)
     else if (body.action === 'invoiceAutoSet')            result = invoiceAutoSet(body);        // v7.411 вимикач автозвірки (CFO)
     else if (body.action === 'invoiceReopen')             result = invoiceReopen(body);         // v7.411 відкат «оплачено» (CFO, dryRun за замовч.)
+    else if (body.action === 'setupDashSnapshotTrigger')  result = setupDashSnapshotTrigger(body);   // v7.503 тригер знімків дашборда (CFO)
     else if (body.action === 'savePromo')                 result = savePromo(body);             // v7.414 акція: офіс — створює; директор — пропозиція
     else if (body.action === 'decidePromo')               result = decidePromo(body);           // v7.414 підтвердити/відхилити пропозицію (офіс)
     else if (body.action === 'recalcDiscounts')           result = recalcDiscounts(body);       // v7.414 перерахунок реєстру за місяць (dryRun за замовч.)
@@ -11875,6 +11878,101 @@ function getDataQuality(params){
     var _dqRes = {ok:true, ym:ym, loc:qLoc, issues:issues, ms:Date.now() - t0};
     try { _cacheGzPutBig(_dqKey, _dqRes, 300); } catch(_dc){}
     return _dqRes;
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.503 ДАШБОРД ОДНИМ ЗАПИТОМ — ЗНІМКИ
+//   dashSnapshotBuild() рахує частини дашборда для всієї мережі й кладе готові результати в CacheService
+//   (ключ dsnap1_<частина>, {at, v}, 6 год). Тригер dashSnapshotTick — кожні 15 хв, працює 7:00–21:00 за Києвом.
+//   getDashboard — одна відповідь з усіма частинами зі знімків (немає знімка — рахує й кладе). Роль:
+//   директор — лише своя локація (картки / Payment / «Оплати» / якість даних / табель обрізаються; &force=1 — наживо по його файлу);
+//   R&D — без «Оплат» (боргів); CFO — ще ЗП й OPEX. Лише читання: нічого не пише в таблиці, лише кеш.
+// ═══════════════════════════════════════════════════════════════════════════
+var DSNAP_TTL = 21600;
+function _dsYm(off){ var t = new Date(), d = new Date(t.getFullYear(), t.getMonth() + (off || 0), 1); return Utilities.formatDate(d, 'Europe/Kiev', 'yyyy-MM'); }
+function _dsAtt(ym, loc){
+  var a = ym + '-01', last = Utilities.formatDate(new Date(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)), 0), 'Europe/Kiev', 'yyyy-MM-dd'),
+      today = Utilities.formatDate(new Date(), 'Europe/Kiev', 'yyyy-MM-dd');
+  var p = {from:a, to:(last < today ? last : today), format:'compact', kind:'kids'}; if (loc) p.loc = loc;
+  var r = getAttendance({parameter:p}); r.ym = ym; return r;
+}
+var DSNAP_FN = {
+  roster:    function(){ return _groupCanonRows(getClients({mode:'roster', format:'compact'})); },
+  caps:      function(){ return getLocationCapacity(); },
+  komp:      function(){ return getKomplektaciyaData({year:String(new Date().getFullYear()), tab:''}); },
+  kompPrev:  function(){ return getKomplektaciyaData({year:String(new Date().getFullYear() - 1), tab:''}); },
+  norms:     function(){ return getGroupNorms(); },
+  ratings:   function(){ return getVyhovatelRatings({year:String(new Date().getFullYear()), month:''}); },
+  payLive:   function(){ return _groupCanonRows(getPaymentsLive({nocache:'1'}), true); },
+  payments:  function(){ return _groupCanonRows(getPayments(), true); },
+  attCur:    function(){ return _dsAtt(_dsYm(0)); },
+  attPrev:   function(){ return _dsAtt(_dsYm(-1)); },
+  dq:        function(){ return getDataQuality({nocache:'1'}); },
+  salOv:     function(){ return getSalaryOverview(String(new Date().getFullYear()), true); },
+  salOvPrev: function(){ return getSalaryOverview(String(new Date().getFullYear() - 1), true); },
+  opexOv:    function(){ return getOpexOverview(String(new Date().getFullYear()), '', true); }
+};
+function _dsPut(part, v){ var snap = {at:new Date().toISOString(), v:v}; if (v && v.ok !== false) _cacheGzPutBig('dsnap1_' + part, snap, DSNAP_TTL); return snap; }
+function dashSnapshotBuild(parts){
+  var t0 = Date.now(), done = {};
+  (parts || Object.keys(DSNAP_FN)).forEach(function(k){
+    var t1 = Date.now();
+    try { _dsPut(k, DSNAP_FN[k]()); done[k] = Date.now() - t1; } catch(e){ done[k] = 'помилка: ' + (e && e.message); }
+  });
+  Logger.log('[dashSnapshotBuild] %s мс %s', Date.now() - t0, JSON.stringify(done));
+  return {ok:true, ms:Date.now() - t0, parts:done};
+}
+function dashSnapshotTick(){
+  var h = Number(Utilities.formatDate(new Date(), 'Europe/Kiev', 'H'));
+  if (h < 7 || h >= 21) return;
+  var lock = LockService.getScriptLock(); if (!lock.tryLock(1000)) return;   // попередній прогін ще йде
+  try { dashSnapshotBuild(); } finally { try { lock.releaseLock(); } catch(_l){} }
+}
+function setupDashSnapshotTrigger(body){
+  var a = null; try { a = _getActor((_CURRENT_AUTH && _CURRENT_AUTH.id) || (body && body.actorId)); } catch(_a){}
+  if (!(a && (_roleKey(a.role) === 'cfo' || Number(a.id) === 1))) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var had = 0;
+  ScriptApp.getProjectTriggers().forEach(function(t){ if (t.getHandlerFunction() === 'dashSnapshotTick'){ ScriptApp.deleteTrigger(t); had++; } });
+  ScriptApp.newTrigger('dashSnapshotTick').timeBased().everyMinutes(15).create();
+  return {ok:true, replaced:had, note:'dashSnapshotTick кожні 15 хв (працює 7:00–21:00 за Києвом)'};
+}
+function getDashboard(params){
+  try {
+    params = params || {};
+    var t0 = Date.now(), force = String(params.force || '') === '1', au = _CURRENT_AUTH, a = null;
+    if (au) a = au; else { try { a = _getActor(Number(params.actorId) || 0); } catch(_a){} }
+    var role = a ? _roleKey(a.role) : '', cfo = role === 'cfo' || !!(a && Number(a.id) === 1), dir = _dirAuth();
+    var parts = ['roster','caps','komp','kompPrev','norms','ratings','attCur','attPrev','payLive','dq'];
+    if (role !== 'rnd_director') parts.push('payments');
+    if (cfo) parts.push('salOv','salOvPrev','opexOv');
+    var out = {}, ats = [], DIRF = {roster:'getClients', payLive:'getPaymentsLive', payments:'getPayments', dq:'getDataQuality'};
+    parts.forEach(function(k){
+      try {
+        var snap = null;
+        if (force && dir && /^(payLive|dq|attCur|attPrev)$/.test(k)){            // директор: наживо лише його файл
+          var v = k === 'payLive' ? _groupCanonRows(getPaymentsLive({nocache:'1', loc:dir.loc}), true)
+                : k === 'dq' ? getDataQuality({nocache:'1', loc:dir.loc})
+                : _dsAtt(_dsYm(k === 'attCur' ? 0 : -1), dir.loc);
+          snap = {at:new Date().toISOString(), v:v};
+        } else {
+          if (!force) snap = _cacheGzGetBig('dsnap1_' + k);
+          if (!snap) snap = _dsPut(k, DSNAP_FN[k]());
+        }
+        var val = snap.v;
+        if (dir && DIRF[k]) val = _dirFilter(DIRF[k], val, dir);
+        out[k] = val; ats.push(snap.at);
+      } catch(e){ out[k] = {ok:false, error:String(e && e.message || e)}; }
+    });
+    if (dir && out.roster && out.roster.headers){                                // табель директора — лише його діти
+      var iI = out.roster.headers.indexOf('ID'), ids = {};
+      (out.roster.rows || []).forEach(function(r){ ids[String(r[iI]).trim()] = 1; });
+      ['attCur','attPrev'].forEach(function(k){ var A = out[k]; if (!A || !A.data || Array.isArray(A.data)) return;
+        var d2 = {}; Object.keys(A.data).forEach(function(d){ var o = {}; Object.keys(A.data[d]).forEach(function(id){ if (ids[String(id).trim()]) o[id] = A.data[d][id]; }); d2[d] = o; });
+        var c = {}; Object.keys(A).forEach(function(x){ c[x] = A[x]; }); c.data = d2; out[k] = c; });
+    }
+    ats.sort();
+    return {ok:true, builtAt:ats[0] || new Date().toISOString(), parts:out, role:role, scopedTo:dir ? dir.loc : '', ms:Date.now() - t0};
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 

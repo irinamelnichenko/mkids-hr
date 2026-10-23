@@ -1100,6 +1100,31 @@ function freezeEmps(){
 const CRM_BDAY_CACHE_KEY = 'crm_clients_bday_cache_v4';   // v7.423: +Лише додаткові   // v7.336: +status (roster)
 const CRM_BDAY_TTL = 3600 * 1000; // 1 година
 // v7.462: maxAge — наскільки свіжими мають бути картки (мс). Дашборд просить ≤ 5 хв; 1 — примусово з сервера.
+// v7.503: розбір відповіді getClients (roster, compact) у S.crm — спільний для ensureClientsLoaded і getDashboard.
+function _crmApplyRoster(j){
+  const _H = (j && j.headers) || null;
+  const rows = _normRows(_H ? (j.rows||[]).map(function(a){ var o={}; for (var i=0;i<_H.length;i++) o[_H[i]]=a[i]; return o; }) : ((j && j.data) || []));   // v7.110: типізовані значення → рядки
+  const crm = {};
+  for (let i=0; i<rows.length; i++) {
+    const row = rows[i];
+    const name = String(row['ПІБ дитини'] || '');
+    const loc = String(row['Локація'] || '');
+    const group = String(row['Група'] || '');
+    if (!name && !loc) continue;
+    const id = row['ID'] || _childId(name, group, loc);
+    crm[id] = {
+      id: id,
+      name: name,
+      loc: loc,
+      group: group,
+      bday: String(row['Дата народження'] || ''),
+      status: String(row['Статус'] || 'active'),   // v7.336: без статусу _isCurrentKid рахував і випускників/розірваних
+      dopOnly: /^(так|true|1|yes|✓|x)$/i.test(String(row['Лише додаткові'] || '').trim())   // v7.423 окремо від звичайних
+    };
+  }
+  S.crm = crm; S._crmAt = Date.now();
+  try { safeSetItem(CRM_BDAY_CACHE_KEY, JSON.stringify({data: crm, ts: Date.now()})); } catch(e) {}
+}
 async function ensureClientsLoaded(maxAge){
   const ttl = maxAge || CRM_BDAY_TTL;
   if (S.crm && Object.keys(S.crm).length && Date.now() - (S._crmAt || 0) < ttl) return;
@@ -1115,28 +1140,7 @@ async function ensureClientsLoaded(maxAge){
     const r = await fetch(_tokUrl(authScriptUrl() + '?action=getClients&mode=roster&format=compact' + (ttl <= 1 ? '&nocache=1' : '')), {redirect:'follow'});   // v7.336 roster: 6 полів замість 28
     if (!r.ok) throw new Error(r.status);
     const j = await r.json();
-    const _H = (j && j.headers) || null;
-    const rows = _normRows(_H ? (j.rows||[]).map(function(a){ var o={}; for (var i=0;i<_H.length;i++) o[_H[i]]=a[i]; return o; }) : ((j && j.data) || []));   // v7.110: типізовані значення → рядки
-    const crm = {};
-    for (let i=0; i<rows.length; i++) {
-      const row = rows[i];
-      const name = String(row['ПІБ дитини'] || '');
-      const loc = String(row['Локація'] || '');
-      const group = String(row['Група'] || '');
-      if (!name && !loc) continue;
-      const id = row['ID'] || _childId(name, group, loc);
-      crm[id] = {
-        id: id,
-        name: name,
-        loc: loc,
-        group: group,
-        bday: String(row['Дата народження'] || ''),
-        status: String(row['Статус'] || 'active'),   // v7.336: без статусу _isCurrentKid рахував і випускників/розірваних
-        dopOnly: /^(так|true|1|yes|✓|x)$/i.test(String(row['Лише додаткові'] || '').trim())   // v7.423 окремо від звичайних
-      };
-    }
-    S.crm = crm; S._crmAt = Date.now();
-    try { safeSetItem(CRM_BDAY_CACHE_KEY, JSON.stringify({data: crm, ts: Date.now()})); } catch(e) {}
+    _crmApplyRoster(j);   // v7.503: розбір — спільний із getDashboard
   } catch(e) {
     console.warn('ensureClientsLoaded failed:', e);
     S.crm = S.crm || {};
@@ -3711,7 +3715,52 @@ window.addEventListener('mkids:fresh', function(e){
   S._salOv={}; S._opexOv={}; S._ratingsY={};
   renderDash();
 });
+// ─── v7.503: ДАШБОРД ОДНИМ ЗАПИТОМ — getDashboard (готові знімки бекенда, тригер кожні 15 хв 7–21) ───
+//   Відповідь розкладаємо в ті самі змінні, що й окремі завантажувачі (S.crm, S._komp, S._payFull, S._attDashM, S._dq…),
+//   тож ті бачать свіжі дані й на бекенд не ходять. «Оплати-Рік» (4,4 МБ) у знімок не вміщається — окремим запитом.
+//   Збій / старий бекенд — працюють окремі завантажувачі, як раніше.
+async function _ensureDashSnap(force){
+  if(S._dsLoading) return S._dsLoading;
+  if(!force && S._ds && S._ds.ok && Date.now()-(S._dsAt||0)<DASH_LIVE_TTL) return;
+  S._dsLoading=(async function(){
+    try{ var r=await fetch(_tokUrl(authScriptUrl()+'?action=getDashboard'+(force?'&force=1':'')),{redirect:'follow'}); var j=await r.json();
+      if(j&&j.ok&&j.parts){ _dsApply(j); S._ds={ok:true,builtAt:j.builtAt,ms:j.ms}; } else S._ds={ok:false,error:(j&&j.error)||'немає відповіді'}; }
+    catch(e){ S._ds={ok:false,error:String(e&&e.message||e)}; }
+    S._dsAt=Date.now(); S._dsLoading=null;
+  })();
+  return S._dsLoading;
+}
+function _dsApply(j){
+  var P=j.parts||{}, now=Date.now(), y=new Date().getFullYear(), ok=function(x){ return !!x && x.ok!==false; };
+  var isHR=isNetworkRole(S.user.role), loc=isHR?'':String(S.user.loc||'');
+  if(ok(P.roster)) _crmApplyRoster(P.roster);
+  if(ok(P.caps)){ S._locCaps=P.caps.data||{}; S._capsAt=now; }
+  S._komp=S._komp||{}; S._kompAt=S._kompAt||{};
+  if(ok(P.komp)){ S._komp[y]=P.komp; S._kompAt[y]=now; }
+  if(ok(P.kompPrev)){ S._komp[y-1]=P.kompPrev; S._kompAt[y-1]=now; }
+  if(ok(P.norms)) S._grpNorms=P.norms.norms||{};
+  if(ok(P.ratings)){ S._ratingsY=S._ratingsY||{}; S._ratingsY[y]=P.ratings; }
+  if(ok(P.payLive)&&Array.isArray(P.payLive.data)){ S._payFull=P.payLive.data; S._payAt=P.payLive.builtAt?new Date(P.payLive.builtAt).getTime():now; S._payLive=true; S._payLoadedAt=now; }
+  if(ok(P.payments)&&Array.isArray(P.payments.data)){ S._payMon={ok:true,data:P.payments.data,updated:P.payments.updated||'',month:P.payments.month||''}; S._payMonAt=now; }
+  S._attDashM=S._attDashM||{};
+  ['attCur','attPrev'].forEach(function(k){ var A=P[k]; if(!ok(A)||!A.data||Array.isArray(A.data)||!A.ym) return;
+    S._attDashM[A.ym]={to:_attDashRange(A.ym).to, loc:loc, at:now, data:A.data}; });
+  if(ok(P.dq)) S._dq={at:now,data:P.dq};
+  S._salOv=S._salOv||{}; S._opexOv=S._opexOv||{};
+  if(ok(P.salOv)) S._salOv[y]=P.salOv; if(ok(P.salOvPrev)) S._salOv[y-1]=P.salOvPrev; if(ok(P.opexOv)) S._opexOv[y]=P.opexOv;
+}
+function dashSnapRefresh(){ if(S._dsBusy) return; S._dsBusy=true; _renderDashNow();
+  _ensureDashSnap(true).then(function(){ S._dsBusy=false; _renderDashNow(); try{ _attDashModalRender(); _riskModalRender(); _dqModalRender(); }catch(e){} }); }
+function _dashSnapLine(){
+  var D=S._ds, t=D&&D.ok&&D.builtAt?new Date(D.builtAt):null, hm=t?('0'+t.getHours()).slice(-2)+':'+('0'+t.getMinutes()).slice(-2):'';
+  return '<div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--gray);margin:-4px 0 10px">'
+    +(S._dsBusy?'⏳ перераховую…':(hm?'Дані дашборда на <b>'+hm+'</b>':(D&&!D.ok?'⚠️ знімок недоступний — дані окремими запитами':'⏳ завантажую…')))
+    +'<button type="button" class="btn btn-secondary btn-sm" onclick="dashSnapRefresh()"'+(S._dsBusy?' disabled':'')+' title="Перерахувати зараз (повз знімок)">🔄</button></div>';
+}
 function renderDash(){
+  // v7.503: спершу — один запит getDashboard (знімки); окремі завантажувачі після нього бачать готові дані
+  if(!S._dsTried){ S._dsTried=true; _renderDashNow(); _ensureDashSnap().then(function(){ if(S.view==='dashboard') renderDash(); }); return; }
+  _ensureDashSnap().then(_dashSoftRerender);
   // лінива підгрузка — кожне джерело по готовності тихо перемальовує
   ensureClientsLoaded(DASH_LIVE_TTL).then(_dashSoftRerender);   // v7.462 картки не старші 5 хв
   _ensureLocCaps().then(_dashSoftRerender);
@@ -5058,6 +5107,7 @@ function _renderDashNow(){
       ${_sc.upr?`<span style="font-size:11px;color:var(--gray)">Управління немає у файлі «Комплектація» — KPI договорів і причини розірвання по ньому порожні</span>`:''}
     </div>`:'';
   set('main',`
+    ${_dashSnapLine()}
     ${scopeBar}
     <div class="stats-grid">
       <div class="stat-card"${_tileClick('kids')}><div class="stat-icon si-g">👶</div><div><div class="stat-val">${totalKids}</div><div class="stat-lbl">Дітей${isHR?'':' — '+myLoc}${_arrow('kids')}</div></div></div>
