@@ -1,5 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.516
+// m.kids CRM — Google Apps Script v7.517
+// v7.517: subLocMoveRecords — записи дітей Школи Кар'єрної під «Кар'єрною» з 01.09 → «Школа Кар'єрна» (Табель, заняття предметників,
+//   додаткові; без дублів, копії аркушів, undo). Перенесені заняття садок оплачував — exportPredmetnykyToSalary хоста рахує їх і далі
+//   (властивість PRED_HOST_PAID_IDS), тож Salary не змінюється.
 // v7.516: директор кількох локацій («Користувачі» → «Локація» через кому, Кар'єрна + Школа Кар'єрна): _dirAuth — усі його локації,
 //   &loc з його списку звужує відповідь до неї; запис (POST) — лише в його локації (FORBIDDEN_LOC); права предметників, співробітників,
 //   карти, відновлення картки, нової картки — за _actorHasLoc; getPredmetnyky віддає лише його локації (_predOnlyLocs).
@@ -7376,7 +7379,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.516', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.517', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -7624,6 +7627,7 @@ function doPost(e) {
     else if (body.action === 'invoiceAutoMatchRange')     result = invoiceAutoMatchRange(body); // v7.411 автозвірка заявок за період (CFO, dryRun за замовч.)
     else if (body.action === 'invoiceAutoSet')            result = invoiceAutoSet(body);        // v7.411 вимикач автозвірки (CFO)
     else if (body.action === 'invoiceReopen')             result = invoiceReopen(body);         // v7.411 відкат «оплачено» (CFO, dryRun за замовч.)
+    else if (body.action === 'subLocMoveRecords')         result = subLocMoveRecords(body);        // v7.517 перенос записів дітей під-локації з хоста (CFO, dryRun)
     else if (body.action === 'setUserLocs')               result = setUserLocs(body);              // v7.511 кілька локацій користувачу (CFO, dryRun)
     else if (body.action === 'setupDashSnapshotTrigger')  result = setupDashSnapshotTrigger(body);   // v7.503 тригер знімків дашборда (CFO)
     else if (body.action === 'savePromo')                 result = savePromo(body);             // v7.414 акція: офіс — створює; директор — пропозиція
@@ -9807,6 +9811,137 @@ function groupRenameApply(body){
     });
     if (!dryRun){ try { _cacheBump('clients'); _cacheBump('fill'); _cacheBump('pay'); } catch(_c){} }
     return {ok:true, dryRun:dryRun, files:out, names:recs};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { if (lock){ try { lock.releaseLock(); } catch(_l){} } }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.517 ПЕРЕНОС ЗАПИСІВ ДІТЕЙ ПІД-ЛОКАЦІЇ З ХОСТА (доручення CFO 23.10.2026: Школа Кар'єрна ← Кар'єрна, з 01.09.2026).
+//   Діти — картки «Клієнтів» з Локацією = під-локація. Три аркуші:
+//     Табель (CRM): локація хоста + ID дитини школи + дата ≥ from → локація школи, група — клас з картки;
+//     Predmetnyky_Lessons (CRM): локація хоста + група блоку школи («Школа») + дата ≥ from → локація школи;
+//     Додаткові_Відвідуваність (CONFIG): локація хоста + ПІБ дитини школи + дата ≥ from → локація школи.
+//   Дубль (такий самий запис уже під школою) — не чіпаємо, показуємо в collisions.
+//   ЗП: перенесені заняття предметників садок оплачував — їхні id лягають у властивість PRED_HOST_PAID_IDS,
+//   і exportPredmetnykyToSalary хоста рахує їх далі (Salary не змінюється). Нові заняття школи садку не йдуть.
+//   POST subLocMoveRecords {sub:"Школа Кар'єрна", from:"2026-09-01", dryRun(за замовч. true)}; запис — лише CFO,
+//   перед записом копія кожного аркуша, що змінюється (без копії — запису немає); у відповіді undo.
+// ═══════════════════════════════════════════════════════════════════════════
+var PRED_HOST_PAID_PROP = 'PRED_HOST_PAID_IDS';
+function _predHostPaidIds(sub){
+  var m = {}; try { m = JSON.parse(PropertiesService.getScriptProperties().getProperty(PRED_HOST_PAID_PROP) || '{}') || {}; } catch(_p){}
+  return sub ? (m[sub] || []) : m;
+}
+function subLocMoveRecords(body){
+  var lock = null;
+  try {
+    body = body || {};
+    var dryRun = (body.dryRun !== false);
+    var a = _promoActor(body);
+    if (!(a && (_roleKey(a.role) === 'cfo' || Number(a.id) === 1))) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+    if (!dryRun && a.founder) return FOUNDER_READONLY;
+    var sub = trim(body.sub || "Школа Кар'єрна"), SL = _subLocOf(sub);
+    if (!SL) return {ok:false, error:'Не під-локація: ' + sub};
+    var host = SL.host, from = trim(body.from || '2026-09-01');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) return {ok:false, error:'from: РРРР-ММ-ДД'};
+    if (!dryRun){ lock = LockService.getScriptLock(); if (!lock.tryLock(30000)) return {ok:false, error:'LOCK_TIMEOUT'}; }
+    var ss = getCRMSpreadsheet(), tz = ss.getSpreadsheetTimeZone() || 'Europe/Kiev';
+    var same = function(x, y){ return _nameFold(trim(x)) === _nameFold(trim(y)); };
+
+    // діти під-локації — за картками
+    var csh = ss.getSheetByName(SHEET_CLIENTS), cv = csh.getDataRange().getValues(), ch = cv[0].map(function(x){ return trim(x); });
+    var cI = ch.indexOf('ID'), cN = ch.indexOf('ПІБ дитини'), cL = ch.indexOf('Локація'), cG = ch.indexOf('Група');
+    var kidsById = {}, kidsByName = {};
+    for (var r = 1; r < cv.length; r++){
+      if (!same(cv[r][cL], sub)) continue;
+      var k = {id:trim(cv[r][cI]), name:trim(cv[r][cN]), group:trim(cv[r][cG]) || SL.group};
+      if (k.id) kidsById[k.id] = k; if (k.name) kidsByName[_nameFold(k.name)] = k;
+    }
+    var out = {ok:true, dryRun:dryRun, sub:sub, host:host, from:from,
+               kids:Object.keys(kidsById).map(function(id){ return kidsById[id].name + ' (' + kidsById[id].group + ')'; }), sheets:{}};
+    var plans = [];
+
+    // 1) Табель
+    (function(){
+      var sh = ss.getSheetByName(SHEET_ATTENDANCE), v = sh.getDataRange().getValues(), have = {}, rows = [], coll = [];
+      for (var i = 1; i < v.length; i++){ var d = _attRowIso(v[i][0], tz); if (d >= from && same(v[i][3], sub)) have[d + '|' + trim(v[i][1])] = 1; }
+      for (var j = 1; j < v.length; j++){
+        var iso = _attRowIso(v[j][0], tz), cid = trim(v[j][1]);
+        if (!iso || iso < from || !same(v[j][3], host) || !kidsById[cid]) continue;
+        var rec = {row:j + 1, date:iso, child:trim(v[j][2]) || kidsById[cid].name, group:trim(v[j][4]), status:trim(v[j][5])};
+        if (have[iso + '|' + cid]){ coll.push(rec); continue; }
+        rec.newGroup = kidsById[cid].group; rows.push(rec);
+      }
+      plans.push({key:'Табель', sh:sh, rows:rows, coll:coll, apply:function(x){ sh.getRange(x.row, 4, 1, 2).setValues([[sub, x.newGroup]]); },
+                  undo:function(x){ return {row:x.row, loc:host, group:x.group}; }});
+    })();
+
+    // 2) Заняття предметників
+    (function(){
+      var sh = _getPredLessonsSheet(), v = sh.getDataRange().getValues(), have = {}, rows = [], coll = [];
+      var key = function(row){ return _predGroupKey(row[3]) + '|' + trim(row[4]) + '|' + _predDateToISO(row[5]); };
+      for (var i = 1; i < v.length; i++){ if (Number(v[i][0]) && same(v[i][2], sub) && _predDateToISO(v[i][5]) >= from) have[key(v[i])] = 1; }
+      for (var j = 1; j < v.length; j++){
+        var id = Number(v[j][0]), iso = _predDateToISO(v[j][5]);
+        if (!id || iso < from || !same(v[j][2], host) || _predGroupKey(v[j][3]) !== _predGroupKey(SL.group)) continue;
+        var rec = {row:j + 1, id:id, date:iso, group:trim(v[j][3]), subject:trim(v[j][4])};
+        if (have[key(v[j])]){ coll.push(rec); continue; }
+        rows.push(rec);
+      }
+      plans.push({key:'Predmetnyky_Lessons', sh:sh, rows:rows, coll:coll, apply:function(x){ sh.getRange(x.row, 3).setValue(sub); },
+                  undo:function(x){ return {row:x.row, id:x.id, loc:host}; }});
+    })();
+
+    // 3) Додаткові (CONFIG)
+    (function(){
+      var sh = _getAttendanceSheet(false); if (!sh){ out.sheets['Додаткові_Відвідуваність'] = {count:0, note:'аркуша немає'}; return; }
+      var v = sh.getDataRange().getValues(), have = {}, rows = [], coll = [];
+      var iso = function(c){ return c instanceof Date ? _dopDateISO(c) : _predDateToISO(c); };
+      var key = function(row){ return iso(row[1]) + '|' + _nameFold(row[4]) + '|' + trim(row[5]); };
+      for (var i = 1; i < v.length; i++){ if (same(v[i][2], sub) && iso(v[i][1]) >= from) have[key(v[i])] = 1; }
+      for (var j = 1; j < v.length; j++){
+        var d = iso(v[j][1]);
+        if (!d || d < from || !same(v[j][2], host) || !kidsByName[_nameFold(v[j][4])]) continue;
+        var rec = {row:j + 1, id:v[j][0], date:d, child:trim(v[j][4]), group:trim(v[j][3]), activity:trim(v[j][6])};
+        if (have[key(v[j])]){ coll.push(rec); continue; }
+        rows.push(rec);
+      }
+      plans.push({key:'Додаткові_Відвідуваність', sh:sh, rows:rows, coll:coll, apply:function(x){ sh.getRange(x.row, 3).setValue(sub); },
+                  undo:function(x){ return {row:x.row, id:x.id, loc:host}; }});
+    })();
+
+    plans.forEach(function(p){
+      var dates = p.rows.map(function(x){ return x.date; }).sort(), by = {};
+      p.rows.forEach(function(x){ var n = x.child || x.subject || '', g = x.group; by[n + ' · ' + g] = (by[n + ' · ' + g] || 0) + 1; });
+      out.sheets[p.key] = {count:p.rows.length, dates:dates.length ? dates[0] + '…' + dates[dates.length - 1] : '', byChildOrSubject:by,
+                           collisions:p.coll, rows:p.rows};
+    });
+    // предмети перенесених занять, яких немає в каталозі школи — у сітці школи їх не буде видно
+    var subj = {}; ((out.sheets.Predmetnyky_Lessons || {}).rows || []).forEach(function(x){ subj[x.subject] = 1; });
+    var catS = _predSubjectsForLoc(sub); out.subjectsMissingInSubCatalog = Object.keys(subj).filter(function(s){ return catS.indexOf(s) < 0; });
+    if (dryRun) return out;
+
+    // запис: копія кожного аркуша зі змінами; без копії — нічого не пишемо
+    var todo = plans.filter(function(p){ return p.rows.length; }), backups = {};
+    for (var b = 0; b < todo.length; b++){
+      var nm = _safeBackupSheet(todo[b].sh, 'subloc');
+      if (!nm) return {ok:false, error:'Копія аркуша «' + todo[b].key + '» не вдалась — запису немає', backups:backups};
+      backups[todo[b].key] = nm;
+    }
+    var undo = {};
+    todo.forEach(function(p){ p.rows.forEach(p.apply); undo[p.key] = p.rows.map(p.undo); });
+    var moved = ((out.sheets.Predmetnyky_Lessons || {}).rows || []).map(function(x){ return x.id; });
+    if (moved.length){
+      var m = _predHostPaidIds(''), cur = m[sub] || [];
+      moved.forEach(function(id){ if (cur.indexOf(id) < 0) cur.push(id); });
+      m[sub] = cur; PropertiesService.getScriptProperties().setProperty(PRED_HOST_PAID_PROP, JSON.stringify(m));
+    }
+    SpreadsheetApp.flush();
+    try { var c = CacheService.getScriptCache(), t = String(Date.now());
+      [host, sub, 'ALL'].forEach(function(l){ c.put('attver_' + l, t, 21600); }); c.put('ver_fill', t, 21600);
+      _bumpPredVer(); ['att','clients','fill'].forEach(_cacheBump); } catch(_c){}
+    out.backups = backups; out.undo = undo; out.hostPaidIds = _predHostPaidIds(sub).length;
+    return out;
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
   finally { if (lock){ try { lock.releaseLock(); } catch(_l){} } }
 }
@@ -38418,6 +38553,14 @@ function exportPredmetnykyToSalary(params){
     // рахунок через _dopCountSessions (обʼєднання схлопують групи одного дня в 1).
     // subjNormKey = _dopNormGroup(subject) (стійке співставлення з subject_norm).
     var lessons = _loadPredLessons(loc, 0, 0, true);   // v7.198: з empKey
+    // v7.517: заняття, перенесені в під-локацію (subLocMoveRecords), садок оплачував — рахуємо їх і далі тут
+    _subLocsOfHost(loc).forEach(function(sl){
+      var paid = _predHostPaidIds(sl.loc); if (!paid.length) return;
+      var set = {}; paid.forEach(function(id){ set[Number(id)] = 1; });
+      _loadPredLessons(sl.loc, 0, 0, true).forEach(function(L){ if (set[Number(L.id)]) lessons.push(L); });
+    });
+    if (_subLocOf(loc)){ var _hp = {}; _predHostPaidIds(loc).forEach(function(id){ _hp[Number(id)] = 1; });   // …а під-локація — ні (без подвійної оплати)
+      lessons = lessons.filter(function(L){ return !_hp[Number(L.id)]; }); }
     var gbdBySubj = {};
     // v7.198 (Б.1): ПАРАЛЕЛЬНИЙ кошик по парі (empKey|subject). Нарахування поки
     // читає gbdBySubj — поведінка не змінюється. Перемикання на пари робиться в
