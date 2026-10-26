@@ -1,5 +1,9 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.517
+// m.kids CRM — Google Apps Script v7.519
+// v7.519: moveDiscountRecord — запис реєстру знижок на інший місяць (стає ручним; A1 Крошкіна вересень → листопад);
+//   ручний A1 має пріоритет — правило його не переносить і не дублює; addLocPaymentStudyDiscount — і з листопада, якщо клітинка ручна.
+// v7.518: addLocPaymentStudyDiscount — ручна знижка на навчання за місяць до старту реєстру (напр. «Приведи друга» за вересень):
+//   клітинка = «як було − сума», наступний місяць, що посилався на неї (=AT82), відв'язується — знижка не тече в жовтень–грудень.
 // v7.517: subLocMoveRecords — записи дітей Школи Кар'єрної під «Кар'єрною» з 01.09 → «Школа Кар'єрна» (Табель, заняття предметників,
 //   додаткові; без дублів, копії аркушів, undo). Перенесені заняття садок оплачував — exportPredmetnykyToSalary хоста рахує їх і далі
 //   (властивість PRED_HOST_PAID_IDS), тож Salary не змінюється.
@@ -7379,7 +7383,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.517', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.519', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -7693,6 +7697,8 @@ function doPost(e) {
     else if (body.action === 'closeMonth')                result = closeMonth(body || {});           // v7.91 закрити місяць
     else if (body.action === 'mergeClientDuplicate')     result = mergeClientDuplicate(body || {}); // v7.44 злиття дублів
     else if (body.action === 'patchClientCell')          result = patchClientCell(body || {});    // v7.44 точкова правка клітинки
+    else if (body.action === 'moveDiscountRecord')         result = moveDiscountRecord(body);        // v7.519 перенос запису реєстру знижок на інший місяць (CFO, dryRun)
+    else if (body.action === 'addLocPaymentStudyDiscount') result = addLocPaymentStudyDiscount(body);   // v7.518 ручна знижка на навчання за місяць без поломки ланцюжка (CFO, dryRun)
     else if (body.action === 'setLocPaymentBudget')      result = (body.dryRun !== false || _promoIsOffice(_promoActor(body))) ? setLocPaymentBudget(body || {}) : PROMO_DENIED; // v7.57; v7.414 запис — лише офіс
     else if (body.action === 'addLocPaymentDop')         result = addLocPaymentDop(body || {}); // v7.87 +delta у «Бюджет доп»
     else if (body.action === 'setLocPaymentName')        result = setLocPaymentName(body || {});   // v7.60 вирівняти імʼя Payment під картку
@@ -26185,6 +26191,101 @@ function setLocPaymentBudget(body){
   } catch(e){ return {ok:false,error:String(e&&e.message||e)}; }
 }
 
+// v7.519: ПЕРЕНОС ЗАПИСУ РЕЄСТРУ НА ІНШИЙ МІСЯЦЬ (рішення CFO; напр. A1 Крошкіна вересень → листопад, перший неоплачений місяць).
+//   Запис стає ручним («ручна», «діє»), ключ лишається (A1|… — правило не дасть знижку вдруге й не перенесе назад).
+//   Payment цим не змінюється: ручну клітинку — addLocPaymentStudyDiscount. POST moveDiscountRecord {id, ym, reason, dryRun(true)}; лише CFO.
+function moveDiscountRecord(body){
+  var lock = null;
+  try {
+    body = body || {};
+    var a = _promoActor(body); if (!_promoIsCfo(a)) return PROMO_DENIED;
+    var id = trim(body.id || ''), ym = _promoYM(body.ym), dryRun = (body.dryRun !== false), reason = trim(body.reason || '');
+    if (!id || !ym) return {ok:false, error:'id і ym (yyyy-MM) обовʼязкові'};
+    if (!reason) return {ok:false, error:'reason обовʼязковий'};
+    var t = _promoRead(DISC_TAB, DISC_HEADER), r = t.rows.filter(function(x){ return String(x['ID запису']) === id; })[0];
+    if (!r) return {ok:false, error:'Запис не знайдено: ' + id};
+    var from = _promoYM(r['Місяць']);
+    if (from === ym) return {ok:false, error:'Запис уже в ' + ym};
+    if (_isMonthClosed(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)))) return _closedMonthError(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)));
+    var dup = t.rows.filter(function(x){ return x !== r && String(x['ID картки']) === String(r['ID картки']) && _promoYM(x['Місяць']) === ym &&
+      String(x['ID акції']) === String(r['ID акції']) && String(x['Статус']) !== 'скасована'; });
+    if (dup.length) return {ok:false, error:'У ' + ym + ' вже є запис ' + dup[0]['ID запису'] + ' цієї акції для цієї дитини'};
+    var c = _promoCards().byId[String(r['ID картки'])], base = c ? _promoFeeFor(c, ym) : _promoNum(r['База']), pct = _promoNum(r['%']);
+    var amount = pct > 0 ? Math.round(base * pct / 100) : _promoNum(r['Сума, грн']);
+    var now = _promoStamp(), who = _promoWho(a);
+    var after = {'Місяць':ym, 'База':base, 'Сума, грн':amount, 'Статус':'діє', 'Джерело':'ручна', 'Оновлено':now,
+      'Підстава':String(r['Підстава']) + ' | перенесено ' + from + ' → ' + ym + ': ' + reason + ' (' + who + ', ' + now + ')'};
+    var before = {}; Object.keys(after).forEach(function(h){ before[h] = r[h]; });
+    var res = {ok:true, dryRun:dryRun, id:id, name:String(r['ПІБ']), loc:String(r['Локація']), promoId:String(r['ID акції']), key:String(r['Ключ']), before:before, after:after,
+      note:'Payment не змінюється — клітинку «Бюджет навч» правте окремо (ручна клітинка: addLocPaymentStudyDiscount)'};
+    if (dryRun) return res;
+    lock = LockService.getScriptLock(); lock.waitLock(30000);
+    _promoTextCols(t.sh, DISC_HEADER, ['Місяць','ID картки','ID запису']);
+    Object.keys(after).forEach(function(h){ t.sh.getRange(r._row, DISC_HEADER.indexOf(h) + 1).setValue(after[h]); });
+    SpreadsheetApp.flush();
+    res.undo = before;
+    return res;
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { if (lock){ try { lock.releaseLock(); } catch(_l){} } }
+}
+
+// v7.518: РУЧНА ЗНИЖКА НА НАВЧАННЯ ЗА МІСЯЦЬ (до старту реєстру, напр. «Приведи друга» за вересень) — без поломки ланцюжка.
+//   «Бюджет навч» часто = формула попереднього місяця (AT82 = AO82, AY82 = AT82 …). Число в клітинці місяця (setLocPaymentBudget)
+//   протягло б знижку на всі наступні місяці. Тут: клітинка місяця = «<як було>-сума» (=AO82-10750 / =21500-10750),
+//   а наступний місяць, якщо він посилався на цю клітинку (=AT82), отримує те, на що спиралась вона (=AO82 / 21500).
+//   POST addLocPaymentStudyDiscount {loc, name, year, month, amount, reason, dryRun(за замовч. true)}; запис — лише CFO; журнал правок.
+function addLocPaymentStudyDiscount(body){
+  try {
+    body = body || {};
+    var a = _promoActor(body); if (!_promoIsCfo(a)) return PROMO_DENIED;
+    var loc = trim(body.loc || ''), name = trim(body.name || ''), year = Number(body.year) || new Date().getFullYear();
+    var month = Number(body.month), amount = Math.round(Number(body.amount) * 100) / 100, dryRun = (body.dryRun !== false);
+    if (!loc || !name || !(month >= 1 && month <= 12) || !(amount > 0)) return {ok:false, error:'потрібні loc, name, month 1–12, amount > 0'};
+    if (_isMonthClosed(year, month)) return _closedMonthError(year, month);
+    if (PAY_READONLY_YEARS[year]) return {ok:false, error:'Файли ' + year + ' — лише читання'};
+    var ym = year + '-' + ('0' + month).slice(-2);
+    var reg = _getLocationPaymentRegistry(loc); if (!reg || !reg.sheetId) return {ok:false, error:'Локацію не знайдено в реєстрі'};
+    var ss = SpreadsheetApp.openById(reg.sheetId), sh = ss.getSheetByName(reg.sheetName) || ss.getSheets()[0], data = sh.getDataRange().getValues();
+    var cpm = reg.colsPerMonth || 5, LO = _paymentLayout(cpm), nk = _normNameVac(name), r0 = -1, hits = 0;
+    for (var r = 3; r < data.length; r++){ var nm = trim(String(data[r][0] || '')); if (!nm || isGroupHeaderRow(data[r], 1)) continue;
+      if (_normNameVac(nm) === nk){ if (r0 < 0) r0 = r; hits++; } }
+    if (r0 < 0) return {ok:false, error:'Рядок «' + name + '» не знайдено у файлі ' + loc};
+    r0 = _payRedirect(data, r0, month, loc, year);
+    var col = 1 + (month - 1) * cpm + LO.budNavch + 1, rg = sh.getRange(r0 + 1, col), a1 = rg.getA1Notation();
+    var f0 = String(rg.getFormula() || ''), v0 = Number(rg.getValue()) || 0;
+    // v7.519: з PROMO_START_YM клітинка на формулі реєстру (=база−SUMIFS) — знижка лише через реєстр; ручна клітинка — можна тут
+    if (ym >= PROMO_START_YM && PROMO_FORMULA_RE.test(f0)) return {ok:false, error:a1 + ' — формула реєстру знижок: знижку вносьте в реєстр «Знижки»'};
+    if (!(v0 >= amount)) return {ok:false, error:a1 + ' = ' + v0 + ' — менше за знижку ' + amount};
+    var after = (f0 ? f0 : '=' + v0) + '-' + amount;
+    var plan = {loc:loc, name:trim(String(data[r0][0])), row:r0 + 1, rowsWithName:hits, cell:a1, before:f0 || v0, beforeValue:v0, after:after, afterValue:v0 - amount};
+    if (month < 12){
+      var rn = sh.getRange(r0 + 1, col + cpm), fn = String(rn.getFormula() || '');
+      plan.next = {cell:rn.getA1Notation(), before:fn || rn.getValue(), value:rn.getValue()};
+      if (new RegExp('^=\\s*\\$?' + _colLetter(col - 1) + '\\$?' + (r0 + 1) + '\\s*$', 'i').test(fn)) plan.next.after = f0 ? f0 : v0;   // ланцюжок — відв'язуємо
+    }
+    var res = {ok:true, dryRun:dryRun, year:year, month:month, amount:amount, reason:String(body.reason || ''), plan:plan};
+    if (dryRun) return res;
+    var lock = LockService.getScriptLock(); try { lock.waitLock(30000); } catch(_l){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+    try {
+      if (plan.next && plan.next.after != null){
+        var rn2 = sh.getRange(plan.row, col + cpm);
+        if (typeof plan.next.after === 'string') rn2.setFormula(plan.next.after); else rn2.setValue(plan.next.after);
+      }
+      rg.setFormula(after);
+      SpreadsheetApp.flush();
+      plan.afterValue = rg.getValue(); if (plan.next) plan.next.afterValue = sh.getRange(plan.row, col + cpm).getValue();
+      var who = body.by || _promoWho(a), j = [{by:who, route:'addLocPaymentStudyDiscount', loc:loc, name:plan.name, year:year, month:month,
+                col:'Бюджет-навч ' + a1, before:plan.before, after:after, reason:body.reason}];
+      if (plan.next && plan.next.after != null) j.push({by:who, route:'addLocPaymentStudyDiscount', loc:loc, name:plan.name, year:year, month:month + 1,
+                col:'Бюджет-навч ' + plan.next.cell + ' (ланцюжок)', before:plan.next.before, after:plan.next.after, reason:'відв\'язано від ' + a1 + ', щоб знижка не перейшла далі'});
+      _moneyJournalLog(j);
+      try { _cacheBump('money'); _cacheBump('pay'); } catch(_c){}
+    } finally { try { lock.releaseLock(); } catch(_r){} }
+    res.undo = {cell:plan.cell, before:plan.before, next:plan.next && plan.next.after != null ? {cell:plan.next.cell, before:plan.next.before} : null};
+    return res;
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
 // POST ?action=addLocPaymentDop {loc, month, year, name, delta, dryRun}.
 // v7.87: ДОДАЄ delta до колонки «Бюджет доп» (offset +3 — НЕ +4/навчання!) у пер-лок Payment-файлі.
 // Не перезаписує абсолютом → перенесені борги/переплати не затираються. Якщо after<0 — відмова.
@@ -40937,6 +41038,7 @@ function recalcDiscounts(body){
       if (!r && st === 'скасована'){ des.warnings.push(e.name + ' (' + e.loc + '), ' + e.promoId + ': у картці немає «Суми договору» — знижку не пораховано'); return; }
       if (!r){
         var other = a1Elsewhere[e.key];
+        if (other && String(other['Джерело']) === 'ручна') return;   // v7.519: A1 перенесено вручну (moveDiscountRecord) — правило не переносить і не дублює
         if (other){ if (!_isMonthClosed(Number(_promoYM(other['Місяць']).slice(0, 4)), Number(_promoYM(other['Місяць']).slice(5, 7)))) moved.push({_row:other._row, key:e.key, loc:String(other['Локація']), ym:_promoYM(other['Місяць'])}); else return; }
         added.push(rowO); return;
       }
