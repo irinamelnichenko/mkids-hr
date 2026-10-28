@@ -1,5 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.519
+// m.kids CRM — Google Apps Script v7.520
+// v7.520: лікарняний одним рядком — % за шкалою від усіх роб. днів поспіль, одна знижка на місяць після місяця початку
+//   (було: сума ділилась по місяцях, у картці «3% + 3%»). Картки — одразу (recalcSickAbsences); Payment — за перемикачем
+//   SICK_ONE_ROW (setSickOneRow, CFO); diagSickOneRow — різниця по мережі без запису.
 // v7.519: moveDiscountRecord — запис реєстру знижок на інший місяць (стає ручним; A1 Крошкіна вересень → листопад);
 //   ручний A1 має пріоритет — правило його не переносить і не дублює; addLocPaymentStudyDiscount — і з листопада, якщо клітинка ручна.
 // v7.518: addLocPaymentStudyDiscount — ручна знижка на навчання за місяць до старту реєстру (напр. «Приведи друга» за вересень):
@@ -7383,7 +7386,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.519', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.520', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -7527,6 +7530,7 @@ function doGet(e) {
     else if (action === 'getPromoReport')              result = getPromoReport(e.parameter || {});         // v7.414 звіт по акціях
     else if (action === 'getPromoAttention')           result = getPromoAttention(e.parameter || {});      // v7.414 передоплати-здогадки + пропозиції
     else if (action === 'getPlan2027')                result = getPlan2027(e.parameter || {});            // v7.508 план набору 2027 (лише читання, CFO / власник)
+    else if (action === 'diagSickOneRow')             result = diagSickOneRow(e.parameter || {});          // v7.520 лікарняний одним рядком — різниця для Payment (лише читання)
     else if (action === 'getTriggerStats')            result = getTriggerStats(e.parameter || {});        // v7.504 час роботи тригерів по днях (квота)
     else if (action === 'getDashboard')               result = getDashboard(e.parameter || {});           // v7.503 дашборд одним запитом зі знімків
     else if (action === 'getDataQuality')             result = getDataQuality(e.parameter || {});         // v7.485 якість даних (лише читання)
@@ -7697,6 +7701,7 @@ function doPost(e) {
     else if (body.action === 'closeMonth')                result = closeMonth(body || {});           // v7.91 закрити місяць
     else if (body.action === 'mergeClientDuplicate')     result = mergeClientDuplicate(body || {}); // v7.44 злиття дублів
     else if (body.action === 'patchClientCell')          result = patchClientCell(body || {});    // v7.44 точкова правка клітинки
+    else if (body.action === 'setSickOneRow')             result = setSickOneRow(body);             // v7.520 перемикач: лікарняний одним рядком у Payment (CFO, dryRun)
     else if (body.action === 'moveDiscountRecord')         result = moveDiscountRecord(body);        // v7.519 перенос запису реєстру знижок на інший місяць (CFO, dryRun)
     else if (body.action === 'addLocPaymentStudyDiscount') result = addLocPaymentStudyDiscount(body);   // v7.518 ручна знижка на навчання за місяць без поломки ланцюжка (CFO, dryRun)
     else if (body.action === 'setLocPaymentBudget')      result = (body.dryRun !== false || _promoIsOffice(_promoActor(body))) ? setLocPaymentBudget(body || {}) : PROMO_DENIED; // v7.57; v7.414 запис — лише офіс
@@ -25247,17 +25252,11 @@ function _recalcSickBreakdown(fromISO, toISO, fee){
   var totalDays = arr.reduce(function(s, x){ return s + x.workDays; }, 0);
   var totalPct = _sickNewScalePct(totalDays);
   var totalDisc = Math.round(fee * totalPct / 100);
-  var sorted = arr.slice().sort(function(a, b){ return b.workDays - a.workDays; });
-  var acc = 0;
-  for (var i = 0; i < sorted.length; i++){
-    var mi = sorted[i];
-    mi.weeks = Math.min(4, Math.ceil(mi.workDays / 5));   // лише для відображення
-    mi.amount = (i === sorted.length - 1) ? Math.max(0, totalDisc - acc)
-              : (totalDays > 0 ? Math.round(totalDisc * mi.workDays / totalDays) : 0);
-    if (i !== sorted.length - 1) acc += mi.amount;
-    mi.pct = (fee > 0) ? Math.round(mi.amount / fee * 100) : 0;
-  }
-  return {bd: arr, totalPct: totalPct, totalAmount: totalDisc};
+  // v7.520: один рядок — місяць після місяця початку хвороби (дзеркало calcAbsMonthBreakdown)
+  var nm = _nextMonth(f.getMonth() + 1, f.getFullYear());
+  var row = {month: nm.year + '-' + _pad2v(nm.month), workDays: totalDays, weeks: Math.min(4, Math.ceil(totalDays / 5)),
+             pct: totalPct, amount: totalDisc, fromMonth: arr.length ? arr[0].month : ''};
+  return {bd: arr.length ? [row] : [], totalPct: totalPct, totalAmount: totalDisc};
 }
 // Перерахувати ВСІ sick-записи клієнта денною шкалою + patchClientAbsences (пряма
 // заміна absences-колонки, без union/повного рядка). Відпустку/інші типи НЕ чіпає.
@@ -25275,19 +25274,21 @@ function recalcSickAbsences(body){
   var changed = [];
   abs.forEach(function(a){
     if (!a || a.type !== 'sick') return;
-    if (a.status === 'rejected' || a.status === 'cancelled') return;
+    if ((a.status === 'rejected' || a.status === 'cancelled') && body.includeRejected !== true) return;   // v7.520: includeRejected — і відхилені
     if (!a.from || !a.to) return;
     var r = _recalcSickBreakdown(a.from, a.to, fee);
     var oldPct = a.totalPct, oldAmt = a.totalAmount;
-    if (oldPct !== r.totalPct || oldAmt !== r.totalAmount){
+    var oldBd = JSON.stringify(a.monthsBreakdown || []);
+    if (oldPct !== r.totalPct || oldAmt !== r.totalAmount || oldBd !== JSON.stringify(r.bd)){   // v7.520: і зміна розбивки (один рядок)
       a.monthsBreakdown = r.bd;
       a.totalPct = r.totalPct;
       a.totalAmount = r.totalAmount;
-      changed.push({from: a.from, to: a.to, workDays: a.workDays,
+      changed.push({from: a.from, to: a.to, workDays: a.workDays, status: a.status || '', oldBreakdown: JSON.parse(oldBd), newBreakdown: r.bd,
                     oldPct: oldPct, newPct: r.totalPct, oldAmount: oldAmt, newAmount: r.totalAmount});
     }
   });
   if (!changed.length) return {ok:true, id:id, name: rowo['ПІБ дитини'], changed: [], note: 'нічого не змінилось (уже денна шкала)'};
+  if (body.dryRun === true) return {ok:true, dryRun:true, id:id, name: rowo['ПІБ дитини'], loc: rowo['Локація'], fee: fee, changed: changed};   // v7.520
   var res = patchClientAbsences(id, abs);
   if (!res.ok) return res;
   Logger.log('[recalcSickAbsences] id=%s changed=%s', id, JSON.stringify(changed));
@@ -25485,7 +25486,43 @@ function recalcVacationBreakdowns(body){
 // ХВОРОБА: розбивка знижки по місяцях — дзеркало calcAbsMonthBreakdown(type='sick').
 // Роб.дні Пн-Пт (свята НЕ виключаються). Вимір PER-RECORD (один запис поспіль).
 // Шкала обирається _sickUseNew(loc, місяць_from). Стара гілка = попередня логіка 1-в-1.
-function _sickMonthBreakdown(fromISO, toISO, fee, loc){
+// v7.520 ЛІКАРНЯНИЙ ОДНИМ РЯДКОМ (рішення CFO 28.10.2026): % за шкалою договору від УСІХ роб. днів поспіль періоду,
+//   без поділу по місяцях; знижка одна — на наступний місяць після місяця ПОЧАТКУ хвороби. Раніше сума ділилась між
+//   місяцями пропорційно дням і кожна частина йшла в свій наступний місяць (у карті округлення давало «3%» + «3%»).
+//   Для Payment діє за перемикачем SICK_ONE_ROW (setSickOneRow, CFO) — щоб нічні й ручні експорти не переписали Payment
+//   до підтвердження; diagSickOneRow показує різницю. Картки (monthsBreakdown) — нова логіка одразу.
+var SICK_ONE_ROW_PROP = 'SICK_ONE_ROW', _SICK_ONE_ROW_MEMO = null;
+function _sickOneRowOn(){
+  if (_SICK_ONE_ROW_MEMO === null){ try { _SICK_ONE_ROW_MEMO = PropertiesService.getScriptProperties().getProperty(SICK_ONE_ROW_PROP) === '1'; } catch(_p){ _SICK_ONE_ROW_MEMO = false; } }
+  return _SICK_ONE_ROW_MEMO;
+}
+function _sickWorkDaysByMonth(f, t){
+  var mmap = {}, cur = new Date(f.getTime());
+  while (cur <= t){
+    var wd = cur.getDay();
+    if (wd !== 0 && wd !== 6){
+      var y = cur.getFullYear(), mo = cur.getMonth() + 1, mk = y + '-' + _pad2v(mo);
+      if (!mmap[mk]) mmap[mk] = {ym: mk, y: y, m: mo, workDays: 0, weeks: 0, discount: 0};
+      mmap[mk].workDays++;
+    }
+    cur.setDate(cur.getDate() + 1);
+  }
+  return Object.keys(mmap).sort().map(function(k){ return mmap[k]; });
+}
+// mode: 'one' — одним рядком, 'split' — стара розбивка; без mode — за перемикачем SICK_ONE_ROW
+function _sickMonthBreakdown(fromISO, toISO, fee, loc, mode){
+  var oneRow = mode ? mode === 'one' : _sickOneRowOn();
+  if (oneRow){
+    var f1 = _vacParseISO(fromISO), t1 = _vacParseISO(toISO);
+    if (!f1 || !t1 || t1 < f1 || !(fee > 0)) return [];
+    var a1 = _sickWorkDaysByMonth(f1, t1); if (!a1.length) return [];
+    var days = a1.reduce(function(s, x){ return s + x.workDays; }, 0), pct = _sickNewScalePct(days);
+    // рядок — місяць ПОЧАТКУ: determineTargetMonth(sick) зсуне його на наступний
+    return [{ym: a1[0].ym, y: a1[0].y, m: a1[0].m, workDays: days, weeks: Math.min(4, Math.ceil(days / 5)), discount: Math.round(fee * pct / 100), pct: pct}];
+  }
+  return _sickMonthBreakdownSplit(fromISO, toISO, fee, loc);
+}
+function _sickMonthBreakdownSplit(fromISO, toISO, fee, loc){
   var f = _vacParseISO(fromISO), t = _vacParseISO(toISO);
   if (!f || !t || t < f || !(fee > 0)) return [];
   var mmap = {}, cur = new Date(f.getTime());
@@ -25529,6 +25566,50 @@ function _sickMonthBreakdown(fromISO, toISO, fee, loc){
     }
   }
   return arr;   // [{ym, y, m, workDays, weeks, discount}]
+}
+// v7.520: показ без запису — у кого зміниться знижка за лікарняний у Payment (стара розбивка → один рядок).
+//   GET diagSickOneRow[&loc=][&from=2026-01] — усі активні записи «sick» (не відхилені/скасовані; школи без знижок — поза),
+//   за кожну дитину й місяць Payment: було / стане. Нічого не пише.
+function diagSickOneRow(params){
+  try {
+    params = params || {};
+    var onlyLoc = trim(params.loc || ''), from = trim(params.from || ''), cli = getClients(); if (!cli.ok) return cli;
+    var out = [], same = 0, totalRecs = 0, rejected = [];
+    (cli.data || []).forEach(function(o){
+      var loc = trim(String(o['Локація'] || '')), name = trim(String(o['ПІБ дитини'] || ''));
+      if (!loc || !name || (onlyLoc && loc !== onlyLoc)) return;
+      var fee = Number(o['Сума договору']) || 0, ct = _vacContractType(_vacContractISO(o['Дата договору']), o['Група'], loc, name);
+      _vacParseAbsences(o['Відсутності (JSON)']).forEach(function(a){
+        if (!a || a.type !== 'sick' || !a.from || !a.to) return;
+        if (from && String(a.to).slice(0, 7) < from) return;
+        var bad = (a.status === 'rejected' || a.status === 'cancelled');
+        var route = function(mode){ var m = {}; if (ct === 'school-no-absence') return m;
+          _sickMonthBreakdown(a.from, a.to, fee, loc, mode).forEach(function(mb){ if (!(mb.discount > 0)) return;
+            var tg = determineTargetMonth(mb.m, mb.y, a.createdAt, 'sick'), k = tg.year + '-' + _pad2v(tg.month); m[k] = (m[k] || 0) + mb.discount; });
+          return m; };
+        var was = route('split'), now = route('one'), keys = {};
+        Object.keys(was).concat(Object.keys(now)).forEach(function(k){ keys[k] = 1; });
+        var diff = Object.keys(keys).sort().filter(function(k){ return (was[k] || 0) !== (now[k] || 0); }).map(function(k){ return {ym:k, was:was[k] || 0, now:now[k] || 0}; });
+        var days = _sickWorkDaysByMonth(_vacParseISO(a.from), _vacParseISO(a.to)).reduce(function(s, x){ return s + x.workDays; }, 0);
+        var rec = {name:name, loc:loc, from:a.from, to:a.to, status:a.status || '', workDays:days, fee:fee, pct:_sickNewScalePct(days),
+                   cardPctWas:a.totalPct, school:ct === 'school-no-absence', was:was, now:now, diff:diff};
+        if (bad){ if (diff.length) rejected.push(rec); return; }
+        totalRecs++;
+        if (diff.length) out.push(rec); else same++;
+      });
+    });
+    return {ok:true, oneRowOn:_sickOneRowOn(), records:totalRecs, unchanged:same, changed:out, rejectedOrCancelledWouldDiffer:rejected,
+            note:'Payment змінюється лише після setSickOneRow {on:true} і експорту знижок за місяцями з diff'};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+// POST setSickOneRow {on:true|false, dryRun(true)} — лише CFO. Вмикає нову логіку лікарняного для експорту в Payment.
+function setSickOneRow(body){
+  body = body || {};
+  var a = _promoActor(body); if (!_promoIsCfo(a)) return PROMO_DENIED;
+  var on = body.on === true, was = _sickOneRowOn();
+  if (body.dryRun !== false) return {ok:true, dryRun:true, was:was, will:on};
+  PropertiesService.getScriptProperties().setProperty(SICK_ONE_ROW_PROP, on ? '1' : '0'); _SICK_ONE_ROW_MEMO = on;
+  return {ok:true, dryRun:false, was:was, now:on};
 }
 var _VAC_SCHOOL_LOCS = ['Школа Осокорки','Школа 228','Онлайн школа'];   // fallback (плюс усі typ='Школа' з реєстру)
 // v7.103: множина шкільних локацій = тип «Школа» з реєстру + fallback-список.
