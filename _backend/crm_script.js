@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.520
+// m.kids CRM — Google Apps Script v7.521
+// v7.521: SICK_SPLIT_KEEP — окремі записи лікарняного (за id) лишаються зі старою розбивкою (Шахраюк Ніка); setSickOneRow
+//   {keepSplitIds}; recalcSickAbsences {absId, setStatus, note} — перерахунок одного запису й статус з позначкою в історії.
 // v7.520: лікарняний одним рядком — % за шкалою від усіх роб. днів поспіль, одна знижка на місяць після місяця початку
 //   (було: сума ділилась по місяцях, у картці «3% + 3%»). Картки — одразу (recalcSickAbsences); Payment — за перемикачем
 //   SICK_ONE_ROW (setSickOneRow, CFO); diagSickOneRow — різниця по мережі без запису.
@@ -7386,7 +7388,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.520', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.521', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -25274,6 +25276,7 @@ function recalcSickAbsences(body){
   var changed = [];
   abs.forEach(function(a){
     if (!a || a.type !== 'sick') return;
+    if (body.absId && String(a.id) !== String(body.absId)) return;   // v7.521: лише один запис
     if ((a.status === 'rejected' || a.status === 'cancelled') && body.includeRejected !== true) return;   // v7.520: includeRejected — і відхилені
     if (!a.from || !a.to) return;
     var r = _recalcSickBreakdown(a.from, a.to, fee);
@@ -25283,6 +25286,12 @@ function recalcSickAbsences(body){
       a.monthsBreakdown = r.bd;
       a.totalPct = r.totalPct;
       a.totalAmount = r.totalAmount;
+      if (body.setStatus && ['pending','processing','done','rejected','cancelled'].indexOf(String(body.setStatus)) >= 0 && a.status !== body.setStatus){   // v7.521
+        a.statusHistory = Array.isArray(a.statusHistory) ? a.statusHistory : [];
+        a.statusHistory.push({status: String(body.setStatus), at: new Date().toISOString(), by: String(body.by || 'CFO'), note: String(body.note || 'перераховано: лікарняний одним рядком (v7.520)')});
+        if (body.setStatus !== 'rejected') a.rejectReason = '';
+        a.status = String(body.setStatus);
+      }
       changed.push({from: a.from, to: a.to, workDays: a.workDays, status: a.status || '', oldBreakdown: JSON.parse(oldBd), newBreakdown: r.bd,
                     oldPct: oldPct, newPct: r.totalPct, oldAmount: oldAmt, newAmount: r.totalAmount});
     }
@@ -25496,6 +25505,12 @@ function _sickOneRowOn(){
   if (_SICK_ONE_ROW_MEMO === null){ try { _SICK_ONE_ROW_MEMO = PropertiesService.getScriptProperties().getProperty(SICK_ONE_ROW_PROP) === '1'; } catch(_p){ _SICK_ONE_ROW_MEMO = false; } }
   return _SICK_ONE_ROW_MEMO;
 }
+// v7.521: окремі записи лишаються зі старою розбивкою (рішення CFO 28.10: Шахраюк Ніка — 325 у листопаді) — id відсутностей
+var SICK_SPLIT_KEEP_PROP = 'SICK_SPLIT_KEEP', _SICK_KEEP_MEMO = null;
+function _sickKeepSplit(absId){
+  if (_SICK_KEEP_MEMO === null){ try { _SICK_KEEP_MEMO = JSON.parse(PropertiesService.getScriptProperties().getProperty(SICK_SPLIT_KEEP_PROP) || '[]') || []; } catch(_k){ _SICK_KEEP_MEMO = []; } }
+  return !!absId && _SICK_KEEP_MEMO.indexOf(String(absId)) >= 0;
+}
 function _sickWorkDaysByMonth(f, t){
   var mmap = {}, cur = new Date(f.getTime());
   while (cur <= t){
@@ -25587,12 +25602,12 @@ function diagSickOneRow(params){
           _sickMonthBreakdown(a.from, a.to, fee, loc, mode).forEach(function(mb){ if (!(mb.discount > 0)) return;
             var tg = determineTargetMonth(mb.m, mb.y, a.createdAt, 'sick'), k = tg.year + '-' + _pad2v(tg.month); m[k] = (m[k] || 0) + mb.discount; });
           return m; };
-        var was = route('split'), now = route('one'), keys = {};
+        var keep = _sickKeepSplit(a.id), was = route('split'), now = route(keep ? 'split' : 'one'), keys = {};   // v7.521: виняток — без змін
         Object.keys(was).concat(Object.keys(now)).forEach(function(k){ keys[k] = 1; });
         var diff = Object.keys(keys).sort().filter(function(k){ return (was[k] || 0) !== (now[k] || 0); }).map(function(k){ return {ym:k, was:was[k] || 0, now:now[k] || 0}; });
         var days = _sickWorkDaysByMonth(_vacParseISO(a.from), _vacParseISO(a.to)).reduce(function(s, x){ return s + x.workDays; }, 0);
         var rec = {name:name, loc:loc, from:a.from, to:a.to, status:a.status || '', workDays:days, fee:fee, pct:_sickNewScalePct(days),
-                   cardPctWas:a.totalPct, school:ct === 'school-no-absence', was:was, now:now, diff:diff};
+                   cardPctWas:a.totalPct, school:ct === 'school-no-absence', keepSplit:keep, absId:a.id || '', was:was, now:now, diff:diff};
         if (bad){ if (diff.length) rejected.push(rec); return; }
         totalRecs++;
         if (diff.length) out.push(rec); else same++;
@@ -25606,10 +25621,13 @@ function diagSickOneRow(params){
 function setSickOneRow(body){
   body = body || {};
   var a = _promoActor(body); if (!_promoIsCfo(a)) return PROMO_DENIED;
-  var on = body.on === true, was = _sickOneRowOn();
-  if (body.dryRun !== false) return {ok:true, dryRun:true, was:was, will:on};
-  PropertiesService.getScriptProperties().setProperty(SICK_ONE_ROW_PROP, on ? '1' : '0'); _SICK_ONE_ROW_MEMO = on;
-  return {ok:true, dryRun:false, was:was, now:on};
+  var on = body.on === true, was = _sickOneRowOn(), keepWas = (_sickKeepSplit(''), _SICK_KEEP_MEMO.slice());
+  var keep = Array.isArray(body.keepSplitIds) ? body.keepSplitIds.map(function(x){ return trim(x); }).filter(Boolean) : keepWas;   // v7.521
+  if (body.dryRun !== false) return {ok:true, dryRun:true, was:was, will:on, keepSplitWas:keepWas, keepSplitWill:keep};
+  var pr = PropertiesService.getScriptProperties();
+  pr.setProperty(SICK_SPLIT_KEEP_PROP, JSON.stringify(keep)); _SICK_KEEP_MEMO = keep;   // виняток — раніше за перемикач
+  pr.setProperty(SICK_ONE_ROW_PROP, on ? '1' : '0'); _SICK_ONE_ROW_MEMO = on;
+  return {ok:true, dryRun:false, was:was, now:on, keepSplit:keep};
 }
 var _VAC_SCHOOL_LOCS = ['Школа Осокорки','Школа 228','Онлайн школа'];   // fallback (плюс усі typ='Школа' з реєстру)
 // v7.103: множина шкільних локацій = тип «Школа» з реєстру + fallback-список.
@@ -40656,7 +40674,7 @@ function _vacDiscForTarget(clientsData, loc, year, month){
         if (isPreschool && !_vacIsSummerPeriod(a.from, a.to)) return;
         _vacMonthBreakdown(a.from, a.to, fee, abs, contractISO, a.id).forEach(function(mb){ _accrue(mb, 'vacation', a); });
       } else {
-        _sickMonthBreakdown(a.from, a.to, fee, loc).forEach(function(mb){ _accrue(mb, 'sick', a); });
+        _sickMonthBreakdown(a.from, a.to, fee, loc, _sickKeepSplit(a.id) ? 'split' : undefined).forEach(function(mb){ _accrue(mb, 'sick', a); });   // v7.521 виняток
       }
     });
   });
