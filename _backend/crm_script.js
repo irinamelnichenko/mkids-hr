@@ -1,5 +1,10 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.521
+// m.kids CRM — Google Apps Script v7.526
+// v7.526: нова картка, рядок якої в Payment уже був, — агрегат «Оплати» локації перезбирається одразу (табель і «Додаткові» бачать дитину без нічного прогону)
+// v7.525: fillPaymentRowLikeNeighbor — fromCol/toCol; не копіює формули без посилань на свій рядок (власні суми сусіда) і IMPORTRANGE
+// v7.524: перейменування групи в картках (renameClientGroup) і заголовка Payment (renamePayGroupHeader) переносить назву у відмітках допів, заняттях, Табелі, поділах, обʼєднаннях (_grpRenameRecords, як groupRenameApply); diagDopMarksHistory — відмітки місяця проти версій файлу CONFIG і копій BKP_; restoreDopMarks — повернення точно як було (CFO, dryRun); setDopMarkGroup — група окремих відміток → чинна
+// v7.523: fillPaymentRowLikeNeighbor — рядок дитини в Payment отримує формули рядка-сусіда (лише порожні клітинки, лише свій рядок); Пуща, Кіщенко Міланія BQ63:CB63
+// v7.522: PRED_SUBJECT_ALIASES — заняття під старою назвою позиції каталогу читаються як чинна (Школа Осокорки: «Психолог Ірина» → «Психолог Діана»); журнал не переписується
 // v7.521: SICK_SPLIT_KEEP — окремі записи лікарняного (за id) лишаються зі старою розбивкою (Шахраюк Ніка); setSickOneRow
 //   {keepSplitIds}; recalcSickAbsences {absId, setStatus, note} — перерахунок одного запису й статус з позначкою в історії.
 // v7.520: лікарняний одним рядком — % за шкалою від усіх роб. днів поспіль, одна знижка на місяць після місяця початку
@@ -7388,7 +7393,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.521', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.526', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -7513,6 +7518,7 @@ function doGet(e) {
     else if (action === 'getPredmetnyCatalog')        result = getPredmetnyCatalog(e.parameter && e.parameter.loc || '');
     else if (action === 'getPredmetnyMarks')          result = getPredmetnyMarks(e.parameter || {});
     else if (action === 'getHrAudit')                  result = getHrAudit(e.parameter || {});                                          // v7.149 read-only аудит
+    else if (action === 'diagDopMarksHistory')       result = diagDopMarksHistory(e.parameter || {});                                 // v7.524 read-only: відмітки допів проти версій файлу
     else if (action === 'getErrLog')                   result = getErrLog(e.parameter || {});                                           // v7.294 CFO/HR: TG_Err за N днів + стан гарантії
     else if (action === 'repairPredmetnykyLessons')    result = repairPredmetnykyLessons(Number(e.parameter && e.parameter.actorId || 0), {dryRun:true}); // v7.149 GET = ЗАВЖДИ dryRun, запис лише POST-ом
     else if (action === 'getTasks')                   result = getTasks(e.parameter || {});
@@ -7664,6 +7670,8 @@ function doPost(e) {
     else if (body.action === 'opex27SetAuto')             result = opex27SetAuto(body);                     // v7.445 вмикач автоперерахунку OPEX 2027 (CFO)
     else if (body.action === 'opex27RecalcAll')           result = opex27RecalcAll(body);                   // v7.444 «Перерахувати всі сади» (CFO; dryRun)
     else if (body.action === 'groupRenameApply')          result = groupRenameApply(body);                  // v7.435 стандарт назв груп (CFO; dryRun)
+    else if (body.action === 'setDopMarkGroup')           result = setDopMarkGroup(body);                    // v7.524 група окремих відміток → чинна (CFO; dryRun)
+    else if (body.action === 'restoreDopMarks')           result = restoreDopMarks(body);                    // v7.524 відмітки допів з версії (CFO; dryRun)
     else if (body.action === 'groupRecordsCanon')         result = groupRecordsCanon(body);                 // v7.513 старі назви груп у відмітках → «Групи_Мапа» (CFO; dryRun)
     else if (body.action === 'setPayAuto')                result = setPayAuto(body);                        // v7.433 вимикач автозапуску (CFO)
     else if (body.action === 'pilot2027Remove')           result = pilot2027Remove(body);       // v7.432 відкат пілоту 2027 (CFO, dryRun)
@@ -7799,6 +7807,7 @@ function doPost(e) {
     else if (body.action === 'movePaymentRowsToGroup')  result = movePaymentRowsToGroup(body || {});   // v7.356 перенесення рядків у блок іншої групи (dryRun, перевірка SUM заголовків)
     else if (body.action === 'movePaymentRowsToBlock')  result = movePaymentRowsToBlock(body || {});   // v7.248 перенесення рядків у блок «Вибули»
     else if (body.action === 'undoPaymentMoveBlock')    result = undoPaymentMoveBlock(body || {});     // v7.297 зворотний хід: рядки з «Вибули» на свої місця (dryRun за замовч.)
+    else if (body.action === 'fillPaymentRowLikeNeighbor') result = fillPaymentRowLikeNeighbor(body || {});   // v7.523 рядок дитини: формули як у сусіда, лише в порожні
     else if (body.action === 'setLocSheetFormulas')     result = setLocSheetFormulas(body || {});      // v7.300 точковий запис формул CF/PL (dryRun за замовч.)
     else if (body.action === 'repriceAttendanceMarks')  result = repriceAttendanceMarks(body || {});   // v7.306 переоцінка відміток (dryRun за замовч.; date або year+month)
     else if (body.action === 'purgePaymentGhostRows')  result = purgePaymentGhostRows(body || {});   // v7.233 рядки-привиди в Payment (dryRun за замовч.)
@@ -8208,7 +8217,9 @@ function renameClientGroup(body){
         sh.getRange(1, iUpd+1, vals.length, 1).setValues(colU);
       }
     }
-    return {ok:true, dryRun:dryRun, loc:loc, oldGroup:oldG, newGroup:newG, matched:matchedRows.length, rows:names.slice(0,60)};
+    var _m = {}; _m[oldG] = newG;   // v7.524: відмітки, заняття, Табель, поділи, обʼєднання — на нову назву разом з картками
+    var records = _grpRenameRecords(loc, _m, dryRun || !matchedRows.length, [SHEET_CLIENTS]);
+    return {ok:true, dryRun:dryRun, loc:loc, oldGroup:oldG, newGroup:newG, matched:matchedRows.length, rows:names.slice(0,60), records:records};
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
   finally { if (lock){ try { lock.releaseLock(); } catch(_){} } }
 }
@@ -8773,11 +8784,13 @@ function renamePayGroupHeader(body){
                   'потраплять у попередній блок. Запис скасовано.';
       return res;
     }
-    if (dryRun || !hits.length) return res;
+    var _rm = {}; hits.forEach(function(h){ if (h.wasHeader) _rm[h.from] = h.to; });   // v7.524: заголовок групи → і записи
+    if (dryRun || !hits.length){ if (Object.keys(_rm).length) res.records = _grpRenameRecords(loc, _rm, true); return res; }
 
     hits.forEach(function(h){ sh.getRange(h.row, 1).setValue(h.to); });
     SpreadsheetApp.flush();
     res.renamed = hits.length;
+    if (Object.keys(_rm).length) res.records = _grpRenameRecords(loc, _rm, false);
     return res;
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
@@ -9793,34 +9806,9 @@ function groupRenameApply(body){
     // 3) назви в картках і записах
     var names = items.filter(function(x){ return x.kind === 'name'; }), byLoc = {};
     names.forEach(function(x){ (byLoc[x.loc] = byLoc[x.loc] || {})[trim(String(x.old))] = trim(String(x.new)); });
-    var crm = getCRMSpreadsheet(), cfg = SpreadsheetApp.openById(CONFIG_SHEET_ID), recs = [];
-    var tables = [
-      [crm, SHEET_CLIENTS, 'Локація', 'Група', false],
-      [crm, SHEET_ATTENDANCE, 'Локація', 'Група', false],
-      [crm, PRED_LESSONS_TAB, 'Location', 'Group', false],
-      [crm, PRED_NORMS_LOC_TAB, 'Локація', 'Група', false],
-      [cfg, ATTENDANCE_SHEET_NAME, 'Локація', 'Група', false],
-      [cfg, DOP_SPLITS_SHEET_NAME, 'Локація', 'Група', false],
-      [cfg, PRED_SPLITS_SHEET_NAME, 'Локація', 'Група', false],
-      [cfg, DOP_MERGES_SHEET_NAME, 'Локація', 'Групи(JSON)', true],
-      [cfg, PRED_MERGES_SHEET_NAME, 'Локація', 'Групи(JSON)', true]
-    ];
-    Object.keys(byLoc).forEach(function(loc){
-      var map = byLoc[loc], r = {loc:loc, map:map, changed:{}};
-      tables.forEach(function(t){
-        var sh = t[0].getSheetByName(t[1]); if (!sh) return;
-        if (dryRun){
-          var hd = sh.getLastRow() > 1 ? sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(function(x){ return trim(String(x)); }) : [];
-          var cL = hd.indexOf(t[2]), cG = hd.indexOf(t[3]); if (cL < 0 || cG < 0) return;
-          var n = sh.getLastRow() - 1, Lv = sh.getRange(2, cL + 1, n, 1).getValues(), Gv = sh.getRange(2, cG + 1, n, 1).getValues(), c = 0;
-          for (var i = 0; i < n; i++){ if (_nameFold(Lv[i][0]) !== _nameFold(loc)) continue; var v = String(Gv[i][0] || '');
-            if (t[4]){ if (Object.keys(map).some(function(o){ return v.indexOf('"' + o + '"') !== -1; })) c++; } else if (map.hasOwnProperty(trim(v))) c++; }
-          if (c) r.changed[t[1]] = c;
-        } else {
-          var c2 = _grpRenameColumn(sh, t[2], t[3], loc, map, t[4]); if (c2) r.changed[t[1]] = c2;
-        }
-      });
-      recs.push(r);
+    var recs = [];
+    Object.keys(byLoc).forEach(function(loc){                                   // v7.524: спільний помічник
+      recs.push({loc:loc, map:byLoc[loc], changed:_grpRenameRecords(loc, byLoc[loc], dryRun)});
     });
     if (!dryRun){ try { _cacheBump('clients'); _cacheBump('fill'); _cacheBump('pay'); } catch(_c){} }
     return {ok:true, dryRun:dryRun, files:out, names:recs};
@@ -9955,6 +9943,179 @@ function subLocMoveRecords(body){
       _bumpPredVer(); ['att','clients','fill'].forEach(_cacheBump); } catch(_c){}
     out.backups = backups; out.undo = undo; out.hostPaidIds = _predHostPaidIds(sub).length;
     return out;
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { if (lock){ try { lock.releaseLock(); } catch(_l){} } }
+}
+
+// v7.524: ПЕРЕЙМЕНУВАННЯ ГРУПИ ПЕРЕНОСИТЬ ЗАПИСИ. Ті самі таблиці, що й groupRenameApply (v7.435): картки, Табель,
+//   заняття предметників і норми груп (CRM), відмітки допів, поділи й обʼєднання (CONFIG). Досі лише groupRenameApply
+//   переносив назву; renameClientGroup (картки) і renamePayGroupHeader (заголовок Payment) лишали записи на старій назві.
+//   skip — назви аркушів, які викликач уже оновив сам. dryRun — лише лічильники.
+function _grpRenameTables(){
+  var crm = getCRMSpreadsheet(), cfg = SpreadsheetApp.openById(CONFIG_SHEET_ID);
+  return [
+    [crm, SHEET_CLIENTS, 'Локація', 'Група', false],
+    [crm, SHEET_ATTENDANCE, 'Локація', 'Група', false],
+    [crm, PRED_LESSONS_TAB, 'Location', 'Group', false],
+    [crm, PRED_NORMS_LOC_TAB, 'Локація', 'Група', false],
+    [cfg, ATTENDANCE_SHEET_NAME, 'Локація', 'Група', false],
+    [cfg, DOP_SPLITS_SHEET_NAME, 'Локація', 'Група', false],
+    [cfg, PRED_SPLITS_SHEET_NAME, 'Локація', 'Група', false],
+    [cfg, DOP_MERGES_SHEET_NAME, 'Локація', 'Групи(JSON)', true],
+    [cfg, PRED_MERGES_SHEET_NAME, 'Локація', 'Групи(JSON)', true]
+  ];
+}
+function _grpRenameRecords(loc, map, dryRun, skip){
+  var changed = {}, sk = {};
+  (skip || []).forEach(function(n){ sk[n] = 1; });
+  _grpRenameTables().forEach(function(t){
+    if (sk[t[1]]) return;
+    var sh = t[0].getSheetByName(t[1]); if (!sh || sh.getLastRow() < 2) return;
+    if (dryRun){
+      var hd = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(function(x){ return trim(String(x)); });
+      var cL = hd.indexOf(t[2]), cG = hd.indexOf(t[3]); if (cL < 0 || cG < 0) return;
+      var n = sh.getLastRow() - 1, Lv = sh.getRange(2, cL + 1, n, 1).getValues(), Gv = sh.getRange(2, cG + 1, n, 1).getValues(), c = 0;
+      for (var i = 0; i < n; i++){ if (_nameFold(Lv[i][0]) !== _nameFold(loc)) continue; var v = String(Gv[i][0] || '');
+        if (t[4]){ if (Object.keys(map).some(function(o){ return v.indexOf('"' + o + '"') !== -1; })) c++; } else if (map.hasOwnProperty(trim(v))) c++; }
+      if (c) changed[t[1]] = c;
+    } else {
+      var c2 = _grpRenameColumn(sh, t[2], t[3], loc, map, t[4]); if (c2) changed[t[1]] = c2;
+    }
+  });
+  if (!dryRun && Object.keys(changed).length){ try { _bumpPredVer(); ['att','clients','fill'].forEach(_cacheBump); } catch(_c){} }
+  return changed;
+}
+
+// v7.524 READ-ONLY: ВІДМІТКИ ДОПІВ ПРОТИ ІСТОРІЇ ВЕРСІЙ. Аркуш «Додаткові_Відвідуваність» (CONFIG) з кожної версії файлу
+//   Drive у вікні [since, until] (CSV-експорт вкладки цієї версії) + копії аркуша BKP_… у CONFIG. Для відміток місяця
+//   month (РРРР-ММ) по локаціях locs (порожньо — усі): яких рядків (за id) зараз немає, і в яких змінились група / дитина /
+//   заняття / ціна. Нічого не пише. GET diagDopMarksHistory&month=2026-10&since=2026-10-01&until=2026-10-29&locs=Пуща,Житомир&max=40
+function diagDopMarksHistory(p){
+  try {
+    p = p || {};
+    var ym = trim(p.month || ''), since = trim(p.since || ''), until = trim(p.until || '') || '9999';
+    if (!/^\d{4}-\d{2}$/.test(ym)) return {ok:false, error:'month: РРРР-ММ'};
+    var locs = String(p.locs || '').split(',').map(function(x){ return _nameFold(trim(x)); }).filter(Boolean);
+    var max = Math.min(Number(p.max) || 40, 120), t0 = Date.now();
+    var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID), sh = ss.getSheetByName(ATTENDANCE_SHEET_NAME), tz = ss.getSpreadsheetTimeZone() || 'Europe/Kiev';
+    var mine = function(loc){ return !locs.length || locs.indexOf(_nameFold(loc)) >= 0; };
+    var iso = function(c){ if (c instanceof Date) return Utilities.formatDate(c, tz, 'yyyy-MM-dd'); var s = trim(String(c || ''));
+      var m = /^(\d{1,2})\.(\d{1,2})\.(\d{4})/.exec(s); if (m) return m[3] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[1]).slice(-2); return s.slice(0, 10); };
+    var pick = function(r){ return {id:Number(r[0]) || 0, date:iso(r[1]), loc:trim(String(r[2] || '')), group:trim(String(r[3] || '')), child:trim(String(r[4] || '')),
+      activityId:Number(r[5]) || 0, activity:trim(String(r[6] || '')), price:Number(r[7]) || 0, markedBy:trim(String(r[8] || '')), markedAt:String(r[9] || '')}; };
+    var now = {}, nowN = 0;
+    sh.getDataRange().getValues().slice(1).forEach(function(r){ var x = pick(r); if (!x.id || x.date.slice(0, 7) !== ym || !mine(x.loc)) return; now[x.id] = x; nowN++; });
+    var seen = {}, sources = [];
+    function take(label, rows){
+      var n = 0;
+      rows.forEach(function(r){ var x = pick(r); if (!x.id || x.date.slice(0, 7) !== ym || !mine(x.loc)) return; n++;
+        var s = seen[x.id]; if (!s){ seen[x.id] = {rec:x, first:label, last:label}; } else { s.last = label; s.rec = x; } });
+      sources.push({source:label, rows:n});
+    }
+    ss.getSheets().forEach(function(b){ var nm = b.getName(); if (nm.indexOf(_SAFE_BACKUP_PREFIX + ATTENDANCE_SHEET_NAME) === 0) take(nm, b.getDataRange().getValues().slice(1)); });
+    var tok = ScriptApp.getOAuthToken(), revs = [], pt = '';
+    do {
+      var r = UrlFetchApp.fetch('https://www.googleapis.com/drive/v3/files/' + CONFIG_SHEET_ID + '/revisions?pageSize=200&fields=nextPageToken,revisions(id,modifiedTime)' + (pt ? '&pageToken=' + encodeURIComponent(pt) : ''),
+        {headers:{Authorization:'Bearer ' + tok}, muteHttpExceptions:true});
+      if (r.getResponseCode() !== 200) return {ok:false, error:'Drive revisions HTTP ' + r.getResponseCode() + ': ' + r.getContentText().slice(0, 200)};
+      var j = JSON.parse(r.getContentText()); pt = j.nextPageToken || '';
+      (j.revisions || []).forEach(function(x){ var d = String(x.modifiedTime || '').slice(0, 10); if ((!since || d >= since) && d <= until) revs.push(x); });
+    } while (pt);
+    var step = Math.max(1, Math.ceil(revs.length / max)), used = [], skipped = 0;
+    for (var i = 0; i < revs.length; i += step){
+      if (Date.now() - t0 > 270000){ skipped = revs.length - i; break; }
+      var rv = revs[i], url = 'https://docs.google.com/spreadsheets/d/' + CONFIG_SHEET_ID + '/export?format=csv&gid=' + sh.getSheetId() + '&revision=' + encodeURIComponent(rv.id);
+      var x = UrlFetchApp.fetch(url, {headers:{Authorization:'Bearer ' + tok}, muteHttpExceptions:true});
+      if (x.getResponseCode() !== 200){ used.push({rev:rv.id, time:rv.modifiedTime, error:'HTTP ' + x.getResponseCode()}); continue; }
+      var csv = Utilities.parseCsv(x.getContentText()); take('rev ' + rv.id + ' ' + rv.modifiedTime, csv.slice(1)); used.push({rev:rv.id, time:rv.modifiedTime});
+    }
+    var missing = [], changed = [];
+    Object.keys(seen).forEach(function(id){
+      var s = seen[id], c = now[id];
+      if (!c){ s.rec.firstSeen = s.first; s.rec.lastSeen = s.last; missing.push(s.rec); return; }
+      var d = ['group','child','activityId','price','date'].filter(function(k){ return String(c[k]) !== String(s.rec[k]); });
+      if (d.length) changed.push({id:Number(id), fields:d, was:s.rec, now:c});
+    });
+    missing.sort(function(a, b){ return a.loc < b.loc ? -1 : a.loc > b.loc ? 1 : a.date < b.date ? -1 : 1; });
+    var byLoc = {}; missing.forEach(function(m){ var k = m.loc + ' · ' + m.group; byLoc[k] = (byLoc[k] || 0) + 1; });
+    return {ok:true, readOnly:true, month:ym, nowRows:nowN, revisionsInWindow:revs.length, revisionsRead:used.length, revisionsSkippedByTime:skipped,
+            sources:sources, missingCount:missing.length, missingByLocGroup:byLoc, missing:missing.slice(0, 2000), changedCount:changed.length, changed:changed.slice(0, 500)};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+// v7.524: ГРУПА ОКРЕМИХ ВІДМІТОК ДОПІВ → ЧИННА НАЗВА (Кар'єрна «Study-ki I Марина» → «Preschool», Бровари «Baby-ki 2» →
+//   «miniBaby-ki», жовтень 2026: стара назва блоку Payment, якої вже немає в групах локації). Лише колонка «Група»;
+//   id, дата, дитина, заняття, ціна, хто і коли відмітив — без змін. Нова група має бути серед чинних груп локації.
+//   POST setDopMarkGroup {ids:[…], loc, group, dryRun(за замовч. true)}; лише CFO; копія аркуша + HR_Audit.
+function setDopMarkGroup(body){
+  var lock = null;
+  try {
+    body = body || {};
+    var a = _promoActor(body); if (!(a && _roleKey(a.role) === 'cfo')) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+    var dryRun = (body.dryRun !== false), loc = trim(body.loc || ''), grp = trim(body.group || '');
+    var want = {}; (body.ids || []).forEach(function(x){ if (Number(x)) want[Number(x)] = 1; });
+    if (!loc || !grp || !Object.keys(want).length) return {ok:false, error:'потрібні loc, group, ids[]'};
+    var real = {}; try { real = _loadRealGroups(loc) || {}; } catch(_g){}
+    if ((real[loc] || []).indexOf(grp) < 0) return {ok:false, error:'«' + grp + '» немає серед груп локації: ' + (real[loc] || []).join(', ')};
+    var sh = _getAttendanceSheet(false), data = sh.getDataRange().getValues(), plan = [];
+    for (var i = 1; i < data.length; i++){
+      var x = _parseAttendanceRow(data[i]); if (!want[x.id]) continue;
+      if (x.loc !== loc){ return {ok:false, error:'Відмітка ' + x.id + ' — локація «' + x.loc + '», не «' + loc + '»'}; }
+      delete want[x.id];
+      if (x.group === grp) continue;
+      plan.push({row:i + 1, id:x.id, date:x.date, child:x.child, activity:x.activityName, price:x.price, from:x.group, to:grp});
+    }
+    var res = {ok:true, dryRun:dryRun, loc:loc, group:grp, toChange:plan.length, notFound:Object.keys(want).map(Number), plan:plan};
+    if (dryRun || !plan.length) return res;
+    lock = LockService.getScriptLock(); lock.waitLock(30000);
+    res.backup = _safeBackupSheet(sh, 'markgrp'); if (!res.backup) return {ok:false, error:'копію аркуша не створено — запис скасовано'};
+    plan.forEach(function(p){ sh.getRange(p.row, 4).setValue(p.to); });
+    SpreadsheetApp.flush();
+    _writeHrAuditRows(_marksActorInfo(body.actorId), 'dop_mark_group', plan.map(function(p){ return {rowNum:p.id, before:JSON.stringify({group:p.from}), after:JSON.stringify({group:p.to})}; }));
+    try { _cacheBump('att'); CacheService.getScriptCache().put('attver_' + loc, String(Date.now()), 21600); CacheService.getScriptCache().put('attver_ALL', String(Date.now()), 21600); } catch(_c){}
+    res.changed = plan.length;
+    return res;
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { if (lock){ try { lock.releaseLock(); } catch(_l){} } }
+}
+
+// v7.524: ВІДНОВЛЕННЯ ВІДМІТОК ДОПІВ ТОЧНО ЯК БУЛИ — з результату diagDopMarksHistory (missing). POST restoreDopMarks
+//   {rows:[{id,date,loc,group,child,activityId,activity,price,markedBy,markedAt}], dryRun(за замовч. true)}; лише CFO.
+//   Рядок повертається з тим самим id, якщо id вільний, інакше пропускається (не вигадуємо). Дубль тієї самої клітинки
+//   (дата + локація + дитина + заняття) — пропуск. Група — чинна назва за ключем (_predGroupKey), якщо така є в локації.
+function restoreDopMarks(body){
+  var lock = null;
+  try {
+    body = body || {};
+    var a = _promoActor(body); if (!(a && _roleKey(a.role) === 'cfo')) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+    var dryRun = (body.dryRun !== false), rows = body.rows || [];
+    if (!rows.length) return {ok:false, error:'rows[] порожній'};
+    var sh = _getAttendanceSheet(false), tz = sh.getParent().getSpreadsheetTimeZone() || 'Europe/Kiev';
+    var data = sh.getDataRange().getValues(), ids = {}, cells = {};
+    var ck = function(d, loc, child, act){ return d + '|' + _nameFold(loc) + '|' + _nameFold(child) + '|' + Number(act); };
+    for (var i = 1; i < data.length; i++){ var x = _parseAttendanceRow(data[i]); ids[x.id] = 1; cells[ck(x.date, x.loc, x.child, x.activityId)] = 1; }
+    var real = {}; try { real = _loadRealGroups('') || {}; } catch(_g){}
+    var canon = function(loc, g){ var k = _predGroupKey(g), hit = ''; (real[loc] || []).forEach(function(r){ if (!hit && _predGroupKey(r) === k) hit = r; }); return hit || g; };
+    var plan = [], skipped = [];
+    rows.forEach(function(r){
+      var id = Number(r.id) || 0, d = trim(String(r.date || ''));
+      if (!id || !/^\d{4}-\d{2}-\d{2}$/.test(d) || !r.loc || !r.child || !Number(r.activityId)){ skipped.push({id:id, why:'неповний рядок'}); return; }
+      if (ids[id]){ skipped.push({id:id, why:'id уже є'}); return; }
+      if (cells[ck(d, r.loc, r.child, r.activityId)]){ skipped.push({id:id, why:'та сама відмітка вже є'}); return; }
+      var g = canon(trim(r.loc), trim(r.group || ''));
+      plan.push({id:id, row:[id, d, trim(r.loc), g, trim(r.child), Number(r.activityId), trim(r.activity || ''), Number(r.price) || 0, trim(r.markedBy || ''), r.markedAt ? new Date(r.markedAt) : new Date()], groupWas:trim(r.group || ''), group:g});
+      ids[id] = 1; cells[ck(d, r.loc, r.child, r.activityId)] = 1;
+    });
+    var res = {ok:true, dryRun:dryRun, toRestore:plan.length, skipped:skipped, plan:plan.map(function(p){ return {id:p.id, date:p.row[1], loc:p.row[2], group:p.group, groupWas:p.groupWas, child:p.row[4], activity:p.row[6], price:p.row[7]}; })};
+    if (dryRun || !plan.length) return res;
+    lock = LockService.getScriptLock(); lock.waitLock(30000);
+    res.backup = _safeBackupSheet(sh, 'restore'); if (!res.backup) return {ok:false, error:'копію аркуша не створено — запис скасовано'};
+    sh.getRange(sh.getLastRow() + 1, 1, plan.length, plan[0].row.length).setValues(plan.map(function(p){ return p.row; }));
+    sh.getRange(2, 2, sh.getLastRow() - 1, 1).setNumberFormat('@');
+    _writeHrAuditRows(_marksActorInfo(body.actorId), 'dop_restore_mark', plan.map(function(p){ return {rowNum:p.id, before:null, after:JSON.stringify(res.plan.filter(function(x){ return x.id === p.id; })[0])}; }));
+    try { ['att'].forEach(_cacheBump); CacheService.getScriptCache().put('attver_ALL', String(Date.now()), 21600); } catch(_c){}
+    res.restored = plan.length;
+    return res;
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
   finally { if (lock){ try { lock.releaseLock(); } catch(_l){} } }
 }
@@ -11016,6 +11177,49 @@ function getLocSheetFormulas(params){
     }
     return {ok:true, loc:loc, tab:tab, lastRow:lr, lastCol:lc, header:header, formulas:cells, colA:colA,
             paymentSheet: pay.getName(), paymentColA: payA};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+// v7.523: РЯДОК ДИТИНИ БЕЗ ФОРМУЛ, ЯКІ Є В СУСІДІВ (Пуща, Кіщенко Міланія: рядок заведено 23.10 без BQ:CB =F…=BI,
+//   тож підсумки блоку за жовтень–грудень недораховували її бюджет). Беремо R1C1-формули рядка-зразка й пишемо
+//   ЛИШЕ в порожні клітинки цілі (без формули й без значення) і ЛИШЕ формули, що посилаються на свій рядок (R / R[0]).
+//   Нічого наявного не перезаписуємо. POST fillPaymentRowLikeNeighbor {loc, row, expectName, likeRow, dryRun(за замовч. true)}; CFO.
+function _colIndex1(letters){ var s = String(letters || '').toUpperCase().replace(/[^A-Z]/g, ''), n = 0; for (var i = 0; i < s.length; i++) n = n * 26 + (s.charCodeAt(i) - 64); return n; }
+function fillPaymentRowLikeNeighbor(body){
+  try {
+    body = body || {};
+    var a = _promoActor(body); if (!_promoIsCfo(a)) return PROMO_DENIED;
+    var loc = trim(body.loc || ''), row = Number(body.row) || 0, like = Number(body.likeRow) || 0, dryRun = (body.dryRun !== false);
+    if (!loc || row < 4 || like < 4 || row === like) return {ok:false, error:'потрібні loc, row, likeRow (різні, ≥ 4), expectName'};
+    var reg = _getLocationPaymentRegistry(loc); if (!reg || !reg.sheetId) return {ok:false, error:'Локацію не знайдено в реєстрі'};
+    var ss = SpreadsheetApp.openById(reg.sheetId), sh = ss.getSheetByName(reg.sheetName) || ss.getSheets()[0];
+    var lc = sh.getLastColumn();
+    var nm = trim(String(sh.getRange(row, 1).getValue() || '')), nmL = trim(String(sh.getRange(like, 1).getValue() || ''));
+    if (!nm || _normNameVac(nm) !== _normNameVac(String(body.expectName || ''))) return {ok:false, error:'У рядку ' + row + ' «' + nm + '», а очікували «' + (body.expectName || '') + '»'};
+    if (!nmL || isGroupHeaderRow([nmL], 1)) return {ok:false, error:'Рядок-зразок ' + like + ' — не дитина'};
+    var fL = sh.getRange(like, 1, 1, lc).getFormulasR1C1()[0];
+    var tg = sh.getRange(row, 1, 1, lc), fT = tg.getFormulas()[0], vT = tg.getValues()[0];
+    var plan = [], cFrom = body.fromCol ? _colIndex1(body.fromCol) : 2, cTo = body.toCol ? _colIndex1(body.toCol) : lc;   // v7.525: межі стовпців (1-based)
+    for (var c = Math.max(1, cFrom - 1); c < Math.min(lc, cTo); c++){
+      var f = String(fL[c] || ''); if (!f) continue;
+      if (/R\[(?!0\])-?\d+\]/.test(f) || /R\d+C/.test(f)) continue;   // лише посилання на свій рядок
+      if (!/R(\[0\])?C/.test(f) || /IMPORTRANGE/i.test(f)) continue;    // v7.525: без посилань (власні суми сусіда) і IMPORTRANGE — не копіюємо
+      if (fT[c] || (vT[c] !== '' && vT[c] != null)) continue;          // наявне не чіпаємо
+      plan.push({col:c + 1, a1:sh.getRange(row, c + 1).getA1Notation(), r1c1:f});
+    }
+    var res = {ok:true, dryRun:dryRun, loc:loc, row:row, name:nm, likeRow:like, likeName:nmL, cells:plan.length, plan:plan};
+    if (dryRun || !plan.length) return res;
+    var lock = LockService.getScriptLock(); try { lock.waitLock(30000); } catch(_l){ return {ok:false, error:'LOCK_TIMEOUT'}; }
+    try {
+      plan.forEach(function(p){ sh.getRange(row, p.col).setFormulaR1C1(p.r1c1); });
+      SpreadsheetApp.flush();
+      plan.forEach(function(p){ var rg = sh.getRange(row, p.col); p.formula = rg.getFormula(); p.value = rg.getValue(); });
+      _moneyJournalLog(plan.map(function(p){ return {by:body.by || _promoWho(a), route:'fillPaymentRowLikeNeighbor', loc:loc, name:nm,
+        year:'', month:'', col:p.a1, before:'', after:p.formula, reason:'формула як у рядку ' + like + ' (' + nmL + ')'}; }));
+      try { _cacheBump('money'); _cacheBump('pay'); } catch(_c){}
+    } finally { try { lock.releaseLock(); } catch(_r){} }
+    res.written = plan.length;
+    return res;
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 
@@ -26885,7 +27089,9 @@ function _autoCreatePaymentForNewCard(data){
     // 1) рядок у Payment (з ґардами)
     var ap = addPaymentRow({loc:loc, name:name, group:group, dryRun:false, by:by, reason:'авто зі створення картки'});
     if (!ap.ok){
-      if (ap.existingRow)  return {status:'exists', row:ap.existingRow};              // дитина вже є → тихо
+      // v7.526: рядок у Payment уже був (внесли раніше за картку — вступний з виписки тощо) → агрегат однаково перезбираємо,
+      //   інакше табель і «Додаткові» (ростер з «Оплат») не бачать дитину до нічного прогону. Прецедент: Уейс Марго, Кругла, 29.10.2026.
+      if (ap.existingRow){ var agE = _aggregateOneLoc(loc); return {status:'exists', row:ap.existingRow, aggregated:!!(agE && agE.ok)}; }
       if (ap.groupHeaders) return {status:'no_group', group:group, groups:ap.groupHeaders}; // групи нема → попередження
       return {status:'error', error:ap.error};
     }
@@ -36563,7 +36769,7 @@ var PRED_SUBJECTS         = ['Англійська','Музика','Хореог
                              'Спорт','Польська',                      // v7.236: Благо (Нац.Гвардії, Манхетен)
                              // v7.268: іменні позиції — кілька виконавців одного предмета
                              'Англійська Кримська','Англійська Пахалюк','Англійська Маришина',
-                             'Психолог Ірина','Психолог Маруфенко',
+                             'Психолог Ірина','Психолог Маруфенко','Психолог Діана',   // v7.522
                              // v7.324: Школа 228 — дві фізкультури з різними ставками + інформатика
                              'Фізкультура Лакіза','Фізкультура Баранов','Інформатика'];
 var PRED_UNLIMITED_SUBJ   = 'Чомусики';   // норму НЕ перевіряємо
@@ -36598,6 +36804,7 @@ var CATALOG_TO_NORM_MAP = {
   // Точна назва в цій мапі перевіряється ПЕРШОЮ, тож фрагмент до неї не дійде
   // і кожна позиція дістає власний subject_norm.
   'Психолог Ірина':              'Психолог Ірина',
+  'Психолог Діана':              'Психолог Діана',   // v7.522: id 58 після заміни Ірини (інакше фрагмент → «Психолог»)
   'Психолог Маруфенко':          'Психолог Маруфенко',
   // Школа 228: три вчительки англійської. Ставки поки 0, уроків у локації
   // нуль — тому розділяємо зараз, поки нічого не треба переписувати заднім
@@ -37514,6 +37721,18 @@ function _loadPredTeachers(locFilter){
 }
 
 // Lessons sheet → [{id, empKey, loc, group, subject, date}].
+// v7.522: ПЕРЕЙМЕНОВАНА ПОЗИЦІЯ КАТАЛОГУ. Заняття зберігають назву предмета, під якою їх
+//   відмітили; після перейменування позиції вони перестали б збігатися з каталогом — зникли б
+//   із сітки, а експорт у Salary їх не порахував би. Записи журналу не переписуємо: стара назва
+//   читається як чинна (сітка, норми, дедуп відмітки, експорт).
+//   Школа Осокорки: «Психолог Ірина» → «Психолог Діана» (заміна з листопада 2026).
+var PRED_SUBJECT_ALIASES = {
+  'Школа Осокорки': {'Психолог Ірина': 'Психолог Діана'}
+};
+function _predSubjAlias(loc, subj){
+  var m = PRED_SUBJECT_ALIASES[loc];
+  return (m && m.hasOwnProperty(subj)) ? m[subj] : subj;
+}
 function _loadPredLessons(locFilter, year, month, withEmpKey){
   var sh = _getPredLessonsSheet();
   var lastRow = sh.getLastRow();
@@ -37545,7 +37764,7 @@ function _loadPredLessons(locFilter, year, month, withEmpKey){
       id:      id,
       loc:     loc,
       group:   String(row[3] || '').trim(),
-      subject: String(row[4] || '').trim(),
+      subject: _predSubjAlias(loc, String(row[4] || '').trim()),   // v7.522: стара назва позиції → чинна
       date:    _fmtLessonDate(row[5])
     };
     if (withEmpKey){

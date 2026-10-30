@@ -6345,6 +6345,22 @@ function attGroups(loc){
     if (!kids.length) continue;                 // група з самих випускників зникає
     out.push(Object.assign({}, g, {children: kids}));
   }
+  // v7.526: нова дитина — у табелі одразу після збереження картки. Ростер будується з «Оплат» (агрегат Payment),
+  //   а він оновлюється не завжди одразу (рядок у Payment уже був → збереження картки агрегат не перезбирало;
+  //   прецедент: Уейс Марго, Кругла, 29.10.2026). Активна картка з групою, якої ще немає в «Оплатах», — у групу з картки.
+  if (UPRAVLINNYA_LOCS.indexOf(loc) < 0){
+    var have = {}, byG = {}, nf = function(x){ return String(x || '').toLowerCase().replace(/[^a-zа-яіїєґ0-9]/g, ''); };
+    out.forEach(function(g){ byG[g.group] = g; g.children.forEach(function(ch){ if (ch.id) have[ch.id] = 1; have['n:' + nf(ch.name)] = 1; }); });   // і за ПІБ — інакше дубль, коли ID рядка Payment не збігся з карткою
+    Object.keys(S.crm || {}).forEach(function(id){
+      var c = S.crm[id], grp = c ? String(c.group || '').trim() : '';
+      if (have[id] || have['n:' + nf(c && c.name)] || !attActiveKid(c) || c.loc !== loc || !grp) return;
+      var g = byG[grp];
+      if (!g){ g = byG[grp] = {group:grp, teacher:'', children:[], totalDebt:0, debtors:0}; out.push(g); }   // out — копії груп, S.groups не змінюється
+      g.children.push({name:c.name, loc:loc, group:grp, teacher:g.teacher, factStudy:0, factEntry:0, factExtra:0, factTotal:0,
+                       budgetStudy:0, budgetExtra:0, budget:0, status:'unknown', debt:0, id:id, contractDate:'', bday:'', cardOnly:true});
+      have[id] = 1;
+    });
+  }
   return out;
 }
 

@@ -3283,6 +3283,18 @@ async function _applySchoolRoster(loc){
         if (!has) outK[a.name] = [];
       });
     }
+    // v7.526: нова дитина — у сітці одразу після збереження картки, не чекаючи перезбору «Оплат» (рядок у Payment
+    //   міг уже бути — тоді збереження картки агрегат не перезбирало; прецедент: Уейс Марго, Кругла, 29.10.2026).
+    //   Картка з групою, якої дитини ще немає в жодній групі списку (і за ПІБ теж), — у групу з картки.
+    var _nf = function(x){ return String(x || '').toLowerCase().replace(/[^a-zа-яіїєґ0-9]/g, ''); }, _seen = {};
+    Object.keys(outK).forEach(function(g){ outK[g].forEach(function(nm){ _seen[_nf(nm)] = 1; }); });
+    Object.keys(src).forEach(function(g){ (src[g] || []).forEach(function(nm){ _seen[_nf(nm)] = 1; }); });
+    Object.keys(rs.byName || {}).forEach(function(nm){
+      var grp = rs.byName[nm];
+      if (dead[nm] || !grp || _seen[_nf(nm)]) return;
+      if (!outK[grp]) outK[grp] = [];
+      outK[grp].push(nm); cntK++; _seen[_nf(nm)] = 1;
+    });
     if (!cntK) return;                             // нічого не лишилось — краще старий список
     Object.keys(outK).forEach(function(g){
       outK[g].sort(function(a, b){ return a.localeCompare(b, 'uk'); });
