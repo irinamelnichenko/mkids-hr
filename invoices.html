@@ -1323,6 +1323,10 @@ function renderInvoiceList(){
         ? '<span class="inv-sum">' + fmtUah(c.paymentSum) + ' ₴</span>'
         : (c.prepayCovered ? '<span class="inv-sum zero" title="' + String(c.prepayCovered).replace(/"/g, '&quot;') + '">💳 передоплата</span>'   // v7.415 місяць покрито — рахунок не формується
                            : '<span class="inv-sum zero">—</span>');
+      // v7.528: борг/переплата — лише з попередніх місяців Payment; ручна різниця бюджету — «⚠️ Payment» для фінансиста
+      if (c.studyCarry) pCell += '<div style="font-size:11.5px;color:var(--gray)">у т.ч. ' + (c.studyCarry > 0 ? 'борг' : 'переплата') + ' попер. періоду ' + fmtUah(c.studyCarry) + ' ₴</div>';
+      if (c.studyChange) pCell += ' <span class="inv-badge b-yellow" title="«Бюджет навч» у Payment відрізняється від договору мінус знижки на ' + fmtUah(c.studyChange) +
+        ' ₴, і попередні місяці цього не пояснюють. У рахунку — рядок «Коригування суми (Payment)». Перевірте Payment або суму договору в картці.">⚠️ Payment</span>';
       var eCell = c.extrasSum > 0
         ? '<span class="inv-sum">' + fmtUah(c.extrasSum) + ' ₴</span>'
         : '<span class="inv-sum zero">—</span>';
@@ -1331,6 +1335,11 @@ function renderInvoiceList(){
       // v7.354: відмітки змінили після експорту — у Payment ще стара сума; рахунок бере відмітки (+ ручну правку).
       if (c.extrasStale) eCell += ' <span class="inv-badge b-yellow" title="У Payment зараз ' + fmtUah(c.extrasPayment || 0) +
         ' ₴ — відмітки змінились після експорту. Рахунок сформується за відмітками; оновіть експорт додаткових.">⚠️ Payment</span>';
+      // v7.528: борг/переплата додаткових — лише з попередніх місяців; ручна різниця «Бюджет доп» — окремо
+      if (c.extrasAdjustment) eCell += '<div style="font-size:11.5px;color:var(--gray)">у т.ч. ' + (c.extrasAdjustment > 0 ? 'борг' : 'переплата') + ' попер. періоду ' + fmtUah(c.extrasAdjustment) + ' ₴</div>';
+      else if (c.extrasPaymentDiff && !c.extrasStale) eCell += ' <span class="inv-badge b-yellow" title="«Бюджет доп» у Payment відрізняється від відміток на ' + fmtUah(c.extrasPaymentDiff) +
+        ' ₴, і попередні місяці цього не пояснюють. У рахунку — рядок «Коригування за даними Payment». Перевірте клітинку Payment.">⚠️ Payment</span>';
+      if (c.extrasAdjustment && c.extrasPaymentDiff && !c.extrasStale) eCell += ' <span class="inv-badge b-yellow" title="Крім боргу/переплати, у «Бюджет доп» ручна різниця ' + fmtUah(c.extrasPaymentDiff) + ' ₴.">⚠️ Payment</span>';
       // v6.26.1 FIX: розділяємо escape HTML-заглушки — щоб не екранувати теги.
       var sName = c.signerName
         ? escapeHtml(c.signerName)
