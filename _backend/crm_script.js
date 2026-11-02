@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.528
+// m.kids CRM — Google Apps Script v7.529
+// v7.529: setDopSalaryBudget пише ручну суму формулою «=N» — exportToSalaryExtras перезаписує клітинку сумою відміток (v6.13, не дельта) і пропускає лише формули, тож число з v7.528 нічний експорт повернув би; власну «=N» можна перезаписати
 // v7.528: рахунки — рядок «Борг / переплата попереднього періоду» лише з клітинок попередніх місяців Payment: незакритий залишок (Бюджет − Факт) і перенесене фінансистом у бюджет місяця, якщо воно = нараховане − сплачене минулого місяця; інша різниця бюджету й нарахування — «Коригування … (Payment)» + позначка ⚠ у списку; до сплати = бюджет місяця + незакритий залишок (передоплата, якої не закрили, більше не губиться); експорт відпустки — клітинка з формулою поверх записаної знижки пропускається (база = значення − знижка додавала знижку), «захист наступного місяця» лише коли пишемо сам місяць, VAC_EXPORT_PAUSED (Кругла — пауза до слова CFO); setDopSalaryBudget — ручні суми бюджету рядка Salary (журнал експорту не чіпаємо → наступний експорт їх зберігає)
 // v7.527: mergeDopSalaryRows — після перейменування заняття Додаткових старий рядок Salary (з виплатами) отримує назву каталогу й бюджет з рядка експорту, порожній рядок експорту видаляється (Пуща, «Англійська індивідуально»); updateActivity з новою назвою — перейменовує й рядок Salary та журнал експорту ЗП (_renameDopSalaryName)
 // v7.526: нова картка, рядок якої в Payment уже був, — агрегат «Оплати» локації перезбирається одразу (табель і «Додаткові» бачать дитину без нічного прогону)
@@ -7395,7 +7396,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.528', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.529', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -19598,8 +19599,8 @@ function mergeDopSalaryRows(body){
 
 // v7.528: РУЧНІ СУМИ БЮДЖЕТУ РЯДКА SALARY (Пуща, «Англійська індивідуально»: ставка 280, CFO задає жовтень 7280, листопад 9520,
 //   а відмітки × 280 дають 7000 / 9800). Пишемо лише БЮДЖЕТ названих місяців; ФАКТ не чіпаємо. Журнал експорту ЗП лишається
-//   на сумі відміток, тож наступний експорт рахує newCell = клітинка + відмітки − записане = та сама ручна сума (різниця живе
-//   як ручна поправка). Формулу в бюджеті місяця не перезаписуємо. Копія аркуша перед записом.
+//   на сумі відміток. v7.529: сума пишеться формулою «=N» — exportToSalaryExtras перезаписує клітинку сумою відміток (не дельта)
+//   і пропускає лише формули, тож ручна сума живе, доки формулу не приберуть. Чужу формулу (=AG43) не чіпаємо, власну «=N» — можна. Копія аркуша перед записом.
 //   POST setDopSalaryBudget {loc, row, name, months:{"10":7280,"11":9520}, dryRun(за замовч. true)}; CFO.
 function setDopSalaryBudget(body){
   body = body || {};
@@ -19615,12 +19616,12 @@ function setDopSalaryBudget(body){
     var nm = trim(String(V[0] || ''));
     if (_journalNormName(nm) !== _journalNormName(body.name || '')) return {ok:false, error:'Рядок ' + row + ' — «' + nm + '», очікували «' + (body.name || '') + '»'};
     var plan = months.map(function(m){ var b = (m - 1) * 3 + 2; return {month:m, col:b + 1, before:_opexNum(V[b]), formula:F[b] || '', after:Number(mo[m]), fact:_opexNum(V[b - 1])}; });
-    var bad = plan.filter(function(p){ return p.formula; });
+    var bad = plan.filter(function(p){ return p.formula && !/^=\s*-?\d+(?:[.,]\d+)?\s*$/.test(p.formula); });   // v7.529: власна «=N» — можна
     if (bad.length) return {ok:false, error:'У бюджеті місяця ' + bad[0].month + ' формула ' + bad[0].formula + ' — не чіпаю', plan:plan};
     var res = {ok:true, dryRun:dryRun, loc:loc, row:row, name:nm, plan:plan};
     if (dryRun) return res;
     res.backup = _salaryBackupSheet(op.ss, sh, op.entry.listName);
-    plan.forEach(function(p){ sh.getRange(row, p.col).setValue(p.after); });
+    plan.forEach(function(p){ sh.getRange(row, p.col).setFormula('=' + p.after); });   // v7.529: формула — експорт її не перезапише
     _salaryBump(loc);
     try { _moneyJournalLog(plan.map(function(p){ return {by:'CFO', route:'setDopSalaryBudget', loc:loc, name:nm, year:'', month:p.month,
       col:'Salary бюджет р.' + row, before:p.before, after:p.after, reason:body.reason || 'ручна сума CFO'}; })); } catch(_j){}
