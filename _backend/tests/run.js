@@ -19,6 +19,12 @@ function fn(name){
   }
   throw new Error('не вдалося виділити ' + name);
 }
+function varBlock(name){   // багаторядкове оголошення var NAME = {...};
+  const i = src.indexOf('\nvar ' + name + ' ');
+  if (i < 0) throw new Error('змінну ' + name + ' не знайдено');
+  const j = src.indexOf(';\n', i);
+  return src.slice(i + 1, j + 1);
+}
 function varLine(name){
   const m = new RegExp('\\nvar ' + name + '\\s*=\\s*([^\\n]*);').exec(src);
   if (!m) throw new Error('змінну ' + name + ' не знайдено');
@@ -38,9 +44,14 @@ const env = {
 };
 const code = [varLine('MONTHS_CAL'), varLine('PROMO_FORMULA_RE'),
   ...['_invR2','_prevYM','_invSplit','_invExtrasCalc','_invStudyCalc','_invPrevBalances','_invPrecheckItems','_invPrecheckHash','_vacCellPlan']
-     .concat(src.indexOf('\nfunction _dopSubPlan(') >= 0 ? ['_dopSubPlan'] : []).map(fn),
+     .concat(src.indexOf('\nfunction _dopSubPlan(') >= 0 ? ['_dopSubPlan'] : []).map(fn)
+     .concat(src.indexOf('\nfunction _predGroupAllowed(') >= 0
+       ? [varLine('PRED_GROUP_TYPES'), varBlock('_GT_TRANSLIT'), varLine('_GT_BABY')]
+           .concat(['_groupLetters','_predGroupKey','_canonGroupType','_normalizeGroupType','_predGroupAllowed'].map(fn)) : []),
   'return {_invPrevBalances, _invExtrasCalc, _invStudyCalc, _invPrecheckItems, _invPrecheckHash, _vacCellPlan,' +
-  ' _dopSubPlan: (typeof _dopSubPlan === "function" ? _dopSubPlan : null)};'].join('\n');
+  ' _dopSubPlan: (typeof _dopSubPlan === "function" ? _dopSubPlan : null),' +
+  ' _predGroupAllowed: (typeof _predGroupAllowed === "function" ? _predGroupAllowed : null),' +
+  ' _normalizeGroupType: (typeof _normalizeGroupType === "function" ? _normalizeGroupType : null)};'].join('\n');
 const F = new Function(...Object.keys(env), code)(...Object.values(env));
 
 let pass = 0, fail = 0;
@@ -109,6 +120,15 @@ if (FX.subscription){
     if (c.expectFirstTo){ const hit = r.changes.find((x) => x.id === c.expectFirstTo.id); check(c.id + ' / перенесення ціни', c.title, {to: hit ? hit.to : null}, {to: c.expectFirstTo.to}); }
     const total = c.marks.filter((m) => sp.hasOwnProperty(m.actId)).reduce((a, m) => { const ch = r.changes.find((x) => x.id === m.id); return a + (ch ? ch.to : m.price); }, 0);
     check(c.id + ' / сума', 'після нормалізації сума = ціна × абонементів', {total}, {total: c.expectGroups.reduce((a, g) => a + g.after, 0)});
+  });
+}
+
+// v7.532: предметники — позиція каталогу лише для певних груп (Осокорки, «Підготовка до школи» → Preschool)
+if (FX.predGroups){
+  if (!F._predGroupAllowed){ fail++; console.log('✗ _predGroupAllowed відсутній у ' + SRC); }
+  else FX.predGroups.cases.forEach((c) => {
+    const got = {}; Object.keys(c.expect).forEach((g) => { got[g] = F._predGroupAllowed(c.allowed, g, F._normalizeGroupType(g)); });
+    check(c.id, 'дозволені групи: ' + (c.allowed.join(', ') || 'усі'), got, c.expect);
   });
 }
 

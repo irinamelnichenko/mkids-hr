@@ -1009,5 +1009,65 @@
     ]
    }
   ]
+ },
+ "predGroups": {
+  "note": "Осокорки (садок), «Підготовка до школи» — лише Preschool (03.11.2026); реальні групи локації",
+  "cases": [
+   {
+    "id": "pred-preschool-only",
+    "allowed": [
+     "Preschool"
+    ],
+    "expect": {
+     "Baby-ki": false,
+     "Findi-Ki": false,
+     "Preschool 1": true,
+     "Preschool 2": true,
+     "Study-ki 1": false,
+     "Study-ki 2": false
+    }
+   },
+   {
+    "id": "pred-no-limit",
+    "allowed": [],
+    "expect": {
+     "Baby-ki": true,
+     "Findi-Ki": true,
+     "Preschool 1": true,
+     "Preschool 2": true,
+     "Study-ki 1": true,
+     "Study-ki 2": true
+    }
+   },
+   {
+    "id": "pred-full-name",
+    "allowed": [
+     "Preschool 1"
+    ],
+    "expect": {
+     "Baby-ki": false,
+     "Findi-Ki": false,
+     "Preschool 1": true,
+     "Preschool 2": false,
+     "Study-ki 1": false,
+     "Study-ki 2": false
+    }
+   },
+   {
+    "id": "pred-two-types",
+    "allowed": [
+     "Preschool",
+     "Study"
+    ],
+    "expect": {
+     "Baby-ki": false,
+     "Findi-Ki": false,
+     "Preschool 1": true,
+     "Preschool 2": true,
+     "Study-ki 1": true,
+     "Study-ki 2": true
+    }
+   }
+  ]
  }
 }

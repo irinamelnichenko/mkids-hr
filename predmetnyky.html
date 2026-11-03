@@ -978,7 +978,8 @@ var PRED_SUBJECTS       = ['Англійська','Музика','Хореогр
                            // Дзеркало backend PRED_SUBJECTS — впливає лише на порядок.
                            'Англійська Кримська','Англійська Пахалюк','Англійська Маришина',
                            'Психолог Ірина','Психолог Маруфенко','Психолог Діана',   // v7.522
-                           'Фізкультура Лакіза','Фізкультура Баранов','Інформатика'];   // v7.324: Школа 228
+                           'Фізкультура Лакіза','Фізкультура Баранов','Інформатика',   // v7.324: Школа 228
+                           'Підготовка до школи'];                                    // v7.532: Осокорки, лише Preschool
 var PRED_UNLIMITED_SUBJ = 'Чомусики';
 var PRED_GROUP_TYPES    = ['miniBaby','Baby','Find','Study','Preschool'];
 var PRED_LVIV_LOCATIONS = ['Кругла','Бігова'];
@@ -992,6 +993,7 @@ var SUBJECT_EMOJI = {
   'Німецька':'🇩🇪','Іспанська':'🇪🇸','Фізкультура':'⚽',
   'Архітектура':'🏛️','Фітнес':'🤸','Speaking club':'🗣️',  // v7.231
   'Спорт':'🏃','Польська':'🇵🇱',                           // v7.236
+  'Підготовка до школи':'🎒',                              // v7.532
   // v7.268: іменні позиції — та сама іконка, що й у базового предмета,
   // інакше три англійські в списку виглядали б як різні дисципліни.
   'Англійська Кримська':'📚','Англійська Пахалюк':'📚','Англійська Маришина':'📚',
@@ -2315,6 +2317,22 @@ function realGroupsFor(loc){
   });
   return raw;
 }
+// v7.532: позиція каталогу лише для перелічених груп (кол. «Групи»: тип або повна назва; порожньо — усі).
+// Дзеркало backend _predGroupAllowed.
+function catGroupAllowed(loc, subj, groupName, groupType){
+  var allowed = null;
+  for (var i = 0; i < S.catalog.length; i++){
+    var c = S.catalog[i];
+    if (!c.active || c.loc !== loc || c.subject_norm !== subj || !c.groups || !c.groups.length) continue;
+    allowed = (allowed || []).concat(c.groups);
+  }
+  if (!allowed) return true;
+  var gk = groupKey(groupName);
+  return allowed.some(function(a){
+    a = String(a || '').trim();
+    return PRED_GROUP_TYPES.indexOf(a) !== -1 ? groupType === a : groupKey(a) === gk;
+  });
+}
 function getRateFor(loc, subj){
   for (var i = 0; i < S.catalog.length; i++){
     var c = S.catalog[i];
@@ -2729,7 +2747,8 @@ function renderTable(loc, subject){
     // unlimited: предмет Чомусики АБО тип не розпізнано і власної норми немає
     var rowUnlimited = isUnlimited || (!gt && locN === null);
     var norm         = rowUnlimited ? 0 : getNormFor(loc, subject, gt, groupName);
-    var isForbidden  = !rowUnlimited && norm <= 0;               // тип з нормою 0 у матриці
+    var isForbidden  = (!rowUnlimited && norm <= 0)              // тип з нормою 0 у матриці
+                       || !catGroupAllowed(loc, subject, groupName, gt);   // v7.532: позиція лише для певних груп
     // v7.270: показуємо сесії (з поділом), ліміт тримаємо по датах — див.
     // countSessionsInRow / countLessonDatesInRow.
     var dates        = isForbidden ? 0 : countLessonDatesInRow(loc, groupName, subject);

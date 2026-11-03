@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.531
+// m.kids CRM — Google Apps Script v7.532
+// v7.532: предметники — «Підготовка до школи» в системі предметів (CATALOG_TO_NORM_MAP, PRED_SUBJECTS; досі null → позиція Осокорків не показувалась); каталог кол. J «Групи» — позиція лише для перелічених груп (тип або повна назва; порожньо — усі), урок в іншій групі бекенд відхиляє (BAD_GROUP_FOR_SUBJECT); updatePredmetny {groups}
 // v7.531: абонемент для батьків у «Додаткових» — каталог кол. K «Модель_клієнта» («Абонемент»): дитина з ≥ 1 відміткою в місяці платить ціну каталогу один раз — ціну несе перша відмітка місяця, решта 0 (_dopSubPlan; нормалізація після додавання й зняття відміток), тож Payment, рахунки, «Додаткові» й аналітика рахують без змін; recalcDopSubscription — перерахунок місяців + експорт у Payment (CFO, dryRun); рахунок показує абонемент одним рядком; ЗП викладача не змінюється
 // v7.530: перевірка рахунків перед розсилкою — getInvoicePrecheck (діти з боргом / переплатою / коригуванням ⚠️, розшифровка по місяцях: бюджет, факт, залишок; хеш списку), invoicePrecheckConfirm (лише CFO, аркуш «Рахунки_Перевірка»), масова розсилка (bulkSendInvoices, sendInvoiceEmail/invoiceViberMessage з bulk:true) заблокована, поки список не підтверджено; _vacCellPlan — розрахунок клітинки знижки відпустки винесено в чисту функцію; тести _backend/tests (predeploy.sh)
 // v7.529: setDopSalaryBudget пише ручну суму формулою «=N» — exportToSalaryExtras перезаписує клітинку сумою відміток (v6.13, не дельта) і пропускає лише формули, тож число з v7.528 нічний експорт повернув би; власну «=N» можна перезаписати
@@ -7398,7 +7399,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.531', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.532', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -33837,6 +33838,22 @@ var PREDMETNY_CATALOG_HEADER = ['id','Локація','Предмет','Став
 // що перезаписують каталог рядками по 8 колонок, — розширення зламало б їх.
 var PRED_CATALOG_MODEL_COL  = 9;   // I
 var PRED_CATALOG_MODEL_HEAD = 'Модель';
+// v7.532: кол. J «Групи» — позиція каталогу лише для цих груп: тип (Preschool, Study…) або повна назва групи,
+//   через «;» або «,». Порожньо — для всіх груп локації (як досі).
+var PRED_CATALOG_GROUPS_COL  = 10;   // J
+var PRED_CATALOG_GROUPS_HEAD = 'Групи';
+function _predCatGroups(v){ return String(v == null ? '' : v).split(/[;,]/).map(function(x){ return x.trim(); }).filter(Boolean); }
+// Чиста функція (тести): чи дозволена група groupName для списку allowed ([] — так). Тип групи — groupType (Preschool…).
+function _predGroupAllowed(allowed, groupName, groupType){
+  if (!allowed || !allowed.length) return true;
+  var gk = _predGroupKey(groupName);
+  for (var i = 0; i < allowed.length; i++){
+    var a = String(allowed[i] || '').trim(); if (!a) continue;
+    if (PRED_GROUP_TYPES.indexOf(a) !== -1){ if (groupType === a) return true; }
+    else if (_predGroupKey(a) === gk) return true;
+  }
+  return false;
+}
 // v7.407: + 'group' («Група/міс») — ставка за КОЖНУ групу, де за місяць було хоч одне заняття.
 function _predPayModelOf(v){ var s = String(v == null ? '' : v); return /груп|group/i.test(s) ? 'group' : (/міс|month/i.test(s) ? 'month' : 'lesson'); }
 function _predPayModelCell(m){ return m === 'group' ? 'Група/міс' : (m === 'month' ? 'Місяць' : 'За заняття'); }
@@ -33883,7 +33900,8 @@ function _parsePredmetnyCatRow(row){
              /^(true|так|y|1|active|активне|✅)$/i.test(String(row[5] || '').trim()),
     empKey:  String(row[6] || '').trim(),     // v7.199 (Б.2)
     uid:     String(row[7] || '').trim(),     // v7.200 (UID.4)
-    payModel: _predPayModelOf(row[PRED_CATALOG_MODEL_COL - 1])   // v7.325: 'lesson' | 'month'
+    payModel: _predPayModelOf(row[PRED_CATALOG_MODEL_COL - 1]),  // v7.325: 'lesson' | 'month'
+    groups:   _predCatGroups(row[PRED_CATALOG_GROUPS_COL - 1])     // v7.532: [] — усі групи
   };
 }
 
@@ -34342,6 +34360,14 @@ function updatePredmetny(id, data){
         _predCatEnsureModelCol(sh);
         sh.getRange(r1, PRED_CATALOG_MODEL_COL).setValue(_predPayModelCell(_predPayModelOf(data.payModel)));
       }
+      if ('groups' in data){                                                                     // v7.532
+        _predCatEnsureModelCol(sh);
+        if (sh.getMaxColumns() < PRED_CATALOG_GROUPS_COL) sh.insertColumnsAfter(sh.getMaxColumns(), PRED_CATALOG_GROUPS_COL - sh.getMaxColumns());
+        if (String(sh.getRange(1, PRED_CATALOG_GROUPS_COL).getValue() || '').trim() === '') sh.getRange(1, PRED_CATALOG_GROUPS_COL).setValue(PRED_CATALOG_GROUPS_HEAD);
+        var _gl = Array.isArray(data.groups) ? data.groups : _predCatGroups(data.groups);
+        sh.getRange(r1, PRED_CATALOG_GROUPS_COL).setNumberFormat('@').setValue(_gl.map(function(x){ return String(x).trim(); }).filter(Boolean).join('; '));
+      }
+      try { _bumpPredVer(); } catch(_bv){}
       return {ok: true};
     }
     return {ok: false, error: 'Предмет не знайдено'};
@@ -37271,7 +37297,8 @@ var PRED_SUBJECTS         = ['Англійська','Музика','Хореог
                              'Англійська Кримська','Англійська Пахалюк','Англійська Маришина',
                              'Психолог Ірина','Психолог Маруфенко','Психолог Діана',   // v7.522
                              // v7.324: Школа 228 — дві фізкультури з різними ставками + інформатика
-                             'Фізкультура Лакіза','Фізкультура Баранов','Інформатика'];
+                             'Фізкультура Лакіза','Фізкультура Баранов','Інформатика',
+                             'Підготовка до школи'];                  // v7.532: Осокорки, лише Preschool
 var PRED_UNLIMITED_SUBJ   = 'Чомусики';   // норму НЕ перевіряємо
 var PRED_GROUP_TYPES      = ['miniBaby','Baby','Find','Study','Preschool'];
 var PRED_LVIV_LOCATIONS   = ['Кругла','Бігова'];   // все інше → 'Київ'
@@ -37285,7 +37312,7 @@ var CATALOG_TO_NORM_MAP = {
   'Хореограф':             'Хореограф',
   'Психолог':              'Психолог',
   'Чомусики':              'Чомусики',
-  'Підготовка до школи':   null,
+  'Підготовка до школи':   'Підготовка до школи',   // v7.532 (було null — позицію не було видно)
   // v7.192: предмети школи
   'Німецька мова':         'Німецька',
   'Іспанська мова':        'Іспанська',
@@ -37975,7 +38002,7 @@ function getSchoolRoster(loc){
 function _loadPredCatalog(locFilter){
   var sh = _getPredmetnyCatalogSheet(false);
   if (!sh || sh.getLastRow() < 2) return [];
-  var _w = Math.max(PREDMETNY_CATALOG_HEADER.length, Math.min(sh.getLastColumn(), PRED_CATALOG_MODEL_COL));   // v7.325
+  var _w = Math.max(PREDMETNY_CATALOG_HEADER.length, Math.min(sh.getLastColumn(), PRED_CATALOG_GROUPS_COL));   // v7.325; v7.532 до «Групи»
   var data = sh.getRange(2, 1, sh.getLastRow() - 1, _w).getValues();
   var out = [];
   var filter = String(locFilter || '').trim();
@@ -37992,7 +38019,8 @@ function _loadPredCatalog(locFilter){
       active:       rec.active,
       empKey:       rec.empKey,                       // v7.199 (Б.2)
       uid:          rec.uid,                          // v7.200 (UID.4)
-      payModel:     rec.payModel                      // v7.325
+      payModel:     rec.payModel,                     // v7.325
+      groups:       rec.groups                        // v7.532: [] — усі групи
     });
   }
   return out;
@@ -38585,6 +38613,12 @@ function savePredmetnykyLesson(actorId, lesson){
     if (realGroups.length && realGroups.indexOf(group) === -1)
       return {ok:false, code:'BAD_GROUP',
               error:'Групи "' + group + '" немає в локації ' + location, group:group};
+    // v7.532: позиція каталогу лише для певних груп (кол. «Групи»)
+    var _gAllow = null;
+    _loadPredCatalog(location).forEach(function(c){ if (c.active && c.subject_norm === subject && c.groups && c.groups.length) _gAllow = (_gAllow || []).concat(c.groups); });
+    if (_gAllow && !_predGroupAllowed(_gAllow, group, _normalizeGroupType(group)))
+      return {ok:false, code:'BAD_GROUP_FOR_SUBJECT',
+              error:'«' + subject + '» у ' + location + ' — лише для груп: ' + _gAllow.join(', '), group:group, allowed:_gAllow};
 
     // ── permission ──
     if (!_canEditPredmetnyky(actor, location))
