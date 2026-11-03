@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.530
+// m.kids CRM — Google Apps Script v7.531
+// v7.531: абонемент для батьків у «Додаткових» — каталог кол. K «Модель_клієнта» («Абонемент»): дитина з ≥ 1 відміткою в місяці платить ціну каталогу один раз — ціну несе перша відмітка місяця, решта 0 (_dopSubPlan; нормалізація після додавання й зняття відміток), тож Payment, рахунки, «Додаткові» й аналітика рахують без змін; recalcDopSubscription — перерахунок місяців + експорт у Payment (CFO, dryRun); рахунок показує абонемент одним рядком; ЗП викладача не змінюється
 // v7.530: перевірка рахунків перед розсилкою — getInvoicePrecheck (діти з боргом / переплатою / коригуванням ⚠️, розшифровка по місяцях: бюджет, факт, залишок; хеш списку), invoicePrecheckConfirm (лише CFO, аркуш «Рахунки_Перевірка»), масова розсилка (bulkSendInvoices, sendInvoiceEmail/invoiceViberMessage з bulk:true) заблокована, поки список не підтверджено; _vacCellPlan — розрахунок клітинки знижки відпустки винесено в чисту функцію; тести _backend/tests (predeploy.sh)
 // v7.529: setDopSalaryBudget пише ручну суму формулою «=N» — exportToSalaryExtras перезаписує клітинку сумою відміток (v6.13, не дельта) і пропускає лише формули, тож число з v7.528 нічний експорт повернув би; власну «=N» можна перезаписати
 // v7.528: рахунки — рядок «Борг / переплата попереднього періоду» лише з клітинок попередніх місяців Payment: незакритий залишок (Бюджет − Факт) і перенесене фінансистом у бюджет місяця, якщо воно = нараховане − сплачене минулого місяця; інша різниця бюджету й нарахування — «Коригування … (Payment)» + позначка ⚠ у списку; до сплати = бюджет місяця + незакритий залишок (передоплата, якої не закрили, більше не губиться); експорт відпустки — клітинка з формулою поверх записаної знижки пропускається (база = значення − знижка додавала знижку), «захист наступного місяця» лише коли пишемо сам місяць, VAC_EXPORT_PAUSED (Кругла — пауза до слова CFO); setDopSalaryBudget — ручні суми бюджету рядка Salary (журнал експорту не чіпаємо → наступний експорт їх зберігає)
@@ -7397,7 +7398,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.530', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.531', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -7760,6 +7761,7 @@ function doPost(e) {
     else if (body.action === 'addSalaryRow')             result = addSalaryRow(body || {});    // v7.42 Етап 1
     else if (body.action === 'mergeDopSalaryRows')        result = mergeDopSalaryRows(body || {});   // v7.527 два рядки Salary одного заняття → один (CFO; dryRun)
     else if (body.action === 'setDopSalaryBudget')        result = setDopSalaryBudget(body || {});   // v7.528 ручні суми бюджету рядка Salary (CFO; dryRun)
+    else if (body.action === 'recalcDopSubscription')     result = recalcDopSubscription(body || {}); // v7.531 абонемент: ціни відміток місяців + експорт у Payment (CFO; dryRun)
     else if (body.action === 'deleteSalaryRow')          result = deleteSalaryRow(body || {}); // v7.42 Етап 1
     else if (body.action === 'saveDopMerge')              result = saveDopMerge(body || {});
     else if (body.action === 'deleteDopMerge')            result = deleteDopMerge(body || {});
@@ -20964,7 +20966,7 @@ function syncPayments() {
 var ACTIVITIES_SHEET_NAME = 'Додаткові_Каталог';
 var ACTIVITIES_HEADER = [
   'id','Локація','Заняття','Ціна_клієнту','Модель_ЗП_викладача',
-  'Ставка_викладача','Викладач','Активне','Розрахунок','Разом_групи'
+  'Ставка_викладача','Викладач','Активне','Розрахунок','Разом_групи','Модель_клієнта'
 ];
 // v7.468: «Разом_групи» (кол. J) — ПОСТІЙНЕ обʼєднання груп на рівні заняття локації: JSON
 // [["Baby-ki 1","Preschool"], …]. Групи набору щодня ведуться ОДНИМ заняттям — викладачу «За заняття»
@@ -21045,6 +21047,116 @@ function _subCountInMonth(exVals, child, actId, dateIso){
   return n;
 }
 
+// ═══ v7.531: АБОНЕМЕНТ ДЛЯ БАТЬКІВ у «Додаткових» (Ментальна арифметика тощо) ═══════════════════════
+//   Каталог, кол. K «Модель_клієнта» = «Абонемент»: дитина з ≥ 1 відміткою заняття в календарному місяці платить ціну
+//   каталогу ОДИН раз, незалежно від кількості занять. Реалізація — ціна у самих відмітках: перша відмітка дитини в місяці
+//   (за датою, потім id) несе ціну абонемента, решта — 0. Тоді все, що сумує ціни відміток (експорт у Payment, рахунки,
+//   сторінка «Додаткові», аналітика), рахує абонемент без окремих гілок. Нормалізація — після кожного додавання / зняття
+//   відмітки такого заняття (_dopSubNormalize) і разово recalcDopSubscription. ЗП викладача ця модель не змінює.
+function _dopClientModel(v){ return /абонем/i.test(String(v == null ? '' : v)) ? 'Абонемент' : ''; }
+// actId → ціна абонемента (лише заняття з моделлю «Абонемент»)
+function _dopSubPriceByActId(){
+  var out = {};
+  try { (getActivitiesCatalog('').items || []).forEach(function(a){ if (a.clientModel === 'Абонемент') out[a.id] = Number(a.clientPrice) || 0; }); } catch(_e){}
+  return out;
+}
+// Чиста функція (тести _backend/tests): marks [{row, id, date 'YYYY-MM-DD', child, actId, price}], subPrice {actId: ціна}.
+//   → {changes:[{row, id, child, actId, ym, from, to}], groups:[{actId, child, ym, marks, before, after}]}
+function _dopSubPlan(marks, subPrice){
+  var g = {};
+  (marks || []).forEach(function(m){
+    if (!subPrice.hasOwnProperty(m.actId)) return;
+    var ym = String(m.date || '').slice(0, 7); if (!/^\d{4}-\d{2}$/.test(ym)) return;
+    var k = m.actId + '|' + _journalNormName(m.child) + '|' + ym;
+    (g[k] = g[k] || {actId:m.actId, child:m.child, ym:ym, list:[]}).list.push(m);
+  });
+  var changes = [], groups = [];
+  Object.keys(g).sort().forEach(function(k){
+    var G = g[k], price = Number(subPrice[G.actId]) || 0, before = 0;
+    G.list.sort(function(a, b){ return a.date < b.date ? -1 : a.date > b.date ? 1 : (Number(a.id) || 0) - (Number(b.id) || 0); });
+    G.list.forEach(function(m, i){
+      var to = (i === 0) ? price : 0, from = Number(m.price) || 0; before += from;
+      if (from !== to) changes.push({row:m.row, id:m.id, child:m.child, actId:m.actId, ym:G.ym, from:from, to:to});
+    });
+    groups.push({actId:G.actId, child:G.child, ym:G.ym, marks:G.list.length, before:before, after:price});
+  });
+  return {changes:changes, groups:groups};
+}
+// Нормалізує ціни в аркуші відміток для ключів keys {"actId|нормПІБ|YYYY-MM": true} (null — усі відмітки абонементів).
+//   data — getValues аркуша (свіжий). Пише лише змінені клітинки ціни (кол. H). → {changes, groups}
+function _dopSubNormalize(sh, data, keys, subPrice, dryRun){
+  subPrice = subPrice || _dopSubPriceByActId();
+  if (!Object.keys(subPrice).length) return {changes:[], groups:[]};
+  var marks = [];
+  for (var i = 1; i < data.length; i++){
+    var x = _parseAttendanceRow(data[i]);
+    if (!subPrice.hasOwnProperty(x.activityId)) continue;
+    if (keys && !keys[x.activityId + '|' + _journalNormName(x.child) + '|' + String(x.date).slice(0, 7)]) continue;
+    marks.push({row:i + 1, id:x.id, date:x.date, child:x.child, actId:x.activityId, price:x.price, loc:x.loc});
+  }
+  var plan = _dopSubPlan(marks, subPrice);
+  if (!dryRun) plan.changes.forEach(function(c){ sh.getRange(c.row, 8).setValue(c.to); });
+  return plan;
+}
+// Ключі абонементних відміток із масиву рядків [дата, дитина, actId] — для нормалізації після запису / видалення.
+function _dopSubKeysFor(items, subPrice, tz){
+  var keys = {}, n = 0;
+  (items || []).forEach(function(it){
+    var a = Number(it.actId) || 0; if (!subPrice.hasOwnProperty(a)) return;
+    keys[a + '|' + _journalNormName(it.child) + '|' + _attDateISO(it.date, tz).slice(0, 7)] = true; n++;
+  });
+  return n ? keys : null;
+}
+
+// POST recalcDopSubscription {loc, activityId, months:['2026-09','2026-10'], dryRun(за замовч. true), exportPayment(true)} — лише CFO.
+//   Ціни відміток заняття-абонемента за місяці → перша відмітка дитини = ціна каталогу, решта 0; далі експорт у Payment
+//   (exportAttendanceToPayments за кожен місяць відміток → «Бюджет доп» наступного місяця, журнальна дельта — ручні правки
+//   фінансиста лишаються). Закриті місяці пропускає. Копія аркуша відміток + HR_Audit.
+function recalcDopSubscription(body){
+  var lock = null;
+  try {
+    body = body || {};
+    if (!_marksActorIsCfo(body.actorId)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+    var loc = trim(body.loc || ''), actId = Number(body.activityId) || 0, dryRun = (body.dryRun !== false);
+    var months = (body.months || []).map(String).filter(function(m){ return /^\d{4}-\d{2}$/.test(m); });
+    if (!loc || !actId || !months.length) return {ok:false, error:'потрібні loc, activityId, months[]'};
+    var act = null; (getActivitiesCatalog(loc).items || []).forEach(function(a){ if (a.id === actId) act = a; });
+    if (!act) return {ok:false, error:'Заняття ' + actId + ' не знайдено в каталозі «' + loc + '»'};
+    if (act.clientModel !== 'Абонемент') return {ok:false, error:'«' + act.name + '» у каталозі не абонемент — спершу постав модель «Абонемент»'};
+    if (!(act.clientPrice > 0)) return {ok:false, error:'У каталозі «' + loc + '» немає ціни абонемента для «' + act.name + '»'};
+    var closed = months.filter(function(m){ return _isMonthClosed(Number(m.slice(0, 4)), Number(m.slice(5, 7))); });
+    months = months.filter(function(m){ return closed.indexOf(m) < 0; });
+    var sub = {}; sub[actId] = act.clientPrice;
+    var sh = _getAttendanceSheet(false), data = sh.getDataRange().getValues(), keys = {};
+    for (var i = 1; i < data.length; i++){
+      var x = _parseAttendanceRow(data[i]);
+      if (x.activityId !== actId || x.loc !== loc || months.indexOf(String(x.date).slice(0, 7)) < 0) continue;
+      keys[actId + '|' + _journalNormName(x.child) + '|' + String(x.date).slice(0, 7)] = true;
+    }
+    var res = {ok:true, dryRun:dryRun, loc:loc, activity:act.name, price:act.clientPrice, months:months, closedSkipped:closed};
+    if (!Object.keys(keys).length){ res.groups = []; res.changes = 0; res.note = 'відміток за ці місяці немає'; return res; }
+    if (!dryRun){ lock = LockService.getScriptLock(); lock.waitLock(30000); res.backup = _safeBackupSheet(sh, 'subnorm'); if (!res.backup) return {ok:false, error:'копію аркуша не створено — запис скасовано'}; data = sh.getDataRange().getValues(); }
+    var plan = _dopSubNormalize(sh, data, keys, sub, dryRun);
+    res.groups = plan.groups; res.changes = plan.changes.length;
+    if (!dryRun){
+      SpreadsheetApp.flush();
+      _writeHrAuditRows(_marksActorInfo(body.actorId), 'dop_sub_price', plan.changes.map(function(c){ return {rowNum:c.id, before:JSON.stringify({price:c.from}), after:JSON.stringify({price:c.to})}; }));
+      try { _cacheBump('att'); CacheService.getScriptCache().put('attver_' + loc, String(Date.now()), 21600); CacheService.getScriptCache().put('attver_ALL', String(Date.now()), 21600); } catch(_c){}
+      try { lock.releaseLock(); } catch(_r){} lock = null;
+    }
+    if (body.exportPayment !== false){
+      res.payment = months.map(function(m){
+        var ex = exportAttendanceToPayments({loc:loc, year:Number(m.slice(0, 4)), month:Number(m.slice(5, 7)), dryRun:dryRun});
+        var kids = {}; plan.groups.forEach(function(gq){ if (gq.ym === m) kids[_journalNormName(gq.child)] = 1; });
+        return {sourceMonth:m, ok:ex.ok, error:ex.error, targetMonth:ex.targetMonth,
+                details:(ex.details || []).filter(function(d){ return kids[_journalNormName(d.child)]; })};
+      });
+    }
+    return res;
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { if (lock){ try { lock.releaseLock(); } catch(_l){} } }
+}
+
 function _parseActivityRow(row){
   var name = String(row[2] || '').trim();
   return {
@@ -21059,7 +21171,8 @@ function _parseActivityRow(row){
                   /^(true|так|y|1|active|активне|✅)$/i.test(String(row[7] || '').trim()),
     payType:      String(row[8] || '').trim(),
     subLimit:     _subLimitForName(name),         // v7.310: 0 = звичайне, N = абонемент N занять/міс
-    jointGroups:  _parseJointGroups(row[9])       // v7.468: постійні набори груп «разом»
+    jointGroups:  _parseJointGroups(row[9]),      // v7.468: постійні набори груп «разом»
+    clientModel:  _dopClientModel(row[10])        // v7.531: '' — за заняття, 'Абонемент' — ціна за місяць
   };
 }
 
@@ -21288,7 +21401,9 @@ function addActivity(data){
       Number(data.teacherRate) || 0,
       String(data.teacher || '').trim(),
       data.active !== false,
-      String(data.payType || '').trim()
+      String(data.payType || '').trim(),
+      '',                                         // кол. J «Разом_групи»
+      _dopClientModel(data.clientModel)           // v7.531 кол. K «Модель_клієнта»
     ];
     if (!row[1]) return {ok: false, error: 'Поле "Локація" обовʼязкове'};
     if (!row[2]) return {ok: false, error: 'Поле "Назва заняття" обовʼязкове'};
@@ -21351,6 +21466,10 @@ function updateActivity(id, data, onlyLoc){
       if ('teacher'      in data) sh.getRange(r1, 7).setValue(String(data.teacher || '').trim());
       if ('active'       in data) sh.getRange(r1, 8).setValue(data.active !== false);
       if ('payType'      in data) sh.getRange(r1, 9).setValue(String(data.payType || '').trim());
+      if ('clientModel'  in data){                                                   // v7.531
+        if (String(sh.getRange(1, 11).getValue() || '').trim() === '') sh.getRange(1, 11).setValue('Модель_клієнта');
+        sh.getRange(r1, 11).setValue(_dopClientModel(data.clientModel));
+      }
       if ('jointGroups'  in data){                                                   // v7.468
         if (String(sh.getRange(1, 10).getValue() || '').trim() === '') sh.getRange(1, 10).setValue('Разом_групи');
         var _js = _parseJointGroups(JSON.stringify(data.jointGroups || []));
@@ -23013,6 +23132,9 @@ function addAttendanceMark(data){
       new Date()
     ];
     sh.appendRow(row);
+    // v7.531: абонемент — ціну несе перша відмітка дитини в місяці
+    try { var _sp1 = _dopSubPriceByActId(), _sk1 = _dopSubKeysFor([{actId:actId, child:child, date:date}], _sp1, _tz);
+          if (_sk1){ SpreadsheetApp.flush(); _dopSubNormalize(sh, sh.getDataRange().getValues(), _sk1, _sp1, false); } } catch(_sn){ Logger.log('[subNorm] %s', _sn); }
     return {ok: true, id: id};
   } catch(e){
     return {ok: false, error: String(e && e.message || e)};
@@ -23107,6 +23229,9 @@ function removeAttendanceMark(id, body){
         var snap = _attRowSnapshot(data[i], tz);
         sh.deleteRow(i + 1);
         _writeHrAuditRows(_marksActorInfo(body && body.actorId), 'dop_delete_mark', [{rowNum:nid, before:snap}]);
+        // v7.531: зняли першу відмітку абонемента — ціна переходить на наступну відмітку місяця
+        try { var _sp3 = _dopSubPriceByActId(), _sk3 = _dopSubKeysFor([{actId:snap.activityId, child:snap.child, date:snap.date}], _sp3, tz);
+              if (_sk3) _dopSubNormalize(sh, sh.getDataRange().getValues(), _sk3, _sp3, false); } catch(_sn){ Logger.log('[subNorm] %s', _sn); }
         return {ok: true};
       }
     }
@@ -23178,6 +23303,9 @@ function bulkAttendanceMarks(body){
     if (rows.length){
       var startRow = sh.getLastRow() + 1;
       sh.getRange(startRow, 1, rows.length, ATTENDANCE_HEADER.length).setValues(rows);
+      // v7.531: абонемент — ціну несе перша відмітка дитини в місяці
+      try { var _sp2 = _dopSubPriceByActId(), _sk2 = _dopSubKeysFor(rows.map(function(r){ return {actId:r[5], child:r[4], date:r[1]}; }), _sp2, _tz);
+            if (_sk2){ SpreadsheetApp.flush(); _dopSubNormalize(sh, sh.getDataRange().getValues(), _sk2, _sp2, false); } } catch(_sn){ Logger.log('[subNorm] %s', _sn); }
     }
     return {ok: true, results: results, count: rows.length};
   } catch(e){
@@ -23224,6 +23352,9 @@ function bulkRemoveAttendanceMarks(body){
     }
     // v7.272: журнал видалень — хто, коли, що зняв (HR_Audit, action dop_delete_mark)
     _writeHrAuditRows(_marksActorInfo(body && body.actorId), 'dop_delete_mark', snaps);
+    // v7.531: абонемент — ціна переходить на першу з решти відміток місяця
+    try { var _sp4 = _dopSubPriceByActId(), _sk4 = _dopSubKeysFor(snaps.map(function(q){ return {actId:q.before.activityId, child:q.before.child, date:q.before.date}; }), _sp4, _tz);
+          if (_sk4 && rowsToDelete.length) _dopSubNormalize(sh, sh.getDataRange().getValues(), _sk4, _sp4, false); } catch(_sn){ Logger.log('[subNorm] %s', _sn); }
     var results = [];
     for (var m = 0; m < ids.length; m++){
       var nn = Number(ids[m]) || 0;
@@ -29662,6 +29793,21 @@ function getInvoiceListData(params){
       b.breakdown[rec.activityName].count++;
       b.breakdown[rec.activityName].total += (rec.price || 0);
     }
+
+    // v7.531: абонемент — один рядок «<заняття> (абонемент, N занять)», 1 × ціна місяця
+    try {
+      var _subP = _dopSubPriceByActId(), _subNames = {};
+      (getActivitiesCatalog(_invSub ? _invSub.host : loc).items || []).forEach(function(a){ if (_subP.hasOwnProperty(a.id)) _subNames[a.name] = 1; });
+      Object.keys(extrasByChild).forEach(function(ch){
+        var bd = extrasByChild[ch].breakdown;
+        Object.keys(bd).forEach(function(nm){
+          if (!_subNames[nm]) return;
+          var b = bd[nm], n = b.count;
+          delete bd[nm];
+          bd[nm + ' (абонемент, ' + n + ' зан.)'] = {name: nm + ' (абонемент, ' + n + ' зан.)', count: 1, price: b.total, total: b.total};
+        });
+      });
+    } catch(_sb){ Logger.log('[invoice] абонемент: %s', _sb); }
 
     // v7.357: ХАРЧУВАННЯ — окремими рядками в рахунку за ДОДАТКОВІ (рішення CFO 01.10.2026: той самий одержувач,
     // що й додаткові). Лише локації з колонкою харчування (colsPerMonth=7, зараз Школа 228). До сплати —

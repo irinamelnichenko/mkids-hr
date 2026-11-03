@@ -1266,6 +1266,13 @@ select,input,textarea{font-family:inherit}
         <div class="fg">
           <label>Ціна для клієнта (₴) *</label>
           <input type="number" id="actClientPrice" min="0" step="1" placeholder="280">
+          <!-- v7.531: абонемент — ціна за місяць, якщо в місяці є хоч одна відмітка -->
+          <label for="actClientModel" style="margin-top:8px">Модель для батьків</label>
+          <select id="actClientModel">
+            <option value="">За кожне заняття</option>
+            <option value="Абонемент">Абонемент (ціна за місяць)</option>
+          </select>
+          <small class="muted" style="display:block;margin-top:4px;font-size:11px;line-height:1.4">Абонемент: дитина з хоча б однією відміткою в місяці платить ціну один раз, скільки б не було занять. ЗП викладача не змінюється.</small>
         </div>
         <div class="fg">
           <label>Модель оплати викладача</label>
@@ -2516,7 +2523,7 @@ function renderCatalog(){
       : '';
     tr.innerHTML =
       '<td class="cat-name">' + escapeHtml(a.name) + '</td>' +
-      '<td class="num">' + (a.clientPrice ? fmtUah(a.clientPrice) + ' ₴' : '<span class="muted">—</span>') + '</td>' +
+      '<td class="num">' + (a.clientPrice ? fmtUah(a.clientPrice) + ' ₴' + (a.clientModel === 'Абонемент' ? '<div class="muted" style="font-size:11px">абонемент / міс</div>' : '') : '<span class="muted">—</span>') + '</td>' +
       '<td>' + (a.teacherModel ? escapeHtml(a.teacherModel) : '<span class="muted">—</span>') + '</td>' +
       '<td class="num">' + (a.teacherRate ? fmtUah(a.teacherRate) + ' ₴' : '<span class="muted">—</span>') + '</td>' +
       '<td>' + (a.teacher ? escapeHtml(a.teacher) : '<span class="muted">—</span>') + '</td>' +
@@ -2578,6 +2585,7 @@ async function openActivityModal(id){
   $('actLocFixed').value      = targetLoc;
   $('actName').value          = existing ? existing.name : '';
   $('actClientPrice').value   = existing ? (existing.clientPrice || '') : '';
+  $('actClientModel').value   = existing ? (existing.clientModel || '') : '';   // v7.531
   $('actTeacherModel').value  = existing ? (existing.teacherModel || '') : '';
   updateModelHint();
   $('actTeacherRate').value   = existing ? (existing.teacherRate || '') : '';
@@ -2641,6 +2649,7 @@ function _collectModalData(){
     loc:          $('actLocFixed').value.trim(),
     name:         $('actName').value.trim(),
     clientPrice:  parseFloat($('actClientPrice').value) || 0,
+    clientModel:  $('actClientModel').value,                // v7.531: '' | 'Абонемент'
     teacherModel: $('actTeacherModel').value.trim(),
     teacherRate:  parseFloat($('actTeacherRate').value) || 0,
     teacher:      $('actTeacher').value.trim(),
@@ -4094,7 +4103,8 @@ async function onGridCellClick(child, iso){
       id: 'local-' + Date.now() + '-' + Math.random().toString(36).slice(2,7),
       date: iso, loc: S.activeLoc, group: ATT.group, child: child,
       activityId: act.id, activityName: act.name,
-      price: Number(act.clientPrice) || 0, markedBy: _markerLabel(),
+      // v7.531: абонемент — ціну місяця несе перша відмітка дитини (бекенд вирівнює і після зняття)
+      price: (act.clientModel === 'Абонемент' && _subCountFor(child, act.id) > 0) ? 0 : (Number(act.clientPrice) || 0), markedBy: _markerLabel(),
       markedAt: new Date().toISOString(), _pending: true
     };
     ATT.gridMarks.push(mark);                   // галочка ОДРАЗУ
