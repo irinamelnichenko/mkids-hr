@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.532
+// m.kids CRM — Google Apps Script v7.533
+// v7.533: запобіжник Salary-рядка (_salaryRowGuard) — слово рядка, яке є ІМ'ЯМ самого співробітника, не робить рядок чужим, навіть якщо в чиїйсь картці воно стоїть у полі «Прізвище» (Школа Осокорки: «Директорка Ольга Бєлобровець» ↔ звільнена картка last «Ольга», first «Павленко»)
 // v7.532: предметники — «Підготовка до школи» в системі предметів (CATALOG_TO_NORM_MAP, PRED_SUBJECTS; досі null → позиція Осокорків не показувалась); каталог кол. J «Групи» — позиція лише для перелічених груп (тип або повна назва; порожньо — усі), урок в іншій групі бекенд відхиляє (BAD_GROUP_FOR_SUBJECT); updatePredmetny {groups}
 // v7.531: абонемент для батьків у «Додаткових» — каталог кол. K «Модель_клієнта» («Абонемент»): дитина з ≥ 1 відміткою в місяці платить ціну каталогу один раз — ціну несе перша відмітка місяця, решта 0 (_dopSubPlan; нормалізація після додавання й зняття відміток), тож Payment, рахунки, «Додаткові» й аналітика рахують без змін; recalcDopSubscription — перерахунок місяців + експорт у Payment (CFO, dryRun); рахунок показує абонемент одним рядком; ЗП викладача не змінюється
 // v7.530: перевірка рахунків перед розсилкою — getInvoicePrecheck (діти з боргом / переплатою / коригуванням ⚠️, розшифровка по місяцях: бюджет, факт, залишок; хеш списку), invoicePrecheckConfirm (лише CFO, аркуш «Рахунки_Перевірка»), масова розсилка (bulkSendInvoices, sendInvoiceEmail/invoiceViberMessage з bulk:true) заблокована, поки список не підтверджено; _vacCellPlan — розрахунок клітинки знижки відпустки винесено в чисту функцію; тести _backend/tests (predeploy.sh)
@@ -7399,7 +7400,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.532', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.533', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -24942,10 +24943,11 @@ function _salaryRowTokens(norm){
 function _salaryRowGuard(row, emp, hrAll, allowAnon){
   var norm = (row && row.norm) || _normEmpNm(row && row.raw);
   var toks = _salaryRowTokens(norm);
-  function hasSurname(sn){
+  function hasSurname(sn, skipTok){
     sn = _normEmpNm(sn);
     if (!sn || sn.length < 3) return false;
     for (var i = 0; i < toks.length; i++){
+      if (skipTok && toks[i] === skipTok) continue;   // v7.533: ім'я самого emp не доказ чужого прізвища
       if (toks[i] === sn) return true;
       if (sn.length >= 5 && toks[i].length >= 5 && _surnameSim(toks[i], sn) >= 0.85) return true;
     }
@@ -24954,7 +24956,7 @@ function _salaryRowGuard(row, emp, hrAll, allowAnon){
   var ownFirst = _normEmpNm(emp && emp.first).split(' ')[0];
   var own = hasSurname(emp && emp.last);
   var others = (hrAll || []).filter(function(o){
-    return o && o !== emp && !(emp && o.rowNum === emp.rowNum) && hasSurname(o.last);
+    return o && o !== emp && !(emp && o.rowNum === emp.rowNum) && hasSurname(o.last, ownFirst);
   });
   if (own){
     // однофамілець, чиє ім'я стоїть у рядку, а ім'я emp — ні
