@@ -1715,7 +1715,8 @@ async function _rcInvApplyHints(j){
   var locs={}; ms.forEach(function(m){ if(m.loc) locs[m.loc]=1; });
   for(var l in locs) await _rcEnsureCats(l);           // статті — з OPEX-файлу локації заявки
   ms.forEach(function(m){
-    var h={id:m.id, number:m.number||'', loc:m.loc||'', raw:m.category||'', category:_rcInvCatMatch(m.category, m.loc), splits:null, badSplit:''};
+    var h={id:m.id, number:m.number||'', loc:m.loc||'', raw:m.category||'', category:_rcInvCatMatch(m.category, m.loc), splits:null, badSplit:'',
+           closedBy:m.closedBy||'', allocated:!!m.allocated};   // v7.534: «оплачено» (бот) ≠ «розписано» (CFO)
     if(m.split && m.split.length > 1){
       var sp=m.split.map(function(x){ return {category:_rcInvCatMatch(x.opex||x.name, m.loc), amount:Number(x.amount)||0, raw:x.name}; });
       var miss=sp.filter(function(x){ return !x.category; });
@@ -1774,15 +1775,23 @@ function rcRenderInvoices(){
   var body='<div style="margin-top:8px">Відкритих заявок: <b>'+(j.openCount||0)+'</b> · знайдено оплат: <b>'+(j.willMark||0)+'</b>'
     + ((j.ambiguousCount||0) ? ' · неоднозначних: <b style="color:#b9770a">'+j.ambiguousCount+'</b>' : '')
     + ((j.alreadyPaidCount||0) ? ' · уже закрито: <b style="color:var(--green)">'+j.alreadyPaidCount+'</b>' : '') + '</div>';
-  // v7.411: заявки, які платежі цієї виписки вже закрили (автозвірка 05:00 або раніше у звірці) — лише для інформації
-  if((j.alreadyPaid||[]).length){
-    body+='<details style="margin-top:8px"><summary style="cursor:pointer;font-size:13px">🤖 Уже закрито: <b>'+j.alreadyPaid.length+'</b> — повторно не позначаються й у групу не пишуть</summary>'
-      +'<table class="inv-table" style="margin-top:6px"><thead><tr><th>№</th><th>Постачальник</th><th>Локація</th><th>Стаття</th><th class="num">Сума</th><th>Оплата</th><th>Хто закрив</th></tr></thead><tbody>'
-      + j.alreadyPaid.map(function(m){
-          return '<tr><td>'+escapeHtml(String(m.number||m.id))+'</td><td>'+escapeHtml(m.supplier||'—')+'</td><td>'+escapeHtml(m.loc||'—')+'</td>'
-            +'<td>'+escapeHtml(m.category||'—')+'</td><td class="num">'+fmtUah(m.amount)+'</td><td>'+escapeHtml(m.payDate||'')+'</td>'
-            +'<td style="font-size:11px;color:#5b6b7c">'+escapeHtml(m.closedBy||'—')+'</td></tr>';
-        }).join('')+'</tbody></table></details>';
+  // v7.534: «оплачено» (бот, для директора) і «розписано» (CFO) — різні статуси. Рахунок, закритий ботом, рядок виписки
+  //   НЕ позначає: поки платіж не внесено в OPEX / Salary (журнал виписки), він — «не розписано» і чекає у «Витратах».
+  var _apRow=function(m){
+    return '<tr><td>'+escapeHtml(String(m.number||m.id))+'</td><td>'+escapeHtml(m.supplier||'—')+'</td><td>'+escapeHtml(m.loc||'—')+'</td>'
+      +'<td>'+escapeHtml(m.category||'—')+'</td><td class="num">'+fmtUah(m.payAmount||m.amount)+'</td><td>'+escapeHtml(m.payDate||'')+'</td>'
+      +'<td style="font-size:11px;color:#5b6b7c">'+escapeHtml(m.closedBy||'—')+'</td></tr>';
+  };
+  var _apHead='<table class="inv-table" style="margin-top:6px"><thead><tr><th>№</th><th>Постачальник</th><th>Локація</th><th>Стаття</th><th class="num">Сума</th><th>Оплата</th><th>Оплачено (хто закрив)</th></tr></thead><tbody>';
+  var _apTodo=(j.alreadyPaid||[]).filter(function(m){ return !m.allocated; });
+  var _apDone=(j.alreadyPaid||[]).filter(function(m){ return m.allocated; });
+  if(_apTodo.length){
+    body+='<div style="margin-top:8px;font-size:13px">✅ Оплачено, <b style="color:#b9770a">ще не розписано: '+_apTodo.length+'</b> — бот повідомив директора, рядки виписки чекають розпису у «Витратах» (локація і стаття — з рахунку)</div>'
+      +_apHead+_apTodo.map(_apRow).join('')+'</tbody></table>';
+  }
+  if(_apDone.length){
+    body+='<details style="margin-top:8px"><summary style="cursor:pointer;font-size:13px">✓ Оплачено й розписано: <b>'+_apDone.length+'</b></summary>'
+      +_apHead+_apDone.map(_apRow).join('')+'</tbody></table></details>';
   }
   if((j.matched||[]).length){
     body+='<table class="inv-table" style="margin-top:8px"><thead><tr><th>№</th><th>Постачальник</th><th>Локація</th>'
@@ -1800,6 +1809,14 @@ function rcRenderInvoices(){
     } else {
       body+='<div style="margin-top:8px;color:var(--green);font-weight:700">✅ Записано: '+(j.marked||0)+' · повідомлень у групу: '+(j.notified||0)+'</div>';
     }
+  }
+  if((j.partial||[]).length){   // v7.534
+    body+='<div style="margin-top:10px;font-size:12px;color:#b9770a"><b>Оплачено частково (не позначаю):</b><br>'
+      + j.partial.map(function(a){ return '#'+escapeHtml(String(a.id))+' '+escapeHtml(a.supplier||'')+' '+fmtUah(a.amount)+' — сплачено '+fmtUah(a.paidSum)+' ('+escapeHtml((a.payDates||[]).join(', '))+')'; }).join('<br>')+'</div>';
+  }
+  if((j.duplicates||[]).length){   // v7.534
+    body+='<div style="margin-top:10px;font-size:12px;color:#5b6b7c"><b>Дублі заявок (той самий рахунок, уже оплачений):</b><br>'
+      + j.duplicates.map(function(a){ return '#'+escapeHtml(String(a.id))+' '+escapeHtml(a.supplier||'')+' '+fmtUah(a.amount)+' = #'+escapeHtml(String(a.dupOf)); }).join('<br>')+'</div>';
   }
   if((j.ambiguous||[]).length){
     body+='<div style="margin-top:10px;font-size:12px;color:#b9770a"><b>Не чіпаю (неоднозначно):</b><br>'
@@ -2366,7 +2383,10 @@ function rcRenderExpenses(){
     var invH = g.inv;
     if(invH){
       mapBadge = ' <span style="font-size:10px;color:#6f42c1;font-weight:700">🧾 рахунок #'+escapeHtml(String(invH.id))
-        + (invH.number?' (№ '+escapeHtml(invH.number)+')':'') + '</span>';
+        + (invH.number?' (№ '+escapeHtml(invH.number)+')':'') + '</span>'
+        // v7.534: статус рахунку для директора — окремо від розпису виписки
+        + (invH.closedBy ? ' <span style="font-size:10px;color:var(--green)">✅ оплачено</span>'
+            + (invH.allocated ? ' <span style="font-size:10px;color:var(--green)">· ✓ розписано</span>' : ' <span style="font-size:10px;color:#b9770a">· не розписано</span>') : '');
       if(!invH.loc) mapBadge += ' <span style="font-size:10px;color:#b9770a">·у заявці немає локації — оберіть</span>';
       if(invH.badSplit) mapBadge += ' <span style="font-size:10px;color:#b9770a">·у рахунку «'+escapeHtml(invH.badSplit)+'», такої статті немає</span>';
       else if(!invH.splits && !invH.category && invH.raw) mapBadge += ' <span style="font-size:10px;color:#b9770a">·у рахунку «'+escapeHtml(invH.raw)+'», такої статті немає</span>';
