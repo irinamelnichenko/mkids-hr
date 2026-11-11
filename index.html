@@ -3212,10 +3212,16 @@ function _ensureDebtsLive(force){
     try{ var r=await cloudFetch(authScriptUrl()+'?action=getDebtsLive'+(force?'&nocache=1':''),{redirect:'follow'}); var j=await r.json();
       S._debtsLive=(j&&j.ok)?j:{ok:false,error:(j&&j.error)||'немає відповіді'}; }
     catch(e){ S._debtsLive={ok:false,error:String(e&&e.message||e)}; }
+    // v7.536: коментарі директора / CFO до боргів (reply у групі «Банк — <локація>») — лише для CFO
+    try{ if(String((S.user&&S.user.role)||'').toLowerCase()==='cfo'){
+      var rc=await cloudFetch(authScriptUrl()+'?action=bankDebtComments',{redirect:'follow'}); var jc=await rc.json();
+      S._bankCmts={}; ((jc&&jc.ok&&jc.items)||[]).forEach(function(x){ S._bankCmts[x.loc+'|'+_bankCmtKey(x.child)]=x.text; }); } }catch(_c){}
     S._debtLoadedAt=Date.now(); S._debtLoading=null;
   })();
   return S._debtLoading;
 }
+function _bankCmtKey(n){ return String(n||'').toLowerCase().replace(/[’ʼ`']/g,'').replace(/\s+\d+\s*$/,'').replace(/\s+/g,' ').trim(); }
+function _bankCmtHtml(L,name){ var t=S._bankCmts&&S._bankCmts[L+'|'+_bankCmtKey(name)]; return t?'<div style="color:#6f42c1;font-size:11px">💬 '+esc(t)+'</div>':''; }
 function dashDebtToggle(L){ S.debtOpen=S.debtOpen||{}; S.debtOpen[L]=!S.debtOpen[L]; _renderDashNow(); }
 // ─── v7.499: БОРГИ МИНУЛИХ МІСЯЦІВ — ОДНАКОВО на дашборді (index.html) і в «Борги та оплати» (clients.html) ───
 //   Джерело — «Оплати-Рік». По дитині (локація + ПІБ, усі її рядки, включно з розірваними й «вибулими»):
@@ -3612,7 +3618,7 @@ function _renderKompBlock(){
       _dbtRows.map(function(r){ var on=!!(S.debtOpen&&S.debtOpen[r.loc]);
         var sub=on?'<tr><td colspan="3" style="padding:0 0 8px 18px;background:#fbfcfe">'+(r.kids||[]).map(function(k){
             return '<div style="padding:6px 0;border-bottom:1px solid #f0f4f8;font-size:12px"><b>'+esc(k.name)+'</b> <span style="color:var(--gray)">'+esc(k.group||'')+' · '+(k.status==='nopay'?'не платив':'борг')+'</span> — <b style="color:#e74c3c">'+fmtG(k.debt)+'</b>'
-              +'<div style="color:var(--gray2)">бюджет '+fmtG(k.b)+' · оплачено '+fmtG(k.f)+'</div></div>'; }).join('')+'</td></tr>':'';
+              +'<div style="color:var(--gray2)">бюджет '+fmtG(k.b)+' · оплачено '+fmtG(k.f)+'</div>'+_bankCmtHtml(r.loc,k.name)+'</div>'; }).join('')+'</td></tr>':'';
         return '<tr style="cursor:pointer" onclick="dashDebtToggle('+esc(JSON.stringify(r.loc))+')"><td><strong>'+(on?'▾ ':'▸ ')+esc(r.loc)+'</strong></td><td>'+r.n+'</td><td style="color:#e74c3c;font-weight:700">'+fmtG(r.sum)+'</td></tr>'+sub; }).join('')+
       '<tr style="border-top:2px solid var(--gray2)"><td><strong>Разом</strong></td><td><strong>'+dbtN+'</strong></td><td style="font-weight:800;color:#e74c3c">'+fmtG(dbtSum)+'</td></tr></tbody></table></div>':'<div class="empty"><p>Немає боргів</p></div>')
       +pastTbl

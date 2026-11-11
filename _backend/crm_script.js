@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.534
+// m.kids CRM — Google Apps Script v7.536
+// v7.536: групи «Банк — <локація>» (пілот Позняки, Пуща) — той самий бот рахунків; підключення кодом (invoiceBankLink → ?startgroup=); о 16:00 банківського дня: 💰 Оплатили (рознесене CFO у Payment), 🔴 Боржники 6/9/12… (Бюджет − Факт поточного місяця, навч/допи, «перенесено», 🆕 вступний з картки, коментарі reply), 📊 OPEX щопонеділка, 🔴 перевищення бюджету; ⚠️ заявка понад бюджет — одразу й лише в групу «Банк» локації; ізоляція локацій (_bankChatFor); виправлено: міграція чужого чату в супергрупу більше не перезаписує INVOICE_CHAT_ID
+// v7.535: бот рахунків — особистий звіт CFO «оплачено, ще не розписано» щобанківського дня о 15:00 (дата оплати · локація · постачальник · сума · № заявки, «Разом»; порожньо — не пише); лише в особистий чат INVOICE_CFO_CHAT_ID (підключення invoiceCfoLink → /start <код>), у групу директорів — ніколи; приватні повідомлення боту далі за підключення не йдуть; invoiceCfoReport (прев'ю/send=1), invoiceCfoSetup (тригер 15:00)
 // v7.534: бот рахунків — (1) зіставлення з випискою в чистій _invMatchCore: ЄДРПОУ ↔ ІПН платника ПДВ (перші 7 цифр), № через дефіс («09-10-26»), чужий № рахунку в призначенні блокує збіг лише за ЄДРПОУ, сума без ПДВ ×1,2, дублі заявки, рахунок кількома платежами (частково — не пишемо), кілька рахунків однією платіжкою; нічна автозвірка дивиться виписку за 7 днів (заявку часто здають після оплати); (2) «оплачено» (бот, для директора) і «розписано» (CFO, журнал виписки) — окремо: бот пише лише заявку, alreadyPaid.allocated — з OPEX_Витрати_Лог; (3) автозвірка й «✅ Оплачено» — лише в банківські дні: у суботу/неділю не звіряє, у понеділок о 09:00 — за п'ятницю й вихідні, дата з виписки
 // v7.533: запобіжник Salary-рядка (_salaryRowGuard) — слово рядка, яке є ІМ'ЯМ самого співробітника, не робить рядок чужим, навіть якщо в чиїйсь картці воно стоїть у полі «Прізвище» (Школа Осокорки: «Директорка Ольга Бєлобровець» ↔ звільнена картка last «Ольга», first «Павленко»)
 // v7.532: предметники — «Підготовка до школи» в системі предметів (CATALOG_TO_NORM_MAP, PRED_SUBJECTS; досі null → позиція Осокорків не показувалась); каталог кол. J «Групи» — позиція лише для перелічених груп (тип або повна назва; порожньо — усі), урок в іншій групі бекенд відхиляє (BAD_GROUP_FOR_SUBJECT); updatePredmetny {groups}
@@ -2916,10 +2918,22 @@ function tgInvoiceWebhook(e){
     var allow = String(_invChatId()||'');
     var chatId = String((msg.chat && msg.chat.id) || '');
     if(msg.migrate_to_chat_id){
-      PropertiesService.getScriptProperties().setProperty('INVOICE_CHAT_ID', String(msg.migrate_to_chat_id));
-      _tgErr('inv:migrate', 'INVOICE_CHAT_ID '+allow+' → '+msg.migrate_to_chat_id);
-      return {ok:true, migrated:String(msg.migrate_to_chat_id)};
+      // v7.536: група → супергрупа. Своя група рахунків — новий INVOICE_CHAT_ID; група «Банк» — новий чат локації;
+      //   будь-яка інша — ігноруємо (раніше чужий чат перезаписував INVOICE_CHAT_ID).
+      var _mg = _bankGroups(), _ml = _bankLocOfChat(_mg, chatId), _to = String(msg.migrate_to_chat_id);
+      if(_ml){ _mg[_ml] = _to; PropertiesService.getScriptProperties().setProperty(BANK_GROUPS_PROP, JSON.stringify(_mg));
+        _tgErr('bank:migrate', _ml + ' ' + chatId + ' → ' + _to); return {ok:true, bankMigrated:_ml}; }
+      if(allow && chatId !== allow) return {ok:true, ignored:'migrate-other'};
+      PropertiesService.getScriptProperties().setProperty('INVOICE_CHAT_ID', _to);
+      _tgErr('inv:migrate', 'INVOICE_CHAT_ID '+allow+' → '+_to);
+      return {ok:true, migrated:_to};
     }
+    // v7.535: особистий чат з ботом — лише підключення звіту CFO («/start <код>»); заявок і відповідей звідти немає
+    if(msg.chat && msg.chat.type === 'private') return _invCfoLinkFromMessage(msg) || {ok:true, ignored:'private'};
+    // v7.536: групи «Банк — <локація>»: лише відповіді на повідомлення бота (коментарі до боргів); заявок звідти немає
+    var _bkLoc = _bankLocOfChat(_bankGroups(), chatId);
+    if(_bkLoc) return _bankOnGroupMessage(_bkLoc, msg, chatId);
+    if(chatId && chatId !== allow && msg.text){ var _bk = _bankLinkFromMessage(msg, chatId); if(_bk) return _bk; }
     if(allow && chatId && chatId !== allow) return {ok:true, ignored:'chat', chat:chatId};
 
     // ── файл? ──
@@ -3611,6 +3625,7 @@ function ensureInvoiceTrigger(body){
 function _invoiceQueueTick__impl(){
   try { processInvoiceQueue({dryRun:false}); }
   catch(e){ _tgErr('inv:tick', e); }
+  try { _bankBudgetSweep(); } catch(e2){ _tgErr('bank:sweep', e2); }   // v7.536: ⚠️ заявка понад бюджет → група «Банк»
 }
 
 
@@ -4188,6 +4203,599 @@ function invoiceAutoSet(body){
   PropertiesService.getScriptProperties().setProperty('INV_AUTO_MATCH', body.on === false ? 'off' : 'on');
   return {ok:true, on:body.on !== false};
 }
+// ═══ v7.535: ОСОБИСТИЙ ЗВІТ CFO «оплачено, ще не розписано» ═══════════════════════════════════════════════
+// Щобанківського дня о 15:00 (Київ) бот рахунків пише ЛИШЕ в особистий чат CFO (INVOICE_CFO_CHAT_ID): дата оплати ·
+// локація · постачальник · сума · № заявки, унизу «Разом». Порожній список — не пише. У групу директорів (INVOICE_CHAT_ID)
+// «розписано» не потрапляє ніколи: адресат перевіряється _invCfoTarget (лише особистий чат, не група, не чат групи).
+// Підключення: CFO → POST invoiceCfoLink → посилання t.me/<бот>?start=<код> (1 год) → «Start» в особистому чаті з ботом.
+// Звіт бере оплачені заявки з датою оплати від INV_CFO_REPORT_FROM (за замовч. 10.11.2026: до 09.11 CFO розписала сама).
+var INV_CFO_REPORT_HOUR = 15;
+var INV_CFO_REPORT_FROM_DEFAULT = '2026-11-10';
+var INV_TG_MAX = 3800;
+// Чистий: куди можна писати звіт. Лише особистий чат (id > 0) і ніколи — чат групи директорів.
+function _invCfoTarget(cfoChat, groupChat){
+  var c = String(cfoChat || '').trim(), g = String(groupChat || '').trim();
+  if (!/^\d+$/.test(c)) return '';            // групи й канали в Telegram мають від'ємний id
+  if (g && c === g) return '';
+  return c;
+}
+function _invMoneyUa(n){
+  var s = (Math.round(Number(n || 0) * 100) / 100).toFixed(2).split('.');
+  return s[0].replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ',' + s[1];
+}
+// Чистий: текст(и) повідомлення. items: [{payDate:'ДД.ММ.РРРР', loc, supplier, amount, ids:['213', …]}] → [] (порожньо) або
+// масив частин ≤ INV_TG_MAX символів; «Разом» — в останній частині.
+function _invCfoReportTexts(items, dayLabel){
+  items = (items || []).slice().sort(function(a, b){
+    var ka = String(a.payDate || '').split('.').reverse().join(''), kb = String(b.payDate || '').split('.').reverse().join('');
+    return ka < kb ? -1 : ka > kb ? 1 : String(a.loc || '').localeCompare(String(b.loc || ''));
+  });
+  if (!items.length) return [];
+  var total = 0;
+  var lines = items.map(function(x){
+    total += Number(x.amount) || 0;
+    return String(x.payDate || '').slice(0, 5) + ' · ' + _htmlEsc(x.loc || '—') + ' · ' + _htmlEsc(x.supplier || '—') +
+           ' · <b>' + _invMoneyUa(x.amount) + ' ₴</b> · #' + (x.ids || []).map(_htmlEsc).join(', #');
+  });
+  var head = '🧾 <b>Оплачено, ще не розписано</b>' + (dayLabel ? ' — ' + _htmlEsc(dayLabel) : '') + ' (' + items.length + ')';
+  var foot = '\n<b>Разом: ' + _invMoneyUa(total) + ' ₴</b>';
+  var parts = [], cur = head;
+  lines.forEach(function(l){
+    if ((cur + '\n' + l).length > INV_TG_MAX){ parts.push(cur); cur = '…'; }
+    cur += '\n' + l;
+  });
+  if ((cur + foot).length > INV_TG_MAX){ parts.push(cur); cur = '…'; }
+  parts.push(cur + foot);
+  return parts;
+}
+// Оплачені, але не розписані заявки (рядок оплати не в журналі виписки). Дублі однієї оплати — одним рядком.
+function _invCfoUnallocated(){
+  var sh = _invSheet(false); if (!sh) return [];
+  var v = sh.getDataRange().getValues(); if (v.length < 2) return [];
+  var H = v[0].map(String), c = function(n){ return H.indexOf(n); };
+  var fromIso = String(PropertiesService.getScriptProperties().getProperty('INV_CFO_REPORT_FROM') || INV_CFO_REPORT_FROM_DEFAULT);
+  var fromMs = _invDateMs(fromIso);
+  var alloc = _invAllocatedRefs(), byRef = {}, out = [];
+  for (var r = 1; r < v.length; r++){
+    if (String(v[r][c('статус')] || '').trim() !== INV_ST.PAID) continue;
+    var ref = String(v[r][c('matched_ref')] || '').trim(); if (!ref) continue;
+    var pd = _invDmy(v[r][c('дата оплати')]); if (!pd || _invDateMs(pd) < fromMs) continue;
+    var refs = ref.split('+').map(function(x){ return _invRefBase(x); }).filter(Boolean);
+    if (refs.length && refs.every(function(x){ return alloc[x]; })) continue;            // розписано
+    var id = String(v[r][c('invoice_id')]);
+    if (byRef[ref]){ byRef[ref].ids.push(id); continue; }                                 // дубль заявки — та сама оплата
+    var it = {payDate:pd, loc:String(v[r][c('локація')] || '').trim(), supplier:String(v[r][c('постачальник')] || '').trim(),
+              amount:Number(v[r][c('сума')]) || 0, ids:[id], ref:ref};
+    byRef[ref] = it; out.push(it);
+  }
+  return out;
+}
+function _invCfoReport__impl(opts){
+  opts = opts || {};
+  if (!opts.force && !_invBankDayKyiv(new Date())) return {ok:true, skipped:'не банківський день'};
+  var items = _invCfoUnallocated();
+  var texts = _invCfoReportTexts(items, Utilities.formatDate(new Date(), 'Europe/Kiev', 'dd.MM.yyyy'));
+  var res = {ok:true, count:items.length, total:items.reduce(function(a, x){ return a + x.amount; }, 0), texts:texts, sent:0};
+  if (!texts.length){ res.skipped = 'порожньо'; return res; }
+  if (opts.dryRun) return res;
+  var to = _invCfoTarget(_invProp('INVOICE_CFO_CHAT_ID'), _invChatId());
+  if (!to){ res.ok = false; res.error = 'особистий чат CFO не підключено (invoiceCfoLink)'; _tgErr('inv:cfo', res.error); return res; }
+  texts.forEach(function(t, i){
+    if (i) Utilities.sleep(1100);
+    var s = _invSend(to, t);
+    if (s && s.ok) res.sent++; else _tgErr('inv:cfo', String((s && s.description) || 'no send'));
+  });
+  return res;
+}
+function invCfoReport(e){ var _t = Date.now(); try { return _invCfoReport__impl({}); } finally { _trigAcc('invCfoReport', _t); } }
+// GET ?action=invoiceCfoReport&actorId=[&send=1] — прев'ю звіту (CFO); send=1 — надіслати зараз собі в особистий чат.
+function invoiceCfoReport(params){
+  params = params || {};
+  if (!_bankCfo(params.actorId)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var r = _invCfoReport__impl({force:true, dryRun:String(params.send || '') !== '1'});
+  r.linked = !!_invCfoTarget(_invProp('INVOICE_CFO_CHAT_ID'), _invChatId());
+  r.trigger = ScriptApp.getProjectTriggers().some(function(t){ return t.getHandlerFunction() === 'invCfoReport'; });
+  return r;
+}
+// POST {action:'invoiceCfoSetup', actorId} — щоденний тригер 15:00 Київ (сам звіт перевіряє банківський день). Лише CFO.
+function invoiceCfoSetup(body){
+  if (!_bankCfo((body || {}).actorId)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  ScriptApp.getProjectTriggers().forEach(function(t){ if (t.getHandlerFunction() === 'invCfoReport') ScriptApp.deleteTrigger(t); });
+  ScriptApp.newTrigger('invCfoReport').timeBased().atHour(INV_CFO_REPORT_HOUR).nearMinute(0).everyDays(1).inTimezone('Europe/Kiev').create();
+  return {ok:true, at:INV_CFO_REPORT_HOUR + ':00 Europe/Kiev, пн–пт'};
+}
+// POST {action:'invoiceCfoLink', actorId} — одноразовий код підключення особистого чату CFO (1 год).
+function invoiceCfoLink(body){
+  if (!_bankCfo((body || {}).actorId)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var code = 'cfo' + Utilities.getUuid().replace(/-/g, '').slice(0, 16);
+  CacheService.getScriptCache().put('inv_cfo_link', code, 3600);
+  var me = _invApi('getMe', {}), un = me && me.ok && me.result && me.result.username;
+  return {ok:true, code:code, link:un ? ('https://t.me/' + un + '?start=' + code) : '', note:'відкрий посилання в Telegram і натисни «Start» — код діє 1 год'};
+}
+// Вебхук: «/start <код>» в ОСОБИСТОМУ чаті з ботом → цей чат стає чатом звітів CFO.
+function _invCfoLinkFromMessage(msg){
+  var chat = msg && msg.chat || {};
+  if (chat.type !== 'private') return null;
+  var m = /^\/start\s+(\S+)/.exec(String(msg.text || ''));
+  var want = CacheService.getScriptCache().get('inv_cfo_link');
+  if (!m || !want || m[1] !== want) return {ok:true, ignored:'private'};
+  var id = _invCfoTarget(String(chat.id || ''), _invChatId());
+  if (!id) return {ok:true, ignored:'private-bad-id'};
+  PropertiesService.getScriptProperties().setProperty('INVOICE_CFO_CHAT_ID', id);
+  CacheService.getScriptCache().remove('inv_cfo_link');
+  _invSend(id, '✅ Підключено. Щобанківського дня о 15:00 надсилатиму сюди список «оплачено, ще не розписано» (якщо він не порожній).');
+  return {ok:true, linked:true};
+}
+
+// ═══ v7.536: ГРУПИ «БАНК — <локація>» (пілот: Позняки, Пуща) ═══════════════════════════════════════════════
+// Той самий бот @mkids_invoices_bot. Група = директор, CFO, працівники; звичайну переписку бот ігнорує (privacy mode:
+// він бачить лише команди й відповіді на свої повідомлення). Підключення — одноразовим кодом (invoiceBankLink → посилання
+// t.me/<бот>?startgroup=<код>). ІЗОЛЯЦІЯ: кожне повідомлення будується з даних ОДНІЄЇ локації і йде лише в її групу
+// (_bankChatFor: чат має належати рівно одній локації, не бути групою рахунків чи особистим чатом CFO).
+// Розклад — щобанківського дня о 16:00 (CFO розносить виписку до 15:00); вихідний → понеділок:
+//   💰 Оплатили — те, що CFO рознесла в Payment (журнал «Звірки_Платежів», не сира виписка), з минулого надсилання;
+//   🔴 Боржники — 6, 9, 12 … числа: Бюджет − Факт ПОТОЧНОГО місяця, окремо навч / допи; «перенесено» = бюджет − договір −
+//      знижки (навч) / бюджет − відмітки (допи), якщо > 0; + блок 🆕 вступний (картка «Вступний внесок» vs Σ «Факт вступ»
+//      від дати договору); коментарі (reply на список) — біля дитини;
+//   📊 OPEX — щопонеділка: бюджет · витрачено (файл OPEX) · у черзі (неоплачені заявки локації, ≤45 днів) · вільно;
+//   🔴 Перевищення бюджету — стаття реально пішла в мінус (або мінус зріс) після розпису.
+// Одразу (тік черги заявок, ≤5 хв): ⚠️ заявка виводить статтю за бюджет → лише в групу «Банк» локації заявки.
+var BANK_GROUPS_PROP = 'BANK_GROUPS';
+var BANK_SEND_HOUR   = 16;
+var BANK_DEBT_DAYS   = [6, 9, 12, 15, 18, 21, 24, 27, 30];
+var BANK_QUEUE_DAYS  = 45;
+var BANK_DEBT_MIN    = 10;            // < 10 ₴ — залишки округлення (як на дашборді, v7.500)
+var BANK_MSG_SHEET   = 'Банк_Повідомлення';
+var BANK_MSG_HEADER  = ['Коли','Локація','chat_id','message_id','Тип','Діти','Ключ'];
+var BANK_CMT_SHEET   = 'Банк_Коментарі';
+var BANK_CMT_HEADER  = ['Коли','Локація','Дитина','Коментар','Хто','Місяць'];
+var BANK_INV_CAT_RULES = [
+  [/аптеч|бейдж|бейж|непередбач|турнікет/, 'НЕЗАПЛАНОВАНІ ВИТРАТИ'],
+  [/госп|хоз|хімі|миюч|прибиран/,           'ХОЗ.ТОВАРИ'],
+  [/канц|фарб|картридж|папір|принтер/,      'КАНЦТОВАРИ'],
+  [/сніданк/,                               'СНІДАНКИ'],
+  [/прання|пральн/,                         'ПРАЛЬНЯ'],
+  [/комунал|охорон|електронн\S* журнал/,    'КОМУНАЛЬНІ ПОСЛУГИ'],
+  [/персонал/,                              'Персонал'],
+  [/^\s*вод[аип]?\s*$/,                     'Вода']
+];
+// ↑ = RC_INV_CAT_RULES у reconcile.html
+
+// ── чисті функції (тести) ──
+function _bankGroupsParse(s){ try { var o = JSON.parse(s || '{}'); return (o && typeof o === 'object') ? o : {}; } catch(_e){ return {}; } }
+// Чат групи «Банк» локації — лише якщо він належить РІВНО цій локації і не є групою рахунків / чатом CFO.
+function _bankChatFor(groups, loc, invGroup, cfoChat){
+  var c = String((groups || {})[loc] || '').trim();
+  if (!/^-\d+$/.test(c)) return '';
+  if (c === String(invGroup || '').trim() || c === String(cfoChat || '').trim()) return '';
+  var owners = Object.keys(groups).filter(function(l){ return String(groups[l]).trim() === c; });
+  return (owners.length === 1 && owners[0] === loc) ? c : '';
+}
+function _bankLocOfChat(groups, chatId){
+  var c = String(chatId || '').trim(); if (!c) return '';
+  var owners = Object.keys(groups || {}).filter(function(l){ return String(groups[l]).trim() === c; });
+  return owners.length === 1 ? owners[0] : '';
+}
+function _bankWords(s){ return String(s || '').toLowerCase().replace(/[’ʼ`']/g, '').replace(/ё/g, 'е').replace(/\s+\d+\s*$/, '').split(/[^a-zа-яіїєґ]+/).filter(Boolean); }
+function _bankMoney(n){ var s = _invMoneyUa(n); return /,00$/.test(s) ? s.slice(0, -3) : s; }
+function _bankNormCat(s){ return String(s || '').toLowerCase().replace(/\s+/g, ' ').trim(); }
+// Стаття заявки → стаття OPEX локації (точна назва або правило); '' — не визначено.
+function _bankInvCat(raw, catNames){
+  var t = _bankNormCat(raw); if (!t) return '';
+  for (var i = 0; i < catNames.length; i++) if (_bankNormCat(catNames[i]) === t) return catNames[i];
+  for (var j = 0; j < BANK_INV_CAT_RULES.length; j++){
+    if (!BANK_INV_CAT_RULES[j][0].test(t)) continue;
+    var want = _bankNormCat(BANK_INV_CAT_RULES[j][1]);
+    for (var k = 0; k < catNames.length; k++) if (_bankNormCat(catNames[k]) === want) return catNames[k];
+    return '';
+  }
+  return '';
+}
+// Найближчий день списку боржників ≤ day у місяці (6, 9, 12 …); 0 — ще рано (оплата до 5-го).
+function _bankDebtDayFor(day){ var last = 0; BANK_DEBT_DAYS.forEach(function(d){ if (d <= day) last = d; }); return last; }
+// kids: [{name, bs, fs, be, fe, net (договір − знижки | null), marks (Σ відміток доп)}]; comments: {ключ дитини: текст}
+function _bankDebtorsCalc(kids, comments){
+  var out = [];
+  (kids || []).forEach(function(k){
+    var dn = Math.round(((Number(k.bs) || 0) - (Number(k.fs) || 0)) * 100) / 100;
+    var dd = Math.round(((Number(k.be) || 0) - (Number(k.fe) || 0)) * 100) / 100;
+    var x = {name:k.name, navch:null, dop:null};
+    if (dn >= BANK_DEBT_MIN){
+      var cn = (k.net == null) ? 0 : Math.max(0, (Number(k.bs) || 0) - Number(k.net));
+      x.navch = {debt:dn, carried:Math.round(Math.min(dn, cn) * 100) / 100};
+    }
+    if (dd >= BANK_DEBT_MIN){
+      var cd = Math.max(0, (Number(k.be) || 0) - (Number(k.marks) || 0));
+      x.dop = {debt:dd, carried:Math.round(Math.min(dd, cd) * 100) / 100};
+    }
+    if (!x.navch && !x.dop) return;
+    x.total = (x.navch ? x.navch.debt : 0) + (x.dop ? x.dop.debt : 0);
+    x.comment = (comments && comments[_dopAnKid(k.name)]) || '';
+    out.push(x);
+  });
+  return out.sort(function(a, b){ return String(a.name).localeCompare(String(b.name), 'uk'); });
+}
+// Вступний: cards [{name, fee, contract:'YYYY-MM-DD'}], facts {ключ дитини: {name, months:[12 × «Факт вступ»]}} поточного року.
+// Сплачено = Σ «Факт вступ» від місяця договору (частинами можна). Договір минулого року — не бачимо (інший файл) → пропуск.
+function _bankEntryCalc(cards, facts, Y, todayISO){
+  var keys = Object.keys(facts || {}), out = [];
+  (cards || []).forEach(function(c){
+    var fee = Number(c.fee) || 0, iso = String(c.contract || '');
+    if (fee <= 0 || !/^\d{4}-\d{2}-\d{2}$/.test(iso) || iso > todayISO || Number(iso.slice(0, 4)) !== Y) return;
+    var k = _dopAnKid(c.name), f = facts[k] ? facts[k].months : null;
+    if (!f){                                            // інше написання прізвища («Дністранський» / «Дністянський»)
+      var p = _bankWords(c.name), best = null, bs = 0;
+      keys.forEach(function(kk){ var q = _bankWords(facts[kk].name);
+        if (!p[1] || (q[1] || '') !== p[1]) return;
+        var s = _surnameSim(q[0] || '', p[0] || ''); if (s > bs){ bs = s; best = kk; } });
+      if (best && bs >= 0.8) f = facts[best].months;
+    }
+    var cm = Number(iso.slice(5, 7)), paid = 0;
+    for (var m = cm; m <= 12; m++) paid += Number((f || [])[m - 1]) || 0;
+    if (paid < fee - 0.5) out.push({name:c.name, paid:Math.round(paid * 100) / 100, fee:fee, contract:iso.slice(8, 10) + '.' + iso.slice(5, 7) + '.' + iso.slice(0, 4)});
+  });
+  return out.sort(function(a, b){ return String(a.name).localeCompare(String(b.name), 'uk'); });
+}
+// OPEX: cats [{name, budget, spent}], queue {стаття: сума, '': без статті} → рядки й підсумок.
+function _bankOpexCalc(cats, queue){
+  queue = queue || {};
+  var lines = [], T = {budget:0, spent:0, queue:0, free:0};
+  (cats || []).forEach(function(c){
+    var b = Number(c.budget) || 0, s = Number(c.spent) || 0, q = Number(queue[c.name]) || 0;
+    if (!b && !s && !q) return;
+    var free = Math.round((b - s - q) * 100) / 100;
+    lines.push({name:c.name, budget:b, spent:s, queue:q, free:free, over:free < 0});
+    T.budget += b; T.spent += s; T.queue += q;
+  });
+  var nq = Number(queue['']) || 0; T.queue += nq;
+  T.free = Math.round((T.budget - T.spent - T.queue) * 100) / 100;
+  return {lines:lines, noCat:nq, total:T};
+}
+// ⚠️ заявка: перевищення після оплати = витрачено + у черзі (без неї) + вона − бюджет (> 0 — попередження).
+function _bankInvOver(budget, spent, queueOther, amount){
+  var x = Math.round(((Number(spent) || 0) + (Number(queueOther) || 0) + (Number(amount) || 0) - (Number(budget) || 0)) * 100) / 100;
+  return x > 0 ? x : 0;
+}
+// 🔴 стаття в мінусі: нові або глибші за вже повідомлені (prev {ключ: дефіцит}).
+function _bankOverNew(cats, prev, ym){
+  var out = [], next = {};
+  (cats || []).forEach(function(c){
+    var d = Math.round(((Number(c.spent) || 0) - (Number(c.budget) || 0)) * 100) / 100;
+    if (d <= 0.5) return;
+    var k = ym + '|' + c.name; next[k] = d;
+    if (!(prev && prev[k] != null) || d > Number(prev[k]) + 0.5) out.push({name:c.name, deficit:d, budget:Number(c.budget) || 0, spent:Number(c.spent) || 0});
+  });
+  return {items:out, state:next};
+}
+// Частини повідомлення ≤ INV_TG_MAX: шапка, рядки, низ (низ — у останній частині).
+function _bankChunks(head, lines, foot){
+  var parts = [], cur = head;
+  lines.forEach(function(l){ if ((cur + '\n' + l).length > INV_TG_MAX){ parts.push(cur); cur = '…'; } cur += '\n' + l; });
+  if (foot){ if ((cur + '\n' + foot).length > INV_TG_MAX){ parts.push(cur); cur = '…'; } cur += '\n' + foot; }
+  parts.push(cur);
+  return parts;
+}
+function _bankPaidTexts(loc, items, dayLabel){
+  if (!items || !items.length) return [];
+  var tot = 0;
+  var lines = items.map(function(x){ tot += Number(x.amount) || 0;
+    return '• ' + _htmlEsc(x.child) + ' — <b>' + _bankMoney(x.amount) + ' ₴</b> · ' + _htmlEsc(x.kind) + ' · оплата ' + _htmlEsc(String(x.date || '').slice(0, 5)); });
+  return _bankChunks('💰 <b>Оплатили</b> — ' + _htmlEsc(loc) + (dayLabel ? ', ' + _htmlEsc(dayLabel) : ''), lines, '<b>Разом: ' + _bankMoney(tot) + ' ₴</b>');
+}
+function _bankDebtorsTexts(loc, monthName, debtors, entries){
+  debtors = debtors || []; entries = entries || [];
+  if (!debtors.length && !entries.length) return [];
+  var tot = 0, lines = [];
+  debtors.forEach(function(x){
+    tot += x.total;
+    var p = [];
+    if (x.navch) p.push('навч. ' + _bankMoney(x.navch.debt) + (x.navch.carried > 0 ? ' (з них перенесено ' + _bankMoney(x.navch.carried) + ')' : ''));
+    if (x.dop) p.push('допи ' + _bankMoney(x.dop.debt) + (x.dop.carried > 0 ? ' (з них перенесено ' + _bankMoney(x.dop.carried) + ')' : ''));
+    lines.push('• ' + _htmlEsc(x.name) + ' — ' + p.join('; ') + (x.comment ? '\n   💬 ' + _htmlEsc(x.comment) : ''));
+  });
+  var foot = debtors.length ? '<b>Разом: ' + _bankMoney(tot) + ' ₴</b> · дітей ' + debtors.length : '';
+  if (entries.length){
+    foot += (foot ? '\n\n' : '') + '🆕 <b>Вступний не сплачено:</b>\n' + entries.map(function(e){
+      return '• ' + _htmlEsc(e.name) + ' — сплачено ' + _bankMoney(e.paid) + ' з ' + _bankMoney(e.fee) + ' (договір ' + _htmlEsc(e.contract) + ')'; }).join('\n');
+  }
+  foot += '\n\n<i>Коментар до боргу — відповіддю (reply) на цей список: «Прізвище: текст».</i>';
+  return _bankChunks('🔴 <b>Боржники</b> — ' + _htmlEsc(loc) + ', ' + _htmlEsc(monthName) + (debtors.length ? '' : ': боргів за місяць немає'), lines, foot);
+}
+function _bankOpexTexts(loc, monthName, calc){
+  if (!calc || !calc.lines.length) return [];
+  var lines = calc.lines.map(function(l){
+    return (l.over ? '🔴 ' : '• ') + _htmlEsc(l.name) + ': бюджет ' + _bankMoney(l.budget) + ' · витрачено ' + _bankMoney(l.spent) +
+           ' · у черзі ' + _bankMoney(l.queue) + ' · вільно <b>' + _bankMoney(l.free) + '</b>'; });
+  if (calc.noCat) lines.push('• без статті (у заявці не вказано): у черзі ' + _bankMoney(calc.noCat));
+  var T = calc.total;
+  return _bankChunks('📊 <b>OPEX ' + _htmlEsc(monthName) + '</b> — ' + _htmlEsc(loc), lines,
+    '<b>Разом:</b> бюджет ' + _bankMoney(T.budget) + ' · витрачено ' + _bankMoney(T.spent) + ' · у черзі ' + _bankMoney(T.queue) + ' · вільно <b>' + _bankMoney(T.free) + '</b>');
+}
+function _bankInvOverText(id, cat, over, budget){
+  return '⚠️ Рахунок #' + _htmlEsc(id) + ', ' + _htmlEsc(cat) + ': після оплати перевищення <b>' + _bankMoney(over) + ' ₴</b> з ' + _bankMoney(budget) + '. Потрібне погодження.';
+}
+function _bankOverTexts(loc, monthName, items){
+  if (!items || !items.length) return [];
+  return _bankChunks('🔴 <b>Перевищення бюджету</b> — ' + _htmlEsc(loc) + ', ' + _htmlEsc(monthName),
+    items.map(function(x){ return '• ' + _htmlEsc(x.name) + ' −' + _bankMoney(x.deficit) + ' ₴ (бюджет ' + _bankMoney(x.budget) + ', витрачено ' + _bankMoney(x.spent) + ')'; }), '');
+}
+// Reply на список боржників → дитина: один у списку — він; інакше прізвище з тексту (рівно один збіг).
+function _bankCommentTarget(children, text){
+  children = children || [];
+  if (children.length === 1) return {child:children[0], text:String(text || '').trim()};
+  var t = ' ' + _bankWords(text).join(' ') + ' ', hits = [];
+  children.forEach(function(ch){
+    var sn = _bankWords(ch)[0];
+    if (sn && sn.length >= 3 && t.indexOf(' ' + sn + ' ') >= 0) hits.push(ch);
+  });
+  if (hits.length !== 1) return null;
+  var clean = String(text || '').replace(new RegExp('^\\s*' + hits[0].split(' ')[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[^:—\\-]*[:—\\-]\\s*', 'i'), '').trim();
+  return {child:hits[0], text:clean || String(text || '').trim()};
+}
+
+// ── стан, відправка, журнали ──
+function _bankGroups(){ return _bankGroupsParse(PropertiesService.getScriptProperties().getProperty(BANK_GROUPS_PROP)); }
+function _bankState(loc){ try { return JSON.parse(PropertiesService.getScriptProperties().getProperty('BANK_STATE_' + loc) || '{}') || {}; } catch(_e){ return {}; } }
+function _bankStateSave(loc, st){ PropertiesService.getScriptProperties().setProperty('BANK_STATE_' + loc, JSON.stringify(st || {})); }
+function _bankSheet(name, header){
+  var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID), sh = ss.getSheetByName(name);
+  if (!sh){ sh = ss.insertSheet(name); sh.getRange(1, 1, 1, header.length).setValues([header]); sh.setFrozenRows(1); }
+  return sh;
+}
+function _bankSend(loc, text, type, children, key){
+  var to = _bankChatFor(_bankGroups(), loc, _invChatId(), _invProp('INVOICE_CFO_CHAT_ID'));
+  if (!to) return {ok:false, description:'група «Банк — ' + loc + '» не підключена'};
+  var res = _invSend(to, text);
+  if (res && res.ok){
+    try { _bankSheet(BANK_MSG_SHEET, BANK_MSG_HEADER).appendRow([new Date(), loc, "'" + to, String(res.result && res.result.message_id || ''), type || '',
+          JSON.stringify(children || []), key || '']); } catch(_l){}
+  } else _tgErr('bank:send', loc + ': ' + String((res && res.description) || 'no send'));
+  return res;
+}
+function _bankSentKey(key){
+  try { var sh = _bankSheet(BANK_MSG_SHEET, BANK_MSG_HEADER); if (sh.getLastRow() < 2) return false;
+    return sh.getRange(2, 7, sh.getLastRow() - 1, 1).getValues().some(function(r){ return String(r[0]) === key; }); } catch(_e){ return false; }
+}
+function _bankComments(loc, ym){
+  var out = {};
+  try { var sh = SpreadsheetApp.openById(CONFIG_SHEET_ID).getSheetByName(BANK_CMT_SHEET); if (!sh || sh.getLastRow() < 2) return out;
+    sh.getRange(2, 1, sh.getLastRow() - 1, BANK_CMT_HEADER.length).getValues().forEach(function(r){
+      if (String(r[1]).trim() !== loc || (ym && String(r[5]).trim() !== ym)) return;
+      out[_dopAnKid(r[2])] = String(r[3] || '') + (r[4] ? ' — ' + String(r[4]) : '') + ' (' + Utilities.formatDate(new Date(r[0]), 'Europe/Kiev', 'dd.MM') + ')';
+    }); } catch(_e){}
+  return out;
+}
+function _bankCfgRow(loc){
+  var cfg = SpreadsheetApp.openById(CONFIG_SHEET_ID).getSheets()[0].getDataRange().getValues();
+  for (var i = 1; i < cfg.length; i++) if (trim(cfg[i][2]) === loc && trim(cfg[i][3])) return cfg[i];
+  return null;
+}
+function _bankYM(now){ return Utilities.formatDate(now, 'Europe/Kiev', 'yyyy-MM'); }
+
+// ── дані однієї локації ──
+function _bankOpexCats(loc, m){
+  var ls = _opexLocSheet(loc); if (!ls) return [];
+  var sh = ls.sheet, V = sh.getRange(1, 1, Math.max(sh.getLastRow(), 30), 37).getValues();
+  return _opexEditableRows(V).filter(function(r){ return r.kind === 'budget'; }).map(function(r){
+    return {name:r.name, budget:_opexNum(V[r.row - 1][_opexBudgetCol(m) - 1]), spent:_opexNum(V[r.row - 1][(m - 1) * 3 + 1])}; });
+}
+function _bankQueue(loc, catNames, exceptId){
+  var q = {}, list = [], sh = _invSheet(false); if (!sh) return {sum:q, list:list};
+  var v = sh.getDataRange().getValues(), H = v[0].map(String), c = function(n){ return H.indexOf(n); };
+  var since = Date.now() - BANK_QUEUE_DAYS * 86400000;
+  for (var r = 1; r < v.length; r++){
+    if (String(v[r][c('локація')] || '').trim() !== loc) continue;
+    if (String(v[r][c('статус')] || '').trim() !== INV_ST.PARSED) continue;
+    var id = String(v[r][c('invoice_id')]), amt = Number(v[r][c('сума')]) || 0;
+    if (!amt || id === String(exceptId || '') || _invDateMs(v[r][c('created_at')]) < since) continue;
+    var cat = _bankInvCat(v[r][c('стаття (з підпису)')], catNames);
+    q[cat] = (q[cat] || 0) + amt; list.push({id:id, cat:cat, amount:amt});
+  }
+  return {sum:q, list:list};
+}
+function _bankDebtData(loc, now){
+  var cfg = _bankCfgRow(loc); if (!cfg) return {kids:[], facts:{}, cards:[]};
+  var Y = Number(Utilities.formatDate(now, 'Europe/Kiev', 'yyyy')), M = Number(Utilities.formatDate(now, 'Europe/Kiev', 'M'));
+  var rows = _aggYearLocRows(cfg, now, formatDate(now)), by = {}, facts = {};
+  rows.forEach(function(row){
+    var name = String(row[5] || '').trim(); if (!name || /^\(без імені/i.test(name) || row[row.length - 1] === 'так') return;
+    var k = _dopAnKid(name), b = 6 + (M - 1) * 6;
+    var x = by[k] || (by[k] = {name:name, bs:0, fs:0, be:0, fe:0, net:null, marks:0});
+    x.fs += toNum(row[b]); x.fe += toNum(row[b + 1]); x.bs += toNum(row[b + 3]); x.be += toNum(row[b + 4]);
+    var f = facts[k] || (facts[k] = {name:name, months:[0,0,0,0,0,0,0,0,0,0,0,0]});
+    for (var m = 1; m <= 12; m++) f.months[m - 1] += toNum(row[6 + (m - 1) * 6 + 2]);
+  });
+  var pm = _prevYM(Y, M);
+  var inv = getInvoiceListData({loc:loc, payMonth:M, payYear:Y, extMonth:pm.m, extYear:pm.y});
+  ((inv && inv.children) || []).forEach(function(ch){ var x = by[_dopAnKid(ch.name)]; if (x){ x.net = ch.studyNet; x.marks = Number(ch.extrasBreakdownSum) || 0; } });
+  var cs = getCRMSpreadsheet().getSheetByName(SHEET_CLIENTS), cv = cs.getDataRange().getValues(), h = cv[0].map(String);
+  var iN = h.indexOf('ПІБ дитини'), iL = h.indexOf('Локація'), iS = h.indexOf('Статус'), iD = h.indexOf('Дата договору'), iE = h.indexOf('Вступний внесок');
+  var cards = [];
+  for (var r = 1; r < cv.length; r++){
+    if (String(cv[r][iL] || '').trim() !== loc) continue;
+    var st = String(cv[r][iS] || '').trim(); if (st !== 'active' && st !== 'adaptation') continue;
+    var d = cv[r][iD], iso = d instanceof Date ? Utilities.formatDate(d, 'Europe/Kiev', 'yyyy-MM-dd') : _toISO(d);
+    cards.push({name:String(cv[r][iN] || '').trim(), fee:Number(cv[r][iE]) || 0, contract:iso || ''});
+  }
+  return {kids:Object.keys(by).map(function(k){ return by[k]; }), facts:facts, cards:cards, Y:Y, M:M};
+}
+// «Оплатили»: рядки «Звірки_Платежів» локації з (fromMs, toMs]; «за що» — за колонкою Payment (блок місяця).
+function _bankPaidItems(loc, fromMs, toMs){
+  var sh = SpreadsheetApp.openById(CONFIG_SHEET_ID).getSheetByName(RECONCILE_LOG_SHEET); if (!sh || sh.getLastRow() < 2) return [];
+  var v = sh.getRange(2, 1, sh.getLastRow() - 1, 12).getValues();
+  var rows = v.filter(function(r){ if (String(r[2] || '').trim() !== loc) return false; var w = new Date(r[0]).getTime(); return w > fromMs && w <= toMs; });
+  if (!rows.length) return [];
+  var cfg = _bankCfgRow(loc), hdr = [], lay = _paymentLayout(5);
+  try { var ss = SpreadsheetApp.openById(trim(cfg[3])), ps = ss.getSheetByName(trim(cfg[4]) || 'Payment') || ss.getSheets()[0];
+        hdr = ps.getRange(1, 1, 3, ps.getLastColumn()).getValues(); lay = _paymentLayout(_paymentColsPerMonth(loc, cfg[5])); } catch(_p){}
+  return rows.map(function(r){
+    var mon = Number(r[9]) || 0, kind = 'навчання';
+    var start = (mon && hdr.length) ? _detectMonthColByHeader(hdr, mon - 1) : -1, idx = _colIndex1(String(r[10] || '')) - 1;
+    if (start >= 0 && idx >= 0){ var off = idx - start;
+      kind = off === lay.factVstup ? 'вступний' : off === lay.factDop ? 'допи' : (lay.factHarch != null && off === lay.factHarch) ? 'харчування' : 'навчання'; }
+    var pd = r[4] instanceof Date ? Utilities.formatDate(r[4], 'Europe/Kiev', 'dd.MM.yyyy') : String(r[4] || '');
+    return {child:String(r[7] || '').trim(), amount:Number(r[11]) || 0, kind:kind, date:pd};
+  }).filter(function(x){ return x.amount; });
+}
+
+// ── щоденний прогін 16:00 ──
+// opts: {now, force (ігнорувати розклад), dryRun (не надсилати, повернути тексти), loc (лише одна), kinds:['paid','debt','opex','over']}
+function _bankDaily__impl(opts){
+  opts = opts || {};
+  var now = opts.now || new Date(), out = {};
+  if (!opts.force && !_invBankDayKyiv(now)) return {ok:true, skipped:'не банківський день'};
+  var groups = _bankGroups(), locs = opts.loc ? [opts.loc] : Object.keys(groups);
+  var want = function(k){ return !opts.kinds || opts.kinds.indexOf(k) >= 0; };
+  var Y = Number(Utilities.formatDate(now, 'Europe/Kiev', 'yyyy')), M = Number(Utilities.formatDate(now, 'Europe/Kiev', 'M'));
+  var day = Number(Utilities.formatDate(now, 'Europe/Kiev', 'd')), today = Utilities.formatDate(now, 'Europe/Kiev', 'yyyy-MM-dd');
+  var mName = String(MONTHS_CAL[M - 1] || '').toLowerCase(), ym = _bankYM(now), dayLabel = Utilities.formatDate(now, 'Europe/Kiev', 'dd.MM');
+  locs.forEach(function(loc){
+    var st = _bankState(loc), r = out[loc] = {texts:{}, sent:0};
+    try {
+      // 💰 Оплатили
+      if (want('paid')){
+        var from = st.paidTs || Utilities.parseDate(today + ' 00:00', 'Europe/Kiev', 'yyyy-MM-dd HH:mm').getTime();
+        var t1 = _bankPaidTexts(loc, _bankPaidItems(loc, from, now.getTime()), dayLabel);
+        r.texts.paid = t1;
+        if (!opts.dryRun){ t1.forEach(function(t){ if (_bankSend(loc, t, 'paid').ok) r.sent++; }); st.paidTs = now.getTime(); }
+      }
+      // 🔴 Боржники (6, 9, 12 …; пропущений через вихідні день — у понеділок)
+      var dd = _bankDebtDayFor(day), dueISO = dd ? today.slice(0, 8) + ('0' + dd).slice(-2) : '';
+      if (want('debt') && (opts.force || (dd && String(st.debtSent || '') < dueISO))){
+        var D = _bankDebtData(loc, now);
+        var debtors = _bankDebtorsCalc(D.kids, _bankComments(loc, ym)), entries = _bankEntryCalc(D.cards, D.facts, D.Y, today);
+        var t2 = _bankDebtorsTexts(loc, mName, debtors, entries);
+        r.texts.debt = t2; r.debtors = debtors.length; r.entries = entries.length;
+        if (!opts.dryRun){
+          var kids = debtors.map(function(x){ return x.name; });
+          t2.forEach(function(t){ if (_bankSend(loc, t, 'debt', kids).ok) r.sent++; });
+          st.debtSent = today;
+        }
+      }
+      // 📊 OPEX — щопонеділка; 🔴 перевищення — щодня
+      var cats = null;
+      var isMon = Utilities.formatDate(now, 'Europe/Kiev', 'u') === '1';
+      if (want('opex') && (opts.force || (isMon && st.opexSent !== today))){
+        cats = cats || _bankOpexCats(loc, M);
+        var q = _bankQueue(loc, cats.map(function(c){ return c.name; }));
+        var t3 = _bankOpexTexts(loc, mName, _bankOpexCalc(cats, q.sum));
+        r.texts.opex = t3;
+        if (!opts.dryRun){ t3.forEach(function(t){ if (_bankSend(loc, t, 'opex').ok) r.sent++; }); st.opexSent = today; }
+      }
+      if (want('over')){
+        cats = cats || _bankOpexCats(loc, M);
+        var ov = _bankOverNew(cats, opts.dryRun ? {} : (st.over || {}), ym);
+        var t4 = _bankOverTexts(loc, mName, ov.items);
+        r.texts.over = t4;
+        if (!opts.dryRun){ t4.forEach(function(t){ if (_bankSend(loc, t, 'over').ok) r.sent++; }); st.over = ov.state; }
+      }
+      if (!opts.dryRun) _bankStateSave(loc, st);
+    } catch(e){ r.error = String(e && e.message || e); _tgErr('bank:daily', loc + ': ' + r.error); }
+  });
+  return {ok:true, locs:out};
+}
+function bankGroupsDaily(e){ var _t = Date.now(); try { return _bankDaily__impl({}); } finally { _trigAcc('bankGroupsDaily', _t); } }
+
+// ⚠️ одразу: тік черги заявок (≤5 хв) — нові розпізнані заявки підключених локацій, що виводять статтю за бюджет.
+function _bankBudgetSweep(){
+  var groups = _bankGroups(); if (!Object.keys(groups).length) return {ok:true, skipped:'груп немає'};
+  var sh = _invSheet(false); if (!sh) return {ok:true};
+  var v = sh.getDataRange().getValues(), H = v[0].map(String), c = function(n){ return H.indexOf(n); };
+  var cache = CacheService.getScriptCache(), since = Date.now() - 3 * 86400000, catsBy = {}, sent = 0;
+  var M = Number(Utilities.formatDate(new Date(), 'Europe/Kiev', 'M'));
+  for (var r = 1; r < v.length; r++){
+    var loc = String(v[r][c('локація')] || '').trim(); if (!groups[loc]) continue;
+    if (String(v[r][c('статус')] || '').trim() !== INV_ST.PARSED) continue;
+    var id = String(v[r][c('invoice_id')]), amt = Number(v[r][c('сума')]) || 0;
+    if (!amt || _invDateMs(v[r][c('created_at')]) < since || cache.get('bank_chk_' + id)) continue;
+    var cats = catsBy[loc] || (catsBy[loc] = _bankOpexCats(loc, M)), names = cats.map(function(x){ return x.name; });
+    var cat = _bankInvCat(v[r][c('стаття (з підпису)')], names);
+    if (!cat) continue;                                     // стаття ще невідома (підпис прийде пізніше) — наступний тік
+    cache.put('bank_chk_' + id, '1', 6 * 3600);
+    if (_bankSentKey('over:' + id)) continue;
+    var C = cats.filter(function(x){ return x.name === cat; })[0] || {budget:0, spent:0};
+    var q = _bankQueue(loc, names, id), over = _bankInvOver(C.budget, C.spent, q.sum[cat] || 0, amt);
+    if (over > 0 && _bankSend(loc, _bankInvOverText(id, cat, over, C.budget), 'invOver', [], 'over:' + id).ok) sent++;
+  }
+  return {ok:true, sent:sent};
+}
+
+// ── вебхук: підключення групи, коментарі ──
+function _bankLinkFromMessage(msg, chatId){
+  var m = /^\/start(?:@\w+)?\s+(\S+)/.exec(String(msg.text || '')); if (!m) return null;
+  var cache = CacheService.getScriptCache(), loc = cache.get('inv_bank_link_' + m[1]); if (!loc) return null;
+  if (!/^-\d+$/.test(chatId) || chatId === String(_invChatId() || '')) return {ok:true, ignored:'bank-link-bad-chat'};
+  var g = _bankGroups(), other = _bankLocOfChat(g, chatId);
+  if (other && other !== loc){ _invSend(chatId, '⛔ Цю групу вже підключено до «Банк — ' + _htmlEsc(other) + '». Одна група — одна локація.'); return {ok:true, refused:other}; }
+  g[loc] = chatId;
+  PropertiesService.getScriptProperties().setProperty(BANK_GROUPS_PROP, JSON.stringify(g));
+  cache.remove('inv_bank_link_' + m[1]);
+  _invSend(chatId, '✅ Групу підключено: <b>Банк — ' + _htmlEsc(loc) + '</b>. Повідомлення — щобанківського дня о 16:00; звичайну переписку бот не читає.');
+  return {ok:true, bankLinked:loc};
+}
+function _bankOnGroupMessage(loc, msg, chatId){
+  var rep = msg.reply_to_message;
+  if (!rep || !msg.text || !(rep.from && rep.from.is_bot)) return {ok:true, ignored:'bank-chat'};
+  var sh = _bankSheet(BANK_MSG_SHEET, BANK_MSG_HEADER), rec = null;
+  if (sh.getLastRow() >= 2) sh.getRange(2, 1, sh.getLastRow() - 1, BANK_MSG_HEADER.length).getValues().some(function(r){
+    if (String(r[2]).replace(/^'/, '') === chatId && String(r[3]) === String(rep.message_id) && String(r[1]) === loc){ rec = r; return true; } return false; });
+  if (!rec || String(rec[4]) !== 'debt') return {ok:true, ignored:'bank-reply-other'};
+  var kids = []; try { kids = JSON.parse(rec[5] || '[]'); } catch(_k){}
+  var tg = _bankCommentTarget(kids, msg.text);
+  if (!tg){ _invSend(chatId, 'Не зрозумів, про кого. Почніть із прізвища дитини, напр. «Абраменко: обіцяли до 15-го».', {reply_to_message_id: msg.message_id}); return {ok:true, ambiguous:true}; }
+  var who = [msg.from && msg.from.first_name, msg.from && msg.from.last_name].filter(Boolean).join(' ') || (msg.from && msg.from.username) || '';
+  _bankSheet(BANK_CMT_SHEET, BANK_CMT_HEADER).appendRow([new Date(), loc, tg.child, tg.text, who, _bankYM(new Date())]);
+  _invSend(chatId, '💬 Збережено для ' + _htmlEsc(tg.child) + '.', {reply_to_message_id: msg.message_id});
+  return {ok:true, comment:tg.child};
+}
+
+// ── дії (лише CFO) ──
+// POST {action:'invoiceBankLink', actorId, loc} — код підключення групи «Банк — <loc>» (1 год).
+function invoiceBankLink(body){
+  body = body || {};
+  if (!_bankCfo(body.actorId)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var loc = String(body.loc || '').trim(); if (!loc || !_bankCfgRow(loc)) return {ok:false, error:'невідома локація «' + loc + '»'};
+  var code = 'bank' + Utilities.getUuid().replace(/-/g, '').slice(0, 14);
+  CacheService.getScriptCache().put('inv_bank_link_' + code, loc, 3600);
+  var me = _invApi('getMe', {}), un = me && me.ok && me.result && me.result.username;
+  return {ok:true, loc:loc, code:code, link:un ? ('https://t.me/' + un + '?startgroup=' + code) : '',
+          note:'Створи групу «Банк — ' + loc + '», відкрий посилання й обери її (або в групі надішли /start ' + code + ') — код діє 1 год'};
+}
+// POST {action:'bankGroupsSetup', actorId} — тригер 16:00 (сам прогін перевіряє банківський день).
+function bankGroupsSetup(body){
+  if (!_bankCfo((body || {}).actorId)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  ScriptApp.getProjectTriggers().forEach(function(t){ if (t.getHandlerFunction() === 'bankGroupsDaily') ScriptApp.deleteTrigger(t); });
+  ScriptApp.newTrigger('bankGroupsDaily').timeBased().atHour(BANK_SEND_HOUR).nearMinute(0).everyDays(1).inTimezone('Europe/Kiev').create();
+  return {ok:true, at:BANK_SEND_HOUR + ':00 Europe/Kiev, пн–пт', groups:_bankGroups()};
+}
+// GET ?action=bankGroupsPreview&actorId=&loc=[&kinds=paid,debt,opex,over][&from=YYYY-MM-DD] — тексти без надсилання (CFO).
+function bankGroupsPreview(p){
+  p = p || {};
+  if (!_bankCfo(p.actorId)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var loc = String(p.loc || '').trim(); if (!loc) return {ok:false, error:'loc обовʼязковий'};
+  var kinds = p.kinds ? String(p.kinds).split(',') : null;
+  var r = _bankDaily__impl({force:true, dryRun:true, loc:loc, kinds:kinds});
+  if (p.from && (!kinds || kinds.indexOf('paid') >= 0)){
+    var fromMs = Utilities.parseDate(String(p.from) + ' 00:00', 'Europe/Kiev', 'yyyy-MM-dd HH:mm').getTime();
+    r.locs[loc].texts.paid = _bankPaidTexts(loc, _bankPaidItems(loc, fromMs, Date.now()), 'з ' + String(p.from).slice(8, 10) + '.' + String(p.from).slice(5, 7));
+  }
+  r.linked = !!_bankChatFor(_bankGroups(), loc, _invChatId(), _invProp('INVOICE_CFO_CHAT_ID'));
+  r.trigger = ScriptApp.getProjectTriggers().some(function(t){ return t.getHandlerFunction() === 'bankGroupsDaily'; });
+  return r;
+}
+// GET ?action=bankDebtComments&actorId= — коментарі до боргів поточного місяця (дашборд CFO): items [{loc, child, text}] — останній на дитину.
+function bankDebtComments(p){
+  if (!_bankCfo((p || {}).actorId)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var ym = _bankYM(new Date()), last = {};
+  try { var sh = SpreadsheetApp.openById(CONFIG_SHEET_ID).getSheetByName(BANK_CMT_SHEET);
+    if (sh && sh.getLastRow() >= 2) sh.getRange(2, 1, sh.getLastRow() - 1, BANK_CMT_HEADER.length).getValues().forEach(function(r){
+      if (String(r[5]).trim() !== ym) return;
+      last[String(r[1]).trim() + '|' + _dopAnKid(r[2])] = {loc:String(r[1]).trim(), child:String(r[2]).trim(),
+        text:String(r[3] || '') + (r[4] ? ' — ' + String(r[4]) : '') + ' (' + Utilities.formatDate(new Date(r[0]), 'Europe/Kiev', 'dd.MM') + ')'};
+    }); } catch(_e){}
+  return {ok:true, month:ym, items:Object.keys(last).map(function(k){ return last[k]; })};
+}
+
 // POST {action:'invoiceReopen', actorId, id, reason?, dryRun} — відкат помилкового «оплачено» (лише CFO; dryRun за замовч.).
 // Заявка → «розпізнано», дата оплати / matched_ref / закрито / рахунок оплати — порожні; «✅ Оплачено» прибирається з
 // черги до 09:00 або видаляється з групи (якщо бот запам'ятав id свого повідомлення). Причина — у «лог».
@@ -7604,7 +8212,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.534', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.536', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -7625,6 +8233,9 @@ function doGet(e) {
     else if (action === 'cashList')           result = cashList(e.parameter || {});        // v7.373 готівка: журнал місяця
     else if (action === 'bankStatus')         result = bankStatus(e.parameter || {});      // v7.375 банк: токени (маска) + рахунки
     else if (action === 'bankFetch')          result = bankFetch(e.parameter || {});       // v7.375 банк: транзакції за період (формат виписки)
+    else if (action === 'bankGroupsPreview')  result = bankGroupsPreview(e.parameter || {}); // v7.536 тексти груп «Банк» без надсилання (CFO)
+    else if (action === 'bankDebtComments')   result = bankDebtComments(e.parameter || {});  // v7.536 коментарі до боргів (CFO)
+    else if (action === 'invoiceCfoReport')   result = invoiceCfoReport(e.parameter || {}); // v7.535 звіт CFO «оплачено, ще не розписано» (прев'ю; send=1 — надіслати)
     else if (action === 'invoiceAutoStatus')  result = invoiceAutoStatus(e.parameter || {}); // v7.411 автозвірка заявок: увімкнено? останній прогін
     else if (action === 'bankCoverage')       result = bankCoverage(e.parameter || {});    // v7.375 банк: покриття рахунок×дата
     else if (action === 'cashPreview')        result = cashAdd(Object.assign({}, e.parameter || {}, {dryRun:true}));   // v7.373 перевірка (лише читання)
@@ -7853,6 +8464,10 @@ function doPost(e) {
     else if (body.action === 'bankAccountMark')           result = bankAccountMark(body);       // v7.378 офісний рахунок
     else if (body.action === 'bankNightlySetup')          result = bankNightlySetup(body);      // v7.405 нічне завантаження банку о 05:00
     else if (body.action === 'invoiceAutoMatchRange')     result = invoiceAutoMatchRange(body); // v7.411 автозвірка заявок за період (CFO, dryRun за замовч.)
+    else if (body.action === 'invoiceBankLink')           result = invoiceBankLink(body);       // v7.536 код підключення групи «Банк — <loc>» (CFO)
+    else if (body.action === 'bankGroupsSetup')           result = bankGroupsSetup(body);       // v7.536 тригер 16:00 (CFO)
+    else if (body.action === 'invoiceCfoSetup')           result = invoiceCfoSetup(body);       // v7.535 тригер звіту CFO 15:00 (CFO)
+    else if (body.action === 'invoiceCfoLink')            result = invoiceCfoLink(body);        // v7.535 код підключення особистого чату CFO
     else if (body.action === 'invoiceAutoSet')            result = invoiceAutoSet(body);        // v7.411 вимикач автозвірки (CFO)
     else if (body.action === 'invoiceReopen')             result = invoiceReopen(body);         // v7.411 відкат «оплачено» (CFO, dryRun за замовч.)
     else if (body.action === 'subLocMoveRecords')         result = subLocMoveRecords(body);        // v7.517 перенос записів дітей під-локації з хоста (CFO, dryRun)

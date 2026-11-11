@@ -192,5 +192,107 @@ if (src.indexOf('\nfunction _invMatchCore(') >= 0){
         {sat: '2026-11-09 9h', fri: '2026-11-06 9h', sun: '2026-11-09 9h'});
 }
 
+// v7.535: особистий звіт CFO «оплачено, ще не розписано» — лише в особистий чат, у групу директорів нічого
+if (src.indexOf('\nfunction _invCfoReportTexts(') >= 0){
+  const C = new Function([varLine('INV_TG_MAX')].concat(['_htmlEsc','_invMoneyUa','_invCfoReportTexts','_invCfoTarget'].map(fn)).join('\n') +
+                         '\nreturn {_invCfoReportTexts, _invCfoTarget};')();
+  const GROUP = '-5142518705';
+  check('звіт CFO: адресат', 'лише особистий чат; група директорів / будь-яка група / порожньо — ні',
+        {priv: C._invCfoTarget('123456789', GROUP), group: C._invCfoTarget(GROUP, GROUP), other: C._invCfoTarget('-100200300', GROUP), none: C._invCfoTarget('', GROUP)},
+        {priv: '123456789', group: '', other: '', none: ''});
+  check('звіт CFO: порожній список', 'не надсилати', {n: C._invCfoReportTexts([], '11.11.2026').length}, {n: 0});
+  const items = [{payDate: '10.11.2026', loc: 'Кругла', supplier: 'TJOB', amount: 4275, ids: ['230']},
+                 {payDate: '06.11.2026', loc: 'Пуща', supplier: 'ТОВ "ШЕРИФ БІЗНЕС"', amount: 945, ids: ['213', '212']},
+                 {payDate: '10.11.2026', loc: 'Бігова', supplier: 'ФОП Грень І. С.', amount: 2000, ids: ['269']}];
+  const t = C._invCfoReportTexts(items, '11.11.2026');
+  check('звіт CFO: рядки й разом', 'дата · локація · постачальник · сума · №, за датою; «Разом» унизу',
+        {parts: t.length, first: t[0].split('\n')[1], dup: /#213, #212/.test(t[0]), total: t[0].trim().split('\n').pop()},
+        {parts: 1, first: '06.11 · Пуща · ТОВ &quot;ШЕРИФ БІЗНЕС&quot; · <b>945,00 ₴</b> · #213, #212'.replace('&quot;', '"').replace('&quot;', '"'), dup: true, total: '<b>Разом: 7 220,00 ₴</b>'});
+  const many = Array.from({length: 120}, (_, i) => ({payDate: '10.11.2026', loc: 'Локація ' + i, supplier: 'Постачальник з довгою назвою ' + i, amount: 100, ids: [String(i)]}));
+  const tm = C._invCfoReportTexts(many, '');
+  check('звіт CFO: довгий список', 'частини ≤ ліміту Telegram, «Разом» лише в останній',
+        {ok: tm.length > 1 && tm.every((x) => x.length <= 4096), totalOnce: tm.filter((x) => /Разом:/.test(x)).length, last: /Разом: 12 000,00/.test(tm[tm.length - 1])},
+        {ok: true, totalOnce: 1, last: true});
+  // у групу (заявки, черга 09:00, повтор) бот пише лише «✅ Оплачено …» — «розписано» туди не потрапляє
+  const sends = [];
+  const re = /_invSend\(([^,]+),\s*([^;]*?)\)/g; let m;
+  while ((m = re.exec(src))){
+    const fstart = src.lastIndexOf('\nfunction ', m.index), fname = /function (\w+)/.exec(src.slice(fstart, fstart + 80))[1];
+    sends.push({fname, to: m[1].trim(), text: m[2]});
+  }
+  const cfoFns = ['_invCfoReport__impl', '_invCfoLinkFromMessage'];
+  const leak = sends.filter((x) => cfoFns.indexOf(x.fname) < 0 && /розпис|texts|_invCfo/.test(x.text));
+  const cfoTo = sends.filter((x) => cfoFns.indexOf(x.fname) >= 0).every((x) => x.to === 'to' || x.to === 'id');
+  const queueOnly = (src.match(/(?<!function )_invQueuePaid\([^;]*\)/g) || []).every((x) => /✅ Оплачено/.test(x));
+  check('звіт CFO: група директорів', 'у групу — лише «✅ Оплачено», звіт іде тільки на адресата з _invCfoTarget',
+        {leak: leak.length, cfoTo: cfoTo, queueOnly: queueOnly, privateHook: /chat\.type === 'private'\) return _invCfoLinkFromMessage/.test(src)},
+        {leak: 0, cfoTo: true, queueOnly: true, privateHook: true});
+}
+
+// v7.536: групи «Банк — <локація>» — ізоляція, боржники (Крошкін, Абраменко), вступний частинами, заявка понад бюджет
+if (src.indexOf('\nfunction _bankChatFor(') >= 0){
+  const Bv = ['_APOSTROPHES','INV_TG_MAX','BANK_DEBT_MIN','BANK_DEBT_DAYS','BANK_GROUPS_PROP'].map(varLine).concat([varBlock('BANK_INV_CAT_RULES')]);
+  const Bf = ['_lat2cyr','_nameFold','_nameFoldTight','_journalNormName','_bankWords','_dopAnKid','_levSalary','_surnameSim','_htmlEsc','_invMoneyUa','_bankGroupsParse','_bankChatFor','_bankLocOfChat','_bankMoney',
+              '_bankNormCat','_bankInvCat','_bankDebtDayFor','_bankDebtorsCalc','_bankEntryCalc','_bankOpexCalc','_bankInvOver','_bankOverNew','_bankChunks',
+              '_bankPaidTexts','_bankDebtorsTexts','_bankOpexTexts','_bankInvOverText','_bankOverTexts','_bankCommentTarget'].map(fn);
+  const K = new Function(Bv.concat(Bf).join('\n') + '\nreturn {' + ['_bankChatFor','_bankLocOfChat','_bankInvCat','_bankDebtDayFor','_bankDebtorsCalc','_bankEntryCalc',
+    '_bankOpexCalc','_bankInvOver','_bankOverNew','_bankPaidTexts','_bankDebtorsTexts','_bankInvOverText','_bankCommentTarget','_dopAnKid'].join(',') + '};')();
+  const INVG = '-5142518705', CFOC = '123456789';
+  // ізоляція: чат належить рівно одній локації; група рахунків / особистий чат / спільний чат двох локацій — ні
+  const G = {'Позняки': '-1001', 'Пуща': '-1002'};
+  check('банк: ізоляція — свій чат', 'Позняки → свій, Пуща → свій, чужої локації немає',
+        {p: K._bankChatFor(G, 'Позняки', INVG, CFOC), u: K._bankChatFor(G, 'Пуща', INVG, CFOC), x: K._bankChatFor(G, 'Оранж', INVG, CFOC),
+         byChat: K._bankLocOfChat(G, '-1002')}, {p: '-1001', u: '-1002', x: '', byChat: 'Пуща'});
+  check('банк: ізоляція — спільний чат', 'одна група на дві локації → нікому не пишемо',
+        {p: K._bankChatFor({'Позняки': '-1001', 'Пуща': '-1001'}, 'Позняки', INVG, CFOC), u: K._bankChatFor({'Позняки': '-1001', 'Пуща': '-1001'}, 'Пуща', INVG, CFOC),
+         byChat: K._bankLocOfChat({'Позняки': '-1001', 'Пуща': '-1001'}, '-1001')}, {p: '', u: '', byChat: ''});
+  check('банк: ізоляція — група рахунків / CFO', 'не можуть бути групою «Банк»',
+        {inv: K._bankChatFor({'Позняки': INVG}, 'Позняки', INVG, CFOC), cfo: K._bankChatFor({'Позняки': CFOC}, 'Позняки', INVG, CFOC)}, {inv: '', cfo: ''});
+  // боржники
+  const pick = (r) => r.map((x) => ({name: x.name, navch: x.navch, dop: x.dop}));
+  check('банк: Крошкін (Позняки) листопад', 'бюджет 0 → боргу немає',
+        {list: pick(K._bankDebtorsCalc([{name: 'Крошкін Олексій', bs: 0, fs: 0, be: 0, fe: 0, net: 10750, marks: 4370}], {}))}, {list: []});
+  check('банк: Абраменко (Позняки) листопад', 'навч. 27 500, з них перенесено 6 000; допи 10 940, з них перенесено 4 340',
+        {list: pick(K._bankDebtorsCalc([{name: 'Абраменко Тимофій', bs: 27500, fs: 0, be: 10940, fe: 0, net: 21500, marks: 6600}], {}))},
+        {list: [{name: 'Абраменко Тимофій', navch: {debt: 27500, carried: 6000}, dop: {debt: 10940, carried: 4340}}]});
+  check('банк: Абраменко — навчання оплачено', 'хто оплатив — зникає (факт навч 27 500 на 11.11)',
+        {list: pick(K._bankDebtorsCalc([{name: 'Абраменко Тимофій', bs: 27500, fs: 27500, be: 10940, fe: 0, net: 21500, marks: 6600}], {}))},
+        {list: [{name: 'Абраменко Тимофій', navch: null, dop: {debt: 10940, carried: 4340}}]});
+  const dt = K._bankDebtorsTexts('Позняки', 'листопад', K._bankDebtorsCalc([{name: 'Абраменко Тимофій', bs: 27500, fs: 0, be: 10940, fe: 0, net: 21500, marks: 6600}],
+        {[K._dopAnKid('Абраменко Тимофій')]: 'обіцяли до 15-го — Ірина (11.11)'}), [])[0];
+  check('банк: текст боржника з коментарем', 'рядок і 💬', {line: dt.split('\n')[1], cmt: /💬 обіцяли до 15-го/.test(dt)},
+        {line: '• Абраменко Тимофій — навч. 27 500 (з них перенесено 6 000); допи 10 940 (з них перенесено 4 340)', cmt: true});
+  check('банк: дні списку боржників', 'до 5-го — ні; 6, 8 (вихідні після 6-го) → 6; 31 → 30', {d5: K._bankDebtDayFor(5), d6: K._bankDebtDayFor(6), d8: K._bankDebtDayFor(8), d31: K._bankDebtDayFor(31)},
+        {d5: 0, d6: 6, d8: 6, d31: 30});
+  // вступний частинами (реальні «Факт вступ» Позняків 2026)
+  const F = {}; [['Шагурі Єва', [0,0,0,10150,10250,100,0,0,0,0,0,0]], ['Драгунов Іван', [0,0,0,0,0,15000,0,0,20500,0,0,0]], ['Дністянський Миколай', [0,0,0,0,0,0,0,0,15000,0,0,0]]].forEach((x) => { F[K._dopAnKid(x[0])] = {name: x[0], months: x[1]}; });
+  check('банк: вступний частинами', 'Σ «Факт вступ» від дати договору; до договору не рахуємо; інше написання прізвища',
+        {list: K._bankEntryCalc([{name: 'Шагурі Єва', fee: 20500, contract: '2026-04-01'}, {name: 'Шагурі Єва', fee: 25000, contract: '2026-04-01'},
+          {name: 'Драгунов Іван', fee: 20500, contract: '2026-08-31'}, {name: 'Драгунов Іван', fee: 35500, contract: '2026-08-31'},
+          {name: 'Дністранський Миколай', fee: 15000, contract: '2026-09-28'}], F, 2026, '2026-11-11')},
+        {list: [{name: 'Драгунов Іван', paid: 20500, fee: 35500, contract: '31.08.2026'}, {name: 'Шагурі Єва', paid: 20500, fee: 25000, contract: '01.04.2026'}]});
+  // заявка понад бюджет: ХОЗ.ТОВАРИ Позняків листопад — бюджет 5 720, витрачено 5 412; нова заявка 1 055,20
+  check('банк: заявка понад бюджет', 'витрачено + черга + заявка − бюджет; текст попередження',
+        {over: K._bankInvOver(5720, 5412, 0, 1055.2), under: K._bankInvOver(5720, 0, 640, 1000), text: K._bankInvOverText('290', 'ХОЗ.ТОВАРИ', 747.2, 5720),
+         cat: [K._bankInvCat('госп.товари', ['ХОЗ.ТОВАРИ', 'ПРАЛЬНЯ']), K._bankInvCat('Пральня 760 +', ['ХОЗ.ТОВАРИ', 'ПРАЛЬНЯ']), K._bankInvCat('Вітаю', ['ХОЗ.ТОВАРИ'])]},
+        {over: 747.2, under: 0, text: '⚠️ Рахунок #290, ХОЗ.ТОВАРИ: після оплати перевищення <b>747,20 ₴</b> з 5 720. Потрібне погодження.', cat: ['ХОЗ.ТОВАРИ', 'ПРАЛЬНЯ', '']});
+  const sweep = fn('_bankBudgetSweep'), bsend = fn('_bankSend');
+  check('банк: попередження лише в групу «Банк»', 'тік заявок пише тільки через _bankSend, а той — лише в чат локації з _bankChatFor',
+        {viaBank: /_bankSend\(loc, _bankInvOverText/.test(sweep), noInvGroup: !/_invSend\(|INVOICE_CHAT_ID|_invChatId\(\)\s*,\s*'/.test(sweep), guarded: /_bankChatFor\(_bankGroups\(\), loc,/.test(bsend)},
+        {viaBank: true, noInvGroup: true, guarded: true});
+  check('банк: перевищення статті', 'нове або глибше — повідомляємо; те саме — ні',
+        {first: K._bankOverNew([{name: 'ХОЗ.ТОВАРИ', budget: 5720, spent: 6467}], {}, '2026-11').items.length,
+         same: K._bankOverNew([{name: 'ХОЗ.ТОВАРИ', budget: 5720, spent: 6467}], {'2026-11|ХОЗ.ТОВАРИ': 747}, '2026-11').items.length,
+         deeper: K._bankOverNew([{name: 'ХОЗ.ТОВАРИ', budget: 5720, spent: 7000}], {'2026-11|ХОЗ.ТОВАРИ': 747}, '2026-11').items.length}, {first: 1, same: 0, deeper: 1});
+  check('банк: коментар до боргу', 'прізвище в reply → дитина; один у списку — він; незрозуміло — ні',
+        {two: K._bankCommentTarget(['Абраменко Тимофій', 'Шагурі Єва'], 'Абраменко: обіцяли до 15-го'), one: K._bankCommentTarget(['Шагурі Єва'], 'обіцяли до 15-го'),
+         none: K._bankCommentTarget(['Абраменко Тимофій', 'Шагурі Єва'], 'обіцяли до 15-го')},
+        {two: {child: 'Абраменко Тимофій', text: 'обіцяли до 15-го'}, one: {child: 'Шагурі Єва', text: 'обіцяли до 15-го'}, none: null});
+  check('банк: оплатили', 'порожньо — не пишемо; разом унизу',
+        {empty: K._bankPaidTexts('Позняки', [], '11.11').length,
+         last: K._bankPaidTexts('Позняки', [{child: 'Хмельницький Іван', amount: 21500, kind: 'навчання', date: '10.11.2026'}, {child: 'Драгунов Іван', amount: 2250, kind: 'допи', date: '10.11.2026'}], '11.11')[0].split('\n').pop()},
+        {empty: 0, last: '<b>Разом: 23 750 ₴</b>'});
+}
+
 console.log('\n' + pass + ' пройдено, ' + fail + ' з помилкою — ' + path.basename(SRC));
 process.exit(fail ? 1 : 0);
