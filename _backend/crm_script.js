@@ -1,5 +1,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.547
+// m.kids CRM — Google Apps Script v7.550
+// v7.550: 🔴 Боржники — вступний «борг  (сплачено / сума)»; «кілька позицій» — кожна позиція окремим рядком з відступом; «(X за жовтень)» / «(за жовтень)» замість «з них … / весь за …»
+// v7.549: теми групи «Банк» — назви без емодзі («Оплати», «Боржники», «Ліміти», «Salary»); іконка — icon_custom_emoji_id з getForumTopicIconStickers (найближчий до 💰 / 🔴 / 📊 / 💼), немає — лише колір; bankTopicsRename перейменовує вже створені (editForumTopic), нових не створює
+// v7.548: групи «Банк» — теми (Topics): бот сам створює «💰 Оплати», «🔴 Боржники», «📊 Ліміти», «💼 Salary» (теми в групі + право «Керування темами»), id у BANK_TOPICS_<loc>; оплатили → Оплати, боржники й «💬 Збережено» → Боржники, OPEX / ⚠️ / 🔴 перевищення / питання статті → Ліміти; щопонеділка «💼 Фонд ЗП» по розділах Salary (основні / предметники / додаткові: план, виплачено, залишок) → Salary; коментарі до боргів лише в темі Боржники, решту тем бот ігнорує; тем чи права немає — загальний чат + раз на день CFO в особистий чат, чого бракує; супергрупа (новий chat_id) — переприв'язка з обох боків (migrate_to / migrate_from / помилка надсилання); bankTopicsCheck — теми й прев'ю «🧪 Перевірка вигляду»
 // v7.547: групи «Банк» для всіх локацій — bankLinkAll (посилання садків і шкіл без Управління, код 14 днів, підключення мовчазне); тестовий режим (bankGroupsGo вмикає з mode:'test', Осокорки — повний): лише «💰 Оплатили» і «🔴 Боржники» з рядком «🧪 Тестовий режим…», без OPEX, перевищень, ⚠️ і питань про статтю; будь-яка відповідь на бота → «Банк_Відгуки» (дитина, автор, текст) → о 18:00 зведення в особистий чат CFO (bankFeedbackSetup / bankFeedbackPreview); короткі назви статей OPEX — словник з усіх локацій
 // v7.546: групи «Банк» — новий вигляд: рядки в <code> з колонками, гривні без копійок; 📊 OPEX — усі статті, блоки 🔴 перевищено (−сума) / 🟡 > 80% / 🟢 у нормі / ⚪ без витрат, у черзі = витрачено, «на ДД.ММ · минуло X% місяця», короткі назви до 11 символів; 🔴 Боржники — по дітях (кожна раз): кілька позицій / тільки навчання / тільки допи / тільки вступний, за сумою, «(з них X за жовтень)» / «(весь за жовтень)», усі суми від 1 ₴, довгий список — кількома повідомленнями; 💰 Оплатили — колонки дитина · сума · тип
 // v7.545: розумна стаття — мапа OPEX_Контрагенти не діє для «мішаного» постачальника (історія < 80% в одній статті з ≥ 2 платежів): на прогоні 13.11 вона дала 4 промахи з 6 (Епіцентр, Пуща); invoiceCatPreview — ids=…
@@ -2934,12 +2937,16 @@ function tgInvoiceWebhook(e){
       // v7.536: група → супергрупа. Своя група рахунків — новий INVOICE_CHAT_ID; група «Банк» — новий чат локації;
       //   будь-яка інша — ігноруємо (раніше чужий чат перезаписував INVOICE_CHAT_ID).
       var _mg = _bankGroups(), _ml = _bankLocOfChat(_mg, chatId), _to = String(msg.migrate_to_chat_id);
-      if(_ml){ _mg[_ml] = _to; PropertiesService.getScriptProperties().setProperty(BANK_GROUPS_PROP, JSON.stringify(_mg));
-        _tgErr('bank:migrate', _ml + ' ' + chatId + ' → ' + _to); return {ok:true, bankMigrated:_ml}; }
+      if(_ml){ _bankMigrate(_ml, chatId, _to); return {ok:true, bankMigrated:_ml}; }
       if(allow && chatId !== allow) return {ok:true, ignored:'migrate-other'};
       PropertiesService.getScriptProperties().setProperty('INVOICE_CHAT_ID', _to);
       _tgErr('inv:migrate', 'INVOICE_CHAT_ID '+allow+' → '+_to);
       return {ok:true, migrated:_to};
+    }
+    if(msg.migrate_from_chat_id){   // v7.548: те саме з боку нової супергрупи (якщо перше оновлення загубилось)
+      var _fl = _bankLocOfChat(_bankGroups(), String(msg.migrate_from_chat_id));
+      if(_fl){ _bankMigrate(_fl, String(msg.migrate_from_chat_id), chatId); return {ok:true, bankMigrated:_fl}; }
+      return {ok:true, ignored:'migrate-from'};
     }
     // v7.535: особистий чат з ботом — лише підключення звіту CFO («/start <код>»); заявок і відповідей звідти немає
     if(msg.chat && msg.chat.type === 'private') return _invCfoLinkFromMessage(msg) || {ok:true, ignored:'private'};
@@ -4577,7 +4584,7 @@ function _bankDebtGroups(debtors, entries){
 }
 function _bankCarried(p, prevMonth){
   if (!p || !(p.carried >= 1)) return '';
-  return p.carried >= p.debt - 0.5 ? ' (весь за ' + prevMonth + ')' : ' (з них ' + _bankInt(p.carried) + ' за ' + prevMonth + ')';
+  return p.carried >= p.debt - 0.5 ? '  (за ' + prevMonth + ')' : '  (' + _bankInt(p.carried) + ' за ' + prevMonth + ')';   // v7.550
 }
 function _bankDebtorsTexts(loc, monthName, debtors, entries, dayLabel, prevMonth){
   var G = _bankDebtGroups(debtors, entries), all = G.multi.concat(G.navch, G.dop, G.entry);
@@ -4594,16 +4601,19 @@ function _bankDebtorsTexts(loc, monthName, debtors, entries, dayLabel, prevMonth
     lines.push('\n<b>' + title + '</b> · ' + _bankKids(list.length) + ' · ' + _bankInt(sum));
     list.forEach(function(x){ lines.push(fmt(x) + cmt(x)); });
   };
+  // v7.550: вступний — «борг  (сплачено / сума)»; у «кілька позицій» кожна позиція окремим рядком з відступом, суми під сумою дитини
+  var entryTail = function(e){ return '  (' + _bankInt(e.paid) + ' / ' + _bankInt(e.fee) + ')'; };
   block(G.multi, 'Винні за кілька позицій', function(x){
-    var p = [];
-    if (x.navch) p.push('навчання ' + _bankInt(x.navch.debt) + _bankCarried(x.navch, prevMonth));
-    if (x.dop) p.push('допи ' + _bankInt(x.dop.debt) + _bankCarried(x.dop, prevMonth));
-    if (x.entry) p.push('вступний ' + _bankInt(x.entry.debt));
-    return row(x) + '\n' + _bankCode('  ' + p.join(' · '));
+    var p = [], L = W + 2 - 2;   // мітка позиції + сума вирівняні під колонку суми дитини
+    var pos = function(label, debt, tail){ p.push(_bankCode('  ' + _bankPadR(label, L) + _bankPadL(_bankInt(debt), A) + tail)); };
+    if (x.navch) pos('навчання', x.navch.debt, _bankCarried(x.navch, prevMonth));
+    if (x.dop) pos('допи', x.dop.debt, _bankCarried(x.dop, prevMonth));
+    if (x.entry) pos('вступний', x.entry.debt, entryTail(x.entry));
+    return row(x) + '\n' + p.join('\n');
   });
   block(G.navch, 'Тільки навчання', function(x){ return row(x, _bankCarried(x.navch, prevMonth)); });
   block(G.dop, 'Тільки допи', function(x){ return row(x, _bankCarried(x.dop, prevMonth)); });
-  block(G.entry, 'Тільки вступний', function(x){ return row(x, ' (сплачено ' + _bankInt(x.entry.paid) + ' з ' + _bankInt(x.entry.fee) + ')'); });
+  block(G.entry, 'Тільки вступний', function(x){ return row(x, entryTail(x.entry)); });
   var foot = '\n<b>Разом боргу: ' + _bankInt(tot) + ' ₴ · ' + _bankKids(all.length) + '</b>\n\n<i>Коментар до боргу — відповіддю (reply) на цей список: «Прізвище: текст».</i>';
   return _bankChunks(head, lines, foot, '🔴 <b>Боржники — ' + _htmlEsc(loc) + '</b> (продовження)');
 }
@@ -4677,7 +4687,8 @@ function _bankSend(loc, text, type, children, key){
   if (text == null) return {ok:false, description:'тестовий режим: «' + type + '» не надсилаємо'};
   var to = _bankChatFor(_bankGroups(), loc, _invChatId(), _invProp('INVOICE_CFO_CHAT_ID'));
   if (!to) return {ok:false, description:'група «Банк — ' + loc + '» не підключена'};
-  var res = _invSend(to, text);
+  var res = _bankPost(loc, to, text, type);   // v7.548: у свою тему (або загальний чат, якщо тем немає)
+  if (res && res.chat) to = res.chat;
   if (res && res.ok){
     try { _bankSheet(BANK_MSG_SHEET, BANK_MSG_HEADER).appendRow([new Date(), loc, "'" + to, String(res.result && res.result.message_id || ''), type || '',
           JSON.stringify(children || []), key || '']); } catch(_l){}
@@ -4834,6 +4845,13 @@ function _bankDaily__impl(opts){
         r.texts.over = t4;
         if (!opts.dryRun){ t4.forEach(function(t){ if (_bankSend(loc, t, 'over').ok) r.sent++; }); st.over = ov.state; }
       }
+      // 💼 Фонд ЗП — щопонеділка (v7.548), лише розділи, без сум окремих співробітників
+      if (want('salary') && (opts.force || (isMon && st.salarySent !== today))){
+        var SD = _bankSalaryData(loc, M);
+        var t5 = SD ? _bankSalaryTexts(loc, mName, SD, dayLabel) : [];
+        r.texts.salary = t5;
+        if (!opts.dryRun){ t5.forEach(function(t){ if (_bankSend(loc, t, 'salary').ok) r.sent++; }); st.salarySent = today; }
+      }
       if (!opts.dryRun) _bankStateSave(loc, st);
     } catch(e){ r.error = String(e && e.message || e); _tgErr('bank:daily', loc + ': ' + r.error); }
   });
@@ -4881,20 +4899,26 @@ function _bankLinkFromMessage(msg, chatId){
 }
 function _bankOnGroupMessage(loc, msg, chatId){
   if (!_bankLive(loc)) return {ok:true, ignored:'bank-not-live'};
-  var rep = msg.reply_to_message;
+  var rep = _bankRealReply(msg);   // v7.548: у темі кожне повідомлення формально — відповідь на її початок
   if (!rep || !msg.text || !(rep.from && rep.from.is_bot)) return {ok:true, ignored:'bank-chat'};
+  // v7.548: теми — коментарі до боргів лише в «Боржниках», відповіді на «X чи Y?» — у «Лімітах», відгуки тесту — в «Оплатах»/«Боржниках»
+  var tp = _bankTopicsGet(loc), inT = (tp.chat === chatId && msg.chat && msg.chat.is_forum) ? tp : null, th = _bankThreadOf(msg);
   var sh = _bankSheet(BANK_MSG_SHEET, BANK_MSG_HEADER), rec = null;
   if (sh.getLastRow() >= 2) sh.getRange(2, 1, sh.getLastRow() - 1, BANK_MSG_HEADER.length).getValues().some(function(r){
     if (String(r[2]).replace(/^'/, '') === chatId && String(r[3]) === String(rep.message_id) && String(r[1]) === loc){ rec = r; return true; } return false; });
-  if (_bankMode(loc) === 'test') return _bankOnTestReply(loc, rec, msg, chatId);   // v7.547: будь-яка відповідь — відгук
-  if (rec && String(rec[4]) === 'catQ') return _catOnAnswer(loc, rec, msg, chatId);   // v7.544: «❓ … — X чи Y?»
+  if (_bankMode(loc) === 'test'){   // v7.547: будь-яка відповідь — відгук
+    if (!_bankThreadOk(inT, th, ['paid', 'debt'])) return {ok:true, ignored:'bank-topic'};
+    return _bankOnTestReply(loc, rec, msg, chatId);
+  }
+  if (rec && String(rec[4]) === 'catQ') return _bankThreadOk(inT, th, ['opex']) ? _catOnAnswer(loc, rec, msg, chatId) : {ok:true, ignored:'bank-topic'};   // v7.544: «❓ … — X чи Y?»
   if (!rec || String(rec[4]) !== 'debt') return {ok:true, ignored:'bank-reply-other'};
+  if (!_bankThreadOk(inT, th, ['debt'])) return {ok:true, ignored:'bank-topic'};
   var kids = []; try { kids = JSON.parse(rec[5] || '[]'); } catch(_k){}
   var tg = _bankCommentTarget(kids, msg.text);
-  if (!tg){ _invSend(chatId, 'Не зрозумів, про кого. Почніть із прізвища дитини, напр. «Абраменко: обіцяли до 15-го».', {reply_to_message_id: msg.message_id}); return {ok:true, ambiguous:true}; }
+  if (!tg){ _invSend(chatId, 'Не зрозумів, про кого. Почніть із прізвища дитини, напр. «Абраменко: обіцяли до 15-го».', _bankReplyExtra(msg)); return {ok:true, ambiguous:true}; }
   var who = [msg.from && msg.from.first_name, msg.from && msg.from.last_name].filter(Boolean).join(' ') || (msg.from && msg.from.username) || '';
   _bankSheet(BANK_CMT_SHEET, BANK_CMT_HEADER).appendRow([new Date(), loc, tg.child, tg.text, who, _bankYM(new Date())]);
-  _invSend(chatId, '💬 Збережено для ' + _htmlEsc(tg.child) + '.', {reply_to_message_id: msg.message_id});
+  _invSend(chatId, '💬 Збережено для ' + _htmlEsc(tg.child) + '.', _bankReplyExtra(msg));
   return {ok:true, comment:tg.child};
 }
 
@@ -4959,7 +4983,7 @@ function _bankOnTestReply(loc, rec, msg, chatId){
   var who = [msg.from && msg.from.first_name, msg.from && msg.from.last_name].filter(Boolean).join(' ') || (msg.from && msg.from.username) || '';
   var kind = rec ? ({paid:'💰 Оплатили', debt:'🔴 Боржники'}[String(rec[4])] || String(rec[4])) : '';
   _bankSheet(BANK_FB_SHEET, BANK_FB_HEADER).appendRow([new Date(), loc, tg ? tg.child : '', who, String(msg.text), kind, '']);
-  _invSend(chatId, '📝 Записано, дякуємо.', {reply_to_message_id: msg.message_id});
+  _invSend(chatId, '📝 Записано, дякуємо.', _bankReplyExtra(msg));
   return {ok:true, feedback:true, child:tg ? tg.child : ''};
 }
 // Зведення відгуків: items [{loc, child, who, text, kind, at}] → тексти (по локаціях).
@@ -5019,7 +5043,207 @@ function bankLinkAll(p){
   pr.setProperty('BANK_LINK_CODES', JSON.stringify(m));
   return {ok:true, until:Utilities.formatDate(new Date(exp), 'Europe/Kiev', 'dd.MM.yyyy'), items:out};
 }
-// GET ?action=bankGroupsPreview&actorId=&loc=[&kinds=paid,debt,opex,over][&from=YYYY-MM-DD] — тексти без надсилання (CFO).
+// ── v7.548: теми (Topics) у групах «Банк» ──
+// Бот сам створює теми (потрібні: теми в групі + право бота «Керування темами»), id — у BANK_TOPICS_<loc> {chat, paid, debt, opex, salary}.
+// «Загальна» (General) — без теми. Тем або права немає — пишемо в загальний чат і раз на день кажемо CFO в особистий чат, чого бракує.
+// v7.549: назви без емодзі; іконка — custom emoji зі списку getForumTopicIconStickers (найближчий до бажаних), інакше лише колір (дозволені Telegram)
+var BANK_TOPICS = [['paid', 'Оплати', ['💰', '💵', '💸', '🪙', '💳'], 9367192], ['debt', 'Боржники', ['🔴', '❗', '‼', '⚠', '🔥'], 16478047], ['opex', 'Ліміти', ['📊', '📈', '📉', '🧮'], 7322096], ['salary', 'Salary', ['💼', '👜', '🗂', '📁'], 16766590]];
+var BANK_TOPIC_OF = {paid:'paid', debt:'debt', opex:'opex', over:'opex', invOver:'opex', catQ:'opex', salary:'salary'};
+var BANK_CHECK_LINE = '🧪 Перевірка вигляду';
+var _BANK_TOPICS_RUN = {};   // перевірка тем — раз на виконання
+// ── чисті ──
+function _bankTopicFor(topics, type){ var k = BANK_TOPIC_OF[type]; return (topics && k && Number(topics[k])) || 0; }
+// Чого бракує: chat — getChat (is_forum), member — getChatMember бота, need — чи треба створювати теми. '' — усе є.
+function _bankTopicMissing(chat, member, need){
+  if (!chat || !chat.is_forum) return 'у групі не ввімкнені теми (Керування групою → Теми)';
+  if (need && !(member && (member.status === 'creator' || (member.status === 'administrator' && member.can_manage_topics))))
+    return 'бот не має права «Керування темами» (адміністратори → бот → «Керування темами»)';
+  return '';
+}
+// Справжня відповідь (reply) — не формальна відповідь на початок теми.
+function _bankRealReply(msg){
+  var rep = msg && msg.reply_to_message; if (!rep) return null;
+  if (rep.forum_topic_created || (msg.is_topic_message && rep.message_id === msg.message_thread_id)) return null;
+  return rep;
+}
+function _bankThreadOf(msg){ return (msg && msg.is_topic_message && Number(msg.message_thread_id)) || 0; }
+function _bankReplyExtra(msg){ var x = {reply_to_message_id: msg.message_id}, t = _bankThreadOf(msg); if (t) x.message_thread_id = t; return x; }
+// Відповідь у дозволеній темі? Група без тем (topics null) — так; з темами — лише в темах kinds.
+function _bankThreadOk(topics, thread, kinds){
+  if (!topics) return true;
+  return kinds.some(function(k){ return Number(topics[k]) && Number(topics[k]) === Number(thread); });
+}
+// v7.549: іконка теми — стікер зі списку Telegram, чиє емодзі перше збіглося з бажаними (за порядком бажаних); '' — немає.
+function _bankTopicIcon(stickers, wants){
+  var norm = function(e){ return String(e || '').replace(/[\uFE0F\u200D]/g, ''); };
+  for (var i = 0; i < (wants || []).length; i++){
+    var w = norm(wants[i]);
+    for (var j = 0; j < (stickers || []).length; j++) if (norm(stickers[j].emoji) === w && stickers[j].custom_emoji_id) return String(stickers[j].custom_emoji_id);
+  }
+  return '';
+}
+// Фонд ЗП: rows [{row, name, fact, budget (рік — для класифікації), mf, mb (місяць)}] → {main, subjects, extras: {plan, paid}}; keep(row) — блок під-локації.
+function _bankSalaryCalc(rows, keep){
+  var S = {main:{plan:0, paid:0}, subjects:{plan:0, paid:0}, extras:{plan:0, paid:0}};
+  var list = (rows || []).filter(function(r){ return !_salaryIsSkippedRow(r.name); });
+  _classifyAllSalaryRows(list).forEach(function(r){
+    if (r._category === 'section_header' || r._category === 'group_header' || _salaryIsSubtotalRow(r.name)) return;
+    if (keep && !keep(r.row)) return;
+    var s = S[r._section] || S.main; s.plan += Number(r.mb) || 0; s.paid += Number(r.mf) || 0;
+  });
+  return S;
+}
+function _bankSalaryTexts(loc, monthName, S, dayLabel){
+  var rows = [], T = {plan:0, paid:0};
+  [['main', 'Основні'], ['subjects', 'Предметники'], ['extras', 'Додаткові']].forEach(function(n){
+    var s = S && S[n[0]]; if (!s || (Math.abs(s.plan) < 0.5 && Math.abs(s.paid) < 0.5)) return;
+    rows.push([n[1], _bankInt(s.plan), _bankInt(s.paid), _bankInt(s.plan - s.paid)]); T.plan += s.plan; T.paid += s.paid;
+  });
+  if (!rows.length) return [];
+  var hdr = ['Розділ', 'План', 'Виплачено', 'Залишок'], W = hdr.map(function(h){ return h.length; });
+  rows.forEach(function(r){ r.forEach(function(c, i){ W[i] = Math.max(W[i], c.length); }); });
+  var fmt = function(r){ return _bankCode(_bankPadR(r[0], W[0]) + '  ' + _bankPadL(r[1], W[1]) + '  ' + _bankPadL(r[2], W[2]) + '  ' + _bankPadL(r[3], W[3])); };
+  var head = '💼 <b>Фонд ЗП — ' + _htmlEsc(loc) + ', ' + _htmlEsc(monthName) + '</b>' + (dayLabel ? '\n<i>на ' + _htmlEsc(dayLabel) + '</i>' : '');
+  var lines = [''].concat([fmt(hdr)], rows.map(fmt));
+  return _bankChunks(head, lines, '\n<b>Разом: залишок ' + _bankInt(T.plan - T.paid) + ' ₴</b>', '💼 <b>Фонд ЗП — ' + _htmlEsc(loc) + '</b> (продовження)');
+}
+// ── з Google / Telegram ──
+function _bankSalaryData(loc, M){
+  var reg = _salaryGetRegistry(); if (!reg.ok) return null;
+  var e = reg.rows.filter(function(x){ return x.loc === loc; })[0]; if (!e) return null;
+  var g = _salaryReadGrids([e], 'old').grids[loc]; if (!g) return null;
+  var fi = (M - 1) * 3 + 1, bi = fi + 1, rows = [];
+  for (var rn = 4; rn <= g.data.length; rn++){
+    var a = g.data[rn - 1] || [], yf = 0, yb = 0;
+    for (var m = 1; m <= 12; m++){ var f0 = (m - 1) * 3 + 1; if (f0 < g.width) yf += _opexNum(a[f0]); if (f0 + 1 < g.width) yb += _opexNum(a[f0 + 1]); }
+    rows.push({row:rn, name:String(a[0] || '').trim(), fact:yf, budget:yb, mf:fi < g.width ? _opexNum(a[fi]) : 0, mb:bi < g.width ? _opexNum(a[bi]) : 0});
+  }
+  var ctx = _salarySubContext(loc), keep = null;
+  if (ctx){
+    var set = _salaryBlockRowSet(_classifyAllSalaryRows(rows.filter(function(r){ return !_salaryIsSkippedRow(r.name); })), ctx.exclude);
+    keep = function(n){ return ctx.mine ? !!set[n] : !set[n]; };
+  }
+  return _bankSalaryCalc(rows, keep);
+}
+var _BANK_ICONS = null;
+function _bankTopicIconId(wants){
+  if (_BANK_ICONS === null){ var r = _invApi('getForumTopicIconStickers', {}); _BANK_ICONS = (r && r.ok && r.result) || []; }
+  return _bankTopicIcon(_BANK_ICONS, wants);
+}
+// POST {action:'bankTopicsRename', actorId[, loc]} — уже створені теми: назва без емодзі + іконка (editForumTopic), нових не створює (CFO).
+//   Колір іконки після створення Telegram змінити не дає — якщо підходящого стікера немає, іконку не чіпаємо.
+function bankTopicsRename(body){
+  body = body || {};
+  if (!_bankCfo(body.actorId)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var g = _bankGroups(), only = String(body.loc || '').trim(), out = [];
+  Object.keys(g).forEach(function(loc){
+    if (only && loc !== only) return;
+    var t = _bankTopicsGet(loc), chat = _bankChatFor(g, loc, _invChatId(), _invProp('INVOICE_CFO_CHAT_ID'));
+    if (!chat || String(t.chat || '') !== chat) return;
+    BANK_TOPICS.forEach(function(x){
+      var th = Number(t[x[0]]); if (!th) return;
+      var ic = _bankTopicIconId(x[2]), pl = {chat_id:chat, message_thread_id:th, name:x[1]};
+      if (ic) pl.icon_custom_emoji_id = ic;
+      var r = _invApi('editForumTopic', pl);
+      out.push({loc:loc, topic:x[1], thread:th, icon:ic || '', ok:!!(r && r.ok), error:r && !r.ok ? String(r.description || '') : ''});
+    });
+  });
+  return {ok:out.every(function(x){ return x.ok || /TOPIC_NOT_MODIFIED/.test(x.error); }), items:out};
+}
+function _bankTopicsGet(loc){ try { return JSON.parse(PropertiesService.getScriptProperties().getProperty('BANK_TOPICS_' + loc) || '{}') || {}; } catch(_e){ return {}; } }
+function _bankTopicsSave(loc, t){ PropertiesService.getScriptProperties().setProperty('BANK_TOPICS_' + loc, JSON.stringify(t)); }
+// Група стала супергрупою (новий chat_id) — та сама локація, теми перевіряться заново.
+function _bankMigrate(loc, from, to){
+  var g = _bankGroups();
+  if (String(g[loc] || '') !== String(to)){ g[loc] = String(to); PropertiesService.getScriptProperties().setProperty(BANK_GROUPS_PROP, JSON.stringify(g)); }
+  delete _BANK_TOPICS_RUN[loc];
+  _tgErr('bank:migrate', loc + ' ' + from + ' → ' + to);
+  return String(to);
+}
+// Теми групи: збережені — беремо; бракує — створюємо. {chat, topics (null — пишемо в загальний чат), missing}
+function _bankTopicsEnsure(loc, chat, force){
+  if (!force && _BANK_TOPICS_RUN[loc] && _BANK_TOPICS_RUN[loc].chat === chat) return _BANK_TOPICS_RUN[loc];
+  var t = _bankTopicsGet(loc); if (String(t.chat || '') !== String(chat)) t = {chat:String(chat)};
+  var need = BANK_TOPICS.filter(function(x){ return !Number(t[x[0]]); }), res = {chat:chat, topics:null, missing:''};
+  var info = _invApi('getChat', {chat_id:chat}), mem = null;
+  if (!(info && info.ok)){
+    var mig = info && info.parameters && info.parameters.migrate_to_chat_id;
+    if (mig){ chat = _bankMigrate(loc, chat, String(mig)); return _bankTopicsEnsure(loc, chat, true); }
+    res.missing = 'Telegram getChat: ' + String((info && info.description) || 'помилка');
+  } else {
+    if (need.length && info.result.is_forum){
+      var me = _invApi('getMe', {});
+      var cm = me && me.ok ? _invApi('getChatMember', {chat_id:chat, user_id:me.result.id}) : null;
+      mem = cm && cm.ok ? cm.result : null;
+    }
+    res.missing = _bankTopicMissing(info.result, mem, need.length > 0);
+  }
+  if (!res.missing){
+    need.forEach(function(x){
+      if (res.missing) return;
+      var ic = _bankTopicIconId(x[2]), pl = {chat_id:chat, name:x[1]};
+      if (ic) pl.icon_custom_emoji_id = ic; else pl.icon_color = x[3];   // v7.549
+      var r = _invApi('createForumTopic', pl);
+      if (r && r.ok) t[x[0]] = r.result.message_thread_id; else res.missing = 'не вдалося створити тему «' + x[1] + '»: ' + String((r && r.description) || 'помилка');
+    });
+    if (need.length) _bankTopicsSave(loc, t);
+    if (!res.missing) res.topics = t;
+  }
+  _BANK_TOPICS_RUN[loc] = res;
+  if (res.missing) _bankTopicWarn(loc, res.missing);
+  return res;
+}
+// CFO в особистий чат — раз на день на локацію (той самий текст).
+function _bankTopicWarn(loc, missing){
+  var p = PropertiesService.getScriptProperties(), k = 'BANK_TOPIC_WARN_' + loc, day = Utilities.formatDate(new Date(), 'Europe/Kiev', 'yyyy-MM-dd');
+  if (p.getProperty(k) === day + '|' + missing) return;
+  var to = _invProp('INVOICE_CFO_CHAT_ID'); if (!to) return;
+  var r = _invSend(to, '⚙️ Група <b>«Банк — ' + _htmlEsc(loc) + '»</b>: ' + _htmlEsc(missing) + '. Поки пишу в загальний чат.');
+  if (r && r.ok) p.setProperty(k, day + '|' + missing);
+}
+// Надіслати в тему типу (або в загальний чат). Група стала супергрупою — переприв'язка і повтор; тему видалили — створюємо заново.
+function _bankPost(loc, to, text, type, depth){
+  var tp = _bankTopicsEnsure(loc, to); to = tp.chat;
+  var th = _bankTopicFor(tp.topics, type), res = _invSend(to, text, th ? {message_thread_id:th} : null);
+  var mig = res && !res.ok && res.parameters && res.parameters.migrate_to_chat_id;
+  if (mig && !depth) return _bankPost(loc, _bankMigrate(loc, to, String(mig)), text, type, 1);
+  if (th && res && !res.ok && /thread not found|TOPIC_DELETED|TOPIC_ID_INVALID/i.test(String(res.description || '')) && !depth){
+    var t = _bankTopicsGet(loc); delete t[BANK_TOPIC_OF[type]]; _bankTopicsSave(loc, t); delete _BANK_TOPICS_RUN[loc];
+    return _bankPost(loc, to, text, type, 1);
+  }
+  if (th && res && !res.ok && /TOPIC_CLOSED/i.test(String(res.description || ''))) res = _invSend(to, text);   // закрита тема — у загальний
+  if (res) res.chat = to;
+  return res;
+}
+// POST {action:'bankTopicsCheck', actorId, loc, send:true|false[, kinds:'debt,…']} — створити теми й (send) надіслати прев'ю чотирьох повідомлень у свої теми з «🧪 Перевірка вигляду» (CFO).
+//   Прев'ю не пишеться в «Банк_Повідомлення» — відповіді на нього бот не читає.
+function bankTopicsCheck(body){
+  body = body || {};
+  if (!_bankCfo(body.actorId)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var loc = String(body.loc || '').trim(); if (!loc) return {ok:false, error:'loc обовʼязковий'};
+  var to = _bankChatFor(_bankGroups(), loc, _invChatId(), _invProp('INVOICE_CFO_CHAT_ID'));
+  if (!to) return {ok:false, error:'група «Банк — ' + loc + '» не підключена'};
+  delete _BANK_TOPICS_RUN[loc];
+  var tp = _bankTopicsEnsure(loc, to, true), out = {ok:true, loc:loc, chat:tp.chat, topics:tp.topics, missing:tp.missing, sent:[]};
+  if (body.send !== true && body.send !== '1') return out;
+  var kinds = ['paid', 'debt', 'opex', 'salary'];
+  if (body.kinds){ var _k = String(body.kinds).split(','); kinds = kinds.filter(function(k){ return _k.indexOf(k) >= 0; }); }   // v7.550: лише вибрані
+  var r = (_bankDaily__impl({force:true, dryRun:true, loc:loc, kinds:kinds}).locs || {})[loc] || {texts:{}};
+  if (!(r.texts.paid || []).length){   // сьогодні ще ніхто не платив — оплати з початку місяця
+    var now = new Date(), m1 = Utilities.formatDate(now, 'Europe/Kiev', 'yyyy-MM') + '-01';
+    r.texts.paid = _bankPaidTexts(loc, _bankPaidItems(loc, Utilities.parseDate(m1 + ' 00:00', 'Europe/Kiev', 'yyyy-MM-dd HH:mm').getTime(), now.getTime()), 'з 01.' + m1.slice(5, 7));
+  }
+  kinds.forEach(function(k){
+    (r.texts[k] || []).forEach(function(t){
+      var s = _bankPost(loc, tp.chat, BANK_CHECK_LINE + '\n\n' + t, k);
+      out.sent.push({kind:k, ok:!!(s && s.ok), thread:(s && s.ok && s.result && s.result.message_thread_id) || 0, error:s && !s.ok ? String(s.description || '') : ''});
+    });
+    if (!(r.texts[k] || []).length) out.sent.push({kind:k, ok:false, error:'порожньо'});
+  });
+  if (r.error) out.error = r.error;
+  return out;
+}
+// GET ?action=bankGroupsPreview&actorId=&loc=[&kinds=paid,debt,opex,over,salary][&from=YYYY-MM-DD] — тексти без надсилання (CFO).
 function bankGroupsPreview(p){
   p = p || {};
   if (!_bankCfo(p.actorId)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
@@ -5459,7 +5683,7 @@ function _catOnAnswer(loc, rec, msg, chatId){
   var meta = {}; try { meta = JSON.parse(rec[5] || '{}') || {}; } catch(_m){}
   var cats = _invOpexCats(loc), opts = meta.opts || [];
   var cat = _catAnswerParse(msg.text, opts, cats) || _catAnswerParse(_opexNormalizeCategoryName(trim(msg.text)), opts, cats);
-  if (!cat){ _invSend(chatId, 'Не впізнав статтю. Відповідь: «1», «2» або назва статті OPEX.', {reply_to_message_id: msg.message_id}); return {ok:true, ignored:'cat-unknown'}; }
+  if (!cat){ _invSend(chatId, 'Не впізнав статтю. Відповідь: «1», «2» або назва статті OPEX.', _bankReplyExtra(msg)); return {ok:true, ignored:'cat-unknown'}; }
   var sh = _invSheet(true), v = sh.getDataRange().getValues(), H = v[0].map(String), c = function(n){ return H.indexOf(n); };
   for (var r = 1; r < v.length; r++){
     if (String(v[r][c('invoice_id')]) !== String(meta.id)) continue;
@@ -5470,7 +5694,7 @@ function _catOnAnswer(loc, rec, msg, chatId){
     var lc = c('лог') + 1, prev = String(sh.getRange(r + 1, lc).getValue() || '');
     sh.getRange(r + 1, lc).setValue((prev ? prev + ' · ' : '') + 'стаття ' + cat + ' — відповідь у групі «Банк» ' + who + ' ' + formatDate(new Date()));
     var L = {saved:[]}; try { L = _catLearn(loc, v[r][c('ЄДРПОУ')], trim(v[r][c('постачальник')]), _catItemsFromCell(v[r][c('позиції')]), cat, 'відповідь', who, meta.id); } catch(_l){ _tgErr('inv:catLearn', _l); }
-    _invSend(chatId, '✅ #' + meta.id + ' → <b>' + _htmlEsc(cat) + '</b>' + (L.saved.length ? '. Запам\'ятав на майбутнє.' : ''), {reply_to_message_id: msg.message_id});
+    _invSend(chatId, '✅ #' + meta.id + ' → <b>' + _htmlEsc(cat) + '</b>' + (L.saved.length ? '. Запам\'ятав на майбутнє.' : ''), _bankReplyExtra(msg));
     return {ok:true, kind:'cat-answer', id:String(meta.id), cat:cat, learned:L.saved.length};
   }
   return {ok:true, ignored:'cat-no-invoice'};
@@ -9167,7 +9391,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.547', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.550', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -9429,6 +9653,8 @@ function doPost(e) {
     else if (body.action === 'bankDebtHold')              result = bankDebtHold(body);          // v7.541 відкласти дитину зі списку боржників (CFO)
     else if (body.action === 'bankGroupsGo')              result = bankGroupsGo(body);          // v7.537 увімкнути групу «Банк» (CFO)
     else if (body.action === 'bankFeedbackSetup')         result = bankFeedbackSetup(body);     // v7.547 тригер 18:00 — відгуки тестових груп (CFO)
+    else if (body.action === 'bankTopicsRename')          result = bankTopicsRename(body);      // v7.549 теми «Банк»: назви без емодзі + іконки (CFO)
+    else if (body.action === 'bankTopicsCheck')           result = bankTopicsCheck(body);       // v7.548 теми групи «Банк» + прев'ю у свої теми (CFO)
     else if (body.action === 'bankGroupsSetup')           result = bankGroupsSetup(body);       // v7.536 тригер 16:00 (CFO)
     else if (body.action === 'invoiceCfoSetup')           result = invoiceCfoSetup(body);       // v7.535 тригер звіту CFO 15:00 (CFO)
     else if (body.action === 'invoiceCfoLink')            result = invoiceCfoLink(body);        // v7.535 код підключення особистого чату CFO

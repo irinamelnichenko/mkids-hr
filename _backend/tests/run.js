@@ -263,8 +263,8 @@ if (src.indexOf('\nfunction _bankChatFor(') >= 0){
   const dt = K._bankDebtorsTexts('Позняки', 'листопад', K._bankDebtorsCalc([{name: 'Абраменко Тимофій', bs: 27500, fs: 0, be: 10940, fe: 0, net: 21500, marks: 6600}],
         {[K._dopAnKid('Абраменко Тимофій')]: 'обіцяли до 15-го — Ірина (11.11)'}), [])[0];
   check('банк: текст боржника з коментарем', 'кілька позицій: дитина й сума, під нею навчання · допи з перенесеним; 💬',
-        {line: dt.split('\n').filter((l) => /^<code>/.test(l)).slice(0, 2), cmt: /💬 <i>обіцяли до 15-го/.test(dt)},
-        {line: ['<code>Абраменко Тимофій  38 440</code>', '<code>  навчання 27 500 (з них 6 000 за минулий місяць) · допи 10 940 (з них 4 340 за минулий місяць)</code>'], cmt: true});
+        {line: dt.split('\n').filter((l) => /^<code>/.test(l)).slice(0, 3), cmt: /💬 <i>обіцяли до 15-го/.test(dt)},
+        {line: ['<code>Абраменко Тимофій  38 440</code>', '<code>  навчання         27 500  (6 000 за минулий місяць)</code>', '<code>  допи             10 940  (4 340 за минулий місяць)</code>'], cmt: true});
   // v7.546: групування й блоки (реальні Осокорки 16.11 — форма)
   const dg = K._bankDebtorsTexts('Осокорки', 'листопад', [
       {name: 'Боднік Віка', navch: {debt: 25500, carried: 25500}, dop: null, total: 25500},
@@ -272,12 +272,13 @@ if (src.indexOf('\nfunction _bankChatFor(') >= 0){
       {name: 'Іванова Марія', navch: null, dop: {debt: 7, carried: 0}, total: 7},
       {name: 'Курінний Михайло', navch: {debt: 31000, carried: 6000}, dop: null, total: 31000}],
     [{name: 'Боднік Віка', paid: 15000, fee: 19500}, {name: 'Драгунов Іван', paid: 20500, fee: 35500}], '16.11', 'жовтень')[0].split('\n');
-  check('банк: боржники по дітях', 'кожна дитина раз; блоки в порядку; за сумою; «весь за жовтень»; дрібні суми теж; вступний «сплачено X з Y»; разом',
+  check('банк: боржники по дітях', 'кожна дитина раз; блоки в порядку; за сумою; «(за жовтень)» / «(X за жовтень)»; дрібні суми теж; вступний «борг  (сплачено / сума)»; кілька позицій — рядок на позицію; разом',
         {heads: dg.filter((l) => /^<b>(Винні|Тільки)/.test(l)), sub: dg[1], kur: dg.find((l) => /Курінний/.test(l)), ent: dg.find((l) => /Драгунов/.test(l)),
-         small: dg.some((l) => /Іванова Марія\s+7<\/code>/.test(l)), tot: dg.find((l) => /Разом боргу/.test(l)), bod: dg.filter((l) => /Боднік/.test(l)).length},
+         small: dg.some((l) => /Іванова Марія\s+7<\/code>/.test(l)), tot: dg.find((l) => /Разом боргу/.test(l)), bod: dg.filter((l) => /Боднік/.test(l)).length, bodPos: dg.slice(dg.findIndex((l) => /Боднік/.test(l)) + 1, dg.findIndex((l) => /Боднік/.test(l)) + 3)},
         {heads: ['<b>Винні за кілька позицій</b> · 2 дитини · 38 010', '<b>Тільки навчання</b> · 1 дитина · 31 000', '<b>Тільки допи</b> · 1 дитина · 7', '<b>Тільки вступний</b> · 1 дитина · 15 000'],
-         sub: '<i>на 16.11 · оплата до 5-го</i>', kur: '<code>Курінний Михайло  31 000 (з них 6 000 за жовтень)</code>', ent: '<code>Драгунов Іван     15 000 (сплачено 20 500 з 35 500)</code>',
-         small: true, tot: '<b>Разом боргу: 84 017 ₴ · 5 дітей</b>', bod: 1});
+         sub: '<i>на 16.11 · оплата до 5-го</i>', kur: '<code>Курінний Михайло  31 000  (6 000 за жовтень)</code>', ent: '<code>Драгунов Іван     15 000  (20 500 / 35 500)</code>',
+         small: true, tot: '<b>Разом боргу: 84 017 ₴ · 5 дітей</b>', bod: 1,
+         bodPos: ['<code>  навчання        25 500  (за жовтень)</code>', '<code>  вступний         4 500  (15 000 / 19 500)</code>']});
   const ox = K._bankOpexTexts('Осокорки', 'листопад', K._bankOpexCalc([{name: 'КАНЦТОВАРИ', budget: 2000, spent: 1998}, {name: 'РЕМОНТ', budget: 4000, spent: 3000},
       {name: 'НЕЗАПЛАНОВАНІ ВИТРАТИ', budget: 3000, spent: 900}, {name: 'СНІДАНКИ', budget: 15000, spent: 6000}, {name: 'ІГРАШКИ', budget: 1500, spent: 0}, {name: 'Вода', budget: 800, spent: 0}],
       {'РЕМОНТ': 2200, '': 6362.51}), '16.11', 53.3)[0].split('\n');
@@ -341,6 +342,61 @@ if (src.indexOf('\nfunction _bankTestText(') >= 0){
         {head: fb[0].split('\n')[0], lines: fb[0].split('\n').slice(1), empty: T._bankFeedbackTexts([], '16.11').length},
         {head: '🧪 <b>Відгуки тестових груп «Банк»</b> — 16.11 · 3', lines: ['', '<b>Позняки</b> · 2', '• <b>Абраменко Тимофій</b> · Олена Директор <i>(🔴 Боржники)</i>: оплатили готівкою 12.11',
           '• Олена Директор <i>(💰 Оплатили)</i>: список ок', '', '<b>Пуща</b> · 1', '• Ірина <i>(🔴 Боржники)</i>: &lt;немає Шевчук&gt;'], empty: 0});
+}
+
+// v7.548: теми (Topics) у групах «Банк» і понеділковий «💼 Фонд ЗП»
+if (src.indexOf('\nfunction _bankTopicFor(') >= 0){
+  const P = new Function(['INV_TG_MAX','BANK_TOPICS','BANK_TOPIC_OF'].map(varLine).concat(['_htmlEsc','_bankChunks','_bankInt','_bankPadR','_bankPadL','_bankCode',
+    '_bankTopicFor','_bankTopicMissing','_bankTopicIcon','_bankRealReply','_bankThreadOf','_bankReplyExtra','_bankThreadOk',
+    '_salaryIsSkippedRow','_salaryIsSubtotalRow','_classifyAllSalaryRows','_bankSalaryCalc','_bankSalaryTexts'].map(fn)).join('\n') +
+    '\nreturn {BANK_TOPICS, _bankTopicIcon, _bankTopicFor, _bankTopicMissing, _bankRealReply, _bankReplyExtra, _bankThreadOk, _bankSalaryCalc, _bankSalaryTexts};')();
+  const tp = {chat: '-1003', paid: 11, debt: 12, opex: 13, salary: 14};
+  check('банк: тема для типу', 'оплатили → Оплати; боржники → Боржники; OPEX, ⚠️, 🔴, питання статті → Ліміти; ЗП → Salary; без тем / невідомий тип — загальний чат (0)',
+        {by: ['paid', 'debt', 'opex', 'invOver', 'over', 'catQ', 'salary', 'other'].map((k) => P._bankTopicFor(tp, k)), none: P._bankTopicFor(null, 'paid')},
+        {by: [11, 12, 13, 13, 13, 13, 14, 0], none: 0});
+  check('банк: чого бракує для тем', 'теми вимкнені; бот без права «Керування темами»; теми вже створені — право не потрібне; власник групи — можна',
+        {off: /теми/.test(P._bankTopicMissing({is_forum: false}, null, true)),
+         noRight: /Керування темами/.test(P._bankTopicMissing({is_forum: true}, {status: 'administrator', can_manage_topics: false}, true)),
+         member: /Керування темами/.test(P._bankTopicMissing({is_forum: true}, {status: 'member'}, true)),
+         haveAll: P._bankTopicMissing({is_forum: true}, {status: 'member'}, false),
+         ok: P._bankTopicMissing({is_forum: true}, {status: 'administrator', can_manage_topics: true}, true)},
+        {off: true, noRight: true, member: true, haveAll: '', ok: ''});
+  const stk = [{emoji: '💵', custom_emoji_id: '501'}, {emoji: '💰', custom_emoji_id: '502'}, {emoji: '❗️', custom_emoji_id: '503'}, {emoji: '📈', custom_emoji_id: '504'}];
+  check('банк: назви й іконки тем', 'назви без емодзі; іконка — стікер з найближчим емодзі (💰 раніше 💵; ❗ з варіаційним селектором; 📊 немає → 📈); підходящого немає → \'\' (лише колір)',
+        {names: P.BANK_TOPICS.map((x) => x[1]), icons: P.BANK_TOPICS.map((x) => P._bankTopicIcon(stk, x[2])), colors: P.BANK_TOPICS.every((x) => [7322096, 16766590, 13338331, 9367192, 16749490, 16478047].includes(x[3]))},
+        {names: ['Оплати', 'Боржники', 'Ліміти', 'Salary'], icons: ['502', '503', '504', ''], colors: true});
+  const root = {message_id: 12, from: {is_bot: true}, forum_topic_created: {name: '🔴 Боржники'}};
+  const botMsg = {message_id: 500, from: {is_bot: true}};
+  check('банк: відповідь у темі', 'звичайне повідомлення в темі — не reply (формально відповідає на початок теми); справжній reply — так; відповідь бота — у ту саму тему',
+        {plain: P._bankRealReply({message_id: 600, is_topic_message: true, message_thread_id: 12, reply_to_message: root}),
+         plain2: P._bankRealReply({message_id: 601, is_topic_message: true, message_thread_id: 12, reply_to_message: {message_id: 12, from: {is_bot: true}}}),
+         real: P._bankRealReply({message_id: 602, is_topic_message: true, message_thread_id: 12, reply_to_message: botMsg}).message_id,
+         general: P._bankRealReply({message_id: 603, reply_to_message: botMsg}).message_id,
+         extra: P._bankReplyExtra({message_id: 602, is_topic_message: true, message_thread_id: 12}), extraGen: P._bankReplyExtra({message_id: 603})},
+        {plain: null, plain2: null, real: 500, general: 500, extra: {reply_to_message_id: 602, message_thread_id: 12}, extraGen: {reply_to_message_id: 603}});
+  check('банк: коментарі лише в «Боржниках»', 'з темами — коментар у Боржниках так, в Оплатах / Лімітах / Загальній — ні; група без тем — як раніше',
+        {debt: P._bankThreadOk(tp, 12, ['debt']), paid: P._bankThreadOk(tp, 11, ['debt']), opex: P._bankThreadOk(tp, 13, ['debt']), general: P._bankThreadOk(tp, 0, ['debt']),
+         test: P._bankThreadOk(tp, 11, ['paid', 'debt']), noTopics: P._bankThreadOk(null, 0, ['debt'])},
+        {debt: true, paid: false, opex: false, general: false, test: true, noTopics: true});
+  const sal = [
+    {row: 4, name: 'Зарплата', fact: 0, budget: 0, mf: 0, mb: 0},
+    {row: 5, name: 'Директор', fact: 300000, budget: 300000, mf: 30000, mb: 30000},
+    {row: 6, name: 'Find-iki', fact: 0, budget: 0, mf: 0, mb: 0},
+    {row: 7, name: 'Вихователь Find-iki', fact: 250000, budget: 250000, mf: 12000, mb: 25000},
+    {row: 8, name: 'Англійська мова 280', fact: 80000, budget: 80000, mf: 0, mb: 8000},
+    {row: 9, name: 'Логопед 300', fact: 60000, budget: 60000, mf: 3000, mb: 6000},
+    {row: 10, name: 'Додаткові заняття', fact: 0, budget: 0, mf: 0, mb: 0},
+    {row: 11, name: 'Хореографія', fact: 40000, budget: 40000, mf: 4500, mb: 4000}];
+  const S = P._bankSalaryCalc(sal), ST = P._bankSalaryTexts('Осокорки сад', 'листопад', S, '16.11');
+  check('банк: фонд ЗП по розділах', 'основні / предметники (ставка в назві) / додаткові (після «Додаткові заняття»); заголовки груп і розділів не рахуються',
+        {S}, {S: {main: {plan: 55000, paid: 42000}, subjects: {plan: 14000, paid: 3000}, extras: {plan: 4000, paid: 4500}}});
+  check('банк: «💼 Фонд ЗП» — вигляд', 'шапка й «на ДД.ММ»; колонки в <code> без копійок; залишок може бути з мінусом; внизу «Разом: залишок»; без імен співробітників',
+        {lines: ST[0].split('\n'), names: /Директор|Вихователь|Хореограф/.test(ST[0]), empty: P._bankSalaryTexts('X', 'листопад', {main: {plan: 0, paid: 0}}, '16.11').length},
+        {lines: ['💼 <b>Фонд ЗП — Осокорки сад, листопад</b>', '<i>на 16.11</i>', '',
+          '<code>Розділ         План  Виплачено  Залишок</code>',
+          '<code>Основні      55 000     42 000   13 000</code>',
+          '<code>Предметники  14 000      3 000   11 000</code>',
+          '<code>Додаткові     4 000      4 500     −500</code>', '', '<b>Разом: залишок 23 500 ₴</b>'], names: false, empty: 0});
 }
 
 // v7.538: сума й стаття заявки — підпис директора головний (#196, #101, #288 Осокорки), комунальні — «До сплати»
