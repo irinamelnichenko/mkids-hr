@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.551
+// m.kids CRM — Google Apps Script v7.552
+// v7.552: групи «Банк» — звичайний текст замість <code>-колонок: «Ім'я — сума · тип» (оплатили), боржники «Ім'я — сума (примітка)», кілька позицій — жирне ім'я й рядок «навчання X (Y за жовтень) · допи Z · вступний W (сплачено A з B)», заголовки блоків «… · N · сума»; ліміти «🔴/🟡/🟢 <b>Стаття</b> — витрачено X з Y (Z%), лишилось W» / «перевищено на W», ⚪ без витрат; Фонд ЗП «<b>Розділ</b> — виплачено X з Y, залишок Z»
 // v7.551: групи «Банк» під телефон — жоден рядок у <code> не довший за 28 символів: Фонд ЗП — розділ жирним, «виплачено X з Y» / «залишок Z», «Разом залишок»; OPEX — стаття окремим рядком, суми нижче (якщо не влазить); боржники й оплатили — імена > 18 → «Прізвище І.», не влазить — ім'я окремо, сума нижче, «(…)» окремим рядком праворуч
 // v7.550: 🔴 Боржники — вступний «борг  (сплачено / сума)»; «кілька позицій» — кожна позиція окремим рядком з відступом; «(X за жовтень)» / «(за жовтень)» замість «з них … / весь за …»
 // v7.549: теми групи «Банк» — назви без емодзі («Оплати», «Боржники», «Ліміти», «Salary»); іконка — icon_custom_emoji_id з getForumTopicIconStickers (найближчий до 💰 / 🔴 / 📊 / 💼), немає — лише колір; bankTopicsRename перейменовує вже створені (editForumTopic), нових не створює
@@ -4545,25 +4546,6 @@ function _bankInt(n){ var v = Math.round(Number(n) || 0), t = String(Math.abs(v)
 function _bankPadR(x, n){ x = String(x); while (x.length < n) x += ' '; return x; }
 function _bankPadL(x, n){ x = String(x); while (x.length < n) x = ' ' + x; return x; }
 function _bankCode(x){ return '<code>' + _htmlEsc(x) + '</code>'; }
-// v7.551: під телефон — рядок у <code> ≤ 28 символів; довгі імена → «Прізвище І.»; не влазить — ім'я окремим рядком, суми нижче (вирівняні праворуч)
-var BANK_LINE_MAX = 28;
-function _bankShortName(n){ n = String(n || '').trim().replace(/\s+/g, ' '); if (n.length <= 18) return n; var p = n.split(' '); var x = p.length > 1 ? p[0] + ' ' + p[1].charAt(0) + '.' : n; return x.length > BANK_LINE_MAX ? p[0].slice(0, BANK_LINE_MAX) : x; }
-// Таблиця «ім'я — права частина»: rows [{name, right}] (right уже з вирівняними колонками) → рядки <code>.
-function _bankFitRows(rows){
-  var R = 0, N = 0; rows.forEach(function(r){ R = Math.max(R, r.right.length); N = Math.max(N, r.name.length); });
-  var one = N + 2 + R <= BANK_LINE_MAX, out = [];   // не влазить хоч один — для всіх: ім'я окремо, суми нижче з відступом
-  rows.forEach(function(r){
-    out.push(one ? _bankCode(_bankPadR(r.name, N) + '  ' + r.right) : _bankCode(r.name.slice(0, BANK_LINE_MAX)) + '\n' + _bankCode('  ' + r.right));
-  });
-  return {lines:out, one:one};
-}
-// Хвіст «(…)» — у той самий рядок, якщо влазить, інакше окремим рядком з відступом ind.
-function _bankTail(line, tail, ind){
-  if (!tail) return line;
-  var m = /<code>([^]*)<\/code>$/.exec(line), last = m ? m[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&') : '';
-  if (m && (last + '  ' + tail).length <= BANK_LINE_MAX) return line.slice(0, line.length - m[0].length) + _bankCode(last + '  ' + tail);
-  return line + '\n' + _bankCode((ind || '') + tail);
-}
 function _bankKids(n){ var a = n % 10, b = n % 100; return n + ' ' + (a === 1 && b !== 11 ? 'дитина' : (a >= 2 && a <= 4 && (b < 12 || b > 14) ? 'дитини' : 'дітей')); }
 var BANK_CAT_SHORT = {'КОМУНАЛЬНІ ПОСЛУГИ':'Комунальні', 'НЕЗАПЛАНОВАНІ ВИТРАТИ':'Незаплан.', 'ХОЗ.ТОВАРИ':'Госптовари', 'КАНЦТОВАРИ':'Канцтовари',
   'ПОСТІЛЬНЕ/КОВРИ/ПУФИ/ФОРМА':'Постільне', 'ПОСТІЛЬНЕ/КОВРИ/ПУФИ':'Постільне', 'МЕТОДИЧНА ЧАСТИНА':'Методичка', 'ОБСЛУГОВУВАННЯ':'Обслуговув.',
@@ -4578,13 +4560,13 @@ function _bankShortCat(name){
   if (w === w.toUpperCase()) w = w.charAt(0) + w.slice(1).toLowerCase();
   return w.length > 11 ? w.slice(0, 10) + '.' : w;
 }
+// v7.552: звичайний текст без <code> і колонок — один рядок на позицію, суми з пробілом тисяч, без копійок.
 function _bankPaidTexts(loc, items, dayLabel){
   if (!items || !items.length) return [];
-  var tot = 0, A = 0, K = 0;
-  items.forEach(function(x){ tot += Number(x.amount) || 0; A = Math.max(A, _bankInt(x.amount).length); K = Math.max(K, String(x.kind).length); });
-  var lines = _bankFitRows(items.map(function(x){ return {name:_bankShortName(x.child), right:_bankPadL(_bankInt(x.amount), A) + '  ' + x.kind}; })).lines;   // v7.551
-  var head = '💰 <b>Оплатили — ' + _htmlEsc(loc) + (dayLabel ? ', ' + _htmlEsc(dayLabel) : '') + '</b>';
-  return _bankChunks(head, lines, '<b>Разом: ' + _bankInt(tot) + ' ₴</b>', '💰 <b>Оплатили — ' + _htmlEsc(loc) + '</b> (продовження)');
+  var tot = 0;
+  var lines = items.map(function(x){ tot += Number(x.amount) || 0; return _htmlEsc(x.child) + ' — ' + _bankInt(x.amount) + ' · ' + _htmlEsc(x.kind); });
+  var head = '💰 <b>Оплатили — ' + _htmlEsc(loc) + (dayLabel ? ', ' + _htmlEsc(dayLabel) : '') + '</b>\n';
+  return _bankChunks(head, lines, '\n<b>Разом: ' + _bankInt(tot) + ' ₴</b>', '💰 <b>Оплатили — ' + _htmlEsc(loc) + '</b> (продовження)');
 }
 // Боржники по дітях: навчання / допи / вступний → кожна дитина один раз; блоки «кілька позицій» → «тільки навчання» → «тільки допи» → «тільки вступний».
 function _bankDebtGroups(debtors, entries){
@@ -4602,74 +4584,59 @@ function _bankDebtGroups(debtors, entries){
   Object.keys(G).forEach(function(g){ G[g].sort(function(a, b){ return b.total - a.total || String(a.name).localeCompare(String(b.name), 'uk'); }); });
   return G;
 }
+// « (Y за жовтень)» / « (за жовтень)» / ''
 function _bankCarried(p, prevMonth){
   if (!p || !(p.carried >= 1)) return '';
-  return p.carried >= p.debt - 0.5 ? '(за ' + prevMonth + ')' : '(' + _bankInt(p.carried) + ' за ' + prevMonth + ')';   // v7.550; v7.551 — без пробілів, їх ставить _bankTail
+  return p.carried >= p.debt - 0.5 ? ' (за ' + prevMonth + ')' : ' (' + _bankInt(p.carried) + ' за ' + prevMonth + ')';
 }
 function _bankDebtorsTexts(loc, monthName, debtors, entries, dayLabel, prevMonth){
   var G = _bankDebtGroups(debtors, entries), all = G.multi.concat(G.navch, G.dop, G.entry);
   var head = '🔴 <b>Боржники — ' + _htmlEsc(loc) + ', ' + _htmlEsc(monthName) + '</b>' + (dayLabel ? '\n<i>на ' + _htmlEsc(dayLabel) + ' · оплата до 5-го</i>' : '');
   if (!all.length) return [head + '\nБоргів за місяць немає ✅'];
   prevMonth = prevMonth || 'минулий місяць';
-  // v7.551: ≤ 28 символів у рядку — довге ім'я → «Прізвище І.», не влазить — ім'я окремо, сума нижче; хвіст «(…)» — окремим рядком, якщо не влазить
-  var A = all.reduce(function(m, x){ return Math.max(m, _bankInt(x.total).length); }, 0);
-  var N = all.reduce(function(m, x){ return Math.max(m, _bankShortName(x.name).length); }, 8);
-  var W = Math.min(N, BANK_LINE_MAX - 2 - A), LW = W + 2 + A;
-  var row = function(x, tail){
-    var nm = _bankShortName(x.name), amt = _bankPadL(_bankInt(x.total), A);
-    var l = nm.length <= W ? _bankCode(_bankPadR(nm, W) + '  ' + amt) : _bankCode(nm.slice(0, BANK_LINE_MAX)) + '\n' + _bankCode(_bankPadL(amt, LW));
-    return _bankTail(l, tail, '  ');
-  };
-  var cmt = function(x){ return x.comment ? '\n   💬 <i>' + _htmlEsc(x.comment) + '</i>' : ''; };
+  var cmt = function(x){ return x.comment ? '\n💬 <i>' + _htmlEsc(x.comment) + '</i>' : ''; };
+  var entryNote = function(e){ return ' (сплачено ' + _bankInt(e.paid) + ' з ' + _bankInt(e.fee) + ')'; };
   var lines = [], tot = 0;
   var block = function(list, title, fmt){
     if (!list.length) return;
     var sum = list.reduce(function(a, x){ return a + x.total; }, 0); tot += sum;
-    lines.push('\n<b>' + title + '</b> · ' + _bankKids(list.length) + ' · ' + _bankInt(sum));
+    lines.push('\n<b>' + title + ' · ' + list.length + ' · ' + _bankInt(sum) + '</b>');
     list.forEach(function(x){ lines.push(fmt(x) + cmt(x)); });
   };
-  // v7.550: вступний — «борг  (сплачено / сума)»; у «кілька позицій» кожна позиція окремим рядком з відступом, суми під сумою дитини
-  var entryTail = function(e){ return '(' + _bankInt(e.paid) + ' / ' + _bankInt(e.fee) + ')'; };
   block(G.multi, 'Винні за кілька позицій', function(x){
     var p = [];
-    var pos = function(label, debt, tail){ p.push(_bankTail(_bankCode('  ' + _bankPadR(label, W) + _bankPadL(_bankInt(debt), A)), tail, '    ')); };
-    if (x.navch) pos('навчання', x.navch.debt, _bankCarried(x.navch, prevMonth));
-    if (x.dop) pos('допи', x.dop.debt, _bankCarried(x.dop, prevMonth));
-    if (x.entry) pos('вступний', x.entry.debt, entryTail(x.entry));
-    return row(x) + '\n' + p.join('\n');
+    if (x.navch) p.push('навчання ' + _bankInt(x.navch.debt) + _bankCarried(x.navch, prevMonth));
+    if (x.dop) p.push('допи ' + _bankInt(x.dop.debt) + _bankCarried(x.dop, prevMonth));
+    if (x.entry) p.push('вступний ' + _bankInt(x.entry.debt) + entryNote(x.entry));
+    return '<b>' + _htmlEsc(x.name) + ' — ' + _bankInt(x.total) + '</b>\n' + p.join(' · ');
   });
-  block(G.navch, 'Тільки навчання', function(x){ return row(x, _bankCarried(x.navch, prevMonth)); });
-  block(G.dop, 'Тільки допи', function(x){ return row(x, _bankCarried(x.dop, prevMonth)); });
-  block(G.entry, 'Тільки вступний', function(x){ return row(x, entryTail(x.entry)); });
-  var foot = '\n<b>Разом боргу: ' + _bankInt(tot) + ' ₴ · ' + _bankKids(all.length) + '</b>\n\n<i>Коментар до боргу — відповіддю (reply) на цей список: «Прізвище: текст».</i>';
+  var one = function(note){ return function(x){ return _htmlEsc(x.name) + ' — ' + _bankInt(x.total) + note(x); }; };
+  block(G.navch, 'Тільки навчання', one(function(x){ return _bankCarried(x.navch, prevMonth); }));
+  block(G.dop, 'Тільки допи', one(function(x){ return _bankCarried(x.dop, prevMonth); }));
+  block(G.entry, 'Тільки вступний', one(function(x){ return entryNote(x.entry); }));
+  var foot = '\n<b>Разом боргу: ' + _bankInt(tot) + ' · ' + _bankKids(all.length) + '</b>\n\n<i>Коментар до боргу — відповіддю (reply) на цей список: «Прізвище: текст».</i>';
   return _bankChunks(head, lines, foot, '🔴 <b>Боржники — ' + _htmlEsc(loc) + '</b> (продовження)');
 }
+// Назва статті для тексту: ВЕЛИКІ → «Як звичайне речення».
+function _bankCatTitle(n){ n = String(n || '').trim().replace(/\s+/g, ' '); return n === n.toUpperCase() ? n.charAt(0) + n.slice(1).toLowerCase() : n; }
 function _bankOpexTexts(loc, monthName, calc, dayLabel, monthPct){
   if (!calc || !calc.lines.length) return [];
-  var red = [], yel = [], grn = [], none = [], used = {};
+  var red = [], yel = [], grn = [], none = [];
   calc.lines.forEach(function(l){
     var u = (Number(l.spent) || 0) + (Number(l.queue) || 0), b = Number(l.budget) || 0;
-    var x = {name:_bankShortCat(l.name), used:u, budget:b, pct:b > 0 ? u / b * 100 : (u > 0 ? Infinity : 0)};
-    if (used[x.name]) x.name = String(l.name).slice(0, 10) + '.'; used[x.name] = 1;   // дві статті з однаковою короткою назвою
+    var x = {name:_bankCatTitle(l.name), used:u, budget:b, pct:b > 0 ? u / b * 100 : (u > 0 ? Infinity : 0)};
     if (u < 0.5) none.push(x.name); else if (u > b + 0.5) red.push(x); else if (x.pct > 80) yel.push(x); else grn.push(x);
   });
-  var rows = red.concat(yel, grn), W = 11, U = 0, B = 0, P = 0;
-  var last = function(x){ return red.indexOf(x) >= 0 ? '−' + _bankInt(x.used - x.budget) : Math.round(x.pct) + '%'; };
-  rows.forEach(function(x){ U = Math.max(U, _bankInt(x.used).length); B = Math.max(B, _bankInt(x.budget).length); P = Math.max(P, last(x).length); });
-  var nums = function(x){ return _bankPadL(_bankInt(x.used), U) + ' / ' + _bankPadL(_bankInt(x.budget), B) + '  ' + _bankPadL(last(x), P); };
-  var two = W + 1 + U + 3 + B + 2 + P > BANK_LINE_MAX;   // v7.551: не влазить у 28 — стаття окремим рядком, суми нижче з відступом (для всіх рядків однаково)
-  var fmt = function(x){ return two ? _bankCode(x.name) + '\n' + _bankCode('  ' + nums(x)) : _bankCode(_bankPadR(x.name, W) + ' ' + nums(x)); };
   var byPct = function(a, b){ return b.pct - a.pct; }, lines = [];
-  [[red, '🔴 <b>Перевищено</b>'], [yel, '🟡 <b>Майже вичерпано</b> (понад 80%)'], [grn, '🟢 <b>У нормі</b>']].forEach(function(bl){
-    if (!bl[0].length) return;
-    lines.push('\n' + bl[1]);
-    bl[0].sort(byPct).forEach(function(x){ lines.push(fmt(x)); });
+  red.sort(byPct).forEach(function(x){ lines.push('🔴 <b>' + _htmlEsc(x.name) + '</b> — витрачено ' + _bankInt(x.used) + ' з ' + _bankInt(x.budget) + ', перевищено на ' + _bankInt(x.used - x.budget)); });
+  [[yel, '🟡'], [grn, '🟢']].forEach(function(bl){
+    bl[0].sort(byPct).forEach(function(x){ lines.push(bl[1] + ' <b>' + _htmlEsc(x.name) + '</b> — витрачено ' + _bankInt(x.used) + ' з ' + _bankInt(x.budget) + ' (' + Math.round(x.pct) + '%), лишилось ' + _bankInt(x.budget - x.used)); });
   });
-  if (none.length) lines.push('\n⚪ <b>Без витрат:</b> ' + _htmlEsc(none.join(', ')));
+  if (none.length) lines.push('⚪ Без витрат: ' + _htmlEsc(none.join(', ')));
   var T = calc.total, U2 = T.spent + T.queue, free = T.budget - U2;
-  var foot = '\n<b>Разом: витрачено ' + _bankInt(U2) + ' з ' + _bankInt(T.budget) + ' · ' + (free >= 0 ? 'вільно ' + _bankInt(free) : 'перевищено на ' + _bankInt(-free)) + ' ₴</b>' +
+  var foot = '\n<b>Разом:</b> витрачено ' + _bankInt(U2) + ' з ' + _bankInt(T.budget) + ', ' + (free >= 0 ? 'вільно ' + _bankInt(free) : 'перевищено на ' + _bankInt(-free)) +
     (calc.noCat >= 1 ? '\n⚠️ ' + _bankInt(calc.noCat) + ' ₴ у рахунках без статті' : '');
-  var head = '📊 <b>OPEX — ' + _htmlEsc(loc) + ', ' + _htmlEsc(monthName) + '</b>' + (dayLabel ? '\n<i>на ' + _htmlEsc(dayLabel) + ' · минуло ' + Math.round(monthPct || 0) + '% місяця</i>' : '');
+  var head = '📊 <b>OPEX — ' + _htmlEsc(loc) + ', ' + _htmlEsc(monthName) + '</b>' + (dayLabel ? '\n<i>на ' + _htmlEsc(dayLabel) + ' · минуло ' + Math.round(monthPct || 0) + '% місяця</i>' : '') + '\n';
   return _bankChunks(head, lines, foot, '📊 <b>OPEX — ' + _htmlEsc(loc) + '</b> (продовження)');
 }
 function _bankInvOverText(id, cat, over, budget){
@@ -5122,22 +5089,15 @@ function _bankSalaryCalc(rows, keep){
   });
   return S;
 }
-// v7.551: під телефон — розділ жирним, під ним «виплачено X з Y» і «залишок Z» (суми праворуч), внизу «Разом залишок» жирним.
+// v7.552: «<b>Розділ</b> — виплачено X з Y, залишок Z», внизу «Разом залишок» жирним.
 function _bankSalaryTexts(loc, monthName, S, dayLabel){
-  var rows = [], T = {plan:0, paid:0};
+  var lines = [], T = {plan:0, paid:0};
   [['main', 'Основні'], ['subjects', 'Предметники'], ['extras', 'Додаткові']].forEach(function(n){
     var s = S && S[n[0]]; if (!s || (Math.abs(s.plan) < 0.5 && Math.abs(s.paid) < 0.5)) return;
-    rows.push({name:n[1], plan:_bankInt(s.plan), paid:_bankInt(s.paid), rest:_bankInt(s.plan - s.paid)}); T.plan += s.plan; T.paid += s.paid;
+    lines.push('<b>' + n[1] + '</b> — виплачено ' + _bankInt(s.paid) + ' з ' + _bankInt(s.plan) + ', залишок ' + _bankInt(s.plan - s.paid)); T.plan += s.plan; T.paid += s.paid;
   });
-  if (!rows.length) return [];
-  var P = 0, Y = 0, Z = 0; rows.forEach(function(r){ P = Math.max(P, r.paid.length); Y = Math.max(Y, r.plan.length); Z = Math.max(Z, r.rest.length); });
-  var LW = Math.max(10 + P + 3 + Y, 8 + Z), lines = [];
-  rows.forEach(function(r){
-    lines.push('\n<b>' + r.name + '</b>');
-    lines.push(_bankCode('виплачено ' + _bankPadL(_bankPadL(r.paid, P) + ' з ' + _bankPadL(r.plan, Y), LW - 10)));
-    lines.push(_bankCode('залишок ' + _bankPadL(r.rest, LW - 8)));
-  });
-  var head = '💼 <b>Фонд ЗП — ' + _htmlEsc(loc) + ', ' + _htmlEsc(monthName) + '</b>' + (dayLabel ? '\n<i>на ' + _htmlEsc(dayLabel) + '</i>' : '');
+  if (!lines.length) return [];
+  var head = '💼 <b>Фонд ЗП — ' + _htmlEsc(loc) + ', ' + _htmlEsc(monthName) + '</b>' + (dayLabel ? '\n<i>на ' + _htmlEsc(dayLabel) + '</i>' : '') + '\n';
   return _bankChunks(head, lines, '\n<b>Разом залишок: ' + _bankInt(T.plan - T.paid) + ' ₴</b>', '💼 <b>Фонд ЗП — ' + _htmlEsc(loc) + '</b> (продовження)');
 }
 // ── з Google / Telegram ──
@@ -9424,7 +9384,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.551', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.552', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»

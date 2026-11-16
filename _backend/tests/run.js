@@ -231,12 +231,12 @@ if (src.indexOf('\nfunction _invCfoReportTexts(') >= 0){
 
 // v7.536: групи «Банк — <локація>» — ізоляція, боржники (Крошкін, Абраменко), вступний частинами, заявка понад бюджет
 if (src.indexOf('\nfunction _bankChatFor(') >= 0){
-  const Bv = ['_APOSTROPHES','INV_TG_MAX','BANK_DEBT_MIN','BANK_DEBT_DAYS','BANK_GROUPS_PROP'].concat(src.indexOf('\nvar BANK_DEBT_LIST_MIN') >= 0 ? ['BANK_DEBT_LIST_MIN'] : []).concat(src.indexOf('\nvar BANK_LINE_MAX') >= 0 ? ['BANK_LINE_MAX'] : []).map(varLine)
+  const Bv = ['_APOSTROPHES','INV_TG_MAX','BANK_DEBT_MIN','BANK_DEBT_DAYS','BANK_GROUPS_PROP'].concat(src.indexOf('\nvar BANK_DEBT_LIST_MIN') >= 0 ? ['BANK_DEBT_LIST_MIN'] : []).map(varLine)
     .concat([varBlock('BANK_INV_CAT_RULES')]).concat(src.indexOf('\nvar BANK_CAT_SHORT ') >= 0 ? [varBlock('BANK_CAT_SHORT')] : []);
   const Bf = ['_lat2cyr','_nameFold','_nameFoldTight','_journalNormName','_bankWords','_dopAnKid','_levSalary','_surnameSim','_htmlEsc','_invMoneyUa','_bankGroupsParse','_bankChatFor','_bankLocOfChat','_bankMoney',
               '_bankNormCat','_bankInvCat','_bankDebtDayFor','_bankDebtorsCalc','_bankEntryCalc','_bankOpexCalc','_bankInvOver','_bankOverNew','_bankChunks',
               ...(src.indexOf('\nfunction _bankInt(') >= 0 ? ['_bankInt','_bankPadR','_bankPadL','_bankCode','_bankKids','_bankShortCat','_bankDebtGroups','_bankCarried'] : []),
-              ...(src.indexOf('\nfunction _bankFitRows(') >= 0 ? ['_bankShortName','_bankFitRows','_bankTail'] : []),
+              ...(src.indexOf('\nfunction _bankCatTitle(') >= 0 ? ['_bankCatTitle'] : []),
               '_bankPaidTexts','_bankDebtorsTexts','_bankOpexTexts','_bankInvOverText','_bankOverTexts','_bankCommentTarget','_bankSuspectDebts','_bankHoldFilter'].map(fn);
   const K = new Function(Bv.concat(Bf).join('\n') + '\nreturn {' + ['_bankChatFor','_bankLocOfChat','_bankInvCat','_bankDebtDayFor','_bankDebtorsCalc','_bankEntryCalc',
     '_bankOpexCalc','_bankInvOver','_bankOverNew','_bankPaidTexts','_bankDebtorsTexts','_bankOpexTexts','_bankInvOverText','_bankCommentTarget','_dopAnKid','_bankSuspectDebts','_bankHoldFilter'].join(',') + '};')();
@@ -264,8 +264,8 @@ if (src.indexOf('\nfunction _bankChatFor(') >= 0){
   const dt = K._bankDebtorsTexts('Позняки', 'листопад', K._bankDebtorsCalc([{name: 'Абраменко Тимофій', bs: 27500, fs: 0, be: 10940, fe: 0, net: 21500, marks: 6600}],
         {[K._dopAnKid('Абраменко Тимофій')]: 'обіцяли до 15-го — Ірина (11.11)'}), [])[0];
   check('банк: текст боржника з коментарем', 'кілька позицій: дитина й сума, під нею навчання · допи з перенесеним; 💬',
-        {line: dt.split('\n').filter((l) => /^<code>/.test(l)).slice(0, 3), cmt: /💬 <i>обіцяли до 15-го/.test(dt)},
-        {line: ['<code>Абраменко Тимофій  38 440</code>', '<code>  навчання         27 500</code>', '<code>    (6 000 за минулий місяць)</code>'], cmt: true});
+        {line: dt.split('\n').slice(3, 5), cmt: /💬 <i>обіцяли до 15-го/.test(dt)},
+        {line: ['<b>Абраменко Тимофій — 38 440</b>', 'навчання 27 500 (6 000 за минулий місяць) · допи 10 940 (4 340 за минулий місяць)'], cmt: true});
   // v7.546: групування й блоки (реальні Осокорки 16.11 — форма)
   const dg = K._bankDebtorsTexts('Осокорки', 'листопад', [
       {name: 'Боднік Віка', navch: {debt: 25500, carried: 25500}, dop: null, total: 25500},
@@ -274,30 +274,20 @@ if (src.indexOf('\nfunction _bankChatFor(') >= 0){
       {name: 'Курінний Михайло', navch: {debt: 31000, carried: 6000}, dop: null, total: 31000}],
     [{name: 'Боднік Віка', paid: 15000, fee: 19500}, {name: 'Драгунов Іван', paid: 20500, fee: 35500}], '16.11', 'жовтень')[0].split('\n');
   check('банк: боржники по дітях', 'кожна дитина раз; блоки в порядку; за сумою; «(за жовтень)» / «(X за жовтень)»; дрібні суми теж; вступний «борг  (сплачено / сума)»; кілька позицій — рядок на позицію; разом',
-        {heads: dg.filter((l) => /^<b>(Винні|Тільки)/.test(l)), sub: dg[1], kur: dg.find((l) => /Курінний/.test(l)) + '\n' + dg[dg.findIndex((l) => /Курінний/.test(l)) + 1], ent: dg.find((l) => /Драгунов/.test(l)) + '\n' + dg[dg.findIndex((l) => /Драгунов/.test(l)) + 1],
-         small: dg.some((l) => /Іванова Марія\s+7<\/code>/.test(l)), tot: dg.find((l) => /Разом боргу/.test(l)), bod: dg.filter((l) => /Боднік/.test(l)).length, bodPos: dg.slice(dg.findIndex((l) => /Боднік/.test(l)) + 1, dg.findIndex((l) => /Боднік/.test(l)) + 3)},
-        {heads: ['<b>Винні за кілька позицій</b> · 2 дитини · 38 010', '<b>Тільки навчання</b> · 1 дитина · 31 000', '<b>Тільки допи</b> · 1 дитина · 7', '<b>Тільки вступний</b> · 1 дитина · 15 000'],
-         sub: '<i>на 16.11 · оплата до 5-го</i>', kur: '<code>Курінний Михайло  31 000</code>\n<code>  (6 000 за жовтень)</code>', ent: '<code>Драгунов Іван     15 000</code>\n<code>  (20 500 / 35 500)</code>',
-         small: true, tot: '<b>Разом боргу: 84 017 ₴ · 5 дітей</b>', bod: 1,
-         bodPos: ['<code>  навчання        25 500</code>', '<code>    (за жовтень)</code>']});
-  if (src.indexOf('\nfunction _bankFitRows(') >= 0){
-    const lng = K._bankDebtorsTexts('Осокорки', 'листопад', [{name: 'Скрипка-Петренко Артем Олегович', navch: null, dop: {debt: 350, carried: 0}, total: 350},
-      {name: 'Константинопольська-Велика Олександра', navch: {debt: 125500, carried: 0}, dop: null, total: 125500}], [], '16.11', 'жовтень')[0];
-    const pd = K._bankPaidTexts('Осокорки', [{child: 'Скрипка-Петренко Артем', amount: 125500, kind: 'харчування'}, {child: 'Іванова Саша', amount: 2250, kind: 'допи'}], '16.11')[0];
-    const lens = (t) => Math.max(...t.match(/<code>[^<]*<\/code>/g).map((c) => c.length - 13));
-    check('банк: під телефон ≤ 28', 'імена > 18 → «Прізвище І.»; не влазить — ім\'я окремо, сума нижче; жоден рядок <code> не довший за 28',
-          {dl: lens(lng) <= 28, pl: lens(pd) <= 28, sk: /Скрипка-Петренко А\./.test(lng), kv: lng.split('\n').filter((l) => /^<code>.*(Константинопольська|125 500)/.test(l)),
-           pdRows: pd.split('\n').filter((l) => /^<code>/.test(l))},
-          {dl: true, pl: true, sk: true, kv: ['<code>Константинопольська-Велика</code>', '<code>                     125 500</code>'],
-           pdRows: ['<code>Скрипка-Петренко А.</code>', '<code>  125 500  харчування</code>', '<code>Іванова Саша</code>', '<code>    2 250  допи</code>']});
-  }
+        {heads: dg.filter((l) => /^<b>(Винні|Тільки)/.test(l)), sub: dg[1], kur: dg.find((l) => /Курінний/.test(l)), ent: dg.find((l) => /Драгунов/.test(l)),
+         small: dg.includes('Іванова Марія — 7'), tot: dg.find((l) => /Разом боргу/.test(l)), bod: dg.filter((l) => /Боднік/.test(l)).length, bodPos: dg.slice(dg.findIndex((l) => /Боднік/.test(l)), dg.findIndex((l) => /Боднік/.test(l)) + 2)},
+        {heads: ['<b>Винні за кілька позицій · 2 · 38 010</b>', '<b>Тільки навчання · 1 · 31 000</b>', '<b>Тільки допи · 1 · 7</b>', '<b>Тільки вступний · 1 · 15 000</b>'],
+         sub: '<i>на 16.11 · оплата до 5-го</i>', kur: 'Курінний Михайло — 31 000 (6 000 за жовтень)', ent: 'Драгунов Іван — 15 000 (сплачено 20 500 з 35 500)',
+         small: true, tot: '<b>Разом боргу: 84 017 · 5 дітей</b>', bod: 1,
+         bodPos: ['<b>Боднік Віка — 30 000</b>', 'навчання 25 500 (за жовтень) · вступний 4 500 (сплачено 15 000 з 19 500)']});
   const ox = K._bankOpexTexts('Осокорки', 'листопад', K._bankOpexCalc([{name: 'КАНЦТОВАРИ', budget: 2000, spent: 1998}, {name: 'РЕМОНТ', budget: 4000, spent: 3000},
       {name: 'НЕЗАПЛАНОВАНІ ВИТРАТИ', budget: 3000, spent: 900}, {name: 'СНІДАНКИ', budget: 15000, spent: 6000}, {name: 'ІГРАШКИ', budget: 1500, spent: 0}, {name: 'Вода', budget: 800, spent: 0}],
       {'РЕМОНТ': 2200, '': 6362.51}), '16.11', 53.3)[0].split('\n');
   check('банк: OPEX новий вигляд', 'черга = витрачено; 🔴 −сума, 🟡 > 80%, 🟢 за % спадно; ⚪ одним рядком; разом і без статті',
-        {rows: ox.filter((l) => /^<code>/.test(l)), none: ox.find((l) => /Без витрат/.test(l)), sub: ox[1], tot: ox.find((l) => /Разом/.test(l)), nc: ox[ox.length - 1]},
-        {rows: ['<code>Ремонт</code>', '<code>  5 200 /  4 000  −1 200</code>', '<code>Канцтовари</code>', '<code>  1 998 /  2 000    100%</code>', '<code>Сніданки</code>', '<code>  6 000 / 15 000     40%</code>', '<code>Незаплан.</code>', '<code>    900 /  3 000     30%</code>'],
-         none: '⚪ <b>Без витрат:</b> Іграшки, Вода', sub: '<i>на 16.11 · минуло 53% місяця</i>', tot: '<b>Разом: витрачено 14 098 з 26 300 · вільно 12 202 ₴</b>', nc: '⚠️ 6 363 ₴ у рахунках без статті'});
+        {rows: ox.filter((l) => /^[🔴🟡🟢]/u.test(l)), none: ox.find((l) => /Без витрат/.test(l)), sub: ox[1], tot: ox.find((l) => /Разом/.test(l)), nc: ox[ox.length - 1]},
+        {rows: ['🔴 <b>Ремонт</b> — витрачено 5 200 з 4 000, перевищено на 1 200', '🟡 <b>Канцтовари</b> — витрачено 1 998 з 2 000 (100%), лишилось 2',
+           '🟢 <b>Сніданки</b> — витрачено 6 000 з 15 000 (40%), лишилось 9 000', '🟢 <b>Незаплановані витрати</b> — витрачено 900 з 3 000 (30%), лишилось 2 100'],
+         none: '⚪ Без витрат: Іграшки, Вода', sub: '<i>на 16.11 · минуло 53% місяця</i>', tot: '<b>Разом:</b> витрачено 14 098 з 26 300, вільно 12 202', nc: '⚠️ 6 363 ₴ у рахунках без статті'});
   check('банк: дні списку боржників', 'до 5-го — ні; 6, 8 (вихідні після 6-го) → 6; 31 → 30', {d5: K._bankDebtDayFor(5), d6: K._bankDebtDayFor(6), d8: K._bankDebtDayFor(8), d31: K._bankDebtDayFor(31)},
         {d5: 0, d6: 6, d8: 6, d31: 30});
   // вступний частинами (реальні «Факт вступ» Позняків 2026)
@@ -358,7 +348,7 @@ if (src.indexOf('\nfunction _bankTestText(') >= 0){
 
 // v7.548: теми (Topics) у групах «Банк» і понеділковий «💼 Фонд ЗП»
 if (src.indexOf('\nfunction _bankTopicFor(') >= 0){
-  const P = new Function(['INV_TG_MAX','BANK_TOPICS','BANK_TOPIC_OF','BANK_LINE_MAX'].map(varLine).concat(['_htmlEsc','_bankChunks','_bankInt','_bankPadR','_bankPadL','_bankCode',
+  const P = new Function(['INV_TG_MAX','BANK_TOPICS','BANK_TOPIC_OF'].map(varLine).concat(['_htmlEsc','_bankChunks','_bankInt','_bankPadR','_bankPadL','_bankCode',
     '_bankTopicFor','_bankTopicMissing','_bankTopicIcon','_bankRealReply','_bankThreadOf','_bankReplyExtra','_bankThreadOk',
     '_salaryIsSkippedRow','_salaryIsSubtotalRow','_classifyAllSalaryRows','_bankSalaryCalc','_bankSalaryTexts'].map(fn)).join('\n') +
     '\nreturn {BANK_TOPICS, _bankTopicIcon, _bankTopicFor, _bankTopicMissing, _bankRealReply, _bankReplyExtra, _bankThreadOk, _bankSalaryCalc, _bankSalaryTexts};')();
@@ -402,12 +392,10 @@ if (src.indexOf('\nfunction _bankTopicFor(') >= 0){
   const S = P._bankSalaryCalc(sal), ST = P._bankSalaryTexts('Осокорки сад', 'листопад', S, '16.11');
   check('банк: фонд ЗП по розділах', 'основні / предметники (ставка в назві) / додаткові (після «Додаткові заняття»); заголовки груп і розділів не рахуються',
         {S}, {S: {main: {plan: 55000, paid: 42000}, subjects: {plan: 14000, paid: 3000}, extras: {plan: 4000, paid: 4500}}});
-  check('банк: «💼 Фонд ЗП» — вигляд', 'шапка й «на ДД.ММ»; колонки в <code> без копійок; залишок може бути з мінусом; внизу «Разом: залишок»; без імен співробітників',
+  check('банк: «💼 Фонд ЗП» — вигляд', 'шапка й «на ДД.ММ»; розділ — один рядок, без копійок; залишок може бути з мінусом; внизу «Разом: залишок»; без імен співробітників',
         {lines: ST[0].split('\n'), names: /Директор|Вихователь|Хореограф/.test(ST[0]), empty: P._bankSalaryTexts('X', 'листопад', {main: {plan: 0, paid: 0}}, '16.11').length},
-        {lines: ['💼 <b>Фонд ЗП — Осокорки сад, листопад</b>', '<i>на 16.11</i>', '',
-          '<b>Основні</b>', '<code>виплачено 42 000 з 55 000</code>', '<code>залишок            13 000</code>', '',
-          '<b>Предметники</b>', '<code>виплачено  3 000 з 14 000</code>', '<code>залишок            11 000</code>', '',
-          '<b>Додаткові</b>', '<code>виплачено  4 500 з  4 000</code>', '<code>залишок              −500</code>', '', '<b>Разом залишок: 23 500 ₴</b>'], names: false, empty: 0});
+        {lines: ['💼 <b>Фонд ЗП — Осокорки сад, листопад</b>', '<i>на 16.11</i>', '', '<b>Основні</b> — виплачено 42 000 з 55 000, залишок 13 000',
+          '<b>Предметники</b> — виплачено 3 000 з 14 000, залишок 11 000', '<b>Додаткові</b> — виплачено 4 500 з 4 000, залишок −500', '', '<b>Разом залишок: 23 500 ₴</b>'], names: false, empty: 0});
 }
 
 // v7.538: сума й стаття заявки — підпис директора головний (#196, #101, #288 Осокорки), комунальні — «До сплати»
