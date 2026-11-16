@@ -231,12 +231,14 @@ if (src.indexOf('\nfunction _invCfoReportTexts(') >= 0){
 
 // v7.536: групи «Банк — <локація>» — ізоляція, боржники (Крошкін, Абраменко), вступний частинами, заявка понад бюджет
 if (src.indexOf('\nfunction _bankChatFor(') >= 0){
-  const Bv = ['_APOSTROPHES','INV_TG_MAX','BANK_DEBT_MIN','BANK_DEBT_DAYS','BANK_GROUPS_PROP'].map(varLine).concat([varBlock('BANK_INV_CAT_RULES')]);
+  const Bv = ['_APOSTROPHES','INV_TG_MAX','BANK_DEBT_MIN','BANK_DEBT_DAYS','BANK_GROUPS_PROP'].concat(src.indexOf('\nvar BANK_DEBT_LIST_MIN') >= 0 ? ['BANK_DEBT_LIST_MIN'] : []).map(varLine)
+    .concat([varBlock('BANK_INV_CAT_RULES')]).concat(src.indexOf('\nvar BANK_CAT_SHORT ') >= 0 ? [varBlock('BANK_CAT_SHORT')] : []);
   const Bf = ['_lat2cyr','_nameFold','_nameFoldTight','_journalNormName','_bankWords','_dopAnKid','_levSalary','_surnameSim','_htmlEsc','_invMoneyUa','_bankGroupsParse','_bankChatFor','_bankLocOfChat','_bankMoney',
               '_bankNormCat','_bankInvCat','_bankDebtDayFor','_bankDebtorsCalc','_bankEntryCalc','_bankOpexCalc','_bankInvOver','_bankOverNew','_bankChunks',
+              ...(src.indexOf('\nfunction _bankInt(') >= 0 ? ['_bankInt','_bankPadR','_bankPadL','_bankCode','_bankKids','_bankShortCat','_bankDebtGroups','_bankCarried'] : []),
               '_bankPaidTexts','_bankDebtorsTexts','_bankOpexTexts','_bankInvOverText','_bankOverTexts','_bankCommentTarget','_bankSuspectDebts','_bankHoldFilter'].map(fn);
   const K = new Function(Bv.concat(Bf).join('\n') + '\nreturn {' + ['_bankChatFor','_bankLocOfChat','_bankInvCat','_bankDebtDayFor','_bankDebtorsCalc','_bankEntryCalc',
-    '_bankOpexCalc','_bankInvOver','_bankOverNew','_bankPaidTexts','_bankDebtorsTexts','_bankInvOverText','_bankCommentTarget','_dopAnKid','_bankSuspectDebts','_bankHoldFilter'].join(',') + '};')();
+    '_bankOpexCalc','_bankInvOver','_bankOverNew','_bankPaidTexts','_bankDebtorsTexts','_bankOpexTexts','_bankInvOverText','_bankCommentTarget','_dopAnKid','_bankSuspectDebts','_bankHoldFilter'].join(',') + '};')();
   const INVG = '-5142518705', CFOC = '123456789';
   // ізоляція: чат належить рівно одній локації; група рахунків / особистий чат / спільний чат двох локацій — ні
   const G = {'Позняки': '-1001', 'Пуща': '-1002'};
@@ -260,8 +262,29 @@ if (src.indexOf('\nfunction _bankChatFor(') >= 0){
         {list: [{name: 'Абраменко Тимофій', navch: null, dop: {debt: 10940, carried: 4340}}]});
   const dt = K._bankDebtorsTexts('Позняки', 'листопад', K._bankDebtorsCalc([{name: 'Абраменко Тимофій', bs: 27500, fs: 0, be: 10940, fe: 0, net: 21500, marks: 6600}],
         {[K._dopAnKid('Абраменко Тимофій')]: 'обіцяли до 15-го — Ірина (11.11)'}), [])[0];
-  check('банк: текст боржника з коментарем', 'рядок і 💬', {line: dt.split('\n')[1], cmt: /💬 обіцяли до 15-го/.test(dt)},
-        {line: '• Абраменко Тимофій — навч. 27 500 (з них перенесено 6 000); допи 10 940 (з них перенесено 4 340)', cmt: true});
+  check('банк: текст боржника з коментарем', 'кілька позицій: дитина й сума, під нею навчання · допи з перенесеним; 💬',
+        {line: dt.split('\n').filter((l) => /^<code>/.test(l)).slice(0, 2), cmt: /💬 <i>обіцяли до 15-го/.test(dt)},
+        {line: ['<code>Абраменко Тимофій  38 440</code>', '<code>  навчання 27 500 (з них 6 000 за минулий місяць) · допи 10 940 (з них 4 340 за минулий місяць)</code>'], cmt: true});
+  // v7.546: групування й блоки (реальні Осокорки 16.11 — форма)
+  const dg = K._bankDebtorsTexts('Осокорки', 'листопад', [
+      {name: 'Боднік Віка', navch: {debt: 25500, carried: 25500}, dop: null, total: 25500},
+      {name: 'Шевчук Саша', navch: {debt: 4200, carried: 0}, dop: {debt: 3810, carried: 1000}, total: 8010},
+      {name: 'Іванова Марія', navch: null, dop: {debt: 7, carried: 0}, total: 7},
+      {name: 'Курінний Михайло', navch: {debt: 31000, carried: 6000}, dop: null, total: 31000}],
+    [{name: 'Боднік Віка', paid: 15000, fee: 19500}, {name: 'Драгунов Іван', paid: 20500, fee: 35500}], '16.11', 'жовтень')[0].split('\n');
+  check('банк: боржники по дітях', 'кожна дитина раз; блоки в порядку; за сумою; «весь за жовтень»; дрібні суми теж; вступний «сплачено X з Y»; разом',
+        {heads: dg.filter((l) => /^<b>(Винні|Тільки)/.test(l)), sub: dg[1], kur: dg.find((l) => /Курінний/.test(l)), ent: dg.find((l) => /Драгунов/.test(l)),
+         small: dg.some((l) => /Іванова Марія\s+7<\/code>/.test(l)), tot: dg.find((l) => /Разом боргу/.test(l)), bod: dg.filter((l) => /Боднік/.test(l)).length},
+        {heads: ['<b>Винні за кілька позицій</b> · 2 дитини · 38 010', '<b>Тільки навчання</b> · 1 дитина · 31 000', '<b>Тільки допи</b> · 1 дитина · 7', '<b>Тільки вступний</b> · 1 дитина · 15 000'],
+         sub: '<i>на 16.11 · оплата до 5-го</i>', kur: '<code>Курінний Михайло  31 000 (з них 6 000 за жовтень)</code>', ent: '<code>Драгунов Іван     15 000 (сплачено 20 500 з 35 500)</code>',
+         small: true, tot: '<b>Разом боргу: 84 017 ₴ · 5 дітей</b>', bod: 1});
+  const ox = K._bankOpexTexts('Осокорки', 'листопад', K._bankOpexCalc([{name: 'КАНЦТОВАРИ', budget: 2000, spent: 1998}, {name: 'РЕМОНТ', budget: 4000, spent: 3000},
+      {name: 'НЕЗАПЛАНОВАНІ ВИТРАТИ', budget: 3000, spent: 900}, {name: 'СНІДАНКИ', budget: 15000, spent: 6000}, {name: 'ІГРАШКИ', budget: 1500, spent: 0}, {name: 'Вода', budget: 800, spent: 0}],
+      {'РЕМОНТ': 2200, '': 6362.51}), '16.11', 53.3)[0].split('\n');
+  check('банк: OPEX новий вигляд', 'черга = витрачено; 🔴 −сума, 🟡 > 80%, 🟢 за % спадно; ⚪ одним рядком; разом і без статті',
+        {rows: ox.filter((l) => /^<code>/.test(l)), none: ox.find((l) => /Без витрат/.test(l)), sub: ox[1], tot: ox.find((l) => /Разом/.test(l)), nc: ox[ox.length - 1]},
+        {rows: ['<code>Ремонт      5 200 /  4 000  −1 200</code>', '<code>Канцтовари  1 998 /  2 000    100%</code>', '<code>Сніданки    6 000 / 15 000     40%</code>', '<code>Незаплан.     900 /  3 000     30%</code>'],
+         none: '⚪ <b>Без витрат:</b> Іграшки, Вода', sub: '<i>на 16.11 · минуло 53% місяця</i>', tot: '<b>Разом: витрачено 14 098 з 26 300 · вільно 12 202 ₴</b>', nc: '⚠️ 6 363 ₴ у рахунках без статті'});
   check('банк: дні списку боржників', 'до 5-го — ні; 6, 8 (вихідні після 6-го) → 6; 31 → 30', {d5: K._bankDebtDayFor(5), d6: K._bankDebtDayFor(6), d8: K._bankDebtDayFor(8), d31: K._bankDebtDayFor(31)},
         {d5: 0, d6: 6, d8: 6, d31: 30});
   // вступний частинами (реальні «Факт вступ» Позняків 2026)
@@ -302,6 +325,22 @@ if (src.indexOf('\nfunction _bankChatFor(') >= 0){
         {empty: K._bankPaidTexts('Позняки', [], '11.11').length,
          last: K._bankPaidTexts('Позняки', [{child: 'Хмельницький Іван', amount: 21500, kind: 'навчання', date: '10.11.2026'}, {child: 'Драгунов Іван', amount: 2250, kind: 'допи', date: '10.11.2026'}], '11.11')[0].split('\n').pop()},
         {empty: 0, last: '<b>Разом: 23 750 ₴</b>'});
+}
+
+// v7.547: тестовий режим групи «Банк» і зведення відгуків
+if (src.indexOf('\nfunction _bankTestText(') >= 0){
+  const T = new Function(['INV_TG_MAX','BANK_TEST_LINE','BANK_TEST_TYPES'].map(varLine).concat(['_htmlEsc','_bankChunks','_bankTestText','_bankFeedbackTexts'].map(fn)).join('\n') +
+    '\nreturn {_bankTestText, _bankFeedbackTexts};')();
+  check('банк: тестовий режим', 'оплатили й боржники — з рядком-позначкою; OPEX, перевищення, ⚠️, питання про статтю — не надсилаємо; повний режим без змін',
+        {paid: T._bankTestText('test', 'paid', '💰 x').split('\n')[0], debt: /^🧪/.test(T._bankTestText('test', 'debt', 'y')),
+         blocked: ['opex', 'over', 'invOver', 'catQ'].map((k) => T._bankTestText('test', k, 'z')), full: T._bankTestText('full', 'opex', 'z')},
+        {paid: '🧪 Тестовий режим. Перевірте список і напишіть у відповідь, що не так.', debt: true, blocked: [null, null, null, null], full: 'z'});
+  const fb = T._bankFeedbackTexts([{loc: 'Позняки', child: 'Абраменко Тимофій', who: 'Олена Директор', text: 'оплатили готівкою 12.11', kind: '🔴 Боржники'},
+    {loc: 'Позняки', child: '', who: 'Олена Директор', text: 'список ок', kind: '💰 Оплатили'}, {loc: 'Пуща', child: '', who: 'Ірина', text: '<немає Шевчук>', kind: '🔴 Боржники'}], '16.11');
+  check('банк: зведення відгуків о 18:00', 'по локаціях; дитина — якщо вказано; автор; текст екрановано; порожньо — нічого',
+        {head: fb[0].split('\n')[0], lines: fb[0].split('\n').slice(1), empty: T._bankFeedbackTexts([], '16.11').length},
+        {head: '🧪 <b>Відгуки тестових груп «Банк»</b> — 16.11 · 3', lines: ['', '<b>Позняки</b> · 2', '• <b>Абраменко Тимофій</b> · Олена Директор <i>(🔴 Боржники)</i>: оплатили готівкою 12.11',
+          '• Олена Директор <i>(💰 Оплатили)</i>: список ок', '', '<b>Пуща</b> · 1', '• Ірина <i>(🔴 Боржники)</i>: &lt;немає Шевчук&gt;'], empty: 0});
 }
 
 // v7.538: сума й стаття заявки — підпис директора головний (#196, #101, #288 Осокорки), комунальні — «До сплати»
@@ -415,6 +454,59 @@ if (src.indexOf('\nfunction _recDayCheck(') >= 0){
         {kurko: w5.payer.length, nag: w6.payer.length, text: /платник не підписант/.test(R._recDayText([w5], '11.11'))}, {kurko: 1, nag: 0, text: true});
   const ok = R._recDayCheck([pC], [eC1], L);
   check('звірка: усе зійшлося', 'один рядок ✅', {t: R._recDayText(ok, '10.11')}, {t: '✅ Надходження за 10.11 зійшлися'});
+}
+
+// v7.544: розумна стаття OPEX — правило → історія ≥ 80% → ШІ → питання
+if (src.indexOf('\nfunction _catDecide(') >= 0){
+  const K = new Function(['OPEX_SKIP_CAT','CAT_HIST_SHARE','CAT_HIST_MIN_N','CAT_CONF_MIN','CAT_LLM_TEXT_MAX','CAT_OTHER','INV_TG_MAX'].map(varLine).concat(
+    ['trim','_htmlEsc','_invMoneyUa','_bankMoney','_invEdrMatch','_catNorm','_catInList','_catItemKey','_catItemsFromCell','_catHistIndex','_catHistPick','_catRulePick',
+     '_catLlmPayload','_catLlmParse','_catDecide','_catQuestionText','_catAnswerParse'].map(fn)).join('\n') +
+    '\nreturn {_catItemKey, _catHistIndex, _catHistPick, _catRulePick, _catLlmPayload, _catLlmParse, _catDecide, _catQuestionText, _catAnswerParse};')();
+  const OS = ['ОРЕНДА','КОМУНАЛЬНІ ПОСЛУГИ','СНІДАНКИ','КУХНЯ','Вода','КАНЦТОВАРИ','ІГРАШКИ','ХОЗ.ТОВАРИ','ПРАЛЬНЯ','РЕМОНТ'];
+  const H = ['Локація','IBAN','Дата платежу','Референс','ЄДРПОУ','Сума','Категорія','Місяць','Коли','Ким','Статус','Причина'];
+  const lg = (loc, edr, cat, st, ref) => [loc, 'UA', '01.11.2026', ref || 'R', edr, 100, cat, 11, '', 'cfo', st || 'внесено', ''];
+  const IDX = K._catHistIndex([H,
+    lg('Осокорки', '36265773', 'КАНЦТОВАРИ'), lg('Осокорки', '36265773', 'КАНЦТОВАРИ'), lg('Осокорки', '36265773', 'КАНЦТОВАРИ'), lg('Осокорки', '36265773', 'ІГРАШКИ'),
+    lg('Осокорки', '32490244', 'ХОЗ.ТОВАРИ'), lg('Осокорки', '32490244', 'ХОЗ.ТОВАРИ'), lg('Позняки', '32490244', 'РЕМОНТ'), lg('Осокорки', '32490244', 'РЕМОНТ'),
+    lg('Позняки', '41981829', 'Комунальні послуги'), lg('Позняки', '41981829', 'КОМУНАЛЬНІ ПОСЛУГИ'), lg('Тичини', '41981829', 'КОМУНАЛЬНІ ПОСЛУГИ'),
+    lg('Осокорки', '11111111', '→Salary: Іваненко'), lg('Осокорки', '11111111', 'КУХНЯ', 'пропущено'), lg('Осокорки', '22222222', 'ВОДА', '', 'ONE')]);
+  const hK = K._catHistPick(IDX, '36265773', 'Осокорки', OS), hE = K._catHistPick(IDX, '32490244', 'Осокорки', OS), hY = K._catHistPick(IDX, '419818226543', 'Осокорки', OS);
+  check('стаття: історія виписки', 'канцтовари 3 з 4 = 75% — мало; змішаний (Епіцентр у локації 2/3) — без статті, але з підказкою; ЯСНО — мережа 3/3 (ІПН ↔ ЄДРПОУ)',
+        {k: hK.cat + ' ' + hK.share, e: hE.cat + '|' + hE.top.map((t) => t.cat + t.n).join(','), y: hY.cat + ' ' + hY.scope + ' ' + hY.n},
+        {k: ' 0.75', e: '|ХОЗ.ТОВАРИ2,РЕМОНТ1', y: 'КОМУНАЛЬНІ ПОСЛУГИ мережа 3'});
+  const IDX2 = K._catHistIndex([H, lg('Осокорки', '36265773', 'КАНЦТОВАРИ'), lg('Осокорки', '36265773', 'КАНЦТОВАРИ', '', 'SELF'), lg('Осокорки', '36265773', 'Канцтовари')]);
+  check('стаття: ≥ 80% і без підглядання', '3/3 → КАНЦТОВАРИ; мінус платіж самої заявки → 2/2 ще так; 1 платіж — замало; Salary і пропущені — не історія',
+        {a: K._catHistPick(IDX2, '36265773', 'Осокорки', OS).cat, b: K._catHistPick(IDX2, '36265773', 'Осокорки', OS, [{loc: 'Осокорки', cat: 'КАНЦТОВАРИ'}]).cat,
+         c: K._catHistPick(IDX, '22222222', 'Осокорки', OS).cat, d: K._catHistPick(IDX, '11111111', 'Осокорки', OS)}, {a: 'КАНЦТОВАРИ', b: 'КАНЦТОВАРИ', c: '', d: null});
+  const RULES = [{type: 'постачальник', key: '32490244', loc: '', cat: 'ХОЗ.ТОВАРИ', src: 'контрагенти'},
+                 {type: 'позиція', key: K._catItemKey('Фарба інтер\'єрна біла 10 л'), loc: 'Осокорки', cat: 'РЕМОНТ', src: 'CFO'},
+                 {type: 'постачальник', key: '32490244', loc: 'Осокорки', cat: 'ХОЗ.ТОВАРИ', src: 'CFO'}];
+  check('стаття: правило людини', 'позиція «фарба» → РЕМОНТ важливіша за постачальника; інші позиції — правило постачальника; стаття не з цієї локації — не правило',
+        {item: K._catRulePick(RULES, '32490244', 'Осокорки', ['Фарба інтерʼєрна біла, 10л'], OS).cat, sup: K._catRulePick(RULES, '32490244', 'Осокорки', ['Пакети для сміття 120 л'], OS).src,
+         none: K._catRulePick([{type: 'постачальник', key: '36265773', loc: '', cat: 'Розвиток', src: ''}], '36265773', 'Осокорки', [], OS), key: K._catItemKey('Папір А4 офісний 500 арк.')},
+        {item: 'РЕМОНТ', sup: 'правило: постачальник (CFO)', none: null, key: 'папір офісний'});
+  const pl = K._catLlmPayload('claude-haiku-5-5', OS, {loc: 'Осокорки', caption: 'Осокорки, садочок / Папір', supplier: 'ТОВ «Буквоїд»', edrpou: '36265773', text: 'Папір А4 — 5 пач.', hint: 'КАНЦТОВАРИ ×1'});
+  const plDoc = K._catLlmPayload('claude-haiku-5-5', OS, {loc: 'Осокорки', doc: {type: 'document'}});
+  check('стаття: запит до ШІ', 'Haiku, статті — enum, текст рахунку в промпті; без тексту — сам PDF вкладенням',
+        {m: pl.model, en: pl.output_config.format.schema.properties.category.enum.length, txt: /Папір А4/.test(pl.messages[0].content) && /КАНЦТОВАРИ ×1/.test(pl.messages[0].content),
+         doc: Array.isArray(plDoc.messages[0].content) && plDoc.messages[0].content[0].type}, {m: 'claude-haiku-5-5', en: 10, txt: true, doc: 'document'});
+  const resp = (o) => ({content: [{type: 'text', text: JSON.stringify(o)}], usage: {input_tokens: 900, output_tokens: 40}});
+  const L1 = K._catLlmParse(resp({category: 'канцтовари', alternative: 'ІГРАШКИ', confidence: 0.92, items: ['Папір А4', 'Конверти']}), OS);
+  const L2 = K._catLlmParse(resp({category: 'ХОЗ.ТОВАРИ', alternative: 'РЕМОНТ', confidence: 0.55, items: ['Фарба біла', 'Валик']}), OS);
+  check('стаття: відповідь ШІ', 'назва статті — як у файлі; поза списком / відмова — помилка (без статті)',
+        {a: L1.cat + ' ' + L1.conf, bad: K._catLlmParse(resp({category: 'Розвиток', alternative: '', confidence: 1, items: []}), OS).ok, ref: K._catLlmParse({stop_reason: 'refusal', content: []}, OS).error},
+        {a: 'КАНЦТОВАРИ 0.92', bad: false, ref: 'ШІ відмовив'});
+  const dQ = K._catDecide(null, null, L2, ''), dE = K._catDecide(null, null, {ok: false, error: 'нема ANTHROPIC_API_KEY'}, 'КАНЦТОВАРИ');
+  check('стаття: рішення', 'правило → історія → ШІ ≥ 0,75; 0,55 — питання «X чи Y»; без ШІ — з підпису',
+        {r: K._catDecide({cat: 'РЕМОНТ', src: 'правило: позиція'}, {cat: 'ХОЗ.ТОВАРИ', share: 1, n: 5, scope: 'локація'}, L1, '').cat,
+         h: K._catDecide(null, {cat: 'ХОЗ.ТОВАРИ', share: 0.83, n: 6, scope: 'локація'}, null, '').src, l: K._catDecide(null, null, L1, '').cat,
+         q: dQ.cat + '|' + dQ.ask.join(' / '), e: dE.cat + ' · ' + dE.src},
+        {r: 'РЕМОНТ', h: 'історія 83% з 6 (локація)', l: 'КАНЦТОВАРИ', q: '|ХОЗ.ТОВАРИ / РЕМОНТ', e: 'КАНЦТОВАРИ · підпис (нема ANTHROPIC_API_KEY)'});
+  check('стаття: питання в групі «Банк»', 'текст «[позиції] — X чи Y?»; відповідь «2», «ремонт», «канц», «так» на одну статтю; незрозуміле — порожньо',
+        {t: K._catQuestionText('301', 'ТОВ «Епіцентр К»', 2450, L2.items, dQ.ask).split('\n')[1],
+         a2: K._catAnswerParse('2', dQ.ask, OS), ar: K._catAnswerParse('Ремонт.', dQ.ask, OS), ak: K._catAnswerParse('канц', dQ.ask, OS),
+         y: K._catAnswerParse('так', ['КАНЦТОВАРИ'], OS), y2: K._catAnswerParse('так', dQ.ask, OS), x: K._catAnswerParse('не знаю', dQ.ask, OS)},
+        {t: '<b>Фарба біла, Валик</b> — ХОЗ.ТОВАРИ чи РЕМОНТ?', a2: 'РЕМОНТ', ar: 'РЕМОНТ', ak: 'КАНЦТОВАРИ', y: 'КАНЦТОВАРИ', y2: '', x: ''});
 }
 
 console.log('\n' + pass + ' пройдено, ' + fail + ' з помилкою — ' + path.basename(SRC));
