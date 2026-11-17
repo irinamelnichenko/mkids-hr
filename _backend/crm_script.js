@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.556
+// m.kids CRM — Google Apps Script v7.557
+// v7.557: теми «Банк» — право бота наперед не перевіряємо (getChatMember міг казати «немає»): пробуємо createForumTopic, «бракує права» — лише при відмові Telegram (з її текстом); getChat повертає інший id — переприв'язка; попередження CFO знімається, щойно теми є; bankGroupsStatus — сирі права бота, старий/новий chat_id, only=<локація>, без попереджень
 // v7.556: групи «Банк» — спільна група лише для пари Кар'єрна (садок) + Школа Кар'єрна (BANK_SHARED): обидві локації в одному чаті, теми спільні, повідомлення окремо по кожній з назвою «Кар'єрна, садок» / «Кар'єрна, школа»; відповіді — до локації повідомлення; переприв'язка супергрупи — уся пара; bankGroupShare (школа до групи садка без посилання); bankGroupsStatus — група, локація, теми, право «Керування темами»
 // v7.553: групи «Банк» — повернуто вигляд v7.550 (колонки в <code>: оплатили, боржники, OPEX, Фонд ЗП таблицею); у боржниках прибрано примітки «(X за жовтень)» / «(за жовтень)»
 // v7.552: групи «Банк» — звичайний текст замість <code>-колонок: «Ім'я — сума · тип» (оплатили), боржники «Ім'я — сума (примітка)», кілька позицій — жирне ім'я й рядок «навчання X (Y за жовтень) · допи Z · вступний W (сплачено A з B)», заголовки блоків «… · N · сума»; ліміти «🔴/🟡/🟢 <b>Стаття</b> — витрачено X з Y (Z%), лишилось W» / «перевищено на W», ⚪ без витрат; Фонд ЗП «<b>Розділ</b> — виплачено X з Y, залишок Z»
@@ -5191,22 +5192,19 @@ function _bankMigrate(loc, from, to){
   return String(to);
 }
 // Теми групи: збережені — беремо; бракує — створюємо. {chat, topics (null — пишемо в загальний чат), missing}
-function _bankTopicsEnsure(loc, chat, force){
+// v7.557: право бота не перевіряємо наперед — пробуємо створити тему; відмова Telegram — тоді й «бракує». Попередження CFO — лише при справжній відмові.
+function _bankTopicsEnsure(loc, chat, force, noWarn){
   if (!force && _BANK_TOPICS_RUN[loc] && _BANK_TOPICS_RUN[loc].chat === chat) return _BANK_TOPICS_RUN[loc];
   var t = _bankTopicsGet(loc); if (String(t.chat || '') !== String(chat)) t = {chat:String(chat)};
   var need = BANK_TOPICS.filter(function(x){ return !Number(t[x[0]]); }), res = {chat:chat, topics:null, missing:''};
   var info = _invApi('getChat', {chat_id:chat}), mem = null;
   if (!(info && info.ok)){
     var mig = info && info.parameters && info.parameters.migrate_to_chat_id;
-    if (mig){ chat = _bankMigrate(loc, chat, String(mig)); return _bankTopicsEnsure(loc, chat, true); }
+    if (mig){ chat = _bankMigrate(loc, chat, String(mig)); return _bankTopicsEnsure(loc, chat, true, noWarn); }
     res.missing = 'Telegram getChat: ' + String((info && info.description) || 'помилка');
   } else {
-    if (need.length && info.result.is_forum){
-      var me = _invApi('getMe', {});
-      var cm = me && me.ok ? _invApi('getChatMember', {chat_id:chat, user_id:me.result.id}) : null;
-      mem = cm && cm.ok ? cm.result : null;
-    }
-    res.missing = _bankTopicMissing(info.result, mem, need.length > 0);
+    if (String(info.result.id) !== String(chat)){ chat = _bankMigrate(loc, chat, String(info.result.id)); res.chat = chat; t = {chat:String(chat)}; need = BANK_TOPICS.slice(); }
+    res.missing = info.result.is_forum ? '' : _bankTopicMissing(info.result, null, false);
   }
   if (!res.missing){
     need.forEach(function(x){
@@ -5214,13 +5212,15 @@ function _bankTopicsEnsure(loc, chat, force){
       var ic = _bankTopicIconId(x[2]), pl = {chat_id:chat, name:x[1]};
       if (ic) pl.icon_custom_emoji_id = ic; else pl.icon_color = x[3];   // v7.549
       var r = _invApi('createForumTopic', pl);
-      if (r && r.ok) t[x[0]] = r.result.message_thread_id; else res.missing = 'не вдалося створити тему «' + x[1] + '»: ' + String((r && r.description) || 'помилка');
+      if (r && r.ok) t[x[0]] = r.result.message_thread_id;
+      else res.missing = (/not enough rights|CHAT_ADMIN_REQUIRED|rights/i.test(String(r && r.description)) ? 'бот не має права «Керування темами» — Telegram: ' : 'не вдалося створити тему «' + x[1] + '»: ') + String((r && r.description) || 'помилка');
     });
     if (need.length) _bankTopicsSave(loc, t);
     if (!res.missing) res.topics = t;
   }
   _BANK_TOPICS_RUN[loc] = res;
-  if (res.missing) _bankTopicWarn(loc, res.missing);
+  if (res.missing && !noWarn) _bankTopicWarn(loc, res.missing);
+  if (!res.missing){ try { PropertiesService.getScriptProperties().deleteProperty('BANK_TOPIC_WARN_' + loc); } catch(_d){} }
   return res;
 }
 // CFO в особистий чат — раз на день на локацію (той самий текст).
@@ -5292,14 +5292,17 @@ function bankGroupsStatus(p){
   Object.keys(g).sort(function(a, b){ return a.localeCompare(b, 'uk'); }).forEach(function(loc){
     var c = _bankChatFor(g, loc, _invChatId(), _invProp('INVOICE_CFO_CHAT_ID')), x = {loc:loc, title:_bankLocTitle(loc), chat:String(g[loc]), linked:!!c, live:_bankLive(loc), mode:_bankMode(loc), shared:_bankLocsOfChat(g, g[loc]).length > 1};
     if (c){
-      if (p.ensure === '1'){ delete _BANK_TOPICS_RUN[loc]; var en = _bankTopicsEnsure(loc, c, true); x.ensureMissing = en.missing; if (en.chat !== c){ x.migratedTo = en.chat; c = en.chat; } }
+      x.oldChat = c;
+      if (p.ensure === '1' && (!p.only || p.only === loc)){ delete _BANK_TOPICS_RUN[loc]; var en = _bankTopicsEnsure(loc, c, true, true); x.ensureMissing = en.missing; if (String(en.chat) !== c){ x.migratedTo = String(en.chat); c = String(en.chat); } }   // v7.557: без попереджень CFO
+      x.chat = c;
       if (!chats[c]){
         var ci = _invApi('getChat', {chat_id:c}), cm = botId ? _invApi('getChatMember', {chat_id:c, user_id:botId}) : null;
         chats[c] = {group:ci && ci.ok ? ci.result.title : ('помилка: ' + (ci && ci.description)), forum:!!(ci && ci.ok && ci.result.is_forum),
-                    admin:cm && cm.ok ? cm.result.status : '', manageTopics:!!(cm && cm.ok && (cm.result.status === 'creator' || cm.result.can_manage_topics))};
+                    admin:cm && cm.ok ? cm.result.status : '', manageTopics:!!(cm && cm.ok && (cm.result.status === 'creator' || cm.result.can_manage_topics)),
+                    raw:cm && cm.ok ? Object.keys(cm.result).filter(function(k){ return /^can_/.test(k); }).reduce(function(o, k){ o[k] = cm.result[k]; return o; }, {}) : (cm && cm.description), chatId:ci && ci.ok ? String(ci.result.id) : ''};
       }
       var t = _bankTopicsGet(loc), ch = chats[c];
-      x.group = ch.group; x.forum = ch.forum; x.botStatus = ch.admin; x.manageTopics = ch.manageTopics;
+      x.group = ch.group; x.forum = ch.forum; x.botStatus = ch.admin; x.manageTopics = ch.manageTopics; x.rights = ch.raw; x.tgChatId = ch.chatId;
       x.topics = String(t.chat || '') === c ? BANK_TOPICS.filter(function(b){ return Number(t[b[0]]); }).map(function(b){ return b[1]; }) : [];
     }
     out.push(x);
@@ -9454,7 +9457,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.556', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.557', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
