@@ -341,10 +341,11 @@ if (src.indexOf('\nfunction _bankChatFor(') >= 0){
 if (src.indexOf('\nfunction _bankTestText(') >= 0){
   const T = new Function(['INV_TG_MAX','BANK_TEST_LINE','BANK_TEST_TYPES'].map(varLine).concat(['_htmlEsc','_bankChunks','_bankTestText','_bankFeedbackTexts'].map(fn)).join('\n') +
     '\nreturn {_bankTestText, _bankFeedbackTexts};')();
-  check('банк: тестовий режим', 'оплатили й боржники — з рядком-позначкою; OPEX, перевищення, ⚠️, питання про статтю — не надсилаємо; повний режим без змін',
+  check('банк: тестовий режим', 'оплатили, боржники, ліміти й фонд ЗП — з рядком-позначкою; перевищення, ⚠️, питання про статтю — не надсилаємо; повний режим без змін',
         {paid: T._bankTestText('test', 'paid', '💰 x').split('\n')[0], debt: /^🧪/.test(T._bankTestText('test', 'debt', 'y')),
-         blocked: ['opex', 'over', 'invOver', 'catQ'].map((k) => T._bankTestText('test', k, 'z')), full: T._bankTestText('full', 'opex', 'z')},
-        {paid: '🧪 Тестовий режим. Перевірте список і напишіть у відповідь, що не так.', debt: true, blocked: [null, null, null, null], full: 'z'});
+         blocked: ['over', 'invOver', 'catQ'].map((k) => T._bankTestText('test', k, 'z')), full: T._bankTestText('full', 'opex', 'z'),
+         weekly: ['opex', 'salary'].map((k) => /^🧪/.test(T._bankTestText('test', k, 'z')))},
+        {paid: '🧪 Тестовий режим. Перевірте список і напишіть у відповідь, що не так.', debt: true, blocked: [null, null, null], full: 'z', weekly: [true, true]});
   const fb = T._bankFeedbackTexts([{loc: 'Позняки', child: 'Абраменко Тимофій', who: 'Олена Директор', text: 'оплатили готівкою 12.11', kind: '🔴 Боржники'},
     {loc: 'Позняки', child: '', who: 'Олена Директор', text: 'список ок', kind: '💰 Оплатили'}, {loc: 'Пуща', child: '', who: 'Ірина', text: '<немає Шевчук>', kind: '🔴 Боржники'}], '16.11');
   check('банк: зведення відгуків о 18:00', 'по локаціях; дитина — якщо вказано; автор; текст екрановано; порожньо — нічого',

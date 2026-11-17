@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.557
+// m.kids CRM — Google Apps Script v7.558
+// v7.558: тестовий режим груп «Банк» — також «📊 Ліміти» (тема Ліміти) і «💼 Фонд ЗП» (тема Salary) з 🧪, щопонеділка (перший раз — вівторок 17.11, 16:00); відповіді на них — у вечірнє зведення; перевищення й ⚠️ — як і раніше, не в тесті
 // v7.557: теми «Банк» — право бота наперед не перевіряємо (getChatMember міг казати «немає»): пробуємо createForumTopic, «бракує права» — лише при відмові Telegram (з її текстом); getChat повертає інший id — переприв'язка; попередження CFO знімається, щойно теми є; bankGroupsStatus — сирі права бота, старий/новий chat_id, only=<локація>, без попереджень
 // v7.556: групи «Банк» — спільна група лише для пари Кар'єрна (садок) + Школа Кар'єрна (BANK_SHARED): обидві локації в одному чаті, теми спільні, повідомлення окремо по кожній з назвою «Кар'єрна, садок» / «Кар'єрна, школа»; відповіді — до локації повідомлення; переприв'язка супергрупи — уся пара; bankGroupShare (школа до групи садка без посилання); bankGroupsStatus — група, локація, теми, право «Керування темами»
 // v7.553: групи «Банк» — повернуто вигляд v7.550 (колонки в <code>: оплатили, боржники, OPEX, Фонд ЗП таблицею); у боржниках прибрано примітки «(X за жовтень)» / «(за жовтень)»
@@ -4394,7 +4395,8 @@ var BANK_MSG_HEADER  = ['Коли','Локація','chat_id','message_id','Ти
 var BANK_CMT_SHEET   = 'Банк_Коментарі';
 // v7.547: тестовий режим групи — лише «💰 Оплатили» і «🔴 Боржники» з рядком-позначкою; відповіді (reply) → «Банк_Відгуки» → зведення CFO о 18:00
 var BANK_TEST_LINE   = '🧪 Тестовий режим. Перевірте список і напишіть у відповідь, що не так.';
-var BANK_TEST_TYPES  = ['paid', 'debt'];
+var BANK_TEST_TYPES  = ['paid', 'debt', 'opex', 'salary'];   // v7.558: + 📊 Ліміти і 💼 Фонд ЗП (щопонеділка)
+var BANK_TEST_WEEKLY_EXTRA = '2026-11-17';   // v7.558: перший показ Лімітів і Фонду ЗП тестовим групам — у вівторок 17.11, далі щопонеділка
 var BANK_FB_SHEET    = 'Банк_Відгуки';
 var BANK_FB_HEADER   = ['Коли','Локація','Дитина','Автор','Текст','До повідомлення','Надіслано CFO'];
 var BANK_FB_HOUR     = 18;
@@ -4855,9 +4857,8 @@ function _bankDaily__impl(opts){
         }
       }
       // 📊 OPEX — щопонеділка; 🔴 перевищення — щодня
-      var cats = null, _test = _bankMode(loc) === 'test';   // v7.547: тестовий режим — без OPEX і перевищень
-      if (_test && !opts.dryRun){ _bankStateSave(loc, st); return; }
-      var isMon = Utilities.formatDate(now, 'Europe/Kiev', 'u') === '1';
+      var cats = null, _test = _bankMode(loc) === 'test';   // v7.558: тестовий режим — OPEX і Фонд ЗП так, перевищення ні
+      var isMon = Utilities.formatDate(now, 'Europe/Kiev', 'u') === '1' || (_test && today === BANK_TEST_WEEKLY_EXTRA);
       if (want('opex') && (opts.force || (isMon && st.opexSent !== today))){
         cats = cats || _bankOpexCats(loc, M);
         var q = _bankQueue(loc, cats.map(function(c){ return c.name; }));
@@ -4866,7 +4867,7 @@ function _bankDaily__impl(opts){
         if (opts.dryRun) r.queue = q.list;   // v7.537: склад черги — у прев'ю
         if (!opts.dryRun){ t3.forEach(function(t){ if (_bankSend(loc, t, 'opex').ok) r.sent++; }); st.opexSent = today; }
       }
-      if (want('over')){
+      if (want('over') && !(_test && !opts.dryRun)){
         cats = cats || _bankOpexCats(loc, M);
         var ov = _bankOverNew(cats, opts.dryRun ? {} : (st.over || {}), ym);
         var t4 = _bankOverTexts(_bankLocTitle(loc), mName, ov.items);
@@ -4937,7 +4938,7 @@ function _bankOnGroupMessage(loc, msg, chatId){
     if (String(r[2]).replace(/^'/, '') === chatId && String(r[3]) === String(rep.message_id) && locs.indexOf(String(r[1])) >= 0){ rec = r; return true; } return false; });
   if (rec) loc = String(rec[1]);   // локація повідомлення, на яке відповіли
   if (_bankMode(loc) === 'test'){   // v7.547: будь-яка відповідь — відгук
-    if (!_bankThreadOk(inT, th, ['paid', 'debt'])) return {ok:true, ignored:'bank-topic'};
+    if (!_bankThreadOk(inT, th, ['paid', 'debt', 'opex', 'salary'])) return {ok:true, ignored:'bank-topic'};
     return _bankOnTestReply(loc, rec, msg, chatId);
   }
   if (rec && String(rec[4]) === 'catQ') return _bankThreadOk(inT, th, ['opex']) ? _catOnAnswer(loc, rec, msg, chatId) : {ok:true, ignored:'bank-topic'};   // v7.544: «❓ … — X чи Y?»
@@ -5011,7 +5012,7 @@ function _bankOnTestReply(loc, rec, msg, chatId){
   if (!Array.isArray(kids)) kids = [];
   var tg = kids.length ? _bankCommentTarget(kids, msg.text) : null;
   var who = [msg.from && msg.from.first_name, msg.from && msg.from.last_name].filter(Boolean).join(' ') || (msg.from && msg.from.username) || '';
-  var kind = rec ? ({paid:'💰 Оплатили', debt:'🔴 Боржники'}[String(rec[4])] || String(rec[4])) : '';
+  var kind = rec ? ({paid:'💰 Оплатили', debt:'🔴 Боржники', opex:'📊 Ліміти', salary:'💼 Фонд ЗП'}[String(rec[4])] || String(rec[4])) : '';
   _bankSheet(BANK_FB_SHEET, BANK_FB_HEADER).appendRow([new Date(), loc, tg ? tg.child : '', who, String(msg.text), kind, '']);
   _invSend(chatId, '📝 Записано, дякуємо.', _bankReplyExtra(msg));
   return {ok:true, feedback:true, child:tg ? tg.child : ''};
@@ -9457,7 +9458,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.557', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.558', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
