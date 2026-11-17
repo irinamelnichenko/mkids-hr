@@ -231,15 +231,24 @@ if (src.indexOf('\nfunction _invCfoReportTexts(') >= 0){
 
 // v7.536: групи «Банк — <локація>» — ізоляція, боржники (Крошкін, Абраменко), вступний частинами, заявка понад бюджет
 if (src.indexOf('\nfunction _bankChatFor(') >= 0){
-  const Bv = ['_APOSTROPHES','INV_TG_MAX','BANK_DEBT_MIN','BANK_DEBT_DAYS','BANK_GROUPS_PROP'].concat(src.indexOf('\nvar BANK_DEBT_LIST_MIN') >= 0 ? ['BANK_DEBT_LIST_MIN'] : []).map(varLine)
+  const Bv = ['_APOSTROPHES','INV_TG_MAX','BANK_DEBT_MIN','BANK_DEBT_DAYS','BANK_GROUPS_PROP'].concat(src.indexOf('\nvar BANK_DEBT_LIST_MIN') >= 0 ? ['BANK_DEBT_LIST_MIN'] : []).concat(src.indexOf('\nvar BANK_SHARED') >= 0 ? ['BANK_SHARED','BANK_LOC_TITLE'] : []).map(varLine)
     .concat([varBlock('BANK_INV_CAT_RULES')]).concat(src.indexOf('\nvar BANK_CAT_SHORT ') >= 0 ? [varBlock('BANK_CAT_SHORT')] : []);
-  const Bf = ['_lat2cyr','_nameFold','_nameFoldTight','_journalNormName','_bankWords','_dopAnKid','_levSalary','_surnameSim','_htmlEsc','_invMoneyUa','_bankGroupsParse','_bankChatFor','_bankLocOfChat','_bankMoney',
+  const Bf = ['_lat2cyr','_nameFold','_nameFoldTight','_journalNormName','_bankWords','_dopAnKid','_levSalary','_surnameSim','_htmlEsc','_invMoneyUa','_bankGroupsParse',...(src.indexOf('\nfunction _bankOwnersOk(') >= 0 ? ['_bankSharedSet','_bankOwnersOk','_bankOwners','_bankLocsOfChat','_bankTopicOwner','_bankLocTitle'] : []),'_bankChatFor','_bankLocOfChat','_bankMoney',
               '_bankNormCat','_bankInvCat','_bankDebtDayFor','_bankDebtorsCalc','_bankEntryCalc','_bankOpexCalc','_bankInvOver','_bankOverNew','_bankChunks',
               ...(src.indexOf('\nfunction _bankInt(') >= 0 ? ['_bankInt','_bankPadR','_bankPadL','_bankCode','_bankKids','_bankShortCat','_bankDebtGroups','_bankCarried'] : []),
               '_bankPaidTexts','_bankDebtorsTexts','_bankOpexTexts','_bankInvOverText','_bankOverTexts','_bankCommentTarget','_bankSuspectDebts','_bankHoldFilter'].map(fn);
   const K = new Function(Bv.concat(Bf).join('\n') + '\nreturn {' + ['_bankChatFor','_bankLocOfChat','_bankInvCat','_bankDebtDayFor','_bankDebtorsCalc','_bankEntryCalc',
-    '_bankOpexCalc','_bankInvOver','_bankOverNew','_bankPaidTexts','_bankDebtorsTexts','_bankOpexTexts','_bankInvOverText','_bankCommentTarget','_dopAnKid','_bankSuspectDebts','_bankHoldFilter'].join(',') + '};')();
+    '_bankOpexCalc','_bankInvOver','_bankOverNew','_bankPaidTexts','_bankDebtorsTexts','_bankOpexTexts','_bankInvOverText','_bankCommentTarget','_dopAnKid','_bankSuspectDebts','_bankHoldFilter'].concat(src.indexOf('\nfunction _bankOwnersOk(') >= 0 ? ['_bankLocsOfChat','_bankTopicOwner','_bankLocTitle'] : []).join(',') + '};')();
   const INVG = '-5142518705', CFOC = '123456789';
+  if (K._bankLocsOfChat){
+    const SG = {"Кар'єрна": '-1001', "Школа Кар'єрна": '-1001', 'Позняки': '-1002', 'Тичини': '-1003', 'Пуща': '-1003'};
+    check('банк: спільна група Кар\'єрної', 'садок і школа — одна група, обидві отримують; теми спільні (ключ — садок); заголовки «Кар\'єрна, садок / школа»; інші пари — ні',
+          {kar: K._bankChatFor(SG, "Кар'єрна", INVG, CFOC), sch: K._bankChatFor(SG, "Школа Кар'єрна", INVG, CFOC), loc: K._bankLocOfChat(SG, '-1001'), locs: K._bankLocsOfChat(SG, '-1001'),
+           topic: K._bankTopicOwner(SG, "Школа Кар'єрна"), title: [K._bankLocTitle("Кар'єрна"), K._bankLocTitle("Школа Кар'єрна"), K._bankLocTitle('Позняки')],
+           other: [K._bankChatFor(SG, 'Тичини', INVG, CFOC), K._bankLocOfChat(SG, '-1003')], pozn: K._bankChatFor(SG, 'Позняки', INVG, CFOC)},
+          {kar: '-1001', sch: '-1001', loc: "Кар'єрна", locs: ["Кар'єрна", "Школа Кар'єрна"], topic: "Кар'єрна", title: ["Кар'єрна, садок", "Кар'єрна, школа", 'Позняки'],
+           other: ['', ''], pozn: '-1002'});
+  }
   // ізоляція: чат належить рівно одній локації; група рахунків / особистий чат / спільний чат двох локацій — ні
   const G = {'Позняки': '-1001', 'Пуща': '-1002'};
   check('банк: ізоляція — свій чат', 'Позняки → свій, Пуща → свій, чужої локації немає',

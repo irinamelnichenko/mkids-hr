@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.553
+// m.kids CRM — Google Apps Script v7.556
+// v7.556: групи «Банк» — спільна група лише для пари Кар'єрна (садок) + Школа Кар'єрна (BANK_SHARED): обидві локації в одному чаті, теми спільні, повідомлення окремо по кожній з назвою «Кар'єрна, садок» / «Кар'єрна, школа»; відповіді — до локації повідомлення; переприв'язка супергрупи — уся пара; bankGroupShare (школа до групи садка без посилання); bankGroupsStatus — група, локація, теми, право «Керування темами»
 // v7.553: групи «Банк» — повернуто вигляд v7.550 (колонки в <code>: оплатили, боржники, OPEX, Фонд ЗП таблицею); у боржниках прибрано примітки «(X за жовтень)» / «(за жовтень)»
 // v7.552: групи «Банк» — звичайний текст замість <code>-колонок: «Ім'я — сума · тип» (оплатили), боржники «Ім'я — сума (примітка)», кілька позицій — жирне ім'я й рядок «навчання X (Y за жовтень) · допи Z · вступний W (сплачено A з B)», заголовки блоків «… · N · сума»; ліміти «🔴/🟡/🟢 <b>Стаття</b> — витрачено X з Y (Z%), лишилось W» / «перевищено на W», ⚪ без витрат; Фонд ЗП «<b>Розділ</b> — виплачено X з Y, залишок Z»
 // v7.551: групи «Банк» під телефон — жоден рядок у <code> не довший за 28 символів: Фонд ЗП — розділ жирним, «виплачено X з Y» / «залишок Z», «Разом залишок»; OPEX — стаття окремим рядком, суми нижче (якщо не влазить); боржники й оплатили — імена > 18 → «Прізвище І.», не влазить — ім'я окремо, сума нижче, «(…)» окремим рядком праворуч
@@ -4413,17 +4414,38 @@ var BANK_INV_CAT_RULES = [
 // ── чисті функції (тести) ──
 function _bankGroupsParse(s){ try { var o = JSON.parse(s || '{}'); return (o && typeof o === 'object') ? o : {}; } catch(_e){ return {}; } }
 // Чат групи «Банк» локації — лише якщо він належить РІВНО цій локації і не є групою рахунків / чатом CFO.
+// v7.556: спільна група — лише ця пара (один директор): садок і школа Кар'єрної. Решта — одна група = одна локація.
+var BANK_SHARED = [["Кар'єрна", "Школа Кар'єрна"]];
+var BANK_LOC_TITLE = {"Кар'єрна":"Кар'єрна, садок", "Школа Кар'єрна":"Кар'єрна, школа"};
+function _bankSharedSet(loc){ for (var i = 0; i < BANK_SHARED.length; i++) if (BANK_SHARED[i].indexOf(loc) >= 0) return BANK_SHARED[i]; return null; }
+// Власники чату дозволені: одна локація або всі з однієї спільної пари.
+function _bankOwnersOk(owners){
+  if (owners.length === 1) return true;
+  var set = _bankSharedSet(owners[0]);
+  return !!set && owners.every(function(o){ return set.indexOf(o) >= 0; });
+}
+function _bankOwners(groups, chat){ var c = String(chat || '').trim(); return c ? Object.keys(groups || {}).filter(function(l){ return String(groups[l]).trim() === c; }) : []; }
+// Назва локації в заголовку: для спільної пари — «Кар'єрна, садок» / «Кар'єрна, школа».
+function _bankLocTitle(loc){ return BANK_LOC_TITLE[loc] || loc; }
+// Чат групи «Банк» локації — лише якщо він належить цій локації (або її спільній парі) і не є групою рахунків / чатом CFO.
 function _bankChatFor(groups, loc, invGroup, cfoChat){
   var c = String((groups || {})[loc] || '').trim();
   if (!/^-\d+$/.test(c)) return '';
   if (c === String(invGroup || '').trim() || c === String(cfoChat || '').trim()) return '';
-  var owners = Object.keys(groups).filter(function(l){ return String(groups[l]).trim() === c; });
-  return (owners.length === 1 && owners[0] === loc) ? c : '';
+  var owners = _bankOwners(groups, c);
+  return (owners.indexOf(loc) >= 0 && _bankOwnersOk(owners)) ? c : '';
 }
+// Локація чату (для спільної пари — перша з пари, «головна»); усі локації чату — _bankLocsOfChat.
 function _bankLocOfChat(groups, chatId){
-  var c = String(chatId || '').trim(); if (!c) return '';
-  var owners = Object.keys(groups || {}).filter(function(l){ return String(groups[l]).trim() === c; });
-  return owners.length === 1 ? owners[0] : '';
+  var owners = _bankOwners(groups, chatId); if (!owners.length || !_bankOwnersOk(owners)) return '';
+  if (owners.length === 1) return owners[0];
+  var set = _bankSharedSet(owners[0]); return set[0];
+}
+function _bankLocsOfChat(groups, chatId){ var o = _bankOwners(groups, chatId); return _bankOwnersOk(o) ? o : []; }
+// Теми спільної групи — одні на групу: ключ — головна локація пари, якщо вона в тому ж чаті.
+function _bankTopicOwner(groups, loc){
+  var set = _bankSharedSet(loc); if (!set || set[0] === loc) return loc;
+  return (groups[set[0]] && String(groups[set[0]]) === String(groups[loc])) ? set[0] : loc;
 }
 function _bankWords(s){ return String(s || '').toLowerCase().replace(/[’ʼ`']/g, '').replace(/ё/g, 'е').replace(/\s+\d+\s*$/, '').split(/[^a-zа-яіїєґ]+/).filter(Boolean); }
 function _bankMoney(n){ var s = _invMoneyUa(n); return /,00$/.test(s) ? s.slice(0, -3) : s; }
@@ -4810,7 +4832,7 @@ function _bankDaily__impl(opts){
       if (want('paid')){
         var from = st.paidTs || Utilities.parseDate(today + ' 00:00', 'Europe/Kiev', 'yyyy-MM-dd HH:mm').getTime();
         r.paidItems = _bankPaidItems(loc, from, now.getTime());
-        var t1 = _bankPaidTexts(loc, r.paidItems, dayLabel);
+        var t1 = _bankPaidTexts(_bankLocTitle(loc), r.paidItems, dayLabel);
         r.texts.paid = t1;
         if (!opts.dryRun){ var _pk = (r.paidItems || []).map(function(x){ return x.child; });
           t1.forEach(function(t){ if (_bankSend(loc, t, 'paid', _pk).ok) r.sent++; }); st.paidTs = now.getTime(); }
@@ -4823,7 +4845,7 @@ function _bankDaily__impl(opts){
         var debtors = _bankHoldFilter(_bankDebtorsCalc(D.kids, _bankComments(loc, ym)), _hold), entries = _bankEntryCalc(D.cards, D.facts, D.Y, today);
         if (opts.dryRun) r.hold = _hold;
         if (opts.dryRun) r.suspect = _bankSuspectDebts(D.kids);   // v7.537: лише в прев'ю для CFO
-        var t2 = _bankDebtorsTexts(loc, mName, debtors, entries, dayLabel, String(MONTHS_CAL[(M + 10) % 12] || '').toLowerCase());   // v7.546
+        var t2 = _bankDebtorsTexts(_bankLocTitle(loc), mName, debtors, entries, dayLabel, String(MONTHS_CAL[(M + 10) % 12] || '').toLowerCase());   // v7.546
         r.texts.debt = t2; r.debtors = debtors.length; r.entries = entries.length;
         if (!opts.dryRun){
           var kids = debtors.map(function(x){ return x.name; });
@@ -4838,7 +4860,7 @@ function _bankDaily__impl(opts){
       if (want('opex') && (opts.force || (isMon && st.opexSent !== today))){
         cats = cats || _bankOpexCats(loc, M);
         var q = _bankQueue(loc, cats.map(function(c){ return c.name; }));
-        var t3 = _bankOpexTexts(loc, mName, _bankOpexCalc(cats, q.sum), dayLabel, day / new Date(Y, M, 0).getDate() * 100);   // v7.546
+        var t3 = _bankOpexTexts(_bankLocTitle(loc), mName, _bankOpexCalc(cats, q.sum), dayLabel, day / new Date(Y, M, 0).getDate() * 100);   // v7.546
         r.texts.opex = t3;
         if (opts.dryRun) r.queue = q.list;   // v7.537: склад черги — у прев'ю
         if (!opts.dryRun){ t3.forEach(function(t){ if (_bankSend(loc, t, 'opex').ok) r.sent++; }); st.opexSent = today; }
@@ -4846,14 +4868,14 @@ function _bankDaily__impl(opts){
       if (want('over')){
         cats = cats || _bankOpexCats(loc, M);
         var ov = _bankOverNew(cats, opts.dryRun ? {} : (st.over || {}), ym);
-        var t4 = _bankOverTexts(loc, mName, ov.items);
+        var t4 = _bankOverTexts(_bankLocTitle(loc), mName, ov.items);
         r.texts.over = t4;
         if (!opts.dryRun){ t4.forEach(function(t){ if (_bankSend(loc, t, 'over').ok) r.sent++; }); st.over = ov.state; }
       }
       // 💼 Фонд ЗП — щопонеділка (v7.548), лише розділи, без сум окремих співробітників
       if (want('salary') && (opts.force || (isMon && st.salarySent !== today))){
         var SD = _bankSalaryData(loc, M);
-        var t5 = SD ? _bankSalaryTexts(loc, mName, SD, dayLabel) : [];
+        var t5 = SD ? _bankSalaryTexts(_bankLocTitle(loc), mName, SD, dayLabel) : [];
         r.texts.salary = t5;
         if (!opts.dryRun){ t5.forEach(function(t){ if (_bankSend(loc, t, 'salary').ok) r.sent++; }); st.salarySent = today; }
       }
@@ -4894,7 +4916,7 @@ function _bankLinkFromMessage(msg, chatId){
   var cache = CacheService.getScriptCache(), loc = cache.get('inv_bank_link_' + m[1]) || _bankLinkCode(m[1]); if (!loc) return null;
   if (!/^-\d+$/.test(chatId) || chatId === String(_invChatId() || '')) return {ok:true, ignored:'bank-link-bad-chat'};
   var g = _bankGroups(), other = _bankLocOfChat(g, chatId);
-  if (other && other !== loc){ if (_bankLive(other)) _invSend(chatId, '⛔ Цю групу вже підключено до «Банк — ' + _htmlEsc(other) + '». Одна група — одна локація.'); return {ok:true, refused:other}; }
+  if (other && other !== loc && !_bankOwnersOk(_bankOwners(g, chatId).concat([loc]))){ if (_bankLive(other)) _invSend(chatId, '⛔ Цю групу вже підключено до «Банк — ' + _htmlEsc(other) + '». Одна група — одна локація.'); return {ok:true, refused:other}; }
   g[loc] = chatId;
   PropertiesService.getScriptProperties().setProperty(BANK_GROUPS_PROP, JSON.stringify(g));
   cache.remove('inv_bank_link_' + m[1]); _bankLinkCode(m[1], true);
@@ -4903,14 +4925,16 @@ function _bankLinkFromMessage(msg, chatId){
   return {ok:true, bankLinked:loc};
 }
 function _bankOnGroupMessage(loc, msg, chatId){
-  if (!_bankLive(loc)) return {ok:true, ignored:'bank-not-live'};
+  var locs = _bankLocsOfChat(_bankGroups(), chatId); if (!locs.length) locs = [loc];   // v7.556: спільна група — будь-яка з пари
+  if (!locs.some(function(l){ return _bankLive(l); })) return {ok:true, ignored:'bank-not-live'};
   var rep = _bankRealReply(msg);   // v7.548: у темі кожне повідомлення формально — відповідь на її початок
   if (!rep || !msg.text || !(rep.from && rep.from.is_bot)) return {ok:true, ignored:'bank-chat'};
   // v7.548: теми — коментарі до боргів лише в «Боржниках», відповіді на «X чи Y?» — у «Лімітах», відгуки тесту — в «Оплатах»/«Боржниках»
   var tp = _bankTopicsGet(loc), inT = (tp.chat === chatId && msg.chat && msg.chat.is_forum) ? tp : null, th = _bankThreadOf(msg);
   var sh = _bankSheet(BANK_MSG_SHEET, BANK_MSG_HEADER), rec = null;
   if (sh.getLastRow() >= 2) sh.getRange(2, 1, sh.getLastRow() - 1, BANK_MSG_HEADER.length).getValues().some(function(r){
-    if (String(r[2]).replace(/^'/, '') === chatId && String(r[3]) === String(rep.message_id) && String(r[1]) === loc){ rec = r; return true; } return false; });
+    if (String(r[2]).replace(/^'/, '') === chatId && String(r[3]) === String(rep.message_id) && locs.indexOf(String(r[1])) >= 0){ rec = r; return true; } return false; });
+  if (rec) loc = String(rec[1]);   // локація повідомлення, на яке відповіли
   if (_bankMode(loc) === 'test'){   // v7.547: будь-яка відповідь — відгук
     if (!_bankThreadOk(inT, th, ['paid', 'debt'])) return {ok:true, ignored:'bank-topic'};
     return _bankOnTestReply(loc, rec, msg, chatId);
@@ -5156,13 +5180,13 @@ function bankTopicsRename(body){
   });
   return {ok:out.every(function(x){ return x.ok || /TOPIC_NOT_MODIFIED/.test(x.error); }), items:out};
 }
-function _bankTopicsGet(loc){ try { return JSON.parse(PropertiesService.getScriptProperties().getProperty('BANK_TOPICS_' + loc) || '{}') || {}; } catch(_e){ return {}; } }
-function _bankTopicsSave(loc, t){ PropertiesService.getScriptProperties().setProperty('BANK_TOPICS_' + loc, JSON.stringify(t)); }
+function _bankTopicsGet(loc){ try { return JSON.parse(PropertiesService.getScriptProperties().getProperty('BANK_TOPICS_' + _bankTopicOwner(_bankGroups(), loc)) || '{}') || {}; } catch(_e){ return {}; } }
+function _bankTopicsSave(loc, t){ PropertiesService.getScriptProperties().setProperty('BANK_TOPICS_' + _bankTopicOwner(_bankGroups(), loc), JSON.stringify(t)); }   // v7.556: спільна група — спільні теми
 // Група стала супергрупою (новий chat_id) — та сама локація, теми перевіряться заново.
 function _bankMigrate(loc, from, to){
-  var g = _bankGroups();
-  if (String(g[loc] || '') !== String(to)){ g[loc] = String(to); PropertiesService.getScriptProperties().setProperty(BANK_GROUPS_PROP, JSON.stringify(g)); }
-  delete _BANK_TOPICS_RUN[loc];
+  var g = _bankGroups(), ch = false;
+  Object.keys(g).forEach(function(l){ if (l === loc || String(g[l]) === String(from)){ if (String(g[l]) !== String(to)){ g[l] = String(to); ch = true; } delete _BANK_TOPICS_RUN[l]; } });   // v7.556: уся спільна пара
+  if (ch) PropertiesService.getScriptProperties().setProperty(BANK_GROUPS_PROP, JSON.stringify(g));
   _tgErr('bank:migrate', loc + ' ' + from + ' → ' + to);
   return String(to);
 }
@@ -5248,6 +5272,39 @@ function bankTopicsCheck(body){
   });
   if (r.error) out.error = r.error;
   return out;
+}
+// POST {action:'bankGroupShare', actorId, loc, with} — v7.556: прив'язати локацію до вже підключеної групи пари (лише BANK_SHARED), без посилання.
+function bankGroupShare(body){
+  body = body || {};
+  if (!_bankCfo(body.actorId)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var loc = String(body.loc || '').trim(), host = String(body['with'] || '').trim(), set = _bankSharedSet(loc);
+  if (!set || set.indexOf(host) < 0 || loc === host) return {ok:false, error:'спільна група дозволена лише для пари ' + BANK_SHARED.map(function(x){ return x.join(' + '); }).join('; ')};
+  var g = _bankGroups(), c = _bankChatFor(g, host, _invChatId(), _invProp('INVOICE_CFO_CHAT_ID'));
+  if (!c) return {ok:false, error:'група «Банк — ' + host + '» не підключена'};
+  g[loc] = c; PropertiesService.getScriptProperties().setProperty(BANK_GROUPS_PROP, JSON.stringify(g));
+  return {ok:true, loc:loc, with:host, chat:c, locs:_bankLocsOfChat(g, c)};
+}
+// GET ?action=bankGroupsStatus&actorId=[&ensure=1] — по кожній підключеній локації: група (назва, chat), теми, право бота «Керування темами»; ensure=1 — створити теми, яких бракує (CFO).
+function bankGroupsStatus(p){
+  p = p || {};
+  if (!_bankCfo(p.actorId)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var g = _bankGroups(), me = _invApi('getMe', {}), botId = me && me.ok && me.result.id, chats = {}, out = [];
+  Object.keys(g).sort(function(a, b){ return a.localeCompare(b, 'uk'); }).forEach(function(loc){
+    var c = _bankChatFor(g, loc, _invChatId(), _invProp('INVOICE_CFO_CHAT_ID')), x = {loc:loc, title:_bankLocTitle(loc), chat:String(g[loc]), linked:!!c, live:_bankLive(loc), mode:_bankMode(loc), shared:_bankLocsOfChat(g, g[loc]).length > 1};
+    if (c){
+      if (p.ensure === '1'){ delete _BANK_TOPICS_RUN[loc]; var en = _bankTopicsEnsure(loc, c, true); x.ensureMissing = en.missing; if (en.chat !== c){ x.migratedTo = en.chat; c = en.chat; } }
+      if (!chats[c]){
+        var ci = _invApi('getChat', {chat_id:c}), cm = botId ? _invApi('getChatMember', {chat_id:c, user_id:botId}) : null;
+        chats[c] = {group:ci && ci.ok ? ci.result.title : ('помилка: ' + (ci && ci.description)), forum:!!(ci && ci.ok && ci.result.is_forum),
+                    admin:cm && cm.ok ? cm.result.status : '', manageTopics:!!(cm && cm.ok && (cm.result.status === 'creator' || cm.result.can_manage_topics))};
+      }
+      var t = _bankTopicsGet(loc), ch = chats[c];
+      x.group = ch.group; x.forum = ch.forum; x.botStatus = ch.admin; x.manageTopics = ch.manageTopics;
+      x.topics = String(t.chat || '') === c ? BANK_TOPICS.filter(function(b){ return Number(t[b[0]]); }).map(function(b){ return b[1]; }) : [];
+    }
+    out.push(x);
+  });
+  return {ok:true, items:out};
 }
 // GET ?action=bankGroupsPreview&actorId=&loc=[&kinds=paid,debt,opex,over,salary][&from=YYYY-MM-DD] — тексти без надсилання (CFO).
 function bankGroupsPreview(p){
@@ -9397,7 +9454,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.553', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.556', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -9422,6 +9479,7 @@ function doGet(e) {
     else if (action === 'invoiceFileText')    result = invoiceFileText(e.parameter || {});   // v7.538 текст файлу рахунку (CFO)
     else if (action === 'invoiceAudit')       result = invoiceAudit(e.parameter || {});      // v7.538 розбіжності підпис/сума/стаття (CFO)
     else if (action === 'invoiceCatPreview')  result = invoiceCatPreview(e.parameter || {}); // v7.544 розумна стаття: «було → стало», без запису (CFO)
+    else if (action === 'bankGroupsStatus')   result = bankGroupsStatus(e.parameter || {});  // v7.556 групи «Банк»: локація, теми, право (CFO)
     else if (action === 'bankLinkAll')        result = bankLinkAll(e.parameter || {});       // v7.547 посилання на групи «Банк» усіх локацій (CFO)
     else if (action === 'bankFeedbackPreview') result = bankFeedbackPreview(e.parameter || {}); // v7.547 зведення відгуків тестових груп (CFO)
     else if (action === 'bankGroupsPreview')  result = bankGroupsPreview(e.parameter || {}); // v7.536 тексти груп «Банк» без надсилання (CFO)
@@ -9660,6 +9718,7 @@ function doPost(e) {
     else if (body.action === 'bankGroupsGo')              result = bankGroupsGo(body);          // v7.537 увімкнути групу «Банк» (CFO)
     else if (body.action === 'bankFeedbackSetup')         result = bankFeedbackSetup(body);     // v7.547 тригер 18:00 — відгуки тестових груп (CFO)
     else if (body.action === 'bankTopicsRename')          result = bankTopicsRename(body);      // v7.549 теми «Банк»: назви без емодзі + іконки (CFO)
+    else if (body.action === 'bankGroupShare')            result = bankGroupShare(body);        // v7.556 спільна група пари Кар'єрна садок + школа (CFO)
     else if (body.action === 'bankTopicsCheck')           result = bankTopicsCheck(body);       // v7.548 теми групи «Банк» + прев'ю у свої теми (CFO)
     else if (body.action === 'bankGroupsSetup')           result = bankGroupsSetup(body);       // v7.536 тригер 16:00 (CFO)
     else if (body.action === 'invoiceCfoSetup')           result = invoiceCfoSetup(body);       // v7.535 тригер звіту CFO 15:00 (CFO)
