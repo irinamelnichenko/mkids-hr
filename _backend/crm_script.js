@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.560
+// m.kids CRM — Google Apps Script v7.561
+// v7.561: bankDebtCheckSend — актуальний список боржників зараз у тему Боржники з рядком «Перевірте, будь ласка, список…»; відповіді на нього (тип debtCheck) — у «Банк_Відгуки» і вечірнє зведення 18:00 навіть у повному режимі групи
 // v7.560: боржники «Банк» — відкладені CFO діти не показуються й серед вступних; поправка CFO до сплаченого вступного (bankEntryAdjust, BANK_ENTRY_ADJ_<loc>) без зміни Payment — Пархоменко: 3 000 у «Факт вступ» жовтня = оплата навчання; еталон Осокорків 18.11 — тест
 // v7.559: bankDebtDiag — звідки борг дитини (Payment по місяцях, картка, розрахунок бота), лише читання
 // v7.558: тестовий режим груп «Банк» — також «📊 Ліміти» (тема Ліміти) і «💼 Фонд ЗП» (тема Salary) з 🧪, щопонеділка (перший раз — вівторок 17.11, 16:00); відповіді на них — у вечірнє зведення; перевищення й ⚠️ — як і раніше, не в тесті
@@ -4857,6 +4858,7 @@ function _bankDaily__impl(opts){
         if (opts.dryRun) r.suspect = _bankSuspectDebts(D.kids);   // v7.537: лише в прев'ю для CFO
         var t2 = _bankDebtorsTexts(_bankLocTitle(loc), mName, debtors, entries, dayLabel, String(MONTHS_CAL[(M + 10) % 12] || '').toLowerCase());   // v7.546
         r.texts.debt = t2; r.debtors = debtors.length; r.entries = entries.length;
+        r.debtNames = debtors.map(function(x){ return x.name; }).concat(entries.map(function(x){ return x.name; }));   // v7.561
         if (!opts.dryRun){
           var kids = debtors.map(function(x){ return x.name; });
           t2.forEach(function(t){ if (_bankSend(loc, t, 'debt', kids).ok) r.sent++; });
@@ -4948,6 +4950,8 @@ function _bankOnGroupMessage(loc, msg, chatId){
     if (!_bankThreadOk(inT, th, ['paid', 'debt', 'opex', 'salary'])) return {ok:true, ignored:'bank-topic'};
     return _bankOnTestReply(loc, rec, msg, chatId);
   }
+  if (rec && String(rec[4]) === 'debtCheck')   // v7.561: «перевірте список» — відповіді у вечірнє зведення CFO
+    return _bankThreadOk(inT, th, ['debt']) ? _bankOnTestReply(String(rec[1]), rec, msg, chatId) : {ok:true, ignored:'bank-topic'};
   if (rec && String(rec[4]) === 'catQ') return _bankThreadOk(inT, th, ['opex']) ? _catOnAnswer(loc, rec, msg, chatId) : {ok:true, ignored:'bank-topic'};   // v7.544: «❓ … — X чи Y?»
   if (!rec || String(rec[4]) !== 'debt') return {ok:true, ignored:'bank-reply-other'};
   if (!_bankThreadOk(inT, th, ['debt'])) return {ok:true, ignored:'bank-topic'};
@@ -4994,6 +4998,24 @@ function bankEntryAdjust(body){
   PropertiesService.getScriptProperties().setProperty('BANK_ENTRY_ADJ_' + loc, JSON.stringify(r));
   return {ok:true, loc:loc, adj:r};
 }
+// POST {action:'bankDebtCheckSend', actorId, loc, header} — v7.561: актуальний список боржників зараз у тему Боржники з рядком-проханням зверху;
+//   відповіді на нього — у «Банк_Відгуки» і вечірнє зведення CFO (і в повному режимі групи). Група має бути ввімкнена.
+function bankDebtCheckSend(body){
+  body = body || {};
+  if (!_bankCfo(body.actorId)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var loc = String(body.loc || '').trim(); if (!loc) return {ok:false, error:'loc обовʼязковий'};
+  var r = (_bankDaily__impl({force:true, dryRun:true, loc:loc, kinds:['debt']}).locs || {})[loc] || {};
+  if (r.error) return {ok:false, error:r.error};
+  var texts = (r.texts && r.texts.debt) || []; if (!texts.length) return {ok:false, error:'список порожній'};
+  var head = String(body.header || 'Перевірте, будь ласка, список. Якщо щось не так — відповідайте на це повідомлення: «Прізвище: що не так».');
+  var kids = (r.debtNames || []), sent = [];
+  texts.forEach(function(t, i){
+    t = t.replace(/\n\n<i>Коментар до боргу — відповіддю[^<]*<\/i>$/, '');
+    var x = _bankSend(loc, (i === 0 ? _htmlEsc(head) + '\n\n' : '') + t, 'debtCheck', kids);
+    sent.push({ok:!!(x && x.ok), message_id:x && x.result && x.result.message_id, thread:x && x.result && x.result.message_thread_id, error:x && !x.ok ? String(x.description || '') : ''});
+  });
+  return {ok:sent.every(function(x){ return x.ok; }), loc:loc, parts:sent.length, sent:sent, kids:kids.length};
+}
 // POST {action:'bankGroupsGo', actorId, loc, on:true|false} — увімкнути / вимкнути групу «Банк» (до ввімкнення бот у неї не пише).
 function bankGroupsGo(body){
   body = body || {};
@@ -5030,7 +5052,7 @@ function _bankOnTestReply(loc, rec, msg, chatId){
   if (!Array.isArray(kids)) kids = [];
   var tg = kids.length ? _bankCommentTarget(kids, msg.text) : null;
   var who = [msg.from && msg.from.first_name, msg.from && msg.from.last_name].filter(Boolean).join(' ') || (msg.from && msg.from.username) || '';
-  var kind = rec ? ({paid:'💰 Оплатили', debt:'🔴 Боржники', opex:'📊 Ліміти', salary:'💼 Фонд ЗП'}[String(rec[4])] || String(rec[4])) : '';
+  var kind = rec ? ({paid:'💰 Оплатили', debt:'🔴 Боржники', debtCheck:'🔴 Боржники (перевірка)', opex:'📊 Ліміти', salary:'💼 Фонд ЗП'}[String(rec[4])] || String(rec[4])) : '';
   _bankSheet(BANK_FB_SHEET, BANK_FB_HEADER).appendRow([new Date(), loc, tg ? tg.child : '', who, String(msg.text), kind, '']);
   _invSend(chatId, '📝 Записано, дякуємо.', _bankReplyExtra(msg));
   return {ok:true, feedback:true, child:tg ? tg.child : ''};
@@ -5097,7 +5119,7 @@ function bankLinkAll(p){
 // «Загальна» (General) — без теми. Тем або права немає — пишемо в загальний чат і раз на день кажемо CFO в особистий чат, чого бракує.
 // v7.549: назви без емодзі; іконка — custom emoji зі списку getForumTopicIconStickers (найближчий до бажаних), інакше лише колір (дозволені Telegram)
 var BANK_TOPICS = [['paid', 'Оплати', ['💰', '💵', '💸', '🪙', '💳'], 9367192], ['debt', 'Боржники', ['🔴', '❗', '‼', '⚠', '🔥'], 16478047], ['opex', 'Ліміти', ['📊', '📈', '📉', '🧮'], 7322096], ['salary', 'Salary', ['💼', '👜', '🗂', '📁'], 16766590]];
-var BANK_TOPIC_OF = {paid:'paid', debt:'debt', opex:'opex', over:'opex', invOver:'opex', catQ:'opex', salary:'salary'};
+var BANK_TOPIC_OF = {paid:'paid', debt:'debt', debtCheck:'debt', opex:'opex', over:'opex', invOver:'opex', catQ:'opex', salary:'salary'};
 var BANK_CHECK_LINE = '🧪 Перевірка вигляду';
 var _BANK_TOPICS_RUN = {};   // перевірка тем — раз на виконання
 // ── чисті ──
@@ -9507,7 +9529,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.560', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.561', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -9770,6 +9792,7 @@ function doPost(e) {
     else if (body.action === 'invoiceBankLink')           result = invoiceBankLink(body);       // v7.536 код підключення групи «Банк — <loc>» (CFO)
     else if (body.action === 'bankDebtHold')              result = bankDebtHold(body);          // v7.541 відкласти дитину зі списку боржників (CFO)
     else if (body.action === 'bankEntryAdjust')           result = bankEntryAdjust(body);       // v7.560 поправка сплаченого вступного (CFO)
+    else if (body.action === 'bankDebtCheckSend')         result = bankDebtCheckSend(body);     // v7.561 список боржників «перевірте» у тему Боржники, відповіді — у зведення (CFO)
     else if (body.action === 'bankGroupsGo')              result = bankGroupsGo(body);          // v7.537 увімкнути групу «Банк» (CFO)
     else if (body.action === 'bankFeedbackSetup')         result = bankFeedbackSetup(body);     // v7.547 тригер 18:00 — відгуки тестових груп (CFO)
     else if (body.action === 'bankTopicsRename')          result = bankTopicsRename(body);      // v7.549 теми «Банк»: назви без емодзі + іконки (CFO)
