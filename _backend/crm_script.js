@@ -1,5 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.558
+// m.kids CRM — Google Apps Script v7.560
+// v7.560: боржники «Банк» — відкладені CFO діти не показуються й серед вступних; поправка CFO до сплаченого вступного (bankEntryAdjust, BANK_ENTRY_ADJ_<loc>) без зміни Payment — Пархоменко: 3 000 у «Факт вступ» жовтня = оплата навчання; еталон Осокорків 18.11 — тест
+// v7.559: bankDebtDiag — звідки борг дитини (Payment по місяцях, картка, розрахунок бота), лише читання
 // v7.558: тестовий режим груп «Банк» — також «📊 Ліміти» (тема Ліміти) і «💼 Фонд ЗП» (тема Salary) з 🧪, щопонеділка (перший раз — вівторок 17.11, 16:00); відповіді на них — у вечірнє зведення; перевищення й ⚠️ — як і раніше, не в тесті
 // v7.557: теми «Банк» — право бота наперед не перевіряємо (getChatMember міг казати «немає»): пробуємо createForumTopic, «бракує права» — лише при відмові Telegram (з її текстом); getChat повертає інший id — переприв'язка; попередження CFO знімається, щойно теми є; bankGroupsStatus — сирі права бота, старий/новий chat_id, only=<локація>, без попереджень
 // v7.556: групи «Банк» — спільна група лише для пари Кар'єрна (садок) + Школа Кар'єрна (BANK_SHARED): обидві локації в одному чаті, теми спільні, повідомлення окремо по кожній з назвою «Кар'єрна, садок» / «Кар'єрна, школа»; відповіді — до локації повідомлення; переприв'язка супергрупи — уся пара; bankGroupShare (школа до групи садка без посилання); bankGroupsStatus — група, локація, теми, право «Керування темами»
@@ -4491,7 +4493,8 @@ function _bankDebtorsCalc(kids, comments){
 }
 // Вступний: cards [{name, fee, contract:'YYYY-MM-DD'}], facts {ключ дитини: {name, months:[12 × «Факт вступ»]}} поточного року.
 // Сплачено = Σ «Факт вступ» від місяця договору (частинами можна). Договір минулого року — не бачимо (інший файл) → пропуск.
-function _bankEntryCalc(cards, facts, Y, todayISO){
+// v7.560: adj {ключ дитини: ₴} — поправка CFO до сплаченого вступного (напр. −3 000: у «Факт вступ» стоїть оплата навчання), Payment не змінюється.
+function _bankEntryCalc(cards, facts, Y, todayISO, adj){
   var keys = Object.keys(facts || {}), out = [];
   (cards || []).forEach(function(c){
     var fee = Number(c.fee) || 0, iso = String(c.contract || '');
@@ -4506,6 +4509,7 @@ function _bankEntryCalc(cards, facts, Y, todayISO){
     }
     var cm = Number(iso.slice(5, 7)), paid = 0;
     for (var m = cm; m <= 12; m++) paid += Number((f || [])[m - 1]) || 0;
+    if (adj && adj[k] != null) paid = Math.max(0, paid + (Number(adj[k]) || 0));
     if (paid < fee - 0.5) out.push({name:c.name, paid:Math.round(paid * 100) / 100, fee:fee, contract:iso.slice(8, 10) + '.' + iso.slice(5, 7) + '.' + iso.slice(0, 4)});
   });
   return out.sort(function(a, b){ return String(a.name).localeCompare(String(b.name), 'uk'); });
@@ -4542,6 +4546,9 @@ function _bankHoldFilter(debtors, hold){
   var h = {}; (hold || []).forEach(function(n){ h[_dopAnKid(n)] = 1; });
   return (debtors || []).filter(function(x){ return !h[_dopAnKid(x.name)]; });
 }
+// v7.560: поправки CFO до сплаченого вступного — BANK_ENTRY_ADJ_<loc> {ПІБ: {amount, note}} → {ключ дитини: amount}.
+function _bankEntryAdjRaw(loc){ try { return JSON.parse(PropertiesService.getScriptProperties().getProperty('BANK_ENTRY_ADJ_' + loc) || '{}') || {}; } catch(_e){ return {}; } }
+function _bankEntryAdj(loc){ var r = _bankEntryAdjRaw(loc), out = {}; Object.keys(r).forEach(function(n){ out[_dopAnKid(n)] = Number(r[n] && r[n].amount) || 0; }); return out; }
 function _bankHold(loc){ try { return JSON.parse(PropertiesService.getScriptProperties().getProperty('BANK_DEBT_HOLD_' + loc) || '[]') || []; } catch(_e){ return []; } }
 // ⚠️ заявка: перевищення після оплати = витрачено + у черзі (без неї) + вона − бюджет (> 0 — попередження).
 function _bankInvOver(budget, spent, queueOther, amount){
@@ -4845,7 +4852,7 @@ function _bankDaily__impl(opts){
       if (want('debt') && (opts.force || (dd && String(st.debtSent || '') < dueISO))){
         var D = _bankDebtData(loc, now);
         var _hold = _bankHold(loc);
-        var debtors = _bankHoldFilter(_bankDebtorsCalc(D.kids, _bankComments(loc, ym)), _hold), entries = _bankEntryCalc(D.cards, D.facts, D.Y, today);
+        var debtors = _bankHoldFilter(_bankDebtorsCalc(D.kids, _bankComments(loc, ym)), _hold), entries = _bankHoldFilter(_bankEntryCalc(D.cards, D.facts, D.Y, today, _bankEntryAdj(loc)), _hold);   // v7.560: відкладені — і зі вступних; поправки CFO
         if (opts.dryRun) r.hold = _hold;
         if (opts.dryRun) r.suspect = _bankSuspectDebts(D.kids);   // v7.537: лише в прев'ю для CFO
         var t2 = _bankDebtorsTexts(_bankLocTitle(loc), mName, debtors, entries, dayLabel, String(MONTHS_CAL[(M + 10) % 12] || '').toLowerCase());   // v7.546
@@ -4975,6 +4982,17 @@ function bankDebtHold(body){
   if (body.on !== false) h.push(name);
   PropertiesService.getScriptProperties().setProperty('BANK_DEBT_HOLD_' + loc, JSON.stringify(h));
   return {ok:true, loc:loc, hold:h};
+}
+// POST {action:'bankEntryAdjust', actorId, loc, name, amount, note} — v7.560: поправка до сплаченого вступного дитини (amount 0 / порожньо — зняти). Payment не змінюється.
+function bankEntryAdjust(body){
+  body = body || {};
+  if (!_bankCfo(body.actorId)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var loc = String(body.loc || '').trim(), name = String(body.name || '').trim(); if (!loc || !name) return {ok:false, error:'loc і name обовʼязкові'};
+  var r = _bankEntryAdjRaw(loc), amt = Number(body.amount) || 0;
+  Object.keys(r).forEach(function(n){ if (_dopAnKid(n) === _dopAnKid(name)) delete r[n]; });
+  if (amt) r[name] = {amount:amt, note:String(body.note || ''), at:formatDate(new Date())};
+  PropertiesService.getScriptProperties().setProperty('BANK_ENTRY_ADJ_' + loc, JSON.stringify(r));
+  return {ok:true, loc:loc, adj:r};
 }
 // POST {action:'bankGroupsGo', actorId, loc, on:true|false} — увімкнути / вимкнути групу «Банк» (до ввімкнення бот у неї не пише).
 function bankGroupsGo(body){
@@ -5309,6 +5327,37 @@ function bankGroupsStatus(p){
     out.push(x);
   });
   return {ok:true, items:out};
+}
+// GET ?action=bankDebtDiag&actorId=&loc=&names=Прізвище1,Прізвище2 — v7.559: звідки борг (лише читання, CFO).
+//   Payment (річний агрегат: по місяцях факт навч / допи / вступ, бюджет навч / допи, «Вибув»), картка (статус, дата договору, вступний внесок),
+//   розрахунок бота (debtors, entries). names — частини ПІБ (порожньо — усі діти з боргом або вступним).
+function bankDebtDiag(p){
+  p = p || {};
+  if (!_bankCfo(p.actorId)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var loc = String(p.loc || '').trim(), cfg = _bankCfgRow(loc); if (!cfg) return {ok:false, error:'невідома локація'};
+  var now = new Date(), M = Number(Utilities.formatDate(now, 'Europe/Kiev', 'M')), today = Utilities.formatDate(now, 'Europe/Kiev', 'yyyy-MM-dd');
+  var want = String(p.names || '').split(',').map(function(x){ return _bankWords(x).join(' '); }).filter(Boolean);
+  var hit = function(n){ if (!want.length) return true; var w = ' ' + _bankWords(n).join(' ') + ' '; return want.some(function(q){ return w.indexOf(' ' + q.split(' ')[0] + ' ') >= 0 && (q.split(' ').length < 2 || w.indexOf(' ' + q.split(' ')[1]) >= 0); }); };
+  var rows = _aggYearLocRows(cfg, now, formatDate(now)), pay = [];
+  rows.forEach(function(r){
+    var nm = String(r[5] || '').trim(); if (!nm || !hit(nm)) return;
+    var mm = [];
+    for (var m = 1; m <= 12; m++){ var b = 6 + (m - 1) * 6; if (toNum(r[b]) || toNum(r[b + 1]) || toNum(r[b + 2]) || toNum(r[b + 3]) || toNum(r[b + 4])) mm.push({m:m, fN:toNum(r[b]), fD:toNum(r[b + 1]), fV:toNum(r[b + 2]), bN:toNum(r[b + 3]), bD:toNum(r[b + 4])}); }
+    pay.push({name:nm, group:String(r[3] || ''), departed:r[r.length - 1] === 'так', months:mm});
+  });
+  var cs = getCRMSpreadsheet().getSheetByName(SHEET_CLIENTS), cv = cs.getDataRange().getValues(), h = cv[0].map(String), cards = [];
+  var col = function(n){ return h.indexOf(n); }, iN = col('ПІБ дитини'), iL = col('Локація'), iS = col('Статус'), iD = col('Дата договору'), iE = col('Вступний внесок'), iG = col('Група');
+  for (var i = 1; i < cv.length; i++){
+    if (String(cv[i][iL] || '').trim() !== loc || !hit(cv[i][iN])) continue;
+    var d = cv[i][iD];
+    cards.push({name:String(cv[i][iN] || '').trim(), status:String(cv[i][iS] || ''), contract:d instanceof Date ? Utilities.formatDate(d, 'Europe/Kiev', 'yyyy-MM-dd') : String(d || ''),
+                entryFee:cv[i][iE], group:iG >= 0 ? String(cv[i][iG] || '') : ''});
+  }
+  var D = _bankDebtData(loc, now);
+  var debtors = _bankDebtorsCalc(D.kids, {}).filter(function(x){ return hit(x.name); });
+  var entries = _bankEntryCalc(D.cards, D.facts, D.Y, today, _bankEntryAdj(loc)).filter(function(x){ return hit(x.name); });
+  var kids = D.kids.filter(function(k){ return hit(k.name); });
+  return {ok:true, loc:loc, month:M, hold:_bankHold(loc), payment:pay, cards:cards, kids:kids, debtors:debtors, entries:entries};
 }
 // GET ?action=bankGroupsPreview&actorId=&loc=[&kinds=paid,debt,opex,over,salary][&from=YYYY-MM-DD] — тексти без надсилання (CFO).
 function bankGroupsPreview(p){
@@ -9458,7 +9507,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.558', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.560', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -9484,6 +9533,7 @@ function doGet(e) {
     else if (action === 'invoiceAudit')       result = invoiceAudit(e.parameter || {});      // v7.538 розбіжності підпис/сума/стаття (CFO)
     else if (action === 'invoiceCatPreview')  result = invoiceCatPreview(e.parameter || {}); // v7.544 розумна стаття: «було → стало», без запису (CFO)
     else if (action === 'bankGroupsStatus')   result = bankGroupsStatus(e.parameter || {});  // v7.556 групи «Банк»: локація, теми, право (CFO)
+    else if (action === 'bankDebtDiag')       result = bankDebtDiag(e.parameter || {});      // v7.559 звідки борг: Payment, картка, розрахунок (CFO)
     else if (action === 'bankLinkAll')        result = bankLinkAll(e.parameter || {});       // v7.547 посилання на групи «Банк» усіх локацій (CFO)
     else if (action === 'bankFeedbackPreview') result = bankFeedbackPreview(e.parameter || {}); // v7.547 зведення відгуків тестових груп (CFO)
     else if (action === 'bankGroupsPreview')  result = bankGroupsPreview(e.parameter || {}); // v7.536 тексти груп «Банк» без надсилання (CFO)
@@ -9719,6 +9769,7 @@ function doPost(e) {
     else if (body.action === 'invoiceAutoMatchRange')     result = invoiceAutoMatchRange(body); // v7.411 автозвірка заявок за період (CFO, dryRun за замовч.)
     else if (body.action === 'invoiceBankLink')           result = invoiceBankLink(body);       // v7.536 код підключення групи «Банк — <loc>» (CFO)
     else if (body.action === 'bankDebtHold')              result = bankDebtHold(body);          // v7.541 відкласти дитину зі списку боржників (CFO)
+    else if (body.action === 'bankEntryAdjust')           result = bankEntryAdjust(body);       // v7.560 поправка сплаченого вступного (CFO)
     else if (body.action === 'bankGroupsGo')              result = bankGroupsGo(body);          // v7.537 увімкнути групу «Банк» (CFO)
     else if (body.action === 'bankFeedbackSetup')         result = bankFeedbackSetup(body);     // v7.547 тригер 18:00 — відгуки тестових груп (CFO)
     else if (body.action === 'bankTopicsRename')          result = bankTopicsRename(body);      // v7.549 теми «Банк»: назви без емодзі + іконки (CFO)

@@ -240,6 +240,14 @@ if (src.indexOf('\nfunction _bankChatFor(') >= 0){
   const K = new Function(Bv.concat(Bf).join('\n') + '\nreturn {' + ['_bankChatFor','_bankLocOfChat','_bankInvCat','_bankDebtDayFor','_bankDebtorsCalc','_bankEntryCalc',
     '_bankOpexCalc','_bankInvOver','_bankOverNew','_bankPaidTexts','_bankDebtorsTexts','_bankOpexTexts','_bankInvOverText','_bankCommentTarget','_dopAnKid','_bankSuspectDebts','_bankHoldFilter'].concat(src.indexOf('\nfunction _bankOwnersOk(') >= 0 ? ['_bankLocsOfChat','_bankTopicOwner','_bankLocTitle'] : []).join(',') + '};')();
   const INVG = '-5142518705', CFOC = '123456789';
+  {
+    const pk = K._dopAnKid('Пархоменко Єва'), fx = {}; fx[pk] = {name: 'Пархоменко Єва', months: [0, 0, 0, 0, 0, 0, 0, 0, 0, 3000, 0, 0]};
+    const cards = [{name: 'Пархоменко Єва', fee: 25500, contract: '2026-09-30'}], adj = {}; adj[pk] = -3000;
+    check('банк: поправка CFO до вступного (Пархоменко, еталон 18.11)', '3 000 у «Факт вступ» жовтня — оплата навчання: без поправки борг 22 500, з поправкою −3 000 — 25 500; Payment не змінюється',
+          {before: K._bankEntryCalc(cards, fx, 2026, '2026-11-18').map((x) => x.fee - x.paid), after: K._bankEntryCalc(cards, fx, 2026, '2026-11-18', adj).map((x) => x.fee - x.paid),
+           held: K._bankHoldFilter(K._bankEntryCalc(cards, fx, 2026, '2026-11-18', adj), ['Пархоменко Єва']).length},
+          {before: [22500], after: [25500], held: 0});
+  }
   if (K._bankLocsOfChat){
     const SG = {"Кар'єрна": '-1001', "Школа Кар'єрна": '-1001', 'Позняки': '-1002', 'Тичини': '-1003', 'Пуща': '-1003'};
     check('банк: спільна група Кар\'єрної', 'садок і школа — одна група, обидві отримують; теми спільні (ключ — садок); заголовки «Кар\'єрна, садок / школа»; інші пари — ні',
@@ -407,6 +415,13 @@ if (src.indexOf('\nfunction _bankTopicFor(') >= 0){
           '<code>Основні      55 000     42 000   13 000</code>',
           '<code>Предметники  14 000      3 000   11 000</code>',
           '<code>Додаткові     4 000      4 500     −500</code>', '', '<b>Разом: залишок 23 500 ₴</b>'], names: false, empty: 0});
+}
+
+// v7.559: еталон боргів CFO (Осокорки, 18.11) — цілісність файлу; звірка з живим списком — node _backend/tests/bank_etalon.js
+{
+  const EOS = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures_bank_etalon_osokorky.json'), 'utf8'));
+  check('банк: еталон боржників Осокорків 18.11', '23 дитини, разом 233 110',
+        {n: EOS.kids.length, total: EOS.kids.reduce((a, k) => a + (k.navch || 0) + (k.dop || 0) + (k.entry || 0), 0)}, {n: 23, total: 233110});
 }
 
 // v7.538: сума й стаття заявки — підпис директора головний (#196, #101, #288 Осокорки), комунальні — «До сплати»
