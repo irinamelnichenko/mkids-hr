@@ -2299,6 +2299,16 @@ function getNormFor(loc, subj, groupType, groupName){
   // Дзеркало backend _predCeilingFor — міняти обидва разом.
   return n > 0 ? n : 0;
 }
+// v7.562: чи передбачає регіональна матриця предмет ХОЧ ДЛЯ ОДНОГО типу групи. Рядок з усіма нулями
+//   (або його відсутність) — це «норму не задано», а не «заборонено»: бекенд (_predCeilingFor) тоді
+//   стелі не ставить і заняття приймає. Раніше фронт такий рядок читав як 0 = «Не передбачено для цієї
+//   групи» в УСІХ групах (Хіміків, Фітнес: локальних норм немає, у матриці Київ Фітнес = 0 скрізь).
+function regionPlansSubject(loc, subj){
+  var r = S.norms[predLocToRegion(loc)]; var s = r && r[subj];
+  if (!s) return false;
+  for (var k in s){ if (Number(s[k]) > 0) return true; }
+  return false;
+}
 // v6.28.2: реальні групи локації (ПОВНІ назви з вихователем), відсортовані
 // за типом (miniBaby→Preschool) і назвою. Кожна реальна група = окремий
 // рядок матриці; норма береться з матриці ПО ТИПУ. Fallback — 5 стандартних
@@ -2745,7 +2755,9 @@ function renderTable(loc, subject){
     // сам по собі більше не означає «без ліміту» — спершу дивимось норми локації.
     var locN         = locNormFor(loc, subject, groupName, gt);
     // unlimited: предмет Чомусики АБО тип не розпізнано і власної норми немає
-    var rowUnlimited = isUnlimited || (!gt && locN === null);
+    // v7.562: + норму не задано ні в локації, ні в матриці регіону (рядок нулів) → без ліміту, як у бекенді
+    var rowUnlimited = isUnlimited || (!gt && locN === null) ||
+                       (locN === null && !isSchoolLoc(loc) && !regionPlansSubject(loc, subject));
     var norm         = rowUnlimited ? 0 : getNormFor(loc, subject, gt, groupName);
     var isForbidden  = (!rowUnlimited && norm <= 0)              // тип з нормою 0 у матриці
                        || !catGroupAllowed(loc, subject, groupName, gt);   // v7.532: позиція лише для певних груп

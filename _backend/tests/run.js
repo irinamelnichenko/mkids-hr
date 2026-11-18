@@ -590,5 +590,32 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
         {t: '<b>Фарба біла, Валик</b> — ХОЗ.ТОВАРИ чи РЕМОНТ?', a2: 'РЕМОНТ', ar: 'РЕМОНТ', ak: 'КАНЦТОВАРИ', y: 'КАНЦТОВАРИ', y2: '', x: ''});
 }
 
+// ── v7.562: Предметники (фронт) — «Не передбачено для цієї групи» лише за справжньою нормою 0 ──
+{
+  const hp = path.join(__dirname, '..', '..', 'predmetnyky.html');
+  if (fs.existsSync(hp)){
+    const h = fs.readFileSync(hp, 'utf8');
+    const hf = (name) => { const i = h.indexOf('function ' + name + '('); let d = 0;
+      for (let k = h.indexOf('{', i); k < h.length; k++){ if (h[k] === '{') d++; else if (h[k] === '}' && --d === 0) return h.slice(i, k + 1); } };
+    const hv = (name) => /var [A-Z_]+ *=[\s\S]*?;\n/.exec(h.slice(h.indexOf('var ' + name + ' ')))[0];
+    const code = ['PRED_LVIV_LOCATIONS', 'GT_TRANSLIT', 'GT_BABY', 'PRED_GROUP_TYPES', 'PRED_UNLIMITED_SUBJ'].map(hv).join('\n') +
+      ['groupLetters', 'groupKey', 'canonGroupType', 'normalizeGroupType', 'predLocToRegion', 'isSchoolLoc', 'locNormFor',
+       'getNormFor', 'catGroupAllowed', 'regionPlansSubject'].map(hf).join('\n');
+    const z = {miniBaby: 0, Baby: 0, Find: 0, Study: 0, Preschool: 0};
+    const S = {locations: [], catalog: [],
+      norms: {'Київ': {'Фітнес': z, 'Логопед': {miniBaby: 0, Baby: 4, Find: 4, Study: 4, Preschool: 4}}},
+      locNorms: {'Нац.Гвардії (Благо)': {'Польська': {byName: {beshketnyky: 0}, byType: {Find: 8}, any: null}}}};
+    const P = new Function('S', code + ';return {normalizeGroupType, locNormFor, getNormFor, catGroupAllowed, regionPlansSubject, isSchoolLoc};')(S);
+    const forb = (loc, subj, g) => { const gt = P.normalizeGroupType(g), ln = P.locNormFor(loc, subj, g, gt);
+      const unl = (!gt && ln === null) || (ln === null && !P.isSchoolLoc(loc) && !P.regionPlansSubject(loc, subj));
+      return (!unl && (unl ? 0 : P.getNormFor(loc, subj, gt, g)) <= 0) || !P.catGroupAllowed(loc, subj, g, gt); };
+    check('предметники: Фітнес Хіміків', 'рядок нулів у матриці = норму не задано → можна відмічати; справжній 0 лишається забороною',
+          {fit: ['Карапузи', 'Малюки', 'Розумники'].map((g) => forb('Хіміків (Благо)', 'Фітнес', g)),
+           log: [forb('Бровари', 'Логопед', 'miniBaby-ki'), forb('Бровари', 'Логопед', 'Baby-ki')],
+           pol: forb('Нац.Гвардії (Благо)', 'Польська', 'Бешкетники')},
+          {fit: [false, false, false], log: [true, false], pol: true});
+  }
+}
+
 console.log('\n' + pass + ' пройдено, ' + fail + ' з помилкою — ' + path.basename(SRC));
 process.exit(fail ? 1 : 0);
