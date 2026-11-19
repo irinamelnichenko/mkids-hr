@@ -590,6 +590,35 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
         {t: '<b>Фарба біла, Валик</b> — ХОЗ.ТОВАРИ чи РЕМОНТ?', a2: 'РЕМОНТ', ar: 'РЕМОНТ', ak: 'КАНЦТОВАРИ', y: 'КАНЦТОВАРИ', y2: '', x: ''});
 }
 
+// ── v7.563: експорт допів під локом + перерахунок після видалення (Голосієво, дубль Лего 28.10, +340 у трьох дітей) ──
+{
+  const st = {held: false, waits: 0, flushed: 0, fail: false};
+  const LS = {getScriptLock: () => ({waitLock(){ if (st.fail) throw new Error('timeout'); if (st.held) throw new Error('deadlock'); st.held = true; st.waits++; },
+                                      releaseLock(){ st.held = false; }})};
+  const SA = {flush(){ st.flushed++; }};
+  const W = new Function('LockService', 'SpreadsheetApp', ['var _DOP_EXP_LOCKED = false;', fn('_dopExpLocked'), fn('_dopRecalcTargets')].join('\n') +
+    '\nreturn {_dopExpLocked, _dopRecalcTargets};')(LS, SA);
+  // модель експорту: клітинка = (клітинка − журнал) + сума відміток; журнал = сума. Читання й запис — усередині core.
+  const world = {cell: 2810 + 340, journal: 2810 + 340, marks: 2810};   // стан, коли дубль уже знято, а клітинка/журнал бачили його
+  const core = (p) => { const held = st.held, base = world.cell - world.journal;
+    if (!p.dryRun){ world.cell = base + world.marks; world.journal = world.marks; }
+    if (p.nested) W._dopExpLocked({}, (q) => ({ok: true, held: st.held}));
+    return {ok: true, held: held}; };
+  const r1 = W._dopExpLocked({loc: 'Голосієво'}, core);
+  const waits1 = st.waits;
+  const rN = W._dopExpLocked({nested: true}, core);
+  const rD = W._dopExpLocked({dryRun: true}, core);
+  st.fail = true; const rT = W._dopExpLocked({}, core); st.fail = false;
+  check('допи: експорт під локом', 'реальний прогін — під ScriptLock (вкладений Payment+Salary не бере лок вдруге), dryRun без локу, зайнято — LOCK_TIMEOUT; після прогону клітинка = сума відміток',
+        {held: r1.held, waits: waits1, nestedWaits: st.waits - waits1, dryHeld: rD.held, timeout: rT.code, released: st.held, cell: world.cell},
+        {held: true, waits: 1, nestedWaits: 1, dryHeld: false, timeout: 'LOCK_TIMEOUT', released: false, cell: 2810});
+  const snaps = [{loc: 'Голосієво', date: '2026-10-28', child: 'Бучковський Лука'}, {loc: 'Голосієво', date: '2026-10-28', child: 'Благовісна Аліса'},
+                 {loc: 'Голосієво', date: '2026-10-28', child: 'Ковальчук Соломія'}, {loc: 'Голосієво', date: '2026-11-02'}, {loc: 'Позняки', date: '2026-10-30'}, {loc: '', date: '2026-10-01'}];
+  check('допи: що перерахувати після видалення', 'локація × місяць відмітки, без повторів (три видалені Лего 28.10 — один перерахунок жовтня)',
+        {t: W._dopRecalcTargets(snaps).map((x) => x.loc + ' ' + x.year + '-' + x.month)},
+        {t: ['Голосієво 2026-10', 'Голосієво 2026-11', 'Позняки 2026-10']});
+}
+
 // ── v7.562: Предметники (фронт) — «Не передбачено для цієї групи» лише за справжньою нормою 0 ──
 {
   const hp = path.join(__dirname, '..', '..', 'predmetnyky.html');

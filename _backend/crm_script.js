@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.561
+// m.kids CRM — Google Apps Script v7.563
+// v7.563: експорт допів у Payment/Salary — під блокуванням (читання відміток, клітинки й журналу та запис — одним шматком): два одночасні автоекспорти (вихователь і директор, дві вкладки) більше не розводять клітинку й журнал («Бюджет доп» залипав +340 після видаленого дубля Лего 28.10, Голосієво); видалення відміток допів (одна / пакет) одразу перераховує «Бюджет доп» місяця відмітки на сервері, не чекаючи вкладки
 // v7.561: bankDebtCheckSend — актуальний список боржників зараз у тему Боржники з рядком «Перевірте, будь ласка, список…»; відповіді на нього (тип debtCheck) — у «Банк_Відгуки» і вечірнє зведення 18:00 навіть у повному режимі групи
 // v7.560: боржники «Банк» — відкладені CFO діти не показуються й серед вступних; поправка CFO до сплаченого вступного (bankEntryAdjust, BANK_ENTRY_ADJ_<loc>) без зміни Payment — Пархоменко: 3 000 у «Факт вступ» жовтня = оплата навчання; еталон Осокорків 18.11 — тест
 // v7.559: bankDebtDiag — звідки борг дитини (Payment по місяцях, картка, розрахунок бота), лише читання
@@ -9529,7 +9530,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.561', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.563', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -25377,6 +25378,28 @@ function _attRowSnapshot(row, tz){
           markedAt:(row[9] instanceof Date) ? Utilities.formatDate(row[9], tz, "yyyy-MM-dd HH:mm") : String(row[9] || '')};
 }
 
+// v7.563: після видалення відміток допів — одразу перерахувати «Бюджет доп» Payment за кожен місяць відмітки
+//   (локація × РРРР-ММ), не покладаючись на автоекспорт вкладки (могла закритись, впасти на мережі чи розминутись з іншою).
+//   Експорт ідемпотентний і сам пропускає закриті місяці; помилка не скасовує видалення — лише повертається в recalc.
+function _dopRecalcTargets(snaps){
+  var seen = {}, out = [];
+  (snaps || []).forEach(function(q){
+    var loc = String(q && q.loc || '').trim(), m = /^(\d{4})-(\d{2})/.exec(String(q && q.date || ''));
+    if (!loc || !m) return;
+    var k = loc + '|' + m[1] + '-' + m[2];
+    if (seen[k]) return; seen[k] = 1;
+    out.push({loc:loc, year:Number(m[1]), month:Number(m[2])});
+  });
+  return out;
+}
+function _dopRecalcAfterRemove(snaps){
+  return _dopRecalcTargets(snaps).map(function(t){
+    try {
+      var r = exportAttendanceToPayments({loc:t.loc, year:t.year, month:t.month});
+      return {loc:t.loc, month:t.year + '-' + ('0' + t.month).slice(-2), ok:!!(r && r.ok), cells:(r && r.cellsWritten) || 0, error:(r && r.error) || ''};
+    } catch(e){ return {loc:t.loc, month:t.year + '-' + ('0' + t.month).slice(-2), ok:false, error:String(e && e.message || e)}; }
+  });
+}
 function removeAttendanceMark(id, body){
   try {
     var nid = Number(id);
@@ -25395,7 +25418,7 @@ function removeAttendanceMark(id, body){
         // v7.531: зняли першу відмітку абонемента — ціна переходить на наступну відмітку місяця
         try { var _sp3 = _dopSubPriceByActId(), _sk3 = _dopSubKeysFor([{actId:snap.activityId, child:snap.child, date:snap.date}], _sp3, tz);
               if (_sk3) _dopSubNormalize(sh, sh.getDataRange().getValues(), _sk3, _sp3, false); } catch(_sn){ Logger.log('[subNorm] %s', _sn); }
-        return {ok: true};
+        return {ok: true, recalc: _dopRecalcAfterRemove([snap])};   // v7.563
       }
     }
     return {ok: false, error: 'Відмітку не знайдено'};
@@ -25518,6 +25541,9 @@ function bulkRemoveAttendanceMarks(body){
     // v7.531: абонемент — ціна переходить на першу з решти відміток місяця
     try { var _sp4 = _dopSubPriceByActId(), _sk4 = _dopSubKeysFor(snaps.map(function(q){ return {actId:q.before.activityId, child:q.before.child, date:q.before.date}; }), _sp4, _tz);
           if (_sk4 && rowsToDelete.length) _dopSubNormalize(sh, sh.getDataRange().getValues(), _sk4, _sp4, false); } catch(_sn){ Logger.log('[subNorm] %s', _sn); }
+    // v7.563: «Бюджет доп» — одразу, після зняття локу відміток (експорт бере свій)
+    var recalc = [];
+    if (rowsToDelete.length){ try { SpreadsheetApp.flush(); lock.releaseLock(); } catch(_rl){} recalc = _dopRecalcAfterRemove(snaps); }
     var results = [];
     for (var m = 0; m < ids.length; m++){
       var nn = Number(ids[m]) || 0;
@@ -25526,7 +25552,7 @@ function bulkRemoveAttendanceMarks(body){
       else                        results.push({ok: false, id: nn, error: 'Відмітку не знайдено'});
     }
     return {ok: true, results: results, removed: rowsToDelete.length,
-            lockedCount: Object.keys(locked).length};
+            lockedCount: Object.keys(locked).length, recalc: recalc};
   } catch(e){
     return {ok: false, error: String(e && e.message || e)};
   } finally {
@@ -26030,7 +26056,25 @@ function _journalMonthsForPayment(loc, year){
   return out;
 }
 
-function exportAttendanceToPayments(params){
+// v7.563: БЛОКУВАННЯ ЕКСПОРТУ ДОПІВ. Експорт пише «клітинка = база + сума відміток», де база = клітинка − записане в журнал.
+//   Без блокування два одночасні прогони (автоекспорт через 5 с після кожної зміни — у вихователя й директора, у двох вкладках)
+//   читали ту саму клітинку й журнал, а писали кожен своє: клітинку лишав прогін, що бачив дубль (+340), журнал — прогін без
+//   дубля. Розбіжність далі жила як «ручна база» і жоден наступний експорт її не прибирав (Голосієво, Лего 28.10, 3 дітей).
+//   Тепер увесь прогін (читання відміток, Payment, журналу + запис) — під ScriptLock; вкладені виклики (exportAttendance →
+//   Payment + Salary) лок не беруть повторно. dryRun — без локу (нічого не пише).
+var _DOP_EXP_LOCKED = false;
+function _dopExpLocked(params, core){
+  params = params || {};
+  if (params.dryRun === true || _DOP_EXP_LOCKED) return core(params);
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(60000); }
+  catch(e){ return {ok:false, code:'LOCK_TIMEOUT', error:'LOCK_TIMEOUT: інший експорт допів ще йде — повторіть за хвилину'}; }
+  _DOP_EXP_LOCKED = true;
+  try { var r = core(params); try { SpreadsheetApp.flush(); } catch(_f){} return r; }
+  finally { _DOP_EXP_LOCKED = false; try { lock.releaseLock(); } catch(_r){} }
+}
+function exportAttendanceToPayments(params){ return _dopExpLocked(params, _exportAttendanceToPaymentsCore); }
+function _exportAttendanceToPaymentsCore(params){
   try {
     var loc = String(params.loc || '').trim();
     if (!loc) return {ok: false, error: 'Параметр loc обовʼязковий'};
@@ -30085,7 +30129,8 @@ function _salaryPlanMonth(nextM){
   return (p.year === nextM.year) ? p : null;
 }
 
-function exportToSalaryExtras(params){
+function exportToSalaryExtras(params){ return _dopExpLocked(params, _exportToSalaryExtrasCore); }   // v7.563
+function _exportToSalaryExtrasCore(params){
   try {
     var loc = String(params.loc || '').trim();
     var month = Number(params.month);
@@ -30967,7 +31012,8 @@ function diagSalaryExtrasSections(){
 }
 
 // v7.284: dryRun:true проходить в ОБИДВІ частини — чисте читання без запису.
-function exportAttendance(params){
+function exportAttendance(params){ return _dopExpLocked(params, _exportAttendanceCore); }   // v7.563: Payment + Salary одним локом
+function _exportAttendanceCore(params){
   var p = exportToPayments(params);
   var s = exportToSalaryExtras(params);
   return {
