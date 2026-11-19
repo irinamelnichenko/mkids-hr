@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.565
+// m.kids CRM — Google Apps Script v7.566
+// v7.566: звірка, «вже внесено» — reconcilePreview віддає applied[]: на кого внесено платіж (дитина, рядок Payment, місяць, колонка навч / вступ / доп, сума, коли, ким) — з «Звірки_Платежів» за референсом; кілька дітей — усі; запис без дитини — appliedNoChild («⚠ внесено, дитину не знайдено»)
 // v7.565: номери відміток допів унікальні — новий № = max(усіх №, верхня межа ATT_ID_HWM) + 1 (було «№ останнього рядка + 1»: відновлені/перенесені в кінець аркуша старі рядки давали повтори — 204 спільні №); renumberAttendanceIds (CFO, dryRun) перенумеровує повтори; видалення відмітки — лише № + дитина + дата + заняття, не збігається — не видаляє, помилка; червень–вересень 2026 заморожені назавжди (FROZEN_MONTHS) — як закриті, але без відкриття: жоден експорт Payment/Salary, правка чи відмітка туди не пише
 // v7.564: дубль відмітки допів неможливий — ключ «дата + локація + дитина + заняття», дитина й локація нормалізовані як у журналі експорту (регістр, пробіли, апострофи); перевірка в addAttendanceMark, bulkAttendanceMarks, сканері дублів; renameAttendanceChild не перейменовує відмітку, якщо під новим ім'ям уже є та сама (skippedDup)
 // v7.563: експорт допів у Payment/Salary — під блокуванням (читання відміток, клітинки й журналу та запис — одним шматком): два одночасні автоекспорти (вихователь і директор, дві вкладки) більше не розводять клітинку й журнал («Бюджет доп» залипав +340 після видаленого дубля Лего 28.10, Голосієво); видалення відміток допів (одна / пакет) одразу перераховує «Бюджет доп» місяця відмітки на сервері, не чекаючи вкладки
@@ -9532,7 +9533,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.565', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.566', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -26834,6 +26835,26 @@ function _scanRecordForChildren(rec, idx){
   return out;
 }
 
+// v7.566: на кого вже внесено платіж — рядки «Звірки_Платежів» (0 Коли, 1 Ким, 2 Локація, 5 Референс, 7 Дитина, 8 Рядок,
+//   9 Місяць, 10 Колонка, 11 Сума, 14 Ключ дедупу) за референсом. Чиста функція (тест): lv — значення аркуша з шапкою.
+function _rcAppliedByRef(lv){
+  var out = {};
+  for (var r = 1; r < (lv || []).length; r++){
+    var row = lv[r], key = trim(String(row[14] || '')), ref = trim(String(row[5] || ''));
+    var k = (key.indexOf('REF|') === 0) ? key.slice(4) : ref;
+    if (!k) continue;
+    var at = row[0]; at = (at instanceof Date) ? Utilities.formatDate(at, 'Europe/Kiev', 'dd.MM.yyyy HH:mm') : String(at || '');
+    (out[k] = out[k] || []).push({child:trim(String(row[7] || '')), row:Number(row[8]) || 0, month:Number(row[9]) || 0,
+      col:trim(String(row[10] || '')), amount:Number(row[11]) || 0, loc:trim(String(row[2] || '')), at:at, by:trim(String(row[1] || ''))});
+  }
+  return out;
+}
+// колонка запису → вид: зсув від початку місяця в Payment 0 навч, 1 вступ, 2 доп (дзеркало _factColForType)
+function _rcColKind(col0, monthStart0){
+  if (!(col0 >= 0) || !(monthStart0 >= 0)) return '';
+  var d = col0 - monthStart0;
+  return d === 0 ? 'навч' : d === 1 ? 'вступ' : d === 2 ? 'доп' : '';
+}
 function reconcilePreview(body){
   try{
     body = body || {};
@@ -26877,6 +26898,7 @@ function reconcilePreview(body){
     var ibanN = iban.replace(/\s+/g, '').toUpperCase();
     var logSh0 = _getReconcileLogSheet();
     var lv0 = logSh0.getDataRange().getValues();
+    var _appliedBy = _rcAppliedByRef(lv0);   // v7.566
     for (var lr = 1; lr < lv0.length; lr++){
       var _k = trim(lv0[lr][14]); if (_k) appliedRefs[_k] = true;
       if (trim(lv0[lr][2]) === loc && String(lv0[lr][3] || '').replace(/\s+/g, '').toUpperCase() === ibanN){
@@ -26912,8 +26934,17 @@ function reconcilePreview(body){
       }
       var status = uniq.length === 0 ? 'none' : (uniq.length === 1 ? 'auto' : 'multi');
       if (rec.ref && appliedRefs['REF|' + trim(rec.ref)]) status = 'dup';   // v7.376: уже внесено (напр. з файлу) — apply однаково пропустить
+      // v7.566: на кого внесено — усі записи з цим референсом (дитина, рядок, місяць, колонка → навч/вступ/доп)
+      var applied = [];
+      if (status === 'dup') applied = (_appliedBy[trim(rec.ref)] || []).map(function(e){
+        var ms = (e.month >= 1 && e.month <= 12) ? _detectMonthColByHeader(data, e.month - 1) : -1;
+        var o = {}; for (var f in e) o[f] = e[f];
+        o.kind = (e.loc && e.loc !== loc) ? '' : _rcColKind(_colIndex1(e.col) - 1, ms);
+        return o;
+      });
 
       return {
+        applied: applied, appliedNoChild: (status === 'dup' && !applied.some(function(e){ return e.child; })),
         i: i, date: String(rec.date || ''), amount: Number(rec.amount) || 0, ref: String(rec.ref || ''),
         payerRaw: payer.raw, payerVia: payer.via, payerSurname: sk, matchVia: matchVia,
         month: (jsMonth + 1), status: status, candidates: uniq, existing: existing,

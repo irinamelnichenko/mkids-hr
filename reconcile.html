@@ -1967,6 +1967,21 @@ function rcChkToggle2(sel){
   if(chk){ chk.disabled=(sel.value===''); if(sel.value==='') chk.checked=false; }
 }
 
+// v7.566: «вже внесено» — завжди з дитиною: ім'я · р.N · місяць · навч/вступ/доп · сума (кожен запис окремо).
+//   Запис без дитини (або записів не знайдено) — «⚠ внесено, дитину не знайдено».
+var _RC_MON=['','січень','лютий','березень','квітень','травень','червень','липень','серпень','вересень','жовтень','листопад','грудень'];
+function rcAppliedHtml(x, loc){
+  if(!x.applied) return '<span style="color:var(--gray)">✓ вже внесено</span>';   // старий бекенд (до v7.566) — без деталей
+  var ap=(x.applied||[]).filter(function(e){ return e.child; });
+  if(!ap.length || x.appliedNoChild)
+    return '<span style="color:var(--red2)" title="Платіж є в «Звірки_Платежів», але без дитини">⚠ внесено, дитину не знайдено</span>';
+  return '<span style="color:var(--gray)">✓ вже внесено:</span>'+ap.map(function(e){
+    return '<div style="font-size:12px;line-height:1.35"><b>'+escapeHtml(e.child)+'</b>'
+      +' <span style="color:var(--gray)">· р.'+(e.row||'?')+' · '+(_RC_MON[e.month]||('міс. '+e.month))
+      +' · '+(e.kind?escapeHtml(e.kind):('кол. '+escapeHtml(e.col||'?')))+(e.loc && loc && e.loc!==loc?' · '+escapeHtml(e.loc):'')
+      +(ap.length>1?' · '+fmtUah(e.amount)+' ₴':'')+'</span></div>';
+  }).join('');
+}
 function rcRowsHtml(p, g){
   var today=rcToday();
   var h='<div style="overflow-x:auto"><table class="inv-table"><thead><tr>'
@@ -1984,7 +1999,7 @@ function rcRowsHtml(p, g){
       : '';
     var child='';
     if(x.status==='dup'){
-      child='<span style="color:var(--gray)">✓ вже внесено'+(x.candidates&&x.candidates.length===1?' — '+escapeHtml(x.candidates[0].childName):'')+'</span>';
+      child=rcAppliedHtml(x, p.loc);   // v7.566: на кого внесено — дитина, рядок, місяць, колонка; кілька дітей — усі
     } else if(x.status==='multi'){
       child='<select class="rc-sel" data-g="'+g+'" data-i="'+x.i+'" onchange="rcChkToggle(this)"><option value="">— оберіть —</option>'
         +x.candidates.map(function(c,ci){ return '<option value="'+ci+'"'+(c.row<0?' disabled':'')+'>'+escapeHtml(c.childName)+(c.group?' ('+escapeHtml(c.group)+')':'')+(c.row<0?' — нема рядка':'')+'</option>'; }).join('')

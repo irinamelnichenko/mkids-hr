@@ -660,6 +660,25 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
         {m: [false, true, true, true, true, false], y27: false, code: 'FROZEN_MONTH'});
 }
 
+// ── v7.566: звірка, «вже внесено» — на кого внесено (Школа 228, К3_транз.рахунок, листопад) ──
+{
+  const Ut = {formatDate: (d) => '19.11.2026 08:13'};
+  const Z = new Function('Utilities', 'trim', [fn('_rcAppliedByRef'), fn('_rcColKind')].join('\n') + '\nreturn {_rcAppliedByRef, _rcColKind};')(Ut, (x) => String(x == null ? '' : x).trim());
+  const H = ['Коли','Ким','Локація','IBAN','Дата платежу','Референс','Платник','Дитина','Рядок','Місяць','Колонка','Сума','Було','Стало','Ключ дедупу'];
+  const L = (ref, child, row, col, amt, key) => [new Date(), 'Мельніченко Ірина (CFO)', 'Школа 228', 'UA72…925', '02.11.2026', ref, 'K3_транз.рахунок платежі BP 3500306', child, row, 11, col, amt, 0, amt, key === undefined ? 'REF|' + ref : key];
+  const A = Z._rcAppliedByRef([H,
+    L('D3K1QB2A9Y1E3B.P', 'Сухина Міна (2 клас)', 120, 'BA', 17000),            // кандидатів за платником 0 — раніше просто «вже внесено»
+    L('D3K5QB3A9ZYZFC.P', 'Шихов Ігор', 88, 'BA', 2100),                        // двоє Шихових у кандидатах
+    L('SPLIT1', 'Терещук Максим', 90, 'BA', 9000), L('SPLIT1', 'Терещук Лука', 91, 'BA', 8000),   // один платіж на двох дітей
+    L('NOKID', '', 0, '', 500)]);
+  check('звірка: на кого вже внесено', 'дитина, рядок, місяць, колонка з «Звірки_Платежів» за референсом; кілька дітей — усі; без дитини видно; колонка → навч / вступ / доп',
+        {suh: A['D3K1QB2A9Y1E3B.P'].map((e) => e.child + ' р.' + e.row + ' міс.' + e.month + ' ' + e.col),
+         split: A['SPLIT1'].map((e) => e.child + ' ' + e.amount), nokid: A['NOKID'].length + ':' + A['NOKID'][0].child,
+         kinds: [Z._rcColKind(52, 52), Z._rcColKind(53, 52), Z._rcColKind(54, 52), Z._rcColKind(55, 52), Z._rcColKind(10, -1)]},
+        {suh: ['Сухина Міна (2 клас) р.120 міс.11 BA'], split: ['Терещук Максим 9000', 'Терещук Лука 8000'], nokid: '1:',
+         kinds: ['навч', 'вступ', 'доп', '', '']});
+}
+
 // ── v7.562: Предметники (фронт) — «Не передбачено для цієї групи» лише за справжньою нормою 0 ──
 {
   const hp = path.join(__dirname, '..', '..', 'predmetnyky.html');
