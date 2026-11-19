@@ -634,6 +634,32 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
         {same: true, suk: true, otherAct: false, otherDate: false, otherLoc: false});
 }
 
+// ── v7.565: унікальні № відміток, видалення з перевіркою, заморожені червень–вересень 2026 ──
+{
+  const R = new Function([varLine('_APOSTROPHES'), fn('_nameFold'), fn('_nameFoldTight'), fn('_journalNormName'), fn('_attDateFast'), fn('_attDateISO'),
+    fn('_attNextIdFrom'), fn('_attRenumberPlan'), fn('_attDelMismatch')].join('\n') + '\nreturn {_attNextIdFrom, _attRenumberPlan, _attDelMismatch};')();
+  // реальні повтори: №165 у трьох дітей Борщагівки, №166 у двох; останній рядок аркуша — старий №2 (звідси й повтори)
+  const col = [[1], [2], [165], [165], [165], [166], [166], [500], [''], [2]];
+  const plan = R._attRenumberPlan(col, 0);
+  check('відмітки: перенумерація повторів', 'перший рядок лишає №, решта — max+1…; порожній № теж; новий № = max колонки, а не № останнього рядка + 1',
+        {plan: plan.map((q) => q.from + '→' + q.to), next: R._attNextIdFrom(col, 0), hwm: R._attNextIdFrom(col, 900)},
+        {plan: ['165→501', '165→502', '166→503', '0→504', '2→505'], next: 501, hwm: 901});
+  const row = [19525, '2026-10-28', 'Голосієво', 'Preschool', 'Бучковський Лука', 1, 'Лего', 340, 'vyhovatel', ''];
+  const tz = 'Europe/Kiev';
+  check('відмітки: видалення лише № + перевірка', 'збіг дитини, дати й заняття — видаляємо; інша дитина / дата / заняття чи без перевірки — ні',
+        {ok: R._attDelMismatch(row, {child: 'бучковський  лука', date: '2026-10-28', activityId: 1}, tz),
+         kid: /дитина «Бучковський Лука», а не «Благовісна Аліса»/.test(R._attDelMismatch(row, {child: 'Благовісна Аліса', date: '2026-10-28', activityId: 1}, tz)),
+         date: /дата 2026-10-28, а не 2026-10-21/.test(R._attDelMismatch(row, {child: 'Бучковський Лука', date: '2026-10-21', activityId: 1}, tz)),
+         act: /заняття «Лего» \(#1\), а не #7/.test(R._attDelMismatch(row, {child: 'Бучковський Лука', date: '2026-10-28', activityId: 7}, tz)),
+         none: /оновіть сторінку/.test(R._attDelMismatch(row, {}, tz))},
+        {ok: '', kid: true, date: true, act: true, none: true});
+  const C = new Function('SpreadsheetApp', ['var _CLOSED_SET_MEMO = null;', varBlock('FROZEN_MONTHS'), fn('_isFrozenMonth'), fn('_closedMonthsSet'), fn('_isMonthClosed'),
+    fn('_closedMonthError'), 'function _getClosedMonthsSheet(){ return null; }'].join('\n') + '\nreturn {_isMonthClosed, _closedMonthError};')({});
+  check('заморожені місяці', 'червень–вересень 2026 закриті завжди (навіть без рядка в «Закриті_Місяці»), травень і жовтень — ні; помилка FROZEN_MONTH',
+        {m: [5, 6, 7, 8, 9, 10].map((m) => C._isMonthClosed(2026, m)), y27: C._isMonthClosed(2027, 6), code: C._closedMonthError(2026, 9).code},
+        {m: [false, true, true, true, true, false], y27: false, code: 'FROZEN_MONTH'});
+}
+
 // ── v7.562: Предметники (фронт) — «Не передбачено для цієї групи» лише за справжньою нормою 0 ──
 {
   const hp = path.join(__dirname, '..', '..', 'predmetnyky.html');

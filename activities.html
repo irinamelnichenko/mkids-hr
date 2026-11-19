@@ -3582,6 +3582,8 @@ function _ddmm(iso){
   return p[2] + '.' + p[1] + '.' + p[0];
 }
 
+// v7.565: видалення відмітки — № + перевірка (дитина, дата, заняття); сервер не видаляє, якщо рядок із цим № інший.
+function _delItem(m){ return {id: m.id, child: m.child, date: m.date, activityId: Number(m.activityId)}; }
 function _markFor(child, activityId){
   for (var i = 0; i < ATT.marks.length; i++){
     if (ATT.marks[i].child === child && ATT.marks[i].activityId === activityId) return ATT.marks[i];
@@ -4056,7 +4058,7 @@ async function _gqFlush(){
       }
     }
     if (dels.length){
-      var res2 = await saveBackend('bulkRemoveAttendanceMarks', {ids: dels.map(function(d){ return d.id; })});
+      var res2 = await saveBackend('bulkRemoveAttendanceMarks', {items: dels.map(function(d){ return _delItem(d.mark); })});   // v7.565
       if (!(res2 && (res2.ok || res2.localOnly))){
         dels.forEach(function(d){ if (!_gridMarkById(d.id)) ATT.gridMarks.push(d.mark); });
         showToast('❌ ' + ((res2 && res2.error) || 'Не вдалось зняти'), 'err', 5000);
@@ -4588,19 +4590,19 @@ async function _runBulk(kind, children){
     } else {
       // kind === 'clear'
       var actId2 = Number(ATT.activity);
-      var ids = [];
+      var ids = [], delItems = [];   // v7.565: + перевірка
       var marksMap = []; // паралельний масив {child, markId}
       for (var j = 0; j < children.length; j++){
         var ch2 = children[j];
         var existing = _markFor(ch2, actId2);
         if (!existing) continue;
-        ids.push(existing.id);
+        ids.push(existing.id); delItems.push(_delItem(existing));
         marksMap.push({child: ch2, id: existing.id});
         _setSyncStatus(ch2, actId2, 'pending');
       }
       if (ids.length){
         attemptedBulk = true;
-        var res2 = await saveBackend('bulkRemoveAttendanceMarks', {ids: ids});
+        var res2 = await saveBackend('bulkRemoveAttendanceMarks', {items: delItems});   // v7.565
         if (res2 && res2.ok && Array.isArray(res2.results)){
           bulkOk = true;
           var removedIds = {};
@@ -4821,7 +4823,8 @@ async function toggleAttendance(btn){
   }
 
   if (existing){
-    var res = await saveBackend('removeAttendanceMark', {id: existing.id});
+    var _di = _delItem(existing);   // v7.565: № + дитина + дата + заняття
+    var res = await saveBackend('removeAttendanceMark', {id: _di.id, child: _di.child, date: _di.date, activityId: _di.activityId});
     if (res.ok || res.localOnly){
       ATT.marks = ATT.marks.filter(function(m){ return m.id !== existing.id; });
       _saveMarksCache();

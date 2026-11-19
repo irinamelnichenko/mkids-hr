@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.564
+// m.kids CRM — Google Apps Script v7.565
+// v7.565: номери відміток допів унікальні — новий № = max(усіх №, верхня межа ATT_ID_HWM) + 1 (було «№ останнього рядка + 1»: відновлені/перенесені в кінець аркуша старі рядки давали повтори — 204 спільні №); renumberAttendanceIds (CFO, dryRun) перенумеровує повтори; видалення відмітки — лише № + дитина + дата + заняття, не збігається — не видаляє, помилка; червень–вересень 2026 заморожені назавжди (FROZEN_MONTHS) — як закриті, але без відкриття: жоден експорт Payment/Salary, правка чи відмітка туди не пише
 // v7.564: дубль відмітки допів неможливий — ключ «дата + локація + дитина + заняття», дитина й локація нормалізовані як у журналі експорту (регістр, пробіли, апострофи); перевірка в addAttendanceMark, bulkAttendanceMarks, сканері дублів; renameAttendanceChild не перейменовує відмітку, якщо під новим ім'ям уже є та сама (skippedDup)
 // v7.563: експорт допів у Payment/Salary — під блокуванням (читання відміток, клітинки й журналу та запис — одним шматком): два одночасні автоекспорти (вихователь і директор, дві вкладки) більше не розводять клітинку й журнал («Бюджет доп» залипав +340 після видаленого дубля Лего 28.10, Голосієво); видалення відміток допів (одна / пакет) одразу перераховує «Бюджет доп» місяця відмітки на сервері, не чекаючи вкладки
 // v7.561: bankDebtCheckSend — актуальний список боржників зараз у тему Боржники з рядком «Перевірте, будь ласка, список…»; відповіді на нього (тип debtCheck) — у «Банк_Відгуки» і вечірнє зведення 18:00 навіть у повному режимі групи
@@ -9531,7 +9532,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.564', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.565', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -9833,6 +9834,7 @@ function doPost(e) {
     else if (body.action === 'opex27RecalcAll')           result = opex27RecalcAll(body);                   // v7.444 «Перерахувати всі сади» (CFO; dryRun)
     else if (body.action === 'groupRenameApply')          result = groupRenameApply(body);                  // v7.435 стандарт назв груп (CFO; dryRun)
     else if (body.action === 'setDopMarkGroup')           result = setDopMarkGroup(body);                    // v7.524 група окремих відміток → чинна (CFO; dryRun)
+    else if (body.action === 'renumberAttendanceIds')     result = renumberAttendanceIds(body);              // v7.565 унікальні № відміток (CFO; dryRun)
     else if (body.action === 'restoreDopMarks')           result = restoreDopMarks(body);                    // v7.524 відмітки допів з версії (CFO; dryRun)
     else if (body.action === 'groupRecordsCanon')         result = groupRecordsCanon(body);                 // v7.513 старі назви груп у відмітках → «Групи_Мапа» (CFO; dryRun)
     else if (body.action === 'setPayAuto')                result = setPayAuto(body);                        // v7.433 вимикач автозапуску (CFO)
@@ -24162,20 +24164,23 @@ function getAttendanceMarks(filters){
   }
 }
 
-function _nextAttendanceId(sh){
-  // v6.84: O(1) — читаємо лише останній рядок (ID лише дописуються).
-  // Раніше читався весь аркуш — тримало замок довго під навантаженням.
-  var last = sh.getLastRow();
-  if (last < 2) return 1;
-  var lastId = Number(sh.getRange(last, 1).getValue()) || 0;
-  if (lastId > 0) return lastId + 1;
-  var ids = sh.getRange(2, 1, last - 1, 1).getValues();
-  var max = 0;
-  for (var i = 0; i < ids.length; i++){
-    var n = Number(ids[i][0]) || 0;
-    if (n > max) max = n;
-  }
+// v7.565: № = max(усі № у колонці, ATT_ID_HWM) + 1. Було «№ останнього рядка + 1» (v6.84): рядок зі старим № у кінці
+//   аркуша (відновлення з версії, перенесення) відкочував лічильник, і нові відмітки отримували вже зайняті № — 204 повтори.
+//   Одна колонка ~22 тис. значень читається швидко; верхня межа в властивостях не дає повторно видати № видаленої відмітки.
+function _attNextIdFrom(ids, hwm){
+  var max = Number(hwm) || 0;
+  for (var i = 0; i < ids.length; i++){ var n = Number(ids[i][0]) || 0; if (n > max) max = n; }
   return max + 1;
+}
+function _nextAttendanceId(sh){
+  var last = sh.getLastRow();
+  var hwm = 0; try { hwm = Number(PropertiesService.getScriptProperties().getProperty('ATT_ID_HWM')) || 0; } catch(_p){}
+  if (last < 2) return hwm + 1;
+  return _attNextIdFrom(sh.getRange(2, 1, last - 1, 1).getValues(), hwm);
+}
+function _attIdCommit(lastUsed){   // v7.565: верхня межа виданих №
+  try { var P = PropertiesService.getScriptProperties(), cur = Number(P.getProperty('ATT_ID_HWM')) || 0;
+        if (Number(lastUsed) > cur) P.setProperty('ATT_ID_HWM', String(Number(lastUsed))); } catch(_p){}
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -25300,6 +25305,7 @@ function addAttendanceMark(data){
       new Date()
     ];
     sh.appendRow(row);
+    _attIdCommit(id);   // v7.565
     // v7.531: абонемент — ціну несе перша відмітка дитини в місяці
     try { var _sp1 = _dopSubPriceByActId(), _sk1 = _dopSubKeysFor([{actId:actId, child:child, date:date}], _sp1, _tz);
           if (_sk1){ SpreadsheetApp.flush(); _dopSubNormalize(sh, sh.getDataRange().getValues(), _sk1, _sp1, false); } } catch(_sn){ Logger.log('[subNorm] %s', _sn); }
@@ -25404,6 +25410,60 @@ function _dopRecalcAfterRemove(snaps){
     } catch(e){ return {loc:t.loc, month:t.year + '-' + ('0' + t.month).slice(-2), ok:false, error:String(e && e.message || e)}; }
   });
 }
+// v7.565: ПЕРЕНУМЕРАЦІЯ ПОВТОРІВ №. Перший рядок із № (вище в аркуші = давніший) лишає №, решта — нові max+1, max+2…
+//   Порожній № теж отримує новий. Чиста частина — _attRenumberPlan (тест). POST {action:'renumberAttendanceIds', dryRun}
+//   (CFO; dryRun за замовчуванням). Запис: копія аркуша, лише колонка №, журнал HR_Audit dop_renumber_mark (було → стало).
+function _attRenumberPlan(ids, hwm){
+  var seen = {}, next = _attNextIdFrom(ids, hwm), plan = [];
+  for (var i = 0; i < ids.length; i++){
+    var n = Number(ids[i][0]) || 0;
+    if (n && !seen[n]){ seen[n] = 1; continue; }
+    plan.push({idx: i, from: n, to: next++});
+  }
+  return plan;
+}
+function renumberAttendanceIds(body){
+  var lock = null;
+  try {
+    body = body || {};
+    var a = _promoActor(body); if (!(a && _roleKey(a.role) === 'cfo')) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+    var dryRun = (body.dryRun !== false);
+    if (!dryRun){ lock = LockService.getScriptLock(); lock.waitLock(30000); }
+    var sh = _getAttendanceSheet(false), last = sh.getLastRow();
+    if (last < 2) return {ok:true, dryRun:dryRun, changes:0};
+    var tz = sh.getParent().getSpreadsheetTimeZone() || 'Europe/Kiev';
+    var data = sh.getRange(2, 1, last - 1, ATTENDANCE_HEADER.length).getValues();
+    var hwm = 0; try { hwm = Number(PropertiesService.getScriptProperties().getProperty('ATT_ID_HWM')) || 0; } catch(_p){}
+    var plan = _attRenumberPlan(data.map(function(r){ return [r[0]]; }), hwm);
+    var res = {ok:true, dryRun:dryRun, rows:data.length, changes:plan.length,
+               sample:plan.slice(0, 30).map(function(p){ var r = data[p.idx]; return {row:p.idx + 2, from:p.from, to:p.to, loc:String(r[2] || ''), child:String(r[4] || ''), date:_attDateISO(r[1], tz), activity:String(r[6] || '')}; })};
+    if (dryRun || !plan.length) return res;
+    res.backup = _safeBackupSheet(sh, 'renum'); if (!res.backup) return {ok:false, error:'копію аркуша не створено — запис скасовано'};
+    var col = data.map(function(r){ return [r[0]]; });
+    plan.forEach(function(p){ col[p.idx][0] = p.to; });
+    sh.getRange(2, 1, col.length, 1).setValues(col);
+    SpreadsheetApp.flush();
+    _attIdCommit(plan[plan.length - 1].to);
+    _writeHrAuditRows(_marksActorInfo(body.actorId), 'dop_renumber_mark', plan.map(function(p){ var r = data[p.idx];
+      return {rowNum:p.to, before:JSON.stringify({id:p.from, loc:String(r[2] || ''), child:String(r[4] || ''), date:_attDateISO(r[1], tz), activity:String(r[6] || '')}), after:JSON.stringify({id:p.to})}; }));
+    try { _cacheBump('att'); CacheService.getScriptCache().put('attver_ALL', String(Date.now()), 21600); } catch(_c){}
+    res.written = plan.length;
+    return res;
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { if (lock){ try { lock.releaseLock(); } catch(_r){} } }
+}
+// v7.565: видалення — лише № + дитина + дата + заняття. Рядок із цим № мусить збігтися з усім; ні — не видаляємо.
+//   want = {child, date, activityId}. Повертає '' (збіг) або текст помилки.
+function _attDelMismatch(row, want, tz){
+  if (!want || !String(want.child || '').trim() || !String(want.date || '').trim() || !Number(want.activityId))
+    return 'Видалення без перевірки (дитина, дата, заняття) заборонено — оновіть сторінку (Ctrl+Shift+R) і спробуйте ще раз';
+  var bad = [];
+  if (_journalNormName(row[4]) !== _journalNormName(want.child)) bad.push('дитина «' + String(row[4] || '') + '», а не «' + String(want.child) + '»');
+  var d1 = _attDateISO(row[1], tz), d2 = _attDateISO(want.date, tz);
+  if (d1 !== d2) bad.push('дата ' + d1 + ', а не ' + d2);
+  if (Number(row[5]) !== Number(want.activityId)) bad.push('заняття «' + String(row[6] || '') + '» (#' + Number(row[5]) + '), а не #' + Number(want.activityId));
+  return bad.length ? ('Відмітка №' + row[0] + ' не збігається: ' + bad.join('; ') + ' — не видалено') : '';
+}
 function removeAttendanceMark(id, body){
   try {
     var nid = Number(id);
@@ -25412,8 +25472,11 @@ function removeAttendanceMark(id, body){
     var data = sh.getDataRange().getValues();
     var tz = sh.getParent().getSpreadsheetTimeZone() || MARKS_LOCK_TZ;
     var isCfo = _marksActorIsCfo(body && body.actorId);
+    var want = {child: body && body.child, date: body && body.date, activityId: body && body.activityId}, firstBad = '';
     for (var i = 1; i < data.length; i++){
       if (Number(data[i][0]) === nid){
+        var _mm = _attDelMismatch(data[i], want, tz);   // v7.565
+        if (_mm){ if (!firstBad) firstBad = _mm; continue; }
         var lockErr = _marksDateLockError(data[i][1], isCfo);                   // v7.272
         if (lockErr) return {ok:false, code:'MONTH_LOCK', error:lockErr};
         var snap = _attRowSnapshot(data[i], tz);
@@ -25425,6 +25488,7 @@ function removeAttendanceMark(id, body){
         return {ok: true, recalc: _dopRecalcAfterRemove([snap])};   // v7.563
       }
     }
+    if (firstBad) return {ok: false, code: 'MARK_MISMATCH', error: firstBad};   // v7.565
     return {ok: false, error: 'Відмітку не знайдено'};
   } catch(e){
     return {ok: false, error: String(e && e.message || e)};
@@ -25493,6 +25557,7 @@ function bulkAttendanceMarks(body){
     if (rows.length){
       var startRow = sh.getLastRow() + 1;
       sh.getRange(startRow, 1, rows.length, ATTENDANCE_HEADER.length).setValues(rows);
+      _attIdCommit(rows[rows.length - 1][0]);   // v7.565
       // v7.531: абонемент — ціну несе перша відмітка дитини в місяці
       try { var _sp2 = _dopSubPriceByActId(), _sk2 = _dopSubKeysFor(rows.map(function(r){ return {actId:r[5], child:r[4], date:r[1]}; }), _sp2, _tz);
             if (_sk2){ SpreadsheetApp.flush(); _dopSubNormalize(sh, sh.getDataRange().getValues(), _sk2, _sp2, false); } } catch(_sn){ Logger.log('[subNorm] %s', _sn); }
@@ -25512,22 +25577,31 @@ function bulkRemoveAttendanceMarks(body){
   try { lock.waitLock(30000); }
   catch(e){ return {ok: false, error: 'LOCK_TIMEOUT: ' + (e && e.message || e)}; }
   try {
-    var ids = (body && body.ids) || [];
-    if (!ids.length) return {ok: false, error: 'No ids'};
-    var idSet = {};
-    for (var k = 0; k < ids.length; k++){
-      var n = Number(ids[k]) || 0;
-      if (n) idSet[n] = true;
+    // v7.565: items [{id, child, date, activityId}] — № + перевірка. Голий список ids більше не приймаємо.
+    var items = (body && body.items) || [];
+    if (!items.length && body && body.ids && body.ids.length)
+      return {ok: false, code: 'MARK_MISMATCH', error: 'Видалення без перевірки (дитина, дата, заняття) заборонено — оновіть сторінку (Ctrl+Shift+R) і спробуйте ще раз'};
+    if (!items.length) return {ok: false, error: 'No ids'};
+    var ids = items.map(function(q){ return Number(q && q.id) || 0; });
+    var idSet = {}, wantById = {};
+    for (var k = 0; k < items.length; k++){
+      var n = Number(items[k] && items[k].id) || 0;
+      if (n){ idSet[n] = true; (wantById[n] = wantById[n] || []).push(items[k]); }
     }
     var sh = _getAttendanceSheet(false);
     var data = sh.getDataRange().getValues();
     var rowsToDelete = [];
-    var found = {}, locked = {}, snaps = [];
+    var found = {}, locked = {}, snaps = [], mismatch = {};
     var _tz = sh.getParent().getSpreadsheetTimeZone() || MARKS_LOCK_TZ;
     var _isCfo = _marksActorIsCfo(body && body.actorId);   // v7.272 серверний замок місяця
     for (var i = 1; i < data.length; i++){
       var rid = Number(data[i][0]) || 0;
       if (rid && idSet[rid]){
+        var _w = wantById[rid] || [], _hit = -1, _why = '';
+        for (var _q = 0; _q < _w.length; _q++){ var _e = _attDelMismatch(data[i], _w[_q], _tz); if (!_e){ _hit = _q; break; } if (!_why) _why = _e; }
+        if (_hit < 0){ if (!found[rid]) mismatch[rid] = _why; continue; }   // v7.565: не та відмітка — не чіпаємо
+        _w.splice(_hit, 1); if (!_w.length) delete idSet[rid];
+        delete mismatch[rid];
         var _lockErr = _marksDateLockError(data[i][1], _isCfo);
         if (_lockErr){ locked[rid] = _lockErr; continue; }
         rowsToDelete.push(i + 1);
@@ -25553,10 +25627,11 @@ function bulkRemoveAttendanceMarks(body){
       var nn = Number(ids[m]) || 0;
       if (nn && found[nn])        results.push({ok: true, id: nn});
       else if (nn && locked[nn])  results.push({ok: false, id: nn, code:'MONTH_LOCK', error: locked[nn]});
+      else if (nn && mismatch[nn]) results.push({ok: false, id: nn, code:'MARK_MISMATCH', error: mismatch[nn]});   // v7.565
       else                        results.push({ok: false, id: nn, error: 'Відмітку не знайдено'});
     }
     return {ok: true, results: results, removed: rowsToDelete.length,
-            lockedCount: Object.keys(locked).length, recalc: recalc};
+            lockedCount: Object.keys(locked).length, mismatchCount: Object.keys(mismatch).length, recalc: recalc};
   } catch(e){
     return {ok: false, error: String(e && e.message || e)};
   } finally {
@@ -27984,9 +28059,15 @@ function _getClosedMonthsSheet(createIfMissing){
 // v7.291: memo на час виконання — bulk-маршрути перевіряють замок на кожен рядок,
 // і без цього кожна перевірка читала б лист «Закриті_Місяці». closeMonth скидає.
 var _CLOSED_SET_MEMO = null;
+// v7.565: ЗАМОРОЖЕНІ НАЗАВЖДИ (CFO, 19.11.2026) — червень–вересень 2026 у Payment і Salary. Завжди в наборі закритих,
+//   навіть якщо рядок у «Закриті_Місяці» прибрати: експорти (авто, ручні, пакетні, нічні), правки й відмітки туди не пишуть.
+//   Наслідок правила «закрите джерело блокує ціль»: «Бюджет доп» жовтня з вересневих відміток теж більше не перераховується.
+var FROZEN_MONTHS = ['2026-6', '2026-7', '2026-8', '2026-9'];
+function _isFrozenMonth(year, month){ return FROZEN_MONTHS.indexOf((Number(year) || 0) + '-' + (Number(month) || 0)) !== -1; }
 function _closedMonthsSet(){
   if (_CLOSED_SET_MEMO) return _CLOSED_SET_MEMO;
   var set = {};
+  FROZEN_MONTHS.forEach(function(k){ set[k] = true; });
   try {
     var sh = _getClosedMonthsSheet(false); if (!sh) return set;
     var data = sh.getDataRange().getValues();
@@ -28031,6 +28112,9 @@ function _isMonthClosed(year, month){
 }
 // Стандартна відмова при спробі запису в закритий місяць.
 function _closedMonthError(year, month){
+  if (_isFrozenMonth(year, month))   // v7.565
+    return {ok: false, closedMonth: true, frozen: true, code: 'FROZEN_MONTH',
+            error: 'Місяць ' + month + '/' + year + ' заморожений назавжди (червень–вересень 2026) — запис у Payment, Salary, відмітки й уроки заблоковано.'};
   return {ok: false, closedMonth: true, code: 'CLOSED_MONTH',
           error: 'Місяць ' + month + '/' + year + ' закритий CFO — запис заблоковано (відмітки, уроки, Табель, Payment, Salary). Щоб змінити, відкрийте місяць у «Закриті_Місяці».'};
 }
