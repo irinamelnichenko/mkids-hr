@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.563
+// m.kids CRM — Google Apps Script v7.564
+// v7.564: дубль відмітки допів неможливий — ключ «дата + локація + дитина + заняття», дитина й локація нормалізовані як у журналі експорту (регістр, пробіли, апострофи); перевірка в addAttendanceMark, bulkAttendanceMarks, сканері дублів; renameAttendanceChild не перейменовує відмітку, якщо під новим ім'ям уже є та сама (skippedDup)
 // v7.563: експорт допів у Payment/Salary — під блокуванням (читання відміток, клітинки й журналу та запис — одним шматком): два одночасні автоекспорти (вихователь і директор, дві вкладки) більше не розводять клітинку й журнал («Бюджет доп» залипав +340 після видаленого дубля Лего 28.10, Голосієво); видалення відміток допів (одна / пакет) одразу перераховує «Бюджет доп» місяця відмітки на сервері, не чекаючи вкладки
 // v7.561: bankDebtCheckSend — актуальний список боржників зараз у тему Боржники з рядком «Перевірте, будь ласка, список…»; відповіді на нього (тип debtCheck) — у «Банк_Відгуки» і вечірнє зведення 18:00 навіть у повному режимі групи
 // v7.560: боржники «Банк» — відкладені CFO діти не показуються й серед вступних; поправка CFO до сплаченого вступного (bankEntryAdjust, BANK_ENTRY_ADJ_<loc>) без зміни Payment — Пархоменко: 3 000 у «Факт вступ» жовтня = оплата навчання; еталон Осокорків 18.11 — тест
@@ -9530,7 +9531,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.563', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.564', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -25248,8 +25249,11 @@ function _attDateISO(v, tz){
   if (!isNaN(d.getTime())) return _attDateFast(d);
   return sx;
 }
-function _attDupKey(date, child, actId, tz){
-  return _attDateISO(date, tz) + '|' + String(child || '').trim().toLowerCase().replace(/\s+/g,' ') + '|' + (Number(actId) || 0);
+// v7.564: ключ «та сама відмітка» = дата + локація + дитина + id заняття. Дитина й локація — через _journalNormName
+//   (регістр, усі пробіли разом із нерозривними, апострофи ’ ʼ ` '), як у журналі експорту: «Сук  Лера» / «сук лера» /
+//   «Сук Лера» — одна дитина. Локація в ключі — щоб тезки в різних садках не блокували одне одного.
+function _attDupKey(date, child, actId, tz, loc){
+  return _attDateISO(date, tz) + '|' + _journalNormName(loc || '') + '|' + _journalNormName(child) + '|' + (Number(actId) || 0);
 }
 
 function addAttendanceMark(data){
@@ -25271,10 +25275,10 @@ function addAttendanceMark(data){
   try {
     var sh  = _getAttendanceSheet(true);
     var _tz = sh.getParent().getSpreadsheetTimeZone() || 'Europe/Kiev';
-    var _k  = _attDupKey(date, child, actId, _tz);
+    var _k  = _attDupKey(date, child, actId, _tz, data.loc);
     var _exVals = sh.getDataRange().getValues();
     for (var _e = 1; _e < _exVals.length; _e++){
-      if (_attDupKey(_exVals[_e][1], _exVals[_e][4], _exVals[_e][5], _tz) === _k){
+      if (_attDupKey(_exVals[_e][1], _exVals[_e][4], _exVals[_e][5], _tz, _exVals[_e][2]) === _k){
         return {ok: true, dup: true, id: Number(_exVals[_e][0]) || 0};   // повтор — тихо ігноруємо
       }
     }
@@ -25446,7 +25450,7 @@ function bulkAttendanceMarks(body){
     var _seen = {};
     var _exVals = sh.getDataRange().getValues();
     for (var _e = 1; _e < _exVals.length; _e++){
-      _seen[_attDupKey(_exVals[_e][1], _exVals[_e][4], _exVals[_e][5], _tz)] = true;
+      _seen[_attDupKey(_exVals[_e][1], _exVals[_e][4], _exVals[_e][5], _tz, _exVals[_e][2])] = true;
     }
     var _isCfo = _marksActorIsCfo(body && body.actorId);   // v7.272 серверний замок місяця
     var _subLims = _subLimitByActId(), _subHave = {};      // v7.310 ліміт абонемента (рахуємо і в межах пакета)
@@ -25461,7 +25465,7 @@ function bulkAttendanceMarks(body){
       }
       var _lockErr = _marksDateLockError(date, _isCfo);
       if (_lockErr){ results.push({ok:false, code:'MONTH_LOCK', error:_lockErr}); continue; }
-      var _k = _attDupKey(date, child, actId, _tz);
+      var _k = _attDupKey(date, child, actId, _tz, d.loc);
       if (_seen[_k]){ results.push({ok: true, dup: true}); continue; }
       if (_subLims[actId]){
         var _sk = actId + '|' + _journalNormName(child) + '|' + _attDateISO(date, _tz).slice(0, 7);
@@ -25740,7 +25744,7 @@ function _dedupExtrasScan(){
     var child = String(row[4] || '').trim();
     var actId = Number(row[5]) || 0;
     if (!child || !actId) continue;                   // неповний — не чіпаємо
-    var k = _attDupKey(row[1], child, actId, tz);
+    var k = _attDupKey(row[1], child, actId, tz, row[2]);
     (buckets[k] = buckets[k] || []).push({
       row: i + 1,                                     // 1-based позиція у аркуші
       child: child,
@@ -29186,23 +29190,33 @@ function renameAttendanceChild(body){
     var data = sh.getDataRange().getValues();
     var COL_LOC = 2, COL_CHILD = 4;   // 0-based
     var nk = _journalNormName(oldName);
-    var rows = [], distinct = {};
+    var rows = [], distinct = {}, skippedDup = [];
+    // v7.564: перейменування не створює дубль — якщо під новим ім'ям уже є та сама відмітка (дата + заняття), рядок лишаємо
+    var _rtz = sh.getParent().getSpreadsheetTimeZone() || 'Europe/Kiev', _have = {};
+    for (var r0 = 1; r0 < data.length; r0++){
+      if (String(data[r0][COL_LOC] || '').trim() === loc && _journalNormName(data[r0][COL_CHILD]) === _journalNormName(newName))
+        _have[_attDupKey(data[r0][1], newName, data[r0][5], _rtz, loc)] = 1;
+    }
     for (var r = 1; r < data.length; r++){
       if (String(data[r][COL_LOC] || '').trim() !== loc) continue;
       var child = String(data[r][COL_CHILD] || '').trim();
       if (!child || _journalNormName(child) !== nk) continue;
+      var _nkey = _attDupKey(data[r][1], newName, data[r][5], _rtz, loc);
+      if (_have[_nkey]){ skippedDup.push({row: r + 1, id: data[r][0], date: _attDateISO(data[r][1], _rtz), activity: String(data[r][6] || '')}); continue; }
+      _have[_nkey] = 1;
       var dt = (data[r][1] instanceof Date) ? data[r][1].toISOString().slice(0, 10) : String(data[r][1] || '');
       rows.push({row: r + 1, id: data[r][0], date: dt, activity: String(data[r][6] || ''), oldChild: child});
       distinct[child] = (distinct[child] || 0) + 1;
     }
-    if (!rows.length) return {ok: false, error: 'У «' + loc + '» немає відміток із «' + oldName + '» — нічого перейменовувати', matched: 0};
+    if (!rows.length) return {ok: false, error: skippedDup.length ? ('Усі відмітки «' + oldName + '» уже є під «' + newName + '» — перейменування дало б дублі') : ('У «' + loc + '» немає відміток із «' + oldName + '» — нічого перейменовувати'), matched: 0, skippedDup: skippedDup};
     if (!dryRun){
       lock = LockService.getScriptLock();
       try { lock.waitLock(30000); } catch(_le){ return {ok: false, error: 'LOCK_TIMEOUT'}; }
       rows.forEach(function(x){ var c = sh.getRange(x.row, COL_CHILD + 1); c.setNumberFormat('@'); c.setValue(newName); });
     }
     return {ok: true, dryRun: dryRun, loc: loc, oldName: oldName, newName: newName,
-            matched: rows.length, distinctOld: Object.keys(distinct), rows: rows.slice(0, 50)};
+            matched: rows.length, distinctOld: Object.keys(distinct), rows: rows.slice(0, 50),
+            skippedDup: skippedDup};   // v7.564: ці відмітки вже є під новим ім'ям — не перейменовано (дубль)
   } catch(e){ return {ok: false, error: String(e && e.message || e)}; }
   finally { if (lock){ try { lock.releaseLock(); } catch(_){} } }
 }
