@@ -223,7 +223,7 @@ if (src.indexOf('\nfunction _invCfoReportTexts(') >= 0){
   const cfoFns = ['_invCfoReport__impl', '_invCfoLinkFromMessage'];
   const leak = sends.filter((x) => cfoFns.indexOf(x.fname) < 0 && /розпис|texts|_invCfo/.test(x.text));
   const cfoTo = sends.filter((x) => cfoFns.indexOf(x.fname) >= 0).every((x) => x.to === 'to' || x.to === 'id');
-  const queueOnly = (src.match(/(?<!function )_invQueuePaid\([^;]*\)/g) || []).every((x) => /✅ Оплачено|_invPaidText\(/.test(x));   // v7.569: текст через _invPaidText
+  const queueOnly = (src.match(/(?<!function )_invQueuePaid\([^;]*\)/g) || []).every((x) => /✅ Оплачено|_invPaidText(Full)?\(/.test(x));   // v7.569: текст через _invPaidText
   check('звіт CFO: група директорів', 'у групу — лише «✅ Оплачено», звіт іде тільки на адресата з _invCfoTarget',
         {leak: leak.length, cfoTo: cfoTo, queueOnly: queueOnly, privateHook: /chat\.type === 'private'\) return _invCfoLinkFromMessage/.test(src)},
         {leak: 0, cfoTo: true, queueOnly: true, privateHook: true});
@@ -735,6 +735,24 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
         {t: L('Тичини').loc, s: L('Школа Осокорки').loc, o: L('Осокорки').loc, k: L("Кар'єрна садок").loc, m: L('Манхетен').loc,
          amb: L('Осокорки сад і школа').loc, gen: L('Загальна').loc, ofc: L('Офіс').why},
         {t: 'Тичини', s: 'Школа Осокорки', o: 'Осокорки', k: "Кар'єрна", m: 'Манхетен (Благо)', amb: '', gen: '', ofc: 'не знайдено локації'});
+}
+
+// ── v7.570: «оплачено» — повний текст і гілка локації ──
+{
+  const Q = new Function([fn('_invPaidTextFull'), fn('_invLocThreads'), fn('_invPaidRoute')].join('\n') + '\nreturn {_invPaidTextFull, _invLocThreads, _invPaidRoute};')();
+  const full = Q._invPaidTextFull({dmy: '18.11.2026', loc: 'Тичини', supplier: 'ТОВ «Епіцентр К»', amount: 5500, caption: 'Тичини\nканцтовари  для групи', number: '301'});
+  const map = {'2': {name: 'Осокорки сад', loc: 'Осокорки', why: 'назва містить локацію'}, '4': {name: 'Тичини', loc: 'Тичини', why: 'назва = локація'},
+    '5': {name: 'Карʼєрна', loc: "Кар'єрна", why: 'назва = локація'}, '14': {name: 'Кухня Карʼєрна', loc: "Кар'єрна", why: 'назва містить локацію'}, '12': {name: 'Осокорки школа', loc: '', why: 'неоднозначно'}};
+  const lt = Q._invLocThreads(map);
+  check('рахунки: повне «оплачено»', '«✅ Оплачено ДД.ММ — Локація — Контрагент — сума ₴ — опис / № рахунку»; без опису й номера — видно, чого бракує',
+        {full: full, bare: Q._invPaidTextFull({dmy: '17.11.2026', amount: 481.5})},
+        {full: '✅ Оплачено 18.11 — Тичини — ТОВ «Епіцентр К» — 5 500 ₴ — Тичини канцтовари для групи / № 301',
+         bare: '✅ Оплачено 17.11 — локація ? — контрагент ? — 481,50 ₴ — без опису'});
+  check('рахунки: куди писати «оплачено»', 'у гілці — відповіддю в ній; із загальної (до гілок) — у гілку локації без відповіді; Кар\'єрна — основна гілка, не «Кухня»; без гілки локації — загальна відповіддю',
+        {lt: lt, inThread: Q._invPaidRoute({messageId: 160, threadId: '4', loc: 'Тичини'}, lt), general: Q._invPaidRoute({messageId: 596, threadId: '', loc: 'Осокорки'}, lt),
+         kar: Q._invPaidRoute({messageId: 601, threadId: '', loc: "Кар'єрна"}, lt), none: Q._invPaidRoute({messageId: 794, threadId: '', loc: 'Школа 228'}, lt)},
+        {lt: {'Осокорки': '2', 'Тичини': '4', "Кар'єрна": '5'}, inThread: {thread: 4, reply: 160}, general: {thread: 2, reply: 0},
+         kar: {thread: 5, reply: 0}, none: {thread: 0, reply: 794}});
 }
 
 // ── v7.562: Предметники (фронт) — «Не передбачено для цієї групи» лише за справжньою нормою 0 ──
