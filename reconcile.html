@@ -2604,7 +2604,7 @@ function rcExpBuildItems(){
       }
       if(!sel.salRow){ return; }   // рядок ще не обрано — пропускаємо (не помилка)
       g.pays.forEach(function(pp){
-        salItems.push({salaryRowNum:sel.salRow, amount:pp.amount, month:mon, loc:iloc, edrpou:g.edrpou, ref:pp.ref, date:pp.date, note:g.name});
+        salItems.push({salaryRowNum:sel.salRow, amount:pp.amount, month:mon, loc:iloc, edrpou:g.edrpou, ref:pp.ref, date:pp.date, note:g.name, purpose:pp.purpose||''});   /* v7.567 призначення — у примітку */
       });
       if(remS && (g.edrpou||g.name)) salRemember.push({edrpou:g.edrpou, name:g.name, loc:iloc, salaryRowNum:sel.salRow, activityName:_rcSalRowName(iloc,sel.salRow), rule:''});
       return;
@@ -2613,7 +2613,7 @@ function rcExpBuildItems(){
     // v7.86: рішення «— не вносити —» → skip-рядки (в OPEX не пишуться, лог зі статусом «пропущено»)
     if(cat===RC_SKIP_VAL){
       g.pays.forEach(function(pp){
-        items.push({skip:true, amount:pp.amount, month:mon, loc:iloc, edrpou:g.edrpou, ref:pp.ref, date:pp.date, note:g.name});
+        items.push({skip:true, amount:pp.amount, month:mon, loc:iloc, edrpou:g.edrpou, ref:pp.ref, date:pp.date, note:g.name, purpose:pp.purpose||''});   /* v7.567 призначення — у примітку */
       });
       // «запам'ятати» для skip → контрагент завжди виходить на ручний вибір (маркер у мапі)
       var remOnS=(sel.remember!=null)?sel.remember:false;
@@ -2627,7 +2627,7 @@ function rcExpBuildItems(){
       sel.splits.forEach(function(sp,si){
         if(!sp.category){ errors.push('«'+g.name+'»: частина '+(si+1)+' без статті'); return; }
         items.push({category:sp.category, amount:Number(sp.amount)||0, month:mon, loc:iloc, edrpou:g.edrpou,
-          ref:(g.inv&&g.pays[0]?g.pays[0].ref:(g.edrpou||g.key))+'-split-'+si, date:(g.pays[0]||{}).date, note:g.name});
+          ref:(g.inv&&g.pays[0]?g.pays[0].ref:(g.edrpou||g.key))+'-split-'+si, date:(g.pays[0]||{}).date, note:g.name, purpose:(g.pays[0]||{}).purpose||''});
       });
       return;
     }
@@ -2635,7 +2635,7 @@ function rcExpBuildItems(){
     if(!iloc){ errors.push('«'+g.name+'»: не обрано локацію'); return; }   // v7.398: рахунок без локації
     // пер-платіжно: справжній ref кожного платежу
     g.pays.forEach(function(pp){
-      items.push({category:cat, amount:pp.amount, month:mon, loc:iloc, edrpou:g.edrpou, ref:pp.ref, date:pp.date, note:g.name});
+      items.push({category:cat, amount:pp.amount, month:mon, loc:iloc, edrpou:g.edrpou, ref:pp.ref, date:pp.date, note:g.name, purpose:pp.purpose||''});   /* v7.567 призначення — у примітку */
     });
     // запам'ятати контрагента
     var remOn=(sel.remember!=null)?sel.remember:(!RC.opex.contractors[rcContractorKey(g.edrpou,g.name)]);

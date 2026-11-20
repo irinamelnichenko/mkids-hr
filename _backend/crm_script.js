@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.566
+// m.kids CRM — Google Apps Script v7.567
+// v7.567: примітки-розшифровки в клітинках (суми не змінюються): Payment (до BJ) — факт навч/вступ/доп (дата, сума, платник, рахунок), бюджет доп (заняття × ціна, дати), бюджет навч (договір, знижка відпустка/лікарняний); OPEX — стаття, місяць, дата · контрагент · сума · опис (з бота рахунків або призначення виписки); Salary — виплачено (відомість/карта, банк ФОП, готівка) і нараховано (ставка, допи, предметники, блок «Виплачено»); «± вручну X», якщо сума не сходиться; ручна примітка лишається після «✎»; черга NOTES_DIRTY після записів + notesTick (10 хв, щоночі повний прохід); notesBuild / notesSetup (CFO); Банк_Призначення — призначення платежів з кожного bankFetch; OPEX_Витрати_Лог + Контрагент, Призначення; червень–вересень не чіпаємо
 // v7.566: звірка, «вже внесено» — reconcilePreview віддає applied[]: на кого внесено платіж (дитина, рядок Payment, місяць, колонка навч / вступ / доп, сума, коли, ким) — з «Звірки_Платежів» за референсом; кілька дітей — усі; запис без дитини — appliedNoChild («⚠ внесено, дитину не знайдено»)
 // v7.565: номери відміток допів унікальні — новий № = max(усіх №, верхня межа ATT_ID_HWM) + 1 (було «№ останнього рядка + 1»: відновлені/перенесені в кінець аркуша старі рядки давали повтори — 204 спільні №); renumberAttendanceIds (CFO, dryRun) перенумеровує повтори; видалення відмітки — лише № + дитина + дата + заняття, не збігається — не видаляє, помилка; червень–вересень 2026 заморожені назавжди (FROZEN_MONTHS) — як закриті, але без відкриття: жоден експорт Payment/Salary, правка чи відмітка туди не пише
 // v7.564: дубль відмітки допів неможливий — ключ «дата + локація + дитина + заняття», дитина й локація нормалізовані як у журналі експорту (регістр, пробіли, апострофи); перевірка в addAttendanceMark, bulkAttendanceMarks, сканері дублів; renameAttendanceChild не перейменовує відмітку, якщо під новим ім'ям уже є та сама (skippedDup)
@@ -9533,7 +9534,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.566', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.567', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -9835,6 +9836,8 @@ function doPost(e) {
     else if (body.action === 'opex27RecalcAll')           result = opex27RecalcAll(body);                   // v7.444 «Перерахувати всі сади» (CFO; dryRun)
     else if (body.action === 'groupRenameApply')          result = groupRenameApply(body);                  // v7.435 стандарт назв груп (CFO; dryRun)
     else if (body.action === 'setDopMarkGroup')           result = setDopMarkGroup(body);                    // v7.524 група окремих відміток → чинна (CFO; dryRun)
+    else if (body.action === 'notesBuild')                result = notesBuild(body);                         // v7.567 примітки-розшифровки (CFO; dryRun)
+    else if (body.action === 'notesSetup')                result = notesSetup(body);                         // v7.567 тригер notesTick
     else if (body.action === 'renumberAttendanceIds')     result = renumberAttendanceIds(body);              // v7.565 унікальні № відміток (CFO; dryRun)
     else if (body.action === 'restoreDopMarks')           result = restoreDopMarks(body);                    // v7.524 відмітки допів з версії (CFO; dryRun)
     else if (body.action === 'groupRecordsCanon')         result = groupRecordsCanon(body);                 // v7.513 старі назви груп у відмітках → «Групи_Мапа» (CFO; dryRun)
@@ -9996,6 +9999,7 @@ function doPost(e) {
     // v7.86: інвалідація кешу getPredmetnyky — бампимо predver після УСПІШНОГО запису,
     // що змінює дані предметників (уроки/призначення/каталог/обʼєднання/норми/сіди).
     if (result && result.ok && _PRED_WRITE_ACTIONS[body.action]) _bumpPredVer();
+    try { _notesMarkDirty(_notesDirtyKeys(body.action, body, result)); } catch(_nd){}   // v7.567 примітки — у чергу
     return jsonOut(result);
   } catch(err) {
     try { _tgErr('route:' + ((typeof action !== 'undefined' && action) || (typeof body !== 'undefined' && body && body.action) || '?'), err); } catch(_le){}   // v7.294: збої маршрутів — у TG_Err
@@ -20185,7 +20189,15 @@ var OPEX_CONTRACTORS_SHEET  = 'OPEX_Контрагенти';
 var OPEX_CONTRACTORS_HEADER = ['ЄДРПОУ', 'Назва_контрагента', 'Категорія', 'Локація', 'Ким', 'Коли'];
 var OPEX_EXP_LOG_SHEET      = 'OPEX_Витрати_Лог';
 // v7.86: +Статус (внесено/пропущено), +Причина — щоб рішення «не вносити» було видно в журналі.
-var OPEX_EXP_LOG_HEADER     = ['Локація', 'IBAN', 'Дата платежу', 'Референс', 'ЄДРПОУ', 'Сума', 'Категорія', 'Місяць', 'Коли', 'Ким', 'Статус', 'Причина'];
+var OPEX_EXP_LOG_HEADER     = ['Локація', 'IBAN', 'Дата платежу', 'Референс', 'ЄДРПОУ', 'Сума', 'Категорія', 'Місяць', 'Коли', 'Ким', 'Статус', 'Причина', 'Контрагент', 'Призначення'];   // v7.567 + 2
+// v7.567: контрагент і призначення платежу для примітки OPEX/Salary — з рядка звірки (note / purpose) або з Банк_Призначення
+var _OPEX_BP_MEMO = null;
+function _opexLogExtra(it){
+  var ref = String((it && it.ref) || '').trim(), name = String((it && (it.name || it.note)) || '').trim(), purpose = String((it && it.purpose) || '').trim();
+  if ((!purpose || !name) && ref){ if (!_OPEX_BP_MEMO){ try { _OPEX_BP_MEMO = _bankPurposeMap(); } catch(_b){ _OPEX_BP_MEMO = {}; } }
+    var b = _OPEX_BP_MEMO[ref] || {}; if (!purpose) purpose = b.purpose || ''; if (!name) name = b.name || ''; }
+  return [name, purpose.slice(0, 500)];
+}
 var OPEX_SKIP_CAT           = '— не вносити —';   // v7.86: маркер рішення «не вносити» / «завжди вручну» у мапі контрагентів
 
 function _opexEnsureCfgSheet(name, header, createIfMissing){
@@ -20485,7 +20497,8 @@ function bankFetch(params){
     if (!Object.keys(tokFilter).length) return {ok:false, error:'Для локації «' + loc + '» немає рахунків під токенами банку (перевір «Реквізити_Локацій»)'};
   }
   var r = _bankFetchCore(from, to, tokFilter);
-  return {ok:!r.errors.length || r.groups.length > 0, from:from, to:to, groups:r.groups, errors:r.errors,
+  var _bpAdded = _bankPurposeUpsert(r.groups);   // v7.567: призначення платежів для приміток
+  return {ok:!r.errors.length || r.groups.length > 0, from:from, to:to, groups:r.groups, errors:r.errors, purposesAdded:_bpAdded,
           count:r.groups.reduce(function(a, g){ return a + g.payments.length + g.expenses.length; }, 0),
           bankTotal:r.total, notReal:r.notReal, loc:loc || ''};   // v7.378: для звірки «у банку N — показано M»
 }
@@ -20928,7 +20941,7 @@ function opexAddExpenses(body){
         var alreadyS = seenSkip[iloc] && seenSkip[iloc][kS];
         if (alreadyS){ out.reason = 'не вносити (вже у журналі)'; return results.push(out); }
         if (!dryRun){
-          logRows.push([iloc, iban, date, ref, edrpou, amount, cat, (mon || ''), now, by, 'пропущено', out.reason]);
+          logRows.push([iloc, iban, date, ref, edrpou, amount, cat, (mon || ''), now, by, 'пропущено', out.reason].concat(_opexLogExtra(it)));
           (seenSkip[iloc] = seenSkip[iloc] || {})[kS] = true;
         }
         return results.push(out);
@@ -20959,7 +20972,7 @@ function opexAddExpenses(body){
         cell.setValue(after);
         _opexTouched[iloc] = true;   // v7.341: кеш цієї локації скинемо після запису
         if (wasFormula) formulaConverted++;
-        logRows.push([iloc, iban, date, ref, edrpou, amount, cat, mon, now, by, 'внесено', '']);
+        logRows.push([iloc, iban, date, ref, edrpou, amount, cat, mon, now, by, 'внесено', ''].concat(_opexLogExtra(it)));
         (seenWrite[iloc] = seenWrite[iloc] || {})[dedupKey] = true;   // дубль у ЦЬОМУ ж батчі теж відсіється
       }
       written++;
@@ -21187,7 +21200,7 @@ function salaryAddExtrasPayments(body){
         var kS = _opexDedupKey(ref, date, edrpou, amount, mon);
         if (seenSkip[iloc] && seenSkip[iloc][kS]){ out.reason = 'не вносити (вже у журналі)'; return results.push(out); }
         if (!dryRun){
-          logRows.push([iloc, iban, date, ref, edrpou, amount, '→Salary: (пропуск)', (mon || ''), now, by, 'пропущено', out.reason]);
+          logRows.push([iloc, iban, date, ref, edrpou, amount, '→Salary: (пропуск)', (mon || ''), now, by, 'пропущено', out.reason].concat(_opexLogExtra(it)));
           (seenSkip[iloc] = seenSkip[iloc] || {})[kS] = true;
         }
         return results.push(out);
@@ -21213,7 +21226,7 @@ function salaryAddExtrasPayments(body){
       if (!dryRun){
         cell.setValue(after);
         if (wasFormula) formulaConverted++;
-        logRows.push([iloc, iban, date, ref, edrpou, amount, '→Salary: ' + rowName, mon, now, by, 'внесено', '']);
+        logRows.push([iloc, iban, date, ref, edrpou, amount, '→Salary: ' + rowName, mon, now, by, 'внесено', ''].concat(_opexLogExtra(it)));
         (seenWrite[iloc] = seenWrite[iloc] || {})[dedupKey] = true;
       }
       written++;
@@ -45814,4 +45827,376 @@ function getDebtsLive(params){
     _cacheGzPutBig(key, res, PAY_LIVE_TTL);
     return res;
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// v7.567 ПРИМІТКИ-РОЗШИФРОВКИ у клітинках OPEX / Salary / Payment (лише примітки — суми не змінюються).
+//   Перший рядок «ⓘ <що>, <місяць>: <сума клітинки>», далі рядки складників; якщо сума клітинки ≠ сумі рядків —
+//   останній рядок «+ вручну X» / «− вручну X». Примітка будується заново з джерел (журнали, відмітки, картки),
+//   тож доданий запис з'являється, видалений — зникає. Чужа (ручна) примітка в клітинці не губиться: наша частина
+//   стоїть першою, ручна — після «✎». Payment — лише колонки до BJ. Червень–вересень 2026 (FROZEN_MONTHS) — не чіпаємо.
+//   Оновлення: після записів через систему (doPost → NOTES_DIRTY) тригер notesTick раз на 10 хв + щоночі повний
+//   прохід поточного й попереднього місяця. Заповнення: POST {action:'notesBuild', kind, loc, months:[10,11], dryRun}.
+// ═══════════════════════════════════════════════════════════════════════════
+var NOTE_TAG = 'ⓘ ';
+var NOTE_USER_SEP = '\n\n✎ ';
+var NOTE_PAY_MAX_COL = 62;   // BJ — після неї в Payment нічого не чіпаємо
+var NOTE_MON = ['', 'січень', 'лютий', 'березень', 'квітень', 'травень', 'червень', 'липень', 'серпень', 'вересень', 'жовтень', 'листопад', 'грудень'];
+var BANK_PURPOSE_SHEET  = 'Банк_Призначення';
+var BANK_PURPOSE_HEADER = ['Референс', 'Дата', 'Сума', 'Контрагент', 'ЄДРПОУ', 'Призначення', 'Рахунок', 'Додано'];
+
+function _noteRound(n){ return Math.round((Number(n) || 0) * 100) / 100; }
+function _noteMoney(n){
+  var v = _noteRound(n), a = Math.abs(v), int = Math.floor(a), frac = Math.round((a - int) * 100);
+  var s = String(int).replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + (frac ? ',' + (frac < 10 ? '0' : '') + frac : '');
+  return (v < 0 ? '−' : '') + s;
+}
+function _noteDay(v){   // Date | 'dd.MM.yyyy' | 'yyyy-MM-dd' → 'dd.MM'
+  if (v instanceof Date) return ('0' + v.getDate()).slice(-2) + '.' + ('0' + (v.getMonth() + 1)).slice(-2);
+  var s = String(v || '').trim(), m;
+  if ((m = /^(\d{2})\.(\d{2})\.\d{4}/.exec(s))) return m[1] + '.' + m[2];
+  if ((m = /^\d{4}-(\d{2})-(\d{2})/.exec(s))) return m[2] + '.' + m[1];
+  return s.slice(0, 10);
+}
+// lines: [{text, amount, noSum}] — noSum: інформаційний рядок (заголовок блоку, «Виплачено» в нарахуванні)
+function _noteCompose(head, lines, cellValue){
+  var cv = _noteRound(cellValue);
+  lines = (lines || []).filter(function(l){ return l && l.text; });
+  if (!lines.length && !cv) return '';
+  var sum = 0; lines.forEach(function(l){ if (!l.noSum) sum += Number(l.amount) || 0; });
+  var out = [NOTE_TAG + head + ': ' + _noteMoney(cv)];
+  var main = lines.filter(function(l){ return !l.tail; }), tail = lines.filter(function(l){ return l.tail; });
+  main.forEach(function(l){ out.push(l.text); });
+  var d = _noteRound(cv - sum);
+  if (Math.abs(d) >= 0.01) out.push((d > 0 ? '+ вручну ' : '− вручну ') + _noteMoney(Math.abs(d)));
+  tail.forEach(function(l){ out.push(l.text); });
+  return out.join('\n');
+}
+// Наша частина + чужа ручна примітка (після «✎»). ours='' — прибираємо лише нашу частину.
+function _noteMerge(existing, ours){
+  var ex = String(existing || ''), user;
+  if (ex.indexOf(NOTE_TAG) === 0){ var i = ex.indexOf(NOTE_USER_SEP); user = i >= 0 ? ex.slice(i + NOTE_USER_SEP.length) : ''; }
+  else user = ex;
+  if (!ours) return user;
+  return user ? ours + NOTE_USER_SEP + user : ours;
+}
+// Допи з відміток: [{activityName, price, date}] → рядки «Лего: 3 × 340 = 1 020 (07, 14, 21.10)»
+function _noteDopLines(marks){
+  var g = {}, order = [];
+  (marks || []).forEach(function(x){
+    var k = String(x.activityName || '') + '|' + (Number(x.price) || 0);
+    if (!g[k]){ g[k] = {name:String(x.activityName || ''), price:Number(x.price) || 0, dates:[]}; order.push(k); }
+    g[k].dates.push(String(x.date || ''));
+  });
+  return order.map(function(k){
+    var a = g[k], ds = a.dates.slice().sort(), mm = ds.length ? ds[0].slice(5, 7) : '';
+    var days = ds.map(function(d){ return d.slice(8, 10); }).join(', ');
+    return {text:a.name + ': ' + ds.length + ' × ' + _noteMoney(a.price) + ' = ' + _noteMoney(ds.length * a.price) + ' (' + days + (mm ? '.' + mm : '') + ')',
+            amount:ds.length * a.price};
+  });
+}
+function _noteIban4(iban){ var s = String(iban || '').replace(/\s+/g, ''); return s ? 'рах. …' + s.slice(-4) : ''; }
+function _noteJoin(parts){ return parts.filter(function(p){ return p !== '' && p != null; }).join(' · '); }
+
+// Запис приміток однієї колонки: notesByRow {рядок1: текст|''}; інші рядки колонки не чіпаємо.
+function _noteWriteColumn(sheet, col1, notesByRow, dryRun){
+  var rows = Object.keys(notesByRow).map(Number).filter(function(r){ return r > 0; });
+  if (!rows.length) return {changed:0, withNote:0};
+  var r0 = Math.min.apply(null, rows), r1 = Math.max.apply(null, rows);
+  var rg = sheet.getRange(r0, col1, r1 - r0 + 1, 1), cur = rg.getNotes(), changed = 0, withNote = 0;
+  var next = cur.map(function(c, i){
+    var row = r0 + i;
+    if (!notesByRow.hasOwnProperty(row)) return [c[0]];
+    var v = _noteMerge(c[0], notesByRow[row]);
+    if (notesByRow[row]) withNote++;
+    if (v !== c[0]) changed++;
+    return [v];
+  });
+  if (changed && !dryRun) rg.setNotes(next);
+  return {changed:changed, withNote:withNote};
+}
+function _noteCfgRows(name){
+  var sh = SpreadsheetApp.openById(CONFIG_SHEET_ID).getSheetByName(name);
+  return sh ? sh.getDataRange().getValues().slice(1) : [];
+}
+function _noteMonthsOk(year, months){
+  return (months || []).map(Number).filter(function(m){ return m >= 1 && m <= 12 && !_isFrozenMonth(year, m); });
+}
+
+// ── Банк: призначення платежів за референсом (заповнюється при кожному bankFetch) ──
+function _bankPurposeUpsert(groups){
+  try {
+    var sh = _opexEnsureCfgSheet(BANK_PURPOSE_SHEET, BANK_PURPOSE_HEADER, true); if (!sh) return 0;
+    var have = {}, last = sh.getLastRow();
+    if (last > 1) sh.getRange(2, 1, last - 1, 1).getValues().forEach(function(r){ have[String(r[0])] = 1; });
+    var add = [], now = new Date();
+    (groups || []).forEach(function(g){
+      (g.expenses || []).concat(g.payments || []).forEach(function(x){
+        var ref = String(x.ref || '').trim(); if (!ref || have[ref]) return; have[ref] = 1;
+        add.push([ref, String(x.date || ''), Number(x.amount) || 0, String(x.counterparty || ''), String(x.edrpou || ''), String(x.purpose || '').slice(0, 500), String(g.iban || ''), now]);
+      });
+    });
+    if (add.length) sh.getRange(sh.getLastRow() + 1, 1, add.length, BANK_PURPOSE_HEADER.length).setValues(add);
+    return add.length;
+  } catch(e){ Logger.log('[bankPurpose] %s', e && e.message); return 0; }
+}
+function _bankPurposeMap(){
+  var out = {};
+  _noteCfgRows(BANK_PURPOSE_SHEET).forEach(function(r){ var ref = String(r[0] || '').trim(); if (ref) out[ref] = {name:String(r[3] || ''), edrpou:String(r[4] || ''), purpose:String(r[5] || '')}; });
+  return out;
+}
+
+// ── PAYMENT ──
+function _notesPayment(loc, year, months, dryRun){
+  var reg = _getLocationPaymentRegistry(loc);
+  if (!reg || !reg.sheetId) return {ok:false, error:'Payment «' + loc + '» не знайдено в реєстрі'};
+  var ss = SpreadsheetApp.openById(reg.sheetId), sh = ss.getSheetByName(reg.sheetName) || ss.getSheets()[0];
+  var data = sh.getDataRange().getValues(), cpm = reg.colsPerMonth || 5, LO = _paymentLayout(cpm);
+  var locs = {}; locs[loc] = 1;
+  try { _subLocsOfHost(loc).forEach(function(s){ locs[s.loc] = 1; }); } catch(_s){}
+  // оплати з виписки: ключ рядок|місяць|колонка
+  var pays = {};
+  _noteCfgRows(RECONCILE_LOG_SHEET).forEach(function(r){
+    if (!locs[String(r[2] || '').trim()]) return;
+    var k = Number(r[8]) + '|' + Number(r[9]) + '|' + String(r[10] || '').trim();
+    (pays[k] = pays[k] || []).push({text:_noteJoin([_noteDay(r[4]), _noteMoney(r[11]), String(r[6] || '').trim(), _noteIban4(r[3])]), amount:_opexNum(r[11])});
+  });
+  // відмітки допів (місяць-джерело = m−1)
+  var tz = 'Europe/Kiev', marks = {};
+  var att = _getAttendanceSheet(false).getDataRange().getValues();
+  for (var i = 1; i < att.length; i++){
+    var a = _parseAttendanceRow(att[i]); if (!locs[a.loc]) continue;
+    var mm = /^(\d{4})-(\d{2})/.exec(String(a.date || '')); if (!mm || Number(mm[1]) !== year) continue;
+    var k2 = _nameFoldTight(a.child) + '|' + Number(mm[2]);
+    (marks[k2] = marks[k2] || []).push({activityName:a.activityName, price:a.price, date:a.date});
+  }
+  // договір з картки
+  var contract = {};
+  try {
+    var cv = getCRMSpreadsheet().getSheetByName(SHEET_CLIENTS).getDataRange().getValues(), h = cv[0].map(String);
+    var iN = h.indexOf('ПІБ дитини'), iL = h.indexOf('Локація'), iS = h.indexOf('Сума договору'), iSt = h.indexOf('Статус');
+    for (var c = 1; c < cv.length; c++){
+      if (!locs[String(cv[c][iL] || '').trim()]) continue;
+      var st = String(cv[c][iSt] || '').toLowerCase(); if (/архів|вибу|розір|deleted/.test(st)) continue;
+      var s = _opexNum(cv[c][iS]); if (s > 0) contract[_nameFoldTight(cv[c][iN])] = s;
+    }
+  } catch(_c){}
+  var res = {ok:true, kind:'payment', loc:loc, months:[], cells:0, changed:0, samples:{}};
+  _noteMonthsOk(year, months).forEach(function(m){
+    var st0 = _detectMonthColByHeader(data, m - 1); if (st0 < 0) st0 = 1 + (m - 1) * cpm;
+    var vac = _readJournalForTarget(loc, 'vacation', year, m).byNormName;
+    var cols = {factNavch:st0 + LO.factNavch, factVstup:st0 + LO.factVstup, factDop:st0 + LO.factDop, budDop:st0 + LO.budDop, budNavch:st0 + LO.budNavch};
+    var notes = {}; Object.keys(cols).forEach(function(k){ notes[k] = {}; });
+    for (var r = 3; r < data.length; r++){
+      var nm = trim(String(data[r][0] || '')); if (!nm || isGroupHeaderRow(data[r], 1)) continue;
+      var nk = _nameFoldTight(nm), row1 = r + 1, mon = NOTE_MON[m];
+      [['factNavch', 'оплата навчання'], ['factVstup', 'оплата вступу'], ['factDop', 'оплата допів']].forEach(function(p){
+        var col0 = cols[p[0]];
+        notes[p[0]][row1] = _noteCompose(nm + ', ' + p[1] + ', ' + mon, pays[row1 + '|' + m + '|' + _colLetter(col0)] || [], _opexNum(data[r][col0]));
+      });
+      notes.budDop[row1] = _noteCompose(nm + ', бюджет допів, ' + mon, _noteDopLines(marks[nk + '|' + (m - 1)] || []), _opexNum(data[r][cols.budDop]));
+      var bl = [];
+      if (contract[nk]) bl.push({text:'договір: ' + _noteMoney(contract[nk]), amount:contract[nk]});
+      var je = vac[_journalNormName(nm)];
+      if (je && je.sum) bl.push({text:'знижка відпустка / лікарняний: −' + _noteMoney(Math.abs(je.sum)), amount:-Math.abs(je.sum)});
+      notes.budNavch[row1] = _noteCompose(nm + ', бюджет навчання, ' + mon, bl, _opexNum(data[r][cols.budNavch]));
+    }
+    Object.keys(cols).forEach(function(k){
+      var col1 = cols[k] + 1; if (col1 > NOTE_PAY_MAX_COL) return;
+      var w = _noteWriteColumn(sh, col1, notes[k], dryRun);
+      res.cells += w.withNote; res.changed += w.changed;
+      if (!res.samples[k]){ var rr = Object.keys(notes[k]).filter(function(x){ return notes[k][x] && notes[k][x].split('\n').length > 2; })[0]; if (rr) res.samples[k] = notes[k][rr]; }
+    });
+    res.months.push(m);
+  });
+  return res;
+}
+
+// ── OPEX ──
+function _notesOpex(loc, year, months, dryRun){
+  var ls = _opexLocSheet(loc); if (!ls) return {ok:false, error:'OPEX «' + loc + '» не знайдено в реєстрі'};
+  var sheet = ls.sheet, data = sheet.getRange(1, 1, Math.max(sheet.getLastRow(), 30), Math.max(sheet.getLastColumn(), 37)).getValues();
+  var catRow = {}, rowName = {};
+  for (var rn = 3; rn <= 30 && rn - 1 < data.length; rn++){
+    var raw = String(data[rn - 1][0] || '').trim(); if (_opexIsSkippedCategory(raw)) continue;
+    var nm = _opexNormalizeCategoryName(raw).trim().toLowerCase(); if (!catRow.hasOwnProperty(nm)){ catRow[nm] = rn; rowName[rn] = raw; }
+  }
+  var cmap = {}; try { cmap = (getOpexContractors().map) || {}; } catch(_c){}
+  var bp = _bankPurposeMap(), inv = {};
+  try { _noteCfgRows(INV_SHEET_NAME).forEach(function(r){ var ref = String(r[INV_HEADER.indexOf('matched_ref')] || '').trim();
+        if (ref) inv[ref] = {caption:String(r[INV_HEADER.indexOf('підпис')] || '').trim(), supplier:String(r[INV_HEADER.indexOf('постачальник')] || '').trim()}; }); } catch(_i){}
+  var lines = {};   // рядок|місяць → [line]
+  _noteCfgRows(OPEX_EXP_LOG_SHEET).forEach(function(r){
+    if (String(r[0] || '').trim() !== loc || String(r[10] || 'внесено').trim() !== 'внесено') return;
+    var cat = String(r[6] || ''); if (cat.indexOf('→Salary') === 0 || cat === OPEX_SKIP_CAT) return;
+    var row = catRow[_opexNormalizeCategoryName(cat).trim().toLowerCase()]; if (!row) return;
+    var ref = String(r[3] || '').trim(), b = bp[ref] || {}, iv = inv[ref] || {}, c = cmap[_opexContractorKey(r[4], '')] || {};
+    var who = String(r[12] || '').trim() || iv.supplier || c.name || b.name || ('ЄДРПОУ ' + String(r[4] || '—'));
+    var what = iv.caption || String(r[13] || '').trim() || b.purpose || '';
+    (lines[row + '|' + Number(r[7])] = lines[row + '|' + Number(r[7])] || []).push({text:_noteJoin([_noteDay(r[2]), who, _noteMoney(r[5]), what.slice(0, 160)]), amount:_opexNum(r[5])});
+  });
+  _noteCfgRows(CASH_LOG_SHEET).forEach(function(r){
+    if (String(r[2]) !== 'expense' || String(r[3] || '').trim() !== loc || String(r[13] || 'внесено') !== 'внесено') return;
+    var k = Number(r[4]) + '|' + Number(r[7]);
+    (lines[k] = lines[k] || []).push({text:_noteJoin([_noteDay(r[0]), 'готівка', _noteMoney(r[8]), String(r[11] || '').slice(0, 160)]), amount:_opexNum(r[8])});
+  });
+  var res = {ok:true, kind:'opex', loc:loc, months:[], cells:0, changed:0, samples:{}};
+  _noteMonthsOk(year, months).forEach(function(m){
+    var col1 = (m - 1) * 3 + 2, notes = {};
+    Object.keys(rowName).forEach(function(rs){
+      var row = Number(rs); notes[row] = _noteCompose(rowName[row] + ', ' + NOTE_MON[m], lines[row + '|' + m] || [], _opexNum(data[row - 1][col1 - 1]));
+    });
+    var w = _noteWriteColumn(sheet, col1, notes, dryRun);
+    res.cells += w.withNote; res.changed += w.changed; res.months.push(m);
+    if (!res.samples.opex){ var rr = Object.keys(notes).filter(function(x){ return notes[x] && notes[x].split('\n').length > 2; })[0]; if (rr) res.samples.opex = notes[rr]; }
+  });
+  return res;
+}
+
+// ── SALARY ──
+function _notesSalary(loc, year, months, dryRun){
+  var o = _salaryOpenSheet(loc); if (!o.ok) return {ok:false, error:o.error};
+  var sheet = o.sheet, data = sheet.getDataRange().getValues();
+  var hr = []; try { hr = _loadHrReconIndex(loc).all || []; } catch(_h){}
+  var rate = {}; hr.forEach(function(e){ var k = _nameFoldTight(e.last + ' ' + e.first); if (e.rate) rate[k] = {rate:e.rate, model:e.calcModel || '', cond:e.workCond || ''}; });
+  var paid = {};   // рядок|місяць → [line]
+  function push(k, l){ (paid[k] = paid[k] || []).push(l); }
+  _noteCfgRows(SALARY_RECON_LOG).forEach(function(r){
+    if (String(r[2] || '').trim() !== loc) return;
+    push(Number(r[8]) + '|' + Number(r[9]), {text:_noteJoin([_noteDay(r[0]), _noteMoney(r[12]), 'карта' + (r[6] ? ' …' + String(r[6]).replace(/\D/g, '').slice(-4) : ''), 'відомість №' + String(r[3] || '—')]), amount:_opexNum(r[12])});
+  });
+  var byName = {}; for (var r0 = 3; r0 < data.length; r0++){ var n0 = String(data[r0][0] || '').trim(); if (n0) byName[_nameFoldTight(n0)] = r0 + 1; }
+  _noteCfgRows(OPEX_EXP_LOG_SHEET).forEach(function(r){
+    var cat = String(r[6] || ''); if (String(r[0] || '').trim() !== loc || cat.indexOf('→Salary: ') !== 0 || String(r[10] || 'внесено') !== 'внесено') return;
+    var row = byName[_nameFoldTight(cat.replace(/^→Salary:\s*/, ''))]; if (!row) return;
+    push(row + '|' + Number(r[7]), {text:_noteJoin([_noteDay(r[2]), _noteMoney(r[5]), 'банк, ФОП', String(r[12] || '').trim()]), amount:_opexNum(r[5])});
+  });
+  _noteCfgRows(CASH_LOG_SHEET).forEach(function(r){
+    if (String(r[2]) !== 'salary' || String(r[3] || '').trim() !== loc || String(r[13] || 'внесено') !== 'внесено') return;
+    push(Number(r[4]) + '|' + Number(r[7]), {text:_noteJoin([_noteDay(r[0]), _noteMoney(r[8]), 'готівка', String(r[11] || '').slice(0, 120)]), amount:_opexNum(r[8])});
+  });
+  // допи: відмітки місяця-джерела по заняттю (для кількості занять у рядку заняття)
+  var dopCnt = {};
+  var att = _getAttendanceSheet(false).getDataRange().getValues();
+  for (var i = 1; i < att.length; i++){
+    var a = _parseAttendanceRow(att[i]); if (a.loc !== loc) continue;
+    var mm = /^(\d{4})-(\d{2})/.exec(String(a.date || '')); if (!mm || Number(mm[1]) !== year) continue;
+    var k = _nameFoldTight(a.activityName) + '|' + Number(mm[2]), d = dopCnt[k] = dopCnt[k] || {dates:{}, marks:0};
+    d.dates[a.date] = 1; d.marks++;
+  }
+  var res = {ok:true, kind:'salary', loc:loc, months:[], cells:0, changed:0, samples:{}};
+  _noteMonthsOk(year, months).forEach(function(m){
+    var fCol = (m - 1) * 3 + 2, bCol = (m - 1) * 3 + 3, nf = {}, nb = {};
+    var sj = _readJournalForTarget(loc, 'salary', year, m).byNormName, pj = _readJournalForTarget(loc, 'predmetnyky', year, m).byNormName;
+    for (var r = 3; r < data.length; r++){
+      var nm = String(data[r][0] || '').trim(); if (!nm || _salaryIsSkippedRow(nm) || _salaryIsSubtotalRow(nm)) continue;
+      var row1 = r + 1, nk = _nameFoldTight(nm), mon = NOTE_MON[m], pl = paid[row1 + '|' + m] || [];
+      var fact = _opexNum(data[r][fCol - 1]), bud = _opexNum(data[r][bCol - 1]);
+      nf[row1] = _noteCompose(nm + ', виплачено, ' + mon, pl, fact);
+      var bl = [], jn = _journalNormName(nm);
+      if (rate[nk]) bl.push({text:'ставка за карткою: ' + rate[nk].rate + (rate[nk].model ? ' (' + rate[nk].model + ')' : '') + (rate[nk].cond ? ' · ' + rate[nk].cond : ''), amount:0, noSum:true});
+      if (sj[jn] && sj[jn].sum){
+        var dc = dopCnt[nk + '|' + (m - 1)];
+        bl.push({text:'допи: ' + (dc ? Object.keys(dc.dates).length + ' занять, ' + dc.marks + ' відміток → ' : '') + _noteMoney(sj[jn].sum), amount:sj[jn].sum});
+      }
+      if (pj[jn] && pj[jn].sum) bl.push({text:'предметники: ' + _noteMoney(pj[jn].sum), amount:pj[jn].sum});
+      if (pl.length){
+        bl.push({text:'Виплачено:', amount:0, noSum:true, tail:true});
+        pl.forEach(function(l){ bl.push({text:'  ' + l.text, amount:l.amount, noSum:true, tail:true}); });
+      }
+      nb[row1] = _noteCompose(nm + ', нараховано, ' + mon, bl, bud);
+    }
+    [[fCol, nf, 'salaryFact'], [bCol, nb, 'salaryBudget']].forEach(function(x){
+      var w = _noteWriteColumn(sheet, x[0], x[1], dryRun); res.cells += w.withNote; res.changed += w.changed;
+      if (!res.samples[x[2]]){ var rr = Object.keys(x[1]).filter(function(q){ return x[1][q] && x[1][q].split('\n').length > 2; })[0]; if (rr) res.samples[x[2]] = x[1][rr]; }
+    });
+    res.months.push(m);
+  });
+  return res;
+}
+
+// POST {action:'notesBuild', actorId, kind:'payment'|'opex'|'salary', loc, months:[10,11], year, dryRun} — CFO; dryRun за замовч.
+function notesBuild(body){
+  body = body || {};
+  var a = _promoActor(body); if (!(a && _roleKey(a.role) === 'cfo')) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var kind = String(body.kind || ''), loc = String(body.loc || '').trim(), year = Number(body.year) || 2026;
+  var months = (body.months || []).map(Number), dryRun = (body.dryRun !== false);
+  if (!loc || !months.length) return {ok:false, error:'loc і months обовʼязкові'};
+  try {
+    if (kind === 'payment') return _notesPayment(loc, year, months, dryRun);
+    if (kind === 'opex')    return _notesOpex(loc, year, months, dryRun);
+    if (kind === 'salary')  return _notesSalary(loc, year, months, dryRun);
+    return {ok:false, error:'kind: payment | opex | salary'};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+
+// ── Оновлення після записів: черга NOTES_DIRTY (kind|loc|рік|місяць) → notesTick раз на 10 хв ──
+// Чиста частина: які клітинки зачепила дія doPost.
+function _notesDirtyKeys(action, body, result){
+  body = body || {}; result = result || {};
+  if (!result.ok || body.dryRun === true || result.dryRun === true) return [];
+  var Y = Number(body.year) || new Date().getFullYear(), out = [];
+  function add(kind, loc, m, y){ loc = String(loc || '').trim(); m = Number(m) || 0; if (loc && m >= 1 && m <= 12) out.push(kind + '|' + loc + '|' + (y || Y) + '|' + m); }
+  function next(m){ return m === 12 ? 1 : m + 1; }
+  var items = body.items || [];
+  switch (action){
+    case 'reconcileApply':
+      items.forEach(function(it){ var mo = Number(it.month) || Number(body.month) || 0;
+        if (!mo){ var d = _recParseDate ? _recParseDate(String(it.date || '')) : null; mo = d ? d.getMonth() + 1 : 0; } add('payment', result.loc, mo); });
+      break;
+    case 'exportAttendance': case 'exportAttendanceToPayments':
+      (result.months || (result.payments && result.payments.months) || []).forEach(function(m){ add('payment', body.loc, m); });
+      if (body.month){ add('payment', body.loc, next(Number(body.month))); if (action === 'exportAttendance') add('salary', body.loc, next(Number(body.month))); }
+      break;
+    case 'exportToSalaryExtras': case 'exportPredmetnykyToSalary':
+      if (body.month) add('salary', body.loc, next(Number(body.month)));
+      break;
+    case 'addLocPaymentDop': case 'setLocPaymentBudget': case 'exportVacationDiscountToPayments':
+      add('payment', body.loc, body.month); break;
+    case 'opexAddExpenses':
+      items.forEach(function(it){ if (!it.skip) add('opex', it.loc || body.loc, it.month || body.month); }); break;
+    case 'salaryAddExtrasPayments':
+      items.forEach(function(it){ if (!it.skip) add('salary', it.loc || body.loc, it.month || body.month); }); break;
+    case 'salaryReconcileApply':
+      add('salary', body.loc || result.loc, body.month || result.month); break;
+    case 'cashAdd': case 'cashCancel':
+      add(String(result.kind) === 'salary' ? 'salary' : 'opex', result.loc, result.month, result.year); break;
+  }
+  var seen = {}; return out.filter(function(k){ if (seen[k]) return false; seen[k] = 1; return true; });
+}
+function _notesMarkDirty(keys){
+  if (!keys || !keys.length) return;
+  try {
+    var P = PropertiesService.getScriptProperties(), cur = {};
+    try { cur = JSON.parse(P.getProperty('NOTES_DIRTY') || '{}') || {}; } catch(_j){}
+    keys.forEach(function(k){ cur[k] = 1; });
+    P.setProperty('NOTES_DIRTY', JSON.stringify(cur));
+  } catch(e){ Logger.log('[notesDirty] %s', e && e.message); }
+}
+// Тригер: черга + раз на добу (після 03:00 за Києвом) повний прохід поточного й попереднього місяця.
+function notesTick(){
+  var P = PropertiesService.getScriptProperties(), t0 = Date.now();
+  var now = new Date(), today = Utilities.formatDate(now, 'Europe/Kiev', 'yyyy-MM-dd'), hour = Number(Utilities.formatDate(now, 'Europe/Kiev', 'H'));
+  var cur = {}; try { cur = JSON.parse(P.getProperty('NOTES_DIRTY') || '{}') || {}; } catch(_j){}
+  if (hour >= 3 && P.getProperty('NOTES_FULL_DAY') !== today){
+    var y = now.getFullYear(), m = now.getMonth() + 1, pm = m === 1 ? 12 : m - 1, py = m === 1 ? y - 1 : y;
+    var locs = []; try { locs = (getLocations().data || []).map(function(l){ return String(l.loc || '').trim(); }).filter(Boolean); } catch(_l){}
+    locs.filter(function(l){ return !/Житомир|Благо/.test(l); }).forEach(function(l){ ['payment', 'opex', 'salary'].forEach(function(k){ cur[k + '|' + l + '|' + y + '|' + m] = 1; cur[k + '|' + l + '|' + py + '|' + pm] = 1; }); });
+    P.setProperty('NOTES_FULL_DAY', today);
+  }
+  var keys = Object.keys(cur);
+  for (var i = 0; i < keys.length; i++){
+    if (Date.now() - t0 > 4.5 * 60 * 1000) break;
+    var p = keys[i].split('|');
+    try { notesBuild({actorId:1, _internal:true, kind:p[0], loc:p[1], year:Number(p[2]), months:[Number(p[3])], dryRun:false}); } catch(e){ Logger.log('[notesTick] %s %s', keys[i], e && e.message); }
+    delete cur[keys[i]];
+  }
+  P.setProperty('NOTES_DIRTY', JSON.stringify(cur));
+}
+// POST {action:'notesSetup', actorId} — CFO: тригер notesTick кожні 10 хв (ідемпотентно).
+function notesSetup(body){
+  var a = _promoActor(body || {}); if (!(a && _roleKey(a.role) === 'cfo')) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var has = ScriptApp.getProjectTriggers().some(function(t){ return t.getHandlerFunction() === 'notesTick'; });
+  if (!has) ScriptApp.newTrigger('notesTick').timeBased().everyMinutes(10).create();
+  return {ok:true, trigger:has ? 'вже є' : 'створено'};
 }

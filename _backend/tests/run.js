@@ -679,6 +679,43 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
          kinds: ['навч', 'вступ', 'доп', '', '']});
 }
 
+// ── v7.567: примітки-розшифровки (Payment / OPEX / Salary) ──
+{
+  const N = new Function([varLine('NOTE_TAG'), varLine('NOTE_USER_SEP'), fn('_noteRound'), fn('_noteMoney'), fn('_noteDay'), fn('_noteCompose'),
+    fn('_noteMerge'), fn('_noteDopLines'), fn('_noteIban4'), fn('_noteJoin'), fn('_recParseDate'), fn('_notesDirtyKeys')].join('\n') +
+    '\nreturn {_noteMoney, _noteDay, _noteCompose, _noteMerge, _noteDopLines, _noteIban4, _noteJoin, _notesDirtyKeys};')();
+  // Ткаченко Вікторія (Позняки): «Бюджет доп» листопада = відмітки жовтня 6 030
+  const tk = [['Арт', 370, '2026-10-01'], ['Логопед', 650, '2026-10-02'], ['Логопед', 650, '2026-10-06'], ['Лего', 370, '2026-10-08'], ['Театр', 500, '2026-10-19'],
+    ['Гончарство', 400, '2026-10-20'], ['Логопед', 650, '2026-10-20'], ['Логопед', 650, '2026-10-22'], ['Лего', 370, '2026-10-22'], ['Логопед', 650, '2026-10-27'],
+    ['Гончарство', 400, '2026-10-27'], ['Лего', 370, '2026-10-29']].map((x) => ({activityName: x[0], price: x[1], date: x[2]}));
+  const dl = N._noteDopLines(tk);
+  const ok = N._noteCompose('Ткаченко Вікторія, бюджет допів, листопад', dl, 6030);
+  const man = N._noteCompose('Ткаченко Вікторія, бюджет допів, листопад', dl, 5380);
+  check('примітки: бюджет допів', 'заняття × ціна з датами; сума сходиться — без «вручну», не сходиться — останній рядок «− вручну 650»',
+        {head: ok.split('\n')[0], lego: dl.find((l) => /^Лего/.test(l.text)).text, logo: dl.find((l) => /^Логопед/.test(l.text)).text,
+         okLast: ok.split('\n').slice(-1)[0], manLast: man.split('\n').slice(-1)[0]},
+        {head: 'ⓘ Ткаченко Вікторія, бюджет допів, листопад: 6 030', lego: 'Лего: 3 × 370 = 1 110 (08, 22, 29.10)', logo: 'Логопед: 5 × 650 = 3 250 (02, 06, 20, 22, 27.10)',
+         okLast: 'Гончарство: 2 × 400 = 800 (20, 27.10)', manLast: '− вручну 650'});
+  const pay = N._noteCompose('Бучковський Лука, оплата допів, листопад', [{text: N._noteJoin([N._noteDay('02.11.2026'), N._noteMoney(2810), 'Бучковський Георгій Валерійович', N._noteIban4('UA72 3052 9900 0002 6000 0462 0592 5')]), amount: 2810}], 2810);
+  const sal = N._noteCompose('Іванова Олена, нараховано, листопад', [{text: 'ставка за карткою: 18000', amount: 0, noSum: true}, {text: 'допи: 8 занять, 40 відміток → 4 000', amount: 4000},
+    {text: 'Виплачено:', noSum: true, tail: true}, {text: '  05.11 · 10 000 · карта …1234 · відомість №7', amount: 10000, noSum: true, tail: true}], 22000);
+  check('примітки: оплата, Salary, нуль', 'оплата — дата · сума · платник · рахунок; Salary — «вручну» перед блоком «Виплачено»; порожня клітинка без рядків — без примітки',
+        {pay: pay.split('\n')[1], sal: sal.split('\n'), empty: N._noteCompose('x', [], 0), plus: N._noteCompose('x', [{text: 'a', amount: 100}], 150.5).split('\n').pop()},
+        {pay: '02.11 · 2 810 · Бучковський Георгій Валерійович · рах. …5925', empty: '', plus: '+ вручну 50,50',
+         sal: ['ⓘ Іванова Олена, нараховано, листопад: 22 000', 'ставка за карткою: 18000', 'допи: 8 занять, 40 відміток → 4 000', '+ вручну 18 000', 'Виплачено:', '  05.11 · 10 000 · карта …1234 · відомість №7']});
+  const ours1 = 'ⓘ Лего, листопад: 340', ours2 = 'ⓘ Лего, листопад: 680';
+  check('примітки: ручна примітка не губиться', 'наша частина першою, ручна — після «✎»; оновлення міняє лише нашу; прибрали нашу — лишається ручна',
+        {first: N._noteMerge('домовились з мамою', ours1), upd: N._noteMerge(N._noteMerge('домовились з мамою', ours1), ours2), del: N._noteMerge(ours1 + '\n\n✎ домовились з мамою', ''), plain: N._noteMerge(ours1, ours2)},
+        {first: 'ⓘ Лего, листопад: 340\n\n✎ домовились з мамою', upd: 'ⓘ Лего, листопад: 680\n\n✎ домовились з мамою', del: 'домовились з мамою', plain: ours2});
+  check('примітки: що оновити після запису', 'звірка → Payment місяця платежу; експорт допів → Payment і Salary наступного місяця; OPEX — по рядках; dryRun і помилка — нічого',
+        {rec: N._notesDirtyKeys('reconcileApply', {items: [{date: '02.11.2026'}, {month: 10}]}, {ok: true, loc: 'Позняки'}),
+         exp: N._notesDirtyKeys('exportAttendance', {loc: 'Голосієво', month: 11, year: 2026}, {ok: true}),
+         opex: N._notesDirtyKeys('opexAddExpenses', {loc: 'Тичини', month: 11, year: 2026, items: [{category: 'КАНЦТОВАРИ'}, {skip: true}, {loc: 'Оранж', month: 10}]}, {ok: true}),
+         dry: N._notesDirtyKeys('addLocPaymentDop', {loc: 'Позняки', month: 11, dryRun: true}, {ok: true}).length, bad: N._notesDirtyKeys('cashAdd', {}, {ok: false}).length},
+        {rec: ['payment|Позняки|2026|11', 'payment|Позняки|2026|10'], exp: ['payment|Голосієво|2026|12', 'salary|Голосієво|2026|12'],
+         opex: ['opex|Тичини|2026|11', 'opex|Оранж|2026|10'], dry: 0, bad: 0});
+}
+
 // ── v7.562: Предметники (фронт) — «Не передбачено для цієї групи» лише за справжньою нормою 0 ──
 {
   const hp = path.join(__dirname, '..', '..', 'predmetnyky.html');
