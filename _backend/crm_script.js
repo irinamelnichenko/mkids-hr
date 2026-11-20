@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.570
+// m.kids CRM — Google Apps Script v7.571
+// v7.571: «оплачено» без «?»: локація — підпис / гілка → відправник рахунку (усі його рахунки з відомою локацією — одна локація) → рахунок, з якого оплачено (Реквізити_Локацій, лише якщо IBAN однієї локації); контрагент — отримувач із виписки за matched_ref (Банк_Призначення); знайдене дописується в порожні поля заявки (з логом); invPaidFix (CFO, dryRun) — уже надіслані «оплачено» виправляє editMessageText, а ті, що отримали локацію з гілкою, переносить у гілку (видалити й надіслати там)
 // v7.570: «оплачено» завжди повне: «✅ Оплачено ДД.ММ — Локація — Контрагент — сума ₴ — опис директора / № рахунку» (і у відповіді, і в черзі — текст будується з заявки в момент відправки); маршрут: рахунок у гілці — відповіддю в ній; рахунок із загальної гілки (до появи гілок) — у гілку його локації (без відповіді); локація без гілки — загальна гілка відповіддю; черга й тік не шлють, поки автозвірку вимкнено (INV_AUTO_MATCH=off); invPaidRedo (CFO, dryRun) — дописати пропущені й замінити голі «оплачено» в новій групі (видалення лише власних повідомлень бота, відправлених у нову групу)
 // v7.569: бот рахунків — «оплачено» знову доходить: група рахунків стала супергрупою (гілки), а «✅ Оплачено» йшло на старий chat_id заявки («group chat was upgraded to a supergroup chat», 224 відмови з 17.11) — INV_CHAT_MIGRATE старий → новий, повтор у нову групу; відповідь — у гілку рахунку (reply_parameters, allow_sending_without_reply); текст «✅ Оплачено ДД.ММ — сума»; гілки: thread_id заявки, назви гілок (INV_TOPICS) з повідомлень і invTopicsScan, гілка → локація (однозначно за назвою, інакше — показати; invTopicSetLoc), рахунок у гілці — локація гілки; черга «оплачено» до 09:00 — розсилка з invoiceQueueTick (тригер на час не обов'язковий: ліміт тригерів)
 // v7.568: примітки — оновлення без власного тригера (ліміт тригерів проєкту вичерпано): notesTick їде на tgSlaCheck (5 хв), не частіше ніж раз на 10 хв, до 2 хв за раз; опис (бот рахунків / виписка) — в один рядок; «бюджет навчання» з нулем у клітинці не показує договір як «− вручну»
@@ -2759,10 +2760,62 @@ function _invPaidTextFull(o){
   return ['✅ Оплачено ' + String(o.dmy || '').slice(0, 5), o.loc || 'локація ?', o.supplier || 'контрагент ?', sum || 'сума ?', tail || 'без опису']
     .map(function(x, k){ return k ? esc(x) : x; }).join(' — ');
 }
-function _invPaidFromRow(row, H){
+function _invPaidFromRow(row, H, ctx){
   var g = function(n){ var i = H.indexOf(n); return i >= 0 ? row[i] : ''; };
-  return {dmy:_invDmy(g('дата оплати')), loc:String(g('локація') || '').trim(), supplier:String(g('постачальник') || '').trim(),
-          amount:g('сума'), caption:String(g('підпис') || ''), number:String(g('№ рахунку') || '')};
+  var o = {dmy:_invDmy(g('дата оплати')), loc:String(g('локація') || '').trim(), supplier:String(g('постачальник') || '').trim(),
+           amount:g('сума'), caption:String(g('підпис') || ''), number:String(g('№ рахунку') || ''), locSrc:'', supSrc:''};
+  if(ctx === false) return o;
+  try {
+    ctx = ctx || _invPaidCtx();
+    if(!o.loc){ var pl = _invPickLoc({threadLoc:_invTopicLocFromMap(ctx.topics, g('thread_id')), sender:g('від кого'), iban:g('рахунок оплати')}, ctx.senderLoc, ctx.ibanLocs);
+      o.loc = pl.loc; o.locSrc = pl.src; }
+    if(!o.supplier){ var sp = _invSupplierFromRefs(g('matched_ref'), ctx.bp); if(sp){ o.supplier = sp; o.supSrc = 'виписка'; } }
+  } catch(_c){}
+  return o;
+}
+// ═══ v7.571: локація й контрагент для «оплачено», коли в заявці порожньо ═══
+function _invPaidCtx(){
+  var sh = _invSheet(false), v = sh ? sh.getDataRange().getValues() : [[]], H = (v[0] || []).map(String);
+  var bp = {}; try { bp = _bankPurposeMap(); } catch(_b){}
+  return {topics:_invTopicLocMap(), senderLoc:_invSenderLocs(v, H), ibanLocs:_invIbanLocs(), bp:bp};
+}
+function _invTopicLocFromMap(map, th){ var m = (map || {})[String(th || '').replace(/\.0$/, '')]; return (m && m.loc) ? m.loc : ''; }   // гілка кухні — її мітка «(не локація)», не локація відправника
+// Відправник → локація: лише якщо ВСІ його заявки з відомою локацією — однієї локації і таких щонайменше 2 (CFO шле за всіх — не однозначно).
+function _invSenderLocs(v, H){
+  var iS = H.indexOf('від кого'), iL = H.indexOf('локація'), by = {};
+  for(var r = 1; r < v.length; r++){
+    var s = String(v[r][iS] || '').trim(), l = String(v[r][iL] || '').trim();
+    if(!s || !l || /не локація/.test(l)) continue;
+    (by[s] = by[s] || {})[l] = (by[s][l] || 0) + 1;
+  }
+  var out = {};
+  Object.keys(by).forEach(function(s){ var ls = Object.keys(by[s]); if(ls.length === 1 && by[s][ls[0]] >= 2) out[s] = ls[0]; });
+  return out;
+}
+// IBAN → локації (Реквізити_Локацій); однозначно — лише IBAN однієї локації.
+function _invIbanLocs(){
+  var out = {}; var sh = SpreadsheetApp.openById(CONFIG_SHEET_ID).getSheetByName('Реквізити_Локацій'); if(!sh) return out;
+  var d = sh.getDataRange().getValues();
+  for(var r = 1; r < d.length; r++){
+    var e = String(d[r][4] || '').replace(/\s+/g, '').toUpperCase(), l = String(d[r][0] || '').trim();
+    if(!e || !l) continue; out[e] = out[e] || []; if(out[e].indexOf(l) < 0) out[e].push(l);
+  }
+  return out;
+}
+// Чиста: гілка → відправник → рахунок оплати.
+function _invPickLoc(x, senderLoc, ibanLocs){
+  x = x || {};
+  if(x.threadLoc) return {loc:x.threadLoc, src:'гілка'};
+  var s = String(x.sender || '').trim(); if(s && senderLoc && senderLoc[s]) return {loc:senderLoc[s], src:'відправник'};
+  var ib = String(x.iban || '').replace(/\s+/g, '').toUpperCase(), ls = (ibanLocs || {})[ib] || [];
+  if(ls.length === 1) return {loc:ls[0], src:'рахунок оплати'};
+  return {loc:'', src:''};
+}
+// Чиста: отримувач із виписки за референсом (кілька — «ref1+ref2», беремо перший відомий).
+function _invSupplierFromRefs(refs, bp){
+  var list = String(refs || '').split('+').map(function(x){ return x.trim(); }).filter(Boolean);
+  for(var i = 0; i < list.length; i++){ var b = (bp || {})[list[i]]; if(b && b.name) return String(b.name).replace(/\s+/g, ' ').trim(); }
+  return '';
 }
 // Локація → гілка: «вручну» або назва = локація; інакше — єдина гілка цієї локації.
 function _invLocThreads(map){
@@ -2885,7 +2938,7 @@ function invPaidRedo(body){
   if(!month) return {ok:false, error:'month обовʼязковий'};
   var sh = _invSheet(false); if(!sh) return {ok:false, error:'листа немає'};
   var v = sh.getDataRange().getValues(), H = v[0].map(String), c = function(n){ return H.indexOf(n); };
-  var newChat = _invChatResolve(_invChatId()), lt = _invLocThreads(), out = {ok:true, dryRun:dryRun, deleted:0, sent:0, failed:0, items:[], example:''};
+  var newChat = _invChatResolve(_invChatId()), lt = _invLocThreads(), out = {ok:true, dryRun:dryRun, deleted:0, sent:0, failed:0, items:[], example:''}, _rctx = null;
   var n = 0;
   for(var r = 1; r < v.length; r++){
     if(String(v[r][c('статус')]).trim() !== INV_ST.PAID) continue;
@@ -2896,7 +2949,7 @@ function invPaidRedo(body){
     if(force && bot && force !== bot) force = '';   // лише якщо збігається з тим, що записано в заявці
     var delId = force || (m ? m[1] : ((bot && chat0 === newChat) ? bot : ''));
     if(bot && !delId) continue;   // уже надіслано в старій групі — не чіпаємо
-    var o = _invPaidFromRow(v[r], H), text = _invPaidTextFull(o), th = c('thread_id') >= 0 ? String(v[r][c('thread_id')] || '') : '';
+    var o = _invPaidFromRow(v[r], H, _rctx || (_rctx = _invPaidCtx())), text = _invPaidTextFull(o), th = c('thread_id') >= 0 ? String(v[r][c('thread_id')] || '') : '';
     var route = _invPaidRoute({messageId:v[r][c('message_id')], threadId:th, loc:o.loc}, lt);
     var it = {id:id, loc:o.loc, delete:delId || '', thread:route.thread, reply:route.reply, text:text};
     if(!out.example) out.example = text;
@@ -2907,6 +2960,54 @@ function invPaidRedo(body){
       it.ok = !!(s && s.ok); it.error = it.ok ? '' : String((s && s.description) || 'no send');
       if(it.ok){ out.sent++; _invSaveBotMsg(sh, c, r + 1, s); _invPaidLog(sh, c, r + 1, s); } else { out.failed++; _tgErr('inv:redo', 'заявка ' + id + ': ' + it.error); }
     }
+    out.items.push(it);
+  }
+  out.count = out.items.length;
+  return out;
+}
+// POST {action:'invPaidFix', actorId, month, year, dryRun} — CFO. Уже надіслані в нову групу «оплачено» (слід «оплачено→<група>:id» у лозі):
+//   текст із локацією / контрагентом (гілка → відправник → рахунок оплати; виписка) — editMessageText; якщо локація тепер має гілку,
+//   а повідомлення в загальній — видалити й надіслати в гілку. Знайдене дописується в порожні «локація» / «постачальник» заявки.
+function invPaidFix(body){
+  body = body || {};
+  if(!_bankCfo(body.actorId)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var month = Number(body.month) || 0, year = Number(body.year) || new Date().getFullYear(), dryRun = (body.dryRun !== false);
+  var sh = _invSheet(false); if(!sh) return {ok:false, error:'листа немає'};
+  var v = sh.getDataRange().getValues(), H = v[0].map(String), c = function(n){ return H.indexOf(n); };
+  var newChat = _invChatResolve(_invChatId()), ctx = _invPaidCtx(), lt = _invLocThreads(ctx.topics);
+  var out = {ok:true, dryRun:dryRun, edited:0, moved:0, unchanged:0, failed:0, locFixed:0, supFixed:0, locLeft:0, supLeft:0, items:[]}, n = 0;
+  var re = new RegExp('оплачено→' + newChat.replace(/-/g, '\\-') + ':(\\d+)', 'g');
+  for(var r = 1; r < v.length; r++){
+    if(String(v[r][c('статус')]).trim() !== INV_ST.PAID) continue;
+    var d = _invDmy(v[r][c('дата оплати')]); if(month && !(Number(d.slice(3, 5)) === month && Number(d.slice(6, 10)) === year)) continue;
+    var lg = String(v[r][c('лог')] || ''), all = lg.match(re); if(!all) continue;
+    var msgId = Number(/:(\d+)$/.exec(all[all.length - 1])[1]);
+    var old = _invPaidFromRow(v[r], H, false), o = _invPaidFromRow(v[r], H, ctx), text = _invPaidTextFull(o);
+    var th = String(v[r][c('thread_id')] || '');
+    var rOld = _invPaidRoute({messageId:v[r][c('message_id')], threadId:th, loc:old.loc}, lt), rNew = _invPaidRoute({messageId:v[r][c('message_id')], threadId:th, loc:o.loc}, lt);
+    var it = {id:String(v[r][c('invoice_id')]), msg:msgId, loc:o.loc || '?', locSrc:o.locSrc, supplier:o.supplier || '?', supSrc:o.supSrc,
+              action:(rNew.thread !== rOld.thread) ? 'перенести в гілку ' + rNew.thread : (text !== _invPaidTextFull(old) ? 'редагувати' : 'без змін'), text:text};
+    if(o.locSrc) out.locFixed++; if(o.supSrc) out.supFixed++; if(!o.loc) out.locLeft++; if(!o.supplier) out.supLeft++;
+    if(!dryRun && it.action !== 'без змін'){
+      if(n++) Utilities.sleep(1200);
+      var res;
+      if(rNew.thread !== rOld.thread){
+        _invApi('deleteMessage', {chat_id:newChat, message_id:msgId});
+        res = _invSendPaid(String(v[r][c('chat_id')] || ''), v[r][c('message_id')], text, th, o.loc);
+        if(res && res.ok){ out.moved++; _invSaveBotMsg(sh, c, r + 1, res); _invPaidLog(sh, c, r + 1, res); }
+      } else {
+        res = _invApi('editMessageText', {chat_id:newChat, message_id:msgId, text:text, parse_mode:'HTML', disable_web_page_preview:true});
+        if(res && res.ok) out.edited++;
+      }
+      it.ok = !!(res && res.ok); it.error = it.ok ? '' : String((res && res.description) || '');
+      if(!it.ok) out.failed++;
+      if(it.ok){   // знайдене — у порожні поля заявки
+        if(o.locSrc && c('локація') >= 0) sh.getRange(r + 1, c('локація') + 1).setValue(o.loc);
+        if(o.supSrc && c('постачальник') >= 0) sh.getRange(r + 1, c('постачальник') + 1).setValue(o.supplier);
+        if(o.locSrc || o.supSrc) sh.getRange(r + 1, c('лог') + 1).setValue(String(sh.getRange(r + 1, c('лог') + 1).getValue() || '') + ' · ' +
+          [o.locSrc ? 'локація ← ' + o.locSrc : '', o.supSrc ? 'контрагент ← виписка' : ''].filter(Boolean).join(', '));
+      }
+    } else if(it.action === 'без змін') out.unchanged++;
     out.items.push(it);
   }
   out.count = out.items.length;
@@ -4304,7 +4405,7 @@ function matchInvoicesToPayments(body){
     var lock = LockService.getScriptLock();
     try { lock.waitLock(30000); } catch(_le){ return {ok:false, error:'LOCK_TIMEOUT'}; }
     try {
-      var marked = 0, notified = 0, queued = 0;
+      var marked = 0, notified = 0, queued = 0, _pctx = null;
       good.forEach(function(x){
         var d = _payDate(x);
         var refAll = x.pays.map(function(p){ return String(p.ref||''); }).filter(Boolean).join('+');
@@ -4322,8 +4423,10 @@ function matchInvoicesToPayments(body){
           // ЄДИНЕ повідомлення бота в групу — див. v7.319.
           if(notify && inv.chatId && inv.messageId){
             // v7.406/7.534: не в банківський день або до 09:00 (Київ) — у чергу до найближчого банківського дня 09:00.
-            var _pt = _invPaidTextFull({dmy:d, loc:inv.loc, supplier:inv.supplier, amount:inv.amount, caption:inv.caption, number:inv.number});   // v7.570
-            if(_invQuietHours()){ _invQueuePaid(inv.chatId, inv.messageId, _invPaidTextFull({dmy:d, loc:inv.loc, supplier:inv.supplier, amount:inv.amount, caption:inv.caption, number:inv.number}), inv.id, inv.threadId); queued++; return; }
+            var _pi = _invPaidFromRow(v[inv.rowNum - 1], v[0].map(String), _pctx || (_pctx = _invPaidCtx()));   // v7.571: локація / контрагент без «?»
+            _pi.dmy = d; inv.loc = _pi.loc;
+            var _pt = _invPaidTextFull(_pi);
+            if(_invQuietHours()){ _invQueuePaid(inv.chatId, inv.messageId, _invPaidTextFull(_pi), inv.id, inv.threadId); queued++; return; }
             if(notified) Utilities.sleep(3100);   // v7.397: ліміт Telegram у групу ~20/хв
             var res = _invSendPaid(inv.chatId, inv.messageId, _pt, inv.threadId, inv.loc);
             if(res && res.ok){ notified++; _invSaveBotMsg(sh, c, inv.rowNum, res); _invPaidLog(sh, c, inv.rowNum, res); }
@@ -4393,12 +4496,13 @@ function _invFlushPaidQueue__impl(){
     var _sh = null, _c = null, _rowOf = {};   // v7.411: id відправленого «✅ Оплачено» — у заявку (для відкату)
     try { _sh = _invSheet(false); var _v = _sh.getDataRange().getValues(), _H = _v[0].map(String); _c = function(n){ return _H.indexOf(n); };
       for (var i = 1; i < _v.length; i++) _rowOf[String(_v[i][_c('invoice_id')])] = i + 1; } catch(_s){ _sh = null; }
-    var _v2 = null, _H2 = null; try { if (_sh){ _v2 = _sh.getDataRange().getValues(); _H2 = _v2[0].map(String); } } catch(_r2){}
+    var _v2 = null, _H2 = null, _qctx = null; try { if (_sh){ _v2 = _sh.getDataRange().getValues(); _H2 = _v2[0].map(String); } } catch(_r2){}
     q.forEach(function(x){
       if (n++) Utilities.sleep(3100);
       var _row = (_v2 && _rowOf[x.id]) ? _v2[_rowOf[x.id] - 1] : null;
-      var _txt = _row ? _invPaidTextFull(_invPaidFromRow(_row, _H2)) : x.t;   // v7.570: текст — із заявки на момент відправки
-      var res = _invSendPaid(x.c, x.m, _txt, x.th, _row ? String(_row[_H2.indexOf('локація')] || '') : '');
+      var _po = _row ? _invPaidFromRow(_row, _H2, _qctx || (_qctx = _invPaidCtx())) : null;   // v7.571
+      var _txt = _po ? _invPaidTextFull(_po) : x.t;   // v7.570: текст — із заявки на момент відправки
+      var res = _invSendPaid(x.c, x.m, _txt, x.th, _po ? _po.loc : '');
       if (!(res && res.ok)){ left.push(x); _tgErr('inv:notify', 'заявка ' + x.id + ' (09:00): ' + String((res && res.description) || 'no send')); }
       else if (_sh && _rowOf[x.id]){ _invSaveBotMsg(_sh, _c, _rowOf[x.id], res); _invPaidLog(_sh, _c, _rowOf[x.id], res); }
     });
@@ -6450,7 +6554,8 @@ function invoiceResendPaid(body){
     if(n++) Utilities.sleep(3100);
     var d = _invDmy(v[r][H.indexOf('дата оплати')]);
     var _thI = H.indexOf('thread_id'), _th = _thI >= 0 ? String(v[r][_thI] || '') : '';
-    var s = _invSendPaid(chat, msg, _invPaidTextFull(_invPaidFromRow(v[r], H)), _th, String(v[r][H.indexOf('локація')] || ''));   // v7.570
+    var _po = _invPaidFromRow(v[r], H);   // v7.571
+    var s = _invSendPaid(chat, msg, _invPaidTextFull(_po), _th, _po.loc);   // v7.570
     if(s && s.ok){ try { var _cf = function(n){ return H.indexOf(n); }; _invSaveBotMsg(sh, _cf, r + 1, s); _invPaidLog(sh, _cf, r + 1, s); } catch(_sv){} }
     else _tgErr('inv:notify', 'заявка '+id+' (повтор): '+String((s&&s.description)||'no send'));
     res.push({id:id, ok:!!(s && s.ok), error:(s && s.ok) ? '' : String((s&&s.description)||'no send')});
@@ -9764,7 +9869,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.570', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.571', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -10067,6 +10172,7 @@ function doPost(e) {
     else if (body.action === 'groupRenameApply')          result = groupRenameApply(body);                  // v7.435 стандарт назв груп (CFO; dryRun)
     else if (body.action === 'setDopMarkGroup')           result = setDopMarkGroup(body);                    // v7.524 група окремих відміток → чинна (CFO; dryRun)
     else if (body.action === 'invTopicsScan')             result = invTopicsScan(body);                      // v7.569 гілки групи рахунків (CFO)
+    else if (body.action === 'invPaidFix')                result = invPaidFix(body);                         // v7.571 «оплачено» — локація / контрагент редагуванням (CFO; dryRun)
     else if (body.action === 'invPaidRedo')               result = invPaidRedo(body);                        // v7.570 «оплачено» — дописати / замінити (CFO; dryRun)
     else if (body.action === 'invTopicSetLoc')            result = invTopicSetLoc(body);                     // v7.569 гілка → локація вручну (CFO)
     else if (body.action === 'notesBuild')                result = notesBuild(body);                         // v7.567 примітки-розшифровки (CFO; dryRun)

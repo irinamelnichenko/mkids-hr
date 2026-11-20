@@ -755,6 +755,28 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
          kar: {thread: 5, reply: 0}, none: {thread: 0, reply: 794}});
 }
 
+// ── v7.571: «оплачено» — локація (гілка → відправник → рахунок оплати) і контрагент із виписки ──
+{
+  const W = new Function([fn('_invSenderLocs'), fn('_invPickLoc'), fn('_invSupplierFromRefs'), fn('_invTopicLocFromMap')].join('\n') +
+    '\nreturn {_invSenderLocs, _invPickLoc, _invSupplierFromRefs, _invTopicLocFromMap};')();
+  const H = ['invoice_id', 'від кого', 'локація'];
+  const v = [H, [1, '@mkidsBrovary', 'Бровари'], [2, '@mkidsBrovary', 'Бровари'], [3, '@mkidsBrovary', ''], [4, '@Ira_Melnichenk0', 'Тичини'], [5, '@Ira_Melnichenk0', 'Пуща'],
+    [6, 'm.Kids Пуща-Водиця', 'Пуща'], [7, 'Ольга', 'Позняки'], [8, 'Ольга', 'Позняки'], [9, 'Ольга', 'Кухня Карʼєрна (не локація)']];
+  const SL = W._invSenderLocs(v, H);
+  const IB = {'UA093052990000026000010124708': ['Бровари'], 'UA723052990000026000046205925': ['Школа 228'], 'UA111': ['Осокорки', 'Школа Осокорки']};
+  const P = (x) => W._invPickLoc(x, SL, IB);
+  check('рахунки: локація для «оплачено»', 'гілка → відправник (усі його заявки — одна локація, ≥ 2) → рахунок оплати (IBAN однієї локації); CFO і спільний рахунок — «?»',
+        {sl: SL, th: P({threadLoc: 'Тичини', sender: '@mkidsBrovary'}), snd: P({sender: '@mkidsBrovary', iban: 'UA723052990000026000046205925'}),
+         iban: P({sender: '@Ira_Melnichenk0', iban: 'UA72 3052 9900 0002 6000 0462 0592 5'}), shared: P({sender: '@Ira_Melnichenk0', iban: 'UA111'}), one: P({sender: 'm.Kids Пуща-Водиця'})},
+        {sl: {'@mkidsBrovary': 'Бровари', 'Ольга': 'Позняки'}, th: {loc: 'Тичини', src: 'гілка'}, snd: {loc: 'Бровари', src: 'відправник'},
+         iban: {loc: 'Школа 228', src: 'рахунок оплати'}, shared: {loc: '', src: ''}, one: {loc: '', src: ''}});
+  const BP = {'JBKLQBJOF7VNX2.1': {name: 'ФОП  Ковальчук   Ігор'}, 'B2': {name: ''}};
+  check('рахунки: контрагент із виписки', 'отримувач за matched_ref; кілька референсів — перший відомий; гілка кухні лишається міткою кухні',
+        {one: W._invSupplierFromRefs('JBKLQBJOF7VNX2.1', BP), multi: W._invSupplierFromRefs('B2+JBKLQBJOF7VNX2.1', BP), none: W._invSupplierFromRefs('', BP),
+         kitchen: W._invTopicLocFromMap({'14': {loc: 'Кухня Карʼєрна (не локація)'}}, '14.0')},
+        {one: 'ФОП Ковальчук Ігор', multi: 'ФОП Ковальчук Ігор', none: '', kitchen: 'Кухня Карʼєрна (не локація)'});
+}
+
 // ── v7.562: Предметники (фронт) — «Не передбачено для цієї групи» лише за справжньою нормою 0 ──
 {
   const hp = path.join(__dirname, '..', '..', 'predmetnyky.html');
