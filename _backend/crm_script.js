@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.567
+// m.kids CRM — Google Apps Script v7.568
+// v7.568: примітки — оновлення без власного тригера (ліміт тригерів проєкту вичерпано): notesTick їде на tgSlaCheck (5 хв), не частіше ніж раз на 10 хв, до 2 хв за раз; опис (бот рахунків / виписка) — в один рядок; «бюджет навчання» з нулем у клітинці не показує договір як «− вручну»
 // v7.567: примітки-розшифровки в клітинках (суми не змінюються): Payment (до BJ) — факт навч/вступ/доп (дата, сума, платник, рахунок), бюджет доп (заняття × ціна, дати), бюджет навч (договір, знижка відпустка/лікарняний); OPEX — стаття, місяць, дата · контрагент · сума · опис (з бота рахунків або призначення виписки); Salary — виплачено (відомість/карта, банк ФОП, готівка) і нараховано (ставка, допи, предметники, блок «Виплачено»); «± вручну X», якщо сума не сходиться; ручна примітка лишається після «✎»; черга NOTES_DIRTY після записів + notesTick (10 хв, щоночі повний прохід); notesBuild / notesSetup (CFO); Банк_Призначення — призначення платежів з кожного bankFetch; OPEX_Витрати_Лог + Контрагент, Призначення; червень–вересень не чіпаємо
 // v7.566: звірка, «вже внесено» — reconcilePreview віддає applied[]: на кого внесено платіж (дитина, рядок Payment, місяць, колонка навч / вступ / доп, сума, коли, ким) — з «Звірки_Платежів» за референсом; кілька дітей — усі; запис без дитини — appliedNoChild («⚠ внесено, дитину не знайдено»)
 // v7.565: номери відміток допів унікальні — новий № = max(усіх №, верхня межа ATT_ID_HWM) + 1 (було «№ останнього рядка + 1»: відновлені/перенесені в кінець аркуша старі рядки давали повтори — 204 спільні №); renumberAttendanceIds (CFO, dryRun) перенумеровує повтори; видалення відмітки — лише № + дитина + дата + заняття, не збігається — не видаляє, помилка; червень–вересень 2026 заморожені назавжди (FROZEN_MONTHS) — як закриті, але без відкриття: жоден експорт Payment/Salary, правка чи відмітка туди не пише
@@ -9534,7 +9535,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.567', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.568', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -14686,7 +14687,7 @@ function getTriggerStats(params){
     return {ok:true, quotaMin:90, triggers:trig, days:out};
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
-function tgSlaCheck(e){ var _t = Date.now(); try { return _tgSlaCheck__impl(e); } finally { _trigAcc('tgSlaCheck', _t); } }
+function tgSlaCheck(e){ var _t = Date.now(); try { return _tgSlaCheck__impl(e); } finally { _trigAcc('tgSlaCheck', _t); try { _notesTickPiggy(); } catch(_n){} } }   // v7.568 + примітки
 function invoiceQueueTick(e){ var _t = Date.now(); try { return _invoiceQueueTick__impl(e); } finally { _trigAcc('invoiceQueueTick', _t); } }
 function dashSnapshotTick(e){ var _t = Date.now(); try { return _dashSnapshotTick__impl(e); } finally { _trigAcc('dashSnapshotTick', _t); } }
 function bankNightly(e){ var _t = Date.now(); try { return _bankNightly__impl(e); } finally { _trigAcc('bankNightly', _t); } }
@@ -45996,7 +45997,8 @@ function _notesPayment(loc, year, months, dryRun){
       });
       notes.budDop[row1] = _noteCompose(nm + ', бюджет допів, ' + mon, _noteDopLines(marks[nk + '|' + (m - 1)] || []), _opexNum(data[r][cols.budDop]));
       var bl = [];
-      if (contract[nk]) bl.push({text:'договір: ' + _noteMoney(contract[nk]), amount:contract[nk]});
+      var _bn = _opexNum(data[r][cols.budNavch]);
+      if (contract[nk] && _bn) bl.push({text:'договір: ' + _noteMoney(contract[nk]), amount:contract[nk]});   // v7.568: нуль у клітинці — договір не «− вручну»
       var je = vac[_journalNormName(nm)];
       if (je && je.sum) bl.push({text:'знижка відпустка / лікарняний: −' + _noteMoney(Math.abs(je.sum)), amount:-Math.abs(je.sum)});
       notes.budNavch[row1] = _noteCompose(nm + ', бюджет навчання, ' + mon, bl, _opexNum(data[r][cols.budNavch]));
@@ -46032,7 +46034,7 @@ function _notesOpex(loc, year, months, dryRun){
     var row = catRow[_opexNormalizeCategoryName(cat).trim().toLowerCase()]; if (!row) return;
     var ref = String(r[3] || '').trim(), b = bp[ref] || {}, iv = inv[ref] || {}, c = cmap[_opexContractorKey(r[4], '')] || {};
     var who = String(r[12] || '').trim() || iv.supplier || c.name || b.name || ('ЄДРПОУ ' + String(r[4] || '—'));
-    var what = iv.caption || String(r[13] || '').trim() || b.purpose || '';
+    var what = String(iv.caption || String(r[13] || '').trim() || b.purpose || '').replace(/\s+/g, ' ').trim();   // v7.568 один рядок
     (lines[row + '|' + Number(r[7])] = lines[row + '|' + Number(r[7])] || []).push({text:_noteJoin([_noteDay(r[2]), who, _noteMoney(r[5]), what.slice(0, 160)]), amount:_opexNum(r[5])});
   });
   _noteCfgRows(CASH_LOG_SHEET).forEach(function(r){
@@ -46174,8 +46176,16 @@ function _notesMarkDirty(keys){
   } catch(e){ Logger.log('[notesDirty] %s', e && e.message); }
 }
 // Тригер: черга + раз на добу (після 03:00 за Києвом) повний прохід поточного й попереднього місяця.
-function notesTick(){
+// v7.568: без власного тригера — раз на 10 хв із tgSlaCheck (5 хв), бюджет 2 хв.
+function _notesTickPiggy(){
+  var P = PropertiesService.getScriptProperties(), last = Number(P.getProperty('NOTES_LAST_TICK')) || 0;
+  if (Date.now() - last < 10 * 60 * 1000) return;
+  P.setProperty('NOTES_LAST_TICK', String(Date.now()));
+  notesTick(2 * 60 * 1000);
+}
+function notesTick(budgetMs){
   var P = PropertiesService.getScriptProperties(), t0 = Date.now();
+  budgetMs = (typeof budgetMs === 'number' && budgetMs > 0) ? budgetMs : 4.5 * 60 * 1000;
   var now = new Date(), today = Utilities.formatDate(now, 'Europe/Kiev', 'yyyy-MM-dd'), hour = Number(Utilities.formatDate(now, 'Europe/Kiev', 'H'));
   var cur = {}; try { cur = JSON.parse(P.getProperty('NOTES_DIRTY') || '{}') || {}; } catch(_j){}
   if (hour >= 3 && P.getProperty('NOTES_FULL_DAY') !== today){
@@ -46186,7 +46196,7 @@ function notesTick(){
   }
   var keys = Object.keys(cur);
   for (var i = 0; i < keys.length; i++){
-    if (Date.now() - t0 > 4.5 * 60 * 1000) break;
+    if (Date.now() - t0 > budgetMs) break;
     var p = keys[i].split('|');
     try { notesBuild({actorId:1, _internal:true, kind:p[0], loc:p[1], year:Number(p[2]), months:[Number(p[3])], dryRun:false}); } catch(e){ Logger.log('[notesTick] %s %s', keys[i], e && e.message); }
     delete cur[keys[i]];
@@ -46196,7 +46206,10 @@ function notesTick(){
 // POST {action:'notesSetup', actorId} — CFO: тригер notesTick кожні 10 хв (ідемпотентно).
 function notesSetup(body){
   var a = _promoActor(body || {}); if (!(a && _roleKey(a.role) === 'cfo')) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
-  var has = ScriptApp.getProjectTriggers().some(function(t){ return t.getHandlerFunction() === 'notesTick'; });
-  if (!has) ScriptApp.newTrigger('notesTick').timeBased().everyMinutes(10).create();
-  return {ok:true, trigger:has ? 'вже є' : 'створено'};
+  var tr = ScriptApp.getProjectTriggers(), has = tr.some(function(t){ return t.getHandlerFunction() === 'notesTick'; });
+  var sla = tr.some(function(t){ return t.getHandlerFunction() === 'tgSlaCheck'; });
+  if (has) return {ok:true, trigger:'notesTick вже є'};
+  if (sla) return {ok:true, trigger:'через tgSlaCheck (кожні 5 хв, примітки — раз на 10 хв)'};   // v7.568: ліміт тригерів
+  try { ScriptApp.newTrigger('notesTick').timeBased().everyMinutes(10).create(); return {ok:true, trigger:'створено'}; }
+  catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
