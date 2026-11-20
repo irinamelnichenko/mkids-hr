@@ -2769,7 +2769,7 @@ function _invPaidFromRow(row, H, ctx){
     ctx = ctx || _invPaidCtx();
     if(!o.loc){ var pl = _invPickLoc({threadLoc:_invTopicLocFromMap(ctx.topics, g('thread_id')), sender:g('від кого'), iban:g('рахунок оплати')}, ctx.senderLoc, ctx.ibanLocs);
       o.loc = pl.loc; o.locSrc = pl.src; }
-    if(!o.supplier){ var sp = _invSupplierFromRefs(g('matched_ref'), ctx.bp); if(sp){ o.supplier = sp; o.supSrc = 'виписка'; } }
+    if(!o.supplier || _invSupGeneric(o.supplier)){ var sp = _invSupplierFromRefs(g('matched_ref'), ctx.bp); if(sp){ o.supplier = sp; o.supSrc = 'виписка'; } }
   } catch(_c){}
   return o;
 }
@@ -2810,6 +2810,12 @@ function _invPickLoc(x, senderLoc, ibanLocs){
   var ib = String(x.iban || '').replace(/\s+/g, '').toUpperCase(), ls = (ibanLocs || {})[ib] || [];
   if(ls.length === 1) return {loc:ls[0], src:'рахунок оплати'};
   return {loc:'', src:''};
+}
+// Чиста: розпізнаний «контрагент» — загальне слово, а не назва (OCR узяв підпис поля).
+function _invSupGeneric(x){
+  var t = String(x || '').toLowerCase().replace(/[«»"'’ʼ.,:\s-]+/g, ' ').trim();
+  return !t || /^(замовник|одержувач|отримувач|постачальник|виконавець|платник|покупець|продавець)$/.test(t) ||
+         /^(фізична особа ?підпри[єе]мець|фоп|тов|пп|товариство з обмеженою відповідальністю)$/.test(t);
 }
 // Чиста: отримувач із виписки за референсом (кілька — «ref1+ref2», беремо перший відомий).
 function _invSupplierFromRefs(refs, bp){

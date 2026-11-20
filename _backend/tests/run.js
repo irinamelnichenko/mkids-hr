@@ -757,8 +757,8 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
 
 // ── v7.571: «оплачено» — локація (гілка → відправник → рахунок оплати) і контрагент із виписки ──
 {
-  const W = new Function([fn('_invSenderLocs'), fn('_invPickLoc'), fn('_invSupplierFromRefs'), fn('_invTopicLocFromMap')].join('\n') +
-    '\nreturn {_invSenderLocs, _invPickLoc, _invSupplierFromRefs, _invTopicLocFromMap};')();
+  const W = new Function([fn('_invSenderLocs'), fn('_invPickLoc'), fn('_invSupplierFromRefs'), fn('_invTopicLocFromMap'), fn('_invSupGeneric')].join('\n') +
+    '\nreturn {_invSenderLocs, _invPickLoc, _invSupplierFromRefs, _invTopicLocFromMap, _invSupGeneric};')();
   const H = ['invoice_id', 'від кого', 'локація'];
   const v = [H, [1, '@mkidsBrovary', 'Бровари'], [2, '@mkidsBrovary', 'Бровари'], [3, '@mkidsBrovary', ''], [4, '@Ira_Melnichenk0', 'Тичини'], [5, '@Ira_Melnichenk0', 'Пуща'],
     [6, 'm.Kids Пуща-Водиця', 'Пуща'], [7, 'Ольга', 'Позняки'], [8, 'Ольга', 'Позняки'], [9, 'Ольга', 'Кухня Карʼєрна (не локація)']];
@@ -775,6 +775,10 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
         {one: W._invSupplierFromRefs('JBKLQBJOF7VNX2.1', BP), multi: W._invSupplierFromRefs('B2+JBKLQBJOF7VNX2.1', BP), none: W._invSupplierFromRefs('', BP),
          kitchen: W._invTopicLocFromMap({'14': {loc: 'Кухня Карʼєрна (не локація)'}}, '14.0')},
         {one: 'ФОП Ковальчук Ігор', multi: 'ФОП Ковальчук Ігор', none: '', kitchen: 'Кухня Карʼєрна (не локація)'});
+  check('рахунки: загальне слово замість контрагента', '«Замовник», «Одержувач», голе «ФІЗИЧНА ОСОБА ПІДПРИЕМЕЦЬ» / «Товариство з обмеженою відповідальністю» — беремо отримувача з виписки; справжня назва лишається',
+        {g: ['Замовник', 'Одержувач', 'ФІЗИЧНА ОСОБА ПІДПРИЕМЕЦЬ', 'Товариство з обмеженою відповідальністю', ''].map(W._invSupGeneric),
+         real: ['ФОП Чаус Я.О.', 'ТОВ "Броварський ЗБК"', 'Назва ФОП Мельник Діана Олегівна'].map(W._invSupGeneric)},
+        {g: [true, true, true, true, true], real: [false, false, false]});
 }
 
 // ── v7.562: Предметники (фронт) — «Не передбачено для цієї групи» лише за справжньою нормою 0 ──
