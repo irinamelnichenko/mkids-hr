@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.568
+// m.kids CRM — Google Apps Script v7.569
+// v7.569: бот рахунків — «оплачено» знову доходить: група рахунків стала супергрупою (гілки), а «✅ Оплачено» йшло на старий chat_id заявки («group chat was upgraded to a supergroup chat», 224 відмови з 17.11) — INV_CHAT_MIGRATE старий → новий, повтор у нову групу; відповідь — у гілку рахунку (reply_parameters, allow_sending_without_reply); текст «✅ Оплачено ДД.ММ — сума»; гілки: thread_id заявки, назви гілок (INV_TOPICS) з повідомлень і invTopicsScan, гілка → локація (однозначно за назвою, інакше — показати; invTopicSetLoc), рахунок у гілці — локація гілки; черга «оплачено» до 09:00 — розсилка з invoiceQueueTick (тригер на час не обов'язковий: ліміт тригерів)
 // v7.568: примітки — оновлення без власного тригера (ліміт тригерів проєкту вичерпано): notesTick їде на tgSlaCheck (5 хв), не частіше ніж раз на 10 хв, до 2 хв за раз; опис (бот рахунків / виписка) — в один рядок; «бюджет навчання» з нулем у клітинці не показує договір як «− вручну»
 // v7.567: примітки-розшифровки в клітинках (суми не змінюються): Payment (до BJ) — факт навч/вступ/доп (дата, сума, платник, рахунок), бюджет доп (заняття × ціна, дати), бюджет навч (договір, знижка відпустка/лікарняний); OPEX — стаття, місяць, дата · контрагент · сума · опис (з бота рахунків або призначення виписки); Salary — виплачено (відомість/карта, банк ФОП, готівка) і нараховано (ставка, допи, предметники, блок «Виплачено»); «± вручну X», якщо сума не сходиться; ручна примітка лишається після «✎»; черга NOTES_DIRTY після записів + notesTick (10 хв, щоночі повний прохід); notesBuild / notesSetup (CFO); Банк_Призначення — призначення платежів з кожного bankFetch; OPEX_Витрати_Лог + Контрагент, Призначення; червень–вересень не чіпаємо
 // v7.566: звірка, «вже внесено» — reconcilePreview віддає applied[]: на кого внесено платіж (дитина, рядок Payment, місяць, колонка навч / вступ / доп, сума, коли, ким) — з «Звірки_Платежів» за референсом; кілька дітей — усі; запис без дитини — appliedNoChild («⚠ внесено, дитину не знайдено»)
@@ -2702,7 +2703,8 @@ var INV_HEADER = ['invoice_id','created_at','chat_id','message_id','від ко�
   'спроб',    // v7.316: лічильник невдалих розпізнавань (INV_MAX_TRIES → статус «помилка»)
   'закрито','рахунок оплати','bot_msg_id',
   'сума OCR','питання_msg',
-  'позиції','стаття_джерело','стаття_довіра','стаття_питання'];   // v7.544: позиції рахунку (ШІ) · звідки стаття · впевненість · id питання в групі «Банк»   // v7.538: сума з файлу (перевірка) · id питання бота «Сума X чи Y?»   // v7.411: хто/як закрив · IBAN платника · id «✅ Оплачено» (для відкату)
+  'позиції','стаття_джерело','стаття_довіра','стаття_питання',
+  'thread_id'];   // v7.569: гілка (topic) групи рахунків   // v7.544: позиції рахунку (ШІ) · звідки стаття · впевненість · id питання в групі «Банк»   // v7.538: сума з файлу (перевірка) · id питання бота «Сума X чи Y?»   // v7.411: хто/як закрив · IBAN платника · id «✅ Оплачено» (для відкату)
 // Статуси заявки. «новий» — файл ще не читали (етап 3 його підхопить).
 var INV_ST = {NEW:'новий', PARSED:'розпізнано', PAID:'оплачено', REJECTED:'відхилено', ERR:'помилка'};
 
@@ -2725,6 +2727,125 @@ function _invSend(chatId, text, extra){
   var p = {chat_id:chatId, text:String(text), parse_mode:'HTML', disable_web_page_preview:true};
   if(extra) for(var k in extra) p[k]=extra[k];
   return _invApi('sendMessage', p);
+}
+// ═══ v7.569: супергрупа й гілки групи рахунків ═══
+// Група → супергрупа (увімкнули гілки) — новий chat_id. Старі заявки тримають старий: відповідь туди Telegram відхиляє.
+function _invMigrMap(){ try { return JSON.parse(_invProp('INV_CHAT_MIGRATE') || '{}') || {}; } catch(_e){ return {}; } }
+function _invMigrSave(from, to){
+  if(!from || !to || String(from) === String(to)) return;
+  var m = _invMigrMap(); m[String(from)] = String(to);
+  PropertiesService.getScriptProperties().setProperty('INV_CHAT_MIGRATE', JSON.stringify(m));
+}
+function _invChatResolve(chat, map){
+  map = map || _invMigrMap(); var c = String(chat || ''), n = 0;
+  while(map[c] && n++ < 5) c = map[c];
+  return c;
+}
+// «✅ Оплачено ДД.ММ — сума»
+function _invPaidText(dmy, amount){
+  var a = Math.round((Number(amount) || 0) * 100) / 100, s = '';
+  if(a){ var i = Math.floor(a), f = Math.round((a - i) * 100); s = ' — ' + String(i).replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + (f ? ',' + (f < 10 ? '0' : '') + f : ''); }
+  return '✅ Оплачено ' + String(dmy || '').slice(0, 5) + s;
+}
+// Параметри відповіді: у гілку рахунку, відповіддю на повідомлення з рахунком; зникло — без відповіді, але в ту ж гілку.
+function _invPaidParams(messageId, threadId){
+  var x = {reply_parameters:{message_id:Number(messageId), allow_sending_without_reply:true}};
+  if(Number(threadId) > 0) x.message_thread_id = Number(threadId);
+  return x;
+}
+function _invSendPaid(chatId, messageId, text, threadId){
+  var chat = _invChatResolve(chatId), res = _invSend(chat, text, _invPaidParams(messageId, threadId));
+  var to = res && !res.ok && res.parameters && res.parameters.migrate_to_chat_id;
+  if(to){ _invMigrSave(chat, String(to)); res = _invSend(String(to), text, _invPaidParams(messageId, threadId)); }
+  if(res && !res.ok && /thread not found|TOPIC_/i.test(String(res.description || '')) && Number(threadId) > 0)
+    res = _invSend(_invChatResolve(chat), text, _invPaidParams(messageId, 0));   // гілку видалили — без гілки
+  return res;
+}
+// Назви гілок: {thread_id: назва}. Беремо з повідомлень (створення / перейменування гілки, reply_to_message у гілці).
+function _invTopics(){ try { return JSON.parse(_invProp('INV_TOPICS') || '{}') || {}; } catch(_e){ return {}; } }
+function _invTopicCapture(msg){
+  try {
+    var th = (msg && msg.is_topic_message && msg.message_thread_id) ? String(msg.message_thread_id) : '';
+    var nm = (msg.forum_topic_created && msg.forum_topic_created.name) || (msg.forum_topic_edited && msg.forum_topic_edited.name) ||
+             (msg.reply_to_message && msg.reply_to_message.forum_topic_created && msg.reply_to_message.forum_topic_created.name) || '';
+    if(msg.forum_topic_created && !th) th = String(msg.message_id || '');
+    if(!th || !nm) return;
+    var t = _invTopics(); if(t[th] === nm) return;
+    t[th] = String(nm); PropertiesService.getScriptProperties().setProperty('INV_TOPICS', JSON.stringify(t));
+  } catch(_e){}
+}
+// Гілка → локація. Ручна прив'язка (INV_TOPIC_LOC) першою; інакше — ОДНОЗНАЧНО за назвою гілки (як локація в підписі).
+//   Чиста частина (тест): назва + перелік локацій → локація або ''.
+function _invTopicLocOf(name, locs){
+  var n = String(name || '').trim(); if(!n) return {loc:'', why:'без назви'};
+  var fold = function(x){ return String(x || '').toLowerCase().replace(/[’ʼ`']/g, "'").replace(/[\s\-\.]+/g, ' ').trim(); };
+  var f = fold(n), exact = locs.filter(function(l){ return fold(l) === f; });
+  if(exact.length === 1) return {loc:exact[0], why:'назва = локація'};
+  var hit = locs.filter(function(l){ var fl = fold(l); return fl && (f.indexOf(fl) !== -1 || fl.indexOf(f) !== -1); });
+  if(hit.length > 1){   // «Школа Осокорки» містить і «Осокорки», і «Школа Осокорки» — беремо найдовший, якщо він містить решту
+    hit.sort(function(a, b){ return b.length - a.length; });
+    if(hit.slice(1).every(function(h){ return fold(hit[0]).indexOf(fold(h)) !== -1; }) && f.indexOf(fold(hit[0])) !== -1) return {loc:hit[0], why:'назва містить локацію'};
+    return {loc:'', why:'неоднозначно: ' + hit.join(' / ')};
+  }
+  if(hit.length === 1){
+    if(/школ/.test(f) !== /школ/.test(fold(hit[0]))) return {loc:'', why:'неоднозначно: садок чи школа (' + hit[0] + ')'};   // «Осокорки сад і школа»
+    return {loc:hit[0], why:'назва містить локацію'};
+  }
+  return {loc:'', why:'не знайдено локації'};
+}
+function _invTopicLocMap(){
+  var man = {}; try { man = JSON.parse(_invProp('INV_TOPIC_LOC') || '{}') || {}; } catch(_m){}
+  var locs = []; try { locs = _invLocList(); } catch(_l){}
+  var t = _invTopics(), out = {};
+  Object.keys(t).forEach(function(th){
+    if(man[th]) out[th] = {name:t[th], loc:man[th], why:'вручну'};
+    else { var r = _invTopicLocOf(t[th], locs); out[th] = {name:t[th], loc:r.loc, why:r.why}; }
+  });
+  Object.keys(man).forEach(function(th){ if(!out[th]) out[th] = {name:'', loc:man[th], why:'вручну'}; });
+  return out;
+}
+function _invThreadLoc(threadId){ var m = _invTopicLocMap()[String(threadId || '')]; return (m && m.loc) || ''; }
+// POST {action:'invTopicsScan', actorId, maxId?} — CFO: знайти гілки групи рахунків і їхні назви.
+//   Номери гілок — sendChatAction (без повідомлень); назви невідомих — тихе службове «·» у гілку (без звуку),
+//   з відповіді Telegram береться назва гілки, повідомлення одразу видаляється.
+function invTopicsScan(body){
+  body = body || {};
+  if(!_bankCfo(body.actorId)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var chat = _invChatResolve(_invChatId()), tok = _invTok(); if(!chat || !tok) return {ok:false, error:'немає INVOICE_CHAT_ID / токена'};
+  var maxId = Number(body.maxId) || 0;
+  if(!maxId){ try { var sh = _invSheet(false), v = sh.getDataRange().getValues(), H = v[0].map(String);
+    for(var r = 1; r < v.length; r++) if(_invChatResolve(v[r][H.indexOf('chat_id')]) === chat) maxId = Math.max(maxId, Number(v[r][H.indexOf('message_id')]) || 0); } catch(_v){} }
+  maxId = Math.min(Math.max(maxId + 50, 100), 3000);
+  var url = 'https://api.telegram.org/bot' + tok + '/sendChatAction', found = [];
+  for(var a = 2; a <= maxId; a += 40){
+    var reqs = [], ids = [];
+    for(var id = a; id < a + 40 && id <= maxId; id++){ ids.push(id);
+      reqs.push({url:url, method:'post', contentType:'application/json', muteHttpExceptions:true, payload:JSON.stringify({chat_id:chat, action:'typing', message_thread_id:id})}); }
+    UrlFetchApp.fetchAll(reqs).forEach(function(rs, i){ try { if(JSON.parse(rs.getContentText()).ok) found.push(ids[i]); } catch(_j){} });
+  }
+  var t = _invTopics(), probed = 0;
+  found.forEach(function(th){
+    if(t[String(th)]) return;
+    var res = _invSend(chat, '·', {message_thread_id:th, disable_notification:true}); probed++;
+    var nm = res && res.ok && res.result && res.result.reply_to_message && res.result.reply_to_message.forum_topic_created && res.result.reply_to_message.forum_topic_created.name;
+    if(res && res.ok) _invApi('deleteMessage', {chat_id:chat, message_id:res.result.message_id});
+    if(nm) t[String(th)] = String(nm);
+    Utilities.sleep(400);
+  });
+  PropertiesService.getScriptProperties().setProperty('INV_TOPICS', JSON.stringify(t));
+  var map = _invTopicLocMap();
+  return {ok:true, chat:chat, scannedTo:maxId, threads:found, probed:probed,
+          topics:Object.keys(map).map(function(th){ return {thread:Number(th), name:map[th].name, loc:map[th].loc, why:map[th].why}; })};
+}
+// POST {action:'invTopicSetLoc', actorId, thread, loc} — CFO: ручна прив'язка гілки (loc:'' — зняти).
+function invTopicSetLoc(body){
+  body = body || {};
+  if(!_bankCfo(body.actorId)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var th = String(Number(body.thread) || ''); if(!th) return {ok:false, error:'thread обовʼязковий'};
+  var man = {}; try { man = JSON.parse(_invProp('INV_TOPIC_LOC') || '{}') || {}; } catch(_m){}
+  if(body.loc) man[th] = String(body.loc).trim(); else delete man[th];
+  PropertiesService.getScriptProperties().setProperty('INV_TOPIC_LOC', JSON.stringify(man));
+  return {ok:true, map:_invTopicLocMap()};
 }
 // Лист заявок у CONFIG-таблиці (поруч із OPEX_Контрагенти та журналами витрат).
 // Схема еволюціонує ДОПИСУВАННЯМ — порядок наявних колонок не зсуваємо.
@@ -2955,6 +3076,7 @@ function tgInvoiceWebhook(e){
       if(_ml){ _bankMigrate(_ml, chatId, _to); return {ok:true, bankMigrated:_ml}; }
       if(allow && chatId !== allow) return {ok:true, ignored:'migrate-other'};
       PropertiesService.getScriptProperties().setProperty('INVOICE_CHAT_ID', _to);
+      _invMigrSave(chatId, _to);   // v7.569: старі заявки → нова група
       _tgErr('inv:migrate', 'INVOICE_CHAT_ID '+allow+' → '+_to);
       return {ok:true, migrated:_to};
     }
@@ -2970,6 +3092,8 @@ function tgInvoiceWebhook(e){
     if(_bkLoc) return _bankOnGroupMessage(_bkLoc, msg, chatId);
     if(chatId && chatId !== allow && msg.text){ var _bk = _bankLinkFromMessage(msg, chatId); if(_bk) return _bk; }
     if(allow && chatId && chatId !== allow) return {ok:true, ignored:'chat', chat:chatId};
+    _invTopicCapture(msg);   // v7.569: назва гілки
+    if(msg.forum_topic_created || msg.forum_topic_edited) return {ok:true, kind:'topic'};
 
     // ── файл? ──
     var kind = '', fileId = '', fileName = '';
@@ -3019,6 +3143,11 @@ function tgInvoiceWebhook(e){
     var logParts = [];
     if(cap.unmatched) logParts.push('решта підпису: '+cap.unmatched);
     if(cap.ambiguous && cap.ambiguous.length) logParts.push('локація неоднозначна: '+cap.ambiguous.join(' / '));
+    // v7.569: рахунок у гілці — локація гілки (підпис локацію не перебиває); загальна гілка — як раніше
+    var _th = (msg.is_topic_message && msg.message_thread_id) ? String(msg.message_thread_id) : '';
+    row[INV_HEADER.indexOf('thread_id')]         = _th;
+    var _thLoc = _th ? _invThreadLoc(_th) : '';
+    if(_thLoc){ if(cap.loc && cap.loc !== _thLoc) logParts.push('у підписі «' + cap.loc + '», гілка — ' + _thLoc); row[INV_HEADER.indexOf('локація')] = _thLoc; }
     row[INV_HEADER.indexOf('лог')]               = logParts.join(' · ');
     for(var c=0;c<INV_HEADER.length;c++) if(row[c]===undefined) row[c]='';
     sh.appendRow(row);
@@ -3108,6 +3237,8 @@ function _invApplyCaption(sh, hdr, rowNum, caption, source, dryRun){
   if (st === INV_ST.PAID) return {id: id, skipped: 'оплачено'};
   var sp = _invParseSplit(caption);
   var loc = sp.loc || '';
+  var _thC = col('thread_id'), _thL = _thC > 0 ? _invThreadLoc(sh.getRange(rowNum, _thC).getValue()) : '';
+  if(_thL) loc = _thL;   // v7.569: рахунок у гілці — локація гілки
   var items = sp.items.map(function(it){ return {name: it.name, amount: it.amount, opex: _invMapOpexCat(loc, it.name)}; });
   // v7.538: стаття — стаття OPEX за ключовими словами підпису (без «Добрий день», локації, «садочок/школа»)
   var _capCat = loc ? _invCaptionCategory(caption, _invOpexCats(loc), _invLocList()) : '';
@@ -3670,6 +3801,7 @@ function ensureInvoiceTrigger(body){
 function _invoiceQueueTick__impl(){
   try { processInvoiceQueue({dryRun:false}); }
   catch(e){ _tgErr('inv:tick', e); }
+  try { _invFlushIfDue(); } catch(e4){ _tgErr('inv:flush', e4); }   // v7.569
   try { _catPendingSweep(_EXEC_T0 + CAT_LLM_BUDGET_MS); } catch(e3){ _tgErr('inv:catSweep', e3); }   // v7.544: стаття після пізнього підпису
   try { _bankBudgetSweep(); } catch(e2){ _tgErr('bank:sweep', e2); }   // v7.536: ⚠️ заявка понад бюджет → група «Банк»
 }
@@ -4013,7 +4145,9 @@ function matchInvoicesToPayments(body){
         invDateMs:_invDateMs(v[r][c('дата рахунку')]),
         createdMs:_invDateMs(v[r][c('created_at')]),                     // v7.411: фолбек, коли OCR дав хибну дату
         chatId:String(v[r][c('chat_id')]||'').trim(),
-        messageId:String(v[r][c('message_id')]||'').trim()
+        messageId:String(v[r][c('message_id')]||'').trim(),
+        threadId:c('thread_id') >= 0 ? String(v[r][c('thread_id')]||'').trim() : '',   // v7.569
+        amountTxt:amt
       });
     }
     if(!open.length || !pays.length) return {ok:true, dryRun:dryRun, matched:[], ambiguous:[], partial:[], openCount:open.length, willMark:0,
@@ -4113,9 +4247,10 @@ function matchInvoicesToPayments(body){
           // ЄДИНЕ повідомлення бота в групу — див. v7.319.
           if(notify && inv.chatId && inv.messageId){
             // v7.406/7.534: не в банківський день або до 09:00 (Київ) — у чергу до найближчого банківського дня 09:00.
-            if(_invQuietHours()){ _invQueuePaid(inv.chatId, inv.messageId, '✅ Оплачено ' + d.slice(0,5), inv.id); queued++; return; }
+            var _pt = _invPaidText(d, inv.amount);   // v7.569: «✅ Оплачено ДД.ММ — сума»
+            if(_invQuietHours()){ _invQueuePaid(inv.chatId, inv.messageId, _invPaidText(d, inv.amount), inv.id, inv.threadId); queued++; return; }
             if(notified) Utilities.sleep(3100);   // v7.397: ліміт Telegram у групу ~20/хв
-            var res = _invSend(inv.chatId, '✅ Оплачено ' + d.slice(0,5), {reply_to_message_id: inv.messageId});
+            var res = _invSendPaid(inv.chatId, inv.messageId, _pt, inv.threadId);
             if(res && res.ok){ notified++; _invSaveBotMsg(sh, c, inv.rowNum, res); }
             else _tgErr('inv:notify', 'заявка '+inv.id+': '+String((res&&res.description)||'no send'));
           }
@@ -4149,10 +4284,10 @@ function _invNextFlushAt(now){
   return new Date(now.getTime() + 60 * 1000);
 }
 function _invQueueRead(p){ try { return JSON.parse(p.getProperty('INV_PAID_QUEUE') || '[]'); } catch(_e){ return []; } }
-function _invQueuePaid(chatId, messageId, text, id){
+function _invQueuePaid(chatId, messageId, text, id, threadId){
   var p = PropertiesService.getScriptProperties(), q = _invQueueRead(p);
   if (!q.some(function(x){ return String(x.m) === String(messageId) && String(x.c) === String(chatId); }))
-    q.push({c:String(chatId), m:String(messageId), t:String(text), id:String(id || '')});
+    q.push({c:String(chatId), m:String(messageId), t:String(text), id:String(id || ''), th:String(threadId || '')});
   p.setProperty('INV_PAID_QUEUE', JSON.stringify(q));
   _invScheduleFlush(false);
 }
@@ -4163,7 +4298,14 @@ function _invScheduleFlush(retry){
   var at;
   if (retry) at = new Date(Date.now() + 5 * 60 * 1000);
   else at = _invNextFlushAt(new Date());   // v7.534: найближчий банківський день 09:00
-  ScriptApp.newTrigger('invFlushPaidQueue').timeBased().at(at).create();
+  try { ScriptApp.newTrigger('invFlushPaidQueue').timeBased().at(at).create(); }
+  catch(_t){ Logger.log('[invFlush] тригер не створено (%s) — розішле invoiceQueueTick', _t && _t.message); }   // v7.569: ліміт тригерів
+}
+// v7.569: страховка — invoiceQueueTick (5 хв) розсилає чергу «оплачено», щойно банківський день і після 09:00.
+function _invFlushIfDue(){
+  if (_invQuietHours()) return;
+  var p = PropertiesService.getScriptProperties(); if (!_invQueueRead(p).length) return;
+  _invFlushPaidQueue__impl();
 }
 function _invFlushPaidQueue__impl(){
   ScriptApp.getProjectTriggers().forEach(function(t){ if (t.getHandlerFunction() === 'invFlushPaidQueue') ScriptApp.deleteTrigger(t); });
@@ -4177,7 +4319,7 @@ function _invFlushPaidQueue__impl(){
       for (var i = 1; i < _v.length; i++) _rowOf[String(_v[i][_c('invoice_id')])] = i + 1; } catch(_s){ _sh = null; }
     q.forEach(function(x){
       if (n++) Utilities.sleep(3100);
-      var res = _invSend(x.c, x.t, {reply_to_message_id: x.m});
+      var res = _invSendPaid(x.c, x.m, x.t, x.th);   // v7.569: нова група / гілка
       if (!(res && res.ok)){ left.push(x); _tgErr('inv:notify', 'заявка ' + x.id + ' (09:00): ' + String((res && res.description) || 'no send')); }
       else if (_sh && _rowOf[x.id]) _invSaveBotMsg(_sh, _c, _rowOf[x.id], res);
     });
@@ -6222,8 +6364,10 @@ function invoiceResendPaid(body){
     if(!chat || !msg){ res.push({id:id, ok:false, error:'немає треду'}); continue; }
     if(n++) Utilities.sleep(3100);
     var d = _invDmy(v[r][H.indexOf('дата оплати')]);
-    var s = _invSend(chat, '✅ Оплачено ' + d.slice(0,5), {reply_to_message_id: msg});
-    if(!(s && s.ok)) _tgErr('inv:notify', 'заявка '+id+' (повтор): '+String((s&&s.description)||'no send'));
+    var _thI = H.indexOf('thread_id'), _th = _thI >= 0 ? String(v[r][_thI] || '') : '';
+    var s = _invSendPaid(chat, msg, _invPaidText(d, v[r][H.indexOf('сума')]), _th);   // v7.569: нова група / гілка, з сумою
+    if(s && s.ok){ try { _invSaveBotMsg(sh, function(n){ return H.indexOf(n); }, r + 1, s); } catch(_sv){} }
+    else _tgErr('inv:notify', 'заявка '+id+' (повтор): '+String((s&&s.description)||'no send'));
     res.push({id:id, ok:!!(s && s.ok), error:(s && s.ok) ? '' : String((s&&s.description)||'no send')});
   }
   return {ok:true, sent:res.filter(function(x){ return x.ok; }).length, items:res};
@@ -9535,7 +9679,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.568', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.569', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -9837,6 +9981,8 @@ function doPost(e) {
     else if (body.action === 'opex27RecalcAll')           result = opex27RecalcAll(body);                   // v7.444 «Перерахувати всі сади» (CFO; dryRun)
     else if (body.action === 'groupRenameApply')          result = groupRenameApply(body);                  // v7.435 стандарт назв груп (CFO; dryRun)
     else if (body.action === 'setDopMarkGroup')           result = setDopMarkGroup(body);                    // v7.524 група окремих відміток → чинна (CFO; dryRun)
+    else if (body.action === 'invTopicsScan')             result = invTopicsScan(body);                      // v7.569 гілки групи рахунків (CFO)
+    else if (body.action === 'invTopicSetLoc')            result = invTopicSetLoc(body);                     // v7.569 гілка → локація вручну (CFO)
     else if (body.action === 'notesBuild')                result = notesBuild(body);                         // v7.567 примітки-розшифровки (CFO; dryRun)
     else if (body.action === 'notesSetup')                result = notesSetup(body);                         // v7.567 тригер notesTick
     else if (body.action === 'renumberAttendanceIds')     result = renumberAttendanceIds(body);              // v7.565 унікальні № відміток (CFO; dryRun)

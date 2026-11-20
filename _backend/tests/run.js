@@ -223,7 +223,7 @@ if (src.indexOf('\nfunction _invCfoReportTexts(') >= 0){
   const cfoFns = ['_invCfoReport__impl', '_invCfoLinkFromMessage'];
   const leak = sends.filter((x) => cfoFns.indexOf(x.fname) < 0 && /розпис|texts|_invCfo/.test(x.text));
   const cfoTo = sends.filter((x) => cfoFns.indexOf(x.fname) >= 0).every((x) => x.to === 'to' || x.to === 'id');
-  const queueOnly = (src.match(/(?<!function )_invQueuePaid\([^;]*\)/g) || []).every((x) => /✅ Оплачено/.test(x));
+  const queueOnly = (src.match(/(?<!function )_invQueuePaid\([^;]*\)/g) || []).every((x) => /✅ Оплачено|_invPaidText\(/.test(x));   // v7.569: текст через _invPaidText
   check('звіт CFO: група директорів', 'у групу — лише «✅ Оплачено», звіт іде тільки на адресата з _invCfoTarget',
         {leak: leak.length, cfoTo: cfoTo, queueOnly: queueOnly, privateHook: /chat\.type === 'private'\) return _invCfoLinkFromMessage/.test(src)},
         {leak: 0, cfoTo: true, queueOnly: true, privateHook: true});
@@ -714,6 +714,27 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
          dry: N._notesDirtyKeys('addLocPaymentDop', {loc: 'Позняки', month: 11, dryRun: true}, {ok: true}).length, bad: N._notesDirtyKeys('cashAdd', {}, {ok: false}).length},
         {rec: ['payment|Позняки|2026|11', 'payment|Позняки|2026|10'], exp: ['payment|Голосієво|2026|12', 'salary|Голосієво|2026|12'],
          opex: ['opex|Тичини|2026|11', 'opex|Оранж|2026|10'], dry: 0, bad: 0});
+}
+
+// ── v7.569: бот рахунків — супергрупа, гілки, «✅ Оплачено ДД.ММ — сума» ──
+{
+  const I = new Function([fn('_invChatResolve'), fn('_invPaidText'), fn('_invPaidParams'), fn('_invTopicLocOf')].join('\n') +
+    '\nreturn {_invChatResolve, _invPaidText, _invPaidParams, _invTopicLocOf};')();
+  const LOCS = ['Тичини', 'Осокорки', 'Позняки', "Кар'єрна", 'Голосієво', 'Пуща', 'Оранж', 'Борщагівка', 'Бровари', 'Кругла', 'Бігова',
+    "Школа Кар'єрна", 'Школа Осокорки', 'Школа 228', 'Житомир', 'Манхетен (Благо)', 'Нац.Гвардії (Благо)', 'Хіміків (Благо)'];
+  const L = (n) => I._invTopicLocOf(n, LOCS);
+  check('рахунки: стара група → супергрупа', 'заявки зі старим chat_id (-5142518705) ідуть у нову групу; відповідь у гілку, на повідомлення з рахунком, зникло — без відповіді',
+        {chat: I._invChatResolve('-5142518705', {'-5142518705': '-1004472189929'}), same: I._invChatResolve('-1004472189929', {'-5142518705': '-1004472189929'}),
+         p: I._invPaidParams('377', '12'), g: I._invPaidParams(120, '')},
+        {chat: '-1004472189929', same: '-1004472189929',
+         p: {reply_parameters: {message_id: 377, allow_sending_without_reply: true}, message_thread_id: 12}, g: {reply_parameters: {message_id: 120, allow_sending_without_reply: true}}});
+  check('рахунки: текст «оплачено»', '«✅ Оплачено ДД.ММ — сума»: ціле без копійок, копійки через кому',
+        {a: I._invPaidText('18.11.2026', 5500), b: I._invPaidText('19.11.2026', 11595.83), c: I._invPaidText('17.11.2026', 481), z: I._invPaidText('17.11.2026', 0)},
+        {a: '✅ Оплачено 18.11 — 5 500', b: '✅ Оплачено 19.11 — 11 595,83', c: '✅ Оплачено 17.11 — 481', z: '✅ Оплачено 17.11'});
+  check('рахунки: гілка → локація', 'однозначна назва → локація; «Школа Осокорки» не плутається з «Осокорки»; неоднозначне чи незнайоме — без локації',
+        {t: L('Тичини').loc, s: L('Школа Осокорки').loc, o: L('Осокорки').loc, k: L("Кар'єрна садок").loc, m: L('Манхетен').loc,
+         amb: L('Осокорки сад і школа').loc, gen: L('Загальна').loc, ofc: L('Офіс').why},
+        {t: 'Тичини', s: 'Школа Осокорки', o: 'Осокорки', k: "Кар'єрна", m: 'Манхетен (Благо)', amb: '', gen: '', ofc: 'не знайдено локації'});
 }
 
 // ── v7.562: Предметники (фронт) — «Не передбачено для цієї групи» лише за справжньою нормою 0 ──
