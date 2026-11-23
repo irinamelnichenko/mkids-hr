@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.575
+// m.kids CRM — Google Apps Script v7.576
+// v7.576: Банк_Призначення — дописування не падає, коли закінчились рядки аркуша (розширюємо аркуш); помилка запису видна в bankFetch (purposesError)
 // v7.575: OPEX — податки (ПДФО / ВЗ) з оренди, комунальних, компенсацій фізособам ідуть у статтю основного платежу, а не в «ПОДАТОК»: звʼязок за призначенням (ІПН, особа, «з оренди»), інакше — фізособа ±1 день і сума за ставкою (18 % / 5 % / 1,5 %); податки із ЗП, єдиний податок, на прибуток, дивіденди — як були. Звірка (reconcile.html) виносить такі податки окремим рядком зі статтею основного платежу; у примітці OPEX податок — рядок під основним платежем «ПДФО + ВЗ з оренди — 2 300 ₴»
 // v7.574: примітки OPEX — одинарні лапки виписки ('НОВА ПОШТА', 'ЕПІЦЕНТР К') знімаються як лапки (апостроф усередині слова лишається); коротка назва з великих літер («СТ», «ОТ») — теж назва
 // v7.573: примітки OPEX — назва з виписки у форматі «ТОВ, НАЗВА» / «ОВВ, НАЗВА» (форма власності перед комою) більше не обрізається до форми («Овв», «ЄДРПОУ …»); немає назви — шукаємо за ЄДРПОУ в історії виписок (Банк_Призначення), рахунках бота й мапі контрагентів
@@ -9879,7 +9880,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.575', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.576', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -20960,7 +20961,7 @@ function bankFetch(params){
   }
   var r = _bankFetchCore(from, to, tokFilter);
   var _bpAdded = _bankPurposeUpsert(r.groups);   // v7.567: призначення платежів для приміток
-  return {ok:!r.errors.length || r.groups.length > 0, from:from, to:to, groups:r.groups, errors:r.errors, purposesAdded:_bpAdded,
+  return {ok:!r.errors.length || r.groups.length > 0, from:from, to:to, groups:r.groups, errors:r.errors, purposesAdded:_bpAdded, purposesError:_BANK_PURPOSE_ERR,
           count:r.groups.reduce(function(a, g){ return a + g.payments.length + g.expenses.length; }, 0),
           bankTotal:r.total, notReal:r.notReal, loc:loc || ''};   // v7.378: для звірки «у банку N — показано M»
 }
@@ -46386,6 +46387,7 @@ function _noteMonthsOk(year, months){
 }
 
 // ── Банк: призначення платежів за референсом (заповнюється при кожному bankFetch) ──
+var _BANK_PURPOSE_ERR = '';
 function _bankPurposeUpsert(groups){
   try {
     var sh = _opexEnsureCfgSheet(BANK_PURPOSE_SHEET, BANK_PURPOSE_HEADER, true); if (!sh) return 0;
@@ -46398,9 +46400,13 @@ function _bankPurposeUpsert(groups){
         add.push([ref, String(x.date || ''), Number(x.amount) || 0, String(x.counterparty || ''), String(x.edrpou || ''), String(x.purpose || '').slice(0, 500), String(g.iban || ''), now]);
       });
     });
-    if (add.length) sh.getRange(sh.getLastRow() + 1, 1, add.length, BANK_PURPOSE_HEADER.length).setValues(add);
+    if (add.length){
+      var start = sh.getLastRow() + 1, need = start + add.length - 1 - sh.getMaxRows();
+      if (need > 0) sh.insertRowsAfter(sh.getMaxRows(), need);   // v7.576: без цього запис за межі аркуша падав мовчки
+      sh.getRange(start, 1, add.length, BANK_PURPOSE_HEADER.length).setValues(add);
+    }
     return add.length;
-  } catch(e){ Logger.log('[bankPurpose] %s', e && e.message); return 0; }
+  } catch(e){ Logger.log('[bankPurpose] %s', e && e.message); _BANK_PURPOSE_ERR = String(e && e.message || e); return 0; }
 }
 function _bankPurposeMap(){
   var out = {};
