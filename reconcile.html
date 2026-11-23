@@ -2065,21 +2065,154 @@ function _rcMonthOptions(sel){
 
 // v7.75/7.84: групування витрат по контрагенту (ключ = ЄДРПОУ, інакше нормалізована назва).
 // v7.84: додатково збираємо самі платежі (pays) — для пер-платіжного запису в OPEX.
+// ═══ v7.575: ПОДАТКИ ДО ОСНОВНОГО ПЛАТЕЖУ (спільне: бекенд crm_script.js і reconcile.html — тексти однакові, тест звіряє) ═══
+// ПДФО / ВЗ у Казначейство з оренди, комунальних, компенсацій фізособам — у статтю основного платежу, не в «ПОДАТОК».
+// Податки із ЗП (половина місяця, відпускні, звільнення, лікарняні, ЄСВ, «ПДФО за жовтень»), єдиний податок і дивіденди — не чіпаємо.
+var OPEX_TAX_RATES = [0.18, 0.05, 0.015];
+var OPEX_TAX_MONTHS = 'січень|лютий|березень|квітень|травень|червень|липень|серпень|вересень|жовтень|листопад|грудень';
+function _opexTaxFold(s){ return String(s || '').toUpperCase().replace(/[IІ]/g, 'І').replace(/[ʼ'’`?]/g, '').replace(/\s+/g, ' ').trim(); }
+function _opexTaxDayNum(v){
+  if (v instanceof Date) return Math.floor(Date.UTC(v.getFullYear(), v.getMonth(), v.getDate()) / 86400000);
+  var s = String(v || '').trim(), m;
+  if ((m = /^(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{4})/.exec(s))) return Math.floor(Date.UTC(+m[3], +m[2] - 1, +m[1]) / 86400000);
+  if ((m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s))) return Math.floor(Date.UTC(+m[1], +m[2] - 1, +m[3]) / 86400000);
+  var d = new Date(s); return isNaN(d.getTime()) ? NaN : Math.floor(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86400000);
+}
+// x {purpose, counterparty} → null (не податок) | {kinds, salary, own, base, person}
+function _opexTaxInfo(x){
+  var p = String((x && x.purpose) || ''), cp = String((x && x.counterparty) || '');
+  if (!/КАЗНАЧ|ДКС|ДПС|УДКС/i.test(cp) && !/^\s*\*?;?101[;\s]/.test(p)) return null;
+  var kinds = [];
+  if (/ПДФО|подато?к\S*\s+з\s+доход/i.test(p)) kinds.push('ПДФО');
+  if (/військов\S*\s+зб(?:і|о)р|(?:^|[^А-ЯІЇЄҐа-яіїєґ])ВЗ(?![А-ЯІЇЄҐа-яіїєґ])/i.test(p)) kinds.push('ВЗ');
+  if (/ЄСВ|єдин\S*\s+соц/i.test(p)) kinds.push('ЄСВ');
+  if (!kinds.length && !/податок|податку|збір|збору/i.test(p)) return null;
+  var notSalary = /інших\s+ніж\s+заробітн/i.test(p);
+  var own = /єдин\S*\s+подат|дивіденд|прибут|спрощен|підприєм\S*,?\s+які\s+перебув|за\s+\d+\s+місяц|квартал/i.test(p);
+  var base = /оренд/i.test(p) ? 'оренда' : /комунал|електроенерг|водопост|теплопост/i.test(p) ? 'комунальні' : /компенсац|відшкод/i.test(p) ? 'компенсація' : '';
+  var salary = !notSalary && !base && (kinds.indexOf('ЄСВ') >= 0 ||
+    /половин|відпуск|відпустк|звільн|лікарн|аванс|зарплат|заробітн|декрет|вагітн|пологам|(?:^|[^А-ЯІЇЄҐа-яіїєґ])ЗП(?![А-ЯІЇЄҐа-яіїєґ])/i.test(p) ||
+    new RegExp('^\\s*(?:\\*?;?101\\s+)?(?:сплата\\s+)?(?:ПДФО|військового\\s+збору|військовий\\s+збір)\\s+за\\s+(?:' + OPEX_TAX_MONTHS + ')\\s+20\\d\\d', 'i').test(p));
+  // особа з призначення: «… за ПОПЕНКО ЛІАНА ВОЛОДИМИРІВНА», «… БОНІСЛАВСЬКИЙ ДМИТРО АНАТОЛІЙОВИЧ», «за Саленко С. К. 3112525620»
+  var person = '', L = 'А-ЯІЇЄҐа-яіїєґʼ\'’`?-', mm;
+  if ((mm = new RegExp('(?:^|\\s)за\\s+([А-ЯІЇЄҐ][' + L + ']+)\\s+(?:[А-ЯІЇЄҐ][' + L + ']+|[А-ЯІЇЄҐ]\\.)', '').exec(p))) person = mm[1];
+  else if ((mm = new RegExp('([А-ЯІЇЄҐ][' + L + ']+)\\s+[А-ЯІЇЄҐ][' + L + ']+\\s+[' + L + ']+(?:ОВИЧ|ЕВИЧ|ЙОВИЧ|ІВНА|ЇВНА|ОВНА|ІЧНА)(?![' + L + '])', 'i').exec(p))) person = mm[1];
+  var ipn = (/(?:^|\D)(\d{10})(?!\d)/.exec(p) || [])[1] || '';   // ІПН особи в призначенні
+  return {kinds:kinds, salary:salary, own:own, base:base, person:_opexTaxFold(person), ipn:ipn};
+}
+// pays: платежі ОДНОГО рахунку [{ref, date, amount, purpose, counterparty, edrpou}] →
+//   {links:{ref:{mainRef, base, kinds, how}}, unlinked:[ref…]} — mainRef '' = зв'язано лише за призначенням (стаття з base)
+function _opexTaxLinks(pays, others){   // others — платежі інших рахунків тієї ж виписки (основний платіж буває з іншого рахунку)
+  pays = pays || [];
+  var info = {}, mains = [], taxes = [];
+  var otherMains = (others || []).filter(function(m){ return !_opexTaxInfo(m); });
+  pays.forEach(function(x){
+    var t = _opexTaxInfo(x);
+    if (!t) { mains.push(x); return; }
+    info[x.ref] = t;
+    if (!t.salary && !t.own) taxes.push(x);
+  });
+  var links = {}, unlinked = [], used = {};
+  function near(t, list){
+    var d = _opexTaxDayNum(t.date);
+    return list.slice().sort(function(a, b){ return Math.abs(_opexTaxDayNum(a.date) - d) - Math.abs(_opexTaxDayNum(b.date) - d); });
+  }
+  function rateOk(main, cluster){
+    var g = (Number(main.amount) || 0) + cluster.reduce(function(s, c){ return s + (Number(c.amount) || 0); }, 0);
+    return g > 0 && cluster.every(function(c){ var r = (Number(c.amount) || 0) / g;
+      return OPEX_TAX_RATES.some(function(q){ return Math.abs(r - q) <= 0.003; }); });
+  }
+  taxes.forEach(function(t){
+    var ti = info[t.ref], d = _opexTaxDayNum(t.date), cand = [], how = '';
+    // а) за призначенням: особа → платіж цій особі; база (оренда / комунальні / компенсація) → платіж з тією ж базою
+    if (ti.ipn){   // ІПН у призначенні = ЄДРПОУ отримувача основного платежу (надійніше за прізвище)
+      var byIpn = function(list){ return list.filter(function(m){ return String(m.edrpou || '').replace(/\D/g, '') === ti.ipn; }); };
+      cand = byIpn(mains); if (!cand.length) cand = byIpn(otherMains);
+      how = 'призначення';
+    }
+    if (!cand.length && ti.person){
+      var byPerson = function(list){ return list.filter(function(m){ var cp = _opexTaxFold(m.counterparty); return cp && (' ' + cp + ' ').indexOf(' ' + ti.person + ' ') >= 0; }); };
+      cand = byPerson(mains);
+      if (!cand.length) cand = byPerson(otherMains);
+      if (ti.base) { var cb = cand.filter(function(m){ var mi = _opexTaxInfoBase(m.purpose); return !mi || mi === ti.base; }); if (cb.length) cand = cb; }
+      how = 'призначення';
+    }
+    if (!cand.length && ti.base){
+      cand = mains.filter(function(m){ return _opexTaxInfoBase(m.purpose) === ti.base && Math.abs(_opexTaxDayNum(m.date) - d) <= 7; });
+      how = 'призначення';
+      if (cand.length > 1){   // кілька — за ставкою від суми
+        var cl = taxes.filter(function(o){ return info[o.ref].base === ti.base && _opexTaxDayNum(o.date) === d && info[o.ref].person === ti.person; });
+        var byRate = cand.filter(function(m){ return rateOk(m, cl); });
+        if (byRate.length === 1) cand = byRate;
+      }
+    }
+    // б) без опису: фізособа (ІПН 10 цифр), той самий або сусідній день, податок = ставка від основного платежу
+    if (!cand.length && !ti.base){
+      var cl2 = taxes.filter(function(o){ return _opexTaxDayNum(o.date) === d && !info[o.ref].base && !info[o.ref].person; });
+      cand = mains.filter(function(m){ return /^\d{10}$/.test(String(m.edrpou || '').replace(/\D/g, '')) &&
+        Math.abs(_opexTaxDayNum(m.date) - d) <= 1 && rateOk(m, cl2); });
+      how = 'сума';
+    }
+    if (cand.length > 1){ var nn = near(t, cand); if (Math.abs(_opexTaxDayNum(nn[0].date) - d) < Math.abs(_opexTaxDayNum(nn[1].date) - d)) cand = [nn[0]]; }
+    // кілька однакових платежів тій самій особі (компенсація за серпень і за вересень) — податок до того, де цього виду ще немає
+    if (cand.length > 1 && how === 'призначення' && (ti.person || ti.ipn) && cand.every(function(m){ return _opexTaxFold(m.counterparty) === _opexTaxFold(cand[0].counterparty) &&
+          Math.abs((Number(m.amount) || 0) - (Number(cand[0].amount) || 0)) < 0.01 && _opexTaxDayNum(m.date) === _opexTaxDayNum(cand[0].date); })){
+      var kk = ti.kinds.join('+'), free = cand.filter(function(m){ return !(used[m.ref] || {})[kk]; });
+      cand = [free.length ? free[0] : cand[0]];
+    }
+    if (cand.length === 1){ (used[cand[0].ref] = used[cand[0].ref] || {})[ti.kinds.join('+')] = 1; }
+    if (cand.length === 1) links[t.ref] = {mainRef:cand[0].ref, base:ti.base || _opexTaxInfoBase(cand[0].purpose), kinds:ti.kinds, how:how};
+    else if (ti.base && ti.base !== 'компенсація') links[t.ref] = {mainRef:'', base:ti.base, kinds:ti.kinds, how:'призначення'};
+    else unlinked.push(t.ref);
+  });
+  return {links:links, unlinked:unlinked};
+}
+function _opexTaxInfoBase(p){ p = String(p || ''); return /оренд/i.test(p) ? 'оренда' : /комунал|електроенерг|водопост|теплопост/i.test(p) ? 'комунальні' : /компенсац|відшкод/i.test(p) ? 'компенсація' : ''; }
+// стаття за базою, коли основний платіж не знайдено (або ще без статті)
+function _opexTaxBaseCat(base){ return base === 'оренда' ? 'ОРЕНДА' : base === 'комунальні' ? 'КОМУНАЛЬНІ ПОСЛУГИ' : ''; }
+// «ПДФО + ВЗ з оренди»
+function _opexTaxLabel(kinds, base){
+  var k = []; ['ПДФО', 'ВЗ', 'ЄСВ'].forEach(function(x){ if ((kinds || []).indexOf(x) >= 0) k.push(x); });
+  var b = base === 'оренда' ? ' з оренди' : base === 'комунальні' ? ' з комунальних' : base === 'компенсація' ? ' з компенсації' : '';
+  return (k.length ? k.join(' + ') : 'Податок') + b;
+}
+// ═══ /v7.575 ═══
+
+// v7.575: ключ групи платежу (той самий, що в rcExpenseGroups) — щоб податок знайшов групу основного платежу
+function _rcExpKeyOf(x){
+  var ref=String(x.ref||'').trim();
+  if(RCINV.byRef[ref]) return 'inv:'+ref;
+  var edr=String(x.edrpou||'').trim(), nm=String(x.counterparty||'').trim();
+  return edr || nm.toLowerCase().replace(/\s+/g,' ') || '—';
+}
 function rcExpenseGroups(){
   var map={};
+  // v7.575: податки до основного платежу (ПДФО / ВЗ з оренди, комунальних, компенсацій) — окремою групою зі статтею основного
+  var allEx=[], byRef={};
+  RC.parsed.forEach(function(p){ if(!p.service) (p.expenses||[]).forEach(function(x){ allEx.push(x); byRef[String(x.ref||'').trim()]=x; }); });
   RC.parsed.forEach(function(p){
     if(p.service) return;                              // v7.381: службовий рахунок — не у «Витратах»
     if(RC.opex.acc && p.iban!==RC.opex.acc) return;   // v7.380: лише обраний рахунок
+    var own=p.expenses||[], ownSet={}, tax={links:{}, unlinked:[]};
+    own.forEach(function(x){ ownSet[String(x.ref||'').trim()]=1; });
+    try{ tax=_opexTaxLinks(own, allEx.filter(function(x){ return !ownSet[String(x.ref||'').trim()]; })); }catch(_t){}
+    var unl={}; tax.unlinked.forEach(function(r){ unl[r]=1; });
     (p.expenses||[]).forEach(function(x){
       var edr=String(x.edrpou||'').trim();
       var nm=String(x.counterparty||'').trim();
       var key=edr || nm.toLowerCase().replace(/\s+/g,' ') || '—';
       var inv=RCINV.byRef[String(x.ref||'').trim()];   // v7.398: платіж із заявкою — окремий рядок
       if(inv) key='inv:'+String(x.ref||'').trim();
-      if(!map[key]) map[key]={key:key, name:nm||'—', edrpou:edr, count:0, sum:0, purposes:[], pays:[], inv:inv||null};
+      var tl=!inv && tax.links[String(x.ref||'').trim()], mx=tl && tl.mainRef ? byRef[tl.mainRef] : null;
+      if(tl) key='tax:'+(tl.mainRef || tl.base);
+      if(!map[key]) map[key]={key:key, name:nm||'—', edrpou:edr, count:0, sum:0, purposes:[], pays:[], inv:inv||null,
+        tax:tl ? {mainRef:tl.mainRef, mainKey:mx ? _rcExpKeyOf(mx) : '', mainName:mx ? String(mx.counterparty||'').trim() : '', mainEdrpou:mx ? String(mx.edrpou||'').trim() : '', base:tl.base, kinds:[]} : null, taxUnlinked:0};
       var g=map[key];
+      if(tl){ tl.kinds.forEach(function(q){ if(g.tax.kinds.indexOf(q)<0) g.tax.kinds.push(q); });
+        g.name='🧾 '+_opexTaxLabel(g.tax.kinds, g.tax.base)+(g.tax.mainName?' · '+g.tax.mainName:''); }
+      if(unl[String(x.ref||'').trim()]) g.taxUnlinked++;
       g.count++; g.sum+=Number(x.amount)||0;
-      g.pays.push({amount:Number(x.amount)||0, ref:String(x.ref||'').trim(), date:String(x.date||'').trim(), edrpou:edr});
+      g.pays.push({amount:Number(x.amount)||0, ref:String(x.ref||'').trim(), date:String(x.date||'').trim(), edrpou:edr, purpose:String(x.purpose||'').trim()});
       if(!g.name || g.name==='—'){ if(nm) g.name=nm; }
       var pr=String(x.purpose||'').trim();
       if(pr && g.purposes.length<3 && g.purposes.indexOf(pr)===-1) g.purposes.push(pr);
@@ -2301,6 +2434,10 @@ function rcExpAlwaysManual(g){
 function rcExpCatFor(g){
   var sel=RC.opex.sel[g.key];
   if(sel && sel.category!=null) return sel.category;
+  if(g.tax){   // v7.575: податок — стаття основного платежу (вибрана / з мапи), інакше за призначенням (оренда / комунальні)
+    var mc=g.tax.mainKey ? rcExpCatFor({key:g.tax.mainKey, edrpou:g.tax.mainEdrpou, name:g.tax.mainName}) : '';
+    return (mc && mc!==RC_SKIP_VAL) ? mc : _opexTaxBaseCat(g.tax.base);
+  }
   var rec=RC.opex.contractors[rcContractorKey(g.edrpou,g.name)];
   if(rec && rec.category && rec.category!==RC_SKIP_CAT) return rec.category;
   return '';
@@ -2387,13 +2524,15 @@ function rcRenderExpenses(){
     var cat=rcExpCatFor(g);
     var alwaysManual = rcExpAlwaysManual(g);
     var autoFromMap = !!RC.opex.contractors[rcContractorKey(g.edrpou,g.name)] && !alwaysManual && (sel.category==null);
-    var remember = (sel.remember!=null) ? sel.remember : !autoFromMap;   // OPEX: за замовч. увімкнено при ручному виборі
+    var remember = g.tax ? false : (sel.remember!=null) ? sel.remember : !autoFromMap;   // OPEX: за замовч. увімкнено при ручному виборі; v7.575 податок — ніколи
     var salBinds = (dest==='salary') ? rcSalBindings(g, iloc) : [];
     var remS = (sel.remember!=null) ? sel.remember : (salBinds.length===0);   // Salary: увімкнено якщо ще нема прив'язки
     var pr=g.purposes.length ? g.purposes.map(function(s){return escapeHtml(s.length>50?s.slice(0,50)+'…':s);}).join('<br>') : '';
     var mapBadge = (dest==='salary' && salBinds.length) ? ' <span style="font-size:10px;color:#0a8a5f">·з мапи ФОП ('+salBinds.length+')</span>'
                  : autoFromMap ? ' <span style="font-size:10px;color:#2980b9">·з мапи</span>'
                  : (alwaysManual ? ' <span style="font-size:10px;color:#b9770a">·завжди вручну</span>' : '');
+    if(g.tax) mapBadge = ' <span style="font-size:10px;color:#0a6e8a;font-weight:700">· податок до основного платежу — стаття як у нього</span>';   // v7.575
+    if(g.taxUnlinked) mapBadge += ' <span style="font-size:10px;color:#b9770a">· ⚠ '+g.taxUnlinked+' податк. не звʼязано з основним платежем — стаття вручну</span>';
     // v7.398: рядок під заявку бота — локація і стаття з рахунку
     var invH = g.inv;
     if(invH){
@@ -2586,8 +2725,9 @@ function rcExpBuildItems(){
   var groups=rcExpenseGroups(), items=[], remember=[], salItems=[], salRemember=[], errors=[];
   groups.forEach(function(g){
     var sel=RC.opex.sel[g.key]||{};
-    var mon=Number(sel.month)||RC.opex.month;      // v7.86: місяць пер-контрагентно, дефолт — загальний
-    var iloc=String(sel.loc||'')||RC.opex.loc;     // v7.86: локація пер-контрагентно, дефолт — локація виписки
+    var msel=(g.tax && g.tax.mainKey && RC.opex.sel[g.tax.mainKey])||{};   // v7.575: податок — місяць і локація основного платежу
+    var mon=Number(sel.month)||Number(msel.month)||RC.opex.month;      // v7.86: місяць пер-контрагентно, дефолт — загальний
+    var iloc=String(sel.loc||'')||String(msel.loc||'')||RC.opex.loc;     // v7.86: локація пер-контрагентно, дефолт — локація виписки
     // ── v7.86: призначення Salary ──
     if((sel.dest||'opex')==='salary'){
       var remS=(sel.remember!=null)?sel.remember:(rcSalBindings(g, iloc).length===0);
@@ -2639,6 +2779,7 @@ function rcExpBuildItems(){
     });
     // запам'ятати контрагента
     var remOn=(sel.remember!=null)?sel.remember:(!RC.opex.contractors[rcContractorKey(g.edrpou,g.name)]);
+    if(g.tax) remOn=false;   // v7.575: Казначейство не запамʼятовуємо під статтю основного платежу
     if(remOn && (g.edrpou||g.name)) remember.push({edrpou:g.edrpou, name:g.name, category:cat});
   });
   return {items:items, remember:remember, salItems:salItems, salRemember:salRemember, errors:errors};

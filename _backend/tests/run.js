@@ -821,6 +821,50 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
         {a: 'Головне Управління Державноі Казначейськоі Служби', b: 'Броварський ЗБК', c: 'Фарлеп-Інвест', d: 'Компанія Інноваційних Рішень', e: 'Прокуда Н. Г.', f: 'Нова Пошта', g: 'Управляюча Компанія Крістал Авеню', h: true, i: "Кар'єрна Ірина"});
 }
 
+// ── v7.575: податки до основного платежу ──
+{
+  const vv = (n) => /var [A-Z_]+ *=[\s\S]*?;\n/.exec(src.slice(src.indexOf('var ' + n + ' ')))[0];
+  const names = ['_opexTaxFold', '_opexTaxDayNum', '_opexTaxInfo', '_opexTaxLinks', '_opexTaxInfoBase', '_opexTaxBaseCat', '_opexTaxLabel'];
+  const W = new Function(['OPEX_TAX_RATES', 'OPEX_TAX_MONTHS'].map(vv).join('\n') + names.map(fn).join('\n') + '\nreturn {' + names.join(',') + '};')();
+  const T = 'ОВВ, ГОЛОВНЕ УПРАВЛІННЯ ДЕРЖАВНОІ КАЗНАЧЕЙСЬКОІ СЛУЖБИ';
+  const pays = [
+    {ref: 'm1', date: '05.10.2026', amount: 11550, purpose: 'Оплата за оренду приміщення за жовтень', counterparty: 'Андрєєва Ірина Анатоліївна', edrpou: '2911111111'},
+    {ref: 't1', date: '05.10.2026', amount: 2700, purpose: '101 ПОДАТОК З ДОХОДІВ ІНШИХ НІЖ ЗАРОБІТНА ПЛАТА. ОРЕНДА', counterparty: T, edrpou: '37993783'},
+    {ref: 't2', date: '05.10.2026', amount: 750, purpose: '101 ВІЙСЬКОВИЙ ЗБІР З ОРЕНДИ', counterparty: T, edrpou: '37993783'},
+    {ref: 's1', date: '22.10.2026', amount: 5783.9, purpose: '101 ПДФО за першу половину жовтня 2026р.', counterparty: T, edrpou: '37993783'},
+    {ref: 's2', date: '06.11.2026', amount: 3802.51, purpose: 'Сплата ПДФО за жовтень 2026', counterparty: T, edrpou: '37993783'},
+    {ref: 'o1', date: '14.10.2026', amount: 27559.2, purpose: '101 ЄДИНИЙ ПОДАТОК З ФІЗИЧНИХ ОСІБ ЗА ВЕРЕСЕНЬ  2026Р.', counterparty: T, edrpou: '37993783'},
+    {ref: 'c1', date: '04.11.2026', amount: 6046.04, purpose: 'Компенсація вартості освітніх послуг за серпень 2026р', counterparty: 'КЛАКОВ ПАВЛО АНДРІЙОВИЧ', edrpou: '3470711820'},
+    {ref: 'c2', date: '04.11.2026', amount: 6046.04, purpose: 'Компенсація вартості освітніх послуг за серпень 2026р', counterparty: 'ФІЗОР ВІТАЛІНА СЕРГІЇВНА', edrpou: '3458912000'},
+    {ref: 'c3', date: '04.11.2026', amount: 6046.04, purpose: 'Компенсація вартості освітніх послуг за вересень 2026р', counterparty: 'ФІЗОР ВІТАЛІНА СЕРГІЇВНА', edrpou: '3458912000'},
+    {ref: 'ct1', date: '04.11.2026', amount: 1413.36, purpose: 'ПДФО з доходів по відшкодуванню компенсації вартості освітніх послуг за Кучанська Роксолана Олександрівна 3470711820.', counterparty: T, edrpou: '37993783'},
+    {ref: 'ct2', date: '04.11.2026', amount: 1413.36, purpose: 'ПДФО з доходів по відшкодуванню компенсації вартості освітніх послуг за Фізор Віталіна Сергіївна 3458912000.', counterparty: T, edrpou: '37993783'},
+    {ref: 'ct3', date: '04.11.2026', amount: 1413.36, purpose: 'ПДФО з доходів по відшкодуванню компенсації вартості освітніх послуг за Фізор Віталіна Сергіївна 3458912000.', counterparty: T, edrpou: '37993783'},
+    {ref: 'u1', date: '04.11.2026', amount: 392.6, purpose: 'ВІЙСЬКОВИЙ ЗБІР з доходів по відшкодуванню компенсації вартості освітніх послуг за Тонченко Сергій Анатолійович 3203915810', counterparty: T, edrpou: '37993783'},
+    {ref: 'm2', date: '10.11.2026', amount: 7700, purpose: 'Послуги згідно акту', counterparty: 'Петренко Олег Іванович', edrpou: '3011111111'},
+    {ref: 'b1', date: '11.11.2026', amount: 1800, purpose: '101 ПДФО', counterparty: T, edrpou: '37993783'},
+    {ref: 'b2', date: '11.11.2026', amount: 500, purpose: '101 Військовий збір', counterparty: T, edrpou: '37993783'}];
+  const r = W._opexTaxLinks(pays), L = r.links;
+  check('OPEX податки: звʼязок з основним платежем', 'оренда за призначенням; компенсація за ІПН (навіть якщо отримувач з іншим прізвищем); два однакові платежі особі — по одному податку; без опису — фізособа ±1 день і ставка; ЗП / єдиний — не чіпаємо; не знайдено — у списку',
+        {t1: L.t1 && L.t1.mainRef, t2: L.t2 && L.t2.mainRef, s: [!!L.s1, !!L.s2, !!L.o1], ct1: L.ct1 && L.ct1.mainRef, ct23: [L.ct2 && L.ct2.mainRef, L.ct3 && L.ct3.mainRef].sort(),
+         b: [L.b1 && L.b1.mainRef, L.b2 && L.b2.mainRef], unl: r.unlinked, lbl: W._opexTaxLabel(['ВЗ', 'ПДФО'], 'оренда'), cat: W._opexTaxBaseCat('оренда')},
+        {t1: 'm1', t2: 'm1', s: [false, false, false], ct1: 'c1', ct23: ['c2', 'c3'], b: ['m2', 'm2'], unl: ['u1'], lbl: 'ПДФО + ВЗ з оренди', cat: 'ОРЕНДА'});
+  // той самий код у звірці (reconcile.html)
+  const hp = path.join(__dirname, '..', '..', 'reconcile.html');
+  if (fs.existsSync(hp)){
+    const h = fs.readFileSync(hp, 'utf8');
+    const hf = (name) => { const i = h.indexOf('function ' + name + '('); let d = 0;
+      for (let k = h.indexOf('{', i); k < h.length; k++){ if (h[k] === '{') d++; else if (h[k] === '}' && --d === 0) return h.slice(i, k + 1); } };
+    check('OPEX податки: звірка = бекенд', 'функції звʼязку податку в reconcile.html і crm_script.js однакові',
+          names.filter((n) => hf(n) !== fn(n)), []);
+  }
+  // примітка: податок рядком під основним
+  const N = new Function(['NOTE_TAG'].map(vv).join('\n') + ['_noteRound', '_noteUah', '_noteComposeOpex', '_opexTaxLabel'].map(fn).join('\n') + '\nreturn {_noteComposeOpex};')();
+  check('OPEX примітка: податок під основним платежем', 'сума статті = основний + податок; «вручну» не зʼявляється',
+        N._noteComposeOpex('Оренда', 'жовтень', [{day: '05.10', sort: '1005', who: 'Андрєєва І.А.', amount: 11550, tax: {kinds: ['ПДФО', 'ВЗ'], base: 'оренда', amount: 3450}}], 15000),
+        'ⓘ ОРЕНДА · жовтень · 15 000 ₴\n\n05.10  Андрєєва І.А. — 11 550 ₴\n       ПДФО + ВЗ з оренди — 3 450 ₴');
+}
+
 // ── v7.562: Предметники (фронт) — «Не передбачено для цієї групи» лише за справжньою нормою 0 ──
 {
   const hp = path.join(__dirname, '..', '..', 'predmetnyky.html');

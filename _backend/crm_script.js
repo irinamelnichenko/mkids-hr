@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.574
+// m.kids CRM — Google Apps Script v7.575
+// v7.575: OPEX — податки (ПДФО / ВЗ) з оренди, комунальних, компенсацій фізособам ідуть у статтю основного платежу, а не в «ПОДАТОК»: звʼязок за призначенням (ІПН, особа, «з оренди»), інакше — фізособа ±1 день і сума за ставкою (18 % / 5 % / 1,5 %); податки із ЗП, єдиний податок, на прибуток, дивіденди — як були. Звірка (reconcile.html) виносить такі податки окремим рядком зі статтею основного платежу; у примітці OPEX податок — рядок під основним платежем «ПДФО + ВЗ з оренди — 2 300 ₴»
 // v7.574: примітки OPEX — одинарні лапки виписки ('НОВА ПОШТА', 'ЕПІЦЕНТР К') знімаються як лапки (апостроф усередині слова лишається); коротка назва з великих літер («СТ», «ОТ») — теж назва
 // v7.573: примітки OPEX — назва з виписки у форматі «ТОВ, НАЗВА» / «ОВВ, НАЗВА» (форма власності перед комою) більше не обрізається до форми («Овв», «ЄДРПОУ …»); немає назви — шукаємо за ЄДРПОУ в історії виписок (Банк_Призначення), рахунках бота й мапі контрагентів
 // v7.572: примітки OPEX читабельні — «СТАТТЯ · місяць · сума ₴», порожній рядок, кожна витрата два рядки: «ДД.ММ  Отримувач — сума ₴» і «       опис директора»; отримувач коротко (без ТОВ/ФОП/лапок/п/р/IBAN, ФОП-особа → «Прізвище І.Б.»); суми цілими гривнями; опис — лише підпис директора з бота (без локації, @згадок, привітань, «прошу оплатити», назв файлів); «+ вручну X» лишається
@@ -9878,7 +9879,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.574', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.575', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -20546,7 +20547,120 @@ function _opexLogExtra(it){
     var b = _OPEX_BP_MEMO[ref] || {}; if (!purpose) purpose = b.purpose || ''; if (!name) name = b.name || ''; }
   return [name, purpose.slice(0, 500)];
 }
-var OPEX_SKIP_CAT           = '— не вносити —';   // v7.86: маркер рішення «не вносити» / «завжди вручну» у мапі контрагентів
+var OPEX_SKIP_CAT           = '— не вносити —';
+// ═══ v7.575: ПОДАТКИ ДО ОСНОВНОГО ПЛАТЕЖУ (спільне: бекенд crm_script.js і reconcile.html — тексти однакові, тест звіряє) ═══
+// ПДФО / ВЗ у Казначейство з оренди, комунальних, компенсацій фізособам — у статтю основного платежу, не в «ПОДАТОК».
+// Податки із ЗП (половина місяця, відпускні, звільнення, лікарняні, ЄСВ, «ПДФО за жовтень»), єдиний податок і дивіденди — не чіпаємо.
+var OPEX_TAX_RATES = [0.18, 0.05, 0.015];
+var OPEX_TAX_MONTHS = 'січень|лютий|березень|квітень|травень|червень|липень|серпень|вересень|жовтень|листопад|грудень';
+function _opexTaxFold(s){ return String(s || '').toUpperCase().replace(/[IІ]/g, 'І').replace(/[ʼ'’`?]/g, '').replace(/\s+/g, ' ').trim(); }
+function _opexTaxDayNum(v){
+  if (v instanceof Date) return Math.floor(Date.UTC(v.getFullYear(), v.getMonth(), v.getDate()) / 86400000);
+  var s = String(v || '').trim(), m;
+  if ((m = /^(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{4})/.exec(s))) return Math.floor(Date.UTC(+m[3], +m[2] - 1, +m[1]) / 86400000);
+  if ((m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s))) return Math.floor(Date.UTC(+m[1], +m[2] - 1, +m[3]) / 86400000);
+  var d = new Date(s); return isNaN(d.getTime()) ? NaN : Math.floor(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86400000);
+}
+// x {purpose, counterparty} → null (не податок) | {kinds, salary, own, base, person}
+function _opexTaxInfo(x){
+  var p = String((x && x.purpose) || ''), cp = String((x && x.counterparty) || '');
+  if (!/КАЗНАЧ|ДКС|ДПС|УДКС/i.test(cp) && !/^\s*\*?;?101[;\s]/.test(p)) return null;
+  var kinds = [];
+  if (/ПДФО|подато?к\S*\s+з\s+доход/i.test(p)) kinds.push('ПДФО');
+  if (/військов\S*\s+зб(?:і|о)р|(?:^|[^А-ЯІЇЄҐа-яіїєґ])ВЗ(?![А-ЯІЇЄҐа-яіїєґ])/i.test(p)) kinds.push('ВЗ');
+  if (/ЄСВ|єдин\S*\s+соц/i.test(p)) kinds.push('ЄСВ');
+  if (!kinds.length && !/податок|податку|збір|збору/i.test(p)) return null;
+  var notSalary = /інших\s+ніж\s+заробітн/i.test(p);
+  var own = /єдин\S*\s+подат|дивіденд|прибут|спрощен|підприєм\S*,?\s+які\s+перебув|за\s+\d+\s+місяц|квартал/i.test(p);
+  var base = /оренд/i.test(p) ? 'оренда' : /комунал|електроенерг|водопост|теплопост/i.test(p) ? 'комунальні' : /компенсац|відшкод/i.test(p) ? 'компенсація' : '';
+  var salary = !notSalary && !base && (kinds.indexOf('ЄСВ') >= 0 ||
+    /половин|відпуск|відпустк|звільн|лікарн|аванс|зарплат|заробітн|декрет|вагітн|пологам|(?:^|[^А-ЯІЇЄҐа-яіїєґ])ЗП(?![А-ЯІЇЄҐа-яіїєґ])/i.test(p) ||
+    new RegExp('^\\s*(?:\\*?;?101\\s+)?(?:сплата\\s+)?(?:ПДФО|військового\\s+збору|військовий\\s+збір)\\s+за\\s+(?:' + OPEX_TAX_MONTHS + ')\\s+20\\d\\d', 'i').test(p));
+  // особа з призначення: «… за ПОПЕНКО ЛІАНА ВОЛОДИМИРІВНА», «… БОНІСЛАВСЬКИЙ ДМИТРО АНАТОЛІЙОВИЧ», «за Саленко С. К. 3112525620»
+  var person = '', L = 'А-ЯІЇЄҐа-яіїєґʼ\'’`?-', mm;
+  if ((mm = new RegExp('(?:^|\\s)за\\s+([А-ЯІЇЄҐ][' + L + ']+)\\s+(?:[А-ЯІЇЄҐ][' + L + ']+|[А-ЯІЇЄҐ]\\.)', '').exec(p))) person = mm[1];
+  else if ((mm = new RegExp('([А-ЯІЇЄҐ][' + L + ']+)\\s+[А-ЯІЇЄҐ][' + L + ']+\\s+[' + L + ']+(?:ОВИЧ|ЕВИЧ|ЙОВИЧ|ІВНА|ЇВНА|ОВНА|ІЧНА)(?![' + L + '])', 'i').exec(p))) person = mm[1];
+  var ipn = (/(?:^|\D)(\d{10})(?!\d)/.exec(p) || [])[1] || '';   // ІПН особи в призначенні
+  return {kinds:kinds, salary:salary, own:own, base:base, person:_opexTaxFold(person), ipn:ipn};
+}
+// pays: платежі ОДНОГО рахунку [{ref, date, amount, purpose, counterparty, edrpou}] →
+//   {links:{ref:{mainRef, base, kinds, how}}, unlinked:[ref…]} — mainRef '' = зв'язано лише за призначенням (стаття з base)
+function _opexTaxLinks(pays, others){   // others — платежі інших рахунків тієї ж виписки (основний платіж буває з іншого рахунку)
+  pays = pays || [];
+  var info = {}, mains = [], taxes = [];
+  var otherMains = (others || []).filter(function(m){ return !_opexTaxInfo(m); });
+  pays.forEach(function(x){
+    var t = _opexTaxInfo(x);
+    if (!t) { mains.push(x); return; }
+    info[x.ref] = t;
+    if (!t.salary && !t.own) taxes.push(x);
+  });
+  var links = {}, unlinked = [], used = {};
+  function near(t, list){
+    var d = _opexTaxDayNum(t.date);
+    return list.slice().sort(function(a, b){ return Math.abs(_opexTaxDayNum(a.date) - d) - Math.abs(_opexTaxDayNum(b.date) - d); });
+  }
+  function rateOk(main, cluster){
+    var g = (Number(main.amount) || 0) + cluster.reduce(function(s, c){ return s + (Number(c.amount) || 0); }, 0);
+    return g > 0 && cluster.every(function(c){ var r = (Number(c.amount) || 0) / g;
+      return OPEX_TAX_RATES.some(function(q){ return Math.abs(r - q) <= 0.003; }); });
+  }
+  taxes.forEach(function(t){
+    var ti = info[t.ref], d = _opexTaxDayNum(t.date), cand = [], how = '';
+    // а) за призначенням: особа → платіж цій особі; база (оренда / комунальні / компенсація) → платіж з тією ж базою
+    if (ti.ipn){   // ІПН у призначенні = ЄДРПОУ отримувача основного платежу (надійніше за прізвище)
+      var byIpn = function(list){ return list.filter(function(m){ return String(m.edrpou || '').replace(/\D/g, '') === ti.ipn; }); };
+      cand = byIpn(mains); if (!cand.length) cand = byIpn(otherMains);
+      how = 'призначення';
+    }
+    if (!cand.length && ti.person){
+      var byPerson = function(list){ return list.filter(function(m){ var cp = _opexTaxFold(m.counterparty); return cp && (' ' + cp + ' ').indexOf(' ' + ti.person + ' ') >= 0; }); };
+      cand = byPerson(mains);
+      if (!cand.length) cand = byPerson(otherMains);
+      if (ti.base) { var cb = cand.filter(function(m){ var mi = _opexTaxInfoBase(m.purpose); return !mi || mi === ti.base; }); if (cb.length) cand = cb; }
+      how = 'призначення';
+    }
+    if (!cand.length && ti.base){
+      cand = mains.filter(function(m){ return _opexTaxInfoBase(m.purpose) === ti.base && Math.abs(_opexTaxDayNum(m.date) - d) <= 7; });
+      how = 'призначення';
+      if (cand.length > 1){   // кілька — за ставкою від суми
+        var cl = taxes.filter(function(o){ return info[o.ref].base === ti.base && _opexTaxDayNum(o.date) === d && info[o.ref].person === ti.person; });
+        var byRate = cand.filter(function(m){ return rateOk(m, cl); });
+        if (byRate.length === 1) cand = byRate;
+      }
+    }
+    // б) без опису: фізособа (ІПН 10 цифр), той самий або сусідній день, податок = ставка від основного платежу
+    if (!cand.length && !ti.base){
+      var cl2 = taxes.filter(function(o){ return _opexTaxDayNum(o.date) === d && !info[o.ref].base && !info[o.ref].person; });
+      cand = mains.filter(function(m){ return /^\d{10}$/.test(String(m.edrpou || '').replace(/\D/g, '')) &&
+        Math.abs(_opexTaxDayNum(m.date) - d) <= 1 && rateOk(m, cl2); });
+      how = 'сума';
+    }
+    if (cand.length > 1){ var nn = near(t, cand); if (Math.abs(_opexTaxDayNum(nn[0].date) - d) < Math.abs(_opexTaxDayNum(nn[1].date) - d)) cand = [nn[0]]; }
+    // кілька однакових платежів тій самій особі (компенсація за серпень і за вересень) — податок до того, де цього виду ще немає
+    if (cand.length > 1 && how === 'призначення' && (ti.person || ti.ipn) && cand.every(function(m){ return _opexTaxFold(m.counterparty) === _opexTaxFold(cand[0].counterparty) &&
+          Math.abs((Number(m.amount) || 0) - (Number(cand[0].amount) || 0)) < 0.01 && _opexTaxDayNum(m.date) === _opexTaxDayNum(cand[0].date); })){
+      var kk = ti.kinds.join('+'), free = cand.filter(function(m){ return !(used[m.ref] || {})[kk]; });
+      cand = [free.length ? free[0] : cand[0]];
+    }
+    if (cand.length === 1){ (used[cand[0].ref] = used[cand[0].ref] || {})[ti.kinds.join('+')] = 1; }
+    if (cand.length === 1) links[t.ref] = {mainRef:cand[0].ref, base:ti.base || _opexTaxInfoBase(cand[0].purpose), kinds:ti.kinds, how:how};
+    else if (ti.base && ti.base !== 'компенсація') links[t.ref] = {mainRef:'', base:ti.base, kinds:ti.kinds, how:'призначення'};
+    else unlinked.push(t.ref);
+  });
+  return {links:links, unlinked:unlinked};
+}
+function _opexTaxInfoBase(p){ p = String(p || ''); return /оренд/i.test(p) ? 'оренда' : /комунал|електроенерг|водопост|теплопост/i.test(p) ? 'комунальні' : /компенсац|відшкод/i.test(p) ? 'компенсація' : ''; }
+// стаття за базою, коли основний платіж не знайдено (або ще без статті)
+function _opexTaxBaseCat(base){ return base === 'оренда' ? 'ОРЕНДА' : base === 'комунальні' ? 'КОМУНАЛЬНІ ПОСЛУГИ' : ''; }
+// «ПДФО + ВЗ з оренди»
+function _opexTaxLabel(kinds, base){
+  var k = []; ['ПДФО', 'ВЗ', 'ЄСВ'].forEach(function(x){ if ((kinds || []).indexOf(x) >= 0) k.push(x); });
+  var b = base === 'оренда' ? ' з оренди' : base === 'комунальні' ? ' з комунальних' : base === 'компенсація' ? ' з компенсації' : '';
+  return (k.length ? k.join(' + ') : 'Податок') + b;
+}
+// ═══ /v7.575 ═══
+   // v7.86: маркер рішення «не вносити» / «завжди вручну» у мапі контрагентів
 
 function _opexEnsureCfgSheet(name, header, createIfMissing){
   var ss = SpreadsheetApp.openById(CONFIG_SHEET_ID);
@@ -46436,8 +46550,9 @@ function _noteComposeOpex(cat, mon, items, cellValue){
   var out = [NOTE_TAG + String(cat || '').trim().toUpperCase() + ' · ' + mon + ' · ' + _noteUah(cv) + ' ₴'], sum = 0;
   if (items.length) out.push('');
   items.forEach(function(x){
-    sum += Number(x.amount) || 0;
+    sum += (Number(x.amount) || 0) + (x.tax ? Number(x.tax.amount) || 0 : 0);
     out.push(x.day + '  ' + (x.who || '—') + ' — ' + _noteUah(x.amount) + ' ₴');
+    if (x.tax) out.push('       ' + _opexTaxLabel(x.tax.kinds, x.tax.base) + ' — ' + _noteUah(x.tax.amount) + ' ₴');   // v7.575
     if (x.desc) out.push('       ' + x.desc);
   });
   var d = _noteRound(cv - sum);
@@ -46484,12 +46599,26 @@ function _notesOpex(loc, year, months, dryRun){
     var who = '';
     [r[12], iv.supplier, c.name, b.name].concat(edr[String(r[4] || '').replace(/\D/g, '')] || []).some(function(x){ var v = _noteShortParty(x); if (_notePartyOk(v)){ who = v; return true; } return false; });
     if (!who) who = 'ЄДРПОУ ' + String(r[4] || '—');
-    (lines[row + '|' + Number(r[7])] = lines[row + '|' + Number(r[7])] || []).push({day:_noteDay(r[2]), sort:_noteSortKey(r[2]), who:who, amount:_opexNum(r[5]), desc:_noteCleanCaption(iv.caption, loc)});
+    (lines[row + '|' + Number(r[7])] = lines[row + '|' + Number(r[7])] || []).push({day:_noteDay(r[2]), sort:_noteSortKey(r[2]), who:who, amount:_opexNum(r[5]), desc:_noteCleanCaption(iv.caption, loc),
+      ref:ref, date:r[2], purpose:b.purpose || String(r[13] || ''), counterparty:String(r[12] || '') || b.name || '', edrpou:String(r[4] || '')});   // v7.575 — для звʼязку податку
   });
   _noteCfgRows(CASH_LOG_SHEET).forEach(function(r){
     if (String(r[2]) !== 'expense' || String(r[3] || '').trim() !== loc || String(r[13] || 'внесено') !== 'внесено') return;
     var k = Number(r[4]) + '|' + Number(r[7]);
     (lines[k] = lines[k] || []).push({day:_noteDay(r[0]), sort:_noteSortKey(r[0]), who:'Готівка', amount:_opexNum(r[8]), desc:_noteCleanCaption(r[11], loc)});
+  });
+  // v7.575: податок до основного платежу — рядком під ним
+  Object.keys(lines).forEach(function(k){
+    var L = lines[k], byRef = {}; L.forEach(function(it){ if (it.ref) byRef[it.ref] = it; });
+    var tl = {}; try { tl = _opexTaxLinks(L.filter(function(it){ return it.ref; })).links; } catch(_t){}
+    lines[k] = L.filter(function(it){
+      var l = it.ref && tl[it.ref], mn = l && l.mainRef && byRef[l.mainRef];
+      if (!mn || mn === it) return true;
+      var tx = mn.tax || (mn.tax = {kinds:[], base:l.base, amount:0});
+      l.kinds.forEach(function(q){ if (tx.kinds.indexOf(q) < 0) tx.kinds.push(q); });
+      tx.amount = _noteRound(tx.amount + it.amount); if (!tx.base) tx.base = l.base;
+      return false;
+    });
   });
   var res = {ok:true, kind:'opex', loc:loc, months:[], cells:0, changed:0, samples:{}};
   _noteMonthsOk(year, months).forEach(function(m){
