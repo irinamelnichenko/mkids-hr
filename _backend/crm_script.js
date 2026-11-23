@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.576
+// m.kids CRM — Google Apps Script v7.577
+// v7.577: податки — нічого автоматично: звірка показує кожен платіж у Казначейство / ДПС окремим рядком, стаття лише підказка (основний платіж / «ПОДАТОК»), запис кнопкою; компенсації освітніх послуг і рахунок …5127 не вносяться; notesBuild {cat} — повні примітки статті для перевірки (діагностика)
 // v7.576: Банк_Призначення — дописування не падає, коли закінчились рядки аркуша (розширюємо аркуш); помилка запису видна в bankFetch (purposesError)
 // v7.575: OPEX — податки (ПДФО / ВЗ) з оренди, комунальних, компенсацій фізособам ідуть у статтю основного платежу, а не в «ПОДАТОК»: звʼязок за призначенням (ІПН, особа, «з оренди»), інакше — фізособа ±1 день і сума за ставкою (18 % / 5 % / 1,5 %); податки із ЗП, єдиний податок, на прибуток, дивіденди — як були. Звірка (reconcile.html) виносить такі податки окремим рядком зі статтею основного платежу; у примітці OPEX податок — рядок під основним платежем «ПДФО + ВЗ з оренди — 2 300 ₴»
 // v7.574: примітки OPEX — одинарні лапки виписки ('НОВА ПОШТА', 'ЕПІЦЕНТР К') знімаються як лапки (апостроф усередині слова лишається); коротка назва з великих літер («СТ», «ОТ») — теж назва
@@ -9880,7 +9881,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.576', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.577', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -46582,7 +46583,7 @@ function _noteEdrpouNames(bp, cmap){
   return out;
 }
 function _noteSortKey(v){ var d = _noteDay(v), m = /^(\d{2})\.(\d{2})$/.exec(d); return m ? m[2] + m[1] : d; }
-function _notesOpex(loc, year, months, dryRun){
+function _notesOpex(loc, year, months, dryRun, opt){
   var ls = _opexLocSheet(loc); if (!ls) return {ok:false, error:'OPEX «' + loc + '» не знайдено в реєстрі'};
   var sheet = ls.sheet, data = sheet.getRange(1, 1, Math.max(sheet.getLastRow(), 30), Math.max(sheet.getLastColumn(), 37)).getValues();
   var catRow = {}, rowName = {};
@@ -46634,6 +46635,9 @@ function _notesOpex(loc, year, months, dryRun){
     });
     var w = _noteWriteColumn(sheet, col1, notes, dryRun);
     res.cells += w.withNote; res.changed += w.changed; res.months.push(m);
+    if (opt && opt.cat){ var cf = String(opt.cat).toLowerCase(); res.catNotes = res.catNotes || [];   // v7.577 діагностика
+      Object.keys(notes).forEach(function(rw){ if (String(rowName[rw] || '').toLowerCase().indexOf(cf) >= 0) res.catNotes.push({row:Number(rw), month:m, note:notes[rw],
+        items:(lines[rw + '|' + m] || []).map(function(it){ return {ref:it.ref, amount:it.amount, who:it.who, purpose:String(it.purpose || '').slice(0, 90), cp:it.counterparty, tax:it.tax || null}; })}); }); }
     if (!res.samples.opex){ var rr = Object.keys(notes).filter(function(x){ return notes[x] && notes[x].split('\n').length > 2; })[0]; if (rr) res.samples.opex = notes[rr]; }
   });
   return res;
@@ -46710,7 +46714,7 @@ function notesBuild(body){
   if (!loc || !months.length) return {ok:false, error:'loc і months обовʼязкові'};
   try {
     if (kind === 'payment') return _notesPayment(loc, year, months, dryRun);
-    if (kind === 'opex')    return _notesOpex(loc, year, months, dryRun);
+    if (kind === 'opex')    return _notesOpex(loc, year, months, dryRun, {cat:String(body.cat || '')});
     if (kind === 'salary')  return _notesSalary(loc, year, months, dryRun);
     return {ok:false, error:'kind: payment | opex | salary'};
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }

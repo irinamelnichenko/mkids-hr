@@ -2203,14 +2203,15 @@ function rcExpenseGroups(){
       var key=edr || nm.toLowerCase().replace(/\s+/g,' ') || '—';
       var inv=RCINV.byRef[String(x.ref||'').trim()];   // v7.398: платіж із заявкою — окремий рядок
       if(inv) key='inv:'+String(x.ref||'').trim();
-      var tl=!inv && tax.links[String(x.ref||'').trim()], mx=tl && tl.mainRef ? byRef[tl.mainRef] : null;
-      if(tl) key='tax:'+(tl.mainRef || tl.base);
-      if(!map[key]) map[key]={key:key, name:nm||'—', edrpou:edr, count:0, sum:0, purposes:[], pays:[], inv:inv||null,
-        tax:tl ? {mainRef:tl.mainRef, mainKey:mx ? _rcExpKeyOf(mx) : '', mainName:mx ? String(mx.counterparty||'').trim() : '', mainEdrpou:mx ? String(mx.edrpou||'').trim() : '', base:tl.base, kinds:[]} : null, taxUnlinked:0};
+      // v7.577: КОЖЕН платіж у Казначейство / ДПС — окремий рядок; стаття — лише підказка (основний платіж / «ПОДАТОК»), запис — кнопкою
+      var ti=!inv && _opexTaxInfo(x), tl=ti && tax.links[String(x.ref||'').trim()], mx=tl && tl.mainRef ? byRef[tl.mainRef] : null;
+      if(ti) key='taxp:'+String(x.ref||'').trim();
+      if(!map[key]) map[key]={key:key, name:nm||'—', edrpou:edr, count:0, sum:0, purposes:[], pays:[], inv:inv||null, iban:p.iban||'',
+        tax:ti ? {linked:!!tl, mainRef:tl ? tl.mainRef : '', mainKey:mx ? _rcExpKeyOf(mx) : '', mainName:mx ? String(mx.counterparty||'').trim() : '', mainEdrpou:mx ? String(mx.edrpou||'').trim() : '',
+                  base:(tl && tl.base) || ti.base, kinds:ti.kinds.slice(), salary:ti.salary, unlinked:!!unl[String(x.ref||'').trim()],
+                  comp:((tl && tl.base) || ti.base)==='компенсація', acc5127:/5127$/.test(String(p.iban||''))} : null};
       var g=map[key];
-      if(tl){ tl.kinds.forEach(function(q){ if(g.tax.kinds.indexOf(q)<0) g.tax.kinds.push(q); });
-        g.name='🧾 '+_opexTaxLabel(g.tax.kinds, g.tax.base)+(g.tax.mainName?' · '+g.tax.mainName:''); }
-      if(unl[String(x.ref||'').trim()]) g.taxUnlinked++;
+      if(ti) g.name='🧾 '+_opexTaxLabel(g.tax.kinds, g.tax.base)+(g.tax.mainName?' · '+g.tax.mainName:'');
       g.count++; g.sum+=Number(x.amount)||0;
       g.pays.push({amount:Number(x.amount)||0, ref:String(x.ref||'').trim(), date:String(x.date||'').trim(), edrpou:edr, purpose:String(x.purpose||'').trim()});
       if(!g.name || g.name==='—'){ if(nm) g.name=nm; }
@@ -2434,9 +2435,11 @@ function rcExpAlwaysManual(g){
 function rcExpCatFor(g){
   var sel=RC.opex.sel[g.key];
   if(sel && sel.category!=null) return sel.category;
-  if(g.tax){   // v7.575: податок — стаття основного платежу (вибрана / з мапи), інакше за призначенням (оренда / комунальні)
+  if(g.tax){   // v7.577: підказка — стаття основного платежу (вибрана / з мапи), за призначенням (оренда / комунальні), інакше «ПОДАТОК»
+    if(g.tax.comp || g.tax.acc5127) return '';   // компенсації освітніх послуг і рахунок …5127 — не вносимо
     var mc=g.tax.mainKey ? rcExpCatFor({key:g.tax.mainKey, edrpou:g.tax.mainEdrpou, name:g.tax.mainName}) : '';
-    return (mc && mc!==RC_SKIP_VAL) ? mc : _opexTaxBaseCat(g.tax.base);
+    if(mc && mc!==RC_SKIP_VAL) return mc;
+    return (g.tax.linked && _opexTaxBaseCat(g.tax.base)) || 'ПОДАТОК';
   }
   var rec=RC.opex.contractors[rcContractorKey(g.edrpou,g.name)];
   if(rec && rec.category && rec.category!==RC_SKIP_CAT) return rec.category;
@@ -2531,8 +2534,13 @@ function rcRenderExpenses(){
     var mapBadge = (dest==='salary' && salBinds.length) ? ' <span style="font-size:10px;color:#0a8a5f">·з мапи ФОП ('+salBinds.length+')</span>'
                  : autoFromMap ? ' <span style="font-size:10px;color:#2980b9">·з мапи</span>'
                  : (alwaysManual ? ' <span style="font-size:10px;color:#b9770a">·завжди вручну</span>' : '');
-    if(g.tax) mapBadge = ' <span style="font-size:10px;color:#0a6e8a;font-weight:700">· податок до основного платежу — стаття як у нього</span>';   // v7.575
-    if(g.taxUnlinked) mapBadge += ' <span style="font-size:10px;color:#b9770a">· ⚠ '+g.taxUnlinked+' податк. не звʼязано з основним платежем — стаття вручну</span>';
+    if(g.tax){   // v7.577
+      mapBadge = g.tax.acc5127 ? ' <span style="font-size:10px;color:#b9770a">· рахунок …5127 — не вносимо</span>'
+        : g.tax.comp ? ' <span style="font-size:10px;color:#b9770a">· компенсація освітніх послуг — не вносимо</span>'
+        : g.tax.linked ? ' <span style="font-size:10px;color:#0a6e8a;font-weight:700">· податок до основного платежу — підказка: його стаття</span>'
+        : g.tax.salary ? ' <span style="font-size:10px;color:var(--gray)">· податок із ЗП — підказка: ПОДАТОК</span>'
+        : ' <span style="font-size:10px;color:#b9770a">· не звʼязано з основним платежем — підказка: ПОДАТОК</span>';
+    }
     // v7.398: рядок під заявку бота — локація і стаття з рахунку
     var invH = g.inv;
     if(invH){
@@ -2569,7 +2577,7 @@ function rcRenderExpenses(){
         splitBtn='<button class="btn btn-secondary btn-xs" onclick="rcSalSplit('+escAttr(g.key)+')">✂ розбити</button>';
       }
     } else {
-      targetCell=destSel+'<select onchange="rcExpOnCat('+escAttr(g.key)+',this.value)"'+(sel.splits?' disabled':'')+'>'+_rcCatOptions(cat, true, iloc)+'</select>'
+      targetCell=destSel+'<select onchange="rcExpOnCat('+escAttr(g.key)+',this.value)"'+(sel.splits?' disabled':'')+'>'+(g.tax?_rcTaxCatOptions(cat, iloc):_rcCatOptions(cat, true, iloc))+'</select>'
         +'<label style="display:block;font-size:11px;margin-top:3px"><input type="checkbox" onchange="rcExpOnRemember('+escAttr(g.key)+',this.checked)"'+(remember?' checked':'')+(sel.splits?' disabled':'')+'> запам\'ятати для контрагента</label>';
       splitBtn=sel.splits?'':'<button class="btn btn-secondary btn-xs" onclick="rcExpSplit('+escAttr(g.key)+')">✂ розбити</button>';
     }
@@ -2710,7 +2718,15 @@ function _rcLocOptions(sel){
   if(sel && list.indexOf(sel)<0) list.unshift(sel);
   return list.map(function(l){return '<option'+(l===sel?' selected':'')+'>'+escapeHtml(l)+'</option>';}).join('');
 }
-function rcExpOnCat(key,v){ var s=_rcSel(key); s.category=v; s._touched=true; RC.opex.preview=null; rcRenderAll(); }
+function rcExpOnCat(key,v){ if(v==='__sal__'){ rcExpOnDest(key,'salary'); return; }   // v7.577: «ЗП» у списку податку → Salary
+  var s=_rcSel(key); s.category=v; s._touched=true; RC.opex.preview=null; rcRenderAll(); }
+// v7.577: список статей для податку — статті OPEX локації + «ПОДАТОК» (якщо немає) + «ЗП»
+function _rcTaxCatOptions(selected, loc){
+  var cats=_rcCatsFor(loc).slice(); if(cats.indexOf('ПОДАТОК')<0) cats.push('ПОДАТОК');
+  return '<option value="">— оберіть статтю —</option><option value="'+RC_SKIP_VAL+'"'+(selected===RC_SKIP_VAL?' selected':'')+'>— не вносити —</option>'
+    + cats.map(function(c){ return '<option value="'+escapeHtml(c)+'"'+(c===selected?' selected':'')+'>'+escapeHtml(c)+'</option>'; }).join('')
+    + '<option value="__sal__">ЗП (Salary)</option>';
+}
 function rcExpOnRemember(key,v){ _rcSel(key).remember=v; }
 function rcExpSplit(key){ var g=rcExpenseGroups().filter(function(x){return x.key===key;})[0]; if(!g)return; _rcSel(key).splits=[{category:rcExpCatFor(g),amount:g.sum}]; RC.opex.preview=null; rcRenderAll(); }
 function rcExpSplitCancel(key){ _rcSel(key).splits=null; RC.opex.preview=null; rcRenderAll(); }
@@ -2724,6 +2740,9 @@ function rcExpSplitAmt(key,i,v){ _rcSel(key).splits[i].amount=Number(v)||0; RC.o
 function rcExpBuildItems(){
   var groups=rcExpenseGroups(), items=[], remember=[], salItems=[], salRemember=[], errors=[];
   groups.forEach(function(g){
+    // v7.577: компенсації освітніх послуг (і податки до них) та рахунок …5127 — не вносимо
+    if((g.tax && (g.tax.comp || g.tax.acc5127)) || /5127$/.test(String(g.iban||'')) ||
+       g.pays.some(function(pp){ return /компенсац\S*\s+вартост\S*\s+освітн/i.test(String(pp.purpose||'')); })) return;
     var sel=RC.opex.sel[g.key]||{};
     var msel=(g.tax && g.tax.mainKey && RC.opex.sel[g.tax.mainKey])||{};   // v7.575: податок — місяць і локація основного платежу
     var mon=Number(sel.month)||Number(msel.month)||RC.opex.month;      // v7.86: місяць пер-контрагентно, дефолт — загальний
