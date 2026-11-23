@@ -810,6 +810,17 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
         {a: 'ⓘ ВОДА · жовтень · 700 ₴\n\n01.10  Діана — 700 ₴', b: ''});
 }
 
+// ── v7.573: назва з виписки «ФОРМА, НАЗВА» ──
+{
+  const vv = (n) => /var [A-Z_]+ *=[\s\S]*?;\n/.exec(src.slice(src.indexOf('var ' + n + ' ')))[0];
+  const W = new Function(['NOTE_CYR', 'NOTE_LET'].map(vv).join('\n') + ['_noteWordRe', '_noteTitleWord', '_noteShortParty', '_notePartyOk'].map(fn).join('\n') +
+    '\nreturn {_noteShortParty, _notePartyOk};')();
+  check('OPEX примітка: форма власності перед комою', '«ОВВ, …» не дає «Овв»; «ТОВ, " БРОВАРСЬКИЙ ЗБК "» не дає порожньо → ЄДРПОУ',
+        {a: W._noteShortParty('ОВВ, ГОЛОВНЕ УПРАВЛІННЯ ДЕРЖАВНОІ КАЗНАЧЕЙСЬКОІ СЛУЖБИ'), b: W._noteShortParty('ТОВ, " БРОВАРСЬКИЙ ЗБК "'),
+         c: W._noteShortParty('ПРАТ, ФАРЛЕП-ІНВЕСТ'), d: W._noteShortParty('ТОВ, "КОМПАНІЯ ІННОВАЦІЙНИХ РІШЕНЬ"'), e: W._noteShortParty('Прокуда Н. Г. ФОП')},
+        {a: 'Головне Управління Державноі Казначейськоі Служби', b: 'Броварський ЗБК', c: 'Фарлеп-Інвест', d: 'Компанія Інноваційних Рішень', e: 'Прокуда Н. Г.'});
+}
+
 // ── v7.562: Предметники (фронт) — «Не передбачено для цієї групи» лише за справжньою нормою 0 ──
 {
   const hp = path.join(__dirname, '..', '..', 'predmetnyky.html');

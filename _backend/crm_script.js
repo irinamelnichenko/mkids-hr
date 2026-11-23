@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.572
+// m.kids CRM — Google Apps Script v7.573
+// v7.573: примітки OPEX — назва з виписки у форматі «ТОВ, НАЗВА» / «ОВВ, НАЗВА» (форма власності перед комою) більше не обрізається до форми («Овв», «ЄДРПОУ …»); немає назви — шукаємо за ЄДРПОУ в історії виписок (Банк_Призначення), рахунках бота й мапі контрагентів
 // v7.572: примітки OPEX читабельні — «СТАТТЯ · місяць · сума ₴», порожній рядок, кожна витрата два рядки: «ДД.ММ  Отримувач — сума ₴» і «       опис директора»; отримувач коротко (без ТОВ/ФОП/лапок/п/р/IBAN, ФОП-особа → «Прізвище І.Б.»); суми цілими гривнями; опис — лише підпис директора з бота (без локації, @згадок, привітань, «прошу оплатити», назв файлів); «+ вручну X» лишається
 // v7.571: «оплачено» без «?»: локація — підпис / гілка → відправник рахунку (усі його рахунки з відомою локацією — одна локація) → рахунок, з якого оплачено (Реквізити_Локацій, лише якщо IBAN однієї локації); контрагент — отримувач із виписки за matched_ref (Банк_Призначення); знайдене дописується в порожні поля заявки (з логом); invPaidFix (CFO, dryRun) — уже надіслані «оплачено» виправляє editMessageText, а ті, що отримали локацію з гілкою, переносить у гілку (видалити й надіслати там)
 // v7.570: «оплачено» завжди повне: «✅ Оплачено ДД.ММ — Локація — Контрагент — сума ₴ — опис директора / № рахунку» (і у відповіді, і в черзі — текст будується з заявки в момент відправки); маршрут: рахунок у гілці — відповіддю в ній; рахунок із загальної гілки (до появи гілок) — у гілку його локації (без відповіді); локація без гілки — загальна гілка відповіддю; черга й тік не шлють, поки автозвірку вимкнено (INV_AUTO_MATCH=off); invPaidRedo (CFO, dryRun) — дописати пропущені й замінити голі «оплачено» в новій групі (видалення лише власних повідомлень бота, відправлених у нову групу)
@@ -9876,7 +9877,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.572', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.573', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -46370,6 +46371,8 @@ function _noteTitleWord(w){ return w.charAt(0).toUpperCase() + w.slice(1).toLowe
 function _noteShortParty(raw){
   var s = String(raw || '').replace(/\s+/g, ' ').trim(); if (!s) return '';
   if (/[А-ЯІЇЄҐа-яіїєґ]/.test(s)) s = s.replace(/I/g, 'І').replace(/i/g, 'і');   // латинська I в кириличних назвах (OCR)
+  // v7.573: виписка пише «ФОРМА, НАЗВА» («ТОВ, " БРОВАРСЬКИЙ ЗБК "», «ОВВ, ГОЛОВНЕ УПРАВЛІННЯ…», «ПРАТ, ФАРЛЕП-ІНВЕСТ») — форму з комою знімаємо
+  s = s.replace(/^\s*(?:ТОВ|ТЗОВ|ТзОВ|ПРАТ|ПрАТ|ПАТ|АТ|ПП|ФОП|ФО-П|ОВВ|КП|КНП|ДП|ДУ|ГО|ТДВ|ОСББ|ПТ|ПОГ)\s*,\s*/i, '');
   s = s.replace(/^.*\/\s*П\.\s*І\.\s*Б\.\s*/i, '').replace(/^(?:Назва(?:\s+компанії)?|Громадянин(?:ка)?\s+України)\s+/i, '');
   s = s.replace(/(^|\s)(?:п|р|ф)\s*\/\s*(?:р|а)[\s:.].*$/i, ' ')
        .replace(/\s(?:IBAN|ЄДРПОУ|ДРФО|код|адреса|тел\.?|рахунок)(?:[\s:\-].*)?$/i, ' ')
@@ -46383,7 +46386,7 @@ function _noteShortParty(raw){
        .replace(/фізична\s+особа\s*-?\s*підпри[єе]мець|ФО\s*-\s*підприємець/gi, ' ')
        .replace(/приватне\s+(?:акціонерне\s+товариство|підприємство)/gi, ' ')
        .replace(/акціонерне\s+товариство/gi, ' ')
-       .replace(_noteWordRe('ТОВ|ТзОВ|ТЗОВ|ФОП|Ф\\.О\\.П\\.?|ФО-П|Ф-ОП|ПП|ПрАТ|ПАТ|АТ|ТДВ|КП'), '$1 ')
+       .replace(_noteWordRe('ТОВ|ТзОВ|ТЗОВ|ФОП|Ф\\.О\\.П\\.?|ФО-П|Ф-ОП|ПП|ПрАТ|ПРАТ|ПАТ|АТ|ТДВ|КП|ОВВ'), '$1 ')
        .replace(/[«»"“”„]/g, ' ')
        .replace(/\s+/g, ' ').replace(/^[\s.,:;\-–—]+|[\s,:;\-–—]+$/g, '').trim();
   if (!s) return '';
@@ -46440,6 +46443,22 @@ function _noteComposeOpex(cat, mon, items, cellValue){
   if (Math.abs(d) >= 0.5) out.push('', (d > 0 ? '+ вручну ' : '− вручну ') + _noteUah(Math.abs(d)) + ' ₴');
   return out.join('\n');
 }
+// v7.573: ЄДРПОУ → назви (найчастіша першою) з історії виписок, рахунків бота й мапі контрагентів
+function _noteEdrpouNames(bp, cmap){
+  var cnt = {};
+  function add(code, name){
+    code = String(code || '').replace(/\D/g, ''); name = String(name || '').trim(); if (!code || !name) return;
+    var v = _noteShortParty(name); if (!_notePartyOk(v)) return;
+    var m = cnt[code] = cnt[code] || {}; m[name] = (m[name] || 0) + 1;
+  }
+  Object.keys(bp || {}).forEach(function(k){ add(bp[k].edrpou, bp[k].name); });
+  try { var iE = INV_HEADER.indexOf('ЄДРПОУ'), iS = INV_HEADER.indexOf('постачальник');
+        _noteCfgRows(INV_SHEET_NAME).forEach(function(r){ add(r[iE], r[iS]); }); } catch(_i){}
+  try { _noteCfgRows(OPEX_CONTRACTORS_SHEET).forEach(function(r){ add(r[0], r[1]); }); } catch(_c){}
+  var out = {};
+  Object.keys(cnt).forEach(function(code){ out[code] = Object.keys(cnt[code]).sort(function(a, b){ return cnt[code][b] - cnt[code][a]; }); });
+  return out;
+}
 function _noteSortKey(v){ var d = _noteDay(v), m = /^(\d{2})\.(\d{2})$/.exec(d); return m ? m[2] + m[1] : d; }
 function _notesOpex(loc, year, months, dryRun){
   var ls = _opexLocSheet(loc); if (!ls) return {ok:false, error:'OPEX «' + loc + '» не знайдено в реєстрі'};
@@ -46454,6 +46473,7 @@ function _notesOpex(loc, year, months, dryRun){
   try { _noteCfgRows(INV_SHEET_NAME).forEach(function(r){ var refs = String(r[INV_HEADER.indexOf('matched_ref')] || '').split('+');
         var o = {caption:String(r[INV_HEADER.indexOf('підпис')] || '').trim(), supplier:String(r[INV_HEADER.indexOf('постачальник')] || '').trim()};
         refs.forEach(function(ref){ ref = ref.trim(); if (ref && !inv[ref]) inv[ref] = o; }); }); } catch(_i){}
+  var edr = _noteEdrpouNames(bp, cmap);   // v7.573
   var lines = {};   // рядок|місяць → [item]
   _noteCfgRows(OPEX_EXP_LOG_SHEET).forEach(function(r){
     if (String(r[0] || '').trim() !== loc || String(r[10] || 'внесено').trim() !== 'внесено') return;
@@ -46461,7 +46481,7 @@ function _notesOpex(loc, year, months, dryRun){
     var row = catRow[_opexNormalizeCategoryName(cat).trim().toLowerCase()]; if (!row) return;
     var ref = String(r[3] || '').trim(), b = bp[ref] || {}, iv = inv[ref] || {}, c = cmap[_opexContractorKey(r[4], '')] || {};
     var who = '';
-    [r[12], iv.supplier, c.name, b.name].some(function(x){ var v = _noteShortParty(x); if (_notePartyOk(v)){ who = v; return true; } return false; });
+    [r[12], iv.supplier, c.name, b.name].concat(edr[String(r[4] || '').replace(/\D/g, '')] || []).some(function(x){ var v = _noteShortParty(x); if (_notePartyOk(v)){ who = v; return true; } return false; });
     if (!who) who = 'ЄДРПОУ ' + String(r[4] || '—');
     (lines[row + '|' + Number(r[7])] = lines[row + '|' + Number(r[7])] || []).push({day:_noteDay(r[2]), sort:_noteSortKey(r[2]), who:who, amount:_opexNum(r[5]), desc:_noteCleanCaption(iv.caption, loc)});
   });
