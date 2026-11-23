@@ -781,6 +781,35 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
         {g: [true, true, true, true, true], real: [false, false, false]});
 }
 
+// ── v7.572: примітки OPEX — читабельний формат ──
+{
+  const vv = (n) => /var [A-Z_]+ *=[\s\S]*?;\n/.exec(src.slice(src.indexOf('var ' + n + ' ')))[0];
+  const W = new Function(['NOTE_TAG', 'NOTE_CYR', 'NOTE_LET', 'NOTE_LOC_SRC'].map(vv).join('\n') +
+    ['_noteRound', '_noteDay', '_noteUah', '_noteWordRe', '_noteTitleWord', '_noteShortParty', '_notePartyOk', '_noteCleanCaption', '_noteComposeOpex', '_noteSortKey'].map(fn).join('\n') +
+    '\nreturn {_noteShortParty, _notePartyOk, _noteCleanCaption, _noteComposeOpex};')();
+  check('OPEX примітка: отримувач коротко', 'без ТОВ/ФОП/лапок/п/р/IBAN; ФОП-особа → Прізвище І.Б.; уламок OCR — не отримувач',
+        {a: W._noteShortParty('ТОВ "Сервіс Про"'), b: W._noteShortParty('ФОП Григоришина Світлана Олександрівна'),
+         c: W._noteShortParty('ТОВАРИСТВО З ОБМЕЖЕНОЮ ВІДПОВІДАЛЬНІСТЮ "СЕРВІС ПРО"'), d: W._noteShortParty('Товариство з обмеженою відповідальністю "Гал Еко Трейд" п/р UA273006140000026000000000001'),
+         e: W._noteShortParty('Фізична особа-підприємець Златова Ірина Володимирівна'), f: W._noteShortParty('ТОВ «СНС КЕЙТЕРИНГ»'),
+         g: W._notePartyOk(W._noteShortParty('а, самовивозом, за наявності')), h: W._notePartyOk('Замовник')},
+        {a: 'Сервіс Про', b: 'Григоришина С.О.', c: 'Сервіс Про', d: 'Гал Еко Трейд', e: 'Златова І.В.', f: 'СНС Кейтеринг', g: false, h: false});
+  check('OPEX примітка: опис директора', 'без локації, @згадок, привітань, «прошу оплатити», назв файлів',
+        {a: W._noteCleanCaption('Добрий день \nЖурнали брокеражу \nПуща \nДякую', 'Пуща'),
+         b: W._noteCleanCaption('Дуже прошу оплатити цей рахунок @Ira_Melnichenk0 \nПослуга надана 20.10.', 'Тичини'),
+         c: W._noteCleanCaption("Аптечка для укриття, Кар'єрна. З непередбачуваних", "Кар'єрна"),
+         d: W._noteCleanCaption('Рахунок ТО_вікон_2a9fd8ed-686d-4197-b6f3-c0f7f015a9c4.pdf', 'Оранж'),
+         e: W._noteCleanCaption('Сніданки 228', 'Школа 228'), f: W._noteCleanCaption('', 'Оранж'), g: W._noteCleanCaption('Осокорки, садочок\nСніданки\n@vldawq', 'Осокорки')},
+        {a: 'Журнали брокеражу', b: 'Послуга надана 20.10', c: 'Аптечка для укриття, З непередбачуваних', d: '', e: 'Сніданки', f: '', g: 'Сніданки'});
+  check('OPEX примітка: формат', 'СТАТТЯ · місяць · сума ₴; витрата — два рядки; цілі гривні; без опису — один рядок; «+ вручну» лише коли не сходиться',
+        W._noteComposeOpex('Господарські товари', 'листопад', [
+          {day: '12.11', sort: '1112', who: 'Сервіс Про', amount: 3200.4, desc: 'Госп. товари'},
+          {day: '03.11', sort: '1103', who: 'Григоришина С.О.', amount: 1250.55, desc: ''}], 5450.95),
+        'ⓘ ГОСПОДАРСЬКІ ТОВАРИ · листопад · 5 451 ₴\n\n03.11  Григоришина С.О. — 1 251 ₴\n12.11  Сервіс Про — 3 200 ₴\n       Госп. товари\n\n+ вручну 1 000 ₴');
+  check('OPEX примітка: суми сходяться', 'різниця в копійках — без «вручну»; порожня стаття з нулем — без примітки',
+        {a: W._noteComposeOpex('Вода', 'жовтень', [{day: '01.10', sort: '1001', who: 'Діана', amount: 700.2}], 700.2), b: W._noteComposeOpex('Вода', 'жовтень', [], 0)},
+        {a: 'ⓘ ВОДА · жовтень · 700 ₴\n\n01.10  Діана — 700 ₴', b: ''});
+}
+
 // ── v7.562: Предметники (фронт) — «Не передбачено для цієї групи» лише за справжньою нормою 0 ──
 {
   const hp = path.join(__dirname, '..', '..', 'predmetnyky.html');

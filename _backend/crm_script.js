@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.571
+// m.kids CRM — Google Apps Script v7.572
+// v7.572: примітки OPEX читабельні — «СТАТТЯ · місяць · сума ₴», порожній рядок, кожна витрата два рядки: «ДД.ММ  Отримувач — сума ₴» і «       опис директора»; отримувач коротко (без ТОВ/ФОП/лапок/п/р/IBAN, ФОП-особа → «Прізвище І.Б.»); суми цілими гривнями; опис — лише підпис директора з бота (без локації, @згадок, привітань, «прошу оплатити», назв файлів); «+ вручну X» лишається
 // v7.571: «оплачено» без «?»: локація — підпис / гілка → відправник рахунку (усі його рахунки з відомою локацією — одна локація) → рахунок, з якого оплачено (Реквізити_Локацій, лише якщо IBAN однієї локації); контрагент — отримувач із виписки за matched_ref (Банк_Призначення); знайдене дописується в порожні поля заявки (з логом); invPaidFix (CFO, dryRun) — уже надіслані «оплачено» виправляє editMessageText, а ті, що отримали локацію з гілкою, переносить у гілку (видалити й надіслати там)
 // v7.570: «оплачено» завжди повне: «✅ Оплачено ДД.ММ — Локація — Контрагент — сума ₴ — опис директора / № рахунку» (і у відповіді, і в черзі — текст будується з заявки в момент відправки); маршрут: рахунок у гілці — відповіддю в ній; рахунок із загальної гілки (до появи гілок) — у гілку його локації (без відповіді); локація без гілки — загальна гілка відповіддю; черга й тік не шлють, поки автозвірку вимкнено (INV_AUTO_MATCH=off); invPaidRedo (CFO, dryRun) — дописати пропущені й замінити голі «оплачено» в новій групі (видалення лише власних повідомлень бота, відправлених у нову групу)
 // v7.569: бот рахунків — «оплачено» знову доходить: група рахунків стала супергрупою (гілки), а «✅ Оплачено» йшло на старий chat_id заявки («group chat was upgraded to a supergroup chat», 224 відмови з 17.11) — INV_CHAT_MIGRATE старий → новий, повтор у нову групу; відповідь — у гілку рахунку (reply_parameters, allow_sending_without_reply); текст «✅ Оплачено ДД.ММ — сума»; гілки: thread_id заявки, назви гілок (INV_TOPICS) з повідомлень і invTopicsScan, гілка → локація (однозначно за назвою, інакше — показати; invTopicSetLoc), рахунок у гілці — локація гілки; черга «оплачено» до 09:00 — розсилка з invoiceQueueTick (тригер на час не обов'язковий: ліміт тригерів)
@@ -9875,7 +9876,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.571', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.572', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -46359,6 +46360,87 @@ function _notesPayment(loc, year, months, dryRun){
 }
 
 // ── OPEX ──
+// v7.572: читабельний формат приміток OPEX
+var NOTE_CYR = 'А-Яа-яІіЇїЄєҐґ';
+var NOTE_LET = NOTE_CYR + 'A-Za-z0-9ʼ\'’';
+function _noteUah(n){ var v = Math.round(Number(n) || 0), s = String(Math.abs(v)).replace(/\B(?=(\d{3})+(?!\d))/g, ' '); return (v < 0 ? '−' : '') + s; }
+function _noteWordRe(src, flags){ return new RegExp('(^|[^' + NOTE_LET + '])(?:' + src + ')(?![' + NOTE_LET + '])', flags || 'gi'); }
+function _noteTitleWord(w){ return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase(); }
+// Отримувач коротко: «ТОВ "Сервіс Про"» → «Сервіс Про», «ФОП Григоришина Світлана Олександрівна» → «Григоришина С.О.»
+function _noteShortParty(raw){
+  var s = String(raw || '').replace(/\s+/g, ' ').trim(); if (!s) return '';
+  if (/[А-ЯІЇЄҐа-яіїєґ]/.test(s)) s = s.replace(/I/g, 'І').replace(/i/g, 'і');   // латинська I в кириличних назвах (OCR)
+  s = s.replace(/^.*\/\s*П\.\s*І\.\s*Б\.\s*/i, '').replace(/^(?:Назва(?:\s+компанії)?|Громадянин(?:ка)?\s+України)\s+/i, '');
+  s = s.replace(/(^|\s)(?:п|р|ф)\s*\/\s*(?:р|а)[\s:.].*$/i, ' ')
+       .replace(/\s(?:IBAN|ЄДРПОУ|ДРФО|код|адреса|тел\.?|рахунок)(?:[\s:\-].*)?$/i, ' ')
+       .replace(/\sУкраїна\s*(?:,|\d).*$/, ' ')
+       .replace(/UA\s?\d{2}(?:\s?\d){10,}/gi, ' ')
+       .replace(/\S+\.(?:ua|com|net|org)\S*/gi, ' ')
+       .replace(/\([^)]*\)/g, ' ')
+       .replace(/\d{6,}/g, ' ');
+  s = s.split(/,|;|\sм\.|\sвул\./)[0];
+  s = s.replace(/(?:[А-ЯІЇЄҐа-яіїєґ]+\s+філія\s+)?товариств[оа]\s+з\s+обмеженою\s+відповідальністю/gi, ' ')
+       .replace(/фізична\s+особа\s*-?\s*підпри[єе]мець|ФО\s*-\s*підприємець/gi, ' ')
+       .replace(/приватне\s+(?:акціонерне\s+товариство|підприємство)/gi, ' ')
+       .replace(/акціонерне\s+товариство/gi, ' ')
+       .replace(_noteWordRe('ТОВ|ТзОВ|ТЗОВ|ФОП|Ф\\.О\\.П\\.?|ФО-П|Ф-ОП|ПП|ПрАТ|ПАТ|АТ|ТДВ|КП'), '$1 ')
+       .replace(/[«»"“”„]/g, ' ')
+       .replace(/\s+/g, ' ').replace(/^[\s.,:;\-–—]+|[\s,:;\-–—]+$/g, '').trim();
+  if (!s) return '';
+  // ВЕЛИКІ слова → Звичайні; абревіатури без голосних (ЗБК, СНС) і ініціали (А.О.) лишаються; «ТА», «НА», «З» → малі
+  s = s.split(' ').map(function(w){
+    if (w !== w.toUpperCase() || !/^[А-ЯІЇЄҐA-Zʼ'’-]+$/.test(w)) return w;
+    if (/^(?:ТА|НА|З|І|В|У|ДО|ПО|ВІД|ДЛЯ)$/.test(w)) return w.toLowerCase();
+    return (w.length >= 3 && /[АЕЄИІЇОУЮЯAEIOUY]/.test(w)) ? w.split('-').map(_noteTitleWord).join('-') : w;
+  }).join(' ');
+  var L = '[' + NOTE_CYR + 'ʼ\'’-]';
+  var m = new RegExp('^(' + L + '+) (' + L + '+) (' + L + '+(?:ович|евич|йович|івич|івна|ївна|овна|ічна|інічна))\\.?$', 'i').exec(s);
+  if (m) s = _noteTitleWord(m[1]) + ' ' + m[2].charAt(0).toUpperCase() + '.' + m[3].charAt(0).toUpperCase() + '.';
+  return s.slice(0, 60);
+}
+// Кандидат на отримувача: не уламок OCR (уламки починаються з малої літери)
+function _notePartyOk(s){ return !!s && s.length >= 3 && /^[А-ЯІЇЄҐA-Z]/.test(s) && !/^(?:\d+\s+)?(?:Замовник|Одержувач|Отримувач|Постачальник|Платник|Покупець|Рахунок|Това[а-яії]*)$/i.test(s); }
+var NOTE_LOC_SRC = 'Пуща[\\s-]*Водиця|Пуща|Тичини|Позняки|Осокорки|Голосієво|Голосіїво|Оранж|Бровари|Кар\\W?єрна|Карєрна|Кругл(?:а|ій|ої)|Бігова|Львів|Борщагівка|Борщаговка|Хіміків|Манхетен|Теремки\\s*\\d*|Житомир|Благо|m\\.?\\s?kids';
+// Опис директора: прибираємо локацію, @згадки, привітання/подяки, «прошу оплатити», назви файлів
+function _noteCleanCaption(raw, loc){
+  var s = String(raw || '').trim(); if (!s) return '';
+  if (/\.(?:pdf|jpe?g|png|heic|docx?|xlsx?)(?:\s|$)/i.test(s) || /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}/i.test(s) || /^вам надано доступ/i.test(s)) return '';
+  var SCH = '(?:школа|школи|садочок|садок|сад)';
+  var locRe = _noteWordRe('(?:' + SCH + '[\\s,]*)?(?:' + NOTE_LOC_SRC + ')(?:[\\s,]*' + SCH + ')?');
+  var n228 = /228/.test(String(loc || '')) ? _noteWordRe('(?:' + SCH + '\\s*)?228(?:\\s*' + SCH + ')?') : null;
+  var out = [];
+  s.split(/\r?\n/).forEach(function(line){
+    var t = line.replace(/@\S+/g, ' ');
+    if (/^\s*(?:сплачено|сплатив|сплатила|оплачено|оплатила?)\s*[.!✅]*\s*$/i.test(t)) return;
+    t = t.replace(/(?:після оплати|підкажіть|чи (?:о|с)плачен).*$/i, ' ');
+    t = t.replace(_noteWordRe('(?:дуже\\s+)?(?:(?:прошу|просимо|прохання|просю)\\s+(?:вас\\s+)?(?:о|с)плат\\S*|(?:о|с)платіть)(?:\\s*,?\\s*будь\\s+ласка\\s*,?)?(?:\\s+(?:цей|цього|даний))?(?:\\s+рахун\\S*)?'), '$1 ')
+         .replace(_noteWordRe('добр(?:ий|ого)\\s+(?:день|дня|ранок|ранку|вечір|вечора)|доброго|вітаю|привіт|дякую(?:\\s+вам)?|дякуємо|будь\\s+ласка'), '$1 ')
+         .replace(locRe, '$1 ');
+    if (n228) t = t.replace(n228, '$1 ');
+    t = t.replace(/✅/g, ' ').replace(/[ \t]+/g, ' ').replace(/\s+([,.;:])/g, '$1').replace(/([,.;:])(?:\s*[,.;:])+/g, '$1').replace(/\(\s*\)/g, ' ').replace(/^[\s.,:;!)\/\-–—]+|[\s.,:;!\/\-–—]+$/g, '').trim();
+    if (t && /[A-Za-zА-Яа-яІіЇїЄєҐґ0-9]/.test(t)) out.push(t);
+  });
+  var r = out.join('; ').replace(/\s+/g, ' ').trim();
+  return r ? (r.charAt(0).toUpperCase() + r.slice(1)).slice(0, 140) : '';
+}
+// items: [{day:'ДД.ММ', sort, who, amount, desc}]
+function _noteComposeOpex(cat, mon, items, cellValue){
+  var cv = _noteRound(cellValue);
+  items = (items || []).filter(function(x){ return x; });
+  if (!items.length && !cv) return '';
+  items = items.slice().sort(function(a, b){ return String(a.sort || '').localeCompare(String(b.sort || '')); });
+  var out = [NOTE_TAG + String(cat || '').trim().toUpperCase() + ' · ' + mon + ' · ' + _noteUah(cv) + ' ₴'], sum = 0;
+  if (items.length) out.push('');
+  items.forEach(function(x){
+    sum += Number(x.amount) || 0;
+    out.push(x.day + '  ' + (x.who || '—') + ' — ' + _noteUah(x.amount) + ' ₴');
+    if (x.desc) out.push('       ' + x.desc);
+  });
+  var d = _noteRound(cv - sum);
+  if (Math.abs(d) >= 0.5) out.push('', (d > 0 ? '+ вручну ' : '− вручну ') + _noteUah(Math.abs(d)) + ' ₴');
+  return out.join('\n');
+}
+function _noteSortKey(v){ var d = _noteDay(v), m = /^(\d{2})\.(\d{2})$/.exec(d); return m ? m[2] + m[1] : d; }
 function _notesOpex(loc, year, months, dryRun){
   var ls = _opexLocSheet(loc); if (!ls) return {ok:false, error:'OPEX «' + loc + '» не знайдено в реєстрі'};
   var sheet = ls.sheet, data = sheet.getRange(1, 1, Math.max(sheet.getLastRow(), 30), Math.max(sheet.getLastColumn(), 37)).getValues();
@@ -46369,28 +46451,30 @@ function _notesOpex(loc, year, months, dryRun){
   }
   var cmap = {}; try { cmap = (getOpexContractors().map) || {}; } catch(_c){}
   var bp = _bankPurposeMap(), inv = {};
-  try { _noteCfgRows(INV_SHEET_NAME).forEach(function(r){ var ref = String(r[INV_HEADER.indexOf('matched_ref')] || '').trim();
-        if (ref) inv[ref] = {caption:String(r[INV_HEADER.indexOf('підпис')] || '').trim(), supplier:String(r[INV_HEADER.indexOf('постачальник')] || '').trim()}; }); } catch(_i){}
-  var lines = {};   // рядок|місяць → [line]
+  try { _noteCfgRows(INV_SHEET_NAME).forEach(function(r){ var refs = String(r[INV_HEADER.indexOf('matched_ref')] || '').split('+');
+        var o = {caption:String(r[INV_HEADER.indexOf('підпис')] || '').trim(), supplier:String(r[INV_HEADER.indexOf('постачальник')] || '').trim()};
+        refs.forEach(function(ref){ ref = ref.trim(); if (ref && !inv[ref]) inv[ref] = o; }); }); } catch(_i){}
+  var lines = {};   // рядок|місяць → [item]
   _noteCfgRows(OPEX_EXP_LOG_SHEET).forEach(function(r){
     if (String(r[0] || '').trim() !== loc || String(r[10] || 'внесено').trim() !== 'внесено') return;
     var cat = String(r[6] || ''); if (cat.indexOf('→Salary') === 0 || cat === OPEX_SKIP_CAT) return;
     var row = catRow[_opexNormalizeCategoryName(cat).trim().toLowerCase()]; if (!row) return;
     var ref = String(r[3] || '').trim(), b = bp[ref] || {}, iv = inv[ref] || {}, c = cmap[_opexContractorKey(r[4], '')] || {};
-    var who = String(r[12] || '').trim() || iv.supplier || c.name || b.name || ('ЄДРПОУ ' + String(r[4] || '—'));
-    var what = String(iv.caption || String(r[13] || '').trim() || b.purpose || '').replace(/\s+/g, ' ').trim();   // v7.568 один рядок
-    (lines[row + '|' + Number(r[7])] = lines[row + '|' + Number(r[7])] || []).push({text:_noteJoin([_noteDay(r[2]), who, _noteMoney(r[5]), what.slice(0, 160)]), amount:_opexNum(r[5])});
+    var who = '';
+    [r[12], iv.supplier, c.name, b.name].some(function(x){ var v = _noteShortParty(x); if (_notePartyOk(v)){ who = v; return true; } return false; });
+    if (!who) who = 'ЄДРПОУ ' + String(r[4] || '—');
+    (lines[row + '|' + Number(r[7])] = lines[row + '|' + Number(r[7])] || []).push({day:_noteDay(r[2]), sort:_noteSortKey(r[2]), who:who, amount:_opexNum(r[5]), desc:_noteCleanCaption(iv.caption, loc)});
   });
   _noteCfgRows(CASH_LOG_SHEET).forEach(function(r){
     if (String(r[2]) !== 'expense' || String(r[3] || '').trim() !== loc || String(r[13] || 'внесено') !== 'внесено') return;
     var k = Number(r[4]) + '|' + Number(r[7]);
-    (lines[k] = lines[k] || []).push({text:_noteJoin([_noteDay(r[0]), 'готівка', _noteMoney(r[8]), String(r[11] || '').slice(0, 160)]), amount:_opexNum(r[8])});
+    (lines[k] = lines[k] || []).push({day:_noteDay(r[0]), sort:_noteSortKey(r[0]), who:'Готівка', amount:_opexNum(r[8]), desc:_noteCleanCaption(r[11], loc)});
   });
   var res = {ok:true, kind:'opex', loc:loc, months:[], cells:0, changed:0, samples:{}};
   _noteMonthsOk(year, months).forEach(function(m){
     var col1 = (m - 1) * 3 + 2, notes = {};
     Object.keys(rowName).forEach(function(rs){
-      var row = Number(rs); notes[row] = _noteCompose(rowName[row] + ', ' + NOTE_MON[m], lines[row + '|' + m] || [], _opexNum(data[row - 1][col1 - 1]));
+      var row = Number(rs); notes[row] = _noteComposeOpex(rowName[row], NOTE_MON[m], lines[row + '|' + m] || [], _opexNum(data[row - 1][col1 - 1]));   // v7.572
     });
     var w = _noteWriteColumn(sheet, col1, notes, dryRun);
     res.cells += w.withNote; res.changed += w.changed; res.months.push(m);
