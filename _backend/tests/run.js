@@ -913,6 +913,32 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
   ck('fx: значення формули = значення клітинки', '500 випадкових клітинок', bad, 0);
 }
 
+// ── v7.583: Польща — розноска виписки PKO ──
+{
+  const vv = (n) => /var [A-Z0-9_]+ *=[\s\S]*?;\n/.exec(src.slice(src.indexOf('var ' + n + ' ')))[0];
+  const names = ['_plFold', '_plTokens', '_plLev1', '_plTokHit', '_plRowName', '_plRowNames', '_plRowHit', '_plJoined', '_plMerchant', '_plTitle', '_plRoute'];
+  const X = new Function(['PL_ACC4', 'PL_STOP'].map(vv).join('\n') + names.map(fn).join('\n') + '\nreturn {' + names.join(',') + '};')();
+  const ck = (id, t, g, e) => check(id, t, {r: g}, {r: e});
+  const L = {payment: [{r: 5, a: 'Miroslava Vinichenko', block: 'Misie'}, {r: 23, a: 'Daryna Rakitina', block: 'Tygryski'}, {r: 24, a: 'Myron Rakitin', block: 'Tygryski'}, {r: 19, a: 'Tygryski', block: ''},
+      {r: 30, a: 'Szymkowiak Piotr', block: ''}, {r: 160, a: 'MAKOUSKI JAN / MAKOUSKI WLADIMIR', block: 'ZUS'}, {r: 46, a: 'Makouski Jan', block: ''},
+      {r: 228, a: 'EWELINA SIENNICKA', block: 'ZUS Return'}],
+    dotRow: 108, salary: [{r: 5, a: 'KOLADA MAŁGORZATA'}, {r: 6, a: 'ZAJĄC ALEKSANDRA (zlecenia spanish)'}],
+    opex: [{r: 36, a: 'PGE OBRÓT S.A.'}, {r: 44, a: 'ZUS'}, {r: 66, a: 'PROW.OD NIEWYK.CZĘŚCI KREDYTU'}, {r: 56, a: 'Opłata za Powiadomienia SMS/OPŁATA MIESIĘCZNA ZA KART'}],
+    zusOpexRow: 44, feeRow: 56, mkidsRow: 29};
+  const R = (o) => { const r = X._plRoute(o, L); return r.kind + ':' + (r.row || ''); };
+  ck('pl: дитина за призначенням', 'платник інший, ім\'я в Tytuł', R({type: 'Przelew na konto', amount: 870, from: 'BOHDAN RAKITIN', desc: 'Tytuł : PŁATNOŚĆ PAŹDZIERNIK 2026 RAKITIN MYRON'}), 'payment:24');
+  ck('pl: розірване банком слово', 'AUTOPAY «Szymkow iak Piotr»', R({type: 'Przelew na konto', amount: 2275, from: 'AUTOPAY SPÓŁKA AKCYJNA', desc: 'Tytuł : /OPF/X///// MT_2610160UJ68C Szymkow iak Piotr, 10.2026, Rozliczenia'}), 'payment:30');
+  ck('pl: назва групи — не дитина', '«grupa-Tygryski» без імені', R({type: 'Przelew na konto', amount: 870, from: 'X Y', desc: 'Tytuł : grupa-Tygryski'}), 'decide:');
+  ck('pl: dotacja', 'URZĄD MIASTA', R({type: 'Przelew na konto', amount: 87550.56, from: 'URZĄD MIASTA LUBLIN WYDATKI', desc: 'Tytuł : transza dotacji'}), 'payment:108');
+  ck('pl: ZUS AwZ → блок ZUS', 'не в рядок навчання', R({type: 'Przelew na konto', amount: 1500, from: 'ZUS Centrum Obsługi Świadczeń dla R odzi', desc: 'Tytuł : Świadczenie ZUS 0100 AwZ MAKOUSKI JAN 36132/Z'}), 'payment:160');
+  ck('pl: повернення ZUS', 'переказ особі з блоку ZUS Return', R({type: 'Przelew z rachunku', amount: -1500, to: 'EWELINA SIENNICKA', desc: 'Tytuł : ZWROT'}), 'payment:228');
+  ck('pl: власний переказ → MKIDS', 'зі знаком', [R({type: 'Przelew na konto', amount: 18400, from: 'M KIDS SPÓŁKA Z OGRANICZONĄ ODPOWIE DZIA', desc: 'Tytuł : OWN TRANSFER'}), X._plRoute({type: 'Przelew na konto', amount: 3200, from: 'FEDIR KORNIIENKO', desc: 'Tytuł : LOAN TO THE COMPANY'}, L).signed], ['opex:29', true]);
+  ck('pl: ZUS → OPEX', 'як у файлах (CF рахує з OPEX)', R({type: 'Przelew do ZUS', amount: -11271.82, to: 'ZAKŁAD UBEZPIECZEŃ SPOŁECZNYCH', desc: 'Tytuł : ZUS'}), 'opex:44');
+  ck('pl: контрагент OPEX / Salary', 'PGE; KOLADA', [R({type: 'Przelew z rachunku', amount: -211.99, to: 'PGE OBRÓT S.A.', desc: 'Tytuł : FA'}), R({type: 'Przelew z rachunku', amount: -6069.92, to: 'KOLADA MAŁGORZATA', desc: 'Tytuł : WYNAGRODZENIE'})], ['opex:36', 'salary:5']);
+  ck('pl: банк за описом', 'PROW.OD NIEWYK. — свій рядок, решта — комісії', [R({type: 'Opłata', amount: -24.8, desc: 'PROW.OD NIEWYK.CZĘŚCI KREDYTU'}), R({type: 'Opłata za użytkowanie karty', amount: -10, desc: 'OPŁATA MIESIĘCZNA'})], ['opex:66', 'opex:56']);
+  ck('pl: невідомий контрагент', 'у список рішень', R({type: 'Przelew z rachunku', amount: -500, to: 'ARVAL SERVICE LEASE', desc: 'Tytuł : FA'}), 'decide:');
+}
+
 // ── v7.562: Предметники (фронт) — «Не передбачено для цієї групи» лише за справжньою нормою 0 ──
 {
   const hp = path.join(__dirname, '..', '..', 'predmetnyky.html');

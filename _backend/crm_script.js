@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.582
+// m.kids CRM — Google Apps Script v7.583
+// v7.583: Польща — ядро розноски виписки PKO BP (_plRoute): рахунок → локація за 4 цифрами (CF), діти за ім'ям у призначенні (AUTOPAY/tpay/Revolut, розірвані банком слова), dotacja, ZUS «Aktywnie w żłobku» → блок ZUS, повернення → «ZUS Return», власні перекази й позики власника → MKIDS зі знаком, ZUS/PIT → OPEX, комісія за переказ → рядок переказу, Overhead — пропуск; без запису (пробний прогін жовтня)
 // v7.582: plDiag {months:['oct',…]} — значення й формули Actual/Budget цих місяців по кожному рядку (порівняння пробного прогону з тим, що вже у файлах)
 // v7.581: Польща, крок 1 — plDiag (лише читання, CFO): структура 4 фінфайлів 2026 (вкладки, колонка A, шапки, колонки місяців Actual/Budget, формули грудня, рахунки IBAN у файлах) для підключення; нічого не пише
 // v7.580: формули з доданків — твої власні доданки (−11200, +500) лишаються як були, окремим доданком лише різниця, якої не пояснюють ні система, ні вони; fxMigrate {before} відновлює їх із версії файлу до переведення (xlsx-експорт версії); Salary — журнал звірки ЗП за назвою рядка (ПІБ), блок під-локації (Школа Кар'єрна) в аркуші хоста
@@ -9886,7 +9887,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.582', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.583', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -46993,6 +46994,122 @@ function fxMigrate(body){
     return out;
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
+// ═══ v7.583: ПОЛЬЩА — розноска виписки PKO BP (спільне ядро; без звернень до таблиць — тестується в node) ═══
+// Рахунок → локація за останніми 4 цифрами (так їх підписано в CF: «LUBLIN 1767 +», «OVERHEAD 1380+»).
+var PL_ACC4 = {'1767':'LUBLIN', '4078':'PRUZSKOW', '2951':'KONSTANCIN', '1006':'PRIMROSE', '1380':'OVERHEAD'};
+function _plFold(s){
+  var m = {'Ą':'A','Ć':'C','Ę':'E','Ł':'L','Ń':'N','Ó':'O','Ś':'S','Ź':'Z','Ż':'Z','ą':'A','ć':'C','ę':'E','ł':'L','ń':'N','ó':'O','ś':'S','ź':'Z','ż':'Z'};
+  return String(s || '').replace(/[ĄĆĘŁŃÓŚŹŻąćęłńóśźż]/g, function(c){ return m[c]; }).toUpperCase().replace(/[^A-Z0-9А-ЯІЇЄҐ]+/g, ' ').trim();
+}
+var PL_STOP = {SP:1, Z:1, O:1, OO:1, SPOLKA:1, SPOLKI:1, OGRANICZONA:1, ODPOWIEDZIALNOSCIA:1, SA:1, S:1, A:1, SC:1, SPK:1, K:1, UL:1, I:1, W:1, DO:1, NA:1, ZA:1, OD:1, NR:1, THE:1, AND:1};
+function _plTokens(s){ return _plFold(s).split(' ').filter(function(t){ return t.length >= 2 && !PL_STOP[t] && !/^\d+$/.test(t); }); }
+function _plLev1(a, b){   // відстань ≤ 1 (одруківка: Trzinka / Trzcinka)
+  if (a === b) return true; if (Math.abs(a.length - b.length) > 1) return false;
+  var i = 0, j = 0, d = 0;
+  while (i < a.length && j < b.length){
+    if (a[i] === b[j]){ i++; j++; continue; }
+    if (++d > 1) return false;
+    if (a.length > b.length) i++; else if (b.length > a.length) j++; else { i++; j++; }
+  }
+  return d + (a.length - i) + (b.length - j) <= 1;
+}
+function _plTokHit(t, list){   // токен у списку: точно, відмінок (спільний початок ≥ 5), одруківка (≥ 6 літер)
+  return list.some(function(x){
+    if (x === t) return true;
+    var n = Math.min(x.length, t.length); if (n >= 5 && x.slice(0, n - 1) === t.slice(0, n - 1) && Math.abs(x.length - t.length) <= 2) return true;
+    return n >= 6 && _plLev1(x, t);
+  });
+}
+// Назва рядка файлу без приміток у дужках і хвостів після «\»: «ZAJĄC ALEKSANDRA (zlecenia spanish)» → «ZAJĄC ALEKSANDRA»
+function _plRowName(a){ return _plRowNames(a)[0] || ''; }
+function _plRowNames(a){   // варіанти назви: «Yagna Bogush (pedagog spec) \ JAGNA BOGUSZ-WACHOWICZ» → обидва; примітки в дужках і після « на »/« или » — геть
+  return String(a || '').replace(/\([^)]*\)?/g, ' ').split(/\\|\//).map(function(x){ return x.split(/ на | или | - | – /)[0].replace(/\s+/g, ' ').trim(); }).filter(Boolean);
+}
+// Рядок збігається з текстом: 2 перші значущі токени назви (≥ 3 літер) є в тексті — як слова або, якщо банк розірвав
+// слово пробілом («Szymkow iak»), як підрядок тексту без пробілів (лише токени ≥ 4 літер)
+function _plRowHit(rowName, textTokens, joined){
+  return _plRowNames(rowName).some(function(nm){
+    var rt = _plTokens(nm).filter(function(t){ return t.length >= 3; }).slice(0, 2);
+    if (!rt.length || (rt.length === 1 && rt[0].length < 5)) return false;
+    return rt.every(function(t){ return _plTokHit(t, textTokens) || (joined && t.length >= 4 && joined.indexOf(t) >= 0); });
+  });
+}
+function _plJoined(s){ return _plFold(s).replace(/ /g, ''); }
+// Операція з виписки (рядок «Lista transakcji»): {date, type, amount, from, to, desc, merchant}
+function _plMerchant(desc){ var m = /Lokalizacja\s*:\s*Adres\s*:\s*(.*?)(?:\s+Miasto\b|\s*\||$)/i.exec(String(desc || '')); return m ? m[1].trim() : ''; }
+function _plTitle(desc){ var m = /Tytuł\s*:\s*([^|]*)/i.exec(String(desc || '')); return m ? m[1].trim() : String(desc || '').split('|')[0].trim(); }
+// layout: {payment:[{r, a, block}], salary:[{r, a}], opex:[{r, a}], dotRow, zusSalaryRow, zusOpexRow, pitOpexRow, feeRow, loanRow}
+// → {kind:'payment'|'salary'|'opex'|'skip'|'decide', row, why, cand?}
+function _plRoute(op, L){
+  var amt = Number(op.amount) || 0, type = String(op.type || ''), title = _plTitle(op.desc), party = amt > 0 ? op.from : op.to;
+  var pf = _plFold(party), tf = _plFold(title);
+  // власні перекази й позики власника — рядок MKIDS в OPEX зі знаком виписки (так у файлах: =-8000+18400+…)
+  if (/M KIDS SPOLKA/.test(pf) || /\bOWNT? TRAN?SFER\b/.test(tf) || (/FEDIR KORNIIENKO/.test(pf) && /LOAN/.test(tf))){
+    var own = /LOAN/.test(tf) && /FEDIR KORNIIENKO/.test(pf) ? 'позика власника' : 'переказ між своїми рахунками';
+    return L.mkidsRow ? {kind:'opex', row:L.mkidsRow, signed:true, why:own + ' → MKIDS'} : {kind:'decide', why:own + ': рядка MKIDS немає'};
+  }
+  var inBlock = function(re){ return (L.payment || []).filter(function(x){ return re.test(x.block || ''); }); };
+  if (amt > 0){
+    if (/DOTAC/.test(tf) || /URZAD MIASTA|GMINY|GMINA|CENTRUM USLUG WSPOLNYCH/.test(pf)){
+      return L.dotRow ? {kind:'payment', row:L.dotRow, why:'dotacja'} : {kind:'decide', why:'dotacja: рядок у Payment не знайдено'};
+    }
+    var tt = _plTokens(party + ' ' + title), jn = _plJoined(party + ' ' + title);
+    var awz = /SWIADCZENIE ZUS|\bAWZ\b/.test(tf) || /CENTRUM OBSLUGI SWIADCZEN/.test(pf);   // «Aktywnie w żłobku» — блок ZUS
+    var pool = awz ? inBlock(/^ZUS(?!\s*RETURN)/i) : (L.payment || []).filter(function(x){ return !/ZUS|DOTAC/i.test(x.block || ''); });
+    if (awz && !pool.length) return {kind:'decide', why:'ZUS «Aktywnie w żłobku»: блоку ZUS у Payment немає'};
+    var kids = pool.filter(function(x){ return _plTokens(_plRowName(x.a)).length >= 2; });   // рядок дитини — ім'я + прізвище (назви груп — ні)
+    var hits = kids.filter(function(x){ return _plRowHit(x.a, tt, jn); });
+    if (hits.length === 1) return {kind:'payment', row:hits[0].r, why:'дитина: ' + hits[0].a};
+    if (hits.length > 1){
+      // кілька рядків: та сама дитина в двох блоках або брати й сестри — лише якщо всі токени імені з назви (не з платника)
+      var ht = _plTokens(title), h2 = hits.filter(function(x){ return _plRowHit(x.a, ht, _plJoined(title)); });
+      if (h2.length === 1) return {kind:'payment', row:h2[0].r, why:'дитина: ' + h2[0].a};
+      if (awz && hits.length > 1){ var hb = hits.filter(function(x){ return /^ZUS$/i.test(x.block || ''); }); if (hb.length === 1) return {kind:'payment', row:hb[0].r, why:'ZUS AwZ: ' + hb[0].a}; }
+      return {kind:'decide', why:'кілька рядків: ' + hits.map(function(x){ return x.a + ' (' + x.r + ')'; }).join(', ')};
+    }
+    return {kind:'decide', why:(awz ? 'ZUS «Aktywnie w żłobku»' : 'надходження') + ': рядок дитини не знайдено'};
+  }
+  // банк: опис операції — назва рядка («PROW.OD NIEWYK.CZĘŚCI KREDYTU», «KAPITALIZACJA ODSETEK», «OPŁATA ZA MODYF.PEŁNOMOC.»)
+  if (/^Opłata|odsetek|kredytu|Obciążenie/i.test(type)){
+    var dt = _plTokens(op.desc), dj = _plJoined(op.desc);
+    var bh = (L.opex || []).filter(function(x){ return x.r !== L.feeRow && _plRowHit(x.a, dt, dj); });
+    if (bh.length === 1) return {kind:'opex', row:bh[0].r, why:'банк: ' + _plRowName(bh[0].a)};
+    if (/odsetek/i.test(type) && L.interestRow) return {kind:'opex', row:L.interestRow, why:'відсотки'};
+  }
+  // витрати
+  if (/FEDIR KORNIIENKO/.test(pf) && /WYNAGRODZ/.test(tf)){
+    var fr = (L.salary || []).filter(function(x){ return /KORNIIENKO/.test(_plFold(x.a)); });
+    return fr.length === 1 ? {kind:'salary', row:fr[0].r, why:'зарплата Fedir'} : {kind:'decide', why:'зарплата Fedir: рядок у Salary не знайдено'};
+  }
+  if (/do ZUS/i.test(type) || /^ZAKLAD UBEZPIECZEN/.test(pf)){
+    if (L.zusOpexRow) return {kind:'opex', row:L.zusOpexRow, why:'ZUS'};   // так у файлах: CF рахує ZUS/PIT з OPEX
+    if (L.zusSalaryRow) return {kind:'salary', row:L.zusSalaryRow, why:'ZUS'};
+    return {kind:'decide', why:'ZUS: рядок не знайдено'};
+  }
+  if (/podatkowy/i.test(type) || /URZAD SKARBOWY/.test(pf)){
+    if (L.pitOpexRow) return {kind:'opex', row:L.pitOpexRow, why:'PIT'};
+    if (L.zusSalaryRow) return {kind:'salary', row:L.zusSalaryRow, why:'PIT'};
+    return {kind:'decide', why:'PIT: рядок не знайдено'};
+  }
+  if (/^Opłata/i.test(type)) return L.feeRow ? {kind:'opex', row:L.feeRow, why:'опл. банку'} : {kind:'decide', why:'опл. банку: рядок не знайдено'};
+  if (/odsetek|kredytu/i.test(type)) return L.loanRow ? {kind:'opex', row:L.loanRow, why:'кредит / відсотки'} : {kind:'decide', why:'кредит: рядок не знайдено'};
+  var who = /kart|terminal/i.test(type) ? _plMerchant(op.desc) : party;
+  if (!_plFold(who)) return {kind:'decide', why:type + ': контрагента немає'};
+  var wt = _plTokens(who), wj = _plJoined(who);
+  var sh = (L.salary || []).filter(function(x){ return _plRowHit(x.a, wt, wj); });
+  if (sh.length > 1){ var sn = {}; sh.forEach(function(x){ sn[_plFold(_plRowName(x.a))] = 1; }); if (Object.keys(sn).length === 1) return {kind:'decide', why:'у Salary кілька однакових рядків: ' + sh.map(function(x){ return x.r; }).join(', ')}; }
+  if (sh.length === 1) return {kind:'salary', row:sh[0].r, why:'Salary: ' + _plRowName(sh[0].a)};
+  var oh = (L.opex || []).filter(function(x){ return _plRowHit(x.a, wt, wj); });
+  if (oh.length === 1) return {kind:'opex', row:oh[0].r, why:'OPEX: ' + _plRowName(oh[0].a)};
+  if (sh.length + oh.length > 1) return {kind:'decide', why:'кілька рядків: ' + sh.concat(oh).map(function(x){ return _plRowName(x.a) + ' (' + x.r + ')'; }).join(', ')};
+  // повернення ZUS батькам — блок «ZUS Return» у Payment (додатне число, як у файлі); лише переказ особі, якої немає в Salary / OPEX
+  var ret = inBlock(/ZUS\s*RETURN/i);
+  if (ret.length && /Przelew/i.test(type)){ var rt0 = _plTokens(party), rj = _plJoined(party), rh = ret.filter(function(x){ return !/\?/.test(x.a) && _plRowHit(x.a, rt0, rj); });
+    if (rh.length === 1) return {kind:'payment', row:rh[0].r, neg:true, why:'ZUS Return: ' + _plRowName(rh[0].a)}; }
+  if (/terminal/i.test(type) && L.mobileRow) return {kind:'opex', row:L.mobileRow, why:'Płatność mobilna'};
+  return {kind:'decide', why:'контрагента немає у файлі: ' + String(who).trim()};
+}
+// ═══ /v7.583 ═══
 // ═══ v7.581: ПОЛЬЩА — крок 1, розвідка файлів (лише читання) ═══
 var PL_FILES_26 = {LUBLIN:'1LEl4R6ba3Yi8el9b8GS_m_HJTspd9OXyIrWgu_d1w5o', PRUZSKOW:'1CKL2AHUnUWjfAifAgLpGYakO2hKgNv9FoiHrQZgTZ0w',
                    KONSTANCIN:'16yD9rLbcu6QPQlkiF6rb4yTNm0z6GW92SgE78fpmxzY', PRIMROSE:'1KQv-z_7SmxUhv2vNw8t2gqZSdTW8_ni8kodajwr3Jw4'};
