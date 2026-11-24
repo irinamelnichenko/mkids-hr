@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.581
+// m.kids CRM — Google Apps Script v7.582
+// v7.582: plDiag {months:['oct',…]} — значення й формули Actual/Budget цих місяців по кожному рядку (порівняння пробного прогону з тим, що вже у файлах)
 // v7.581: Польща, крок 1 — plDiag (лише читання, CFO): структура 4 фінфайлів 2026 (вкладки, колонка A, шапки, колонки місяців Actual/Budget, формули грудня, рахунки IBAN у файлах) для підключення; нічого не пише
 // v7.580: формули з доданків — твої власні доданки (−11200, +500) лишаються як були, окремим доданком лише різниця, якої не пояснюють ні система, ні вони; fxMigrate {before} відновлює їх із версії файлу до переведення (xlsx-експорт версії); Salary — журнал звірки ЗП за назвою рядка (ПІБ), блок під-локації (Школа Кар'єрна) в аркуші хоста
 // v7.579: нарахування ЗП — від'ємна ручна різниця в кінці (=6500−2500, не =−2500+6500); Payment «Бюджет навч» теж формулою: =договір−знижка відпустки/лікарняного окремими доданками (=21000−5250), ручна різниця окремим доданком; клітинки з посиланнями (акції SUMIFS, «=попередній місяць») не чіпаються
@@ -9885,7 +9886,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.581', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.582', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -47027,6 +47028,8 @@ function plDiag(p){
           var row = {r:r + 1, a:A}; if (B && !A) row.b = B;
           ['actual', 'budget'].forEach(function(kd){ var c = dec[kd]; if (c){ row['dec_' + kd] = V[r][c - 1]; if (F[r][c - 1]) row['decF_' + kd] = F[r][c - 1]; } });
           var nov = (cols.nov || {}).actual; if (nov){ row.nov = V[r][nov - 1]; if (F[r][nov - 1]) row.novF = F[r][nov - 1]; }
+          (p.months || []).forEach(function(mk){ var mc = cols[mk] || {}; ['actual', 'budget'].forEach(function(kd){ var c = mc[kd]; if (!c) return;   // v7.582
+            if (V[r][c - 1] !== '') row[mk + '_' + kd] = V[r][c - 1]; if (F[r][c - 1]) row[mk + 'F_' + kd] = F[r][c - 1]; }); });
           if (A || B || row.decF_actual || row.decF_budget) t.rows.push(row);
           V[r].forEach(function(x, c){ var mm = /\b(PL\s?\d{2}(?:\s?\d{4}){6}|\d{2}(?:\s?\d{4}){6})\b/.exec(String(x)); if (mm) t.ibans.push({cell:_colLetter(c) + (r + 1), v:mm[1], ctx:String(V[r][0] || '')}); });
         }
