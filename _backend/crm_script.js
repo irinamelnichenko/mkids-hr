@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.579
+// m.kids CRM — Google Apps Script v7.580
+// v7.580: формули з доданків — твої власні доданки (−11200, +500) лишаються як були, окремим доданком лише різниця, якої не пояснюють ні система, ні вони; fxMigrate {before} відновлює їх із версії файлу до переведення (xlsx-експорт версії); Salary — журнал звірки ЗП за назвою рядка (ПІБ), блок під-локації (Школа Кар'єрна) в аркуші хоста
 // v7.579: нарахування ЗП — від'ємна ручна різниця в кінці (=6500−2500, не =−2500+6500); Payment «Бюджет навч» теж формулою: =договір−знижка відпустки/лікарняного окремими доданками (=21000−5250), ручна різниця окремим доданком; клітинки з посиланнями (акції SUMIFS, «=попередній місяць») не чіпаються
 // v7.578: клітинки України — формула з доданків замість суми: OPEX =4558+1155+527 (податок окремо), Payment факт навч/вступ/доп кожен платіж, бюджет доп =4*340+430 (до BJ), Salary виплати кожна окремо, нарахування — складові; ручна правка — різницею окремим доданком; значення не змінюється (перевірка після запису, відкат клітинки); запис OPEX/Payment/Salary тепер дописує «+сума» у формулу; перебудова разом із примітками
 // v7.577: податки — нічого автоматично: звірка показує кожен платіж у Казначейство / ДПС окремим рядком, стаття лише підказка (основний платіж / «ПОДАТОК»), запис кнопкою; компенсації освітніх послуг і рахунок …5127 не вносяться; notesBuild {cat} — повні примітки статті для перевірки (діагностика)
@@ -9883,7 +9884,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.579', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.580', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -46342,34 +46343,35 @@ function _fxCompose(parts, value, old, opt){
   parts = (parts || []).filter(function(p){ return p && Math.abs(_fxR2(p.val)) >= 0.005; })
     .map(function(p){ return {txt:p.txt || _fxNum(p.val), val:_fxR2(p.val)}; });
   if (!parts.length) return null;
-  var sum = parts.reduce(function(s, p){ return s + p.val; }, 0), diff = _fxR2(value - sum), manual = [];
-  if (Math.abs(diff) >= 0.005){
-    var left = null;
-    if (old && old.length){
-      left = old.slice(); var okAll = true;
-      parts.forEach(function(p){
-        var i = -1; for (var k = 0; k < left.length; k++){ if (Math.abs(_fxR2(left[k].val) - p.val) < 0.005){ i = k; break; } }
-        if (i >= 0) left.splice(i, 1); else okAll = false;
-      });
-      var ls = left.reduce(function(s, x){ return s + x.val; }, 0);
-      if (!okAll || !left.length || Math.abs(_fxR2(ls) - diff) >= 0.005) left = null;
-    }
-    manual = left ? left.map(function(x){ return {txt:x.txt, val:_fxR2(x.val)}; }) : [{txt:_fxNum(diff), val:diff}];
+  // v7.580: власні доданки — з попереднього запису: прибираємо ті, що збігаються з доданками системи, і перший незбіжний
+  // (стара загальна сума, яку тепер розкладено); решта — твої (−11200, +500) і лишаються як були.
+  var user = [];
+  if (old && old.length){
+    var left = old.map(function(x, k){ return {txt:x.txt, val:_fxR2(x.val), k:k}; });
+    parts.forEach(function(p){
+      for (var k = 0; k < left.length; k++){ if (Math.abs(left[k].val - p.val) < 0.005){ left.splice(k, 1); return; } }
+    });
+    user = left.filter(function(x){ return x.k !== 0 && Math.abs(x.val) >= 0.005; });
   }
+  var sum = parts.concat(user).reduce(function(s, p){ return s + p.val; }, 0), diff = _fxR2(value - sum);
+  var manual = user.map(function(x){ return {txt:x.txt, val:x.val}; });
+  if (Math.abs(diff) >= 0.005) manual.push({txt:_fxNum(diff), val:diff});
   var all = opt.manualFirst ? manual.filter(function(x){ return x.val > 0; }).concat(parts, manual.filter(function(x){ return x.val < 0; })) : parts.concat(manual);   // v7.579: мінус — у кінці
   if (all.length < 2) return null;
   var tot = all.reduce(function(s, x){ return s + x.val; }, 0);
   if (Math.abs(_fxR2(tot) - _fxR2(value)) >= 0.005) return null;
   var f = '=' + all.map(function(x, i){ return (x.val < 0 ? '-' : (i ? '+' : '')) + x.txt; }).join('');
-  return {formula:f, manual:manual};
+  return {formula:f, manual:manual, userKept:user.length};
 }
-// Рішення для однієї клітинки: cur = {formula, value} → {formula} | null
+// Рішення для однієї клітинки: cur = {formula, value} → {formula} | null. opt.old — доданки з попередньої версії файлу (відновлення).
 function _fxCellPlan(parts, cur, opt){
+  opt = opt || {};
   var f = String((cur && cur.formula) || ''), v = cur ? cur.value : '';
   if (typeof v !== 'number') return null;               // текст / порожньо — не чіпаємо
   var old;
   if (f){ old = _fxParseArith(f); if (old === 'ref') return null; }
   else old = [{txt:_fxNum(v), val:v}];
+  if (opt.old && opt.old.length) old = opt.old;
   var c = _fxCompose(parts, v, old, opt); if (!c) return null;
   if (f && _fxNorm(f) === _fxNorm(c.formula)) return null;   // уже так
   return c;
@@ -46408,12 +46410,20 @@ function _fxWriteColumn(sheet, col1, partsByRow, dryRun, opt){
   try {
     var r0 = Math.min.apply(null, rows), r1 = Math.max.apply(null, rows), rg = sheet.getRange(r0, col1, r1 - r0 + 1, 1);
     var fs = rg.getFormulas(), vs = rg.getValues(), plan = [];
+    var nmA = (opt && opt.oldF) ? sheet.getRange(r0, 1, r1 - r0 + 1, 1).getValues() : null;
     rows.forEach(function(r){
-      var i = r - r0, p = _fxCellPlan(partsByRow[r], {formula:fs[i][0], value:vs[i][0]}, opt);
-      if (p) plan.push({row:r, f0:fs[i][0], v0:vs[i][0], f:p.formula});
+      var i = r - r0, o2 = opt || {}, rf = '';
+      if (nmA){   // v7.580: відновлення власних доданків із версії файлу до переведення
+        rf = opt.oldF(col1, r, String(nmA[i][0] || '').trim()) || '';
+        var po = rf ? _fxParseArith('=' + rf) : null;
+        if (po && po !== 'ref' && po.length >= 2){ o2 = {}; for (var q in opt) o2[q] = opt[q]; o2.old = po; } else rf = '';
+      }
+      var p = _fxCellPlan(partsByRow[r], {formula:fs[i][0], value:vs[i][0]}, o2);
+      if (p) plan.push({row:r, f0:fs[i][0], v0:vs[i][0], f:p.formula, rev:rf, user:rf ? p.userKept : 0});
     });
-    plan.forEach(function(p){ if (res.samples.length < 3) res.samples.push({cell:_colLetter(col1 - 1) + p.row, before:p.f0 || p.v0, after:p.f}); });
+    plan.slice().sort(function(a, b){ return b.user - a.user; }).forEach(function(p){ if (res.samples.length < 3) res.samples.push({cell:_colLetter(col1 - 1) + p.row, was:p.rev || undefined, before:p.f0 || p.v0, after:p.f}); });
     res.changed = plan.length;
+    res.userKept = plan.reduce(function(a, p){ return a + p.user; }, 0);
     if (dryRun || !plan.length) return res;
     var sep = _fxSep(sheet.getParent());
     plan.forEach(function(p){ sheet.getRange(p.row, col1).setFormula(_fxLoc(p.f, sep)); });
@@ -46424,7 +46434,7 @@ function _fxWriteColumn(sheet, col1, partsByRow, dryRun, opt){
       if (typeof v === 'number' && Math.abs(v - p.v0) < 0.001) return;
       var c = sheet.getRange(p.row, col1);
       if (p.f0) c.setFormula(p.f0); else c.setValue(p.v0);
-      res.failed++; res.changed--;
+      res.failed++; res.changed--; res.userKept -= p.user;
       (res.errors = res.errors || []).push(_colLetter(col1 - 1) + p.row + ': ' + v + ' ≠ ' + p.v0);
     });
     if (res.failed) SpreadsheetApp.flush();
@@ -46443,10 +46453,10 @@ function _fxDopParts(marks){   // допи: [{activityName, price}] → [{txt:'4
 }
 function _fxAcc(res, w){
   res.fx = res.fx || {changed:0, failed:0, samples:[]};
-  res.fx.changed += w.changed || 0; res.fx.failed += Math.max(0, w.failed || 0);
+  res.fx.changed += w.changed || 0; res.fx.failed += Math.max(0, w.failed || 0); res.fx.userKept = (res.fx.userKept || 0) + (w.userKept || 0);
   if (w.error) res.fx.error = w.error;
   (w.errors || []).forEach(function(e){ (res.fx.errors = res.fx.errors || []).push(e); });
-  (w.samples || []).forEach(function(s){ if (res.fx.samples.length < 4) res.fx.samples.push(s); });
+  (w.samples || []).forEach(function(s){ if (res.fx.samples.length < 8 && (s.was || res.fx.samples.length < 4)) res.fx.samples.push(s); });
 }
 var NOTE_TAG = 'ⓘ ';
 var NOTE_USER_SEP = '\n\n✎ ';
@@ -46624,7 +46634,7 @@ function _notesPayment(loc, year, months, dryRun, opt){
     }
     Object.keys(cols).forEach(function(k){
       var col1 = cols[k] + 1; if (col1 > NOTE_PAY_MAX_COL) return;
-      if (doFx && (!opt.only || opt.only === k)) _fxAcc(res, _fxWriteColumn(sh, col1, fx[k], dryRun));   // v7.578, бюджет навчання — v7.579
+      if (doFx && (!opt.only || opt.only === k)) _fxAcc(res, _fxWriteColumn(sh, col1, fx[k], dryRun, {oldF:opt.oldF}));   // v7.578, бюджет навчання — v7.579
       if (noNotes) return;
       var w = _noteWriteColumn(sh, col1, notes[k], dryRun);
       res.cells += w.withNote; res.changed += w.changed;
@@ -46794,7 +46804,7 @@ function _notesOpex(loc, year, months, dryRun, opt){
         L.forEach(function(it){ pp.push({val:it.amount}); if (it.tax && it.tax.amount) pp.push({val:it.tax.amount}); });
         fxp[rs] = pp;
       });
-      _fxAcc(res, _fxWriteColumn(sheet, col1, fxp, dryRun));
+      _fxAcc(res, _fxWriteColumn(sheet, col1, fxp, dryRun, {oldF:opt.oldF}));
     }
     var w = noNotes ? {withNote:0, changed:0} : _noteWriteColumn(sheet, col1, notes, dryRun);
     res.cells += w.withNote; res.changed += w.changed; res.months.push(m);
@@ -46815,25 +46825,32 @@ function _notesSalary(loc, year, months, dryRun, opt){
   var rate = {}; hr.forEach(function(e){ var k = _nameFoldTight(e.last + ' ' + e.first); if (e.rate) rate[k] = {rate:e.rate, model:e.calcModel || '', cond:e.workCond || ''}; });
   var paid = {};   // рядок|місяць → [line]
   function push(k, l){ (paid[k] = paid[k] || []).push(l); }
+  // v7.580: блоки під-локацій в аркуші хоста (Школа Кар'єрна — в аркуші Кар'єрної)
+  var locs = {}; locs[loc] = 1; try { _subLocsOfHost(loc).forEach(function(x){ locs[x.loc] = 1; }); } catch(_s){}
+  // v7.580: «Salary_рядок» у журналі звірки — назва рядка (ПІБ), не номер; однакові назви — не вгадуємо
+  var rowByRaw = {}, rawDup = {};
+  for (var q0 = 3; q0 < data.length; q0++){ var t0 = String(data[q0][0] || '').trim(); if (!t0) continue; if (rowByRaw[t0]) rawDup[t0] = 1; rowByRaw[t0] = q0 + 1; }
+  function reconRow(v){ var t = String(v || '').trim(); if (/^\d+$/.test(t)) return Number(t); return (rowByRaw[t] && !rawDup[t]) ? rowByRaw[t] : 0; }
   _noteCfgRows(SALARY_RECON_LOG).forEach(function(r){
-    if (String(r[2] || '').trim() !== loc) return;
-    push(Number(r[8]) + '|' + Number(r[9]), {text:_noteJoin([_noteDay(r[0]), _noteMoney(r[12]), 'карта' + (r[6] ? ' …' + String(r[6]).replace(/\D/g, '').slice(-4) : ''), 'відомість №' + String(r[3] || '—')]), amount:_opexNum(r[12])});
+    if (!locs[String(r[2] || '').trim()]) return;
+    var rr = reconRow(r[8]); if (!rr) return;
+    push(rr + '|' + Number(r[9]), {text:_noteJoin([_noteDay(r[0]), _noteMoney(r[12]), 'карта' + (r[6] ? ' …' + String(r[6]).replace(/\D/g, '').slice(-4) : ''), 'відомість №' + String(r[3] || '—')]), amount:_opexNum(r[12])});
   });
   var byName = {}; for (var r0 = 3; r0 < data.length; r0++){ var n0 = String(data[r0][0] || '').trim(); if (n0) byName[_nameFoldTight(n0)] = r0 + 1; }
   _noteCfgRows(OPEX_EXP_LOG_SHEET).forEach(function(r){
-    var cat = String(r[6] || ''); if (String(r[0] || '').trim() !== loc || cat.indexOf('→Salary: ') !== 0 || String(r[10] || 'внесено') !== 'внесено') return;
+    var cat = String(r[6] || ''); if (!locs[String(r[0] || '').trim()] || cat.indexOf('→Salary: ') !== 0 || String(r[10] || 'внесено') !== 'внесено') return;
     var row = byName[_nameFoldTight(cat.replace(/^→Salary:\s*/, ''))]; if (!row) return;
     push(row + '|' + Number(r[7]), {text:_noteJoin([_noteDay(r[2]), _noteMoney(r[5]), 'банк, ФОП', String(r[12] || '').trim()]), amount:_opexNum(r[5])});
   });
   _noteCfgRows(CASH_LOG_SHEET).forEach(function(r){
-    if (String(r[2]) !== 'salary' || String(r[3] || '').trim() !== loc || String(r[13] || 'внесено') !== 'внесено') return;
+    if (String(r[2]) !== 'salary' || !locs[String(r[3] || '').trim()] || String(r[13] || 'внесено') !== 'внесено') return;
     push(Number(r[4]) + '|' + Number(r[7]), {text:_noteJoin([_noteDay(r[0]), _noteMoney(r[8]), 'готівка', String(r[11] || '').slice(0, 120)]), amount:_opexNum(r[8])});
   });
   // допи: відмітки місяця-джерела по заняттю (для кількості занять у рядку заняття)
   var dopCnt = {};
   var att = _getAttendanceSheet(false).getDataRange().getValues();
   for (var i = 1; i < att.length; i++){
-    var a = _parseAttendanceRow(att[i]); if (a.loc !== loc) continue;
+    var a = _parseAttendanceRow(att[i]); if (!locs[a.loc]) continue;
     var mm = /^(\d{4})-(\d{2})/.exec(String(a.date || '')); if (!mm || Number(mm[1]) !== year) continue;
     var k = _nameFoldTight(a.activityName) + '|' + Number(mm[2]), d = dopCnt[k] = dopCnt[k] || {dates:{}, marks:0};
     d.dates[a.date] = 1; d.marks++;
@@ -46841,7 +46858,11 @@ function _notesSalary(loc, year, months, dryRun, opt){
   var res = {ok:true, kind:'salary', loc:loc, months:[], cells:0, changed:0, samples:{}};
   _noteMonthsOk(year, months).forEach(function(m){
     var fCol = (m - 1) * 3 + 2, bCol = (m - 1) * 3 + 3, nf = {}, nb = {}, xf = {}, xb = {};
-    var sj = _readJournalForTarget(loc, 'salary', year, m).byNormName, pj = _readJournalForTarget(loc, 'predmetnyky', year, m).byNormName;
+    var sj = {}, pj = {};
+    Object.keys(locs).forEach(function(l){   // v7.580: журнали під-локацій теж
+      var a1 = {}, a2 = {}; try { a1 = _readJournalForTarget(l, 'salary', year, m).byNormName || {}; } catch(_j1){} try { a2 = _readJournalForTarget(l, 'predmetnyky', year, m).byNormName || {}; } catch(_j2){}
+      Object.keys(a1).forEach(function(k){ if (!sj[k]) sj[k] = a1[k]; }); Object.keys(a2).forEach(function(k){ if (!pj[k]) pj[k] = a2[k]; });
+    });
     for (var r = 3; r < data.length; r++){
       var nm = String(data[r][0] || '').trim(); if (!nm || _salaryIsSkippedRow(nm) || _salaryIsSubtotalRow(nm)) continue;
       var row1 = r + 1, nk = _nameFoldTight(nm), mon = NOTE_MON[m], pl = paid[row1 + '|' + m] || [];
@@ -46862,7 +46883,7 @@ function _notesSalary(loc, year, months, dryRun, opt){
       nb[row1] = _noteCompose(nm + ', нараховано, ' + mon, bl, bud);
       xb[row1] = bl.filter(function(l){ return !l.noSum && l.amount; }).map(function(l){ return {val:l.amount}; });   // v7.578 база (залишок) + допи + предметники
     }
-    if (doFx){ _fxAcc(res, _fxWriteColumn(sheet, fCol, xf, dryRun)); _fxAcc(res, _fxWriteColumn(sheet, bCol, xb, dryRun, {manualFirst:true})); }
+    if (doFx){ _fxAcc(res, _fxWriteColumn(sheet, fCol, xf, dryRun, {oldF:opt.oldF})); _fxAcc(res, _fxWriteColumn(sheet, bCol, xb, dryRun, {manualFirst:true, oldF:opt.oldF})); }
     [[fCol, nf, 'salaryFact'], [bCol, nb, 'salaryBudget']].forEach(function(x){
       if (noNotes) return;
       var w = _noteWriteColumn(sheet, x[0], x[1], dryRun); res.cells += w.withNote; res.changed += w.changed;
@@ -46898,6 +46919,51 @@ function _fxSnapDiff(a, b){
   });
   return d;
 }
+// v7.580: формули аркуша з версії файлу до моменту before (Drive revisions + експорт xlsx цієї версії).
+// → {sheet, revTime, f:{'AC4':'167228.48-11200'}, a:{4:'ОРЕНДА'}} — f англійською (крапка), a — текст колонки A.
+function _fxXmlText(x){ return String(x || '').replace(/<[^>]+>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&'); }
+function _fxRevSheet(ss, sheetName, beforeIso){
+  var tok = ScriptApp.getOAuthToken(), id = ss.getId(), revs = [], pt = '';
+  do {
+    var r = UrlFetchApp.fetch('https://www.googleapis.com/drive/v3/files/' + id + '/revisions?pageSize=200&fields=nextPageToken,revisions(id,modifiedTime)' + (pt ? '&pageToken=' + encodeURIComponent(pt) : ''),
+      {headers:{Authorization:'Bearer ' + tok}, muteHttpExceptions:true});
+    if (r.getResponseCode() !== 200) throw new Error('Drive revisions HTTP ' + r.getResponseCode());
+    var j = JSON.parse(r.getContentText()); pt = j.nextPageToken || '';
+    (j.revisions || []).forEach(function(x){ if (String(x.modifiedTime) < beforeIso) revs.push(x); });
+  } while (pt);
+  if (!revs.length) throw new Error('немає версії до ' + beforeIso);
+  revs.sort(function(a, b){ return String(a.modifiedTime).localeCompare(String(b.modifiedTime)); });
+  var rv = revs[revs.length - 1];
+  var ex = UrlFetchApp.fetch('https://docs.google.com/spreadsheets/d/' + id + '/export?format=xlsx&revision=' + encodeURIComponent(rv.id), {headers:{Authorization:'Bearer ' + tok}, muteHttpExceptions:true});
+  if (ex.getResponseCode() !== 200) throw new Error('export xlsx HTTP ' + ex.getResponseCode());
+  var files = {}; Utilities.unzip(ex.getBlob().setContentType('application/zip')).forEach(function(b){ files[b.getName()] = b; });
+  var wb = files['xl/workbook.xml'].getDataAsString(), rels = files['xl/_rels/workbook.xml.rels'].getDataAsString(), rid = '', m;
+  var reS = /<sheet\b([^>]*)\/>/g;
+  while ((m = reS.exec(wb))){ var nm = /\bname="([^"]*)"/.exec(m[1]), ri = /\br:id="([^"]*)"/.exec(m[1]); if (nm && ri && _fxXmlText(nm[1]) === sheetName) rid = ri[1]; }
+  if (!rid) throw new Error('аркуш «' + sheetName + '» у версії не знайдено');
+  var tg = new RegExp('<Relationship\\b[^>]*Id="' + rid + '"[^>]*>').exec(rels), tgt = tg && /Target="([^"]*)"/.exec(tg[0]);
+  if (!tgt) throw new Error('rels');
+  var path = tgt[1].replace(/^\/?(xl\/)?/, 'xl/'), xml = files[path].getDataAsString();
+  var sst = [];
+  if (files['xl/sharedStrings.xml']){ var sx = files['xl/sharedStrings.xml'].getDataAsString(), re2 = /<si>([\s\S]*?)<\/si>/g, m2; while ((m2 = re2.exec(sx))) sst.push(_fxXmlText(m2[1])); }
+  var out = {sheet:sheetName, revTime:rv.modifiedTime, f:{}, a:{}}, reC = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g, mc;
+  while ((mc = reC.exec(xml))){
+    var at = mc[1], ref = /\br="([A-Z]+)(\d+)"/.exec(at); if (!ref || !mc[2]) continue;
+    var body = mc[2], ff = /<f[^>]*>([\s\S]*?)<\/f>/.exec(body);
+    if (ff && ff[1]) out.f[ref[1] + ref[2]] = _fxXmlText(ff[1]);
+    if (ref[1] === 'A'){
+      var t = /\bt="([^"]*)"/.exec(at), v = /<v>([\s\S]*?)<\/v>/.exec(body), is = /<is>([\s\S]*?)<\/is>/.exec(body);
+      out.a[ref[2]] = t && t[1] === 's' && v ? (sst[Number(v[1])] || '') : is ? _fxXmlText(is[1]) : v ? _fxXmlText(v[1]) : '';
+    }
+  }
+  return out;
+}
+function _fxOldF(rs){   // (col1, row, назва в A зараз) → формула з версії, якщо рядок той самий
+  return function(col1, row, name){
+    if (String(rs.a[row] || '').trim() !== String(name || '').trim()) return '';
+    return rs.f[_colLetter(col1 - 1) + row] || '';
+  };
+}
 function fxMigrate(body){
   body = body || {};
   var a = _promoActor(body); if (!(a && _roleKey(a.role) === 'cfo')) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
@@ -46906,18 +46972,20 @@ function fxMigrate(body){
   if (!loc || !months.length) return {ok:false, error:'loc і months обовʼязкові'};
   if (/Житомир|Благо/.test(loc)) return {ok:false, error:'Управління не чіпаємо'};
   try {
-    var ss = null;
-    if (kind === 'payment'){ var reg = _getLocationPaymentRegistry(loc); if (reg && reg.sheetId) ss = SpreadsheetApp.openById(reg.sheetId); }
-    else if (kind === 'opex'){ var ls = _opexLocSheet(loc); if (ls) ss = ls.sheet.getParent(); }
-    else if (kind === 'salary'){ var so = _salaryOpenSheet(loc); if (so.ok) ss = so.sheet.getParent(); }
+    var ss = null, shN = '';
+    if (kind === 'payment'){ var reg = _getLocationPaymentRegistry(loc); if (reg && reg.sheetId){ ss = SpreadsheetApp.openById(reg.sheetId); shN = (ss.getSheetByName(reg.sheetName) || ss.getSheets()[0]).getName(); } }
+    else if (kind === 'opex'){ var ls = _opexLocSheet(loc); if (ls){ ss = ls.sheet.getParent(); shN = ls.sheet.getName(); } }
+    else if (kind === 'salary'){ var so = _salaryOpenSheet(loc); if (so.ok){ ss = so.sheet.getParent(); shN = so.sheet.getName(); } }
     if (!ss) return {ok:false, error:kind + ' «' + loc + '» не знайдено'};
     var before = dryRun ? null : _fxSnapshot(ss);
-    var o = {fx:true, notes:false, only:String(body.only || '')}, r;
+    var o = {fx:true, notes:false, only:String(body.only || '')}, r, rsv = null;
+    if (body.before){ rsv = _fxRevSheet(ss, shN, String(body.before)); o.oldF = _fxOldF(rsv); }   // v7.580 власні доданки з версії до переведення
     if (kind === 'payment') r = _notesPayment(loc, year, months, dryRun, o);
     else if (kind === 'opex') r = _notesOpex(loc, year, months, dryRun, o);
     else r = _notesSalary(loc, year, months, dryRun, o);
     if (!r || !r.ok) return r || {ok:false, error:'?'};
     var out = {ok:true, kind:kind, loc:loc, months:r.months, dryRun:dryRun, fx:r.fx || {changed:0, failed:0, samples:[]}};
+    if (rsv){ out.revTime = rsv.revTime; out.revFormulas = Object.keys(rsv.f).length; }
     if (!dryRun){ SpreadsheetApp.flush(); var diffs = _fxSnapDiff(before, _fxSnapshot(ss)); out.sheets = Object.keys(before).length; out.diffCount = diffs.length; out.diffs = diffs.slice(0, 20); }
     return out;
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
