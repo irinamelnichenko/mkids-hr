@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.578
+// m.kids CRM — Google Apps Script v7.579
+// v7.579: Payment «Бюджет навч» теж формулою: =договір−знижка відпустки/лікарняного окремими доданками (=21000−5250), ручна різниця окремим доданком; клітинки з посиланнями (акції SUMIFS, «=попередній місяць») не чіпаються
 // v7.578: клітинки України — формула з доданків замість суми: OPEX =4558+1155+527 (податок окремо), Payment факт навч/вступ/доп кожен платіж, бюджет доп =4*340+430 (до BJ), Salary виплати кожна окремо, нарахування — складові; ручна правка — різницею окремим доданком; значення не змінюється (перевірка після запису, відкат клітинки); запис OPEX/Payment/Salary тепер дописує «+сума» у формулу; перебудова разом із примітками
 // v7.577: податки — нічого автоматично: звірка показує кожен платіж у Казначейство / ДПС окремим рядком, стаття лише підказка (основний платіж / «ПОДАТОК»), запис кнопкою; компенсації освітніх послуг і рахунок …5127 не вносяться; notesBuild {cat} — повні примітки статті для перевірки (діагностика)
 // v7.576: Банк_Призначення — дописування не падає, коли закінчились рядки аркуша (розширюємо аркуш); помилка запису видна в bankFetch (purposesError)
@@ -9882,7 +9883,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.578', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.579', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -46619,10 +46620,11 @@ function _notesPayment(loc, year, months, dryRun, opt){
       var je = vac[_journalNormName(nm)];
       if (je && je.sum) bl.push({text:'знижка відпустка / лікарняний: −' + _noteMoney(Math.abs(je.sum)), amount:-Math.abs(je.sum)});
       notes.budNavch[row1] = _noteCompose(nm + ', бюджет навчання, ' + mon, bl, _opexNum(data[r][cols.budNavch]));
+      fx.budNavch[row1] = bl.map(function(l){ return {val:l.amount}; });   // v7.579 =договір−знижка
     }
     Object.keys(cols).forEach(function(k){
       var col1 = cols[k] + 1; if (col1 > NOTE_PAY_MAX_COL) return;
-      if (doFx && k !== 'budNavch') _fxAcc(res, _fxWriteColumn(sh, col1, fx[k], dryRun));   // v7.578 (бюджет навчання — ні)
+      if (doFx && (!opt.only || opt.only === k)) _fxAcc(res, _fxWriteColumn(sh, col1, fx[k], dryRun));   // v7.578, бюджет навчання — v7.579
       if (noNotes) return;
       var w = _noteWriteColumn(sh, col1, notes[k], dryRun);
       res.cells += w.withNote; res.changed += w.changed;
@@ -46910,7 +46912,7 @@ function fxMigrate(body){
     else if (kind === 'salary'){ var so = _salaryOpenSheet(loc); if (so.ok) ss = so.sheet.getParent(); }
     if (!ss) return {ok:false, error:kind + ' «' + loc + '» не знайдено'};
     var before = dryRun ? null : _fxSnapshot(ss);
-    var o = {fx:true, notes:false}, r;
+    var o = {fx:true, notes:false, only:String(body.only || '')}, r;
     if (kind === 'payment') r = _notesPayment(loc, year, months, dryRun, o);
     else if (kind === 'opex') r = _notesOpex(loc, year, months, dryRun, o);
     else r = _notesSalary(loc, year, months, dryRun, o);
