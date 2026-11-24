@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.580
+// m.kids CRM — Google Apps Script v7.581
+// v7.581: Польща, крок 1 — plDiag (лише читання, CFO): структура 4 фінфайлів 2026 (вкладки, колонка A, шапки, колонки місяців Actual/Budget, формули грудня, рахунки IBAN у файлах) для підключення; нічого не пише
 // v7.580: формули з доданків — твої власні доданки (−11200, +500) лишаються як були, окремим доданком лише різниця, якої не пояснюють ні система, ні вони; fxMigrate {before} відновлює їх із версії файлу до переведення (xlsx-експорт версії); Salary — журнал звірки ЗП за назвою рядка (ПІБ), блок під-локації (Школа Кар'єрна) в аркуші хоста
 // v7.579: нарахування ЗП — від'ємна ручна різниця в кінці (=6500−2500, не =−2500+6500); Payment «Бюджет навч» теж формулою: =договір−знижка відпустки/лікарняного окремими доданками (=21000−5250), ручна різниця окремим доданком; клітинки з посиланнями (акції SUMIFS, «=попередній місяць») не чіпаються
 // v7.578: клітинки України — формула з доданків замість суми: OPEX =4558+1155+527 (податок окремо), Payment факт навч/вступ/доп кожен платіж, бюджет доп =4*340+430 (до BJ), Salary виплати кожна окремо, нарахування — складові; ручна правка — різницею окремим доданком; значення не змінюється (перевірка після запису, відкат клітинки); запис OPEX/Payment/Salary тепер дописує «+сума» у формулу; перебудова разом із примітками
@@ -9884,7 +9885,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.580', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.581', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -10190,6 +10191,7 @@ function doPost(e) {
     else if (body.action === 'invPaidFix')                result = invPaidFix(body);                         // v7.571 «оплачено» — локація / контрагент редагуванням (CFO; dryRun)
     else if (body.action === 'invPaidRedo')               result = invPaidRedo(body);                        // v7.570 «оплачено» — дописати / замінити (CFO; dryRun)
     else if (body.action === 'invTopicSetLoc')            result = invTopicSetLoc(body);                     // v7.569 гілка → локація вручну (CFO)
+    else if (body.action === 'plDiag')                    result = plDiag(body);                             // v7.581 Польща: структура файлів (читання)
     else if (body.action === 'fxMigrate')                 result = fxMigrate(body);                          // v7.578 формули з доданків
     else if (body.action === 'notesBuild')                result = notesBuild(body);                         // v7.567 примітки-розшифровки (CFO; dryRun)
     else if (body.action === 'notesSetup')                result = notesSetup(body);                         // v7.567 тригер notesTick
@@ -46990,6 +46992,52 @@ function fxMigrate(body){
     return out;
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
+// ═══ v7.581: ПОЛЬЩА — крок 1, розвідка файлів (лише читання) ═══
+var PL_FILES_26 = {LUBLIN:'1LEl4R6ba3Yi8el9b8GS_m_HJTspd9OXyIrWgu_d1w5o', PRUZSKOW:'1CKL2AHUnUWjfAifAgLpGYakO2hKgNv9FoiHrQZgTZ0w',
+                   KONSTANCIN:'16yD9rLbcu6QPQlkiF6rb4yTNm0z6GW92SgE78fpmxzY', PRIMROSE:'1KQv-z_7SmxUhv2vNw8t2gqZSdTW8_ni8kodajwr3Jw4'};
+var PL_MON_EN = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+// Колонки місяців за шапкою (перші 6 рядків): {Dec:{actual:col1, budget:col1}, …}
+function _plMonthCols(head){
+  var out = {}, W = 0; head.forEach(function(r){ W = Math.max(W, r.length); });
+  for (var c = 0; c < W; c++){
+    var txt = head.map(function(r){ return String(r[c] == null ? '' : r[c]).replace(/\s+/g, ' ').trim().toLowerCase(); }).join(' | ');
+    var m = -1; PL_MON_EN.forEach(function(x, i){ if (new RegExp('(^|[^a-z])' + x + '([^a-z]|$)').test(txt)) m = i; });
+    if (m < 0 || /\bq[1-4]\b|total/.test(txt)) continue;
+    var kind = /budget|budżet/.test(txt) ? 'budget' : /actual/.test(txt) ? 'actual' : '';
+    if (!kind) continue;
+    var k = PL_MON_EN[m]; out[k] = out[k] || {}; if (!out[k][kind]) out[k][kind] = c + 1;
+  }
+  return out;
+}
+function plDiag(p){
+  p = p || {};
+  var a = _promoActor(p); if (!(a && _roleKey(a.role) === 'cfo')) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var only = String(p.file || ''), res = {ok:true, files:{}};
+  Object.keys(PL_FILES_26).forEach(function(k){
+    if (only && only !== k) return;
+    try {
+      var ss = SpreadsheetApp.openById(PL_FILES_26[k]), f = {name:ss.getName(), locale:ss.getSpreadsheetLocale(), tabs:{}};
+      ss.getSheets().forEach(function(sh){
+        var lr = sh.getLastRow(), lc = sh.getLastColumn(); if (!lr || !lc) { f.tabs[sh.getName()] = {empty:true}; return; }
+        var rg = sh.getRange(1, 1, lr, lc), V = rg.getDisplayValues(), F = rg.getFormulas();
+        var head = V.slice(0, Math.min(6, V.length)), cols = _plMonthCols(head), dec = cols.dec || {};
+        var t = {lastRow:lr, lastCol:lc, head:head, months:cols, rows:[], ibans:[]};
+        for (var r = 0; r < V.length; r++){
+          var A = String(V[r][0] || '').trim(), B = String(V[r][1] || '').trim();
+          var row = {r:r + 1, a:A}; if (B && !A) row.b = B;
+          ['actual', 'budget'].forEach(function(kd){ var c = dec[kd]; if (c){ row['dec_' + kd] = V[r][c - 1]; if (F[r][c - 1]) row['decF_' + kd] = F[r][c - 1]; } });
+          var nov = (cols.nov || {}).actual; if (nov){ row.nov = V[r][nov - 1]; if (F[r][nov - 1]) row.novF = F[r][nov - 1]; }
+          if (A || B || row.decF_actual || row.decF_budget) t.rows.push(row);
+          V[r].forEach(function(x, c){ var mm = /\b(PL\s?\d{2}(?:\s?\d{4}){6}|\d{2}(?:\s?\d{4}){6})\b/.exec(String(x)); if (mm) t.ibans.push({cell:_colLetter(c) + (r + 1), v:mm[1], ctx:String(V[r][0] || '')}); });
+        }
+        f.tabs[sh.getName()] = t;
+      });
+      res.files[k] = f;
+    } catch(e){ res.files[k] = {error:String(e && e.message || e)}; }
+  });
+  return res;
+}
+// ═══ /v7.581 ═══
 // POST {action:'notesBuild', actorId, kind:'payment'|'opex'|'salary', loc, months:[10,11], year, dryRun} — CFO; dryRun за замовч.
 function notesBuild(body){
   body = body || {};
