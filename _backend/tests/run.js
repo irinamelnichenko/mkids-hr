@@ -917,7 +917,7 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
 {
   const vv = (n) => /var [A-Z0-9_]+ *=[\s\S]*?;\n/.exec(src.slice(src.indexOf('var ' + n + ' ')))[0];
   const names = ['_plFold', '_plTokens', '_plLev1', '_plTokHit', '_plRowName', '_plRowNames', '_plRowHit', '_plJoined', '_plMerchant', '_plTitle', '_plRoute', '_plZusPass',
-    '_plRedir', '_plUniqRows', '_plKidFallback', '_plSplit', '_plBankEnds', '_plCfOpenPlan', '_plColNum', '_plPayerName', '_plCfRow', '_plBalFix'];
+    '_plRedir', '_plUniqRows', '_plKidFallback', '_plSplit', '_plBankEnds', '_plCfOpenPlan', '_plColNum', '_plPayerName', '_plCfRow', '_plBalFix', '_plParseF', '_plPlanCells', '_plNoteMerge', '_plEvalPlus'];
   const X = new Function(['PL_ACC4', 'PL_STOP', 'PL_AWZ_PEER', 'PL_FEDIR_RE', 'PL_PERSPICIO_RE', 'PL_REDIRECT', 'PL_FIXED', 'PL_LOC4'].map(vv).join('\n') + names.map(fn).join('\n') + '\nreturn {' + names.join(',') + '};')();
   const ck = (id, t, g, e) => check(id, t, {r: g}, {r: e});
   const L = {payment: [{r: 5, a: 'Miroslava Vinichenko', block: 'Misie'}, {r: 23, a: 'Daryna Rakitina', block: 'Tygryski'}, {r: 24, a: 'Myron Rakitin', block: 'Tygryski'}, {r: 19, a: 'Tygryski', block: ''},
@@ -960,7 +960,7 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
      [pj({type: 'Przelew z rachunku', amount: -5000, to: 'PERSPICIO SPÓŁKA Z OGRANICZONĄ ODPO WIEDZIALNOŚCIĄ', to_acc: '42102010970000730208971006', desc: 'Tytuł : LOAN RETURN'}),
       pj({type: 'Przelew na konto', amount: 5000, from: 'M KIDS SPÓŁKA Z OGRANICZONĄ', from_acc: '96102010970000760208391767', desc: 'Tytuł : LOAN RETURN'}, Object.assign({}, L, {loc: 'PRIMROSE'})),
       pj({type: 'Przelew na konto', amount: 5880, from: 'PERSPICIO SP. Z O.O. al. 3 MAJA', from_acc: '50156000132334344210000001', desc: 'Tytuł : Przelew środków'}, Object.assign({}, L, {loc: 'PRIMROSE'}))],
-     [['opex', 'PERSPICIO', 'до PERSPICIO'], ['opex', 'PERSPICIO', 'від LUBLIN (PERSPICIO)'], ['opex', 'PERSPICIO', 'від PERSPICIO']]);
+     [['cf', 'PERSPICIO', 'до PERSPICIO'], ['cf', 'PERSPICIO', 'від LUBLIN (PERSPICIO)'], ['cf', 'PERSPICIO', 'від PERSPICIO']]);
   const LD = Object.assign({}, L, {loc: 'LUBLIN', salary: [{r: 5, a: 'KOLADA MAŁGORZATA'}, {r: 51, a: 'KOLADA MAŁGORZATA'}, {r: 50, a: 'FEDIR KORNIIENKO на 11 число'}, {r: 13, a: 'KUBIK MAŁGORZATA'}],
     opex: L.opex.concat([{r: 34, a: 'WSPÓLNOTA MIESZKANIOWA'}, {r: 78, a: 'SPRZEDAWCA WSPÓLNOTA MIESZKANIOWA'}, {r: 40, a: 'P 4 sp. z o.o.'}, {r: 53, a: 'ZWROT ZA FA'}])});
   const RD = (o) => { const r = X._plRoute(o, LD); return r.kind + ':' + (r.row || ''); };
@@ -1002,7 +1002,7 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
      [cr('PRUZSKOW', {amount: 500}, {interco: 'LUBLIN'}), cr('PRUZSKOW', {amount: -3500}, {interco: 'LUBLIN'}), cr('PRUZSKOW', {amount: -2500}, {journal: 'Позики Федора'}),
       cr('PRUZSKOW', {amount: -500}, {journal: 'PERSPICIO', peer: 'PRIMROSE'}), cr('PRIMROSE', {amount: 5000}, {journal: 'PERSPICIO', peer: 'LUBLIN'}),
       cr('PRIMROSE', {amount: 5880}, {journal: 'PERSPICIO', peer: ''}), cr('PRUZSKOW', {amount: 1500}, {awzPeer: true, loc: 'KONSTANCIN'}), cr('PRUZSKOW', {amount: -100}, {interco: 'OVERHEAD'})],
-     [87, 88, 91, 99, 87, 98, 94, null]);
+     [87, 88, 91, 99, 98, 98, 94, null]);
   ck('pl: PERSPICIO у формулу BALANCE', 'у підсумок відтоків; ручна поправка лишається в кінці; уже є — не чіпаємо',
      [X._plBalFix('=AJ77+AJ106+AJ107', {106: '=AJ5+AJ87+AJ89', 107: '=AJ39+AJ88+AJ103'}, 39, 104, 'AJ'),
       X._plBalFix('=AL77+AL106+AL107', {106: '=AL5+AL87', 107: '=AL39+AL88+AL103+0,72'}, 39, 104, 'AL').after,
@@ -1011,6 +1011,25 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
   const LT = Object.assign({}, L, {loc: 'PRIMROSE', payment: [{r: 9, a: 'Then Teodor', block: 'OWLS', budget: 1850}, {r: 54, a: 'IZABELA THEN', block: 'OWLS', budget: 0}]});
   const tt = X._plRoute({type: 'Przelew na konto', amount: 2630, from: 'IZABELA THEN', desc: 'Tytuł : TEO THEN PAZDZIERNIK'}, LT);
   ck('pl: Teo Then → рядок дитини', 'рядок 9, платник у підставі', [tt.row, /платник IZABELA THEN/.test(tt.why)], [9, true]);
+  // v7.587
+  ck('pl: доданки з клітинки', 'ru-формула, посилання, число', [X._plParseF('=276,23-102,9'), X._plParseF('=T5'), X._plParseF('', 870), X._plParseF('', '')], [[276.23, -102.9], 'ref', [870], []]);
+  const pc = X._plPlanCells([
+    {key: 'Bied', file: 'P', parts: [{val: 276.23}, {val: 102.9}], old: [276.23, -102.9]},
+    {key: 'BRECHKO', file: 'K', parts: [{val: 5000}], old: [5000, 680]},
+    {key: 'BRZ', file: 'L', parts: [{val: 1086.21}], old: [1086.21, 925.37]}, {key: 'KULIK', file: 'L', parts: [{val: 925.37}], old: []},
+    {key: 'B1', file: 'R', group: 'g', parts: [{val: 2690.16}], old: [2623]}, {key: 'B2', file: 'R', group: 'g', parts: [{val: 2556.34}], old: [2623]},
+    {key: 'ARVAL', file: 'A', parts: [{val: 3258.27}], old: [3258.27, 1.1]}, {key: 'FEE', file: 'A', parts: [{val: 1.1}], old: []},
+    {key: 'PRY76', file: 'Y', parts: [], old: [603.07, 1.1]}, {key: 'PRY62', file: 'Y', parts: [{val: 603.07}, {val: 1.1}], old: []},
+    {key: 'MK', file: 'M', parts: [{val: 11700}], old: [-500, 11700], drop: [{val: -500, why: 'PERSPICIO'}]},
+    {key: 'X', file: 'Q', parts: [{val: 300}], old: [100]}]);
+  const st2 = (k) => { const x = pc.find((q) => q.key === k); return x.status + ':' + (x.formula || ''); };
+  ck('pl: план клітинок (запис доданками)', 'знак-помилка; готівка лишається; перенесене; брати й сестри; дрібна комісія; PERSPICIO з MKIDS; незрозуміле',
+     ['Bied', 'BRECHKO', 'BRZ', 'KULIK', 'B1', 'ARVAL', 'PRY76', 'PRY62', 'MK', 'X'].map(st2),
+     ['write:=276.23+102.9', 'same:=5000+680', 'write:=1086.21', 'write:=925.37', 'write:=2690.16', 'same:=3258.27+1.1', 'clear:', 'write:=603.07+1.1', 'write:=11700', 'unsafe:']);
+  ck('pl: примітка PKO', 'блок замінюється, примітка Іри лишається', [X._plNoteMerge('моя примітка', 'a'), X._plNoteMerge('моя примітка\n── PKO ──\nстаре', 'нове'), X._plNoteMerge('x\n── PKO ──\nстаре', ''), X._plEvalPlus('=1.1+2.25-0.35')],
+     ['моя примітка\n── PKO ──\na', 'моя примітка\n── PKO ──\nнове', 'x', 3]);
+  ck('pl: відшкодування за чек', '«FAKTURA - SKLEP ZABKA» → ZWROT; «FAKTURA» компанії — ні',
+     [RD({type: 'Przelew z rachunku', amount: -12, to: 'KUBIK MAŁGORZATA', desc: 'Tytuł : FAKTURA - SKLEP ZABKA- 13.10.2026'}), RD({type: 'Przelew z rachunku', amount: -2400, to: 'KUBIK MAŁGORZATA', desc: 'Tytuł : FAKTURA 12/2026'})], ['opex:53', 'salary:13']);
   ck('pl: невідомий контрагент', 'у список рішень', R({type: 'Przelew z rachunku', amount: -500, to: 'ARVAL SERVICE LEASE', desc: 'Tytuł : FA'}), 'decide:');
 }
 

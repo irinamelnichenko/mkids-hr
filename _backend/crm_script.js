@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.586
+// m.kids CRM — Google Apps Script v7.587
+// v7.587: Польща — рішення CFO 25.11 (четверте): PERSPICIO не в MKIDS — лише журнал і рядок CF (PRIMROSE — «OWN TRANSFER ±» з приміткою «PERSPICIO»); запис доданками plWriteCells + план _plPlanCells (власні доданки, яких немає в банку, лишаються; перенесене між рядками прибирається; брати й сестри — заміна розподілом банку; незрозуміле — не пишемо); Opening жовтня = банк 01.10, Closing = банк на кінець; відшкодування «SKLEP / FAKTURA»
 // v7.586: Польща — рішення CFO 25.11 (третє): власні перекази знову в MKIDS зі знаком (як у жовтні) + рядок CF переказу (_plCfRow); PERSPICIO — окрема компанія, журнал PERSPICIO, на PRIMROSE — рядки «LUBLIN 1767 +» / «OWN TRANSFER ±»; рядок PERSPICIO у формулу BALANCE (plCfFixBalance, _plBalFix); Teo Then → рядок 9 з платником у примітці; залишки банку за ланцюжком saldo (картки проводяться пізніше)
 // v7.585: Польща — рішення CFO 25.11 (друге): PERSPICIO — окремий журнал (рахунок 1006 належить PERSPICIO), перекази між власними рахунками не вносимо (skip + interco для CF), дублі рядків → один рядок (PL_REDIRECT), Arval/P4/Biedronka → фіксовані рядки (PL_FIXED), брати й сестри — частки за бюджетом місяця (_plSplit), дитина за прізвищем / платником у дужках / ім'ям у призначенні (_plKidFallback), повернення по картці — мінус у рядку покупки, відшкодування працівнику → «ZWROT ZA …», банківські списання за повною назвою рядка, CF: Opening з банку через Closing попереднього місяця (_plBankEnds, _plCfOpenPlan)
 // v7.584: Польща — рішення CFO 25.11: ZUS «Aktywnie w żłobku» за дітей KONSTANCIN, що прийшов на PRUZSKOW, → блок ZUS у Payment KONSTANCIN, переказ PRUZSKOW → KONSTANCIN на цю суму — транзит (_plZusPass), повернення батькам → «ZUS Return» KONSTANCIN; позики Федора (Корнієнко або LOAN) → MKIDS з підписом «позика Федора» / «повернення Федору», незрозуміле — у список; примітки рядка українською/російською не заважають знайти контрагента
@@ -9890,7 +9891,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.586', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.587', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -10197,7 +10198,8 @@ function doPost(e) {
     else if (body.action === 'invPaidRedo')               result = invPaidRedo(body);                        // v7.570 «оплачено» — дописати / замінити (CFO; dryRun)
     else if (body.action === 'invTopicSetLoc')            result = invTopicSetLoc(body);                     // v7.569 гілка → локація вручну (CFO)
     else if (body.action === 'plDiag')                    result = plDiag(body);
-    else if (body.action === 'plCfFixBalance')            result = plCfFixBalance(body);                     // v7.586 PERSPICIO у формулу BALANCE (dryRun за замовч.)                             // v7.581 Польща: структура файлів (читання)
+    else if (body.action === 'plCfFixBalance')            result = plCfFixBalance(body);
+    else if (body.action === 'plWriteCells')              result = plWriteCells(body);                       // v7.587 запис доданками (dryRun за замовч.)                     // v7.586 PERSPICIO у формулу BALANCE (dryRun за замовч.)                             // v7.581 Польща: структура файлів (читання)
     else if (body.action === 'fxMigrate')                 result = fxMigrate(body);                          // v7.578 формули з доданків
     else if (body.action === 'notesBuild')                result = notesBuild(body);                         // v7.567 примітки-розшифровки (CFO; dryRun)
     else if (body.action === 'notesSetup')                result = notesSetup(body);                         // v7.567 тригер notesTick
@@ -47108,7 +47110,7 @@ function _plRoute(op, L){
   if (persp){
     var pw = amt > 0 ? 'від PERSPICIO' : 'до PERSPICIO';
     if (L.loc === 'PRIMROSE' && peer && peer !== 'PRIMROSE') pw = amt > 0 ? 'від ' + peer + ' (PERSPICIO)' : 'до ' + peer + ' (PERSPICIO)';
-    return L.mkidsRow ? {kind:'opex', row:L.mkidsRow, signed:true, loan:pw, journal:'PERSPICIO', peer:peer, why:'PERSPICIO ' + pw + ' → MKIDS'} : {kind:'decide', why:'PERSPICIO: рядка MKIDS немає'};
+    return {kind:'cf', loan:pw, journal:'PERSPICIO', peer:peer, why:'PERSPICIO ' + pw + ' — журнал PERSPICIO + рядок CF (у MKIDS не вносимо)'};   // v7.587
   }
   if (fed || (loanT && !own)) return {kind:'decide', why:fed ? 'Корнієнко Федір без LOAN у призначенні — позика чи ні?' : 'LOAN у призначенні, але не Корнієнко Федір і не PERSPICIO'};
   if (own && loanT) return {kind:'decide', why:'LOAN у призначенні власного переказу — позика Федора чи переказ?'};
@@ -47188,7 +47190,7 @@ function _plRoute(op, L){
   var wt = _plTokens(who), wj = _plJoined(who);
   var sh = _plUniqRows(L, 'salary', (L.salary || []).filter(function(x){ return _plRowHit(x.a, wt, wj); }));
   // відшкодування працівнику (є в Salary) за чеки / фактури («ZWROT ZA FA», «ZWROT ZA ZAKUPY») — рядок OPEX «ZWROT ZA …», не зарплата
-  if (sh.length && amt < 0 && /Przelew/i.test(type) && /\bZWROT\b|\bZA FA\b|\bZAKUP|\bPARAGON/.test(tf)){
+  if (sh.length && amt < 0 && /Przelew/i.test(type) && /\bZWROT\b|\bZA FA\b|\bZAKUP|\bPARAGON|\bSKLEP\b/.test(tf)){
     var zr = (L.opex || []).filter(function(x){ return /^ZWROT ZA\b/.test(_plFold(x.a)); });
     if (zr.length) return {kind:'opex', row:zr[0].r, why:'відшкодування: ' + _plRowName(zr[0].a)};
   }
@@ -47258,7 +47260,7 @@ function _plCfRow(cfRows, loc, op, r){
   if (r.awzPeer && r.loc && r.loc !== loc) return find(/^ZUS DLA KONSTANCINA/i);                       // ZUS дитини KONSTANCIN на рахунку PRUZSKOW
   if (r.journal === 'Позики Федора') return find(/^Fedor/i);
   if (r.journal === 'PERSPICIO'){
-    if (loc === 'PRIMROSE') return (r.peer ? peerRow(r.peer) : null) || find(new RegExp('^OWN TRANSFER\\s*' + sg, 'i'));   // PRIMROSE — рахунок PERSPICIO
+    if (loc === 'PRIMROSE') return find(new RegExp('^OWN TRANSFER\\s*' + sg, 'i'));   // PRIMROSE — рахунок PERSPICIO: «OWN TRANSFER ±» з приміткою «PERSPICIO» (v7.587)
     return find(/^PERSPICIO/i);
   }
   if (r.interco){ var pr = r.interco !== '?' ? peerRow(r.interco) : null; return pr || (loc === 'PRIMROSE' ? find(new RegExp('^OWN TRANSFER\\s*' + sg, 'i')) : null); }
@@ -47277,6 +47279,66 @@ function _plBalFix(balF, F, opexRow, perspRow, col){
   var m = /^(=[^]*?)([+-]\d+(?:[.,]\d+)?)?$/.exec(before);   // ручна поправка в кінці («…+AL103+0,72») лишається в кінці
   var after = m && m[2] ? m[1] + '+' + col + perspRow + m[2] : before + '+' + col + perspRow;
   return {aggRow:ag, before:before, after:after};
+}
+// v7.587: запис доданками. Формула / значення клітинки → доданки; посилання / функції → 'ref' (не чіпаємо)
+function _plParseF(f, v){
+  f = String(f || '').trim();
+  if (!f){ if (v === '' || v == null) return []; var n = typeof v === 'number' ? v : Number(String(v).replace(/[\s\u00a0]/g, '').replace(',', '.')); return isNaN(n) ? 'ref' : (Math.abs(n) < 0.005 ? [] : [Math.round(n * 100) / 100]); }
+  var b = f.replace(/^=/, '').replace(/\s+/g, '');
+  if (/[^0-9+\-.,]/.test(b)) return 'ref';
+  var m = b.match(/[+-]?[0-9]+(?:[.,][0-9]+)?/g) || [];
+  if (m.join('') !== b) return 'ref';
+  return m.map(function(x){ return Math.round(Number(x.replace(',', '.')) * 100) / 100; });
+}
+// Плани клітинок місяця. cells: [{key, file, group?, parts:[{val, note}], old:[числа]|'ref'}] (old — з файлу; parts — з виписки).
+// Доданки, що збігаються з банком (точно / до 1 zł / з протилежним знаком), — замінюються сумою банку; власні доданки, яких у банку немає, — лишаються;
+// доданок, що в банку стоїть в іншій клітинці того ж файлу, — прибирається тут (перенесено); якщо банк і файл розходяться без пояснення — 'unsafe' (не пишемо).
+function _plPlanCells(cells){
+  var R2 = function(x){ return Math.round(x * 100) / 100; }, sum = function(a){ return R2(a.reduce(function(s, x){ return s + x; }, 0)); };
+  var st = cells.map(function(c){
+    var o = {c:c, U:[], Pu:[], drop:[], ref:c.old === 'ref'}; if (o.ref) return o;
+    var old = c.old.slice(), parts = c.parts || [];
+    var take = function(pv, test){ var bi = -1, bd = 1e9; old.forEach(function(x, i){ var d = test(x, pv); if (d !== false && d < bd){ bd = d; bi = i; } }); if (bi < 0) return false; old.splice(bi, 1); return true; };
+    var left = [];
+    parts.forEach(function(p){ if (!take(p.val, function(x, v){ var d = Math.abs(x - v); return d < 0.005 ? d : false; })) left.push(p); });
+    var left2 = [];
+    left.forEach(function(p){ if (!take(p.val, function(x, v){ var d = Math.abs(x - v); return d < 1 ? d : false; }) &&
+                                !take(p.val, function(x, v){ return Math.abs(x + v) < 0.005 ? 0 : false; })) left2.push(p); });
+    o.Pu = left2; o.U = old;
+    (c.drop || []).forEach(function(d){ var i = -1; o.U.forEach(function(u, j){ if (i < 0 && Math.abs(u - d.val) < 0.005) i = j; }); if (i >= 0){ o.drop.push({val:o.U[i], why:d.why}); o.U.splice(i, 1); } });
+    return o;
+  });
+  // перенесене: доданок файлу = незакрита сума банку в іншій клітинці того ж файлу.
+  // Дрібні (< 5, комісія 1,10) — лише слідом за великим доданком цієї ж клітинки в ту саму клітинку
+  var moveStep = function(small){ st.forEach(function(o){ if (o.ref) return;
+    o.U = o.U.filter(function(u){
+      if ((Math.abs(u) < 5) !== small) return true;
+      var t = null; st.some(function(q){ if (q === o || q.ref || q.c.file !== o.c.file) return false;
+        if (small && !(o.movedTo || {})[q.c.key]) return false;
+        var j = -1; q.Pu.forEach(function(p, i){ if (j < 0 && !p._claimed && Math.abs(p.val - u) < 0.005) j = i; });
+        if (j >= 0){ q.Pu[j]._claimed = o.c.key; t = q.c.key; return true; } return false; });
+      if (t){ o.drop.push({val:u, why:'у банку — в ' + t}); (o.movedTo = o.movedTo || {})[t] = 1; return false; } return true; }); }); };
+  moveStep(false); moveStep(true);
+  // брати й сестри: сума власних доданків групи = сумі банку групи → заміна
+  var grp = {}; st.forEach(function(o){ if (!o.ref && o.c.group) (grp[o.c.group] = grp[o.c.group] || []).push(o); });
+  Object.keys(grp).forEach(function(g){ var G = grp[g], su = sum([].concat.apply([], G.map(function(o){ return o.U; }))),
+    sp = sum([].concat.apply([], G.map(function(o){ return o.Pu.map(function(p){ return p.val; }); })));
+    if (su && Math.abs(su - sp) < 1) G.forEach(function(o){ o.U.forEach(function(u){ o.drop.push({val:u, why:'брати й сестри: заміна розподілом банку'}); }); o.U = []; o.Pu.forEach(function(p){ p._claimed = 'group'; }); }); });
+  return st.map(function(o){
+    var c = o.c, res = {key:c.key, file:c.file};
+    if (o.ref) return Object.assign(res, {status:'ref', why:'у клітинці посилання / функція — не чіпаємо'});
+    var pu = o.Pu.filter(function(p){ return !p._claimed; });
+    if (o.U.length && pu.length){
+      if (Math.abs(sum(o.U) - sum(pu.map(function(p){ return p.val; }))) < 1){ o.U.forEach(function(u){ o.drop.push({val:u, why:'та сама сума іншими доданками'}); }); o.U = []; }
+      else return Object.assign(res, {status:'unsafe', why:'у файлі ' + o.U.join(' + ') + ', у банку ' + pu.map(function(p){ return p.val; }).join(' + ') + ' — без пояснення', oldSum:sum(c.old), bankSum:sum((c.parts || []).map(function(p){ return p.val; }))});
+    }
+    var parts = c.parts || [], add = parts.map(function(p){ return p.val; }).concat(o.U);
+    if (!parts.length && !o.drop.length) return Object.assign(res, {status:'keep'});
+    var f = add.length ? '=' + add.map(function(v, i){ var t = String(Math.abs(R2(v))); return (v < 0 ? '-' : (i ? '+' : '')) + t; }).join('') : '';
+    var srt = function(a){ return a.map(R2).sort(function(x, y){ return x - y; }); }, A = srt(add), O = srt(c.old);
+    var same = A.length === O.length && A.every(function(v, i){ return Math.abs(v - O[i]) < 0.005; });   // ті самі доданки в іншому порядку — не переписуємо
+    return Object.assign(res, {status:same ? 'same' : (add.length ? 'write' : 'clear'), formula:f, value:sum(add), oldSum:sum(c.old), kept:o.U, dropped:o.drop});
+  });
 }
 // ═══ v7.581: ПОЛЬЩА — крок 1, розвідка файлів (лише читання) ═══
 var PL_FILES_26 = {LUBLIN:'1LEl4R6ba3Yi8el9b8GS_m_HJTspd9OXyIrWgu_d1w5o', PRUZSKOW:'1CKL2AHUnUWjfAifAgLpGYakO2hKgNv9FoiHrQZgTZ0w',
@@ -47361,6 +47423,52 @@ function plCfFixBalance(p){
       });
     } catch(e){ fr.error = String(e && e.message || e); res.ok = false; }
   });
+  return res;
+}
+// v7.587: POST {action:'plWriteCells', actorId, file, month:'oct'|'nov'|'dec', items:[{tab, a1, before:{f, v}, formula?, value?, status, note}], dryRun}
+// Запис пробного прогону доданками: лише колонка Actual цього місяця (жовтень–грудень), лише файли 2026; клітинка, що змінилася після прогону, — пропуск;
+// після запису значення перевіряється, розбіжність → відкат. Примітка: блок «── PKO ──» замінюється, решта приміток лишається.
+function _plNoteMerge(old, block){
+  var o = String(old || ''), i = o.indexOf('── PKO ──'), base = (i >= 0 ? o.slice(0, i) : o).replace(/\s+$/, '');
+  return block ? (base ? base + '\n' : '') + '── PKO ──\n' + block : base;
+}
+function _plEvalPlus(f){ var a = _plParseF(f); return a === 'ref' ? null : Math.round(a.reduce(function(s, x){ return s + x; }, 0) * 100) / 100; }
+function plWriteCells(p){
+  p = p || {};
+  var a = _promoActor(p); if (!(a && _roleKey(a.role) === 'cfo')) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var k = String(p.file || ''), mon = String(p.month || ''), dryRun = p.dryRun !== false;
+  if (!PL_FILES_26[k]) return {ok:false, error:'Невідомий файл: ' + k};
+  if (['oct', 'nov', 'dec'].indexOf(mon) < 0) return {ok:false, error:'Лише oct / nov / dec'};
+  var ss = SpreadsheetApp.openById(PL_FILES_26[k]), comma = _fxSep(ss) === ';', res = {ok:true, dryRun:dryRun, file:k, month:mon, done:0, skipped:0, failed:0, items:[]};
+  var heads = {}, norm = function(x){ return String(x == null ? '' : x).replace(/[\s\u00a0]/g, '').replace(/,/g, '.'); };
+  var lock = null; if (!dryRun){ lock = LockService.getScriptLock(); if (!lock.tryLock(30000)) return {ok:false, error:'LOCK'}; }
+  try {
+    (p.items || []).forEach(function(it){
+      var r = {tab:it.tab, a1:it.a1, status:it.status}; res.items.push(r);
+      try {
+        var sh = ss.getSheetByName(String(it.tab || '')); if (!sh){ r.skip = 'вкладки немає'; res.skipped++; return; }
+        if (!heads[it.tab]) heads[it.tab] = _plMonthCols(sh.getRange(1, 1, 6, sh.getLastColumn()).getDisplayValues());
+        var cell = sh.getRange(String(it.a1)), col = ((heads[it.tab][mon] || {}).actual) || -1;
+        if (cell.getColumn() !== col){ r.skip = 'не колонка Actual ' + mon; res.skipped++; return; }
+        var f0 = cell.getFormula(), v0 = cell.getValue(), d0 = cell.getDisplayValue(), n0 = cell.getNote();
+        var bf = String((it.before || {}).f || ''), bv = (it.before || {}).v;
+        if (bf ? norm(f0) !== norm(bf) : (f0 || norm(d0) !== norm(bv))){ r.skip = 'клітинка змінилась після прогону: ' + (f0 || d0); res.skipped++; return; }
+        var want, fx = '';
+        if (it.status === 'value'){ want = Math.round(Number(it.value) * 100) / 100; }
+        else if (it.status === 'clear'){ want = 0; }
+        else if (it.status === 'write'){ fx = String(it.formula || ''); want = _plEvalPlus(fx); if (want == null){ r.skip = 'формула не з чисел'; res.skipped++; return; } if (comma) fx = fx.replace(/(\d)\.(\d)/g, '$1,$2'); }
+        else { r.skip = 'статус ' + it.status + ' не пишемо'; res.skipped++; return; }
+        r.before = f0 || v0; r.after = fx || (it.status === 'clear' ? '' : want); r.want = want;
+        if (dryRun){ res.done++; return; }
+        if (it.status === 'value') cell.setValue(want); else if (it.status === 'clear') cell.clearContent(); else cell.setFormula(fx);
+        SpreadsheetApp.flush();
+        var got = Number(cell.getValue()) || 0;
+        if (Math.abs(got - want) > 0.005){ if (f0) cell.setFormula(f0); else cell.setValue(v0); SpreadsheetApp.flush(); r.rolledBack = 'значення ' + got + ' ≠ ' + want; res.failed++; res.ok = false; return; }
+        var nn = _plNoteMerge(n0, it.status === 'clear' ? '' : String(it.note || '')); if (nn !== n0) cell.setNote(nn);
+        res.done++;
+      } catch(e){ r.error = String(e && e.message || e); res.failed++; res.ok = false; }
+    });
+  } finally { if (lock) lock.releaseLock(); }
   return res;
 }
 // ═══ /v7.581 ═══
