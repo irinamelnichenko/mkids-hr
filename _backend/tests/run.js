@@ -916,8 +916,9 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
 // ── v7.583: Польща — розноска виписки PKO ──
 {
   const vv = (n) => /var [A-Z0-9_]+ *=[\s\S]*?;\n/.exec(src.slice(src.indexOf('var ' + n + ' ')))[0];
-  const names = ['_plFold', '_plTokens', '_plLev1', '_plTokHit', '_plRowName', '_plRowNames', '_plRowHit', '_plJoined', '_plMerchant', '_plTitle', '_plRoute', '_plZusPass'];
-  const X = new Function(['PL_ACC4', 'PL_STOP', 'PL_AWZ_PEER', 'PL_FEDIR_RE'].map(vv).join('\n') + names.map(fn).join('\n') + '\nreturn {' + names.join(',') + '};')();
+  const names = ['_plFold', '_plTokens', '_plLev1', '_plTokHit', '_plRowName', '_plRowNames', '_plRowHit', '_plJoined', '_plMerchant', '_plTitle', '_plRoute', '_plZusPass',
+    '_plRedir', '_plUniqRows', '_plKidFallback', '_plSplit', '_plBankEnds', '_plCfOpenPlan', '_plColNum'];
+  const X = new Function(['PL_ACC4', 'PL_STOP', 'PL_AWZ_PEER', 'PL_FEDIR_RE', 'PL_PERSPICIO_RE', 'PL_REDIRECT', 'PL_FIXED'].map(vv).join('\n') + names.map(fn).join('\n') + '\nreturn {' + names.join(',') + '};')();
   const ck = (id, t, g, e) => check(id, t, {r: g}, {r: e});
   const L = {payment: [{r: 5, a: 'Miroslava Vinichenko', block: 'Misie'}, {r: 23, a: 'Daryna Rakitina', block: 'Tygryski'}, {r: 24, a: 'Myron Rakitin', block: 'Tygryski'}, {r: 19, a: 'Tygryski', block: ''},
       {r: 30, a: 'Szymkowiak Piotr', block: ''}, {r: 160, a: 'MAKOUSKI JAN / MAKOUSKI WLADIMIR', block: 'ZUS'}, {r: 46, a: 'Makouski Jan', block: ''},
@@ -932,7 +933,10 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
   ck('pl: dotacja', 'URZĄD MIASTA', R({type: 'Przelew na konto', amount: 87550.56, from: 'URZĄD MIASTA LUBLIN WYDATKI', desc: 'Tytuł : transza dotacji'}), 'payment:108');
   ck('pl: ZUS AwZ → блок ZUS', 'не в рядок навчання', R({type: 'Przelew na konto', amount: 1500, from: 'ZUS Centrum Obsługi Świadczeń dla R odzi', desc: 'Tytuł : Świadczenie ZUS 0100 AwZ MAKOUSKI JAN 36132/Z'}), 'payment:160');
   ck('pl: повернення ZUS', 'переказ особі з блоку ZUS Return', R({type: 'Przelew z rachunku', amount: -1500, to: 'EWELINA SIENNICKA', desc: 'Tytuł : ZWROT'}), 'payment:228');
-  ck('pl: власний переказ → MKIDS', 'зі знаком', [R({type: 'Przelew na konto', amount: 18400, from: 'M KIDS SPÓŁKA Z OGRANICZONĄ ODPOWIE DZIA', desc: 'Tytuł : OWN TRANSFER'}), X._plRoute({type: 'Przelew na konto', amount: 3200, from: 'FEDIR KORNIIENKO', desc: 'Tytuł : LOAN TO THE COMPANY'}, L).signed], ['opex:29', true]);
+  ck('pl: власний переказ — не вносимо (v7.585)', 'skip + рахунок-партнер для CF; позика Федора — MKIDS зі знаком',
+     [R({type: 'Przelew na konto', amount: 18400, from: 'M KIDS SPÓŁKA Z OGRANICZONĄ ODPOWIE DZIA', from_acc: '61102010970000710208931380', desc: 'Tytuł : OWN TRANSFER'}),
+      X._plRoute({type: 'Przelew na konto', amount: 18400, from: 'M KIDS SPÓŁKA', from_acc: '61102010970000710208931380', desc: 'Tytuł : OWN TRANSFER'}, L).interco,
+      X._plRoute({type: 'Przelew na konto', amount: 3200, from: 'FEDIR KORNIIENKO', desc: 'Tytuł : LOAN TO THE COMPANY'}, L).signed], ['skip:', 'OVERHEAD', true]);
   ck('pl: ZUS → OPEX', 'як у файлах (CF рахує з OPEX)', R({type: 'Przelew do ZUS', amount: -11271.82, to: 'ZAKŁAD UBEZPIECZEŃ SPOŁECZNYCH', desc: 'Tytuł : ZUS'}), 'opex:44');
   ck('pl: контрагент OPEX / Salary', 'PGE; KOLADA', [R({type: 'Przelew z rachunku', amount: -211.99, to: 'PGE OBRÓT S.A.', desc: 'Tytuł : FA'}), R({type: 'Przelew z rachunku', amount: -6069.92, to: 'KOLADA MAŁGORZATA', desc: 'Tytuł : WYNAGRODZENIE'})], ['opex:36', 'salary:5']);
   ck('pl: банк за описом', 'PROW.OD NIEWYK. — свій рядок, решта — комісії', [R({type: 'Opłata', amount: -24.8, desc: 'PROW.OD NIEWYK.CZĘŚCI KREDYTU'}), R({type: 'Opłata za użytkowanie karty', amount: -10, desc: 'OPŁATA MIESIĘCZNA'})], ['opex:66', 'opex:56']);
@@ -944,12 +948,49 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
   const lw = (o) => { const r = X._plRoute(o, L); return r.kind + ':' + (r.loan || r.why.slice(0, 30)); };
   ck('pl: позики Федора', 'позика / повернення / незрозуміле',
      [lw({type: 'Przelew na konto', amount: 3200, from: 'FEDIR KORNIIENKO', desc: 'Tytuł : LOAN TO THE COMPANY'}), lw({type: 'Przelew z rachunku', amount: -2000, to: 'FEDIR KORNIIENKO', desc: 'Tytuł : LOAN RETURN'}),
-      lw({type: 'Przelew z rachunku', amount: -5000, to: 'PERSPICIO SPÓŁKA', desc: 'Tytuł : LOAN'}).split(':')[0], lw({type: 'Przelew na konto', amount: 500, from: 'FEDIR KORNIIENKO', desc: 'Tytuł : PRZELEW'}).split(':')[0]],
+      lw({type: 'Przelew z rachunku', amount: -5000, to: 'SOMEONE ELSE', desc: 'Tytuł : LOAN'}).split(':')[0], lw({type: 'Przelew na konto', amount: 500, from: 'FEDIR KORNIIENKO', desc: 'Tytuł : PRZELEW'}).split(':')[0]],
      ['opex:позика Федора', 'opex:повернення Федору', 'decide', 'decide']);
   const L2 = Object.assign({}, L, {opex: [{r: 47, a: 'Action нужды в магазине'}, {r: 48, a: 'Biedronka  магазин'}], payment: [{r: 119, a: 'KASIANOVA OLENA/EVHENIIA', block: 'ZUS'}, {r: 163, a: 'VASYLCHENKO YEVHENIIA / VASYLCHENKO IRYNA', block: 'ZUS'}]});
   ck('pl: примітки в назві рядка', '«Action нужды в магазине»; «OLENA/EVHENIIA» не збігається з YEVHENIIA',
      [X._plRoute({type: 'Płatność kartą', amount: -331.65, desc: 'Tytuł : 1 | Lokalizacja : Adres : Action A065 Miasto : P'}, L2).row,
       X._plRoute({type: 'Przelew na konto', amount: 1500, from: 'ZUS Centrum Obsługi Świadczeń', desc: 'Tytuł : Świadczenie ZUS AwZ VASYLCHENKO YEVHENIIA 36132'}, L2).row], [47, 163]);
+  // v7.585
+  const pj = (o, LL) => { const r = X._plRoute(o, LL || L); return [r.kind, r.journal || '', r.loan || '']; };
+  ck('pl: PERSPICIO — окремий журнал', 'LUBLIN → рахунок 1006 «LOAN RETURN»; PRIMROSE отримує від M KIDS з LOAN; зовнішній PERSPICIO',
+     [pj({type: 'Przelew z rachunku', amount: -5000, to: 'PERSPICIO SPÓŁKA Z OGRANICZONĄ ODPO WIEDZIALNOŚCIĄ', to_acc: '42102010970000730208971006', desc: 'Tytuł : LOAN RETURN'}),
+      pj({type: 'Przelew na konto', amount: 5000, from: 'M KIDS SPÓŁKA Z OGRANICZONĄ', from_acc: '96102010970000760208391767', desc: 'Tytuł : LOAN RETURN'}, Object.assign({}, L, {loc: 'PRIMROSE'})),
+      pj({type: 'Przelew na konto', amount: 5880, from: 'PERSPICIO SP. Z O.O. al. 3 MAJA', from_acc: '50156000132334344210000001', desc: 'Tytuł : Przelew środków'}, Object.assign({}, L, {loc: 'PRIMROSE'}))],
+     [['opex', 'PERSPICIO', 'до PERSPICIO'], ['opex', 'PERSPICIO', 'від LUBLIN (PERSPICIO)'], ['opex', 'PERSPICIO', 'від PERSPICIO']]);
+  const LD = Object.assign({}, L, {loc: 'LUBLIN', salary: [{r: 5, a: 'KOLADA MAŁGORZATA'}, {r: 51, a: 'KOLADA MAŁGORZATA'}, {r: 50, a: 'FEDIR KORNIIENKO на 11 число'}, {r: 13, a: 'KUBIK MAŁGORZATA'}],
+    opex: L.opex.concat([{r: 34, a: 'WSPÓLNOTA MIESZKANIOWA'}, {r: 78, a: 'SPRZEDAWCA WSPÓLNOTA MIESZKANIOWA'}, {r: 40, a: 'P 4 sp. z o.o.'}, {r: 53, a: 'ZWROT ZA FA'}])});
+  const RD = (o) => { const r = X._plRoute(o, LD); return r.kind + ':' + (r.row || ''); };
+  ck('pl: дублі рядків і фіксовані контрагенти', 'KOLADA → 5, WSPÓLNOTA → 34, Arval → Salary 50, P4 → 40',
+     [RD({type: 'Przelew z rachunku', amount: -6069.92, to: 'KOLADA MAŁGORZATA', desc: 'Tytuł : WYNAGRODZENIE'}), RD({type: 'Przelew z rachunku', amount: -650, to: 'WSPÓLNOTA MIESZKANIOWA', desc: 'Tytuł : czynsz'}),
+      RD({type: 'Przelew z rachunku', amount: -1200, to: 'ARVAL SERVICE LEASE POLSKA', desc: 'Tytuł : FA'}), RD({type: 'Przelew z rachunku', amount: -215.25, to: 'P4 SP. Z O.O.', desc: 'Tytuł : FA'})],
+     ['salary:5', 'opex:34', 'salary:50', 'opex:40']);
+  ck('pl: відшкодування працівнику', '«ZWROT ZA FA» → рядок ZWROT, не зарплата', RD({type: 'Przelew z rachunku', amount: -192.12, to: 'KUBIK MAŁGORZATA', desc: 'Tytuł : ZWROT ZA FA'}), 'opex:53');
+  const LB = Object.assign({}, L, {payment: [{r: 16, a: 'Bator Karol', block: 'OWLS', budget: 1850}, {r: 43, a: 'Bator Karolina (знайти)', block: 'BEES', budget: 1950},
+    {r: 5, a: 'Miroslava Vinichenko', block: 'Misie', budget: 708}, {r: 30, a: 'Marusceac Ivan (MARIANA ONUFRAK )', block: 'MOTYLKI', budget: 950}, {r: 28, a: 'Leon Bliski', block: 'OWLS', budget: 1950}]});
+  const sb = X._plRoute({type: 'Przelew na konto', amount: 5246.5, from: 'ANNA BATOR', desc: 'Tytuł : BATOR KAROL BATOR KAROLINA'}, LB);
+  ck('pl: брати й сестри', 'частки за бюджетом, сума не губиться', [sb.split.map((x) => x.row), Math.round(sb.split.reduce((s, x) => s + x.amount, 0) * 100) / 100, sb.split[0].amount], [[16, 43], 5246.5, 2554.22]);
+  const RB = (o) => { const r = X._plRoute(o, LB); return r.kind + ':' + (r.row || ''); };
+  ck('pl: дитину знайдено без імені + прізвища', 'прізвище; платник у дужках; ім\'я в призначенні',
+     [RB({type: 'Przelew na konto', amount: 708, from: 'KATERYNA VINICHENKO', desc: 'Tytuł : PŁATNOŚĆ ZA PAŹDZIERNIK 2026 MYROSL AVAVINICHENKO'}),
+      RB({type: 'Przelew na konto', amount: 1478, from: 'MARIANA ONUFRAK', desc: 'Tytuł : Paźdzernik. grupa Motylki'}),
+      RB({type: 'Przelew na konto', amount: 2425, from: 'MARLENA M JAROSZ-BILSKA', desc: 'Tytuł : Leon gr. Misie'}),
+      RB({type: 'Przelew na konto', amount: 500, from: 'JAN KOWALSKI', desc: 'Tytuł : opłata'})], ['payment:5', 'payment:30', 'payment:28', 'decide:']);
+  const LO = Object.assign({}, L, {loc: 'PRUZSKOW', opex: [{r: 48, a: 'Biedronka  магазин'}, {r: 57, a: '456991******1621'}, {r: 79, a: 'OPŁATA - PRZELEW NATYCH. WYCH.'}, {r: 155, a: 'OPŁATA ZA MODYF.PEŁNOMOC. DO RACH.'}], feeRow: 0});
+  const ro = (o) => { const r = X._plRoute(o, LO); return r.kind + ':' + (r.row || ''); };
+  ck('pl: Biedronka, повернення по картці, Obciążenie', 'усі магазини Biedronka → 48; повернення → мінус у тому ж рядку; списання за повною назвою рядка',
+     [ro({type: 'Płatność kartą', amount: -102.9, desc: 'Tytuł : 1 | Lokalizacja : Adres : JMP S.A. BIEDRONKA 4035 Miasto : GRODZIS'}),
+      ro({type: 'Zwrot płatności kartą', amount: 102.9, desc: 'Tytuł : 1 | Lokalizacja : Adres : JMP S.A. BIEDRONKA 4035 Miasto : GRODZIS'}),
+      ro({type: 'Obciążenie', amount: -2, desc: '456991******1621, 27.10-26.11'}), ro({type: 'Obciążenie', amount: -30, desc: 'OPŁATA ZA MODYF.PEŁNOMOC. DO RACH.'})],
+     ['opex:48', 'opex:48', 'opex:57', 'opex:155']);
+  const be = X._plBankEnds([{amount: -100, saldo: 900}, {amount: 50, saldo: 1000}]);
+  const cfr = [{r: 77, a: 'Opening Balance (Bank Account)', f: {40: '=IF(AL80<>"";AL80;AL76)'}}, {r: 80, a: 'Closing Balance (Bank Account)', f: {}}];
+  ck('pl: CF Opening з банку', 'пишемо Closing попереднього місяця й цього; формула не та — нічого',
+     [be, X._plCfOpenPlan(cfr, {prev: 38, cur: 40}, be).cells.map((x) => [x.r, x.c, x.value]), X._plCfOpenPlan([{r: 77, a: 'Opening Balance', f: {40: '=AL76'}}, cfr[1]], {prev: 38, cur: 40}, be).cells.length],
+     [{open: 950, close: 900, net: -50, gap: 0}, [[80, 38, 950], [80, 40, 900]], 0]);
   ck('pl: невідомий контрагент', 'у список рішень', R({type: 'Przelew z rachunku', amount: -500, to: 'ARVAL SERVICE LEASE', desc: 'Tytuł : FA'}), 'decide:');
 }
 
