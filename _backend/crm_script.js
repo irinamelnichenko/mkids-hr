@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.585
+// m.kids CRM — Google Apps Script v7.586
+// v7.586: Польща — рішення CFO 25.11 (третє): власні перекази знову в MKIDS зі знаком (як у жовтні) + рядок CF переказу (_plCfRow); PERSPICIO — окрема компанія, журнал PERSPICIO, на PRIMROSE — рядки «LUBLIN 1767 +» / «OWN TRANSFER ±»; рядок PERSPICIO у формулу BALANCE (plCfFixBalance, _plBalFix); Teo Then → рядок 9 з платником у примітці; залишки банку за ланцюжком saldo (картки проводяться пізніше)
 // v7.585: Польща — рішення CFO 25.11 (друге): PERSPICIO — окремий журнал (рахунок 1006 належить PERSPICIO), перекази між власними рахунками не вносимо (skip + interco для CF), дублі рядків → один рядок (PL_REDIRECT), Arval/P4/Biedronka → фіксовані рядки (PL_FIXED), брати й сестри — частки за бюджетом місяця (_plSplit), дитина за прізвищем / платником у дужках / ім'ям у призначенні (_plKidFallback), повернення по картці — мінус у рядку покупки, відшкодування працівнику → «ZWROT ZA …», банківські списання за повною назвою рядка, CF: Opening з банку через Closing попереднього місяця (_plBankEnds, _plCfOpenPlan)
 // v7.584: Польща — рішення CFO 25.11: ZUS «Aktywnie w żłobku» за дітей KONSTANCIN, що прийшов на PRUZSKOW, → блок ZUS у Payment KONSTANCIN, переказ PRUZSKOW → KONSTANCIN на цю суму — транзит (_plZusPass), повернення батькам → «ZUS Return» KONSTANCIN; позики Федора (Корнієнко або LOAN) → MKIDS з підписом «позика Федора» / «повернення Федору», незрозуміле — у список; примітки рядка українською/російською не заважають знайти контрагента
 // v7.583: Польща — ядро розноски виписки PKO BP (_plRoute): рахунок → локація за 4 цифрами (CF), діти за ім'ям у призначенні (AUTOPAY/tpay/Revolut, розірвані банком слова), dotacja, ZUS «Aktywnie w żłobku» → блок ZUS, повернення → «ZUS Return», власні перекази й позики власника → MKIDS зі знаком, ZUS/PIT → OPEX, комісія за переказ → рядок переказу, Overhead — пропуск; без запису (пробний прогін жовтня)
@@ -9889,7 +9890,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.585', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.586', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -10195,7 +10196,8 @@ function doPost(e) {
     else if (body.action === 'invPaidFix')                result = invPaidFix(body);                         // v7.571 «оплачено» — локація / контрагент редагуванням (CFO; dryRun)
     else if (body.action === 'invPaidRedo')               result = invPaidRedo(body);                        // v7.570 «оплачено» — дописати / замінити (CFO; dryRun)
     else if (body.action === 'invTopicSetLoc')            result = invTopicSetLoc(body);                     // v7.569 гілка → локація вручну (CFO)
-    else if (body.action === 'plDiag')                    result = plDiag(body);                             // v7.581 Польща: структура файлів (читання)
+    else if (body.action === 'plDiag')                    result = plDiag(body);
+    else if (body.action === 'plCfFixBalance')            result = plCfFixBalance(body);                     // v7.586 PERSPICIO у формулу BALANCE (dryRun за замовч.)                             // v7.581 Польща: структура файлів (читання)
     else if (body.action === 'fxMigrate')                 result = fxMigrate(body);                          // v7.578 формули з доданків
     else if (body.action === 'notesBuild')                result = notesBuild(body);                         // v7.567 примітки-розшифровки (CFO; dryRun)
     else if (body.action === 'notesSetup')                result = notesSetup(body);                         // v7.567 тригер notesTick
@@ -47007,7 +47009,7 @@ var PL_PERSPICIO_RE = /PERSPICIO/;
 var PL_REDIRECT = {   // рядок-дубль → рядок, куди пишемо нові виплати
   LUBLIN:{salary:{51:5}, payment:{70:48}, opex:{78:34, 76:62}},
   KONSTANCIN:{salary:{38:30, 49:32}},
-  PRIMROSE:{payment:{73:36}, opex:{151:147}},
+  PRIMROSE:{payment:{73:36, 54:9}, opex:{151:147}},   // 54 «IZABELA THEN» — мама; дитина — 9 «Then Teodor»
   PRUZSKOW:{payment:{94:13, 75:52, 80:62}}
 };
 var PL_FIXED = [   // контрагент → рядок (назва рядка його не містить або токен закороткий)
@@ -47018,7 +47020,8 @@ var PL_FIXED = [   // контрагент → рядок (назва рядка
 ];
 function _plRedir(L, kind, row){ var m = ((PL_REDIRECT[L.loc] || {})[kind] || {}); return m[row] || row; }
 function _plUniqRows(L, kind, hits){ var seen = {}, out = []; hits.forEach(function(x){ var r = _plRedir(L, kind, x.r); if (seen[r]) return; seen[r] = 1;
-  out.push(r === x.r ? x : ((L[kind] || []).filter(function(y){ return y.r === r; })[0] || {r:r, a:x.a, block:x.block, budget:x.budget})); }); return out; }
+  out.push(r === x.r ? x : Object.assign({}, (L[kind] || []).filter(function(y){ return y.r === r; })[0] || {r:r, a:x.a, block:x.block, budget:x.budget}, {redir:x.r})); }); return out; }
+function _plPayerName(p){ return String(p || '').replace(/\s+(UL\.|AL\.|UL |\d).*$/i, '').trim(); }   // «MARLENA M JAROSZ-BILSKA BLUSZCZAŃSK A 14/47» → без адреси (наближено)
 // брати й сестри одним платежем — частки пропорційно бюджету місяця (копійки — в останню частку)
 // дитину не знайдено за ім'ям + прізвищем: (1) ім'я батьків у дужках у назві рядка = платник; (2) лише прізвище (≥ 6 літер, не перше слово платника)
 // єдиний рядок у локації; (3) ім'я з призначення (не платника) — єдина дитина в локації з таким словом у назві
@@ -47110,8 +47113,11 @@ function _plRoute(op, L){
   if (fed || (loanT && !own)) return {kind:'decide', why:fed ? 'Корнієнко Федір без LOAN у призначенні — позика чи ні?' : 'LOAN у призначенні, але не Корнієнко Федір і не PERSPICIO'};
   if (own && loanT) return {kind:'decide', why:'LOAN у призначенні власного переказу — позика Федора чи переказ?'};
   // перекази між власними рахунками (4 локації + Overhead) — у файли не вносимо; у CF — рядок «<ЛОКАЦІЯ> <4 цифри> ±»
+  // перекази між власними рахунками (4 локації + Overhead) — рядок MKIDS в OPEX зі знаком виписки (рішення CFO 25.11, як у жовтні);
+  // у CF — рядок «<ЛОКАЦІЯ> <4 цифри> ±» (_plCfRow)
   if (own || peer || /\bOWNT? TRAN?SFER\b/.test(tf)){
-    return {kind:'skip', interco:peer || '?', why:'переказ між власними рахунками' + (peer ? ' (' + peer + ')' : '') + ' — не вносимо'};
+    return L.mkidsRow ? {kind:'opex', row:L.mkidsRow, signed:true, interco:peer || '?', why:'переказ між власними рахунками' + (peer ? ' (' + peer + ')' : '') + ' → MKIDS'}
+                      : {kind:'decide', why:'переказ між власними рахунками: рядка MKIDS немає'};
   }
   var inBlock = function(re){ return (L.payment || []).filter(function(x){ return re.test(x.block || ''); }); };
   var refund = amt > 0 && /kart|zwrot/i.test(type) && !!_plMerchant(op.desc);   // повернення по картці — віднімаємо в рядку покупки
@@ -47133,7 +47139,7 @@ function _plRoute(op, L){
     }
     var kids = pool.filter(function(x){ return _plTokens(_plRowName(x.a)).length >= 2; });   // рядок дитини — ім'я + прізвище (назви груп — ні)
     var hits = _plUniqRows(L, 'payment', kids.filter(function(x){ return _plRowHit(x.a, tt, jn); }));
-    if (hits.length === 1) return {kind:'payment', row:hits[0].r, why:'дитина: ' + hits[0].a};
+    if (hits.length === 1) return {kind:'payment', row:hits[0].r, payer:String(party || '').trim(), why:'дитина: ' + hits[0].a + (_plRowHit(hits[0].a, _plTokens(party), _plJoined(party)) && !hits[0].redir ? '' : ' (платник ' + _plPayerName(party) + ')')};
     if (hits.length > 1){
       // кілька рядків: та сама дитина в двох блоках або брати й сестри — лише якщо всі токени імені з назви (не з платника)
       var ht = _plTokens(title), h2 = hits.filter(function(x){ return _plRowHit(x.a, ht, _plJoined(title)); });
@@ -47149,7 +47155,7 @@ function _plRoute(op, L){
       return {kind:'decide', why:'кілька рядків: ' + hits.map(function(x){ return x.a + ' (' + x.r + ')'; }).join(', ')};
     }
     var fb = _plKidFallback(kids, party, title);
-    if (fb) return {kind:'payment', row:_plRedir(L, 'payment', fb.r), why:fb.why + ': ' + fb.a};
+    if (fb) return {kind:'payment', row:_plRedir(L, 'payment', fb.r), payer:String(party || '').trim(), why:fb.why + ': ' + fb.a + ' (платник ' + _plPayerName(party) + ')'};
     return {kind:'decide', why:(awz ? 'ZUS «Aktywnie w żłobku»' : 'надходження') + ': рядок дитини не знайдено'};
   }
   // банк: опис операції — назва рядка («PROW.OD NIEWYK.CZĘŚCI KREDYTU», «KAPITALIZACJA ODSETEK», «OPŁATA ZA MODYF.PEŁNOMOC.»)
@@ -47215,10 +47221,20 @@ function _plZusPass(awz, out){
 // пишемо банківський залишок у «Closing Balance (Bank Account)» попереднього місяця (= Opening цього) і цього місяця (рядок 81 покаже різницю CF − банк).
 // ops — операції одного рахунку за місяць у порядку виписки (нові зверху)
 function _plBankEnds(ops){
+  // «Saldo po transakcji» — залишок після проведення; картки проводяться пізніше, тож порядок рядків ≠ порядок проведення.
+  // Ланцюжок saldo: початок — «saldo до» без попередника (найраніша дата), кінець — saldo без наступника (найпізніша дата);
+  // gap = проведене банком у цьому періоді, але датоване іншим місяцем (у виписку за датами не потрапило)
   ops = ops || []; if (!ops.length) return null;
-  var last = ops[ops.length - 1], net = ops.reduce(function(s, x){ return s + (Number(x.amount) || 0); }, 0);
-  var open = Math.round((Number(last.saldo) - Number(last.amount)) * 100) / 100, close = Math.round(Number(ops[0].saldo) * 100) / 100;
-  return {open:open, close:close, net:Math.round(net * 100) / 100, gap:Math.round((close - open - net) * 100) / 100};
+  var k = function(v){ return Math.round(Number(v) * 100); }, S = {}, P = {}, net = 0;
+  ops.forEach(function(x){ S[k(x.saldo)] = (S[k(x.saldo)] || 0) + 1; P[k(x.saldo - x.amount)] = (P[k(x.saldo - x.amount)] || 0) + 1; net += Number(x.amount) || 0; });
+  var ix = ops.map(function(x, i){ return {x:x, i:i}; });   // рівні дати: нижчий рядок виписки — раніший
+  var st = ix.filter(function(o){ var v = k(o.x.saldo - o.x.amount); return (P[v] || 0) > (S[v] || 0); }).sort(function(a, b){ return String(a.x.date).localeCompare(String(b.x.date)) || b.i - a.i; }).map(function(o){ return o.x; });
+  var en = ix.filter(function(o){ var v = k(o.x.saldo); return (S[v] || 0) > (P[v] || 0); }).sort(function(a, b){ return String(b.x.date).localeCompare(String(a.x.date)) || a.i - b.i; }).map(function(o){ return o.x; });
+  var last = ops[ops.length - 1];
+  var open = st.length ? Math.round((st[0].saldo - st[0].amount) * 100) / 100 : Math.round((last.saldo - last.amount) * 100) / 100;
+  var close = en.length ? Math.round(en[0].saldo * 100) / 100 : Math.round(ops[0].saldo * 100) / 100;
+  net = Math.round(net * 100) / 100;
+  return {open:open, close:close, net:net, byDate:Math.round((open + net) * 100) / 100, gap:Math.round((close - open - net) * 100) / 100};
 }
 // cfRows: [{r, a, f:{<колонка>:формула}}], cols: {prev, cur} — номери колонок Actual; → {cells:[{r, c, value, why}], warn}
 function _plCfOpenPlan(cfRows, cols, bank){
@@ -47232,6 +47248,36 @@ function _plCfOpenPlan(cfRows, cols, bank){
           warn:bank.gap ? 'у виписці залишок змінився не лише через операції: ' + bank.gap : ''};
 }
 function _plColNum(L){ var n = 0; String(L).toUpperCase().split('').forEach(function(ch){ n = n * 26 + ch.charCodeAt(0) - 64; }); return n; }
+// v7.586: рядок CF для переказу / позики (ручні рядки 87–104, формули не міняємо). cfRows: [{r, a}]; loc — рахунок операції;
+// r — результат _plRoute; → {r, label} | null
+var PL_LOC4 = {LUBLIN:'1767', PRUZSKOW:'4078', KONSTANCIN:'2951', PRIMROSE:'1006', OVERHEAD:'1380'};
+function _plCfRow(cfRows, loc, op, r){
+  var amt = Number(op.amount) || 0, sg = amt > 0 ? '\\+' : '-';
+  var find = function(re){ var x = (cfRows || []).filter(function(y){ return re.test(String(y.a || '').trim()); })[0]; return x ? {r:x.r, label:String(x.a).trim()} : null; };
+  var peerRow = function(p){ return find(new RegExp('^' + p + '\\s*' + (PL_LOC4[p] || '') + '\\s*' + sg)); };
+  if (r.awzPeer && r.loc && r.loc !== loc) return find(/^ZUS DLA KONSTANCINA/i);                       // ZUS дитини KONSTANCIN на рахунку PRUZSKOW
+  if (r.journal === 'Позики Федора') return find(/^Fedor/i);
+  if (r.journal === 'PERSPICIO'){
+    if (loc === 'PRIMROSE') return (r.peer ? peerRow(r.peer) : null) || find(new RegExp('^OWN TRANSFER\\s*' + sg, 'i'));   // PRIMROSE — рахунок PERSPICIO
+    return find(/^PERSPICIO/i);
+  }
+  if (r.interco){ var pr = r.interco !== '?' ? peerRow(r.interco) : null; return pr || (loc === 'PRIMROSE' ? find(new RegExp('^OWN TRANSFER\\s*' + sg, 'i')) : null); }
+  return null;
+}
+// v7.586: рядок PERSPICIO поза формулою BALANCE (рішення CFO 25.11) → додаємо його в підсумок відтоків (рядок без назви з посиланням на Operating expenses).
+// balF — формула BALANCE; F — {рядок: формула} рядків CF у цій колонці; → {aggRow, before, after} | {skip}
+function _plBalFix(balF, F, opexRow, perspRow, col){
+  var refs = function(f){ return (String(f || '').match(/\$?[A-Z]+\$?(\d+)/g) || []).map(function(x){ return +x.replace(/^\$?[A-Z]+\$?/, ''); }); };
+  var aggs = refs(balF).filter(function(q){ return F[q] != null && /^=/.test(String(F[q])); });
+  if (!aggs.length) return {skip:'формула BALANCE без підсумкових рядків: ' + balF};
+  if (aggs.some(function(q){ return refs(F[q]).indexOf(perspRow) >= 0; }) || refs(balF).indexOf(perspRow) >= 0) return {skip:'рядок ' + perspRow + ' уже в BALANCE'};
+  var ag = aggs.filter(function(q){ return refs(F[q]).indexOf(opexRow) >= 0; })[0];
+  if (!ag) return {skip:'не знайдено підсумок відтоків (з посиланням на рядок ' + opexRow + ')'};
+  var before = String(F[ag]);
+  var m = /^(=[^]*?)([+-]\d+(?:[.,]\d+)?)?$/.exec(before);   // ручна поправка в кінці («…+AL103+0,72») лишається в кінці
+  var after = m && m[2] ? m[1] + '+' + col + perspRow + m[2] : before + '+' + col + perspRow;
+  return {aggRow:ag, before:before, after:after};
+}
 // ═══ v7.581: ПОЛЬЩА — крок 1, розвідка файлів (лише читання) ═══
 var PL_FILES_26 = {LUBLIN:'1LEl4R6ba3Yi8el9b8GS_m_HJTspd9OXyIrWgu_d1w5o', PRUZSKOW:'1CKL2AHUnUWjfAifAgLpGYakO2hKgNv9FoiHrQZgTZ0w',
                    KONSTANCIN:'16yD9rLbcu6QPQlkiF6rb4yTNm0z6GW92SgE78fpmxzY', PRIMROSE:'1KQv-z_7SmxUhv2vNw8t2gqZSdTW8_ni8kodajwr3Jw4'};
@@ -47276,6 +47322,44 @@ function plDiag(p){
       });
       res.files[k] = f;
     } catch(e){ res.files[k] = {error:String(e && e.message || e)}; }
+  });
+  return res;
+}
+// POST {action:'plCfFixBalance', actorId, months:['oct','nov','dec'], file?, dryRun} — CFO; dryRun за замовч.
+// Рядок PERSPICIO у CF, якого немає у формулі BALANCE, додається в підсумок відтоків. Лише файли 2026, лише жовтень–грудень (червень–вересень заморожені).
+function plCfFixBalance(p){
+  p = p || {};
+  var a = _promoActor(p); if (!(a && _roleKey(a.role) === 'cfo')) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var months = (p.months && p.months.length ? p.months : ['oct', 'nov', 'dec']).map(String), dryRun = p.dryRun !== false;
+  var bad = months.filter(function(m){ return ['oct', 'nov', 'dec'].indexOf(m) < 0; });
+  if (bad.length) return {ok:false, error:'Лише oct / nov / dec: ' + bad.join(', ')};
+  var res = {ok:true, dryRun:dryRun, files:{}};
+  Object.keys(PL_FILES_26).forEach(function(k){
+    if (p.file && p.file !== k) return;
+    var fr = res.files[k] = {changes:[]};
+    try {
+      var sh = SpreadsheetApp.openById(PL_FILES_26[k]).getSheetByName('CF'); if (!sh){ fr.skip = 'вкладки CF немає'; return; }
+      var lr = sh.getLastRow(), lc = sh.getLastColumn(), V = sh.getRange(1, 1, lr, lc).getDisplayValues(), F = sh.getRange(1, 1, lr, lc).getFormulas();
+      var cols = _plMonthCols(V.slice(0, 6)), rowOf = function(re){ for (var r = 0; r < lr; r++) if (re.test(String(V[r][0] || '').trim())) return r + 1; return 0; };
+      var pr = rowOf(/^PERSPICIO/i), br = rowOf(/^BALANCE Bank/i), orow = rowOf(/^Operating expenses/i);
+      if (!pr){ fr.skip = 'рядка PERSPICIO немає'; return; }
+      if (!br || !orow){ fr.skip = 'рядків BALANCE / Operating expenses немає'; return; }
+      months.forEach(function(m){
+        var c = (cols[m] || {}).actual; if (!c){ fr.changes.push({month:m, skip:'колонки Actual немає'}); return; }
+        var Fc = {}; for (var r = 0; r < lr; r++) if (F[r][c - 1]) Fc[r + 1] = F[r][c - 1];
+        var L = _colLetter(c - 1), fx = _plBalFix(F[br - 1][c - 1], Fc, orow, pr, L);
+        var ch = {month:m, perspicio:L + pr, perspValue:V[pr - 1][c - 1]};
+        if (fx.skip){ ch.skip = fx.skip; fr.changes.push(ch); return; }
+        ch.cell = L + fx.aggRow; ch.before = fx.before; ch.after = fx.after; ch.balanceBefore = sh.getRange(br, c).getValue();
+        if (!dryRun){
+          var cell = sh.getRange(fx.aggRow, c), pv = Number(sh.getRange(pr, c).getValue()) || 0;
+          cell.setFormula(fx.after); SpreadsheetApp.flush();
+          ch.balanceAfter = sh.getRange(br, c).getValue();
+          if (Math.abs((Number(ch.balanceAfter) || 0) - (Number(ch.balanceBefore) || 0) - pv) > 0.01){ cell.setFormula(fx.before); SpreadsheetApp.flush(); ch.rolledBack = true; res.ok = false; }
+        }
+        fr.changes.push(ch);
+      });
+    } catch(e){ fr.error = String(e && e.message || e); res.ok = false; }
   });
   return res;
 }
