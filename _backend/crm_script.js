@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.590
+// m.kids CRM — Google Apps Script v7.591
+// v7.591: Польща — plJournalSeed (стартові записи журналів «Позики Федора» / PERSPICIO з виписок 2026, без дублів за ключем), plApply не дублює рядки журналу, звірка (plCompare) — і закриті місяці, операції без рядка звіряються з сумами у твоєму файлі
 // v7.590: Польща — plCompare / _plCompare: звірка виписки з тим, що вже внесено вручну (✓ збігається / ⚠ сума чи рядок інші / ➕ немає / є у файлі, немає у виписці), нічого не пише; plPreview — помилка замість порожнього списку, дати дд.мм.рррр
 // v7.589: Польща — внесення через систему: реєстр PL_Реєстр і журнали (PL_Операції, PL_Контрагенти, PL_Банк, PL_Готівка, «Позики Федора», PERSPICIO) у CRM Data (лише CFO); plPreview / plApply (_plBuild — уся виписка, повторне завантаження не дублює, вибір рядка запам'ятовується для контрагента), plCash («Готівка Федора»), plBalance (BALANCE проти банку), plRowsList
 // v7.588: Польща — plFixFormulas (точкові виправлення формул CF / статей жовтня–грудня з перевіркою «before» і відкатом); готівка Федора → рядок CF «наличка Федор» як надходження; NINETAILS / Arval — лише суми банку (c.force у _plPlanCells)
@@ -9894,7 +9895,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.590', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.591', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -10209,7 +10210,8 @@ function doPost(e) {
     else if (body.action === 'plBalance')                 result = plBalance(body);                          // v7.589 Польща: BALANCE проти банку
     else if (body.action === 'plRowsList')                result = plRowsList(body);                         // v7.589 Польща: рядки для форми готівки
     else if (body.action === 'plCash')                    result = plCash(body);
-    else if (body.action === 'plCompare')                 result = plCompare(body);                          // v7.590 Польща: звірка виписки з ручними записами (без запису)                             // v7.589 Польща: «Готівка Федора»                      // v7.588 точкові виправлення формул CF (dryRun за замовч.)                       // v7.587 запис доданками (dryRun за замовч.)                     // v7.586 PERSPICIO у формулу BALANCE (dryRun за замовч.)                             // v7.581 Польща: структура файлів (читання)
+    else if (body.action === 'plCompare')                 result = plCompare(body);
+    else if (body.action === 'plJournalSeed')             result = plJournalSeed(body);                      // v7.591 Польща: стартове заповнення журналів позик                          // v7.590 Польща: звірка виписки з ручними записами (без запису)                             // v7.589 Польща: «Готівка Федора»                      // v7.588 точкові виправлення формул CF (dryRun за замовч.)                       // v7.587 запис доданками (dryRun за замовч.)                     // v7.586 PERSPICIO у формулу BALANCE (dryRun за замовч.)                             // v7.581 Польща: структура файлів (читання)
     else if (body.action === 'fxMigrate')                 result = fxMigrate(body);                          // v7.578 формули з доданків
     else if (body.action === 'notesBuild')                result = notesBuild(body);                         // v7.567 примітки-розшифровки (CFO; dryRun)
     else if (body.action === 'notesSetup')                result = notesSetup(body);                         // v7.567 тригер notesTick
@@ -47420,7 +47422,7 @@ function _plBuild(ops, files, opt){
     var it = {key:_plOpKey(op), op:op, acc:op._loc, mon:_plMonOf(op.date), cells:[], cf:[], why:''}; out.push(it);
     if (op._loc === 'OVERHEAD'){ it.status = 'skip'; it.why = 'рахунок Overhead — не вносимо'; return; }
     if (op._loc === '?'){ it.status = 'decide'; it.why = 'рахунок ' + op.acc + ' не в реєстрі'; return; }
-    if (!_plWritable(op.date)){ it.status = 'closed'; it.why = 'місяць закритий (вносимо з жовтня 2026)'; return; }
+    if (!opt.anyMonth && !_plWritable(op.date)){ it.status = 'closed'; it.why = 'місяць закритий (вносимо з жовтня 2026)'; return; }
     var L = lay(op._loc, it.mon); if (!L){ it.status = 'decide'; it.why = 'файл локації не підключено'; return; }
     if (PL_AWZ_PEER[op._loc] && !L.peer){ var PL2 = lay(PL_AWZ_PEER[op._loc], it.mon); if (PL2) L.peer = {loc:PL2.loc, payment:PL2.payment}; }
     var r = op._feeOf ? _plRoute(op._feeOf, L) : _plRoute(op, L);
@@ -47517,6 +47519,11 @@ function _plCompare(items, files, locs){
     if (left.length === 1){ left[0].used = true; p.st = 'diff'; p.file = left[0].v; p.why = 'інша сума'; } });
   out.forEach(function(o){ if (o.group) return; o.parts.forEach(function(p){ if (!p.st) p.st = 'new'; });
     var s = o.parts.map(function(p){ return p.st; }); o.group = !s.length ? 'skip' : s.every(function(x){ return x === 'match'; }) ? 'match' : s.some(function(x){ return x === 'diff'; }) ? 'diff' : s.every(function(x){ return x === 'new'; }) ? 'new' : 'diff'; });
+  // без рядка (❓), але така сума є у твоєму файлі цього рахунку — ✓, рядок узято з твого запису
+  out.forEach(function(o){ if (o.group !== 'decide' || !files[o.acc]) return; var P = cellsOf(o.acc, o.mon), want = Math.abs(o.amount), hit = null;
+    Object.keys(P).some(function(k){ var tn = k.split('|')[0]; if (o.amount > 0 ? !/^Payment/i.test(tn) : /^Payment|^CF$/i.test(tn)) return false;
+      var v = take(P[k], want, 0.005); if (v != null){ hit = k; return true; } return false; });
+    if (hit){ o.group = 'match'; o.parts = [{loc:o.acc, mon:o.mon, tab:hit.split('|')[0], a1:hit.split('|')[1], name:names[o.acc + '|' + hit], bank:want, file:want, st:'match', why:'рядок — з твого запису (система сама не визначила)'}]; } });
   var extra = [];
   Object.keys(pool).forEach(function(k){ var q = k.split('|'); if ((locs || []).indexOf(q[0]) < 0) return;
     Object.keys(pool[k]).forEach(function(ck){ pool[k][ck].forEach(function(x){ if (!x.used) extra.push({loc:q[0], mon:q[1], tab:ck.split('|')[0], a1:ck.split('|')[1], name:names[q[0] + '|' + ck], val:R2(x.v)}); }); }); });
@@ -47835,8 +47842,8 @@ function plApply(p){
     });
     // журнали «Позики Федора» / PERSPICIO
     Object.keys(PL_SH_JOURNALS).forEach(function(j){
-      var sh = _plSh(PL_SH_JOURNALS[j]), prev = {}; _plRows(PL_SH_JOURNALS[j]).forEach(function(r){ prev[String(r[1])] = Number(r[4]) || 0; });
-      _plJournalRows(done, j, prev).forEach(function(x){ sh.appendRow([x.date, x.loc, x.amount, x.dir, x.balance, x.key]); }); });
+      var sh = _plSh(PL_SH_JOURNALS[j]), prev = {}, seen = {}; _plRows(PL_SH_JOURNALS[j]).forEach(function(r){ prev[String(r[1])] = Number(r[4]) || 0; seen[String(r[5])] = 1; });
+      _plJournalRows(done.filter(function(it){ return !seen[it.key]; }), j, prev).forEach(function(x){ sh.appendRow([x.date, x.loc, x.amount, x.dir, x.balance, x.key]); }); });   // v7.591: уже в журналі (стартове заповнення) — не дублюємо
     // залишки банку: місяць повністю у виписці → Closing місяця = банк; Opening (Closing попереднього, якщо він відкритий) = банк
     var bank = [], per = p.periods || {};
     if (!only || only !== 'OVERHEAD'){
@@ -47926,11 +47933,30 @@ function plCompare(p){
     _plLoadReg();
     var ops = _plCleanOps(p.ops); if (!ops.length) return {ok:false, error:'Немає операцій з датою (отримано ' + ((p.ops || []).length) + ')'};
     var need = _plNeed(ops), files = _plFiles(need.locs, need.mons);
-    var items = _plBuild(ops, files, {memory:_plMemory()}), accs = {};
+    var items = _plBuild(ops, files, {memory:_plMemory(), anyMonth:true}), accs = {};   // v7.591: звірка — і закриті місяці (лише показ)
     items.forEach(function(it){ if (PL_FILES_26[it.acc]) accs[it.acc] = 1; });
     var c = _plCompare(items, files, Object.keys(accs));
     return {ok:true, ops:c.ops, extra:c.extra, items:items.map(_plItemOut)};
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+// v7.591: POST {action:'plJournalSeed', actorId, journal:'Позики Федора'|'PERSPICIO', rows:[{date, loc, amount, dir, key}], dryRun}
+// Стартове заповнення журналу з виписок 2026: рядки з ключем, якого ще немає; залишок по локації — наростаючим від наявних рядків
+function plJournalSeed(p){
+  var a = _plCfo(p); if (!a) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var j = String(p.journal || ''); if (!PL_SH_JOURNALS[j]) return {ok:false, error:'Журнал: «Позики Федора» або PERSPICIO'};
+  var lock = LockService.getScriptLock(); if (!lock.tryLock(30000)) return {ok:false, error:'Зайнято'};
+  try {
+    var sh = _plSh(PL_SH_JOURNALS[j]), have = _plRows(PL_SH_JOURNALS[j]), seen = {}, bal = {};
+    have.forEach(function(r){ seen[String(r[5])] = 1; bal[String(r[1])] = Number(r[4]) || 0; });
+    var add = [];
+    (p.rows || []).slice().sort(function(x, y){ return String(x.date).localeCompare(String(y.date)); }).forEach(function(r){
+      var k = String(r.key || ''); if (!k || seen[k]) return; seen[k] = 1; var l = String(r.loc || '');
+      bal[l] = Math.round(((bal[l] || 0) + Number(r.amount)) * 100) / 100;
+      add.push([String(r.date).slice(0, 10), l, Number(r.amount), String(r.dir || ''), bal[l], k]); });
+    if (p.dryRun === false && add.length) sh.getRange(sh.getLastRow() + 1, 1, add.length, 6).setValues(add);
+    return {ok:true, dryRun:p.dryRun !== false, journal:j, added:add.length, balances:bal};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { lock.releaseLock(); }
 }
 // ═══ /v7.589 ═══
 // ═══ /v7.581 ═══

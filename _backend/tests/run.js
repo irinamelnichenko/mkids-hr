@@ -1067,9 +1067,9 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
   FC.tabs['Payment 26'].rows[2].dec_actual = '870'; FC.tabs['OPEX 26'].rows[2].decF_actual = '=211,99+1,1'; FC.tabs['OPEX 26'].rows[3].decF_actual = '=300+15';
   FC.tabs['OPEX 26'].rows[1].decF_actual = '=-450'; FC.tabs['CF'].rows[1].decF_actual = '=-500';
   const IC = X._plBuild(OPS.slice(0, 5).map((o) => Object.assign({}, o)), {LUBLIN: FC}, {}), CC = X._plCompare(IC, {LUBLIN: FC}, ['LUBLIN']);
-  ck('pl: звірка з ручними записами', '✓ дитина, комісія, PGE; ⚠ MKIDS інша сума; ❓ без рядка; зайве в файлі',
+  ck('pl: звірка з ручними записами', '✓ дитина, комісія, PGE; ⚠ MKIDS інша сума; без рядка, але сума є у файлі — ✓; зайве в файлі',
      [CC.ops.map((o) => o.group), CC.ops[3].parts.map((p) => p.st + ':' + (p.file != null ? p.file : '')), CC.extra.map((e) => e.a1 + '=' + e.val).sort()],
-     [['match', 'match', 'match', 'diff', 'decide'], ['diff:-450', 'match:-500'], ['X56=15', 'X56=300']]);
+     [['match', 'match', 'match', 'diff', 'match'], ['diff:-450', 'match:-500'], ['X56=15']]);
   ck('pl: невідомий контрагент', 'у список рішень', R({type: 'Przelew z rachunku', amount: -500, to: 'ARVAL SERVICE LEASE', desc: 'Tytuł : FA'}), 'decide:');
 }
 
