@@ -917,8 +917,9 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
 {
   const vv = (n) => /var [A-Z0-9_]+ *=[\s\S]*?;\n/.exec(src.slice(src.indexOf('var ' + n + ' ')))[0];
   const names = ['_plFold', '_plTokens', '_plLev1', '_plTokHit', '_plRowName', '_plRowNames', '_plRowHit', '_plJoined', '_plMerchant', '_plTitle', '_plRoute', '_plZusPass',
-    '_plRedir', '_plUniqRows', '_plKidFallback', '_plSplit', '_plBankEnds', '_plCfOpenPlan', '_plColNum', '_plPayerName', '_plCfRow', '_plBalFix', '_plParseF', '_plPlanCells', '_plNoteMerge', '_plEvalPlus'];
-  const X = new Function(['PL_ACC4', 'PL_STOP', 'PL_AWZ_PEER', 'PL_FEDIR_RE', 'PL_PERSPICIO_RE', 'PL_REDIRECT', 'PL_FIXED', 'PL_LOC4'].map(vv).join('\n') + names.map(fn).join('\n') + '\nreturn {' + names.join(',') + '};')();
+    '_plRedir', '_plUniqRows', '_plKidFallback', '_plSplit', '_plBankEnds', '_plCfOpenPlan', '_plColNum', '_plPayerName', '_plCfRow', '_plBalFix', '_plParseF', '_plPlanCells', '_plNoteMerge', '_plEvalPlus',
+    '_plNum', '_plColL', '_plIsRef', '_plTab', '_plMonOf', '_plWritable', '_plLayout', '_plOpKey', '_plPartyKey', '_plDm', '_plNote', '_plBuild', '_plRowLabel', '_plRowOptions', '_plCellParts', '_plJournalRows'];
+  const X = new Function(['PL_ACC4', 'PL_STOP', 'PL_AWZ_PEER', 'PL_FEDIR_RE', 'PL_PERSPICIO_RE', 'PL_REDIRECT', 'PL_FIXED', 'PL_LOC4', 'PL_MONS', 'PL_WRITE_FROM'].map(vv).join('\n') + names.map(fn).join('\n') + '\nreturn {' + names.join(',') + '};')();
   const ck = (id, t, g, e) => check(id, t, {r: g}, {r: e});
   const L = {payment: [{r: 5, a: 'Miroslava Vinichenko', block: 'Misie'}, {r: 23, a: 'Daryna Rakitina', block: 'Tygryski'}, {r: 24, a: 'Myron Rakitin', block: 'Tygryski'}, {r: 19, a: 'Tygryski', block: ''},
       {r: 30, a: 'Szymkowiak Piotr', block: ''}, {r: 160, a: 'MAKOUSKI JAN / MAKOUSKI WLADIMIR', block: 'ZUS'}, {r: 46, a: 'Makouski Jan', block: ''},
@@ -1033,6 +1034,34 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
   ck('pl: рішення CFO — лише суми банку', 'NINETAILS 2578 → 2857; Arval без 4 × 1,10',
      X._plPlanCells([{key: 'N', file: 'P', parts: [{val: 2857}], old: [2578], force: 'CFO'}, {key: 'A', file: 'L', parts: [{val: 3258.27}, {val: 2913.87}], old: [2913.87, 1.1, 3258.27, 1.1], force: 'CFO'}]).map((x) => x.status + ':' + x.formula),
      ['write:=2857', 'write:=3258.27+2913.87']);
+  // v7.589: внесення через систему
+  const FL = {tabs: {
+    'Payment 26': {months: {dec: {actual: 24, budget: 25}}, rows: [{r: 4, a: 'Misie', decF_actual: '=SUM(X5:X6)'}, {r: 5, a: 'Klara Trzcinka', dec_budget: '870'}, {r: 6, a: 'Myron Rakitin', dec_budget: '870'}]},
+    'Salary 26': {months: {dec: {actual: 24}}, rows: [{r: 3, a: 'personel', decF_actual: '=sum(X4:X10)'}, {r: 5, a: 'KOLADA MAŁGORZATA'}]},
+    'OPEX 26': {months: {dec: {actual: 24}}, rows: [{r: 20, a: 'TOTAL'}, {r: 29, a: 'MKIDS'}, {r: 33, a: 'PGE OBRÓT S.A.'}, {r: 56, a: 'Opłata za Powiadomienia SMS/OPŁATA MIESIĘCZNA ZA KART'}]},
+    'CF': {months: {dec: {actual: 40}}, rows: [{r: 87, a: 'PRUZSKOW 4078 +'}, {r: 88, a: 'PRUZSKOW 4078 -'}, {r: 91, a: 'Fedor  1650'}]}}};
+  const LL = X._plLayout(FL, 'LUBLIN', 'dec');
+  ck('pl: розмітка файлу', 'діти / працівники / контрагенти / MKIDS', [LL.payment.map((x) => x.r), LL.salary.map((x) => x.r), LL.opex.map((x) => x.r), LL.mkidsRow, LL.feeRow, LL.col.cf], [[5, 6], [5], [29, 33, 56], 29, 56, 40]);
+  const OPS = [
+    {acc: '96102010970000760208391767', date: '2026-12-02', type: 'Przelew na konto', amount: 870, saldo: 1870, from: 'BOHDAN RAKITIN', desc: 'Tytuł : grudzień RAKITIN MYRON'},
+    {acc: '96102010970000760208391767', date: '2026-12-03', type: 'Opłata', amount: -1.1, saldo: 1868.9, desc: 'OPŁATA PRZELEW ZEW.DOWOL.'},
+    {acc: '96102010970000760208391767', date: '2026-12-03', type: 'Przelew z rachunku', amount: -211.99, saldo: 1656.91, to: 'PGE OBRÓT S.A.', desc: 'Tytuł : FA 12'},
+    {acc: '96102010970000760208391767', date: '2026-12-04', type: 'Przelew z rachunku', amount: -500, saldo: 1156.91, to: 'M KIDS SPÓŁKA', to_acc: '69102010970000720208524078', desc: 'Tytuł : OWN TRANSFER'},
+    {acc: '96102010970000760208391767', date: '2026-12-05', type: 'Przelew z rachunku', amount: -300, saldo: 856.91, to: 'NOWY KONTRAHENT', desc: 'Tytuł : FA 1'},
+    {acc: '96102010970000760208391767', date: '2026-09-05', type: 'Przelew z rachunku', amount: -10, saldo: 0, to: 'X', desc: 'Tytuł : y'}];
+  const B1 = X._plBuild(OPS.map((o) => Object.assign({}, o)), {LUBLIN: FL}, {});
+  ck('pl: розноска всієї виписки', 'дитина; комісія до переказу; власний переказ → MKIDS + CF; невідомий → рішення; вересень закритий',
+     B1.map((i) => i.status + ':' + i.cells.map((c) => c.tab.split(' ')[0] + c.a1 + '=' + c.val).join(',') + (i.cf.length ? '|CF' + i.cf[0].a1 : '')),
+     ['ok:PaymentX6=870', 'ok:OPEXX33=1.1', 'ok:OPEXX33=211.99', 'ok:OPEXX29=-500|CFAN88', 'decide:', 'closed:']);
+  const k5 = B1[4].key, B2 = X._plBuild(OPS.map((o) => Object.assign({}, o)), {LUBLIN: FL}, {ledger: {[B1[0].key]: 1}, overrides: {[k5]: {kind: 'opex', row: 56}}, memory: {}});
+  const B3 = X._plBuild(OPS.map((o) => Object.assign({}, o)), {LUBLIN: FL}, {memory: {['LUBLIN|' + B1[4].party]: {kind: 'opex', row: 33}}});
+  ck('pl: повтор, вибір вручну, пам\'ять контрагента', 'внесене — dup; вибір → рядок; наступного разу — з пам\'яті',
+     [B2[0].status, B2[4].status + ':' + B2[4].cells[0].a1, B3[4].status + ':' + B3[4].cells[0].a1, X._plOpKey(OPS[0]) === X._plOpKey(Object.assign({}, OPS[0]))], ['dup', 'ok:X56', 'ok:X33', true]);
+  const CP = X._plCellParts(B1, [{cellKey: 'LUBLIN|OPEX 26|X33', val: 100, note: 'старе'}]);
+  ck('pl: частини клітинки', 'внесене раніше + нове', [CP['LUBLIN|OPEX 26|X33'].parts.map((x) => x.val), Object.keys(CP).length], [[100, 1.1, 211.99], 4]);
+  ck('pl: внесення не чіпає власних доданків', 'готівка 680 + новий банк 5000 → обидва; без «unsafe»',
+     X._plPlanCells([{key: 'K', file: 'K', parts: [{val: 5000}], old: [680]}, {key: 'M', file: 'K', parts: [{val: 680}], old: []}], {incremental: true}).map((x) => x.status + ':' + x.formula), ['write:=5000+680', 'write:=680']);
+  ck('pl: журнал з залишком', 'по локації наростаючим', X._plJournalRows([{status: 'ok', journal: 'PERSPICIO', acc: 'LUBLIN', op: {date: '2026-12-02', amount: -500}, key: 'a'}, {status: 'ok', journal: 'PERSPICIO', acc: 'LUBLIN', op: {date: '2026-12-01', amount: 2000}, key: 'b'}], 'PERSPICIO', {LUBLIN: -5000}).map((x) => x.balance), [-3000, -3500]);
   ck('pl: невідомий контрагент', 'у список рішень', R({type: 'Przelew z rachunku', amount: -500, to: 'ARVAL SERVICE LEASE', desc: 'Tytuł : FA'}), 'decide:');
 }
 

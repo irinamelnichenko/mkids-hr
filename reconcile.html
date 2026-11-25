@@ -41,6 +41,7 @@
 })();
 </script>
 <script defer src="xlsx.full.min.js"></script>
+<script defer src="pl_reconcile.js?v=7.589"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -531,6 +532,8 @@ select,input{font-family:inherit}
     <div class="hd-ctrl">
       <input type="file" id="rcFile" accept=".xls,.xlsx,.csv" multiple style="display:none" onchange="rcOnFile(this)">
       <button class="btn btn-primary" onclick="document.getElementById('rcFile').click()">📂 Обрати виписки</button>
+      <!-- v7.589: Польща (лише CFO) — виписка PKO BP → фінфайли; логіка в pl_reconcile.js -->
+      <button class="btn" id="plModeBtn" style="display:none" onclick="plMode()">🇵🇱 Польща</button>
       <!-- v7.375: виписка напряму з банку (ПриватБанк API) — лише CFO -->
       <span id="rcBankBox" style="display:none;align-items:center;gap:6px;flex-wrap:wrap">
         <input type="date" id="rcBankFrom" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:8px">
@@ -1479,6 +1482,7 @@ function rcBankInit(){
   var box = document.getElementById('rcBankBox'); if (!box) return;
   var cfo = S.user && String(S.user.role || '').toLowerCase() === 'cfo';
   box.style.display = cfo ? 'inline-flex' : 'none';
+  var plb = document.getElementById('plModeBtn'); if (plb) plb.style.display = cfo ? '' : 'none';   // v7.589 Польща — лише CFO
   if (!cfo) return;
   var y = new Date(); y.setDate(y.getDate() - 1);
   var f = document.getElementById('rcBankFrom'), t = document.getElementById('rcBankTo');

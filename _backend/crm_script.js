@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.588
+// m.kids CRM — Google Apps Script v7.589
+// v7.589: Польща — внесення через систему: реєстр PL_Реєстр і журнали (PL_Операції, PL_Контрагенти, PL_Банк, PL_Готівка, «Позики Федора», PERSPICIO) у CRM Data (лише CFO); plPreview / plApply (_plBuild — уся виписка, повторне завантаження не дублює, вибір рядка запам'ятовується для контрагента), plCash («Готівка Федора»), plBalance (BALANCE проти банку), plRowsList
 // v7.588: Польща — plFixFormulas (точкові виправлення формул CF / статей жовтня–грудня з перевіркою «before» і відкатом); готівка Федора → рядок CF «наличка Федор» як надходження; NINETAILS / Arval — лише суми банку (c.force у _plPlanCells)
 // v7.587: Польща — рішення CFO 25.11 (четверте): PERSPICIO не в MKIDS — лише журнал і рядок CF (PRIMROSE — «OWN TRANSFER ±» з приміткою «PERSPICIO»); запис доданками plWriteCells + план _plPlanCells (власні доданки, яких немає в банку, лишаються; перенесене між рядками прибирається; брати й сестри — заміна розподілом банку; незрозуміле — не пишемо); Opening жовтня = банк 01.10, Closing = банк на кінець; відшкодування «SKLEP / FAKTURA»
 // v7.586: Польща — рішення CFO 25.11 (третє): власні перекази знову в MKIDS зі знаком (як у жовтні) + рядок CF переказу (_plCfRow); PERSPICIO — окрема компанія, журнал PERSPICIO, на PRIMROSE — рядки «LUBLIN 1767 +» / «OWN TRANSFER ±»; рядок PERSPICIO у формулу BALANCE (plCfFixBalance, _plBalFix); Teo Then → рядок 9 з платником у примітці; залишки банку за ланцюжком saldo (картки проводяться пізніше)
@@ -9892,7 +9893,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.588', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.589', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -10201,7 +10202,12 @@ function doPost(e) {
     else if (body.action === 'plDiag')                    result = plDiag(body);
     else if (body.action === 'plCfFixBalance')            result = plCfFixBalance(body);
     else if (body.action === 'plWriteCells')              result = plWriteCells(body);
-    else if (body.action === 'plFixFormulas')             result = plFixFormulas(body);                      // v7.588 точкові виправлення формул CF (dryRun за замовч.)                       // v7.587 запис доданками (dryRun за замовч.)                     // v7.586 PERSPICIO у формулу BALANCE (dryRun за замовч.)                             // v7.581 Польща: структура файлів (читання)
+    else if (body.action === 'plFixFormulas')             result = plFixFormulas(body);
+    else if (body.action === 'plPreview')                 result = plPreview(body);                          // v7.589 Польща: розноска виписки без запису
+    else if (body.action === 'plApply')                   result = plApply(body);                            // v7.589 Польща: «Внести»
+    else if (body.action === 'plBalance')                 result = plBalance(body);                          // v7.589 Польща: BALANCE проти банку
+    else if (body.action === 'plRowsList')                result = plRowsList(body);                         // v7.589 Польща: рядки для форми готівки
+    else if (body.action === 'plCash')                    result = plCash(body);                             // v7.589 Польща: «Готівка Федора»                      // v7.588 точкові виправлення формул CF (dryRun за замовч.)                       // v7.587 запис доданками (dryRun за замовч.)                     // v7.586 PERSPICIO у формулу BALANCE (dryRun за замовч.)                             // v7.581 Польща: структура файлів (читання)
     else if (body.action === 'fxMigrate')                 result = fxMigrate(body);                          // v7.578 формули з доданків
     else if (body.action === 'notesBuild')                result = notesBuild(body);                         // v7.567 примітки-розшифровки (CFO; dryRun)
     else if (body.action === 'notesSetup')                result = notesSetup(body);                         // v7.567 тригер notesTick
@@ -47295,7 +47301,8 @@ function _plParseF(f, v){
 // Плани клітинок місяця. cells: [{key, file, group?, parts:[{val, note}], old:[числа]|'ref'}] (old — з файлу; parts — з виписки).
 // Доданки, що збігаються з банком (точно / до 1 zł / з протилежним знаком), — замінюються сумою банку; власні доданки, яких у банку немає, — лишаються;
 // доданок, що в банку стоїть в іншій клітинці того ж файлу, — прибирається тут (перенесено); якщо банк і файл розходяться без пояснення — 'unsafe' (не пишемо).
-function _plPlanCells(cells){
+function _plPlanCells(cells, popt){
+  popt = popt || {};   // incremental (внесення з системи): власні доданки завжди лишаються, без «перенесеного» й «unsafe»
   var R2 = function(x){ return Math.round(x * 100) / 100; }, sum = function(a){ return R2(a.reduce(function(s, x){ return s + x; }, 0)); };
   var st = cells.map(function(c){
     var o = {c:c, U:[], Pu:[], drop:[], ref:c.old === 'ref'}; if (o.ref) return o;
@@ -47321,9 +47328,9 @@ function _plPlanCells(cells){
         var j = -1; q.Pu.forEach(function(p, i){ if (j < 0 && !p._claimed && Math.abs(p.val - u) < 0.005) j = i; });
         if (j >= 0){ q.Pu[j]._claimed = o.c.key; t = q.c.key; return true; } return false; });
       if (t){ o.drop.push({val:u, why:'у банку — в ' + t}); (o.movedTo = o.movedTo || {})[t] = 1; return false; } return true; }); }); };
-  moveStep(false); moveStep(true);
+  if (!popt.incremental){ moveStep(false); moveStep(true); }
   // брати й сестри: сума власних доданків групи = сумі банку групи → заміна
-  var grp = {}; st.forEach(function(o){ if (!o.ref && o.c.group) (grp[o.c.group] = grp[o.c.group] || []).push(o); });
+  var grp = {}; if (!popt.incremental) st.forEach(function(o){ if (!o.ref && o.c.group) (grp[o.c.group] = grp[o.c.group] || []).push(o); });
   Object.keys(grp).forEach(function(g){ var G = grp[g], su = sum([].concat.apply([], G.map(function(o){ return o.U; }))),
     sp = sum([].concat.apply([], G.map(function(o){ return o.Pu.map(function(p){ return p.val; }); })));
     if (su && Math.abs(su - sp) < 1) G.forEach(function(o){ o.U.forEach(function(u){ o.drop.push({val:u, why:'брати й сестри: заміна розподілом банку'}); }); o.U = []; o.Pu.forEach(function(p){ p._claimed = 'group'; }); }); });
@@ -47331,7 +47338,7 @@ function _plPlanCells(cells){
     var c = o.c, res = {key:c.key, file:c.file};
     if (o.ref) return Object.assign(res, {status:'ref', why:'у клітинці посилання / функція — не чіпаємо'});
     var pu = o.Pu.filter(function(p){ return !p._claimed; });
-    if (o.U.length && pu.length){
+    if (o.U.length && pu.length && !popt.incremental){
       if (Math.abs(sum(o.U) - sum(pu.map(function(p){ return p.val; }))) < 1){ o.U.forEach(function(u){ o.drop.push({val:u, why:'та сама сума іншими доданками'}); }); o.U = []; }
       else return Object.assign(res, {status:'unsafe', why:'у файлі ' + o.U.join(' + ') + ', у банку ' + pu.map(function(p){ return p.val; }).join(' + ') + ' — без пояснення', oldSum:sum(c.old), bankSum:sum((c.parts || []).map(function(p){ return p.val; }))});
     }
@@ -47343,6 +47350,135 @@ function _plPlanCells(cells){
     return Object.assign(res, {status:same ? 'same' : (add.length ? 'write' : 'clear'), formula:f, value:sum(add), oldSum:sum(c.old), kept:o.U, dropped:o.drop});
   });
 }
+// ═══ v7.589: ПОЛЬЩА — внесення через систему (чиста частина: розмітка файлу, розноска всієї виписки, клітинки, CF) ═══
+// Файл (як повертає _plReadFile / plDiag): {tabs:{<вкладка>:{months:{oct:{actual, budget}}, rows:[{r, a, oct_actual, octF_actual, oct_budget}]}}}
+var PL_MONS = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+// раніше — закриті місяці (червень–вересень заморожені); 2027 — окремі файли, лише читання
+var PL_WRITE_FROM = '2026-10';
+function _plNum(v){ var s = String(v == null ? '' : v).replace(/[\s ]/g, '').replace(',', '.').replace(/^\((.*)\)$/, '-$1'); var n = Number(s.replace(/^-$/, '0')); return isNaN(n) ? 0 : n; }
+function _plColL(c1){ var s = '', c = c1; while (c > 0){ var m = (c - 1) % 26; s = String.fromCharCode(65 + m) + s; c = Math.floor((c - 1) / 26); } return s; }
+function _plIsRef(f){ return !!f && /[A-Za-z]/.test(String(f).replace(/^=/, '')); }
+function _plTab(f, re){ var k = Object.keys((f && f.tabs) || {}).filter(function(t){ return re.test(t); })[0]; return k ? {name:k, t:f.tabs[k]} : null; }
+function _plMonOf(date){ return PL_MONS[Number(String(date).slice(5, 7)) - 1]; }
+function _plWritable(date){ return String(date).slice(0, 7) >= PL_WRITE_FROM && String(date).slice(0, 4) === '2026'; }
+// Розмітка файлу на місяць: рядки дітей / працівників / контрагентів і службові рядки
+function _plLayout(f, loc, mon){
+  var P = _plTab(f, /^Payment/i), S = _plTab(f, /^Salary/i), O = _plTab(f, /^OPEX/i), C = _plTab(f, /^CF$/i);
+  var fx = function(r){ return r[mon + 'F_actual'] || ''; };
+  var L = {loc:loc, mon:mon, payment:[], salary:[], opex:[], tabs:{payment:P && P.name, salary:S && S.name, opex:O && O.name, cf:C && C.name}, col:{}, cfRows:C ? C.t.rows : []};
+  [['payment', P], ['salary', S], ['opex', O], ['cf', C]].forEach(function(x){ if (x[1]) L.col[x[0]] = ((x[1].t.months || {})[mon] || {}).actual; });
+  if (P){
+    var blk = {}, HB = /^(ZUS( KONSTANCIN)?|ZUS Return|dotacj[ai])$/i, cur = '';
+    P.t.rows.forEach(function(r){ var m = /^=SUM\([A-Z]+(\d+):[A-Z]+(\d+)\)$/i.exec(fx(r)); if (!m) return;
+      for (var q = +m[1]; q <= +m[2]; q++) if (!blk[q] || String(r.a || '').trim()) blk[q] = String(r.a || '').trim() || blk[q] || ''; });
+    P.t.rows.forEach(function(r){ var a = String(r.a || '').trim();
+      if (HB.test(a) || /^=SUM\(/i.test(fx(r))){ cur = HB.test(a) ? a : ''; return; }
+      if (cur && !blk[r.r]) blk[r.r] = cur; });
+    P.t.rows.forEach(function(r){ var a = String(r.a || '').trim(); if (!a || r.r < 4 || _plIsRef(fx(r))) return;
+      var b = blk[r.r] || '';
+      if (/dotac/i.test(a) || /dotac/i.test(b)){ if (!L.dotRow) L.dotRow = r.r; return; }
+      if (/^Opłata za pobyt$/i.test(a)) return;
+      L.payment.push({r:r.r, a:a, block:b, budget:_plNum(r[mon + '_budget'])}); });
+  }
+  if (S) S.t.rows.forEach(function(r){ var a = String(r.a || '').trim(); if (!a || r.r < 3 || _plIsRef(fx(r))) return;
+    if (/^ZUS\/PIT$/i.test(a)){ L.zusSalaryRow = r.r; return; }
+    if (/^(Salary|personel|Zajęcia dodatkowe)$/i.test(a)) return;
+    L.salary.push({r:r.r, a:a}); });
+  if (O){ var start = 0; O.t.rows.forEach(function(r){ if (/^TOTAL$/i.test(String(r.a || '').trim())) start = r.r; });
+    O.t.rows.forEach(function(r){ var a = String(r.a || '').trim(); if (/^MKIDS$/i.test(a) && !_plIsRef(fx(r))) L.mkidsRow = r.r;
+      if (!a || r.r <= start + 2 || _plIsRef(fx(r)) || /^RETURN$/i.test(a)) return;
+      if (/^ZUS$/i.test(a)) L.zusOpexRow = r.r; else if (/^PIT$/i.test(a)) L.pitOpexRow = r.r;
+      if (/OPŁATA/i.test(a) && /KART|SMS|PRZELEW/i.test(a) && !L.feeRow) L.feeRow = r.r;
+      if (/KAPITALIZACJA|KREDYT/i.test(a) && !L.loanRow) L.loanRow = r.r;
+      if (/KAPITALIZACJA ODSETEK/i.test(a) && !L.interestRow) L.interestRow = r.r;
+      if (/Płatność mobilna/i.test(a) && !L.mobileRow) L.mobileRow = r.r;
+      L.opex.push({r:r.r, a:a}); }); }
+  return L;
+}
+// Ключ операції (повторне завантаження тієї ж виписки не дублює)
+function _plOpKey(op){ return [String(op.acc || '').slice(-4), op.date, Math.round(Number(op.amount) * 100), Math.round(Number(op.saldo) * 100), _plTitle(op.desc).replace(/\s+/g, '').slice(0, 40)].join('|'); }
+// Контрагент для пам'яті вибору: магазин для карток, інакше ім'я без адреси
+function _plPartyKey(op){ var t = String(op.type || ''), p = /kart|terminal/i.test(t) ? _plMerchant(op.desc) : (Number(op.amount) > 0 ? op.from : op.to);
+  return _plFold(_plPayerName(p || '')).replace(/\b\d+\b/g, ' ').replace(/\s+/g, ' ').trim(); }
+function _plDm(d){ return String(d).slice(8, 10) + '.' + String(d).slice(5, 7); }
+function _plNote(op, val, tag){ var p = Number(op.amount) > 0 ? op.from : op.to;
+  if (/kart|terminal/i.test(String(op.type || ''))) p = _plMerchant(op.desc) || p;
+  return [_plDm(op.date), String(_plPayerName(p || op.type || '')).replace(/\s+/g, ' ').trim().slice(0, 60), String(Math.round(val * 100) / 100).replace('.', ','), tag].filter(Boolean).join(' · '); }
+// Уся виписка → операції з клітинками. files: {loc: файл}; opt: {ledger:{key:1}, memory:{'loc|party':{kind,row}}, overrides:{key:{kind,row}}}
+// → [{key, op, acc, mon, status:'ok'|'decide'|'skip'|'dup'|'closed', why, journal, loan, cells:[{loc, kind, tab, row, a1, val, note}], cf:[{loc, row, a1, val, note}]}]
+function _plBuild(ops, files, opt){
+  opt = opt || {}; var led = opt.ledger || {}, mem = opt.memory || {}, ovr = opt.overrides || {}, lays = {}, out = [];
+  var lay = function(loc, mon){ var k = loc + '|' + mon; if (!(k in lays)){ lays[k] = files[loc] ? _plLayout(files[loc], loc, mon) : null; } return lays[k]; };
+  var accLoc = function(op){ return PL_ACC4[String(op.acc || '').slice(-4)] || '?'; };
+  // комісія «OPŁATA PRZELEW…» — до переказу, що йде у виписці одразу під нею (та сама дата, той самий рахунок)
+  ops.forEach(function(op, i){ op._loc = accLoc(op); if (/^Opłata$/i.test(op.type) && /PRZELEW/i.test(op.desc)){
+    var nx = ops[i + 1]; if (nx && nx.acc === op.acc && nx.date === op.date && /Przelew z rachunku/i.test(nx.type)) op._feeOf = nx; } });
+  var awz = [];
+  ops.forEach(function(op){
+    var it = {key:_plOpKey(op), op:op, acc:op._loc, mon:_plMonOf(op.date), cells:[], cf:[], why:''}; out.push(it);
+    if (op._loc === 'OVERHEAD'){ it.status = 'skip'; it.why = 'рахунок Overhead — не вносимо'; return; }
+    if (op._loc === '?'){ it.status = 'decide'; it.why = 'рахунок ' + op.acc + ' не в реєстрі'; return; }
+    if (!_plWritable(op.date)){ it.status = 'closed'; it.why = 'місяць закритий (вносимо з жовтня 2026)'; return; }
+    var L = lay(op._loc, it.mon); if (!L){ it.status = 'decide'; it.why = 'файл локації не підключено'; return; }
+    if (PL_AWZ_PEER[op._loc] && !L.peer){ var PL2 = lay(PL_AWZ_PEER[op._loc], it.mon); if (PL2) L.peer = {loc:PL2.loc, payment:PL2.payment}; }
+    var r = op._feeOf ? _plRoute(op._feeOf, L) : _plRoute(op, L);
+    if (op._feeOf && r.kind !== 'decide') r.why = 'комісія за переказ → ' + r.why;
+    if (op._feeOf){ r = Object.assign({}, r); delete r.split; delete r.loan; delete r.journal; }   // комісія — лише в рядок переказу
+    var pk = _plPartyKey(op), o = ovr[it.key], m = mem[op._loc + '|' + pk];
+    if (o){ r = {kind:o.kind, row:Number(o.row), why:'вибір вручну'}; it.picked = true; }
+    else if (m && (r.kind === 'decide' || /^контрагента немає|кілька рядків|рядок дитини не знайдено/.test(r.why || ''))){ r = {kind:m.kind, row:Number(m.row), why:'запам\'ятований вибір для «' + pk + '»'}; }
+    it.why = r.why || ''; it.journal = r.journal || ''; it.loan = r.loan || ''; it.party = pk; it.route = r;
+    if (r.kind === 'skip'){ it.status = 'skip'; return; }
+    if (r.kind === 'decide'){ it.status = 'decide'; return; }
+    it.status = led[it.key] ? 'dup' : 'ok';
+    if (r.awzPeer) awz.push({op:op, date:op.date, amount:op.amount});
+    var tag = r.journal === 'Позики Федора' ? r.loan : r.interco ? 'власний переказ' : r.awzPeer ? 'ZUS AwZ (рахунок ' + op._loc + ')' : '';
+    if (r.kind !== 'cf'){
+      var tl = r.loc || op._loc, TL = lay(tl, it.mon), col = TL && TL.col[r.kind];
+      if (!TL || !col){ it.status = 'decide'; it.why = 'немає вкладки / колонки місяця'; return; }
+      var pieces = r.split ? r.split.map(function(x){ return {row:x.row, amount:x.amount}; }) : [{row:r.row, amount:Number(op.amount)}];
+      pieces.forEach(function(pc){
+        var val = r.signed ? pc.amount : r.neg ? -pc.amount : r.kind === 'payment' ? pc.amount : -pc.amount;
+        it.cells.push({loc:tl, kind:r.kind, tab:TL.tabs[r.kind], row:pc.row, a1:_plColL(col) + pc.row, val:Math.round(val * 100) / 100,
+          note:_plNote(op, val, tag), group:r.split ? it.key : '', name:_plRowLabel(TL, r.kind, pc.row)}); });
+    }
+    // рядок CF (перекази, Федір, PERSPICIO, ZUS KONSTANCIN) — у файлі рахунку
+    var A = lay(op._loc, it.mon), cr = A ? _plCfRow(A.cfRows, op._loc, op, r) : null;
+    if (cr && A.col.cf) it.cf.push({loc:op._loc, row:cr.r, a1:_plColL(A.col.cf) + cr.r, val:Math.round(Number(op.amount) * 100) / 100,
+      note:_plNote(op, Number(op.amount), r.journal === 'PERSPICIO' ? 'PERSPICIO' : r.journal === 'Позики Федора' ? 'Федір' : ''), name:cr.label});
+    else if (r.kind === 'cf' || r.journal || r.interco){ it.cfMissing = 'рядка в CF немає'; }
+  });
+  // транзит ZUS KONSTANCIN: переказ PRUZSKOW → KONSTANCIN на суму надходжень AwZ — у файли не вносимо; у CF PRUZSKOW — «KONSTANCIN 2951 −»
+  var tr = out.filter(function(x){ return x.route && x.route.interco && x.acc === 'PRUZSKOW' && /2951$/.test(x.op.to_acc) && x.op.amount < 0; });
+  var pass = _plZusPass(awz, tr.map(function(x){ return {date:x.op.date, amount:x.op.amount}; }));
+  pass.forEach(function(i){ var x = tr[i]; x.cells = []; x.why = 'транзит ZUS KONSTANCIN — у блоці ZUS KONSTANCIN';
+    var tw = out.filter(function(y){ return y.route && y.route.interco && y.acc === 'KONSTANCIN' && /4078$/.test(y.op.from_acc) && Math.abs(y.op.amount + x.op.amount) < 0.01 && !y._tw; })[0];
+    if (tw){ tw._tw = 1; tw.cells = []; tw.cf = []; tw.why = x.why; } });
+  return out;
+}
+function _plRowLabel(L, kind, row){ var a = (L[kind] || []).filter(function(x){ return x.r === row; })[0]; if (a) return a.a;
+  if (row === L.mkidsRow) return 'MKIDS'; if (row === L.dotRow) return 'dotacja'; if (row === L.zusSalaryRow) return 'ZUS/PIT'; return ''; }
+// Рядки файлу для випадаючого списку: {payment:[{r, a}], salary:[…], opex:[…]}
+function _plRowOptions(L){ var o = {}; ['payment', 'salary', 'opex'].forEach(function(k){ o[k] = (L[k] || []).map(function(x){ return {r:x.r, a:x.a}; }); });
+  if (L.mkidsRow) o.opex.push({r:L.mkidsRow, a:'MKIDS'}); return o; }
+// Клітинки до запису: групування нових і вже внесених (з журналу операцій) частин по клітинці
+// items — з _plBuild (status ok), ledgerParts — [{cellKey, val, note}] → {cellKey: {parts:[{val, note}], group}}
+function _plCellParts(items, ledgerParts){
+  var C = {};
+  (ledgerParts || []).forEach(function(p){ (C[p.cellKey] = C[p.cellKey] || {parts:[], group:''}).parts.push({val:Number(p.val), note:p.note, old:true}); });
+  items.forEach(function(it){ if (it.status !== 'ok') return;
+    it.cells.forEach(function(c){ var k = c.loc + '|' + c.tab + '|' + c.a1; (C[k] = C[k] || {parts:[], group:''}).parts.push({val:c.val, note:c.note}); if (c.group) C[k].group = c.group; });
+    it.cf.forEach(function(c){ var k = c.loc + '|CF|' + c.a1; (C[k] = C[k] || {parts:[], group:''}).parts.push({val:c.val, note:c.note}); }); });
+  return C;
+}
+// Журнал позик / PERSPICIO: нові записи з залишком по локації (prev — останні залишки {loc: сума})
+function _plJournalRows(items, journal, prev){
+  var bal = {}; Object.keys(prev || {}).forEach(function(k){ bal[k] = Number(prev[k]) || 0; });
+  return items.filter(function(it){ return it.status === 'ok' && it.journal === journal; }).sort(function(a, b){ return String(a.op.date).localeCompare(String(b.op.date)); })
+    .map(function(it){ var l = it.acc; bal[l] = Math.round(((bal[l] || 0) + Number(it.op.amount)) * 100) / 100;
+      return {date:it.op.date, loc:l, amount:Number(it.op.amount), dir:it.loan || (it.op.amount > 0 ? 'надходження' : 'виплата'), balance:bal[l], key:it.key}; });
+}
+// ═══ /v7.589 (чиста частина) ═══
 // ═══ v7.581: ПОЛЬЩА — крок 1, розвідка файлів (лише читання) ═══
 var PL_FILES_26 = {LUBLIN:'1LEl4R6ba3Yi8el9b8GS_m_HJTspd9OXyIrWgu_d1w5o', PRUZSKOW:'1CKL2AHUnUWjfAifAgLpGYakO2hKgNv9FoiHrQZgTZ0w',
                    KONSTANCIN:'16yD9rLbcu6QPQlkiF6rb4yTNm0z6GW92SgE78fpmxzY', PRIMROSE:'1KQv-z_7SmxUhv2vNw8t2gqZSdTW8_ni8kodajwr3Jw4'};
@@ -47505,6 +47641,240 @@ function plFixFormulas(p){
   });
   return res;
 }
+// ═══ v7.589: ПОЛЬЩА — внесення через систему (таблиці, дії) ═══
+// Аркуші в «m.kids CRM Data» (лише CFO; українські аркуші не чіпаємо)
+var PL_SH_REG = 'PL_Реєстр', PL_SH_OPS = 'PL_Операції', PL_SH_MEM = 'PL_Контрагенти', PL_SH_BANK = 'PL_Банк', PL_SH_CASH = 'PL_Готівка';
+var PL_SH_JOURNALS = {'Позики Федора':'Позики Федора', 'PERSPICIO':'PERSPICIO'};
+var PL_HEAD = {
+  'PL_Реєстр':['Локація', 'Файл 2026 (ID)', 'Рахунок (4 цифри)', 'Активна', 'Примітка'],
+  'PL_Операції':['Ключ', 'Рахунок', 'Дата', 'Сума', 'Контрагент', 'Клітинки (JSON)', 'Підстава', 'Записано', 'Хто'],
+  'PL_Контрагенти':['Локація', 'Контрагент', 'Вкладка', 'Рядок', 'Назва рядка', 'Хто', 'Коли'],
+  'PL_Банк':['Локація', 'Місяць', 'Залишок на початок', 'На кінець (за проведенням)', 'На кінець (за датами)', 'Розрив виписки', 'Записано'],
+  'PL_Готівка':['ID', 'Дата', 'Локація', 'Сума', 'Вкладка', 'Рядок', 'Назва рядка', 'Примітка', 'Записано', 'Хто'],
+  'Позики Федора':['Дата', 'Локація', 'Сума', 'Напрямок', 'Залишок по локації', 'Ключ операції'],
+  'PERSPICIO':['Дата', 'Локація', 'Сума', 'Напрямок', 'Залишок по локації', 'Ключ операції']
+};
+function _plSh(name){
+  var ss = getCRMSpreadsheet(), sh = ss.getSheetByName(name);
+  if (!sh){ sh = ss.insertSheet(name); sh.getRange(1, 1, 1, PL_HEAD[name].length).setValues([PL_HEAD[name]]).setFontWeight('bold'); sh.setFrozenRows(1);
+    if (name === PL_SH_REG){
+      var rows = [['LUBLIN', PL_FILES_26.LUBLIN, '1767', 'так', ''], ['PRUZSKOW', PL_FILES_26.PRUZSKOW, '4078', 'так', ''], ['KONSTANCIN', PL_FILES_26.KONSTANCIN, '2951', 'так', ''],
+                  ['PRIMROSE', PL_FILES_26.PRIMROSE, '1006', 'так', 'рахунок PERSPICIO SP. Z O.O.'], ['OVERHEAD', '', '1380', 'ні', 'Overhead — не вносимо']];
+      sh.getRange(2, 1, rows.length, 5).setValues(rows);
+    }
+  }
+  return sh;
+}
+function _plRows(name){ var sh = _plSh(name), n = sh.getLastRow(); return n < 2 ? [] : sh.getRange(2, 1, n - 1, PL_HEAD[name].length).getValues(); }
+// Реєстр → PL_FILES_26 / PL_ACC4 (змінити файл чи рахунок можна в аркуші, без коду)
+function _plLoadReg(){
+  _plRows(PL_SH_REG).forEach(function(r){ var l = String(r[0] || '').trim(), id = String(r[1] || '').trim(), a4 = String(r[2] || '').replace(/\D/g, '').slice(-4);
+    if (!l) return; if (a4) PL_ACC4[a4] = l; if (id && /так|yes|1/i.test(String(r[3]))) PL_FILES_26[l] = id; });
+}
+function _plCfo(p){ var a = _promoActor(p); return a && _roleKey(a.role) === 'cfo' ? a : null; }
+// Файл: вкладки Payment / Salary / OPEX / CF — значення й формули місяців (як plDiag)
+function _plReadFile(id, months){
+  var ss = SpreadsheetApp.openById(id), f = {tabs:{}, comma:_fxSep(ss) === ';'};
+  ss.getSheets().forEach(function(sh){
+    var nm = sh.getName(); if (!/^(Payment|Salary|OPEX|CF$)/i.test(nm)) return;
+    var lr = sh.getLastRow(), lc = sh.getLastColumn(); if (!lr || !lc) return;
+    var rg = sh.getRange(1, 1, lr, lc), V = rg.getDisplayValues(), F = rg.getFormulas(), cols = _plMonthCols(V.slice(0, 6)), t = {months:cols, rows:[]};
+    for (var r = 0; r < lr; r++){
+      var row = {r:r + 1, a:String(V[r][0] || '').trim()};
+      months.forEach(function(mk){ var mc = cols[mk] || {}; ['actual', 'budget'].forEach(function(kd){ var c = mc[kd]; if (!c) return;
+        if (V[r][c - 1] !== '') row[mk + '_' + kd] = V[r][c - 1]; if (F[r][c - 1]) row[mk + 'F_' + kd] = F[r][c - 1]; }); });
+      t.rows.push(row);
+    }
+    f.tabs[nm] = t;
+  });
+  return f;
+}
+function _plLedger(){
+  var keys = {}, parts = [];
+  _plRows(PL_SH_OPS).forEach(function(r){ var k = String(r[0] || ''); if (!k) return; keys[k] = 1;
+    var cells = []; try { cells = JSON.parse(String(r[5] || '[]')); } catch(e){}
+    cells.forEach(function(c){ parts.push({cellKey:c.k, val:Number(c.v), note:c.n}); }); });
+  return {keys:keys, parts:parts};
+}
+function _plMemory(){ var m = {}; _plRows(PL_SH_MEM).forEach(function(r){ var l = String(r[0] || ''), p = String(r[1] || ''); if (l && p) m[l + '|' + p] = {kind:String(r[2]), row:Number(r[3])}; }); return m; }
+function _plNeed(ops){   // які файли й місяці читати
+  var locs = {}, mons = {};
+  ops.forEach(function(op){ var l = PL_ACC4[String(op.acc || '').slice(-4)]; if (!l || l === 'OVERHEAD') return; locs[l] = 1; if (PL_AWZ_PEER[l]) locs[PL_AWZ_PEER[l]] = 1; mons[_plMonOf(op.date)] = 1; });
+  return {locs:Object.keys(locs), mons:Object.keys(mons)};
+}
+function _plFiles(locs, mons){ var f = {}; locs.forEach(function(l){ if (PL_FILES_26[l]) f[l] = _plReadFile(PL_FILES_26[l], mons); }); return f; }
+// Залишки банку по рахунку-місяцю (ops у порядку виписки)
+function _plBankByMonth(ops){
+  var g = {}; ops.forEach(function(op){ var l = PL_ACC4[String(op.acc || '').slice(-4)] || '?', k = l + '|' + _plMonOf(op.date); (g[k] = g[k] || []).push(op); });
+  var out = {}; Object.keys(g).forEach(function(k){ out[k] = _plBankEnds(g[k]); }); return out;
+}
+function _plCleanOps(ops){
+  return (ops || []).map(function(o){ return {acc:String(o.acc || '').replace(/\s/g, ''), date:String(o.date || '').slice(0, 10), type:String(o.type || ''), amount:Number(o.amount) || 0, saldo:Number(o.saldo) || 0,
+    from_acc:String(o.from_acc || ''), from:String(o.from || ''), to_acc:String(o.to_acc || ''), to:String(o.to || ''), desc:String(o.desc || '')}; }).filter(function(o){ return /^\d{4}-\d{2}-\d{2}$/.test(o.date); });
+}
+// POST {action:'plPreview', actorId, ops:[…]} — розноска без запису
+function plPreview(p){
+  if (!_plCfo(p)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  try {
+    _plLoadReg();
+    var ops = _plCleanOps(p.ops), need = _plNeed(ops), files = _plFiles(need.locs, need.mons), led = _plLedger();
+    var items = _plBuild(ops, files, {ledger:led.keys, memory:_plMemory(), overrides:p.overrides || {}});
+    var opts = {}; need.locs.forEach(function(l){ need.mons.forEach(function(m){ if (files[l]) opts[l + '|' + m] = _plRowOptions(_plLayout(files[l], l, m)); }); });
+    return {ok:true, items:items.map(_plItemOut), options:opts, bank:_plBankByMonth(ops)};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+function _plItemOut(it){ var o = it.op;
+  return {key:it.key, date:o.date, type:o.type, amount:o.amount, party:(o.amount > 0 ? o.from : o.to) || _plMerchant(o.desc) || o.type, title:_plTitle(o.desc).slice(0, 120), acc:it.acc, mon:it.mon,
+    status:it.status, why:it.why, journal:it.journal, loan:it.loan, partyKey:it.party, picked:!!it.picked, cfMissing:it.cfMissing || '',
+    cells:it.cells.map(function(c){ return {loc:c.loc, kind:c.kind, tab:c.tab, row:c.row, a1:c.a1, name:c.name, val:c.val}; }),
+    cf:it.cf.map(function(c){ return {loc:c.loc, row:c.row, a1:c.a1, name:c.name, val:c.val}; })}; }
+// Запис однієї клітинки за планом (формула доданками / очищення / значення) з перевіркою і відкатом; примітка — блок «── PKO ──»
+function _plPut(sh, a1, plan, note, comma){
+  var cell = sh.getRange(a1), f0 = cell.getFormula(), v0 = cell.getValue(), n0 = cell.getNote(), want, fx = '';
+  if (plan.status === 'value') want = Math.round(Number(plan.value) * 100) / 100;
+  else if (plan.status === 'clear') want = 0;
+  else { fx = String(plan.formula || ''); want = _plEvalPlus(fx); if (want == null) return {ok:false, err:'формула не з чисел'}; if (comma) fx = fx.replace(/(\d)\.(\d)/g, '$1,$2'); }
+  if (plan.status === 'value') cell.setValue(want); else if (plan.status === 'clear') cell.clearContent(); else cell.setFormula(fx);
+  SpreadsheetApp.flush();
+  var got = Number(cell.getValue()) || 0;
+  if (Math.abs(got - want) > 0.005){ if (f0) cell.setFormula(f0); else cell.setValue(v0); SpreadsheetApp.flush(); return {ok:false, err:'значення ' + got + ' ≠ ' + want + ' — відкат'}; }
+  var nn = _plNoteMerge(n0, plan.status === 'clear' ? '' : String(note || '')); if (nn !== n0) cell.setNote(nn);
+  return {ok:true, before:f0 || v0, after:fx || want};
+}
+// Спланувати й записати клітинки: C = {cellKey:{parts, group}} (cellKey = loc|вкладка|A1); ss — {loc: Spreadsheet}
+function _plWriteCellsMap(C, ss, extra){
+  var cells = [], meta = {}, res = {written:[], unsafe:[], failed:[]};
+  Object.keys(C).forEach(function(k){ var q = k.split('|'), loc = q[0], tab = q[1], a1 = q[2]; if (!ss[loc]) ss[loc] = SpreadsheetApp.openById(PL_FILES_26[loc]);
+    var sh = ss[loc].getSheetByName(tab); if (!sh){ res.failed.push({k:k, err:'вкладки немає'}); return; }
+    var cell = sh.getRange(a1), old = _plParseF(cell.getFormula(), cell.getValue());
+    meta[k] = {sh:sh, a1:a1, comma:_fxSep(ss[loc]) === ';'};
+    cells.push({key:k, file:loc + (tab === 'CF' ? '|CF' : '|PSO'), group:C[k].group || '', parts:C[k].parts, old:old, drop:(extra && extra.drop && extra.drop[k]) || []}); });
+  _plPlanCells(cells, {incremental:true}).forEach(function(pl){
+    var m = meta[pl.key], c = cells.filter(function(x){ return x.key === pl.key; })[0];
+    if (pl.status === 'unsafe' || pl.status === 'ref'){ res.unsafe.push({k:pl.key, why:pl.why}); return; }
+    if (pl.status === 'keep' || pl.status === 'same'){ res.written.push({k:pl.key, same:true}); return; }
+    var note = c.parts.map(function(x){ return x.note; }).filter(Boolean).concat((pl.kept || []).map(function(v){ return 'власний доданок (не з банку): ' + String(v).replace('.', ','); })).join('\n');
+    try { var w = _plPut(m.sh, m.a1, pl, note, m.comma); if (w.ok) res.written.push({k:pl.key, before:w.before, after:w.after}); else res.failed.push({k:pl.key, err:w.err}); }
+    catch(e){ res.failed.push({k:pl.key, err:String(e && e.message || e)}); }
+  });
+  return res;
+}
+// POST {action:'plApply', actorId, ops, overrides:{key:{kind,row}}, remember:[{loc, party, kind, row, name}], only:'LUBLIN', periods:{acc4:{from,to}}}
+function plApply(p){
+  var a = _plCfo(p); if (!a) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var lock = LockService.getScriptLock(); if (!lock.tryLock(30000)) return {ok:false, error:'Зайнято іншим записом — спробуй за хвилину'};
+  try {
+    _plLoadReg();
+    var who = _promoWho(a, 'CFO'), now = new Date();
+    // пам'ять вибору для контрагента
+    var memSh = _plSh(PL_SH_MEM), memRows = _plRows(PL_SH_MEM);
+    (p.remember || []).forEach(function(m){ if (!m.loc || !m.party || !m.kind || !m.row) return;
+      var i = -1; memRows.forEach(function(r, j){ if (String(r[0]) === m.loc && String(r[1]) === m.party) i = j; });
+      var row = [m.loc, m.party, m.kind, Number(m.row), String(m.name || ''), who, now];
+      if (i >= 0) memSh.getRange(i + 2, 1, 1, row.length).setValues([row]); else { memSh.appendRow(row); memRows.push(row); } });
+    var ops = _plCleanOps(p.ops), need = _plNeed(ops), files = _plFiles(need.locs, need.mons), led = _plLedger();
+    var items = _plBuild(ops, files, {ledger:led.keys, memory:_plMemory(), overrides:p.overrides || {}});
+    var only = String(p.only || ''), mine = items.filter(function(it){ return it.status === 'ok' && (!only || it.acc === only); });
+    // частини клітинок: уже внесене (журнал операцій) + нове; PERSPICIO з MKIDS не вносимо
+    var C0 = _plCellParts(mine, []), touched = {}; Object.keys(C0).forEach(function(k){ touched[k] = 1; });
+    var C = _plCellParts(mine, led.parts.filter(function(x){ return touched[x.cellKey]; }));
+    var ss = {}, w = _plWriteCellsMap(C, ss);
+    var bad = {}; w.unsafe.concat(w.failed).forEach(function(x){ bad[x.k] = x.why || x.err; });
+    // журнал операцій: лише операції, всі клітинки яких записані
+    var opsSh = _plSh(PL_SH_OPS), done = [], notDone = [];
+    mine.forEach(function(it){
+      var ks = it.cells.map(function(c){ return {k:c.loc + '|' + c.tab + '|' + c.a1, v:c.val, n:c.note}; }).concat(it.cf.map(function(c){ return {k:c.loc + '|CF|' + c.a1, v:c.val, n:c.note}; }));
+      var why = ks.map(function(x){ return bad[x.k]; }).filter(Boolean)[0];
+      if (why){ notDone.push({key:it.key, date:it.op.date, amount:it.op.amount, party:it.party, why:why}); return; }
+      done.push(it); opsSh.appendRow([it.key, it.acc, it.op.date, it.op.amount, it.party, JSON.stringify(ks), it.why, now, who]);
+    });
+    // журнали «Позики Федора» / PERSPICIO
+    Object.keys(PL_SH_JOURNALS).forEach(function(j){
+      var sh = _plSh(PL_SH_JOURNALS[j]), prev = {}; _plRows(PL_SH_JOURNALS[j]).forEach(function(r){ prev[String(r[1])] = Number(r[4]) || 0; });
+      _plJournalRows(done, j, prev).forEach(function(x){ sh.appendRow([x.date, x.loc, x.amount, x.dir, x.balance, x.key]); }); });
+    // залишки банку: місяць повністю у виписці → Closing місяця = банк; Opening (Closing попереднього, якщо він відкритий) = банк
+    var bank = [], per = p.periods || {};
+    if (!only || only !== 'OVERHEAD'){
+      var bm = _plBankByMonth(ops.filter(function(o){ return !only || PL_ACC4[String(o.acc).slice(-4)] === only; }));
+      Object.keys(bm).forEach(function(k){ var q = k.split('|'), l = q[0], mon = q[1], b = bm[k]; if (!PL_FILES_26[l] || l === 'OVERHEAD') return;
+        var mi = PL_MONS.indexOf(mon), first = '2026-' + ('0' + (mi + 1)).slice(-2) + '-01', last = Utilities.formatDate(new Date(2026, mi + 1, 0), 'Europe/Warsaw', 'yyyy-MM-dd');
+        var pd = per[String(PL_FILES_26[l] && Object.keys(PL_ACC4).filter(function(x){ return PL_ACC4[x] === l; })[0])] || {};
+        var full = (!pd.from || pd.from <= first) && (!pd.to || pd.to >= last);
+        if (!full || !_plWritable(first)) return;
+        var sh = (ss[l] = ss[l] || SpreadsheetApp.openById(PL_FILES_26[l])).getSheetByName('CF');
+        var cols = _plMonthCols(sh.getRange(1, 1, 6, sh.getLastColumn()).getDisplayValues()), A = sh.getRange(1, 1, sh.getLastRow(), 1).getDisplayValues();
+        var rowOf = function(re){ for (var i = 0; i < A.length; i++) if (re.test(String(A[i][0]).trim())) return i + 1; return 0; };
+        var cr = rowOf(/^Closing Balance/i), cur = (cols[mon] || {}).actual, prv = mi > 0 ? (cols[PL_MONS[mi - 1]] || {}).actual : 0;
+        if (cr && cur) _plPut(sh, _plColL(cur) + cr, {status:'value', value:b.close}, 'Closing = залишок PKO на кінець місяця (за проведенням)', false);
+        if (cr && prv && _plWritable('2026-' + ('0' + mi).slice(-2) + '-01')) _plPut(sh, _plColL(prv) + cr, {status:'value', value:b.open}, 'Closing = залишок PKO на 01.' + ('0' + (mi + 1)).slice(-2) + ' → Opening наступного місяця', false);
+        _plUpsertBank(l, mon, b, now); bank.push({loc:l, mon:mon, open:b.open, close:b.close, byDate:b.byDate, gap:b.gap}); });
+    }
+    return {ok:true, only:only, ops:mine.length, done:done.length, dup:items.filter(function(it){ return it.status === 'dup' && (!only || it.acc === only); }).length,
+      cells:w.written.filter(function(x){ return !x.same; }).length, same:w.written.filter(function(x){ return x.same; }).length, unsafe:w.unsafe, failed:w.failed, notDone:notDone, bank:bank};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { lock.releaseLock(); }
+}
+function _plUpsertBank(l, mon, b, now){
+  var sh = _plSh(PL_SH_BANK), rows = _plRows(PL_SH_BANK), i = -1;
+  rows.forEach(function(r, j){ if (String(r[0]) === l && String(r[1]) === mon) i = j; });
+  var row = [l, mon, b.open, b.close, b.byDate, b.gap, now];
+  if (i >= 0) sh.getRange(i + 2, 1, 1, row.length).setValues([row]); else sh.appendRow(row);
+}
+// POST {action:'plBalance', actorId, months?:['oct']} — BALANCE у файлі проти банку по кожній локації
+function plBalance(p){
+  if (!_plCfo(p)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  try {
+    _plLoadReg();
+    var bank = {}; _plRows(PL_SH_BANK).forEach(function(r){ bank[r[0] + '|' + r[1]] = {open:Number(r[2]), close:Number(r[3]), byDate:Number(r[4]), gap:Number(r[5])}; });
+    var months = (p.months && p.months.length) ? p.months : Object.keys(bank).map(function(k){ return k.split('|')[1]; }).filter(function(m, i, a){ return a.indexOf(m) === i; });
+    var out = [];
+    ['LUBLIN', 'PRUZSKOW', 'KONSTANCIN', 'PRIMROSE'].forEach(function(l){ if (!PL_FILES_26[l]) return;
+      var sh = SpreadsheetApp.openById(PL_FILES_26[l]).getSheetByName('CF'), cols = _plMonthCols(sh.getRange(1, 1, 6, sh.getLastColumn()).getDisplayValues());
+      var A = sh.getRange(1, 1, sh.getLastRow(), 1).getDisplayValues(), rowOf = function(re){ for (var i = 0; i < A.length; i++) if (re.test(String(A[i][0]).trim())) return i + 1; return 0; };
+      var br = rowOf(/^BALANCE Bank/i), orow = rowOf(/^Opening Balance/i);
+      months.forEach(function(m){ var c = (cols[m] || {}).actual; if (!c || !br) return; var b = bank[l + '|' + m] || null;
+        var bal = Number(sh.getRange(br, c).getValue()) || 0, op = Number(sh.getRange(orow, c).getValue()) || 0;
+        out.push({loc:l, mon:m, opening:op, balance:Math.round(bal * 100) / 100, bankOpen:b ? b.open : null, bankByDate:b ? b.byDate : null, bankClose:b ? b.close : null, gap:b ? b.gap : null,
+          diff:b ? Math.round((bal - b.byDate) * 100) / 100 : null}); }); });
+    return {ok:true, rows:out};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+// POST {action:'plRowsList', actorId, loc, month} — рядки Salary / OPEX для форми «Готівка Федора»
+function plRowsList(p){
+  if (!_plCfo(p)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  try { _plLoadReg(); var l = String(p.loc || ''), m = String(p.month || ''); if (!PL_FILES_26[l]) return {ok:false, error:'Невідома локація'};
+    var f = _plReadFile(PL_FILES_26[l], [m]); return {ok:true, options:_plRowOptions(_plLayout(f, l, m)), locs:Object.keys(PL_FILES_26)}; }
+  catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+// POST {action:'plCash', actorId, id, date, amount, loc, kind:'salary'|'opex', row, note} — «Готівка Федора»:
+// витрата — доданком у свій рядок, та сама сума — у CF «наличка Федор» (надходження, банк не зменшує)
+function plCash(p){
+  var a = _plCfo(p); if (!a) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var lock = LockService.getScriptLock(); if (!lock.tryLock(30000)) return {ok:false, error:'Зайнято іншим записом'};
+  try {
+    _plLoadReg();
+    var l = String(p.loc || ''), d = String(p.date || '').slice(0, 10), amt = Math.round(Number(p.amount) * 100) / 100, kind = String(p.kind || ''), row = Number(p.row), id = String(p.id || '');
+    if (!PL_FILES_26[l]) return {ok:false, error:'Невідома локація'};
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || !_plWritable(d)) return {ok:false, error:'Дата: місяць жовтень–грудень 2026'};
+    if (!(amt > 0) || !row || ['salary', 'opex'].indexOf(kind) < 0 || !id) return {ok:false, error:'Сума, вкладка, рядок і id обовʼязкові'};
+    var key = 'cash|' + id, led = _plLedger(); if (led.keys[key]) return {ok:true, dup:true, msg:'вже внесено'};
+    var mon = _plMonOf(d), f = _plReadFile(PL_FILES_26[l], [mon]), L = _plLayout(f, l, mon), tab = L.tabs[kind], col = L.col[kind];
+    var cr = (L.cfRows || []).filter(function(x){ return /^наличка Федор/i.test(String(x.a || '').trim()); })[0];
+    if (!tab || !col || !cr || !L.col.cf) return {ok:false, error:'Немає вкладки / колонки місяця / рядка «наличка Федор» у CF'};
+    var name = _plRowLabel(L, kind, row) || '', note = _plDm(d) + ' · готівка Федора · ' + String(amt).replace('.', ',') + (p.note ? ' · ' + String(p.note).slice(0, 80) : '');
+    var k1 = l + '|' + tab + '|' + _plColL(col) + row, k2 = l + '|CF|' + _plColL(L.col.cf) + cr.r, C = {};
+    C[k1] = {parts:led.parts.filter(function(x){ return x.cellKey === k1; }).map(function(x){ return {val:x.val, note:x.note}; }).concat([{val:amt, note:note}])};
+    C[k2] = {parts:led.parts.filter(function(x){ return x.cellKey === k2; }).map(function(x){ return {val:x.val, note:x.note}; }).concat([{val:amt, note:note + ' · ' + tab + ' ' + name}])};
+    var w = _plWriteCellsMap(C, {});
+    if (w.unsafe.length || w.failed.length) return {ok:false, error:'Не записано: ' + JSON.stringify(w.unsafe.concat(w.failed))};
+    var who = _promoWho(a, 'CFO'), now = new Date();
+    _plSh(PL_SH_OPS).appendRow([key, l, d, -amt, 'готівка Федора', JSON.stringify([{k:k1, v:amt, n:note}, {k:k2, v:amt, n:note + ' · ' + tab + ' ' + name}]), 'Готівка Федора', now, who]);
+    _plSh(PL_SH_CASH).appendRow([id, d, l, amt, tab, row, name, String(p.note || ''), now, who]);
+    return {ok:true, cells:[k1, k2], name:name};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { lock.releaseLock(); }
+}
+// ═══ /v7.589 ═══
 // ═══ /v7.581 ═══
 // POST {action:'notesBuild', actorId, kind:'payment'|'opex'|'salary', loc, months:[10,11], year, dryRun} — CFO; dryRun за замовч.
 function notesBuild(body){
