@@ -917,7 +917,7 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
 {
   const vv = (n) => /var [A-Z0-9_]+ *=[\s\S]*?;\n/.exec(src.slice(src.indexOf('var ' + n + ' ')))[0];
   const names = ['_plFold', '_plTokens', '_plLev1', '_plTokHit', '_plRowName', '_plRowNames', '_plRowHit', '_plJoined', '_plMerchant', '_plTitle', '_plRoute', '_plZusPass',
-    '_plRedir', '_plUniqRows', '_plKidFallback', '_plSplit', '_plBankEnds', '_plCfOpenPlan', '_plColNum', '_plPayerName', '_plCfRow', '_plBalFix', '_plParseF', '_plPlanCells', '_plNoteMerge', '_plEvalPlus',
+    '_plRedir', '_plIsReimb', '_plUniqRows', '_plKidFallback', '_plSplit', '_plBankEnds', '_plCfOpenPlan', '_plColNum', '_plPayerName', '_plCfRow', '_plBalFix', '_plParseF', '_plPlanCells', '_plNoteMerge', '_plEvalPlus',
     '_plNum', '_plColL', '_plIsRef', '_plTab', '_plMonOf', '_plWritable', '_plLayout', '_plOpKey', '_plPartyKey', '_plDm', '_plNote', '_plBuild', '_plRowLabel', '_plRowOptions', '_plCellParts', '_plJournalRows', '_plCompare'];
   const X = new Function(['PL_ACC4', 'PL_STOP', 'PL_AWZ_PEER', 'PL_FEDIR_RE', 'PL_PERSPICIO_RE', 'PL_REDIRECT', 'PL_FIXED', 'PL_LOC4', 'PL_MONS', 'PL_WRITE_FROM', 'PL_CMP_CF'].map(vv).join('\n') + names.map(fn).join('\n') + '\nreturn {' + names.join(',') + '};')();
   const ck = (id, t, g, e) => check(id, t, {r: g}, {r: e});
@@ -1070,6 +1070,17 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
   ck('pl: звірка з ручними записами', '✓ дитина, комісія, PGE; ⚠ MKIDS інша сума; без рядка, але сума є у файлі — ✓; зайве в файлі',
      [CC.ops.map((o) => o.group), CC.ops[3].parts.map((p) => p.st + ':' + (p.file != null ? p.file : '')), CC.extra.map((e) => e.a1 + '=' + e.val).sort()],
      [['match', 'match', 'match', 'diff', 'match'], ['diff:-450', 'match:-500'], ['X56=15']]);
+  // v7.592
+  const RM = (to, t) => X._plIsReimb(X._plFold(to), X._plFold(t), t);
+  ck('pl: чек працівнику → ZWROT', 'FAKTURA NR / перелік покупок / RETURN — так; ЗП, оренда, рахунок підрядника N/MM/РРРР, фірма — ні',
+     [RM('DOROTA WALDON', 'FAKTURA NR- 45284'), RM('CHINI PULIKAL', 'TEDI 76,00; PEPCO 6,00; AUCHAN 11,86;'), RM('MONIKA BURSKA', 'MEDICAL TEST RETURN'),
+      RM('JULIA BERNAT', 'WYNAGRODZENIE 10/26'), RM('JERZY GAWOR', 'CZYNSZ 01/26'), RM('SPORTOWI FACHOWCY DARIA', 'NUMER FAKTURY: FS 71/10/2026'), RM('CTR ARTYSTYKA SP. Z O.O.', 'FAKTURA NR 2')],
+     [true, true, true, false, false, false, false]);
+  const LBT = Object.assign({}, L, {payment: [{r: 16, a: 'Bator Karol', block: 'OWLS', budget: 1950}, {r: 43, a: 'Bator Karolina (знайти)', block: 'OWLS', budget: 1853}]});
+  ck('pl: Bator Karolina — не брати й сестри', 'довша назва перемагає; обидва імені — частки',
+     [X._plRoute({type: 'Przelew na konto', amount: 2527.5, from: 'AUTOPAY SPÓŁKA AKCYJNA', desc: 'Tytuł : /OPF/X///// MT_2611 Bator K arolina, 11.2026, Rozliczenia'}, LBT).row,
+      X._plRoute({type: 'Przelew na konto', amount: 3177, from: 'AUTOPAY SPÓŁKA AKCYJNA', desc: 'Tytuł : /OPF/X///// MT_2611 Bator K arol, 11.2026, Rozliczenia'}, LBT).row,
+      !!X._plRoute({type: 'Przelew na konto', amount: 5000, from: 'ANNA BATOR', desc: 'Tytuł : BATOR KAROL I BATOR KAROLINA'}, LBT).split], [43, 16, true]);
   ck('pl: невідомий контрагент', 'у список рішень', R({type: 'Przelew z rachunku', amount: -500, to: 'ARVAL SERVICE LEASE', desc: 'Tytuł : FA'}), 'decide:');
 }
 

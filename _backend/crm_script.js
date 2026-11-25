@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.591
+// m.kids CRM — Google Apps Script v7.592
+// v7.592: Польща — відшкодування за чеки працівнику → ZWROT і без слова «ZWROT» (_plIsReimb: «FAKTURA NR» без N/MM/РРРР, перелік покупок, RETURN / BADANIA; не ЗП, не оренда, не рахунки підрядників); «Bator Karolina» більше не ділиться як брати й сестри з «Bator Karol»; аркуш журналу без шапки — шапка відновлюється
 // v7.591: Польща — plJournalSeed (стартові записи журналів «Позики Федора» / PERSPICIO з виписок 2026, без дублів за ключем), plApply не дублює рядки журналу, звірка (plCompare) — і закриті місяці, операції без рядка звіряються з сумами у твоєму файлі
 // v7.590: Польща — plCompare / _plCompare: звірка виписки з тим, що вже внесено вручну (✓ збігається / ⚠ сума чи рядок інші / ➕ немає / є у файлі, немає у виписці), нічого не пише; plPreview — помилка замість порожнього списку, дати дд.мм.рррр
 // v7.589: Польща — внесення через систему: реєстр PL_Реєстр і журнали (PL_Операції, PL_Контрагенти, PL_Банк, PL_Готівка, «Позики Федора», PERSPICIO) у CRM Data (лише CFO); plPreview / plApply (_plBuild — уся виписка, повторне завантаження не дублює, вибір рядка запам'ятовується для контрагента), plCash («Готівка Федора»), plBalance (BALANCE проти банку), plRowsList
@@ -9895,7 +9896,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.591', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.592', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -47032,6 +47033,16 @@ var PL_FIXED = [   // контрагент → рядок (назва рядка
   {loc:'PRIMROSE', re:/^P ?4\b/, kind:'opex', row:39, why:'P4'},
   {loc:'PRUZSKOW', re:/\bBIEDRONKA\b/, kind:'opex', row:48, why:'Biedronka'}
 ];
+// v7.592: відшкодування за чеки працівнику (рішення CFO): людина з Salary, не зарплата, не фірма, не рахунок за послуги з номером «1/09/2026»
+function _plIsReimb(pf, tf, raw){
+  if (/WYNAGRO|CZYNSZ|NAJMU|PENSJ|ZALICZK/.test(tf)) return false;
+  if (/\b(SP|SPOLKA|SA|CENTRUM|KANCELARI\w*|LEASE|FUNDACJA)\b/.test(pf)) return false;
+  if (/\d+\s?\/\s?\d{1,2}\s?\/\s?\d{4}/.test(String(raw || ''))) return false;   // «FS 71/10/2026» — рахунок за послуги
+  if (/\bFAKTURY\b|\bRETURN\b|BADANI/.test(tf)) return true;                       // «ZWROT ZA FAKTURY», «MEDICAL TEST RETURN», «ZA BADANIA LEKARSKIE»
+  var t = String(raw || '');
+  if (/^\s*FAKTURA\W*NR\b/i.test(t) && t.indexOf('/') < 0) return true;              // «FAKTURA NR- 45284» — чек, не рахунок підрядника (N/MM/РРРР)
+  return (t.match(/[A-ZĄĆĘŁŃÓŚŹŻ]{2,}[^;]{0,20}?\d+ ?,\d{2}\s*[;.]/gi) || []).length >= 2;   // «TEDI 76,00; PEPCO 6,00; …» — перелік покупок
+}
 function _plRedir(L, kind, row){ var m = ((PL_REDIRECT[L.loc] || {})[kind] || {}); return m[row] || row; }
 function _plUniqRows(L, kind, hits){ var seen = {}, out = []; hits.forEach(function(x){ var r = _plRedir(L, kind, x.r); if (seen[r]) return; seen[r] = 1;
   out.push(r === x.r ? x : Object.assign({}, (L[kind] || []).filter(function(y){ return y.r === r; })[0] || {r:r, a:x.a, block:x.block, budget:x.budget}, {redir:x.r})); }); return out; }
@@ -47153,6 +47164,9 @@ function _plRoute(op, L){
     }
     var kids = pool.filter(function(x){ return _plTokens(_plRowName(x.a)).length >= 2; });   // рядок дитини — ім'я + прізвище (назви груп — ні)
     var hits = _plUniqRows(L, 'payment', kids.filter(function(x){ return _plRowHit(x.a, tt, jn); }));
+    // v7.592: «Bator Karolina» — не «Bator Karol» + «Bator Karolina»: коротша назва, що є частиною довшої знайденої, відпадає
+    var jname = function(x){ return _plJoined(_plRowName(x.a)); };
+    if (hits.length > 1) hits = hits.filter(function(x){ var jx = jname(x); return !hits.some(function(y){ var jy = jname(y); return y !== x && jy.length > jx.length && jy.indexOf(jx) >= 0 && jn.indexOf(jy) >= 0 && jn.split(jy).join('|').indexOf(jx) < 0; }); });   // коротша трапляється й окремо — брати й сестри
     if (hits.length === 1) return {kind:'payment', row:hits[0].r, payer:String(party || '').trim(), why:'дитина: ' + hits[0].a + (_plRowHit(hits[0].a, _plTokens(party), _plJoined(party)) && !hits[0].redir ? '' : ' (платник ' + _plPayerName(party) + ')')};
     if (hits.length > 1){
       // кілька рядків: та сама дитина в двох блоках або брати й сестри — лише якщо всі токени імені з назви (не з платника)
@@ -47202,7 +47216,7 @@ function _plRoute(op, L){
   var wt = _plTokens(who), wj = _plJoined(who);
   var sh = _plUniqRows(L, 'salary', (L.salary || []).filter(function(x){ return _plRowHit(x.a, wt, wj); }));
   // відшкодування працівнику (є в Salary) за чеки / фактури («ZWROT ZA FA», «ZWROT ZA ZAKUPY») — рядок OPEX «ZWROT ZA …», не зарплата
-  if (sh.length && amt < 0 && /Przelew/i.test(type) && /\bZWROT\b|\bZA FA\b|\bZAKUP|\bPARAGON|\bSKLEP\b/.test(tf)){
+  if (sh.length && amt < 0 && /Przelew/i.test(type) && (/\bZWROT\b|\bZA FA\b|\bZAKUP|\bPARAGON|\bSKLEP\b/.test(tf) || _plIsReimb(pf, tf, title))){
     var zr = (L.opex || []).filter(function(x){ return /^ZWROT ZA\b/.test(_plFold(x.a)); });
     if (zr.length) return {kind:'opex', row:zr[0].r, why:'відшкодування: ' + _plRowName(zr[0].a)};
   }
@@ -47712,6 +47726,9 @@ function _plSh(name){
                   ['PRIMROSE', PL_FILES_26.PRIMROSE, '1006', 'так', 'рахунок PERSPICIO SP. Z O.O.'], ['OVERHEAD', '', '1380', 'ні', 'Overhead — не вносимо']];
       sh.getRange(2, 1, rows.length, 5).setValues(rows);
     }
+  }
+  else if (String(sh.getRange(1, 1).getValue()) !== PL_HEAD[name][0]){   // v7.592: шапки немає (аркуш створено обірваним викликом) — вставляємо, дані лишаються
+    sh.insertRowBefore(1); sh.getRange(1, 1, 1, PL_HEAD[name].length).setValues([PL_HEAD[name]]).setFontWeight('bold'); sh.setFrozenRows(1);
   }
   return sh;
 }
