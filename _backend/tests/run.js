@@ -916,8 +916,8 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
 // ── v7.583: Польща — розноска виписки PKO ──
 {
   const vv = (n) => /var [A-Z0-9_]+ *=[\s\S]*?;\n/.exec(src.slice(src.indexOf('var ' + n + ' ')))[0];
-  const names = ['_plFold', '_plTokens', '_plLev1', '_plTokHit', '_plRowName', '_plRowNames', '_plRowHit', '_plJoined', '_plMerchant', '_plTitle', '_plRoute'];
-  const X = new Function(['PL_ACC4', 'PL_STOP'].map(vv).join('\n') + names.map(fn).join('\n') + '\nreturn {' + names.join(',') + '};')();
+  const names = ['_plFold', '_plTokens', '_plLev1', '_plTokHit', '_plRowName', '_plRowNames', '_plRowHit', '_plJoined', '_plMerchant', '_plTitle', '_plRoute', '_plZusPass'];
+  const X = new Function(['PL_ACC4', 'PL_STOP', 'PL_AWZ_PEER', 'PL_FEDIR_RE'].map(vv).join('\n') + names.map(fn).join('\n') + '\nreturn {' + names.join(',') + '};')();
   const ck = (id, t, g, e) => check(id, t, {r: g}, {r: e});
   const L = {payment: [{r: 5, a: 'Miroslava Vinichenko', block: 'Misie'}, {r: 23, a: 'Daryna Rakitina', block: 'Tygryski'}, {r: 24, a: 'Myron Rakitin', block: 'Tygryski'}, {r: 19, a: 'Tygryski', block: ''},
       {r: 30, a: 'Szymkowiak Piotr', block: ''}, {r: 160, a: 'MAKOUSKI JAN / MAKOUSKI WLADIMIR', block: 'ZUS'}, {r: 46, a: 'Makouski Jan', block: ''},
@@ -936,6 +936,20 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
   ck('pl: ZUS → OPEX', 'як у файлах (CF рахує з OPEX)', R({type: 'Przelew do ZUS', amount: -11271.82, to: 'ZAKŁAD UBEZPIECZEŃ SPOŁECZNYCH', desc: 'Tytuł : ZUS'}), 'opex:44');
   ck('pl: контрагент OPEX / Salary', 'PGE; KOLADA', [R({type: 'Przelew z rachunku', amount: -211.99, to: 'PGE OBRÓT S.A.', desc: 'Tytuł : FA'}), R({type: 'Przelew z rachunku', amount: -6069.92, to: 'KOLADA MAŁGORZATA', desc: 'Tytuł : WYNAGRODZENIE'})], ['opex:36', 'salary:5']);
   ck('pl: банк за описом', 'PROW.OD NIEWYK. — свій рядок, решта — комісії', [R({type: 'Opłata', amount: -24.8, desc: 'PROW.OD NIEWYK.CZĘŚCI KREDYTU'}), R({type: 'Opłata za użytkowanie karty', amount: -10, desc: 'OPŁATA MIESIĘCZNA'})], ['opex:66', 'opex:56']);
+  const K = Object.assign({}, L, {peer: {loc: 'KONSTANCIN', payment: [{r: 60, a: 'CHRZĄSZCZ NATALIA /  CHRZĄSZCZ PAULINA', block: 'ZUS KONSTANCIN'}]}});
+  const rk = X._plRoute({type: 'Przelew na konto', amount: 1500, from: 'ZUS Centrum Obsługi Świadczeń dla R odzi', desc: 'Tytuł : Świadczenie ZUS AwZ CHRZĄSZCZ NATALIA 36132'}, K);
+  ck('pl: ZUS дитини KONSTANCIN на PRUZSKOW', 'у блок ZUS файлу KONSTANCIN', [rk.loc, rk.row, rk.awzPeer], ['KONSTANCIN', 60, true]);
+  ck('pl: транзит ZUS PRUZSKOW → KONSTANCIN', 'переказ на суму надходжень — транзит, інший — ні',
+     X._plZusPass([{date: '2026-12-03', amount: 1500}, {date: '2026-12-04', amount: 1500}], [{date: '2026-12-02', amount: -700}, {date: '2026-12-05', amount: -3000}]), [1]);
+  const lw = (o) => { const r = X._plRoute(o, L); return r.kind + ':' + (r.loan || r.why.slice(0, 30)); };
+  ck('pl: позики Федора', 'позика / повернення / незрозуміле',
+     [lw({type: 'Przelew na konto', amount: 3200, from: 'FEDIR KORNIIENKO', desc: 'Tytuł : LOAN TO THE COMPANY'}), lw({type: 'Przelew z rachunku', amount: -2000, to: 'FEDIR KORNIIENKO', desc: 'Tytuł : LOAN RETURN'}),
+      lw({type: 'Przelew z rachunku', amount: -5000, to: 'PERSPICIO SPÓŁKA', desc: 'Tytuł : LOAN'}).split(':')[0], lw({type: 'Przelew na konto', amount: 500, from: 'FEDIR KORNIIENKO', desc: 'Tytuł : PRZELEW'}).split(':')[0]],
+     ['opex:позика Федора', 'opex:повернення Федору', 'decide', 'decide']);
+  const L2 = Object.assign({}, L, {opex: [{r: 47, a: 'Action нужды в магазине'}, {r: 48, a: 'Biedronka  магазин'}], payment: [{r: 119, a: 'KASIANOVA OLENA/EVHENIIA', block: 'ZUS'}, {r: 163, a: 'VASYLCHENKO YEVHENIIA / VASYLCHENKO IRYNA', block: 'ZUS'}]});
+  ck('pl: примітки в назві рядка', '«Action нужды в магазине»; «OLENA/EVHENIIA» не збігається з YEVHENIIA',
+     [X._plRoute({type: 'Płatność kartą', amount: -331.65, desc: 'Tytuł : 1 | Lokalizacja : Adres : Action A065 Miasto : P'}, L2).row,
+      X._plRoute({type: 'Przelew na konto', amount: 1500, from: 'ZUS Centrum Obsługi Świadczeń', desc: 'Tytuł : Świadczenie ZUS AwZ VASYLCHENKO YEVHENIIA 36132'}, L2).row], [47, 163]);
   ck('pl: невідомий контрагент', 'у список рішень', R({type: 'Przelew z rachunku', amount: -500, to: 'ARVAL SERVICE LEASE', desc: 'Tytuł : FA'}), 'decide:');
 }
 

@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.583
+// m.kids CRM — Google Apps Script v7.584
+// v7.584: Польща — рішення CFO 25.11: ZUS «Aktywnie w żłobku» за дітей KONSTANCIN, що прийшов на PRUZSKOW, → блок ZUS у Payment KONSTANCIN, переказ PRUZSKOW → KONSTANCIN на цю суму — транзит (_plZusPass), повернення батькам → «ZUS Return» KONSTANCIN; позики Федора (Корнієнко або LOAN) → MKIDS з підписом «позика Федора» / «повернення Федору», незрозуміле — у список; примітки рядка українською/російською не заважають знайти контрагента
 // v7.583: Польща — ядро розноски виписки PKO BP (_plRoute): рахунок → локація за 4 цифрами (CF), діти за ім'ям у призначенні (AUTOPAY/tpay/Revolut, розірвані банком слова), dotacja, ZUS «Aktywnie w żłobku» → блок ZUS, повернення → «ZUS Return», власні перекази й позики власника → MKIDS зі знаком, ZUS/PIT → OPEX, комісія за переказ → рядок переказу, Overhead — пропуск; без запису (пробний прогін жовтня)
 // v7.582: plDiag {months:['oct',…]} — значення й формули Actual/Budget цих місяців по кожному рядку (порівняння пробного прогону з тим, що вже у файлах)
 // v7.581: Польща, крок 1 — plDiag (лише читання, CFO): структура 4 фінфайлів 2026 (вкладки, колонка A, шапки, колонки місяців Actual/Budget, формули грудня, рахунки IBAN у файлах) для підключення; нічого не пише
@@ -9887,7 +9888,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.583', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.584', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -46997,6 +46998,9 @@ function fxMigrate(body){
 // ═══ v7.583: ПОЛЬЩА — розноска виписки PKO BP (спільне ядро; без звернень до таблиць — тестується в node) ═══
 // Рахунок → локація за останніми 4 цифрами (так їх підписано в CF: «LUBLIN 1767 +», «OVERHEAD 1380+»).
 var PL_ACC4 = {'1767':'LUBLIN', '4078':'PRUZSKOW', '2951':'KONSTANCIN', '1006':'PRIMROSE', '1380':'OVERHEAD'};
+// ZUS «Aktywnie w żłobku» за дітей KONSTANCIN приходить на рахунок PRUZSKOW (рішення CFO 25.11.2026)
+var PL_AWZ_PEER = {PRUZSKOW:'KONSTANCIN'};
+var PL_FEDIR_RE = /KORNIIENKO|KORNIENKO|KORNIJENKO/;
 function _plFold(s){
   var m = {'Ą':'A','Ć':'C','Ę':'E','Ł':'L','Ń':'N','Ó':'O','Ś':'S','Ź':'Z','Ż':'Z','ą':'A','ć':'C','ę':'E','ł':'L','ń':'N','ó':'O','ś':'S','ź':'Z','ż':'Z'};
   return String(s || '').replace(/[ĄĆĘŁŃÓŚŹŻąćęłńóśźż]/g, function(c){ return m[c]; }).toUpperCase().replace(/[^A-Z0-9А-ЯІЇЄҐ]+/g, ' ').trim();
@@ -47028,9 +47032,9 @@ function _plRowNames(a){   // варіанти назви: «Yagna Bogush (pedag
 // Рядок збігається з текстом: 2 перші значущі токени назви (≥ 3 літер) є в тексті — як слова або, якщо банк розірвав
 // слово пробілом («Szymkow iak»), як підрядок тексту без пробілів (лише токени ≥ 4 літер)
 function _plRowHit(rowName, textTokens, joined){
-  return _plRowNames(rowName).some(function(nm){
-    var rt = _plTokens(nm).filter(function(t){ return t.length >= 3; }).slice(0, 2);
-    if (!rt.length || (rt.length === 1 && rt[0].length < 5)) return false;
+  return _plRowNames(rowName).some(function(nm, vi){
+    var rt = _plTokens(nm).filter(function(t){ return t.length >= 3 && !/[А-ЯІЇЄҐ]/.test(t); }).slice(0, 2);   // українські/російські примітки в назві рядка — не частина імені
+    if (!rt.length || (rt.length === 1 && (rt[0].length < 4 || vi > 0))) return false;   // «KASIANOVA OLENA/EVHENIIA»: друге «EVHENIIA» саме — не ім'я дитини
     return rt.every(function(t){ return _plTokHit(t, textTokens) || (joined && t.length >= 4 && joined.indexOf(t) >= 0); });
   });
 }
@@ -47043,10 +47047,21 @@ function _plTitle(desc){ var m = /Tytuł\s*:\s*([^|]*)/i.exec(String(desc || '')
 function _plRoute(op, L){
   var amt = Number(op.amount) || 0, type = String(op.type || ''), title = _plTitle(op.desc), party = amt > 0 ? op.from : op.to;
   var pf = _plFold(party), tf = _plFold(title);
-  // власні перекази й позики власника — рядок MKIDS в OPEX зі знаком виписки (так у файлах: =-8000+18400+…)
-  if (/M KIDS SPOLKA/.test(pf) || /\bOWNT? TRAN?SFER\b/.test(tf) || (/FEDIR KORNIIENKO/.test(pf) && /LOAN/.test(tf))){
-    var own = /LOAN/.test(tf) && /FEDIR KORNIIENKO/.test(pf) ? 'позика власника' : 'переказ між своїми рахунками';
-    return L.mkidsRow ? {kind:'opex', row:L.mkidsRow, signed:true, why:own + ' → MKIDS'} : {kind:'decide', why:own + ': рядка MKIDS немає'};
+  // позики Федора: платник / одержувач Корнієнко або LOAN у призначенні → MKIDS зі знаком + журнал «Позики Федора»
+  var fed = PL_FEDIR_RE.test(pf), loanT = /\bLOAN\b/.test(tf), own = /M KIDS SPOLKA/.test(pf);
+  if (fed && /WYNAGRODZ/.test(tf) && amt < 0){
+    var fr = (L.salary || []).filter(function(x){ return PL_FEDIR_RE.test(_plFold(x.a)); });
+    return fr.length === 1 ? {kind:'salary', row:fr[0].r, why:'зарплата Fedir'} : {kind:'decide', why:'зарплата Fedir: рядок у Salary не знайдено'};
+  }
+  if ((fed && loanT) || (fed && !own) || (loanT && !own)){
+    if (!(fed && loanT)) return {kind:'decide', why:fed ? 'Корнієнко Федір без LOAN у призначенні — позика чи ні?' : 'LOAN у призначенні, але не Корнієнко Федір'};
+    var lw = amt > 0 ? 'позика Федора' : 'повернення Федору';
+    return L.mkidsRow ? {kind:'opex', row:L.mkidsRow, signed:true, loan:lw, why:lw + ' → MKIDS'} : {kind:'decide', why:lw + ': рядка MKIDS немає'};
+  }
+  if (own && loanT) return {kind:'decide', why:'LOAN у призначенні власного переказу — позика Федора чи переказ?'};
+  // власні перекази — рядок MKIDS в OPEX зі знаком виписки (так у файлах: =-8000+18400+…)
+  if (own || /\bOWNT? TRAN?SFER\b/.test(tf)){
+    return L.mkidsRow ? {kind:'opex', row:L.mkidsRow, signed:true, why:'переказ між своїми рахунками → MKIDS'} : {kind:'decide', why:'переказ між своїми рахунками: рядка MKIDS немає'};
   }
   var inBlock = function(re){ return (L.payment || []).filter(function(x){ return re.test(x.block || ''); }); };
   if (amt > 0){
@@ -47055,8 +47070,16 @@ function _plRoute(op, L){
     }
     var tt = _plTokens(party + ' ' + title), jn = _plJoined(party + ' ' + title);
     var awz = /SWIADCZENIE ZUS|\bAWZ\b/.test(tf) || /CENTRUM OBSLUGI SWIADCZEN/.test(pf);   // «Aktywnie w żłobku» — блок ZUS
-    var pool = awz ? inBlock(/^ZUS(?!\s*RETURN)/i) : (L.payment || []).filter(function(x){ return !/ZUS|DOTAC/i.test(x.block || ''); });
-    if (awz && !pool.length) return {kind:'decide', why:'ZUS «Aktywnie w żłobku»: блоку ZUS у Payment немає'};
+    var pool = awz ? inBlock(/^ZUS$/i) : (L.payment || []).filter(function(x){ return !/ZUS|DOTAC/i.test(x.block || ''); });
+    if (awz && !pool.length) pool = inBlock(/^ZUS(?!\s*RETURN)/i);
+    if (awz){   // дитина іншої локації (KONSTANCIN) — у блок ZUS її файлу
+      var mine = pool.filter(function(x){ return _plRowHit(x.a, tt, jn); });
+      if (!mine.length && L.peer){
+        var pp = (L.peer.payment || []).filter(function(x){ return /^ZUS(?!\s*RETURN)/i.test(x.block || '') && _plRowHit(x.a, tt, jn); });
+        if (pp.length === 1) return {kind:'payment', loc:L.peer.loc, row:pp[0].r, awzPeer:true, why:'ZUS AwZ дитини ' + L.peer.loc + ': ' + _plRowName(pp[0].a)};
+      }
+      if (!pool.length) return {kind:'decide', why:'ZUS «Aktywnie w żłobku»: блоку ZUS у Payment немає'};
+    }
     var kids = pool.filter(function(x){ return _plTokens(_plRowName(x.a)).length >= 2; });   // рядок дитини — ім'я + прізвище (назви груп — ні)
     var hits = kids.filter(function(x){ return _plRowHit(x.a, tt, jn); });
     if (hits.length === 1) return {kind:'payment', row:hits[0].r, why:'дитина: ' + hits[0].a};
@@ -47077,10 +47100,6 @@ function _plRoute(op, L){
     if (/odsetek/i.test(type) && L.interestRow) return {kind:'opex', row:L.interestRow, why:'відсотки'};
   }
   // витрати
-  if (/FEDIR KORNIIENKO/.test(pf) && /WYNAGRODZ/.test(tf)){
-    var fr = (L.salary || []).filter(function(x){ return /KORNIIENKO/.test(_plFold(x.a)); });
-    return fr.length === 1 ? {kind:'salary', row:fr[0].r, why:'зарплата Fedir'} : {kind:'decide', why:'зарплата Fedir: рядок у Salary не знайдено'};
-  }
   if (/do ZUS/i.test(type) || /^ZAKLAD UBEZPIECZEN/.test(pf)){
     if (L.zusOpexRow) return {kind:'opex', row:L.zusOpexRow, why:'ZUS'};   // так у файлах: CF рахує ZUS/PIT з OPEX
     if (L.zusSalaryRow) return {kind:'salary', row:L.zusSalaryRow, why:'ZUS'};
@@ -47110,6 +47129,18 @@ function _plRoute(op, L){
   return {kind:'decide', why:'контрагента немає у файлі: ' + String(who).trim()};
 }
 // ═══ /v7.583 ═══
+// v7.584: транзит ZUS KONSTANCIN. awz — надходження ZUS за дітей KONSTANCIN на рахунку PRUZSKOW [{date, amount}];
+// out — перекази PRUZSKOW → KONSTANCIN [{date, amount<0}]; переказ на суму накопичених до його дати надходжень — транзит (не вносимо в жоден файл).
+// → індекси транзитних переказів у out
+function _plZusPass(awz, out){
+  var used = {}, res = [];
+  awz = (awz || []).map(function(x, i){ return {i:i, date:String(x.date), amount:Number(x.amount) || 0}; }).sort(function(a, b){ return a.date.localeCompare(b.date); });
+  (out || []).map(function(x, i){ return {i:i, date:String(x.date), amount:Number(x.amount) || 0}; }).sort(function(a, b){ return a.date.localeCompare(b.date); }).forEach(function(t){
+    var upto = awz.filter(function(z){ return !used[z.i] && z.date <= t.date; }), s = Math.round(upto.reduce(function(a, z){ return a + z.amount; }, 0) * 100) / 100;
+    if (s > 0 && Math.abs(s + t.amount) < 0.01){ upto.forEach(function(z){ used[z.i] = 1; }); res.push(t.i); }
+  });
+  return res;
+}
 // ═══ v7.581: ПОЛЬЩА — крок 1, розвідка файлів (лише читання) ═══
 var PL_FILES_26 = {LUBLIN:'1LEl4R6ba3Yi8el9b8GS_m_HJTspd9OXyIrWgu_d1w5o', PRUZSKOW:'1CKL2AHUnUWjfAifAgLpGYakO2hKgNv9FoiHrQZgTZ0w',
                    KONSTANCIN:'16yD9rLbcu6QPQlkiF6rb4yTNm0z6GW92SgE78fpmxzY', PRIMROSE:'1KQv-z_7SmxUhv2vNw8t2gqZSdTW8_ni8kodajwr3Jw4'};
