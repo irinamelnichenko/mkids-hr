@@ -918,8 +918,8 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
   const vv = (n) => /var [A-Z0-9_]+ *=[\s\S]*?;\n/.exec(src.slice(src.indexOf('var ' + n + ' ')))[0];
   const names = ['_plFold', '_plTokens', '_plLev1', '_plTokHit', '_plRowName', '_plRowNames', '_plRowHit', '_plJoined', '_plMerchant', '_plTitle', '_plRoute', '_plZusPass',
     '_plRedir', '_plUniqRows', '_plKidFallback', '_plSplit', '_plBankEnds', '_plCfOpenPlan', '_plColNum', '_plPayerName', '_plCfRow', '_plBalFix', '_plParseF', '_plPlanCells', '_plNoteMerge', '_plEvalPlus',
-    '_plNum', '_plColL', '_plIsRef', '_plTab', '_plMonOf', '_plWritable', '_plLayout', '_plOpKey', '_plPartyKey', '_plDm', '_plNote', '_plBuild', '_plRowLabel', '_plRowOptions', '_plCellParts', '_plJournalRows'];
-  const X = new Function(['PL_ACC4', 'PL_STOP', 'PL_AWZ_PEER', 'PL_FEDIR_RE', 'PL_PERSPICIO_RE', 'PL_REDIRECT', 'PL_FIXED', 'PL_LOC4', 'PL_MONS', 'PL_WRITE_FROM'].map(vv).join('\n') + names.map(fn).join('\n') + '\nreturn {' + names.join(',') + '};')();
+    '_plNum', '_plColL', '_plIsRef', '_plTab', '_plMonOf', '_plWritable', '_plLayout', '_plOpKey', '_plPartyKey', '_plDm', '_plNote', '_plBuild', '_plRowLabel', '_plRowOptions', '_plCellParts', '_plJournalRows', '_plCompare'];
+  const X = new Function(['PL_ACC4', 'PL_STOP', 'PL_AWZ_PEER', 'PL_FEDIR_RE', 'PL_PERSPICIO_RE', 'PL_REDIRECT', 'PL_FIXED', 'PL_LOC4', 'PL_MONS', 'PL_WRITE_FROM', 'PL_CMP_CF'].map(vv).join('\n') + names.map(fn).join('\n') + '\nreturn {' + names.join(',') + '};')();
   const ck = (id, t, g, e) => check(id, t, {r: g}, {r: e});
   const L = {payment: [{r: 5, a: 'Miroslava Vinichenko', block: 'Misie'}, {r: 23, a: 'Daryna Rakitina', block: 'Tygryski'}, {r: 24, a: 'Myron Rakitin', block: 'Tygryski'}, {r: 19, a: 'Tygryski', block: ''},
       {r: 30, a: 'Szymkowiak Piotr', block: ''}, {r: 160, a: 'MAKOUSKI JAN / MAKOUSKI WLADIMIR', block: 'ZUS'}, {r: 46, a: 'Makouski Jan', block: ''},
@@ -1062,6 +1062,14 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
   ck('pl: внесення не чіпає власних доданків', 'готівка 680 + новий банк 5000 → обидва; без «unsafe»',
      X._plPlanCells([{key: 'K', file: 'K', parts: [{val: 5000}], old: [680]}, {key: 'M', file: 'K', parts: [{val: 680}], old: []}], {incremental: true}).map((x) => x.status + ':' + x.formula), ['write:=5000+680', 'write:=680']);
   ck('pl: журнал з залишком', 'по локації наростаючим', X._plJournalRows([{status: 'ok', journal: 'PERSPICIO', acc: 'LUBLIN', op: {date: '2026-12-02', amount: -500}, key: 'a'}, {status: 'ok', journal: 'PERSPICIO', acc: 'LUBLIN', op: {date: '2026-12-01', amount: 2000}, key: 'b'}], 'PERSPICIO', {LUBLIN: -5000}).map((x) => x.balance), [-3000, -3500]);
+  // v7.590: звірка з ручними записами
+  const FC = JSON.parse(JSON.stringify(FL));
+  FC.tabs['Payment 26'].rows[2].dec_actual = '870'; FC.tabs['OPEX 26'].rows[2].decF_actual = '=211,99+1,1'; FC.tabs['OPEX 26'].rows[3].decF_actual = '=300+15';
+  FC.tabs['OPEX 26'].rows[1].decF_actual = '=-450'; FC.tabs['CF'].rows[1].decF_actual = '=-500';
+  const IC = X._plBuild(OPS.slice(0, 5).map((o) => Object.assign({}, o)), {LUBLIN: FC}, {}), CC = X._plCompare(IC, {LUBLIN: FC}, ['LUBLIN']);
+  ck('pl: звірка з ручними записами', '✓ дитина, комісія, PGE; ⚠ MKIDS інша сума; ❓ без рядка; зайве в файлі',
+     [CC.ops.map((o) => o.group), CC.ops[3].parts.map((p) => p.st + ':' + (p.file != null ? p.file : '')), CC.extra.map((e) => e.a1 + '=' + e.val).sort()],
+     [['match', 'match', 'match', 'diff', 'decide'], ['diff:-450', 'match:-500'], ['X56=15', 'X56=300']]);
   ck('pl: невідомий контрагент', 'у список рішень', R({type: 'Przelew z rachunku', amount: -500, to: 'ARVAL SERVICE LEASE', desc: 'Tytuł : FA'}), 'decide:');
 }
 

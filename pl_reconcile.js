@@ -1,4 +1,4 @@
-/* v7.589 Польща (лише CFO): виписка PKO BP → перегляд → «Внести» доданками; «Готівка Федора»; звірка BALANCE з банком.
+/* v7.589–7.590 Польща (лише CFO): виписка PKO BP → перегляд → «Внести» доданками; «Готівка Федора»; звірка BALANCE з банком.
    Підключається на reconcile.html; українська частина сторінки не змінюється. Бекенд: plPreview / plApply / plBalance / plRowsList / plCash. */
 (function(){
   'use strict';
@@ -28,6 +28,7 @@
       '  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">' +
       '    <input type="file" id="plFile" accept=".xls,.xlsx" multiple style="display:none">' +
       '    <button class="btn btn-primary" id="plPick">📂 Виписки PKO BP (.xls)</button>' +
+      '    <button class="btn" id="plCmp" disabled title="Спершу обери виписку">🔍 Звірити з моїм файлом</button>' +
       '    <button class="btn" id="plBal">⚖️ Звірка BALANCE з банком</button>' +
       '    <button class="btn" id="plCashBtn">💵 Готівка Федора</button>' +
       '    <label style="font-size:13px;color:var(--gray)"><input type="checkbox" id="plAll"> показати вже внесене й пропущене</label>' +
@@ -44,6 +45,7 @@
     $('plPick').onclick = function(){ $('plFile').click(); };
     $('plFile').onchange = function(){ onFiles(this.files); this.value = ''; };
     $('plBal').onclick = function(){ showBalance(); };
+    $('plCmp').onclick = function(){ compare(); };
     $('plCashBtn').onclick = function(){ cashForm(); };
     $('plAll').onchange = function(){ PL.showAll = this.checked; render(); };
     $('plApplyBtn').onclick = function(){ apply(); };
@@ -71,8 +73,8 @@
     var wb = XLSX.read(new Uint8Array(buf), {type: 'array'});
     var crit = wb.Sheets['Kryteria wyszukiwania'] || wb.Sheets[wb.SheetNames[1]], tr = wb.Sheets['Lista transakcji'] || wb.Sheets[wb.SheetNames[0]];
     var acc = '', from = '', to = '';
-    (crit ? XLSX.utils.sheet_to_json(crit, {header: 1, raw: true, defval: ''}) : []).forEach(function(r){
-      var k = String(r[0] || ''); if (/^Numer rachunku/i.test(k)) acc = String(r[1] || '').replace(/\s/g, ''); if (/^Od dnia/i.test(k)) from = isoDate(r[1]); if (/^Do dnia/i.test(k)) to = isoDate(r[1]); });
+    (crit ? XLSX.utils.sheet_to_json(crit, {header: 1, raw: false, defval: ''}) : []).forEach(function(r){
+      var k = String(r[0] || ''); if (/^Numer rachunku/i.test(k)) acc = String(r[1] || '').replace(/\D/g, ''); if (/^Od dnia/i.test(k)) from = isoDate(r[1]); if (/^Do dnia/i.test(k)) to = isoDate(r[1]); });
     var rows = XLSX.utils.sheet_to_json(tr, {header: 1, raw: true, defval: ''}), ops = [];
     rows.slice(1).forEach(function(v){ var d = isoDate(v[0]); if (!d) return;
       ops.push({acc: acc, date: d, type: String(v[2] || ''), amount: num(v[3]), saldo: num(v[5]), from_acc: String(v[6] || ''), from: String(v[7] || '').trim(),
@@ -91,17 +93,24 @@
   function loaded(books){
     PL.ops = []; PL.periods = {}; PL.overrides = {}; PL.remember = {};
     var seen = {};
-    books.forEach(function(b){ if (!b.acc) return; PL.periods[b.acc.slice(-4)] = {from: b.from, to: b.to};
+    books.forEach(function(b){ if (!b.acc){ toast('❌ У файлі немає номера рахунку («Kryteria wyszukiwania») — пропущено', 'error', 6000); return; } PL.periods[b.acc.slice(-4)] = {from: b.from, to: b.to};
       b.ops.forEach(function(o){ var k = [o.acc, o.date, o.amount, o.saldo, o.desc].join('|'); if (seen[k]) return; seen[k] = 1; PL.ops.push(o); }); });
     $('plMeta').textContent = books.length + ' файл(и), ' + PL.ops.length + ' операцій · ' + books.map(function(b){ return '…' + b.acc.slice(-4) + ' ' + b.from + '…' + b.to; }).join(', ');
+    PL.items = []; PL.cmp = null; $('plResult').innerHTML = ''; $('plCmp').disabled = !PL.ops.length;
     preview();
   }
+  // v7.590: стан очікування й помилка не ховаються за «Немає операцій» (раніше галочка малювала порожню таблицю, поки запит ще йшов або впав)
+  function wait(msg){ var t0 = Date.now(); PL.loading = msg; $('plWrap').innerHTML = '<div class="inv-loading" id="plWait">⏳ ' + esc(msg) + ' <span id="plWaitS"></span></div>';
+    clearInterval(PL.tick); PL.tick = setInterval(function(){ var e = $('plWaitS'); if (e) e.textContent = Math.round((Date.now() - t0) / 1000) + ' с'; }, 1000); }
+  function stopWait(){ clearInterval(PL.tick); PL.loading = ''; }
   async function preview(){
     if (!PL.ops.length) return;
-    $('plWrap').innerHTML = '<div class="inv-loading">⏳ Розкладаю операції по файлах…</div>';
-    var j = await post({action: 'plPreview', ops: PL.ops, overrides: PL.overrides});
-    if (!j.ok){ $('plWrap').innerHTML = '<div class="err">❌ ' + esc(j.error || 'помилка') + '</div>'; return; }
+    PL.error = ''; wait('Розкладаю ' + PL.ops.length + ' операцій по файлах…');
+    var j; try { j = await post({action: 'plPreview', ops: PL.ops, overrides: PL.overrides}); } catch(e){ j = {ok: false, error: 'Запит не пройшов: ' + (e && e.message || e)}; }
+    stopWait();
+    if (!j.ok){ PL.items = []; PL.error = j.error || 'помилка'; render(); return; }
     PL.items = j.items || []; PL.options = j.options || {}; PL.bank = j.bank || {};
+    if (!PL.items.length) PL.error = 'Бекенд повернув 0 операцій з ' + PL.ops.length + ' — перша: ' + JSON.stringify(PL.ops[0]).slice(0, 160);
     render();
   }
 
@@ -122,6 +131,9 @@
     return h + '</select>';
   }
   function render(){
+    if (PL.loading) return;   // запит ще йде — не підміняємо «⏳» порожньою таблицею
+    if (PL.error){ $('plSummary').innerHTML = ''; $('plApplyBar').style.display = 'none'; $('plWrap').innerHTML = '<div class="err" style="display:block">❌ ' + esc(PL.error) + '</div>'; return; }
+    if (PL.cmp){ renderCmp(); return; }
     var c = {}; PL.items.forEach(function(it){ c[it.status] = (c[it.status] || 0) + 1; });
     $('plSummary').innerHTML = Object.keys(ST).filter(function(k){ return c[k]; }).map(function(k){ return '<span class="fc-chip">' + ST[k][0] + ' ' + ST[k][1] + ': <b>' + c[k] + '</b></span>'; }).join('');
     var h = '';
@@ -154,6 +166,41 @@
     PL.overrides[key] = {kind: q[0], row: Number(q[1])};
     if (it.partyKey) PL.remember[it.acc + '|' + it.partyKey] = {loc: it.acc, party: it.partyKey, kind: q[0], row: Number(q[1]), name: nm};
     preview();
+  }
+
+  // ── v7.590: звірка з тим, що вже внесено вручну (нічого не пише) ──
+  async function compare(){
+    if (!PL.ops.length) return;
+    PL.error = ''; wait('Звіряю ' + PL.ops.length + ' операцій з твоїм файлом…');
+    var j; try { j = await post({action: 'plCompare', ops: PL.ops}); } catch(e){ j = {ok: false, error: 'Запит не пройшов: ' + (e && e.message || e)}; }
+    stopWait();
+    if (!j.ok){ PL.error = j.error || 'помилка'; render(); return; }
+    PL.cmp = j; PL.items = j.items || PL.items; render();
+  }
+  function renderCmp(){
+    var C = PL.cmp, G = {match: ['✓', 'збігається з твоїм записом'], diff: ['⚠', 'є в тебе, але сума / рядок інші'], 'new': ['➕', 'немає в тебе'], decide: ['❓', 'без рядка'], skip: ['⏭', 'не вноситься']};
+    var cnt = {}; C.ops.forEach(function(o){ cnt[o.group] = (cnt[o.group] || 0) + 1; });
+    $('plSummary').innerHTML = Object.keys(G).filter(function(k){ return cnt[k]; }).map(function(k){ return '<span class="fc-chip">' + G[k][0] + ' ' + G[k][1] + ': <b>' + cnt[k] + '</b></span>'; }).join('') +
+      '<span class="fc-chip">📄 є у файлі, немає у виписці: <b>' + C.extra.length + '</b></span> <button class="btn" id="plCmpOff" style="padding:4px 10px">← до внесення</button>';
+    var part = function(p){ var s = '<b>' + esc(p.tab) + ' ' + esc(p.a1) + '</b> <span style="color:var(--gray)">' + esc(p.name || '') + '</span>: банк ' + money(p.bank);
+      if (p.st === 'match') return '✓ ' + s + (p.why ? ' (у тебе ' + money(p.file) + ', ' + esc(p.why) + ')' : '');
+      if (p.st === 'diff') return '⚠ ' + s + ' — ' + (p.where ? 'у тебе в ' + esc(p.where) + ' <span style="color:var(--gray)">' + esc(p.whereName || '') + '</span>' : 'у тебе ' + money(p.file) + ' (' + esc(p.why) + ')');
+      return '➕ ' + s + ' — у тебе немає'; };
+    var h = '';
+    ['diff', 'new', 'decide', 'match', 'skip'].forEach(function(g){
+      var arr = C.ops.filter(function(o){ return o.group === g; }); if (!arr.length) return;
+      h += '<h3 style="margin:16px 0 8px">' + G[g][0] + ' ' + G[g][1] + ' <span style="font-weight:400;color:var(--gray);font-size:13px">' + arr.length + '</span></h3>' +
+        '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr><th>Дата</th><th>Контрагент</th><th style="text-align:right">Сума</th><th>Клітинки: твій запис vs банк</th><th>Підстава</th></tr></thead><tbody>' +
+        arr.sort(function(a, b){ return String(a.date).localeCompare(String(b.date)); }).map(function(o){
+          return '<tr style="border-top:1px solid #e5e7eb' + (g === 'diff' ? ';background:#fffbeb' : g === 'new' ? ';background:#f0fdf4' : '') + '"><td style="white-space:nowrap">' + esc(o.date) + '</td><td>' + esc(String(o.party).slice(0, 44)) + '</td>' +
+            '<td style="text-align:right;white-space:nowrap">' + money(o.amount) + '</td><td>' + (o.parts.map(part).join('<br>') || '—') + '</td><td style="font-size:12px">' + esc(o.why || '') + '</td></tr>'; }).join('') + '</tbody></table></div>';
+    });
+    if (C.extra.length) h += '<h3 style="margin:16px 0 8px">📄 Є у твоєму файлі, але немає у виписці <span style="font-weight:400;color:var(--gray);font-size:13px">' + C.extra.length + '</span></h3>' +
+      '<div style="font-size:12px;color:var(--gray);margin-bottom:6px">Доданки клітинок за місяці виписки, яким не знайшлося операції в банку (готівка, ручні правки, або операція після дати виписки).</div>' +
+      '<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr><th>Файл</th><th>Місяць</th><th>Клітинка</th><th>Рядок</th><th style="text-align:right">Сума</th></tr></thead><tbody>' +
+      C.extra.map(function(e){ return '<tr style="border-top:1px solid #e5e7eb"><td>' + esc(e.loc) + '</td><td>' + esc(MUA[e.mon] || e.mon) + '</td><td>' + esc(e.tab) + ' ' + esc(e.a1) + '</td><td>' + esc(e.name || '') + '</td><td style="text-align:right">' + money(e.val) + '</td></tr>'; }).join('') + '</tbody></table>';
+    $('plWrap').innerHTML = h; $('plApplyBar').style.display = 'none';
+    $('plCmpOff').onclick = function(){ PL.cmp = null; preview(); };
   }
 
   // ── «Внести» ──
