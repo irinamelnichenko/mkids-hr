@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.587
+// m.kids CRM — Google Apps Script v7.588
+// v7.588: Польща — plFixFormulas (точкові виправлення формул CF / статей жовтня–грудня з перевіркою «before» і відкатом); готівка Федора → рядок CF «наличка Федор» як надходження; NINETAILS / Arval — лише суми банку (c.force у _plPlanCells)
 // v7.587: Польща — рішення CFO 25.11 (четверте): PERSPICIO не в MKIDS — лише журнал і рядок CF (PRIMROSE — «OWN TRANSFER ±» з приміткою «PERSPICIO»); запис доданками plWriteCells + план _plPlanCells (власні доданки, яких немає в банку, лишаються; перенесене між рядками прибирається; брати й сестри — заміна розподілом банку; незрозуміле — не пишемо); Opening жовтня = банк 01.10, Closing = банк на кінець; відшкодування «SKLEP / FAKTURA»
 // v7.586: Польща — рішення CFO 25.11 (третє): власні перекази знову в MKIDS зі знаком (як у жовтні) + рядок CF переказу (_plCfRow); PERSPICIO — окрема компанія, журнал PERSPICIO, на PRIMROSE — рядки «LUBLIN 1767 +» / «OWN TRANSFER ±»; рядок PERSPICIO у формулу BALANCE (plCfFixBalance, _plBalFix); Teo Then → рядок 9 з платником у примітці; залишки банку за ланцюжком saldo (картки проводяться пізніше)
 // v7.585: Польща — рішення CFO 25.11 (друге): PERSPICIO — окремий журнал (рахунок 1006 належить PERSPICIO), перекази між власними рахунками не вносимо (skip + interco для CF), дублі рядків → один рядок (PL_REDIRECT), Arval/P4/Biedronka → фіксовані рядки (PL_FIXED), брати й сестри — частки за бюджетом місяця (_plSplit), дитина за прізвищем / платником у дужках / ім'ям у призначенні (_plKidFallback), повернення по картці — мінус у рядку покупки, відшкодування працівнику → «ZWROT ZA …», банківські списання за повною назвою рядка, CF: Opening з банку через Closing попереднього місяця (_plBankEnds, _plCfOpenPlan)
@@ -9891,7 +9892,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.587', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.588', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -10199,7 +10200,8 @@ function doPost(e) {
     else if (body.action === 'invTopicSetLoc')            result = invTopicSetLoc(body);                     // v7.569 гілка → локація вручну (CFO)
     else if (body.action === 'plDiag')                    result = plDiag(body);
     else if (body.action === 'plCfFixBalance')            result = plCfFixBalance(body);
-    else if (body.action === 'plWriteCells')              result = plWriteCells(body);                       // v7.587 запис доданками (dryRun за замовч.)                     // v7.586 PERSPICIO у формулу BALANCE (dryRun за замовч.)                             // v7.581 Польща: структура файлів (читання)
+    else if (body.action === 'plWriteCells')              result = plWriteCells(body);
+    else if (body.action === 'plFixFormulas')             result = plFixFormulas(body);                      // v7.588 точкові виправлення формул CF (dryRun за замовч.)                       // v7.587 запис доданками (dryRun за замовч.)                     // v7.586 PERSPICIO у формулу BALANCE (dryRun за замовч.)                             // v7.581 Польща: структура файлів (читання)
     else if (body.action === 'fxMigrate')                 result = fxMigrate(body);                          // v7.578 формули з доданків
     else if (body.action === 'notesBuild')                result = notesBuild(body);                         // v7.567 примітки-розшифровки (CFO; dryRun)
     else if (body.action === 'notesSetup')                result = notesSetup(body);                         // v7.567 тригер notesTick
@@ -47305,6 +47307,7 @@ function _plPlanCells(cells){
     left.forEach(function(p){ if (!take(p.val, function(x, v){ var d = Math.abs(x - v); return d < 1 ? d : false; }) &&
                                 !take(p.val, function(x, v){ return Math.abs(x + v) < 0.005 ? 0 : false; })) left2.push(p); });
     o.Pu = left2; o.U = old;
+    if (c.force){ o.U.forEach(function(u){ o.drop.push({val:u, why:c.force}); }); o.U = []; }   // рішення CFO: лише суми банку
     (c.drop || []).forEach(function(d){ var i = -1; o.U.forEach(function(u, j){ if (i < 0 && Math.abs(u - d.val) < 0.005) i = j; }); if (i >= 0){ o.drop.push({val:o.U[i], why:d.why}); o.U.splice(i, 1); } });
     return o;
   });
@@ -47469,6 +47472,37 @@ function plWriteCells(p){
       } catch(e){ r.error = String(e && e.message || e); res.failed++; res.ok = false; }
     });
   } finally { if (lock) lock.releaseLock(); }
+  return res;
+}
+// v7.588: POST {action:'plFixFormulas', actorId, file, items:[{tab, a1, before, after}], dryRun} — CFO; точкові виправлення формул CF / статей
+// (рішення CFO: CF має сходитися з банком). Лише колонки Actual жовтня–грудня 2026; формула має бути саме «before»; помилка після запису → відкат.
+function plFixFormulas(p){
+  p = p || {};
+  var a = _promoActor(p); if (!(a && _roleKey(a.role) === 'cfo')) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+  var k = String(p.file || ''), dryRun = p.dryRun !== false; if (!PL_FILES_26[k]) return {ok:false, error:'Невідомий файл: ' + k};
+  var ss = SpreadsheetApp.openById(PL_FILES_26[k]), res = {ok:true, dryRun:dryRun, file:k, items:[]}, heads = {};
+  var norm = function(x){ return String(x || '').replace(/\s+/g, '').toUpperCase(); };
+  var cfSh = ss.getSheetByName('CF'), balRow = 0;
+  if (cfSh){ var A = cfSh.getRange(1, 1, cfSh.getLastRow(), 1).getDisplayValues(); A.forEach(function(x, i){ if (!balRow && /^BALANCE Bank/i.test(String(x[0]).trim())) balRow = i + 1; }); }
+  (p.items || []).forEach(function(it){
+    var r = {tab:it.tab, a1:it.a1}; res.items.push(r);
+    try {
+      var sh = ss.getSheetByName(String(it.tab || '')); if (!sh){ r.skip = 'вкладки немає'; return; }
+      if (!heads[it.tab]) heads[it.tab] = _plMonthCols(sh.getRange(1, 1, 6, sh.getLastColumn()).getDisplayValues());
+      var cell = sh.getRange(String(it.a1)), c = cell.getColumn(), mon = ['oct', 'nov', 'dec'].filter(function(m){ return (heads[it.tab][m] || {}).actual === c; })[0];
+      if (!mon){ r.skip = 'не колонка Actual жовтня–грудня'; return; }
+      var f0 = cell.getFormula(); r.month = mon; r.before = f0; r.after = it.after;
+      if (norm(f0) !== norm(it.before)){ r.skip = 'формула інша, ніж очікували: ' + f0; return; }
+      if (!/^=/.test(String(it.after || ''))){ r.skip = 'нова формула порожня'; return; }
+      var bc = cfSh && balRow ? cfSh.getRange(balRow, ((heads.CF || (heads.CF = _plMonthCols(cfSh.getRange(1, 1, 6, cfSh.getLastColumn()).getDisplayValues())))[mon] || {}).actual || c) : null;
+      r.balanceBefore = bc ? bc.getValue() : null;
+      if (dryRun) return;
+      cell.setFormula(String(it.after)); SpreadsheetApp.flush();
+      var d = String(cell.getDisplayValue() || '');
+      if (/^#/.test(d)){ cell.setFormula(f0); SpreadsheetApp.flush(); r.rolledBack = d; res.ok = false; return; }
+      r.done = true; r.balanceAfter = bc ? bc.getValue() : null;
+    } catch(e){ r.error = String(e && e.message || e); res.ok = false; }
+  });
   return res;
 }
 // ═══ /v7.581 ═══

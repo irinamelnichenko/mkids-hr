@@ -1030,6 +1030,9 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
      ['моя примітка\n── PKO ──\na', 'моя примітка\n── PKO ──\nнове', 'x', 3]);
   ck('pl: відшкодування за чек', '«FAKTURA - SKLEP ZABKA» → ZWROT; «FAKTURA» компанії — ні',
      [RD({type: 'Przelew z rachunku', amount: -12, to: 'KUBIK MAŁGORZATA', desc: 'Tytuł : FAKTURA - SKLEP ZABKA- 13.10.2026'}), RD({type: 'Przelew z rachunku', amount: -2400, to: 'KUBIK MAŁGORZATA', desc: 'Tytuł : FAKTURA 12/2026'})], ['opex:53', 'salary:13']);
+  ck('pl: рішення CFO — лише суми банку', 'NINETAILS 2578 → 2857; Arval без 4 × 1,10',
+     X._plPlanCells([{key: 'N', file: 'P', parts: [{val: 2857}], old: [2578], force: 'CFO'}, {key: 'A', file: 'L', parts: [{val: 3258.27}, {val: 2913.87}], old: [2913.87, 1.1, 3258.27, 1.1], force: 'CFO'}]).map((x) => x.status + ':' + x.formula),
+     ['write:=2857', 'write:=3258.27+2913.87']);
   ck('pl: невідомий контрагент', 'у список рішень', R({type: 'Przelew z rachunku', amount: -500, to: 'ARVAL SERVICE LEASE', desc: 'Tytuł : FA'}), 'decide:');
 }
 
