@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.592
+// m.kids CRM — Google Apps Script v7.593
+// v7.593: звірка (Україна) — однакове прізвище: платіж на дитину, у якої в локації (Кар'єрна + Школа Кар'єрна разом) є однофамілець, — 🟡 «вибір» з усіма цими дітьми (ім'я, група, рядок, бюджет); 🟢 лише коли призначення називає ім'я однієї дитини або сума = бюджет лише однієї; дитина лише з карткою (нема рядка в Payment) — 🔴 з вибором рядка, не «авто»; індекс Школи Кар'єрної бере картки й з самої під-локації (був порожній)
 // v7.592: Польща — відшкодування за чеки працівнику → ZWROT і без слова «ZWROT» (_plIsReimb: «FAKTURA NR» без N/MM/РРРР, перелік покупок, RETURN / BADANIA; не ЗП, не оренда, не рахунки підрядників); «Bator Karolina» більше не ділиться як брати й сестри з «Bator Karol»; аркуш журналу без шапки — шапка відновлюється
 // v7.591: Польща — plJournalSeed (стартові записи журналів «Позики Федора» / PERSPICIO з виписок 2026, без дублів за ключем), plApply не дублює рядки журналу, звірка (plCompare) — і закриті місяці, операції без рядка звіряються з сумами у твоєму файлі
 // v7.590: Польща — plCompare / _plCompare: звірка виписки з тим, що вже внесено вручну (✓ збігається / ⚠ сума чи рядок інші / ➕ немає / є у файлі, немає у виписці), нічого не пише; plPreview — помилка замість порожнього списку, дати дд.мм.рррр
@@ -9896,7 +9897,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.592', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.593', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -27262,15 +27263,21 @@ function _buildPayerIndex(loc){
   //    оператор більше не мусить вибирати між двома однаковими кандидатами.
   //    БЕЗПЕКА: локація без жодної активної картки правило пропускає (як у v7.252).
   if (isSchool){
-    var bucket = (_activeCardsByLoc() || {})[_nameFold(cardsLoc)] || {};
-    if (Object.keys(bucket).length){
+    // v7.593: картка під-локації може лежати й на самій під-локації («Школа Кар'єрна»), не лише під хостом
+    //   (як у _schoolRosterFromCards, v7.267). Було: лише хост → індекс Школи Кар'єрної порожній (0 дітей),
+    //   школяр-однофамілець не потрапляв у звірку, і платіж ішов «авто» на садкову сестру (Поворозник).
+    var _cIdx = _activeCardsByLoc() || {};
+    var bucket = _cIdx[_nameFold(cardsLoc)] || {};
+    var ownCards = sub ? (_cIdx[_nameFold(loc)] || {}) : {};
+    if (Object.keys(bucket).length || Object.keys(ownCards).length){
       diag.cardRule = true;
       var seen = {}, kept = [];
       rows.forEach(function(c){
         var key  = _nameFold(c.childName);
-        var card = bucket[key];
+        var own  = ownCards[key];
+        var card = own || bucket[key];
         if (!card){ diag.droppedNoCard++; return; }
-        if (sub && _nameFold(card.group) !== _nameFold(sub.group)){ diag.droppedNoCard++; return; }
+        if (sub && !own && _nameFold(card.group) !== _nameFold(sub.group)){ diag.droppedNoCard++; return; }
         if (seen[key]){ diag.mergedDup++; return; }
         seen[key] = true;
         c.group = trim(card.group) || c.group;
@@ -27296,12 +27303,13 @@ function _buildPayerIndex(loc){
   var cli = getClients();
   if (cli && cli.ok){
     (cli.data || []).forEach(function(o){
-      if (trim(o['Локація']) !== cardsLoc) return;
+      var cl = trim(o['Локація']);
+      if (cl !== cardsLoc && !(sub && cl === loc)) return;   // v7.593: картка може лежати на самій під-локації
       if (isSchool){
         var st = trim(o['Статус']);
         if (st !== 'active' && st !== 'adaptation') return;
       }
-      if (sub && _nameFold(o['Група']) !== _nameFold(sub.group)) return;
+      if (sub && cl !== loc && _nameFold(o['Група']) !== _nameFold(sub.group)) return;
       var cn = trim(o['ПІБ дитини']); if (!cn) return;
       var child = byNorm[_normNameVac(cn)] || { childName: cn, row: -1, group: trim(o['Група']) };
       ['ПІБ мами', 'ПІБ тата', 'Підписант договору'].forEach(function(f){
@@ -27359,6 +27367,75 @@ function _rcColKind(col0, monthStart0){
   var d = col0 - monthStart0;
   return d === 0 ? 'навч' : d === 1 ? 'вступ' : d === 2 ? 'доп' : '';
 }
+// ═══ v7.593: ОДНАКОВЕ ПРІЗВИЩЕ. Платіж на дитину, у якої в локації (Кар'єрна + Школа Кар'єрна — разом) є інша дитина
+//   з тим самим прізвищем, — 🟡 «вибір» зі списком усіх цих дітей (ім'я, група, рядок Payment, бюджет).
+//   🟢 «авто» — лише коли призначення однозначно називає ім'я однієї дитини або сума = бюджет лише однієї з них.
+//   Дитина лише з карткою (рядка в Payment нема) «авто» не буває: 🔴 з вибором рядка. Чисті функції — тести.
+function _rcFold(s){ return String(s || '').replace(/[иіїы]/g, 'і').replace(/є/g, 'е').replace(/ґ/g, 'г').replace(/ё/g, 'е'); }
+function _rcKidName(s){ return _normPayerName(String(s || '').replace(/\([^)]*\)/g, ' ')); }      // без «(Study-ki)»
+function _rcSurFold(s){ return _rcFold(_rcKidName(s).split(' ')[0] || ''); }
+function _rcFirstFold(s){ return _rcFold(_rcKidName(s).split(' ')[1] || ''); }
+function _rcLev(a, b){
+  if (a === b) return 0; if (!a || !b) return Math.max(a.length, b.length);
+  var p = [], i, j; for (j = 0; j <= b.length; j++) p[j] = j;
+  for (i = 1; i <= a.length; i++){ var prev = p[0]; p[0] = i;
+    for (j = 1; j <= b.length; j++){ var t = p[j]; p[j] = Math.min(p[j] + 1, p[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1)); prev = t; } }
+  return p[b.length];
+}
+// та сама дитина, інакше записана (Каньшiна/Каньшіна, Міланія/Меланія, «(Study-ki)»)
+function _rcSameKid(a, b){
+  if (_rcSurFold(a) !== _rcSurFold(b)) return false;
+  var fa = _rcFirstFold(a), fb = _rcFirstFold(b);
+  return fa === fb || (fa.length >= 4 && fb.length >= 4 && _rcLev(fa, fb) <= 1);
+}
+// Пул: кандидати + усі діти з тим самим прізвищем (ростер родини локацій і діти лише з карткою). Одна дитина — один раз.
+function _rcNamesakePool(cands, roster, cardOnly){
+  var pool = [], byRow = {};
+  function put(c){
+    if (c.row >= 0){ if (byRow[c.row]) return; byRow[c.row] = 1; pool.push(c); return; }
+    if (pool.some(function(x){ return _rcSameKid(x.childName, c.childName); })) return;
+    pool.push(c);
+  }
+  (cands || []).filter(function(c){ return c.row >= 0; }).forEach(put);
+  var keys = {}; (cands || []).forEach(function(c){ var k = _rcSurFold(c.childName); if (k) keys[k] = 1; });
+  (roster || []).forEach(function(r){ if (keys[_rcSurFold(r.name)]) put({childName:r.name, row:r.row, group:r.group || ''}); });
+  (cands || []).filter(function(c){ return !(c.row >= 0); }).forEach(put);
+  (cardOnly || []).forEach(function(c){ if (keys[_rcSurFold(c.childName)]) put(c); });
+  return pool;
+}
+// Чи названо в тексті ім'я дитини (з відмінками: Емілія/Емілії, Георгій/Георгія). payerToks — токени платника (не рахуються).
+function _rcNamedIn(toks, kidName){
+  var fn = _rcFirstFold(kidName); if (fn.length < 3) return false;
+  var cut = fn.length >= 5 ? 2 : (fn.length === 4 ? 1 : 0), stem = fn.slice(0, fn.length - cut);   // Лука → Луки, Емілія → Емілії
+  return toks.some(function(t){ return t === fn || (cut && t.indexOf(stem) === 0 && t.length <= fn.length + cut); });
+}
+// Рішення по платежу. text — увесь текст запису, payerRaw — ПІБ платника, budgetOf(row) → бюджет місяця або null.
+// → {status:'auto'|'multi'|'none'|null, candidates, why, noRow}; null — пул з однієї дитини з рядком (як було).
+function _rcNamesakeResolve(cands, roster, cardOnly, text, payerRaw, amount, budgetOf){
+  if (!(cands || []).length) return null;
+  var pool = _rcNamesakePool(cands, roster, cardOnly);
+  pool.forEach(function(c){ var b = (c.row >= 0 && budgetOf) ? budgetOf(c.row) : null; if (b != null) c.budget = b; });
+  var withRow = pool.filter(function(c){ return c.row >= 0; });
+  if (pool.length === 1 && withRow.length === 1){
+    if (cands.length === 1 && cands[0].row === withRow[0].row) return null;               // як було: одна дитина з рядком
+    var c0 = cands.filter(function(c){ return !(c.row >= 0); })[0];                        // картка без рядка → рядок тієї ж дитини
+    if (c0 && _rcFold(_rcKidName(c0.childName)) === _rcFold(_rcKidName(withRow[0].childName)))
+      return {status:'auto', candidates:withRow, why:'рядок Payment за ПІБ із картки'};
+    return {status:'multi', candidates:withRow, why:'у картці ' + (c0 ? c0.childName : '?') + ' — перевірте рядок'};
+  }
+  if (!withRow.length) return {status:'none', candidates:pool, noRow:true, why:'дитина лише з карткою — рядка в Payment нема, оберіть рядок'};
+  var payer = {}; (_rcFold(_normPayerName(payerRaw)).match(/[а-яіїєґ]+/g) || []).forEach(function(t){ payer[t] = 1; });
+  var toks = (_rcFold(_normPayerName(text)).match(/[а-яіїєґ]+/g) || []).filter(function(t){ return !payer[t]; });
+  var named = withRow.filter(function(c){ return _rcNamedIn(toks, c.childName); });
+  if (named.length === 1) return {status:'auto', candidates:[named[0]], why:'ім\'я в призначенні'};
+  var amt = Math.round((Number(amount) || 0) * 100);
+  if (amt > 0 && !named.length){
+    var hit = withRow.filter(function(c){ return c.budget != null && Math.round(Number(c.budget) * 100) === amt; });
+    if (hit.length === 1) return {status:'auto', candidates:[hit[0]], why:'сума = бюджет лише цієї дитини'};
+  }
+  var sorted = withRow.concat(pool.filter(function(c){ return !(c.row >= 0); }));
+  return {status:'multi', candidates:sorted, why:(withRow.length > 1 ? 'однакове прізвище — оберіть дитину' : 'оберіть рядок')};
+}
 function reconcilePreview(body){
   try{
     body = body || {};
@@ -27397,6 +27474,27 @@ function reconcilePreview(body){
       sharedWith.push(sl.loc);
     });
 
+    // v7.593: однофамільці — ростер усієї «родини» локацій у тому самому файлі Payment (хост + під-локації),
+    //   навіть коли рахунок їм не спільний: дитина зі Школи Кар'єрної з тим самим прізвищем — теж кандидат на вибір.
+    var famRoster = (built.roster || []).slice(), cardOnly = [];
+    var _addCardOnly = function(ix, tag){ Object.keys(ix || {}).forEach(function(k){ (ix[k] || []).forEach(function(c){
+      if (c.row >= 0 || cardOnly.some(function(x){ return x.childName === c.childName; })) return;
+      cardOnly.push({childName:c.childName, row:-1, group:(tag ? (c.group ? c.group + ' · ' : '') + tag : c.group || '')}); }); }); };
+    _addCardOnly(idx, '');
+    var _me = _subLocOf(loc), _fam = [];
+    if (_me){ _fam.push(_me.host); _subLocsOfHost(_me.host).forEach(function(x){ if (x.loc !== loc) _fam.push(x.loc); }); }
+    else _subLocsOfHost(loc).forEach(function(x){ if (sharedWith.indexOf(x.loc) < 0) _fam.push(x.loc); });
+    _fam.forEach(function(fl){
+      try {
+        var fr = _getLocationPaymentRegistry(fl); if (!fr || fr.sheetId !== reg.sheetId) return;   // лише той самий файл
+        var fb = _buildPayerIndex(fl);
+        (fb.roster || []).forEach(function(r){ if (!famRoster.some(function(x){ return x.row === r.row; }))
+          famRoster.push({name:r.name, row:r.row, group:(r.group ? r.group + ' · ' : '') + fl}); });
+        _addCardOnly(fb.index, fl);
+      } catch(_fe){}
+    });
+    var _LOp = _paymentLayout(reg.colsPerMonth || 5);
+
     // Дати, що вже звірялися (для цього loc+iban) — м'яке попередження «день уже оброблено».
     var processed = {}, appliedRefs = {};   // v7.376: референси, уже внесені (ключ дедупу «REF|…», як у reconcileApply)
     var ibanN = iban.replace(/\s+/g, '').toUpperCase();
@@ -27432,11 +27530,17 @@ function reconcilePreview(body){
       // Непорожній Факт — НОРМА (батьки платять частинами → сума ДОДАСТЬСЯ у Фазі 2).
       // Тому "дубля" по непорожній клітинці НЕ існує; справжній дубль = той самий
       // Референс уже у Звірки_Платежів — а у Фазі 1 (без записів) дублів не буває.
+      var status = uniq.length === 0 ? 'none' : (uniq.length === 1 ? 'auto' : 'multi');
+      // v7.593: однакове прізвище / дитина без рядка — не «авто» (див. _rcNamesakeResolve)
+      var budCol0 = (monthCol0 >= 0 && type !== 'vstup') ? monthCol0 + (type === 'extras' ? _LOp.budDop : _LOp.budNavch) : -1;
+      var nsWhy = '', noRow = false;
+      var ns = _rcNamesakeResolve(uniq, famRoster, cardOnly, _recSearchBlob(rec), payer.raw, rec.amount, function(r){
+        if (budCol0 < 0) return null; var v = (data[r] || [])[budCol0]; return (v === '' || v == null) ? null : (Number(toNum(v)) || 0); });
+      if (ns){ status = ns.status; uniq = ns.candidates; nsWhy = ns.why; noRow = !!ns.noRow; }
       var existing = 0;
-      if (uniq.length === 1 && uniq[0].row >= 0 && factCol0 >= 0){
+      if (status === 'auto' && uniq.length === 1 && uniq[0].row >= 0 && factCol0 >= 0){
         existing = Number(toNum((data[uniq[0].row] || [])[factCol0])) || 0;
       }
-      var status = uniq.length === 0 ? 'none' : (uniq.length === 1 ? 'auto' : 'multi');
       if (rec.ref && appliedRefs['REF|' + trim(rec.ref)]) status = 'dup';   // v7.376: уже внесено (напр. з файлу) — apply однаково пропустить
       // v7.566: на кого внесено — усі записи з цим референсом (дитина, рядок, місяць, колонка → навч/вступ/доп)
       var applied = [];
@@ -27451,7 +27555,7 @@ function reconcilePreview(body){
         applied: applied, appliedNoChild: (status === 'dup' && !applied.some(function(e){ return e.child; })),
         i: i, date: String(rec.date || ''), amount: Number(rec.amount) || 0, ref: String(rec.ref || ''),
         payerRaw: payer.raw, payerVia: payer.via, payerSurname: sk, matchVia: matchVia,
-        month: (jsMonth + 1), status: status, candidates: uniq, existing: existing,
+        month: (jsMonth + 1), status: status, candidates: uniq, existing: existing, why: nsWhy, noRow: noRow,
         factCol: factCol0 >= 0 ? _colLetter(factCol0) : ''
       };
     });

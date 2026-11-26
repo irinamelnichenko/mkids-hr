@@ -1610,25 +1610,29 @@ async function rcBankTokenRemove(key, label){
 // v7.378: звірка кількості — скільки операцій у банку за період і скільки показано в системі.
 function rcCountCheckHtml(){
   var st=RC.bankStats; if(!st) return '';
-  var payAll=0, expAll=0, payLoc=0, payOffice=0, payNoReq=0, payErr=0, intAll=0, trN=0, trSum=0, slN=0, slSum=0;
+  var payAll=0, expAll=0, payLoc=0, payOffice=0, payNoReq=0, payErr=0, payOther=0, otherList=[], intAll=0, trN=0, trSum=0, slN=0, slSum=0;
   var svcN=0;
   RC.parsed.forEach(function(p){ if(p.service){ svcN+=(p.payments||[]).length+(p.expenses||[]).length; } else { payAll+=(p.payments||[]).length; expAll+=(p.expenses||[]).length; }
     (p.internal||[]).forEach(function(x){ intAll++; if(x._int==='salary'){ slN++; slSum+=Number(x.amount)||0; } else { trN++; trSum+=Number(x.amount)||0; } }); });
   RC.groups.forEach(function(g){
     if(g.ok) payLoc+=(g.preview.rows||[]).length;
     else if(g.office) payOffice+=g.nPay||0;
+    else if(g.otherLoc){ payOther+=g.nPay||0; (g.payments||[]).forEach(function(x){ otherList.push({loc:g.otherLoc, x:x}); }); }   // v7.593
     else if(g.ibanErr) payNoReq+=g.nPay||0;
     else payErr+=g.nPay||0;
   });
-  var shown=payLoc+payOffice+payNoReq+payErr+expAll+intAll+svcN, bankTotal=st.bankTotal||0, notReal=st.notReal||0;
+  var shown=payLoc+payOffice+payNoReq+payErr+payOther+expAll+intAll+svcN, bankTotal=st.bankTotal||0, notReal=st.notReal||0;
   var ok=(shown+notReal===bankTotal);
   return '<div style="margin-bottom:12px;padding:10px 14px;border-radius:12px;border:1px solid '+(ok?'#bbf7d0':'#fecaca')+';background:'+(ok?'#f0fdf4':'#fef2f2')+';font-size:13px">'
     +(ok?'✅':'⚠️')+' <b>Звірка кількості</b> · '+escapeHtml(st.from)+(st.to!==st.from?' — '+escapeHtml(st.to):'')+'<br>'
     +'У банку: <b>'+bankTotal+'</b> операцій'+(notReal?' (з них не проведені: '+notReal+')':'')
-    +' · у системі: <b>'+shown+'</b> = надходжень '+(payAll)+' (по локаціях '+payLoc+(payOffice?', офісні '+payOffice:'')+(payNoReq?', без реквізитів '+payNoReq:'')+(payErr?', з помилкою '+payErr:'')+') + витрат '+expAll+' (режим «Витрати»)'
+    +' · у системі: <b>'+shown+'</b> = надходжень '+(payAll)+' (по локаціях '+payLoc+(payOffice?', офісні '+payOffice:'')+(payNoReq?', без реквізитів '+payNoReq:'')+(payErr?', з помилкою '+payErr:'')+(payOther?', іншої локації '+payOther:'')+') + витрат '+expAll+' (режим «Витрати»)'
     +(trN?'<br>↔️ перекази між власними рахунками: <b>'+trN+'</b> на '+fmtUah(trSum)+' ₴ (кожен — двічі: списання й зарахування) — не дохід і не витрата, не показуються':'')
     +(svcN?'<br>🗂 службові рахунки: <b>'+svcN+'</b> операцій — не показуються':'')
     +(slN?'<br>💼 поповнення зарплатного рахунку: <b>'+slN+'</b> на '+fmtUah(slSum)+' ₴ — ЗП вноситься через «Звірку ЗП» за відомістю, тут не показується':'')
+    +(otherList.length?'<br>🔀 на рахунок <b>іншої локації</b> тієї ж юрособи: '+otherList.map(function(o){
+        return escapeHtml(o.x.date||'')+' · <b>'+fmtUah(o.x.amount)+' ₴</b> · '+escapeHtml(String(o.x.counterparty||'').slice(0,40))+' · «'+escapeHtml(String(o.x.purpose||'').slice(0,70))+'» → '+escapeHtml(o.loc);
+      }).join('; ')+' — щоб внести, оберіть цю локацію або «Усі локації»':'')
     +(ok?'':'<br><b>Розбіжність: '+(bankTotal-notReal-shown)+'</b> — оновіть виписку або напишіть мені.')+'</div>';
 }
 async function rcMarkOffice(iban){
@@ -1885,7 +1889,7 @@ function _rcSortRows(arr){
 async function rcPreviewAll(){
   $('rcWrap').innerHTML='<div class="inv-loading">⏳ Зіставлення платників з дітьми…</div>';
   // лишаємо лише parse-error плашки, ok-групи й офісні перебудовуємо
-  RC.groups=RC.groups.filter(function(g){return !g.ok && !g.office && !g.service && !g.ibanErr;});
+  RC.groups=RC.groups.filter(function(g){return !g.ok && !g.office && !g.service && !g.ibanErr && !g.otherLoc;});
   // v7.405: ШВИДКО. (1) локації всіх рахунків — ОДНИМ запитом; рахунок поза «Реквізити_Локацій» на прев'ю
   //   не шлемо (сервер однаково відмовляв, але кожна відмова коштувала ~9 с). (2) Прев'ю решти — по 6 паралельно.
   //   (3) Обрано локацію — звіряємо лише її рахунки. Було: 63 рахунки × ~9 с ПО ЧЕРЗІ = ~10 хв на день виписки.
@@ -1915,7 +1919,11 @@ async function rcPreviewAll(){
                 ibanErr:true, nPay:(pr.payments||[]).length, nExp:(pr.expenses||[]).length};
       continue;
     }
-    if (RC.bankLoc && locOf && locOf[_k(pr.iban)]!==RC.bankLoc) continue;   // рахунок іншої локації тієї ж юрособи
+    if (RC.bankLoc && locOf && locOf[_k(pr.iban)]!==RC.bankLoc){   // рахунок іншої локації тієї ж юрособи
+      // v7.593: не відкидаємо мовчки (було «у банку 10 — у системі 9»): показуємо, що це за надходження і де їх внести
+      slots[i]={fileName:pr.fileName, ok:false, otherLoc:locOf[_k(pr.iban)], iban:pr.iban, nPay:(pr.payments||[]).length, nExp:(pr.expenses||[]).length, payments:pr.payments};
+      continue;
+    }
     jobs.push(i);
   }
   var done=0;
@@ -1928,8 +1936,10 @@ async function rcPreviewAll(){
       var j=await r.json();
       if(!j.ok) slots[i]={fileName:pr.fileName, ok:false, error:j.error||'preview failed', iban:pr.iban,
                           ibanErr:/Реквізити_Локацій/.test(String(j.error||'')), nPay:(pr.payments||[]).length, nExp:(pr.expenses||[]).length};
-      else { j.fileName=pr.fileName; slots[i]={fileName:pr.fileName, ok:true, preview:j, parsedIdx:i}; }
-    }catch(e2){ slots[i]={fileName:pr.fileName, ok:false, error:String(e2&&e2.message||e2)}; }
+      else { j.fileName=pr.fileName;
+        (j.rows||[]).forEach(function(x){ if(x.status==='auto' && x.candidates && x.candidates.length && !(x.candidates[0].row>=0)){ x.status='none'; x.noRow=true; } });   // v7.593
+        slots[i]={fileName:pr.fileName, ok:true, preview:j, parsedIdx:i}; }
+    }catch(e2){ slots[i]={fileName:pr.fileName, ok:false, error:String(e2&&e2.message||e2), iban:pr.iban, nPay:(pr.payments||[]).length, nExp:(pr.expenses||[]).length}; }   // v7.593: nPay — щоб звірка кількості сходилась
     done++; $('rcWrap').innerHTML='<div class="inv-loading">⏳ Зіставлення платників з дітьми… '+done+' / '+jobs.length+' рахунків</div>';
   };
   var q=jobs.slice(), workers=[];
@@ -1992,9 +2002,11 @@ function rcRowsHtml(p, g){
     +'<th style="width:34px"></th><th>Дата</th><th>Сума</th><th>Платник (виписка)</th><th>Прізв.</th><th>Статус</th><th>Дитина → рядок</th><th>Місяць запису</th></tr></thead><tbody>';
   var defType=(p.type==='extras')?'extras':'navch';
   p.rows.forEach(function(x){
+    // v7.593: «авто» без рядка в Payment не буває — 🔴 з вибором рядка (і для старого бекенда)
+    if(x.status==='auto' && x.candidates && x.candidates.length && !(x.candidates[0].row>=0)){ x.status='none'; x.noRow=true; }
     var st=_RC_STAT[x.status]||_RC_STAT.none;
     var isUO=(String(x.payerSurname||'').toLowerCase()==='уо')||/^\s*УО\b/.test(x.payerRaw||'');
-    var hasCand=(x.candidates && x.candidates.length && x.candidates[0].row>=0);
+    var hasCand=(x.candidates && x.candidates.length && x.candidates[0].row>=0) && !x.noRow;   // v7.593: дитина без рядка → вибір рядка
     var canManual=!isUO && !hasCand && x.status!=='auto' && x.status!=='multi' && x.status!=='dup' && (p.roster && p.roster.length);   // v7.376: дубль не пишемо
     var writable=x.status!=='dup' && ((x.status==='auto' && x.candidates && x.candidates.length && x.candidates[0].row>=0) || (x.status==='multi') || isUO || canManual);
     var chkDisabled=(x.status!=='auto' && !isUO);   // УО — увімкнено й позначено за умовч.
@@ -2006,12 +2018,19 @@ function rcRowsHtml(p, g){
       child=rcAppliedHtml(x, p.loc);   // v7.566: на кого внесено — дитина, рядок, місяць, колонка; кілька дітей — усі
     } else if(x.status==='multi'){
       child='<select class="rc-sel" data-g="'+g+'" data-i="'+x.i+'" onchange="rcChkToggle(this)"><option value="">— оберіть —</option>'
-        +x.candidates.map(function(c,ci){ return '<option value="'+ci+'"'+(c.row<0?' disabled':'')+'>'+escapeHtml(c.childName)+(c.group?' ('+escapeHtml(c.group)+')':'')+(c.row<0?' — нема рядка':'')+'</option>'; }).join('')
-        +'</select>';
+        +x.candidates.map(function(c,ci){ return '<option value="'+ci+'"'+(c.row<0?' disabled':'')+'>'+escapeHtml(c.childName)+(c.group?' ('+escapeHtml(c.group)+')':'')
+          +(c.row<0?' — нема рядка':' · р.'+(c.row+1))+(c.budget!=null?' · бюджет '+fmtUah(c.budget):'')+'</option>'; }).join('')   // v7.593: ім'я, група, рядок, бюджет
+        +'</select>'+(x.why?'<div style="font-size:11px;color:#C77A12">'+escapeHtml(x.why)+'</div>':'');
+    } else if(x.noRow && canManual){   // v7.593: картка без рядка в Payment — 🔴, обрати рядок
+      child='<div style="font-size:11px;color:var(--red2)">картка: '+escapeHtml(x.candidates.map(function(c){ return c.childName+(c.group?' ('+c.group+')':''); }).join(', '))+' — рядка в Payment нема, оберіть рядок</div>'
+        +'<select class="rc-roster" data-g="'+g+'" data-i="'+x.i+'" onchange="rcChkToggle2(this)"><option value="">— обрати дитину —</option>'
+        + p.roster.map(function(rc){ return '<option value="'+rc.row+'">'+escapeHtml(rc.name)+(rc.group?' ('+escapeHtml(rc.group)+')':'')+' · р.'+(rc.row+1)+'</option>'; }).join('')
+        + '</select>';
     } else if(x.candidates&&x.candidates.length){
       var c=x.candidates[0];
       child=escapeHtml(c.childName)+(c.group?' <span style="color:var(--gray);font-size:11px">('+escapeHtml(c.group)+')</span>':'')+(c.row>=0?' <span style="color:var(--gray);font-size:11px">р.'+(c.row+1)+'</span>':' <span style="color:var(--red2);font-size:11px">нема рядка в Payment</span>');
       if(x.existing>0) child+=' <span style="color:#2980b9;font-size:11px">· вже '+fmtUah(x.existing)+', додасться +'+fmtUah(x.amount)+'</span>';
+      if(x.why) child+='<div style="font-size:11px;color:var(--gray)">'+escapeHtml(x.why)+'</div>';   // v7.593 чому «авто»
     } else if(isUO){
       child='<select class="rc-target" data-g="'+g+'" data-i="'+x.i+'" onchange="rcChkToggle2(this)"><option value="">— пропустити —</option><option value="uo237" selected>УО → рядок 237</option></select>';
     } else if(canManual){
@@ -2927,6 +2946,12 @@ function rcRenderAll(){
   RC.groups.filter(function(g){return !g.ok;}).forEach(function(g){
     if(g.service){
       html+='<div class="inv-empty" style="text-align:left;margin-bottom:10px;background:#f8fafc;color:#64748b">'+(/^🗂/.test(g.fileName)?'':'🗂 ')+'<b>'+escapeHtml(g.fileName)+'</b> — службовий рахунок, у звірці не показується (операцій: '+((g.nPay||0)+(g.nExp||0))+'). ЗП — через «Звірку ЗП».</div>';
+      return;
+    }
+    if(g.otherLoc){   // v7.593
+      html+='<div class="inv-empty" style="text-align:left;margin-bottom:10px;background:#fffbeb;color:#92400e">🔀 <b>'+escapeHtml(g.fileName)+'</b> — рахунок локації <b>'+escapeHtml(g.otherLoc)+'</b> (та сама юрособа). '
+        +'Надходжень: <b>'+g.nPay+'</b>'+((g.payments||[]).length?': '+(g.payments||[]).map(function(x){ return escapeHtml(x.date||'')+' '+fmtUah(x.amount)+' ₴ '+escapeHtml(String(x.counterparty||'').slice(0,30)); }).join('; '):'')
+        +'. Щоб внести — оберіть «'+escapeHtml(g.otherLoc)+'» або «Усі локації».</div>';
       return;
     }
     if(g.office){
