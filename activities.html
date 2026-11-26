@@ -6135,6 +6135,7 @@ async function _dopEnqueueExport(spec){
   try {
     var r = await saveBackend('dopExportEnqueue', {loc: spec.loc, month: spec.month, year: spec.year});
     if (r && r.ok) setSyncState('ok', '✅ Відмітки збережено · Пейменти й Salary оновляться автоматично за 1–2 хв');
+    else if (r && /unknown action/i.test(String(r.error || ''))) doExportAttendance(spec.loc, spec.month, spec.year, false);   // бекенд ще до v7.594
     else setSyncState('pending', '⏳ Пейменти оновляться автоматично (сервер підхопить відмітки)');
   } catch(_){ }
 }
