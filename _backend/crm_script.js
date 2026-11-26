@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.595
+// m.kids CRM — Google Apps Script v7.596
+// v7.596: ключ батьків у лапках («"Трикур Тарас"») більше не відкидається як технічний
 // v7.595: звірка (Україна) — транзитний / технічний платник («K3_транз.рахунок…», bank-unparsed) не шукається як прізвище; прізвище дитини (з ПІБ дитини) в призначенні — як раніше (🟢 / однофамільці 🟡), інакше кандидати лише за сумою (залишок до сплати = сумі), нема — 🔴 з дітьми локації, названі в призначенні — підказка; індекс прізвищ не бере ключем ім'я з карток («ПІБ мами: Юлія» → Копил Давид на всіх «Юліях»), технічне, телефон, «-» (diag.badKeys)
 // v7.594: відмітки допів не губляться — експорт допів більше не тримає загальний ScriptLock (окремий прапорець DOP_EXP_BUSY, ScriptLock — на мить); експорт Payment/Salary після відмітки й видалення — у фоні з черги (DOPQ|локація|рік|місяць, тригер dopExportQueueRun щохвилини, серія відміток зливається за 15 с); зайнятий експорт → у чергу, а не LOCK_TIMEOUT; відмова відмітки → аркуш «Допи_Відмови» + retry:true; dopExportEnqueue / dopExportQueueStatus / dopExportQueueRun
 // v7.593: звірка (Україна) — однакове прізвище: платіж на дитину, у якої в локації (Кар'єрна + Школа Кар'єрна разом) є однофамілець, — 🟡 «вибір» з усіма цими дітьми (ім'я, група, рядок, бюджет); 🟢 лише коли призначення називає ім'я однієї дитини або сума = бюджет лише однієї; дитина лише з карткою (нема рядка в Payment) — 🔴 з вибором рядка, не «авто»; індекс Школи Кар'єрної бере картки й з самої під-локації (був порожній)
@@ -9899,7 +9900,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.595', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.596', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -27333,7 +27334,7 @@ function _rcNameStats(list){
 function _rcIsFirstName(tok, st){ var f = (st && st.first[tok]) || 0, s = (st && st.sur[tok]) || 0; return f >= 2 && f > 2 * s; }
 // ключ прізвища для поля батьків / сторони договору; '' — ключа не ставимо. why — для діагностики.
 function _rcParentKey(v, st){
-  var t = _normPayerName(v).split(' ').filter(Boolean);
+  var t = _normPayerName(String(v || '').replace(/["«»„“”]/g, ' ')).split(' ').filter(Boolean);   // «"Трикур Тарас "» — лапки не роблять ПІБ технічним
   if (!t.length) return {key:'', why:'порожньо'};
   if (_RC_TECH_RE.test(t[0]) || t[0].length < 3) return {key:'', why:'технічне'};
   if (!_rcIsFirstName(t[0], st)) return {key:t[0], why:''};
