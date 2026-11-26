@@ -1184,6 +1184,15 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
       {two: X._rcByRemainder(roster, 23800, (r) => rem[r]).map((c) => c.childName), one: X._rcByRemainder(roster, 20500, (r) => rem[r]).map((c) => c.childName),
        none: X._rcByRemainder(roster, 999, (r) => rem[r]).length, zero: X._rcByRemainder(roster, 0, (r) => rem[r]).length},
       {two: ['Пархоменко Єва', 'Горідько Юля'], one: ['Копил Давид'], none: 0, zero: 0});
+    {
+      const Y = new Function('trim', [fn('_lat2cyr'), fn('_normPayerName'), fn('_surnameKey'), fn('_fixHomoglyph'), fn('_recSearchBlob'), fn('_rcSurStem'), fn('_rcKidScan')].join('\n') + ';return {_scanRecordForChildren: _rcKidScan};')((x) => String(x == null ? '' : x).trim());
+      const kidIdx = {'істомін': [{childName: 'Істомін Родіон', row: 70}], 'кустовський': [{childName: 'Кустовський Микита', row: 71}], 'кулієва': [{childName: 'Кулієва Софія', row: 53}], 'щербина': [{childName: 'Щербина Данило', row: 20}], 'погосян': [{childName: 'Погосян Емілія', row: 30}, {childName: 'Погосян Ерік', row: 31}]};
+      const S = (purpose) => Y._scanRecordForChildren({purpose, counterparty: 'K3_транз.рахунок платежі BP 3916731'}, kidIdx).map((c) => c.childName);
+      check('звірка: транзит — прізвище дитини в призначенні', 'Кулієва (мама Кулієва Ксенія) → дитина знайдена; Григоренко Анна → нікого (далі за сумою); Погосян — двоє однофамільців (🟡)',
+        {k: S('Оплата за навчання, 61-06-09, Кулієва Ксенія Олегівна'), g: S('Оплата за послуги. Львів, згідно договору № 02.50, Григоренко Анна Андріївна'), p: S('Оплата за навчання, дог.№ 75-31-94, Погосян Марина Станіславівна'),
+         ist: S('Оплата за навчання, 28-20-26, Істоміна Юлія Іванівна'), kus: S('Додаткові заняття Кар.Дачі, Кустовська Наталія Олегівна'), low: S('Оплата за навчання. Київ від данило щербина'), up: S('Сплата за освітні послуги, КУЛІЄВА КСЕНІЯ')},
+        {k: ['Кулієва Софія'], g: [], p: ['Погосян Емілія', 'Погосян Ерік'], ist: ['Істомін Родіон'], kus: ['Кустовський Микита'], low: ['Щербина Данило'], up: ['Кулієва Софія']});
+    }
   } else { fail++; console.log('✗ звірка: _rcParentKey не знайдено'); }
 }
 

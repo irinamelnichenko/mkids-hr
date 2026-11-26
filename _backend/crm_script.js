@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
 // m.kids CRM — Google Apps Script v7.595
-// v7.595: звірка (Україна) — транзитний / технічний платник («K3_транз.рахунок…», bank-unparsed) не шукається як прізвище; кандидати лише за сумою (залишок до сплати = сумі), нема — 🔴 з дітьми локації, названі в призначенні — підказка; індекс прізвищ не бере ключем ім'я з карток («ПІБ мами: Юлія» → Копил Давид на всіх «Юліях»), технічне, телефон, «-» (diag.badKeys)
+// v7.595: звірка (Україна) — транзитний / технічний платник («K3_транз.рахунок…», bank-unparsed) не шукається як прізвище; прізвище дитини (з ПІБ дитини) в призначенні — як раніше (🟢 / однофамільці 🟡), інакше кандидати лише за сумою (залишок до сплати = сумі), нема — 🔴 з дітьми локації, названі в призначенні — підказка; індекс прізвищ не бере ключем ім'я з карток («ПІБ мами: Юлія» → Копил Давид на всіх «Юліях»), технічне, телефон, «-» (diag.badKeys)
 // v7.594: відмітки допів не губляться — експорт допів більше не тримає загальний ScriptLock (окремий прапорець DOP_EXP_BUSY, ScriptLock — на мить); експорт Payment/Salary після відмітки й видалення — у фоні з черги (DOPQ|локація|рік|місяць, тригер dopExportQueueRun щохвилини, серія відміток зливається за 15 с); зайнятий експорт → у чергу, а не LOCK_TIMEOUT; відмова відмітки → аркуш «Допи_Відмови» + retry:true; dopExportEnqueue / dopExportQueueStatus / dopExportQueueRun
 // v7.593: звірка (Україна) — однакове прізвище: платіж на дитину, у якої в локації (Кар'єрна + Школа Кар'єрна разом) є однофамілець, — 🟡 «вибір» з усіма цими дітьми (ім'я, група, рядок, бюджет); 🟢 лише коли призначення називає ім'я однієї дитини або сума = бюджет лише однієї; дитина лише з карткою (нема рядка в Payment) — 🔴 з вибором рядка, не «авто»; індекс Школи Кар'єрної бере картки й з самої під-локації (був порожній)
 // v7.592: Польща — відшкодування за чеки працівнику → ZWROT і без слова «ZWROT» (_plIsReimb: «FAKTURA NR» без N/MM/РРРР, перелік покупок, RETURN / BADANIA; не ЗП, не оренда, не рахунки підрядників); «Bator Karolina» більше не ділиться як брати й сестри з «Bator Karol»; аркуш журналу без шапки — шапка відновлюється
@@ -27342,6 +27342,24 @@ function _rcParentKey(v, st){
   }
   return {key:'', why:'лише ім\'я'};
 }
+// v7.595: основа прізвища без родового закінчення — Істомін/Істоміна, Кустовський/Кустовська, Зайцев/Зайцева, Харітонов/Харітонова
+function _rcSurStem(k){
+  k = String(k || '').replace(/[иіїы]/g, 'і').replace(/є/g, 'е');
+  return k.replace(/(ськ|цьк|зьк)(ий|ій|а|ої|ій)$/, '$1').replace(/(ов|ев|ін)(а|ої|ій)$/, '$1');
+}
+// діти, чиє прізвище (основа) є серед слів запису (призначення, контрагент). kidIdx: ключ прізвища дитини → [діти]
+function _rcKidScan(rec, kidIdx){
+  var byStem = {};
+  Object.keys(kidIdx || {}).forEach(function(k){ var st = _rcSurStem(k); (byStem[st] = byStem[st] || []).push.apply(byStem[st], kidIdx[k]); });
+  var out = [], seen = {};
+  // будь-який регістр («мілана боденчук», «БІКАНАСОВА»); «Лук янова» (апостроф пробілом) — і пара сусідніх слів разом
+  var toks = _normPayerName(_recSearchBlob(rec)).match(/[а-яіїєґ]+/g) || [], cand = [];
+  for (var i = 0; i < toks.length; i++){ if (toks[i].length >= 3) cand.push(toks[i]); if (i + 1 < toks.length && toks[i].length <= 4) cand.push(toks[i] + toks[i + 1]); }
+  cand.forEach(function(t){
+    (byStem[_rcSurStem(t)] || []).forEach(function(c){ if (!seen[c.childName]){ seen[c.childName] = 1; out.push(c); } });
+  });
+  return out;
+}
 // технічний платник (транзитний рахунок банку, організація без «Платник …» у призначенні) — не людина, не ключ
 function _rcIsTechPayer(payer, rec){
   if (!payer) return true;
@@ -27375,8 +27393,10 @@ function _buildPayerIndex(loc){
     list.push(child); return true;
   }
   // add: childName унікальний у межах ключа-прізвища (одну дитину з різних джерел не дублюємо)
+  var childIdx = {};   // v7.595: лише прізвища ДІТЕЙ (для транзиту — без імен батьків)
   function add(surnameSrc, child){
     var sk = _surnameKey(surnameSrc); if (!sk || !child.childName) return false;
+    if (surnameSrc === child.childName){ var cl = (childIdx[sk] = childIdx[sk] || []); if (!cl.some(function(x){ return x.childName === child.childName; })) cl.push(child); }
     var list = (idx[sk] = idx[sk] || []);
     for (var i = 0; i < list.length; i++) if (list[i].childName === child.childName) return false;
     list.push(child); return true;
@@ -27486,7 +27506,7 @@ function _buildPayerIndex(loc){
       });
     });
   }
-  return { index: idx, diag: diag, roster: payRows.map(function(c){ return { name: c.childName, row: c.row, group: c.group }; }) };
+  return { index: idx, childIndex: childIdx, diag: diag, roster: payRows.map(function(c){ return { name: c.childName, row: c.row, group: c.group }; }) };
 }
 
 // ── ФАЗА 1: PREVIEW (read-only). Вхід: {iban, payments:[{date,amount,purpose,edrpou,counterparty,ref,...}]}.
@@ -27641,6 +27661,10 @@ function reconcilePreview(body){
       var sreg = _getLocationPaymentRegistry(sl.loc);
       if (!sreg || sreg.sheetId !== reg.sheetId) return;          // запобіжник: лише той самий файл
       var b2 = _buildPayerIndex(sl.loc);
+      Object.keys(b2.childIndex || {}).forEach(function(k){   // v7.595
+        var cl = (built.childIndex[k] = built.childIndex[k] || []);
+        (b2.childIndex[k] || []).forEach(function(c){ if (!cl.some(function(x){ return x.row === c.row; })){ var cc = {}; for (var f in c) cc[f] = c[f]; cc.group = (c.group ? c.group + ' · ' : '') + sl.loc; cl.push(cc); } });
+      });
       Object.keys(b2.index || {}).forEach(function(k){
         var list = idx[k] || (idx[k] = []);
         (b2.index[k] || []).forEach(function(c){
@@ -27701,7 +27725,10 @@ function reconcilePreview(body){
       var budCol0 = (monthCol0 >= 0 && type !== 'vstup') ? monthCol0 + (type === 'extras' ? _LOp.budDop : _LOp.budNavch) : -1;
       var _pm = _scanRecordForChildren(rec, idx);
       var hint = [];
-      if (tech){
+      var _pmKid = tech ? _rcKidScan(rec, built.childIndex || {}) : [];   // v7.595: прізвище ДИТИНИ в призначенні
+      if (tech && _pmKid.length){
+        uniq = _pmKid.slice(); matchVia = 'text';   // як раніше: одна дитина → 🟢, однофамільці → 🟡 (_rcNamesakeResolve нижче)
+      } else if (tech){
         // v7.595: транзит — кандидати ЛИШЕ за сумою: діти локації, у кого залишок до сплати (бюджет − факт місяця) = сумі.
         //   Діти, названі в призначенні, — лише підказка нагорі списку вибору (не «авто»).
         uniq = _rcByRemainder(built.roster || [], rec.amount, function(r){
@@ -27722,8 +27749,9 @@ function reconcilePreview(body){
       // Референс уже у Звірки_Платежів — а у Фазі 1 (без записів) дублів не буває.
       var status = uniq.length === 0 ? 'none' : (uniq.length === 1 ? 'auto' : 'multi');
       // v7.593: однакове прізвище / дитина без рядка — не «авто» (див. _rcNamesakeResolve)
-      var nsWhy = tech ? (uniq.length === 1 ? 'транзит: сума = залишок до сплати' : (uniq.length ? 'транзит: кілька дітей із таким залишком — оберіть' : 'транзит: залишку, рівного сумі, нема — оберіть дитину')) : '', noRow = false;
-      var ns = tech ? null : _rcNamesakeResolve(uniq, famRoster, cardOnly, _recSearchBlob(rec), payer.raw, rec.amount, function(r){
+      var _amt = tech && !_pmKid.length;
+      var nsWhy = _amt ? (uniq.length === 1 ? 'транзит: сума = залишок до сплати' : (uniq.length ? 'транзит: кілька дітей із таким залишком — оберіть' : 'транзит: залишку, рівного сумі, нема — оберіть дитину')) : '', noRow = false;
+      var ns = _amt ? null : _rcNamesakeResolve(uniq, famRoster, cardOnly, _recSearchBlob(rec), payer.raw, rec.amount, function(r){
         if (budCol0 < 0) return null; var v = (data[r] || [])[budCol0]; return (v === '' || v == null) ? null : (Number(toNum(v)) || 0); });
       if (ns){ status = ns.status; uniq = ns.candidates; nsWhy = ns.why; noRow = !!ns.noRow; }
       var existing = 0;
