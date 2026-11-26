@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.593
+// m.kids CRM — Google Apps Script v7.594
+// v7.594: відмітки допів не губляться — експорт допів більше не тримає загальний ScriptLock (окремий прапорець DOP_EXP_BUSY, ScriptLock — на мить); експорт Payment/Salary після відмітки й видалення — у фоні з черги (DOPQ|локація|рік|місяць, тригер dopExportQueueRun щохвилини, серія відміток зливається за 15 с); зайнятий експорт → у чергу, а не LOCK_TIMEOUT; відмова відмітки → аркуш «Допи_Відмови» + retry:true; dopExportEnqueue / dopExportQueueStatus / dopExportQueueRun
 // v7.593: звірка (Україна) — однакове прізвище: платіж на дитину, у якої в локації (Кар'єрна + Школа Кар'єрна разом) є однофамілець, — 🟡 «вибір» з усіма цими дітьми (ім'я, група, рядок, бюджет); 🟢 лише коли призначення називає ім'я однієї дитини або сума = бюджет лише однієї; дитина лише з карткою (нема рядка в Payment) — 🔴 з вибором рядка, не «авто»; індекс Школи Кар'єрної бере картки й з самої під-локації (був порожній)
 // v7.592: Польща — відшкодування за чеки працівнику → ZWROT і без слова «ZWROT» (_plIsReimb: «FAKTURA NR» без N/MM/РРРР, перелік покупок, RETURN / BADANIA; не ЗП, не оренда, не рахунки підрядників); «Bator Karolina» більше не ділиться як брати й сестри з «Bator Karol»; аркуш журналу без шапки — шапка відновлюється
 // v7.591: Польща — plJournalSeed (стартові записи журналів «Позики Федора» / PERSPICIO з виписок 2026, без дублів за ключем), plApply не дублює рядки журналу, звірка (plCompare) — і закриті місяці, операції без рядка звіряються з сумами у твоєму файлі
@@ -9897,7 +9898,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.593', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.594', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -10000,6 +10001,7 @@ function doGet(e) {
     else if (action === 'getMealMarks')              result = getMealMarks({loc:e.parameter.loc||'', year:e.parameter.year||'', month:e.parameter.month||''});          // v7.104 харчування — відмітки
     else if (action === 'getActivitiesCatalog')      result = getActivitiesCatalog(e.parameter && e.parameter.loc || '');
     else if (action === 'getAttendanceMarks')         result = getAttendanceMarks(e.parameter || {});
+    else if (action === 'dopExportQueueStatus')       result = dopExportQueueStatus();   // v7.594 черга експорту допів
     else if (action === 'getDopMerges')               result = getDopMerges(e.parameter || {});
     else if (action === 'getPredMerges')              result = getPredMerges(e.parameter || {});
     else if (action === 'getDopSplits')               result = getDopSplits(e.parameter || {});
@@ -10319,6 +10321,8 @@ function doPost(e) {
     else if (body.action === 'addChomusykyMark')          result = addChomusykyMark(body.data || body || {});
     else if (body.action === 'removeChomusykyMark')       result = removeChomusykyMark(body || {});
     else if (body.action === 'exportAttendance')          result = exportAttendance(body || {});
+    else if (body.action === 'dopExportEnqueue')          result = dopExportEnqueue(body || {});   // v7.594 черга експорту допів (швидко)
+    else if (body.action === 'dopExportQueueRun')         result = (_marksActorIsCfo(body.actorId) ? dopExportQueueRun() : {ok:false, code:'PERM_DENIED', error:'Лише CFO'});   // v7.594 розібрати чергу зараз
     else if (body.action === 'addPredmetny')              result = addPredmetny(body.data || {});
     else if (body.action === 'updatePredmetny')           result = updatePredmetny(body.id || 0, body.data || {});
     else if (body.action === 'deletePredmetny')           result = deletePredmetny(body.id || 0);
@@ -25780,9 +25784,10 @@ function addAttendanceMark(data){
   // _attDupKey (Дата + Дитина норм + id_заняття) проти існуючих рядків — якщо
   // такий запис уже є, НЕ дублюємо (повертаємо існуючий id, dup:true). Лок також
   // робить _nextAttendanceId атомарним → прибирає старий race із неунікальними id.
-  var lock = LockService.getScriptLock();
+  var lock = LockService.getScriptLock(), _qT = [];
   try { lock.waitLock(30000); }
-  catch(e){ return {ok: false, error: 'LOCK_TIMEOUT: ' + (e && e.message || e)}; }
+  catch(e){ _attRejectLog([data], 'LOCK_TIMEOUT: ' + (e && e.message || e), 'add');   // v7.594
+            return {ok: false, code: 'LOCK_TIMEOUT', retry: true, error: 'LOCK_TIMEOUT: ' + (e && e.message || e)}; }
   try {
     var sh  = _getAttendanceSheet(true);
     var _tz = sh.getParent().getSpreadsheetTimeZone() || 'Europe/Kiev';
@@ -25815,11 +25820,14 @@ function addAttendanceMark(data){
     // v7.531: абонемент — ціну несе перша відмітка дитини в місяці
     try { var _sp1 = _dopSubPriceByActId(), _sk1 = _dopSubKeysFor([{actId:actId, child:child, date:date}], _sp1, _tz);
           if (_sk1){ SpreadsheetApp.flush(); _dopSubNormalize(sh, sh.getDataRange().getValues(), _sk1, _sp1, false); } } catch(_sn){ Logger.log('[subNorm] %s', _sn); }
+    _qT = _dopQueueTargets([{date:date, loc:data.loc}], _tz);   // v7.594: експорт — у фоні
     return {ok: true, id: id};
   } catch(e){
-    return {ok: false, error: String(e && e.message || e)};
+    _attRejectLog([data], String(e && e.message || e), 'add');
+    return {ok: false, retry: true, error: String(e && e.message || e)};
   } finally {
     try { lock.releaseLock(); } catch(_){}
+    if (_qT.length) _dopQueueAdd(_qT);
   }
 }
 
@@ -25991,7 +25999,7 @@ function removeAttendanceMark(id, body){
         // v7.531: зняли першу відмітку абонемента — ціна переходить на наступну відмітку місяця
         try { var _sp3 = _dopSubPriceByActId(), _sk3 = _dopSubKeysFor([{actId:snap.activityId, child:snap.child, date:snap.date}], _sp3, tz);
               if (_sk3) _dopSubNormalize(sh, sh.getDataRange().getValues(), _sk3, _sp3, false); } catch(_sn){ Logger.log('[subNorm] %s', _sn); }
-        return {ok: true, recalc: _dopRecalcAfterRemove([snap])};   // v7.563
+        return {ok: true, recalc: {queued: _dopQueueAdd(_dopRecalcTargets([snap]))}};   // v7.594: перерахунок «Бюджет доп» — у фоні з черги
       }
     }
     if (firstBad) return {ok: false, code: 'MARK_MISMATCH', error: firstBad};   // v7.565
@@ -26005,9 +26013,10 @@ function removeAttendanceMark(id, body){
 // Замість 14× (HTTP→lock→appendRow) = 1× (HTTP→lock→batch write).
 // Усуває race condition між паралельними auto-export запитами.
 function bulkAttendanceMarks(body){
-  var lock = LockService.getScriptLock();
+  var lock = LockService.getScriptLock(), _qT = [];
   try { lock.waitLock(30000); }
-  catch(e){ return {ok: false, error: 'LOCK_TIMEOUT: ' + (e && e.message || e)}; }
+  catch(e){ _attRejectLog((body && body.items) || [], 'LOCK_TIMEOUT: ' + (e && e.message || e), 'add');   // v7.594
+            return {ok: false, code: 'LOCK_TIMEOUT', retry: true, error: 'LOCK_TIMEOUT: ' + (e && e.message || e)}; }
   try {
     var items = (body && body.items) || [];
     if (!items.length) return {ok: false, error: 'No items'};
@@ -26067,12 +26076,15 @@ function bulkAttendanceMarks(body){
       // v7.531: абонемент — ціну несе перша відмітка дитини в місяці
       try { var _sp2 = _dopSubPriceByActId(), _sk2 = _dopSubKeysFor(rows.map(function(r){ return {actId:r[5], child:r[4], date:r[1]}; }), _sp2, _tz);
             if (_sk2){ SpreadsheetApp.flush(); _dopSubNormalize(sh, sh.getDataRange().getValues(), _sk2, _sp2, false); } } catch(_sn){ Logger.log('[subNorm] %s', _sn); }
+      _qT = _dopQueueTargets(rows.map(function(r){ return {date:r[1], loc:r[2]}; }), _tz);   // v7.594: експорт — у фоні
     }
     return {ok: true, results: results, count: rows.length};
   } catch(e){
-    return {ok: false, error: String(e && e.message || e)};
+    _attRejectLog((body && body.items) || [], String(e && e.message || e), 'add');
+    return {ok: false, retry: true, error: String(e && e.message || e)};
   } finally {
     try { lock.releaseLock(); } catch(_){}
+    if (_qT.length) _dopQueueAdd(_qT);
   }
 }
 
@@ -26081,7 +26093,7 @@ function bulkAttendanceMarks(body){
 function bulkRemoveAttendanceMarks(body){
   var lock = LockService.getScriptLock();
   try { lock.waitLock(30000); }
-  catch(e){ return {ok: false, error: 'LOCK_TIMEOUT: ' + (e && e.message || e)}; }
+  catch(e){ return {ok: false, code: 'LOCK_TIMEOUT', retry: true, error: 'LOCK_TIMEOUT: ' + (e && e.message || e)}; }   // v7.594: фронт повторить
   try {
     // v7.565: items [{id, child, date, activityId}] — № + перевірка. Голий список ids більше не приймаємо.
     var items = (body && body.items) || [];
@@ -26127,7 +26139,7 @@ function bulkRemoveAttendanceMarks(body){
           if (_sk4 && rowsToDelete.length) _dopSubNormalize(sh, sh.getDataRange().getValues(), _sk4, _sp4, false); } catch(_sn){ Logger.log('[subNorm] %s', _sn); }
     // v7.563: «Бюджет доп» — одразу, після зняття локу відміток (експорт бере свій)
     var recalc = [];
-    if (rowsToDelete.length){ try { SpreadsheetApp.flush(); lock.releaseLock(); } catch(_rl){} recalc = _dopRecalcAfterRemove(snaps); }
+    if (rowsToDelete.length){ try { SpreadsheetApp.flush(); } catch(_rl){} recalc = {queued: _dopQueueAdd(_dopRecalcTargets(snaps.map(function(q){ return q.before; })))}; }   // v7.594: у фоні
     var results = [];
     for (var m = 0; m < ids.length; m++){
       var nn = Number(ids[m]) || 0;
@@ -26648,15 +26660,129 @@ function _journalMonthsForPayment(loc, year){
 //   Тепер увесь прогін (читання відміток, Payment, журналу + запис) — під ScriptLock; вкладені виклики (exportAttendance →
 //   Payment + Salary) лок не беруть повторно. dryRun — без локу (нічого не пише).
 var _DOP_EXP_LOCKED = false;
+// v7.594: ЕКСПОРТ ДОПІВ БІЛЬШЕ НЕ ТРИМАЄ ScriptLock. З v7.563 експорт (Payment + Salary, 10–60 с) сидів під загальним
+//   ScriptLock, а автоекспорт кожної вкладки вихователя біг через 5 с після кожної відмітки — відмітки (теж ScriptLock,
+//   чекання 30 с) отримували LOCK_TIMEOUT, і фронт їх знімав з екрана (Житомир, 24–26.11). Тепер:
+//   • взаємовиключення експортів — окремий «м'ютекс» у ScriptProperties (DOP_EXP_BUSY = час захоплення); ScriptLock
+//     береться лише на мить, щоб атомарно перевірити й поставити прапорець;
+//   • зайнято — експорт не чекає довго: ставиться в чергу (DOPQ|локація|рік|місяць), тригер dopExportQueueRun щохвилини
+//     її розбирає; відмітки й видалення самі ставлять у чергу свій місяць (експорт у тому ж запиті більше не йде).
+var DOP_EXP_MUTEX_KEY = 'DOP_EXP_BUSY', DOP_EXP_STALE_MS = 7 * 60000, DOPQ_PREFIX = 'DOPQ|', DOPQ_DEBOUNCE_MS = 15000;
+function _dopMutexTry(){
+  var lk = LockService.getScriptLock();
+  if (!lk.tryLock(3000)) return false;
+  try {
+    var p = PropertiesService.getScriptProperties(), v = Number(p.getProperty(DOP_EXP_MUTEX_KEY)) || 0;
+    if (v && Date.now() - v < DOP_EXP_STALE_MS) return false;
+    p.setProperty(DOP_EXP_MUTEX_KEY, String(Date.now()));
+    return true;
+  } finally { try { lk.releaseLock(); } catch(_r){} }
+}
+function _dopMutexTouch(){ try { PropertiesService.getScriptProperties().setProperty(DOP_EXP_MUTEX_KEY, String(Date.now())); } catch(_t){} }
+function _dopMutexRelease(){ try { PropertiesService.getScriptProperties().deleteProperty(DOP_EXP_MUTEX_KEY); } catch(_d){} }
+// Черга: один ключ на «локація|рік|місяць» (без читання-зміни-запису → без локу; повтор лише оновлює час).
+function _dopQueueAdd(list){
+  var n = 0;
+  try {
+    var p = PropertiesService.getScriptProperties(), now = String(Date.now()), seen = {};
+    (list || []).forEach(function(t){
+      var loc = String(t && t.loc || '').trim(), y = Number(t && t.year) || 0, m = Number(t && t.month) || 0;
+      if (!loc || !y) return;
+      var k = DOPQ_PREFIX + loc + '|' + y + '|' + m; if (seen[k]) return; seen[k] = 1;
+      p.setProperty(k, now); n++;
+    });
+    if (n) _dopQueueEnsureTrigger();
+  } catch(e){ Logger.log('[dopQueueAdd] %s', e); }
+  return n;
+}
+// цілі черги з відміток: [{date:'YYYY-MM-DD'|Date, loc}] → [{loc, year, month}] (місяць самої відмітки — як передає фронт)
+function _dopQueueTargets(marks, tz){
+  var out = [], seen = {};
+  (marks || []).forEach(function(q){
+    var iso = _attDateISO(q && q.date, tz || MARKS_LOCK_TZ), m = /^(\d{4})-(\d{2})/.exec(String(iso || ''));
+    var loc = String(q && q.loc || '').trim(); if (!loc || !m) return;
+    var k = loc + '|' + m[1] + m[2]; if (seen[k]) return; seen[k] = 1;
+    out.push({loc:loc, year:Number(m[1]), month:Number(m[2])});
+  });
+  return out;
+}
+function _dopQueueEnsureTrigger(){
+  var p = PropertiesService.getScriptProperties();
+  if (p.getProperty('DOPQ_TRIG') === '1') return;
+  try {
+    var has = ScriptApp.getProjectTriggers().some(function(t){ return t.getHandlerFunction() === 'dopExportQueueRun'; });
+    if (!has) ScriptApp.newTrigger('dopExportQueueRun').timeBased().everyMinutes(1).create();
+    p.setProperty('DOPQ_TRIG', '1');
+  } catch(e){ Logger.log('[dopQueueTrigger] %s', e); }
+}
+// Тригер (щохвилини): розбирає чергу під м'ютексом. Ключ, оновлений під час прогону (нові відмітки), лишається на наступний раз.
+function dopExportQueueRun(){
+  if (!_dopMutexTry()) return {ok:true, busy:true};
+  var t0 = Date.now(), done = [], errs = [], left = 0, p = PropertiesService.getScriptProperties();
+  _DOP_EXP_LOCKED = true;
+  try {
+    var all = p.getProperties();
+    var keys = Object.keys(all).filter(function(k){ return k.indexOf(DOPQ_PREFIX) === 0; })
+      .sort(function(a, b){ return Number(all[a]) - Number(all[b]); });
+    for (var i = 0; i < keys.length; i++){
+      var k = keys[i], ts = all[k];
+      if (Date.now() - t0 > 270000){ left = keys.length - i; break; }
+      if (Date.now() - Number(ts) < DOPQ_DEBOUNCE_MS){ left++; continue; }   // серія відміток ще йде — наступна хвилина
+      var a = k.slice(DOPQ_PREFIX.length).split('|'), month = Number(a.pop()), year = Number(a.pop()), loc = a.join('|');
+      try {
+        var r = _exportAttendanceCore({loc:loc, year:year, month:month});
+        try { SpreadsheetApp.flush(); } catch(_f){}
+        if (r && r.ok) done.push(loc + ' ' + year + '-' + month);
+        else errs.push(loc + ' ' + year + '-' + month + ': ' + String((r && ((r.payments && r.payments.error) || (r.salary && r.salary.error) || r.error)) || 'помилка').slice(0, 200));
+      } catch(e){ errs.push(loc + ' ' + year + '-' + month + ': ' + String(e && e.message || e).slice(0, 200)); }
+      if (p.getProperty(k) === ts) p.deleteProperty(k); else left++;
+      _dopMutexTouch();
+    }
+  } finally {
+    _DOP_EXP_LOCKED = false; _dopMutexRelease();
+  }
+  var res = {ok:true, at:new Date().toISOString(), done:done, errors:errs, left:left, ms:Date.now() - t0};
+  try { p.setProperty('DOPQ_LAST', JSON.stringify(res).slice(0, 8000)); } catch(_s){}
+  return res;
+}
+// GET ?action=dopExportQueueStatus — що в черзі, чи зайнятий експорт, останній прогін
+function dopExportQueueStatus(){
+  var p = PropertiesService.getScriptProperties(), all = p.getProperties(), q = [];
+  Object.keys(all).forEach(function(k){ if (k.indexOf(DOPQ_PREFIX) === 0) q.push({key:k.slice(DOPQ_PREFIX.length), since:new Date(Number(all[k])).toISOString()}); });
+  var busy = Number(all[DOP_EXP_MUTEX_KEY]) || 0;
+  var trig = 0; try { trig = ScriptApp.getProjectTriggers().filter(function(t){ return t.getHandlerFunction() === 'dopExportQueueRun'; }).length; } catch(_t){}
+  var last = null; try { last = JSON.parse(all.DOPQ_LAST || 'null'); } catch(_l){}
+  return {ok:true, queue:q, busy:busy ? new Date(busy).toISOString() : '', triggers:trig, last:last};
+}
+// POST {action:'dopExportEnqueue', loc, year, month} — фронт після відміток (швидко, без експорту в запиті)
+function dopExportEnqueue(body){
+  body = body || {};
+  var n = _dopQueueAdd([{loc:body.loc, year:Number(body.year) || new Date().getFullYear(), month:Number(body.month) || 0}]);
+  return {ok:true, queued:n};
+}
+// Журнал відмов відміток (LOCK_TIMEOUT тощо) — щоб втрачене можна було знайти й доставити. Без локу.
+var DOP_REJECT_SHEET = 'Допи_Відмови';
+function _attRejectLog(items, reason, kind){
+  try {
+    var ss = _getAttendanceSheet(true).getParent(), sh = ss.getSheetByName(DOP_REJECT_SHEET);
+    if (!sh){ sh = ss.insertSheet(DOP_REJECT_SHEET); sh.appendRow(['Коли', 'Дія', 'Дата', 'Локація', 'Група', 'Дитина', 'id_заняття', 'Заняття', 'Відмітив', 'Причина']); }
+    var now = new Date(), rows = (items || []).map(function(d){ d = d || {};
+      return [now, kind || 'add', String(d.date || ''), String(d.loc || ''), String(d.group || ''), String(d.child || ''), Number(d.activityId) || '', String(d.activityName || ''), String(d.markedBy || ''), String(reason || '').slice(0, 300)]; });
+    if (rows.length) sh.getRange(sh.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
+  } catch(e){ Logger.log('[attRejectLog] %s', e); }
+}
 function _dopExpLocked(params, core){
   params = params || {};
   if (params.dryRun === true || _DOP_EXP_LOCKED) return core(params);
-  var lock = LockService.getScriptLock();
-  try { lock.waitLock(60000); }
-  catch(e){ return {ok:false, code:'LOCK_TIMEOUT', error:'LOCK_TIMEOUT: інший експорт допів ще йде — повторіть за хвилину'}; }
+  var waitMs = (params._waitMs != null) ? Number(params._waitMs) : 25000, t0 = Date.now(), got = false;
+  while (!(got = _dopMutexTry()) && Date.now() - t0 < waitMs) Utilities.sleep(2000);
+  if (!got){
+    _dopQueueAdd([{loc:params.loc, year:Number(params.year) || new Date().getFullYear(), month:Number(params.month) || 0}]);
+    return {ok:true, queued:true, code:'QUEUED', msg:'Інший експорт допів ще йде — поставлено в чергу, Payment і Salary оновляться автоматично за 1–2 хв'};
+  }
   _DOP_EXP_LOCKED = true;
   try { var r = core(params); try { SpreadsheetApp.flush(); } catch(_f){} return r; }
-  finally { _DOP_EXP_LOCKED = false; try { lock.releaseLock(); } catch(_r){} }
+  finally { _DOP_EXP_LOCKED = false; _dopMutexRelease(); }
 }
 function exportAttendanceToPayments(params){ return _dopExpLocked(params, _exportAttendanceToPaymentsCore); }
 function _exportAttendanceToPaymentsCore(params){

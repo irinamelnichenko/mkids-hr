@@ -2278,21 +2278,44 @@ function _afSpinnerWatch(id, ms){
   }, ms || 50000);
 }
 
+// v7.594: тимчасова відмова сервера (зайнято блокування / перевищено час) — НЕ відкат відмітки, а повтор.
+//   Повтор безпечний: бекенд не дублює відмітку (ключ дата + локація + дитина + заняття), зняття — за № і перевіркою.
+var _SP_RETRY_ACTIONS = {bulkAttendanceMarks:1, bulkRemoveAttendanceMarks:1, addAttendanceMark:1, removeAttendanceMark:1};
+var _SP_RETRY_DELAYS = [2000, 4000, 8000, 15000, 30000];
+function _spRetryable(json){
+  if (!json || json.ok !== false) return false;
+  if (json.code === 'MONTH_LOCK' || json.code === 'SUB_LIMIT' || json.code === 'MARK_MISMATCH' || json.code === 'PERM_DENIED' || json.code === 'CLOSED_MONTH') return false;
+  return !!json.retry || /LOCK_TIMEOUT|Час очікування|виключного права|Lock timeout|timed out|too many|Перевищено|Service invoked|Server error|Сервіс/i.test(String(json.error || ''));
+}
 async function safePost(action, payload, attempt){
   attempt = attempt || 0;
   var body = JSON.stringify(_tokBody(Object.assign({action: action}, payload || {})));
+  var _ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+  var _tmr = _ctrl ? setTimeout(function(){ try { _ctrl.abort(); } catch(_a){} }, 90000) : null;   // v7.594: завислий запит → повтор
   try {
     var r = await fetch(CFG.SCRIPT_URL, {
       method: 'POST', redirect: 'follow',
       headers: {'Content-Type': 'text/plain;charset=utf-8'},
-      body: body
+      body: body, signal: _ctrl ? _ctrl.signal : undefined
     });
+    if (_tmr) clearTimeout(_tmr);
     if (!r.ok) throw new Error('HTTP ' + r.status);
     var _t = await r.text();
     var json; try{ json = JSON.parse(_t); }catch(_){ json = {ok:true, _assumed:true}; }  // v6.27.5: Apps Script 302→HTML = успіх (дані збережено)
-    // v6.23: application errors (validation/perm/lock) — НЕ retry, НЕ queue.
-    // Caller сам інтерпретує (наприклад LOCK_TIMEOUT → sync-indicator ❌).
-    // Retry лишається тільки на network/HTTP/JSON-parse fail (catch нижче).
+    // v6.23: application errors (validation/perm) — НЕ retry, НЕ queue; caller інтерпретує.
+    // v7.594: відмітки — тимчасова відмова (LOCK_TIMEOUT тощо) → повтор, після останньої спроби — локальна черга (не відкат).
+    if (json && json.ok === false && _SP_RETRY_ACTIONS[action] && _spRetryable(json)){
+      if (attempt < _SP_RETRY_DELAYS.length){
+        var dl = _SP_RETRY_DELAYS[attempt];
+        try { showToast('⏳ Не збережено (сервер зайнятий), повторюю через ' + Math.round(dl / 1000) + ' с…', 'info', dl); } catch(_){}
+        try { if (typeof setSyncState === 'function') setSyncState('pending', '⏳ Не збережено, повторюю…'); } catch(_){}
+        await new Promise(function(rs){ setTimeout(rs, dl); });
+        return safePost(action, payload, attempt + 1);
+      }
+      _queueOffline(action, payload);
+      try { showToast('💾 Сервер зайнятий — відмітку збережено на пристрої, відправлю автоматично', 'info', 6000); } catch(_){}
+      return {ok: false, error: json.error, localOnly: true, queued: true};
+    }
     if (json && json.ok === false) return json;
     // v6.23: opportunistic replay черги після success (без чекання online event).
     if (navigator.onLine && typeof replayOfflineQueue === 'function'){
@@ -2300,9 +2323,10 @@ async function safePost(action, payload, attempt){
     }
     return json;
   } catch(e){
+    if (_tmr) clearTimeout(_tmr);
     if (attempt < 2){
       var delayMs = 1000 * Math.pow(2, attempt);   // 1s → 2s → 4s
-      try { showToast('⚠ Зв\'язок нестабільний, повтор через ' + (delayMs/1000) + ' сек…', 'info', delayMs); } catch(_){}
+      try { showToast('⚠ Не збережено (зв\'язок), повторюю через ' + (delayMs/1000) + ' сек…', 'info', delayMs); } catch(_){}
       await new Promise(function(rs){ setTimeout(rs, delayMs); });
       return safePost(action, payload, attempt + 1);
     }
@@ -2353,11 +2377,12 @@ async function replayOfflineQueue(){
       var r = await fetch(CFG.SCRIPT_URL, {
         method: 'POST', redirect: 'follow',
         headers: {'Content-Type': 'text/plain;charset=utf-8'},
-        body: JSON.stringify(Object.assign({action: item.action}, item.payload || {}))
+        body: JSON.stringify(_tokBody(Object.assign({action: item.action}, item.payload || {})))   // v7.594: + токен
       });
       var _t = await r.text();
       var json; try{ json = JSON.parse(_t); }catch(_){ json = {ok:true, _assumed:true}; }  // v6.27.5: HTML-редірект = успіх
-      if (!(json && json.ok)) remaining.push(item);
+      if (!(json && json.ok) && (_spRetryable(json) || !json)) remaining.push(item);   // v7.594: остаточну відмову (замок місяця тощо) не крутимо вічно
+      else if (!(json && json.ok)) { try { showToast('❌ ' + (json.error || 'не збереглось') + ' — ' + ((item.payload && item.payload.data && item.payload.data.child) || ''), 'err', 6000); } catch(_){} }
     } catch(e){
       remaining.push(item);
     }
@@ -2371,6 +2396,8 @@ async function replayOfflineQueue(){
 }
 
 window.addEventListener('online',  function(){ replayOfflineQueue(); });
+// v7.594: черга на пристрої — раз на хвилину пробуємо відправити (не лише при поверненні мережі)
+setInterval(function(){ try { if (navigator.onLine && JSON.parse(localStorage.getItem('mkids_offline_queue') || '[]').length) replayOfflineQueue(); } catch(_){} }, 60000);
 window.addEventListener('offline', function(){ updatePwaOfflineIndicator(); });
 
 // ── HR EMPS (для dropdown викладачів) ──────────────────────────
@@ -4033,6 +4060,7 @@ async function _gqFlush(){
   _gqUpdateBadge();
   var adds = GQ.add.splice(0, GQ.add.length);
   var dels = GQ.del.splice(0, GQ.del.length);
+  var _retry = false;   // v7.594: тимчасова відмова → повтор з паузою, що росте (2 → 4 → … 30 с)
   try {
     if (adds.length){
       var items = adds.map(function(m){
@@ -4052,6 +4080,9 @@ async function _gqFlush(){
       } else if (res && res.localOnly){
         adds.forEach(function(m){ var c = _gridMarkById(m.id); if (c){ delete c._pending; c._localOnly = true; } });
         showToast('💾 Збережено локально — відправимо коли зʼявиться мережа', 'info', 4000);
+      } else if (_spRetryable(res) || !res){   // v7.594: не відкочуємо — повторимо (на екрані лишається, позначка «не збережено»)
+        adds.forEach(function(m){ if (_gridMarkById(m.id)) GQ.add.push(m); });
+        _retry = true; showToast('⏳ Не збережено, повторюю…', 'info', 4000);
       } else {
         adds.forEach(function(m){ _gridDropById(m.id); });
         showToast('❌ ' + ((res && res.error) || 'Не вдалось зберегти'), 'err', 5000);
@@ -4059,7 +4090,10 @@ async function _gqFlush(){
     }
     if (dels.length){
       var res2 = await saveBackend('bulkRemoveAttendanceMarks', {items: dels.map(function(d){ return _delItem(d.mark); })});   // v7.565
-      if (!(res2 && (res2.ok || res2.localOnly))){
+      if (!(res2 && (res2.ok || res2.localOnly)) && (_spRetryable(res2) || !res2)){   // v7.594: тимчасово — повторимо зняття
+        dels.forEach(function(d){ GQ.del.push(d); });
+        _retry = true; showToast('⏳ Не знято, повторюю…', 'info', 4000);
+      } else if (!(res2 && (res2.ok || res2.localOnly))){
         dels.forEach(function(d){ if (!_gridMarkById(d.id)) ATT.gridMarks.push(d.mark); });
         showToast('❌ ' + ((res2 && res2.error) || 'Не вдалось зняти'), 'err', 5000);
       } else if (res2 && res2.ok && Array.isArray(res2.results)){
@@ -4073,14 +4107,21 @@ async function _gqFlush(){
       }
     }
   } catch(e){
-    adds.forEach(function(m){ _gridDropById(m.id); });
-    dels.forEach(function(d){ if (!_gridMarkById(d.id)) ATT.gridMarks.push(d.mark); });
-    showToast('❌ ' + (e && e.message || e), 'err', 5000);
+    // v7.594: збій мережі/коду — відмітки лишаються на екрані й повторюються, а не зникають
+    adds.forEach(function(m){ if (_gridMarkById(m.id)) GQ.add.push(m); });
+    dels.forEach(function(d){ GQ.del.push(d); });
+    _retry = true; showToast('⏳ Не збережено (' + (e && e.message || e) + '), повторюю…', 'info', 5000);
   }
   GQ.sending = false;
+  GQ.backoff = _retry ? Math.min((GQ.backoff || 1000) * 2, 30000) : 0;
   _gqPromoteWaitingDeletes();
   renderMonthGrid();
-  if (GQ.add.length || GQ.del.length) _gqSchedule();
+  if (GQ.backoff && (GQ.add.length || GQ.del.length)){
+    if (GQ.timer) clearTimeout(GQ.timer);
+    try { setSyncState('pending', '⏳ Не збережено ' + (GQ.add.length + GQ.del.length) + ' — повторюю через ' + Math.round(GQ.backoff / 1000) + ' с'); } catch(_){}
+    GQ.timer = setTimeout(function(){ GQ.timer = null; _gqFlush(); }, GQ.backoff);
+  }
+  else if (GQ.add.length || GQ.del.length) _gqSchedule();
   else if (!GQ.sending) _gqUpdateBadge();
 }
 
@@ -6085,9 +6126,17 @@ async function flushGridAndExport(reason){
   if (EXP.countdownTimer){ clearInterval(EXP.countdownTimer); EXP.countdownTimer = null; }
   var spec = EXP.pendingFor; EXP.pendingFor = null;
   if (!spec) return false;
-  try { console.log('[att.grid] примусовий експорт:', reason || ''); } catch(_){}
-  doExportAttendance(spec.loc, spec.month, spec.year, /*manual*/ false);
+  try { console.log('[att.grid] експорт у черзі:', reason || ''); } catch(_){}
+  _dopEnqueueExport(spec);   // v7.594
   return true;
+}
+// v7.594: поставити місяць у серверну чергу експорту (Payment + Salary оновить тригер за 1–2 хв). Швидкий запит.
+async function _dopEnqueueExport(spec){
+  try {
+    var r = await saveBackend('dopExportEnqueue', {loc: spec.loc, month: spec.month, year: spec.year});
+    if (r && r.ok) setSyncState('ok', '✅ Відмітки збережено · Пейменти й Salary оновляться автоматично за 1–2 хв');
+    else setSyncState('pending', '⏳ Пейменти оновляться автоматично (сервер підхопить відмітки)');
+  } catch(_){ }
 }
 function scheduleAutoExport(){
   // Авто-експорт запускає кожен, хто може ставити відмітки (attendance-edit) —
@@ -6124,7 +6173,7 @@ function scheduleAutoExport(){
     if (EXP.countdownTimer){ clearInterval(EXP.countdownTimer); EXP.countdownTimer = null; }
     var spec = EXP.pendingFor;
     EXP.pendingFor = null;
-    if (spec) doExportAttendance(spec.loc, spec.month, spec.year, /*manual*/ false);
+    if (spec) _dopEnqueueExport(spec);   // v7.594: експорт — у фоні з черги на сервері, вкладка не чекає
   }, 5000);
 }
 
@@ -6150,6 +6199,11 @@ async function doExportAttendance(loc, month, year, manual){
     });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     var json = await r.json();
+    if (json && json.queued){   // v7.594: інший експорт іде — у черзі, не помилка
+      setSyncState('ok', '⏳ ' + (json.msg || 'Експорт у черзі — Пейменти оновляться за 1–2 хв'));
+      if (manual) showToast('⏳ ' + (json.msg || 'Експорт у черзі'), 'info', 6000);
+      return json;
+    }
     var p = json.payments || {};
     var s = json.salary   || {};
     if (!json.ok){

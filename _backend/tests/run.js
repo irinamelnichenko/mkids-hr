@@ -592,26 +592,30 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
 
 // ── v7.563: експорт допів під локом + перерахунок після видалення (Голосієво, дубль Лего 28.10, +340 у трьох дітей) ──
 {
-  const st = {held: false, waits: 0, flushed: 0, fail: false};
-  const LS = {getScriptLock: () => ({waitLock(){ if (st.fail) throw new Error('timeout'); if (st.held) throw new Error('deadlock'); st.held = true; st.waits++; },
-                                      releaseLock(){ st.held = false; }})};
+  // v7.594: взаємовиключення експортів — прапорець DOP_EXP_BUSY у ScriptProperties (ScriptLock — лише на мить), зайнято → черга
+  const st = {waits: 0, flushed: 0}, PR = {};
+  const LS = {getScriptLock: () => ({tryLock(){ st.waits++; return true; }, releaseLock(){}})};
+  const PS = {getScriptProperties: () => ({getProperty: (k) => (k in PR ? PR[k] : null), setProperty: (k, v) => { PR[k] = String(v); }, deleteProperty: (k) => { delete PR[k]; }})};
   const SA = {flush(){ st.flushed++; }};
-  const W = new Function('LockService', 'SpreadsheetApp', ['var _DOP_EXP_LOCKED = false;', fn('_dopExpLocked'), fn('_dopRecalcTargets')].join('\n') +
-    '\nreturn {_dopExpLocked, _dopRecalcTargets};')(LS, SA);
+  const W = new Function('LockService', 'SpreadsheetApp', 'PropertiesService', 'Utilities', 'ScriptApp', 'Logger',
+    ['var _DOP_EXP_LOCKED = false;', src.match(/\nvar DOP_EXP_MUTEX_KEY[^\n]*\n/)[0], fn('_dopMutexTry'), fn('_dopMutexRelease'), fn('_dopQueueAdd'), fn('_dopQueueEnsureTrigger'), fn('_dopExpLocked'), fn('_dopRecalcTargets')].join('\n') +
+    '\nreturn {_dopExpLocked, _dopRecalcTargets};')(LS, SA, PS, {sleep(){}}, {getProjectTriggers: () => [{getHandlerFunction: () => 'dopExportQueueRun'}]}, {log(){}});
+  const busy = () => !!PR.DOP_EXP_BUSY;
   // модель експорту: клітинка = (клітинка − журнал) + сума відміток; журнал = сума. Читання й запис — усередині core.
   const world = {cell: 2810 + 340, journal: 2810 + 340, marks: 2810};   // стан, коли дубль уже знято, а клітинка/журнал бачили його
-  const core = (p) => { const held = st.held, base = world.cell - world.journal;
+  const core = (p) => { const held = busy(), base = world.cell - world.journal;
     if (!p.dryRun){ world.cell = base + world.marks; world.journal = world.marks; }
-    if (p.nested) W._dopExpLocked({}, (q) => ({ok: true, held: st.held}));
+    if (p.nested) W._dopExpLocked({}, (q) => ({ok: true, held: busy()}));
     return {ok: true, held: held}; };
   const r1 = W._dopExpLocked({loc: 'Голосієво'}, core);
   const waits1 = st.waits;
   const rN = W._dopExpLocked({nested: true}, core);
+  const waitsN = st.waits;
   const rD = W._dopExpLocked({dryRun: true}, core);
-  st.fail = true; const rT = W._dopExpLocked({}, core); st.fail = false;
-  check('допи: експорт під локом', 'реальний прогін — під ScriptLock (вкладений Payment+Salary не бере лок вдруге), dryRun без локу, зайнято — LOCK_TIMEOUT; після прогону клітинка = сума відміток',
-        {held: r1.held, waits: waits1, nestedWaits: st.waits - waits1, dryHeld: rD.held, timeout: rT.code, released: st.held, cell: world.cell},
-        {held: true, waits: 1, nestedWaits: 1, dryHeld: false, timeout: 'LOCK_TIMEOUT', released: false, cell: 2810});
+  PR.DOP_EXP_BUSY = String(Date.now()); const rT = W._dopExpLocked({loc: 'Голосієво', year: 2026, month: 10, _waitMs: 0}, core); delete PR.DOP_EXP_BUSY;
+  check('допи: експорт під прапорцем', 'прогін — під DOP_EXP_BUSY (вкладений Payment+Salary не бере вдруге), dryRun без прапорця, зайнято — у черзі (не LOCK_TIMEOUT); після прогону клітинка = сума відміток',
+        {held: r1.held, waits: waits1, nestedWaits: waitsN - waits1, dryHeld: rD.held, busy: rT.code, inQ: 'DOPQ|Голосієво|2026|10' in PR, released: busy(), cell: world.cell},
+        {held: true, waits: 1, nestedWaits: 1, dryHeld: false, busy: 'QUEUED', inQ: true, released: false, cell: 2810});
   const snaps = [{loc: 'Голосієво', date: '2026-10-28', child: 'Бучковський Лука'}, {loc: 'Голосієво', date: '2026-10-28', child: 'Благовісна Аліса'},
                  {loc: 'Голосієво', date: '2026-10-28', child: 'Ковальчук Соломія'}, {loc: 'Голосієво', date: '2026-11-02'}, {loc: 'Позняки', date: '2026-10-30'}, {loc: '', date: '2026-10-01'}];
   check('допи: що перерахувати після видалення', 'локація × місяць відмітки, без повторів (три видалені Лего 28.10 — один перерахунок жовтня)',
@@ -1154,5 +1158,114 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
   } else { fail++; console.log('✗ звірка: _rcNamesakeResolve не знайдено'); }
 }
 
+// ── v7.594: відмітки допів не губляться — експорт не тримає ScriptLock, черга експорту, повтор на фронті ──
+{
+  const need = ['_dopMutexTry', '_dopQueueAdd', 'dopExportQueueRun', '_dopExpLocked', 'bulkAttendanceMarks', '_attRejectLog'];
+  if (need.every((n) => src.indexOf('\nfunction ' + n + '(') >= 0)){
+    const LOCK = {held: false, external: false};
+    const lockObj = {waitLock(){ if (LOCK.external || LOCK.held) throw new Error('Час очікування для отримання виключного права доступу вичерпано'); LOCK.held = true; },
+      tryLock(){ if (LOCK.external || LOCK.held) return false; LOCK.held = true; return true; }, releaseLock(){ LOCK.held = false; }};
+    const PROPS = {};
+    const props = {getProperty: (k) => (k in PROPS ? PROPS[k] : null), setProperty: (k, v) => { PROPS[k] = String(v); }, deleteProperty: (k) => { delete PROPS[k]; }, getProperties: () => Object.assign({}, PROPS)};
+    const mkSheet = (head) => { const d = head.length ? [head] : []; return {d, getDataRange: () => ({getValues: () => d.map((r) => r.slice())}), getLastRow: () => d.length,
+      getRange: (r, c, n) => ({setValues: (rows) => { rows.forEach((x, i) => { d[r - 1 + i] = x.slice(); }); }}), appendRow: (x) => d.push(x.slice())}; };
+    const ATT = mkSheet(['id', 'date', 'loc', 'group', 'child', 'actId', 'act', 'price', 'by', 'at']);
+    const sheets = {};
+    const ss = {getSpreadsheetTimeZone: () => 'Europe/Kiev', getSheetByName: (n) => sheets[n] || null, insertSheet: (n) => (sheets[n] = mkSheet([]))};
+    ATT.getParent = () => ss;
+    const EXPORTS = [];
+    let duringExport = null;
+    const env = {
+      LockService: {getScriptLock: () => lockObj}, PropertiesService: {getScriptProperties: () => props},
+      ScriptApp: {getProjectTriggers: () => [], newTrigger: () => ({timeBased: () => ({everyMinutes: () => ({create(){ PROPS.__trig = '1'; }})})})},
+      Utilities: {sleep(){}}, SpreadsheetApp: {flush(){}}, Logger: {log(){}}, MARKS_LOCK_TZ: 'Europe/Kiev', ATTENDANCE_HEADER: new Array(10),
+      _getAttendanceSheet: () => ATT, _nextAttendanceId: (sh) => sh.d.slice(1).reduce((m, r) => Math.max(m, Number(r[0]) || 0), 0) + 1, _attIdCommit(){},
+      _attDupKey: (d, c, a, tz, l) => [String(d).slice(0, 10), String(l || '').toLowerCase(), String(c).toLowerCase(), Number(a)].join('|'),
+      _marksActorIsCfo: () => false, _marksDateLockError: () => '', _subLimitByActId: () => ({}), _journalNormName: (x) => String(x).toLowerCase(),
+      _attDateISO: (d) => String(d).slice(0, 10), _dopSubPriceByActId: () => ({}), _dopSubKeysFor: () => null, _subCountInMonth: () => 0, _dopSubNormalize(){},
+      _exportAttendanceCore: (p) => { EXPORTS.push(p.loc + ' ' + p.year + '-' + p.month); if (duringExport){ const f = duringExport; duringExport = null; f(); } return {ok: true}; },
+    };
+    const code = varLine('_DOP_EXP_LOCKED') + '\n' + src.match(/\nvar DOP_EXP_MUTEX_KEY[^\n]*\n/)[0] + varLine('DOP_REJECT_SHEET') + '\n' +
+      ['_dopMutexTry', '_dopMutexTouch', '_dopMutexRelease', '_dopQueueAdd', '_dopQueueTargets', '_dopQueueEnsureTrigger', 'dopExportQueueRun', '_dopExpLocked', '_attRejectLog', 'bulkAttendanceMarks'].map(fn).join('\n') +
+      ';return {dopExportQueueRun, _dopExpLocked, bulkAttendanceMarks, _dopQueueAdd};';
+    const X = new Function(...Object.keys(env), code)(...Object.values(env));
+    const realNow = Date.now; let NOW = 1e12; Date.now = () => NOW;
+    try {
+      const T = ['Житомир', 'Житомир', 'Житомир', 'Позняки', 'Осокорки'];
+      const mk = (ti) => ({actorId: 9, items: [0, 1, 2].map((k) => ({date: '2026-11-25', loc: T[ti], group: 'Find-iki', child: 'Дитина ' + ti + '-' + k, activityId: 70 + k, activityName: 'Лего', price: 350, markedBy: 'vyhovatel ' + ti}))});
+      // 1) експорт іде (тримає прапорець), у цей час 5 вихователів ставлять по 3 відмітки
+      PROPS['DOPQ|Житомир|2026|11'] = String(NOW - 60000);
+      const res = [];
+      duringExport = () => { T.forEach((_, ti) => res.push(X.bulkAttendanceMarks(mk(ti)))); };
+      const run1 = X.dopExportQueueRun();
+      const allOk = res.every((r) => r.ok && r.results.every((x) => x.ok));
+      check('допи: 5 вихователів під час експорту', 'експорт не тримає ScriptLock — усі 15 відміток збережені, жодного LOCK_TIMEOUT',
+        {allOk, rows: ATT.d.length - 1, ids: new Set(ATT.d.slice(1).map((r) => r[0])).size, runOk: run1.ok, exported: EXPORTS.slice()},
+        {allOk: true, rows: 15, ids: 15, runOk: true, exported: ['Житомир 2026-11']});
+      check('допи: черга після відміток', 'місяць оновлений під час прогону лишився в черзі; Позняки й Осокорки додались; прапорець знято',
+        {q: Object.keys(PROPS).filter((k) => k.indexOf('DOPQ|') === 0).sort(), busy: PROPS.DOP_EXP_BUSY || null, trig: PROPS.DOPQ_TRIG || null},
+        {q: ['DOPQ|Житомир|2026|11', 'DOPQ|Осокорки|2026|11', 'DOPQ|Позняки|2026|11'], busy: null, trig: '1'});
+      // 2) повтор тих самих відміток (фронт повторив після обриву мережі) — без дублів
+      const again = X.bulkAttendanceMarks(mk(0));
+      check('допи: повтор запиту не дублює', 'та сама відмітка вдруге — dup, рядків не додано', {dup: again.results.every((x) => x.dup), rows: ATT.d.length - 1}, {dup: true, rows: 15});
+      // 3) зайнятий експорт — не чекає й не падає, а стає в чергу
+      PROPS.DOP_EXP_BUSY = String(NOW);
+      const q = X._dopExpLocked({loc: 'Бровари', year: 2026, month: 11, _waitMs: 0}, () => ({ok: true}));
+      check('допи: експорт зайнятий', '→ ok + queued (не LOCK_TIMEOUT), ключ у черзі', {ok: q.ok, queued: q.queued, inQ: 'DOPQ|Бровари|2026|11' in PROPS}, {ok: true, queued: true, inQ: true});
+      delete PROPS.DOP_EXP_BUSY;
+      // 4) розбір черги: свіжі (< 15 с) чекають, решта експортується
+      NOW += 20000; EXPORTS.length = 0; PROPS['DOPQ|Кругла|2026|11'] = String(NOW - 1000);
+      const run2 = X.dopExportQueueRun();
+      check('допи: тригер розбирає чергу', 'експортовано 4 місяці, свіжий (Кругла, 1 с тому) — наступної хвилини',
+        {n: EXPORTS.length, left: Object.keys(PROPS).filter((k) => k.indexOf('DOPQ|') === 0), runLeft: run2.left}, {n: 4, left: ['DOPQ|Кругла|2026|11'], runLeft: 1});
+      // 5) справді зайнятий ScriptLock (інша довга дія) — відмова з retry і запис у «Допи_Відмови»
+      LOCK.external = true;
+      const rj = X.bulkAttendanceMarks(mk(1));
+      LOCK.external = false;
+      check('допи: LOCK_TIMEOUT', 'відповідь retry:true (фронт повторить), 3 відмітки в журналі «Допи_Відмови»',
+        {ok: rj.ok, retry: rj.retry, code: rj.code, logged: (sheets['Допи_Відмови'] ? sheets['Допи_Відмови'].d.length - 1 : 0)}, {ok: false, retry: true, code: 'LOCK_TIMEOUT', logged: 3});
+    } finally { Date.now = realNow; }
+  } else { fail++; console.log('✗ допи: функцій черги експорту не знайдено'); }
+}
+// ── v7.594 (фронт): відмітка при LOCK_TIMEOUT / обриві мережі — повтор, а не зникнення ──
+{
+  const hp = path.join(__dirname, '..', '..', 'activities.html');
+  if (fs.existsSync(hp)){
+    const h = fs.readFileSync(hp, 'utf8');
+    const hf = (name) => { const i = h.indexOf('function ' + name + '('); let d = 0;
+      for (let k = h.indexOf('{', i); k < h.length; k++){ if (h[k] === '{') d++; else if (h[k] === '}' && --d === 0) return h.slice(h.lastIndexOf('\n', i) + 1, k + 1); } };
+    const hv = (name) => /var [A-Z_]+ *=[^;]*;/.exec(h.slice(h.indexOf('var ' + name + ' ')))[0];
+    const server = {rows: {}, calls: 0, failFirst: 0, netFail: 0};
+    const fetchMock = async (url, o) => {
+      server.calls++;
+      if (server.netFail > 0){ server.netFail--; throw new Error('Fetch is aborted'); }
+      const b = JSON.parse(o.body);
+      if (server.failFirst > 0){ server.failFirst--; return {ok: true, text: async () => JSON.stringify({ok: false, code: 'LOCK_TIMEOUT', retry: true, error: 'LOCK_TIMEOUT: Час очікування для отримання виключного права доступу вичерпано'})}; }
+      const res = (b.items || []).map((it) => { const k = it.date + '|' + it.child + '|' + it.activityId; if (server.rows[k]) return {ok: true, dup: true}; server.rows[k] = 1; return {ok: true, id: Object.keys(server.rows).length}; });
+      return {ok: true, text: async () => JSON.stringify({ok: true, results: res})};
+    };
+    const QUEUE = [];
+    const code = hv('_SP_RETRY_ACTIONS') + '\n' + hv('_SP_RETRY_DELAYS') + '\n' + hf('_spRetryable') + '\n' + hf('safePost') + ';return {safePost};';
+    const F2 = new Function('fetch', 'setTimeout', 'clearTimeout', 'AbortController', 'CFG', '_tokBody', 'showToast', 'setSyncState', '_queueOffline', 'navigator', 'replayOfflineQueue',
+      code)(fetchMock, (f) => { f(); return 0; }, () => {}, undefined, {SCRIPT_URL: 'x'}, (b) => b, () => {}, () => {}, (a, p) => QUEUE.push(a), {onLine: false}, null);
+    (async () => {
+      const mk = (t) => ({items: [0, 1, 2].map((k) => ({date: '2026-11-25', loc: 'Житомир', child: 'Д' + t + '-' + k, activityId: 70 + k}))});
+      server.failFirst = 7; server.netFail = 2;   // 7 відмов LOCK_TIMEOUT і 2 обриви мережі впереміш між 5 вихователями
+      const out = await Promise.all([0, 1, 2, 3, 4].map((t) => F2.safePost('bulkAttendanceMarks', mk(t))));
+      check('допи (фронт): 5 вихователів, сервер зайнятий', 'жодна з 15 відміток не загубилась: повтор після LOCK_TIMEOUT і обриву, без дублів, без черги на пристрої',
+        {ok: out.every((r) => r.ok), rows: Object.keys(server.rows).length, queued: QUEUE.length}, {ok: true, rows: 15, queued: 0});
+      server.failFirst = 100;
+      const last = await F2.safePost('bulkAttendanceMarks', mk(9));
+      check('допи (фронт): сервер зайнятий довго', 'після 5 повторів — збережено на пристрої (localOnly), не відкат', {localOnly: !!last.localOnly, queued: QUEUE.length}, {localOnly: true, queued: 1});
+      server.failFirst = 0;
+      const ml = await (async () => { const f = fetchMock; return F2.safePost('bulkAttendanceMarks', {items: []}); })();
+      console.log('\n' + pass + ' пройдено, ' + fail + ' з помилкою — ' + path.basename(SRC));
+      process.exit(fail ? 1 : 0);
+    })();
+  }
+}
+
+if (!fs.existsSync(path.join(__dirname, '..', '..', 'activities.html'))){
 console.log('\n' + pass + ' пройдено, ' + fail + ' з помилкою — ' + path.basename(SRC));
 process.exit(fail ? 1 : 0);
+}
