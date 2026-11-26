@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.594
+// m.kids CRM — Google Apps Script v7.595
+// v7.595: звірка (Україна) — транзитний / технічний платник («K3_транз.рахунок…», bank-unparsed) не шукається як прізвище; кандидати лише за сумою (залишок до сплати = сумі), нема — 🔴 з дітьми локації, названі в призначенні — підказка; індекс прізвищ не бере ключем ім'я з карток («ПІБ мами: Юлія» → Копил Давид на всіх «Юліях»), технічне, телефон, «-» (diag.badKeys)
 // v7.594: відмітки допів не губляться — експорт допів більше не тримає загальний ScriptLock (окремий прапорець DOP_EXP_BUSY, ScriptLock — на мить); експорт Payment/Salary після відмітки й видалення — у фоні з черги (DOPQ|локація|рік|місяць, тригер dopExportQueueRun щохвилини, серія відміток зливається за 15 с); зайнятий експорт → у чергу, а не LOCK_TIMEOUT; відмова відмітки → аркуш «Допи_Відмови» + retry:true; dopExportEnqueue / dopExportQueueStatus / dopExportQueueRun
 // v7.593: звірка (Україна) — однакове прізвище: платіж на дитину, у якої в локації (Кар'єрна + Школа Кар'єрна разом) є однофамілець, — 🟡 «вибір» з усіма цими дітьми (ім'я, група, рядок, бюджет); 🟢 лише коли призначення називає ім'я однієї дитини або сума = бюджет лише однієї; дитина лише з карткою (нема рядка в Payment) — 🔴 з вибором рядка, не «авто»; індекс Школи Кар'єрної бере картки й з самої під-локації (був порожній)
 // v7.592: Польща — відшкодування за чеки працівнику → ZWROT і без слова «ZWROT» (_plIsReimb: «FAKTURA NR» без N/MM/РРРР, перелік покупок, RETURN / BADANIA; не ЗП, не оренда, не рахунки підрядників); «Bator Karolina» більше не ділиться як брати й сестри з «Bator Karol»; аркуш журналу без шапки — шапка відновлюється
@@ -9898,7 +9899,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.594', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.595', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -27317,6 +27318,39 @@ function _extractPayer(rec){
   return { raw: trim(cp), via: 'bank-unparsed' };
 }
 
+// v7.595: ГІГІЄНА КЛЮЧІВ ІНДЕКСУ. Ключ = перше слово ПІБ. Із поля «ПІБ мами: Юлія» (лише ім'я) чи «Анна Щербина» (ім'я першим)
+//   ключем ставало ІМ'Я — і будь-який платіж зі словом «Юлія» в призначенні пропонував Копил Давида (Осокорки), а
+//   «…Григоренко Анна Андріївна» з транзитного рахунку записався на Щербину Данила (Бігова, 06.11). Тепер:
+//   технічне (транзитний рахунок, ТОВ/ФОП/банк, цифри, телефон, «-») ключем не буває; ім'я на першому місці → беремо
+//   наступне слово, що не є ім'ям; лише ім'я → ключа нема. «Ім'я» — слово, яке в ПІБ мережі частіше стоїть другим, ніж першим.
+var _RC_TECH_RE = /транз|рахун|платеж|платіж|^[кk]\d|bank|банк|^тов$|^фоп$|^пп$|^ат$|^кб$|^[^a-zа-яіїєґ]|_/i;   // без \W: у JS без /u кирилиця — теж \W
+function _rcNameStats(list){
+  var first = {}, sur = {};
+  (list || []).forEach(function(v){ var t = _normPayerName(v).split(' ').filter(Boolean);
+    if (t.length >= 2){ sur[t[0]] = (sur[t[0]] || 0) + 1; first[t[1]] = (first[t[1]] || 0) + 1; } });
+  return {first:first, sur:sur};
+}
+function _rcIsFirstName(tok, st){ var f = (st && st.first[tok]) || 0, s = (st && st.sur[tok]) || 0; return f >= 2 && f > 2 * s; }
+// ключ прізвища для поля батьків / сторони договору; '' — ключа не ставимо. why — для діагностики.
+function _rcParentKey(v, st){
+  var t = _normPayerName(v).split(' ').filter(Boolean);
+  if (!t.length) return {key:'', why:'порожньо'};
+  if (_RC_TECH_RE.test(t[0]) || t[0].length < 3) return {key:'', why:'технічне'};
+  if (!_rcIsFirstName(t[0], st)) return {key:t[0], why:''};
+  for (var i = 1; i < t.length; i++){
+    if (t[i].length >= 3 && !_RC_TECH_RE.test(t[i]) && !_rcIsFirstName(t[i], st) && !/(вна|вич|ична|ович|івна|ївна)$/.test(t[i])) return {key:t[i], why:'ім\'я першим → ' + t[i]};
+  }
+  return {key:'', why:'лише ім\'я'};
+}
+// технічний платник (транзитний рахунок банку, організація без «Платник …» у призначенні) — не людина, не ключ
+function _rcIsTechPayer(payer, rec){
+  if (!payer) return true;
+  var t = _normPayerName(payer.raw).split(' ')[0] || '';
+  if (!t || _RC_TECH_RE.test(t)) return true;
+  // організація (8 цифр коду), а «Платник …» у призначенні не знайдено — не людина. Без коду (файл виписки) — як було.
+  return payer.via === 'bank-unparsed' && String((rec && rec.edrpou) || '').replace(/\D/g, '').length === 8;
+}
+
 // Індекс «ПРІЗВИЩЕ → [діти]» у межах локації. Три джерела прізвища:
 //   (A) ПІБ ДИТИНИ (кол. A Payment) — прізвище дитини часто = прізвище платника;
 //   (BJ) «сторона договору» у Payment;
@@ -27329,7 +27363,17 @@ function _buildPayerIndex(loc){
   // скільки віддано під-локації, скільки відкинуто без активної картки і
   // скільки дублів схлопнуто. scanned vs roster = поведінка до і після правила.
   var diag = { bjColDetected:false, fromChild:0, fromBJ:0, fromCard:0,
-               scanned:0, droppedBlock:0, droppedNoCard:0, mergedDup:0, cardRule:false };
+               scanned:0, droppedBlock:0, droppedNoCard:0, mergedDup:0, cardRule:false, badKeys:[] };
+  var cli = getClients();   // v7.595: раніше — для статистики імен (ключі батьків)
+  var _st = _rcNameStats(((cli && cli.ok && cli.data) || []).reduce(function(a, o){ a.push(o['ПІБ дитини'], o['ПІБ мами'], o['ПІБ тата']); return a; }, []));
+  function addParent(src, child, from){   // v7.595: поле батьків / сторони договору — лише справжнє прізвище
+    var pk = _rcParentKey(src, _st);
+    if (pk.why) diag.badKeys.push({from:from, value:String(src || '').slice(0, 60), child:child.childName, key:pk.key, why:pk.why});
+    if (!pk.key) return false;
+    var list = (idx[pk.key] = idx[pk.key] || []);
+    for (var i = 0; i < list.length; i++) if (list[i].childName === child.childName) return false;
+    list.push(child); return true;
+  }
   // add: childName унікальний у межах ключа-прізвища (одну дитину з різних джерел не дублюємо)
   function add(surnameSrc, child){
     var sk = _surnameKey(surnameSrc); if (!sk || !child.childName) return false;
@@ -27419,14 +27463,13 @@ function _buildPayerIndex(loc){
     var child = { childName: c.childName, row: c.row, group: c.group };
     payRows.push(child);
     if (add(c.childName, child)) diag.fromChild++;
-    if (c.party && add(c.party, child)) diag.fromBJ++;
+    if (c.party && addParent(c.party, child, 'сторона договору')) diag.fromBJ++;
   });
 
   // 5) CRM-картки: батьки (мама/тато/підписант) → той самий payRow по імені.
   //    Картки беремо з локації-хоста (для під-локації — з садка), для школи —
   //    лише активні, для під-локації — лише її блок.
   var byNorm = {}; payRows.forEach(function(c){ byNorm[_normNameVac(c.childName)] = c; });
-  var cli = getClients();
   if (cli && cli.ok){
     (cli.data || []).forEach(function(o){
       var cl = trim(o['Локація']);
@@ -27439,7 +27482,7 @@ function _buildPayerIndex(loc){
       var cn = trim(o['ПІБ дитини']); if (!cn) return;
       var child = byNorm[_normNameVac(cn)] || { childName: cn, row: -1, group: trim(o['Група']) };
       ['ПІБ мами', 'ПІБ тата', 'Підписант договору'].forEach(function(f){
-        var p = trim(o[f]); if (p && add(p, child)) diag.fromCard++;
+        var p = trim(o[f]); if (p && addParent(p, child, 'картка: ' + f)) diag.fromCard++;
       });
     });
   }
@@ -27537,6 +27580,17 @@ function _rcNamedIn(toks, kidName){
 }
 // Рішення по платежу. text — увесь текст запису, payerRaw — ПІБ платника, budgetOf(row) → бюджет місяця або null.
 // → {status:'auto'|'multi'|'none'|null, candidates, why, noRow}; null — пул з однієї дитини з рядком (як було).
+// v7.595: діти, у кого залишок до сплати за місяць (бюджет − факт) дорівнює сумі платежу. remOf(row) → число або null.
+function _rcByRemainder(roster, amount, remOf){
+  var amt = Math.round((Number(amount) || 0) * 100); if (amt <= 0) return [];
+  var out = [], seen = {};
+  (roster || []).forEach(function(r){
+    if (!(r.row >= 0) || seen[r.row]) return; seen[r.row] = 1;
+    var rem = remOf(r.row); if (rem == null) return;
+    if (Math.round(rem * 100) === amt) out.push({childName:r.name, row:r.row, group:r.group || '', remainder:rem});
+  });
+  return out;
+}
 function _rcNamesakeResolve(cands, roster, cardOnly, text, payerRaw, amount, budgetOf){
   if (!(cands || []).length) return null;
   var pool = _rcNamesakePool(cands, roster, cardOnly);
@@ -27636,31 +27690,40 @@ function reconcilePreview(body){
 
     var rows = payments.map(function(rec, i){
       var payer = _extractPayer(rec);
-      var sk = _surnameKey(payer.raw);               // КЛЮЧ = ПРІЗВИЩЕ платника
-      var uniq = (idx[sk] || []).slice();
+      var tech = _rcIsTechPayer(payer, rec);              // v7.595: транзитний / технічний платник — не людина
+      var sk = tech ? '' : _surnameKey(payer.raw);   // КЛЮЧ = ПРІЗВИЩЕ платника
+      var uniq = sk ? (idx[sk] || []).slice() : [];
       var matchVia = uniq.length ? 'payer' : '';
-      // _scanRecordForChildren сканує ВЕСЬ blob запису (включно з purpose),
-      // тож окремий purpose-фолбек зайвий. Текстовий матч → мітка 'text'.
-      var _pm = _scanRecordForChildren(rec, idx);
-      if (_pm.length){
-        var _seen = {}; uniq.forEach(function(c){ _seen[c.childName] = 1; });
-        _pm.forEach(function(c){ if (!_seen[c.childName]){ _seen[c.childName] = 1; uniq.push(c); } });
-        if (!matchVia) matchVia = 'text';
-      }            // вже dedup по childName в індексі
-
       var d = _recParseDate(rec.date);
       var jsMonth = d ? d.getMonth() : -1;
       var monthCol0 = (jsMonth >= 0) ? _detectMonthColByHeader(data, jsMonth) : -1;
       var factCol0  = (monthCol0 >= 0) ? _factColForType(monthCol0, type) : -1;
+      var budCol0 = (monthCol0 >= 0 && type !== 'vstup') ? monthCol0 + (type === 'extras' ? _LOp.budDop : _LOp.budNavch) : -1;
+      var _pm = _scanRecordForChildren(rec, idx);
+      var hint = [];
+      if (tech){
+        // v7.595: транзит — кандидати ЛИШЕ за сумою: діти локації, у кого залишок до сплати (бюджет − факт місяця) = сумі.
+        //   Діти, названі в призначенні, — лише підказка нагорі списку вибору (не «авто»).
+        uniq = _rcByRemainder(built.roster || [], rec.amount, function(r){
+          if (budCol0 < 0 || factCol0 < 0) return null;
+          var b = (data[r] || [])[budCol0]; if (b === '' || b == null) return null;
+          return (Number(toNum(b)) || 0) - (Number(toNum((data[r] || [])[factCol0])) || 0); });
+        matchVia = uniq.length ? 'amount' : '';
+        hint = _pm.filter(function(c){ return c.row >= 0; }).map(function(c){ return {childName:c.childName, row:c.row, group:c.group}; });
+      } else if (_pm.length){
+        // _scanRecordForChildren сканує ВЕСЬ blob запису (включно з purpose). Текстовий матч → мітка 'text'.
+        var _seen = {}; uniq.forEach(function(c){ _seen[c.childName] = 1; });
+        _pm.forEach(function(c){ if (!_seen[c.childName]){ _seen[c.childName] = 1; uniq.push(c); } });
+        if (!matchVia) matchVia = 'text';
+      }            // вже dedup по childName в індексі
 
       // Непорожній Факт — НОРМА (батьки платять частинами → сума ДОДАСТЬСЯ у Фазі 2).
       // Тому "дубля" по непорожній клітинці НЕ існує; справжній дубль = той самий
       // Референс уже у Звірки_Платежів — а у Фазі 1 (без записів) дублів не буває.
       var status = uniq.length === 0 ? 'none' : (uniq.length === 1 ? 'auto' : 'multi');
       // v7.593: однакове прізвище / дитина без рядка — не «авто» (див. _rcNamesakeResolve)
-      var budCol0 = (monthCol0 >= 0 && type !== 'vstup') ? monthCol0 + (type === 'extras' ? _LOp.budDop : _LOp.budNavch) : -1;
-      var nsWhy = '', noRow = false;
-      var ns = _rcNamesakeResolve(uniq, famRoster, cardOnly, _recSearchBlob(rec), payer.raw, rec.amount, function(r){
+      var nsWhy = tech ? (uniq.length === 1 ? 'транзит: сума = залишок до сплати' : (uniq.length ? 'транзит: кілька дітей із таким залишком — оберіть' : 'транзит: залишку, рівного сумі, нема — оберіть дитину')) : '', noRow = false;
+      var ns = tech ? null : _rcNamesakeResolve(uniq, famRoster, cardOnly, _recSearchBlob(rec), payer.raw, rec.amount, function(r){
         if (budCol0 < 0) return null; var v = (data[r] || [])[budCol0]; return (v === '' || v == null) ? null : (Number(toNum(v)) || 0); });
       if (ns){ status = ns.status; uniq = ns.candidates; nsWhy = ns.why; noRow = !!ns.noRow; }
       var existing = 0;
@@ -27681,7 +27744,7 @@ function reconcilePreview(body){
         applied: applied, appliedNoChild: (status === 'dup' && !applied.some(function(e){ return e.child; })),
         i: i, date: String(rec.date || ''), amount: Number(rec.amount) || 0, ref: String(rec.ref || ''),
         payerRaw: payer.raw, payerVia: payer.via, payerSurname: sk, matchVia: matchVia,
-        month: (jsMonth + 1), status: status, candidates: uniq, existing: existing, why: nsWhy, noRow: noRow,
+        month: (jsMonth + 1), status: status, candidates: uniq, existing: existing, why: nsWhy, noRow: noRow, tech: tech, hint: hint,
         factCol: factCol0 >= 0 ? _colLetter(factCol0) : ''
       };
     });

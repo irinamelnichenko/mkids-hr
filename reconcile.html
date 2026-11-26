@@ -2019,7 +2019,7 @@ function rcRowsHtml(p, g){
     } else if(x.status==='multi'){
       child='<select class="rc-sel" data-g="'+g+'" data-i="'+x.i+'" onchange="rcChkToggle(this)"><option value="">— оберіть —</option>'
         +x.candidates.map(function(c,ci){ return '<option value="'+ci+'"'+(c.row<0?' disabled':'')+'>'+escapeHtml(c.childName)+(c.group?' ('+escapeHtml(c.group)+')':'')
-          +(c.row<0?' — нема рядка':' · р.'+(c.row+1))+(c.budget!=null?' · бюджет '+fmtUah(c.budget):'')+'</option>'; }).join('')   // v7.593: ім'я, група, рядок, бюджет
+          +(c.row<0?' — нема рядка':' · р.'+(c.row+1))+(c.budget!=null?' · бюджет '+fmtUah(c.budget):'')+(c.remainder!=null?' · залишок '+fmtUah(c.remainder):'')+'</option>'; }).join('')   // v7.593 / v7.595 залишок: ім'я, група, рядок, бюджет
         +'</select>'+(x.why?'<div style="font-size:11px;color:#C77A12">'+escapeHtml(x.why)+'</div>':'');
     } else if(x.noRow && canManual){   // v7.593: картка без рядка в Payment — 🔴, обрати рядок
       child='<div style="font-size:11px;color:var(--red2)">картка: '+escapeHtml(x.candidates.map(function(c){ return c.childName+(c.group?' ('+c.group+')':''); }).join(', '))+' — рядка в Payment нема, оберіть рядок</div>'
@@ -2034,9 +2034,13 @@ function rcRowsHtml(p, g){
     } else if(isUO){
       child='<select class="rc-target" data-g="'+g+'" data-i="'+x.i+'" onchange="rcChkToggle2(this)"><option value="">— пропустити —</option><option value="uo237" selected>УО → рядок 237</option></select>';
     } else if(canManual){
-      child='<select class="rc-roster" data-g="'+g+'" data-i="'+x.i+'" onchange="rcChkToggle2(this)"><option value="">— обрати дитину —</option>'
+      // v7.595: транзит без збігу за сумою — названі в призначенні діти нагорі (лише підказка), далі вся локація
+      var _hint=(x.hint||[]).filter(function(h){ return h.row>=0; });
+      child=(x.why?'<div style="font-size:11px;color:var(--red2)">'+escapeHtml(x.why)+'</div>':'')
+        +'<select class="rc-roster" data-g="'+g+'" data-i="'+x.i+'" onchange="rcChkToggle2(this)"><option value="">— обрати дитину —</option>'
+        + (_hint.length?'<optgroup label="Названі в призначенні (сума ≠ залишку)">'+_hint.map(function(h){ return '<option value="'+h.row+'">'+escapeHtml(h.childName)+(h.group?' ('+escapeHtml(h.group)+')':'')+' · р.'+(h.row+1)+'</option>'; }).join('')+'</optgroup><optgroup label="Усі діти локації">':'')
         + p.roster.map(function(rc){ return '<option value="'+rc.row+'">'+escapeHtml(rc.name)+(rc.group?' ('+escapeHtml(rc.group)+')':'')+'</option>'; }).join('')
-        + '</select>';
+        + (_hint.length?'</optgroup>':'') + '</select>';
     } else child='<span style="color:var(--gray)">—</span>';
     if(writable){
       child+=' <select class="rc-type" data-g="'+g+'" data-i="'+x.i+'" title="стовпець" style="margin-left:4px;font-size:11px">'

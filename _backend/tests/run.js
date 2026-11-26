@@ -1158,6 +1158,35 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
   } else { fail++; console.log('✗ звірка: _rcNamesakeResolve не знайдено'); }
 }
 
+// ── v7.595: звірка — транзит не платник; ім'я з картки не ключ прізвища (Копил Давид на всіх «Юліях», Щербина 06.11) ──
+{
+  if (src.indexOf('\nfunction _rcParentKey(') >= 0){
+    const code = [varLine('_RC_TECH_RE'), fn('_lat2cyr'), fn('_normPayerName'), fn('_rcNameStats'), fn('_rcIsFirstName'), fn('_rcParentKey'), fn('_rcIsTechPayer'), fn('_rcByRemainder')].join('\n') +
+      ';return {_rcNameStats, _rcParentKey, _rcIsTechPayer, _rcByRemainder};';
+    const X = new Function('trim', code)((x) => String(x == null ? '' : x).trim());
+    const names = ['Копил Давид', 'Копил Богдан', 'Пархоменко Юлія', 'Іванова Юлія', 'Сидоренко Юлія', 'Щербина Данило', 'Григоренко Анна', 'Петренко Анна', 'Коваль Анна', 'Погосян Марина', 'Бондар Марина', 'Шевченко Максим', 'Олійник Наталія', 'Мельник Наталія'];
+    const st = X._rcNameStats(names);
+    const K = (v) => X._rcParentKey(v, st).key;
+    check('звірка: ключі батьків', "«Юлія» — не ключ; «Анна Щербина» → щербина; справжнє прізвище лишається; телефон, «-», транзит — не ключ",
+      {yu: K('Юлія'), an: K('Анна Щербина'), kop: K('Копил Богдан Костянтинович'), mar: K('Марина'), tel: K('+380 93 302 8528'), dash: K('-'), tr: K('K3_транз.рахунок платежі BP 3916731'), nat: K('Наталія Петрівна')},
+      {yu: '', an: 'щербина', kop: 'копил', mar: '', tel: '', dash: '', tr: '', nat: ''});
+    check('звірка: технічний платник', 'транзитний рахунок і організація без «Платник …» — технічні; людина (10 цифр, «від …») — ні; файл без коду — як було',
+      {k3: X._rcIsTechPayer({raw: 'K3_транз.рахунок платежі BP 3916731', via: 'bank-unparsed'}, {edrpou: '14360570'}),
+       k7: X._rcIsTechPayer({raw: 'К7_Транз.рахунок платежі bp 4696335', via: 'bank-unparsed'}, {}),
+       org: X._rcIsTechPayer({raw: 'ТОВ ФК ЕЛАЄНС', via: 'bank-unparsed'}, {edrpou: '38324133'}),
+       ind: X._rcIsTechPayer({raw: 'Копил Богдан Костянтинович', via: 'individual'}, {edrpou: '3012345678'}),
+       vid: X._rcIsTechPayer({raw: 'Кобзар Оксана', via: 'bank-vid'}, {edrpou: '14360570'}),
+       file: X._rcIsTechPayer({raw: 'Іваненко Олена', via: 'bank-unparsed'}, {edrpou: ''})},
+      {k3: true, k7: true, org: true, ind: false, vid: false, file: false});
+    const roster = [{name: 'Копил Давид', row: 50, group: 'Preschool'}, {name: 'Пархоменко Єва', row: 51}, {name: 'Горідько Юля', row: 52}, {name: 'Кулієва Софія', row: 53}];
+    const rem = {50: 20500, 51: 23800, 52: 23800, 53: 0};
+    check('звірка: транзит за сумою', '23 800 — двоє з таким залишком (🟡), 20 500 — один (🟢), 999 — нікого (🔴), уже сплачено (0) не кандидат',
+      {two: X._rcByRemainder(roster, 23800, (r) => rem[r]).map((c) => c.childName), one: X._rcByRemainder(roster, 20500, (r) => rem[r]).map((c) => c.childName),
+       none: X._rcByRemainder(roster, 999, (r) => rem[r]).length, zero: X._rcByRemainder(roster, 0, (r) => rem[r]).length},
+      {two: ['Пархоменко Єва', 'Горідько Юля'], one: ['Копил Давид'], none: 0, zero: 0});
+  } else { fail++; console.log('✗ звірка: _rcParentKey не знайдено'); }
+}
+
 // ── v7.594: відмітки допів не губляться — експорт не тримає ScriptLock, черга експорту, повтор на фронті ──
 {
   const need = ['_dopMutexTry', '_dopQueueAdd', 'dopExportQueueRun', '_dopExpLocked', 'bulkAttendanceMarks', '_attRejectLog'];
