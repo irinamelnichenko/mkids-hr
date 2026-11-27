@@ -1101,14 +1101,14 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
   const FP = {tabs: {
     'Payment 26': {months: {nov: {actual: 22}, dec: {actual: 24}}, rows: [{r: 5, a: 'Makar Didur'}]},
     'Salary 26': {months: {nov: {actual: 22}, dec: {actual: 24}}, rows: [{r: 5, a: 'KOLADA MAŁGORZATA'}]},
-    'OPEX 26': {months: {nov: {actual: 22}, dec: {actual: 24}}, rows: [{r: 20, a: 'TOTAL'}, {r: 29, a: 'MKIDS'}, {r: 48, a: 'Biedronka'}, {r: 52, a: 'PEPCO'}]},
+    'OPEX 26': {months: {nov: {actual: 22}, dec: {actual: 24}}, rows: [{r: 20, a: 'TOTAL'}, {r: 29, a: 'MKIDS'}, {r: 48, a: 'Biedronka'}, {r: 55, a: 'PEPCO 1669 PRUSZKOW 2'}]},
     'CF': {months: {nov: {actual: 38}, dec: {actual: 40}}, rows: []}}};
   const H = (d, a, t, adr) => ({acc: ACC, date: d, type: 'Blokada', amount: a, saldo: 0, desc: 'Tytuł : ' + t + '    | Lokalizacja : Adres : ' + adr + ' Miasto : PRUSZKOW Kraj : POLSKA'});
   const K = (d, ex, a, adr) => ({acc: ACC, date: d, type: 'Płatność kartą', amount: a, saldo: 5000, desc: 'Tytuł :  74988856 | Lokalizacja : Adres : ' + adr + ' Miasto : PRUSZKOW Kraj : POLSKA | Data wykonania operacji : ' + ex + ' | Oryginalna kwota operacji : ' + (-a) + ' | Numer karty : 456991******1621'});
   const h1 = H('2026-11-25', -24.99, 'P456991000051162187810016', 'JMP S.A. BIEDRONKA 546'), h2 = H('2026-11-26', -382.8, 'P456991000051162193809002', 'PEPCO 1581 MILANOWEK 1');
   const b1 = X._plBuild([Object.assign({}, h1), Object.assign({}, h2)], {PRUZSKOW: FP}, {});
   ck('pl блокада: розноска як витрата', 'дата = Data waluty; Biedronka → OPEX 48, PEPCO → рядок PEPCO; примітка без «блокада»',
-     b1.map((i) => i.status + ':' + i.cells.map((c) => c.a1 + '=' + c.val).join(',') + ':' + /блок/i.test(i.cells.map((c) => c.note).join(' '))), ['ok:V48=24.99:false', 'ok:V52=382.8:false']);
+     b1.map((i) => i.status + ':' + i.cells.map((c) => c.a1 + '=' + c.val).join(',') + ':' + /блок/i.test(i.cells.map((c) => c.note).join(' '))), ['ok:V48=24.99:false', 'ok:V55=382.8:false']);
   ck('pl блокада: картка / магазин', 'P + 16 цифр → 456991*1621 як у проведеній; номер магазину не важить', [X._plCardOf(h1), X._plCardOf(K('2026-11-27', '2026-11-25', -24.99, 'x')), X._plMerchKey(h1)], ['456991*1621', '456991*1621', 'JMP S A BIEDRONKA']);
   const pend = X._plBuild([{acc: ACC, date: '', type: 'Blokada', amount: -30, saldo: 0, desc: 'Tytuł : P4569910000511621'}], {PRUZSKOW: FP}, {});
   // журнал: обидві блокади внесено
@@ -1121,7 +1121,7 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
   const b2 = X._plBuild([Object.assign({}, p1), Object.assign({}, p2)], {PRUZSKOW: FP}, {ledger: led.keys, holds: led.open});
   ck('pl блокада проведена', 'та сама сума → «вже внесено», не вдруге; інша сума → доданок блокади × (проведена / блокада)',
      [b2[0].status, b2[0].holdOf === led.open[0].key, b2[1].status, b2[1].cells.map((c) => c.a1 + '=' + c.val).join(','), b2[1].holdFix.key === led.open[1].key, /блок/i.test(b2[1].cells[0].note)],
-     ['dup', true, 'ok', 'V52=380.5', true, false]);
+     ['dup', true, 'ok', 'V55=380.5', true, false]);
   const pl = X._plPlanCells([{key: 'C', file: 'F', parts: [{val: 380.5}], old: [100, 382.8], drop: [{val: 382.8, why: 'x'}]}], {incremental: true});
   ck('pl блокада: корекція клітинки', 'старий доданок 382,80 → 380,50, власні доданки лишаються', [pl[0].status, pl[0].formula], ['write', '=380.5+100']);
   const p3 = K('2026-12-08', '2026-12-07', -24.99, 'JMP S.A. BIEDRONKA 546'), p4 = Object.assign(K('2026-11-27', '2026-11-25', -24.99, 'JMP S.A. BIEDRONKA 546'), {desc: K('2026-11-27', '2026-11-25', -24.99, 'JMP S.A. BIEDRONKA 546').desc.replace('1621', '9877')});
@@ -1133,7 +1133,7 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
   const seen = {}, iss = X._plHoldIssues(led.open, {'4078': {from: '2026-11-25', to: '2026-12-02'}}, seen, {[led.open[0].key]: 1});
   const iss2 = X._plHoldIssues(led.open, {'4078': {from: '2026-11-25', to: '2026-11-28'}}, seen, {});
   ck('pl блокада зникла', 'не проведена за 5 днів → рішення Іри (нічого не віднімаємо); раніше — чекаємо; проведену не показуємо',
-     [iss.map((x) => x.status + ':' + x.amount + ':' + x.cells.join()), iss2.map((x) => x.status)], [['cancelled:-382.8:PRUZSKOW|OPEX 26|V52'], ['wait', 'wait']]);
+     [iss.map((x) => x.status + ':' + x.amount + ':' + x.cells.join()), iss2.map((x) => x.status)], [['cancelled:-382.8:PRUZSKOW|OPEX 26|V55'], ['wait', 'wait']]);
   ck('pl BALANCE з блокадами', 'листопад: банк без блокад → + блокади; проведена в грудні — назад; проведена в тому ж місяці — без поправки',
      X._plHoldAdj([{loc: 'P', holdMon: 'nov', cfAmount: -24.99, postMon: ''}, {loc: 'P', holdMon: 'nov', cfAmount: -380.5, postMon: 'dec'}, {loc: 'P', holdMon: 'nov', cfAmount: -10, postMon: 'nov'}]),
      {'P|nov': -405.49, 'P|dec': 380.5});
