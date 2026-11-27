@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.604
+// m.kids CRM — Google Apps Script v7.605
+// v7.605: «Оплати-Рік» оновлюється по одній локації з Payment (refreshYearlyLoc, логіка повного перезбору) — перед рахунками (refresh=1), перед масовою розсилкою і після кожного експорту допів
 // v7.604: рахунки — масову розсилку більше не блокує підтвердження CFO (додано в v7.530): список з ⚠ іде фінансисту «на перевірку CFO»; блок лише для дитини з від'ємним «До сплати» або помилкою в клітинці бюджету Payment
 // v7.603: вага і зріст — редагування й видалення виміру (медсестра своєї локації, директор, CFO); журнал «Вага_і_зріст_Журнал» (хто, коли, було → стало); видалення м'яке
 // v7.602: вага і зріст дитини — аркуш «Вага_і_зріст» (getGrowth / addGrowth / markGrowthSent); вносять медсестра, директор, CFO; старі квартальні заміри віддаються як історія
@@ -9905,7 +9906,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.604', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.605', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -10390,6 +10391,7 @@ function doPost(e) {
     else if (body.action === 'logViberSent')                result = logViberSent(body || {});          // v6.50.3
     else if (body.action === 'getInvoiceStatusReport')      result = getInvoiceStatusReport(body || {}); // v6.50.3
     else if (body.action === 'refreshYearlyAggregate')      result = refreshYearlyAggregate();           // лише агрегат (швидко)
+    else if (body.action === 'refreshYearlyLoc')            result = refreshYearlyLoc(body.loc, {force:true});   // v7.605 одна локація з Payment
     else if (body.action === 'reexportLocation')            result = reexportLocationFull(body.loc || '', body.month, body.year); // кнопка "Перерахувати локацію": Payment+Salary+агрегат
     else if (body.action === 'save')                        result = saveDashRecords(body.data || {});   // v7.106 дашборд-записи (S.recs) — збереження (upsert по ключу)
     else result = {ok:false, error:'Unknown action'};
@@ -17775,6 +17777,56 @@ function reaggregateYearlyAfterDedup(){
 function refreshYearlyAggregate(){
   var res = aggregatePaymentsYearly();
   return {ok: !!(res && res.ok), rows: (res && res.rows) || 0, errors: (res && res.errors) || []};
+}
+
+// ═══ v7.605: «Оплати-Рік» — оновлення ОДНІЄЇ локації з Payment (перед рахунками, перед масовою розсилкою, після експорту допів) ═══
+//   Рядки рахує _aggYearLocRows — та сама функція, що й повний перезбір (правила під-локацій, «Вибув», покриття передоплатою).
+//   НЕ _aggregateOneLoc (стара копія місячного агрегатора, псує «Оплати»). Інші локації не чіпаємо; запобіжники:
+//   локацію не знайдено / Payment не прочитався / нових рядків < половини старих (при > 10) — нічого не пишемо.
+//   Тротлінг: не частіше ніж раз на 90 с на локацію (force — без тротлінгу; експорт допів завжди з force).
+function _yearlyMergeLoc(vals, loc, newRows, width){
+  if (!vals || !vals.length) return {error:'Оплати-Рік порожній'};
+  var body = vals.slice(1), idx = [];
+  body.forEach(function(r, i){ if (String(r[0] == null ? '' : r[0]).trim() === loc) idx.push(i); });
+  var before = idx.length, after = newRows.length;
+  if (!after && before) return {error:'Payment «' + loc + '» дав 0 рядків (було ' + before + ') — зведення не змінено'};
+  if (before > 10 && after < before * 0.5) return {error:'Payment «' + loc + '» дав ' + after + ' рядків замість ' + before + ' — зведення не змінено'};
+  var pad = function(r){ r = r.slice(0, width); while (r.length < width) r.push(''); return r; };
+  var rows = newRows.map(pad);
+  var contiguous = before > 0 && idx[before - 1] - idx[0] === before - 1;
+  if (contiguous && before === after) return {inPlace:true, start:idx[0] + 2, rows:rows, before:before, after:after};
+  var at = before ? idx[0] : body.length, keep = body.filter(function(r){ return String(r[0] == null ? '' : r[0]).trim() !== loc; });
+  var shift = 0; for (var k = 0; k < before; k++) if (idx[k] < at) shift++;
+  var out = keep.slice(0, at - shift).concat(rows, keep.slice(at - shift)).map(pad);
+  return {inPlace:false, data:out, before:before, after:after};
+}
+function refreshYearlyLoc(loc, opts){
+  opts = opts || {}; loc = trim(loc || '');
+  if (!loc) return {ok:false, error:'loc обовʼязковий'};
+  var ck = 'yrloc_' + _nameFoldTight(loc), cache = CacheService.getScriptCache();
+  if (!opts.force){ try { if (cache.get(ck)) return {ok:true, skipped:'fresh', loc:loc}; } catch(_c){} }
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) return {ok:false, error:'зайнято — зведення не оновлено'};
+  try {
+    var cfg = SpreadsheetApp.openById(CONFIG_SHEET_ID).getSheets()[0].getDataRange().getValues(), cfgRow = null;
+    for (var i = 1; i < cfg.length; i++) if (trim(cfg[i][2]) === loc && trim(cfg[i][3])){ cfgRow = cfg[i]; break; }
+    if (!cfgRow) return {ok:false, error:'Локацію «' + loc + '» не знайдено в реєстрі'};
+    var now = new Date(), rows = _aggYearLocRows(cfgRow, now, formatDate(now));
+    var sh = getCRMSpreadsheet().getSheetByName(SHEET_YEARLY); if (!sh) return {ok:false, error:'Оплати-Рік не знайдено'};
+    var vals = sh.getDataRange().getValues(), width = vals[0].length;
+    var m = _yearlyMergeLoc(vals, loc, rows, width); if (m.error) return {ok:false, error:m.error};
+    if (m.inPlace) sh.getRange(m.start, 1, m.rows.length, width).setValues(m.rows);
+    else {
+      if (sh.getMaxRows() < m.data.length + 1) sh.insertRowsAfter(sh.getMaxRows(), m.data.length + 1 - sh.getMaxRows());
+      if (m.data.length) sh.getRange(2, 1, m.data.length, width).setValues(m.data);
+      var extra = (vals.length - 1) - m.data.length; if (extra > 0) sh.getRange(m.data.length + 2, 1, extra, width).clearContent();
+    }
+    SpreadsheetApp.flush();
+    _cacheBump('payyear');
+    try { cache.put(ck, '1', 90); } catch(_p){}
+    return {ok:true, loc:loc, before:m.before, after:m.after, inPlace:!!m.inPlace};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+  finally { try { lock.releaseLock(); } catch(_l){} }
 }
 
 // v7.299: рядок Оплати-Рік зі службового блоку («Вибув»='так'). Гроші — так, ростер — ні.
@@ -26973,7 +27025,14 @@ function _dopExpLocked(params, core){
   try { var r = core(params); try { SpreadsheetApp.flush(); } catch(_f){} return r; }
   finally { _DOP_EXP_LOCKED = false; _dopMutexRelease(); }
 }
-function exportAttendanceToPayments(params){ return _dopExpLocked(params, _exportAttendanceToPaymentsCore); }
+function exportAttendanceToPayments(params){
+  var r = _dopExpLocked(params, _exportAttendanceToPaymentsCore);
+  // v7.605: записали в Payment — одразу оновлюємо «Оплати-Рік» цієї локації (рахунки читають зведення)
+  if (r && r.ok && !r.queued && !(params && params.dryRun === true) && (Number(r.cellsWritten) || Number(r.formulaCellsConverted) || 0) > 0){
+    try { r.yearly = refreshYearlyLoc(String(params.loc || '').trim(), {force:true}); } catch(_y){ r.yearly = {ok:false, error:String(_y && _y.message || _y)}; }
+  }
+  return r;
+}
 function _exportAttendanceToPaymentsCore(params){
   try {
     var loc = String(params.loc || '').trim();
@@ -33069,6 +33128,7 @@ function _invBulkGuard(params){
   var key = _invChkKey(p.loc, p.payYear, p.payMonth, p.extYear, p.extMonth), ck = _invChkCacheKey(key), st = null;
   try { var hit = CacheService.getScriptCache().get(ck); if (hit){ try { st = JSON.parse(hit); } catch(_j){ st = {hash:hit, blocked:[], why:{}}; } } } catch(_c){}
   if (!st){
+    try { refreshYearlyLoc(p.loc, {}); } catch(_yr){}   // v7.605: перед масовою розсилкою — свіже зведення з Payment
     var pc = getInvoicePrecheck(p); if (!pc.ok) return pc;
     var why = {}; (pc.items || []).forEach(function(it){ if (it.block && it.block.length) why[it.name] = it.block.join('; '); });
     st = {hash:pc.hash, blocked:pc.blocked || [], why:why};
@@ -33118,6 +33178,9 @@ function getInvoiceListData(params){
     var extYear  = Number(params.extYear  || 0);
     if (!loc) return {ok:false, error:'Параметр loc обовʼязковий'};
     if (payMonth < 1 || payMonth > 12) return {ok:false, error:'payMonth має бути 1-12'};
+    // v7.605: перед формуванням рахунків — свіже зведення цієї локації з Payment (refresh=1 від сторінки рахунків / масової розсилки)
+    var _yr = null;
+    if (String(params.refresh || '') === '1' || params.refresh === true){ try { _yr = refreshYearlyLoc(loc, {}); } catch(_ry){ _yr = {ok:false, error:String(_ry && _ry.message || _ry)}; } }
     if (extMonth < 1 || extMonth > 12) return {ok:false, error:'extMonth має бути 1-12'};
 
     // === 1. Клієнти (фільтр: loc + status IN active/adaptation) ===
@@ -33339,7 +33402,8 @@ function getInvoiceListData(params){
       extMonth: extMonth, extYear: extYear,
       totalClients:  clients.length,
       shownChildren: children.length,
-      children: children
+      children: children,
+      yearly: _yr   // v7.605: оновлення «Оплати-Рік» перед рахунками (null — не просили)
     };
   } catch(e){
     Logger.log('[getInvoiceListData] EXCEPTION: %s\n%s', e && e.message, e && e.stack);

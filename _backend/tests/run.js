@@ -1175,6 +1175,31 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
   }
 }
 
+// ── v7.605: «Оплати-Рік» — оновлення однієї локації (_yearlyMergeLoc): інші локації цілі, запобіжники ──
+if (src.indexOf('\nfunction _yearlyMergeLoc(') >= 0){
+  const YM = new Function([fn('_yearlyMergeLoc')].join('\n') + '\nreturn _yearlyMergeLoc;')();
+  const H = ['Локація', 'Ім\'я', 'Грудень-Бюджет-доп'];
+  const V = [H, ['Позняки', 'А', 100], ['Голосієво', 'Благовісна Аліса', 3950], ['Голосієво', 'Бучковський Лука', 2980], ['Оранж', 'Б', 200]];
+  const same = YM(V, 'Голосієво', [['Голосієво', 'Благовісна Аліса', 4300], ['Голосієво', 'Бучковський Лука', 3410]], 3);
+  const grow = YM(V, 'Голосієво', [['Голосієво', 'Благовісна Аліса', 4300], ['Голосієво', 'Бучковський Лука', 3410], ['Голосієво', 'Нова Дитина', 400]], 3);
+  const shrink = YM(V, 'Голосієво', [['Голосієво', 'Благовісна Аліса', 4300]], 3);
+  const empty = YM(V, 'Голосієво', [], 3);
+  const big = [H].concat(Array.from({length: 20}, (_, i) => ['Голосієво', 'Д' + i, i])).concat([['Оранж', 'Б', 200]]);
+  const half = YM(big, 'Голосієво', [['Голосієво', 'Д0', 0], ['Голосієво', 'Д1', 1]], 3);
+  const fresh = YM(V, 'Тичини', [['Тичини', 'Т', 7, 'зайве']], 3);
+  check('Оплати-Рік: одна локація (Голосієво 27.11 +4 940)', 'та сама кількість — запис на місці; більше / менше — тіло з інших локацій без змін; 0 або < половини — нічого не пишемо; нова локація — у кінець',
+    {same: [same.inPlace, same.start, same.rows.map((r) => r[2])], grow: grow.data.map((r) => r[0] + ':' + r[2]), shrink: shrink.data.map((r) => r[0] + ':' + r[2]),
+     empty: empty.error, half: half.error, fresh: fresh.data.map((r) => r.join('|'))},
+    {same: [true, 3, [4300, 3410]], grow: ['Позняки:100', 'Голосієво:4300', 'Голосієво:3410', 'Голосієво:400', 'Оранж:200'], shrink: ['Позняки:100', 'Голосієво:4300', 'Оранж:200'],
+     empty: 'Payment «Голосієво» дав 0 рядків (було 2) — зведення не змінено', half: 'Payment «Голосієво» дав 2 рядків замість 20 — зведення не змінено',
+     fresh: ['Позняки|А|100', 'Голосієво|Благовісна Аліса|3950', 'Голосієво|Бучковський Лука|2980', 'Оранж|Б|200', 'Тичини|Т|7']});
+  const scat = YM([H, ['Голосієво', 'X', 1], ['Оранж', 'Б', 2], ['Голосієво', 'Y', 3]], 'Голосієво', [['Голосієво', 'X', 10], ['Голосієво', 'Y', 30]], 3);
+  check('Оплати-Рік: рядки локації не поспіль', 'збираються в один блок на місці першого, Оранж не губиться', {d: scat.inPlace ? 'inPlace' : scat.data.map((r) => r[0] + ':' + r[2])}, {d: ['Голосієво:10', 'Голосієво:30', 'Оранж:2']});
+  check('Оплати-Рік: не той перезбір', 'refreshYearlyLoc рахує рядки через _aggYearLocRows (як повний), без _aggregateOneLoc; експорт допів і масова розсилка його викликають',
+    {fn: /_aggYearLocRows\(cfgRow/.test(fn('refreshYearlyLoc')) && !/_aggregateOneLoc/.test(fn('refreshYearlyLoc')), exp: /refreshYearlyLoc\(/.test(fn('exportAttendanceToPayments')), bulk: /refreshYearlyLoc\(/.test(fn('_invBulkGuard')), inv: /refreshYearlyLoc\(/.test(fn('getInvoiceListData'))},
+    {fn: true, exp: true, bulk: true, inv: true});
+}
+
 // ── v7.604: рахунки — розсилку не блокує підтвердження CFO; ⛔ лише дитині з явно помилковою сумою; список «на перевірку CFO» ──
 if (src.indexOf('\nfunction _invPrecheckBlock(') >= 0){
   const HO = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures_holosiievo_1226.json'), 'utf8'));

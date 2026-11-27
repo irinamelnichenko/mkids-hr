@@ -1249,12 +1249,14 @@ async function loadInvoiceData(){
               '&payMonth=' + INV.payMonth +
               '&payYear='  + INV.payYear +
               '&extMonth=' + INV.extMonth +
-              '&extYear='  + INV.extYear;
+              '&extYear='  + INV.extYear +
+              '&refresh=1';   // v7.605: бекенд спершу оновлює «Оплати-Рік» цієї локації з Payment
     var r = await fetch(url, {redirect: 'follow'});
     if (!r.ok) throw new Error('HTTP ' + r.status);
     var json = await r.json();
     if (!json.ok) throw new Error(json.error || 'failed');
     INV.data = json;
+    if (json.yearly && json.yearly.ok === false) showToast('⚠️ Зведення з Payment не оновлено: ' + json.yearly.error + ' — суми можуть відставати', 'err', 7000);   // v7.605
     INV.sendStatus = null;
     renderInvoiceList();
     loadSendStatus();           // v6.50.3: підвантажує бейджі асинхронно
