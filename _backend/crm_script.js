@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.605
+// m.kids CRM — Google Apps Script v7.606
+// v7.606: рахунки рахують як боржники груп «Банк»: рахунок = «Бюджет» місяця з Payment (навч/доп окремо); борг = бюджет − факт поточного місяця, вступний, «потрібно звірити», відкладені — спільні _bank*-функції; власну логіку v7.528 («незакриті місяці») прибрано; перед розсилкою звірка сума рахунку = Payment, не збігається — «🔍 Потрібно звірити», рахунок не йде
 // v7.605: «Оплати-Рік» оновлюється по одній локації з Payment (refreshYearlyLoc, логіка повного перезбору) — перед рахунками (refresh=1), перед масовою розсилкою і після кожного експорту допів
 // v7.604: рахунки — масову розсилку більше не блокує підтвердження CFO (додано в v7.530): список з ⚠ іде фінансисту «на перевірку CFO»; блок лише для дитини з від'ємним «До сплати» або помилкою в клітинці бюджету Payment
 // v7.603: вага і зріст — редагування й видалення виміру (медсестра своєї локації, директор, CFO); журнал «Вага_і_зріст_Журнал» (хто, коли, було → стало); видалення м'яке
@@ -5148,10 +5149,10 @@ function _bankQueue(loc, catNames, exceptId){
   }
   return {sum:q, list:list};
 }
-function _bankDebtData(loc, now){
-  var cfg = _bankCfgRow(loc); if (!cfg) return {kids:[], facts:{}, cards:[]};
-  var Y = Number(Utilities.formatDate(now, 'Europe/Kiev', 'yyyy')), M = Number(Utilities.formatDate(now, 'Europe/Kiev', 'M'));
-  var rows = _aggYearLocRows(cfg, now, formatDate(now)), by = {}, facts = {};
+// v7.606: діти (бюджет / факт місяця M, переплата попередніх місяців) і «Факт вступ» по місяцях — з рядків «Оплати-Рік» або
+//   _aggYearLocRows (однаковий формат). Спільне для боржників груп «Банк» і рахунків батькам — одна логіка.
+function _bankKidsFromRows(rows, M){
+  var by = {}, facts = {};
   rows.forEach(function(row){
     var name = String(row[5] || '').trim(); if (!name || /^\(без імені/i.test(name) || row[row.length - 1] === 'так') return;
     var k = _dopAnKid(name), b = 6 + (M - 1) * 6;
@@ -5166,6 +5167,12 @@ function _bankDebtData(loc, now){
     var f = facts[k] || (facts[k] = {name:name, months:[0,0,0,0,0,0,0,0,0,0,0,0]});
     for (var m = 1; m <= 12; m++) f.months[m - 1] += toNum(row[6 + (m - 1) * 6 + 2]);
   });
+  return {by:by, facts:facts};
+}
+function _bankDebtData(loc, now){
+  var cfg = _bankCfgRow(loc); if (!cfg) return {kids:[], facts:{}, cards:[]};
+  var Y = Number(Utilities.formatDate(now, 'Europe/Kiev', 'yyyy')), M = Number(Utilities.formatDate(now, 'Europe/Kiev', 'M'));
+  var rows = _aggYearLocRows(cfg, now, formatDate(now)), KF = _bankKidsFromRows(rows, M), by = KF.by, facts = KF.facts;   // v7.606: спільне з рахунками
   var pm = _prevYM(Y, M);
   var inv = getInvoiceListData({loc:loc, payMonth:M, payYear:Y, extMonth:pm.m, extYear:pm.y});
   ((inv && inv.children) || []).forEach(function(ch){ var x = by[_dopAnKid(ch.name)]; if (x){ x.net = ch.studyNet; x.marks = Number(ch.extrasBreakdownSum) || 0; } });
@@ -9906,7 +9913,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.605', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.606', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -32919,84 +32926,69 @@ function _invMealForChild(meal, name){
   return {sum:sum, breakdown:bd, adj:adj, stale:stale, marks:mk.n};
 }
 
-// v7.528: «БОРГ / ПЕРЕПЛАТА ПОПЕРЕДНЬОГО ПЕРІОДУ» — ЛИШЕ З КЛІТИНОК ПОПЕРЕДНІХ МІСЯЦІВ.
-//   Досі рядок = бюджет місяця − нарахування (відмітки / договір − знижки): будь-яка ручна різниця бюджету ставала «переплатою
-//   попереднього періоду» (Позняки, Ткаленко Анна: «Бюджет доп» листопада BC5 = 8320, відмітки жовтня 8870 → «Переплата −550»,
-//   хоча вересневі 9250 нараховано й сплачено: AX5 = AW5 = 9250), а незакрита переплата (листопад сплачено ще в жовтні, AU ≫ AY)
-//   у суму рахунку не входила взагалі.
-//   Тепер: prev = Σ (Бюджет − Факт) місяців року до місяця рахунку (незакритий залишок); manual = бюджет місяця − нарахування.
-//   manual — «борг/переплата», лише якщо дорівнює нарахованому − сплаченому попереднього місяця (фінансист закрив місяць і переніс
-//   залишок; нараховане: додаткові — журнал експорту + ручні коригування, навчання — договір − знижки); інакше «Коригування (Payment)».
-//   Перенесли, не закривши місяць (залишок і в бюджеті, і в незакритому) — рахуємо один раз. До сплати = нарахування + manual + prev.
 function _invR2(x){ return Math.round((Number(x) || 0) * 100) / 100; }
 function _prevYM(y, m){ y = Number(y); m = Number(m); return m > 1 ? {y:y, m:m - 1} : {y:y - 1, m:12}; }
-function _invSplit(base, manual, explained, prevSum, prevLast){
-  manual = _invR2(manual); prevSum = _invR2(prevSum); prevLast = _invR2(prevLast);
-  var isCarry = manual !== 0 && explained != null && Math.abs(manual - _invR2(explained)) < 1;
-  var prev = (isCarry && Math.abs(prevLast - manual) < 1) ? _invR2(prevSum - prevLast) : prevSum;
-  return {debt:_invR2((isCarry ? manual : 0) + prev), adjust:(isCarry ? 0 : manual), carried:isCarry, prev:prev,
-          due:_invR2(base + manual + prev)};
+// v7.606: власну логіку боргів рахунків (v7.528 _invSplit / _invPrevBalances / _invStudyCalc / _invExtrasCalc — «незакриті місяці»)
+//   прибрано. Рахунок на місяць = «Бюджет» цього місяця з Payment (навч і доп окремо). Борг / переплата, вступний, «потрібно звірити» —
+//   ті самі функції, що й боржники груп «Банк» (еталон Осокорків 18.11): _bankKidsFromRows → _bankDebtorsCalc / _bankEntryCalc /
+//   _bankSuspectDebts, відкладені CFO (bankDebtHold) — _bankHoldFilter.
+function _invBankView(loc, rows, M, Y, cards, todayISO, hold, entryAdj){
+  var KF = _bankKidsFromRows(rows || [], M), kids = Object.keys(KF.by).map(function(k){ return KF.by[k]; });
+  var key = function(n){ return _dopAnKid(n); }, out = {debt:{}, entry:{}, suspect:{}, hold:{}};
+  (hold || []).forEach(function(n){ out.hold[key(n)] = 1; });
+  _bankHoldFilter(_bankDebtorsCalc(kids, {}), hold).forEach(function(d){ out.debt[key(d.name)] = {navch:d.navch, dop:d.dop, total:d.total}; });
+  _bankHoldFilter(_bankEntryCalc(cards || [], KF.facts, Y, todayISO, entryAdj || {}), hold).forEach(function(e){ out.entry[key(e.name)] = {fee:e.fee, paid:e.paid, debt:_invR2(e.fee - e.paid), contract:e.contract}; });
+  _bankHoldFilter(_bankSuspectDebts(kids), hold).forEach(function(x){ out.suspect[key(x.name)] = x.items; });
+  return out;
 }
-// v7.530: обгортки над _invSplit — ті самі виклики в списку рахунків, PDF і тестах (_backend/tests).
-//   Додаткові: marks — відмітки місяця; budget — «Бюджет доп»; stale + journalSum — експорт застарів (v7.354: ручна різниця
-//   рахується від записаного експортом). Навчання: net / netPrev — договір − знижки місяця й попереднього (null — немає договору).
-function _invExtrasCalc(marks, budget, journalSum, stale, pb){
-  pb = pb || {};
-  var man = stale ? budget - journalSum : budget - marks;
-  return _invSplit(marks, man, (pb.jPrev == null ? null : pb.jPrev - (pb.fdPrev || 0)), pb.dop || 0, pb.lastD || 0);
-}
-function _invStudyCalc(budget, net, netPrev, pb){
-  pb = pb || {};
-  return _invSplit((net == null ? budget : net), (net == null ? 0 : budget - net),
-                   ((net != null && netPrev != null) ? netPrev - (pb.fnPrev || 0) : null), pb.navch || 0, pb.lastN || 0);
-}
-// {ПІБ: {navch, dop (Σ Бюджет − Факт до місяця рахунку), lastN, lastD (те саме за попередній місяць), fnPrev, fdPrev, jPrev (нараховане
-//   «доп» попереднього місяця за журналом або null), month}}. Січень → {} (попередній рік в іншому файлі).
-function _invPrevBalances(loc, payMonth, vals, payYear){
-  var out = {}; payMonth = Number(payMonth) || 0; if (payMonth <= 1) return out;
-  if (!vals){ var sh = getCRMSpreadsheet().getSheetByName(SHEET_YEARLY); if (!sh) return out; vals = sh.getDataRange().getValues(); }
-  if (!vals || vals.length < 2) return out;
-  var h = vals[0].map(String), ni = h.indexOf("Ім'я дитини"), li = h.indexOf('Локація'), di = _yearlyDepartedIdx(h);
-  if (ni < 0 || li < 0) return out;
-  var year = Number(payYear) || new Date().getFullYear(), pm = payMonth - 1;
-  var jr = {};   // нормім'я → нараховане «доп» попереднього місяця (journal payment + dop-manual)
-  try {
-    var jv = _getExportJournalSheet().getDataRange().getValues();
-    for (var q = 1; q < jv.length; q++){
-      if (trim(String(jv[q][0])) !== loc || Number(jv[q][3]) !== year || Number(jv[q][4]) !== pm) continue;
-      var kd = trim(String(jv[q][1])); if (kd !== 'payment' && kd !== 'dop-manual') continue;
-      var nk = _journalNormName(jv[q][2]); var e = jr[nk] = jr[nk] || {pay:null, man:0};
-      if (kd === 'payment') e.pay = (e.pay || 0) + (Number(jv[q][5]) || 0); else e.man += (Number(jv[q][5]) || 0);
-    }
-  } catch(_j){ Logger.log('[invoice] журнал експорту: %s', _j && _j.message); }
-  var col = {};
-  for (var m = 1; m < payMonth; m++){ var mn = MONTHS_CAL[m - 1];
-    col[m] = {bn:h.indexOf(mn + '-Бюджет-навч'), fn:h.indexOf(mn + '-Факт-навч'), bd:h.indexOf(mn + '-Бюджет-доп'), fd:h.indexOf(mn + '-Факт-доп')}; }
-  var num = function(row, c){ return c >= 0 ? (Number(row[c]) || 0) : 0; };
-  for (var r = 1; r < vals.length; r++){
-    if (String(vals[r][li]).trim() !== loc) continue;
-    if (_isYearlyDeparted(vals[r], di)) continue;
-    var n = String(vals[r][ni]).trim(); if (!n) continue;
-    var o = out[n] = out[n] || {navch:0, dop:0, lastN:0, lastD:0, fnPrev:0, fdPrev:0, jPrev:null, month:MONTHS_CAL[pm - 1].toLowerCase(), _m:{}};
-    for (var k = 1; k < payMonth; k++){
-      var c = col[k], dn = num(vals[r], c.bn) - num(vals[r], c.fn), dd = num(vals[r], c.bd) - num(vals[r], c.fd);
-      o.navch = _invR2(o.navch + dn); o.dop = _invR2(o.dop + dd);
-      var mm = o._m[k] = o._m[k] || {bn:0, fn:0, bd:0, fd:0};   // v7.530: розшифровка по місяцях
-      mm.bn += num(vals[r], c.bn); mm.fn += num(vals[r], c.fn); mm.bd += num(vals[r], c.bd); mm.fd += num(vals[r], c.fd);
-      if (k === pm){ o.lastN = _invR2(o.lastN + dn); o.lastD = _invR2(o.lastD + dd); o.fnPrev += num(vals[r], c.fn); o.fdPrev += num(vals[r], c.fd); }
-    }
-  }
-  Object.keys(out).forEach(function(n){
-    var o = out[n], je = jr[_journalNormName(n)]; if (je && je.pay !== null) o.jPrev = _invR2(je.pay + je.man);
-    // v7.530: місяці з незакритим залишком (|бюджет − факт| ≥ 1) — для перевірки перед розсилкою
-    o.monN = []; o.monD = [];
-    Object.keys(o._m).map(Number).sort(function(a, b){ return a - b; }).forEach(function(k){
-      var mm = o._m[k], lb = MONTHS_CAL[k - 1];
-      if (Math.abs(mm.bn - mm.fn) >= 1) o.monN.push({m:k, label:lb, budget:_invR2(mm.bn), fact:_invR2(mm.fn), diff:_invR2(mm.bn - mm.fn)});
-      if (Math.abs(mm.bd - mm.fd) >= 1) o.monD.push({m:k, label:lb, budget:_invR2(mm.bd), fact:_invR2(mm.fd), diff:_invR2(mm.bd - mm.fd)});
-    });
-    delete o._m;
+// v7.606: звірка перед розсилкою — сума рахунку = «Бюджет» місяця в Payment (live: _aggYearLocRows). live {ключ: {bs, be}}.
+//   Не збігається → «🔍 Потрібно звірити», рахунок цій дитині не йде. Відкладені CFO (held) — не в списку.
+function _invVerifyDiff(children, live){
+  var out = {};
+  (children || []).forEach(function(c){
+    if (c.held) return;
+    var L = live[_dopAnKid(c.name)] || {bs:0, be:0}, msg = [];
+    var expS = c.prepayCovered ? 0 : _invR2(L.bs), gotS = _invR2(c.paymentSum), expE = _invR2(L.be), gotE = _invR2(c.extrasOnlySum != null ? c.extrasOnlySum : c.extrasSum);
+    if (Math.abs(gotS - expS) >= 0.5) msg.push('навчання: рахунок ' + gotS + ' ≠ Payment ' + expS);
+    if (Math.abs(gotE - expE) >= 0.5) msg.push('допи: рахунок ' + gotE + ' ≠ Payment ' + expE);
+    if (msg.length) out[c.name] = msg.join('; ');
   });
+  return out;
+}
+function _invEntryDueFor(loc, childName, client){
+  if (!(Number(client.entryFee) > 0) || !client.contractISO) return 0;
+  var sh = getCRMSpreadsheet().getSheetByName(SHEET_YEARLY); if (!sh) return 0;
+  var v = sh.getDataRange().getValues(), rows = v.slice(1).filter(function(r){ return String(r[0]).trim() === loc; });
+  var now = new Date(), Y = Number(Utilities.formatDate(now, 'Europe/Kiev', 'yyyy')), today = Utilities.formatDate(now, 'Europe/Kiev', 'yyyy-MM-dd');
+  var bv = _invBankView(loc, rows, Number(Utilities.formatDate(now, 'Europe/Kiev', 'M')), Y, [{name:childName, fee:Number(client.entryFee), contract:client.contractISO}], today, _bankHold(loc), _bankEntryAdj(loc));
+  var e = bv.entry[_dopAnKid(childName)]; return e ? _invR2(e.debt) : 0;
+}
+// v7.606: «Оплати-Рік» → суми рахунку місяця по дитині: {pay: Σ «Бюджет навч», dop: Σ «Бюджет доп», err: клітинки-помилки, rows: рядки локації}.
+//   Дві строки однієї дитини (Школа Осокорки: клас + «(без групи)») — складаються (v7.361). Вибулі (v7.299) — не для рахунків.
+function _invPayByName(pvals, loc, payMonth){
+  var out = {pay:{}, dop:{}, err:{}, rows:[]};
+  if (!pvals || pvals.length < 2) return out;
+  var budNavchCol = MONTHS_CAL[payMonth - 1] + '-Бюджет-навч', budDopCol = MONTHS_CAL[payMonth - 1] + '-Бюджет-доп';
+  var ph = pvals[0].map(function(h){ return String(h); }), nameIdx = ph.indexOf('Ім\'я дитини'), locIdx = ph.indexOf('Локація');
+  var budIdx = ph.indexOf(budNavchCol), dopIdx = ph.indexOf(budDopCol), depIdx = _yearlyDepartedIdx(ph);
+  if (nameIdx < 0 || locIdx < 0 || budIdx < 0){ Logger.log('[invoice] Оплати-Рік: немає колонок (%s)', budNavchCol); return out; }
+  for (var pr = 1; pr < pvals.length; pr++){
+    if (String(pvals[pr][locIdx]).trim() !== loc) continue;
+    out.rows.push(pvals[pr]);
+    if (_isYearlyDeparted(pvals[pr], depIdx)) continue;
+    var pname = String(pvals[pr][nameIdx]).trim(); if (!pname) continue;
+    out.pay[pname] = (out.pay[pname] || 0) + (Number(pvals[pr][budIdx]) || 0);
+    out.dop[pname] = (out.dop[pname] || 0) + (dopIdx >= 0 ? (Number(pvals[pr][dopIdx]) || 0) : 0);
+    var bE = _invCellErr(pvals[pr][budIdx]), dE = dopIdx >= 0 ? _invCellErr(pvals[pr][dopIdx]) : '';
+    if (bE || dE){ var e = out.err[pname] = out.err[pname] || []; if (bE) e.push(budNavchCol + ' = «' + bE + '»'); if (dE) e.push(budDopCol + ' = «' + dE + '»'); }
+  }
+  return out;
+}
+function _invLiveBudgets(loc, payMonth){
+  var cfg = _bankCfgRow(loc); if (!cfg) throw new Error('Локацію «' + loc + '» не знайдено в реєстрі');
+  var now = new Date(), rows = _aggYearLocRows(cfg, now, formatDate(now)), out = {}, b = 6 + (payMonth - 1) * 6;
+  rows.forEach(function(r){ var n = String(r[5] || '').trim(); if (!n || r[r.length - 1] === 'так') return;
+    var x = out[_dopAnKid(n)] || (out[_dopAnKid(n)] = {bs:0, be:0}); x.bs += toNum(r[b + 3]); x.be += toNum(r[b + 4]); });
   return out;
 }
 // Нарахування за навчання місяця: ціна договору (зі «Змінами суми») − знижки (реєстр; до реєстру — журнал відпустки).
@@ -33050,18 +33042,22 @@ function _invPrecheckBlock(c){
   if (sd < 0) r.push('До сплати за навчання від\'ємне: ' + _invR2(sd));
   if (ed < 0) r.push('До сплати за допи від\'ємне: ' + _invR2(ed));
   (c.budgetError || []).forEach(function(e){ r.push('Помилка в Payment: ' + e); });
+  if (c.verify) r.push('🔍 Потрібно звірити: ' + c.verify);   // v7.606: сума рахунку ≠ «Бюджет» у Payment
   return r;
 }
+// v7.606: список перевірки — борг поточного місяця, вступний, «потрібно звірити» (усе — спільні функції груп «Банк»), ⛔.
+//   Колонки «Незакриті місяці» і «Коригування» прибрано.
 function _invPrecheckItems(children){
   var items = [];
   (children || []).forEach(function(c){
-    var s = {budget:_invR2(c.studyBudget), net:(c.studyNet == null ? null : _invR2(c.studyNet)), carry:_invR2(c.studyCarry),
-             change:_invR2(c.studyChange), due:_invR2(c.paymentSum), months:c.prevNavch || []};
-    var e = {budget:_invR2(c.extrasPayment), marks:_invR2(c.extrasBreakdownSum), carry:_invR2(c.extrasAdjustment),
-             change:_invR2(c.extrasPaymentDiff), due:_invR2(c.extrasOnlySum != null ? c.extrasOnlySum : c.extrasSum), months:c.prevDop || []};
-    var fs = !!(s.carry || s.change), fe = !!(e.carry || e.change), bl = _invPrecheckBlock(c);
-    if (!fs && !fe && !bl.length) return;
-    var it = {name:c.name, group:c.group || '', study:(fs || bl.length ? s : null), extras:(fe ? e : null)};
+    var bl = _invPrecheckBlock(c), d = c.debt || {}, dn = d.navch ? _invR2(d.navch.debt) : 0, dd = d.dop ? _invR2(d.dop.debt) : 0;
+    var en = c.entryDue || null, sp = (c.suspect && c.suspect.length) ? c.suspect : null;
+    if (!bl.length && !dn && !dd && !en && !sp) return;
+    var it = {name:c.name, group:c.group || '',
+              study:{budget:_invR2(c.studyBudget), due:_invR2(c.paymentSum), debt:dn},
+              extras:{budget:_invR2(c.extrasPayment), marks:_invR2(c.extrasBreakdownSum), due:_invR2(c.extrasOnlySum != null ? c.extrasOnlySum : c.extrasSum), debt:dd},
+              entry:en ? {fee:_invR2(en.fee), paid:_invR2(en.paid), debt:_invR2(en.debt)} : null,
+              suspect:sp ? sp.map(function(x){ return {kind:x.kind, prepaid:_invR2(x.prepaid), debt:_invR2(x.debt)}; }) : null};
     if (bl.length) it.block = bl;
     items.push(it);
   });
@@ -33070,7 +33066,7 @@ function _invPrecheckItems(children){
 }
 function _invPrecheckHash(items){
   var src = JSON.stringify(items.map(function(it){
-    return [it.name, it.study && [it.study.budget, it.study.carry, it.study.change, it.study.due], it.extras && [it.extras.budget, it.extras.marks, it.extras.carry, it.extras.change, it.extras.due]];
+    return [it.name, [it.study.budget, it.study.due, it.study.debt], [it.extras.budget, it.extras.due, it.extras.debt], it.entry && it.entry.debt, (it.block || []).join('|')];
   }));
   var d = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, src, Utilities.Charset.UTF_8);
   return d.map(function(b){ return ('0' + (b & 0xff).toString(16)).slice(-2); }).join('').slice(0, 16);
@@ -33084,7 +33080,10 @@ function getInvoicePrecheck(params){
   try {
     var p = _invChkParams(params);
     if (!p.loc || !p.payMonth || !p.payYear) return {ok:false, error:'потрібні loc, payMonth, payYear'};
-    var inv = getInvoiceListData(p); if (!inv.ok) return inv;
+    var inv = getInvoiceListData({loc:p.loc, payMonth:p.payMonth, payYear:p.payYear, extMonth:p.extMonth, extYear:p.extYear, refresh:'1'}); if (!inv.ok) return inv;   // v7.606: спершу свіже зведення з Payment
+    // v7.606: сума рахунку = «Бюджет» місяця в Payment (читаємо Payment наживо); не збігається — «🔍 Потрібно звірити», рахунок не йде
+    var _ver = _invVerifyDiff(inv.children, _invLiveBudgets(p.loc, p.payMonth));
+    (inv.children || []).forEach(function(c){ if (_ver[c.name]) c.verify = _ver[c.name]; });
     var items = _invPrecheckItems(inv.children), hash = _invPrecheckHash(items), key = _invChkKey(p.loc, p.payYear, p.payMonth, p.extYear, p.extMonth);
     var last = null; try { last = _invPrecheckLastConfirm(key); } catch(_l){}
     var conf = last ? {hash:String(last['Хеш']), by:String(last['Хто']), at:_promoStampOut(last['Коли']), count:Number(last['Дітей у списку']) || 0,
@@ -33096,7 +33095,7 @@ function getInvoicePrecheck(params){
     var warn = items.filter(function(it){ return !(it.block && it.block.length); }).length;
     return {ok:true, loc:p.loc, payMonth:p.payMonth, payYear:p.payYear, extMonth:p.extMonth, extYear:p.extYear, key:key,
             items:items, hash:hash, totals:tot, confirmed:conf, needsConfirm:items.length > 0, needsReview:(items.length > 0 && !(conf && conf.valid)),
-            blocked:blocked, warnCount:warn, allowed:true};
+            blocked:blocked, warnCount:warn, verifyCount:Object.keys(_ver).length, yearly:inv.yearly || null, allowed:true};
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 // POST invoicePrecheckConfirm {loc, payMonth, payYear, extMonth?, extYear?, hash} — лише CFO; хеш має збігтися з поточним.
@@ -33128,7 +33127,7 @@ function _invBulkGuard(params){
   var key = _invChkKey(p.loc, p.payYear, p.payMonth, p.extYear, p.extMonth), ck = _invChkCacheKey(key), st = null;
   try { var hit = CacheService.getScriptCache().get(ck); if (hit){ try { st = JSON.parse(hit); } catch(_j){ st = {hash:hit, blocked:[], why:{}}; } } } catch(_c){}
   if (!st){
-    try { refreshYearlyLoc(p.loc, {}); } catch(_yr){}   // v7.605: перед масовою розсилкою — свіже зведення з Payment
+    try { refreshYearlyLoc(p.loc, {force:true}); } catch(_yr){}   // v7.605/7.606: перед масовою розсилкою — свіже зведення з Payment (без тротлінгу)
     var pc = getInvoicePrecheck(p); if (!pc.ok) return pc;
     var why = {}; (pc.items || []).forEach(function(it){ if (it.block && it.block.length) why[it.name] = it.block.join('; '); });
     st = {hash:pc.hash, blocked:pc.blocked || [], why:why};
@@ -33143,9 +33142,11 @@ function _invBulkGuard(params){
 function _invPrecheckMarkPending(pc, who){
   var rd = _promoRead(INVCHK_TAB, INVCHK_HEADER);
   if (rd.rows.some(function(r){ return String(r['Ключ']) === pc.key && String(r['Хеш']) === pc.hash; })) return false;
-  rd.sh.getRange(1, 1, rd.sh.getMaxRows(), 4).setNumberFormat('@');
-  rd.sh.appendRow([pc.key, pc.loc, pc.payYear + '-' + ('0' + pc.payMonth).slice(-2), pc.extYear + '-' + ('0' + pc.extMonth).slice(-2),
-                   pc.hash, pc.items.length, trim(who) || 'директор', _promoStamp(), INVCHK_PENDING]);
+  var nr = rd.sh.getLastRow() + 1, row = [pc.key, pc.loc, pc.payYear + '-' + ('0' + pc.payMonth).slice(-2), pc.extYear + '-' + ('0' + pc.extMonth).slice(-2),
+                   pc.hash, pc.items.length, trim(who) || 'директор', _promoStamp(), INVCHK_PENDING];
+  if (rd.sh.getMaxRows() < nr) rd.sh.insertRowsAfter(rd.sh.getMaxRows(), nr - rd.sh.getMaxRows());
+  rd.sh.getRange(nr, 1, 1, 4).setNumberFormat('@');   // v7.606: «2026-12» лишається текстом (appendRow за межею формату робив з нього дату)
+  rd.sh.getRange(nr, 1, 1, row.length).setValues([row]);
   return true;
 }
 // Чисте: які списки чекають на перегляд CFO — «на перевірку» без пізнішого «переглянуто» з тим самим хешем
@@ -33156,7 +33157,8 @@ function _invPendingFrom(rows){
     if (String(r['Статус'] || '') !== INVCHK_PENDING) return;
     var k = String(r['Ключ']); if (seen[k]) return; seen[k] = 1;   // лише найсвіжіший список по ключу
     if (ok[k + '|' + String(r['Хеш'])]) return;
-    out.push({key:k, loc:String(r['Локація']), pay:String(r['Навчання']), ext:String(r['Додаткові']), hash:String(r['Хеш']), count:Number(r['Дітей у списку']) || 0,
+    var ym = function(v){ return (v instanceof Date && !isNaN(v.getTime())) ? v.getFullYear() + '-' + ('0' + (v.getMonth() + 1)).slice(-2) : String(v == null ? '' : v); };   // v7.606: Sheets міг зробити дату
+    out.push({key:k, loc:String(r['Локація']), pay:ym(r['Навчання']), ext:ym(r['Додаткові']), hash:String(r['Хеш']), count:Number(r['Дітей у списку']) || 0,
               by:String(r['Хто']), at:_promoStampOut(r['Коли'])});
   });
   return out;
@@ -33208,40 +33210,11 @@ function getInvoiceListData(params){
     var paymentByName = {};
     var budgetErrByName = {};   // v7.604
     var extrasByPayment = {};   // v6.11.16: "<Місяць>-Бюджет-доп" — загальна сума додаткових ДО СПЛАТИ
-    var prevBal = {};           // v7.528: залишок попередніх місяців — борг/переплата попереднього періоду (_invPrevBalances)
+    var locRows = [];           // v7.606: рядки локації з «Оплати-Рік» — для спільної логіки боргів (групи «Банк»)
     var paySheet = getCRMSpreadsheet().getSheetByName(SHEET_YEARLY);
-    var budNavchCol = MONTHS_CAL[payMonth - 1] + '-Бюджет-навч';
-    var budDopCol   = MONTHS_CAL[payMonth - 1] + '-Бюджет-доп';
     if (paySheet){
-      var pvals = paySheet.getDataRange().getValues();
-      try { prevBal = _invPrevBalances(loc, payMonth, pvals, payYear); } catch(_pb){ prevBal = {}; }
-      if (pvals.length >= 2){
-        var phdrs = pvals[0].map(function(h){ return String(h); });
-        var nameIdx = phdrs.indexOf('Ім\'я дитини');
-        var locIdx  = phdrs.indexOf('Локація');
-        var budIdx  = phdrs.indexOf(budNavchCol);
-        var dopIdx  = phdrs.indexOf(budDopCol);
-        var depIdx  = _yearlyDepartedIdx(phdrs);   // v7.299
-        if (nameIdx < 0 || locIdx < 0 || budIdx < 0){
-          Logger.log('[getInvoiceListData] Оплати-Рік headers missing: name=%s loc=%s bud=%s (col="%s")',
-            nameIdx, locIdx, budIdx, budNavchCol);
-        } else {
-          if (dopIdx < 0) Logger.log('[getInvoiceListData] ⚠ колонку "%s" не знайдено — extrasSum=0 для всіх', budDopCol);
-          for (var pr = 1; pr < pvals.length; pr++){
-            if (String(pvals[pr][locIdx]).trim() !== loc) continue;
-            if (_isYearlyDeparted(pvals[pr], depIdx)) continue;   // v7.299: вибулі — не для рахунків
-            var pname = String(pvals[pr][nameIdx]).trim();
-            if (!pname) continue;
-            // v7.361: та сама дитина двічі в Payment (Школа Осокорки: рядок у класі + старий рядок «(без групи)»
-            // з нулями) — СКЛАДАЄМО. Раніше останній рядок перезаписував перший, і рахунок показував 0.
-            paymentByName[pname]   = (paymentByName[pname]   || 0) + (Number(pvals[pr][budIdx]) || 0);
-            extrasByPayment[pname] = (extrasByPayment[pname] || 0) + (dopIdx >= 0 ? (Number(pvals[pr][dopIdx]) || 0) : 0);
-            // v7.604: клітинка бюджету — не число (#ERROR!, #REF!, текст) → сума рахунку явно помилкова
-            var _bE = _invCellErr(pvals[pr][budIdx]), _dE = dopIdx >= 0 ? _invCellErr(pvals[pr][dopIdx]) : '';
-            if (_bE || _dE){ budgetErrByName[pname] = budgetErrByName[pname] || []; if (_bE) budgetErrByName[pname].push(budNavchCol + ' = «' + _bE + '»'); if (_dE) budgetErrByName[pname].push(budDopCol + ' = «' + _dE + '»'); }
-          }
-        }
-      }
+      var _pbn = _invPayByName(paySheet.getDataRange().getValues(), loc, payMonth);   // v7.606: чиста функція (тест «рахунки = бюджет»)
+      paymentByName = _pbn.pay; extrasByPayment = _pbn.dop; budgetErrByName = _pbn.err; locRows = _pbn.rows;
     } else {
       Logger.log('[getInvoiceListData] Sheet "%s" не знайдено — paymentSum буде 0 для всіх', SHEET_YEARLY);
     }
@@ -33293,15 +33266,17 @@ function getInvoiceListData(params){
     // «Борг/Переплата (харчування)», застарілий експорт (журнал kind='meal') боргом не показуємо, як і для додаткових.
     var _meal = _invMealData(_invSub ? _invSub.host : loc, payMonth, payYear, extMonth, extYear);
 
-    // v7.354: журнал експорту (що експорт востаннє записав у «Бюджет доп» місяця рахунку). Потрібен, щоб
-    // відрізнити РУЧНУ правку (клітинка − записане експортом → «Борг/Переплата») від ЗАСТАРІЛОГО експорту
-    // (записане − поточні відмітки: відмітки змінили після експорту). Застарілий експорт НЕ показуємо боргом —
-    // до сплати = відмітки + ручна правка (те саме, що запише наступний експорт). Лише коли місяць рахунку =
-    // місяць відміток + 1 (звичайний режим) і в журналі є запис дитини; інакше — як раніше.
-    var _jNext = _nextMonth(extMonth, extYear), _jByName = null;
-    if (_jNext.month === payMonth && _jNext.year === payYear){
-      try { _jByName = _readJournalForTarget(_invSub ? _invSub.host : loc, 'payment', payYear, payMonth).byNormName; } catch(_je){ _jByName = null; }
-    }
+    // v7.606: борг / переплата, вступний, «потрібно звірити» — ТІ САМІ функції, що й боржники груп «Банк» (_bankKidsFromRows →
+    //   _bankDebtorsCalc / _bankEntryCalc / _bankSuspectDebts, відкладені CFO — _bankHoldFilter). Поточний місяць = місяць перед місяцем
+    //   рахунку: бюджет − факт ЦЬОГО місяця, навч і доп окремо; минулі місяці не тягнемо (CFO переносить борги в бюджет сама).
+    var _bv = {debt:{}, entry:{}, suspect:{}, hold:{}};
+    try {
+      var _cm = _prevYM(payYear, payMonth), _today = Utilities.formatDate(new Date(), 'Europe/Kiev', 'yyyy-MM-dd');
+      var _cards = clients.filter(function(c){ var st = String(c['Статус'] || '').trim(); return st === 'active' || st === 'adaptation'; }).map(function(c){
+        var d = c['Дата договору']; return {name:String(c['ПІБ дитини'] || '').trim(), fee:Number(c['Вступний внесок']) || 0,
+                                             contract:(d instanceof Date ? Utilities.formatDate(d, 'Europe/Kiev', 'yyyy-MM-dd') : (_toISO(d) || ''))}; });
+      _bv = _invBankView(loc, locRows, _cm.m, _cm.y, _cards, _today, _bankHold(loc), _bankEntryAdj(loc));
+    } catch(_bvE){ Logger.log('[invoice] спільна логіка боргів: %s', _bvE && _bvE.message); }
 
     // === 4. Збираємо response — фільтр paymentSum > 0 OR extrasSum > 0 ===
     var children = [], _stCache = {};
@@ -33317,17 +33292,8 @@ function getInvoiceListData(params){
       var extras = extrasByChild[name] || {sum: 0, breakdown: {}};
       var extrasBreakdownSum = extras.sum;                    // сума занять з відмічань (розписка)
       var extrasSum = extrasByPayment[name] || 0;             // v6.11.16: до сплати = "<Місяць>-Бюджет-доп"
-      var extrasStale = 0, extrasPayment = extrasSum;          // v7.354
+      var extrasPayment = extrasSum;                          // v7.606: рахунок за допи = «Бюджет доп» місяця рахунку (Payment)
       var _ml = _meal ? _invMealForChild(_meal, name) : null;  // v7.357
-      var _je = _jByName ? _jByName[_journalNormName(name)] : null;
-      if (_je) extrasStale = (Number(_je.sum) || 0) - extrasBreakdownSum;   // ≠0 → відмітки змінили після експорту (інформативно)
-      // v7.528: manual = «Бюджет доп» − відмітки (застарілий експорт — − записане експортом, v7.354); борг/переплата — лише з
-      // попередніх місяців (_invSplit); інша ручна різниця — «Коригування (Payment)» + позначка для фінансиста.
-      var _pbE = prevBal[name] || {navch:0, dop:0, lastN:0, lastD:0, fnPrev:0, fdPrev:0, jPrev:null, month:''};
-      var _spE = _invExtrasCalc(extrasBreakdownSum, extrasPayment, (_je ? Number(_je.sum) || 0 : 0), (extrasStale !== 0 && !!_je), _pbE);
-      var extrasAdjustment = _spE.debt;          // рядок «Борг / Переплата попереднього періоду»
-      var extrasPaymentDiff = _spE.adjust;       // рядок «Коригування (Payment)» — ручна різниця без залишку минулих місяців
-      extrasSum = Math.max(0, _spE.due);
       // Fix A: graduated (випускник) показуємо ЛИШЕ якщо є додаткові за extMonth;
       // "голі" випускники без занять — не показуємо (рахунок тільки на гуртки).
       if (String(c['Статус'] || '').trim() === 'graduated' && extrasBreakdownSum <= 0) return;
@@ -33343,16 +33309,13 @@ function getInvoiceListData(params){
       var signerPhone = signer === 'dad' ? String(c['Телефон тата']|| '') : String(c['Телефон мами']|| '');
       var signerEmail = signer === 'dad' ? String(c['Email тата']  || '') : String(c['Email мами']  || '');
 
-      // v7.528: навчання — до сплати = бюджет + незакритий залишок «навч»; нарахування = договір − знижки (для рядка «Коригування»)
+      // v7.606: рахунок за навчання = «Бюджет навч» місяця рахунку (Payment). Договір − знижки (studyNet) — лише для розбивки рядків PDF і груп «Банк».
       var _stC = _invStudyCharge({id:String(c['ID'] || ''), name:name, fee:Number(c['Сума договору']) || 0,
                                   feeHist:_promoJSON(c['Зміни суми (JSON)'], []), regFrom:_promoYM(c[CARD_COL_REGFROM])}, loc, payYear, payMonth, _stCache);
-      var studyBudget = paymentSum, _pmS = _prevYM(payYear, payMonth), _stP = null;
-      if (_stC.net != null && payMonth > 1){ try { _stP = _invStudyCharge({id:String(c['ID'] || ''), name:name, fee:Number(c['Сума договору']) || 0,
-        feeHist:_promoJSON(c['Зміни суми (JSON)'], []), regFrom:_promoYM(c[CARD_COL_REGFROM])}, loc, _pmS.y, _pmS.m, _stCache); } catch(_sp){} }
-      var _spS = _invStudyCalc(paymentSum, _stC.net, (_stP ? _stP.net : null), _pbE);
-      paymentSum = Math.max(0, _spS.due);
+      var studyBudget = paymentSum;
       var _covL = _coverFor(payYear + '-' + ('0' + payMonth).slice(-2), String(c['ID'] || ''), name, loc);   // v7.415
       if (_covL) paymentSum = 0;   // навчання за місяць покрито передоплатою — рахунок за навчання не формуємо
+      var _kk = _dopAnKid(name);
       children.push({
         id: String(c['ID'] || ''),
         name: name,
@@ -33361,19 +33324,15 @@ function getInvoiceListData(params){
         status: String(c['Статус'] || '').trim(),
         paymentSum: paymentSum,
         studyBudget: studyBudget,                     // v7.528: «Бюджет навч» місяця в Payment
-        studyCarry: _spS.debt,                        // v7.528: «Борг / Переплата попереднього періоду» (навчання)
-        studyChange: _spS.adjust,                     // v7.528: «Коригування суми за місяць (Payment)» — не пояснене попередніми місяцями
-        prevMonth: _pbE.month || '',
-        prevNavch: _pbE.monN || [],                   // v7.530: місяці з незакритим залишком «навч» (бюджет, факт, різниця)
-        prevDop: _pbE.monD || [],                     // v7.530: те саме для «доп»
+        debt: _bv.debt[_kk] || null,                  // v7.606: борг поточного місяця {navch:{debt}, dop:{debt}} — як у групах «Банк»
+        entryDue: _bv.entry[_kk] || null,             // v7.606: вступний {fee, paid} — як у групах «Банк»
+        suspect: _bv.suspect[_kk] || null,            // v7.606: «🔍 Потрібно звірити» (_bankSuspectDebts)
+        held: !!_bv.hold[_kk],                        // v7.606: bankDebtHold — не в боржниках і не в «Потрібно звірити»
         studyNet: _stC.net,                           // v7.530: договір − знижки місяця (null — договору немає)
         budgetError: budgetErrByName[name] || [],     // v7.604: клітинки бюджету з помилкою (#ERROR! тощо)
-        extrasPaymentDiff: extrasPaymentDiff,         // v7.528: «Коригування (Payment)» додаткових; ≠ 0 — позначка для фінансиста
         extrasSum: extrasSum + (_ml ? _ml.sum : 0),   // v7.357: до сплати ФОП додаткових = додаткові + харчування
         extrasBreakdown: breakdownArr,
         extrasBreakdownSum: extrasBreakdownSum,
-        extrasAdjustment: extrasAdjustment,
-        extrasStale: extrasStale,       // v7.354: різниця «записано експортом − відмітки» (0 = експорт актуальний)
         extrasOnlySum: extrasSum,       // v7.357: лише додаткові (extrasSum нижче = додаткові + харчування)
         mealsSum: _ml ? _ml.sum : 0, mealsBreakdown: _ml ? _ml.breakdown : [], mealsAdjustment: _ml ? _ml.adj : 0, mealsStale: _ml ? _ml.stale : 0,
         extrasPayment: extrasPayment,   // v7.354: що зараз стоїть у Payment (Оплати-Рік)
@@ -33636,20 +33595,17 @@ function generateInvoicePDF(opts){
     if (!inv.ok) return {ok:false, error: inv.error};
     var ch = null;
     (inv.children || []).forEach(function(c){ if (String(c.name).trim() === childName) ch = c; });
-    if (!ch || (Number(ch.extrasSum) || 0) === 0 || ((!ch.extrasBreakdown || !ch.extrasBreakdown.length) && !(ch.mealsBreakdown || []).length && !((Number(ch.extrasAdjustment) || 0) + (Number(ch.extrasPaymentDiff) || 0) > 0))){   // v7.357: або лише харчування; v7.528: або лише борг
+    if (!ch || (Number(ch.extrasSum) || 0) <= 0){   // v7.606: рахунок за допи = «Бюджет доп» (+ харчування); 0 — не формується
       return {ok:false, error:'У дитини "' + childName + '" немає додаткових занять за ' + MONTHS_CAL[month - 1] + ' ' + year + '. Рахунок не формується.'};
     }
     ch.extrasBreakdown.forEach(function(b){
       // v6.50.1: НЕ дублюємо ПІБ дитини в назві послуги (вона вгорі у "Замовник").
       lines.push({name: b.name, qty: b.count, price: b.price, sum: b.total});
     });
-    var adj = Number(ch.extrasAdjustment) || 0;   // v7.528: лише з попередніх місяців (_invSplit)
-    if (adj > 0)      lines.push({name: LABEL_DEBT,    qty: 1, price: adj, sum: adj});
-    else if (adj < 0) lines.push({name: LABEL_OVERPAY, qty: 1, price: adj, sum: adj});
-    var _eAdj = Number(ch.extrasPaymentDiff) || 0;   // v7.528: ручна різниця «Бюджет доп» — не борг
-    if (_eAdj) lines.push({name: 'Коригування за даними Payment', qty: 1, price: _eAdj, sum: _eAdj});
-    var _eb = (ch.extrasBreakdownSum || 0) + adj + _eAdj;   // переплата більша за нарахування → до сплати 0, решта переходить далі
-    if (_eb < 0) lines.push({name: 'Залишок переплати переходить на наступний місяць', qty: 1, price: -_eb, sum: -_eb});
+    // v7.606: сума = «Бюджет доп» з Payment; рядки — відмітки, різниця з бюджетом — одним рядком (без підрахунку минулих місяців)
+    var _eDiff = _invR2((Number(ch.extrasOnlySum) || 0) - (Number(ch.extrasBreakdownSum) || 0));
+    if (_eDiff > 0)      lines.push({name: LABEL_DEBT, qty: 1, price: _eDiff, sum: _eDiff});
+    else if (_eDiff < 0) lines.push({name: 'Коригування за даними Payment', qty: 1, price: _eDiff, sum: _eDiff});
     // v7.357: харчування — окремими рядками в тому самому рахунку (той самий одержувач)
     (ch.mealsBreakdown || []).forEach(function(b){ lines.push({name: 'Харчування: ' + b.name, qty: b.count, price: b.price, sum: b.total}); _hasMeals = true; });
     var madj = Number(ch.mealsAdjustment) || 0; if (madj) _hasMeals = true;
@@ -33675,15 +33631,12 @@ function generateInvoicePDF(opts){
     // далі кожна знижка «Знижка: …» (мінус), а борг/переплата — лише від ціни ВЖЕ ЗІ ЗНИЖКАМИ.
     // До PROMO_START_YM реєстру немає — знижку відпустки беремо з журналу експорту (kind=vacation).
     // Total НЕ змінюється (= sum, тобто Бюджет місяця).
-    // v7.528: борг/переплата — незакритий залишок попередніх місяців (Payment: Бюджет − Факт), див. _invPrevBalances.
+    // v7.606: сума = «Бюджет навч» з Payment; рядки — договір і знижки, різниця з бюджетом — одним рядком (без підрахунку минулих місяців)
     var _stI = _invStudyCharge({id:client.id, name:childName, fee:_mf, feeHist:client.feeHist || [], regFrom:client.regFrom}, loc, year, month, {});
     var _discL = _stI.disc, _fs = _stI.fs;
     _mf = _stI.fee;
-    var _pbI = (_invPrevBalances(loc, month, null, year) || {})[childName] || {navch:0, lastN:0, fnPrev:0, month:''};
-    var _pmI = _prevYM(year, month), _stIP = null;
-    if (_stI.net != null && month > 1){ try { _stIP = _invStudyCharge({id:client.id, name:childName, fee:Number(client.monthlyFee) || 0, feeHist:client.feeHist || [], regFrom:client.regFrom}, loc, _pmI.y, _pmI.m, {}); } catch(_sp){} }
-    var _spI = _invStudyCalc(_budI, _stI.net, (_stIP ? _stIP.net : null), _pbI);
-    var _dI = {carry:_spI.debt, change:_spI.adjust, due:_spI.due};
+    var _gap = (_stI.net == null) ? 0 : _invR2(_budI - _stI.net);
+    var _dI = {carry:(_gap > 0 ? _gap : 0), change:(_gap < 0 ? _gap : 0), due:_budI};
     var _chgName = 'Коригування суми за ' + (MONTHS_CAL[month - 1] || '').toLowerCase() + ' (Payment)';
     if (_mf > 0 && _fs && _fs.prorated){
       _fs.segs.forEach(function(sg){ lines.push({name: 'Оплата за навчання ' + _feeSegText(sg) + ' (' + sg.price + ' грн/міс, ' + sg.days + ' з ' + _fs.days + ' роб. дн.)', qty: 1, price: sg.sum, sum: sg.sum}); });
@@ -33697,24 +33650,17 @@ function generateInvoicePDF(opts){
       _discL.forEach(function(d){ lines.push({name: d.name, qty: 1, price: -d.amount, sum: -d.amount}); });
       if (_dI.change) lines.push({name: _chgName, qty: 1, price: _dI.change, sum: _dI.change});
     }
-    if (_dI.carry > 0)      lines.push({name: LABEL_DEBT,    qty: 1, price: _dI.carry, sum: _dI.carry});
-    else if (_dI.carry < 0) lines.push({name: LABEL_OVERPAY, qty: 1, price: _dI.carry, sum: _dI.carry});
-    if (_dI.due < 0) lines.push({name: 'Залишок переплати переходить на наступний місяць', qty: 1, price: -_dI.due, sum: -_dI.due});
-    sum = Math.max(0, _dI.due);
+    if (_mf > 0 && _dI.carry > 0) lines.push({name: LABEL_DEBT, qty: 1, price: _dI.carry, sum: _dI.carry});
+    sum = _dI.due;
     total = sum;
     // v6.11.26: вступний внесок — план у картці = джерело правди. Додаємо рядки, де
     // paid!==true і дата платежу <= останній день поточного місяця (вкл. прострочені).
-    var efSched = client.entryFeeSchedule || [];
-    var cutoffISO = _lastDayOfMonth(month, year);
-    efSched.forEach(function(p){
-      if (!p || p.paid === true) return;
-      var iso = _toISO(p.date);
-      if (!iso || iso > cutoffISO) return;            // невалідна або майбутня дата → пропустити
-      var amt = Number(p.amount) || 0;
-      if (amt <= 0) return;
-      lines.push({name: 'Вступний внесок', qty: 1, price: amt, sum: amt});
-      total += amt;
-    });
+    // v7.606: вступний — спільна функція груп «Банк» (_bankEntryCalc): «Вступний внесок» з картки − Σ «Факт вступ» від дати договору
+    //   (поправки CFO, відкладені — так само). Графік внеску з картки більше не читаємо.
+    try {
+      var _ed = _invEntryDueFor(loc, childName, client);
+      if (_ed > 0){ lines.push({name: 'Вступний внесок', qty: 1, price: _ed, sum: _ed}); total += _ed; }
+    } catch(_eE){ Logger.log('[invoice] вступний: %s', _eE && _eE.message); }
   }
 
   // v6.93: dataOnly — повертаємо лише дані для Viber-повідомлення, БЕЗ номера рахунку
@@ -34672,6 +34618,9 @@ function _invoiceClientData(childName, loc, type){
     : _contractStr(c['Номер договору']);
   try { var efs = JSON.parse(c['Графік внеску (JSON)'] || '[]'); res.entryFeeSchedule = Array.isArray(efs) ? efs : []; }
   catch(e){ res.entryFeeSchedule = []; }
+  var _cd = c['Дата договору'];   // v7.606: вступний — як у групах «Банк» (сума з картки проти Σ «Факт вступ» від дати договору)
+  res.entryFee = Number(c['Вступний внесок']) || 0;
+  res.contractISO = _cd instanceof Date ? Utilities.formatDate(_cd, 'Europe/Kiev', 'yyyy-MM-dd') : (_toISO(_cd) || '');
   res.monthlyFee = Number(c['Сума договору']) || 0;   // v7.63 для розбивки навч-рахунку (борг = Бюджет − договір)
   res.id = String(c['ID'] || '').trim();              // v7.414 знижки з реєстру — за ID картки
   res.feeHist = _promoJSON(c['Зміни суми (JSON)'], []);  // v7.417 перехід з середини місяця

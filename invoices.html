@@ -1342,23 +1342,14 @@ function renderInvoiceList(){
         ? '<span class="inv-sum">' + fmtUah(c.paymentSum) + ' ₴</span>'
         : (c.prepayCovered ? '<span class="inv-sum zero" title="' + String(c.prepayCovered).replace(/"/g, '&quot;') + '">💳 передоплата</span>'   // v7.415 місяць покрито — рахунок не формується
                            : '<span class="inv-sum zero">—</span>');
-      // v7.528: борг/переплата — лише з попередніх місяців Payment; ручна різниця бюджету — «⚠️ Payment» для фінансиста
-      if (c.studyCarry) pCell += '<div style="font-size:11.5px;color:var(--gray)">у т.ч. ' + (c.studyCarry > 0 ? 'борг' : 'переплата') + ' попер. періоду ' + fmtUah(c.studyCarry) + ' ₴</div>';
-      if (c.studyChange) pCell += ' <span class="inv-badge b-yellow" title="«Бюджет навч» у Payment відрізняється від договору мінус знижки на ' + fmtUah(c.studyChange) +
-        ' ₴, і попередні місяці цього не пояснюють. У рахунку — рядок «Коригування суми (Payment)». Перевірте Payment або суму договору в картці.">⚠️ Payment</span>';
+      // v7.606: борг поточного місяця — як у групі «Банк» (бюджет − факт), інформативно; рахунок = бюджет місяця
+      if (c.debt && c.debt.navch) pCell += '<div style="font-size:11.5px;color:var(--gray)">борг поточного місяця ' + fmtUah(c.debt.navch.debt) + ' ₴</div>';
       var eCell = c.extrasSum > 0
         ? '<span class="inv-sum">' + fmtUah(c.extrasSum) + ' ₴</span>'
         : '<span class="inv-sum zero">—</span>';
       // v7.357: харчування входить у рахунок за додаткові (той самий ФОП) — показуємо частку окремо
       if (c.mealsSum) eCell += '<div style="font-size:11.5px;color:var(--gray)">у т.ч. 🍽 харчування ' + fmtUah(c.mealsSum) + ' ₴</div>';
-      // v7.354: відмітки змінили після експорту — у Payment ще стара сума; рахунок бере відмітки (+ ручну правку).
-      if (c.extrasStale) eCell += ' <span class="inv-badge b-yellow" title="У Payment зараз ' + fmtUah(c.extrasPayment || 0) +
-        ' ₴ — відмітки змінились після експорту. Рахунок сформується за відмітками; оновіть експорт додаткових.">⚠️ Payment</span>';
-      // v7.528: борг/переплата додаткових — лише з попередніх місяців; ручна різниця «Бюджет доп» — окремо
-      if (c.extrasAdjustment) eCell += '<div style="font-size:11.5px;color:var(--gray)">у т.ч. ' + (c.extrasAdjustment > 0 ? 'борг' : 'переплата') + ' попер. періоду ' + fmtUah(c.extrasAdjustment) + ' ₴</div>';
-      else if (c.extrasPaymentDiff && !c.extrasStale) eCell += ' <span class="inv-badge b-yellow" title="«Бюджет доп» у Payment відрізняється від відміток на ' + fmtUah(c.extrasPaymentDiff) +
-        ' ₴, і попередні місяці цього не пояснюють. У рахунку — рядок «Коригування за даними Payment». Перевірте клітинку Payment.">⚠️ Payment</span>';
-      if (c.extrasAdjustment && c.extrasPaymentDiff && !c.extrasStale) eCell += ' <span class="inv-badge b-yellow" title="Крім боргу/переплати, у «Бюджет доп» ручна різниця ' + fmtUah(c.extrasPaymentDiff) + ' ₴.">⚠️ Payment</span>';
+      if (c.debt && c.debt.dop) eCell += '<div style="font-size:11.5px;color:var(--gray)">борг поточного місяця ' + fmtUah(c.debt.dop.debt) + ' ₴</div>';   // v7.606
       // v6.26.1 FIX: розділяємо escape HTML-заглушки — щоб не екранувати теги.
       var sName = c.signerName
         ? escapeHtml(c.signerName)
@@ -1799,45 +1790,39 @@ async function invPrecheckLoad(){
   INV._chk = r;
   return r;
 }
-function _chkAmt(v){ v = Number(v) || 0; return v ? ((v > 0 ? '+' : '') + fmtUah(v) + ' ₴') : '—'; }
-function _chkCarry(v){ v = Number(v) || 0; if (!v) return '—'; return '<span class="' + (v > 0 ? 'debt' : 'over') + '">' + (v > 0 ? 'борг ' : 'переплата ') + fmtUah(v) + ' ₴</span>'; }
-function _chkMonths(arr){
-  if (!arr || !arr.length) return '<span class="mon">незакритих місяців немає</span>';
-  return arr.map(function(m){ return '<div class="mon">' + escapeHtml(m.label) + ': бюджет ' + fmtUah(m.budget) + ' · факт ' + fmtUah(m.fact) + ' · ' + (m.diff > 0 ? 'борг ' : 'переплата ') + fmtUah(m.diff) + '</div>'; }).join('');
-}
 function invPrecheckRender(){
   var box = $('invChk'), r = INV._chk; if (!box || !r) return;
   var items = r.items || [], c = r.confirmed;
-  // v7.604: розсилку не блокуємо; ⚠ — попередження (список іде CFO на перевірку), ⛔ — лише дитина з явно помилковою сумою
-  var bl = r.blocked || [], status;
-  if (!items.length) status = '✅ Боргів, переплат і коригувань немає — розсилку можна запускати.';
+  // v7.606: як боржники груп «Банк» — борг = бюджет − факт ПОТОЧНОГО місяця (навч і доп окремо), вступний — картка проти Σ факт вступ,
+  //   «🔍 Потрібно звірити» — сума рахунку ≠ «Бюджет» у Payment (рахунок не йде) або переплата наперед при неочищеному бюджеті.
+  var bl = r.blocked || [], status, mName = (INV_MONTHS[(r.payMonth + 10) % 12] || '').toLowerCase();
+  if (!items.length) status = '✅ Боржників і розбіжностей немає — рахунки = бюджет місяця в Payment.';
   else if (c && c.valid) status = '✅ Переглянуто фінансистом: ' + escapeHtml(c.by) + ', ' + escapeHtml(c.at) + '.';
-  else status = '⚠️ Розсилати можна. Діти з боргом / переплатою / коригуванням — нижче; цей список піде фінансисту (CFO) на перевірку' +
-                (c ? ' (суми змінились після перегляду ' + escapeHtml(c.at) + ')' : '') + '.';
-  if (bl.length) status += ' ⛔ Не отримають рахунок у розсилці, доки не виправлять Payment: ' + escapeHtml(bl.join(', ')) + '.';
+  else status = '⚠️ Розсилати можна; список нижче піде фінансисту (CFO) на перевірку' + (c ? ' (суми змінились після перегляду ' + escapeHtml(c.at) + ')' : '') + '.';
   var btn = (items.length && !(c && c.valid) && _invIsCfo()) ? '<button class="btn btn-primary" id="invChkConfirm" onclick="invPrecheckConfirm()">✓ Переглянуто (' + items.length + ')</button>' : '';
+  var ver = items.filter(function(it){ return it.block && it.block.length; });
+  var verBox = ver.length ? '<div class="inv-chk-sub" style="margin:8px 0;padding:10px 12px;border:1px solid #f5c2c0;background:#fdecea;border-radius:10px;color:#922">' +
+      '<b>🔍 Потрібно звірити (' + ver.length + ')</b> — рахунок цим дітям не піде, доки цифри не зійдуться з Payment:' +
+      ver.map(function(it){ return '<div style="margin-top:4px">• <b>' + escapeHtml(it.name) + '</b>: ' + escapeHtml(it.block.join('; ').replace(/^🔍 Потрібно звірити: /, '')) + '</div>'; }).join('') + '</div>' : '';
+  var dbt = function(v){ return v ? '<span class="debt">борг ' + fmtUah(v) + ' ₴</span>' : '—'; };
   var rows = items.map(function(it){
-    var s = it.study, e = it.extras, out = '';
-    var blk = (it.block && it.block.length) ? '<div class="mon" style="color:#c0392b;font-weight:700">⛔ ' + escapeHtml(it.block.join('; ')) + '</div>' : '';
-    if (s) out += '<tr><td><b>' + escapeHtml(it.name) + '</b><div class="mon">' + escapeHtml(it.group || '') + '</div>' + blk + '</td><td>навчання</td>' +
-      '<td class="n">' + fmtUah(s.budget) + '</td><td class="n">' + (s.net == null ? '—' : fmtUah(s.net)) + '</td>' +
-      '<td>' + _chkCarry(s.carry) + '</td><td>' + (s.change ? '<span class="inv-badge b-yellow">⚠️ ' + _chkAmt(s.change) + '</span>' : '—') + '</td>' +
-      '<td class="n"><b>' + fmtUah(s.due) + '</b></td><td>' + _chkMonths(s.months) + '</td></tr>';
-    if (e) out += '<tr><td>' + (s ? '' : '<b>' + escapeHtml(it.name) + '</b><div class="mon">' + escapeHtml(it.group || '') + '</div>') + '</td><td>допи</td>' +
-      '<td class="n">' + fmtUah(e.budget) + '</td><td class="n">' + fmtUah(e.marks) + '</td>' +
-      '<td>' + _chkCarry(e.carry) + '</td><td>' + (e.change ? '<span class="inv-badge b-yellow">⚠️ ' + _chkAmt(e.change) + '</span>' : '—') + '</td>' +
-      '<td class="n"><b>' + fmtUah(e.due) + '</b></td><td>' + _chkMonths(e.months) + '</td></tr>';
+    var s = it.study, e = it.extras, out = '', nm = '<b>' + escapeHtml(it.name) + '</b><div class="mon">' + escapeHtml(it.group || '') + '</div>';
+    var en = it.entry ? fmtUah(it.entry.debt) + ' ₴ <span class="mon">(' + fmtUah(it.entry.paid) + ' / ' + fmtUah(it.entry.fee) + ')</span>' : '—';
+    var sp = it.suspect ? it.suspect.map(function(x){ return '🔍 ' + escapeHtml(x.kind) + ': сплачено наперед ' + fmtUah(x.prepaid) + ', а бюджет не обнулено'; }).join('<br>') : '';
+    var st = (it.block && it.block.length) ? '<span style="color:#c0392b;font-weight:700">⛔ не надсилається</span>' : (sp || '⚠️');
+    out += '<tr><td>' + nm + '</td><td>навчання</td><td class="n">' + fmtUah(s.budget) + '</td><td class="n"><b>' + fmtUah(s.due) + '</b></td><td>' + dbt(s.debt) + '</td><td>' + en + '</td><td>' + st + '</td></tr>';
+    if (e.budget || e.debt || e.due) out += '<tr><td></td><td>допи</td><td class="n">' + fmtUah(e.budget) + '</td><td class="n"><b>' + fmtUah(e.due) + '</b></td><td>' + dbt(e.debt) + '</td><td></td><td></td></tr>';
     return out;
   }).join('');
-  box.className = 'inv-chk' + ((!items.length || (c && c.valid)) ? ' ok' : '');
+  box.className = 'inv-chk' + ((!items.length || (c && c.valid)) && !ver.length ? ' ok' : '');
   box.innerHTML = '<div class="inv-chk-head"><div><div class="inv-chk-title">Перевірка рахунків перед розсилкою · ' + escapeHtml(r.loc) + ', навчання ' +
       (INV_MONTHS[r.payMonth - 1] || r.payMonth) + ', допи ' + (INV_MONTHS[r.extMonth - 1] || r.extMonth) + '</div>' +
       '<div class="inv-chk-sub">' + status + ' Дітей у локації: ' + ((r.totals && r.totals.children) || 0) + ', у списку: ' + items.length +
-      '. Борг / переплата — з клітинок минулих місяців Payment (бюджет − факт); ⚠️ коригування — ручна різниця бюджету, яку минулі місяці не пояснюють.</div></div>' +
-      '<div style="display:flex;gap:8px;align-items:center">' + btn + '<button class="btn" onclick="invPrecheckShow(true)">Оновити</button></div></div>' +
-    (items.length ? '<div class="inv-chk-wrap"><table><thead><tr><th>Дитина</th><th>Рахунок</th><th style="text-align:right">Бюджет місяця</th>' +
-      '<th style="text-align:right">Договір − знижки / відмітки</th><th>Борг / переплата</th><th>Коригування</th><th style="text-align:right">До сплати</th>' +
-      '<th>Незакриті місяці (бюджет · факт · залишок)</th></tr></thead><tbody>' + rows + '</tbody></table></div>' : '');
+      '. Рахунок = «Бюджет» місяця в Payment (зведення оновлюється з Payment перед перевіркою). Борг — бюджет − факт за ' + escapeHtml(mName) +
+      ', навч і доп окремо (як у групі «Банк»); минулі місяці фінансист переносить у бюджет сама.</div></div>' +
+      '<div style="display:flex;gap:8px;align-items:center">' + btn + '<button class="btn" onclick="invPrecheckShow(true)">Оновити</button></div></div>' + verBox +
+    (items.length ? '<div class="inv-chk-wrap"><table><thead><tr><th>Дитина</th><th>Рахунок</th><th style="text-align:right">Бюджет місяця (Payment)</th>' +
+      '<th style="text-align:right">До сплати</th><th>Борг за ' + escapeHtml(mName) + '</th><th>Вступний (сплачено / сума)</th><th>Стан</th></tr></thead><tbody>' + rows + '</tbody></table></div>' : '');
   box.hidden = false;
 }
 async function invPrecheckShow(force){
@@ -1876,7 +1861,7 @@ async function invPrecheckGate(){
     try { $('invChk').scrollIntoView({behavior: 'smooth', block: 'start'}); } catch(_s){}
   }
   if (warn && r.needsReview) showToast('⚠️ ' + warn + ' дітей з боргом / переплатою / коригуванням — список піде фінансисту на перевірку', 'info', 6000);
-  if (bl.length) showToast('⛔ Без рахунку в розсилці (сума явно помилкова): ' + bl.join(', '), 'err', 8000);
+  if (bl.length) showToast('⛔ Без рахунку в розсилці — 🔍 потрібно звірити: ' + bl.join(', '), 'err', 8000);
   return {skip: bl, warn: warn, review: !!r.needsReview};
 }
 // v7.604: CFO — списки, надіслані з ⚠ без перегляду
@@ -1918,7 +1903,7 @@ async function invBulkSend(){
   if (!targets.length){ showToast('Немає кому надсилати', 'info', 4000); return; }
   if (!confirm('Надіслати рахунки ' + targets.length + ' батькам?' +
       (noEmailCnt ? ('\n(' + noEmailCnt + ' без email — пропустимо)') : '') +
-      (gate.skip.length ? ('\n⛔ Без рахунку (сума явно помилкова): ' + gate.skip.join(', ')) : '') +
+      (gate.skip.length ? ('\n⛔ Без рахунку (🔍 потрібно звірити): ' + gate.skip.join(', ')) : '') +
       ((gate.warn && gate.review) ? ('\n⚠️ ' + gate.warn + ' дітей з боргом / переплатою / коригуванням — список піде фінансисту на перевірку') : ''))) return;
 
   var bulkBtn = $('invBulkBtn');

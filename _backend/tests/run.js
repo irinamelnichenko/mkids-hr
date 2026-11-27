@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Тести бекенду перед деплоєм (v7.530). Запуск: node _backend/tests/run.js [шлях до crm_script.js]
 // Беруть ЧИСТІ функції прямо з crm_script.js (без Google-сервісів) і проганяють реальні випадки 02.11.2026:
-//   рахунки — «борг / переплата / коригування ⚠️» (_invPrevBalances → _invExtrasCalc / _invStudyCalc → _invPrecheckItems),
+//   рахунки — перевірка перед розсилкою (_invPrecheckItems; борги — спільні функції груп «Банк», v7.606),
 //   знижка відпустки — _vacCellPlan. Будь-яка розбіжність → код виходу 1, і predeploy.sh не копіює бекенд у буфер.
 'use strict';
 const fs = require('fs'), path = require('path'), crypto = require('crypto');
@@ -43,12 +43,12 @@ const env = {
     computeDigest: (_a, s) => Array.from(crypto.createHash('md5').update(String(s), 'utf8').digest()).map((b) => (b > 127 ? b - 256 : b))},
 };
 const code = [varLine('MONTHS_CAL'), varLine('PROMO_FORMULA_RE'),
-  ...['_invR2','_prevYM','_invSplit','_invExtrasCalc','_invStudyCalc','_invPrevBalances'].concat(src.indexOf('\nfunction _invPrecheckBlock(') >= 0 ? ['_invCellErr','_invPrecheckBlock'] : []).concat(['_invPrecheckItems','_invPrecheckHash','_vacCellPlan'])
+  ...['_invR2','_prevYM','_invCellErr','_invPrecheckBlock','_invPrecheckItems','_invPrecheckHash','_vacCellPlan']
      .concat(src.indexOf('\nfunction _dopSubPlan(') >= 0 ? ['_dopSubPlan'] : []).map(fn)
      .concat(src.indexOf('\nfunction _predGroupAllowed(') >= 0
        ? [varLine('PRED_GROUP_TYPES'), varBlock('_GT_TRANSLIT'), varLine('_GT_BABY')]
            .concat(['_groupLetters','_predGroupKey','_canonGroupType','_normalizeGroupType','_predGroupAllowed'].map(fn)) : []),
-  'return {_invPrevBalances, _invExtrasCalc, _invStudyCalc, _invPrecheckItems, _invPrecheckHash, _vacCellPlan,' +
+  'return {_invPrecheckItems, _invPrecheckHash, _vacCellPlan,' +
   ' _dopSubPlan: (typeof _dopSubPlan === "function" ? _dopSubPlan : null),' +
   ' _predGroupAllowed: (typeof _predGroupAllowed === "function" ? _predGroupAllowed : null),' +
   ' _normalizeGroupType: (typeof _normalizeGroupType === "function" ? _normalizeGroupType : null)};'].join('\n');
@@ -61,45 +61,21 @@ function check(id, title, got, exp){
   else { pass++; console.log('✓ ' + id); }
 }
 
-const children = [];
-FX.cases.forEach((c) => {
-  JOURNAL = [JOURNAL[0]].concat(c.journal || []);
-  const head = Object.keys(c.rows[0]);
-  const vals = [head].concat(c.rows.map((r) => head.map((k) => r[k])));
-  const pb = F._invPrevBalances(c.loc, FX.payMonth, vals, FX.payYear)[c.name];
-  if (!pb){ fail++; console.log('✗ ' + c.id + ' — дитину не знайдено в рядках'); return; }
-  const sum = (col) => c.rows.reduce((a, r) => a + (Number(r[col]) || 0), 0);
-  const ch = {name: c.name, group: '', studyBudget: sum('Листопад-Бюджет-навч'), extrasPayment: sum('Листопад-Бюджет-доп'),
-              prevNavch: pb.monN, prevDop: pb.monD};
-  if (c.extras){
-    const r = F._invExtrasCalc(c.extras.marks, ch.extrasPayment, 0, false, pb);
-    check(c.id + ' / допи', c.title, {debt: r.debt, adjust: r.adjust, due: Math.max(0, r.due)}, c.extras.expect);
-    Object.assign(ch, {extrasBreakdownSum: c.extras.marks, extrasAdjustment: r.debt, extrasPaymentDiff: r.adjust, extrasOnlySum: Math.max(0, r.due)});
-  }
-  if (c.study){
-    const r = F._invStudyCalc(ch.studyBudget, c.study.net, c.study.netPrev, pb);
-    check(c.id + ' / навчання', c.title, {debt: r.debt, adjust: r.adjust, due: Math.max(0, r.due)}, c.study.expect);
-    Object.assign(ch, {studyNet: c.study.net, studyCarry: r.debt, studyChange: r.adjust, paymentSum: Math.max(0, r.due)});
-  }
-  ch._listed = c.listed;
-  children.push(ch);
-});
-
-// перевірка перед розсилкою: у списку саме ті, де є борг / переплата / коригування; чиста дитина — ні; хеш реагує на суми
-const clean = {name: 'Чиста Дитина', studyBudget: 21500, paymentSum: 21500, studyCarry: 0, studyChange: 0, extrasPayment: 3000,
-               extrasBreakdownSum: 3000, extrasAdjustment: 0, extrasPaymentDiff: 0, extrasOnlySum: 3000, _listed: false};
-const all = children.concat([clean]);
-const items = F._invPrecheckItems(all), names = items.map((x) => x.name);
-all.forEach((c) => check('перевірка: ' + c.name, 'у списку перед розсилкою = ' + c._listed, {listed: names.indexOf(c.name) >= 0}, {listed: c._listed}));
-const tk = items.find((x) => x.name === 'Ткаленко Анна');
-check('перевірка: розшифровка Ткаленко', 'допи: бюджет 8320, відмітки 8870, коригування −550', tk && tk.extras ? {budget: tk.extras.budget, marks: tk.extras.marks, change: tk.extras.change} : {},
-      {budget: 8320, marks: 8870, change: -550});
-const ml = items.find((x) => x.name === 'Малпетті Даніелє');
-check('перевірка: розшифровка Малпетті', 'навчання: місяць з залишком — жовтень 0 / 21500', ml && ml.study ? {months: ml.study.months} : {},
-      {months: [{m: 10, label: 'Жовтень', budget: 0, fact: 21500, diff: -21500}]});
-const h1 = F._invPrecheckHash(items), items2 = JSON.parse(JSON.stringify(items));
-items2[0].study ? (items2[0].study.due += 1) : (items2[0].extras.due += 1);
-check('перевірка: хеш', 'хеш стабільний і змінюється від суми', {same: F._invPrecheckHash(F._invPrecheckItems(all)) === h1, changed: F._invPrecheckHash(items2) !== h1}, {same: true, changed: true});
+// v7.606: перевірка перед розсилкою — лише спільна логіка груп «Банк» (борг поточного місяця, вступний, «потрібно звірити») і ⛔.
+//   Тести старої логіки v7.528 (_invPrevBalances / _invSplit, «незакриті місяці», «коригування») прибрано разом із нею.
+{
+  const base = {group: 'G', studyBudget: 24000, paymentSum: 24000, extrasPayment: 3000, extrasBreakdownSum: 3000, extrasOnlySum: 3000};
+  const kid = (name, x) => Object.assign({name: name}, base, x || {});
+  const all = [kid('Чиста Дитина'), kid('Боржник Навч', {debt: {navch: {debt: 3800}, dop: null}}), kid('Вступ Частинами', {entryDue: {fee: 25500, paid: 5500, debt: 20000}}),
+               kid('Звірити Переплату', {suspect: [{kind: 'навч.', prepaid: 24000, debt: 24000}]}), kid('Не Та Сума', {verify: 'допи: рахунок 3950 ≠ Payment 4300'})];
+  const it = F._invPrecheckItems(all), by = {}; it.forEach((x) => { by[x.name] = x; });
+  check('рахунки v7.606: перевірка перед розсилкою', 'чиста дитина — не в списку; борг / вступний / «потрібно звірити» — ⚠; сума ≠ Payment — ⛔ «🔍 Потрібно звірити»; до сплати = бюджет',
+    {names: it.map((x) => x.name), debt: by['Боржник Навч'].study.debt, due: by['Боржник Навч'].study.due, entry: by['Вступ Частинами'].entry, sus: !!by['Звірити Переплату'].suspect, bl: by['Не Та Сума'].block, noMonths: it.every((x) => !('months' in x.study) && !('change' in x.study))},
+    {names: ['Боржник Навч', 'Вступ Частинами', 'Звірити Переплату', 'Не Та Сума'], debt: 3800, due: 24000, entry: {fee: 25500, paid: 5500, debt: 20000}, sus: true,
+     bl: ['🔍 Потрібно звірити: допи: рахунок 3950 ≠ Payment 4300'], noMonths: true});
+  const h1 = F._invPrecheckHash(it), it2 = JSON.parse(JSON.stringify(it)); it2[0].study.due += 1;
+  check('перевірка: хеш', 'хеш стабільний і змінюється від суми', {same: F._invPrecheckHash(F._invPrecheckItems(all)) === h1, changed: F._invPrecheckHash(it2) !== h1}, {same: true, changed: true});
+}
 
 FX.vacation.forEach((v) => {
   const r = F._vacCellPlan.apply(null, v.args), got = {};
@@ -1175,6 +1151,29 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
   }
 }
 
+// ── v7.606: рахунки — спільна логіка груп «Банк» (_invBankView): поточний місяць, вступний, відкладені CFO (bankDebtHold) ──
+if (src.indexOf('\nfunction _invBankView(') >= 0){
+  const B = require('./_bankload.js')(SRC);
+  const H = ['Локація', 'Напрямок', 'Тип', 'Група', 'Вихователь', "Ім'я дитини"]; for (let m = 0; m < 12 * 6; m++) H.push('m' + m); H.push('a', 'b', 'c', 'd', 'e', 'Вибув');
+  const row = (name, months) => { const a = H.map(() => 0); a[0] = 'Голосієво'; a[5] = name; a[a.length - 1] = ''; Object.keys(months).forEach((mm) => { const b = 6 + (mm - 1) * 6, v = months[mm]; a[b] = v[0]; a[b + 1] = v[1]; a[b + 2] = v[2] || 0; a[b + 3] = v[3]; a[b + 4] = v[4]; }); return a; };
+  const rows = [row('Ющенко Мія', {10: [28000, 0, 0, 28000, 0], 11: [20200, 1760, 0, 24000, 1760]}),          // листопад: бюджет 24 000, факт 20 200 → борг 3 800
+                row('Шевель Єсенія', {11: [24000, 0, 0, 19200, 0]}),                                          // переплата 4 800 — не борг
+                row('Зимуха-Романов Ян', {11: [12600, 0, 0, 0, 0]}),
+                row('Відкладена Дитина', {11: [0, 0, 0, 24000, 0]}),                                          // bankDebtHold
+                row('Новенька Соня', {11: [24000, 0, 5000, 24000, 0]})];
+  const V = B._invBankView('Голосієво', rows, 11, 2026, [{name: 'Новенька Соня', fee: 25500, contract: '2026-11-03'}, {name: 'Відкладена Дитина', fee: 25500, contract: '2026-11-03'}],
+    '2026-11-27', ['Відкладена Дитина'], {});
+  const k = (n) => B._dopAnKid(n);
+  check('рахунки = групи «Банк»: борг поточного місяця', 'бюджет − факт листопада (навч і доп окремо); минулі місяці не тягнемо; переплата — не борг; відкладена CFO — ні в боргах, ні у вступних, ні в «потрібно звірити»',
+    {yus: V.debt[k('Ющенко Мія')] && V.debt[k('Ющенко Мія')].navch.debt, yusDop: V.debt[k('Ющенко Мія')] && V.debt[k('Ющенко Мія')].dop, shev: !!V.debt[k('Шевель Єсенія')],
+     held: [!!V.debt[k('Відкладена Дитина')], !!V.entry[k('Відкладена Дитина')], !!V.suspect[k('Відкладена Дитина')], !!V.hold[k('Відкладена Дитина')]], entry: V.entry[k('Новенька Соня')]},
+    {yus: 3800, yusDop: null, shev: false, held: [false, false, false, true], entry: {fee: 25500, paid: 5000, debt: 20500, contract: '03.11.2026'}});
+  const sameFns = ['_bankKidsFromRows', '_bankDebtorsCalc', '_bankEntryCalc', '_bankSuspectDebts', '_bankHoldFilter'].every((f) => new RegExp(f + '\\(').test(fn('_invBankView')));
+  check('рахунки = групи «Банк»: та сама функція', 'рахунки кличуть ті самі _bank*-функції, що й боржники груп; _bankDebtData — теж через _bankKidsFromRows; старої логіки v7.528 немає',
+    {same: sameFns, bank: /_bankKidsFromRows\(rows, M\)/.test(fn('_bankDebtData')), old: ['_invPrevBalances', '_invSplit', '_invStudyCalc', '_invExtrasCalc'].filter((f) => src.indexOf('\nfunction ' + f + '(') >= 0)},
+    {same: true, bank: true, old: []});
+}
+
 // ── v7.605: «Оплати-Рік» — оновлення однієї локації (_yearlyMergeLoc): інші локації цілі, запобіжники ──
 if (src.indexOf('\nfunction _yearlyMergeLoc(') >= 0){
   const YM = new Function([fn('_yearlyMergeLoc')].join('\n') + '\nreturn _yearlyMergeLoc;')();
@@ -1202,14 +1201,7 @@ if (src.indexOf('\nfunction _yearlyMergeLoc(') >= 0){
 
 // ── v7.604: рахунки — розсилку не блокує підтвердження CFO; ⛔ лише дитині з явно помилковою сумою; список «на перевірку CFO» ──
 if (src.indexOf('\nfunction _invPrecheckBlock(') >= 0){
-  const HO = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures_holosiievo_1226.json'), 'utf8'));
-  const it = F._invPrecheckItems(HO), by = {}; it.forEach((x) => { by[x.name] = x; });
-  const row = (n, k) => { const x = by[n][k]; return x && [x.budget, k === 'study' ? x.net : x.marks, x.carry, x.change, x.due]; };
-  check('рахунки Голосієво грудень (реальні цифри 27.11)', '15 дітей з ⚠, жодна не заблокована; бюджет · договір/відмітки · борг/переплата · коригування · до сплати',
-    {n: it.length, blocked: it.filter((x) => x.block).length, zym: row('Зимуха-Романов Ян', 'study'), kov: row('Ковальчук Соломія', 'study'), kovE: row('Ковальчук Соломія', 'extras'),
-     bla: row('Благовісна Аліса', 'extras'), buch: row('Бучковський Лука', 'extras'), gam: row('Гамуза Богдан', 'extras'), kam: row('Каменщик Степан', 'study'), yus: row('Ющенко Мія', 'study')},
-    {n: 15, blocked: 0, zym: [0, 24000, -12600, -24000, 0], kov: [18000, 18000, -10560, 0, 7440], kovE: [5160, 5960, 0, -800, 5160],
-     bla: [3950, 4300, 0, -350, 3950], buch: [2980, 3410, 0, -430, 2980], gam: [2800, 3400, 0, -600, 2800], kam: [23000, 21160, 0, 1840, 23000], yus: [24000, 24000, 3800, 0, 27800]});
+  // v7.606: перевірку реальних цифр Голосієва за логікою v7.528 прибрано — тепер invoice_budget.js (рахунки = бюджет Payment, усі локації)
   const base = {name: 'Тест', group: 'G', studyBudget: 20000, studyNet: 20000, studyCarry: 0, studyChange: 0, paymentSum: 20000, extrasPayment: 0, extrasBreakdownSum: 0, extrasAdjustment: 0, extrasPaymentDiff: 0, extrasOnlySum: 0};
   const neg = F._invPrecheckItems([Object.assign({}, base, {paymentSum: -500})]), err = F._invPrecheckItems([Object.assign({}, base, {budgetError: ['Грудень-Бюджет-навч = «#ERROR!»']})]), clean = F._invPrecheckItems([base]);
   check('рахунки: ⛔ лише явно помилкове', 'від\'ємне «До сплати» або #ERROR! у клітинці бюджету → дитина в списку з ⛔; чисті цифри — не в списку',
@@ -1223,6 +1215,8 @@ if (src.indexOf('\nfunction _invPrecheckBlock(') >= 0){
                    R('Позняки|2026-12|2026-11', 'bbb', 'переглянуто CFO', 'CFO', '27.11 16:00'), R('Оранж|2026-12|2026-11', 'c1', '', 'CFO', '20.11'), R('Оранж|2026-12|2026-11', 'c2', 'на перевірку CFO', 'Директор', '27.11')]);
   check('рахунки: список «на перевірку CFO»', 'надіслано з ⚠ і не переглянуто — у списку; переглянуто з тим самим хешем — ні; старе підтвердження іншого хешу не закриває',
     {locs: pend.map((x) => x.loc), by: pend[0] && pend[0].by}, {locs: ['Оранж', 'Голосієво'], by: 'Директор'});
+  const pd = PF([Object.assign(R("Кар'єрна|2026-12|2026-11", 'k1', 'на перевірку CFO', 'Директор Кар\'єрна', '27.11.2026 14:41'), {'Навчання': new Date(2026, 11, 1), 'Додаткові': new Date(2026, 10, 1)})]);
+  check('рахунки: місяць у списку «на перевірку»', 'Sheets зробив з «2026-12» дату — показуємо «2026-12», а не «Tue Dec 01 2026…» (Кар\'єрна 27.11)', {pay: pd[0].pay, ext: pd[0].ext}, {pay: '2026-12', ext: '2026-11'});
 }
 
 // ── v7.602: вага і зріст дитини — бекенд (перевірка введення, старі заміри) і фронт (потрібно виміряти, текст, телефон, звіт) ──
