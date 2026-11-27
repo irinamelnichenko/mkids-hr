@@ -1519,6 +1519,44 @@ if (src.indexOf('\nfunction _invPrecheckBlock(') >= 0){
   }
 }
 
+// ── v7.607: зв'язок картка ↔ рядок Payment не на точному збігу імені (Пуща, «Кіщенко Меланія» ↔ «Кіщенко Міланія») ──
+if (src.indexOf('\nfunction _kidLinkMap(') >= 0){
+  const B = require('./_bankload.js')(SRC);
+  const cards = [{name: 'Кіщенко Меланія', id: 'c_Кіщенко Міланія_Пуща'}, {name: 'Лапутько Максим', id: 'c_Лапутько М аксим Віталій_Бігова'},
+                 {name: 'Гриб Дарʼя', id: 'c_Гриб Дарʼя_Житомир'}, {name: 'Каньшiна Варвара', id: 'c_x_y'}, {name: 'Невинний Данїїл', id: 'c_Невинний Данїїл_Голосієво'},
+                 {name: 'Петренко Іван', id: 'c_Петренко Іван_Пуща'}, {name: 'Петренко Ірина', id: 'c_Петренко Ірина_Пуща'}, {name: 'Солодуха Матвій', id: 'c_s_Голосієво'}];
+  const L = B._kidLinkMap(cards, ['Кіщенко Міланія', 'Лапутько М аксим Віталійович', "Гриб Дар'я", 'Каньшіна Варвара', 'Невинний Даніїл', 'Петренко Іра', 'Солодуха Лука', 'Чужий Хтось']);
+  const m = {}; Object.keys(L).forEach((n) => { m[n] = L[n].card + ' · ' + L[n].how; });
+  check("Payment ↔ картка: зв'язок не на точному імені", 'ID картки (Кіщенко), початок імені (Лапутько), апостроф і латиниця, і/ї; однофамільці й інше ім\'я — не склеюються навмання',
+    m, {'Кіщенко Міланія': 'Кіщенко Меланія · id', 'Лапутько М аксим Віталійович': 'Лапутько Максим · prefix', "Гриб Дар'я": 'Гриб Дарʼя · exact',
+        'Каньшіна Варвара': 'Каньшiна Варвара · loose', 'Невинний Даніїл': 'Невинний Данїїл · loose'});
+  const H = ['Локація', 'Напрямок', 'Тип', 'Група', 'Вихователь', "Ім'я дитини"]; ['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень']
+    .forEach((mm) => ['Факт-навч', 'Факт-доп', 'Факт-вступ', 'Бюджет-навч', 'Бюджет-доп', 'Статус'].forEach((x) => H.push(mm + '-' + x))); H.push('Вибув');
+  const r = (n, bn, bd) => { const a = H.map(() => ''); a[0] = 'Пуща'; a[5] = n; a[H.indexOf('Грудень-Бюджет-навч')] = bn; a[H.indexOf('Грудень-Бюджет-доп')] = bd; return a; };
+  const P = B._invPayByName([H, r('Кіщенко Міланія', 20500, 980), r('Інша Дитина', 21000, 0)], 'Пуща', 12);
+  const lk = B._kidLinkMap([{name: 'Кіщенко Меланія', id: 'c_Кіщенко Міланія_Пуща'}, {name: 'Інша Дитина', id: 'c_Інша Дитина_Пуща'}], Object.keys(P.pay));
+  const sum = (a, b) => a + b, pay = B._kidRekey(P.pay, lk, sum), dop = B._kidRekey(P.dop, lk, sum);
+  check('рахунки: Кіщенко Меланія (Пуща)', 'рахунок грудня береться з рядка «Кіщенко Міланія»: навчання 20 500, допи 980', {pay: pay['Кіщенко Меланія'], dop: dop['Кіщенко Меланія']}, {pay: 20500, dop: 980});
+  const ver = B._invVerifyDiff([{name: 'Кіщенко Меланія', payName: 'Кіщенко Міланія', paymentSum: 20500, extrasOnlySum: 980}],
+    {[B._dopAnKid('Кіщенко Міланія')]: {bs: 20500, be: 980}});
+  check('звірка перед розсилкою: інше написання', 'звіряє з рядком Payment за зв\'язком, а не «0 ≠ 20 500»', ver, {});
+  const CH = path.join(__dirname, '..', '..', 'clients.html');
+  if (fs.existsSync(CH)){
+    const h = fs.readFileSync(CH, 'utf8'), a = h.indexOf('var _KID_HG='), b = h.indexOf('// Індекс «локація|ПІБ рядка Payment»');
+    const nf = (() => { const i = h.indexOf('\nfunction nameFold('); let d = 0; for (let k = h.indexOf('{', i); k < h.length; k++){ if (h[k] === '{') d++; else if (h[k] === '}' && --d === 0) return h.slice(i, k + 1); } })();
+    const ap = /\nvar _APOSTROPHES_FE\s*=\s*([^\n]*);/.exec(h);
+    const FE = new Function((ap ? 'var _APOSTROPHES_FE = ' + ap[1] + ';' : '') + nf + h.slice(a, b) + ';return kidLinkMap;')();
+    const cards2 = cards.concat([{name: 'Олександренко Олександр', id: 'c_a_b'}, {name: 'Бойко Іван', id: 'c_b_c'}]);
+    const names2 = ['Кіщенко Міланія', 'Лапутько М аксим Віталійович', "Гриб Дар'я", 'Каньшіна Варвара', 'Невинний Даніїл', 'Петренко Іра', 'Солодуха Лука', 'Олександренко Олександра', 'Бойко Іванна'];
+    const L2 = B._kidLinkMap(cards2, names2);
+    check('Payment ↔ картка: не описка', '«Олександр»/«Олександра», «Іван»/«Іванна» — різні діти, не склеюються', [!!L2['Олександренко Олександра'], !!L2['Бойко Іванна'], L2['Кіщенко Міланія'] && L2['Кіщенко Міланія'].how], [false, false, 'id']);
+    check('Payment ↔ картка: 1–2 літери', '«Меланія»/«Міланія» без ID — описка, склеюється', (B._kidLinkMap([{name: 'Кіщенко Меланія', id: ''}], ['Кіщенко Мілания'])['Кіщенко Мілания'] || {}).how, 'loose');
+    check("Payment ↔ картка: фронт = бекенд", 'картка в clients.html знаходить рядок Payment тією ж логікою, що й рахунки', FE(cards2, names2), B._kidLinkMap(cards2, names2));
+  }
+  const used = ['getInvoiceListData', '_invoiceSumFromYearly', '_bankDebtData'].filter((f) => fn(f).indexOf('_kidLinkMap(') < 0);
+  check('зв\'язок картка ↔ Payment — одна функція', 'рахунки, PDF навчання і групи «Банк» беруть зв\'язок з _kidLinkMap', used, []);
+}
+
 if (!fs.existsSync(path.join(__dirname, '..', '..', 'activities.html'))){
 console.log('\n' + pass + ' пройдено, ' + fail + ' з помилкою — ' + path.basename(SRC));
 process.exit(fail ? 1 : 0);

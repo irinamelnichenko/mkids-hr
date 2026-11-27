@@ -6,11 +6,12 @@ module.exports = function(srcPath){
   const fn = (name) => { const i = src.indexOf('\nfunction ' + name + '('); if (i < 0) throw new Error('функцію ' + name + ' не знайдено');
     let d = 0; for (let k = src.indexOf('{', i); k < src.length; k++){ if (src[k] === '{') d++; else if (src[k] === '}' && --d === 0) return src.slice(i, k + 1); } };
   const varLine = (name) => { const m = new RegExp('\\nvar ' + name + '\\s*=\\s*([^\\n]*);').exec(src); if (!m) throw new Error('змінну ' + name + ' не знайдено'); return 'var ' + name + ' = ' + m[1] + ';'; };
-  const V = ['_APOSTROPHES', 'INV_TG_MAX', 'BANK_DEBT_MIN', 'BANK_DEBT_LIST_MIN', 'MONTHS_CAL'].map(varLine);
+  const V = ['_APOSTROPHES', '_INV_HOMOGLYPH', 'INV_TG_MAX', 'BANK_DEBT_MIN', 'BANK_DEBT_LIST_MIN', 'MONTHS_CAL'].map(varLine);
   const F = ['toNum', '_lat2cyr', '_nameFold', '_nameFoldTight', '_journalNormName', '_bankWords', '_dopAnKid', '_levSalary', '_surnameSim', '_htmlEsc', '_invMoneyUa', '_bankMoney',
     '_bankChunks', '_bankInt', '_bankPadR', '_bankPadL', '_bankCode', '_bankKids', '_bankDebtGroups', '_bankCarried', '_bankDebtorsTexts',
     '_bankKidsFromRows', '_bankDebtorsCalc', '_bankEntryCalc', '_bankSuspectDebts', '_bankHoldFilter', '_invR2', '_prevYM', '_invBankView', '_invVerifyDiff',
-    '_invCellErr', '_invPrecheckBlock', '_invPrecheckItems', '_yearlyDepartedIdx', '_isYearlyDeparted', '_invPayByName'].map(fn);
-  const names = ['_bankKidsFromRows', '_bankDebtorsCalc', '_bankEntryCalc', '_bankSuspectDebts', '_bankHoldFilter', '_bankDebtorsTexts', '_invBankView', '_invVerifyDiff', '_invPrecheckItems', '_invPayByName', '_dopAnKid', 'MONTHS_CAL'];
+    '_invCellErr', '_invPrecheckBlock', '_invPrecheckItems', '_yearlyDepartedIdx', '_isYearlyDeparted', '_invPayByName',
+    '_kidLoose', '_kidIdName', '_kidSurname', '_kidLinkMap', '_kidRekey'].map(fn);
+  const names = ['_bankKidsFromRows', '_bankDebtorsCalc', '_bankEntryCalc', '_bankSuspectDebts', '_bankHoldFilter', '_bankDebtorsTexts', '_invBankView', '_invVerifyDiff', '_invPrecheckItems', '_invPayByName', '_dopAnKid', 'MONTHS_CAL', '_kidLinkMap', '_kidRekey', '_kidLoose'];
   return new Function('Logger', V.concat(F).join('\n') + '\nreturn {' + names.join(',') + '};')({log(){}});
 };

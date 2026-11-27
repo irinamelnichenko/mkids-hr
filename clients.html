@@ -1302,6 +1302,49 @@ function _uniqSorted(arr){
   var m={}; arr.forEach(function(x){ m[x]=1; });
   return Object.keys(m).sort();          // sort → вибір стабільний між перезавантаженнями
 }
+// ─── v7.607: ЗВ'ЯЗОК РЯДОК PAYMENT → КАРТКА не на точному імені (дзеркало бекенду _kidLinkMap) ───────────
+// Пуща: картка «Кіщенко Меланія», у Payment «Кіщенко Міланія» — картка не бачила свій рядок («не знайдена в річних даних»).
+// По черзі: той самий ПІБ → ID картки «c_<ПІБ>_<локація>» → латиниця/апостроф/е-и-і-ї-є → початок імені (хвіст ≥ 4) → 1–2 літери при тому
+// самому прізвищі; кроки після першого — лише для однозначної пари з обох боків. Нічого не перейменовується.
+var _KID_HG={a:'а',c:'с',e:'е',i:'і',o:'о',p:'р',x:'х',y:'у',k:'к',m:'м',t:'т',b:'в',h:'н'};
+function _kidKey(s){ return nameFold(String(s||'').replace(/\s+\d+\s*$/,'')).replace(/\s+/g,''); }
+function _kidLoose(s){ return _kidKey(s).replace(/[aceiopxykmtbh]/g,function(ch){ return _KID_HG[ch]||ch; }).replace(/['\-]/g,'').replace(/[єиіїй]/g,'е').replace(/[ёы]/g,'е').replace(/ъ/g,''); }
+function _kidSurname(s){ return _kidLoose(String(s||'').trim().split(/\s+/)[0]||''); }
+function _kidLev(a,b){ var m=a.length,n=b.length; if(!m) return n; if(!n) return m; var p=[],j,i; for(j=0;j<=n;j++) p[j]=j;
+  for(i=1;i<=m;i++){ var c=[i]; for(j=1;j<=n;j++) c[j]=Math.min(p[j]+1,c[j-1]+1,p[j-1]+(a.charAt(i-1)===b.charAt(j-1)?0:1)); p=c; } return p[n]; }
+function kidLinkMap(cards, names){
+  var out={}, used={}, free=[], U=[];
+  (names||[]).forEach(function(n){ n=String(n||'').trim(); if(n&&U.indexOf(n)<0) U.push(n); });
+  var C=(cards||[]).map(function(c,i){ var m=/^c_([^_]+)_/.exec(String(c.id||'')); return {i:i,name:String(c.name||'').trim(),id:String(c.id||''),k:_kidKey(c.name),l:_kidLoose(c.name),idk:m?_kidKey(m[1]):''}; }).filter(function(c){ return c.name; });
+  U.forEach(function(n){ var k=_kidKey(n), h=C.filter(function(c){ return c.k===k; }); if(h.length){ h.forEach(function(c){ used[c.i]=1; }); out[n]={card:h[0].name,id:h[0].id,how:'exact'}; } else free.push(n); });
+  [['id',function(n,c){ return c.idk&&c.idk===_kidKey(n); }],
+   ['loose',function(n,c){ return c.l===_kidLoose(n); }],
+   ['prefix',function(n,c){ var a=_kidLoose(n),b=c.l,s=a.length<b.length?a:b,L=a.length<b.length?b:a; return s.length>=8&&L.length-s.length>=4&&L.indexOf(s)===0&&_kidSurname(n)===_kidSurname(c.name); }],
+   ['typo',function(n,c){ var a=_kidLoose(n); return a.length>=8&&_kidSurname(n)===_kidSurname(c.name)&&a.indexOf(c.l)!==0&&c.l.indexOf(a)!==0&&_kidLev(a,c.l)<=2; }]
+  ].forEach(function(t){
+    var cand={}, byC={};
+    free.forEach(function(n){ if(out[n]) return; C.forEach(function(c){ if(used[c.i]||!t[1](n,c)) return; (cand[n]=cand[n]||[]).push(c); (byC[c.i]=byC[c.i]||[]).push(n); }); });
+    Object.keys(cand).forEach(function(n){ var cs=cand[n]; if(cs.length!==1||byC[cs[0].i].length!==1) return; used[cs[0].i]=1; out[n]={card:cs[0].name,id:cs[0].id,how:t[0]}; });
+  });
+  return out;
+}
+// Індекс «локація|ПІБ рядка Payment» → id картки (лише не-точні зв'язки; точні знаходить resolveCardId і так).
+var _payLinkCache=null, _payLinkKey='';
+function _payLinkIdx(){
+  var yd=S.yearlyData||[], key=yd.length+'|'+Object.keys(S.crm||{}).length;
+  if(_payLinkCache&&_payLinkKey===key) return _payLinkCache;
+  var byLoc={}, out={};
+  yd.forEach(function(r){ var L=String(r['Локація']||'').trim(), n=String(r["Ім'я дитини"]||'').trim(); if(L&&n) (byLoc[L]=byLoc[L]||[]).push(n); });
+  Object.keys(byLoc).forEach(function(L){
+    var cards=[]; Object.keys(S.crm||{}).forEach(function(id){ var c=S.crm[id]; if(c&&String(c.loc||'').trim()===L) cards.push({name:c.name,id:id}); });
+    var lk=kidLinkMap(cards, byLoc[L]); Object.keys(lk).forEach(function(n){ if(lk[n].how!=='exact') out[L+'|'+n]=lk[n]; });
+  });
+  _payLinkCache=out; _payLinkKey=key; return out;
+}
+// Рядок «Оплати-Рік» → id картки (з урахуванням іншого написання)
+function payRowCardId(r){ var L=String(r['Локація']||'').trim(), n=String(r["Ім'я дитини"]||'').trim(), x=_payLinkIdx()[L+'|'+n]; return x?x.id:resolveCardId(n,L); }
+// Картка → ПІБ рядка Payment, коли пишеться інакше ('' — так само)
+function cardPayName(id){ var ix=_payLinkIdx(); for(var k in ix){ if(ix.hasOwnProperty(k)&&ix[k].id===id) return k.slice(k.indexOf('|')+1); } return ''; }
 function resolveCardId(name, loc){
   var n=nameFold(name);      // v7.220
   var l=nameFold(loc);       // v7.220
@@ -1324,6 +1367,9 @@ function resolveCardId(name, loc){
   var pr=_uniqSorted(pref);
   if(pr.length===1) return pr[0];
   if(pr.length>1)   return base;          // однофамільці
+
+  // 1б) v7.607: рядок Payment з іншим написанням (ID картки / схоже ім'я, лише однозначна пара)
+  try{ var _lx=_payLinkIdx()[String(loc||'').trim()+'|'+String(name||'').trim()]; if(_lx&&S.crm[_lx.id]) return _lx.id; }catch(_e){}
 
   // 2) картки без локації
   var noloc=(idx.byLoc[''])||[], nl=[];
@@ -2184,6 +2230,7 @@ function _lastPaidMonthCell(ch){
     if(!S.yearlyData||!S.yearlyData.length) return '<span style="color:var(--gray2)">—</span>';
     var nm=String(ch.name||'').trim().toLowerCase(), loc=String(ch.loc||'').trim(), row=null;
     for(var i=0;i<S.yearlyData.length;i++){ var r=S.yearlyData[i]; if(String(r['Локація']||'').trim()===loc && String(r["Ім'я дитини"]||'').trim().toLowerCase()===nm){ row=r; break; } }
+    if(!row && ch.id){ var _pa=cardPayName(ch.id); if(_pa) for(var i3=0;i3<S.yearlyData.length;i3++){ var r3=S.yearlyData[i3]; if(String(r3['Локація']||'').trim()===loc && String(r3["Ім'я дитини"]||'').trim()===_pa){ row=r3; break; } } }   // v7.607
     if(!row) return '<span style="color:var(--gray2)">—</span>';
     var last='';
     CFG.MONTHS_DISP.forEach(function(m){ var f=(+(row[m+'-Факт-навч']||0))+(+(row[m+'-Факт-доп']||0)); if(f>0) last=m; });
@@ -9579,6 +9626,10 @@ function renderPayMonths(){
     var rLoc=String(r['Локація']||'').trim();
     if(rName===childName&&(!childLoc||rLoc===childLoc)){ yearRow=r; break; }
   }
+  // v7.607: у Payment ім'я може писатись інакше («Кіщенко Міланія» ↔ картка «Кіщенко Меланія») — зв'язок за ID / схожим написанням
+  var _payAlias='';
+  if(!yearRow){ _payAlias=cardPayName(id);
+    if(_payAlias) for(var i2=0;i2<S.yearlyData.length;i2++){ var r2=S.yearlyData[i2]; if(String(r2["Ім'я дитини"]||'').trim()===_payAlias&&String(r2['Локація']||'').trim()===childLoc){ yearRow=r2; break; } } }
 
   if(!yearRow){
     el.innerHTML='<div class="empty"><span class="ei">📊</span><h4>Дитина не знайдена в річних даних</h4>'
@@ -9598,6 +9649,7 @@ function renderPayMonths(){
     +'<div class="stat-card"><div class="stat-icon si-b">📋</div><div><div class="stat-val" style="font-size:20px">'+fmtN(Math.round(budY))+'</div><div class="stat-lbl">Бюджет 2026 (грн)</div></div></div>'
     +'<div class="stat-card"><div class="stat-icon '+(debtY>0?'si-r':'si-g')+'">'+( debtY>0?'❌':'✅')+'</div><div><div class="stat-val" style="font-size:20px;color:'+(debtY>0?'var(--red2)':'var(--green)')+'">'+fmtN(Math.round(debtY))+'</div><div class="stat-lbl">Борг за рік (грн)</div></div></div>'
     +'</div>';
+  if(_payAlias) html+='<div style="font-size:12px;color:var(--gray2);margin:-8px 0 12px">ℹ️ У Payment записано «'+esc(_payAlias)+'» — рядок знайдено за ID картки / схожим написанням.</div>';   // v7.607
 
   // Таблиця 12 місяців
   html+='<div class="tbl-wrap"><table class="pay-hist-table"><thead><tr>'

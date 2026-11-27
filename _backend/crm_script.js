@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.606
+// m.kids CRM — Google Apps Script v7.607
+// v7.607: зв'язок картка ↔ рядок Payment не на точному збігу імені (_kidLinkMap: ПІБ → ID картки → схоже написання, лише однозначна пара) — рахунки, PDF, звірка перед розсилкою, групи «Банк»; рядки Payment з бюджетом без картки — у перевірці рахунків (Пуща, «Кіщенко Меланія» ↔ «Кіщенко Міланія»)
 // v7.606: рахунки рахують як боржники груп «Банк»: рахунок = «Бюджет» місяця з Payment (навч/доп окремо); борг = бюджет − факт поточного місяця, вступний, «потрібно звірити», відкладені — спільні _bank*-функції; власну логіку v7.528 («незакриті місяці») прибрано; перед розсилкою звірка сума рахунку = Payment, не збігається — «🔍 Потрібно звірити», рахунок не йде
 // v7.605: «Оплати-Рік» оновлюється по одній локації з Payment (refreshYearlyLoc, логіка повного перезбору) — перед рахунками (refresh=1), перед масовою розсилкою і після кожного експорту допів
 // v7.604: рахунки — масову розсилку більше не блокує підтвердження CFO (додано в v7.530): список з ⚠ іде фінансисту «на перевірку CFO»; блок лише для дитини з від'ємним «До сплати» або помилкою в клітинці бюджету Payment
@@ -5175,7 +5176,7 @@ function _bankDebtData(loc, now){
   var rows = _aggYearLocRows(cfg, now, formatDate(now)), KF = _bankKidsFromRows(rows, M), by = KF.by, facts = KF.facts;   // v7.606: спільне з рахунками
   var pm = _prevYM(Y, M);
   var inv = getInvoiceListData({loc:loc, payMonth:M, payYear:Y, extMonth:pm.m, extYear:pm.y});
-  ((inv && inv.children) || []).forEach(function(ch){ var x = by[_dopAnKid(ch.name)]; if (x){ x.net = ch.studyNet; x.marks = Number(ch.extrasBreakdownSum) || 0; } });
+  ((inv && inv.children) || []).forEach(function(ch){ var x = by[_dopAnKid(ch.payName || ch.name)]; if (x){ x.net = ch.studyNet; x.marks = Number(ch.extrasBreakdownSum) || 0; } });
   var cs = getCRMSpreadsheet().getSheetByName(SHEET_CLIENTS), cv = cs.getDataRange().getValues(), h = cv[0].map(String);
   var iN = h.indexOf('ПІБ дитини'), iL = h.indexOf('Локація'), iS = h.indexOf('Статус'), iD = h.indexOf('Дата договору'), iE = h.indexOf('Вступний внесок');
   var cards = [];
@@ -5183,8 +5184,12 @@ function _bankDebtData(loc, now){
     if (String(cv[r][iL] || '').trim() !== loc) continue;
     var st = String(cv[r][iS] || '').trim(); if (st !== 'active' && st !== 'adaptation') continue;
     var d = cv[r][iD], iso = d instanceof Date ? Utilities.formatDate(d, 'Europe/Kiev', 'yyyy-MM-dd') : _toISO(d);
-    cards.push({name:String(cv[r][iN] || '').trim(), fee:Number(cv[r][iE]) || 0, contract:iso || ''});
+    cards.push({name:String(cv[r][iN] || '').trim(), id:String(cv[r][h.indexOf('ID')] || ''), fee:Number(cv[r][iE]) || 0, contract:iso || ''});
   }
+  // v7.607: групи «Банк» говорять ПІБ рядка Payment — картку з іншим написанням зводимо з рядком (ID / схоже ім'я), інакше її вступний не бачив оплат
+  try { var _lk = _kidLinkMap(cards, Object.keys(facts).map(function(k){ return facts[k].name; })), _rev = {};
+        Object.keys(_lk).forEach(function(n){ if (_lk[n].card !== n) _rev[_lk[n].card] = n; });
+        cards.forEach(function(c){ if (_rev[c.name]) c.name = _rev[c.name]; }); } catch(_lkE){ Logger.log('[bank] зв\'язок карток: %s', _lkE && _lkE.message); }
   return {kids:Object.keys(by).map(function(k){ return by[k]; }), facts:facts, cards:cards, Y:Y, M:M};
 }
 // «Оплатили»: рядки «Звірки_Платежів» локації з (fromMs, toMs]; «за що» — за колонкою Payment (блок місяця).
@@ -9913,7 +9918,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.606', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.607', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -32947,7 +32952,7 @@ function _invVerifyDiff(children, live){
   var out = {};
   (children || []).forEach(function(c){
     if (c.held) return;
-    var L = live[_dopAnKid(c.name)] || {bs:0, be:0}, msg = [];
+    var L = live[_dopAnKid(c.payName || c.name)] || {bs:0, be:0}, msg = [];   // v7.607: рядок Payment може писатись інакше
     var expS = c.prepayCovered ? 0 : _invR2(L.bs), gotS = _invR2(c.paymentSum), expE = _invR2(L.be), gotE = _invR2(c.extrasOnlySum != null ? c.extrasOnlySum : c.extrasSum);
     if (Math.abs(gotS - expS) >= 0.5) msg.push('навчання: рахунок ' + gotS + ' ≠ Payment ' + expS);
     if (Math.abs(gotE - expE) >= 0.5) msg.push('допи: рахунок ' + gotE + ' ≠ Payment ' + expE);
@@ -32982,6 +32987,56 @@ function _invPayByName(pvals, loc, payMonth){
     var bE = _invCellErr(pvals[pr][budIdx]), dE = dopIdx >= 0 ? _invCellErr(pvals[pr][dopIdx]) : '';
     if (bE || dE){ var e = out.err[pname] = out.err[pname] || []; if (bE) e.push(budNavchCol + ' = «' + bE + '»'); if (dE) e.push(budDopCol + ' = «' + dE + '»'); }
   }
+  return out;
+}
+// ─── v7.607: ЗВ'ЯЗОК КАРТКА ↔ РЯДОК PAYMENT — не на точному збігу імені ────────────────────────────────
+// Привід: Пуща, картка «Кіщенко Меланія», у Payment «Кіщенко Міланія» — рахунки шукали рядок за точним ПІБ і дитину не показували
+//   (рахунок на 20 500 не формувався, звірка перед розсилкою її теж не бачила). Payment не чіпаємо, тож у самому рядку ID немає;
+//   зв'язок — по черзі: 1) той самий ПІБ (лапки/пробіли/регістр, _dopAnKid); 2) ID картки «c_<ПІБ>_<локація>» — він народжується з ПІБ
+//   рядка Payment і при перейменуванні картки не змінюється; 3) «м'яке» написання: латиниця→кирилиця, без апострофа, е/и/і/ї/є/й —
+//   одна літера; 4) одне ім'я — початок іншого («Лапутько Максим» ↔ «Лапутько М аксим Віталійович»); 5) 1–2 літери різниці при тому
+//   самому прізвищі. Кроки 2–5 — лише коли пара однозначна з обох боків (жоден інший рядок/картка не підходить) і обидва ще вільні.
+//   Нічого не перейменовується — лише читання.
+function _kidLoose(s){
+  var t = _dopAnKid(s).replace(/[aceiopxykmtbh]/g, function(ch){ return _INV_HOMOGLYPH[ch] || ch; }).replace(/['\-]/g, '');
+  return t.replace(/[єиіїй]/g, 'е').replace(/ё/g, 'е').replace(/ы/g, 'е').replace(/ъ/g, '');
+}
+function _kidIdName(id){ var m = /^c_([^_]+)_/.exec(String(id || '')); return m ? m[1] : ''; }
+function _kidSurname(s){ return _kidLoose(String(s || '').trim().split(/\s+/)[0] || ''); }
+// cards: [{name, id}], names: [ПІБ з Payment / відміток] → {ПІБ рядка: {card: ПІБ картки, id, how: exact|id|loose|prefix|typo}}
+function _kidLinkMap(cards, names){
+  var out = {}, usedCard = {}, free = [];
+  var uniqNames = []; (names || []).forEach(function(n){ n = String(n || '').trim(); if (n && uniqNames.indexOf(n) < 0) uniqNames.push(n); });
+  var C = (cards || []).map(function(c, i){ return {i:i, name:String(c.name || '').trim(), id:String(c.id || ''), k:_dopAnKid(c.name), l:_kidLoose(c.name), idk:_dopAnKid(_kidIdName(c.id))}; })
+    .filter(function(c){ return c.name; });
+  uniqNames.forEach(function(n){
+    var k = _dopAnKid(n), hit = C.filter(function(c){ return c.k === k; });
+    if (hit.length){ hit.forEach(function(c){ usedCard[c.i] = 1; }); out[n] = {card:hit[0].name, id:hit[0].id, how:'exact'}; }
+    else free.push(n);
+  });
+  var tests = [
+    ['id',     function(n, c){ return c.idk && c.idk === _dopAnKid(n); }],
+    ['loose',  function(n, c){ return c.l === _kidLoose(n); }],
+    ['prefix', function(n, c){ var a = _kidLoose(n), b = c.l, s = a.length < b.length ? a : b, L = a.length < b.length ? b : a;
+                               return s.length >= 8 && L.length - s.length >= 4 && L.indexOf(s) === 0 && _kidSurname(n) === _kidSurname(c.name); }],   // хвіст ≥ 4 — по батькові, не «Іван»/«Іванна»
+    ['typo',   function(n, c){ var a = _kidLoose(n); return a.length >= 8 && _kidSurname(n) === _kidSurname(c.name) && a.indexOf(c.l) !== 0 && c.l.indexOf(a) !== 0 && _levSalary(a, c.l) <= 2; }]   // «Іван»/«Іванна», «Олександр»/«Олександра» — різні діти, не описка
+  ];
+  tests.forEach(function(t){
+    var cand = {}, byCard = {};
+    free.forEach(function(n){ if (out[n]) return; C.forEach(function(c){ if (usedCard[c.i] || !t[1](n, c)) return;
+      (cand[n] = cand[n] || []).push(c); (byCard[c.i] = byCard[c.i] || []).push(n); }); });
+    Object.keys(cand).forEach(function(n){
+      var cs = cand[n]; if (cs.length !== 1 || byCard[cs[0].i].length !== 1) return;   // неоднозначно — не склеюємо навмання
+      usedCard[cs[0].i] = 1; out[n] = {card:cs[0].name, id:cs[0].id, how:t[0]};
+    });
+  });
+  return out;
+}
+// Перекласти словник {ПІБ рядка: x} на ПІБ карток (сума, якщо кілька рядків → одна картка). Незв'язані ключі лишаються як є.
+function _kidRekey(dict, link, merge){
+  var out = {};
+  Object.keys(dict || {}).forEach(function(n){ var to = link[n] ? link[n].card : n;
+    out[to] = out.hasOwnProperty(to) ? merge(out[to], dict[n]) : dict[n]; });
   return out;
 }
 function _invLiveBudgets(loc, payMonth){
@@ -33059,6 +33114,7 @@ function _invPrecheckItems(children){
               entry:en ? {fee:_invR2(en.fee), paid:_invR2(en.paid), debt:_invR2(en.debt)} : null,
               suspect:sp ? sp.map(function(x){ return {kind:x.kind, prepaid:_invR2(x.prepaid), debt:_invR2(x.debt)}; }) : null};
     if (bl.length) it.block = bl;
+    if (c.payName) it.payName = c.payName;   // v7.607
     items.push(it);
   });
   items.sort(function(a, b){ return a.name.localeCompare(b.name, 'uk'); });
@@ -33095,7 +33151,8 @@ function getInvoicePrecheck(params){
     var warn = items.filter(function(it){ return !(it.block && it.block.length); }).length;
     return {ok:true, loc:p.loc, payMonth:p.payMonth, payYear:p.payYear, extMonth:p.extMonth, extYear:p.extYear, key:key,
             items:items, hash:hash, totals:tot, confirmed:conf, needsConfirm:items.length > 0, needsReview:(items.length > 0 && !(conf && conf.valid)),
-            blocked:blocked, warnCount:warn, verifyCount:Object.keys(_ver).length, yearly:inv.yearly || null, allowed:true};
+            blocked:blocked, warnCount:warn, verifyCount:Object.keys(_ver).length, yearly:inv.yearly || null, allowed:true,
+            unlinked:inv.unlinked || []};   // v7.607: рядки Payment з бюджетом без картки
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 // POST invoicePrecheckConfirm {loc, payMonth, payYear, extMonth?, extYear?, hash} — лише CFO; хеш має збігтися з поточним.
@@ -33219,6 +33276,18 @@ function getInvoiceListData(params){
       Logger.log('[getInvoiceListData] Sheet "%s" не знайдено — paymentSum буде 0 для всіх', SHEET_YEARLY);
     }
 
+    // v7.607: рядок Payment ↔ картка — через _kidLinkMap (ПІБ → ID картки → схоже написання), а не точний збіг імені
+    var _linkCards = clients.map(function(c){ return {name:String(c['ПІБ дитини'] || '').trim(), id:String(c['ID'] || '')}; });
+    var _payLink = _kidLinkMap(_linkCards, Object.keys(paymentByName));
+    var _payNameOf = {};   // ПІБ картки → ПІБ рядка Payment (коли пишеться інакше)
+    Object.keys(_payLink).forEach(function(n){ if (_payLink[n].card !== n) _payNameOf[_payLink[n].card] = n; });
+    var _sumF = function(a, b){ return (Number(a) || 0) + (Number(b) || 0); };
+    paymentByName = _kidRekey(paymentByName, _payLink, _sumF);
+    extrasByPayment = _kidRekey(extrasByPayment, _payLink, _sumF);
+    budgetErrByName = _kidRekey(budgetErrByName, _payLink, function(a, b){ return a.concat(b); });
+    // рядки для спільної логіки боргів — з ПІБ картки, щоб борг/вступний/«звірити» знайшли дитину
+    locRows = locRows.map(function(r){ var n = String(r[5] || '').trim(); if (!_payLink[n] || _payLink[n].card === n) return r; var c = r.slice(); c[5] = _payLink[n].card; return c; });
+
     // === 3. Extras per-child з "Додаткові_Відвідуваність" (фільтр extMonth/extYear) ===
     var attSh = _getAttendanceSheet(false);
     var attData = attSh.getDataRange().getValues();
@@ -33259,6 +33328,11 @@ function getInvoiceListData(params){
         });
       });
     } catch(_sb){ Logger.log('[invoice] абонемент: %s', _sb); }
+    // v7.607: відмітки ставляться з ростера «Оплат» (написання Payment) — так само переводимо на картку
+    extrasByChild = _kidRekey(extrasByChild, _kidLinkMap(_linkCards, Object.keys(extrasByChild)), function(a, b){
+      var bd = {}; [a.breakdown, b.breakdown].forEach(function(x){ Object.keys(x).forEach(function(k){ var s = x[k];
+        if (!bd[k]) bd[k] = {name:s.name, count:0, price:s.price, total:0}; bd[k].count += s.count; bd[k].total += s.total; }); });
+      return {sum:a.sum + b.sum, breakdown:bd}; });
 
     // v7.357: ХАРЧУВАННЯ — окремими рядками в рахунку за ДОДАТКОВІ (рішення CFO 01.10.2026: той самий одержувач,
     // що й додаткові). Лише локації з колонкою харчування (colsPerMonth=7, зараз Школа 228). До сплати —
@@ -33319,6 +33393,8 @@ function getInvoiceListData(params){
       children.push({
         id: String(c['ID'] || ''),
         name: name,
+        payName: _payNameOf[name] || '',              // v7.607: у Payment записано інакше (зв'язок за ID / схожим написанням)
+        payLink: _payNameOf[name] ? _payLink[_payNameOf[name]].how : '',
         prepayCovered: _covL ? _coverText(_covL) : '',
         group: String(c['Група'] || '').trim(),
         status: String(c['Статус'] || '').trim(),
@@ -33362,6 +33438,9 @@ function getInvoiceListData(params){
       totalClients:  clients.length,
       shownChildren: children.length,
       children: children,
+      // v7.607: рядки Payment з бюджетом місяця, для яких не знайшлось картки — рахунок їм не сформується (видно в перевірці)
+      unlinked: Object.keys(_pbn ? _pbn.pay : {}).filter(function(n){ return !_payLink[n] && ((Number(_pbn.pay[n]) || 0) !== 0 || (Number(_pbn.dop[n]) || 0) !== 0); })
+        .map(function(n){ return {name:n, study:_pbn.pay[n] || 0, extras:_pbn.dop[n] || 0}; }),
       yearly: _yr   // v7.605: оновлення «Оплати-Рік» перед рахунками (null — не просили)
     };
   } catch(e){
@@ -33616,7 +33695,7 @@ function generateInvoicePDF(opts){
     // v7.415: місяць покрито передоплатою → рахунок за навчання не формується
     var _covI = _coverFor(year + '-' + ('0' + month).slice(-2), client.id, childName, loc);
     if (_covI) return {ok:false, covered:true, error:'Навчання ' + childName + ' за ' + MONTHS_CAL[month - 1] + ' ' + year + ' ' + _coverText(_covI) + ' — рахунок не формується.'};
-    var sum = _invoiceSumFromYearly(childName, loc, month, type);
+    var sum = _invoiceSumFromYearly(childName, loc, month, type, client.id);   // v7.607: + ID картки (рядок Payment може писатись інакше)
     if(opts.dataOnly){ Logger.log('[TIMING] _invoiceSumFromYearly: %s ms', Date.now()-_tp); _tp=Date.now(); }
     // v7.423 «Лише додаткові»: навчання немає — рахунок лише за додаткові (type=extras); тут — відмова, якщо «Бюджет навч» 0
     if (client.dopOnly && !(Number(sum) > 0)) return {ok:false, dopOnly:true, error:childName + ' — «Лише додаткові»: рахунок за навчання не формується, лише за додаткові заняття.'};
@@ -34630,8 +34709,20 @@ function _invoiceClientData(childName, loc, type){
   return res;
 }
 
+// v7.607: картки локації (як у списку рахунків: active / adaptation / graduated; під-локація — блок хоста) для _kidLinkMap
+function _kidCardsOfLoc(loc){
+  var sub = _subLocOf(loc), sh = getCRMSpreadsheet().getSheetByName(SHEET_CLIENTS), v = sh.getDataRange().getValues(), h = v[0].map(String);
+  var iN = h.indexOf('ПІБ дитини'), iI = h.indexOf('ID'), iL = h.indexOf('Локація'), iS = h.indexOf('Статус'), iG = h.indexOf('Група'), out = [];
+  for (var r = 1; r < v.length; r++){
+    var cl = String(v[r][iL] || '').trim(), st = String(v[r][iS] || '').trim();
+    if (st !== 'active' && st !== 'adaptation' && st !== 'graduated') continue;
+    if (sub){ if (cl !== loc && !(cl === sub.host && _sameBlock({group:v[r][iG]}, sub.group))) continue; } else if (cl !== loc) continue;
+    out.push({name:String(v[r][iN] || '').trim(), id:String(v[r][iI] || '')});
+  }
+  return out;
+}
 // Сума з Оплати-Рік: studies → "<Місяць>-Бюджет-навч", extras → "-Бюджет-доп".
-function _invoiceSumFromYearly(childName, loc, month, type){
+function _invoiceSumFromYearly(childName, loc, month, type, childId){
   var sh = getCRMSpreadsheet().getSheetByName(SHEET_YEARLY);
   if (!sh) return 0;
   var vals = sh.getDataRange().getValues();
@@ -34648,9 +34739,15 @@ function _invoiceSumFromYearly(childName, loc, month, type){
   }
   var nn = String(childName).trim(), ll = String(loc).trim(), _sumY = 0;
   var depIdx = _yearlyDepartedIdx(h);   // v7.299
+  var _want = {}; _want[nn] = 1;
+  try {   // v7.607: той самий зв'язок картка ↔ рядок, що й у списку рахунків (_kidLinkMap)
+    var _pn = []; for (var q = 1; q < vals.length; q++) if (String(vals[q][locIdx]).trim() === ll) _pn.push(String(vals[q][nameIdx]).trim());
+    var _lk = _kidLinkMap(_kidCardsOfLoc(ll), _pn);
+    Object.keys(_lk).forEach(function(n){ if (_lk[n].card === nn && (!childId || !_lk[n].id || _lk[n].id === String(childId))) _want[n] = 1; });
+  } catch(_lkE){ Logger.log('[invoicePDF] зв\'язок з Payment: %s', _lkE && _lkE.message); }
   for (var r = 1; r < vals.length; r++){
     if (String(vals[r][locIdx]).trim() !== ll) continue;
-    if (String(vals[r][nameIdx]).trim() !== nn) continue;
+    if (!_want[String(vals[r][nameIdx]).trim()]) continue;
     if (_isYearlyDeparted(vals[r], depIdx)) continue;
     _sumY += Number(vals[r][budIdx]) || 0;   // v7.361: дублі рядків — складаємо (як у списку рахунків)
   }
