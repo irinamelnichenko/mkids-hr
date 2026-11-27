@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.612
+// m.kids CRM — Google Apps Script v7.613
+// v7.613: SLA лідів — кнопки-переходи (меню дат/годин, «назад», запит примітки) більше не закривають SLA, лише дія чи введений текст; нічна звірка експортів перенесена з tgSlaCheck на invoiceQueueTick
 // v7.612: квота тригерів — черга рахунків повний прохід лише за подією (вебхук) або раз на 30 хв, заявки «чекає» без локації більше не забирають пачку; знімки дашборда — лише змінені / застарілі частини; час приміток на tgSlaCheck тепер рахується; експорт допів у Payment — зв'язок картка ↔ рядок (v7.607); OPEX з виписки й ЗП з відомості — не в закриті / заморожені місяці
 // v7.611: щоденна звірка — на tgSlaCheck (ліміт тригерів проєкту), вмикає auditExportsSetup; createCardsFromPayment — група картки як у ростері «Оплат» (відмітки допів), а не назва блоку файлу (Нац.Гвардії: «Preschool» = «Розумники»)
 // v7.610: createCardsFromPayment — картки для рядків Payment без картки (лише «Клієнти», Payment не чіпає); щоденна звірка експортів (05:00 прогін без запису, 09:00 — CFO в Telegram лише розбіжності й паузи: знижки відсутності, допи → Payment/Salary, предметники → Salary); експорт знижок не пише в рік, відмінний від файлів (грудень → січень 2027 — інакше лягло б у січень 2026), колонка «Бюджет навч» — за розкладкою локації (7 колонок)
@@ -9387,6 +9388,9 @@ function _leadTouchReaction(id, who){
   return false;
 }
 
+// v7.613: кнопки, що лише відкривають меню / просять ввід (лід не змінюють) — не реакція для SLA.
+var LEAD_NAV_ACTS = {note:1, campaign:1, exother:1, extother:1, cbother:1, cbtother:1, later:1, exc:1, back:1, extback:1, cbtback:1, refuse:1};
+function _leadIsNavAct(act){ act = String(act || ''); return !!LEAD_NAV_ACTS[act] || act.indexOf('exth:') === 0 || act.indexOf('cbth:') === 0; }
 function _tgHandleCallback(cq){
   try{
     var parts=String(cq.data||'').split('|');
@@ -9394,8 +9398,11 @@ function _tgHandleCallback(cq){
     var id=parts[1], act=parts[2];
     var who=cq.from && (cq.from.username?('@'+cq.from.username):(cq.from.first_name||'')) || '';
     try{ if(cq.from && cq.from.username && cq.from.id){ _tgLearnUserId(cq.from.username, cq.from.id); _TG_DIRS_CACHE=null; } }catch(_lu){}  // автозаповнення user_id
-    // v7.156: фіксуємо реакцію ДО розгалуження — байдуже, яку саме кнопку натиснули.
-    _leadTouchReaction(id, who);
+    // v7.156: фіксуємо реакцію ДО розгалуження. v7.613: але НЕ на кнопки-переходи (відкрити меню дат / годин, «← назад»,
+    //   запит примітки чи кампанії без тексту) — вони не змінюють ліда, а SLA закривали: Бровари 27.11 18:36, «Олена 2 роки» —
+    //   натиск о 18:38 без дії, статус лишився «новий», нагадування о 18:51 не пішло. Реакцію ставлять сама дія (_tgUpdateLead)
+    //   або введений текст (_tgHandlePending / _tgHandleReply).
+    if (!_leadIsNavAct(act)) _leadTouchReaction(id, who);
     // Кнопки, що чекають ВВІД: лише popup-підтвердження, НІЧОГО в чат; наступне повідомлення = ввід.
     if(act==='note'){    _tgAck(cq); _tgSetPending(cq, id, 'note',    'напишіть примітку:',              'Примітка до ліда'); return; }
     if(act==='campaign'){_tgAck(cq); _tgSetPending(cq, id, 'campaign','напишіть кампанію:',              'напр. знижка вересень'); return; }   // v7.169
@@ -9954,7 +9961,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.612', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.613', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -15158,9 +15165,9 @@ function getTriggerStats(params){
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 function tgSlaCheck(e){ var _t = Date.now(); try { return _tgSlaCheck__impl(e); } finally { _trigAcc('tgSlaCheck', _t);
-  var _t2 = Date.now(); try { _notesTickPiggy(); } catch(_n){} _trigAcc('notesTick (на tgSlaCheck)', _t2);   // v7.612: раніше цей час не рахувався
-  var _t3 = Date.now(); try { _auditExpPiggy(); } catch(_a){} _trigAcc('звірка експортів (на tgSlaCheck)', _t3); } }   // v7.611 + звірка експортів   // v7.568 + примітки
-function invoiceQueueTick(e){ var _t = Date.now(); try { return _invoiceQueueTick__impl(e); } finally { _trigAcc('invoiceQueueTick', _t); } }
+  var _t2 = Date.now(); try { _notesTickPiggy(); } catch(_n){} _trigAcc('notesTick (на tgSlaCheck)', _t2); } }   // v7.612: час приміток рахується; v7.613: нічна звірка — не тут (SLA першочергово), а на invoiceQueueTick
+function invoiceQueueTick(e){ var _t = Date.now(); try { return _invoiceQueueTick__impl(e); } finally { _trigAcc('invoiceQueueTick', _t);
+  var _t3 = Date.now(); try { _auditExpPiggy(); } catch(_a){} _trigAcc('звірка експортів (на invoiceQueueTick)', _t3); } }   // v7.613: звірка — тут, не в tgSlaCheck
 function dashSnapshotTick(e){ var _t = Date.now(); try { return _dashSnapshotTick__impl(e); } finally { _trigAcc('dashSnapshotTick', _t); } }
 function bankNightly(e){ var _t = Date.now(); try { return _bankNightly__impl(e); } finally { _trigAcc('bankNightly', _t); } }
 function promoNightly(e){ var _t = Date.now(); try { return _promoNightly__impl(e); } finally { _trigAcc('promoNightly', _t); } }
@@ -15281,7 +15288,7 @@ function _auditExpRun(){
   }
   if (st.pos >= st.locs.length){ st.done = new Date().toISOString(); _auditExpSave(st); }
 }
-// v7.611: тригерів у проєкті — ліміт Google (20), тож звірка їде на 5-хвилинному tgSlaCheck: з 05:00 — пачками ≤ 4 хв,
+// v7.611: тригерів у проєкті — ліміт Google (20), тож звірка їде на 5-хвилинному тригері (v7.613: invoiceQueueTick, не tgSlaCheck — SLA лідів першочергово): з 05:00 — пачками ≤ 4 хв,
 //   о 09:00 — один звіт за день. Вмикає auditExportsSetup (властивість AUDIT_EXP_ON=1).
 function _auditExpPiggy(){
   var P = PropertiesService.getScriptProperties(); if (P.getProperty('AUDIT_EXP_ON') !== '1') return;

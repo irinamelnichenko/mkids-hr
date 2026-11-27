@@ -1597,7 +1597,7 @@ if (src.indexOf('\nfunction _auditEvalLoc(') >= 0){
     {empty: A._auditExpText(ok, [], '2026-11-28'), has: /Кругла[\s\S]*Яременко/.test(A._auditExpText({day: '2026-11-28', locs: ['Кругла'], pos: 1, res: [{loc: 'Кругла', issues: ['знижки: Яременко']}]}, [], '2026-11-28')),
      stale: /не запускалась/.test(A._auditExpText(ok, [], '2026-11-29'))}, {empty: '', has: true, stale: true});
   check('звірка експортів: без нових тригерів', 'їде на tgSlaCheck (ліміт тригерів проєкту), вмикач — властивість; жодного newTrigger у звірці',
-    {piggy: /_auditExpPiggy\(\)/.test(fn('tgSlaCheck')),
+    {piggy: /_auditExpPiggy\(\)/.test(fn('invoiceQueueTick')) && !/_auditExpPiggy/.test(fn('tgSlaCheck')),
      noTrig: ['_auditExpRun', '_auditExpPiggy', 'auditExportsSetup', '_auditExpStart'].every((f) => fn(f).indexOf('newTrigger') < 0)}, {piggy: true, noTrig: true});
   check('знижки відсутності: не в чужий рік', 'експорт не пише січень 2027 у файл 2026; колонка — за розкладкою локації (7 колонок)',
     {year: /year !== PAY_BASE_YEAR\) return \{ok:true, skippedYear:true/.test(fn('exportVacationDiscountToPayments')), cpm: /_paymentLayout\(_vCpm\)/.test(fn('exportVacationDiscountToPayments'))}, {year: true, cpm: true});
@@ -1644,6 +1644,16 @@ if (src.indexOf('\nfunction _invTickDue(') >= 0){
   check('закриті / заморожені місяці: OPEX і ЗП з відомості', 'opexAddExpenses пропускає позицію закритого місяця, salaryReconcileApply відмовляє (запис і відкат)',
     {opex: /_isMonthClosed\(year, mon\)/.test(fn('opexAddExpenses')), sal: /if \(!dryRun && _isMonthClosed\(year, month\)\) return _closedMonthError/.test(fn('salaryReconcileApply')),
      dop: /_dopLinkMarks\(/.test(fn('_exportAttendanceToPaymentsCore'))}, {opex: true, sal: true, dop: true});
+}
+
+// ── v7.613: SLA лідів — кнопки-переходи не закривають SLA ──
+if (src.indexOf('\nfunction _leadIsNavAct(') >= 0){
+  const N = new Function(/\nvar LEAD_NAV_ACTS[^\n]*/.exec(src)[0] + '\n' + fn('_leadIsNavAct') + ';return _leadIsNavAct;')();
+  check('SLA лідів: що є реакцією', 'меню екскурсії / передзвону, години, «назад», запит примітки — не реакція; взяти, додзвонився, не відповів, дата, договір, причина відмови — реакція',
+    {nav: ['exc', 'later', 'note', 'campaign', 'back', 'exth:10', 'cbth:9', 'extback', 'refuse', 'exother'].filter((a) => !N(a)),
+     real: ['take', 'call_ok', 'call_no', 'sign', 'exd:28.11', 'ext:10:00', 'cbd:28.11', 'cbt:9:00', 'r:price', 'reassign'].filter((a) => N(a))}, {nav: [], real: []});
+  check('SLA лідів: першочергово', 'у tgSlaCheck немає нічної звірки; реакцію ставить лише не-перехід',
+    {sla: !/_auditExpPiggy/.test(fn('tgSlaCheck')), gate: /if \(!_leadIsNavAct\(act\)\) _leadTouchReaction/.test(fn('_tgHandleCallback'))}, {sla: true, gate: true});
 }
 
 if (!fs.existsSync(path.join(__dirname, '..', '..', 'activities.html'))){
