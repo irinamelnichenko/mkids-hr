@@ -1599,6 +1599,10 @@ if (src.indexOf('\nfunction _auditEvalLoc(') >= 0){
   check('звірка експортів: без нових тригерів', 'їде на tgSlaCheck (ліміт тригерів проєкту), вмикач — властивість; жодного newTrigger у звірці',
     {piggy: /_auditExpPiggy\(\)/.test(fn('invoiceQueueTick')) && !/_auditExpPiggy/.test(fn('tgSlaCheck')),
      noTrig: ['_auditExpRun', '_auditExpPiggy', 'auditExportsSetup', '_auditExpStart'].every((f) => fn(f).indexOf('newTrigger') < 0)}, {piggy: true, noTrig: true});
+  const PH = new Function(/\nvar AUDIT_EXP_KEY[^;]*;/.exec(src)[0] + '\n' + fn('_auditExpPhase') + ';return _auditExpPhase;')();
+  check('звірка експортів: лише вночі', '01:00–06:00 — прогін; 09:00 і далі — лише звіт (раз на день); удень і ввечері прогонів немає; не в tgSlaCheck',
+    {h: [0, 1, 3, 5, 6, 8, 9, 14, 23].map((h) => h + ':' + PH(h)), sla: !/_auditExp/.test(fn('tgSlaCheck'))},
+    {h: ['0:idle', '1:run', '3:run', '5:run', '6:idle', '8:idle', '9:report', '14:report', '23:report'], sla: true});
   check('знижки відсутності: не в чужий рік', 'експорт не пише січень 2027 у файл 2026; колонка — за розкладкою локації (7 колонок)',
     {year: /year !== PAY_BASE_YEAR\) return \{ok:true, skippedYear:true/.test(fn('exportVacationDiscountToPayments')), cpm: /_paymentLayout\(_vCpm\)/.test(fn('exportVacationDiscountToPayments'))}, {year: true, cpm: true});
 }

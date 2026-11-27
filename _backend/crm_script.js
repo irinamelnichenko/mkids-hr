@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.613
+// m.kids CRM — Google Apps Script v7.614
+// v7.614: нічна звірка експортів — прогони лише вночі 01:00–06:00 (на invoiceQueueTick, не в tgSlaCheck), о 09:00 — лише надсилання звіту
 // v7.613: SLA лідів — кнопки-переходи (меню дат/годин, «назад», запит примітки) більше не закривають SLA, лише дія чи введений текст; нічна звірка експортів перенесена з tgSlaCheck на invoiceQueueTick
 // v7.612: квота тригерів — черга рахунків повний прохід лише за подією (вебхук) або раз на 30 хв, заявки «чекає» без локації більше не забирають пачку; знімки дашборда — лише змінені / застарілі частини; час приміток на tgSlaCheck тепер рахується; експорт допів у Payment — зв'язок картка ↔ рядок (v7.607); OPEX з виписки й ЗП з відомості — не в закриті / заморожені місяці
 // v7.611: щоденна звірка — на tgSlaCheck (ліміт тригерів проєкту), вмикає auditExportsSetup; createCardsFromPayment — група картки як у ростері «Оплат» (відмітки допів), а не назва блоку файлу (Нац.Гвардії: «Preschool» = «Розумники»)
@@ -9961,7 +9962,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.613', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.614', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -15199,7 +15200,8 @@ function opex27OnEdit(e){ var _t = Date.now(); try { return _opex27OnEdit__impl(
 //   Розбіжність = експорт ЗАПИСАВ БИ щось (система ≠ Payment/Salary) або не знайшов рядок.
 // 09:00 — у особистий чат CFO (INVOICE_CFO_CHAT_ID) список розбіжностей і пауз; усе збігається — нічого не надсилає.
 //   Нічого не пише ні в Payment, ні в Salary, ні в аркуші — стан лише у властивостях скрипта.
-var AUDIT_EXP_KEY = 'AUDIT_EXP_STATE', AUDIT_EXP_START_HOUR = 5, AUDIT_EXP_REPORT_HOUR = 9, AUDIT_EXP_BUDGET_MS = 180000;   // v7.611: ≤ 3 хв на пачку (одна локація ~1–1,5 хв), разом з tgSlaCheck — у межах 6 хв
+var AUDIT_EXP_KEY = 'AUDIT_EXP_STATE', AUDIT_EXP_START_HOUR = 1, AUDIT_EXP_END_HOUR = 6,   // v7.614: прогони лише вночі 01:00–06:00
+    AUDIT_EXP_REPORT_HOUR = 9, AUDIT_EXP_BUDGET_MS = 180000;   // v7.611: ≤ 3 хв на пачку (одна локація ~1–1,5 хв), разом з tgSlaCheck — у межах 6 хв
 function _auditExpLocs(){
   var out = [];
   (getLocations().data || []).forEach(function(l){ var t = String(l.typ || '').trim(), n = String(l.loc || '').trim();
@@ -15290,19 +15292,21 @@ function _auditExpRun(){
 }
 // v7.611: тригерів у проєкті — ліміт Google (20), тож звірка їде на 5-хвилинному тригері (v7.613: invoiceQueueTick, не tgSlaCheck — SLA лідів першочергово): з 05:00 — пачками ≤ 4 хв,
 //   о 09:00 — один звіт за день. Вмикає auditExportsSetup (властивість AUDIT_EXP_ON=1).
+function _auditExpPhase(hour){ hour = Number(hour); return (hour >= AUDIT_EXP_START_HOUR && hour < AUDIT_EXP_END_HOUR) ? 'run' : (hour >= AUDIT_EXP_REPORT_HOUR ? 'report' : 'idle'); }
 function _auditExpPiggy(){
   var P = PropertiesService.getScriptProperties(); if (P.getProperty('AUDIT_EXP_ON') !== '1') return;
   var now = new Date(), hour = Number(Utilities.formatDate(now, 'Europe/Kiev', 'H')), day = _auditExpDay();
-  if (hour < AUDIT_EXP_START_HOUR) return;
+  var phase = _auditExpPhase(hour);   // v7.614: 'run' лише вночі; 'report' — один раз о 9:00; решта доби — нічого
+  if (phase === 'report'){ if (P.getProperty('AUDIT_EXP_SENT') !== day){ P.setProperty('AUDIT_EXP_SENT', day); _auditExpReport(); } return; }
+  if (phase !== 'run') return;
   var last = Number(P.getProperty('AUDIT_EXP_LAST')) || 0; if (Date.now() - last < 4 * 60 * 1000) return;
   P.setProperty('AUDIT_EXP_LAST', String(Date.now()));
   var st = _auditExpLoad();
-  if (!st || st.day !== day){ if (hour < 12) _auditExpSave({day:day, locs:_auditExpLocs(), pos:0, res:[], started:now.toISOString()}); st = _auditExpLoad(); }
-  if (st && st.day === day && st.pos < st.locs.length && hour < 12){
-    var _al = LockService.getUserLock();   // два tgSlaCheck поспіль не ганяють ту саму пачку
+  if (!st || st.day !== day){ _auditExpSave({day:day, locs:_auditExpLocs(), pos:0, res:[], started:now.toISOString()}); st = _auditExpLoad(); }
+  if (st && st.day === day && st.pos < st.locs.length){
+    var _al = LockService.getUserLock();   // два тіки поспіль не ганяють ту саму пачку
     if (_al.tryLock(0)){ try { _auditExpRun(); } finally { _al.releaseLock(); } }
   }
-  if (hour >= AUDIT_EXP_REPORT_HOUR && P.getProperty('AUDIT_EXP_SENT') !== day){ P.setProperty('AUDIT_EXP_SENT', day); _auditExpReport(); }
 }
 // Текст звіту (чиста функція): '' — нічого не надсилати.
 function _auditExpText(st, pauses, day){
@@ -15329,7 +15333,7 @@ function auditExportsSetup(body){
   var a = _promoActor(body || {}); if (!(a && _roleKey(a.role) === 'cfo')) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
   var on = (body.off === true) ? '0' : '1';   // v7.611: без власних тригерів (ліміт проєкту) — їде на tgSlaCheck
   PropertiesService.getScriptProperties().setProperty('AUDIT_EXP_ON', on);
-  return {ok:true, on:on === '1', run:'з ' + AUDIT_EXP_START_HOUR + ':00 (на tgSlaCheck кожні 5 хв)', report:AUDIT_EXP_REPORT_HOUR + ':00 Europe/Kiev',
+  return {ok:true, on:on === '1', run:AUDIT_EXP_START_HOUR + ':00–' + AUDIT_EXP_END_HOUR + ':00 (на invoiceQueueTick, не tgSlaCheck)', report:AUDIT_EXP_REPORT_HOUR + ':00 Europe/Kiev',
           to:_invProp('INVOICE_CFO_CHAT_ID') ? 'особистий чат CFO' : 'НЕМАЄ INVOICE_CFO_CHAT_ID', tgSla:ScriptApp.getProjectTriggers().some(function(t){ return t.getHandlerFunction() === 'tgSlaCheck'; })};
 }
 // GET getAuditExports&loc= — та сама звірка однієї локації зараз (без запису, без надсилання); без loc — стан нічного прогону і паузи.
