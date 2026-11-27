@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.607
+// m.kids CRM — Google Apps Script v7.608
+// v7.608: знижки відсутності, записані вручну доданком у наступний місяць (addLocPaymentStudyDiscount, тег «[знижка відсутності X → Y]» у журналі грошових правок), експорт знижок більше не чіпає ні в X, ні в Y — без подвоєння (Кругла, листопад → грудень)
 // v7.607: зв'язок картка ↔ рядок Payment не на точному збігу імені (_kidLinkMap: ПІБ → ID картки → схоже написання, лише однозначна пара) — рахунки, PDF, звірка перед розсилкою, групи «Банк»; рядки Payment з бюджетом без картки — у перевірці рахунків (Пуща, «Кіщенко Меланія» ↔ «Кіщенко Міланія»)
 // v7.606: рахунки рахують як боржники груп «Банк»: рахунок = «Бюджет» місяця з Payment (навч/доп окремо); борг = бюджет − факт поточного місяця, вступний, «потрібно звірити», відкладені — спільні _bank*-функції; власну логіку v7.528 («незакриті місяці») прибрано; перед розсилкою звірка сума рахунку = Payment, не збігається — «🔍 Потрібно звірити», рахунок не йде
 // v7.605: «Оплати-Рік» оновлюється по одній локації з Payment (refreshYearlyLoc, логіка повного перезбору) — перед рахунками (refresh=1), перед масовою розсилкою і після кожного експорту допів
@@ -9918,7 +9919,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.607', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.608', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -29599,6 +29600,20 @@ function _vacCellPlan(cur, lastWritten, disc, wasFormula, nextFormula){
   return {conflict:false, base:base, newSum:newSum, newValue:newValue, write:write, protectNext:protectNext};
 }
 
+// v7.608: ручні знижки відсутності з «Грошові_Правки_Лог» (addLocPaymentStudyDiscount з тегом «[знижка відсутності 2026-11 → 2026-12]»)
+//   → {нормІм'я|РРРР-ММ: опис} і для місяця відсутності, і для місяця запису. Чиста функція (тест).
+var ABS_MOVED_RE = /\[знижка відсутності (\d{4}-\d{2}) → (\d{4}-\d{2})\]/;
+function _absMovedParse(rows, loc){
+  var out = {}, h = (rows && rows[0]) || [], iR = h.indexOf('Роут'), iL = h.indexOf('Локація'), iN = h.indexOf('Дитина'), iP = h.indexOf('Причина'), iA = h.indexOf('Стало');
+  if (iR < 0 || iL < 0 || iN < 0 || iP < 0) return out;
+  for (var r = 1; r < rows.length; r++){
+    if (String(rows[r][iR]) !== 'addLocPaymentStudyDiscount' || _nameFold(rows[r][iL]) !== _nameFold(loc)) continue;
+    var m = ABS_MOVED_RE.exec(String(rows[r][iP] || '')); if (!m) continue;
+    var nk = _normNameVac(rows[r][iN]), txt = String(rows[r][iP]) + (iA >= 0 ? ' · ' + rows[r][iA] : '');
+    out[nk + '|' + m[1]] = txt; out[nk + '|' + m[2]] = txt;
+  }
+  return out;
+}
 function exportVacationDiscountToPayments(params){
   var _vacLock = null;   // v7.81
   try {
@@ -29671,9 +29686,19 @@ function exportVacationDiscountToPayments(params){
     var journalOps = [], details = [], notFound = [];
     var cellsWritten = 0, formulaConverted = 0, nextProtected = 0, updated = 0, totalDisc = 0;
 
+    var _moved = {}; try { _moved = _absMovedParse(_moneyJournalSheet(true).getDataRange().getValues(), loc); } catch(_mv){ Logger.log('[vacDiscount] журнал правок: %s', _mv && _mv.message); }
     Object.keys(rowByNorm).forEach(function(nk){
       var rowIdx0 = _payPickRow(rowsByNorm[nk], data, month, loc, year);   // v7.433 перехід між групами — рядок місяця
       if (_regNk[nk] || PROMO_FORMULA_RE.test(String((colFormulas[rowIdx0] || [''])[0] || ''))) return;   // v7.418: клітинка реєстру — не чіпаємо
+      // v7.608: знижку відсутності вже записано вручну доданком (журнал грошових правок, «[знижка відсутності X → Y]») — у місяці X
+      //   і Y клітинку не чіпаємо, інакше знижка подвоїться (Кругла, листопад → грудень 27.11.2026)
+      var _mvK = nk + '|' + _ymT;
+      if (_moved[_mvK]){
+        var _dm = discByNorm[nk] ? Math.round(discByNorm[nk].discount) : 0;
+        details.push({child: trim(String(data[rowIdx0][0] || '')), discount: _dm, currentBefore: Number(colValues[rowIdx0][0]) || 0, wasFormula: false,
+                      lastWritten: -_dm, row: rowIdx0 + 1, status: 'moved', note: _moved[_mvK]});
+        return;
+      }
       // v6.41: формульні рядки БІЛЬШЕ НЕ пропускаємо. getValues() дає обчислене
       // значення формули (напр. 21000), яке стає базою; setValue замінює формулу числом.
       var wasFormula   = !!(colFormulas[rowIdx0] && colFormulas[rowIdx0][0]);
@@ -30017,9 +30042,11 @@ function _moneyJournalLog(entries){
   try {
     var sh = _moneyJournalSheet(true);
     var stamp = formatDate(new Date());
+    // v7.608: формулу («=BD52-4500») пишемо ТЕКСТОМ — інакше аркуш журналу рахує її сам (Кругла 27.11: «було» '' → «стало» −4500)
+    var _txt = function(v){ return (typeof v === 'string' && /^[=+]/.test(v)) ? "'" + v : v; };
     var rows = entries.map(function(e){ return [stamp, _entryAuthor(e.by),   /* v7.372 */ String(e.route||''), String(e.loc||''),
       String(e.name||''), (e.year!=null?e.year:''), (e.month!=null?e.month:''), String(e.col||''),
-      (e.before!=null?e.before:''), (e.after!=null?e.after:''), String(e.reason||'')]; });
+      (e.before!=null?_txt(e.before):''), (e.after!=null?_txt(e.after):''), String(e.reason||'')]; });
     sh.getRange(sh.getLastRow()+1, 1, rows.length, MONEY_JOURNAL_HEADER.length).setValues(rows);
   } catch(_e){ Logger.log('[_moneyJournalLog] ERR %s', _e && _e.message); }
 }

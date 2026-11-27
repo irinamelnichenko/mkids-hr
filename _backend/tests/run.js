@@ -1539,7 +1539,7 @@ if (src.indexOf('\nfunction _kidLinkMap(') >= 0){
   check('рахунки: Кіщенко Меланія (Пуща)', 'рахунок грудня береться з рядка «Кіщенко Міланія»: навчання 20 500, допи 980', {pay: pay['Кіщенко Меланія'], dop: dop['Кіщенко Меланія']}, {pay: 20500, dop: 980});
   const ver = B._invVerifyDiff([{name: 'Кіщенко Меланія', payName: 'Кіщенко Міланія', paymentSum: 20500, extrasOnlySum: 980}],
     {[B._dopAnKid('Кіщенко Міланія')]: {bs: 20500, be: 980}});
-  check('звірка перед розсилкою: інше написання', 'звіряє з рядком Payment за зв\'язком, а не «0 ≠ 20 500»', ver, {});
+  check('звірка перед розсилкою: інше написання', 'звіряє з рядком Payment за зв\'язком, а не «0 ≠ 20 500»', {ver}, {ver: {}});
   const CH = path.join(__dirname, '..', '..', 'clients.html');
   if (fs.existsSync(CH)){
     const h = fs.readFileSync(CH, 'utf8'), a = h.indexOf('var _KID_HG='), b = h.indexOf('// Індекс «локація|ПІБ рядка Payment»');
@@ -1554,7 +1554,22 @@ if (src.indexOf('\nfunction _kidLinkMap(') >= 0){
     check("Payment ↔ картка: фронт = бекенд", 'картка в clients.html знаходить рядок Payment тією ж логікою, що й рахунки', FE(cards2, names2), B._kidLinkMap(cards2, names2));
   }
   const used = ['getInvoiceListData', '_invoiceSumFromYearly', '_bankDebtData'].filter((f) => fn(f).indexOf('_kidLinkMap(') < 0);
-  check('зв\'язок картка ↔ Payment — одна функція', 'рахунки, PDF навчання і групи «Банк» беруть зв\'язок з _kidLinkMap', used, []);
+  check('зв\'язок картка ↔ Payment — одна функція', 'рахунки, PDF навчання і групи «Банк» беруть зв\'язок з _kidLinkMap', {used}, {used: []});
+}
+
+// ── v7.608: ручна знижка відсутності в наступному місяці — експорт не подвоює (Кругла, листопад → грудень) ──
+if (src.indexOf('\nfunction _absMovedParse(') >= 0){
+  const lat = {'c':'с','o':'о','e':'е','a':'а','p':'р','x':'х','y':'у','i':'і','k':'к','m':'м','t':'т'};
+  const E = new Function('_nameFold', '_normNameVac', /\nvar ABS_MOVED_RE[^\n]*/.exec(src)[0] + '\n' + fn('_absMovedParse') + ';return _absMovedParse;')(
+    (x) => String(x || '').trim().toLowerCase(), (x) => String(x || '').replace(/\s+/g, '').toLowerCase());
+  const H = ['Коли','Ким','Роут','Локація','Дитина','Рік','Місяць','Колонка','Було','Стало','Причина'];
+  const M = E([H, ['', 'CFO', 'addLocPaymentStudyDiscount', 'Кругла', 'Яременко Ярослав', 2026, 12, 'Бюджет-навч BH52', 18000, '=18000-4500', 'відпустка листопада, 1 тиждень [знижка відсутності 2026-11 → 2026-12]'],
+                  ['', 'CFO', 'addLocPaymentStudyDiscount', 'Кругла', 'Інша Дитина', 2026, 12, 'x', 1, 1, 'Приведи друга'],
+                  ['', 'CFO', 'setLocPaymentBudget', 'Кругла', 'Третя Дитина', 2026, 12, 'x', 1, 1, '[знижка відсутності 2026-11 → 2026-12]']], 'Кругла');
+  check('знижка відсутності вручну: без подвоєння', 'експорт бачить ручний запис і в листопаді, і в грудні; інші правки не рахуються',
+    {keys: Object.keys(M).sort()}, {keys: ['яременкоярослав|2026-11', 'яременкоярослав|2026-12']});
+  check('знижка відсутності вручну: експорт пропускає', 'exportVacationDiscountToPayments не пише клітинку дитини з ручним записом місяця',
+    {uses: /_absMovedParse\(/.test(fn('exportVacationDiscountToPayments')) && /status: 'moved'/.test(fn('exportVacationDiscountToPayments'))}, {uses: true});
 }
 
 if (!fs.existsSync(path.join(__dirname, '..', '..', 'activities.html'))){
