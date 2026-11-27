@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.611
+// m.kids CRM — Google Apps Script v7.612
+// v7.612: квота тригерів — черга рахунків повний прохід лише за подією (вебхук) або раз на 30 хв, заявки «чекає» без локації більше не забирають пачку; знімки дашборда — лише змінені / застарілі частини; час приміток на tgSlaCheck тепер рахується; експорт допів у Payment — зв'язок картка ↔ рядок (v7.607); OPEX з виписки й ЗП з відомості — не в закриті / заморожені місяці
 // v7.611: щоденна звірка — на tgSlaCheck (ліміт тригерів проєкту), вмикає auditExportsSetup; createCardsFromPayment — група картки як у ростері «Оплат» (відмітки допів), а не назва блоку файлу (Нац.Гвардії: «Preschool» = «Розумники»)
 // v7.610: createCardsFromPayment — картки для рядків Payment без картки (лише «Клієнти», Payment не чіпає); щоденна звірка експортів (05:00 прогін без запису, 09:00 — CFO в Telegram лише розбіжності й паузи: знижки відсутності, допи → Payment/Salary, предметники → Salary); експорт знижок не пише в рік, відмінний від файлів (грудень → січень 2027 — інакше лягло б у січень 2026), колонка «Бюджет навч» — за розкладкою локації (7 колонок)
 // v7.609: знято паузу експорту знижок відпустки/лікарняного для Круглої (VAC_EXPORT_PAUSED порожній) — нічний прогін, кнопка й звірка знову пишуть у Payment
@@ -3280,6 +3281,7 @@ function tgInvoiceWebhook(e){
   try {
     var secret = _invProp('INVOICE_WEBHOOK_SECRET');
     if(!secret || !e || !e.parameter || String(e.parameter.s) !== secret) return {ok:false, error:'bad secret'};
+    try { PropertiesService.getScriptProperties().setProperty('INV_DIRTY', '1'); } catch(_d){}   // v7.612: тік черги зробить повний прохід
     var up = {};
     try { up = JSON.parse(e.postData.contents); } catch(_p){ return {ok:true, note:'no body'}; }
     if(_invSeen(up.update_id)) return {ok:true, dup:true, update_id:up.update_id};
@@ -4017,12 +4019,24 @@ function ensureInvoiceTrigger(body){
     return {ok:true, created:true, everyMinutes:5};
   } catch(e){ return {ok:false, error:String(e&&e.message||e)}; }
 }
+// v7.612 КВОТА: тік кожні 5 хв, але повний прохід — лише коли щось прийшло (вебхук бота ставить INV_DIRTY) або раз на 30 хв
+//   (запасний — пропущені повтори, бюджети). Раніше кожен тік читав аркуш заявок 3 рази, вантажив правила / історію статей і відкривав
+//   OPEX-файли локацій — ~36 с × 288 = 130–190 хв/добу при квоті 90.
+var INV_TICK_IDLE_MS = 30 * 60 * 1000;
+function _invTickDue(dirty, last, now){ return !!dirty || !(now - (Number(last) || 0) < INV_TICK_IDLE_MS); }
 function _invoiceQueueTick__impl(){
-  try { processInvoiceQueue({dryRun:false}); }
+  try { _invFlushIfDue(); } catch(e4){ _tgErr('inv:flush', e4); }   // v7.569 (лише властивість — дешево)
+  var P = PropertiesService.getScriptProperties(), now = Date.now();
+  if (!_invTickDue(P.getProperty('INV_DIRTY'), P.getProperty('INV_TICK_FULL'), now)) return;
+  P.deleteProperty('INV_DIRTY'); P.setProperty('INV_TICK_FULL', String(now));
+  var t = Date.now();
+  try { var q = processInvoiceQueue({dryRun:false}); if (q && q.processed >= INV_BATCH) P.setProperty('INV_DIRTY', '1'); }   // ще є — наступний тік
   catch(e){ _tgErr('inv:tick', e); }
-  try { _invFlushIfDue(); } catch(e4){ _tgErr('inv:flush', e4); }   // v7.569
-  try { _catPendingSweep(_EXEC_T0 + CAT_LLM_BUDGET_MS); } catch(e3){ _tgErr('inv:catSweep', e3); }   // v7.544: стаття після пізнього підпису
+  _trigAcc('·inv: розпізнавання', t); t = Date.now();
+  try { var cs = _catPendingSweep(_EXEC_T0 + CAT_LLM_BUDGET_MS); if (cs && cs.done >= INV_BATCH) P.setProperty('INV_DIRTY', '1'); } catch(e3){ _tgErr('inv:catSweep', e3); }   // v7.544: стаття після пізнього підпису
+  _trigAcc('·inv: статті', t); t = Date.now();
   try { _bankBudgetSweep(); } catch(e2){ _tgErr('bank:sweep', e2); }   // v7.536: ⚠️ заявка понад бюджет → група «Банк»
+  _trigAcc('·inv: бюджети', t);
 }
 
 
@@ -5288,6 +5302,14 @@ function _bankDaily__impl(opts){
 function bankGroupsDaily(e){ var _t = Date.now(); try { return _bankDaily__impl({}); } finally { _trigAcc('bankGroupsDaily', _t); } }
 
 // ⚠️ одразу: тік черги заявок (≤5 хв) — нові розпізнані заявки підключених локацій, що виводять статтю за бюджет.
+function _bankCatNames(loc, M, catsBy){
+  var k = 'bank_catn_' + loc + '_' + M, c = CacheService.getScriptCache(), raw = null;
+  try { raw = c.get(k); } catch(_c){}
+  if (raw){ try { return JSON.parse(raw); } catch(_j){} }
+  var cats = catsBy[loc] || (catsBy[loc] = _bankOpexCats(loc, M)), names = cats.map(function(x){ return x.name; });
+  try { c.put(k, JSON.stringify(names), 3600); } catch(_p){}
+  return names;
+}
 function _bankBudgetSweep(){
   var groups = _bankGroups(); if (!Object.keys(groups).length) return {ok:true, skipped:'груп немає'};
   var sh = _invSheet(false); if (!sh) return {ok:true};
@@ -5299,9 +5321,11 @@ function _bankBudgetSweep(){
     if (String(v[r][c('статус')] || '').trim() !== INV_ST.PARSED) continue;
     var id = String(v[r][c('invoice_id')]), amt = Number(v[r][c('сума')]) || 0;
     if (!amt || _invDateMs(v[r][c('created_at')]) < since || cache.get('bank_chk_' + id)) continue;
-    var cats = catsBy[loc] || (catsBy[loc] = _bankOpexCats(loc, M)), names = cats.map(function(x){ return x.name; });
+    // v7.612: назви статей — з кешу (1 год), OPEX-файл відкриваємо лише коли стаття відома і заявку треба перевірити
+    var names = _bankCatNames(loc, M, catsBy);
     var cat = _bankInvCat(v[r][c('стаття (з підпису)')], names);
     if (!cat) continue;                                     // стаття ще невідома (підпис прийде пізніше) — наступний тік
+    var cats = catsBy[loc] || (catsBy[loc] = _bankOpexCats(loc, M));
     cache.put('bank_chk_' + id, '1', 6 * 3600);
     if (_bankSentKey('over:' + id)) continue;
     var C = cats.filter(function(x){ return x.name === cat; })[0] || {budget:0, spent:0};
@@ -6197,11 +6221,19 @@ function _catPendingSweep(deadline){
   var v = sh.getDataRange().getValues(), H = v[0].map(String), cS = H.indexOf('стаття_джерело'), cSt = H.indexOf('статус'), done = 0;
   if (cS < 0) return {ok:true, done:0};
   var rules = null, hist = null;
+  // v7.612: заявки «чекає» БЕЗ локації (36 шт. на 27.11) стояли першими і щотіку забирали всю пачку (5) — правила й історія вантажились
+  //   даремно, а заявки з локацією за ними не оброблялись. Тепер: без локації / «(не локація)» — пропуск без витрат; «пропущено»
+  //   (немає статей OPEX тощо) — не повторюємо 6 год; у пачку рахуються лише оброблені.
+  var cL = H.indexOf('локація'), cI = H.indexOf('invoice_id'), cache = CacheService.getScriptCache();
   for (var r = 1; r < v.length && done < INV_BATCH; r++){
     if (trim(v[r][cS]) !== 'чекає' || trim(v[r][cSt]) !== INV_ST.PARSED) continue;
+    var _loc = cL >= 0 ? trim(v[r][cL]) : 'x'; if (!_loc || /не локація/i.test(_loc)) continue;
+    var _ck = 'cat_skip_' + String(v[r][cI]); if (cache.get(_ck)) continue;
     if (Date.now() > deadline) break;
     rules = rules || _catRules(); hist = hist || _catHistIndex(_catHistRows());
-    try { _invSmartCategory(sh, r + 1, {rules:rules, hist:hist, deadline:deadline, getFile:(function(rw){ return function(){ return _catFileCtx(rw, H); }; })(v[r])}); } catch(e){ _tgErr('inv:cat', e); }
+    var _res = null;
+    try { _res = _invSmartCategory(sh, r + 1, {rules:rules, hist:hist, deadline:deadline, getFile:(function(rw){ return function(){ return _catFileCtx(rw, H); }; })(v[r])}); } catch(e){ _tgErr('inv:cat', e); }
+    if (_res && _res.skipped){ cache.put(_ck, '1', 21600); continue; }
     done++;
   }
   return {ok:true, done:done};
@@ -9922,7 +9954,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.611', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.612', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -15027,11 +15059,32 @@ function dashSnapshotBuild(parts){
   Logger.log('[dashSnapshotBuild] %s мс %s', Date.now() - t0, JSON.stringify(done));
   return {ok:true, ms:Date.now() - t0, parts:done};
 }
+// v7.612 КВОТА: тік (кожні 30 хв) перебудовує ЛИШЕ частини, у яких змінились дані (версії кешу _cacheBump) або знімок старший
+//   за свій вік. Раніше — всі 14 частин щоразу (~60 с × 28 = 37–53 хв/добу). getDashboard без знімка, як і раніше, рахує сам.
+//   [групи версій, макс. вік с]: відмітки (att) міняються щохвилини — для них лише вік.
+var DSNAP_DEPS = {roster:[['clients'], 7200], caps:[['clients'], 18000], komp:[['clients'], 10800], kompPrev:[[], 18000], norms:[[], 18000],
+  ratings:[[], 10800], payLive:[['pay', 'money'], 3600], payments:[['payyear', 'pay'], 7200], attCur:[[], 3600], attPrev:[[], 18000],
+  dq:[['clients', 'pay', 'payyear'], 7200], salOv:[['money', 'salary'], 7200], salOvPrev:[[], 18000], opexOv:[['money'], 7200]};
+function _dsStale(meta, sig, maxAgeS, nowMs){ return !meta || meta.sig !== sig || !(nowMs - (Number(meta.at) || 0) < maxAgeS * 1000); }
+function _dashSnapshotDue(){
+  var c = CacheService.getScriptCache(), now = Date.now(), out = [];
+  Object.keys(DSNAP_FN).forEach(function(k){
+    var d = DSNAP_DEPS[k] || [[], 3600], sig = d[0].map(_cacheVer).join(','), meta = null;
+    try { meta = JSON.parse(c.get('dsnapm_' + k) || 'null'); } catch(_m){}
+    if (_dsStale(meta, sig, d[1], now)) out.push({k:k, sig:sig});
+  });
+  return out;
+}
 function _dashSnapshotTick__impl(){
   var h = Number(Utilities.formatDate(new Date(), 'Europe/Kiev', 'H'));
   if (h < 7 || h >= 21) return;
+  var due = _dashSnapshotDue(); if (!due.length) return;
   var lock = LockService.getScriptLock(); if (!lock.tryLock(1000)) return;   // попередній прогін ще йде
-  try { dashSnapshotBuild(); } finally { try { lock.releaseLock(); } catch(_l){} }
+  try {
+    dashSnapshotBuild(due.map(function(x){ return x.k; }));
+    var c = CacheService.getScriptCache(), at = Date.now();
+    due.forEach(function(x){ try { c.put('dsnapm_' + x.k, JSON.stringify({sig:x.sig, at:at}), 21600); } catch(_p){} });
+  } finally { try { lock.releaseLock(); } catch(_l){} }
 }
 function setupDashSnapshotTrigger(body){
   var a = null; try { a = _getActor((_CURRENT_AUTH && _CURRENT_AUTH.id) || (body && body.actorId)); } catch(_a){}
@@ -15098,13 +15151,15 @@ function getTriggerStats(params){
     for (var i = 0; i < days; i++){
       var d = Utilities.formatDate(new Date(Date.now() - i * 86400000), 'Europe/Kiev', 'yyyy-MM-dd'), o = {};
       try { o = JSON.parse(P.getProperty('trigstat_' + d) || '{}') || {}; } catch(_j){}
-      var tot = 0; Object.keys(o).forEach(function(k){ tot += o[k].ms; });
+      var tot = 0; Object.keys(o).forEach(function(k){ if (k.charAt(0) !== '·') tot += o[k].ms; });   // v7.612: «·…» — розбивка всередині тригера, у суму не йде
       out.push({day:d, totalMin:Math.round(tot / 600) / 100, quotaPct:Math.round(tot / (90 * 60000) * 100), byTrigger:o});
     }
     return {ok:true, quotaMin:90, triggers:trig, days:out};
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
-function tgSlaCheck(e){ var _t = Date.now(); try { return _tgSlaCheck__impl(e); } finally { _trigAcc('tgSlaCheck', _t); try { _notesTickPiggy(); } catch(_n){} try { _auditExpPiggy(); } catch(_a){} } }   // v7.611 + звірка експортів   // v7.568 + примітки
+function tgSlaCheck(e){ var _t = Date.now(); try { return _tgSlaCheck__impl(e); } finally { _trigAcc('tgSlaCheck', _t);
+  var _t2 = Date.now(); try { _notesTickPiggy(); } catch(_n){} _trigAcc('notesTick (на tgSlaCheck)', _t2);   // v7.612: раніше цей час не рахувався
+  var _t3 = Date.now(); try { _auditExpPiggy(); } catch(_a){} _trigAcc('звірка експортів (на tgSlaCheck)', _t3); } }   // v7.611 + звірка експортів   // v7.568 + примітки
 function invoiceQueueTick(e){ var _t = Date.now(); try { return _invoiceQueueTick__impl(e); } finally { _trigAcc('invoiceQueueTick', _t); } }
 function dashSnapshotTick(e){ var _t = Date.now(); try { return _dashSnapshotTick__impl(e); } finally { _trigAcc('dashSnapshotTick', _t); } }
 function bankNightly(e){ var _t = Date.now(); try { return _bankNightly__impl(e); } finally { _trigAcc('bankNightly', _t); } }
@@ -15166,6 +15221,8 @@ function _auditEvalLoc(raw){
       if (r.queued){ out.push(tag + ': експорт у черзі — не перевірено'); return; }
       if (!r.ok){ if (/NO_MARKS|NO_LESSONS|немає відміток|немає уроків/i.test(String(r.code || '') + String(r.error || ''))) return;
                   out.push(tag + ': помилка — ' + String(r.error || '?').slice(0, 120)); return; }
+      var _nfL = (r.notFound || []).filter(function(x){ var k = typeof x === 'string' ? x : ''; return !(k && r.factByActivity && r.factByActivity.hasOwnProperty(k) && !(Number(r.factByActivity[k]) > 0)); });   // v7.612: без відміток — не розбіжність
+      r = Object.assign({}, r, {notFound:_nfL});
       var w = (Number(r.cellsWritten) || 0) + (Number(r.formulaCellsConverted) || 0) + (Number(r.rowsAdded) || 0), nf = (r.notFound || []).length;
       if (!w && !nf) return;
       var who = (r.details || []).filter(function(x){ var a = x.currentBefore != null ? x.currentBefore : x.oldValue, b = x.newCell != null ? x.newCell : x.newValue; return a != null && b != null && Number(a) !== Number(b); })
@@ -21923,6 +21980,8 @@ function opexAddExpenses(body){
 
       var ctx = getCtx(iloc);
       if (ctx.error){ out.skipped = true; out.reason = ctx.error; skipped++; return results.push(out); }
+      // v7.612: закриті й заморожені місяці (червень–вересень 2026) — не пишемо, як в інших експортах (і в прев'ю видно чому)
+      if (mon && _isMonthClosed(year, mon)){ out.skipped = true; out.reason = (_isFrozenMonth(year, mon) ? 'місяць заморожений' : 'місяць закритий') + ' (' + mon + '/' + year + ')'; skipped++; return results.push(out); }
       if (!cat){ out.skipped = true; out.reason = 'порожня категорія'; skipped++; return results.push(out); }
       if (!mon || mon < 1 || mon > 12){ out.skipped = true; out.reason = 'некоректний місяць'; skipped++; return results.push(out); }
       var row = ctx.catRow[cat.toLowerCase()];
@@ -27344,6 +27403,15 @@ function _exportAttendanceToPaymentsCore(params){
       Object.keys(buckets[childName]).forEach(function(m){ tgt.m[m] = (tgt.m[m] || 0) + buckets[childName][m]; });
     });
 
+    // v7.612: відмітки з ПІБ, якого немає в Payment, — зв'язок картка ↔ рядок (v7.607): картка відміток → її рядок Payment,
+    //   інакше однозначне схоже написання рядка (не на рядок, у якого вже є свої відмітки). Payment-ім'я не міняється.
+    var linkedMarks = [];
+    try {
+      var _pn = Object.keys(paymentByNorm).map(function(k){ return trim(String(data[paymentByNorm[k]][0] || '')); });
+      if (Object.keys(sumByNormTarget).some(function(k){ return !paymentByNorm.hasOwnProperty(k); }))
+        linkedMarks = _dopLinkMarks(sumByNormTarget, paymentByNorm, _pn, _kidCardsOfLoc(loc), _normName);
+    } catch(_lkE){ Logger.log('[exportAttendanceToPayments] зв\'язок карток: %s', _lkE && _lkE.message); }
+
     // === 3. Які target-місяці обробляти ===
     // full (без month): місяці з відмітками + місяці, наявні в журналі payment (щоб очистити ті,
     // де відмітки зникли). single (з month): лише _nextMonth(month).
@@ -27425,6 +27493,7 @@ function _exportAttendanceToPaymentsCore(params){
       updated: updated, totalAmount: totalAmount,
       cellsWritten: cellsWritten, formulaCellsConverted: formulaConverted,
       notFound: notFound,
+      linkedMarks: linkedMarks,                   // v7.612: відмітки → рядок Payment з іншим написанням
       attendanceKeys: Object.keys(buckets),       // сумісність із діагностикою
       srcMonths: Object.keys(srcMonthsSeen),
       sourceMonth: srcMonthOne ? MONTHS_CAL_UA[srcMonthOne-1] : 'усі',
@@ -27438,6 +27507,26 @@ function _exportAttendanceToPaymentsCore(params){
   }
 }
 function exportToPayments(params){ return exportAttendanceToPayments(params); }
+// v7.612: чиста функція (тест). sum {нормІм'я: {names, m}}, pay {нормІм'я: рядок}, payNames — ПІБ рядків, cards — картки локації.
+function _dopLinkMarks(sum, pay, payNames, cards, norm){
+  var out = [], lp = _kidLinkMap(cards, payNames), payOfCard = {}, asCards = payNames.map(function(n){ return {name:n, id:''}; });
+  Object.keys(lp).forEach(function(pn){ payOfCard[lp[pn].id || lp[pn].card] = pn; });
+  Object.keys(sum).forEach(function(nk){
+    if (pay.hasOwnProperty(nk)) return;
+    var st = sum[nk], mn = Object.keys(st.names)[0], to = '', how = '';
+    var lc = _kidLinkMap(cards, [mn])[mn];
+    if (lc && payOfCard[lc.id || lc.card]){ to = payOfCard[lc.id || lc.card]; how = 'картка'; }
+    if (!to){ var ld = _kidLinkMap(asCards, [mn])[mn]; if (ld && ld.how !== 'exact' && !sum[norm(ld.card)]){ to = ld.card; how = 'написання'; } }
+    if (!to) return;
+    var tk = norm(to); if (!pay.hasOwnProperty(tk)) return;
+    var dst = sum[tk] = sum[tk] || {names:{}, m:{}};
+    Object.keys(st.names).forEach(function(x){ dst.names[x] = true; });
+    Object.keys(st.m).forEach(function(m){ dst.m[m] = (dst.m[m] || 0) + st.m[m]; });
+    delete sum[nk];
+    out.push({marks:mn, payment:to, how:how});
+  });
+  return out;
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // v7.104 ХАРЧУВАННЯ (по днях → Payment «Бюджет-харчування», offset +5, лише 7-кол локації).
@@ -29009,6 +29098,7 @@ function salaryReconcileApply(body){
     var now = new Date();
     var month = Number(body.month) || (now.getMonth() + 1);
     var year  = Number(body.year)  || now.getFullYear();
+    if (!dryRun && _isMonthClosed(year, month)) return _closedMonthError(year, month);   // v7.612: і запис, і відкат — не в закритий / заморожений місяць
     var factCol1 = (month - 1) * 3 + 2;                 // 1-based Факт-колонка (лип=T)
     // ОКРУГЛЕННЯ суми до цілого. Іра ЗАВЖДИ округлює ВГОРУ (ceil): 2668.05→2669,
     // 2643.55→2644, 755.30→756. Дефолт 'up'; 'math' лишив як опцію на майбутнє.

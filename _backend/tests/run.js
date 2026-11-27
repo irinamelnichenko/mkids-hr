@@ -1597,7 +1597,7 @@ if (src.indexOf('\nfunction _auditEvalLoc(') >= 0){
     {empty: A._auditExpText(ok, [], '2026-11-28'), has: /Кругла[\s\S]*Яременко/.test(A._auditExpText({day: '2026-11-28', locs: ['Кругла'], pos: 1, res: [{loc: 'Кругла', issues: ['знижки: Яременко']}]}, [], '2026-11-28')),
      stale: /не запускалась/.test(A._auditExpText(ok, [], '2026-11-29'))}, {empty: '', has: true, stale: true});
   check('звірка експортів: без нових тригерів', 'їде на tgSlaCheck (ліміт тригерів проєкту), вмикач — властивість; жодного newTrigger у звірці',
-    {piggy: /_auditExpPiggy\(\)/.test(src.slice(src.indexOf('\nfunction tgSlaCheck('), src.indexOf('\n', src.indexOf('\nfunction tgSlaCheck(') + 1))),
+    {piggy: /_auditExpPiggy\(\)/.test(fn('tgSlaCheck')),
      noTrig: ['_auditExpRun', '_auditExpPiggy', 'auditExportsSetup', '_auditExpStart'].every((f) => fn(f).indexOf('newTrigger') < 0)}, {piggy: true, noTrig: true});
   check('знижки відсутності: не в чужий рік', 'експорт не пише січень 2027 у файл 2026; колонка — за розкладкою локації (7 колонок)',
     {year: /year !== PAY_BASE_YEAR\) return \{ok:true, skippedYear:true/.test(fn('exportVacationDiscountToPayments')), cpm: /_paymentLayout\(_vCpm\)/.test(fn('exportVacationDiscountToPayments'))}, {year: true, cpm: true});
@@ -1616,6 +1616,34 @@ if (src.indexOf('\nfunction _cardsFromPayPlan(') >= 0){
     {create: ['Капоріков Еван 715 · Мандрівники', 'Савчук Софія 717 · Розумники'], noBudget: ['Тихий Без Бюджету'], departed: 1, linked: ['Єлагін Марк(Леонов)→Єлагін Марк']});
   check('картки з Payment: Payment не чіпаємо', 'createCardsFromPayment пише лише «Клієнти» (без addPaymentRow / setLocPaymentBudget / агрегату)',
     {bad: ['addPaymentRow(', 'setLocPaymentBudget(', '_aggregateOneLoc(', '_autoCreatePaymentForNewCard(', 'saveClient('].filter((f) => fn('createCardsFromPayment').indexOf(f) >= 0)}, {bad: []});
+}
+
+// ── v7.612: квота тригерів, допи → Payment за зв'язком, закриті місяці в OPEX / ЗП ──
+if (src.indexOf('\nfunction _invTickDue(') >= 0){
+  const Q = new Function(/\nvar INV_TICK_IDLE_MS[^\n]*/.exec(src)[0] + '\n' + fn('_invTickDue') + '\n' + fn('_dsStale') + ';return {_invTickDue, _dsStale};')();
+  const now = 1e12;
+  check('квота: черга рахунків за подією', 'повний прохід — є нове (вебхук) або минуло 30 хв; інакше тік порожній',
+    {dirty: Q._invTickDue('1', now - 60000, now), idle: Q._invTickDue(null, now - 60000, now), late: Q._invTickDue(null, now - 31 * 60000, now), first: Q._invTickDue(null, null, now)},
+    {dirty: true, idle: false, late: true, first: true});
+  check('квота: знімки дашборда', 'частина перебудовується лише коли змінились дані або знімок застарів',
+    {same: Q._dsStale({sig: '1,2', at: now - 600000}, '1,2', 3600, now), changed: Q._dsStale({sig: '1,2', at: now - 600000}, '1,3', 3600, now), old: Q._dsStale({sig: '', at: now - 4000000}, '', 3600, now), none: Q._dsStale(null, '', 3600, now)},
+    {same: false, changed: true, old: true, none: true});
+  check('квота: статті рахунків', 'заявки «чекає» без локації не забирають пачку; пропущені — кеш 6 год; час приміток на tgSlaCheck рахується',
+    {noLoc: /не локація/.test(fn('_catPendingSweep')) && /cat_skip_/.test(fn('_catPendingSweep')), notes: /_trigAcc\('notesTick \(на tgSlaCheck\)'/.test(src), webhook: /INV_DIRTY', '1'/.test(fn('tgInvoiceWebhook'))},
+    {noLoc: true, notes: true, webhook: true});
+  const B = require('./_bankload.js')(SRC);
+  const L = new Function('_kidLinkMap', fn('_dopLinkMarks') + ';return _dopLinkMarks;')(B._kidLinkMap);
+  const norm = (x) => String(x).replace(/\s+/g, '').toLowerCase();
+  const sum = {[norm('Лапутько Максим')]: {names: {'Лапутько Максим': 1}, m: {12: 2550}}, [norm('Кіщенко Меланія')]: {names: {'Кіщенко Меланія': 1}, m: {12: 980}},
+               [norm('Петренко Іван')]: {names: {'Петренко Іван': 1}, m: {12: 500}}, [norm('Нема Ніде')]: {names: {'Нема Ніде': 1}, m: {12: 100}}};
+  const pay = {[norm('Лапутько М аксим Віталійович')]: 5, [norm('Кіщенко Міланія')]: 6, [norm('Петренко Іванна')]: 7};
+  const out = L(sum, pay, ['Лапутько М аксим Віталійович', 'Кіщенко Міланія', 'Петренко Іванна'], [{name: 'Кіщенко Меланія', id: 'c_Кіщенко Міланія_Пуща'}], norm);
+  check('допи → Payment: зв\'язок картка ↔ рядок', 'відмітки «Кіщенко Меланія» → рядок «Кіщенко Міланія» (ID картки), «Лапутько Максим» → «Лапутько М аксим Віталійович»; Іван ≠ Іванна; невідомий — у «немає рядка»',
+    {links: out.map((x) => x.marks + '→' + x.payment), kish: sum[norm('Кіщенко Міланія')] && sum[norm('Кіщенко Міланія')].m[12], left: Object.keys(sum).filter((k) => !pay[k]).sort()},
+    {links: ['Лапутько Максим→Лапутько М аксим Віталійович', 'Кіщенко Меланія→Кіщенко Міланія'], kish: 980, left: [norm('Нема Ніде'), norm('Петренко Іван')].sort()});
+  check('закриті / заморожені місяці: OPEX і ЗП з відомості', 'opexAddExpenses пропускає позицію закритого місяця, salaryReconcileApply відмовляє (запис і відкат)',
+    {opex: /_isMonthClosed\(year, mon\)/.test(fn('opexAddExpenses')), sal: /if \(!dryRun && _isMonthClosed\(year, month\)\) return _closedMonthError/.test(fn('salaryReconcileApply')),
+     dop: /_dopLinkMarks\(/.test(fn('_exportAttendanceToPaymentsCore'))}, {opex: true, sal: true, dop: true});
 }
 
 if (!fs.existsSync(path.join(__dirname, '..', '..', 'activities.html'))){
