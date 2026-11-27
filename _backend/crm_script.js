@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.608
+// m.kids CRM — Google Apps Script v7.609
+// v7.609: знято паузу експорту знижок відпустки/лікарняного для Круглої (VAC_EXPORT_PAUSED порожній) — нічний прогін, кнопка й звірка знову пишуть у Payment
 // v7.608: знижки відсутності, записані вручну доданком у наступний місяць (addLocPaymentStudyDiscount, тег «[знижка відсутності X → Y]» у журналі грошових правок), експорт знижок більше не чіпає ні в X, ні в Y — без подвоєння (Кругла, листопад → грудень)
 // v7.607: зв'язок картка ↔ рядок Payment не на точному збігу імені (_kidLinkMap: ПІБ → ID картки → схоже написання, лише однозначна пара) — рахунки, PDF, звірка перед розсилкою, групи «Банк»; рядки Payment з бюджетом без картки — у перевірці рахунків (Пуща, «Кіщенко Меланія» ↔ «Кіщенко Міланія»)
 // v7.606: рахунки рахують як боржники груп «Банк»: рахунок = «Бюджет» місяця з Payment (навч/доп окремо); борг = бюджет − факт поточного місяця, вступний, «потрібно звірити», відкладені — спільні _bank*-функції; власну логіку v7.528 («незакриті місяці») прибрано; перед розсилкою звірка сума рахунку = Payment, не збігається — «🔍 Потрібно звірити», рахунок не йде
@@ -9919,7 +9920,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.608', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.609', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -29585,7 +29586,8 @@ function determineTargetMonth(vacationMonth, vacationYear, entryTimestamp, kind)
 // журнал. За замовчуванням false — поведінка всіх наявних викликів не змінюється.
 // v7.528: пауза експорту знижок відпустки по локації (будь-який запис: нічний, кнопка, звірка). Кругла — CFO вручну
 //   виправляє бюджет після того, як знижку жовтня додало замість відняти (02.11.2026). Знімати лише за словом CFO.
-var VAC_EXPORT_PAUSED = {'Кругла': true};
+// v7.609: пауза Круглої знята 27.11.2026 — сухий прогін жовтень/листопад/грудень: 0 записів, ручні знижки 5 дітей (v7.608) не подвоюються
+var VAC_EXPORT_PAUSED = {};
 function _vacExportPaused(loc){ return !!VAC_EXPORT_PAUSED[String(loc || '').trim()]; }
 
 // v7.530: розрахунок однієї клітинки «Бюджет навч» для знижки відпустки (чиста функція — під тести _backend/tests).
