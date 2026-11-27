@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.610
+// m.kids CRM — Google Apps Script v7.611
+// v7.611: createCardsFromPayment — група картки як у ростері «Оплат» (відмітки допів), а не назва блоку файлу (Нац.Гвардії: «Preschool» = «Розумники»)
 // v7.610: createCardsFromPayment — картки для рядків Payment без картки (лише «Клієнти», Payment не чіпає); щоденна звірка експортів (05:00 прогін без запису, 09:00 — CFO в Telegram лише розбіжності й паузи: знижки відсутності, допи → Payment/Salary, предметники → Salary); експорт знижок не пише в рік, відмінний від файлів (грудень → січень 2027 — інакше лягло б у січень 2026), колонка «Бюджет навч» — за розкладкою локації (7 колонок)
 // v7.609: знято паузу експорту знижок відпустки/лікарняного для Круглої (VAC_EXPORT_PAUSED порожній) — нічний прогін, кнопка й звірка знову пишуть у Payment
 // v7.608: знижки відсутності, записані вручну доданком у наступний місяць (addLocPaymentStudyDiscount, тег «[знижка відсутності X → Y]» у журналі грошових правок), експорт знижок більше не чіпає ні в X, ні в Y — без подвоєння (Кругла, листопад → грудень)
@@ -9921,7 +9922,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.610', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.611', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -15280,7 +15281,7 @@ function _cardsFromPayPlan(rows, cards, months, canon){
     if (lk[n]){ if (lk[n].how !== 'exact') out.linked.push({name:n, card:lk[n].card, how:lk[n].how}); return; }
     if (/^\(без імені/i.test(n) || r.departed){ out.departed.push({name:n, group:r.group}); return; }
     var bud = months.some(function(m){ return (Number((r.bud[m] || {}).navch) || 0) !== 0 || (Number((r.bud[m] || {}).dop) || 0) !== 0; });
-    var item = {name:n, group:canon(r.group), groupInPayment:r.group, bud:r.bud};
+    var item = {name:n, group:canon(r.group, n), groupInPayment:r.group, bud:r.bud};
     (bud ? out.create : out.noBudget).push(item);
   });
   return out;
@@ -15303,7 +15304,9 @@ function createCardsFromPayment(body){
     var cv = cs.getDataRange().getValues(), ch = cv[0].map(String), cI = ch.indexOf('ID'), cN = ch.indexOf('ПІБ дитини'), cL = ch.indexOf('Локація'), cards = [], ids = {};
     for (var q = 1; q < cv.length; q++){ var cid = String(cv[q][cI] || '').trim(); if (cid) ids[cid] = 1;
       if (String(cv[q][cL] || '').trim() === loc) cards.push({name:String(cv[q][cN] || '').trim(), id:cid}); }
-    var plan = _cardsFromPayPlan(rows, cards, months, function(g){ return _groupCanon(loc, g); });
+    // група — як у ростері «Оплат» (відмітки допів), інакше канонічна назва блоку (Нац.Гвардії: блок «Preschool» = «Розумники» в «Оплатах»)
+    var _ros = {}; try { ((_groupCanonRows(getPayments(), true) || {}).data || []).forEach(function(x){ if (String(x['Локація'] || '').trim() === loc) _ros[String(x["Ім'я дитини"] || '').trim()] = String(x['Група'] || '').trim(); }); } catch(_rs){}
+    var plan = _cardsFromPayPlan(rows, cards, months, function(g, n){ return _ros[n] || _groupCanon(loc, g); });
     // рядок у файлі Payment (лише читання) — для звіту
     try { var reg = _getLocationPaymentRegistry(loc), ps = SpreadsheetApp.openById(reg.sheetId), sh = ps.getSheetByName(reg.sheetName) || ps.getSheets()[0], pa = sh.getRange(1, 1, sh.getLastRow(), 1).getValues();
           plan.create.forEach(function(it){ for (var k = 0; k < pa.length; k++) if (String(pa[k][0]).trim() === it.name){ it.row = k + 1; break; } }); } catch(_pr){}
