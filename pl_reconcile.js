@@ -1,4 +1,4 @@
-/* v7.589–7.590 Польща (лише CFO): виписка PKO BP → перегляд → «Внести» доданками; «Готівка Федора»; звірка BALANCE з банком.
+/* v7.597: блокади PKO (Blokada без Data operacji → дата = Data waluty). v7.589–7.590 Польща (лише CFO): виписка PKO BP → перегляд → «Внести» доданками; «Готівка Федора»; звірка BALANCE з банком.
    Підключається на reconcile.html; українська частина сторінки не змінюється. Бекенд: plPreview / plApply / plBalance / plRowsList / plCash. */
 (function(){
   'use strict';
@@ -76,7 +76,7 @@
     (crit ? XLSX.utils.sheet_to_json(crit, {header: 1, raw: false, defval: ''}) : []).forEach(function(r){
       var k = String(r[0] || ''); if (/^Numer rachunku/i.test(k)) acc = String(r[1] || '').replace(/\D/g, ''); if (/^Od dnia/i.test(k)) from = isoDate(r[1]); if (/^Do dnia/i.test(k)) to = isoDate(r[1]); });
     var rows = XLSX.utils.sheet_to_json(tr, {header: 1, raw: true, defval: ''}), ops = [];
-    rows.slice(1).forEach(function(v){ var d = isoDate(v[0]); if (!d) return;
+    rows.slice(1).forEach(function(v){ var d = isoDate(v[0]); if (!d && /^\s*Blokada\s*$/i.test(String(v[2] || ''))) d = isoDate(v[1]); if (!d) return;   // v7.597: блокада — Data waluty
       ops.push({acc: acc, date: d, type: String(v[2] || ''), amount: num(v[3]), saldo: num(v[5]), from_acc: String(v[6] || ''), from: String(v[7] || '').trim(),
         to_acc: String(v[9] || ''), to: String(v[10] || '').trim(), desc: v.slice(12).map(function(x){ return String(x).trim(); }).filter(Boolean).join(' | ')}); });
     return {acc: acc, from: from, to: to, ops: ops};
@@ -106,10 +106,10 @@
   async function preview(){
     if (!PL.ops.length) return;
     PL.error = ''; wait('Розкладаю ' + PL.ops.length + ' операцій по файлах…');
-    var j; try { j = await post({action: 'plPreview', ops: PL.ops, overrides: PL.overrides}); } catch(e){ j = {ok: false, error: 'Запит не пройшов: ' + (e && e.message || e)}; }
+    var j; try { j = await post({action: 'plPreview', ops: PL.ops, overrides: PL.overrides, periods: PL.periods}); } catch(e){ j = {ok: false, error: 'Запит не пройшов: ' + (e && e.message || e)}; }
     stopWait();
     if (!j.ok){ PL.items = []; PL.error = j.error || 'помилка'; render(); return; }
-    PL.items = j.items || []; PL.options = j.options || {}; PL.bank = j.bank || {};
+    PL.items = j.items || []; PL.options = j.options || {}; PL.bank = j.bank || {}; PL.holdIssues = j.holdIssues || [];
     if (!PL.items.length) PL.error = 'Бекенд повернув 0 операцій з ' + PL.ops.length + ' — перша: ' + JSON.stringify(PL.ops[0]).slice(0, 160);
     render();
   }
@@ -136,7 +136,10 @@
     if (PL.cmp){ renderCmp(); return; }
     var c = {}; PL.items.forEach(function(it){ c[it.status] = (c[it.status] || 0) + 1; });
     $('plSummary').innerHTML = Object.keys(ST).filter(function(k){ return c[k]; }).map(function(k){ return '<span class="fc-chip">' + ST[k][0] + ' ' + ST[k][1] + ': <b>' + c[k] + '</b></span>'; }).join('');
-    var h = '';
+    var h = '', hi = PL.holdIssues || [];
+    if (hi.length) h += '<div style="margin:6px 0 12px;padding:10px 12px;border:1px solid #fdba74;background:#fff7ed;border-radius:10px"><b>🙋 Потрібно рішення Іри</b>' +
+      hi.map(function(x){ return '<div style="margin-top:6px;font-size:13px">' + (x.status === 'cancelled' ? '❗' : '⏳') + ' <b>' + esc(x.acc) + '</b> · ' + esc(x.date) + ' · ' + esc(x.merchant || '') + ' · <b>' + money(x.amount) + '</b>' +
+        (x.cells && x.cells.length ? ' · у файлі: ' + esc(x.cells.map(function(k){ return k.split('|').slice(1).join(' '); }).join(', ')) : '') + '<div style="color:var(--gray);font-size:12px">' + esc(x.why) + '</div></div>'; }).join('') + '</div>';
     LOCS.concat(['OVERHEAD', '?']).forEach(function(l){
       var arr = PL.items.filter(function(it){ return it.acc === l && (PL.showAll || ['ok', 'decide'].indexOf(it.status) >= 0); });
       if (!arr.length) return;
@@ -220,7 +223,7 @@
         if (!r.ok) return '<div class="err">❌ ' + esc(x.loc) + ': ' + esc(r.error || 'помилка') + '</div>';
         var bad = (r.unsafe || []).concat(r.failed || []);
         return '<div style="margin:4px 0">' + (bad.length || (r.notDone || []).length ? '⚠️' : '✅') + ' <b>' + esc(x.loc) + '</b>: внесено операцій ' + r.done + ', клітинок змінено ' + r.cells +
-          (r.dup ? ', уже були ' + r.dup : '') + (bad.length ? ' · <b>не записано клітинок: ' + bad.length + '</b> — ' + esc(bad.map(function(b){ return b.k.split('|').slice(1).join(' ') + ' (' + (b.why || b.err) + ')'; }).join('; ')) : '') + '</div>'; }).join('');
+          (r.dup ? ', уже були ' + r.dup : '') + (r.holdsClosed ? ', закрито блокад: ' + r.holdsClosed : '') + (bad.length ? ' · <b>не записано клітинок: ' + bad.length + '</b> — ' + esc(bad.map(function(b){ return b.k.split('|').slice(1).join(' ') + ' (' + (b.why || b.err) + ')'; }).join('; ')) : '') + '</div>'; }).join('');
       $('plResult').innerHTML = '<div class="inv-card">' + hdr + '</div>';
       toast('Внесено', 'info', 4000);
       var mons = {}; PL.items.forEach(function(it){ if (it.status === 'ok') mons[it.mon] = 1; });
@@ -238,13 +241,14 @@
     var j = await post({action: 'plBalance', months: months || []});
     if (!j.ok){ box.innerHTML = '<div class="err">❌ ' + esc(j.error || 'помилка') + '</div>'; return; }
     box.innerHTML = '<h3 style="margin:0 0 8px">⚖️ BALANCE у файлі проти банку</h3><div style="overflow-x:auto"><table style="width:100%;font-size:13px;border-collapse:collapse"><thead><tr>' +
-      '<th>Локація</th><th>Місяць</th><th style="text-align:right">Opening</th><th style="text-align:right">BALANCE у файлі</th><th style="text-align:right">Банк на кінець (за датами)</th><th style="text-align:right">Різниця</th><th style="text-align:right">Банк за проведенням</th></tr></thead><tbody>' +
+      '<th>Локація</th><th>Місяць</th><th style="text-align:right">Opening</th><th style="text-align:right">BALANCE у файлі</th><th style="text-align:right">Банк на кінець (за датами)</th><th style="text-align:right">Блокади</th><th style="text-align:right">Різниця</th><th style="text-align:right">Банк за проведенням</th></tr></thead><tbody>' +
       (j.rows || []).map(function(r){ var okk = r.diff != null && Math.abs(r.diff) < 0.01;
         return '<tr style="border-top:1px solid #e5e7eb"><td><b>' + esc(r.loc) + '</b></td><td>' + esc(MUA[r.mon] || r.mon) + '</td><td style="text-align:right">' + money(r.opening) + '</td><td style="text-align:right">' + money(r.balance) + '</td>' +
           '<td style="text-align:right">' + (r.bankByDate == null ? '<span style="color:var(--gray)">виписки немає</span>' : money(r.bankByDate)) + '</td>' +
+          '<td style="text-align:right;color:var(--gray)">' + (r.holds ? money(r.holds) : '') + '</td>' +
           '<td style="text-align:right;font-weight:700;color:' + (r.diff == null ? 'inherit' : okk ? '#047857' : '#b91c1c') + '">' + (r.diff == null ? '—' : (okk ? '✓ 0' : money(r.diff))) + '</td>' +
           '<td style="text-align:right;color:var(--gray)">' + (r.bankClose == null ? '' : money(r.bankClose) + (r.gap ? ' (розрив ' + money(r.gap) + ')' : '')) + '</td></tr>'; }).join('') +
-      '</tbody></table></div><div style="font-size:12px;color:var(--gray);margin-top:6px">«Розрив» — операції, які банк провів у цьому місяці, але датовані іншим (у виписку за датами не потрапили).</div>';
+      '</tbody></table></div><div style="font-size:12px;color:var(--gray);margin-top:6px">«Розрив» — операції, які банк провів у цьому місяці, але датовані іншим (у виписку за датами не потрапили). «Блокади» — покупки картою, які у файлі вже є, а банк у залишку ще не врахував (або врахував у іншому місяці); різниця рахується з ними.</div>';
   }
 
   // ── «Готівка Федора» ──

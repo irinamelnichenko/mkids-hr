@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.596
+// m.kids CRM — Google Apps Script v7.597
+// v7.597: Польща — блокади PKO (Typ transakcji = Blokada, без Data operacji): дата = Data waluty, розноска як звичайна витрата (магазин → рядок), без позначок у файлі; у PL_Операції колонка «Блокада»; проведена тією ж сумою (±5 днів, та сама картка) — «вже внесено», іншою — доданок виправляється на різницю; зникла без проведення — «потрібно рішення Іри»; BALANCE — поправка на блокади
 // v7.596: ключ батьків у лапках («"Трикур Тарас"») більше не відкидається як технічний
 // v7.595: звірка (Україна) — транзитний / технічний платник («K3_транз.рахунок…», bank-unparsed) не шукається як прізвище; прізвище дитини (з ПІБ дитини) в призначенні — як раніше (🟢 / однофамільці 🟡), інакше кандидати лише за сумою (залишок до сплати = сумі), нема — 🔴 з дітьми локації, названі в призначенні — підказка; індекс прізвищ не бере ключем ім'я з карток («ПІБ мами: Юлія» → Копил Давид на всіх «Юліях»), технічне, телефон, «-» (diag.badKeys)
 // v7.594: відмітки допів не губляться — експорт допів більше не тримає загальний ScriptLock (окремий прапорець DOP_EXP_BUSY, ScriptLock — на мить); експорт Payment/Salary після відмітки й видалення — у фоні з черги (DOPQ|локація|рік|місяць, тригер dopExportQueueRun щохвилини, серія відміток зливається за 15 с); зайнятий експорт → у чергу, а не LOCK_TIMEOUT; відмова відмітки → аркуш «Допи_Відмови» + retry:true; dopExportEnqueue / dopExportQueueStatus / dopExportQueueRun
@@ -9900,7 +9901,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.596', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.597', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -47531,7 +47532,7 @@ function _plRoute(op, L){
   }
   if (/^Opłata/i.test(type)) return L.feeRow ? {kind:'opex', row:L.feeRow, why:'опл. банку'} : {kind:'decide', why:'опл. банку: рядок не знайдено'};
   if (/odsetek|kredytu/i.test(type)) return L.loanRow ? {kind:'opex', row:L.loanRow, why:'кредит / відсотки'} : {kind:'decide', why:'кредит: рядок не знайдено'};
-  var who = /kart|terminal/i.test(type) ? _plMerchant(op.desc) : party;
+  var who = _plIsCardOp(type) ? _plMerchant(op.desc) : party;
   if (!_plFold(who)) return {kind:'decide', why:type + ': контрагента немає — ' + String(op.desc || '').slice(0, 120)};
   var wf = _plFold(who), fx0 = PL_FIXED.filter(function(x){ return x.loc === L.loc && x.re.test(wf); })[0];
   if (fx0) return {kind:fx0.kind, row:fx0.row, why:fx0.why + (refund ? ' (повернення)' : '')};
@@ -47738,16 +47739,69 @@ function _plLayout(f, loc, mon){
 // Ключ операції (повторне завантаження тієї ж виписки не дублює)
 function _plOpKey(op){ return [String(op.acc || '').slice(-4), op.date, Math.round(Number(op.amount) * 100), Math.round(Number(op.saldo) * 100), _plTitle(op.desc).replace(/\s+/g, '').slice(0, 40)].join('|'); }
 // Контрагент для пам'яті вибору: магазин для карток, інакше ім'я без адреси
-function _plPartyKey(op){ var t = String(op.type || ''), p = /kart|terminal/i.test(t) ? _plMerchant(op.desc) : (Number(op.amount) > 0 ? op.from : op.to);
+function _plPartyKey(op){ var t = String(op.type || ''), p = _plIsCardOp(t) ? _plMerchant(op.desc) : (Number(op.amount) > 0 ? op.from : op.to);
   return _plFold(_plPayerName(p || '')).replace(/\b\d+\b/g, ' ').replace(/\s+/g, ' ').trim(); }
 function _plDm(d){ return String(d).slice(8, 10) + '.' + String(d).slice(5, 7); }
 function _plNote(op, val, tag){ var p = Number(op.amount) > 0 ? op.from : op.to;
-  if (/kart|terminal/i.test(String(op.type || ''))) p = _plMerchant(op.desc) || p;
+  if (_plIsCardOp(op.type)) p = _plMerchant(op.desc) || p;
   return [_plDm(op.date), String(_plPayerName(p || op.type || '')).replace(/\s+/g, ' ').trim().slice(0, 60), String(Math.round(val * 100) / 100).replace('.', ','), tag].filter(Boolean).join(' · '); }
+// ═══ v7.597: блокади PKO («Typ transakcji = Blokada», без Data operacji, без saldo) ═══
+// Дата = Data waluty; вноситься як звичайна витрата (без позначок у файлі й примітці); що це блокада — лише в PL_Операції (колонка «Блокада»).
+function _plIsHold(op){ return /^\s*Blokada\s*$/i.test(String((op && op.type) || '')); }
+function _plIsCardOp(type){ return /kart|terminal|^\s*Blokada\s*$/i.test(String(type || '')); }
+function _plDayN(d){ var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(d || '')); return m ? Date.UTC(+m[1], +m[2] - 1, +m[3]) / 864e5 : NaN; }
+// картка: блокада — «Tytuł : P4569910000511621…» (16 цифр після P), проведена — «Numer karty : 456991******1621» → '456991*1621'
+function _plCardOf(op){ var d = String((op && op.desc) || ''), m = /Numer karty\s*:\s*(\d{6})\D+(\d{4})\b/i.exec(d); if (m) return m[1] + '*' + m[2];
+  m = /^P(\d{16})/.exec(_plTitle(d)); return m ? m[1].slice(0, 6) + '*' + m[1].slice(12, 16) : ''; }
+function _plMerchKey(op){ return _plFold(_plMerchant((op && op.desc) || '')).replace(/\b\w*\d\w*\b/g, ' ').replace(/\s+/g, ' ').trim(); }
+function _plExecDate(op){ var m = /Data wykonania operacji\s*:\s*(\d{4}-\d{2}-\d{2})/i.exec(String((op && op.desc) || '')); return m ? m[1] : String((op && op.date) || ''); }
+function _plHoldRec(op){ return {hold:1, card:_plCardOf(op), merch:_plMerchKey(op), date:op.date, amount:Math.round(Number(op.amount) * 100) / 100}; }
+// проведена покупка ↔ відкрита блокада: той самий рахунок, витрата, дата ±5 днів, картка (якщо відома в обох).
+// Та сама сума → {hold, exact:true}; інша сума — лише той самий магазин і одна така блокада → {hold, exact:false}
+function _plHoldMatch(op, holds, used){
+  if (!op || _plIsHold(op) || !/kart|terminal/i.test(String(op.type || '')) || !(Number(op.amount) < 0)) return null;
+  var a4 = String(op.acc || '').slice(-4), card = _plCardOf(op), mk = _plMerchKey(op), amt = Math.round(Number(op.amount) * 100);
+  var dd = [_plDayN(op.date), _plDayN(_plExecDate(op))].filter(function(x){ return !isNaN(x); });
+  var c = (holds || []).filter(function(h){ if (!h || (used && used[h.key]) || String(h.acc4) !== a4) return false;
+    if (h.card && card && h.card !== card) return false;
+    var hd = _plDayN(h.date); return dd.some(function(x){ return Math.abs(x - hd) <= 5; }); });
+  var near = function(h){ var hd = _plDayN(h.date); return Math.min.apply(null, dd.map(function(x){ return Math.abs(x - hd); })); };
+  var ord = function(a, b){ return ((b.merch === mk) - (a.merch === mk)) || (near(a) - near(b)); };
+  var ex = c.filter(function(h){ return Math.round(Number(h.amount) * 100) === amt; }).sort(ord);
+  if (ex.length) return {hold:ex[0], exact:true};
+  var ot = c.filter(function(h){ return mk && h.merch === mk && Number(h.amount) < 0; });
+  return ot.length === 1 ? {hold:ot[0], exact:false} : null;
+}
+// Відкриті блокади, яких немає в завантаженій виписці і яких не проведено → «потрібно рішення Іри» (нічого не віднімаємо).
+// periods: {acc4:{from, to}}; seen: {ключ:1} — ключі операцій виписки; matched: {ключ блокади:1}
+function _plHoldIssues(open, periods, seen, matched){
+  var out = [];
+  (open || []).forEach(function(h){ var pd = (periods || {})[String(h.acc4)]; if (!pd || !pd.from || !pd.to) return;
+    if (seen[h.key] || matched[h.key] || h.date < pd.from || h.date > pd.to) return;
+    var wait = _plDayN(pd.to) - _plDayN(h.date) < 5;
+    out.push({key:h.key, acc:PL_ACC4[String(h.acc4)] || h.acc4, date:h.date, amount:h.amount, merchant:h.merchName || h.merch, cells:(h.cells || []).map(function(c){ return c.k; }),
+      status:wait ? 'wait' : 'cancelled',
+      why:wait ? 'блокади вже немає у виписці, проведеної ще немає — чекаю проведення до ' + _plDm(new Date((_plDayN(h.date) + 5) * 864e5).toISOString().slice(0, 10))
+               : 'блокада зникла з виписки й не проведена за 5 днів — можливо, скасована. Доданок у файлі не віднімаю — твоє рішення'}); });
+  return out;
+}
+// Поправка до звірки BALANCE: банк не враховує блокад у залишку, а у файлі витрата вже є.
+// recs: [{loc, holdMon, cfAmount, postMon}] → {'loc|mon': сума, яку додати до залишку банку}
+function _plHoldAdj(recs){
+  var A = {}, add = function(k, v){ A[k] = Math.round(((A[k] || 0) + v) * 100) / 100; };
+  (recs || []).forEach(function(r){ if (r.postMon === r.holdMon) return; add(r.loc + '|' + r.holdMon, Number(r.cfAmount)); if (r.postMon) add(r.loc + '|' + r.postMon, -Number(r.cfAmount)); });
+  return A;
+}
+// ═══ /v7.597 (чиста частина) ═══
 // Уся виписка → операції з клітинками. files: {loc: файл}; opt: {ledger:{key:1}, memory:{'loc|party':{kind,row}}, overrides:{key:{kind,row}}}
 // → [{key, op, acc, mon, status:'ok'|'decide'|'skip'|'dup'|'closed', why, journal, loan, cells:[{loc, kind, tab, row, a1, val, note}], cf:[{loc, row, a1, val, note}]}]
 function _plBuild(ops, files, opt){
   opt = opt || {}; var led = opt.ledger || {}, mem = opt.memory || {}, ovr = opt.overrides || {}, lays = {}, out = [];
+  // v7.597: блокади — відкриті з журналу (opt.holds) і ті, що в цій самій виписці; проведена покупка закриває блокаду
+  var usedH = {}, batchH = ops.filter(_plIsHold).map(function(h){ return Object.assign(_plHoldRec(h), {key:_plOpKey(h), acc4:String(h.acc || '').slice(-4), batch:true}); });
+  var holdsAll = (opt.holds || []).concat(batchH.filter(function(h){ return !led[h.key]; }));
+  ops.forEach(function(op){ if (_plIsHold(op)) return; var m = _plHoldMatch(op, holdsAll, usedH); if (m){ usedH[m.hold.key] = 1; op._hm = m; } });
+  var postedInBatch = {}; ops.forEach(function(op){ if (op._hm && op._hm.hold.batch) postedInBatch[op._hm.hold.key] = op; });
   var lay = function(loc, mon){ var k = loc + '|' + mon; if (!(k in lays)){ lays[k] = files[loc] ? _plLayout(files[loc], loc, mon) : null; } return lays[k]; };
   var accLoc = function(op){ return PL_ACC4[String(op.acc || '').slice(-4)] || '?'; };
   // комісія «OPŁATA PRZELEW…» — до переказу, що йде у виписці одразу під нею (та сама дата, той самий рахунок)
@@ -47759,6 +47813,20 @@ function _plBuild(ops, files, opt){
     if (op._loc === 'OVERHEAD'){ it.status = 'skip'; it.why = 'рахунок Overhead — не вносимо'; return; }
     if (op._loc === '?'){ it.status = 'decide'; it.why = 'рахунок ' + op.acc + ' не в реєстрі'; return; }
     if (!opt.anyMonth && !_plWritable(op.date)){ it.status = 'closed'; it.why = 'місяць закритий (вносимо з жовтня 2026)'; return; }
+    if (_plIsHold(op)){ it.hold = _plHoldRec(op); if (postedInBatch[it.key]){ it.status = 'skip'; it.why = 'блокада вже проведена в цій виписці (' + _plDm(postedInBatch[it.key].date) + ') — вноситься проведена'; return; } }
+    var hm = op._hm;
+    if (hm && !hm.hold.batch){
+      it.holdOf = hm.hold.key; it.party = _plPartyKey(op);
+      if (hm.exact || led[it.key]){ it.status = 'dup'; it.why = 'вже внесено (блокада ' + _plDm(hm.hold.date) + ')'; return; }
+      var ratio = Number(op.amount) / Number(hm.hold.amount);
+      it.holdFix = {key:hm.hold.key, parts:(hm.hold.cells || []).map(function(c){ return {k:c.k, v:Number(c.v)}; })};
+      it.cells = it.holdFix.parts.map(function(c){ var q = c.k.split('|'), val = Math.round(c.v * ratio * 100) / 100;
+        return {loc:q[0], kind:/^Payment/i.test(q[1]) ? 'payment' : /^Salary/i.test(q[1]) ? 'salary' : 'opex', tab:q[1], row:Number(String(q[2]).replace(/\D/g, '')), a1:q[2], val:val, note:_plNote(op, val, ''), name:''}; });
+      it.status = it.cells.length ? 'ok' : 'decide'; it.route = {kind:'holdfix'};
+      it.why = 'проведено ' + _plMoney2(op.amount) + ' замість ' + _plMoney2(hm.hold.amount) + ' (блокада ' + _plDm(hm.hold.date) + ') — доданок виправляється на різницю ' + _plMoney2(Number(op.amount) - Number(hm.hold.amount));
+      if (!it.cells.length) it.why = 'блокада ' + _plDm(hm.hold.date) + ' була без клітинки — обери рядок';
+      return;
+    }
     var L = lay(op._loc, it.mon); if (!L){ it.status = 'decide'; it.why = 'файл локації не підключено'; return; }
     if (PL_AWZ_PEER[op._loc] && !L.peer){ var PL2 = lay(PL_AWZ_PEER[op._loc], it.mon); if (PL2) L.peer = {loc:PL2.loc, payment:PL2.payment}; }
     var r = op._feeOf ? _plRoute(op._feeOf, L) : _plRoute(op, L);
@@ -47796,6 +47864,7 @@ function _plBuild(ops, files, opt){
     if (tw){ tw._tw = 1; tw.cells = []; tw.cf = []; tw.why = x.why; } });
   return out;
 }
+function _plMoney2(v){ return String(Math.round(Number(v) * 100) / 100).replace('.', ','); }
 function _plRowLabel(L, kind, row){ var a = (L[kind] || []).filter(function(x){ return x.r === row; })[0]; if (a) return a.a;
   if (row === L.mkidsRow) return 'MKIDS'; if (row === L.dotRow) return 'dotacja'; if (row === L.zusSalaryRow) return 'ZUS/PIT'; return ''; }
 // Рядки файлу для випадаючого списку: {payment:[{r, a}], salary:[…], opex:[…]}
@@ -48033,7 +48102,7 @@ var PL_SH_REG = 'PL_Реєстр', PL_SH_OPS = 'PL_Операції', PL_SH_MEM 
 var PL_SH_JOURNALS = {'Позики Федора':'Позики Федора', 'PERSPICIO':'PERSPICIO'};
 var PL_HEAD = {
   'PL_Реєстр':['Локація', 'Файл 2026 (ID)', 'Рахунок (4 цифри)', 'Активна', 'Примітка'],
-  'PL_Операції':['Ключ', 'Рахунок', 'Дата', 'Сума', 'Контрагент', 'Клітинки (JSON)', 'Підстава', 'Записано', 'Хто'],
+  'PL_Операції':['Ключ', 'Рахунок', 'Дата', 'Сума', 'Контрагент', 'Клітинки (JSON)', 'Підстава', 'Записано', 'Хто', 'Блокада'],
   'PL_Контрагенти':['Локація', 'Контрагент', 'Вкладка', 'Рядок', 'Назва рядка', 'Хто', 'Коли'],
   'PL_Банк':['Локація', 'Місяць', 'Залишок на початок', 'На кінець (за проведенням)', 'На кінець (за датами)', 'Розрив виписки', 'Записано'],
   'PL_Готівка':['ID', 'Дата', 'Локація', 'Сума', 'Вкладка', 'Рядок', 'Назва рядка', 'Примітка', 'Записано', 'Хто'],
@@ -48048,6 +48117,9 @@ function _plSh(name){
                   ['PRIMROSE', PL_FILES_26.PRIMROSE, '1006', 'так', 'рахунок PERSPICIO SP. Z O.O.'], ['OVERHEAD', '', '1380', 'ні', 'Overhead — не вносимо']];
       sh.getRange(2, 1, rows.length, 5).setValues(rows);
     }
+  }
+  else if (String(sh.getRange(1, 1).getValue()) === PL_HEAD[name][0] && sh.getLastColumn() < PL_HEAD[name].length && !String(sh.getRange(1, PL_HEAD[name].length).getValue())){   // v7.597: нова колонка шапки
+    sh.getRange(1, 1, 1, PL_HEAD[name].length).setValues([PL_HEAD[name]]).setFontWeight('bold');
   }
   else if (String(sh.getRange(1, 1).getValue()) !== PL_HEAD[name][0]){   // v7.592: шапки немає (аркуш створено обірваним викликом) — вставляємо, дані лишаються
     sh.insertRowBefore(1); sh.getRange(1, 1, 1, PL_HEAD[name].length).setValues([PL_HEAD[name]]).setFontWeight('bold'); sh.setFrozenRows(1);
@@ -48079,11 +48151,26 @@ function _plReadFile(id, months){
   return f;
 }
 function _plLedger(){
-  var keys = {}, parts = [];
-  _plRows(PL_SH_OPS).forEach(function(r){ var k = String(r[0] || ''); if (!k) return; keys[k] = 1;
+  return _plLedgerFrom(_plRows(PL_SH_OPS));
+}
+// v7.597: рядки PL_Операції → ключі, частини клітинок, блокади (відкриті / проведені). Колонка 10 «Блокада» (JSON):
+// {hold:1, card, merch, date, amount, posted?:{key, date, amount, mon, fixed}} — блокада; {postedOf:<ключ блокади>} — проведена покупка
+function _plLedgerFrom(rows){
+  var keys = {}, parts = [], holds = [], open = [];
+  (rows || []).forEach(function(r, i){ var k = String(r[0] || ''); if (!k) return; keys[k] = 1;
     var cells = []; try { cells = JSON.parse(String(r[5] || '[]')); } catch(e){}
-    cells.forEach(function(c){ parts.push({cellKey:c.k, val:Number(c.v), note:c.n}); }); });
-  return {keys:keys, parts:parts};
+    var h = null; try { h = r[9] ? JSON.parse(String(r[9])) : null; } catch(e){}
+    var replaced = h && h.hold && h.posted && h.posted.fixed;   // проведено іншою сумою — доданок блокади замінено доданком проведеної
+    if (!replaced) cells.forEach(function(c){ parts.push({cellKey:c.k, val:Number(c.v), note:c.n, key:k}); });
+    if (h && h.hold){ var d = r[2] instanceof Date ? Utilities.formatDate(r[2], 'Europe/Warsaw', 'yyyy-MM-dd') : String(h.date || r[2] || '').slice(0, 10);
+      var rec = {key:k, row:i + 2, acc4:String(k.split('|')[0]), loc:String(r[1] || ''), date:d, amount:Number(h.amount), card:h.card || '', merch:h.merch || '', merchName:String(r[4] || ''), cells:cells, posted:h.posted || null};
+      holds.push(rec); if (!h.posted) open.push(rec); } });
+  return {keys:keys, parts:parts, holds:holds, open:open};
+}
+// поправки BALANCE з блокад журналу: у місяці блокади файл має витрату, банк — ні; у місяці проведення — навпаки
+function _plHoldAdjOf(holds){
+  return _plHoldAdj((holds || []).map(function(h){ var cf = h.posted && h.posted.fixed ? Number(h.posted.amount) : Number(h.amount);
+    return {loc:h.loc, holdMon:_plMonOf(h.date), cfAmount:cf, postMon:h.posted ? _plMonOf(h.posted.date) : ''}; }));
 }
 function _plMemory(){ var m = {}; _plRows(PL_SH_MEM).forEach(function(r){ var l = String(r[0] || ''), p = String(r[1] || ''); if (l && p) m[l + '|' + p] = {kind:String(r[2]), row:Number(r[3])}; }); return m; }
 function _plNeed(ops){   // які файли й місяці читати
@@ -48094,7 +48181,7 @@ function _plNeed(ops){   // які файли й місяці читати
 function _plFiles(locs, mons){ var f = {}; locs.forEach(function(l){ if (PL_FILES_26[l]) f[l] = _plReadFile(PL_FILES_26[l], mons); }); return f; }
 // Залишки банку по рахунку-місяцю (ops у порядку виписки)
 function _plBankByMonth(ops){
-  var g = {}; ops.forEach(function(op){ var l = PL_ACC4[String(op.acc || '').slice(-4)] || '?', k = l + '|' + _plMonOf(op.date); (g[k] = g[k] || []).push(op); });
+  var g = {}; ops.forEach(function(op){ if (_plIsHold(op)) return;   /* v7.597: блокада без saldo — не в ланцюжку залишків */ var l = PL_ACC4[String(op.acc || '').slice(-4)] || '?', k = l + '|' + _plMonOf(op.date); (g[k] = g[k] || []).push(op); });
   var out = {}; Object.keys(g).forEach(function(k){ out[k] = _plBankEnds(g[k]); }); return out;
 }
 function _plCleanOps(ops){
@@ -48109,10 +48196,14 @@ function plPreview(p){
     _plLoadReg();
     var ops = _plCleanOps(p.ops); if (!ops.length) return {ok:false, error:'Бекенд не отримав жодної операції з датою (надіслано ' + ((p.ops || []).length) + '; перша: ' + JSON.stringify((p.ops || [])[0] || {}).slice(0, 160) + ')'};
     var need = _plNeed(ops), files = _plFiles(need.locs, need.mons), led = _plLedger();
-    var items = _plBuild(ops, files, {ledger:led.keys, memory:_plMemory(), overrides:p.overrides || {}});
+    var items = _plBuild(ops, files, {ledger:led.keys, memory:_plMemory(), overrides:p.overrides || {}, holds:led.open});
     var opts = {}; need.locs.forEach(function(l){ need.mons.forEach(function(m){ if (files[l]) opts[l + '|' + m] = _plRowOptions(_plLayout(files[l], l, m)); }); });
-    return {ok:true, items:items.map(_plItemOut), options:opts, bank:_plBankByMonth(ops)};
+    return {ok:true, items:items.map(_plItemOut), options:opts, bank:_plBankByMonth(ops), holdIssues:_plHoldIssuesOf(items, led.open, p.periods)};
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
+}
+function _plHoldIssuesOf(items, open, periods){
+  var seen = {}, matched = {}; (items || []).forEach(function(it){ seen[it.key] = 1; if (it.holdOf) matched[it.holdOf] = 1; });
+  return _plHoldIssues(open, periods || {}, seen, matched);
 }
 function _plItemOut(it){ var o = it.op;
   return {key:it.key, date:o.date, type:o.type, amount:o.amount, party:(o.amount > 0 ? o.from : o.to) || _plMerchant(o.desc) || o.type, title:_plTitle(o.desc).slice(0, 120), acc:it.acc, mon:it.mon,
@@ -48164,12 +48255,15 @@ function plApply(p){
       var row = [m.loc, m.party, m.kind, Number(m.row), String(m.name || ''), who, now];
       if (i >= 0) memSh.getRange(i + 2, 1, 1, row.length).setValues([row]); else { memSh.appendRow(row); memRows.push(row); } });
     var ops = _plCleanOps(p.ops), need = _plNeed(ops), files = _plFiles(need.locs, need.mons), led = _plLedger();
-    var items = _plBuild(ops, files, {ledger:led.keys, memory:_plMemory(), overrides:p.overrides || {}});
+    var items = _plBuild(ops, files, {ledger:led.keys, memory:_plMemory(), overrides:p.overrides || {}, holds:led.open});
     var only = String(p.only || ''), mine = items.filter(function(it){ return it.status === 'ok' && (!only || it.acc === only); });
     // частини клітинок: уже внесене (журнал операцій) + нове; PERSPICIO з MKIDS не вносимо
     var C0 = _plCellParts(mine, []), touched = {}; Object.keys(C0).forEach(function(k){ touched[k] = 1; });
-    var C = _plCellParts(mine, led.parts.filter(function(x){ return touched[x.cellKey]; }));
-    var ss = {}, w = _plWriteCellsMap(C, ss);
+    // v7.597: проведено іншою сумою — доданок блокади виходить із клітинки, замість нього доданок проведеної
+    var fixOf = {}, drop = {}; mine.forEach(function(it){ if (!it.holdFix) return; fixOf[it.holdFix.key] = 1;
+      it.holdFix.parts.forEach(function(c){ (drop[c.k] = drop[c.k] || []).push({val:Number(c.v), why:'блокада проведена іншою сумою'}); }); });
+    var C = _plCellParts(mine, led.parts.filter(function(x){ return touched[x.cellKey] && !fixOf[x.key]; }));
+    var ss = {}, w = _plWriteCellsMap(C, ss, {drop:drop});
     var bad = {}; w.unsafe.concat(w.failed).forEach(function(x){ bad[x.k] = x.why || x.err; });
     // журнал операцій: лише операції, всі клітинки яких записані
     var opsSh = _plSh(PL_SH_OPS), done = [], notDone = [];
@@ -48177,8 +48271,13 @@ function plApply(p){
       var ks = it.cells.map(function(c){ return {k:c.loc + '|' + c.tab + '|' + c.a1, v:c.val, n:c.note}; }).concat(it.cf.map(function(c){ return {k:c.loc + '|CF|' + c.a1, v:c.val, n:c.note}; }));
       var why = ks.map(function(x){ return bad[x.k]; }).filter(Boolean)[0];
       if (why){ notDone.push({key:it.key, date:it.op.date, amount:it.op.amount, party:it.party, why:why}); return; }
-      done.push(it); opsSh.appendRow([it.key, it.acc, it.op.date, it.op.amount, it.party, JSON.stringify(ks), it.why, now, who]);
+      var hj = it.hold ? JSON.stringify(it.hold) : it.holdFix ? JSON.stringify({postedOf:it.holdFix.key}) : '';
+      done.push(it); opsSh.appendRow([it.key, it.acc, it.op.date, it.op.amount, it.party, JSON.stringify(ks), it.why, now, who, hj]);
+      if (it.holdFix) _plHoldMark(opsSh, led, it, true);
     });
+    // v7.597: проведена тією самою сумою — у файл не вносимо, лише закриваємо блокаду в журналі
+    var posted = items.filter(function(it){ return it.status === 'dup' && it.holdOf && !led.keys[it.key] && (!only || it.acc === only); });
+    posted.forEach(function(it){ opsSh.appendRow([it.key, it.acc, it.op.date, it.op.amount, it.party, '[]', it.why, now, who, JSON.stringify({postedOf:it.holdOf})]); _plHoldMark(opsSh, led, it, false); });
     // журнали «Позики Федора» / PERSPICIO
     Object.keys(PL_SH_JOURNALS).forEach(function(j){
       var sh = _plSh(PL_SH_JOURNALS[j]), prev = {}, seen = {}; _plRows(PL_SH_JOURNALS[j]).forEach(function(r){ prev[String(r[1])] = Number(r[4]) || 0; seen[String(r[5])] = 1; });
@@ -48200,10 +48299,17 @@ function plApply(p){
         if (cr && prv && _plWritable('2026-' + ('0' + mi).slice(-2) + '-01')) _plPut(sh, _plColL(prv) + cr, {status:'value', value:b.open}, 'Closing = залишок PKO на 01.' + ('0' + (mi + 1)).slice(-2) + ' → Opening наступного місяця', false);
         _plUpsertBank(l, mon, b, now); bank.push({loc:l, mon:mon, open:b.open, close:b.close, byDate:b.byDate, gap:b.gap}); });
     }
-    return {ok:true, only:only, ops:mine.length, done:done.length, dup:items.filter(function(it){ return it.status === 'dup' && (!only || it.acc === only); }).length,
+    return {ok:true, only:only, ops:mine.length, done:done.length, holdsClosed:posted.length + mine.filter(function(it){ return it.holdFix && done.indexOf(it) >= 0; }).length, dup:items.filter(function(it){ return it.status === 'dup' && (!only || it.acc === only); }).length,
       cells:w.written.filter(function(x){ return !x.same; }).length, same:w.written.filter(function(x){ return x.same; }).length, unsafe:w.unsafe, failed:w.failed, notDone:notDone, bank:bank};
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
   finally { lock.releaseLock(); }
+}
+function _plHoldMark(sh, led, it, fixed){
+  var h = led.holds.filter(function(x){ return x.key === (it.holdOf || (it.holdFix && it.holdFix.key)); })[0]; if (!h) return;
+  var cur = {}; try { cur = JSON.parse(String(sh.getRange(h.row, 10).getValue() || '{}')); } catch(e){}
+  if (!cur.hold) cur = {hold:1, card:h.card, merch:h.merch, date:h.date, amount:h.amount};
+  cur.posted = {key:it.key, date:it.op.date, amount:Math.round(Number(it.op.amount) * 100) / 100, fixed:!!fixed};
+  sh.getRange(h.row, 10).setValue(JSON.stringify(cur));
 }
 function _plUpsertBank(l, mon, b, now){
   var sh = _plSh(PL_SH_BANK), rows = _plRows(PL_SH_BANK), i = -1;
@@ -48217,6 +48323,7 @@ function plBalance(p){
   try {
     _plLoadReg();
     var bank = {}; _plRows(PL_SH_BANK).forEach(function(r){ bank[r[0] + '|' + r[1]] = {open:Number(r[2]), close:Number(r[3]), byDate:Number(r[4]), gap:Number(r[5])}; });
+    var hadj = _plHoldAdjOf(_plLedger().holds);   // v7.597: банк показує залишок без блокад
     var months = (p.months && p.months.length) ? p.months : Object.keys(bank).map(function(k){ return k.split('|')[1]; }).filter(function(m, i, a){ return a.indexOf(m) === i; });
     var out = [];
     ['LUBLIN', 'PRUZSKOW', 'KONSTANCIN', 'PRIMROSE'].forEach(function(l){ if (!PL_FILES_26[l]) return;
@@ -48225,8 +48332,9 @@ function plBalance(p){
       var br = rowOf(/^BALANCE Bank/i), orow = rowOf(/^Opening Balance/i);
       months.forEach(function(m){ var c = (cols[m] || {}).actual; if (!c || !br) return; var b = bank[l + '|' + m] || null;
         var bal = Number(sh.getRange(br, c).getValue()) || 0, op = Number(sh.getRange(orow, c).getValue()) || 0;
+        var ha = hadj[l + '|' + m] || 0;
         out.push({loc:l, mon:m, opening:op, balance:Math.round(bal * 100) / 100, bankOpen:b ? b.open : null, bankByDate:b ? b.byDate : null, bankClose:b ? b.close : null, gap:b ? b.gap : null,
-          diff:b ? Math.round((bal - b.byDate) * 100) / 100 : null}); }); });
+          holds:ha, bankWithHolds:b ? Math.round((b.byDate + ha) * 100) / 100 : null, diff:b ? Math.round((bal - b.byDate - ha) * 100) / 100 : null}); }); });
     return {ok:true, rows:out};
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
