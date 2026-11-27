@@ -1596,6 +1596,9 @@ if (src.indexOf('\nfunction _auditEvalLoc(') >= 0){
   check('звірка експортів: Telegram', 'без розбіжностей і пауз — нічого не надсилаємо; з розбіжністю — список; не запускалась — попередження',
     {empty: A._auditExpText(ok, [], '2026-11-28'), has: /Кругла[\s\S]*Яременко/.test(A._auditExpText({day: '2026-11-28', locs: ['Кругла'], pos: 1, res: [{loc: 'Кругла', issues: ['знижки: Яременко']}]}, [], '2026-11-28')),
      stale: /не запускалась/.test(A._auditExpText(ok, [], '2026-11-29'))}, {empty: '', has: true, stale: true});
+  check('звірка експортів: без нових тригерів', 'їде на tgSlaCheck (ліміт тригерів проєкту), вмикач — властивість; жодного newTrigger у звірці',
+    {piggy: /_auditExpPiggy\(\)/.test(src.slice(src.indexOf('\nfunction tgSlaCheck('), src.indexOf('\n', src.indexOf('\nfunction tgSlaCheck(') + 1))),
+     noTrig: ['_auditExpRun', '_auditExpPiggy', 'auditExportsSetup', '_auditExpStart'].every((f) => fn(f).indexOf('newTrigger') < 0)}, {piggy: true, noTrig: true});
   check('знижки відсутності: не в чужий рік', 'експорт не пише січень 2027 у файл 2026; колонка — за розкладкою локації (7 колонок)',
     {year: /year !== PAY_BASE_YEAR\) return \{ok:true, skippedYear:true/.test(fn('exportVacationDiscountToPayments')), cpm: /_paymentLayout\(_vCpm\)/.test(fn('exportVacationDiscountToPayments'))}, {year: true, cpm: true});
 }
