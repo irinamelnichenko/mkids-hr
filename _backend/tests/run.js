@@ -1142,6 +1142,35 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
   ck('pl блокада без дати', 'без Data waluty — не операція (фронт відкидає)', pend.length, 1);
 }
 
+// ── v7.599 (фронт): «📄 Звіт для батьків (PDF)» — лише внесене, період, права ──
+{
+  const dp = path.join(__dirname, '..', '..', 'dev_report.js');
+  if (fs.existsSync(dp)){
+    const DR = require(dp);
+    const T = {'1': {title: 'Емоційний інтелект', items: [{id: '1.1', text: 'Розпізнає почуття.'}, {id: '1.2', text: 'Підтримує товариша.'}, {id: '1.3', text: 'Пояснює емоції.'}]},
+               '2': {title: 'Мовленнєвий розвиток', items: [{id: '2.1', text: 'Речення з 5 слів.'}, {id: '2.2', text: 'Переказує казку.'}]}};
+    const dev = {'2025-09': {criteria: {'1.1': '+', '1.2': '-', '1.3': '−'}}, '2026-01': {criteria: {'1.1': '+', '1.2': '+', '1.3': '-'}}, '2026-06': {criteria: {}}, 'x': {criteria: {'1.1': '+'}}};
+    const card = {name: 'Тест Дитина', loc: 'Оранж', group: 'Study-ki', teacher: 'Масловська Анна', development: dev};
+    const q = DR.periodOf('quarter', '2025-11'), m = DR.periodOf('month', '2026-06'), r = DR.periodOf('range', '2026-01', '2025-09');
+    check('звіт батькам: період', 'квартал / місяць / свій діапазон (у будь-якому порядку)', {q: [q.from, q.to], m: [m.from, m.to], r: [r.from, r.to], l: DR.periodLabel(r)},
+          {q: ['2025-10', '2025-12'], m: ['2026-06', '2026-06'], r: ['2025-09', '2026-01'], l: 'вересень 2025 – січень 2026'});
+    check('звіт батькам: немає записів', 'квартал без спостережень і порожня точка червня → кнопка неактивна', {q: DR.hasData(dev, q), jun: DR.hasData(dev, m), sep: DR.hasData(dev, DR.periodOf('month', '2025-09'))}, {q: false, jun: false, sep: true});
+    const D = DR.buildData(card, T, r, new Date(2026, 10, 27));
+    check('звіт батькам: лише внесене', 'розділ без позначок не показується; «−» = вчиться; динаміка було → стало; нове вміння',
+          {secs: D.sections.map((s) => s.title), can: D.sections[0].can, learn: D.sections[0].learn, trend: D.sections[0].trend.map((t) => t.pct), nw: D.sections[0].newSkills, obs: D.observations, gen: D.generated},
+          {secs: ['Емоційний інтелект'], can: ['Розпізнає почуття.', 'Підтримує товариша.'], learn: ['Пояснює емоції.'], trend: [33, 67], nw: ['Підтримує товариша.'], obs: ['Вересень 2025', 'Січень 2026'], gen: '27 листопада 2026'});
+    const html = DR.renderHtml(D, 'mkids-logo.png');
+    check('звіт батькам: вигляд', 'шапка (логотип, локація, ПІБ, група, період, вихователь), шкала словами, підпис; без коментарів, яких немає',
+          ['mkids-logo.png', 'Оранж', 'Тест Дитина', 'Study-ki', 'вересень 2025 – січень 2026', 'Масловська Анна', 'Активно розвивається', 'з турботою,<br>команда m.kids', 'Було → стало'].map((x) => html.includes(x)).concat([/коментар/i.test(html), /\d+%/.test(html.replace(/<[^>]+>/g, ""))]),
+          [true, true, true, true, true, true, true, true, true, false, false]);
+    const U = (role, loc, extra) => Object.assign({id: 5, role, loc}, extra || {});
+    check('звіт батькам: права', 'CFO — усі; директор — своя локація; вихователь — своя локація (і група, якщо задана); інші — ні',
+          [DR.canReport(U('cfo', 'Позняки'), card), DR.canReport(U('director', 'Оранж'), card), DR.canReport(U('director', 'Позняки'), card), DR.canReport(U('vyhovatel', 'Оранж'), card),
+           DR.canReport(U('vyhovatel', 'Позняки, Оранж', {locs: ['Позняки', 'Оранж']}), card), DR.canReport(U('vyhovatel', 'Оранж', {group: 'Preschool'}), card), DR.canReport(U('hr', 'Оранж'), card), DR.canReport(null, card)],
+          [true, true, false, true, true, false, false, false]);
+  }
+}
+
 // ── v7.562: Предметники (фронт) — «Не передбачено для цієї групи» лише за справжньою нормою 0 ──
 {
   const hp = path.join(__dirname, '..', '..', 'predmetnyky.html');

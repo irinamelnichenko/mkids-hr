@@ -2,7 +2,8 @@
 <html lang="uk">
 <head>
 <meta charset="UTF-8">
-<script src="locswitch.js?v=7.516"></script>   <!-- v7.516 кілька локацій користувача: активна + перемикач -->
+<script src="locswitch.js?v=7.516"></script>
+<script src="dev_report.js?v=7.599"></script>   <!-- v7.599 «📄 Звіт для батьків (PDF)» у вкладці «Розвиток» -->   <!-- v7.516 кілька локацій користувача: активна + перемикач -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>m.kids System — Клієнти</title>
 <link rel="manifest" href="manifest.json">
@@ -7264,6 +7265,7 @@ function renderDevelopmentTab(){
   var html='<div class="card" style="margin-bottom:12px"><div class="card-hd" style="gap:10px;flex-wrap:wrap"><h3>🌱 Особистісно-соціальний розвиток</h3>'
     +'<div style="display:flex;gap:8px;align-items:center;margin-left:auto">Навч.рік: '+sel
     +'<span class="badge bb">Оцінено '+filled+' з '+CRIT_TOTAL+' · '+_devPeriodLabel(progKey)+'</span>'
+    +(typeof devReportButton==='function'?devReportButton(id):'')   // v7.599
     +(canEdit?'<button class="btn btn-primary btn-sm" onclick="saveDevelopment('+escAttrJS(id)+')">💾 Зберегти</button>':'<span class="badge" style="background:#f0f4f8;color:var(--gray)">перегляд</span>')+'</div></div></div>';
   Object.keys(CRIT).forEach(function(sec){
     var S2=CRIT[sec]; var open=!!S._devOpen[sec];
