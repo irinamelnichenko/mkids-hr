@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.597
+// m.kids CRM — Google Apps Script v7.598
+// v7.598: Польща — PRUZSKOW: PEPCO будь-якого магазину → OPEX 55 (як Biedronka → 48)
 // v7.597: Польща — блокади PKO (Typ transakcji = Blokada, без Data operacji): дата = Data waluty, розноска як звичайна витрата (магазин → рядок), без позначок у файлі; у PL_Операції колонка «Блокада»; проведена тією ж сумою (±5 днів, та сама картка) — «вже внесено», іншою — доданок виправляється на різницю; зникла без проведення — «потрібно рішення Іри»; BALANCE — поправка на блокади
 // v7.596: ключ батьків у лапках («"Трикур Тарас"») більше не відкидається як технічний
 // v7.595: звірка (Україна) — транзитний / технічний платник («K3_транз.рахунок…», bank-unparsed) не шукається як прізвище; прізвище дитини (з ПІБ дитини) в призначенні — як раніше (🟢 / однофамільці 🟡), інакше кандидати лише за сумою (залишок до сплати = сумі), нема — 🔴 з дітьми локації, названі в призначенні — підказка; індекс прізвищ не бере ключем ім'я з карток («ПІБ мами: Юлія» → Копил Давид на всіх «Юліях»), технічне, телефон, «-» (diag.badKeys)
@@ -9901,7 +9902,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.597', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.598', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -47354,7 +47355,8 @@ var PL_FIXED = [   // контрагент → рядок (назва рядка
   {loc:'LUBLIN', re:/\bARVAL\b/, kind:'salary', row:50, why:'Arval — FO (кредити Федора)'},
   {loc:'LUBLIN', re:/^P ?4\b/, kind:'opex', row:40, why:'P4'},
   {loc:'PRIMROSE', re:/^P ?4\b/, kind:'opex', row:39, why:'P4'},
-  {loc:'PRUZSKOW', re:/\bBIEDRONKA\b/, kind:'opex', row:48, why:'Biedronka'}
+  {loc:'PRUZSKOW', re:/\bBIEDRONKA\b/, kind:'opex', row:48, why:'Biedronka'},
+  {loc:'PRUZSKOW', re:/^PEPCO\b/, kind:'opex', row:55, why:'PEPCO (будь-який магазин)'}   // v7.598: рядок 55 «PEPCO 1669 PRUSZKOW 2», блокади 26.11 — Grodzisk / Milanówek
 ];
 // v7.592: відшкодування за чеки працівнику (рішення CFO): людина з Salary, не зарплата, не фірма, не рахунок за послуги з номером «1/09/2026»
 function _plIsReimb(pf, tf, raw){

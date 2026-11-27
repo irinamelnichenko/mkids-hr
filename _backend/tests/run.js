@@ -1138,6 +1138,7 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
      X._plHoldAdj([{loc: 'P', holdMon: 'nov', cfAmount: -24.99, postMon: ''}, {loc: 'P', holdMon: 'nov', cfAmount: -380.5, postMon: 'dec'}, {loc: 'P', holdMon: 'nov', cfAmount: -10, postMon: 'nov'}]),
      {'P|nov': -405.49, 'P|dec': 380.5});
   ck('pl BALANCE: блокада не ламає залишки', 'saldo блокади (0) не в ланцюжку', X._plBankEnds([{date: '2026-11-25', amount: -100, saldo: 900}, {date: '2026-11-26', amount: 50, saldo: 950}]).close, 950);
+  ck('pl PRUZSKOW: PEPCO будь-якого магазину', 'Grodzisk / Milanówek → OPEX 55', ['PEPCO 1813 GRODZISK MA', 'PEPCO 1581 MILANOWEK 1', 'PEPCO 110794 GRODZISK'].map((m) => { const r = X._plRoute(H('2026-11-26', -30, 'P4569910000511621', m), X._plLayout(FP, 'PRUZSKOW', 'nov')); return r.kind + ':' + r.row; }), ['opex:55', 'opex:55', 'opex:55']);
   ck('pl блокада без дати', 'без Data waluty — не операція (фронт відкидає)', pend.length, 1);
 }
 
