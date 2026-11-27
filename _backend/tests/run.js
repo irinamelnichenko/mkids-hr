@@ -43,7 +43,7 @@ const env = {
     computeDigest: (_a, s) => Array.from(crypto.createHash('md5').update(String(s), 'utf8').digest()).map((b) => (b > 127 ? b - 256 : b))},
 };
 const code = [varLine('MONTHS_CAL'), varLine('PROMO_FORMULA_RE'),
-  ...['_invR2','_prevYM','_invSplit','_invExtrasCalc','_invStudyCalc','_invPrevBalances','_invPrecheckItems','_invPrecheckHash','_vacCellPlan']
+  ...['_invR2','_prevYM','_invSplit','_invExtrasCalc','_invStudyCalc','_invPrevBalances'].concat(src.indexOf('\nfunction _invPrecheckBlock(') >= 0 ? ['_invCellErr','_invPrecheckBlock'] : []).concat(['_invPrecheckItems','_invPrecheckHash','_vacCellPlan'])
      .concat(src.indexOf('\nfunction _dopSubPlan(') >= 0 ? ['_dopSubPlan'] : []).map(fn)
      .concat(src.indexOf('\nfunction _predGroupAllowed(') >= 0
        ? [varLine('PRED_GROUP_TYPES'), varBlock('_GT_TRANSLIT'), varLine('_GT_BABY')]
@@ -1173,6 +1173,31 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
           ['cfo', 'director', 'vyhovatel', 'nurse', 'rnd_director', 'ceo', 'cco', 'hr', 'founder'].map((r) => DR.canReport(U(r, r === 'rnd_director' ? 'Менеджмент' : 'Позняки'), card)).concat([DR.canReport(null, card), DR.canReport(U('cfo', ''), null)]),
           [true, true, true, true, true, true, true, true, true, false, false]);
   }
+}
+
+// ── v7.604: рахунки — розсилку не блокує підтвердження CFO; ⛔ лише дитині з явно помилковою сумою; список «на перевірку CFO» ──
+if (src.indexOf('\nfunction _invPrecheckBlock(') >= 0){
+  const HO = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures_holosiievo_1226.json'), 'utf8'));
+  const it = F._invPrecheckItems(HO), by = {}; it.forEach((x) => { by[x.name] = x; });
+  const row = (n, k) => { const x = by[n][k]; return x && [x.budget, k === 'study' ? x.net : x.marks, x.carry, x.change, x.due]; };
+  check('рахунки Голосієво грудень (реальні цифри 27.11)', '15 дітей з ⚠, жодна не заблокована; бюджет · договір/відмітки · борг/переплата · коригування · до сплати',
+    {n: it.length, blocked: it.filter((x) => x.block).length, zym: row('Зимуха-Романов Ян', 'study'), kov: row('Ковальчук Соломія', 'study'), kovE: row('Ковальчук Соломія', 'extras'),
+     bla: row('Благовісна Аліса', 'extras'), buch: row('Бучковський Лука', 'extras'), gam: row('Гамуза Богдан', 'extras'), kam: row('Каменщик Степан', 'study'), yus: row('Ющенко Мія', 'study')},
+    {n: 15, blocked: 0, zym: [0, 24000, -12600, -24000, 0], kov: [18000, 18000, -10560, 0, 7440], kovE: [5160, 5960, 0, -800, 5160],
+     bla: [3950, 4300, 0, -350, 3950], buch: [2980, 3410, 0, -430, 2980], gam: [2800, 3400, 0, -600, 2800], kam: [23000, 21160, 0, 1840, 23000], yus: [24000, 24000, 3800, 0, 27800]});
+  const base = {name: 'Тест', group: 'G', studyBudget: 20000, studyNet: 20000, studyCarry: 0, studyChange: 0, paymentSum: 20000, extrasPayment: 0, extrasBreakdownSum: 0, extrasAdjustment: 0, extrasPaymentDiff: 0, extrasOnlySum: 0};
+  const neg = F._invPrecheckItems([Object.assign({}, base, {paymentSum: -500})]), err = F._invPrecheckItems([Object.assign({}, base, {budgetError: ['Грудень-Бюджет-навч = «#ERROR!»']})]), clean = F._invPrecheckItems([base]);
+  check('рахунки: ⛔ лише явно помилкове', 'від\'ємне «До сплати» або #ERROR! у клітинці бюджету → дитина в списку з ⛔; чисті цифри — не в списку',
+    {neg: neg[0] && neg[0].block, err: err[0] && err[0].block, clean: clean.length},
+    {neg: ['До сплати за навчання від\'ємне: -500'], err: ['Помилка в Payment: Грудень-Бюджет-навч = «#ERROR!»'], clean: 0});
+  const CE = new Function([fn('_invCellErr')].join('\n') + '\nreturn _invCellErr;')();
+  check('рахунки: клітинка бюджету', 'число / порожньо / «24 000» — ок; #ERROR!, #REF!, текст — помилка', {v: [CE(24000), CE(''), CE('24 000'), CE('#ERROR!'), CE('#REF!'), CE('див. договір')]}, {v: ['', '', '', '#ERROR!', '#REF!', 'див. договір']});
+  const PF = new Function('_promoStampOut', [varLine('INVCHK_PENDING'), fn('_invPendingFrom')].join('\n') + '\nreturn _invPendingFrom;')((v) => String(v));
+  const R = (k, h, st, who, at) => ({'Ключ': k, 'Локація': k.split('|')[0], 'Навчання': '2026-12', 'Додаткові': '2026-11', 'Хеш': h, 'Дітей у списку': 15, 'Хто': who, 'Коли': at, 'Статус': st});
+  const pend = PF([R('Голосієво|2026-12|2026-11', 'aaa', 'на перевірку CFO', 'Директор', '27.11 14:00'), R('Позняки|2026-12|2026-11', 'bbb', 'на перевірку CFO', 'Директор', '27.11 15:00'),
+                   R('Позняки|2026-12|2026-11', 'bbb', 'переглянуто CFO', 'CFO', '27.11 16:00'), R('Оранж|2026-12|2026-11', 'c1', '', 'CFO', '20.11'), R('Оранж|2026-12|2026-11', 'c2', 'на перевірку CFO', 'Директор', '27.11')]);
+  check('рахунки: список «на перевірку CFO»', 'надіслано з ⚠ і не переглянуто — у списку; переглянуто з тим самим хешем — ні; старе підтвердження іншого хешу не закриває',
+    {locs: pend.map((x) => x.loc), by: pend[0] && pend[0].by}, {locs: ['Оранж', 'Голосієво'], by: 'Директор'});
 }
 
 // ── v7.602: вага і зріст дитини — бекенд (перевірка введення, старі заміри) і фронт (потрібно виміряти, текст, телефон, звіт) ──

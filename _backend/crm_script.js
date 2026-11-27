@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.603
+// m.kids CRM — Google Apps Script v7.604
+// v7.604: рахунки — масову розсилку більше не блокує підтвердження CFO (додано в v7.530): список з ⚠ іде фінансисту «на перевірку CFO»; блок лише для дитини з від'ємним «До сплати» або помилкою в клітинці бюджету Payment
 // v7.603: вага і зріст — редагування й видалення виміру (медсестра своєї локації, директор, CFO); журнал «Вага_і_зріст_Журнал» (хто, коли, було → стало); видалення м'яке
 // v7.602: вага і зріст дитини — аркуш «Вага_і_зріст» (getGrowth / addGrowth / markGrowthSent); вносять медсестра, директор, CFO; старі квартальні заміри віддаються як історія
 // v7.598: Польща — PRUZSKOW: PEPCO будь-якого магазину → OPEX 55 (як Biedronka → 48)
@@ -9904,7 +9905,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.603', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.604', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -10051,6 +10052,7 @@ function doGet(e) {
     else if (action === 'getEmployees')               result = getEmployees(Number(e.parameter && e.parameter.actorId || 0), e.parameter && e.parameter.loc || '');
     else if (action === 'getPredmetnyky')              result = getPredmetnyky(Number(e.parameter && e.parameter.actorId || 0), Number(e.parameter && e.parameter.year || 0), Number(e.parameter && e.parameter.month || 0)); // v7.80: місячний зріз
     else if (action === 'getInvoiceListData')          result = getInvoiceListData(e.parameter || {});
+    else if (action === 'getInvoicePrecheckPending')   result = getInvoicePrecheckPending(e.parameter || {});   // v7.604 списки «на перевірку CFO»
     else if (action === 'getInvoicePrecheck')          result = getInvoicePrecheck(e.parameter || {});   // v7.530 перевірка перед розсилкою (читання)
     else if (action === 'diagSpreadsheet')            result = diagSpreadsheet(e.parameter || {});      // v7.362 перевірка файлу нової локації (лише читання)
     else if (action === 'getPaymentRowsWithoutCards') result = getPaymentRowsWithoutCards(e.parameter || {});   // v7.357 рядки Payment без картки
@@ -10382,6 +10384,7 @@ function doPost(e) {
     else if (body.action === 'invoiceViberMessage')         result = invoiceViberMessage(body || {});   // v6.72 Viber text
     else if (body.action === 'sendInvoiceEmail')            result = sendInvoiceEmail(body || {});      // v6.50
     else if (body.action === 'getInvoicePrecheck')          result = getInvoicePrecheck(body || {});    // v7.530 перевірка перед розсилкою (читання)
+    else if (body.action === 'getInvoicePrecheckPending')   result = getInvoicePrecheckPending(body || {});   // v7.604
     else if (body.action === 'invoicePrecheckConfirm')      result = invoicePrecheckConfirm(body || {}); // v7.530 підтвердження списку (CFO)
     else if (body.action === 'bulkSendInvoices')            result = bulkSendInvoices(body || {});      // v6.50
     else if (body.action === 'logViberSent')                result = logViberSent(body || {});          // v6.50.3
@@ -32967,13 +32970,28 @@ function _invStudyCharge(cl, loc, year, month, cache){
 //   sendInvoiceEmail / invoiceViberMessage з bulk:true) блокується, доки поточний хеш не підтверджено. Порожній список —
 //   підтвердження не потрібне. Поодинокі рахунки (кнопки в рядку дитини) не блокуються.
 var INVCHK_TAB = 'Рахунки_Перевірка';
-var INVCHK_HEADER = ['Ключ', 'Локація', 'Навчання', 'Додаткові', 'Хеш', 'Дітей у списку', 'Хто', 'Коли'];
+var INVCHK_HEADER = ['Ключ', 'Локація', 'Навчання', 'Додаткові', 'Хеш', 'Дітей у списку', 'Хто', 'Коли', 'Статус'];   // v7.604: + Статус («переглянуто CFO» / «на перевірку CFO»)
+var INVCHK_PENDING = 'на перевірку CFO';
 function _invChkKey(loc, py, pm, ey, em){ return loc + '|' + py + '-' + ('0' + pm).slice(-2) + '|' + ey + '-' + ('0' + em).slice(-2); }
 function _invChkParams(p){
   p = p || {};
   var pm = Number(p.payMonth) || 0, py = Number(p.payYear) || 0, em = Number(p.extMonth) || 0, ey = Number(p.extYear) || 0;
   if (!em && pm){ var pv = _prevYM(py, pm); em = pv.m; ey = pv.y; }
   return {loc:trim(p.loc || ''), payMonth:pm, payYear:py, extMonth:em, extYear:ey};
+}
+// v7.604: «явно помилкове» — блокує розсилку ЛИШЕ цій дитині: «До сплати» від'ємне або клітинка бюджету в Payment — не число.
+//   Усе інше (борг / переплата / коригування) — попередження: розсилати можна, список іде фінансисту (CFO) на перевірку.
+function _invCellErr(v){
+  if (v == null || v === '' || typeof v === 'number' || v instanceof Date) return '';
+  var t = String(v).trim(); if (!t) return '';
+  return isNaN(Number(t.replace(/\s/g, '').replace(',', '.'))) ? t.slice(0, 20) : '';
+}
+function _invPrecheckBlock(c){
+  var r = [], sd = Number(c.paymentSum), ed = Number(c.extrasOnlySum != null ? c.extrasOnlySum : c.extrasSum);
+  if (sd < 0) r.push('До сплати за навчання від\'ємне: ' + _invR2(sd));
+  if (ed < 0) r.push('До сплати за допи від\'ємне: ' + _invR2(ed));
+  (c.budgetError || []).forEach(function(e){ r.push('Помилка в Payment: ' + e); });
+  return r;
 }
 function _invPrecheckItems(children){
   var items = [];
@@ -32982,9 +33000,11 @@ function _invPrecheckItems(children){
              change:_invR2(c.studyChange), due:_invR2(c.paymentSum), months:c.prevNavch || []};
     var e = {budget:_invR2(c.extrasPayment), marks:_invR2(c.extrasBreakdownSum), carry:_invR2(c.extrasAdjustment),
              change:_invR2(c.extrasPaymentDiff), due:_invR2(c.extrasOnlySum != null ? c.extrasOnlySum : c.extrasSum), months:c.prevDop || []};
-    var fs = !!(s.carry || s.change), fe = !!(e.carry || e.change);
-    if (!fs && !fe) return;
-    items.push({name:c.name, group:c.group || '', study:(fs ? s : null), extras:(fe ? e : null)});
+    var fs = !!(s.carry || s.change), fe = !!(e.carry || e.change), bl = _invPrecheckBlock(c);
+    if (!fs && !fe && !bl.length) return;
+    var it = {name:c.name, group:c.group || '', study:(fs || bl.length ? s : null), extras:(fe ? e : null)};
+    if (bl.length) it.block = bl;
+    items.push(it);
   });
   items.sort(function(a, b){ return a.name.localeCompare(b.name, 'uk'); });
   return items;
@@ -32997,7 +33017,7 @@ function _invPrecheckHash(items){
   return d.map(function(b){ return ('0' + (b & 0xff).toString(16)).slice(-2); }).join('').slice(0, 16);
 }
 function _invPrecheckLastConfirm(key){
-  var rows = _promoRead(INVCHK_TAB, INVCHK_HEADER).rows.filter(function(r){ return String(r['Ключ']) === key; });
+  var rows = _promoRead(INVCHK_TAB, INVCHK_HEADER).rows.filter(function(r){ return String(r['Ключ']) === key && String(r['Статус'] || '') !== INVCHK_PENDING; });
   return rows.length ? rows[rows.length - 1] : null;
 }
 // GET/POST getInvoicePrecheck {loc, payMonth, payYear, extMonth?, extYear?}
@@ -33012,8 +33032,12 @@ function getInvoicePrecheck(params){
                        valid:String(last['Хеш']) === hash} : null;
     var tot = {children:(inv.children || []).length, studyDue:0, extrasDue:0};
     (inv.children || []).forEach(function(c){ tot.studyDue += Number(c.paymentSum) || 0; tot.extrasDue += Number(c.extrasOnlySum != null ? c.extrasOnlySum : c.extrasSum) || 0; });
+    // v7.604: розсилку не блокуємо — лише діти з «явно помилковою» сумою (blocked) не отримують рахунок у масовій розсилці
+    var blocked = items.filter(function(it){ return it.block && it.block.length; }).map(function(it){ return it.name; });
+    var warn = items.filter(function(it){ return !(it.block && it.block.length); }).length;
     return {ok:true, loc:p.loc, payMonth:p.payMonth, payYear:p.payYear, extMonth:p.extMonth, extYear:p.extYear, key:key,
-            items:items, hash:hash, totals:tot, confirmed:conf, needsConfirm:items.length > 0, allowed:(!items.length || !!(conf && conf.valid))};
+            items:items, hash:hash, totals:tot, confirmed:conf, needsConfirm:items.length > 0, needsReview:(items.length > 0 && !(conf && conf.valid)),
+            blocked:blocked, warnCount:warn, allowed:true};
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 // POST invoicePrecheckConfirm {loc, payMonth, payYear, extMonth?, extYear?, hash} — лише CFO; хеш має збігтися з поточним.
@@ -33025,9 +33049,9 @@ function invoicePrecheckConfirm(body){
     var sh = _promoSheet(INVCHK_TAB, INVCHK_HEADER);
     sh.getRange(1, 1, sh.getMaxRows(), 4).setNumberFormat('@');
     sh.appendRow([pc.key, pc.loc, pc.payYear + '-' + ('0' + pc.payMonth).slice(-2), pc.extYear + '-' + ('0' + pc.extMonth).slice(-2),
-                  pc.hash, pc.items.length, _promoWho(a), _promoStamp()]);
-    try { CacheService.getScriptCache().put(_invChkCacheKey(pc.key), pc.hash, 1800); } catch(_c){}
-    pc.confirmed = {hash:pc.hash, by:_promoWho(a), at:_promoStamp(), count:pc.items.length, valid:true}; pc.allowed = true;
+                  pc.hash, pc.items.length, _promoWho(a), _promoStamp(), 'переглянуто CFO']);
+    try { CacheService.getScriptCache().remove(_invChkCacheKey(pc.key)); } catch(_c){}   // v7.604: кеш масової розсилки перерахується (з переліком заблокованих дітей)
+    pc.confirmed = {hash:pc.hash, by:_promoWho(a), at:_promoStamp(), count:pc.items.length, valid:true}; pc.allowed = true; pc.needsReview = false;
     return pc;
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
@@ -33035,16 +33059,54 @@ function _invChkCacheKey(key){
   var d = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, key, Utilities.Charset.UTF_8);
   return 'invchk_' + d.map(function(b){ return ('0' + (b & 0xff).toString(16)).slice(-2); }).join('');
 }
-// null — можна; інакше відповідь-відмова. Кеш 30 хв після підтвердження / успішної перевірки (масова розсилка — десятки викликів).
+// v7.604: масова розсилка більше не блокується підтвердженням CFO. null — можна; відмова — лише для дитини з «явно помилковою» сумою
+//   (від'ємне «До сплати» / помилка в клітинці бюджету). Список з ⚠ (борг / переплата / коригування) при першій масовій розсилці
+//   пишеться в «Рахунки_Перевірка» зі статусом «на перевірку CFO» — фінансист бачить його в «Рахунках» і переглядає.
+//   Кеш 30 хв: {hash, blocked} (масова розсилка — десятки викликів).
 function _invBulkGuard(params){
-  var p = _invChkParams(params);
+  var p = _invChkParams(params), child = trim((params && params.childName) || '');
   if (!p.loc || !p.payMonth || !p.payYear) return {ok:false, code:'PRECHECK', error:'Масова розсилка: не вказано локацію або місяць'};
-  var key = _invChkKey(p.loc, p.payYear, p.payMonth, p.extYear, p.extMonth), ck = _invChkCacheKey(key);
-  try { if (CacheService.getScriptCache().get(ck)) return null; } catch(_c){}
-  var pc = getInvoicePrecheck(p); if (!pc.ok) return pc;
-  if (pc.allowed){ try { CacheService.getScriptCache().put(ck, pc.hash || 'empty', 1800); } catch(_p){} return null; }
-  return {ok:false, code:'PRECHECK', blocked:true, error:'Розсилку по «' + p.loc + '» заблоковано: фінансист має підтвердити перевірку рахунків (' + pc.items.length +
-          ' дітей з боргом / переплатою / коригуванням' + (pc.confirmed ? '; список змінився після підтвердження ' + pc.confirmed.at : '') + ')'};
+  var key = _invChkKey(p.loc, p.payYear, p.payMonth, p.extYear, p.extMonth), ck = _invChkCacheKey(key), st = null;
+  try { var hit = CacheService.getScriptCache().get(ck); if (hit){ try { st = JSON.parse(hit); } catch(_j){ st = {hash:hit, blocked:[], why:{}}; } } } catch(_c){}
+  if (!st){
+    var pc = getInvoicePrecheck(p); if (!pc.ok) return pc;
+    var why = {}; (pc.items || []).forEach(function(it){ if (it.block && it.block.length) why[it.name] = it.block.join('; '); });
+    st = {hash:pc.hash, blocked:pc.blocked || [], why:why};
+    if (pc.needsReview && pc.warnCount > 0){ try { _invPrecheckMarkPending(pc, (params && params.actorName) || ''); } catch(_m){ Logger.log('[invoice] на перевірку CFO: %s', _m && _m.message); } }
+    try { CacheService.getScriptCache().put(ck, JSON.stringify(st), 1800); } catch(_p){}
+  }
+  if (child && (st.blocked || []).indexOf(child) >= 0)
+    return {ok:false, code:'PRECHECK_CHILD', blocked:true, error:'⛔ ' + child + ': рахунок не надіслано — ' + ((st.why || {})[child] || 'сума явно помилкова') + '. Виправте Payment і надішліть окремо.'};
+  return null;
+}
+// Рядок «на перевірку CFO» — один раз на той самий список (ключ + хеш)
+function _invPrecheckMarkPending(pc, who){
+  var rd = _promoRead(INVCHK_TAB, INVCHK_HEADER);
+  if (rd.rows.some(function(r){ return String(r['Ключ']) === pc.key && String(r['Хеш']) === pc.hash; })) return false;
+  rd.sh.getRange(1, 1, rd.sh.getMaxRows(), 4).setNumberFormat('@');
+  rd.sh.appendRow([pc.key, pc.loc, pc.payYear + '-' + ('0' + pc.payMonth).slice(-2), pc.extYear + '-' + ('0' + pc.extMonth).slice(-2),
+                   pc.hash, pc.items.length, trim(who) || 'директор', _promoStamp(), INVCHK_PENDING]);
+  return true;
+}
+// Чисте: які списки чекають на перегляд CFO — «на перевірку» без пізнішого «переглянуто» з тим самим хешем
+function _invPendingFrom(rows){
+  var ok = {}; rows.forEach(function(r){ if (String(r['Статус'] || '') !== INVCHK_PENDING) ok[String(r['Ключ']) + '|' + String(r['Хеш'])] = 1; });
+  var seen = {}, out = [];
+  rows.slice().reverse().forEach(function(r){
+    if (String(r['Статус'] || '') !== INVCHK_PENDING) return;
+    var k = String(r['Ключ']); if (seen[k]) return; seen[k] = 1;   // лише найсвіжіший список по ключу
+    if (ok[k + '|' + String(r['Хеш'])]) return;
+    out.push({key:k, loc:String(r['Локація']), pay:String(r['Навчання']), ext:String(r['Додаткові']), hash:String(r['Хеш']), count:Number(r['Дітей у списку']) || 0,
+              by:String(r['Хто']), at:_promoStampOut(r['Коли'])});
+  });
+  return out;
+}
+// GET getInvoicePrecheckPending — лише CFO
+function getInvoicePrecheckPending(params){
+  try {
+    var a = _promoActor(params || {}); if (!_promoIsCfo(a)) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
+    return {ok:true, items:_invPendingFrom(_promoRead(INVCHK_TAB, INVCHK_HEADER).rows)};
+  } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
 }
 
 function getInvoiceListData(params){
@@ -33081,6 +33143,7 @@ function getInvoiceListData(params){
 
     // === 2. Payment per-child з "Оплати-Рік" (поля "<Місяць>-Бюджет-навч" + "-доп") ===
     var paymentByName = {};
+    var budgetErrByName = {};   // v7.604
     var extrasByPayment = {};   // v6.11.16: "<Місяць>-Бюджет-доп" — загальна сума додаткових ДО СПЛАТИ
     var prevBal = {};           // v7.528: залишок попередніх місяців — борг/переплата попереднього періоду (_invPrevBalances)
     var paySheet = getCRMSpreadsheet().getSheetByName(SHEET_YEARLY);
@@ -33110,6 +33173,9 @@ function getInvoiceListData(params){
             // з нулями) — СКЛАДАЄМО. Раніше останній рядок перезаписував перший, і рахунок показував 0.
             paymentByName[pname]   = (paymentByName[pname]   || 0) + (Number(pvals[pr][budIdx]) || 0);
             extrasByPayment[pname] = (extrasByPayment[pname] || 0) + (dopIdx >= 0 ? (Number(pvals[pr][dopIdx]) || 0) : 0);
+            // v7.604: клітинка бюджету — не число (#ERROR!, #REF!, текст) → сума рахунку явно помилкова
+            var _bE = _invCellErr(pvals[pr][budIdx]), _dE = dopIdx >= 0 ? _invCellErr(pvals[pr][dopIdx]) : '';
+            if (_bE || _dE){ budgetErrByName[pname] = budgetErrByName[pname] || []; if (_bE) budgetErrByName[pname].push(budNavchCol + ' = «' + _bE + '»'); if (_dE) budgetErrByName[pname].push(budDopCol + ' = «' + _dE + '»'); }
           }
         }
       }
@@ -33238,6 +33304,7 @@ function getInvoiceListData(params){
         prevNavch: _pbE.monN || [],                   // v7.530: місяці з незакритим залишком «навч» (бюджет, факт, різниця)
         prevDop: _pbE.monD || [],                     // v7.530: те саме для «доп»
         studyNet: _stC.net,                           // v7.530: договір − знижки місяця (null — договору немає)
+        budgetError: budgetErrByName[name] || [],     // v7.604: клітинки бюджету з помилкою (#ERROR! тощо)
         extrasPaymentDiff: extrasPaymentDiff,         // v7.528: «Коригування (Payment)» додаткових; ≠ 0 — позначка для фінансиста
         extrasSum: extrasSum + (_ml ? _ml.sum : 0),   // v7.357: до сплати ФОП додаткових = додаткові + харчування
         extrasBreakdown: breakdownArr,
@@ -33806,7 +33873,7 @@ function bulkSendInvoices(opts){
   var actor    = String(opts.actorName || '').trim();
   if (!loc) return {ok:false, error:'loc обовʼязковий'};
 
-  var _g = _invBulkGuard({loc:loc, payMonth:payMonth, payYear:payYear, extMonth:extMonth, extYear:extYear});   // v7.530
+  var _g = _invBulkGuard({loc:loc, payMonth:payMonth, payYear:payYear, extMonth:extMonth, extYear:extYear, actorName:actor});   // v7.530; v7.604 — блок лише для окремих дітей
   if (_g) return _g;
   var inv = getInvoiceListData({loc:loc, payMonth:payMonth, payYear:payYear,
     extMonth:extMonth, extYear:extYear});
@@ -33818,6 +33885,8 @@ function bulkSendInvoices(opts){
     var hasExtras  = (Number(c.extrasSum)  || 0) > 0;
     if (!hasStudies && !hasExtras) return;
     if (!c.signerEmail){ noEmail++; details.push({name:c.name, status:'без email'}); return; }
+    var _gc = _invBulkGuard({loc:loc, payMonth:payMonth, payYear:payYear, extMonth:extMonth, extYear:extYear, childName:c.name, actorName:actor});   // v7.604
+    if (_gc){ failed++; details.push({name:c.name, status:'⛔ не надіслано', error:_gc.error}); return; }
     var r = sendInvoiceEmail({childName:c.name, loc:loc, invoiceDate:invoiceDate, actorName:actor,
       payMonth:payMonth, payYear:payYear, extMonth:extMonth, extYear:extYear,
       sendStudies:hasStudies, sendExtras:hasExtras});

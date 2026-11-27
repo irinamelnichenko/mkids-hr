@@ -486,6 +486,7 @@ select,input{font-family:inherit}
         <button class="btn btn-primary" id="invBulkBtn" onclick="invBulkSend()">📬 Надіслати всім</button>
       </div>
       <div id="invChk" class="inv-chk" hidden></div>
+      <div id="invPending" class="inv-chk" hidden></div>   <!-- v7.604: CFO — списки «на перевірку» -->
       <input id="invSearch" class="inv-search" type="text" placeholder="🔍 Пошук дитини або групи..." oninput="INV.searchQ=this.value; renderInvoiceList()">
       <div id="invListWrap">
         <div class="inv-loading">⏳ Завантаження…</div>
@@ -1733,7 +1734,9 @@ async function invPrewarmAll(){
   var btn = $('invPrewarmBtn');
   var total = targets.length;
   if (!total){ showToast('Немає кого готувати', 'info'); return; }
-  if (!(await invPrecheckGate())) return;   // v7.530: перевірка перед розсилкою
+  var gate = await invPrecheckGate(); if (!gate) return;   // v7.530 → v7.604
+  targets = targets.filter(function(c){ return gate.skip.indexOf(c.name) < 0; }); total = targets.length;
+  if (!total){ showToast('Немає кого готувати', 'info'); return; }
   if (btn){ btn.disabled = true; }
   var done = 0, cached = 0, skipped = 0;
   function paint(){ if (btn) btn.textContent = '⚡ Підготовка ' + done + ' / ' + total; }
@@ -1750,7 +1753,7 @@ async function invPrewarmAll(){
     try {
       var res = await invApi({
         action: 'invoiceViberMessage', bulk: true,   // v7.530
-        childName: c.name, loc: CFG.LOC,
+        childName: c.name, loc: CFG.LOC, actorName: _invActor(),
         sendStudies: sStudies,
         sendExtras:  sExtras,
         payMonth: INV.payMonth, payYear: INV.payYear,
@@ -1803,17 +1806,18 @@ function _chkMonths(arr){
 function invPrecheckRender(){
   var box = $('invChk'), r = INV._chk; if (!box || !r) return;
   var items = r.items || [], c = r.confirmed;
-  var status;
+  // v7.604: розсилку не блокуємо; ⚠ — попередження (список іде CFO на перевірку), ⛔ — лише дитина з явно помилковою сумою
+  var bl = r.blocked || [], status;
   if (!items.length) status = '✅ Боргів, переплат і коригувань немає — розсилку можна запускати.';
-  else if (c && c.valid) status = '✅ Підтверджено: ' + escapeHtml(c.by) + ', ' + escapeHtml(c.at) + ' — розсилку можна запускати.';
-  else if (c) status = '⛔ Суми змінились після підтвердження (' + escapeHtml(c.by) + ', ' + escapeHtml(c.at) + ') — потрібне нове підтвердження фінансиста.';
-  else status = '⛔ Розсилка заблокована, доки фінансист не підтвердить цей список.';
-  var btn = (items.length && !(c && c.valid))
-    ? (_invIsCfo() ? '<button class="btn btn-primary" id="invChkConfirm" onclick="invPrecheckConfirm()">Підтверджую список (' + items.length + ')</button>'
-                   : '<span class="inv-chk-sub">Підтвердити може лише фінансист (CFO).</span>') : '';
+  else if (c && c.valid) status = '✅ Переглянуто фінансистом: ' + escapeHtml(c.by) + ', ' + escapeHtml(c.at) + '.';
+  else status = '⚠️ Розсилати можна. Діти з боргом / переплатою / коригуванням — нижче; цей список піде фінансисту (CFO) на перевірку' +
+                (c ? ' (суми змінились після перегляду ' + escapeHtml(c.at) + ')' : '') + '.';
+  if (bl.length) status += ' ⛔ Не отримають рахунок у розсилці, доки не виправлять Payment: ' + escapeHtml(bl.join(', ')) + '.';
+  var btn = (items.length && !(c && c.valid) && _invIsCfo()) ? '<button class="btn btn-primary" id="invChkConfirm" onclick="invPrecheckConfirm()">✓ Переглянуто (' + items.length + ')</button>' : '';
   var rows = items.map(function(it){
     var s = it.study, e = it.extras, out = '';
-    if (s) out += '<tr><td><b>' + escapeHtml(it.name) + '</b><div class="mon">' + escapeHtml(it.group || '') + '</div></td><td>навчання</td>' +
+    var blk = (it.block && it.block.length) ? '<div class="mon" style="color:#c0392b;font-weight:700">⛔ ' + escapeHtml(it.block.join('; ')) + '</div>' : '';
+    if (s) out += '<tr><td><b>' + escapeHtml(it.name) + '</b><div class="mon">' + escapeHtml(it.group || '') + '</div>' + blk + '</td><td>навчання</td>' +
       '<td class="n">' + fmtUah(s.budget) + '</td><td class="n">' + (s.net == null ? '—' : fmtUah(s.net)) + '</td>' +
       '<td>' + _chkCarry(s.carry) + '</td><td>' + (s.change ? '<span class="inv-badge b-yellow">⚠️ ' + _chkAmt(s.change) + '</span>' : '—') + '</td>' +
       '<td class="n"><b>' + fmtUah(s.due) + '</b></td><td>' + _chkMonths(s.months) + '</td></tr>';
@@ -1823,7 +1827,7 @@ function invPrecheckRender(){
       '<td class="n"><b>' + fmtUah(e.due) + '</b></td><td>' + _chkMonths(e.months) + '</td></tr>';
     return out;
   }).join('');
-  box.className = 'inv-chk' + (r.allowed ? ' ok' : '');
+  box.className = 'inv-chk' + ((!items.length || (c && c.valid)) ? ' ok' : '');
   box.innerHTML = '<div class="inv-chk-head"><div><div class="inv-chk-title">Перевірка рахунків перед розсилкою · ' + escapeHtml(r.loc) + ', навчання ' +
       (INV_MONTHS[r.payMonth - 1] || r.payMonth) + ', допи ' + (INV_MONTHS[r.extMonth - 1] || r.extMonth) + '</div>' +
       '<div class="inv-chk-sub">' + status + ' Дітей у локації: ' + ((r.totals && r.totals.children) || 0) + ', у списку: ' + items.length +
@@ -1852,21 +1856,49 @@ async function invPrecheckConfirm(){
     var p = _invChkParams(); p.action = 'invoicePrecheckConfirm'; p.hash = r.hash;
     INV._chk = await invApi(p);
     invPrecheckRender();
-    showToast('✅ Перевірку підтверджено — розсилку відкрито', 'ok', 5000);
+    showToast('✅ Позначено: переглянуто фінансистом', 'ok', 5000);
+    invPendingLoad();
   } catch(e){
     showToast(e.message, 'err', 8000);
     try { await invPrecheckLoad(); invPrecheckRender(); } catch(_e){}
   }
 }
-// true — можна масово надсилати; false — показали перевірку й заблокували
+// v7.604: {skip:[імена]} — можна надсилати (крім дітей з явно помилковою сумою); null — перевірку не отримано.
+//   Раніше (v7.530) розсилка блокувалась, доки CFO не підтвердить список; тепер це попередження — список іде CFO на перевірку.
 async function invPrecheckGate(){
   var r = null;
-  try { r = await invPrecheckLoad(); } catch(e){ showToast('Перевірку не отримано — розсилку не запущено: ' + e.message, 'err', 7000); return false; }
-  if (r.allowed) return true;
-  invPrecheckRender();
-  try { $('invChk').scrollIntoView({behavior: 'smooth', block: 'start'}); } catch(_s){}
-  showToast('⛔ Розсилку заблоковано: фінансист має підтвердити перевірку рахунків (' + (r.items || []).length + ' дітей)', 'err', 7000);
-  return false;
+  try { r = await invPrecheckLoad(); } catch(e){ showToast('Перевірку не отримано — розсилку не запущено: ' + e.message, 'err', 7000); return null; }
+  var bl = r.blocked || [], warn = Number(r.warnCount) || 0;
+  if (bl.length || (warn && r.needsReview)){
+    invPrecheckRender();
+    try { $('invChk').scrollIntoView({behavior: 'smooth', block: 'start'}); } catch(_s){}
+  }
+  if (warn && r.needsReview) showToast('⚠️ ' + warn + ' дітей з боргом / переплатою / коригуванням — список піде фінансисту на перевірку', 'info', 6000);
+  if (bl.length) showToast('⛔ Без рахунку в розсилці (сума явно помилкова): ' + bl.join(', '), 'err', 8000);
+  return {skip: bl, warn: warn, review: !!r.needsReview};
+}
+// v7.604: CFO — списки, надіслані з ⚠ без перегляду
+async function invPendingLoad(){
+  var box = $('invPending'); if (!box) return;
+  if (!_invIsCfo()){ box.hidden = true; return; }
+  try {
+    var r = await invApi({action: 'getInvoicePrecheckPending', actorId: (S.user && S.user.id) || ''});
+    var it = r.items || [];
+    if (!it.length){ box.hidden = true; return; }
+    box.innerHTML = '<div class="inv-chk-title">📥 На перевірку фінансисту: ' + it.length + '</div>' + it.map(function(x, i){
+      return '<div class="inv-chk-sub" style="margin-top:6px">' + escapeHtml(x.loc) + ' · навчання ' + escapeHtml(x.pay) + ', допи ' + escapeHtml(x.ext) + ' · ' + x.count + ' дітей з ⚠ · розіслав(ла) ' +
+        escapeHtml(x.by) + ', ' + escapeHtml(x.at) + ' <button class="btn" onclick="invPendingOpen(' + i + ')">Відкрити</button></div>'; }).join('');
+    INV._pending = it; box.hidden = false;
+  } catch(e){ box.hidden = true; }
+}
+async function invPendingOpen(i){
+  var x = (INV._pending || [])[i]; if (!x) return;
+  var pm = x.pay.split('-'), em = x.ext.split('-');
+  if ($('locSel') && CFG.LOC !== x.loc){ $('locSel').value = x.loc; CFG.LOC = x.loc; $('meta').textContent = 'Локація: ' + CFG.LOC; }
+  INV.payYear = Number(pm[0]); INV.payMonth = Number(pm[1]); INV.extYear = Number(em[0]); INV.extMonth = Number(em[1]);
+  ['invPayMonth', 'invPayYear', 'invExtMonth', 'invExtYear'].forEach(function(id, k){ var el = $(id); if (el) el.value = [INV.payMonth, INV.payYear, INV.extMonth, INV.extYear][k]; });
+  await loadInvoiceData();
+  invPrecheckShow(true);
 }
 
 // 📬 — масова: послідовно по дітях з email і сумою > 0, з прогрес-тостом.
@@ -1879,9 +1911,13 @@ async function invBulkSend(){
   var targets    = withSum.filter(function(c){ return !!c.signerEmail; });
   var noEmailCnt = withSum.length - targets.length;
   if (!targets.length){ showToast('Немає кому надсилати (нема email або сум)', 'info', 4000); return; }
-  if (!(await invPrecheckGate())) return;   // v7.530: перевірка перед розсилкою
+  var gate = await invPrecheckGate(); if (!gate) return;   // v7.530 → v7.604: попередження, блок лише окремих дітей
+  targets = targets.filter(function(c){ return gate.skip.indexOf(c.name) < 0; });
+  if (!targets.length){ showToast('Немає кому надсилати', 'info', 4000); return; }
   if (!confirm('Надіслати рахунки ' + targets.length + ' батькам?' +
-      (noEmailCnt ? ('\n(' + noEmailCnt + ' без email — пропустимо)') : ''))) return;
+      (noEmailCnt ? ('\n(' + noEmailCnt + ' без email — пропустимо)') : '') +
+      (gate.skip.length ? ('\n⛔ Без рахунку (сума явно помилкова): ' + gate.skip.join(', ')) : '') +
+      ((gate.warn && gate.review) ? ('\n⚠️ ' + gate.warn + ' дітей з боргом / переплатою / коригуванням — список піде фінансисту на перевірку') : ''))) return;
 
   var bulkBtn = $('invBulkBtn');
   if (bulkBtn) bulkBtn.disabled = true;
@@ -1964,6 +2000,7 @@ function showFatalError(msg){
   $('loadBox').classList.add('hidden');
   $('content').classList.remove('hidden');
   await loadInvoiceData();
+  try { invPendingLoad(); } catch(_pl){}   // v7.604: CFO — списки «на перевірку»
 })();
 </script>
 <script>
