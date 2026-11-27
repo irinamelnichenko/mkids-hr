@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.602
+// m.kids CRM — Google Apps Script v7.603
+// v7.603: вага і зріст — редагування й видалення виміру (медсестра своєї локації, директор, CFO); журнал «Вага_і_зріст_Журнал» (хто, коли, було → стало); видалення м'яке
 // v7.602: вага і зріст дитини — аркуш «Вага_і_зріст» (getGrowth / addGrowth / markGrowthSent); вносять медсестра, директор, CFO; старі квартальні заміри віддаються як історія
 // v7.598: Польща — PRUZSKOW: PEPCO будь-якого магазину → OPEX 55 (як Biedronka → 48)
 // v7.597: Польща — блокади PKO (Typ transakcji = Blokada, без Data operacji): дата = Data waluty, розноска як звичайна витрата (магазин → рядок), без позначок у файлі; у PL_Операції колонка «Блокада»; проведена тією ж сумою (±5 днів, та сама картка) — «вже внесено», іншою — доданок виправляється на різницю; зникла без проведення — «потрібно рішення Іри»; BALANCE — поправка на блокади
@@ -9903,7 +9904,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.602', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.603', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -10146,6 +10147,8 @@ function doPost(e) {
     else if (body.action === 'saveHealthRecord') result = saveHealthRecord(body);
     else if (body.action === 'addGrowth')        result = addGrowth(body);        // v7.602
     else if (body.action === 'markGrowthSent')   result = markGrowthSent(body);   // v7.602
+    else if (body.action === 'editGrowth')       result = editGrowth(body);       // v7.603
+    else if (body.action === 'deleteGrowth')     result = deleteGrowth(body);     // v7.603
     else if (body.action === 'deleteHealthRecord')    result = deleteHealthRecord(body);
     else if (body.action === 'writeAbsenceToPayment')    result = writeAbsenceToPayment(body);
     else if (body.action === 'exportVacationDiscountToPayments') result = exportVacationDiscountToPayments(body || {});
@@ -18258,7 +18261,10 @@ function dedupAttendanceApi(body){
 // не переносимо — віддаємо поруч як legacy, фронт показує їх в історії. Вносять: медсестра (свої локації), директор (своя), CFO.
 // Без норм і оцінок — лише внесені цифри.
 var SHEET_GROWTH = 'Вага_і_зріст';
-var GROWTH_HEAD = ['ID виміру', 'ID дитини', 'ПІБ дитини', 'Локація', 'Дата', 'Вага, кг', 'Зріст, см', 'Хто вніс', 'Коли внесено', 'Надіслано батькам (JSON)'];
+var GROWTH_HEAD = ['ID виміру', 'ID дитини', 'ПІБ дитини', 'Локація', 'Дата', 'Вага, кг', 'Зріст, см', 'Хто вніс', 'Коли внесено', 'Надіслано батькам (JSON)', 'Видалено'];
+// v7.603: журнал змін (редагування / видалення): хто, коли, було → стало. Видалення м'яке — рядок лишається з позначкою «Видалено».
+var SHEET_GROWTH_LOG = 'Вага_і_зріст_Журнал';
+var GROWTH_LOG_HEAD = ['Коли', 'Хто', 'Роль', 'Дія', 'ID виміру', 'ID дитини', 'ПІБ дитини', 'Локація', 'Було', 'Стало'];
 var GROWTH_ROLES = {nurse: 1, director: 1, cfo: 1};
 function _growthNum(v){                                   // «15,9» / «15.90» / 15.9 → 15.9 (1 знак); інакше NaN
   var s = String(v == null ? '' : v).trim().replace(',', '.'); if (!/^\d{1,3}(\.\d+)?$/.test(s)) return NaN;
@@ -18290,12 +18296,13 @@ function _growthLegacy(health){
 function _growthSheet(create){
   var ss = getCRMSpreadsheet(), sh = ss.getSheetByName(SHEET_GROWTH);
   if (!sh && create){ sh = ss.insertSheet(SHEET_GROWTH); sh.getRange(1, 1, 1, GROWTH_HEAD.length).setValues([GROWTH_HEAD]).setFontWeight('bold'); sh.setFrozenRows(1); sh.getRange('E:E').setNumberFormat('@'); }
+  if (sh && sh.getLastColumn() < GROWTH_HEAD.length) sh.getRange(1, 1, 1, GROWTH_HEAD.length).setValues([GROWTH_HEAD]).setFontWeight('bold');   // v7.603: + «Видалено»
   return sh;
 }
 function _growthItem(r){
   var sent = []; try { sent = JSON.parse(String(r[9] || '[]')) || []; } catch(_e){ sent = []; }
   return {id: String(r[0] || ''), childId: String(r[1] || ''), name: String(r[2] || ''), loc: String(r[3] || ''), date: _growthIso(r[4]),
-          weight: _growthNum(r[5]), height: _growthNum(r[6]), by: String(r[7] || ''), at: r[8] instanceof Date ? formatDate(r[8]) : String(r[8] || ''), sent: sent};
+          weight: _growthNum(r[5]), height: _growthNum(r[6]), by: String(r[7] || ''), at: r[8] instanceof Date ? formatDate(r[8]) : String(r[8] || ''), sent: sent, deleted: String(r[10] == null ? '' : r[10])};
 }
 // GET getGrowth&childId=… | &loc=… → {items:[…], legacy:{childId:[…]}}
 function getGrowth(p){
@@ -18304,8 +18311,12 @@ function getGrowth(p){
   var mine = function(id, l){ return cid ? id === cid : _dirSameLoc(l, loc); };
   var sh = _growthSheet(false), items = [];
   if (sh && sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, GROWTH_HEAD.length).getValues().forEach(function(r){
-    if (r[0] && mine(String(r[1] || ''), String(r[3] || ''))) items.push(_growthItem(r));
+    if (r[0] && !String(r[10] == null ? '' : r[10]).trim() && mine(String(r[1] || ''), String(r[3] || ''))) items.push(_growthItem(r));
   });
+  var log = [];   // v7.603: журнал змін — лише для картки дитини
+  if (cid){ var ls = getCRMSpreadsheet().getSheetByName(SHEET_GROWTH_LOG);
+    if (ls && ls.getLastRow() > 1) ls.getRange(2, 1, ls.getLastRow() - 1, GROWTH_LOG_HEAD.length).getValues().forEach(function(r){
+      if (String(r[5] || '') === cid) log.push({at: r[0] instanceof Date ? formatDate(r[0]) : String(r[0] || ''), by: String(r[1] || ''), action: String(r[3] || ''), id: String(r[4] || ''), was: String(r[8] || ''), now: String(r[9] || '')}); }); }
   var legacy = {}, cs = getCRMSpreadsheet().getSheetByName(SHEET_CLIENTS);
   if (cs){
     var v = cs.getDataRange().getValues(), hd = v[0].map(String), iId = hd.indexOf('ID'), iL = hd.indexOf('Локація'), iH = hd.indexOf("Здоров'я (JSON)");
@@ -18315,7 +18326,7 @@ function getGrowth(p){
       var L = _growthLegacy(h); if (L.length) legacy[id] = L;
     }
   }
-  return {ok: true, items: items, legacy: legacy};
+  return {ok: true, items: items, legacy: legacy, log: log};
 }
 function _growthActor(body){
   var a = _CURRENT_AUTH, role = a && a.role ? String(a.role).toLowerCase().trim() : '';
@@ -18336,12 +18347,73 @@ function addGrowth(body){
     var sh = _growthSheet(true), n = sh.getLastRow();
     if (n > 1){ var v = sh.getRange(2, 1, n - 1, GROWTH_HEAD.length).getValues();
       for (var i = 0; i < v.length; i++){ var it = _growthItem(v[i]);   // повтор того ж запиту (мережа) — не дублюємо
-        if (it.childId === cid && it.date === ok.date && it.weight === ok.weight && it.height === ok.height) return {ok: true, item: it, existed: true}; } }
+        if (!it.deleted && it.childId === cid && it.date === ok.date && it.weight === ok.weight && it.height === ok.height) return {ok: true, item: it, existed: true}; } }
     var item = {id: 'g_' + new Date().getTime() + '_' + Math.floor(Math.random() * 1000), childId: cid, name: trim(body.name || ''), loc: loc,
                 date: ok.date, weight: ok.weight, height: ok.height, by: trim(body.actorName || '') || role, at: formatDate(new Date()), sent: []};
     var rg = sh.getRange(n + 1, 1, 1, GROWTH_HEAD.length); rg.offset(0, 4, 1, 1).setNumberFormat('@');
     rg.setValues([[item.id, item.childId, item.name, item.loc, item.date, item.weight, item.height, item.by, item.at, '[]']]);
     return {ok: true, item: item};
+  } finally { try { lock.releaseLock(); } catch(_l){} }
+}
+// v7.603: «15.10.2026 · 15,9 кг · 96 см» — для журналу «було → стало»
+function _growthStr(it){
+  if (!it) return '';
+  var d = String(it.date || ''), m = d.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  var w = it.weight > 0 ? Number(it.weight).toFixed(1).replace('.', ',') + ' кг' : '— кг', h = it.height > 0 ? (Math.round(it.height) === it.height ? String(it.height) : Number(it.height).toFixed(1).replace('.', ',')) + ' см' : '— см';
+  return (m ? m[3] + '.' + m[2] + '.' + m[1] : d) + ' · ' + w + ' · ' + h;
+}
+// Хто може правити саме цей вимір: роль + локація рядка (медсестра — свої, директор — свої, CFO — усі)
+function _growthMayEdit(role, loc){
+  if (!GROWTH_ROLES[role]) return 'Змінювати вагу і зріст можуть медсестра, директор, CFO';
+  var nu = _nurseAuth(); if (nu && !_nurseLocOk(nu, loc)) return 'Лише ваші локації: ' + nu.locs.join(', ');
+  var dir = _dirAuth(); if (dir && !_dirHas(dir, loc)) return 'Лише ваші локації: ' + dir.all.join(', ');
+  return '';
+}
+function _growthLog(it, action, was, now, who, role){
+  var ss = getCRMSpreadsheet(), ls = ss.getSheetByName(SHEET_GROWTH_LOG);
+  if (!ls){ ls = ss.insertSheet(SHEET_GROWTH_LOG); ls.getRange(1, 1, 1, GROWTH_LOG_HEAD.length).setValues([GROWTH_LOG_HEAD]).setFontWeight('bold'); ls.setFrozenRows(1); }
+  var row = [formatDate(new Date()), who, role, action, it.id, it.childId, it.name, it.loc, was, now];
+  ls.getRange(ls.getLastRow() + 1, 1, 1, row.length).setValues([row]);
+  return {at: row[0], by: who, action: action, id: it.id, was: was, now: now};
+}
+// спільне для edit/delete: знайти живий рядок, перевірити права
+function _growthFind(sh, id){
+  if (!sh || sh.getLastRow() < 2) return null;
+  var v = sh.getRange(2, 1, sh.getLastRow() - 1, GROWTH_HEAD.length).getValues();
+  for (var i = 0; i < v.length; i++) if (String(v[i][0]) === id) return {row: i + 2, it: _growthItem(v[i])};
+  return null;
+}
+// POST editGrowth {id, date, weight, height, actorName}
+function editGrowth(body){
+  body = body || {}; var id = trim(body.id || ''); if (!id) return {ok: false, error: 'Немає ID виміру'};
+  var role = _growthActor(body), who = trim(body.actorName || '') || role;
+  var ok = _growthValid(body, Utilities.formatDate(new Date(), 'Europe/Kiev', 'yyyy-MM-dd')); if (ok.error) return {ok: false, error: ok.error};
+  var lock = LockService.getScriptLock(); lock.waitLock(20000);
+  try {
+    var sh = _growthSheet(false), f = _growthFind(sh, id);
+    if (!f || f.it.deleted) return {ok: false, error: 'Вимір не знайдено (можливо, вже видалено)'};
+    var bad = _growthMayEdit(role, f.it.loc); if (bad) return {ok: false, code: 'PERM_DENIED', error: bad};
+    var was = _growthStr(f.it), nw = Object.assign({}, f.it, {date: ok.date, weight: ok.weight, height: ok.height}), now = _growthStr(nw);
+    if (was === now) return {ok: true, item: f.it, unchanged: true};
+    sh.getRange(f.row, 5).setNumberFormat('@');
+    sh.getRange(f.row, 5, 1, 3).setValues([[ok.date, ok.weight, ok.height]]);
+    var lg = _growthLog(f.it, 'зміна', was, now, who, role);
+    return {ok: true, item: nw, log: lg};
+  } finally { try { lock.releaseLock(); } catch(_l){} }
+}
+// POST deleteGrowth {id, actorName} — м'яке видалення: рядок лишається, у «Видалено» — коли · хто
+function deleteGrowth(body){
+  body = body || {}; var id = trim(body.id || ''); if (!id) return {ok: false, error: 'Немає ID виміру'};
+  var role = _growthActor(body), who = trim(body.actorName || '') || role;
+  var lock = LockService.getScriptLock(); lock.waitLock(20000);
+  try {
+    var sh = _growthSheet(true), f = _growthFind(sh, id);
+    if (!f) return {ok: false, error: 'Вимір не знайдено'};
+    if (f.it.deleted) return {ok: true, id: id, already: true};
+    var bad = _growthMayEdit(role, f.it.loc); if (bad) return {ok: false, code: 'PERM_DENIED', error: bad};
+    sh.getRange(f.row, 11).setValue(formatDate(new Date()) + ' · ' + who);
+    var lg = _growthLog(f.it, 'видалення', _growthStr(f.it), '', who, role);
+    return {ok: true, id: id, log: lg};
   } finally { try { lock.releaseLock(); } catch(_l){} }
 }
 // POST markGrowthSent {id, actorName} — позначка «надіслано батькам» (дата, хто)

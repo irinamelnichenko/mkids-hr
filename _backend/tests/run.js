@@ -1218,6 +1218,47 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
       {g1: {date: '20 серпня 2026', weight: '15,9', height: '96'}, g2: null, has: true, none: false, norm: false});
   }
 }
+// ── v7.603: вага і зріст — редагування / видалення / журнал змін (макет аркушів) ──
+{
+  const mkSheet = (rows) => { const sh = {rows, getLastRow: () => sh.rows.length, getLastColumn: () => Math.max(...sh.rows.map((r) => r.length)),
+    getRange: (r, c, nr, nc) => { if (typeof r === 'string') return {setNumberFormat(){ return this; }};
+      const g = {getValues: () => sh.rows.slice(r - 1, r - 1 + (nr || 1)).map((x) => { const o = x.slice(c - 1, c - 1 + (nc || 1)); while (o.length < (nc || 1)) o.push(''); return o; }),
+        setValues: (v) => { v.forEach((row, i) => { const t = sh.rows[r - 1 + i] = sh.rows[r - 1 + i] || []; row.forEach((x, j) => { t[c - 1 + j] = x; }); }); return g; },
+        setValue: (x) => { (sh.rows[r - 1] = sh.rows[r - 1] || [])[c - 1] = x; return g; }, setNumberFormat: () => g, setFontWeight: () => g, getValue: () => (sh.rows[r - 1] || [])[c - 1]};
+      return g; }, setFrozenRows(){}}; return sh; };
+  const head = ['ID виміру', 'ID дитини', 'ПІБ дитини', 'Локація', 'Дата', 'Вага, кг', 'Зріст, см', 'Хто вніс', 'Коли внесено', 'Надіслано батькам (JSON)'];
+  const SH = {'Вага_і_зріст': mkSheet([head, ['g1', 'c_Дядюша Злата_Кар\'єрна', 'Дядюша Злата', "Кар'єрна", '2026-11-27', 15.9, 96, 'Оксана', '2026-11-27 12:00', '[]'],
+                                      ['g2', 'c_Інша_Оранж', 'Інша Дитина', 'Оранж', '2026-11-20', 18, 105, 'Медсестра', '2026-11-20 10:00', '[]']])};
+  const ss = {getSheetByName: (n) => SH[n] || null, insertSheet: (n) => (SH[n] = mkSheet([]))};
+  let AUTH = null, NURSE = null, DIR = null;
+  const env2 = {Utilities: {formatDate: () => '2026-11-27'}, trim: (x) => String(x == null ? '' : x).trim(), getCRMSpreadsheet: () => ss, formatDate: () => '2026-11-28 09:15',
+    LockService: {getScriptLock: () => ({waitLock(){}, releaseLock(){}})}, _getActor: () => ({role: ''}), _roleKey: (r) => String(r || '').toLowerCase(),
+    _nurseAuth: () => NURSE, _nurseLocOk: (nu, l) => nu.locs.indexOf(l) >= 0, _dirAuth: () => DIR, _dirHas: (d, l) => d.all.indexOf(l) >= 0, _dirSameLoc: (a, b) => a === b};
+  const names = ['_growthNum', '_growthIso', '_growthValid', '_growthSheet', '_growthItem', '_growthActor', '_growthStr', '_growthMayEdit', '_growthLog', '_growthFind', 'editGrowth', 'deleteGrowth'];
+  const GE = new Function(...Object.keys(env2), '_AUTH', [varLine('SHEET_GROWTH'), varBlock('GROWTH_HEAD'), varLine('SHEET_GROWTH_LOG'), varBlock('GROWTH_LOG_HEAD'), varBlock('GROWTH_ROLES'), 'var _CURRENT_AUTH = null;']
+    .concat(names.map(fn)).join('\n') + '\nreturn {setAuth: function(a){ _CURRENT_AUTH = a; }, ' + names.join(', ') + '};')(...Object.values(env2), null);
+  GE.setAuth({role: 'nurse', id: 5}); NURSE = {locs: ["Кар'єрна"]};
+  const e1 = GE.editGrowth({id: 'g1', date: '2026-11-26', weight: '16,1', height: '96', actorName: 'Оксана'});
+  const eBad = GE.editGrowth({id: 'g2', date: '2026-11-20', weight: '18,2', height: '105', actorName: 'Оксана'});
+  const eSame = GE.editGrowth({id: 'g1', date: '2026-11-26', weight: '16.1', height: 96, actorName: 'Оксана'});
+  const d1 = GE.deleteGrowth({id: 'g1', actorName: 'Оксана'}), eDel = GE.editGrowth({id: 'g1', date: '2026-11-26', weight: 17, height: 96});
+  const LOGR = SH['Вага_і_зріст_Журнал'].rows;
+  check('вага/зріст: редагування й видалення (медсестра)', 'своя локація — так, чужа — ні; без змін — без запису; видалення м\'яке (рядок лишається); журнал хто/коли/було → стало',
+    {e1: e1.ok && e1.item.weight, row: SH['Вага_і_зріст'].rows[1].slice(4, 7), bad: eBad.code, same: !!eSame.unchanged, d1: d1.ok, kept: SH['Вага_і_зріст'].rows.length, mark: SH['Вага_і_зріст'].rows[1][10], eDel: eDel.ok,
+     head: SH['Вага_і_зріст'].rows[0].length, log: LOGR.slice(1)},
+    {e1: 16.1, row: ['2026-11-26', 16.1, 96], bad: 'PERM_DENIED', same: true, d1: true, kept: 3, mark: '2026-11-28 09:15 · Оксана', eDel: false, head: 11,
+     log: [['2026-11-28 09:15', 'Оксана', 'nurse', 'зміна', 'g1', "c_Дядюша Злата_Кар'єрна", 'Дядюша Злата', "Кар'єрна", '27.11.2026 · 15,9 кг · 96 см', '26.11.2026 · 16,1 кг · 96 см'],
+           ['2026-11-28 09:15', 'Оксана', 'nurse', 'видалення', 'g1', "c_Дядюша Злата_Кар'єрна", 'Дядюша Злата', "Кар'єрна", '26.11.2026 · 16,1 кг · 96 см', '']]});
+  NURSE = null; GE.setAuth({role: 'director', id: 7}); DIR = {all: ['Позняки']};
+  const dDir = GE.deleteGrowth({id: 'g2', actorName: 'Директор'}); DIR = null;
+  GE.setAuth({role: 'vyhovatel', id: 9}); const dV = GE.deleteGrowth({id: 'g2'});
+  GE.setAuth({role: 'cfo', id: 1}); const dC = GE.deleteGrowth({id: 'g2', actorName: 'CFO'});
+  check('вага/зріст: права на видалення', 'директор чужої локації — ні; вихователь — ні; CFO — будь-яка', {dir: dDir.code, v: dV.code, cfo: dC.ok, log: LOGR.length}, {dir: 'PERM_DENIED', v: 'PERM_DENIED', cfo: true, log: 4});
+  const gp = path.join(__dirname, '..', '..', 'growth.js');
+  if (fs.existsSync(gp)){ const MG = require(gp);
+    check('вага/зріст: «було → стало» однаково у фронті й бекенді', 'той самий рядок журналу', {f: MG.describe({date: '2026-11-26', weight: 16.1, height: 96.5}), b: GE._growthStr({date: '2026-11-26', weight: 16.1, height: 96.5})},
+      {f: '26.11.2026 · 16,1 кг · 96,5 см', b: '26.11.2026 · 16,1 кг · 96,5 см'}); }
+}
 
 // ── v7.562: Предметники (фронт) — «Не передбачено для цієї групи» лише за справжньою нормою 0 ──
 {

@@ -57,7 +57,9 @@
   // останній вимір за період звіту (місяці 'YYYY-MM' включно) — для «📄 Звіт для батьків»
   function inPeriod(list, p){ var l = merge(list).filter(function(r){ var m = r.date.slice(0, 7); return m >= p.from && m <= p.to && (r.weight > 0 || r.height > 0); }); return l.length ? l[0] : null; }
 
-  var API = {num: num, fmtW: fmtW, fmtH: fmtH, fmtDate: fmtDate, validate: validate, merge: merge, last: last, minus3m: minus3m, isDue: isDue,
+  // v7.603: рядок для журналу «було → стало» (як у бекенді _growthStr)
+  function describe(it){ return it ? fmtDate(it.date) + ' · ' + fmtW(it.weight > 0 ? it.weight : null) + ' кг · ' + fmtH(it.height > 0 ? it.height : null) + ' см' : ''; }
+  var API = {describe: describe, num: num, fmtW: fmtW, fmtH: fmtH, fmtDate: fmtDate, validate: validate, merge: merge, last: last, minus3m: minus3m, isDue: isDue,
              messageText: messageText, normPhone: normPhone, parentPhone: parentPhone, viberUrl: viberUrl, canEdit: canEdit, canList: canList, inPeriod: inPeriod, LIVE: LIVE};
   if (typeof module !== 'undefined' && module.exports) module.exports = API;
   root.MkGrowth = API;
@@ -65,6 +67,8 @@
 
   // ── UI ──────────────────────────────────────────────────────────────────────
   var CACHE = {};   // childId → злитий список
+  var LOG = {};     // v7.603: childId → журнал змін
+  var EDITING = ''; // v7.603: id виміру, що зараз редагується у вкладці
   function S(){ return root.S || {}; }
   function user(){ return S().user || null; }
   function todayIso(){ return isoOf(new Date()); }
@@ -77,7 +81,7 @@
   API.load = function(childId, force){
     if (!force && CACHE[childId]) return Promise.resolve(CACHE[childId]);
     return apiGet({action: 'getGrowth', childId: childId}).then(function(j){
-      CACHE[childId] = merge(j.items, (j.legacy || {})[childId]); return CACHE[childId];
+      CACHE[childId] = merge(j.items, (j.legacy || {})[childId]); LOG[childId] = j.log || []; return CACHE[childId];
     });
   };
   API.cached = function(childId){ return CACHE[childId] || null; };
@@ -165,13 +169,37 @@
     else {
       h += '<div class="tbl-wrap"><table><thead><tr><th>Дата</th><th>Вага, кг</th><th>Зріст, см</th><th>Хто вніс</th><th>Надіслано батькам</th>' + (edit ? '<th></th>' : '') + '</tr></thead><tbody>';
       list.forEach(function(r){
+        var own = edit && !r.legacy && r.id;
+        if (own && EDITING === r.id){   // v7.603: рядок у режимі редагування
+          h += '<tr style="background:#fffaf3"><td colspan="5"><span style="display:inline-flex;gap:6px;flex-wrap:wrap;align-items:center">' + inputs('grE', r.date) +
+            '<button class="btn btn-primary btn-xs" id="grESave">💾 Зберегти зміни</button><button class="btn btn-secondary btn-xs" id="grECancel">Скасувати</button><span id="grEMsg" style="font-size:12px;color:#c0392b"></span></span></td><td></td></tr>';
+          return;
+        }
         h += '<tr><td>' + fmtDate(r.date) + (r.legacy ? ' <span style="font-size:11px;color:var(--gray)">квартальні заміри</span>' : '') + '</td><td>' + fmtW(r.weight) + '</td><td>' + fmtH(r.height) + '</td>' +
           '<td style="font-size:12px;color:var(--gray)">' + esc(r.by || '') + '</td><td style="font-size:12px;color:var(--green,#27ae60)">' + sentLine(r) + '</td>' +
-          (edit ? '<td>' + (!r.legacy && r.weight > 0 && r.height > 0 ? '<button class="btn btn-secondary btn-xs" onclick="MkGrowth.sendOpen(' + esc(JSON.stringify(String(id))) + ',' + esc(JSON.stringify(String(r.id))) + ')">💬 Надіслати батькам</button>' : '') + '</td>' : '') + '</tr>';
+          (edit ? '<td style="white-space:nowrap">' + (!r.legacy && r.weight > 0 && r.height > 0 ? '<button class="btn btn-secondary btn-xs" onclick="MkGrowth.sendOpen(' + esc(JSON.stringify(String(id))) + ',' + esc(JSON.stringify(String(r.id))) + ')">💬 Надіслати батькам</button>' : '') +
+            (own ? ' <button class="btn btn-secondary btn-xs" title="Редагувати" onclick="MkGrowth.editStart(' + esc(JSON.stringify(String(r.id))) + ')">✏️</button> <button class="btn btn-secondary btn-xs" title="Видалити" onclick="MkGrowth.remove(' + esc(JSON.stringify(String(r.id))) + ')">🗑</button>' : '') + '</td>' : '') + '</tr>';
       });
       h += '</tbody></table></div>';
+      if (list.some(function(r){ return r.legacy; }) && edit) h += '<div style="font-size:11.5px;color:var(--gray);margin:4px 2px">Квартальні заміри змінюються у вкладці «🩺 Здоров\'я».</div>';
     }
+    var lg = LOG[id] || [];
+    if (lg.length) h += '<details style="margin-top:12px"><summary style="cursor:pointer;font-size:13px;font-weight:700">🕓 Журнал змін (' + lg.length + ')</summary><div style="font-size:12.5px;margin-top:6px">' +
+      lg.slice().reverse().map(function(x){ return '<div style="padding:4px 0;border-bottom:1px solid #f0f0f0">' + esc(String(x.at || '').slice(0, 16)) + ' · <b>' + esc(x.by || '') + '</b> · ' + esc(x.action || '') + ': ' + esc(x.was || '') + (x.now ? ' → ' + esc(x.now) : '') + '</div>'; }).join('') + '</div></details>';
     tp.innerHTML = h;
+    if (EDITING){ var er = list.filter(function(r){ return r.id === EDITING; })[0];
+      if (er){ document.getElementById('grEW').value = fmtW(er.weight); document.getElementById('grEH').value = fmtH(er.height);
+        document.getElementById('grECancel').onclick = function(){ EDITING = ''; API.renderTab(); };
+        document.getElementById('grESave').onclick = function(){
+          var b = this, m = document.getElementById('grEMsg'), v = validate(readInputs('grE'), todayIso());
+          if (v.error){ m.textContent = '⚠️ ' + v.error; return; }
+          b.disabled = true; m.textContent = '⏳';
+          var u = user() || {};
+          apiPost({action: 'editGrowth', id: er.id, loc: er.loc || c.loc || '', date: v.date, weight: v.weight, height: v.height, actorId: u.id, actorName: actorName()}).then(function(j){
+            if (!j || j.ok === false){ b.disabled = false; m.textContent = '⚠️ ' + ((j && j.error) || 'немає зв\'язку з хмарою'); return; }
+            EDITING = ''; toast(j.unchanged ? 'Без змін' : '✅ Вимір змінено'); API.load(id, true).then(function(){ API.renderTab(); }, function(){ API.renderTab(); });
+          }, function(e){ b.disabled = false; m.textContent = '⚠️ ' + (e && e.message || e); });
+        }; } else EDITING = ''; }
     var sb = document.getElementById('grTSave');
     if (sb) sb.onclick = function(){
       var msg = document.getElementById('grTMsg'); sb.disabled = true; msg.textContent = '⏳ Зберігаю…'; msg.style.color = '';
@@ -182,6 +210,17 @@
         if (!it.id) API.load(id, true).then(function(){ });
       }, function(e){ sb.disabled = false; msg.textContent = '⚠️ ' + (e && e.message || e); msg.style.color = '#c0392b'; });
     };
+  };
+
+  API.editStart = function(itemId){ EDITING = itemId; API.renderTab(); };
+  API.remove = function(itemId){
+    var id = S().editId, list = CACHE[id] || [], it = list.filter(function(r){ return r.id === itemId; })[0]; if (!it) return;
+    if (!root.confirm('Видалити вимір ' + describe(it) + '?\nЗапис залишиться в журналі змін.')) return;
+    var u = user() || {}, c = card(id) || {};
+    apiPost({action: 'deleteGrowth', id: it.id, loc: it.loc || c.loc || '', actorId: u.id, actorName: actorName()}).then(function(j){
+      if (!j || j.ok === false){ toast('⚠️ ' + ((j && j.error) || 'немає зв\'язку з хмарою')); return; }
+      toast('🗑 Вимір видалено'); API.load(id, true).then(function(){ API.renderTab(); }, function(){ API.renderTab(); });
+    }, function(e){ toast('⚠️ ' + (e && e.message || e)); });
   };
 
   // ── розділ «📏 Вага і зріст»: діти локації, яких потрібно виміряти ──
