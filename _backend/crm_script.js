@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.598
+// m.kids CRM — Google Apps Script v7.602
+// v7.602: вага і зріст дитини — аркуш «Вага_і_зріст» (getGrowth / addGrowth / markGrowthSent); вносять медсестра, директор, CFO; старі квартальні заміри віддаються як історія
 // v7.598: Польща — PRUZSKOW: PEPCO будь-якого магазину → OPEX 55 (як Biedronka → 48)
 // v7.597: Польща — блокади PKO (Typ transakcji = Blokada, без Data operacji): дата = Data waluty, розноска як звичайна витрата (магазин → рядок), без позначок у файлі; у PL_Операції колонка «Блокада»; проведена тією ж сумою (±5 днів, та сама картка) — «вже внесено», іншою — доданок виправляється на різницю; зникла без проведення — «потрібно рішення Іри»; BALANCE — поправка на блокади
 // v7.596: ключ батьків у лапках («"Трикур Тарас"») більше не відкидається як технічний
@@ -9902,7 +9903,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.598', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.602', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -9967,6 +9968,7 @@ function doGet(e) {
     else if (action === 'diagLocPayment')     result = diagLocPayment(e); // v7.57 read-only: пер-лок Payment-файл
     else if (action === 'getCardPaymentDiff') result = getCardPaymentDiff(e.parameter || {}); // v7.423 read-only: звірка карток з Payment за місяць
     else if (action === 'getHealthRecords')         result = getHealthRecords(e);
+    else if (action === 'getGrowth')                result = getGrowth(e.parameter || {});   // v7.602 вага і зріст
     else if (action === 'dryRunImportAbsences')      result = dryRunImportAbsences(e.parameter.loc || '');
     else if (action === 'importAbsencesFromPayment') result = importAbsencesFromPayment(e.parameter.loc || '');
     else if (action === 'getOpexData')               result = getOpexData(e.parameter.loc || '', e.parameter.year || '', String(e.parameter.nocache || '') === '1');   // v7.341 кеш
@@ -10142,6 +10144,8 @@ function doPost(e) {
       result = _badL.length ? {ok:false, code:'FORBIDDEN_LOC', error:'Табель лише ваших локацій: ' + _nu2.locs.join(', ') + ' (відхилено ' + _badL.length + ')'} : saveAttendance(body);
     }
     else if (body.action === 'saveHealthRecord') result = saveHealthRecord(body);
+    else if (body.action === 'addGrowth')        result = addGrowth(body);        // v7.602
+    else if (body.action === 'markGrowthSent')   result = markGrowthSent(body);   // v7.602
     else if (body.action === 'deleteHealthRecord')    result = deleteHealthRecord(body);
     else if (body.action === 'writeAbsenceToPayment')    result = writeAbsenceToPayment(body);
     else if (body.action === 'exportVacationDiscountToPayments') result = exportVacationDiscountToPayments(body || {});
@@ -18247,6 +18251,112 @@ function dedupAttendanceApi(body){
     return report;
   } catch(e){ return {ok:false, error:String(e && e.message || e)}; }
   finally { try { lock.releaseLock(); } catch(_){} }
+}
+
+// ═══ v7.602 ВАГА І ЗРІСТ ДИТИНИ (медсестра раз на 3 місяці) ═══════════════════════════════════
+// Аркуш «Вага_і_зріст» у CRM: один рядок = один вимір. Старі «Квартальні заміри» (Здоров'я (JSON) → measurements)
+// не переносимо — віддаємо поруч як legacy, фронт показує їх в історії. Вносять: медсестра (свої локації), директор (своя), CFO.
+// Без норм і оцінок — лише внесені цифри.
+var SHEET_GROWTH = 'Вага_і_зріст';
+var GROWTH_HEAD = ['ID виміру', 'ID дитини', 'ПІБ дитини', 'Локація', 'Дата', 'Вага, кг', 'Зріст, см', 'Хто вніс', 'Коли внесено', 'Надіслано батькам (JSON)'];
+var GROWTH_ROLES = {nurse: 1, director: 1, cfo: 1};
+function _growthNum(v){                                   // «15,9» / «15.90» / 15.9 → 15.9 (1 знак); інакше NaN
+  var s = String(v == null ? '' : v).trim().replace(',', '.'); if (!/^\d{1,3}(\.\d+)?$/.test(s)) return NaN;
+  return Math.round(parseFloat(s) * 10) / 10;
+}
+function _growthIso(v){
+  if (v instanceof Date) return isNaN(v.getTime()) ? '' : Utilities.formatDate(v, 'Europe/Kiev', 'yyyy-MM-dd');
+  var s = String(v == null ? '' : v).trim(), m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); if (m) return m[1] + '-' + m[2] + '-' + m[3];
+  m = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/); return m ? m[3] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[1]).slice(-2) : '';
+}
+// Перевірка введення: дата не з майбутнього, вага 1–99,9 кг, зріст 30–199,9 см (захист від описок, не норма)
+function _growthValid(o, todayIso){
+  var d = _growthIso(o && o.date), w = _growthNum(o && o.weight), h = _growthNum(o && o.height);
+  if (!d) return {error: 'Вкажіть дату виміру'};
+  if (todayIso && d > todayIso) return {error: 'Дата виміру — не з майбутнього'};
+  if (!(w >= 1 && w < 100)) return {error: 'Вага — у кг, напр. 15,9'};
+  if (!(h >= 30 && h < 200)) return {error: 'Зріст — у см, напр. 96'};
+  return {date: d, weight: w, height: h};
+}
+// Старі квартальні заміри з картки: {'2026-09': {weight:'15.900', height:'96', by, at}} → [{date, weight, height, by, legacy}]
+function _growthLegacy(health){
+  var m = (health && health.measurements) || {}, out = [];
+  Object.keys(m).forEach(function(k){
+    var r = m[k] || {}, w = _growthNum(r.weight), h = _growthNum(r.height); if (!(w > 0) && !(h > 0)) return;
+    out.push({id: 'legacy_' + k, date: _growthIso(r.at) || (k + '-01'), weight: w > 0 ? w : null, height: h > 0 ? h : null, by: String(r.by || ''), legacy: true, sent: []});
+  });
+  return out;
+}
+function _growthSheet(create){
+  var ss = getCRMSpreadsheet(), sh = ss.getSheetByName(SHEET_GROWTH);
+  if (!sh && create){ sh = ss.insertSheet(SHEET_GROWTH); sh.getRange(1, 1, 1, GROWTH_HEAD.length).setValues([GROWTH_HEAD]).setFontWeight('bold'); sh.setFrozenRows(1); sh.getRange('E:E').setNumberFormat('@'); }
+  return sh;
+}
+function _growthItem(r){
+  var sent = []; try { sent = JSON.parse(String(r[9] || '[]')) || []; } catch(_e){ sent = []; }
+  return {id: String(r[0] || ''), childId: String(r[1] || ''), name: String(r[2] || ''), loc: String(r[3] || ''), date: _growthIso(r[4]),
+          weight: _growthNum(r[5]), height: _growthNum(r[6]), by: String(r[7] || ''), at: r[8] instanceof Date ? formatDate(r[8]) : String(r[8] || ''), sent: sent};
+}
+// GET getGrowth&childId=… | &loc=… → {items:[…], legacy:{childId:[…]}}
+function getGrowth(p){
+  p = p || {}; var cid = trim(p.childId || ''), loc = trim(p.loc || '');
+  if (!cid && !loc) return {ok: false, error: 'Потрібно childId або loc'};
+  var mine = function(id, l){ return cid ? id === cid : _dirSameLoc(l, loc); };
+  var sh = _growthSheet(false), items = [];
+  if (sh && sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, GROWTH_HEAD.length).getValues().forEach(function(r){
+    if (r[0] && mine(String(r[1] || ''), String(r[3] || ''))) items.push(_growthItem(r));
+  });
+  var legacy = {}, cs = getCRMSpreadsheet().getSheetByName(SHEET_CLIENTS);
+  if (cs){
+    var v = cs.getDataRange().getValues(), hd = v[0].map(String), iId = hd.indexOf('ID'), iL = hd.indexOf('Локація'), iH = hd.indexOf("Здоров'я (JSON)");
+    if (iId >= 0 && iH >= 0) for (var i = 1; i < v.length; i++){
+      var id = String(v[i][iId] || ''); if (!id || !mine(id, String(v[i][iL] || '')) || !v[i][iH]) continue;
+      var h = null; try { h = JSON.parse(String(v[i][iH])); } catch(_j){ h = null; }
+      var L = _growthLegacy(h); if (L.length) legacy[id] = L;
+    }
+  }
+  return {ok: true, items: items, legacy: legacy};
+}
+function _growthActor(body){
+  var a = _CURRENT_AUTH, role = a && a.role ? String(a.role).toLowerCase().trim() : '';
+  if (!role && body && body.actorId){ try { role = _roleKey(_getActor(body.actorId).role); } catch(_e){ role = ''; } }
+  return role;
+}
+// POST addGrowth {childId, name, loc, date, weight, height, actorName}
+function addGrowth(body){
+  body = body || {};
+  var role = _growthActor(body);
+  if (!GROWTH_ROLES[role]) return {ok: false, code: 'PERM_DENIED', error: 'Вносити вагу і зріст можуть медсестра, директор, CFO'};
+  var cid = trim(body.childId || ''), loc = trim(body.loc || '');
+  if (!cid || !loc) return {ok: false, error: 'Немає дитини або локації'};
+  var nu = _nurseAuth(); if (nu && !_nurseLocOk(nu, loc)) return {ok: false, code: 'FORBIDDEN_LOC', error: 'Лише ваші локації: ' + nu.locs.join(', ')};
+  var ok = _growthValid(body, Utilities.formatDate(new Date(), 'Europe/Kiev', 'yyyy-MM-dd')); if (ok.error) return {ok: false, error: ok.error};
+  var lock = LockService.getScriptLock(); lock.waitLock(20000);
+  try {
+    var sh = _growthSheet(true), n = sh.getLastRow();
+    if (n > 1){ var v = sh.getRange(2, 1, n - 1, GROWTH_HEAD.length).getValues();
+      for (var i = 0; i < v.length; i++){ var it = _growthItem(v[i]);   // повтор того ж запиту (мережа) — не дублюємо
+        if (it.childId === cid && it.date === ok.date && it.weight === ok.weight && it.height === ok.height) return {ok: true, item: it, existed: true}; } }
+    var item = {id: 'g_' + new Date().getTime() + '_' + Math.floor(Math.random() * 1000), childId: cid, name: trim(body.name || ''), loc: loc,
+                date: ok.date, weight: ok.weight, height: ok.height, by: trim(body.actorName || '') || role, at: formatDate(new Date()), sent: []};
+    var rg = sh.getRange(n + 1, 1, 1, GROWTH_HEAD.length); rg.offset(0, 4, 1, 1).setNumberFormat('@');
+    rg.setValues([[item.id, item.childId, item.name, item.loc, item.date, item.weight, item.height, item.by, item.at, '[]']]);
+    return {ok: true, item: item};
+  } finally { try { lock.releaseLock(); } catch(_l){} }
+}
+// POST markGrowthSent {id, actorName} — позначка «надіслано батькам» (дата, хто)
+function markGrowthSent(body){
+  body = body || {}; var id = trim(body.id || ''); if (!id) return {ok: false, error: 'Немає ID виміру'};
+  var lock = LockService.getScriptLock(); lock.waitLock(20000);
+  try {
+    var sh = _growthSheet(false); if (!sh || sh.getLastRow() < 2) return {ok: false, error: 'Вимір не знайдено'};
+    var ids = sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues();
+    for (var i = 0; i < ids.length; i++){ if (String(ids[i][0]) !== id) continue;
+      var c = sh.getRange(i + 2, 10), sent = []; try { sent = JSON.parse(String(c.getValue() || '[]')) || []; } catch(_e){ sent = []; }
+      sent.push({at: formatDate(new Date()), by: trim(body.actorName || '') || _growthActor(body) || ''});
+      c.setValue(JSON.stringify(sent)); return {ok: true, id: id, sent: sent}; }
+    return {ok: false, error: 'Вимір не знайдено'};
+  } finally { try { lock.releaseLock(); } catch(_l){} }
 }
 
 function getHealthRecords(e) {

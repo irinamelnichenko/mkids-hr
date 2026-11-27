@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <script src="locswitch.js?v=7.516"></script>
-<script src="dev_report.js?v=7.601"></script>   <!-- v7.599 «📄 Звіт для батьків (PDF)» у вкладці «Розвиток» -->   <!-- v7.516 кілька локацій користувача: активна + перемикач -->
+<script src="dev_report.js?v=7.602"></script><script src="growth.js?v=7.602"></script>   <!-- v7.602 «📏 Вага і зріст» -->   <!-- v7.599 «📄 Звіт для батьків (PDF)» у вкладці «Розвиток» -->   <!-- v7.516 кілька локацій користувача: активна + перемикач -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>m.kids System — Клієнти</title>
 <link rel="manifest" href="manifest.json">
@@ -589,6 +589,9 @@ details.card>summary::-webkit-details-marker{display:none}details.card[open]>sum
            data-v="incomplete" onclick="navIncomplete()">
         <span class="ni">🧩</span> Неповні картки
       </div>
+      <div class="nav-item" id="navGrowth" data-parent="crm" data-v="growth" style="display:none" onclick="nav('growth')">
+        <span class="ni">📏</span> Вага і зріст
+      </div>
       <div class="nav-item" id="navClientMap" style="display:none"
            onclick="window.location.href='map.html'">
         <span class="ni">🗺️</span> Карта клієнтів
@@ -744,6 +747,7 @@ details.card>summary::-webkit-details-marker{display:none}details.card[open]>sum
       <div class="tab" onclick="switchTab(8)" data-permission="card-child-development">🌱 Розвиток</div>
       <div class="tab" onclick="switchTab(9)" data-permission="card-child-banner">📄 Документи</div>
       <div class="tab" onclick="switchTab(10)" data-permission="card-child-history">🎨 Додаткові</div>
+      <div class="tab" onclick="switchTab(11)">📏 Вага і зріст</div>   <!-- v7.602: бачать усі, хто бачить картку -->
     </div>
     <div class="modal-bd">
       <!-- v6.29: банер розірваного договору (показується якщо статус=terminated) -->
@@ -999,6 +1003,8 @@ details.card>summary::-webkit-details-marker{display:none}details.card[open]>sum
       <div class="tab-pane" id="tp10" data-permission="card-child-history">
         <div class="loading"><div class="spinner"></div><p>Завантаження…</p></div>
       </div>
+      <!-- v7.602: Вага і зріст — DOM-індекс 11 = switchTab(11); без data-permission — бачать усі, хто бачить картку -->
+      <div class="tab-pane" id="tpGrowth"></div>
     </div>
     <div class="modal-ft">
       <button class="btn btn-danger btn-sm" id="btnDeleteChild" onclick="deleteChild()" style="margin-right:auto">🗑️ Видалити</button>
@@ -2948,6 +2954,7 @@ function applyRoleVisibility(){
   // що пункт зникав із меню, а сторінка лишалась доступною за посиланням.
   // Єдине джерело прав — PERMISSIONS.
   applyMealsVisibility();   // v7.241: харчування — CFO + директорка Школи 228
+  try { if (window.MkGrowth) MkGrowth.revealNav(); } catch(_g){}   // v7.602: «📏 Вага і зріст» — медсестра, директор, CFO
 
   document.querySelectorAll('[data-section]').forEach(function(section){
     var sectionName = section.dataset.section;
@@ -3186,7 +3193,7 @@ function showSpinner(){ document.getElementById('main').innerHTML='<div class="l
 function toggleSidebar(){ document.getElementById('sidebar').classList.toggle('open'); }
 
 // ─── NAVIGATION ──────────────────────────────────────────────────────────────
-var TITLES={clients:'👶 Список дітей',debts:'💰 Борги та оплати',settings:'⚙️ Налаштування',absRequests:'💼 Перерахунки бюджету',attendance:'📋 Табель відвідування',archive:'📁 Архів клієнтів',needsAttention:'✋ Потребують уваги',incomplete:'🧩 Неповні картки'};
+var TITLES={clients:'👶 Список дітей',debts:'💰 Борги та оплати',settings:'⚙️ Налаштування',absRequests:'💼 Перерахунки бюджету',attendance:'📋 Табель відвідування',archive:'📁 Архів клієнтів',needsAttention:'✋ Потребують уваги',incomplete:'🧩 Неповні картки',growth:'📏 Вага і зріст — потрібно виміряти'};
 function navArchive(){ nav('archive'); }
 function navNeedsAttention(){ nav('needsAttention'); }
 function navIncomplete(){ nav('incomplete'); }
@@ -3214,6 +3221,7 @@ function renderView(){
   else if(S.view==='archive') renderArchive();
   else if(S.view==='needsAttention') renderNeedsAttention();
   else if(S.view==='incomplete') renderIncomplete();
+  else if(S.view==='growth' && window.MkGrowth) MkGrowth.renderList();   // v7.602
   else renderSettings();
 }
 function switchMainTab(tab){
@@ -4372,6 +4380,7 @@ function switchTab(i){
   if(i===7) renderHealthTab();
   if(i===8) renderDevelopmentTab();   // v6.47.2: Розвиток — tab 8 (перед Документи)
   if(i===10) renderExtrasHistory();   // v7.108: Додаткові заняття + харчування по дитині
+  if(i===11 && window.MkGrowth) MkGrowth.renderTab(true);   // v7.602 вага і зріст
 }
 
 // v7.108: історія ДОДАТКОВИХ занять (і харчування) КОНКРЕТНОЇ дитини за рік, по місяцях.

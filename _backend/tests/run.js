@@ -1175,6 +1175,50 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
   }
 }
 
+// ── v7.602: вага і зріст дитини — бекенд (перевірка введення, старі заміри) і фронт (потрібно виміряти, текст, телефон, звіт) ──
+{
+  const U = {formatDate: (d) => d.toISOString().slice(0, 10)};
+  const G = new Function('Utilities', 'trim', ['_growthNum', '_growthIso', '_growthValid', '_growthLegacy'].map(fn).join('\n') + '\nreturn {_growthNum, _growthIso, _growthValid, _growthLegacy};')(U, (x) => String(x == null ? '' : x).trim());
+  check('вага/зріст (бекенд): введення', 'кома, 1 знак, дата з майбутнього і описки відхиляються',
+    {a: G._growthValid({date: '2026-11-27', weight: '15,94', height: '96'}, '2026-11-27'), f: G._growthValid({date: '2026-11-28', weight: 15, height: 96}, '2026-11-27').error,
+     w: G._growthValid({date: '2026-11-20', weight: '159', height: 96}, '2026-11-27').error, h: G._growthValid({date: '2026-11-20', weight: 15.9, height: '9,6'}, '2026-11-27').error,
+     d: G._growthValid({date: '', weight: 15.9, height: 96}, '2026-11-27').error, ua: G._growthIso('05.11.2026')},
+    {a: {date: '2026-11-27', weight: 15.9, height: 96}, f: 'Дата виміру — не з майбутнього', w: 'Вага — у кг, напр. 15,9', h: 'Зріст — у см, напр. 96', d: 'Вкажіть дату виміру', ua: '2026-11-05'});
+  check('вага/зріст (бекенд): старі квартальні заміри', 'Качан Ярема 2026-09 «15.900» / 96 → історія з датою внесення; порожня точка не потрапляє',
+    G._growthLegacy({measurements: {'2026-09': {weight: '15.900', height: '96', headCirc: '49', by: 'director', at: '2026-11-12'}, '2027-01': {weight: '', height: ''}, '2026-06': {weight: '14,2', height: ''}}}),
+    {0: {id: 'legacy_2026-09', date: '2026-11-12', weight: 15.9, height: 96, by: 'director', legacy: true, sent: []}, 1: {id: 'legacy_2026-06', date: '2026-06-01', weight: 14.2, height: null, by: '', legacy: true, sent: []}, length: 2});
+  const gp = path.join(__dirname, '..', '..', 'growth.js');
+  if (fs.existsSync(gp)){
+    const MG = require(gp);
+    const hist = [{id: 'legacy_2026-09', date: '2026-08-20', weight: 15.9, height: 96, legacy: true}, {id: 'g1', date: '2026-05-10', weight: 15.1, height: 93}];
+    check('вага/зріст: потрібно виміряти', 'немає виміру або останній старший за 3 місяці; рівно 3 місяці — ще ні; 31 травня → 28/29 лютого',
+      {none: MG.isDue([], '2026-11-27'), fresh: MG.isDue(hist, '2026-11-19'), edge: MG.isDue(hist, '2026-11-20'), old: MG.isDue(hist, '2026-11-21'), feb: MG.minus3m('2026-05-31'), last: MG.last(hist).id},
+      {none: true, fresh: false, edge: false, old: true, feb: '2026-02-28', last: 'legacy_2026-09'});
+    check('вага/зріст: текст батькам', 'рівно як задано; вага з 1 знаком, зріст без «,0»', {t: MG.messageText(16, 96), t2: MG.messageText(15.94, 96.5)},
+      {t: 'Вітаю, рада сповістити, що малеча фізично розвивається та зростає відповідно графіку на сьогодні:\nВага: 16,0 кг\nЗріст: 96 см',
+       t2: 'Вітаю, рада сповістити, що малеча фізично розвивається та зростає відповідно графіку на сьогодні:\nВага: 15,9 кг\nЗріст: 96,5 см'});
+    check('вага/зріст: номер батьків', 'підписант → його номер; немає — другий; немає жодного — лише копіювання; Viber як у рахунках',
+      {mom: MG.parentPhone({signerParent: 'mom', momPhone: '067 123 45 67', dadPhone: '0501112233'}).intl, dad: MG.parentPhone({signerParent: 'dad', momPhone: '0671234567', dadPhone: ''}).who,
+       none: MG.parentPhone({momPhone: '—', dadPhone: ''}), url: MG.viberUrl('380671234567', 'Вага: 16,0 кг')},
+      {mom: '380671234567', dad: 'мама', none: null, url: 'viber://chat?number=%2B380671234567&text=%D0%92%D0%B0%D0%B3%D0%B0%3A%2016%2C0%20%D0%BA%D0%B3'});
+    check('вага/зріст: хто вносить', 'медсестра й директор — свої локації, CFO — усі; вихователь, R&D, HR — лише перегляд',
+      {nurse: MG.canEdit({role: 'nurse', loc: "Кар'єрна", locs: ["Кар'єрна", "Школа Кар'єрна"]}, "Школа Кар'єрна"), nurseX: MG.canEdit({role: 'nurse', loc: 'Оранж'}, 'Позняки'),
+       dir: MG.canEdit({role: 'director', loc: 'Позняки'}, 'Позняки'), cfo: MG.canEdit({role: 'cfo'}, 'Оранж'),
+       vyh: MG.canEdit({role: 'vyhovatel', loc: 'Оранж'}, 'Оранж'), rnd: MG.canEdit({role: 'rnd_director', loc: 'Менеджмент'}, 'Оранж'), hr: MG.canEdit({role: 'hr'}, 'Оранж'), list: MG.canList({role: 'vyhovatel'})},
+      {nurse: true, nurseX: false, dir: true, cfo: true, vyh: false, rnd: false, hr: false, list: false});
+    check('вага/зріст: введення (фронт)', 'та сама перевірка, що в бекенді', {a: MG.validate({date: '2026-11-27', weight: '15,94', height: '96'}, '2026-11-27'), e: MG.validate({date: '2026-11-27', weight: '', height: 96}, '2026-11-27').error},
+      {a: {date: '2026-11-27', weight: 15.9, height: 96}, e: 'Вага — у кг, напр. 15,9'});
+    const DR = require(path.join(__dirname, '..', '..', 'dev_report.js'));
+    const T = {'1': {title: 'Емоційний інтелект', items: [{id: '1.1', text: 'Розпізнає почуття.'}]}};
+    const card = {name: 'Тест Дитина', loc: 'Оранж', group: 'Study-ki', development: {'2026-09': {criteria: {'1.1': '+'}}}, growth: hist.concat([{id: 'g0', date: '2026-10-02', weight: 16, height: 97}])};
+    const D1 = DR.buildData(card, T, DR.periodOf('quarter', '2026-09')), D2 = DR.buildData(card, T, DR.periodOf('quarter', '2026-11')), D3 = DR.buildData(Object.assign({}, card, {growth: []}), T, DR.periodOf('quarter', '2026-09'));
+    const H1 = DR.renderHtml(D1, ''), H3 = DR.renderHtml(D3, '');
+    check('вага/зріст у «Звіті для батьків»', 'останній вимір періоду окремим блоком; поза періодом / без вимірів — блоку немає; без норм і оцінок',
+      {g1: D1.growth, g2: D2 && D2.growth, has: /Вага і зріст/.test(H1) && /15,9 кг/.test(H1) && /96 см/.test(H1), none: /Вага і зріст/.test(H3), norm: /норм|ВООЗ/i.test(H1)},
+      {g1: {date: '20 серпня 2026', weight: '15,9', height: '96'}, g2: null, has: true, none: false, norm: false});
+  }
+}
+
 // ── v7.562: Предметники (фронт) — «Не передбачено для цієї групи» лише за справжньою нормою 0 ──
 {
   const hp = path.join(__dirname, '..', '..', 'predmetnyky.html');

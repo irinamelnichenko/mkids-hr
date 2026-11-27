@@ -5,7 +5,7 @@
 //   • GET до /macros/ (Apps Script) → network-only, fallback на cache
 //   • GET до інших static URLs → cache-first з фоновим оновленням
 
-var CACHE = 'mkids-cache-v7.601';
+var CACHE = 'mkids-cache-v7.602';
 // v7.401: бібліотеки (xlsx 952 КБ, pdf.js + worker 1,3 МБ, chart.js, Leaflet) — в ОКРЕМОМУ кеші, який НЕ
 // стирається з кожним релізом і не перекачується щоразу у фоні. Нова версія бібліотеки → змінити LIBS.
 var LIBS = 'mkids-libs-v1';
@@ -28,6 +28,7 @@ var SHELL = [
   'locswitch.js',        // v7.516 перемикач локацій користувача
   'pl_reconcile.js',     // v7.589 Польща: виписка PKO → фінфайли (CFO)
   'dev_report.js',       // v7.599 звіт для батьків (PDF)
+  'growth.js',           // v7.602 вага і зріст
   'mkids-logo.png',
   'manifest.json',
   'icon-192.png',
