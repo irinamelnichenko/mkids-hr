@@ -1,5 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// m.kids CRM — Google Apps Script v7.614
+// m.kids CRM — Google Apps Script v7.615
+// v7.615: статистика й воронка лідів — лише «Ліди_Бот» (без «Ліди_Історія»); імпорт історії з таблиці маркетолога вимкнено, id прибрано; тригер auditExportsNightly (лишився від v7.610) нічого не робить, поки звірку не ввімкнено, auditExportsSetup його прибирає
 // v7.614: нічна звірка експортів — прогони лише вночі 01:00–06:00 (на invoiceQueueTick, не в tgSlaCheck), о 09:00 — лише надсилання звіту
 // v7.613: SLA лідів — кнопки-переходи (меню дат/годин, «назад», запит примітки) більше не закривають SLA, лише дія чи введений текст; нічна звірка експортів перенесена з tgSlaCheck на invoiceQueueTick
 // v7.612: квота тригерів — черга рахунків повний прохід лише за подією (вебхук) або раз на 30 хв, заявки «чекає» без локації більше не забирають пачку; знімки дашборда — лише змінені / застарілі частини; час приміток на tgSlaCheck тепер рахується; експорт допів у Payment — зв'язок картка ↔ рядок (v7.607); OPEX з виписки й ЗП з відомості — не в закриті / заморожені місяці
@@ -1410,7 +1411,10 @@ function writeClientsHeader(sheet) {
 // Імпорт разовий і повторюваний: APPLY перебудовує аркуш Ліди_Історія з нуля,
 // тож повторний запуск не дублює дані.
 // ═══════════════════════════════════════════════════════════════════════════
-var LEADS_HIST_SRC_ID  = '1XfLgI_0hEObGylpTTRVHPOjkEB6crW5YNW816gy4Vdg';
+// v7.615 (27.11.2026): таблицю маркетолога НЕ чіпаємо і НЕ читаємо — імпорт «Ліди_Історія» вимкнено, id прибрано з коду.
+//   Статистика й воронка бота — лише з «Ліди_Бот» (+ дзеркало «m.kids Leads 26»); сам аркуш «Ліди_Історія» лишається як є.
+var LEADS_HIST_SRC_ID  = '';
+var LEADS_HISTORY_IN_STATS = false;
 var LEADS_HIST_SRC_TAB = 'ВСІ дані';
 var LEADS_HIST_SHEET   = 'Ліди_Історія';
 var LEADS_HIST_HEADER  = ['lead_id','created_at','day','source','локація','phone','parent','child',
@@ -1473,6 +1477,7 @@ function IMPORT_LEADS_HISTORY_DRYRUN(){ _importLeadsHistory(true); }
 function IMPORT_LEADS_HISTORY_APPLY(){  _importLeadsHistory(false); }
 
 function _importLeadsHistory(dryRun){
+  if (!LEADS_HIST_SRC_ID){ Logger.log('IMPORT_LEADS_HISTORY вимкнено (v7.615): таблицю маркетолога не читаємо'); return; }
   var out = [];
   function o(l){ out.push(l); if (out.length >= 60){ Logger.log(out.join('\n')); out = []; } }
   function flush(){ if (out.length) Logger.log(out.join('\n')); out = []; }
@@ -1699,6 +1704,7 @@ function _leadLocCanon(loc){
 }
 
 function _leadsFromHistory(){
+  if (!LEADS_HISTORY_IN_STATS) return [];   // v7.615: «Ліди_Історія» не йде ні в екран лідів, ні в аналітику, ні у звіт власнику
   var ss = getCRMSpreadsheet();
   var sh = ss.getSheetByName(LEADS_HIST_SHEET);
   if (!sh || sh.getLastRow() < 2) return [];
@@ -9962,7 +9968,7 @@ function doGet(e) {
       _gck = _gcKey(action, e.parameter || {}, _gcs);
       if (_gck){ var _gch = _cacheGzGetBig(_gck); if (_gch) return jsonOut(_dir ? _dirFilter(action, _gch, _dir) : _gch); }
     }
-    if      (action === 'ping')               result = {ok:true, msg:'pong v7.614', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
+    if      (action === 'ping')               result = {ok:true, msg:'pong v7.615', ts: new Date().toISOString(), authEnforce: _authEnforceOn(), cli: _cliInfo()};
     else if (action === 'getLoginUsers')      result = getLoginUsers();   // v7.491 публічний список для входу
     else if (action === 'getLocations')       result = getLocations({noCache: String(e.parameter && e.parameter.nocache || '') === '1'});   // v7.274 кеш 5 хв
     else if (action === 'getCacheVer')        result = {ok:true, group:String(e.parameter.group||''), ver:_cacheVer(String(e.parameter.group||''))};   // v7.401 дешева перевірка «чи змінились дані»
@@ -15185,7 +15191,7 @@ function weeklyOwnerReport(e){ var _t = Date.now(); try { return _weeklyOwnerRep
 function invFlushPaidQueue(e){ var _t = Date.now(); try { return _invFlushPaidQueue__impl(e); } finally { _trigAcc('invFlushPaidQueue', _t); } }
 function _vacExportGuardBatch(e){ var _t = Date.now(); try { return __vacExportGuardBatch__impl(e); } finally { _trigAcc('_vacExportGuardBatch', _t); } }
 function onMirrorOpen(e){ var _t = Date.now(); try { return _onMirrorOpen__impl(e); } finally { _trigAcc('onMirrorOpen', _t); } }
-function auditExportsNightly(e){ var _t = Date.now(); try { return _auditExpStart(e); } finally { _trigAcc('auditExportsNightly', _t); } }   // v7.610
+function auditExportsNightly(e){ var _t = Date.now(); try { if (PropertiesService.getScriptProperties().getProperty('AUDIT_EXP_ON') !== '1') return; return _auditExpStart(e); } finally { _trigAcc('auditExportsNightly', _t); } }   // v7.610; v7.615 — лише коли звірку ввімкнено (тригер лишився від невдалого setup)
 function _auditExpBatch(e){ var _t = Date.now(); try { return _auditExpRun(e); } finally { _trigAcc('_auditExpBatch', _t); } }
 function auditExportsReport(e){ var _t = Date.now(); try { return _auditExpReport(e); } finally { _trigAcc('auditExportsReport', _t); } }
 function nightlyExportGuarantee(e){ var _t = Date.now(); try { return _nightlyExportGuarantee__impl(e); } finally { _trigAcc('nightlyExportGuarantee', _t); } }
@@ -15331,9 +15337,11 @@ function _auditExpReport(){
 // POST {action:'auditExportsSetup', actorId, off?} — вмикає / вимикає звірку (05:00 прогін, 09:00 звіт, Europe/Kiev) (CFO).
 function auditExportsSetup(body){
   var a = _promoActor(body || {}); if (!(a && _roleKey(a.role) === 'cfo')) return {ok:false, code:'PERM_DENIED', error:'Лише CFO'};
-  var on = (body.off === true) ? '0' : '1';   // v7.611: без власних тригерів (ліміт проєкту) — їде на tgSlaCheck
+  var on = (body.off === true) ? '0' : '1';   // v7.611: без власних тригерів (ліміт проєкту)
   PropertiesService.getScriptProperties().setProperty('AUDIT_EXP_ON', on);
-  return {ok:true, on:on === '1', run:AUDIT_EXP_START_HOUR + ':00–' + AUDIT_EXP_END_HOUR + ':00 (на invoiceQueueTick, не tgSlaCheck)', report:AUDIT_EXP_REPORT_HOUR + ':00 Europe/Kiev',
+  // v7.615: власні тригери звірки (auditExportsNightly лишився від невдалого setup v7.610) — прибираємо завжди, звільняємо місце в ліміті
+  var dropped = 0; ScriptApp.getProjectTriggers().forEach(function(t){ var h = t.getHandlerFunction(); if (h === 'auditExportsNightly' || h === 'auditExportsReport' || h === '_auditExpBatch'){ ScriptApp.deleteTrigger(t); dropped++; } });
+  return {ok:true, on:on === '1', droppedTriggers:dropped, run:AUDIT_EXP_START_HOUR + ':00–' + AUDIT_EXP_END_HOUR + ':00 (на invoiceQueueTick, не tgSlaCheck)', report:AUDIT_EXP_REPORT_HOUR + ':00 Europe/Kiev',
           to:_invProp('INVOICE_CFO_CHAT_ID') ? 'особистий чат CFO' : 'НЕМАЄ INVOICE_CFO_CHAT_ID', tgSla:ScriptApp.getProjectTriggers().some(function(t){ return t.getHandlerFunction() === 'tgSlaCheck'; })};
 }
 // GET getAuditExports&loc= — та сама звірка однієї локації зараз (без запису, без надсилання); без loc — стан нічного прогону і паузи.

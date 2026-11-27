@@ -1660,6 +1660,16 @@ if (src.indexOf('\nfunction _leadIsNavAct(') >= 0){
     {sla: !/_auditExpPiggy/.test(fn('tgSlaCheck')), gate: /if \(!_leadIsNavAct\(act\)\) _leadTouchReaction/.test(fn('_tgHandleCallback'))}, {sla: true, gate: true});
 }
 
+// ── v7.615: ліди — лише наша таблиця, таблицю маркетолога не читаємо ──
+if (/\nvar LEADS_HISTORY_IN_STATS/.test(src)){
+  check('ліди: без таблиці маркетолога', 'id таблиці маркетолога немає в коді; імпорт «Ліди_Історія» вимкнено; історія не йде в статистику / воронку / звіт',
+    {id: /1XfLgI_0hEO/.test(src), srcId: /\nvar LEADS_HIST_SRC_ID\s*=\s*'';/.test(src), off: /\nvar LEADS_HISTORY_IN_STATS = false;/.test(src),
+     guardImport: /if \(!LEADS_HIST_SRC_ID\)/.test(fn('_importLeadsHistory')), guardStats: /if \(!LEADS_HISTORY_IN_STATS\) return \[\];/.test(fn('_leadsFromHistory'))},
+    {id: false, srcId: true, off: true, guardImport: true, guardStats: true});
+  check('звірка: тригер-сирота', 'auditExportsNightly нічого не робить без AUDIT_EXP_ON; auditExportsSetup прибирає тригери звірки',
+    {nightly: /AUDIT_EXP_ON'\) !== '1'\) return;/.test(fn('auditExportsNightly')), setup: /deleteTrigger/.test(fn('auditExportsSetup'))}, {nightly: true, setup: true});
+}
+
 if (!fs.existsSync(path.join(__dirname, '..', '..', 'activities.html'))){
 console.log('\n' + pass + ' пройдено, ' + fail + ' з помилкою — ' + path.basename(SRC));
 process.exit(fail ? 1 : 0);
