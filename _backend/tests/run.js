@@ -1169,10 +1169,9 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
            title: pg.includes('<title>Звіт_Тест_Дитина_2025-09_2026-01</title>'), h2p: /html2pdf\(/.test(src2), scriptEnd: (pg.match(/<\/script>/g) || []).length},
           {a4: true, wait: true, print: true, mob: true, logo: true, title: true, h2p: false, scriptEnd: 1});
     const U = (role, loc, extra) => Object.assign({id: 5, role, loc}, extra || {});
-    check('звіт батькам: права', 'CFO — усі; директор — своя локація; вихователь — своя локація (і група, якщо задана); інші — ні',
-          [DR.canReport(U('cfo', 'Позняки'), card), DR.canReport(U('director', 'Оранж'), card), DR.canReport(U('director', 'Позняки'), card), DR.canReport(U('vyhovatel', 'Оранж'), card),
-           DR.canReport(U('vyhovatel', 'Позняки, Оранж', {locs: ['Позняки', 'Оранж']}), card), DR.canReport(U('vyhovatel', 'Оранж', {group: 'Preschool'}), card), DR.canReport(U('hr', 'Оранж'), card), DR.canReport(null, card)],
-          [true, true, false, true, true, false, false, false]);
+    check('звіт батькам: права (v7.601)', 'усі ролі, що бачать вкладку «Розвиток» — без обмежень за роллю й локацією (Полякова rnd_director «Менеджмент»)',
+          ['cfo', 'director', 'vyhovatel', 'nurse', 'rnd_director', 'ceo', 'cco', 'hr', 'founder'].map((r) => DR.canReport(U(r, r === 'rnd_director' ? 'Менеджмент' : 'Позняки'), card)).concat([DR.canReport(null, card), DR.canReport(U('cfo', ''), null)]),
+          [true, true, true, true, true, true, true, true, true, false, false]);
   }
 }
 

@@ -45,22 +45,10 @@
       .filter(function(o){ return Object.keys(o.criteria).length > 0; });
   }
   function hasData(dev, p){ return observations(dev, p).length > 0; }
-  // Права: CFO (і власник) — усі; директор — свої локації; вихователь — свої локації (облікові записи вихователів — на локацію, без групи),
-  // а якщо в записі є група(и) — лише свої групи
-  function canReport(user, card){
-    if (!user || !card) return false;
-    var r = String(user.role || '').toLowerCase();
-    if (r === 'cfo' || r === 'founder' || Number(user.id) === 1) return true;
-    if (r !== 'director' && r !== 'vyhovatel') return false;
-    var locs = (Array.isArray(user.locs) && user.locs.length ? user.locs : String(user.loc || '').split(',')).map(function(x){ return String(x).trim(); }).filter(Boolean);
-    var loc = String(card.loc || card['Локація'] || '').trim();
-    if (locs.indexOf(loc) < 0) return false;
-    if (r === 'vyhovatel'){
-      var gs = [].concat(user.groups || (user.group ? String(user.group).split(',') : [])).map(function(x){ return String(x).trim().toLowerCase(); }).filter(Boolean);
-      if (gs.length && gs.indexOf(String(card.group || card['Група'] || '').trim().toLowerCase()) < 0) return false;
-    }
-    return true;
-  }
+  // Права (v7.601): кнопка — усім, хто бачить вкладку «Розвиток» картки дитини (її відкриває право card-child-development:
+  // вихователь, директор, медсестра, R&D, CEO, CCO, HR, CFO…). Окремих обмежень за роллю немає — раніше їх було (лише cfo/director/vyhovatel),
+  // і Полякова (rnd_director, «Менеджмент») кнопки не бачила.
+  function canReport(user, card){ return !!(user && card); }
   // Дані звіту (без вигадок): розділи з позначками останнього спостереження, динаміка між першим і останнім спостереженням періоду
   function buildData(card, template, p, now){
     var obs = observations(card.development, p); if (!obs.length) return null;
@@ -179,7 +167,7 @@
   };
   root.devReportOpen = function(id){
     var c = cardFor(id); if (!c) return;
-    if (!canReport(root.S && root.S.user, c)){ if (root.showFloatMsg) root.showFloatMsg('🚫 Звіт доступний вихователю групи, директору локації та CFO'); return; }
+    if (!canReport(root.S && root.S.user, c)){ return; }
     var old = document.getElementById('devRepBox'); if (old) old.remove();
     var a = latestYm(c), box = document.createElement('div'); box.id = 'devRepBox';
     box.style.cssText = 'position:fixed;inset:0;background:rgba(20,20,30,.45);z-index:10050;display:flex;align-items:center;justify-content:center;padding:16px';
