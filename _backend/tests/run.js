@@ -1163,6 +1163,11 @@ if (src.indexOf('\nfunction _catDecide(') >= 0){
     check('звіт батькам: вигляд', 'шапка (логотип, локація, ПІБ, група, період, вихователь), шкала словами, підпис; без коментарів, яких немає',
           ['mkids-logo.png', 'Оранж', 'Тест Дитина', 'Study-ki', 'вересень 2025 – січень 2026', 'Масловська Анна', 'Активно розвивається', 'з турботою,<br>команда m.kids', 'Було → стало'].map((x) => html.includes(x)).concat([/коментар/i.test(html), /\d+%/.test(html.replace(/<[^>]+>/g, ""))]),
           [true, true, true, true, true, true, true, true, true, false, false]);
+    const pg = DR.pageHtml(D, DR.LOGO), src2 = fs.readFileSync(dp, 'utf8');
+    check('звіт батькам: друк замість знімка (v7.600)', 'окрема сторінка A4: чекає шрифти й логотип → window.print(); логотип вбудований; назва = ім\'я файлу; без html2pdf',
+          {a4: /@page\{size:A4/.test(pg), wait: /document\.fonts/.test(pg) && /decode\(\)/.test(pg), print: /window\.print\(\)/.test(pg), mob: pg.includes('Поділитися / Зберегти PDF'), logo: /^data:image\/png;base64,/.test(DR.LOGO) && pg.includes(DR.LOGO.slice(0, 60)),
+           title: pg.includes('<title>Звіт_Тест_Дитина_2025-09_2026-01</title>'), h2p: /html2pdf\(/.test(src2), scriptEnd: (pg.match(/<\/script>/g) || []).length},
+          {a4: true, wait: true, print: true, mob: true, logo: true, title: true, h2p: false, scriptEnd: 1});
     const U = (role, loc, extra) => Object.assign({id: 5, role, loc}, extra || {});
     check('звіт батькам: права', 'CFO — усі; директор — своя локація; вихователь — своя локація (і група, якщо задана); інші — ні',
           [DR.canReport(U('cfo', 'Позняки'), card), DR.canReport(U('director', 'Оранж'), card), DR.canReport(U('director', 'Позняки'), card), DR.canReport(U('vyhovatel', 'Оранж'), card),
